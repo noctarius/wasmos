@@ -14,9 +14,7 @@
 #include "timer.h"
 #include "sched.h"
 
-static void *
-boot_shadow_alloc_low(uint64_t size_bytes, uint64_t *out_phys)
-{
+static void* boot_shadow_alloc_low(uint64_t size_bytes, uint64_t* out_phys) {
     const uint64_t page_size = 0x1000ULL;
     const uint64_t max_low = 64ULL * 1024ULL * 1024ULL;
     if (size_bytes == 0) {
@@ -30,7 +28,7 @@ boot_shadow_alloc_low(uint64_t size_bytes, uint64_t *out_phys)
     if (!phys) {
         return 0;
     }
-    void *low = (void *)(uintptr_t)phys;
+    void* low = (void*)(uintptr_t)phys;
     memset(low, 0, (size_t)(pages * page_size));
     if (out_phys) {
         *out_phys = phys;
@@ -38,9 +36,7 @@ boot_shadow_alloc_low(uint64_t size_bytes, uint64_t *out_phys)
     return low;
 }
 
-static int
-boot_shadow_copy_blob(void **dst_ptr, const void *src_ptr, uint64_t size_bytes)
-{
+static int boot_shadow_copy_blob(void** dst_ptr, const void* src_ptr, uint64_t size_bytes) {
     if (!dst_ptr) {
         return -1;
     }
@@ -49,18 +45,16 @@ boot_shadow_copy_blob(void **dst_ptr, const void *src_ptr, uint64_t size_bytes)
         return 0;
     }
     uint64_t dst_phys = 0;
-    void *dst_low = boot_shadow_alloc_low(size_bytes, &dst_phys);
+    void* dst_low = boot_shadow_alloc_low(size_bytes, &dst_phys);
     if (!dst_low) {
         return -1;
     }
     memcpy(dst_low, src_ptr, (size_t)size_bytes);
-    *dst_ptr = (void *)(uintptr_t)(dst_phys + KERNEL_HIGHER_HALF_BASE);
+    *dst_ptr = (void*)(uintptr_t)(dst_phys + KERNEL_HIGHER_HALF_BASE);
     return 0;
 }
 
-int
-kernel_boot_build_bootinfo_shadow(const boot_info_t *src, boot_info_t *dst)
-{
+int kernel_boot_build_bootinfo_shadow(const boot_info_t* src, boot_info_t* dst) {
     if (!src || !dst) {
         return -1;
     }
@@ -68,7 +62,8 @@ kernel_boot_build_bootinfo_shadow(const boot_info_t *src, boot_info_t *dst)
     if (boot_shadow_copy_blob(&dst->rsdp, src->rsdp, (uint64_t)src->rsdp_length) != 0) {
         return -1;
     }
-    if (boot_shadow_copy_blob(&dst->boot_config, src->boot_config, (uint64_t)src->boot_config_size) != 0) {
+    if (boot_shadow_copy_blob(&dst->boot_config, src->boot_config,
+                              (uint64_t)src->boot_config_size) != 0) {
         return -1;
     }
     /* Remap initfs to its higher-half virtual alias.  UEFI allocates the initfs
@@ -80,7 +75,7 @@ kernel_boot_build_bootinfo_shadow(const boot_info_t *src, boot_info_t *dst)
     if ((src->flags & BOOT_INFO_FLAG_INITFS_PRESENT) && src->initfs && src->initfs_size > 0) {
         uint64_t phys = (uint64_t)(uintptr_t)dst->initfs;
         if (phys < KERNEL_HIGHER_HALF_BASE) {
-            dst->initfs = (void *)(uintptr_t)(phys + KERNEL_HIGHER_HALF_BASE);
+            dst->initfs = (void*)(uintptr_t)(phys + KERNEL_HIGHER_HALF_BASE);
         }
     }
     if (!(src->flags & BOOT_INFO_FLAG_MODULES_PRESENT) || !src->modules || src->module_count == 0 ||
@@ -94,24 +89,25 @@ kernel_boot_build_bootinfo_shadow(const boot_info_t *src, boot_info_t *dst)
     }
 
     uint64_t table_phys = 0;
-    void *table_low = boot_shadow_alloc_low(table_size, &table_phys);
+    void* table_low = boot_shadow_alloc_low(table_size, &table_phys);
     if (!table_low) {
         return -1;
     }
     memcpy(table_low, src->modules, (size_t)table_size);
-    dst->modules = (void *)(uintptr_t)(table_phys + KERNEL_HIGHER_HALF_BASE);
+    dst->modules = (void*)(uintptr_t)(table_phys + KERNEL_HIGHER_HALF_BASE);
 
-    uint8_t *mods_low = (uint8_t *)table_low;
+    uint8_t* mods_low = (uint8_t*)table_low;
     for (uint32_t i = 0; i < src->module_count; ++i) {
-        boot_module_t *mod = (boot_module_t *)(mods_low + (uint64_t)i * (uint64_t)src->module_entry_size);
+        boot_module_t* mod =
+            (boot_module_t*)(mods_low + (uint64_t)i * (uint64_t)src->module_entry_size);
         if (!mod || mod->base == 0 || mod->size == 0) {
             continue;
         }
         if (mod->size > 0xFFFFFFFFULL) {
             return -1;
         }
-        void *shadow_blob_high = 0;
-        const void *blob_src = (const void *)(uintptr_t)mod->base;
+        void* shadow_blob_high = 0;
+        const void* blob_src = (const void*)(uintptr_t)mod->base;
         if (boot_shadow_copy_blob(&shadow_blob_high, blob_src, mod->size) != 0) {
             return -1;
         }
@@ -120,13 +116,11 @@ kernel_boot_build_bootinfo_shadow(const boot_info_t *src, boot_info_t *dst)
     return 0;
 }
 
-void
-kernel_boot_run_low_slot_sweep_diagnostic(void)
-{
+void kernel_boot_run_low_slot_sweep_diagnostic(void) {
     uint32_t active = process_count_active();
     uint32_t pid = 0;
     uint32_t parent_pid = 0;
-    const char *name = 0;
+    const char* name = 0;
     uint8_t failed = 0;
 
     klog_write("[diag] low-slot sweep start\n");
@@ -134,7 +128,7 @@ kernel_boot_run_low_slot_sweep_diagnostic(void)
         if (process_info_at_ex(i, &pid, &parent_pid, &name) != 0) {
             continue;
         }
-        process_t *proc = process_get(pid);
+        process_t* proc = process_get(pid);
         if (!proc || proc->is_idle || proc->context_id == 0) {
             continue;
         }
@@ -144,13 +138,13 @@ kernel_boot_run_low_slot_sweep_diagnostic(void)
         }
         if (paging_strip_low_slot_in_root(root) != 0) {
             klog_printf("[diag] low-slot sweep fail: strip pid=%u name=%s ctx=%u root=%016llx\n",
-                          pid, name ? name : "(null)", proc->context_id, (unsigned long long)root);
+                        pid, name ? name : "(null)", proc->context_id, (unsigned long long)root);
             failed = 1;
             break;
         }
         if (paging_verify_user_root_no_low_slot(root, 1) != 0) {
             klog_printf("[diag] low-slot sweep fail: verify pid=%u name=%s ctx=%u root=%016llx\n",
-                          pid, name ? name : "(null)", proc->context_id, (unsigned long long)root);
+                        pid, name ? name : "(null)", proc->context_id, (unsigned long long)root);
             failed = 1;
             break;
         }
@@ -160,9 +154,7 @@ kernel_boot_run_low_slot_sweep_diagnostic(void)
     }
 }
 
-void
-kernel_boot_run_scheduler_loop(void)
-{
+void kernel_boot_run_scheduler_loop(void) {
     for (;;) {
         __asm__ volatile("cli");
         int rc = process_schedule_once();
@@ -170,7 +162,8 @@ kernel_boot_run_scheduler_loop(void)
          * re-loop immediately — the idle thread does the actual (sti;hlt) idling. */
         if (rc == SCHED_R_PICK || rc == SCHED_R_CTX || rc == SCHED_R_ROOT || rc == SCHED_R_MAXCOUNT)
             kpanic("scheduler: no runnable thread (idle not dispatchable)", (uint64_t)rc, 0);
-        if (process_should_resched()) process_clear_resched();
+        if (process_should_resched())
+            process_clear_resched();
         timer_poll();
     }
 }

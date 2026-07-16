@@ -5,6 +5,6 @@
 #include "compat/iostream"
 
 namespace std {
-    ostream cout;
-    ostream cerr;
+ostream cout;
+ostream cerr;
 } // namespace std

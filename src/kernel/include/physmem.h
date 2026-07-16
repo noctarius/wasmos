@@ -8,7 +8,7 @@
 #include "boot.h"
 
 /* Initialize the PFA from the UEFI memory map provided at boot. */
-void pfa_init(const boot_info_t *boot_info);
+void pfa_init(const boot_info_t* boot_info);
 
 /* Allocate a contiguous run of pages physical pages.  Returns the physical base address,
  * or 0 on failure. */

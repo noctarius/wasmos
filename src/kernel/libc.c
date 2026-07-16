@@ -15,9 +15,7 @@
 extern uint8_t __kernel_start;
 extern uint8_t __kernel_end;
 
-static inline const char *
-kernel_str_ptr(const char *s)
-{
+static inline const char* kernel_str_ptr(const char* s) {
     uintptr_t p = (uintptr_t)s;
     uint64_t base = KERNEL_HIGHER_HALF_BASE;
     if (serial_high_alias_enabled() && p != 0 && (uint64_t)p < base) {
@@ -29,24 +27,24 @@ kernel_str_ptr(const char *s)
             p = (uintptr_t)((uint64_t)p + base);
         }
     }
-    return (const char *)p;
+    return (const char*)p;
 }
 
-static inline void copy8_forward(uint8_t *d, const uint8_t *s) {
+static inline void copy8_forward(uint8_t* d, const uint8_t* s) {
     uint64_t v;
     __builtin_memcpy(&v, s, sizeof(v));
     __builtin_memcpy(d, &v, sizeof(v));
 }
 
-static inline void copy8_backward(uint8_t *d, const uint8_t *s) {
+static inline void copy8_backward(uint8_t* d, const uint8_t* s) {
     uint64_t v;
     __builtin_memcpy(&v, s, sizeof(v));
     __builtin_memcpy(d, &v, sizeof(v));
 }
 
-void *memcpy(void *dst, const void *src, size_t n) {
-    uint8_t *d = (uint8_t *)dst;
-    const uint8_t *s = (const uint8_t *)src;
+void* memcpy(void* dst, const void* src, size_t n) {
+    uint8_t* d = (uint8_t*)dst;
+    const uint8_t* s = (const uint8_t*)src;
 
     /* TODO: memcpy remains intentionally non-overlap-safe; use memmove when ranges can overlap. */
     while (n >= 32) {
@@ -71,24 +69,23 @@ void *memcpy(void *dst, const void *src, size_t n) {
     return dst;
 }
 
-void *memset(void *dst, int c, size_t n) {
+void* memset(void* dst, int c, size_t n) {
     /* rep stosb: correct on every x86 CPU and microcode-accelerated (ERMS) on
      * anything since ~2012, so no CPUID gate is needed.  `cld` forces forward
      * direction independent of the caller's DF, since kernel memset runs in
      * arbitrary contexts (boot, ISRs). */
-    void *ret = dst;
-    __asm__ __volatile__(
-        "cld\n\t"
-        "rep stosb"
-        : "+D"(dst), "+c"(n)
-        : "a"((uint8_t)c)
-        : "memory");
+    void* ret = dst;
+    __asm__ __volatile__("cld\n\t"
+                         "rep stosb"
+                         : "+D"(dst), "+c"(n)
+                         : "a"((uint8_t)c)
+                         : "memory");
     return ret;
 }
 
-void *memmove(void *dst, const void *src, size_t n) {
-    uint8_t *d = (uint8_t *)dst;
-    const uint8_t *s = (const uint8_t *)src;
+void* memmove(void* dst, const void* src, size_t n) {
+    uint8_t* d = (uint8_t*)dst;
+    const uint8_t* s = (const uint8_t*)src;
     if (d == s || n == 0) {
         return dst;
     }
@@ -140,9 +137,9 @@ void *memmove(void *dst, const void *src, size_t n) {
     return dst;
 }
 
-int memcmp(const void *a, const void *b, size_t n) {
-    const uint8_t *pa = (const uint8_t *)a;
-    const uint8_t *pb = (const uint8_t *)b;
+int memcmp(const void* a, const void* b, size_t n) {
+    const uint8_t* pa = (const uint8_t*)a;
+    const uint8_t* pb = (const uint8_t*)b;
     for (size_t i = 0; i < n; ++i) {
         if (pa[i] != pb[i]) {
             return (pa[i] < pb[i]) ? -1 : 1;
@@ -151,7 +148,7 @@ int memcmp(const void *a, const void *b, size_t n) {
     return 0;
 }
 
-size_t strlen(const char *s) {
+size_t strlen(const char* s) {
     if (!s) {
         return 0;
     }
@@ -162,7 +159,7 @@ size_t strlen(const char *s) {
     return len;
 }
 
-size_t strnlen(const char *s, size_t max_len) {
+size_t strnlen(const char* s, size_t max_len) {
     if (!s) {
         return 0;
     }
@@ -174,7 +171,7 @@ size_t strnlen(const char *s, size_t max_len) {
     return len;
 }
 
-int strcmp(const char *a, const char *b) {
+int strcmp(const char* a, const char* b) {
     a = kernel_str_ptr(a);
     b = kernel_str_ptr(b);
     if (!a && !b) {
@@ -199,7 +196,7 @@ int strcmp(const char *a, const char *b) {
     return (*a < *b) ? -1 : 1;
 }
 
-int strncmp(const char *a, const char *b, size_t n) {
+int strncmp(const char* a, const char* b, size_t n) {
     if (n == 0 || a == b) {
         return 0;
     }
@@ -224,7 +221,7 @@ int strncmp(const char *a, const char *b, size_t n) {
     return 0;
 }
 
-int strcasecmp(const char *a, const char *b) {
+int strcasecmp(const char* a, const char* b) {
     if (a == b) {
         return 0;
     }
@@ -250,7 +247,7 @@ int strcasecmp(const char *a, const char *b) {
     }
 }
 
-char *strcpy(char *dst, const char *src) {
+char* strcpy(char* dst, const char* src) {
     if (!dst || !src) {
         return dst;
     }
@@ -262,7 +259,7 @@ char *strcpy(char *dst, const char *src) {
     return dst;
 }
 
-char *strncpy(char *dst, const char *src, size_t n) {
+char* strncpy(char* dst, const char* src, size_t n) {
     if (!dst || !src) {
         return dst;
     }
@@ -278,7 +275,7 @@ char *strncpy(char *dst, const char *src, size_t n) {
     return dst;
 }
 
-int str_copy_bytes(char *dst, size_t dst_len, const uint8_t *src, size_t src_len) {
+int str_copy_bytes(char* dst, size_t dst_len, const uint8_t* src, size_t src_len) {
     if (!dst || !src || dst_len == 0 || src_len == 0 || src_len >= dst_len) {
         return -1;
     }
@@ -292,7 +289,7 @@ int str_copy_bytes(char *dst, size_t dst_len, const uint8_t *src, size_t src_len
 /* Truncating C-string copy shared by the service/subsystem registries and app
  * loader; mirrors the libc str_copy. Reads src directly (no kernel_str_ptr
  * translation), matching the hand-rolled copies it replaces. */
-size_t str_copy(char *dst, size_t dst_len, const char *src) {
+size_t str_copy(char* dst, size_t dst_len, const char* src) {
     size_t i = 0;
     if (!dst || dst_len == 0) {
         return 0;
@@ -309,7 +306,7 @@ size_t str_copy(char *dst, size_t dst_len, const char *src) {
     return i;
 }
 
-int str_eq_bytes(const uint8_t *bytes, size_t bytes_len, const char *lit) {
+int str_eq_bytes(const uint8_t* bytes, size_t bytes_len, const char* lit) {
     size_t i = 0;
     if (!bytes || !lit) {
         return 0;
@@ -324,7 +321,7 @@ int str_eq_bytes(const uint8_t *bytes, size_t bytes_len, const char *lit) {
     return i == bytes_len;
 }
 
-char *strchr(const char *s, int ch) {
+char* strchr(const char* s, int ch) {
     if (!s) {
         return 0;
     }
@@ -332,7 +329,7 @@ char *strchr(const char *s, int ch) {
     char needle = (char)ch;
     for (;;) {
         if (*s == needle) {
-            return (char *)s;
+            return (char*)s;
         }
         if (*s == '\0') {
             break;
@@ -342,8 +339,8 @@ char *strchr(const char *s, int ch) {
     return 0;
 }
 
-char *strrchr(const char *s, int ch) {
-    const char *last = 0;
+char* strrchr(const char* s, int ch) {
+    const char* last = 0;
     if (!s) {
         return 0;
     }
@@ -358,10 +355,10 @@ char *strrchr(const char *s, int ch) {
         }
         s++;
     }
-    return (char *)last;
+    return (char*)last;
 }
 
-static size_t append_char(char *buf, size_t size, size_t pos, char ch) {
+static size_t append_char(char* buf, size_t size, size_t pos, char ch) {
     if (pos + 1 < size) {
         buf[pos] = ch;
         buf[pos + 1] = '\0';
@@ -369,7 +366,7 @@ static size_t append_char(char *buf, size_t size, size_t pos, char ch) {
     return pos + 1;
 }
 
-static size_t append_str(char *buf, size_t size, size_t pos, const char *s) {
+static size_t append_str(char* buf, size_t size, size_t pos, const char* s) {
     if (!s) {
         s = "(null)";
     }
@@ -380,11 +377,10 @@ static size_t append_str(char *buf, size_t size, size_t pos, const char *s) {
     return pos;
 }
 
-static size_t append_u64(char *buf, size_t size, size_t pos,
-                          uint64_t value, uint32_t base, int uppercase,
-                          int width, char pad) {
+static size_t append_u64(char* buf, size_t size, size_t pos, uint64_t value, uint32_t base,
+                         int uppercase, int width, char pad) {
     char tmp[32];
-    const char *digits = uppercase ? "0123456789ABCDEF" : "0123456789abcdef";
+    const char* digits = uppercase ? "0123456789ABCDEF" : "0123456789abcdef";
     digits = kernel_str_ptr(digits);
     int idx = 0;
     if (value == 0) {
@@ -404,7 +400,7 @@ static size_t append_u64(char *buf, size_t size, size_t pos,
     return pos;
 }
 
-static size_t append_i64(char *buf, size_t size, size_t pos, int64_t value) {
+static size_t append_i64(char* buf, size_t size, size_t pos, int64_t value) {
     if (value < 0) {
         pos = append_char(buf, size, pos, '-');
         return append_u64(buf, size, pos, (uint64_t)(-value), 10, 0, 0, ' ');
@@ -412,14 +408,14 @@ static size_t append_i64(char *buf, size_t size, size_t pos, int64_t value) {
     return append_u64(buf, size, pos, (uint64_t)value, 10, 0, 0, ' ');
 }
 
-int vsnprintf(char *buf, size_t size, const char *fmt, va_list ap) {
+int vsnprintf(char* buf, size_t size, const char* fmt, va_list ap) {
     if (!buf || size == 0) {
         return 0;
     }
     buf[0] = '\0';
     fmt = kernel_str_ptr(fmt);
     size_t pos = 0;
-    for (const char *p = fmt; p && *p; ++p) {
+    for (const char* p = fmt; p && *p; ++p) {
         if (*p != '%') {
             pos = append_char(buf, size, pos, *p);
             continue;
@@ -435,7 +431,10 @@ int vsnprintf(char *buf, size_t size, const char *fmt, va_list ap) {
 
         /* Flags: only '0' for now. */
         char pad = ' ';
-        if (*p == '0') { pad = '0'; p++; }
+        if (*p == '0') {
+            pad = '0';
+            p++;
+        }
 
         /* Width. */
         int width = 0;
@@ -447,10 +446,15 @@ int vsnprintf(char *buf, size_t size, const char *fmt, va_list ap) {
         /* Length modifier: l, ll, z. */
         int lmod = 0; /* 0=int, 1=long, 2=long long / size_t */
         if (*p == 'l') {
-            lmod = 1; p++;
-            if (*p == 'l') { lmod = 2; p++; }
+            lmod = 1;
+            p++;
+            if (*p == 'l') {
+                lmod = 2;
+                p++;
+            }
         } else if (*p == 'z') {
-            lmod = 2; p++;
+            lmod = 2;
+            p++;
         }
 
         switch (*p) {
@@ -460,45 +464,57 @@ int vsnprintf(char *buf, size_t size, const char *fmt, va_list ap) {
             break;
         }
         case 's': {
-            const char *s = va_arg(ap, const char *);
+            const char* s = va_arg(ap, const char*);
             pos = append_str(buf, size, pos, s);
             break;
         }
         case 'd':
         case 'i': {
             int64_t v;
-            if (lmod == 2)      v = va_arg(ap, long long);
-            else if (lmod == 1) v = va_arg(ap, long);
-            else                v = va_arg(ap, int);
+            if (lmod == 2)
+                v = va_arg(ap, long long);
+            else if (lmod == 1)
+                v = va_arg(ap, long);
+            else
+                v = va_arg(ap, int);
             pos = append_i64(buf, size, pos, v);
             break;
         }
         case 'u': {
             uint64_t v;
-            if (lmod == 2)      v = va_arg(ap, unsigned long long);
-            else if (lmod == 1) v = va_arg(ap, unsigned long);
-            else                v = va_arg(ap, unsigned int);
+            if (lmod == 2)
+                v = va_arg(ap, unsigned long long);
+            else if (lmod == 1)
+                v = va_arg(ap, unsigned long);
+            else
+                v = va_arg(ap, unsigned int);
             pos = append_u64(buf, size, pos, v, 10, 0, width, pad);
             break;
         }
         case 'x': {
             uint64_t v;
-            if (lmod == 2)      v = va_arg(ap, unsigned long long);
-            else if (lmod == 1) v = va_arg(ap, unsigned long);
-            else                v = va_arg(ap, unsigned int);
+            if (lmod == 2)
+                v = va_arg(ap, unsigned long long);
+            else if (lmod == 1)
+                v = va_arg(ap, unsigned long);
+            else
+                v = va_arg(ap, unsigned int);
             pos = append_u64(buf, size, pos, v, 16, 0, width, pad);
             break;
         }
         case 'X': {
             uint64_t v;
-            if (lmod == 2)      v = va_arg(ap, unsigned long long);
-            else if (lmod == 1) v = va_arg(ap, unsigned long);
-            else                v = va_arg(ap, unsigned int);
+            if (lmod == 2)
+                v = va_arg(ap, unsigned long long);
+            else if (lmod == 1)
+                v = va_arg(ap, unsigned long);
+            else
+                v = va_arg(ap, unsigned int);
             pos = append_u64(buf, size, pos, v, 16, 1, width, pad);
             break;
         }
         case 'p': {
-            uintptr_t v = (uintptr_t)va_arg(ap, void *);
+            uintptr_t v = (uintptr_t)va_arg(ap, void*);
             pos = append_str(buf, size, pos, "0x");
             pos = append_u64(buf, size, pos, (uint64_t)v, 16, 0, 0, ' ');
             break;
@@ -532,8 +548,7 @@ int toupper(int ch) {
 }
 
 int isspace(int ch) {
-    return ch == ' ' || ch == '\t' || ch == '\n' ||
-           ch == '\r' || ch == '\f' || ch == '\v';
+    return ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r' || ch == '\f' || ch == '\v';
 }
 
 int isdigit(int ch) {
@@ -549,7 +564,5 @@ int isalnum(int ch) {
 }
 
 int isxdigit(int ch) {
-    return isdigit(ch) ||
-           (ch >= 'a' && ch <= 'f') ||
-           (ch >= 'A' && ch <= 'F');
+    return isdigit(ch) || (ch >= 'a' && ch <= 'f') || (ch >= 'A' && ch <= 'F');
 }

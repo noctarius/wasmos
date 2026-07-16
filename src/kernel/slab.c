@@ -10,7 +10,7 @@
 #define SLAB_CLASS_COUNT 3u
 
 typedef struct slab_node {
-    struct slab_node *next;
+    struct slab_node* next;
 } slab_node_t;
 
 typedef struct {
@@ -22,8 +22,8 @@ typedef struct {
 typedef struct {
     uint16_t chunk_size;
     uint16_t chunk_count;
-    uint8_t *buffer;
-    slab_node_t *free_list;
+    uint8_t* buffer;
+    slab_node_t* free_list;
 } slab_class_t;
 
 #define SLAB_MAGIC 0x51ABu
@@ -33,31 +33,27 @@ static uint8_t g_slab_buf_64[64u * 128u];
 static uint8_t g_slab_buf_128[128u * 96u];
 
 static slab_class_t g_classes[SLAB_CLASS_COUNT] = {
-    { 32u, 128u, g_slab_buf_32, 0 },
-    { 64u, 128u, g_slab_buf_64, 0 },
-    { 128u, 96u, g_slab_buf_128, 0 },
+    {32u, 128u, g_slab_buf_32, 0},
+    {64u, 128u, g_slab_buf_64, 0},
+    {128u, 96u, g_slab_buf_128, 0},
 };
 static ksync_spinlock_t g_slab_lock;
 
-void
-slab_init(void)
-{
+void slab_init(void) {
     ksync_spinlock_init(&g_slab_lock);
     for (uint32_t c = 0; c < SLAB_CLASS_COUNT; ++c) {
-        slab_class_t *klass = &g_classes[c];
+        slab_class_t* klass = &g_classes[c];
         klass->free_list = 0;
         for (uint32_t i = 0; i < klass->chunk_count; ++i) {
-            uint8_t *chunk = klass->buffer + ((uint32_t)klass->chunk_size * i);
-            slab_node_t *node = (slab_node_t *)(uintptr_t)chunk;
+            uint8_t* chunk = klass->buffer + ((uint32_t)klass->chunk_size * i);
+            slab_node_t* node = (slab_node_t*)(uintptr_t)chunk;
             node->next = klass->free_list;
             klass->free_list = node;
         }
     }
 }
 
-static int
-find_class(size_t total_size)
-{
+static int find_class(size_t total_size) {
     for (uint32_t c = 0; c < SLAB_CLASS_COUNT; ++c) {
         if (total_size <= g_classes[c].chunk_size) {
             return (int)c;
@@ -66,44 +62,40 @@ find_class(size_t total_size)
     return -1;
 }
 
-void *
-kalloc_small(size_t size)
-{
+void* kalloc_small(size_t size) {
     size_t total = size + sizeof(slab_header_t);
     int c = find_class(total);
     if (c < 0) {
         return 0;
     }
     ksync_spinlock_lock(&g_slab_lock);
-    slab_class_t *klass = &g_classes[c];
-    slab_node_t *node = klass->free_list;
+    slab_class_t* klass = &g_classes[c];
+    slab_node_t* node = klass->free_list;
     if (!node) {
         ksync_spinlock_unlock(&g_slab_lock);
         return 0;
     }
     klass->free_list = node->next;
-    slab_header_t *hdr = (slab_header_t *)(uintptr_t)node;
+    slab_header_t* hdr = (slab_header_t*)(uintptr_t)node;
     hdr->magic = SLAB_MAGIC;
     hdr->class_index = (uint8_t)c;
     hdr->reserved = 0;
     ksync_spinlock_unlock(&g_slab_lock);
-    return (void *)(uintptr_t)(hdr + 1);
+    return (void*)(uintptr_t)(hdr + 1);
 }
 
-void
-kfree_small(void *ptr)
-{
+void kfree_small(void* ptr) {
     if (!ptr) {
         return;
     }
-    slab_header_t *hdr = ((slab_header_t *)ptr) - 1;
+    slab_header_t* hdr = ((slab_header_t*)ptr) - 1;
     if (hdr->magic != SLAB_MAGIC || hdr->class_index >= SLAB_CLASS_COUNT) {
         return;
     }
     ksync_spinlock_lock(&g_slab_lock);
-    slab_class_t *klass = &g_classes[hdr->class_index];
+    slab_class_t* klass = &g_classes[hdr->class_index];
     hdr->magic = 0;
-    slab_node_t *node = (slab_node_t *)(uintptr_t)hdr;
+    slab_node_t* node = (slab_node_t*)(uintptr_t)hdr;
     node->next = klass->free_list;
     klass->free_list = node;
     ksync_spinlock_unlock(&g_slab_lock);

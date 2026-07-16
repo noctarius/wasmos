@@ -9,13 +9,11 @@ typedef struct {
 
 __attribute__((weak)) const char g_kernel_kallsyms_names[] = "";
 __attribute__((weak)) const kernel_kallsyms_entry_t g_kernel_kallsyms[] = {
-    { 0ULL, 0u },
+    {0ULL, 0u},
 };
 __attribute__((weak)) const uint32_t g_kernel_kallsyms_count = 0u;
 
-int
-kpanic_symbolize(uint64_t addr, const char **name, uint64_t *sym_addr)
-{
+int kpanic_symbolize(uint64_t addr, const char** name, uint64_t* sym_addr) {
     uint32_t lo = 0;
     uint32_t hi = g_kernel_kallsyms_count;
     uint32_t match = 0;

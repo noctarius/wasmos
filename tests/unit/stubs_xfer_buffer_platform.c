@@ -4,9 +4,7 @@
 
 static uint64_t g_next_phys = 0x00100000ULL;
 
-uint64_t
-pfa_alloc_pages(uint64_t pages)
-{
+uint64_t pfa_alloc_pages(uint64_t pages) {
     uint64_t base = g_next_phys;
 
     if (pages == 0) {
@@ -16,16 +14,12 @@ pfa_alloc_pages(uint64_t pages)
     return base;
 }
 
-void
-pfa_free_pages(uint64_t base, uint64_t pages)
-{
+void pfa_free_pages(uint64_t base, uint64_t pages) {
     (void)base;
     (void)pages;
 }
 
-int
-framebuffer_get_info(framebuffer_info_t *out)
-{
+int framebuffer_get_info(framebuffer_info_t* out) {
     if (!out) {
         return -1;
     }

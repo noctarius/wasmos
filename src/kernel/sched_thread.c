@@ -23,24 +23,19 @@
  */
 #define SCHED_ANTISTARVATION_STREAK 4
 static uint8_t g_last_dispatched_prio = SCHED_PRIO_IDLE;
-static uint8_t g_high_prio_streak     = 0;
+static uint8_t g_high_prio_streak = 0;
 
 /* ffs_table[bitmap] = index of lowest set bit (highest priority), or 0xFF.
  * Covers all 128 valid 7-bit bitmap values. */
 static const uint8_t ffs_table[128] = {
-    0xFF, 0, 1, 0, 2, 0, 1, 0, 3, 0, 1, 0, 2, 0, 1, 0,
-       4, 0, 1, 0, 2, 0, 1, 0, 3, 0, 1, 0, 2, 0, 1, 0,
-       5, 0, 1, 0, 2, 0, 1, 0, 3, 0, 1, 0, 2, 0, 1, 0,
-       4, 0, 1, 0, 2, 0, 1, 0, 3, 0, 1, 0, 2, 0, 1, 0,
-       6, 0, 1, 0, 2, 0, 1, 0, 3, 0, 1, 0, 2, 0, 1, 0,
-       4, 0, 1, 0, 2, 0, 1, 0, 3, 0, 1, 0, 2, 0, 1, 0,
-       5, 0, 1, 0, 2, 0, 1, 0, 3, 0, 1, 0, 2, 0, 1, 0,
-       4, 0, 1, 0, 2, 0, 1, 0, 3, 0, 1, 0, 2, 0, 1, 0,
+    0xFF, 0, 1, 0, 2, 0, 1, 0, 3, 0, 1, 0, 2, 0, 1, 0, 4, 0, 1, 0, 2, 0, 1, 0, 3, 0,
+    1,    0, 2, 0, 1, 0, 5, 0, 1, 0, 2, 0, 1, 0, 3, 0, 1, 0, 2, 0, 1, 0, 4, 0, 1, 0,
+    2,    0, 1, 0, 3, 0, 1, 0, 2, 0, 1, 0, 6, 0, 1, 0, 2, 0, 1, 0, 3, 0, 1, 0, 2, 0,
+    1,    0, 4, 0, 1, 0, 2, 0, 1, 0, 3, 0, 1, 0, 2, 0, 1, 0, 5, 0, 1, 0, 2, 0, 1, 0,
+    3,    0, 1, 0, 2, 0, 1, 0, 4, 0, 1, 0, 2, 0, 1, 0, 3, 0, 1, 0, 2, 0, 1, 0,
 };
 
-static inline int
-cpu_sched_highest_prio(const cpu_sched_t *cs)
-{
+static inline int cpu_sched_highest_prio(const cpu_sched_t* cs) {
     uint8_t bm = cs->ready_bitmap & 0x7Fu;
     if (bm == 0) {
         return 0xFF;
@@ -48,9 +43,7 @@ cpu_sched_highest_prio(const cpu_sched_t *cs)
     return (int)ffs_table[bm];
 }
 
-static inline uint32_t
-cpu_sched_online_mask(void)
-{
+static inline uint32_t cpu_sched_online_mask(void) {
     uint32_t mask = 1u; /* BSP scheduler is initialized during process_init(). */
     uint32_t limit = g_cpu_count;
     if (limit > WASMOS_MAX_CPUS) {
@@ -64,10 +57,8 @@ cpu_sched_online_mask(void)
     return mask;
 }
 
-static uint32_t
-cpu_sched_load_on(uint32_t cpu_id)
-{
-    cpu_sched_t *cs = &g_cpus[cpu_id].sched;
+static uint32_t cpu_sched_load_on(uint32_t cpu_id) {
+    cpu_sched_t* cs = &g_cpus[cpu_id].sched;
     uint32_t load = 0;
     for (int p = 0; p < SCHED_PRIO_MAX; p++) {
         load += cs->thread_count[p];
@@ -80,31 +71,25 @@ cpu_sched_load_on(uint32_t cpu_id)
     return load;
 }
 
-void
-cpu_sched_init(cpu_sched_t *cs)
-{
+void cpu_sched_init(cpu_sched_t* cs) {
     ksync_spinlock_init(&cs->lock);
     cs->ready_bitmap = 0;
     for (int i = 0; i < SCHED_PRIO_MAX; i++) {
         list_head_init(&cs->ready_list[i]);
         cs->thread_count[i] = 0;
     }
-    cs->running     = 0;
-    cs->idle        = 0;
-    cs->nr_threads  = 0;
+    cs->running = 0;
+    cs->idle = 0;
+    cs->nr_threads = 0;
 }
 
-void
-cpu_sched_enqueue(cpu_sched_t *cs, thread_t *t)
-{
+void cpu_sched_enqueue(cpu_sched_t* cs, thread_t* t) {
     for (uint32_t i = 0; i < WASMOS_MAX_CPUS; ++i) {
         if (g_cpus[i].current_thread == t) {
-            serial_printf_unlocked("[sched] enqueue current tid=%u owner=%u caller_cpu=%u holder_cpu=%u state=%u\n",
-                                   (unsigned)t->tid,
-                                   (unsigned)t->owner_pid,
-                                   (unsigned)cpu_local()->cpu_id,
-                                   (unsigned)i,
-                                   (unsigned)t->state);
+            serial_printf_unlocked(
+                "[sched] enqueue current tid=%u owner=%u caller_cpu=%u holder_cpu=%u state=%u\n",
+                (unsigned)t->tid, (unsigned)t->owner_pid, (unsigned)cpu_local()->cpu_id,
+                (unsigned)i, (unsigned)t->state);
             /* Thread is still running on another CPU.  Mark it ready so the
              * owning CPU re-enqueues when its timeslice or blocking-yield
              * completes (see PROCESS_RUN_BLOCKED handler).  Never halt here
@@ -129,17 +114,13 @@ cpu_sched_enqueue(cpu_sched_t *cs, thread_t *t)
     ksync_spinlock_unlock(&cs->lock);
 }
 
-void
-sched_enqueue_thread_from(thread_t *t, uintptr_t caller)
-{
+void sched_enqueue_thread_from(thread_t* t, uintptr_t caller) {
     for (uint32_t i = 0; i < WASMOS_MAX_CPUS; ++i) {
         if (g_cpus[i].current_thread == t) {
-            serial_printf_unlocked("[sched] enqueue current tid=%u owner=%u caller_cpu=%u holder_cpu=%u state=%u caller=%016llx\n",
-                                   (unsigned)t->tid,
-                                   (unsigned)t->owner_pid,
-                                   (unsigned)cpu_local()->cpu_id,
-                                   (unsigned)i,
-                                   (unsigned)t->state,
+            serial_printf_unlocked("[sched] enqueue current tid=%u owner=%u caller_cpu=%u "
+                                   "holder_cpu=%u state=%u caller=%016llx\n",
+                                   (unsigned)t->tid, (unsigned)t->owner_pid,
+                                   (unsigned)cpu_local()->cpu_id, (unsigned)i, (unsigned)t->state,
                                    (unsigned long long)caller);
             t->state = THREAD_STATE_READY;
             t->block_reason = THREAD_BLOCK_NONE;
@@ -149,9 +130,7 @@ sched_enqueue_thread_from(thread_t *t, uintptr_t caller)
     cpu_sched_enqueue(cpu_sched(), t);
 }
 
-void
-cpu_sched_dequeue(cpu_sched_t *cs, thread_t *t)
-{
+void cpu_sched_dequeue(cpu_sched_t* cs, thread_t* t) {
     /* Caller holds cs->lock. */
     uint8_t prio = t->sched_prio;
     list_head_del(&t->sched_node);
@@ -160,13 +139,11 @@ cpu_sched_dequeue(cpu_sched_t *cs, thread_t *t)
     }
 }
 
-thread_t *
-cpu_sched_pick_next(cpu_sched_t *cs)
-{
+thread_t* cpu_sched_pick_next(cpu_sched_t* cs) {
     /* Caller holds cs->lock. */
     int prio = cpu_sched_highest_prio(cs);
     if (prio == 0xFF) {
-        g_high_prio_streak     = 0;
+        g_high_prio_streak = 0;
         g_last_dispatched_prio = SCHED_PRIO_IDLE;
         /* Return the per-CPU idle thread.  Each CPU has its own, so no two
          * CPUs ever dispatch the same idle thread simultaneously. */
@@ -177,8 +154,7 @@ cpu_sched_pick_next(cpu_sched_t *cs)
      * threads at priority <= prio and a lower-priority band also has work,
      * yield one slot to that band.  This keeps higher-priority workers from
      * permanently starving the WASM services they cooperate with. */
-    if ((int)g_last_dispatched_prio <= prio &&
-        g_high_prio_streak >= SCHED_ANTISTARVATION_STREAK) {
+    if ((int)g_last_dispatched_prio <= prio && g_high_prio_streak >= SCHED_ANTISTARVATION_STREAK) {
         /* Find the next lower occupied priority. */
         int lower_prio = -1;
         for (int p = prio + 1; p < SCHED_PRIO_MAX; p++) {
@@ -200,7 +176,7 @@ cpu_sched_pick_next(cpu_sched_t *cs)
     }
     g_last_dispatched_prio = (uint8_t)prio;
 
-    thread_t *t = list_first_entry(&cs->ready_list[prio], thread_t, sched_node);
+    thread_t* t = list_first_entry(&cs->ready_list[prio], thread_t, sched_node);
     list_head_del(&t->sched_node);
     if (--cs->thread_count[prio] == 0) {
         cs->ready_bitmap &= (uint8_t)(~(1u << prio));
@@ -208,17 +184,13 @@ cpu_sched_pick_next(cpu_sched_t *cs)
     return t;
 }
 
-void
-sched_set_need_resched(void)
-{
+void sched_set_need_resched(void) {
     /* Delegate to the existing process.c resched flag. */
     extern void process_set_need_resched(void);
     process_set_need_resched();
 }
 
-void
-sched_wake_thread(thread_t *t)
-{
+void sched_wake_thread(thread_t* t) {
     if (!t) {
         return;
     }
@@ -252,28 +224,22 @@ sched_wake_thread(thread_t *t)
     }
 }
 
-void
-sched_thread_init(thread_t *t, sched_prio_t prio)
-{
-    t->ctx_canary_pre  = PROCESS_CTX_CANARY_VALUE;
+void sched_thread_init(thread_t* t, sched_prio_t prio) {
+    t->ctx_canary_pre = PROCESS_CTX_CANARY_VALUE;
     t->ctx_canary_post = PROCESS_CTX_CANARY_VALUE;
-    t->sched_prio      = (uint8_t)prio;
-    t->cpu_affinity    = ~0u;
-    t->last_cpu        = 0;
+    t->sched_prio = (uint8_t)prio;
+    t->cpu_affinity = ~0u;
+    t->last_cpu = 0;
     list_head_init(&t->sched_node);
     list_head_init(&t->event_node);
     sched_event_init(&t->join_event, SCHED_EVENT_TYPE_JOIN);
     t->wait_event = 0;
     t->pend_state = SCHED_PEND_NONE;
-    t->pend_data  = 0;
+    t->pend_data = 0;
 }
 
-sched_prio_t
-sched_default_prio(int is_idle,
-                   int is_kernel_worker,
-                   int is_driver,
-                   int is_native_service)
-{
+sched_prio_t sched_default_prio(int is_idle, int is_kernel_worker, int is_driver,
+                                int is_native_service) {
     if (is_idle) {
         return SCHED_PRIO_IDLE;
     }
@@ -289,15 +255,13 @@ sched_default_prio(int is_idle,
     return SCHED_PRIO_WASM;
 }
 
-uint32_t
-cpu_sched_pick_target_cpu(void)
-{
+uint32_t cpu_sched_pick_target_cpu(void) {
     /* Round-robin counter: on ties (all CPUs equally loaded) we rotate the
      * starting search index so spawns spread evenly instead of always
      * accumulating on CPU 0. */
     static uint32_t g_spawn_rr = 0;
-    uint32_t start     = g_spawn_rr % g_cpu_count;
-    uint32_t best      = start;
+    uint32_t start = g_spawn_rr % g_cpu_count;
+    uint32_t best = start;
     uint32_t best_load = UINT32_MAX;
 
     for (uint32_t n = 0; n < g_cpu_count; n++) {
@@ -305,16 +269,14 @@ cpu_sched_pick_target_cpu(void)
         uint32_t load = cpu_sched_load_on(i);
         if (load < best_load) {
             best_load = load;
-            best      = i;
+            best = i;
         }
     }
     g_spawn_rr++;
     return best;
 }
 
-uint32_t
-cpu_sched_pick_target_cpu_for_thread(const thread_t *t, uint8_t prefer_last_cpu)
-{
+uint32_t cpu_sched_pick_target_cpu_for_thread(const thread_t* t, uint8_t prefer_last_cpu) {
     uint32_t online_mask = cpu_sched_online_mask();
     uint32_t allowed_mask = online_mask;
     static uint32_t g_affine_rr = 0;
@@ -324,8 +286,7 @@ cpu_sched_pick_target_cpu_for_thread(const thread_t *t, uint8_t prefer_last_cpu)
         if (allowed_mask == 0u) {
             allowed_mask = online_mask;
         }
-        if (prefer_last_cpu &&
-            t->last_cpu < g_cpu_count &&
+        if (prefer_last_cpu && t->last_cpu < g_cpu_count &&
             (allowed_mask & (1u << t->last_cpu)) != 0u) {
             return t->last_cpu;
         }
@@ -349,9 +310,7 @@ cpu_sched_pick_target_cpu_for_thread(const thread_t *t, uint8_t prefer_last_cpu)
     return best;
 }
 
-void
-sched_spawn_thread(struct thread *t)
-{
+void sched_spawn_thread(struct thread* t) {
     uint32_t target = cpu_sched_pick_target_cpu_for_thread(t, 0);
     t->last_cpu = target;
     cpu_sched_enqueue(&g_cpus[target].sched, t);
@@ -362,16 +321,14 @@ sched_spawn_thread(struct thread *t)
  * run was a voluntary yield — likely a poll/yield loop that should stay on its
  * home CPU rather than be re-run by every idle CPU).  Caller holds cs->lock.
  * Unlike cpu_sched_pick_next this does not touch the anti-starvation globals. */
-static thread_t *
-cpu_sched_steal_pick(cpu_sched_t *cs)
-{
+static thread_t* cpu_sched_steal_pick(cpu_sched_t* cs) {
     for (int prio = 0; prio < SCHED_PRIO_MAX; prio++) {
         if (!(cs->ready_bitmap & (1u << prio))) {
             continue;
         }
         list_head_t *pos, *tmp;
         list_for_each_safe(pos, tmp, &cs->ready_list[prio]) {
-            thread_t *t = list_entry(pos, thread_t, sched_node);
+            thread_t* t = list_entry(pos, thread_t, sched_node);
             if (t == cs->idle || t->sched_sticky) {
                 continue;
             }
@@ -385,9 +342,7 @@ cpu_sched_steal_pick(cpu_sched_t *cs)
     return NULL;
 }
 
-struct thread *
-cpu_sched_try_steal(uint32_t my_cpu_id)
-{
+struct thread* cpu_sched_try_steal(uint32_t my_cpu_id) {
     /* Start scan from the next CPU so each AP preferentially targets a
      * different victim, preventing all APs from racing over CPU 0's queue. */
     for (uint32_t n = 1; n < g_cpu_count; n++) {
@@ -395,14 +350,14 @@ cpu_sched_try_steal(uint32_t my_cpu_id)
         if (i == my_cpu_id) {
             continue;
         }
-        cpu_sched_t *remote = &g_cpus[i].sched;
+        cpu_sched_t* remote = &g_cpus[i].sched;
         if (!remote->ready_bitmap) {
             continue;
         }
         if (!ksync_spinlock_try_lock(&remote->lock)) {
             continue;
         }
-        struct thread *t = NULL;
+        struct thread* t = NULL;
         if (remote->ready_bitmap) {
             t = cpu_sched_steal_pick(remote);
         }

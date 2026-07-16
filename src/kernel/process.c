@@ -38,14 +38,14 @@ static process_t g_processes[PROCESS_MAX_COUNT];
 static uint32_t g_next_pid;
 static ksync_spinlock_t g_process_table_lock;
 /* Scheduler state lives in cpu_local_t (per-CPU) — see smp.h. */
-static process_t *g_idle_process;
+static process_t* g_idle_process;
 /* g_in_context_switch removed: each CPU now tracks in_context_switch in
  * cpu_local_t (at offset 17 from GS:0) to avoid false preemption suppression
  * across CPUs when multiple context switches run simultaneously. */
 static uint64_t g_ctx_watch_logged;
 
-static void process_clear_runtime_tag(process_t *proc);
-static int process_copy_runtime_tag(process_t *proc, const char *tag);
+static void process_clear_runtime_tag(process_t* proc);
+static int process_copy_runtime_tag(process_t* proc, const char* tag);
 static uint64_t g_ctx_watch_last_logged_rip;
 static uint64_t g_ctx_watch_last_logged_rsp;
 static uint64_t g_ctx_watch_last_logged_rflags;
@@ -55,20 +55,15 @@ static uint8_t g_sched_progress_logged;
 static uint64_t g_sched_switch_count;
 static uint64_t g_trap_frame_invalid_reports;
 
-static process_t *process_find_by_pid(uint32_t pid);
+static process_t* process_find_by_pid(uint32_t pid);
 static void process_trampoline(void);
-static int process_spawn_as_internal(uint32_t parent_pid,
-                                     const char *name,
-                                     process_entry_t entry,
-                                     void *arg,
-                                     uint32_t *out_pid,
+static int process_spawn_as_internal(uint32_t parent_pid, const char* name, process_entry_t entry,
+                                     void* arg, uint32_t* out_pid,
                                      thread_state_t initial_thread_state,
                                      thread_block_reason_t initial_thread_reason,
                                      uint8_t enqueue_initial);
 
-static inline uintptr_t
-process_kernel_alias_addr(uintptr_t addr)
-{
+static inline uintptr_t process_kernel_alias_addr(uintptr_t addr) {
     uint64_t base = KERNEL_HIGHER_HALF_BASE;
     if ((uint64_t)addr < base) {
         return (uintptr_t)((uint64_t)addr + base);
@@ -76,10 +71,8 @@ process_kernel_alias_addr(uintptr_t addr)
     return addr;
 }
 
-static inline process_t *
-process_table(void)
-{
-    return (process_t *)(void *)process_kernel_alias_addr((uintptr_t)&g_processes[0]);
+static inline process_t* process_table(void) {
+    return (process_t*)(void*)process_kernel_alias_addr((uintptr_t)&g_processes[0]);
 }
 
 volatile uint64_t g_ctxsw_last_out_ctx;
@@ -101,15 +94,15 @@ volatile uint64_t g_ctx_restore_ctx;
 volatile uint64_t g_ctx_restore_rip;
 volatile uint64_t g_ctx_restore_rsp;
 volatile uint64_t g_ctx_restore_rflags;
-volatile uint64_t *g_pm_stack_watch;
+volatile uint64_t* g_pm_stack_watch;
 extern uint8_t __kernel_start;
 extern uint8_t __kernel_end;
 
 #define PAGE_SIZE 0x1000u
 #define KERNEL_CS_SELECTOR 0x08u
 #define KERNEL_DS_SELECTOR 0x10u
-#define USER_CS_SELECTOR   0x1Bu
-#define USER_DS_SELECTOR   0x23u
+#define USER_CS_SELECTOR 0x1Bu
+#define USER_DS_SELECTOR 0x23u
 #define STACK_GUARD_PAGES 1u
 #define STACK_REDZONE_BYTES 4096u
 #define STACK_CANARY_VALUE 0xC0DEC0DEF00DFACEULL
@@ -122,9 +115,7 @@ extern uint8_t __kernel_end;
 static uint8_t g_sched_trampoline_stacks[WASMOS_MAX_CPUS][SCHED_TRAMPOLINE_STACK_BYTES]
     __attribute__((aligned(16)));
 
-static int
-process_alloc_stack(process_t *slot, uint32_t stack_pages)
-{
+static int process_alloc_stack(process_t* slot, uint32_t stack_pages) {
     if (!slot || stack_pages == 0) {
         return -1;
     }
@@ -149,8 +140,10 @@ process_alloc_stack(process_t *slot, uint32_t stack_pages)
     uint64_t guard_high = base + ((total_pages - STACK_GUARD_PAGES) * PAGE_SIZE);
     uint64_t higher_half_base = paging_get_higher_half_base();
     uint64_t guard_low_virt = using_higher_half_stack ? (higher_half_base + guard_low) : guard_low;
-    uint64_t usable_base_virt = using_higher_half_stack ? (higher_half_base + usable_base) : usable_base;
-    uint64_t guard_high_virt = using_higher_half_stack ? (higher_half_base + guard_high) : guard_high;
+    uint64_t usable_base_virt =
+        using_higher_half_stack ? (higher_half_base + usable_base) : usable_base;
+    uint64_t guard_high_virt =
+        using_higher_half_stack ? (higher_half_base + guard_high) : guard_high;
 
     for (uint32_t i = 0; i < STACK_GUARD_PAGES; ++i) {
         if (paging_unmap_4k(guard_low_virt + ((uint64_t)i * PAGE_SIZE)) != 0) {
@@ -173,10 +166,10 @@ process_alloc_stack(process_t *slot, uint32_t stack_pages)
     if (slot->stack_base && slot->stack_top > slot->stack_base + sizeof(uint64_t)) {
         /* Canaries catch in-range stack corruption that does not reach the guard
          * pages, such as smashed frames near the bottom or top of the stack. */
-        uint64_t *base_canary = (uint64_t *)(uintptr_t)slot->stack_base;
-        uint64_t *top_canary = (uint64_t *)(uintptr_t)(slot->stack_top - sizeof(uint64_t));
+        uint64_t* base_canary = (uint64_t*)(uintptr_t)slot->stack_base;
+        uint64_t* top_canary = (uint64_t*)(uintptr_t)(slot->stack_top - sizeof(uint64_t));
         uintptr_t mid_addr = slot->stack_base + (slot->stack_top - slot->stack_base) / 2u;
-        uint64_t *mid_canary = (uint64_t *)(uintptr_t)(mid_addr & ~(uintptr_t)0x7u);
+        uint64_t* mid_canary = (uint64_t*)(uintptr_t)(mid_addr & ~(uintptr_t)0x7u);
         *base_canary = STACK_CANARY_VALUE;
         *top_canary = STACK_CANARY_VALUE;
         *mid_canary = STACK_CANARY_VALUE;
@@ -184,9 +177,7 @@ process_alloc_stack(process_t *slot, uint32_t stack_pages)
     return 0;
 }
 
-static int
-process_alloc_thread_stack(thread_t *thread, uint32_t stack_pages)
-{
+static int process_alloc_thread_stack(thread_t* thread, uint32_t stack_pages) {
     if (!thread || stack_pages == 0) {
         return -1;
     }
@@ -225,9 +216,7 @@ process_alloc_thread_stack(thread_t *thread, uint32_t stack_pages)
     return 0;
 }
 
-static void
-process_restore_stack_guard_mappings(uint64_t alloc_base_phys, uint32_t stack_pages)
-{
+static void process_restore_stack_guard_mappings(uint64_t alloc_base_phys, uint32_t stack_pages) {
     if (!alloc_base_phys || stack_pages == 0) {
         return;
     }
@@ -248,72 +237,62 @@ process_restore_stack_guard_mappings(uint64_t alloc_base_phys, uint32_t stack_pa
     }
 }
 
-static process_run_result_t
-process_run_worker_on_stack(process_t *proc, thread_t *thread)
-{
+static process_run_result_t process_run_worker_on_stack(process_t* proc, thread_t* thread) {
     process_thread_worker_entry_t entry =
         (process_thread_worker_entry_t)(uintptr_t)process_kernel_alias_addr(thread->worker_entry);
     uintptr_t stack_top = thread->kstack_top - 16u;
     stack_top &= ~(uintptr_t)0xFULL;
     process_run_result_t rc = PROCESS_RUN_EXITED;
-    __asm__ volatile(
-        "mov %%rsp, %%r15\n"
-        "mov %[stack_top], %%rsp\n"
-        "call *%[entry]\n"
-        "mov %%r15, %%rsp\n"
-        : "=a"(rc)
-        : [stack_top] "r"(stack_top),
-          [entry] "r"(entry),
-          "D"(proc),
-          "S"(thread->tid),
-          "d"(thread->worker_arg)
-        : "r15", "rcx", "r8", "r9", "r10", "r11", "memory", "cc");
+    __asm__ volatile("mov %%rsp, %%r15\n"
+                     "mov %[stack_top], %%rsp\n"
+                     "call *%[entry]\n"
+                     "mov %%r15, %%rsp\n"
+                     : "=a"(rc)
+                     : [stack_top] "r"(stack_top), [entry] "r"(entry), "D"(proc), "S"(thread->tid),
+                       "d"(thread->worker_arg)
+                     : "r15", "rcx", "r8", "r9", "r10", "r11", "memory", "cc");
     return rc;
 }
 
-extern void context_switch(process_context_t *out, process_context_t *in);
-extern void context_switch_to(process_context_t *in);
-static void context_switch_high(process_context_t *out, process_context_t *in);
+extern void context_switch(process_context_t* out, process_context_t* in);
+extern void context_switch_to(process_context_t* in);
+static void context_switch_high(process_context_t* out, process_context_t* in);
 static int process_schedule_once_impl(void);
-static thread_t *process_main_thread(process_t *proc);
-static process_t *process_owner_for_thread(thread_t *thread);
-static thread_t *process_thread_for_transition(process_t *proc);
-static thread_t *process_first_owner_ready_thread(process_t *proc);
-static process_context_t *process_sched_ctx_for_thread(process_t *proc, thread_t *thread);
-static void process_wake_thread_joiner(process_t *owner, thread_t *exited);
-static void process_reap(process_t *proc);
-static void process_sched_invariant_fail(const char *msg, uint64_t a, uint64_t b);
-static void process_set_blocked(process_t *proc, thread_t *thread, process_block_reason_t reason, thread_block_reason_t thread_reason);
-static void process_set_ready(process_t *proc, thread_t *thread);
-static void process_set_running(process_t *proc, thread_t *thread);
+static thread_t* process_main_thread(process_t* proc);
+static process_t* process_owner_for_thread(thread_t* thread);
+static thread_t* process_thread_for_transition(process_t* proc);
+static thread_t* process_first_owner_ready_thread(process_t* proc);
+static process_context_t* process_sched_ctx_for_thread(process_t* proc, thread_t* thread);
+static void process_wake_thread_joiner(process_t* owner, thread_t* exited);
+static void process_reap(process_t* proc);
+static void process_sched_invariant_fail(const char* msg, uint64_t a, uint64_t b);
+static void process_set_blocked(process_t* proc, thread_t* thread, process_block_reason_t reason,
+                                thread_block_reason_t thread_reason);
+static void process_set_ready(process_t* proc, thread_t* thread);
+static void process_set_running(process_t* proc, thread_t* thread);
 static uint8_t process_has_waiters(uint32_t target_pid);
-static void process_try_auto_reap(process_t *proc);
-static process_run_result_t process_thread_spawn_default_worker(process_t *process, uint32_t tid, void *arg);
+static void process_try_auto_reap(process_t* proc);
+static process_run_result_t process_thread_spawn_default_worker(process_t* process, uint32_t tid,
+                                                                void* arg);
 
-
-static process_run_result_t
-process_thread_spawn_default_worker(process_t *process, uint32_t tid, void *arg)
-{
+static process_run_result_t process_thread_spawn_default_worker(process_t* process, uint32_t tid,
+                                                                void* arg) {
     (void)process;
     (void)tid;
     (void)arg;
     return PROCESS_RUN_THREAD_EXITED;
 }
 
-static void
-context_switch_high(process_context_t *out, process_context_t *in)
-{
+static void context_switch_high(process_context_t* out, process_context_t* in) {
     uint64_t higher_half_base = paging_get_higher_half_base();
     uintptr_t fn = (uintptr_t)&context_switch;
     if ((uint64_t)fn < higher_half_base) {
         fn += (uintptr_t)higher_half_base;
     }
-    ((void (*)(process_context_t *, process_context_t *))fn)(out, in);
+    ((void (*)(process_context_t*, process_context_t*))fn)(out, in);
 }
 
-static int
-process_run_on_sched_stack(int (*fn)(void))
-{
+static int process_run_on_sched_stack(int (*fn)(void)) {
     if (!fn) {
         return -1;
     }
@@ -325,18 +304,17 @@ process_run_on_sched_stack(int (*fn)(void))
         (uintptr_t)&g_sched_trampoline_stacks[cpu_id][SCHED_TRAMPOLINE_STACK_BYTES]);
     stack_top &= ~(uintptr_t)0xFULL;
     int rc = -1;
-    __asm__ volatile(
-        "mov %%rsp, %%r15\n"
-        "mov %[stack_top], %%rsp\n"
-        "call *%[fn]\n"
-        "mov %%r15, %%rsp\n"
-        : "=a"(rc)
-        : [stack_top] "r"(stack_top), [fn] "r"(fn)
-        : "r15", "rcx", "rdx", "rsi", "rdi", "r8", "r9", "r10", "memory", "cc");
+    __asm__ volatile("mov %%rsp, %%r15\n"
+                     "mov %[stack_top], %%rsp\n"
+                     "call *%[fn]\n"
+                     "mov %%r15, %%rsp\n"
+                     : "=a"(rc)
+                     : [stack_top] "r"(stack_top), [fn] "r"(fn)
+                     : "r15", "rcx", "rdx", "rsi", "rdi", "r8", "r9", "r10", "memory", "cc");
     return rc;
 }
 
-static void process_log_ctx_watch(const char *where) {
+static void process_log_ctx_watch(const char* where) {
     trace_write("[sched] ctxwatch ");
     if (where) {
         trace_write(where);
@@ -396,28 +374,24 @@ static void process_log_ctx_watch_if_changed(void) {
     process_log_ctx_watch("ctxsw");
 }
 
-static void process_validate_thread_context(process_t *proc,
-                                            thread_t *thread,
-                                            process_context_t *ctx,
-                                            const char *where) {
+static void process_validate_thread_context(process_t* proc, thread_t* thread,
+                                            process_context_t* ctx, const char* where) {
     if (!proc || !thread || !ctx) {
         return;
     }
     if (thread->ctx_canary_pre != PROCESS_CTX_CANARY_VALUE ||
         thread->ctx_canary_post != PROCESS_CTX_CANARY_VALUE) {
-        klog_printf(
-            "[sched] thread ctx canary corrupt pid=%016llx tid=%016llx\n"
-            "[sched] name=%s\n"
-            "[sched] ctx canary pre=%016llx\n"
-            "[sched] ctx canary post=%016llx\n",
-            (unsigned long long)proc->pid,
-            (unsigned long long)thread->tid,
-            proc->name ? proc->name : "(null)",
-            (unsigned long long)thread->ctx_canary_pre,
-            (unsigned long long)thread->ctx_canary_post);
+        klog_printf("[sched] thread ctx canary corrupt pid=%016llx tid=%016llx\n"
+                    "[sched] name=%s\n"
+                    "[sched] ctx canary pre=%016llx\n"
+                    "[sched] ctx canary post=%016llx\n",
+                    (unsigned long long)proc->pid, (unsigned long long)thread->tid,
+                    proc->name ? proc->name : "(null)", (unsigned long long)thread->ctx_canary_pre,
+                    (unsigned long long)thread->ctx_canary_post);
         process_log_ctxsw_state();
         process_log_ctx_watch("canary");
-        kpanic("ctx_canary_tripped", (uintptr_t)thread->ctx_canary_pre, (uintptr_t)thread->ctx_canary_post);
+        kpanic("ctx_canary_tripped", (uintptr_t)thread->ctx_canary_pre,
+               (uintptr_t)thread->ctx_canary_post);
     }
     uint64_t rip = ctx->rip;
     uint8_t is_user_ctx = (uint8_t)((ctx->cs & 0x3u) == 0x3u);
@@ -432,22 +406,17 @@ static void process_validate_thread_context(process_t *proc,
     if (end < higher_half) {
         end += higher_half;
     }
-    if (is_user_ctx || (rip >= start && rip < end) ||
-        (rip >= low_start && rip < low_end)) {
+    if (is_user_ctx || (rip >= start && rip < end) || (rip >= low_start && rip < low_end)) {
         if (!is_user_ctx) {
             uint64_t rsp = ctx->rsp;
             if (rsp < higher_half) {
-                klog_printf(
-                    "[sched] invalid thread rsp in %s pid=%016llx tid=%016llx\n"
-                    "[sched] name=%s\n"
-                    "[sched] rip=%016llx\n"
-                    "[sched] rsp=%016llx\n",
-                    where ? where : "?",
-                    (unsigned long long)proc->pid,
-                    (unsigned long long)thread->tid,
-                    proc->name ? proc->name : "(null)",
-                    (unsigned long long)rip,
-                    (unsigned long long)rsp);
+                klog_printf("[sched] invalid thread rsp in %s pid=%016llx tid=%016llx\n"
+                            "[sched] name=%s\n"
+                            "[sched] rip=%016llx\n"
+                            "[sched] rsp=%016llx\n",
+                            where ? where : "?", (unsigned long long)proc->pid,
+                            (unsigned long long)thread->tid, proc->name ? proc->name : "(null)",
+                            (unsigned long long)rip, (unsigned long long)rsp);
                 process_log_ctxsw_state();
                 process_log_ctx_watch("invalid-rsp");
                 kpanic("invalid_rsp", (uintptr_t)rip, (uintptr_t)rsp);
@@ -455,43 +424,33 @@ static void process_validate_thread_context(process_t *proc,
         }
         return;
     }
-    klog_printf(
-        "[sched] invalid thread rip in %s pid=%016llx tid=%016llx\n"
-        "[sched] name=%s\n"
-        "[sched] rip=%016llx\n"
-        "[sched] rsp=%016llx\n",
-        where ? where : "?",
-        (unsigned long long)proc->pid,
-        (unsigned long long)thread->tid,
-        proc->name ? proc->name : "(null)",
-        (unsigned long long)rip,
-        (unsigned long long)ctx->rsp);
+    klog_printf("[sched] invalid thread rip in %s pid=%016llx tid=%016llx\n"
+                "[sched] name=%s\n"
+                "[sched] rip=%016llx\n"
+                "[sched] rsp=%016llx\n",
+                where ? where : "?", (unsigned long long)proc->pid, (unsigned long long)thread->tid,
+                proc->name ? proc->name : "(null)", (unsigned long long)rip,
+                (unsigned long long)ctx->rsp);
     process_log_ctxsw_state();
     process_log_ctx_watch("invalid-rip");
     kpanic("invalid_rip", (uintptr_t)rip, (uintptr_t)ctx->rsp);
 }
 
-static thread_t *
-process_main_thread(process_t *proc)
-{
+static thread_t* process_main_thread(process_t* proc) {
     if (!proc || proc->main_tid == 0) {
         return 0;
     }
     return thread_get(proc->main_tid);
 }
 
-static process_t *
-process_owner_for_thread(thread_t *thread)
-{
+static process_t* process_owner_for_thread(thread_t* thread) {
     if (!thread || thread->owner_pid == 0) {
         return 0;
     }
     return process_find_by_pid(thread->owner_pid);
 }
 
-static thread_t *
-process_thread_for_transition(process_t *proc)
-{
+static thread_t* process_thread_for_transition(process_t* proc) {
     if (!proc) {
         return 0;
     }
@@ -501,15 +460,13 @@ process_thread_for_transition(process_t *proc)
     return process_main_thread(proc);
 }
 
-static thread_t *
-process_first_owner_ready_thread(process_t *proc)
-{
+static thread_t* process_first_owner_ready_thread(process_t* proc) {
     if (!proc) {
         return 0;
     }
     for (uint32_t i = 0;; ++i) {
         uint32_t tid = 0;
-        thread_t *thread = 0;
+        thread_t* thread = 0;
         if (thread_owner_tid_at(proc->pid, i, &tid) != 0) {
             break;
         }
@@ -522,9 +479,7 @@ process_first_owner_ready_thread(process_t *proc)
     return 0;
 }
 
-static process_context_t *
-process_sched_ctx_for_thread(process_t *proc, thread_t *thread)
-{
+static process_context_t* process_sched_ctx_for_thread(process_t* proc, thread_t* thread) {
     if (!proc || !thread) {
         return 0;
     }
@@ -536,11 +491,14 @@ static void process_trampoline(void) {
     for (;;) {
         cpu_local()->in_scheduler = 0;
         if (cpu_local()->current_process) {
-            uint64_t *base = (uint64_t *)(uintptr_t)cpu_local()->current_process->stack_base;
-            uint64_t *top = (uint64_t *)(uintptr_t)(cpu_local()->current_process->stack_top - sizeof(uint64_t));
-            uintptr_t mid_addr = cpu_local()->current_process->stack_base
-                                 + (cpu_local()->current_process->stack_top - cpu_local()->current_process->stack_base) / 2u;
-            uint64_t *mid = (uint64_t *)(uintptr_t)(mid_addr & ~(uintptr_t)0x7u);
+            uint64_t* base = (uint64_t*)(uintptr_t)cpu_local()->current_process->stack_base;
+            uint64_t* top =
+                (uint64_t*)(uintptr_t)(cpu_local()->current_process->stack_top - sizeof(uint64_t));
+            uintptr_t mid_addr = cpu_local()->current_process->stack_base +
+                                 (cpu_local()->current_process->stack_top -
+                                  cpu_local()->current_process->stack_base) /
+                                     2u;
+            uint64_t* mid = (uint64_t*)(uintptr_t)(mid_addr & ~(uintptr_t)0x7u);
             if (base && top && mid) {
                 const uint64_t canary = STACK_CANARY_VALUE;
                 if (*base != canary || *top != canary || *mid != canary) {
@@ -552,13 +510,11 @@ static void process_trampoline(void) {
                         "[sched] base val=%016llx\n"
                         "[sched] mid val=%016llx\n"
                         "[sched] top val=%016llx\n",
-                        cpu_local()->current_process->name ? cpu_local()->current_process->name : "(unknown)",
-                        (unsigned long long)(uintptr_t)base,
-                        (unsigned long long)(uintptr_t)mid,
-                        (unsigned long long)(uintptr_t)top,
-                        (unsigned long long)*base,
-                        (unsigned long long)*mid,
-                        (unsigned long long)*top);
+                        cpu_local()->current_process->name ? cpu_local()->current_process->name
+                                                           : "(unknown)",
+                        (unsigned long long)(uintptr_t)base, (unsigned long long)(uintptr_t)mid,
+                        (unsigned long long)(uintptr_t)top, (unsigned long long)*base,
+                        (unsigned long long)*mid, (unsigned long long)*top);
                     kpanic("stack_canary_tripped", (uintptr_t)base, (uintptr_t)top);
                 }
             }
@@ -574,8 +530,9 @@ static void process_trampoline(void) {
         if (!cpu_local()->current_process || !cpu_local()->current_process->entry) {
             cpu_local()->last_run_result = PROCESS_RUN_IDLE;
         } else {
-            uintptr_t entry_ptr = process_kernel_alias_addr((uintptr_t)cpu_local()->current_process->entry);
-            process_entry_t entry_fn = (process_entry_t)(void *)entry_ptr;
+            uintptr_t entry_ptr =
+                process_kernel_alias_addr((uintptr_t)cpu_local()->current_process->entry);
+            process_entry_t entry_fn = (process_entry_t)(void*)entry_ptr;
             /* Guard runtime reentrancy for subsystems that require a
              * single-threaded process entry path. Kernel workers
              * (is_kernel_worker) skip this path entirely. */
@@ -587,16 +544,19 @@ static void process_trampoline(void) {
                  * the full irq-disable contract is not needed here. */
                 ksync_spinlock_lock_noirq(&cpu_local()->current_process->runtime_lock);
                 cpu_local()->current_process->runtime_lock_owner = cpu_local()->current_thread->tid;
-                cpu_local()->last_run_result = entry_fn(cpu_local()->current_process, cpu_local()->current_process->arg);
+                cpu_local()->last_run_result =
+                    entry_fn(cpu_local()->current_process, cpu_local()->current_process->arg);
                 cpu_local()->current_process->runtime_lock_owner = 0;
                 ksync_spinlock_unlock_noirq(&cpu_local()->current_process->runtime_lock);
             } else {
-                cpu_local()->last_run_result = entry_fn(cpu_local()->current_process, cpu_local()->current_process->arg);
+                cpu_local()->last_run_result =
+                    entry_fn(cpu_local()->current_process, cpu_local()->current_process->arg);
             }
         }
         cpu_local()->in_scheduler = 1;
         critical_section_enter();
-        process_context_t *ctx = process_sched_ctx_for_thread(cpu_local()->current_process, cpu_local()->current_thread);
+        process_context_t* ctx =
+            process_sched_ctx_for_thread(cpu_local()->current_process, cpu_local()->current_thread);
         if (!ctx) {
             cpu_local()->last_run_result = PROCESS_RUN_IDLE;
             continue;
@@ -611,7 +571,7 @@ static void process_trampoline(void) {
 
 extern void process_preempt_trampoline(void);
 
-static void process_reset_slot(process_t *proc) {
+static void process_reset_slot(process_t* proc) {
     if (!proc) {
         return;
     }
@@ -650,9 +610,7 @@ static void process_reset_slot(process_t *proc) {
     proc->name = 0;
 }
 
-static int
-process_copy_name(process_t *proc, const char *name)
-{
+static int process_copy_name(process_t* proc, const char* name) {
     if (!proc || !name) {
         return -1;
     }
@@ -665,9 +623,7 @@ process_copy_name(process_t *proc, const char *name)
     return name[i] == '\0' ? 0 : -1;
 }
 
-static void
-process_clear_runtime_tag(process_t *proc)
-{
+static void process_clear_runtime_tag(process_t* proc) {
     if (!proc) {
         return;
     }
@@ -676,9 +632,7 @@ process_clear_runtime_tag(process_t *proc)
     }
 }
 
-static int
-process_copy_runtime_tag(process_t *proc, const char *tag)
-{
+static int process_copy_runtime_tag(process_t* proc, const char* tag) {
     if (!proc || !tag) {
         return -1;
     }
@@ -692,9 +646,9 @@ process_copy_runtime_tag(process_t *proc, const char *tag)
     return tag[WASMOS_APP_SUBSYSTEM_TAG_LEN] == '\0' ? 0 : -1;
 }
 
-static process_t *process_find_slot(void) {
+static process_t* process_find_slot(void) {
     /* Must be called with g_process_table_lock held. */
-    process_t *table = process_table();
+    process_t* table = process_table();
     for (uint32_t i = 0; i < PROCESS_MAX_COUNT; ++i) {
         if (table[i].state == PROCESS_STATE_UNUSED) {
             return &table[i];
@@ -703,12 +657,12 @@ static process_t *process_find_slot(void) {
     return 0;
 }
 
-static process_t *process_find_by_pid(uint32_t pid) {
+static process_t* process_find_by_pid(uint32_t pid) {
     /* Must be called with g_process_table_lock held. */
     if (pid == 0) {
         return 0;
     }
-    process_t *table = process_table();
+    process_t* table = process_table();
     for (uint32_t i = 0; i < PROCESS_MAX_COUNT; ++i) {
         if (table[i].pid == pid && table[i].state != PROCESS_STATE_UNUSED) {
             return &table[i];
@@ -717,15 +671,14 @@ static process_t *process_find_by_pid(uint32_t pid) {
     return 0;
 }
 
-static process_t *process_find_by_context_internal(uint32_t context_id) {
+static process_t* process_find_by_context_internal(uint32_t context_id) {
     /* Must be called with g_process_table_lock held. */
     if (context_id == 0) {
         return 0;
     }
-    process_t *table = process_table();
+    process_t* table = process_table();
     for (uint32_t i = 0; i < PROCESS_MAX_COUNT; ++i) {
-        if (table[i].context_id == context_id &&
-            table[i].state != PROCESS_STATE_UNUSED) {
+        if (table[i].context_id == context_id && table[i].state != PROCESS_STATE_UNUSED) {
             return &table[i];
         }
     }
@@ -737,7 +690,7 @@ static void process_wake_waiters(uint32_t target_pid) {
         return;
     }
     for (uint32_t i = 0; i < PROCESS_MAX_COUNT; ++i) {
-        process_t *proc = &g_processes[i];
+        process_t* proc = &g_processes[i];
         uint8_t woke_any = 0;
         if (proc->state == PROCESS_STATE_UNUSED || proc->state == PROCESS_STATE_ZOMBIE ||
             proc->state == PROCESS_STATE_REAPING) {
@@ -745,7 +698,7 @@ static void process_wake_waiters(uint32_t target_pid) {
         }
         for (uint32_t j = 0;; ++j) {
             uint32_t tid = 0;
-            thread_t *waiter = 0;
+            thread_t* waiter = 0;
             if (thread_owner_tid_at(proc->pid, j, &tid) != 0) {
                 break;
             }
@@ -761,10 +714,8 @@ static void process_wake_waiters(uint32_t target_pid) {
             }
             waiter->wait_target_pid = 0;
             woke_any = 1;
-            if (proc == cpu_local()->current_process &&
-                proc->state == PROCESS_STATE_RUNNING &&
-                cpu_local()->current_thread &&
-                cpu_local()->current_thread->tid != waiter->tid) {
+            if (proc == cpu_local()->current_process && proc->state == PROCESS_STATE_RUNNING &&
+                cpu_local()->current_thread && cpu_local()->current_thread->tid != waiter->tid) {
                 thread_set_state(waiter->tid, THREAD_STATE_READY, THREAD_BLOCK_NONE);
             } else {
                 process_set_ready(proc, waiter);
@@ -784,7 +735,7 @@ static void process_wake_waiters(uint32_t target_pid) {
     }
 }
 
-static void process_mark_exited(process_t *proc, int32_t exit_status) {
+static void process_mark_exited(process_t* proc, int32_t exit_status) {
     if (!proc || proc->state == PROCESS_STATE_UNUSED) {
         return;
     }
@@ -798,21 +749,19 @@ static void process_mark_exited(process_t *proc, int32_t exit_status) {
     process_wake_waiters(proc->pid);
 }
 
-static uint8_t
-process_has_waiters(uint32_t target_pid)
-{
+static uint8_t process_has_waiters(uint32_t target_pid) {
     if (target_pid == 0) {
         return 0;
     }
     for (uint32_t i = 0; i < PROCESS_MAX_COUNT; ++i) {
-        process_t *proc = &g_processes[i];
+        process_t* proc = &g_processes[i];
         if (proc->state == PROCESS_STATE_UNUSED || proc->state == PROCESS_STATE_ZOMBIE ||
             proc->state == PROCESS_STATE_REAPING) {
             continue;
         }
         for (uint32_t j = 0;; ++j) {
             uint32_t tid = 0;
-            thread_t *waiter = 0;
+            thread_t* waiter = 0;
             if (thread_owner_tid_at(proc->pid, j, &tid) != 0) {
                 break;
             }
@@ -836,27 +785,20 @@ process_has_waiters(uint32_t target_pid)
  * freeing the same process's stacks/memory when work-stealing causes concurrent
  * exits/waits to arrive on different CPUs.  All reap paths (auto-reap, wait,
  * PM wait-reply) funnel through here so the CAS is the single gate. */
-static void
-process_reap_claim(process_t *proc)
-{
+static void process_reap_claim(process_t* proc) {
     if (!proc) {
         return;
     }
     uint32_t expected = (uint32_t)PROCESS_STATE_ZOMBIE;
-    if (!__atomic_compare_exchange_n((uint32_t *)&proc->state,
-                                     &expected,
-                                     (uint32_t)PROCESS_STATE_REAPING,
-                                     0,
-                                     __ATOMIC_ACQ_REL,
+    if (!__atomic_compare_exchange_n((uint32_t*)&proc->state, &expected,
+                                     (uint32_t)PROCESS_STATE_REAPING, 0, __ATOMIC_ACQ_REL,
                                      __ATOMIC_RELAXED)) {
         return;
     }
     process_reap(proc);
 }
 
-static void
-process_try_auto_reap(process_t *proc)
-{
+static void process_try_auto_reap(process_t* proc) {
     if (!proc || !proc->auto_reap) {
         return;
     }
@@ -871,19 +813,17 @@ process_try_auto_reap(process_t *proc)
  * the waiter — interactive CLI children are parented to the CLI, not the PM, so
  * the PM cannot use process_wait() (which enforces the parent check).  No-op if
  * the pid is not a (still-unreaped) zombie. */
-void
-process_reap_zombie_pid(uint32_t pid)
-{
+void process_reap_zombie_pid(uint32_t pid) {
     if (pid == 0) {
         return;
     }
-    process_t *proc = process_find_by_pid(pid);
+    process_t* proc = process_find_by_pid(pid);
     if (proc) {
         process_reap_claim(proc);
     }
 }
 
-static void process_reap(process_t *proc) {
+static void process_reap(process_t* proc) {
     if (!proc) {
         return;
     }
@@ -892,7 +832,7 @@ static void process_reap(process_t *proc) {
         if (thread_owner_tid_at(proc->pid, i, &tid) != 0) {
             break;
         }
-        thread_t *thread = thread_get(tid);
+        thread_t* thread = thread_get(tid);
         if (!thread) {
             continue;
         }
@@ -929,9 +869,7 @@ static void process_reap(process_t *proc) {
     process_reset_slot(proc);
 }
 
-process_context_t *
-cpu_local_sched_ctx(void)
-{
+process_context_t* cpu_local_sched_ctx(void) {
     return &cpu_local()->sched_ctx;
 }
 
@@ -984,17 +922,17 @@ void process_ap_init(void) {
     /* Initialize per-CPU scheduler state for an AP before its timer fires.
      * Must be called before lapic_ap_enable() so no timer preemption can
      * occur against an uninitialized sched_ctx. */
-    cpu_local()->last_index           = 0;
-    cpu_local()->current_pid          = 0;
-    cpu_local()->need_resched         = 0;
-    cpu_local()->current_process      = 0;
-    cpu_local()->current_thread       = 0;
-    cpu_local()->last_run_result      = PROCESS_RUN_IDLE;
+    cpu_local()->last_index = 0;
+    cpu_local()->current_pid = 0;
+    cpu_local()->need_resched = 0;
+    cpu_local()->current_process = 0;
+    cpu_local()->current_thread = 0;
+    cpu_local()->last_run_result = PROCESS_RUN_IDLE;
     cpu_local()->preempt_disable_count = 0;
     cpu_local()->pm_preempt_safe_depth = 0;
     cpu_local()->resched_pending_since_tick = 0;
     cpu_local()->resched_stall_reports = 0;
-    cpu_local()->in_scheduler         = 1; /* block premature preemption */
+    cpu_local()->in_scheduler = 1; /* block premature preemption */
     cpu_local()->sched_ctx.root_table = paging_get_root_table();
     /* Do NOT clear global ctx watch state here; the BSP may already have armed
      * it for a target thread before AP bring-up completes.
@@ -1004,26 +942,21 @@ void process_ap_init(void) {
     cpu_sched_init(cpu_sched());
 }
 
-int process_spawn(const char *name, process_entry_t entry, void *arg, uint32_t *out_pid) {
+int process_spawn(const char* name, process_entry_t entry, void* arg, uint32_t* out_pid) {
     return process_spawn_as(cpu_local()->current_pid, name, entry, arg, out_pid);
 }
 
-static int
-process_spawn_as_internal(uint32_t parent_pid,
-                          const char *name,
-                          process_entry_t entry,
-                          void *arg,
-                          uint32_t *out_pid,
-                          thread_state_t initial_thread_state,
-                          thread_block_reason_t initial_thread_reason,
-                          uint8_t enqueue_initial)
-{
+static int process_spawn_as_internal(uint32_t parent_pid, const char* name, process_entry_t entry,
+                                     void* arg, uint32_t* out_pid,
+                                     thread_state_t initial_thread_state,
+                                     thread_block_reason_t initial_thread_reason,
+                                     uint8_t enqueue_initial) {
     if (!entry || !out_pid) {
         return -1;
     }
 
     ksync_spinlock_lock(&g_process_table_lock);
-    process_t *slot = process_find_slot();
+    process_t* slot = process_find_slot();
     if (!slot) {
         ksync_spinlock_unlock(&g_process_table_lock);
         return -1;
@@ -1033,7 +966,7 @@ process_spawn_as_internal(uint32_t parent_pid,
 
     uint32_t pid = g_next_pid++;
     ksync_spinlock_unlock(&g_process_table_lock);
-    mm_context_t *ctx = mm_context_create(pid);
+    mm_context_t* ctx = mm_context_create(pid);
     if (!ctx) {
         return -1;
     }
@@ -1066,15 +999,12 @@ process_spawn_as_internal(uint32_t parent_pid,
     if (process_copy_name(slot, name ? name : "") != 0) {
         return -1;
     }
-    if (thread_spawn_in_owner(pid,
-                              name ? name : "",
-                              initial_thread_state,
-                              initial_thread_reason,
+    if (thread_spawn_in_owner(pid, name ? name : "", initial_thread_state, initial_thread_reason,
                               &slot->main_tid) != 0) {
         return -1;
     }
     {
-        thread_t *main_thread = process_main_thread(slot);
+        thread_t* main_thread = process_main_thread(slot);
         if (!main_thread) {
             return -1;
         }
@@ -1096,19 +1026,17 @@ process_spawn_as_internal(uint32_t parent_pid,
     slot->ctx.ss = KERNEL_DS_SELECTOR;
     slot->ctx.root_table = ctx->root_table;
     {
-        thread_t *main_thread = process_main_thread(slot);
+        thread_t* main_thread = process_main_thread(slot);
         if (main_thread) {
             main_thread->ctx = slot->ctx;
-            sched_thread_init(main_thread,
-                sched_default_prio(slot->is_idle, 0, 0, 0));
+            sched_thread_init(main_thread, sched_default_prio(slot->is_idle, 0, 0, 0));
         }
     }
     ksync_spinlock_init(&slot->runtime_lock);
     slot->runtime_lock_owner = 0;
     sched_event_init(&slot->wait_event, SCHED_EVENT_TYPE_PROCESS);
-    if (strcmp(name, "process-manager") == 0 ||
-        strcmp(name, "native-call-min") == 0) {
-        thread_t *watch_thread = process_main_thread(slot);
+    if (strcmp(name, "process-manager") == 0 || strcmp(name, "native-call-min") == 0) {
+        thread_t* watch_thread = process_main_thread(slot);
         if (watch_thread) {
             g_ctx_watch_ctx = (uint64_t)(uintptr_t)&watch_thread->ctx;
             g_ctx_watch_last_ctx = g_ctx_watch_ctx;
@@ -1118,7 +1046,7 @@ process_spawn_as_internal(uint32_t parent_pid,
             trace_do(serial_write_hex64(g_ctx_watch_ctx));
         }
         if (slot->stack_top >= sizeof(uint64_t)) {
-            g_pm_stack_watch = (uint64_t *)(uintptr_t)(slot->stack_top - sizeof(uint64_t));
+            g_pm_stack_watch = (uint64_t*)(uintptr_t)(slot->stack_top - sizeof(uint64_t));
             trace_write("[sched] pm stack watch addr=");
             trace_do(serial_write_hex64((uint64_t)(uintptr_t)g_pm_stack_watch));
         }
@@ -1143,36 +1071,26 @@ process_spawn_as_internal(uint32_t parent_pid,
     return 0;
 }
 
-int process_spawn_as(uint32_t parent_pid, const char *name, process_entry_t entry, void *arg, uint32_t *out_pid) {
-    return process_spawn_as_internal(parent_pid,
-                                     name,
-                                     entry,
-                                     arg,
-                                     out_pid,
-                                     THREAD_STATE_READY,
-                                     THREAD_BLOCK_NONE,
-                                     1);
+int process_spawn_as(uint32_t parent_pid, const char* name, process_entry_t entry, void* arg,
+                     uint32_t* out_pid) {
+    return process_spawn_as_internal(parent_pid, name, entry, arg, out_pid, THREAD_STATE_READY,
+                                     THREAD_BLOCK_NONE, 1);
 }
 
-int process_spawn_as_parked(uint32_t parent_pid, const char *name, process_entry_t entry, void *arg, uint32_t *out_pid) {
+int process_spawn_as_parked(uint32_t parent_pid, const char* name, process_entry_t entry, void* arg,
+                            uint32_t* out_pid) {
     /* Spawn with the main thread blocked from the start so no AP can dispatch
      * it before PM explicitly unparks the child. */
-    return process_spawn_as_internal(parent_pid,
-                                     name,
-                                     entry,
-                                     arg,
-                                     out_pid,
-                                     THREAD_STATE_BLOCKED,
-                                     THREAD_BLOCK_NONE,
-                                     0);
+    return process_spawn_as_internal(parent_pid, name, entry, arg, out_pid, THREAD_STATE_BLOCKED,
+                                     THREAD_BLOCK_NONE, 0);
 }
 
 int process_unpark_pid(uint32_t pid) {
-    process_t *proc = process_get(pid);
+    process_t* proc = process_get(pid);
     if (!proc) {
         return -1;
     }
-    thread_t *t = process_main_thread(proc);
+    thread_t* t = process_main_thread(proc);
     if (!t) {
         return -1;
     }
@@ -1194,16 +1112,19 @@ int process_unpark_pid(uint32_t pid) {
     return 0;
 }
 
-int process_spawn_as_ready_gated_parked(uint32_t parent_pid, const char *name, process_entry_t entry, void *arg, uint32_t *out_pid) {
+int process_spawn_as_ready_gated_parked(uint32_t parent_pid, const char* name,
+                                        process_entry_t entry, void* arg, uint32_t* out_pid) {
     /* Spawn parked and require explicit notify_ready before PM considers it started. */
     int rc = process_spawn_as_parked(parent_pid, name, entry, arg, out_pid);
-    if (rc != 0) return rc;
-    process_t *proc = process_get(*out_pid);
-    if (proc) process_set_require_explicit_ready(proc);
+    if (rc != 0)
+        return rc;
+    process_t* proc = process_get(*out_pid);
+    if (proc)
+        process_set_require_explicit_ready(proc);
     return 0;
 }
 
-int process_spawn_idle(const char *name, process_entry_t entry, void *arg, uint32_t *out_pid) {
+int process_spawn_idle(const char* name, process_entry_t entry, void* arg, uint32_t* out_pid) {
     if (!entry || !out_pid) {
         return -1;
     }
@@ -1211,13 +1132,13 @@ int process_spawn_idle(const char *name, process_entry_t entry, void *arg, uint3
         return -1;
     }
 
-    process_t *slot = process_find_slot();
+    process_t* slot = process_find_slot();
     if (!slot) {
         return -1;
     }
 
     uint32_t pid = g_next_pid++;
-    mm_context_t *ctx = mm_context_create(pid);
+    mm_context_t* ctx = mm_context_create(pid);
     if (!ctx) {
         return -1;
     }
@@ -1250,7 +1171,7 @@ int process_spawn_idle(const char *name, process_entry_t entry, void *arg, uint3
         return -1;
     }
     {
-        thread_t *main_thread = process_main_thread(slot);
+        thread_t* main_thread = process_main_thread(slot);
         if (!main_thread) {
             return -1;
         }
@@ -1273,7 +1194,7 @@ int process_spawn_idle(const char *name, process_entry_t entry, void *arg, uint3
     slot->ctx.ss = KERNEL_DS_SELECTOR;
     slot->ctx.root_table = paging_get_root_table();
     {
-        thread_t *main_thread = process_main_thread(slot);
+        thread_t* main_thread = process_main_thread(slot);
         if (main_thread) {
             main_thread->ctx = slot->ctx;
             sched_thread_init(main_thread, SCHED_PRIO_IDLE);
@@ -1290,19 +1211,16 @@ int process_spawn_idle(const char *name, process_entry_t entry, void *arg, uint3
     return 0;
 }
 
-int
-process_spawn_idle_ap(uint32_t cpu_id)
-{
+int process_spawn_idle_ap(uint32_t cpu_id) {
     if (!g_idle_process || cpu_id == 0 || cpu_id >= WASMOS_MAX_CPUS) {
         return -1;
     }
     uint32_t tid = 0;
-    if (thread_spawn_in_owner(g_idle_process->pid, "idle-ap",
-                              THREAD_STATE_READY, THREAD_BLOCK_NONE,
+    if (thread_spawn_in_owner(g_idle_process->pid, "idle-ap", THREAD_STATE_READY, THREAD_BLOCK_NONE,
                               &tid) != 0) {
         return -1;
     }
-    thread_t *thread = thread_get(tid);
+    thread_t* thread = thread_get(tid);
     if (!thread) {
         return -1;
     }
@@ -1311,12 +1229,12 @@ process_spawn_idle_ap(uint32_t cpu_id)
         thread_reap(tid);
         return -1;
     }
-    thread->ctx.rsp        = thread->kstack_top - (STACK_REDZONE_BYTES + 8u);
-    thread->ctx.user_rsp   = thread->ctx.rsp;
-    thread->ctx.rip        = (uint64_t)process_kernel_alias_addr((uintptr_t)process_trampoline);
-    thread->ctx.rflags     = 0x200u;
-    thread->ctx.cs         = KERNEL_CS_SELECTOR;
-    thread->ctx.ss         = KERNEL_DS_SELECTOR;
+    thread->ctx.rsp = thread->kstack_top - (STACK_REDZONE_BYTES + 8u);
+    thread->ctx.user_rsp = thread->ctx.rsp;
+    thread->ctx.rip = (uint64_t)process_kernel_alias_addr((uintptr_t)process_trampoline);
+    thread->ctx.rflags = 0x200u;
+    thread->ctx.cs = KERNEL_CS_SELECTOR;
+    thread->ctx.ss = KERNEL_DS_SELECTOR;
     thread->ctx.root_table = paging_get_root_table();
     thread->time_slice_ticks = PROCESS_DEFAULT_SLICE_TICKS;
     thread->ticks_remaining = thread->time_slice_ticks;
@@ -1338,28 +1256,19 @@ process_spawn_idle_ap(uint32_t cpu_id)
     return 0;
 }
 
-int
-process_thread_spawn_internal(uint32_t owner_pid, const char *name, uint32_t *out_tid)
-{
+int process_thread_spawn_internal(uint32_t owner_pid, const char* name, uint32_t* out_tid) {
     /* Compatibility shim: preserve legacy signature but create a schedulable
      * worker thread that immediately exits when no explicit entry point exists.
      */
-    return process_thread_spawn_worker_internal(owner_pid,
-                                                name ? name : "thread-worker",
-                                                process_thread_spawn_default_worker,
-                                                0,
-                                                out_tid);
+    return process_thread_spawn_worker_internal(owner_pid, name ? name : "thread-worker",
+                                                process_thread_spawn_default_worker, 0, out_tid);
 }
 
-int
-process_thread_spawn_worker_internal(uint32_t owner_pid,
-                                     const char *name,
-                                     process_thread_worker_entry_t entry,
-                                     void *arg,
-                                     uint32_t *out_tid)
-{
-    process_t *owner = process_find_by_pid(owner_pid);
-    thread_t *thread = 0;
+int process_thread_spawn_worker_internal(uint32_t owner_pid, const char* name,
+                                         process_thread_worker_entry_t entry, void* arg,
+                                         uint32_t* out_tid) {
+    process_t* owner = process_find_by_pid(owner_pid);
+    thread_t* thread = 0;
     uint32_t tid = 0;
     uint32_t stack_pages = 0;
     if (!owner || !entry || !out_tid) {
@@ -1369,10 +1278,7 @@ process_thread_spawn_worker_internal(uint32_t owner_pid,
         owner->state == PROCESS_STATE_REAPING || owner->exiting) {
         return -1;
     }
-    if (thread_spawn_in_owner(owner_pid,
-                              name ? name : "",
-                              THREAD_STATE_READY,
-                              THREAD_BLOCK_NONE,
+    if (thread_spawn_in_owner(owner_pid, name ? name : "", THREAD_STATE_READY, THREAD_BLOCK_NONE,
                               &tid) != 0) {
         return -1;
     }
@@ -1399,15 +1305,10 @@ process_thread_spawn_worker_internal(uint32_t owner_pid,
     return 0;
 }
 
-int
-process_thread_spawn_user_internal(uint32_t owner_pid,
-                                   const char *name,
-                                   uint64_t entry_rip,
-                                   uint64_t user_stack_top,
-                                   uint32_t *out_tid)
-{
-    process_t *owner = process_find_by_pid(owner_pid);
-    thread_t *thread = 0;
+int process_thread_spawn_user_internal(uint32_t owner_pid, const char* name, uint64_t entry_rip,
+                                       uint64_t user_stack_top, uint32_t* out_tid) {
+    process_t* owner = process_find_by_pid(owner_pid);
+    thread_t* thread = 0;
     uint32_t tid = 0;
     uint32_t stack_pages = 0;
     uint64_t user_root = 0;
@@ -1421,11 +1322,8 @@ process_thread_spawn_user_internal(uint32_t owner_pid,
     if ((user_stack_top & 0xFULL) != 0) {
         user_stack_top &= ~0xFULL;
     }
-    if (thread_spawn_in_owner(owner_pid,
-                              name ? name : "user-thread",
-                              THREAD_STATE_BLOCKED,
-                              THREAD_BLOCK_NONE,
-                              &tid) != 0) {
+    if (thread_spawn_in_owner(owner_pid, name ? name : "user-thread", THREAD_STATE_BLOCKED,
+                              THREAD_BLOCK_NONE, &tid) != 0) {
         return -1;
     }
     thread = thread_get(tid);
@@ -1470,12 +1368,10 @@ process_thread_spawn_user_internal(uint32_t owner_pid,
     return 0;
 }
 
-int
-process_set_user_entry(uint32_t pid, uint64_t rip, uint64_t user_rsp)
-{
+int process_set_user_entry(uint32_t pid, uint64_t rip, uint64_t user_rsp) {
     /* TODO: Wire this into process-manager launch policy once the first
      * user-mode service/app path is selected and validated end-to-end. */
-    process_t *proc = process_find_by_pid(pid);
+    process_t* proc = process_find_by_pid(pid);
     uint64_t higher_half_base = paging_get_higher_half_base();
     if (!proc || rip == 0 || user_rsp == 0) {
         return -1;
@@ -1496,7 +1392,7 @@ process_set_user_entry(uint32_t pid, uint64_t rip, uint64_t user_rsp)
     proc->ctx.user_rsp = user_rsp;
     proc->ctx.rflags = 0x200;
     {
-        thread_t *main_thread = process_main_thread(proc);
+        thread_t* main_thread = process_main_thread(proc);
         if (main_thread) {
             main_thread->ctx = proc->ctx;
             main_thread->ctx.root_table = user_root;
@@ -1505,22 +1401,23 @@ process_set_user_entry(uint32_t pid, uint64_t rip, uint64_t user_rsp)
     return 0;
 }
 
-process_t *process_get(uint32_t pid) {
+process_t* process_get(uint32_t pid) {
     /* Hot path called on every scheduler dispatch.  The entry cannot disappear
      * while a live thread references it — no lock needed for read-only lookup. */
     return process_find_by_pid(pid);
 }
 
-process_t *process_find_by_context(uint32_t context_id) {
+process_t* process_find_by_context(uint32_t context_id) {
     return process_find_by_context_internal(context_id);
 }
 
 uint32_t process_current_pid(void) {
-    uint32_t *pid_ptr = (uint32_t *)(void *)process_kernel_alias_addr((uintptr_t)&cpu_local()->current_pid);
+    uint32_t* pid_ptr =
+        (uint32_t*)(void*)process_kernel_alias_addr((uintptr_t)&cpu_local()->current_pid);
     return *pid_ptr;
 }
 
-void process_set_exit_status(process_t *process, int32_t exit_status) {
+void process_set_exit_status(process_t* process, int32_t exit_status) {
     if (!process) {
         return;
     }
@@ -1532,8 +1429,8 @@ void process_yield(process_run_result_t result) {
         return;
     }
     cpu_local()->last_run_result = result;
-    thread_t *thread = cpu_local()->current_thread;
-    process_context_t *ctx = process_sched_ctx_for_thread(cpu_local()->current_process, thread);
+    thread_t* thread = cpu_local()->current_thread;
+    process_context_t* ctx = process_sched_ctx_for_thread(cpu_local()->current_process, thread);
     if (!ctx) {
         return;
     }
@@ -1547,7 +1444,7 @@ void process_yield(process_run_result_t result) {
     context_switch_high(ctx, &cpu_local()->sched_ctx);
 }
 
-void process_set_require_explicit_ready(process_t *process) {
+void process_set_require_explicit_ready(process_t* process) {
     if (!process) {
         return;
     }
@@ -1558,23 +1455,23 @@ void process_set_require_explicit_ready(process_t *process) {
  * state is managed by sched_event_wait; callers that return
  * PROCESS_RUN_BLOCKED no longer need to touch process state here.
  * TODO: remove once all callers are updated. */
-void process_block_on_ipc(process_t *process) {
+void process_block_on_ipc(process_t* process) {
     (void)process;
 }
 
-void process_notify_ready(process_t *process) {
+void process_notify_ready(process_t* process) {
     if (!process) {
         return;
     }
     process->ready = 1;
 }
 
-int process_wait(process_t *process, uint32_t target_pid, int32_t *out_exit_status) {
+int process_wait(process_t* process, uint32_t target_pid, int32_t* out_exit_status) {
     if (!process || target_pid == 0 || process->pid == target_pid) {
         return -1;
     }
 
-    process_t *target = process_find_by_pid(target_pid);
+    process_t* target = process_find_by_pid(target_pid);
     if (!target) {
         return -1;
     }
@@ -1592,7 +1489,7 @@ int process_wait(process_t *process, uint32_t target_pid, int32_t *out_exit_stat
         return 0;
     }
 
-    thread_t *thread = process_thread_for_transition(process);
+    thread_t* thread = process_thread_for_transition(process);
     process_set_blocked(process, thread, PROCESS_BLOCK_WAIT, THREAD_BLOCK_WAIT_PROCESS);
     if (thread) {
         thread->wait_target_pid = target_pid;
@@ -1600,11 +1497,9 @@ int process_wait(process_t *process, uint32_t target_pid, int32_t *out_exit_stat
     return 1;
 }
 
-int
-process_thread_join(process_t *process, uint32_t target_tid, int32_t *out_exit_status)
-{
-    thread_t *target = 0;
-    thread_t *caller = 0;
+int process_thread_join(process_t* process, uint32_t target_tid, int32_t* out_exit_status) {
+    thread_t* target = 0;
+    thread_t* caller = 0;
     uint32_t caller_tid = 0;
     if (!process || target_tid == 0) {
         return -1;
@@ -1643,10 +1538,8 @@ process_thread_join(process_t *process, uint32_t target_tid, int32_t *out_exit_s
     return 1;
 }
 
-int
-process_thread_detach(process_t *process, uint32_t target_tid)
-{
-    thread_t *target = 0;
+int process_thread_detach(process_t* process, uint32_t target_tid) {
+    thread_t* target = 0;
     uint32_t caller_tid = 0;
     if (!process || target_tid == 0) {
         return -1;
@@ -1676,7 +1569,7 @@ process_thread_detach(process_t *process, uint32_t target_tid)
 }
 
 int process_kill(uint32_t pid, int32_t exit_status) {
-    process_t *target = process_find_by_pid(pid);
+    process_t* target = process_find_by_pid(pid);
     if (!target) {
         return -1;
     }
@@ -1694,10 +1587,8 @@ int process_kill(uint32_t pid, int32_t exit_status) {
     return 0;
 }
 
-int
-process_set_auto_reap(uint32_t pid, uint8_t enabled)
-{
-    process_t *proc = process_find_by_pid(pid);
+int process_set_auto_reap(uint32_t pid, uint8_t enabled) {
+    process_t* proc = process_find_by_pid(pid);
     if (!proc || proc->state == PROCESS_STATE_UNUSED) {
         return -1;
     }
@@ -1706,8 +1597,8 @@ process_set_auto_reap(uint32_t pid, uint8_t enabled)
     return 0;
 }
 
-int process_get_exit_status(uint32_t pid, int32_t *out_exit_status) {
-    process_t *proc = process_find_by_pid(pid);
+int process_get_exit_status(uint32_t pid, int32_t* out_exit_status) {
+    process_t* proc = process_find_by_pid(pid);
     if (!proc || !out_exit_status) {
         return -1;
     }
@@ -1718,13 +1609,11 @@ int process_get_exit_status(uint32_t pid, int32_t *out_exit_status) {
     return 0;
 }
 
-int
-process_wake_thread(uint32_t tid)
-{
+int process_wake_thread(uint32_t tid) {
     if (tid == 0) {
         return 0;
     }
-    thread_t *thread = thread_get(tid);
+    thread_t* thread = thread_get(tid);
     if (!thread) {
         return 0;
     }
@@ -1765,17 +1654,17 @@ static int process_schedule_once_impl(void) {
      * run-queue lock held) so it can safely wake/enqueue. */
     sched_timeout_check();
 
-    cpu_sched_t *cs = cpu_sched();
+    cpu_sched_t* cs = cpu_sched();
     ksync_spinlock_lock(&cs->lock);
-    thread_t *thread = cpu_sched_pick_next(cs);
+    thread_t* thread = cpu_sched_pick_next(cs);
     ksync_spinlock_unlock(&cs->lock);
     if (thread == cs->idle) {
-        thread_t *stolen = cpu_sched_try_steal(cpu_local()->cpu_id);
+        thread_t* stolen = cpu_sched_try_steal(cpu_local()->cpu_id);
         if (stolen) {
             thread = stolen;
         }
     }
-    process_t *proc = thread ? process_owner_for_thread(thread) : 0;
+    process_t* proc = thread ? process_owner_for_thread(thread) : 0;
     if (!thread || !proc || !proc->entry) {
         return SCHED_R_PICK;
     }
@@ -1784,10 +1673,8 @@ static int process_schedule_once_impl(void) {
      * cpu_sched_pick_next returns NULL for idle when state==RUNNING. */
     if (thread->state != THREAD_STATE_READY) {
         serial_printf_unlocked("[sched] dequeued non-ready tid=%u pid=%u state=%u block=%u\n",
-                               (unsigned)thread->tid,
-                               (unsigned)(proc ? proc->pid : 0u),
-                               (unsigned)thread->state,
-                               (unsigned)thread->block_reason);
+                               (unsigned)thread->tid, (unsigned)(proc ? proc->pid : 0u),
+                               (unsigned)thread->state, (unsigned)thread->block_reason);
         return SCHED_R_NOTREADY;
     }
 
@@ -1798,10 +1685,10 @@ static int process_schedule_once_impl(void) {
     if (thread->time_slice_ticks == 0) {
         process_sched_invariant_fail("zero time slice", thread->tid, 0);
     }
-    process_context_t *run_ctx = process_sched_ctx_for_thread(proc, thread);
+    process_context_t* run_ctx = process_sched_ctx_for_thread(proc, thread);
     critical_section_enter();
-    cpu_local()->current_pid          = proc->pid;
-    cpu_local()->last_dispatched_pid  = proc->pid;
+    cpu_local()->current_pid = proc->pid;
+    cpu_local()->last_dispatched_pid = proc->pid;
     cpu_local()->current_process = proc;
     cpu_local()->current_thread = thread;
     thread->last_cpu = cpu_local()->cpu_id;
@@ -1809,7 +1696,9 @@ static int process_schedule_once_impl(void) {
      * this run ends in another voluntary yield. */
     thread->sched_sticky = 0;
     if (cpu_local()->current_thread->owner_pid != cpu_local()->current_process->pid) {
-        process_sched_invariant_fail("current owner mismatch", cpu_local()->current_thread->owner_pid, cpu_local()->current_process->pid);
+        process_sched_invariant_fail("current owner mismatch",
+                                     cpu_local()->current_thread->owner_pid,
+                                     cpu_local()->current_process->pid);
     }
     thread_set_current(thread ? thread->tid : 0);
     critical_section_leave();
@@ -1839,10 +1728,10 @@ static int process_schedule_once_impl(void) {
     }
     /* Defensive: physical page table addresses must fit in 32 bits on this HW. */
     if (run_ctx->root_table >= 0x100000000ULL) {
-        serial_printf_unlocked("[sched] CORRUPT root_table pid=%u name=%s root=%016llx rip=%016llx\n",
+        serial_printf_unlocked(
+            "[sched] CORRUPT root_table pid=%u name=%s root=%016llx rip=%016llx\n",
             (unsigned)proc->pid, proc->name ? proc->name : "?",
-            (unsigned long long)run_ctx->root_table,
-            (unsigned long long)run_ctx->rip);
+            (unsigned long long)run_ctx->root_table, (unsigned long long)run_ctx->rip);
         run_ctx->root_table = paging_get_root_table();
     }
     if (run_ctx->root_table == 0) {
@@ -1864,7 +1753,7 @@ static int process_schedule_once_impl(void) {
          * Only callee-saved regs + RSP need updating; RIP is always label-1
          * (set by the last context_switch_high(&cpu_local()->sched_ctx,...) call). */
         {
-            process_context_t *_sctx = &cpu_local()->sched_ctx;
+            process_context_t* _sctx = &cpu_local()->sched_ctx;
             uintptr_t _rsp;
             __asm__ volatile(
                 "mov %%rsp, %[rsp]\n"
@@ -1875,14 +1764,9 @@ static int process_schedule_once_impl(void) {
                 "mov %%rbp, %[rbp]\n"
                 "mov %%rbx, %[rbx]\n"
                 "pushfq; pop %[rf]"
-                : [rsp]  "=r"(_rsp),
-                  [r15]  "=m"(_sctx->r15),
-                  [r14]  "=m"(_sctx->r14),
-                  [r13]  "=m"(_sctx->r13),
-                  [r12]  "=m"(_sctx->r12),
-                  [rbp]  "=m"(_sctx->rbp),
-                  [rbx]  "=m"(_sctx->rbx),
-                  [rf]   "=m"(_sctx->rflags)
+                : [rsp] "=r"(_rsp), [r15] "=m"(_sctx->r15), [r14] "=m"(_sctx->r14),
+                  [r13] "=m"(_sctx->r13), [r12] "=m"(_sctx->r12), [rbp] "=m"(_sctx->rbp),
+                  [rbx] "=m"(_sctx->rbx), [rf] "=m"(_sctx->rflags)
                 :
                 : "memory");
             _sctx->rax = (uint64_t)PROCESS_RUN_BLOCKED;
@@ -1892,12 +1776,9 @@ static int process_schedule_once_impl(void) {
         cpu_local()->last_run_result = process_run_worker_on_stack(proc, thread);
     } else {
 #ifdef WASMOS_WASM_RUNTIME_WARP
-        if (proc->runtime_tag[0] == 'W' &&
-            proc->runtime_tag[1] == 'A' &&
-            proc->runtime_tag[2] == 'R' &&
-            proc->runtime_tag[3] == 'P' &&
-            proc->runtime_tag[4] == '\0' &&
-            run_ctx->root_table != 0 &&
+        if (proc->runtime_tag[0] == 'W' && proc->runtime_tag[1] == 'A' &&
+            proc->runtime_tag[2] == 'R' && proc->runtime_tag[3] == 'P' &&
+            proc->runtime_tag[4] == '\0' && run_ctx->root_table != 0 &&
             run_ctx->root_table != paging_get_root_table()) {
             (void)warp_sync_linmem_for_pid(proc->pid, run_ctx->root_table);
         }
@@ -1940,7 +1821,7 @@ static int process_schedule_once_impl(void) {
                 proc->live_thread_count--;
             }
             if (proc->live_thread_count > 0) {
-                thread_t *next = process_first_owner_ready_thread(proc);
+                thread_t* next = process_first_owner_ready_thread(proc);
                 if (next && next->state != THREAD_STATE_ZOMBIE) {
                     process_set_ready(proc, next);
                     /* Only enqueue if not already in the ready list
@@ -1960,7 +1841,7 @@ static int process_schedule_once_impl(void) {
             }
         }
     } else if (result == PROCESS_RUN_THREAD_EXITED) {
-        thread_t *next = 0;
+        thread_t* next = 0;
         uint8_t reap_detached = 0;
         uint32_t exited_tid = thread->tid;
         thread_set_state(thread->tid, THREAD_STATE_ZOMBIE, THREAD_BLOCK_NONE);
@@ -2024,7 +1905,7 @@ static int process_schedule_once_impl(void) {
          * Guard the enqueue to prevent double-enqueue if the sender already
          * woke the thread via sched_event_wake_one. */
         if (thread->wait_event) {
-            sched_event_t *_ev = thread->wait_event;
+            sched_event_t* _ev = thread->wait_event;
             ksync_spinlock_lock(&_ev->lock);
             if (!list_head_empty(&thread->event_node)) {
                 list_head_del(&thread->event_node);
@@ -2056,11 +1937,11 @@ static int process_schedule_once_impl(void) {
 void process_tick(void) {
     uint64_t now = timer_ticks();
     if (cpu_local()->current_pid == 0 || !cpu_local()->current_thread ||
-            cpu_local()->in_scheduler) {
+        cpu_local()->in_scheduler) {
         cpu_local()->resched_pending_since_tick = 0;
         return;
     }
-    process_t *proc = process_find_by_pid(cpu_local()->current_pid);
+    process_t* proc = process_find_by_pid(cpu_local()->current_pid);
     if (!proc || proc->state != PROCESS_STATE_RUNNING) {
         return;
     }
@@ -2125,7 +2006,7 @@ void process_clear_resched(void) {
     cpu_local()->resched_pending_since_tick = 0;
 }
 
-int process_preempt_from_irq(irq_frame_t *frame) {
+int process_preempt_from_irq(irq_frame_t* frame) {
     if (!frame) {
         return 0;
     }
@@ -2135,14 +2016,16 @@ int process_preempt_from_irq(irq_frame_t *frame) {
     if (cpu_local()->in_context_switch) {
         return 0;
     }
-    if (cpu_local()->current_process && strcmp(cpu_local()->current_process->name, "process-manager") == 0 &&
+    if (cpu_local()->current_process &&
+        strcmp(cpu_local()->current_process->name, "process-manager") == 0 &&
         cpu_local()->pm_preempt_safe_depth == 0) {
         return 0;
     }
     if (!process_should_resched() || !preempt_is_enabled()) {
         return 0;
     }
-    if (!cpu_local()->current_process || cpu_local()->current_process->state != PROCESS_STATE_RUNNING) {
+    if (!cpu_local()->current_process ||
+        cpu_local()->current_process->state != PROCESS_STATE_RUNNING) {
         process_clear_resched();
         return 0;
     }
@@ -2185,7 +2068,8 @@ int process_preempt_from_irq(irq_frame_t *frame) {
         }
     }
 
-    process_context_t *ctx = process_sched_ctx_for_thread(cpu_local()->current_process, cpu_local()->current_thread);
+    process_context_t* ctx =
+        process_sched_ctx_for_thread(cpu_local()->current_process, cpu_local()->current_thread);
     if (!ctx) {
         process_clear_resched();
         return 0;
@@ -2211,9 +2095,7 @@ int process_preempt_from_irq(irq_frame_t *frame) {
     ctx->rip = frame->rip;
     ctx->rflags = frame->rflags;
     ctx->root_table = paging_get_current_root_table();
-    process_validate_thread_context(cpu_local()->current_process,
-                                    cpu_local()->current_thread,
-                                    ctx,
+    process_validate_thread_context(cpu_local()->current_process, cpu_local()->current_thread, ctx,
                                     "preempt");
     cpu_local()->current_process->ctx = *ctx;
     if (g_ctx_watch_ctx == (uint64_t)(uintptr_t)ctx) {
@@ -2235,7 +2117,7 @@ int process_preempt_from_irq(irq_frame_t *frame) {
         trace_do(serial_write_hex64(g_ctx_watch_last_rflags));
     }
 
-    thread_t *thread = process_thread_for_transition(cpu_local()->current_process);
+    thread_t* thread = process_thread_for_transition(cpu_local()->current_process);
     if (!thread) {
         process_clear_resched();
         return 0;
@@ -2326,7 +2208,7 @@ uint32_t process_ready_count(void) {
     return cpu_sched()->nr_threads;
 }
 
-int process_info_at(uint32_t index, uint32_t *out_pid, const char **out_name) {
+int process_info_at(uint32_t index, uint32_t* out_pid, const char** out_name) {
     if (!out_pid || !out_name) {
         return -1;
     }
@@ -2347,7 +2229,8 @@ int process_info_at(uint32_t index, uint32_t *out_pid, const char **out_name) {
     return -1;
 }
 
-int process_info_at_ex(uint32_t index, uint32_t *out_pid, uint32_t *out_parent_pid, const char **out_name) {
+int process_info_at_ex(uint32_t index, uint32_t* out_pid, uint32_t* out_parent_pid,
+                       const char** out_name) {
     if (!out_pid || !out_parent_pid || !out_name) {
         return -1;
     }
@@ -2369,9 +2252,7 @@ int process_info_at_ex(uint32_t index, uint32_t *out_pid, uint32_t *out_parent_p
     return -1;
 }
 
-static uint64_t
-process_sum_thread_ticks(const process_t *proc)
-{
+static uint64_t process_sum_thread_ticks(const process_t* proc) {
     uint64_t total = 0;
     if (!proc || proc->pid == 0) {
         return 0;
@@ -2381,7 +2262,7 @@ process_sum_thread_ticks(const process_t *proc)
         if (thread_owner_tid_at(proc->pid, i, &tid) != 0) {
             break;
         }
-        thread_t *thread = thread_get(tid);
+        thread_t* thread = thread_get(tid);
         if (!thread || thread->owner_pid != proc->pid) {
             continue;
         }
@@ -2390,13 +2271,11 @@ process_sum_thread_ticks(const process_t *proc)
     return total;
 }
 
-static uint64_t
-process_context_mem_bytes(const process_t *proc)
-{
+static uint64_t process_context_mem_bytes(const process_t* proc) {
     if (!proc || proc->context_id == 0) {
         return 0;
     }
-    mm_context_t *ctx = mm_context_get(proc->context_id);
+    mm_context_t* ctx = mm_context_get(proc->context_id);
     if (!ctx) {
         return 0;
     }
@@ -2411,9 +2290,7 @@ process_context_mem_bytes(const process_t *proc)
     return bytes;
 }
 
-static uint64_t
-process_thread_kstack_total_bytes(const process_t *proc)
-{
+static uint64_t process_thread_kstack_total_bytes(const process_t* proc) {
     uint64_t total = 0;
     if (!proc || proc->pid == 0) {
         return 0;
@@ -2423,7 +2300,7 @@ process_thread_kstack_total_bytes(const process_t *proc)
     }
     for (uint32_t i = 0;; ++i) {
         uint32_t tid = 0;
-        thread_t *thread = 0;
+        thread_t* thread = 0;
         if (thread_owner_tid_at(proc->pid, i, &tid) != 0) {
             break;
         }
@@ -2436,24 +2313,18 @@ process_thread_kstack_total_bytes(const process_t *proc)
     return total;
 }
 
-int
-process_info_at_stats(uint32_t index,
-                      uint32_t *out_pid,
-                      uint32_t *out_parent_pid,
-                      const char **out_name,
-                      process_stats_t *out_stats)
-{
+int process_info_at_stats(uint32_t index, uint32_t* out_pid, uint32_t* out_parent_pid,
+                          const char** out_name, process_stats_t* out_stats) {
     if (!out_pid || !out_parent_pid || !out_name || !out_stats) {
         return -1;
     }
     uint32_t current = 0;
     for (uint32_t i = 0; i < PROCESS_MAX_COUNT; ++i) {
-        process_t *proc = &g_processes[i];
+        process_t* proc = &g_processes[i];
         /* Include ZOMBIE so `ps` shows not-yet-reaped children (state "zmb"),
          * like Linux's Z/defunct — makes leaked/unreaped slots visible.  Skip
          * only truly-free slots and the transient in-reap state. */
-        if (proc->state == PROCESS_STATE_UNUSED ||
-            proc->state == PROCESS_STATE_REAPING) {
+        if (proc->state == PROCESS_STATE_UNUSED || proc->state == PROCESS_STATE_REAPING) {
             continue;
         }
         if (current == index) {
@@ -2468,22 +2339,22 @@ process_info_at_stats(uint32_t index,
             out_stats->thread_count = proc->thread_count;
             out_stats->live_thread_count = proc->live_thread_count;
             out_stats->current_tid =
-                (cpu_local()->current_process && cpu_local()->current_process->pid == proc->pid && cpu_local()->current_thread)
+                (cpu_local()->current_process && cpu_local()->current_process->pid == proc->pid &&
+                 cpu_local()->current_thread)
                     ? cpu_local()->current_thread->tid
                     : 0;
             out_stats->context_id = proc->context_id;
             out_stats->cpu_ticks = process_sum_thread_ticks(proc);
             out_stats->vm_total_bytes = process_context_mem_bytes(proc);
             out_stats->thread_kstack_total_bytes = process_thread_kstack_total_bytes(proc);
-            out_stats->heap_committed_bytes =
-                wasm3_heap_committed_bytes(proc->pid) +
-                native_driver_heap_committed_bytes(proc->pid);
+            out_stats->heap_committed_bytes = wasm3_heap_committed_bytes(proc->pid) +
+                                              native_driver_heap_committed_bytes(proc->pid);
             /* TODO(memory-rss): Replace this estimate with real resident-page
              * accounting once per-context page presence tracking is available.
              */
             out_stats->rss_est_bytes = out_stats->vm_total_bytes;
             {
-                thread_t *mt = thread_get(proc->main_tid);
+                thread_t* mt = thread_get(proc->main_tid);
                 out_stats->last_cpu = mt ? mt->last_cpu : 0;
             }
             return 0;
@@ -2493,10 +2364,8 @@ process_info_at_stats(uint32_t index,
     return -1;
 }
 
-int
-process_set_runtime_lock_required(uint32_t pid, uint8_t required)
-{
-    process_t *proc = process_get(pid);
+int process_set_runtime_lock_required(uint32_t pid, uint8_t required) {
+    process_t* proc = process_get(pid);
     if (!proc) {
         return -1;
     }
@@ -2504,18 +2373,14 @@ process_set_runtime_lock_required(uint32_t pid, uint8_t required)
     return 0;
 }
 
-int
-process_set_runtime_tag(uint32_t pid, const char *tag)
-{
-    process_t *proc = process_get(pid);
+int process_set_runtime_tag(uint32_t pid, const char* tag) {
+    process_t* proc = process_get(pid);
     if (!proc) {
         return -1;
     }
     return process_copy_runtime_tag(proc, tag);
 }
-static void
-process_sched_invariant_fail(const char *msg, uint64_t a, uint64_t b)
-{
+static void process_sched_invariant_fail(const char* msg, uint64_t a, uint64_t b) {
     klog_write("[sched] invariant fail: ");
     klog_write(msg ? msg : "(unknown)");
     klog_write("\n[sched] a=");
@@ -2525,25 +2390,21 @@ process_sched_invariant_fail(const char *msg, uint64_t a, uint64_t b)
     kpanic(msg, a, b);
 }
 
-static void
-process_set_blocked(process_t *proc,
-                    thread_t *thread,
-                    process_block_reason_t reason,
-                    thread_block_reason_t thread_reason)
-{
+static void process_set_blocked(process_t* proc, thread_t* thread, process_block_reason_t reason,
+                                thread_block_reason_t thread_reason) {
     if (!proc || !thread) {
-        process_sched_invariant_fail("set_blocked null", (uint64_t)(uintptr_t)proc, (uint64_t)(uintptr_t)thread);
+        process_sched_invariant_fail("set_blocked null", (uint64_t)(uintptr_t)proc,
+                                     (uint64_t)(uintptr_t)thread);
     }
     proc->state = PROCESS_STATE_BLOCKED;
     proc->block_reason = reason;
     thread_set_state(thread->tid, THREAD_STATE_BLOCKED, thread_reason);
 }
 
-static void
-process_set_ready(process_t *proc, thread_t *thread)
-{
+static void process_set_ready(process_t* proc, thread_t* thread) {
     if (!proc || !thread) {
-        process_sched_invariant_fail("set_ready null", (uint64_t)(uintptr_t)proc, (uint64_t)(uintptr_t)thread);
+        process_sched_invariant_fail("set_ready null", (uint64_t)(uintptr_t)proc,
+                                     (uint64_t)(uintptr_t)thread);
     }
     if (proc->state == PROCESS_STATE_ZOMBIE || proc->exiting) {
         process_sched_invariant_fail("set_ready zombie", proc->pid, thread->tid);
@@ -2553,11 +2414,10 @@ process_set_ready(process_t *proc, thread_t *thread)
     thread_set_state(thread->tid, THREAD_STATE_READY, THREAD_BLOCK_NONE);
 }
 
-static void
-process_set_running(process_t *proc, thread_t *thread)
-{
+static void process_set_running(process_t* proc, thread_t* thread) {
     if (!proc || !thread) {
-        process_sched_invariant_fail("set_running null", (uint64_t)(uintptr_t)proc, (uint64_t)(uintptr_t)thread);
+        process_sched_invariant_fail("set_running null", (uint64_t)(uintptr_t)proc,
+                                     (uint64_t)(uintptr_t)thread);
     }
     if (proc->state == PROCESS_STATE_ZOMBIE || proc->exiting) {
         process_sched_invariant_fail("set_running zombie", proc->pid, thread->tid);
@@ -2566,10 +2426,8 @@ process_set_running(process_t *proc, thread_t *thread)
     thread_set_state(thread->tid, THREAD_STATE_RUNNING, THREAD_BLOCK_NONE);
 }
 
-static void
-process_wake_thread_joiner(process_t *owner, thread_t *exited)
-{
-    thread_t *waiter = 0;
+static void process_wake_thread_joiner(process_t* owner, thread_t* exited) {
+    thread_t* waiter = 0;
     uint32_t waiter_tid = 0;
     if (!owner || !exited) {
         return;

@@ -19,32 +19,29 @@ extern "C" {
 typedef struct {
     int32_t in_use;
     int32_t request_id;
-    void (*on_resolve)(void *user, const wasmos_ipc_message_t *msg);
-    void *user;
+    void (*on_resolve)(void* user, const wasmos_ipc_message_t* msg);
+    void* user;
 } wasmos_sys_intent_t;
 
 typedef struct {
     int32_t in_use;
     int32_t msg_type;
-    void (*on_message)(void *user, const wasmos_ipc_message_t *msg);
-    void *user;
+    void (*on_message)(void* user, const wasmos_ipc_message_t* msg);
+    void* user;
 } wasmos_sys_handler_t;
 
 typedef struct {
     int32_t receiver_endpoint;
-    int32_t select_id;  /* select-set watching receiver_endpoint; -1 if not created */
+    int32_t select_id; /* select-set watching receiver_endpoint; -1 if not created */
     int32_t next_request_id;
-    void (*default_on_message)(void *user, const wasmos_ipc_message_t *msg);
-    void *default_user;
+    void (*default_on_message)(void* user, const wasmos_ipc_message_t* msg);
+    void* default_user;
     wasmos_sys_intent_t intents[WASMOS_SYS_INTENT_MAX];
     wasmos_sys_handler_t handlers[WASMOS_SYS_HANDLER_MAX];
 } wasmos_sys_event_loop_t;
 
-static inline int32_t
-wasmos_sys_ipc_recv_matching(int32_t reply_endpoint,
-                             int32_t request_id,
-                             wasmos_ipc_message_t *out_reply)
-{
+static inline int32_t wasmos_sys_ipc_recv_matching(int32_t reply_endpoint, int32_t request_id,
+                                                   wasmos_ipc_message_t* out_reply) {
     for (;;) {
         if (wasmos_ipc_select_one(reply_endpoint) < 0) {
             return -1;
@@ -61,11 +58,8 @@ wasmos_sys_ipc_recv_matching(int32_t reply_endpoint,
     }
 }
 
-static inline void
-wasmos_sys_event_loop_init(wasmos_sys_event_loop_t *loop,
-                           int32_t receiver_endpoint,
-                           int32_t request_id_base)
-{
+static inline void wasmos_sys_event_loop_init(wasmos_sys_event_loop_t* loop,
+                                              int32_t receiver_endpoint, int32_t request_id_base) {
     if (!loop) {
         return;
     }
@@ -102,10 +96,9 @@ wasmos_sys_event_loop_init(wasmos_sys_event_loop_t *loop,
 }
 
 static inline int32_t
-wasmos_sys_event_set_default(wasmos_sys_event_loop_t *loop,
-                             void (*on_message)(void *user, const wasmos_ipc_message_t *msg),
-                             void *user)
-{
+wasmos_sys_event_set_default(wasmos_sys_event_loop_t* loop,
+                             void (*on_message)(void* user, const wasmos_ipc_message_t* msg),
+                             void* user) {
     if (!loop || !on_message) {
         return -1;
     }
@@ -114,12 +107,10 @@ wasmos_sys_event_set_default(wasmos_sys_event_loop_t *loop,
     return 0;
 }
 
-static inline int32_t
-wasmos_sys_event_register(wasmos_sys_event_loop_t *loop,
-                          int32_t msg_type,
-                          void (*on_message)(void *user, const wasmos_ipc_message_t *msg),
-                          void *user)
-{
+static inline int32_t wasmos_sys_event_register(wasmos_sys_event_loop_t* loop, int32_t msg_type,
+                                                void (*on_message)(void* user,
+                                                                   const wasmos_ipc_message_t* msg),
+                                                void* user) {
     if (!loop || !on_message) {
         return -1;
     }
@@ -143,18 +134,11 @@ wasmos_sys_event_register(wasmos_sys_event_loop_t *loop,
 }
 
 static inline int32_t
-wasmos_sys_intent_send(wasmos_sys_event_loop_t *loop,
-                       int32_t destination_endpoint,
-                       int32_t source_endpoint,
-                       int32_t type,
-                       int32_t arg0,
-                       int32_t arg1,
-                       int32_t arg2,
-                       int32_t arg3,
-                       void (*on_resolve)(void *user, const wasmos_ipc_message_t *msg),
-                       void *user,
-                       int32_t *out_request_id)
-{
+wasmos_sys_intent_send(wasmos_sys_event_loop_t* loop, int32_t destination_endpoint,
+                       int32_t source_endpoint, int32_t type, int32_t arg0, int32_t arg1,
+                       int32_t arg2, int32_t arg3,
+                       void (*on_resolve)(void* user, const wasmos_ipc_message_t* msg), void* user,
+                       int32_t* out_request_id) {
     int32_t request_id = 0;
     if (!loop || !on_resolve) {
         return -1;
@@ -166,14 +150,8 @@ wasmos_sys_intent_send(wasmos_sys_event_loop_t *loop,
             loop->intents[i].request_id = request_id;
             loop->intents[i].on_resolve = on_resolve;
             loop->intents[i].user = user;
-            if (wasmos_ipc_send(destination_endpoint,
-                                source_endpoint,
-                                type,
-                                request_id,
-                                arg0,
-                                arg1,
-                                arg2,
-                                arg3) != 0) {
+            if (wasmos_ipc_send(destination_endpoint, source_endpoint, type, request_id, arg0, arg1,
+                                arg2, arg3) != 0) {
                 loop->intents[i].in_use = 0;
                 loop->intents[i].request_id = 0;
                 loop->intents[i].on_resolve = 0;
@@ -189,19 +167,10 @@ wasmos_sys_intent_send(wasmos_sys_event_loop_t *loop,
     return -1;
 }
 
-static inline int32_t
-wasmos_sys_intent_send_with_request_id(wasmos_sys_event_loop_t *loop,
-                                       int32_t destination_endpoint,
-                                       int32_t source_endpoint,
-                                       int32_t request_id,
-                                       int32_t type,
-                                       int32_t arg0,
-                                       int32_t arg1,
-                                       int32_t arg2,
-                                       int32_t arg3,
-                                       void (*on_resolve)(void *user, const wasmos_ipc_message_t *msg),
-                                       void *user)
-{
+static inline int32_t wasmos_sys_intent_send_with_request_id(
+    wasmos_sys_event_loop_t* loop, int32_t destination_endpoint, int32_t source_endpoint,
+    int32_t request_id, int32_t type, int32_t arg0, int32_t arg1, int32_t arg2, int32_t arg3,
+    void (*on_resolve)(void* user, const wasmos_ipc_message_t* msg), void* user) {
     if (!loop || !on_resolve || request_id <= 0) {
         return -1;
     }
@@ -216,14 +185,8 @@ wasmos_sys_intent_send_with_request_id(wasmos_sys_event_loop_t *loop,
             loop->intents[i].request_id = request_id;
             loop->intents[i].on_resolve = on_resolve;
             loop->intents[i].user = user;
-            if (wasmos_ipc_send(destination_endpoint,
-                                source_endpoint,
-                                type,
-                                request_id,
-                                arg0,
-                                arg1,
-                                arg2,
-                                arg3) != 0) {
+            if (wasmos_ipc_send(destination_endpoint, source_endpoint, type, request_id, arg0, arg1,
+                                arg2, arg3) != 0) {
                 loop->intents[i].in_use = 0;
                 loop->intents[i].request_id = 0;
                 loop->intents[i].on_resolve = 0;
@@ -236,9 +199,7 @@ wasmos_sys_intent_send_with_request_id(wasmos_sys_event_loop_t *loop,
     return -1;
 }
 
-static inline int32_t
-wasmos_sys_event_loop_poll(wasmos_sys_event_loop_t *loop, int32_t budget)
-{
+static inline int32_t wasmos_sys_event_loop_poll(wasmos_sys_event_loop_t* loop, int32_t budget) {
     int32_t handled = 0;
     if (!loop) {
         return 0;
@@ -263,12 +224,13 @@ wasmos_sys_event_loop_poll(wasmos_sys_event_loop_t *loop, int32_t budget)
             break;
         }
         wasmos_ipc_message_read_last(&msg);
-wasmos_sys_event_loop_poll_handle:
+    wasmos_sys_event_loop_poll_handle:
         handled++;
         for (int32_t j = 0; j < WASMOS_SYS_INTENT_MAX; ++j) {
             if (loop->intents[j].in_use && loop->intents[j].request_id == msg.request_id) {
-                void (*cb)(void *user, const wasmos_ipc_message_t *msg) = loop->intents[j].on_resolve;
-                void *cb_user = loop->intents[j].user;
+                void (*cb)(void* user, const wasmos_ipc_message_t* msg) =
+                    loop->intents[j].on_resolve;
+                void* cb_user = loop->intents[j].user;
                 loop->intents[j].in_use = 0;
                 loop->intents[j].request_id = 0;
                 loop->intents[j].on_resolve = 0;
@@ -279,8 +241,7 @@ wasmos_sys_event_loop_poll_handle:
         }
         int32_t dispatched = 0;
         for (int32_t j = 0; j < WASMOS_SYS_HANDLER_MAX; ++j) {
-            if (loop->handlers[j].in_use &&
-                loop->handlers[j].msg_type == msg.type &&
+            if (loop->handlers[j].in_use && loop->handlers[j].msg_type == msg.type &&
                 loop->handlers[j].on_message) {
                 loop->handlers[j].on_message(loop->handlers[j].user, &msg);
                 dispatched = 1;
@@ -290,27 +251,18 @@ wasmos_sys_event_loop_poll_handle:
         if (!dispatched && loop->default_on_message) {
             loop->default_on_message(loop->default_user, &msg);
         }
-wasmos_sys_event_loop_poll_done_message:
-        ;
+    wasmos_sys_event_loop_poll_done_message:;
     }
     return handled;
 }
 
-static inline void
-wasmos_sys_ipc_pack_name16(const char *name, int32_t out_args[4])
-{
+static inline void wasmos_sys_ipc_pack_name16(const char* name, int32_t out_args[4]) {
     wasmos_ipc_pack_name16(name, out_args);
 }
 
-static inline void
-wasmos_sys_ipc_unpack_name16(uint32_t arg0,
-                             uint32_t arg1,
-                             uint32_t arg2,
-                             uint32_t arg3,
-                             char *out,
-                             uint32_t out_len)
-{
-    uint32_t args[4] = { arg0, arg1, arg2, arg3 };
+static inline void wasmos_sys_ipc_unpack_name16(uint32_t arg0, uint32_t arg1, uint32_t arg2,
+                                                uint32_t arg3, char* out, uint32_t out_len) {
+    uint32_t args[4] = {arg0, arg1, arg2, arg3};
     uint32_t pos = 0;
     if (!out || out_len == 0) {
         return;
@@ -330,9 +282,7 @@ wasmos_sys_ipc_unpack_name16(uint32_t arg0,
     out[pos] = '\0';
 }
 
-static inline void
-wasmos_sys_ipc_recv_loop(void)
-{
+static inline void wasmos_sys_ipc_recv_loop(void) {
     int32_t endpoint = wasmos_ipc_create_endpoint();
     for (;;) {
         if (endpoint >= 0) {
@@ -346,14 +296,9 @@ wasmos_sys_ipc_recv_loop(void)
  * identify the sender, which lets PM reliably unblock any sync-spawn parent
  * and prevents the race where a short-lived process (e.g. pci-bus) destroys
  * its endpoint before PM processes the IPC. */
-static inline void
-wasmos_sys_notify_ready(int32_t proc_endpoint, int32_t source_endpoint)
-{
+static inline void wasmos_sys_notify_ready(int32_t proc_endpoint, int32_t source_endpoint) {
     wasmos_ipc_message_t reply;
-    (void)wasmos_ipc_call(proc_endpoint,
-                          source_endpoint,
-                          PROC_IPC_NOTIFY_READY,
-                          0, 0, 0, 0, 0,
+    (void)wasmos_ipc_call(proc_endpoint, source_endpoint, PROC_IPC_NOTIFY_READY, 0, 0, 0, 0, 0,
                           &reply);
 }
 
@@ -361,23 +306,12 @@ wasmos_sys_notify_ready(int32_t proc_endpoint, int32_t source_endpoint)
  * (implicit ready signal) or until timeout_ms milliseconds have elapsed
  * (0 = wait forever).  Returns the child PID on success or a negative error
  * code on failure or timeout. */
-static inline int32_t
-wasmos_sys_spawn_sync(int32_t proc_endpoint,
-                      int32_t reply_endpoint,
-                      int32_t module_index,
-                      int32_t timeout_ms,
-                      int32_t request_id)
-{
+static inline int32_t wasmos_sys_spawn_sync(int32_t proc_endpoint, int32_t reply_endpoint,
+                                            int32_t module_index, int32_t timeout_ms,
+                                            int32_t request_id) {
     wasmos_ipc_message_t reply;
-    if (wasmos_ipc_call(proc_endpoint,
-                        reply_endpoint,
-                        PROC_IPC_SPAWN_SYNC,
-                        request_id,
-                        module_index,
-                        timeout_ms,
-                        0,
-                        0,
-                        &reply) != 0) {
+    if (wasmos_ipc_call(proc_endpoint, reply_endpoint, PROC_IPC_SPAWN_SYNC, request_id,
+                        module_index, timeout_ms, 0, 0, &reply) != 0) {
         return -1;
     }
     return reply.type == PROC_IPC_RESP ? (int32_t)reply.arg0 : -1;
@@ -388,43 +322,26 @@ wasmos_sys_spawn_sync(int32_t proc_endpoint,
  * The caller must write the path bytes to the xfer buffer before calling.
  * Returns the child PID on success or a negative error code on failure or
  * timeout. */
-static inline int32_t
-wasmos_sys_spawn_path_sync(int32_t proc_endpoint,
-                           int32_t reply_endpoint,
-                           int32_t path_len,
-                           int32_t timeout_ms,
-                           int32_t request_id)
-{
+static inline int32_t wasmos_sys_spawn_path_sync(int32_t proc_endpoint, int32_t reply_endpoint,
+                                                 int32_t path_len, int32_t timeout_ms,
+                                                 int32_t request_id) {
     wasmos_ipc_message_t reply;
-    if (wasmos_ipc_call(proc_endpoint,
-                        reply_endpoint,
-                        PROC_IPC_SPAWN_PATH_SYNC,
-                        request_id,
-                        0,
-                        path_len,
-                        0,
-                        timeout_ms,
-                        &reply) != 0) {
+    if (wasmos_ipc_call(proc_endpoint, reply_endpoint, PROC_IPC_SPAWN_PATH_SYNC, request_id, 0,
+                        path_len, 0, timeout_ms, &reply) != 0) {
         return -1;
     }
     return reply.type == PROC_IPC_RESP ? (int32_t)reply.arg0 : -1;
 }
 
-static inline int32_t
-wasmos_sys_svc_lookup_retry(int32_t proc_endpoint,
-                            int32_t reply_endpoint,
-                            const char *service_name,
-                            int32_t request_id_base,
-                            int32_t attempts)
-{
+static inline int32_t wasmos_sys_svc_lookup_retry(int32_t proc_endpoint, int32_t reply_endpoint,
+                                                  const char* service_name, int32_t request_id_base,
+                                                  int32_t attempts) {
     if (attempts <= 0) {
         attempts = 1;
     }
     for (int32_t i = 0; i < attempts; ++i) {
-        int32_t endpoint = wasmos_svc_lookup(proc_endpoint,
-                                             reply_endpoint,
-                                             service_name,
-                                             request_id_base + i);
+        int32_t endpoint =
+            wasmos_svc_lookup(proc_endpoint, reply_endpoint, service_name, request_id_base + i);
         if (endpoint >= 0) {
             return endpoint;
         }
@@ -433,17 +350,10 @@ wasmos_sys_svc_lookup_retry(int32_t proc_endpoint,
     return -1;
 }
 
-static inline int32_t
-wasmos_sys_ipc_send_retry(int32_t destination_endpoint,
-                          int32_t source_endpoint,
-                          int32_t type,
-                          int32_t request_id,
-                          int32_t arg0,
-                          int32_t arg1,
-                          int32_t arg2,
-                          int32_t arg3,
-                          int32_t retries)
-{
+static inline int32_t wasmos_sys_ipc_send_retry(int32_t destination_endpoint,
+                                                int32_t source_endpoint, int32_t type,
+                                                int32_t request_id, int32_t arg0, int32_t arg1,
+                                                int32_t arg2, int32_t arg3, int32_t retries) {
     /* Keep in sync with kernel ipc.h */
     const int32_t ipc_err_full = -3;
     int32_t tries = 0;
@@ -451,14 +361,8 @@ wasmos_sys_ipc_send_retry(int32_t destination_endpoint,
         retries = 1;
     }
     for (;;) {
-        int32_t rc = wasmos_ipc_send(destination_endpoint,
-                                     source_endpoint,
-                                     type,
-                                     request_id,
-                                     arg0,
-                                     arg1,
-                                     arg2,
-                                     arg3);
+        int32_t rc = wasmos_ipc_send(destination_endpoint, source_endpoint, type, request_id, arg0,
+                                     arg1, arg2, arg3);
         if (rc == 0 || rc != ipc_err_full) {
             return rc;
         }
@@ -472,9 +376,8 @@ wasmos_sys_ipc_send_retry(int32_t destination_endpoint,
 /* Grantee-side read of a transfer buffer object named by `buffer_id`. The owner
  * must already have granted this context READ (via borrow/reborrow) before
  * sending buffer_id; the kernel enforces access. No borrow is taken here. */
-static inline int32_t
-wasmos_sys_buffer_read(int32_t buffer_id, void *dst, int32_t len, int32_t offset)
-{
+static inline int32_t wasmos_sys_buffer_read(int32_t buffer_id, void* dst, int32_t len,
+                                             int32_t offset) {
     if (!dst || buffer_id <= 0 || len < 0 || offset < 0) {
         return -1;
     }
@@ -483,9 +386,8 @@ wasmos_sys_buffer_read(int32_t buffer_id, void *dst, int32_t len, int32_t offset
 
 /* Grantee-side write of a transfer buffer object named by `buffer_id`. The owner
  * must already have granted this context WRITE before sending buffer_id. */
-static inline int32_t
-wasmos_sys_buffer_write(int32_t buffer_id, const void *src, int32_t len, int32_t offset)
-{
+static inline int32_t wasmos_sys_buffer_write(int32_t buffer_id, const void* src, int32_t len,
+                                              int32_t offset) {
     if (!src || buffer_id <= 0 || len < 0 || offset < 0) {
         return -1;
     }
@@ -498,14 +400,9 @@ wasmos_sys_buffer_write(int32_t buffer_id, const void *src, int32_t len, int32_t
  * fs-manager reborrows to the backend, which writes the blob straight back into
  * this buffer, then fs-manager unborrows b1 before replying so release()
  * succeeds. Returns bytes read or -1. */
-static inline int32_t
-wasmos_sys_fs_read_path(int32_t fs_endpoint,
-                        int32_t reply_endpoint,
-                        int32_t request_id,
-                        const char *path,
-                        char *out_text,
-                        int32_t out_text_len)
-{
+static inline int32_t wasmos_sys_fs_read_path(int32_t fs_endpoint, int32_t reply_endpoint,
+                                              int32_t request_id, const char* path, char* out_text,
+                                              int32_t out_text_len) {
     wasmos_ipc_message_t resp;
     int32_t path_len = 0;
     int32_t read_len = 0;
@@ -535,14 +432,8 @@ wasmos_sys_fs_read_path(int32_t fs_endpoint,
         (void)wasmos_xfer_buffer_release(bid);
         return -1;
     }
-    if (wasmos_ipc_send(fs_endpoint,
-                        reply_endpoint,
-                        FS_IPC_READ_PATH_REQ,
-                        request_id,
-                        path_len,
-                        buf_size,
-                        bid,
-                        b1) != 0) {
+    if (wasmos_ipc_send(fs_endpoint, reply_endpoint, FS_IPC_READ_PATH_REQ, request_id, path_len,
+                        buf_size, bid, b1) != 0) {
         (void)wasmos_xfer_buffer_release(bid);
         return -1;
     }

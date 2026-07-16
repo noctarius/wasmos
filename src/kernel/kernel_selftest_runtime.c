@@ -46,14 +46,10 @@ typedef struct {
  * and return the (buffer_id<<12)|path_len arg1 encoding the spawn-path IPC
  * protocol expects. Releases any previously-held buffer first. Returns 0 on
  * failure. */
-static uint32_t
-broker_selftest_stage_path(broker_spawn_request_state_t *state,
-                           uint32_t context_id,
-                           const char *path,
-                           uint32_t path_len)
-{
+static uint32_t broker_selftest_stage_path(broker_spawn_request_state_t* state, uint32_t context_id,
+                                           const char* path, uint32_t path_len) {
     uint64_t phys = 0u;
-    uint8_t *buf = 0;
+    uint8_t* buf = 0;
 
     if (state->caller_buf.buffer.buffer_id != 0u) {
         (void)xfer_buffer_release_owned(&state->caller_buf);
@@ -62,63 +58,99 @@ broker_selftest_stage_path(broker_spawn_request_state_t *state,
     if (path_len == 0u || path_len > 0xFFFu) {
         return 0u;
     }
-    if (xfer_buffer_acquire(BUFFER_KIND_TRANSFER, context_id, path_len, &state->caller_buf)
-            != XFER_BUFFER_OK) {
+    if (xfer_buffer_acquire(BUFFER_KIND_TRANSFER, context_id, path_len, &state->caller_buf) !=
+        XFER_BUFFER_OK) {
         return 0u;
     }
     phys = xfer_buffer_object_phys(&state->caller_buf.buffer);
     if (phys == 0u) {
         return 0u;
     }
-    buf = (uint8_t *)(uintptr_t)(phys | KERNEL_HIGHER_HALF_BASE);
+    buf = (uint8_t*)(uintptr_t)(phys | KERNEL_HIGHER_HALF_BASE);
     memcpy(buf, path, path_len);
     return (state->caller_buf.buffer.buffer_id << 12) | (path_len & 0xFFFu);
 }
 
 static broker_spawn_request_state_t g_broker_spawn_request_state;
 
-static const char *
-kernel_selftest_spawn_error_name(int32_t err)
-{
+static const char* kernel_selftest_spawn_error_name(int32_t err) {
     switch (err) {
-    case PROC_SPAWN_ERR_BAD_ENDPOINT: return "PROC_SPAWN_ERR_BAD_ENDPOINT";
-    case PROC_SPAWN_ERR_NO_CALLER: return "PROC_SPAWN_ERR_NO_CALLER";
-    case PROC_SPAWN_ERR_BAD_PATH: return "PROC_SPAWN_ERR_BAD_PATH";
-    case PROC_SPAWN_ERR_CALLER_FSBUF: return "PROC_SPAWN_ERR_CALLER_FSBUF";
-    case PROC_SPAWN_ERR_ARGS_TOOBIG: return "PROC_SPAWN_ERR_ARGS_TOOBIG";
-    case PROC_SPAWN_ERR_NO_PM_FSBUF: return "PROC_SPAWN_ERR_NO_PM_FSBUF";
-    case PROC_SPAWN_ERR_FS_READ: return "PROC_SPAWN_ERR_FS_READ";
-    case PROC_SPAWN_ERR_SPAWN_FAILED: return "PROC_SPAWN_ERR_SPAWN_FAILED";
-    case PROC_SPAWN_ERR_BROKER_IPC: return "PROC_SPAWN_ERR_BROKER_IPC";
-    case PROC_SPAWN_ERR_BROKER_PLAN: return "PROC_SPAWN_ERR_BROKER_PLAN";
-    case PROC_SPAWN_ERR_BROKER_DEFERRED: return "PROC_SPAWN_ERR_BROKER_DEFERRED";
-    case PROC_PM_ERR_BUSY: return "PROC_PM_ERR_BUSY";
-    case PROC_PM_ERR_BAD_ENDPOINT: return "PROC_PM_ERR_BAD_ENDPOINT";
-    case PROC_PM_ERR_NO_CALLER: return "PROC_PM_ERR_NO_CALLER";
-    case PROC_PM_ERR_INVALID_NAME: return "PROC_PM_ERR_INVALID_NAME";
-    case PROC_PM_ERR_INVALID_MODULE: return "PROC_PM_ERR_INVALID_MODULE";
-    case PROC_PM_ERR_FS_UNAVAILABLE: return "PROC_PM_ERR_FS_UNAVAILABLE";
-    case PROC_PM_ERR_FS_REQUEST: return "PROC_PM_ERR_FS_REQUEST";
-    case PROC_PM_ERR_BAD_PATH: return "PROC_PM_ERR_BAD_PATH";
-    case PROC_PM_ERR_PATH_RESOLVE: return "PROC_PM_ERR_PATH_RESOLVE";
-    case PROC_PM_ERR_SPAWN_FAILED: return "PROC_PM_ERR_SPAWN_FAILED";
-    case PROC_PM_ERR_CAPS_APPLY: return "PROC_PM_ERR_CAPS_APPLY";
-    case PROC_PM_ERR_BAD_CAPS: return "PROC_PM_ERR_BAD_CAPS";
-    case PROC_PM_ERR_BAD_USER_PTR: return "PROC_PM_ERR_BAD_USER_PTR";
-    case PROC_PM_ERR_USER_COPY: return "PROC_PM_ERR_USER_COPY";
-    case PROC_PM_ERR_META_LOOKUP: return "PROC_PM_ERR_META_LOOKUP";
-    case PROC_PM_ERR_META_NOT_DRIVER: return "PROC_PM_ERR_META_NOT_DRIVER";
-    case PROC_PM_ERR_META_BAD_INDEX: return "PROC_PM_ERR_META_BAD_INDEX";
-    case PROC_PM_ERR_META_BAD_SOURCE: return "PROC_PM_ERR_META_BAD_SOURCE";
-    case PROC_PM_ERR_CALLER_FSBUF: return "PROC_PM_ERR_CALLER_FSBUF";
-    case PROC_PM_ERR_REPLY_SEND: return "PROC_PM_ERR_REPLY_SEND";
-    case PROC_PM_ERR_FS_REPLY: return "PROC_PM_ERR_FS_REPLY";
-    case PROC_PM_ERR_BAD_BROKER: return "PROC_PM_ERR_BAD_BROKER";
-    case PROC_PM_ERR_BAD_HANDLER: return "PROC_PM_ERR_BAD_HANDLER";
-    case PROC_PM_ERR_SUBSYSTEM_REG: return "PROC_PM_ERR_SUBSYSTEM_REG";
-    case PROC_PM_ERR_HANDLER_REG: return "PROC_PM_ERR_HANDLER_REG";
-    case PROC_PM_ERR_NOT_AUTHORIZED: return "PROC_PM_ERR_NOT_AUTHORIZED";
-    default: return "UNKNOWN";
+    case PROC_SPAWN_ERR_BAD_ENDPOINT:
+        return "PROC_SPAWN_ERR_BAD_ENDPOINT";
+    case PROC_SPAWN_ERR_NO_CALLER:
+        return "PROC_SPAWN_ERR_NO_CALLER";
+    case PROC_SPAWN_ERR_BAD_PATH:
+        return "PROC_SPAWN_ERR_BAD_PATH";
+    case PROC_SPAWN_ERR_CALLER_FSBUF:
+        return "PROC_SPAWN_ERR_CALLER_FSBUF";
+    case PROC_SPAWN_ERR_ARGS_TOOBIG:
+        return "PROC_SPAWN_ERR_ARGS_TOOBIG";
+    case PROC_SPAWN_ERR_NO_PM_FSBUF:
+        return "PROC_SPAWN_ERR_NO_PM_FSBUF";
+    case PROC_SPAWN_ERR_FS_READ:
+        return "PROC_SPAWN_ERR_FS_READ";
+    case PROC_SPAWN_ERR_SPAWN_FAILED:
+        return "PROC_SPAWN_ERR_SPAWN_FAILED";
+    case PROC_SPAWN_ERR_BROKER_IPC:
+        return "PROC_SPAWN_ERR_BROKER_IPC";
+    case PROC_SPAWN_ERR_BROKER_PLAN:
+        return "PROC_SPAWN_ERR_BROKER_PLAN";
+    case PROC_SPAWN_ERR_BROKER_DEFERRED:
+        return "PROC_SPAWN_ERR_BROKER_DEFERRED";
+    case PROC_PM_ERR_BUSY:
+        return "PROC_PM_ERR_BUSY";
+    case PROC_PM_ERR_BAD_ENDPOINT:
+        return "PROC_PM_ERR_BAD_ENDPOINT";
+    case PROC_PM_ERR_NO_CALLER:
+        return "PROC_PM_ERR_NO_CALLER";
+    case PROC_PM_ERR_INVALID_NAME:
+        return "PROC_PM_ERR_INVALID_NAME";
+    case PROC_PM_ERR_INVALID_MODULE:
+        return "PROC_PM_ERR_INVALID_MODULE";
+    case PROC_PM_ERR_FS_UNAVAILABLE:
+        return "PROC_PM_ERR_FS_UNAVAILABLE";
+    case PROC_PM_ERR_FS_REQUEST:
+        return "PROC_PM_ERR_FS_REQUEST";
+    case PROC_PM_ERR_BAD_PATH:
+        return "PROC_PM_ERR_BAD_PATH";
+    case PROC_PM_ERR_PATH_RESOLVE:
+        return "PROC_PM_ERR_PATH_RESOLVE";
+    case PROC_PM_ERR_SPAWN_FAILED:
+        return "PROC_PM_ERR_SPAWN_FAILED";
+    case PROC_PM_ERR_CAPS_APPLY:
+        return "PROC_PM_ERR_CAPS_APPLY";
+    case PROC_PM_ERR_BAD_CAPS:
+        return "PROC_PM_ERR_BAD_CAPS";
+    case PROC_PM_ERR_BAD_USER_PTR:
+        return "PROC_PM_ERR_BAD_USER_PTR";
+    case PROC_PM_ERR_USER_COPY:
+        return "PROC_PM_ERR_USER_COPY";
+    case PROC_PM_ERR_META_LOOKUP:
+        return "PROC_PM_ERR_META_LOOKUP";
+    case PROC_PM_ERR_META_NOT_DRIVER:
+        return "PROC_PM_ERR_META_NOT_DRIVER";
+    case PROC_PM_ERR_META_BAD_INDEX:
+        return "PROC_PM_ERR_META_BAD_INDEX";
+    case PROC_PM_ERR_META_BAD_SOURCE:
+        return "PROC_PM_ERR_META_BAD_SOURCE";
+    case PROC_PM_ERR_CALLER_FSBUF:
+        return "PROC_PM_ERR_CALLER_FSBUF";
+    case PROC_PM_ERR_REPLY_SEND:
+        return "PROC_PM_ERR_REPLY_SEND";
+    case PROC_PM_ERR_FS_REPLY:
+        return "PROC_PM_ERR_FS_REPLY";
+    case PROC_PM_ERR_BAD_BROKER:
+        return "PROC_PM_ERR_BAD_BROKER";
+    case PROC_PM_ERR_BAD_HANDLER:
+        return "PROC_PM_ERR_BAD_HANDLER";
+    case PROC_PM_ERR_SUBSYSTEM_REG:
+        return "PROC_PM_ERR_SUBSYSTEM_REG";
+    case PROC_PM_ERR_HANDLER_REG:
+        return "PROC_PM_ERR_HANDLER_REG";
+    case PROC_PM_ERR_NOT_AUTHORIZED:
+        return "PROC_PM_ERR_NOT_AUTHORIZED";
+    default:
+        return "UNKNOWN";
     }
 }
 
@@ -130,9 +162,7 @@ kernel_selftest_spawn_error_name(int32_t err)
 #define BROKER_TEST_PATH "/init/apps/hello.rc"
 #define BROKER_TEST_MAX_ATTEMPTS 64u
 
-static int
-kernel_selftest_process_ready_named(const char *name)
-{
+static int kernel_selftest_process_ready_named(const char* name) {
     uint32_t active = 0u;
 
     if (!name || name[0] == '\0') {
@@ -141,8 +171,8 @@ kernel_selftest_process_ready_named(const char *name)
     active = process_count_active();
     for (uint32_t i = 0; i < active; ++i) {
         uint32_t pid = 0u;
-        const char *proc_name = 0;
-        process_t *proc = 0;
+        const char* proc_name = 0;
+        process_t* proc = 0;
         if (process_info_at(i, &pid, &proc_name) != 0 || !proc_name) {
             continue;
         }
@@ -157,16 +187,14 @@ kernel_selftest_process_ready_named(const char *name)
     return 0;
 }
 
-static process_run_result_t
-page_fault_test_entry(process_t *process, void *arg)
-{
-    pf_test_state_t *state = (pf_test_state_t *)arg;
+static process_run_result_t page_fault_test_entry(process_t* process, void* arg) {
+    pf_test_state_t* state = (pf_test_state_t*)arg;
     if (!process || !state) {
         return PROCESS_RUN_IDLE;
     }
 
     if (state->stage == 0) {
-        mm_context_t *ctx = mm_context_get(process->context_id);
+        mm_context_t* ctx = mm_context_get(process->context_id);
         mem_region_t linear;
         if (!ctx || mm_context_region_for_type(ctx, MEM_REGION_WASM_LINEAR, &linear) != 0) {
             klog_write("[test] page fault region lookup failed\n");
@@ -187,7 +215,7 @@ page_fault_test_entry(process_t *process, void *arg)
         state->stage = 1;
     }
 
-    volatile uint8_t *ptr = (volatile uint8_t *)(uintptr_t)state->addr;
+    volatile uint8_t* ptr = (volatile uint8_t*)(uintptr_t)state->addr;
     uint8_t value = *ptr;
     *ptr = (uint8_t)(value + 1);
     klog_write("[test] page fault recovered\n");
@@ -195,10 +223,8 @@ page_fault_test_entry(process_t *process, void *arg)
     return PROCESS_RUN_EXITED;
 }
 
-static process_run_result_t
-ipc_wait_test_entry(process_t *process, void *arg)
-{
-    ipc_test_state_t *state = (ipc_test_state_t *)arg;
+static process_run_result_t ipc_wait_test_entry(process_t* process, void* arg) {
+    ipc_test_state_t* state = (ipc_test_state_t*)arg;
     ipc_message_t msg;
 
     if (!process || !state) {
@@ -226,10 +252,8 @@ ipc_wait_test_entry(process_t *process, void *arg)
     return PROCESS_RUN_EXITED;
 }
 
-static process_run_result_t
-ipc_send_test_entry(process_t *process, void *arg)
-{
-    ipc_test_state_t *state = (ipc_test_state_t *)arg;
+static process_run_result_t ipc_send_test_entry(process_t* process, void* arg) {
+    ipc_test_state_t* state = (ipc_test_state_t*)arg;
     ipc_message_t msg;
 
     if (!process || !state) {
@@ -266,10 +290,8 @@ ipc_send_test_entry(process_t *process, void *arg)
     return PROCESS_RUN_EXITED;
 }
 
-static process_run_result_t
-preempt_busy_entry(process_t *process, void *arg)
-{
-    preempt_test_state_t *state = (preempt_test_state_t *)arg;
+static process_run_result_t preempt_busy_entry(process_t* process, void* arg) {
+    preempt_test_state_t* state = (preempt_test_state_t*)arg;
     if (!process || !state) {
         return PROCESS_RUN_IDLE;
     }
@@ -282,10 +304,8 @@ preempt_busy_entry(process_t *process, void *arg)
     }
 }
 
-static process_run_result_t
-preempt_observer_entry(process_t *process, void *arg)
-{
-    preempt_test_state_t *state = (preempt_test_state_t *)arg;
+static process_run_result_t preempt_observer_entry(process_t* process, void* arg) {
+    preempt_test_state_t* state = (preempt_test_state_t*)arg;
 
     if (!process || !state) {
         return PROCESS_RUN_IDLE;
@@ -305,10 +325,8 @@ preempt_observer_entry(process_t *process, void *arg)
     return PROCESS_RUN_YIELDED;
 }
 
-static process_run_result_t
-broker_spawn_request_entry(process_t *process, void *arg)
-{
-    broker_spawn_request_state_t *state = (broker_spawn_request_state_t *)arg;
+static process_run_result_t broker_spawn_request_entry(process_t* process, void* arg) {
+    broker_spawn_request_state_t* state = (broker_spawn_request_state_t*)arg;
     ipc_message_t msg;
     uint32_t proc_ep = IPC_ENDPOINT_NONE;
 
@@ -327,17 +345,15 @@ broker_spawn_request_entry(process_t *process, void *arg)
     }
 
     proc_ep = process_manager_endpoint();
-    if (proc_ep == IPC_ENDPOINT_NONE ||
-        process_manager_fs_endpoint() == IPC_ENDPOINT_NONE ||
+    if (proc_ep == IPC_ENDPOINT_NONE || process_manager_fs_endpoint() == IPC_ENDPOINT_NONE ||
         !kernel_selftest_process_ready_named("font-service")) {
         return PROCESS_RUN_YIELDED;
     }
 
     if (state->phase == 0u) {
-        uint32_t arg1 = broker_selftest_stage_path(state,
-                                                   process->context_id,
-                                                   BROKER_TEST_SERVICE_PATH,
-                                                   (uint32_t)sizeof(BROKER_TEST_SERVICE_PATH) - 1u);
+        uint32_t arg1 =
+            broker_selftest_stage_path(state, process->context_id, BROKER_TEST_SERVICE_PATH,
+                                       (uint32_t)sizeof(BROKER_TEST_SERVICE_PATH) - 1u);
         if (arg1 == 0u) {
             klog_write("[test] broker spawn xfer buffer missing\n");
             process_set_exit_status(process, -1);
@@ -359,9 +375,7 @@ broker_spawn_request_entry(process_t *process, void *arg)
     }
 
     if (state->phase == 2u) {
-        uint32_t arg1 = broker_selftest_stage_path(state,
-                                                   process->context_id,
-                                                   BROKER_TEST_PATH,
+        uint32_t arg1 = broker_selftest_stage_path(state, process->context_id, BROKER_TEST_PATH,
                                                    (uint32_t)sizeof(BROKER_TEST_PATH) - 1u);
         if (arg1 == 0u) {
             klog_write("[test] broker spawn xf buffer missing\n");
@@ -405,8 +419,7 @@ broker_spawn_request_entry(process_t *process, void *arg)
         process_set_exit_status(process, 0);
         return PROCESS_RUN_EXITED;
     }
-    if (msg.type == PROC_IPC_ERROR &&
-        state->attempts < BROKER_TEST_MAX_ATTEMPTS &&
+    if (msg.type == PROC_IPC_ERROR && state->attempts < BROKER_TEST_MAX_ATTEMPTS &&
         ((uint32_t)msg.arg1 == (uint32_t)PROC_SPAWN_ERR_FS_READ ||
          (uint32_t)msg.arg1 == (uint32_t)PROC_SPAWN_ERR_SPAWN_FAILED ||
          (uint32_t)msg.arg1 == (uint32_t)PROC_PM_ERR_BUSY)) {
@@ -417,26 +430,24 @@ broker_spawn_request_entry(process_t *process, void *arg)
     }
 
     klog_printf("[test] broker spawn delegation failed err=%016llx (%s)\n",
-                (unsigned long long)msg.arg1,
-                kernel_selftest_spawn_error_name((int32_t)msg.arg1));
+                (unsigned long long)msg.arg1, kernel_selftest_spawn_error_name((int32_t)msg.arg1));
     process_set_exit_status(process, -1);
     return PROCESS_RUN_EXITED;
 }
 
-int
-kernel_selftest_spawn_baseline(uint32_t init_pid, uint8_t preempt_test_enabled)
-{
+int kernel_selftest_spawn_baseline(uint32_t init_pid, uint8_t preempt_test_enabled) {
     uint32_t pf_test_pid = 0;
     uint32_t ipc_wait_pid = 0;
     uint32_t ipc_send_pid = 0;
-    process_t *ipc_wait_proc = 0;
-    process_t *ipc_send_proc = 0;
+    process_t* ipc_wait_proc = 0;
+    process_t* ipc_send_proc = 0;
     uint32_t preempt_busy_pid = 0;
     uint32_t preempt_observer_pid = 0;
 
     g_pf_test_state.addr = 0;
     g_pf_test_state.stage = 0;
-    if (process_spawn_as(init_pid, "pagefault-test", page_fault_test_entry, &g_pf_test_state, &pf_test_pid) != 0) {
+    if (process_spawn_as(init_pid, "pagefault-test", page_fault_test_entry, &g_pf_test_state,
+                         &pf_test_pid) != 0) {
         klog_write("[kernel] page fault test spawn failed\n");
         return -1;
     }
@@ -450,8 +461,10 @@ kernel_selftest_spawn_baseline(uint32_t init_pid, uint8_t preempt_test_enabled)
     g_ipc_test_state.sender_endpoint = IPC_ENDPOINT_NONE;
     g_ipc_test_state.sender_ticks = 0;
     g_ipc_test_state.done = 0;
-    if (process_spawn_as(init_pid, "ipc-wait-test", ipc_wait_test_entry, &g_ipc_test_state, &ipc_wait_pid) != 0 ||
-        process_spawn_as(init_pid, "ipc-send-test", ipc_send_test_entry, &g_ipc_test_state, &ipc_send_pid) != 0) {
+    if (process_spawn_as(init_pid, "ipc-wait-test", ipc_wait_test_entry, &g_ipc_test_state,
+                         &ipc_wait_pid) != 0 ||
+        process_spawn_as(init_pid, "ipc-send-test", ipc_send_test_entry, &g_ipc_test_state,
+                         &ipc_send_pid) != 0) {
         klog_write("[kernel] ipc test spawn failed\n");
         return -1;
     }
@@ -467,7 +480,8 @@ kernel_selftest_spawn_baseline(uint32_t init_pid, uint8_t preempt_test_enabled)
     (void)process_set_auto_reap(ipc_send_pid, 1);
 
     if (ipc_endpoint_create(ipc_wait_proc->context_id, &g_ipc_test_state.endpoint) != IPC_OK ||
-        ipc_endpoint_create(ipc_send_proc->context_id, &g_ipc_test_state.sender_endpoint) != IPC_OK) {
+        ipc_endpoint_create(ipc_send_proc->context_id, &g_ipc_test_state.sender_endpoint) !=
+            IPC_OK) {
         klog_write("[kernel] ipc test endpoint create failed\n");
         return -1;
     }
@@ -481,11 +495,8 @@ kernel_selftest_spawn_baseline(uint32_t init_pid, uint8_t preempt_test_enabled)
     g_broker_spawn_request_state.phase = 0u;
     {
         uint32_t broker_request_pid = 0;
-        if (process_spawn_as(init_pid,
-                             "broker-spawn-test",
-                             broker_spawn_request_entry,
-                             &g_broker_spawn_request_state,
-                             &broker_request_pid) != 0) {
+        if (process_spawn_as(init_pid, "broker-spawn-test", broker_spawn_request_entry,
+                             &g_broker_spawn_request_state, &broker_request_pid) != 0) {
             klog_write("[kernel] broker spawn request failed\n");
             return -1;
         }
@@ -496,9 +507,10 @@ kernel_selftest_spawn_baseline(uint32_t init_pid, uint8_t preempt_test_enabled)
         g_preempt_test_state.observer_runs = 0;
         g_preempt_test_state.done = 0;
         g_preempt_test_state.stop_busy = 0;
-        if (process_spawn_as(init_pid, "preempt-busy", preempt_busy_entry, &g_preempt_test_state, &preempt_busy_pid) != 0 ||
-            process_spawn_as(init_pid, "preempt-observer", preempt_observer_entry, &g_preempt_test_state,
-                             &preempt_observer_pid) != 0) {
+        if (process_spawn_as(init_pid, "preempt-busy", preempt_busy_entry, &g_preempt_test_state,
+                             &preempt_busy_pid) != 0 ||
+            process_spawn_as(init_pid, "preempt-observer", preempt_observer_entry,
+                             &g_preempt_test_state, &preempt_observer_pid) != 0) {
             klog_write("[kernel] preempt test spawn failed\n");
             return -1;
         }

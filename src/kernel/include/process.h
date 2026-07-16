@@ -51,11 +51,14 @@ _Static_assert(offsetof(process_context_t, r15) == 0, "process_context_t r15 off
 _Static_assert(offsetof(process_context_t, rdi) == 64, "process_context_t rdi offset mismatch");
 _Static_assert(offsetof(process_context_t, rsp) == 120, "process_context_t rsp offset mismatch");
 _Static_assert(offsetof(process_context_t, rip) == 128, "process_context_t rip offset mismatch");
-_Static_assert(offsetof(process_context_t, rflags) == 136, "process_context_t rflags offset mismatch");
+_Static_assert(offsetof(process_context_t, rflags) == 136,
+               "process_context_t rflags offset mismatch");
 _Static_assert(offsetof(process_context_t, cs) == 144, "process_context_t cs offset mismatch");
 _Static_assert(offsetof(process_context_t, ss) == 152, "process_context_t ss offset mismatch");
-_Static_assert(offsetof(process_context_t, user_rsp) == 160, "process_context_t user_rsp offset mismatch");
-_Static_assert(offsetof(process_context_t, root_table) == 168, "process_context_t root_table offset mismatch");
+_Static_assert(offsetof(process_context_t, user_rsp) == 160,
+               "process_context_t user_rsp offset mismatch");
+_Static_assert(offsetof(process_context_t, root_table) == 168,
+               "process_context_t root_table offset mismatch");
 
 typedef struct {
     uint64_t r15;
@@ -93,7 +96,7 @@ typedef enum {
     PROCESS_STATE_ZOMBIE,
     /* ALIVE covers READY/RUNNING/BLOCKED for code that only needs to
      * distinguish live vs. dead. */
-    PROCESS_STATE_ALIVE   = PROCESS_STATE_READY,
+    PROCESS_STATE_ALIVE = PROCESS_STATE_READY,
     PROCESS_STATE_REAPING = 6,
 } process_state_t;
 
@@ -112,8 +115,9 @@ typedef enum {
 } process_block_reason_t;
 
 struct process;
-typedef process_run_result_t (*process_entry_t)(struct process *process, void *arg);
-typedef process_run_result_t (*process_thread_worker_entry_t)(struct process *process, uint32_t tid, void *arg);
+typedef process_run_result_t (*process_entry_t)(struct process* process, void* arg);
+typedef process_run_result_t (*process_thread_worker_entry_t)(struct process* process, uint32_t tid,
+                                                              void* arg);
 
 typedef struct process {
     uint32_t pid;
@@ -145,14 +149,14 @@ typedef struct process {
     uintptr_t stack_alloc_base_phys;
     uint32_t stack_pages;
     process_entry_t entry;
-    void *arg;
+    void* arg;
     char name_storage[PROCESS_NAME_MAX];
-    const char *name;
+    const char* name;
     /* Runtime reentrancy guard for subsystems that require single-threaded
      * process entry (currently the built-in WASM runtimes). Worker threads
      * (is_kernel_worker) never acquire this. */
-    ksync_spinlock_t  runtime_lock;
-    uint32_t    runtime_lock_owner;   /* TID of current runtime-lock occupant; 0 = free */
+    ksync_spinlock_t runtime_lock;
+    uint32_t runtime_lock_owner; /* TID of current runtime-lock occupant; 0 = free */
     /* Process-level wait event (replaces wait_target_pid polling). */
     sched_event_t wait_event;
     /* Transfer-buffer id (child-owned) holding this process's wasmos_spawn_info_t
@@ -184,43 +188,41 @@ typedef struct {
  */
 struct thread;
 #include "sched.h"
-void sched_enqueue_thread_from(struct thread *t, uintptr_t caller);
-static inline void sched_enqueue_thread(struct thread *t) {
+void sched_enqueue_thread_from(struct thread* t, uintptr_t caller);
+static inline void sched_enqueue_thread(struct thread* t) {
     sched_enqueue_thread_from(t, (uintptr_t)__builtin_return_address(0));
 }
 
 void process_init(void);
 void process_ap_init(void); /* per-AP scheduler state init; call before enabling AP timer */
-int process_spawn(const char *name, process_entry_t entry, void *arg, uint32_t *out_pid);
-int process_spawn_as(uint32_t parent_pid, const char *name, process_entry_t entry, void *arg, uint32_t *out_pid);
-int process_spawn_as_parked(uint32_t parent_pid, const char *name, process_entry_t entry, void *arg, uint32_t *out_pid);
-int process_spawn_as_ready_gated_parked(uint32_t parent_pid, const char *name, process_entry_t entry, void *arg, uint32_t *out_pid);
+int process_spawn(const char* name, process_entry_t entry, void* arg, uint32_t* out_pid);
+int process_spawn_as(uint32_t parent_pid, const char* name, process_entry_t entry, void* arg,
+                     uint32_t* out_pid);
+int process_spawn_as_parked(uint32_t parent_pid, const char* name, process_entry_t entry, void* arg,
+                            uint32_t* out_pid);
+int process_spawn_as_ready_gated_parked(uint32_t parent_pid, const char* name,
+                                        process_entry_t entry, void* arg, uint32_t* out_pid);
 int process_unpark_pid(uint32_t pid);
-int process_spawn_idle(const char *name, process_entry_t entry, void *arg, uint32_t *out_pid);
+int process_spawn_idle(const char* name, process_entry_t entry, void* arg, uint32_t* out_pid);
 int process_spawn_idle_ap(uint32_t cpu_id);
-int process_thread_spawn_internal(uint32_t owner_pid, const char *name, uint32_t *out_tid);
-int process_thread_spawn_worker_internal(uint32_t owner_pid,
-                                         const char *name,
-                                         process_thread_worker_entry_t entry,
-                                         void *arg,
-                                         uint32_t *out_tid);
-int process_thread_spawn_user_internal(uint32_t owner_pid,
-                                       const char *name,
-                                       uint64_t entry_rip,
-                                       uint64_t user_stack_top,
-                                       uint32_t *out_tid);
-process_t *process_get(uint32_t pid);
-process_t *process_find_by_context(uint32_t context_id);
+int process_thread_spawn_internal(uint32_t owner_pid, const char* name, uint32_t* out_tid);
+int process_thread_spawn_worker_internal(uint32_t owner_pid, const char* name,
+                                         process_thread_worker_entry_t entry, void* arg,
+                                         uint32_t* out_tid);
+int process_thread_spawn_user_internal(uint32_t owner_pid, const char* name, uint64_t entry_rip,
+                                       uint64_t user_stack_top, uint32_t* out_tid);
+process_t* process_get(uint32_t pid);
+process_t* process_find_by_context(uint32_t context_id);
 uint32_t process_current_pid(void);
-void process_set_exit_status(process_t *process, int32_t exit_status);
-void process_block_on_ipc(process_t *process); /* TODO: remove once all callers updated */
-void process_notify_ready(process_t *process);
-void process_set_require_explicit_ready(process_t *process);
-int process_wait(process_t *process, uint32_t target_pid, int32_t *out_exit_status);
-int process_thread_join(process_t *process, uint32_t target_tid, int32_t *out_exit_status);
-int process_thread_detach(process_t *process, uint32_t target_tid);
+void process_set_exit_status(process_t* process, int32_t exit_status);
+void process_block_on_ipc(process_t* process); /* TODO: remove once all callers updated */
+void process_notify_ready(process_t* process);
+void process_set_require_explicit_ready(process_t* process);
+int process_wait(process_t* process, uint32_t target_pid, int32_t* out_exit_status);
+int process_thread_join(process_t* process, uint32_t target_tid, int32_t* out_exit_status);
+int process_thread_detach(process_t* process, uint32_t target_tid);
 int process_kill(uint32_t pid, int32_t exit_status);
-int process_get_exit_status(uint32_t pid, int32_t *out_exit_status);
+int process_get_exit_status(uint32_t pid, int32_t* out_exit_status);
 int process_set_auto_reap(uint32_t pid, uint8_t enabled);
 /* Reap a specific zombie by pid (CAS-guarded); used by the PM WAIT path to free
  * a child's slot after its exit status has been delivered.  No-op if not a
@@ -233,7 +235,7 @@ void process_tick(void);
 int process_should_resched(void);
 void process_set_need_resched(void);
 void process_clear_resched(void);
-int process_preempt_from_irq(irq_frame_t *frame);
+int process_preempt_from_irq(irq_frame_t* frame);
 void preempt_disable(void);
 void preempt_enable(void);
 int preempt_is_enabled(void);
@@ -246,15 +248,13 @@ void pm_preempt_safe_leave(void);
 uint64_t process_watchdog_issue_count(void);
 uint32_t process_count_active(void);
 uint32_t process_ready_count(void);
-int process_info_at(uint32_t index, uint32_t *out_pid, const char **out_name);
-int process_info_at_ex(uint32_t index, uint32_t *out_pid, uint32_t *out_parent_pid, const char **out_name);
-int process_info_at_stats(uint32_t index,
-                          uint32_t *out_pid,
-                          uint32_t *out_parent_pid,
-                          const char **out_name,
-                          process_stats_t *out_stats);
+int process_info_at(uint32_t index, uint32_t* out_pid, const char** out_name);
+int process_info_at_ex(uint32_t index, uint32_t* out_pid, uint32_t* out_parent_pid,
+                       const char** out_name);
+int process_info_at_stats(uint32_t index, uint32_t* out_pid, uint32_t* out_parent_pid,
+                          const char** out_name, process_stats_t* out_stats);
 int process_set_runtime_lock_required(uint32_t pid, uint8_t required);
-int process_set_runtime_tag(uint32_t pid, const char *tag);
+int process_set_runtime_tag(uint32_t pid, const char* tag);
 int process_set_user_entry(uint32_t pid, uint64_t rip, uint64_t user_rsp);
 
 #endif

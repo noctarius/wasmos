@@ -15,7 +15,7 @@ class ReadError(Exception):
 def read_bytes(data, off, size):
     if off + size > len(data):
         raise ReadError("unexpected end of file")
-    return data[off:off + size], off + size
+    return data[off : off + size], off + size
 
 
 def read_u32_le(data, off):
@@ -212,7 +212,7 @@ def parse_wasm(data):
                 if flags in (0, 2):
                     if flags == 2:
                         _, p = read_varuint32(payload, p)
-                    while p < len(payload) and payload[p] != 0x0b:
+                    while p < len(payload) and payload[p] != 0x0B:
                         p += 1
                     if p < len(payload):
                         p += 1
@@ -233,7 +233,7 @@ def parse_wasm(data):
             for _ in range(count):
                 flags, p = read_varuint32(payload, p)
                 if flags == 0:
-                    while p < len(payload) and payload[p] != 0x0b:
+                    while p < len(payload) and payload[p] != 0x0B:
                         p += 1
                     if p < len(payload):
                         p += 1
@@ -241,7 +241,7 @@ def parse_wasm(data):
                     pass
                 elif flags == 2:
                     _, p = read_varuint32(payload, p)
-                    while p < len(payload) and payload[p] != 0x0b:
+                    while p < len(payload) and payload[p] != 0x0B:
                         p += 1
                     if p < len(payload):
                         p += 1
@@ -288,7 +288,7 @@ def scan_calls_in_body(body):
     while off < len(body):
         op = body[off]
         off += 1
-        if op == 0x0b:
+        if op == 0x0B:
             break
         if op in (0x02, 0x03, 0x04):
             if off >= len(body):
@@ -299,14 +299,14 @@ def scan_calls_in_body(body):
                 _, off = read_varuint32(body, off)
         elif op == 0x05:
             continue
-        elif op in (0x0c, 0x0d):
+        elif op in (0x0C, 0x0D):
             _, off = read_varuint32(body, off)
-        elif op == 0x0e:
+        elif op == 0x0E:
             cnt, off = read_varuint32(body, off)
             for _ in range(cnt):
                 _, off = read_varuint32(body, off)
             _, off = read_varuint32(body, off)
-        elif op == 0x0f:
+        elif op == 0x0F:
             continue
         elif op == 0x10:
             idx, off = read_varuint32(body, off)
@@ -316,15 +316,37 @@ def scan_calls_in_body(body):
             if off < len(body):
                 off += 1
             calls.append(("indirect", None))
-        elif op in (0x1a, 0x1b):
+        elif op in (0x1A, 0x1B):
             continue
         elif op in (0x20, 0x21, 0x22, 0x23, 0x24):
             _, off = read_varuint32(body, off)
-        elif op in (0x28, 0x29, 0x2a, 0x2b, 0x2c, 0x2d, 0x2e, 0x2f,
-                    0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37,
-                    0x38, 0x39, 0x3a, 0x3b, 0x3c, 0x3d, 0x3e):
+        elif op in (
+            0x28,
+            0x29,
+            0x2A,
+            0x2B,
+            0x2C,
+            0x2D,
+            0x2E,
+            0x2F,
+            0x30,
+            0x31,
+            0x32,
+            0x33,
+            0x34,
+            0x35,
+            0x36,
+            0x37,
+            0x38,
+            0x39,
+            0x3A,
+            0x3B,
+            0x3C,
+            0x3D,
+            0x3E,
+        ):
             off = skip_memarg(body, off)
-        elif op in (0x3f, 0x40):
+        elif op in (0x3F, 0x40):
             if off < len(body):
                 off += 1
         elif op == 0x41:
@@ -335,7 +357,7 @@ def scan_calls_in_body(body):
             off += 4
         elif op == 0x44:
             off += 8
-        elif op == 0xfc or op == 0xfd:
+        elif op == 0xFC or op == 0xFD:
             _, off = read_varuint32(body, off)
         else:
             continue
@@ -345,8 +367,14 @@ def scan_calls_in_body(body):
 def main():
     parser = argparse.ArgumentParser(description="Inspect wasm or .wap files.")
     parser.add_argument("path", help="Path to .wasm or .wap")
-    parser.add_argument("--raw", action="store_true", help="Print raw import/export lists without headers")
-    parser.add_argument("--calls", action="store_true", help="Scan function bodies for call opcodes")
+    parser.add_argument(
+        "--raw",
+        action="store_true",
+        help="Print raw import/export lists without headers",
+    )
+    parser.add_argument(
+        "--calls", action="store_true", help="Scan function bodies for call opcodes"
+    )
     args = parser.parse_args()
 
     with open(args.path, "rb") as f:
@@ -355,7 +383,9 @@ def main():
     app_info = None
     if data.startswith(WASMOS_MAGIC):
         app_info = parse_wasmos_app(data)
-        wasm_data = data[app_info["wasm_offset"]:app_info["wasm_offset"] + app_info["wasm_size"]]
+        wasm_data = data[
+            app_info["wasm_offset"] : app_info["wasm_offset"] + app_info["wasm_size"]
+        ]
     else:
         wasm_data = data
 

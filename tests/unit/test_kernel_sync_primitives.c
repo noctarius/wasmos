@@ -18,28 +18,22 @@ extern int sched_yield(void);
 static _Thread_local uint32_t g_current_tid = 1u;
 static uint32_t g_wait_call_count = 0u;
 static uint32_t g_wake_one_call_count = 0u;
-static thread_t g_woken_thread = { .tid = 99u };
+static thread_t g_woken_thread = {.tid = 99u};
 
-void
-spinlock_init(spinlock_t *lock)
-{
+void spinlock_init(spinlock_t* lock) {
     if (lock) {
         lock->state = 0u;
     }
 }
 
-int
-spinlock_try_lock(spinlock_t *lock)
-{
+int spinlock_try_lock(spinlock_t* lock) {
     if (!lock) {
         return 0;
     }
     return __sync_lock_test_and_set(&lock->state, 1u) == 0u;
 }
 
-void
-spinlock_lock(spinlock_t *lock)
-{
+void spinlock_lock(spinlock_t* lock) {
     if (!lock) {
         return;
     }
@@ -48,35 +42,25 @@ spinlock_lock(spinlock_t *lock)
     }
 }
 
-void
-spinlock_unlock(spinlock_t *lock)
-{
+void spinlock_unlock(spinlock_t* lock) {
     if (lock) {
         __sync_lock_release(&lock->state);
     }
 }
 
-void
-spinlock_lock_noirq(spinlock_t *lock)
-{
+void spinlock_lock_noirq(spinlock_t* lock) {
     spinlock_lock(lock);
 }
 
-void
-spinlock_unlock_noirq(spinlock_t *lock)
-{
+void spinlock_unlock_noirq(spinlock_t* lock) {
     spinlock_unlock(lock);
 }
 
-uint32_t
-thread_current_tid(void)
-{
+uint32_t thread_current_tid(void) {
     return g_current_tid;
 }
 
-void
-sched_event_init(sched_event_t *ev, sched_event_type_t type)
-{
+void sched_event_init(sched_event_t* ev, sched_event_type_t type) {
     assert(ev);
     ksync_spinlock_init(&ev->lock);
     ev->cnt = 0u;
@@ -87,9 +71,7 @@ sched_event_init(sched_event_t *ev, sched_event_type_t type)
     ev->host_signals = 0u;
 }
 
-void
-sched_event_wait(sched_event_t *ev, uint32_t timeout_ms)
-{
+void sched_event_wait(sched_event_t* ev, uint32_t timeout_ms) {
     (void)timeout_ms;
     assert(ev);
     ksync_spinlock_unlock(&ev->lock);
@@ -104,9 +86,7 @@ sched_event_wait(sched_event_t *ev, uint32_t timeout_ms)
     assert(pthread_mutex_unlock(&ev->host_mutex) == 0);
 }
 
-thread_t *
-sched_event_wake_one(sched_event_t *ev, uint64_t data, sched_pend_state_t pend)
-{
+thread_t* sched_event_wake_one(sched_event_t* ev, uint64_t data, sched_pend_state_t pend) {
     (void)data;
     (void)pend;
     assert(ev);
@@ -120,37 +100,26 @@ sched_event_wake_one(sched_event_t *ev, uint64_t data, sched_pend_state_t pend)
     return &g_woken_thread;
 }
 
-int
-sched_event_wake_all(sched_event_t *ev, uint64_t data, sched_pend_state_t pend)
-{
+int sched_event_wake_all(sched_event_t* ev, uint64_t data, sched_pend_state_t pend) {
     (void)ev;
     (void)data;
     (void)pend;
     return 0;
 }
 
-void
-sched_event_abort_all(sched_event_t *ev)
-{
+void sched_event_abort_all(sched_event_t* ev) {
     (void)ev;
 }
 
-void
-sched_timeout_check(void)
-{
-}
+void sched_timeout_check(void) {}
 
-static void
-reset_scheduler_stubs(void)
-{
+static void reset_scheduler_stubs(void) {
     g_current_tid = 1u;
     g_wait_call_count = 0u;
     g_wake_one_call_count = 0u;
 }
 
-static void
-wait_for_host_waiters(sched_event_t *ev, uint32_t expected_waiters)
-{
+static void wait_for_host_waiters(sched_event_t* ev, uint32_t expected_waiters) {
     uint32_t spins = 0u;
     assert(ev);
     while (spins++ < 100000u) {
@@ -166,9 +135,7 @@ wait_for_host_waiters(sched_event_t *ev, uint32_t expected_waiters)
     assert(!"timed out waiting for blocked test thread");
 }
 
-static void
-test_mutex_try_lock_and_unlock(void)
-{
+static void test_mutex_try_lock_and_unlock(void) {
     ksync_mutex_t mutex;
 
     reset_scheduler_stubs();
@@ -186,29 +153,25 @@ test_mutex_try_lock_and_unlock(void)
 }
 
 typedef struct {
-    ksync_mutex_t *mutex;
+    ksync_mutex_t* mutex;
     int try_result;
 } mutex_try_thread_arg_t;
 
 typedef struct {
-    ksync_mutex_t *mutex;
+    ksync_mutex_t* mutex;
     volatile uint32_t acquired;
     volatile uint32_t released;
 } mutex_lock_thread_arg_t;
 
-static void *
-mutex_try_lock_worker(void *arg)
-{
-    mutex_try_thread_arg_t *worker_arg = (mutex_try_thread_arg_t *)arg;
+static void* mutex_try_lock_worker(void* arg) {
+    mutex_try_thread_arg_t* worker_arg = (mutex_try_thread_arg_t*)arg;
     g_current_tid = 2u;
     worker_arg->try_result = ksync_mutex_try_lock(worker_arg->mutex);
     return 0;
 }
 
-static void *
-mutex_blocking_lock_worker(void *arg)
-{
-    mutex_lock_thread_arg_t *worker_arg = (mutex_lock_thread_arg_t *)arg;
+static void* mutex_blocking_lock_worker(void* arg) {
+    mutex_lock_thread_arg_t* worker_arg = (mutex_lock_thread_arg_t*)arg;
     g_current_tid = 2u;
     assert(ksync_mutex_lock(worker_arg->mutex) == KSYNC_MUTEX_OK);
     worker_arg->acquired = 1u;
@@ -217,9 +180,7 @@ mutex_blocking_lock_worker(void *arg)
     return 0;
 }
 
-static void
-test_mutex_try_lock_fails_under_contention(void)
-{
+static void test_mutex_try_lock_fails_under_contention(void) {
     ksync_mutex_t mutex;
     pthread_t worker;
     mutex_try_thread_arg_t worker_arg = {0};
@@ -234,9 +195,7 @@ test_mutex_try_lock_fails_under_contention(void)
     assert(ksync_mutex_unlock(&mutex) == KSYNC_MUTEX_OK);
 }
 
-static void
-test_mutex_lock_waits_until_released_by_other_thread(void)
-{
+static void test_mutex_lock_waits_until_released_by_other_thread(void) {
     ksync_mutex_t mutex;
     pthread_t worker;
     mutex_lock_thread_arg_t worker_arg = {0};
@@ -254,9 +213,7 @@ test_mutex_lock_waits_until_released_by_other_thread(void)
     assert(__atomic_load_n(&g_wait_call_count, __ATOMIC_RELAXED) >= 1u);
 }
 
-static void
-test_mutex_unlock_rejects_non_owner(void)
-{
+static void test_mutex_unlock_rejects_non_owner(void) {
     ksync_mutex_t mutex;
 
     reset_scheduler_stubs();
@@ -269,23 +226,19 @@ test_mutex_unlock_rejects_non_owner(void)
 }
 
 typedef struct {
-    ksync_semaphore_t *sem;
+    ksync_semaphore_t* sem;
     volatile uint32_t acquired;
 } semaphore_thread_arg_t;
 
-static void *
-semaphore_acquire_worker(void *arg)
-{
-    semaphore_thread_arg_t *worker_arg = (semaphore_thread_arg_t *)arg;
+static void* semaphore_acquire_worker(void* arg) {
+    semaphore_thread_arg_t* worker_arg = (semaphore_thread_arg_t*)arg;
     g_current_tid = 3u;
     assert(ksync_semaphore_acquire(worker_arg->sem) == KSYNC_SEMAPHORE_OK);
     worker_arg->acquired = 1u;
     return 0;
 }
 
-static void
-test_semaphore_try_acquire_and_release(void)
-{
+static void test_semaphore_try_acquire_and_release(void) {
     ksync_semaphore_t sem;
 
     reset_scheduler_stubs();
@@ -300,9 +253,7 @@ test_semaphore_try_acquire_and_release(void)
     assert(ksync_semaphore_count(&sem) == 1u);
 }
 
-static void
-test_semaphore_acquire_blocks_until_release(void)
-{
+static void test_semaphore_acquire_blocks_until_release(void) {
     ksync_semaphore_t sem;
     pthread_t worker;
     semaphore_thread_arg_t worker_arg = {0};
@@ -319,9 +270,7 @@ test_semaphore_acquire_blocks_until_release(void)
     assert(ksync_semaphore_count(&sem) == 0u);
 }
 
-static void
-test_semaphore_release_rejects_overflow(void)
-{
+static void test_semaphore_release_rejects_overflow(void) {
     ksync_semaphore_t sem;
 
     reset_scheduler_stubs();
@@ -330,9 +279,7 @@ test_semaphore_release_rejects_overflow(void)
     assert(g_wake_one_call_count == 0u);
 }
 
-int
-main(void)
-{
+int main(void) {
     test_mutex_try_lock_and_unlock();
     test_mutex_try_lock_fails_under_contention();
     test_mutex_lock_waits_until_released_by_other_thread();

@@ -82,7 +82,8 @@ fn logHex32(prefix: []const u8, v: u32) void {
 }
 
 fn svc_register(name: []const u8, request_id: u32) i32 {
-    return sys.svcRegister(api(),
+    return sys.svcRegister(
+        api(),
         g_proc_endpoint,
         g_font_endpoint,
         name,
@@ -91,7 +92,8 @@ fn svc_register(name: []const u8, request_id: u32) i32 {
 }
 
 fn svc_lookup(name: []const u8, request_id: u32) i32 {
-    return sys.svcLookup(api(),
+    return sys.svcLookup(
+        api(),
         g_proc_endpoint,
         g_font_endpoint,
         name,
@@ -841,8 +843,7 @@ fn load_builtin_fonts() void {
         var bid: u32 = 0;
         var ptr: [*]u8 = undefined;
         var len: usize = 0;
-        if (read_font_file(primary_paths[i], &bid, &ptr, &len) != 0)
-        {
+        if (read_font_file(primary_paths[i], &bid, &ptr, &len) != 0) {
             logMsg("[font] load failed\n");
             continue;
         }

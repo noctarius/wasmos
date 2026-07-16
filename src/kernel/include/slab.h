@@ -11,9 +11,9 @@
 void slab_init(void);
 
 /* Allocate size bytes from the kernel heap.  Returns NULL on exhaustion. */
-void *kalloc_small(size_t size);
+void* kalloc_small(size_t size);
 
 /* Return a previously allocated block to the kernel heap. */
-void kfree_small(void *ptr);
+void kfree_small(void* ptr);
 
 #endif

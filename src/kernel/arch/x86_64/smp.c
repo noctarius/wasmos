@@ -20,24 +20,22 @@ uint32_t g_cpu_count = 1;
 #include "arch/x86_64/lapic.h"
 
 /* Physical address where the AP trampoline code is placed. */
-#define TRAMP_PHYS  0x1000ULL
+#define TRAMP_PHYS 0x1000ULL
 
 /* Physical addresses of the AP data slots (below the trampoline). */
-#define AP_SLOT_CR3          0x500ULL
-#define AP_SLOT_ENTRY        0x508ULL
-#define AP_SLOT_RSP          0x510ULL
-#define AP_SLOT_GDTR         0x518ULL   /* 6 bytes: uint16_t limit + uint32_t base */
-#define AP_SLOT_CPU_ID       0x51EULL   /* uint32_t */
+#define AP_SLOT_CR3 0x500ULL
+#define AP_SLOT_ENTRY 0x508ULL
+#define AP_SLOT_RSP 0x510ULL
+#define AP_SLOT_GDTR 0x518ULL   /* 6 bytes: uint16_t limit + uint32_t base */
+#define AP_SLOT_CPU_ID 0x51EULL /* uint32_t */
 
 /* SIPI vector: startup address = vector << 12 = 0x01 << 12 = 0x1000. */
-#define TRAMP_SIPI_VECTOR   0x01u
+#define TRAMP_SIPI_VECTOR 0x01u
 
 /* Static stacks for APs.  Kept in BSS so they are in the kernel's higher-half
  * virtual address space and are covered by the existing page table. */
-uint8_t g_ap_ist_stacks[WASMOS_MAX_CPUS - 1][CPU_IST_STACK_SIZE]
-    __attribute__((aligned(16)));
-uint8_t g_ap_rsp0_stacks[WASMOS_MAX_CPUS - 1][CPU_IST_STACK_SIZE]
-    __attribute__((aligned(16)));
+uint8_t g_ap_ist_stacks[WASMOS_MAX_CPUS - 1][CPU_IST_STACK_SIZE] __attribute__((aligned(16)));
+uint8_t g_ap_rsp0_stacks[WASMOS_MAX_CPUS - 1][CPU_IST_STACK_SIZE] __attribute__((aligned(16)));
 
 /* Trampoline symbol bounds exported from smp_trampoline.S. */
 extern uint8_t smp_trampoline_start[];
@@ -48,22 +46,16 @@ extern uint8_t smp_trampoline_end[];
  * Write an 8-byte value to a physical address that has been identity-mapped
  * by smp_trampoline_setup() (virtual == physical for those pages).
  */
-static inline void
-write_slot_u64(uint64_t phys_addr, uint64_t value)
-{
-    *(volatile uint64_t *)(uintptr_t)phys_addr = value;
+static inline void write_slot_u64(uint64_t phys_addr, uint64_t value) {
+    *(volatile uint64_t*)(uintptr_t)phys_addr = value;
 }
 
-static inline void
-write_slot_u32(uint64_t phys_addr, uint32_t value)
-{
-    *(volatile uint32_t *)(uintptr_t)phys_addr = value;
+static inline void write_slot_u32(uint64_t phys_addr, uint32_t value) {
+    *(volatile uint32_t*)(uintptr_t)phys_addr = value;
 }
 
-static inline void
-write_slot_u16(uint64_t phys_addr, uint16_t value)
-{
-    *(volatile uint16_t *)(uintptr_t)phys_addr = value;
+static inline void write_slot_u16(uint64_t phys_addr, uint16_t value) {
+    *(volatile uint16_t*)(uintptr_t)phys_addr = value;
 }
 
 /*
@@ -72,9 +64,7 @@ write_slot_u16(uint64_t phys_addr, uint16_t value)
  *   2. Copy the trampoline binary to physical 0x1000.
  *   3. Fill in data slots at 0x500 with CR3, entry point, stack, GDTR, cpu_id.
  */
-static void
-smp_trampoline_setup(cpu_local_t *ap, uint64_t ap_rsp)
-{
+static void smp_trampoline_setup(cpu_local_t* ap, uint64_t ap_rsp) {
     uint64_t data_flags = MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE;
     uint64_t code_flags = MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE | MEM_REGION_FLAG_EXEC;
 
@@ -85,7 +75,7 @@ smp_trampoline_setup(cpu_local_t *ap, uint64_t ap_rsp)
 
     /* Copy the trampoline binary to physical 0x1000. */
     uint32_t tramp_size = (uint32_t)(smp_trampoline_end - smp_trampoline_start);
-    __builtin_memcpy((void *)(uintptr_t)TRAMP_PHYS, smp_trampoline_start, tramp_size);
+    __builtin_memcpy((void*)(uintptr_t)TRAMP_PHYS, smp_trampoline_start, tramp_size);
 
     /* CR3: kernel page table root (physical, fits in 32 bits). */
     write_slot_u64(AP_SLOT_CR3, paging_get_root_table());
@@ -98,10 +88,10 @@ smp_trampoline_setup(cpu_local_t *ap, uint64_t ap_rsp)
 
     /* GDTR pointing at the temporary GDT embedded in the trampoline.
      * smp_trampoline_gdt offset from start → physical address after copy. */
-    uint32_t gdt_phys = (uint32_t)(TRAMP_PHYS +
-        (uintptr_t)(smp_trampoline_gdt - smp_trampoline_start));
-    uint16_t gdt_limit = 5u * 8u - 1u;   /* 5 entries */
-    write_slot_u16(AP_SLOT_GDTR,        gdt_limit);
+    uint32_t gdt_phys =
+        (uint32_t)(TRAMP_PHYS + (uintptr_t)(smp_trampoline_gdt - smp_trampoline_start));
+    uint16_t gdt_limit = 5u * 8u - 1u; /* 5 entries */
+    write_slot_u16(AP_SLOT_GDTR, gdt_limit);
     write_slot_u32(AP_SLOT_GDTR + 2ULL, gdt_phys);
 
     /* Logical CPU ID. */
@@ -109,9 +99,7 @@ smp_trampoline_setup(cpu_local_t *ap, uint64_t ap_rsp)
 }
 
 /* C entry point called by the AP trampoline after entering 64-bit long mode. */
-void
-smp_ap_c_entry(uint32_t cpu_id)
-{
+void smp_ap_c_entry(uint32_t cpu_id) {
     /* Perform per-CPU GDT/TSS/IDT/GS-base setup (runs on the AP). */
     x86_ap_cpu_init(cpu_id);
 
@@ -135,12 +123,9 @@ smp_ap_c_entry(uint32_t cpu_id)
  * Records the BSP's hardware APIC ID into g_cpus[0].apic_id and logs
  * the number of CPUs discovered by MADT scanning in ioapic_init().
  */
-void
-smp_init(void)
-{
+void smp_init(void) {
     g_cpus[0].apic_id = lapic_read_id();
-    serial_printf("[smp] bsp apic_id=%u cpu_count=%u\n",
-                  g_cpus[0].apic_id, g_cpu_count);
+    serial_printf("[smp] bsp apic_id=%u cpu_count=%u\n", g_cpus[0].apic_id, g_cpu_count);
 }
 
 /*
@@ -155,9 +140,7 @@ smp_init(void)
  * APs are brought up one at a time so the shared data slots at 0x500 are
  * not clobbered before the previous AP has read them.
  */
-void
-smp_cpus_up(void)
-{
+void smp_cpus_up(void) {
     if (g_cpu_count <= 1u) {
         serial_write("[smp] no APs to bring up\n");
         return;
@@ -166,24 +149,21 @@ smp_cpus_up(void)
     serial_printf("[smp] bringing up %u APs\n", g_cpu_count - 1u);
 
     for (uint32_t i = 1u; i < g_cpu_count; i++) {
-        cpu_local_t *ap = &g_cpus[i];
+        cpu_local_t* ap = &g_cpus[i];
 
         /* Allocate static stacks (in higher-half kernel BSS). */
-        uint64_t ist1_top = (uint64_t)(uintptr_t)
-            (g_ap_ist_stacks[i - 1u] + CPU_IST_STACK_SIZE);
-        uint64_t rsp0_top = (uint64_t)(uintptr_t)
-            (g_ap_rsp0_stacks[i - 1u] + CPU_IST_STACK_SIZE);
+        uint64_t ist1_top = (uint64_t)(uintptr_t)(g_ap_ist_stacks[i - 1u] + CPU_IST_STACK_SIZE);
+        uint64_t rsp0_top = (uint64_t)(uintptr_t)(g_ap_rsp0_stacks[i - 1u] + CPU_IST_STACK_SIZE);
 
         /* Prepare the per-CPU GDT and TSS before the AP starts. */
-        ap->cpu_id  = i;
+        ap->cpu_id = i;
         ap->started = 0;
         x86_cpu_prepare_ap(ap, ist1_top, rsp0_top);
 
         /* Write trampoline data slots and copy code to 0x1000. */
         smp_trampoline_setup(ap, rsp0_top);
 
-        serial_printf("[smp] starting ap %u (apic_id=%u)\n",
-                      i, ap->apic_id);
+        serial_printf("[smp] starting ap %u (apic_id=%u)\n", i, ap->apic_id);
 
         /* INIT IPI → delay → SIPI → delay → SIPI (Intel SDM §10.4.4.1). */
         lapic_send_init_ipi(ap->apic_id);

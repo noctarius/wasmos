@@ -17,9 +17,10 @@ void memory_service_register(uint32_t context_id, uint32_t endpoint, uint32_t re
 int memory_service_serve_one(void);
 
 /* Handle an IPC_MEM_FAULT from a page fault for fault_context_id at fault_addr. */
-int memory_service_handle_fault_ipc(uint32_t fault_context_id, uint64_t fault_addr, uint64_t error_code);
+int memory_service_handle_fault_ipc(uint32_t fault_context_id, uint64_t fault_addr,
+                                    uint64_t error_code);
 
 /* Kernel process entry point for the memory service loop. */
-process_run_result_t memory_service_entry(process_t *process, void *arg);
+process_run_result_t memory_service_entry(process_t* process, void* arg);
 
 #endif

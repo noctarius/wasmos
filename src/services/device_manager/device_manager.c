@@ -72,8 +72,8 @@ static wasmos_sys_event_loop_t g_dm_query_loop;
 static wasmos_sys_event_loop_t g_dm_rules_loop;
 static int32_t g_dm_call_select_id = -1;
 
-#define DM_SPAWN_TIMEOUT_MS   5000
-#define DM_SPAWN_POLL_MAX     65536
+#define DM_SPAWN_TIMEOUT_MS 5000
+#define DM_SPAWN_POLL_MAX 65536
 /* Sync spawns rely on PM's own DM_SPAWN_TIMEOUT_MS deadline for termination;
  * the DM-side poll cap must not fire first. */
 #define DM_SPAWN_SYNC_POLL_MAX 0x7FFFFFFF
@@ -95,9 +95,7 @@ static dm_rules_wait_t g_dm_rules_wait = {0};
 #define RULE_SPAWN_KIND_PCI_MATCH 3u
 #define RULE_SPAWN_KIND_ACPI_MATCH 4u
 
-static void
-console_write(const char *s)
-{
+static void console_write(const char* s) {
     if (!s) {
         return;
     }
@@ -107,28 +105,24 @@ console_write(const char *s)
     (void)printf("%s", s);
 }
 
-static void
-hex16_from_sha256(const char *in, char out[17])
-{
+static void hex16_from_sha256(const char* in, char out[17]) {
     wasmos_sha256_hex16_prefix(in, out);
 }
 
-static void
-log_rule_roots_once(void)
-{
+static void log_rule_roots_once(void) {
     if (g_dm.rules_roots_logged) {
         return;
     }
     g_dm.rules_roots_logged = 1;
-    console_write("[device-manager] rule roots: " DEVMGR_RULES_INIT_ROOT " (bootstrap), "
-                  DEVMGR_RULES_BOOT_ROOT " (override)\n");
+    console_write("[device-manager] rule roots: " DEVMGR_RULES_INIT_ROOT
+                  " (bootstrap), " DEVMGR_RULES_BOOT_ROOT " (override)\n");
     /* TODO: rule actions are still informational; wire parsed rules into
      * runtime bind/unbind/mount policy decisions in the next slice. */
 }
 
-static int proc_running(const char *name);
+static int proc_running(const char* name);
 static int ensure_fs_endpoint(void);
-static int query_module_meta_by_path(const char *path, uint32_t source, int32_t *out_index);
+static int query_module_meta_by_path(const char* path, uint32_t source, int32_t* out_index);
 static void kick_boot_rules_read_async(void);
 static void poll_boot_rules_async(void);
 static void queue_always_spawn_rules(void);
@@ -136,25 +130,18 @@ static void queue_pci_match_rule_spawns(void);
 static void queue_acpi_match_rule_spawns(void);
 static void queue_block_fs_rule_spawns(void);
 static void queue_block_fs_rules_for_known_devices(void);
-static int module_index_by_name(const char *name);
+static int module_index_by_name(const char* name);
 static uint16_t count_loaded_active_rules(void);
-static int is_mount_already_active(const char *mount);
-static void handle_query_message_fields(const wasmos_ipc_message_t *msg);
+static int is_mount_already_active(const char* mount);
+static void handle_query_message_fields(const wasmos_ipc_message_t* msg);
 static void handle_query_endpoint_nonblocking(void);
 static void consume_inventory_events_nonblocking(void);
 static void drain_reply_endpoint_nonblocking(int32_t budget);
-static int dm_ipc_call(int32_t destination_endpoint,
-                       int32_t source_endpoint,
-                       int32_t msg_type,
-                       int32_t request_id,
-                       int32_t arg0,
-                       int32_t arg1,
-                       int32_t arg2,
-                       int32_t arg3,
-                       wasmos_ipc_message_t *out_msg,
-                       int32_t max_empty_polls);
-static void dm_handle_ipc_default(void *user, const wasmos_ipc_message_t *msg);
-static void dm_handle_rules_reply(void *user, const wasmos_ipc_message_t *msg);
+static int dm_ipc_call(int32_t destination_endpoint, int32_t source_endpoint, int32_t msg_type,
+                       int32_t request_id, int32_t arg0, int32_t arg1, int32_t arg2, int32_t arg3,
+                       wasmos_ipc_message_t* out_msg, int32_t max_empty_polls);
+static void dm_handle_ipc_default(void* user, const wasmos_ipc_message_t* msg);
+static void dm_handle_rules_reply(void* user, const wasmos_ipc_message_t* msg);
 static int dm_register_ipc_handlers(void);
 static int dm_register_inventory_handlers(void);
 static int dm_register_query_handlers(void);
@@ -164,31 +151,16 @@ static int dm_register_rules_handlers(void);
  * spin-poll until the matching reply arrives or max_empty_polls is reached.
  * Also drains the query endpoint while waiting so external callers don't stall.
  * Returns 0 on success, -1 on timeout or send failure. */
-static int
-dm_ipc_call(int32_t destination_endpoint,
-            int32_t source_endpoint,
-            int32_t msg_type,
-            int32_t request_id,
-            int32_t arg0,
-            int32_t arg1,
-            int32_t arg2,
-            int32_t arg3,
-            wasmos_ipc_message_t *out_msg,
-            int32_t max_empty_polls)
-{
+static int dm_ipc_call(int32_t destination_endpoint, int32_t source_endpoint, int32_t msg_type,
+                       int32_t request_id, int32_t arg0, int32_t arg1, int32_t arg2, int32_t arg3,
+                       wasmos_ipc_message_t* out_msg, int32_t max_empty_polls) {
     wasmos_ipc_message_t msg;
     int32_t empty_polls = 0;
     if (request_id <= 0 || !out_msg) {
         return -1;
     }
-    if (wasmos_ipc_send(destination_endpoint,
-                        source_endpoint,
-                        msg_type,
-                        request_id,
-                        arg0,
-                        arg1,
-                        arg2,
-                        arg3) != 0) {
+    if (wasmos_ipc_send(destination_endpoint, source_endpoint, msg_type, request_id, arg0, arg1,
+                        arg2, arg3) != 0) {
         return -1;
     }
     for (;;) {
@@ -233,9 +205,7 @@ dm_ipc_call(int32_t destination_endpoint,
     }
 }
 
-static int
-copy_mount_name_token(const char *line, char *out, uint32_t out_len)
-{
+static int copy_mount_name_token(const char* line, char* out, uint32_t out_len) {
     uint32_t i = 0;
     uint32_t pos = 0;
     if (!line || !out || out_len < 2u) {
@@ -260,9 +230,7 @@ copy_mount_name_token(const char *line, char *out, uint32_t out_len)
     return 0;
 }
 
-static int
-is_mount_already_active(const char *mount)
-{
+static int is_mount_already_active(const char* mount) {
     char buf[384];
     int32_t req_id = 0;
     int32_t resp_type = 0;
@@ -291,16 +259,8 @@ is_mount_already_active(const char *mount)
         (void)wasmos_xfer_buffer_release(bid);
         return 0;
     }
-    if (dm_ipc_call(g_dm.fs_endpoint,
-                    g_dm.reply_endpoint,
-                    FSMGR_IPC_QUERY_MOUNTS_REQ,
-                    req_id,
-                    0,
-                    0,
-                    bid,
-                    b1,
-                    &resp,
-                    128) != 0) {
+    if (dm_ipc_call(g_dm.fs_endpoint, g_dm.reply_endpoint, FSMGR_IPC_QUERY_MOUNTS_REQ, req_id, 0, 0,
+                    bid, b1, &resp, 128) != 0) {
         (void)wasmos_xfer_buffer_release(bid);
         return 0;
     }
@@ -341,23 +301,17 @@ is_mount_already_active(const char *mount)
     return 0;
 }
 
-static void
-log_mount_already_active(const char *mount)
-{
+static void log_mount_already_active(const char* mount) {
     char msg[96];
     if (!mount || mount[0] == '\0') {
         return;
     }
-    (void)snprintf(msg,
-                   sizeof(msg),
-                   "[device-manager] mount already active; skipping rule mount=%s\n",
-                   mount);
+    (void)snprintf(msg, sizeof(msg),
+                   "[device-manager] mount already active; skipping rule mount=%s\n", mount);
     console_write(msg);
 }
 
-static uint16_t
-count_loaded_active_rules(void)
-{
+static uint16_t count_loaded_active_rules(void) {
     uint16_t count = 0;
     for (uint32_t i = 0; i < g_dm.always_spawn_rule_count; ++i) {
         if (g_dm.always_spawn_rules[i].active) {
@@ -382,9 +336,7 @@ count_loaded_active_rules(void)
     return count;
 }
 
-static int
-read_rules_file(const char *path, char *out_text, uint32_t out_text_len)
-{
+static int read_rules_file(const char* path, char* out_text, uint32_t out_text_len) {
     int32_t read_len = -1;
     if (!path || !out_text || out_text_len < 2u) {
         return -1;
@@ -392,21 +344,15 @@ read_rules_file(const char *path, char *out_text, uint32_t out_text_len)
     if (ensure_fs_endpoint() != 0) {
         return -1;
     }
-    read_len = wasmos_sys_fs_read_path(g_dm.fs_endpoint,
-                                       g_dm.reply_endpoint,
-                                       g_dm.request_id++,
-                                       path,
-                                       out_text,
-                                       (int32_t)out_text_len);
+    read_len = wasmos_sys_fs_read_path(g_dm.fs_endpoint, g_dm.reply_endpoint, g_dm.request_id++,
+                                       path, out_text, (int32_t)out_text_len);
     if (read_len < 0) {
         return -1;
     }
     return read_len;
 }
 
-static int
-ensure_fs_endpoint(void)
-{
+static int ensure_fs_endpoint(void) {
     if (g_dm.fs_endpoint >= 0) {
         return 0;
     }
@@ -417,9 +363,7 @@ ensure_fs_endpoint(void)
     return (g_dm.fs_endpoint >= 0) ? 0 : -1;
 }
 
-static void
-kick_boot_rules_read_async(void)
-{
+static void kick_boot_rules_read_async(void) {
     char path[96];
     int32_t path_len = 0;
     if (g_dm.rules_boot_loaded || g_dm.rules_boot_request_pending) {
@@ -477,14 +421,8 @@ kick_boot_rules_read_async(void)
         return;
     }
     g_dm.rules_boot_request_id = g_dm.request_id++;
-    if (wasmos_ipc_send(g_dm.fs_endpoint,
-                        g_dm.rule_reply_endpoint,
-                        FS_IPC_READ_PATH_REQ,
-                        g_dm.rules_boot_request_id,
-                        path_len,
-                        buf_size,
-                        bid,
-                        b1) != 0) {
+    if (wasmos_ipc_send(g_dm.fs_endpoint, g_dm.rule_reply_endpoint, FS_IPC_READ_PATH_REQ,
+                        g_dm.rules_boot_request_id, path_len, buf_size, bid, b1) != 0) {
         (void)wasmos_xfer_buffer_release(bid);
         g_dm.rules_boot_loaded = 1;
         g_dm.rules_boot_active = 0;
@@ -497,9 +435,7 @@ kick_boot_rules_read_async(void)
     g_dm_rules_wait.done = 0;
 }
 
-static void
-poll_boot_rules_async(void)
-{
+static void poll_boot_rules_async(void) {
     int32_t read_len = 0;
     char text[DEVMGR_RULE_TEXT_CAP];
     char msg[128];
@@ -597,13 +533,12 @@ poll_boot_rules_async(void)
         queue_acpi_match_rule_spawns();
     }
     g_dm.rules_boot_loaded = 1;
-    snprintf(msg, sizeof(msg), "[device-manager] loaded boot rules: %d active\n", (int)g_dm.rules_boot_active);
+    snprintf(msg, sizeof(msg), "[device-manager] loaded boot rules: %d active\n",
+             (int)g_dm.rules_boot_active);
     console_write(msg);
 }
 
-static void
-load_rules_if_available(void)
-{
+static void load_rules_if_available(void) {
     if (!g_dm.rules_init_loaded) {
         char path[96];
         char text[DEVMGR_RULE_TEXT_CAP];
@@ -645,9 +580,7 @@ load_rules_if_available(void)
     poll_boot_rules_async();
 }
 
-static int
-proc_running(const char *name)
-{
+static int proc_running(const char* name) {
     int32_t count = wasmos_proc_count();
     if (count <= 0) {
         return 0;
@@ -669,9 +602,7 @@ proc_running(const char *name)
     return 0;
 }
 
-static int
-module_index_by_name(const char *name)
-{
+static int module_index_by_name(const char* name) {
     int32_t scan_limit = g_dm.module_count;
     if (!name) {
         return -1;
@@ -696,14 +627,10 @@ module_index_by_name(const char *name)
     return -1;
 }
 
-
-static void
-hw_scan_acpi(void)
-{
+static void hw_scan_acpi(void) {
     acpi_rsdp_t rsdp;
     uint32_t length = 0;
-    int32_t rc = wasmos_acpi_rsdp_info((int32_t)(uintptr_t)&rsdp,
-                                       (int32_t)(uintptr_t)&length,
+    int32_t rc = wasmos_acpi_rsdp_info((int32_t)(uintptr_t)&rsdp, (int32_t)(uintptr_t)&length,
                                        (int32_t)sizeof(rsdp));
     if (rc != 0) {
         console_write("[device-manager] ACPI RSDP not found\n");
@@ -718,9 +645,8 @@ hw_scan_acpi(void)
         console_write("[device-manager] ACPI RSDP too small\n");
         return;
     }
-    if (!(rsdp.signature[0] == 'R' && rsdp.signature[1] == 'S' &&
-          rsdp.signature[2] == 'D' && rsdp.signature[3] == ' ' &&
-          rsdp.signature[4] == 'P' && rsdp.signature[5] == 'T' &&
+    if (!(rsdp.signature[0] == 'R' && rsdp.signature[1] == 'S' && rsdp.signature[2] == 'D' &&
+          rsdp.signature[3] == ' ' && rsdp.signature[4] == 'P' && rsdp.signature[5] == 'T' &&
           rsdp.signature[6] == 'R' && rsdp.signature[7] == ' ')) {
         console_write("[device-manager] ACPI RSDP signature mismatch\n");
         return;
@@ -728,31 +654,24 @@ hw_scan_acpi(void)
     console_write("[device-manager] ACPI RSDP ok\n");
 }
 
-static int
-dm_spawn_sync_call(int32_t msg_type, int32_t arg0, int32_t arg1, int32_t arg2, int32_t arg3)
-{
+static int dm_spawn_sync_call(int32_t msg_type, int32_t arg0, int32_t arg1, int32_t arg2,
+                              int32_t arg3) {
     wasmos_ipc_message_t resp;
-    if (dm_ipc_call(g_dm.proc_endpoint, g_dm.reply_endpoint,
-                    msg_type, g_dm.request_id++,
-                    arg0, arg1, arg2, arg3,
-                    &resp, DM_SPAWN_SYNC_POLL_MAX) != 0) {
+    if (dm_ipc_call(g_dm.proc_endpoint, g_dm.reply_endpoint, msg_type, g_dm.request_id++, arg0,
+                    arg1, arg2, arg3, &resp, DM_SPAWN_SYNC_POLL_MAX) != 0) {
         return -1;
     }
     return resp.type == PROC_IPC_RESP ? 0 : -1;
 }
 
-static int
-hw_spawn_driver_index(int32_t index)
-{
+static int hw_spawn_driver_index(int32_t index) {
     if (index < 0) {
         return -1;
     }
     return dm_spawn_sync_call(PROC_IPC_SPAWN_SYNC, index, DM_SPAWN_TIMEOUT_MS, 0, 0);
 }
 
-static int
-hw_spawn_driver_index_caps(int32_t index, const spawn_caps_t *caps)
-{
+static int hw_spawn_driver_index_caps(int32_t index, const spawn_caps_t* caps) {
     uint32_t io_packed = 0;
     uint32_t arg3 = 0;
     if (!caps) {
@@ -763,13 +682,11 @@ hw_spawn_driver_index_caps(int32_t index, const spawn_caps_t *caps)
     }
     io_packed = ((uint32_t)caps->io_port_min) | ((uint32_t)caps->io_port_max << 16);
     arg3 = (caps->irq_mask & 0xFFFFu) | ((DM_SPAWN_TIMEOUT_MS & 0xFFFFu) << 16);
-    return dm_spawn_sync_call(PROC_IPC_SPAWN_CAPS_SYNC,
-                              index, (int32_t)caps->cap_flags, (int32_t)io_packed, (int32_t)arg3);
+    return dm_spawn_sync_call(PROC_IPC_SPAWN_CAPS_SYNC, index, (int32_t)caps->cap_flags,
+                              (int32_t)io_packed, (int32_t)arg3);
 }
 
-static int
-hw_spawn_driver_path(const char *path)
-{
+static int hw_spawn_driver_path(const char* path) {
     uint32_t path_len = 0;
     if (!path || path[0] == '\0') {
         return -1;
@@ -789,19 +706,16 @@ hw_spawn_driver_path(const char *path)
         (void)wasmos_xfer_buffer_release(bid);
         return -1;
     }
-    int rc = dm_spawn_sync_call(PROC_IPC_SPAWN_PATH_SYNC,
-                                PROC_SPAWN_PATH_FLAG_AUTOREAP, /* reap one-shot enumerators (pci/acpi) on exit */
-                                (int32_t)(((uint32_t)bid << 12) | (path_len & 0xFFFu)),
-                                0, DM_SPAWN_TIMEOUT_MS);
+    int rc = dm_spawn_sync_call(
+        PROC_IPC_SPAWN_PATH_SYNC,
+        PROC_SPAWN_PATH_FLAG_AUTOREAP, /* reap one-shot enumerators (pci/acpi) on exit */
+        (int32_t)(((uint32_t)bid << 12) | (path_len & 0xFFFu)), 0, DM_SPAWN_TIMEOUT_MS);
     (void)wasmos_xfer_buffer_release(bid);
     return rc;
 }
 
-static int
-hw_spawn_driver_path_caps_args(const char *path,
-                               const spawn_caps_t *caps,
-                               const char *args)
-{
+static int hw_spawn_driver_path_caps_args(const char* path, const spawn_caps_t* caps,
+                                          const char* args) {
     uint32_t path_len = 0;
     uint32_t args_len = 0;
     uint32_t caps_arg0 = 0;
@@ -833,35 +747,26 @@ hw_spawn_driver_path_caps_args(const char *path,
         return -1;
     }
     if (args_len > 0u &&
-        wasmos_xfer_buffer_write(bid,
-                                 (int32_t)(uintptr_t)args,
-                                 (int32_t)(args_len + 1u),
+        wasmos_xfer_buffer_write(bid, (int32_t)(uintptr_t)args, (int32_t)(args_len + 1u),
                                  (int32_t)path_len) != 0) {
         (void)wasmos_xfer_buffer_release(bid);
         return -1;
     }
     if (args_len == 0u &&
-        wasmos_xfer_buffer_write(bid,
-                                 (int32_t)(uintptr_t)"",
-                                 1,
-                                 (int32_t)path_len) != 0) {
+        wasmos_xfer_buffer_write(bid, (int32_t)(uintptr_t)"", 1, (int32_t)path_len) != 0) {
         (void)wasmos_xfer_buffer_release(bid);
         return -1;
     }
     caps_arg0 = ((uint32_t)caps->irq_mask << 16) | ((uint32_t)caps->cap_flags & 0xFFFFu);
     caps_arg2 = ((uint32_t)caps->io_port_max << 16) | (uint32_t)caps->io_port_min;
-    int rc = dm_spawn_sync_call(PROC_IPC_SPAWN_PATH_CAPS_SYNC,
-                                (int32_t)caps_arg0,
+    int rc = dm_spawn_sync_call(PROC_IPC_SPAWN_PATH_CAPS_SYNC, (int32_t)caps_arg0,
                                 (int32_t)(((uint32_t)bid << 12) | (path_len & 0xFFFu)),
-                                (int32_t)caps_arg2,
-                                DM_SPAWN_TIMEOUT_MS);
+                                (int32_t)caps_arg2, DM_SPAWN_TIMEOUT_MS);
     (void)wasmos_xfer_buffer_release(bid);
     return rc;
 }
 
-static int
-build_block_fs_spawn_args(uint8_t unit, char *out, uint32_t out_cap)
-{
+static int build_block_fs_spawn_args(uint8_t unit, char* out, uint32_t out_cap) {
     int n = 0;
     if (!out || out_cap == 0u) {
         return -1;
@@ -873,21 +778,14 @@ build_block_fs_spawn_args(uint8_t unit, char *out, uint32_t out_cap)
     return n;
 }
 
-static int
-build_pci_spawn_args(const pci_device_record_t *rec, char *out, uint32_t out_cap)
-{
+static int build_pci_spawn_args(const pci_device_record_t* rec, char* out, uint32_t out_cap) {
     int n = 0;
     if (!rec || !out || out_cap == 0u) {
         return -1;
     }
-    n = snprintf(out, out_cap,
-                 "pci=%02X:%02X.%02X vendor=%04X device=%04X io=%04X irq=%02X",
-                 (unsigned)rec->bus,
-                 (unsigned)rec->device,
-                 (unsigned)rec->function,
-                 (unsigned)rec->vendor_id,
-                 (unsigned)rec->device_id,
-                 (unsigned)rec->io_port_base,
+    n = snprintf(out, out_cap, "pci=%02X:%02X.%02X vendor=%04X device=%04X io=%04X irq=%02X",
+                 (unsigned)rec->bus, (unsigned)rec->device, (unsigned)rec->function,
+                 (unsigned)rec->vendor_id, (unsigned)rec->device_id, (unsigned)rec->io_port_base,
                  (unsigned)rec->irq_hint);
     if (n <= 0 || (uint32_t)n >= out_cap) {
         return -1;
@@ -895,9 +793,7 @@ build_pci_spawn_args(const pci_device_record_t *rec, char *out, uint32_t out_cap
     return n;
 }
 
-static int
-hw_spawn_rule_target(const char *rule_path)
-{
+static int hw_spawn_rule_target(const char* rule_path) {
     int32_t module_index = -1;
     if (!rule_path || rule_path[0] == '\0') {
         return -1;
@@ -905,8 +801,9 @@ hw_spawn_rule_target(const char *rule_path)
     if (rule_path[0] == '/') {
         return hw_spawn_driver_path(rule_path);
     }
-    if (query_module_meta_by_path(rule_path, PROC_MODULE_SOURCE_INITFS, &module_index) != 0 || module_index < 0) {
-        const char *tail = rule_path;
+    if (query_module_meta_by_path(rule_path, PROC_MODULE_SOURCE_INITFS, &module_index) != 0 ||
+        module_index < 0) {
+        const char* tail = rule_path;
         char name[32];
         uint32_t n = 0;
         for (uint32_t i = 0; rule_path[i] != '\0'; ++i) {
@@ -949,9 +846,7 @@ hw_spawn_rule_target(const char *rule_path)
     return hw_spawn_driver_index(module_index);
 }
 
-static int
-query_module_meta_by_path(const char *path, uint32_t source, int32_t *out_index)
-{
+static int query_module_meta_by_path(const char* path, uint32_t source, int32_t* out_index) {
     uint32_t path_len = 0;
     wasmos_ipc_message_t resp;
     if (!path || !out_index) {
@@ -973,16 +868,9 @@ query_module_meta_by_path(const char *path, uint32_t source, int32_t *out_index)
         (void)wasmos_xfer_buffer_release(bid);
         return -1;
     }
-    if (dm_ipc_call(g_dm.proc_endpoint,
-                    g_dm.reply_endpoint,
-                    PROC_IPC_MODULE_META_PATH,
-                    g_dm.request_id++,
-                    0,
-                    (int32_t)(((uint32_t)bid << 12) | (path_len & 0xFFFu)),
-                    (int32_t)source,
-                    0,
-                    &resp,
-                    128) != 0) {
+    if (dm_ipc_call(g_dm.proc_endpoint, g_dm.reply_endpoint, PROC_IPC_MODULE_META_PATH,
+                    g_dm.request_id++, 0, (int32_t)(((uint32_t)bid << 12) | (path_len & 0xFFFu)),
+                    (int32_t)source, 0, &resp, 128) != 0) {
         (void)wasmos_xfer_buffer_release(bid);
         return -1;
     }
@@ -1002,13 +890,11 @@ query_module_meta_by_path(const char *path, uint32_t source, int32_t *out_index)
  *   arg2 [31:16]=io_port_base  [15:0]=device_id
  *   arg3 [15:8]=irq_hint  [7:0]=mmio_hint
  */
-static void
-registry_add_from_ipc(int32_t arg0, int32_t arg1, int32_t arg2, int32_t arg3)
-{
+static void registry_add_from_ipc(int32_t arg0, int32_t arg1, int32_t arg2, int32_t arg3) {
     if (g_dm.registry_count >= DEVICE_REGISTRY_CAP) {
         return;
     }
-    pci_device_record_t *rec = &g_dm.registry[g_dm.registry_count++];
+    pci_device_record_t* rec = &g_dm.registry[g_dm.registry_count++];
     uint32_t v0 = (uint32_t)arg0;
     uint32_t v1 = (uint32_t)arg1;
     uint32_t v2 = (uint32_t)arg2;
@@ -1026,11 +912,9 @@ registry_add_from_ipc(int32_t arg0, int32_t arg1, int32_t arg2, int32_t arg3)
     queue_block_fs_rule_spawns();
 }
 
-static void
-queue_always_spawn_rules(void)
-{
+static void queue_always_spawn_rules(void) {
     for (uint32_t i = 0; i < g_dm.always_spawn_rule_count; ++i) {
-        always_spawn_rule_t *rule = &g_dm.always_spawn_rules[i];
+        always_spawn_rule_t* rule = &g_dm.always_spawn_rules[i];
         if (!rule->active || rule->spawned) {
             continue;
         }
@@ -1041,16 +925,14 @@ queue_always_spawn_rules(void)
 /* Walk pci_match_rules against the current registry; for the first unspawned
  * match, populate active_rule_spawn_* and set rule_spawn_pending=1.
  * Only one spawn is queued at a time; caller re-invokes after completion. */
-static void
-queue_pci_match_rule_spawns(void)
-{
+static void queue_pci_match_rule_spawns(void) {
     for (uint32_t ri = 0; ri < g_dm.pci_match_rule_count; ++ri) {
-        pci_match_rule_t *rule = &g_dm.pci_match_rules[ri];
+        pci_match_rule_t* rule = &g_dm.pci_match_rules[ri];
         if (!rule->active || rule->spawn_path[0] == '\0') {
             continue;
         }
         for (uint32_t di = 0; di < g_dm.registry_count; ++di) {
-            const pci_device_record_t *rec = &g_dm.registry[di];
+            const pci_device_record_t* rec = &g_dm.registry[di];
             if (di >= 64u || ((rule->spawned_device_mask >> di) & 1u) != 0u) {
                 continue;
             }
@@ -1086,19 +968,17 @@ queue_pci_match_rule_spawns(void)
     }
 }
 
-static void
-queue_acpi_match_rule_spawns(void)
-{
+static void queue_acpi_match_rule_spawns(void) {
     if (g_dm.rule_spawn_pending) {
         return;
     }
     for (uint32_t ri = 0; ri < g_dm.acpi_match_rule_count; ++ri) {
-        acpi_match_rule_t *rule = &g_dm.acpi_match_rules[ri];
+        acpi_match_rule_t* rule = &g_dm.acpi_match_rules[ri];
         if (!rule->active || rule->spawn_path[0] == '\0') {
             continue;
         }
         for (uint32_t di = 0; di < g_dm.registry_count; ++di) {
-            const pci_device_record_t *rec = &g_dm.registry[di];
+            const pci_device_record_t* rec = &g_dm.registry[di];
             /* ACPI/ISA devices are published with bus=0xFF. */
             if (rec->bus != 0xFFu) {
                 continue;
@@ -1140,14 +1020,12 @@ queue_acpi_match_rule_spawns(void)
  *
  * Callers re-invoke after each spawn completes so lower-priority rules are
  * eventually processed without starving higher-priority ones. */
-static void
-queue_block_fs_rule_spawns(void)
-{
+static void queue_block_fs_rule_spawns(void) {
     if (g_dm.rule_spawn_pending) {
         return;
     }
     for (uint32_t i = 0; i < g_dm.always_spawn_rule_count; ++i) {
-        always_spawn_rule_t *rule = &g_dm.always_spawn_rules[i];
+        always_spawn_rule_t* rule = &g_dm.always_spawn_rules[i];
         if (!rule->active || !rule->queued || rule->spawned) {
             continue;
         }
@@ -1170,7 +1048,7 @@ queue_block_fs_rule_spawns(void)
         return;
     }
     for (uint32_t i = 0; i < g_dm.block_fs_rule_count; ++i) {
-        block_fs_rule_t *rule = &g_dm.block_fs_rules[i];
+        block_fs_rule_t* rule = &g_dm.block_fs_rules[i];
         if (!rule->active || !rule->queued || rule->spawned) {
             continue;
         }
@@ -1189,16 +1067,14 @@ queue_block_fs_rule_spawns(void)
     }
 }
 
-static void
-queue_block_fs_rules_for_known_devices(void)
-{
+static void queue_block_fs_rules_for_known_devices(void) {
     for (uint32_t bi = 0; bi < g_dm.block_registry_count; ++bi) {
-        const block_device_record_t *rec = &g_dm.block_registry[bi];
+        const block_device_record_t* rec = &g_dm.block_registry[bi];
         if (!rec->in_use || !rec->present) {
             continue;
         }
         for (uint32_t ri = 0; ri < g_dm.block_fs_rule_count; ++ri) {
-            block_fs_rule_t *rule = &g_dm.block_fs_rules[ri];
+            block_fs_rule_t* rule = &g_dm.block_fs_rules[ri];
             if (!rule->active || rule->spawned || rule->queued) {
                 continue;
             }
@@ -1225,15 +1101,13 @@ queue_block_fs_rules_for_known_devices(void)
  *
  * Upserts by unit: updates an existing record if the unit is already known,
  * otherwise appends a new entry. */
-static void
-registry_add_block_from_ipc(int32_t arg0, int32_t arg1, int32_t arg2, int32_t arg3)
-{
+static void registry_add_block_from_ipc(int32_t arg0, int32_t arg1, int32_t arg2, int32_t arg3) {
     (void)arg3;
     uint8_t unit = (uint8_t)((uint32_t)arg0 & 0xFFu);
     uint32_t sectors = (uint32_t)arg1;
     uint8_t present = (uint8_t)(((uint32_t)arg2 & 1u) != 0u);
     uint8_t active = (uint8_t)((((uint32_t)arg2 >> 1) & 1u) != 0u);
-    block_device_record_t *rec = 0;
+    block_device_record_t* rec = 0;
     for (uint32_t i = 0; i < g_dm.block_registry_count; ++i) {
         if (g_dm.block_registry[i].in_use && g_dm.block_registry[i].unit == unit) {
             rec = &g_dm.block_registry[i];
@@ -1252,36 +1126,26 @@ registry_add_block_from_ipc(int32_t arg0, int32_t arg1, int32_t arg2, int32_t ar
     rec->active_service = active;
     rec->sector_count = sectors;
     if (g_dm.selected_storage_has_record) {
-        const pci_device_record_t *p = &g_dm.selected_storage_record;
-        (void)snprintf(rec->canonical_id,
-                       sizeof(rec->canonical_id),
-                       "block:pci:%02X:%02X.%02X:ata%u",
-                       (unsigned)p->bus,
-                       (unsigned)p->device,
-                       (unsigned)p->function,
-                       (unsigned)unit);
+        const pci_device_record_t* p = &g_dm.selected_storage_record;
+        (void)snprintf(rec->canonical_id, sizeof(rec->canonical_id),
+                       "block:pci:%02X:%02X.%02X:ata%u", (unsigned)p->bus, (unsigned)p->device,
+                       (unsigned)p->function, (unsigned)unit);
     } else {
-        (void)snprintf(rec->canonical_id,
-                       sizeof(rec->canonical_id),
-                       "block:pci:??:??.??:ata%u",
+        (void)snprintf(rec->canonical_id, sizeof(rec->canonical_id), "block:pci:??:??.??:ata%u",
                        (unsigned)unit);
     }
     hex16_from_sha256(rec->canonical_id, rec->hash_id);
     {
         char msg[224];
-        (void)snprintf(msg,
-                       sizeof(msg),
-                       "[device-manager] block add id=%s hash=%s present=%u sectors=%u\n",
-                       rec->canonical_id,
-                       rec->hash_id,
-                       (unsigned)rec->present,
-                       (unsigned)rec->sector_count);
+        (void)snprintf(
+            msg, sizeof(msg), "[device-manager] block add id=%s hash=%s present=%u sectors=%u\n",
+            rec->canonical_id, rec->hash_id, (unsigned)rec->present, (unsigned)rec->sector_count);
         console_write(msg);
     }
     if (rec->present) {
         uint8_t queued_any = 0;
         for (uint32_t i = 0; i < g_dm.block_fs_rule_count; ++i) {
-            block_fs_rule_t *rule = &g_dm.block_fs_rules[i];
+            block_fs_rule_t* rule = &g_dm.block_fs_rules[i];
             if (!rule->active || rule->spawned || rule->queued) {
                 continue;
             }
@@ -1303,9 +1167,7 @@ registry_add_block_from_ipc(int32_t arg0, int32_t arg1, int32_t arg2, int32_t ar
     }
 }
 
-static void
-reset_selected_storage(void)
-{
+static void reset_selected_storage(void) {
     g_dm.selected_storage_index = -1;
     g_dm.selected_storage_has_record = 0;
     g_dm.selected_storage_caps.cap_flags = 0;
@@ -1318,33 +1180,18 @@ reset_selected_storage(void)
  * decode the packed IPC response fields into individual output parameters.
  * arg0 encodes io_port_min/max; arg1 encodes class/subclass/prog_if/flags;
  * arg2 encodes vendor_id/device_id. Returns 0 on success, -1 otherwise. */
-static int
-query_driver_module_meta(int32_t module_index,
-                         uint32_t match_index,
-                         uint8_t *out_class_code,
-                         uint8_t *out_subclass,
-                         uint8_t *out_prog_if,
-                         uint16_t *out_vendor_id,
-                         uint16_t *out_device_id,
-                         uint8_t *out_storage_bootstrap,
-                         uint8_t *out_match_count,
-                         spawn_caps_t *out_caps)
-{
+static int query_driver_module_meta(int32_t module_index, uint32_t match_index,
+                                    uint8_t* out_class_code, uint8_t* out_subclass,
+                                    uint8_t* out_prog_if, uint16_t* out_vendor_id,
+                                    uint16_t* out_device_id, uint8_t* out_storage_bootstrap,
+                                    uint8_t* out_match_count, spawn_caps_t* out_caps) {
     wasmos_ipc_message_t resp;
-    if (!out_class_code || !out_subclass || !out_prog_if ||
-        !out_vendor_id || !out_device_id || !out_storage_bootstrap || !out_match_count || !out_caps) {
+    if (!out_class_code || !out_subclass || !out_prog_if || !out_vendor_id || !out_device_id ||
+        !out_storage_bootstrap || !out_match_count || !out_caps) {
         return -1;
     }
-    if (dm_ipc_call(g_dm.proc_endpoint,
-                    g_dm.reply_endpoint,
-                    PROC_IPC_MODULE_META,
-                    g_dm.request_id++,
-                    module_index,
-                    (int32_t)match_index,
-                    0,
-                    0,
-                    &resp,
-                    128) != 0) {
+    if (dm_ipc_call(g_dm.proc_endpoint, g_dm.reply_endpoint, PROC_IPC_MODULE_META,
+                    g_dm.request_id++, module_index, (int32_t)match_index, 0, 0, &resp, 128) != 0) {
         return -1;
     }
     if (resp.type != PROC_IPC_RESP) {
@@ -1368,25 +1215,19 @@ query_driver_module_meta(int32_t module_index,
     return 0;
 }
 
-static void
-dm_handle_ipc_default(void *user, const wasmos_ipc_message_t *msg)
-{
+static void dm_handle_ipc_default(void* user, const wasmos_ipc_message_t* msg) {
     (void)user;
     (void)msg;
 }
 
-static int
-dm_register_ipc_handlers(void)
-{
+static int dm_register_ipc_handlers(void) {
     if (wasmos_sys_event_set_default(&g_dm_ipc_loop, dm_handle_ipc_default, 0) != 0) {
         return -1;
     }
     return 0;
 }
 
-static void
-dm_handle_inventory_message(void *user, const wasmos_ipc_message_t *msg)
-{
+static void dm_handle_inventory_message(void* user, const wasmos_ipc_message_t* msg) {
     (void)user;
     if (!msg) {
         return;
@@ -1413,19 +1254,21 @@ dm_handle_inventory_message(void *user, const wasmos_ipc_message_t *msg)
     }
 }
 
-static int
-dm_register_inventory_handlers(void)
-{
-    if (wasmos_sys_event_register(&g_dm_inventory_loop, DEVMGR_PUBLISH_BLOCK_DEVICE, dm_handle_inventory_message, 0) != 0) {
+static int dm_register_inventory_handlers(void) {
+    if (wasmos_sys_event_register(&g_dm_inventory_loop, DEVMGR_PUBLISH_BLOCK_DEVICE,
+                                  dm_handle_inventory_message, 0) != 0) {
         return -1;
     }
-    if (wasmos_sys_event_register(&g_dm_inventory_loop, DEVMGR_PUBLISH_DEVICE, dm_handle_inventory_message, 0) != 0) {
+    if (wasmos_sys_event_register(&g_dm_inventory_loop, DEVMGR_PUBLISH_DEVICE,
+                                  dm_handle_inventory_message, 0) != 0) {
         return -1;
     }
-    if (wasmos_sys_event_register(&g_dm_inventory_loop, DEVMGR_PCI_SCAN_DONE, dm_handle_inventory_message, 0) != 0) {
+    if (wasmos_sys_event_register(&g_dm_inventory_loop, DEVMGR_PCI_SCAN_DONE,
+                                  dm_handle_inventory_message, 0) != 0) {
         return -1;
     }
-    if (wasmos_sys_event_register(&g_dm_inventory_loop, DEVMGR_ACPI_SCAN_DONE, dm_handle_inventory_message, 0) != 0) {
+    if (wasmos_sys_event_register(&g_dm_inventory_loop, DEVMGR_ACPI_SCAN_DONE,
+                                  dm_handle_inventory_message, 0) != 0) {
         return -1;
     }
     if (wasmos_sys_event_set_default(&g_dm_inventory_loop, dm_handle_ipc_default, 0) != 0) {
@@ -1434,13 +1277,13 @@ dm_register_inventory_handlers(void)
     return 0;
 }
 
-static int
-dm_register_query_handlers(void)
-{
-    if (wasmos_sys_event_register(&g_dm_query_loop, DEVMGR_QUERY_MOUNT_REQ, dm_handle_inventory_message, 0) != 0) {
+static int dm_register_query_handlers(void) {
+    if (wasmos_sys_event_register(&g_dm_query_loop, DEVMGR_QUERY_MOUNT_REQ,
+                                  dm_handle_inventory_message, 0) != 0) {
         return -1;
     }
-    if (wasmos_sys_event_register(&g_dm_query_loop, DEVMGR_QUERY_BLOCK_MOUNT_REQ, dm_handle_inventory_message, 0) != 0) {
+    if (wasmos_sys_event_register(&g_dm_query_loop, DEVMGR_QUERY_BLOCK_MOUNT_REQ,
+                                  dm_handle_inventory_message, 0) != 0) {
         return -1;
     }
     if (wasmos_sys_event_set_default(&g_dm_query_loop, dm_handle_ipc_default, 0) != 0) {
@@ -1449,9 +1292,7 @@ dm_register_query_handlers(void)
     return 0;
 }
 
-static int
-dm_register_rules_handlers(void)
-{
+static int dm_register_rules_handlers(void) {
     if (wasmos_sys_event_register(&g_dm_rules_loop, FS_IPC_RESP, dm_handle_rules_reply, 0) != 0) {
         return -1;
     }
@@ -1464,45 +1305,36 @@ dm_register_rules_handlers(void)
     return 0;
 }
 
-static int
-match_any_or_u8(uint8_t actual, uint8_t expected)
-{
+static int match_any_or_u8(uint8_t actual, uint8_t expected) {
     return (expected == MATCH_ANY_U8 || actual == expected) ? 1 : 0;
 }
 
-static int
-match_any_or_u16(uint16_t actual, uint16_t expected)
-{
+static int match_any_or_u16(uint16_t actual, uint16_t expected) {
     return (expected == MATCH_ANY_U16 || actual == expected) ? 1 : 0;
 }
 
-static int
-select_pci_matched_driver(int32_t module_index, spawn_caps_t *out_caps)
-{
+static int select_pci_matched_driver(int32_t module_index, spawn_caps_t* out_caps) {
     uint8_t class_code = 0, subclass = 0, prog_if = 0, storage_bootstrap = 0, match_count = 0;
     uint16_t vendor_id = 0, device_id = 0;
     spawn_caps_t caps;
     if (module_index < 0 || !out_caps) {
         return -1;
     }
-    if (query_driver_module_meta(module_index, 0,
-                                 &class_code, &subclass, &prog_if,
-                                 &vendor_id, &device_id,
-                                 &storage_bootstrap, &match_count, &caps) != 0 ||
+    if (query_driver_module_meta(module_index, 0, &class_code, &subclass, &prog_if, &vendor_id,
+                                 &device_id, &storage_bootstrap, &match_count, &caps) != 0 ||
         match_count == 0) {
         return -1;
     }
     for (uint32_t m = 0; m < match_count; ++m) {
         if (m != 0) {
-            if (query_driver_module_meta(module_index, m,
-                                         &class_code, &subclass, &prog_if,
-                                         &vendor_id, &device_id,
-                                         &storage_bootstrap, &match_count, &caps) != 0) {
+            if (query_driver_module_meta(module_index, m, &class_code, &subclass, &prog_if,
+                                         &vendor_id, &device_id, &storage_bootstrap, &match_count,
+                                         &caps) != 0) {
                 continue;
             }
         }
         for (uint32_t i = 0; i < g_dm.registry_count; ++i) {
-            const pci_device_record_t *rec = &g_dm.registry[i];
+            const pci_device_record_t* rec = &g_dm.registry[i];
             if (!match_any_or_u8(rec->class_code, class_code) ||
                 !match_any_or_u8(rec->subclass, subclass) ||
                 !match_any_or_u8(rec->prog_if, prog_if) ||
@@ -1520,32 +1352,27 @@ select_pci_matched_driver(int32_t module_index, spawn_caps_t *out_caps)
     return -1;
 }
 
-static void
-apply_pci_matches(void)
-{
+static void apply_pci_matches(void) {
     reset_selected_storage();
     for (int32_t module_index = 0; module_index < g_dm.module_count; ++module_index) {
         uint8_t class_code = 0, subclass = 0, prog_if = 0, storage_bootstrap = 0, match_count = 0;
         uint16_t vendor_id = 0, device_id = 0;
         spawn_caps_t caps;
-        if (query_driver_module_meta(module_index, 0,
-                                     &class_code, &subclass, &prog_if,
-                                     &vendor_id, &device_id,
-                                     &storage_bootstrap, &match_count, &caps) != 0 ||
+        if (query_driver_module_meta(module_index, 0, &class_code, &subclass, &prog_if, &vendor_id,
+                                     &device_id, &storage_bootstrap, &match_count, &caps) != 0 ||
             !storage_bootstrap || match_count == 0) {
             continue;
         }
         for (uint32_t m = 0; m < match_count; ++m) {
             if (m != 0) {
-                if (query_driver_module_meta(module_index, m,
-                                             &class_code, &subclass, &prog_if,
-                                             &vendor_id, &device_id,
-                                             &storage_bootstrap, &match_count, &caps) != 0) {
+                if (query_driver_module_meta(module_index, m, &class_code, &subclass, &prog_if,
+                                             &vendor_id, &device_id, &storage_bootstrap,
+                                             &match_count, &caps) != 0) {
                     continue;
                 }
             }
             for (uint32_t i = 0; i < g_dm.registry_count; ++i) {
-                const pci_device_record_t *rec = &g_dm.registry[i];
+                const pci_device_record_t* rec = &g_dm.registry[i];
                 if (!match_any_or_u8(rec->class_code, class_code) ||
                     !match_any_or_u8(rec->subclass, subclass) ||
                     !match_any_or_u8(rec->prog_if, prog_if) ||
@@ -1567,9 +1394,7 @@ apply_pci_matches(void)
     }
 }
 
-static void
-consume_pci_inventory(void)
-{
+static void consume_pci_inventory(void) {
     if (g_dm.inventory_endpoint < 0) {
         return;
     }
@@ -1593,9 +1418,7 @@ consume_pci_inventory(void)
     queue_block_fs_rule_spawns();
 }
 
-static void
-consume_acpi_inventory(void)
-{
+static void consume_acpi_inventory(void) {
     if (g_dm.inventory_endpoint < 0) {
         return;
     }
@@ -1619,9 +1442,7 @@ consume_acpi_inventory(void)
      * boot_mount_ready so drivers on /boot can be found by the FS. */
 }
 
-static hw_spawn_target_t
-next_spawn_target(void)
-{
+static hw_spawn_target_t next_spawn_target(void) {
     if (g_dm.need_pci_bus) {
         return HW_SPAWN_PCI_BUS;
     }
@@ -1650,9 +1471,7 @@ next_spawn_target(void)
     return HW_SPAWN_NONE;
 }
 
-static void
-handle_query_message_fields(const wasmos_ipc_message_t *msg)
-{
+static void handle_query_message_fields(const wasmos_ipc_message_t* msg) {
     int32_t type = msg ? msg->type : 0;
     int32_t req_id = msg ? msg->request_id : 0;
     int32_t source = msg ? msg->source : 0;
@@ -1663,10 +1482,10 @@ handle_query_message_fields(const wasmos_ipc_message_t *msg)
     }
     if (type == DEVMGR_QUERY_BLOCK_MOUNT_REQ) {
         uint8_t unit = (uint8_t)((uint32_t)index & 0xFFu);
-        const char *mount = 0;
+        const char* mount = 0;
         uint32_t packed[4] = {0, 0, 0, 0};
         for (uint32_t i = 0; i < g_dm.block_fs_rule_count; ++i) {
-            block_fs_rule_t *rule = &g_dm.block_fs_rules[i];
+            block_fs_rule_t* rule = &g_dm.block_fs_rules[i];
             if (!rule->active) {
                 continue;
             }
@@ -1684,13 +1503,8 @@ handle_query_message_fields(const wasmos_ipc_message_t *msg)
             uint32_t shift = (i % 4u) * 8u;
             packed[slot] |= ((uint32_t)(uint8_t)mount[i]) << shift;
         }
-        (void)wasmos_ipc_send(source,
-                              g_dm.query_endpoint,
-                              DEVMGR_BLOCK_MOUNT_INFO,
-                              req_id,
-                              (int32_t)packed[0],
-                              (int32_t)packed[1],
-                              (int32_t)packed[2],
+        (void)wasmos_ipc_send(source, g_dm.query_endpoint, DEVMGR_BLOCK_MOUNT_INFO, req_id,
+                              (int32_t)packed[0], (int32_t)packed[1], (int32_t)packed[2],
                               (int32_t)packed[3]);
         return;
     }
@@ -1699,21 +1513,24 @@ handle_query_message_fields(const wasmos_ipc_message_t *msg)
         uint32_t a2 = 0;
         uint32_t a3 = 0;
         if (g_dm.selected_storage_has_record) {
-            const pci_device_record_t *rec = &g_dm.selected_storage_record;
+            const pci_device_record_t* rec = &g_dm.selected_storage_record;
             a1 = ((uint32_t)rec->bus << 24) | ((uint32_t)rec->device << 16) |
                  ((uint32_t)rec->function << 8) | (uint32_t)rec->class_code;
             a2 = ((uint32_t)rec->subclass << 24) | ((uint32_t)rec->prog_if << 16) |
                  (uint32_t)rec->vendor_id;
             a3 = (uint32_t)rec->device_id | ((uint32_t)1u << 31);
         }
-        (void)wasmos_ipc_send(source, g_dm.query_endpoint, DEVMGR_MOUNT_INFO, req_id, 0, (int32_t)a1, (int32_t)a2, (int32_t)a3);
+        (void)wasmos_ipc_send(source, g_dm.query_endpoint, DEVMGR_MOUNT_INFO, req_id, 0,
+                              (int32_t)a1, (int32_t)a2, (int32_t)a3);
         return;
     }
     if (index == 1) {
         if (g_dm.boot_mount_ready) {
-            (void)wasmos_ipc_send(source, g_dm.query_endpoint, DEVMGR_MOUNT_INFO, req_id, 1, 0, 0, 0);
+            (void)wasmos_ipc_send(source, g_dm.query_endpoint, DEVMGR_MOUNT_INFO, req_id, 1, 0, 0,
+                                  0);
         } else {
-            (void)wasmos_ipc_send(source, g_dm.query_endpoint, DEVMGR_QUERY_DONE, req_id, 0, 0, 0, 0);
+            (void)wasmos_ipc_send(source, g_dm.query_endpoint, DEVMGR_QUERY_DONE, req_id, 0, 0, 0,
+                                  0);
         }
         return;
     }
@@ -1723,25 +1540,25 @@ handle_query_message_fields(const wasmos_ipc_message_t *msg)
             uint32_t a2 = 0;
             uint32_t a3 = 0;
             if (g_dm.selected_storage_has_record) {
-                const pci_device_record_t *rec = &g_dm.selected_storage_record;
+                const pci_device_record_t* rec = &g_dm.selected_storage_record;
                 a1 = ((uint32_t)rec->bus << 24) | ((uint32_t)rec->device << 16) |
                      ((uint32_t)rec->function << 8) | (uint32_t)rec->class_code;
                 a2 = ((uint32_t)rec->subclass << 24) | ((uint32_t)rec->prog_if << 16) |
                      (uint32_t)rec->vendor_id;
                 a3 = (uint32_t)rec->device_id | ((uint32_t)1u << 31);
             }
-            (void)wasmos_ipc_send(source, g_dm.query_endpoint, DEVMGR_MOUNT_INFO, req_id, 2, (int32_t)a1, (int32_t)a2, (int32_t)a3);
+            (void)wasmos_ipc_send(source, g_dm.query_endpoint, DEVMGR_MOUNT_INFO, req_id, 2,
+                                  (int32_t)a1, (int32_t)a2, (int32_t)a3);
         } else {
-            (void)wasmos_ipc_send(source, g_dm.query_endpoint, DEVMGR_QUERY_DONE, req_id, 0, 0, 0, 0);
+            (void)wasmos_ipc_send(source, g_dm.query_endpoint, DEVMGR_QUERY_DONE, req_id, 0, 0, 0,
+                                  0);
         }
         return;
     }
     (void)wasmos_ipc_send(source, g_dm.query_endpoint, DEVMGR_QUERY_DONE, req_id, 0, 0, 0, 0);
 }
 
-static void
-handle_query_endpoint_nonblocking(void)
-{
+static void handle_query_endpoint_nonblocking(void) {
     for (int32_t i = 0; i < 16; ++i) {
         wasmos_ipc_message_t msg;
         if (g_dm.query_endpoint < 0) {
@@ -1758,9 +1575,7 @@ handle_query_endpoint_nonblocking(void)
     }
 }
 
-static void
-consume_inventory_events_nonblocking(void)
-{
+static void consume_inventory_events_nonblocking(void) {
     for (int32_t i = 0; i < 16; ++i) {
         wasmos_ipc_message_t msg;
         if (g_dm.inventory_endpoint < 0) {
@@ -1774,9 +1589,7 @@ consume_inventory_events_nonblocking(void)
     }
 }
 
-static void
-drain_reply_endpoint_nonblocking(int32_t budget)
-{
+static void drain_reply_endpoint_nonblocking(int32_t budget) {
     if (budget <= 0) {
         budget = 1;
     }
@@ -1801,12 +1614,8 @@ drain_reply_endpoint_nonblocking(int32_t budget)
  * NOTE: boot rules (DEVMGR_RULES_BOOT_ROOT) must be fully loaded before new
  * rule-driven spawns begin — poll_boot_rules_async must not be called while
  * a rule spawn is active or it will corrupt active_rule_spawn_* state. */
-WASMOS_WASM_EXPORT int32_t
-initialize(int32_t proc_endpoint,
-           int32_t module_count,
-           int32_t ignored_arg2,
-           int32_t ignored_arg3)
-{
+WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t module_count,
+                                      int32_t ignored_arg2, int32_t ignored_arg3) {
     (void)ignored_arg2;
     (void)ignored_arg3;
     /* proc.endpoint and module.count now come from the spawn-info contract. */
@@ -1880,23 +1689,28 @@ initialize(int32_t proc_endpoint,
     log_rule_roots_once();
     load_rules_if_available();
     hw_scan_acpi();
-    (void)query_module_meta_by_path("system/services/pci_bus.wap", PROC_MODULE_SOURCE_INITFS, &g_dm.pci_bus_index);
+    (void)query_module_meta_by_path("system/services/pci_bus.wap", PROC_MODULE_SOURCE_INITFS,
+                                    &g_dm.pci_bus_index);
     if (g_dm.pci_bus_index < 0) {
         g_dm.pci_bus_index = module_index_by_name("pci-bus");
     }
-    (void)query_module_meta_by_path("system/services/acpi_bus.wap", PROC_MODULE_SOURCE_INITFS, &g_dm.acpi_bus_index);
+    (void)query_module_meta_by_path("system/services/acpi_bus.wap", PROC_MODULE_SOURCE_INITFS,
+                                    &g_dm.acpi_bus_index);
     if (g_dm.acpi_bus_index < 0) {
         g_dm.acpi_bus_index = module_index_by_name("acpi-bus");
     }
-    (void)query_module_meta_by_path("system/drivers/fs_fat.wap", PROC_MODULE_SOURCE_INITFS, &g_dm.fat_index);
+    (void)query_module_meta_by_path("system/drivers/fs_fat.wap", PROC_MODULE_SOURCE_INITFS,
+                                    &g_dm.fat_index);
     if (g_dm.fat_index < 0) {
         g_dm.fat_index = module_index_by_name("fs-fat");
     }
-    (void)query_module_meta_by_path("system/drivers/fs_init.wap", PROC_MODULE_SOURCE_INITFS, &g_dm.fs_init_index);
+    (void)query_module_meta_by_path("system/drivers/fs_init.wap", PROC_MODULE_SOURCE_INITFS,
+                                    &g_dm.fs_init_index);
     if (g_dm.fs_init_index < 0) {
         g_dm.fs_init_index = module_index_by_name("fs-init");
     }
-    (void)query_module_meta_by_path("system/services/fs_manager.wap", PROC_MODULE_SOURCE_INITFS, &g_dm.fs_manager_index);
+    (void)query_module_meta_by_path("system/services/fs_manager.wap", PROC_MODULE_SOURCE_INITFS,
+                                    &g_dm.fs_manager_index);
     if (g_dm.fs_manager_index < 0) {
         g_dm.fs_manager_index = module_index_by_name("fs-manager");
     }
@@ -1970,7 +1784,7 @@ initialize(int32_t proc_endpoint,
                      g_dm.active_rule_spawn_caps.cap_flags != 0)) {
                     char spawn_path[104];
                     char spawn_args[DM_RULE_SPAWN_ARGS_MAX];
-                    const char *args = 0;
+                    const char* args = 0;
                     spawn_path[0] = '\0';
                     if (g_dm.active_rule_spawn_kind == RULE_SPAWN_KIND_BLOCK_FS) {
                         str_copy(spawn_path, sizeof(spawn_path), "/init/");
@@ -1982,18 +1796,18 @@ initialize(int32_t proc_endpoint,
                         g_dm.active_rule_spawn_device_index >= 0 &&
                         g_dm.active_rule_spawn_device_index < (int32_t)g_dm.registry_count &&
                         build_pci_spawn_args(&g_dm.registry[g_dm.active_rule_spawn_device_index],
-                                             spawn_args,
-                                             sizeof(spawn_args)) > 0) {
+                                             spawn_args, sizeof(spawn_args)) > 0) {
                         args = spawn_args;
                     } else if (g_dm.active_rule_spawn_kind == RULE_SPAWN_KIND_BLOCK_FS &&
                                g_dm.active_rule_spawn_index >= 0 &&
                                g_dm.active_rule_spawn_index < (int32_t)g_dm.block_fs_rule_count &&
-                               build_block_fs_spawn_args(g_dm.block_fs_rules[g_dm.active_rule_spawn_index].unit,
-                                                         spawn_args,
-                                                         sizeof(spawn_args)) > 0) {
+                               build_block_fs_spawn_args(
+                                   g_dm.block_fs_rules[g_dm.active_rule_spawn_index].unit,
+                                   spawn_args, sizeof(spawn_args)) > 0) {
                         args = spawn_args;
                     }
-                    rc = hw_spawn_driver_path_caps_args(spawn_path, &g_dm.active_rule_spawn_caps, args);
+                    rc = hw_spawn_driver_path_caps_args(spawn_path, &g_dm.active_rule_spawn_caps,
+                                                        args);
                 } else {
                     rc = hw_spawn_rule_target(g_dm.rule_spawn_path);
                 }
@@ -2002,14 +1816,16 @@ initialize(int32_t proc_endpoint,
                     if (g_dm.active_rule_spawn_kind == RULE_SPAWN_KIND_ALWAYS) {
                         if (g_dm.active_rule_spawn_index >= 0 &&
                             g_dm.active_rule_spawn_index < (int32_t)g_dm.always_spawn_rule_count) {
-                            always_spawn_rule_t *rule = &g_dm.always_spawn_rules[g_dm.active_rule_spawn_index];
+                            always_spawn_rule_t* rule =
+                                &g_dm.always_spawn_rules[g_dm.active_rule_spawn_index];
                             rule->spawned = 1;
                             rule->queued = 0;
                         }
                     } else if (g_dm.active_rule_spawn_kind == RULE_SPAWN_KIND_BLOCK_FS) {
                         if (g_dm.active_rule_spawn_index >= 0 &&
                             g_dm.active_rule_spawn_index < (int32_t)g_dm.block_fs_rule_count) {
-                            block_fs_rule_t *rule = &g_dm.block_fs_rules[g_dm.active_rule_spawn_index];
+                            block_fs_rule_t* rule =
+                                &g_dm.block_fs_rules[g_dm.active_rule_spawn_index];
                             rule->spawned = 1;
                             rule->queued = 0;
                             if (wasmos_sys_streq(rule->mount, "/boot")) {
@@ -2024,7 +1840,8 @@ initialize(int32_t proc_endpoint,
                             g_dm.active_rule_spawn_index < (int32_t)g_dm.pci_match_rule_count) {
                             if (g_dm.active_rule_spawn_device_index >= 0 &&
                                 g_dm.active_rule_spawn_device_index < 64) {
-                                g_dm.pci_match_rules[g_dm.active_rule_spawn_index].spawned_device_mask |=
+                                g_dm.pci_match_rules[g_dm.active_rule_spawn_index]
+                                    .spawned_device_mask |=
                                     (uint64_t)1u << (uint32_t)g_dm.active_rule_spawn_device_index;
                             }
                         }
@@ -2033,7 +1850,8 @@ initialize(int32_t proc_endpoint,
                             g_dm.active_rule_spawn_index < (int32_t)g_dm.acpi_match_rule_count) {
                             if (g_dm.active_rule_spawn_device_index >= 0 &&
                                 g_dm.active_rule_spawn_device_index < 64) {
-                                g_dm.acpi_match_rules[g_dm.active_rule_spawn_index].spawned_device_mask |=
+                                g_dm.acpi_match_rules[g_dm.active_rule_spawn_index]
+                                    .spawned_device_mask |=
                                     (uint64_t)1u << (uint32_t)g_dm.active_rule_spawn_device_index;
                             }
                         }
@@ -2100,9 +1918,7 @@ initialize(int32_t proc_endpoint,
                 g_dm.phase = HW_PHASE_SPAWN;
                 continue;
             }
-            if (!g_dm.ready_notified &&
-                g_dm.boot_mount_ready &&
-                g_dm.rules_boot_loaded) {
+            if (!g_dm.ready_notified && g_dm.boot_mount_ready && g_dm.rules_boot_loaded) {
                 g_dm.ready_notified = 1;
                 wasmos_sys_notify_ready(g_dm.proc_endpoint, g_dm.reply_endpoint);
             }
@@ -2114,9 +1930,7 @@ initialize(int32_t proc_endpoint,
         wasmos_sys_ipc_recv_loop();
     }
 }
-static void
-dm_handle_rules_reply(void *user, const wasmos_ipc_message_t *msg)
-{
+static void dm_handle_rules_reply(void* user, const wasmos_ipc_message_t* msg) {
     (void)user;
     if (!msg || !g_dm_rules_wait.pending) {
         return;

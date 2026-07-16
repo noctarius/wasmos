@@ -4,6 +4,11 @@
 
 #include <stdlib.h>
 
-#define assert(cond) do { if (!(cond)) { abort(); } } while (0)
+#define assert(cond)                                                                               \
+    do {                                                                                           \
+        if (!(cond)) {                                                                             \
+            abort();                                                                               \
+        }                                                                                          \
+    } while (0)
 
 #endif

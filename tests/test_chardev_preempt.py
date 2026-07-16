@@ -39,7 +39,9 @@ class ChardevPreemptTest(unittest.TestCase):
                 )
         ok = self.session.expect_from(mark, b"wamos> ", timeout_s=timeout_s)
         if not ok:
-            self.fail(f"Prompt not found after '{cmd}'.\n--- tail ---\n{self.session.tail()}\n")
+            self.fail(
+                f"Prompt not found after '{cmd}'.\n--- tail ---\n{self.session.tail()}\n"
+            )
 
     def test_exec_chardev_preempt(self):
         self._cmd_expect("cd apps", [b"/apps wamos>"])

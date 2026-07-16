@@ -62,9 +62,7 @@ static ui_context_t g_ctx1;
 static ui_context_t g_ctx2;
 static ui_context_t g_ctx3;
 
-static int32_t
-create_damage_rect_shmem(int32_t gfx_ep, int32_t width, int32_t height)
-{
+static int32_t create_damage_rect_shmem(int32_t gfx_ep, int32_t width, int32_t height) {
     int32_t shmem_id = wasmos_shmem_create(1, 0);
     if (shmem_id <= 0) {
         puts("[test] gfx smoke damage alloc failed");
@@ -84,7 +82,7 @@ create_damage_rect_shmem(int32_t gfx_ep, int32_t width, int32_t height)
         puts("[test] gfx smoke damage map failed");
         return -1;
     }
-    gfx_rect_t *rect = (gfx_rect_t *)(uintptr_t)(uint32_t)map_ptr;
+    gfx_rect_t* rect = (gfx_rect_t*)(uintptr_t)(uint32_t)map_ptr;
     rect->x = 0;
     rect->y = 0;
     rect->w = width;
@@ -100,9 +98,8 @@ create_damage_rect_shmem(int32_t gfx_ep, int32_t width, int32_t height)
     return shmem_id;
 }
 
-static int
-map_shared_buffer_ptr(int32_t shmem_id, int32_t stride_bytes, int32_t height, uint8_t **out_base)
-{
+static int map_shared_buffer_ptr(int32_t shmem_id, int32_t stride_bytes, int32_t height,
+                                 uint8_t** out_base) {
     int32_t byte_len = stride_bytes * height;
     int32_t map_len = (byte_len + (PAGE_SIZE - 1)) & ~(PAGE_SIZE - 1);
     int32_t map_ptr = wasmos_shmem_map_auto(shmem_id, map_len);
@@ -110,13 +107,12 @@ map_shared_buffer_ptr(int32_t shmem_id, int32_t stride_bytes, int32_t height, ui
         puts("[test] gfx smoke shmem map failed");
         return -1;
     }
-    *out_base = (uint8_t *)(uintptr_t)(uint32_t)map_ptr;
+    *out_base = (uint8_t*)(uintptr_t)(uint32_t)map_ptr;
     return 0;
 }
 
-static int
-flush_shared_buffer_ptr(int32_t shmem_id, uint8_t *base, int32_t stride_bytes, int32_t height)
-{
+static int flush_shared_buffer_ptr(int32_t shmem_id, uint8_t* base, int32_t stride_bytes,
+                                   int32_t height) {
     int32_t byte_len = stride_bytes * height;
     int32_t ptr = (int32_t)(uintptr_t)base;
     if (wasmos_shmem_flush(shmem_id, ptr, byte_len) != 0) {
@@ -126,13 +122,12 @@ flush_shared_buffer_ptr(int32_t shmem_id, uint8_t *base, int32_t stride_bytes, i
     return 0;
 }
 
-static int
-fill_pattern(uint8_t *base, int32_t width, int32_t height, int32_t stride_bytes, uint32_t phase)
-{
+static int fill_pattern(uint8_t* base, int32_t width, int32_t height, int32_t stride_bytes,
+                        uint32_t phase) {
     (void)stride_bytes;
     const int32_t packed_stride = width * FBPP;
     for (int32_t y = 0; y < height; ++y) {
-        uint32_t *row = (uint32_t *)(void *)(base + (y * packed_stride));
+        uint32_t* row = (uint32_t*)(void*)(base + (y * packed_stride));
         for (int32_t x = 0; x < width; ++x) {
             uint32_t r = (uint32_t)((x + (int32_t)phase) & 0xFF);
             uint32_t g = (uint32_t)((y + (int32_t)(phase * 3u)) & 0xFF);
@@ -143,37 +138,29 @@ fill_pattern(uint8_t *base, int32_t width, int32_t height, int32_t stride_bytes,
     return 0;
 }
 
-static void
-fill_rect(uint8_t *base,
-          int32_t width,
-          int32_t height,
-          int32_t stride_bytes,
-          int32_t x,
-          int32_t y,
-          int32_t w,
-          int32_t h,
-          uint32_t color)
-{
+static void fill_rect(uint8_t* base, int32_t width, int32_t height, int32_t stride_bytes, int32_t x,
+                      int32_t y, int32_t w, int32_t h, uint32_t color) {
     (void)stride_bytes;
     const int32_t packed_stride = width * FBPP;
-    if (w <= 0 || h <= 0) return;
+    if (w <= 0 || h <= 0)
+        return;
     int32_t x0 = x < 0 ? 0 : x;
     int32_t y0 = y < 0 ? 0 : y;
     int32_t x1 = x + w;
     int32_t y1 = y + h;
-    if (x1 > width) x1 = width;
-    if (y1 > height) y1 = height;
+    if (x1 > width)
+        x1 = width;
+    if (y1 > height)
+        y1 = height;
     for (int32_t yy = y0; yy < y1; ++yy) {
-        uint32_t *row = (uint32_t *)(void *)(base + (yy * packed_stride));
+        uint32_t* row = (uint32_t*)(void*)(base + (yy * packed_stride));
         for (int32_t xx = x0; xx < x1; ++xx) {
             row[xx] = color;
         }
     }
 }
 
-static int
-fill_wasmos_logo(uint8_t *base, int32_t width, int32_t height, int32_t stride_bytes)
-{
+static int fill_wasmos_logo(uint8_t* base, int32_t width, int32_t height, int32_t stride_bytes) {
     const uint32_t bg = 0xFF171A22u;
     const int32_t mascot_src_w = WASMO_MASCOT_RGBA_WIDTH;
     const int32_t mascot_src_h = WASMO_MASCOT_RGBA_HEIGHT;
@@ -183,7 +170,7 @@ fill_wasmos_logo(uint8_t *base, int32_t width, int32_t height, int32_t stride_by
     const int32_t off_x = (width - mascot_draw_w) / 2;
     const int32_t off_y = (height - mascot_draw_h) / 2;
     for (int32_t y = 0; y < mascot_draw_h; ++y) {
-        uint32_t *dst_row = (uint32_t *)(void *)(base + ((off_y + y) * (width * FBPP)));
+        uint32_t* dst_row = (uint32_t*)(void*)(base + ((off_y + y) * (width * FBPP)));
         const int32_t sy = (y * mascot_src_h) / mascot_draw_h;
         const int32_t src_row_off = sy * mascot_src_w * 4;
         for (int32_t x = 0; x < mascot_draw_w; ++x) {
@@ -202,27 +189,10 @@ fill_wasmos_logo(uint8_t *base, int32_t width, int32_t height, int32_t stride_by
     return 0;
 }
 
-static int
-send_gfx(int32_t gfx_ep,
-         int32_t reply_ep,
-         int32_t req_id,
-         int32_t opcode,
-         int32_t arg0,
-         int32_t arg1,
-         int32_t arg2,
-         int32_t arg3,
-         gfx_reply_t *out)
-{
+static int send_gfx(int32_t gfx_ep, int32_t reply_ep, int32_t req_id, int32_t opcode, int32_t arg0,
+                    int32_t arg1, int32_t arg2, int32_t arg3, gfx_reply_t* out) {
     wasmos_ipc_message_t resp;
-    if (wasmos_ipc_call(gfx_ep,
-                        reply_ep,
-                        opcode,
-                        req_id,
-                        arg0,
-                        arg1,
-                        arg2,
-                        arg3,
-                        &resp) != 0) {
+    if (wasmos_ipc_call(gfx_ep, reply_ep, opcode, req_id, arg0, arg1, arg2, arg3, &resp) != 0) {
         return -1;
     }
     if (resp.type != GFX_IPC_RESP && resp.type != GFX_IPC_ERROR) {
@@ -237,9 +207,8 @@ send_gfx(int32_t gfx_ep,
     return 0;
 }
 
-static int
-poll_gfx_focus_event(int32_t gfx_ep, int32_t reply_ep, int32_t *req, int32_t expected_window_id)
-{
+static int poll_gfx_focus_event(int32_t gfx_ep, int32_t reply_ep, int32_t* req,
+                                int32_t expected_window_id) {
     gfx_reply_t ev;
     for (int i = 0; i < 96; ++i) {
         if (send_gfx(gfx_ep, reply_ep, (*req)++, GFX_IPC_POLL_EVENT, 0, 0, 0, 0, &ev) != 0 ||
@@ -258,9 +227,8 @@ poll_gfx_focus_event(int32_t gfx_ep, int32_t reply_ep, int32_t *req, int32_t exp
     return -1;
 }
 
-static int
-poll_gfx_events_once(int32_t gfx_ep, int32_t reply_ep, int32_t *req, int32_t *out_close_window_id)
-{
+static int poll_gfx_events_once(int32_t gfx_ep, int32_t reply_ep, int32_t* req,
+                                int32_t* out_close_window_id) {
     gfx_reply_t ev;
     if (send_gfx(gfx_ep, reply_ep, (*req)++, GFX_IPC_POLL_EVENT, 0, 0, 0, 0, &ev) != 0 ||
         ev.status != GFX_STATUS_OK) {
@@ -268,9 +236,8 @@ poll_gfx_events_once(int32_t gfx_ep, int32_t reply_ep, int32_t *req, int32_t *ou
     }
     if (ev.arg1 == GFX_EVENT_KEY) {
         char msg[96];
-        int n = snprintf(msg, sizeof(msg),
-                         "[test] gfx smoke event key sc=%d flags=%d\n",
-                         ev.arg2, ev.arg3);
+        int n = snprintf(msg, sizeof(msg), "[test] gfx smoke event key sc=%d flags=%d\n", ev.arg2,
+                         ev.arg3);
         if (n > 0) {
             (void)putsn(msg, (size_t)n);
         }
@@ -294,8 +261,7 @@ poll_gfx_events_once(int32_t gfx_ep, int32_t reply_ep, int32_t *req, int32_t *ou
         int32_t rw = (int32_t)(ev.arg3 & 0xFFFF);
         int32_t rh = (int32_t)((ev.arg3 >> 16) & 0xFFFF);
         char msg[128];
-        int n = snprintf(msg, sizeof(msg),
-                         "[test] gfx smoke event resize win=%d w=%d h=%d\n",
+        int n = snprintf(msg, sizeof(msg), "[test] gfx smoke event resize win=%d w=%d h=%d\n",
                          ev.arg2, rw, rh);
         if (n > 0) {
             (void)putsn(msg, (size_t)n);
@@ -304,9 +270,8 @@ poll_gfx_events_once(int32_t gfx_ep, int32_t reply_ep, int32_t *req, int32_t *ou
     return 0;
 }
 
-static int
-handle_resize_realloc_logo(int32_t gfx_ep, int32_t reply_ep, int32_t *req, ui_context_t *ctx, int32_t new_w, int32_t new_h)
-{
+static int handle_resize_realloc_logo(int32_t gfx_ep, int32_t reply_ep, int32_t* req,
+                                      ui_context_t* ctx, int32_t new_w, int32_t new_h) {
     gfx_reply_t reply;
     if (new_w <= 0 || new_h <= 0) {
         return -1;
@@ -327,17 +292,17 @@ handle_resize_realloc_logo(int32_t gfx_ep, int32_t reply_ep, int32_t *req, ui_co
     if (flush_shared_buffer_ptr(ctx->shmem_id, ctx->mapped_base, ctx->stride_bytes, new_h) != 0) {
         return -1;
     }
-    if (send_gfx(gfx_ep, reply_ep, (*req)++, GFX_IPC_PRESENT_WINDOW,
-                 ctx->window_id, ctx->buffer_id, 0, 0, &reply) != 0 || reply.status != GFX_STATUS_OK) {
+    if (send_gfx(gfx_ep, reply_ep, (*req)++, GFX_IPC_PRESENT_WINDOW, ctx->window_id, ctx->buffer_id,
+                 0, 0, &reply) != 0 ||
+        reply.status != GFX_STATUS_OK) {
         puts("[test] gfx smoke resize3 present failed");
         return -1;
     }
     return 0;
 }
 
-static int
-handle_resize_realloc(int32_t gfx_ep, int32_t reply_ep, int32_t *req, ui_context_t *ctx, int32_t new_w, int32_t new_h, uint32_t phase)
-{
+static int handle_resize_realloc(int32_t gfx_ep, int32_t reply_ep, int32_t* req, ui_context_t* ctx,
+                                 int32_t new_w, int32_t new_h, uint32_t phase) {
     gfx_reply_t reply;
     if (new_w <= 0 || new_h <= 0) {
         return -1;
@@ -353,26 +318,25 @@ handle_resize_realloc(int32_t gfx_ep, int32_t reply_ep, int32_t *req, ui_context
     if (flush_shared_buffer_ptr(ctx->shmem_id, ctx->mapped_base, ctx->stride_bytes, new_h) != 0) {
         return -1;
     }
-    if (send_gfx(gfx_ep, reply_ep, (*req)++, GFX_IPC_PRESENT_WINDOW,
-                 ctx->window_id, ctx->buffer_id, 0, 0, &reply) != 0 || reply.status != GFX_STATUS_OK) {
+    if (send_gfx(gfx_ep, reply_ep, (*req)++, GFX_IPC_PRESENT_WINDOW, ctx->window_id, ctx->buffer_id,
+                 0, 0, &reply) != 0 ||
+        reply.status != GFX_STATUS_OK) {
         puts("[test] gfx smoke resize present failed");
         return -1;
     }
     return 0;
 }
 
-static void
-ui_demo_button_click(ui_context_t *ctx, int32_t component_id, void *user)
-{
+static void ui_demo_button_click(ui_context_t* ctx, int32_t component_id, void* user) {
     (void)component_id;
 #if GFX_SMOKE_TRACE
     puts("[dbg-libui] on_click fired");
 #endif
-    int32_t *click_count = (int32_t *)user;
-    ui_component_t *root = ui_component_by_id(ctx, ctx->root_id);
-    ui_component_t *label = ui_component_by_id(ctx, 2);
-    ui_component_t *button = ui_component_by_id(ctx, 3);
-    ui_component_t *checkbox = ui_component_by_id(ctx, 4);
+    int32_t* click_count = (int32_t*)user;
+    ui_component_t* root = ui_component_by_id(ctx, ctx->root_id);
+    ui_component_t* label = ui_component_by_id(ctx, 2);
+    ui_component_t* button = ui_component_by_id(ctx, 3);
+    ui_component_t* checkbox = ui_component_by_id(ctx, 4);
     if (click_count) {
         (*click_count)++;
     }
@@ -386,7 +350,9 @@ ui_demo_button_click(ui_context_t *ctx, int32_t component_id, void *user)
         button->border_color = (click_count && ((*click_count) & 1)) ? 0xFF9CE2FFu : 0xFF536271u;
     }
     if (checkbox) {
-        ui_component_set_text(ctx, checkbox->id, ui_component_get_checked(checkbox) ? "checkbox: on" : "checkbox: off");
+        ui_component_set_text(ctx, checkbox->id,
+                              ui_component_get_checked(checkbox) ? "checkbox: on"
+                                                                 : "checkbox: off");
     }
     ui_mark_dirty(ctx);
 }
@@ -394,10 +360,8 @@ ui_demo_button_click(ui_context_t *ctx, int32_t component_id, void *user)
 static ui_context_t g_libui_ctx;
 static int32_t g_libui_click_count = 0;
 
-static int
-start_libui_demo(int32_t proc_endpoint)
-{
-    ui_context_t *ui = &g_libui_ctx;
+static int start_libui_demo(int32_t proc_endpoint) {
+    ui_context_t* ui = &g_libui_ctx;
     g_libui_click_count = 0;
     if (ui_init(ui, proc_endpoint, wasmos_ipc_create_endpoint(), 520, 360) != 0) {
         puts("[test] libui demo init failed");
@@ -415,12 +379,12 @@ start_libui_demo(int32_t proc_endpoint)
         ui_destroy(ui);
         return -1;
     }
-    ui_component_t *p = ui_component_by_id(ui, panel);
-    ui_component_t *l = ui_component_by_id(ui, label);
-    ui_component_t *b = ui_component_by_id(ui, button);
-    ui_component_t *cb = ui_component_by_id(ui, checkbox);
-    ui_component_t *ti = ui_component_by_id(ui, input);
-    ui_component_t *lv = ui_component_by_id(ui, list);
+    ui_component_t* p = ui_component_by_id(ui, panel);
+    ui_component_t* l = ui_component_by_id(ui, label);
+    ui_component_t* b = ui_component_by_id(ui, button);
+    ui_component_t* cb = ui_component_by_id(ui, checkbox);
+    ui_component_t* ti = ui_component_by_id(ui, input);
+    ui_component_t* lv = ui_component_by_id(ui, list);
     if (!p || !l || !b || !cb || !ti || !lv) {
         ui_destroy(ui);
         return -1;
@@ -476,21 +440,17 @@ start_libui_demo(int32_t proc_endpoint)
     return 0;
 }
 
-static int
-pump_libui_demo(void)
-{
-    ui_context_t *ui = &g_libui_ctx;
-    if (ui->window_id <= 0) return 0;
+static int pump_libui_demo(void) {
+    ui_context_t* ui = &g_libui_ctx;
+    if (ui->window_id <= 0)
+        return 0;
     wasmos_ipc_message_t ev_raw;
-    if (!ui->close_requested &&
-        ui_send_gfx_raw(ui->gfx_endpoint, ui->reply_endpoint, ui->req_id++,
-                        GFX_IPC_POLL_EVENT, 0, 0, 0, 0, &ev_raw) == 0) {
+    if (!ui->close_requested && ui_send_gfx_raw(ui->gfx_endpoint, ui->reply_endpoint, ui->req_id++,
+                                                GFX_IPC_POLL_EVENT, 0, 0, 0, 0, &ev_raw) == 0) {
 #if GFX_SMOKE_TRACE
         if (ev_raw.arg1 == GFX_EVENT_POINTER) {
-            printf("[gfx-t] libui ptr win=%d x=%d y=%d btn=%d\n",
-                   ev_raw.arg2,
-                   (int)(ev_raw.arg3 & 0xFFF),
-                   (int)((ev_raw.arg3 >> 12) & 0xFFF),
+            printf("[gfx-t] libui ptr win=%d x=%d y=%d btn=%d\n", ev_raw.arg2,
+                   (int)(ev_raw.arg3 & 0xFFF), (int)((ev_raw.arg3 >> 12) & 0xFFF),
                    (int)((ev_raw.arg3 >> 24) & 1));
             if (((ev_raw.arg3 >> 24) & 1) != 0) {
                 puts("[dbg-libui] pointer btn-down");
@@ -505,19 +465,15 @@ pump_libui_demo(void)
     return 0;
 }
 
-static void
-stop_libui_demo(void)
-{
-    ui_context_t *ui = &g_libui_ctx;
+static void stop_libui_demo(void) {
+    ui_context_t* ui = &g_libui_ctx;
     if (ui->window_id > 0) {
         ui_destroy(ui);
         puts("[test] libui demo done");
     }
 }
 
-int
-main(int argc, char **argv)
-{
+int main(int argc, char** argv) {
     (void)argc;
     (void)argv;
     puts("[test] gfx smoke main start");
@@ -558,12 +514,13 @@ main(int argc, char **argv)
         puts("[test] gfx smoke paint1 failed");
         return GFX_SMOKE_E_PAINT0;
     }
-    if (flush_shared_buffer_ptr(g_ctx1.shmem_id, g_ctx1.mapped_base, g_ctx1.stride_bytes, GFX_H) != 0) {
+    if (flush_shared_buffer_ptr(g_ctx1.shmem_id, g_ctx1.mapped_base, g_ctx1.stride_bytes, GFX_H) !=
+        0) {
         return GFX_SMOKE_E_PAINT0;
     }
 
-    if (send_gfx(gfx_ep, reply_ep, req++, GFX_IPC_PRESENT_WINDOW,
-                 g_ctx1.window_id, g_ctx1.buffer_id, 0, 0, &reply) != 0 ||
+    if (send_gfx(gfx_ep, reply_ep, req++, GFX_IPC_PRESENT_WINDOW, g_ctx1.window_id,
+                 g_ctx1.buffer_id, 0, 0, &reply) != 0 ||
         reply.status != GFX_STATUS_OK) {
         puts("[test] gfx smoke present1 failed");
         return GFX_SMOKE_E_PRESENT0;
@@ -573,8 +530,9 @@ main(int argc, char **argv)
         return GFX_SMOKE_E_EVENT_FOCUS;
     }
 
-    if (send_gfx(gfx_ep, reply_ep, req++, GFX_IPC_RESIZE_WINDOW,
-                 g_ctx1.window_id, GFX_RESIZE_W, GFX_RESIZE_H, 0, &reply) != 0 || reply.status != GFX_STATUS_OK) {
+    if (send_gfx(gfx_ep, reply_ep, req++, GFX_IPC_RESIZE_WINDOW, g_ctx1.window_id, GFX_RESIZE_W,
+                 GFX_RESIZE_H, 0, &reply) != 0 ||
+        reply.status != GFX_STATUS_OK) {
         puts("[test] gfx smoke resize failed");
         return GFX_SMOKE_E_RESIZE;
     }
@@ -585,9 +543,10 @@ main(int argc, char **argv)
 
     {
         int32_t new_buffer_id = 0, new_shmem_id = 0, new_stride = 0;
-        uint8_t *new_base = 0;
-        if (send_gfx(gfx_ep, reply_ep, req++, GFX_IPC_ALLOC_SHARED_BUFFER,
-                     g_ctx1.window_id, GFX_RESIZE_W, GFX_RESIZE_H, 0, &reply) != 0 || reply.status != GFX_STATUS_OK) {
+        uint8_t* new_base = 0;
+        if (send_gfx(gfx_ep, reply_ep, req++, GFX_IPC_ALLOC_SHARED_BUFFER, g_ctx1.window_id,
+                     GFX_RESIZE_W, GFX_RESIZE_H, 0, &reply) != 0 ||
+            reply.status != GFX_STATUS_OK) {
             puts("[test] gfx smoke resize-alloc failed");
             return GFX_SMOKE_E_ALLOC1;
         }
@@ -611,15 +570,17 @@ main(int argc, char **argv)
 
     puts("[test] gfx smoke visible start");
     for (uint32_t frame = 0; frame < GFX_FRAME_COUNT; ++frame) {
-        if (fill_pattern(g_ctx1.mapped_base, GFX_RESIZE_W, GFX_RESIZE_H, g_ctx1.stride_bytes, frame + 2u) != 0) {
+        if (fill_pattern(g_ctx1.mapped_base, GFX_RESIZE_W, GFX_RESIZE_H, g_ctx1.stride_bytes,
+                         frame + 2u) != 0) {
             puts("[test] gfx smoke paint-loop failed");
             return GFX_SMOKE_E_PAINT_LOOP;
         }
-        if (flush_shared_buffer_ptr(g_ctx1.shmem_id, g_ctx1.mapped_base, g_ctx1.stride_bytes, GFX_RESIZE_H) != 0) {
+        if (flush_shared_buffer_ptr(g_ctx1.shmem_id, g_ctx1.mapped_base, g_ctx1.stride_bytes,
+                                    GFX_RESIZE_H) != 0) {
             return GFX_SMOKE_E_PRESENT_LOOP;
         }
-    if (send_gfx(gfx_ep, reply_ep, req++, GFX_IPC_PRESENT_WINDOW,
-                 g_ctx1.window_id, g_ctx1.buffer_id, 1, damage_shmem_id, &reply) != 0 ||
+        if (send_gfx(gfx_ep, reply_ep, req++, GFX_IPC_PRESENT_WINDOW, g_ctx1.window_id,
+                     g_ctx1.buffer_id, 1, damage_shmem_id, &reply) != 0 ||
             reply.status != GFX_STATUS_OK) {
             puts("[test] gfx smoke present-loop failed");
             return GFX_SMOKE_E_PRESENT_LOOP;
@@ -640,11 +601,12 @@ main(int argc, char **argv)
         puts("[test] gfx smoke paint2 failed");
         return GFX_SMOKE_E_PAINT_LOOP;
     }
-    if (flush_shared_buffer_ptr(g_ctx2.shmem_id, g_ctx2.mapped_base, g_ctx2.stride_bytes, GFX2_H) != 0) {
+    if (flush_shared_buffer_ptr(g_ctx2.shmem_id, g_ctx2.mapped_base, g_ctx2.stride_bytes, GFX2_H) !=
+        0) {
         return GFX_SMOKE_E_PRESENT_LOOP;
     }
-    if (send_gfx(gfx_ep, reply_ep, req++, GFX_IPC_PRESENT_WINDOW,
-                 g_ctx2.window_id, g_ctx2.buffer_id, 0, 0, &reply) != 0 ||
+    if (send_gfx(gfx_ep, reply_ep, req++, GFX_IPC_PRESENT_WINDOW, g_ctx2.window_id,
+                 g_ctx2.buffer_id, 0, 0, &reply) != 0 ||
         reply.status != GFX_STATUS_OK) {
         puts("[test] gfx smoke present2 failed");
         return GFX_SMOKE_E_PRESENT_LOOP;
@@ -661,11 +623,12 @@ main(int argc, char **argv)
         puts("[test] gfx smoke paint3 failed");
         return GFX_SMOKE_E_PAINT_LOOP;
     }
-    if (flush_shared_buffer_ptr(g_ctx3.shmem_id, g_ctx3.mapped_base, g_ctx3.stride_bytes, GFX3_H) != 0) {
+    if (flush_shared_buffer_ptr(g_ctx3.shmem_id, g_ctx3.mapped_base, g_ctx3.stride_bytes, GFX3_H) !=
+        0) {
         return GFX_SMOKE_E_PRESENT_LOOP;
     }
-    if (send_gfx(gfx_ep, reply_ep, req++, GFX_IPC_PRESENT_WINDOW,
-                 g_ctx3.window_id, g_ctx3.buffer_id, 0, 0, &reply) != 0 ||
+    if (send_gfx(gfx_ep, reply_ep, req++, GFX_IPC_PRESENT_WINDOW, g_ctx3.window_id,
+                 g_ctx3.buffer_id, 0, 0, &reply) != 0 ||
         reply.status != GFX_STATUS_OK) {
         puts("[test] gfx smoke present3 failed");
         return GFX_SMOKE_E_PRESENT_LOOP;
@@ -716,8 +679,9 @@ main(int argc, char **argv)
         }
         if (rc == 1) {
             if (!closed1 && close_id == g_ctx1.window_id) {
-                if (send_gfx(gfx_ep, reply_ep, req++, GFX_IPC_DESTROY_WINDOW,
-                             g_ctx1.window_id, 0, 0, 0, &reply) != 0 || reply.status != GFX_STATUS_OK) {
+                if (send_gfx(gfx_ep, reply_ep, req++, GFX_IPC_DESTROY_WINDOW, g_ctx1.window_id, 0,
+                             0, 0, &reply) != 0 ||
+                    reply.status != GFX_STATUS_OK) {
                     puts("[test] gfx smoke destroy1 failed");
                     return GFX_SMOKE_E_DESTROY;
                 }
@@ -725,8 +689,9 @@ main(int argc, char **argv)
                 continue;
             }
             if (!closed2 && close_id == g_ctx2.window_id) {
-                if (send_gfx(gfx_ep, reply_ep, req++, GFX_IPC_DESTROY_WINDOW,
-                             g_ctx2.window_id, 0, 0, 0, &reply) != 0 || reply.status != GFX_STATUS_OK) {
+                if (send_gfx(gfx_ep, reply_ep, req++, GFX_IPC_DESTROY_WINDOW, g_ctx2.window_id, 0,
+                             0, 0, &reply) != 0 ||
+                    reply.status != GFX_STATUS_OK) {
                     puts("[test] gfx smoke destroy2 failed");
                     return GFX_SMOKE_E_DESTROY;
                 }
@@ -734,8 +699,9 @@ main(int argc, char **argv)
                 continue;
             }
             if (!closed3 && close_id == g_ctx3.window_id) {
-                if (send_gfx(gfx_ep, reply_ep, req++, GFX_IPC_DESTROY_WINDOW,
-                             g_ctx3.window_id, 0, 0, 0, &reply) != 0 || reply.status != GFX_STATUS_OK) {
+                if (send_gfx(gfx_ep, reply_ep, req++, GFX_IPC_DESTROY_WINDOW, g_ctx3.window_id, 0,
+                             0, 0, &reply) != 0 ||
+                    reply.status != GFX_STATUS_OK) {
                     puts("[test] gfx smoke destroy3 failed");
                     return GFX_SMOKE_E_DESTROY;
                 }
@@ -750,57 +716,64 @@ main(int argc, char **argv)
         (void)wasmos_sched_yield();
     }
 
-    if (send_gfx(gfx_ep, reply_ep, req++, GFX_IPC_PRESENT_WINDOW,
-                 g_ctx1.window_id, g_ctx1.buffer_id + 1, 0, 0, &reply) != 0 ||
+    if (send_gfx(gfx_ep, reply_ep, req++, GFX_IPC_PRESENT_WINDOW, g_ctx1.window_id,
+                 g_ctx1.buffer_id + 1, 0, 0, &reply) != 0 ||
         reply.status != GFX_STATUS_INVALID) {
         puts("[test] gfx smoke invalid-buffer deny failed");
         return GFX_SMOKE_E_INVALID_DENY;
     }
-    if (send_gfx(gfx_ep, reply_ep, req++, GFX_IPC_RESIZE_WINDOW,
-                 g_ctx1.window_id, 200, 120, 0, &reply) != 0 || reply.status != GFX_STATUS_INVALID) {
+    if (send_gfx(gfx_ep, reply_ep, req++, GFX_IPC_RESIZE_WINDOW, g_ctx1.window_id, 200, 120, 0,
+                 &reply) != 0 ||
+        reply.status != GFX_STATUS_INVALID) {
         puts("[test] gfx smoke post-destroy deny failed");
         return GFX_SMOKE_E_POST_DESTROY;
     }
 
-    if (send_gfx(gfx_ep, reply_ep, req++, GFX_IPC_RELEASE_SHARED_BUFFER,
-                 g_ctx1.buffer_id, 0, 0, 0, &reply) != 0 || reply.status != GFX_STATUS_OK) {
+    if (send_gfx(gfx_ep, reply_ep, req++, GFX_IPC_RELEASE_SHARED_BUFFER, g_ctx1.buffer_id, 0, 0, 0,
+                 &reply) != 0 ||
+        reply.status != GFX_STATUS_OK) {
         puts("[test] gfx smoke release1 failed");
         return GFX_SMOKE_E_RELEASE1;
     }
-    if (send_gfx(gfx_ep, reply_ep, req++, GFX_IPC_RELEASE_SHARED_BUFFER,
-                 g_ctx2.buffer_id, 0, 0, 0, &reply) != 0 || reply.status != GFX_STATUS_OK) {
+    if (send_gfx(gfx_ep, reply_ep, req++, GFX_IPC_RELEASE_SHARED_BUFFER, g_ctx2.buffer_id, 0, 0, 0,
+                 &reply) != 0 ||
+        reply.status != GFX_STATUS_OK) {
         puts("[test] gfx smoke release2a failed");
         return GFX_SMOKE_E_RELEASE1;
     }
-    if (send_gfx(gfx_ep, reply_ep, req++, GFX_IPC_RELEASE_SHARED_BUFFER,
-                 g_ctx3.buffer_id, 0, 0, 0, &reply) != 0 || reply.status != GFX_STATUS_OK) {
+    if (send_gfx(gfx_ep, reply_ep, req++, GFX_IPC_RELEASE_SHARED_BUFFER, g_ctx3.buffer_id, 0, 0, 0,
+                 &reply) != 0 ||
+        reply.status != GFX_STATUS_OK) {
         puts("[test] gfx smoke release3a failed");
         return GFX_SMOKE_E_RELEASE1;
     }
-    if (wasmos_shmem_unmap(g_ctx1.shmem_id) != 0 ||
-        wasmos_shmem_unmap(g_ctx2.shmem_id) != 0 ||
+    if (wasmos_shmem_unmap(g_ctx1.shmem_id) != 0 || wasmos_shmem_unmap(g_ctx2.shmem_id) != 0 ||
         wasmos_shmem_unmap(g_ctx3.shmem_id) != 0) {
         puts("[test] gfx smoke shmem unmap failed");
         return GFX_SMOKE_E_UNMAP1;
     }
-    if (send_gfx(gfx_ep, reply_ep, req++, GFX_IPC_RELEASE_SHARED_BUFFER,
-                 g_ctx1.buffer_id, 0, 0, 0, &reply) != 0 || reply.status != GFX_STATUS_INVALID) {
+    if (send_gfx(gfx_ep, reply_ep, req++, GFX_IPC_RELEASE_SHARED_BUFFER, g_ctx1.buffer_id, 0, 0, 0,
+                 &reply) != 0 ||
+        reply.status != GFX_STATUS_INVALID) {
         puts("[test] gfx smoke release2 deny failed");
         return GFX_SMOKE_E_RELEASE2;
     }
-    if (send_gfx(gfx_ep, reply_ep, req++, GFX_IPC_RELEASE_SHARED_BUFFER,
-                 g_ctx2.buffer_id, 0, 0, 0, &reply) != 0 || reply.status != GFX_STATUS_INVALID) {
+    if (send_gfx(gfx_ep, reply_ep, req++, GFX_IPC_RELEASE_SHARED_BUFFER, g_ctx2.buffer_id, 0, 0, 0,
+                 &reply) != 0 ||
+        reply.status != GFX_STATUS_INVALID) {
         puts("[test] gfx smoke release2b deny failed");
         return GFX_SMOKE_E_RELEASE2;
     }
-    if (send_gfx(gfx_ep, reply_ep, req++, GFX_IPC_RELEASE_SHARED_BUFFER,
-                 g_ctx3.buffer_id, 0, 0, 0, &reply) != 0 || reply.status != GFX_STATUS_INVALID) {
+    if (send_gfx(gfx_ep, reply_ep, req++, GFX_IPC_RELEASE_SHARED_BUFFER, g_ctx3.buffer_id, 0, 0, 0,
+                 &reply) != 0 ||
+        reply.status != GFX_STATUS_INVALID) {
         puts("[test] gfx smoke release3b deny failed");
         return GFX_SMOKE_E_RELEASE2;
     }
 
     puts("[test] gfx smoke app ok");
     puts("[test] gfx smoke main done");
-    if (libui_started) stop_libui_demo();
+    if (libui_started)
+        stop_libui_demo();
     return 0;
 }

@@ -14,7 +14,7 @@
 /* Minimal service state; only the IPC endpoints needed by script callbacks. */
 typedef struct {
     int32_t reply_endpoint;
-    int32_t spawn_request_id;  /* monotonically incremented per IPC call */
+    int32_t spawn_request_id; /* monotonically incremented per IPC call */
     int32_t proc_endpoint;
 } sysinit_state_t;
 

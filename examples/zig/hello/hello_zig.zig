@@ -41,14 +41,11 @@ pub fn main() u8 {
         const verify_count = verify.read(verify_buf[0..]) catch 0;
         verify.close() catch {};
         long_file_ok = std.mem.eql(u8, verify_buf[0..verify_count], content);
-        const unlink_ok = if (long_file_ok)
-            blk: {
-                wasmos.fs.unlink(path) catch break :blk false;
-                _ = wasmos.fs.stat(path) catch break :blk true;
-                break :blk false;
-            }
-        else
-            false;
+        const unlink_ok = if (long_file_ok) blk: {
+            wasmos.fs.unlink(path) catch break :blk false;
+            _ = wasmos.fs.stat(path) catch break :blk true;
+            break :blk false;
+        } else false;
 
         var buffer: [96]u8 = undefined;
         const count = file.read(buffer[0..]) catch 0;

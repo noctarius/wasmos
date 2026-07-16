@@ -9,14 +9,21 @@
 
 #include <stddef.h>
 
-void *malloc(size_t size);
-void  free(void *ptr);
-void *realloc(void *ptr, size_t size);
-void *calloc(size_t n, size_t size);
+void* malloc(size_t size);
+void free(void* ptr);
+void* realloc(void* ptr, size_t size);
+void* calloc(size_t n, size_t size);
 
-long int strtol(const char *nptr, char **endptr, int base);
+long int strtol(const char* nptr, char** endptr, int base);
 
-static inline void abort(void) { for (;;) {} }
-static inline void exit(int status) { (void)status; for (;;) {} }
+static inline void abort(void) {
+    for (;;) {
+    }
+}
+static inline void exit(int status) {
+    (void)status;
+    for (;;) {
+    }
+}
 
 #endif /* WASMOS_COMPAT_STDLIB_H */

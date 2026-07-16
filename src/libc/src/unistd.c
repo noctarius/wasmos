@@ -13,7 +13,7 @@
 #include <stdint.h>
 
 #define WASMOS_FILE_STREAM_COUNT 8
-#define WASMOS_FILE_MODE_READ  0x1
+#define WASMOS_FILE_MODE_READ 0x1
 #define WASMOS_FILE_MODE_WRITE 0x2
 
 static int32_t g_fs_reply_endpoint = -1;
@@ -21,9 +21,7 @@ static int32_t g_fs_request_id = 1;
 static FILE g_file_streams[WASMOS_FILE_STREAM_COUNT];
 static uint8_t g_file_stream_used[WASMOS_FILE_STREAM_COUNT];
 
-static int32_t
-libc_fs_reply_endpoint(void)
-{
+static int32_t libc_fs_reply_endpoint(void) {
     if (g_fs_reply_endpoint >= 0) {
         return g_fs_reply_endpoint;
     }
@@ -32,9 +30,7 @@ libc_fs_reply_endpoint(void)
     return g_fs_reply_endpoint;
 }
 
-static int32_t
-libc_fs_endpoint(void)
-{
+static int32_t libc_fs_endpoint(void) {
     return wasmos_fs_endpoint();
 }
 
@@ -43,9 +39,7 @@ libc_fs_endpoint(void)
  * reborrows this to the backend and unborrows it before replying, so the
  * client's release() afterwards finds no active borrows. Returns b1 (>0) or <0.
  * TODO: narrow rights per op (READ needs W, WRITE needs R) once profiled. */
-static int32_t
-libc_fs_grant(int32_t buffer_id)
-{
+static int32_t libc_fs_grant(int32_t buffer_id) {
     return wasmos_xfer_buffer_borrow(libc_fs_endpoint(), buffer_id,
                                      WASMOS_BUFFER_GRANT_READ | WASMOS_BUFFER_GRANT_WRITE);
 }
@@ -55,9 +49,7 @@ libc_fs_grant(int32_t buffer_id)
  * buffer_id in arg2 of the FS request (the FS side borrows it), and must release
  * it with wasmos_xfer_buffer_release once the reply is received. *out_len is set
  * to the path length (excluding the NUL) for the request's path_len arg. */
-static int32_t
-libc_fs_stage_path(const char *path, size_t *out_len)
-{
+static int32_t libc_fs_stage_path(const char* path, size_t* out_len) {
     size_t path_len;
     int32_t bid;
 
@@ -85,15 +77,8 @@ libc_fs_stage_path(const char *path, size_t *out_len)
 
 /* Send an FS IPC request and wait for FS_IPC_RESP; skips unmatched messages.
  * Returns 0 on success and fills out_arg0/out_arg1 from the response. */
-static int
-libc_fs_request(int32_t type,
-                int32_t arg0,
-                int32_t arg1,
-                int32_t arg2,
-                int32_t arg3,
-                int32_t *out_arg0,
-                int32_t *out_arg1)
-{
+static int libc_fs_request(int32_t type, int32_t arg0, int32_t arg1, int32_t arg2, int32_t arg3,
+                           int32_t* out_arg0, int32_t* out_arg1) {
     int32_t fs_endpoint = libc_fs_endpoint();
     int32_t reply_endpoint = libc_fs_reply_endpoint();
     wasmos_ipc_message_t reply;
@@ -108,14 +93,8 @@ libc_fs_request(int32_t type,
         g_fs_request_id = 1;
     }
 
-    if (wasmos_ipc_send(fs_endpoint,
-                        reply_endpoint,
-                        type,
-                        request_id,
-                        arg0,
-                        arg1,
-                        arg2,
-                        arg3) != 0) {
+    if (wasmos_ipc_send(fs_endpoint, reply_endpoint, type, request_id, arg0, arg1, arg2, arg3) !=
+        0) {
         return -1;
     }
     for (;;) {
@@ -143,10 +122,8 @@ libc_fs_request(int32_t type,
 /* Send an FS IPC request and reassemble FS_IPC_STREAM chunks into out[].
  * Each stream message carries 4 bytes in arg0..arg3 (0 = padding after EOF).
  * Returns total bytes written, or -1 on error. */
-static ssize_t
-libc_fs_request_stream(int32_t type, int32_t arg0, int32_t arg1, int32_t arg2, int32_t arg3,
-                       char *out, size_t out_cap)
-{
+static ssize_t libc_fs_request_stream(int32_t type, int32_t arg0, int32_t arg1, int32_t arg2,
+                                      int32_t arg3, char* out, size_t out_cap) {
     int32_t fs_endpoint = libc_fs_endpoint();
     int32_t reply_endpoint = libc_fs_reply_endpoint();
     wasmos_ipc_message_t reply;
@@ -162,7 +139,8 @@ libc_fs_request_stream(int32_t type, int32_t arg0, int32_t arg1, int32_t arg2, i
         g_fs_request_id = 1;
     }
 
-    if (wasmos_ipc_send(fs_endpoint, reply_endpoint, type, request_id, arg0, arg1, arg2, arg3) != 0) {
+    if (wasmos_ipc_send(fs_endpoint, reply_endpoint, type, request_id, arg0, arg1, arg2, arg3) !=
+        0) {
         return -1;
     }
 
@@ -175,7 +153,7 @@ libc_fs_request_stream(int32_t type, int32_t arg0, int32_t arg1, int32_t arg2, i
             continue;
         }
         if (reply.type == FS_IPC_STREAM) {
-            int32_t args[4] = { reply.arg0, reply.arg1, reply.arg2, reply.arg3 };
+            int32_t args[4] = {reply.arg0, reply.arg1, reply.arg2, reply.arg3};
             for (int i = 0; i < 4; ++i) {
                 char c = (char)(args[i] & 0xFF);
                 if (c == '\0') {
@@ -197,9 +175,7 @@ libc_fs_request_stream(int32_t type, int32_t arg0, int32_t arg1, int32_t arg2, i
     }
 }
 
-int
-open(const char *path, int flags, ...)
-{
+int open(const char* path, int flags, ...) {
     size_t path_len;
     int32_t fd = -1;
     int32_t bid;
@@ -235,10 +211,8 @@ open(const char *path, int flags, ...)
     return (int)fd;
 }
 
-ssize_t
-read(int fd, void *buf, size_t count)
-{
-    uint8_t *dst = (uint8_t *)buf;
+ssize_t read(int fd, void* buf, size_t count) {
+    uint8_t* dst = (uint8_t*)buf;
     size_t done = 0;
     size_t chunk_max;
     size_t buffer_cap;
@@ -312,10 +286,8 @@ read(int fd, void *buf, size_t count)
     return (ssize_t)done;
 }
 
-ssize_t
-write(int fd, const void *buf, size_t count)
-{
-    const uint8_t *src = (const uint8_t *)buf;
+ssize_t write(int fd, const void* buf, size_t count) {
+    const uint8_t* src = (const uint8_t*)buf;
     size_t done = 0;
     size_t chunk_max;
     size_t buffer_cap;
@@ -363,7 +335,8 @@ write(int fd, const void *buf, size_t count)
         if (chunk > chunk_max) {
             chunk = chunk_max;
         }
-        if (wasmos_xfer_buffer_write(bid, (int32_t)(uintptr_t)(src + done), (int32_t)chunk, 0) != 0) {
+        if (wasmos_xfer_buffer_write(bid, (int32_t)(uintptr_t)(src + done), (int32_t)chunk, 0) !=
+            0) {
             failed = 1;
             break;
         }
@@ -388,35 +361,23 @@ write(int fd, const void *buf, size_t count)
     return (ssize_t)done;
 }
 
-int
-close(int fd)
-{
+int close(int fd) {
     return libc_fs_request(FS_IPC_CLOSE_REQ, fd, 0, 0, 0, NULL, NULL);
 }
 
-off_t
-lseek(int fd, off_t offset, int whence)
-{
+off_t lseek(int fd, off_t offset, int whence) {
     int32_t result = -1;
 
     if (offset < (off_t)INT32_MIN || offset > (off_t)INT32_MAX) {
         return (off_t)-1;
     }
-    if (libc_fs_request(FS_IPC_SEEK_REQ,
-                        fd,
-                        (int32_t)offset,
-                        whence,
-                        0,
-                        &result,
-                        NULL) != 0) {
+    if (libc_fs_request(FS_IPC_SEEK_REQ, fd, (int32_t)offset, whence, 0, &result, NULL) != 0) {
         return (off_t)-1;
     }
     return (off_t)result;
 }
 
-int
-stat(const char *path, struct stat *st)
-{
+int stat(const char* path, struct stat* st) {
     size_t path_len;
     int32_t size = 0;
     int32_t mode = 0;
@@ -437,13 +398,7 @@ stat(const char *path, struct stat *st)
         (void)wasmos_xfer_buffer_release(bid);
         return -1;
     }
-    rc = libc_fs_request(FS_IPC_STAT_REQ,
-                         (int32_t)path_len,
-                         0,
-                         bid,
-                         b1,
-                         &size,
-                         &mode);
+    rc = libc_fs_request(FS_IPC_STAT_REQ, (int32_t)path_len, 0, bid, b1, &size, &mode);
     (void)wasmos_xfer_buffer_release(bid);
     if (rc != 0) {
         return -1;
@@ -456,9 +411,7 @@ stat(const char *path, struct stat *st)
 
 /* Send a path-only FS request (unlink/mkdir/rmdir): stage the path into an owned
  * buffer, pass its buffer_id in arg2, release after the reply. */
-static int
-libc_fs_path_op(int32_t type, const char *path)
-{
+static int libc_fs_path_op(int32_t type, const char* path) {
     size_t path_len;
     int32_t bid;
     int32_t b1;
@@ -478,36 +431,26 @@ libc_fs_path_op(int32_t type, const char *path)
     return rc;
 }
 
-int
-unlink(const char *path)
-{
+int unlink(const char* path) {
     return libc_fs_path_op(FS_IPC_UNLINK_REQ, path);
 }
 
-int
-mkdir(const char *path, mode_t mode)
-{
+int mkdir(const char* path, mode_t mode) {
     /* TODO: Honor mode bits if WASMOS grows real permission semantics. */
     (void)mode;
 
     return libc_fs_path_op(FS_IPC_MKDIR_REQ, path);
 }
 
-int
-rmdir(const char *path)
-{
+int rmdir(const char* path) {
     return libc_fs_path_op(FS_IPC_RMDIR_REQ, path);
 }
 
-ssize_t
-listdir(char *buf, size_t count)
-{
+ssize_t listdir(char* buf, size_t count) {
     return libc_fs_request_stream(FS_IPC_READDIR_REQ, 0, 0, 0, 0, buf, count);
 }
 
-FILE *
-fopen(const char *path, const char *mode)
-{
+FILE* fopen(const char* path, const char* mode) {
     int fd;
     int open_flags = 0;
     int stream_mode = 0;
@@ -549,9 +492,7 @@ fopen(const char *path, const char *mode)
     return NULL;
 }
 
-size_t
-fread(void *ptr, size_t size, size_t nmemb, FILE *stream)
-{
+size_t fread(void* ptr, size_t size, size_t nmemb, FILE* stream) {
     ssize_t rc;
     size_t total;
 
@@ -575,9 +516,7 @@ fread(void *ptr, size_t size, size_t nmemb, FILE *stream)
     return (size_t)rc / size;
 }
 
-size_t
-fwrite(const void *ptr, size_t size, size_t nmemb, FILE *stream)
-{
+size_t fwrite(const void* ptr, size_t size, size_t nmemb, FILE* stream) {
     ssize_t rc;
     size_t total;
 
@@ -598,9 +537,7 @@ fwrite(const void *ptr, size_t size, size_t nmemb, FILE *stream)
     return (size_t)rc / size;
 }
 
-int
-fclose(FILE *stream)
-{
+int fclose(FILE* stream) {
     if (!stream) {
         return -1;
     }
@@ -620,9 +557,7 @@ fclose(FILE *stream)
     return -1;
 }
 
-int
-fseek(FILE *stream, long offset, int whence)
-{
+int fseek(FILE* stream, long offset, int whence) {
     if (!stream || stream->fd < 0) {
         return -1;
     }
@@ -635,9 +570,7 @@ fseek(FILE *stream, long offset, int whence)
     return 0;
 }
 
-long
-ftell(FILE *stream)
-{
+long ftell(FILE* stream) {
     off_t pos;
 
     if (!stream || stream->fd < 0) {
@@ -651,9 +584,7 @@ ftell(FILE *stream)
     return (long)pos;
 }
 
-int
-fgetc(FILE *stream)
-{
+int fgetc(FILE* stream) {
     unsigned char ch = 0;
     ssize_t rc;
 
@@ -673,15 +604,11 @@ fgetc(FILE *stream)
     return (int)ch;
 }
 
-int
-getc(FILE *stream)
-{
+int getc(FILE* stream) {
     return fgetc(stream);
 }
 
-int
-getchar(void)
-{
+int getchar(void) {
     unsigned char ch = 0;
     ssize_t rc = read(STDIN_FILENO, &ch, 1u);
 
@@ -691,9 +618,7 @@ getchar(void)
     return (int)ch;
 }
 
-int
-putchar(int ch)
-{
+int putchar(int ch) {
     unsigned char out = (unsigned char)ch;
     ssize_t rc = write(STDOUT_FILENO, &out, 1u);
 
@@ -703,9 +628,7 @@ putchar(int ch)
     return (int)out;
 }
 
-int
-fputs(const char *s, FILE *stream)
-{
+int fputs(const char* s, FILE* stream) {
     size_t len;
     ssize_t rc;
 
@@ -725,9 +648,7 @@ fputs(const char *s, FILE *stream)
     return 0;
 }
 
-int
-readline(char *s, int size)
-{
+int readline(char* s, int size) {
     int pos = 0;
 
     if (!s || size <= 1) {
@@ -753,9 +674,7 @@ readline(char *s, int size)
     return pos;
 }
 
-char *
-fgets(char *s, int size, FILE *stream)
-{
+char* fgets(char* s, int size, FILE* stream) {
     int pos = 0;
 
     if (!s || size <= 0 || !stream) {
@@ -780,21 +699,15 @@ fgets(char *s, int size, FILE *stream)
     return s;
 }
 
-int
-feof(FILE *stream)
-{
+int feof(FILE* stream) {
     return stream ? stream->eof : 0;
 }
 
-int
-ferror(FILE *stream)
-{
+int ferror(FILE* stream) {
     return stream ? stream->error : 0;
 }
 
-void
-clearerr(FILE *stream)
-{
+void clearerr(FILE* stream) {
     if (!stream) {
         return;
     }

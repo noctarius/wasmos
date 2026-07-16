@@ -49,8 +49,8 @@ extern "C" uint64_t warp_mem_alias_phys(uint64_t virt);
 // ---------------------------------------------------------------------------
 
 /* Forward declarations — defined after the two-tier allocator below. */
-static void *warp_kmalloc(size_t);
-static void  warp_kfree(void *);
+static void* warp_kmalloc(size_t);
+static void warp_kfree(void*);
 
 /* Dedicated-VA linmem slot helpers (defined after the per-pid config table).
  * warp_linmem_move: relocate the just-identified linmem block into a per-app VA
@@ -58,24 +58,36 @@ static void  warp_kfree(void *);
  * warp_linmem_grow: commit more scattered zeroed pages into the slot in place.
  * warp_linmem_slot_free_pid: idempotent free (walk-unmap + pfa_free + release
  *   the slot), routed from BOTH warp_kfree(is_pages==2) and the reap hook. */
-static void *warp_linmem_move(uint32_t pid, void *old_ptr, size_t old_bytes, size_t size);
-static void *warp_linmem_grow(void *ptr, size_t size);
-static void  warp_linmem_slot_free_pid(uint32_t pid);
+static void* warp_linmem_move(uint32_t pid, void* old_ptr, size_t old_bytes, size_t size);
+static void* warp_linmem_grow(void* ptr, size_t size);
+static void warp_linmem_slot_free_pid(uint32_t pid);
 /* The VA-slot pool itself (reserve/commit/decommit) lives in the shared
  * linmem_slots primitive; WARP layers its AllocHeader + per-pid config on top. */
 /* One-shot hint: pid of the linmem block about to be identified at its first
  * warp_krealloc grow (armed by warp_linmem_reserve_hint before module init). */
-static uint32_t g_linmem_reserve_pid   = 0;
+static uint32_t g_linmem_reserve_pid = 0;
 static uint64_t g_linmem_reserve_bytes = 0;
 
 /* operator new/delete use the two-tier allocator so that C++ objects of
  * any size (e.g., vb::WasmModule itself) are allocated correctly. */
-void *operator new(size_t size)   { return warp_kmalloc(size); }
-void *operator new[](size_t size) { return warp_kmalloc(size); }
-void  operator delete(void *p) noexcept   { warp_kfree(p); }
-void  operator delete[](void *p) noexcept { warp_kfree(p); }
-void  operator delete(void *p, size_t) noexcept   { warp_kfree(p); }
-void  operator delete[](void *p, size_t) noexcept { warp_kfree(p); }
+void* operator new(size_t size) {
+    return warp_kmalloc(size);
+}
+void* operator new[](size_t size) {
+    return warp_kmalloc(size);
+}
+void operator delete(void* p) noexcept {
+    warp_kfree(p);
+}
+void operator delete[](void* p) noexcept {
+    warp_kfree(p);
+}
+void operator delete(void* p, size_t) noexcept {
+    warp_kfree(p);
+}
+void operator delete[](void* p, size_t) noexcept {
+    warp_kfree(p);
+}
 
 // ---------------------------------------------------------------------------
 // 2. Kernel allocator — two-tier: slab for small, page allocator for large.
@@ -88,41 +100,36 @@ void  operator delete[](void *p, size_t) noexcept { warp_kfree(p); }
 namespace {
 
 struct AllocHeader {
-    size_t   size;      /* requested byte count */
-    size_t   capacity;  /* usable byte capacity */
-    size_t   pages;     /* page count for page-backed allocations */
+    size_t size;        /* requested byte count */
+    size_t capacity;    /* usable byte capacity */
+    size_t pages;       /* page count for page-backed allocations */
     uint32_t is_pages;  /* 0 = slab, 1 = contiguous page-alloc, 2 = linmem VA slot */
     uint32_t owner_pid; /* is_pages==2 only: owning pid, for slot free/dispatch */
 };
 
-static constexpr size_t   kLargeThreshold = 112;           /* slab max usable */
-static constexpr uint64_t kHalfBase       = 0xFFFFFFFF80000000ULL;
-static constexpr uint64_t kPhysLimit      = 512ULL * 1024ULL * 1024ULL;
-static constexpr size_t   kPageSize       = 4096UL;
+static constexpr size_t kLargeThreshold = 112; /* slab max usable */
+static constexpr uint64_t kHalfBase = 0xFFFFFFFF80000000ULL;
+static constexpr uint64_t kPhysLimit = 512ULL * 1024ULL * 1024ULL;
+static constexpr size_t kPageSize = 4096UL;
 
-static inline AllocHeader *header_of(void *p)
-{
-    return reinterpret_cast<AllocHeader *>(static_cast<uint8_t *>(p) - sizeof(AllocHeader));
+static inline AllocHeader* header_of(void* p) {
+    return reinterpret_cast<AllocHeader*>(static_cast<uint8_t*>(p) - sizeof(AllocHeader));
 }
 
-static inline uint64_t phys_of_pages_ptr(void *p)
-{
+static inline uint64_t phys_of_pages_ptr(void* p) {
     return warp_mem_alias_phys(reinterpret_cast<uint64_t>(p));
 }
 
-static int warp_map_page_alias(uint64_t phys, uint64_t pages)
-{
+static int warp_map_page_alias(uint64_t phys, uint64_t pages) {
     if (!phys || pages == 0) {
         return -1;
     }
     for (uint64_t i = 0; i < pages; ++i) {
         uint64_t page_phys = phys + (i * kPageSize);
         uint64_t page_virt = page_phys + kHalfBase;
-        if (paging_map_4k(page_virt,
-                          page_phys,
-                          MEM_REGION_FLAG_READ |
-                              MEM_REGION_FLAG_WRITE |
-                              MEM_REGION_FLAG_EXEC) != 0) {
+        if (paging_map_4k(page_virt, page_phys,
+                          MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE | MEM_REGION_FLAG_EXEC) !=
+            0) {
             return -1;
         }
     }
@@ -131,25 +138,26 @@ static int warp_map_page_alias(uint64_t phys, uint64_t pages)
 
 } // namespace
 
-static void *warp_kmalloc(size_t const size)
-{
+static void* warp_kmalloc(size_t const size) {
     size_t total = sizeof(AllocHeader) + size;
 
     if (total <= kLargeThreshold) {
         /* Small path: slab allocator */
-        void *raw = kalloc_small(total);
-        if (!raw) return nullptr;
-        auto *hdr = static_cast<AllocHeader *>(raw);
-        hdr->size     = size;
+        void* raw = kalloc_small(total);
+        if (!raw)
+            return nullptr;
+        auto* hdr = static_cast<AllocHeader*>(raw);
+        hdr->size = size;
         hdr->capacity = size;
-        hdr->pages    = 0;
+        hdr->pages = 0;
         hdr->is_pages = 0;
         return hdr + 1;
     } else {
         /* Large path: physical page allocator */
         uint64_t pages = (static_cast<uint64_t>(total) + kPageSize - 1) / kPageSize;
-        uint64_t phys  = pfa_alloc_pages_above(pages, WASMOS_SHMEM_PHYS_LIMIT);
-        if (!phys) return nullptr;
+        uint64_t phys = pfa_alloc_pages_above(pages, WASMOS_SHMEM_PHYS_LIMIT);
+        if (!phys)
+            return nullptr;
         if (warp_map_page_alias(phys, pages) != 0) {
             pfa_free_pages(phys, pages);
             return nullptr;
@@ -157,19 +165,19 @@ static void *warp_kmalloc(size_t const size)
 #ifdef WASMOS_WASM_RUNTIME_WARP
         warp_mem_kmalloc_register(phys, pages, sizeof(AllocHeader));
 #endif
-        auto *hdr = reinterpret_cast<AllocHeader *>(phys | kHalfBase);
-        hdr->size     = size;
+        auto* hdr = reinterpret_cast<AllocHeader*>(phys | kHalfBase);
+        hdr->size = size;
         hdr->capacity = pages * kPageSize - sizeof(AllocHeader);
-        hdr->pages    = pages;
+        hdr->pages = pages;
         hdr->is_pages = 1;
         return hdr + 1;
     }
 }
 
-static void *warp_krealloc(void *const ptr, size_t const size)
-{
-    if (!ptr) return warp_kmalloc(size);
-    AllocHeader *old_hdr = header_of(ptr);
+static void* warp_krealloc(void* const ptr, size_t const size) {
+    if (!ptr)
+        return warp_kmalloc(size);
+    AllocHeader* old_hdr = header_of(ptr);
     size_t old_bytes = old_hdr->size;
 
     /* Dedicated-VA linmem slot (is_pages==2): dispatch FIRST — its VA base is
@@ -213,9 +221,9 @@ static void *warp_krealloc(void *const ptr, size_t const size)
      * the app's lifetime (no relocation → shmem/DMA maps stay valid). */
     if (old_hdr->is_pages == 1 && g_linmem_reserve_bytes) {
         uint32_t pid = g_linmem_reserve_pid;
-        g_linmem_reserve_pid   = 0;
+        g_linmem_reserve_pid = 0;
         g_linmem_reserve_bytes = 0;
-        void *moved = warp_linmem_move(pid, ptr, old_bytes, size);
+        void* moved = warp_linmem_move(pid, ptr, old_bytes, size);
         if (moved) {
             return moved; /* old contiguous block freed inside warp_linmem_move */
         }
@@ -231,15 +239,16 @@ static void *warp_krealloc(void *const ptr, size_t const size)
         }
     }
 
-    void *n = warp_kmalloc(target);
-    if (!n) return nullptr;
+    void* n = warp_kmalloc(target);
+    if (!n)
+        return nullptr;
     header_of(n)->size = size;
     size_t copy = old_bytes < size ? old_bytes : size;
     __builtin_memcpy(n, ptr, copy);
 
     if (old_hdr->is_pages) {
 #ifdef WASMOS_WASM_RUNTIME_WARP
-            warp_mem_kmalloc_unregister(phys_of_pages_ptr(old_hdr));
+        warp_mem_kmalloc_unregister(phys_of_pages_ptr(old_hdr));
 #endif
         pfa_free_pages(phys_of_pages_ptr(old_hdr), old_hdr->pages);
     } else {
@@ -248,10 +257,10 @@ static void *warp_krealloc(void *const ptr, size_t const size)
     return n;
 }
 
-static void warp_kfree(void *const ptr)
-{
-    if (!ptr) return;
-    AllocHeader *hdr = header_of(ptr);
+static void warp_kfree(void* const ptr) {
+    if (!ptr)
+        return;
+    AllocHeader* hdr = header_of(ptr);
     if (hdr->is_pages == 2) {
         /* Dedicated-VA linmem slot — dispatch BEFORE phys_of_pages_ptr (its VA
          * base is not in the direct map).  Idempotent with the reap-path free. */
@@ -275,12 +284,13 @@ static void warp_kfree(void *const ptr)
 namespace {
 
 class KernelLogger final : public vb::ILogger {
-public:
-    KernelLogger &operator<<(char const *const msg) override {
-        if (msg) klog_write(msg);
+  public:
+    KernelLogger& operator<<(char const* const msg) override {
+        if (msg)
+            klog_write(msg);
         return *this;
     }
-    KernelLogger &operator<<(const vb::Span<char const> &msg) override {
+    KernelLogger& operator<<(const vb::Span<char const>& msg) override {
         if (msg.data() && msg.size() > 0) {
             char buf[128];
             size_t n = msg.size() < 127 ? msg.size() : 127;
@@ -290,7 +300,9 @@ public:
         }
         return *this;
     }
-    KernelLogger &operator<<(uint32_t const) override { return *this; }
+    KernelLogger& operator<<(uint32_t const) override {
+        return *this;
+    }
 };
 
 static KernelLogger g_kernel_logger;
@@ -298,7 +310,9 @@ static KernelLogger g_kernel_logger;
 } // namespace
 
 // ILogger accessor used by warp/link.cpp.
-vb::ILogger &warp_kernel_logger() { return g_kernel_logger; }
+vb::ILogger& warp_kernel_logger() {
+    return g_kernel_logger;
+}
 
 // ---------------------------------------------------------------------------
 // 4. Per-PID configuration table
@@ -309,11 +323,11 @@ namespace {
 struct WarpPidConfig {
     uint64_t heap_size;
     uint64_t heap_max;
-    uint64_t linmem_reserved;         /* map_auto scan ceiling (bytes) */
-    uint32_t linmem_slot;             /* dedicated-VA slot index, or LINMEM_SLOT_NONE */
-    uint64_t linmem_va_base;          /* VA slot base (AllocHeader lives here) */
-    uint64_t linmem_committed_pages;  /* pages committed into the slot so far */
-    uint8_t  configured;
+    uint64_t linmem_reserved;        /* map_auto scan ceiling (bytes) */
+    uint32_t linmem_slot;            /* dedicated-VA slot index, or LINMEM_SLOT_NONE */
+    uint64_t linmem_va_base;         /* VA slot base (AllocHeader lives here) */
+    uint64_t linmem_committed_pages; /* pages committed into the slot so far */
+    uint8_t configured;
 };
 
 /* LINMEM_SLOT_NONE comes from linmem_slots.h (shared with the slot primitive). */
@@ -323,13 +337,12 @@ struct WarpPidConfig {
  * warp_heap_release (driven from warp_release_pid in warp/link.cpp).  Lazily
  * initialized on first configure since shim.cpp has no init entry point. */
 static hashmap_t g_pid_config_map;
-static uint8_t   g_env_initialized = 0;
+static uint8_t g_env_initialized = 0;
 
-static WarpPidConfig *
-pid_config_get(uint32_t pid)
-{
-    if (g_pid_config_map.bucket_count == 0) return nullptr;
-    return static_cast<WarpPidConfig *>(hashmap_get(&g_pid_config_map, pid));
+static WarpPidConfig* pid_config_get(uint32_t pid) {
+    if (g_pid_config_map.bucket_count == 0)
+        return nullptr;
+    return static_cast<WarpPidConfig*>(hashmap_get(&g_pid_config_map, pid));
 }
 
 } // namespace
@@ -344,10 +357,8 @@ pid_config_get(uint32_t pid)
 /* Move the just-identified linmem block into a dedicated per-app VA slot.
  * Returns the new memoryBase (va_base + AllocHeader), or nullptr on failure
  * (caller falls back to the legacy contiguous realloc). */
-static void *
-warp_linmem_move(uint32_t pid, void *old_ptr, size_t old_bytes, size_t size)
-{
-    WarpPidConfig *cfg = pid_config_get(pid);
+static void* warp_linmem_move(uint32_t pid, void* old_ptr, size_t old_bytes, size_t size) {
+    WarpPidConfig* cfg = pid_config_get(pid);
     if (!cfg) {
         return nullptr;
     }
@@ -355,40 +366,40 @@ warp_linmem_move(uint32_t pid, void *old_ptr, size_t old_bytes, size_t size)
     if (slot < 0) {
         return nullptr;
     }
-    uint64_t va_base    = linmem_slot_va((uint32_t)slot);
+    uint64_t va_base = linmem_slot_va((uint32_t)slot);
     uint64_t need_pages = (sizeof(AllocHeader) + (uint64_t)size + kPageSize - 1) / kPageSize;
     if (linmem_slot_commit(va_base, 0, need_pages) != 0) {
         linmem_slot_release((uint32_t)slot);
         return nullptr;
     }
-    AllocHeader *nh = reinterpret_cast<AllocHeader *>(static_cast<uintptr_t>(va_base));
-    nh->size      = size;
+    AllocHeader* nh = reinterpret_cast<AllocHeader*>(static_cast<uintptr_t>(va_base));
+    nh->size = size;
     /* Logical capacity = the whole reserved slot (minus header); grows commit
      * on demand up to it without ever relocating. */
-    nh->capacity  = WARP_LINMEM_VA_STRIDE - sizeof(AllocHeader);
-    nh->pages     = need_pages;   /* committed pages so far */
-    nh->is_pages  = 2;
+    nh->capacity = WARP_LINMEM_VA_STRIDE - sizeof(AllocHeader);
+    nh->pages = need_pages; /* committed pages so far */
+    nh->is_pages = 2;
     nh->owner_pid = pid;
-    void *nmem = reinterpret_cast<void *>(static_cast<uintptr_t>(va_base + sizeof(AllocHeader)));
+    void* nmem = reinterpret_cast<void*>(static_cast<uintptr_t>(va_base + sizeof(AllocHeader)));
     __builtin_memcpy(nmem, old_ptr, old_bytes < size ? old_bytes : size);
 
-    cfg->linmem_slot            = (uint32_t)slot;
-    cfg->linmem_va_base         = va_base;
+    cfg->linmem_slot = (uint32_t)slot;
+    cfg->linmem_va_base = va_base;
     cfg->linmem_committed_pages = need_pages;
     /* map_auto scan ceiling = the app's DECLARED size, NOT the 2 GiB slot.  The
      * slot's capacity is 2 GiB (commit-on-demand growth), but the shmem-window
      * scan must stay within what the app declared/can commit — a 2 GiB ceiling
      * would trip map_auto's 2 MiB low_guard and push a window past the app's
      * module max (fault).  This mirrors the ceiling that worked pre-VA-slot. */
-    cfg->linmem_reserved        = cfg->heap_size;
+    cfg->linmem_reserved = cfg->heap_size;
 #if WASMOS_TRACE
     klog_printf("[trace-linmem] move pid=%u va=%llx committed_pages=%llx reserved=%llx\n",
-                (unsigned)pid, (unsigned long long)va_base,
-                (unsigned long long)need_pages, (unsigned long long)cfg->heap_size);
+                (unsigned)pid, (unsigned long long)va_base, (unsigned long long)need_pages,
+                (unsigned long long)cfg->heap_size);
 #endif
 
     /* Free the old contiguous direct-map block. */
-    AllocHeader *old_hdr = header_of(old_ptr);
+    AllocHeader* old_hdr = header_of(old_ptr);
 #ifdef WASMOS_WASM_RUNTIME_WARP
     warp_mem_kmalloc_unregister(phys_of_pages_ptr(old_hdr));
 #endif
@@ -397,19 +408,17 @@ warp_linmem_move(uint32_t pid, void *old_ptr, size_t old_bytes, size_t size)
 }
 
 /* Commit-on-demand growth of a VA-slot block; returns the SAME base. */
-static void *
-warp_linmem_grow(void *ptr, size_t size)
-{
-    AllocHeader *hdr    = header_of(ptr);
-    uint64_t va_base    = reinterpret_cast<uint64_t>(hdr);
+static void* warp_linmem_grow(void* ptr, size_t size) {
+    AllocHeader* hdr = header_of(ptr);
+    uint64_t va_base = reinterpret_cast<uint64_t>(hdr);
     uint64_t need_pages = (sizeof(AllocHeader) + (uint64_t)size + kPageSize - 1) / kPageSize;
     if (need_pages > hdr->pages) {
         if (linmem_slot_commit(va_base, hdr->pages, need_pages) != 0) {
             return nullptr;
         }
         hdr->pages = need_pages;
-        WarpPidConfig *cfg = pid_config_get(hdr->owner_pid);
-    if (cfg) {
+        WarpPidConfig* cfg = pid_config_get(hdr->owner_pid);
+        if (cfg) {
             cfg->linmem_committed_pages = need_pages;
         }
     }
@@ -421,17 +430,15 @@ warp_linmem_grow(void *ptr, size_t size)
  * slot.  Routed from BOTH warp_kfree(is_pages==2) and the reap hook
  * (warp_heap_release); the linmem_slot==NONE guard makes the second a no-op,
  * mirroring the ZOMBIE->REAPING idempotency. */
-static void
-warp_linmem_slot_free_pid(uint32_t pid)
-{
-    WarpPidConfig *cfg = pid_config_get(pid);
+static void warp_linmem_slot_free_pid(uint32_t pid) {
+    WarpPidConfig* cfg = pid_config_get(pid);
     if (!cfg || cfg->linmem_slot == LINMEM_SLOT_NONE) {
         return;
     }
     linmem_slot_decommit(cfg->linmem_va_base, cfg->linmem_committed_pages);
     linmem_slot_release(cfg->linmem_slot);
-    cfg->linmem_slot            = LINMEM_SLOT_NONE;
-    cfg->linmem_va_base         = 0;
+    cfg->linmem_slot = LINMEM_SLOT_NONE;
+    cfg->linmem_va_base = 0;
     cfg->linmem_committed_pages = 0;
 }
 
@@ -441,10 +448,9 @@ warp_linmem_slot_free_pid(uint32_t pid)
 
 extern "C" {
 
-void
-warp_heap_configure(uint32_t pid, uint64_t initial_size, uint64_t max_size)
-{
-    if (pid == 0) return;
+void warp_heap_configure(uint32_t pid, uint64_t initial_size, uint64_t max_size) {
+    if (pid == 0)
+        return;
     if (!g_env_initialized) {
         vb::WasmModule::initEnvironment(warp_kmalloc, warp_krealloc, warp_kfree);
         g_env_initialized = 1;
@@ -452,34 +458,29 @@ warp_heap_configure(uint32_t pid, uint64_t initial_size, uint64_t max_size)
     if (g_pid_config_map.bucket_count == 0) {
         hashmap_init(&g_pid_config_map, sizeof(WarpPidConfig), 64);
     }
-    WarpPidConfig *cfg = static_cast<WarpPidConfig *>(hashmap_put(&g_pid_config_map, pid));
-    if (!cfg) return;
-    cfg->heap_size             = initial_size;
-    cfg->heap_max              = max_size;
-    cfg->linmem_reserved       = 0;
-    cfg->linmem_slot           = LINMEM_SLOT_NONE; /* no VA slot until first grow */
-    cfg->linmem_va_base        = 0;
+    WarpPidConfig* cfg = static_cast<WarpPidConfig*>(hashmap_put(&g_pid_config_map, pid));
+    if (!cfg)
+        return;
+    cfg->heap_size = initial_size;
+    cfg->heap_max = max_size;
+    cfg->linmem_reserved = 0;
+    cfg->linmem_slot = LINMEM_SLOT_NONE; /* no VA slot until first grow */
+    cfg->linmem_va_base = 0;
     cfg->linmem_committed_pages = 0;
-    cfg->configured            = 1;
+    cfg->configured = 1;
 }
 
-uint32_t
-warp_heap_bind_pid(uint32_t pid)
-{
+uint32_t warp_heap_bind_pid(uint32_t pid) {
     uint32_t prev = cpu_local()->wasm3_heap_bound_pid;
     cpu_local()->wasm3_heap_bound_pid = pid;
     return prev;
 }
 
-void
-warp_heap_restore_pid(uint32_t previous_pid)
-{
+void warp_heap_restore_pid(uint32_t previous_pid) {
     cpu_local()->wasm3_heap_bound_pid = previous_pid;
 }
 
-uint32_t
-warp_runtime_enter(uint32_t pid)
-{
+uint32_t warp_runtime_enter(uint32_t pid) {
     /* FIXME(smp-warp): WARP assumes "only one CPU inside WARP at any time"
      * (see warp/sjlj_unwind.cpp), but this enter/leave pair only rebinds the
      * per-CPU heap PID — it takes NO lock. As long as all WARP modules run on
@@ -494,16 +495,13 @@ warp_runtime_enter(uint32_t pid)
     return warp_heap_bind_pid(pid);
 }
 
-void
-warp_runtime_leave(uint32_t previous_pid)
-{
+void warp_runtime_leave(uint32_t previous_pid) {
     warp_heap_restore_pid(previous_pid);
 }
 
-void
-warp_heap_release(uint32_t pid)
-{
-    if (pid == 0) return;
+void warp_heap_release(uint32_t pid) {
+    if (pid == 0)
+        return;
     /* Reap-path free of the dedicated-VA linmem slot (idempotent; a no-op if the
      * sync teardown already freed it).  Must run BEFORE the cfg is removed — it
      * reads va_base/committed_pages from the cfg to walk-unmap + pfa_free. */
@@ -511,40 +509,32 @@ warp_heap_release(uint32_t pid)
     (void)hashmap_remove(&g_pid_config_map, pid);
 }
 
-uint64_t
-warp_heap_committed_bytes(uint32_t pid)
-{
-    WarpPidConfig *cfg = pid_config_get(pid);
-    if (!cfg || !cfg->configured) return 0;
+uint64_t warp_heap_committed_bytes(uint32_t pid) {
+    WarpPidConfig* cfg = pid_config_get(pid);
+    if (!cfg || !cfg->configured)
+        return 0;
     return cfg->heap_size;
 }
 
 /* Reserved linmem-block capacity (bytes) for this pid — the map_auto scan
  * ceiling.  0 until the block moves into its dedicated VA slot. */
-uint64_t
-warp_linmem_reserved_bytes(uint32_t pid)
-{
-    WarpPidConfig *cfg = pid_config_get(pid);
-    if (!cfg || !cfg->configured) return 0;
+uint64_t warp_linmem_reserved_bytes(uint32_t pid) {
+    WarpPidConfig* cfg = pid_config_get(pid);
+    if (!cfg || !cfg->configured)
+        return 0;
     return cfg->linmem_reserved;
 }
 
 /* One-shot: arm the pid of the linmem block about to be identified at its first
  * warp_krealloc grow.  Called just before the module's first linmem-allocating
  * probe; consumed by warp_krealloc's move-to-slot path. */
-void
-warp_linmem_reserve_hint(uint32_t pid, uint64_t reserve_bytes)
-{
-    g_linmem_reserve_pid   = pid;
+void warp_linmem_reserve_hint(uint32_t pid, uint64_t reserve_bytes) {
+    g_linmem_reserve_pid = pid;
     g_linmem_reserve_bytes = reserve_bytes;
 }
 
-int
-warp_linmem_kernel_window_query(const uint8_t *linmem_kernel_ptr,
-                                uint64_t *out_slot_va_base,
-                                uint64_t *out_basedata_length,
-                                uint64_t *out_committed_pages)
-{
+int warp_linmem_kernel_window_query(const uint8_t* linmem_kernel_ptr, uint64_t* out_slot_va_base,
+                                    uint64_t* out_basedata_length, uint64_t* out_committed_pages) {
     if (!linmem_kernel_ptr || !out_slot_va_base || !out_basedata_length || !out_committed_pages) {
         return -1;
     }
@@ -557,7 +547,7 @@ warp_linmem_kernel_window_query(const uint8_t *linmem_kernel_ptr,
         return -1;
     }
     uint64_t slot_va_base = WARP_LINMEM_VA_BASE + slot * WARP_LINMEM_VA_STRIDE;
-    AllocHeader *hdr = reinterpret_cast<AllocHeader *>(static_cast<uintptr_t>(slot_va_base));
+    AllocHeader* hdr = reinterpret_cast<AllocHeader*>(static_cast<uintptr_t>(slot_va_base));
     if (hdr->is_pages != 2) {
         return -1;
     }
@@ -571,11 +561,10 @@ warp_linmem_kernel_window_query(const uint8_t *linmem_kernel_ptr,
     return 0;
 }
 
-int
-warp_heap_probe_growth(size_t size)
-{
-    void *p = warp_kmalloc(size);
-    if (!p) return -1;
+int warp_heap_probe_growth(size_t size) {
+    void* p = warp_kmalloc(size);
+    if (!p)
+        return -1;
     warp_kfree(p);
     return 0;
 }

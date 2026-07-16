@@ -19,9 +19,9 @@ typedef struct {
     uint8_t in_use;
     uint32_t pid;
     uint32_t flags;
-    const uint8_t *blob;
+    const uint8_t* blob;
     uint32_t blob_size;
-    uint8_t *owned_blob_storage;
+    uint8_t* owned_blob_storage;
     uint64_t owned_blob_storage_phys;
     uint32_t owned_blob_storage_pages;
     uint8_t started;
@@ -46,7 +46,7 @@ typedef struct {
 
 typedef struct {
     uint8_t in_use;
-    uint8_t is_sync;           /* 1 = SPAWN_SYNC waiting for child readiness */
+    uint8_t is_sync; /* 1 = SPAWN_SYNC waiting for child readiness */
     uint32_t reply_endpoint;
     uint32_t request_id;
     uint32_t parent_pid;
@@ -79,7 +79,7 @@ typedef struct {
 } pm_service_entry_t;
 
 typedef struct {
-    const boot_info_t *boot_info;
+    const boot_info_t* boot_info;
     uint32_t proc_endpoint;
     uint32_t fs_endpoint;
     uint32_t block_endpoint;
@@ -88,7 +88,7 @@ typedef struct {
     uint32_t fs_reply_endpoint;
     uint32_t fs_ctrl_endpoint;
     uint32_t broker_reply_endpoint;
-    uint32_t select_id;        /* select set over the endpoints above */
+    uint32_t select_id; /* select set over the endpoints above */
     uint32_t fs_request_id;
     uint32_t next_cli_tty;
     uint8_t started;
@@ -106,57 +106,54 @@ extern uint8_t g_pm_kill_owner_deny_logged;
 extern uint8_t g_pm_status_owner_deny_logged;
 extern uint8_t g_pm_spawn_owner_deny_logged;
 
-static inline uint32_t
-pm_atomic_load_u32(const uint32_t *ptr)
-{
+static inline uint32_t pm_atomic_load_u32(const uint32_t* ptr) {
     return __atomic_load_n(ptr, __ATOMIC_ACQUIRE);
 }
 
-static inline void
-pm_atomic_store_u32(uint32_t *ptr, uint32_t value)
-{
+static inline void pm_atomic_store_u32(uint32_t* ptr, uint32_t value) {
     __atomic_store_n(ptr, value, __ATOMIC_RELEASE);
 }
 
-void pm_unpack_name_args(uint32_t arg0, uint32_t arg1, uint32_t arg2, uint32_t arg3, char *out, uint32_t out_len);
-void pm_pack_name_args(const char *name, uint32_t out[4]);
+void pm_unpack_name_args(uint32_t arg0, uint32_t arg1, uint32_t arg2, uint32_t arg3, char* out,
+                         uint32_t out_len);
+void pm_pack_name_args(const char* name, uint32_t out[4]);
 uint32_t pm_alloc_cli_tty(void);
 
 /* Kernel VA of a transfer buffer owned by `owner_context` and named by
  * `buffer_id` (as carried over IPC), or 0 if no such object is owned by that
  * context. Fills *out_size (intrinsic capacity) when non-NULL. Used to read a
  * caller-owned buffer that PM does not own. */
-const uint8_t *pm_foreign_xfer_ptr(uint32_t buffer_id, uint32_t owner_context, uint32_t *out_size);
+const uint8_t* pm_foreign_xfer_ptr(uint32_t buffer_id, uint32_t owner_context, uint32_t* out_size);
 
-int pm_service_set(const char *name, uint32_t endpoint, uint32_t owner_context_id);
-uint32_t pm_service_lookup(const char *name);
-void pm_update_well_known_service_endpoint(const char *name, uint32_t endpoint);
-int pm_handle_service_register(uint32_t pm_context_id, const ipc_message_t *msg);
-int pm_handle_service_register_desc(uint32_t pm_context_id, const ipc_message_t *msg);
-int pm_handle_service_lookup(uint32_t pm_context_id, const ipc_message_t *msg);
-int pm_handle_service_lookup_class(uint32_t pm_context_id, const ipc_message_t *msg);
-int pm_handle_class_subscribe(uint32_t pm_context_id, const ipc_message_t *msg);
+int pm_service_set(const char* name, uint32_t endpoint, uint32_t owner_context_id);
+uint32_t pm_service_lookup(const char* name);
+void pm_update_well_known_service_endpoint(const char* name, uint32_t endpoint);
+int pm_handle_service_register(uint32_t pm_context_id, const ipc_message_t* msg);
+int pm_handle_service_register_desc(uint32_t pm_context_id, const ipc_message_t* msg);
+int pm_handle_service_lookup(uint32_t pm_context_id, const ipc_message_t* msg);
+int pm_handle_service_lookup_class(uint32_t pm_context_id, const ipc_message_t* msg);
+int pm_handle_class_subscribe(uint32_t pm_context_id, const ipc_message_t* msg);
 void pm_services_class_reap(uint32_t pm_context_id);
-int pm_handle_subsystem_register_broker(uint32_t pm_context_id, const ipc_message_t *msg);
-int pm_handle_exec_handler_register(uint32_t pm_context_id, const ipc_message_t *msg);
+int pm_handle_subsystem_register_broker(uint32_t pm_context_id, const ipc_message_t* msg);
+int pm_handle_exec_handler_register(uint32_t pm_context_id, const ipc_message_t* msg);
 
-int pm_handle_spawn(uint32_t pm_context_id, const ipc_message_t *msg);
-int pm_handle_spawn_caps(uint32_t pm_context_id, const ipc_message_t *msg);
-int pm_handle_spawn_caps_v2(uint32_t pm_context_id, const ipc_message_t *msg);
-int pm_handle_spawn_path(uint32_t pm_context_id, const ipc_message_t *msg);
-int pm_handle_spawn_path_caps(uint32_t pm_context_id, const ipc_message_t *msg);
-int pm_handle_spawn_sync(uint32_t pm_context_id, const ipc_message_t *msg);
-int pm_handle_spawn_caps_sync(uint32_t pm_context_id, const ipc_message_t *msg);
-int pm_handle_spawn_path_sync(uint32_t pm_context_id, const ipc_message_t *msg);
-int pm_handle_spawn_path_caps_sync(uint32_t pm_context_id, const ipc_message_t *msg);
-int pm_handle_notify_ready(uint32_t pm_context_id, const ipc_message_t *msg);
-uint32_t pm_find_module_index_by_name(const char *name);
+int pm_handle_spawn(uint32_t pm_context_id, const ipc_message_t* msg);
+int pm_handle_spawn_caps(uint32_t pm_context_id, const ipc_message_t* msg);
+int pm_handle_spawn_caps_v2(uint32_t pm_context_id, const ipc_message_t* msg);
+int pm_handle_spawn_path(uint32_t pm_context_id, const ipc_message_t* msg);
+int pm_handle_spawn_path_caps(uint32_t pm_context_id, const ipc_message_t* msg);
+int pm_handle_spawn_sync(uint32_t pm_context_id, const ipc_message_t* msg);
+int pm_handle_spawn_caps_sync(uint32_t pm_context_id, const ipc_message_t* msg);
+int pm_handle_spawn_path_sync(uint32_t pm_context_id, const ipc_message_t* msg);
+int pm_handle_spawn_path_caps_sync(uint32_t pm_context_id, const ipc_message_t* msg);
+int pm_handle_notify_ready(uint32_t pm_context_id, const ipc_message_t* msg);
+uint32_t pm_find_module_index_by_name(const char* name);
 void pm_poll_spawn(uint32_t pm_context_id);
 void pm_check_waits(uint32_t pm_context_id);
-void pm_reap_apps(process_t *owner);
-pm_wait_state_t *pm_wait_slot_acquire(void);
+void pm_reap_apps(process_t* owner);
+pm_wait_state_t* pm_wait_slot_acquire(void);
 
-int pm_handle_module_meta(uint32_t pm_context_id, const ipc_message_t *msg);
-int pm_handle_module_meta_path(uint32_t pm_context_id, const ipc_message_t *msg);
+int pm_handle_module_meta(uint32_t pm_context_id, const ipc_message_t* msg);
+int pm_handle_module_meta_path(uint32_t pm_context_id, const ipc_message_t* msg);
 
 #endif

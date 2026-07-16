@@ -21,20 +21,24 @@
  * Helpers
  * ------------------------------------------------------------------------- */
 
-#define TEST_PASS(name)  klog_write("[test] sched " name " ok\n")
-#define TEST_FAIL(name)  klog_write("[test] sched " name " FAILED\n")
-#define CHECK(expr, name) do { if (!(expr)) { TEST_FAIL(name); return -1; } } while (0)
+#define TEST_PASS(name) klog_write("[test] sched " name " ok\n")
+#define TEST_FAIL(name) klog_write("[test] sched " name " FAILED\n")
+#define CHECK(expr, name)                                                                          \
+    do {                                                                                           \
+        if (!(expr)) {                                                                             \
+            TEST_FAIL(name);                                                                       \
+            return -1;                                                                             \
+        }                                                                                          \
+    } while (0)
 
 /* Fabricate a minimal thread_t on the stack for queue tests.
  * Only the fields touched by cpu_sched_enqueue / cpu_sched_pick_next are
  * initialised; the rest remain zero.  Do NOT enqueue these into the real
  * live scheduler — use a private cpu_sched_t created in each test. */
-static void
-make_thread(thread_t *t, uint32_t tid, sched_prio_t prio)
-{
+static void make_thread(thread_t* t, uint32_t tid, sched_prio_t prio) {
     memset(t, 0, sizeof(*t));
-    t->tid       = tid;
-    t->state     = THREAD_STATE_READY;
+    t->tid = tid;
+    t->state = THREAD_STATE_READY;
     t->sched_prio = (uint8_t)prio;
     list_head_init(&t->sched_node);
     list_head_init(&t->event_node);
@@ -43,30 +47,28 @@ make_thread(thread_t *t, uint32_t tid, sched_prio_t prio)
 /* -------------------------------------------------------------------------
  * Test 1: bitmap — ffs_table returns correct highest-priority index
  * ------------------------------------------------------------------------- */
-static int
-test_bitmap_ffs(void)
-{
+static int test_bitmap_ffs(void) {
     cpu_sched_t cs;
     cpu_sched_init(&cs);
 
     thread_t t4, t2, t6;
-    make_thread(&t4, 1, SCHED_PRIO_WASM);       /* bit 4 */
-    make_thread(&t2, 2, SCHED_PRIO_SERVICE);     /* bit 2 */
-    make_thread(&t6, 3, SCHED_PRIO_IDLE);        /* bit 6 */
+    make_thread(&t4, 1, SCHED_PRIO_WASM);    /* bit 4 */
+    make_thread(&t2, 2, SCHED_PRIO_SERVICE); /* bit 2 */
+    make_thread(&t6, 3, SCHED_PRIO_IDLE);    /* bit 6 */
 
     cpu_sched_enqueue(&cs, &t4);
     cpu_sched_enqueue(&cs, &t2);
     cpu_sched_enqueue(&cs, &t6);
 
     /* bitmap should be 0b1010100 = bits 2, 4, 6 */
-    CHECK(cs.ready_bitmap == ((1u<<2)|(1u<<4)|(1u<<6)), "bitmap-ffs-bitmap");
+    CHECK(cs.ready_bitmap == ((1u << 2) | (1u << 4) | (1u << 6)), "bitmap-ffs-bitmap");
 
     /* pick_next must return the highest priority (lowest index = 2) */
     ksync_spinlock_lock(&cs.lock);
-    thread_t *next = cpu_sched_pick_next(&cs);
+    thread_t* next = cpu_sched_pick_next(&cs);
     ksync_spinlock_unlock(&cs.lock);
     CHECK(next == &t2, "bitmap-ffs-pick");
-    CHECK(cs.ready_bitmap == ((1u<<4)|(1u<<6)), "bitmap-ffs-clear");
+    CHECK(cs.ready_bitmap == ((1u << 4) | (1u << 6)), "bitmap-ffs-clear");
 
     TEST_PASS("bitmap-ffs");
     return 0;
@@ -76,9 +78,7 @@ test_bitmap_ffs(void)
  * Test 2: priority ordering — FIFO within same priority, strict ordering
  *         across different priorities
  * ------------------------------------------------------------------------- */
-static int
-test_priority_ordering(void)
-{
+static int test_priority_ordering(void) {
     cpu_sched_t cs;
     cpu_sched_init(&cs);
 
@@ -93,10 +93,10 @@ test_priority_ordering(void)
     cpu_sched_enqueue(&cs, &hi2);
 
     ksync_spinlock_lock(&cs.lock);
-    thread_t *p1 = cpu_sched_pick_next(&cs);
-    thread_t *p2 = cpu_sched_pick_next(&cs);
-    thread_t *p3 = cpu_sched_pick_next(&cs);
-    thread_t *p4 = cpu_sched_pick_next(&cs); /* should be idle */
+    thread_t* p1 = cpu_sched_pick_next(&cs);
+    thread_t* p2 = cpu_sched_pick_next(&cs);
+    thread_t* p3 = cpu_sched_pick_next(&cs);
+    thread_t* p4 = cpu_sched_pick_next(&cs); /* should be idle */
     ksync_spinlock_unlock(&cs.lock);
 
     CHECK(p1 == &hi1, "prio-order-first");
@@ -113,9 +113,7 @@ test_priority_ordering(void)
 /* -------------------------------------------------------------------------
  * Test 3: dequeue — cpu_sched_dequeue removes without pick_next
  * ------------------------------------------------------------------------- */
-static int
-test_dequeue(void)
-{
+static int test_dequeue(void) {
     cpu_sched_t cs;
     cpu_sched_init(&cs);
 
@@ -159,20 +157,16 @@ test_dequeue(void)
 
 /* Minimal stand-in: add a thread to an event's wait_list without actually
  * blocking (skips the blocking_transition / yield path). */
-static void
-fake_wait(sched_event_t *ev, thread_t *t)
-{
+static void fake_wait(sched_event_t* ev, thread_t* t) {
     ksync_spinlock_lock(&ev->lock);
     t->wait_event = ev;
     t->pend_state = SCHED_PEND_NONE;
-    t->pend_data  = 0;
+    t->pend_data = 0;
     list_head_add_tail(&ev->wait_list, &t->event_node);
     ksync_spinlock_unlock(&ev->lock);
 }
 
-static int
-test_event_wake_one(void)
-{
+static int test_event_wake_one(void) {
     sched_event_t ev;
     sched_event_init(&ev, SCHED_EVENT_TYPE_IPC);
 
@@ -193,25 +187,23 @@ test_event_wake_one(void)
     /* Manually dequeue first waiter the same way wake_one does, without the
      * sched_wake_thread call, so we can test pure list/pend logic. */
     CHECK(!list_head_empty(&ev.wait_list), "event-wake-one-before");
-    thread_t *first = list_first_entry(&ev.wait_list, thread_t, event_node);
+    thread_t* first = list_first_entry(&ev.wait_list, thread_t, event_node);
     list_head_del(&first->event_node);
     first->wait_event = 0;
     first->pend_state = SCHED_PEND_OK;
-    first->pend_data  = 42;
+    first->pend_data = 42;
     ksync_spinlock_unlock(&ev.lock);
 
     CHECK(first == &ta, "event-wake-one-order");
     CHECK(first->pend_state == SCHED_PEND_OK, "event-wake-one-pend");
-    CHECK(first->pend_data  == 42, "event-wake-one-data");
+    CHECK(first->pend_data == 42, "event-wake-one-data");
     CHECK(!list_head_empty(&ev.wait_list), "event-wake-one-tb-remains");
 
     TEST_PASS("event-wake-one");
     return 0;
 }
 
-static int
-test_event_wake_all(void)
-{
+static int test_event_wake_all(void) {
     sched_event_t ev;
     sched_event_init(&ev, SCHED_EVENT_TYPE_IPC);
 
@@ -229,11 +221,11 @@ test_event_wake_all(void)
     int woken = 0;
     list_head_t *pos, *tmp;
     list_for_each_safe(pos, tmp, &ev.wait_list) {
-        thread_t *t = list_entry(pos, thread_t, event_node);
+        thread_t* t = list_entry(pos, thread_t, event_node);
         list_head_del(&t->event_node);
         t->wait_event = 0;
         t->pend_state = SCHED_PEND_ABORT;
-        t->pend_data  = 0;
+        t->pend_data = 0;
         woken++;
     }
     ksync_spinlock_unlock(&ev.lock);
@@ -251,14 +243,12 @@ test_event_wake_all(void)
 /* -------------------------------------------------------------------------
  * Test 5: sched_default_prio mapping
  * ------------------------------------------------------------------------- */
-static int
-test_default_prio(void)
-{
-    CHECK(sched_default_prio(1, 0, 0, 0) == SCHED_PRIO_IDLE,       "prio-idle");
-    CHECK(sched_default_prio(0, 1, 0, 0) == SCHED_PRIO_SYSTEM,     "prio-system");
-    CHECK(sched_default_prio(0, 0, 1, 0) == SCHED_PRIO_DRIVER,     "prio-driver");
-    CHECK(sched_default_prio(0, 0, 0, 1) == SCHED_PRIO_SERVICE,    "prio-service");
-    CHECK(sched_default_prio(0, 0, 0, 0) == SCHED_PRIO_WASM,       "prio-wasm");
+static int test_default_prio(void) {
+    CHECK(sched_default_prio(1, 0, 0, 0) == SCHED_PRIO_IDLE, "prio-idle");
+    CHECK(sched_default_prio(0, 1, 0, 0) == SCHED_PRIO_SYSTEM, "prio-system");
+    CHECK(sched_default_prio(0, 0, 1, 0) == SCHED_PRIO_DRIVER, "prio-driver");
+    CHECK(sched_default_prio(0, 0, 0, 1) == SCHED_PRIO_SERVICE, "prio-service");
+    CHECK(sched_default_prio(0, 0, 0, 0) == SCHED_PRIO_WASM, "prio-wasm");
     TEST_PASS("default-prio");
     return 0;
 }
@@ -266,9 +256,7 @@ test_default_prio(void)
 /* -------------------------------------------------------------------------
  * Test 6: sched_list — empty sentinel, add_tail, del, for_each_safe
  * ------------------------------------------------------------------------- */
-static int
-test_sched_list(void)
-{
+static int test_sched_list(void) {
     list_head_t head;
     list_head_init(&head);
     CHECK(list_head_empty(&head), "list-empty-init");
@@ -305,9 +293,7 @@ test_sched_list(void)
  * Test 7: wake-during-block-transition — waking a thread in the narrow
  *         RUNNING->BLOCKED handoff must not spin or enqueue early
  * ------------------------------------------------------------------------- */
-static int
-test_wake_during_block_transition(void)
-{
+static int test_wake_during_block_transition(void) {
     thread_t t;
     make_thread(&t, 50, SCHED_PRIO_SERVICE);
     t.state = THREAD_STATE_BLOCKED;
@@ -329,12 +315,10 @@ test_wake_during_block_transition(void)
  * Test 8: target CPU selection honors last_cpu for parked children but falls
  *         back to the lightest allowed CPU when last_cpu is invalid.
  * ------------------------------------------------------------------------- */
-static int
-test_target_cpu_selection(void)
-{
+static int test_target_cpu_selection(void) {
     uint32_t saved_cpu_count = g_cpu_count;
     cpu_sched_t saved_sched[3];
-    thread_t *saved_current[3];
+    thread_t* saved_current[3];
     uint8_t saved_started[3];
 
     for (int i = 0; i < 3; ++i) {
@@ -381,17 +365,15 @@ test_target_cpu_selection(void)
 /* -------------------------------------------------------------------------
  * Entry point
  * ------------------------------------------------------------------------- */
-int
-kernel_sched_selftest_run(void)
-{
+int kernel_sched_selftest_run(void) {
     int failures = 0;
-    failures += (test_bitmap_ffs()        != 0) ? 1 : 0;
+    failures += (test_bitmap_ffs() != 0) ? 1 : 0;
     failures += (test_priority_ordering() != 0) ? 1 : 0;
-    failures += (test_dequeue()           != 0) ? 1 : 0;
-    failures += (test_event_wake_one()    != 0) ? 1 : 0;
-    failures += (test_event_wake_all()    != 0) ? 1 : 0;
-    failures += (test_default_prio()      != 0) ? 1 : 0;
-    failures += (test_sched_list()        != 0) ? 1 : 0;
+    failures += (test_dequeue() != 0) ? 1 : 0;
+    failures += (test_event_wake_one() != 0) ? 1 : 0;
+    failures += (test_event_wake_all() != 0) ? 1 : 0;
+    failures += (test_default_prio() != 0) ? 1 : 0;
+    failures += (test_sched_list() != 0) ? 1 : 0;
     failures += (test_wake_during_block_transition() != 0) ? 1 : 0;
     failures += (test_target_cpu_selection() != 0) ? 1 : 0;
 

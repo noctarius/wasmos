@@ -11,8 +11,7 @@ void futex_init(void);
  * timeout_ms == 0 means no timeout.
  * Returns 0 on wakeup, -1 on timeout, negative IPC error code on fault.
  */
-int futex_wait(uint32_t uaddr, uint32_t expected,
-               uint32_t timeout_ms, uint32_t context_id);
+int futex_wait(uint32_t uaddr, uint32_t expected, uint32_t timeout_ms, uint32_t context_id);
 
 /*
  * futex_wake — wake up to count threads waiting on uaddr.

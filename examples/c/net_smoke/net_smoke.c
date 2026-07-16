@@ -16,9 +16,7 @@
 
 /* Block until a message arrives on `ep` (bounded so a stuck driver can't hang
  * the test). Returns 0 and fills `m`, or -1 on timeout. */
-static int
-recv_on(int32_t ep, wasmos_ipc_message_t *m)
-{
+static int recv_on(int32_t ep, wasmos_ipc_message_t* m) {
     for (int spin = 0; spin < 200000; ++spin) {
         if (wasmos_ipc_select_one(ep) == 1) {
             wasmos_ipc_message_read_last(m);
@@ -29,9 +27,7 @@ recv_on(int32_t ep, wasmos_ipc_message_t *m)
     return -1;
 }
 
-int
-main(int argc, char **argv)
-{
+int main(int argc, char** argv) {
     (void)argc;
     (void)argv;
 
@@ -62,9 +58,8 @@ main(int argc, char **argv)
      * documented follow-up; this matches virtio_net's current placeholder args.
      * The grant is left to process-exit teardown for this short-lived example. */
     int32_t bid = wasmos_xfer_buffer_acquire(2048);
-    if (bid < 0 ||
-        wasmos_xfer_buffer_borrow(net_ep, bid,
-                                  WASMOS_BUFFER_GRANT_READ | WASMOS_BUFFER_GRANT_WRITE) < 0) {
+    if (bid < 0 || wasmos_xfer_buffer_borrow(
+                       net_ep, bid, WASMOS_BUFFER_GRANT_READ | WASMOS_BUFFER_GRANT_WRITE) < 0) {
         puts("[net-smoke] buffer setup failed");
         return 1;
     }
@@ -75,16 +70,16 @@ main(int argc, char **argv)
      * unicasts its ARP reply to the sender MAC, so it must be the real NIC MAC
      * or the device would filter the reply out. */
     uint8_t mac[6];
-    if (wasmos_ipc_send(net_ep, reply_ep, NETDRV_IPC_LINK_GET, req++, bid, 0, 0, 0) != 0
-        || recv_on(reply_ep, &m) != 0 || m.type != NETDRV_IPC_RESP
-        || wasmos_xfer_buffer_read(bid, (int32_t)(uintptr_t)mac, 6, 0) != 0) {
+    if (wasmos_ipc_send(net_ep, reply_ep, NETDRV_IPC_LINK_GET, req++, bid, 0, 0, 0) != 0 ||
+        recv_on(reply_ep, &m) != 0 || m.type != NETDRV_IPC_RESP ||
+        wasmos_xfer_buffer_read(bid, (int32_t)(uintptr_t)mac, 6, 0) != 0) {
         puts("[net-smoke] link_get failed");
         return 1;
     }
 
     /* Subscribe (and drain any already-queued frames). */
-    if (wasmos_ipc_send(net_ep, reply_ep, NETDRV_IPC_RX_POLL, req++, 0, 0, 0, 0) != 0
-        || recv_on(reply_ep, &m) != 0) {
+    if (wasmos_ipc_send(net_ep, reply_ep, NETDRV_IPC_RX_POLL, req++, 0, 0, 0, 0) != 0 ||
+        recv_on(reply_ep, &m) != 0) {
         puts("[net-smoke] subscribe failed");
         return 1;
     }
@@ -95,22 +90,32 @@ main(int argc, char **argv)
     uint8_t arp[42];
     uint32_t p = 0;
     int i;
-    for (i = 0; i < 6; ++i) arp[p++] = 0xFFu;            /* dst broadcast */
-    for (i = 0; i < 6; ++i) arp[p++] = mac[i];           /* src NIC MAC */
-    arp[p++] = 0x08u; arp[p++] = 0x06u;                  /* ethertype ARP */
-    arp[p++] = 0x00u; arp[p++] = 0x01u;                  /* htype */
-    arp[p++] = 0x08u; arp[p++] = 0x00u;                  /* ptype */
-    arp[p++] = 0x06u; arp[p++] = 0x04u;                  /* hlen, plen */
-    arp[p++] = 0x00u; arp[p++] = 0x01u;                  /* oper=request */
-    for (i = 0; i < 6; ++i) arp[p++] = mac[i];           /* sender MAC */
-    for (i = 0; i < 4; ++i) arp[p++] = sender_ip[i];     /* sender IP */
-    for (i = 0; i < 6; ++i) arp[p++] = 0x00u;            /* target MAC */
-    for (i = 0; i < 4; ++i) arp[p++] = target_ip[i];     /* target IP */
+    for (i = 0; i < 6; ++i)
+        arp[p++] = 0xFFu; /* dst broadcast */
+    for (i = 0; i < 6; ++i)
+        arp[p++] = mac[i]; /* src NIC MAC */
+    arp[p++] = 0x08u;
+    arp[p++] = 0x06u; /* ethertype ARP */
+    arp[p++] = 0x00u;
+    arp[p++] = 0x01u; /* htype */
+    arp[p++] = 0x08u;
+    arp[p++] = 0x00u; /* ptype */
+    arp[p++] = 0x06u;
+    arp[p++] = 0x04u; /* hlen, plen */
+    arp[p++] = 0x00u;
+    arp[p++] = 0x01u; /* oper=request */
+    for (i = 0; i < 6; ++i)
+        arp[p++] = mac[i]; /* sender MAC */
+    for (i = 0; i < 4; ++i)
+        arp[p++] = sender_ip[i]; /* sender IP */
+    for (i = 0; i < 6; ++i)
+        arp[p++] = 0x00u; /* target MAC */
+    for (i = 0; i < 4; ++i)
+        arp[p++] = target_ip[i]; /* target IP */
 
-    if (wasmos_xfer_buffer_write(bid, (int32_t)(uintptr_t)arp, (int32_t)p, 0) != 0
-        || wasmos_ipc_send(net_ep, reply_ep, NETDRV_IPC_TX_FRAME, req++,
-                           (int32_t)p, bid, 0, 0) != 0
-        || recv_on(reply_ep, &m) != 0 || m.type != NETDRV_IPC_RESP) {
+    if (wasmos_xfer_buffer_write(bid, (int32_t)(uintptr_t)arp, (int32_t)p, 0) != 0 ||
+        wasmos_ipc_send(net_ep, reply_ep, NETDRV_IPC_TX_FRAME, req++, (int32_t)p, bid, 0, 0) != 0 ||
+        recv_on(reply_ep, &m) != 0 || m.type != NETDRV_IPC_RESP) {
         puts("[net-smoke] tx failed");
         return 1;
     }
@@ -123,13 +128,13 @@ main(int argc, char **argv)
      * receiving the notify proves re-delivery works. */
     for (int rounds = 0; rounds < 8; ++rounds) {
         if (recv_on(reply_ep, &m) != 0) {
-            break;  /* no notify arrived — re-delivery broken */
+            break; /* no notify arrived — re-delivery broken */
         }
         if (m.type != NETDRV_IPC_RX_FRAME_NOTIFY) {
             continue;
         }
-        if (wasmos_ipc_send(net_ep, reply_ep, NETDRV_IPC_RX_POLL, req++, bid, 0, 0, 0) != 0
-            || recv_on(reply_ep, &m) != 0 || m.type != NETDRV_IPC_RESP) {
+        if (wasmos_ipc_send(net_ep, reply_ep, NETDRV_IPC_RX_POLL, req++, bid, 0, 0, 0) != 0 ||
+            recv_on(reply_ep, &m) != 0 || m.type != NETDRV_IPC_RESP) {
             break;
         }
         int32_t len = m.arg0;
@@ -144,8 +149,7 @@ main(int argc, char **argv)
         unsigned et = ((unsigned)frame[12] << 8) | (unsigned)frame[13];
         (void)printf("[net-smoke] notify rx=%d ethertype=0x%04X "
                      "from=%02X:%02X:%02X:%02X:%02X:%02X\n",
-                     (int)len, et, frame[6], frame[7], frame[8],
-                     frame[9], frame[10], frame[11]);
+                     (int)len, et, frame[6], frame[7], frame[8], frame[9], frame[10], frame[11]);
         return 0;
     }
 

@@ -9,13 +9,9 @@
 
 static ksync_spinlock_t g_user_mutex_lock;
 
-static int
-user_mutex_access(uint32_t context_id,
-                  uint64_t user_addr,
-                  uint32_t tid,
-                  int (*op)(user_mutex_state_t *state, uint32_t tid),
-                  user_mutex_state_t *out_state)
-{
+static int user_mutex_access(uint32_t context_id, uint64_t user_addr, uint32_t tid,
+                             int (*op)(user_mutex_state_t* state, uint32_t tid),
+                             user_mutex_state_t* out_state) {
     user_mutex_state_t state = {0};
     int rc = -1;
 
@@ -42,20 +38,12 @@ user_mutex_access(uint32_t context_id,
     return rc;
 }
 
-int
-user_mutex_user_try_lock(uint32_t context_id,
-                         uint64_t user_addr,
-                         uint32_t tid,
-                         user_mutex_state_t *out_state)
-{
+int user_mutex_user_try_lock(uint32_t context_id, uint64_t user_addr, uint32_t tid,
+                             user_mutex_state_t* out_state) {
     return user_mutex_access(context_id, user_addr, tid, user_mutex_state_try_lock, out_state);
 }
 
-int
-user_mutex_user_unlock(uint32_t context_id,
-                       uint64_t user_addr,
-                       uint32_t tid,
-                       user_mutex_state_t *out_state)
-{
+int user_mutex_user_unlock(uint32_t context_id, uint64_t user_addr, uint32_t tid,
+                           user_mutex_state_t* out_state) {
     return user_mutex_access(context_id, user_addr, tid, user_mutex_state_unlock, out_state);
 }

@@ -87,7 +87,10 @@ class MakeWasmosAppCapabilitiesTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            for manifest, out_path in ((default_manifest, default_out), (explicit_manifest, explicit_out)):
+            for manifest, out_path in (
+                (default_manifest, default_out),
+                (explicit_manifest, explicit_out),
+            ):
                 result = subprocess.run(
                     [
                         str(packer),
@@ -108,8 +111,18 @@ class MakeWasmosAppCapabilitiesTest(unittest.TestCase):
             explicit_hdr = explicit_out.read_bytes()
             default_header_size = struct.unpack_from("<H", default_hdr, 10)[0]
             explicit_header_size = struct.unpack_from("<H", explicit_hdr, 10)[0]
-            self.assertEqual(default_hdr[default_header_size - 8:default_header_size].rstrip(b"\0"), b"WASM")
-            self.assertEqual(explicit_hdr[explicit_header_size - 8:explicit_header_size].rstrip(b"\0"), b"WARP")
+            self.assertEqual(
+                default_hdr[default_header_size - 8 : default_header_size].rstrip(
+                    b"\0"
+                ),
+                b"WASM",
+            )
+            self.assertEqual(
+                explicit_hdr[explicit_header_size - 8 : explicit_header_size].rstrip(
+                    b"\0"
+                ),
+                b"WARP",
+            )
 
 
 if __name__ == "__main__":

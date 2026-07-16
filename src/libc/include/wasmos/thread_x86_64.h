@@ -11,45 +11,36 @@
 
 #if defined(__x86_64__) && !defined(__wasm__)
 
-typedef void (*wasmos_thread_entry_fn_t)(void *arg);
-typedef void (*wasmos_thread_continue_fn_t)(void *ctx, int32_t status);
+typedef void (*wasmos_thread_entry_fn_t)(void* arg);
+typedef void (*wasmos_thread_continue_fn_t)(void* ctx, int32_t status);
 
 typedef struct {
     wasmos_thread_entry_fn_t entry;
-    void *arg;
+    void* arg;
 } wasmos_thread_start_t;
 
-static inline uintptr_t
-wasmos_thread_align_down(uintptr_t v)
-{
+static inline uintptr_t wasmos_thread_align_down(uintptr_t v) {
     return v & ~(uintptr_t)0xFULL;
 }
 
-static inline void
-wasmos_thread_bootstrap(void)
-{
+static inline void wasmos_thread_bootstrap(void) {
     uintptr_t sp;
-    wasmos_thread_start_t *start;
+    wasmos_thread_start_t* start;
 
     __asm__ volatile("mov %%rsp, %0" : "=r"(sp));
-    start = (wasmos_thread_start_t *)sp;
+    start = (wasmos_thread_start_t*)sp;
     start->entry(start->arg);
     wasmos_sys_thread_exit(0);
 }
 
 /* Continuation-style spawn: caller provides stack storage and an optional
  * continuation callback that receives spawn status (tid or negative error). */
-static inline int32_t
-wasmos_thread_spawn_cont(void *stack_base,
-                         size_t stack_size,
-                         wasmos_thread_entry_fn_t entry,
-                         void *arg,
-                         wasmos_thread_continue_fn_t cont,
-                         void *cont_ctx,
-                         uint32_t *out_tid)
-{
+static inline int32_t wasmos_thread_spawn_cont(void* stack_base, size_t stack_size,
+                                               wasmos_thread_entry_fn_t entry, void* arg,
+                                               wasmos_thread_continue_fn_t cont, void* cont_ctx,
+                                               uint32_t* out_tid) {
     uintptr_t top;
-    wasmos_thread_start_t *start;
+    wasmos_thread_start_t* start;
     int64_t rc;
 
     if (!stack_base || stack_size < sizeof(wasmos_thread_start_t) || !entry) {
@@ -62,7 +53,7 @@ wasmos_thread_spawn_cont(void *stack_base,
     top = wasmos_thread_align_down((uintptr_t)stack_base + stack_size);
     top -= sizeof(wasmos_thread_start_t);
     top = wasmos_thread_align_down(top);
-    start = (wasmos_thread_start_t *)top;
+    start = (wasmos_thread_start_t*)top;
     start->entry = entry;
     start->arg = arg;
 
@@ -80,9 +71,8 @@ wasmos_thread_spawn_cont(void *stack_base,
 
 /* Continuation-style join: callback receives joined thread exit status or
  * negative error code. */
-static inline int32_t
-wasmos_thread_join_cont(uint32_t tid, wasmos_thread_continue_fn_t cont, void *cont_ctx)
-{
+static inline int32_t wasmos_thread_join_cont(uint32_t tid, wasmos_thread_continue_fn_t cont,
+                                              void* cont_ctx) {
     int32_t rc = (int32_t)wasmos_sys_thread_join(tid);
     if (cont) {
         cont(cont_ctx, rc);
@@ -91,9 +81,8 @@ wasmos_thread_join_cont(uint32_t tid, wasmos_thread_continue_fn_t cont, void *co
 }
 
 /* Continuation-style detach: callback receives detach status. */
-static inline int32_t
-wasmos_thread_detach_cont(uint32_t tid, wasmos_thread_continue_fn_t cont, void *cont_ctx)
-{
+static inline int32_t wasmos_thread_detach_cont(uint32_t tid, wasmos_thread_continue_fn_t cont,
+                                                void* cont_ctx) {
     int32_t rc = (int32_t)wasmos_sys_thread_detach(tid);
     if (cont) {
         cont(cont_ctx, rc);

@@ -32,43 +32,42 @@ extern "C" {
 // -fsjlj-exceptions on x86_64.  The jbuf is a 5-void* __builtin_setjmp buf.
 // ---------------------------------------------------------------------------
 
-typedef int32_t  _Unwind_Reason_Code;
-typedef int32_t  _Unwind_Action;
+typedef int32_t _Unwind_Reason_Code;
+typedef int32_t _Unwind_Action;
 typedef uint64_t _Unwind_Exception_Class;
 
-static constexpr _Unwind_Reason_Code _URC_NO_REASON       = 0;
-static constexpr _Unwind_Reason_Code _URC_HANDLER_FOUND   = 6;
+static constexpr _Unwind_Reason_Code _URC_NO_REASON = 0;
+static constexpr _Unwind_Reason_Code _URC_HANDLER_FOUND = 6;
 static constexpr _Unwind_Reason_Code _URC_CONTINUE_UNWIND = 8;
-static constexpr _Unwind_Action      _UA_SEARCH_PHASE     = 1;
+static constexpr _Unwind_Action _UA_SEARCH_PHASE = 1;
 
 struct _Unwind_Exception {
     _Unwind_Exception_Class exception_class;
-    void (*exception_cleanup)(_Unwind_Reason_Code, _Unwind_Exception *);
+    void (*exception_cleanup)(_Unwind_Reason_Code, _Unwind_Exception*);
     unsigned long private_1;
     unsigned long private_2;
 };
 
-typedef _Unwind_Reason_Code (*__personality_routine)(
-    int version, _Unwind_Action actions, _Unwind_Exception_Class exclass,
-    _Unwind_Exception *exc, void *context);
+typedef _Unwind_Reason_Code (*__personality_routine)(int version, _Unwind_Action actions,
+                                                     _Unwind_Exception_Class exclass,
+                                                     _Unwind_Exception* exc, void* context);
 
 struct _Unwind_FunctionContext {
-    _Unwind_FunctionContext *prev;
-    int32_t                  resumeIndex;
-    void                    *resumeParameters[4];
-    __personality_routine    personality;
-    uintptr_t                lsda;
-    void                    *jbuf[5];   /* __builtin_setjmp buffer */
+    _Unwind_FunctionContext* prev;
+    int32_t resumeIndex;
+    void* resumeParameters[4];
+    __personality_routine personality;
+    uintptr_t lsda;
+    void* jbuf[5]; /* __builtin_setjmp buffer */
 };
 
 // ---------------------------------------------------------------------------
 // Per-CPU-slot context stack (WARP is serialized by warp_runtime_enter)
 // ---------------------------------------------------------------------------
 
-static _Unwind_FunctionContext *g_sjlj_top[64];
+static _Unwind_FunctionContext* g_sjlj_top[64];
 
-static inline _Unwind_FunctionContext **ctx_stack(void)
-{
+static inline _Unwind_FunctionContext** ctx_stack(void) {
     uint32_t id = cpu_local()->cpu_id;
     return &g_sjlj_top[id < 64u ? id : 0u];
 }
@@ -79,28 +78,26 @@ static inline _Unwind_FunctionContext **ctx_stack(void)
 
 extern "C" {
 
-void _Unwind_SjLj_Register(_Unwind_FunctionContext *ctx)
-{
-    _Unwind_FunctionContext **top = ctx_stack();
+void _Unwind_SjLj_Register(_Unwind_FunctionContext* ctx) {
+    _Unwind_FunctionContext** top = ctx_stack();
     ctx->prev = *top;
-    *top      = ctx;
+    *top = ctx;
 }
 
-void _Unwind_SjLj_Unregister(_Unwind_FunctionContext *ctx)
-{
-    _Unwind_FunctionContext **top = ctx_stack();
-    if (*top == ctx) *top = ctx->prev;
+void _Unwind_SjLj_Unregister(_Unwind_FunctionContext* ctx) {
+    _Unwind_FunctionContext** top = ctx_stack();
+    if (*top == ctx)
+        *top = ctx->prev;
 }
 
-_Unwind_Reason_Code _Unwind_SjLj_RaiseException(_Unwind_Exception *exc)
-{
-    _Unwind_FunctionContext **top = ctx_stack();
-    _Unwind_FunctionContext  *ctx = *top;
+_Unwind_Reason_Code _Unwind_SjLj_RaiseException(_Unwind_Exception* exc) {
+    _Unwind_FunctionContext** top = ctx_stack();
+    _Unwind_FunctionContext* ctx = *top;
 
     while (ctx) {
         if (ctx->personality) {
-            _Unwind_Reason_Code rc = ctx->personality(
-                1, _UA_SEARCH_PHASE, exc->exception_class, exc, ctx);
+            _Unwind_Reason_Code rc =
+                ctx->personality(1, _UA_SEARCH_PHASE, exc->exception_class, exc, ctx);
             if (rc == _URC_HANDLER_FOUND) {
                 /* Pop this frame and longjmp to its catch landing pad.
                  * __builtin_longjmp val must be the compile-time constant 1;
@@ -116,29 +113,26 @@ _Unwind_Reason_Code _Unwind_SjLj_RaiseException(_Unwind_Exception *exc)
     kpanic("uncaught_sjlj_exception_panic", 0ULL, 0ULL);
 }
 
-_Unwind_Reason_Code _Unwind_SjLj_Resume(_Unwind_Exception *exc)
-{
+_Unwind_Reason_Code _Unwind_SjLj_Resume(_Unwind_Exception* exc) {
     return _Unwind_SjLj_RaiseException(exc);
 }
 
-_Unwind_Reason_Code _Unwind_SjLj_Resume_or_Rethrow(_Unwind_Exception *exc)
-{
+_Unwind_Reason_Code _Unwind_SjLj_Resume_or_Rethrow(_Unwind_Exception* exc) {
     return _Unwind_SjLj_RaiseException(exc);
 }
 
 /* SJLJ C++ personality function — called by _Unwind_SjLj_RaiseException for
  * each frame.  Returns HANDLER_FOUND for every frame so that catch(...) in
  * warp_driver.cpp always catches WARP exceptions at the first opportunity. */
-_Unwind_Reason_Code __gxx_personality_sj0(
-    int /*version*/, _Unwind_Action actions, _Unwind_Exception_Class /*exclass*/,
-    _Unwind_Exception * /*exc*/, void * /*context*/)
-{
-    if (actions & _UA_SEARCH_PHASE) return _URC_HANDLER_FOUND;
+_Unwind_Reason_Code __gxx_personality_sj0(int /*version*/, _Unwind_Action actions,
+                                          _Unwind_Exception_Class /*exclass*/,
+                                          _Unwind_Exception* /*exc*/, void* /*context*/) {
+    if (actions & _UA_SEARCH_PHASE)
+        return _URC_HANDLER_FOUND;
     return _URC_CONTINUE_UNWIND;
 }
 
-void _Unwind_SjLj_DeleteException(_Unwind_Exception *exc)
-{
+void _Unwind_SjLj_DeleteException(_Unwind_Exception* exc) {
     if (exc && exc->exception_cleanup)
         exc->exception_cleanup(_URC_NO_REASON, exc);
 }

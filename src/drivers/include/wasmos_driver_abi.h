@@ -91,8 +91,8 @@ enum {
      *                         arg2=io_packed           arg3=timeout_ms
      * On success: PROC_IPC_RESP, arg0=child_pid.
      * On timeout or child death before ready: PROC_IPC_ERROR. */
-    PROC_IPC_SPAWN_CAPS_SYNC      = 0x20D,
-    PROC_IPC_SPAWN_PATH_SYNC      = 0x20E,
+    PROC_IPC_SPAWN_CAPS_SYNC = 0x20D,
+    PROC_IPC_SPAWN_PATH_SYNC = 0x20E,
     PROC_IPC_SPAWN_PATH_CAPS_SYNC = 0x20F,
     /* Descriptor-based broker subsystem registration.
      * arg0=offset(0) arg1=byte_len(sizeof(wasmos_subsystem_broker_register_desc_t))
@@ -114,18 +114,15 @@ enum {
      *
      * The broker replies on msg->source with the same request_id. On success
      * arg0=plan_offset and arg1=plan_size in the broker's own xfer buffer. */
-    PROC_BROKER_IPC_SPAWN_PLAN_REQ  = 0x223,
+    PROC_BROKER_IPC_SPAWN_PLAN_REQ = 0x223,
     PROC_BROKER_IPC_SPAWN_PLAN_RESP = 0x2A3,
     PROC_BROKER_IPC_SPAWN_PLAN_ERROR = 0x2E3
 };
 
-enum {
-    PROC_MODULE_SOURCE_INITFS = 0,
-    PROC_MODULE_SOURCE_FS = 1
-};
+enum { PROC_MODULE_SOURCE_INITFS = 0, PROC_MODULE_SOURCE_FS = 1 };
 
 /* arg0 flags for PROC_IPC_SPAWN_PATH (request). */
-#define PROC_SPAWN_PATH_FLAG_DETACH   (1u << 0) /* skip ready-wait even for service/driver */
+#define PROC_SPAWN_PATH_FLAG_DETACH (1u << 0) /* skip ready-wait even for service/driver */
 /* Reap the child's process slot automatically when it exits, instead of leaving
  * it as a zombie until a waiter consumes its status.  Orthogonal to DETACH
  * (which is about ready-gating at spawn): set this for fire-and-forget one-shot
@@ -138,17 +135,18 @@ enum {
      * PROC_IPC_ERROR.arg1 so a failed spawn reports WHY instead of a blanket
      * "exec failed".  Kept as small negative ints so they don't collide with
      * success (0). */
-    PROC_SPAWN_ERR_BAD_ENDPOINT = -10,   /* request endpoint owner lookup failed */
-    PROC_SPAWN_ERR_NO_CALLER = -11,      /* caller process/context not found */
-    PROC_SPAWN_ERR_BAD_PATH = -12,       /* fs endpoint missing or bad path length */
-    PROC_SPAWN_ERR_CALLER_FSBUF = -13,   /* caller xfer buffer missing / path too big */
-    PROC_SPAWN_ERR_ARGS_TOOBIG = -14,    /* args exceed the xfer buffer */
-    PROC_SPAWN_ERR_NO_PM_FSBUF = -15,    /* PM xfer buffer missing */
-    PROC_SPAWN_ERR_FS_READ = -16,        /* reading the app blob from FS failed */
-    PROC_SPAWN_ERR_SPAWN_FAILED = -17,   /* process create/start failed (e.g. no free slot) */
-    PROC_SPAWN_ERR_BROKER_IPC = -18,     /* broker plan IPC transport/reply failed */
-    PROC_SPAWN_ERR_BROKER_PLAN = -19,    /* broker replied with malformed/unsupported plan */
-    PROC_SPAWN_ERR_BROKER_DEFERRED = -20 /* valid broker plan returned; PM launch step still deferred */
+    PROC_SPAWN_ERR_BAD_ENDPOINT = -10, /* request endpoint owner lookup failed */
+    PROC_SPAWN_ERR_NO_CALLER = -11,    /* caller process/context not found */
+    PROC_SPAWN_ERR_BAD_PATH = -12,     /* fs endpoint missing or bad path length */
+    PROC_SPAWN_ERR_CALLER_FSBUF = -13, /* caller xfer buffer missing / path too big */
+    PROC_SPAWN_ERR_ARGS_TOOBIG = -14,  /* args exceed the xfer buffer */
+    PROC_SPAWN_ERR_NO_PM_FSBUF = -15,  /* PM xfer buffer missing */
+    PROC_SPAWN_ERR_FS_READ = -16,      /* reading the app blob from FS failed */
+    PROC_SPAWN_ERR_SPAWN_FAILED = -17, /* process create/start failed (e.g. no free slot) */
+    PROC_SPAWN_ERR_BROKER_IPC = -18,   /* broker plan IPC transport/reply failed */
+    PROC_SPAWN_ERR_BROKER_PLAN = -19,  /* broker replied with malformed/unsupported plan */
+    PROC_SPAWN_ERR_BROKER_DEFERRED =
+        -20 /* valid broker plan returned; PM launch step still deferred */
 };
 
 enum {
@@ -187,19 +185,19 @@ enum {
  * wasmos_shmem_map / wasmos_shmem_map_auto instead of a blanket -1, so a failed
  * map reports WHY.  Mirrored in both runtimes (warp/link.cpp, wasm3/link.c).
  * Distinct -30 range so they don't collide with PROC_SPAWN_ERR_* (-10..-20). */
-#define SHMEM_ERR_BAD_ARGS    (-30) /* id/size invalid or size not page-aligned */
-#define SHMEM_ERR_NO_CAP      (-31) /* caller lacks the DMA capability / no context */
-#define SHMEM_ERR_BAD_ID      (-32) /* shmem id unknown / no backing pages */
-#define SHMEM_ERR_BAD_SIZE    (-33) /* requested size smaller than the shared region */
-#define SHMEM_ERR_UNALIGNED   (-34) /* fixed offset cannot yield a page-aligned host addr */
-#define SHMEM_ERR_NO_WINDOW   (-35) /* no free page-aligned window fits in linear memory */
-#define SHMEM_ERR_MAP         (-36) /* paging/linear-memory mapping step failed */
+#define SHMEM_ERR_BAD_ARGS (-30)  /* id/size invalid or size not page-aligned */
+#define SHMEM_ERR_NO_CAP (-31)    /* caller lacks the DMA capability / no context */
+#define SHMEM_ERR_BAD_ID (-32)    /* shmem id unknown / no backing pages */
+#define SHMEM_ERR_BAD_SIZE (-33)  /* requested size smaller than the shared region */
+#define SHMEM_ERR_UNALIGNED (-34) /* fixed offset cannot yield a page-aligned host addr */
+#define SHMEM_ERR_NO_WINDOW (-35) /* no free page-aligned window fits in linear memory */
+#define SHMEM_ERR_MAP (-36)       /* paging/linear-memory mapping step failed */
 
 /* Flags returned in arg1 of PROC_IPC_RESP for PROC_IPC_SPAWN_PATH.
  * Mirror of WASMOS_APP_FLAG_* in the kernel's wasmos_app.h. */
-#define WASMOS_SPAWN_FLAG_DRIVER  (1u << 0)
+#define WASMOS_SPAWN_FLAG_DRIVER (1u << 0)
 #define WASMOS_SPAWN_FLAG_SERVICE (1u << 1)
-#define WASMOS_SPAWN_FLAG_APP     (1u << 2)
+#define WASMOS_SPAWN_FLAG_APP (1u << 2)
 
 #define WASMOS_BROKER_SPAWN_PLAN_VERSION 1u
 
@@ -334,7 +332,7 @@ enum {
 
 /* Existence-event kinds carried in SVC_IPC_CLASS_EVENT arg0. Keep in sync with
  * SVC_CLASS_EVENT_* in src/kernel/include/service_class_registry.h. */
-#define SVC_CLASS_EVENT_ADD    1u
+#define SVC_CLASS_EVENT_ADD 1u
 #define SVC_CLASS_EVENT_REMOVE 2u
 
 /* Register descriptor written to the xfer buffer for SVC_IPC_REGISTER_DESC_REQ.
@@ -343,18 +341,17 @@ enum {
  * class/instance fields; PM accepts a v1-length descriptor (no class) for
  * back-compat by checking the byte length, not just the version. */
 typedef struct {
-    uint32_t version;          /* = WASMOS_SVC_REGISTER_DESC_VERSION */
-    uint32_t service_endpoint; /* endpoint clients send requests to */
-    uint32_t flags;            /* reserved, 0 */
-    char     name[WASMOS_SVC_NAME_MAX]; /* NUL-terminated service name */
+    uint32_t version;               /* = WASMOS_SVC_REGISTER_DESC_VERSION */
+    uint32_t service_endpoint;      /* endpoint clients send requests to */
+    uint32_t flags;                 /* reserved, 0 */
+    char name[WASMOS_SVC_NAME_MAX]; /* NUL-terminated service name */
     /* v2+ (present iff the descriptor byte length covers these fields): */
-    uint32_t instance;         /* provider instance index within the class */
-    char     class_name[WASMOS_SVC_CLASS_MAX]; /* NUL-term; "" = no class */
+    uint32_t instance;                     /* provider instance index within the class */
+    char class_name[WASMOS_SVC_CLASS_MAX]; /* NUL-term; "" = no class */
 } svc_register_desc_t;
 
 /* v1 descriptor length: fields up to and including name[], no class/instance. */
-#define WASMOS_SVC_REGISTER_DESC_V1_BYTES \
-    (3u * (uint32_t)sizeof(uint32_t) + WASMOS_SVC_NAME_MAX)
+#define WASMOS_SVC_REGISTER_DESC_V1_BYTES (3u * (uint32_t)sizeof(uint32_t) + WASMOS_SVC_NAME_MAX)
 
 /* One resolved provider returned by SVC_IPC_LOOKUP_CLASS_REQ (wire layout;
  * matches service_class_provider_t). */
@@ -364,11 +361,7 @@ typedef struct {
     uint32_t pid;
 } svc_class_entry_t;
 
-enum {
-    PROC_STATUS_UNKNOWN = 0,
-    PROC_STATUS_RUNNING = 1,
-    PROC_STATUS_ZOMBIE = 2
-};
+enum { PROC_STATUS_UNKNOWN = 0, PROC_STATUS_RUNNING = 1, PROC_STATUS_ZOMBIE = 2 };
 
 enum {
     BLOCK_IPC_READ_REQ = 0x300,
@@ -419,85 +412,70 @@ enum {
  * still reporting the plain kind over FSMGR_IPC_BACKEND_INFO_RESP arg0. */
 #define FSMGR_BACKEND_CLASS "fs.backend"
 
-enum {
-    FSMGR_BACKEND_BOOT = 1,
-    FSMGR_BACKEND_INIT = 2
-};
+enum { FSMGR_BACKEND_BOOT = 1, FSMGR_BACKEND_INIT = 2 };
 
-#define FSMGR_BACKEND_INSTANCE(kind, unit) \
-    ((((uint32_t)(kind)) << 8) | ((uint32_t)(unit) & 0xFFu))
+#define FSMGR_BACKEND_INSTANCE(kind, unit) ((((uint32_t)(kind)) << 8) | ((uint32_t)(unit) & 0xFFu))
 
 enum {
-    FBTEXT_IPC_CELL_WRITE_REQ  = 0x600,
-    FBTEXT_IPC_CURSOR_SET_REQ  = 0x601,
-    FBTEXT_IPC_SCROLL_REQ      = 0x602,
-    FBTEXT_IPC_CLEAR_REQ       = 0x603,
-    FBTEXT_IPC_CONSOLE_MODE_REQ = 0x604, /* arg0: 0=ring off, 1=ring on */
-    FBTEXT_IPC_GEOMETRY_REQ    = 0x605,  /* resp: arg0=cols arg1=rows */
-    FBTEXT_IPC_GFX_OVERLAY_REQ = 0x606,  /* arg0: 0=unlock, 1=lock */
-    FBTEXT_IPC_QUERY_CAPS_REQ  = 0x607,  /* resp: arg0=FBTEXT_CAP_* bitmask */
-    FBTEXT_IPC_QUERY_MODES_REQ = 0x608,  /* req: arg0=index, resp: arg0=w arg1=h arg2=stride */
+    FBTEXT_IPC_CELL_WRITE_REQ = 0x600,
+    FBTEXT_IPC_CURSOR_SET_REQ = 0x601,
+    FBTEXT_IPC_SCROLL_REQ = 0x602,
+    FBTEXT_IPC_CLEAR_REQ = 0x603,
+    FBTEXT_IPC_CONSOLE_MODE_REQ = 0x604,   /* arg0: 0=ring off, 1=ring on */
+    FBTEXT_IPC_GEOMETRY_REQ = 0x605,       /* resp: arg0=cols arg1=rows */
+    FBTEXT_IPC_GFX_OVERLAY_REQ = 0x606,    /* arg0: 0=unlock, 1=lock */
+    FBTEXT_IPC_QUERY_CAPS_REQ = 0x607,     /* resp: arg0=FBTEXT_CAP_* bitmask */
+    FBTEXT_IPC_QUERY_MODES_REQ = 0x608,    /* req: arg0=index, resp: arg0=w arg1=h arg2=stride */
     FBTEXT_IPC_SET_RESOLUTION_REQ = 0x609, /* req: arg0=w arg1=h */
-    FBTEXT_IPC_RESP            = 0x680,
-    FBTEXT_IPC_ERROR           = 0x6FF
+    FBTEXT_IPC_RESP = 0x680,
+    FBTEXT_IPC_ERROR = 0x6FF
 };
 
-enum {
-    FBTEXT_CAP_SET_RESOLUTION = 1u << 0,
-    FBTEXT_CAP_QUERY_MODES    = 1u << 1
-};
+enum { FBTEXT_CAP_SET_RESOLUTION = 1u << 0, FBTEXT_CAP_QUERY_MODES = 1u << 1 };
 
 enum {
-    VT_IPC_WRITE_REQ    = 0x700, /* arg0[27:24]=byte_count(1-4), arg0[7:0]..arg3[7:0]=bytes */
-    VT_IPC_READ_REQ     = 0x701,
+    VT_IPC_WRITE_REQ = 0x700, /* arg0[27:24]=byte_count(1-4), arg0[7:0]..arg3[7:0]=bytes */
+    VT_IPC_READ_REQ = 0x701,
     VT_IPC_SET_ATTR_REQ = 0x702,
-    VT_IPC_SWITCH_TTY   = 0x703,
+    VT_IPC_SWITCH_TTY = 0x703,
     VT_IPC_GET_ACTIVE_TTY = 0x704,
     VT_IPC_REGISTER_WRITER = 0x705,
     VT_IPC_SET_MODE_REQ = 0x706,
-    VT_IPC_RESP         = 0x780,
-    VT_IPC_ERROR        = 0x7FF
+    VT_IPC_RESP = 0x780,
+    VT_IPC_ERROR = 0x7FF
 };
 
-enum {
-    VT_INPUT_MODE_RAW = 0,
-    VT_INPUT_MODE_CANONICAL = 1 << 0,
-    VT_INPUT_MODE_ECHO = 1 << 1
-};
+enum { VT_INPUT_MODE_RAW = 0, VT_INPUT_MODE_CANONICAL = 1 << 0, VT_INPUT_MODE_ECHO = 1 << 1 };
+
+enum { KBD_IPC_SUBSCRIBE_REQ = 0x800, KBD_IPC_SUBSCRIBE_RESP = 0x880, KBD_IPC_KEY_NOTIFY = 0x801 };
 
 enum {
-    KBD_IPC_SUBSCRIBE_REQ  = 0x800,
-    KBD_IPC_SUBSCRIBE_RESP = 0x880,
-    KBD_IPC_KEY_NOTIFY     = 0x801
-};
-
-enum {
-    MOUSE_IPC_SUBSCRIBE_REQ  = 0x810,
+    MOUSE_IPC_SUBSCRIBE_REQ = 0x810,
     MOUSE_IPC_SUBSCRIBE_RESP = 0x890,
     /* arg0=dx (signed 8-bit in low byte), arg1=dy (signed 8-bit in low byte),
      * arg2=buttons (bit0=left bit1=right bit2=middle), arg3=flags reserved. */
-    MOUSE_IPC_MOVE_NOTIFY    = 0x811
+    MOUSE_IPC_MOVE_NOTIFY = 0x811
 };
 
 enum {
-    RTC_IPC_READ_REQ  = 0x820,
-    RTC_IPC_SET_REQ   = 0x821,
+    RTC_IPC_READ_REQ = 0x820,
+    RTC_IPC_SET_REQ = 0x821,
     RTC_IPC_READ_RESP = 0x8A0,
-    RTC_IPC_SET_RESP  = 0x8A1,
-    RTC_IPC_ERROR     = 0x8FF
+    RTC_IPC_SET_RESP = 0x8A1,
+    RTC_IPC_ERROR = 0x8FF
 };
 
 enum {
-    VIRTIO_SERIAL_IPC_QUERY_REQ       = 0x830,
-    VIRTIO_SERIAL_IPC_READ_REG32_REQ  = 0x831,
+    VIRTIO_SERIAL_IPC_QUERY_REQ = 0x830,
+    VIRTIO_SERIAL_IPC_READ_REG32_REQ = 0x831,
     VIRTIO_SERIAL_IPC_WRITE_REG32_REQ = 0x832,
-    VIRTIO_SERIAL_IPC_RESP            = 0x8B0,
-    VIRTIO_SERIAL_IPC_ERROR           = 0x8BF
+    VIRTIO_SERIAL_IPC_RESP = 0x8B0,
+    VIRTIO_SERIAL_IPC_ERROR = 0x8BF
 };
 
 enum {
     DEVMGR_PUBLISH_DEVICE = 0x900,
-    DEVMGR_PCI_SCAN_DONE  = 0x901,
+    DEVMGR_PCI_SCAN_DONE = 0x901,
     DEVMGR_QUERY_MOUNT_REQ = 0x902,
     DEVMGR_PUBLISH_BLOCK_DEVICE = 0x903,
     DEVMGR_QUERY_BLOCK_MOUNT_REQ = 0x904,
@@ -510,52 +488,52 @@ enum {
 };
 
 enum {
-    DEVMGR_CAP_IO_PORT  = 1 << 0,
+    DEVMGR_CAP_IO_PORT = 1 << 0,
     DEVMGR_CAP_MMIO_MAP = 1 << 1,
-    DEVMGR_CAP_IRQ      = 1 << 2,
-    DEVMGR_CAP_DMA      = 1 << 3
+    DEVMGR_CAP_IRQ = 1 << 2,
+    DEVMGR_CAP_DMA = 1 << 3
 };
 
 enum {
-    NETDRV_IPC_LINK_GET        = 0xA00,
-    NETDRV_IPC_TX_FRAME        = 0xA01,
-    NETDRV_IPC_RX_POLL         = 0xA02,
-    NETDRV_IPC_STATS_GET       = 0xA03,
+    NETDRV_IPC_LINK_GET = 0xA00,
+    NETDRV_IPC_TX_FRAME = 0xA01,
+    NETDRV_IPC_RX_POLL = 0xA02,
+    NETDRV_IPC_STATS_GET = 0xA03,
     NETDRV_IPC_RX_FRAME_NOTIFY = 0xA04,
-    NETDRV_IPC_RESP            = 0xA80,
-    NETDRV_IPC_ERROR           = 0xAFF
+    NETDRV_IPC_RESP = 0xA80,
+    NETDRV_IPC_ERROR = 0xAFF
 };
 
 enum {
-    NET_IPC_SOCKET_OPEN   = 0xB00,
-    NET_IPC_BIND          = 0xB01,
-    NET_IPC_CONNECT       = 0xB02,
-    NET_IPC_SEND          = 0xB03,
-    NET_IPC_RECV          = 0xB04,
-    NET_IPC_CLOSE         = 0xB05,
-    NET_IPC_POLL          = 0xB06,
-    NET_IPC_IFADDR_ADD    = 0xB07,
-    NET_IPC_IFADDR_DEL    = 0xB08,
-    NET_IPC_IFADDR_LIST   = 0xB09,
-    NET_IPC_STACK_CREATE  = 0xB0A,
+    NET_IPC_SOCKET_OPEN = 0xB00,
+    NET_IPC_BIND = 0xB01,
+    NET_IPC_CONNECT = 0xB02,
+    NET_IPC_SEND = 0xB03,
+    NET_IPC_RECV = 0xB04,
+    NET_IPC_CLOSE = 0xB05,
+    NET_IPC_POLL = 0xB06,
+    NET_IPC_IFADDR_ADD = 0xB07,
+    NET_IPC_IFADDR_DEL = 0xB08,
+    NET_IPC_IFADDR_LIST = 0xB09,
+    NET_IPC_STACK_CREATE = 0xB0A,
     NET_IPC_STACK_DESTROY = 0xB0B,
-    NET_IPC_STACK_SELECT  = 0xB0C,
-    NET_IPC_DATA_NOTIFY   = 0xB0D,
-    NET_IPC_RESP          = 0xB80,
-    NET_IPC_ERROR         = 0xBFF
+    NET_IPC_STACK_SELECT = 0xB0C,
+    NET_IPC_DATA_NOTIFY = 0xB0D,
+    NET_IPC_RESP = 0xB80,
+    NET_IPC_ERROR = 0xBFF
 };
 
 enum {
-    NET_STATUS_OK          = 0,
+    NET_STATUS_OK = 0,
     NET_STATUS_WOULD_BLOCK = -1,
-    NET_STATUS_INVALID     = -2,
-    NET_STATUS_NOT_READY   = -3,
-    NET_STATUS_DENIED      = -4,
-    NET_STATUS_IO_ERROR    = -5,
-    NET_STATUS_QUEUE_FULL  = -6,
-    NET_STATUS_NO_MEM      = -7,
+    NET_STATUS_INVALID = -2,
+    NET_STATUS_NOT_READY = -3,
+    NET_STATUS_DENIED = -4,
+    NET_STATUS_IO_ERROR = -5,
+    NET_STATUS_QUEUE_FULL = -6,
+    NET_STATUS_NO_MEM = -7,
     NET_STATUS_ADDR_IN_USE = -8,
-    NET_STATUS_TIMEOUT     = -9
+    NET_STATUS_TIMEOUT = -9
 };
 
 typedef struct {
@@ -568,7 +546,7 @@ typedef struct {
 } netdrv_stats_t;
 
 enum {
-    WASMOS_DMA_DIR_TO_DEVICE   = 1 << 0,
+    WASMOS_DMA_DIR_TO_DEVICE = 1 << 0,
     WASMOS_DMA_DIR_FROM_DEVICE = 1 << 1,
     WASMOS_DMA_DIR_BIDIR = WASMOS_DMA_DIR_TO_DEVICE | WASMOS_DMA_DIR_FROM_DEVICE
 };
@@ -581,24 +559,17 @@ enum {
     WASMOS_DMA_STATUS_UNAVAILABLE = -4
 };
 
-enum {
-    WASMOS_DMA_SYNC_TO_DEVICE = 1,
-    WASMOS_DMA_SYNC_FROM_DEVICE = 2,
-    WASMOS_DMA_SYNC_BIDIR = 3
-};
+enum { WASMOS_DMA_SYNC_TO_DEVICE = 1, WASMOS_DMA_SYNC_FROM_DEVICE = 2, WASMOS_DMA_SYNC_BIDIR = 3 };
 
 /* Cache policy for wasmos_region_alloc (driver-owned pinned DMA regions). */
 enum {
-    WASMOS_REGION_CACHE_WB = 0,  /* write-back: coherent, virtqueue rings on x86 */
-    WASMOS_REGION_CACHE_WC = 1   /* write-combining: framebuffer/scanout (TODO) */
+    WASMOS_REGION_CACHE_WB = 0, /* write-back: coherent, virtqueue rings on x86 */
+    WASMOS_REGION_CACHE_WC = 1  /* write-combining: framebuffer/scanout (TODO) */
 };
 
 /* Trigger/polarity flags for wasmos_irq_configure. Default (no flags) is
  * edge-triggered active-high (ISA). PCI INTx lines are level + active-low. */
-enum {
-    WASMOS_IRQ_TRIGGER_LEVEL = 1 << 0,
-    WASMOS_IRQ_POLARITY_LOW  = 1 << 1
-};
+enum { WASMOS_IRQ_TRIGGER_LEVEL = 1 << 0, WASMOS_IRQ_POLARITY_LOW = 1 << 1 };
 
 typedef struct __attribute__((packed)) {
     uint64_t base;
@@ -622,8 +593,9 @@ typedef struct __attribute__((packed)) {
     wasmos_dma_window_t windows[];
 } wasmos_spawn_caps_v2_t;
 
-#define WASMOS_SPAWN_CAPS_V2_SIZE(window_count) \
-    (sizeof(wasmos_spawn_caps_v2_t) + ((uint32_t)(window_count) * (uint32_t)sizeof(wasmos_dma_window_t)))
+#define WASMOS_SPAWN_CAPS_V2_SIZE(window_count)                                                    \
+    (sizeof(wasmos_spawn_caps_v2_t) +                                                              \
+     ((uint32_t)(window_count) * (uint32_t)sizeof(wasmos_dma_window_t)))
 
 enum {
     PROC_IPC_DMA_MAP_BORROW_REQ = 0x230,

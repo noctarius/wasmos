@@ -59,7 +59,8 @@ class VirtioNetE2ETest(unittest.TestCase):
         )
         # The received frame must be the ARP reply (ethertype 0x0806).
         self.assertIn(
-            b"ethertype=0x0806", self.session.buf,
+            b"ethertype=0x0806",
+            self.session.buf,
             "IRQ-delivered frame was not the expected ARP reply",
         )
 

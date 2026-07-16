@@ -17,8 +17,12 @@ def main():
     args = parser.parse_args()
 
     if args.ovmf_code or args.esp:
-        userfs = args.userfs or os.environ.get("WASMOS_USERFS", os.path.join(os.getcwd(), "userfs"))
-        cfg = QemuConfig(args.ovmf_code, args.ovmf_vars, args.esp, userfs, smp_count=args.smp)
+        userfs = args.userfs or os.environ.get(
+            "WASMOS_USERFS", os.path.join(os.getcwd(), "userfs")
+        )
+        cfg = QemuConfig(
+            args.ovmf_code, args.ovmf_vars, args.esp, userfs, smp_count=args.smp
+        )
     else:
         cfg = default_config()
 
@@ -28,7 +32,9 @@ def main():
         # within a few seconds the boot is dead (e.g. it halted on
         # "[kernel] invalid boot_info"); don't wait out the whole timeout.
         if not session.expect(b"[kernel] boot_info version=", timeout_s=20):
-            sys.stderr.write("FAIL: kernel did not reach early boot within 20s (boot is dead)\n")
+            sys.stderr.write(
+                "FAIL: kernel did not reach early boot within 20s (boot is dead)\n"
+            )
             sys.stderr.write(session.tail() + "\n")
             return 1
         # Calculator is spawned by sysinit.rc before the CLI starts.

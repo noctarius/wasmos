@@ -7,17 +7,13 @@
 #include "wasmos/api.h"
 #include "wasmos/script.h"
 
-void
-wasmos_script_state_init(wasmos_script_state_t *state)
-{
+void wasmos_script_state_init(wasmos_script_state_t* state) {
     memset(state, 0, sizeof(*state));
 }
 
 /* Look up a variable in a linked-list env table; returns value or NULL. */
-static const char *
-script_table_get(const wasmos_script_env_node_t *table, const char *name)
-{
-    const wasmos_script_env_node_t *it = table;
+static const char* script_table_get(const wasmos_script_env_node_t* table, const char* name) {
+    const wasmos_script_env_node_t* it = table;
     while (it) {
         if (strcmp(it->pair.name, name) == 0) {
             return it->pair.value;
@@ -29,11 +25,9 @@ script_table_get(const wasmos_script_env_node_t *table, const char *name)
 
 /* Set or delete a variable in a linked-list env table using malloc/free.
  * Passing NULL or empty value removes the entry. */
-static int
-script_table_set(wasmos_script_env_node_t **table, const char *name, const char *value)
-{
-    wasmos_script_env_node_t *it = 0;
-    wasmos_script_env_node_t *prev = 0;
+static int script_table_set(wasmos_script_env_node_t** table, const char* name, const char* value) {
+    wasmos_script_env_node_t* it = 0;
+    wasmos_script_env_node_t* prev = 0;
     if (!name || !name[0]) {
         return -1;
     }
@@ -58,7 +52,7 @@ script_table_set(wasmos_script_env_node_t **table, const char *name, const char 
     if (!value || !value[0]) {
         return 0;
     }
-    it = (wasmos_script_env_node_t *)malloc(sizeof(*it));
+    it = (wasmos_script_env_node_t*)malloc(sizeof(*it));
     if (!it) {
         return -1;
     }
@@ -70,34 +64,30 @@ script_table_set(wasmos_script_env_node_t **table, const char *name, const char 
     return 0;
 }
 
-static void
-script_table_dispose(wasmos_script_env_node_t **table)
-{
-    wasmos_script_env_node_t *it = 0;
+static void script_table_dispose(wasmos_script_env_node_t** table) {
+    wasmos_script_env_node_t* it = 0;
     if (!table) {
         return;
     }
     it = *table;
     while (it) {
-        wasmos_script_env_node_t *next = it->next;
+        wasmos_script_env_node_t* next = it->next;
         free(it);
         it = next;
     }
     *table = 0;
 }
 
-static int
-script_table_clone(wasmos_script_env_node_t **out, const wasmos_script_env_node_t *in)
-{
-    wasmos_script_env_node_t *head = 0;
-    wasmos_script_env_node_t *tail = 0;
-    const wasmos_script_env_node_t *it = in;
+static int script_table_clone(wasmos_script_env_node_t** out, const wasmos_script_env_node_t* in) {
+    wasmos_script_env_node_t* head = 0;
+    wasmos_script_env_node_t* tail = 0;
+    const wasmos_script_env_node_t* it = in;
     if (!out) {
         return -1;
     }
     *out = 0;
     while (it) {
-        wasmos_script_env_node_t *node = (wasmos_script_env_node_t *)malloc(sizeof(*node));
+        wasmos_script_env_node_t* node = (wasmos_script_env_node_t*)malloc(sizeof(*node));
         if (!node) {
             script_table_dispose(&head);
             return -1;
@@ -118,20 +108,16 @@ script_table_clone(wasmos_script_env_node_t **out, const wasmos_script_env_node_
     return 0;
 }
 
-static const char *
-script_scope_get(wasmos_script_state_t *state, const char *name)
-{
-    const char *val = script_table_get(state->locals, name);
+static const char* script_scope_get(wasmos_script_state_t* state, const char* name) {
+    const char* val = script_table_get(state->locals, name);
     if (val) {
         return val;
     }
     return script_table_get(state->exports, name);
 }
 
-void
-wasmos_script_state_init_child(wasmos_script_state_t *child,
-                               const wasmos_script_state_t *parent)
-{
+void wasmos_script_state_init_child(wasmos_script_state_t* child,
+                                    const wasmos_script_state_t* parent) {
     if (!child) {
         return;
     }
@@ -145,9 +131,7 @@ wasmos_script_state_init_child(wasmos_script_state_t *child,
     }
 }
 
-void
-wasmos_script_state_dispose(wasmos_script_state_t *state)
-{
+void wasmos_script_state_dispose(wasmos_script_state_t* state) {
     if (!state) {
         return;
     }
@@ -157,9 +141,7 @@ wasmos_script_state_dispose(wasmos_script_state_t *state)
     state->total_depth = 0;
 }
 
-static int
-script_expand(wasmos_script_state_t *state, const char *in, char *out, int out_len)
-{
+static int script_expand(wasmos_script_state_t* state, const char* in, char* out, int out_len) {
     int ri = 0;
     int wi = 0;
     if (!in || !out || out_len <= 0) {
@@ -210,7 +192,7 @@ script_expand(wasmos_script_state_t *state, const char *in, char *out, int out_l
                     out[wi++] = tmp[i];
                 }
             } else {
-                const char *val = script_scope_get(state, name);
+                const char* val = script_scope_get(state, name);
                 if (val) {
                     int vi = 0;
                     while (val[vi]) {
@@ -232,9 +214,7 @@ script_expand(wasmos_script_state_t *state, const char *in, char *out, int out_l
     return 0;
 }
 
-static int
-echo_append_char(char *out, int32_t out_len, int32_t *io_pos, char c)
-{
+static int echo_append_char(char* out, int32_t out_len, int32_t* io_pos, char c) {
     if (!out || !io_pos || *io_pos < 0 || *io_pos + 1 >= out_len) {
         return -1;
     }
@@ -243,14 +223,8 @@ echo_append_char(char *out, int32_t out_len, int32_t *io_pos, char c)
     return 0;
 }
 
-int
-wasmos_script_echo_expand(const char *expr,
-                          wasmos_script_echo_resolve_var_fn resolve_var,
-                          void *resolve_user,
-                          char *out,
-                          int32_t out_len,
-                          int *out_newline)
-{
+int wasmos_script_echo_expand(const char* expr, wasmos_script_echo_resolve_var_fn resolve_var,
+                              void* resolve_user, char* out, int32_t out_len, int* out_newline) {
     int32_t i = 0;
     int32_t out_pos = 0;
     int parse_flags = 1;
@@ -422,11 +396,10 @@ wasmos_script_echo_expand(const char *expr,
     return 0;
 }
 
-static int
-script_echo_resolve_var(void *user, const char *name, int32_t name_len, char *out, int32_t out_len)
-{
-    wasmos_script_state_t *state = (wasmos_script_state_t *)user;
-    const char *val = 0;
+static int script_echo_resolve_var(void* user, const char* name, int32_t name_len, char* out,
+                                   int32_t out_len) {
+    wasmos_script_state_t* state = (wasmos_script_state_t*)user;
+    const char* val = 0;
     char name_buf[WASMOS_SCRIPT_ENV_NAME_MAX];
     if (!state || !name || name_len <= 0 || !out || out_len <= 0) {
         return -1;
@@ -450,9 +423,7 @@ script_echo_resolve_var(void *user, const char *name, int32_t name_len, char *ou
     return 0;
 }
 
-static int
-parse_int64(const char *s, int64_t *out)
-{
+static int parse_int64(const char* s, int64_t* out) {
     if (!s || !s[0]) {
         return -1;
     }
@@ -477,9 +448,7 @@ parse_int64(const char *s, int64_t *out)
     return 0;
 }
 
-static int
-script_eval_condition(wasmos_script_state_t *state, const char *cond_str)
-{
+static int script_eval_condition(wasmos_script_state_t* state, const char* cond_str) {
     char buf[WASMOS_SCRIPT_LINE_MAX];
     int start = 0;
     int negate = 0;
@@ -495,10 +464,10 @@ script_eval_condition(wasmos_script_state_t *state, const char *cond_str)
         }
     }
 
-    const char *cond = &cond_str[start];
+    const char* cond = &cond_str[start];
 
     if (cond[0] == '-' && cond[1] == 'f' && (cond[2] == ' ' || cond[2] == '\t')) {
-        const char *path = &cond[3];
+        const char* path = &cond[3];
         struct stat st;
         while (*path == ' ' || *path == '\t') {
             path++;
@@ -512,7 +481,7 @@ script_eval_condition(wasmos_script_state_t *state, const char *cond_str)
     }
 
     if (cond[0] == '-' && cond[1] == 'd' && (cond[2] == ' ' || cond[2] == '\t')) {
-        const char *path = &cond[3];
+        const char* path = &cond[3];
         while (*path == ' ' || *path == '\t') {
             path++;
         }
@@ -526,13 +495,11 @@ script_eval_condition(wasmos_script_state_t *state, const char *cond_str)
     }
 
     /* Find operator: scan for 2-char ops first, then 1-char ops */
-    const char *op = 0;
+    const char* op = 0;
     int op_len = 0;
     for (int i = 0; cond[i]; i++) {
-        if ((cond[i] == '<' && cond[i+1] == '=') ||
-            (cond[i] == '>' && cond[i+1] == '=') ||
-            (cond[i] == '=' && cond[i+1] == '=') ||
-            (cond[i] == '!' && cond[i+1] == '=')) {
+        if ((cond[i] == '<' && cond[i + 1] == '=') || (cond[i] == '>' && cond[i + 1] == '=') ||
+            (cond[i] == '=' && cond[i + 1] == '=') || (cond[i] == '!' && cond[i + 1] == '=')) {
             op = &cond[i];
             op_len = 2;
             break;
@@ -562,7 +529,7 @@ script_eval_condition(wasmos_script_state_t *state, const char *cond_str)
     }
     lhs_raw[j] = '\0';
 
-    const char *rhs_start = op + op_len;
+    const char* rhs_start = op + op_len;
     while (*rhs_start == ' ' || *rhs_start == '\t') {
         rhs_start++;
     }
@@ -573,7 +540,7 @@ script_eval_condition(wasmos_script_state_t *state, const char *cond_str)
         j++;
     }
     rhs_raw[j] = '\0';
-    while (j > 0 && (rhs_raw[j-1] == ' ' || rhs_raw[j-1] == '\t')) {
+    while (j > 0 && (rhs_raw[j - 1] == ' ' || rhs_raw[j - 1] == '\t')) {
         rhs_raw[--j] = '\0';
     }
 
@@ -614,9 +581,7 @@ script_eval_condition(wasmos_script_state_t *state, const char *cond_str)
     return negate ? !result : result;
 }
 
-static void
-parse_name_value(const char *line, char *name, int name_cap, char *value, int val_cap)
-{
+static void parse_name_value(const char* line, char* name, int name_cap, char* value, int val_cap) {
     int eq = -1;
     int i = 0;
     name[0] = '\0';
@@ -629,7 +594,7 @@ parse_name_value(const char *line, char *name, int name_cap, char *value, int va
     }
     eq = i;
     int nlen = eq;
-    while (nlen > 0 && (line[nlen-1] == ' ' || line[nlen-1] == '\t')) {
+    while (nlen > 0 && (line[nlen - 1] == ' ' || line[nlen - 1] == '\t')) {
         nlen--;
     }
     if (nlen <= 0 || nlen >= name_cap) {
@@ -640,7 +605,7 @@ parse_name_value(const char *line, char *name, int name_cap, char *value, int va
     }
     name[nlen] = '\0';
 
-    const char *vstart = &line[eq + 1];
+    const char* vstart = &line[eq + 1];
     while (*vstart == ' ' || *vstart == '\t') {
         vstart++;
     }
@@ -648,10 +613,10 @@ parse_name_value(const char *line, char *name, int name_cap, char *value, int va
     while (vstart[vlen]) {
         vlen++;
     }
-    while (vlen > 0 && (vstart[vlen-1] == ' ' || vstart[vlen-1] == '\t')) {
+    while (vlen > 0 && (vstart[vlen - 1] == ' ' || vstart[vlen - 1] == '\t')) {
         vlen--;
     }
-    if (vlen >= 2 && vstart[0] == '"' && vstart[vlen-1] == '"') {
+    if (vlen >= 2 && vstart[0] == '"' && vstart[vlen - 1] == '"') {
         vstart++;
         vlen -= 2;
     }
@@ -667,14 +632,13 @@ parse_name_value(const char *line, char *name, int name_cap, char *value, int va
     value[vlen] = '\0';
 }
 
-static int
-script_exec_line(wasmos_script_state_t *state, const wasmos_script_ops_t *ops, const char *line)
-{
+static int script_exec_line(wasmos_script_state_t* state, const wasmos_script_ops_t* ops,
+                            const char* line) {
     int executing = (state->exec_depth == state->total_depth);
 
     /* Handle structural keywords regardless of executing state */
     if (line[0] == 'i' && line[1] == 'f' && (line[2] == ' ' || line[2] == '\t')) {
-        const char *rest = &line[3];
+        const char* rest = &line[3];
         while (*rest == ' ' || *rest == '\t') {
             rest++;
         }
@@ -685,11 +649,12 @@ script_exec_line(wasmos_script_state_t *state, const wasmos_script_ops_t *ops, c
         }
         int has_then = 0;
         if (rlen >= 5) {
-            const char *tail = &rest[rlen - 5];
-            if (tail[0] == ' ' && tail[1] == 't' && tail[2] == 'h' && tail[3] == 'e' && tail[4] == 'n') {
+            const char* tail = &rest[rlen - 5];
+            if (tail[0] == ' ' && tail[1] == 't' && tail[2] == 'h' && tail[3] == 'e' &&
+                tail[4] == 'n') {
                 has_then = 1;
                 rlen -= 5;
-                while (rlen > 0 && (rest[rlen-1] == ' ' || rest[rlen-1] == '\t')) {
+                while (rlen > 0 && (rest[rlen - 1] == ' ' || rest[rlen - 1] == '\t')) {
                     rlen--;
                 }
             }
@@ -754,7 +719,7 @@ script_exec_line(wasmos_script_state_t *state, const wasmos_script_ops_t *ops, c
     /* Command dispatch */
     if (line[0] == 's' && line[1] == 't' && line[2] == 'a' && line[3] == 'r' && line[4] == 't' &&
         (line[5] == ' ' || line[5] == '\t')) {
-        const char *path = &line[6];
+        const char* path = &line[6];
         while (*path == ' ' || *path == '\t') {
             path++;
         }
@@ -771,7 +736,7 @@ script_exec_line(wasmos_script_state_t *state, const wasmos_script_ops_t *ops, c
 
     if (line[0] == 's' && line[1] == 'p' && line[2] == 'a' && line[3] == 'w' && line[4] == 'n' &&
         (line[5] == ' ' || line[5] == '\t')) {
-        const char *path = &line[6];
+        const char* path = &line[6];
         while (*path == ' ' || *path == '\t') {
             path++;
         }
@@ -785,7 +750,7 @@ script_exec_line(wasmos_script_state_t *state, const wasmos_script_ops_t *ops, c
 
     if (line[0] == 'e' && line[1] == 'x' && line[2] == 'e' && line[3] == 'c' &&
         (line[4] == ' ' || line[4] == '\t')) {
-        const char *rest = &line[5];
+        const char* rest = &line[5];
         while (*rest == ' ' || *rest == '\t') {
             rest++;
         }
@@ -805,7 +770,7 @@ script_exec_line(wasmos_script_state_t *state, const wasmos_script_ops_t *ops, c
         if (script_expand(state, path_raw, expanded_path, (int)sizeof(expanded_path)) != 0) {
             return 0;
         }
-        const char *args_raw = &rest[plen];
+        const char* args_raw = &rest[plen];
         while (*args_raw == ' ' || *args_raw == '\t') {
             args_raw++;
         }
@@ -822,10 +787,9 @@ script_exec_line(wasmos_script_state_t *state, const wasmos_script_ops_t *ops, c
         return 0;
     }
 
-    if (line[0] == 'w' && line[1] == 'a' && line[2] == 'i' && line[3] == 't' &&
-        line[4] == '-' && line[5] == 's' && line[6] == 'v' && line[7] == 'c' &&
-        (line[8] == ' ' || line[8] == '\t')) {
-        const char *name = &line[9];
+    if (line[0] == 'w' && line[1] == 'a' && line[2] == 'i' && line[3] == 't' && line[4] == '-' &&
+        line[5] == 's' && line[6] == 'v' && line[7] == 'c' && (line[8] == ' ' || line[8] == '\t')) {
+        const char* name = &line[9];
         while (*name == ' ' || *name == '\t') {
             name++;
         }
@@ -837,9 +801,9 @@ script_exec_line(wasmos_script_state_t *state, const wasmos_script_ops_t *ops, c
         return 0;
     }
 
-    if (line[0] == 'e' && line[1] == 'x' && line[2] == 'p' && line[3] == 'o' &&
-        line[4] == 'r' && line[5] == 't' && (line[6] == ' ' || line[6] == '\t')) {
-        const char *rest = &line[7];
+    if (line[0] == 'e' && line[1] == 'x' && line[2] == 'p' && line[3] == 'o' && line[4] == 'r' &&
+        line[5] == 't' && (line[6] == ' ' || line[6] == '\t')) {
+        const char* rest = &line[7];
         while (*rest == ' ' || *rest == '\t') {
             rest++;
         }
@@ -860,9 +824,8 @@ script_exec_line(wasmos_script_state_t *state, const wasmos_script_ops_t *ops, c
         return 0;
     }
 
-    if (line[0] == 's' && line[1] == 'e' && line[2] == 't' &&
-        (line[3] == ' ' || line[3] == '\t')) {
-        const char *rest = &line[4];
+    if (line[0] == 's' && line[1] == 'e' && line[2] == 't' && (line[3] == ' ' || line[3] == '\t')) {
+        const char* rest = &line[4];
         while (*rest == ' ' || *rest == '\t') {
             rest++;
         }
@@ -880,9 +843,9 @@ script_exec_line(wasmos_script_state_t *state, const wasmos_script_ops_t *ops, c
         return 0;
     }
 
-    if (line[0] == 's' && line[1] == 'c' && line[2] == 'r' && line[3] == 'i' &&
-        line[4] == 'p' && line[5] == 't' && (line[6] == ' ' || line[6] == '\t')) {
-        const char *path = &line[7];
+    if (line[0] == 's' && line[1] == 'c' && line[2] == 'r' && line[3] == 'i' && line[4] == 'p' &&
+        line[5] == 't' && (line[6] == ' ' || line[6] == '\t')) {
+        const char* path = &line[7];
         while (*path == ' ' || *path == '\t') {
             path++;
         }
@@ -902,10 +865,9 @@ script_exec_line(wasmos_script_state_t *state, const wasmos_script_ops_t *ops, c
         return 0;
     }
 
-    if (line[0] == 's' && line[1] == 'o' && line[2] == 'u' &&
-        line[3] == 'r' && line[4] == 'c' && line[5] == 'e' &&
-        (line[6] == ' ' || line[6] == '\t')) {
-        const char *path = &line[7];
+    if (line[0] == 's' && line[1] == 'o' && line[2] == 'u' && line[3] == 'r' && line[4] == 'c' &&
+        line[5] == 'e' && (line[6] == ' ' || line[6] == '\t')) {
+        const char* path = &line[7];
         while (*path == ' ' || *path == '\t') {
             path++;
         }
@@ -921,7 +883,7 @@ script_exec_line(wasmos_script_state_t *state, const wasmos_script_ops_t *ops, c
     }
 
     if (line[0] == '.' && (line[1] == ' ' || line[1] == '\t')) {
-        const char *path = &line[2];
+        const char* path = &line[2];
         while (*path == ' ' || *path == '\t') {
             path++;
         }
@@ -938,15 +900,11 @@ script_exec_line(wasmos_script_state_t *state, const wasmos_script_ops_t *ops, c
 
     if (line[0] == 'e' && line[1] == 'c' && line[2] == 'h' && line[3] == 'o' &&
         (line[4] == ' ' || line[4] == '\t')) {
-        const char *text = &line[5];
+        const char* text = &line[5];
         char expanded[WASMOS_SCRIPT_LINE_MAX];
         int newline = 1;
-        if (wasmos_script_echo_expand(text,
-                                      script_echo_resolve_var,
-                                      state,
-                                      expanded,
-                                      (int32_t)sizeof(expanded),
-                                      &newline) != 0) {
+        if (wasmos_script_echo_expand(text, script_echo_resolve_var, state, expanded,
+                                      (int32_t)sizeof(expanded), &newline) != 0) {
             return 0;
         }
         if (ops->on_echo_ex) {
@@ -960,12 +918,9 @@ script_exec_line(wasmos_script_state_t *state, const wasmos_script_ops_t *ops, c
     return 0;
 }
 
-int
-wasmos_script_run(wasmos_script_state_t *state,
-                  const wasmos_script_ops_t *ops,
-                  const char *path)
-{
-    FILE *f = fopen(path, "r");
+int wasmos_script_run(wasmos_script_state_t* state, const wasmos_script_ops_t* ops,
+                      const char* path) {
+    FILE* f = fopen(path, "r");
     if (!f) {
         return -1;
     }
@@ -984,7 +939,7 @@ wasmos_script_run(wasmos_script_state_t *state,
         while (line[end] && line[end] != '\n' && line[end] != '\r') {
             end++;
         }
-        while (end > start && (line[end-1] == ' ' || line[end-1] == '\t')) {
+        while (end > start && (line[end - 1] == ' ' || line[end - 1] == '\t')) {
             end--;
         }
         line[end] = '\0';

@@ -13,8 +13,7 @@ class DecodeKernelPanicScriptTest(unittest.TestCase):
         script = Path("scripts/decode_kernel_panic.py")
         self.assertTrue(script.exists(), "decode_kernel_panic.py must exist")
 
-        panic_log = textwrap.dedent(
-            """\
+        panic_log = textwrap.dedent("""\
             [cpu] rip=ffffffff80201bb4
 
             ================= KERNEL PANIC =================
@@ -26,8 +25,7 @@ class DecodeKernelPanicScriptTest(unittest.TestCase):
                 [0] ret=ffffffff80201ba9 (panic_verify_level2)
                 [1] ret=ffffffff80201b79 (panic_verify_level1)
                 [2] ret=ffffffff80201922 (kmain)
-            """
-        )
+            """)
 
         with tempfile.TemporaryDirectory() as td:
             td_path = Path(td)
@@ -36,8 +34,7 @@ class DecodeKernelPanicScriptTest(unittest.TestCase):
 
             fake_addr2line = td_path / "fake-addr2line.py"
             fake_addr2line.write_text(
-                textwrap.dedent(
-                    """\
+                textwrap.dedent("""\
                     #!/usr/bin/env python3
                     import sys
 
@@ -49,12 +46,14 @@ class DecodeKernelPanicScriptTest(unittest.TestCase):
                     }
                     for addr in sys.argv[6:]:
                         print(mapping[addr])
-                    """
-                ),
+                    """),
                 encoding="utf-8",
             )
             fake_addr2line.chmod(
-                fake_addr2line.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH
+                fake_addr2line.stat().st_mode
+                | stat.S_IXUSR
+                | stat.S_IXGRP
+                | stat.S_IXOTH
             )
 
             result = subprocess.run(
@@ -109,16 +108,17 @@ class DecodeKernelPanicScriptTest(unittest.TestCase):
 
             fake_addr2line = llvm_bin / "llvm-addr2line"
             fake_addr2line.write_text(
-                textwrap.dedent(
-                    """\
+                textwrap.dedent("""\
                     #!/bin/sh
                     echo "panic_verify_level3 at src/kernel/kernel.c:45"
-                    """
-                ),
+                    """),
                 encoding="utf-8",
             )
             fake_addr2line.chmod(
-                fake_addr2line.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH
+                fake_addr2line.stat().st_mode
+                | stat.S_IXUSR
+                | stat.S_IXGRP
+                | stat.S_IXOTH
             )
 
             result = subprocess.run(

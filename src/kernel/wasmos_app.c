@@ -87,7 +87,7 @@ typedef struct __attribute__((packed)) {
     uint16_t driver_io_port_min;
     uint16_t driver_io_port_max;
     uint32_t driver_match_count;
-    uint32_t compiled_size;   /* size of WARP AOT binary appended after WASM bytes; 0 if absent */
+    uint32_t compiled_size; /* size of WARP AOT binary appended after WASM bytes; 0 if absent */
 } wasmos_app_header_v4_t;
 
 typedef struct __attribute__((packed)) {
@@ -161,12 +161,9 @@ static uint8_t g_subsystem_lock_initialized;
 #define WASMOS_ACTIVE_WASM_SUBSYSTEM_TAG WASMOS_SUBSYSTEM_TAG_WASM3
 #endif
 
-static int
-wasmos_wasm_subsystem_start(wasmos_app_runtime_state_t *state,
-                            const wasmos_app_start_params_t *params,
-                            uint32_t owner_context_id,
-                            uint32_t flags)
-{
+static int wasmos_wasm_subsystem_start(wasmos_app_runtime_state_t* state,
+                                       const wasmos_app_start_params_t* params,
+                                       uint32_t owner_context_id, uint32_t flags) {
     wasm_driver_manifest_t manifest;
     (void)flags;
     if (!state || !params) {
@@ -185,55 +182,40 @@ wasmos_wasm_subsystem_start(wasmos_app_runtime_state_t *state,
     return wasm_driver_start(&state->wasm, &manifest, owner_context_id);
 }
 
-static int
-wasmos_wasm_subsystem_call_entry(wasmos_app_runtime_state_t *state,
-                                 const char *entry_export,
-                                 uint32_t entry_argc,
-                                 uint32_t *entry_argv)
-{
+static int wasmos_wasm_subsystem_call_entry(wasmos_app_runtime_state_t* state,
+                                            const char* entry_export, uint32_t entry_argc,
+                                            uint32_t* entry_argv) {
     if (!state) {
         return -1;
     }
     return wasm_driver_call_unlocked(&state->wasm, entry_export, entry_argc, entry_argv);
 }
 
-static void
-wasmos_wasm_subsystem_stop(wasmos_app_runtime_state_t *state)
-{
+static void wasmos_wasm_subsystem_stop(wasmos_app_runtime_state_t* state) {
     if (!state) {
         return;
     }
     wasm_driver_stop(&state->wasm);
 }
 
-static int
-wasmos_native_subsystem_start(wasmos_app_runtime_state_t *state,
-                              const wasmos_app_start_params_t *params,
-                              uint32_t owner_context_id,
-                              uint32_t flags)
-{
+static int wasmos_native_subsystem_start(wasmos_app_runtime_state_t* state,
+                                         const wasmos_app_start_params_t* params,
+                                         uint32_t owner_context_id, uint32_t flags) {
     int rc = -1;
     (void)flags;
     if (!state || !params) {
         return -1;
     }
-    rc = native_driver_start(owner_context_id,
-                             params->module_bytes,
-                             params->module_size,
-                             params->name,
-                             params->entry_argv,
-                             params->entry_argc);
+    rc = native_driver_start(owner_context_id, params->module_bytes, params->module_size,
+                             params->name, params->entry_argv, params->entry_argc);
     state->native.started = 1;
     state->native.entry_rc = rc;
     return rc == 0 ? 0 : -1;
 }
 
-static int
-wasmos_native_subsystem_call_entry(wasmos_app_runtime_state_t *state,
-                                   const char *entry_export,
-                                   uint32_t entry_argc,
-                                   uint32_t *entry_argv)
-{
+static int wasmos_native_subsystem_call_entry(wasmos_app_runtime_state_t* state,
+                                              const char* entry_export, uint32_t entry_argc,
+                                              uint32_t* entry_argv) {
     (void)entry_export;
     (void)entry_argc;
     (void)entry_argv;
@@ -243,9 +225,7 @@ wasmos_native_subsystem_call_entry(wasmos_app_runtime_state_t *state,
     return state->native.entry_rc;
 }
 
-static void
-wasmos_native_subsystem_stop(wasmos_app_runtime_state_t *state)
-{
+static void wasmos_native_subsystem_stop(wasmos_app_runtime_state_t* state) {
     if (!state) {
         return;
     }
@@ -273,9 +253,7 @@ static const wasmos_subsystem_ops_t g_wasmos_native_subsystem_ops = {
     .stop = wasmos_native_subsystem_stop,
 };
 
-static void
-copy_subsystem_tag(char *dst, const char *src)
-{
+static void copy_subsystem_tag(char* dst, const char* src) {
     if (!dst) {
         return;
     }
@@ -284,17 +262,12 @@ copy_subsystem_tag(char *dst, const char *src)
     (void)str_copy(dst, WASMOS_APP_SUBSYSTEM_TAG_LEN + 1, src);
 }
 
-static int
-subsystem_tag_has_valid_char(char c)
-{
-    return ((c >= 'A') && (c <= 'Z')) ||
-           ((c >= '0') && (c <= '9')) ||
-           c == '+' || c == '_' || c == '-';
+static int subsystem_tag_has_valid_char(char c) {
+    return ((c >= 'A') && (c <= 'Z')) || ((c >= '0') && (c <= '9')) || c == '+' || c == '_' ||
+           c == '-';
 }
 
-static int
-subsystem_tag_validate_bytes(const char *tag, uint32_t len)
-{
+static int subsystem_tag_validate_bytes(const char* tag, uint32_t len) {
     int saw_nul = 0;
     if (!tag || len == 0) {
         return -1;
@@ -312,18 +285,13 @@ subsystem_tag_validate_bytes(const char *tag, uint32_t len)
     return tag[0] == '\0' ? -1 : 0;
 }
 
-static void
-subsystem_tag_default_for_flags(uint32_t flags, char out_tag[WASMOS_APP_SUBSYSTEM_TAG_LEN + 1])
-{
-    copy_subsystem_tag(out_tag,
-                       (flags & WASMOS_APP_FLAG_NATIVE) != 0
-                           ? WASMOS_SUBSYSTEM_TAG_NATIVE
-                           : WASMOS_SUBSYSTEM_TAG_WASM);
+static void subsystem_tag_default_for_flags(uint32_t flags,
+                                            char out_tag[WASMOS_APP_SUBSYSTEM_TAG_LEN + 1]) {
+    copy_subsystem_tag(out_tag, (flags & WASMOS_APP_FLAG_NATIVE) != 0 ? WASMOS_SUBSYSTEM_TAG_NATIVE
+                                                                      : WASMOS_SUBSYSTEM_TAG_WASM);
 }
 
-static int
-check_u32_add(uint32_t a, uint32_t b, uint32_t *out)
-{
+static int check_u32_add(uint32_t a, uint32_t b, uint32_t* out) {
     uint64_t sum = (uint64_t)a + (uint64_t)b;
     if (sum > 0xFFFFFFFFULL) {
         return -1;
@@ -332,9 +300,7 @@ check_u32_add(uint32_t a, uint32_t b, uint32_t *out)
     return 0;
 }
 
-static int
-check_bounds(uint32_t offset, uint32_t size, uint32_t blob_size)
-{
+static int check_bounds(uint32_t offset, uint32_t size, uint32_t blob_size) {
     /* All variable-sized sections are bounds-checked with 32-bit arithmetic
      * overflow protection before any pointer arithmetic is trusted. */
     uint32_t end = 0;
@@ -347,36 +313,25 @@ check_bounds(uint32_t offset, uint32_t size, uint32_t blob_size)
     return 0;
 }
 
-static void
-wasmos_subsystem_lock_init_once(void)
-{
+static void wasmos_subsystem_lock_init_once(void) {
     if (!g_subsystem_lock_initialized) {
         ksync_spinlock_init(&g_subsystem_lock);
         g_subsystem_lock_initialized = 1u;
     }
 }
 
-static int
-wasmos_subsystem_register_locked(const char *request_tag,
-                                 const char *runtime_tag,
-                                 const wasmos_subsystem_ops_t *ops)
-{
+static int wasmos_subsystem_register_locked(const char* request_tag, const char* runtime_tag,
+                                            const wasmos_subsystem_ops_t* ops) {
     if (!ops) {
         return -1;
     }
-    return wasmos_subsystem_registry_register_builtin(request_tag,
-                                                      runtime_tag,
-                                                      ops->uses_wasm_payload,
-                                                      ops->needs_runtime_lock,
-                                                      ops->gates_ready_for_services,
-                                                      ops);
+    return wasmos_subsystem_registry_register_builtin(
+        request_tag, runtime_tag, ops->uses_wasm_payload, ops->needs_runtime_lock,
+        ops->gates_ready_for_services, ops);
 }
 
-int
-wasmos_subsystem_register(const char *request_tag,
-                          const char *runtime_tag,
-                          const wasmos_subsystem_ops_t *ops)
-{
+int wasmos_subsystem_register(const char* request_tag, const char* runtime_tag,
+                              const wasmos_subsystem_ops_t* ops) {
     int rc = -1;
     wasmos_subsystem_lock_init_once();
     ksync_spinlock_lock(&g_subsystem_lock);
@@ -385,11 +340,8 @@ wasmos_subsystem_register(const char *request_tag,
     return rc;
 }
 
-static int
-wasmos_register_builtin_subsystems(void)
-{
-    if (wasmos_subsystem_register_locked(WASMOS_SUBSYSTEM_TAG_NATIVE,
-                                         WASMOS_SUBSYSTEM_TAG_NATIVE,
+static int wasmos_register_builtin_subsystems(void) {
+    if (wasmos_subsystem_register_locked(WASMOS_SUBSYSTEM_TAG_NATIVE, WASMOS_SUBSYSTEM_TAG_NATIVE,
                                          &g_wasmos_native_subsystem_ops) != 0 ||
         wasmos_subsystem_register_locked(WASMOS_SUBSYSTEM_TAG_WASM,
                                          WASMOS_ACTIVE_WASM_SUBSYSTEM_TAG,
@@ -400,8 +352,7 @@ wasmos_register_builtin_subsystems(void)
         return -1;
     }
 #if WASMOS_WASM_RUNTIME == 1
-    if (wasmos_subsystem_register_locked("WARP+JIT",
-                                         WASMOS_ACTIVE_WASM_SUBSYSTEM_TAG,
+    if (wasmos_subsystem_register_locked("WARP+JIT", WASMOS_ACTIVE_WASM_SUBSYSTEM_TAG,
                                          &g_wasmos_wasm_subsystem_ops) != 0) {
         return -1;
     }
@@ -409,9 +360,7 @@ wasmos_register_builtin_subsystems(void)
     return 0;
 }
 
-static int
-wasmos_register_builtin_subsystems_once_locked(void)
-{
+static int wasmos_register_builtin_subsystems_once_locked(void) {
     if (g_subsystems_initialized) {
         return 0;
     }
@@ -422,9 +371,7 @@ wasmos_register_builtin_subsystems_once_locked(void)
     return 0;
 }
 
-int
-wasmos_app_init_subsystems(void)
-{
+int wasmos_app_init_subsystems(void) {
     int rc = -1;
     wasmos_subsystem_lock_init_once();
     ksync_spinlock_lock(&g_subsystem_lock);
@@ -433,23 +380,19 @@ wasmos_app_init_subsystems(void)
     return rc;
 }
 
-static const wasmos_subsystem_registry_entry_t *
-wasmos_app_find_subsystem_handler(const char *request_tag)
-{
+static const wasmos_subsystem_registry_entry_t*
+wasmos_app_find_subsystem_handler(const char* request_tag) {
     if (!request_tag) {
         return 0;
     }
     return wasmos_subsystem_registry_find(request_tag);
 }
 
-
-int
-wasmos_app_parse(const uint8_t *blob, uint32_t blob_size, wasmos_app_desc_t *out_desc)
-{
+int wasmos_app_parse(const uint8_t* blob, uint32_t blob_size, wasmos_app_desc_t* out_desc) {
     if (!blob || !out_desc || blob_size < sizeof(wasmos_app_header_v1_t)) {
         return -1;
     }
-    const wasmos_app_header_v1_t *hdr_v1 = (const wasmos_app_header_v1_t *)blob;
+    const wasmos_app_header_v1_t* hdr_v1 = (const wasmos_app_header_v1_t*)blob;
     uint32_t version = hdr_v1->version;
     uint32_t header_size = 0;
     uint32_t flags = 0;
@@ -494,7 +437,7 @@ wasmos_app_parse(const uint8_t *blob, uint32_t blob_size, wasmos_app_desc_t *out
         if (blob_size < sizeof(wasmos_app_header_v2_t)) {
             return -1;
         }
-        const wasmos_app_header_v2_t *hdr_v2 = (const wasmos_app_header_v2_t *)blob;
+        const wasmos_app_header_v2_t* hdr_v2 = (const wasmos_app_header_v2_t*)blob;
         header_size = hdr_v2->header_size;
         flags = hdr_v2->flags;
         name_len = hdr_v2->name_len;
@@ -525,7 +468,7 @@ wasmos_app_parse(const uint8_t *blob, uint32_t blob_size, wasmos_app_desc_t *out
         if (blob_size < sizeof(wasmos_app_header_v3_t)) {
             return -1;
         }
-        const wasmos_app_header_v3_t *hdr_v3 = (const wasmos_app_header_v3_t *)blob;
+        const wasmos_app_header_v3_t* hdr_v3 = (const wasmos_app_header_v3_t*)blob;
         header_size = hdr_v3->header_size;
         flags = hdr_v3->flags;
         name_len = hdr_v3->name_len;
@@ -544,7 +487,7 @@ wasmos_app_parse(const uint8_t *blob, uint32_t blob_size, wasmos_app_desc_t *out
         if (blob_size < sizeof(wasmos_app_header_v4_t)) {
             return -1;
         }
-        const wasmos_app_header_v4_t *hdr_v4 = (const wasmos_app_header_v4_t *)blob;
+        const wasmos_app_header_v4_t* hdr_v4 = (const wasmos_app_header_v4_t*)blob;
         header_size = hdr_v4->header_size;
         flags = hdr_v4->flags;
         name_len = hdr_v4->name_len;
@@ -565,7 +508,7 @@ wasmos_app_parse(const uint8_t *blob, uint32_t blob_size, wasmos_app_desc_t *out
         if (blob_size < sizeof(wasmos_app_header_v5_t)) {
             return -1;
         }
-        const wasmos_app_header_v5_t *hdr_v5 = (const wasmos_app_header_v5_t *)blob;
+        const wasmos_app_header_v5_t* hdr_v5 = (const wasmos_app_header_v5_t*)blob;
         header_size = hdr_v5->header_size;
         flags = hdr_v5->flags;
         name_len = hdr_v5->name_len;
@@ -626,20 +569,20 @@ wasmos_app_parse(const uint8_t *blob, uint32_t blob_size, wasmos_app_desc_t *out
     if (check_bounds(off, name_len, blob_size) != 0) {
         return -1;
     }
-    const uint8_t *name = &blob[off];
+    const uint8_t* name = &blob[off];
     off += name_len;
 
     if (check_bounds(off, entry_len, blob_size) != 0) {
         return -1;
     }
-    const uint8_t *entry = &blob[off];
+    const uint8_t* entry = &blob[off];
     off += entry_len;
 
     for (uint32_t i = 0; i < req_ep_count; ++i) {
         if (check_bounds(off, sizeof(wasmos_req_endpoint_t), blob_size) != 0) {
             return -1;
         }
-        const wasmos_req_endpoint_t *req = (const wasmos_req_endpoint_t *)&blob[off];
+        const wasmos_req_endpoint_t* req = (const wasmos_req_endpoint_t*)&blob[off];
         off += sizeof(wasmos_req_endpoint_t);
         if (check_bounds(off, req->name_len, blob_size) != 0) {
             return -1;
@@ -655,7 +598,7 @@ wasmos_app_parse(const uint8_t *blob, uint32_t blob_size, wasmos_app_desc_t *out
         if (check_bounds(off, sizeof(wasmos_cap_request_t), blob_size) != 0) {
             return -1;
         }
-        const wasmos_cap_request_t *cap = (const wasmos_cap_request_t *)&blob[off];
+        const wasmos_cap_request_t* cap = (const wasmos_cap_request_t*)&blob[off];
         off += sizeof(wasmos_cap_request_t);
         if (check_bounds(off, cap->name_len, blob_size) != 0) {
             return -1;
@@ -671,7 +614,7 @@ wasmos_app_parse(const uint8_t *blob, uint32_t blob_size, wasmos_app_desc_t *out
         if (check_bounds(off, sizeof(wasmos_entry_arg_binding_t), blob_size) != 0) {
             return -1;
         }
-        const wasmos_entry_arg_binding_t *binding = (const wasmos_entry_arg_binding_t *)&blob[off];
+        const wasmos_entry_arg_binding_t* binding = (const wasmos_entry_arg_binding_t*)&blob[off];
         off += sizeof(wasmos_entry_arg_binding_t);
         if (check_bounds(off, binding->name_len, blob_size) != 0) {
             return -1;
@@ -686,7 +629,7 @@ wasmos_app_parse(const uint8_t *blob, uint32_t blob_size, wasmos_app_desc_t *out
         if (check_bounds(off, sizeof(wasmos_app_driver_match_t), blob_size) != 0) {
             return -1;
         }
-        const wasmos_app_driver_match_t *m = (const wasmos_app_driver_match_t *)&blob[off];
+        const wasmos_app_driver_match_t* m = (const wasmos_app_driver_match_t*)&blob[off];
         driver_matches[i] = *m;
         off += sizeof(wasmos_app_driver_match_t);
     }
@@ -697,7 +640,7 @@ wasmos_app_parse(const uint8_t *blob, uint32_t blob_size, wasmos_app_desc_t *out
         if (check_bounds(off, sizeof(wasmos_mem_hint_t), blob_size) != 0) {
             return -1;
         }
-        const wasmos_mem_hint_t *hint = (const wasmos_mem_hint_t *)&blob[off];
+        const wasmos_mem_hint_t* hint = (const wasmos_mem_hint_t*)&blob[off];
         off += sizeof(wasmos_mem_hint_t);
         if (hint->kind == WASMOS_APP_MEM_HINT_STACK) {
             stack_pages_hint = hint->min_pages;
@@ -710,11 +653,11 @@ wasmos_app_parse(const uint8_t *blob, uint32_t blob_size, wasmos_app_desc_t *out
         return -1;
     }
 
-    const uint8_t *wasm_bytes = &blob[off];
+    const uint8_t* wasm_bytes = &blob[off];
     off += wasm_size;
 
     /* Version 4+ may append a pre-compiled WARP AOT binary after the WASM bytes. */
-    const uint8_t *compiled_bytes = 0;
+    const uint8_t* compiled_bytes = 0;
     if (compiled_size > 0) {
         if (check_bounds(off, compiled_size, blob_size) != 0) {
             return -1;
@@ -744,14 +687,13 @@ wasmos_app_parse(const uint8_t *blob, uint32_t blob_size, wasmos_app_desc_t *out
     return 0;
 }
 
-int
-wasmos_app_resolve_subsystem(const wasmos_app_desc_t *desc,
-                             wasmos_app_subsystem_info_t *out_info)
-{
+int wasmos_app_resolve_subsystem(const wasmos_app_desc_t* desc,
+                                 wasmos_app_subsystem_info_t* out_info) {
     if (!desc || !out_info) {
         return -1;
     }
-    const wasmos_subsystem_registry_entry_t *handler = wasmos_app_find_subsystem_handler(desc->subsystem_tag);
+    const wasmos_subsystem_registry_entry_t* handler =
+        wasmos_app_find_subsystem_handler(desc->subsystem_tag);
     if (!handler) {
         return -1;
     }
@@ -770,9 +712,7 @@ wasmos_app_resolve_subsystem(const wasmos_app_desc_t *desc,
     return 0;
 }
 
-int
-wasmos_app_requires_explicit_ready(const wasmos_app_desc_t *desc)
-{
+int wasmos_app_requires_explicit_ready(const wasmos_app_desc_t* desc) {
     wasmos_app_subsystem_info_t info;
     if (!desc) {
         return -1;
@@ -789,40 +729,31 @@ wasmos_app_requires_explicit_ready(const wasmos_app_desc_t *desc)
     return info.gates_ready_for_services ? 1 : 0;
 }
 
-int
-wasmos_app_call_entry(wasmos_app_instance_t *instance)
-{
+int wasmos_app_call_entry(wasmos_app_instance_t* instance) {
     if (!instance || !instance->active || !instance->ops || !instance->ops->call_entry) {
         trace_write("[wasmos-app] entry skipped (inactive)\n");
         return -1;
     }
-    trace_do(klog_printf("[wasmos-app] entry start %s export=%s\n",
-        instance->name, instance->entry));
+    trace_do(
+        klog_printf("[wasmos-app] entry start %s export=%s\n", instance->name, instance->entry));
     /* Entry dispatch is centralized here so drivers, services, and applications
      * all produce the same diagnostic framing around their actual export call. */
-    int rc = instance->ops->call_entry(&instance->runtime,
-                                       instance->entry,
-                                       instance->entry_argc,
+    int rc = instance->ops->call_entry(&instance->runtime, instance->entry, instance->entry_argc,
                                        instance->entry_argv);
     trace_do(klog_printf("[wasmos-app] entry rc=%016llx\n[wasmos-app] entry %s %s\n",
-        (unsigned long long)(uint32_t)rc,
-        rc == 0 ? "ok" : "failed",
-        instance->name));
+                         (unsigned long long)(uint32_t)rc, rc == 0 ? "ok" : "failed",
+                         instance->name));
     return rc;
 }
 
-int
-wasmos_app_start(wasmos_app_instance_t *instance,
-                 const wasmos_app_desc_t *desc,
-                 uint32_t owner_context_id,
-                 const uint32_t *init_argv,
-                 uint32_t init_argc)
-{
+int wasmos_app_start(wasmos_app_instance_t* instance, const wasmos_app_desc_t* desc,
+                     uint32_t owner_context_id, const uint32_t* init_argv, uint32_t init_argc) {
     if (!instance || !desc || owner_context_id == 0) {
         return -1;
     }
     if (str_copy_bytes(instance->name, sizeof(instance->name), desc->name, desc->name_len) != 0 ||
-        str_copy_bytes(instance->entry, sizeof(instance->entry), desc->entry, desc->entry_len) != 0) {
+        str_copy_bytes(instance->entry, sizeof(instance->entry), desc->entry, desc->entry_len) !=
+            0) {
         klog_write("[wasmos-app] invalid name or entry\n");
         return -1;
     }
@@ -834,11 +765,8 @@ wasmos_app_start(wasmos_app_instance_t *instance,
             return -1;
         }
         uint32_t endpoint = IPC_ENDPOINT_NONE;
-        if (g_endpoint_resolver(owner_context_id,
-                                desc->req_eps[i].name,
-                                desc->req_eps[i].name_len,
-                                desc->req_eps[i].rights,
-                                &endpoint) != 0 ||
+        if (g_endpoint_resolver(owner_context_id, desc->req_eps[i].name, desc->req_eps[i].name_len,
+                                desc->req_eps[i].rights, &endpoint) != 0 ||
             endpoint == IPC_ENDPOINT_NONE) {
             klog_write("[wasmos-app] endpoint resolve failed\n");
             return -1;
@@ -851,9 +779,7 @@ wasmos_app_start(wasmos_app_instance_t *instance,
             klog_write("[wasmos-app] capability granter missing\n");
             return -1;
         }
-        if (g_capability_granter(owner_context_id,
-                                 desc->caps[i].name,
-                                 desc->caps[i].name_len,
+        if (g_capability_granter(owner_context_id, desc->caps[i].name, desc->caps[i].name_len,
                                  desc->caps[i].flags) != 0) {
             klog_write("[wasmos-app] capability grant failed\n");
             return -1;
@@ -912,9 +838,7 @@ wasmos_app_start(wasmos_app_instance_t *instance,
     return 0;
 }
 
-void
-wasmos_app_stop(wasmos_app_instance_t *instance)
-{
+void wasmos_app_stop(wasmos_app_instance_t* instance) {
     if (!instance || !instance->active) {
         return;
     }
@@ -929,10 +853,8 @@ wasmos_app_stop(wasmos_app_instance_t *instance)
     instance->entry_argc = 0;
 }
 
-void
-wasmos_app_set_policy_hooks(wasmos_app_endpoint_resolver_t endpoint_resolver,
-                            wasmos_app_capability_granter_t capability_granter)
-{
+void wasmos_app_set_policy_hooks(wasmos_app_endpoint_resolver_t endpoint_resolver,
+                                 wasmos_app_capability_granter_t capability_granter) {
     g_endpoint_resolver = endpoint_resolver;
     g_capability_granter = capability_granter;
 }

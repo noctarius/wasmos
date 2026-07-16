@@ -24,13 +24,15 @@ extern "C" {
 
 extern "C" {
 
-void *malloc(size_t size)  { return kalloc_small(size); }
+void* malloc(size_t size) {
+    return kalloc_small(size);
+}
 
-void *memchr(const void *s, int c, size_t n)
-{
-    const unsigned char *p = static_cast<const unsigned char *>(s);
+void* memchr(const void* s, int c, size_t n) {
+    const unsigned char* p = static_cast<const unsigned char*>(s);
     for (size_t i = 0; i < n; ++i) {
-        if (p[i] == (unsigned char)c) return const_cast<unsigned char *>(&p[i]);
+        if (p[i] == (unsigned char)c)
+            return const_cast<unsigned char*>(&p[i]);
     }
     return nullptr;
 }
@@ -42,7 +44,9 @@ void *memchr(const void *s, int c, size_t n)
 
 struct boot_info;
 void wasm3_heap_release(unsigned int) {}
-unsigned long long wasm3_heap_committed_bytes(unsigned int) { return 0; }
+unsigned long long wasm3_heap_committed_bytes(unsigned int) {
+    return 0;
+}
 
 } // extern "C"
 
@@ -64,7 +68,7 @@ struct __class_type_info {
 __class_type_info::~__class_type_info() {}
 
 struct __si_class_type_info : __class_type_info {
-    const __class_type_info *__base_type;
+    const __class_type_info* __base_type;
     virtual ~__si_class_type_info();
 };
 __si_class_type_info::~__si_class_type_info() {}

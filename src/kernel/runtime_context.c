@@ -4,14 +4,14 @@
  * pointers before dereferencing them. */
 #include "runtime_context.h"
 
-static int find_region(const mm_context_t *ctx, mem_region_type_t type, mem_region_t *out) {
+static int find_region(const mm_context_t* ctx, mem_region_type_t type, mem_region_t* out) {
     if (!ctx || !out) {
         return 0;
     }
-    return mm_context_region_for_type((mm_context_t *)ctx, type, out) == 0 ? 1 : 0;
+    return mm_context_region_for_type((mm_context_t*)ctx, type, out) == 0 ? 1 : 0;
 }
 
-int runtime_context_bind(mm_context_t *ctx, runtime_context_t *out_ctx) {
+int runtime_context_bind(mm_context_t* ctx, runtime_context_t* out_ctx) {
     if (!ctx || !out_ctx) {
         return -1;
     }

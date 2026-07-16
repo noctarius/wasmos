@@ -6,7 +6,6 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-
 BOOL_KEYS = {
     "AS_ENABLE",
     "RUST_ENABLE",
@@ -28,8 +27,13 @@ BOOL_KEYS = {
 
 STRING_KEYS = {"KERNEL_TARGET_TRIPLE"}
 INT_KEYS = {"QEMU_GDB_PORT", "WASMOS_PM_LIST_ARRAY_CHUNK_CAP"}
-INITIALIZED_GUARDS = {"AS_ENABLE", "RUST_ENABLE", "GO_ENABLE", "ZIG_ENABLE",
-                      "WASMOS_WASM_RUNTIME_WASM3"}
+INITIALIZED_GUARDS = {
+    "AS_ENABLE",
+    "RUST_ENABLE",
+    "GO_ENABLE",
+    "ZIG_ENABLE",
+    "WASMOS_WASM_RUNTIME_WASM3",
+}
 # TODO: Extend this symbol map as additional CMake cache settings migrate to Kconfig.
 
 
@@ -56,7 +60,9 @@ def cmake_bool(value: str) -> str:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--input", required=True, help="Path to Kconfig .config file")
-    parser.add_argument("--output", required=True, help="Path to generated CMake include")
+    parser.add_argument(
+        "--output", required=True, help="Path to generated CMake include"
+    )
     args = parser.parse_args()
 
     in_path = Path(args.input)
@@ -78,15 +84,19 @@ def main() -> int:
     for key in sorted(values.keys()):
         value = values[key]
         if key in BOOL_KEYS:
-            lines.append(f"set({key} {cmake_bool(value)} CACHE BOOL \"Kconfig imported\" FORCE)")
+            lines.append(
+                f'set({key} {cmake_bool(value)} CACHE BOOL "Kconfig imported" FORCE)'
+            )
         elif key in STRING_KEYS:
-            lines.append(f"set({key} {value} CACHE STRING \"Kconfig imported\" FORCE)")
+            lines.append(f'set({key} {value} CACHE STRING "Kconfig imported" FORCE)')
         elif key in INT_KEYS:
-            lines.append(f"set({key} {value} CACHE STRING \"Kconfig imported\" FORCE)")
+            lines.append(f'set({key} {value} CACHE STRING "Kconfig imported" FORCE)')
 
     for key in sorted(INITIALIZED_GUARDS):
         if key in values:
-            lines.append(f"set({key}_INITIALIZED ON CACHE BOOL \"Kconfig imported\" FORCE)")
+            lines.append(
+                f'set({key}_INITIALIZED ON CACHE BOOL "Kconfig imported" FORCE)'
+            )
 
     out_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return 0

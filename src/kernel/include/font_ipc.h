@@ -15,11 +15,7 @@ enum {
     FONT_IPC_ERROR = 0xAFF
 };
 
-enum {
-    FONT_ID_ROBOTO = 1,
-    FONT_ID_ROBOTO_MONO = 2,
-    FONT_ID_NOTO_SERIF = 3
-};
+enum { FONT_ID_ROBOTO = 1, FONT_ID_ROBOTO_MONO = 2, FONT_ID_NOTO_SERIF = 3 };
 
 enum {
     FONT_STATUS_OK = 0,

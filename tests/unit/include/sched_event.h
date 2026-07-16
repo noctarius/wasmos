@@ -36,15 +36,11 @@ typedef struct {
 
 struct thread;
 
-void sched_event_init(sched_event_t *ev, sched_event_type_t type);
-void sched_event_wait(sched_event_t *ev, uint32_t timeout_ms);
-struct thread *sched_event_wake_one(sched_event_t *ev,
-                                    uint64_t data,
-                                    sched_pend_state_t pend);
-int sched_event_wake_all(sched_event_t *ev,
-                         uint64_t data,
-                         sched_pend_state_t pend);
-void sched_event_abort_all(sched_event_t *ev);
+void sched_event_init(sched_event_t* ev, sched_event_type_t type);
+void sched_event_wait(sched_event_t* ev, uint32_t timeout_ms);
+struct thread* sched_event_wake_one(sched_event_t* ev, uint64_t data, sched_pend_state_t pend);
+int sched_event_wake_all(sched_event_t* ev, uint64_t data, sched_pend_state_t pend);
+void sched_event_abort_all(sched_event_t* ev);
 void sched_timeout_check(void);
 
 #endif

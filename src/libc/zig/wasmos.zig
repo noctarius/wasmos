@@ -735,7 +735,10 @@ pub const strconv = struct {
     /// being emitted — WARP's JIT rejects function types that contain f64.
     inline fn fmtIntF64(val: f64, buf: []u8) []const u8 {
         if (val == 0.0) {
-            if (buf.len > 0) { buf[0] = '0'; return buf[0..1]; }
+            if (buf.len > 0) {
+                buf[0] = '0';
+                return buf[0..1];
+            }
             return buf[0..0];
         }
         var tmp: [20]u8 = undefined;
@@ -767,7 +770,11 @@ pub const strconv = struct {
         if (buf.len == 0) return buf[0..0];
         var pos: usize = 0;
         var val = v;
-        if (val < 0.0) { buf[pos] = '-'; pos += 1; val = -val; }
+        if (val < 0.0) {
+            buf[pos] = '-';
+            pos += 1;
+            val = -val;
+        }
         if (@trunc(val) == val and val < 1e15) {
             const s = fmtIntF64(val, buf[pos..]);
             return buf[0 .. pos + s.len];
@@ -775,17 +782,20 @@ pub const strconv = struct {
         const int_f = @trunc(val);
         const si = fmtIntF64(int_f, buf[pos..]);
         pos += si.len;
-        if (pos < buf.len) { buf[pos] = '.'; pos += 1; }
+        if (pos < buf.len) {
+            buf[pos] = '.';
+            pos += 1;
+        }
         var frac = val - int_f;
         var last_nz = pos;
         var d: usize = 0;
         while (d < 8 and pos < buf.len) : (d += 1) {
             frac *= 10.0;
             const t = @trunc(frac);
-            const dv = f64Digit(t);  // f64Digit avoids trunc_sat
+            const dv = f64Digit(t); // f64Digit avoids trunc_sat
             buf[pos] = '0' + dv;
             pos += 1;
-            frac = frac - t;  // manual subtraction avoids @mod / fmod
+            frac = frac - t; // manual subtraction avoids @mod / fmod
             if (dv != 0) last_nz = pos;
         }
         return buf[0..last_nz];
@@ -796,7 +806,10 @@ pub const strconv = struct {
     pub inline fn parseF64(s: []const u8) f64 {
         var neg = false;
         var i: usize = 0;
-        if (i < s.len and s[i] == '-') { neg = true; i += 1; }
+        if (i < s.len and s[i] == '-') {
+            neg = true;
+            i += 1;
+        }
         var int_part: f64 = 0;
         while (i < s.len and s[i] >= '0' and s[i] <= '9') : (i += 1)
             int_part = int_part * 10 + @as(f64, @floatFromInt(s[i] - '0'));

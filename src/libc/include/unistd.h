@@ -18,14 +18,14 @@ extern "C" {
 #define STDERR_FILENO 2
 
 int close(int fd);
-ssize_t read(int fd, void *buf, size_t count);
-ssize_t write(int fd, const void *buf, size_t count);
-int open(const char *path, int flags, ...);
+ssize_t read(int fd, void* buf, size_t count);
+ssize_t write(int fd, const void* buf, size_t count);
+int open(const char* path, int flags, ...);
 off_t lseek(int fd, off_t offset, int whence);
-int stat(const char *path, struct stat *st);
-int unlink(const char *path);
-int rmdir(const char *path);
-ssize_t listdir(char *buf, size_t count);
+int stat(const char* path, struct stat* st);
+int unlink(const char* path);
+int rmdir(const char* path);
+ssize_t listdir(char* buf, size_t count);
 
 #ifdef __cplusplus
 }

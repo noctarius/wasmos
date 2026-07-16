@@ -8,15 +8,11 @@
 #include <stdarg.h>
 #include <stdio.h>
 
-void
-klog_write(const char *s)
-{
+void klog_write(const char* s) {
     serial_write(s);
 }
 
-void
-klog_printf(const char *fmt, ...)
-{
+void klog_printf(const char* fmt, ...) {
     char buf[512];
     va_list ap;
     va_start(ap, fmt);

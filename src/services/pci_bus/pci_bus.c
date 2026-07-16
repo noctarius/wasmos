@@ -11,35 +11,23 @@
 #include "pci_bus_types.h"
 
 /* Log one record to serial for debug visibility. */
-static void
-log_record(const pci_device_record_t *rec)
-{
+static void log_record(const pci_device_record_t* rec) {
     if (!rec) {
         return;
     }
-    (void)printf("[pci-bus] dev %02X:%02X.%02X class %02X:%02X:%02X vid:did %04X:%04X mmio %02X irq %02X\n",
-                 (unsigned)rec->bus,
-                 (unsigned)rec->device,
-                 (unsigned)rec->function,
-                 (unsigned)rec->class_code,
-                 (unsigned)rec->subclass,
-                 (unsigned)rec->prog_if,
-                 (unsigned)rec->vendor_id,
-                 (unsigned)rec->device_id,
-                 (unsigned)rec->mmio_hint,
-                 (unsigned)rec->irq_hint);
+    (void)printf(
+        "[pci-bus] dev %02X:%02X.%02X class %02X:%02X:%02X vid:did %04X:%04X mmio %02X irq %02X\n",
+        (unsigned)rec->bus, (unsigned)rec->device, (unsigned)rec->function,
+        (unsigned)rec->class_code, (unsigned)rec->subclass, (unsigned)rec->prog_if,
+        (unsigned)rec->vendor_id, (unsigned)rec->device_id, (unsigned)rec->mmio_hint,
+        (unsigned)rec->irq_hint);
 }
 
 /* Read a 32-bit register from PCI config space using mechanism 1.
  * Bit 31 of the address register is the enable bit. */
-static uint32_t
-pci_config_read32(uint8_t bus, uint8_t device, uint8_t function, uint8_t reg)
-{
-    uint32_t address = 0x80000000u |
-                       ((uint32_t)bus << 16) |
-                       ((uint32_t)device << 11) |
-                       ((uint32_t)function << 8) |
-                       ((uint32_t)reg & 0xFCu);
+static uint32_t pci_config_read32(uint8_t bus, uint8_t device, uint8_t function, uint8_t reg) {
+    uint32_t address = 0x80000000u | ((uint32_t)bus << 16) | ((uint32_t)device << 11) |
+                       ((uint32_t)function << 8) | ((uint32_t)reg & 0xFCu);
     (void)wasmos_io_out32(PCI_CFG_ADDR_PORT, (int32_t)address);
     return (uint32_t)wasmos_io_in32(PCI_CFG_DATA_PORT);
 }
@@ -50,46 +38,28 @@ pci_config_read32(uint8_t bus, uint8_t device, uint8_t function, uint8_t reg)
  *   arg1 = (subclass<<24) | (prog_if<<16) | vendor_id
  *   arg2 = (io_port_base<<16) | device_id
  *   arg3 = (io_port_base<<16) | (irq_hint<<8) | mmio_hint */
-static void
-publish_record(int32_t devmgr_endpoint,
-               int32_t source_endpoint,
-               const pci_device_record_t *rec,
-               int32_t request_id)
-{
+static void publish_record(int32_t devmgr_endpoint, int32_t source_endpoint,
+                           const pci_device_record_t* rec, int32_t request_id) {
     if (!rec) {
         return;
     }
-    uint32_t arg0 = ((uint32_t)rec->bus << 24) |
-                    ((uint32_t)rec->device << 16) |
-                    ((uint32_t)rec->function << 8) |
-                    (uint32_t)rec->class_code;
-    uint32_t arg1 = ((uint32_t)rec->subclass << 24) |
-                    ((uint32_t)rec->prog_if << 16) |
-                    (uint32_t)rec->vendor_id;
+    uint32_t arg0 = ((uint32_t)rec->bus << 24) | ((uint32_t)rec->device << 16) |
+                    ((uint32_t)rec->function << 8) | (uint32_t)rec->class_code;
+    uint32_t arg1 =
+        ((uint32_t)rec->subclass << 24) | ((uint32_t)rec->prog_if << 16) | (uint32_t)rec->vendor_id;
     uint32_t arg2 = ((uint32_t)rec->io_port_base << 16) | (uint32_t)rec->device_id;
-    uint32_t arg3 = ((uint32_t)rec->io_port_base << 16) |
-                    ((uint32_t)rec->irq_hint << 8) |
+    uint32_t arg3 = ((uint32_t)rec->io_port_base << 16) | ((uint32_t)rec->irq_hint << 8) |
                     (uint32_t)rec->mmio_hint;
-    (void)wasmos_ipc_send(devmgr_endpoint,
-                          source_endpoint,
-                          DEVMGR_PUBLISH_DEVICE,
-                          request_id,
-                          (int32_t)arg0,
-                          (int32_t)arg1,
-                          (int32_t)arg2,
-                          (int32_t)arg3);
+    (void)wasmos_ipc_send(devmgr_endpoint, source_endpoint, DEVMGR_PUBLISH_DEVICE, request_id,
+                          (int32_t)arg0, (int32_t)arg1, (int32_t)arg2, (int32_t)arg3);
 }
 
 /* Service entry point.  Looks up "devmgr.inv", performs a brute-force PCI
  * scan (buses 0-255, devices 0-31, functions 0-7), publishes each present
  * function, then sends DEVMGR_PCI_SCAN_DONE and calls wasmos_sys_notify_ready.
  * Stops scanning functions for single-function devices (header type bit 7 = 0). */
-WASMOS_WASM_EXPORT int32_t
-initialize(int32_t proc_endpoint,
-           int32_t ignored_arg1,
-           int32_t ignored_arg2,
-           int32_t ignored_arg3)
-{
+WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t ignored_arg1,
+                                      int32_t ignored_arg2, int32_t ignored_arg3) {
     /* proc.endpoint now comes from the spawn-info contract, not an entry arg. */
     proc_endpoint = wasmos_startup_proc_endpoint();
     (void)ignored_arg1;
@@ -103,11 +73,8 @@ initialize(int32_t proc_endpoint,
     if (source_endpoint < 0) {
         return -1;
     }
-    int32_t devmgr_endpoint = wasmos_sys_svc_lookup_retry(proc_endpoint,
-                                                          source_endpoint,
-                                                          "devmgr.inv",
-                                                          1,
-                                                          1024);
+    int32_t devmgr_endpoint =
+        wasmos_sys_svc_lookup_retry(proc_endpoint, source_endpoint, "devmgr.inv", 1, 1024);
     if (devmgr_endpoint == -1) {
         return -1;
     }
@@ -145,14 +112,10 @@ initialize(int32_t proc_endpoint,
                 uint8_t irq_pin = (uint8_t)((irq_reg >> 8) & 0xFFu);
                 if (irq_pin != 0u && rec.irq_hint != 0u && rec.irq_hint < 16u) {
                     (void)wasmos_irq_configure((int32_t)rec.irq_hint,
-                                               WASMOS_IRQ_TRIGGER_LEVEL |
-                                               WASMOS_IRQ_POLARITY_LOW);
+                                               WASMOS_IRQ_TRIGGER_LEVEL | WASMOS_IRQ_POLARITY_LOW);
                 }
                 log_record(&rec);
-                publish_record(devmgr_endpoint,
-                               source_endpoint,
-                               &rec,
-                               request_id++);
+                publish_record(devmgr_endpoint, source_endpoint, &rec, request_id++);
                 uint32_t header_reg = pci_config_read32((uint8_t)bus, device, 0, 0x0C);
                 if (function == 0 && (((header_reg >> 16) & 0x80u) == 0)) {
                     break;
@@ -161,14 +124,8 @@ initialize(int32_t proc_endpoint,
         }
     }
 
-    (void)wasmos_ipc_send(devmgr_endpoint,
-                          source_endpoint,
-                          DEVMGR_PCI_SCAN_DONE,
-                          request_id,
-                          0,
-                          0,
-                          0,
-                          0);
+    (void)wasmos_ipc_send(devmgr_endpoint, source_endpoint, DEVMGR_PCI_SCAN_DONE, request_id, 0, 0,
+                          0, 0);
     wasmos_sys_notify_ready(proc_endpoint, source_endpoint);
     return 0;
 }

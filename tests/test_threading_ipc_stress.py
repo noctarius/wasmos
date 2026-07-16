@@ -39,7 +39,9 @@ class ThreadingIpcStressTests(unittest.TestCase):
         # (setUpClass waits for the CLI prompt).
         ok = b"[test] threading ipc stress ok" in self.session.buf
         if not ok:
-            self.fail(f"Threading IPC stress marker not found.\n--- tail ---\n{self.session.tail()}\n")
+            self.fail(
+                f"Threading IPC stress marker not found.\n--- tail ---\n{self.session.tail()}\n"
+            )
 
 
 if __name__ == "__main__":

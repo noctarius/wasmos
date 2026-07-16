@@ -33,19 +33,9 @@
 #define IPC_ERR_FULL (-3)
 #define FAT_STREAM_SEND_RETRIES 8192
 
-typedef enum {
-    FAT_BOOT_INIT = 0,
-    FAT_BOOT_WAIT,
-    FAT_BOOT_READY,
-    FAT_BOOT_FAILED
-} fat_boot_phase_t;
+typedef enum { FAT_BOOT_INIT = 0, FAT_BOOT_WAIT, FAT_BOOT_READY, FAT_BOOT_FAILED } fat_boot_phase_t;
 
-typedef enum {
-    FAT_TYPE_UNKNOWN = 0,
-    FAT_TYPE_12,
-    FAT_TYPE_16,
-    FAT_TYPE_32
-} fat_type_t;
+typedef enum { FAT_TYPE_UNKNOWN = 0, FAT_TYPE_12, FAT_TYPE_16, FAT_TYPE_32 } fat_type_t;
 
 typedef enum {
     FAT_OP_NONE = 0,
@@ -57,10 +47,7 @@ typedef enum {
     FAT_OP_READ_APP
 } fat_op_t;
 
-typedef enum {
-    FAT_CAT_SCAN = 0,
-    FAT_CAT_FILE
-} fat_cat_stage_t;
+typedef enum { FAT_CAT_SCAN = 0, FAT_CAT_FILE } fat_cat_stage_t;
 
 typedef enum {
     FAT_READ_FIND_APPS = 0,
@@ -71,9 +58,7 @@ typedef enum {
     FAT_READ_FILE
 } fat_read_stage_t;
 
-typedef enum {
-    VFS_MOUNT_BOOT = 0
-} vfs_mount_t;
+typedef enum { VFS_MOUNT_BOOT = 0 } vfs_mount_t;
 
 static int32_t g_block_endpoint = -1;
 static int32_t g_fs_endpoint = -1;
@@ -93,7 +78,7 @@ static uint8_t g_sector_buf_storage[FAT_MAX_SECTOR_BYTES];
  * them by phys and we read/write them here with no staging copy.  All uses are
  * array-decay (indexing, pointer arithmetic, casts), so a pointer is a drop-in
  * for the former array. */
-static uint8_t *g_sector_buf = g_sector_buf_storage;
+static uint8_t* g_sector_buf = g_sector_buf_storage;
 static int g_block_buf_mapped = 0;
 
 static fat_boot_phase_t g_boot_phase = FAT_BOOT_INIT;
@@ -192,68 +177,52 @@ typedef struct {
 
 static fat_open_file_t g_open_files[FAT_MAX_OPEN_FILES];
 
-static int vfs_translate_path(const char *in, char *out, uint32_t out_len, uint8_t *out_is_init);
+static int vfs_translate_path(const char* in, char* out, uint32_t out_len, uint8_t* out_is_init);
 
 static void fat_lfn_reset(void);
 static void fat_lfn_finalize(void);
-static void fat_lfn_collect(const uint8_t *ent);
-static int fat_name_eq(const char *a, const char *b);
+static void fat_lfn_collect(const uint8_t* ent);
+static int fat_name_eq(const char* a, const char* b);
 static uint32_t fat_first_data_lba(void);
 static uint32_t fat_lba_for_cluster(uint16_t cluster);
-static int fat_next_cluster(uint16_t cluster, uint16_t *out_next);
+static int fat_next_cluster(uint16_t cluster, uint16_t* out_next);
 static uint32_t fat_cluster_chain_capacity(uint16_t first_cluster);
-static int fat_open_file_access_mode(const fat_open_file_t *file);
-static int fat_set_open_file_offset(fat_open_file_t *file, uint32_t offset, uint32_t limit);
-static int fat_reposition_open_file(fat_open_file_t *file, uint32_t offset);
+static int fat_open_file_access_mode(const fat_open_file_t* file);
+static int fat_set_open_file_offset(fat_open_file_t* file, uint32_t offset, uint32_t limit);
+static int fat_reposition_open_file(fat_open_file_t* file, uint32_t offset);
 static int fat_sync_block_write(uint32_t lba);
-static int fat_store_open_file_size(fat_open_file_t *file, uint32_t size);
-static int fat_store_open_file_cluster(fat_open_file_t *file, uint16_t cluster);
-static int fat_resolve_parent_dir(const char *path,
-                                  uint32_t *out_dir_lba,
-                                  uint32_t *out_dir_sectors,
-                                  uint8_t *out_root,
-                                  char *out_name,
+static int fat_store_open_file_size(fat_open_file_t* file, uint32_t size);
+static int fat_store_open_file_cluster(fat_open_file_t* file, uint16_t cluster);
+static int fat_resolve_parent_dir(const char* path, uint32_t* out_dir_lba,
+                                  uint32_t* out_dir_sectors, uint8_t* out_root, char* out_name,
                                   uint32_t out_name_len);
-static int fat_validate_lfn_name(const char *name, uint32_t *out_len);
-static int fat_encode_short_name(const char *name, uint8_t out[11]);
+static int fat_validate_lfn_name(const char* name, uint32_t* out_len);
+static int fat_encode_short_name(const char* name, uint8_t out[11]);
 static uint8_t fat_short_name_checksum(const uint8_t short_name[11]);
-static int fat_build_short_alias(const char *name, uint32_t ordinal, uint8_t out[11]);
-static int fat_short_name_exists_in_dir(uint32_t dir_lba,
-                                        uint32_t dir_sectors,
-                                        uint32_t entry_limit,
-                                        const uint8_t short_name[11]);
-static int fat_find_free_dir_slots(uint32_t dir_lba,
-                                   uint32_t dir_sectors,
-                                   uint32_t entry_limit,
-                                   uint32_t needed,
-                                   uint32_t *out_entry);
+static int fat_build_short_alias(const char* name, uint32_t ordinal, uint8_t out[11]);
+static int fat_short_name_exists_in_dir(uint32_t dir_lba, uint32_t dir_sectors,
+                                        uint32_t entry_limit, const uint8_t short_name[11]);
+static int fat_find_free_dir_slots(uint32_t dir_lba, uint32_t dir_sectors, uint32_t entry_limit,
+                                   uint32_t needed, uint32_t* out_entry);
 static int fat_write_dir_entry(uint32_t dir_lba, uint32_t entry_index, const uint8_t entry[32]);
-static void fat_fill_lfn_entry(uint8_t *entry,
-                               const char *name,
-                               uint32_t name_len,
-                               uint32_t ordinal,
-                               uint32_t total,
-                               uint8_t checksum);
-static int fat_create_path_entry(const char *path,
-                                 uint8_t attr,
-                                 uint16_t cluster,
-                                 uint32_t size,
-                                 uint8_t fail_if_exists,
-                                 fat_dir_entry_info_t *out);
-static int fat_create_empty_file(const char *path, fat_dir_entry_info_t *out);
-static int fat_create_directory(const char *path);
+static void fat_fill_lfn_entry(uint8_t* entry, const char* name, uint32_t name_len,
+                               uint32_t ordinal, uint32_t total, uint8_t checksum);
+static int fat_create_path_entry(const char* path, uint8_t attr, uint16_t cluster, uint32_t size,
+                                 uint8_t fail_if_exists, fat_dir_entry_info_t* out);
+static int fat_create_empty_file(const char* path, fat_dir_entry_info_t* out);
+static int fat_create_directory(const char* path);
 static int fat_free_cluster_chain(uint16_t first_cluster);
-static int fat_entry_is_open(const fat_dir_entry_info_t *entry);
+static int fat_entry_is_open(const fat_dir_entry_info_t* entry);
 static int fat_delete_dir_entry_chain(uint32_t dir_lba, uint32_t entry_index);
-static int fat_unlink_path(const char *path);
-static int fat_rmdir_path(const char *path);
-static int fat_read_fat_entry(uint16_t cluster, uint16_t *out_value);
+static int fat_unlink_path(const char* path);
+static int fat_rmdir_path(const char* path);
+static int fat_read_fat_entry(uint16_t cluster, uint16_t* out_value);
 static int fat_write_fat_entry(uint16_t cluster, uint16_t value);
-static int fat_find_free_cluster(uint16_t *out_cluster);
+static int fat_find_free_cluster(uint16_t* out_cluster);
 static uint16_t fat_end_of_chain_marker(void);
-static int fat_last_cluster_in_chain(uint16_t first_cluster, uint16_t *out_cluster);
-static int fat_append_cluster_to_file(fat_open_file_t *file);
-static int fat_ensure_open_file_capacity(fat_open_file_t *file, uint32_t min_size);
+static int fat_last_cluster_in_chain(uint16_t first_cluster, uint16_t* out_cluster);
+static int fat_append_cluster_to_file(fat_open_file_t* file);
+static int fat_ensure_open_file_capacity(fat_open_file_t* file, uint32_t min_size);
 
 typedef struct {
     uint8_t in_use;
@@ -297,29 +266,20 @@ typedef struct {
     uint32_t sectors;
 } fat_mbr_entry_t;
 
-static int32_t
-str_len(const char *s)
-{
+static int32_t str_len(const char* s) {
     return (int32_t)strlen(s);
 }
 
-static char
-to_upper(char c)
-{
+static char to_upper(char c) {
     return (char)toupper((unsigned char)c);
 }
 
-static void
-console_write(const char *s)
-{
+static void console_write(const char* s) {
     int32_t len = str_len(s);
     if (len <= 0) {
         return;
     }
-    if (g_fs_req.in_use &&
-        g_fs_req.source >= 0 &&
-        g_fs_req.request_id != 0 &&
-        g_fs_endpoint >= 0 &&
+    if (g_fs_req.in_use && g_fs_req.source >= 0 && g_fs_req.request_id != 0 && g_fs_endpoint >= 0 &&
         (g_fs_req.type == FS_IPC_READDIR_REQ)) {
         uint32_t pos = 0;
         while (pos < (uint32_t)len) {
@@ -339,14 +299,8 @@ console_write(const char *s)
             }
             uint32_t tries = 0;
             for (;;) {
-                int32_t rc = wasmos_ipc_send(g_fs_req.source,
-                                             g_fs_endpoint,
-                                             FS_IPC_STREAM,
-                                             g_fs_req.request_id,
-                                             a0,
-                                             a1,
-                                             a2,
-                                             a3);
+                int32_t rc = wasmos_ipc_send(g_fs_req.source, g_fs_endpoint, FS_IPC_STREAM,
+                                             g_fs_req.request_id, a0, a1, a2, a3);
                 if (rc == 0) {
                     break;
                 }
@@ -362,16 +316,12 @@ console_write(const char *s)
     wasmos_console_write((int32_t)(uintptr_t)s, len);
 }
 
-static void
-fat_log(const char *msg)
-{
+static void fat_log(const char* msg) {
     console_write("[fat] ");
     console_write(msg);
 }
 
-static const char *
-fat_find_token_value(const char *args, const char *key)
-{
+static const char* fat_find_token_value(const char* args, const char* key) {
     uint32_t i = 0;
     uint32_t key_len = 0;
     if (!args || !key || key[0] == '\0') {
@@ -400,12 +350,10 @@ fat_find_token_value(const char *args, const char *key)
     }
 }
 
-static int32_t
-fat_parse_requested_unit(void)
-{
+static int32_t fat_parse_requested_unit(void) {
     char args[64];
-    char *end = 0;
-    const char *unit = 0;
+    char* end = 0;
+    const char* unit = 0;
     long value = 0;
     if (wasmos_startup_args(args, sizeof(args)) == 0u) {
         return -1;
@@ -423,23 +371,17 @@ fat_parse_requested_unit(void)
 
 /* Answer an fs-manager FSMGR_IPC_BACKEND_INFO_REQ pull: borrow the mount-name
  * buffer READ to the requester and reply kind=BOOT, mount buffer, unit. */
-static void
-fat_report_backend_info(int32_t dst, int32_t request_id)
-{
+static void fat_report_backend_info(int32_t dst, int32_t request_id) {
     int32_t mount_arg = 0;
     if (g_mount_bid >= 0 && g_mount_len > 0 &&
         wasmos_xfer_buffer_borrow(dst, g_mount_bid, WASMOS_BUFFER_GRANT_READ) >= 0) {
-        mount_arg = (int32_t)(((uint32_t)g_mount_bid << 12) |
-                              ((uint32_t)g_mount_len & 0xFFFu));
+        mount_arg = (int32_t)(((uint32_t)g_mount_bid << 12) | ((uint32_t)g_mount_len & 0xFFFu));
     }
-    (void)wasmos_ipc_send(dst, g_fs_endpoint, FSMGR_IPC_BACKEND_INFO_RESP,
-                          request_id, FSMGR_BACKEND_BOOT, 0, mount_arg,
-                          (int32_t)g_mount_unit);
+    (void)wasmos_ipc_send(dst, g_fs_endpoint, FSMGR_IPC_BACKEND_INFO_RESP, request_id,
+                          FSMGR_BACKEND_BOOT, 0, mount_arg, (int32_t)g_mount_unit);
 }
 
-static void
-fat_stall(void)
-{
+static void fat_stall(void) {
     int32_t endpoint = wasmos_ipc_create_endpoint();
     for (;;) {
         if (endpoint >= 0) {
@@ -448,9 +390,7 @@ fat_stall(void)
     }
 }
 
-static int
-fat_send_block_read(uint32_t lba, uint32_t count)
-{
+static int fat_send_block_read(uint32_t lba, uint32_t count) {
     /* Block reads are asynchronous at the protocol level even though the driver
      * currently processes one filesystem operation at a time. */
     if (g_block_endpoint == -1 || g_reply_endpoint < 0 || g_block_buf_phys < 0) {
@@ -463,23 +403,15 @@ fat_send_block_read(uint32_t lba, uint32_t count)
     g_wait_copy_into_sector = 1;
     g_waiting = 1;
 
-    if (wasmos_ipc_send(g_block_endpoint,
-                        g_reply_endpoint,
-                        BLOCK_IPC_READ_REQ,
-                        g_wait_req_id,
-                        g_block_buf_phys,
-                        (int32_t)lba,
-                        (int32_t)count,
-                        0) != 0) {
+    if (wasmos_ipc_send(g_block_endpoint, g_reply_endpoint, BLOCK_IPC_READ_REQ, g_wait_req_id,
+                        g_block_buf_phys, (int32_t)lba, (int32_t)count, 0) != 0) {
         g_waiting = 0;
         return -1;
     }
     return 0;
 }
 
-static int
-fat_send_block_write(uint32_t lba, uint32_t count)
-{
+static int fat_send_block_write(uint32_t lba, uint32_t count) {
     if (g_block_endpoint == -1 || g_reply_endpoint < 0 || g_block_buf_phys < 0) {
         return -1;
     }
@@ -490,23 +422,15 @@ fat_send_block_write(uint32_t lba, uint32_t count)
     g_wait_copy_into_sector = 0;
     g_waiting = 1;
 
-    if (wasmos_ipc_send(g_block_endpoint,
-                        g_reply_endpoint,
-                        BLOCK_IPC_WRITE_REQ,
-                        g_wait_req_id,
-                        g_block_buf_phys,
-                        (int32_t)lba,
-                        (int32_t)count,
-                        0) != 0) {
+    if (wasmos_ipc_send(g_block_endpoint, g_reply_endpoint, BLOCK_IPC_WRITE_REQ, g_wait_req_id,
+                        g_block_buf_phys, (int32_t)lba, (int32_t)count, 0) != 0) {
         g_waiting = 0;
         return -1;
     }
     return 0;
 }
 
-static int
-fat_poll_block_io(void)
-{
+static int fat_poll_block_io(void) {
     if (!g_waiting) {
         return 0;
     }
@@ -548,10 +472,8 @@ fat_poll_block_io(void)
         /* When the buffer is mapped, g_sector_buf already aliases the pages the
          * block server just filled; the staging copy is only needed otherwise. */
         if (!g_block_buf_mapped &&
-            wasmos_block_buffer_copy(g_block_buf_phys,
-                                     (int32_t)(uintptr_t)g_sector_buf,
-                                     (int32_t)bytes,
-                                     0) != 0) {
+            wasmos_block_buffer_copy(g_block_buf_phys, (int32_t)(uintptr_t)g_sector_buf,
+                                     (int32_t)bytes, 0) != 0) {
             g_waiting = 0;
             fat_log("block copy failed\n");
             return -1;
@@ -561,21 +483,17 @@ fat_poll_block_io(void)
     return 0;
 }
 
-static int
-fat_poll_block_read(void)
-{
+static int fat_poll_block_read(void) {
     return fat_poll_block_io();
 }
 
-static int
-fat_try_parse_mbr(uint32_t *out_lba)
-{
+static int fat_try_parse_mbr(uint32_t* out_lba) {
     uint16_t sig = (uint16_t)g_sector_buf[510] | ((uint16_t)g_sector_buf[511] << 8);
     if (sig != 0xAA55) {
         return -1;
     }
 
-    fat_mbr_entry_t *entries = (fat_mbr_entry_t *)(uintptr_t)(g_sector_buf + 446);
+    fat_mbr_entry_t* entries = (fat_mbr_entry_t*)(uintptr_t)(g_sector_buf + 446);
     for (uint32_t i = 0; i < 4; ++i) {
         uint8_t type = entries[i].type;
         if (type == 0x00) {
@@ -585,8 +503,8 @@ fat_try_parse_mbr(uint32_t *out_lba)
             fat_log("GPT detected (unsupported)\n");
             return -1;
         }
-        if (type == 0x01 || type == 0x04 || type == 0x06 ||
-            type == 0x0B || type == 0x0C || type == 0x0E) {
+        if (type == 0x01 || type == 0x04 || type == 0x06 || type == 0x0B || type == 0x0C ||
+            type == 0x0E) {
             *out_lba = entries[i].lba_start;
             return 0;
         }
@@ -594,15 +512,12 @@ fat_try_parse_mbr(uint32_t *out_lba)
     return -1;
 }
 
-static int
-fat_parse_boot(void)
-{
-    fat_bpb_t *bpb = (fat_bpb_t *)(uintptr_t)g_sector_buf;
+static int fat_parse_boot(void) {
+    fat_bpb_t* bpb = (fat_bpb_t*)(uintptr_t)g_sector_buf;
     uint16_t sig = (uint16_t)g_sector_buf[510] | ((uint16_t)g_sector_buf[511] << 8);
     uint32_t bytes_per_sector = bpb->bytes_per_sector;
-    if (sig != 0xAA55 ||
-        (bytes_per_sector != 512 && bytes_per_sector != 1024 &&
-         bytes_per_sector != 2048 && bytes_per_sector != 4096)) {
+    if (sig != 0xAA55 || (bytes_per_sector != 512 && bytes_per_sector != 1024 &&
+                          bytes_per_sector != 2048 && bytes_per_sector != 4096)) {
         fat_log("invalid bytes_per_sector\n");
         return -1;
     }
@@ -610,11 +525,13 @@ fat_parse_boot(void)
     uint32_t total_sectors = bpb->total_sectors_16 ? bpb->total_sectors_16 : bpb->total_sectors_32;
     uint32_t fat_size = bpb->fat_size_16;
     if (fat_size == 0) {
-        fat_size = ((uint32_t *)bpb->ext)[0];
+        fat_size = ((uint32_t*)bpb->ext)[0];
     }
 
-    uint32_t root_dir_sectors = ((bpb->root_entry_count * 32u) + (bytes_per_sector - 1u)) / bytes_per_sector;
-    uint32_t data_sectors = total_sectors - (bpb->reserved_sectors + (bpb->fat_count * fat_size) + root_dir_sectors);
+    uint32_t root_dir_sectors =
+        ((bpb->root_entry_count * 32u) + (bytes_per_sector - 1u)) / bytes_per_sector;
+    uint32_t data_sectors =
+        total_sectors - (bpb->reserved_sectors + (bpb->fat_count * fat_size) + root_dir_sectors);
     uint32_t cluster_count = data_sectors / bpb->sectors_per_cluster;
 
     g_bytes_per_sector = (uint16_t)bytes_per_sector;
@@ -658,9 +575,7 @@ fat_parse_boot(void)
  *
  * Called from the IPC dispatch loop before every filesystem operation so that
  * all ops naturally wait for the async block I/O without a dedicated thread. */
-static int
-fat_ensure_ready(void)
-{
+static int fat_ensure_ready(void) {
     for (;;) {
         if (g_boot_phase == FAT_BOOT_READY) {
             return 0;
@@ -689,7 +604,8 @@ fat_ensure_ready(void)
             }
 
             uint16_t sig = (uint16_t)g_sector_buf[510] | ((uint16_t)g_sector_buf[511] << 8);
-            uint16_t bytes_per_sector = (uint16_t)g_sector_buf[11] | ((uint16_t)g_sector_buf[12] << 8);
+            uint16_t bytes_per_sector =
+                (uint16_t)g_sector_buf[11] | ((uint16_t)g_sector_buf[12] << 8);
             if (sig != 0xAA55 || bytes_per_sector == 0) {
                 /* LBA 0 is an MBR, not a BPB.  Try to extract the first
                  * FAT partition offset from the MBR partition table. */
@@ -721,10 +637,9 @@ fat_ensure_ready(void)
     }
 }
 
-static void
-fat_unpack_name(uint32_t arg0, uint32_t arg1, uint32_t arg2, uint32_t arg3, char *out, uint32_t out_len)
-{
-    uint32_t args[4] = { arg0, arg1, arg2, arg3 };
+static void fat_unpack_name(uint32_t arg0, uint32_t arg1, uint32_t arg2, uint32_t arg3, char* out,
+                            uint32_t out_len) {
+    uint32_t args[4] = {arg0, arg1, arg2, arg3};
     uint32_t pos = 0;
     for (uint32_t i = 0; i < 4 && pos + 1 < out_len; ++i) {
         uint32_t v = args[i];
@@ -741,9 +656,8 @@ fat_unpack_name(uint32_t arg0, uint32_t arg1, uint32_t arg2, uint32_t arg3, char
     out[pos] = '\0';
 }
 
-static int
-fat_resolve_mount_alias(int32_t proc_endpoint, char *out_mount, uint32_t out_mount_len, uint8_t *out_unit)
-{
+static int fat_resolve_mount_alias(int32_t proc_endpoint, char* out_mount, uint32_t out_mount_len,
+                                   uint8_t* out_unit) {
     int32_t devmgr_endpoint = -1;
     int32_t req_id = 41;
     int32_t unit = 0;
@@ -753,14 +667,8 @@ fat_resolve_mount_alias(int32_t proc_endpoint, char *out_mount, uint32_t out_mou
     }
     out_mount[0] = '\0';
     *out_unit = 0;
-    if (wasmos_ipc_send(g_block_endpoint,
-                        g_reply_endpoint,
-                        BLOCK_IPC_IDENTIFY_REQ,
-                        req_id,
-                        g_requested_unit,
-                        0,
-                        0,
-                        0) != 0 ||
+    if (wasmos_ipc_send(g_block_endpoint, g_reply_endpoint, BLOCK_IPC_IDENTIFY_REQ, req_id,
+                        g_requested_unit, 0, 0, 0) != 0 ||
         wasmos_ipc_select_one(g_reply_endpoint) < 0) {
         return -1;
     }
@@ -777,14 +685,8 @@ fat_resolve_mount_alias(int32_t proc_endpoint, char *out_mount, uint32_t out_mou
         return -1;
     }
     req_id++;
-    if (wasmos_ipc_send(devmgr_endpoint,
-                        g_reply_endpoint,
-                        DEVMGR_QUERY_BLOCK_MOUNT_REQ,
-                        req_id,
-                        unit,
-                        0,
-                        0,
-                        0) != 0 ||
+    if (wasmos_ipc_send(devmgr_endpoint, g_reply_endpoint, DEVMGR_QUERY_BLOCK_MOUNT_REQ, req_id,
+                        unit, 0, 0, 0) != 0 ||
         wasmos_ipc_select_one(g_reply_endpoint) < 0) {
         return -1;
     }
@@ -802,9 +704,7 @@ fat_resolve_mount_alias(int32_t proc_endpoint, char *out_mount, uint32_t out_mou
     return out_mount[0] ? 0 : -1;
 }
 
-static int
-vfs_translate_path(const char *in, char *out, uint32_t out_len, uint8_t *out_is_init)
-{
+static int vfs_translate_path(const char* in, char* out, uint32_t out_len, uint8_t* out_is_init) {
     if (!in || !out || out_len < 2 || !out_is_init) {
         return -1;
     }
@@ -827,9 +727,7 @@ vfs_translate_path(const char *in, char *out, uint32_t out_len, uint8_t *out_is_
     return in[i] == '\0' ? 0 : -1;
 }
 
-static void
-fat_write_name(const char *name, uint32_t len)
-{
+static void fat_write_name(const char* name, uint32_t len) {
     char buf[16];
     uint32_t out = 0;
     for (uint32_t i = 0; i < len && out + 1 < sizeof(buf); ++i) {
@@ -839,9 +737,7 @@ fat_write_name(const char *name, uint32_t len)
     console_write(buf);
 }
 
-static void
-fat_write_full(const char *name)
-{
+static void fat_write_full(const char* name) {
     char buf[64];
     uint32_t pos = 0;
     if (!name) {
@@ -861,9 +757,7 @@ fat_write_full(const char *name)
     }
 }
 
-static uint32_t
-fat_str_len(const char *s)
-{
+static uint32_t fat_str_len(const char* s) {
     uint32_t len = 0;
     if (!s) {
         return 0;
@@ -874,25 +768,19 @@ fat_str_len(const char *s)
     return len;
 }
 
-static int
-fat_sync_block_read(uint32_t lba)
-{
+static int fat_sync_block_read(uint32_t lba) {
     if (fat_send_block_read(lba, 1) != 0) {
         return -1;
     }
     return fat_poll_block_read();
 }
 
-static int
-fat_sync_block_write(uint32_t lba)
-{
+static int fat_sync_block_write(uint32_t lba) {
     /* When mapped, we already wrote directly into the shared pages via
      * g_sector_buf; the block server reads them by phys, so no staging write. */
     if (!g_block_buf_mapped &&
-        wasmos_block_buffer_write(g_block_buf_phys,
-                                  (int32_t)(uintptr_t)g_sector_buf,
-                                  FAT_SECTOR_SIZE,
-                                  0) != 0) {
+        wasmos_block_buffer_write(g_block_buf_phys, (int32_t)(uintptr_t)g_sector_buf,
+                                  FAT_SECTOR_SIZE, 0) != 0) {
         return -1;
     }
     if (fat_send_block_write(lba, 1) != 0) {
@@ -901,9 +789,7 @@ fat_sync_block_write(uint32_t lba)
     return fat_poll_block_io();
 }
 
-static int
-fat_entry_name_from_dirent(const uint8_t *ent, char *out, uint32_t out_len)
-{
+static int fat_entry_name_from_dirent(const uint8_t* ent, char* out, uint32_t out_len) {
     uint32_t pos = 0;
 
     if (!ent || !out || out_len == 0) {
@@ -937,22 +823,15 @@ fat_entry_name_from_dirent(const uint8_t *ent, char *out, uint32_t out_len)
     return 0;
 }
 
-static uint32_t
-fat_dir_entry_limit(uint8_t root, uint32_t dir_sectors)
-{
+static uint32_t fat_dir_entry_limit(uint8_t root, uint32_t dir_sectors) {
     if (root) {
         return g_root_entry_count;
     }
     return (dir_sectors * g_bytes_per_sector) / 32u;
 }
 
-static int
-fat_find_in_dir(uint32_t dir_lba,
-                uint32_t dir_sectors,
-                uint32_t entry_limit,
-                const char *target,
-                fat_dir_entry_info_t *out)
-{
+static int fat_find_in_dir(uint32_t dir_lba, uint32_t dir_sectors, uint32_t entry_limit,
+                           const char* target, fat_dir_entry_info_t* out) {
     uint32_t entries_left = entry_limit;
 
     if (!target || !out) {
@@ -962,7 +841,8 @@ fat_find_in_dir(uint32_t dir_lba,
     fat_lfn_reset();
     for (uint32_t sector = 0; sector < dir_sectors && entries_left > 0; ++sector) {
         uint32_t entries_per_sector = g_bytes_per_sector / 32u;
-        uint32_t entries_total = entries_left < entries_per_sector ? entries_left : entries_per_sector;
+        uint32_t entries_total =
+            entries_left < entries_per_sector ? entries_left : entries_per_sector;
 
         if (fat_sync_block_read(dir_lba + sector) != 0) {
             fat_lfn_reset();
@@ -970,7 +850,7 @@ fat_find_in_dir(uint32_t dir_lba,
         }
 
         for (uint32_t i = 0; i < entries_total; ++i) {
-            uint8_t *ent = g_sector_buf + i * 32u;
+            uint8_t* ent = g_sector_buf + i * 32u;
             char entry_name[FAT_LFN_MAX + 1u];
 
             if (ent[0] == 0x00) {
@@ -999,9 +879,7 @@ fat_find_in_dir(uint32_t dir_lba,
             out->valid = 1;
             out->attr = ent[11];
             out->cluster = (uint16_t)ent[26] | ((uint16_t)ent[27] << 8);
-            out->size = (uint32_t)ent[28] |
-                        ((uint32_t)ent[29] << 8) |
-                        ((uint32_t)ent[30] << 16) |
+            out->size = (uint32_t)ent[28] | ((uint32_t)ent[29] << 8) | ((uint32_t)ent[30] << 16) |
                         ((uint32_t)ent[31] << 24);
             out->dir_lba = dir_lba;
             out->dir_sector = sector;
@@ -1017,9 +895,8 @@ fat_find_in_dir(uint32_t dir_lba,
     return -1;
 }
 
-static int
-fat_path_next_component(const char *path, uint32_t *pos, char *component, uint32_t component_len)
-{
+static int fat_path_next_component(const char* path, uint32_t* pos, char* component,
+                                   uint32_t component_len) {
     uint32_t out = 0;
 
     if (!path || !pos || !component || component_len < 2) {
@@ -1045,18 +922,14 @@ fat_path_next_component(const char *path, uint32_t *pos, char *component, uint32
     return 1;
 }
 
-static int
-fat_path_has_more(const char *path, uint32_t pos)
-{
+static int fat_path_has_more(const char* path, uint32_t pos) {
     while (path[pos] == '/') {
         pos++;
     }
     return path[pos] != '\0';
 }
 
-static int
-fat_resolve_path(const char *path, fat_dir_entry_info_t *out)
-{
+static int fat_resolve_path(const char* path, fat_dir_entry_info_t* out) {
     uint8_t current_root = 1;
     uint32_t current_lba = g_root_dir_lba;
     uint32_t current_sectors = g_root_dir_sectors;
@@ -1066,7 +939,8 @@ fat_resolve_path(const char *path, fat_dir_entry_info_t *out)
         return -1;
     }
 
-    if (path[0] != '\0' && path[0] != '/' && g_fs_req.source == g_cwd_source && !g_cwd_root && g_dir_lba != 0) {
+    if (path[0] != '\0' && path[0] != '/' && g_fs_req.source == g_cwd_source && !g_cwd_root &&
+        g_dir_lba != 0) {
         current_root = 0;
         current_lba = g_dir_lba;
         current_sectors = g_dir_sectors;
@@ -1074,7 +948,7 @@ fat_resolve_path(const char *path, fat_dir_entry_info_t *out)
 
     for (;;) {
         char component[FAT_MAX_PATH];
-        fat_dir_entry_info_t entry = { 0 };
+        fat_dir_entry_info_t entry = {0};
         int rc = fat_path_next_component(path, &pos, component, sizeof(component));
         if (rc <= 0) {
             return -1;
@@ -1094,10 +968,8 @@ fat_resolve_path(const char *path, fat_dir_entry_info_t *out)
             }
             continue;
         }
-        if (fat_find_in_dir(current_lba,
-                            current_sectors,
-                            fat_dir_entry_limit(current_root, current_sectors),
-                            component,
+        if (fat_find_in_dir(current_lba, current_sectors,
+                            fat_dir_entry_limit(current_root, current_sectors), component,
                             &entry) != 0) {
             return -1;
         }
@@ -1117,9 +989,7 @@ fat_resolve_path(const char *path, fat_dir_entry_info_t *out)
     }
 }
 
-static fat_open_file_t *
-fat_open_file_for_fd(int32_t source, int32_t fd)
-{
+static fat_open_file_t* fat_open_file_for_fd(int32_t source, int32_t fd) {
     int32_t index = fd - 3;
 
     if (index < 0 || (uint32_t)index >= FAT_MAX_OPEN_FILES) {
@@ -1131,9 +1001,7 @@ fat_open_file_for_fd(int32_t source, int32_t fd)
     return &g_open_files[index];
 }
 
-static int
-fat_open_file_alloc(int32_t source, int32_t *out_fd)
-{
+static int fat_open_file_alloc(int32_t source, int32_t* out_fd) {
     for (uint32_t i = 0; i < FAT_MAX_OPEN_FILES; ++i) {
         if (!g_open_files[i].in_use) {
             g_open_files[i].in_use = 1;
@@ -1156,18 +1024,17 @@ fat_open_file_alloc(int32_t source, int32_t *out_fd)
     return -1;
 }
 
-static int
-fat_handle_open(void)
-{
+static int fat_handle_open(void) {
     char path[FAT_MAX_PATH];
     char fat_path[FAT_MAX_PATH];
-    fat_dir_entry_info_t entry = { 0 };
+    fat_dir_entry_info_t entry = {0};
     int32_t fd = -1;
     uint32_t path_len = (uint32_t)g_fs_req.arg0;
     int32_t access_mode = g_fs_req.arg1 & 1;
     uint8_t path_is_init = 0;
 
-    if ((g_fs_req.arg1 & ~((int32_t)FAT_OPEN_APPEND | (int32_t)FAT_OPEN_CREAT | (int32_t)FAT_OPEN_TRUNC | 1)) != 0 ||
+    if ((g_fs_req.arg1 & ~((int32_t)FAT_OPEN_APPEND | (int32_t)FAT_OPEN_CREAT |
+                           (int32_t)FAT_OPEN_TRUNC | 1)) != 0 ||
         path_len == 0 || path_len >= sizeof(path)) {
         return -1;
     }
@@ -1211,7 +1078,7 @@ fat_handle_open(void)
         return -1;
     }
 
-    fat_open_file_t *file = fat_open_file_for_fd(g_fs_req.source, fd);
+    fat_open_file_t* file = fat_open_file_for_fd(g_fs_req.source, fd);
     if (!file) {
         return -1;
     }
@@ -1248,10 +1115,8 @@ fat_handle_open(void)
     return 0;
 }
 
-static int
-fat_store_open_file_size(fat_open_file_t *file, uint32_t size)
-{
-    uint8_t *ent;
+static int fat_store_open_file_size(fat_open_file_t* file, uint32_t size) {
+    uint8_t* ent;
 
     if (!file || file->dir_lba == 0 || file->dir_index >= (g_bytes_per_sector / 32u)) {
         return -1;
@@ -1274,10 +1139,8 @@ fat_store_open_file_size(fat_open_file_t *file, uint32_t size)
     return 0;
 }
 
-static int
-fat_store_open_file_cluster(fat_open_file_t *file, uint16_t cluster)
-{
-    uint8_t *ent;
+static int fat_store_open_file_cluster(fat_open_file_t* file, uint16_t cluster) {
+    uint8_t* ent;
 
     if (!file || file->dir_lba == 0 || file->dir_index >= (g_bytes_per_sector / 32u)) {
         return -1;
@@ -1298,14 +1161,9 @@ fat_store_open_file_cluster(fat_open_file_t *file, uint16_t cluster)
     return 0;
 }
 
-static int
-fat_resolve_parent_dir(const char *path,
-                       uint32_t *out_dir_lba,
-                       uint32_t *out_dir_sectors,
-                       uint8_t *out_root,
-                       char *out_name,
-                       uint32_t out_name_len)
-{
+static int fat_resolve_parent_dir(const char* path, uint32_t* out_dir_lba,
+                                  uint32_t* out_dir_sectors, uint8_t* out_root, char* out_name,
+                                  uint32_t out_name_len) {
     uint8_t current_root = 1;
     uint32_t current_lba = g_root_dir_lba;
     uint32_t current_sectors = g_root_dir_sectors;
@@ -1318,7 +1176,8 @@ fat_resolve_parent_dir(const char *path,
         return -1;
     }
 
-    if (path[0] != '\0' && path[0] != '/' && g_fs_req.source == g_cwd_source && !g_cwd_root && g_dir_lba != 0) {
+    if (path[0] != '\0' && path[0] != '/' && g_fs_req.source == g_cwd_source && !g_cwd_root &&
+        g_dir_lba != 0) {
         current_root = 0;
         current_lba = g_dir_lba;
         current_sectors = g_dir_sectors;
@@ -1326,7 +1185,7 @@ fat_resolve_parent_dir(const char *path,
 
     for (;;) {
         char component[FAT_MAX_PATH];
-        fat_dir_entry_info_t entry = { 0 };
+        fat_dir_entry_info_t entry = {0};
         int rc = fat_path_next_component(path, &pos, component, sizeof(component));
         if (rc <= 0) {
             return -1;
@@ -1361,10 +1220,8 @@ fat_resolve_parent_dir(const char *path,
             *out_root = current_root;
             return 0;
         }
-        if (fat_find_in_dir(current_lba,
-                            current_sectors,
-                            fat_dir_entry_limit(current_root, current_sectors),
-                            component,
+        if (fat_find_in_dir(current_lba, current_sectors,
+                            fat_dir_entry_limit(current_root, current_sectors), component,
                             &entry) != 0) {
             return -1;
         }
@@ -1380,9 +1237,7 @@ fat_resolve_parent_dir(const char *path,
     }
 }
 
-static int
-fat_validate_lfn_name(const char *name, uint32_t *out_len)
-{
+static int fat_validate_lfn_name(const char* name, uint32_t* out_len) {
     uint32_t len = 0;
 
     if (!name || name[0] == '\0') {
@@ -1392,9 +1247,8 @@ fat_validate_lfn_name(const char *name, uint32_t *out_len)
         unsigned char c = (unsigned char)name[len];
         /* TODO: Extend new-file LFN creation beyond ASCII once the service
          * grows a real UTF-16 normalization and alias policy. */
-        if (c < 0x20 || c > 0x7Eu ||
-            c == '"' || c == '*' || c == '/' || c == ':' ||
-            c == '<' || c == '>' || c == '?' || c == '\\' || c == '|') {
+        if (c < 0x20 || c > 0x7Eu || c == '"' || c == '*' || c == '/' || c == ':' || c == '<' ||
+            c == '>' || c == '?' || c == '\\' || c == '|') {
             return -1;
         }
         len++;
@@ -1408,9 +1262,7 @@ fat_validate_lfn_name(const char *name, uint32_t *out_len)
     return 0;
 }
 
-static int
-fat_encode_short_name(const char *name, uint8_t out[11])
-{
+static int fat_encode_short_name(const char* name, uint8_t out[11]) {
     uint32_t base_len = 0;
     uint32_t ext_len = 0;
     uint32_t i = 0;
@@ -1427,9 +1279,7 @@ fat_encode_short_name(const char *name, uint8_t out[11])
                 return -1;
             }
             dot_pos = i;
-        } else if (!((c >= 'a' && c <= 'z') ||
-                     (c >= 'A' && c <= 'Z') ||
-                     (c >= '0' && c <= '9') ||
+        } else if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ||
                      c == '_' || c == '-')) {
             return -1;
         }
@@ -1459,9 +1309,7 @@ fat_encode_short_name(const char *name, uint8_t out[11])
     return 0;
 }
 
-static uint8_t
-fat_short_name_checksum(const uint8_t short_name[11])
-{
+static uint8_t fat_short_name_checksum(const uint8_t short_name[11]) {
     uint8_t sum = 0;
 
     for (uint32_t i = 0; i < 11; ++i) {
@@ -1470,9 +1318,7 @@ fat_short_name_checksum(const uint8_t short_name[11])
     return sum;
 }
 
-static int
-fat_build_short_alias(const char *name, uint32_t ordinal, uint8_t out[11])
-{
+static int fat_build_short_alias(const char* name, uint32_t ordinal, uint8_t out[11]) {
     char base[9];
     char ext[4];
     uint32_t base_len = 0;
@@ -1499,9 +1345,7 @@ fat_build_short_alias(const char *name, uint32_t ordinal, uint8_t out[11])
             if (c == ' ' || c == '.') {
                 continue;
             }
-            if (!((c >= 'a' && c <= 'z') ||
-                  (c >= 'A' && c <= 'Z') ||
-                  (c >= '0' && c <= '9') ||
+            if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ||
                   c == '_' || c == '-')) {
                 c = '_';
             }
@@ -1513,9 +1357,7 @@ fat_build_short_alias(const char *name, uint32_t ordinal, uint8_t out[11])
         if (c == ' ' || c == '.') {
             continue;
         }
-        if (!((c >= 'a' && c <= 'z') ||
-              (c >= 'A' && c <= 'Z') ||
-              (c >= '0' && c <= '9') ||
+        if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ||
               c == '_' || c == '-')) {
             c = '_';
         }
@@ -1540,23 +1382,20 @@ fat_build_short_alias(const char *name, uint32_t ordinal, uint8_t out[11])
     return 0;
 }
 
-static int
-fat_short_name_exists_in_dir(uint32_t dir_lba,
-                             uint32_t dir_sectors,
-                             uint32_t entry_limit,
-                             const uint8_t short_name[11])
-{
+static int fat_short_name_exists_in_dir(uint32_t dir_lba, uint32_t dir_sectors,
+                                        uint32_t entry_limit, const uint8_t short_name[11]) {
     uint32_t entries_left = entry_limit;
 
     for (uint32_t sector = 0; sector < dir_sectors && entries_left > 0; ++sector) {
         uint32_t entries_per_sector = g_bytes_per_sector / 32u;
-        uint32_t entries_total = entries_left < entries_per_sector ? entries_left : entries_per_sector;
+        uint32_t entries_total =
+            entries_left < entries_per_sector ? entries_left : entries_per_sector;
 
         if (fat_sync_block_read(dir_lba + sector) != 0) {
             return -1;
         }
         for (uint32_t i = 0; i < entries_total; ++i) {
-            uint8_t *ent = g_sector_buf + i * 32u;
+            uint8_t* ent = g_sector_buf + i * 32u;
             uint32_t matched = 1;
 
             if (ent[0] == 0x00) {
@@ -1581,13 +1420,8 @@ fat_short_name_exists_in_dir(uint32_t dir_lba,
     return 0;
 }
 
-static int
-fat_find_free_dir_slots(uint32_t dir_lba,
-                        uint32_t dir_sectors,
-                        uint32_t entry_limit,
-                        uint32_t needed,
-                        uint32_t *out_entry)
-{
+static int fat_find_free_dir_slots(uint32_t dir_lba, uint32_t dir_sectors, uint32_t entry_limit,
+                                   uint32_t needed, uint32_t* out_entry) {
     uint32_t run = 0;
     uint32_t run_start = 0;
 
@@ -1598,7 +1432,7 @@ fat_find_free_dir_slots(uint32_t dir_lba,
     for (uint32_t entry = 0; entry < entry_limit; ++entry) {
         uint32_t sector = entry / (g_bytes_per_sector / 32u);
         uint32_t index = entry % (g_bytes_per_sector / 32u);
-        uint8_t *ent;
+        uint8_t* ent;
 
         if (sector >= dir_sectors) {
             return -1;
@@ -1626,13 +1460,11 @@ fat_find_free_dir_slots(uint32_t dir_lba,
     return -1;
 }
 
-static int
-fat_write_dir_entry(uint32_t dir_lba, uint32_t entry_index, const uint8_t entry[32])
-{
+static int fat_write_dir_entry(uint32_t dir_lba, uint32_t entry_index, const uint8_t entry[32]) {
     uint32_t entries_per_sector = g_bytes_per_sector / 32u;
     uint32_t sector = entry_index / entries_per_sector;
     uint32_t index = entry_index % entries_per_sector;
-    uint8_t *ent;
+    uint8_t* ent;
 
     if (fat_sync_block_read(dir_lba + sector) != 0) {
         return -1;
@@ -1662,20 +1494,10 @@ fat_write_dir_entry(uint32_t dir_lba, uint32_t entry_index, const uint8_t entry[
  *
  * Characters after the name end are filled with 0x0000 (first unused slot)
  * and 0xFFFF (all remaining padding slots). */
-static void
-fat_fill_lfn_entry(uint8_t *entry,
-                   const char *name,
-                   uint32_t name_len,
-                   uint32_t ordinal,
-                   uint32_t total,
-                   uint8_t checksum)
-{
+static void fat_fill_lfn_entry(uint8_t* entry, const char* name, uint32_t name_len,
+                               uint32_t ordinal, uint32_t total, uint8_t checksum) {
     /* byte offsets of the low byte of each UTF-16LE character in the entry */
-    static const uint8_t positions[13] = {
-        1, 3, 5, 7, 9,
-        14, 16, 18, 20, 22, 24,
-        28, 30
-    };
+    static const uint8_t positions[13] = {1, 3, 5, 7, 9, 14, 16, 18, 20, 22, 24, 28, 30};
     uint32_t base = (ordinal - 1u) * 13u;
     uint32_t ended = 0;
 
@@ -1686,11 +1508,11 @@ fat_fill_lfn_entry(uint8_t *entry,
     if (ordinal == total) {
         entry[0] |= 0x40u; /* last/highest ordinal flag */
     }
-    entry[11] = 0x0Fu;  /* ATTR_LONG_NAME */
+    entry[11] = 0x0Fu; /* ATTR_LONG_NAME */
     entry[12] = 0x00u;
     entry[13] = checksum;
-    entry[26] = 0x00u;  /* cluster low (must be 0) */
-    entry[27] = 0x00u;  /* cluster high (must be 0) */
+    entry[26] = 0x00u; /* cluster low (must be 0) */
+    entry[27] = 0x00u; /* cluster high (must be 0) */
 
     for (uint32_t i = 0; i < 13; ++i) {
         uint16_t ch = 0xFFFFu; /* padding for unused slots beyond NUL */
@@ -1709,14 +1531,8 @@ fat_fill_lfn_entry(uint8_t *entry,
     }
 }
 
-static int
-fat_create_path_entry(const char *path,
-                      uint8_t attr,
-                      uint16_t cluster,
-                      uint32_t size,
-                      uint8_t fail_if_exists,
-                      fat_dir_entry_info_t *out)
-{
+static int fat_create_path_entry(const char* path, uint8_t attr, uint16_t cluster, uint32_t size,
+                                 uint8_t fail_if_exists, fat_dir_entry_info_t* out) {
     uint32_t dir_lba = 0;
     uint32_t dir_sectors = 0;
     uint32_t slot_entry = 0;
@@ -1739,11 +1555,9 @@ fat_create_path_entry(const char *path,
     if (fat_validate_lfn_name(name, &name_len) != 0) {
         return -1;
     }
-    if (fat_find_in_dir(dir_lba,
-                        dir_sectors,
-                        fat_dir_entry_limit(root, dir_sectors),
-                        name,
-                        out) == 0 && out->valid) {
+    if (fat_find_in_dir(dir_lba, dir_sectors, fat_dir_entry_limit(root, dir_sectors), name, out) ==
+            0 &&
+        out->valid) {
         return fail_if_exists ? -1 : 0;
     }
     if (fat_encode_short_name(name, short_name) == 0) {
@@ -1753,10 +1567,8 @@ fat_create_path_entry(const char *path,
             if (fat_build_short_alias(name, ordinal, short_name) != 0) {
                 return -1;
             }
-            short_exists = fat_short_name_exists_in_dir(dir_lba,
-                                                        dir_sectors,
-                                                        fat_dir_entry_limit(root, dir_sectors),
-                                                        short_name);
+            short_exists = fat_short_name_exists_in_dir(
+                dir_lba, dir_sectors, fat_dir_entry_limit(root, dir_sectors), short_name);
             if (short_exists < 0) {
                 return -1;
             }
@@ -1774,11 +1586,8 @@ fat_create_path_entry(const char *path,
         needed_entries = lfn_count + 1u;
     }
 
-    if (fat_find_free_dir_slots(dir_lba,
-                                dir_sectors,
-                                fat_dir_entry_limit(root, dir_sectors),
-                                needed_entries,
-                                &slot_entry) != 0) {
+    if (fat_find_free_dir_slots(dir_lba, dir_sectors, fat_dir_entry_limit(root, dir_sectors),
+                                needed_entries, &slot_entry) != 0) {
         return -1;
     }
 
@@ -1822,15 +1631,11 @@ fat_create_path_entry(const char *path,
     return 0;
 }
 
-static int
-fat_create_empty_file(const char *path, fat_dir_entry_info_t *out)
-{
+static int fat_create_empty_file(const char* path, fat_dir_entry_info_t* out) {
     return fat_create_path_entry(path, 0, 0, 0, 0, out);
 }
 
-static int
-fat_zero_cluster(uint16_t cluster)
-{
+static int fat_zero_cluster(uint16_t cluster) {
     uint32_t lba = fat_lba_for_cluster(cluster);
 
     if (cluster < 2 || lba == 0) {
@@ -1847,9 +1652,7 @@ fat_zero_cluster(uint16_t cluster)
     return 0;
 }
 
-static int
-fat_dir_cluster_from_lba(uint32_t dir_lba, uint16_t *out_cluster)
-{
+static int fat_dir_cluster_from_lba(uint32_t dir_lba, uint16_t* out_cluster) {
     uint32_t first_data = fat_first_data_lba();
     uint32_t rel;
 
@@ -1868,9 +1671,7 @@ fat_dir_cluster_from_lba(uint32_t dir_lba, uint16_t *out_cluster)
     return 0;
 }
 
-static void
-fat_fill_dot_dir_entry(uint8_t entry[32], uint8_t dots, uint16_t cluster)
-{
+static void fat_fill_dot_dir_entry(uint8_t entry[32], uint8_t dots, uint16_t cluster) {
     for (uint32_t i = 0; i < 32; ++i) {
         entry[i] = 0;
     }
@@ -1884,9 +1685,7 @@ fat_fill_dot_dir_entry(uint8_t entry[32], uint8_t dots, uint16_t cluster)
     entry[27] = (uint8_t)((cluster >> 8) & 0xFFu);
 }
 
-static int
-fat_init_directory_cluster(uint16_t cluster, uint16_t parent_cluster)
-{
+static int fat_init_directory_cluster(uint16_t cluster, uint16_t parent_cluster) {
     uint32_t lba = fat_lba_for_cluster(cluster);
     uint8_t entry[32];
 
@@ -1907,10 +1706,8 @@ fat_init_directory_cluster(uint16_t cluster, uint16_t parent_cluster)
     return fat_sync_block_write(lba);
 }
 
-static int
-fat_create_directory(const char *path)
-{
-    fat_dir_entry_info_t entry = { 0 };
+static int fat_create_directory(const char* path) {
+    fat_dir_entry_info_t entry = {0};
     uint32_t dir_lba = 0;
     uint32_t dir_sectors = 0;
     uint8_t root = 1;
@@ -1955,9 +1752,7 @@ fat_create_directory(const char *path)
     return 0;
 }
 
-static int
-fat_free_cluster_chain(uint16_t first_cluster)
-{
+static int fat_free_cluster_chain(uint16_t first_cluster) {
     uint16_t cluster = first_cluster;
 
     while (cluster >= 2) {
@@ -1976,21 +1771,18 @@ fat_free_cluster_chain(uint16_t first_cluster)
     return 0;
 }
 
-static int
-fat_entry_is_open(const fat_dir_entry_info_t *entry)
-{
+static int fat_entry_is_open(const fat_dir_entry_info_t* entry) {
     if (!entry) {
         return 0;
     }
 
     for (uint32_t i = 0; i < FAT_MAX_OPEN_FILES; ++i) {
-        fat_open_file_t *file = &g_open_files[i];
+        fat_open_file_t* file = &g_open_files[i];
 
         if (!file->in_use) {
             continue;
         }
-        if (file->dir_lba == entry->dir_lba &&
-            file->dir_sector == entry->dir_sector &&
+        if (file->dir_lba == entry->dir_lba && file->dir_sector == entry->dir_sector &&
             file->dir_index == entry->dir_index) {
             return 1;
         }
@@ -1999,9 +1791,7 @@ fat_entry_is_open(const fat_dir_entry_info_t *entry)
     return 0;
 }
 
-static int
-fat_delete_dir_entry_chain(uint32_t dir_lba, uint32_t entry_index)
-{
+static int fat_delete_dir_entry_chain(uint32_t dir_lba, uint32_t entry_index) {
     uint32_t entries_per_sector = g_bytes_per_sector / 32u;
     uint8_t tombstone[32];
 
@@ -2018,7 +1808,7 @@ fat_delete_dir_entry_chain(uint32_t dir_lba, uint32_t entry_index)
         uint32_t prev_index = entry_index - 1u;
         uint32_t sector = prev_index / entries_per_sector;
         uint32_t index = prev_index % entries_per_sector;
-        uint8_t *ent;
+        uint8_t* ent;
 
         if (fat_sync_block_read(dir_lba + sector) != 0) {
             return -1;
@@ -2036,10 +1826,8 @@ fat_delete_dir_entry_chain(uint32_t dir_lba, uint32_t entry_index)
     return 0;
 }
 
-static int
-fat_unlink_path(const char *path)
-{
-    fat_dir_entry_info_t entry = { 0 };
+static int fat_unlink_path(const char* path) {
+    fat_dir_entry_info_t entry = {0};
     uint32_t entry_index;
 
     if (!path || fat_resolve_path(path, &entry) != 0 || !entry.valid) {
@@ -2061,9 +1849,7 @@ fat_unlink_path(const char *path)
     return fat_delete_dir_entry_chain(entry.dir_lba, entry_index);
 }
 
-static int
-fat_dir_is_empty(const fat_dir_entry_info_t *entry)
-{
+static int fat_dir_is_empty(const fat_dir_entry_info_t* entry) {
     uint32_t entries_left;
     uint32_t dir_lba;
     uint32_t dir_sectors;
@@ -2079,14 +1865,15 @@ fat_dir_is_empty(const fat_dir_entry_info_t *entry)
 
     for (uint32_t sector = 0; sector < dir_sectors && entries_left > 0; ++sector) {
         uint32_t entries_per_sector = g_bytes_per_sector / 32u;
-        uint32_t entries_total = entries_left < entries_per_sector ? entries_left : entries_per_sector;
+        uint32_t entries_total =
+            entries_left < entries_per_sector ? entries_left : entries_per_sector;
 
         if (fat_sync_block_read(dir_lba + sector) != 0) {
             fat_lfn_reset();
             return -1;
         }
         for (uint32_t i = 0; i < entries_total; ++i) {
-            uint8_t *ent = g_sector_buf + i * 32u;
+            uint8_t* ent = g_sector_buf + i * 32u;
             char entry_name[FAT_LFN_MAX + 1u];
 
             if (ent[0] == 0x00) {
@@ -2118,10 +1905,8 @@ fat_dir_is_empty(const fat_dir_entry_info_t *entry)
     return 1;
 }
 
-static int
-fat_rmdir_path(const char *path)
-{
-    fat_dir_entry_info_t entry = { 0 };
+static int fat_rmdir_path(const char* path) {
+    fat_dir_entry_info_t entry = {0};
     uint32_t entry_index;
     int empty;
 
@@ -2131,8 +1916,7 @@ fat_rmdir_path(const char *path)
     if ((entry.attr & 0x10) == 0 || entry.cluster < 2) {
         return -1;
     }
-    if (g_cwd_source == g_fs_req.source &&
-        !g_cwd_root &&
+    if (g_cwd_source == g_fs_req.source && !g_cwd_root &&
         g_dir_lba == fat_lba_for_cluster(entry.cluster)) {
         return -1;
     }
@@ -2147,10 +1931,8 @@ fat_rmdir_path(const char *path)
     return fat_free_cluster_chain(entry.cluster);
 }
 
-static int
-fat_handle_read_open_file(void)
-{
-    fat_open_file_t *file = fat_open_file_for_fd(g_fs_req.source, g_fs_req.arg0);
+static int fat_handle_read_open_file(void) {
+    fat_open_file_t* file = fat_open_file_for_fd(g_fs_req.source, g_fs_req.arg0);
     uint32_t max_buffer = (uint32_t)wasmos_xfer_buffer_size();
     uint32_t remaining;
     uint32_t requested;
@@ -2185,9 +1967,8 @@ fat_handle_read_open_file(void)
             return -1;
         }
         if (wasmos_xfer_buffer_write(g_fs_req.arg2,
-                                   (int32_t)(uintptr_t)(g_sector_buf + sector_offset),
-                                   (int32_t)chunk,
-                                   (int32_t)done) != 0) {
+                                     (int32_t)(uintptr_t)(g_sector_buf + sector_offset),
+                                     (int32_t)chunk, (int32_t)done) != 0) {
             return -1;
         }
         file->offset += chunk;
@@ -2214,10 +1995,8 @@ fat_handle_read_open_file(void)
     return 0;
 }
 
-static int
-fat_handle_write_open_file(void)
-{
-    fat_open_file_t *file = fat_open_file_for_fd(g_fs_req.source, g_fs_req.arg0);
+static int fat_handle_write_open_file(void) {
+    fat_open_file_t* file = fat_open_file_for_fd(g_fs_req.source, g_fs_req.arg0);
     uint32_t max_buffer = (uint32_t)wasmos_xfer_buffer_size();
     uint32_t requested;
     uint32_t done = 0;
@@ -2283,10 +2062,8 @@ fat_handle_write_open_file(void)
         /* Stage through a separate buffer before merging into the sector so
          * partial writes do not depend on host-call copies into a shifted
          * destination pointer inside linear memory. */
-        if (wasmos_xfer_buffer_read(g_fs_req.arg2,
-                                  (int32_t)(uintptr_t)g_fs_stage_buf,
-                                  (int32_t)chunk,
-                                  (int32_t)done) != 0) {
+        if (wasmos_xfer_buffer_read(g_fs_req.arg2, (int32_t)(uintptr_t)g_fs_stage_buf,
+                                    (int32_t)chunk, (int32_t)done) != 0) {
             return -1;
         }
         for (uint32_t i = 0; i < chunk; ++i) {
@@ -2319,12 +2096,10 @@ fat_handle_write_open_file(void)
     return 0;
 }
 
-static int
-fat_handle_stat(void)
-{
+static int fat_handle_stat(void) {
     char path[FAT_MAX_PATH];
     char fat_path[FAT_MAX_PATH];
-    fat_dir_entry_info_t entry = { 0 };
+    fat_dir_entry_info_t entry = {0};
     uint32_t path_len = (uint32_t)g_fs_req.arg0;
     uint8_t path_is_init = 0;
 
@@ -2352,9 +2127,7 @@ fat_handle_stat(void)
     return 0;
 }
 
-static int
-fat_handle_unlink(void)
-{
+static int fat_handle_unlink(void) {
     char path[FAT_MAX_PATH];
     uint32_t path_len = (uint32_t)g_fs_req.arg0;
     char fat_path[FAT_MAX_PATH];
@@ -2383,9 +2156,7 @@ fat_handle_unlink(void)
     return 0;
 }
 
-static int
-fat_handle_mkdir(void)
-{
+static int fat_handle_mkdir(void) {
     char path[FAT_MAX_PATH];
     uint32_t path_len = (uint32_t)g_fs_req.arg0;
     char fat_path[FAT_MAX_PATH];
@@ -2414,9 +2185,7 @@ fat_handle_mkdir(void)
     return 0;
 }
 
-static int
-fat_handle_rmdir(void)
-{
+static int fat_handle_rmdir(void) {
     char path[FAT_MAX_PATH];
     uint32_t path_len = (uint32_t)g_fs_req.arg0;
     char fat_path[FAT_MAX_PATH];
@@ -2445,16 +2214,12 @@ fat_handle_rmdir(void)
     return 0;
 }
 
-static int
-fat_reposition_open_file(fat_open_file_t *file, uint32_t offset)
-{
+static int fat_reposition_open_file(fat_open_file_t* file, uint32_t offset) {
     return fat_set_open_file_offset(file, offset, file ? file->size : 0);
 }
 
-static int
-fat_handle_seek_open_file(void)
-{
-    fat_open_file_t *file = fat_open_file_for_fd(g_fs_req.source, g_fs_req.arg0);
+static int fat_handle_seek_open_file(void) {
+    fat_open_file_t* file = fat_open_file_for_fd(g_fs_req.source, g_fs_req.arg0);
     int32_t base;
     int64_t target;
 
@@ -2485,10 +2250,8 @@ fat_handle_seek_open_file(void)
     return 0;
 }
 
-static int
-fat_handle_close_open_file(void)
-{
-    fat_open_file_t *file = fat_open_file_for_fd(g_fs_req.source, g_fs_req.arg0);
+static int fat_handle_close_open_file(void) {
+    fat_open_file_t* file = fat_open_file_for_fd(g_fs_req.source, g_fs_req.arg0);
 
     if (!file) {
         return -1;
@@ -2510,9 +2273,7 @@ fat_handle_close_open_file(void)
     return 0;
 }
 
-static void
-fat_lfn_reset(void)
-{
+static void fat_lfn_reset(void) {
     g_lfn_total = 0;
     g_lfn_seen = 0;
     g_lfn_valid = 0;
@@ -2525,9 +2286,7 @@ fat_lfn_reset(void)
  * 0x0000 = end-of-name sentinel; 0xFFFF = unused padding slot.  Characters with
  * a non-zero high byte are outside ASCII — map them to '?' since FAT LFN names
  * in practice are ASCII-only in this implementation. */
-static void
-fat_lfn_store_char(uint32_t pos, uint16_t ch)
-{
+static void fat_lfn_store_char(uint32_t pos, uint16_t ch) {
     if (pos >= FAT_LFN_MAX) {
         return;
     }
@@ -2549,9 +2308,7 @@ fat_lfn_store_char(uint32_t pos, uint16_t ch)
  * collected.  Each LFN entry holds 13 UTF-16LE characters; g_lfn_total tells
  * us how many entries were present.  If fat_lfn_store_char already wrote a
  * NUL (end-of-name sentinel), the loop exits early. */
-static void
-fat_lfn_finalize(void)
-{
+static void fat_lfn_finalize(void) {
     if (!g_lfn_valid || g_lfn_total == 0) {
         return;
     }
@@ -2584,9 +2341,7 @@ fat_lfn_finalize(void)
  * first entry seen has bit 0x40 set and declares g_lfn_total.  We write
  * each entry's characters at base = (ordinal-1)*13 so they land in forward
  * order in g_lfn_buf regardless of disk order. */
-static void
-fat_lfn_collect(const uint8_t *ent)
-{
+static void fat_lfn_collect(const uint8_t* ent) {
     uint8_t ord = ent[0];
     if (ord == 0xE5) {
         /* 0xE5 marks a deleted entry — discard any partial LFN state. */
@@ -2632,9 +2387,7 @@ fat_lfn_collect(const uint8_t *ent)
     g_lfn_seen++;
 }
 
-static void
-fat_emit_bytes(const uint8_t *data, uint32_t len)
-{
+static void fat_emit_bytes(const uint8_t* data, uint32_t len) {
     char buf[64];
     uint32_t pos = 0;
     for (uint32_t i = 0; i < len; ++i) {
@@ -2655,18 +2408,14 @@ fat_emit_bytes(const uint8_t *data, uint32_t len)
     }
 }
 
-static int
-fat_name_eq(const char *a, const char *b)
-{
+static int fat_name_eq(const char* a, const char* b) {
     if (!a || !b) {
         return 0;
     }
     return strcasecmp(a, b) == 0;
 }
 
-static int
-fat_name_has_dot(const char *name)
-{
+static int fat_name_has_dot(const char* name) {
     uint32_t i = 0;
     if (!name) {
         return 0;
@@ -2680,9 +2429,7 @@ fat_name_has_dot(const char *name)
     return 0;
 }
 
-static void
-fat_build_read_names(void)
-{
+static void fat_build_read_names(void) {
     g_read_name_ext[0] = '\0';
     g_read_name_alt[0] = '\0';
     g_read_name_alt_ext[0] = '\0';
@@ -2715,7 +2462,7 @@ fat_build_read_names(void)
         }
         g_read_name_alt[pos] = '\0';
     }
-    const char *suffix = ".wap";
+    const char* suffix = ".wap";
     uint32_t s = 0;
     while (suffix[s] && pos + 1 < sizeof(g_read_name_ext)) {
         g_read_name_ext[pos++] = suffix[s++];
@@ -2735,32 +2482,23 @@ fat_build_read_names(void)
     }
 }
 
-static int
-fat_read_name_is_driver(void)
-{
-    return fat_name_eq(g_read_name, "serial") ||
-           fat_name_eq(g_read_name, "keyboard") ||
+static int fat_read_name_is_driver(void) {
+    return fat_name_eq(g_read_name, "serial") || fat_name_eq(g_read_name, "keyboard") ||
            fat_name_eq(g_read_name, "framebuffer");
 }
 
-static uint32_t
-fat_first_data_lba(void)
-{
+static uint32_t fat_first_data_lba(void) {
     return g_root_dir_lba + g_root_dir_sectors;
 }
 
-static uint32_t
-fat_lba_for_cluster(uint16_t cluster)
-{
+static uint32_t fat_lba_for_cluster(uint16_t cluster) {
     if (cluster < 2) {
         return 0;
     }
     return fat_first_data_lba() + (uint32_t)(cluster - 2) * g_sectors_per_cluster;
 }
 
-static int
-fat_load_fat_bytes(uint32_t fat_offset, uint8_t *out_lo, uint8_t *out_hi)
-{
+static int fat_load_fat_bytes(uint32_t fat_offset, uint8_t* out_lo, uint8_t* out_hi) {
     uint32_t fat_lba = g_boot_lba + g_reserved_sectors + (fat_offset / g_bytes_per_sector);
     uint32_t sector_offset = fat_offset % g_bytes_per_sector;
 
@@ -2782,9 +2520,7 @@ fat_load_fat_bytes(uint32_t fat_offset, uint8_t *out_lo, uint8_t *out_hi)
     return 0;
 }
 
-static uint16_t
-fat_end_of_chain_marker(void)
-{
+static uint16_t fat_end_of_chain_marker(void) {
     if (g_fat_type == FAT_TYPE_12) {
         return 0x0FFFu;
     }
@@ -2794,22 +2530,19 @@ fat_end_of_chain_marker(void)
     return 0;
 }
 
-static uint32_t
-fat_total_clusters(void)
-{
+static uint32_t fat_total_clusters(void) {
     uint32_t first_data = fat_first_data_lba();
     uint32_t data_sectors;
 
-    if (first_data < g_boot_lba || g_total_sectors <= first_data - g_boot_lba || g_sectors_per_cluster == 0) {
+    if (first_data < g_boot_lba || g_total_sectors <= first_data - g_boot_lba ||
+        g_sectors_per_cluster == 0) {
         return 0;
     }
     data_sectors = g_total_sectors - (first_data - g_boot_lba);
     return data_sectors / g_sectors_per_cluster;
 }
 
-static int
-fat_store_fat_bytes(uint32_t fat_offset, uint8_t lo, uint8_t hi)
-{
+static int fat_store_fat_bytes(uint32_t fat_offset, uint8_t lo, uint8_t hi) {
     for (uint32_t copy = 0; copy < g_fat_count; ++copy) {
         uint32_t fat_base = g_boot_lba + g_reserved_sectors + copy * g_fat_size;
         uint32_t fat_lba = fat_base + (fat_offset / g_bytes_per_sector);
@@ -2840,9 +2573,7 @@ fat_store_fat_bytes(uint32_t fat_offset, uint8_t lo, uint8_t hi)
     return 0;
 }
 
-static int
-fat_read_fat_entry(uint16_t cluster, uint16_t *out_value)
-{
+static int fat_read_fat_entry(uint16_t cluster, uint16_t* out_value) {
     uint8_t lo = 0;
     uint8_t hi = 0;
     uint16_t value;
@@ -2876,9 +2607,7 @@ fat_read_fat_entry(uint16_t cluster, uint16_t *out_value)
     return -1;
 }
 
-static int
-fat_write_fat_entry(uint16_t cluster, uint16_t value)
-{
+static int fat_write_fat_entry(uint16_t cluster, uint16_t value) {
     uint8_t lo = 0;
     uint8_t hi = 0;
     uint16_t current = 0;
@@ -2900,22 +2629,18 @@ fat_write_fat_entry(uint16_t cluster, uint16_t value)
         } else {
             merged = (uint16_t)((current & 0xF000u) | value);
         }
-        return fat_store_fat_bytes(fat_offset,
-                                   (uint8_t)(merged & 0xFFu),
+        return fat_store_fat_bytes(fat_offset, (uint8_t)(merged & 0xFFu),
                                    (uint8_t)((merged >> 8) & 0xFFu));
     }
     if (g_fat_type == FAT_TYPE_16) {
         fat_offset = (uint32_t)cluster * 2u;
-        return fat_store_fat_bytes(fat_offset,
-                                   (uint8_t)(value & 0xFFu),
+        return fat_store_fat_bytes(fat_offset, (uint8_t)(value & 0xFFu),
                                    (uint8_t)((value >> 8) & 0xFFu));
     }
     return -1;
 }
 
-static int
-fat_next_cluster(uint16_t cluster, uint16_t *out_next)
-{
+static int fat_next_cluster(uint16_t cluster, uint16_t* out_next) {
     uint16_t value = 0;
 
     if (!out_next || cluster < 2) {
@@ -2939,9 +2664,7 @@ fat_next_cluster(uint16_t cluster, uint16_t *out_next)
      * scaffold. */
 }
 
-static uint32_t
-fat_cluster_chain_capacity(uint16_t first_cluster)
-{
+static uint32_t fat_cluster_chain_capacity(uint16_t first_cluster) {
     uint32_t cluster_bytes;
     uint32_t total = 0;
     uint16_t cluster = first_cluster;
@@ -2963,9 +2686,7 @@ fat_cluster_chain_capacity(uint16_t first_cluster)
     return total;
 }
 
-static int
-fat_find_free_cluster(uint16_t *out_cluster)
-{
+static int fat_find_free_cluster(uint16_t* out_cluster) {
     uint32_t total_clusters = fat_total_clusters();
 
     if (!out_cluster || total_clusters == 0) {
@@ -2984,9 +2705,7 @@ fat_find_free_cluster(uint16_t *out_cluster)
     return -1;
 }
 
-static int
-fat_last_cluster_in_chain(uint16_t first_cluster, uint16_t *out_cluster)
-{
+static int fat_last_cluster_in_chain(uint16_t first_cluster, uint16_t* out_cluster) {
     uint16_t cluster = first_cluster;
 
     if (!out_cluster || cluster < 2) {
@@ -3002,9 +2721,7 @@ fat_last_cluster_in_chain(uint16_t first_cluster, uint16_t *out_cluster)
     }
 }
 
-static int
-fat_append_cluster_to_file(fat_open_file_t *file)
-{
+static int fat_append_cluster_to_file(fat_open_file_t* file) {
     uint16_t new_cluster = 0;
     uint16_t last_cluster = 0;
     uint16_t end_marker;
@@ -3037,9 +2754,7 @@ fat_append_cluster_to_file(fat_open_file_t *file)
     return 0;
 }
 
-static int
-fat_ensure_open_file_capacity(fat_open_file_t *file, uint32_t min_size)
-{
+static int fat_ensure_open_file_capacity(fat_open_file_t* file, uint32_t min_size) {
     uint32_t saved_offset;
 
     if (!file) {
@@ -3061,18 +2776,14 @@ fat_ensure_open_file_capacity(fat_open_file_t *file, uint32_t min_size)
     return 0;
 }
 
-static int
-fat_open_file_access_mode(const fat_open_file_t *file)
-{
+static int fat_open_file_access_mode(const fat_open_file_t* file) {
     if (!file) {
         return -1;
     }
     return file->flags & 1;
 }
 
-static int
-fat_set_open_file_offset(fat_open_file_t *file, uint32_t offset, uint32_t limit)
-{
+static int fat_set_open_file_offset(fat_open_file_t* file, uint32_t offset, uint32_t limit) {
     uint32_t cluster_bytes;
     uint32_t cluster_skip;
     uint32_t cluster_offset;
@@ -3119,9 +2830,7 @@ fat_set_open_file_offset(fat_open_file_t *file, uint32_t offset, uint32_t limit)
     return file->file_lba == 0 ? -1 : 0;
 }
 
-static int
-fat_chdir_next_component(void)
-{
+static int fat_chdir_next_component(void) {
     while (g_chdir_path[g_chdir_pos] == '/') {
         g_chdir_pos++;
     }
@@ -3149,9 +2858,7 @@ fat_chdir_next_component(void)
     return 1;
 }
 
-static int
-fat_chdir_begin_dir(uint8_t root, uint16_t cluster)
-{
+static int fat_chdir_begin_dir(uint8_t root, uint16_t cluster) {
     if (root) {
         g_chdir_dir_lba = g_root_dir_lba;
         g_chdir_dir_sectors = g_root_dir_sectors;
@@ -3173,9 +2880,7 @@ fat_chdir_begin_dir(uint8_t root, uint16_t cluster)
     return 0;
 }
 
-static int
-fat_handle_read_app(void)
-{
+static int fat_handle_read_app(void) {
     if (g_root_entry_count == 0 || g_root_dir_sectors == 0) {
         return -1;
     }
@@ -3217,10 +2922,8 @@ fat_handle_read_app(void)
         return -1;
     }
 
-    if (g_read_stage == FAT_READ_FIND_APPS ||
-        g_read_stage == FAT_READ_FIND_SYSTEM ||
-        g_read_stage == FAT_READ_FIND_SERVICES ||
-        g_read_stage == FAT_READ_FIND_DRIVERS ||
+    if (g_read_stage == FAT_READ_FIND_APPS || g_read_stage == FAT_READ_FIND_SYSTEM ||
+        g_read_stage == FAT_READ_FIND_SERVICES || g_read_stage == FAT_READ_FIND_DRIVERS ||
         g_read_stage == FAT_READ_FIND_FILE) {
         uint32_t entries_per_sector = g_bytes_per_sector / 32u;
         uint32_t entries_total = entries_per_sector;
@@ -3229,7 +2932,7 @@ fat_handle_read_app(void)
         }
 
         for (uint32_t i = 0; i < entries_total; ++i) {
-            uint8_t *ent = g_sector_buf + i * 32u;
+            uint8_t* ent = g_sector_buf + i * 32u;
             if (ent[0] == 0x00) {
                 if (g_read_stage == FAT_READ_FIND_SERVICES) {
                     g_read_dir_lba = g_root_dir_lba;
@@ -3256,7 +2959,7 @@ fat_handle_read_app(void)
                 fat_lfn_collect(ent);
                 continue;
             }
-            const char *entry_name = 0;
+            const char* entry_name = 0;
             if (g_lfn_valid && g_lfn_seen == g_lfn_total && g_lfn_buf[0]) {
                 fat_lfn_finalize();
                 entry_name = g_lfn_buf;
@@ -3314,10 +3017,9 @@ fat_handle_read_app(void)
                 return FAT_WAITING;
             }
 
-            if (g_read_stage == FAT_READ_FIND_SYSTEM ||
-                g_read_stage == FAT_READ_FIND_SERVICES ||
+            if (g_read_stage == FAT_READ_FIND_SYSTEM || g_read_stage == FAT_READ_FIND_SERVICES ||
                 g_read_stage == FAT_READ_FIND_DRIVERS) {
-                const char *wanted = "SYSTEM";
+                const char* wanted = "SYSTEM";
                 if (g_read_stage == FAT_READ_FIND_SERVICES) {
                     wanted = "SERVICES";
                 } else if (g_read_stage == FAT_READ_FIND_DRIVERS) {
@@ -3342,9 +3044,8 @@ fat_handle_read_app(void)
                 g_read_entries_left = (g_read_dir_sectors * g_bytes_per_sector) / 32u;
                 g_read_sector = 0;
                 if (g_read_stage == FAT_READ_FIND_SYSTEM) {
-                    g_read_stage = g_read_driver_mode
-                                       ? FAT_READ_FIND_DRIVERS
-                                       : FAT_READ_FIND_SERVICES;
+                    g_read_stage =
+                        g_read_driver_mode ? FAT_READ_FIND_DRIVERS : FAT_READ_FIND_SERVICES;
                 } else {
                     g_read_stage = FAT_READ_FIND_FILE;
                 }
@@ -3373,10 +3074,8 @@ fat_handle_read_app(void)
                 fat_lfn_reset();
                 return -1;
             }
-            uint32_t file_size = (uint32_t)ent[28] |
-                                 ((uint32_t)ent[29] << 8) |
-                                 ((uint32_t)ent[30] << 16) |
-                                 ((uint32_t)ent[31] << 24);
+            uint32_t file_size = (uint32_t)ent[28] | ((uint32_t)ent[29] << 8) |
+                                 ((uint32_t)ent[30] << 16) | ((uint32_t)ent[31] << 24);
             if (file_size == 0 || file_size > g_read_max) {
                 g_op = FAT_OP_NONE;
                 fat_lfn_reset();
@@ -3436,7 +3135,8 @@ fat_handle_read_app(void)
             g_op = FAT_OP_NONE;
             return 0;
         }
-        uint32_t bytes = g_file_remaining > g_bytes_per_sector ? g_bytes_per_sector : g_file_remaining;
+        uint32_t bytes =
+            g_file_remaining > g_bytes_per_sector ? g_bytes_per_sector : g_file_remaining;
         if (g_read_offset + bytes > g_read_max) {
             g_op = FAT_OP_NONE;
             return -1;
@@ -3444,10 +3144,8 @@ fat_handle_read_app(void)
         /* FIXME: READ_APP is dead (spawn-by-name was removed) and has no sender;
          * this path is unreachable and should be deleted along with the
          * FAT_OP_READ_APP state machine. g_fs_req.arg2 keeps it arity-correct. */
-        if (wasmos_xfer_buffer_write(g_fs_req.arg2,
-                                   (int32_t)(uintptr_t)g_sector_buf,
-                                   (int32_t)bytes,
-                                   (int32_t)g_read_offset) != 0) {
+        if (wasmos_xfer_buffer_write(g_fs_req.arg2, (int32_t)(uintptr_t)g_sector_buf,
+                                     (int32_t)bytes, (int32_t)g_read_offset) != 0) {
             g_op = FAT_OP_NONE;
             return -1;
         }
@@ -3481,9 +3179,7 @@ fat_handle_read_app(void)
     return -1;
 }
 
-static int
-fat_handle_chdir(void)
-{
+static int fat_handle_chdir(void) {
     if (g_root_entry_count == 0 || g_root_dir_sectors == 0) {
         return -1;
     }
@@ -3552,7 +3248,7 @@ fat_handle_chdir(void)
     }
 
     for (uint32_t i = 0; i < entries_total; ++i) {
-        uint8_t *ent = g_sector_buf + i * 32u;
+        uint8_t* ent = g_sector_buf + i * 32u;
         if (ent[0] == 0x00) {
             g_op = FAT_OP_NONE;
             fat_lfn_reset();
@@ -3566,11 +3262,11 @@ fat_handle_chdir(void)
             fat_lfn_collect(ent);
             continue;
         }
-        const char *entry_name = 0;
-    if (g_lfn_valid && g_lfn_seen == g_lfn_total && g_lfn_buf[0]) {
-        fat_lfn_finalize();
-        entry_name = g_lfn_buf;
-    }
+        const char* entry_name = 0;
+        if (g_lfn_valid && g_lfn_seen == g_lfn_total && g_lfn_buf[0]) {
+            fat_lfn_finalize();
+            entry_name = g_lfn_buf;
+        }
         if (!(ent[11] & 0x10)) {
             fat_lfn_reset();
             continue;
@@ -3640,9 +3336,7 @@ fat_handle_chdir(void)
     return FAT_WAITING;
 }
 
-static int
-fat_handle_list(void)
-{
+static int fat_handle_list(void) {
     if (g_root_entry_count == 0 || g_root_dir_sectors == 0) {
         fat_log("root listing unsupported\n");
         return -1;
@@ -3655,8 +3349,8 @@ fat_handle_list(void)
     if (g_op == FAT_OP_NONE) {
         g_op = g_cwd_root ? FAT_OP_LIST : FAT_OP_LIST_DIR;
         g_op_sector = 0;
-        g_op_entries_left = g_cwd_root ? g_root_entry_count :
-                           (g_dir_sectors * g_bytes_per_sector) / 32u;
+        g_op_entries_left =
+            g_cwd_root ? g_root_entry_count : (g_dir_sectors * g_bytes_per_sector) / 32u;
         fat_lfn_reset();
         uint32_t start_lba = g_cwd_root ? g_root_dir_lba : g_dir_lba;
         if (fat_send_block_read(start_lba, 1) != 0) {
@@ -3687,7 +3381,7 @@ fat_handle_list(void)
     }
 
     for (uint32_t i = 0; i < entries_total; ++i) {
-        uint8_t *ent = g_sector_buf + i * 32u;
+        uint8_t* ent = g_sector_buf + i * 32u;
         if (ent[0] == 0x00) {
             g_op = FAT_OP_NONE;
             fat_lfn_reset();
@@ -3701,7 +3395,7 @@ fat_handle_list(void)
             fat_lfn_collect(ent);
             continue;
         }
-        const char *entry_name = 0;
+        const char* entry_name = 0;
         const int is_dir = (ent[11] & 0x10) != 0;
         if (g_lfn_valid && g_lfn_seen == g_lfn_total && g_lfn_buf[0]) {
             fat_lfn_finalize();
@@ -3768,9 +3462,7 @@ fat_handle_list(void)
     return FAT_WAITING;
 }
 
-static int
-fat_handle_cat(void)
-{
+static int fat_handle_cat(void) {
     if (g_root_entry_count == 0 || g_root_dir_sectors == 0) {
         return -1;
     }
@@ -3782,8 +3474,8 @@ fat_handle_cat(void)
         g_op = g_cwd_root ? FAT_OP_CAT : FAT_OP_CAT_DIR;
         g_cat_stage = FAT_CAT_SCAN;
         g_op_sector = 0;
-        g_op_entries_left = g_cwd_root ? g_root_entry_count :
-                           (g_dir_sectors * g_bytes_per_sector) / 32u;
+        g_op_entries_left =
+            g_cwd_root ? g_root_entry_count : (g_dir_sectors * g_bytes_per_sector) / 32u;
         fat_lfn_reset();
         uint32_t start_lba = g_cwd_root ? g_root_dir_lba : g_dir_lba;
         if (fat_send_block_read(start_lba, 1) != 0) {
@@ -3815,7 +3507,7 @@ fat_handle_cat(void)
         }
 
         for (uint32_t i = 0; i < entries_total; ++i) {
-            uint8_t *ent = g_sector_buf + i * 32u;
+            uint8_t* ent = g_sector_buf + i * 32u;
             if (ent[0] == 0x00) {
                 g_op = FAT_OP_NONE;
                 fat_lfn_reset();
@@ -3829,7 +3521,7 @@ fat_handle_cat(void)
                 fat_lfn_collect(ent);
                 continue;
             }
-            const char *entry_name = 0;
+            const char* entry_name = 0;
             if (g_lfn_valid && g_lfn_seen == g_lfn_total && g_lfn_buf[0]) {
                 fat_lfn_finalize();
                 entry_name = g_lfn_buf;
@@ -3877,10 +3569,8 @@ fat_handle_cat(void)
                 fat_lfn_reset();
                 return -1;
             }
-            uint32_t file_size = (uint32_t)ent[28] |
-                                 ((uint32_t)ent[29] << 8) |
-                                 ((uint32_t)ent[30] << 16) |
-                                 ((uint32_t)ent[31] << 24);
+            uint32_t file_size = (uint32_t)ent[28] | ((uint32_t)ent[29] << 8) |
+                                 ((uint32_t)ent[30] << 16) | ((uint32_t)ent[31] << 24);
             if (file_size == 0) {
                 console_write("\n");
                 g_op = FAT_OP_NONE;
@@ -3931,7 +3621,8 @@ fat_handle_cat(void)
             return 0;
         }
 
-        uint32_t bytes = g_file_remaining > g_bytes_per_sector ? g_bytes_per_sector : g_file_remaining;
+        uint32_t bytes =
+            g_file_remaining > g_bytes_per_sector ? g_bytes_per_sector : g_file_remaining;
         fat_emit_bytes(g_sector_buf, bytes);
         g_file_remaining -= bytes;
         g_file_sector++;
@@ -3965,13 +3656,8 @@ fat_handle_cat(void)
     return -1;
 }
 
-WASMOS_WASM_EXPORT int32_t
-fat_ipc_dispatch(int32_t type,
-                 int32_t arg0,
-                 int32_t arg1,
-                 int32_t arg2,
-                 int32_t arg3)
-{
+WASMOS_WASM_EXPORT int32_t fat_ipc_dispatch(int32_t type, int32_t arg0, int32_t arg1, int32_t arg2,
+                                            int32_t arg3) {
     int rc = fat_ensure_ready();
     if (rc != 0) {
         return rc;
@@ -4071,9 +3757,7 @@ fat_ipc_dispatch(int32_t type,
     return -1;
 }
 
-static int
-fat_send_fs_response(int32_t status)
-{
+static int fat_send_fs_response(int32_t status) {
     int32_t type = status == 0 ? FS_IPC_RESP : FS_IPC_ERROR;
     int32_t arg0 = status;
     int32_t arg1 = 0;
@@ -4084,22 +3768,12 @@ fat_send_fs_response(int32_t status)
     g_fs_resp_override = 0;
     g_fs_resp_arg0 = 0;
     g_fs_resp_arg1 = 0;
-    return wasmos_ipc_send(g_fs_req.source,
-                           g_fs_endpoint,
-                           type,
-                           g_fs_req.request_id,
-                           arg0,
-                           arg1,
-                           0,
+    return wasmos_ipc_send(g_fs_req.source, g_fs_endpoint, type, g_fs_req.request_id, arg0, arg1, 0,
                            0);
 }
 
-WASMOS_WASM_EXPORT int32_t
-initialize(int32_t proc_endpoint,
-           int32_t block_endpoint,
-           int32_t ignored_arg2,
-           int32_t ignored_arg3)
-{
+WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t block_endpoint,
+                                      int32_t ignored_arg2, int32_t ignored_arg3) {
     (void)ignored_arg2;
     (void)ignored_arg3;
     /* proc.endpoint now comes from the spawn-info contract, not an entry arg. */
@@ -4119,9 +3793,7 @@ initialize(int32_t proc_endpoint,
     /* Block-fs rule spawns pass unit=<n> through spawn-info args. The
      * destination endpoint is still a plain service lookup today because the
      * per-app endpoint binding path was retired with entry args. */
-    g_block_endpoint = (g_requested_unit < 0 && block_endpoint >= 0)
-        ? block_endpoint
-        : -1;
+    g_block_endpoint = (g_requested_unit < 0 && block_endpoint >= 0) ? block_endpoint : -1;
     if (g_requested_unit < 0 && block_endpoint > 0) {
         /* TODO(fs-fat): remove this compatibility fallback once all spawners
          * pass an explicit unit selector in spawn-info args. */
@@ -4146,7 +3818,7 @@ initialize(int32_t proc_endpoint,
      * (map unsupported / no window) stays correct. */
     int32_t block_buf_win = wasmos_block_buffer_map();
     if (block_buf_win >= 0) {
-        g_sector_buf = (uint8_t *)(uintptr_t)block_buf_win;
+        g_sector_buf = (uint8_t*)(uintptr_t)block_buf_win;
         g_block_buf_mapped = 1;
     }
     g_boot_phase = FAT_BOOT_INIT;
@@ -4192,12 +3864,12 @@ initialize(int32_t proc_endpoint,
         fat_log("boot init failed\n");
         fat_stall();
     }
-    if (fat_resolve_mount_alias(proc_endpoint, mount_alias, sizeof(mount_alias), &g_mount_unit) != 0) {
+    if (fat_resolve_mount_alias(proc_endpoint, mount_alias, sizeof(mount_alias), &g_mount_unit) !=
+        0) {
         fat_log("mount alias resolve failed\n");
         fat_stall();
     }
-    if (snprintf(service_name, sizeof(service_name), "fs.boot%u",
-                 (unsigned)g_mount_unit) <= 0) {
+    if (snprintf(service_name, sizeof(service_name), "fs.boot%u", (unsigned)g_mount_unit) <= 0) {
         fat_log("service name build failed\n");
         fat_stall();
     }
@@ -4211,8 +3883,8 @@ initialize(int32_t proc_endpoint,
      * fs-manager on each FSMGR_IPC_BACKEND_INFO_REQ pull (including after an
      * fs-manager restart). Intentionally never released. */
     g_mount_bid = wasmos_xfer_buffer_acquire(mount_alias_len);
-    if (g_mount_bid < 0 ||
-        wasmos_xfer_buffer_write(g_mount_bid, (int32_t)(uintptr_t)mount_alias, mount_alias_len, 0) != 0) {
+    if (g_mount_bid < 0 || wasmos_xfer_buffer_write(g_mount_bid, (int32_t)(uintptr_t)mount_alias,
+                                                    mount_alias_len, 0) != 0) {
         fat_log("mount alias buffer write failed\n");
         fat_stall();
     }
@@ -4221,8 +3893,7 @@ initialize(int32_t proc_endpoint,
      * fs-manager discovers backends via the class + subscription and pulls
      * their info. Class registration needs the svc.class capability (see
      * linker.metadata). */
-    if (wasmos_svc_register_class(proc_endpoint, g_fs_endpoint, service_name,
-                                  FSMGR_BACKEND_CLASS,
+    if (wasmos_svc_register_class(proc_endpoint, g_fs_endpoint, service_name, FSMGR_BACKEND_CLASS,
                                   FSMGR_BACKEND_INSTANCE(FSMGR_BACKEND_BOOT, g_mount_unit),
                                   1) != 0) {
         fat_log("fs.backend register failed\n");
@@ -4247,10 +3918,7 @@ initialize(int32_t proc_endpoint,
 
     for (;;) {
         if (g_fs_req.in_use) {
-            int rc = fat_ipc_dispatch(g_fs_req.type,
-                                      g_fs_req.arg0,
-                                      g_fs_req.arg1,
-                                      g_fs_req.arg2,
+            int rc = fat_ipc_dispatch(g_fs_req.type, g_fs_req.arg0, g_fs_req.arg1, g_fs_req.arg2,
                                       g_fs_req.arg3);
             if (rc == FAT_WAITING) {
                 continue;

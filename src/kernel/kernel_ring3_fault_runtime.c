@@ -32,10 +32,8 @@ typedef struct {
 static ring3_fault_policy_state_t g_ring3_fault_policy_state;
 static ring3_fault_churn_spawn_fn g_ring3_fault_churn_spawn;
 
-static process_run_result_t
-ring3_fault_policy_entry(process_t *process, void *arg)
-{
-    ring3_fault_policy_state_t *state = (ring3_fault_policy_state_t *)arg;
+static process_run_result_t ring3_fault_policy_entry(process_t* process, void* arg) {
+    ring3_fault_policy_state_t* state = (ring3_fault_policy_state_t*)arg;
     int32_t exit_status = 0;
     int rc = 0;
 
@@ -203,11 +201,10 @@ ring3_fault_policy_entry(process_t *process, void *arg)
         }
     }
 
-    if (state->fault_ok && state->fault_write_ok && state->fault_exec_ok &&
-        state->fault_ud_ok && state->fault_gp_ok && state->fault_de_ok &&
-        state->fault_db_ok && state->fault_bp_ok && state->fault_of_ok && state->fault_nm_ok &&
-        state->fault_ss_ok && state->fault_ac_ok) {
-        process_t *init_proc = process_get(process->parent_pid);
+    if (state->fault_ok && state->fault_write_ok && state->fault_exec_ok && state->fault_ud_ok &&
+        state->fault_gp_ok && state->fault_de_ok && state->fault_db_ok && state->fault_bp_ok &&
+        state->fault_of_ok && state->fault_nm_ok && state->fault_ss_ok && state->fault_ac_ok) {
+        process_t* init_proc = process_get(process->parent_pid);
         if (!init_proc || init_proc->state == PROCESS_STATE_ZOMBIE) {
             klog_write("[test] ring3 containment liveness mismatch\n");
             process_set_exit_status(process, -1);
@@ -224,7 +221,8 @@ ring3_fault_policy_entry(process_t *process, void *arg)
             } else {
                 if (state->churn_pid == 0) {
                     if (!g_ring3_fault_churn_spawn ||
-                        g_ring3_fault_churn_spawn(process->pid, state->churn_round, &state->churn_pid) != 0 ||
+                        g_ring3_fault_churn_spawn(process->pid, state->churn_round,
+                                                  &state->churn_pid) != 0 ||
                         state->churn_pid == 0) {
                         klog_write("[test] ring3 mixed stress spawn failed\n");
                         process_set_exit_status(process, -1);
@@ -263,12 +261,8 @@ ring3_fault_policy_entry(process_t *process, void *arg)
     return PROCESS_RUN_YIELDED;
 }
 
-int
-kernel_ring3_fault_policy_spawn(uint32_t init_pid,
-                                const ring3_fault_policy_probes_t *probes,
-                                uint8_t churn_rounds,
-                                ring3_fault_churn_spawn_fn churn_spawn)
-{
+int kernel_ring3_fault_policy_spawn(uint32_t init_pid, const ring3_fault_policy_probes_t* probes,
+                                    uint8_t churn_rounds, ring3_fault_churn_spawn_fn churn_spawn) {
     uint32_t ring3_fault_policy_pid = 0;
     if (!probes) {
         return -1;
@@ -277,11 +271,8 @@ kernel_ring3_fault_policy_spawn(uint32_t init_pid,
     g_ring3_fault_policy_state.probes = *probes;
     g_ring3_fault_policy_state.churn_rounds = churn_rounds;
     g_ring3_fault_churn_spawn = churn_spawn;
-    if (process_spawn_as(init_pid,
-                         "ring3-fault-policy",
-                         ring3_fault_policy_entry,
-                         &g_ring3_fault_policy_state,
-                         &ring3_fault_policy_pid) != 0) {
+    if (process_spawn_as(init_pid, "ring3-fault-policy", ring3_fault_policy_entry,
+                         &g_ring3_fault_policy_state, &ring3_fault_policy_pid) != 0) {
         klog_write("[kernel] ring3 fault policy spawn failed\n");
         return -1;
     }

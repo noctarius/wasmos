@@ -23,75 +23,63 @@
  */
 
 /* IPC_EMPTY and IPC_OK values — must stay in sync with kernel ipc.h. */
-#define ND_IPC_OK    0
+#define ND_IPC_OK 0
 #define ND_IPC_EMPTY 1
 
 #define EARLY_LOG_BUF 4096
 #define BGA_INDEX_PORT 0x01CEu
-#define BGA_DATA_PORT  0x01CFu
-#define BGA_REG_XRES   0x0001u
-#define BGA_REG_YRES   0x0002u
-#define BGA_REG_BPP    0x0003u
+#define BGA_DATA_PORT 0x01CFu
+#define BGA_REG_XRES 0x0001u
+#define BGA_REG_YRES 0x0002u
+#define BGA_REG_BPP 0x0003u
 #define BGA_REG_ENABLE 0x0004u
-#define BGA_ENABLED    0x0001u
+#define BGA_ENABLED 0x0001u
 #define BGA_LFB_ENABLED 0x0040u
 
 static fbtext_state_t g_state;
-static uint8_t        g_early_log_buf[EARLY_LOG_BUF];
-static uint8_t        g_console_ring_enabled = 1;
-static uint8_t        g_text_plane_enabled = 1;
-static uint8_t        g_gfx_overlay_lock = 0;
-static uint32_t       g_fb_bytes_limit = 0;
+static uint8_t g_early_log_buf[EARLY_LOG_BUF];
+static uint8_t g_console_ring_enabled = 1;
+static uint8_t g_text_plane_enabled = 1;
+static uint8_t g_gfx_overlay_lock = 0;
+static uint32_t g_fb_bytes_limit = 0;
 
 typedef struct {
     uint16_t width;
     uint16_t height;
 } fb_mode_t;
 
-static const fb_mode_t g_modes[] = {
-    {640u, 480u},
-    {800u, 600u},
-    {1024u, 768u},
-    {1152u, 864u},
-    {1280u, 720u},
-    {1280u, 800u},
-    {1280u, 1024u},
-    {1366u, 768u},
-    {1440u, 900u},
-    {1600u, 900u}
-};
+static const fb_mode_t g_modes[] = {{640u, 480u},  {800u, 600u},  {1024u, 768u},  {1152u, 864u},
+                                    {1280u, 720u}, {1280u, 800u}, {1280u, 1024u}, {1366u, 768u},
+                                    {1440u, 900u}, {1600u, 900u}};
 
-static int
-str_len(const char *s)
-{
+static int str_len(const char* s) {
     int n = 0;
-    while (s[n]) { ++n; }
+    while (s[n]) {
+        ++n;
+    }
     return n;
 }
 
-static void
-write_str(wasmos_driver_api_t *api, const char *s)
-{
+static void write_str(wasmos_driver_api_t* api, const char* s) {
     api->console_write(s, str_len(s));
 }
 
-static void
-write_hex32(wasmos_driver_api_t *api, const char *label, uint32_t v)
-{
+static void write_hex32(wasmos_driver_api_t* api, const char* label, uint32_t v) {
     static const char hx[] = "0123456789ABCDEF";
     char buf[64];
     int i = 0;
-    const char *p = label;
-    while (*p) buf[i++] = *p++;
-    buf[i++] = '0'; buf[i++] = 'x';
-    for (int s = 28; s >= 0; s -= 4) buf[i++] = hx[(v >> s) & 0xF];
+    const char* p = label;
+    while (*p)
+        buf[i++] = *p++;
+    buf[i++] = '0';
+    buf[i++] = 'x';
+    for (int s = 28; s >= 0; s -= 4)
+        buf[i++] = hx[(v >> s) & 0xF];
     buf[i] = '\0';
     api->console_write(buf, i);
 }
 
-static uint32_t
-mode_map_bytes(uint32_t stride, uint32_t height)
-{
+static uint32_t mode_map_bytes(uint32_t stride, uint32_t height) {
     uint64_t bytes = (uint64_t)stride * (uint64_t)height * 4u;
     if (bytes > 0xFFFFFFFFu) {
         return 0;
@@ -99,18 +87,14 @@ mode_map_bytes(uint32_t stride, uint32_t height)
     return (uint32_t)bytes;
 }
 
-static int
-mode_fits_boot_map(uint32_t width, uint32_t height)
-{
+static int mode_fits_boot_map(uint32_t width, uint32_t height) {
     if (width == 0 || height == 0 || g_fb_bytes_limit == 0) {
         return 0;
     }
     return mode_map_bytes(width, height) <= g_fb_bytes_limit;
 }
 
-static int
-find_mode(uint32_t width, uint32_t height, uint32_t *out_index, uint32_t *out_stride)
-{
+static int find_mode(uint32_t width, uint32_t height, uint32_t* out_index, uint32_t* out_stride) {
     uint32_t i;
     if (out_index) {
         *out_index = 0;
@@ -119,8 +103,7 @@ find_mode(uint32_t width, uint32_t height, uint32_t *out_index, uint32_t *out_st
         *out_stride = width;
     }
     for (i = 0; i < (uint32_t)(sizeof(g_modes) / sizeof(g_modes[0])); ++i) {
-        if ((uint32_t)g_modes[i].width == width &&
-            (uint32_t)g_modes[i].height == height) {
+        if ((uint32_t)g_modes[i].width == width && (uint32_t)g_modes[i].height == height) {
             if (out_index) {
                 *out_index = i;
             }
@@ -133,9 +116,8 @@ find_mode(uint32_t width, uint32_t height, uint32_t *out_index, uint32_t *out_st
     return -1;
 }
 
-static int
-query_mode_by_index(uint32_t index, uint32_t *out_width, uint32_t *out_height, uint32_t *out_stride)
-{
+static int query_mode_by_index(uint32_t index, uint32_t* out_width, uint32_t* out_height,
+                               uint32_t* out_stride) {
     uint32_t total = (uint32_t)(sizeof(g_modes) / sizeof(g_modes[0]));
     uint32_t seen = 0;
     uint32_t i;
@@ -162,31 +144,24 @@ query_mode_by_index(uint32_t index, uint32_t *out_width, uint32_t *out_height, u
     return -1;
 }
 
-static uint32_t
-count_supported_modes(void)
-{
+static uint32_t count_supported_modes(void) {
     uint32_t total = (uint32_t)(sizeof(g_modes) / sizeof(g_modes[0]));
     uint32_t count = 0;
     uint32_t i;
     for (i = 0; i < total; ++i) {
-        if (mode_fits_boot_map((uint32_t)g_modes[i].width,
-                               (uint32_t)g_modes[i].height)) {
+        if (mode_fits_boot_map((uint32_t)g_modes[i].width, (uint32_t)g_modes[i].height)) {
             ++count;
         }
     }
     return count;
 }
 
-static void
-bga_write_reg(wasmos_driver_api_t *api, uint16_t reg, uint16_t value)
-{
+static void bga_write_reg(wasmos_driver_api_t* api, uint16_t reg, uint16_t value) {
     api->io_out16(BGA_INDEX_PORT, reg);
     api->io_out16(BGA_DATA_PORT, value);
 }
 
-static int
-set_resolution(wasmos_driver_api_t *api, uint32_t width, uint32_t height)
-{
+static int set_resolution(wasmos_driver_api_t* api, uint32_t width, uint32_t height) {
     uint32_t stride = 0;
     if (!api || !api->io_out16 || width > 0xFFFFu || height > 0xFFFFu) {
         return -1;
@@ -207,9 +182,7 @@ set_resolution(wasmos_driver_api_t *api, uint32_t width, uint32_t height)
     return 0;
 }
 
-static void
-replay_early_log(wasmos_driver_api_t *api)
-{
+static void replay_early_log(wasmos_driver_api_t* api) {
     uint32_t total = api->early_log_size();
     if (total == 0) {
         return;
@@ -226,13 +199,13 @@ replay_early_log(wasmos_driver_api_t *api)
      * of content is replayed — fits on screen without any scrolling. */
     uint16_t max_rows = g_state.rows > 1 ? (uint16_t)(g_state.rows - 1) : 1;
     uint16_t nl_count = 0;
-    uint32_t start    = total;        /* exclusive upper bound, scan left */
+    uint32_t start = total; /* exclusive upper bound, scan left */
     while (start > 0) {
         start--;
         if (g_early_log_buf[start] == '\n') {
             nl_count++;
             if (nl_count >= max_rows) {
-                start++;            /* replay from byte after this newline */
+                start++; /* replay from byte after this newline */
                 break;
             }
         }
@@ -243,9 +216,7 @@ replay_early_log(wasmos_driver_api_t *api)
     }
 }
 
-static int
-drain_console_ring(console_ring_t *ring, uint32_t budget)
-{
+static int drain_console_ring(console_ring_t* ring, uint32_t budget) {
     if (!ring || ring->capacity == 0) {
         return 0;
     }
@@ -264,16 +235,12 @@ drain_console_ring(console_ring_t *ring, uint32_t budget)
     return drained;
 }
 
-int
-initialize(wasmos_driver_api_t *api, int module_count, int arg2, int arg3)
-{
+int initialize(wasmos_driver_api_t* api, int module_count, int arg2, int arg3) {
     (void)module_count;
     (void)arg2;
     (void)arg3;
-    if (!api ||
-        api->abi_magic != WASMOS_NATIVE_ABI_MAGIC ||
-        api->abi_version != WASMOS_NATIVE_ABI_VERSION ||
-        !api->console_write ||
+    if (!api || api->abi_magic != WASMOS_NATIVE_ABI_MAGIC ||
+        api->abi_version != WASMOS_NATIVE_ABI_VERSION || !api->console_write ||
         !api->xfer_buffer_acquire) {
         return -2;
     }
@@ -281,10 +248,8 @@ initialize(wasmos_driver_api_t *api, int module_count, int arg2, int arg3)
     write_str(api, "[framebuffer-pci] probing\n");
 
     nd_framebuffer_info_t info;
-    if (api->framebuffer_info(&info) != 0 ||
-        info.framebuffer_base == 0 ||
-        info.framebuffer_width == 0 ||
-        info.framebuffer_height == 0 ||
+    if (api->framebuffer_info(&info) != 0 || info.framebuffer_base == 0 ||
+        info.framebuffer_width == 0 || info.framebuffer_height == 0 ||
         info.framebuffer_stride == 0) {
         write_str(api, "[framebuffer] not present\n");
         return 0;
@@ -296,7 +261,7 @@ initialize(wasmos_driver_api_t *api, int module_count, int arg2, int arg3)
      * TODO: add an explicit mode-set/update-framebuffer-info path before
      * allowing this driver to reprogram Bochs VBE after ExitBootServices().
      */
-    uint32_t fb_width  = info.framebuffer_width;
+    uint32_t fb_width = info.framebuffer_width;
     uint32_t fb_height = info.framebuffer_height;
     uint32_t fb_stride = info.framebuffer_stride;
     write_hex32(api, "[framebuffer] boot mode ", fb_width);
@@ -313,14 +278,14 @@ initialize(wasmos_driver_api_t *api, int module_count, int arg2, int arg3)
     /* Owned xfer_buffer of kind=framebuffer (hardware fb backing); acquire+map,
      * held for the driver's lifetime. */
     uint32_t fb_buffer_id = 0;
-    void *fb = api->xfer_buffer_acquire(ND_BUFFER_KIND_FRAMEBUFFER, size, &fb_buffer_id);
+    void* fb = api->xfer_buffer_acquire(ND_BUFFER_KIND_FRAMEBUFFER, size, &fb_buffer_id);
     if (!fb) {
         write_str(api, "[framebuffer] map failed\n");
         return -1;
     }
 
     /* Initialise the cell grid with the corrected geometry. */
-    fbtext_render_init(&g_state, (uint32_t *)fb, fb_stride, fb_width, fb_height);
+    fbtext_render_init(&g_state, (uint32_t*)fb, fb_stride, fb_width, fb_height);
     fbtext_clear(&g_state);
 
     replay_early_log(api);
@@ -340,7 +305,7 @@ initialize(wasmos_driver_api_t *api, int module_count, int arg2, int arg3)
         return -1;
     }
 
-    console_ring_t *ring = (console_ring_t *)api->shmem_map(api->console_ring_id());
+    console_ring_t* ring = (console_ring_t*)api->shmem_map(api->console_ring_id());
     if (!ring) {
         write_str(api, "[framebuffer] console ring map failed\n");
         return -1;
@@ -369,30 +334,30 @@ initialize(wasmos_driver_api_t *api, int module_count, int arg2, int arg3)
         }
 
         nd_ipc_message_t resp;
-        resp.type        = FBTEXT_IPC_RESP;
-        resp.source      = ep;
+        resp.type = FBTEXT_IPC_RESP;
+        resp.source = ep;
         resp.destination = msg.source;
-        resp.request_id  = msg.request_id;
-        resp.arg0        = 0;
-        resp.arg1        = 0;
-        resp.arg2        = 0;
-        resp.arg3        = 0;
+        resp.request_id = msg.request_id;
+        resp.arg0 = 0;
+        resp.arg1 = 0;
+        resp.arg2 = 0;
+        resp.arg3 = 0;
 
         switch (msg.type) {
         case FBTEXT_IPC_CELL_WRITE_REQ: {
             if (!g_text_plane_enabled || g_gfx_overlay_lock) {
                 break;
             }
-            uint16_t col       = (uint16_t)msg.arg0;
-            uint16_t row       = (uint16_t)msg.arg1;
+            uint16_t col = (uint16_t)msg.arg0;
+            uint16_t row = (uint16_t)msg.arg1;
             uint32_t codepoint = msg.arg2;
-            uint8_t  fg        = (uint8_t)((msg.arg3 >> 8) & 0xF);
-            uint8_t  bg        = (uint8_t)(msg.arg3 & 0xF);
+            uint8_t fg = (uint8_t)((msg.arg3 >> 8) & 0xF);
+            uint8_t bg = (uint8_t)(msg.arg3 & 0xF);
             if (col < g_state.cols && row < g_state.rows) {
-                fbtext_cell_t *cell = &g_state.cells[row * g_state.cols + col];
-                cell->ch  = codepoint;
-                cell->fg  = fg;
-                cell->bg  = bg;
+                fbtext_cell_t* cell = &g_state.cells[row * g_state.cols + col];
+                cell->ch = codepoint;
+                cell->fg = fg;
+                cell->bg = bg;
                 fbtext_render_cell(&g_state, col, row);
             }
             break;
@@ -401,8 +366,7 @@ initialize(wasmos_driver_api_t *api, int module_count, int arg2, int arg3)
             if (!g_text_plane_enabled || g_gfx_overlay_lock) {
                 break;
             }
-            if ((uint16_t)msg.arg0 < g_state.cols &&
-                (uint16_t)msg.arg1 < g_state.rows) {
+            if ((uint16_t)msg.arg0 < g_state.cols && (uint16_t)msg.arg1 < g_state.rows) {
                 g_state.cursor.col = (uint16_t)msg.arg0;
                 g_state.cursor.row = (uint16_t)msg.arg1;
             }

@@ -4,25 +4,19 @@
 #include <stdint.h>
 
 /* Copy 8 bytes at once using uint64_t to hint at wider loads/stores. */
-static inline void
-copy8_forward(unsigned char *out, const unsigned char *in)
-{
+static inline void copy8_forward(unsigned char* out, const unsigned char* in) {
     uint64_t v;
     __builtin_memcpy(&v, in, sizeof(v));
     __builtin_memcpy(out, &v, sizeof(v));
 }
 
-static inline void
-copy8_backward(unsigned char *out, const unsigned char *in)
-{
+static inline void copy8_backward(unsigned char* out, const unsigned char* in) {
     uint64_t v;
     __builtin_memcpy(&v, in, sizeof(v));
     __builtin_memcpy(out, &v, sizeof(v));
 }
 
-size_t
-strlen(const char *s)
-{
+size_t strlen(const char* s) {
     size_t len = 0;
 
     if (!s) {
@@ -34,9 +28,7 @@ strlen(const char *s)
     return len;
 }
 
-size_t
-strnlen(const char *s, size_t max_len)
-{
+size_t strnlen(const char* s, size_t max_len) {
     size_t len = 0;
 
     if (!s) {
@@ -48,9 +40,7 @@ strnlen(const char *s, size_t max_len)
     return len;
 }
 
-int
-strcmp(const char *lhs, const char *rhs)
-{
+int strcmp(const char* lhs, const char* rhs) {
     size_t i = 0;
 
     if (lhs == rhs) {
@@ -71,9 +61,7 @@ strcmp(const char *lhs, const char *rhs)
     return (int)(unsigned char)lhs[i] - (int)(unsigned char)rhs[i];
 }
 
-int
-strncmp(const char *lhs, const char *rhs, size_t count)
-{
+int strncmp(const char* lhs, const char* rhs, size_t count) {
     if (count == 0 || lhs == rhs) {
         return 0;
     }
@@ -91,9 +79,7 @@ strncmp(const char *lhs, const char *rhs, size_t count)
     return 0;
 }
 
-int
-strcasecmp(const char *lhs, const char *rhs)
-{
+int strcasecmp(const char* lhs, const char* rhs) {
     size_t i = 0;
 
     if (lhs == rhs) {
@@ -115,9 +101,7 @@ strcasecmp(const char *lhs, const char *rhs)
     }
 }
 
-char *
-strcpy(char *dest, const char *src)
-{
+char* strcpy(char* dest, const char* src) {
     size_t i = 0;
 
     if (!dest || !src) {
@@ -129,9 +113,7 @@ strcpy(char *dest, const char *src)
     return dest;
 }
 
-char *
-strncpy(char *dest, const char *src, size_t count)
-{
+char* strncpy(char* dest, const char* src, size_t count) {
     size_t i = 0;
 
     if (!dest || !src) {
@@ -147,9 +129,7 @@ strncpy(char *dest, const char *src, size_t count)
     return dest;
 }
 
-int
-str_copy_bytes(char *dst, size_t dst_len, const uint8_t *src, size_t src_len)
-{
+int str_copy_bytes(char* dst, size_t dst_len, const uint8_t* src, size_t src_len) {
     size_t i = 0;
 
     if (!dst || !src || dst_len == 0 || src_len == 0 || src_len >= dst_len) {
@@ -162,9 +142,7 @@ str_copy_bytes(char *dst, size_t dst_len, const uint8_t *src, size_t src_len)
     return 0;
 }
 
-size_t
-str_copy(char *dst, size_t dst_len, const char *src)
-{
+size_t str_copy(char* dst, size_t dst_len, const char* src) {
     size_t i = 0;
 
     if (!dst || dst_len == 0) {
@@ -182,9 +160,7 @@ str_copy(char *dst, size_t dst_len, const char *src)
     return i;
 }
 
-char *
-strchr(const char *s, int ch)
-{
+char* strchr(const char* s, int ch) {
     char needle = (char)ch;
 
     if (!s) {
@@ -192,7 +168,7 @@ strchr(const char *s, int ch)
     }
     for (;;) {
         if (*s == needle) {
-            return (char *)s;
+            return (char*)s;
         }
         if (*s == '\0') {
             break;
@@ -202,10 +178,8 @@ strchr(const char *s, int ch)
     return 0;
 }
 
-char *
-strrchr(const char *s, int ch)
-{
-    const char *last = 0;
+char* strrchr(const char* s, int ch) {
+    const char* last = 0;
     char needle = (char)ch;
 
     if (!s) {
@@ -220,14 +194,12 @@ strrchr(const char *s, int ch)
         }
         s++;
     }
-    return (char *)last;
+    return (char*)last;
 }
 
-void *
-memcpy(void *dest, const void *src, size_t count)
-{
-    unsigned char *out = (unsigned char *)dest;
-    const unsigned char *in = (const unsigned char *)src;
+void* memcpy(void* dest, const void* src, size_t count) {
+    unsigned char* out = (unsigned char*)dest;
+    const unsigned char* in = (const unsigned char*)src;
 
     if (!dest || !src) {
         return dest;
@@ -255,11 +227,9 @@ memcpy(void *dest, const void *src, size_t count)
     return dest;
 }
 
-void *
-memmove(void *dest, const void *src, size_t count)
-{
-    unsigned char *out = (unsigned char *)dest;
-    const unsigned char *in = (const unsigned char *)src;
+void* memmove(void* dest, const void* src, size_t count) {
+    unsigned char* out = (unsigned char*)dest;
+    const unsigned char* in = (const unsigned char*)src;
 
     if (!dest || !src || dest == src || count == 0) {
         return dest;
@@ -312,9 +282,7 @@ memmove(void *dest, const void *src, size_t count)
     return dest;
 }
 
-void *
-memset(void *dest, int value, size_t count)
-{
+void* memset(void* dest, int value, size_t count) {
     /* Word-optimized: fill 8 bytes at a time (with an unrolled 32-byte stride)
      * after aligning to 8.  This compiles to wasm32 (no x86 asm / hostcall) and
      * is ~8x fewer stores than a byte loop.  (The kernel's native memset uses
@@ -322,7 +290,7 @@ memset(void *dest, int value, size_t count)
     if (!dest) {
         return dest;
     }
-    uint8_t *d = (uint8_t *)dest;
+    uint8_t* d = (uint8_t*)dest;
     uint8_t v8 = (uint8_t)value;
 
     uint64_t v64 = v8;
@@ -330,13 +298,16 @@ memset(void *dest, int value, size_t count)
     v64 |= v64 << 16;
     v64 |= v64 << 32;
 
-    while (count && ((uintptr_t)d & 7u)) {   /* align to 8 */
+    while (count && ((uintptr_t)d & 7u)) { /* align to 8 */
         *d++ = v8;
         count--;
     }
-    uint64_t *q = (uint64_t *)d;
+    uint64_t* q = (uint64_t*)d;
     while (count >= 32) {
-        q[0] = v64; q[1] = v64; q[2] = v64; q[3] = v64;
+        q[0] = v64;
+        q[1] = v64;
+        q[2] = v64;
+        q[3] = v64;
         q += 4;
         count -= 32;
     }
@@ -344,18 +315,16 @@ memset(void *dest, int value, size_t count)
         *q++ = v64;
         count -= 8;
     }
-    d = (uint8_t *)q;
+    d = (uint8_t*)q;
     while (count--) {
         *d++ = v8;
     }
     return dest;
 }
 
-int
-memcmp(const void *lhs, const void *rhs, size_t count)
-{
-    const unsigned char *a = (const unsigned char *)lhs;
-    const unsigned char *b = (const unsigned char *)rhs;
+int memcmp(const void* lhs, const void* rhs, size_t count) {
+    const unsigned char* a = (const unsigned char*)lhs;
+    const unsigned char* b = (const unsigned char*)rhs;
 
     if (lhs == rhs || count == 0) {
         return 0;

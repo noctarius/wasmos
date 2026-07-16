@@ -4,9 +4,7 @@
 #include "wasmos/libsys_native.h"
 #include <string.h> /* libc str_copy_bytes (native drivers link libc string.c) */
 
-static void
-byte_copy(uint8_t *dst, const uint8_t *src, uint32_t len)
-{
+static void byte_copy(uint8_t* dst, const uint8_t* src, uint32_t len) {
     uint32_t i = 0;
     if (!dst || !src) {
         return;
@@ -16,9 +14,7 @@ byte_copy(uint8_t *dst, const uint8_t *src, uint32_t len)
     }
 }
 
-static void
-byte_zero(uint8_t *dst, uint32_t len)
-{
+static void byte_zero(uint8_t* dst, uint32_t len) {
     uint32_t i = 0;
     if (!dst) {
         return;
@@ -28,15 +24,12 @@ byte_zero(uint8_t *dst, uint32_t len)
     }
 }
 
-void
-wasmos_sys_byte_copy_native(uint8_t *dst, const uint8_t *src, uint32_t len)
-{
+void wasmos_sys_byte_copy_native(uint8_t* dst, const uint8_t* src, uint32_t len) {
     byte_copy(dst, src, len);
 }
 
-int32_t
-wasmos_sys_be_u16_native(const uint8_t *data, uint32_t data_len, uint32_t off, uint16_t *out)
-{
+int32_t wasmos_sys_be_u16_native(const uint8_t* data, uint32_t data_len, uint32_t off,
+                                 uint16_t* out) {
     if (!data || !out || off + 2u > data_len) {
         return -1;
     }
@@ -44,9 +37,8 @@ wasmos_sys_be_u16_native(const uint8_t *data, uint32_t data_len, uint32_t off, u
     return 0;
 }
 
-int32_t
-wasmos_sys_be_i16_native(const uint8_t *data, uint32_t data_len, uint32_t off, int16_t *out)
-{
+int32_t wasmos_sys_be_i16_native(const uint8_t* data, uint32_t data_len, uint32_t off,
+                                 int16_t* out) {
     uint16_t u = 0;
     if (!out || wasmos_sys_be_u16_native(data, data_len, off, &u) != 0) {
         return -1;
@@ -55,24 +47,20 @@ wasmos_sys_be_i16_native(const uint8_t *data, uint32_t data_len, uint32_t off, i
     return 0;
 }
 
-int32_t
-wasmos_sys_be_u32_native(const uint8_t *data, uint32_t data_len, uint32_t off, uint32_t *out)
-{
+int32_t wasmos_sys_be_u32_native(const uint8_t* data, uint32_t data_len, uint32_t off,
+                                 uint32_t* out) {
     if (!data || !out || off + 4u > data_len) {
         return -1;
     }
-    *out = ((uint32_t)data[off] << 24u) |
-           ((uint32_t)data[off + 1u] << 16u) |
-           ((uint32_t)data[off + 2u] << 8u) |
-           (uint32_t)data[off + 3u];
+    *out = ((uint32_t)data[off] << 24u) | ((uint32_t)data[off + 1u] << 16u) |
+           ((uint32_t)data[off + 2u] << 8u) | (uint32_t)data[off + 3u];
     return 0;
 }
 
 /* Search an OpenType/TrueType font binary for a table by 4-char tag;
  * returns 0 and sets *out_offset to the table's file offset, -1 if not found. */
-int32_t
-wasmos_sys_find_table_native(const uint8_t *data, uint32_t data_len, const uint8_t tag[4], uint32_t *out_offset)
-{
+int32_t wasmos_sys_find_table_native(const uint8_t* data, uint32_t data_len, const uint8_t tag[4],
+                                     uint32_t* out_offset) {
     uint16_t num_tables = 0;
     uint32_t i = 0;
     if (!data || !tag || !out_offset) {
@@ -87,7 +75,8 @@ wasmos_sys_find_table_native(const uint8_t *data, uint32_t data_len, const uint8
         if (rec + 16u > data_len) {
             return -1;
         }
-        if (data[rec] != tag[0] || data[rec + 1u] != tag[1] || data[rec + 2u] != tag[2] || data[rec + 3u] != tag[3]) {
+        if (data[rec] != tag[0] || data[rec + 1u] != tag[1] || data[rec + 2u] != tag[2] ||
+            data[rec + 3u] != tag[3]) {
             continue;
         }
         if (wasmos_sys_be_u32_native(data, data_len, rec + 8u, &offset) != 0) {
@@ -99,26 +88,20 @@ wasmos_sys_find_table_native(const uint8_t *data, uint32_t data_len, const uint8
     return -1;
 }
 
-uint32_t
-wasmos_sys_pack_u16_pair_native(uint32_t a, uint32_t b)
-{
+uint32_t wasmos_sys_pack_u16_pair_native(uint32_t a, uint32_t b) {
     uint16_t a16 = (uint16_t)(a & 0xFFFFu);
     uint16_t b16 = (uint16_t)(b & 0xFFFFu);
     return (uint32_t)a16 | ((uint32_t)b16 << 16u);
 }
 
-uint32_t
-wasmos_sys_pack_s16_pair_native(int32_t a, int32_t b)
-{
+uint32_t wasmos_sys_pack_s16_pair_native(int32_t a, int32_t b) {
     uint16_t a16 = (uint16_t)(int16_t)a;
     uint16_t b16 = (uint16_t)(int16_t)b;
     return (uint32_t)a16 | ((uint32_t)b16 << 16u);
 }
 
-uint32_t
-wasmos_sys_hex_u32_native(uint32_t value, uint8_t *out, uint32_t out_len)
-{
-    static const char *hex = "0123456789abcdef";
+uint32_t wasmos_sys_hex_u32_native(uint32_t value, uint8_t* out, uint32_t out_len) {
+    static const char* hex = "0123456789abcdef";
     uint32_t i = 0;
     if (!out || out_len < 11u) {
         return 0;
@@ -135,9 +118,8 @@ wasmos_sys_hex_u32_native(uint32_t value, uint8_t *out, uint32_t out_len)
 
 /* Pack up to 16 bytes of a service name into four uint32 IPC args
  * (4 bytes each, little-endian). */
-void
-wasmos_sys_ipc_pack_name16_native(const uint8_t *name, uint32_t name_len, uint32_t out_args[4])
-{
+void wasmos_sys_ipc_pack_name16_native(const uint8_t* name, uint32_t name_len,
+                                       uint32_t out_args[4]) {
     uint32_t i = 0;
     if (!out_args) {
         return;
@@ -156,14 +138,8 @@ wasmos_sys_ipc_pack_name16_native(const uint8_t *name, uint32_t name_len, uint32
     }
 }
 
-void
-wasmos_sys_ipc_unpack_name16_native(uint32_t arg0,
-                                    uint32_t arg1,
-                                    uint32_t arg2,
-                                    uint32_t arg3,
-                                    uint8_t *out,
-                                    uint32_t out_len)
-{
+void wasmos_sys_ipc_unpack_name16_native(uint32_t arg0, uint32_t arg1, uint32_t arg2, uint32_t arg3,
+                                         uint8_t* out, uint32_t out_len) {
     uint32_t args[4];
     uint32_t i = 0;
     uint32_t pos = 0;
@@ -192,9 +168,7 @@ wasmos_sys_ipc_unpack_name16_native(uint32_t arg0,
 
 /* Idle receive loop for native drivers that have entered a terminal state;
  * yields after each message so the scheduler can run other processes. */
-void
-wasmos_sys_ipc_recv_loop_native(wasmos_driver_api_t *api, uint32_t receiver_endpoint)
-{
+void wasmos_sys_ipc_recv_loop_native(wasmos_driver_api_t* api, uint32_t receiver_endpoint) {
     nd_ipc_message_t msg;
     if (!api || !api->ipc_recv || !api->sched_current_pid) {
         return;
@@ -208,9 +182,8 @@ wasmos_sys_ipc_recv_loop_native(wasmos_driver_api_t *api, uint32_t receiver_endp
     }
 }
 
-static wasmos_sys_native_intent_t *
-native_intent_find(wasmos_sys_native_event_loop_t *loop, uint32_t request_id)
-{
+static wasmos_sys_native_intent_t* native_intent_find(wasmos_sys_native_event_loop_t* loop,
+                                                      uint32_t request_id) {
     uint32_t i = 0;
     if (!loop) {
         return 0;
@@ -223,9 +196,7 @@ native_intent_find(wasmos_sys_native_event_loop_t *loop, uint32_t request_id)
     return 0;
 }
 
-static wasmos_sys_native_intent_t *
-native_intent_alloc(wasmos_sys_native_event_loop_t *loop)
-{
+static wasmos_sys_native_intent_t* native_intent_alloc(wasmos_sys_native_event_loop_t* loop) {
     uint32_t i = 0;
     if (!loop) {
         return 0;
@@ -238,12 +209,9 @@ native_intent_alloc(wasmos_sys_native_event_loop_t *loop)
     return 0;
 }
 
-void
-wasmos_sys_native_event_loop_init(wasmos_sys_native_event_loop_t *loop,
-                                  wasmos_driver_api_t *api,
-                                  uint32_t receiver_endpoint,
-                                  uint32_t request_id_base)
-{
+void wasmos_sys_native_event_loop_init(wasmos_sys_native_event_loop_t* loop,
+                                       wasmos_driver_api_t* api, uint32_t receiver_endpoint,
+                                       uint32_t request_id_base) {
     uint32_t i = 0;
     if (!loop) {
         return;
@@ -267,11 +235,10 @@ wasmos_sys_native_event_loop_init(wasmos_sys_native_event_loop_t *loop,
     }
 }
 
-int32_t
-wasmos_sys_native_event_set_default(wasmos_sys_native_event_loop_t *loop,
-                                    void (*on_message)(void *user, const nd_ipc_message_t *msg),
-                                    void *user)
-{
+int32_t wasmos_sys_native_event_set_default(wasmos_sys_native_event_loop_t* loop,
+                                            void (*on_message)(void* user,
+                                                               const nd_ipc_message_t* msg),
+                                            void* user) {
     if (!loop || !on_message) {
         return -1;
     }
@@ -280,12 +247,10 @@ wasmos_sys_native_event_set_default(wasmos_sys_native_event_loop_t *loop,
     return 0;
 }
 
-int32_t
-wasmos_sys_native_event_register(wasmos_sys_native_event_loop_t *loop,
-                                 uint32_t msg_type,
-                                 void (*on_message)(void *user, const nd_ipc_message_t *msg),
-                                 void *user)
-{
+int32_t wasmos_sys_native_event_register(wasmos_sys_native_event_loop_t* loop, uint32_t msg_type,
+                                         void (*on_message)(void* user,
+                                                            const nd_ipc_message_t* msg),
+                                         void* user) {
     uint32_t i = 0;
     if (!loop || !on_message) {
         return -1;
@@ -309,24 +274,18 @@ wasmos_sys_native_event_register(wasmos_sys_native_event_loop_t *loop,
     return -1;
 }
 
-int32_t
-wasmos_sys_native_intent_send(wasmos_sys_native_event_loop_t *loop,
-                              uint32_t destination_endpoint,
-                              uint32_t source_endpoint,
-                              uint32_t msg_type,
-                              uint32_t arg0,
-                              uint32_t arg1,
-                              uint32_t arg2,
-                              uint32_t arg3,
-                              void (*on_resolve)(void *user, const nd_ipc_message_t *msg),
-                              void *user,
-                              uint32_t *out_request_id)
-{
+int32_t wasmos_sys_native_intent_send(wasmos_sys_native_event_loop_t* loop,
+                                      uint32_t destination_endpoint, uint32_t source_endpoint,
+                                      uint32_t msg_type, uint32_t arg0, uint32_t arg1,
+                                      uint32_t arg2, uint32_t arg3,
+                                      void (*on_resolve)(void* user, const nd_ipc_message_t* msg),
+                                      void* user, uint32_t* out_request_id) {
     nd_ipc_message_t req;
-    wasmos_sys_native_intent_t *slot = 0;
+    wasmos_sys_native_intent_t* slot = 0;
     uint32_t ctx_id = 0;
     int32_t send_rc = 0;
-    if (!loop || !loop->api || !loop->api->ipc_send || !loop->api->sched_current_pid || !on_resolve) {
+    if (!loop || !loop->api || !loop->api->ipc_send || !loop->api->sched_current_pid ||
+        !on_resolve) {
         return -1;
     }
     slot = native_intent_alloc(loop);
@@ -356,24 +315,16 @@ wasmos_sys_native_intent_send(wasmos_sys_native_event_loop_t *loop,
     return 0;
 }
 
-int32_t
-wasmos_sys_native_intent_send_with_request_id(wasmos_sys_native_event_loop_t *loop,
-                                              uint32_t destination_endpoint,
-                                              uint32_t source_endpoint,
-                                              uint32_t request_id,
-                                              uint32_t msg_type,
-                                              uint32_t arg0,
-                                              uint32_t arg1,
-                                              uint32_t arg2,
-                                              uint32_t arg3,
-                                              void (*on_resolve)(void *user, const nd_ipc_message_t *msg),
-                                              void *user)
-{
+int32_t wasmos_sys_native_intent_send_with_request_id(
+    wasmos_sys_native_event_loop_t* loop, uint32_t destination_endpoint, uint32_t source_endpoint,
+    uint32_t request_id, uint32_t msg_type, uint32_t arg0, uint32_t arg1, uint32_t arg2,
+    uint32_t arg3, void (*on_resolve)(void* user, const nd_ipc_message_t* msg), void* user) {
     nd_ipc_message_t req;
-    wasmos_sys_native_intent_t *slot = 0;
+    wasmos_sys_native_intent_t* slot = 0;
     uint32_t ctx_id = 0;
     int32_t send_rc = 0;
-    if (!loop || !loop->api || !loop->api->ipc_send || !loop->api->sched_current_pid || !on_resolve || request_id == 0) {
+    if (!loop || !loop->api || !loop->api->ipc_send || !loop->api->sched_current_pid ||
+        !on_resolve || request_id == 0) {
         return -1;
     }
     if (native_intent_find(loop, request_id)) {
@@ -403,10 +354,8 @@ wasmos_sys_native_intent_send_with_request_id(wasmos_sys_native_event_loop_t *lo
     return 0;
 }
 
-void
-wasmos_sys_native_intent_cancel(wasmos_sys_native_event_loop_t *loop, uint32_t request_id)
-{
-    wasmos_sys_native_intent_t *intent = native_intent_find(loop, request_id);
+void wasmos_sys_native_intent_cancel(wasmos_sys_native_event_loop_t* loop, uint32_t request_id) {
+    wasmos_sys_native_intent_t* intent = native_intent_find(loop, request_id);
     if (!intent) {
         return;
     }
@@ -416,9 +365,7 @@ wasmos_sys_native_intent_cancel(wasmos_sys_native_event_loop_t *loop, uint32_t r
     intent->user = 0;
 }
 
-int32_t
-wasmos_sys_native_event_loop_poll(wasmos_sys_native_event_loop_t *loop, uint32_t budget)
-{
+int32_t wasmos_sys_native_event_loop_poll(wasmos_sys_native_event_loop_t* loop, uint32_t budget) {
     uint32_t ctx_id = 0;
     uint32_t i = 0;
     uint32_t handled = 0;
@@ -440,10 +387,10 @@ wasmos_sys_native_event_loop_poll(wasmos_sys_native_event_loop_t *loop, uint32_t
         }
         handled++;
         {
-            wasmos_sys_native_intent_t *intent = native_intent_find(loop, msg.request_id);
+            wasmos_sys_native_intent_t* intent = native_intent_find(loop, msg.request_id);
             if (intent) {
-                void (*cb)(void *, const nd_ipc_message_t *) = intent->on_resolve;
-                void *user = intent->user;
+                void (*cb)(void*, const nd_ipc_message_t*) = intent->on_resolve;
+                void* user = intent->user;
                 intent->in_use = 0;
                 intent->request_id = 0;
                 intent->on_resolve = 0;
@@ -454,8 +401,7 @@ wasmos_sys_native_event_loop_poll(wasmos_sys_native_event_loop_t *loop, uint32_t
         }
         uint8_t dispatched = 0;
         for (uint32_t h = 0; h < WASMOS_SYS_NATIVE_HANDLER_MAX; ++h) {
-            if (loop->handlers[h].in_use &&
-                loop->handlers[h].msg_type == msg.type &&
+            if (loop->handlers[h].in_use && loop->handlers[h].msg_type == msg.type &&
                 loop->handlers[h].on_message) {
                 loop->handlers[h].on_message(loop->handlers[h].user, &msg);
                 dispatched = 1;
@@ -469,12 +415,8 @@ wasmos_sys_native_event_loop_poll(wasmos_sys_native_event_loop_t *loop, uint32_t
     return (int32_t)handled;
 }
 
-int32_t
-wasmos_sys_ipc_recv_matching_native(wasmos_driver_api_t *api,
-                                    uint32_t receiver_endpoint,
-                                    uint32_t request_id,
-                                    nd_ipc_message_t *out_message)
-{
+int32_t wasmos_sys_ipc_recv_matching_native(wasmos_driver_api_t* api, uint32_t receiver_endpoint,
+                                            uint32_t request_id, nd_ipc_message_t* out_message) {
     uint32_t ctx_id = 0;
     int32_t rc = 0;
     if (!api || !out_message || !api->ipc_recv || !api->sched_current_pid) {
@@ -498,18 +440,10 @@ wasmos_sys_ipc_recv_matching_native(wasmos_driver_api_t *api,
     }
 }
 
-int32_t
-wasmos_sys_ipc_send_retry_native(wasmos_driver_api_t *api,
-                                 uint32_t destination_endpoint,
-                                 uint32_t source_endpoint,
-                                 uint32_t msg_type,
-                                 uint32_t request_id,
-                                 uint32_t arg0,
-                                 uint32_t arg1,
-                                 uint32_t arg2,
-                                 uint32_t arg3,
-                                 uint32_t retries)
-{
+int32_t wasmos_sys_ipc_send_retry_native(wasmos_driver_api_t* api, uint32_t destination_endpoint,
+                                         uint32_t source_endpoint, uint32_t msg_type,
+                                         uint32_t request_id, uint32_t arg0, uint32_t arg1,
+                                         uint32_t arg2, uint32_t arg3, uint32_t retries) {
     nd_ipc_message_t req;
     uint32_t ctx_id = 0;
     uint32_t tries = 0;
@@ -548,18 +482,10 @@ wasmos_sys_ipc_send_retry_native(wasmos_driver_api_t *api,
 /* Synchronous send+recv: sends the request and blocks in
  * wasmos_sys_ipc_recv_matching_native until the matching reply arrives.
  * Returns 0 on success, -1 on error. */
-int32_t
-wasmos_sys_ipc_call_native(wasmos_driver_api_t *api,
-                           uint32_t source_endpoint,
-                           uint32_t destination,
-                           uint32_t request_id,
-                           uint32_t msg_type,
-                           uint32_t arg0,
-                           uint32_t arg1,
-                           uint32_t arg2,
-                           uint32_t arg3,
-                           nd_ipc_message_t *out_message)
-{
+int32_t wasmos_sys_ipc_call_native(wasmos_driver_api_t* api, uint32_t source_endpoint,
+                                   uint32_t destination, uint32_t request_id, uint32_t msg_type,
+                                   uint32_t arg0, uint32_t arg1, uint32_t arg2, uint32_t arg3,
+                                   nd_ipc_message_t* out_message) {
     nd_ipc_message_t req;
     uint32_t ctx_id = 0;
     if (!api || !out_message || !api->ipc_send || !api->sched_current_pid) {
@@ -580,14 +506,9 @@ wasmos_sys_ipc_call_native(wasmos_driver_api_t *api,
     return wasmos_sys_ipc_recv_matching_native(api, source_endpoint, request_id, out_message);
 }
 
-int32_t
-wasmos_sys_svc_register_native(wasmos_driver_api_t *api,
-                               uint32_t proc_endpoint,
-                               uint32_t source_endpoint,
-                               const uint8_t *name,
-                               uint32_t name_len,
-                               uint32_t request_id)
-{
+int32_t wasmos_sys_svc_register_native(wasmos_driver_api_t* api, uint32_t proc_endpoint,
+                                       uint32_t source_endpoint, const uint8_t* name,
+                                       uint32_t name_len, uint32_t request_id) {
     nd_ipc_message_t msg;
     uint32_t args[4];
     uint32_t ctx_id = 0;
@@ -616,14 +537,9 @@ wasmos_sys_svc_register_native(wasmos_driver_api_t *api,
     return (int32_t)msg.arg0;
 }
 
-int32_t
-wasmos_sys_svc_lookup_native(wasmos_driver_api_t *api,
-                             uint32_t proc_endpoint,
-                             uint32_t source_endpoint,
-                             const uint8_t *name,
-                             uint32_t name_len,
-                             uint32_t request_id)
-{
+int32_t wasmos_sys_svc_lookup_native(wasmos_driver_api_t* api, uint32_t proc_endpoint,
+                                     uint32_t source_endpoint, const uint8_t* name,
+                                     uint32_t name_len, uint32_t request_id) {
     nd_ipc_message_t msg;
     uint32_t args[4];
     uint32_t ctx_id = 0;
@@ -652,21 +568,17 @@ wasmos_sys_svc_lookup_native(wasmos_driver_api_t *api,
     return (int32_t)msg.arg0;
 }
 
-int32_t
-wasmos_sys_svc_lookup_retry_native(wasmos_driver_api_t *api,
-                                   uint32_t proc_endpoint,
-                                   uint32_t source_endpoint,
-                                   const uint8_t *name,
-                                   uint32_t name_len,
-                                   uint32_t request_id_base,
-                                   uint32_t attempts)
-{
+int32_t wasmos_sys_svc_lookup_retry_native(wasmos_driver_api_t* api, uint32_t proc_endpoint,
+                                           uint32_t source_endpoint, const uint8_t* name,
+                                           uint32_t name_len, uint32_t request_id_base,
+                                           uint32_t attempts) {
     uint32_t i = 0;
     if (attempts == 0u) {
         attempts = 1u;
     }
     for (i = 0; i < attempts; ++i) {
-        int32_t ep = wasmos_sys_svc_lookup_native(api, proc_endpoint, source_endpoint, name, name_len, request_id_base + i);
+        int32_t ep = wasmos_sys_svc_lookup_native(api, proc_endpoint, source_endpoint, name,
+                                                  name_len, request_id_base + i);
         if (ep >= 0) {
             return ep;
         }
@@ -681,32 +593,24 @@ wasmos_sys_svc_lookup_retry_native(wasmos_driver_api_t *api,
  * instance, using the descriptor-based SVC_IPC_REGISTER_DESC_REQ. Pass
  * class_name=NULL/class_len=0 to register with no class. Returns the assigned
  * service handle, or -1 on failure. */
-int32_t
-wasmos_sys_svc_register_class_native(wasmos_driver_api_t *api,
-                                     uint32_t proc_endpoint,
-                                     uint32_t source_endpoint,
-                                     uint32_t service_endpoint,
-                                     const uint8_t *name,
-                                     uint32_t name_len,
-                                     const uint8_t *class_name,
-                                     uint32_t class_len,
-                                     uint32_t instance,
-                                     uint32_t request_id)
-{
-    svc_register_desc_t *desc;
+int32_t wasmos_sys_svc_register_class_native(wasmos_driver_api_t* api, uint32_t proc_endpoint,
+                                             uint32_t source_endpoint, uint32_t service_endpoint,
+                                             const uint8_t* name, uint32_t name_len,
+                                             const uint8_t* class_name, uint32_t class_len,
+                                             uint32_t instance, uint32_t request_id) {
+    svc_register_desc_t* desc;
     nd_ipc_message_t resp;
     uint32_t buffer_id = 0;
     int32_t rc;
     if (!api || !api->xfer_buffer_acquire || !api->xfer_buffer_release) {
         return -1;
     }
-    desc = (svc_register_desc_t *)api->xfer_buffer_acquire(ND_BUFFER_KIND_XFER,
-                                                           (uint32_t)sizeof(*desc),
-                                                           &buffer_id);
+    desc = (svc_register_desc_t*)api->xfer_buffer_acquire(ND_BUFFER_KIND_XFER,
+                                                          (uint32_t)sizeof(*desc), &buffer_id);
     if (!desc) {
         return -1;
     }
-    byte_zero((uint8_t *)desc, (uint32_t)sizeof(*desc));
+    byte_zero((uint8_t*)desc, (uint32_t)sizeof(*desc));
     desc->version = WASMOS_SVC_REGISTER_DESC_VERSION;
     desc->service_endpoint = service_endpoint;
     desc->flags = 0u;
@@ -716,8 +620,8 @@ wasmos_sys_svc_register_class_native(wasmos_driver_api_t *api,
     desc->instance = instance;
     (void)str_copy_bytes(desc->class_name, WASMOS_SVC_CLASS_MAX, class_name, class_len);
     rc = wasmos_sys_ipc_call_native(api, source_endpoint, proc_endpoint, request_id,
-                                    SVC_IPC_REGISTER_DESC_REQ,
-                                    0u, (uint32_t)sizeof(*desc), buffer_id, 0u, &resp);
+                                    SVC_IPC_REGISTER_DESC_REQ, 0u, (uint32_t)sizeof(*desc),
+                                    buffer_id, 0u, &resp);
     (void)api->xfer_buffer_release(buffer_id);
     if (rc != 0 || resp.type != SVC_IPC_REGISTER_RESP) {
         return -1;
@@ -728,18 +632,12 @@ wasmos_sys_svc_register_class_native(wasmos_driver_api_t *api,
 /* Enumerate providers of a virtual class into out[0..max_entries). Returns the
  * total match count (may exceed max_entries; only min(count,max_entries) entries
  * are written), or -1 on error. */
-int32_t
-wasmos_sys_svc_lookup_class_native(wasmos_driver_api_t *api,
-                                   uint32_t proc_endpoint,
-                                   uint32_t source_endpoint,
-                                   const uint8_t *class_name,
-                                   uint32_t class_len,
-                                   svc_class_entry_t *out,
-                                   uint32_t max_entries,
-                                   uint32_t request_id)
-{
+int32_t wasmos_sys_svc_lookup_class_native(wasmos_driver_api_t* api, uint32_t proc_endpoint,
+                                           uint32_t source_endpoint, const uint8_t* class_name,
+                                           uint32_t class_len, svc_class_entry_t* out,
+                                           uint32_t max_entries, uint32_t request_id) {
     nd_ipc_message_t resp;
-    uint8_t *buf;
+    uint8_t* buf;
     uint32_t buffer_id = 0;
     uint32_t sz;
     int32_t count;
@@ -751,16 +649,16 @@ wasmos_sys_svc_lookup_class_native(wasmos_driver_api_t *api,
     if (sz < WASMOS_SVC_CLASS_MAX) {
         sz = WASMOS_SVC_CLASS_MAX; /* room for the class name on input */
     }
-    buf = (uint8_t *)api->xfer_buffer_acquire(ND_BUFFER_KIND_XFER, sz, &buffer_id);
+    buf = (uint8_t*)api->xfer_buffer_acquire(ND_BUFFER_KIND_XFER, sz, &buffer_id);
     if (!buf) {
         return -1;
     }
-    if (str_copy_bytes((char *)buf, WASMOS_SVC_CLASS_MAX, class_name, class_len) != 0) {
+    if (str_copy_bytes((char*)buf, WASMOS_SVC_CLASS_MAX, class_name, class_len) != 0) {
         buf[0] = '\0';
     }
     if (wasmos_sys_ipc_call_native(api, source_endpoint, proc_endpoint, request_id,
-                                   SVC_IPC_LOOKUP_CLASS_REQ,
-                                   buffer_id, max_entries, 0u, 0u, &resp) != 0 ||
+                                   SVC_IPC_LOOKUP_CLASS_REQ, buffer_id, max_entries, 0u, 0u,
+                                   &resp) != 0 ||
         resp.type != SVC_IPC_LOOKUP_CLASS_RESP) {
         (void)api->xfer_buffer_release(buffer_id);
         return -1;
@@ -768,7 +666,7 @@ wasmos_sys_svc_lookup_class_native(wasmos_driver_api_t *api,
     count = (int32_t)resp.arg0;
     got = ((uint32_t)count < max_entries) ? (uint32_t)count : max_entries;
     if (out && count > 0 && got > 0u) {
-        byte_copy((uint8_t *)out, buf, got * (uint32_t)sizeof(svc_class_entry_t));
+        byte_copy((uint8_t*)out, buf, got * (uint32_t)sizeof(svc_class_entry_t));
     }
     (void)api->xfer_buffer_release(buffer_id);
     return count;
@@ -776,31 +674,26 @@ wasmos_sys_svc_lookup_class_native(wasmos_driver_api_t *api,
 
 /* Subscribe notify_endpoint to existence events (SVC_IPC_CLASS_EVENT) for a
  * class. Returns 0 on success, -1 on error. */
-int32_t
-wasmos_sys_svc_subscribe_class_native(wasmos_driver_api_t *api,
-                                      uint32_t proc_endpoint,
-                                      uint32_t source_endpoint,
-                                      uint32_t notify_endpoint,
-                                      const uint8_t *class_name,
-                                      uint32_t class_len,
-                                      uint32_t request_id)
-{
+int32_t wasmos_sys_svc_subscribe_class_native(wasmos_driver_api_t* api, uint32_t proc_endpoint,
+                                              uint32_t source_endpoint, uint32_t notify_endpoint,
+                                              const uint8_t* class_name, uint32_t class_len,
+                                              uint32_t request_id) {
     nd_ipc_message_t resp;
-    uint8_t *buf;
+    uint8_t* buf;
     uint32_t buffer_id = 0;
     if (!api || !api->xfer_buffer_acquire || !api->xfer_buffer_release) {
         return -1;
     }
-    buf = (uint8_t *)api->xfer_buffer_acquire(ND_BUFFER_KIND_XFER, WASMOS_SVC_CLASS_MAX, &buffer_id);
+    buf = (uint8_t*)api->xfer_buffer_acquire(ND_BUFFER_KIND_XFER, WASMOS_SVC_CLASS_MAX, &buffer_id);
     if (!buf) {
         return -1;
     }
-    if (str_copy_bytes((char *)buf, WASMOS_SVC_CLASS_MAX, class_name, class_len) != 0) {
+    if (str_copy_bytes((char*)buf, WASMOS_SVC_CLASS_MAX, class_name, class_len) != 0) {
         buf[0] = '\0';
     }
     if (wasmos_sys_ipc_call_native(api, source_endpoint, proc_endpoint, request_id,
-                                   SVC_IPC_SUBSCRIBE_CLASS_REQ,
-                                   notify_endpoint, buffer_id, 0u, 0u, &resp) != 0 ||
+                                   SVC_IPC_SUBSCRIBE_CLASS_REQ, notify_endpoint, buffer_id, 0u, 0u,
+                                   &resp) != 0 ||
         resp.type != SVC_IPC_SUBSCRIBE_CLASS_RESP) {
         (void)api->xfer_buffer_release(buffer_id);
         return -1;
@@ -808,5 +701,3 @@ wasmos_sys_svc_subscribe_class_native(wasmos_driver_api_t *api,
     (void)api->xfer_buffer_release(buffer_id);
     return 0;
 }
-
-

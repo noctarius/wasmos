@@ -59,15 +59,11 @@ static uint8_t g_dma_write_fallback_logged = 0;
 static int32_t g_client_owner[ATA_CLIENT_MAP_CAP];
 static uint8_t g_client_unit[ATA_CLIENT_MAP_CAP];
 
-static uint8_t
-ata_read_status(void)
-{
+static uint8_t ata_read_status(void) {
     return (uint8_t)wasmos_io_in8(ATA_PRIMARY_BASE + ATA_REG_STATUS);
 }
 
-static int
-ata_wait_not_busy(void)
-{
+static int ata_wait_not_busy(void) {
     for (uint32_t i = 0; i < 100000; ++i) {
         if ((ata_read_status() & ATA_SR_BSY) == 0) {
             return 0;
@@ -77,9 +73,7 @@ ata_wait_not_busy(void)
     return -1;
 }
 
-static int
-ata_wait_drq(void)
-{
+static int ata_wait_drq(void) {
     /* Polling is acceptable here because the driver is intentionally tiny and
      * only used in the single-disk bootstrap path. */
     for (uint32_t i = 0; i < 100000; ++i) {
@@ -95,9 +89,7 @@ ata_wait_drq(void)
     return -1;
 }
 
-static int
-ata_identify_unit(uint8_t unit, uint16_t *out_words)
-{
+static int ata_identify_unit(uint8_t unit, uint16_t* out_words) {
     if (!out_words) {
         return -1;
     }
@@ -122,9 +114,7 @@ ata_identify_unit(uint8_t unit, uint16_t *out_words)
     return 0;
 }
 
-static void
-ata_publish_block_device(uint8_t unit, uint32_t sectors, uint8_t present)
-{
+static void ata_publish_block_device(uint8_t unit, uint32_t sectors, uint8_t present) {
     if (g_devmgr_endpoint < 0 || g_block_endpoint < 0) {
         return;
     }
@@ -135,19 +125,11 @@ ata_publish_block_device(uint8_t unit, uint32_t sectors, uint8_t present)
     if (unit == 0 && g_present) {
         flags |= 2u;
     }
-    (void)wasmos_ipc_send(g_devmgr_endpoint,
-                          g_block_endpoint,
-                          DEVMGR_PUBLISH_BLOCK_DEVICE,
-                          0,
-                          (int32_t)unit,
-                          (int32_t)sectors,
-                          (int32_t)flags,
-                          0);
+    (void)wasmos_ipc_send(g_devmgr_endpoint, g_block_endpoint, DEVMGR_PUBLISH_BLOCK_DEVICE, 0,
+                          (int32_t)unit, (int32_t)sectors, (int32_t)flags, 0);
 }
 
-static int
-ata_read_lba28(uint8_t unit, uint32_t lba, uint8_t count, uint32_t buffer_phys)
-{
+static int ata_read_lba28(uint8_t unit, uint32_t lba, uint8_t count, uint32_t buffer_phys) {
     if (count == 0 || count > ATA_MAX_READ_SECTORS || buffer_phys == 0) {
         return -1;
     }
@@ -156,7 +138,8 @@ ata_read_lba28(uint8_t unit, uint32_t lba, uint8_t count, uint32_t buffer_phys)
         return -1;
     }
 
-    wasmos_io_out8(ATA_PRIMARY_BASE + ATA_REG_HDDEVSEL, (uint8_t)(0xE0u | ((unit & 1u) << 4) | ((lba >> 24) & 0x0Fu)));
+    wasmos_io_out8(ATA_PRIMARY_BASE + ATA_REG_HDDEVSEL,
+                   (uint8_t)(0xE0u | ((unit & 1u) << 4) | ((lba >> 24) & 0x0Fu)));
     wasmos_io_wait();
     wasmos_io_out8(ATA_PRIMARY_BASE + ATA_REG_SECCOUNT0, count);
     wasmos_io_out8(ATA_PRIMARY_BASE + ATA_REG_LBA0, (uint8_t)(lba & 0xFF));
@@ -170,14 +153,12 @@ ata_read_lba28(uint8_t unit, uint32_t lba, uint8_t count, uint32_t buffer_phys)
         if (ata_wait_drq() != 0) {
             return -1;
         }
-        uint16_t *out = (uint16_t *)g_sector_buf;
+        uint16_t* out = (uint16_t*)g_sector_buf;
         for (uint32_t i = 0; i < 256; ++i) {
             out[i] = (uint16_t)wasmos_io_in16(ATA_PRIMARY_BASE + ATA_REG_DATA);
         }
-        if (wasmos_block_buffer_write((int32_t)buffer_phys,
-                                      (int32_t)(uintptr_t)g_sector_buf,
-                                      ATA_SECTOR_SIZE,
-                                      (int32_t)(sector * ATA_SECTOR_SIZE)) != 0) {
+        if (wasmos_block_buffer_write((int32_t)buffer_phys, (int32_t)(uintptr_t)g_sector_buf,
+                                      ATA_SECTOR_SIZE, (int32_t)(sector * ATA_SECTOR_SIZE)) != 0) {
             return -1;
         }
     }
@@ -185,9 +166,7 @@ ata_read_lba28(uint8_t unit, uint32_t lba, uint8_t count, uint32_t buffer_phys)
     return 0;
 }
 
-static int
-ata_write_lba28(uint8_t unit, uint32_t lba, uint8_t count, uint32_t buffer_phys)
-{
+static int ata_write_lba28(uint8_t unit, uint32_t lba, uint8_t count, uint32_t buffer_phys) {
     if (count == 0 || count > ATA_MAX_READ_SECTORS || buffer_phys == 0) {
         return -1;
     }
@@ -196,7 +175,8 @@ ata_write_lba28(uint8_t unit, uint32_t lba, uint8_t count, uint32_t buffer_phys)
         return -1;
     }
 
-    wasmos_io_out8(ATA_PRIMARY_BASE + ATA_REG_HDDEVSEL, (uint8_t)(0xE0u | ((unit & 1u) << 4) | ((lba >> 24) & 0x0Fu)));
+    wasmos_io_out8(ATA_PRIMARY_BASE + ATA_REG_HDDEVSEL,
+                   (uint8_t)(0xE0u | ((unit & 1u) << 4) | ((lba >> 24) & 0x0Fu)));
     wasmos_io_wait();
     wasmos_io_out8(ATA_PRIMARY_BASE + ATA_REG_SECCOUNT0, count);
     wasmos_io_out8(ATA_PRIMARY_BASE + ATA_REG_LBA0, (uint8_t)(lba & 0xFF));
@@ -208,13 +188,11 @@ ata_write_lba28(uint8_t unit, uint32_t lba, uint8_t count, uint32_t buffer_phys)
         if (ata_wait_drq() != 0) {
             return -1;
         }
-        if (wasmos_block_buffer_copy((int32_t)buffer_phys,
-                                     (int32_t)(uintptr_t)g_sector_buf,
-                                     ATA_SECTOR_SIZE,
-                                     (int32_t)(sector * ATA_SECTOR_SIZE)) != 0) {
+        if (wasmos_block_buffer_copy((int32_t)buffer_phys, (int32_t)(uintptr_t)g_sector_buf,
+                                     ATA_SECTOR_SIZE, (int32_t)(sector * ATA_SECTOR_SIZE)) != 0) {
             return -1;
         }
-        uint16_t *in = (uint16_t *)g_sector_buf;
+        uint16_t* in = (uint16_t*)g_sector_buf;
         for (uint32_t i = 0; i < 256; ++i) {
             wasmos_io_out16(ATA_PRIMARY_BASE + ATA_REG_DATA, in[i]);
         }
@@ -227,31 +205,19 @@ ata_write_lba28(uint8_t unit, uint32_t lba, uint8_t count, uint32_t buffer_phys)
     return ata_wait_not_busy();
 }
 
-static void
-ata_send_resp(int32_t reply_ep, int32_t req_id, int32_t type, int32_t status, int32_t arg1)
-{
-    wasmos_ipc_send(reply_ep,
-                    g_block_endpoint,
-                    type,
-                    req_id,
-                    status,
-                    arg1,
-                    0,
-                    0);
+static void ata_send_resp(int32_t reply_ep, int32_t req_id, int32_t type, int32_t status,
+                          int32_t arg1) {
+    wasmos_ipc_send(reply_ep, g_block_endpoint, type, req_id, status, arg1, 0, 0);
 }
 
-static void
-ata_log(const char *s)
-{
+static void ata_log(const char* s) {
     if (!s) {
         return;
     }
     (void)printf("%s", s);
 }
 
-static void
-ata_log_dma_active(uint8_t is_write)
-{
+static void ata_log_dma_active(uint8_t is_write) {
     if (is_write) {
         if (!g_dma_write_ok_logged) {
             g_dma_write_ok_logged = 1;
@@ -265,9 +231,7 @@ ata_log_dma_active(uint8_t is_write)
     }
 }
 
-static void
-ata_log_dma_fallback(uint8_t is_write, int32_t rc)
-{
+static void ata_log_dma_fallback(uint8_t is_write, int32_t rc) {
     if (is_write) {
         if (!g_dma_write_fallback_logged) {
             g_dma_write_fallback_logged = 1;
@@ -289,13 +253,8 @@ ata_log_dma_fallback(uint8_t is_write, int32_t rc)
  * ata would dma_map_borrow(borrow_id, ...)/dma_sync_borrow/dma_unmap_borrow.
  * Until the block protocol carries the grant, force the PIO fallback (which uses
  * the dedicated block_buffer and is unaffected by this migration). */
-static int
-ata_dma_prepare(int32_t source_endpoint,
-                uint32_t offset,
-                uint32_t length,
-                uint32_t direction_flags,
-                int32_t *out_device_addr)
-{
+static int ata_dma_prepare(int32_t source_endpoint, uint32_t offset, uint32_t length,
+                           uint32_t direction_flags, int32_t* out_device_addr) {
     (void)source_endpoint;
     (void)offset;
     (void)length;
@@ -304,12 +263,8 @@ ata_dma_prepare(int32_t source_endpoint,
     return WASMOS_DMA_STATUS_DENY; /* force PIO fallback */
 }
 
-static int
-ata_dma_finish(int32_t source_endpoint,
-               uint32_t offset,
-               uint32_t length,
-               uint32_t direction_flags)
-{
+static int ata_dma_finish(int32_t source_endpoint, uint32_t offset, uint32_t length,
+                          uint32_t direction_flags) {
     /* Unreachable while ata_dma_prepare always denies (callers guard on OK). */
     (void)source_endpoint;
     (void)offset;
@@ -318,9 +273,7 @@ ata_dma_finish(int32_t source_endpoint,
     return 0;
 }
 
-static int
-ata_assign_unit_for_source(int32_t source, int32_t preferred_unit, uint8_t *out_unit)
-{
+static int ata_assign_unit_for_source(int32_t source, int32_t preferred_unit, uint8_t* out_unit) {
     if (!out_unit || source < 0) {
         return -1;
     }
@@ -381,9 +334,8 @@ ata_assign_unit_for_source(int32_t source, int32_t preferred_unit, uint8_t *out_
     return -1;
 }
 
-static int
-ata_handle_ipc(int32_t type, int32_t source, int32_t req_id, int32_t arg0, int32_t arg1, int32_t arg2)
-{
+static int ata_handle_ipc(int32_t type, int32_t source, int32_t req_id, int32_t arg0, int32_t arg1,
+                          int32_t arg2) {
     uint8_t unit = 0;
     int32_t preferred_unit = -1;
     if (!g_present) {
@@ -399,14 +351,8 @@ ata_handle_ipc(int32_t type, int32_t source, int32_t req_id, int32_t arg0, int32
     }
 
     if (type == BLOCK_IPC_IDENTIFY_REQ) {
-        wasmos_ipc_send(source,
-                        g_block_endpoint,
-                        BLOCK_IPC_IDENTIFY_RESP,
-                        req_id,
-                        0,
-                        (int32_t)g_unit_sectors[unit],
-                        (int32_t)unit,
-                        0);
+        wasmos_ipc_send(source, g_block_endpoint, BLOCK_IPC_IDENTIFY_RESP, req_id, 0,
+                        (int32_t)g_unit_sectors[unit], (int32_t)unit, 0);
         return 0;
     }
 
@@ -419,11 +365,7 @@ ata_handle_ipc(int32_t type, int32_t source, int32_t req_id, int32_t arg0, int32
             return 0;
         }
         byte_count = (uint32_t)arg2 * ATA_SECTOR_SIZE;
-        dma_rc = ata_dma_prepare(source,
-                                 0u,
-                                 byte_count,
-                                 WASMOS_DMA_DIR_FROM_DEVICE,
-                                 &dma_addr);
+        dma_rc = ata_dma_prepare(source, 0u, byte_count, WASMOS_DMA_DIR_FROM_DEVICE, &dma_addr);
         if (dma_rc != WASMOS_DMA_STATUS_OK) {
             ata_log_dma_fallback(0, dma_rc);
         } else {
@@ -442,14 +384,7 @@ ata_handle_ipc(int32_t type, int32_t source, int32_t req_id, int32_t arg0, int32
             ata_send_resp(source, req_id, BLOCK_IPC_ERROR, 3, 0);
             return 0;
         }
-        wasmos_ipc_send(source,
-                        g_block_endpoint,
-                        BLOCK_IPC_READ_RESP,
-                        req_id,
-                        0,
-                        arg2,
-                        0,
-                        0);
+        wasmos_ipc_send(source, g_block_endpoint, BLOCK_IPC_READ_RESP, req_id, 0, arg2, 0, 0);
         return 0;
     }
 
@@ -462,11 +397,7 @@ ata_handle_ipc(int32_t type, int32_t source, int32_t req_id, int32_t arg0, int32
             return 0;
         }
         byte_count = (uint32_t)arg2 * ATA_SECTOR_SIZE;
-        dma_rc = ata_dma_prepare(source,
-                                 0u,
-                                 byte_count,
-                                 WASMOS_DMA_DIR_TO_DEVICE,
-                                 &dma_addr);
+        dma_rc = ata_dma_prepare(source, 0u, byte_count, WASMOS_DMA_DIR_TO_DEVICE, &dma_addr);
         if (dma_rc != WASMOS_DMA_STATUS_OK) {
             ata_log_dma_fallback(1, dma_rc);
         } else {
@@ -485,14 +416,7 @@ ata_handle_ipc(int32_t type, int32_t source, int32_t req_id, int32_t arg0, int32
             ata_send_resp(source, req_id, BLOCK_IPC_ERROR, 5, 0);
             return 0;
         }
-        wasmos_ipc_send(source,
-                        g_block_endpoint,
-                        BLOCK_IPC_WRITE_RESP,
-                        req_id,
-                        0,
-                        arg2,
-                        0,
-                        0);
+        wasmos_ipc_send(source, g_block_endpoint, BLOCK_IPC_WRITE_RESP, req_id, 0, arg2, 0, 0);
         return 0;
     }
 
@@ -500,12 +424,8 @@ ata_handle_ipc(int32_t type, int32_t source, int32_t req_id, int32_t arg0, int32
     return 0;
 }
 
-WASMOS_WASM_EXPORT int32_t
-initialize(int32_t proc_endpoint,
-           int32_t ignored_arg1,
-           int32_t ignored_arg2,
-           int32_t ignored_arg3)
-{
+WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t ignored_arg1,
+                                      int32_t ignored_arg2, int32_t ignored_arg3) {
     /* proc.endpoint now comes from the spawn-info contract, not an entry arg. */
     proc_endpoint = wasmos_startup_proc_endpoint();
     (void)ignored_arg1;
@@ -522,10 +442,8 @@ initialize(int32_t proc_endpoint,
     }
     g_devmgr_endpoint = -1;
     for (int32_t attempts = 0; attempts < 256; ++attempts) {
-        g_devmgr_endpoint = wasmos_svc_lookup(proc_endpoint,
-                                              g_block_endpoint,
-                                              "devmgr.inv",
-                                              1 + attempts);
+        g_devmgr_endpoint =
+            wasmos_svc_lookup(proc_endpoint, g_block_endpoint, "devmgr.inv", 1 + attempts);
         if (g_devmgr_endpoint >= 0) {
             break;
         }

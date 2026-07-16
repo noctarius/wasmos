@@ -12,21 +12,19 @@ static uint32_t g_mem_service_endpoint = IPC_ENDPOINT_NONE;
 static uint32_t g_mem_service_reply_endpoint = IPC_ENDPOINT_NONE;
 static uint32_t g_mem_service_request_id = 1;
 static uint32_t g_mem_service_select_id = 0;
-static uint8_t  g_mem_service_select_ready = 0;
+static uint8_t g_mem_service_select_ready = 0;
 
 /* Lazily create the select set watching the request endpoint. Select-style
  * (rather than a bare single-endpoint blocking recv) keeps this service on the
  * same wait pattern as process-manager and other multi-endpoint consumers. */
-static int
-memory_service_select_setup(void)
-{
+static int memory_service_select_setup(void) {
     if (g_mem_service_select_ready) {
         return 0;
     }
     if (g_mem_service_endpoint == IPC_ENDPOINT_NONE || g_mem_service_context == 0) {
         return -1;
     }
-    uint32_t eps[1] = { g_mem_service_endpoint };
+    uint32_t eps[1] = {g_mem_service_endpoint};
     if (ipc_select_listen(g_mem_service_context, eps, 1, &g_mem_service_select_id) != IPC_OK) {
         return -1;
     }
@@ -34,18 +32,14 @@ memory_service_select_setup(void)
     return 0;
 }
 
-void
-memory_service_register(uint32_t context_id, uint32_t endpoint, uint32_t reply_endpoint)
-{
+void memory_service_register(uint32_t context_id, uint32_t endpoint, uint32_t reply_endpoint) {
     g_mem_service_context = context_id;
     g_mem_service_endpoint = endpoint;
     g_mem_service_reply_endpoint = reply_endpoint;
     g_mem_service_request_id = 1;
 }
 
-static int
-memory_service_handle_request(const ipc_message_t *req, ipc_message_t *reply)
-{
+static int memory_service_handle_request(const ipc_message_t* req, ipc_message_t* reply) {
     if (!req || !reply) {
         return -1;
     }
@@ -70,9 +64,7 @@ memory_service_handle_request(const ipc_message_t *req, ipc_message_t *reply)
     return status;
 }
 
-int
-memory_service_serve_one(void)
-{
+int memory_service_serve_one(void) {
     if (memory_service_select_setup() != 0) {
         return -1;
     }
@@ -81,10 +73,9 @@ memory_service_serve_one(void)
     uint32_t ready_ep = IPC_ENDPOINT_NONE;
     /* Block on the select set until the request endpoint has a message (no
      * timeout — mem-service has no periodic work, so it sleeps until woken). */
-    int rc = ipc_select_recv(g_mem_service_select_id, g_mem_service_context,
-                             &ready_ep, &req, 0);
+    int rc = ipc_select_recv(g_mem_service_select_id, g_mem_service_context, &ready_ep, &req, 0);
     if (rc == IPC_EMPTY) {
-        return 1;   /* spurious wake / lost race — caller loops and re-blocks */
+        return 1; /* spurious wake / lost race — caller loops and re-blocks */
     }
     if (rc != IPC_OK) {
         return -1;
@@ -103,9 +94,8 @@ memory_service_serve_one(void)
     return status == 0 ? 0 : -1;
 }
 
-int
-memory_service_handle_fault_ipc(uint32_t fault_context_id, uint64_t fault_addr, uint64_t error_code)
-{
+int memory_service_handle_fault_ipc(uint32_t fault_context_id, uint64_t fault_addr,
+                                    uint64_t error_code) {
     /* Resolve the fault directly rather than round-tripping through the
      * mem-service IPC endpoint.  memory_service_handle_request() only ever
      * calls mm_handle_page_fault() for IPC_MEM_FAULT, and that endpoint is also
@@ -120,9 +110,7 @@ memory_service_handle_fault_ipc(uint32_t fault_context_id, uint64_t fault_addr, 
     return mm_handle_page_fault(fault_context_id, fault_addr, error_code, &mapped_base);
 }
 
-process_run_result_t
-memory_service_entry(process_t *process, void *arg)
-{
+process_run_result_t memory_service_entry(process_t* process, void* arg) {
     (void)arg;
     if (!process) {
         return PROCESS_RUN_IDLE;

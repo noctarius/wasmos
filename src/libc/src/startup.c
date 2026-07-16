@@ -11,19 +11,14 @@
 
 #include <stdint.h>
 
-static char *g_wasmos_argv[1];
+static char* g_wasmos_argv[1];
 
-extern int main(int argc, char **argv);
+extern int main(int argc, char** argv);
 
 /* WASM export called by PM instead of _start. The four entry-arg registers are
  * retired (always zero); startup values come from the spawn-info buffer via the
  * wasmos_startup_* accessors. */
-WASMOS_WASM_EXPORT int32_t
-wasmos_main(int32_t arg0,
-            int32_t arg1,
-            int32_t arg2,
-            int32_t arg3)
-{
+WASMOS_WASM_EXPORT int32_t wasmos_main(int32_t arg0, int32_t arg1, int32_t arg2, int32_t arg3) {
     (void)arg0;
     (void)arg1;
     (void)arg2;

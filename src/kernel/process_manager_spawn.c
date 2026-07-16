@@ -45,23 +45,22 @@ typedef enum {
  * many live buffers as it has live operations). PM hands an operation's
  * buffer_id to a provider (e.g. fs-manager) which borrows it to fill it; PM
  * reads the result out of the object it owns and then releases it. */
-static int
-pm_xfer_acquire(uint32_t pm_context_id, uint32_t minimum_size, xfer_buffer_owner_t *out)
-{
+static int pm_xfer_acquire(uint32_t pm_context_id, uint32_t minimum_size,
+                           xfer_buffer_owner_t* out) {
     if (!out || pm_context_id == 0u) {
         return -1;
     }
     if (minimum_size == 0u) {
         minimum_size = 1u;
     }
-    return xfer_buffer_acquire(BUFFER_KIND_TRANSFER, pm_context_id, minimum_size, out)
-               == XFER_BUFFER_OK ? 0 : -1;
+    return xfer_buffer_acquire(BUFFER_KIND_TRANSFER, pm_context_id, minimum_size, out) ==
+                   XFER_BUFFER_OK
+               ? 0
+               : -1;
 }
 
 /* Kernel VA of the backing of a PM-owned buffer, or 0 if it is not live. */
-static uint8_t *
-pm_xfer_owner_ptr(const xfer_buffer_owner_t *owner)
-{
+static uint8_t* pm_xfer_owner_ptr(const xfer_buffer_owner_t* owner) {
     uint64_t phys = 0u;
 
     if (!owner) {
@@ -71,14 +70,12 @@ pm_xfer_owner_ptr(const xfer_buffer_owner_t *owner)
     if (phys == 0u) {
         return 0;
     }
-    return (uint8_t *)(uintptr_t)(phys | KERNEL_HIGHER_HALF_BASE);
+    return (uint8_t*)(uintptr_t)(phys | KERNEL_HIGHER_HALF_BASE);
 }
 
 /* Release a PM-owned per-operation buffer and mark the binding empty so a
  * double release is a no-op. */
-static void
-pm_xfer_release(xfer_buffer_owner_t *owner)
-{
+static void pm_xfer_release(xfer_buffer_owner_t* owner) {
     if (owner && owner->buffer.buffer_id != 0u) {
         (void)xfer_buffer_release_owned(owner);
         owner->buffer.buffer_id = 0u;
@@ -89,13 +86,12 @@ pm_xfer_release(xfer_buffer_owner_t *owner)
  * `buffer_id` (as carried over IPC). PM reads a caller-owned buffer directly
  * (it is kernel); describe validates the object exists and is owned by that
  * context. Returns 0 on any failure; fills *out_size when non-NULL. */
-const uint8_t *
-pm_foreign_xfer_ptr(uint32_t buffer_id, uint32_t owner_context, uint32_t *out_size)
-{
+const uint8_t* pm_foreign_xfer_ptr(uint32_t buffer_id, uint32_t owner_context, uint32_t* out_size) {
     xfer_buffer_t desc = {0};
     uint64_t phys = 0u;
 
-    if (xfer_buffer_describe(buffer_id, BUFFER_KIND_TRANSFER, owner_context, &desc) != XFER_BUFFER_OK) {
+    if (xfer_buffer_describe(buffer_id, BUFFER_KIND_TRANSFER, owner_context, &desc) !=
+        XFER_BUFFER_OK) {
         return 0;
     }
     phys = xfer_buffer_object_phys(&desc);
@@ -105,13 +101,11 @@ pm_foreign_xfer_ptr(uint32_t buffer_id, uint32_t owner_context, uint32_t *out_si
     if (out_size) {
         *out_size = desc.size_bytes;
     }
-    return (const uint8_t *)(uintptr_t)(phys | KERNEL_HIGHER_HALF_BASE);
+    return (const uint8_t*)(uintptr_t)(phys | KERNEL_HIGHER_HALF_BASE);
 }
 
-static void
-pm_slot_release_owned_blob(pm_app_state_t *slot)
-{
-    uint8_t *owned = 0;
+static void pm_slot_release_owned_blob(pm_app_state_t* slot) {
+    uint8_t* owned = 0;
 
     if (!slot) {
         return;
@@ -128,9 +122,7 @@ pm_slot_release_owned_blob(pm_app_state_t *slot)
     slot->owned_blob_storage_pages = 0;
 }
 
-static void
-pm_slot_reset(pm_app_state_t *slot)
-{
+static void pm_slot_reset(pm_app_state_t* slot) {
     if (!slot) {
         return;
     }
@@ -151,13 +143,11 @@ pm_slot_reset(pm_app_state_t *slot)
     memset(slot->name, 0, sizeof(slot->name));
 }
 
-static int
-pm_slot_alloc_owned_blob(pm_app_state_t *slot, const uint8_t *blob, uint32_t blob_size)
-{
+static int pm_slot_alloc_owned_blob(pm_app_state_t* slot, const uint8_t* blob, uint32_t blob_size) {
     const uint64_t page_size = 4096u;
     uint64_t pages = 0;
     uint64_t phys = 0;
-    uint8_t *dst = 0;
+    uint8_t* dst = 0;
 
     if (!slot || !blob || blob_size == 0) {
         return PM_SPAWN_INTERNAL_ERR_BAD_ARGS;
@@ -168,7 +158,7 @@ pm_slot_alloc_owned_blob(pm_app_state_t *slot, const uint8_t *blob, uint32_t blo
     if (phys == 0) {
         return PM_SPAWN_INTERNAL_ERR_ALLOC;
     }
-    dst = (uint8_t *)(uintptr_t)(phys | KERNEL_HIGHER_HALF_BASE);
+    dst = (uint8_t*)(uintptr_t)(phys | KERNEL_HIGHER_HALF_BASE);
     for (uint32_t i = 0; i < blob_size; ++i) {
         dst[i] = blob[i];
     }
@@ -181,10 +171,8 @@ pm_slot_alloc_owned_blob(pm_app_state_t *slot, const uint8_t *blob, uint32_t blo
     return 0;
 }
 
-static const boot_module_t *
-pm_module_at(uint32_t index)
-{
-    const boot_info_t *info = g_pm.boot_info;
+static const boot_module_t* pm_module_at(uint32_t index) {
+    const boot_info_t* info = g_pm.boot_info;
     if (!info || !(info->flags & BOOT_INFO_FLAG_MODULES_PRESENT)) {
         return 0;
     }
@@ -194,26 +182,25 @@ pm_module_at(uint32_t index)
     if (index >= info->module_count) {
         return 0;
     }
-    const uint8_t *mods = (const uint8_t *)info->modules;
-    return (const boot_module_t *)(mods + index * info->module_entry_size);
+    const uint8_t* mods = (const uint8_t*)info->modules;
+    return (const boot_module_t*)(mods + index * info->module_entry_size);
 }
 
-uint32_t
-pm_find_module_index_by_name(const char *name)
-{
-    const boot_info_t *info = g_pm.boot_info;
+uint32_t pm_find_module_index_by_name(const char* name) {
+    const boot_info_t* info = g_pm.boot_info;
     if (!info || !name || !(info->flags & BOOT_INFO_FLAG_MODULES_PRESENT)) {
         return 0xFFFFFFFFu;
     }
 
     for (uint32_t i = 0; i < info->module_count; ++i) {
-        const boot_module_t *mod = pm_module_at(i);
-        if (!mod || mod->type != BOOT_MODULE_TYPE_WASMOS_APP ||
-            mod->base == 0 || mod->size == 0 || mod->size > 0xFFFFFFFFULL) {
+        const boot_module_t* mod = pm_module_at(i);
+        if (!mod || mod->type != BOOT_MODULE_TYPE_WASMOS_APP || mod->base == 0 || mod->size == 0 ||
+            mod->size > 0xFFFFFFFFULL) {
             continue;
         }
         wasmos_app_desc_t desc;
-        if (wasmos_app_parse((const uint8_t *)(uintptr_t)mod->base, (uint32_t)mod->size, &desc) != 0) {
+        if (wasmos_app_parse((const uint8_t*)(uintptr_t)mod->base, (uint32_t)mod->size, &desc) !=
+            0) {
             continue;
         }
         char temp[64];
@@ -227,18 +214,16 @@ pm_find_module_index_by_name(const char *name)
     return 0xFFFFFFFFu;
 }
 
-static pm_app_state_t *
-pm_find_app_slot(void)
-{
+static pm_app_state_t* pm_find_app_slot(void) {
     list_iter_t it;
-    pm_app_state_t *slot = (pm_app_state_t *)list_first(&g_pm.apps, &it);
+    pm_app_state_t* slot = (pm_app_state_t*)list_first(&g_pm.apps, &it);
     while (slot) {
         if (!slot->in_use) {
             return slot;
         }
-        slot = (pm_app_state_t *)list_next(&it);
+        slot = (pm_app_state_t*)list_next(&it);
     }
-    return (pm_app_state_t *)list_alloc(&g_pm.apps);
+    return (pm_app_state_t*)list_alloc(&g_pm.apps);
 }
 
 /* The legacy per-app entry-arg binding mechanism (proc.endpoint / module.count /
@@ -247,9 +232,7 @@ pm_find_app_slot(void)
  * value the child needs now travels in its spawn-info buffer, and service
  * endpoints are resolved via svc_lookup. The 4-slot wasm entry signature is
  * kept but always receives zeros. */
-static int
-pm_apply_entry_bindings(pm_app_state_t *slot, const wasmos_app_desc_t *desc)
-{
+static int pm_apply_entry_bindings(pm_app_state_t* slot, const wasmos_app_desc_t* desc) {
     if (!slot || !desc) {
         return PM_SPAWN_INTERNAL_ERR_BAD_ARGS;
     }
@@ -261,18 +244,14 @@ pm_apply_entry_bindings(pm_app_state_t *slot, const wasmos_app_desc_t *desc)
     return 0;
 }
 
-static int
-pm_apply_post_spawn_bindings(pm_app_state_t *slot, uint32_t pid)
-{
+static int pm_apply_post_spawn_bindings(pm_app_state_t* slot, uint32_t pid) {
     (void)pid;
     (void)slot;
     return 0;
 }
 
-static process_run_result_t
-pm_app_entry(process_t *process, void *arg)
-{
-    pm_app_state_t *state = (pm_app_state_t *)arg;
+static process_run_result_t pm_app_entry(process_t* process, void* arg) {
+    pm_app_state_t* state = (pm_app_state_t*)arg;
 
     if (!process || !state) {
         return PROCESS_RUN_IDLE;
@@ -306,13 +285,11 @@ pm_app_entry(process_t *process, void *arg)
             uint32_t args_len = state->spawn_cli_args_len;
             uint32_t need = (uint32_t)sizeof(wasmos_spawn_info_t) + args_len + 1u;
             uint64_t si_phys = 0;
-            uint8_t *si_buf = 0;
-            wasmos_spawn_info_t *si = 0;
-            uint8_t *args_dst = 0;
-            if (xfer_buffer_acquire(BUFFER_KIND_TRANSFER,
-                                    process->context_id,
-                                    need,
-                                    &si_xfer) != XFER_BUFFER_OK ||
+            uint8_t* si_buf = 0;
+            wasmos_spawn_info_t* si = 0;
+            uint8_t* args_dst = 0;
+            if (xfer_buffer_acquire(BUFFER_KIND_TRANSFER, process->context_id, need, &si_xfer) !=
+                    XFER_BUFFER_OK ||
                 (si_phys = xfer_buffer_object_phys(&si_xfer.buffer)) == 0u) {
                 klog_write("[pm] spawn info alloc failed\n");
                 process_set_exit_status(process, -1);
@@ -322,8 +299,8 @@ pm_app_entry(process_t *process, void *arg)
 #endif
                 return PROCESS_RUN_EXITED;
             }
-            si_buf = (uint8_t *)(uintptr_t)(si_phys | KERNEL_HIGHER_HALF_BASE);
-            si = (wasmos_spawn_info_t *)si_buf;
+            si_buf = (uint8_t*)(uintptr_t)(si_phys | KERNEL_HIGHER_HALF_BASE);
+            si = (wasmos_spawn_info_t*)si_buf;
             si->magic = WASMOS_SPAWN_INFO_MAGIC;
             si->version = WASMOS_SPAWN_INFO_VERSION;
             si->header_size = (uint32_t)sizeof(wasmos_spawn_info_t);
@@ -343,7 +320,7 @@ pm_app_entry(process_t *process, void *arg)
         /* The 4-slot entry-arg calling convention is retired: the child pulls
          * everything from its spawn-info buffer. Pass zeros to satisfy the
          * (unchanged) wasm entry signature. */
-        uint32_t init_args[4] = { 0u, 0u, 0u, 0u };
+        uint32_t init_args[4] = {0u, 0u, 0u, 0u};
 
 #if defined(WASMOS_ENABLE_PREEMPT_GUARD)
         /* Drain pdc to 0 before any long-running module start (native driver
@@ -351,14 +328,12 @@ pm_app_entry(process_t *process, void *arg)
          * take seconds; holding pdc=1 through it accumulates watchdog stall ticks
          * until the 512-tick threshold fires.  The paired preempt_enable() at
          * every exit path becomes a safe no-op when pdc is already 0. */
-        while (preempt_disable_depth() > 0) preempt_enable();
+        while (preempt_disable_depth() > 0)
+            preempt_enable();
         process_clear_resched();
 #endif
 
-        if (wasmos_app_start(&state->app,
-                             &desc,
-                             process->context_id,
-                             init_args,
+        if (wasmos_app_start(&state->app, &desc, process->context_id, init_args,
                              state->entry_argc) != 0) {
             klog_write("[pm] app start failed\n");
             process_set_exit_status(process, -1);
@@ -392,17 +367,15 @@ pm_app_entry(process_t *process, void *arg)
     return PROCESS_RUN_EXITED;
 }
 
-static int
-pm_spawn_module(uint32_t parent_pid, uint32_t module_index, uint32_t *out_pid)
-{
-    const boot_module_t *mod = pm_module_at(module_index);
-    if (!mod || mod->type != BOOT_MODULE_TYPE_WASMOS_APP || mod->base == 0 ||
-        mod->size == 0 || mod->size > 0xFFFFFFFFULL) {
+static int pm_spawn_module(uint32_t parent_pid, uint32_t module_index, uint32_t* out_pid) {
+    const boot_module_t* mod = pm_module_at(module_index);
+    if (!mod || mod->type != BOOT_MODULE_TYPE_WASMOS_APP || mod->base == 0 || mod->size == 0 ||
+        mod->size > 0xFFFFFFFFULL) {
         klog_write("[pm] spawn_module invalid module\n");
         return PM_SPAWN_INTERNAL_ERR_BAD_ARGS;
     }
 
-    pm_app_state_t *slot = pm_find_app_slot();
+    pm_app_state_t* slot = pm_find_app_slot();
     if (!slot) {
         klog_write("[pm] spawn_module no slot\n");
         return PM_SPAWN_INTERNAL_ERR_ALLOC;
@@ -412,7 +385,7 @@ pm_spawn_module(uint32_t parent_pid, uint32_t module_index, uint32_t *out_pid)
     wasmos_app_desc_t desc;
     wasmos_app_subsystem_info_t subsystem;
     uint8_t require_explicit_ready = 0;
-    if (wasmos_app_parse((const uint8_t *)(uintptr_t)mod->base, (uint32_t)mod->size, &desc) != 0) {
+    if (wasmos_app_parse((const uint8_t*)(uintptr_t)mod->base, (uint32_t)mod->size, &desc) != 0) {
         klog_write("[pm] spawn_module parse failed\n");
         return PM_SPAWN_INTERNAL_ERR_BAD_ARGS;
     }
@@ -434,7 +407,7 @@ pm_spawn_module(uint32_t parent_pid, uint32_t module_index, uint32_t *out_pid)
         return PM_SPAWN_INTERNAL_ERR_BAD_ARGS;
     }
 
-    slot->blob = (const uint8_t *)(uintptr_t)mod->base;
+    slot->blob = (const uint8_t*)(uintptr_t)mod->base;
     slot->blob_size = (uint32_t)mod->size;
     slot->started = 0;
     slot->in_use = 1;
@@ -448,8 +421,9 @@ pm_spawn_module(uint32_t parent_pid, uint32_t module_index, uint32_t *out_pid)
 
     preempt_disable();
     if ((require_explicit_ready
-            ? process_spawn_as_ready_gated_parked(parent_pid, slot->name, pm_app_entry, slot, out_pid)
-            : process_spawn_as_parked(parent_pid, slot->name, pm_app_entry, slot, out_pid)) != 0) {
+             ? process_spawn_as_ready_gated_parked(parent_pid, slot->name, pm_app_entry, slot,
+                                                   out_pid)
+             : process_spawn_as_parked(parent_pid, slot->name, pm_app_entry, slot, out_pid)) != 0) {
         klog_write("[pm] spawn_module process spawn failed: ");
         klog_write(slot->name);
         klog_write("\n");
@@ -482,10 +456,8 @@ pm_spawn_module(uint32_t parent_pid, uint32_t module_index, uint32_t *out_pid)
     return 0;
 }
 
-static int
-pm_apply_spawn_caps(uint32_t pid, const pm_spawn_caps_t *caps)
-{
-    process_t *proc = 0;
+static int pm_apply_spawn_caps(uint32_t pid, const pm_spawn_caps_t* caps) {
+    process_t* proc = 0;
     uint32_t packed_io = 0;
     if (!caps || !caps->valid) {
         return 0;
@@ -495,25 +467,19 @@ pm_apply_spawn_caps(uint32_t pid, const pm_spawn_caps_t *caps)
         return PM_SPAWN_INTERNAL_ERR_BAD_PROCESS;
     }
     packed_io = ((uint32_t)caps->io_port_min) | ((uint32_t)caps->io_port_max << 16);
-    if (capability_set_spawn_profile(proc->context_id,
-                                     caps->cap_flags,
-                                     (uint16_t)(packed_io & 0xFFFFu),
-                                     (uint16_t)((packed_io >> 16) & 0xFFFFu),
-                                     caps->irq_mask,
-                                     caps->dma_direction_flags,
-                                     caps->dma_max_bytes,
-                                     caps->dma_window_count,
-                                     caps->dma_windows) != 0) {
+    if (capability_set_spawn_profile(
+            proc->context_id, caps->cap_flags, (uint16_t)(packed_io & 0xFFFFu),
+            (uint16_t)((packed_io >> 16) & 0xFFFFu), caps->irq_mask, caps->dma_direction_flags,
+            caps->dma_max_bytes, caps->dma_window_count, caps->dma_windows) != 0) {
         return PM_SPAWN_INTERNAL_ERR_CAPS_APPLY;
     }
     return 0;
 }
 
-static int
-pm_resolve_user_ptr(uint32_t context_id, uint32_t ptr32, uint32_t len, uint64_t *out_user_va)
-{
+static int pm_resolve_user_ptr(uint32_t context_id, uint32_t ptr32, uint32_t len,
+                               uint64_t* out_user_va) {
     uint64_t direct = (uint64_t)ptr32;
-    mm_context_t *ctx = 0;
+    mm_context_t* ctx = 0;
     mem_region_t linear = {0};
     uint64_t via_linear = 0;
 
@@ -529,38 +495,27 @@ pm_resolve_user_ptr(uint32_t context_id, uint32_t ptr32, uint32_t len, uint64_t 
         goto fallback_direct;
     }
     via_linear = linear.base + (uint64_t)ptr32;
-    if (mm_user_range_permitted(context_id,
-                                via_linear,
-                                (uint64_t)len,
-                                MEM_REGION_FLAG_READ) != 0) {
+    if (mm_user_range_permitted(context_id, via_linear, (uint64_t)len, MEM_REGION_FLAG_READ) != 0) {
         goto fallback_direct;
     }
     *out_user_va = via_linear;
     return 0;
 
 fallback_direct:
-    if (mm_user_range_permitted(context_id,
-                                direct,
-                                (uint64_t)len,
-                                MEM_REGION_FLAG_READ) == 0) {
+    if (mm_user_range_permitted(context_id, direct, (uint64_t)len, MEM_REGION_FLAG_READ) == 0) {
         *out_user_va = direct;
         return 0;
     }
     return PM_SPAWN_INTERNAL_ERR_BAD_USER_PTR;
 }
 
-static int
-pm_spawn_from_buffer(uint32_t parent_pid,
-                     const uint8_t *blob,
-                     uint32_t blob_size,
-                     const char *spawn_cli_args,
-                     uint32_t spawn_cli_args_len,
-                     uint32_t *out_pid)
-{
+static int pm_spawn_from_buffer(uint32_t parent_pid, const uint8_t* blob, uint32_t blob_size,
+                                const char* spawn_cli_args, uint32_t spawn_cli_args_len,
+                                uint32_t* out_pid) {
     if (!blob || blob_size == 0 || !out_pid) {
         return PM_SPAWN_INTERNAL_ERR_BAD_ARGS;
     }
-    pm_app_state_t *slot = pm_find_app_slot();
+    pm_app_state_t* slot = pm_find_app_slot();
     if (!slot) {
         return PM_SPAWN_INTERNAL_ERR_ALLOC;
     }
@@ -575,9 +530,8 @@ pm_spawn_from_buffer(uint32_t parent_pid,
     if (wasmos_app_resolve_subsystem(&desc, &subsystem) != 0) {
         return PM_SPAWN_INTERNAL_ERR_BINDING;
     }
-    if ((desc.flags & (WASMOS_APP_FLAG_APP |
-                       WASMOS_APP_FLAG_SERVICE |
-                       WASMOS_APP_FLAG_DRIVER)) == 0) {
+    if ((desc.flags & (WASMOS_APP_FLAG_APP | WASMOS_APP_FLAG_SERVICE | WASMOS_APP_FLAG_DRIVER)) ==
+        0) {
         return PM_SPAWN_INTERNAL_ERR_BAD_ARGS;
     }
     {
@@ -614,8 +568,9 @@ pm_spawn_from_buffer(uint32_t parent_pid,
     }
 
     if ((require_explicit_ready
-            ? process_spawn_as_ready_gated_parked(parent_pid, slot->name, pm_app_entry, slot, out_pid)
-            : process_spawn_as_parked(parent_pid, slot->name, pm_app_entry, slot, out_pid)) != 0) {
+             ? process_spawn_as_ready_gated_parked(parent_pid, slot->name, pm_app_entry, slot,
+                                                   out_pid)
+             : process_spawn_as_parked(parent_pid, slot->name, pm_app_entry, slot, out_pid)) != 0) {
         pm_slot_reset(slot);
         return PM_SPAWN_INTERNAL_ERR_ALLOC;
     }
@@ -634,17 +589,13 @@ pm_spawn_from_buffer(uint32_t parent_pid,
     return 0;
 }
 
-static int
-pm_recv_fs_reply(uint32_t source_context_id,
-                 uint32_t source_endpoint,
-                 uint32_t request_id,
-                 ipc_message_t *out_msg)
-{
+static int pm_recv_fs_reply(uint32_t source_context_id, uint32_t source_endpoint,
+                            uint32_t request_id, ipc_message_t* out_msg) {
     ipc_message_t msg;
     for (;;) {
         int rc = ipc_recv_blocking_for(source_context_id, source_endpoint, &msg);
         if (rc == IPC_EMPTY) {
-            continue;  /* spurious wake; retry */
+            continue; /* spurious wake; retry */
         }
         if (rc != IPC_OK) {
             return PM_SPAWN_INTERNAL_ERR_RECV;
@@ -659,13 +610,9 @@ pm_recv_fs_reply(uint32_t source_context_id,
     }
 }
 
-static int
-pm_recv_reply_matching(uint32_t source_context_id,
-                       uint32_t source_endpoint,
-                       uint32_t request_id,
-                       uint32_t expected_source,
-                       ipc_message_t *out_msg)
-{
+static int pm_recv_reply_matching(uint32_t source_context_id, uint32_t source_endpoint,
+                                  uint32_t request_id, uint32_t expected_source,
+                                  ipc_message_t* out_msg) {
     ipc_message_t msg;
 
     for (;;) {
@@ -686,17 +633,10 @@ pm_recv_reply_matching(uint32_t source_context_id,
     }
 }
 
-static int
-pm_exec_tail_write(uint8_t *buffer,
-                   uint32_t buffer_size,
-                   uint32_t *io_offset,
-                   const void *src,
-                   uint32_t len,
-                   uint32_t *out_offset,
-                   int append_nul)
-{
+static int pm_exec_tail_write(uint8_t* buffer, uint32_t buffer_size, uint32_t* io_offset,
+                              const void* src, uint32_t len, uint32_t* out_offset, int append_nul) {
     uint32_t offset = 0u;
-    const uint8_t *src_bytes = (const uint8_t *)src;
+    const uint8_t* src_bytes = (const uint8_t*)src;
 
     if (!buffer || !io_offset || (!src && len != 0u)) {
         return PM_SPAWN_INTERNAL_ERR_BAD_ARGS;
@@ -726,20 +666,13 @@ pm_exec_tail_write(uint8_t *buffer,
     return 0;
 }
 
-static int
-pm_request_broker_spawn_plan(uint32_t pm_context_id,
-                             const xfer_buffer_owner_t *pmbuf,
-                             const wasmos_exec_handler_registry_entry_t *handler,
-                             const char *path,
-                             uint32_t path_len,
-                             const char *cli_args,
-                             uint32_t args_len,
-                             uint32_t spawn_flags,
-                             uint32_t blob_size,
-                             wasmos_exec_broker_plan_t *out_plan)
-{
+static int pm_request_broker_spawn_plan(uint32_t pm_context_id, const xfer_buffer_owner_t* pmbuf,
+                                        const wasmos_exec_handler_registry_entry_t* handler,
+                                        const char* path, uint32_t path_len, const char* cli_args,
+                                        uint32_t args_len, uint32_t spawn_flags, uint32_t blob_size,
+                                        wasmos_exec_broker_plan_t* out_plan) {
     uint32_t broker_context_id = 0u;
-    uint8_t *pm_fs_buf = 0;
+    uint8_t* pm_fs_buf = 0;
     uint32_t pm_fs_buf_size = 0u;
     uint32_t request_offset = 0u;
     uint32_t request_size = sizeof(wasmos_broker_spawn_plan_request_t);
@@ -753,7 +686,7 @@ pm_request_broker_spawn_plan(uint32_t pm_context_id,
     ipc_message_t req;
     ipc_message_t reply;
     wasmos_broker_spawn_plan_request_t request;
-    const uint8_t *broker_fs_buf = 0;
+    const uint8_t* broker_fs_buf = 0;
 
     if (!handler || !path || path_len == 0u || !out_plan) {
         return PROC_SPAWN_ERR_BROKER_PLAN;
@@ -772,27 +705,12 @@ pm_request_broker_spawn_plan(uint32_t pm_context_id,
 
     request_offset = blob_size;
     tail_offset = request_offset + request_size;
-    if (pm_exec_tail_write(pm_fs_buf,
-                           pm_fs_buf_size,
-                           &tail_offset,
-                           handler->handler_name,
-                           (uint32_t)strlen(handler->handler_name),
-                           &handler_name_offset,
+    if (pm_exec_tail_write(pm_fs_buf, pm_fs_buf_size, &tail_offset, handler->handler_name,
+                           (uint32_t)strlen(handler->handler_name), &handler_name_offset, 1) != 0 ||
+        pm_exec_tail_write(pm_fs_buf, pm_fs_buf_size, &tail_offset, path, path_len, &path_offset,
                            1) != 0 ||
-        pm_exec_tail_write(pm_fs_buf,
-                           pm_fs_buf_size,
-                           &tail_offset,
-                           path,
-                           path_len,
-                           &path_offset,
-                           1) != 0 ||
-        pm_exec_tail_write(pm_fs_buf,
-                           pm_fs_buf_size,
-                           &tail_offset,
-                           cli_args,
-                           args_len,
-                           &args_offset,
-                           args_len > 0u ? 1 : 0) != 0) {
+        pm_exec_tail_write(pm_fs_buf, pm_fs_buf_size, &tail_offset, cli_args, args_len,
+                           &args_offset, args_len > 0u ? 1 : 0) != 0) {
         return PROC_SPAWN_ERR_BROKER_PLAN;
     }
 
@@ -817,9 +735,7 @@ pm_request_broker_spawn_plan(uint32_t pm_context_id,
      * request payload PM staged, WRITE for the plan the broker returns into the
      * same buffer. buffer_id is carried in arg2 so the broker can resolve it.
      * PM revokes the borrow once it has read the plan. */
-    if (xfer_buffer_borrow(pmbuf,
-                           broker_context_id,
-                           BUFFER_BORROW_READ | BUFFER_BORROW_WRITE,
+    if (xfer_buffer_borrow(pmbuf, broker_context_id, BUFFER_BORROW_READ | BUFFER_BORROW_WRITE,
                            &broker_borrow) != XFER_BUFFER_OK) {
         return PROC_SPAWN_ERR_BROKER_IPC;
     }
@@ -838,11 +754,8 @@ pm_request_broker_spawn_plan(uint32_t pm_context_id,
         klog_write("[dbg-pm-broker] send failed\n");
         goto broker_ipc_fail;
     }
-    if (pm_recv_reply_matching(pm_context_id,
-                               g_pm.broker_reply_endpoint,
-                               request_id,
-                               handler->broker_endpoint,
-                               &reply) != 0) {
+    if (pm_recv_reply_matching(pm_context_id, g_pm.broker_reply_endpoint, request_id,
+                               handler->broker_endpoint, &reply) != 0) {
         klog_write("[dbg-pm-broker] recv failed\n");
         goto broker_ipc_fail;
     }
@@ -855,21 +768,16 @@ pm_request_broker_spawn_plan(uint32_t pm_context_id,
         serial_write_hex64((uint64_t)reply.arg1);
         klog_write("\n");
     }
-    if (reply.type != PROC_BROKER_IPC_SPAWN_PLAN_RESP ||
-        reply.arg1 == 0u ||
-        reply.arg0 >= pm_fs_buf_size ||
-        reply.arg1 > (pm_fs_buf_size - reply.arg0)) {
+    if (reply.type != PROC_BROKER_IPC_SPAWN_PLAN_RESP || reply.arg1 == 0u ||
+        reply.arg0 >= pm_fs_buf_size || reply.arg1 > (pm_fs_buf_size - reply.arg0)) {
         klog_write("[dbg-pm-broker] reply envelope invalid\n");
         goto broker_plan_fail;
     }
     /* The broker wrote its plan into PM's owned buffer (reply.arg0 = offset,
      * reply.arg1 = size); PM reads it back out of the buffer it owns. */
-    broker_fs_buf = (const uint8_t *)pm_xfer_owner_ptr(pmbuf);
-    if (!broker_fs_buf ||
-        wasmos_exec_broker_plan_validate(broker_fs_buf + reply.arg0,
-                                         reply.arg1,
-                                         handler,
-                                         out_plan) != 0) {
+    broker_fs_buf = (const uint8_t*)pm_xfer_owner_ptr(pmbuf);
+    if (!broker_fs_buf || wasmos_exec_broker_plan_validate(broker_fs_buf + reply.arg0, reply.arg1,
+                                                           handler, out_plan) != 0) {
         klog_write("[dbg-pm-broker] plan validate failed\n");
         goto broker_plan_fail;
     }
@@ -892,12 +800,8 @@ broker_plan_fail:
     return PROC_SPAWN_ERR_BROKER_PLAN;
 }
 
-static int
-pm_fs_read_blob_for_spawn(uint32_t pm_context_id,
-                          const xfer_buffer_owner_t *pmbuf,
-                          const char *path,
-                          uint32_t path_len,
-                          uint32_t *out_blob_size);
+static int pm_fs_read_blob_for_spawn(uint32_t pm_context_id, const xfer_buffer_owner_t* pmbuf,
+                                     const char* path, uint32_t path_len, uint32_t* out_blob_size);
 
 typedef struct {
     char path[256];
@@ -910,17 +814,11 @@ typedef struct {
 /* Resolves a spawn path into a ready-to-parse blob in the caller-provided,
  * PM-owned per-operation buffer `pmbuf` (acquired and released by the handler).
  * The blob stays live in *pmbuf on success for the handler to spawn from. */
-static int
-pm_resolve_spawn_path(uint32_t pm_context_id,
-                      const xfer_buffer_owner_t *pmbuf,
-                      const char *path,
-                      uint32_t path_len,
-                      const char *cli_args,
-                      uint32_t args_len,
-                      uint32_t spawn_flags,
-                      pm_resolved_spawn_path_t *out_resolved)
-{
-    const uint8_t *pm_fs_buf = 0;
+static int pm_resolve_spawn_path(uint32_t pm_context_id, const xfer_buffer_owner_t* pmbuf,
+                                 const char* path, uint32_t path_len, const char* cli_args,
+                                 uint32_t args_len, uint32_t spawn_flags,
+                                 pm_resolved_spawn_path_t* out_resolved) {
+    const uint8_t* pm_fs_buf = 0;
     wasmos_exec_format_match_t format_match;
     wasmos_exec_broker_plan_t broker_plan;
     int broker_rc = 0;
@@ -941,41 +839,29 @@ pm_resolve_spawn_path(uint32_t pm_context_id,
         out_resolved->args_len = args_len;
     }
 
-    pm_fs_buf = (const uint8_t *)pm_xfer_owner_ptr(pmbuf);
+    pm_fs_buf = (const uint8_t*)pm_xfer_owner_ptr(pmbuf);
     if (!pm_fs_buf) {
         return PROC_SPAWN_ERR_NO_PM_FSBUF;
     }
-    if (pm_fs_read_blob_for_spawn(pm_context_id,
-                                  pmbuf,
-                                  out_resolved->path,
-                                  out_resolved->path_len,
+    if (pm_fs_read_blob_for_spawn(pm_context_id, pmbuf, out_resolved->path, out_resolved->path_len,
                                   &out_resolved->blob_size) != 0) {
         return PROC_SPAWN_ERR_FS_READ;
     }
-    if (wasmos_exec_format_classify(out_resolved->path,
-                                    pm_fs_buf,
-                                    out_resolved->blob_size,
+    if (wasmos_exec_format_classify(out_resolved->path, pm_fs_buf, out_resolved->blob_size,
                                     &format_match) != 0) {
         return PROC_SPAWN_ERR_SPAWN_FAILED;
     }
     if (format_match.kind != WASMOS_EXEC_FORMAT_BROKER) {
         return 0;
     }
-    broker_rc = pm_request_broker_spawn_plan(pm_context_id,
-                                             pmbuf,
-                                             format_match.handler,
-                                             out_resolved->path,
-                                             out_resolved->path_len,
-                                             out_resolved->args_len > 0u ? out_resolved->args : 0,
-                                             out_resolved->args_len,
-                                             spawn_flags,
-                                             out_resolved->blob_size,
-                                             &broker_plan);
+    broker_rc = pm_request_broker_spawn_plan(
+        pm_context_id, pmbuf, format_match.handler, out_resolved->path, out_resolved->path_len,
+        out_resolved->args_len > 0u ? out_resolved->args : 0, out_resolved->args_len, spawn_flags,
+        out_resolved->blob_size, &broker_plan);
     if (broker_rc != 0) {
         return broker_rc;
     }
-    if (!broker_plan.host_path ||
-        broker_plan.host_path_len == 0u ||
+    if (!broker_plan.host_path || broker_plan.host_path_len == 0u ||
         broker_plan.host_path_len >= sizeof(out_resolved->path) ||
         broker_plan.host_args_len >= sizeof(out_resolved->args)) {
         return PROC_SPAWN_ERR_BROKER_PLAN;
@@ -994,16 +880,11 @@ pm_resolve_spawn_path(uint32_t pm_context_id,
     }
     out_resolved->args_len = broker_plan.host_args_len;
 
-    if (pm_fs_read_blob_for_spawn(pm_context_id,
-                                  pmbuf,
-                                  out_resolved->path,
-                                  out_resolved->path_len,
+    if (pm_fs_read_blob_for_spawn(pm_context_id, pmbuf, out_resolved->path, out_resolved->path_len,
                                   &out_resolved->blob_size) != 0) {
         return PROC_SPAWN_ERR_BROKER_PLAN;
     }
-    if (wasmos_exec_format_classify(out_resolved->path,
-                                    pm_fs_buf,
-                                    out_resolved->blob_size,
+    if (wasmos_exec_format_classify(out_resolved->path, pm_fs_buf, out_resolved->blob_size,
                                     &format_match) != 0 ||
         format_match.kind != WASMOS_EXEC_FORMAT_WAP) {
         return PROC_SPAWN_ERR_BROKER_PLAN;
@@ -1011,17 +892,14 @@ pm_resolve_spawn_path(uint32_t pm_context_id,
     return 0;
 }
 
-static int
-pm_inherit_child_cwd(uint32_t pm_context_id, uint32_t parent_context_id, uint32_t child_pid)
-{
-    process_t *child = 0;
+static int pm_inherit_child_cwd(uint32_t pm_context_id, uint32_t parent_context_id,
+                                uint32_t child_pid) {
+    process_t* child = 0;
     ipc_message_t req;
     uint32_t req_id = 0;
 
-    if (g_pm.fs_endpoint == IPC_ENDPOINT_NONE ||
-        g_pm.fs_ctrl_endpoint == IPC_ENDPOINT_NONE ||
-        parent_context_id == 0 ||
-        child_pid == 0) {
+    if (g_pm.fs_endpoint == IPC_ENDPOINT_NONE || g_pm.fs_ctrl_endpoint == IPC_ENDPOINT_NONE ||
+        parent_context_id == 0 || child_pid == 0) {
         return 0;
     }
     child = process_get(child_pid);
@@ -1044,14 +922,9 @@ pm_inherit_child_cwd(uint32_t pm_context_id, uint32_t parent_context_id, uint32_
     return 0;
 }
 
-static int
-pm_fs_read_blob_for_spawn(uint32_t pm_context_id,
-                          const xfer_buffer_owner_t *pmbuf,
-                          const char *path,
-                          uint32_t path_len,
-                          uint32_t *out_blob_size)
-{
-    uint8_t *pm_fs_buf = 0;
+static int pm_fs_read_blob_for_spawn(uint32_t pm_context_id, const xfer_buffer_owner_t* pmbuf,
+                                     const char* path, uint32_t path_len, uint32_t* out_blob_size) {
+    uint8_t* pm_fs_buf = 0;
     uint32_t max = 0;
     uint32_t req_id = 0;
     ipc_message_t reply;
@@ -1083,21 +956,19 @@ pm_fs_read_blob_for_spawn(uint32_t pm_context_id,
     if (ipc_endpoint_owner(g_pm.fs_endpoint, &fsmgr_ctx) != IPC_OK || fsmgr_ctx == 0) {
         return PM_SPAWN_INTERNAL_ERR_SEND;
     }
-    if (xfer_buffer_borrow(pmbuf, fsmgr_ctx,
-                           BUFFER_BORROW_READ | BUFFER_BORROW_WRITE, &fs_grant) != XFER_BUFFER_OK) {
+    if (xfer_buffer_borrow(pmbuf, fsmgr_ctx, BUFFER_BORROW_READ | BUFFER_BORROW_WRITE, &fs_grant) !=
+        XFER_BUFFER_OK) {
         return PM_SPAWN_INTERNAL_ERR_SEND;
     }
     req_id = g_pm.fs_request_id++;
-    ipc_message_t req = {
-        .type = FS_IPC_READ_PATH_REQ,
-        .source = g_pm.fs_reply_endpoint,
-        .destination = g_pm.fs_endpoint,
-        .request_id = req_id,
-        .arg0 = (int32_t)path_len,
-        .arg1 = 0,
-        .arg2 = (int32_t)pmbuf->buffer.buffer_id,
-        .arg3 = (int32_t)fs_grant.borrow_id
-    };
+    ipc_message_t req = {.type = FS_IPC_READ_PATH_REQ,
+                         .source = g_pm.fs_reply_endpoint,
+                         .destination = g_pm.fs_endpoint,
+                         .request_id = req_id,
+                         .arg0 = (int32_t)path_len,
+                         .arg1 = 0,
+                         .arg2 = (int32_t)pmbuf->buffer.buffer_id,
+                         .arg3 = (int32_t)fs_grant.borrow_id};
     if (ipc_send_from(pm_context_id, g_pm.fs_endpoint, &req) != IPC_OK) {
         (void)xfer_buffer_unborrow(&fs_grant);
         return PM_SPAWN_INTERNAL_ERR_SEND;
@@ -1110,9 +981,7 @@ pm_fs_read_blob_for_spawn(uint32_t pm_context_id,
          * it. Leaving it active would make the next read's re-grant fail
          * ALREADY_BORROWED. PM created the grant, so it holds the handle. */
         (void)xfer_buffer_unborrow(&fs_grant);
-        if (recv_rc != 0 ||
-            reply.type != FS_IPC_RESP ||
-            reply.arg0 <= 0 ||
+        if (recv_rc != 0 || reply.type != FS_IPC_RESP || reply.arg0 <= 0 ||
             (uint32_t)reply.arg0 > max) {
             klog_write("[pm] spawn_path fs read failed: ");
             for (uint32_t i = 0; i < path_len; ++i) {
@@ -1129,11 +998,9 @@ pm_fs_read_blob_for_spawn(uint32_t pm_context_id,
     return 0;
 }
 
-int
-pm_handle_spawn_sync(uint32_t pm_context_id, const ipc_message_t *msg)
-{
+int pm_handle_spawn_sync(uint32_t pm_context_id, const ipc_message_t* msg) {
     uint32_t owner_context = 0;
-    process_t *caller = 0;
+    process_t* caller = 0;
     uint32_t parent_pid = 0;
     uint32_t child_pid = 0;
 
@@ -1163,19 +1030,16 @@ pm_handle_spawn_sync(uint32_t pm_context_id, const ipc_message_t *msg)
     g_pm.spawn.parent_context_id = owner_context;
     g_pm.spawn.sync_child_pid = child_pid;
     g_pm.spawn.app_flags = 0;
-    g_pm.spawn.sync_timeout_ticks = (timeout_ms > 0)
-        ? (timer_ticks() + timer_ms_to_ticks(timeout_ms))
-        : 0;
+    g_pm.spawn.sync_timeout_ticks =
+        (timeout_ms > 0) ? (timer_ticks() + timer_ms_to_ticks(timeout_ms)) : 0;
     process_unpark_pid(child_pid);
     return 0;
 }
 
-int
-pm_handle_spawn_caps_sync(uint32_t pm_context_id, const ipc_message_t *msg)
-{
+int pm_handle_spawn_caps_sync(uint32_t pm_context_id, const ipc_message_t* msg) {
     pm_spawn_caps_t caps = {0};
     uint32_t owner_context = 0;
-    process_t *caller = 0;
+    process_t* caller = 0;
     uint32_t parent_pid = 0;
     uint32_t child_pid = 0;
 
@@ -1192,10 +1056,10 @@ pm_handle_spawn_caps_sync(uint32_t pm_context_id, const ipc_message_t *msg)
     parent_pid = caller->pid;
 
     caps.valid = 1;
-    caps.cap_flags   = (uint32_t)msg->arg1;
+    caps.cap_flags = (uint32_t)msg->arg1;
     caps.io_port_min = (uint16_t)((uint32_t)msg->arg2 & 0xFFFFu);
     caps.io_port_max = (uint16_t)(((uint32_t)msg->arg2 >> 16) & 0xFFFFu);
-    caps.irq_mask    = (uint16_t)((uint32_t)msg->arg3 & 0xFFFFu);
+    caps.irq_mask = (uint16_t)((uint32_t)msg->arg3 & 0xFFFFu);
     uint32_t timeout_ms = (uint32_t)msg->arg3 >> 16;
     if ((caps.cap_flags & DEVMGR_CAP_IO_PORT) == 0) {
         caps.io_port_min = 0;
@@ -1231,23 +1095,21 @@ pm_handle_spawn_caps_sync(uint32_t pm_context_id, const ipc_message_t *msg)
     g_pm.spawn.parent_context_id = owner_context;
     g_pm.spawn.sync_child_pid = child_pid;
     g_pm.spawn.app_flags = 0;
-    g_pm.spawn.sync_timeout_ticks = (timeout_ms > 0)
-        ? (timer_ticks() + timer_ms_to_ticks(timeout_ms)) : 0;
+    g_pm.spawn.sync_timeout_ticks =
+        (timeout_ms > 0) ? (timer_ticks() + timer_ms_to_ticks(timeout_ms)) : 0;
     process_unpark_pid(child_pid);
     return 0;
 }
 
-int
-pm_handle_spawn_path_sync(uint32_t pm_context_id, const ipc_message_t *msg)
-{
+int pm_handle_spawn_path_sync(uint32_t pm_context_id, const ipc_message_t* msg) {
     uint32_t owner_context = 0;
-    process_t *caller = 0;
+    process_t* caller = 0;
     uint32_t parent_pid = 0;
     uint32_t spawn_req_flags = (uint32_t)msg->arg0;
     uint32_t path_len = (uint32_t)msg->arg1 & 0xFFFu;
     uint32_t caller_buffer_id = (uint32_t)msg->arg1 >> 12;
     uint32_t timeout_ms = (uint32_t)msg->arg3;
-    const uint8_t *caller_fs_buf = 0;
+    const uint8_t* caller_fs_buf = 0;
     char path[256];
     pm_resolved_spawn_path_t resolved;
     uint32_t child_pid = 0;
@@ -1278,23 +1140,14 @@ pm_handle_spawn_path_sync(uint32_t pm_context_id, const ipc_message_t *msg)
     if (pm_xfer_acquire(pm_context_id, xfer_buffer_size(BUFFER_KIND_TRANSFER), &pmbuf) != 0) {
         return PROC_PM_ERR_NO_PM_FSBUF;
     }
-    if (pm_resolve_spawn_path(pm_context_id,
-                              &pmbuf,
-                              path,
-                              path_len,
-                              0,
-                              0,
-                              spawn_req_flags,
+    if (pm_resolve_spawn_path(pm_context_id, &pmbuf, path, path_len, 0, 0, spawn_req_flags,
                               &resolved) != 0) {
         pm_xfer_release(&pmbuf);
         return PROC_PM_ERR_PATH_RESOLVE;
     }
-    if (pm_spawn_from_buffer(parent_pid,
-                             (const uint8_t *)pm_xfer_owner_ptr(&pmbuf),
-                             resolved.blob_size,
-                             resolved.args_len > 0u ? resolved.args : 0,
-                             resolved.args_len,
-                             &child_pid) != 0) {
+    if (pm_spawn_from_buffer(parent_pid, (const uint8_t*)pm_xfer_owner_ptr(&pmbuf),
+                             resolved.blob_size, resolved.args_len > 0u ? resolved.args : 0,
+                             resolved.args_len, &child_pid) != 0) {
         pm_xfer_release(&pmbuf);
         return PROC_PM_ERR_SPAWN_FAILED;
     }
@@ -1316,15 +1169,13 @@ pm_handle_spawn_path_sync(uint32_t pm_context_id, const ipc_message_t *msg)
     g_pm.spawn.parent_context_id = owner_context;
     g_pm.spawn.sync_child_pid = child_pid;
     g_pm.spawn.app_flags = 0;
-    g_pm.spawn.sync_timeout_ticks = (timeout_ms > 0)
-        ? (timer_ticks() + timer_ms_to_ticks(timeout_ms)) : 0;
+    g_pm.spawn.sync_timeout_ticks =
+        (timeout_ms > 0) ? (timer_ticks() + timer_ms_to_ticks(timeout_ms)) : 0;
     process_unpark_pid(child_pid);
     return 0;
 }
 
-int
-pm_handle_spawn_path_caps_sync(uint32_t pm_context_id, const ipc_message_t *msg)
-{
+int pm_handle_spawn_path_caps_sync(uint32_t pm_context_id, const ipc_message_t* msg) {
     uint32_t caps_arg0 = (uint32_t)msg->arg0;
     uint32_t caps_arg2 = (uint32_t)msg->arg2;
     uint32_t path_len = (uint32_t)msg->arg1 & 0xFFFu;
@@ -1332,9 +1183,9 @@ pm_handle_spawn_path_caps_sync(uint32_t pm_context_id, const ipc_message_t *msg)
     uint32_t timeout_ms = (uint32_t)msg->arg3;
     pm_spawn_caps_t caps = {0};
     uint32_t owner_context = 0;
-    process_t *caller = 0;
+    process_t* caller = 0;
     uint32_t parent_pid = 0;
-    const uint8_t *caller_fs_buf = 0;
+    const uint8_t* caller_fs_buf = 0;
     char path[256];
     char cli_args[256];
     uint32_t cli_args_len = 0;
@@ -1343,8 +1194,8 @@ pm_handle_spawn_path_caps_sync(uint32_t pm_context_id, const ipc_message_t *msg)
     xfer_buffer_owner_t pmbuf = {0};
 
     caps.valid = 1;
-    caps.cap_flags   = caps_arg0 & 0xFFFFu;
-    caps.irq_mask    = (uint16_t)(caps_arg0 >> 16);
+    caps.cap_flags = caps_arg0 & 0xFFFFu;
+    caps.irq_mask = (uint16_t)(caps_arg0 >> 16);
     caps.io_port_min = (uint16_t)(caps_arg2 & 0xFFFFu);
     caps.io_port_max = (uint16_t)(caps_arg2 >> 16);
     caps.dma_direction_flags = 0;
@@ -1408,23 +1259,14 @@ pm_handle_spawn_path_caps_sync(uint32_t pm_context_id, const ipc_message_t *msg)
     if (pm_xfer_acquire(pm_context_id, xfer_buffer_size(BUFFER_KIND_TRANSFER), &pmbuf) != 0) {
         return PROC_PM_ERR_NO_PM_FSBUF;
     }
-    if (pm_resolve_spawn_path(pm_context_id,
-                              &pmbuf,
-                              path,
-                              path_len,
-                              cli_args_len > 0u ? cli_args : 0,
-                              cli_args_len,
-                              0,
-                              &resolved) != 0) {
+    if (pm_resolve_spawn_path(pm_context_id, &pmbuf, path, path_len,
+                              cli_args_len > 0u ? cli_args : 0, cli_args_len, 0, &resolved) != 0) {
         pm_xfer_release(&pmbuf);
         return PROC_PM_ERR_PATH_RESOLVE;
     }
-    if (pm_spawn_from_buffer(parent_pid,
-                             (const uint8_t *)pm_xfer_owner_ptr(&pmbuf),
-                             resolved.blob_size,
-                             resolved.args_len > 0u ? resolved.args : 0,
-                             resolved.args_len,
-                             &child_pid) != 0) {
+    if (pm_spawn_from_buffer(parent_pid, (const uint8_t*)pm_xfer_owner_ptr(&pmbuf),
+                             resolved.blob_size, resolved.args_len > 0u ? resolved.args : 0,
+                             resolved.args_len, &child_pid) != 0) {
         pm_xfer_release(&pmbuf);
         return PROC_PM_ERR_SPAWN_FAILED;
     }
@@ -1450,19 +1292,16 @@ pm_handle_spawn_path_caps_sync(uint32_t pm_context_id, const ipc_message_t *msg)
     g_pm.spawn.parent_context_id = owner_context;
     g_pm.spawn.sync_child_pid = child_pid;
     g_pm.spawn.app_flags = 0;
-    g_pm.spawn.sync_timeout_ticks = (timeout_ms > 0)
-        ? (timer_ticks() + timer_ms_to_ticks(timeout_ms)) : 0;
+    g_pm.spawn.sync_timeout_ticks =
+        (timeout_ms > 0) ? (timer_ticks() + timer_ms_to_ticks(timeout_ms)) : 0;
     process_unpark_pid(child_pid);
     return 0;
 }
 
-static void
-pm_poll_sync_spawn(uint32_t pm_context_id)
-{
+static void pm_poll_sync_spawn(uint32_t pm_context_id) {
     ipc_message_t resp;
 
-    if (g_pm.spawn.sync_timeout_ticks > 0 &&
-        timer_ticks() >= g_pm.spawn.sync_timeout_ticks) {
+    if (g_pm.spawn.sync_timeout_ticks > 0 && timer_ticks() >= g_pm.spawn.sync_timeout_ticks) {
         klog_write("[pm] spawn timeout ticks=");
         serial_write_hex64(timer_ticks());
         klog_write(" deadline=");
@@ -1483,10 +1322,8 @@ pm_poll_sync_spawn(uint32_t pm_context_id)
         return;
     }
 
-    process_t *child = process_get(g_pm.spawn.sync_child_pid);
-    if (!child ||
-        child->state == PROCESS_STATE_ZOMBIE ||
-        child->exiting) {
+    process_t* child = process_get(g_pm.spawn.sync_child_pid);
+    if (!child || child->state == PROCESS_STATE_ZOMBIE || child->exiting) {
         klog_write("[pm] spawn child-dead pid=");
         serial_write_hex64((uint64_t)g_pm.spawn.sync_child_pid);
         klog_write(" state=");
@@ -1527,20 +1364,16 @@ pm_poll_sync_spawn(uint32_t pm_context_id)
  * pm_poll_sync_spawn. The former name-based async path (FS_IPC_READ_APP round
  * trip) was removed with spawn-by-name; spawns now read blobs inline in the
  * path handlers using a PM-owned per-operation buffer. */
-void
-pm_poll_spawn(uint32_t pm_context_id)
-{
+void pm_poll_spawn(uint32_t pm_context_id) {
     if (!g_pm.spawn.in_use) {
         return;
     }
     pm_poll_sync_spawn(pm_context_id);
 }
 
-int
-pm_handle_notify_ready(uint32_t pm_context_id, const ipc_message_t *msg)
-{
+int pm_handle_notify_ready(uint32_t pm_context_id, const ipc_message_t* msg) {
     uint32_t owner_context = 0;
-    process_t *sender = 0;
+    process_t* sender = 0;
 
     if (ipc_endpoint_owner(msg->source, &owner_context) != IPC_OK) {
         return PROC_PM_ERR_BAD_ENDPOINT;
@@ -1551,9 +1384,7 @@ pm_handle_notify_ready(uint32_t pm_context_id, const ipc_message_t *msg)
     }
     process_notify_ready(sender);
 
-    if (g_pm.spawn.in_use &&
-        g_pm.spawn.is_sync &&
-        g_pm.spawn.sync_child_pid == sender->pid) {
+    if (g_pm.spawn.in_use && g_pm.spawn.is_sync && g_pm.spawn.sync_child_pid == sender->pid) {
         ipc_message_t resp;
         resp.type = PROC_IPC_RESP;
         resp.source = g_pm.proc_endpoint;
@@ -1584,15 +1415,13 @@ pm_handle_notify_ready(uint32_t pm_context_id, const ipc_message_t *msg)
     return ipc_send_from(pm_context_id, msg->source, &ack) == IPC_OK ? 0 : PROC_PM_ERR_REPLY_SEND;
 }
 
-void
-pm_check_waits(uint32_t pm_context_id)
-{
+void pm_check_waits(uint32_t pm_context_id) {
     list_iter_t it;
-    pm_wait_state_t *waiter = (pm_wait_state_t *)list_first(&g_pm.waits, &it);
+    pm_wait_state_t* waiter = (pm_wait_state_t*)list_first(&g_pm.waits, &it);
     while (waiter) {
         uint32_t reply_owner_context = 0;
         if (!waiter->in_use) {
-            waiter = (pm_wait_state_t *)list_next(&it);
+            waiter = (pm_wait_state_t*)list_next(&it);
             continue;
         }
         if (ipc_endpoint_owner(waiter->reply_endpoint, &reply_owner_context) != IPC_OK ||
@@ -1602,13 +1431,13 @@ pm_check_waits(uint32_t pm_context_id)
                 klog_write("[test] pm wait reply owner deny ok\n");
             }
             waiter->in_use = 0;
-            waiter = (pm_wait_state_t *)list_next(&it);
+            waiter = (pm_wait_state_t*)list_next(&it);
             continue;
         }
         int32_t exit_status = 0;
         int rc = process_get_exit_status(waiter->pid, &exit_status);
         if (rc != 0) {
-            waiter = (pm_wait_state_t *)list_next(&it);
+            waiter = (pm_wait_state_t*)list_next(&it);
             continue;
         }
 
@@ -1625,43 +1454,39 @@ pm_check_waits(uint32_t pm_context_id)
         waiter->in_use = 0;
         /* Status delivered — reap the zombie so its process slot is freed. */
         process_reap_zombie_pid(waiter->pid);
-        waiter = (pm_wait_state_t *)list_next(&it);
+        waiter = (pm_wait_state_t*)list_next(&it);
     }
 }
 
-void
-pm_reap_apps(process_t *owner)
-{
+void pm_reap_apps(process_t* owner) {
     if (!owner) {
         return;
     }
     list_iter_t it;
-    pm_app_state_t *app = (pm_app_state_t *)list_first(&g_pm.apps, &it);
+    pm_app_state_t* app = (pm_app_state_t*)list_first(&g_pm.apps, &it);
     while (app) {
         if (!app->in_use || app->pid == 0) {
-            app = (pm_app_state_t *)list_next(&it);
+            app = (pm_app_state_t*)list_next(&it);
             continue;
         }
         int32_t exit_status = 0;
         if (process_get_exit_status(app->pid, &exit_status) != 0) {
-            app = (pm_app_state_t *)list_next(&it);
+            app = (pm_app_state_t*)list_next(&it);
             continue;
         }
         if (process_wait(owner, app->pid, &exit_status) != 0) {
-            app = (pm_app_state_t *)list_next(&it);
+            app = (pm_app_state_t*)list_next(&it);
             continue;
         }
         wasmos_app_stop(&app->app);
         pm_slot_reset(app);
-        app = (pm_app_state_t *)list_next(&it);
+        app = (pm_app_state_t*)list_next(&it);
     }
 }
 
-int
-pm_handle_spawn(uint32_t pm_context_id, const ipc_message_t *msg)
-{
+int pm_handle_spawn(uint32_t pm_context_id, const ipc_message_t* msg) {
     uint32_t owner_context = 0;
-    process_t *caller = 0;
+    process_t* caller = 0;
     uint32_t parent_pid = 0;
     uint32_t pid = 0;
     if (ipc_endpoint_owner(msg->source, &owner_context) != IPC_OK) {
@@ -1702,12 +1527,10 @@ pm_handle_spawn(uint32_t pm_context_id, const ipc_message_t *msg)
     return ipc_send_from(pm_context_id, msg->source, &resp) == IPC_OK ? 0 : PROC_PM_ERR_REPLY_SEND;
 }
 
-int
-pm_handle_spawn_caps(uint32_t pm_context_id, const ipc_message_t *msg)
-{
+int pm_handle_spawn_caps(uint32_t pm_context_id, const ipc_message_t* msg) {
     pm_spawn_caps_t caps = {0};
     uint32_t owner_context = 0;
-    process_t *caller = 0;
+    process_t* caller = 0;
     uint32_t parent_pid = 0;
     uint32_t pid = 0;
     if (ipc_endpoint_owner(msg->source, &owner_context) != IPC_OK) {
@@ -1763,19 +1586,15 @@ pm_handle_spawn_caps(uint32_t pm_context_id, const ipc_message_t *msg)
     return ipc_send_from(pm_context_id, msg->source, &resp) == IPC_OK ? 0 : PROC_PM_ERR_REPLY_SEND;
 }
 
-int
-pm_handle_spawn_caps_v2(uint32_t pm_context_id, const ipc_message_t *msg)
-{
+int pm_handle_spawn_caps_v2(uint32_t pm_context_id, const ipc_message_t* msg) {
     pm_spawn_caps_t caps = {0};
     wasmos_spawn_caps_v2_t in_caps;
     uint32_t owner_context = 0;
-    process_t *caller = 0;
+    process_t* caller = 0;
     uint32_t parent_pid = 0;
     uint32_t pid = 0;
-    uint32_t known_cap_mask = DEVMGR_CAP_IO_PORT |
-                              DEVMGR_CAP_MMIO_MAP |
-                              DEVMGR_CAP_IRQ |
-                              DEVMGR_CAP_DMA;
+    uint32_t known_cap_mask =
+        DEVMGR_CAP_IO_PORT | DEVMGR_CAP_MMIO_MAP | DEVMGR_CAP_IRQ | DEVMGR_CAP_DMA;
     uint32_t payload_size = 0;
     uint32_t expected_size = 0;
     uint64_t caps_user_va = 0;
@@ -1793,16 +1612,11 @@ pm_handle_spawn_caps_v2(uint32_t pm_context_id, const ipc_message_t *msg)
     if (msg->arg1 == 0 || payload_size < (uint32_t)sizeof(in_caps)) {
         return PROC_PM_ERR_BAD_CAPS;
     }
-    if (pm_resolve_user_ptr(owner_context,
-                            (uint32_t)msg->arg1,
-                            (uint32_t)sizeof(in_caps),
+    if (pm_resolve_user_ptr(owner_context, (uint32_t)msg->arg1, (uint32_t)sizeof(in_caps),
                             &caps_user_va) != 0) {
         return PROC_PM_ERR_BAD_USER_PTR;
     }
-    if (mm_copy_from_user(owner_context,
-                          &in_caps,
-                          caps_user_va,
-                          sizeof(in_caps)) != 0) {
+    if (mm_copy_from_user(owner_context, &in_caps, caps_user_va, sizeof(in_caps)) != 0) {
         return PROC_PM_ERR_USER_COPY;
     }
 
@@ -1829,20 +1643,17 @@ pm_handle_spawn_caps_v2(uint32_t pm_context_id, const ipc_message_t *msg)
     }
     if ((caps.cap_flags & DEVMGR_CAP_DMA) != 0) {
         if ((in_caps.dma.direction_flags & ~WASMOS_DMA_DIR_BIDIR) != 0 ||
-            in_caps.dma.direction_flags == 0 ||
-            in_caps.dma.max_bytes == 0 ||
-            in_caps.dma.window_count == 0 ||
-            in_caps.dma.window_count > PM_DMA_WINDOW_LIMIT) {
+            in_caps.dma.direction_flags == 0 || in_caps.dma.max_bytes == 0 ||
+            in_caps.dma.window_count == 0 || in_caps.dma.window_count > PM_DMA_WINDOW_LIMIT) {
             return PROC_PM_ERR_BAD_CAPS;
         }
         expected_size = WASMOS_SPAWN_CAPS_V2_SIZE(in_caps.dma.window_count);
         if (payload_size != expected_size) {
             return PROC_PM_ERR_BAD_CAPS;
         }
-        if (mm_copy_from_user(owner_context,
-                              caps.dma_windows,
-                              caps_user_va + sizeof(in_caps),
-                              (uint64_t)in_caps.dma.window_count * sizeof(wasmos_dma_window_t)) != 0) {
+        if (mm_copy_from_user(owner_context, caps.dma_windows, caps_user_va + sizeof(in_caps),
+                              (uint64_t)in_caps.dma.window_count * sizeof(wasmos_dma_window_t)) !=
+            0) {
             return PROC_PM_ERR_USER_COPY;
         }
         for (uint32_t i = 0; i < in_caps.dma.window_count; ++i) {
@@ -1882,16 +1693,14 @@ pm_handle_spawn_caps_v2(uint32_t pm_context_id, const ipc_message_t *msg)
     return ipc_send_from(pm_context_id, msg->source, &resp) == IPC_OK ? 0 : PROC_PM_ERR_REPLY_SEND;
 }
 
-int
-pm_handle_spawn_path(uint32_t pm_context_id, const ipc_message_t *msg)
-{
+int pm_handle_spawn_path(uint32_t pm_context_id, const ipc_message_t* msg) {
     uint32_t owner_context = 0;
-    process_t *caller = 0;
+    process_t* caller = 0;
     uint32_t parent_pid = 0;
     uint32_t path_len = (uint32_t)msg->arg1 & 0xFFFu;
     uint32_t caller_buffer_id = (uint32_t)msg->arg1 >> 12;
     uint32_t args_len = (uint32_t)msg->arg2;
-    const uint8_t *caller_fs_buf = 0;
+    const uint8_t* caller_fs_buf = 0;
     char path[256];
     char cli_args[256];
     pm_resolved_spawn_path_t resolved;
@@ -1921,7 +1730,8 @@ pm_handle_spawn_path(uint32_t pm_context_id, const ipc_message_t *msg)
     if (args_len > 0u) {
         uint32_t fs_buf_size = xfer_buffer_size(BUFFER_KIND_TRANSFER);
         uint32_t args_off = path_len + 1u;
-        if (args_len >= sizeof(cli_args) || args_off >= fs_buf_size || args_len > (fs_buf_size - args_off)) {
+        if (args_len >= sizeof(cli_args) || args_off >= fs_buf_size ||
+            args_len > (fs_buf_size - args_off)) {
             return PROC_SPAWN_ERR_ARGS_TOOBIG;
         }
         for (uint32_t i = 0; i < args_len; ++i) {
@@ -1935,14 +1745,9 @@ pm_handle_spawn_path(uint32_t pm_context_id, const ipc_message_t *msg)
         return PROC_SPAWN_ERR_NO_PM_FSBUF;
     }
     {
-        int resolve_rc = pm_resolve_spawn_path(pm_context_id,
-                                               &pmbuf,
-                                               path,
-                                               path_len,
-                                               args_len > 0u ? cli_args : 0,
-                                               args_len,
-                                               spawn_req_flags,
-                                               &resolved);
+        int resolve_rc = pm_resolve_spawn_path(pm_context_id, &pmbuf, path, path_len,
+                                               args_len > 0u ? cli_args : 0, args_len,
+                                               spawn_req_flags, &resolved);
         if (resolve_rc != 0) {
             pm_xfer_release(&pmbuf);
             return resolve_rc;
@@ -1950,9 +1755,8 @@ pm_handle_spawn_path(uint32_t pm_context_id, const ipc_message_t *msg)
     }
     wasmos_app_desc_t desc;
     uint32_t app_flags = 0;
-    int parse_rc = wasmos_app_parse((const uint8_t *)pm_xfer_owner_ptr(&pmbuf),
-                                    resolved.blob_size,
-                                    &desc);
+    int parse_rc =
+        wasmos_app_parse((const uint8_t*)pm_xfer_owner_ptr(&pmbuf), resolved.blob_size, &desc);
     if (parse_rc == 0) {
         app_flags = desc.flags;
     }
@@ -1969,12 +1773,9 @@ pm_handle_spawn_path(uint32_t pm_context_id, const ipc_message_t *msg)
         pm_xfer_release(&pmbuf);
         return PROC_PM_ERR_BUSY;
     }
-    if (pm_spawn_from_buffer(parent_pid,
-                             (const uint8_t *)pm_xfer_owner_ptr(&pmbuf),
-                             resolved.blob_size,
-                             resolved.args_len > 0u ? resolved.args : 0,
-                             resolved.args_len,
-                             &pid) != 0) {
+    if (pm_spawn_from_buffer(parent_pid, (const uint8_t*)pm_xfer_owner_ptr(&pmbuf),
+                             resolved.blob_size, resolved.args_len > 0u ? resolved.args : 0,
+                             resolved.args_len, &pid) != 0) {
         pm_xfer_release(&pmbuf);
         return PROC_SPAWN_ERR_SPAWN_FAILED;
     }
@@ -2018,15 +1819,13 @@ pm_handle_spawn_path(uint32_t pm_context_id, const ipc_message_t *msg)
     return ipc_send_from(pm_context_id, msg->source, &resp) == IPC_OK ? 0 : PROC_PM_ERR_REPLY_SEND;
 }
 
-int
-pm_handle_spawn_path_caps(uint32_t pm_context_id, const ipc_message_t *msg)
-{
+int pm_handle_spawn_path_caps(uint32_t pm_context_id, const ipc_message_t* msg) {
     uint32_t owner_context = 0;
-    process_t *caller = 0;
+    process_t* caller = 0;
     uint32_t parent_pid = 0;
     uint32_t path_len = (uint32_t)msg->arg1 & 0xFFFu;
     uint32_t caller_buffer_id = (uint32_t)msg->arg1 >> 12;
-    const uint8_t *caller_fs_buf = 0;
+    const uint8_t* caller_fs_buf = 0;
     char path[256];
     char cli_args[256];
     uint32_t cli_args_len = 0;
@@ -2041,8 +1840,8 @@ pm_handle_spawn_path_caps(uint32_t pm_context_id, const ipc_message_t *msg)
     uint32_t caps_arg0 = (uint32_t)msg->arg0;
     uint32_t caps_arg2 = (uint32_t)msg->arg2;
     caps.valid = 1;
-    caps.cap_flags  = caps_arg0 & 0xFFFFu;
-    caps.irq_mask   = (uint16_t)(caps_arg0 >> 16);
+    caps.cap_flags = caps_arg0 & 0xFFFFu;
+    caps.irq_mask = (uint16_t)(caps_arg0 >> 16);
     caps.io_port_min = (uint16_t)(caps_arg2 & 0xFFFFu);
     caps.io_port_max = (uint16_t)(caps_arg2 >> 16);
     caps.dma_direction_flags = 0;
@@ -2100,23 +1899,14 @@ pm_handle_spawn_path_caps(uint32_t pm_context_id, const ipc_message_t *msg)
     if (pm_xfer_acquire(pm_context_id, xfer_buffer_size(BUFFER_KIND_TRANSFER), &pmbuf) != 0) {
         return PROC_PM_ERR_NO_PM_FSBUF;
     }
-    if (pm_resolve_spawn_path(pm_context_id,
-                              &pmbuf,
-                              path,
-                              path_len,
-                              cli_args_len > 0u ? cli_args : 0,
-                              cli_args_len,
-                              0,
-                              &resolved) != 0) {
+    if (pm_resolve_spawn_path(pm_context_id, &pmbuf, path, path_len,
+                              cli_args_len > 0u ? cli_args : 0, cli_args_len, 0, &resolved) != 0) {
         pm_xfer_release(&pmbuf);
         return PROC_PM_ERR_PATH_RESOLVE;
     }
-    if (pm_spawn_from_buffer(parent_pid,
-                             (const uint8_t *)pm_xfer_owner_ptr(&pmbuf),
-                             resolved.blob_size,
-                             resolved.args_len > 0u ? resolved.args : 0,
-                             resolved.args_len,
-                             &pid) != 0) {
+    if (pm_spawn_from_buffer(parent_pid, (const uint8_t*)pm_xfer_owner_ptr(&pmbuf),
+                             resolved.blob_size, resolved.args_len > 0u ? resolved.args : 0,
+                             resolved.args_len, &pid) != 0) {
         pm_xfer_release(&pmbuf);
         return PROC_PM_ERR_SPAWN_FAILED;
     }
@@ -2140,15 +1930,13 @@ pm_handle_spawn_path_caps(uint32_t pm_context_id, const ipc_message_t *msg)
     return ipc_send_from(pm_context_id, msg->source, &resp) == IPC_OK ? 0 : PROC_PM_ERR_REPLY_SEND;
 }
 
-int
-pm_handle_module_meta(uint32_t pm_context_id, const ipc_message_t *msg)
-{
+int pm_handle_module_meta(uint32_t pm_context_id, const ipc_message_t* msg) {
     uint32_t owner_context = 0;
-    process_t *caller = 0;
+    process_t* caller = 0;
     wasmos_app_desc_t desc;
     uint32_t match_index = msg->arg1;
     uint32_t match_count = 0;
-    wasmos_app_driver_match_t *match = 0;
+    wasmos_app_driver_match_t* match = 0;
     uint32_t cap_flags = 0;
     uint32_t packed_match = 0;
     uint32_t packed_vendor_device = 0;
@@ -2175,16 +1963,13 @@ pm_handle_module_meta(uint32_t pm_context_id, const ipc_message_t *msg)
     match = &desc.driver_matches[match_index];
     cap_flags = wasmos_app_driver_cap_flags(&desc);
 
-    packed_match = ((uint32_t)match->class_code << 24) |
-                   ((uint32_t)match->subclass << 16) |
+    packed_match = ((uint32_t)match->class_code << 24) | ((uint32_t)match->subclass << 16) |
                    ((uint32_t)match->prog_if << 8) |
                    ((((desc.flags & WASMOS_APP_FLAG_STORAGE_BOOTSTRAP) != 0) ? 1u : 0u) |
                     ((match_count & 0x7Fu) << 1));
-    packed_vendor_device = ((uint32_t)match->vendor_id << 16) |
-                           (uint32_t)match->device_id;
+    packed_vendor_device = ((uint32_t)match->vendor_id << 16) | (uint32_t)match->device_id;
     packed_caps = (uint32_t)cap_flags;
-    packed_io = ((uint32_t)match->io_port_max << 16) |
-                ((uint32_t)match->io_port_min & 0xFFFFu);
+    packed_io = ((uint32_t)match->io_port_max << 16) | ((uint32_t)match->io_port_min & 0xFFFFu);
 
     ipc_message_t resp;
     resp.type = PROC_IPC_RESP;
@@ -2198,12 +1983,10 @@ pm_handle_module_meta(uint32_t pm_context_id, const ipc_message_t *msg)
     return ipc_send_from(pm_context_id, msg->source, &resp) == IPC_OK ? 0 : PROC_PM_ERR_REPLY_SEND;
 }
 
-int
-pm_handle_module_meta_path(uint32_t pm_context_id, const ipc_message_t *msg)
-{
+int pm_handle_module_meta_path(uint32_t pm_context_id, const ipc_message_t* msg) {
     uint32_t owner_context = 0;
-    process_t *caller = 0;
-    const uint8_t *caller_fs_buf = 0;
+    process_t* caller = 0;
+    const uint8_t* caller_fs_buf = 0;
     char path[96];
     uint32_t path_ptr = (uint32_t)msg->arg0;
     uint32_t path_len = (uint32_t)msg->arg1 & 0xFFFu;
@@ -2239,7 +2022,8 @@ pm_handle_module_meta_path(uint32_t pm_context_id, const ipc_message_t *msg)
     }
     path[path_len] = '\0';
     if (source == PROC_MODULE_SOURCE_INITFS) {
-        if (wasmos_app_module_desc_by_initfs_path(g_pm.boot_info, path, &module_index, &desc) != 0) {
+        if (wasmos_app_module_desc_by_initfs_path(g_pm.boot_info, path, &module_index, &desc) !=
+            0) {
             return PROC_PM_ERR_META_LOOKUP;
         }
     } else if (source == PROC_MODULE_SOURCE_FS) {

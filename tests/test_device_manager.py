@@ -33,10 +33,14 @@ class DeviceManagerIntegrationTests(unittest.TestCase):
         self.session.send(cmd)
         ok = self.session.expect_from(mark, needle, timeout_s=timeout_s)
         if not ok:
-            self.fail(f"Expected output not found for '{cmd}'.\n--- tail ---\n{self.session.tail()}\n")
+            self.fail(
+                f"Expected output not found for '{cmd}'.\n--- tail ---\n{self.session.tail()}\n"
+            )
         ok = self.session.expect_from(mark, b"wamos> ", timeout_s=timeout_s)
         if not ok:
-            self.fail(f"Prompt not found after '{cmd}'.\n--- tail ---\n{self.session.tail()}\n")
+            self.fail(
+                f"Prompt not found after '{cmd}'.\n--- tail ---\n{self.session.tail()}\n"
+            )
 
     def test_device_manager_running(self):
         self._cmd_expect("ps", b"device-manager")

@@ -17,9 +17,7 @@
 static uint8_t g_kmem_early_arena[KMEM_EARLY_ARENA_BYTES];
 static uint32_t g_kmem_early_arena_off;
 
-static void *
-kmem_early_alloc(size_t size)
-{
+static void* kmem_early_alloc(size_t size) {
     uintptr_t base = (uintptr_t)&g_kmem_early_arena[0];
     if (size == 0) {
         return 0;
@@ -35,15 +33,13 @@ kmem_early_alloc(size_t size)
         }
         next = (uint32_t)(end - base);
         if (__sync_bool_compare_and_swap(&g_kmem_early_arena_off, observed, next)) {
-            return (void *)aligned;
+            return (void*)aligned;
         }
     }
 }
 
-void *
-kmem_alloc(size_t size)
-{
-    void *ptr = 0;
+void* kmem_alloc(size_t size) {
+    void* ptr = 0;
     if (size == 0) {
         return 0;
     }
@@ -54,9 +50,7 @@ kmem_alloc(size_t size)
     return kmem_early_alloc(size);
 }
 
-void
-kmem_free(void *ptr)
-{
+void kmem_free(void* ptr) {
     uintptr_t start = (uintptr_t)&g_kmem_early_arena[0];
     uintptr_t end = start + (uintptr_t)KMEM_EARLY_ARENA_BYTES;
     uintptr_t p = (uintptr_t)ptr;

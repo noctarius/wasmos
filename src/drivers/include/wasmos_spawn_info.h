@@ -25,21 +25,21 @@
 
 #include <stdint.h>
 
-#define WASMOS_SPAWN_INFO_MAGIC   0x57535049u /* 'WSPI' (little-endian on wire) */
+#define WASMOS_SPAWN_INFO_MAGIC 0x57535049u /* 'WSPI' (little-endian on wire) */
 #define WASMOS_SPAWN_INFO_VERSION 1u
 
 typedef struct {
-    uint32_t magic;         /* WASMOS_SPAWN_INFO_MAGIC */
-    uint32_t version;       /* WASMOS_SPAWN_INFO_VERSION */
-    uint32_t header_size;   /* sizeof(this header); cursor to the args blob */
+    uint32_t magic;       /* WASMOS_SPAWN_INFO_MAGIC */
+    uint32_t version;     /* WASMOS_SPAWN_INFO_VERSION */
+    uint32_t header_size; /* sizeof(this header); cursor to the args blob */
 
     uint32_t proc_endpoint; /* process-manager IPC endpoint (svc_lookup bootstrap) */
     uint32_t tty;           /* allocated controlling TTY id, 0 if none */
     uint32_t module_count;  /* number of boot modules (sysinit/device_manager) */
     uint32_t module_index;  /* this module's index in the boot list, 0 if N/A */
 
-    uint32_t args_off;      /* byte offset of the args blob within the buffer */
-    uint32_t args_len;      /* args length in bytes, excluding the trailing NUL */
+    uint32_t args_off; /* byte offset of the args blob within the buffer */
+    uint32_t args_len; /* args length in bytes, excluding the trailing NUL */
     /* v2+: env_off/env_len, cwd_off/cwd_len, uid, ... appended here. */
 } wasmos_spawn_info_t;
 

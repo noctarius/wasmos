@@ -23,30 +23,46 @@
  * C++ memory operators
  * ----------------------------------------------------------------------- */
 
-void *operator new(size_t size)
-{
-    void *p = malloc(size);
-    if (!p) throw std::bad_alloc();
+void* operator new(size_t size) {
+    void* p = malloc(size);
+    if (!p)
+        throw std::bad_alloc();
     return p;
 }
 
-void *operator new[](size_t size)
-{
-    void *p = malloc(size);
-    if (!p) throw std::bad_alloc();
+void* operator new[](size_t size) {
+    void* p = malloc(size);
+    if (!p)
+        throw std::bad_alloc();
     return p;
 }
 
-void operator delete(void *p) noexcept   { free(p); }
-void operator delete[](void *p) noexcept { free(p); }
-void operator delete(void *p, size_t) noexcept   { free(p); }
-void operator delete[](void *p, size_t) noexcept { free(p); }
+void operator delete(void* p) noexcept {
+    free(p);
+}
+void operator delete[](void* p) noexcept {
+    free(p);
+}
+void operator delete(void* p, size_t) noexcept {
+    free(p);
+}
+void operator delete[](void* p, size_t) noexcept {
+    free(p);
+}
 
 /* nothrow variants */
-void *operator new(size_t size, std::nothrow_t const &) noexcept   { return malloc(size); }
-void *operator new[](size_t size, std::nothrow_t const &) noexcept { return malloc(size); }
-void  operator delete(void *p, std::nothrow_t const &) noexcept   { free(p); }
-void  operator delete[](void *p, std::nothrow_t const &) noexcept { free(p); }
+void* operator new(size_t size, std::nothrow_t const&) noexcept {
+    return malloc(size);
+}
+void* operator new[](size_t size, std::nothrow_t const&) noexcept {
+    return malloc(size);
+}
+void operator delete(void* p, std::nothrow_t const&) noexcept {
+    free(p);
+}
+void operator delete[](void* p, std::nothrow_t const&) noexcept {
+    free(p);
+}
 
 /* -----------------------------------------------------------------------
  * RAIISignalHandler stub
@@ -63,7 +79,7 @@ std::mutex RAIISignalHandler::handlerMutex;
 bool RAIISignalHandler::raiiSetSignalHandler = false;
 
 #ifndef VB_WIN32
-struct sigaction RAIISignalHandler::saSEGVOld   = {};
+struct sigaction RAIISignalHandler::saSEGVOld = {};
 struct sigaction RAIISignalHandler::saSIGFPEOld = {};
 #ifdef __APPLE__
 struct sigaction RAIISignalHandler::saSIGBUSOld = {};
@@ -72,22 +88,18 @@ struct sigaction RAIISignalHandler::saSIGBUSOld = {};
 
 /* setSignalHandler: no-op; signal-based memory protection is disabled when
  * both bounds check flags are set. */
-void RAIISignalHandler::setSignalHandler(
-    SignalHandler const /* memorySignalHandler */,
-    SignalHandler const /* divSignalHandler */)
-{
+void RAIISignalHandler::setSignalHandler(SignalHandler const /* memorySignalHandler */,
+                                         SignalHandler const /* divSignalHandler */) {
     /* Both ACTIVE_STACK_OVERFLOW_CHECK and LINEAR_MEMORY_BOUNDS_CHECKS are
      * enabled, so WARP uses explicit bounds checks rather than signal handlers.
      * No signal handler registration is needed. */
 }
 
-void RAIISignalHandler::unsetSignalHandler() VB_NOEXCEPT
-{
+void RAIISignalHandler::unsetSignalHandler() VB_NOEXCEPT {
     /* No-op: see setSignalHandler above. */
 }
 
-void RAIISignalHandler::restoreSignalHandler() VB_NOEXCEPT
-{
+void RAIISignalHandler::restoreSignalHandler() VB_NOEXCEPT {
     /* No-op: see setSignalHandler above. */
 }
 

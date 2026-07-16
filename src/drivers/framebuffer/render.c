@@ -2,46 +2,55 @@
 #include "font_8x16.h"
 #include <stdint.h>
 
-static inline void copy8(void *d, const void *s)
-{
+static inline void copy8(void* d, const void* s) {
     uint64_t v;
     __builtin_memcpy(&v, s, sizeof(v));
     __builtin_memcpy(d, &v, sizeof(v));
 }
 
-static void *
-nd_memset(void *dst, int c, unsigned long n)
-{
-    unsigned char *p = (unsigned char *)dst;
-    while (n--) { *p++ = (unsigned char)c; }
+static void* nd_memset(void* dst, int c, unsigned long n) {
+    unsigned char* p = (unsigned char*)dst;
+    while (n--) {
+        *p++ = (unsigned char)c;
+    }
     return dst;
 }
 
-static void *
-nd_memcpy(void *dst, const void *src, unsigned long n)
-{
-    uint8_t       *d = (uint8_t *)dst;
-    const uint8_t *s = (const uint8_t *)src;
+static void* nd_memcpy(void* dst, const void* src, unsigned long n) {
+    uint8_t* d = (uint8_t*)dst;
+    const uint8_t* s = (const uint8_t*)src;
     while (n >= 32) {
-        copy8(d,      s);
-        copy8(d +  8, s +  8);
+        copy8(d, s);
+        copy8(d + 8, s + 8);
         copy8(d + 16, s + 16);
         copy8(d + 24, s + 24);
-        d += 32; s += 32; n -= 32;
+        d += 32;
+        s += 32;
+        n -= 32;
     }
-    while (n >= 8) { copy8(d, s); d += 8; s += 8; n -= 8; }
-    while (n--)    { *d++ = *s++; }
+    while (n >= 8) {
+        copy8(d, s);
+        d += 8;
+        s += 8;
+        n -= 8;
+    }
+    while (n--) {
+        *d++ = *s++;
+    }
     return dst;
 }
 
-static void *
-nd_memmove(void *dst, const void *src, unsigned long n)
-{
-    uint8_t       *d = (uint8_t *)dst;
-    const uint8_t *s = (const uint8_t *)src;
-    if (d <= s) { return nd_memcpy(dst, src, n); }
-    d += n; s += n;
-    while (n--) { *--d = *--s; }
+static void* nd_memmove(void* dst, const void* src, unsigned long n) {
+    uint8_t* d = (uint8_t*)dst;
+    const uint8_t* s = (const uint8_t*)src;
+    if (d <= s) {
+        return nd_memcpy(dst, src, n);
+    }
+    d += n;
+    s += n;
+    while (n--) {
+        *--d = *--s;
+    }
     return dst;
 }
 
@@ -72,21 +81,22 @@ static const uint32_t cga_palette[16] = {
     0x00FFFFFF, /* 15 white          */
 };
 
-void
-fbtext_render_init(fbtext_state_t *s,
-                   uint32_t *fb, uint32_t stride,
-                   uint32_t width, uint32_t height)
-{
-    s->fb        = fb;
+void fbtext_render_init(fbtext_state_t* s, uint32_t* fb, uint32_t stride, uint32_t width,
+                        uint32_t height) {
+    s->fb = fb;
     s->fb_stride = stride;
-    s->cols      = (uint16_t)(width  / CELL_W);
-    s->rows      = (uint16_t)(height / CELL_H);
-    if (s->cols > FBTEXT_MAX_COLS) { s->cols = FBTEXT_MAX_COLS; }
-    if (s->rows > FBTEXT_MAX_ROWS) { s->rows = FBTEXT_MAX_ROWS; }
+    s->cols = (uint16_t)(width / CELL_W);
+    s->rows = (uint16_t)(height / CELL_H);
+    if (s->cols > FBTEXT_MAX_COLS) {
+        s->cols = FBTEXT_MAX_COLS;
+    }
+    if (s->rows > FBTEXT_MAX_ROWS) {
+        s->rows = FBTEXT_MAX_ROWS;
+    }
     s->cursor.col = 0;
     s->cursor.row = 0;
-    s->cur_fg     = FBTEXT_DEFAULT_FG;
-    s->cur_bg     = FBTEXT_DEFAULT_BG;
+    s->cur_fg = FBTEXT_DEFAULT_FG;
+    s->cur_bg = FBTEXT_DEFAULT_BG;
     for (int i = 0; i < 16; i++) {
         s->palette[i] = cga_palette[i];
     }
@@ -94,14 +104,14 @@ fbtext_render_init(fbtext_state_t *s,
 }
 
 /* Blit a single cell to the framebuffer. */
-void
-fbtext_render_cell(fbtext_state_t *s, uint16_t col, uint16_t row)
-{
-    if (s->suppress_render) { return; }
+void fbtext_render_cell(fbtext_state_t* s, uint16_t col, uint16_t row) {
+    if (s->suppress_render) {
+        return;
+    }
     if (col >= s->cols || row >= s->rows) {
         return;
     }
-    const fbtext_cell_t *cell = &s->cells[row * s->cols + col];
+    const fbtext_cell_t* cell = &s->cells[row * s->cols + col];
     uint32_t fg = s->palette[cell->fg & 0xF];
     uint32_t bg = s->palette[cell->bg & 0xF];
 
@@ -109,7 +119,7 @@ fbtext_render_cell(fbtext_state_t *s, uint16_t col, uint16_t row)
     if (ch < 0x20 || ch > 0x7E) {
         ch = ' ';
     }
-    const uint8_t *glyph = font_8x16[ch - 0x20];
+    const uint8_t* glyph = font_8x16[ch - 0x20];
 
     uint32_t x0 = (uint32_t)col * CELL_W;
     uint32_t y0 = (uint32_t)row * CELL_H;
@@ -120,15 +130,13 @@ fbtext_render_cell(fbtext_state_t *s, uint16_t col, uint16_t row)
         for (int x = 0; x < FONT_W; x++) {
             pixels[x] = (bits & (0x80u >> x)) ? fg : bg;
         }
-        uint32_t *line = s->fb + (y0 + (uint32_t)y) * s->fb_stride + x0;
+        uint32_t* line = s->fb + (y0 + (uint32_t)y) * s->fb_stride + x0;
         __builtin_memcpy(line, pixels, FONT_W * sizeof(uint32_t));
     }
 }
 
 /* Repaint the entire grid. */
-void
-fbtext_render_all(fbtext_state_t *s)
-{
+void fbtext_render_all(fbtext_state_t* s) {
     for (uint16_t r = 0; r < s->rows; r++) {
         for (uint16_t c = 0; c < s->cols; c++) {
             fbtext_render_cell(s, c, r);
@@ -137,13 +145,11 @@ fbtext_render_all(fbtext_state_t *s)
 }
 
 /* Clear all cells and repaint. */
-void
-fbtext_clear(fbtext_state_t *s)
-{
+void fbtext_clear(fbtext_state_t* s) {
     for (int i = 0; i < s->rows * s->cols; i++) {
-        s->cells[i].ch   = ' ';
-        s->cells[i].fg   = FBTEXT_DEFAULT_FG;
-        s->cells[i].bg   = FBTEXT_DEFAULT_BG;
+        s->cells[i].ch = ' ';
+        s->cells[i].fg = FBTEXT_DEFAULT_FG;
+        s->cells[i].bg = FBTEXT_DEFAULT_BG;
         s->cells[i].attr = 0;
     }
     s->cursor.col = 0;
@@ -155,30 +161,28 @@ fbtext_clear(fbtext_state_t *s)
  *
  * Uses a pixel-level memmove on the framebuffer so only the vacated bottom
  * rows need to be re-rendered, rather than repainting the entire grid. */
-void
-fbtext_scroll_up(fbtext_state_t *s, uint16_t n)
-{
-    if (n == 0) { return; }
+void fbtext_scroll_up(fbtext_state_t* s, uint16_t n) {
+    if (n == 0) {
+        return;
+    }
     if (n >= s->rows) {
         fbtext_clear(s);
         return;
     }
     /* Shift cell buffer up. */
-    nd_memmove(&s->cells[0],
-               &s->cells[(int)n * s->cols],
+    nd_memmove(&s->cells[0], &s->cells[(int)n * s->cols],
                sizeof(fbtext_cell_t) * (unsigned long)(s->rows - n) * s->cols);
     /* Clear the vacated bottom rows in the cell buffer. */
     for (int i = (s->rows - n) * s->cols; i < s->rows * s->cols; i++) {
-        s->cells[i].ch   = ' ';
-        s->cells[i].fg   = FBTEXT_DEFAULT_FG;
-        s->cells[i].bg   = FBTEXT_DEFAULT_BG;
+        s->cells[i].ch = ' ';
+        s->cells[i].fg = FBTEXT_DEFAULT_FG;
+        s->cells[i].bg = FBTEXT_DEFAULT_BG;
         s->cells[i].attr = 0;
     }
     /* Pixel-level: shift framebuffer rows up by n*CELL_H scan lines. */
-    unsigned long move_lines  = (unsigned long)(s->rows - n) * CELL_H;
+    unsigned long move_lines = (unsigned long)(s->rows - n) * CELL_H;
     unsigned long clear_lines = (unsigned long)n * CELL_H;
-    nd_memcpy(s->fb,
-              s->fb + (unsigned long)n * CELL_H * s->fb_stride,
+    nd_memcpy(s->fb, s->fb + (unsigned long)n * CELL_H * s->fb_stride,
               move_lines * s->fb_stride * sizeof(uint32_t));
     /* Re-render only the vacated bottom n rows. */
     for (uint16_t r = (uint16_t)(s->rows - n); r < s->rows; r++) {
@@ -193,9 +197,7 @@ fbtext_scroll_up(fbtext_state_t *s, uint16_t n)
  * Write one character at the current cursor position, handling control codes.
  * Advances the cursor and scrolls as needed.
  */
-void
-fbtext_put_char(fbtext_state_t *s, uint32_t ch)
-{
+void fbtext_put_char(fbtext_state_t* s, uint32_t ch) {
     switch (ch) {
     case '\r':
         s->cursor.col = 0;
@@ -211,21 +213,23 @@ fbtext_put_char(fbtext_state_t *s, uint32_t ch)
     case '\b':
         if (s->cursor.col > 0) {
             s->cursor.col--;
-            s->cells[s->cursor.row * s->cols + s->cursor.col].ch   = ' ';
-            s->cells[s->cursor.row * s->cols + s->cursor.col].fg   = s->cur_fg;
-            s->cells[s->cursor.row * s->cols + s->cursor.col].bg   = s->cur_bg;
+            s->cells[s->cursor.row * s->cols + s->cursor.col].ch = ' ';
+            s->cells[s->cursor.row * s->cols + s->cursor.col].fg = s->cur_fg;
+            s->cells[s->cursor.row * s->cols + s->cursor.col].bg = s->cur_bg;
             fbtext_render_cell(s, s->cursor.col, s->cursor.row);
         }
         return;
     case '\t': {
         /* Advance to next 8-column tab stop. */
         uint16_t next = (uint16_t)((s->cursor.col + 8) & ~7u);
-        if (next >= s->cols) { next = s->cols - 1; }
+        if (next >= s->cols) {
+            next = s->cols - 1;
+        }
         while (s->cursor.col < next) {
-            fbtext_cell_t *cell = &s->cells[s->cursor.row * s->cols + s->cursor.col];
-            cell->ch  = ' ';
-            cell->fg  = s->cur_fg;
-            cell->bg  = s->cur_bg;
+            fbtext_cell_t* cell = &s->cells[s->cursor.row * s->cols + s->cursor.col];
+            cell->ch = ' ';
+            cell->fg = s->cur_fg;
+            cell->bg = s->cur_bg;
             fbtext_render_cell(s, s->cursor.col, s->cursor.row);
             s->cursor.col++;
         }
@@ -239,10 +243,10 @@ fbtext_put_char(fbtext_state_t *s, uint32_t ch)
     if (ch < 0x20 || ch > 0x7E) {
         ch = '?';
     }
-    fbtext_cell_t *cell = &s->cells[s->cursor.row * s->cols + s->cursor.col];
-    cell->ch   = ch;
-    cell->fg   = s->cur_fg;
-    cell->bg   = s->cur_bg;
+    fbtext_cell_t* cell = &s->cells[s->cursor.row * s->cols + s->cursor.col];
+    cell->ch = ch;
+    cell->fg = s->cur_fg;
+    cell->bg = s->cur_bg;
     cell->attr = 0;
     fbtext_render_cell(s, s->cursor.col, s->cursor.row);
 

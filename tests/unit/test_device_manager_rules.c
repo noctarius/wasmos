@@ -5,13 +5,10 @@
 
 #include "device_manager_rules.h"
 
-static void
-test_always_spawn_rule(void)
-{
+static void test_always_spawn_rule(void) {
     device_manager_state_t state;
-    const char *rules =
-        "SUBSYSTEM==\"boot\", ACTION==\"add\", RUN+=\"system/drivers/ata.wap\"\n"
-        "SUBSYSTEM==\"boot\", RUN+=\"system/drivers/keyboard.wap\"\n";
+    const char* rules = "SUBSYSTEM==\"boot\", ACTION==\"add\", RUN+=\"system/drivers/ata.wap\"\n"
+                        "SUBSYSTEM==\"boot\", RUN+=\"system/drivers/keyboard.wap\"\n";
     memset(&state, 0, sizeof(state));
     dm_rules_load_always_spawn(&state, rules);
     assert(state.always_spawn_rule_count == 2u);
@@ -19,13 +16,12 @@ test_always_spawn_rule(void)
     assert(strcmp(state.always_spawn_rules[1].spawn_path, "system/drivers/keyboard.wap") == 0);
 }
 
-static void
-test_block_fs_rule(void)
-{
+static void test_block_fs_rule(void) {
     device_manager_state_t state;
-    const char *rules =
-        "SUBSYSTEM==\"block\", ATTR{unit}==\"0\", ENV{MOUNT}=\"/boot\", RUN+=\"system/drivers/fs_fat.wap\"\n"
-        "SUBSYSTEM==\"block\", ATTR{unit}==\"1\", ENV{MOUNT}=\"/user\", RUN+=\"system/drivers/fs_fat.wap\"\n";
+    const char* rules = "SUBSYSTEM==\"block\", ATTR{unit}==\"0\", ENV{MOUNT}=\"/boot\", "
+                        "RUN+=\"system/drivers/fs_fat.wap\"\n"
+                        "SUBSYSTEM==\"block\", ATTR{unit}==\"1\", ENV{MOUNT}=\"/user\", "
+                        "RUN+=\"system/drivers/fs_fat.wap\"\n";
     memset(&state, 0, sizeof(state));
     dm_rules_load_block_fs(&state, rules);
     assert(state.block_fs_rule_count == 2u);
@@ -36,12 +32,12 @@ test_block_fs_rule(void)
     assert(strcmp(state.block_fs_rules[1].mount, "/user") == 0);
 }
 
-static void
-test_pci_match_rule(void)
-{
+static void test_pci_match_rule(void) {
     device_manager_state_t state;
-    const char *rules =
-        "SUBSYSTEM==\"pci\", ATTR{bus}==\"0x00\", ATTR{slot}==\"0x02\", ATTR{function}==\"0x00\", ATTR{class}==\"0x03\", ATTR{subclass}==\"0x00\", ATTR{prog_if}==\"0x00\", RUN+=\"system/drivers/fbpci.wap\"\n";
+    const char* rules =
+        "SUBSYSTEM==\"pci\", ATTR{bus}==\"0x00\", ATTR{slot}==\"0x02\", ATTR{function}==\"0x00\", "
+        "ATTR{class}==\"0x03\", ATTR{subclass}==\"0x00\", ATTR{prog_if}==\"0x00\", "
+        "RUN+=\"system/drivers/fbpci.wap\"\n";
     memset(&state, 0, sizeof(state));
     dm_rules_load_pci_match(&state, rules);
     assert(state.pci_match_rule_count == 1u);
@@ -54,14 +50,11 @@ test_pci_match_rule(void)
     assert(strcmp(state.pci_match_rules[0].spawn_path, "system/drivers/fbpci.wap") == 0);
 }
 
-static void
-test_legacy_rule_is_rejected(void)
-{
+static void test_legacy_rule_is_rejected(void) {
     device_manager_state_t state;
-    const char *rules =
-        "always_spawn spawn_path=system/drivers/ata.wap\n"
-        "pci_match class=03 spawn_path=system/drivers/fbpci.wap\n"
-        "block_fs unit=0 mount=/boot spawn_path=system/drivers/fs_fat.wap\n";
+    const char* rules = "always_spawn spawn_path=system/drivers/ata.wap\n"
+                        "pci_match class=03 spawn_path=system/drivers/fbpci.wap\n"
+                        "block_fs unit=0 mount=/boot spawn_path=system/drivers/fs_fat.wap\n";
     memset(&state, 0, sizeof(state));
     dm_rules_load_always_spawn(&state, rules);
     dm_rules_load_pci_match(&state, rules);
@@ -71,9 +64,7 @@ test_legacy_rule_is_rejected(void)
     assert(state.block_fs_rule_count == 0u);
 }
 
-int
-main(void)
-{
+int main(void) {
     test_always_spawn_rule();
     test_block_fs_rule();
     test_pci_match_rule();

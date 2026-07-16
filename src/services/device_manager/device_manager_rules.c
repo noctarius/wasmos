@@ -6,9 +6,7 @@
 
 /* Copy one line from text, strip inline comments (respecting quotes),
  * trim trailing whitespace; returns -1 if buf is too small. */
-static int
-copy_rule_line(const char *line, char *out, uint32_t out_len)
-{
+static int copy_rule_line(const char* line, char* out, uint32_t out_len) {
     uint32_t n = 0;
     uint8_t in_quote = 0;
     if (!line || !out || out_len < 2u) {
@@ -36,11 +34,9 @@ copy_rule_line(const char *line, char *out, uint32_t out_len)
 /* Consume the next comma-separated token from *cursor (modifies the buffer
  * in-place by NUL-terminating after the token); respects double-quoted fields.
  * Returns pointer to the token or NULL when exhausted. */
-static char *
-next_csv_token(char **cursor)
-{
-    char *start = 0;
-    char *p = 0;
+static char* next_csv_token(char** cursor) {
+    char* start = 0;
+    char* p = 0;
     uint8_t in_quote = 0;
     if (!cursor || !*cursor) {
         return 0;
@@ -75,14 +71,9 @@ next_csv_token(char **cursor)
 /* Match token against "KEY OP \"value\"" and copy the quoted value into out.
  * Returns 0 on match, -1 if the token doesn't start with key+op or the
  * value is not properly quoted / too long. */
-static int
-extract_op_value(const char *token,
-                 const char *key,
-                 const char *op,
-                 char *out,
-                 uint32_t out_len)
-{
-    const char *p = token;
+static int extract_op_value(const char* token, const char* key, const char* op, char* out,
+                            uint32_t out_len) {
+    const char* p = token;
     uint32_t key_len = 0;
     uint32_t op_len = 0;
     uint32_t n = 0;
@@ -127,9 +118,7 @@ extract_op_value(const char *token,
     return 0;
 }
 
-uint16_t
-dm_rules_count_active(const char *text)
-{
+uint16_t dm_rules_count_active(const char* text) {
     uint16_t count = 0;
     uint8_t saw_non_space = 0;
     uint8_t line_comment = 0;
@@ -164,9 +153,7 @@ dm_rules_count_active(const char *text)
     return count;
 }
 
-static int
-parse_u8_hex(const char *s, uint8_t *out)
-{
+static int parse_u8_hex(const char* s, uint8_t* out) {
     uint32_t i = 0;
     uint32_t v = 0;
     if (!s || !out || s[0] == '\0') {
@@ -196,9 +183,7 @@ parse_u8_hex(const char *s, uint8_t *out)
     return 0;
 }
 
-static int
-parse_u16_hex(const char *s, uint16_t *out)
-{
+static int parse_u16_hex(const char* s, uint16_t* out) {
     uint32_t i = 0;
     uint32_t v = 0;
     if (!s || !out || s[0] == '\0') {
@@ -228,9 +213,7 @@ parse_u16_hex(const char *s, uint16_t *out)
     return 0;
 }
 
-static int
-parse_u8_dec(const char *s, uint8_t *out)
-{
+static int parse_u8_dec(const char* s, uint8_t* out) {
     uint32_t v = 0;
     if (!s || !out || s[0] == '\0') {
         return -1;
@@ -248,13 +231,11 @@ parse_u8_dec(const char *s, uint8_t *out)
     return 0;
 }
 
-static int
-parse_always_spawn_rule_line(const char *line, always_spawn_rule_t *out_rule)
-{
+static int parse_always_spawn_rule_line(const char* line, always_spawn_rule_t* out_rule) {
     char line_buf[256];
     char path[96];
-    char *cur = 0;
-    char *tok = 0;
+    char* cur = 0;
+    char* tok = 0;
     char sub[32];
     if (!line || !out_rule) {
         return -1;
@@ -269,7 +250,7 @@ parse_always_spawn_rule_line(const char *line, always_spawn_rule_t *out_rule)
     sub[0] = '\0';
     cur = line_buf;
     while ((tok = next_csv_token(&cur)) != 0) {
-        tok = (char *)wasmos_sys_trim_left(tok);
+        tok = (char*)wasmos_sys_trim_left(tok);
         if (extract_op_value(tok, "SUBSYSTEM", "==", sub, sizeof(sub)) == 0) {
             continue;
         }
@@ -287,9 +268,7 @@ parse_always_spawn_rule_line(const char *line, always_spawn_rule_t *out_rule)
     return 0;
 }
 
-void
-dm_rules_load_always_spawn(device_manager_state_t *state, const char *text)
-{
+void dm_rules_load_always_spawn(device_manager_state_t* state, const char* text) {
     uint32_t out_count = 0;
     if (!state || !text) {
         return;
@@ -302,7 +281,7 @@ dm_rules_load_always_spawn(device_manager_state_t *state, const char *text)
     for (int32_t i = 0;;) {
         int32_t line_start = i;
         int32_t line_end = i;
-        const char *line = 0;
+        const char* line = 0;
         while (text[line_end] && text[line_end] != '\n') {
             line_end++;
         }
@@ -320,15 +299,13 @@ dm_rules_load_always_spawn(device_manager_state_t *state, const char *text)
     state->always_spawn_rule_count = out_count;
 }
 
-static int
-parse_block_fs_rule_line(const char *line, block_fs_rule_t *out_rule)
-{
+static int parse_block_fs_rule_line(const char* line, block_fs_rule_t* out_rule) {
     char line_buf[256];
     char path[96];
     char mount[16];
     uint8_t unit = 0xFFu;
-    char *cur = 0;
-    char *tok = 0;
+    char* cur = 0;
+    char* tok = 0;
     char sub[32];
     char tmp[64];
     if (!line || !out_rule) {
@@ -345,7 +322,7 @@ parse_block_fs_rule_line(const char *line, block_fs_rule_t *out_rule)
     sub[0] = '\0';
     cur = line_buf;
     while ((tok = next_csv_token(&cur)) != 0) {
-        tok = (char *)wasmos_sys_trim_left(tok);
+        tok = (char*)wasmos_sys_trim_left(tok);
         if (extract_op_value(tok, "SUBSYSTEM", "==", sub, sizeof(sub)) == 0) {
             continue;
         }
@@ -378,9 +355,7 @@ parse_block_fs_rule_line(const char *line, block_fs_rule_t *out_rule)
     return 0;
 }
 
-void
-dm_rules_load_block_fs(device_manager_state_t *state, const char *text)
-{
+void dm_rules_load_block_fs(device_manager_state_t* state, const char* text) {
     uint32_t out_count = 0;
     if (!state || !text) {
         return;
@@ -394,7 +369,7 @@ dm_rules_load_block_fs(device_manager_state_t *state, const char *text)
     for (int32_t i = 0;;) {
         int32_t line_start = i;
         int32_t line_end = i;
-        const char *line = 0;
+        const char* line = 0;
         while (text[line_end] && text[line_end] != '\n') {
             line_end++;
         }
@@ -412,13 +387,11 @@ dm_rules_load_block_fs(device_manager_state_t *state, const char *text)
     state->block_fs_rule_count = out_count;
 }
 
-static int
-parse_pci_match_rule_line(const char *line, pci_match_rule_t *out_rule)
-{
+static int parse_pci_match_rule_line(const char* line, pci_match_rule_t* out_rule) {
     char line_buf[320];
     char path[96];
-    char *cur = 0;
-    char *tok = 0;
+    char* cur = 0;
+    char* tok = 0;
     char sub[32];
     char tmp[64];
     uint8_t class_code = MATCH_ANY_U8;
@@ -442,7 +415,7 @@ parse_pci_match_rule_line(const char *line, pci_match_rule_t *out_rule)
     sub[0] = '\0';
     cur = line_buf;
     while ((tok = next_csv_token(&cur)) != 0) {
-        tok = (char *)wasmos_sys_trim_left(tok);
+        tok = (char*)wasmos_sys_trim_left(tok);
         if (extract_op_value(tok, "SUBSYSTEM", "==", sub, sizeof(sub)) == 0) {
             continue;
         }
@@ -515,9 +488,7 @@ parse_pci_match_rule_line(const char *line, pci_match_rule_t *out_rule)
     return 0;
 }
 
-void
-dm_rules_load_pci_match(device_manager_state_t *state, const char *text)
-{
+void dm_rules_load_pci_match(device_manager_state_t* state, const char* text) {
     uint32_t out_count = 0;
     if (!state || !text) {
         return;
@@ -529,7 +500,7 @@ dm_rules_load_pci_match(device_manager_state_t *state, const char *text)
     for (int32_t i = 0;;) {
         int32_t line_start = i;
         int32_t line_end = i;
-        const char *line = 0;
+        const char* line = 0;
         while (text[line_end] && text[line_end] != '\n') {
             line_end++;
         }
@@ -547,17 +518,15 @@ dm_rules_load_pci_match(device_manager_state_t *state, const char *text)
     state->pci_match_rule_count = out_count;
 }
 
-static int
-parse_acpi_match_rule_line(const char *line, acpi_match_rule_t *out_rule)
-{
+static int parse_acpi_match_rule_line(const char* line, acpi_match_rule_t* out_rule) {
     char line_buf[256];
     char path[96];
-    char *cur = 0;
-    char *tok = 0;
+    char* cur = 0;
+    char* tok = 0;
     char sub[32];
     char tmp[64];
     uint8_t class_code = MATCH_ANY_U8;
-    uint8_t subclass   = MATCH_ANY_U8;
+    uint8_t subclass = MATCH_ANY_U8;
     if (!line || !out_rule) {
         return -1;
     }
@@ -571,7 +540,7 @@ parse_acpi_match_rule_line(const char *line, acpi_match_rule_t *out_rule)
     sub[0] = '\0';
     cur = line_buf;
     while ((tok = next_csv_token(&cur)) != 0) {
-        tok = (char *)wasmos_sys_trim_left(tok);
+        tok = (char*)wasmos_sys_trim_left(tok);
         if (extract_op_value(tok, "SUBSYSTEM", "==", sub, sizeof(sub)) == 0) {
             continue;
         }
@@ -596,15 +565,13 @@ parse_acpi_match_rule_line(const char *line, acpi_match_rule_t *out_rule)
     }
     out_rule->active = 1;
     out_rule->class_code = class_code;
-    out_rule->subclass   = subclass;
+    out_rule->subclass = subclass;
     out_rule->spawned_device_mask = 0;
     str_copy(out_rule->spawn_path, sizeof(out_rule->spawn_path), path);
     return 0;
 }
 
-void
-dm_rules_load_acpi_match(device_manager_state_t *state, const char *text)
-{
+void dm_rules_load_acpi_match(device_manager_state_t* state, const char* text) {
     uint32_t out_count = 0;
     if (!state || !text) {
         return;
@@ -617,7 +584,7 @@ dm_rules_load_acpi_match(device_manager_state_t *state, const char *text)
     for (int32_t i = 0;;) {
         int32_t line_start = i;
         int32_t line_end = i;
-        const char *line = 0;
+        const char* line = 0;
         while (text[line_end] && text[line_end] != '\n') {
             line_end++;
         }

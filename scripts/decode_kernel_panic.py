@@ -13,7 +13,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
-
 PANIC_ADDR_RE = re.compile(r"\b(?P<kind>rip|ret)=(?P<addr>[0-9a-fA-F]{16})\b")
 CPU_HEADER_RE = re.compile(r"^--- CPU (?P<cpu>\d+)\b")
 FRAME_RE = re.compile(r"^\s*\[(?P<frame>\d+)\]")
@@ -66,12 +65,22 @@ def unique_addresses(entries: Iterable[PanicAddress]) -> list[str]:
     return ordered
 
 
-def resolve_addresses(addr2line: str, kernel: str, addresses: list[str]) -> dict[str, str]:
+def resolve_addresses(
+    addr2line: str, kernel: str, addresses: list[str]
+) -> dict[str, str]:
     if not addresses:
         return {}
 
     proc = subprocess.run(
-        [addr2line, "-e", kernel, "-f", "-C", "-p", *("0x" + addr for addr in addresses)],
+        [
+            addr2line,
+            "-e",
+            kernel,
+            "-f",
+            "-C",
+            "-p",
+            *("0x" + addr for addr in addresses),
+        ],
         check=True,
         capture_output=True,
         text=True,

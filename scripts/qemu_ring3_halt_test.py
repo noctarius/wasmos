@@ -6,7 +6,9 @@ from qemu_test_framework import QemuConfig, QemuSession, default_config
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Run QEMU and assert ring3 smoke markers before halt.")
+    parser = argparse.ArgumentParser(
+        description="Run QEMU and assert ring3 smoke markers before halt."
+    )
     parser.add_argument("--ovmf-code", default="")
     parser.add_argument("--ovmf-vars", default="")
     parser.add_argument("--esp", default="")
@@ -16,7 +18,9 @@ def main():
     args = parser.parse_args()
 
     if args.ovmf_code or args.esp:
-        userfs = args.userfs or os.environ.get("WASMOS_USERFS", os.path.join(os.getcwd(), "userfs"))
+        userfs = args.userfs or os.environ.get(
+            "WASMOS_USERFS", os.path.join(os.getcwd(), "userfs")
+        )
         cfg = QemuConfig(args.ovmf_code, args.ovmf_vars, args.esp, userfs)
     else:
         cfg = default_config()

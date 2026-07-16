@@ -1,9 +1,7 @@
 #include "stdio.h"
 #include "wasmos/api.h"
 
-int
-main(int argc, char **argv)
-{
+int main(int argc, char** argv) {
     int32_t endpoint = 0;
     int32_t rc = 0;
 

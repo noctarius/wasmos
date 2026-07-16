@@ -3,9 +3,7 @@
 #include "wasmos/api.h"
 #include "wasmos_driver_abi.h"
 
-int
-main(int argc, char **argv)
-{
+int main(int argc, char** argv) {
     (void)argc;
     (void)argv;
 

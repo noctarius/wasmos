@@ -14,9 +14,9 @@
 
 #define PAGE_SIZE 0x1000ULL
 #define MM_USER_LINEAR_BASE 0x0000008000000000ULL
-#define MM_USER_STACK_BASE  0x0000008100000000ULL
-#define MM_USER_HEAP_BASE   0x0000008200000000ULL
-#define MM_USER_IPC_BASE    0x0000008300000000ULL
+#define MM_USER_STACK_BASE 0x0000008100000000ULL
+#define MM_USER_HEAP_BASE 0x0000008200000000ULL
+#define MM_USER_IPC_BASE 0x0000008300000000ULL
 #define MM_USER_DEVICE_BASE 0x0000008400000000ULL
 #define MM_USER_SHARED_BASE 0x0000008500000000ULL
 #define MM_COPY_STACK_BYTES 8192u
@@ -24,15 +24,13 @@ static const uint64_t pf_err_present = 1ULL << 0;
 static const uint64_t pf_err_write = 1ULL << 1;
 static const uint64_t pf_err_user = 1ULL << 2;
 static const uint64_t pf_err_instr = 1ULL << 4;
-static const boot_info_t *g_boot_info;
+static const boot_info_t* g_boot_info;
 static list_t g_contexts;
 static ksync_spinlock_t g_contexts_lock;
 static mm_context_t g_root_ctx;
 static uint8_t g_mm_copy_stacks[WASMOS_MAX_CPUS][MM_COPY_STACK_BYTES] __attribute__((aligned(16)));
 
-static inline uintptr_t
-mm_kernel_alias_addr(uintptr_t addr)
-{
+static inline uintptr_t mm_kernel_alias_addr(uintptr_t addr) {
     if ((uint64_t)addr < KERNEL_HIGHER_HALF_BASE) {
         return (uintptr_t)((uint64_t)addr + KERNEL_HIGHER_HALF_BASE);
     }
@@ -57,26 +55,23 @@ static uint8_t g_shared_list_initialized = 0;
 static uint32_t g_shared_next_id = 1;
 static ksync_spinlock_t g_shared_lock;
 
-static void
-mm_shared_init_once_locked(void)
-{
+static void mm_shared_init_once_locked(void) {
     if (g_shared_list_initialized) {
         return;
     }
-    list_init(&g_shared_list, (uint32_t)sizeof(mm_shared_region_t),
-              LIST_IMPL_ARRAY_CHUNK, MM_MAX_SHARED);
+    list_init(&g_shared_list, (uint32_t)sizeof(mm_shared_region_t), LIST_IMPL_ARRAY_CHUNK,
+              MM_MAX_SHARED);
     g_shared_list_initialized = 1;
 }
 static int mm_region_flags_valid(uint32_t flags);
-typedef int (*mm_copy_work_fn)(void *arg);
-static mem_region_t *mm_context_add_region_slot(mm_context_t *ctx, uint64_t base, uint64_t size, uint32_t flags, mem_region_type_t type);
-static void mm_context_release_regions(mm_context_t *ctx);
-static mm_context_t *mm_context_get_locked(uint32_t id);
-static mm_shared_region_t *mm_shared_find_locked(uint32_t id);
+typedef int (*mm_copy_work_fn)(void* arg);
+static mem_region_t* mm_context_add_region_slot(mm_context_t* ctx, uint64_t base, uint64_t size,
+                                                uint32_t flags, mem_region_type_t type);
+static void mm_context_release_regions(mm_context_t* ctx);
+static mm_context_t* mm_context_get_locked(uint32_t id);
+static mm_shared_region_t* mm_shared_find_locked(uint32_t id);
 
-static int
-mm_run_on_copy_stack(mm_copy_work_fn fn, void *arg)
-{
+static int mm_run_on_copy_stack(mm_copy_work_fn fn, void* arg) {
     if (!fn) {
         return -1;
     }
@@ -88,24 +83,22 @@ mm_run_on_copy_stack(mm_copy_work_fn fn, void *arg)
         return fn(arg);
     }
 
-    uintptr_t stack_top = mm_kernel_alias_addr((uintptr_t)&g_mm_copy_stacks[cpu_local()->cpu_id][MM_COPY_STACK_BYTES]);
+    uintptr_t stack_top = mm_kernel_alias_addr(
+        (uintptr_t)&g_mm_copy_stacks[cpu_local()->cpu_id][MM_COPY_STACK_BYTES]);
     stack_top &= ~(uintptr_t)0xFULL;
     int rc = -1;
-    __asm__ volatile(
-        "mov %%rsp, %%r15\n"
-        "mov %[stack_top], %%rsp\n"
-        "mov %[arg], %%rdi\n"
-        "call *%[fn]\n"
-        "mov %%r15, %%rsp\n"
-        : "=a"(rc)
-        : [stack_top] "r"(stack_top), [fn] "r"(fn), [arg] "r"(arg)
-        : "r15", "rdi", "rcx", "rdx", "rsi", "r8", "r9", "r10", "memory", "cc");
+    __asm__ volatile("mov %%rsp, %%r15\n"
+                     "mov %[stack_top], %%rsp\n"
+                     "mov %[arg], %%rdi\n"
+                     "call *%[fn]\n"
+                     "mov %%r15, %%rsp\n"
+                     : "=a"(rc)
+                     : [stack_top] "r"(stack_top), [fn] "r"(fn), [arg] "r"(arg)
+                     : "r15", "rdi", "rcx", "rdx", "rsi", "r8", "r9", "r10", "memory", "cc");
     return rc;
 }
 
-static uint64_t
-mm_region_virtual_base(mm_context_t *ctx, mem_region_type_t type, uint64_t pages)
-{
+static uint64_t mm_region_virtual_base(mm_context_t* ctx, mem_region_type_t type, uint64_t pages) {
     (void)pages;
     if (!ctx) {
         return 0;
@@ -132,7 +125,7 @@ mm_region_virtual_base(mm_context_t *ctx, mem_region_type_t type, uint64_t pages
     }
 }
 
-void mm_init(const boot_info_t *boot_info) {
+void mm_init(const boot_info_t* boot_info) {
     g_boot_info = boot_info;
     klog_write("[mm] init\n");
     ksync_spinlock_init(&g_contexts_lock);
@@ -150,19 +143,22 @@ void mm_init(const boot_info_t *boot_info) {
 
     if (mm_context_init(&g_root_ctx, 0) == 0) {
         g_root_ctx.root_table = paging_get_root_table();
-        mm_context_alloc_region(&g_root_ctx, 16, MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE, MEM_REGION_WASM_LINEAR);
-        mm_context_alloc_region(&g_root_ctx, 4, MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE, MEM_REGION_STACK);
-        mm_context_alloc_region(&g_root_ctx, 8, MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE, MEM_REGION_HEAP);
-        mm_context_alloc_region(&g_root_ctx, 2, MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE, MEM_REGION_IPC);
-        mm_context_alloc_region(&g_root_ctx, 2, MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE, MEM_REGION_DEVICE);
+        mm_context_alloc_region(&g_root_ctx, 16, MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE,
+                                MEM_REGION_WASM_LINEAR);
+        mm_context_alloc_region(&g_root_ctx, 4, MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE,
+                                MEM_REGION_STACK);
+        mm_context_alloc_region(&g_root_ctx, 8, MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE,
+                                MEM_REGION_HEAP);
+        mm_context_alloc_region(&g_root_ctx, 2, MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE,
+                                MEM_REGION_IPC);
+        mm_context_alloc_region(&g_root_ctx, 2, MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE,
+                                MEM_REGION_DEVICE);
     }
 
-    klog_printf("[mm] ctx0 regions=0x%016llX\n",
-                  (unsigned long long)g_root_ctx.region_count);
-
+    klog_printf("[mm] ctx0 regions=0x%016llX\n", (unsigned long long)g_root_ctx.region_count);
 }
 
-int mm_context_init(mm_context_t *ctx, uint32_t id) {
+int mm_context_init(mm_context_t* ctx, uint32_t id) {
     if (!ctx) {
         return -1;
     }
@@ -177,66 +173,64 @@ int mm_context_init(mm_context_t *ctx, uint32_t id) {
     return 0;
 }
 
-int mm_context_add_region(mm_context_t *ctx, uint64_t base, uint64_t size, uint32_t flags, mem_region_type_t type) {
+int mm_context_add_region(mm_context_t* ctx, uint64_t base, uint64_t size, uint32_t flags,
+                          mem_region_type_t type) {
     return mm_context_add_region_slot(ctx, base, size, flags, type) ? 0 : -1;
 }
 
-int mm_context_region_for_type(mm_context_t *ctx, mem_region_type_t type, mem_region_t *out_region) {
+int mm_context_region_for_type(mm_context_t* ctx, mem_region_type_t type,
+                               mem_region_t* out_region) {
     if (!ctx || !out_region) {
         return -1;
     }
     list_iter_t it;
-    mem_region_t *region = (mem_region_t *)list_first(&ctx->regions, &it);
+    mem_region_t* region = (mem_region_t*)list_first(&ctx->regions, &it);
     while (region) {
         if (region->type == type) {
             *out_region = *region;
             return 0;
         }
-        region = (mem_region_t *)list_next(&it);
+        region = (mem_region_t*)list_next(&it);
     }
     return -1;
 }
 
-int
-mm_context_region_at(mm_context_t *ctx, uint32_t index, mem_region_t *out_region)
-{
+int mm_context_region_at(mm_context_t* ctx, uint32_t index, mem_region_t* out_region) {
     uint32_t current = 0;
     list_iter_t it;
-    mem_region_t *region = 0;
+    mem_region_t* region = 0;
     if (!ctx || !out_region) {
         return -1;
     }
-    region = (mem_region_t *)list_first(&ctx->regions, &it);
+    region = (mem_region_t*)list_first(&ctx->regions, &it);
     while (region) {
         if (current == index) {
             *out_region = *region;
             return 0;
         }
         current++;
-        region = (mem_region_t *)list_next(&it);
+        region = (mem_region_t*)list_next(&it);
     }
     return -1;
 }
 
-static mm_shared_region_t *mm_shared_find_locked(uint32_t id) {
+static mm_shared_region_t* mm_shared_find_locked(uint32_t id) {
     if (id == 0) {
         return 0;
     }
     mm_shared_init_once_locked();
     list_iter_t it;
-    mm_shared_region_t *r = (mm_shared_region_t *)list_first(&g_shared_list, &it);
+    mm_shared_region_t* r = (mm_shared_region_t*)list_first(&g_shared_list, &it);
     while (r) {
         if (r->id == id) {
             return r;
         }
-        r = (mm_shared_region_t *)list_next(&it);
+        r = (mm_shared_region_t*)list_next(&it);
     }
     return 0;
 }
 
-static int
-mm_shared_access_allowed(const mm_shared_region_t *region, uint32_t context_id)
-{
+static int mm_shared_access_allowed(const mm_shared_region_t* region, uint32_t context_id) {
     uint8_t i = 0;
     if (!region) {
         return 0;
@@ -256,7 +250,7 @@ mm_shared_access_allowed(const mm_shared_region_t *region, uint32_t context_id)
     return 0;
 }
 
-static int mm_shared_free_if_unused(mm_shared_region_t *region) {
+static int mm_shared_free_if_unused(mm_shared_region_t* region) {
     if (!region) {
         return -1;
     }
@@ -268,50 +262,44 @@ static int mm_shared_free_if_unused(mm_shared_region_t *region) {
     return 0;
 }
 
-static mem_region_t *mm_find_region_for_addr(mm_context_t *ctx, uint64_t addr) {
+static mem_region_t* mm_find_region_for_addr(mm_context_t* ctx, uint64_t addr) {
     if (!ctx) {
         return 0;
     }
     list_iter_t it;
-    mem_region_t *region = (mem_region_t *)list_first(&ctx->regions, &it);
+    mem_region_t* region = (mem_region_t*)list_first(&ctx->regions, &it);
     while (region) {
         uint64_t end = region->base + region->size;
         if (addr >= region->base && addr < end) {
             return region;
         }
-        region = (mem_region_t *)list_next(&it);
+        region = (mem_region_t*)list_next(&it);
     }
     return 0;
 }
 
-static int
-mm_region_flags_valid(uint32_t flags)
-{
-    if ((flags & MEM_REGION_FLAG_USER) &&
-        (flags & MEM_REGION_FLAG_WRITE) &&
+static int mm_region_flags_valid(uint32_t flags) {
+    if ((flags & MEM_REGION_FLAG_USER) && (flags & MEM_REGION_FLAG_WRITE) &&
         (flags & MEM_REGION_FLAG_EXEC)) {
         return 0;
     }
     return 1;
 }
 
-static uint64_t
-mm_page_align_up(uint64_t size)
-{
+static uint64_t mm_page_align_up(uint64_t size) {
     if (size == 0) {
         return 0;
     }
     return (size + PAGE_SIZE - 1ULL) & ~(PAGE_SIZE - 1ULL);
 }
 
-static mem_region_t *
-mm_context_add_region_slot(mm_context_t *ctx, uint64_t base, uint64_t size, uint32_t flags, mem_region_type_t type)
-{
-    mem_region_t *region = 0;
+static mem_region_t* mm_context_add_region_slot(mm_context_t* ctx, uint64_t base, uint64_t size,
+                                                uint32_t flags, mem_region_type_t type) {
+    mem_region_t* region = 0;
     if (!ctx || !mm_region_flags_valid(flags)) {
         return 0;
     }
-    region = (mem_region_t *)list_alloc(&ctx->regions);
+    region = (mem_region_t*)list_alloc(&ctx->regions);
     if (!region) {
         return 0;
     }
@@ -325,15 +313,13 @@ mm_context_add_region_slot(mm_context_t *ctx, uint64_t base, uint64_t size, uint
     return region;
 }
 
-static void
-mm_context_release_regions(mm_context_t *ctx)
-{
+static void mm_context_release_regions(mm_context_t* ctx) {
     list_iter_t it;
-    mem_region_t *region = 0;
+    mem_region_t* region = 0;
     if (!ctx) {
         return;
     }
-    region = (mem_region_t *)list_first(&ctx->regions, &it);
+    region = (mem_region_t*)list_first(&ctx->regions, &it);
     while (region) {
         if (region->phys_base != 0 && region->size != 0) {
             if (region->type == MEM_REGION_SHARED) {
@@ -351,23 +337,16 @@ mm_context_release_regions(mm_context_t *ctx)
                 pfa_free_pages(region->phys_base, region->backing_pages);
             }
         }
-        region = (mem_region_t *)list_next(&it);
+        region = (mem_region_t*)list_next(&it);
     }
     list_destroy(&ctx->regions);
     ctx->region_count = 0;
 }
 
-static void
-mm_trace_copy_fail(const char *op,
-                   const char *stage,
-                   uint32_t context_id,
-                   uint64_t user_addr,
-                   uint64_t size,
-                   uint64_t root_expected,
-                   uint64_t root_current,
-                   uint64_t chunk_user_addr,
-                   uint64_t chunk_size)
-{
+static void mm_trace_copy_fail(const char* op, const char* stage, uint32_t context_id,
+                               uint64_t user_addr, uint64_t size, uint64_t root_expected,
+                               uint64_t root_current, uint64_t chunk_user_addr,
+                               uint64_t chunk_size) {
     trace_do(klog_write("[mm-copy] fail op="));
     trace_do(klog_write(op));
     trace_do(klog_write(" stage="));
@@ -389,9 +368,8 @@ mm_trace_copy_fail(const char *op,
     trace_do(klog_write("\n"));
 }
 
-static int
-mm_ensure_user_range_mapped(mm_context_t *ctx, uint64_t user_addr, uint64_t size, uint32_t needed_flags)
-{
+static int mm_ensure_user_range_mapped(mm_context_t* ctx, uint64_t user_addr, uint64_t size,
+                                       uint32_t needed_flags) {
     if (!ctx || ctx->root_table == 0 || user_addr == 0 || size == 0) {
         return -1;
     }
@@ -401,12 +379,11 @@ mm_ensure_user_range_mapped(mm_context_t *ctx, uint64_t user_addr, uint64_t size
     }
     uint64_t cur = user_addr;
     while (cur < end) {
-        mem_region_t *region = mm_find_region_for_addr(ctx, cur);
+        mem_region_t* region = mm_find_region_for_addr(ctx, cur);
         if (!region) {
             return -1;
         }
-        if (!(region->flags & MEM_REGION_FLAG_USER) ||
-            !(region->flags & MEM_REGION_FLAG_READ) ||
+        if (!(region->flags & MEM_REGION_FLAG_USER) || !(region->flags & MEM_REGION_FLAG_READ) ||
             ((needed_flags & MEM_REGION_FLAG_WRITE) && !(region->flags & MEM_REGION_FLAG_WRITE))) {
             return -1;
         }
@@ -431,14 +408,13 @@ mm_ensure_user_range_mapped(mm_context_t *ctx, uint64_t user_addr, uint64_t size
     return 0;
 }
 
-int
-mm_user_range_permitted(uint32_t context_id, uint64_t user_addr, uint64_t size, uint32_t needed_flags)
-{
+int mm_user_range_permitted(uint32_t context_id, uint64_t user_addr, uint64_t size,
+                            uint32_t needed_flags) {
     if (context_id == 0 || user_addr == 0 || size == 0) {
         return -1;
     }
 
-    mm_context_t *ctx = mm_context_get(context_id);
+    mm_context_t* ctx = mm_context_get(context_id);
     if (!ctx || ctx->root_table == 0) {
         return -1;
     }
@@ -450,7 +426,7 @@ mm_user_range_permitted(uint32_t context_id, uint64_t user_addr, uint64_t size, 
 
     uint64_t cur = user_addr;
     while (cur < end) {
-        mem_region_t *region = mm_find_region_for_addr(ctx, cur);
+        mem_region_t* region = mm_find_region_for_addr(ctx, cur);
         if (!region) {
             return -1;
         }
@@ -474,8 +450,9 @@ mm_user_range_permitted(uint32_t context_id, uint64_t user_addr, uint64_t size, 
     return 0;
 }
 
-int mm_handle_page_fault(uint32_t context_id, uint64_t addr, uint64_t error_code, uint64_t *out_mapped_base) {
-    mm_context_t *ctx = mm_context_get(context_id);
+int mm_handle_page_fault(uint32_t context_id, uint64_t addr, uint64_t error_code,
+                         uint64_t* out_mapped_base) {
+    mm_context_t* ctx = mm_context_get(context_id);
     if (!ctx) {
         return -1;
     }
@@ -484,7 +461,7 @@ int mm_handle_page_fault(uint32_t context_id, uint64_t addr, uint64_t error_code
         return -1;
     }
 
-    mem_region_t *region = mm_find_region_for_addr(ctx, addr);
+    mem_region_t* region = mm_find_region_for_addr(ctx, addr);
     if (!region) {
         return -1;
     }
@@ -515,14 +492,14 @@ int mm_handle_page_fault(uint32_t context_id, uint64_t addr, uint64_t error_code
     return 0;
 }
 
-int mm_shared_create(uint32_t owner_context_id, uint64_t pages, uint32_t flags,
-                     uint32_t *out_id, uint64_t *out_base) {
+int mm_shared_create(uint32_t owner_context_id, uint64_t pages, uint32_t flags, uint32_t* out_id,
+                     uint64_t* out_base) {
     if (!out_id || !out_base || pages == 0) {
         return -1;
     }
     ksync_spinlock_lock(&g_shared_lock);
     mm_shared_init_once_locked();
-#if WASMOS_WASM_RUNTIME == 1  /* WARP JIT backend */
+#if WASMOS_WASM_RUNTIME == 1 /* WARP JIT backend */
     /* Allocate shmem from the dedicated shmem zone (below WASMOS_SHMEM_PHYS_LIMIT)
      * so canonical kernel VAs (phys | kHalfBase) never fall inside a WARP
      * linear-memory range.  WARP linear memory is allocated above the limit,
@@ -554,7 +531,7 @@ int mm_shared_create(uint32_t owner_context_id, uint64_t pages, uint32_t flags,
         ksync_spinlock_unlock(&g_shared_lock);
         return -1;
     }
-    mm_shared_region_t *region = (mm_shared_region_t *)list_alloc(&g_shared_list);
+    mm_shared_region_t* region = (mm_shared_region_t*)list_alloc(&g_shared_list);
     if (!region) {
         pfa_free_pages(base, pages);
         ksync_spinlock_unlock(&g_shared_lock);
@@ -576,7 +553,7 @@ int mm_shared_create(uint32_t owner_context_id, uint64_t pages, uint32_t flags,
 
 int mm_shared_grant(uint32_t owner_context_id, uint32_t id, uint32_t target_context_id) {
     ksync_spinlock_lock(&g_shared_lock);
-    mm_shared_region_t *region = mm_shared_find_locked(id);
+    mm_shared_region_t* region = mm_shared_find_locked(id);
     uint8_t i = 0;
     if (!region || target_context_id == 0) {
         ksync_spinlock_unlock(&g_shared_lock);
@@ -607,7 +584,7 @@ int mm_shared_grant(uint32_t owner_context_id, uint32_t id, uint32_t target_cont
 
 int mm_shared_revoke(uint32_t owner_context_id, uint32_t id, uint32_t target_context_id) {
     ksync_spinlock_lock(&g_shared_lock);
-    mm_shared_region_t *region = mm_shared_find_locked(id);
+    mm_shared_region_t* region = mm_shared_find_locked(id);
     uint8_t i = 0;
     if (!region || target_context_id == 0) {
         ksync_spinlock_unlock(&g_shared_lock);
@@ -639,13 +616,13 @@ int mm_shared_revoke(uint32_t owner_context_id, uint32_t id, uint32_t target_con
     return 0;
 }
 
-int mm_shared_get_phys(uint32_t owner_context_id, uint32_t id,
-                       uint64_t *out_base, uint64_t *out_pages) {
+int mm_shared_get_phys(uint32_t owner_context_id, uint32_t id, uint64_t* out_base,
+                       uint64_t* out_pages) {
     if (!out_base || !out_pages) {
         return -1;
     }
     ksync_spinlock_lock(&g_shared_lock);
-    mm_shared_region_t *region = mm_shared_find_locked(id);
+    mm_shared_region_t* region = mm_shared_find_locked(id);
     if (!region || !mm_shared_access_allowed(region, owner_context_id)) {
         ksync_spinlock_unlock(&g_shared_lock);
         return -1;
@@ -658,7 +635,7 @@ int mm_shared_get_phys(uint32_t owner_context_id, uint32_t id,
 
 int mm_shared_retain(uint32_t owner_context_id, uint32_t id) {
     ksync_spinlock_lock(&g_shared_lock);
-    mm_shared_region_t *region = mm_shared_find_locked(id);
+    mm_shared_region_t* region = mm_shared_find_locked(id);
     if (!region || !mm_shared_access_allowed(region, owner_context_id)) {
         ksync_spinlock_unlock(&g_shared_lock);
         return -1;
@@ -674,7 +651,7 @@ int mm_shared_retain(uint32_t owner_context_id, uint32_t id) {
 
 int mm_shared_release(uint32_t owner_context_id, uint32_t id) {
     ksync_spinlock_lock(&g_shared_lock);
-    mm_shared_region_t *region = mm_shared_find_locked(id);
+    mm_shared_region_t* region = mm_shared_find_locked(id);
     if (!region || !mm_shared_access_allowed(region, owner_context_id) || region->refcount == 0) {
         ksync_spinlock_unlock(&g_shared_lock);
         return -1;
@@ -685,12 +662,12 @@ int mm_shared_release(uint32_t owner_context_id, uint32_t id) {
     return rc;
 }
 
-int mm_shared_map(mm_context_t *ctx, uint32_t id, uint32_t flags, uint64_t *out_base) {
+int mm_shared_map(mm_context_t* ctx, uint32_t id, uint32_t flags, uint64_t* out_base) {
     if (!ctx) {
         return -1;
     }
     ksync_spinlock_lock(&g_shared_lock);
-    mm_shared_region_t *region = mm_shared_find_locked(id);
+    mm_shared_region_t* region = mm_shared_find_locked(id);
     if (!region || !mm_shared_access_allowed(region, ctx->id)) {
         ksync_spinlock_unlock(&g_shared_lock);
         return -1;
@@ -705,7 +682,7 @@ int mm_shared_map(mm_context_t *ctx, uint32_t id, uint32_t flags, uint64_t *out_
     }
     region->refcount++;
     uint64_t virt_base = mm_region_virtual_base(ctx, MEM_REGION_SHARED, region->pages);
-    mem_region_t *added = 0;
+    mem_region_t* added = 0;
     if (virt_base != 0) {
         added = mm_context_add_region_slot(ctx, virt_base, region->pages * PAGE_SIZE,
                                            effective_flags, MEM_REGION_SHARED);
@@ -726,12 +703,12 @@ int mm_shared_map(mm_context_t *ctx, uint32_t id, uint32_t flags, uint64_t *out_
     return 0;
 }
 
-int mm_shared_unmap(mm_context_t *ctx, uint32_t id) {
+int mm_shared_unmap(mm_context_t* ctx, uint32_t id) {
     if (!ctx) {
         return -1;
     }
     ksync_spinlock_lock(&g_shared_lock);
-    mm_shared_region_t *region = mm_shared_find_locked(id);
+    mm_shared_region_t* region = mm_shared_find_locked(id);
     if (!region || !mm_shared_access_allowed(region, ctx->id)) {
         ksync_spinlock_unlock(&g_shared_lock);
         return -1;
@@ -739,7 +716,7 @@ int mm_shared_unmap(mm_context_t *ctx, uint32_t id) {
 
     uint32_t found = 0;
     list_iter_t it;
-    mem_region_t *r = (mem_region_t *)list_first(&ctx->regions, &it);
+    mem_region_t* r = (mem_region_t*)list_first(&ctx->regions, &it);
     while (r) {
         if (r->type == MEM_REGION_SHARED && r->phys_base == region->base &&
             r->size == region->pages * PAGE_SIZE) {
@@ -751,7 +728,7 @@ int mm_shared_unmap(mm_context_t *ctx, uint32_t id) {
             }
             break;
         }
-        r = (mem_region_t *)list_next(&it);
+        r = (mem_region_t*)list_next(&it);
     }
     if (!found) {
         ksync_spinlock_unlock(&g_shared_lock);
@@ -767,7 +744,8 @@ int mm_shared_unmap(mm_context_t *ctx, uint32_t id) {
     return rc;
 }
 
-int mm_context_alloc_region(mm_context_t *ctx, uint64_t pages, uint32_t flags, mem_region_type_t type) {
+int mm_context_alloc_region(mm_context_t* ctx, uint64_t pages, uint32_t flags,
+                            mem_region_type_t type) {
     if (!ctx || pages == 0) {
         return -1;
     }
@@ -780,7 +758,7 @@ int mm_context_alloc_region(mm_context_t *ctx, uint64_t pages, uint32_t flags, m
         pfa_free_pages(phys, pages);
         return -1;
     }
-    mem_region_t *added = mm_context_add_region_slot(ctx, virt, pages * PAGE_SIZE, flags, type);
+    mem_region_t* added = mm_context_add_region_slot(ctx, virt, pages * PAGE_SIZE, flags, type);
     if (!added) {
         pfa_free_pages(phys, pages);
         return -1;
@@ -790,11 +768,9 @@ int mm_context_alloc_region(mm_context_t *ctx, uint64_t pages, uint32_t flags, m
     return 0;
 }
 
-int
-mm_context_rebind_wasm_linear(uint32_t context_id, uint64_t phys_base, uint64_t size)
-{
-    mm_context_t *ctx = 0;
-    mem_region_t *region = 0;
+int mm_context_rebind_wasm_linear(uint32_t context_id, uint64_t phys_base, uint64_t size) {
+    mm_context_t* ctx = 0;
+    mem_region_t* region = 0;
     list_iter_t it;
     uint64_t old_phys = 0;
     uint64_t old_size = 0;
@@ -810,12 +786,12 @@ mm_context_rebind_wasm_linear(uint32_t context_id, uint64_t phys_base, uint64_t 
         return -1;
     }
 
-    region = (mem_region_t *)list_first(&ctx->regions, &it);
+    region = (mem_region_t*)list_first(&ctx->regions, &it);
     while (region) {
         if (region->type == MEM_REGION_WASM_LINEAR) {
             break;
         }
-        region = (mem_region_t *)list_next(&it);
+        region = (mem_region_t*)list_next(&it);
     }
     if (!region) {
         return -1;
@@ -824,9 +800,7 @@ mm_context_rebind_wasm_linear(uint32_t context_id, uint64_t phys_base, uint64_t 
     old_phys = region->phys_base;
     old_size = region->size;
     old_flags = region->flags;
-    if (old_phys == phys_base &&
-        old_size == size &&
-        (old_flags & MEM_REGION_FLAG_PHYS_EXTERNAL)) {
+    if (old_phys == phys_base && old_size == size && (old_flags & MEM_REGION_FLAG_PHYS_EXTERNAL)) {
         return 0;
     }
 
@@ -838,9 +812,7 @@ mm_context_rebind_wasm_linear(uint32_t context_id, uint64_t phys_base, uint64_t 
         (void)paging_unmap_4k_in_root(ctx->root_table, region->base + off);
     }
 
-    if (old_phys != 0 &&
-        !(old_flags & MEM_REGION_FLAG_PHYS_EXTERNAL) &&
-        old_phys != phys_base) {
+    if (old_phys != 0 && !(old_flags & MEM_REGION_FLAG_PHYS_EXTERNAL) && old_phys != phys_base) {
         uint64_t old_pages = (old_size + PAGE_SIZE - 1ULL) / PAGE_SIZE;
         if (old_pages != 0) {
             pfa_free_pages(old_phys, old_pages);
@@ -861,12 +833,10 @@ mm_context_rebind_wasm_linear(uint32_t context_id, uint64_t phys_base, uint64_t 
  * mm_context_rebind_wasm_linear can't describe scattered backing).  The slot
  * owns the physical pages, so the region is marked PHYS_EXTERNAL (phys_base=0)
  * and mm_context_destroy will not free them. */
-int
-mm_context_bind_wasm_linear_scattered(uint32_t context_id, uint64_t slot_va_base,
-                                      uint64_t from_page, uint64_t to_page)
-{
-    mm_context_t *ctx = 0;
-    mem_region_t *region = 0;
+int mm_context_bind_wasm_linear_scattered(uint32_t context_id, uint64_t slot_va_base,
+                                          uint64_t from_page, uint64_t to_page) {
+    mm_context_t* ctx = 0;
+    mem_region_t* region = 0;
     list_iter_t it;
     uint64_t new_size = 0;
 
@@ -878,12 +848,12 @@ mm_context_bind_wasm_linear_scattered(uint32_t context_id, uint64_t slot_va_base
     if (!ctx) {
         return -1;
     }
-    region = (mem_region_t *)list_first(&ctx->regions, &it);
+    region = (mem_region_t*)list_first(&ctx->regions, &it);
     while (region) {
         if (region->type == MEM_REGION_WASM_LINEAR) {
             break;
         }
-        region = (mem_region_t *)list_next(&it);
+        region = (mem_region_t*)list_next(&it);
     }
     if (!region) {
         return -1;
@@ -926,35 +896,33 @@ mm_context_bind_wasm_linear_scattered(uint32_t context_id, uint64_t slot_va_base
     return 0;
 }
 
-uint64_t
-mm_user_wasm_linear_base(void)
-{
+uint64_t mm_user_wasm_linear_base(void) {
     return MM_USER_LINEAR_BASE;
 }
 
-static mm_context_t *mm_context_get_locked(uint32_t id) {
+static mm_context_t* mm_context_get_locked(uint32_t id) {
     if (id == g_root_ctx.id) {
         return &g_root_ctx;
     }
     list_iter_t it;
-    mm_context_t *ctx = (mm_context_t *)list_first(&g_contexts, &it);
+    mm_context_t* ctx = (mm_context_t*)list_first(&g_contexts, &it);
     while (ctx) {
         if (ctx->id == id) {
             return ctx;
         }
-        ctx = (mm_context_t *)list_next(&it);
+        ctx = (mm_context_t*)list_next(&it);
     }
     return 0;
 }
 
-mm_context_t *mm_context_get(uint32_t id) {
+mm_context_t* mm_context_get(uint32_t id) {
     ksync_spinlock_lock(&g_contexts_lock);
-    mm_context_t *ctx = mm_context_get_locked(id);
+    mm_context_t* ctx = mm_context_get_locked(id);
     ksync_spinlock_unlock(&g_contexts_lock);
     return ctx;
 }
 
-mm_context_t *mm_context_create(uint32_t id) {
+mm_context_t* mm_context_create(uint32_t id) {
     ksync_spinlock_lock(&g_contexts_lock);
     if (id == g_root_ctx.id) {
         ksync_spinlock_unlock(&g_contexts_lock);
@@ -964,7 +932,7 @@ mm_context_t *mm_context_create(uint32_t id) {
         ksync_spinlock_unlock(&g_contexts_lock);
         return 0;
     }
-    mm_context_t *ctx = (mm_context_t *)list_alloc(&g_contexts);
+    mm_context_t* ctx = (mm_context_t*)list_alloc(&g_contexts);
     if (!ctx) {
         ksync_spinlock_unlock(&g_contexts_lock);
         return 0;
@@ -986,7 +954,8 @@ mm_context_t *mm_context_create(uint32_t id) {
      * pointers whose offset lands above the region — e.g. a service whose stack
      * sits high in linear memory failing svc_register.  16 pages == 64 KiB
      * matches the wasm3 initial memory (and the root context). */
-    if (mm_context_alloc_region(ctx, 16, MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE | MEM_REGION_FLAG_USER,
+    if (mm_context_alloc_region(ctx, 16,
+                                MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE | MEM_REGION_FLAG_USER,
                                 MEM_REGION_WASM_LINEAR) != 0) {
         mm_context_release_regions(ctx);
         paging_destroy_address_space(ctx->root_table);
@@ -994,7 +963,8 @@ mm_context_t *mm_context_create(uint32_t id) {
         ksync_spinlock_unlock(&g_contexts_lock);
         return 0;
     }
-    if (mm_context_alloc_region(ctx, 2, MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE | MEM_REGION_FLAG_USER,
+    if (mm_context_alloc_region(ctx, 2,
+                                MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE | MEM_REGION_FLAG_USER,
                                 MEM_REGION_STACK) != 0) {
         mm_context_release_regions(ctx);
         paging_destroy_address_space(ctx->root_table);
@@ -1002,7 +972,8 @@ mm_context_t *mm_context_create(uint32_t id) {
         ksync_spinlock_unlock(&g_contexts_lock);
         return 0;
     }
-    if (mm_context_alloc_region(ctx, 4, MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE | MEM_REGION_FLAG_USER,
+    if (mm_context_alloc_region(ctx, 4,
+                                MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE | MEM_REGION_FLAG_USER,
                                 MEM_REGION_HEAP) != 0) {
         mm_context_release_regions(ctx);
         paging_destroy_address_space(ctx->root_table);
@@ -1029,7 +1000,7 @@ int mm_context_destroy(uint32_t id) {
         ksync_spinlock_unlock(&g_contexts_lock);
         return -1;
     }
-    mm_context_t *ctx = mm_context_get_locked(id);
+    mm_context_t* ctx = mm_context_get_locked(id);
     if (!ctx) {
         ksync_spinlock_unlock(&g_contexts_lock);
         return -1;
@@ -1042,7 +1013,7 @@ int mm_context_destroy(uint32_t id) {
 }
 
 int mm_context_activate(uint32_t id) {
-    mm_context_t *ctx = mm_context_get(id);
+    mm_context_t* ctx = mm_context_get(id);
     if (!ctx || ctx->root_table == 0) {
         return -1;
     }
@@ -1053,7 +1024,7 @@ int mm_context_activate(uint32_t id) {
 }
 
 uint64_t mm_context_root_table(uint32_t id) {
-    mm_context_t *ctx = mm_context_get(id);
+    mm_context_t* ctx = mm_context_get(id);
     if (!ctx) {
         return 0;
     }
@@ -1066,7 +1037,7 @@ typedef struct {
     uint64_t size;
     uint64_t root_table;
     uint64_t prev_root;
-    uint8_t *kernel_ptr;
+    uint8_t* kernel_ptr;
 } mm_copy_from_user_args_t;
 
 typedef struct {
@@ -1075,7 +1046,7 @@ typedef struct {
     uint64_t size;
     uint64_t root_table;
     uint64_t prev_root;
-    const uint8_t *kernel_ptr;
+    const uint8_t* kernel_ptr;
 } mm_copy_to_user_args_t;
 
 /* Called on the dedicated copy-stack to safely read from a user address space.
@@ -1091,14 +1062,12 @@ typedef struct {
  * Chunks are 256 bytes to keep the bounce buffer small (stack space is
  * limited on the copy-stack) while amortising the two CR3 switches per
  * iteration over a reasonable number of bytes. */
-static int
-mm_copy_from_user_impl(void *opaque)
-{
-    mm_copy_from_user_args_t *args = (mm_copy_from_user_args_t *)opaque;
+static int mm_copy_from_user_impl(void* opaque) {
+    mm_copy_from_user_args_t* args = (mm_copy_from_user_args_t*)opaque;
     if (!args) {
         return -1;
     }
-    uint8_t *dst_bytes = args->kernel_ptr;
+    uint8_t* dst_bytes = args->kernel_ptr;
     uint64_t remaining = args->size;
     uint64_t user_cur = args->user_addr;
     const uint64_t chunk_size = 256ULL;
@@ -1107,14 +1076,19 @@ mm_copy_from_user_impl(void *opaque)
     while (remaining > 0) {
         uint64_t n = (remaining < chunk_size) ? remaining : chunk_size;
         if (paging_switch_root(args->root_table) != 0) {
-            mm_trace_copy_fail("from", "switch_to_user", args->context_id, args->user_addr, args->size, args->root_table, paging_get_current_root_table(), user_cur, n);
+            mm_trace_copy_fail("from", "switch_to_user", args->context_id, args->user_addr,
+                               args->size, args->root_table, paging_get_current_root_table(),
+                               user_cur, n);
             return -1;
         }
-        memcpy(bounce, (const void *)(uintptr_t)user_cur, (size_t)n);
+        memcpy(bounce, (const void*)(uintptr_t)user_cur, (size_t)n);
         if (paging_switch_root(args->prev_root) != 0) {
-            mm_trace_copy_fail("from", "switch_to_prev", args->context_id, args->user_addr, args->size, args->prev_root, paging_get_current_root_table(), user_cur, n);
+            mm_trace_copy_fail("from", "switch_to_prev", args->context_id, args->user_addr,
+                               args->size, args->prev_root, paging_get_current_root_table(),
+                               user_cur, n);
             /* Cannot return: CPU is still under the user page table. Halt. */
-            for (;;) {}
+            for (;;) {
+            }
         }
         memcpy(dst_bytes, bounce, (size_t)n);
         dst_bytes += n;
@@ -1124,20 +1098,21 @@ mm_copy_from_user_impl(void *opaque)
     return 0;
 }
 
-int
-mm_copy_from_user(uint32_t context_id, void *dst, uint64_t user_src, uint64_t size)
-{
+int mm_copy_from_user(uint32_t context_id, void* dst, uint64_t user_src, uint64_t size) {
     if (context_id == 0 || !dst || user_src == 0 || size == 0) {
-        mm_trace_copy_fail("from", "arg", context_id, user_src, size, 0, paging_get_current_root_table(), user_src, 0);
+        mm_trace_copy_fail("from", "arg", context_id, user_src, size, 0,
+                           paging_get_current_root_table(), user_src, 0);
         return -1;
     }
-    mm_context_t *ctx = mm_context_get(context_id);
+    mm_context_t* ctx = mm_context_get(context_id);
     if (!ctx || ctx->root_table == 0) {
-        mm_trace_copy_fail("from", "ctx", context_id, user_src, size, 0, paging_get_current_root_table(), user_src, 0);
+        mm_trace_copy_fail("from", "ctx", context_id, user_src, size, 0,
+                           paging_get_current_root_table(), user_src, 0);
         return -1;
     }
     if (mm_ensure_user_range_mapped(ctx, user_src, size, MEM_REGION_FLAG_READ) != 0) {
-        mm_trace_copy_fail("from", "map", context_id, user_src, size, ctx->root_table, paging_get_current_root_table(), user_src, size);
+        mm_trace_copy_fail("from", "map", context_id, user_src, size, ctx->root_table,
+                           paging_get_current_root_table(), user_src, size);
         return -1;
     }
 
@@ -1153,19 +1128,17 @@ mm_copy_from_user(uint32_t context_id, void *dst, uint64_t user_src, uint64_t si
         .size = size,
         .root_table = ctx->root_table,
         .prev_root = cur_cr3,
-        .kernel_ptr = (uint8_t *)dst,
+        .kernel_ptr = (uint8_t*)dst,
     };
     return mm_run_on_copy_stack(mm_copy_from_user_impl, &args);
 }
 
-static int
-mm_copy_to_user_impl(void *opaque)
-{
-    mm_copy_to_user_args_t *args = (mm_copy_to_user_args_t *)opaque;
+static int mm_copy_to_user_impl(void* opaque) {
+    mm_copy_to_user_args_t* args = (mm_copy_to_user_args_t*)opaque;
     if (!args) {
         return -1;
     }
-    const uint8_t *src_bytes = args->kernel_ptr;
+    const uint8_t* src_bytes = args->kernel_ptr;
     uint64_t remaining = args->size;
     uint64_t user_cur = args->user_addr;
     const uint64_t chunk_size = 256ULL;
@@ -1175,14 +1148,19 @@ mm_copy_to_user_impl(void *opaque)
         uint64_t n = (remaining < chunk_size) ? remaining : chunk_size;
         memcpy(bounce, src_bytes, (size_t)n);
         if (paging_switch_root(args->root_table) != 0) {
-            mm_trace_copy_fail("to", "switch_to_user", args->context_id, args->user_addr, args->size, args->root_table, paging_get_current_root_table(), user_cur, n);
+            mm_trace_copy_fail("to", "switch_to_user", args->context_id, args->user_addr,
+                               args->size, args->root_table, paging_get_current_root_table(),
+                               user_cur, n);
             return -1;
         }
-        memcpy((void *)(uintptr_t)user_cur, bounce, (size_t)n);
+        memcpy((void*)(uintptr_t)user_cur, bounce, (size_t)n);
         if (paging_switch_root(args->prev_root) != 0) {
-            mm_trace_copy_fail("to", "switch_to_prev", args->context_id, args->user_addr, args->size, args->prev_root, paging_get_current_root_table(), user_cur, n);
+            mm_trace_copy_fail("to", "switch_to_prev", args->context_id, args->user_addr,
+                               args->size, args->prev_root, paging_get_current_root_table(),
+                               user_cur, n);
             /* Cannot return: CPU is still under the user page table. Halt. */
-            for (;;) {}
+            for (;;) {
+            }
         }
         src_bytes += n;
         user_cur += n;
@@ -1191,20 +1169,21 @@ mm_copy_to_user_impl(void *opaque)
     return 0;
 }
 
-int
-mm_copy_to_user(uint32_t context_id, uint64_t user_dst, const void *src, uint64_t size)
-{
+int mm_copy_to_user(uint32_t context_id, uint64_t user_dst, const void* src, uint64_t size) {
     if (context_id == 0 || user_dst == 0 || !src || size == 0) {
-        mm_trace_copy_fail("to", "arg", context_id, user_dst, size, 0, paging_get_current_root_table(), user_dst, 0);
+        mm_trace_copy_fail("to", "arg", context_id, user_dst, size, 0,
+                           paging_get_current_root_table(), user_dst, 0);
         return -1;
     }
-    mm_context_t *ctx = mm_context_get(context_id);
+    mm_context_t* ctx = mm_context_get(context_id);
     if (!ctx || ctx->root_table == 0) {
-        mm_trace_copy_fail("to", "ctx", context_id, user_dst, size, 0, paging_get_current_root_table(), user_dst, 0);
+        mm_trace_copy_fail("to", "ctx", context_id, user_dst, size, 0,
+                           paging_get_current_root_table(), user_dst, 0);
         return -1;
     }
     if (mm_ensure_user_range_mapped(ctx, user_dst, size, MEM_REGION_FLAG_WRITE) != 0) {
-        mm_trace_copy_fail("to", "map", context_id, user_dst, size, ctx->root_table, paging_get_current_root_table(), user_dst, size);
+        mm_trace_copy_fail("to", "map", context_id, user_dst, size, ctx->root_table,
+                           paging_get_current_root_table(), user_dst, size);
         return -1;
     }
 
@@ -1217,7 +1196,7 @@ mm_copy_to_user(uint32_t context_id, uint64_t user_dst, const void *src, uint64_
         .size = size,
         .root_table = ctx->root_table,
         .prev_root = cur_cr3,
-        .kernel_ptr = (const uint8_t *)src,
+        .kernel_ptr = (const uint8_t*)src,
     };
     return mm_run_on_copy_stack(mm_copy_to_user_impl, &args);
 }
@@ -1225,12 +1204,8 @@ mm_copy_to_user(uint32_t context_id, uint64_t user_dst, const void *src, uint64_
 /* TODO: Migrate pointer-bearing syscall and IPC entry paths to this helper
  * family so kernel code stops dereferencing user virtual addresses directly. */
 
-int mm_context_map_physical(uint32_t context_id,
-                           uint64_t virt,
-                           uint64_t phys,
-                           uint64_t size,
-                           uint32_t flags)
-{
+int mm_context_map_physical(uint32_t context_id, uint64_t virt, uint64_t phys, uint64_t size,
+                            uint32_t flags) {
     if (context_id == 0 || virt == 0 || phys == 0 || size == 0) {
         return -1;
     }
@@ -1241,7 +1216,7 @@ int mm_context_map_physical(uint32_t context_id,
         return -1;
     }
 
-    mm_context_t *ctx = mm_context_get(context_id);
+    mm_context_t* ctx = mm_context_get(context_id);
     if (!ctx || ctx->root_table == 0) {
         return -1;
     }
@@ -1262,7 +1237,7 @@ int mm_context_map_physical(uint32_t context_id,
     }
 
     uint64_t current_virt = virt;
-        uint64_t current_phys = phys;
+    uint64_t current_phys = phys;
     for (uint64_t i = 0; i < pages; ++i) {
         (void)paging_unmap_4k_in_root(ctx->root_table, current_virt);
         int map_rc = paging_map_4k_in_root(ctx->root_table, current_virt, current_phys, flags);

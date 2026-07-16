@@ -22,9 +22,9 @@ typedef enum {
 #define WASMOS_EXEC_HANDLER_MAX_PER_OWNER 8u
 
 typedef struct {
-    const char *path;
-    const char *filename;
-    const uint8_t *initial_bytes;
+    const char* path;
+    const char* filename;
+    const uint8_t* initial_bytes;
     uint32_t initial_size;
 } wasmos_exec_probe_t;
 
@@ -38,8 +38,8 @@ typedef struct wasmos_subsystem_registry_entry {
     uint8_t gates_ready_for_services;
     uint32_t broker_endpoint;
     uint32_t owner_context_id; /* 0 = kernel built-in; nonzero = registering broker context */
-    const wasmos_subsystem_ops_t *ops;
-    struct wasmos_subsystem_registry_entry *next;
+    const wasmos_subsystem_ops_t* ops;
+    struct wasmos_subsystem_registry_entry* next;
 } wasmos_subsystem_registry_entry_t;
 
 typedef struct wasmos_exec_handler_registry_entry {
@@ -53,37 +53,32 @@ typedef struct wasmos_exec_handler_registry_entry {
     uint32_t node_count;
     uint32_t root_index;
     uint32_t owner_context_id; /* registering broker context; dropped when it exits */
-    wasmos_exec_match_node_t *nodes;
-    struct wasmos_exec_handler_registry_entry *next;
+    wasmos_exec_match_node_t* nodes;
+    struct wasmos_exec_handler_registry_entry* next;
 } wasmos_exec_handler_registry_entry_t;
 
-int wasmos_subsystem_registry_register_builtin(const char *request_tag,
-                                               const char *runtime_tag,
+int wasmos_subsystem_registry_register_builtin(const char* request_tag, const char* runtime_tag,
                                                uint8_t uses_wasm_payload,
                                                uint8_t needs_runtime_lock,
                                                uint8_t gates_ready_for_services,
-                                               const wasmos_subsystem_ops_t *ops);
-int wasmos_subsystem_registry_register_broker(const char *request_tag,
-                                              const char *runtime_tag,
-                                              const char *broker_name,
-                                              uint32_t broker_endpoint,
-                                              uint32_t owner_context_id,
-                                              uint8_t uses_wasm_payload,
+                                               const wasmos_subsystem_ops_t* ops);
+int wasmos_subsystem_registry_register_broker(const char* request_tag, const char* runtime_tag,
+                                              const char* broker_name, uint32_t broker_endpoint,
+                                              uint32_t owner_context_id, uint8_t uses_wasm_payload,
                                               uint8_t needs_runtime_lock,
                                               uint8_t gates_ready_for_services);
-int wasmos_subsystem_registry_register_exec_handler(const char *handler_name,
-                                                    const char *request_tag,
-                                                    uint32_t owner_context_id,
-                                                    uint32_t priority,
+int wasmos_subsystem_registry_register_exec_handler(const char* handler_name,
+                                                    const char* request_tag,
+                                                    uint32_t owner_context_id, uint32_t priority,
                                                     uint32_t max_probe_bytes,
-                                                    const wasmos_exec_match_node_t *nodes,
-                                                    uint32_t node_count,
-                                                    uint32_t root_index);
+                                                    const wasmos_exec_match_node_t* nodes,
+                                                    uint32_t node_count, uint32_t root_index);
 /* Remove every broker subsystem and exec handler owned by owner_context_id.
  * Called from process teardown so a dead broker leaves no stale endpoint. */
 void wasmos_subsystem_registry_drop_owner(uint32_t owner_context_id);
-const wasmos_subsystem_registry_entry_t *wasmos_subsystem_registry_find(const char *request_tag);
-const wasmos_exec_handler_registry_entry_t *wasmos_subsystem_registry_find_exec_handler(const wasmos_exec_probe_t *probe);
+const wasmos_subsystem_registry_entry_t* wasmos_subsystem_registry_find(const char* request_tag);
+const wasmos_exec_handler_registry_entry_t*
+wasmos_subsystem_registry_find_exec_handler(const wasmos_exec_probe_t* probe);
 uint32_t wasmos_subsystem_registry_exec_max_probe_bytes(void);
 void wasmos_subsystem_registry_reset(void);
 

@@ -43,7 +43,9 @@ class FsWriteSmokeTest(unittest.TestCase):
                 )
         ok = self.session.expect_from(mark, b"wamos> ", timeout_s=timeout_s)
         if not ok:
-            self.fail(f"Prompt not found after '{cmd}'.\n--- tail ---\n{self.session.tail()}\n")
+            self.fail(
+                f"Prompt not found after '{cmd}'.\n--- tail ---\n{self.session.tail()}\n"
+            )
 
     def test_exec_fs_write_smoke(self):
         self._cmd_expect("cd /boot", [b"/boot wamos>"])

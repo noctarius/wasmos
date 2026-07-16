@@ -5,7 +5,9 @@ import sys
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Run unittest suite with deterministic status markers.")
+    parser = argparse.ArgumentParser(
+        description="Run unittest suite with deterministic status markers."
+    )
     parser.add_argument("--start-dir", default="tests")
     args = parser.parse_args()
 

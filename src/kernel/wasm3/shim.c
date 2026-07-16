@@ -24,7 +24,7 @@
 
 typedef struct {
     uint64_t phys;
-    uint8_t *base;
+    uint8_t* base;
     size_t size;
     size_t offset;
 } wasm3_heap_chunk_t;
@@ -64,10 +64,7 @@ static ksync_spinlock_t g_wasm3_heap_lock;
  * m3_Call deadlocks when a WASM process blocks on another WASM service.  Shared
  * side tables are protected where they live instead. */
 
-
-static size_t
-align_up(size_t value, size_t align)
-{
+static size_t align_up(size_t value, size_t align) {
     if (align == 0) {
         return value;
     }
@@ -75,9 +72,7 @@ align_up(size_t value, size_t align)
     return (value + mask) & ~mask;
 }
 
-static void
-wasm3_heap_slot_init(wasm3_heap_slot_t *slot, uint32_t pid)
-{
+static void wasm3_heap_slot_init(wasm3_heap_slot_t* slot, uint32_t pid) {
     if (!slot) {
         return;
     }
@@ -99,32 +94,26 @@ wasm3_heap_slot_init(wasm3_heap_slot_t *slot, uint32_t pid)
     }
 }
 
-static void
-wasm3_memset(void *dst, int value, size_t len)
-{
-    uint8_t *p = (uint8_t *)dst;
+static void wasm3_memset(void* dst, int value, size_t len) {
+    uint8_t* p = (uint8_t*)dst;
     for (size_t i = 0; i < len; ++i) {
         p[i] = (uint8_t)value;
     }
 }
 
-static void
-wasm3_memcpy(void *dst, const void *src, size_t len)
-{
-    uint8_t *d = (uint8_t *)dst;
-    const uint8_t *s = (const uint8_t *)src;
+static void wasm3_memcpy(void* dst, const void* src, size_t len) {
+    uint8_t* d = (uint8_t*)dst;
+    const uint8_t* s = (const uint8_t*)src;
     for (size_t i = 0; i < len; ++i) {
         d[i] = s[i];
     }
 }
 
-static wasm3_heap_slot_t *
-wasm3_heap_slot_for_pid(uint32_t pid)
-{
+static wasm3_heap_slot_t* wasm3_heap_slot_for_pid(uint32_t pid) {
     if (pid == 0) {
         return 0;
     }
-    wasm3_heap_slot_t *empty = 0;
+    wasm3_heap_slot_t* empty = 0;
     for (uint32_t i = 0; i < PROCESS_MAX_COUNT; ++i) {
         if (g_wasm3_heaps[i].pid == pid) {
             return &g_wasm3_heaps[i];
@@ -139,31 +128,23 @@ wasm3_heap_slot_for_pid(uint32_t pid)
     return empty;
 }
 
-static wasm3_heap_slot_t *
-wasm3_heap_slot(void)
-{
+static wasm3_heap_slot_t* wasm3_heap_slot(void) {
     uint32_t bound = cpu_local()->wasm3_heap_bound_pid;
     uint32_t pid = bound ? bound : process_current_pid();
     return wasm3_heap_slot_for_pid(pid);
 }
 
-uint32_t
-wasm3_heap_bind_pid(uint32_t pid)
-{
+uint32_t wasm3_heap_bind_pid(uint32_t pid) {
     uint32_t previous_pid = cpu_local()->wasm3_heap_bound_pid;
     cpu_local()->wasm3_heap_bound_pid = pid;
     return previous_pid;
 }
 
-void
-wasm3_heap_restore_pid(uint32_t previous_pid)
-{
+void wasm3_heap_restore_pid(uint32_t previous_pid) {
     cpu_local()->wasm3_heap_bound_pid = previous_pid;
 }
 
-uint32_t
-wasm3_runtime_enter(uint32_t pid)
-{
+uint32_t wasm3_runtime_enter(uint32_t pid) {
     /* Bind this CPU's wasm3 heap to pid for the duration of the m3_* call.
      * Preemption is disabled to keep the CPU-local heap binding coherent for
      * the duration of the m3_* call. */
@@ -171,21 +152,17 @@ wasm3_runtime_enter(uint32_t pid)
     return wasm3_heap_bind_pid(pid);
 }
 
-void
-wasm3_runtime_leave(uint32_t previous_pid)
-{
+void wasm3_runtime_leave(uint32_t previous_pid) {
     wasm3_heap_restore_pid(previous_pid);
     preempt_enable();
 }
 
-void
-wasm3_heap_configure(uint32_t pid, uint64_t initial_size, uint64_t max_size)
-{
+void wasm3_heap_configure(uint32_t pid, uint64_t initial_size, uint64_t max_size) {
     if (pid == 0) {
         return;
     }
     ksync_spinlock_lock(&g_wasm3_heap_lock);
-    wasm3_heap_slot_t *slot = wasm3_heap_slot_for_pid(pid);
+    wasm3_heap_slot_t* slot = wasm3_heap_slot_for_pid(pid);
     if (slot) {
         size_t preferred = (size_t)initial_size;
         size_t limit = max_size == 0 ? (size_t)WASM3_HEAP_MAX_BYTES : (size_t)max_size;
@@ -211,9 +188,7 @@ wasm3_heap_configure(uint32_t pid, uint64_t initial_size, uint64_t max_size)
     ksync_spinlock_unlock(&g_wasm3_heap_lock);
 }
 
-static int
-wasm3_heap_grow(wasm3_heap_slot_t *slot, size_t min_total)
-{
+static int wasm3_heap_grow(wasm3_heap_slot_t* slot, size_t min_total) {
     if (!slot || min_total == 0) {
         return -1;
     }
@@ -262,9 +237,9 @@ wasm3_heap_grow(wasm3_heap_slot_t *slot, size_t min_total)
             phys = pfa_alloc_pages(pages);
         }
         if (phys) {
-            wasm3_heap_chunk_t *chunk = &slot->chunks[slot->chunk_count++];
+            wasm3_heap_chunk_t* chunk = &slot->chunks[slot->chunk_count++];
             chunk->phys = phys;
-            chunk->base = (uint8_t *)(uintptr_t)(phys + KERNEL_HIGHER_HALF_BASE);
+            chunk->base = (uint8_t*)(uintptr_t)(phys + KERNEL_HIGHER_HALF_BASE);
             chunk->size = (size_t)pages * 4096u;
             chunk->offset = 0;
             slot->committed_size += chunk->size;
@@ -281,24 +256,21 @@ wasm3_heap_grow(wasm3_heap_slot_t *slot, size_t min_total)
     return -1;
 }
 
-static wasm3_heap_chunk_t *
-wasm3_heap_tail_chunk(wasm3_heap_slot_t *slot)
-{
+static wasm3_heap_chunk_t* wasm3_heap_tail_chunk(wasm3_heap_slot_t* slot) {
     if (!slot || slot->chunk_count == 0) {
         return 0;
     }
     return &slot->chunks[slot->chunk_count - 1];
 }
 
-static wasm3_heap_chunk_t *
-wasm3_heap_chunk_for_ptr(wasm3_heap_slot_t *slot, const void *ptr, uint32_t *out_index)
-{
+static wasm3_heap_chunk_t* wasm3_heap_chunk_for_ptr(wasm3_heap_slot_t* slot, const void* ptr,
+                                                    uint32_t* out_index) {
     if (!slot || !ptr) {
         return 0;
     }
     uintptr_t addr = (uintptr_t)ptr;
     for (uint32_t i = 0; i < slot->chunk_count; ++i) {
-        wasm3_heap_chunk_t *chunk = &slot->chunks[i];
+        wasm3_heap_chunk_t* chunk = &slot->chunks[i];
         uintptr_t base = (uintptr_t)chunk->base;
         uintptr_t end = base + chunk->size;
         if (addr >= base && addr < end) {
@@ -311,16 +283,14 @@ wasm3_heap_chunk_for_ptr(wasm3_heap_slot_t *slot, const void *ptr, uint32_t *out
     return 0;
 }
 
-static void
-wasm3_heap_release_empty_tail_chunks(wasm3_heap_slot_t *slot)
-{
+static void wasm3_heap_release_empty_tail_chunks(wasm3_heap_slot_t* slot) {
     if (!slot) {
         return;
     }
     /* Empty tail chunks can be returned to the frame allocator immediately.
      * Interior holes are intentionally not compacted yet. */
     while (slot->chunk_count > 1) {
-        wasm3_heap_chunk_t *chunk = &slot->chunks[slot->chunk_count - 1];
+        wasm3_heap_chunk_t* chunk = &slot->chunks[slot->chunk_count - 1];
         if (!chunk->base || chunk->offset != 0) {
             break;
         }
@@ -335,15 +305,13 @@ wasm3_heap_release_empty_tail_chunks(wasm3_heap_slot_t *slot)
     }
 }
 
-static void *
-wasm3_alloc(size_t size, int zero)
-{
+static void* wasm3_alloc(size_t size, int zero) {
     if (size == 0) {
         return 0;
     }
 
     ksync_spinlock_lock(&g_wasm3_heap_lock);
-    wasm3_heap_slot_t *slot = wasm3_heap_slot();
+    wasm3_heap_slot_t* slot = wasm3_heap_slot();
     if (!slot) {
         ksync_spinlock_unlock(&g_wasm3_heap_lock);
         return 0;
@@ -363,7 +331,7 @@ wasm3_alloc(size_t size, int zero)
     if (align == 4096u) {
         skew = 0x18u;
     }
-    wasm3_heap_chunk_t *chunk = wasm3_heap_tail_chunk(slot);
+    wasm3_heap_chunk_t* chunk = wasm3_heap_tail_chunk(slot);
     size_t aligned_offset = 0;
     if (chunk) {
         aligned_offset = align_up(chunk->offset + header + skew, align);
@@ -376,15 +344,13 @@ wasm3_alloc(size_t size, int zero)
     if (!chunk || aligned_offset == 0 || aligned_offset + total > chunk->size) {
         /* Ensure new chunks account for the worst-case alignment slop. */
         if (wasm3_heap_grow(slot, total + align) != 0) {
-            klog_printf(
-                "[wasm3-heap] grow failed pid=%016llx\n"
-                "[wasm3-heap] req=%016llx\n"
-                "[wasm3-heap] committed=%016llx\n"
-                "[wasm3-heap] limit=%016llx\n",
-                (unsigned long long)slot->pid,
-                (unsigned long long)size,
-                (unsigned long long)slot->committed_size,
-                (unsigned long long)slot->max_size);
+            klog_printf("[wasm3-heap] grow failed pid=%016llx\n"
+                        "[wasm3-heap] req=%016llx\n"
+                        "[wasm3-heap] committed=%016llx\n"
+                        "[wasm3-heap] limit=%016llx\n",
+                        (unsigned long long)slot->pid, (unsigned long long)size,
+                        (unsigned long long)slot->committed_size,
+                        (unsigned long long)slot->max_size);
             ksync_spinlock_unlock(&g_wasm3_heap_lock);
             return 0;
         }
@@ -405,11 +371,11 @@ wasm3_alloc(size_t size, int zero)
         }
     }
 
-    wasm3_heap_block_t *block = (wasm3_heap_block_t *)(chunk->base + aligned_offset);
+    wasm3_heap_block_t* block = (wasm3_heap_block_t*)(chunk->base + aligned_offset);
     block->size = size;
     block->total = total;
     block->start = aligned_offset;
-    void *ptr = (uint8_t *)block + sizeof(wasm3_heap_block_t);
+    void* ptr = (uint8_t*)block + sizeof(wasm3_heap_block_t);
     chunk->offset = aligned_offset + total;
     ksync_spinlock_unlock(&g_wasm3_heap_lock);
     if (zero) {
@@ -418,13 +384,11 @@ wasm3_alloc(size_t size, int zero)
     return ptr;
 }
 
-void *malloc(size_t size)
-{
+void* malloc(size_t size) {
     return wasm3_alloc(size, 0);
 }
 
-void *calloc(size_t nmemb, size_t size)
-{
+void* calloc(size_t nmemb, size_t size) {
     if (nmemb == 0 || size == 0) {
         return 0;
     }
@@ -437,18 +401,17 @@ void *calloc(size_t nmemb, size_t size)
 
 /* Forward declarations: dedicated-VA linmem helpers defined below (near
  * realloc); referenced here by free() and by wasm3_heap_release(). */
-static int  wasm3_ptr_in_linmem_slot(const void *p);
-static void wasm3_linmem_free_slot_locked(wasm3_heap_slot_t *slot);
+static int wasm3_ptr_in_linmem_slot(const void* p);
+static void wasm3_linmem_free_slot_locked(wasm3_heap_slot_t* slot);
 
-void free(void *ptr)
-{
+void free(void* ptr) {
     if (!ptr) {
         return;
     }
     /* Slot-backed linear memory: release the whole slot (decommit + free). */
     if (wasm3_ptr_in_linmem_slot(ptr)) {
         ksync_spinlock_lock(&g_wasm3_heap_lock);
-        wasm3_heap_slot_t *lslot = wasm3_heap_slot();
+        wasm3_heap_slot_t* lslot = wasm3_heap_slot();
         if (lslot && (uint64_t)(uintptr_t)ptr == lslot->linmem_block) {
             wasm3_linmem_free_slot_locked(lslot);
         }
@@ -456,37 +419,35 @@ void free(void *ptr)
         return;
     }
     ksync_spinlock_lock(&g_wasm3_heap_lock);
-    wasm3_heap_slot_t *slot = wasm3_heap_slot();
+    wasm3_heap_slot_t* slot = wasm3_heap_slot();
     if (!slot || slot->chunk_count == 0) {
         ksync_spinlock_unlock(&g_wasm3_heap_lock);
         return;
     }
     uint32_t chunk_index = 0;
-    wasm3_heap_chunk_t *chunk = wasm3_heap_chunk_for_ptr(slot, ptr, &chunk_index);
+    wasm3_heap_chunk_t* chunk = wasm3_heap_chunk_for_ptr(slot, ptr, &chunk_index);
     if (!chunk) {
         ksync_spinlock_unlock(&g_wasm3_heap_lock);
         return;
     }
-    wasm3_heap_block_t *block = (wasm3_heap_block_t *)((uint8_t *)ptr - sizeof(wasm3_heap_block_t));
+    wasm3_heap_block_t* block = (wasm3_heap_block_t*)((uint8_t*)ptr - sizeof(wasm3_heap_block_t));
     /* Free remains stack-like: only the most recent allocation in the tail
      * chunk shrinks the live frontier. This matches the old allocator's
      * behavior while still allowing chunked growth. */
-    if (chunk_index + 1 == slot->chunk_count &&
-        block->start + block->total == chunk->offset) {
+    if (chunk_index + 1 == slot->chunk_count && block->start + block->total == chunk->offset) {
         chunk->offset = block->start;
         wasm3_heap_release_empty_tail_chunks(slot);
     }
     ksync_spinlock_unlock(&g_wasm3_heap_lock);
 }
 
-void wasm3_heap_release(uint32_t pid)
-{
+void wasm3_heap_release(uint32_t pid) {
     if (pid == 0) {
         return;
     }
     ksync_spinlock_lock(&g_wasm3_heap_lock);
     for (uint32_t i = 0; i < PROCESS_MAX_COUNT; ++i) {
-        wasm3_heap_slot_t *slot = &g_wasm3_heaps[i];
+        wasm3_heap_slot_t* slot = &g_wasm3_heaps[i];
         if (slot->pid != pid) {
             continue;
         }
@@ -494,7 +455,7 @@ void wasm3_heap_release(uint32_t pid)
          * bookkeeping (idempotent if the runtime already freed it). */
         wasm3_linmem_free_slot_locked(slot);
         for (uint32_t chunk_index = 0; chunk_index < slot->chunk_count; ++chunk_index) {
-            wasm3_heap_chunk_t *chunk = &slot->chunks[chunk_index];
+            wasm3_heap_chunk_t* chunk = &slot->chunks[chunk_index];
             if (!chunk->base || chunk->size == 0) {
                 continue;
             }
@@ -507,9 +468,7 @@ void wasm3_heap_release(uint32_t pid)
     ksync_spinlock_unlock(&g_wasm3_heap_lock);
 }
 
-uint64_t
-wasm3_heap_committed_bytes(uint32_t pid)
-{
+uint64_t wasm3_heap_committed_bytes(uint32_t pid) {
     uint64_t committed = 0;
     if (pid == 0) {
         return 0;
@@ -526,11 +485,9 @@ wasm3_heap_committed_bytes(uint32_t pid)
     return committed;
 }
 
-int
-wasm3_heap_query_phys(uint32_t pid, const void *ptr, uint64_t size, uint64_t *out_phys_base)
-{
-    wasm3_heap_slot_t *slot = 0;
-    wasm3_heap_chunk_t *chunk = 0;
+int wasm3_heap_query_phys(uint32_t pid, const void* ptr, uint64_t size, uint64_t* out_phys_base) {
+    wasm3_heap_slot_t* slot = 0;
+    wasm3_heap_chunk_t* chunk = 0;
     uintptr_t chunk_base = 0;
     uintptr_t addr = 0;
     uint64_t offset = 0;
@@ -580,13 +537,11 @@ wasm3_heap_query_phys(uint32_t pid, const void *ptr, uint64_t size, uint64_t *ou
 
 /* Resolve the context that owns this heap slot's process (needed to bind the
  * user-VA linear-memory window). */
-static uint32_t
-wasm3_slot_context_id(const wasm3_heap_slot_t *slot)
-{
+static uint32_t wasm3_slot_context_id(const wasm3_heap_slot_t* slot) {
     if (!slot || slot->pid == 0) {
         return 0;
     }
-    process_t *proc = process_get(slot->pid);
+    process_t* proc = process_get(slot->pid);
     return proc ? proc->context_id : 0;
 }
 
@@ -595,9 +550,7 @@ wasm3_slot_context_id(const wasm3_heap_slot_t *slot)
  * kernel slot alias.  A block never spans more than one slot's worth of VA, so
  * the window range is a cheap pre-filter; free()/realloc() then exact-match the
  * per-process slot->linmem_block. */
-static int
-wasm3_ptr_in_linmem_slot(const void *p)
-{
+static int wasm3_ptr_in_linmem_slot(const void* p) {
     uint64_t v = (uint64_t)(uintptr_t)p;
     uint64_t lo = mm_user_wasm_linear_base();
     uint64_t hi = lo + WARP_LINMEM_VA_STRIDE;
@@ -605,19 +558,17 @@ wasm3_ptr_in_linmem_slot(const void *p)
 }
 
 /* Release the pid's linmem slot (decommit + free); lock held; idempotent. */
-static void
-wasm3_linmem_free_slot_locked(wasm3_heap_slot_t *slot)
-{
+static void wasm3_linmem_free_slot_locked(wasm3_heap_slot_t* slot) {
     if (!slot || slot->linmem_slot == LINMEM_SLOT_NONE) {
         return;
     }
     linmem_slot_decommit(slot->linmem_va_base, slot->linmem_committed_pages);
     linmem_slot_release(slot->linmem_slot);
-    slot->linmem_slot            = LINMEM_SLOT_NONE;
-    slot->linmem_va_base         = 0;
-    slot->linmem_block           = 0;
+    slot->linmem_slot = LINMEM_SLOT_NONE;
+    slot->linmem_va_base = 0;
+    slot->linmem_block = 0;
     slot->linmem_committed_pages = 0;
-    slot->linmem_max_pages       = 0;
+    slot->linmem_max_pages = 0;
 }
 
 /* Reserve a slot-backed linear-memory block for the current process, committing
@@ -625,14 +576,12 @@ wasm3_linmem_free_slot_locked(wasm3_heap_slot_t *slot)
  * `block + data_offset` (i.e. m3MemData) is page-aligned.  `max_bytes` caps
  * growth (also bounded by the slot's VA capacity).  Returns the block pointer
  * (used as M3MemoryHeader*) or 0 on failure. */
-void *
-wasm3_linmem_reserve(size_t total_bytes, size_t max_bytes, size_t data_offset)
-{
+void* wasm3_linmem_reserve(size_t total_bytes, size_t max_bytes, size_t data_offset) {
     if (total_bytes == 0 || data_offset >= 4096u) {
         return 0;
     }
     ksync_spinlock_lock(&g_wasm3_heap_lock);
-    wasm3_heap_slot_t *slot = wasm3_heap_slot();
+    wasm3_heap_slot_t* slot = wasm3_heap_slot();
     if (!slot || slot->linmem_slot != LINMEM_SLOT_NONE) {
         ksync_spinlock_unlock(&g_wasm3_heap_lock);
         return 0;
@@ -651,15 +600,14 @@ wasm3_linmem_reserve(size_t total_bytes, size_t max_bytes, size_t data_offset)
     /* Place the block so m3MemData (block + data_offset) starts at page 1; the
      * header occupies the tail of page 0.  Guest offset 0 is therefore at region
      * page 1, and the header page (page 0) is part of the committed range. */
-    uint64_t block_off  = 4096u - (uint64_t)data_offset;
+    uint64_t block_off = 4096u - (uint64_t)data_offset;
     uint64_t need_pages = (block_off + (uint64_t)total_bytes + 4095u) / 4096u;
     uint64_t slot_pages = WARP_LINMEM_VA_STRIDE / 4096u;
-    uint64_t max_pages  = ((uint64_t)max_bytes + 4095u) / 4096u + 1u; /* +header page */
+    uint64_t max_pages = ((uint64_t)max_bytes + 4095u) / 4096u + 1u; /* +header page */
     if (max_pages > slot_pages) {
         max_pages = slot_pages;
     }
-    if (need_pages > max_pages ||
-        linmem_slot_commit(va_base, 0, need_pages) != 0) {
+    if (need_pages > max_pages || linmem_slot_commit(va_base, 0, need_pages) != 0) {
         linmem_slot_release((uint32_t)s);
         ksync_spinlock_unlock(&g_wasm3_heap_lock);
         return 0;
@@ -675,25 +623,23 @@ wasm3_linmem_reserve(size_t total_bytes, size_t max_bytes, size_t data_offset)
         return 0;
     }
     uint64_t user_block = mm_user_wasm_linear_base() + block_off;
-    slot->linmem_slot            = (uint32_t)s;
-    slot->linmem_va_base         = va_base;      /* slot VA: decommit + bind source */
-    slot->linmem_block           = user_block;   /* user VA: interpreter's mem_base */
+    slot->linmem_slot = (uint32_t)s;
+    slot->linmem_va_base = va_base;  /* slot VA: decommit + bind source */
+    slot->linmem_block = user_block; /* user VA: interpreter's mem_base */
     slot->linmem_committed_pages = need_pages;
-    slot->linmem_max_pages       = max_pages;
+    slot->linmem_max_pages = max_pages;
     ksync_spinlock_unlock(&g_wasm3_heap_lock);
-    return (void *)(uintptr_t)user_block;
+    return (void*)(uintptr_t)user_block;
 }
 
 /* Grow the slot-backed block in place to `new_total_bytes` (commit tail pages).
  * The base never moves; returns the same block pointer, or 0 on failure. */
-void *
-wasm3_linmem_grow(void *blockp, size_t new_total_bytes)
-{
+void* wasm3_linmem_grow(void* blockp, size_t new_total_bytes) {
     if (!blockp) {
         return 0;
     }
     ksync_spinlock_lock(&g_wasm3_heap_lock);
-    wasm3_heap_slot_t *slot = wasm3_heap_slot();
+    wasm3_heap_slot_t* slot = wasm3_heap_slot();
     if (!slot || slot->linmem_slot == LINMEM_SLOT_NONE ||
         (uint64_t)(uintptr_t)blockp != slot->linmem_block) {
         ksync_spinlock_unlock(&g_wasm3_heap_lock);
@@ -723,8 +669,8 @@ wasm3_linmem_grow(void *blockp, size_t new_total_bytes)
         slot->linmem_committed_pages = need_pages;
         /* Bind ONLY the freshly committed tail into the user window; lower pages
          * keep their bindings and any overlays mapped over them. */
-        if (mm_context_bind_wasm_linear_scattered(context_id, slot->linmem_va_base,
-                                                  from_page, need_pages) != 0) {
+        if (mm_context_bind_wasm_linear_scattered(context_id, slot->linmem_va_base, from_page,
+                                                  need_pages) != 0) {
             ksync_spinlock_unlock(&g_wasm3_heap_lock);
             return 0;
         }
@@ -733,8 +679,7 @@ wasm3_linmem_grow(void *blockp, size_t new_total_bytes)
     return blockp;
 }
 
-void *realloc(void *ptr, size_t size)
-{
+void* realloc(void* ptr, size_t size) {
     if (!ptr) {
         return malloc(size);
     }
@@ -745,20 +690,18 @@ void *realloc(void *ptr, size_t size)
     if (wasm3_ptr_in_linmem_slot(ptr)) {
         return wasm3_linmem_grow(ptr, size);
     }
-    wasm3_heap_block_t *block = (wasm3_heap_block_t *)((uint8_t *)ptr - sizeof(wasm3_heap_block_t));
+    wasm3_heap_block_t* block = (wasm3_heap_block_t*)((uint8_t*)ptr - sizeof(wasm3_heap_block_t));
     size_t old_size = block->size;
     size_t new_total = align_up(sizeof(wasm3_heap_block_t) + size, WASM3_HEAP_ALIGN);
 
     ksync_spinlock_lock(&g_wasm3_heap_lock);
-    wasm3_heap_slot_t *slot = wasm3_heap_slot();
+    wasm3_heap_slot_t* slot = wasm3_heap_slot();
     uint32_t chunk_index = 0;
-    wasm3_heap_chunk_t *chunk = slot ? wasm3_heap_chunk_for_ptr(slot, ptr, &chunk_index) : 0;
+    wasm3_heap_chunk_t* chunk = slot ? wasm3_heap_chunk_for_ptr(slot, ptr, &chunk_index) : 0;
     /* In-place growth is only safe for the newest allocation in the active
      * tail chunk. All other cases fall back to allocate-copy-free. */
-    if (slot && chunk &&
-        chunk_index + 1 == slot->chunk_count &&
-        block->start + block->total == chunk->offset &&
-        block->start + new_total <= chunk->size) {
+    if (slot && chunk && chunk_index + 1 == slot->chunk_count &&
+        block->start + block->total == chunk->offset && block->start + new_total <= chunk->size) {
         chunk->offset = block->start + new_total;
         block->size = size;
         block->total = new_total;
@@ -767,7 +710,7 @@ void *realloc(void *ptr, size_t size)
     }
     ksync_spinlock_unlock(&g_wasm3_heap_lock);
 
-    void *new_ptr = malloc(size);
+    void* new_ptr = malloc(size);
     if (!new_ptr) {
         return 0;
     }
@@ -777,13 +720,11 @@ void *realloc(void *ptr, size_t size)
     return new_ptr;
 }
 
-int
-wasm3_heap_probe_growth(size_t size)
-{
+int wasm3_heap_probe_growth(size_t size) {
     if (size == 0) {
         return -1;
     }
-    uint8_t *ptr = (uint8_t *)malloc(size);
+    uint8_t* ptr = (uint8_t*)malloc(size);
     if (!ptr) {
         return -1;
     }
@@ -797,9 +738,7 @@ wasm3_heap_probe_growth(size_t size)
     return 0;
 }
 
-static int
-append_char(char *buf, size_t size, int *idx, char ch)
-{
+static int append_char(char* buf, size_t size, int* idx, char ch) {
     if (*idx + 1 < (int)size) {
         buf[*idx] = ch;
     }
@@ -807,9 +746,7 @@ append_char(char *buf, size_t size, int *idx, char ch)
     return 0;
 }
 
-static int
-append_str(char *buf, size_t size, int *idx, const char *s)
-{
+static int append_str(char* buf, size_t size, int* idx, const char* s) {
     if (!s) {
         s = "(null)";
     }
@@ -819,9 +756,7 @@ append_str(char *buf, size_t size, int *idx, const char *s)
     return 0;
 }
 
-static int
-append_uint(char *buf, size_t size, int *idx, uint64_t value, int base, int prefix)
-{
+static int append_uint(char* buf, size_t size, int* idx, uint64_t value, int base, int prefix) {
     char tmp[32];
     int n = 0;
     if (value == 0) {
@@ -843,9 +778,7 @@ append_uint(char *buf, size_t size, int *idx, uint64_t value, int base, int pref
     return 0;
 }
 
-static int
-format_to_buffer(char *buf, size_t size, const char *fmt, va_list ap)
-{
+static int format_to_buffer(char* buf, size_t size, const char* fmt, va_list ap) {
     int idx = 0;
     if (!buf || size == 0) {
         return 0;
@@ -854,7 +787,7 @@ format_to_buffer(char *buf, size_t size, const char *fmt, va_list ap)
         buf[0] = '\0';
         return 0;
     }
-    for (const char *p = fmt; *p; ++p) {
+    for (const char* p = fmt; *p; ++p) {
         if (*p != '%') {
             append_char(buf, size, &idx, *p);
             continue;
@@ -865,7 +798,7 @@ format_to_buffer(char *buf, size_t size, const char *fmt, va_list ap)
             continue;
         }
         if (*p == 's') {
-            append_str(buf, size, &idx, va_arg(ap, const char *));
+            append_str(buf, size, &idx, va_arg(ap, const char*));
             continue;
         }
         if (*p == 'd' || *p == 'i') {
@@ -889,7 +822,7 @@ format_to_buffer(char *buf, size_t size, const char *fmt, va_list ap)
             continue;
         }
         if (*p == 'p') {
-            uintptr_t v = (uintptr_t)va_arg(ap, void *);
+            uintptr_t v = (uintptr_t)va_arg(ap, void*);
             append_uint(buf, size, &idx, (uint64_t)v, 16, 1);
             continue;
         }
@@ -905,10 +838,9 @@ format_to_buffer(char *buf, size_t size, const char *fmt, va_list ap)
 }
 
 static FILE wasm3_stderr_instance;
-FILE *stderr = &wasm3_stderr_instance;
+FILE* stderr = &wasm3_stderr_instance;
 
-int fprintf(FILE *stream, const char *fmt, ...)
-{
+int fprintf(FILE* stream, const char* fmt, ...) {
     (void)stream;
     char buf[256];
     va_list ap;
@@ -919,8 +851,7 @@ int fprintf(FILE *stream, const char *fmt, ...)
     return rc;
 }
 
-int printf(const char *fmt, ...)
-{
+int printf(const char* fmt, ...) {
     char buf[256];
     va_list ap;
     va_start(ap, fmt);
@@ -930,14 +861,12 @@ int printf(const char *fmt, ...)
     return rc;
 }
 
-static unsigned long
-parse_ul(const char *nptr, char **endptr, int base)
-{
+static unsigned long parse_ul(const char* nptr, char** endptr, int base) {
     if (base == 0) {
         base = 10;
     }
     unsigned long value = 0;
-    const char *s = nptr;
+    const char* s = nptr;
     while (s && *s == ' ') {
         s++;
     }
@@ -960,35 +889,44 @@ parse_ul(const char *nptr, char **endptr, int base)
         s++;
     }
     if (endptr) {
-        *endptr = (char *)(uintptr_t)s;
+        *endptr = (char*)(uintptr_t)s;
     }
     return value;
 }
 
-unsigned long strtoul(const char *nptr, char **endptr, int base)
-{
+unsigned long strtoul(const char* nptr, char** endptr, int base) {
     return parse_ul(nptr, endptr, base);
 }
 
-unsigned long long strtoull(const char *nptr, char **endptr, int base)
-{
+unsigned long long strtoull(const char* nptr, char** endptr, int base) {
     return (unsigned long long)parse_ul(nptr, endptr, base);
 }
 
-double strtod(const char *nptr, char **endptr)
-{
+double strtod(const char* nptr, char** endptr) {
     /* Minimal implementation: parse optional sign, integer part, optional
      * fractional part.  Exponent notation and special values (inf/nan) are
      * not needed because this path is only reached when wasm3's m3_Call is
      * driven by string arguments, which does not happen in the WASMOS kernel. */
-    if (!nptr) { if (endptr) *endptr = (char *)nptr; return 0.0; }
-    const char *s = nptr;
-    while (*s == ' ' || *s == '\t') s++;
+    if (!nptr) {
+        if (endptr)
+            *endptr = (char*)nptr;
+        return 0.0;
+    }
+    const char* s = nptr;
+    while (*s == ' ' || *s == '\t')
+        s++;
     int neg = 0;
-    if (*s == '-') { neg = 1; s++; }
-    else if (*s == '+') { s++; }
+    if (*s == '-') {
+        neg = 1;
+        s++;
+    } else if (*s == '+') {
+        s++;
+    }
     double val = 0.0;
-    while (*s >= '0' && *s <= '9') { val = val * 10.0 + (double)(*s - '0'); s++; }
+    while (*s >= '0' && *s <= '9') {
+        val = val * 10.0 + (double)(*s - '0');
+        s++;
+    }
     if (*s == '.') {
         s++;
         double frac = 0.1;
@@ -998,6 +936,7 @@ double strtod(const char *nptr, char **endptr)
             s++;
         }
     }
-    if (endptr) *endptr = (char *)s;
+    if (endptr)
+        *endptr = (char*)s;
     return neg ? -val : val;
 }

@@ -16,6 +16,7 @@ def _require_kconfiglib():
     global _kc
     try:
         import kconfiglib  # type: ignore
+
         _kc = kconfiglib
     except ModuleNotFoundError:
         print(

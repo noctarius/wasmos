@@ -219,7 +219,13 @@ fn next_fs_request_id() -> i32 {
     }
 }
 
-fn fs_request(msg_type: i32, arg0: i32, arg1: i32, arg2: i32, arg3: i32) -> Result<(i32, i32), Error> {
+fn fs_request(
+    msg_type: i32,
+    arg0: i32,
+    arg1: i32,
+    arg2: i32,
+    arg3: i32,
+) -> Result<(i32, i32), Error> {
     let endpoint = unsafe { fs_endpoint() };
     if endpoint < 0 {
         return Err(Error::NotAvailable);
@@ -228,7 +234,19 @@ fn fs_request(msg_type: i32, arg0: i32, arg1: i32, arg2: i32, arg3: i32) -> Resu
     let reply_endpoint = ensure_fs_reply_endpoint()?;
     let request_id = next_fs_request_id();
 
-    if unsafe { ipc_send(endpoint, reply_endpoint, msg_type, request_id, arg0, arg1, arg2, arg3) } != 0 {
+    if unsafe {
+        ipc_send(
+            endpoint,
+            reply_endpoint,
+            msg_type,
+            request_id,
+            arg0,
+            arg1,
+            arg2,
+            arg3,
+        )
+    } != 0
+    {
         return Err(Error::HostCallFailed);
     }
     if unsafe { ipc_select_one(reply_endpoint) } < 0 {
@@ -241,20 +259,38 @@ fn fs_request(msg_type: i32, arg0: i32, arg1: i32, arg2: i32, arg3: i32) -> Resu
         return Err(Error::BadResponse);
     }
 
-    Ok((
-        unsafe { ipc_last_field(IPC_FIELD_ARG0) },
-        unsafe { ipc_last_field(IPC_FIELD_ARG1) },
-    ))
+    Ok((unsafe { ipc_last_field(IPC_FIELD_ARG0) }, unsafe {
+        ipc_last_field(IPC_FIELD_ARG1)
+    }))
 }
 
-fn fs_request_stream(msg_type: i32, arg0: i32, arg1: i32, arg2: i32, arg3: i32, out: &mut [u8]) -> Result<usize, Error> {
+fn fs_request_stream(
+    msg_type: i32,
+    arg0: i32,
+    arg1: i32,
+    arg2: i32,
+    arg3: i32,
+    out: &mut [u8],
+) -> Result<usize, Error> {
     let endpoint = unsafe { fs_endpoint() };
     if endpoint < 0 || out.is_empty() {
         return Err(Error::NotAvailable);
     }
     let reply_endpoint = ensure_fs_reply_endpoint()?;
     let request_id = next_fs_request_id();
-    if unsafe { ipc_send(endpoint, reply_endpoint, msg_type, request_id, arg0, arg1, arg2, arg3) } != 0 {
+    if unsafe {
+        ipc_send(
+            endpoint,
+            reply_endpoint,
+            msg_type,
+            request_id,
+            arg0,
+            arg1,
+            arg2,
+            arg3,
+        )
+    } != 0
+    {
         return Err(Error::HostCallFailed);
     }
 
@@ -354,8 +390,7 @@ pub mod std {
 pub mod ipc {
     use super::{
         ensure_ipc_reply_endpoint, ipc_create_endpoint, ipc_last_field, ipc_select_one, ipc_send,
-        next_ipc_request_id, Error,
-        IPC_FIELD_ARG0, IPC_FIELD_ARG1, IPC_FIELD_ARG2, IPC_FIELD_ARG3,
+        next_ipc_request_id, Error, IPC_FIELD_ARG0, IPC_FIELD_ARG1, IPC_FIELD_ARG2, IPC_FIELD_ARG3,
         IPC_FIELD_DESTINATION, IPC_FIELD_REQUEST_ID, IPC_FIELD_SOURCE, IPC_FIELD_TYPE,
     };
 
@@ -374,24 +409,36 @@ pub mod ipc {
     fn read_reply() -> Reply {
         unsafe {
             Reply {
-                r#type:      ipc_last_field(IPC_FIELD_TYPE),
-                request_id:  ipc_last_field(IPC_FIELD_REQUEST_ID),
-                source:      ipc_last_field(IPC_FIELD_SOURCE),
+                r#type: ipc_last_field(IPC_FIELD_TYPE),
+                request_id: ipc_last_field(IPC_FIELD_REQUEST_ID),
+                source: ipc_last_field(IPC_FIELD_SOURCE),
                 destination: ipc_last_field(IPC_FIELD_DESTINATION),
-                arg0:        ipc_last_field(IPC_FIELD_ARG0),
-                arg1:        ipc_last_field(IPC_FIELD_ARG1),
-                arg2:        ipc_last_field(IPC_FIELD_ARG2),
-                arg3:        ipc_last_field(IPC_FIELD_ARG3),
+                arg0: ipc_last_field(IPC_FIELD_ARG0),
+                arg1: ipc_last_field(IPC_FIELD_ARG1),
+                arg2: ipc_last_field(IPC_FIELD_ARG2),
+                arg3: ipc_last_field(IPC_FIELD_ARG3),
             }
         }
     }
 
     /// Send a request to server and block until a reply arrives.
     /// The reply endpoint is per-context and managed internally.
-    pub fn call(server: i32, msg_type: i32, arg0: i32, arg1: i32, arg2: i32, arg3: i32) -> Result<Reply, Error> {
+    pub fn call(
+        server: i32,
+        msg_type: i32,
+        arg0: i32,
+        arg1: i32,
+        arg2: i32,
+        arg3: i32,
+    ) -> Result<Reply, Error> {
         let reply_ep = ensure_ipc_reply_endpoint()?;
         let request_id = next_ipc_request_id();
-        if unsafe { ipc_send(server, reply_ep, msg_type, request_id, arg0, arg1, arg2, arg3) } != 0 {
+        if unsafe {
+            ipc_send(
+                server, reply_ep, msg_type, request_id, arg0, arg1, arg2, arg3,
+            )
+        } != 0
+        {
             return Err(Error::HostCallFailed);
         }
         if unsafe { ipc_select_one(reply_ep) } < 0 {
@@ -411,9 +458,29 @@ pub mod ipc {
     /// Send a reply from a server back to the caller's private reply endpoint.
     /// source should be the server's own service endpoint.
     /// destination should be req.source from the incoming request.
-    pub fn reply(destination: i32, source: i32, msg_type: i32, request_id: i32,
-                 arg0: i32, arg1: i32, arg2: i32, arg3: i32) -> Result<(), Error> {
-        if unsafe { ipc_send(destination, source, msg_type, request_id, arg0, arg1, arg2, arg3) } != 0 {
+    pub fn reply(
+        destination: i32,
+        source: i32,
+        msg_type: i32,
+        request_id: i32,
+        arg0: i32,
+        arg1: i32,
+        arg2: i32,
+        arg3: i32,
+    ) -> Result<(), Error> {
+        if unsafe {
+            ipc_send(
+                destination,
+                source,
+                msg_type,
+                request_id,
+                arg0,
+                arg1,
+                arg2,
+                arg3,
+            )
+        } != 0
+        {
             return Err(Error::HostCallFailed);
         }
         Ok(())
@@ -431,10 +498,10 @@ pub mod ipc {
 
 pub mod fs {
     use super::{
-        xfer_buffer_acquire, xfer_buffer_borrow, xfer_buffer_read, xfer_buffer_release,
-        xfer_buffer_size, xfer_buffer_write, fs_endpoint, fs_request, Error, FS_IPC_CLOSE_REQ,
-        FS_IPC_MKDIR_REQ, FS_IPC_OPEN_REQ, FS_IPC_READ_REQ, FS_IPC_RMDIR_REQ, FS_IPC_SEEK_REQ,
-        FS_IPC_STAT_REQ, FS_IPC_UNLINK_REQ, FS_IPC_WRITE_REQ, FS_IPC_READDIR_REQ, fs_request_stream,
+        fs_endpoint, fs_request, fs_request_stream, xfer_buffer_acquire, xfer_buffer_borrow,
+        xfer_buffer_read, xfer_buffer_release, xfer_buffer_size, xfer_buffer_write, Error,
+        FS_IPC_CLOSE_REQ, FS_IPC_MKDIR_REQ, FS_IPC_OPEN_REQ, FS_IPC_READDIR_REQ, FS_IPC_READ_REQ,
+        FS_IPC_RMDIR_REQ, FS_IPC_SEEK_REQ, FS_IPC_STAT_REQ, FS_IPC_UNLINK_REQ, FS_IPC_WRITE_REQ,
         O_APPEND, O_CREAT, O_RDONLY, O_TRUNC, O_WRONLY, S_IFDIR, S_IFREG, XFER_GRANT_RW,
     };
 
@@ -497,7 +564,13 @@ pub mod fs {
             while done < buffer.len() {
                 let remaining = buffer.len() - done;
                 let chunk_len = remaining.min(max_buffer as usize);
-                let (chunk_read, _) = fs_request(FS_IPC_READ_REQ, self.fd, chunk_len as i32, xfer.bid, xfer.b1)?;
+                let (chunk_read, _) = fs_request(
+                    FS_IPC_READ_REQ,
+                    self.fd,
+                    chunk_len as i32,
+                    xfer.bid,
+                    xfer.b1,
+                )?;
                 if chunk_read < 0 {
                     return Err(Error::BadResponse);
                 }
@@ -540,11 +613,24 @@ pub mod fs {
             while done < buffer.len() {
                 let remaining = buffer.len() - done;
                 let chunk_len = remaining.min(max_buffer as usize);
-                if unsafe { xfer_buffer_write(xfer.bid, buffer.as_ptr().add(done) as i32, chunk_len as i32, 0) } != 0 {
+                if unsafe {
+                    xfer_buffer_write(
+                        xfer.bid,
+                        buffer.as_ptr().add(done) as i32,
+                        chunk_len as i32,
+                        0,
+                    )
+                } != 0
+                {
                     return Err(Error::HostCallFailed);
                 }
-                let (chunk_written, _) =
-                    fs_request(FS_IPC_WRITE_REQ, self.fd, chunk_len as i32, xfer.bid, xfer.b1)?;
+                let (chunk_written, _) = fs_request(
+                    FS_IPC_WRITE_REQ,
+                    self.fd,
+                    chunk_len as i32,
+                    xfer.bid,
+                    xfer.b1,
+                )?;
                 if chunk_written < 0 {
                     return Err(Error::BadResponse);
                 }
@@ -591,7 +677,15 @@ pub mod fs {
         path_buf[path_bytes.len()] = 0;
 
         let xfer = borrow_fs_buffer((path_bytes.len() + 1) as i32)?;
-        if unsafe { xfer_buffer_write(xfer.bid, path_buf.as_ptr() as i32, (path_bytes.len() + 1) as i32, 0) } != 0 {
+        if unsafe {
+            xfer_buffer_write(
+                xfer.bid,
+                path_buf.as_ptr() as i32,
+                (path_bytes.len() + 1) as i32,
+                0,
+            )
+        } != 0
+        {
             return Err(Error::HostCallFailed);
         }
         Ok(StagedPath {

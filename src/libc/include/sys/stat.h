@@ -14,11 +14,11 @@ struct stat {
     uint32_t st_size;
 };
 
-#define S_IFMT  0xF000u
+#define S_IFMT 0xF000u
 #define S_IFREG 0x8000u
 #define S_IFDIR 0x4000u
 
-int mkdir(const char *path, mode_t mode);
+int mkdir(const char* path, mode_t mode);
 
 #ifdef __cplusplus
 }

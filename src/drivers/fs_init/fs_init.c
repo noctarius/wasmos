@@ -55,18 +55,15 @@ static initfs_client_t g_clients[INITFS_MAX_CLIENTS];
 static int32_t g_file_count = 0;
 static int32_t g_dir_count = 0;
 
-static void
-console_write(const char *s)
-{
+static void console_write(const char* s) {
     if (s) {
         (void)printf("%s", s);
     }
 }
 
-static void
-unpack_name(uint32_t arg0, uint32_t arg1, uint32_t arg2, uint32_t arg3, char *out, uint32_t out_len)
-{
-    uint32_t args[4] = { arg0, arg1, arg2, arg3 };
+static void unpack_name(uint32_t arg0, uint32_t arg1, uint32_t arg2, uint32_t arg3, char* out,
+                        uint32_t out_len) {
+    uint32_t args[4] = {arg0, arg1, arg2, arg3};
     uint32_t pos = 0;
     if (!out || out_len == 0) {
         return;
@@ -86,9 +83,8 @@ unpack_name(uint32_t arg0, uint32_t arg1, uint32_t arg2, uint32_t arg3, char *ou
     out[pos] = '\0';
 }
 
-static int
-copy_path_from_xfer_buffer(int32_t buffer_id, int32_t path_len, char *out, uint32_t out_len)
-{
+static int copy_path_from_xfer_buffer(int32_t buffer_id, int32_t path_len, char* out,
+                                      uint32_t out_len) {
     if (!out || out_len == 0 || path_len <= 0 || path_len >= (int32_t)out_len || buffer_id <= 0) {
         return -1;
     }
@@ -104,19 +100,12 @@ copy_path_from_xfer_buffer(int32_t buffer_id, int32_t path_len, char *out, uint3
     return 0;
 }
 
-static int
-initfs_has_init_prefix(const char *s)
-{
-    return s[0] && (s[0] == 'i' || s[0] == 'I') &&
-           s[1] && (s[1] == 'n' || s[1] == 'N') &&
-           s[2] && (s[2] == 'i' || s[2] == 'I') &&
-           s[3] && (s[3] == 't' || s[3] == 'T') &&
-           s[4] == '/';
+static int initfs_has_init_prefix(const char* s) {
+    return s[0] && (s[0] == 'i' || s[0] == 'I') && s[1] && (s[1] == 'n' || s[1] == 'N') && s[2] &&
+           (s[2] == 'i' || s[2] == 'I') && s[3] && (s[3] == 't' || s[3] == 'T') && s[4] == '/';
 }
 
-static int
-initfs_normalize_input_path(const char *in, char *out, uint32_t out_len)
-{
+static int initfs_normalize_input_path(const char* in, char* out, uint32_t out_len) {
     uint32_t ri = 0;
     uint32_t wi = 0;
     if (!in || !out || out_len < 2) {
@@ -135,18 +124,15 @@ initfs_normalize_input_path(const char *in, char *out, uint32_t out_len)
     return wi > 0 ? 0 : -1;
 }
 
-static int
-initfs_build_absolute_path(int32_t cwd_dir, const char *input, char *out, uint32_t out_len)
-{
+static int initfs_build_absolute_path(int32_t cwd_dir, const char* input, char* out,
+                                      uint32_t out_len) {
     char norm[INITFS_PATH_MAX];
-    const char *cwd = g_dirs[cwd_dir].path;
+    const char* cwd = g_dirs[cwd_dir].path;
     if (!input || !out || out_len == 0) {
         return -1;
     }
     out[0] = '\0';
-    if (input[0] == '/' ||
-        initfs_has_init_prefix(input) ||
-        strcasecmp(input, "init") == 0) {
+    if (input[0] == '/' || initfs_has_init_prefix(input) || strcasecmp(input, "init") == 0) {
         return initfs_normalize_input_path(input, out, out_len);
     }
     if (initfs_normalize_input_path(input, norm, sizeof(norm)) != 0) {
@@ -162,9 +148,7 @@ initfs_build_absolute_path(int32_t cwd_dir, const char *input, char *out, uint32
     return 0;
 }
 
-static int32_t
-dir_find_by_path(const char *path)
-{
+static int32_t dir_find_by_path(const char* path) {
     for (int32_t i = 0; i < g_dir_count; ++i) {
         if (g_dirs[i].in_use && strcasecmp(g_dirs[i].path, path) == 0) {
             return i;
@@ -173,13 +157,11 @@ dir_find_by_path(const char *path)
     return -1;
 }
 
-static int32_t
-dir_add(const char *path, int32_t parent_index, const char *name)
-{
+static int32_t dir_add(const char* path, int32_t parent_index, const char* name) {
     if (g_dir_count >= INITFS_MAX_DIRS) {
         return -1;
     }
-    initfs_dir_t *d = &g_dirs[g_dir_count];
+    initfs_dir_t* d = &g_dirs[g_dir_count];
     d->in_use = 1;
     d->parent_index = parent_index;
     str_copy(d->path, sizeof(d->path), path ? path : "");
@@ -188,9 +170,7 @@ dir_add(const char *path, int32_t parent_index, const char *name)
     return g_dir_count - 1;
 }
 
-static int32_t
-dir_ensure_path(const char *full_path, int32_t *out_parent_dir)
-{
+static int32_t dir_ensure_path(const char* full_path, int32_t* out_parent_dir) {
     char scratch[INITFS_PATH_MAX];
     char prefix[INITFS_PATH_MAX];
     int32_t parent = 0;
@@ -213,7 +193,7 @@ dir_ensure_path(const char *full_path, int32_t *out_parent_dir)
         str_copy(prefix, sizeof(prefix), scratch);
         int32_t existing = dir_find_by_path(prefix);
         if (existing < 0) {
-            const char *base = prefix;
+            const char* base = prefix;
             for (int32_t j = 0; prefix[j] != '\0'; ++j) {
                 if (prefix[j] == '/') {
                     base = &prefix[j + 1];
@@ -230,9 +210,7 @@ dir_ensure_path(const char *full_path, int32_t *out_parent_dir)
     return -1;
 }
 
-static int
-initfs_build_index(void)
-{
+static int initfs_build_index(void) {
     int32_t count = wasmos_initfs_entry_count();
     if (count < 0) {
         return -1;
@@ -247,9 +225,8 @@ initfs_build_index(void)
     for (int32_t i = 0; i < count; ++i) {
         char raw_path[INITFS_PATH_MAX];
         char norm_path[INITFS_PATH_MAX];
-        int32_t raw_len = wasmos_initfs_entry_name(i,
-                                                   (int32_t)(uintptr_t)raw_path,
-                                                   (int32_t)sizeof(raw_path));
+        int32_t raw_len =
+            wasmos_initfs_entry_name(i, (int32_t)(uintptr_t)raw_path, (int32_t)sizeof(raw_path));
         if (raw_len <= 0 || raw_len >= (int32_t)sizeof(raw_path)) {
             continue;
         }
@@ -271,13 +248,13 @@ initfs_build_index(void)
         if (g_file_count >= INITFS_MAX_FILES) {
             break;
         }
-        initfs_file_t *f = &g_files[g_file_count];
+        initfs_file_t* f = &g_files[g_file_count];
         f->in_use = 1;
         f->entry_index = i;
         f->size = size;
         f->dir_index = parent_dir;
         str_copy(f->path, sizeof(f->path), norm_path);
-        const char *base = f->path;
+        const char* base = f->path;
         for (int32_t j = 0; f->path[j] != '\0'; ++j) {
             if (f->path[j] == '/') {
                 base = &f->path[j + 1];
@@ -289,9 +266,7 @@ initfs_build_index(void)
     return 0;
 }
 
-static int32_t
-initfs_find_file_path_exact(const char *norm_path)
-{
+static int32_t initfs_find_file_path_exact(const char* norm_path) {
     for (int32_t i = 0; i < g_file_count; ++i) {
         if (g_files[i].in_use && strcasecmp(g_files[i].path, norm_path) == 0) {
             return i;
@@ -300,9 +275,7 @@ initfs_find_file_path_exact(const char *norm_path)
     return -1;
 }
 
-static int32_t
-initfs_find_file_by_basename_unique(const char *name)
-{
+static int32_t initfs_find_file_by_basename_unique(const char* name) {
     int32_t match = -1;
     for (int32_t i = 0; i < g_file_count; ++i) {
         if (!g_files[i].in_use) {
@@ -319,9 +292,7 @@ initfs_find_file_by_basename_unique(const char *name)
     return match;
 }
 
-static int32_t
-initfs_find_file_record(int32_t cwd_dir, const char *path)
-{
+static int32_t initfs_find_file_record(int32_t cwd_dir, const char* path) {
     char full[INITFS_PATH_MAX];
     if (initfs_build_absolute_path(cwd_dir, path, full, sizeof(full)) != 0) {
         return -1;
@@ -336,9 +307,7 @@ initfs_find_file_record(int32_t cwd_dir, const char *path)
     return -1;
 }
 
-static int32_t
-initfs_fd_alloc(int32_t file_index)
-{
+static int32_t initfs_fd_alloc(int32_t file_index) {
     for (int32_t i = 0; i < INITFS_MAX_OPEN_FILES; ++i) {
         if (!g_open_files[i].in_use) {
             g_open_files[i].in_use = 1;
@@ -350,9 +319,7 @@ initfs_fd_alloc(int32_t file_index)
     return -1;
 }
 
-static initfs_fd_t *
-initfs_fd_lookup(int32_t fd)
-{
+static initfs_fd_t* initfs_fd_lookup(int32_t fd) {
     if (fd < 3 || fd >= (3 + INITFS_MAX_OPEN_FILES)) {
         return 0;
     }
@@ -362,11 +329,9 @@ initfs_fd_lookup(int32_t fd)
     return &g_open_files[fd - 3];
 }
 
-static int
-emit_stream_text(int32_t source, int32_t req_id, const char *text)
-{
+static int emit_stream_text(int32_t source, int32_t req_id, const char* text) {
     int32_t len = (int32_t)strlen(text);
-    for (int32_t pos = 0; pos < len; ) {
+    for (int32_t pos = 0; pos < len;) {
         int32_t a0 = (int32_t)(uint8_t)text[pos++];
         int32_t a1 = (pos < len) ? (int32_t)(uint8_t)text[pos++] : 0;
         int32_t a2 = (pos < len) ? (int32_t)(uint8_t)text[pos++] : 0;
@@ -378,9 +343,7 @@ emit_stream_text(int32_t source, int32_t req_id, const char *text)
     return 0;
 }
 
-static int
-emit_init_listing(int32_t source, int32_t req_id)
-{
+static int emit_init_listing(int32_t source, int32_t req_id) {
     char line[INITFS_PATH_MAX + 4];
     int32_t cwd_dir = 0;
     for (int32_t i = 0; i < INITFS_MAX_CLIENTS; ++i) {
@@ -410,14 +373,13 @@ emit_init_listing(int32_t source, int32_t req_id)
     return 0;
 }
 
-static int
-chdir_to_path(int32_t *cwd_dir, const char *path)
-{
+static int chdir_to_path(int32_t* cwd_dir, const char* path) {
     char full[INITFS_PATH_MAX];
     if (!cwd_dir) {
         return -1;
     }
-    if (!path || path[0] == '\0' || strcasecmp(path, "/") == 0 || strcasecmp(path, "init") == 0 || strcasecmp(path, "/init") == 0) {
+    if (!path || path[0] == '\0' || strcasecmp(path, "/") == 0 || strcasecmp(path, "init") == 0 ||
+        strcasecmp(path, "/init") == 0) {
         *cwd_dir = 0;
         return 0;
     }
@@ -438,9 +400,7 @@ chdir_to_path(int32_t *cwd_dir, const char *path)
     return 0;
 }
 
-static int32_t *
-client_cwd_for_source(int32_t source)
-{
+static int32_t* client_cwd_for_source(int32_t source) {
     int32_t free_slot = -1;
     for (int32_t i = 0; i < INITFS_MAX_CLIENTS; ++i) {
         if (g_clients[i].in_use && g_clients[i].source == source) {
@@ -459,12 +419,8 @@ client_cwd_for_source(int32_t source)
     return &g_clients[free_slot].cwd_dir;
 }
 
-WASMOS_WASM_EXPORT int32_t
-initialize(int32_t proc_endpoint,
-           int32_t ignored_arg1,
-           int32_t ignored_arg2,
-           int32_t ignored_arg3)
-{
+WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t ignored_arg1,
+                                      int32_t ignored_arg2, int32_t ignored_arg3) {
     /* proc.endpoint now comes from the spawn-info contract, not an entry arg. */
     proc_endpoint = wasmos_startup_proc_endpoint();
     (void)ignored_arg1;
@@ -491,10 +447,8 @@ initialize(int32_t proc_endpoint,
      * class + subscription and pulls mount info, so there is no push
      * registration here. Class registration needs the svc.class capability
      * (see linker.metadata). */
-    if (wasmos_svc_register_class(proc_endpoint, g_fs_endpoint, "initfs.rules",
-                                  FSMGR_BACKEND_CLASS,
-                                  FSMGR_BACKEND_INSTANCE(FSMGR_BACKEND_INIT, 0),
-                                  1) != 0) {
+    if (wasmos_svc_register_class(proc_endpoint, g_fs_endpoint, "initfs.rules", FSMGR_BACKEND_CLASS,
+                                  FSMGR_BACKEND_INSTANCE(FSMGR_BACKEND_INIT, 0), 1) != 0) {
         console_write("[fs-init] register failed\n");
         wasmos_sys_ipc_recv_loop();
     }
@@ -507,8 +461,8 @@ initialize(int32_t proc_endpoint,
             continue;
         }
         if (wasmos_ipc_last_field(WASMOS_IPC_FIELD_TYPE) == FSMGR_IPC_BACKEND_INFO_REQ) {
-            (void)wasmos_ipc_send(wasmos_ipc_last_field(WASMOS_IPC_FIELD_SOURCE),
-                                  g_fs_endpoint, FSMGR_IPC_BACKEND_INFO_RESP,
+            (void)wasmos_ipc_send(wasmos_ipc_last_field(WASMOS_IPC_FIELD_SOURCE), g_fs_endpoint,
+                                  FSMGR_IPC_BACKEND_INFO_RESP,
                                   wasmos_ipc_last_field(WASMOS_IPC_FIELD_REQUEST_ID),
                                   FSMGR_BACKEND_INIT, 0, 0, 0);
             break;
@@ -530,11 +484,11 @@ initialize(int32_t proc_endpoint,
         /* fs-manager pull: report kind=INIT. No mount buffer (arg2=0) → fs-manager
          * uses its default "init" mount name; unit 0. */
         if (type == FSMGR_IPC_BACKEND_INFO_REQ) {
-            (void)wasmos_ipc_send(source, g_fs_endpoint, FSMGR_IPC_BACKEND_INFO_RESP,
-                                  req_id, FSMGR_BACKEND_INIT, 0, 0, 0);
+            (void)wasmos_ipc_send(source, g_fs_endpoint, FSMGR_IPC_BACKEND_INFO_RESP, req_id,
+                                  FSMGR_BACKEND_INIT, 0, 0, 0);
             continue;
         }
-        int32_t *cwd_dir = client_cwd_for_source(source);
+        int32_t* cwd_dir = client_cwd_for_source(source);
         int32_t status = -1;
         if (!cwd_dir) {
             (void)wasmos_ipc_send(source, g_fs_endpoint, FS_IPC_ERROR, req_id, -1, 0, 0, 0);
@@ -553,10 +507,10 @@ initialize(int32_t proc_endpoint,
                 }
             }
         } else if (type == FS_IPC_READ_REQ) {
-            initfs_fd_t *fd = initfs_fd_lookup(arg0);
+            initfs_fd_t* fd = initfs_fd_lookup(arg0);
             int32_t req_len = arg1;
             if (fd && req_len >= 0) {
-                initfs_file_t *file = &g_files[fd->entry_index];
+                initfs_file_t* file = &g_files[fd->entry_index];
                 int32_t fs_buf_size = wasmos_xfer_buffer_size();
                 uint8_t tmp[512];
                 if (fd->offset >= file->size) {
@@ -575,10 +529,8 @@ initialize(int32_t proc_endpoint,
                         if (chunk > (int32_t)sizeof(tmp)) {
                             chunk = (int32_t)sizeof(tmp);
                         }
-                        int32_t copied = wasmos_initfs_entry_copy(file->entry_index,
-                                                                  (int32_t)(uintptr_t)tmp,
-                                                                  chunk,
-                                                                  fd->offset + total);
+                        int32_t copied = wasmos_initfs_entry_copy(
+                            file->entry_index, (int32_t)(uintptr_t)tmp, chunk, fd->offset + total);
                         if (copied < 0) {
                             total = -1;
                             break;
@@ -586,7 +538,8 @@ initialize(int32_t proc_endpoint,
                         if (copied == 0) {
                             break;
                         }
-                        if (wasmos_xfer_buffer_write(arg2, (int32_t)(uintptr_t)tmp, copied, total) != 0) {
+                        if (wasmos_xfer_buffer_write(arg2, (int32_t)(uintptr_t)tmp, copied,
+                                                     total) != 0) {
                             total = -1;
                             break;
                         }
@@ -599,7 +552,7 @@ initialize(int32_t proc_endpoint,
                 }
             }
         } else if (type == FS_IPC_CLOSE_REQ) {
-            initfs_fd_t *fd = initfs_fd_lookup(arg0);
+            initfs_fd_t* fd = initfs_fd_lookup(arg0);
             if (fd) {
                 fd->in_use = 0;
                 fd->entry_index = -1;
@@ -610,19 +563,14 @@ initialize(int32_t proc_endpoint,
             status = emit_init_listing(source, req_id);
         } else if (type == FS_IPC_CHDIR_REQ) {
             char name[INITFS_PATH_MAX];
-            unpack_name((uint32_t)arg0, (uint32_t)arg1, (uint32_t)arg2, (uint32_t)arg3, name, sizeof(name));
+            unpack_name((uint32_t)arg0, (uint32_t)arg1, (uint32_t)arg2, (uint32_t)arg3, name,
+                        sizeof(name));
             status = chdir_to_path(cwd_dir, name);
         } else if (type == FS_IPC_READY_REQ) {
             status = 0;
         }
 
-        (void)wasmos_ipc_send(source,
-                              g_fs_endpoint,
-                              status >= 0 ? FS_IPC_RESP : FS_IPC_ERROR,
-                              req_id,
-                              status,
-                              0,
-                              0,
-                              0);
+        (void)wasmos_ipc_send(source, g_fs_endpoint, status >= 0 ? FS_IPC_RESP : FS_IPC_ERROR,
+                              req_id, status, 0, 0, 0);
     }
 }

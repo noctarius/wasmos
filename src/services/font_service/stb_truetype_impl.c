@@ -6,13 +6,11 @@
 static uint8_t g_stbtt_alloc_buf[512 * 1024];
 static size_t g_stbtt_alloc_off = 0;
 
-static size_t align_up(size_t v, size_t a)
-{
+static size_t align_up(size_t v, size_t a) {
     return (v + (a - 1u)) & ~(a - 1u);
 }
 
-void *wasmos_stbtt_malloc(size_t size, void *user)
-{
+void* wasmos_stbtt_malloc(size_t size, void* user) {
     (void)user;
     if (size == 0) {
         return NULL;
@@ -25,14 +23,12 @@ void *wasmos_stbtt_malloc(size_t size, void *user)
     return &g_stbtt_alloc_buf[off];
 }
 
-void wasmos_stbtt_free(void *ptr, void *user)
-{
+void wasmos_stbtt_free(void* ptr, void* user) {
     (void)ptr;
     (void)user;
 }
 
-void wasmos_stbtt_alloc_reset(void)
-{
+void wasmos_stbtt_alloc_reset(void) {
     g_stbtt_alloc_off = 0;
 }
 

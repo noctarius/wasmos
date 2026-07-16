@@ -25,23 +25,32 @@ import sys
 
 
 def main() -> int:
-    p = argparse.ArgumentParser(description=__doc__,
-                                formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--cmake",           required=True, help="Path to cmake executable")
-    p.add_argument("--build-dir",       required=True, help="Build directory")
-    p.add_argument("--target",          required=True, help="CMake target to build")
-    p.add_argument("--skip-configure",  action="store_true",
-                   help="Skip cmake configure; build-dir must already be configured")
+    p = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    p.add_argument("--cmake", required=True, help="Path to cmake executable")
+    p.add_argument("--build-dir", required=True, help="Build directory")
+    p.add_argument("--target", required=True, help="CMake target to build")
+    p.add_argument(
+        "--skip-configure",
+        action="store_true",
+        help="Skip cmake configure; build-dir must already be configured",
+    )
     # Configure-only flags (ignored with --skip-configure)
     p.add_argument("--source-dir", default="", help="CMake source root (-S)")
-    p.add_argument("--clang",      default="", help="Clang compiler path")
-    p.add_argument("--lld",        default="", help="LLD linker name or path")
-    p.add_argument("--objcopy",    default="", help="llvm-objcopy path")
-    p.add_argument("--ovmf-code",  default="", help="OVMF_CODE.fd path")
-    p.add_argument("--ovmf-vars",  default="", help="OVMF_VARS.fd path (optional)")
-    p.add_argument("--trace",      default="OFF", help="WASMOS_TRACE value (ON or OFF)")
-    p.add_argument("--define",     action="append", default=[], metavar="KEY=VALUE",
-                   help="Extra -DKEY=VALUE flag for cmake configure (repeatable)")
+    p.add_argument("--clang", default="", help="Clang compiler path")
+    p.add_argument("--lld", default="", help="LLD linker name or path")
+    p.add_argument("--objcopy", default="", help="llvm-objcopy path")
+    p.add_argument("--ovmf-code", default="", help="OVMF_CODE.fd path")
+    p.add_argument("--ovmf-vars", default="", help="OVMF_VARS.fd path (optional)")
+    p.add_argument("--trace", default="OFF", help="WASMOS_TRACE value (ON or OFF)")
+    p.add_argument(
+        "--define",
+        action="append",
+        default=[],
+        metavar="KEY=VALUE",
+        help="Extra -DKEY=VALUE flag for cmake configure (repeatable)",
+    )
     args = p.parse_args()
 
     cmds = []
@@ -49,8 +58,10 @@ def main() -> int:
     if not args.skip_configure:
         configure_cmd = [
             args.cmake,
-            "-S", args.source_dir,
-            "-B", args.build_dir,
+            "-S",
+            args.source_dir,
+            "-B",
+            args.build_dir,
             f"-DCLANG={args.clang}",
             f"-DLLD={args.lld}",
             f"-DOBJCOPY={args.objcopy}",

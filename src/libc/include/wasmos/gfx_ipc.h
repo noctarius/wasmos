@@ -6,10 +6,10 @@
 
 #include <stdint.h>
 
-#define FB_IPC_ABI_MAGIC   0x46424950u /* FBIP */
+#define FB_IPC_ABI_MAGIC 0x46424950u /* FBIP */
 #define FB_IPC_ABI_VERSION 1u
 
-#define GFX_IPC_ABI_MAGIC   0x47465850u /* GFXP */
+#define GFX_IPC_ABI_MAGIC 0x47465850u /* GFXP */
 #define GFX_IPC_ABI_VERSION 1u
 
 enum {
@@ -39,7 +39,8 @@ enum {
     GFX_IPC_GET_DISPLAY_INFO = 0x020C,
     GFX_IPC_MOVE_WINDOW = 0x020D,
     GFX_IPC_SET_WINDOW_TITLE = 0x020E, /* arg0=window_id arg1=shmem_id arg2=title_len arg3=0 */
-    GFX_IPC_GET_WINDOW_TITLE = 0x020F, /* arg0=window_id arg1=shmem_id arg2=max_len arg3=0; reply arg1=actual_len */
+    GFX_IPC_GET_WINDOW_TITLE =
+        0x020F, /* arg0=window_id arg1=shmem_id arg2=max_len arg3=0; reply arg1=actual_len */
     GFX_IPC_RESP = 0x0280,
     GFX_IPC_ERROR = 0x02FF
 };
@@ -80,13 +81,13 @@ enum {
  */
 
 /* Window flags for GFX_IPC_SET_WINDOW_FLAGS. These bits compose. */
-#define GFX_WINDOW_FLAG_TOPMOST          (1u << 0)
-#define GFX_WINDOW_FLAG_NO_CHROME        (1u << 1)
-#define GFX_WINDOW_FLAG_INVISIBLE        (1u << 2)
+#define GFX_WINDOW_FLAG_TOPMOST (1u << 0)
+#define GFX_WINDOW_FLAG_NO_CHROME (1u << 1)
+#define GFX_WINDOW_FLAG_INVISIBLE (1u << 2)
 #define GFX_WINDOW_FLAG_PASSTHROUGH_ZERO (1u << 3)
-#define GFX_WINDOW_FLAG_NO_ACTIVATE      (1u << 4)
-#define GFX_WINDOW_FLAG_NO_CONTENT       (1u << 5)
-#define GFX_WINDOW_FLAG_NO_TASK_LIST     (1u << 6) /* exclude from GFX_IPC_LIST_WINDOWS */
+#define GFX_WINDOW_FLAG_NO_ACTIVATE (1u << 4)
+#define GFX_WINDOW_FLAG_NO_CONTENT (1u << 5)
+#define GFX_WINDOW_FLAG_NO_TASK_LIST (1u << 6) /* exclude from GFX_IPC_LIST_WINDOWS */
 
 typedef struct {
     int32_t x;
@@ -127,11 +128,7 @@ enum {
     GFX_EVENT_POINTER_GESTURE = 7
 };
 
-enum {
-    GFX_POINTER_BUTTON_LEFT = 1,
-    GFX_POINTER_BUTTON_RIGHT = 2,
-    GFX_POINTER_BUTTON_MIDDLE = 3
-};
+enum { GFX_POINTER_BUTTON_LEFT = 1, GFX_POINTER_BUTTON_RIGHT = 2, GFX_POINTER_BUTTON_MIDDLE = 3 };
 
 enum {
     GFX_POINTER_GESTURE_DOWN = 1,
@@ -151,41 +148,45 @@ typedef struct {
     int32_t status;
 } gfx_ipc_hdr_t;
 
-static inline uint32_t
-gfx_ipc_header_pack(uint16_t version, uint16_t opcode)
-{
+static inline uint32_t gfx_ipc_header_pack(uint16_t version, uint16_t opcode) {
     return ((uint32_t)version << 16) | (uint32_t)opcode;
 }
 
-static inline int
-gfx_ipc_header_valid(uint32_t magic, uint32_t ver_opcode)
-{
+static inline int gfx_ipc_header_valid(uint32_t magic, uint32_t ver_opcode) {
     uint16_t version = (uint16_t)(ver_opcode >> 16);
     return magic == GFX_IPC_ABI_MAGIC && version == GFX_IPC_ABI_VERSION;
 }
 
-static inline uint32_t
-gfx_pointer_event_pack(uint32_t x, uint32_t y, uint32_t buttons)
-{
+static inline uint32_t gfx_pointer_event_pack(uint32_t x, uint32_t y, uint32_t buttons) {
     return (x & 0xFFFu) | ((y & 0xFFFu) << 12) | ((buttons & 0xFFu) << 24);
 }
 
-static inline uint32_t gfx_pointer_event_x(uint32_t packed) { return packed & 0xFFFu; }
-static inline uint32_t gfx_pointer_event_y(uint32_t packed) { return (packed >> 12) & 0xFFFu; }
-static inline uint32_t gfx_pointer_event_buttons(uint32_t packed) { return (packed >> 24) & 0xFFu; }
-
-static inline uint32_t
-gfx_pointer_gesture_pack(uint32_t x, uint32_t y, uint32_t button, uint32_t gesture)
-{
-    return (x & 0xFFFu) |
-           ((y & 0xFFFu) << 12) |
-           ((button & 0xFu) << 24) |
-           ((gesture & 0xFu) << 28);
+static inline uint32_t gfx_pointer_event_x(uint32_t packed) {
+    return packed & 0xFFFu;
+}
+static inline uint32_t gfx_pointer_event_y(uint32_t packed) {
+    return (packed >> 12) & 0xFFFu;
+}
+static inline uint32_t gfx_pointer_event_buttons(uint32_t packed) {
+    return (packed >> 24) & 0xFFu;
 }
 
-static inline uint32_t gfx_pointer_gesture_x(uint32_t packed) { return packed & 0xFFFu; }
-static inline uint32_t gfx_pointer_gesture_y(uint32_t packed) { return (packed >> 12) & 0xFFFu; }
-static inline uint32_t gfx_pointer_gesture_button(uint32_t packed) { return (packed >> 24) & 0xFu; }
-static inline uint32_t gfx_pointer_gesture_kind(uint32_t packed) { return (packed >> 28) & 0xFu; }
+static inline uint32_t gfx_pointer_gesture_pack(uint32_t x, uint32_t y, uint32_t button,
+                                                uint32_t gesture) {
+    return (x & 0xFFFu) | ((y & 0xFFFu) << 12) | ((button & 0xFu) << 24) | ((gesture & 0xFu) << 28);
+}
+
+static inline uint32_t gfx_pointer_gesture_x(uint32_t packed) {
+    return packed & 0xFFFu;
+}
+static inline uint32_t gfx_pointer_gesture_y(uint32_t packed) {
+    return (packed >> 12) & 0xFFFu;
+}
+static inline uint32_t gfx_pointer_gesture_button(uint32_t packed) {
+    return (packed >> 24) & 0xFu;
+}
+static inline uint32_t gfx_pointer_gesture_kind(uint32_t packed) {
+    return (packed >> 28) & 0xFu;
+}
 
 #endif

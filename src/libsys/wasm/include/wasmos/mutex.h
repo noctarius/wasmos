@@ -20,9 +20,7 @@ typedef struct {
 
 #define WASMOS_MUTEX_INITIALIZER {0u, 0u}
 
-static inline void
-wasmos_mutex_init(wasmos_mutex_t *mutex)
-{
+static inline void wasmos_mutex_init(wasmos_mutex_t* mutex) {
     if (!mutex) {
         return;
     }
@@ -30,18 +28,14 @@ wasmos_mutex_init(wasmos_mutex_t *mutex)
     mutex->recursion_depth = 0u;
 }
 
-static inline int32_t
-wasmos_mutex_try_lock(wasmos_mutex_t *mutex)
-{
+static inline int32_t wasmos_mutex_try_lock(wasmos_mutex_t* mutex) {
     if (!mutex) {
         return -1;
     }
     return wasmos_mutex_try_lock_host((int32_t)(uintptr_t)mutex);
 }
 
-static inline int32_t
-wasmos_mutex_lock(wasmos_mutex_t *mutex)
-{
+static inline int32_t wasmos_mutex_lock(wasmos_mutex_t* mutex) {
     int32_t rc = -1;
     if (!mutex) {
         return -1;
@@ -57,9 +51,7 @@ wasmos_mutex_lock(wasmos_mutex_t *mutex)
     }
 }
 
-static inline int32_t
-wasmos_mutex_unlock(wasmos_mutex_t *mutex)
-{
+static inline int32_t wasmos_mutex_unlock(wasmos_mutex_t* mutex) {
     if (!mutex) {
         return -1;
     }

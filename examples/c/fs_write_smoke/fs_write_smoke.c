@@ -4,9 +4,7 @@
 #include "sys/stat.h"
 #include "unistd.h"
 
-int
-main(int argc, char **argv)
-{
+int main(int argc, char** argv) {
     static char grow_pattern[1024];
     static const char stdio_initial[] = "STDIO-WRITE\n";
     static const char stdio_append[] = "APPEND\n";
@@ -16,7 +14,7 @@ main(int argc, char **argv)
     static const char appended[] = "WASMOS-WRITE-SMOKE-ORIGINAL\nAPPEND\n";
     static const char updated[] = "TRUNCATED\n";
     char buffer[sizeof(grow_pattern)];
-    FILE *stream;
+    FILE* stream;
     struct stat st;
     int fd;
     ssize_t rc;
@@ -31,7 +29,8 @@ main(int argc, char **argv)
     }
     rc = read(fd, buffer, sizeof(buffer));
     close(fd);
-    if (rc != (ssize_t)(sizeof(original) - 1u) || memcmp(buffer, original, sizeof(original) - 1u) != 0) {
+    if (rc != (ssize_t)(sizeof(original) - 1u) ||
+        memcmp(buffer, original, sizeof(original) - 1u) != 0) {
         puts("fs-write-smoke: original mismatch");
         return 1;
     }
@@ -82,7 +81,8 @@ main(int argc, char **argv)
     }
     rc = read(fd, buffer, sizeof(buffer));
     close(fd);
-    if (rc != (ssize_t)sizeof(grow_pattern) || memcmp(buffer, grow_pattern, sizeof(grow_pattern)) != 0) {
+    if (rc != (ssize_t)sizeof(grow_pattern) ||
+        memcmp(buffer, grow_pattern, sizeof(grow_pattern)) != 0) {
         puts("fs-write-smoke: grow verify failed");
         return 1;
     }
@@ -129,7 +129,8 @@ main(int argc, char **argv)
         puts("fs-write-smoke: stdio write open failed");
         return 1;
     }
-    if (fwrite(stdio_initial, 1u, sizeof(stdio_initial) - 1u, stream) != sizeof(stdio_initial) - 1u ||
+    if (fwrite(stdio_initial, 1u, sizeof(stdio_initial) - 1u, stream) !=
+            sizeof(stdio_initial) - 1u ||
         fclose(stream) != 0) {
         puts("fs-write-smoke: stdio write failed");
         return 1;
@@ -150,8 +151,7 @@ main(int argc, char **argv)
         return 1;
     }
     if (fread(buffer, 1u, sizeof(stdio_expected) - 1u, stream) != sizeof(stdio_expected) - 1u ||
-        fclose(stream) != 0 ||
-        memcmp(buffer, stdio_expected, sizeof(stdio_expected) - 1u) != 0) {
+        fclose(stream) != 0 || memcmp(buffer, stdio_expected, sizeof(stdio_expected) - 1u) != 0) {
         puts("fs-write-smoke: stdio verify failed");
         return 1;
     }
@@ -179,7 +179,8 @@ main(int argc, char **argv)
     }
     rc = read(fd, buffer, sizeof(buffer));
     close(fd);
-    if (rc != (ssize_t)(sizeof(updated) - 1u) || memcmp(buffer, updated, sizeof(updated) - 1u) != 0) {
+    if (rc != (ssize_t)(sizeof(updated) - 1u) ||
+        memcmp(buffer, updated, sizeof(updated) - 1u) != 0) {
         puts("fs-write-smoke: verify failed");
         return 1;
     }
@@ -219,7 +220,8 @@ main(int argc, char **argv)
     }
     rc = read(fd, buffer, sizeof(buffer));
     close(fd);
-    if (rc != (ssize_t)(sizeof(appended) - 1u) || memcmp(buffer, appended, sizeof(appended) - 1u) != 0) {
+    if (rc != (ssize_t)(sizeof(appended) - 1u) ||
+        memcmp(buffer, appended, sizeof(appended) - 1u) != 0) {
         puts("fs-write-smoke: append verify failed");
         return 1;
     }
@@ -243,7 +245,8 @@ main(int argc, char **argv)
     }
     rc = read(fd, buffer, sizeof(buffer));
     close(fd);
-    if (rc != (ssize_t)(sizeof(original) - 1u) || memcmp(buffer, original, sizeof(original) - 1u) != 0) {
+    if (rc != (ssize_t)(sizeof(original) - 1u) ||
+        memcmp(buffer, original, sizeof(original) - 1u) != 0) {
         puts("fs-write-smoke: final verify failed");
         return 1;
     }

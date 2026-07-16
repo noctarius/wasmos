@@ -13,34 +13,31 @@
 #define WASMOS_TRACE 0
 #endif
 
-static int32_t  g_vt_ep = -1;
-static int32_t  g_kbd_ep = -1;
-static int32_t  g_fb_ep = -1;
+static int32_t g_vt_ep = -1;
+static int32_t g_kbd_ep = -1;
+static int32_t g_fb_ep = -1;
 static vt_tty_t g_ttys[VT_MAX_TTYS];
 static uint32_t g_active_tty = 0;
-static int32_t  g_tty_reader_ep[VT_MAX_TTYS] = { -1, -1, -1, -1 };
-static int32_t  g_tty_writer_ep[VT_MAX_TTYS] = { -1, -1, -1, -1 };
+static int32_t g_tty_reader_ep[VT_MAX_TTYS] = {-1, -1, -1, -1};
+static int32_t g_tty_writer_ep[VT_MAX_TTYS] = {-1, -1, -1, -1};
 static uint32_t g_switch_generation = 1;
-static uint8_t  g_switch_barrier = 0;
-static uint8_t  g_ctrl_down = 0;
-static uint8_t  g_shift_down = 0;
+static uint8_t g_switch_barrier = 0;
+static uint8_t g_ctrl_down = 0;
+static uint8_t g_shift_down = 0;
 static uint16_t g_vt_cols = VT_COLS_DEFAULT;
 static uint16_t g_vt_rows = VT_ROWS_DEFAULT;
 static uint32_t g_heap_cursor = 0;
 static uint32_t g_heap_limit = 0;
-static int32_t  g_alloc_failure = 0;
+static int32_t g_alloc_failure = 0;
 
 extern uint8_t __heap_base;
 
 /* Emit a 32-bit debug_mark tag encoding event (8 bits) and two 12-bit values.
  * Compiled out when WASMOS_TRACE == 0. */
-static void
-vt_trace_mark(uint8_t event, uint16_t a, uint16_t b)
-{
+static void vt_trace_mark(uint8_t event, uint16_t a, uint16_t b) {
 #if WASMOS_TRACE
-    uint32_t tag = ((uint32_t)event << 24) |
-                   (((uint32_t)(a & 0x0FFFu)) << 12) |
-                   (uint32_t)(b & 0x0FFFu);
+    uint32_t tag =
+        ((uint32_t)event << 24) | (((uint32_t)(a & 0x0FFFu)) << 12) | (uint32_t)(b & 0x0FFFu);
     (void)wasmos_debug_mark((int32_t)tag);
 #else
     (void)event;
@@ -49,32 +46,23 @@ vt_trace_mark(uint8_t event, uint16_t a, uint16_t b)
 #endif
 }
 
-static uint32_t
-vt_pack_cell_colors(const vt_cell_t *cell)
-{
+static uint32_t vt_pack_cell_colors(const vt_cell_t* cell) {
     if (!cell) {
         return 0u;
     }
-    return ((uint32_t)(cell->fg & 0x0Fu) << 8) |
-           (uint32_t)(cell->bg & 0x0Fu);
+    return ((uint32_t)(cell->fg & 0x0Fu) << 8) | (uint32_t)(cell->bg & 0x0Fu);
 }
 
-static uint32_t
-vt_cell_index(uint16_t row, uint16_t col)
-{
+static uint32_t vt_cell_index(uint16_t row, uint16_t col) {
     return (uint32_t)row * g_vt_cols + (uint32_t)col;
 }
 
-static uint32_t
-vt_cell_capacity(void)
-{
+static uint32_t vt_cell_capacity(void) {
     return (uint32_t)g_vt_cols * (uint32_t)g_vt_rows;
 }
 
 /* Initialise the custom bump heap at &__heap_base for cell-grid allocation. */
-static void
-vt_heap_init(void)
-{
+static void vt_heap_init(void) {
     g_heap_cursor = (uint32_t)(uintptr_t)&__heap_base;
     g_heap_limit = (uint32_t)__builtin_wasm_memory_size(0) * 65536u;
     if (g_heap_cursor > g_heap_limit) {
@@ -83,17 +71,13 @@ vt_heap_init(void)
     g_alloc_failure = VT_ALLOC_FAIL_NONE;
 }
 
-static void
-vt_log_alloc_failure(const char *tag, int32_t code)
-{
+static void vt_log_alloc_failure(const char* tag, int32_t code) {
     printf("[vt] alloc failed: %s code=%d\n", tag ? tag : "unknown", (int)code);
 }
 
-static void *
-vt_alloc(uint32_t size, uint32_t align)
-{
+static void* vt_alloc(uint32_t size, uint32_t align) {
     if (size == 0u) {
-        return (void *)(uintptr_t)g_heap_cursor;
+        return (void*)(uintptr_t)g_heap_cursor;
     }
     if (align == 0u) {
         align = 1u;
@@ -117,21 +101,17 @@ vt_alloc(uint32_t size, uint32_t align)
         g_heap_limit += 65536u;
     }
     g_heap_cursor = end;
-    return (void *)(uintptr_t)aligned;
+    return (void*)(uintptr_t)aligned;
 }
 
-static void
-vt_reset_tty_cells(void)
-{
+static void vt_reset_tty_cells(void) {
     for (uint32_t i = 0; i < VT_MAX_TTYS; ++i) {
         g_ttys[i].cells = 0;
     }
 }
 
 /* Allocate one cell grid per TTY from the bump heap; sets cells pointer. */
-static int
-vt_alloc_tty_cells(void)
-{
+static int vt_alloc_tty_cells(void) {
     uint32_t cells = vt_cell_capacity();
     if (cells == 0u || cells > (uint32_t)VT_MAX_COLS * (uint32_t)VT_MAX_ROWS) {
         g_alloc_failure = VT_ALLOC_FAIL_CAPACITY;
@@ -139,7 +119,7 @@ vt_alloc_tty_cells(void)
     }
     uint32_t bytes = cells * (uint32_t)sizeof(vt_cell_t);
     for (uint32_t i = 0; i < VT_MAX_TTYS; ++i) {
-        vt_cell_t *buf = (vt_cell_t *)vt_alloc(bytes, 8u);
+        vt_cell_t* buf = (vt_cell_t*)vt_alloc(bytes, 8u);
         if (!buf) {
             return -1;
         }
@@ -148,14 +128,10 @@ vt_alloc_tty_cells(void)
     return 0;
 }
 
-static void
-vt_render_cell(const vt_tty_t *tty, uint16_t row, uint16_t col);
-static void
-vt_draw_tty0_hint(void);
+static void vt_render_cell(const vt_tty_t* tty, uint16_t row, uint16_t col);
+static void vt_draw_tty0_hint(void);
 
-static int
-vt_bytes_equal(const uint8_t *a, const uint8_t *b, uint16_t len)
-{
+static int vt_bytes_equal(const uint8_t* a, const uint8_t* b, uint16_t len) {
     if (!a || !b) {
         return 0;
     }
@@ -167,15 +143,11 @@ vt_bytes_equal(const uint8_t *a, const uint8_t *b, uint16_t len)
     return 1;
 }
 
-static uint16_t
-vt_input_q_next(uint16_t v)
-{
+static uint16_t vt_input_q_next(uint16_t v) {
     return (uint16_t)((v + 1u) & 0xFFu);
 }
 
-static int
-vt_input_q_push(vt_tty_t *tty, uint8_t ch)
-{
+static int vt_input_q_push(vt_tty_t* tty, uint8_t ch) {
     if (!tty) {
         return -1;
     }
@@ -188,9 +160,7 @@ vt_input_q_push(vt_tty_t *tty, uint8_t ch)
     return 0;
 }
 
-static int
-vt_input_q_pop(vt_tty_t *tty, uint8_t *out_ch)
-{
+static int vt_input_q_pop(vt_tty_t* tty, uint8_t* out_ch) {
     if (!tty || !out_ch) {
         return -1;
     }
@@ -202,9 +172,7 @@ vt_input_q_pop(vt_tty_t *tty, uint8_t *out_ch)
     return 0;
 }
 
-static void
-vt_input_q_push_escape(vt_tty_t *tty, uint8_t final)
-{
+static void vt_input_q_push_escape(vt_tty_t* tty, uint8_t final) {
     if (!tty) {
         return;
     }
@@ -213,20 +181,13 @@ vt_input_q_push_escape(vt_tty_t *tty, uint8_t final)
     (void)vt_input_q_push(tty, final);
 }
 
-static int
-vt_fb_send(uint32_t type,
-           int32_t arg0,
-           int32_t arg1,
-           int32_t arg2,
-           int32_t arg3)
-{
+static int vt_fb_send(uint32_t type, int32_t arg0, int32_t arg1, int32_t arg2, int32_t arg3) {
     if (g_fb_ep < 0 || g_vt_ep < 0) {
         return -1;
     }
     uint32_t tries = 0;
     for (;;) {
-        int32_t rc = wasmos_ipc_send(g_fb_ep, g_vt_ep, (int32_t)type, 0,
-                                     arg0, arg1, arg2, arg3);
+        int32_t rc = wasmos_ipc_send(g_fb_ep, g_vt_ep, (int32_t)type, 0, arg0, arg1, arg2, arg3);
         if (rc == 0) {
             return 0;
         }
@@ -242,23 +203,16 @@ vt_fb_send(uint32_t type,
     }
 }
 
-static int
-vt_fb_send_switch(uint32_t type,
-                  int32_t arg0,
-                  int32_t arg1,
-                  int32_t arg2,
-                  int32_t arg3)
-{
+static int vt_fb_send_switch(uint32_t type, int32_t arg0, int32_t arg1, int32_t arg2,
+                             int32_t arg3) {
     if (g_fb_ep < 0 || g_vt_ep < 0) {
         return -1;
     }
     uint32_t tries = 0;
-    uint32_t max_tries = (type == FBTEXT_IPC_CELL_WRITE_REQ)
-                             ? VT_FB_SWITCH_CELL_RETRIES
-                             : VT_FB_SWITCH_CTRL_RETRIES;
+    uint32_t max_tries =
+        (type == FBTEXT_IPC_CELL_WRITE_REQ) ? VT_FB_SWITCH_CELL_RETRIES : VT_FB_SWITCH_CTRL_RETRIES;
     for (;;) {
-        int32_t rc = wasmos_ipc_send(g_fb_ep, g_vt_ep, (int32_t)type, 0,
-                                     arg0, arg1, arg2, arg3);
+        int32_t rc = wasmos_ipc_send(g_fb_ep, g_vt_ep, (int32_t)type, 0, arg0, arg1, arg2, arg3);
         if (rc == 0) {
             return 0;
         }
@@ -269,20 +223,14 @@ vt_fb_send_switch(uint32_t type,
     }
 }
 
-static int
-vt_ipc_reply_retry(int32_t reply_endpoint,
-                   int32_t type,
-                   int32_t request_id,
-                   int32_t arg0,
-                   int32_t arg1)
-{
+static int vt_ipc_reply_retry(int32_t reply_endpoint, int32_t type, int32_t request_id,
+                              int32_t arg0, int32_t arg1) {
     if (reply_endpoint < 0 || g_vt_ep < 0 || request_id == 0) {
         return -1;
     }
     uint32_t tries = 0;
     for (;;) {
-        int32_t rc = wasmos_ipc_reply(reply_endpoint, g_vt_ep,
-                                      type, request_id, arg0, arg1);
+        int32_t rc = wasmos_ipc_reply(reply_endpoint, g_vt_ep, type, request_id, arg0, arg1);
         if (rc == 0) {
             return 0;
         }
@@ -298,15 +246,12 @@ vt_ipc_reply_retry(int32_t reply_endpoint,
     }
 }
 
-static void
-vt_query_geometry(void)
-{
+static void vt_query_geometry(void) {
     if (g_fb_ep < 0 || g_vt_ep < 0) {
         return;
     }
     int32_t req_id = 0x5647; /* fixed local request id */
-    if (wasmos_ipc_send(g_fb_ep, g_vt_ep, FBTEXT_IPC_GEOMETRY_REQ, req_id,
-                        0, 0, 0, 0) != 0) {
+    if (wasmos_ipc_send(g_fb_ep, g_vt_ep, FBTEXT_IPC_GEOMETRY_REQ, req_id, 0, 0, 0, 0) != 0) {
         return;
     }
     for (int tries = 0; tries < VT_GEOMETRY_QUERY_RETRIES; ++tries) {
@@ -338,32 +283,19 @@ vt_query_geometry(void)
     }
 }
 
-static void
-vt_fb_set_cursor(const vt_tty_t *tty)
-{
+static void vt_fb_set_cursor(const vt_tty_t* tty) {
     if (!tty || !tty->cursor_visible) {
         return;
     }
-    (void)vt_fb_send(FBTEXT_IPC_CURSOR_SET_REQ,
-                     (int32_t)tty->cursor_col,
-                     (int32_t)tty->cursor_row,
-                     0,
-                     0);
+    (void)vt_fb_send(FBTEXT_IPC_CURSOR_SET_REQ, (int32_t)tty->cursor_col, (int32_t)tty->cursor_row,
+                     0, 0);
 }
 
-static void
-vt_fb_console_mode(uint8_t enabled)
-{
-    (void)vt_fb_send(FBTEXT_IPC_CONSOLE_MODE_REQ,
-                     enabled ? 1 : 0,
-                     0,
-                     0,
-                     0);
+static void vt_fb_console_mode(uint8_t enabled) {
+    (void)vt_fb_send(FBTEXT_IPC_CONSOLE_MODE_REQ, enabled ? 1 : 0, 0, 0, 0);
 }
 
-static void
-vt_store_cell(vt_tty_t *tty, uint16_t row, uint16_t col, uint32_t ch)
-{
+static void vt_store_cell(vt_tty_t* tty, uint16_t row, uint16_t col, uint32_t ch) {
     if (!tty || !tty->cells || row >= g_vt_rows || col >= g_vt_cols) {
         return;
     }
@@ -374,9 +306,7 @@ vt_store_cell(vt_tty_t *tty, uint16_t row, uint16_t col, uint32_t ch)
     tty->cells[idx].attr = tty->attr;
 }
 
-static uint16_t
-vt_clamp_row(int32_t row)
-{
+static uint16_t vt_clamp_row(int32_t row) {
     if (row < 0) {
         return 0;
     }
@@ -386,9 +316,7 @@ vt_clamp_row(int32_t row)
     return (uint16_t)row;
 }
 
-static uint16_t
-vt_clamp_col(int32_t col)
-{
+static uint16_t vt_clamp_col(int32_t col) {
     if (col < 0) {
         return 0;
     }
@@ -398,9 +326,7 @@ vt_clamp_col(int32_t col)
     return (uint16_t)col;
 }
 
-static void
-vt_csi_reset(vt_tty_t *tty)
-{
+static void vt_csi_reset(vt_tty_t* tty) {
     if (!tty) {
         return;
     }
@@ -410,9 +336,7 @@ vt_csi_reset(vt_tty_t *tty)
     tty->csi_private = 0;
 }
 
-static void
-vt_csi_push_param(vt_tty_t *tty)
-{
+static void vt_csi_push_param(vt_tty_t* tty) {
     if (!tty) {
         return;
     }
@@ -426,9 +350,7 @@ vt_csi_push_param(vt_tty_t *tty)
     tty->csi_have_current = 0;
 }
 
-static uint16_t
-vt_csi_param(vt_tty_t *tty, uint8_t index, uint16_t def)
-{
+static uint16_t vt_csi_param(vt_tty_t* tty, uint8_t index, uint16_t def) {
     if (!tty) {
         return def;
     }
@@ -439,9 +361,7 @@ vt_csi_param(vt_tty_t *tty, uint8_t index, uint16_t def)
     return def;
 }
 
-static void
-vt_clear_cell(vt_tty_t *tty, uint16_t row, uint16_t col, uint8_t render_now)
-{
+static void vt_clear_cell(vt_tty_t* tty, uint16_t row, uint16_t col, uint8_t render_now) {
     if (!tty || !tty->cells || row >= g_vt_rows || col >= g_vt_cols) {
         return;
     }
@@ -451,9 +371,7 @@ vt_clear_cell(vt_tty_t *tty, uint16_t row, uint16_t col, uint8_t render_now)
     }
 }
 
-static void
-vt_apply_sgr(vt_tty_t *tty, uint16_t code)
-{
+static void vt_apply_sgr(vt_tty_t* tty, uint16_t code) {
     if (!tty) {
         return;
     }
@@ -497,9 +415,7 @@ vt_apply_sgr(vt_tty_t *tty, uint16_t code)
     }
 }
 
-static void
-vt_apply_private_csi(uint32_t tty_index, vt_tty_t *tty, uint8_t final)
-{
+static void vt_apply_private_csi(uint32_t tty_index, vt_tty_t* tty, uint8_t final) {
     if (!tty || (final != 'h' && final != 'l')) {
         return;
     }
@@ -516,23 +432,17 @@ vt_apply_private_csi(uint32_t tty_index, vt_tty_t *tty, uint8_t final)
     }
 
     tty->cursor_visible = (final == 'h') ? 1u : 0u;
-    if ((tty_index != 0u) &&
-        (tty_index == g_active_tty) &&
-        !g_switch_barrier &&
+    if ((tty_index != 0u) && (tty_index == g_active_tty) && !g_switch_barrier &&
         tty->cursor_visible) {
         vt_fb_set_cursor(tty);
     }
 }
 
-static void
-vt_apply_csi(uint32_t tty_index, vt_tty_t *tty, uint8_t final)
-{
+static void vt_apply_csi(uint32_t tty_index, vt_tty_t* tty, uint8_t final) {
     if (!tty) {
         return;
     }
-    uint8_t render_now = (tty_index != 0) &&
-                         (tty_index == g_active_tty) &&
-                         !g_switch_barrier;
+    uint8_t render_now = (tty_index != 0) && (tty_index == g_active_tty) && !g_switch_barrier;
     switch (final) {
     case 'A': {
         uint16_t n = vt_csi_param(tty, 0, 1);
@@ -572,7 +482,8 @@ vt_apply_csi(uint32_t tty_index, vt_tty_t *tty, uint8_t final)
             }
         } else if (mode == 1) {
             for (uint16_t r = 0; r <= tty->cursor_row; ++r) {
-                uint16_t max_col = (r == tty->cursor_row) ? tty->cursor_col : (uint16_t)(g_vt_cols - 1u);
+                uint16_t max_col =
+                    (r == tty->cursor_row) ? tty->cursor_col : (uint16_t)(g_vt_cols - 1u);
                 for (uint16_t c = 0; c <= max_col; ++c) {
                     vt_clear_cell(tty, r, c, render_now);
                 }
@@ -634,41 +545,29 @@ vt_apply_csi(uint32_t tty_index, vt_tty_t *tty, uint8_t final)
     }
 }
 
-static void
-vt_render_cell(const vt_tty_t *tty, uint16_t row, uint16_t col)
-{
+static void vt_render_cell(const vt_tty_t* tty, uint16_t row, uint16_t col) {
     if (!tty || !tty->cells || row >= g_vt_rows || col >= g_vt_cols) {
         return;
     }
     uint32_t idx = vt_cell_index(row, col);
-    const vt_cell_t *cell = &tty->cells[idx];
+    const vt_cell_t* cell = &tty->cells[idx];
     uint32_t packed = vt_pack_cell_colors(cell);
-    (void)vt_fb_send(FBTEXT_IPC_CELL_WRITE_REQ,
-                     (int32_t)col,
-                     (int32_t)row,
-                     (int32_t)cell->ch,
+    (void)vt_fb_send(FBTEXT_IPC_CELL_WRITE_REQ, (int32_t)col, (int32_t)row, (int32_t)cell->ch,
                      (int32_t)packed);
 }
 
-static int32_t
-vt_render_cell_switch(const vt_tty_t *tty, uint16_t row, uint16_t col)
-{
+static int32_t vt_render_cell_switch(const vt_tty_t* tty, uint16_t row, uint16_t col) {
     if (!tty || !tty->cells || row >= g_vt_rows || col >= g_vt_cols) {
         return -1;
     }
     uint32_t idx = vt_cell_index(row, col);
-    const vt_cell_t *cell = &tty->cells[idx];
+    const vt_cell_t* cell = &tty->cells[idx];
     uint32_t packed = vt_pack_cell_colors(cell);
-    return vt_fb_send_switch(FBTEXT_IPC_CELL_WRITE_REQ,
-                             (int32_t)col,
-                             (int32_t)row,
-                             (int32_t)cell->ch,
-                             (int32_t)packed);
+    return vt_fb_send_switch(FBTEXT_IPC_CELL_WRITE_REQ, (int32_t)col, (int32_t)row,
+                             (int32_t)cell->ch, (int32_t)packed);
 }
 
-static void
-vt_scroll_up(vt_tty_t *tty, uint8_t render_now)
-{
+static void vt_scroll_up(vt_tty_t* tty, uint8_t render_now) {
     if (!tty || !tty->cells) {
         return;
     }
@@ -693,9 +592,7 @@ vt_scroll_up(vt_tty_t *tty, uint8_t render_now)
     }
 }
 
-static void
-vt_put_char_tty0(vt_tty_t *tty, uint8_t ch)
-{
+static void vt_put_char_tty0(vt_tty_t* tty, uint8_t ch) {
     char c = (char)ch;
     if (tty) {
         if (c == '\r') {
@@ -730,9 +627,7 @@ vt_put_char_tty0(vt_tty_t *tty, uint8_t ch)
     (void)wasmos_console_write((int32_t)(uintptr_t)&c, 1);
 }
 
-static void
-vt_put_char_virtual(vt_tty_t *tty, uint32_t tty_index, uint8_t ch)
-{
+static void vt_put_char_virtual(vt_tty_t* tty, uint32_t tty_index, uint8_t ch) {
     if (!tty) {
         return;
     }
@@ -797,17 +692,15 @@ vt_put_char_virtual(vt_tty_t *tty, uint32_t tty_index, uint8_t ch)
     }
 }
 
-static void
-vt_draw_tty0_hint(void)
-{
-    vt_tty_t *tty = &g_ttys[0];
+static void vt_draw_tty0_hint(void) {
+    vt_tty_t* tty = &g_ttys[0];
     tty->fg = 14;
     tty->bg = 0;
     tty->attr = 0;
     tty->cursor_row = 0;
     tty->cursor_col = 0;
-    const char *line0 = "tty0 system console (read-only)";
-    const char *line1 = "press F2/F3/F4 or Ctrl+Shift+F2/F3/F4";
+    const char* line0 = "tty0 system console (read-only)";
+    const char* line1 = "press F2/F3/F4 or Ctrl+Shift+F2/F3/F4";
     while (*line0) {
         vt_put_char_virtual(tty, 0, (uint8_t)*line0++);
     }
@@ -819,9 +712,7 @@ vt_draw_tty0_hint(void)
     tty->fg = 15;
 }
 
-static void
-vt_process_byte(uint32_t tty_index, vt_tty_t *tty, uint8_t c)
-{
+static void vt_process_byte(uint32_t tty_index, vt_tty_t* tty, uint8_t c) {
     if (!tty) {
         return;
     }
@@ -875,9 +766,7 @@ vt_process_byte(uint32_t tty_index, vt_tty_t *tty, uint8_t c)
 }
 
 /* Return the TTY index owning source_ep (as reader or writer), or -1. */
-static int32_t
-vt_tty_index_for_source(int32_t source_ep)
-{
+static int32_t vt_tty_index_for_source(int32_t source_ep) {
     if (source_ep < 0) {
         return -1;
     }
@@ -896,13 +785,11 @@ vt_tty_index_for_source(int32_t source_ep)
  * reliable=1: uses vt_render_cell_switch and yields between rows to reduce
  *   FB queue saturation; dropped cells are tolerated (best-effort).
  * reliable=0: fast path for non-switch redraws. */
-static int32_t
-vt_replay_tty(uint32_t tty_index, uint8_t reliable)
-{
+static int32_t vt_replay_tty(uint32_t tty_index, uint8_t reliable) {
     if (tty_index >= VT_MAX_TTYS) {
         return -1;
     }
-    vt_tty_t *tty = &g_ttys[tty_index];
+    vt_tty_t* tty = &g_ttys[tty_index];
     if (!tty->cells) {
         return -1;
     }
@@ -933,15 +820,13 @@ vt_replay_tty(uint32_t tty_index, uint8_t reliable)
     return 0;
 }
 
-static void
-vt_init_ttys(void)
-{
+static void vt_init_ttys(void) {
     uint32_t cell_count = vt_cell_capacity();
     if (cell_count == 0u || cell_count > (uint32_t)VT_MAX_COLS * (uint32_t)VT_MAX_ROWS) {
         return;
     }
     for (uint32_t i = 0; i < VT_MAX_TTYS; ++i) {
-        vt_cell_t *cells = g_ttys[i].cells;
+        vt_cell_t* cells = g_ttys[i].cells;
         memset(&g_ttys[i], 0, sizeof(g_ttys[i]));
         g_ttys[i].cells = cells;
         g_ttys[i].fg = 15;
@@ -960,9 +845,7 @@ vt_init_ttys(void)
     g_switch_barrier = 0;
 }
 
-static int32_t
-vt_switch_tty(uint32_t tty_index)
-{
+static int32_t vt_switch_tty(uint32_t tty_index) {
     if (tty_index >= VT_MAX_TTYS) {
         return VT_SWITCH_ERR_INVALID_TTY;
     }
@@ -981,8 +864,7 @@ vt_switch_tty(uint32_t tty_index)
     if (g_fb_ep < 0) {
         g_switch_generation++;
         g_active_tty = tty_index;
-        vt_trace_mark(VT_TRACE_SWITCH,
-                      (uint16_t)(tty_index & 0x0FFFu),
+        vt_trace_mark(VT_TRACE_SWITCH, (uint16_t)(tty_index & 0x0FFFu),
                       (uint16_t)(g_switch_generation & 0x0FFFu));
         g_switch_barrier = 0;
         return 0;
@@ -1025,8 +907,7 @@ vt_switch_tty(uint32_t tty_index)
 
     g_switch_generation++;
     g_active_tty = tty_index;
-    vt_trace_mark(VT_TRACE_SWITCH,
-                  (uint16_t)(tty_index & 0x0FFFu),
+    vt_trace_mark(VT_TRACE_SWITCH, (uint16_t)(tty_index & 0x0FFFu),
                   (uint16_t)(g_switch_generation & 0x0FFFu));
     g_switch_barrier = 0;
     if (tty_index == 0) {
@@ -1043,36 +924,26 @@ vt_switch_tty(uint32_t tty_index)
 }
 
 static const uint8_t g_sc_to_ascii[58] = {
-    0, 0x1B, '1', '2', '3', '4', '5', '6', '7', '8',
-    '9', '0', '-', '=', '\b', '\t', 'q', 'w', 'e', 'r',
-    't', 'y', 'u', 'i', 'o', 'p', '[', ']', '\n', 0,
-    'a', 's', 'd', 'f', 'g', 'h', 'j', 'k', 'l', ';',
-    '\'', '`', 0, '\\', 'z', 'x', 'c', 'v', 'b', 'n',
-    'm', ',', '.', '/', 0, '*', 0, ' '
-};
+    0,    0x1B, '1', '2', '3', '4', '5', '6', '7', '8', '9',  '0', '-', '=',  '\b',
+    '\t', 'q',  'w', 'e', 'r', 't', 'y', 'u', 'i', 'o', 'p',  '[', ']', '\n', 0,
+    'a',  's',  'd', 'f', 'g', 'h', 'j', 'k', 'l', ';', '\'', '`', 0,   '\\', 'z',
+    'x',  'c',  'v', 'b', 'n', 'm', ',', '.', '/', 0,   '*',  0,   ' '};
 
 static const uint8_t g_sc_to_ascii_shift[58] = {
-    0, 0x1B, '!', '@', '#', '$', '%', '^', '&', '*',
-    '(', ')', '_', '+', '\b', '\t', 'Q', 'W', 'E', 'R',
-    'T', 'Y', 'U', 'I', 'O', 'P', '{', '}', '\n', 0,
-    'A', 'S', 'D', 'F', 'G', 'H', 'J', 'K', 'L', ':',
-    '"', '~', 0, '|', 'Z', 'X', 'C', 'V', 'B', 'N',
-    'M', '<', '>', '?', 0, '*', 0, ' '
-};
+    0,    0x1B, '!', '@', '#', '$', '%', '^', '&', '*', '(', ')', '_', '+',  '\b',
+    '\t', 'Q',  'W', 'E', 'R', 'T', 'Y', 'U', 'I', 'O', 'P', '{', '}', '\n', 0,
+    'A',  'S',  'D', 'F', 'G', 'H', 'J', 'K', 'L', ':', '"', '~', 0,   '|',  'Z',
+    'X',  'C',  'V', 'B', 'N', 'M', '<', '>', '?', 0,   '*', 0,   ' '};
 
-static void
-vt_input_echo_char(uint32_t tty_index, uint8_t ch)
-{
+static void vt_input_echo_char(uint32_t tty_index, uint8_t ch) {
     if (tty_index >= VT_MAX_TTYS || tty_index != g_active_tty) {
         return;
     }
-    vt_tty_t *tty = &g_ttys[tty_index];
+    vt_tty_t* tty = &g_ttys[tty_index];
     vt_process_byte(tty_index, tty, ch);
 }
 
-static void
-vt_input_commit_line(vt_tty_t *tty)
-{
+static void vt_input_commit_line(vt_tty_t* tty) {
     if (!tty) {
         return;
     }
@@ -1085,9 +956,7 @@ vt_input_commit_line(vt_tty_t *tty)
     tty->input_history_nav = -1;
 }
 
-static void
-vt_input_history_store(vt_tty_t *tty)
-{
+static void vt_input_history_store(vt_tty_t* tty) {
     if (!tty || tty->input_line_len == 0) {
         return;
     }
@@ -1112,9 +981,8 @@ vt_input_history_store(vt_tty_t *tty)
     }
 }
 
-static void
-vt_input_replace_line(uint32_t tty_index, vt_tty_t *tty, const uint8_t *line, uint16_t len)
-{
+static void vt_input_replace_line(uint32_t tty_index, vt_tty_t* tty, const uint8_t* line,
+                                  uint16_t len) {
     if (!tty) {
         return;
     }
@@ -1136,9 +1004,7 @@ vt_input_replace_line(uint32_t tty_index, vt_tty_t *tty, const uint8_t *line, ui
     }
 }
 
-static void
-vt_input_history_nav(uint32_t tty_index, vt_tty_t *tty, uint8_t older)
-{
+static void vt_input_history_nav(uint32_t tty_index, vt_tty_t* tty, uint8_t older) {
     if (!tty || tty->input_history_count == 0) {
         return;
     }
@@ -1169,13 +1035,11 @@ vt_input_history_nav(uint32_t tty_index, vt_tty_t *tty, uint8_t older)
     vt_input_replace_line(tty_index, tty, tty->input_history[slot], len);
 }
 
-static void
-vt_input_handle_char(uint32_t tty_index, uint8_t ch)
-{
+static void vt_input_handle_char(uint32_t tty_index, uint8_t ch) {
     if (tty_index >= VT_MAX_TTYS) {
         return;
     }
-    vt_tty_t *tty = &g_ttys[tty_index];
+    vt_tty_t* tty = &g_ttys[tty_index];
     if (tty->input_canonical) {
         if (ch == 0x03) { /* Ctrl+C */
             tty->input_line_len = 0;
@@ -1247,9 +1111,7 @@ vt_input_handle_char(uint32_t tty_index, uint8_t ch)
     }
 }
 
-static void
-vt_set_input_mode(vt_tty_t *tty, uint8_t mode)
-{
+static void vt_set_input_mode(vt_tty_t* tty, uint8_t mode) {
     if (!tty) {
         return;
     }
@@ -1262,9 +1124,7 @@ vt_set_input_mode(vt_tty_t *tty, uint8_t mode)
     }
 }
 
-static void
-vt_handle_key_notify(int32_t scancode, int32_t keyup, int32_t extended)
-{
+static void vt_handle_key_notify(int32_t scancode, int32_t keyup, int32_t extended) {
     if (scancode == 0x1D) { /* Ctrl (left + extended right) */
         g_ctrl_down = keyup ? 0 : 1;
         return;
@@ -1288,7 +1148,7 @@ vt_handle_key_notify(int32_t scancode, int32_t keyup, int32_t extended)
     }
 
     if (extended && g_active_tty != 0) {
-        vt_tty_t *tty = &g_ttys[g_active_tty];
+        vt_tty_t* tty = &g_ttys[g_active_tty];
         /* Extended set-1 keys include arrows plus nav/edit cluster. */
         if (tty->input_canonical) {
             if (scancode == 0x48) {
@@ -1302,47 +1162,47 @@ vt_handle_key_notify(int32_t scancode, int32_t keyup, int32_t extended)
             return;
         }
 
-        if (scancode == 0x48) {       /* Up */
+        if (scancode == 0x48) { /* Up */
             vt_input_q_push_escape(tty, 'A');
             return;
-        } else if (scancode == 0x50) {/* Down */
+        } else if (scancode == 0x50) { /* Down */
             vt_input_q_push_escape(tty, 'B');
             return;
-        } else if (scancode == 0x4D) {/* Right */
+        } else if (scancode == 0x4D) { /* Right */
             vt_input_q_push_escape(tty, 'C');
             return;
-        } else if (scancode == 0x4B) {/* Left */
+        } else if (scancode == 0x4B) { /* Left */
             vt_input_q_push_escape(tty, 'D');
             return;
-        } else if (scancode == 0x47) {/* Home */
+        } else if (scancode == 0x47) { /* Home */
             (void)vt_input_q_push(tty, 0x1B);
             (void)vt_input_q_push(tty, '[');
             (void)vt_input_q_push(tty, 'H');
             return;
-        } else if (scancode == 0x4F) {/* End */
+        } else if (scancode == 0x4F) { /* End */
             (void)vt_input_q_push(tty, 0x1B);
             (void)vt_input_q_push(tty, '[');
             (void)vt_input_q_push(tty, 'F');
             return;
-        } else if (scancode == 0x49) {/* Page Up */
+        } else if (scancode == 0x49) { /* Page Up */
             (void)vt_input_q_push(tty, 0x1B);
             (void)vt_input_q_push(tty, '[');
             (void)vt_input_q_push(tty, '5');
             (void)vt_input_q_push(tty, '~');
             return;
-        } else if (scancode == 0x51) {/* Page Down */
+        } else if (scancode == 0x51) { /* Page Down */
             (void)vt_input_q_push(tty, 0x1B);
             (void)vt_input_q_push(tty, '[');
             (void)vt_input_q_push(tty, '6');
             (void)vt_input_q_push(tty, '~');
             return;
-        } else if (scancode == 0x52) {/* Insert */
+        } else if (scancode == 0x52) { /* Insert */
             (void)vt_input_q_push(tty, 0x1B);
             (void)vt_input_q_push(tty, '[');
             (void)vt_input_q_push(tty, '2');
             (void)vt_input_q_push(tty, '~');
             return;
-        } else if (scancode == 0x53) {/* Delete */
+        } else if (scancode == 0x53) { /* Delete */
             (void)vt_input_q_push(tty, 0x1B);
             (void)vt_input_q_push(tty, '[');
             (void)vt_input_q_push(tty, '3');
@@ -1362,23 +1222,22 @@ vt_handle_key_notify(int32_t scancode, int32_t keyup, int32_t extended)
     uint8_t ch = 0;
     if (g_ctrl_down) {
         /* Minimal cooked-mode control set for line discipline. */
-        if (scancode == 0x16) {       /* U */
-            ch = 0x15;                /* NAK / Ctrl+U */
-        } else if (scancode == 0x2E) {/* C */
-            ch = 0x03;                /* ETX / Ctrl+C */
-        } else if (scancode == 0x19) {/* P */
-            ch = 0x10;                /* DLE / Ctrl+P */
-        } else if (scancode == 0x31) {/* N */
-            ch = 0x0E;                /* SO / Ctrl+N */
+        if (scancode == 0x16) {        /* U */
+            ch = 0x15;                 /* NAK / Ctrl+U */
+        } else if (scancode == 0x2E) { /* C */
+            ch = 0x03;                 /* ETX / Ctrl+C */
+        } else if (scancode == 0x19) { /* P */
+            ch = 0x10;                 /* DLE / Ctrl+P */
+        } else if (scancode == 0x31) { /* N */
+            ch = 0x0E;                 /* SO / Ctrl+N */
         }
     }
     if (ch == 0) {
         if (scancode <= 0 || scancode >= (int32_t)(sizeof(g_sc_to_ascii))) {
             return;
         }
-        ch = g_shift_down
-            ? g_sc_to_ascii_shift[(uint32_t)scancode]
-            : g_sc_to_ascii[(uint32_t)scancode];
+        ch = g_shift_down ? g_sc_to_ascii_shift[(uint32_t)scancode]
+                          : g_sc_to_ascii[(uint32_t)scancode];
         /* FIXME: this Set-1 map currently ignores CapsLock and AltGr states;
          * add modifier-state-aware keymap handling when layouts expand. */
     }
@@ -1397,9 +1256,8 @@ vt_handle_key_notify(int32_t scancode, int32_t keyup, int32_t extended)
  * subscribes to keyboard events and enters the main IPC receive loop.
  * g_switch_generation is a monotonic counter incremented on TTY switches;
  * write messages with a stale generation are silently dropped. */
-WASMOS_WASM_EXPORT int32_t
-initialize(int32_t proc_endpoint, int32_t arg1, int32_t arg2, int32_t arg3)
-{
+WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t arg1, int32_t arg2,
+                                      int32_t arg3) {
     /* proc.endpoint now comes from the spawn-info contract, not an entry arg. */
     proc_endpoint = wasmos_startup_proc_endpoint();
     (void)arg1;
@@ -1433,8 +1291,7 @@ initialize(int32_t proc_endpoint, int32_t arg1, int32_t arg2, int32_t arg3)
     vt_init_ttys();
 
     if (g_kbd_ep != -1) {
-        (void)wasmos_ipc_send(g_kbd_ep, g_vt_ep, KBD_IPC_SUBSCRIBE_REQ,
-                              1, 0, 0, 0, 0);
+        (void)wasmos_ipc_send(g_kbd_ep, g_vt_ep, KBD_IPC_SUBSCRIBE_REQ, 1, 0, 0, 0, 0);
     }
 
     if (g_fb_ep != -1) {
@@ -1464,15 +1321,14 @@ initialize(int32_t proc_endpoint, int32_t arg1, int32_t arg2, int32_t arg3)
                 tty_index = vt_tty_index_for_source(msg.source);
             }
             if (tty_index < 0 || tty_index >= (int32_t)VT_MAX_TTYS) {
-                vt_trace_mark(VT_TRACE_DROP_UNOWNED,
-                              (uint16_t)(msg.source < 0 ? 0x0FFFu : ((uint32_t)msg.source & 0x0FFFu)),
-                              0);
+                vt_trace_mark(
+                    VT_TRACE_DROP_UNOWNED,
+                    (uint16_t)(msg.source < 0 ? 0x0FFFu : ((uint32_t)msg.source & 0x0FFFu)), 0);
                 break;
             }
             if (msg.source >= 0 && (uint32_t)msg.request_id != g_switch_generation) {
                 /* Drop stale write chunks queued before the last tty switch. */
-                vt_trace_mark(VT_TRACE_DROP_STALE,
-                              (uint16_t)((uint32_t)tty_index & 0x0FFFu),
+                vt_trace_mark(VT_TRACE_DROP_STALE, (uint16_t)((uint32_t)tty_index & 0x0FFFu),
                               (uint16_t)(((uint32_t)msg.request_id) & 0x0FFFu));
                 break;
             }
@@ -1482,10 +1338,11 @@ initialize(int32_t proc_endpoint, int32_t arg1, int32_t arg2, int32_t arg3)
              * reproduced again in recent runs, but keep the VT trace markers
              * (switch/write-drop/register events) enabled for future captures
              * and revisit once a reliable repro sequence exists. */
-            vt_tty_t *tty = &g_ttys[(uint32_t)tty_index];
-            int32_t args[4] = { msg.arg0, msg.arg1, msg.arg2, msg.arg3 };
+            vt_tty_t* tty = &g_ttys[(uint32_t)tty_index];
+            int32_t args[4] = {msg.arg0, msg.arg1, msg.arg2, msg.arg3};
             int count = (args[0] >> 24) & 0xF;
-            if (count > 4) count = 4;
+            if (count > 4)
+                count = 4;
             args[0] &= 0xFF;
             for (int i = 0; i < count; ++i) {
                 vt_process_byte((uint32_t)tty_index, tty, (uint8_t)(args[i] & 0xFF));
@@ -1497,15 +1354,11 @@ initialize(int32_t proc_endpoint, int32_t arg1, int32_t arg2, int32_t arg3)
             int32_t tty_index = vt_tty_index_for_source(msg.source);
             if (tty_index < 0 || tty_index >= (int32_t)VT_MAX_TTYS) {
                 if (msg.source >= 0 && msg.request_id != 0) {
-                    (void)vt_ipc_reply_retry(msg.source,
-                                             VT_IPC_ERROR,
-                                             msg.request_id,
-                                             -1,
-                                             0);
+                    (void)vt_ipc_reply_retry(msg.source, VT_IPC_ERROR, msg.request_id, -1, 0);
                 }
                 break;
             }
-            vt_tty_t *tty = &g_ttys[(uint32_t)tty_index];
+            vt_tty_t* tty = &g_ttys[(uint32_t)tty_index];
             uint8_t fg = (uint8_t)(msg.arg0 & 0xFF);
             uint8_t bg = (uint8_t)(msg.arg1 & 0xFF);
             uint8_t attr = (uint8_t)(msg.arg2 & 0xFF);
@@ -1517,11 +1370,7 @@ initialize(int32_t proc_endpoint, int32_t arg1, int32_t arg2, int32_t arg3)
             }
             tty->attr = attr;
             if (msg.source >= 0 && msg.request_id != 0) {
-                (void)vt_ipc_reply_retry(msg.source,
-                                         VT_IPC_RESP,
-                                         msg.request_id,
-                                         0,
-                                         0);
+                (void)vt_ipc_reply_retry(msg.source, VT_IPC_RESP, msg.request_id, 0, 0);
             }
             break;
         }
@@ -1529,22 +1378,17 @@ initialize(int32_t proc_endpoint, int32_t arg1, int32_t arg2, int32_t arg3)
         case VT_IPC_SWITCH_TTY: {
             int32_t sw = vt_switch_tty((uint32_t)msg.arg0);
             if (msg.source >= 0 && msg.request_id != 0) {
-                (void)vt_ipc_reply_retry(msg.source,
-                                         (sw == 0) ? VT_IPC_RESP : VT_IPC_ERROR,
-                                         msg.request_id,
-                                         (sw == 0) ? (int32_t)g_switch_generation : sw,
-                                         (int32_t)g_active_tty);
+                (void)vt_ipc_reply_retry(
+                    msg.source, (sw == 0) ? VT_IPC_RESP : VT_IPC_ERROR, msg.request_id,
+                    (sw == 0) ? (int32_t)g_switch_generation : sw, (int32_t)g_active_tty);
             }
             break;
         }
 
         case VT_IPC_GET_ACTIVE_TTY:
             if (msg.source >= 0 && msg.request_id != 0) {
-                (void)vt_ipc_reply_retry(msg.source,
-                                         VT_IPC_RESP,
-                                         msg.request_id,
-                                         (int32_t)g_switch_generation,
-                                         (int32_t)g_active_tty);
+                (void)vt_ipc_reply_retry(msg.source, VT_IPC_RESP, msg.request_id,
+                                         (int32_t)g_switch_generation, (int32_t)g_active_tty);
             }
             break;
 
@@ -1554,31 +1398,22 @@ initialize(int32_t proc_endpoint, int32_t arg1, int32_t arg2, int32_t arg3)
             }
             int32_t tty_id = msg.arg0;
             if (tty_id < 0 || tty_id >= (int32_t)VT_MAX_TTYS) {
-                (void)vt_ipc_reply_retry(msg.source,
-                                         VT_IPC_ERROR,
-                                         msg.request_id,
-                                         -1,
-                                         0);
+                (void)vt_ipc_reply_retry(msg.source, VT_IPC_ERROR, msg.request_id, -1, 0);
                 break;
             }
             uint32_t idx = (uint32_t)tty_id;
             if (g_tty_writer_ep[idx] >= 0 && g_tty_writer_ep[idx] != msg.source) {
-                vt_trace_mark(VT_TRACE_WRITER_CONFLICT,
-                              (uint16_t)(idx & 0x0FFFu),
+                vt_trace_mark(VT_TRACE_WRITER_CONFLICT, (uint16_t)(idx & 0x0FFFu),
                               (uint16_t)((uint32_t)msg.source & 0x0FFFu));
                 /* Replace stale/previous writer ownership instead of rejecting
                  * new registrations. This keeps CLI recovery robust when a
                  * prior writer process exited without an explicit unregister. */
             }
             g_tty_writer_ep[idx] = msg.source;
-            vt_trace_mark(VT_TRACE_WRITER_OK,
-                          (uint16_t)(idx & 0x0FFFu),
+            vt_trace_mark(VT_TRACE_WRITER_OK, (uint16_t)(idx & 0x0FFFu),
                           (uint16_t)((uint32_t)msg.source & 0x0FFFu));
-            (void)vt_ipc_reply_retry(msg.source,
-                                     VT_IPC_RESP,
-                                     msg.request_id,
-                                     (int32_t)g_switch_generation,
-                                     tty_id);
+            (void)vt_ipc_reply_retry(msg.source, VT_IPC_RESP, msg.request_id,
+                                     (int32_t)g_switch_generation, tty_id);
             break;
         }
 
@@ -1588,36 +1423,20 @@ initialize(int32_t proc_endpoint, int32_t arg1, int32_t arg2, int32_t arg3)
             }
             int32_t tty_id = msg.arg0;
             if (tty_id < 0 || tty_id >= (int32_t)VT_MAX_TTYS) {
-                (void)vt_ipc_reply_retry(msg.source,
-                                         VT_IPC_ERROR,
-                                         msg.request_id,
-                                         -1,
-                                         0);
+                (void)vt_ipc_reply_retry(msg.source, VT_IPC_ERROR, msg.request_id, -1, 0);
                 break;
             }
             if (g_tty_reader_ep[(uint32_t)tty_id] < 0) {
                 g_tty_reader_ep[(uint32_t)tty_id] = msg.source;
             } else if (g_tty_reader_ep[(uint32_t)tty_id] != msg.source) {
-                (void)vt_ipc_reply_retry(msg.source,
-                                         VT_IPC_ERROR,
-                                         msg.request_id,
-                                         -1,
-                                         0);
+                (void)vt_ipc_reply_retry(msg.source, VT_IPC_ERROR, msg.request_id, -1, 0);
                 break;
             }
             uint8_t ch = 0;
             if (vt_input_q_pop(&g_ttys[(uint32_t)tty_id], &ch) == 0) {
-                (void)vt_ipc_reply_retry(msg.source,
-                                         VT_IPC_RESP,
-                                         msg.request_id,
-                                         0,
-                                         (int32_t)ch);
+                (void)vt_ipc_reply_retry(msg.source, VT_IPC_RESP, msg.request_id, 0, (int32_t)ch);
             } else {
-                (void)vt_ipc_reply_retry(msg.source,
-                                         VT_IPC_RESP,
-                                         msg.request_id,
-                                         1,
-                                         0);
+                (void)vt_ipc_reply_retry(msg.source, VT_IPC_RESP, msg.request_id, 1, 0);
             }
             break;
         }
@@ -1628,20 +1447,12 @@ initialize(int32_t proc_endpoint, int32_t arg1, int32_t arg2, int32_t arg3)
             }
             int32_t tty_index = vt_tty_index_for_source(msg.source);
             if (tty_index < 0 || tty_index >= (int32_t)VT_MAX_TTYS) {
-                (void)vt_ipc_reply_retry(msg.source,
-                                         VT_IPC_ERROR,
-                                         msg.request_id,
-                                         -1,
-                                         0);
+                (void)vt_ipc_reply_retry(msg.source, VT_IPC_ERROR, msg.request_id, -1, 0);
                 break;
             }
-            uint8_t mode = (uint8_t)(msg.arg0 &
-                                     (VT_INPUT_MODE_CANONICAL | VT_INPUT_MODE_ECHO));
+            uint8_t mode = (uint8_t)(msg.arg0 & (VT_INPUT_MODE_CANONICAL | VT_INPUT_MODE_ECHO));
             vt_set_input_mode(&g_ttys[(uint32_t)tty_index], mode);
-            (void)vt_ipc_reply_retry(msg.source,
-                                     VT_IPC_RESP,
-                                     msg.request_id,
-                                     (int32_t)mode,
+            (void)vt_ipc_reply_retry(msg.source, VT_IPC_RESP, msg.request_id, (int32_t)mode,
                                      tty_index);
             break;
         }
@@ -1655,11 +1466,7 @@ initialize(int32_t proc_endpoint, int32_t arg1, int32_t arg2, int32_t arg3)
 
         default:
             if (msg.source >= 0 && msg.request_id != 0) {
-                (void)vt_ipc_reply_retry(msg.source,
-                                         VT_IPC_ERROR,
-                                         msg.request_id,
-                                         -1,
-                                         0);
+                (void)vt_ipc_reply_retry(msg.source, VT_IPC_ERROR, msg.request_id, -1, 0);
             }
             break;
         }

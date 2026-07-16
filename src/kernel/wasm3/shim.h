@@ -13,6 +13,6 @@ void wasm3_runtime_leave(uint32_t previous_pid);
 void wasm3_heap_release(uint32_t pid);
 uint64_t wasm3_heap_committed_bytes(uint32_t pid);
 int wasm3_heap_probe_growth(size_t size);
-int wasm3_heap_query_phys(uint32_t pid, const void *ptr, uint64_t size, uint64_t *out_phys_base);
+int wasm3_heap_query_phys(uint32_t pid, const void* ptr, uint64_t size, uint64_t* out_phys_base);
 
 #endif

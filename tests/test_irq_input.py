@@ -40,7 +40,9 @@ class IrqInputTest(unittest.TestCase):
 
     def test_keyboard_started_irq_driven(self) -> None:
         """Keyboard driver must report IRQ-driven startup, not polling fallback."""
-        ok = self.session.expect(b"[keyboard] driver starting (IRQ-driven)", timeout_s=1)
+        ok = self.session.expect(
+            b"[keyboard] driver starting (IRQ-driven)", timeout_s=1
+        )
         if not ok:
             self.fail(
                 "Keyboard driver did not start in IRQ-driven mode — "

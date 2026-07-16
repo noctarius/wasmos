@@ -11,20 +11,18 @@
 #include "string.h"
 
 typedef struct {
-    const char *app_name;
+    const char* app_name;
     uint16_t irq_mask;
 } irq_route_policy_t;
 
 /* Keep policy explicit and default-deny for userspace: capability ownership is
  * necessary but not sufficient for IRQ line routing. */
 static const irq_route_policy_t g_irq_route_policy[] = {
-    { "ata",             (uint16_t)((1u << 14) | (1u << 15)) },
-    { "irq-route-allow", (uint16_t)(1u << 1) },
+    {"ata", (uint16_t)((1u << 14) | (1u << 15))},
+    {"irq-route-allow", (uint16_t)(1u << 1)},
 };
 
-static int
-policy_irq_route_allows(uint32_t context_id, uint32_t irq_line)
-{
+static int policy_irq_route_allows(uint32_t context_id, uint32_t irq_line) {
     if (context_id == IPC_CONTEXT_KERNEL) {
         return 1;
     }
@@ -34,11 +32,12 @@ policy_irq_route_allows(uint32_t context_id, uint32_t irq_line)
     if (capability_spawn_profile_configured(context_id)) {
         return capability_irq_line_allowed(context_id, irq_line);
     }
-    process_t *proc = process_find_by_context(context_id);
+    process_t* proc = process_find_by_context(context_id);
     if (!proc || !proc->name) {
         return 0;
     }
-    for (uint32_t i = 0; i < (uint32_t)(sizeof(g_irq_route_policy) / sizeof(g_irq_route_policy[0])); ++i) {
+    for (uint32_t i = 0; i < (uint32_t)(sizeof(g_irq_route_policy) / sizeof(g_irq_route_policy[0]));
+         ++i) {
         if (strcmp(proc->name, g_irq_route_policy[i].app_name) != 0) {
             continue;
         }
@@ -47,27 +46,30 @@ policy_irq_route_allows(uint32_t context_id, uint32_t irq_line)
     return 0;
 }
 
-static const char *
-policy_action_name(policy_action_t action)
-{
+static const char* policy_action_name(policy_action_t action) {
     switch (action) {
-    case POLICY_ACTION_IO_PORT:       return "io.port";
-    case POLICY_ACTION_MMIO_MAP:      return "io.mmio";
-    case POLICY_ACTION_DMA_BUFFER:    return "dma.buffer";
-    case POLICY_ACTION_IRQ_CONTROL:   return "irq.control";
-    case POLICY_ACTION_IRQ_ROUTE:     return "irq.route";
-    case POLICY_ACTION_SYSTEM_CONTROL: return "system.control";
-    default:                          return "unknown";
+    case POLICY_ACTION_IO_PORT:
+        return "io.port";
+    case POLICY_ACTION_MMIO_MAP:
+        return "io.mmio";
+    case POLICY_ACTION_DMA_BUFFER:
+        return "dma.buffer";
+    case POLICY_ACTION_IRQ_CONTROL:
+        return "irq.control";
+    case POLICY_ACTION_IRQ_ROUTE:
+        return "irq.route";
+    case POLICY_ACTION_SYSTEM_CONTROL:
+        return "system.control";
+    default:
+        return "unknown";
     }
 }
 
-int
-policy_require(uint32_t context_id, policy_action_t action, uint32_t arg0)
-{
+int policy_require(uint32_t context_id, policy_action_t action, uint32_t arg0) {
     if (policy_authorize(context_id, action, arg0) == 0) {
         return 0;
     }
-    process_t *proc = process_find_by_context(context_id);
+    process_t* proc = process_find_by_context(context_id);
     serial_write("[permission] denied: ");
     serial_write(policy_action_name(action));
     serial_write(" from ");
@@ -80,9 +82,7 @@ policy_require(uint32_t context_id, policy_action_t action, uint32_t arg0)
     return -1; /* only reached if process could not be killed */
 }
 
-int
-policy_authorize(uint32_t context_id, policy_action_t action, uint32_t arg0)
-{
+int policy_authorize(uint32_t context_id, policy_action_t action, uint32_t arg0) {
     switch (action) {
     case POLICY_ACTION_IO_PORT:
         if (!capability_has(context_id, CAP_IO_PORT)) {

@@ -8,19 +8,12 @@
 
 #include <stdlib.h>
 
-void
-slab_init(void)
-{
-}
+void slab_init(void) {}
 
-void *
-kalloc_small(size_t size)
-{
+void* kalloc_small(size_t size) {
     return malloc(size);
 }
 
-void
-kfree_small(void *ptr)
-{
+void kfree_small(void* ptr) {
     free(ptr);
 }

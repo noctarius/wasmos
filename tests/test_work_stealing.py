@@ -51,6 +51,7 @@ class WorkStealingTest(unittest.TestCase):
             self.fail("sched_info did not produce output")
         # Give it a moment to finish, then collect the buffered output
         import time
+
         time.sleep(0.5)
         lines = self.session.buf.decode("utf-8", errors="replace").splitlines()
         return lines
@@ -64,7 +65,7 @@ class WorkStealingTest(unittest.TestCase):
         for line in lines:
             m = re.match(r"(\d+)\s+(\d+)\s+(\d+)\s+(\d+)", line.strip())
             if m:
-                cpu_id    = int(m.group(1))
+                cpu_id = int(m.group(1))
                 steal_cnt = int(m.group(4))
                 cpu_rows[cpu_id] = steal_cnt
 

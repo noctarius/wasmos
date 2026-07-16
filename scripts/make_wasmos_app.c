@@ -38,7 +38,7 @@ typedef struct __attribute__((packed)) {
     uint16_t driver_io_port_min;
     uint16_t driver_io_port_max;
     uint32_t driver_match_count;
-    uint32_t compiled_size;   /* v4: size of WARP AOT binary appended after WASM; 0 if absent */
+    uint32_t compiled_size; /* v4: size of WARP AOT binary appended after WASM; 0 if absent */
     char subsystem_tag[SUBSYSTEM_TAG_LEN];
 } wasmos_app_header_t;
 
@@ -74,11 +74,11 @@ typedef struct __attribute__((packed)) {
     uint32_t priority;
 } wasmos_driver_match_t;
 
-static int parse_u32(const char *s, uint32_t *out) {
+static int parse_u32(const char* s, uint32_t* out) {
     if (!s || !out || !*s) {
         return -1;
     }
-    char *end = NULL;
+    char* end = NULL;
     unsigned long v = strtoul(s, &end, 10);
     if ((end && *end != '\0') || v > 0xFFFFFFFFUL) {
         return -1;
@@ -87,12 +87,11 @@ static int parse_u32(const char *s, uint32_t *out) {
     return 0;
 }
 
-static char *
-trim(char *s) {
+static char* trim(char* s) {
     while (*s && isspace((unsigned char)*s)) {
         s++;
     }
-    char *end = s + strlen(s);
+    char* end = s + strlen(s);
     while (end > s && isspace((unsigned char)end[-1])) {
         end--;
     }
@@ -100,8 +99,7 @@ trim(char *s) {
     return s;
 }
 
-static void
-strip_quotes(char *s) {
+static void strip_quotes(char* s) {
     size_t n = strlen(s);
     if (n >= 2 && s[0] == '"' && s[n - 1] == '"') {
         memmove(s, s + 1, n - 2);
@@ -109,7 +107,7 @@ strip_quotes(char *s) {
     }
 }
 
-static int parse_u16_any(const char *s, uint16_t *out, uint16_t any_value) {
+static int parse_u16_any(const char* s, uint16_t* out, uint16_t any_value) {
     if (!s || !out) {
         return -1;
     }
@@ -117,7 +115,7 @@ static int parse_u16_any(const char *s, uint16_t *out, uint16_t any_value) {
         *out = any_value;
         return 0;
     }
-    char *end = NULL;
+    char* end = NULL;
     unsigned long v = strtoul(s, &end, 0);
     if (!*s || (end && *end != '\0') || v > 0xFFFFUL) {
         return -1;
@@ -126,27 +124,22 @@ static int parse_u16_any(const char *s, uint16_t *out, uint16_t any_value) {
     return 0;
 }
 
-static int capability_name_supported(const char *name) {
+static int capability_name_supported(const char* name) {
     if (!name) {
         return 0;
     }
-    return strcmp(name, "ipc.basic") == 0 ||
-           strcmp(name, "io.port") == 0 ||
-           strcmp(name, "irq.route") == 0 ||
-           strcmp(name, "mmio.map") == 0 ||
-           strcmp(name, "dma.buffer") == 0 ||
-           strcmp(name, "system.control") == 0 ||
-           strcmp(name, "subsystem.register") == 0 ||
-           strcmp(name, "svc.class") == 0;
+    return strcmp(name, "ipc.basic") == 0 || strcmp(name, "io.port") == 0 ||
+           strcmp(name, "irq.route") == 0 || strcmp(name, "mmio.map") == 0 ||
+           strcmp(name, "dma.buffer") == 0 || strcmp(name, "system.control") == 0 ||
+           strcmp(name, "subsystem.register") == 0 || strcmp(name, "svc.class") == 0;
 }
 
 static int subsystem_tag_has_valid_char(char c) {
-    return ((c >= 'A') && (c <= 'Z')) ||
-           ((c >= '0') && (c <= '9')) ||
-           c == '+' || c == '_' || c == '-';
+    return ((c >= 'A') && (c <= 'Z')) || ((c >= '0') && (c <= '9')) || c == '+' || c == '_' ||
+           c == '-';
 }
 
-static int subsystem_tag_valid(const char *tag) {
+static int subsystem_tag_valid(const char* tag) {
     size_t len = 0;
     if (!tag || !tag[0]) {
         return 0;
@@ -159,7 +152,7 @@ static int subsystem_tag_valid(const char *tag) {
     return len > 0 && len <= SUBSYSTEM_TAG_LEN;
 }
 
-static void subsystem_tag_copy(char dst[SUBSYSTEM_TAG_LEN], const char *src) {
+static void subsystem_tag_copy(char dst[SUBSYSTEM_TAG_LEN], const char* src) {
     memset(dst, 0, SUBSYSTEM_TAG_LEN);
     if (!src) {
         return;
@@ -205,13 +198,11 @@ typedef struct {
     uint32_t match_count;
 } linker_manifest_t;
 
-static int
-parse_u32_auto(const char *s, uint32_t *out)
-{
+static int parse_u32_auto(const char* s, uint32_t* out) {
     if (!s || !out || !*s) {
         return -1;
     }
-    char *end = NULL;
+    char* end = NULL;
     unsigned long v = strtoul(s, &end, 0);
     if ((end && *end != '\0') || v > 0xFFFFFFFFUL) {
         return -1;
@@ -220,9 +211,7 @@ parse_u32_auto(const char *s, uint32_t *out)
     return 0;
 }
 
-static int
-manifest_parse_bool(const char *s, uint8_t *out)
-{
+static int manifest_parse_bool(const char* s, uint8_t* out) {
     if (!s || !out) {
         return -1;
     }
@@ -237,16 +226,14 @@ manifest_parse_bool(const char *s, uint8_t *out)
     return -1;
 }
 
-static int
-parse_linker_manifest(const char *path, linker_manifest_t *out)
-{
+static int parse_linker_manifest(const char* path, linker_manifest_t* out) {
     if (!path || !out) {
         return -1;
     }
     memset(out, 0, sizeof(*out));
     strcpy(out->kind, "app");
     strcpy(out->req_ep_name, "-");
-    FILE *f = fopen(path, "rb");
+    FILE* f = fopen(path, "rb");
     if (!f) {
         return -1;
     }
@@ -255,11 +242,11 @@ parse_linker_manifest(const char *path, linker_manifest_t *out)
     int match_idx = -1;
     char line[512];
     while (fgets(line, sizeof(line), f)) {
-        char *s = trim(line);
+        char* s = trim(line);
         if (*s == '\0' || *s == '#') {
             continue;
         }
-        char *hash = strchr(s, '#');
+        char* hash = strchr(s, '#');
         if (hash) {
             *hash = '\0';
             s = trim(s);
@@ -267,19 +254,34 @@ parse_linker_manifest(const char *path, linker_manifest_t *out)
                 continue;
             }
         }
-        if (strcmp(s, "[package]") == 0) { sec = SEC_PACKAGE; continue; }
-        if (strcmp(s, "[resources]") == 0) { sec = SEC_RESOURCES; continue; }
-        if (strcmp(s, "[ipc]") == 0) { sec = SEC_IPC; continue; }
+        if (strcmp(s, "[package]") == 0) {
+            sec = SEC_PACKAGE;
+            continue;
+        }
+        if (strcmp(s, "[resources]") == 0) {
+            sec = SEC_RESOURCES;
+            continue;
+        }
+        if (strcmp(s, "[ipc]") == 0) {
+            sec = SEC_IPC;
+            continue;
+        }
         if (strcmp(s, "[[capabilities]]") == 0) {
             sec = SEC_CAP;
-            if (out->cap_count >= 8) { fclose(f); return -1; }
+            if (out->cap_count >= 8) {
+                fclose(f);
+                return -1;
+            }
             cap_idx = (int)out->cap_count++;
             memset(&out->caps[cap_idx], 0, sizeof(out->caps[cap_idx]));
             continue;
         }
         if (strcmp(s, "[[matches]]") == 0) {
             sec = SEC_MATCH;
-            if (out->match_count >= 8) { fclose(f); return -1; }
+            if (out->match_count >= 8) {
+                fclose(f);
+                return -1;
+            }
             match_idx = (int)out->match_count++;
             out->matches[match_idx].class_code = MATCH_ANY_U8;
             out->matches[match_idx].subclass = MATCH_ANY_U8;
@@ -289,13 +291,13 @@ parse_linker_manifest(const char *path, linker_manifest_t *out)
             continue;
         }
 
-        char *eq = strchr(s, '=');
+        char* eq = strchr(s, '=');
         if (!eq) {
             continue;
         }
         *eq = '\0';
-        char *key = trim(s);
-        char *val = trim(eq + 1);
+        char* key = trim(s);
+        char* val = trim(eq + 1);
         strip_quotes(val);
 
         if (sec == SEC_PACKAGE) {
@@ -308,38 +310,64 @@ parse_linker_manifest(const char *path, linker_manifest_t *out)
             } else if (strcmp(key, "subsystem") == 0) {
                 snprintf(out->subsystem, sizeof(out->subsystem), "%s", val);
             } else if (strcmp(key, "native") == 0) {
-                if (manifest_parse_bool(val, &out->native) != 0) { fclose(f); return -1; }
+                if (manifest_parse_bool(val, &out->native) != 0) {
+                    fclose(f);
+                    return -1;
+                }
             } else if (strcmp(key, "storage_bootstrap") == 0) {
-                if (manifest_parse_bool(val, &out->storage_bootstrap) != 0) { fclose(f); return -1; }
+                if (manifest_parse_bool(val, &out->storage_bootstrap) != 0) {
+                    fclose(f);
+                    return -1;
+                }
             } else if (strcmp(key, "wants_tty") == 0) {
-                if (manifest_parse_bool(val, &out->wants_tty) != 0) { fclose(f); return -1; }
+                if (manifest_parse_bool(val, &out->wants_tty) != 0) {
+                    fclose(f);
+                    return -1;
+                }
             }
         } else if (sec == SEC_RESOURCES) {
             if (strcmp(key, "stack_pages") == 0) {
-                if (parse_u32_auto(val, &out->stack_pages) != 0) { fclose(f); return -1; }
+                if (parse_u32_auto(val, &out->stack_pages) != 0) {
+                    fclose(f);
+                    return -1;
+                }
             } else if (strcmp(key, "heap_pages") == 0) {
-                if (parse_u32_auto(val, &out->heap_pages) != 0) { fclose(f); return -1; }
+                if (parse_u32_auto(val, &out->heap_pages) != 0) {
+                    fclose(f);
+                    return -1;
+                }
             }
         } else if (sec == SEC_IPC) {
             if (strcmp(key, "required_endpoint_name") == 0) {
                 snprintf(out->req_ep_name, sizeof(out->req_ep_name), "%s", val);
             } else if (strcmp(key, "required_endpoint_rights") == 0) {
-                if (parse_u32_auto(val, &out->req_ep_rights) != 0) { fclose(f); return -1; }
+                if (parse_u32_auto(val, &out->req_ep_rights) != 0) {
+                    fclose(f);
+                    return -1;
+                }
             } else if (strcmp(key, "entry_arg_bindings") == 0) {
-                if (*val != '[') { fclose(f); return -1; }
+                if (*val != '[') {
+                    fclose(f);
+                    return -1;
+                }
                 char tmp[256];
                 snprintf(tmp, sizeof(tmp), "%s", val);
-                char *p = tmp;
-                if (*p == '[') p++;
-                char *rbr = strrchr(p, ']');
-                if (rbr) *rbr = '\0';
+                char* p = tmp;
+                if (*p == '[')
+                    p++;
+                char* rbr = strrchr(p, ']');
+                if (rbr)
+                    *rbr = '\0';
                 out->entry_arg_binding_count = 0;
-                char *tok = strtok(p, ",");
+                char* tok = strtok(p, ",");
                 while (tok) {
                     tok = trim(tok);
                     strip_quotes(tok);
                     if (*tok) {
-                        if (out->entry_arg_binding_count >= 4) { fclose(f); return -1; }
+                        if (out->entry_arg_binding_count >= 4) {
+                            fclose(f);
+                            return -1;
+                        }
                         snprintf(out->entry_arg_bindings[out->entry_arg_binding_count],
                                  sizeof(out->entry_arg_bindings[0]), "%s", tok);
                         out->entry_arg_binding_count++;
@@ -351,37 +379,67 @@ parse_linker_manifest(const char *path, linker_manifest_t *out)
             if (strcmp(key, "name") == 0) {
                 snprintf(out->caps[cap_idx].name, sizeof(out->caps[cap_idx].name), "%s", val);
             } else if (strcmp(key, "flags") == 0) {
-                if (parse_u32_auto(val, &out->caps[cap_idx].flags) != 0) { fclose(f); return -1; }
+                if (parse_u32_auto(val, &out->caps[cap_idx].flags) != 0) {
+                    fclose(f);
+                    return -1;
+                }
             }
         } else if (sec == SEC_MATCH && match_idx >= 0) {
-            manifest_match_t *m = &out->matches[match_idx];
+            manifest_match_t* m = &out->matches[match_idx];
             uint16_t u16 = 0;
             uint32_t u32 = 0;
             if (strcmp(key, "bus") == 0) {
-                if (strcmp(val, "pci") != 0) { fclose(f); return -1; }
+                if (strcmp(val, "pci") != 0) {
+                    fclose(f);
+                    return -1;
+                }
             } else if (strcmp(key, "class") == 0) {
-                if (parse_u16_any(val, &u16, MATCH_ANY_U8) != 0) { fclose(f); return -1; }
+                if (parse_u16_any(val, &u16, MATCH_ANY_U8) != 0) {
+                    fclose(f);
+                    return -1;
+                }
                 m->class_code = (uint8_t)u16;
             } else if (strcmp(key, "subclass") == 0) {
-                if (parse_u16_any(val, &u16, MATCH_ANY_U8) != 0) { fclose(f); return -1; }
+                if (parse_u16_any(val, &u16, MATCH_ANY_U8) != 0) {
+                    fclose(f);
+                    return -1;
+                }
                 m->subclass = (uint8_t)u16;
             } else if (strcmp(key, "prog_if") == 0) {
-                if (parse_u16_any(val, &u16, MATCH_ANY_U8) != 0) { fclose(f); return -1; }
+                if (parse_u16_any(val, &u16, MATCH_ANY_U8) != 0) {
+                    fclose(f);
+                    return -1;
+                }
                 m->prog_if = (uint8_t)u16;
             } else if (strcmp(key, "vendor") == 0) {
-                if (parse_u16_any(val, &u16, MATCH_ANY_U16) != 0) { fclose(f); return -1; }
+                if (parse_u16_any(val, &u16, MATCH_ANY_U16) != 0) {
+                    fclose(f);
+                    return -1;
+                }
                 m->vendor_id = u16;
             } else if (strcmp(key, "device") == 0) {
-                if (parse_u16_any(val, &u16, MATCH_ANY_U16) != 0) { fclose(f); return -1; }
+                if (parse_u16_any(val, &u16, MATCH_ANY_U16) != 0) {
+                    fclose(f);
+                    return -1;
+                }
                 m->device_id = u16;
             } else if (strcmp(key, "io_port_min") == 0) {
-                if (parse_u16_any(val, &u16, 0) != 0) { fclose(f); return -1; }
+                if (parse_u16_any(val, &u16, 0) != 0) {
+                    fclose(f);
+                    return -1;
+                }
                 m->io_port_min = u16;
             } else if (strcmp(key, "io_port_max") == 0) {
-                if (parse_u16_any(val, &u16, 0) != 0) { fclose(f); return -1; }
+                if (parse_u16_any(val, &u16, 0) != 0) {
+                    fclose(f);
+                    return -1;
+                }
                 m->io_port_max = u16;
             } else if (strcmp(key, "priority") == 0) {
-                if (parse_u32_auto(val, &u32) != 0) { fclose(f); return -1; }
+                if (parse_u32_auto(val, &u32) != 0) {
+                    fclose(f);
+                    return -1;
+                }
                 m->priority = u32;
             }
         }
@@ -391,8 +449,7 @@ parse_linker_manifest(const char *path, linker_manifest_t *out)
         return -1;
     }
     if (out->subsystem[0] == '\0') {
-        snprintf(out->subsystem, sizeof(out->subsystem), "%s",
-                 out->native ? "NATIVE" : "WASM");
+        snprintf(out->subsystem, sizeof(out->subsystem), "%s", out->native ? "NATIVE" : "WASM");
     }
     if (!subsystem_tag_valid(out->subsystem)) {
         return -1;
@@ -400,12 +457,12 @@ parse_linker_manifest(const char *path, linker_manifest_t *out)
     return 0;
 }
 
-int main(int argc, char **argv) {
+int main(int argc, char** argv) {
     if (argc >= 6 && strcmp(argv[1], "--manifest") == 0) {
-        const char *manifest_path = argv[2];
-        const char *in_path = NULL;
-        const char *out_path = NULL;
-        const char *compiled_path = NULL;
+        const char* manifest_path = argv[2];
+        const char* in_path = NULL;
+        const char* out_path = NULL;
+        const char* compiled_path = NULL;
         for (int i = 3; i + 1 < argc; i += 2) {
             if (strcmp(argv[i], "--in") == 0) {
                 in_path = argv[i + 1];
@@ -419,7 +476,10 @@ int main(int argc, char **argv) {
             }
         }
         if (!in_path || !out_path) {
-            fprintf(stderr, "usage: %s --manifest <path> --in <in.wasm|elf> --out <out.wap> [--compiled <in.warpbin>]\n", argv[0]);
+            fprintf(stderr,
+                    "usage: %s --manifest <path> --in <in.wasm|elf> --out <out.wap> [--compiled "
+                    "<in.warpbin>]\n",
+                    argv[0]);
             return 1;
         }
         linker_manifest_t lm;
@@ -428,15 +488,21 @@ int main(int argc, char **argv) {
             return 1;
         }
         uint32_t flags = 0;
-        if (strcmp(lm.kind, "driver") == 0) flags |= FLAG_DRIVER;
-        else if (strcmp(lm.kind, "service") == 0) flags |= FLAG_SERVICE;
-        else flags |= FLAG_APP;
-        if (lm.native) flags |= (1u << 4);
-        if (lm.storage_bootstrap) flags |= (1u << 5);
-        if (lm.wants_tty) flags |= (1u << 6);
+        if (strcmp(lm.kind, "driver") == 0)
+            flags |= FLAG_DRIVER;
+        else if (strcmp(lm.kind, "service") == 0)
+            flags |= FLAG_SERVICE;
+        else
+            flags |= FLAG_APP;
+        if (lm.native)
+            flags |= (1u << 4);
+        if (lm.storage_bootstrap)
+            flags |= (1u << 5);
+        if (lm.wants_tty)
+            flags |= (1u << 6);
 
         uint32_t cap_count = lm.cap_count;
-        const char *cap_names[8];
+        const char* cap_names[8];
         wasmos_cap_request_t caps[8];
         for (uint32_t i = 0; i < cap_count; ++i) {
             if (!capability_name_supported(lm.caps[i].name)) {
@@ -462,7 +528,7 @@ int main(int argc, char **argv) {
             driver_matches[i].priority = lm.matches[i].priority;
         }
 
-        FILE *in = fopen(in_path, "rb");
+        FILE* in = fopen(in_path, "rb");
         if (!in) {
             perror("open input");
             return 1;
@@ -483,7 +549,7 @@ int main(int argc, char **argv) {
             fclose(in);
             return 1;
         }
-        uint8_t *wasm = (uint8_t *)malloc((size_t)in_size);
+        uint8_t* wasm = (uint8_t*)malloc((size_t)in_size);
         if (!wasm) {
             fclose(in);
             return 1;
@@ -497,10 +563,10 @@ int main(int argc, char **argv) {
         fclose(in);
 
         /* Optional: load pre-compiled WARP AOT binary. */
-        uint8_t *compiled_data = NULL;
+        uint8_t* compiled_data = NULL;
         size_t compiled_data_size = 0;
         if (compiled_path) {
-            FILE *cf = fopen(compiled_path, "rb");
+            FILE* cf = fopen(compiled_path, "rb");
             if (!cf) {
                 perror("open compiled");
                 free(wasm);
@@ -520,7 +586,7 @@ int main(int argc, char **argv) {
                 return 1;
             }
             fseek(cf, 0, SEEK_SET);
-            compiled_data = (uint8_t *)malloc((size_t)csz);
+            compiled_data = (uint8_t*)malloc((size_t)csz);
             if (!compiled_data) {
                 fclose(cf);
                 free(wasm);
@@ -537,7 +603,7 @@ int main(int argc, char **argv) {
             compiled_data_size = (size_t)csz;
         }
 
-        FILE *outf = fopen(out_path, "wb");
+        FILE* outf = fopen(out_path, "wb");
         if (!outf) {
             perror("open output");
             free(compiled_data);
@@ -557,21 +623,26 @@ int main(int argc, char **argv) {
         hdr.cap_count = cap_count;
         hdr.entry_arg_binding_count = lm.entry_arg_binding_count;
         hdr.mem_hint_count = 2;
-        hdr.driver_match_class = (driver_match_count > 0) ? driver_matches[0].class_code : MATCH_ANY_U8;
-        hdr.driver_match_subclass = (driver_match_count > 0) ? driver_matches[0].subclass : MATCH_ANY_U8;
-        hdr.driver_match_prog_if = (driver_match_count > 0) ? driver_matches[0].prog_if : MATCH_ANY_U8;
+        hdr.driver_match_class =
+            (driver_match_count > 0) ? driver_matches[0].class_code : MATCH_ANY_U8;
+        hdr.driver_match_subclass =
+            (driver_match_count > 0) ? driver_matches[0].subclass : MATCH_ANY_U8;
+        hdr.driver_match_prog_if =
+            (driver_match_count > 0) ? driver_matches[0].prog_if : MATCH_ANY_U8;
         hdr.driver_match_reserved0 = 0;
-        hdr.driver_match_vendor_id = (driver_match_count > 0) ? driver_matches[0].vendor_id : MATCH_ANY_U16;
-        hdr.driver_match_device_id = (driver_match_count > 0) ? driver_matches[0].device_id : MATCH_ANY_U16;
+        hdr.driver_match_vendor_id =
+            (driver_match_count > 0) ? driver_matches[0].vendor_id : MATCH_ANY_U16;
+        hdr.driver_match_device_id =
+            (driver_match_count > 0) ? driver_matches[0].device_id : MATCH_ANY_U16;
         hdr.driver_io_port_min = (driver_match_count > 0) ? driver_matches[0].io_port_min : 0;
         hdr.driver_io_port_max = (driver_match_count > 0) ? driver_matches[0].io_port_max : 0;
         hdr.driver_match_count = driver_match_count;
         hdr.compiled_size = (uint32_t)compiled_data_size;
         subsystem_tag_copy(hdr.subsystem_tag, lm.subsystem);
 
-        wasmos_mem_hint_t stack_hint = { MEM_HINT_STACK, lm.stack_pages, 0 };
-        wasmos_mem_hint_t heap_hint = { MEM_HINT_HEAP, lm.heap_pages, 0 };
-        wasmos_req_endpoint_t req_ep = { (uint32_t)strlen(lm.req_ep_name), lm.req_ep_rights };
+        wasmos_mem_hint_t stack_hint = {MEM_HINT_STACK, lm.stack_pages, 0};
+        wasmos_mem_hint_t heap_hint = {MEM_HINT_HEAP, lm.heap_pages, 0};
+        wasmos_req_endpoint_t req_ep = {(uint32_t)strlen(lm.req_ep_name), lm.req_ep_rights};
         wasmos_entry_arg_binding_t entry_arg_binding_hdrs[4];
 
         int ok = 1;
@@ -588,7 +659,8 @@ int main(int argc, char **argv) {
         }
         for (uint32_t i = 0; i < lm.entry_arg_binding_count; ++i) {
             entry_arg_binding_hdrs[i].name_len = (uint32_t)strlen(lm.entry_arg_bindings[i]);
-            ok &= fwrite(&entry_arg_binding_hdrs[i], sizeof(entry_arg_binding_hdrs[i]), 1, outf) == 1;
+            ok &=
+                fwrite(&entry_arg_binding_hdrs[i], sizeof(entry_arg_binding_hdrs[i]), 1, outf) == 1;
             ok &= fwrite(lm.entry_arg_bindings[i], 1, entry_arg_binding_hdrs[i].name_len, outf) ==
                   entry_arg_binding_hdrs[i].name_len;
         }
@@ -608,27 +680,33 @@ int main(int argc, char **argv) {
         return ok ? 0 : 1;
     }
     if (argc < 11) {
-        fprintf(stderr, "usage: %s <in.wasm> <out.wap> <name> <entry> <stack_pages> <heap_pages> <flags> <req_ep_name|- > <req_ep_rights> <cap_count> [<cap_name> <cap_flags>]...\n", argv[0]);
-        fprintf(stderr, "legacy: %s <in.wasm> <out.wap> <name> <entry> <stack_pages> <heap_pages> <flags> <req_ep_name|- > <req_ep_rights> <cap_name|- > <cap_flags>\n", argv[0]);
+        fprintf(stderr,
+                "usage: %s <in.wasm> <out.wap> <name> <entry> <stack_pages> <heap_pages> <flags> "
+                "<req_ep_name|- > <req_ep_rights> <cap_count> [<cap_name> <cap_flags>]...\n",
+                argv[0]);
+        fprintf(stderr,
+                "legacy: %s <in.wasm> <out.wap> <name> <entry> <stack_pages> <heap_pages> <flags> "
+                "<req_ep_name|- > <req_ep_rights> <cap_name|- > <cap_flags>\n",
+                argv[0]);
         return 1;
     }
 
-    const char *in_path = argv[1];
-    const char *out_path = argv[2];
-    const char *name = argv[3];
-    const char *entry = argv[4];
-    const char *req_ep_name = argv[8];
+    const char* in_path = argv[1];
+    const char* out_path = argv[2];
+    const char* name = argv[3];
+    const char* entry = argv[4];
+    const char* req_ep_name = argv[8];
     uint32_t stack_pages = 0;
     uint32_t heap_pages = 0;
     uint32_t flags = 0;
     uint32_t req_ep_rights = 0;
     uint32_t cap_count = 0;
     const uint32_t cap_max = 8;
-    const char *cap_names[8];
+    const char* cap_names[8];
     wasmos_cap_request_t caps[8];
     uint32_t entry_arg_binding_count = 0;
     const uint32_t entry_arg_binding_max = 4;
-    const char *entry_arg_bindings[4];
+    const char* entry_arg_bindings[4];
     uint8_t driver_match_class = MATCH_ANY_U8;
     uint8_t driver_match_subclass = MATCH_ANY_U8;
     uint8_t driver_match_prog_if = MATCH_ANY_U8;
@@ -641,8 +719,7 @@ int main(int argc, char **argv) {
         fprintf(stderr, "invalid stack/heap page value\n");
         return 1;
     }
-    if (parse_u32(argv[7], &flags) != 0 ||
-        parse_u32(argv[9], &req_ep_rights) != 0) {
+    if (parse_u32(argv[7], &flags) != 0 || parse_u32(argv[9], &req_ep_rights) != 0) {
         fprintf(stderr, "invalid flags/req_ep_rights value\n");
         return 1;
     }
@@ -660,10 +737,9 @@ int main(int argc, char **argv) {
             return 1;
         }
         for (uint32_t i = 0; i < cap_count; ++i) {
-            const char *cap_name = argv[11 + (i * 2u)];
+            const char* cap_name = argv[11 + (i * 2u)];
             uint32_t cap_flags = 0;
-            if (!cap_name || cap_name[0] == '\0' ||
-                (cap_name[0] == '-' && cap_name[1] == '\0') ||
+            if (!cap_name || cap_name[0] == '\0' || (cap_name[0] == '-' && cap_name[1] == '\0') ||
                 parse_u32(argv[12 + (i * 2u)], &cap_flags) != 0) {
                 fprintf(stderr, "invalid capability entry at index %u\n", i);
                 return 1;
@@ -696,7 +772,7 @@ int main(int argc, char **argv) {
                         return 1;
                     }
                     for (uint32_t i = 0; i < entry_arg_binding_count; ++i) {
-                        const char *binding = argv[next + (int)i];
+                        const char* binding = argv[next + (int)i];
                         if (!binding || binding[0] == '\0') {
                             fprintf(stderr, "invalid entry arg binding at index %u\n", i);
                             return 1;
@@ -715,8 +791,10 @@ int main(int argc, char **argv) {
                     if (parse_u16_any(argv[next + 1], &cls, MATCH_ANY_U8) != 0 ||
                         parse_u16_any(argv[next + 2], &sub, MATCH_ANY_U8) != 0 ||
                         parse_u16_any(argv[next + 3], &prog, MATCH_ANY_U8) != 0 ||
-                        parse_u16_any(argv[next + 4], &driver_match_vendor_id, MATCH_ANY_U16) != 0 ||
-                        parse_u16_any(argv[next + 5], &driver_match_device_id, MATCH_ANY_U16) != 0 ||
+                        parse_u16_any(argv[next + 4], &driver_match_vendor_id, MATCH_ANY_U16) !=
+                            0 ||
+                        parse_u16_any(argv[next + 5], &driver_match_device_id, MATCH_ANY_U16) !=
+                            0 ||
                         parse_u16_any(argv[next + 6], &driver_io_port_min, 0) != 0 ||
                         parse_u16_any(argv[next + 7], &driver_io_port_max, 0) != 0) {
                         fprintf(stderr, "invalid --driver-match value\n");
@@ -736,7 +814,7 @@ int main(int argc, char **argv) {
     } else if (argc == 12) {
         /* Backward compatibility mode: one optional capability pair. */
         legacy_mode = 1;
-        const char *cap_name = argv[10];
+        const char* cap_name = argv[10];
         uint32_t cap_flags = 0;
         if (parse_u32(argv[11], &cap_flags) != 0) {
             fprintf(stderr, "invalid legacy cap_flags value\n");
@@ -759,12 +837,16 @@ int main(int argc, char **argv) {
     } else {
         fprintf(stderr, "invalid capability argument layout\n");
         if (!legacy_mode) {
-            fprintf(stderr, "usage: %s <in.wasm> <out.wap> <name> <entry> <stack_pages> <heap_pages> <flags> <req_ep_name|- > <req_ep_rights> <cap_count> [<cap_name> <cap_flags>]...\n", argv[0]);
+            fprintf(
+                stderr,
+                "usage: %s <in.wasm> <out.wap> <name> <entry> <stack_pages> <heap_pages> <flags> "
+                "<req_ep_name|- > <req_ep_rights> <cap_count> [<cap_name> <cap_flags>]...\n",
+                argv[0]);
         }
         return 1;
     }
 
-    FILE *in = fopen(in_path, "rb");
+    FILE* in = fopen(in_path, "rb");
     if (!in) {
         perror("open input");
         return 1;
@@ -786,7 +868,7 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    uint8_t *wasm = (uint8_t *)malloc((size_t)in_size);
+    uint8_t* wasm = (uint8_t*)malloc((size_t)in_size);
     if (!wasm) {
         fclose(in);
         return 1;
@@ -799,7 +881,7 @@ int main(int argc, char **argv) {
     }
     fclose(in);
 
-    FILE *out = fopen(out_path, "wb");
+    FILE* out = fopen(out_path, "wb");
     if (!out) {
         perror("open output");
         free(wasm);
@@ -827,12 +909,12 @@ int main(int argc, char **argv) {
     hdr.driver_io_port_min = driver_io_port_min;
     hdr.driver_io_port_max = driver_io_port_max;
     hdr.driver_match_count = driver_match_count;
-    hdr.compiled_size = 0;  /* legacy path: no AOT binary; use --manifest --compiled for AOT */
+    hdr.compiled_size = 0; /* legacy path: no AOT binary; use --manifest --compiled for AOT */
     subsystem_tag_copy(hdr.subsystem_tag, (flags & (1u << 4)) != 0 ? "NATIVE" : "WASM");
 
-    wasmos_mem_hint_t stack_hint = { MEM_HINT_STACK, stack_pages, 0 };
-    wasmos_mem_hint_t heap_hint = { MEM_HINT_HEAP, heap_pages, 0 };
-    wasmos_req_endpoint_t req_ep = { (uint32_t)strlen(req_ep_name), req_ep_rights };
+    wasmos_mem_hint_t stack_hint = {MEM_HINT_STACK, stack_pages, 0};
+    wasmos_mem_hint_t heap_hint = {MEM_HINT_HEAP, heap_pages, 0};
+    wasmos_req_endpoint_t req_ep = {(uint32_t)strlen(req_ep_name), req_ep_rights};
     wasmos_entry_arg_binding_t entry_arg_binding_hdrs[4];
 
     int ok = 1;

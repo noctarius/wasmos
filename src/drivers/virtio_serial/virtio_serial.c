@@ -14,8 +14,8 @@
 #define PCI_CFG_DATA_PORT 0xCFC
 
 #define VIRTIO_PCI_VENDOR_ID 0x1AF4u
-#define VIRTIO_PCI_DEV_MIN   0x1000u
-#define VIRTIO_PCI_DEV_MAX   0x107Fu
+#define VIRTIO_PCI_DEV_MIN 0x1000u
+#define VIRTIO_PCI_DEV_MAX 0x107Fu
 #define VIRTIO_SERIAL_DEV_LEGACY 0x1003u
 #define VIRTIO_SERIAL_DEV_TRANSITIONAL 0x1043u
 
@@ -33,21 +33,14 @@ typedef struct {
 static int32_t g_endpoint = -1;
 static virtio_serial_device_t g_dev;
 
-static uint32_t
-pci_config_read32(uint8_t bus, uint8_t slot, uint8_t function, uint8_t reg)
-{
-    uint32_t address = 0x80000000u |
-                       ((uint32_t)bus << 16) |
-                       ((uint32_t)slot << 11) |
-                       ((uint32_t)function << 8) |
-                       ((uint32_t)reg & 0xFCu);
+static uint32_t pci_config_read32(uint8_t bus, uint8_t slot, uint8_t function, uint8_t reg) {
+    uint32_t address = 0x80000000u | ((uint32_t)bus << 16) | ((uint32_t)slot << 11) |
+                       ((uint32_t)function << 8) | ((uint32_t)reg & 0xFCu);
     (void)wasmos_io_out32(PCI_CFG_ADDR_PORT, (int32_t)address);
     return (uint32_t)wasmos_io_in32(PCI_CFG_DATA_PORT);
 }
 
-static int
-is_virtio_serial_device(uint16_t vendor_id, uint16_t device_id)
-{
+static int is_virtio_serial_device(uint16_t vendor_id, uint16_t device_id) {
     if (vendor_id != VIRTIO_PCI_VENDOR_ID) {
         return 0;
     }
@@ -57,9 +50,7 @@ is_virtio_serial_device(uint16_t vendor_id, uint16_t device_id)
     return device_id >= VIRTIO_PCI_DEV_MIN && device_id <= VIRTIO_PCI_DEV_MAX;
 }
 
-static int
-probe_virtio_serial(void)
-{
+static int probe_virtio_serial(void) {
     for (uint16_t bus = 0; bus < 256; ++bus) {
         for (uint8_t slot = 0; slot < 32; ++slot) {
             for (uint8_t function = 0; function < 8; ++function) {
@@ -89,7 +80,8 @@ probe_virtio_serial(void)
                 if (io_base == 0u) {
                     continue;
                 }
-                uint8_t irq = (uint8_t)(pci_config_read32((uint8_t)bus, slot, function, 0x3C) & 0xFFu);
+                uint8_t irq =
+                    (uint8_t)(pci_config_read32((uint8_t)bus, slot, function, 0x3C) & 0xFFu);
                 g_dev.present = 1;
                 g_dev.bus = (uint8_t)bus;
                 g_dev.slot = slot;
@@ -105,34 +97,20 @@ probe_virtio_serial(void)
     return -1;
 }
 
-static void
-send_error(int32_t dest, int32_t request_id, int32_t code)
-{
+static void send_error(int32_t dest, int32_t request_id, int32_t code) {
     (void)wasmos_ipc_send(dest, g_endpoint, VIRTIO_SERIAL_IPC_ERROR, request_id, code, 0, 0, 0);
 }
 
-static void
-handle_query(int32_t source, int32_t request_id)
-{
+static void handle_query(int32_t source, int32_t request_id) {
     int32_t present = g_dev.present ? 1 : 0;
     int32_t packed0 = ((int32_t)g_dev.vendor_id << 16) | (int32_t)g_dev.device_id;
-    int32_t packed1 = ((int32_t)g_dev.bus << 24) |
-                      ((int32_t)g_dev.slot << 16) |
-                      ((int32_t)g_dev.function << 8) |
-                      (int32_t)g_dev.irq;
-    (void)wasmos_ipc_send(source,
-                          g_endpoint,
-                          VIRTIO_SERIAL_IPC_RESP,
-                          request_id,
-                          present,
-                          packed0,
-                          packed1,
-                          (int32_t)g_dev.io_base);
+    int32_t packed1 = ((int32_t)g_dev.bus << 24) | ((int32_t)g_dev.slot << 16) |
+                      ((int32_t)g_dev.function << 8) | (int32_t)g_dev.irq;
+    (void)wasmos_ipc_send(source, g_endpoint, VIRTIO_SERIAL_IPC_RESP, request_id, present, packed0,
+                          packed1, (int32_t)g_dev.io_base);
 }
 
-static void
-handle_read_reg32(int32_t source, int32_t request_id, int32_t offset)
-{
+static void handle_read_reg32(int32_t source, int32_t request_id, int32_t offset) {
     if (!g_dev.present) {
         send_error(source, request_id, -2);
         return;
@@ -141,20 +119,13 @@ handle_read_reg32(int32_t source, int32_t request_id, int32_t offset)
         send_error(source, request_id, -22);
         return;
     }
-    uint32_t value = (uint32_t)wasmos_io_in32((int32_t)((uint32_t)g_dev.io_base + (uint32_t)offset));
-    (void)wasmos_ipc_send(source,
-                          g_endpoint,
-                          VIRTIO_SERIAL_IPC_RESP,
-                          request_id,
-                          0,
-                          (int32_t)value,
-                          offset,
-                          0);
+    uint32_t value =
+        (uint32_t)wasmos_io_in32((int32_t)((uint32_t)g_dev.io_base + (uint32_t)offset));
+    (void)wasmos_ipc_send(source, g_endpoint, VIRTIO_SERIAL_IPC_RESP, request_id, 0, (int32_t)value,
+                          offset, 0);
 }
 
-static void
-handle_write_reg32(int32_t source, int32_t request_id, int32_t offset, int32_t value)
-{
+static void handle_write_reg32(int32_t source, int32_t request_id, int32_t offset, int32_t value) {
     if (!g_dev.present) {
         send_error(source, request_id, -2);
         return;
@@ -164,19 +135,12 @@ handle_write_reg32(int32_t source, int32_t request_id, int32_t offset, int32_t v
         return;
     }
     (void)wasmos_io_out32((int32_t)((uint32_t)g_dev.io_base + (uint32_t)offset), value);
-    (void)wasmos_ipc_send(source,
-                          g_endpoint,
-                          VIRTIO_SERIAL_IPC_RESP,
-                          request_id,
-                          0,
-                          offset,
-                          value,
+    (void)wasmos_ipc_send(source, g_endpoint, VIRTIO_SERIAL_IPC_RESP, request_id, 0, offset, value,
                           0);
 }
 
-WASMOS_WASM_EXPORT int32_t
-initialize(int32_t proc_endpoint, int32_t ignored_arg1, int32_t ignored_arg2, int32_t ignored_arg3)
-{
+WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t ignored_arg1,
+                                      int32_t ignored_arg2, int32_t ignored_arg3) {
     /* proc.endpoint now comes from the spawn-info contract, not an entry arg. */
     proc_endpoint = wasmos_startup_proc_endpoint();
     (void)ignored_arg1;
@@ -200,10 +164,8 @@ initialize(int32_t proc_endpoint, int32_t ignored_arg1, int32_t ignored_arg2, in
         return -1;
     }
     if (g_dev.present) {
-        (void)printf("[virtio-serial] ready io=0x%04X irq=%u dev=%04X\n",
-                     (unsigned)g_dev.io_base,
-                     (unsigned)g_dev.irq,
-                     (unsigned)g_dev.device_id);
+        (void)printf("[virtio-serial] ready io=0x%04X irq=%u dev=%04X\n", (unsigned)g_dev.io_base,
+                     (unsigned)g_dev.irq, (unsigned)g_dev.device_id);
     } else {
         (void)printf("[virtio-serial] no device found\n");
     }

@@ -4,11 +4,11 @@
 #include <stdint.h>
 
 enum {
-    RTC_IPC_READ_REQ  = 0x820,
-    RTC_IPC_SET_REQ   = 0x821,
+    RTC_IPC_READ_REQ = 0x820,
+    RTC_IPC_SET_REQ = 0x821,
     RTC_IPC_READ_RESP = 0x8A0,
-    RTC_IPC_SET_RESP  = 0x8A1,
-    RTC_IPC_ERROR     = 0x8FF
+    RTC_IPC_SET_RESP = 0x8A1,
+    RTC_IPC_ERROR = 0x8FF
 };
 
 enum {
@@ -44,31 +44,22 @@ typedef struct {
     uint16_t year;
 } rtc_ipc_time_t;
 
-static inline int32_t
-rtc_ipc_pack_time_arg0(const rtc_ipc_time_t *t)
-{
+static inline int32_t rtc_ipc_pack_time_arg0(const rtc_ipc_time_t* t) {
     if (!t) {
         return 0;
     }
-    return (int32_t)(((uint32_t)t->second & 0xFFu) |
-                     (((uint32_t)t->minute & 0xFFu) << 8) |
-                     (((uint32_t)t->hour & 0xFFu) << 16) |
-                     (((uint32_t)t->day & 0xFFu) << 24));
+    return (int32_t)(((uint32_t)t->second & 0xFFu) | (((uint32_t)t->minute & 0xFFu) << 8) |
+                     (((uint32_t)t->hour & 0xFFu) << 16) | (((uint32_t)t->day & 0xFFu) << 24));
 }
 
-static inline int32_t
-rtc_ipc_pack_time_arg1(const rtc_ipc_time_t *t)
-{
+static inline int32_t rtc_ipc_pack_time_arg1(const rtc_ipc_time_t* t) {
     if (!t) {
         return 0;
     }
-    return (int32_t)(((uint32_t)t->month & 0xFFu) |
-                     (((uint32_t)t->year & 0xFFFFu) << 8));
+    return (int32_t)(((uint32_t)t->month & 0xFFu) | (((uint32_t)t->year & 0xFFFFu) << 8));
 }
 
-static inline void
-rtc_ipc_unpack_time(int32_t arg0, int32_t arg1, rtc_ipc_time_t *out)
-{
+static inline void rtc_ipc_unpack_time(int32_t arg0, int32_t arg1, rtc_ipc_time_t* out) {
     if (!out) {
         return;
     }

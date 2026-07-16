@@ -49,23 +49,19 @@
 #include "warp_ring3.h"
 
 #define PAGE_SIZE 4096ULL
-#define KBASE     0xFFFFFFFF80000000ULL
+#define KBASE 0xFFFFFFFF80000000ULL
 
 /* Kernel alias of a physical page. */
-static inline uint8_t *kptr(uint64_t phys)
-{
-    return (uint8_t *)(uintptr_t)(phys | KBASE);
+static inline uint8_t* kptr(uint64_t phys) {
+    return (uint8_t*)(uintptr_t)(phys | KBASE);
 }
 
 /* Map one 4 KiB page at user VA in the given root, with specified flags. */
-static int map_user_page(uint64_t root, uint64_t user_va, uint64_t phys, uint64_t flags)
-{
+static int map_user_page(uint64_t root, uint64_t user_va, uint64_t phys, uint64_t flags) {
     return paging_map_4k_in_root(root, user_va, phys, flags);
 }
 
-int
-warp_r3_setup(uint64_t *out_user_root, uint64_t *out_stack_phys)
-{
+int warp_r3_setup(uint64_t* out_user_root, uint64_t* out_stack_phys) {
     uint64_t root = 0;
 
     /* Create user address space (inherits kernel higher-half mappings). */
@@ -82,13 +78,14 @@ warp_r3_setup(uint64_t *out_user_root, uint64_t *out_stack_phys)
         return -1;
     }
 
-    uint8_t *hc = kptr(hc_phys);
+    uint8_t* hc = kptr(hc_phys);
     /* Zero the page first. */
-    for (uint32_t i = 0; i < PAGE_SIZE; i++) hc[i] = 0;
+    for (uint32_t i = 0; i < PAGE_SIZE; i++)
+        hc[i] = 0;
 
     /* Write 8-byte stubs. Stub for HC id N: */
     for (uint32_t n = 0; n < WARP_HC_MAX; n++) {
-        uint8_t *s = hc + n * 8;
+        uint8_t* s = hc + n * 8;
         uint32_t eax_val = WARP_HC_SYSCALL_BASE + n;
         /* mov eax, imm32 = b8 <4 bytes LE> */
         s[0] = 0xb8;
@@ -120,8 +117,9 @@ warp_r3_setup(uint64_t *out_user_root, uint64_t *out_stack_phys)
         return -1;
     }
 
-    uint8_t *rp = kptr(ret_phys);
-    for (uint32_t i = 0; i < PAGE_SIZE; i++) rp[i] = 0;
+    uint8_t* rp = kptr(ret_phys);
+    for (uint32_t i = 0; i < PAGE_SIZE; i++)
+        rp[i] = 0;
 
     /* Return trampoline code:
      *   push rax          50
@@ -146,7 +144,7 @@ warp_r3_setup(uint64_t *out_user_root, uint64_t *out_stack_phys)
      *   int 0x80
      *   ret
      */
-    uint8_t *mh = rp + 0x10;
+    uint8_t* mh = rp + 0x10;
     mh[0] = 0xb8;
     mh[1] = (uint8_t)(WASMOS_SYSCALL_WARP_MEMORY_HELPER & 0xFF);
     mh[2] = (uint8_t)((WASMOS_SYSCALL_WARP_MEMORY_HELPER >> 8) & 0xFF);
@@ -168,17 +166,25 @@ warp_r3_setup(uint64_t *out_user_root, uint64_t *out_stack_phys)
     /* TODO(smp-tlb): replace entry-stub diagnostics with a cleaner per-call
      * capture path once WARP ring-3 bring-up is stable again. */
     {
-        uint8_t *et = rp + 0x20;
+        uint8_t* et = rp + 0x20;
         uint64_t capture_va = WARP_R3_STACK_BASE + 64ULL;
-        uint64_t target_va  = WARP_R3_STACK_BASE + 56ULL;
+        uint64_t target_va = WARP_R3_STACK_BASE + 56ULL;
 
-        et[0] = 0x49; et[1] = 0xba;
-        *(uint64_t *)(void *)&et[2] = capture_va;
-        et[10] = 0x49; et[11] = 0x89; et[12] = 0x22;
-        et[13] = 0x49; et[14] = 0xbb;
-        *(uint64_t *)(void *)&et[15] = target_va;
-        et[23] = 0x4d; et[24] = 0x8b; et[25] = 0x1b;
-        et[26] = 0x41; et[27] = 0xff; et[28] = 0xe3;
+        et[0] = 0x49;
+        et[1] = 0xba;
+        *(uint64_t*)(void*)&et[2] = capture_va;
+        et[10] = 0x49;
+        et[11] = 0x89;
+        et[12] = 0x22;
+        et[13] = 0x49;
+        et[14] = 0xbb;
+        *(uint64_t*)(void*)&et[15] = target_va;
+        et[23] = 0x4d;
+        et[24] = 0x8b;
+        et[25] = 0x1b;
+        et[26] = 0x41;
+        et[27] = 0xff;
+        et[28] = 0xe3;
     }
 
     if (map_user_page(root, WARP_R3_RET_TRAMPOLINE, ret_phys, rx_flags) != 0) {
@@ -216,14 +222,12 @@ warp_r3_setup(uint64_t *out_user_root, uint64_t *out_stack_phys)
     /* Return the freshly-created root and stack to the caller, which stores them
      * per-process on the wasm_driver.  No global state is touched, so concurrent
      * setup/teardown on other CPUs cannot clobber this call. */
-    *out_user_root  = root;
+    *out_user_root = root;
     *out_stack_phys = stack_phys;
     return 0;
 }
 
-void
-warp_r3_teardown(uint64_t user_root, uint64_t stack_phys)
-{
+void warp_r3_teardown(uint64_t user_root, uint64_t stack_phys) {
     if (user_root) {
         paging_destroy_address_space(user_root);
     }

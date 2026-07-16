@@ -50,35 +50,27 @@ static uint8_t g_history_have_scratch = 0;
 static uint8_t g_esc_state = 0;
 static uint8_t g_vt_read_backoff = 0;
 static uint8_t g_fg_query_backoff = 0;
-static cli_env_var_t *g_env = 0;
+static cli_env_var_t* g_env = 0;
 static wasmos_script_state_t g_cli_script_state;
 
-static void
-set_cwd_root(void)
-{
+static void set_cwd_root(void) {
     g_cwd[0] = '/';
     g_cwd[1] = '\0';
 }
 
-static void
-cli_release_pending_spawn_bid(void)
-{
+static void cli_release_pending_spawn_bid(void) {
     if (g_pending_spawn_bid >= 0) {
         (void)wasmos_xfer_buffer_release(g_pending_spawn_bid);
         g_pending_spawn_bid = -1;
     }
 }
 
-static char
-to_lower(char c)
-{
+static char to_lower(char c) {
     return wasmos_sys_to_lower(c);
 }
 
 /* Case-insensitive exact match of g_line against s. */
-static int
-line_eq_ci(const char *s)
-{
+static int line_eq_ci(const char* s) {
     int32_t i = 0;
     if (!s) {
         return 0;
@@ -93,9 +85,7 @@ line_eq_ci(const char *s)
 }
 
 /* Case-insensitive prefix match of g_line against s. */
-static int
-line_starts_with_ci(const char *s)
-{
+static int line_starts_with_ci(const char* s) {
     int32_t i = 0;
     if (!s) {
         return 0;
@@ -109,9 +99,7 @@ line_starts_with_ci(const char *s)
     return 1;
 }
 
-static int
-str_ends_with(const char *s, const char *suffix)
-{
+static int str_ends_with(const char* s, const char* suffix) {
     int32_t slen = 0;
     int32_t xlen = 0;
     if (!s || !suffix) {
@@ -129,9 +117,7 @@ str_ends_with(const char *s, const char *suffix)
     return wasmos_sys_strcmp(s + (slen - xlen), suffix) == 0;
 }
 
-static int
-str_starts_with_ci(const char *s, const char *prefix)
-{
+static int str_starts_with_ci(const char* s, const char* prefix) {
     int32_t i = 0;
     if (!s || !prefix) {
         return 0;
@@ -145,12 +131,9 @@ str_starts_with_ci(const char *s, const char *prefix)
     return 1;
 }
 
-static void
-console_write(const char *s);
+static void console_write(const char* s);
 
-static int
-str_find_char(const char *s, char ch)
-{
+static int str_find_char(const char* s, char ch) {
     int32_t i = 0;
     if (!s) {
         return -1;
@@ -165,10 +148,8 @@ str_find_char(const char *s, char ch)
 }
 
 /* Find a shell variable by name; is_export selects the exported vs local list. */
-static cli_env_var_t *
-cli_env_find(const char *name, int is_export)
-{
-    cli_env_var_t *it = g_env;
+static cli_env_var_t* cli_env_find(const char* name, int is_export) {
+    cli_env_var_t* it = g_env;
     if (!name || !name[0]) {
         return 0;
     }
@@ -181,10 +162,8 @@ cli_env_find(const char *name, int is_export)
     return 0;
 }
 
-static const char *
-cli_env_get(const char *name)
-{
-    cli_env_var_t *var = cli_env_find(name, 0);
+static const char* cli_env_get(const char* name) {
+    cli_env_var_t* var = cli_env_find(name, 0);
     if (var) {
         return var->value;
     }
@@ -192,12 +171,10 @@ cli_env_get(const char *name)
     return var ? var->value : 0;
 }
 
-static void
-cli_env_clear(void)
-{
-    cli_env_var_t *it = g_env;
+static void cli_env_clear(void) {
+    cli_env_var_t* it = g_env;
     while (it) {
-        cli_env_var_t *next = it->next;
+        cli_env_var_t* next = it->next;
         free(it);
         it = next;
     }
@@ -205,11 +182,9 @@ cli_env_clear(void)
 }
 
 /* Create or update a shell variable; passing NULL/empty value removes it. */
-static int
-cli_env_set(const char *name, const char *value, int is_export)
-{
-    cli_env_var_t *it = 0;
-    cli_env_var_t *prev = 0;
+static int cli_env_set(const char* name, const char* value, int is_export) {
+    cli_env_var_t* it = 0;
+    cli_env_var_t* prev = 0;
     if (!name || !name[0]) {
         return -1;
     }
@@ -236,7 +211,7 @@ cli_env_set(const char *name, const char *value, int is_export)
         return -1;
     }
     if (!it) {
-        it = (cli_env_var_t *)malloc(sizeof(*it));
+        it = (cli_env_var_t*)malloc(sizeof(*it));
         if (!it) {
             return -1;
         }
@@ -251,18 +226,15 @@ cli_env_set(const char *name, const char *value, int is_export)
     return 0;
 }
 
-static void
-cli_env_init_defaults(void)
-{
+static void cli_env_init_defaults(void) {
     cli_env_clear();
-    (void)cli_env_set("PATH", "/boot/apps:/boot/system/services:/boot/system/drivers:/boot/system/utils", 1);
+    (void)cli_env_set(
+        "PATH", "/boot/apps:/boot/system/services:/boot/system/drivers:/boot/system/utils", 1);
     (void)cli_env_set("?", "0", 0);
 }
 
-static int
-cli_parse_name_value(const char *line, char *name, int name_cap,
-                     char *value, int val_cap, int32_t *out_nlen, int32_t *out_vlen)
-{
+static int cli_parse_name_value(const char* line, char* name, int name_cap, char* value,
+                                int val_cap, int32_t* out_nlen, int32_t* out_vlen) {
     int32_t start = 0;
     int32_t eq = -1;
     int32_t nlen = 0;
@@ -278,11 +250,8 @@ cli_parse_name_value(const char *line, char *name, int name_cap,
         return -1;
     }
     nlen = eq;
-    while (nlen > 0 &&
-           (line[start + nlen - 1] == ' ' ||
-            line[start + nlen - 1] == '\t' ||
-            line[start + nlen - 1] == '\r' ||
-            line[start + nlen - 1] == '\n')) {
+    while (nlen > 0 && (line[start + nlen - 1] == ' ' || line[start + nlen - 1] == '\t' ||
+                        line[start + nlen - 1] == '\r' || line[start + nlen - 1] == '\n')) {
         nlen--;
     }
     if (nlen <= 0 || nlen >= name_cap) {
@@ -302,11 +271,8 @@ cli_parse_name_value(const char *line, char *name, int name_cap,
             vlen++;
         }
         value[vlen] = '\0';
-        while (vlen > 0 &&
-               (value[vlen - 1] == ' ' ||
-                value[vlen - 1] == '\t' ||
-                value[vlen - 1] == '\r' ||
-                value[vlen - 1] == '\n')) {
+        while (vlen > 0 && (value[vlen - 1] == ' ' || value[vlen - 1] == '\t' ||
+                            value[vlen - 1] == '\r' || value[vlen - 1] == '\n')) {
             value[vlen - 1] = '\0';
             vlen--;
         }
@@ -320,14 +286,13 @@ cli_parse_name_value(const char *line, char *name, int name_cap,
     return 0;
 }
 
-static int
-cli_env_apply_export_line(const char *line)
-{
+static int cli_env_apply_export_line(const char* line) {
     char name[CLI_ENV_NAME_MAX];
     char value[CLI_ENV_VALUE_MAX];
     int32_t nlen = 0;
     int32_t vlen = 0;
-    if (cli_parse_name_value(line, name, (int)sizeof(name), value, (int)sizeof(value), &nlen, &vlen) != 0) {
+    if (cli_parse_name_value(line, name, (int)sizeof(name), value, (int)sizeof(value), &nlen,
+                             &vlen) != 0) {
         return -1;
     }
     (void)nlen;
@@ -335,9 +300,7 @@ cli_env_apply_export_line(const char *line)
     return cli_env_set(name, value, 1);
 }
 
-static int
-cli_env_set_local_line(const char *line)
-{
+static int cli_env_set_local_line(const char* line) {
     char name[CLI_ENV_NAME_MAX];
     char value[CLI_ENV_VALUE_MAX];
     if (cli_parse_name_value(line, name, (int)sizeof(name), value, (int)sizeof(value), 0, 0) != 0) {
@@ -346,9 +309,7 @@ cli_env_set_local_line(const char *line)
     return cli_env_set(name, value, 0);
 }
 
-static int
-cli_echo_env_expr(const char *expr)
-{
+static int cli_echo_env_expr(const char* expr) {
     char out[512];
     char expanded_expr[512];
     uint32_t expanded_len = 0;
@@ -364,7 +325,7 @@ cli_echo_env_expr(const char *expr)
     while (expr[i] && expanded_len + 1u < sizeof(expanded_expr)) {
         if (expr[i] == '$' && expr[i + 1] == '{') {
             char name[CLI_ENV_NAME_MAX];
-            const char *val = 0;
+            const char* val = 0;
             int32_t nlen = 0;
             int32_t j = i + 2;
             while (expr[j] && expr[j] != '}' && nlen + 1 < (int32_t)sizeof(name)) {
@@ -375,7 +336,8 @@ cli_echo_env_expr(const char *expr)
                 if (nlen > 0) {
                     val = cli_env_get(name);
                     if (val) {
-                        for (int32_t vi = 0; val[vi] && expanded_len + 1u < sizeof(expanded_expr); ++vi) {
+                        for (int32_t vi = 0; val[vi] && expanded_len + 1u < sizeof(expanded_expr);
+                             ++vi) {
                             expanded_expr[expanded_len++] = val[vi];
                         }
                     }
@@ -505,7 +467,7 @@ cli_echo_env_expr(const char *expr)
             if (!in_single && c == '$' && expr[i + 1] == '{') {
                 char name[CLI_ENV_NAME_MAX];
                 int32_t nlen = 0;
-                const char *val = 0;
+                const char* val = 0;
                 i += 2;
                 while (expr[i] && expr[i] != '}' && nlen + 1 < (int32_t)sizeof(name)) {
                     name[nlen++] = expr[i++];
@@ -557,11 +519,9 @@ cli_echo_env_expr(const char *expr)
 
 /* Walk PATH variable segments and probe each <dir>/<prog> via fopen;
  * writes the first match to resolved and returns 0, or -1 if not found. */
-static int
-cli_resolve_path_from_pathvar(const char *prog, char *resolved, uint32_t resolved_len)
-{
+static int cli_resolve_path_from_pathvar(const char* prog, char* resolved, uint32_t resolved_len) {
     char candidate[96];
-    const char *path = cli_env_get("PATH");
+    const char* path = cli_env_get("PATH");
     int32_t i = 0;
     int32_t seg_start = 0;
     if (!path || !prog || !prog[0]) {
@@ -582,7 +542,7 @@ cli_resolve_path_from_pathvar(const char *prog, char *resolved, uint32_t resolve
                     candidate[pos++] = prog[j];
                 }
                 candidate[pos] = '\0';
-                FILE *f = fopen(candidate, "r");
+                FILE* f = fopen(candidate, "r");
                 if (f) {
                     (void)fclose(f);
                     (void)snprintf(resolved, resolved_len, "%s", candidate);
@@ -604,9 +564,7 @@ cli_resolve_path_from_pathvar(const char *prog, char *resolved, uint32_t resolve
  * the active TTY; otherwise falls back to serial via putsn.
  * g_vt_switch_generation is a monotonic counter that the VT service uses to
  * drop writes from stale writers (e.g. a CLI registered on a previous focus). */
-static void
-console_write(const char *s)
-{
+static void console_write(const char* s) {
     if (!s) {
         return;
     }
@@ -615,8 +573,7 @@ console_write(const char *s)
         return;
     }
     int use_vt = (g_vt_endpoint >= 0 && g_reply_endpoint >= 0 && g_home_tty > 0 &&
-        g_vt_client_endpoint >= 0 &&
-        g_last_seen_active_tty == g_home_tty);
+                  g_vt_client_endpoint >= 0 && g_last_seen_active_tty == g_home_tty);
     if (use_vt) {
         uint32_t pos = 0;
         while (pos < len) {
@@ -626,15 +583,9 @@ console_write(const char *s)
                 args[i] = (int32_t)(uint8_t)s[pos];
             }
             args[0] |= (count << 24);
-            (void)wasmos_sys_ipc_send_retry(g_vt_endpoint,
-                                            g_vt_client_endpoint,
-                                            VT_IPC_WRITE_REQ,
-                                            (int32_t)g_vt_switch_generation,
-                                            args[0],
-                                            args[1],
-                                            args[2],
-                                            args[3],
-                                            CLI_VT_SEND_RETRIES);
+            (void)wasmos_sys_ipc_send_retry(g_vt_endpoint, g_vt_client_endpoint, VT_IPC_WRITE_REQ,
+                                            (int32_t)g_vt_switch_generation, args[0], args[1],
+                                            args[2], args[3], CLI_VT_SEND_RETRIES);
         }
     }
     putsn(s, len);
@@ -642,9 +593,7 @@ console_write(const char *s)
 
 /* Ask the VT service for the current active TTY index and its switch generation.
  * Updates g_vt_switch_generation from the response; returns TTY index or -1. */
-static int32_t
-cli_query_active_tty(uint32_t *out_generation)
-{
+static int32_t cli_query_active_tty(uint32_t* out_generation) {
     if (g_vt_endpoint < 0 || g_vt_client_endpoint < 0) {
         if (out_generation) {
             *out_generation = g_vt_switch_generation;
@@ -652,11 +601,8 @@ cli_query_active_tty(uint32_t *out_generation)
         return g_home_tty;
     }
     int32_t req_id = g_request_id++;
-    if (wasmos_ipc_send(g_vt_endpoint,
-                        g_vt_client_endpoint,
-                        VT_IPC_GET_ACTIVE_TTY,
-                        req_id,
-                        0, 0, 0, 0) != 0) {
+    if (wasmos_ipc_send(g_vt_endpoint, g_vt_client_endpoint, VT_IPC_GET_ACTIVE_TTY, req_id, 0, 0, 0,
+                        0) != 0) {
         return -1;
     }
 
@@ -690,9 +636,7 @@ cli_query_active_tty(uint32_t *out_generation)
     return -1;
 }
 
-static int
-cli_switch_tty(int32_t tty, int wait_resp, int32_t *out_error)
-{
+static int cli_switch_tty(int32_t tty, int wait_resp, int32_t* out_error) {
     if (out_error) {
         *out_error = 0;
     }
@@ -704,15 +648,9 @@ cli_switch_tty(int32_t tty, int wait_resp, int32_t *out_error)
     }
 
     int32_t req_id = wait_resp ? g_request_id++ : 0;
-    int32_t send_rc = wasmos_sys_ipc_send_retry(g_vt_endpoint,
-                                                g_vt_client_endpoint,
-                                                VT_IPC_SWITCH_TTY,
-                                                req_id,
-                                                tty,
-                                                0,
-                                                0,
-                                                0,
-                                                CLI_VT_SEND_RETRIES);
+    int32_t send_rc =
+        wasmos_sys_ipc_send_retry(g_vt_endpoint, g_vt_client_endpoint, VT_IPC_SWITCH_TTY, req_id,
+                                  tty, 0, 0, 0, CLI_VT_SEND_RETRIES);
     if (send_rc != 0) {
         if (out_error) {
             *out_error = send_rc;
@@ -760,9 +698,7 @@ cli_switch_tty(int32_t tty, int wait_resp, int32_t *out_error)
     return -1;
 }
 
-static int
-cli_is_foreground(void)
-{
+static int cli_is_foreground(void) {
     if (g_vt_endpoint < 0 || g_home_tty <= 0) {
         return 1;
     }
@@ -782,22 +718,14 @@ cli_is_foreground(void)
     return g_last_seen_active_tty == g_home_tty;
 }
 
-static int
-cli_register_vt_writer(void)
-{
+static int cli_register_vt_writer(void) {
     if (g_vt_endpoint < 0 || g_vt_client_endpoint < 0 || g_home_tty < 0) {
         return -1;
     }
     int32_t req_id = g_request_id++;
-    int32_t send_rc = wasmos_sys_ipc_send_retry(g_vt_endpoint,
-                                                g_vt_client_endpoint,
-                                                VT_IPC_REGISTER_WRITER,
-                                                req_id,
-                                                g_home_tty,
-                                                0,
-                                                0,
-                                                0,
-                                                CLI_VT_SEND_RETRIES);
+    int32_t send_rc =
+        wasmos_sys_ipc_send_retry(g_vt_endpoint, g_vt_client_endpoint, VT_IPC_REGISTER_WRITER,
+                                  req_id, g_home_tty, 0, 0, 0, CLI_VT_SEND_RETRIES);
     if (send_rc != 0) {
         return -1;
     }
@@ -828,17 +756,12 @@ cli_register_vt_writer(void)
     return -1;
 }
 
-static int
-cli_set_vt_mode(uint32_t mode)
-{
+static int cli_set_vt_mode(uint32_t mode) {
     if (g_vt_endpoint < 0 || g_vt_client_endpoint < 0) {
         return -1;
     }
     int32_t req_id = g_request_id++;
-    if (wasmos_ipc_send(g_vt_endpoint,
-                        g_vt_client_endpoint,
-                        VT_IPC_SET_MODE_REQ,
-                        req_id,
+    if (wasmos_ipc_send(g_vt_endpoint, g_vt_client_endpoint, VT_IPC_SET_MODE_REQ, req_id,
                         (int32_t)mode, 0, 0, 0) != 0) {
         return -1;
     }
@@ -862,9 +785,7 @@ cli_set_vt_mode(uint32_t mode)
     return -1;
 }
 
-static int32_t
-cli_vt_read_char(char *out_ch)
-{
+static int32_t cli_vt_read_char(char* out_ch) {
     if (!out_ch) {
         return -1;
     }
@@ -873,15 +794,9 @@ cli_vt_read_char(char *out_ch)
     }
 
     int32_t req_id = g_request_id++;
-    int32_t send_rc = wasmos_sys_ipc_send_retry(g_vt_endpoint,
-                                                g_vt_client_endpoint,
-                                                VT_IPC_READ_REQ,
-                                                req_id,
-                                                g_home_tty,
-                                                0,
-                                                0,
-                                                0,
-                                                CLI_VT_SEND_RETRIES);
+    int32_t send_rc =
+        wasmos_sys_ipc_send_retry(g_vt_endpoint, g_vt_client_endpoint, VT_IPC_READ_REQ, req_id,
+                                  g_home_tty, 0, 0, 0, CLI_VT_SEND_RETRIES);
     if (send_rc != 0) {
         return -1;
     }
@@ -914,9 +829,7 @@ cli_vt_read_char(char *out_ch)
     return 0;
 }
 
-static void
-console_prompt(void)
-{
+static void console_prompt(void) {
     /* Build the full prompt in one buffer so it is emitted as a single
      * console_write call.  Multiple separate calls release the serial spinlock
      * between them; another process can log a '\n' in the gap, causing a
@@ -933,7 +846,7 @@ console_prompt(void)
         }
         buf[pos++] = ' ';
     }
-    const char *suffix = "wamos> ";
+    const char* suffix = "wamos> ";
     for (int32_t i = 0; suffix[i]; ++i) {
         buf[pos++] = suffix[i];
     }
@@ -941,9 +854,7 @@ console_prompt(void)
     console_write(buf);
 }
 
-static void
-console_write_num(const char *label, int32_t value)
-{
+static void console_write_num(const char* label, int32_t value) {
     char buf[32];
     int pos = 0;
     if (label) {
@@ -974,9 +885,7 @@ console_write_num(const char *label, int32_t value)
     console_write(buf);
 }
 
-static void
-console_write_u32(uint32_t value)
-{
+static void console_write_u32(uint32_t value) {
     char buf[16];
     int pos = 0;
     if (value == 0) {
@@ -997,9 +906,7 @@ console_write_u32(uint32_t value)
     console_write(buf);
 }
 
-static int
-cli_bytes_equal(const char *a, const char *b, int32_t len)
-{
+static int cli_bytes_equal(const char* a, const char* b, int32_t len) {
     if (!a || !b || len < 0) {
         return 0;
     }
@@ -1011,9 +918,7 @@ cli_bytes_equal(const char *a, const char *b, int32_t len)
     return 1;
 }
 
-static void
-cli_replace_line(const char *line, int32_t len)
-{
+static void cli_replace_line(const char* line, int32_t len) {
     if (!line || len < 0) {
         return;
     }
@@ -1026,21 +931,18 @@ cli_replace_line(const char *line, int32_t len)
     }
     for (int32_t i = 0; i < len; ++i) {
         g_line[i] = line[i];
-        char echo_buf[2] = { line[i], '\0' };
+        char echo_buf[2] = {line[i], '\0'};
         console_write(echo_buf);
     }
     g_line_len = len;
 }
 
-static void
-cli_history_store_current(void)
-{
+static void cli_history_store_current(void) {
     if (g_line_len <= 0) {
         return;
     }
     uint8_t newest = (uint8_t)((g_history_head + CLI_HISTORY_MAX - 1u) % CLI_HISTORY_MAX);
-    if (g_history_count > 0 &&
-        g_history_len[newest] == (uint8_t)g_line_len &&
+    if (g_history_count > 0 && g_history_len[newest] == (uint8_t)g_line_len &&
         cli_bytes_equal(g_history[newest], g_line, g_line_len)) {
         return;
     }
@@ -1056,17 +958,13 @@ cli_history_store_current(void)
     }
 }
 
-static void
-cli_history_reset_nav(void)
-{
+static void cli_history_reset_nav(void) {
     g_history_nav = -1;
     g_history_have_scratch = 0;
     g_history_scratch_len = 0;
 }
 
-static void
-cli_history_nav(int older)
-{
+static void cli_history_nav(int older) {
     if (g_history_count == 0) {
         return;
     }
@@ -1099,15 +997,13 @@ cli_history_nav(int older)
         g_history_nav--;
     }
 
-    uint8_t slot = (uint8_t)((g_history_head + CLI_HISTORY_MAX - 1u -
-                              (uint8_t)g_history_nav) % CLI_HISTORY_MAX);
+    uint8_t slot = (uint8_t)((g_history_head + CLI_HISTORY_MAX - 1u - (uint8_t)g_history_nav) %
+                             CLI_HISTORY_MAX);
     cli_replace_line(g_history[slot], g_history_len[slot]);
 }
 
-static void
-cli_pack_name(const char *name, uint32_t out[4])
-{
-    int32_t packed[4] = { 0, 0, 0, 0 };
+static void cli_pack_name(const char* name, uint32_t out[4]) {
+    int32_t packed[4] = {0, 0, 0, 0};
     if (!out) {
         return;
     }
@@ -1118,23 +1014,15 @@ cli_pack_name(const char *name, uint32_t out[4])
     out[3] = (uint32_t)packed[3];
 }
 
-static int
-cli_send_fs(int32_t type, uint32_t arg0, uint32_t arg1, uint32_t arg2, uint32_t arg3)
-{
+static int cli_send_fs(int32_t type, uint32_t arg0, uint32_t arg1, uint32_t arg2, uint32_t arg3) {
     if (g_fs_endpoint < 0 || g_reply_endpoint < 0) {
         return -1;
     }
     /* The CLI tracks one outstanding request at a time, which keeps the state
      * machine small and makes the Python QEMU tests deterministic. */
     int32_t req_id = g_request_id++;
-    if (wasmos_sys_ipc_send_retry(g_fs_endpoint,
-                                  g_reply_endpoint,
-                                  type,
-                                  req_id,
-                                  (int32_t)arg0,
-                                  (int32_t)arg1,
-                                  (int32_t)arg2,
-                                  (int32_t)arg3,
+    if (wasmos_sys_ipc_send_retry(g_fs_endpoint, g_reply_endpoint, type, req_id, (int32_t)arg0,
+                                  (int32_t)arg1, (int32_t)arg2, (int32_t)arg3,
                                   CLI_REQ_SEND_RETRIES) != 0) {
         return -1;
     }
@@ -1142,21 +1030,13 @@ cli_send_fs(int32_t type, uint32_t arg0, uint32_t arg1, uint32_t arg2, uint32_t 
     return 0;
 }
 
-static int
-cli_send_proc(int32_t type, uint32_t arg0, uint32_t arg1, uint32_t arg2, uint32_t arg3)
-{
+static int cli_send_proc(int32_t type, uint32_t arg0, uint32_t arg1, uint32_t arg2, uint32_t arg3) {
     if (g_proc_endpoint < 0 || g_reply_endpoint < 0) {
         return -1;
     }
     int32_t req_id = g_request_id++;
-    if (wasmos_sys_ipc_send_retry(g_proc_endpoint,
-                                  g_reply_endpoint,
-                                  type,
-                                  req_id,
-                                  (int32_t)arg0,
-                                  (int32_t)arg1,
-                                  (int32_t)arg2,
-                                  (int32_t)arg3,
+    if (wasmos_sys_ipc_send_retry(g_proc_endpoint, g_reply_endpoint, type, req_id, (int32_t)arg0,
+                                  (int32_t)arg1, (int32_t)arg2, (int32_t)arg3,
                                   CLI_REQ_SEND_RETRIES) != 0) {
         return -1;
     }
@@ -1164,9 +1044,7 @@ cli_send_proc(int32_t type, uint32_t arg0, uint32_t arg1, uint32_t arg2, uint32_
     return 0;
 }
 
-static void
-cli_show_mounts(void)
-{
+static void cli_show_mounts(void) {
     char buf[384];
     int32_t req_id = 0;
     int32_t resp_type = 0;
@@ -1191,7 +1069,8 @@ cli_show_mounts(void)
         return;
     }
     req_id = g_request_id++;
-    if (wasmos_ipc_send(g_fs_endpoint, g_reply_endpoint, FSMGR_IPC_QUERY_MOUNTS_REQ, req_id, 0, 0, bid, b1) != 0 ||
+    if (wasmos_ipc_send(g_fs_endpoint, g_reply_endpoint, FSMGR_IPC_QUERY_MOUNTS_REQ, req_id, 0, 0,
+                        bid, b1) != 0 ||
         wasmos_ipc_select_one(g_reply_endpoint) < 0 ||
         wasmos_ipc_last_field(WASMOS_IPC_FIELD_REQUEST_ID) != req_id) {
         (void)wasmos_xfer_buffer_release(bid);
@@ -1220,9 +1099,7 @@ cli_show_mounts(void)
     console_write(buf);
 }
 
-static void
-set_cwd_path(const char *path)
-{
+static void set_cwd_path(const char* path) {
     if (!path || !path[0] || wasmos_sys_streq(path, ".")) {
         return;
     }
@@ -1300,9 +1177,7 @@ set_cwd_path(const char *path)
     g_cwd[k] = '\0';
 }
 
-static void
-cli_trim_name(char *name)
-{
+static void cli_trim_name(char* name) {
     if (!name) {
         return;
     }
@@ -1316,9 +1191,7 @@ cli_trim_name(char *name)
     }
 }
 
-static void
-cli_extract_exec_path(const char *input, char *out, uint32_t out_len)
-{
+static void cli_extract_exec_path(const char* input, char* out, uint32_t out_len) {
     uint32_t start = 0;
     uint32_t end = 0;
     if (!input || !out || out_len == 0) {
@@ -1353,9 +1226,7 @@ cli_extract_exec_path(const char *input, char *out, uint32_t out_len)
     }
 }
 
-static int
-cli_resolve_exec_path(const char *input, char *resolved, uint32_t resolved_len)
-{
+static int cli_resolve_exec_path(const char* input, char* resolved, uint32_t resolved_len) {
     int n = 0;
     char path[96];
     path[0] = '\0';
@@ -1375,7 +1246,7 @@ cli_resolve_exec_path(const char *input, char *resolved, uint32_t resolved_len)
     } else if (str_find_char(path, '/') < 0) {
         if (cli_resolve_path_from_pathvar(path, resolved, resolved_len) != 0) {
             char candidate[96];
-            FILE *f = 0;
+            FILE* f = 0;
             if (g_cwd[0] == '/' && g_cwd[1] == '\0') {
                 n = snprintf(candidate, sizeof(candidate), "/%s", path);
             } else {
@@ -1414,12 +1285,10 @@ cli_resolve_exec_path(const char *input, char *resolved, uint32_t resolved_len)
     return 0;
 }
 
-static int
-cli_spawn_exec_path(const char *input, int32_t *out_pid)
-{
+static int cli_spawn_exec_path(const char* input, int32_t* out_pid) {
     char resolved[96];
     uint32_t path_len = 0;
-    const char *args = 0;
+    const char* args = 0;
     uint32_t args_len = 0;
     uint32_t write_off = 0;
     int32_t fs_buf_size = 0;
@@ -1449,8 +1318,8 @@ cli_spawn_exec_path(const char *input, int32_t *out_pid)
     }
     write_off = path_len + 1u;
     if ((int32_t)path_len >= fs_buf_size ||
-        (args_len > 0u && ((int32_t)write_off >= fs_buf_size ||
-                           (int32_t)(write_off + args_len) > fs_buf_size))) {
+        (args_len > 0u &&
+         ((int32_t)write_off >= fs_buf_size || (int32_t)(write_off + args_len) > fs_buf_size))) {
         return -1;
     }
     /* Owner-push spawn: PM reads the caller's buffer via ownership (no grant). */
@@ -1462,13 +1331,13 @@ cli_spawn_exec_path(const char *input, int32_t *out_pid)
         (void)wasmos_xfer_buffer_release(bid);
         return -1;
     }
-    if (args_len > 0u &&
-        wasmos_xfer_buffer_write(bid, (int32_t)(uintptr_t)args, (int32_t)args_len, (int32_t)write_off) != 0) {
+    if (args_len > 0u && wasmos_xfer_buffer_write(bid, (int32_t)(uintptr_t)args, (int32_t)args_len,
+                                                  (int32_t)write_off) != 0) {
         (void)wasmos_xfer_buffer_release(bid);
         return -1;
     }
-    if (cli_send_proc(PROC_IPC_SPAWN_PATH, 0,
-                      ((uint32_t)bid << 12) | (path_len & 0xFFFu), args_len, 0) != 0) {
+    if (cli_send_proc(PROC_IPC_SPAWN_PATH, 0, ((uint32_t)bid << 12) | (path_len & 0xFFFu), args_len,
+                      0) != 0) {
         (void)wasmos_xfer_buffer_release(bid);
         return -1;
     }
@@ -1487,9 +1356,7 @@ cli_spawn_exec_path(const char *input, int32_t *out_pid)
     return (*out_pid > 0) ? 0 : -1;
 }
 
-static int
-cli_wait_for_pid_exit(int32_t pid, int32_t *out_exit_status)
-{
+static int cli_wait_for_pid_exit(int32_t pid, int32_t* out_exit_status) {
     if (pid <= 0 || !out_exit_status) {
         return -1;
     }
@@ -1513,9 +1380,7 @@ cli_wait_for_pid_exit(int32_t pid, int32_t *out_exit_status)
     return 0;
 }
 
-static int
-cli_script_on_start(void *user, const char *path)
-{
+static int cli_script_on_start(void* user, const char* path) {
     (void)user;
     int32_t pid = -1;
     if (cli_spawn_exec_path(path, &pid) != 0) {
@@ -1524,18 +1389,15 @@ cli_script_on_start(void *user, const char *path)
     return 0;
 }
 
-static int
-cli_script_on_spawn(void *user, const char *path)
-{
+static int cli_script_on_spawn(void* user, const char* path) {
     (void)user;
     int32_t pid = -1;
     (void)cli_spawn_exec_path(path, &pid);
     return 0;
 }
 
-static int
-cli_script_on_exec(void *user, const char *path, const char *args, int32_t *out_exit_code)
-{
+static int cli_script_on_exec(void* user, const char* path, const char* args,
+                              int32_t* out_exit_code) {
     (void)user;
     int32_t pid = -1;
     char input[192];
@@ -1568,16 +1430,11 @@ cli_script_on_exec(void *user, const char *path, const char *args, int32_t *out_
     return 0;
 }
 
-static int
-cli_script_on_wait_svc(void *user, const char *name)
-{
+static int cli_script_on_wait_svc(void* user, const char* name) {
     (void)user;
     for (int i = 0; i < 256; i++) {
-        int32_t ep = wasmos_sys_svc_lookup_retry(g_proc_endpoint,
-                                                 g_reply_endpoint,
-                                                 name,
-                                                 g_request_id,
-                                                 1);
+        int32_t ep =
+            wasmos_sys_svc_lookup_retry(g_proc_endpoint, g_reply_endpoint, name, g_request_id, 1);
         g_request_id++;
         if (ep >= 0) {
             return 0;
@@ -1587,17 +1444,13 @@ cli_script_on_wait_svc(void *user, const char *name)
     return 0;
 }
 
-static void
-cli_script_on_echo(void *user, const char *text)
-{
+static void cli_script_on_echo(void* user, const char* text) {
     (void)user;
     console_write(text);
     console_write("\n");
 }
 
-static void
-cli_script_on_echo_ex(void *user, const char *text, int newline)
-{
+static void cli_script_on_echo_ex(void* user, const char* text, int newline) {
     (void)user;
     console_write(text);
     if (newline) {
@@ -1605,19 +1458,16 @@ cli_script_on_echo_ex(void *user, const char *text, int newline)
     }
 }
 
-static int
-cli_script_on_export(void *user, const char *name, const char *value)
-{
+static int cli_script_on_export(void* user, const char* name, const char* value) {
     (void)user;
     (void)name;
     (void)value;
     return 0;
 }
 
-static int
-cli_script_scope_put(wasmos_script_env_node_t **table, const char *name, const char *value)
-{
-    wasmos_script_env_node_t *it = 0;
+static int cli_script_scope_put(wasmos_script_env_node_t** table, const char* name,
+                                const char* value) {
+    wasmos_script_env_node_t* it = 0;
     if (!table || !name || !name[0] || !value || !value[0]) {
         return -1;
     }
@@ -1627,7 +1477,7 @@ cli_script_scope_put(wasmos_script_env_node_t **table, const char *name, const c
             return 0;
         }
     }
-    it = (wasmos_script_env_node_t *)malloc(sizeof(*it));
+    it = (wasmos_script_env_node_t*)malloc(sizeof(*it));
     if (!it) {
         return -1;
     }
@@ -1639,15 +1489,13 @@ cli_script_scope_put(wasmos_script_env_node_t **table, const char *name, const c
     return 0;
 }
 
-static void
-cli_scope_to_script(wasmos_script_state_t *state, int include_locals)
-{
+static void cli_scope_to_script(wasmos_script_state_t* state, int include_locals) {
     if (!state) {
         return;
     }
     wasmos_script_state_dispose(state);
     wasmos_script_state_init(state);
-    for (cli_env_var_t *it = g_env; it; it = it->next) {
+    for (cli_env_var_t* it = g_env; it; it = it->next) {
         if (it->is_export) {
             (void)cli_script_scope_put(&state->exports, it->name, it->value);
         } else if (include_locals) {
@@ -1656,37 +1504,33 @@ cli_scope_to_script(wasmos_script_state_t *state, int include_locals)
     }
 }
 
-static void
-cli_scope_from_script(const wasmos_script_state_t *state)
-{
+static void cli_scope_from_script(const wasmos_script_state_t* state) {
     if (!state) {
         return;
     }
     cli_env_clear();
-    for (const wasmos_script_env_node_t *it = state->exports; it; it = it->next) {
+    for (const wasmos_script_env_node_t* it = state->exports; it; it = it->next) {
         (void)cli_env_set(it->pair.name, it->pair.value, 1);
     }
-    for (const wasmos_script_env_node_t *it = state->locals; it; it = it->next) {
+    for (const wasmos_script_env_node_t* it = state->locals; it; it = it->next) {
         (void)cli_env_set(it->pair.name, it->pair.value, 0);
     }
 }
 
-static int
-cli_run_script(const char *script_path, int source_mode)
-{
+static int cli_run_script(const char* script_path, int source_mode) {
     if (!script_path || script_path[0] == '\0') {
         return -1;
     }
     cli_scope_to_script(&g_cli_script_state, source_mode ? 1 : 0);
-    wasmos_script_ops_t ops = { 0 };
-    ops.on_start    = cli_script_on_start;
-    ops.on_spawn    = cli_script_on_spawn;
-    ops.on_exec     = cli_script_on_exec;
+    wasmos_script_ops_t ops = {0};
+    ops.on_start = cli_script_on_start;
+    ops.on_spawn = cli_script_on_spawn;
+    ops.on_exec = cli_script_on_exec;
     ops.on_wait_svc = cli_script_on_wait_svc;
-    ops.on_echo     = cli_script_on_echo;
-    ops.on_echo_ex  = cli_script_on_echo_ex;
-    ops.on_export   = cli_script_on_export;
-    ops.user        = 0;
+    ops.on_echo = cli_script_on_echo;
+    ops.on_echo_ex = cli_script_on_echo_ex;
+    ops.on_export = cli_script_on_export;
+    ops.user = 0;
     if (wasmos_script_run(&g_cli_script_state, &ops, script_path) != 0) {
         return -1;
     }
@@ -1696,15 +1540,15 @@ cli_run_script(const char *script_path, int source_mode)
     return 0;
 }
 
-static int
-cli_handle_line(void)
-{
+static int cli_handle_line(void) {
     g_line[g_line_len] = '\0';
     if (g_line_len == 0) {
         return 0;
     }
     if (line_eq_ci("help")) {
-        console_write("commands: help, kmaps [all], ls, cd <path>, mount, script <file>, source <file>, spawn <cmd>, export VAR=<value>, set VAR=<value>, echo [-n] [-e|-E] [--] [text|${VAR}...], tty <0-3>, halt, reboot\n");
+        console_write("commands: help, kmaps [all], ls, cd <path>, mount, script <file>, source "
+                      "<file>, spawn <cmd>, export VAR=<value>, set VAR=<value>, echo [-n] [-e|-E] "
+                      "[--] [text|${VAR}...], tty <0-3>, halt, reboot\n");
         return 0;
     }
     if (line_eq_ci("mount")) {
@@ -1755,7 +1599,7 @@ cli_handle_line(void)
         return 0;
     }
     if (g_line_len > 3 && line_starts_with_ci("cd ")) {
-        const char *path = &g_line[3];
+        const char* path = &g_line[3];
         if (wasmos_sys_streq(path, "/")) {
             set_cwd_root();
             if (cli_send_fs(FS_IPC_CHDIR_REQ, 0, 0, 0, 0) != 0) {
@@ -1792,7 +1636,7 @@ cli_handle_line(void)
         return 1;
     }
     if (g_line_len > 7 && line_starts_with_ci("script ")) {
-        const char *path = &g_line[7];
+        const char* path = &g_line[7];
         while (*path == ' ' || *path == '\t') {
             path++;
         }
@@ -1808,7 +1652,7 @@ cli_handle_line(void)
     }
     if ((g_line_len > 7 && line_starts_with_ci("source ")) ||
         (g_line_len > 2 && g_line[0] == '.' && g_line[1] == ' ')) {
-        const char *path = line_starts_with_ci("source ") ? &g_line[7] : &g_line[2];
+        const char* path = line_starts_with_ci("source ") ? &g_line[7] : &g_line[2];
         while (*path == ' ' || *path == '\t') {
             path++;
         }
@@ -1857,17 +1701,18 @@ cli_handle_line(void)
         return 1;
     }
     if (g_line_len > 6 && line_starts_with_ci("spawn ")) {
-        const char *spawn_input = &g_line[6];
+        const char* spawn_input = &g_line[6];
         char resolved[96];
         uint32_t path_len = 0;
-        const char *args = 0;
+        const char* args = 0;
         uint32_t args_len = 0;
         uint32_t write_off = 0;
         int32_t fs_buf_size = 0;
         uint32_t i = 0;
         char cmd_name[96];
         uint32_t name_len = 0;
-        while (spawn_input[name_len] != '\0' && spawn_input[name_len] != ' ' && spawn_input[name_len] != '\t') {
+        while (spawn_input[name_len] != '\0' && spawn_input[name_len] != ' ' &&
+               spawn_input[name_len] != '\t') {
             name_len++;
         }
         if (name_len == 0) {
@@ -1890,8 +1735,12 @@ cli_handle_line(void)
             }
             return 0;
         }
-        while (spawn_input[i] == ' ' || spawn_input[i] == '\t') { i++; }
-        while (spawn_input[i] && spawn_input[i] != ' ' && spawn_input[i] != '\t') { i++; }
+        while (spawn_input[i] == ' ' || spawn_input[i] == '\t') {
+            i++;
+        }
+        while (spawn_input[i] && spawn_input[i] != ' ' && spawn_input[i] != '\t') {
+            i++;
+        }
         if (spawn_input[i] == ' ' || spawn_input[i] == '\t') {
             args = &spawn_input[i + 1u];
             args_len = (uint32_t)wasmos_sys_strlen(args);
@@ -1912,22 +1761,20 @@ cli_handle_line(void)
             console_write("spawn failed\n");
             return 0;
         }
-        if (wasmos_xfer_buffer_write(bid, (int32_t)(uintptr_t)resolved, (int32_t)path_len, 0) != 0) {
+        if (wasmos_xfer_buffer_write(bid, (int32_t)(uintptr_t)resolved, (int32_t)path_len, 0) !=
+            0) {
             (void)wasmos_xfer_buffer_release(bid);
             console_write("spawn failed\n");
             return 0;
         }
-        if (args_len > 0u &&
-            wasmos_xfer_buffer_write(bid, (int32_t)(uintptr_t)args, (int32_t)args_len, (int32_t)write_off) != 0) {
+        if (args_len > 0u && wasmos_xfer_buffer_write(bid, (int32_t)(uintptr_t)args,
+                                                      (int32_t)args_len, (int32_t)write_off) != 0) {
             (void)wasmos_xfer_buffer_release(bid);
             console_write("spawn failed\n");
             return 0;
         }
-        if (cli_send_proc(PROC_IPC_SPAWN_PATH,
-                          PROC_SPAWN_PATH_FLAG_DETACH,
-                          ((uint32_t)bid << 12) | (path_len & 0xFFFu),
-                          (int32_t)args_len,
-                          0) != 0) {
+        if (cli_send_proc(PROC_IPC_SPAWN_PATH, PROC_SPAWN_PATH_FLAG_DETACH,
+                          ((uint32_t)bid << 12) | (path_len & 0xFFFu), (int32_t)args_len, 0) != 0) {
             (void)wasmos_xfer_buffer_release(bid);
             console_write("spawn failed\n");
             return 0;
@@ -1955,7 +1802,7 @@ cli_handle_line(void)
 
         char resolved[96];
         uint32_t path_len = 0;
-        const char *args = 0;
+        const char* args = 0;
         uint32_t args_len = 0;
         uint32_t write_off = 0;
         int32_t fs_buf_size = 0;
@@ -1996,22 +1843,20 @@ cli_handle_line(void)
             console_write("exec failed\n");
             return 0;
         }
-        if (wasmos_xfer_buffer_write(bid, (int32_t)(uintptr_t)resolved, (int32_t)path_len, 0) != 0) {
+        if (wasmos_xfer_buffer_write(bid, (int32_t)(uintptr_t)resolved, (int32_t)path_len, 0) !=
+            0) {
             (void)wasmos_xfer_buffer_release(bid);
             console_write("exec failed\n");
             return 0;
         }
-        if (args_len > 0u &&
-            wasmos_xfer_buffer_write(bid, (int32_t)(uintptr_t)args, (int32_t)args_len, (int32_t)write_off) != 0) {
+        if (args_len > 0u && wasmos_xfer_buffer_write(bid, (int32_t)(uintptr_t)args,
+                                                      (int32_t)args_len, (int32_t)write_off) != 0) {
             (void)wasmos_xfer_buffer_release(bid);
             console_write("exec failed\n");
             return 0;
         }
-        if (cli_send_proc(PROC_IPC_SPAWN_PATH,
-                          0,
-                          ((uint32_t)bid << 12) | (path_len & 0xFFFu),
-                          (int32_t)args_len,
-                          0) != 0) {
+        if (cli_send_proc(PROC_IPC_SPAWN_PATH, 0, ((uint32_t)bid << 12) | (path_len & 0xFFFu),
+                          (int32_t)args_len, 0) != 0) {
             (void)wasmos_xfer_buffer_release(bid);
             console_write("exec failed\n");
             return 0;
@@ -2022,17 +1867,13 @@ cli_handle_line(void)
     }
 }
 
-static void
-cli_fail_and_stall(const char *msg)
-{
+static void cli_fail_and_stall(const char* msg) {
     g_phase = CLI_PHASE_FAILED;
     console_write(msg);
     wasmos_sys_ipc_recv_loop();
 }
 
-static void
-cli_phase_init_step(int32_t proc_endpoint, int32_t home_tty_arg)
-{
+static void cli_phase_init_step(int32_t proc_endpoint, int32_t home_tty_arg) {
     cli_env_init_defaults();
     set_cwd_root();
     g_reply_endpoint = wasmos_ipc_create_endpoint();
@@ -2044,28 +1885,13 @@ cli_phase_init_step(int32_t proc_endpoint, int32_t home_tty_arg)
         cli_fail_and_stall("[cli] failed to create vt endpoint\n");
     }
     g_proc_endpoint = proc_endpoint;
-    g_fs_endpoint = wasmos_sys_svc_lookup_retry(g_proc_endpoint,
-                                                g_reply_endpoint,
-                                                "fs.vfs",
-                                                1,
-                                                64);
+    g_fs_endpoint = wasmos_sys_svc_lookup_retry(g_proc_endpoint, g_reply_endpoint, "fs.vfs", 1, 64);
     if (g_fs_endpoint < 0) {
-        g_fs_endpoint = wasmos_sys_svc_lookup_retry(g_proc_endpoint,
-                                                    g_reply_endpoint,
-                                                    "fs",
-                                                    1,
-                                                    64);
+        g_fs_endpoint = wasmos_sys_svc_lookup_retry(g_proc_endpoint, g_reply_endpoint, "fs", 1, 64);
     }
-    g_devmgr_endpoint = wasmos_sys_svc_lookup_retry(g_proc_endpoint,
-                                                    g_reply_endpoint,
-                                                    "devmgr.query",
-                                                    1,
-                                                    64);
-    g_vt_endpoint = wasmos_sys_svc_lookup_retry(g_proc_endpoint,
-                                                g_reply_endpoint,
-                                                "vt",
-                                                2,
-                                                64);
+    g_devmgr_endpoint =
+        wasmos_sys_svc_lookup_retry(g_proc_endpoint, g_reply_endpoint, "devmgr.query", 1, 64);
+    g_vt_endpoint = wasmos_sys_svc_lookup_retry(g_proc_endpoint, g_reply_endpoint, "vt", 2, 64);
     if (home_tty_arg >= 1 && home_tty_arg <= 3) {
         g_home_tty = home_tty_arg;
     } else {
@@ -2077,8 +1903,7 @@ cli_phase_init_step(int32_t proc_endpoint, int32_t home_tty_arg)
         g_vt_endpoint = -1;
         g_vt_client_endpoint = -1;
     }
-    if (g_vt_endpoint >= 0 &&
-        cli_set_vt_mode((uint32_t)VT_INPUT_MODE_RAW) != 0) {
+    if (g_vt_endpoint >= 0 && cli_set_vt_mode((uint32_t)VT_INPUT_MODE_RAW) != 0) {
         console_write("[cli] vt mode set failed; serial fallback\n");
         g_vt_endpoint = -1;
         g_vt_client_endpoint = -1;
@@ -2088,15 +1913,15 @@ cli_phase_init_step(int32_t proc_endpoint, int32_t home_tty_arg)
         (void)cli_switch_tty(1, 1, 0);
     }
     if (g_home_tty == 1) {
-        console_write("WAMOS CLI\ncommands: help, kmaps [all], ls, cd <path>, mount, script <file>, source <file>, spawn <cmd>, export VAR=<value>, set VAR=<value>, echo [-n] [-e|-E] [--] [text|${VAR}...], tty <0-3>, halt, reboot\n");
+        console_write("WAMOS CLI\ncommands: help, kmaps [all], ls, cd <path>, mount, script "
+                      "<file>, source <file>, spawn <cmd>, export VAR=<value>, set VAR=<value>, "
+                      "echo [-n] [-e|-E] [--] [text|${VAR}...], tty <0-3>, halt, reboot\n");
     }
     wasmos_sys_notify_ready(g_proc_endpoint, g_reply_endpoint);
     g_phase = CLI_PHASE_PROMPT;
 }
 
-static void
-cli_phase_prompt_step(void)
-{
+static void cli_phase_prompt_step(void) {
     if (!cli_is_foreground()) {
         (void)wasmos_sched_yield();
         return;
@@ -2108,9 +1933,7 @@ cli_phase_prompt_step(void)
     g_phase = CLI_PHASE_READ;
 }
 
-static void
-cli_phase_read_step(void)
-{
+static void cli_phase_read_step(void) {
     if (!cli_is_foreground()) {
         (void)wasmos_sched_yield();
         return;
@@ -2190,13 +2013,11 @@ cli_phase_read_step(void)
     }
     g_line[g_line_len++] = ch;
     cli_history_reset_nav();
-    char echo_buf[2] = { ch, '\0' };
+    char echo_buf[2] = {ch, '\0'};
     console_write(echo_buf);
 }
 
-static void
-cli_phase_wait_ipc_step(void)
-{
+static void cli_phase_wait_ipc_step(void) {
     int32_t recv_rc = wasmos_ipc_select_one(g_reply_endpoint);
     if (recv_rc < 0) {
         cli_release_pending_spawn_bid();
@@ -2205,14 +2026,11 @@ cli_phase_wait_ipc_step(void)
     int32_t resp_type = wasmos_ipc_last_field(WASMOS_IPC_FIELD_TYPE);
     int32_t resp_req = wasmos_ipc_last_field(WASMOS_IPC_FIELD_REQUEST_ID);
     if ((g_pending_kind == PENDING_LIST || g_pending_kind == PENDING_CAT) &&
-        resp_type == FS_IPC_STREAM &&
-        resp_req == g_pending_req) {
-        int32_t args[4] = {
-            wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG0),
-            wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG1),
-            wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG2),
-            wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG3)
-        };
+        resp_type == FS_IPC_STREAM && resp_req == g_pending_req) {
+        int32_t args[4] = {wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG0),
+                           wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG1),
+                           wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG2),
+                           wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG3)};
         char out[5];
         int out_len = 0;
         for (int i = 0; i < 4; ++i) {
@@ -2234,28 +2052,50 @@ cli_phase_wait_ipc_step(void)
         cli_fail_and_stall("[cli] ipc response mismatch\n");
     }
     if ((g_pending_kind == PENDING_EXEC || g_pending_kind == PENDING_SPAWN) &&
-        g_pending_spawn_bid >= 0 &&
-        (resp_type == PROC_IPC_RESP || resp_type == PROC_IPC_ERROR)) {
+        g_pending_spawn_bid >= 0 && (resp_type == PROC_IPC_RESP || resp_type == PROC_IPC_ERROR)) {
         cli_release_pending_spawn_bid();
     }
     if (resp_type == PROC_IPC_ERROR) {
         /* PM packs the real failure rc into arg1 — surface it instead of a
          * blanket "exec failed", so a failed spawn reports why. */
         int32_t spawn_rc = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG1);
-        const char *reason = 0;
+        const char* reason = 0;
         switch (spawn_rc) {
-            case PROC_SPAWN_ERR_BAD_ENDPOINT: reason = "bad request endpoint"; break;
-            case PROC_SPAWN_ERR_NO_CALLER:    reason = "caller not found"; break;
-            case PROC_SPAWN_ERR_BAD_PATH:     reason = "bad path"; break;
-            case PROC_SPAWN_ERR_CALLER_FSBUF: reason = "path too long"; break;
-            case PROC_SPAWN_ERR_ARGS_TOOBIG:  reason = "args too long"; break;
-            case PROC_SPAWN_ERR_NO_PM_FSBUF:  reason = "transfer buffer unavailable"; break;
-            case PROC_SPAWN_ERR_FS_READ:      reason = "cannot read executable"; break;
-            case PROC_SPAWN_ERR_BROKER_IPC:   reason = "broker plan IPC failed"; break;
-            case PROC_SPAWN_ERR_BROKER_PLAN:  reason = "broker returned an invalid spawn plan"; break;
-            case PROC_SPAWN_ERR_BROKER_DEFERRED: reason = "broker plan validated but launch is not implemented yet"; break;
-            case PROC_SPAWN_ERR_SPAWN_FAILED: reason = "cannot start process (no free slot?)"; break;
-            default: break;
+        case PROC_SPAWN_ERR_BAD_ENDPOINT:
+            reason = "bad request endpoint";
+            break;
+        case PROC_SPAWN_ERR_NO_CALLER:
+            reason = "caller not found";
+            break;
+        case PROC_SPAWN_ERR_BAD_PATH:
+            reason = "bad path";
+            break;
+        case PROC_SPAWN_ERR_CALLER_FSBUF:
+            reason = "path too long";
+            break;
+        case PROC_SPAWN_ERR_ARGS_TOOBIG:
+            reason = "args too long";
+            break;
+        case PROC_SPAWN_ERR_NO_PM_FSBUF:
+            reason = "transfer buffer unavailable";
+            break;
+        case PROC_SPAWN_ERR_FS_READ:
+            reason = "cannot read executable";
+            break;
+        case PROC_SPAWN_ERR_BROKER_IPC:
+            reason = "broker plan IPC failed";
+            break;
+        case PROC_SPAWN_ERR_BROKER_PLAN:
+            reason = "broker returned an invalid spawn plan";
+            break;
+        case PROC_SPAWN_ERR_BROKER_DEFERRED:
+            reason = "broker plan validated but launch is not implemented yet";
+            break;
+        case PROC_SPAWN_ERR_SPAWN_FAILED:
+            reason = "cannot start process (no free slot?)";
+            break;
+        default:
+            break;
         }
         if (reason) {
             console_write("exec failed: ");
@@ -2297,7 +2137,7 @@ cli_phase_wait_ipc_step(void)
         /* detached: process started in background, $? unchanged */
         (void)resp_status;
     } else if (g_pending_kind == PENDING_CD_CHAIN) {
-        const char *tail = g_pending_cd_path;
+        const char* tail = g_pending_cd_path;
         if (tail[0] == '/') {
             tail++;
         }
@@ -2318,7 +2158,7 @@ cli_phase_wait_ipc_step(void)
             set_cwd_path(g_pending_cd_path);
             g_pending_cd_use_path = 0;
         } else if (g_line_len > 3) {
-            const char *path = &g_line[3];
+            const char* path = &g_line[3];
             set_cwd_path(path);
         } else {
             set_cwd_root();
@@ -2333,12 +2173,8 @@ cli_phase_wait_ipc_step(void)
 /* Service entry point.  home_tty_arg (arg1) is the TTY index assigned by PM
  * (1-based).  Runs the phase state machine forever; only exits to the idle
  * recv loop on CLI_PHASE_FAILED. */
-WASMOS_WASM_EXPORT int32_t
-initialize(int32_t proc_endpoint,
-           int32_t home_tty_arg,
-           int32_t ignored_arg2,
-           int32_t ignored_arg3)
-{
+WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t home_tty_arg,
+                                      int32_t ignored_arg2, int32_t ignored_arg3) {
     (void)ignored_arg2;
     (void)ignored_arg3;
     /* proc.endpoint and the controlling TTY now come from the spawn-info

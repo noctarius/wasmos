@@ -4,7 +4,6 @@
 /// for vertical stacking and libui "row" (MENU_BAR) components for the
 /// horizontal button grid.  Button colours are driven by bg_color so the
 /// updated button renderer respects per-button theming.
-
 const wasmos = @import("wasmos.zig");
 const libui = @import("libui.zig");
 // ---------------------------------------------------------------------------
@@ -13,11 +12,26 @@ const libui = @import("libui.zig");
 
 /// Actions that a button can trigger.
 const Action = enum {
-    digit_0, digit_1, digit_2, digit_3, digit_4,
-    digit_5, digit_6, digit_7, digit_8, digit_9,
-    decimal, negate,
-    op_add, op_sub, op_mul, op_div,
-    equals, clear, clear_entry, backspace,
+    digit_0,
+    digit_1,
+    digit_2,
+    digit_3,
+    digit_4,
+    digit_5,
+    digit_6,
+    digit_7,
+    digit_8,
+    digit_9,
+    decimal,
+    negate,
+    op_add,
+    op_sub,
+    op_mul,
+    op_div,
+    equals,
+    clear,
+    clear_entry,
+    backspace,
 };
 
 const Calc = struct {
@@ -29,7 +43,7 @@ const Calc = struct {
     display_len: u8 = 0,
     // Accumulated left-hand value and pending operator
     lhs: i64 = 0,
-    op: u8 = 0,   // '+', '-', '*', '/', 0
+    op: u8 = 0, // '+', '-', '*', '/', 0
     // True when the next digit should start a fresh input rather than appending
     fresh: bool = true,
     err: bool = false,
@@ -154,7 +168,10 @@ const Calc = struct {
             '+' => a + b,
             '-' => a - b,
             '*' => @divTrunc(a * b, scale),
-            '/' => if (b == 0) blk: { err.* = true; break :blk 0; } else @divTrunc(a * scale, b),
+            '/' => if (b == 0) blk: {
+                err.* = true;
+                break :blk 0;
+            } else @divTrunc(a * scale, b),
             else => b,
         };
     }
@@ -162,8 +179,7 @@ const Calc = struct {
     pub fn handle(self: *Calc, action: Action) void {
         if (self.err and action != .clear and action != .clear_entry) return;
         switch (action) {
-            .digit_0, .digit_1, .digit_2, .digit_3, .digit_4,
-            .digit_5, .digit_6, .digit_7, .digit_8, .digit_9 => {
+            .digit_0, .digit_1, .digit_2, .digit_3, .digit_4, .digit_5, .digit_6, .digit_7, .digit_8, .digit_9 => {
                 const d: u8 = '0' + @as(u8, @intFromEnum(action));
                 if (self.fresh) {
                     self.display[0] = d;
@@ -185,8 +201,10 @@ const Calc = struct {
             },
             .decimal => {
                 if (self.fresh) {
-                    self.display[0] = '0'; self.display[1] = '.';
-                    self.display_len = 2; self.display[2] = 0;
+                    self.display[0] = '0';
+                    self.display[1] = '.';
+                    self.display_len = 2;
+                    self.display[2] = 0;
                     self.fresh = false;
                 } else {
                     if (!self.hasDot() and self.display_len < 12) {
@@ -220,17 +238,27 @@ const Calc = struct {
                 }
             },
             .clear_entry => {
-                self.display[0] = '0'; self.display_len = 1; self.display[1] = 0;
-                self.fresh = true; self.err = false;
+                self.display[0] = '0';
+                self.display_len = 1;
+                self.display[1] = 0;
+                self.fresh = true;
+                self.err = false;
             },
             .clear => {
-                self.display[0] = '0'; self.display_len = 1; self.display[1] = 0;
-                self.lhs = 0; self.op = 0; self.fresh = true; self.err = false;
+                self.display[0] = '0';
+                self.display_len = 1;
+                self.display[1] = 0;
+                self.lhs = 0;
+                self.op = 0;
+                self.fresh = true;
+                self.err = false;
             },
             .backspace => {
                 if (self.fresh) return;
                 if (self.display_len <= 1) {
-                    self.display[0] = '0'; self.display_len = 1; self.display[1] = 0;
+                    self.display[0] = '0';
+                    self.display_len = 1;
+                    self.display[1] = 0;
                 } else {
                     self.display_len -= 1;
                     self.display[self.display_len] = 0;
@@ -259,15 +287,15 @@ const Calc = struct {
 // UI constants — dark theme inspired by Windows Calculator
 // ---------------------------------------------------------------------------
 
-const COL_BG       = 0xFF1E1E2E; // window background
-const COL_DISPLAY  = 0xFF16161E; // display label background
-const COL_TEXT     = 0xFFD0D0E8; // display text
-const COL_BTN_NUM  = 0xFF2A2A3E; // digit buttons
-const COL_BTN_OP   = 0xFF1C3A5A; // operator buttons (+, -, *, /)
-const COL_BTN_EQ   = 0xFF0062A5; // equals button (accent blue)
-const COL_BTN_CLR  = 0xFF6B2020; // CE / C (red-tinted)
+const COL_BG = 0xFF1E1E2E; // window background
+const COL_DISPLAY = 0xFF16161E; // display label background
+const COL_TEXT = 0xFFD0D0E8; // display text
+const COL_BTN_NUM = 0xFF2A2A3E; // digit buttons
+const COL_BTN_OP = 0xFF1C3A5A; // operator buttons (+, -, *, /)
+const COL_BTN_EQ = 0xFF0062A5; // equals button (accent blue)
+const COL_BTN_CLR = 0xFF6B2020; // CE / C (red-tinted)
 const COL_BTN_MISC = 0xFF242438; // ±, backspace
-const COL_FG       = 0xFFFFFFFF; // button text
+const COL_FG = 0xFFFFFFFF; // button text
 const WINDOW_CONTENT_W = 280;
 const WINDOW_CONTENT_H = 350;
 
@@ -283,34 +311,34 @@ const ButtonDef = struct {
 
 const layout: [5][4]ButtonDef = .{
     .{
-        .{ .label = "CE",  .bg = COL_BTN_CLR,  .action = .clear_entry },
-        .{ .label = "C",   .bg = COL_BTN_CLR,  .action = .clear       },
-        .{ .label = "<-",  .bg = COL_BTN_MISC, .action = .backspace   },
-        .{ .label = "/",   .bg = COL_BTN_OP,   .action = .op_div      },
+        .{ .label = "CE", .bg = COL_BTN_CLR, .action = .clear_entry },
+        .{ .label = "C", .bg = COL_BTN_CLR, .action = .clear },
+        .{ .label = "<-", .bg = COL_BTN_MISC, .action = .backspace },
+        .{ .label = "/", .bg = COL_BTN_OP, .action = .op_div },
     },
     .{
-        .{ .label = "7",   .bg = COL_BTN_NUM,  .action = .digit_7    },
-        .{ .label = "8",   .bg = COL_BTN_NUM,  .action = .digit_8    },
-        .{ .label = "9",   .bg = COL_BTN_NUM,  .action = .digit_9    },
-        .{ .label = "*",   .bg = COL_BTN_OP,   .action = .op_mul     },
+        .{ .label = "7", .bg = COL_BTN_NUM, .action = .digit_7 },
+        .{ .label = "8", .bg = COL_BTN_NUM, .action = .digit_8 },
+        .{ .label = "9", .bg = COL_BTN_NUM, .action = .digit_9 },
+        .{ .label = "*", .bg = COL_BTN_OP, .action = .op_mul },
     },
     .{
-        .{ .label = "4",   .bg = COL_BTN_NUM,  .action = .digit_4    },
-        .{ .label = "5",   .bg = COL_BTN_NUM,  .action = .digit_5    },
-        .{ .label = "6",   .bg = COL_BTN_NUM,  .action = .digit_6    },
-        .{ .label = "-",   .bg = COL_BTN_OP,   .action = .op_sub     },
+        .{ .label = "4", .bg = COL_BTN_NUM, .action = .digit_4 },
+        .{ .label = "5", .bg = COL_BTN_NUM, .action = .digit_5 },
+        .{ .label = "6", .bg = COL_BTN_NUM, .action = .digit_6 },
+        .{ .label = "-", .bg = COL_BTN_OP, .action = .op_sub },
     },
     .{
-        .{ .label = "1",   .bg = COL_BTN_NUM,  .action = .digit_1    },
-        .{ .label = "2",   .bg = COL_BTN_NUM,  .action = .digit_2    },
-        .{ .label = "3",   .bg = COL_BTN_NUM,  .action = .digit_3    },
-        .{ .label = "+",   .bg = COL_BTN_OP,   .action = .op_add     },
+        .{ .label = "1", .bg = COL_BTN_NUM, .action = .digit_1 },
+        .{ .label = "2", .bg = COL_BTN_NUM, .action = .digit_2 },
+        .{ .label = "3", .bg = COL_BTN_NUM, .action = .digit_3 },
+        .{ .label = "+", .bg = COL_BTN_OP, .action = .op_add },
     },
     .{
-        .{ .label = "+/-", .bg = COL_BTN_MISC, .action = .negate     },
-        .{ .label = "0",   .bg = COL_BTN_NUM,  .action = .digit_0    },
-        .{ .label = ".",   .bg = COL_BTN_NUM,  .action = .decimal    },
-        .{ .label = "=",   .bg = COL_BTN_EQ,   .action = .equals     },
+        .{ .label = "+/-", .bg = COL_BTN_MISC, .action = .negate },
+        .{ .label = "0", .bg = COL_BTN_NUM, .action = .digit_0 },
+        .{ .label = ".", .bg = COL_BTN_NUM, .action = .decimal },
+        .{ .label = "=", .bg = COL_BTN_EQ, .action = .equals },
     },
 };
 
@@ -372,9 +400,7 @@ pub fn main() u8 {
 
     g_calc.init();
 
-    var ui = libui.Context.init(proc_ep, wasmos.ipc.createEndpoint() catch return 1,
-                                 WINDOW_CONTENT_W,
-                                 WINDOW_CONTENT_H) catch return 1;
+    var ui = libui.Context.init(proc_ep, wasmos.ipc.createEndpoint() catch return 1, WINDOW_CONTENT_W, WINDOW_CONTENT_H) catch return 1;
     ui.setTitle("Calculator");
 
     const root = ui.rootId();
@@ -382,8 +408,7 @@ pub fn main() u8 {
 
     // Display label: full width, tall, right-padded text
     g_display_id = ui.createLabel() catch return 1;
-    ui.style(g_display_id, .{ .bg = COL_DISPLAY, .fg = COL_TEXT,
-                               .preferred_h = 72, .pad = 12 });
+    ui.style(g_display_id, .{ .bg = COL_DISPLAY, .fg = COL_TEXT, .preferred_h = 72, .pad = 12 });
     ui.setText(g_display_id, "0");
     ui.appendChild(root, g_display_id);
 
@@ -407,8 +432,7 @@ pub fn main() u8 {
             const btn = ui.createButton() catch return 1;
             const flat_idx = row_idx * 4 + col_idx;
             g_btn_ids[flat_idx] = btn;
-            ui.style(btn, .{ .bg = btn_def.bg, .fg = COL_FG,
-                              .preferred_h = BTN_W, .clickable = true });
+            ui.style(btn, .{ .bg = btn_def.bg, .fg = COL_FG, .preferred_h = BTN_W, .clickable = true });
             ui.setText(btn, btn_def.label);
             ui.setClickCallback(btn, @ptrCast(&onButtonClick), null);
             ui.appendChild(row, btn);

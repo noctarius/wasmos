@@ -4,9 +4,9 @@
 
 #include <stdint.h>
 
-#define KERNEL_HIGHER_HALF_BASE  0xFFFFFFFF80000000ULL
-#define KERNEL_MMIO_PDPT_INDEX   509u
-#define KERNEL_MMIO_FB_VA        0xFFFFFFFF40000000ULL
+#define KERNEL_HIGHER_HALF_BASE 0xFFFFFFFF80000000ULL
+#define KERNEL_MMIO_PDPT_INDEX 509u
+#define KERNEL_MMIO_FB_VA 0xFFFFFFFF40000000ULL
 
 /* Dedicated per-app WARP linear-memory kernel-VA window, carved from free PDPT
  * slots in the shared higher-half (PML4[511]).  2 GiB (2 PDPT slots) per app,
@@ -18,17 +18,17 @@
  * ONLY (never MEM_REGION_FLAG_USER - enforced in paging_map_4k_in_root's
  * higher-half no-USER check), so ring-3 code cannot reach it; ring-3 wasm uses
  * the separate per-app user mapping at WARP_R3_LINMEM_BASE (PML4 slot 1). */
-#define WARP_LINMEM_PDPT_INDEX   64u
-#define WARP_LINMEM_PDPT_COUNT   96u
-#define WARP_LINMEM_VA_BASE      0xFFFFFF9000000000ULL /* 0xFFFFFF8000000000 + 64*1GiB */
-#define WARP_LINMEM_VA_STRIDE    (2ULL * 1024ULL * 1024ULL * 1024ULL) /* 2 GiB / app */
+#define WARP_LINMEM_PDPT_INDEX 64u
+#define WARP_LINMEM_PDPT_COUNT 96u
+#define WARP_LINMEM_VA_BASE 0xFFFFFF9000000000ULL /* 0xFFFFFF8000000000 + 64*1GiB */
+#define WARP_LINMEM_VA_STRIDE (2ULL * 1024ULL * 1024ULL * 1024ULL) /* 2 GiB / app */
 
 int paging_init(void);
 uint64_t paging_get_higher_half_base(void);
 uint64_t paging_get_root_table(void);
 uint64_t paging_get_current_root_table(void);
 int paging_switch_root(uint64_t root_table);
-int paging_create_address_space(uint64_t *out_root_table);
+int paging_create_address_space(uint64_t* out_root_table);
 void paging_destroy_address_space(uint64_t root_table);
 int paging_clone_low_slot_in_root(uint64_t root_table);
 int paging_map_4k_in_root(uint64_t root_table, uint64_t virt, uint64_t phys, uint64_t flags);

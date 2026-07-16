@@ -18,9 +18,9 @@ typedef struct {
     uint8_t prog_if;
     uint16_t vendor_id;
     uint16_t device_id;
-    uint16_t io_port_base;  /* BAR0 I/O base (0 if MMIO or absent) */
-    uint8_t mmio_hint;      /* 1 if BAR0 looks like a 32-bit MMIO BAR */
-    uint8_t irq_hint;       /* interrupt line from config register 0x3C */
+    uint16_t io_port_base; /* BAR0 I/O base (0 if MMIO or absent) */
+    uint8_t mmio_hint;     /* 1 if BAR0 looks like a 32-bit MMIO BAR */
+    uint8_t irq_hint;      /* interrupt line from config register 0x3C */
 } pci_device_record_t;
 
 #endif

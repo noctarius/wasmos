@@ -24,63 +24,55 @@ static uint32_t g_panic_bg = 0x00000000;
 #define PANIC_FONT_W 8u
 #define PANIC_FONT_H 16u
 
-static inline uintptr_t framebuffer_alias_ptr(uintptr_t p)
-{
+static inline uintptr_t framebuffer_alias_ptr(uintptr_t p) {
     if (serial_high_alias_enabled() && (uint64_t)p < KERNEL_HIGHER_HALF_BASE) {
         p = (uintptr_t)((uint64_t)p + KERNEL_HIGHER_HALF_BASE);
     }
     return p;
 }
 
-static inline framebuffer_info_t *framebuffer_info_slot(void)
-{
-    return (framebuffer_info_t *)(void *)framebuffer_alias_ptr((uintptr_t)&g_framebuffer_info);
+static inline framebuffer_info_t* framebuffer_info_slot(void) {
+    return (framebuffer_info_t*)(void*)framebuffer_alias_ptr((uintptr_t)&g_framebuffer_info);
 }
 
-static inline uint64_t *fb_hi_base_slot(void)
-{
-    return (uint64_t *)(void *)framebuffer_alias_ptr((uintptr_t)&g_framebuffer_hi_base);
+static inline uint64_t* fb_hi_base_slot(void) {
+    return (uint64_t*)(void*)framebuffer_alias_ptr((uintptr_t)&g_framebuffer_hi_base);
 }
 
-static inline uint64_t _fb_mmio_va(void)
-{
+static inline uint64_t _fb_mmio_va(void) {
     return *fb_hi_base_slot();
 }
 
-static inline uint32_t *panic_col_slot(void)
-{
-    return (uint32_t *)(void *)framebuffer_alias_ptr((uintptr_t)&g_panic_col);
+static inline uint32_t* panic_col_slot(void) {
+    return (uint32_t*)(void*)framebuffer_alias_ptr((uintptr_t)&g_panic_col);
 }
 
-static inline uint32_t *panic_row_slot(void)
-{
-    return (uint32_t *)(void *)framebuffer_alias_ptr((uintptr_t)&g_panic_row);
+static inline uint32_t* panic_row_slot(void) {
+    return (uint32_t*)(void*)framebuffer_alias_ptr((uintptr_t)&g_panic_row);
 }
 
-static inline uint32_t *panic_fg_slot(void)
-{
-    return (uint32_t *)(void *)framebuffer_alias_ptr((uintptr_t)&g_panic_fg);
+static inline uint32_t* panic_fg_slot(void) {
+    return (uint32_t*)(void*)framebuffer_alias_ptr((uintptr_t)&g_panic_fg);
 }
 
-static inline uint32_t *panic_bg_slot(void)
-{
-    return (uint32_t *)(void *)framebuffer_alias_ptr((uintptr_t)&g_panic_bg);
+static inline uint32_t* panic_bg_slot(void) {
+    return (uint32_t*)(void*)framebuffer_alias_ptr((uintptr_t)&g_panic_bg);
 }
 
-void framebuffer_init(const boot_info_t *info)
-{
-    framebuffer_info_t *fb = framebuffer_info_slot();
-    klog_printf("[framebuffer] init 0x%016llX 0x%016llX 0x%016llX 0x%016llX 0x%016llX flags=0x%016llX\n",
-                  (unsigned long long)(info ? (uint64_t)(uintptr_t)info->framebuffer_base : 0),
-                  (unsigned long long)(info ? (uint64_t)info->framebuffer_size : 0),
-                  (unsigned long long)(info ? info->framebuffer_width : 0),
-                  (unsigned long long)(info ? info->framebuffer_height : 0),
-                  (unsigned long long)(info ? info->framebuffer_pixels_per_scanline : 0),
-                  (unsigned long long)(info ? info->flags : 0));
+void framebuffer_init(const boot_info_t* info) {
+    framebuffer_info_t* fb = framebuffer_info_slot();
+    klog_printf(
+        "[framebuffer] init 0x%016llX 0x%016llX 0x%016llX 0x%016llX 0x%016llX flags=0x%016llX\n",
+        (unsigned long long)(info ? (uint64_t)(uintptr_t)info->framebuffer_base : 0),
+        (unsigned long long)(info ? (uint64_t)info->framebuffer_size : 0),
+        (unsigned long long)(info ? info->framebuffer_width : 0),
+        (unsigned long long)(info ? info->framebuffer_height : 0),
+        (unsigned long long)(info ? info->framebuffer_pixels_per_scanline : 0),
+        (unsigned long long)(info ? info->flags : 0));
 
-    if (!info || !(info->flags & BOOT_INFO_FLAG_GOP_PRESENT) ||
-        !info->framebuffer_base || info->framebuffer_size == 0 ||
-        info->framebuffer_width == 0 || info->framebuffer_height == 0) {
+    if (!info || !(info->flags & BOOT_INFO_FLAG_GOP_PRESENT) || !info->framebuffer_base ||
+        info->framebuffer_size == 0 || info->framebuffer_width == 0 ||
+        info->framebuffer_height == 0) {
         return;
     }
     fb->framebuffer_base = (uint64_t)(uintptr_t)info->framebuffer_base;
@@ -88,29 +80,25 @@ void framebuffer_init(const boot_info_t *info)
     fb->framebuffer_width = info->framebuffer_width;
     fb->framebuffer_height = info->framebuffer_height;
     fb->framebuffer_stride = info->framebuffer_pixels_per_scanline;
-    fb->framebuffer_gop_pixel_format = (uint32_t)((info->flags & BOOT_INFO_FLAG_GOP_PIXEL_FORMAT_MASK) >>
-                                          BOOT_INFO_FLAG_GOP_PIXEL_FORMAT_SHIFT);
+    fb->framebuffer_gop_pixel_format =
+        (uint32_t)((info->flags & BOOT_INFO_FLAG_GOP_PIXEL_FORMAT_MASK) >>
+                   BOOT_INFO_FLAG_GOP_PIXEL_FORMAT_SHIFT);
     klog_printf("[framebuffer] stride=0x%016llX\n",
-                  (unsigned long long)info->framebuffer_pixels_per_scanline);
+                (unsigned long long)info->framebuffer_pixels_per_scanline);
 }
 
-int framebuffer_get_info(framebuffer_info_t *out)
-{
-    framebuffer_info_t *fb = framebuffer_info_slot();
-    if (!out || fb->framebuffer_base == 0 ||
-        fb->framebuffer_size == 0 ||
-        fb->framebuffer_width == 0 ||
-        fb->framebuffer_height == 0 ||
-        fb->framebuffer_stride == 0) {
+int framebuffer_get_info(framebuffer_info_t* out) {
+    framebuffer_info_t* fb = framebuffer_info_slot();
+    if (!out || fb->framebuffer_base == 0 || fb->framebuffer_size == 0 ||
+        fb->framebuffer_width == 0 || fb->framebuffer_height == 0 || fb->framebuffer_stride == 0) {
         return -1;
     }
     memcpy(out, fb, sizeof(framebuffer_info_t));
     return 0;
 }
 
-int framebuffer_map_high(void)
-{
-    framebuffer_info_t *fb = framebuffer_info_slot();
+int framebuffer_map_high(void) {
+    framebuffer_info_t* fb = framebuffer_info_slot();
     if (fb->framebuffer_base == 0 || fb->framebuffer_size == 0) {
         return -1;
     }
@@ -126,23 +114,18 @@ int framebuffer_map_high(void)
     }
     *fb_hi_base_slot() = KERNEL_MMIO_FB_VA + (fb->framebuffer_base & 0xFFFULL);
     klog_printf("[framebuffer] hi base=0x%016llx pages=%llu\n",
-                (unsigned long long)*fb_hi_base_slot(),
-                (unsigned long long)num_pages);
+                (unsigned long long)*fb_hi_base_slot(), (unsigned long long)num_pages);
     return 0;
 }
 
-int framebuffer_put_pixel(uint32_t x, uint32_t y, uint32_t color)
-{
-    framebuffer_info_t *fb = framebuffer_info_slot();
+int framebuffer_put_pixel(uint32_t x, uint32_t y, uint32_t color) {
+    framebuffer_info_t* fb = framebuffer_info_slot();
     uint64_t fb_va = _fb_mmio_va();
-    if (fb_va == 0 || fb->framebuffer_base == 0 ||
-        fb->framebuffer_size == 0 ||
-        fb->framebuffer_width == 0 ||
-        fb->framebuffer_height == 0) {
+    if (fb_va == 0 || fb->framebuffer_base == 0 || fb->framebuffer_size == 0 ||
+        fb->framebuffer_width == 0 || fb->framebuffer_height == 0) {
         return -1;
     }
-    if (x >= fb->framebuffer_width ||
-        y >= fb->framebuffer_height) {
+    if (x >= fb->framebuffer_width || y >= fb->framebuffer_height) {
         return -1;
     }
     uint64_t stride = fb->framebuffer_stride;
@@ -154,24 +137,21 @@ int framebuffer_put_pixel(uint32_t x, uint32_t y, uint32_t color)
     if (offset + 4 > fb->framebuffer_size) {
         return -1;
     }
-    uint32_t *pixel = (uint32_t *)(uintptr_t)(fb_va + offset);
+    uint32_t* pixel = (uint32_t*)(uintptr_t)(fb_va + offset);
     *pixel = color;
     return 0;
 }
 
-int framebuffer_fill(uint32_t color)
-{
-    framebuffer_info_t *fb_info = framebuffer_info_slot();
+int framebuffer_fill(uint32_t color) {
+    framebuffer_info_t* fb_info = framebuffer_info_slot();
     uint64_t fb_va = _fb_mmio_va();
-    if (fb_va == 0 || fb_info->framebuffer_base == 0 ||
-        fb_info->framebuffer_size == 0 ||
-        fb_info->framebuffer_width == 0 ||
-        fb_info->framebuffer_height == 0 ||
+    if (fb_va == 0 || fb_info->framebuffer_base == 0 || fb_info->framebuffer_size == 0 ||
+        fb_info->framebuffer_width == 0 || fb_info->framebuffer_height == 0 ||
         fb_info->framebuffer_stride == 0) {
         return -1;
     }
 
-    uint32_t *fb = (uint32_t *)(uintptr_t)fb_va;
+    uint32_t* fb = (uint32_t*)(uintptr_t)fb_va;
     uint64_t stride = fb_info->framebuffer_stride;
     uint64_t height = fb_info->framebuffer_height;
     uint64_t total = stride * height;
@@ -186,14 +166,11 @@ int framebuffer_fill(uint32_t color)
     return 0;
 }
 
-static void framebuffer_draw_char(uint32_t col, uint32_t row, char ch, uint32_t fg, uint32_t bg)
-{
-    framebuffer_info_t *fb_info = framebuffer_info_slot();
+static void framebuffer_draw_char(uint32_t col, uint32_t row, char ch, uint32_t fg, uint32_t bg) {
+    framebuffer_info_t* fb_info = framebuffer_info_slot();
     uint64_t fb_va = _fb_mmio_va();
-    if (fb_va == 0 || fb_info->framebuffer_base == 0 ||
-        fb_info->framebuffer_width == 0 ||
-        fb_info->framebuffer_height == 0 ||
-        fb_info->framebuffer_stride == 0) {
+    if (fb_va == 0 || fb_info->framebuffer_base == 0 || fb_info->framebuffer_width == 0 ||
+        fb_info->framebuffer_height == 0 || fb_info->framebuffer_stride == 0) {
         return;
     }
 
@@ -207,27 +184,26 @@ static void framebuffer_draw_char(uint32_t col, uint32_t row, char ch, uint32_t 
     if (glyph_index < 0x20 || glyph_index > 0x7E) {
         glyph_index = '?';
     }
-    const uint8_t *glyph = font_8x16[glyph_index - 0x20];
+    const uint8_t* glyph = font_8x16[glyph_index - 0x20];
 
     uint32_t x0 = col * PANIC_FONT_W;
     uint32_t y0 = row * PANIC_FONT_H;
-    uint32_t *fb = (uint32_t *)(uintptr_t)fb_va;
+    uint32_t* fb = (uint32_t*)(uintptr_t)fb_va;
     uint32_t stride = fb_info->framebuffer_stride;
 
     for (uint32_t y = 0; y < PANIC_FONT_H; ++y) {
         uint8_t bits = glyph[y];
-        uint32_t *line = fb + (y0 + y) * stride + x0;
+        uint32_t* line = fb + (y0 + y) * stride + x0;
         for (uint32_t x = 0; x < PANIC_FONT_W; ++x) {
             line[x] = (bits & (0x80u >> x)) ? fg : bg;
         }
     }
 }
 
-static void framebuffer_panic_newline(void)
-{
-    framebuffer_info_t *fb_info = framebuffer_info_slot();
-    uint32_t *panic_col = panic_col_slot();
-    uint32_t *panic_row = panic_row_slot();
+static void framebuffer_panic_newline(void) {
+    framebuffer_info_t* fb_info = framebuffer_info_slot();
+    uint32_t* panic_col = panic_col_slot();
+    uint32_t* panic_row = panic_row_slot();
     *panic_col = 0;
     (*panic_row)++;
     uint32_t max_rows = fb_info->framebuffer_height / PANIC_FONT_H;
@@ -237,12 +213,11 @@ static void framebuffer_panic_newline(void)
     }
 }
 
-void framebuffer_panic_begin(void)
-{
-    uint32_t *panic_col = panic_col_slot();
-    uint32_t *panic_row = panic_row_slot();
-    uint32_t *panic_fg = panic_fg_slot();
-    uint32_t *panic_bg = panic_bg_slot();
+void framebuffer_panic_begin(void) {
+    uint32_t* panic_col = panic_col_slot();
+    uint32_t* panic_row = panic_row_slot();
+    uint32_t* panic_fg = panic_fg_slot();
+    uint32_t* panic_bg = panic_bg_slot();
     if (framebuffer_fill(0x00000000) != 0) {
         return;
     }
@@ -252,13 +227,12 @@ void framebuffer_panic_begin(void)
     *panic_bg = 0x00000000;
 }
 
-void framebuffer_panic_write(const char *text)
-{
-    framebuffer_info_t *fb_info = framebuffer_info_slot();
-    uint32_t *panic_col = panic_col_slot();
-    uint32_t *panic_row = panic_row_slot();
-    uint32_t *panic_fg = panic_fg_slot();
-    uint32_t *panic_bg = panic_bg_slot();
+void framebuffer_panic_write(const char* text) {
+    framebuffer_info_t* fb_info = framebuffer_info_slot();
+    uint32_t* panic_col = panic_col_slot();
+    uint32_t* panic_row = panic_row_slot();
+    uint32_t* panic_fg = panic_fg_slot();
+    uint32_t* panic_bg = panic_bg_slot();
     if (!text || fb_info->framebuffer_base == 0) {
         return;
     }

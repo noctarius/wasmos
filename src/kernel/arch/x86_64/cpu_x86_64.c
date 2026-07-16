@@ -25,12 +25,12 @@
 #define IDT_ENTRY_COUNT 256
 #define EXCEPTION_COUNT 32
 
-#define KERNEL_CS_SELECTOR  0x08
-#define KERNEL_DS_SELECTOR  0x10
-#define USER_CS_SELECTOR    0x18
-#define USER_DS_SELECTOR    0x20
+#define KERNEL_CS_SELECTOR 0x08
+#define KERNEL_DS_SELECTOR 0x10
+#define USER_CS_SELECTOR 0x18
+#define USER_DS_SELECTOR 0x20
 #define KERNEL_TSS_SELECTOR 0x28
-#define IRQ0_IST_INDEX      1
+#define IRQ0_IST_INDEX 1
 
 #define IA32_GS_BASE_MSR 0xC0000101u
 
@@ -56,8 +56,8 @@ typedef struct __attribute__((packed)) {
     uint32_t zero;
 } idt_entry_t;
 
-extern void *x86_exception_stub_table[];
-extern void *x86_irq_stub_table[];
+extern void* x86_exception_stub_table[];
+extern void* x86_irq_stub_table[];
 extern void isr_syscall_128(void);
 extern uint8_t __kernel_start;
 extern uint8_t __kernel_end;
@@ -80,19 +80,14 @@ static idt_entry_t g_idt[IDT_ENTRY_COUNT];
 /* BSP GDT initial values — copied into g_cpus[0].gdt during x86_cpu_init().
  * TSS slots [5..6] are filled in by gdt_set_tss_base(). */
 static const uint64_t k_gdt_template[GDT_ENTRY_COUNT] = {
-    0x0000000000000000ULL,
-    0x00AF9A000000FFFFULL,
-    0x00AF92000000FFFFULL,
-    0x00AFFA000000FFFFULL,
-    0x00AFF2000000FFFFULL,
-    0x0000000000000000ULL,
-    0x0000000000000000ULL,
+    0x0000000000000000ULL, 0x00AF9A000000FFFFULL, 0x00AF92000000FFFFULL, 0x00AFFA000000FFFFULL,
+    0x00AFF2000000FFFFULL, 0x0000000000000000ULL, 0x0000000000000000ULL,
 };
 
 /* BSP interrupt stacks.  Kept as standalone arrays so that cpu_isr.S can
  * reference g_irq0_ist_stack by name for the canary check without indirection.
  * AP stacks are allocated dynamically at SMP bring-up. */
-uint8_t  g_irq0_ist_stack[CPU_IST_STACK_SIZE] __attribute__((aligned(16)));
+uint8_t g_irq0_ist_stack[CPU_IST_STACK_SIZE] __attribute__((aligned(16)));
 static uint8_t g_bsp_rsp0_stack[CPU_IST_STACK_SIZE] __attribute__((aligned(16)));
 
 /* IST-stack canary: written at the bottom of the BSP's IST stack and compared
@@ -103,20 +98,20 @@ uint64_t g_irq0_ist_canary = 0xCAFEBABEDEADC0DEULL;
 #define IA32_EFER_MSR 0xC0000080u
 #define IA32_EFER_NXE (1ULL << 11)
 
-#define X86_CR0_PE        (1ULL << 0)
-#define X86_CR0_MP        (1ULL << 1)
-#define X86_CR0_EM        (1ULL << 2)
-#define X86_CR0_TS        (1ULL << 3)
-#define X86_CR0_ET        (1ULL << 4)
-#define X86_CR0_NE        (1ULL << 5)
-#define X86_CR0_WP        (1ULL << 16)
-#define X86_CR0_NW        (1ULL << 29)
-#define X86_CR0_CD        (1ULL << 30)
-#define X86_CR0_PG        (1ULL << 31)
+#define X86_CR0_PE (1ULL << 0)
+#define X86_CR0_MP (1ULL << 1)
+#define X86_CR0_EM (1ULL << 2)
+#define X86_CR0_TS (1ULL << 3)
+#define X86_CR0_ET (1ULL << 4)
+#define X86_CR0_NE (1ULL << 5)
+#define X86_CR0_WP (1ULL << 16)
+#define X86_CR0_NW (1ULL << 29)
+#define X86_CR0_CD (1ULL << 30)
+#define X86_CR0_PG (1ULL << 31)
 
-#define X86_CR4_PAE       (1ULL << 5)
-#define X86_CR4_PGE       (1ULL << 7)
-#define X86_CR4_OSFXSR    (1ULL << 9)
+#define X86_CR4_PAE (1ULL << 5)
+#define X86_CR4_PGE (1ULL << 7)
+#define X86_CR4_OSFXSR (1ULL << 9)
 #define X86_CR4_OSXMMEXCPT (1ULL << 10)
 
 #define X86_MXCSR_DEFAULT 0x1F80u
@@ -129,9 +124,7 @@ typedef enum {
     PF_REASON_PROTECTION,
 } pf_reason_t;
 
-static pf_reason_t
-pf_classify_reason(uint64_t error_code, uint64_t addr, uint8_t from_user)
-{
+static pf_reason_t pf_classify_reason(uint64_t error_code, uint64_t addr, uint8_t from_user) {
     const uint8_t present = (uint8_t)((error_code & (1ULL << 0)) != 0);
     const uint8_t write = (uint8_t)((error_code & (1ULL << 1)) != 0);
     const uint8_t instr = (uint8_t)((error_code & (1ULL << 4)) != 0);
@@ -151,9 +144,7 @@ pf_classify_reason(uint64_t error_code, uint64_t addr, uint8_t from_user)
     return PF_REASON_PROTECTION;
 }
 
-static const char *
-pf_reason_name(pf_reason_t reason)
-{
+static const char* pf_reason_name(pf_reason_t reason) {
     switch (reason) {
     case PF_REASON_UNMAPPED:
         return "unmapped";
@@ -169,9 +160,7 @@ pf_reason_name(pf_reason_t reason)
     }
 }
 
-static void
-x86_cpu_enable_kernel_simd(void)
-{
+static void x86_cpu_enable_kernel_simd(void) {
     uint64_t cr0;
     uint64_t cr4;
     uint32_t mxcsr = X86_MXCSR_DEFAULT;
@@ -189,10 +178,7 @@ x86_cpu_enable_kernel_simd(void)
     __asm__ volatile("ldmxcsr %0" : : "m"(mxcsr));
 }
 
-
-static void
-serial_write_hexbyte_unlocked(uint8_t value)
-{
+static void serial_write_hexbyte_unlocked(uint8_t value) {
     char buf[3];
     static const char hex[] = "0123456789ABCDEF";
     buf[0] = hex[(value >> 4) & 0xF];
@@ -201,9 +187,7 @@ serial_write_hexbyte_unlocked(uint8_t value)
     serial_write_unlocked(buf);
 }
 
-static void
-serial_dump_bytes_unlocked(const char *label, const uint8_t *ptr, uint32_t count)
-{
+static void serial_dump_bytes_unlocked(const char* label, const uint8_t* ptr, uint32_t count) {
     if (!ptr || count == 0) {
         return;
     }
@@ -221,9 +205,7 @@ serial_dump_bytes_unlocked(const char *label, const uint8_t *ptr, uint32_t count
     serial_write_unlocked("\n");
 }
 
-static void
-panic_fb_printf(const char *fmt, ...)
-{
+static void panic_fb_printf(const char* fmt, ...) {
     char buf[192];
     va_list ap;
     va_start(ap, fmt);
@@ -232,23 +214,11 @@ panic_fb_printf(const char *fmt, ...)
     framebuffer_panic_write(buf);
 }
 
-static void
-panic_render_screen(uint64_t vector,
-                    uint64_t err,
-                    uint64_t rip,
-                    uint64_t cs,
-                    uint64_t rflags,
-                    uint64_t cr2,
-                    int has_cr2,
-                    const uint64_t *frame,
-                    uint32_t pid,
-                    const char *name,
-                    uint64_t stack_base,
-                    uint64_t stack_top,
-                    uint64_t kernel_start,
-                    uint64_t kernel_end,
-                    uint64_t cr3)
-{
+static void panic_render_screen(uint64_t vector, uint64_t err, uint64_t rip, uint64_t cs,
+                                uint64_t rflags, uint64_t cr2, int has_cr2, const uint64_t* frame,
+                                uint32_t pid, const char* name, uint64_t stack_base,
+                                uint64_t stack_top, uint64_t kernel_start, uint64_t kernel_end,
+                                uint64_t cr3) {
     framebuffer_info_t fb_info;
     int have_fb = framebuffer_get_info(&fb_info) == 0;
     framebuffer_panic_begin();
@@ -276,8 +246,7 @@ panic_render_screen(uint64_t vector,
     if (have_fb) {
         panic_fb_printf("fb_base  %016llx\n", (unsigned long long)fb_info.framebuffer_base);
         panic_fb_printf("fb_size  %016llx\n", (unsigned long long)fb_info.framebuffer_size);
-        panic_fb_printf("fb_w/h   %u x %u\n",
-                        (unsigned)fb_info.framebuffer_width,
+        panic_fb_printf("fb_w/h   %u x %u\n", (unsigned)fb_info.framebuffer_width,
                         (unsigned)fb_info.framebuffer_height);
         panic_fb_printf("fb_strd  %u\n", (unsigned)fb_info.framebuffer_stride);
     } else {
@@ -287,36 +256,31 @@ panic_render_screen(uint64_t vector,
     panic_fb_printf("System halted.\n");
 }
 
-static void
-gdt_install(cpu_local_t *cpu)
-{
+static void gdt_install(cpu_local_t* cpu) {
     descriptor_ptr_t gdtr;
     gdtr.limit = (uint16_t)(sizeof(cpu->gdt) - 1);
     gdtr.base = (uint64_t)(uintptr_t)&cpu->gdt[0];
 
-    __asm__ volatile(
-        "lgdt %0\n"
-        "pushq $0x08\n"
-        "leaq 1f(%%rip), %%rax\n"
-        "pushq %%rax\n"
-        "lretq\n"
-        "1:\n"
-        "movw $0x10, %%ax\n"
-        "movw %%ax, %%ds\n"
-        "movw %%ax, %%es\n"
-        "movw %%ax, %%ss\n"
-        :
-        : "m"(gdtr)
-        : "rax", "memory");
+    __asm__ volatile("lgdt %0\n"
+                     "pushq $0x08\n"
+                     "leaq 1f(%%rip), %%rax\n"
+                     "pushq %%rax\n"
+                     "lretq\n"
+                     "1:\n"
+                     "movw $0x10, %%ax\n"
+                     "movw %%ax, %%ds\n"
+                     "movw %%ax, %%es\n"
+                     "movw %%ax, %%ss\n"
+                     :
+                     : "m"(gdtr)
+                     : "rax", "memory");
 
     uint16_t tss_selector = KERNEL_TSS_SELECTOR;
     __asm__ volatile("ltr %0" : : "r"(tss_selector) : "memory");
 }
 
-static void
-idt_set_gate(uint8_t vector, uintptr_t handler, uint8_t type_attr)
-{
-    idt_entry_t *entry = &g_idt[vector];
+static void idt_set_gate(uint8_t vector, uintptr_t handler, uint8_t type_attr) {
+    idt_entry_t* entry = &g_idt[vector];
     entry->offset_low = (uint16_t)(handler & 0xFFFFU);
     entry->selector = KERNEL_CS_SELECTOR;
     entry->ist = 0;
@@ -326,10 +290,8 @@ idt_set_gate(uint8_t vector, uintptr_t handler, uint8_t type_attr)
     entry->zero = 0;
 }
 
-static void
-idt_set_gate_ist(uint8_t vector, uintptr_t handler, uint8_t type_attr, uint8_t ist)
-{
-    idt_entry_t *entry = &g_idt[vector];
+static void idt_set_gate_ist(uint8_t vector, uintptr_t handler, uint8_t type_attr, uint8_t ist) {
+    idt_entry_t* entry = &g_idt[vector];
     entry->offset_low = (uint16_t)(handler & 0xFFFFU);
     entry->selector = KERNEL_CS_SELECTOR;
     entry->ist = ist;
@@ -339,9 +301,7 @@ idt_set_gate_ist(uint8_t vector, uintptr_t handler, uint8_t type_attr, uint8_t i
     entry->zero = 0;
 }
 
-static uintptr_t
-x86_kernel_handler_addr(uintptr_t handler)
-{
+static uintptr_t x86_kernel_handler_addr(uintptr_t handler) {
     uint64_t higher_half_base = paging_get_higher_half_base();
     if ((uint64_t)handler < higher_half_base) {
         return (uintptr_t)(higher_half_base + (uint64_t)handler);
@@ -349,9 +309,7 @@ x86_kernel_handler_addr(uintptr_t handler)
     return handler;
 }
 
-static uint64_t
-x86_kernel_data_addr(uint64_t addr)
-{
+static uint64_t x86_kernel_data_addr(uint64_t addr) {
     uint64_t higher_half_base = paging_get_higher_half_base();
     if (addr < higher_half_base) {
         return higher_half_base + addr;
@@ -359,9 +317,7 @@ x86_kernel_data_addr(uint64_t addr)
     return addr;
 }
 
-static void
-gdt_set_tss_base(cpu_local_t *cpu, uint64_t base)
-{
+static void gdt_set_tss_base(cpu_local_t* cpu, uint64_t base) {
     uint32_t limit = (uint32_t)(sizeof(cpu->tss) - 1u);
     uint64_t low = 0;
     low |= (uint64_t)(limit & 0xFFFFu);
@@ -374,22 +330,18 @@ gdt_set_tss_base(cpu_local_t *cpu, uint64_t base)
     cpu->gdt[6] = high;
 }
 
-static void
-gdt_set_tss(cpu_local_t *cpu)
-{
+static void gdt_set_tss(cpu_local_t* cpu) {
     gdt_set_tss_base(cpu, (uint64_t)(uintptr_t)&cpu->tss);
 }
 
-static void
-tss_init(cpu_local_t *cpu)
-{
+static void tss_init(cpu_local_t* cpu) {
     for (uint32_t i = 0; i < sizeof(cpu->tss); ++i) {
-        ((uint8_t *)&cpu->tss)[i] = 0;
+        ((uint8_t*)&cpu->tss)[i] = 0;
     }
     for (uint32_t i = 0; i < CPU_IST_STACK_SIZE; ++i) {
         g_irq0_ist_stack[i] = 0xCC;
     }
-    *(uint64_t *)(uintptr_t)g_irq0_ist_stack = g_irq0_ist_canary;
+    *(uint64_t*)(uintptr_t)g_irq0_ist_stack = g_irq0_ist_canary;
     uint64_t ist1_top = (uint64_t)(uintptr_t)(g_irq0_ist_stack + CPU_IST_STACK_SIZE);
     uint64_t rsp0_top = (uint64_t)(uintptr_t)(g_bsp_rsp0_stack + CPU_IST_STACK_SIZE);
     cpu->tss.rsp0 = rsp0_top;
@@ -398,9 +350,7 @@ tss_init(cpu_local_t *cpu)
     gdt_set_tss(cpu);
 }
 
-static void
-idt_install(void)
-{
+static void idt_install(void) {
     for (uint32_t i = 0; i < IDT_ENTRY_COUNT; ++i) {
         g_idt[i].offset_low = 0;
         g_idt[i].selector = 0;
@@ -412,8 +362,7 @@ idt_install(void)
     }
 
     for (uint32_t vec = 0; vec < EXCEPTION_COUNT; ++vec) {
-        uintptr_t handler =
-            x86_kernel_handler_addr((uintptr_t)x86_exception_stub_table[vec]);
+        uintptr_t handler = x86_kernel_handler_addr((uintptr_t)x86_exception_stub_table[vec]);
         idt_set_gate((uint8_t)vec, handler, IDT_TYPE_INTERRUPT_GATE);
     }
 
@@ -422,8 +371,7 @@ idt_install(void)
      * exception stub with the dedicated capture-and-halt handler. */
     {
         extern void isr_nmi(void);
-        idt_set_gate(2u, x86_kernel_handler_addr((uintptr_t)isr_nmi),
-                     IDT_TYPE_INTERRUPT_GATE);
+        idt_set_gate(2u, x86_kernel_handler_addr((uintptr_t)isr_nmi), IDT_TYPE_INTERRUPT_GATE);
     }
 
     descriptor_ptr_t idtr;
@@ -437,9 +385,8 @@ idt_install(void)
  * funnel here. It renders the rich, exception-specific dump + on-screen panic
  * for THIS CPU, then calls kpanic() to stop every other CPU via NMI, dump their
  * contexts, and halt the machine. */
-static __attribute__((noreturn)) void
-x86_exception_panic_common(uint64_t vector, const uint64_t *regs)
-{
+static __attribute__((noreturn)) void x86_exception_panic_common(uint64_t vector,
+                                                                 const uint64_t* regs) {
     enum {
         EXC_REG_RBP = 10,
         EXC_REG_FRAME = 15,
@@ -449,24 +396,24 @@ x86_exception_panic_common(uint64_t vector, const uint64_t *regs)
     uint64_t kernel_start = (uint64_t)(uintptr_t)&__kernel_start;
     uint64_t kernel_end = (uint64_t)(uintptr_t)&__kernel_end;
     uint32_t pid = process_current_pid();
-    process_t *proc = process_get(pid);
-    const char *name = proc && proc->name ? proc->name : 0;
+    process_t* proc = process_get(pid);
+    const char* name = proc && proc->name ? proc->name : 0;
     uint64_t stack_base = proc ? (uint64_t)proc->stack_base : 0;
     uint64_t stack_top = proc ? (uint64_t)proc->stack_top : 0;
     int has_cr2 = (vector == 14);
-    const uint64_t *frame = regs ? regs + EXC_REG_FRAME : 0;
+    const uint64_t* frame = regs ? regs + EXC_REG_FRAME : 0;
 
     __asm__ volatile("mov %%cr3, %0" : "=r"(cr3));
     if (has_cr2) {
         __asm__ volatile("mov %%cr2, %0" : "=r"(cr2));
     }
     if (regs) {
-        err    = frame[0];
-        rip    = frame[1];
-        cs     = frame[2];
+        err = frame[0];
+        rip = frame[1];
+        cs = frame[2];
         rflags = frame[3];
-        rbp    = regs[EXC_REG_RBP];
-        rsp    = ((cs & 0x3u) == 0x3u) ? frame[4] : (uint64_t)(uintptr_t)frame;
+        rbp = regs[EXC_REG_RBP];
+        rsp = ((cs & 0x3u) == 0x3u) ? frame[4] : (uint64_t)(uintptr_t)frame;
     } else {
         __asm__ volatile("lea (%%rip), %0" : "=r"(rip));
         __asm__ volatile("mov %%cs, %0" : "=r"(cs));
@@ -475,54 +422,41 @@ x86_exception_panic_common(uint64_t vector, const uint64_t *regs)
         __asm__ volatile("mov %%rsp, %0" : "=r"(rsp));
     }
 
-    serial_printf_unlocked(
-        "[cpu] exception vector=%016llx\n"
-        "[cpu] err=%016llx\n"
-        "[cpu] rip=%016llx\n"
-        "[cpu] cs=%016llx\n"
-        "[cpu] rflags=%016llx\n",
-        (unsigned long long)vector,
-        (unsigned long long)err,
-        (unsigned long long)rip,
-        (unsigned long long)cs,
-        (unsigned long long)rflags);
+    serial_printf_unlocked("[cpu] exception vector=%016llx\n"
+                           "[cpu] err=%016llx\n"
+                           "[cpu] rip=%016llx\n"
+                           "[cpu] cs=%016llx\n"
+                           "[cpu] rflags=%016llx\n",
+                           (unsigned long long)vector, (unsigned long long)err,
+                           (unsigned long long)rip, (unsigned long long)cs,
+                           (unsigned long long)rflags);
     if (has_cr2) {
         serial_printf_unlocked("[cpu] cr2=%016llx\n", (unsigned long long)cr2);
     }
-    serial_printf_unlocked(
-        "[cpu] frame=%016llx\n"
-        "[cpu] pid=%u\n"
-        "[cpu] name=%s\n"
-        "[cpu] stack base=%016llx\n"
-        "[cpu] stack top=%016llx\n",
-        (unsigned long long)(uintptr_t)frame,
-        pid,
-        name ? name : "(null)",
-        (unsigned long long)stack_base,
-        (unsigned long long)stack_top);
+    serial_printf_unlocked("[cpu] frame=%016llx\n"
+                           "[cpu] pid=%u\n"
+                           "[cpu] name=%s\n"
+                           "[cpu] stack base=%016llx\n"
+                           "[cpu] stack top=%016llx\n",
+                           (unsigned long long)(uintptr_t)frame, pid, name ? name : "(null)",
+                           (unsigned long long)stack_base, (unsigned long long)stack_top);
     serial_printf_unlocked(
         "[cpu] ctxsw out ctx=%016llx rip=%016llx rsp=%016llx rflags=%016llx\n"
         "[cpu] ctxsw in ctx=%016llx rip=%016llx rsp=%016llx rflags=%016llx\n"
         "[cpu] ctxsw restore ctx=%016llx rip=%016llx rsp=%016llx rflags=%016llx\n",
-        (unsigned long long)g_ctxsw_last_out_ctx,
-        (unsigned long long)g_ctxsw_last_out_rip,
-        (unsigned long long)g_ctxsw_last_out_rsp,
-        (unsigned long long)g_ctxsw_last_out_rflags,
-        (unsigned long long)g_ctxsw_last_in_ctx,
-        (unsigned long long)g_ctxsw_last_in_rip,
-        (unsigned long long)g_ctxsw_last_in_rsp,
-        (unsigned long long)g_ctxsw_last_in_rflags,
-        (unsigned long long)g_ctx_restore_ctx,
-        (unsigned long long)g_ctx_restore_rip,
-        (unsigned long long)g_ctx_restore_rsp,
-        (unsigned long long)g_ctx_restore_rflags);
+        (unsigned long long)g_ctxsw_last_out_ctx, (unsigned long long)g_ctxsw_last_out_rip,
+        (unsigned long long)g_ctxsw_last_out_rsp, (unsigned long long)g_ctxsw_last_out_rflags,
+        (unsigned long long)g_ctxsw_last_in_ctx, (unsigned long long)g_ctxsw_last_in_rip,
+        (unsigned long long)g_ctxsw_last_in_rsp, (unsigned long long)g_ctxsw_last_in_rflags,
+        (unsigned long long)g_ctx_restore_ctx, (unsigned long long)g_ctx_restore_rip,
+        (unsigned long long)g_ctx_restore_rsp, (unsigned long long)g_ctx_restore_rflags);
     if (rip >= kernel_start && (rip + 16) <= kernel_end) {
-        serial_dump_bytes_unlocked("[cpu] rip bytes", (const uint8_t *)rip, 16);
+        serial_dump_bytes_unlocked("[cpu] rip bytes", (const uint8_t*)rip, 16);
     }
     serial_printf_unlocked("[cpu] cr3=%016llx\n", (unsigned long long)cr3);
 
-    panic_render_screen(vector, err, rip, cs, rflags, cr2, has_cr2, frame,
-                        pid, name, stack_base, stack_top, kernel_start, kernel_end, cr3);
+    panic_render_screen(vector, err, rip, cs, rflags, cr2, has_cr2, frame, pid, name, stack_base,
+                        stack_top, kernel_start, kernel_end, cr3);
 
     /* Stop the world, dump every CPU, and halt. a=vector; b=cr2 for a page
      * fault, else the faulting rip. */
@@ -530,24 +464,17 @@ x86_exception_panic_common(uint64_t vector, const uint64_t *regs)
     kpanic("cpu_exception", vector, has_cr2 ? cr2 : rip);
 }
 
-__attribute__((noreturn)) void
-x86_exception_panic(uint64_t vector)
-{
+__attribute__((noreturn)) void x86_exception_panic(uint64_t vector) {
     x86_exception_panic_common(vector, 0);
 }
 
-__attribute__((noreturn)) void
-x86_exception_panic_frame(uint64_t vector, const uint64_t *regs)
-{
+__attribute__((noreturn)) void x86_exception_panic_frame(uint64_t vector, const uint64_t* regs) {
     x86_exception_panic_common(vector, regs);
 }
 
-
-int
-x86_user_exception_handler(uint64_t vector, const uint64_t *frame)
-{
+int x86_user_exception_handler(uint64_t vector, const uint64_t* frame) {
     uint32_t pid = process_current_pid();
-    process_t *proc = process_get(pid);
+    process_t* proc = process_get(pid);
     uint64_t cs = frame ? frame[2] : 0;
     uint64_t rip = frame ? frame[1] : 0;
     uint8_t from_user = (uint8_t)((cs & 0x3u) == 0x3u);
@@ -558,16 +485,13 @@ x86_user_exception_handler(uint64_t vector, const uint64_t *frame)
     /* TODO(ring3-phase5): Expand strict-mode process-local handling to the
      * remaining user vectors we still do not probe/classify explicitly
      * (for example #BR/#NP/#MF/#XM) once stable repro payloads are available. */
-    if (vector != 0 && vector != 1 && vector != 4 &&
-        vector != 6 && vector != 7 &&
-        vector != 12 && vector != 13 && vector != 17) {
+    if (vector != 0 && vector != 1 && vector != 4 && vector != 6 && vector != 7 && vector != 12 &&
+        vector != 13 && vector != 17) {
         return -1;
     }
 
-    serial_printf("[fault] user-exc pid=%u vector=%llu rip=%016llx\n",
-                  pid,
-                  (unsigned long long)vector,
-                  (unsigned long long)rip);
+    serial_printf("[fault] user-exc pid=%u vector=%llu rip=%016llx\n", pid,
+                  (unsigned long long)vector, (unsigned long long)rip);
     if (proc->name && strcmp(proc->name, "ring3-fault-ud") == 0) {
         serial_write("[test] ring3 fault ud reason ok\n");
     }
@@ -597,14 +521,12 @@ x86_user_exception_handler(uint64_t vector, const uint64_t *frame)
     return 0;
 }
 
-int
-x86_page_fault_handler(uint64_t error_code, const uint64_t *frame)
-{
+int x86_page_fault_handler(uint64_t error_code, const uint64_t* frame) {
     uint64_t cr2 = 0;
     __asm__ volatile("mov %%cr2, %0" : "=r"(cr2));
 
     uint32_t pid = process_current_pid();
-    process_t *proc = process_get(pid);
+    process_t* proc = process_get(pid);
     if (!proc) {
         return -1;
     }
@@ -615,11 +537,9 @@ x86_page_fault_handler(uint64_t error_code, const uint64_t *frame)
     uint8_t from_user = (uint8_t)((cs & 0x3u) == 0x3u);
     pf_reason_t reason = pf_classify_reason(error_code, cr2, from_user);
 
-    if (!from_user &&
-        !(error_code & (1ULL << 0)) &&
-        cr2 >= WARP_LINMEM_VA_BASE &&
-        cr2 < WARP_LINMEM_VA_BASE +
-                  (uint64_t)(WARP_LINMEM_PDPT_COUNT / 2u) * WARP_LINMEM_VA_STRIDE &&
+    if (!from_user && !(error_code & (1ULL << 0)) && cr2 >= WARP_LINMEM_VA_BASE &&
+        cr2 <
+            WARP_LINMEM_VA_BASE + (uint64_t)(WARP_LINMEM_PDPT_COUNT / 2u) * WARP_LINMEM_VA_STRIDE &&
         paging_virt_to_phys(cr2) != 0) {
         /* The shared higher-half linmem slot window is updated in one CPU's
          * page tables and reaches every CR3 via PML4[511], but the mapping CPU
@@ -635,15 +555,10 @@ x86_page_fault_handler(uint64_t error_code, const uint64_t *frame)
     if (memory_service_handle_fault_ipc(proc->context_id, cr2, error_code) != 0) {
         if (from_user) {
             serial_printf("[fault] user-pf pid=%u reason=%s err=%016llx cr2=%016llx rip=%016llx\n",
-                          pid,
-                          pf_reason_name(reason),
-                          (unsigned long long)error_code,
-                          (unsigned long long)cr2,
-                          (unsigned long long)rip);
-            serial_printf("[cpu] user page fault terminate pid=%u err=%016llx cr2=%016llx\n",
-                          pid,
-                          (unsigned long long)error_code,
-                          (unsigned long long)cr2);
+                          pid, pf_reason_name(reason), (unsigned long long)error_code,
+                          (unsigned long long)cr2, (unsigned long long)rip);
+            serial_printf("[cpu] user page fault terminate pid=%u err=%016llx cr2=%016llx\n", pid,
+                          (unsigned long long)error_code, (unsigned long long)cr2);
             if (proc->name && strcmp(proc->name, "ring3-fault") == 0 &&
                 reason == PF_REASON_USER_TO_KERNEL) {
                 serial_write("[test] ring3 fault isolate ok\n");
@@ -653,8 +568,7 @@ x86_page_fault_handler(uint64_t error_code, const uint64_t *frame)
                 serial_write("[test] ring3 fault write reason ok\n");
             }
             if (proc->name && strcmp(proc->name, "ring3-fault-exec") == 0 &&
-                (reason == PF_REASON_EXEC_VIOLATION ||
-                 reason == PF_REASON_USER_TO_KERNEL ||
+                (reason == PF_REASON_EXEC_VIOLATION || reason == PF_REASON_USER_TO_KERNEL ||
                  reason == PF_REASON_UNMAPPED)) {
                 /* TODO: Tighten this back to EXEC_VIOLATION-only once all test
                  * CPU models consistently surface NX instruction-fetch faults
@@ -672,9 +586,7 @@ x86_page_fault_handler(uint64_t error_code, const uint64_t *frame)
     return 0;
 }
 
-void
-x86_cpu_init(void)
-{
+void x86_cpu_init(void) {
     uint64_t efer = x86_read_msr(IA32_EFER_MSR);
     if ((efer & IA32_EFER_NXE) == 0) {
         x86_write_msr(IA32_EFER_MSR, efer | IA32_EFER_NXE);
@@ -685,9 +597,9 @@ x86_cpu_init(void)
     /* Initialise BSP's per-CPU slot.  We pass &g_cpus[0] explicitly because
      * the GS base MSR has not been loaded yet — cpu_local() must not be called
      * until after the wrgsbase below. */
-    cpu_local_t *bsp = &g_cpus[0];
-    bsp->cpu_id  = 0;
-    bsp->apic_id = 0;   /* updated after lapic_init() reads LAPIC_REG_ID */
+    cpu_local_t* bsp = &g_cpus[0];
+    bsp->cpu_id = 0;
+    bsp->apic_id = 0; /* updated after lapic_init() reads LAPIC_REG_ID */
     bsp->started = 1;
     for (uint32_t i = 0; i < GDT_ENTRY_COUNT; ++i) {
         bsp->gdt[i] = k_gdt_template[i];
@@ -697,10 +609,10 @@ x86_cpu_init(void)
     gdt_install(bsp);
     idt_install();
     for (uint32_t i = 0; i < IRQ_COUNT; ++i) {
-        uintptr_t handler =
-            x86_kernel_handler_addr((uintptr_t)x86_irq_stub_table[i]);
+        uintptr_t handler = x86_kernel_handler_addr((uintptr_t)x86_irq_stub_table[i]);
         if (i == 0) {
-            idt_set_gate_ist((uint8_t)(IRQ_VECTOR_BASE + i), handler, IDT_TYPE_INTERRUPT_GATE, IRQ0_IST_INDEX);
+            idt_set_gate_ist((uint8_t)(IRQ_VECTOR_BASE + i), handler, IDT_TYPE_INTERRUPT_GATE,
+                             IRQ0_IST_INDEX);
         } else {
             idt_set_gate((uint8_t)(IRQ_VECTOR_BASE + i), handler, IDT_TYPE_INTERRUPT_GATE);
         }
@@ -715,11 +627,9 @@ x86_cpu_init(void)
 #endif
     /* Keep this literal wiring form present for source-level spec assertions;
      * runtime installation is corrected to higher-half alias immediately below. */
-    idt_set_gate((uint8_t)X86_VECTOR_SYSCALL,
-                 (uintptr_t)isr_syscall_128,
+    idt_set_gate((uint8_t)X86_VECTOR_SYSCALL, (uintptr_t)isr_syscall_128,
                  IDT_TYPE_INTERRUPT_GATE_USER);
-    idt_set_gate((uint8_t)X86_VECTOR_SYSCALL,
-                 x86_kernel_handler_addr((uintptr_t)isr_syscall_128),
+    idt_set_gate((uint8_t)X86_VECTOR_SYSCALL, x86_kernel_handler_addr((uintptr_t)isr_syscall_128),
                  IDT_TYPE_INTERRUPT_GATE_USER);
     /* Set GS base to &g_cpus[0] so cpu_local() via GS:0 works from here on.
      * The self-pointer must be written before the MSR load. */
@@ -733,22 +643,18 @@ x86_cpu_init(void)
     (void)USER_DS_SELECTOR;
 }
 
-void
-x86_cpu_set_kernel_stack(uint64_t rsp0)
-{
+void x86_cpu_set_kernel_stack(uint64_t rsp0) {
     if (rsp0 == 0) {
         return;
     }
     cpu_local()->tss.rsp0 = rsp0;
 }
 
-void
-x86_cpu_relocate_tables_high(void)
-{
-    cpu_local_t      *cpu = cpu_local();
-    descriptor_ptr_t  gdtr;
-    descriptor_ptr_t  idtr;
-    uint16_t          tss_selector = KERNEL_TSS_SELECTOR;
+void x86_cpu_relocate_tables_high(void) {
+    cpu_local_t* cpu = cpu_local();
+    descriptor_ptr_t gdtr;
+    descriptor_ptr_t idtr;
+    uint16_t tss_selector = KERNEL_TSS_SELECTOR;
 
     cpu->tss.rsp0 = x86_kernel_data_addr(cpu->tss.rsp0);
     cpu->tss.ist1 = x86_kernel_data_addr(cpu->tss.ist1);
@@ -761,7 +667,7 @@ x86_cpu_relocate_tables_high(void)
 
     /* Relocate the GS base MSR to the high-half address of g_cpus[0]. */
     uint64_t bsp_high = x86_kernel_data_addr((uint64_t)(uintptr_t)cpu);
-    cpu_local_t *bsp_high_ptr = (cpu_local_t *)(uintptr_t)bsp_high;
+    cpu_local_t* bsp_high_ptr = (cpu_local_t*)(uintptr_t)bsp_high;
     bsp_high_ptr->self = bsp_high_ptr;
     x86_write_msr(IA32_GS_BASE_MSR, bsp_high);
 
@@ -770,15 +676,11 @@ x86_cpu_relocate_tables_high(void)
     __asm__ volatile("ltr %0" : : "r"(tss_selector) : "memory");
 }
 
-void
-x86_cpu_enable_interrupts(void)
-{
+void x86_cpu_enable_interrupts(void) {
     __asm__ volatile("sti");
 }
 
-void
-x86_cpu_disable_interrupts(void)
-{
+void x86_cpu_disable_interrupts(void) {
     __asm__ volatile("cli");
 }
 
@@ -786,14 +688,12 @@ x86_cpu_disable_interrupts(void)
 
 #if WASMOS_SMP
 
-void
-x86_cpu_prepare_ap(cpu_local_t *cpu, uint64_t ist1_top, uint64_t rsp0_top)
-{
+void x86_cpu_prepare_ap(cpu_local_t* cpu, uint64_t ist1_top, uint64_t rsp0_top) {
     for (uint32_t i = 0; i < GDT_ENTRY_COUNT; ++i) {
         cpu->gdt[i] = k_gdt_template[i];
     }
     for (uint32_t i = 0; i < sizeof(cpu->tss); ++i) {
-        ((uint8_t *)&cpu->tss)[i] = 0;
+        ((uint8_t*)&cpu->tss)[i] = 0;
     }
     cpu->tss.rsp0 = rsp0_top;
     cpu->tss.ist1 = ist1_top;
@@ -801,10 +701,8 @@ x86_cpu_prepare_ap(cpu_local_t *cpu, uint64_t ist1_top, uint64_t rsp0_top)
     gdt_set_tss(cpu);
 }
 
-void
-x86_ap_cpu_init(uint32_t cpu_id)
-{
-    cpu_local_t *cpu = &g_cpus[cpu_id];
+void x86_ap_cpu_init(uint32_t cpu_id) {
+    cpu_local_t* cpu = &g_cpus[cpu_id];
 
     x86_cpu_enable_kernel_simd();
 
@@ -814,7 +712,7 @@ x86_ap_cpu_init(uint32_t cpu_id)
     /* Load the shared IDT (table already populated by BSP). */
     descriptor_ptr_t idtr;
     idtr.limit = (uint16_t)(sizeof(g_idt) - 1);
-    idtr.base  = (uint64_t)(uintptr_t)&g_idt[0];
+    idtr.base = (uint64_t)(uintptr_t)&g_idt[0];
     __asm__ volatile("lidt %0" : : "m"(idtr) : "memory");
 
     /* Set GS base to this CPU's per-CPU slot so cpu_local() works. */

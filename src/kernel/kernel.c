@@ -43,7 +43,7 @@
  */
 
 static uint32_t g_chardev_service_endpoint = IPC_ENDPOINT_NONE;
-static const boot_info_t *g_boot_info;
+static const boot_info_t* g_boot_info;
 static boot_info_t g_boot_info_shadow;
 
 static const uint8_t g_preempt_test_enabled = 0;
@@ -60,9 +60,7 @@ static const uint8_t g_ring3_smoke_enabled = WASMOS_RING3_SMOKE_DEFAULT;
 static const uint8_t g_ring3_thread_lifecycle_smoke_enabled =
     WASMOS_RING3_THREAD_LIFECYCLE_SMOKE_DEFAULT;
 
-uint8_t
-kernel_ring3_smoke_enabled(void)
-{
+uint8_t kernel_ring3_smoke_enabled(void) {
     return g_ring3_smoke_enabled;
 }
 
@@ -70,13 +68,8 @@ static const uint8_t g_ring3_fault_churn_rounds = 6;
 
 static init_state_t g_init_state;
 
-static int
-wasmos_endpoint_resolve(uint32_t owner_context_id,
-                        const uint8_t *name,
-                        uint32_t name_len,
-                        uint32_t rights,
-                        uint32_t *out_endpoint)
-{
+static int wasmos_endpoint_resolve(uint32_t owner_context_id, const uint8_t* name,
+                                   uint32_t name_len, uint32_t rights, uint32_t* out_endpoint) {
     if (!out_endpoint) {
         return -1;
     }
@@ -109,12 +102,8 @@ wasmos_endpoint_resolve(uint32_t owner_context_id,
     return -1;
 }
 
-static int
-wasmos_capability_grant(uint32_t owner_context_id,
-                        const uint8_t *name,
-                        uint32_t name_len,
-                        uint32_t flags)
-{
+static int wasmos_capability_grant(uint32_t owner_context_id, const uint8_t* name,
+                                   uint32_t name_len, uint32_t flags) {
     if (str_eq_bytes(name, name_len, "ipc.basic")) {
         return 0;
     }
@@ -124,9 +113,7 @@ wasmos_capability_grant(uint32_t owner_context_id,
     return -1;
 }
 
-static process_run_result_t
-chardev_server_entry(process_t *process, void *arg)
-{
+static process_run_result_t chardev_server_entry(process_t* process, void* arg) {
     (void)arg;
 
     int rc = wasm_chardev_run();
@@ -134,9 +121,7 @@ chardev_server_entry(process_t *process, void *arg)
     return PROCESS_RUN_EXITED;
 }
 
-static process_run_result_t
-idle_entry(process_t *process, void *arg)
-{
+static process_run_result_t idle_entry(process_t* process, void* arg) {
     for (;;) {
         /* Enable interrupts and halt ATOMICALLY: `sti` has a one-instruction
          * shadow so an interrupt cannot be taken between `sti` and `hlt`.
@@ -154,18 +139,14 @@ idle_entry(process_t *process, void *arg)
     }
 }
 
-static void __attribute__((noreturn))
-kernel_halt_forever(void)
-{
+static void __attribute__((noreturn)) kernel_halt_forever(void) {
     __asm__ volatile("cli");
     for (;;) {
         __asm__ volatile("hlt");
     }
 }
 
-void
-kernel_system_poweroff(void)
-{
+void kernel_system_poweroff(void) {
     __asm__ volatile("cli");
 
     outw(0x604u, 0x2000u);
@@ -178,9 +159,7 @@ kernel_system_poweroff(void)
     kernel_halt_forever();
 }
 
-void
-kernel_system_reboot(void)
-{
+void kernel_system_reboot(void) {
     __asm__ volatile("cli");
 
     outb(0x64u, 0xFEu);
@@ -193,14 +172,12 @@ kernel_system_reboot(void)
     kernel_halt_forever();
 }
 
-void
-kmain(boot_info_t *boot_info)
-{
+void kmain(boot_info_t* boot_info) {
     uint32_t chardev_pid = 0;
-    process_t *chardev_proc;
+    process_t* chardev_proc;
     uint32_t chardev_endpoint = IPC_ENDPOINT_NONE;
     uint32_t mem_service_pid = 0;
-    process_t *mem_service_proc = 0;
+    process_t* mem_service_proc = 0;
     uint32_t mem_service_endpoint = IPC_ENDPOINT_NONE;
     uint32_t mem_reply_endpoint = IPC_ENDPOINT_NONE;
     uint32_t idle_pid = 0;
@@ -215,8 +192,7 @@ kmain(boot_info_t *boot_info)
         kpanic("invalid_boot_info", 0ULL, 0ULL);
     }
     klog_printf("[kernel] boot_info version=%016llx\n[kernel] boot_info size=%016llx\n",
-        (unsigned long long)boot_info->version,
-        (unsigned long long)boot_info->size);
+                (unsigned long long)boot_info->version, (unsigned long long)boot_info->size);
     g_boot_info = boot_info;
     framebuffer_init(boot_info);
     cpu_init();
@@ -301,9 +277,8 @@ kmain(boot_info_t *boot_info)
     }
     g_chardev_service_endpoint = chardev_endpoint;
     kernel_shmem_owner_isolation_test(mem_service_proc->context_id, chardev_proc->context_id);
-    kernel_shmem_misuse_matrix_test(mem_service_proc->context_id,
-                                 chardev_proc->context_id,
-                                 g_ring3_smoke_enabled);
+    kernel_shmem_misuse_matrix_test(mem_service_proc->context_id, chardev_proc->context_id,
+                                    g_ring3_smoke_enabled);
 
     wasmos_app_set_policy_hooks(wasmos_endpoint_resolve, wasmos_capability_grant);
 
@@ -320,8 +295,7 @@ kmain(boot_info_t *boot_info)
     }
 
     if (g_ring3_smoke_enabled) {
-        if (kernel_ring3_spawn_suite(init_pid,
-                                     g_ring3_thread_lifecycle_smoke_enabled,
+        if (kernel_ring3_spawn_suite(init_pid, g_ring3_thread_lifecycle_smoke_enabled,
                                      g_ring3_fault_churn_rounds) != 0) {
             kpanic("ring3_spawn_suite_failed", 0ULL, 0ULL);
         }

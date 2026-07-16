@@ -5,7 +5,7 @@
 
 #include <stdint.h>
 
-#define X86_VECTOR_SYSCALL 0x80u  /* int 0x80 is the WASMOS syscall vector */
+#define X86_VECTOR_SYSCALL 0x80u /* int 0x80 is the WASMOS syscall vector */
 
 /* Program GDT, TSS, and IDT; called once on the BSP during kernel startup. */
 void cpu_init(void);
@@ -14,10 +14,10 @@ void cpu_init(void);
 void cpu_relocate_tables_high(void);
 
 /* Handle a CPU exception from ring-3; delivers a SIGFPE-equivalent or kills the process. */
-int x86_user_exception_handler(uint64_t vector, const uint64_t *frame);
+int x86_user_exception_handler(uint64_t vector, const uint64_t* frame);
 
 /* Handle a page fault; may invoke demand paging or kill the faulting process. */
-int x86_page_fault_handler(uint64_t error_code, const uint64_t *frame);
+int x86_page_fault_handler(uint64_t error_code, const uint64_t* frame);
 
 /* Update TSS.RSP0 so the next ring-3 → ring-0 transition lands on the correct stack. */
 void cpu_set_kernel_stack(uint64_t rsp0);

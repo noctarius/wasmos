@@ -3,7 +3,6 @@ const c = @cImport({
 });
 const sys = @import("libsys");
 
-
 const IPC_OK: i32 = 0;
 const IPC_EMPTY: i32 = 1;
 const IPC_ENDPOINT_NONE: u32 = 0xFFFF_FFFF;
@@ -253,8 +252,10 @@ fn logHex32(prefix: []const u8, v: u32) void {
         n += 1;
     }
     if (n + 10 >= buf.len) return;
-    buf[n] = '0'; n += 1;
-    buf[n] = 'x'; n += 1;
+    buf[n] = '0';
+    n += 1;
+    buf[n] = 'x';
+    n += 1;
     const hex = "0123456789abcdef";
     var shift: i32 = 28;
     while (shift >= 0) : (shift -= 4) {
@@ -438,48 +439,48 @@ fn endpoint_alive(endpoint: u32) bool {
 
 const KEYMAP_US = keymap_t{
     .plain = [_]u8{
-        0, 0x1B, '1', '2', '3', '4', '5', '6', '7', '8',
-        '9', '0', '-', '=', 0x08, 0x09, 'q', 'w', 'e', 'r',
-        't', 'y', 'u', 'i', 'o', 'p', '[', ']', 0x0A, 0,
-        'a', 's', 'd', 'f', 'g', 'h', 'j', 'k', 'l', ';',
-        '\'', '`', 0, '\\', 'z', 'x', 'c', 'v', 'b', 'n',
-        'm', ',', '.', '/', 0, '*', 0, ' ',
+        0,    0x1B, '1', '2',  '3',  '4',  '5', '6', '7',  '8',
+        '9',  '0',  '-', '=',  0x08, 0x09, 'q', 'w', 'e',  'r',
+        't',  'y',  'u', 'i',  'o',  'p',  '[', ']', 0x0A, 0,
+        'a',  's',  'd', 'f',  'g',  'h',  'j', 'k', 'l',  ';',
+        '\'', '`',  0,   '\\', 'z',  'x',  'c', 'v', 'b',  'n',
+        'm',  ',',  '.', '/',  0,    '*',  0,   ' ',
     },
     .shift = [_]u8{
-        0, 0x1B, '!', '@', '#', '$', '%', '^', '&', '*',
-        '(', ')', '_', '+', 0x08, 0x09, 'Q', 'W', 'E', 'R',
-        'T', 'Y', 'U', 'I', 'O', 'P', '{', '}', 0x0A, 0,
-        'A', 'S', 'D', 'F', 'G', 'H', 'J', 'K', 'L', ':',
-        '"', '~', 0, '|', 'Z', 'X', 'C', 'V', 'B', 'N',
-        'M', '<', '>', '?', 0, '*', 0, ' ',
+        0,   0x1B, '!', '@', '#',  '$',  '%', '^', '&',  '*',
+        '(', ')',  '_', '+', 0x08, 0x09, 'Q', 'W', 'E',  'R',
+        'T', 'Y',  'U', 'I', 'O',  'P',  '{', '}', 0x0A, 0,
+        'A', 'S',  'D', 'F', 'G',  'H',  'J', 'K', 'L',  ':',
+        '"', '~',  0,   '|', 'Z',  'X',  'C', 'V', 'B',  'N',
+        'M', '<',  '>', '?', 0,    '*',  0,   ' ',
     },
     .altgr = [_]u8{0} ** SCANCODE_MAP_LEN,
 };
 
 const KEYMAP_DE_NODEADKEYS = keymap_t{
     .plain = [_]u8{
-        0, 0x1B, '1', '2', '3', '4', '5', '6', '7', '8',
-        '9', '0', 0xDF, 0xB4, 0x08, 0x09, 'q', 'w', 'e', 'r',
-        't', 'z', 'u', 'i', 'o', 'p', 0xFC, '+', 0x0A, 0,
-        'a', 's', 'd', 'f', 'g', 'h', 'j', 'k', 'l', 0xF6,
-        0xE4, '#', 0, '<', 'y', 'x', 'c', 'v', 'b', 'n',
-        'm', ',', '.', '-', 0, '*', 0, ' ',
+        0,    0x1B, '1',  '2',  '3',  '4',  '5',  '6', '7',  '8',
+        '9',  '0',  0xDF, 0xB4, 0x08, 0x09, 'q',  'w', 'e',  'r',
+        't',  'z',  'u',  'i',  'o',  'p',  0xFC, '+', 0x0A, 0,
+        'a',  's',  'd',  'f',  'g',  'h',  'j',  'k', 'l',  0xF6,
+        0xE4, '#',  0,    '<',  'y',  'x',  'c',  'v', 'b',  'n',
+        'm',  ',',  '.',  '-',  0,    '*',  0,    ' ',
     },
     .shift = [_]u8{
-        0, 0x1B, '!', '"', '#', '$', '%', '&', '/', '(',
-        ')', '=', '?', '`', 0x08, 0x09, 'Q', 'W', 'E', 'R',
-        'T', 'Z', 'U', 'I', 'O', 'P', 0xDC, '*', 0x0A, 0,
-        'A', 'S', 'D', 'F', 'G', 'H', 'J', 'K', 'L', 0xD6,
-        0xC4, '\'', 0, '>', 'Y', 'X', 'C', 'V', 'B', 'N',
-        'M', ';', ':', '_', 0, '*', 0, ' ',
+        0,    0x1B, '!', '"', '#',  '$',  '%',  '&', '/',  '(',
+        ')',  '=',  '?', '`', 0x08, 0x09, 'Q',  'W', 'E',  'R',
+        'T',  'Z',  'U', 'I', 'O',  'P',  0xDC, '*', 0x0A, 0,
+        'A',  'S',  'D', 'F', 'G',  'H',  'J',  'K', 'L',  0xD6,
+        0xC4, '\'', 0,   '>', 'Y',  'X',  'C',  'V', 'B',  'N',
+        'M',  ';',  ':', '_', 0,    '*',  0,    ' ',
     },
     .altgr = [_]u8{
-        0, 0, 0, 0, 0, 0, 0, '{', '[', ']',
-        '}', 0, '\\', 0, 0, 0, '@', 0, 0, 0,
-        0, 0xFC, 0, 0, 0, 0xF6, '~', 0, 0, 0,
-        0, 0xDF, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, '|', 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0,
+        0,   0,    0,    0,   0, 0,    0,   '{', '[', ']',
+        '}', 0,    '\\', 0,   0, 0,    '@', 0,   0,   0,
+        0,   0xFC, 0,    0,   0, 0xF6, '~', 0,   0,   0,
+        0,   0xDF, 0,    0,   0, 0,    0,   0,   0,   0,
+        0,   0,    0,    '|', 0, 0,    0,   0,   0,   0,
+        0,   0,    0,    0,   0, 0,    0,   0,
     },
 };
 
@@ -617,7 +618,9 @@ fn ipc_call_budgeted(destination: u32, request_id: u32, msg_type: u32, arg0: u32
             api().sched_yield.?();
         }
         if (total_polls >= total_limit) {
-            if (GFX_TRACE) { logMsg("[gfx-t] ipc_call_budgeted: total limit hit\n"); }
+            if (GFX_TRACE) {
+                logMsg("[gfx-t] ipc_call_budgeted: total limit hit\n");
+            }
             sys.intentCancel(&g_ipc_loop, request_id);
             return -1;
         }
@@ -762,16 +765,22 @@ fn try_switch_to_gfx_tty() void {
 
 fn try_restore_cli_tty() void {
     if (g_vt_endpoint == IPC_ENDPOINT_NONE) return;
-    if (GFX_TRACE) { logMsg("[gfx-t] try_restore_cli_tty ENTER\n"); }
+    if (GFX_TRACE) {
+        logMsg("[gfx-t] try_restore_cli_tty ENTER\n");
+    }
     var reply: c.nd_ipc_message_t = undefined;
     const req_id: u32 = GFX_REQUEST_BASE + GFX_FB_LOOKUP_RETRIES + 3;
     if (ipc_call(g_vt_endpoint, req_id, c.VT_IPC_SWITCH_TTY, 1, 0, 0, 0, &reply) == 0 and
         reply.type == c.VT_IPC_RESP)
     {
-        if (GFX_TRACE) { logMsg("[gfx-t] try_restore_cli_tty OK\n"); }
+        if (GFX_TRACE) {
+            logMsg("[gfx-t] try_restore_cli_tty OK\n");
+        }
         logMsg("[gfx] restored tty1 for CLI\n");
     } else {
-        if (GFX_TRACE) { logMsg("[gfx-t] try_restore_cli_tty FAILED\n"); }
+        if (GFX_TRACE) {
+            logMsg("[gfx-t] try_restore_cli_tty FAILED\n");
+        }
     }
 }
 
@@ -1102,7 +1111,11 @@ fn request_repaint_full() void {
 fn flush_repaint_if_pending() void {
     if (!g_dirty_pending) return;
     if (GFX_TRACE) {
-        if (g_dirty_full) { logMsg("[gfx-t] repaint full\n"); } else { logMsg("[gfx-t] repaint rect\n"); }
+        if (g_dirty_full) {
+            logMsg("[gfx-t] repaint full\n");
+        } else {
+            logMsg("[gfx-t] repaint rect\n");
+        }
     }
     if (g_dirty_full) {
         _ = compose_full();
@@ -1265,10 +1278,7 @@ fn maybe_emit_pointer_event(dx: i32, dy: i32, buttons: u32, prev_buttons: u32) v
         if (GFX_TRACE and (buttons & 0x1) != 0 and (prev_buttons & 0x1) == 0) {
             logMsg("[dbg-gfx] pointer btn-push queued\n");
         }
-        event_push(target.owner_endpoint, c.GFX_EVENT_POINTER,
-                   target.window_id,
-                   pack_pointer_event(@intCast(rel_x), @intCast(rel_y), buttons),
-                   0);
+        event_push(target.owner_endpoint, c.GFX_EVENT_POINTER, target.window_id, pack_pointer_event(@intCast(rel_x), @intCast(rel_y), buttons), 0);
     }
 }
 
@@ -1396,7 +1406,9 @@ fn handle_mouse_notify(msg: *const c.nd_ipc_message_t) void {
     pointer_update_position(dx, dy);
 
     if (g_overlay_locked and (old_x != g_pointer_x or old_y != g_pointer_y)) {
-        if (GFX_TRACE) { logMsg("[gfx-t] cursor move\n"); }
+        if (GFX_TRACE) {
+            logMsg("[gfx-t] cursor move\n");
+        }
         request_repaint_rect(cursor_rect_at(old_x, old_y));
         request_repaint_rect(cursor_rect_at(g_pointer_x, g_pointer_y));
     }
@@ -1429,7 +1441,9 @@ fn sync_console_mode_for_windows() void {
     const cnt = active_presented_window_count();
     const has_presented_windows = cnt > 0;
     if (has_presented_windows and !g_overlay_locked) {
-        if (GFX_TRACE) { logMsg("[gfx-t] sync: lock\n"); }
+        if (GFX_TRACE) {
+            logMsg("[gfx-t] sync: lock\n");
+        }
         try_switch_to_gfx_tty();
         fb_set_overlay_lock(true);
         g_overlay_locked = true;
@@ -1437,7 +1451,9 @@ fn sync_console_mode_for_windows() void {
         return;
     }
     if (!has_presented_windows and g_overlay_locked) {
-        if (GFX_TRACE) { logMsg("[gfx-t] sync: restore cnt=0 locked=true\n"); }
+        if (GFX_TRACE) {
+            logMsg("[gfx-t] sync: restore cnt=0 locked=true\n");
+        }
         fb_set_overlay_lock(false);
         g_overlay_locked = false;
         try_restore_cli_tty();
@@ -1643,7 +1659,7 @@ fn fill_rect(x0: i32, y0: i32, w: i32, h: i32, color: u32) void {
         const row_base: usize = @as(usize, @intCast(y)) * stride + @as(usize, @intCast(sx));
         var col: usize = 0;
         while (col + 4 <= row_w) : (col += 4) {
-            fb[row_base + col]     = color;
+            fb[row_base + col] = color;
             fb[row_base + col + 1] = color;
             fb[row_base + col + 2] = color;
             fb[row_base + col + 3] = color;
@@ -1674,7 +1690,9 @@ fn draw_cursor_overlay(region: c.gfx_rect_t) void {
     if (!g_fb_info_valid or g_backbuffer_pixels == null) return;
     const cr = cursor_rect_at(g_pointer_x, g_pointer_y);
     if (!rect_intersects(region, cr)) {
-        if (GFX_TRACE) { logMsg("[gfx-t] cursor no-intersect\n"); }
+        if (GFX_TRACE) {
+            logMsg("[gfx-t] cursor no-intersect\n");
+        }
         return;
     }
 
@@ -1863,9 +1881,7 @@ fn try_toggle_maximize(window_idx: usize) bool {
         g_windows[window_idx].restore_w = g_windows[window_idx].width;
         g_windows[window_idx].restore_h = g_windows[window_idx].height;
         g_windows[window_idx].is_maximized = true;
-        resize_window_and_notify(window_idx, 0, 0,
-            @intCast(content_width_for_outer_limit(@intCast(fb_w), window_has_no_chrome(g_windows[window_idx]))),
-            @intCast(content_height_for_outer_limit(@intCast(fb_h), window_has_no_chrome(g_windows[window_idx]))));
+        resize_window_and_notify(window_idx, 0, 0, @intCast(content_width_for_outer_limit(@intCast(fb_w), window_has_no_chrome(g_windows[window_idx]))), @intCast(content_height_for_outer_limit(@intCast(fb_h), window_has_no_chrome(g_windows[window_idx]))));
         return true;
     }
 
@@ -2222,7 +2238,9 @@ fn draw_window_buffer(win: window_slot_t, buf: buffer_slot_t, clip: c.gfx_rect_t
     if (g_backbuffer_pixels == null) return false;
     // Use the permanently-cached mapping set at buffer allocation.
     const src_pixels = buf.mapped_pixels orelse {
-        if (GFX_TRACE) { logMsg("[gfx-t] draw_window_buffer: mapped_pixels null!\n"); }
+        if (GFX_TRACE) {
+            logMsg("[gfx-t] draw_window_buffer: mapped_pixels null!\n");
+        }
         return false;
     };
     const dst_pixels = g_backbuffer_pixels.?;
@@ -2624,7 +2642,9 @@ fn handle_present_window(msg: *const c.nd_ipc_message_t) void {
 
     if (damage_count == 0 or damage_shmem_id == 0 or damage_count > GFX_MAX_DAMAGE_RECTS) {
         request_repaint_full();
-        if (GFX_TRACE) { logMsg("[gfx-t] present-reply OK\n"); }
+        if (GFX_TRACE) {
+            logMsg("[gfx-t] present-reply OK\n");
+        }
         reply_with_status(msg, c.GFX_STATUS_OK, 0, 0, 0);
         return;
     }
@@ -2676,7 +2696,9 @@ fn handle_present_window(msg: *const c.nd_ipc_message_t) void {
 }
 
 fn handle_poll_event(msg: *const c.nd_ipc_message_t) void {
-    if (GFX_TRACE) { logMsg("[gfx-t] poll-event\n"); }
+    if (GFX_TRACE) {
+        logMsg("[gfx-t] poll-event\n");
+    }
     var ev: gfx_event_t = .{};
     if (event_pop_for(msg.source, &ev)) {
         reply_with_status(msg, c.GFX_STATUS_OK, ev.event_type, ev.arg1, ev.arg2);
@@ -2756,10 +2778,7 @@ fn handle_list_windows(msg: *const c.nd_ipc_message_t) void {
                 if (g_windows[m].in_use and
                     (g_windows[m].flags & GFX_WINDOW_FLAG_NO_TASK_LIST) == 0) total += 1;
             }
-            reply_with_status(msg, c.GFX_STATUS_OK,
-                @intCast(g_windows[k].window_id),
-                @intCast(g_windows[k].owner_endpoint),
-                @intCast(total));
+            reply_with_status(msg, c.GFX_STATUS_OK, @intCast(g_windows[k].window_id), @intCast(g_windows[k].owner_endpoint), @intCast(total));
             return;
         }
         count += 1;
@@ -2826,10 +2845,7 @@ fn handle_get_display_info(msg: *const c.nd_ipc_message_t) void {
         reply_with_status(msg, c.GFX_STATUS_IO, 0, 0, 0);
         return;
     }
-    reply_with_status(msg, c.GFX_STATUS_OK,
-        @intCast(g_fb_info.framebuffer_width),
-        @intCast(g_fb_info.framebuffer_height),
-        0);
+    reply_with_status(msg, c.GFX_STATUS_OK, @intCast(g_fb_info.framebuffer_width), @intCast(g_fb_info.framebuffer_height), 0);
 }
 
 fn handle_move_window(msg: *const c.nd_ipc_message_t) void {

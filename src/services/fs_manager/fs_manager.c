@@ -21,19 +21,17 @@ static fs_backend_t g_backends[FS_BACKEND_CAP];
 extern uint8_t __heap_base;
 
 typedef struct fs_client_chunk {
-    struct fs_client_chunk *next;
+    struct fs_client_chunk* next;
     uint32_t used;
     fs_client_state_t slots[FS_CLIENT_CHUNK_CAP];
 } fs_client_chunk_t;
 
-static fs_client_chunk_t *g_client_chunks = 0;
+static fs_client_chunk_t* g_client_chunks = 0;
 static uint32_t g_heap_cursor = 0;
 static uint32_t g_heap_limit = 0;
 
 /* Initialise the custom bump heap starting at &__heap_base. */
-static void
-fsmgr_heap_init(void)
-{
+static void fsmgr_heap_init(void) {
     g_heap_cursor = (uint32_t)(uintptr_t)&__heap_base;
     g_heap_limit = (uint32_t)__builtin_wasm_memory_size(0) * 65536u;
     if (g_heap_cursor > g_heap_limit) {
@@ -43,9 +41,7 @@ fsmgr_heap_init(void)
 
 /* Bump-allocate size bytes aligned to align (must be power-of-two);
  * grows WASM memory pages on demand.  Memory is never freed. */
-static void *
-fsmgr_heap_alloc(uint32_t size, uint32_t align)
-{
+static void* fsmgr_heap_alloc(uint32_t size, uint32_t align) {
     uint32_t aligned = 0;
     uint32_t end = 0;
     if (align == 0 || (align & (align - 1u)) != 0u) {
@@ -66,14 +62,12 @@ fsmgr_heap_alloc(uint32_t size, uint32_t align)
         g_heap_limit += 65536u;
     }
     g_heap_cursor = end;
-    return (void *)(uintptr_t)aligned;
+    return (void*)(uintptr_t)aligned;
 }
 
-static fs_client_chunk_t *
-client_chunk_alloc(void)
-{
-    fs_client_chunk_t *chunk =
-        (fs_client_chunk_t *)fsmgr_heap_alloc((uint32_t)sizeof(fs_client_chunk_t), 8u);
+static fs_client_chunk_t* client_chunk_alloc(void) {
+    fs_client_chunk_t* chunk =
+        (fs_client_chunk_t*)fsmgr_heap_alloc((uint32_t)sizeof(fs_client_chunk_t), 8u);
     if (!chunk) {
         return 0;
     }
@@ -85,30 +79,25 @@ client_chunk_alloc(void)
  * that the backend must borrow. Such requests carry the client's buffer_id in
  * arg2; fs-manager forwards it and the client endpoint so the backend can borrow
  * the client's object directly. */
-static int
-type_uses_client_buffer(int32_t type)
-{
-    return type == FS_IPC_OPEN_REQ ||
-           type == FS_IPC_STAT_REQ ||
-           type == FS_IPC_UNLINK_REQ ||
-           type == FS_IPC_MKDIR_REQ ||
-           type == FS_IPC_RMDIR_REQ ||
-           type == FS_IPC_READ_REQ ||
-           type == FS_IPC_WRITE_REQ ||
-           type == FS_IPC_READ_APP_REQ;
+static int type_uses_client_buffer(int32_t type) {
+    return type == FS_IPC_OPEN_REQ || type == FS_IPC_STAT_REQ || type == FS_IPC_UNLINK_REQ ||
+           type == FS_IPC_MKDIR_REQ || type == FS_IPC_RMDIR_REQ || type == FS_IPC_READ_REQ ||
+           type == FS_IPC_WRITE_REQ || type == FS_IPC_READ_APP_REQ;
 }
 
-static void log_msg(const char *s) {
-    if (!s) return;
+static void log_msg(const char* s) {
+    if (!s)
+        return;
     (void)printf("%s", s);
 }
 
-static void set_mount_name(fs_backend_t *slot, const char *base) {
+static void set_mount_name(fs_backend_t* slot, const char* base) {
     char buf[16];
     uint8_t tmp[3];
     uint32_t n = 0;
     uint32_t pos = 0;
-    if (!slot) return;
+    if (!slot)
+        return;
     str_copy(buf, sizeof(buf), base);
     if (slot->slot == 0) {
         str_copy(slot->mount_name, sizeof(slot->mount_name), buf);
@@ -129,10 +118,8 @@ static void set_mount_name(fs_backend_t *slot, const char *base) {
     str_copy(slot->mount_name, sizeof(slot->mount_name), buf);
 }
 
-static fs_client_state_t *
-client_state_lookup(int32_t context_id)
-{
-    fs_client_chunk_t *chunk = g_client_chunks;
+static fs_client_state_t* client_state_lookup(int32_t context_id) {
+    fs_client_chunk_t* chunk = g_client_chunks;
     while (chunk) {
         for (uint32_t i = 0; i < chunk->used; ++i) {
             if (chunk->slots[i].in_use && chunk->slots[i].context_id == context_id) {
@@ -144,9 +131,7 @@ client_state_lookup(int32_t context_id)
     return 0;
 }
 
-static void
-client_state_reset_fds(fs_client_state_t *state)
-{
+static void client_state_reset_fds(fs_client_state_t* state) {
     if (!state) {
         return;
     }
@@ -155,18 +140,16 @@ client_state_reset_fds(fs_client_state_t *state)
 
 /* Find or create per-context state for context_id; allocates a new chunk if
  * the current one is full.  Returns NULL only if heap is exhausted. */
-static fs_client_state_t *
-client_state(int32_t context_id)
-{
-    fs_client_state_t *state = client_state_lookup(context_id);
-    fs_client_chunk_t *chunk = g_client_chunks;
-    fs_client_chunk_t *last = 0;
+static fs_client_state_t* client_state(int32_t context_id) {
+    fs_client_state_t* state = client_state_lookup(context_id);
+    fs_client_chunk_t* chunk = g_client_chunks;
+    fs_client_chunk_t* last = 0;
     if (state) {
         return state;
     }
     while (chunk) {
         if (chunk->used < FS_CLIENT_CHUNK_CAP) {
-            fs_client_state_t *slot = &chunk->slots[chunk->used++];
+            fs_client_state_t* slot = &chunk->slots[chunk->used++];
             slot->in_use = 1;
             slot->context_id = context_id;
             slot->mount = FS_MOUNT_ROOT;
@@ -197,18 +180,12 @@ client_state(int32_t context_id)
     return &chunk->slots[0];
 }
 
-static int
-fsmgr_is_fd_op_type(int32_t type)
-{
-    return type == FS_IPC_READ_REQ ||
-           type == FS_IPC_WRITE_REQ ||
-           type == FS_IPC_CLOSE_REQ ||
+static int fsmgr_is_fd_op_type(int32_t type) {
+    return type == FS_IPC_READ_REQ || type == FS_IPC_WRITE_REQ || type == FS_IPC_CLOSE_REQ ||
            type == FS_IPC_SEEK_REQ;
 }
 
-static fsmgr_client_fd_t *
-fsmgr_fd_entry(fs_client_state_t *state, int32_t client_fd)
-{
+static fsmgr_client_fd_t* fsmgr_fd_entry(fs_client_state_t* state, int32_t client_fd) {
     int32_t index = client_fd - 3;
 
     if (!state || index < 0 || index >= FSMGR_CLIENT_FD_CAP) {
@@ -220,9 +197,8 @@ fsmgr_fd_entry(fs_client_state_t *state, int32_t client_fd)
     return &state->fds[index];
 }
 
-static int
-fsmgr_fd_alloc(fs_client_state_t *state, int32_t backend_endpoint, int32_t backend_fd, int32_t *out_client_fd)
-{
+static int fsmgr_fd_alloc(fs_client_state_t* state, int32_t backend_endpoint, int32_t backend_fd,
+                          int32_t* out_client_fd) {
     if (!state || !out_client_fd || backend_endpoint < 0 || backend_fd < 0) {
         return -1;
     }
@@ -239,10 +215,8 @@ fsmgr_fd_alloc(fs_client_state_t *state, int32_t backend_endpoint, int32_t backe
     return -1;
 }
 
-static void
-fsmgr_fd_release(fs_client_state_t *state, int32_t client_fd)
-{
-    fsmgr_client_fd_t *entry = fsmgr_fd_entry(state, client_fd);
+static void fsmgr_fd_release(fs_client_state_t* state, int32_t client_fd) {
+    fsmgr_client_fd_t* entry = fsmgr_fd_entry(state, client_fd);
 
     if (!entry) {
         return;
@@ -252,9 +226,7 @@ fsmgr_fd_release(fs_client_state_t *state, int32_t client_fd)
     entry->backend_fd = -1;
 }
 
-static fs_backend_t *
-backend_find_by_name(const char *name)
-{
+static fs_backend_t* backend_find_by_name(const char* name) {
     if (!name) {
         return 0;
     }
@@ -266,9 +238,7 @@ backend_find_by_name(const char *name)
     return 0;
 }
 
-static fs_backend_t *
-backend_first_of_kind(uint8_t kind)
-{
+static fs_backend_t* backend_first_of_kind(uint8_t kind) {
     for (uint32_t i = 0; i < FS_BACKEND_CAP; ++i) {
         if (g_backends[i].in_use && g_backends[i].kind == kind) {
             return &g_backends[i];
@@ -279,10 +249,8 @@ backend_first_of_kind(uint8_t kind)
 
 /* Register or update a backend at endpoint; assigns a slot-based mount name
  * ("boot"/"user" for BOOT kind; "init"/"init1" for INIT; "fs"/"fs1" for others). */
-static fs_backend_t *
-backend_register(uint8_t kind, int32_t endpoint)
-{
-    fs_backend_t *slot = 0;
+static fs_backend_t* backend_register(uint8_t kind, int32_t endpoint) {
+    fs_backend_t* slot = 0;
     uint8_t kind_slot = 0;
     for (uint32_t i = 0; i < FS_BACKEND_CAP; ++i) {
         if (g_backends[i].in_use && g_backends[i].endpoint == endpoint) {
@@ -329,9 +297,7 @@ backend_register(uint8_t kind, int32_t endpoint)
 /* Query devmgr.query for DEVMGR_MOUNT_INFO and populate PCI metadata fields
  * (bus, device_fn, class, vendor, etc.) on the given BOOT backend slot.
  * The IPC response arg3 bit 31 must be set for the info to be valid. */
-static void
-backend_refresh_boot_meta(fs_backend_t *slot, int32_t req_seed)
-{
+static void backend_refresh_boot_meta(fs_backend_t* slot, int32_t req_seed) {
     int32_t devmgr = -1;
     int32_t req_id = req_seed;
     if (!slot || slot->kind != FSMGR_BACKEND_BOOT || g_proc_endpoint < 0 || g_reply_endpoint < 0) {
@@ -341,15 +307,14 @@ backend_refresh_boot_meta(fs_backend_t *slot, int32_t req_seed)
     if (devmgr < 0) {
         return;
     }
-    int32_t send_rc = wasmos_ipc_send(devmgr, g_reply_endpoint, DEVMGR_QUERY_MOUNT_REQ, req_id, 0, 0, 0, 0);
+    int32_t send_rc =
+        wasmos_ipc_send(devmgr, g_reply_endpoint, DEVMGR_QUERY_MOUNT_REQ, req_id, 0, 0, 0, 0);
     int32_t sel_rc = (send_rc == 0) ? wasmos_ipc_select_one(g_reply_endpoint) : -1;
     int32_t last_req = (sel_rc >= 0) ? wasmos_ipc_last_field(WASMOS_IPC_FIELD_REQUEST_ID) : -1;
     int32_t last_type = (sel_rc >= 0) ? wasmos_ipc_last_field(WASMOS_IPC_FIELD_TYPE) : -1;
-    if (send_rc != 0 ||
-        sel_rc < 0 ||
-        last_req != req_id ||
-        last_type != DEVMGR_MOUNT_INFO) {
-        printf("[fs-manager] boot-meta fail devmgr=%d send=%d sel=%d req=%d type=%d src=%d dst=%d a0=%d a1=%d a2=%d a3=%d\n",
+    if (send_rc != 0 || sel_rc < 0 || last_req != req_id || last_type != DEVMGR_MOUNT_INFO) {
+        printf("[fs-manager] boot-meta fail devmgr=%d send=%d sel=%d req=%d type=%d src=%d dst=%d "
+               "a0=%d a1=%d a2=%d a3=%d\n",
                devmgr, send_rc, sel_rc, last_req, last_type,
                wasmos_ipc_last_field(WASMOS_IPC_FIELD_SOURCE),
                wasmos_ipc_last_field(WASMOS_IPC_FIELD_DESTINATION),
@@ -377,9 +342,7 @@ backend_refresh_boot_meta(fs_backend_t *slot, int32_t req_seed)
     }
 }
 
-static int
-send_virtual_root_listing(int32_t source, int32_t req_id)
-{
+static int send_virtual_root_listing(int32_t source, int32_t req_id) {
     char root_listing[256];
     uint32_t pos = 0;
     root_listing[0] = '\0';
@@ -403,9 +366,12 @@ send_virtual_root_listing(int32_t source, int32_t req_id)
     while (pos < len) {
         int32_t a0 = (int32_t)(uint8_t)root_listing[pos++];
         int32_t a1 = 0, a2 = 0, a3 = 0;
-        if (pos < len) a1 = (int32_t)(uint8_t)root_listing[pos++];
-        if (pos < len) a2 = (int32_t)(uint8_t)root_listing[pos++];
-        if (pos < len) a3 = (int32_t)(uint8_t)root_listing[pos++];
+        if (pos < len)
+            a1 = (int32_t)(uint8_t)root_listing[pos++];
+        if (pos < len)
+            a2 = (int32_t)(uint8_t)root_listing[pos++];
+        if (pos < len)
+            a3 = (int32_t)(uint8_t)root_listing[pos++];
         if (wasmos_ipc_send(source, g_fs_endpoint, FS_IPC_STREAM, req_id, a0, a1, a2, a3) != 0) {
             return -1;
         }
@@ -413,15 +379,13 @@ send_virtual_root_listing(int32_t source, int32_t req_id)
     return wasmos_ipc_send(source, g_fs_endpoint, FS_IPC_RESP, req_id, 0, 0, 0, 0);
 }
 
-static int
-fsmgr_emit_mounts(int32_t source, int32_t req_id, int32_t buffer_id)
-{
+static int fsmgr_emit_mounts(int32_t source, int32_t req_id, int32_t buffer_id) {
     char mounts[384];
     uint32_t pos = 0;
     str_copy(mounts, sizeof(mounts), "mounts:\n");
     pos = (uint32_t)strlen(mounts);
     for (uint32_t i = 0; i < FS_BACKEND_CAP; ++i) {
-        const char *kind = "fs";
+        const char* kind = "fs";
         int n = 0;
         if (!g_backends[i].in_use) {
             continue;
@@ -431,27 +395,18 @@ fsmgr_emit_mounts(int32_t source, int32_t req_id, int32_t buffer_id)
         } else if (g_backends[i].kind == FSMGR_BACKEND_INIT) {
             kind = "fs-init";
         }
-        n = snprintf(mounts + pos,
-                     sizeof(mounts) - pos,
-                     "/%s -> %s",
-                     g_backends[i].mount_name,
+        n = snprintf(mounts + pos, sizeof(mounts) - pos, "/%s -> %s", g_backends[i].mount_name,
                      kind);
         if (n > 0 && (uint32_t)n < sizeof(mounts) - pos &&
             g_backends[i].kind == FSMGR_BACKEND_BOOT && g_backends[i].has_meta) {
             uint8_t dev = (uint8_t)((g_backends[i].device_fn >> 4) & 0x1Fu);
             uint8_t fun = (uint8_t)(g_backends[i].device_fn & 0x07u);
-            int m = snprintf(mounts + pos + (uint32_t)n,
-                             sizeof(mounts) - (pos + (uint32_t)n),
+            int m = snprintf(mounts + pos + (uint32_t)n, sizeof(mounts) - (pos + (uint32_t)n),
                              " pci %02X:%02X.%02X class %02X:%02X:%02X vid:did %04X:%04X unit %u",
-                             (unsigned)g_backends[i].bus,
-                             (unsigned)dev,
-                             (unsigned)fun,
-                             (unsigned)g_backends[i].class_code,
-                             (unsigned)g_backends[i].subclass,
-                             (unsigned)g_backends[i].prog_if,
-                             (unsigned)g_backends[i].vendor_id,
-                             (unsigned)g_backends[i].device_id,
-                             (unsigned)g_backends[i].unit);
+                             (unsigned)g_backends[i].bus, (unsigned)dev, (unsigned)fun,
+                             (unsigned)g_backends[i].class_code, (unsigned)g_backends[i].subclass,
+                             (unsigned)g_backends[i].prog_if, (unsigned)g_backends[i].vendor_id,
+                             (unsigned)g_backends[i].device_id, (unsigned)g_backends[i].unit);
             if (m > 0) {
                 n += m;
             }
@@ -469,31 +424,24 @@ fsmgr_emit_mounts(int32_t source, int32_t req_id, int32_t buffer_id)
             break;
         }
     }
-    if (buffer_id <= 0 ||
-        wasmos_sys_buffer_write(buffer_id, mounts, (int32_t)pos, 0) != 0) {
+    if (buffer_id <= 0 || wasmos_sys_buffer_write(buffer_id, mounts, (int32_t)pos, 0) != 0) {
         return -1;
     }
-    return wasmos_ipc_send(source, g_fs_endpoint, FSMGR_IPC_QUERY_MOUNTS_RESP, req_id, (int32_t)pos, 0, 0, 0);
+    return wasmos_ipc_send(source, g_fs_endpoint, FSMGR_IPC_QUERY_MOUNTS_RESP, req_id, (int32_t)pos,
+                           0, 0, 0);
 }
 
 /* Forward an IPC request to a backend, relaying FS_IPC_STREAM chunks back to
  * source immediately as they arrive, then returning the final reply fields.
  * Blocks until a non-STREAM response with the matching request_id is received. */
-static int forward_request(int32_t backend_endpoint,
-                           int32_t type,
-                           int32_t req_id,
-                           int32_t arg0,
-                           int32_t arg1,
-                           int32_t arg2,
-                           int32_t arg3,
-                           int32_t source,
-                           int32_t *out_resp_type,
-                           int32_t *out_r0,
-                           int32_t *out_r1,
-                           int32_t *out_r2,
-                           int32_t *out_r3) {
-    if (backend_endpoint < 0) return -1;
-    if (wasmos_ipc_send(backend_endpoint, g_reply_endpoint, type, req_id, arg0, arg1, arg2, arg3) != 0) {
+static int forward_request(int32_t backend_endpoint, int32_t type, int32_t req_id, int32_t arg0,
+                           int32_t arg1, int32_t arg2, int32_t arg3, int32_t source,
+                           int32_t* out_resp_type, int32_t* out_r0, int32_t* out_r1,
+                           int32_t* out_r2, int32_t* out_r3) {
+    if (backend_endpoint < 0)
+        return -1;
+    if (wasmos_ipc_send(backend_endpoint, g_reply_endpoint, type, req_id, arg0, arg1, arg2, arg3) !=
+        0) {
         return -1;
     }
     for (;;) {
@@ -515,8 +463,8 @@ static int forward_request(int32_t backend_endpoint,
              * A bare non-retrying send would fill the 32-slot queue, abort the
              * relay, drop the error notification (send_fs_error also fails on a
              * full queue), and leave the client blocked in select_one forever. */
-            if (wasmos_sys_ipc_send_retry(source, g_fs_endpoint, resp_type, req_id,
-                                          rr0, rr1, rr2, rr3, 8192) != 0) {
+            if (wasmos_sys_ipc_send_retry(source, g_fs_endpoint, resp_type, req_id, rr0, rr1, rr2,
+                                          rr3, 8192) != 0) {
                 return -1;
             }
             continue;
@@ -530,47 +478,32 @@ static int forward_request(int32_t backend_endpoint,
     }
 }
 
-static void
-send_fs_error(int32_t source, int32_t request_id)
-{
+static void send_fs_error(int32_t source, int32_t request_id) {
     /* Retry with yield for the same reason as forward_request's STREAM relay:
      * if the client's endpoint is temporarily full we must not drop the error
      * notification, otherwise the client hangs forever in select_one. */
-    (void)wasmos_sys_ipc_send_retry(source, g_fs_endpoint, FS_IPC_ERROR,
-                                    request_id, -1, 0, 0, 0, 4096);
+    (void)wasmos_sys_ipc_send_retry(source, g_fs_endpoint, FS_IPC_ERROR, request_id, -1, 0, 0, 0,
+                                    4096);
 }
 
-static int32_t
-resolve_backend_for_state(const fs_client_state_t *state)
-{
+static int32_t resolve_backend_for_state(const fs_client_state_t* state) {
     int32_t backend = state ? state->backend_endpoint : -1;
     if (backend < 0) {
-        fs_backend_t *fallback_boot = backend_first_of_kind(FSMGR_BACKEND_BOOT);
+        fs_backend_t* fallback_boot = backend_first_of_kind(FSMGR_BACKEND_BOOT);
         backend = fallback_boot ? fallback_boot->endpoint : -1;
     }
     return backend;
 }
 
-static int
-is_path_op_type(int32_t type)
-{
-    return type == FS_IPC_OPEN_REQ ||
-           type == FS_IPC_STAT_REQ ||
-           type == FS_IPC_UNLINK_REQ ||
-           type == FS_IPC_MKDIR_REQ ||
-           type == FS_IPC_RMDIR_REQ;
+static int is_path_op_type(int32_t type) {
+    return type == FS_IPC_OPEN_REQ || type == FS_IPC_STAT_REQ || type == FS_IPC_UNLINK_REQ ||
+           type == FS_IPC_MKDIR_REQ || type == FS_IPC_RMDIR_REQ;
 }
 
-static int32_t
-route_path_to_backend(const uint8_t *path_bytes,
-                      int32_t path_len,
-                      int32_t allow_relative,
-                      char *out_path,
-                      int32_t out_path_cap,
-                      int32_t *out_path_len,
-                      int32_t *out_backend)
-{
-    const char *mount_names[FS_BACKEND_CAP];
+static int32_t route_path_to_backend(const uint8_t* path_bytes, int32_t path_len,
+                                     int32_t allow_relative, char* out_path, int32_t out_path_cap,
+                                     int32_t* out_path_len, int32_t* out_backend) {
+    const char* mount_names[FS_BACKEND_CAP];
     int32_t mount_endpoints[FS_BACKEND_CAP];
     int32_t mount_count = 0;
     int32_t mount_index = -1;
@@ -590,15 +523,9 @@ route_path_to_backend(const uint8_t *path_bytes,
     if (mount_count <= 0) {
         return 0;
     }
-    routed = fsmgr_route_path_for_mounts((const char *)path_bytes,
-                                         path_len,
-                                         mount_names,
-                                         mount_count,
-                                         allow_relative,
-                                         &mount_index,
-                                         out_path,
-                                         out_path_cap,
-                                         out_path_len);
+    routed = fsmgr_route_path_for_mounts((const char*)path_bytes, path_len, mount_names,
+                                         mount_count, allow_relative, &mount_index, out_path,
+                                         out_path_cap, out_path_len);
     if (!routed || mount_index < 0 || mount_index >= mount_count) {
         return 0;
     }
@@ -610,13 +537,8 @@ route_path_to_backend(const uint8_t *path_bytes,
  * write the tail path back into the local xfer buffer, and set *out_backend.
  * *inout_arg0 is updated to the tail path length.
  * Returns 1 on successful routing, 0 if path is at VFS root, -1 on error. */
-static int
-route_root_path_request(fs_client_state_t *state,
-                        int32_t buffer_id,
-                        int32_t type,
-                        int32_t *inout_arg0,
-                        int32_t *out_backend)
-{
+static int route_root_path_request(fs_client_state_t* state, int32_t buffer_id, int32_t type,
+                                   int32_t* inout_arg0, int32_t* out_backend) {
     int32_t path_len = inout_arg0 ? *inout_arg0 : 0;
     int32_t fs_buf_size = wasmos_xfer_buffer_size();
     uint8_t scratch[256];
@@ -637,13 +559,8 @@ route_root_path_request(fs_client_state_t *state,
     }
     scratch[path_len] = '\0';
     if (scratch[0] == '/' && scratch[1] != '\0') {
-        (void)route_path_to_backend(scratch,
-                                    path_len,
-                                    0,
-                                    (char *)scratch,
-                                    (int32_t)sizeof(scratch),
-                                    &open_path_len,
-                                    &routed_backend);
+        (void)route_path_to_backend(scratch, path_len, 0, (char*)scratch, (int32_t)sizeof(scratch),
+                                    &open_path_len, &routed_backend);
     }
     if (open_path_len <= 0 ||
         wasmos_xfer_buffer_write(buffer_id, (int32_t)(uintptr_t)scratch, open_path_len, 0) != 0) {
@@ -658,10 +575,9 @@ route_root_path_request(fs_client_state_t *state,
  * read its mount name (arg2 packs (buffer_id<<12)|len; the backend borrowed the
  * buffer READ to fs-manager). Shared by the initial class enumeration and ADD
  * events. */
-static void
-fsmgr_apply_backend_info(int32_t backend_endpoint, int32_t kind, int32_t arg2f, int32_t unit)
-{
-    fs_backend_t *registered = backend_register((uint8_t)kind, backend_endpoint);
+static void fsmgr_apply_backend_info(int32_t backend_endpoint, int32_t kind, int32_t arg2f,
+                                     int32_t unit) {
+    fs_backend_t* registered = backend_register((uint8_t)kind, backend_endpoint);
     int32_t mount_len = arg2f & 0xFFF;
     int32_t buffer_id = (int32_t)((uint32_t)arg2f >> 12);
     if (!registered) {
@@ -698,30 +614,25 @@ fsmgr_apply_backend_info(int32_t backend_endpoint, int32_t kind, int32_t arg2f, 
 /* Pull a discovered backend's info over FSMGR_IPC_BACKEND_INFO and register it.
  * Synchronous round-trip on the reply endpoint; the backend answers without any
  * dependency on fs-manager, so this cannot deadlock. */
-static void
-fsmgr_pull_backend(int32_t backend_endpoint)
-{
+static void fsmgr_pull_backend(int32_t backend_endpoint) {
     if (backend_endpoint < 0) {
         return;
     }
-    if (wasmos_ipc_send(backend_endpoint, g_reply_endpoint,
-                        FSMGR_IPC_BACKEND_INFO_REQ, 1, 0, 0, 0, 0) != 0) {
+    if (wasmos_ipc_send(backend_endpoint, g_reply_endpoint, FSMGR_IPC_BACKEND_INFO_REQ, 1, 0, 0, 0,
+                        0) != 0) {
         return;
     }
     if (wasmos_ipc_select_one(g_reply_endpoint) < 0 ||
         wasmos_ipc_last_field(WASMOS_IPC_FIELD_TYPE) != FSMGR_IPC_BACKEND_INFO_RESP) {
         return;
     }
-    fsmgr_apply_backend_info(backend_endpoint,
-                             wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG0),
+    fsmgr_apply_backend_info(backend_endpoint, wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG0),
                              wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG2),
                              wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG3));
 }
 
 /* Drop a backend that left its class (provider died / unregistered). */
-static void
-fsmgr_backend_remove(int32_t backend_endpoint)
-{
+static void fsmgr_backend_remove(int32_t backend_endpoint) {
     for (uint32_t i = 0; i < FS_BACKEND_CAP; ++i) {
         if (g_backends[i].in_use && g_backends[i].endpoint == backend_endpoint) {
             g_backends[i].in_use = 0;
@@ -733,34 +644,27 @@ fsmgr_backend_remove(int32_t backend_endpoint)
  * backend registering between here and the lookup still fires an event; the
  * lookup then captures the current set (and rebuilds it after an fs-manager
  * restart). backend_register is idempotent, so an overlap is harmless. */
-static void
-fsmgr_discover_backends(void)
-{
+static void fsmgr_discover_backends(void) {
     svc_class_entry_t backends[8];
     int32_t n;
     int32_t i;
-    (void)wasmos_svc_subscribe_class(g_proc_endpoint, g_reply_endpoint,
-                                     g_fs_endpoint, FSMGR_BACKEND_CLASS, 3);
-    n = wasmos_svc_lookup_class(g_proc_endpoint, g_reply_endpoint,
-                                FSMGR_BACKEND_CLASS, backends,
+    (void)wasmos_svc_subscribe_class(g_proc_endpoint, g_reply_endpoint, g_fs_endpoint,
+                                     FSMGR_BACKEND_CLASS, 3);
+    n = wasmos_svc_lookup_class(g_proc_endpoint, g_reply_endpoint, FSMGR_BACKEND_CLASS, backends,
                                 (int32_t)(sizeof(backends) / sizeof(backends[0])), 4);
     for (i = 0; i < n && i < (int32_t)(sizeof(backends) / sizeof(backends[0])); ++i) {
         fsmgr_pull_backend((int32_t)backends[i].endpoint);
     }
 }
 
-static int
-handle_clone_cwd_req(int32_t source, int32_t source_owner, int32_t request_id, int32_t arg0, int32_t arg1f)
-{
-    fs_client_state_t *src_state = 0;
-    fs_client_state_t *dst_state = 0;
+static int handle_clone_cwd_req(int32_t source, int32_t source_owner, int32_t request_id,
+                                int32_t arg0, int32_t arg1f) {
+    fs_client_state_t* src_state = 0;
+    fs_client_state_t* dst_state = 0;
     int32_t src_context_id = arg0;
     int32_t dst_context_id = arg1f;
     int32_t proc_owner = wasmos_ipc_endpoint_owner(g_proc_endpoint);
-    if (source_owner < 0 ||
-        proc_owner < 0 ||
-        source_owner != proc_owner ||
-        src_context_id <= 0 ||
+    if (source_owner < 0 || proc_owner < 0 || source_owner != proc_owner || src_context_id <= 0 ||
         dst_context_id <= 0) {
         send_fs_error(source, request_id);
         return 1;
@@ -787,15 +691,9 @@ handle_clone_cwd_req(int32_t source, int32_t source_owner, int32_t request_id, i
  * then unborrows client_borrow (cascade-revoking the reborrow) before replying so
  * the client's release() succeeds. `capacity` bounds the read to the client
  * buffer size (0 = full transfer size). No relay copy. */
-static int
-handle_read_path_req(fs_client_state_t *state,
-                     int32_t source,
-                     int32_t request_id,
-                     int32_t path_len,
-                     int32_t capacity,
-                     int32_t buffer_id,
-                     int32_t client_borrow)
-{
+static int handle_read_path_req(fs_client_state_t* state, int32_t source, int32_t request_id,
+                                int32_t path_len, int32_t capacity, int32_t buffer_id,
+                                int32_t client_borrow) {
     int32_t backend = state ? state->backend_endpoint : -1;
     int32_t open_t = FS_IPC_ERROR, open0 = -1, open1 = 0, open2 = 0, open3 = 0;
     int32_t read_t = FS_IPC_ERROR, read0 = -1, read1 = 0, read2 = 0, read3 = 0;
@@ -807,9 +705,7 @@ handle_read_path_req(fs_client_state_t *state,
     int32_t open_path_len = 0;
     int32_t backend_borrow = -1;
 
-    if (buffer_id <= 0 ||
-        path_len <= 0 ||
-        path_len >= fs_buf_size ||
+    if (buffer_id <= 0 || path_len <= 0 || path_len >= fs_buf_size ||
         path_len >= (int32_t)sizeof(path_scratch) - 1) {
         send_fs_error(source, request_id);
         return 1;
@@ -828,34 +724,29 @@ handle_read_path_req(fs_client_state_t *state,
         return 1;
     }
     open_path_len = path_len;
-    (void)route_path_to_backend(path_scratch,
-                                path_len,
-                                0,
-                                (char *)path_scratch,
-                                (int32_t)sizeof(path_scratch),
-                                &open_path_len,
-                                &backend);
+    (void)route_path_to_backend(path_scratch, path_len, 0, (char*)path_scratch,
+                                (int32_t)sizeof(path_scratch), &open_path_len, &backend);
     if (backend < 0) {
-        fs_backend_t *fallback_boot = backend_first_of_kind(FSMGR_BACKEND_BOOT);
+        fs_backend_t* fallback_boot = backend_first_of_kind(FSMGR_BACKEND_BOOT);
         backend = fallback_boot ? fallback_boot->endpoint : -1;
     }
-    if (backend < 0 ||
-        open_path_len <= 0 ||
-        wasmos_xfer_buffer_write(buffer_id, (int32_t)(uintptr_t)path_scratch, open_path_len, 0) != 0) {
+    if (backend < 0 || open_path_len <= 0 ||
+        wasmos_xfer_buffer_write(buffer_id, (int32_t)(uintptr_t)path_scratch, open_path_len, 0) !=
+            0) {
         send_fs_error(source, request_id);
         return 1;
     }
     /* Reborrow to the backend (R|W: reads the path, writes the blob). */
-    backend_borrow = wasmos_xfer_buffer_reborrow(backend, client_borrow,
-                                                 WASMOS_BUFFER_GRANT_READ | WASMOS_BUFFER_GRANT_WRITE);
+    backend_borrow = wasmos_xfer_buffer_reborrow(
+        backend, client_borrow, WASMOS_BUFFER_GRANT_READ | WASMOS_BUFFER_GRANT_WRITE);
     if (backend_borrow < 0) {
         send_fs_error(source, request_id);
         return 1;
     }
     {
-        int32_t open_rc = forward_request(backend, FS_IPC_OPEN_REQ, request_id, open_path_len, 0,
-                                          buffer_id, backend_borrow,
-                                          source, &open_t, &open0, &open1, &open2, &open3);
+        int32_t open_rc =
+            forward_request(backend, FS_IPC_OPEN_REQ, request_id, open_path_len, 0, buffer_id,
+                            backend_borrow, source, &open_t, &open0, &open1, &open2, &open3);
         if (open_rc != 0 || open_t != FS_IPC_RESP || open0 < 0) {
             (void)wasmos_xfer_buffer_unborrow(backend_borrow);
             send_fs_error(source, request_id);
@@ -863,18 +754,17 @@ handle_read_path_req(fs_client_state_t *state,
         }
     }
     fd = open0;
-    if (forward_request(backend, FS_IPC_READ_REQ, request_id, fd, read_cap,
-                        buffer_id, backend_borrow,
-                        source, &read_t, &read0, &read1, &read2, &read3) != 0 ||
+    if (forward_request(backend, FS_IPC_READ_REQ, request_id, fd, read_cap, buffer_id,
+                        backend_borrow, source, &read_t, &read0, &read1, &read2, &read3) != 0 ||
         read_t != FS_IPC_RESP || read0 <= 0 || read0 > read_cap) {
-        (void)forward_request(backend, FS_IPC_CLOSE_REQ, request_id, fd, 0, 0, 0,
-                              source, &close_t, &close0, &close1, &close2, &close3);
+        (void)forward_request(backend, FS_IPC_CLOSE_REQ, request_id, fd, 0, 0, 0, source, &close_t,
+                              &close0, &close1, &close2, &close3);
         (void)wasmos_xfer_buffer_unborrow(backend_borrow);
         send_fs_error(source, request_id);
         return 1;
     }
-    (void)forward_request(backend, FS_IPC_CLOSE_REQ, request_id, fd, 0, 0, 0,
-                          source, &close_t, &close0, &close1, &close2, &close3);
+    (void)forward_request(backend, FS_IPC_CLOSE_REQ, request_id, fd, 0, 0, 0, source, &close_t,
+                          &close0, &close1, &close2, &close3);
     /* Drop fs-manager's reborrow (cascade-safe) before replying; the client's
      * grant b1 stays until the client releases the buffer. */
     (void)wasmos_xfer_buffer_unborrow(backend_borrow);
@@ -882,17 +772,11 @@ handle_read_path_req(fs_client_state_t *state,
     return 1;
 }
 
-static int
-handle_chdir_mount(fs_client_state_t *state,
-                   int32_t source,
-                   int32_t request_id,
-                   int32_t arg0,
-                   int32_t arg1f,
-                   int32_t arg2f,
-                   int32_t arg3f)
-{
+static int handle_chdir_mount(fs_client_state_t* state, int32_t source, int32_t request_id,
+                              int32_t arg0, int32_t arg1f, int32_t arg2f, int32_t arg3f) {
     char path[32];
-    wasmos_sys_ipc_unpack_name16((uint32_t)arg0, (uint32_t)arg1f, (uint32_t)arg2f, (uint32_t)arg3f, path, sizeof(path));
+    wasmos_sys_ipc_unpack_name16((uint32_t)arg0, (uint32_t)arg1f, (uint32_t)arg2f, (uint32_t)arg3f,
+                                 path, sizeof(path));
 
     if (strcasecmp(path, "") == 0 || strcasecmp(path, "/") == 0) {
         state->mount = FS_MOUNT_ROOT;
@@ -912,11 +796,11 @@ handle_chdir_mount(fs_client_state_t *state,
         return 1;
     }
     {
-        const char *mount_name = path;
+        const char* mount_name = path;
         if (path[0] == '/') {
             mount_name = &path[1];
         }
-        fs_backend_t *target = backend_find_by_name(mount_name);
+        fs_backend_t* target = backend_find_by_name(mount_name);
         if (target) {
             int32_t s0, s1, s2, s3;
             int32_t rr_t, rr0, rr1, rr2, rr3;
@@ -945,7 +829,8 @@ handle_chdir_mount(fs_client_state_t *state,
     return 0;
 }
 
-WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t arg1, int32_t arg2, int32_t arg3) {
+WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t arg1, int32_t arg2,
+                                      int32_t arg3) {
     /* proc.endpoint now comes from the spawn-info contract, not an entry arg. */
     proc_endpoint = wasmos_startup_proc_endpoint();
     (void)arg1;
@@ -1013,7 +898,7 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t arg1, int32
             client_key = source;
         }
 
-        fs_client_state_t *state = client_state(client_key);
+        fs_client_state_t* state = client_state(client_key);
         if (!state) {
             send_fs_error(source, request_id);
             continue;
@@ -1058,7 +943,7 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t arg1, int32
             }
         }
         if (fsmgr_is_fd_op_type(type)) {
-            fsmgr_client_fd_t *fd_entry = fsmgr_fd_entry(state, arg0);
+            fsmgr_client_fd_t* fd_entry = fsmgr_fd_entry(state, arg0);
             if (!fd_entry) {
                 send_fs_error(source, request_id);
                 continue;
@@ -1069,24 +954,27 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t arg1, int32
         }
         if (uses_buf) {
             backend_borrow = wasmos_xfer_buffer_reborrow(
-                backend, client_borrow,
-                WASMOS_BUFFER_GRANT_READ | WASMOS_BUFFER_GRANT_WRITE);
+                backend, client_borrow, WASMOS_BUFFER_GRANT_READ | WASMOS_BUFFER_GRANT_WRITE);
             if (backend_borrow < 0) {
                 send_fs_error(source, request_id);
                 continue;
             }
             fwd_arg3 = backend_borrow;
         }
-        if (forward_request(backend, type, request_id, req_arg0, arg1f, arg2f, fwd_arg3,
-                            source, &resp_type, &r0, &r1, &r2, &r3) != 0) {
-            if (backend_borrow >= 0) { (void)wasmos_xfer_buffer_unborrow(backend_borrow); }
+        if (forward_request(backend, type, request_id, req_arg0, arg1f, arg2f, fwd_arg3, source,
+                            &resp_type, &r0, &r1, &r2, &r3) != 0) {
+            if (backend_borrow >= 0) {
+                (void)wasmos_xfer_buffer_unborrow(backend_borrow);
+            }
             if (type == FS_IPC_CHDIR_REQ && state->mount != FS_MOUNT_ROOT) {
                 char path[32];
-                wasmos_sys_ipc_unpack_name16((uint32_t)arg0, (uint32_t)arg1f, (uint32_t)arg2f, (uint32_t)arg3f, path, sizeof(path));
+                wasmos_sys_ipc_unpack_name16((uint32_t)arg0, (uint32_t)arg1f, (uint32_t)arg2f,
+                                             (uint32_t)arg3f, path, sizeof(path));
                 if (strcasecmp(path, "..") == 0) {
                     state->mount = FS_MOUNT_ROOT;
                     state->backend_endpoint = -1;
-                    (void)wasmos_ipc_send(source, g_fs_endpoint, FS_IPC_RESP, request_id, 0, 0, 0, 0);
+                    (void)wasmos_ipc_send(source, g_fs_endpoint, FS_IPC_RESP, request_id, 0, 0, 0,
+                                          0);
                     continue;
                 }
             }
@@ -1100,7 +988,9 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t arg1, int32
                 int32_t close0 = -1, close1 = 0, close2 = 0, close3 = 0;
                 (void)forward_request(backend, FS_IPC_CLOSE_REQ, request_id, backend_fd, 0, 0, 0,
                                       source, &close_t, &close0, &close1, &close2, &close3);
-                if (backend_borrow >= 0) { (void)wasmos_xfer_buffer_unborrow(backend_borrow); }
+                if (backend_borrow >= 0) {
+                    (void)wasmos_xfer_buffer_unborrow(backend_borrow);
+                }
                 send_fs_error(source, request_id);
                 continue;
             }
@@ -1108,10 +998,13 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t arg1, int32
         if (type == FS_IPC_CLOSE_REQ && resp_type == FS_IPC_RESP && r0 == 0 && client_fd >= 0) {
             fsmgr_fd_release(state, client_fd);
         }
-        if (backend_borrow >= 0) { (void)wasmos_xfer_buffer_unborrow(backend_borrow); }
+        if (backend_borrow >= 0) {
+            (void)wasmos_xfer_buffer_unborrow(backend_borrow);
+        }
         if (type == FS_IPC_CHDIR_REQ && resp_type == FS_IPC_ERROR) {
             char path[32];
-            wasmos_sys_ipc_unpack_name16((uint32_t)arg0, (uint32_t)arg1f, (uint32_t)arg2f, (uint32_t)arg3f, path, sizeof(path));
+            wasmos_sys_ipc_unpack_name16((uint32_t)arg0, (uint32_t)arg1f, (uint32_t)arg2f,
+                                         (uint32_t)arg3f, path, sizeof(path));
             if (strcasecmp(path, "..") == 0 && state->mount != FS_MOUNT_ROOT) {
                 state->mount = FS_MOUNT_ROOT;
                 state->backend_endpoint = -1;
@@ -1122,7 +1015,8 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t arg1, int32
         }
         if (type == FS_IPC_CHDIR_REQ && resp_type == FS_IPC_RESP && state->mount != FS_MOUNT_ROOT) {
             char path[32];
-            wasmos_sys_ipc_unpack_name16((uint32_t)arg0, (uint32_t)arg1f, (uint32_t)arg2f, (uint32_t)arg3f, path, sizeof(path));
+            wasmos_sys_ipc_unpack_name16((uint32_t)arg0, (uint32_t)arg1f, (uint32_t)arg2f,
+                                         (uint32_t)arg3f, path, sizeof(path));
             if (strcasecmp(path, "..") == 0) {
                 if (state->mount_depth > 0) {
                     state->mount_depth--;

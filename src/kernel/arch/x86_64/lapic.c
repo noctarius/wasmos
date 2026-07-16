@@ -19,35 +19,35 @@
 
 /* IA32_APIC_BASE MSR (0x1B): bits [51:12] hold the physical base, bit 11 is
  * the global APIC enable flag, bit 8 marks the bootstrap processor. */
-#define IA32_APIC_BASE_MSR     0x1Bu
-#define IA32_APIC_BASE_EN      (1ULL << 11)
-#define IA32_APIC_BASE_MASK    0x000FFFFFFFFFF000ULL
+#define IA32_APIC_BASE_MSR 0x1Bu
+#define IA32_APIC_BASE_EN (1ULL << 11)
+#define IA32_APIC_BASE_MASK 0x000FFFFFFFFFF000ULL
 
 /* LAPIC MMIO register offsets (each register is 32-bit wide, 16-byte aligned). */
-#define LAPIC_REG_ID           0x020u
-#define LAPIC_REG_EOI          0x0B0u
-#define LAPIC_REG_SVR          0x0F0u   /* Spurious Interrupt Vector Register */
-#define LAPIC_REG_LVT_LINT0    0x350u   /* LVT LINT0 — wired to 8259 INTR in virtual wire mode */
-#define LAPIC_REG_LVT_TIMER    0x320u
-#define LAPIC_REG_TIMER_ICR    0x380u   /* Initial Count */
-#define LAPIC_REG_TIMER_CCR    0x390u   /* Current Count */
-#define LAPIC_REG_TIMER_DCR    0x3E0u   /* Divide Configuration */
+#define LAPIC_REG_ID 0x020u
+#define LAPIC_REG_EOI 0x0B0u
+#define LAPIC_REG_SVR 0x0F0u       /* Spurious Interrupt Vector Register */
+#define LAPIC_REG_LVT_LINT0 0x350u /* LVT LINT0 — wired to 8259 INTR in virtual wire mode */
+#define LAPIC_REG_LVT_TIMER 0x320u
+#define LAPIC_REG_TIMER_ICR 0x380u /* Initial Count */
+#define LAPIC_REG_TIMER_CCR 0x390u /* Current Count */
+#define LAPIC_REG_TIMER_DCR 0x3E0u /* Divide Configuration */
 
 /* SVR bit 8: software-enable; low 8 bits: spurious vector. */
-#define LAPIC_SVR_ENABLE       (1u << 8)
-#define LAPIC_SPURIOUS_VECTOR  0xFFu
+#define LAPIC_SVR_ENABLE (1u << 8)
+#define LAPIC_SPURIOUS_VECTOR 0xFFu
 
 /* LVT timer bits [18:17] — 00=one-shot, 01=periodic, 10=TSC-deadline. */
-#define LAPIC_TIMER_PERIODIC   (1u << 17)
+#define LAPIC_TIMER_PERIODIC (1u << 17)
 
 /* Divide-by-16: DCR value 0x3. */
-#define LAPIC_TIMER_DIVIDE_16  0x3u
+#define LAPIC_TIMER_DIVIDE_16 0x3u
 
 /* PT_FLAG_PCD (bit 4): cache-disable, required for MMIO mappings. */
-#define PT_FLAG_PRESENT        (1ULL << 0)
-#define PT_FLAG_WRITE          (1ULL << 1)
-#define PT_FLAG_PCD            (1ULL << 4)
-#define PT_FLAG_NX             (1ULL << 63)
+#define PT_FLAG_PRESENT (1ULL << 0)
+#define PT_FLAG_WRITE (1ULL << 1)
+#define PT_FLAG_PCD (1ULL << 4)
+#define PT_FLAG_NX (1ULL << 63)
 
 /*
  * Reserved kernel virtual address for the LAPIC MMIO page.
@@ -58,54 +58,44 @@
  * index is in this region prevents the higher-half alias for that physical
  * address from being clobbered by the MMIO mapping.
  */
-#define LAPIC_VIRT_BASE        0xFFFFFFFF800FE000ULL
+#define LAPIC_VIRT_BASE 0xFFFFFFFF800FE000ULL
 
 /* PIT channel 2 registers — used as a reference clock for calibration only. */
-#define PIT_CMD_PORT           0x43u
-#define PIT_CH2_PORT           0x42u
-#define PIT_GATE_PORT          0x61u
-#define PIT_BASE_HZ            1193182u
+#define PIT_CMD_PORT 0x43u
+#define PIT_CH2_PORT 0x42u
+#define PIT_GATE_PORT 0x61u
+#define PIT_BASE_HZ 1193182u
 
-static uintptr_t g_lapic_base;  /* kernel virtual address of LAPIC MMIO */
+static uintptr_t g_lapic_base; /* kernel virtual address of LAPIC MMIO */
 
 /* ------------------------------------------------------------------ helpers */
 
-static inline void
-outb(uint16_t port, uint8_t value)
-{
+static inline void outb(uint16_t port, uint8_t value) {
     __asm__ volatile("outb %0, %1" : : "a"(value), "Nd"(port));
 }
 
-static inline uint8_t
-inb(uint16_t port)
-{
+static inline uint8_t inb(uint16_t port) {
     uint8_t ret;
     __asm__ volatile("inb %1, %0" : "=a"(ret) : "Nd"(port));
     return ret;
 }
 
-static inline uint32_t
-lapic_read(uint32_t reg)
-{
-    volatile uint32_t *addr = (volatile uint32_t *)(g_lapic_base + reg);
+static inline uint32_t lapic_read(uint32_t reg) {
+    volatile uint32_t* addr = (volatile uint32_t*)(g_lapic_base + reg);
     return *addr;
 }
 
-static inline void
-lapic_write(uint32_t reg, uint32_t val)
-{
-    volatile uint32_t *addr = (volatile uint32_t *)(g_lapic_base + reg);
+static inline void lapic_write(uint32_t reg, uint32_t val) {
+    volatile uint32_t* addr = (volatile uint32_t*)(g_lapic_base + reg);
     *addr = val;
 }
 
 /* ---------------------------------------------------------------- map/enable */
 
-static void
-lapic_map(void)
-{
+static void lapic_map(void) {
     uint64_t apic_base_msr = x86_read_msr(IA32_APIC_BASE_MSR);
-    uint64_t lapic_phys    = apic_base_msr & IA32_APIC_BASE_MASK;
-    uint64_t flags         = PT_FLAG_PRESENT | PT_FLAG_WRITE | PT_FLAG_PCD | PT_FLAG_NX;
+    uint64_t lapic_phys = apic_base_msr & IA32_APIC_BASE_MASK;
+    uint64_t flags = PT_FLAG_PRESENT | PT_FLAG_WRITE | PT_FLAG_PCD | PT_FLAG_NX;
 
     int rc = paging_map_4k(LAPIC_VIRT_BASE, lapic_phys, flags);
     if (rc != 0) {
@@ -115,9 +105,7 @@ lapic_map(void)
     g_lapic_base = (uintptr_t)LAPIC_VIRT_BASE;
 }
 
-static void
-lapic_enable(void)
-{
+static void lapic_enable(void) {
     uint32_t svr = lapic_read(LAPIC_REG_SVR);
     svr &= ~0xFFu;
     svr |= LAPIC_SPURIOUS_VECTOR;
@@ -134,9 +122,7 @@ lapic_enable(void)
 /* --------------------------------------------------------- 8259 PIC disable */
 
 #if WASMOS_IRQ_MODE == 2
-static void
-pic_disable(void)
-{
+static void pic_disable(void) {
     /* Mask every line on both PICs so no legacy interrupt reaches the CPU. */
     outb(0x21u, 0xFFu);
     outb(0xA1u, 0xFFu);
@@ -145,9 +131,7 @@ pic_disable(void)
 
 /* --------------------------------- PIT channel 2 calibration (one-shot 10 ms) */
 
-static uint32_t
-lapic_calibrate_ticks_per_ms(void)
-{
+static uint32_t lapic_calibrate_ticks_per_ms(void) {
     /*
      * Use PIT channel 2 in mode 0 (interrupt-on-terminal-count / one-shot)
      * as a ~10 ms reference.  Channel 2 output is readable from bit 5 of
@@ -157,10 +141,10 @@ lapic_calibrate_ticks_per_ms(void)
      * 10 ms at 1193182 Hz ≈ 11932 (0x2E9C) PIT ticks.
      */
     uint8_t gate = inb(PIT_GATE_PORT);
-    outb(PIT_GATE_PORT, (gate & ~0x02u) | 0x01u);  /* gate on, speaker off */
-    outb(PIT_CMD_PORT, 0xB0u);  /* ch2, mode 0, binary, LSB+MSB */
-    outb(PIT_CH2_PORT, 0x9Cu);  /* low byte:  11932 & 0xFF */
-    outb(PIT_CH2_PORT, 0x2Eu);  /* high byte: 11932 >> 8  */
+    outb(PIT_GATE_PORT, (gate & ~0x02u) | 0x01u); /* gate on, speaker off */
+    outb(PIT_CMD_PORT, 0xB0u);                    /* ch2, mode 0, binary, LSB+MSB */
+    outb(PIT_CH2_PORT, 0x9Cu);                    /* low byte:  11932 & 0xFF */
+    outb(PIT_CH2_PORT, 0x2Eu);                    /* high byte: 11932 >> 8  */
 
     /* Start LAPIC counter at maximum so we can measure elapsed ticks. */
     lapic_write(LAPIC_REG_TIMER_DCR, LAPIC_TIMER_DIVIDE_16);
@@ -171,24 +155,22 @@ lapic_calibrate_ticks_per_ms(void)
         ;
 
     uint32_t remaining = lapic_read(LAPIC_REG_TIMER_CCR);
-    uint32_t elapsed   = 0xFFFFFFFFu - remaining;
+    uint32_t elapsed = 0xFFFFFFFFu - remaining;
 
     /* Disable channel 2 gate. */
     outb(PIT_GATE_PORT, inb(PIT_GATE_PORT) & ~0x01u);
 
-    return elapsed / 10u;  /* ticks per millisecond */
+    return elapsed / 10u; /* ticks per millisecond */
 }
 
 /* ---------------------------------------------------------- timer configure */
 
-static void
-lapic_timer_set_hz(uint32_t hz)
-{
+static void lapic_timer_set_hz(uint32_t hz) {
     if (hz == 0u) {
         hz = 250u;
     }
 
-    uint32_t ticks_per_ms  = lapic_calibrate_ticks_per_ms();
+    uint32_t ticks_per_ms = lapic_calibrate_ticks_per_ms();
     uint32_t initial_count = (ticks_per_ms * 1000u) / hz;
 
     /* Mask the timer entry while reconfiguring. */
@@ -203,9 +185,7 @@ lapic_timer_set_hz(uint32_t hz)
 
 /* --------------------------------------------------------------------- API */
 
-void
-lapic_init(uint32_t hz)
-{
+void lapic_init(uint32_t hz) {
     lapic_map();
     lapic_enable();
 
@@ -218,7 +198,7 @@ lapic_init(uint32_t hz)
      * bit (Intel SDM Vol 3A §10.8.4).  IRQ 0 (timer) is driven by the LAPIC
      * LVT_TIMER entry and therefore does NOT go through LINT0.
      */
-    lapic_write(LAPIC_REG_LVT_LINT0, 0x700u);  /* ExtINT, unmasked */
+    lapic_write(LAPIC_REG_LVT_LINT0, 0x700u); /* ExtINT, unmasked */
 #elif WASMOS_IRQ_MODE == 2
     /* IOAPIC mode: the 8259 is entirely bypassed; mask all its lines. */
     pic_disable();
@@ -228,9 +208,7 @@ lapic_init(uint32_t hz)
     serial_write("[lapic] init ok\n");
 }
 
-void
-lapic_eoi(void)
-{
+void lapic_eoi(void) {
     lapic_write(LAPIC_REG_EOI, 0u);
 }
 
@@ -239,71 +217,58 @@ lapic_eoi(void)
 #if WASMOS_SMP
 
 /* ICR registers and field definitions. */
-#define LAPIC_REG_ICR_LO        0x300u
-#define LAPIC_REG_ICR_HI        0x310u
+#define LAPIC_REG_ICR_LO 0x300u
+#define LAPIC_REG_ICR_HI 0x310u
 
-#define LAPIC_ICR_SEND_PENDING  (1u << 12)
-#define LAPIC_ICR_LEVEL_ASSERT  (1u << 14)
+#define LAPIC_ICR_SEND_PENDING (1u << 12)
+#define LAPIC_ICR_LEVEL_ASSERT (1u << 14)
 #define LAPIC_ICR_DELIVERY_INIT (0x5u << 8)
 #define LAPIC_ICR_DELIVERY_SIPI (0x6u << 8)
 
 /* Approximate I/O-port delay (port 0x80 is the standard POST code port;
  * one outb takes ~1 µs on x86 hardware and QEMU). */
-static void
-io_delay_us(uint32_t us)
-{
+static void io_delay_us(uint32_t us) {
     for (uint32_t i = 0; i < us; i++) {
         __asm__ volatile("outb %%al, $0x80" : : "a"((uint8_t)0) : "memory");
     }
 }
 
-uint32_t
-lapic_read_id(void)
-{
+uint32_t lapic_read_id(void) {
     return lapic_read(LAPIC_REG_ID) >> 24;
 }
 
-void
-lapic_send_init_ipi(uint32_t apic_id)
-{
+void lapic_send_init_ipi(uint32_t apic_id) {
     lapic_write(LAPIC_REG_ICR_HI, apic_id << 24);
     lapic_write(LAPIC_REG_ICR_LO, LAPIC_ICR_LEVEL_ASSERT | LAPIC_ICR_DELIVERY_INIT);
     while (lapic_read(LAPIC_REG_ICR_LO) & LAPIC_ICR_SEND_PENDING)
         ;
-    io_delay_us(10000u);  /* 10 ms */
+    io_delay_us(10000u); /* 10 ms */
 }
 
-void
-lapic_send_sipi(uint32_t apic_id, uint8_t vector)
-{
+void lapic_send_sipi(uint32_t apic_id, uint8_t vector) {
     lapic_write(LAPIC_REG_ICR_HI, apic_id << 24);
-    lapic_write(LAPIC_REG_ICR_LO, LAPIC_ICR_LEVEL_ASSERT |
-                                   LAPIC_ICR_DELIVERY_SIPI | (uint32_t)vector);
+    lapic_write(LAPIC_REG_ICR_LO,
+                LAPIC_ICR_LEVEL_ASSERT | LAPIC_ICR_DELIVERY_SIPI | (uint32_t)vector);
     while (lapic_read(LAPIC_REG_ICR_LO) & LAPIC_ICR_SEND_PENDING)
         ;
-    io_delay_us(200u);   /* 200 µs */
+    io_delay_us(200u); /* 200 µs */
 }
 
-#define LAPIC_ICR_DELIVERY_NMI   (0x4u << 8)
-#define LAPIC_ICR_DEST_ALL_BUT_SELF (0x3u << 18)  /* destination shorthand */
+#define LAPIC_ICR_DELIVERY_NMI (0x4u << 8)
+#define LAPIC_ICR_DEST_ALL_BUT_SELF (0x3u << 18) /* destination shorthand */
 
 /* Send an NMI to every CPU except this one. Used by kpanic() to stop the world;
  * NMI is chosen because it is delivered even to CPUs running with interrupts
  * disabled (cli). No-op in practice on a single-CPU machine. */
-void
-lapic_send_nmi_allbutself(void)
-{
+void lapic_send_nmi_allbutself(void) {
     lapic_write(LAPIC_REG_ICR_HI, 0u);
-    lapic_write(LAPIC_REG_ICR_LO, LAPIC_ICR_DEST_ALL_BUT_SELF |
-                                   LAPIC_ICR_LEVEL_ASSERT |
-                                   LAPIC_ICR_DELIVERY_NMI);
+    lapic_write(LAPIC_REG_ICR_LO,
+                LAPIC_ICR_DEST_ALL_BUT_SELF | LAPIC_ICR_LEVEL_ASSERT | LAPIC_ICR_DELIVERY_NMI);
     while (lapic_read(LAPIC_REG_ICR_LO) & LAPIC_ICR_SEND_PENDING)
         ;
 }
 
-void
-lapic_ap_enable(uint32_t hz)
-{
+void lapic_ap_enable(uint32_t hz) {
     lapic_enable();
     /* BSP already masked the PIC; pic_disable() here would be a no-op. */
     lapic_timer_set_hz(hz);

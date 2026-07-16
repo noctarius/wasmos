@@ -33,16 +33,22 @@ class CliIntegrationTests(unittest.TestCase):
         self.session.send(cmd)
         ok = self.session.expect_from(mark, needle, timeout_s=timeout_s)
         if not ok:
-            self.fail(f"Expected output not found for '{cmd}'.\n--- tail ---\n{self.session.tail()}\n")
+            self.fail(
+                f"Expected output not found for '{cmd}'.\n--- tail ---\n{self.session.tail()}\n"
+            )
         ok = self.session.expect_from(mark, b"wamos> ", timeout_s=timeout_s)
         if not ok:
-            self.fail(f"Prompt not found after '{cmd}'.\n--- tail ---\n{self.session.tail()}\n")
+            self.fail(
+                f"Prompt not found after '{cmd}'.\n--- tail ---\n{self.session.tail()}\n"
+            )
 
     def test_help_lists_commands(self):
         self._cmd_expect("help", b"commands:")
 
     def test_ps_lists_processes(self):
-        self._cmd_expect("ps", b"vm(bytes) kstack(bytes) heap(bytes) rss_est(bytes) cpu(ticks) name")
+        self._cmd_expect(
+            "ps", b"vm(bytes) kstack(bytes) heap(bytes) rss_est(bytes) cpu(ticks) name"
+        )
         self._cmd_expect("ps", b"cli")
         self._cmd_expect("ps", b"fs-manager")
 
@@ -52,7 +58,10 @@ class CliIntegrationTests(unittest.TestCase):
         self._cmd_expect("ps tree", b"fs-manager (pid")
 
     def test_ps_all_lists_table_and_tree(self):
-        self._cmd_expect("ps all", b"vm(bytes) kstack(bytes) heap(bytes) rss_est(bytes) cpu(ticks) name")
+        self._cmd_expect(
+            "ps all",
+            b"vm(bytes) kstack(bytes) heap(bytes) rss_est(bytes) cpu(ticks) name",
+        )
         self._cmd_expect("ps all", b"cli")
         self._cmd_expect("ps all", b"fs-manager")
         self._cmd_expect("ps all", b"tree:")
@@ -114,14 +123,19 @@ class CliIntegrationTests(unittest.TestCase):
         self._cmd_expect("set FOO=bar", b"wamos> ")
         self._cmd_expect("echo ${FOO}", b"bar")
         self._cmd_expect("echo hello world", b"hello world")
-        self._cmd_expect("echo \"hi ${FOO}\"", b"hi bar")
+        self._cmd_expect('echo "hi ${FOO}"', b"hi bar")
         self._cmd_expect("echo -- -n literal", b"-n literal")
         self._cmd_expect("set FOO=", b"wamos> ")
         self._cmd_expect("export FOO=", b"wamos> ")
         mark = self.session.mark()
         self.session.send("echo ${FOO}")
-        self.assertTrue(self.session.expect_from(mark, b"\n", timeout_s=20), self.session.tail())
-        self.assertTrue(self.session.expect_from(mark, b"wamos> ", timeout_s=20), self.session.tail())
+        self.assertTrue(
+            self.session.expect_from(mark, b"\n", timeout_s=20), self.session.tail()
+        )
+        self.assertTrue(
+            self.session.expect_from(mark, b"wamos> ", timeout_s=20),
+            self.session.tail(),
+        )
 
     def test_path_lookup_for_exec(self):
         self._cmd_expect("cd /", b"/ wamos>")
@@ -133,6 +147,7 @@ class CliIntegrationTests(unittest.TestCase):
             "export PATH=/boot/apps:/boot/system/services:/boot/system/drivers:/boot/system/utils",
             b"wamos> ",
         )
+
 
 if __name__ == "__main__":
     unittest.main()

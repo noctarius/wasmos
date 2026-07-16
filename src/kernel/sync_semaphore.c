@@ -1,9 +1,7 @@
 #include "sync/semaphore.h"
 #include "sync/spinlock.h"
 
-void
-ksync_semaphore_init(ksync_semaphore_t *sem, uint32_t initial_count)
-{
+void ksync_semaphore_init(ksync_semaphore_t* sem, uint32_t initial_count) {
     if (!sem) {
         return;
     }
@@ -11,9 +9,7 @@ ksync_semaphore_init(ksync_semaphore_t *sem, uint32_t initial_count)
     sem->event.cnt = initial_count;
 }
 
-int
-ksync_semaphore_try_acquire(ksync_semaphore_t *sem)
-{
+int ksync_semaphore_try_acquire(ksync_semaphore_t* sem) {
     int rc = KSYNC_SEMAPHORE_BUSY;
 
     if (!sem) {
@@ -29,9 +25,7 @@ ksync_semaphore_try_acquire(ksync_semaphore_t *sem)
     return rc;
 }
 
-int
-ksync_semaphore_acquire(ksync_semaphore_t *sem)
-{
+int ksync_semaphore_acquire(ksync_semaphore_t* sem) {
     if (!sem) {
         return -1;
     }
@@ -47,9 +41,7 @@ ksync_semaphore_acquire(ksync_semaphore_t *sem)
     }
 }
 
-int
-ksync_semaphore_release(ksync_semaphore_t *sem)
-{
+int ksync_semaphore_release(ksync_semaphore_t* sem) {
     if (!sem) {
         return -1;
     }
@@ -65,9 +57,7 @@ ksync_semaphore_release(ksync_semaphore_t *sem)
     return KSYNC_SEMAPHORE_OK;
 }
 
-uint32_t
-ksync_semaphore_count(ksync_semaphore_t *sem)
-{
+uint32_t ksync_semaphore_count(ksync_semaphore_t* sem) {
     uint32_t count = 0;
 
     if (!sem) {

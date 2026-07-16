@@ -27,9 +27,9 @@
 #include "serial.h"
 #include "arch/x86_64/smp.h"
 
-#define SMP_STRESS_WORKERS  8u
-#define SMP_STRESS_ITERS    256u
-#define SMP_STRESS_TOKENS   4u
+#define SMP_STRESS_WORKERS 8u
+#define SMP_STRESS_ITERS 256u
+#define SMP_STRESS_TOKENS 4u
 /* Consecutive coordinator polls with zero forward progress before declaring the
  * ring stalled. The coordinator yields between polls, so a live ring advances
  * within a handful of polls; this bound is far above normal scheduling jitter. */
@@ -45,22 +45,20 @@ typedef struct {
 } smp_stress_worker_t;
 
 typedef struct {
-    uint8_t  spawned;
-    uint8_t  done;
+    uint8_t spawned;
+    uint8_t done;
     uint32_t last_hops;
     uint32_t stall_polls;
 } smp_stress_coord_state_t;
 
-static smp_stress_worker_t   g_sw[SMP_STRESS_WORKERS];
-static uint32_t              g_smp_stress_ep[SMP_STRESS_WORKERS];
-static volatile uint32_t     g_smp_stress_hops;
-static volatile uint32_t     g_smp_stress_done;
+static smp_stress_worker_t g_sw[SMP_STRESS_WORKERS];
+static uint32_t g_smp_stress_ep[SMP_STRESS_WORKERS];
+static volatile uint32_t g_smp_stress_hops;
+static volatile uint32_t g_smp_stress_done;
 static smp_stress_coord_state_t g_smp_stress_coord;
 
-static process_run_result_t
-smp_stress_worker_entry(process_t *process, uint32_t tid, void *arg)
-{
-    smp_stress_worker_t *w = (smp_stress_worker_t *)arg;
+static process_run_result_t smp_stress_worker_entry(process_t* process, uint32_t tid, void* arg) {
+    smp_stress_worker_t* w = (smp_stress_worker_t*)arg;
     (void)tid;
     if (!process || !w) {
         return PROCESS_RUN_EXITED;
@@ -99,23 +97,22 @@ smp_stress_worker_entry(process_t *process, uint32_t tid, void *arg)
     return PROCESS_RUN_EXITED;
 }
 
-static uint32_t
-smp_stress_popcount(uint32_t v)
-{
+static uint32_t smp_stress_popcount(uint32_t v) {
     uint32_t n = 0;
-    while (v) { n += (v & 1u); v >>= 1; }
+    while (v) {
+        n += (v & 1u);
+        v >>= 1;
+    }
     return n;
 }
 
 /* Scan for the invariant violation this test exists to catch: a thread left in
  * THREAD_STATE_RUNNING that is not the current thread on any CPU (and hence in
  * no ready queue) — i.e. a stranded/orphaned thread. Returns the count. */
-static uint32_t
-smp_stress_count_orphans(void)
-{
+static uint32_t smp_stress_count_orphans(void) {
     uint32_t orphans = 0;
     for (uint32_t i = 0; i < SMP_STRESS_WORKERS; ++i) {
-        thread_t *t = thread_get(g_sw[i].tid);
+        thread_t* t = thread_get(g_sw[i].tid);
         if (!t || t->state != THREAD_STATE_RUNNING) {
             continue;
         }
@@ -136,9 +133,7 @@ smp_stress_count_orphans(void)
     return orphans;
 }
 
-static void
-smp_stress_report(uint8_t passed)
-{
+static void smp_stress_report(uint8_t passed) {
     uint32_t cpus_used = 0;
     for (uint32_t i = 0; i < SMP_STRESS_WORKERS; ++i) {
         cpus_used |= g_sw[i].cpu_mask;
@@ -147,23 +142,20 @@ smp_stress_report(uint8_t passed)
                   passed ? "summary" : "DIAG",
                   (unsigned)__atomic_load_n(&g_smp_stress_hops, __ATOMIC_RELAXED),
                   (unsigned)__atomic_load_n(&g_smp_stress_done, __ATOMIC_RELAXED),
-                  (unsigned)SMP_STRESS_WORKERS,
-                  (unsigned)smp_stress_popcount(cpus_used));
+                  (unsigned)SMP_STRESS_WORKERS, (unsigned)smp_stress_popcount(cpus_used));
     if (!passed) {
         for (uint32_t i = 0; i < SMP_STRESS_WORKERS; ++i) {
-            serial_printf("[test] sched smp stress worker %u iters=%u cpus=%u\n",
-                          (unsigned)i, (unsigned)g_sw[i].iters_done,
+            serial_printf("[test] sched smp stress worker %u iters=%u cpus=%u\n", (unsigned)i,
+                          (unsigned)g_sw[i].iters_done,
                           (unsigned)smp_stress_popcount(g_sw[i].cpu_mask));
         }
         (void)smp_stress_count_orphans();
     }
 }
 
-static process_run_result_t
-smp_stress_coordinator_entry(process_t *process, void *arg)
-{
+static process_run_result_t smp_stress_coordinator_entry(process_t* process, void* arg) {
     (void)arg;
-    smp_stress_coord_state_t *st = &g_smp_stress_coord;
+    smp_stress_coord_state_t* st = &g_smp_stress_coord;
     if (!process) {
         return PROCESS_RUN_IDLE;
     }
@@ -180,15 +172,13 @@ smp_stress_coordinator_entry(process_t *process, void *arg)
             }
         }
         for (uint32_t i = 0; i < SMP_STRESS_WORKERS; ++i) {
-            g_sw[i].recv_ep    = g_smp_stress_ep[i];
-            g_sw[i].send_ep    = g_smp_stress_ep[(i + 1u) % SMP_STRESS_WORKERS];
+            g_sw[i].recv_ep = g_smp_stress_ep[i];
+            g_sw[i].send_ep = g_smp_stress_ep[(i + 1u) % SMP_STRESS_WORKERS];
             g_sw[i].context_id = process->context_id;
             g_sw[i].iters_done = 0;
-            g_sw[i].cpu_mask   = 0;
-            if (process_thread_spawn_worker_internal(process->pid,
-                                                     "smp-stress",
-                                                     smp_stress_worker_entry,
-                                                     &g_sw[i],
+            g_sw[i].cpu_mask = 0;
+            if (process_thread_spawn_worker_internal(process->pid, "smp-stress",
+                                                     smp_stress_worker_entry, &g_sw[i],
                                                      &g_sw[i].tid) != 0) {
                 klog_write("[test] sched smp stress worker spawn failed\n");
                 process_set_exit_status(process, -1);
@@ -210,8 +200,7 @@ smp_stress_coordinator_entry(process_t *process, void *arg)
             }
         }
         klog_printf("[test] sched smp stress start workers=%u tokens=%u iters=%u\n",
-                    (unsigned)SMP_STRESS_WORKERS,
-                    (unsigned)SMP_STRESS_TOKENS,
+                    (unsigned)SMP_STRESS_WORKERS, (unsigned)SMP_STRESS_TOKENS,
                     (unsigned)SMP_STRESS_ITERS);
         st->spawned = 1;
         st->last_hops = 0;
@@ -248,9 +237,7 @@ smp_stress_coordinator_entry(process_t *process, void *arg)
     return PROCESS_RUN_YIELDED;
 }
 
-int
-kernel_sched_smp_stress_spawn(uint32_t init_pid)
-{
+int kernel_sched_smp_stress_spawn(uint32_t init_pid) {
     uint32_t pid = 0;
     g_smp_stress_hops = 0;
     g_smp_stress_done = 0;
@@ -265,9 +252,7 @@ kernel_sched_smp_stress_spawn(uint32_t init_pid)
 
 #else /* !WASMOS_SCHED_SMP_STRESS */
 
-int
-kernel_sched_smp_stress_spawn(uint32_t init_pid)
-{
+int kernel_sched_smp_stress_spawn(uint32_t init_pid) {
     (void)init_pid;
     return 0;
 }

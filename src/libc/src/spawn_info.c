@@ -22,9 +22,7 @@ static int g_spawn_loaded;
 /* Read this process's spawn-info header + args blob into static storage, once.
  * Lazy + idempotent: works for main-entry apps and initialize-entry
  * services/drivers alike. Leaves g_spawn_info.magic == 0 if none is available. */
-static void
-wasmos_startup_load(void)
-{
+static void wasmos_startup_load(void) {
     int32_t bid;
     uint32_t n = 0;
 
@@ -38,10 +36,8 @@ wasmos_startup_load(void)
     if (bid <= 0) {
         return;
     }
-    if (wasmos_xfer_buffer_read(bid,
-                                (int32_t)(uintptr_t)&g_spawn_info,
-                                (int32_t)sizeof(g_spawn_info),
-                                0) != 0 ||
+    if (wasmos_xfer_buffer_read(bid, (int32_t)(uintptr_t)&g_spawn_info,
+                                (int32_t)sizeof(g_spawn_info), 0) != 0 ||
         g_spawn_info.magic != WASMOS_SPAWN_INFO_MAGIC) {
         g_spawn_info.magic = 0u;
         return;
@@ -50,19 +46,14 @@ wasmos_startup_load(void)
     if (n > WASMOS_STARTUP_ARGS_MAX - 1u) {
         n = WASMOS_STARTUP_ARGS_MAX - 1u;
     }
-    if (n > 0u &&
-        wasmos_xfer_buffer_read(bid,
-                                (int32_t)(uintptr_t)g_spawn_args,
-                                (int32_t)n,
-                                (int32_t)g_spawn_info.args_off) != 0) {
+    if (n > 0u && wasmos_xfer_buffer_read(bid, (int32_t)(uintptr_t)g_spawn_args, (int32_t)n,
+                                          (int32_t)g_spawn_info.args_off) != 0) {
         n = 0u;
     }
     g_spawn_args[n] = '\0';
 }
 
-int32_t
-wasmos_startup_arg(uint32_t index)
-{
+int32_t wasmos_startup_arg(uint32_t index) {
     wasmos_startup_load();
     if (index == 0u) {
         return (int32_t)g_spawn_info.proc_endpoint;
@@ -70,37 +61,27 @@ wasmos_startup_arg(uint32_t index)
     return 0;
 }
 
-int32_t
-wasmos_startup_proc_endpoint(void)
-{
+int32_t wasmos_startup_proc_endpoint(void) {
     wasmos_startup_load();
     return (int32_t)g_spawn_info.proc_endpoint;
 }
 
-int32_t
-wasmos_startup_tty(void)
-{
+int32_t wasmos_startup_tty(void) {
     wasmos_startup_load();
     return (int32_t)g_spawn_info.tty;
 }
 
-uint32_t
-wasmos_startup_module_count(void)
-{
+uint32_t wasmos_startup_module_count(void) {
     wasmos_startup_load();
     return g_spawn_info.module_count;
 }
 
-uint32_t
-wasmos_startup_module_index(void)
-{
+uint32_t wasmos_startup_module_index(void) {
     wasmos_startup_load();
     return g_spawn_info.module_index;
 }
 
-uint32_t
-wasmos_startup_args(char *dst, uint32_t cap)
-{
+uint32_t wasmos_startup_args(char* dst, uint32_t cap) {
     uint32_t i = 0;
     wasmos_startup_load();
     if (!dst || cap == 0u) {

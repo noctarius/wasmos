@@ -19,8 +19,8 @@
  */
 
 #define SHMEM_SYNC_PATH "/boot/shmem_e2e.bin"
-#define SHMEM_MAP_OFF   0x1000
-#define SHMEM_MAP_SIZE  0x1000
+#define SHMEM_MAP_OFF 0x1000
+#define SHMEM_MAP_SIZE 0x1000
 
 /* Must match shmem_target.c */
 typedef struct {
@@ -32,39 +32,36 @@ typedef struct {
     int32_t owner_ep;
 } shmem_sync_t;
 
-static int
-sync_write(const shmem_sync_t *s)
-{
+static int sync_write(const shmem_sync_t* s) {
     int fd = open(SHMEM_SYNC_PATH, O_WRONLY | O_CREAT | O_TRUNC);
-    if (fd < 0) return -1;
+    if (fd < 0)
+        return -1;
     ssize_t rc = write(fd, s, sizeof(*s));
     close(fd);
     return rc == (ssize_t)sizeof(*s) ? 0 : -1;
 }
 
-static int
-sync_read(shmem_sync_t *s)
-{
+static int sync_read(shmem_sync_t* s) {
     int fd = open(SHMEM_SYNC_PATH, O_RDONLY);
-    if (fd < 0) return -1;
+    if (fd < 0)
+        return -1;
     ssize_t rc = read(fd, s, sizeof(*s));
     close(fd);
     return rc == (ssize_t)sizeof(*s) ? 0 : -1;
 }
 
 /* Send a stage signal to shmtgt and wait for its acknowledgement. */
-static int
-signal_and_wait(int32_t owner_ep, int32_t target_ep, int32_t stage)
-{
-    if (wasmos_ipc_send(target_ep, owner_ep, stage, 0, 0, 0, 0, 0) != 0) return -1;
-    if (wasmos_ipc_select_one(owner_ep) < 0) return -1;
+static int signal_and_wait(int32_t owner_ep, int32_t target_ep, int32_t stage) {
+    if (wasmos_ipc_send(target_ep, owner_ep, stage, 0, 0, 0, 0, 0) != 0)
+        return -1;
+    if (wasmos_ipc_select_one(owner_ep) < 0)
+        return -1;
     return 0;
 }
 
-int
-main(int argc, char **argv)
-{
-    (void)argc; (void)argv;
+int main(int argc, char** argv) {
+    (void)argc;
+    (void)argv;
 
     shmem_sync_t sync;
     memset(&sync, 0, sizeof(sync));
@@ -110,12 +107,12 @@ main(int argc, char **argv)
     }
 
     /* Stage 0: shmem created, tell shmtgt to run pre-grant policy checks. */
-    sync.stage     = 0;
-    sync.shmem_id  = shmem_id;
+    sync.stage = 0;
+    sync.shmem_id = shmem_id;
     sync.owner_pid = wasmos_sched_current_pid();
     sync.target_pid = target_pid;
-    sync.target_ep  = target_ep;
-    sync.owner_ep   = owner_ep;
+    sync.target_ep = target_ep;
+    sync.owner_ep = owner_ep;
     if (sync_write(&sync) != 0) {
         puts("[test] shmem e2e setup write-stage0-failed");
         return 1;

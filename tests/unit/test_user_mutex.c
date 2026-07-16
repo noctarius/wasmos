@@ -3,9 +3,7 @@
 
 #include "user_mutex.h"
 
-static void
-test_basic_lock_unlock(void)
-{
+static void test_basic_lock_unlock(void) {
     user_mutex_state_t state = {0};
     assert(user_mutex_state_try_lock(&state, 7u) == USER_MUTEX_OK);
     assert(state.owner_tid == 7u);
@@ -16,9 +14,7 @@ test_basic_lock_unlock(void)
     assert(state.recursion_depth == 0u);
 }
 
-static void
-test_recursive_locking(void)
-{
+static void test_recursive_locking(void) {
     user_mutex_state_t state = {0};
     assert(user_mutex_state_try_lock(&state, 11u) == USER_MUTEX_OK);
     assert(user_mutex_state_try_lock(&state, 11u) == USER_MUTEX_OK);
@@ -34,9 +30,7 @@ test_recursive_locking(void)
     assert(state.recursion_depth == 0u);
 }
 
-static void
-test_contention_and_non_owner_unlock(void)
-{
+static void test_contention_and_non_owner_unlock(void) {
     user_mutex_state_t state = {0};
     assert(user_mutex_state_try_lock(&state, 3u) == USER_MUTEX_OK);
     assert(user_mutex_state_try_lock(&state, 9u) == USER_MUTEX_BUSY);
@@ -48,9 +42,7 @@ test_contention_and_non_owner_unlock(void)
     assert(state.recursion_depth == 1u);
 }
 
-int
-main(void)
-{
+int main(void) {
     test_basic_lock_unlock();
     test_recursive_locking();
     test_contention_and_non_owner_unlock();

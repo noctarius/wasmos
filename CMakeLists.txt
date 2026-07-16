@@ -1903,3 +1903,74 @@ add_custom_target(run-kernel-unit-tests
   COMMENT "Running host kernel unit tests"
   VERBATIM
 )
+
+# ---------------------------------------------------------------------------
+# Developer quality targets: formatting and linting.
+#
+# scripts/quality.sh is the backing implementation (it owns the source
+# allowlist and per-language tool invocations). CMake has already resolved the
+# toolchain, so rather than have the script re-search PATH, pass the paths we
+# know through the env-var overrides it honors. Tools CMake cannot locate here
+# are left unset; the script then falls back to PATH and only errors if a
+# language with matching in-scope sources is actually present.
+# CMAKE_EXPORT_COMPILE_COMMANDS (set at the top of this file) gives clang-tidy
+# its compile database under the build dir.
+# ---------------------------------------------------------------------------
+find_program(QUALITY_CLANG_FORMAT clang-format HINTS ${CLANG_BIN_DIR} ${LLVM_HINTS})
+find_program(QUALITY_CLANG_TIDY clang-tidy HINTS ${CLANG_BIN_DIR} ${LLVM_HINTS})
+find_program(QUALITY_ZIG zig)
+find_program(QUALITY_GOFMT gofmt)
+find_program(QUALITY_GO go)
+find_program(QUALITY_RUSTFMT rustfmt)
+find_program(QUALITY_RUSTC rustc)
+find_program(QUALITY_ASC asc HINTS ${CMAKE_SOURCE_DIR}/node_modules/.bin)
+find_program(QUALITY_BLACK black)
+find_program(QUALITY_RUFF ruff)
+
+set(QUALITY_ENV QUALITY_BUILD_DIR=${CMAKE_BINARY_DIR})
+foreach (_pair
+    CLANG_FORMAT:QUALITY_CLANG_FORMAT
+    CLANG_TIDY:QUALITY_CLANG_TIDY
+    ZIG:QUALITY_ZIG
+    GOFMT:QUALITY_GOFMT
+    GO:QUALITY_GO
+    RUSTFMT:QUALITY_RUSTFMT
+    RUSTC:QUALITY_RUSTC
+    ASC:QUALITY_ASC
+    BLACK:QUALITY_BLACK
+    RUFF:QUALITY_RUFF)
+  string(REPLACE ":" ";" _kv ${_pair})
+  list(GET _kv 0 _env_name)
+  list(GET _kv 1 _var_name)
+  if (${_var_name})
+    list(APPEND QUALITY_ENV ${_env_name}=${${_var_name}})
+  endif ()
+endforeach ()
+
+set(QUALITY_SCRIPT ${CMAKE_SOURCE_DIR}/scripts/quality.sh)
+
+add_custom_target(fmt
+  COMMAND ${CMAKE_COMMAND} -E env ${QUALITY_ENV} bash ${QUALITY_SCRIPT} format
+  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+  USES_TERMINAL VERBATIM
+  COMMENT "quality: format in-scope sources in place")
+
+add_custom_target(fmt-check
+  COMMAND ${CMAKE_COMMAND} -E env ${QUALITY_ENV} bash ${QUALITY_SCRIPT} format --check
+  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+  USES_TERMINAL VERBATIM
+  COMMENT "quality: check formatting (no writes)")
+
+add_custom_target(lint
+  COMMAND ${CMAKE_COMMAND} -E env ${QUALITY_ENV} bash ${QUALITY_SCRIPT} lint
+  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+  USES_TERMINAL VERBATIM
+  COMMENT "quality: lint in-scope sources")
+
+# `quality` runs format then lint sequentially (two COMMANDs = ordered).
+add_custom_target(quality
+  COMMAND ${CMAKE_COMMAND} -E env ${QUALITY_ENV} bash ${QUALITY_SCRIPT} format
+  COMMAND ${CMAKE_COMMAND} -E env ${QUALITY_ENV} bash ${QUALITY_SCRIPT} lint
+  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+  USES_TERMINAL VERBATIM
+  COMMENT "quality: format then lint")

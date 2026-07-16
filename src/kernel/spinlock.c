@@ -35,11 +35,10 @@
  * The pushfq+cli sequence is performed BEFORE checking/incrementing the depth
  * counter to close the window where IF=1 but depth>0.
  */
-static inline void spinlock_irq_save(void)
-{
+static inline void spinlock_irq_save(void) {
     uint64_t flags;
-    __asm__ volatile("pushfq; pop %0; cli" : "=r"(flags) :: "memory");
-    cpu_local_t *cpu = cpu_local();
+    __asm__ volatile("pushfq; pop %0; cli" : "=r"(flags)::"memory");
+    cpu_local_t* cpu = cpu_local();
     if (cpu->irq_disable_depth++ == 0) {
         cpu->irq_saved_flags = flags;
     }
@@ -50,32 +49,31 @@ static inline void spinlock_irq_save(void)
  * RFLAGS, which re-enables interrupts if they were enabled before the first
  * spinlock_irq_save().
  */
-static inline void spinlock_irq_restore(void)
-{
-    cpu_local_t *cpu = cpu_local();
+static inline void spinlock_irq_restore(void) {
+    cpu_local_t* cpu = cpu_local();
     if (cpu->irq_disable_depth == 0) {
         return;
     }
     if (--cpu->irq_disable_depth == 0) {
-        __asm__ volatile("push %0; popfq" :: "r"(cpu->irq_saved_flags) : "memory");
+        __asm__ volatile("push %0; popfq" ::"r"(cpu->irq_saved_flags) : "memory");
     }
 }
 
-void spinlock_init(spinlock_t *lock) {
+void spinlock_init(spinlock_t* lock) {
     if (!lock) {
         return;
     }
     lock->state = 0;
 }
 
-int spinlock_try_lock(spinlock_t *lock) {
+int spinlock_try_lock(spinlock_t* lock) {
     if (!lock) {
         return 0;
     }
     return __sync_lock_test_and_set(&lock->state, 1u) == 0u;
 }
 
-void spinlock_lock(spinlock_t *lock) {
+void spinlock_lock(spinlock_t* lock) {
     if (!lock) {
         return;
     }
@@ -91,7 +89,7 @@ void spinlock_lock(spinlock_t *lock) {
     }
 }
 
-void spinlock_unlock(spinlock_t *lock) {
+void spinlock_unlock(spinlock_t* lock) {
     if (!lock) {
         return;
     }
@@ -105,7 +103,7 @@ void spinlock_unlock(spinlock_t *lock) {
  * try to acquire the same lock (which is the case for runtime_lock, held across an
  * entire WASM process timeslice — using the regular spinlock_lock would keep cli
  * active for the whole timeslice and permanently suppress keyboard/mouse IRQs). */
-void spinlock_lock_noirq(spinlock_t *lock) {
+void spinlock_lock_noirq(spinlock_t* lock) {
     if (!lock) {
         return;
     }
@@ -117,7 +115,7 @@ void spinlock_lock_noirq(spinlock_t *lock) {
     }
 }
 
-void spinlock_unlock_noirq(spinlock_t *lock) {
+void spinlock_unlock_noirq(spinlock_t* lock) {
     if (!lock) {
         return;
     }

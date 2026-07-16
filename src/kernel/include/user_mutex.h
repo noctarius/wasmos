@@ -16,14 +16,9 @@ typedef struct {
     uint32_t recursion_depth;
 } user_mutex_state_t;
 
-enum {
-    USER_MUTEX_OK = 0,
-    USER_MUTEX_BUSY = 1
-};
+enum { USER_MUTEX_OK = 0, USER_MUTEX_BUSY = 1 };
 
-static inline int
-user_mutex_state_try_lock(user_mutex_state_t *state, uint32_t tid)
-{
+static inline int user_mutex_state_try_lock(user_mutex_state_t* state, uint32_t tid) {
     if (!state || tid == 0u) {
         return -1;
     }
@@ -42,9 +37,7 @@ user_mutex_state_try_lock(user_mutex_state_t *state, uint32_t tid)
     return USER_MUTEX_BUSY;
 }
 
-static inline int
-user_mutex_state_unlock(user_mutex_state_t *state, uint32_t tid)
-{
+static inline int user_mutex_state_unlock(user_mutex_state_t* state, uint32_t tid) {
     if (!state || tid == 0u) {
         return -1;
     }
@@ -60,13 +53,9 @@ user_mutex_state_unlock(user_mutex_state_t *state, uint32_t tid)
     return USER_MUTEX_OK;
 }
 
-int user_mutex_user_try_lock(uint32_t context_id,
-                             uint64_t user_addr,
-                             uint32_t tid,
-                             user_mutex_state_t *out_state);
-int user_mutex_user_unlock(uint32_t context_id,
-                           uint64_t user_addr,
-                           uint32_t tid,
-                           user_mutex_state_t *out_state);
+int user_mutex_user_try_lock(uint32_t context_id, uint64_t user_addr, uint32_t tid,
+                             user_mutex_state_t* out_state);
+int user_mutex_user_unlock(uint32_t context_id, uint64_t user_addr, uint32_t tid,
+                           user_mutex_state_t* out_state);
 
 #endif

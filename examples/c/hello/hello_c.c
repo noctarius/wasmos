@@ -1,8 +1,6 @@
 #include "stdio.h"
 
-int
-main(int argc, char **argv)
-{
+int main(int argc, char** argv) {
     static int printed = 0;
     (void)argc;
     (void)argv;

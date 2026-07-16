@@ -4,9 +4,7 @@
 #include <stddef.h>
 
 /* ASCII-only tolower; used for case-insensitive mount name comparison. */
-static int32_t
-ascii_tolower(int32_t c)
-{
+static int32_t ascii_tolower(int32_t c) {
     if (c >= 'A' && c <= 'Z') {
         return c + ('a' - 'A');
     }
@@ -14,9 +12,7 @@ ascii_tolower(int32_t c)
 }
 
 /* Case-insensitive comparison of exactly n bytes; returns 1 if equal. */
-static int32_t
-ascii_case_equal(const char *a, const char *b, int32_t n)
-{
+static int32_t ascii_case_equal(const char* a, const char* b, int32_t n) {
     int32_t i;
     if (!a || !b || n <= 0) {
         return 0;
@@ -29,17 +25,10 @@ ascii_case_equal(const char *a, const char *b, int32_t n)
     return 1;
 }
 
-int32_t
-fsmgr_route_path_for_mounts(const char *path,
-                            int32_t path_len,
-                            const char *const *mount_names,
-                            int32_t mount_count,
-                            int32_t allow_relative,
-                            int32_t *out_mount_index,
-                            char *out_path,
-                            int32_t out_path_cap,
-                            int32_t *out_path_len)
-{
+int32_t fsmgr_route_path_for_mounts(const char* path, int32_t path_len,
+                                    const char* const* mount_names, int32_t mount_count,
+                                    int32_t allow_relative, int32_t* out_mount_index,
+                                    char* out_path, int32_t out_path_cap, int32_t* out_path_len) {
     int32_t start = 0;
     int32_t mount_start;
     int32_t mount_end;
@@ -48,7 +37,8 @@ fsmgr_route_path_for_mounts(const char *path,
     int32_t tail_start;
     int32_t tail_len;
 
-    if (!path || !mount_names || mount_count <= 0 || !out_mount_index || !out_path || out_path_cap < 2 || !out_path_len) {
+    if (!path || !mount_names || mount_count <= 0 || !out_mount_index || !out_path ||
+        out_path_cap < 2 || !out_path_len) {
         return 0;
     }
     if (path_len <= 0) {
@@ -76,7 +66,7 @@ fsmgr_route_path_for_mounts(const char *path,
     }
 
     for (i = 0; i < mount_count; ++i) {
-        const char *name = mount_names[i];
+        const char* name = mount_names[i];
         int32_t name_len = 0;
         if (!name) {
             continue;

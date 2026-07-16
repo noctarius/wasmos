@@ -7,6 +7,7 @@ Checks the diagnostic markers added to pump_libui_demo and the compositor.
 
 Requires WASMOS_TEST_INPUT_INJECTION=1 and a display backend.
 """
+
 import os
 import sys
 import subprocess
@@ -29,8 +30,9 @@ def _best_display() -> str:
         return ""
     qemu_bin = shutil.which("qemu-system-x86_64") or "qemu-system-x86_64"
     try:
-        result = subprocess.run([qemu_bin, "-display", "help"],
-                                capture_output=True, text=True)
+        result = subprocess.run(
+            [qemu_bin, "-display", "help"], capture_output=True, text=True
+        )
         for backend in ("cocoa", "gtk", "sdl"):
             if backend in result.stdout.lower():
                 return backend
@@ -67,8 +69,9 @@ class LibuiClickTest(unittest.TestCase):
         cfg.enable_monitor = True
         cfg.nographic = False
         cfg.display = _DISPLAY
-        cls.session = QemuSession(cfg, timeout_s=180, echo=True,
-                                  force_stop_on_timeout=False)
+        cls.session = QemuSession(
+            cfg, timeout_s=180, echo=True, force_stop_on_timeout=False
+        )
         cls.session.start()
         if not cls.session.expect(b"wamos> ", timeout_s=120):
             cls.session.close()
@@ -139,8 +142,9 @@ class LibuiClickTest(unittest.TestCase):
         mark = self.session.mark()
         self._click_current()
 
-        ok = self.session.expect_from(mark, b"[dbg-gfx] pointer btn-push queued",
-                                       timeout_s=5)
+        ok = self.session.expect_from(
+            mark, b"[dbg-gfx] pointer btn-push queued", timeout_s=5
+        )
         if not ok:
             self.fail(
                 "Compositor did not queue a pointer button-press event.\n"
@@ -158,8 +162,9 @@ class LibuiClickTest(unittest.TestCase):
         for dx, dy in [(0, 0), (10, 0), (-10, 5), (0, -5)]:
             self._move_to_libui_button(dx, dy)
             self._click_current()
-            if self.session.expect_from(mark, b"[dbg-libui] pointer btn-down",
-                                         timeout_s=3):
+            if self.session.expect_from(
+                mark, b"[dbg-libui] pointer btn-down", timeout_s=3
+            ):
                 break
         else:
             self.fail(
@@ -179,8 +184,9 @@ class LibuiClickTest(unittest.TestCase):
         for dx, dy in [(0, 0), (10, 0), (-10, 5), (5, 5)]:
             self._move_to_libui_button(dx, dy)
             self._click_current()
-            if self.session.expect_from(mark, b"[dbg-libui] on_click fired",
-                                         timeout_s=3):
+            if self.session.expect_from(
+                mark, b"[dbg-libui] on_click fired", timeout_s=3
+            ):
                 return
         self.fail(
             "on_click callback was never fired after multiple click attempts.\n"

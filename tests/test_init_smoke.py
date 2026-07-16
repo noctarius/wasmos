@@ -33,10 +33,14 @@ class InitSmokeTests(unittest.TestCase):
         self.session.send(cmd)
         ok = self.session.expect_from(mark, needle, timeout_s=timeout_s)
         if not ok:
-            self.fail(f"Expected output not found for '{cmd}'.\n--- tail ---\n{self.session.tail()}\n")
+            self.fail(
+                f"Expected output not found for '{cmd}'.\n--- tail ---\n{self.session.tail()}\n"
+            )
         ok = self.session.expect_from(mark, b"wamos> ", timeout_s=timeout_s)
         if not ok:
-            self.fail(f"Prompt not found after '{cmd}'.\n--- tail ---\n{self.session.tail()}\n")
+            self.fail(
+                f"Prompt not found after '{cmd}'.\n--- tail ---\n{self.session.tail()}\n"
+            )
 
     def test_init_smoke_runs(self):
         self._cmd_expect("init_smoke", b"init-smoke: init done")
@@ -49,10 +53,14 @@ class InitSmokeTests(unittest.TestCase):
         for needle in (b"vt", b"gfx-compositor", b"cli"):
             ok = self.session.expect_from(mark, needle, timeout_s=10)
             if not ok:
-                self.fail(f"Expected '{needle.decode()}' in ps output.\n--- tail ---\n{self.session.tail()}\n")
+                self.fail(
+                    f"Expected '{needle.decode()}' in ps output.\n--- tail ---\n{self.session.tail()}\n"
+                )
         ok = self.session.expect_from(mark, b"wamos> ", timeout_s=10)
         if not ok:
-            self.fail(f"Prompt not found after ps.\n--- tail ---\n{self.session.tail()}\n")
+            self.fail(
+                f"Prompt not found after ps.\n--- tail ---\n{self.session.tail()}\n"
+            )
 
 
 if __name__ == "__main__":

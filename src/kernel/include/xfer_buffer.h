@@ -58,11 +58,11 @@ extern "C" {
  */
 
 /* Transfer-buffer kinds. */
-#define BUFFER_KIND_TRANSFER    1u
+#define BUFFER_KIND_TRANSFER 1u
 #define BUFFER_KIND_FRAMEBUFFER 2u
 
 /* Borrow access rights. */
-#define BUFFER_BORROW_READ  0x1u
+#define BUFFER_BORROW_READ 0x1u
 #define BUFFER_BORROW_WRITE 0x2u
 
 /**
@@ -201,10 +201,8 @@ uint32_t xfer_buffer_size(uint32_t kind);
  *     initialized or a slot could not be allocated.</li>
  * </ul>
  */
-int xfer_buffer_acquire(uint32_t kind,
-                        uint32_t owner_context_id,
-                        uint32_t minimum_size,
-                        xfer_buffer_owner_t *out_owner);
+int xfer_buffer_acquire(uint32_t kind, uint32_t owner_context_id, uint32_t minimum_size,
+                        xfer_buffer_owner_t* out_owner);
 
 /**
  * Retrieve the current owner binding for a buffer object as seen by one
@@ -222,9 +220,8 @@ int xfer_buffer_acquire(uint32_t kind,
  *     current owner.</li>
  * </ul>
  */
-int xfer_buffer_get_owned(const xfer_buffer_t *buffer,
-                          uint32_t context_id,
-                          xfer_buffer_owner_t *out_owner);
+int xfer_buffer_get_owned(const xfer_buffer_t* buffer, uint32_t context_id,
+                          xfer_buffer_owner_t* out_owner);
 
 /**
  * Destroy an owned buffer object. Only the current owner may destroy it.
@@ -243,7 +240,7 @@ int xfer_buffer_get_owned(const xfer_buffer_t *buffer,
  *     object; unmap it first.</li>
  * </ul>
  */
-int xfer_buffer_release_owned(const xfer_buffer_owner_t *owner);
+int xfer_buffer_release_owned(const xfer_buffer_owner_t* owner);
 
 /**
  * Transfer ownership of a buffer object to another context.
@@ -266,7 +263,7 @@ int xfer_buffer_release_owned(const xfer_buffer_owner_t *owner);
  *     borrows; transfer is only allowed once all borrows are gone.</li>
  * </ul>
  */
-int xfer_buffer_transfer_ownership(const xfer_buffer_owner_t *current_owner,
+int xfer_buffer_transfer_ownership(const xfer_buffer_owner_t* current_owner,
                                    uint32_t new_owner_context_id);
 
 /**
@@ -298,10 +295,8 @@ int xfer_buffer_transfer_ownership(const xfer_buffer_owner_t *current_owner,
  *     allocated.</li>
  * </ul>
  */
-int xfer_buffer_borrow(const xfer_buffer_owner_t *owner,
-                       uint32_t borrower_context_id,
-                       uint32_t flags,
-                       xfer_buffer_borrow_t *out_borrow);
+int xfer_buffer_borrow(const xfer_buffer_owner_t* owner, uint32_t borrower_context_id,
+                       uint32_t flags, xfer_buffer_borrow_t* out_borrow);
 
 /**
  * Reborrow a buffer object from an existing active borrow. Downstream rights
@@ -330,10 +325,8 @@ int xfer_buffer_borrow(const xfer_buffer_owner_t *owner,
  *     allocated.</li>
  * </ul>
  */
-int xfer_buffer_reborrow(const xfer_buffer_borrow_t *upstream,
-                         uint32_t borrower_context_id,
-                         uint32_t flags,
-                         xfer_buffer_borrow_t *out_borrow);
+int xfer_buffer_reborrow(const xfer_buffer_borrow_t* upstream, uint32_t borrower_context_id,
+                         uint32_t flags, xfer_buffer_borrow_t* out_borrow);
 
 /**
  * Remove one active borrow handle. Cascade-revokes all downstream reborrows
@@ -349,7 +342,7 @@ int xfer_buffer_reborrow(const xfer_buffer_borrow_t *upstream,
  *     unmap it first.</li>
  * </ul>
  */
-int xfer_buffer_unborrow(const xfer_buffer_borrow_t *borrow);
+int xfer_buffer_unborrow(const xfer_buffer_borrow_t* borrow);
 
 /**
  * Resolve a borrow binding for its grantor (owner-push). Authorizes the context
@@ -367,9 +360,8 @@ int xfer_buffer_unborrow(const xfer_buffer_borrow_t *borrow);
  * <li>{@code XFER_BUFFER_ERR_NOT_FOUND} - the underlying object no longer exists.</li>
  * </ul>
  */
-int xfer_buffer_get_lent(uint32_t borrow_id,
-                         uint32_t lender_context_id,
-                         xfer_buffer_borrow_t *out_borrow);
+int xfer_buffer_get_lent(uint32_t borrow_id, uint32_t lender_context_id,
+                         xfer_buffer_borrow_t* out_borrow);
 
 /**
  * Whether a context currently holds at least the requested access rights to a
@@ -378,8 +370,7 @@ int xfer_buffer_get_lent(uint32_t borrow_id,
  *
  * @return 1 when access is currently allowed; 0 otherwise.
  */
-int xfer_buffer_can_access(const xfer_buffer_t *buffer,
-                           uint32_t accessor_context_id,
+int xfer_buffer_can_access(const xfer_buffer_t* buffer, uint32_t accessor_context_id,
                            uint32_t requested_flags);
 
 /**
@@ -388,8 +379,7 @@ int xfer_buffer_can_access(const xfer_buffer_t *buffer,
  *
  * @return 1 when both resolve to the same object; 0 otherwise.
  */
-int xfer_buffer_same_object(const xfer_buffer_t *buffer,
-                            uint32_t accessor_context_id,
+int xfer_buffer_same_object(const xfer_buffer_t* buffer, uint32_t accessor_context_id,
                             uint32_t owner_context_id);
 
 /**
@@ -412,11 +402,8 @@ int xfer_buffer_same_object(const xfer_buffer_t *buffer,
  *     owner-side DMA mapping.</li>
  * </ul>
  */
-int xfer_buffer_dma_map_owned(const xfer_buffer_owner_t *owner,
-                              uint32_t offset,
-                              uint32_t length,
-                              uint32_t direction_flags,
-                              xfer_buffer_dma_mapping_t *out_mapping);
+int xfer_buffer_dma_map_owned(const xfer_buffer_owner_t* owner, uint32_t offset, uint32_t length,
+                              uint32_t direction_flags, xfer_buffer_dma_mapping_t* out_mapping);
 
 /**
  * Attach DMA state to one active borrow (borrower-initiated). Direction
@@ -440,11 +427,8 @@ int xfer_buffer_dma_map_owned(const xfer_buffer_owner_t *owner,
  *     mapping.</li>
  * </ul>
  */
-int xfer_buffer_dma_map_borrow(const xfer_buffer_borrow_t *borrow,
-                               uint32_t offset,
-                               uint32_t length,
-                               uint32_t direction_flags,
-                               xfer_buffer_dma_mapping_t *out_mapping);
+int xfer_buffer_dma_map_borrow(const xfer_buffer_borrow_t* borrow, uint32_t offset, uint32_t length,
+                               uint32_t direction_flags, xfer_buffer_dma_mapping_t* out_mapping);
 
 /**
  * Synchronize a subrange of an active DMA mapping. {@code offset} and
@@ -460,8 +444,7 @@ int xfer_buffer_dma_map_borrow(const xfer_buffer_borrow_t *borrow,
  *     falls outside the mapped range.</li>
  * </ul>
  */
-int xfer_buffer_dma_sync(const xfer_buffer_dma_mapping_t *mapping,
-                         uint32_t offset,
+int xfer_buffer_dma_sync(const xfer_buffer_dma_mapping_t* mapping, uint32_t offset,
                          uint32_t length);
 
 /**
@@ -477,7 +460,7 @@ int xfer_buffer_dma_sync(const xfer_buffer_dma_mapping_t *mapping,
  *     example already unmapped).</li>
  * </ul>
  */
-int xfer_buffer_dma_unmap(xfer_buffer_dma_mapping_t *mapping);
+int xfer_buffer_dma_unmap(xfer_buffer_dma_mapping_t* mapping);
 
 /**
  * Tear down all xfer-buffer state rooted in one context: destroys owner
@@ -490,7 +473,7 @@ void xfer_buffer_drop_context(uint32_t context_id);
  * Physical base address of a buffer object's backing, or 0 if the object does
  * not exist. Used by kernel code that must map or DMA the backing directly.
  */
-uint64_t xfer_buffer_object_phys(const xfer_buffer_t *buffer);
+uint64_t xfer_buffer_object_phys(const xfer_buffer_t* buffer);
 
 /**
  * Resolve a bare {@code buffer_id} (as carried across the syscall/IPC boundary)
@@ -513,10 +496,8 @@ uint64_t xfer_buffer_object_phys(const xfer_buffer_t *buffer);
  *     neither its owner nor an active borrower.</li>
  * </ul>
  */
-int xfer_buffer_describe(uint32_t buffer_id,
-                         uint32_t kind,
-                         uint32_t context_id,
-                         xfer_buffer_t *out);
+int xfer_buffer_describe(uint32_t buffer_id, uint32_t kind, uint32_t context_id,
+                         xfer_buffer_t* out);
 
 /**
  * Materialize the borrow binding a context holds, from its {@code borrow_id},
@@ -545,10 +526,9 @@ int xfer_buffer_describe(uint32_t buffer_id,
  *     exists.</li>
  * </ul>
  */
-int xfer_buffer_get_borrowed(uint32_t borrow_id,
-                             uint32_t context_id,
-                             xfer_buffer_borrow_t *out_borrow,
-                             xfer_buffer_dma_mapping_t *out_mapping);
+int xfer_buffer_get_borrowed(uint32_t borrow_id, uint32_t context_id,
+                             xfer_buffer_borrow_t* out_borrow,
+                             xfer_buffer_dma_mapping_t* out_mapping);
 
 #ifdef __cplusplus
 }

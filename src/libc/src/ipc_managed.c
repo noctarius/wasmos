@@ -4,9 +4,7 @@
 static int32_t g_wasmos_ipc_reply_endpoint = -1;
 static int32_t g_wasmos_ipc_request_id = 1;
 
-int32_t
-wasmos_ipc_ensure_reply_endpoint(void)
-{
+int32_t wasmos_ipc_ensure_reply_endpoint(void) {
     if (g_wasmos_ipc_reply_endpoint >= 0) {
         return g_wasmos_ipc_reply_endpoint;
     }
@@ -14,9 +12,7 @@ wasmos_ipc_ensure_reply_endpoint(void)
     return g_wasmos_ipc_reply_endpoint;
 }
 
-int32_t
-wasmos_ipc_next_request_id(void)
-{
+int32_t wasmos_ipc_next_request_id(void) {
     int32_t id = g_wasmos_ipc_request_id++;
     if (g_wasmos_ipc_request_id < 1) {
         g_wasmos_ipc_request_id = 1;

@@ -72,166 +72,139 @@ static uint32_t g_next_borrow_id = 1u;
  * (== unlocked) is a valid starting value, so no explicit init is required. */
 static ksync_spinlock_t g_xfer_lock;
 
-static int
-registry_init_once(void)
-{
+static int registry_init_once(void) {
     if (g_initialized) {
         return 0;
     }
-    if (list_init(&g_objects,
-                  (uint32_t)sizeof(object_slot_t),
-                  LIST_IMPL_LINKED,
-                  0u) != 0) {
+    if (list_init(&g_objects, (uint32_t)sizeof(object_slot_t), LIST_IMPL_LINKED, 0u) != 0) {
         return -1;
     }
-    if (list_init(&g_borrows,
-                  (uint32_t)sizeof(borrow_slot_t),
-                  LIST_IMPL_LINKED,
-                  0u) != 0) {
+    if (list_init(&g_borrows, (uint32_t)sizeof(borrow_slot_t), LIST_IMPL_LINKED, 0u) != 0) {
         return -1;
     }
     g_initialized = 1u;
     return 0;
 }
 
-static int
-valid_flags(uint32_t flags)
-{
+static int valid_flags(uint32_t flags) {
     const uint32_t allowed = BUFFER_BORROW_READ | BUFFER_BORROW_WRITE;
 
     return flags != 0u && (flags & allowed) == flags;
 }
 
-static object_slot_t *
-object_alloc(void)
-{
+static object_slot_t* object_alloc(void) {
     list_iter_t it;
-    object_slot_t *slot = 0;
+    object_slot_t* slot = 0;
 
     /* Reuse a freed slot before growing the list to keep the store bounded. */
-    slot = (object_slot_t *)list_first(&g_objects, &it);
+    slot = (object_slot_t*)list_first(&g_objects, &it);
     while (slot) {
         if (!slot->active) {
             return slot;
         }
-        slot = (object_slot_t *)list_next(&it);
+        slot = (object_slot_t*)list_next(&it);
     }
-    return (object_slot_t *)list_alloc(&g_objects);
+    return (object_slot_t*)list_alloc(&g_objects);
 }
 
-static borrow_slot_t *
-borrow_alloc(void)
-{
+static borrow_slot_t* borrow_alloc(void) {
     list_iter_t it;
-    borrow_slot_t *slot = 0;
+    borrow_slot_t* slot = 0;
 
-    slot = (borrow_slot_t *)list_first(&g_borrows, &it);
+    slot = (borrow_slot_t*)list_first(&g_borrows, &it);
     while (slot) {
         if (!slot->active) {
             return slot;
         }
-        slot = (borrow_slot_t *)list_next(&it);
+        slot = (borrow_slot_t*)list_next(&it);
     }
-    return (borrow_slot_t *)list_alloc(&g_borrows);
+    return (borrow_slot_t*)list_alloc(&g_borrows);
 }
 
-static object_slot_t *
-object_find(const xfer_buffer_t *buffer)
-{
+static object_slot_t* object_find(const xfer_buffer_t* buffer) {
     list_iter_t it;
-    object_slot_t *slot = 0;
+    object_slot_t* slot = 0;
 
     if (!buffer || buffer->buffer_id == 0u || registry_init_once() != 0) {
         return 0;
     }
-    slot = (object_slot_t *)list_first(&g_objects, &it);
+    slot = (object_slot_t*)list_first(&g_objects, &it);
     while (slot) {
-        if (slot->active &&
-            slot->buffer_id == buffer->buffer_id &&
-            slot->kind == buffer->kind) {
+        if (slot->active && slot->buffer_id == buffer->buffer_id && slot->kind == buffer->kind) {
             return slot;
         }
-        slot = (object_slot_t *)list_next(&it);
+        slot = (object_slot_t*)list_next(&it);
     }
     return 0;
 }
 
-static object_slot_t *
-object_find_by_id(uint32_t buffer_id)
-{
+static object_slot_t* object_find_by_id(uint32_t buffer_id) {
     list_iter_t it;
-    object_slot_t *slot = 0;
+    object_slot_t* slot = 0;
 
     if (buffer_id == 0u || registry_init_once() != 0) {
         return 0;
     }
-    slot = (object_slot_t *)list_first(&g_objects, &it);
+    slot = (object_slot_t*)list_first(&g_objects, &it);
     while (slot) {
         if (slot->active && slot->buffer_id == buffer_id) {
             return slot;
         }
-        slot = (object_slot_t *)list_next(&it);
+        slot = (object_slot_t*)list_next(&it);
     }
     return 0;
 }
 
-static borrow_slot_t *
-borrow_find(uint32_t borrow_id)
-{
+static borrow_slot_t* borrow_find(uint32_t borrow_id) {
     list_iter_t it;
-    borrow_slot_t *slot = 0;
+    borrow_slot_t* slot = 0;
 
     if (borrow_id == 0u || registry_init_once() != 0) {
         return 0;
     }
-    slot = (borrow_slot_t *)list_first(&g_borrows, &it);
+    slot = (borrow_slot_t*)list_first(&g_borrows, &it);
     while (slot) {
         if (slot->active && slot->borrow_id == borrow_id) {
             return slot;
         }
-        slot = (borrow_slot_t *)list_next(&it);
+        slot = (borrow_slot_t*)list_next(&it);
     }
     return 0;
 }
 
 /* Active borrow held by borrower_context_id on a specific object, if any. A
  * borrower holds at most one active borrow per object. */
-static borrow_slot_t *
-borrow_find_for(uint32_t buffer_id, uint32_t borrower_context_id)
-{
+static borrow_slot_t* borrow_find_for(uint32_t buffer_id, uint32_t borrower_context_id) {
     list_iter_t it;
-    borrow_slot_t *slot = 0;
+    borrow_slot_t* slot = 0;
 
     if (registry_init_once() != 0) {
         return 0;
     }
-    slot = (borrow_slot_t *)list_first(&g_borrows, &it);
+    slot = (borrow_slot_t*)list_first(&g_borrows, &it);
     while (slot) {
-        if (slot->active &&
-            slot->buffer_id == buffer_id &&
+        if (slot->active && slot->buffer_id == buffer_id &&
             slot->borrower_context_id == borrower_context_id) {
             return slot;
         }
-        slot = (borrow_slot_t *)list_next(&it);
+        slot = (borrow_slot_t*)list_next(&it);
     }
     return 0;
 }
 
-static int
-object_has_active_borrow(uint32_t buffer_id)
-{
+static int object_has_active_borrow(uint32_t buffer_id) {
     list_iter_t it;
-    borrow_slot_t *slot = 0;
+    borrow_slot_t* slot = 0;
 
     if (registry_init_once() != 0) {
         return 0;
     }
-    slot = (borrow_slot_t *)list_first(&g_borrows, &it);
+    slot = (borrow_slot_t*)list_first(&g_borrows, &it);
     while (slot) {
         if (slot->active && slot->buffer_id == buffer_id) {
             return 1;
         }
-        slot = (borrow_slot_t *)list_next(&it);
+        slot = (borrow_slot_t*)list_next(&it);
     }
     return 0;
 }
@@ -240,63 +213,55 @@ object_has_active_borrow(uint32_t buffer_id)
  * reborrows share the object's buffer_id). Used by owner-side release as a
  * "transient unborrow": the owner tears the whole borrow tree down when it
  * destroys the object. DMA state on each revoked borrow is cleared. */
-static void
-object_revoke_all_borrows(uint32_t buffer_id)
-{
+static void object_revoke_all_borrows(uint32_t buffer_id) {
     list_iter_t it;
-    borrow_slot_t *slot = 0;
+    borrow_slot_t* slot = 0;
 
     if (registry_init_once() != 0) {
         return;
     }
-    slot = (borrow_slot_t *)list_first(&g_borrows, &it);
+    slot = (borrow_slot_t*)list_first(&g_borrows, &it);
     while (slot) {
         if (slot->active && slot->buffer_id == buffer_id) {
             slot->active = 0u;
             slot->dma_active = 0u;
         }
-        slot = (borrow_slot_t *)list_next(&it);
+        slot = (borrow_slot_t*)list_next(&it);
     }
 }
 
 /* Deactivate a borrow and cascade-revoke every downstream reborrow rooted in
  * it. DMA state attached to any revoked borrow is cleared. */
-static void
-borrow_revoke_tree(uint32_t borrow_id)
-{
+static void borrow_revoke_tree(uint32_t borrow_id) {
     list_iter_t it;
-    borrow_slot_t *slot = 0;
+    borrow_slot_t* slot = 0;
 
     if (registry_init_once() != 0) {
         return;
     }
-    slot = (borrow_slot_t *)list_first(&g_borrows, &it);
+    slot = (borrow_slot_t*)list_first(&g_borrows, &it);
     while (slot) {
         if (slot->active && slot->parent_borrow_id == borrow_id) {
             borrow_revoke_tree(slot->borrow_id);
         }
-        slot = (borrow_slot_t *)list_next(&it);
+        slot = (borrow_slot_t*)list_next(&it);
     }
-    slot = (borrow_slot_t *)list_first(&g_borrows, &it);
+    slot = (borrow_slot_t*)list_first(&g_borrows, &it);
     while (slot) {
         if (slot->active && slot->borrow_id == borrow_id) {
             slot->active = 0u;
             slot->dma_active = 0u;
             return;
         }
-        slot = (borrow_slot_t *)list_next(&it);
+        slot = (borrow_slot_t*)list_next(&it);
     }
 }
 
-static uint32_t
-transfer_capacity(void)
-{
+static uint32_t transfer_capacity(void) {
     return XFER_TRANSFER_CAPACITY;
 }
 
-static uint32_t
-framebuffer_capacity(void)
-{
+static uint32_t framebuffer_capacity(void) {
     framebuffer_info_t fb_info = {0};
 
     if (framebuffer_get_info(&fb_info) != 0) {
@@ -308,9 +273,7 @@ framebuffer_capacity(void)
     return (uint32_t)fb_info.framebuffer_size;
 }
 
-uint32_t
-xfer_buffer_size(uint32_t kind)
-{
+uint32_t xfer_buffer_size(uint32_t kind) {
     if (kind == BUFFER_KIND_TRANSFER) {
         return transfer_capacity();
     }
@@ -320,22 +283,16 @@ xfer_buffer_size(uint32_t kind)
     return 0u;
 }
 
-static uint64_t
-xfer_buffer_object_phys_locked(const xfer_buffer_t *buffer)
-{
-    object_slot_t *slot = object_find(buffer);
+static uint64_t xfer_buffer_object_phys_locked(const xfer_buffer_t* buffer) {
+    object_slot_t* slot = object_find(buffer);
 
     return slot ? slot->phys_base : 0u;
 }
 
-static int
-xfer_buffer_describe_locked(uint32_t buffer_id,
-                     uint32_t kind,
-                     uint32_t context_id,
-                     xfer_buffer_t *out)
-{
+static int xfer_buffer_describe_locked(uint32_t buffer_id, uint32_t kind, uint32_t context_id,
+                                       xfer_buffer_t* out) {
     xfer_buffer_t key;
-    object_slot_t *slot = 0;
+    object_slot_t* slot = 0;
 
     if (!out) {
         return XFER_BUFFER_ERR_NULL_ARG;
@@ -354,8 +311,7 @@ xfer_buffer_describe_locked(uint32_t buffer_id,
     if (!slot) {
         return XFER_BUFFER_ERR_NOT_FOUND;
     }
-    if (slot->owner_context_id != context_id &&
-        !borrow_find_for(slot->buffer_id, context_id)) {
+    if (slot->owner_context_id != context_id && !borrow_find_for(slot->buffer_id, context_id)) {
         return XFER_BUFFER_ERR_NO_ACCESS;
     }
     out->kind = slot->kind;
@@ -364,14 +320,11 @@ xfer_buffer_describe_locked(uint32_t buffer_id,
     return XFER_BUFFER_OK;
 }
 
-static int
-xfer_buffer_get_borrowed_locked(uint32_t borrow_id,
-                         uint32_t context_id,
-                         xfer_buffer_borrow_t *out_borrow,
-                         xfer_buffer_dma_mapping_t *out_mapping)
-{
-    borrow_slot_t *slot = 0;
-    object_slot_t *object = 0;
+static int xfer_buffer_get_borrowed_locked(uint32_t borrow_id, uint32_t context_id,
+                                           xfer_buffer_borrow_t* out_borrow,
+                                           xfer_buffer_dma_mapping_t* out_mapping) {
+    borrow_slot_t* slot = 0;
+    object_slot_t* object = 0;
 
     if (!out_borrow) {
         return XFER_BUFFER_ERR_NULL_ARG;
@@ -432,9 +385,7 @@ xfer_buffer_get_borrowed_locked(uint32_t borrow_id,
     return XFER_BUFFER_OK;
 }
 
-static uint64_t
-object_alloc_backing(uint32_t kind, uint32_t size_bytes)
-{
+static uint64_t object_alloc_backing(uint32_t kind, uint32_t size_bytes) {
     if (kind == BUFFER_KIND_TRANSFER) {
         uint64_t pages = ((uint64_t)size_bytes + XFER_PAGE_SIZE - 1u) / XFER_PAGE_SIZE;
         return pfa_alloc_pages(pages);
@@ -449,9 +400,7 @@ object_alloc_backing(uint32_t kind, uint32_t size_bytes)
     return 0u;
 }
 
-static void
-object_free_backing(const object_slot_t *slot)
-{
+static void object_free_backing(const object_slot_t* slot) {
     if (slot->kind == BUFFER_KIND_TRANSFER && slot->phys_base != 0u) {
         uint64_t pages = ((uint64_t)slot->size_bytes + XFER_PAGE_SIZE - 1u) / XFER_PAGE_SIZE;
         pfa_free_pages(slot->phys_base, pages);
@@ -459,23 +408,18 @@ object_free_backing(const object_slot_t *slot)
 }
 
 /* Range [offset, offset+length) fully inside [0, size). */
-static int
-range_within(uint32_t size, uint32_t offset, uint32_t length)
-{
+static int range_within(uint32_t size, uint32_t offset, uint32_t length) {
     if (length == 0u || offset > size) {
         return 0;
     }
     return length <= size - offset;
 }
 
-static int
-dma_direction_allowed(uint32_t flags, uint32_t direction_flags)
-{
+static int dma_direction_allowed(uint32_t flags, uint32_t direction_flags) {
     if (direction_flags == 0u) {
         return 0;
     }
-    if ((direction_flags & WASMOS_DMA_DIR_TO_DEVICE) != 0u &&
-        (flags & BUFFER_BORROW_READ) == 0u) {
+    if ((direction_flags & WASMOS_DMA_DIR_TO_DEVICE) != 0u && (flags & BUFFER_BORROW_READ) == 0u) {
         return 0;
     }
     if ((direction_flags & WASMOS_DMA_DIR_FROM_DEVICE) != 0u &&
@@ -485,15 +429,11 @@ dma_direction_allowed(uint32_t flags, uint32_t direction_flags)
     return 1;
 }
 
-static int
-xfer_buffer_acquire_locked(uint32_t kind,
-                    uint32_t owner_context_id,
-                    uint32_t minimum_size,
-                    xfer_buffer_owner_t *out_owner)
-{
+static int xfer_buffer_acquire_locked(uint32_t kind, uint32_t owner_context_id,
+                                      uint32_t minimum_size, xfer_buffer_owner_t* out_owner) {
     uint32_t size = 0u;
     uint64_t phys_base = 0u;
-    object_slot_t *slot = 0;
+    object_slot_t* slot = 0;
 
     if (!out_owner) {
         return XFER_BUFFER_ERR_NULL_ARG;
@@ -556,12 +496,9 @@ xfer_buffer_acquire_locked(uint32_t kind,
     return XFER_BUFFER_OK;
 }
 
-static int
-xfer_buffer_get_owned_locked(const xfer_buffer_t *buffer,
-                      uint32_t context_id,
-                      xfer_buffer_owner_t *out_owner)
-{
-    object_slot_t *slot = 0;
+static int xfer_buffer_get_owned_locked(const xfer_buffer_t* buffer, uint32_t context_id,
+                                        xfer_buffer_owner_t* out_owner) {
+    object_slot_t* slot = 0;
 
     if (!buffer || !out_owner) {
         return XFER_BUFFER_ERR_NULL_ARG;
@@ -583,10 +520,8 @@ xfer_buffer_get_owned_locked(const xfer_buffer_t *buffer,
     return XFER_BUFFER_OK;
 }
 
-static int
-xfer_buffer_release_owned_locked(const xfer_buffer_owner_t *owner)
-{
-    object_slot_t *slot = 0;
+static int xfer_buffer_release_owned_locked(const xfer_buffer_owner_t* owner) {
+    object_slot_t* slot = 0;
 
     if (!owner) {
         return XFER_BUFFER_ERR_NULL_ARG;
@@ -612,11 +547,9 @@ xfer_buffer_release_owned_locked(const xfer_buffer_owner_t *owner)
     return XFER_BUFFER_OK;
 }
 
-static int
-xfer_buffer_transfer_ownership_locked(const xfer_buffer_owner_t *current_owner,
-                               uint32_t new_owner_context_id)
-{
-    object_slot_t *slot = 0;
+static int xfer_buffer_transfer_ownership_locked(const xfer_buffer_owner_t* current_owner,
+                                                 uint32_t new_owner_context_id) {
+    object_slot_t* slot = 0;
 
     if (!current_owner) {
         return XFER_BUFFER_ERR_NULL_ARG;
@@ -644,15 +577,10 @@ xfer_buffer_transfer_ownership_locked(const xfer_buffer_owner_t *current_owner,
     return XFER_BUFFER_OK;
 }
 
-static int
-attach_borrow(object_slot_t *object,
-              uint32_t parent_borrow_id,
-              uint32_t lender_context_id,
-              uint32_t borrower_context_id,
-              uint32_t flags,
-              xfer_buffer_borrow_t *out_borrow)
-{
-    borrow_slot_t *slot = borrow_alloc();
+static int attach_borrow(object_slot_t* object, uint32_t parent_borrow_id,
+                         uint32_t lender_context_id, uint32_t borrower_context_id, uint32_t flags,
+                         xfer_buffer_borrow_t* out_borrow) {
+    borrow_slot_t* slot = borrow_alloc();
 
     if (!slot) {
         return XFER_BUFFER_ERR_INTERNAL;
@@ -680,13 +608,9 @@ attach_borrow(object_slot_t *object,
     return XFER_BUFFER_OK;
 }
 
-static int
-xfer_buffer_borrow_locked(const xfer_buffer_owner_t *owner,
-                   uint32_t borrower_context_id,
-                   uint32_t flags,
-                   xfer_buffer_borrow_t *out_borrow)
-{
-    object_slot_t *slot = 0;
+static int xfer_buffer_borrow_locked(const xfer_buffer_owner_t* owner, uint32_t borrower_context_id,
+                                     uint32_t flags, xfer_buffer_borrow_t* out_borrow) {
+    object_slot_t* slot = 0;
 
     if (!owner || !out_borrow) {
         return XFER_BUFFER_ERR_NULL_ARG;
@@ -720,22 +644,14 @@ xfer_buffer_borrow_locked(const xfer_buffer_owner_t *owner,
     if (borrow_find_for(slot->buffer_id, borrower_context_id)) {
         return XFER_BUFFER_ERR_ALREADY_BORROWED;
     }
-    return attach_borrow(slot,
-                         0u,
-                         slot->owner_context_id,
-                         borrower_context_id,
-                         flags,
-                         out_borrow);
+    return attach_borrow(slot, 0u, slot->owner_context_id, borrower_context_id, flags, out_borrow);
 }
 
-static int
-xfer_buffer_reborrow_locked(const xfer_buffer_borrow_t *upstream,
-                     uint32_t borrower_context_id,
-                     uint32_t flags,
-                     xfer_buffer_borrow_t *out_borrow)
-{
-    borrow_slot_t *up = 0;
-    object_slot_t *object = 0;
+static int xfer_buffer_reborrow_locked(const xfer_buffer_borrow_t* upstream,
+                                       uint32_t borrower_context_id, uint32_t flags,
+                                       xfer_buffer_borrow_t* out_borrow) {
+    borrow_slot_t* up = 0;
+    object_slot_t* object = 0;
 
     if (!upstream || !out_borrow) {
         return XFER_BUFFER_ERR_NULL_ARG;
@@ -764,18 +680,12 @@ xfer_buffer_reborrow_locked(const xfer_buffer_borrow_t *upstream,
     if (borrow_find_for(up->buffer_id, borrower_context_id)) {
         return XFER_BUFFER_ERR_ALREADY_BORROWED;
     }
-    return attach_borrow(object,
-                         up->borrow_id,
-                         up->borrower_context_id,
-                         borrower_context_id,
-                         flags,
+    return attach_borrow(object, up->borrow_id, up->borrower_context_id, borrower_context_id, flags,
                          out_borrow);
 }
 
-static int
-xfer_buffer_unborrow_locked(const xfer_buffer_borrow_t *borrow)
-{
-    borrow_slot_t *slot = 0;
+static int xfer_buffer_unborrow_locked(const xfer_buffer_borrow_t* borrow) {
+    borrow_slot_t* slot = 0;
 
     if (!borrow) {
         return XFER_BUFFER_ERR_NULL_ARG;
@@ -800,13 +710,10 @@ xfer_buffer_unborrow_locked(const xfer_buffer_borrow_t *borrow)
  * upstream borrower for a reborrow). Sibling of xfer_buffer_get_borrowed (which
  * authorizes the borrower, e.g. for DMA); feed the result to
  * xfer_buffer_unborrow so the grantor — and only the grantor — may drop it. */
-static int
-xfer_buffer_get_lent_locked(uint32_t borrow_id,
-                     uint32_t lender_context_id,
-                     xfer_buffer_borrow_t *out_borrow)
-{
-    borrow_slot_t *slot = 0;
-    object_slot_t *object = 0;
+static int xfer_buffer_get_lent_locked(uint32_t borrow_id, uint32_t lender_context_id,
+                                       xfer_buffer_borrow_t* out_borrow) {
+    borrow_slot_t* slot = 0;
+    object_slot_t* object = 0;
 
     if (!out_borrow) {
         return XFER_BUFFER_ERR_NULL_ARG;
@@ -838,13 +745,10 @@ xfer_buffer_get_lent_locked(uint32_t borrow_id,
     return XFER_BUFFER_OK;
 }
 
-static int
-xfer_buffer_can_access_locked(const xfer_buffer_t *buffer,
-                       uint32_t accessor_context_id,
-                       uint32_t requested_flags)
-{
-    object_slot_t *slot = object_find(buffer);
-    borrow_slot_t *borrow = 0;
+static int xfer_buffer_can_access_locked(const xfer_buffer_t* buffer, uint32_t accessor_context_id,
+                                         uint32_t requested_flags) {
+    object_slot_t* slot = object_find(buffer);
+    borrow_slot_t* borrow = 0;
 
     if (!slot || accessor_context_id == 0u || !valid_flags(requested_flags)) {
         return 0;
@@ -859,12 +763,9 @@ xfer_buffer_can_access_locked(const xfer_buffer_t *buffer,
     return (borrow->flags & requested_flags) == requested_flags;
 }
 
-static int
-xfer_buffer_same_object_locked(const xfer_buffer_t *buffer,
-                        uint32_t accessor_context_id,
-                        uint32_t owner_context_id)
-{
-    object_slot_t *slot = object_find(buffer);
+static int xfer_buffer_same_object_locked(const xfer_buffer_t* buffer, uint32_t accessor_context_id,
+                                          uint32_t owner_context_id) {
+    object_slot_t* slot = object_find(buffer);
 
     if (!slot || accessor_context_id == 0u || owner_context_id == 0u) {
         return 0;
@@ -878,14 +779,10 @@ xfer_buffer_same_object_locked(const xfer_buffer_t *buffer,
     return borrow_find_for(slot->buffer_id, accessor_context_id) != 0;
 }
 
-static int
-xfer_buffer_dma_map_owned_locked(const xfer_buffer_owner_t *owner,
-                          uint32_t offset,
-                          uint32_t length,
-                          uint32_t direction_flags,
-                          xfer_buffer_dma_mapping_t *out_mapping)
-{
-    object_slot_t *slot = 0;
+static int xfer_buffer_dma_map_owned_locked(const xfer_buffer_owner_t* owner, uint32_t offset,
+                                            uint32_t length, uint32_t direction_flags,
+                                            xfer_buffer_dma_mapping_t* out_mapping) {
+    object_slot_t* slot = 0;
 
     if (!owner || !out_mapping) {
         return XFER_BUFFER_ERR_NULL_ARG;
@@ -926,15 +823,11 @@ xfer_buffer_dma_map_owned_locked(const xfer_buffer_owner_t *owner,
     return XFER_BUFFER_OK;
 }
 
-static int
-xfer_buffer_dma_map_borrow_locked(const xfer_buffer_borrow_t *borrow,
-                           uint32_t offset,
-                           uint32_t length,
-                           uint32_t direction_flags,
-                           xfer_buffer_dma_mapping_t *out_mapping)
-{
-    borrow_slot_t *slot = 0;
-    object_slot_t *object = 0;
+static int xfer_buffer_dma_map_borrow_locked(const xfer_buffer_borrow_t* borrow, uint32_t offset,
+                                             uint32_t length, uint32_t direction_flags,
+                                             xfer_buffer_dma_mapping_t* out_mapping) {
+    borrow_slot_t* slot = 0;
+    object_slot_t* object = 0;
 
     if (!borrow || !out_mapping) {
         return XFER_BUFFER_ERR_NULL_ARG;
@@ -975,11 +868,8 @@ xfer_buffer_dma_map_borrow_locked(const xfer_buffer_borrow_t *borrow,
     return XFER_BUFFER_OK;
 }
 
-static int
-xfer_buffer_dma_sync_locked(const xfer_buffer_dma_mapping_t *mapping,
-                     uint32_t offset,
-                     uint32_t length)
-{
+static int xfer_buffer_dma_sync_locked(const xfer_buffer_dma_mapping_t* mapping, uint32_t offset,
+                                       uint32_t length) {
     if (!mapping) {
         return XFER_BUFFER_ERR_NULL_ARG;
     }
@@ -992,9 +882,7 @@ xfer_buffer_dma_sync_locked(const xfer_buffer_dma_mapping_t *mapping,
     return XFER_BUFFER_OK;
 }
 
-static int
-xfer_buffer_dma_unmap_locked(xfer_buffer_dma_mapping_t *mapping)
-{
+static int xfer_buffer_dma_unmap_locked(xfer_buffer_dma_mapping_t* mapping) {
     if (!mapping) {
         return XFER_BUFFER_ERR_NULL_ARG;
     }
@@ -1002,12 +890,12 @@ xfer_buffer_dma_unmap_locked(xfer_buffer_dma_mapping_t *mapping)
         return XFER_BUFFER_ERR_INACTIVE_MAPPING;
     }
     if (mapping->attached_via_borrow) {
-        borrow_slot_t *slot = borrow_find(mapping->borrow_id);
+        borrow_slot_t* slot = borrow_find(mapping->borrow_id);
         if (slot) {
             slot->dma_active = 0u;
         }
     } else {
-        object_slot_t *slot = object_find_by_id(mapping->buffer.buffer_id);
+        object_slot_t* slot = object_find_by_id(mapping->buffer.buffer_id);
         if (slot) {
             slot->dma_active = 0u;
         }
@@ -1016,44 +904,41 @@ xfer_buffer_dma_unmap_locked(xfer_buffer_dma_mapping_t *mapping)
     return XFER_BUFFER_OK;
 }
 
-static void
-xfer_buffer_drop_context_locked(uint32_t context_id)
-{
+static void xfer_buffer_drop_context_locked(uint32_t context_id) {
     list_iter_t it;
-    borrow_slot_t *borrow = 0;
-    object_slot_t *object = 0;
+    borrow_slot_t* borrow = 0;
+    object_slot_t* object = 0;
 
     if (context_id == 0u || registry_init_once() != 0) {
         return;
     }
     /* Revoke every borrow this context issued (as lender) or holds (as
      * borrower), cascading through downstream reborrows. */
-    borrow = (borrow_slot_t *)list_first(&g_borrows, &it);
+    borrow = (borrow_slot_t*)list_first(&g_borrows, &it);
     while (borrow) {
-        if (borrow->active &&
-            (borrow->lender_context_id == context_id ||
-             borrow->borrower_context_id == context_id)) {
+        if (borrow->active && (borrow->lender_context_id == context_id ||
+                               borrow->borrower_context_id == context_id)) {
             borrow_revoke_tree(borrow->borrow_id);
         }
-        borrow = (borrow_slot_t *)list_next(&it);
+        borrow = (borrow_slot_t*)list_next(&it);
     }
     /* Destroy objects owned by this context, revoking any borrows still rooted
      * in them and freeing their backing. */
-    object = (object_slot_t *)list_first(&g_objects, &it);
+    object = (object_slot_t*)list_first(&g_objects, &it);
     while (object) {
         if (object->active && object->owner_context_id == context_id) {
             list_iter_t bit;
-            borrow_slot_t *b = (borrow_slot_t *)list_first(&g_borrows, &bit);
+            borrow_slot_t* b = (borrow_slot_t*)list_first(&g_borrows, &bit);
             while (b) {
                 if (b->active && b->buffer_id == object->buffer_id) {
                     borrow_revoke_tree(b->borrow_id);
                 }
-                b = (borrow_slot_t *)list_next(&bit);
+                b = (borrow_slot_t*)list_next(&bit);
             }
             object_free_backing(object);
             object->active = 0u;
         }
-        object = (object_slot_t *)list_next(&it);
+        object = (object_slot_t*)list_next(&it);
     }
 }
 
@@ -1065,177 +950,140 @@ xfer_buffer_drop_context_locked(uint32_t context_id)
  * registry state).
  * ---------------------------------------------------------------------- */
 
-int
-xfer_buffer_acquire(uint32_t kind, uint32_t owner_context_id,
-                    uint32_t minimum_size, xfer_buffer_owner_t *out_owner)
-{
+int xfer_buffer_acquire(uint32_t kind, uint32_t owner_context_id, uint32_t minimum_size,
+                        xfer_buffer_owner_t* out_owner) {
     ksync_spinlock_lock(&g_xfer_lock);
     int rc = xfer_buffer_acquire_locked(kind, owner_context_id, minimum_size, out_owner);
     ksync_spinlock_unlock(&g_xfer_lock);
     return rc;
 }
 
-int
-xfer_buffer_get_owned(const xfer_buffer_t *buffer, uint32_t context_id,
-                      xfer_buffer_owner_t *out_owner)
-{
+int xfer_buffer_get_owned(const xfer_buffer_t* buffer, uint32_t context_id,
+                          xfer_buffer_owner_t* out_owner) {
     ksync_spinlock_lock(&g_xfer_lock);
     int rc = xfer_buffer_get_owned_locked(buffer, context_id, out_owner);
     ksync_spinlock_unlock(&g_xfer_lock);
     return rc;
 }
 
-int
-xfer_buffer_release_owned(const xfer_buffer_owner_t *owner)
-{
+int xfer_buffer_release_owned(const xfer_buffer_owner_t* owner) {
     ksync_spinlock_lock(&g_xfer_lock);
     int rc = xfer_buffer_release_owned_locked(owner);
     ksync_spinlock_unlock(&g_xfer_lock);
     return rc;
 }
 
-int
-xfer_buffer_transfer_ownership(const xfer_buffer_owner_t *current_owner,
-                               uint32_t new_owner_context_id)
-{
+int xfer_buffer_transfer_ownership(const xfer_buffer_owner_t* current_owner,
+                                   uint32_t new_owner_context_id) {
     ksync_spinlock_lock(&g_xfer_lock);
     int rc = xfer_buffer_transfer_ownership_locked(current_owner, new_owner_context_id);
     ksync_spinlock_unlock(&g_xfer_lock);
     return rc;
 }
 
-int
-xfer_buffer_borrow(const xfer_buffer_owner_t *owner, uint32_t borrower_context_id,
-                   uint32_t flags, xfer_buffer_borrow_t *out_borrow)
-{
+int xfer_buffer_borrow(const xfer_buffer_owner_t* owner, uint32_t borrower_context_id,
+                       uint32_t flags, xfer_buffer_borrow_t* out_borrow) {
     ksync_spinlock_lock(&g_xfer_lock);
     int rc = xfer_buffer_borrow_locked(owner, borrower_context_id, flags, out_borrow);
     ksync_spinlock_unlock(&g_xfer_lock);
     return rc;
 }
 
-int
-xfer_buffer_reborrow(const xfer_buffer_borrow_t *upstream, uint32_t borrower_context_id,
-                     uint32_t flags, xfer_buffer_borrow_t *out_borrow)
-{
+int xfer_buffer_reborrow(const xfer_buffer_borrow_t* upstream, uint32_t borrower_context_id,
+                         uint32_t flags, xfer_buffer_borrow_t* out_borrow) {
     ksync_spinlock_lock(&g_xfer_lock);
     int rc = xfer_buffer_reborrow_locked(upstream, borrower_context_id, flags, out_borrow);
     ksync_spinlock_unlock(&g_xfer_lock);
     return rc;
 }
 
-int
-xfer_buffer_unborrow(const xfer_buffer_borrow_t *borrow)
-{
+int xfer_buffer_unborrow(const xfer_buffer_borrow_t* borrow) {
     ksync_spinlock_lock(&g_xfer_lock);
     int rc = xfer_buffer_unborrow_locked(borrow);
     ksync_spinlock_unlock(&g_xfer_lock);
     return rc;
 }
 
-int
-xfer_buffer_get_lent(uint32_t borrow_id, uint32_t lender_context_id,
-                     xfer_buffer_borrow_t *out_borrow)
-{
+int xfer_buffer_get_lent(uint32_t borrow_id, uint32_t lender_context_id,
+                         xfer_buffer_borrow_t* out_borrow) {
     ksync_spinlock_lock(&g_xfer_lock);
     int rc = xfer_buffer_get_lent_locked(borrow_id, lender_context_id, out_borrow);
     ksync_spinlock_unlock(&g_xfer_lock);
     return rc;
 }
 
-int
-xfer_buffer_can_access(const xfer_buffer_t *buffer, uint32_t accessor_context_id,
-                       uint32_t requested_flags)
-{
+int xfer_buffer_can_access(const xfer_buffer_t* buffer, uint32_t accessor_context_id,
+                           uint32_t requested_flags) {
     ksync_spinlock_lock(&g_xfer_lock);
     int rc = xfer_buffer_can_access_locked(buffer, accessor_context_id, requested_flags);
     ksync_spinlock_unlock(&g_xfer_lock);
     return rc;
 }
 
-int
-xfer_buffer_same_object(const xfer_buffer_t *buffer, uint32_t accessor_context_id,
-                        uint32_t owner_context_id)
-{
+int xfer_buffer_same_object(const xfer_buffer_t* buffer, uint32_t accessor_context_id,
+                            uint32_t owner_context_id) {
     ksync_spinlock_lock(&g_xfer_lock);
     int rc = xfer_buffer_same_object_locked(buffer, accessor_context_id, owner_context_id);
     ksync_spinlock_unlock(&g_xfer_lock);
     return rc;
 }
 
-int
-xfer_buffer_dma_map_owned(const xfer_buffer_owner_t *owner, uint32_t offset,
-                          uint32_t length, uint32_t direction_flags,
-                          xfer_buffer_dma_mapping_t *out_mapping)
-{
+int xfer_buffer_dma_map_owned(const xfer_buffer_owner_t* owner, uint32_t offset, uint32_t length,
+                              uint32_t direction_flags, xfer_buffer_dma_mapping_t* out_mapping) {
     ksync_spinlock_lock(&g_xfer_lock);
     int rc = xfer_buffer_dma_map_owned_locked(owner, offset, length, direction_flags, out_mapping);
     ksync_spinlock_unlock(&g_xfer_lock);
     return rc;
 }
 
-int
-xfer_buffer_dma_map_borrow(const xfer_buffer_borrow_t *borrow, uint32_t offset,
-                           uint32_t length, uint32_t direction_flags,
-                           xfer_buffer_dma_mapping_t *out_mapping)
-{
+int xfer_buffer_dma_map_borrow(const xfer_buffer_borrow_t* borrow, uint32_t offset, uint32_t length,
+                               uint32_t direction_flags, xfer_buffer_dma_mapping_t* out_mapping) {
     ksync_spinlock_lock(&g_xfer_lock);
-    int rc = xfer_buffer_dma_map_borrow_locked(borrow, offset, length, direction_flags, out_mapping);
+    int rc =
+        xfer_buffer_dma_map_borrow_locked(borrow, offset, length, direction_flags, out_mapping);
     ksync_spinlock_unlock(&g_xfer_lock);
     return rc;
 }
 
-int
-xfer_buffer_dma_sync(const xfer_buffer_dma_mapping_t *mapping, uint32_t offset,
-                     uint32_t length)
-{
+int xfer_buffer_dma_sync(const xfer_buffer_dma_mapping_t* mapping, uint32_t offset,
+                         uint32_t length) {
     ksync_spinlock_lock(&g_xfer_lock);
     int rc = xfer_buffer_dma_sync_locked(mapping, offset, length);
     ksync_spinlock_unlock(&g_xfer_lock);
     return rc;
 }
 
-int
-xfer_buffer_dma_unmap(xfer_buffer_dma_mapping_t *mapping)
-{
+int xfer_buffer_dma_unmap(xfer_buffer_dma_mapping_t* mapping) {
     ksync_spinlock_lock(&g_xfer_lock);
     int rc = xfer_buffer_dma_unmap_locked(mapping);
     ksync_spinlock_unlock(&g_xfer_lock);
     return rc;
 }
 
-void
-xfer_buffer_drop_context(uint32_t context_id)
-{
+void xfer_buffer_drop_context(uint32_t context_id) {
     ksync_spinlock_lock(&g_xfer_lock);
     xfer_buffer_drop_context_locked(context_id);
     ksync_spinlock_unlock(&g_xfer_lock);
 }
 
-uint64_t
-xfer_buffer_object_phys(const xfer_buffer_t *buffer)
-{
+uint64_t xfer_buffer_object_phys(const xfer_buffer_t* buffer) {
     ksync_spinlock_lock(&g_xfer_lock);
     uint64_t phys = xfer_buffer_object_phys_locked(buffer);
     ksync_spinlock_unlock(&g_xfer_lock);
     return phys;
 }
 
-int
-xfer_buffer_describe(uint32_t buffer_id, uint32_t kind, uint32_t context_id,
-                     xfer_buffer_t *out)
-{
+int xfer_buffer_describe(uint32_t buffer_id, uint32_t kind, uint32_t context_id,
+                         xfer_buffer_t* out) {
     ksync_spinlock_lock(&g_xfer_lock);
     int rc = xfer_buffer_describe_locked(buffer_id, kind, context_id, out);
     ksync_spinlock_unlock(&g_xfer_lock);
     return rc;
 }
 
-int
-xfer_buffer_get_borrowed(uint32_t borrow_id, uint32_t context_id,
-                         xfer_buffer_borrow_t *out_borrow,
-                         xfer_buffer_dma_mapping_t *out_mapping)
-{
+int xfer_buffer_get_borrowed(uint32_t borrow_id, uint32_t context_id,
+                             xfer_buffer_borrow_t* out_borrow,
+                             xfer_buffer_dma_mapping_t* out_mapping) {
     ksync_spinlock_lock(&g_xfer_lock);
     int rc = xfer_buffer_get_borrowed_locked(borrow_id, context_id, out_borrow, out_mapping);
     ksync_spinlock_unlock(&g_xfer_lock);

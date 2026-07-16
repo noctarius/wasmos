@@ -29,20 +29,18 @@ typedef struct {
  * rather than collapsing every failure to -1.  0 is success. */
 enum {
     WAMOS_SCRIPT_OK = 0,
-    WAMOS_SCRIPT_ERR_PATH_READ = -2,   /* FS-buffer read of the script path failed */
-    WAMOS_SCRIPT_ERR_NO_PATH = -3,     /* broker supplied an empty script path */
-    WAMOS_SCRIPT_ERR_ENDPOINT = -4,    /* reply endpoint create / proc endpoint missing */
-    WAMOS_SCRIPT_ERR_RUN = -5          /* the script engine reported a run failure */
+    WAMOS_SCRIPT_ERR_PATH_READ = -2, /* FS-buffer read of the script path failed */
+    WAMOS_SCRIPT_ERR_NO_PATH = -3,   /* broker supplied an empty script path */
+    WAMOS_SCRIPT_ERR_ENDPOINT = -4,  /* reply endpoint create / proc endpoint missing */
+    WAMOS_SCRIPT_ERR_RUN = -5        /* the script engine reported a run failure */
 };
 
 /* Owner-push: acquire an xfer buffer, stage "<path>\0[<args>\0]" into it for a
  * path spawn (PM reads it via ownership), and return the path length (or -1).
  * The acquired buffer_id is returned via *out_bid so the caller can pack it into
  * the spawn arg1 and release it after the reply.  args may be NULL. */
-static int32_t
-wamos_script_write_spawn_buf(const char *path, const char *args,
-                             uint32_t *out_args_len, int32_t *out_bid)
-{
+static int32_t wamos_script_write_spawn_buf(const char* path, const char* args,
+                                            uint32_t* out_args_len, int32_t* out_bid) {
     uint32_t path_len = path ? (uint32_t)strlen(path) : 0u;
     uint32_t args_len = args ? (uint32_t)strlen(args) : 0u;
     int32_t buf_size = wasmos_xfer_buffer_size();
@@ -70,8 +68,8 @@ wamos_script_write_spawn_buf(const char *path, const char *args,
         (void)wasmos_xfer_buffer_release(bid);
         return -1;
     }
-    if (args_len > 0u &&
-        wasmos_xfer_buffer_write(bid, (int32_t)(uintptr_t)args, (int32_t)args_len, (int32_t)write_off) != 0) {
+    if (args_len > 0u && wasmos_xfer_buffer_write(bid, (int32_t)(uintptr_t)args, (int32_t)args_len,
+                                                  (int32_t)write_off) != 0) {
         (void)wasmos_xfer_buffer_release(bid);
         return -1;
     }
@@ -84,9 +82,8 @@ wamos_script_write_spawn_buf(const char *path, const char *args,
     return (int32_t)path_len;
 }
 
-static int32_t
-wamos_script_spawn(wamos_script_ctx_t *ctx, const char *path, const char *args, int32_t *out_pid)
-{
+static int32_t wamos_script_spawn(wamos_script_ctx_t* ctx, const char* path, const char* args,
+                                  int32_t* out_pid) {
     uint32_t args_len = 0u;
     int32_t bid = -1;
     int32_t path_len = wamos_script_write_spawn_buf(path, args, &args_len, &bid);
@@ -98,15 +95,10 @@ wamos_script_spawn(wamos_script_ctx_t *ctx, const char *path, const char *args, 
     if (path_len < 0) {
         return -1;
     }
-    if (wasmos_ipc_call(ctx->proc_endpoint,
-                        ctx->reply_endpoint,
-                        PROC_IPC_SPAWN_PATH,
-                        (int32_t)ctx->request_id++,
-                        0,
+    if (wasmos_ipc_call(ctx->proc_endpoint, ctx->reply_endpoint, PROC_IPC_SPAWN_PATH,
+                        (int32_t)ctx->request_id++, 0,
                         (int32_t)(((uint32_t)bid << 12) | ((uint32_t)path_len & 0xFFFu)),
-                        (int32_t)args_len,
-                        0,
-                        &reply) != 0) {
+                        (int32_t)args_len, 0, &reply) != 0) {
         (void)wasmos_xfer_buffer_release(bid);
         return -1;
     }
@@ -120,9 +112,7 @@ wamos_script_spawn(wamos_script_ctx_t *ctx, const char *path, const char *args, 
     return 0;
 }
 
-static int32_t
-wamos_script_wait(wamos_script_ctx_t *ctx, int32_t pid, int32_t *out_exit)
-{
+static int32_t wamos_script_wait(wamos_script_ctx_t* ctx, int32_t pid, int32_t* out_exit) {
     wasmos_ipc_message_t reply;
 
     if (out_exit) {
@@ -131,15 +121,8 @@ wamos_script_wait(wamos_script_ctx_t *ctx, int32_t pid, int32_t *out_exit)
     if (pid <= 0) {
         return -1;
     }
-    if (wasmos_ipc_call(ctx->proc_endpoint,
-                        ctx->reply_endpoint,
-                        PROC_IPC_WAIT,
-                        (int32_t)ctx->request_id++,
-                        pid,
-                        0,
-                        0,
-                        0,
-                        &reply) != 0) {
+    if (wasmos_ipc_call(ctx->proc_endpoint, ctx->reply_endpoint, PROC_IPC_WAIT,
+                        (int32_t)ctx->request_id++, pid, 0, 0, 0, &reply) != 0) {
         return -1;
     }
     if (reply.type != PROC_IPC_RESP || (int32_t)reply.arg0 != pid) {
@@ -151,24 +134,19 @@ wamos_script_wait(wamos_script_ctx_t *ctx, int32_t pid, int32_t *out_exit)
     return 0;
 }
 
-static int
-wamos_script_on_start(void *user, const char *path)
-{
+static int wamos_script_on_start(void* user, const char* path) {
     int32_t pid = -1;
-    (void)wamos_script_spawn((wamos_script_ctx_t *)user, path, 0, &pid);
+    (void)wamos_script_spawn((wamos_script_ctx_t*)user, path, 0, &pid);
     return 0;
 }
 
-static int
-wamos_script_on_spawn(void *user, const char *path)
-{
+static int wamos_script_on_spawn(void* user, const char* path) {
     return wamos_script_on_start(user, path);
 }
 
-static int
-wamos_script_on_exec(void *user, const char *path, const char *args, int32_t *out_exit_code)
-{
-    wamos_script_ctx_t *ctx = (wamos_script_ctx_t *)user;
+static int wamos_script_on_exec(void* user, const char* path, const char* args,
+                                int32_t* out_exit_code) {
+    wamos_script_ctx_t* ctx = (wamos_script_ctx_t*)user;
     int32_t pid = -1;
     int32_t exit_code = -1;
 
@@ -185,22 +163,15 @@ wamos_script_on_exec(void *user, const char *path, const char *args, int32_t *ou
     return 0;
 }
 
-static int
-wamos_script_on_wait_svc(void *user, const char *name)
-{
-    wamos_script_ctx_t *ctx = (wamos_script_ctx_t *)user;
-    int32_t endpoint = wasmos_sys_svc_lookup_retry(ctx->proc_endpoint,
-                                                   ctx->reply_endpoint,
-                                                   name,
-                                                   (int32_t)ctx->request_id,
-                                                   256);
+static int wamos_script_on_wait_svc(void* user, const char* name) {
+    wamos_script_ctx_t* ctx = (wamos_script_ctx_t*)user;
+    int32_t endpoint = wasmos_sys_svc_lookup_retry(ctx->proc_endpoint, ctx->reply_endpoint, name,
+                                                   (int32_t)ctx->request_id, 256);
     ctx->request_id += 256u;
     return endpoint >= 0 ? 0 : -1;
 }
 
-static void
-wamos_script_on_echo_ex(void *user, const char *text, int newline)
-{
+static void wamos_script_on_echo_ex(void* user, const char* text, int newline) {
     (void)user;
     if (text) {
         (void)putsn(text, strlen(text));
@@ -210,15 +181,11 @@ wamos_script_on_echo_ex(void *user, const char *text, int newline)
     }
 }
 
-static void
-wamos_script_on_echo(void *user, const char *text)
-{
+static void wamos_script_on_echo(void* user, const char* text) {
     wamos_script_on_echo_ex(user, text, 1);
 }
 
-static int
-wamos_script_on_export(void *user, const char *name, const char *value)
-{
+static int wamos_script_on_export(void* user, const char* name, const char* value) {
     /* Exported vars live in the script state and are inherited by child scripts;
      * the executor keeps no external environment, so this is observe-only. */
     (void)user;
@@ -227,16 +194,14 @@ wamos_script_on_export(void *user, const char *name, const char *value)
     return 0;
 }
 
-int
-main(int argc, char **argv)
-{
+int main(int argc, char** argv) {
     /* Static (data-segment) storage, not a stack local: the FS-buffer read
      * lands in already-committed linear memory, matching the proven cliArgs
      * pattern and avoiding a first-touch stack-page coherence gap under WARP. */
     static char script_path[128];
     wamos_script_ctx_t ctx;
     wasmos_script_state_t state;
-    wasmos_script_ops_t ops = { 0 };
+    wasmos_script_ops_t ops = {0};
 
     (void)argc;
     (void)argv;

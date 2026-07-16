@@ -15,8 +15,7 @@
 #ifdef WASMOS_WASM_RUNTIME_WARP
 #include "warp_ring3.h"
 #include "arch/x86_64/smp.h"
-extern uint64_t warp_r3_memory_helper(uint64_t min_linmem_len,
-                                      uint32_t basedata_len,
+extern uint64_t warp_r3_memory_helper(uint64_t min_linmem_len, uint32_t basedata_len,
                                       uint64_t original_linmem_user_va);
 #endif
 
@@ -69,31 +68,26 @@ typedef struct {
 
 static syscall_ipc_call_slot_t g_syscall_ipc_call_slots[PROCESS_MAX_COUNT];
 
-static inline uintptr_t syscall_alias_ptr(uintptr_t p)
-{
+static inline uintptr_t syscall_alias_ptr(uintptr_t p) {
     if ((uint64_t)p < KERNEL_HIGHER_HALF_BASE) {
         p = (uintptr_t)((uint64_t)p + KERNEL_HIGHER_HALF_BASE);
     }
     return p;
 }
 
-static inline syscall_ipc_call_slot_t *syscall_ipc_call_slots_ptr(void)
-{
-    return (syscall_ipc_call_slot_t *)(void *)syscall_alias_ptr((uintptr_t)&g_syscall_ipc_call_slots[0]);
+static inline syscall_ipc_call_slot_t* syscall_ipc_call_slots_ptr(void) {
+    return (syscall_ipc_call_slot_t*)(void*)syscall_alias_ptr(
+        (uintptr_t)&g_syscall_ipc_call_slots[0]);
 }
 
-static int
-name_eq(const char *a, const char *b)
-{
+static int name_eq(const char* a, const char* b) {
     if (!a || !b) {
         return 0;
     }
     return strcmp(a, b) == 0;
 }
 
-static int
-syscall_arg_u32(uint64_t raw, uint32_t *out)
-{
+static int syscall_arg_u32(uint64_t raw, uint32_t* out) {
     if (!out) {
         return -1;
     }
@@ -104,9 +98,7 @@ syscall_arg_u32(uint64_t raw, uint32_t *out)
     return 0;
 }
 
-static int
-syscall_arg_i32(uint64_t raw, int32_t *out)
-{
+static int syscall_arg_i32(uint64_t raw, int32_t* out) {
     if (!out) {
         return -1;
     }
@@ -118,40 +110,30 @@ syscall_arg_i32(uint64_t raw, int32_t *out)
     return 0;
 }
 
-void
-syscall_set_ipc_call_echo_endpoint(uint32_t endpoint)
-{
+void syscall_set_ipc_call_echo_endpoint(uint32_t endpoint) {
     g_ipc_call_echo_endpoint = endpoint;
 }
 
-uint32_t
-syscall_ipc_call_echo_endpoint(void)
-{
+uint32_t syscall_ipc_call_echo_endpoint(void) {
     return g_ipc_call_echo_endpoint;
 }
 
-void
-syscall_set_ipc_call_control_deny_endpoint(uint32_t endpoint)
-{
+void syscall_set_ipc_call_control_deny_endpoint(uint32_t endpoint) {
     g_ipc_call_control_deny_endpoint = endpoint;
 }
 
-void
-syscall_set_ipc_notify_control_deny_endpoint(uint32_t endpoint)
-{
+void syscall_set_ipc_notify_control_deny_endpoint(uint32_t endpoint) {
     g_ipc_notify_control_deny_endpoint = endpoint;
 }
 
-static syscall_ipc_call_slot_t *
-syscall_ipc_call_slot_for_pid(uint32_t pid)
-{
-    syscall_ipc_call_slot_t *slots = syscall_ipc_call_slots_ptr();
-    syscall_ipc_call_slot_t *empty = 0;
+static syscall_ipc_call_slot_t* syscall_ipc_call_slot_for_pid(uint32_t pid) {
+    syscall_ipc_call_slot_t* slots = syscall_ipc_call_slots_ptr();
+    syscall_ipc_call_slot_t* empty = 0;
     if (pid == 0) {
         return 0;
     }
     for (uint32_t i = 0; i < PROCESS_MAX_COUNT; ++i) {
-        syscall_ipc_call_slot_t *slot = &slots[i];
+        syscall_ipc_call_slot_t* slot = &slots[i];
         if (slot->in_use && !process_get(slot->pid)) {
             slot->in_use = 0;
             slot->pid = 0;
@@ -177,9 +159,7 @@ syscall_ipc_call_slot_for_pid(uint32_t pid)
     return empty;
 }
 
-static int
-syscall_ipc_pending_enqueue(syscall_ipc_call_slot_t *slot, const ipc_message_t *msg)
-{
+static int syscall_ipc_pending_enqueue(syscall_ipc_call_slot_t* slot, const ipc_message_t* msg) {
     if (!slot || !msg) {
         return -1;
     }
@@ -194,9 +174,8 @@ syscall_ipc_pending_enqueue(syscall_ipc_call_slot_t *slot, const ipc_message_t *
     return 0;
 }
 
-static int
-syscall_ipc_pending_take_request(syscall_ipc_call_slot_t *slot, uint32_t request_id, ipc_message_t *out)
-{
+static int syscall_ipc_pending_take_request(syscall_ipc_call_slot_t* slot, uint32_t request_id,
+                                            ipc_message_t* out) {
     if (!slot || !out || slot->pending_count == 0) {
         return -1;
     }
@@ -217,17 +196,13 @@ syscall_ipc_pending_take_request(syscall_ipc_call_slot_t *slot, uint32_t request
     return -1;
 }
 
-static int
-syscall_ipc_reply_authentic(const ipc_message_t *resp,
-                            uint32_t expected_source_endpoint,
-                            uint32_t expected_owner_context)
-{
+static int syscall_ipc_reply_authentic(const ipc_message_t* resp, uint32_t expected_source_endpoint,
+                                       uint32_t expected_owner_context) {
     uint32_t reply_owner_context = 0;
     if (!resp || resp->source == IPC_ENDPOINT_NONE) {
         return 0;
     }
-    if (expected_source_endpoint != IPC_ENDPOINT_NONE &&
-        resp->source != expected_source_endpoint) {
+    if (expected_source_endpoint != IPC_ENDPOINT_NONE && resp->source != expected_source_endpoint) {
         return 0;
     }
     if (ipc_endpoint_owner(resp->source, &reply_owner_context) != IPC_OK) {
@@ -236,10 +211,8 @@ syscall_ipc_reply_authentic(const ipc_message_t *resp,
     return reply_owner_context == expected_owner_context;
 }
 
-static int
-syscall_ipc_call_source_endpoint(process_t *proc, uint32_t *out_endpoint)
-{
-    syscall_ipc_call_slot_t *slot = 0;
+static int syscall_ipc_call_source_endpoint(process_t* proc, uint32_t* out_endpoint) {
+    syscall_ipc_call_slot_t* slot = 0;
     uint32_t endpoint = IPC_ENDPOINT_NONE;
     uint32_t owner_context = 0;
 
@@ -265,15 +238,11 @@ syscall_ipc_call_source_endpoint(process_t *proc, uint32_t *out_endpoint)
     return IPC_OK;
 }
 
-static int
-syscall_ipc_call_kernel_endpoint_allowed(uint32_t destination)
-{
+static int syscall_ipc_call_kernel_endpoint_allowed(uint32_t destination) {
     return destination == g_ipc_call_echo_endpoint;
 }
 
-static void
-syscall_trace_ring3_once(syscall_frame_t *frame)
-{
+static void syscall_trace_ring3_once(syscall_frame_t* frame) {
     if (!frame || g_ring3_syscall_logged) {
         return;
     }
@@ -283,7 +252,7 @@ syscall_trace_ring3_once(syscall_frame_t *frame)
     if ((uint32_t)frame->rax != WASMOS_SYSCALL_GETPID) {
         return;
     }
-    process_t *proc = process_get(process_current_pid());
+    process_t* proc = process_get(process_current_pid());
     if (!proc || !name_eq(proc->name, "ring3-smoke")) {
         return;
     }
@@ -291,16 +260,14 @@ syscall_trace_ring3_once(syscall_frame_t *frame)
     klog_write("[test] ring3 syscall ok\n");
 }
 
-static void
-syscall_trace_ring3_stress(syscall_frame_t *frame)
-{
+static void syscall_trace_ring3_stress(syscall_frame_t* frame) {
     if (!frame || g_ring3_stress_ok_logged) {
         return;
     }
     if ((frame->cs & 0x3u) != 0x3u) {
         return;
     }
-    process_t *proc = process_get(process_current_pid());
+    process_t* proc = process_get(process_current_pid());
     if (!proc || !name_eq(proc->name, "ring3-smoke")) {
         return;
     }
@@ -316,10 +283,8 @@ syscall_trace_ring3_stress(syscall_frame_t *frame)
     }
 }
 
-uint64_t
-x86_syscall_handler(syscall_frame_t *frame)
-{
-    thread_t *current_thread = 0;
+uint64_t x86_syscall_handler(syscall_frame_t* frame) {
+    thread_t* current_thread = 0;
     if (!frame) {
         return (uint64_t)-1;
     }
@@ -355,7 +320,7 @@ x86_syscall_handler(syscall_frame_t *frame)
      * wrapper executes its final `ret`. RDI contains the raw RAX that the
      * JIT wrapper had on exit (trap code or return value). */
     if ((uint32_t)frame->rax == WASMOS_SYSCALL_WARP_RETURN) {
-        thread_t *r3t = cpu_local()->current_thread;
+        thread_t* r3t = cpu_local()->current_thread;
         if (r3t && r3t->warp_r3_active) {
             r3t->warp_r3_active = 0;
             __builtin_longjmp(r3t->warp_r3_jbuf, 1);
@@ -373,10 +338,9 @@ x86_syscall_handler(syscall_frame_t *frame)
         return frame->rax;
     }
     /* WARP ring-3 hostcall: stubs fire int 0x80 with RAX = 0x100 + hc_id. */
-    if (frame->rax >= WARP_HC_SYSCALL_BASE &&
-        frame->rax < WARP_HC_SYSCALL_BASE + WARP_HC_MAX) {
+    if (frame->rax >= WARP_HC_SYSCALL_BASE && frame->rax < WARP_HC_SYSCALL_BASE + WARP_HC_MAX) {
         uint32_t hc_id = (uint32_t)(frame->rax - WARP_HC_SYSCALL_BASE);
-        frame->rax = (uint64_t)warp_ring3_dispatch(hc_id, (void *)frame);
+        frame->rax = (uint64_t)warp_ring3_dispatch(hc_id, (void*)frame);
         return frame->rax;
     }
 #endif
@@ -386,7 +350,7 @@ x86_syscall_handler(syscall_frame_t *frame)
         return 0;
     case WASMOS_SYSCALL_GETPID:
         if (!g_ring3_native_abi_logged && (frame->cs & 0x3u) == 0x3u) {
-            process_t *proc = process_get(process_current_pid());
+            process_t* proc = process_get(process_current_pid());
             if (proc && name_eq(proc->name, "ring3-native")) {
                 g_ring3_native_abi_logged = 1;
                 klog_write("[test] ring3 native abi ok\n");
@@ -395,7 +359,7 @@ x86_syscall_handler(syscall_frame_t *frame)
         return process_current_pid();
     case WASMOS_SYSCALL_GETTID:
         if (!g_ring3_native_gettid_logged && (frame->cs & 0x3u) == 0x3u) {
-            process_t *proc = process_get(process_current_pid());
+            process_t* proc = process_get(process_current_pid());
             if (proc && name_eq(proc->name, "ring3-native")) {
                 g_ring3_native_gettid_logged = 1;
                 klog_write("[test] ring3 native gettid ok\n");
@@ -403,7 +367,7 @@ x86_syscall_handler(syscall_frame_t *frame)
         }
         return thread_current_tid();
     case WASMOS_SYSCALL_EXIT: {
-        process_t *proc = process_get(process_current_pid());
+        process_t* proc = process_get(process_current_pid());
         int32_t exit_status = 0;
         if (!proc) {
             return (uint64_t)-1;
@@ -417,9 +381,8 @@ x86_syscall_handler(syscall_frame_t *frame)
     }
     case WASMOS_SYSCALL_YIELD:
         if (!g_ring3_yield_logged) {
-            process_t *proc = process_get(process_current_pid());
-            if (proc && name_eq(proc->name, "ring3-smoke") &&
-                (frame->cs & 0x3u) == 0x3u) {
+            process_t* proc = process_get(process_current_pid());
+            if (proc && name_eq(proc->name, "ring3-smoke") && (frame->cs & 0x3u) == 0x3u) {
                 g_ring3_yield_logged = 1;
                 klog_write("[test] ring3 yield syscall ok\n");
             }
@@ -428,9 +391,8 @@ x86_syscall_handler(syscall_frame_t *frame)
         return 0;
     case WASMOS_SYSCALL_THREAD_YIELD:
         if (!g_ring3_thread_yield_logged) {
-            process_t *proc = process_get(process_current_pid());
-            if (proc && name_eq(proc->name, "ring3-native") &&
-                (frame->cs & 0x3u) == 0x3u) {
+            process_t* proc = process_get(process_current_pid());
+            if (proc && name_eq(proc->name, "ring3-native") && (frame->cs & 0x3u) == 0x3u) {
                 g_ring3_thread_yield_logged = 1;
                 klog_write("[test] ring3 thread yield syscall ok\n");
             }
@@ -438,7 +400,7 @@ x86_syscall_handler(syscall_frame_t *frame)
         process_yield(PROCESS_RUN_YIELDED);
         return 0;
     case WASMOS_SYSCALL_THREAD_EXIT: {
-        process_t *proc = process_get(process_current_pid());
+        process_t* proc = process_get(process_current_pid());
         int32_t exit_status = 0;
         if (!proc) {
             return (uint64_t)-1;
@@ -456,7 +418,7 @@ x86_syscall_handler(syscall_frame_t *frame)
         return 0;
     }
     case WASMOS_SYSCALL_THREAD_CREATE: {
-        process_t *proc = process_get(process_current_pid());
+        process_t* proc = process_get(process_current_pid());
         uint32_t tid = 0;
         uint64_t entry_rip = frame->rdi;
         uint64_t user_stack_top = frame->rsi;
@@ -468,17 +430,14 @@ x86_syscall_handler(syscall_frame_t *frame)
             g_ring3_thread_create_logged = 1;
             klog_write("[test] ring3 thread create syscall ok\n");
         }
-        if (process_thread_spawn_user_internal(proc->pid,
-                                               "user-thread",
-                                               entry_rip,
-                                               user_stack_top,
+        if (process_thread_spawn_user_internal(proc->pid, "user-thread", entry_rip, user_stack_top,
                                                &tid) != 0) {
             return (uint64_t)-1;
         }
         return tid;
     }
     case WASMOS_SYSCALL_THREAD_JOIN: {
-        process_t *proc = process_get(process_current_pid());
+        process_t* proc = process_get(process_current_pid());
         uint32_t target_tid = 0;
         int join_rc = -1;
         int32_t exit_status = 0;
@@ -497,27 +456,21 @@ x86_syscall_handler(syscall_frame_t *frame)
         for (;;) {
             join_rc = process_thread_join(proc, target_tid, &exit_status);
             if (join_rc == 0) {
-                if (!g_ring3_thread_join_helper_ok_logged &&
-                    (frame->cs & 0x3u) == 0x3u &&
-                    !name_eq(proc->name, "ring3-native") &&
-                    target_tid != self_tid) {
+                if (!g_ring3_thread_join_helper_ok_logged && (frame->cs & 0x3u) == 0x3u &&
+                    !name_eq(proc->name, "ring3-native") && target_tid != self_tid) {
                     g_ring3_thread_join_helper_ok_logged = 1;
                     klog_write("[test] ring3 thread join helper ok\n");
                 }
                 return (uint64_t)(int64_t)exit_status;
             }
             if (join_rc < 0) {
-                if (!g_ring3_thread_join_self_deny_logged &&
-                    (frame->cs & 0x3u) == 0x3u &&
-                    name_eq(proc->name, "ring3-native") &&
-                    target_tid == self_tid) {
+                if (!g_ring3_thread_join_self_deny_logged && (frame->cs & 0x3u) == 0x3u &&
+                    name_eq(proc->name, "ring3-native") && target_tid == self_tid) {
                     g_ring3_thread_join_self_deny_logged = 1;
                     klog_write("[test] ring3 thread join self deny ok\n");
                 }
-                if (!g_ring3_thread_detach_join_deny_logged &&
-                    (frame->cs & 0x3u) == 0x3u &&
-                    name_eq(proc->name, "ring3-threading") &&
-                    target_tid != self_tid) {
+                if (!g_ring3_thread_detach_join_deny_logged && (frame->cs & 0x3u) == 0x3u &&
+                    name_eq(proc->name, "ring3-threading") && target_tid != self_tid) {
                     g_ring3_thread_detach_join_deny_logged = 1;
                     klog_write("[test] ring3 thread detach join deny ok\n");
                 }
@@ -527,7 +480,7 @@ x86_syscall_handler(syscall_frame_t *frame)
         }
     }
     case WASMOS_SYSCALL_THREAD_DETACH: {
-        process_t *proc = process_get(process_current_pid());
+        process_t* proc = process_get(process_current_pid());
         uint32_t target_tid = 0;
         int detach_rc = -1;
         if (!proc) {
@@ -543,24 +496,19 @@ x86_syscall_handler(syscall_frame_t *frame)
         }
         detach_rc = process_thread_detach(proc, target_tid);
         if (detach_rc < 0) {
-            if (!g_ring3_thread_detach_invalid_deny_logged &&
-                (frame->cs & 0x3u) == 0x3u &&
-                name_eq(proc->name, "ring3-native") &&
-                target_tid == 0) {
+            if (!g_ring3_thread_detach_invalid_deny_logged && (frame->cs & 0x3u) == 0x3u &&
+                name_eq(proc->name, "ring3-native") && target_tid == 0) {
                 g_ring3_thread_detach_invalid_deny_logged = 1;
                 klog_write("[test] ring3 thread detach invalid deny ok\n");
             }
             return (uint64_t)-1;
         }
-        if (!g_ring3_thread_detach_helper_ok_logged &&
-            (frame->cs & 0x3u) == 0x3u &&
-            !name_eq(proc->name, "ring3-native") &&
-            target_tid != thread_current_tid()) {
+        if (!g_ring3_thread_detach_helper_ok_logged && (frame->cs & 0x3u) == 0x3u &&
+            !name_eq(proc->name, "ring3-native") && target_tid != thread_current_tid()) {
             g_ring3_thread_detach_helper_ok_logged = 1;
             klog_write("[test] ring3 thread detach helper ok\n");
         }
-        if (!g_ring3_thread_detach_join_deny_logged &&
-            (frame->cs & 0x3u) == 0x3u &&
+        if (!g_ring3_thread_detach_join_deny_logged && (frame->cs & 0x3u) == 0x3u &&
             name_eq(proc->name, "ring3-native")) {
             if (process_thread_join(proc, target_tid, 0) < 0) {
                 g_ring3_thread_detach_join_deny_logged = 1;
@@ -570,27 +518,23 @@ x86_syscall_handler(syscall_frame_t *frame)
         return 0;
     }
     case WASMOS_SYSCALL_MUTEX_TRY_LOCK: {
-        process_t *proc = process_get(process_current_pid());
+        process_t* proc = process_get(process_current_pid());
         if (!proc) {
             return (uint64_t)-1;
         }
-        return (uint64_t)(int64_t)user_mutex_user_try_lock(proc->context_id,
-                                                            frame->rdi,
-                                                            thread_current_tid(),
-                                                            0);
+        return (uint64_t)(int64_t)user_mutex_user_try_lock(proc->context_id, frame->rdi,
+                                                           thread_current_tid(), 0);
     }
     case WASMOS_SYSCALL_MUTEX_UNLOCK: {
-        process_t *proc = process_get(process_current_pid());
+        process_t* proc = process_get(process_current_pid());
         if (!proc) {
             return (uint64_t)-1;
         }
-        return (uint64_t)(int64_t)user_mutex_user_unlock(proc->context_id,
-                                                         frame->rdi,
-                                                         thread_current_tid(),
-                                                         0);
+        return (uint64_t)(int64_t)user_mutex_user_unlock(proc->context_id, frame->rdi,
+                                                         thread_current_tid(), 0);
     }
     case WASMOS_SYSCALL_WAIT: {
-        process_t *proc = process_get(process_current_pid());
+        process_t* proc = process_get(process_current_pid());
         uint32_t target_pid = 0;
         int32_t exit_status = 0;
         int wait_rc = 0;
@@ -612,14 +556,14 @@ x86_syscall_handler(syscall_frame_t *frame)
         }
     }
     case WASMOS_SYSCALL_NOTIFY_READY: {
-        process_t *proc = process_get(process_current_pid());
+        process_t* proc = process_get(process_current_pid());
         if (proc) {
             process_notify_ready(proc);
         }
         return 0;
     }
     case WASMOS_SYSCALL_IPC_NOTIFY: {
-        process_t *proc = process_get(process_current_pid());
+        process_t* proc = process_get(process_current_pid());
         uint32_t endpoint = 0;
         int rc = IPC_ERR_INVALID;
         if (!proc) {
@@ -644,8 +588,7 @@ x86_syscall_handler(syscall_frame_t *frame)
             }
             if (!g_ring3_ipc_control_deny_logged &&
                 endpoint == g_ipc_notify_control_deny_endpoint &&
-                g_ipc_notify_control_deny_endpoint != IPC_ENDPOINT_NONE &&
-                rc == IPC_ERR_PERM) {
+                g_ipc_notify_control_deny_endpoint != IPC_ENDPOINT_NONE && rc == IPC_ERR_PERM) {
                 g_ring3_ipc_control_deny_logged = 1;
                 klog_write("[test] ring3 ipc syscall control deny ok\n");
             }
@@ -653,7 +596,7 @@ x86_syscall_handler(syscall_frame_t *frame)
         return (uint64_t)(int64_t)rc;
     }
     case WASMOS_SYSCALL_IPC_CALL: {
-        process_t *proc = process_get(process_current_pid());
+        process_t* proc = process_get(process_current_pid());
         uint32_t destination = 0;
         uint32_t msg_type = 0;
         uint32_t arg0 = 0;
@@ -671,16 +614,14 @@ x86_syscall_handler(syscall_frame_t *frame)
         int rc = IPC_ERR_INVALID;
         ipc_message_t req;
         ipc_message_t resp;
-        syscall_ipc_call_slot_t *slot = 0;
+        syscall_ipc_call_slot_t* slot = 0;
         if (!proc) {
             return (uint64_t)-1;
         }
         if (syscall_arg_u32(frame->rdi, &destination) != 0 ||
             syscall_arg_u32(frame->rsi, &msg_type) != 0 ||
-            syscall_arg_u32(frame->rdx, &arg0) != 0 ||
-            syscall_arg_u32(frame->rcx, &arg1) != 0 ||
-            syscall_arg_u32(frame->r8, &arg2) != 0 ||
-            syscall_arg_u32(frame->r9, &arg3) != 0) {
+            syscall_arg_u32(frame->rdx, &arg0) != 0 || syscall_arg_u32(frame->rcx, &arg1) != 0 ||
+            syscall_arg_u32(frame->r8, &arg2) != 0 || syscall_arg_u32(frame->r9, &arg3) != 0) {
             return (uint64_t)(int64_t)IPC_ERR_INVALID;
         }
         /* IPC_CALL returns a secondary value in RDX only on success.
@@ -714,13 +655,11 @@ x86_syscall_handler(syscall_frame_t *frame)
         if (owner_context == IPC_CONTEXT_KERNEL &&
             !syscall_ipc_call_kernel_endpoint_allowed(destination)) {
             rc = IPC_ERR_PERM;
-            if (name_eq(proc->name, "ring3-smoke") &&
-                !g_ring3_ipc_call_perm_deny_logged) {
+            if (name_eq(proc->name, "ring3-smoke") && !g_ring3_ipc_call_perm_deny_logged) {
                 g_ring3_ipc_call_perm_deny_logged = 1;
                 klog_write("[test] ring3 ipc call perm deny ok\n");
             }
-            if (name_eq(proc->name, "ring3-smoke") &&
-                !g_ring3_ipc_call_control_deny_logged) {
+            if (name_eq(proc->name, "ring3-smoke") && !g_ring3_ipc_call_control_deny_logged) {
                 g_ring3_ipc_call_control_deny_logged = 1;
                 klog_write("[test] ring3 ipc call control deny ok\n");
             }
@@ -729,8 +668,7 @@ x86_syscall_handler(syscall_frame_t *frame)
         if (destination == g_ipc_call_control_deny_endpoint &&
             g_ipc_call_control_deny_endpoint != IPC_ENDPOINT_NONE) {
             rc = IPC_ERR_PERM;
-            if (name_eq(proc->name, "ring3-smoke") &&
-                !g_ring3_ipc_call_control_deny_logged) {
+            if (name_eq(proc->name, "ring3-smoke") && !g_ring3_ipc_call_control_deny_logged) {
                 g_ring3_ipc_call_control_deny_logged = 1;
                 klog_write("[test] ring3 ipc call control deny ok\n");
             }
@@ -752,8 +690,7 @@ x86_syscall_handler(syscall_frame_t *frame)
         expected_reply_source = destination;
         expected_reply_owner_context = owner_context;
         if (destination == g_ipc_call_echo_endpoint &&
-            g_ipc_call_echo_endpoint != IPC_ENDPOINT_NONE &&
-            msg_type == 0x00009ABCu) {
+            g_ipc_call_echo_endpoint != IPC_ENDPOINT_NONE && msg_type == 0x00009ABCu) {
             ipc_message_t stale;
             ipc_message_t synthetic;
             stale.type = req.type;
@@ -778,8 +715,7 @@ x86_syscall_handler(syscall_frame_t *frame)
             (void)syscall_ipc_pending_enqueue(slot, &synthetic);
         }
         if (destination == g_ipc_call_echo_endpoint &&
-            g_ipc_call_echo_endpoint != IPC_ENDPOINT_NONE &&
-            msg_type == 0x00009ABDu) {
+            g_ipc_call_echo_endpoint != IPC_ENDPOINT_NONE && msg_type == 0x00009ABDu) {
             ipc_message_t out_of_order;
             ipc_message_t invalid_source;
             ipc_message_t forged;
@@ -814,8 +750,7 @@ x86_syscall_handler(syscall_frame_t *frame)
             (void)syscall_ipc_pending_enqueue(slot, &synthetic);
         }
         if (destination == g_ipc_call_echo_endpoint &&
-            g_ipc_call_echo_endpoint != IPC_ENDPOINT_NONE &&
-            msg_type != 0x00009ABCu &&
+            g_ipc_call_echo_endpoint != IPC_ENDPOINT_NONE && msg_type != 0x00009ABCu &&
             msg_type != 0x00009ABDu) {
             frame->rdx = (uint64_t)req.arg0;
             if (name_eq(proc->name, "ring3-smoke") && !g_ring3_ipc_call_ok_logged &&
@@ -834,8 +769,7 @@ x86_syscall_handler(syscall_frame_t *frame)
             }
         }
         while (syscall_ipc_pending_take_request(slot, request_id, &resp) == 0) {
-            if (!syscall_ipc_reply_authentic(&resp,
-                                             expected_reply_source,
+            if (!syscall_ipc_reply_authentic(&resp, expected_reply_source,
                                              expected_reply_owner_context)) {
                 dropped_inauth_replies++;
                 continue;
@@ -846,16 +780,13 @@ x86_syscall_handler(syscall_frame_t *frame)
                 g_ring3_ipc_call_ok_logged = 1;
                 klog_write("[test] ring3 ipc call ok\n");
             }
-            if (name_eq(proc->name, "ring3-smoke") &&
-                msg_type == 0x00009ABCu &&
-                !g_ring3_ipc_call_correlation_logged &&
-                (uint32_t)frame->rdx == req.arg0) {
+            if (name_eq(proc->name, "ring3-smoke") && msg_type == 0x00009ABCu &&
+                !g_ring3_ipc_call_correlation_logged && (uint32_t)frame->rdx == req.arg0) {
                 g_ring3_ipc_call_correlation_logged = 1;
                 klog_write("[test] ring3 ipc call correlate ok\n");
                 klog_write("[test] ring3 ipc call stale id deny ok\n");
             }
-            if (name_eq(proc->name, "ring3-smoke") &&
-                msg_type == 0x00009ABDu &&
+            if (name_eq(proc->name, "ring3-smoke") && msg_type == 0x00009ABDu &&
                 (uint32_t)frame->rdx == req.arg0) {
                 klog_write("[test] ring3 ipc call source auth ok\n");
                 if (!g_ring3_ipc_call_spoof_invalid_source_deny_logged &&
@@ -866,15 +797,13 @@ x86_syscall_handler(syscall_frame_t *frame)
                 if (!g_ring3_ipc_call_out_of_order_retain_logged &&
                     injected_out_of_order_request_id != 0) {
                     ipc_message_t retained;
-                    if (syscall_ipc_pending_take_request(slot,
-                                                         injected_out_of_order_request_id,
+                    if (syscall_ipc_pending_take_request(slot, injected_out_of_order_request_id,
                                                          &retained) == 0) {
                         g_ring3_ipc_call_out_of_order_retain_logged = 1;
                         klog_write("[test] ring3 ipc call out-of-order retain ok\n");
                     }
                 }
-                if (!g_ring3_ipc_call_owner_sender_stress_logged &&
-                    dropped_inauth_replies >= 2u) {
+                if (!g_ring3_ipc_call_owner_sender_stress_logged && dropped_inauth_replies >= 2u) {
                     g_ring3_ipc_call_owner_sender_stress_logged = 1;
                     klog_write("[test] ring3 ipc owner+sender stress ok\n");
                 }
@@ -890,8 +819,7 @@ x86_syscall_handler(syscall_frame_t *frame)
                 (void)syscall_ipc_pending_enqueue(slot, &resp);
                 continue;
             }
-            if (!syscall_ipc_reply_authentic(&resp,
-                                             expected_reply_source,
+            if (!syscall_ipc_reply_authentic(&resp, expected_reply_source,
                                              expected_reply_owner_context)) {
                 dropped_inauth_replies++;
                 continue;

@@ -11,9 +11,7 @@
 
 static const uint8_t g_skip_wasm_boot = 0;
 
-void
-kernel_init_state_reset(init_state_t *state, const boot_info_t *boot_info)
-{
+void kernel_init_state_reset(init_state_t* state, const boot_info_t* boot_info) {
     if (!state) {
         return;
     }
@@ -36,24 +34,23 @@ kernel_init_state_reset(init_state_t *state, const boot_info_t *boot_info)
     state->dm_pid = 0;
 }
 
-static uint32_t
-boot_module_index_by_app_name(const boot_info_t *info, const char *name)
-{
+static uint32_t boot_module_index_by_app_name(const boot_info_t* info, const char* name) {
     if (!info || !name || !(info->flags & BOOT_INFO_FLAG_MODULES_PRESENT)) {
         return 0xFFFFFFFFu;
     }
     if (!info->modules || info->module_entry_size < sizeof(boot_module_t)) {
         return 0xFFFFFFFFu;
     }
-    const uint8_t *mods = (const uint8_t *)info->modules;
+    const uint8_t* mods = (const uint8_t*)info->modules;
     for (uint32_t i = 0; i < info->module_count; ++i) {
-        const boot_module_t *mod = (const boot_module_t *)(mods + i * info->module_entry_size);
-        if (!mod || mod->type != BOOT_MODULE_TYPE_WASMOS_APP || mod->base == 0 ||
-            mod->size == 0 || mod->size > 0xFFFFFFFFULL) {
+        const boot_module_t* mod = (const boot_module_t*)(mods + i * info->module_entry_size);
+        if (!mod || mod->type != BOOT_MODULE_TYPE_WASMOS_APP || mod->base == 0 || mod->size == 0 ||
+            mod->size > 0xFFFFFFFFULL) {
             continue;
         }
         wasmos_app_desc_t desc;
-        if (wasmos_app_parse((const uint8_t *)(uintptr_t)mod->base, (uint32_t)mod->size, &desc) != 0) {
+        if (wasmos_app_parse((const uint8_t*)(uintptr_t)mod->base, (uint32_t)mod->size, &desc) !=
+            0) {
             continue;
         }
         if (str_eq_bytes(desc.name, desc.name_len, name)) {
@@ -63,9 +60,8 @@ boot_module_index_by_app_name(const boot_info_t *info, const char *name)
     return 0xFFFFFFFFu;
 }
 
-static int
-init_send_spawn_index(process_t *process, init_state_t *state, uint32_t module_index, uint8_t pending_kind)
-{
+static int init_send_spawn_index(process_t* process, init_state_t* state, uint32_t module_index,
+                                 uint8_t pending_kind) {
     uint32_t proc_ep;
     ipc_message_t msg;
     int send_rc;
@@ -100,15 +96,13 @@ init_send_spawn_index(process_t *process, init_state_t *state, uint32_t module_i
 /* Spawn a process by filesystem path. init owns a transfer buffer holding the
  * path (staged at offset 0) that PM borrows/reads while handling the message;
  * the spawn-path protocol carries arg1 = (buffer_id<<12)|path_len. */
-static int
-init_send_spawn_path(process_t *process, init_state_t *state, const char *path)
-{
+static int init_send_spawn_path(process_t* process, init_state_t* state, const char* path) {
     uint32_t proc_ep;
     ipc_message_t msg;
     int send_rc;
     xfer_buffer_owner_t buf = {0};
     uint64_t phys = 0u;
-    uint8_t *p = 0;
+    uint8_t* p = 0;
     uint32_t path_len;
 
     if (!process || !state || !path) {
@@ -122,8 +116,8 @@ init_send_spawn_path(process_t *process, init_state_t *state, const char *path)
     if (path_len == 0u || path_len > 0xFFFu) {
         return -1;
     }
-    if (xfer_buffer_acquire(BUFFER_KIND_TRANSFER, process->context_id, path_len, &buf)
-            != XFER_BUFFER_OK) {
+    if (xfer_buffer_acquire(BUFFER_KIND_TRANSFER, process->context_id, path_len, &buf) !=
+        XFER_BUFFER_OK) {
         return -1;
     }
     phys = xfer_buffer_object_phys(&buf.buffer);
@@ -131,15 +125,15 @@ init_send_spawn_path(process_t *process, init_state_t *state, const char *path)
         (void)xfer_buffer_release_owned(&buf);
         return -1;
     }
-    p = (uint8_t *)(uintptr_t)(phys | KERNEL_HIGHER_HALF_BASE);
+    p = (uint8_t*)(uintptr_t)(phys | KERNEL_HIGHER_HALF_BASE);
     memcpy(p, path, path_len);
     msg.type = PROC_IPC_SPAWN_PATH;
     msg.source = state->reply_endpoint;
     msg.destination = proc_ep;
     msg.request_id = state->request_id;
-    msg.arg0 = 0;                                              /* no spawn flags */
+    msg.arg0 = 0; /* no spawn flags */
     msg.arg1 = (buf.buffer.buffer_id << 12) | (path_len & 0xFFFu);
-    msg.arg2 = 0;                                             /* args_len */
+    msg.arg2 = 0; /* args_len */
     msg.arg3 = 0;
     send_rc = ipc_send_from(process->context_id, proc_ep, &msg);
     if (send_rc != IPC_OK) {
@@ -155,12 +149,8 @@ init_send_spawn_path(process_t *process, init_state_t *state, const char *path)
     return 0;
 }
 
-
-
-process_run_result_t
-kernel_init_entry(process_t *process, void *arg)
-{
-    init_state_t *state = (init_state_t *)arg;
+process_run_result_t kernel_init_entry(process_t* process, void* arg) {
+    init_state_t* state = (init_state_t*)arg;
     uint32_t pm_pid = 0;
     ipc_message_t msg;
 
@@ -169,12 +159,15 @@ kernel_init_entry(process_t *process, void *arg)
     }
 
     if (!state->started) {
-        state->native_min_index = boot_module_index_by_app_name(state->boot_info, "native-call-min");
-        state->native_smoke_index = boot_module_index_by_app_name(state->boot_info, "native-call-smoke");
+        state->native_min_index =
+            boot_module_index_by_app_name(state->boot_info, "native-call-min");
+        state->native_smoke_index =
+            boot_module_index_by_app_name(state->boot_info, "native-call-smoke");
         state->smoke_index = boot_module_index_by_app_name(state->boot_info, "init-smoke");
         state->fs_manager_index = boot_module_index_by_app_name(state->boot_info, "fs-manager");
         state->fs_init_index = boot_module_index_by_app_name(state->boot_info, "fs-init");
-        state->device_manager_index = boot_module_index_by_app_name(state->boot_info, "device-manager");
+        state->device_manager_index =
+            boot_module_index_by_app_name(state->boot_info, "device-manager");
         state->reply_endpoint = IPC_ENDPOINT_NONE;
         state->request_id = 1;
         state->pending_kind = 0;
@@ -186,7 +179,8 @@ kernel_init_entry(process_t *process, void *arg)
         }
 
         process_manager_init(state->boot_info);
-        if (process_spawn_as(process->pid, "process-manager", process_manager_entry, 0, &pm_pid) != 0) {
+        if (process_spawn_as(process->pid, "process-manager", process_manager_entry, 0, &pm_pid) !=
+            0) {
             klog_write("[init] process manager spawn failed\n");
             process_set_exit_status(process, -1);
             return PROCESS_RUN_EXITED;
@@ -308,7 +302,7 @@ kernel_init_entry(process_t *process, void *arg)
         int recv_rc = ipc_recv_blocking_for(process->context_id, state->reply_endpoint, &msg);
         /* ipc_recv_blocking_for only returns IPC_EMPTY on spurious wake; caller loops */
         if (recv_rc == IPC_EMPTY) {
-            return PROCESS_RUN_YIELDED;  /* retry on next dispatch */
+            return PROCESS_RUN_YIELDED; /* retry on next dispatch */
         }
         if (recv_rc != IPC_OK) {
             return PROCESS_RUN_YIELDED;
@@ -320,8 +314,7 @@ kernel_init_entry(process_t *process, void *arg)
         if (msg.type == PROC_IPC_ERROR) {
             uint32_t op = msg.arg0;
             uint32_t err = msg.arg1;
-            if (op == PROC_IPC_SPAWN &&
-                (err == (uint32_t)-1 || err == (uint32_t)-2)) {
+            if (op == PROC_IPC_SPAWN && (err == (uint32_t)-1 || err == (uint32_t)-2)) {
                 /* PM spawn can transiently fail while slots/services churn
                  * during strict ring3 threading smoke; retry same phase. */
                 state->request_id++;
@@ -366,7 +359,7 @@ kernel_init_entry(process_t *process, void *arg)
             state->dm_pid = (uint32_t)msg.arg0;
             /* DM may have already set ready=1 implicitly (first IPC block).
              * Reset it and require explicit notify_ready before init proceeds. */
-            process_t *dm = process_get(state->dm_pid);
+            process_t* dm = process_get(state->dm_pid);
             if (dm) {
                 dm->ready = 0;
                 process_set_require_explicit_ready(dm);
@@ -383,7 +376,7 @@ kernel_init_entry(process_t *process, void *arg)
     }
 
     if (state->phase == 6) {
-        process_t *dm = state->dm_pid ? process_get(state->dm_pid) : 0;
+        process_t* dm = state->dm_pid ? process_get(state->dm_pid) : 0;
         if (!dm || !dm->ready) {
             return PROCESS_RUN_YIELDED;
         }
@@ -402,7 +395,7 @@ kernel_init_entry(process_t *process, void *arg)
         int recv_rc = ipc_recv_blocking_for(process->context_id, state->reply_endpoint, &msg);
         /* ipc_recv_blocking_for only returns IPC_EMPTY on spurious wake; caller loops */
         if (recv_rc == IPC_EMPTY) {
-            return PROCESS_RUN_YIELDED;  /* retry on next dispatch */
+            return PROCESS_RUN_YIELDED; /* retry on next dispatch */
         }
         if (recv_rc != IPC_OK) {
             return PROCESS_RUN_YIELDED;

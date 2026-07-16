@@ -9,16 +9,16 @@
 
 #include <stdint.h>
 
-#define BOOT_INFO_VERSION 4u                  /* increment on any boot_info_t field change */
-#define BOOT_INFO_FLAG_GOP_PRESENT     (1u << 0)
+#define BOOT_INFO_VERSION 4u /* increment on any boot_info_t field change */
+#define BOOT_INFO_FLAG_GOP_PRESENT (1u << 0)
 #define BOOT_INFO_FLAG_MODULES_PRESENT (1u << 1)
-#define BOOT_INFO_FLAG_INITFS_PRESENT  (1u << 2)
+#define BOOT_INFO_FLAG_INITFS_PRESENT (1u << 2)
 #define BOOT_INFO_FLAG_GOP_PIXEL_FORMAT_SHIFT 8u
-#define BOOT_INFO_FLAG_GOP_PIXEL_FORMAT_MASK  (0xFu << BOOT_INFO_FLAG_GOP_PIXEL_FORMAT_SHIFT)
+#define BOOT_INFO_FLAG_GOP_PIXEL_FORMAT_MASK (0xFu << BOOT_INFO_FLAG_GOP_PIXEL_FORMAT_SHIFT)
 
 typedef enum {
     BOOT_MODULE_TYPE_NONE = 0,
-    BOOT_MODULE_TYPE_WASMOS_APP = 1   /* embedded .wap payload */
+    BOOT_MODULE_TYPE_WASMOS_APP = 1 /* embedded .wap payload */
 } boot_module_type_t;
 
 typedef struct {
@@ -63,23 +63,23 @@ typedef struct {
     uint32_t version;
     uint32_t size;
     uint32_t flags;
-    void *memory_map;
+    void* memory_map;
     uint64_t memory_map_size;
     uint64_t memory_desc_size;
     uint32_t memory_desc_version;
-    void *framebuffer_base;
+    void* framebuffer_base;
     uint64_t framebuffer_size;
     uint32_t framebuffer_width;
     uint32_t framebuffer_height;
     uint32_t framebuffer_pixels_per_scanline;
-    void *modules;
+    void* modules;
     uint32_t module_count;
     uint32_t module_entry_size;
-    void *rsdp;
+    void* rsdp;
     uint32_t rsdp_length;
-    void *initfs;
+    void* initfs;
     uint32_t initfs_size;
-    void *boot_config;
+    void* boot_config;
     uint32_t boot_config_size;
 } boot_info_t;
 

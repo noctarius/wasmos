@@ -36,7 +36,9 @@ class IpcWakeupTests(unittest.TestCase):
     def test_ipc_wakeup_marker(self):
         ok = b"[test] ipc wake ok" in self.session.buf
         if not ok:
-            self.fail(f"IPC wakeup marker not found.\n--- tail ---\n{self.session.tail()}\n")
+            self.fail(
+                f"IPC wakeup marker not found.\n--- tail ---\n{self.session.tail()}\n"
+            )
 
 
 if __name__ == "__main__":

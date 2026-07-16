@@ -33,32 +33,19 @@ typedef struct {
     int32_t destination;
 } wasmos_ipc_message_t;
 
-static inline int32_t
-wasmos_ipc_call_retry(int32_t destination_endpoint,
-                      int32_t source_endpoint,
-                      int32_t type,
-                      int32_t request_id,
-                      int32_t arg0,
-                      int32_t arg1,
-                      int32_t arg2,
-                      int32_t arg3,
-                      wasmos_ipc_message_t *out_reply,
-                      int32_t send_retry_limit);
+static inline int32_t wasmos_ipc_call_retry(int32_t destination_endpoint, int32_t source_endpoint,
+                                            int32_t type, int32_t request_id, int32_t arg0,
+                                            int32_t arg1, int32_t arg2, int32_t arg3,
+                                            wasmos_ipc_message_t* out_reply,
+                                            int32_t send_retry_limit);
 
-static inline int32_t
-wasmos_ipc_call_managed(int32_t server,
-                        int32_t type,
-                        int32_t arg0,
-                        int32_t arg1,
-                        int32_t arg2,
-                        int32_t arg3,
-                        wasmos_ipc_message_t *out_reply);
+static inline int32_t wasmos_ipc_call_managed(int32_t server, int32_t type, int32_t arg0,
+                                              int32_t arg1, int32_t arg2, int32_t arg3,
+                                              wasmos_ipc_message_t* out_reply);
 
 /* Populate message from the last received IPC fields.
  * Must be called immediately after wasmos_ipc_recv/try_recv returns > 0. */
-static inline void
-wasmos_ipc_message_read_last(wasmos_ipc_message_t *message)
-{
+static inline void wasmos_ipc_message_read_last(wasmos_ipc_message_t* message) {
     if (!message) {
         return;
     }
@@ -72,51 +59,26 @@ wasmos_ipc_message_read_last(wasmos_ipc_message_t *message)
     message->arg3 = wasmos_ipc_last_field(7);
 }
 
-static inline int32_t
-wasmos_ipc_reply(int32_t reply_endpoint,
-                 int32_t source_endpoint,
-                 int32_t type,
-                 int32_t request_id,
-                 int32_t arg0,
-                 int32_t arg1)
-{
-    return wasmos_ipc_send(reply_endpoint,
-                           source_endpoint,
-                           type,
-                           request_id,
-                           arg0,
-                           arg1,
-                           0,
-                           0);
+static inline int32_t wasmos_ipc_reply(int32_t reply_endpoint, int32_t source_endpoint,
+                                       int32_t type, int32_t request_id, int32_t arg0,
+                                       int32_t arg1) {
+    return wasmos_ipc_send(reply_endpoint, source_endpoint, type, request_id, arg0, arg1, 0, 0);
 }
 
 /* Send with automatic retry on IPC_ERR_FULL (-3) up to retry_limit times,
  * yielding between each attempt.  Use 0 for the default limit. */
-static inline int32_t
-wasmos_ipc_send_retry(int32_t destination_endpoint,
-                      int32_t source_endpoint,
-                      int32_t type,
-                      int32_t request_id,
-                      int32_t arg0,
-                      int32_t arg1,
-                      int32_t arg2,
-                      int32_t arg3,
-                      int32_t retry_limit)
-{
+static inline int32_t wasmos_ipc_send_retry(int32_t destination_endpoint, int32_t source_endpoint,
+                                            int32_t type, int32_t request_id, int32_t arg0,
+                                            int32_t arg1, int32_t arg2, int32_t arg3,
+                                            int32_t retry_limit) {
     int32_t tries = 0;
     int32_t rc;
     if (retry_limit <= 0) {
         retry_limit = WASMOS_IPC_SEND_RETRY_LIMIT;
     }
     for (;;) {
-        rc = wasmos_ipc_send(destination_endpoint,
-                             source_endpoint,
-                             type,
-                             request_id,
-                             arg0,
-                             arg1,
-                             arg2,
-                             arg3);
+        rc = wasmos_ipc_send(destination_endpoint, source_endpoint, type, request_id, arg0, arg1,
+                             arg2, arg3);
         if (rc == 0) {
             return 0;
         }
@@ -127,50 +89,20 @@ wasmos_ipc_send_retry(int32_t destination_endpoint,
     }
 }
 
-static inline int32_t
-wasmos_ipc_call(int32_t destination_endpoint,
-                int32_t source_endpoint,
-                int32_t type,
-                int32_t request_id,
-                int32_t arg0,
-                int32_t arg1,
-                int32_t arg2,
-                int32_t arg3,
-                wasmos_ipc_message_t *out_reply)
-{
-    return wasmos_ipc_call_retry(destination_endpoint,
-                                 source_endpoint,
-                                 type,
-                                 request_id,
-                                 arg0,
-                                 arg1,
-                                 arg2,
-                                 arg3,
-                                 out_reply,
-                                 WASMOS_IPC_SEND_RETRY_LIMIT);
+static inline int32_t wasmos_ipc_call(int32_t destination_endpoint, int32_t source_endpoint,
+                                      int32_t type, int32_t request_id, int32_t arg0, int32_t arg1,
+                                      int32_t arg2, int32_t arg3, wasmos_ipc_message_t* out_reply) {
+    return wasmos_ipc_call_retry(destination_endpoint, source_endpoint, type, request_id, arg0,
+                                 arg1, arg2, arg3, out_reply, WASMOS_IPC_SEND_RETRY_LIMIT);
 }
 
-static inline int32_t
-wasmos_ipc_call_retry(int32_t destination_endpoint,
-                      int32_t source_endpoint,
-                      int32_t type,
-                      int32_t request_id,
-                      int32_t arg0,
-                      int32_t arg1,
-                      int32_t arg2,
-                      int32_t arg3,
-                      wasmos_ipc_message_t *out_reply,
-                      int32_t send_retry_limit)
-{
-    int32_t rc = wasmos_ipc_send_retry(destination_endpoint,
-                                       source_endpoint,
-                                       type,
-                                       request_id,
-                                       arg0,
-                                       arg1,
-                                       arg2,
-                                       arg3,
-                                       send_retry_limit);
+static inline int32_t wasmos_ipc_call_retry(int32_t destination_endpoint, int32_t source_endpoint,
+                                            int32_t type, int32_t request_id, int32_t arg0,
+                                            int32_t arg1, int32_t arg2, int32_t arg3,
+                                            wasmos_ipc_message_t* out_reply,
+                                            int32_t send_retry_limit) {
+    int32_t rc = wasmos_ipc_send_retry(destination_endpoint, source_endpoint, type, request_id,
+                                       arg0, arg1, arg2, arg3, send_retry_limit);
     if (rc != 0) {
         return rc;
     }
@@ -203,9 +135,7 @@ wasmos_ipc_call_retry(int32_t destination_endpoint,
 
 /* Pack up to 16 chars of a service name into four int32 IPC args (4 bytes each,
  * little-endian).  Used by wasmos_svc_register/lookup. */
-static inline void
-wasmos_ipc_pack_name16(const char *name, int32_t out_args[4])
-{
+static inline void wasmos_ipc_pack_name16(const char* name, int32_t out_args[4]) {
     if (!out_args) {
         return;
     }
@@ -227,9 +157,7 @@ wasmos_ipc_pack_name16(const char *name, int32_t out_args[4])
  * `src` into it at offset 0. Returns the owned buffer_id (>= 0) or -1. The
  * caller sends the id to the kernel (arg2 by convention) and releases it with
  * wasmos_xfer_buffer_release once the synchronous request completes. */
-static inline int32_t
-wasmos_xfer_stage(const void *src, int32_t len)
-{
+static inline int32_t wasmos_xfer_stage(const void* src, int32_t len) {
     int32_t bid = wasmos_xfer_buffer_acquire(len);
     if (bid < 0) {
         return -1;
@@ -252,19 +180,14 @@ wasmos_xfer_stage(const void *src, int32_t len)
  * translation unit and reused across registrations (no per-call leak); it is
  * created here rather than via the startup.c managed endpoint so the helper
  * works in drivers that do not link the full libc startup unit. */
-static inline int32_t
-wasmos_svc_register_class(int32_t proc_endpoint,
-                          int32_t service_endpoint,
-                          const char *service_name,
-                          const char *class_name,
-                          uint32_t instance,
-                          int32_t request_id)
-{
+static inline int32_t wasmos_svc_register_class(int32_t proc_endpoint, int32_t service_endpoint,
+                                                const char* service_name, const char* class_name,
+                                                uint32_t instance, int32_t request_id) {
     static int32_t s_reg_reply_ep = -1;
     svc_register_desc_t desc;
     wasmos_ipc_message_t resp;
     uint32_t i;
-    uint8_t *raw = (uint8_t *)&desc;
+    uint8_t* raw = (uint8_t*)&desc;
     if (s_reg_reply_ep < 0) {
         s_reg_reply_ep = wasmos_ipc_create_endpoint();
     }
@@ -293,15 +216,8 @@ wasmos_svc_register_class(int32_t proc_endpoint,
     if (bid < 0) {
         return -1;
     }
-    if (wasmos_ipc_call(proc_endpoint,
-                        reply_ep,
-                        SVC_IPC_REGISTER_DESC_REQ,
-                        request_id,
-                        0,
-                        (int32_t)sizeof(desc),
-                        bid,
-                        0,
-                        &resp) != 0) {
+    if (wasmos_ipc_call(proc_endpoint, reply_ep, SVC_IPC_REGISTER_DESC_REQ, request_id, 0,
+                        (int32_t)sizeof(desc), bid, 0, &resp) != 0) {
         (void)wasmos_xfer_buffer_release(bid);
         return -1;
     }
@@ -310,37 +226,22 @@ wasmos_svc_register_class(int32_t proc_endpoint,
 }
 
 /* Register a service by name only (no virtual class). */
-static inline int32_t
-wasmos_svc_register(int32_t proc_endpoint,
-                    int32_t service_endpoint,
-                    const char *service_name,
-                    int32_t request_id)
-{
-    return wasmos_svc_register_class(proc_endpoint, service_endpoint,
-                                     service_name, 0, 0, request_id);
+static inline int32_t wasmos_svc_register(int32_t proc_endpoint, int32_t service_endpoint,
+                                          const char* service_name, int32_t request_id) {
+    return wasmos_svc_register_class(proc_endpoint, service_endpoint, service_name, 0, 0,
+                                     request_id);
 }
 
 /* Look up a service by name; returns its endpoint or -1 if not registered.
  * Does not retry — caller must loop with yield for services not yet ready. */
-static inline int32_t
-wasmos_svc_lookup(int32_t proc_endpoint,
-                  int32_t reply_endpoint,
-                  const char *service_name,
-                  int32_t request_id)
-{
+static inline int32_t wasmos_svc_lookup(int32_t proc_endpoint, int32_t reply_endpoint,
+                                        const char* service_name, int32_t request_id) {
     int32_t args[4];
     wasmos_ipc_message_t resp;
     uint32_t endpoint_raw;
     wasmos_ipc_pack_name16(service_name, args);
-    if (wasmos_ipc_call(proc_endpoint,
-                        reply_endpoint,
-                        SVC_IPC_LOOKUP_REQ,
-                        request_id,
-                        args[0],
-                        args[1],
-                        args[2],
-                        args[3],
-                        &resp) != 0) {
+    if (wasmos_ipc_call(proc_endpoint, reply_endpoint, SVC_IPC_LOOKUP_REQ, request_id, args[0],
+                        args[1], args[2], args[3], &resp) != 0) {
         return -1;
     }
     if (resp.type != SVC_IPC_LOOKUP_RESP) {
@@ -356,14 +257,9 @@ wasmos_svc_lookup(int32_t proc_endpoint,
 /* Enumerate providers of a virtual class into out[0..max_entries). Returns the
  * total match count (may exceed max_entries; only min(count,max_entries) entries
  * are written), or -1 on error. */
-static inline int32_t
-wasmos_svc_lookup_class(int32_t proc_endpoint,
-                        int32_t reply_endpoint,
-                        const char *class_name,
-                        svc_class_entry_t *out,
-                        int32_t max_entries,
-                        int32_t request_id)
-{
+static inline int32_t wasmos_svc_lookup_class(int32_t proc_endpoint, int32_t reply_endpoint,
+                                              const char* class_name, svc_class_entry_t* out,
+                                              int32_t max_entries, int32_t request_id) {
     wasmos_ipc_message_t resp;
     char cn[WASMOS_SVC_CLASS_MAX];
     uint32_t i;
@@ -390,8 +286,8 @@ wasmos_svc_lookup_class(int32_t proc_endpoint,
         (void)wasmos_xfer_buffer_release(bid);
         return -1;
     }
-    if (wasmos_ipc_call(proc_endpoint, reply_endpoint, SVC_IPC_LOOKUP_CLASS_REQ,
-                        request_id, bid, max_entries, 0, 0, &resp) != 0 ||
+    if (wasmos_ipc_call(proc_endpoint, reply_endpoint, SVC_IPC_LOOKUP_CLASS_REQ, request_id, bid,
+                        max_entries, 0, 0, &resp) != 0 ||
         resp.type != SVC_IPC_LOOKUP_CLASS_RESP) {
         (void)wasmos_xfer_buffer_release(bid);
         return -1;
@@ -408,13 +304,9 @@ wasmos_svc_lookup_class(int32_t proc_endpoint,
 
 /* Subscribe notify_endpoint to existence events (SVC_IPC_CLASS_EVENT) for a
  * class. Returns 0 on success, -1 on error. */
-static inline int32_t
-wasmos_svc_subscribe_class(int32_t proc_endpoint,
-                           int32_t reply_endpoint,
-                           int32_t notify_endpoint,
-                           const char *class_name,
-                           int32_t request_id)
-{
+static inline int32_t wasmos_svc_subscribe_class(int32_t proc_endpoint, int32_t reply_endpoint,
+                                                 int32_t notify_endpoint, const char* class_name,
+                                                 int32_t request_id) {
     wasmos_ipc_message_t resp;
     char cn[WASMOS_SVC_CLASS_MAX];
     uint32_t i;
@@ -427,8 +319,8 @@ wasmos_svc_subscribe_class(int32_t proc_endpoint,
     if (bid < 0) {
         return -1;
     }
-    if (wasmos_ipc_call(proc_endpoint, reply_endpoint, SVC_IPC_SUBSCRIBE_CLASS_REQ,
-                        request_id, notify_endpoint, bid, 0, 0, &resp) != 0 ||
+    if (wasmos_ipc_call(proc_endpoint, reply_endpoint, SVC_IPC_SUBSCRIBE_CLASS_REQ, request_id,
+                        notify_endpoint, bid, 0, 0, &resp) != 0 ||
         resp.type != SVC_IPC_SUBSCRIBE_CLASS_RESP) {
         (void)wasmos_xfer_buffer_release(bid);
         return -1;
@@ -437,17 +329,10 @@ wasmos_svc_subscribe_class(int32_t proc_endpoint,
     return 0;
 }
 
-static inline int32_t
-wasmos_subsystem_register_broker(int32_t proc_endpoint,
-                                 int32_t broker_endpoint,
-                                 const char *request_tag,
-                                 const char *runtime_tag,
-                                 const char *broker_name,
-                                 int32_t uses_wasm_payload,
-                                 int32_t needs_runtime_lock,
-                                 int32_t gates_ready_for_services,
-                                 int32_t request_id)
-{
+static inline int32_t wasmos_subsystem_register_broker(
+    int32_t proc_endpoint, int32_t broker_endpoint, const char* request_tag,
+    const char* runtime_tag, const char* broker_name, int32_t uses_wasm_payload,
+    int32_t needs_runtime_lock, int32_t gates_ready_for_services, int32_t request_id) {
     wasmos_subsystem_broker_register_desc_t desc;
     wasmos_ipc_message_t resp;
     uint32_t i = 0u;
@@ -480,13 +365,8 @@ wasmos_subsystem_register_broker(int32_t proc_endpoint,
     if (bid < 0) {
         return -1;
     }
-    if (wasmos_ipc_call_managed(proc_endpoint,
-                                PROC_IPC_SUBSYSTEM_REGISTER_BROKER,
-                                0,
-                                (int32_t)sizeof(desc),
-                                bid,
-                                0,
-                                &resp) != 0) {
+    if (wasmos_ipc_call_managed(proc_endpoint, PROC_IPC_SUBSYSTEM_REGISTER_BROKER, 0,
+                                (int32_t)sizeof(desc), bid, 0, &resp) != 0) {
         (void)wasmos_xfer_buffer_release(bid);
         return -1;
     }
@@ -495,17 +375,12 @@ wasmos_subsystem_register_broker(int32_t proc_endpoint,
     return (resp.type == PROC_IPC_RESP) ? 0 : resp.arg1;
 }
 
-static inline int32_t
-wasmos_exec_handler_register(int32_t proc_endpoint,
-                             const char *request_tag,
-                             const char *handler_name,
-                             int32_t priority,
-                             int32_t max_probe_bytes,
-                             const wasmos_exec_match_node_t *nodes,
-                             int32_t node_count,
-                             int32_t root_index,
-                             int32_t request_id)
-{
+static inline int32_t wasmos_exec_handler_register(int32_t proc_endpoint, const char* request_tag,
+                                                   const char* handler_name, int32_t priority,
+                                                   int32_t max_probe_bytes,
+                                                   const wasmos_exec_match_node_t* nodes,
+                                                   int32_t node_count, int32_t root_index,
+                                                   int32_t request_id) {
     wasmos_exec_handler_register_desc_t desc;
     wasmos_ipc_message_t resp;
     int32_t total_size = 0;
@@ -532,7 +407,8 @@ wasmos_exec_handler_register(int32_t proc_endpoint,
         }
         desc.handler_name[i] = '\0';
     }
-    total_size = (int32_t)sizeof(desc) + (int32_t)(sizeof(wasmos_exec_match_node_t) * (uint32_t)node_count);
+    total_size =
+        (int32_t)sizeof(desc) + (int32_t)(sizeof(wasmos_exec_match_node_t) * (uint32_t)node_count);
     int32_t bid = wasmos_xfer_buffer_acquire(total_size);
     if (bid < 0) {
         return -1;
@@ -544,13 +420,8 @@ wasmos_exec_handler_register(int32_t proc_endpoint,
         (void)wasmos_xfer_buffer_release(bid);
         return -1;
     }
-    if (wasmos_ipc_call_managed(proc_endpoint,
-                                PROC_IPC_EXEC_HANDLER_REGISTER,
-                                0,
-                                total_size,
-                                bid,
-                                0,
-                                &resp) != 0) {
+    if (wasmos_ipc_call_managed(proc_endpoint, PROC_IPC_EXEC_HANDLER_REGISTER, 0, total_size, bid,
+                                0, &resp) != 0) {
         (void)wasmos_xfer_buffer_release(bid);
         return -1;
     }
@@ -567,43 +438,21 @@ wasmos_exec_handler_register(int32_t proc_endpoint,
 int32_t wasmos_ipc_ensure_reply_endpoint(void);
 int32_t wasmos_ipc_next_request_id(void);
 
-static inline int32_t
-wasmos_ipc_call_managed(int32_t server,
-                        int32_t type,
-                        int32_t arg0,
-                        int32_t arg1,
-                        int32_t arg2,
-                        int32_t arg3,
-                        wasmos_ipc_message_t *out_reply)
-{
+static inline int32_t wasmos_ipc_call_managed(int32_t server, int32_t type, int32_t arg0,
+                                              int32_t arg1, int32_t arg2, int32_t arg3,
+                                              wasmos_ipc_message_t* out_reply) {
     int32_t reply_ep = wasmos_ipc_ensure_reply_endpoint();
     if (reply_ep < 0) {
         return -1;
     }
-    return wasmos_ipc_call_retry(server,
-                                 reply_ep,
-                                 type,
-                                 wasmos_ipc_next_request_id(),
-                                 arg0,
-                                 arg1,
-                                 arg2,
-                                 arg3,
-                                 out_reply,
-                                 WASMOS_IPC_SEND_RETRY_LIMIT);
+    return wasmos_ipc_call_retry(server, reply_ep, type, wasmos_ipc_next_request_id(), arg0, arg1,
+                                 arg2, arg3, out_reply, WASMOS_IPC_SEND_RETRY_LIMIT);
 }
 
-static inline int32_t
-wasmos_ipc_reply_full(int32_t destination,
-                       int32_t source,
-                       int32_t type,
-                       int32_t request_id,
-                       int32_t arg0,
-                       int32_t arg1,
-                       int32_t arg2,
-                       int32_t arg3)
-{
-    return wasmos_ipc_send(destination, source, type, request_id,
-                            arg0, arg1, arg2, arg3);
+static inline int32_t wasmos_ipc_reply_full(int32_t destination, int32_t source, int32_t type,
+                                            int32_t request_id, int32_t arg0, int32_t arg1,
+                                            int32_t arg2, int32_t arg3) {
+    return wasmos_ipc_send(destination, source, type, request_id, arg0, arg1, arg2, arg3);
 }
 
 #ifdef __cplusplus

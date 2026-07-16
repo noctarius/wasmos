@@ -3,16 +3,12 @@
 
 #include "thread.h"
 
-static uint32_t
-ksync_mutex_current_owner_tid(void)
-{
+static uint32_t ksync_mutex_current_owner_tid(void) {
     uint32_t tid = thread_current_tid();
     return tid != 0 ? tid : 0xFFFFFFFFu;
 }
 
-void
-ksync_mutex_init(ksync_mutex_t *mutex)
-{
+void ksync_mutex_init(ksync_mutex_t* mutex) {
     if (!mutex) {
         return;
     }
@@ -21,9 +17,7 @@ ksync_mutex_init(ksync_mutex_t *mutex)
     mutex->locked = 0u;
 }
 
-int
-ksync_mutex_try_lock(ksync_mutex_t *mutex)
-{
+int ksync_mutex_try_lock(ksync_mutex_t* mutex) {
     uint32_t owner_tid = 0;
     int rc = KSYNC_MUTEX_BUSY;
 
@@ -44,9 +38,7 @@ ksync_mutex_try_lock(ksync_mutex_t *mutex)
     return rc;
 }
 
-int
-ksync_mutex_lock(ksync_mutex_t *mutex)
-{
+int ksync_mutex_lock(ksync_mutex_t* mutex) {
     uint32_t owner_tid = 0;
 
     if (!mutex) {
@@ -70,9 +62,7 @@ ksync_mutex_lock(ksync_mutex_t *mutex)
     }
 }
 
-int
-ksync_mutex_unlock(ksync_mutex_t *mutex)
-{
+int ksync_mutex_unlock(ksync_mutex_t* mutex) {
     uint32_t owner_tid = 0;
 
     if (!mutex) {

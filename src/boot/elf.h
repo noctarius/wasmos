@@ -6,7 +6,7 @@
 #include <stdint.h>
 
 #define EI_NIDENT 16
-#define PT_LOAD 1  /* loadable segment type */
+#define PT_LOAD 1 /* loadable segment type */
 
 /* ELF64 executable header. e_entry holds the virtual entry point (_start). */
 typedef struct {
@@ -28,13 +28,13 @@ typedef struct {
 
 /* ELF64 program header. p_memsz >= p_filesz; the gap must be zero-filled (BSS). */
 typedef struct {
-    uint32_t p_type;    /* PT_LOAD = 1 for a loadable segment */
+    uint32_t p_type; /* PT_LOAD = 1 for a loadable segment */
     uint32_t p_flags;
-    uint64_t p_offset;  /* byte offset in the ELF file */
-    uint64_t p_vaddr;   /* target virtual address */
+    uint64_t p_offset; /* byte offset in the ELF file */
+    uint64_t p_vaddr;  /* target virtual address */
     uint64_t p_paddr;
-    uint64_t p_filesz;  /* bytes present in the file (may be 0 for BSS-only) */
-    uint64_t p_memsz;   /* bytes to occupy in memory */
+    uint64_t p_filesz; /* bytes present in the file (may be 0 for BSS-only) */
+    uint64_t p_memsz;  /* bytes to occupy in memory */
     uint64_t p_align;
 } Elf64_Phdr;
 

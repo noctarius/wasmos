@@ -50,14 +50,14 @@
 extern "C" {
 #endif
 
-#define WASMOS_RINGBUF_MAGIC     0x474E5257u  /* 'WRNG' (little-endian) */
-#define WASMOS_RINGBUF_VERSION   1u
-#define WASMOS_RINGBUF_HDR_BYTES  64u
+#define WASMOS_RINGBUF_MAGIC 0x474E5257u /* 'WRNG' (little-endian) */
+#define WASMOS_RINGBUF_VERSION 1u
+#define WASMOS_RINGBUF_HDR_BYTES 64u
 
 /* Header flags. Either party may set these; they are advisory state, not part
  * of the index protocol. */
-#define WASMOS_RINGBUF_FLAG_PEER_CLOSED      (1u << 0) /* other end went away */
-#define WASMOS_RINGBUF_FLAG_RESET            (1u << 1) /* stream reset/aborted */
+#define WASMOS_RINGBUF_FLAG_PEER_CLOSED (1u << 0)      /* other end went away */
+#define WASMOS_RINGBUF_FLAG_RESET (1u << 1)            /* stream reset/aborted */
 #define WASMOS_RINGBUF_FLAG_OVERFLOW_DROPPED (1u << 2) /* producer dropped data */
 
 /* Shared header, fixed 64 bytes. `write` and `read` are kept far apart within
@@ -65,15 +65,15 @@ extern "C" {
  * leaves room to grow the ABI (stats, close/reset detail) without re-cutting
  * the header size. Producer owns `write`; consumer owns `read`. */
 typedef struct __attribute__((packed, aligned(64))) wasmos_ringbuf_hdr {
-    uint32_t magic;       /* +0  WASMOS_RINGBUF_MAGIC */
-    uint16_t version;     /* +4  WASMOS_RINGBUF_VERSION */
-    uint16_t hdr_bytes;   /* +6  = WASMOS_RINGBUF_HDR_BYTES (64) */
-    uint32_t capacity;    /* +8  data-region bytes; power of two */
-    uint32_t flags;       /* +12 WASMOS_RINGBUF_FLAG_* */
-    uint32_t write;       /* +16 producer-owned, free-running */
-    uint32_t _pad_w[7];   /* +20 pad producer/consumer words apart */
-    uint32_t read;        /* +48 consumer-owned, free-running */
-    uint32_t _pad_r[3];   /* +52 pad to 64 bytes total */
+    uint32_t magic;     /* +0  WASMOS_RINGBUF_MAGIC */
+    uint16_t version;   /* +4  WASMOS_RINGBUF_VERSION */
+    uint16_t hdr_bytes; /* +6  = WASMOS_RINGBUF_HDR_BYTES (64) */
+    uint32_t capacity;  /* +8  data-region bytes; power of two */
+    uint32_t flags;     /* +12 WASMOS_RINGBUF_FLAG_* */
+    uint32_t write;     /* +16 producer-owned, free-running */
+    uint32_t _pad_w[7]; /* +20 pad producer/consumer words apart */
+    uint32_t read;      /* +48 consumer-owned, free-running */
+    uint32_t _pad_r[3]; /* +52 pad to 64 bytes total */
 } wasmos_ringbuf_hdr_t;
 
 _Static_assert(sizeof(wasmos_ringbuf_hdr_t) == WASMOS_RINGBUF_HDR_BYTES,
@@ -83,11 +83,11 @@ _Static_assert(sizeof(wasmos_ringbuf_hdr_t) == WASMOS_RINGBUF_HDR_BYTES,
  * handle itself is private per party (not shared) and is rebuilt with attach()
  * whenever the region is (re)mapped. */
 typedef struct {
-    wasmos_ringbuf_hdr_t *hdr;  /* region base */
-    uint8_t *data;              /* region base + hdr_bytes */
+    wasmos_ringbuf_hdr_t* hdr;  /* region base */
+    uint8_t* data;              /* region base + hdr_bytes */
     uint32_t capacity;          /* cached hdr->capacity (power of two) */
-    void (*notify)(void *user); /* doorbell (backend-supplied), may be NULL */
-    void *notify_user;
+    void (*notify)(void* user); /* doorbell (backend-supplied), may be NULL */
+    void* notify_user;
 } wasmos_ringbuf_t;
 
 /* --- sizing / validation helpers --- */
@@ -109,26 +109,28 @@ static inline uint32_t wasmos_ringbuf_bytes_for(uint32_t capacity) {
  * the region (typically the producer/owner) before the peer attaches. capacity
  * must be a power of two and must fit: region_bytes >= hdr + capacity. Returns
  * 0 on success, -1 on bad parameters. */
-static inline int32_t
-wasmos_ringbuf_init(wasmos_ringbuf_t *rb, void *base, uint32_t region_bytes,
-                    uint32_t capacity) {
-    if (rb == 0 || base == 0) return -1;
-    if (!wasmos_ringbuf_is_pow2(capacity)) return -1;
-    if (region_bytes < wasmos_ringbuf_bytes_for(capacity)) return -1;
+static inline int32_t wasmos_ringbuf_init(wasmos_ringbuf_t* rb, void* base, uint32_t region_bytes,
+                                          uint32_t capacity) {
+    if (rb == 0 || base == 0)
+        return -1;
+    if (!wasmos_ringbuf_is_pow2(capacity))
+        return -1;
+    if (region_bytes < wasmos_ringbuf_bytes_for(capacity))
+        return -1;
 
-    wasmos_ringbuf_hdr_t *hdr = (wasmos_ringbuf_hdr_t *)base;
-    hdr->capacity  = capacity;
-    hdr->flags     = 0u;
-    hdr->write     = 0u;
-    hdr->read      = 0u;
-    hdr->version   = (uint16_t)WASMOS_RINGBUF_VERSION;
+    wasmos_ringbuf_hdr_t* hdr = (wasmos_ringbuf_hdr_t*)base;
+    hdr->capacity = capacity;
+    hdr->flags = 0u;
+    hdr->write = 0u;
+    hdr->read = 0u;
+    hdr->version = (uint16_t)WASMOS_RINGBUF_VERSION;
     hdr->hdr_bytes = (uint16_t)WASMOS_RINGBUF_HDR_BYTES;
     /* Publish magic last (release): a peer that sees the magic sees a fully
      * formed header behind it. */
     __atomic_store_n(&hdr->magic, WASMOS_RINGBUF_MAGIC, __ATOMIC_RELEASE);
 
     rb->hdr = hdr;
-    rb->data = (uint8_t *)base + WASMOS_RINGBUF_HDR_BYTES;
+    rb->data = (uint8_t*)base + WASMOS_RINGBUF_HDR_BYTES;
     rb->capacity = capacity;
     rb->notify = 0;
     rb->notify_user = 0;
@@ -140,29 +142,33 @@ wasmos_ringbuf_init(wasmos_ringbuf_t *rb, void *base, uint32_t region_bytes,
  * header (magic/version/hdr_bytes and a power-of-two capacity that fits) but
  * does NOT touch the indices. Returns 0 on success, -1 if the header is not a
  * valid ring or does not fit region_bytes. */
-static inline int32_t
-wasmos_ringbuf_attach(wasmos_ringbuf_t *rb, void *base, uint32_t region_bytes) {
-    if (rb == 0 || base == 0) return -1;
-    wasmos_ringbuf_hdr_t *hdr = (wasmos_ringbuf_hdr_t *)base;
+static inline int32_t wasmos_ringbuf_attach(wasmos_ringbuf_t* rb, void* base,
+                                            uint32_t region_bytes) {
+    if (rb == 0 || base == 0)
+        return -1;
+    wasmos_ringbuf_hdr_t* hdr = (wasmos_ringbuf_hdr_t*)base;
     if (__atomic_load_n(&hdr->magic, __ATOMIC_ACQUIRE) != WASMOS_RINGBUF_MAGIC)
         return -1;
-    if (hdr->version != (uint16_t)WASMOS_RINGBUF_VERSION) return -1;
-    if (hdr->hdr_bytes != (uint16_t)WASMOS_RINGBUF_HDR_BYTES) return -1;
+    if (hdr->version != (uint16_t)WASMOS_RINGBUF_VERSION)
+        return -1;
+    if (hdr->hdr_bytes != (uint16_t)WASMOS_RINGBUF_HDR_BYTES)
+        return -1;
     uint32_t capacity = hdr->capacity;
-    if (!wasmos_ringbuf_is_pow2(capacity)) return -1;
-    if (region_bytes < wasmos_ringbuf_bytes_for(capacity)) return -1;
+    if (!wasmos_ringbuf_is_pow2(capacity))
+        return -1;
+    if (region_bytes < wasmos_ringbuf_bytes_for(capacity))
+        return -1;
 
     rb->hdr = hdr;
-    rb->data = (uint8_t *)base + WASMOS_RINGBUF_HDR_BYTES;
+    rb->data = (uint8_t*)base + WASMOS_RINGBUF_HDR_BYTES;
     rb->capacity = capacity;
     rb->notify = 0;
     rb->notify_user = 0;
     return 0;
 }
 
-static inline void
-wasmos_ringbuf_set_notify(wasmos_ringbuf_t *rb, void (*notify)(void *user),
-                          void *user) {
+static inline void wasmos_ringbuf_set_notify(wasmos_ringbuf_t* rb, void (*notify)(void* user),
+                                             void* user) {
     rb->notify = notify;
     rb->notify_user = user;
 }
@@ -171,57 +177,58 @@ wasmos_ringbuf_set_notify(wasmos_ringbuf_t *rb, void (*notify)(void *user),
 
 /* Bytes currently queued (written but not yet consumed). Acquire-loads both
  * indices so it is correct whether the caller is producer or consumer. */
-static inline uint32_t wasmos_ringbuf_used(const wasmos_ringbuf_t *rb) {
+static inline uint32_t wasmos_ringbuf_used(const wasmos_ringbuf_t* rb) {
     uint32_t w = __atomic_load_n(&rb->hdr->write, __ATOMIC_ACQUIRE);
     uint32_t r = __atomic_load_n(&rb->hdr->read, __ATOMIC_ACQUIRE);
     return w - r; /* unsigned wrap is intentional and correct */
 }
 
-static inline uint32_t wasmos_ringbuf_free(const wasmos_ringbuf_t *rb) {
+static inline uint32_t wasmos_ringbuf_free(const wasmos_ringbuf_t* rb) {
     return rb->capacity - wasmos_ringbuf_used(rb);
 }
 
-static inline int32_t wasmos_ringbuf_is_empty(const wasmos_ringbuf_t *rb) {
+static inline int32_t wasmos_ringbuf_is_empty(const wasmos_ringbuf_t* rb) {
     return wasmos_ringbuf_used(rb) == 0u;
 }
 
-static inline int32_t wasmos_ringbuf_is_full(const wasmos_ringbuf_t *rb) {
+static inline int32_t wasmos_ringbuf_is_full(const wasmos_ringbuf_t* rb) {
     return wasmos_ringbuf_used(rb) == rb->capacity;
 }
 
 /* --- flags --- */
 
-static inline uint32_t wasmos_ringbuf_flags(const wasmos_ringbuf_t *rb) {
+static inline uint32_t wasmos_ringbuf_flags(const wasmos_ringbuf_t* rb) {
     return __atomic_load_n(&rb->hdr->flags, __ATOMIC_ACQUIRE);
 }
 
-static inline void
-wasmos_ringbuf_set_flags(wasmos_ringbuf_t *rb, uint32_t mask) {
+static inline void wasmos_ringbuf_set_flags(wasmos_ringbuf_t* rb, uint32_t mask) {
     __atomic_or_fetch(&rb->hdr->flags, mask, __ATOMIC_RELEASE);
 }
 
 /* --- internal copy helpers (wraparound-aware) --- */
 
-static inline void
-wasmos_ringbuf__store(wasmos_ringbuf_t *rb, uint32_t wpos,
-                      const uint8_t *src, uint32_t n) {
+static inline void wasmos_ringbuf__store(wasmos_ringbuf_t* rb, uint32_t wpos, const uint8_t* src,
+                                         uint32_t n) {
     uint32_t cap = rb->capacity;
     uint32_t off = wpos & (cap - 1u);
     uint32_t first = cap - off;
-    if (first > n) first = n;
+    if (first > n)
+        first = n;
     __builtin_memcpy(rb->data + off, src, first);
-    if (n > first) __builtin_memcpy(rb->data, src + first, n - first);
+    if (n > first)
+        __builtin_memcpy(rb->data, src + first, n - first);
 }
 
-static inline void
-wasmos_ringbuf__load(const wasmos_ringbuf_t *rb, uint32_t rpos,
-                     uint8_t *dst, uint32_t n) {
+static inline void wasmos_ringbuf__load(const wasmos_ringbuf_t* rb, uint32_t rpos, uint8_t* dst,
+                                        uint32_t n) {
     uint32_t cap = rb->capacity;
     uint32_t off = rpos & (cap - 1u);
     uint32_t first = cap - off;
-    if (first > n) first = n;
+    if (first > n)
+        first = n;
     __builtin_memcpy(dst, rb->data + off, first);
-    if (n > first) __builtin_memcpy(dst + first, rb->data, n - first);
+    if (n > first)
+        __builtin_memcpy(dst + first, rb->data, n - first);
 }
 
 /* --- producer: byte stream --- */
@@ -229,14 +236,13 @@ wasmos_ringbuf__load(const wasmos_ringbuf_t *rb, uint32_t rpos,
 /* Write up to `len` bytes; copies min(len, free) and returns that count (a
  * short write means the ring was near full — that IS the flow control). Does
  * not ring the doorbell; pair with wasmos_ringbuf_write or use _write_signal. */
-static inline uint32_t
-wasmos_ringbuf_write(wasmos_ringbuf_t *rb, const void *src, uint32_t len) {
+static inline uint32_t wasmos_ringbuf_write(wasmos_ringbuf_t* rb, const void* src, uint32_t len) {
     uint32_t w = __atomic_load_n(&rb->hdr->write, __ATOMIC_RELAXED); /* sole writer */
     uint32_t r = __atomic_load_n(&rb->hdr->read, __ATOMIC_ACQUIRE);
     uint32_t freeb = rb->capacity - (w - r);
     uint32_t n = (len < freeb) ? len : freeb;
     if (n != 0u) {
-        wasmos_ringbuf__store(rb, w, (const uint8_t *)src, n);
+        wasmos_ringbuf__store(rb, w, (const uint8_t*)src, n);
         __atomic_store_n(&rb->hdr->write, w + n, __ATOMIC_RELEASE);
     }
     return n;
@@ -246,14 +252,13 @@ wasmos_ringbuf_write(wasmos_ringbuf_t *rb, const void *src, uint32_t len) {
 
 /* Copy up to `len` bytes out and advance the read index; returns the count
  * copied (0 when empty). */
-static inline uint32_t
-wasmos_ringbuf_read(wasmos_ringbuf_t *rb, void *dst, uint32_t len) {
+static inline uint32_t wasmos_ringbuf_read(wasmos_ringbuf_t* rb, void* dst, uint32_t len) {
     uint32_t r = __atomic_load_n(&rb->hdr->read, __ATOMIC_RELAXED); /* sole reader */
     uint32_t w = __atomic_load_n(&rb->hdr->write, __ATOMIC_ACQUIRE);
     uint32_t used = w - r;
     uint32_t n = (len < used) ? len : used;
     if (n != 0u) {
-        wasmos_ringbuf__load(rb, r, (uint8_t *)dst, n);
+        wasmos_ringbuf__load(rb, r, (uint8_t*)dst, n);
         __atomic_store_n(&rb->hdr->read, r + n, __ATOMIC_RELEASE);
     }
     return n;
@@ -261,24 +266,24 @@ wasmos_ringbuf_read(wasmos_ringbuf_t *rb, void *dst, uint32_t len) {
 
 /* Copy up to `len` bytes out WITHOUT advancing the read index; returns the
  * count copied. Useful to inspect a length prefix before committing. */
-static inline uint32_t
-wasmos_ringbuf_peek(const wasmos_ringbuf_t *rb, void *dst, uint32_t len) {
+static inline uint32_t wasmos_ringbuf_peek(const wasmos_ringbuf_t* rb, void* dst, uint32_t len) {
     uint32_t r = __atomic_load_n(&rb->hdr->read, __ATOMIC_RELAXED);
     uint32_t w = __atomic_load_n(&rb->hdr->write, __ATOMIC_ACQUIRE);
     uint32_t used = w - r;
     uint32_t n = (len < used) ? len : used;
-    if (n != 0u) wasmos_ringbuf__load(rb, r, (uint8_t *)dst, n);
+    if (n != 0u)
+        wasmos_ringbuf__load(rb, r, (uint8_t*)dst, n);
     return n;
 }
 
 /* Discard up to `len` bytes from the front; returns the count skipped. */
-static inline uint32_t
-wasmos_ringbuf_skip(wasmos_ringbuf_t *rb, uint32_t len) {
+static inline uint32_t wasmos_ringbuf_skip(wasmos_ringbuf_t* rb, uint32_t len) {
     uint32_t r = __atomic_load_n(&rb->hdr->read, __ATOMIC_RELAXED);
     uint32_t w = __atomic_load_n(&rb->hdr->write, __ATOMIC_ACQUIRE);
     uint32_t used = w - r;
     uint32_t n = (len < used) ? len : used;
-    if (n != 0u) __atomic_store_n(&rb->hdr->read, r + n, __ATOMIC_RELEASE);
+    if (n != 0u)
+        __atomic_store_n(&rb->hdr->read, r + n, __ATOMIC_RELEASE);
     return n;
 }
 
@@ -290,15 +295,16 @@ wasmos_ringbuf_skip(wasmos_ringbuf_t *rb, uint32_t len) {
  * the full payload behind it). Returns `len` on success, or -1 if the record
  * (4 + len bytes) does not currently fit — the caller retries or drops. A
  * record larger than the ring capacity can never fit and always returns -1. */
-static inline int32_t
-wasmos_ringbuf_write_record(wasmos_ringbuf_t *rb, const void *src,
-                            uint32_t len) {
+static inline int32_t wasmos_ringbuf_write_record(wasmos_ringbuf_t* rb, const void* src,
+                                                  uint32_t len) {
     uint32_t need = len + 4u;
-    if (need < len) return -1; /* length overflow */
+    if (need < len)
+        return -1; /* length overflow */
     uint32_t w = __atomic_load_n(&rb->hdr->write, __ATOMIC_RELAXED);
     uint32_t r = __atomic_load_n(&rb->hdr->read, __ATOMIC_ACQUIRE);
     uint32_t freeb = rb->capacity - (w - r);
-    if (need > freeb) return -1;
+    if (need > freeb)
+        return -1;
 
     uint8_t hdr[4];
     hdr[0] = (uint8_t)(len & 0xFFu);
@@ -306,7 +312,8 @@ wasmos_ringbuf_write_record(wasmos_ringbuf_t *rb, const void *src,
     hdr[2] = (uint8_t)((len >> 16) & 0xFFu);
     hdr[3] = (uint8_t)((len >> 24) & 0xFFu);
     wasmos_ringbuf__store(rb, w, hdr, 4u);
-    if (len != 0u) wasmos_ringbuf__store(rb, w + 4u, (const uint8_t *)src, len);
+    if (len != 0u)
+        wasmos_ringbuf__store(rb, w + 4u, (const uint8_t*)src, len);
     __atomic_store_n(&rb->hdr->write, w + need, __ATOMIC_RELEASE);
     return (int32_t)len;
 }
@@ -314,13 +321,15 @@ wasmos_ringbuf_write_record(wasmos_ringbuf_t *rb, const void *src,
 /* Peek the length of the record at the front without consuming it. Returns 1
  * and sets *out_len when a full length prefix is present, 0 when fewer than 4
  * bytes are queued. (A published prefix implies its payload is present.) */
-static inline int32_t
-wasmos_ringbuf_peek_record_len(const wasmos_ringbuf_t *rb, uint32_t *out_len) {
+static inline int32_t wasmos_ringbuf_peek_record_len(const wasmos_ringbuf_t* rb,
+                                                     uint32_t* out_len) {
     uint8_t hdr[4];
-    if (wasmos_ringbuf_peek(rb, hdr, 4u) != 4u) return 0;
-    uint32_t len = (uint32_t)hdr[0] | ((uint32_t)hdr[1] << 8) |
-                   ((uint32_t)hdr[2] << 16) | ((uint32_t)hdr[3] << 24);
-    if (out_len) *out_len = len;
+    if (wasmos_ringbuf_peek(rb, hdr, 4u) != 4u)
+        return 0;
+    uint32_t len = (uint32_t)hdr[0] | ((uint32_t)hdr[1] << 8) | ((uint32_t)hdr[2] << 16) |
+                   ((uint32_t)hdr[3] << 24);
+    if (out_len)
+        *out_len = len;
     return 1;
 }
 
@@ -331,26 +340,31 @@ wasmos_ringbuf_peek_record_len(const wasmos_ringbuf_t *rb, uint32_t *out_len) {
  *        consumed; *out_len untouched),
  *   -2 : record does not fit in `max` (nothing consumed; *out_len is set to the
  *        record length so the caller can grow its buffer and retry). */
-static inline int32_t
-wasmos_ringbuf_read_record(wasmos_ringbuf_t *rb, void *dst, uint32_t max,
-                           uint32_t *out_len) {
+static inline int32_t wasmos_ringbuf_read_record(wasmos_ringbuf_t* rb, void* dst, uint32_t max,
+                                                 uint32_t* out_len) {
     uint32_t len = 0u;
-    if (!wasmos_ringbuf_peek_record_len(rb, &len)) return -1;
+    if (!wasmos_ringbuf_peek_record_len(rb, &len))
+        return -1;
     /* Reject a corrupt/oversized length prefix WITHOUT over-reading (mutual
      * distrust: the peer owns its side of a shared ring). `need` overflowing
      * (len near UINT32_MAX) or exceeding capacity means no legitimate producer
      * could have published this record — write_record caps need at free <=
      * capacity. Do not report the bogus length to the caller. */
     uint32_t need = len + 4u;
-    if (need < 4u || need > rb->capacity) return -1;
+    if (need < 4u || need > rb->capacity)
+        return -1;
     /* Whole record must be present (a correct producer publishes it atomically,
      * so this only trips on a truncated/forged stream). */
-    if (wasmos_ringbuf_used(rb) < need) return -1;
-    if (out_len) *out_len = len;
-    if (len > max) return -2;
+    if (wasmos_ringbuf_used(rb) < need)
+        return -1;
+    if (out_len)
+        *out_len = len;
+    if (len > max)
+        return -2;
 
     (void)wasmos_ringbuf_skip(rb, 4u);
-    if (len != 0u) (void)wasmos_ringbuf_read(rb, dst, len);
+    if (len != 0u)
+        (void)wasmos_ringbuf_read(rb, dst, len);
     return (int32_t)len;
 }
 
@@ -365,23 +379,23 @@ wasmos_ringbuf_read_record(wasmos_ringbuf_t *rb, void *dst, uint32_t max,
 
 /* write() a byte run and ring the doorbell if this write took the ring from
  * empty to non-empty. Returns bytes written. */
-static inline uint32_t
-wasmos_ringbuf_write_signal(wasmos_ringbuf_t *rb, const void *src,
-                            uint32_t len) {
+static inline uint32_t wasmos_ringbuf_write_signal(wasmos_ringbuf_t* rb, const void* src,
+                                                   uint32_t len) {
     uint32_t before = wasmos_ringbuf_used(rb);
     uint32_t n = wasmos_ringbuf_write(rb, src, len);
-    if (before == 0u && n != 0u && rb->notify) rb->notify(rb->notify_user);
+    if (before == 0u && n != 0u && rb->notify)
+        rb->notify(rb->notify_user);
     return n;
 }
 
 /* write_record() and ring the doorbell on the empty->non-empty edge. Returns
  * the _write_record result (len, or -1 when the record does not fit). */
-static inline int32_t
-wasmos_ringbuf_write_record_signal(wasmos_ringbuf_t *rb, const void *src,
-                                   uint32_t len) {
+static inline int32_t wasmos_ringbuf_write_record_signal(wasmos_ringbuf_t* rb, const void* src,
+                                                         uint32_t len) {
     uint32_t before = wasmos_ringbuf_used(rb);
     int32_t rc = wasmos_ringbuf_write_record(rb, src, len);
-    if (before == 0u && rc >= 0 && rb->notify) rb->notify(rb->notify_user);
+    if (before == 0u && rc >= 0 && rb->notify)
+        rb->notify(rb->notify_user);
     return rc;
 }
 

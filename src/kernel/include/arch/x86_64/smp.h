@@ -24,68 +24,68 @@
 
 typedef struct cpu_local {
     /* Self-pointer at offset 0 — read via GS:0 for lock-free per-CPU access. */
-    struct cpu_local    *self;
+    struct cpu_local* self;
 
     /* CPU identity */
-    uint32_t             cpu_id;    /* logical index 0..N-1 */
-    uint32_t             apic_id;   /* hardware LAPIC ID from MADT */
+    uint32_t cpu_id;  /* logical index 0..N-1 */
+    uint32_t apic_id; /* hardware LAPIC ID from MADT */
 
     /* Startup synchronisation: AP sets to 1 after full per-CPU init. */
-    volatile uint8_t     started;
+    volatile uint8_t started;
 
     /* Set to 1 while context_switch / context_switch_to are executing on this
      * CPU.  Used by process_preempt_from_irq to suppress timer preemption
      * while register state is mid-save/restore.  Sits in the natural padding
      * byte after started so cpu_local_t layout is unchanged from GDT onward. */
-    volatile uint8_t     in_context_switch;
+    volatile uint8_t in_context_switch;
 
     /* Per-CPU x86 descriptor tables.
      * Interrupt stacks (IST1 / RSP0) are separate per-CPU allocations whose
      * base addresses are stored in cpu->tss.ist1 / cpu->tss.rsp0.  For the
      * BSP these are static arrays in cpu_x86_64.c; for APs they are allocated
      * at SMP bring-up time. */
-    uint64_t    gdt[GDT_ENTRY_COUNT];
-    tss_t       tss;
+    uint64_t gdt[GDT_ENTRY_COUNT];
+    tss_t tss;
 
     /* Scheduler state (previously file-static globals in process.c). */
-    process_t         *current_process;
-    thread_t          *current_thread;
-    uint32_t           preempt_disable_count;
-    uint32_t           pm_preempt_safe_depth;
-    volatile uint8_t   in_scheduler;
+    process_t* current_process;
+    thread_t* current_thread;
+    uint32_t preempt_disable_count;
+    uint32_t pm_preempt_safe_depth;
+    volatile uint8_t in_scheduler;
 
     /* Per-CPU IRQ-disable nesting (moved from spinlock.c globals for SMP safety). */
-    volatile uint32_t  irq_disable_depth;
-    uint64_t           irq_saved_flags;
+    volatile uint32_t irq_disable_depth;
+    uint64_t irq_saved_flags;
 
     /* Per-CPU ready queues (one FIFO per priority level).
      * Threads are enqueued on the waking CPU's sched, giving IPC callers and
      * their receivers cache-local scheduling without cross-CPU queue traffic. */
-    cpu_sched_t        sched;
+    cpu_sched_t sched;
 
     /* Cumulative count of threads successfully stolen from other CPUs. */
-    uint32_t           steal_count;
+    uint32_t steal_count;
 
     /* Cumulative count of threads dispatched by this CPU (context switches
      * out of the scheduler).  Monotonically increasing; never reset. */
-    uint32_t           dispatch_count;
+    uint32_t dispatch_count;
 
     /* PID of the last process dispatched by this CPU.  Set on dispatch and
      * never cleared, so it remains visible when the CPU is between threads. */
-    uint32_t           last_dispatched_pid;
+    uint32_t last_dispatched_pid;
 
     /* Scheduler context — saved here on every context switch so concurrent CPUs
      * cannot clobber each other's return frame (was a shared global g_sched_ctx). */
-    process_context_t  sched_ctx;
+    process_context_t sched_ctx;
 
     /* Per-CPU reschedule flag and watchdog state (formerly file-static globals). */
-    volatile uint8_t   need_resched;
-    uint32_t           current_pid;
-    uint64_t           resched_pending_since_tick;
-    uint64_t           resched_stall_reports;
+    volatile uint8_t need_resched;
+    uint32_t current_pid;
+    uint64_t resched_pending_since_tick;
+    uint64_t resched_stall_reports;
 
     /* Round-robin scheduling hint and last-run classification (per-CPU). */
-    uint32_t           last_index;
+    uint32_t last_index;
     process_run_result_t last_run_result;
 
     /* Per-CPU wasm3 heap PID override.  wasm3_heap_bind_pid() sets this so
@@ -93,13 +93,13 @@ typedef struct cpu_local {
      * process's heap regardless of which process is currently scheduled.
      * Making it per-CPU prevents an AP loading a driver from diverting
      * another CPU's malloc to the wrong heap slot. */
-    uint32_t           wasm3_heap_bound_pid;
+    uint32_t wasm3_heap_bound_pid;
 
     /* Per-CPU idle thread: dispatched only when the ready queue is empty.
      * Set by process_spawn_idle (BSP) and process_spawn_idle_ap (APs).
      * Never placed in the global ready queue; always dispatched via the
      * cpu_sched_pick_next fallback path. */
-    thread_t          *idle_thread;
+    thread_t* idle_thread;
 } cpu_local_t;
 
 /* context_switch.S encodes this offset as CPU_LOCAL_IN_CONTEXT_SWITCH_OFFSET.
@@ -108,7 +108,7 @@ _Static_assert(offsetof(cpu_local_t, in_context_switch) == 17,
                "cpu_local_t in_context_switch offset changed; update context_switch.S");
 
 extern cpu_local_t g_cpus[WASMOS_MAX_CPUS];
-extern uint32_t    g_cpu_count;   /* CPUs discovered in MADT; always >= 1 */
+extern uint32_t g_cpu_count; /* CPUs discovered in MADT; always >= 1 */
 
 /*
  * Return a pointer to the calling CPU's cpu_local_t.
@@ -117,23 +117,21 @@ extern uint32_t    g_cpu_count;   /* CPUs discovered in MADT; always >= 1 */
  * Non-SMP build: always &g_cpus[0], no GS dependency.
  */
 #if WASMOS_SMP
-static inline cpu_local_t *
-cpu_local(void)
-{
-    cpu_local_t *p;
+static inline cpu_local_t* cpu_local(void) {
+    cpu_local_t* p;
     __asm__ volatile("mov %%gs:0, %0" : "=r"(p));
     return p;
 }
 #else
-static inline cpu_local_t *
-cpu_local(void)
-{
+static inline cpu_local_t* cpu_local(void) {
     return &g_cpus[0];
 }
 #endif
 
 /* Return the calling CPU's scheduler state. */
-static inline cpu_sched_t *cpu_sched(void) { return &cpu_local()->sched; }
+static inline cpu_sched_t* cpu_sched(void) {
+    return &cpu_local()->sched;
+}
 
 /*
  * SMP init API.  Both functions are no-ops in a non-SMP build.
@@ -149,6 +147,6 @@ void smp_init(void);
 void smp_cpus_up(void);
 void smp_ap_c_entry(uint32_t cpu_id);
 #else
-static inline void smp_init(void)    {}
+static inline void smp_init(void) {}
 static inline void smp_cpus_up(void) {}
 #endif

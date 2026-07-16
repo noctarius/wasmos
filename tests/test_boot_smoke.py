@@ -36,7 +36,9 @@ class BootSmokeTest(unittest.TestCase):
         self.assertTrue(ok, "CLI prompt not reached")
         # Accept any IRQ-init marker; check accumulated buffer so we don't
         # need sequential expects that can race past the right marker.
-        irq_ok = (b"[irq] pic remapped" in self.session.buf
-                  or b"[ioapic] init ok" in self.session.buf
-                  or b"[kernel] interrupts on" in self.session.buf)
+        irq_ok = (
+            b"[irq] pic remapped" in self.session.buf
+            or b"[ioapic] init ok" in self.session.buf
+            or b"[kernel] interrupts on" in self.session.buf
+        )
         self.assertTrue(irq_ok, "IRQ init marker not observed")

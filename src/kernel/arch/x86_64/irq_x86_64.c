@@ -46,49 +46,41 @@ static uint8_t g_pic_mask1 = 0xFF;
 static uint8_t g_pic_mask2 = 0xFF;
 #endif
 
-static inline uintptr_t irq_alias_ptr(uintptr_t p)
-{
+static inline uintptr_t irq_alias_ptr(uintptr_t p) {
     if (serial_high_alias_enabled() && (uint64_t)p < KERNEL_HIGHER_HALF_BASE) {
         p = (uintptr_t)((uint64_t)p + KERNEL_HIGHER_HALF_BASE);
     }
     return p;
 }
 
-static inline irq_route_t *irq_routes_ptr(void)
-{
-    return (irq_route_t *)(void *)irq_alias_ptr((uintptr_t)&g_irq_routes[0]);
+static inline irq_route_t* irq_routes_ptr(void) {
+    return (irq_route_t*)(void*)irq_alias_ptr((uintptr_t)&g_irq_routes[0]);
 }
 
 #if WASMOS_IRQ_MODE <= 1
-static inline uint8_t *pic_mask1_slot(void)
-{
-    return (uint8_t *)(void *)irq_alias_ptr((uintptr_t)&g_pic_mask1);
+static inline uint8_t* pic_mask1_slot(void) {
+    return (uint8_t*)(void*)irq_alias_ptr((uintptr_t)&g_pic_mask1);
 }
 
-static inline uint8_t *pic_mask2_slot(void)
-{
-    return (uint8_t *)(void *)irq_alias_ptr((uintptr_t)&g_pic_mask2);
+static inline uint8_t* pic_mask2_slot(void) {
+    return (uint8_t*)(void*)irq_alias_ptr((uintptr_t)&g_pic_mask2);
 }
 #endif
 
-void x86_irq_iret_corrupt(const uint64_t *saved, const uint64_t *current) {
+void x86_irq_iret_corrupt(const uint64_t* saved, const uint64_t* current) {
     serial_write("[irq] iret frame corrupt\n");
     if (!saved || !current) {
         kpanic("irq iret frame corrupt (invalid ptr)", 0ULL, 0ULL);
     }
-    serial_printf(
-        "[irq] saved rip=%016llx\n"
-        "[irq] saved cs=%016llx\n"
-        "[irq] saved rflags=%016llx\n"
-        "[irq] current rip=%016llx\n"
-        "[irq] current cs=%016llx\n"
-        "[irq] current rflags=%016llx\n",
-        (unsigned long long)saved[0],
-        (unsigned long long)saved[1],
-        (unsigned long long)saved[2],
-        (unsigned long long)current[0],
-        (unsigned long long)current[1],
-        (unsigned long long)current[2]);
+    serial_printf("[irq] saved rip=%016llx\n"
+                  "[irq] saved cs=%016llx\n"
+                  "[irq] saved rflags=%016llx\n"
+                  "[irq] current rip=%016llx\n"
+                  "[irq] current cs=%016llx\n"
+                  "[irq] current rflags=%016llx\n",
+                  (unsigned long long)saved[0], (unsigned long long)saved[1],
+                  (unsigned long long)saved[2], (unsigned long long)current[0],
+                  (unsigned long long)current[1], (unsigned long long)current[2]);
     /* Corrupt return frame — unrecoverable. a=saved rip, b=current rip. */
     kpanic("irq_iret_frame_corrupt", saved[0], current[0]);
 }
@@ -172,7 +164,7 @@ static void irq_send_eoi(uint32_t irq_line) {
 }
 
 void x86_irq_init(void) {
-    irq_route_t *routes = irq_routes_ptr();
+    irq_route_t* routes = irq_routes_ptr();
     for (uint32_t i = 0; i < IRQ_COUNT; ++i) {
         routes[i].in_use = 0;
         routes[i].owner_context_id = 0;
@@ -187,8 +179,8 @@ void x86_irq_init(void) {
  * the PIC is disabled later by lapic_init() so no remap is needed.
  */
 #if WASMOS_IRQ_MODE <= 1
-    uint8_t *mask1_slot = pic_mask1_slot();
-    uint8_t *mask2_slot = pic_mask2_slot();
+    uint8_t* mask1_slot = pic_mask1_slot();
+    uint8_t* mask2_slot = pic_mask2_slot();
 
     /* Preserve the pre-existing mask state across the PIC remap so only the
      * lines we explicitly unmask later become active. */
@@ -224,8 +216,8 @@ int x86_irq_mask(uint32_t irq_line) {
         return -1;
     }
 #if WASMOS_IRQ_MODE <= 1
-    uint8_t *mask1_slot = pic_mask1_slot();
-    uint8_t *mask2_slot = pic_mask2_slot();
+    uint8_t* mask1_slot = pic_mask1_slot();
+    uint8_t* mask2_slot = pic_mask2_slot();
     if (irq_line < 8) {
         *mask1_slot |= (uint8_t)(1u << irq_line);
     } else {
@@ -243,8 +235,8 @@ int x86_irq_unmask(uint32_t irq_line) {
         return -1;
     }
 #if WASMOS_IRQ_MODE <= 1
-    uint8_t *mask1_slot = pic_mask1_slot();
-    uint8_t *mask2_slot = pic_mask2_slot();
+    uint8_t* mask1_slot = pic_mask1_slot();
+    uint8_t* mask2_slot = pic_mask2_slot();
     if (irq_line < 8) {
         *mask1_slot &= (uint8_t)~(1u << irq_line);
     } else {
@@ -277,7 +269,7 @@ int x86_irq_configure(uint32_t irq_line, uint32_t flags) {
     return 0;
 }
 
-void x86_irq_late_init(const boot_info_t *boot_info) {
+void x86_irq_late_init(const boot_info_t* boot_info) {
 #if WASMOS_IRQ_MODE == 2
     ioapic_init(boot_info);
 #else
@@ -285,9 +277,8 @@ void x86_irq_late_init(const boot_info_t *boot_info) {
 #endif
 }
 
-int x86_irq_register(uint32_t context_id, uint32_t irq_line, uint32_t endpoint)
-{
-    irq_route_t *routes = irq_routes_ptr();
+int x86_irq_register(uint32_t context_id, uint32_t irq_line, uint32_t endpoint) {
+    irq_route_t* routes = irq_routes_ptr();
     if (irq_line >= IRQ_COUNT || endpoint == IPC_ENDPOINT_NONE) {
         return -1;
     }
@@ -308,13 +299,12 @@ int x86_irq_register(uint32_t context_id, uint32_t irq_line, uint32_t endpoint)
     return 0;
 }
 
-int x86_irq_ack(uint32_t context_id, uint32_t irq_line)
-{
-    irq_route_t *routes = irq_routes_ptr();
+int x86_irq_ack(uint32_t context_id, uint32_t irq_line) {
+    irq_route_t* routes = irq_routes_ptr();
     if (irq_line >= IRQ_COUNT) {
         return -1;
     }
-    irq_route_t *route = &routes[irq_line];
+    irq_route_t* route = &routes[irq_line];
     if (!route->in_use || route->owner_context_id != context_id) {
         return -1;
     }
@@ -322,12 +312,12 @@ int x86_irq_ack(uint32_t context_id, uint32_t irq_line)
 }
 
 int x86_irq_unregister(uint32_t context_id, uint32_t irq_line) {
-    irq_route_t *routes = irq_routes_ptr();
+    irq_route_t* routes = irq_routes_ptr();
     if (irq_line >= IRQ_COUNT) {
         return -1;
     }
 
-    irq_route_t *route = &routes[irq_line];
+    irq_route_t* route = &routes[irq_line];
     if (!route->in_use) {
         return -1;
     }
@@ -342,7 +332,7 @@ int x86_irq_unregister(uint32_t context_id, uint32_t irq_line) {
 }
 
 void x86_irq_handler(uint64_t vector) {
-    irq_route_t *routes = irq_routes_ptr();
+    irq_route_t* routes = irq_routes_ptr();
     if (vector < IRQ_VECTOR_BASE || vector >= (IRQ_VECTOR_BASE + IRQ_COUNT)) {
         return;
     }
@@ -362,7 +352,7 @@ void x86_irq_handler(uint64_t vector) {
     }
 #endif
 
-    irq_route_t *route = &routes[irq_line];
+    irq_route_t* route = &routes[irq_line];
     /* IRQ0 is special because it drives scheduler accounting before any routed
      * notification endpoints are serviced. */
     if (irq_line == 0) {
@@ -392,7 +382,7 @@ void x86_irq_handler(uint64_t vector) {
     irq_send_eoi(irq_line);
 }
 
-void x86_timer_irq_handler(irq_frame_t *frame) {
+void x86_timer_irq_handler(irq_frame_t* frame) {
     static uint8_t logged;
     if (WASMOS_TRACE && !logged) {
         logged = 1;

@@ -39,7 +39,9 @@ class ShmemGrantRevokeE2ETest(unittest.TestCase):
                 )
         ok = self.session.expect_from(mark, b"wamos> ", timeout_s=timeout_s)
         if not ok:
-            self.fail(f"Prompt not found after '{cmd}'.\n--- tail ---\n{self.session.tail()}\n")
+            self.fail(
+                f"Prompt not found after '{cmd}'.\n--- tail ---\n{self.session.tail()}\n"
+            )
 
     def _exec_expect(self, cmd: str, timeout_s: int = 30, retries: int = 3) -> None:
         last_tail = b""
@@ -50,9 +52,13 @@ class ShmemGrantRevokeE2ETest(unittest.TestCase):
             if ok:
                 return
             last_tail = self.session.tail()
-        self.fail(f"Prompt not found after '{cmd}' within {retries} retries\n--- tail ---\n{last_tail}\n")
+        self.fail(
+            f"Prompt not found after '{cmd}' within {retries} retries\n--- tail ---\n{last_tail}\n"
+        )
 
-    def _expect_markers_from(self, mark: int, needles: list[bytes], timeout_s: int = 60) -> None:
+    def _expect_markers_from(
+        self, mark: int, needles: list[bytes], timeout_s: int = 60
+    ) -> None:
         for needle in needles:
             ok = self.session.expect_from(mark, needle, timeout_s=timeout_s)
             if not ok:

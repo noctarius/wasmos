@@ -31,7 +31,9 @@ class PreemptSmokeTests(unittest.TestCase):
     def test_preempt_marker(self):
         ok = self.session.expect(b"[test] preempt ok", timeout_s=20)
         if not ok:
-            self.fail(f"Preempt marker not found.\n--- tail ---\n{self.session.tail()}\n")
+            self.fail(
+                f"Preempt marker not found.\n--- tail ---\n{self.session.tail()}\n"
+            )
 
 
 if __name__ == "__main__":

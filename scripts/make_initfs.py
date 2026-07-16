@@ -5,7 +5,6 @@ import pathlib
 import struct
 import tomllib
 
-
 INITFS_MAGIC = b"WMINITFS"
 INITFS_VERSION = 1
 INITFS_HEADER_STRUCT = struct.Struct("<8sHHIIII")
@@ -82,7 +81,7 @@ def build_initfs(manifest: dict, build_dir: pathlib.Path) -> bytes:
     initfs[0:header_size] = header
     offset = header_size
     for packed_entry in packed_entries:
-        initfs[offset:offset + entry_size] = packed_entry
+        initfs[offset : offset + entry_size] = packed_entry
         offset += entry_size
 
     return bytes(initfs)

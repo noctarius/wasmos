@@ -23,7 +23,9 @@ fn main(_args: &[&str]) -> i32 {
                 if file.write(CONTENT).ok() == Some(CONTENT.len()) && file.close().is_ok() {
                     let mut buffer = [0u8; 32];
                     if let Ok(read_file) = wasmos::fs::open_read(PATH) {
-                        if read_file.read(&mut buffer).ok() == Some(CONTENT.len()) && read_file.close().is_ok() {
+                        if read_file.read(&mut buffer).ok() == Some(CONTENT.len())
+                            && read_file.close().is_ok()
+                        {
                             file_ok = &buffer[..CONTENT.len()] == CONTENT;
                         }
                     }

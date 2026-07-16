@@ -10,9 +10,9 @@
 #include <stdint.h>
 
 /* Allocate size bytes (8-byte aligned).  Returns NULL on failure. */
-void *kmem_alloc(size_t size);
+void* kmem_alloc(size_t size);
 
 /* Free a pointer previously returned by kmem_alloc (NULL is ignored). */
-void kmem_free(void *ptr);
+void kmem_free(void* ptr);
 
 #endif

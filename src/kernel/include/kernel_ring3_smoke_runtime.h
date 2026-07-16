@@ -10,11 +10,12 @@
 void kernel_shmem_owner_isolation_test(uint32_t owner_context_id, uint32_t foreign_context_id);
 
 /* Run a matrix of shared memory misuse scenarios; ring3_mode gates ring-3-specific paths. */
-void kernel_shmem_misuse_matrix_test(uint32_t owner_context_id, uint32_t foreign_context_id, uint8_t ring3_mode);
+void kernel_shmem_misuse_matrix_test(uint32_t owner_context_id, uint32_t foreign_context_id,
+                                     uint8_t ring3_mode);
 
 void kernel_ring3_shmem_isolation_test(uint32_t owner_context_id, uint32_t foreign_context_id);
 
 /* Spawn a ring-3 smoke process under parent_pid; writes *out_pid on success. */
-int kernel_ring3_spawn_smoke_process(uint32_t parent_pid, uint32_t *out_pid);
+int kernel_ring3_spawn_smoke_process(uint32_t parent_pid, uint32_t* out_pid);
 
 #endif

@@ -34,23 +34,24 @@ typedef struct {
 } ipc_message_t;
 
 void ipc_init(void);
-int ipc_endpoint_create(uint32_t owner_context_id, uint32_t *out_endpoint);
-int ipc_notification_create(uint32_t owner_context_id, uint32_t *out_endpoint);
-int ipc_endpoint_owner(uint32_t endpoint, uint32_t *out_owner_context_id);
-int ipc_endpoint_count(uint32_t endpoint, uint32_t *out_count);
-int ipc_send_from(uint32_t sender_context_id, uint32_t endpoint, const ipc_message_t *message);
-int ipc_recv_for(uint32_t receiver_context_id, uint32_t endpoint, ipc_message_t *out_message);
+int ipc_endpoint_create(uint32_t owner_context_id, uint32_t* out_endpoint);
+int ipc_notification_create(uint32_t owner_context_id, uint32_t* out_endpoint);
+int ipc_endpoint_owner(uint32_t endpoint, uint32_t* out_owner_context_id);
+int ipc_endpoint_count(uint32_t endpoint, uint32_t* out_count);
+int ipc_send_from(uint32_t sender_context_id, uint32_t endpoint, const ipc_message_t* message);
+int ipc_recv_for(uint32_t receiver_context_id, uint32_t endpoint, ipc_message_t* out_message);
 /*
  * ipc_recv_blocking_for — like ipc_recv_for but blocks via sched_event_wait.
  * Use for callers that want to sleep until a message arrives (e.g. WASM host
  * ipc_recv, kernel_init_runtime).
  * On spurious wake returns IPC_EMPTY; caller should retry.
  */
-int ipc_recv_blocking_for(uint32_t receiver_context_id, uint32_t endpoint, ipc_message_t *out_message);
+int ipc_recv_blocking_for(uint32_t receiver_context_id, uint32_t endpoint,
+                          ipc_message_t* out_message);
 int ipc_notify_from(uint32_t sender_context_id, uint32_t endpoint);
 int ipc_wait_for(uint32_t receiver_context_id, uint32_t endpoint);
-int ipc_send(uint32_t endpoint, const ipc_message_t *message);
-int ipc_recv(uint32_t endpoint, ipc_message_t *out_message);
+int ipc_send(uint32_t endpoint, const ipc_message_t* message);
+int ipc_recv(uint32_t endpoint, ipc_message_t* out_message);
 int ipc_notify(uint32_t endpoint);
 int ipc_wait(uint32_t endpoint);
 void ipc_endpoints_release_owner(uint32_t owner_context_id);
@@ -63,26 +64,24 @@ void ipc_endpoints_release_owner(uint32_t owner_context_id);
  * ready, then returns the ready endpoint ID.  The caller then calls
  * ipc_recv_for / ipc_wait_for to consume the payload.
  */
-int ipc_select_create(uint32_t owner_context_id, uint32_t *out_select_id);
-int ipc_select_add(uint32_t select_id, uint32_t endpoint_id,
-                   uint32_t owner_context_id);
+int ipc_select_create(uint32_t owner_context_id, uint32_t* out_select_id);
+int ipc_select_add(uint32_t select_id, uint32_t endpoint_id, uint32_t owner_context_id);
 /* Block until a watched endpoint is ready, or timeout_ms elapses (0 = forever).
  * On timeout returns IPC_EMPTY. */
-int ipc_select_wait(uint32_t select_id, uint32_t owner_context_id,
-                    uint32_t *out_ready_ep, uint32_t timeout_ms);
+int ipc_select_wait(uint32_t select_id, uint32_t owner_context_id, uint32_t* out_ready_ep,
+                    uint32_t timeout_ms);
 /* Create a select set watching endpoints[0..count). */
-int ipc_select_listen(uint32_t owner_context_id, const uint32_t *endpoints,
-                      uint32_t count, uint32_t *out_select_id);
+int ipc_select_listen(uint32_t owner_context_id, const uint32_t* endpoints, uint32_t count,
+                      uint32_t* out_select_id);
 /* Block until a watched endpoint has a message (or timeout_ms elapses; 0 =
  * forever), then dequeue it. Returns IPC_OK / IPC_EMPTY (spurious, timeout, or
  * lost race; loop) / error. */
-int ipc_select_recv(uint32_t select_id, uint32_t owner_context_id,
-                    uint32_t *out_endpoint, ipc_message_t *out_message,
-                    uint32_t timeout_ms);
+int ipc_select_recv(uint32_t select_id, uint32_t owner_context_id, uint32_t* out_endpoint,
+                    ipc_message_t* out_message, uint32_t timeout_ms);
 void ipc_select_destroy(uint32_t select_id, uint32_t owner_context_id);
 
 struct ipc_select;
 /* Called by poll_notify to signal a select set from the sender side. */
-void ipc_select_signal(struct ipc_select *sel, uint32_t ep_id);
+void ipc_select_signal(struct ipc_select* sel, uint32_t ep_id);
 
 #endif

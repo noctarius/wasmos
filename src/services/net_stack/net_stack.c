@@ -21,14 +21,14 @@
 
 /* The api table captured at initialize() time. Read by port.c (sys_now,
  * lwip_port_rand) and net_stack_lwip_diag(). NULL until initialize() runs. */
-static wasmos_driver_api_t *g_api = NULL;
+static wasmos_driver_api_t* g_api = NULL;
 
-wasmos_driver_api_t *net_stack_api(void) {
+wasmos_driver_api_t* net_stack_api(void) {
     return g_api;
 }
 
 /* Minimal string length for the raw diag path below. */
-static int ns_strlen(const char *s) {
+static int ns_strlen(const char* s) {
     int n = 0;
     while (s != NULL && s[n] != '\0') {
         n++;
@@ -42,7 +42,7 @@ static int ns_strlen(const char *s) {
  * milestone exercises no code paths that emit formatted lwIP diagnostics.
  * TODO(net_stack): route through a real minimal vprintf once the netif step
  * needs formatted diagnostics. */
-void net_stack_lwip_diag(const char *fmt, ...) {
+void net_stack_lwip_diag(const char* fmt, ...) {
     (void)0;
     if (g_api != NULL && g_api->console_write != NULL && fmt != NULL) {
         g_api->console_write(fmt, ns_strlen(fmt));
@@ -56,15 +56,13 @@ void net_stack_lwip_diag(const char *fmt, ...) {
 /* Native service entry. Signature/ABI match gfx_compositor's initialize():
  *   int initialize(wasmos_driver_api_t *api, int module_count, int, int)
  * The loader jumps here via ELF e_entry (-e initialize). */
-int initialize(wasmos_driver_api_t *driver_api, int module_count,
-               int arg2, int arg3) {
+int initialize(wasmos_driver_api_t* driver_api, int module_count, int arg2, int arg3) {
     (void)module_count;
     (void)arg2;
     (void)arg3;
 
     g_api = driver_api;
-    if (driver_api == NULL ||
-        driver_api->abi_magic != WASMOS_NATIVE_ABI_MAGIC ||
+    if (driver_api == NULL || driver_api->abi_magic != WASMOS_NATIVE_ABI_MAGIC ||
         driver_api->abi_version != WASMOS_NATIVE_ABI_VERSION) {
         return -2;
     }

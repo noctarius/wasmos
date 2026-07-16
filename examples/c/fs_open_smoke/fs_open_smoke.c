@@ -3,10 +3,8 @@
 #include "sys/stat.h"
 #include "unistd.h"
 #include "wasmos/api.h"
-int
-main(int argc, char **argv)
-{
-    FILE *file;
+int main(int argc, char** argv) {
+    FILE* file;
     char buffer[128];
     char tail[18];
     size_t count;
@@ -35,16 +33,11 @@ main(int argc, char **argv)
         return 1;
     }
 
-    if (ftell(file) != 0L ||
-        fseek(file, 512L, SEEK_SET) != 0 ||
-        ftell(file) != 512L ||
+    if (ftell(file) != 0L || fseek(file, 512L, SEEK_SET) != 0 || ftell(file) != 512L ||
         fread(buffer, 1u, 24u, file) != 24u ||
-        memcmp(buffer, " FAT chain walking.\nWASM", 24u) != 0 ||
-        fseek(file, -18L, SEEK_END) != 0 ||
-        ftell(file) != 6840L ||
-        fread(tail, 1u, sizeof(tail), file) != sizeof(tail) ||
-        memcmp(tail, "END-OF-LARGE-READ\n", sizeof(tail)) != 0 ||
-        fseek(file, 0L, SEEK_SET) != 0) {
+        memcmp(buffer, " FAT chain walking.\nWASM", 24u) != 0 || fseek(file, -18L, SEEK_END) != 0 ||
+        ftell(file) != 6840L || fread(tail, 1u, sizeof(tail), file) != sizeof(tail) ||
+        memcmp(tail, "END-OF-LARGE-READ\n", sizeof(tail)) != 0 || fseek(file, 0L, SEEK_SET) != 0) {
         fclose(file);
         puts("fs-open-smoke: seek failed");
         return 1;

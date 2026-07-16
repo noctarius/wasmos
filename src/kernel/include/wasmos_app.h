@@ -22,18 +22,18 @@
 #define WASMOS_APP_VERSION 5u
 #define WASMOS_APP_SUBSYSTEM_TAG_LEN 8u
 
-#define WASMOS_SUBSYSTEM_TAG_WASM   "WASM"
-#define WASMOS_SUBSYSTEM_TAG_WASM3  "WASM3"
-#define WASMOS_SUBSYSTEM_TAG_WARP   "WARP"
+#define WASMOS_SUBSYSTEM_TAG_WASM "WASM"
+#define WASMOS_SUBSYSTEM_TAG_WASM3 "WASM3"
+#define WASMOS_SUBSYSTEM_TAG_WARP "WARP"
 #define WASMOS_SUBSYSTEM_TAG_NATIVE "NATIVE"
 
 /* Package type flags stored in the .wap header. */
-#define WASMOS_APP_FLAG_DRIVER     (1u << 0)
-#define WASMOS_APP_FLAG_SERVICE    (1u << 1)
-#define WASMOS_APP_FLAG_APP        (1u << 2)
+#define WASMOS_APP_FLAG_DRIVER (1u << 0)
+#define WASMOS_APP_FLAG_SERVICE (1u << 1)
+#define WASMOS_APP_FLAG_APP (1u << 2)
 #define WASMOS_APP_FLAG_NEEDS_PRIV (1u << 3)
 /* Native ELF payload; valid for privileged service/driver payloads. */
-#define WASMOS_APP_FLAG_NATIVE     (1u << 4)
+#define WASMOS_APP_FLAG_NATIVE (1u << 4)
 #define WASMOS_APP_FLAG_STORAGE_BOOTSTRAP (1u << 5)
 /* Process wants a controlling TTY allocated at spawn; PM fills spawn_info.tty.
  * Replaces the old "cli.tty.alloc" entry-arg binding. */
@@ -43,9 +43,9 @@
 #define WASMOS_DRIVER_MATCH_ANY_U16 0xFFFFu
 
 #define WASMOS_APP_MEM_HINT_LINEAR 0u
-#define WASMOS_APP_MEM_HINT_STACK  1u
-#define WASMOS_APP_MEM_HINT_HEAP   2u
-#define WASMOS_APP_MEM_HINT_IPC    3u
+#define WASMOS_APP_MEM_HINT_STACK 1u
+#define WASMOS_APP_MEM_HINT_HEAP 2u
+#define WASMOS_APP_MEM_HINT_IPC 3u
 #define WASMOS_APP_MEM_HINT_DEVICE 4u
 
 #define WASMOS_APP_MAX_REQUIRED_ENDPOINTS 8u
@@ -54,19 +54,19 @@
 #define WASMOS_APP_MAX_DRIVER_MATCHES 8u
 
 typedef struct {
-    const uint8_t *name;
+    const uint8_t* name;
     uint32_t name_len;
     uint32_t rights;
 } wasmos_app_req_endpoint_t;
 
 typedef struct {
-    const uint8_t *name;
+    const uint8_t* name;
     uint32_t name_len;
     uint32_t flags;
 } wasmos_app_cap_request_t;
 
 typedef struct {
-    const uint8_t *name;
+    const uint8_t* name;
     uint32_t name_len;
 } wasmos_app_entry_arg_binding_t;
 
@@ -83,17 +83,17 @@ typedef struct {
 } wasmos_app_driver_match_t;
 
 typedef struct {
-    const uint8_t *blob;
+    const uint8_t* blob;
     uint32_t blob_size;
     uint32_t flags;
     char subsystem_tag[WASMOS_APP_SUBSYSTEM_TAG_LEN + 1];
-    const uint8_t *wasm_bytes;
+    const uint8_t* wasm_bytes;
     uint32_t wasm_size;
-    const uint8_t *compiled_bytes;   /* pre-compiled WARP AOT binary; NULL if absent */
+    const uint8_t* compiled_bytes; /* pre-compiled WARP AOT binary; NULL if absent */
     uint32_t compiled_size;
-    const uint8_t *name;
+    const uint8_t* name;
     uint32_t name_len;
-    const uint8_t *entry;
+    const uint8_t* entry;
     uint32_t entry_len;
     uint32_t stack_pages_hint;
     uint32_t heap_pages_hint;
@@ -108,16 +108,16 @@ typedef struct {
 } wasmos_app_desc_t;
 
 typedef struct {
-    const char *name;
-    const uint8_t *module_bytes;
+    const char* name;
+    const uint8_t* module_bytes;
     uint32_t module_size;
-    const uint8_t *compiled_bytes;
+    const uint8_t* compiled_bytes;
     uint32_t compiled_size;
-    const char *entry_export;
+    const char* entry_export;
     uint32_t stack_size;
     uint32_t heap_size;
     uint32_t entry_argc;
-    const uint32_t *entry_argv;
+    const uint32_t* entry_argv;
 } wasmos_app_start_params_t;
 
 typedef struct {
@@ -139,38 +139,30 @@ typedef struct {
     uint8_t needs_runtime_lock;
     uint8_t gates_ready_for_services;
     uint32_t broker_endpoint;
-    const wasmos_subsystem_ops_t *ops;
+    const wasmos_subsystem_ops_t* ops;
 } wasmos_app_subsystem_info_t;
 
 typedef struct wasmos_subsystem_ops wasmos_subsystem_ops_t;
 struct wasmos_subsystem_ops {
-    const char *tag;
+    const char* tag;
     uint8_t uses_wasm_payload;
     uint8_t needs_runtime_lock;
     uint8_t gates_ready_for_services;
-    int (*start)(wasmos_app_runtime_state_t *state,
-                 const wasmos_app_start_params_t *params,
-                 uint32_t owner_context_id,
-                 uint32_t flags);
-    int (*call_entry)(wasmos_app_runtime_state_t *state,
-                      const char *entry_export,
-                      uint32_t entry_argc,
-                      uint32_t *entry_argv);
-    void (*stop)(wasmos_app_runtime_state_t *state);
+    int (*start)(wasmos_app_runtime_state_t* state, const wasmos_app_start_params_t* params,
+                 uint32_t owner_context_id, uint32_t flags);
+    int (*call_entry)(wasmos_app_runtime_state_t* state, const char* entry_export,
+                      uint32_t entry_argc, uint32_t* entry_argv);
+    void (*stop)(wasmos_app_runtime_state_t* state);
 };
 
-typedef int (*wasmos_app_endpoint_resolver_t)(uint32_t owner_context_id,
-                                              const uint8_t *name,
-                                              uint32_t name_len,
-                                              uint32_t rights,
-                                              uint32_t *out_endpoint);
-typedef int (*wasmos_app_capability_granter_t)(uint32_t owner_context_id,
-                                               const uint8_t *name,
-                                               uint32_t name_len,
-                                               uint32_t flags);
+typedef int (*wasmos_app_endpoint_resolver_t)(uint32_t owner_context_id, const uint8_t* name,
+                                              uint32_t name_len, uint32_t rights,
+                                              uint32_t* out_endpoint);
+typedef int (*wasmos_app_capability_granter_t)(uint32_t owner_context_id, const uint8_t* name,
+                                               uint32_t name_len, uint32_t flags);
 
 typedef struct {
-    const wasmos_subsystem_ops_t *ops;
+    const wasmos_subsystem_ops_t* ops;
     wasmos_app_runtime_state_t runtime;
     uint8_t active;
     uint32_t flags;
@@ -183,21 +175,17 @@ typedef struct {
     uint32_t entry_argv[4];
 } wasmos_app_instance_t;
 
-int wasmos_app_parse(const uint8_t *blob, uint32_t blob_size, wasmos_app_desc_t *out_desc);
+int wasmos_app_parse(const uint8_t* blob, uint32_t blob_size, wasmos_app_desc_t* out_desc);
 int wasmos_app_init_subsystems(void);
-int wasmos_subsystem_register(const char *request_tag,
-                              const char *runtime_tag,
-                              const wasmos_subsystem_ops_t *ops);
-int wasmos_app_resolve_subsystem(const wasmos_app_desc_t *desc,
-                                 wasmos_app_subsystem_info_t *out_info);
-int wasmos_app_requires_explicit_ready(const wasmos_app_desc_t *desc);
-int wasmos_app_start(wasmos_app_instance_t *instance,
-                     const wasmos_app_desc_t *desc,
-                     uint32_t owner_context_id,
-                     const uint32_t *init_argv,
-                     uint32_t init_argc);
-int wasmos_app_call_entry(wasmos_app_instance_t *instance);
-void wasmos_app_stop(wasmos_app_instance_t *instance);
+int wasmos_subsystem_register(const char* request_tag, const char* runtime_tag,
+                              const wasmos_subsystem_ops_t* ops);
+int wasmos_app_resolve_subsystem(const wasmos_app_desc_t* desc,
+                                 wasmos_app_subsystem_info_t* out_info);
+int wasmos_app_requires_explicit_ready(const wasmos_app_desc_t* desc);
+int wasmos_app_start(wasmos_app_instance_t* instance, const wasmos_app_desc_t* desc,
+                     uint32_t owner_context_id, const uint32_t* init_argv, uint32_t init_argc);
+int wasmos_app_call_entry(wasmos_app_instance_t* instance);
+void wasmos_app_stop(wasmos_app_instance_t* instance);
 void wasmos_app_set_policy_hooks(wasmos_app_endpoint_resolver_t endpoint_resolver,
                                  wasmos_app_capability_granter_t capability_granter);
 

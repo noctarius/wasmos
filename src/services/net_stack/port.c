@@ -24,7 +24,7 @@
 
 /* Provided by net_stack.c: the api table captured at initialize() time.
  * May be NULL before initialize() runs; callers must tolerate that. */
-wasmos_driver_api_t *net_stack_api(void);
+wasmos_driver_api_t* net_stack_api(void);
 
 /* Return monotonic time in milliseconds.
  *
@@ -40,7 +40,7 @@ wasmos_driver_api_t *net_stack_api(void);
  * the actual timer frequency (or add a native ms hook) when the netif/ICMP step
  * lands and lwIP timeouts start mattering. */
 u32_t sys_now(void) {
-    wasmos_driver_api_t *api = net_stack_api();
+    wasmos_driver_api_t* api = net_stack_api();
     if (api != NULL && api->sched_ticks != NULL) {
         return (u32_t)api->sched_ticks();
     }
@@ -56,7 +56,7 @@ u32_t sys_now(void) {
 uint32_t lwip_port_rand(void) {
     static uint32_t state = 0u;
     if (state == 0u) {
-        wasmos_driver_api_t *api = net_stack_api();
+        wasmos_driver_api_t* api = net_stack_api();
         uint32_t seed = 0x2545F491u;
         if (api != NULL && api->sched_ticks != NULL) {
             seed ^= (uint32_t)api->sched_ticks();
@@ -73,14 +73,14 @@ uint32_t lwip_port_rand(void) {
  * objects this service links (string.c, ctype.c) do not include atoi (it lives
  * in stdlib.c, which is not linked), so provide a minimal implementation here
  * to satisfy the link without editing libs/lwip or pulling in more of libc. */
-int atoi(const char *nptr) {
+int atoi(const char* nptr) {
     int sign = 1;
     int value = 0;
     if (nptr == NULL) {
         return 0;
     }
-    while (*nptr == ' ' || *nptr == '\t' || *nptr == '\n' ||
-           *nptr == '\r' || *nptr == '\f' || *nptr == '\v') {
+    while (*nptr == ' ' || *nptr == '\t' || *nptr == '\n' || *nptr == '\r' || *nptr == '\f' ||
+           *nptr == '\v') {
         nptr++;
     }
     if (*nptr == '+' || *nptr == '-') {

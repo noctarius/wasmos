@@ -32,30 +32,24 @@ typedef struct {
 typedef struct _EFI_GRAPHICS_OUTPUT_PROTOCOL_MODE {
     UINT32 MaxMode;
     UINT32 Mode;
-    EFI_GRAPHICS_OUTPUT_MODE_INFORMATION *Info;
+    EFI_GRAPHICS_OUTPUT_MODE_INFORMATION* Info;
     UINTN SizeOfInfo;
     UINT64 FrameBufferBase;
     UINTN FrameBufferSize;
 } EFI_GRAPHICS_OUTPUT_PROTOCOL_MODE;
 
 typedef struct {
-    void *QueryMode;
-    void *SetMode;
-    void *Blt;
-    EFI_GRAPHICS_OUTPUT_PROTOCOL_MODE *Mode;
+    void* QueryMode;
+    void* SetMode;
+    void* Blt;
+    EFI_GRAPHICS_OUTPUT_PROTOCOL_MODE* Mode;
 } EFI_GRAPHICS_OUTPUT_PROTOCOL;
 
-typedef EFI_STATUS (EFIAPI *EFI_GOP_SET_MODE)(
-    EFI_GRAPHICS_OUTPUT_PROTOCOL *This,
-    UINT32 ModeNumber
-);
+typedef EFI_STATUS(EFIAPI* EFI_GOP_SET_MODE)(EFI_GRAPHICS_OUTPUT_PROTOCOL* This, UINT32 ModeNumber);
 
-typedef EFI_STATUS (EFIAPI *EFI_GOP_QUERY_MODE)(
-    EFI_GRAPHICS_OUTPUT_PROTOCOL *This,
-    UINT32 ModeNumber,
-    UINTN *SizeOfInfo,
-    EFI_GRAPHICS_OUTPUT_MODE_INFORMATION **Info
-);
+typedef EFI_STATUS(EFIAPI* EFI_GOP_QUERY_MODE)(EFI_GRAPHICS_OUTPUT_PROTOCOL* This,
+                                               UINT32 ModeNumber, UINTN* SizeOfInfo,
+                                               EFI_GRAPHICS_OUTPUT_MODE_INFORMATION** Info);
 
 /*
  * The UEFI loader keeps policy intentionally narrow. Its only job is to build a
@@ -82,7 +76,7 @@ typedef struct __attribute__((packed)) {
     UINT8 reserved[3];
 } acpi_rsdp_t;
 
-static int guid_eq(const EFI_GUID *a, const EFI_GUID *b) {
+static int guid_eq(const EFI_GUID* a, const EFI_GUID* b) {
     if (!a || !b) {
         return 0;
     }
@@ -97,11 +91,11 @@ static int guid_eq(const EFI_GUID *a, const EFI_GUID *b) {
     return 1;
 }
 
-static void *find_acpi_rsdp(EFI_SYSTEM_TABLE *system, UINT32 *out_len) {
-    static const EFI_GUID acpi20_guid =
-        { 0x8868e871, 0xe4f1, 0x11d3, { 0xbc, 0x22, 0x00, 0x80, 0xc7, 0x3c, 0x88, 0x81 } };
-    static const EFI_GUID acpi10_guid =
-        { 0xeb9d2d30, 0x2d88, 0x11d3, { 0x9a, 0x16, 0x00, 0x90, 0x27, 0x3f, 0xc1, 0x4d } };
+static void* find_acpi_rsdp(EFI_SYSTEM_TABLE* system, UINT32* out_len) {
+    static const EFI_GUID acpi20_guid = {
+        0x8868e871, 0xe4f1, 0x11d3, {0xbc, 0x22, 0x00, 0x80, 0xc7, 0x3c, 0x88, 0x81}};
+    static const EFI_GUID acpi10_guid = {
+        0xeb9d2d30, 0x2d88, 0x11d3, {0x9a, 0x16, 0x00, 0x90, 0x27, 0x3f, 0xc1, 0x4d}};
 
     if (out_len) {
         *out_len = 0;
@@ -115,8 +109,8 @@ static void *find_acpi_rsdp(EFI_SYSTEM_TABLE *system, UINT32 *out_len) {
      * table when available but keep the ACPI 1.0 pointer as a fallback so early
      * hardware discovery still has a stable root pointer on older firmware.
      */
-    EFI_CONFIGURATION_TABLE *tables = (EFI_CONFIGURATION_TABLE *)system->ConfigurationTable;
-    void *rsdp = 0;
+    EFI_CONFIGURATION_TABLE* tables = (EFI_CONFIGURATION_TABLE*)system->ConfigurationTable;
+    void* rsdp = 0;
     for (UINTN i = 0; i < system->NumberOfTableEntries; ++i) {
         if (guid_eq(&tables[i].VendorGuid, &acpi20_guid)) {
             rsdp = tables[i].VendorTable;
@@ -131,7 +125,7 @@ static void *find_acpi_rsdp(EFI_SYSTEM_TABLE *system, UINT32 *out_len) {
         return 0;
     }
     if (out_len) {
-        acpi_rsdp_t *desc = (acpi_rsdp_t *)rsdp;
+        acpi_rsdp_t* desc = (acpi_rsdp_t*)rsdp;
         UINT32 len = 20;
         if (desc->revision >= 2 && desc->length >= 20) {
             len = desc->length;
@@ -141,24 +135,24 @@ static void *find_acpi_rsdp(EFI_SYSTEM_TABLE *system, UINT32 *out_len) {
     return rsdp;
 }
 
-static void *memcpy8(void *dst, const void *src, UINTN n) {
-    UINT8 *d = (UINT8 *)dst;
-    const UINT8 *s = (const UINT8 *)src;
+static void* memcpy8(void* dst, const void* src, UINTN n) {
+    UINT8* d = (UINT8*)dst;
+    const UINT8* s = (const UINT8*)src;
     for (UINTN i = 0; i < n; ++i) {
         d[i] = s[i];
     }
     return dst;
 }
 
-static void *memset8(void *dst, UINT8 val, UINTN n) {
-    UINT8 *d = (UINT8 *)dst;
+static void* memset8(void* dst, UINT8 val, UINTN n) {
+    UINT8* d = (UINT8*)dst;
     for (UINTN i = 0; i < n; ++i) {
         d[i] = val;
     }
     return dst;
 }
 
-static void copy_cstr(char *dst, UINTN dst_size, const char *src) {
+static void copy_cstr(char* dst, UINTN dst_size, const char* src) {
     if (!dst || dst_size == 0) {
         return;
     }
@@ -169,20 +163,17 @@ static void copy_cstr(char *dst, UINTN dst_size, const char *src) {
     dst[i] = '\0';
 }
 
-static void connect_handles_for_protocol(EFI_SYSTEM_TABLE *system, EFI_CONNECT_CONTROLLER connect_controller,
-                                         EFI_LOCATE_HANDLE_BUFFER locate_handle_buffer, const EFI_GUID *protocol) {
+static void connect_handles_for_protocol(EFI_SYSTEM_TABLE* system,
+                                         EFI_CONNECT_CONTROLLER connect_controller,
+                                         EFI_LOCATE_HANDLE_BUFFER locate_handle_buffer,
+                                         const EFI_GUID* protocol) {
     if (!system || !connect_controller || !locate_handle_buffer || !protocol) {
         return;
     }
-    EFI_HANDLE *handles = 0;
+    EFI_HANDLE* handles = 0;
     UINTN handle_count = 0;
-    EFI_STATUS status = locate_handle_buffer(
-        EFI_LOCATE_SEARCH_TYPE_BY_PROTOCOL,
-        protocol,
-        0,
-        &handle_count,
-        &handles
-    );
+    EFI_STATUS status = locate_handle_buffer(EFI_LOCATE_SEARCH_TYPE_BY_PROTOCOL, protocol, 0,
+                                             &handle_count, &handles);
     if (EFI_ERROR(status) || !handles || handle_count == 0) {
         return;
     }
@@ -197,7 +188,7 @@ static void connect_handles_for_protocol(EFI_SYSTEM_TABLE *system, EFI_CONNECT_C
     }
 }
 
-static void connect_graphics_controllers(EFI_SYSTEM_TABLE *system) {
+static void connect_graphics_controllers(EFI_SYSTEM_TABLE* system) {
     static int g_graphics_connected = 0;
     if (g_graphics_connected || !system || !system->BootServices) {
         return;
@@ -217,21 +208,23 @@ static void connect_graphics_controllers(EFI_SYSTEM_TABLE *system) {
         connect_controller(system->StandardErrorHandle, 0, 0, TRUE);
     }
 
-    static const EFI_GUID text_output_guid =
-        { 0x387477c2, 0x69c7, 0x11d2, { 0x8e, 0x39, 0x00, 0xa0, 0xc9, 0x69, 0x72, 0x3b } };
-    static const EFI_GUID pci_io_guid =
-        { 0x2f707eb9, 0x3a1a, 0x11d4, { 0x9a, 0x46, 0x00, 0x90, 0x27, 0x3f, 0xcc, 0x69 } };
+    static const EFI_GUID text_output_guid = {
+        0x387477c2, 0x69c7, 0x11d2, {0x8e, 0x39, 0x00, 0xa0, 0xc9, 0x69, 0x72, 0x3b}};
+    static const EFI_GUID pci_io_guid = {
+        0x2f707eb9, 0x3a1a, 0x11d4, {0x9a, 0x46, 0x00, 0x90, 0x27, 0x3f, 0xcc, 0x69}};
     static const EFI_GUID root_bridge_guid = EFI_PCI_ROOT_BRIDGE_IO_PROTOCOL_GUID;
 
-    connect_handles_for_protocol(system, connect_controller, locate_handle_buffer, &text_output_guid);
+    connect_handles_for_protocol(system, connect_controller, locate_handle_buffer,
+                                 &text_output_guid);
     connect_handles_for_protocol(system, connect_controller, locate_handle_buffer, &pci_io_guid);
-    connect_handles_for_protocol(system, connect_controller, locate_handle_buffer, &root_bridge_guid);
+    connect_handles_for_protocol(system, connect_controller, locate_handle_buffer,
+                                 &root_bridge_guid);
     g_graphics_connected = 1;
 }
 
-static void uefi_log(EFI_SYSTEM_TABLE *system, const char *msg);
-static void uefi_log_status(EFI_SYSTEM_TABLE *system, const char *msg, EFI_STATUS status);
-static void uefi_log_hex_prefixed(EFI_SYSTEM_TABLE *system, const char *prefix, uint64_t value);
+static void uefi_log(EFI_SYSTEM_TABLE* system, const char* msg);
+static void uefi_log_status(EFI_SYSTEM_TABLE* system, const char* msg, EFI_STATUS status);
+static void uefi_log_hex_prefixed(EFI_SYSTEM_TABLE* system, const char* prefix, uint64_t value);
 
 typedef struct {
     uint64_t base;
@@ -242,20 +235,17 @@ typedef struct {
     uint32_t flags;
 } framebuffer_snapshot_t;
 
-static inline void pci_out32(uint16_t port, uint32_t value)
-{
+static inline void pci_out32(uint16_t port, uint32_t value) {
     __asm__ volatile("outl %%eax, %%dx" : : "a"(value), "d"(port));
 }
 
-static inline uint32_t pci_in32(uint16_t port)
-{
+static inline uint32_t pci_in32(uint16_t port) {
     uint32_t value;
     __asm__ volatile("inl %%dx, %%eax" : "=a"(value) : "d"(port));
     return value;
 }
 
-static uint32_t pci_config_read32(uint8_t bus, uint8_t device, uint8_t function, uint8_t reg)
-{
+static uint32_t pci_config_read32(uint8_t bus, uint8_t device, uint8_t function, uint8_t reg) {
     uint32_t address = 0x80000000u;
     address |= ((uint32_t)bus << 16);
     address |= ((uint32_t)device << 11);
@@ -265,8 +255,8 @@ static uint32_t pci_config_read32(uint8_t bus, uint8_t device, uint8_t function,
     return pci_in32(0xCFC);
 }
 
-static void pci_config_write32(uint8_t bus, uint8_t device, uint8_t function, uint8_t reg, uint32_t value)
-{
+static void pci_config_write32(uint8_t bus, uint8_t device, uint8_t function, uint8_t reg,
+                               uint32_t value) {
     uint32_t address = 0x80000000u;
     address |= ((uint32_t)bus << 16);
     address |= ((uint32_t)device << 11);
@@ -276,14 +266,8 @@ static void pci_config_write32(uint8_t bus, uint8_t device, uint8_t function, ui
     pci_out32(0xCFC, value);
 }
 
-static int pci_probe_mem_bar(uint8_t bus,
-                            uint8_t device,
-                            uint8_t function,
-                            uint8_t bar_index,
-                            uint64_t *out_base,
-                            uint64_t *out_size,
-                            int *consumed_next)
-{
+static int pci_probe_mem_bar(uint8_t bus, uint8_t device, uint8_t function, uint8_t bar_index,
+                             uint64_t* out_base, uint64_t* out_size, int* consumed_next) {
     if (!out_base || !out_size || !consumed_next) {
         return -1;
     }
@@ -335,9 +319,8 @@ static int pci_probe_mem_bar(uint8_t bus,
     return -1;
 }
 
-static int capture_framebuffer_from_pci_config(EFI_SYSTEM_TABLE *system,
-                                               framebuffer_snapshot_t *snapshot)
-{
+static int capture_framebuffer_from_pci_config(EFI_SYSTEM_TABLE* system,
+                                               framebuffer_snapshot_t* snapshot) {
     if (!system || !system->BootServices || !snapshot) {
         return -1;
     }
@@ -392,10 +375,8 @@ static int capture_framebuffer_from_pci_config(EFI_SYSTEM_TABLE *system,
     return 0;
 }
 
-
-static int capture_framebuffer_snapshot(EFI_SYSTEM_TABLE *system,
-                                       framebuffer_snapshot_t *snapshot)
-{
+static int capture_framebuffer_snapshot(EFI_SYSTEM_TABLE* system,
+                                        framebuffer_snapshot_t* snapshot) {
     if (!system || !system->BootServices || !snapshot) {
         return -1;
     }
@@ -403,36 +384,34 @@ static int capture_framebuffer_snapshot(EFI_SYSTEM_TABLE *system,
     connect_graphics_controllers(system);
     static int gop_locate_failed = 0;
     static int gop_handle_locate_failed = 0;
-    static const EFI_GUID gop_guid =
-        { 0x9042a9de, 0x23dc, 0x4a38, { 0x96, 0xfb, 0x7a, 0xde, 0xd0, 0x80, 0x51, 0x6a } };
-    EFI_GRAPHICS_OUTPUT_PROTOCOL *gop = 0;
+    static const EFI_GUID gop_guid = {
+        0x9042a9de, 0x23dc, 0x4a38, {0x96, 0xfb, 0x7a, 0xde, 0xd0, 0x80, 0x51, 0x6a}};
+    EFI_GRAPHICS_OUTPUT_PROTOCOL* gop = 0;
     EFI_STATUS status = EFI_NOT_FOUND;
-    EFI_HANDLE *handles = 0;
+    EFI_HANDLE* handles = 0;
     UINTN handle_count = 0;
     EFI_LOCATE_HANDLE_BUFFER locate_handle_buffer =
         (EFI_LOCATE_HANDLE_BUFFER)system->BootServices->LocateHandleBuffer;
-    EFI_HANDLE_PROTOCOL handle_protocol =
-        (EFI_HANDLE_PROTOCOL)system->BootServices->HandleProtocol;
+    EFI_HANDLE_PROTOCOL handle_protocol = (EFI_HANDLE_PROTOCOL)system->BootServices->HandleProtocol;
     EFI_CONNECT_CONTROLLER connect_controller =
         (EFI_CONNECT_CONTROLLER)system->BootServices->ConnectController;
-    EFI_LOCATE_PROTOCOL locate_protocol =
-        (EFI_LOCATE_PROTOCOL)system->BootServices->LocateProtocol;
+    EFI_LOCATE_PROTOCOL locate_protocol = (EFI_LOCATE_PROTOCOL)system->BootServices->LocateProtocol;
 
     if (connect_controller && system->ConsoleOutHandle) {
         connect_controller(system->ConsoleOutHandle, 0, 0, TRUE);
     }
 
     if (locate_protocol) {
-        status = locate_protocol(&gop_guid, 0, (void **)&gop);
+        status = locate_protocol(&gop_guid, 0, (void**)&gop);
     }
 
     if ((EFI_ERROR(status) || !gop) && handle_protocol && system->ConsoleOutHandle) {
-        status = handle_protocol(system->ConsoleOutHandle, &gop_guid, (void **)&gop);
+        status = handle_protocol(system->ConsoleOutHandle, &gop_guid, (void**)&gop);
     }
 
     if ((EFI_ERROR(status) || !gop) && locate_handle_buffer && handle_protocol) {
-        status = locate_handle_buffer(EFI_LOCATE_SEARCH_TYPE_BY_PROTOCOL,
-                                      &gop_guid, 0, &handle_count, &handles);
+        status = locate_handle_buffer(EFI_LOCATE_SEARCH_TYPE_BY_PROTOCOL, &gop_guid, 0,
+                                      &handle_count, &handles);
         if (EFI_ERROR(status)) {
             if (!gop_handle_locate_failed) {
                 uefi_log_status(system, "[boot] LocateHandleBuffer error: ", status);
@@ -448,7 +427,7 @@ static int capture_framebuffer_snapshot(EFI_SYSTEM_TABLE *system,
                 if (connect_controller) {
                     connect_controller(candidate, 0, 0, TRUE);
                 }
-                status = handle_protocol(candidate, &gop_guid, (void **)&gop);
+                status = handle_protocol(candidate, &gop_guid, (void**)&gop);
                 if (EFI_ERROR(status) || !gop) {
                     continue;
                 }
@@ -503,7 +482,7 @@ static int capture_framebuffer_snapshot(EFI_SYSTEM_TABLE *system,
         }
     }
 
-    EFI_GRAPHICS_OUTPUT_MODE_INFORMATION *mode_info = gop->Mode->Info;
+    EFI_GRAPHICS_OUTPUT_MODE_INFORMATION* mode_info = gop->Mode->Info;
     UINTN mode_size = 0;
     if ((!mode_info || mode_info->HorizontalResolution == 0) && query_mode) {
         status = query_mode(gop, gop->Mode->Mode, &mode_size, &mode_info);
@@ -527,19 +506,18 @@ static int capture_framebuffer_snapshot(EFI_SYSTEM_TABLE *system,
     snapshot->width = mode_info->HorizontalResolution;
     snapshot->height = mode_info->VerticalResolution;
     snapshot->stride = mode_info->PixelsPerScanLine;
-    snapshot->flags = BOOT_INFO_FLAG_GOP_PRESENT |
-                      ((((uint32_t)mode_info->PixelFormat) & 0xFu) << BOOT_INFO_FLAG_GOP_PIXEL_FORMAT_SHIFT);
+    snapshot->flags = BOOT_INFO_FLAG_GOP_PRESENT | ((((uint32_t)mode_info->PixelFormat) & 0xFu)
+                                                    << BOOT_INFO_FLAG_GOP_PIXEL_FORMAT_SHIFT);
     return 0;
 }
 
-static void apply_framebuffer_snapshot(boot_info_t *boot_info,
-                                       const framebuffer_snapshot_t *snapshot)
-{
+static void apply_framebuffer_snapshot(boot_info_t* boot_info,
+                                       const framebuffer_snapshot_t* snapshot) {
     if (!boot_info || !snapshot || snapshot->base == 0 || snapshot->size == 0) {
         return;
     }
 
-    boot_info->framebuffer_base = (void *)(uintptr_t)snapshot->base;
+    boot_info->framebuffer_base = (void*)(uintptr_t)snapshot->base;
     boot_info->framebuffer_size = snapshot->size;
     boot_info->framebuffer_width = snapshot->width;
     boot_info->framebuffer_height = snapshot->height;
@@ -547,7 +525,7 @@ static void apply_framebuffer_snapshot(boot_info_t *boot_info,
     boot_info->flags |= snapshot->flags;
 }
 
-static void uefi_hex(UINT64 value, char *out) {
+static void uefi_hex(UINT64 value, char* out) {
     static const char hex[] = "0123456789ABCDEF";
     out[0] = '0';
     out[1] = 'x';
@@ -557,7 +535,7 @@ static void uefi_hex(UINT64 value, char *out) {
     out[18] = '\0';
 }
 
-static void uefi_log_hex_prefixed(EFI_SYSTEM_TABLE *system, const char *prefix, uint64_t value) {
+static void uefi_log_hex_prefixed(EFI_SYSTEM_TABLE* system, const char* prefix, uint64_t value) {
     char hex_buf[19];
     uefi_hex(value, hex_buf);
     uefi_log(system, prefix);
@@ -565,8 +543,8 @@ static void uefi_log_hex_prefixed(EFI_SYSTEM_TABLE *system, const char *prefix, 
     uefi_log(system, "\n");
 }
 
-static void uefi_log(EFI_SYSTEM_TABLE *system, const char *msg) {
-    EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL *out = system->ConOut;
+static void uefi_log(EFI_SYSTEM_TABLE* system, const char* msg) {
+    EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL* out = system->ConOut;
     if (!out || !out->OutputString) {
         return;
     }
@@ -589,7 +567,7 @@ static void uefi_log(EFI_SYSTEM_TABLE *system, const char *msg) {
     out->OutputString(out, buf);
 }
 
-static void uefi_log_status(EFI_SYSTEM_TABLE *system, const char *msg, EFI_STATUS status) {
+static void uefi_log_status(EFI_SYSTEM_TABLE* system, const char* msg, EFI_STATUS status) {
     char hex_buf[19];
     uefi_hex((UINT64)status, hex_buf);
     uefi_log(system, msg);
@@ -597,26 +575,21 @@ static void uefi_log_status(EFI_SYSTEM_TABLE *system, const char *msg, EFI_STATU
     uefi_log(system, "\n");
 }
 
-static int elf_is_valid(const Elf64_Ehdr *ehdr) {
-    return ehdr->e_ident[0] == 0x7f &&
-           ehdr->e_ident[1] == 'E' &&
-           ehdr->e_ident[2] == 'L' &&
+static int elf_is_valid(const Elf64_Ehdr* ehdr) {
+    return ehdr->e_ident[0] == 0x7f && ehdr->e_ident[1] == 'E' && ehdr->e_ident[2] == 'L' &&
            ehdr->e_ident[3] == 'F';
 }
 
-static EFI_STATUS read_file_alloc(EFI_BOOT_SERVICES *bs,
-                                  EFI_FILE_PROTOCOL *root,
-                                  CHAR16 *path,
-                                  void **out_buf,
-                                  UINTN *out_size) {
+static EFI_STATUS read_file_alloc(EFI_BOOT_SERVICES* bs, EFI_FILE_PROTOCOL* root, CHAR16* path,
+                                  void** out_buf, UINTN* out_size) {
     if (!bs || !root || !path || !out_buf || !out_size) {
         return 1;
     }
 
     EFI_STATUS status;
-    EFI_FILE_PROTOCOL *file = 0;
-    EFI_FILE_INFO *info = 0;
-    void *buf = 0;
+    EFI_FILE_PROTOCOL* file = 0;
+    EFI_FILE_INFO* info = 0;
+    void* buf = 0;
 
     status = root->Open(root, &file, path, EFI_FILE_MODE_READ, 0);
     if (EFI_ERROR(status)) {
@@ -633,7 +606,7 @@ static EFI_STATUS read_file_alloc(EFI_BOOT_SERVICES *bs,
     UINTN info_size = 0;
     status = file->GetInfo(file, &file_info_guid, &info_size, info);
     if (status == EFI_BUFFER_TOO_SMALL) {
-        status = bs->AllocatePool(EFI_LOADER_DATA, info_size, (void **)&info);
+        status = bs->AllocatePool(EFI_LOADER_DATA, info_size, (void**)&info);
         if (EFI_ERROR(status)) {
             goto done;
         }
@@ -669,13 +642,11 @@ done:
     return status;
 }
 
-static int
-initfs_valid(const void *blob, UINTN size)
-{
+static int initfs_valid(const void* blob, UINTN size) {
     if (!blob || size < sizeof(wasmos_initfs_header_t)) {
         return 0;
     }
-    const wasmos_initfs_header_t *hdr = (const wasmos_initfs_header_t *)blob;
+    const wasmos_initfs_header_t* hdr = (const wasmos_initfs_header_t*)blob;
     for (UINTN i = 0; i < 8; ++i) {
         if ((UINT8)hdr->magic[i] != (UINT8)WASMOS_INITFS_MAGIC[i]) {
             return 0;
@@ -683,18 +654,17 @@ initfs_valid(const void *blob, UINTN size)
     }
     if (hdr->version != WASMOS_INITFS_VERSION ||
         hdr->header_size != sizeof(wasmos_initfs_header_t) ||
-        hdr->entry_size != sizeof(wasmos_initfs_entry_t) ||
-        hdr->total_size > size) {
+        hdr->entry_size != sizeof(wasmos_initfs_entry_t) || hdr->total_size > size) {
         return 0;
     }
     UINTN table_bytes = (UINTN)hdr->entry_count * sizeof(wasmos_initfs_entry_t);
     if (hdr->header_size + table_bytes > hdr->total_size) {
         return 0;
     }
-    const wasmos_initfs_entry_t *entries =
-        (const wasmos_initfs_entry_t *)((const UINT8 *)blob + hdr->header_size);
+    const wasmos_initfs_entry_t* entries =
+        (const wasmos_initfs_entry_t*)((const UINT8*)blob + hdr->header_size);
     for (UINT32 i = 0; i < hdr->entry_count; ++i) {
-        const wasmos_initfs_entry_t *entry = &entries[i];
+        const wasmos_initfs_entry_t* entry = &entries[i];
         UINT64 end = (UINT64)entry->offset + (UINT64)entry->size;
         if (entry->offset < hdr->header_size + table_bytes || end > hdr->total_size) {
             return 0;
@@ -703,9 +673,8 @@ initfs_valid(const void *blob, UINTN size)
     return 1;
 }
 
-static void
-uefi_log_initfs_entry(EFI_SYSTEM_TABLE *system, const char *prefix, const wasmos_initfs_entry_t *entry)
-{
+static void uefi_log_initfs_entry(EFI_SYSTEM_TABLE* system, const char* prefix,
+                                  const wasmos_initfs_entry_t* entry) {
     if (!system || !prefix || !entry) {
         return;
     }
@@ -714,28 +683,28 @@ uefi_log_initfs_entry(EFI_SYSTEM_TABLE *system, const char *prefix, const wasmos
     uefi_log(system, "\n");
 }
 
-EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system) {
-    EFI_BOOT_SERVICES *bs = system->BootServices;
+EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE* system) {
+    EFI_BOOT_SERVICES* bs = system->BootServices;
     EFI_STATUS status;
 
     uefi_log(system, "[boot] start\n");
     EFI_GUID lip_guid = EFI_LOADED_IMAGE_PROTOCOL_GUID;
-    EFI_LOADED_IMAGE_PROTOCOL *loaded = 0;
-    status = bs->HandleProtocol(image, &lip_guid, (void **)&loaded);
+    EFI_LOADED_IMAGE_PROTOCOL* loaded = 0;
+    status = bs->HandleProtocol(image, &lip_guid, (void**)&loaded);
     if (EFI_ERROR(status)) {
         uefi_log_status(system, "[boot] HandleProtocol failed: ", status);
         return status;
     }
 
     EFI_GUID fs_guid = EFI_SIMPLE_FILE_SYSTEM_PROTOCOL_GUID;
-    EFI_SIMPLE_FILE_SYSTEM_PROTOCOL *fs = 0;
-    status = bs->HandleProtocol(loaded->DeviceHandle, &fs_guid, (void **)&fs);
+    EFI_SIMPLE_FILE_SYSTEM_PROTOCOL* fs = 0;
+    status = bs->HandleProtocol(loaded->DeviceHandle, &fs_guid, (void**)&fs);
     if (EFI_ERROR(status)) {
         uefi_log_status(system, "[boot] Simple FS HandleProtocol failed: ", status);
         return status;
     }
 
-    EFI_FILE_PROTOCOL *root = 0;
+    EFI_FILE_PROTOCOL* root = 0;
     status = fs->OpenVolume(fs, &root);
     if (EFI_ERROR(status)) {
         uefi_log_status(system, "[boot] OpenVolume failed: ", status);
@@ -744,7 +713,7 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system) {
 
     /* The kernel image itself is always loaded from the ESP root. */
     static CHAR16 kernel_path[] = L"\\kernel.elf";
-    void *kernel_buf = 0;
+    void* kernel_buf = 0;
     UINTN kernel_size = 0;
     status = read_file_alloc(bs, root, kernel_path, &kernel_buf, &kernel_size);
     if (EFI_ERROR(status)) {
@@ -757,7 +726,7 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system) {
      * entries as boot modules so the kernel and early services can keep the
      * same module-index bootstrap contract. */
     static CHAR16 initfs_path[] = L"\\initfs.img";
-    void *initfs_buf = 0;
+    void* initfs_buf = 0;
     UINTN initfs_size = 0;
     status = read_file_alloc(bs, root, initfs_path, &initfs_buf, &initfs_size);
     if (EFI_ERROR(status)) {
@@ -770,7 +739,7 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system) {
     }
     uefi_log(system, "[boot] loaded initfs: \\\\initfs.img\n");
 
-    Elf64_Ehdr *ehdr = (Elf64_Ehdr *)kernel_buf;
+    Elf64_Ehdr* ehdr = (Elf64_Ehdr*)kernel_buf;
     if (!elf_is_valid(ehdr)) {
         uefi_log(system, "[boot] Invalid ELF header\n");
         return 1;
@@ -782,12 +751,12 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system) {
         uefi_log(system, "[boot] ELF phdrs out of bounds\n");
         return 1;
     }
-    Elf64_Phdr *phdrs = (Elf64_Phdr *)((UINT8 *)kernel_buf + ehdr->e_phoff);
+    Elf64_Phdr* phdrs = (Elf64_Phdr*)((UINT8*)kernel_buf + ehdr->e_phoff);
     UINT64 alloc_bases[16];
     UINT64 alloc_pages[16];
     UINTN alloc_count = 0;
     for (UINT16 i = 0; i < ehdr->e_phnum; ++i) {
-        Elf64_Phdr *ph = &phdrs[i];
+        Elf64_Phdr* ph = &phdrs[i];
         if (ph->p_type != PT_LOAD) {
             continue;
         }
@@ -830,16 +799,16 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system) {
             uefi_log(system, "[boot] ELF segment out of bounds\n");
             return 1;
         }
-        void *segment_src = (UINT8 *)kernel_buf + ph->p_offset;
-        void *segment_dst = (UINT8 *)(UINTN)dest + page_offset;
+        void* segment_src = (UINT8*)kernel_buf + ph->p_offset;
+        void* segment_dst = (UINT8*)(UINTN)dest + page_offset;
         memcpy8(segment_dst, segment_src, (UINTN)ph->p_filesz);
         if (ph->p_memsz > ph->p_filesz) {
-            memset8((UINT8 *)segment_dst + ph->p_filesz, 0, (UINTN)(ph->p_memsz - ph->p_filesz));
+            memset8((UINT8*)segment_dst + ph->p_filesz, 0, (UINTN)(ph->p_memsz - ph->p_filesz));
         }
     }
 
     UINT32 rsdp_length = 0;
-    void *rsdp = find_acpi_rsdp(system, &rsdp_length);
+    void* rsdp = find_acpi_rsdp(system, &rsdp_length);
     if (rsdp) {
         uefi_log(system, "[boot] ACPI RSDP located\n");
     }
@@ -862,7 +831,7 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system) {
         uefi_log_hex_prefixed(system, "  flags=", framebuffer_snapshot.flags);
     }
 
-    boot_info_t *boot_info = 0;
+    boot_info_t* boot_info = 0;
     UINTN mmap_size = 0;
     UINTN map_key = 0;
     UINTN desc_size = 0;
@@ -871,9 +840,9 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system) {
     mmap_size += desc_size * 2;
     UINTN mmap_capacity = mmap_size;
     UINTN boot_capacity = 0;
-    const wasmos_initfs_header_t *initfs_hdr = (const wasmos_initfs_header_t *)initfs_buf;
-    const wasmos_initfs_entry_t *initfs_entries =
-        (const wasmos_initfs_entry_t *)((const UINT8 *)initfs_buf + initfs_hdr->header_size);
+    const wasmos_initfs_header_t* initfs_hdr = (const wasmos_initfs_header_t*)initfs_buf;
+    const wasmos_initfs_entry_t* initfs_entries =
+        (const wasmos_initfs_entry_t*)((const UINT8*)initfs_buf + initfs_hdr->header_size);
     UINTN module_count = 0;
     for (UINT32 i = 0; i < initfs_hdr->entry_count; ++i) {
         if (initfs_entries[i].type == WASMOS_INITFS_ENTRY_WASMOS_APP) {
@@ -883,12 +852,12 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system) {
     }
     UINTN module_table_bytes = module_count * sizeof(boot_module_t);
 
-    void *mmap = 0;
+    void* mmap = 0;
     UINT64 boot_buf = 0;
 
     uefi_log(system, "[boot] ExitBootServices\n");
     int exited = 0;
-    void *map_dst = 0;
+    void* map_dst = 0;
     UINTN map_bytes = 0;
     while (!exited) {
         if (!mmap) {
@@ -916,20 +885,21 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system) {
         UINTN total_bytes = boot_bytes + map_bytes + initfs_size + module_table_bytes;
         UINTN total_pages = (total_bytes + 0xFFF) / 0x1000;
         if (boot_capacity < total_pages) {
-            status = bs->AllocatePages(EFI_ALLOCATE_ANY_PAGES, EFI_LOADER_DATA, total_pages, &boot_buf);
+            status =
+                bs->AllocatePages(EFI_ALLOCATE_ANY_PAGES, EFI_LOADER_DATA, total_pages, &boot_buf);
             if (EFI_ERROR(status)) {
                 uefi_log_status(system, "[boot] AllocatePages(boot info) failed: ", status);
                 return status;
             }
             boot_capacity = total_pages;
-            boot_info = (boot_info_t *)(UINTN)boot_buf;
+            boot_info = (boot_info_t*)(UINTN)boot_buf;
         }
 
         memset8(boot_info, 0, sizeof(boot_info_t));
         boot_info->version = BOOT_INFO_VERSION;
         boot_info->size = (uint32_t)sizeof(boot_info_t);
         boot_info->flags = 0;
-        map_dst = (void *)((UINT8 *)boot_info + boot_bytes);
+        map_dst = (void*)((UINT8*)boot_info + boot_bytes);
         memcpy8(map_dst, mmap, map_bytes);
         boot_info->memory_map = map_dst;
         boot_info->memory_map_size = map_bytes;
@@ -949,8 +919,8 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system) {
             apply_framebuffer_snapshot(boot_info, &framebuffer_snapshot);
         }
 
-        UINT8 *cursor = (UINT8 *)map_dst + map_bytes;
-        UINT8 *initfs_copy = cursor;
+        UINT8* cursor = (UINT8*)map_dst + map_bytes;
+        UINT8* initfs_copy = cursor;
         memcpy8(initfs_copy, initfs_buf, initfs_size);
         boot_info->initfs = initfs_copy;
         boot_info->initfs_size = (uint32_t)initfs_size;
@@ -958,17 +928,17 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system) {
         cursor += initfs_size;
 
         if (module_count > 0) {
-            boot_module_t *mods = (boot_module_t *)cursor;
+            boot_module_t* mods = (boot_module_t*)cursor;
             memset8(mods, 0, module_table_bytes);
             cursor += module_table_bytes;
 
             UINT32 mod_index = 0;
-            const wasmos_initfs_header_t *copied_hdr = (const wasmos_initfs_header_t *)initfs_copy;
-            const wasmos_initfs_entry_t *copied_entries =
-                (const wasmos_initfs_entry_t *)(initfs_copy + copied_hdr->header_size);
+            const wasmos_initfs_header_t* copied_hdr = (const wasmos_initfs_header_t*)initfs_copy;
+            const wasmos_initfs_entry_t* copied_entries =
+                (const wasmos_initfs_entry_t*)(initfs_copy + copied_hdr->header_size);
             for (UINT32 i = 0; i < copied_hdr->entry_count; ++i) {
-                const wasmos_initfs_entry_t *entry = &copied_entries[i];
-                UINT8 *payload = initfs_copy + entry->offset;
+                const wasmos_initfs_entry_t* entry = &copied_entries[i];
+                UINT8* payload = initfs_copy + entry->offset;
                 if (entry->type == WASMOS_INITFS_ENTRY_WASMOS_APP) {
                     mods[mod_index].base = (UINT64)(UINTN)payload;
                     mods[mod_index].size = entry->size;
@@ -1001,8 +971,8 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system) {
      * calling convention has varied across versions (clang 20 passed arg0 in
      * RDI, so _start saw an empty RCX and kmain got a NULL boot_info), and we
      * must not depend on that default matching the kernel's expectation. */
-    void (__attribute__((ms_abi)) *kernel_entry)(boot_info_t *) =
-        (void(__attribute__((ms_abi)) *)(boot_info_t *))(UINTN)ehdr->e_entry;
+    void(__attribute__((ms_abi)) * kernel_entry)(boot_info_t*) =
+        (void(__attribute__((ms_abi))*)(boot_info_t*))(UINTN)ehdr->e_entry;
     kernel_entry(boot_info);
 
     return EFI_SUCCESS;

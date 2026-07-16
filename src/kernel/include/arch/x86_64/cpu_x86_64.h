@@ -4,7 +4,7 @@
 
 #include <stdint.h>
 
-#define GDT_ENTRY_COUNT    7
+#define GDT_ENTRY_COUNT 7
 #define CPU_IST_STACK_SIZE 16384u
 
 typedef struct __attribute__((packed)) {
@@ -35,7 +35,7 @@ void x86_cpu_disable_interrupts(void);
 struct cpu_local;
 /* Initialise the AP cpu_local slot: copy GDT template, zero TSS, set stack
  * tops, encode TSS into GDT.  Called from the BSP before sending SIPI. */
-void x86_cpu_prepare_ap(struct cpu_local *cpu, uint64_t ist1_top, uint64_t rsp0_top);
+void x86_cpu_prepare_ap(struct cpu_local* cpu, uint64_t ist1_top, uint64_t rsp0_top);
 /* Load the per-CPU GDT, IDT, TSS, and GS base on the calling AP.
  * Must be called from the AP itself after it reaches 64-bit long mode. */
 void x86_ap_cpu_init(uint32_t cpu_id);

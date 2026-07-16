@@ -7,9 +7,7 @@
 #include "list_internal.h"
 #include "string.h"
 
-int
-list_init(list_t *list, uint32_t elem_size, list_impl_t impl, uint32_t config_value)
-{
+int list_init(list_t* list, uint32_t elem_size, list_impl_t impl, uint32_t config_value) {
     if (!list || elem_size == 0) {
         return -1;
     }
@@ -28,9 +26,7 @@ list_init(list_t *list, uint32_t elem_size, list_impl_t impl, uint32_t config_va
     return -1;
 }
 
-void
-list_destroy(list_t *list)
-{
+void list_destroy(list_t* list) {
     if (!list || !list->ops || !list->ops->destroy) {
         return;
     }
@@ -39,27 +35,21 @@ list_destroy(list_t *list)
     list->impl_state = 0;
 }
 
-void *
-list_alloc(list_t *list)
-{
+void* list_alloc(list_t* list) {
     if (!list || !list->ops || !list->ops->alloc) {
         return 0;
     }
     return list->ops->alloc(list);
 }
 
-int
-list_remove(list_t *list, void *elem)
-{
+int list_remove(list_t* list, void* elem) {
     if (!list || !list->ops || !list->ops->remove) {
         return -1;
     }
     return list->ops->remove(list, elem);
 }
 
-void *
-list_first(list_t *list, list_iter_t *iter)
-{
+void* list_first(list_t* list, list_iter_t* iter) {
     if (!list || !iter || !list->ops || !list->ops->first) {
         return 0;
     }
@@ -68,9 +58,7 @@ list_first(list_t *list, list_iter_t *iter)
     return list->ops->first(list, iter);
 }
 
-void *
-list_next(list_iter_t *iter)
-{
+void* list_next(list_iter_t* iter) {
     if (!iter || !iter->list || !iter->list->ops || !iter->list->ops->next) {
         return 0;
     }

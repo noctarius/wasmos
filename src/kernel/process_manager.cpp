@@ -31,7 +31,7 @@ uint8_t g_pm_status_owner_deny_logged;
 uint8_t g_pm_spawn_owner_deny_logged;
 
 class ProcessManager {
-public:
+  public:
     typedef struct {
         uint32_t type;
         uint32_t request_id;
@@ -43,22 +43,20 @@ public:
         uint8_t wait_owner_mismatch;
     } inject_request_t;
 
-    pm_wait_state_t *wait_slot_acquire(void)
-    {
+    pm_wait_state_t* wait_slot_acquire(void) {
         list_iter_t it;
-        pm_wait_state_t *waiter = (pm_wait_state_t *)list_first(&g_pm.waits, &it);
+        pm_wait_state_t* waiter = (pm_wait_state_t*)list_first(&g_pm.waits, &it);
         while (waiter) {
             if (!waiter->in_use) {
                 return waiter;
             }
-            waiter = (pm_wait_state_t *)list_next(&it);
+            waiter = (pm_wait_state_t*)list_next(&it);
         }
-        waiter = (pm_wait_state_t *)list_alloc(&g_pm.waits);
+        waiter = (pm_wait_state_t*)list_alloc(&g_pm.waits);
         return waiter;
     }
 
-    uint32_t alloc_cli_tty(void)
-    {
+    uint32_t alloc_cli_tty(void) {
         uint32_t tty = g_pm.next_cli_tty;
         if (tty < 1 || tty > 3) {
             tty = 1;
@@ -67,8 +65,7 @@ public:
         return tty;
     }
 
-    void inject(const inject_request_t *request)
-    {
+    void inject(const inject_request_t* request) {
 #if WASMOS_PM_TEST_HOOKS
         if (!request) {
             return;
@@ -82,7 +79,7 @@ public:
                 reply_endpoint == IPC_ENDPOINT_NONE) {
                 return;
             }
-            pm_wait_state_t *waiter = wait_slot_acquire();
+            pm_wait_state_t* waiter = wait_slot_acquire();
             if (!waiter) {
                 return;
             }
@@ -119,8 +116,7 @@ public:
 #endif
     }
 
-    int init(const boot_info_t *boot_info)
-    {
+    int init(const boot_info_t* boot_info) {
         g_pm.init_module_index = 0xFFFFFFFFu;
         g_pm.module_count = 0;
         g_pm.boot_info = boot_info;
@@ -142,21 +138,15 @@ public:
             g_pm.module_count = boot_info->module_count;
             g_pm.init_module_index = pm_find_module_index_by_name("sysinit");
         }
-        if (list_init(&g_pm.apps,
-                      sizeof(pm_app_state_t),
-                      (list_impl_t)WASMOS_PM_LIST_IMPL,
+        if (list_init(&g_pm.apps, sizeof(pm_app_state_t), (list_impl_t)WASMOS_PM_LIST_IMPL,
                       WASMOS_PM_LIST_ARRAY_CHUNK_CAP) != 0) {
             return -1;
         }
-        if (list_init(&g_pm.waits,
-                      sizeof(pm_wait_state_t),
-                      (list_impl_t)WASMOS_PM_LIST_IMPL,
+        if (list_init(&g_pm.waits, sizeof(pm_wait_state_t), (list_impl_t)WASMOS_PM_LIST_IMPL,
                       WASMOS_PM_LIST_ARRAY_CHUNK_CAP) != 0) {
             return -1;
         }
-        if (list_init(&g_pm.services,
-                      sizeof(pm_service_entry_t),
-                      (list_impl_t)WASMOS_PM_LIST_IMPL,
+        if (list_init(&g_pm.services, sizeof(pm_service_entry_t), (list_impl_t)WASMOS_PM_LIST_IMPL,
                       WASMOS_PM_LIST_ARRAY_CHUNK_CAP) != 0) {
             return -1;
         }
@@ -164,11 +154,10 @@ public:
         return 0;
     }
 
-    int handle_kill(uint32_t pm_context_id, const ipc_message_t *msg)
-    {
+    int handle_kill(uint32_t pm_context_id, const ipc_message_t* msg) {
         uint32_t owner_context = 0;
-        process_t *caller = 0;
-        process_t *target = 0;
+        process_t* caller = 0;
+        process_t* target = 0;
 
         if (ipc_endpoint_owner(msg->source, &owner_context) != IPC_OK) {
             return -1;
@@ -203,11 +192,10 @@ public:
         return ipc_send_from(pm_context_id, msg->source, &resp) == IPC_OK ? 0 : -1;
     }
 
-    int handle_status(uint32_t pm_context_id, const ipc_message_t *msg)
-    {
+    int handle_status(uint32_t pm_context_id, const ipc_message_t* msg) {
         uint32_t owner_context = 0;
-        process_t *caller = 0;
-        process_t *target = process_get(msg->arg0);
+        process_t* caller = 0;
+        process_t* target = process_get(msg->arg0);
         ipc_message_t resp;
 
         if (ipc_endpoint_owner(msg->source, &owner_context) != IPC_OK) {
@@ -243,11 +231,10 @@ public:
         return ipc_send_from(pm_context_id, msg->source, &resp) == IPC_OK ? 0 : -1;
     }
 
-    int handle_wait(uint32_t pm_context_id, const ipc_message_t *msg)
-    {
+    int handle_wait(uint32_t pm_context_id, const ipc_message_t* msg) {
         uint32_t owner_context = 0;
-        process_t *caller = 0;
-        process_t *target = 0;
+        process_t* caller = 0;
+        process_t* target = 0;
         int32_t exit_status = 0;
 
         if (ipc_endpoint_owner(msg->source, &owner_context) != IPC_OK) {
@@ -280,7 +267,7 @@ public:
             return rc;
         }
 
-        pm_wait_state_t *waiter = wait_slot_acquire();
+        pm_wait_state_t* waiter = wait_slot_acquire();
         if (!waiter) {
             return -1;
         }
@@ -292,8 +279,7 @@ public:
         return 0;
     }
 
-    process_run_result_t entry(process_t *process, void *)
-    {
+    process_run_result_t entry(process_t* process, void*) {
         ipc_message_t msg;
 
         if (!process) {
@@ -332,7 +318,7 @@ public:
 
             /* Watch all three endpoints with one select set so the entry can
              * block (instead of busy-polling) until any of them has traffic. */
-            uint32_t pm_eps[3] = { proc_endpoint, fs_ctrl_endpoint, fs_reply_endpoint };
+            uint32_t pm_eps[3] = {proc_endpoint, fs_ctrl_endpoint, fs_reply_endpoint};
             uint32_t pm_select = 0;
             if (ipc_select_listen(process->context_id, pm_eps, 3, &pm_select) != IPC_OK) {
                 klog_write("[pm] select setup failed\n");
@@ -365,91 +351,88 @@ public:
              * (productive work, not a spin); we only sleep once the queue is
              * empty. */
             uint32_t ready_ep = IPC_ENDPOINT_NONE;
-            (void)ipc_select_wait(pm_atomic_load_u32(&g_pm.select_id),
-                                  process->context_id, &ready_ep,
-                                  WASMOS_PM_POLL_INTERVAL_MS);
+            (void)ipc_select_wait(pm_atomic_load_u32(&g_pm.select_id), process->context_id,
+                                  &ready_ep, WASMOS_PM_POLL_INTERVAL_MS);
             return PROCESS_RUN_YIELDED;
         }
 
         int rc = -1;
         switch (msg.type) {
-            case PROC_IPC_SPAWN:
-                rc = pm_handle_spawn(process->context_id, &msg);
-                break;
-            case PROC_IPC_SPAWN_CAPS:
-                rc = pm_handle_spawn_caps(process->context_id, &msg);
-                break;
-            case PROC_IPC_SPAWN_CAPS_V2:
-                rc = pm_handle_spawn_caps_v2(process->context_id, &msg);
-                break;
-            case PROC_IPC_SPAWN_PATH:
-                rc = pm_handle_spawn_path(process->context_id, &msg);
-                break;
-            case PROC_IPC_SPAWN_PATH_CAPS:
-                rc = pm_handle_spawn_path_caps(process->context_id, &msg);
-                break;
-            case PROC_IPC_SPAWN_SYNC:
-                rc = pm_handle_spawn_sync(process->context_id, &msg);
-                break;
-            case PROC_IPC_SPAWN_CAPS_SYNC:
-                rc = pm_handle_spawn_caps_sync(process->context_id, &msg);
-                break;
-            case PROC_IPC_SPAWN_PATH_SYNC:
-                rc = pm_handle_spawn_path_sync(process->context_id, &msg);
-                break;
-            case PROC_IPC_SPAWN_PATH_CAPS_SYNC:
-                rc = pm_handle_spawn_path_caps_sync(process->context_id, &msg);
-                break;
-            case PROC_IPC_NOTIFY_READY:
-                rc = pm_handle_notify_ready(process->context_id, &msg);
-                break;
-            case PROC_IPC_MODULE_META:
-                rc = pm_handle_module_meta(process->context_id, &msg);
-                break;
-            case PROC_IPC_MODULE_META_PATH:
-                rc = pm_handle_module_meta_path(process->context_id, &msg);
-                break;
-            case PROC_IPC_SUBSYSTEM_REGISTER_BROKER:
-                rc = pm_handle_subsystem_register_broker(process->context_id, &msg);
-                break;
-            case PROC_IPC_EXEC_HANDLER_REGISTER:
-                rc = pm_handle_exec_handler_register(process->context_id, &msg);
-                break;
-            case PROC_IPC_KILL:
-                rc = handle_kill(process->context_id, &msg);
-                break;
-            case PROC_IPC_STATUS:
-                rc = handle_status(process->context_id, &msg);
-                break;
-            case PROC_IPC_WAIT:
-                rc = handle_wait(process->context_id, &msg);
-                break;
-            case SVC_IPC_REGISTER_REQ:
-                rc = pm_handle_service_register(process->context_id, &msg);
-                break;
-            case SVC_IPC_REGISTER_DESC_REQ:
-                rc = pm_handle_service_register_desc(process->context_id, &msg);
-                break;
-            case SVC_IPC_LOOKUP_REQ:
-                rc = pm_handle_service_lookup(process->context_id, &msg);
-                break;
-            case SVC_IPC_LOOKUP_CLASS_REQ:
-                rc = pm_handle_service_lookup_class(process->context_id, &msg);
-                break;
-            case SVC_IPC_SUBSCRIBE_CLASS_REQ:
-                rc = pm_handle_class_subscribe(process->context_id, &msg);
-                break;
-            default:
-                rc = -1;
-                break;
+        case PROC_IPC_SPAWN:
+            rc = pm_handle_spawn(process->context_id, &msg);
+            break;
+        case PROC_IPC_SPAWN_CAPS:
+            rc = pm_handle_spawn_caps(process->context_id, &msg);
+            break;
+        case PROC_IPC_SPAWN_CAPS_V2:
+            rc = pm_handle_spawn_caps_v2(process->context_id, &msg);
+            break;
+        case PROC_IPC_SPAWN_PATH:
+            rc = pm_handle_spawn_path(process->context_id, &msg);
+            break;
+        case PROC_IPC_SPAWN_PATH_CAPS:
+            rc = pm_handle_spawn_path_caps(process->context_id, &msg);
+            break;
+        case PROC_IPC_SPAWN_SYNC:
+            rc = pm_handle_spawn_sync(process->context_id, &msg);
+            break;
+        case PROC_IPC_SPAWN_CAPS_SYNC:
+            rc = pm_handle_spawn_caps_sync(process->context_id, &msg);
+            break;
+        case PROC_IPC_SPAWN_PATH_SYNC:
+            rc = pm_handle_spawn_path_sync(process->context_id, &msg);
+            break;
+        case PROC_IPC_SPAWN_PATH_CAPS_SYNC:
+            rc = pm_handle_spawn_path_caps_sync(process->context_id, &msg);
+            break;
+        case PROC_IPC_NOTIFY_READY:
+            rc = pm_handle_notify_ready(process->context_id, &msg);
+            break;
+        case PROC_IPC_MODULE_META:
+            rc = pm_handle_module_meta(process->context_id, &msg);
+            break;
+        case PROC_IPC_MODULE_META_PATH:
+            rc = pm_handle_module_meta_path(process->context_id, &msg);
+            break;
+        case PROC_IPC_SUBSYSTEM_REGISTER_BROKER:
+            rc = pm_handle_subsystem_register_broker(process->context_id, &msg);
+            break;
+        case PROC_IPC_EXEC_HANDLER_REGISTER:
+            rc = pm_handle_exec_handler_register(process->context_id, &msg);
+            break;
+        case PROC_IPC_KILL:
+            rc = handle_kill(process->context_id, &msg);
+            break;
+        case PROC_IPC_STATUS:
+            rc = handle_status(process->context_id, &msg);
+            break;
+        case PROC_IPC_WAIT:
+            rc = handle_wait(process->context_id, &msg);
+            break;
+        case SVC_IPC_REGISTER_REQ:
+            rc = pm_handle_service_register(process->context_id, &msg);
+            break;
+        case SVC_IPC_REGISTER_DESC_REQ:
+            rc = pm_handle_service_register_desc(process->context_id, &msg);
+            break;
+        case SVC_IPC_LOOKUP_REQ:
+            rc = pm_handle_service_lookup(process->context_id, &msg);
+            break;
+        case SVC_IPC_LOOKUP_CLASS_REQ:
+            rc = pm_handle_service_lookup_class(process->context_id, &msg);
+            break;
+        case SVC_IPC_SUBSCRIBE_CLASS_REQ:
+            rc = pm_handle_class_subscribe(process->context_id, &msg);
+            break;
+        default:
+            rc = -1;
+            break;
         }
 
         if (rc != 0) {
             ipc_message_t resp;
-            if (msg.type == SVC_IPC_REGISTER_REQ ||
-                msg.type == SVC_IPC_REGISTER_DESC_REQ ||
-                msg.type == SVC_IPC_LOOKUP_REQ ||
-                msg.type == SVC_IPC_LOOKUP_CLASS_REQ ||
+            if (msg.type == SVC_IPC_REGISTER_REQ || msg.type == SVC_IPC_REGISTER_DESC_REQ ||
+                msg.type == SVC_IPC_LOOKUP_REQ || msg.type == SVC_IPC_LOOKUP_CLASS_REQ ||
                 msg.type == SVC_IPC_SUBSCRIBE_CLASS_REQ) {
                 resp.type = SVC_IPC_ERROR;
             } else {
@@ -471,11 +454,14 @@ public:
 
 static ProcessManager g_process_manager;
 
-pm_wait_state_t *pm_wait_slot_acquire(void) { return g_process_manager.wait_slot_acquire(); }
-uint32_t pm_alloc_cli_tty(void) { return g_process_manager.alloc_cli_tty(); }
+pm_wait_state_t* pm_wait_slot_acquire(void) {
+    return g_process_manager.wait_slot_acquire();
+}
+uint32_t pm_alloc_cli_tty(void) {
+    return g_process_manager.alloc_cli_tty();
+}
 
-void process_manager_inject_wait_owner_mismatch_test(uint32_t expected_owner_context_id)
-{
+void process_manager_inject_wait_owner_mismatch_test(uint32_t expected_owner_context_id) {
     ProcessManager::inject_request_t request;
     request.type = 0;
     request.request_id = 0xFFFF0001u;
@@ -487,8 +473,7 @@ void process_manager_inject_wait_owner_mismatch_test(uint32_t expected_owner_con
     request.wait_owner_mismatch = 1;
     g_process_manager.inject(&request);
 }
-void process_manager_inject_kill_owner_deny_test(void)
-{
+void process_manager_inject_kill_owner_deny_test(void) {
     ProcessManager::inject_request_t request;
     request.type = PROC_IPC_KILL;
     request.request_id = 0xFFFF1001u;
@@ -500,8 +485,7 @@ void process_manager_inject_kill_owner_deny_test(void)
     request.wait_owner_mismatch = 0;
     g_process_manager.inject(&request);
 }
-void process_manager_inject_status_owner_deny_test(void)
-{
+void process_manager_inject_status_owner_deny_test(void) {
     ProcessManager::inject_request_t request;
     request.type = PROC_IPC_STATUS;
     request.request_id = 0xFFFF1002u;
@@ -513,8 +497,7 @@ void process_manager_inject_status_owner_deny_test(void)
     request.wait_owner_mismatch = 0;
     g_process_manager.inject(&request);
 }
-void process_manager_inject_spawn_owner_deny_test(void)
-{
+void process_manager_inject_spawn_owner_deny_test(void) {
     ProcessManager::inject_request_t request;
     request.type = PROC_IPC_SPAWN;
     request.request_id = 0xFFFF1003u;
@@ -527,30 +510,37 @@ void process_manager_inject_spawn_owner_deny_test(void)
     g_process_manager.inject(&request);
 }
 
-int process_manager_init(const boot_info_t *boot_info) { return g_process_manager.init(boot_info); }
+int process_manager_init(const boot_info_t* boot_info) {
+    return g_process_manager.init(boot_info);
+}
 
-uint32_t process_manager_endpoint(void) { return pm_atomic_load_u32(&g_pm.proc_endpoint); }
-uint32_t process_manager_fs_endpoint(void)
-{
+uint32_t process_manager_endpoint(void) {
+    return pm_atomic_load_u32(&g_pm.proc_endpoint);
+}
+uint32_t process_manager_fs_endpoint(void) {
     return pm_atomic_load_u32(&g_pm.fs_endpoint);
 }
-uint32_t process_manager_block_endpoint(void) { return pm_atomic_load_u32(&g_pm.block_endpoint); }
-uint32_t process_manager_vt_endpoint(void) { return pm_atomic_load_u32(&g_pm.vt_endpoint); }
-uint32_t process_manager_framebuffer_endpoint(void) { return pm_atomic_load_u32(&g_pm.fb_endpoint); }
+uint32_t process_manager_block_endpoint(void) {
+    return pm_atomic_load_u32(&g_pm.block_endpoint);
+}
+uint32_t process_manager_vt_endpoint(void) {
+    return pm_atomic_load_u32(&g_pm.vt_endpoint);
+}
+uint32_t process_manager_framebuffer_endpoint(void) {
+    return pm_atomic_load_u32(&g_pm.fb_endpoint);
+}
 
-void
-process_manager_set_framebuffer_endpoint(uint32_t endpoint)
-{
+void process_manager_set_framebuffer_endpoint(uint32_t endpoint) {
     pm_atomic_store_u32(&g_pm.fb_endpoint, endpoint);
     (void)pm_service_set("fb", endpoint, IPC_CONTEXT_KERNEL);
 }
 
-process_run_result_t process_manager_entry(process_t *process, void *arg) { return g_process_manager.entry(process, arg); }
+process_run_result_t process_manager_entry(process_t* process, void* arg) {
+    return g_process_manager.entry(process, arg);
+}
 
-void
-process_manager_on_child_ready(uint32_t pid)
-{
-    process_t *proc = process_get(pid);
+void process_manager_on_child_ready(uint32_t pid) {
+    process_t* proc = process_get(pid);
     if (!proc) {
         return;
     }

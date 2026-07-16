@@ -9,7 +9,7 @@ typedef enum {
     CLI_PHASE_INIT = 0,
     CLI_PHASE_PROMPT,
     CLI_PHASE_READ,
-    CLI_PHASE_WAIT_IPC,   /* blocked waiting for an IPC response */
+    CLI_PHASE_WAIT_IPC, /* blocked waiting for an IPC response */
     CLI_PHASE_FAILED
 } cli_phase_t;
 
@@ -27,8 +27,8 @@ typedef enum {
 typedef struct cli_env_var {
     char name[CLI_ENV_NAME_MAX];
     char value[CLI_ENV_VALUE_MAX];
-    uint8_t is_export;   /* non-zero if variable is exported to child processes */
-    struct cli_env_var *next;
+    uint8_t is_export; /* non-zero if variable is exported to child processes */
+    struct cli_env_var* next;
 } cli_env_var_t;
 
 /* Tag for the asynchronous operation that is currently in flight. */
@@ -37,7 +37,7 @@ enum {
     PENDING_LIST,
     PENDING_CAT,
     PENDING_CD,
-    PENDING_CD_CHAIN,  /* chained cd: waiting for first segment reply */
+    PENDING_CD_CHAIN, /* chained cd: waiting for first segment reply */
     PENDING_EXEC,
     PENDING_WAIT,
     PENDING_SPAWN

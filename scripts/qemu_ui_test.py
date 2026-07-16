@@ -95,7 +95,9 @@ def main():
         display_backend = detect_display_backend()
 
     if args.ovmf_code or args.esp:
-        userfs = args.userfs or os.environ.get("WASMOS_USERFS", os.path.join(os.getcwd(), "userfs"))
+        userfs = args.userfs or os.environ.get(
+            "WASMOS_USERFS", os.path.join(os.getcwd(), "userfs")
+        )
         cfg = QemuConfig(
             args.ovmf_code,
             args.ovmf_vars,

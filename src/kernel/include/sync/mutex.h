@@ -11,14 +11,11 @@ typedef struct {
     uint8_t locked;
 } ksync_mutex_t;
 
-enum {
-    KSYNC_MUTEX_OK = 0,
-    KSYNC_MUTEX_BUSY = 1
-};
+enum { KSYNC_MUTEX_OK = 0, KSYNC_MUTEX_BUSY = 1 };
 
-void ksync_mutex_init(ksync_mutex_t *mutex);
-int ksync_mutex_try_lock(ksync_mutex_t *mutex);
-int ksync_mutex_lock(ksync_mutex_t *mutex);
-int ksync_mutex_unlock(ksync_mutex_t *mutex);
+void ksync_mutex_init(ksync_mutex_t* mutex);
+int ksync_mutex_try_lock(ksync_mutex_t* mutex);
+int ksync_mutex_lock(ksync_mutex_t* mutex);
+int ksync_mutex_unlock(ksync_mutex_t* mutex);
 
 #endif

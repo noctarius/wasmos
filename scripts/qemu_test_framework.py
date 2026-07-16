@@ -72,8 +72,9 @@ def default_config(build_dir: str = "build") -> QemuConfig:
     enable_monitor = os.environ.get("WASMOS_QEMU_MONITOR", "0") == "1"
     monitor_socket = os.environ.get("WASMOS_QEMU_MONITOR_SOCK", "")
     smp_count = int(os.environ.get("WASMOS_QEMU_SMP_COUNT", "1"))
-    nic_model = os.environ.get("WASMOS_QEMU_NIC_MODEL",
-                               cache.get("WASMOS_QEMU_NIC_MODEL", "virtio-net-pci"))
+    nic_model = os.environ.get(
+        "WASMOS_QEMU_NIC_MODEL", cache.get("WASMOS_QEMU_NIC_MODEL", "virtio-net-pci")
+    )
     if not ovmf_code:
         raise RuntimeError("OVMF_CODE not set (WASMOS_OVMF_CODE or CMakeCache.txt)")
     return QemuConfig(
@@ -122,8 +123,7 @@ def build_qemu_cmd(cfg: QemuConfig) -> list:
     if cfg.userfs_dir:
         cmd += ["-drive", f"format=raw,file=fat:rw:{cfg.userfs_dir}"]
     if cfg.nic_model and cfg.nic_model != "none":
-        cmd += ["-netdev", "user,id=net0",
-                "-device", f"{cfg.nic_model},netdev=net0"]
+        cmd += ["-netdev", "user,id=net0", "-device", f"{cfg.nic_model},netdev=net0"]
     if cfg.monitor_socket:
         cmd += ["-qmp", f"unix:{cfg.monitor_socket},server,wait=off"]
     return cmd
@@ -183,6 +183,7 @@ def _ppm_to_png(ppm_path: str, png_path: str) -> None:
     """
     try:
         from PIL import Image as _Image
+
         _Image.open(ppm_path).save(png_path)
         return
     except ImportError:
@@ -206,11 +207,15 @@ def _ppm_to_png(ppm_path: str, png_path: str) -> None:
 
     def _chunk(tag: bytes, data: bytes) -> bytes:
         body = tag + data
-        return struct.pack(">I", len(data)) + body + struct.pack(">I", zlib.crc32(body) & 0xFFFFFFFF)
+        return (
+            struct.pack(">I", len(data))
+            + body
+            + struct.pack(">I", zlib.crc32(body) & 0xFFFFFFFF)
+        )
 
     stride = w * 3
     # Prepend filter-type byte 0 (None) to each scanline, then zlib-compress.
-    filtered = b"".join(b"\x00" + raw[y * stride:(y + 1) * stride] for y in range(h))
+    filtered = b"".join(b"\x00" + raw[y * stride : (y + 1) * stride] for y in range(h))
 
     with open(png_path, "wb") as fh:
         fh.write(b"\x89PNG\r\n\x1a\n")
@@ -299,7 +304,7 @@ class QemuMonitor:
             idx = self._buf.find(b"\n")
             if idx >= 0:
                 line = self._buf[:idx].strip()
-                self._buf = self._buf[idx + 1:]
+                self._buf = self._buf[idx + 1 :]
                 if line:
                     return json.loads(line.decode("utf-8"))
                 continue
@@ -346,10 +351,12 @@ class QemuMonitor:
             session.monitor.hmp("info pci")
             session.monitor.hmp("sendkey ctrl-alt-delete")
         """
-        self._send_object({
-            "execute": "human-monitor-command",
-            "arguments": {"command-line": cmd},
-        })
+        self._send_object(
+            {
+                "execute": "human-monitor-command",
+                "arguments": {"command-line": cmd},
+            }
+        )
         while True:
             resp = self._read_object()
             if "return" in resp:
@@ -368,18 +375,24 @@ class QemuMonitor:
         """
         self.execute(
             "input-send-event",
-            events=[{"type": "key", "data": {
-                "down": True, "key": {"type": "qcode", "data": key}
-            }}],
+            events=[
+                {
+                    "type": "key",
+                    "data": {"down": True, "key": {"type": "qcode", "data": key}},
+                }
+            ],
         )
 
     def key_up(self, key: str) -> None:
         """Send a key-release event."""
         self.execute(
             "input-send-event",
-            events=[{"type": "key", "data": {
-                "down": False, "key": {"type": "qcode", "data": key}
-            }}],
+            events=[
+                {
+                    "type": "key",
+                    "data": {"down": False, "key": {"type": "qcode", "data": key}},
+                }
+            ],
         )
 
     def key_press(self, key: str) -> None:
@@ -431,8 +444,9 @@ class QemuMonitor:
         if events:
             self.execute("input-send-event", events=events)
 
-    def mouse_move_abs(self, x: int, y: int,
-                       screen_w: int = 1024, screen_h: int = 768) -> None:
+    def mouse_move_abs(
+        self, x: int, y: int, screen_w: int = 1024, screen_h: int = 768
+    ) -> None:
         """Move the mouse pointer to an absolute screen position.
 
         x and y are pixel coordinates within a screen_w × screen_h display.
@@ -443,8 +457,14 @@ class QemuMonitor:
         self.execute(
             "input-send-event",
             events=[
-                {"type": "abs", "data": {"axis": "x", "value": max(0, min(0x7FFF, ax))}},
-                {"type": "abs", "data": {"axis": "y", "value": max(0, min(0x7FFF, ay))}},
+                {
+                    "type": "abs",
+                    "data": {"axis": "x", "value": max(0, min(0x7FFF, ax))},
+                },
+                {
+                    "type": "abs",
+                    "data": {"axis": "y", "value": max(0, min(0x7FFF, ay))},
+                },
             ],
         )
 
@@ -511,7 +531,9 @@ class QemuMonitor:
             raise ValueError(f"unsupported fmt {fmt!r}: choose 'png' or 'ppm'")
 
         if path is None:
-            fd, path = tempfile.mkstemp(suffix=f".{fmt}", prefix="wasmos-screen-", dir="/tmp")
+            fd, path = tempfile.mkstemp(
+                suffix=f".{fmt}", prefix="wasmos-screen-", dir="/tmp"
+            )
             os.close(fd)
 
         if fmt == "ppm":
@@ -519,7 +541,9 @@ class QemuMonitor:
             return path
 
         # Dump native PPM to a temp file, convert to PNG, clean up the PPM.
-        fd, ppm_path = tempfile.mkstemp(suffix=".ppm", prefix="wasmos-screen-", dir="/tmp")
+        fd, ppm_path = tempfile.mkstemp(
+            suffix=".ppm", prefix="wasmos-screen-", dir="/tmp"
+        )
         os.close(fd)
         try:
             self.hmp(f"screendump {ppm_path}")
@@ -533,8 +557,13 @@ class QemuMonitor:
 
 
 class QemuSession:
-    def __init__(self, cfg: QemuConfig, timeout_s: int = 120, echo: bool = True,
-                 force_stop_on_timeout: bool = True):
+    def __init__(
+        self,
+        cfg: QemuConfig,
+        timeout_s: int = 120,
+        echo: bool = True,
+        force_stop_on_timeout: bool = True,
+    ):
         self.cfg = cfg
         self.timeout_s = timeout_s
         self.echo = echo
@@ -714,7 +743,9 @@ class QemuSession:
                     sys.stdout.buffer.flush()
                 self.buf += chunk
 
-    def expect(self, needle: Union[bytes, str, Pattern[bytes]], timeout_s: Optional[int] = None) -> bool:
+    def expect(
+        self, needle: Union[bytes, str, Pattern[bytes]], timeout_s: Optional[int] = None
+    ) -> bool:
         if isinstance(needle, str):
             needle_b = needle.encode("utf-8")
             pattern = None
@@ -742,7 +773,12 @@ class QemuSession:
     def mark(self) -> int:
         return len(self.buf)
 
-    def expect_from(self, start: int, needle: Union[bytes, str, Pattern[bytes]], timeout_s: Optional[int] = None) -> bool:
+    def expect_from(
+        self,
+        start: int,
+        needle: Union[bytes, str, Pattern[bytes]],
+        timeout_s: Optional[int] = None,
+    ) -> bool:
         if isinstance(needle, str):
             needle_b = needle.encode("utf-8")
             pattern = None
@@ -798,8 +834,12 @@ def main():
     args = parser.parse_args()
 
     if args.ovmf_code or args.esp:
-        userfs = args.userfs or os.environ.get("WASMOS_USERFS", os.path.join(os.getcwd(), "userfs"))
-        cfg = QemuConfig(args.ovmf_code, args.ovmf_vars, args.esp, userfs, smp_count=args.smp)
+        userfs = args.userfs or os.environ.get(
+            "WASMOS_USERFS", os.path.join(os.getcwd(), "userfs")
+        )
+        cfg = QemuConfig(
+            args.ovmf_code, args.ovmf_vars, args.esp, userfs, smp_count=args.smp
+        )
     else:
         cfg = default_config()
 

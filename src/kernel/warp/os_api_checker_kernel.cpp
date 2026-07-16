@@ -8,8 +8,7 @@ extern "C" {
 
 #include "src/utils/OSAPIChecker.hpp"
 
-void checkSysCallReturn(const char *const msg, int32_t const errorCode)
-{
+void checkSysCallReturn(const char* const msg, int32_t const errorCode) {
     if (errorCode != 0) {
         klog_write("[warp] syscall failed: ");
         klog_write(msg ? msg : "?");

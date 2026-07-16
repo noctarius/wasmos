@@ -17,7 +17,7 @@ extern "C" {
 #endif
 
 /* Initialize the process manager and start the PM kernel process. */
-int process_manager_init(const boot_info_t *boot_info);
+int process_manager_init(const boot_info_t* boot_info);
 
 /* Return the IPC endpoint number for the PM's main message queue. */
 uint32_t process_manager_endpoint(void);
@@ -36,7 +36,7 @@ void process_manager_inject_status_owner_deny_test(void);
 void process_manager_inject_spawn_owner_deny_test(void);
 
 /* PM kernel process entry point; runs the PM IPC event loop. */
-process_run_result_t process_manager_entry(process_t *process, void *arg);
+process_run_result_t process_manager_entry(process_t* process, void* arg);
 
 /* Called by a child process once it considers itself ready; unblocks waiting parent. */
 void process_manager_on_child_ready(uint32_t pid);

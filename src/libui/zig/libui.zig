@@ -15,7 +15,6 @@
 ///   while (!ui.closeRequested()) {
 ///       ui.pollAndDrain();
 ///   }
-
 const Error = error{ InitFailed, CreateFailed };
 
 // ---------------------------------------------------------------------------
@@ -158,9 +157,9 @@ pub const Context = struct {
             libui_zig_set_border_color(self.handle, id, s.border);
         }
         if (s.preferred_h != 0) libui_zig_set_preferred_h(self.handle, id, s.preferred_h);
-        if (s.pad != 0)          libui_zig_set_padding_px(self.handle, id, s.pad);
-        if (s.gap != 0)          libui_zig_set_gap_px(self.handle, id, s.gap);
-        if (s.border_px != 0)    libui_zig_set_border_px(self.handle, id, s.border_px);
-        if (s.clickable)         libui_zig_set_clickable(self.handle, id, 1);
+        if (s.pad != 0) libui_zig_set_padding_px(self.handle, id, s.pad);
+        if (s.gap != 0) libui_zig_set_gap_px(self.handle, id, s.gap);
+        if (s.border_px != 0) libui_zig_set_border_px(self.handle, id, s.border_px);
+        if (s.clickable) libui_zig_set_clickable(self.handle, id, 1);
     }
 };

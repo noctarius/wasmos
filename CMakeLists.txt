@@ -1,5 +1,7 @@
 cmake_minimum_required(VERSION 3.20)
 
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
 # Strip host toolchain flags that break freestanding builds on macOS.
 if (CMAKE_SYSTEM_NAME STREQUAL "Darwin")
   set(ENV{CFLAGS} "")

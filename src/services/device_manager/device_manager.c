@@ -860,6 +860,20 @@ hw_spawn_driver_path_caps_args(const char *path,
 }
 
 static int
+build_block_fs_spawn_args(uint8_t unit, char *out, uint32_t out_cap)
+{
+    int n = 0;
+    if (!out || out_cap == 0u) {
+        return -1;
+    }
+    n = snprintf(out, out_cap, "unit=%u", (unsigned)unit);
+    if (n <= 0 || (uint32_t)n >= out_cap) {
+        return -1;
+    }
+    return n;
+}
+
+static int
 build_pci_spawn_args(const pci_device_record_t *rec, char *out, uint32_t out_cap)
 {
     int n = 0;
@@ -1948,17 +1962,22 @@ initialize(int32_t proc_endpoint,
 
             if (target == HW_SPAWN_RULE_PATH) {
                 int rc;
-                /* PCI/ACPI rule-based matches use path+caps spawn so the
-                 * driver gets I/O-port and IRQ grants derived from inventory. */
-                if ((g_dm.active_rule_spawn_kind == RULE_SPAWN_KIND_ACPI_MATCH ||
-                     g_dm.active_rule_spawn_kind == RULE_SPAWN_KIND_PCI_MATCH) &&
-                    g_dm.active_rule_spawn_caps.cap_flags != 0) {
-                    char boot_path[104];
+                /* Rule-based driver launches use path+caps spawn when they need
+                 * inventory-derived grants or startup args to target a device. */
+                if (g_dm.active_rule_spawn_kind == RULE_SPAWN_KIND_BLOCK_FS ||
+                    (((g_dm.active_rule_spawn_kind == RULE_SPAWN_KIND_ACPI_MATCH) ||
+                      (g_dm.active_rule_spawn_kind == RULE_SPAWN_KIND_PCI_MATCH)) &&
+                     g_dm.active_rule_spawn_caps.cap_flags != 0)) {
+                    char spawn_path[104];
                     char spawn_args[DM_RULE_SPAWN_ARGS_MAX];
                     const char *args = 0;
-                    boot_path[0] = '\0';
-                    wasmos_sys_strcpy(boot_path, sizeof(boot_path), "/boot/");
-                    wasmos_sys_str_append(boot_path, sizeof(boot_path), g_dm.rule_spawn_path);
+                    spawn_path[0] = '\0';
+                    if (g_dm.active_rule_spawn_kind == RULE_SPAWN_KIND_BLOCK_FS) {
+                        wasmos_sys_strcpy(spawn_path, sizeof(spawn_path), "/init/");
+                    } else {
+                        wasmos_sys_strcpy(spawn_path, sizeof(spawn_path), "/boot/");
+                    }
+                    wasmos_sys_str_append(spawn_path, sizeof(spawn_path), g_dm.rule_spawn_path);
                     if (g_dm.active_rule_spawn_kind == RULE_SPAWN_KIND_PCI_MATCH &&
                         g_dm.active_rule_spawn_device_index >= 0 &&
                         g_dm.active_rule_spawn_device_index < (int32_t)g_dm.registry_count &&
@@ -1966,8 +1985,15 @@ initialize(int32_t proc_endpoint,
                                              spawn_args,
                                              sizeof(spawn_args)) > 0) {
                         args = spawn_args;
+                    } else if (g_dm.active_rule_spawn_kind == RULE_SPAWN_KIND_BLOCK_FS &&
+                               g_dm.active_rule_spawn_index >= 0 &&
+                               g_dm.active_rule_spawn_index < (int32_t)g_dm.block_fs_rule_count &&
+                               build_block_fs_spawn_args(g_dm.block_fs_rules[g_dm.active_rule_spawn_index].unit,
+                                                         spawn_args,
+                                                         sizeof(spawn_args)) > 0) {
+                        args = spawn_args;
                     }
-                    rc = hw_spawn_driver_path_caps_args(boot_path, &g_dm.active_rule_spawn_caps, args);
+                    rc = hw_spawn_driver_path_caps_args(spawn_path, &g_dm.active_rule_spawn_caps, args);
                 } else {
                     rc = hw_spawn_rule_target(g_dm.rule_spawn_path);
                 }

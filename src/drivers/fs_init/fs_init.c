@@ -504,37 +504,34 @@ initialize(int32_t proc_endpoint,
         g_clients[i].source = -1;
         g_clients[i].cwd_dir = 0;
     }
-    if (wasmos_svc_register(proc_endpoint, g_fs_endpoint, "initfs.rules", 1) != 0) {
-        console_write("[fs-init] register initfs.rules failed\n");
+    /* Register the initfs.rules name plus the fs.backend class with a unique
+     * encoded (kind, unit) instance. fs-manager discovers backends via the
+     * class + subscription and pulls mount info, so there is no push
+     * registration here. Class registration needs the svc.class capability
+     * (see linker.metadata). */
+    if (wasmos_svc_register_class(proc_endpoint, g_fs_endpoint, "initfs.rules",
+                                  FSMGR_BACKEND_CLASS,
+                                  FSMGR_BACKEND_INSTANCE(FSMGR_BACKEND_INIT, 0),
+                                  1) != 0) {
+        console_write("[fs-init] register failed\n");
         wasmos_sys_ipc_recv_loop();
     }
-
-    int32_t fsmgr_endpoint = -1;
+    console_write("[fs-init] fs.backend registered\n");
+    /* Signal ready only after fs-manager pulls our info (first
+     * FSMGR_IPC_BACKEND_INFO_REQ), so a consumer never sees us ready before the
+     * mount is registered. */
     for (;;) {
-        fsmgr_endpoint = wasmos_svc_lookup(proc_endpoint, g_reply_endpoint, "fs.vfs", 1);
-        if (fsmgr_endpoint >= 0) {
+        if (wasmos_ipc_select_one(g_fs_endpoint) < 0) {
+            continue;
+        }
+        if (wasmos_ipc_last_field(WASMOS_IPC_FIELD_TYPE) == FSMGR_IPC_BACKEND_INFO_REQ) {
+            (void)wasmos_ipc_send(wasmos_ipc_last_field(WASMOS_IPC_FIELD_SOURCE),
+                                  g_fs_endpoint, FSMGR_IPC_BACKEND_INFO_RESP,
+                                  wasmos_ipc_last_field(WASMOS_IPC_FIELD_REQUEST_ID),
+                                  FSMGR_BACKEND_INIT, 0, 0, 0);
             break;
         }
-        (void)wasmos_sched_yield();
     }
-
-    if (wasmos_ipc_send(fsmgr_endpoint,
-                        g_reply_endpoint,
-                        FSMGR_IPC_REGISTER_BACKEND_REQ,
-                        1,
-                        FSMGR_BACKEND_INIT,
-                        g_fs_endpoint,
-                        0,
-                        0) != 0) {
-        console_write("[fs-init] register fs-manager send failed\n");
-        wasmos_sys_ipc_recv_loop();
-    }
-    if (wasmos_ipc_select_one(g_reply_endpoint) < 0 ||
-        wasmos_ipc_last_field(WASMOS_IPC_FIELD_TYPE) != FSMGR_IPC_REGISTER_BACKEND_RESP) {
-        console_write("[fs-init] register fs-manager failed\n");
-        wasmos_sys_ipc_recv_loop();
-    }
-    console_write("[fs-init] register fs-manager ok\n");
     wasmos_sys_notify_ready(proc_endpoint, g_fs_endpoint);
 
     for (;;) {
@@ -548,6 +545,13 @@ initialize(int32_t proc_endpoint,
         int32_t arg1 = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG1);
         int32_t arg2 = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG2);
         int32_t arg3 = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG3);
+        /* fs-manager pull: report kind=INIT. No mount buffer (arg2=0) → fs-manager
+         * uses its default "init" mount name; unit 0. */
+        if (type == FSMGR_IPC_BACKEND_INFO_REQ) {
+            (void)wasmos_ipc_send(source, g_fs_endpoint, FSMGR_IPC_BACKEND_INFO_RESP,
+                                  req_id, FSMGR_BACKEND_INIT, 0, 0, 0);
+            continue;
+        }
         int32_t *cwd_dir = client_cwd_for_source(source);
         int32_t status = -1;
         if (!cwd_dir) {

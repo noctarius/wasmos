@@ -654,20 +654,20 @@ route_root_path_request(fs_client_state_t *state,
     return 1;
 }
 
-static int
-handle_register_backend_req(int32_t source, int32_t request_id, int32_t arg0, int32_t arg1f, int32_t arg2f, int32_t arg3f)
+/* Apply a backend's pulled info: register it at its endpoint, set unit, and
+ * read its mount name (arg2 packs (buffer_id<<12)|len; the backend borrowed the
+ * buffer READ to fs-manager). Shared by the initial class enumeration and ADD
+ * events. */
+static void
+fsmgr_apply_backend_info(int32_t backend_endpoint, int32_t kind, int32_t arg2f, int32_t unit)
 {
-    int32_t backend_endpoint = arg1f > 0 ? arg1f : source;
-    fs_backend_t *registered = backend_register((uint8_t)arg0, backend_endpoint);
-    /* arg2 packs (buffer_id << 12) | (mount_len & 0xFFF): the backend wrote its
-     * mount name into buffer_id, which fs-manager borrows to read. */
+    fs_backend_t *registered = backend_register((uint8_t)kind, backend_endpoint);
     int32_t mount_len = arg2f & 0xFFF;
     int32_t buffer_id = (int32_t)((uint32_t)arg2f >> 12);
     if (!registered) {
-        send_fs_error(source, request_id);
-        return 1;
+        return;
     }
-    registered->unit = (uint8_t)(arg3f & 0xFF);
+    registered->unit = (uint8_t)(unit & 0xFF);
     if (buffer_id > 0 && mount_len > 0 && mount_len < (int32_t)sizeof(registered->mount_name)) {
         char mount_name[16];
         int32_t copy_len = mount_len;
@@ -684,9 +684,69 @@ handle_register_backend_req(int32_t source, int32_t request_id, int32_t arg0, in
             wasmos_sys_to_lower_ascii(registered->mount_name);
         }
     }
-    backend_refresh_boot_meta(registered, request_id + 1);
-    (void)wasmos_ipc_send(source, g_fs_endpoint, FSMGR_IPC_REGISTER_BACKEND_RESP, request_id, 0, registered->slot, 0, 0);
-    return 1;
+    /* NOTE: do NOT call backend_refresh_boot_meta() here. This runs while
+     * handling a class-discovery event, and that helper does a SYNCHRONOUS
+     * DEVMGR_QUERY_MOUNT_REQ round-trip to device-manager — which at this point
+     * is itself blocked waiting for fs-manager to answer its /boot rules read,
+     * producing a mutual-wait deadlock. (The old push path ran this during the
+     * backend's own init, before that window opened.) The boot meta is
+     * diagnostic PCI identity, not required to mount.
+     * TODO(fs-class-discovery): refetch boot meta out of band (device-manager
+     * push, or a fs-manager idle step) rather than a nested synchronous call. */
+}
+
+/* Pull a discovered backend's info over FSMGR_IPC_BACKEND_INFO and register it.
+ * Synchronous round-trip on the reply endpoint; the backend answers without any
+ * dependency on fs-manager, so this cannot deadlock. */
+static void
+fsmgr_pull_backend(int32_t backend_endpoint)
+{
+    if (backend_endpoint < 0) {
+        return;
+    }
+    if (wasmos_ipc_send(backend_endpoint, g_reply_endpoint,
+                        FSMGR_IPC_BACKEND_INFO_REQ, 1, 0, 0, 0, 0) != 0) {
+        return;
+    }
+    if (wasmos_ipc_select_one(g_reply_endpoint) < 0 ||
+        wasmos_ipc_last_field(WASMOS_IPC_FIELD_TYPE) != FSMGR_IPC_BACKEND_INFO_RESP) {
+        return;
+    }
+    fsmgr_apply_backend_info(backend_endpoint,
+                             wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG0),
+                             wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG2),
+                             wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG3));
+}
+
+/* Drop a backend that left its class (provider died / unregistered). */
+static void
+fsmgr_backend_remove(int32_t backend_endpoint)
+{
+    for (uint32_t i = 0; i < FS_BACKEND_CAP; ++i) {
+        if (g_backends[i].in_use && g_backends[i].endpoint == backend_endpoint) {
+            g_backends[i].in_use = 0;
+        }
+    }
+}
+
+/* Discover the current FS backends by class and pull each. Subscribe first so a
+ * backend registering between here and the lookup still fires an event; the
+ * lookup then captures the current set (and rebuilds it after an fs-manager
+ * restart). backend_register is idempotent, so an overlap is harmless. */
+static void
+fsmgr_discover_backends(void)
+{
+    svc_class_entry_t backends[8];
+    int32_t n;
+    int32_t i;
+    (void)wasmos_svc_subscribe_class(g_proc_endpoint, g_reply_endpoint,
+                                     g_fs_endpoint, FSMGR_BACKEND_CLASS, 3);
+    n = wasmos_svc_lookup_class(g_proc_endpoint, g_reply_endpoint,
+                                FSMGR_BACKEND_CLASS, backends,
+                                (int32_t)(sizeof(backends) / sizeof(backends[0])), 4);
+    for (i = 0; i < n && i < (int32_t)(sizeof(backends) / sizeof(backends[0])); ++i) {
+        fsmgr_pull_backend((int32_t)backends[i].endpoint);
+    }
 }
 
 static int
@@ -907,6 +967,7 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t arg1, int32
     }
     log_msg("[fs-manager] services registered\n");
     wasmos_sys_notify_ready(g_proc_endpoint, g_fs_endpoint);
+    fsmgr_discover_backends();
 
     for (;;) {
         if (wasmos_ipc_select_one(g_fs_endpoint) < 0) {
@@ -923,8 +984,14 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t arg1, int32
         int32_t arg2f = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG2);
         int32_t arg3f = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG3);
 
-        if (type == FSMGR_IPC_REGISTER_BACKEND_REQ) {
-            (void)handle_register_backend_req(source, request_id, arg0, arg1f, arg2f, arg3f);
+        if (type == SVC_IPC_CLASS_EVENT) {
+            /* Existence event for FSMGR_BACKEND_CLASS: arg0=event, arg1=instance,
+             * arg2=provider endpoint, arg3=pid. */
+            if (arg0 == (int32_t)SVC_CLASS_EVENT_ADD) {
+                fsmgr_pull_backend(arg2f);
+            } else if (arg0 == (int32_t)SVC_CLASS_EVENT_REMOVE) {
+                fsmgr_backend_remove(arg2f);
+            }
             continue;
         }
 

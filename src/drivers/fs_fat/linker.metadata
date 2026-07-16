@@ -19,3 +19,7 @@ entry_arg_bindings = ["proc.endpoint", "block.endpoint"]
 [[capabilities]]
 name = "ipc.basic"
 flags = 0
+
+[[capabilities]]
+name = "svc.class"
+flags = 0

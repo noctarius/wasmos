@@ -319,7 +319,7 @@ ata_dma_finish(int32_t source_endpoint,
 }
 
 static int
-ata_assign_unit_for_source(int32_t source, uint8_t *out_unit)
+ata_assign_unit_for_source(int32_t source, int32_t preferred_unit, uint8_t *out_unit)
 {
     if (!out_unit || source < 0) {
         return -1;
@@ -329,6 +329,31 @@ ata_assign_unit_for_source(int32_t source, uint8_t *out_unit)
             *out_unit = g_client_unit[i];
             return 0;
         }
+    }
+    if (preferred_unit >= 0 && preferred_unit < (int32_t)ATA_UNIT_COUNT) {
+        uint8_t unit = (uint8_t)preferred_unit;
+        uint8_t claimed = 0;
+        if (!g_unit_present[unit]) {
+            return -1;
+        }
+        for (uint32_t i = 0; i < ATA_CLIENT_MAP_CAP; ++i) {
+            if (g_client_owner[i] >= 0 && g_client_unit[i] == unit) {
+                claimed = 1;
+                break;
+            }
+        }
+        if (claimed) {
+            return -1;
+        }
+        for (uint32_t i = 0; i < ATA_CLIENT_MAP_CAP; ++i) {
+            if (g_client_owner[i] < 0) {
+                g_client_owner[i] = source;
+                g_client_unit[i] = unit;
+                *out_unit = unit;
+                return 0;
+            }
+        }
+        return -1;
     }
     for (uint32_t unit = 0; unit < ATA_UNIT_COUNT; ++unit) {
         uint8_t claimed = 0;
@@ -360,11 +385,15 @@ static int
 ata_handle_ipc(int32_t type, int32_t source, int32_t req_id, int32_t arg0, int32_t arg1, int32_t arg2)
 {
     uint8_t unit = 0;
+    int32_t preferred_unit = -1;
     if (!g_present) {
         ata_send_resp(source, req_id, BLOCK_IPC_ERROR, 1, 0);
         return 0;
     }
-    if (ata_assign_unit_for_source(source, &unit) != 0 || !g_unit_present[unit]) {
+    if (type == BLOCK_IPC_IDENTIFY_REQ && arg0 >= 0 && arg0 < (int32_t)ATA_UNIT_COUNT) {
+        preferred_unit = arg0;
+    }
+    if (ata_assign_unit_for_source(source, preferred_unit, &unit) != 0 || !g_unit_present[unit]) {
         ata_send_resp(source, req_id, BLOCK_IPC_ERROR, 1, 0);
         return 0;
     }

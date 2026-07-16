@@ -5,6 +5,7 @@
 #include <stdint.h>
 #include "ctype.h"
 #include "stdio.h"
+#include "stdlib.h"
 #include "string.h"
 #include "wasmos/api.h"
 #include "wasmos/ipc.h"
@@ -77,6 +78,12 @@ typedef enum {
 static int32_t g_block_endpoint = -1;
 static int32_t g_fs_endpoint = -1;
 static int32_t g_reply_endpoint = -1;
+/* Mount identity resolved at init and reported to fs-manager on each
+ * FSMGR_IPC_BACKEND_INFO_REQ pull. The buffer is owned persistently and
+ * (re)borrowed READ to the requesting fs-manager per pull. */
+static int32_t g_mount_bid = -1;
+static int32_t g_mount_len = 0;
+static uint8_t g_mount_unit = 0;
 static int32_t g_block_req_id = 1;
 static int32_t g_block_buf_phys = -1;
 static uint8_t g_sector_buf_storage[FAT_MAX_SECTOR_BYTES];
@@ -109,6 +116,7 @@ static int32_t g_cwd_source = -1;
 static uint16_t g_cwd_cluster = 0;
 static uint8_t g_cwd_root = 1;
 static vfs_mount_t g_cwd_mount = VFS_MOUNT_BOOT;
+static int32_t g_requested_unit = -1;
 
 static fat_op_t g_op = FAT_OP_NONE;
 static fat_cat_stage_t g_cat_stage = FAT_CAT_SCAN;
@@ -359,6 +367,74 @@ fat_log(const char *msg)
 {
     console_write("[fat] ");
     console_write(msg);
+}
+
+static const char *
+fat_find_token_value(const char *args, const char *key)
+{
+    uint32_t i = 0;
+    uint32_t key_len = 0;
+    if (!args || !key || key[0] == '\0') {
+        return 0;
+    }
+    while (key[key_len] != '\0') {
+        key_len++;
+    }
+    for (;;) {
+        uint32_t j = 0;
+        while (args[i] == ' ') {
+            i++;
+        }
+        if (args[i] == '\0') {
+            return 0;
+        }
+        while (key[j] != '\0' && args[i + j] == key[j]) {
+            j++;
+        }
+        if (j == key_len) {
+            return &args[i + key_len];
+        }
+        while (args[i] != '\0' && args[i] != ' ') {
+            i++;
+        }
+    }
+}
+
+static int32_t
+fat_parse_requested_unit(void)
+{
+    char args[64];
+    char *end = 0;
+    const char *unit = 0;
+    long value = 0;
+    if (wasmos_startup_args(args, sizeof(args)) == 0u) {
+        return -1;
+    }
+    unit = fat_find_token_value(args, "unit=");
+    if (!unit) {
+        return -1;
+    }
+    value = strtol(unit, &end, 10);
+    if (end == unit || (*end != '\0' && *end != ' ') || value < 0 || value > 255) {
+        return -1;
+    }
+    return (int32_t)value;
+}
+
+/* Answer an fs-manager FSMGR_IPC_BACKEND_INFO_REQ pull: borrow the mount-name
+ * buffer READ to the requester and reply kind=BOOT, mount buffer, unit. */
+static void
+fat_report_backend_info(int32_t dst, int32_t request_id)
+{
+    int32_t mount_arg = 0;
+    if (g_mount_bid >= 0 && g_mount_len > 0 &&
+        wasmos_xfer_buffer_borrow(dst, g_mount_bid, WASMOS_BUFFER_GRANT_READ) >= 0) {
+        mount_arg = (int32_t)(((uint32_t)g_mount_bid << 12) |
+                              ((uint32_t)g_mount_len & 0xFFFu));
+    }
+    (void)wasmos_ipc_send(dst, g_fs_endpoint, FSMGR_IPC_BACKEND_INFO_RESP,
+                          request_id, FSMGR_BACKEND_BOOT, 0, mount_arg,
+                          (int32_t)g_mount_unit);
 }
 
 static void
@@ -677,7 +753,14 @@ fat_resolve_mount_alias(int32_t proc_endpoint, char *out_mount, uint32_t out_mou
     }
     out_mount[0] = '\0';
     *out_unit = 0;
-    if (wasmos_ipc_send(g_block_endpoint, g_reply_endpoint, BLOCK_IPC_IDENTIFY_REQ, req_id, 0, 0, 0, 0) != 0 ||
+    if (wasmos_ipc_send(g_block_endpoint,
+                        g_reply_endpoint,
+                        BLOCK_IPC_IDENTIFY_REQ,
+                        req_id,
+                        g_requested_unit,
+                        0,
+                        0,
+                        0) != 0 ||
         wasmos_ipc_select_one(g_reply_endpoint) < 0) {
         return -1;
     }
@@ -4017,7 +4100,7 @@ initialize(int32_t proc_endpoint,
            int32_t ignored_arg2,
            int32_t ignored_arg3)
 {
-    (void)block_endpoint;
+    (void)ignored_arg2;
     (void)ignored_arg3;
     /* proc.endpoint now comes from the spawn-info contract, not an entry arg. */
     proc_endpoint = wasmos_startup_proc_endpoint();
@@ -4032,14 +4115,26 @@ initialize(int32_t proc_endpoint,
         fat_log("failed to create reply endpoint\n");
         fat_stall();
     }
-    /* The block device endpoint is resolved via service lookup (registered by
-     * the ata driver as "block"), not passed as an entry arg. */
-    for (;;) {
-        g_block_endpoint = wasmos_svc_lookup(proc_endpoint, g_reply_endpoint, "block", 1);
-        if (g_block_endpoint >= 0) {
-            break;
+    g_requested_unit = fat_parse_requested_unit();
+    /* Block-fs rule spawns pass unit=<n> through spawn-info args. The
+     * destination endpoint is still a plain service lookup today because the
+     * per-app endpoint binding path was retired with entry args. */
+    g_block_endpoint = (g_requested_unit < 0 && block_endpoint >= 0)
+        ? block_endpoint
+        : -1;
+    if (g_requested_unit < 0 && block_endpoint > 0) {
+        /* TODO(fs-fat): remove this compatibility fallback once all spawners
+         * pass an explicit unit selector in spawn-info args. */
+        g_block_endpoint = block_endpoint;
+    }
+    if (g_block_endpoint <= 0) {
+        for (;;) {
+            g_block_endpoint = wasmos_svc_lookup(proc_endpoint, g_reply_endpoint, "block", 1);
+            if (g_block_endpoint > 0) {
+                break;
+            }
+            (void)wasmos_sched_yield();
         }
-        (void)wasmos_sched_yield();
     }
     g_block_buf_phys = wasmos_block_buffer_phys();
     if (g_block_buf_phys < 0) {
@@ -4090,63 +4185,64 @@ initialize(int32_t proc_endpoint,
         g_open_files[i].dir_index = 0;
     }
 
-    int32_t fsmgr_endpoint = -1;
     char mount_alias[16];
-    uint8_t mount_unit = 0;
+    char service_name[16];
     int32_t mount_alias_len = 0;
     if (fat_ensure_ready() != 0) {
         fat_log("boot init failed\n");
         fat_stall();
     }
-    for (;;) {
-        fsmgr_endpoint = wasmos_svc_lookup(proc_endpoint, g_reply_endpoint, "fs.vfs", 1);
-        if (fsmgr_endpoint >= 0) {
-            break;
-        }
-        (void)wasmos_sched_yield();
-    }
-    if (fat_resolve_mount_alias(proc_endpoint, mount_alias, sizeof(mount_alias), &mount_unit) != 0) {
+    if (fat_resolve_mount_alias(proc_endpoint, mount_alias, sizeof(mount_alias), &g_mount_unit) != 0) {
         fat_log("mount alias resolve failed\n");
         fat_stall();
     }
+    if (snprintf(service_name, sizeof(service_name), "fs.boot%u",
+                 (unsigned)g_mount_unit) <= 0) {
+        fat_log("service name build failed\n");
+        fat_stall();
+    }
     mount_alias_len = (int32_t)strlen(mount_alias);
-    int32_t mount_bid = -1;
     if (mount_alias_len <= 0 || mount_alias_len >= 0xFFF ||
         mount_alias_len >= wasmos_xfer_buffer_size()) {
+        fat_log("mount alias buffer size invalid\n");
+        fat_stall();
+    }
+    /* Own a persistent buffer holding the mount name; it is (re)borrowed READ to
+     * fs-manager on each FSMGR_IPC_BACKEND_INFO_REQ pull (including after an
+     * fs-manager restart). Intentionally never released. */
+    g_mount_bid = wasmos_xfer_buffer_acquire(mount_alias_len);
+    if (g_mount_bid < 0 ||
+        wasmos_xfer_buffer_write(g_mount_bid, (int32_t)(uintptr_t)mount_alias, mount_alias_len, 0) != 0) {
         fat_log("mount alias buffer write failed\n");
         fat_stall();
     }
-    /* Owner-push registration: own a one-shot buffer holding the mount name,
-     * grant fs-manager READ over it, and pass buffer_id packed with the length
-     * in arg2. This is a one-time registration, so the buffer and grant are
-     * intentionally not released. */
-    mount_bid = wasmos_xfer_buffer_acquire(mount_alias_len);
-    if (mount_bid < 0 ||
-        wasmos_xfer_buffer_write(mount_bid, (int32_t)(uintptr_t)mount_alias, mount_alias_len, 0) != 0 ||
-        wasmos_xfer_buffer_borrow(fsmgr_endpoint, mount_bid, WASMOS_BUFFER_GRANT_READ) < 0) {
-        fat_log("mount alias buffer write failed\n");
+    g_mount_len = mount_alias_len;
+    /* Register under the fs.backend class with a unique (kind, unit) instance;
+     * fs-manager discovers backends via the class + subscription and pulls
+     * their info. Class registration needs the svc.class capability (see
+     * linker.metadata). */
+    if (wasmos_svc_register_class(proc_endpoint, g_fs_endpoint, service_name,
+                                  FSMGR_BACKEND_CLASS,
+                                  FSMGR_BACKEND_INSTANCE(FSMGR_BACKEND_BOOT, g_mount_unit),
+                                  1) != 0) {
+        fat_log("fs.backend register failed\n");
         fat_stall();
     }
-    if (wasmos_ipc_send(fsmgr_endpoint,
-                        g_reply_endpoint,
-                        FSMGR_IPC_REGISTER_BACKEND_REQ,
-                        1,
-                        FSMGR_BACKEND_BOOT,
-                        g_fs_endpoint,
-                        (int32_t)(((uint32_t)mount_bid << 12) | ((uint32_t)mount_alias_len & 0xFFFu)),
-                        (int32_t)mount_unit) != 0) {
-        fat_log("fs-manager register send failed\n");
-        fat_stall();
+    fat_log("fs.backend registered\n");
+    /* Signal ready only after fs-manager has pulled our info (first
+     * FSMGR_IPC_BACKEND_INFO_REQ) — otherwise a consumer could observe us ready
+     * before the /boot mount is registered, and device-manager's mount-readiness
+     * retry would re-spawn this backend. */
+    for (;;) {
+        if (wasmos_ipc_select_one(g_fs_endpoint) < 0) {
+            continue;
+        }
+        if (wasmos_ipc_last_field(WASMOS_IPC_FIELD_TYPE) == FSMGR_IPC_BACKEND_INFO_REQ) {
+            fat_report_backend_info(wasmos_ipc_last_field(WASMOS_IPC_FIELD_SOURCE),
+                                    wasmos_ipc_last_field(WASMOS_IPC_FIELD_REQUEST_ID));
+            break;
+        }
     }
-    if (wasmos_ipc_select_one(g_reply_endpoint) < 0) {
-        fat_log("fs-manager register recv failed\n");
-        fat_stall();
-    }
-    if (wasmos_ipc_last_field(WASMOS_IPC_FIELD_TYPE) != FSMGR_IPC_REGISTER_BACKEND_RESP) {
-        fat_log("fs-manager register bad response\n");
-        fat_stall();
-    }
-    fat_log("fs-manager register ok\n");
     wasmos_sys_notify_ready(proc_endpoint, g_reply_endpoint);
 
     for (;;) {
@@ -4166,6 +4262,12 @@ initialize(int32_t proc_endpoint,
 
         int32_t recv_rc = wasmos_ipc_select_one(g_fs_endpoint);
         if (recv_rc < 0) {
+            continue;
+        }
+
+        if (wasmos_ipc_last_field(WASMOS_IPC_FIELD_TYPE) == FSMGR_IPC_BACKEND_INFO_REQ) {
+            fat_report_backend_info(wasmos_ipc_last_field(WASMOS_IPC_FIELD_SOURCE),
+                                    wasmos_ipc_last_field(WASMOS_IPC_FIELD_REQUEST_ID));
             continue;
         }
 

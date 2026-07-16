@@ -401,18 +401,31 @@ enum {
 };
 
 enum {
-    FSMGR_IPC_REGISTER_BACKEND_REQ = 0x420,
+    /* fs-manager -> backend pull: report kind/mount/unit. Reply RESP packs
+     * arg0=kind, arg2=(mount_buffer_id<<12)|mount_len (backend owns the buffer
+     * and borrows it READ to fs-manager), arg3=unit. Backends are discovered
+     * via svc class FSMGR_BACKEND_CLASS, not a push, so fs-manager rebuilds its
+     * backend set from the registry on (re)start. */
+    FSMGR_IPC_BACKEND_INFO_REQ = 0x420,
     FSMGR_IPC_CLONE_CWD_REQ = 0x421,
     FSMGR_IPC_QUERY_MOUNTS_REQ = 0x422,
-    FSMGR_IPC_REGISTER_BACKEND_RESP = 0x4A0,
+    FSMGR_IPC_BACKEND_INFO_RESP = 0x4A0,
     FSMGR_IPC_CLONE_CWD_RESP = 0x4A1,
     FSMGR_IPC_QUERY_MOUNTS_RESP = 0x4A2
 };
+
+/* Virtual class FS backends register under. Class instances must be unique per
+ * provider, so backends encode (kind, unit) into the registry instance while
+ * still reporting the plain kind over FSMGR_IPC_BACKEND_INFO_RESP arg0. */
+#define FSMGR_BACKEND_CLASS "fs.backend"
 
 enum {
     FSMGR_BACKEND_BOOT = 1,
     FSMGR_BACKEND_INIT = 2
 };
+
+#define FSMGR_BACKEND_INSTANCE(kind, unit) \
+    ((((uint32_t)(kind)) << 8) | ((uint32_t)(unit) & 0xFFu))
 
 enum {
     FBTEXT_IPC_CELL_WRITE_REQ  = 0x600,

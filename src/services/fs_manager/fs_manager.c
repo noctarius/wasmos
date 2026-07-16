@@ -109,9 +109,9 @@ static void set_mount_name(fs_backend_t *slot, const char *base) {
     uint32_t n = 0;
     uint32_t pos = 0;
     if (!slot) return;
-    wasmos_sys_strcpy(buf, sizeof(buf), base);
+    str_copy(buf, sizeof(buf), base);
     if (slot->slot == 0) {
-        wasmos_sys_strcpy(slot->mount_name, sizeof(slot->mount_name), buf);
+        str_copy(slot->mount_name, sizeof(slot->mount_name), buf);
         return;
     }
     while (buf[pos] && pos + 1 < sizeof(buf)) {
@@ -126,7 +126,7 @@ static void set_mount_name(fs_backend_t *slot, const char *base) {
         buf[pos++] = (char)tmp[--n];
     }
     buf[pos] = '\0';
-    wasmos_sys_strcpy(slot->mount_name, sizeof(slot->mount_name), buf);
+    str_copy(slot->mount_name, sizeof(slot->mount_name), buf);
 }
 
 static fs_client_state_t *
@@ -312,9 +312,9 @@ backend_register(uint8_t kind, int32_t endpoint)
     slot->unit = 0xFFu;
     if (kind == FSMGR_BACKEND_BOOT) {
         if (slot->slot == 0) {
-            wasmos_sys_strcpy(slot->mount_name, sizeof(slot->mount_name), "boot");
+            str_copy(slot->mount_name, sizeof(slot->mount_name), "boot");
         } else if (slot->slot == 1) {
-            wasmos_sys_strcpy(slot->mount_name, sizeof(slot->mount_name), "user");
+            str_copy(slot->mount_name, sizeof(slot->mount_name), "user");
         } else {
             set_mount_name(slot, "boot");
         }
@@ -418,7 +418,7 @@ fsmgr_emit_mounts(int32_t source, int32_t req_id, int32_t buffer_id)
 {
     char mounts[384];
     uint32_t pos = 0;
-    wasmos_sys_strcpy(mounts, sizeof(mounts), "mounts:\n");
+    str_copy(mounts, sizeof(mounts), "mounts:\n");
     pos = (uint32_t)strlen(mounts);
     for (uint32_t i = 0; i < FS_BACKEND_CAP; ++i) {
         const char *kind = "fs";
@@ -677,9 +677,9 @@ fsmgr_apply_backend_info(int32_t backend_endpoint, int32_t kind, int32_t arg2f, 
         if (wasmos_sys_buffer_read(buffer_id, mount_name, copy_len, 0) == 0) {
             mount_name[copy_len] = '\0';
             if (mount_name[0] == '/') {
-                wasmos_sys_strcpy(registered->mount_name, sizeof(registered->mount_name), &mount_name[1]);
+                str_copy(registered->mount_name, sizeof(registered->mount_name), &mount_name[1]);
             } else {
-                wasmos_sys_strcpy(registered->mount_name, sizeof(registered->mount_name), mount_name);
+                str_copy(registered->mount_name, sizeof(registered->mount_name), mount_name);
             }
             wasmos_sys_to_lower_ascii(registered->mount_name);
         }

@@ -69,17 +69,6 @@ pm_services_class_reap(uint32_t pm_context_id)
     service_class_registry_reap_dead(pm_service_class_alive, 0);
 }
 
-/* Copy a NUL-terminated class name out of a shared buffer, bounded. */
-static void
-pm_copy_class_name(const char *src, char *dst)
-{
-    uint32_t i = 0;
-    for (; i + 1u < WASMOS_SVC_CLASS_MAX && src[i] != '\0'; ++i) {
-        dst[i] = src[i];
-    }
-    dst[i] = '\0';
-}
-
 void
 pm_unpack_name_args(uint32_t arg0, uint32_t arg1, uint32_t arg2, uint32_t arg3, char *out, uint32_t out_len)
 {
@@ -321,7 +310,7 @@ pm_handle_service_register_desc(uint32_t pm_context_id, const ipc_message_t *msg
         if (!capability_has(reply_owner, CAP_SVC_CLASS_REGISTER)) {
             return -1;
         }
-        pm_copy_class_name(desc->class_name, class_name);
+        str_copy(class_name, sizeof(class_name), desc->class_name);
         pm_service_class_ensure(pm_context_id);
         provider = process_find_by_context(reply_owner);
         provider_pid = provider ? provider->pid : 0;
@@ -393,7 +382,7 @@ pm_handle_service_lookup_class(uint32_t pm_context_id, const ipc_message_t *msg)
     if (!buf) {
         return -1;
     }
-    pm_copy_class_name((const char *)buf, class_name);
+    str_copy(class_name, sizeof(class_name), (const char *)buf);
     cap_entries = xfer_buffer_size(BUFFER_KIND_TRANSFER) /
                   (uint32_t)sizeof(svc_class_entry_t);
     if (max_entries > cap_entries) {
@@ -437,7 +426,7 @@ pm_handle_class_subscribe(uint32_t pm_context_id, const ipc_message_t *msg)
     if (!buf) {
         return -1;
     }
-    pm_copy_class_name((const char *)buf, class_name);
+    str_copy(class_name, sizeof(class_name), (const char *)buf);
     pm_service_class_ensure(pm_context_id);
     if (service_class_registry_subscribe(class_name, notify_endpoint, owner) != 0) {
         return -1;

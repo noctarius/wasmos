@@ -70,38 +70,23 @@ copy_subsystem_tag(char *dst, const char *src)
     if (!dst) {
         return;
     }
-    for (uint32_t i = 0; i <= WASMOS_SUBSYSTEM_TAG_LEN; ++i) {
-        dst[i] = '\0';
-    }
-    if (!src) {
-        return;
-    }
-    for (uint32_t i = 0; i < WASMOS_SUBSYSTEM_TAG_LEN && src[i] != '\0'; ++i) {
-        dst[i] = src[i];
-    }
+    /* Zero-fill the whole field, then truncate-copy the tag into it. */
+    memset(dst, 0, WASMOS_SUBSYSTEM_TAG_LEN + 1);
+    (void)str_copy(dst, WASMOS_SUBSYSTEM_TAG_LEN + 1, src);
 }
 
 static int
 copy_exec_text(char *dst, uint32_t dst_len, const char *src)
 {
-    uint32_t i = 0;
-
     if (!dst || dst_len == 0u) {
         return -1;
     }
-    for (i = 0; i < dst_len; ++i) {
-        dst[i] = '\0';
-    }
+    memset(dst, 0, dst_len);
     if (!src || src[0] == '\0') {
         return -1;
     }
-    for (i = 0; i + 1u < dst_len && src[i] != '\0'; ++i) {
-        dst[i] = src[i];
-    }
-    if (src[i] != '\0') {
-        return -1;
-    }
-    return 0;
+    /* Reject rather than truncate: str_copy_bytes fails if src does not fit. */
+    return str_copy_bytes(dst, dst_len, (const uint8_t *)src, strlen(src));
 }
 
 static int

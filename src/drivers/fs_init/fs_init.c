@@ -64,24 +64,6 @@ console_write(const char *s)
 }
 
 static void
-str_copy(char *dst, uint32_t dst_len, const char *src)
-{
-    uint32_t i = 0;
-    if (!dst || dst_len == 0) {
-        return;
-    }
-    if (!src) {
-        dst[0] = '\0';
-        return;
-    }
-    while (i + 1 < dst_len && src[i] != '\0') {
-        dst[i] = src[i];
-        i++;
-    }
-    dst[i] = '\0';
-}
-
-static void
 unpack_name(uint32_t arg0, uint32_t arg1, uint32_t arg2, uint32_t arg3, char *out, uint32_t out_len)
 {
     uint32_t args[4] = { arg0, arg1, arg2, arg3 };

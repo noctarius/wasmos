@@ -42,24 +42,6 @@ wasmos_sys_streq(const char *a, const char *b)
 }
 
 static inline void
-wasmos_sys_strcpy(char *dst, uint32_t dst_len, const char *src)
-{
-    uint32_t i = 0;
-    if (!dst || dst_len == 0) {
-        return;
-    }
-    if (!src) {
-        dst[0] = '\0';
-        return;
-    }
-    while (i + 1u < dst_len && src[i] != '\0') {
-        dst[i] = src[i];
-        i++;
-    }
-    dst[i] = '\0';
-}
-
-static inline void
 wasmos_sys_str_append(char *dst, uint32_t dst_len, const char *src)
 {
     uint32_t pos = 0;

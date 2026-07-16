@@ -436,7 +436,7 @@ kick_boot_rules_read_async(void)
         return;
     }
     path[0] = '\0';
-    wasmos_sys_strcpy(path, sizeof(path), DEVMGR_RULES_BOOT_ROOT);
+    str_copy(path, sizeof(path), DEVMGR_RULES_BOOT_ROOT);
     wasmos_sys_str_append(path, sizeof(path), "/");
     wasmos_sys_str_append(path, sizeof(path), DEVMGR_RULE_FILE);
     path_len = wasmos_sys_strlen(path);
@@ -609,7 +609,7 @@ load_rules_if_available(void)
         char text[DEVMGR_RULE_TEXT_CAP];
         int32_t read_len = -1;
         path[0] = '\0';
-        wasmos_sys_strcpy(path, sizeof(path), DEVMGR_RULES_INIT_ROOT);
+        str_copy(path, sizeof(path), DEVMGR_RULES_INIT_ROOT);
         wasmos_sys_str_append(path, sizeof(path), "/");
         wasmos_sys_str_append(path, sizeof(path), DEVMGR_RULE_FILE);
         read_len = read_rules_file(path, text, sizeof(text));
@@ -935,7 +935,7 @@ hw_spawn_rule_target(const char *rule_path)
             /* Rule paths may target drivers only available on /boot. */
             char boot_path[96];
             boot_path[0] = '\0';
-            wasmos_sys_strcpy(boot_path, sizeof(boot_path), "/boot/");
+            str_copy(boot_path, sizeof(boot_path), "/boot/");
             wasmos_sys_str_append(boot_path, sizeof(boot_path), rule_path);
             if (hw_spawn_driver_path(boot_path) == 0) {
                 return 0;
@@ -1075,7 +1075,7 @@ queue_pci_match_rule_spawns(void)
             if (strcmp(rule->spawn_path, "system/drivers/virtio_net.wap") == 0) {
                 g_dm.active_rule_spawn_caps.cap_flags |= DEVMGR_CAP_DMA;
             }
-            wasmos_sys_strcpy(g_dm.rule_spawn_path, sizeof(g_dm.rule_spawn_path), rule->spawn_path);
+            str_copy(g_dm.rule_spawn_path, sizeof(g_dm.rule_spawn_path), rule->spawn_path);
             g_dm.rule_spawn_pending = 1;
             g_dm.rule_spawn_retries = 0;
             g_dm.active_rule_spawn_kind = RULE_SPAWN_KIND_PCI_MATCH;
@@ -1119,7 +1119,7 @@ queue_acpi_match_rule_spawns(void)
             g_dm.active_rule_spawn_caps.io_port_max = (uint16_t)(rec->device_id + 7u);
             g_dm.active_rule_spawn_caps.irq_mask =
                 (rec->irq_hint < 16u) ? (uint16_t)(1u << rec->irq_hint) : 0u;
-            wasmos_sys_strcpy(g_dm.rule_spawn_path, sizeof(g_dm.rule_spawn_path), rule->spawn_path);
+            str_copy(g_dm.rule_spawn_path, sizeof(g_dm.rule_spawn_path), rule->spawn_path);
             g_dm.rule_spawn_pending = 1;
             g_dm.rule_spawn_retries = 0;
             g_dm.active_rule_spawn_kind = RULE_SPAWN_KIND_ACPI_MATCH;
@@ -1151,7 +1151,7 @@ queue_block_fs_rule_spawns(void)
         if (!rule->active || !rule->queued || rule->spawned) {
             continue;
         }
-        wasmos_sys_strcpy(g_dm.rule_spawn_path, sizeof(g_dm.rule_spawn_path), rule->spawn_path);
+        str_copy(g_dm.rule_spawn_path, sizeof(g_dm.rule_spawn_path), rule->spawn_path);
         g_dm.rule_spawn_pending = 1;
         g_dm.rule_spawn_retries = 0;
         g_dm.active_rule_spawn_kind = RULE_SPAWN_KIND_ALWAYS;
@@ -1180,7 +1180,7 @@ queue_block_fs_rule_spawns(void)
             log_mount_already_active(rule->mount);
             continue;
         }
-        wasmos_sys_strcpy(g_dm.rule_spawn_path, sizeof(g_dm.rule_spawn_path), rule->spawn_path);
+        str_copy(g_dm.rule_spawn_path, sizeof(g_dm.rule_spawn_path), rule->spawn_path);
         g_dm.rule_spawn_pending = 1;
         g_dm.rule_spawn_retries = 0;
         g_dm.active_rule_spawn_kind = RULE_SPAWN_KIND_BLOCK_FS;
@@ -1973,9 +1973,9 @@ initialize(int32_t proc_endpoint,
                     const char *args = 0;
                     spawn_path[0] = '\0';
                     if (g_dm.active_rule_spawn_kind == RULE_SPAWN_KIND_BLOCK_FS) {
-                        wasmos_sys_strcpy(spawn_path, sizeof(spawn_path), "/init/");
+                        str_copy(spawn_path, sizeof(spawn_path), "/init/");
                     } else {
-                        wasmos_sys_strcpy(spawn_path, sizeof(spawn_path), "/boot/");
+                        str_copy(spawn_path, sizeof(spawn_path), "/boot/");
                     }
                     wasmos_sys_str_append(spawn_path, sizeof(spawn_path), g_dm.rule_spawn_path);
                     if (g_dm.active_rule_spawn_kind == RULE_SPAWN_KIND_PCI_MATCH &&

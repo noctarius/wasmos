@@ -162,6 +162,26 @@ str_copy_bytes(char *dst, size_t dst_len, const uint8_t *src, size_t src_len)
     return 0;
 }
 
+size_t
+str_copy(char *dst, size_t dst_len, const char *src)
+{
+    size_t i = 0;
+
+    if (!dst || dst_len == 0) {
+        return 0;
+    }
+    if (!src) {
+        dst[0] = '\0';
+        return 0;
+    }
+    while (i + 1 < dst_len && src[i] != '\0') {
+        dst[i] = src[i];
+        i++;
+    }
+    dst[i] = '\0';
+    return i;
+}
+
 char *
 strchr(const char *s, int ch)
 {

@@ -21,6 +21,11 @@ char *strncpy(char *dest, const char *src, size_t count);
  * dst_len; 0 on success. Same contract as the kernel's str_copy_bytes — keep
  * the two in sync. */
 int str_copy_bytes(char *dst, size_t dst_len, const uint8_t *src, size_t src_len);
+/* Copy the C-string src into dst[], truncating to fit and always
+ * NUL-terminating (dst_len >= 1). Returns the number of bytes written (excluding
+ * the NUL). The shared truncating counterpart to str_copy_bytes; keep the kernel
+ * and libc copies in sync. */
+size_t str_copy(char *dst, size_t dst_len, const char *src);
 char *strchr(const char *s, int ch);
 char *strrchr(const char *s, int ch);
 void *memcpy(void *dest, const void *src, size_t count);

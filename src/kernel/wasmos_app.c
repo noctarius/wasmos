@@ -279,15 +279,9 @@ copy_subsystem_tag(char *dst, const char *src)
     if (!dst) {
         return;
     }
-    for (uint32_t i = 0; i <= WASMOS_APP_SUBSYSTEM_TAG_LEN; ++i) {
-        dst[i] = '\0';
-    }
-    if (!src) {
-        return;
-    }
-    for (uint32_t i = 0; i < WASMOS_APP_SUBSYSTEM_TAG_LEN && src[i] != '\0'; ++i) {
-        dst[i] = src[i];
-    }
+    /* Zero-fill the whole field, then truncate-copy the tag into it. */
+    memset(dst, 0, WASMOS_APP_SUBSYSTEM_TAG_LEN + 1);
+    (void)str_copy(dst, WASMOS_APP_SUBSYSTEM_TAG_LEN + 1, src);
 }
 
 static int
@@ -350,19 +344,6 @@ check_bounds(uint32_t offset, uint32_t size, uint32_t blob_size)
     if (end > blob_size) {
         return -1;
     }
-    return 0;
-}
-
-static int
-copy_ascii_field(char *dst, uint32_t dst_size, const uint8_t *src, uint32_t src_len)
-{
-    if (!dst || !src || dst_size == 0 || src_len == 0 || src_len >= dst_size) {
-        return -1;
-    }
-    for (uint32_t i = 0; i < src_len; ++i) {
-        dst[i] = (char)src[i];
-    }
-    dst[src_len] = '\0';
     return 0;
 }
 
@@ -840,8 +821,8 @@ wasmos_app_start(wasmos_app_instance_t *instance,
     if (!instance || !desc || owner_context_id == 0) {
         return -1;
     }
-    if (copy_ascii_field(instance->name, sizeof(instance->name), desc->name, desc->name_len) != 0 ||
-        copy_ascii_field(instance->entry, sizeof(instance->entry), desc->entry, desc->entry_len) != 0) {
+    if (str_copy_bytes(instance->name, sizeof(instance->name), desc->name, desc->name_len) != 0 ||
+        str_copy_bytes(instance->entry, sizeof(instance->entry), desc->entry, desc->entry_len) != 0) {
         klog_write("[wasmos-app] invalid name or entry\n");
         return -1;
     }

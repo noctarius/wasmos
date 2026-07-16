@@ -1770,18 +1770,24 @@ add_custom_target(run-kernel-unit-tests
   COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
           -I${CMAKE_SOURCE_DIR}/tests/unit/include
           -I${KERNEL_DIR}/include
+          # -iquote routes libc/src/string.c's own "string.h"/"ctype.h" to the
+          # libc headers; kernel files use <string.h> so they stay on the kernel
+          # header. Provides str_copy/str_copy_bytes (defined in libc string.c).
+          -iquote ${LIBC_DIR}/include
           ${CMAKE_SOURCE_DIR}/tests/unit/test_subsystem_registry.c
           ${CMAKE_SOURCE_DIR}/tests/unit/stubs_spinlock.c
           ${KERNEL_DIR}/subsystem_registry.c
           ${KERNEL_DIR}/hashmap.c
           ${KERNEL_DIR}/kmem.c
           ${CMAKE_SOURCE_DIR}/tests/unit/stubs_slab.c
+          ${LIBC_DIR}/src/string.c
           -o ${BUILD_DIR}/test_subsystem_registry
   COMMAND ${BUILD_DIR}/test_subsystem_registry
   COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
           -I${CMAKE_SOURCE_DIR}/tests/unit/include
           -I${CMAKE_SOURCE_DIR}/src/drivers/include
           -I${KERNEL_DIR}/include
+          -iquote ${LIBC_DIR}/include
           ${CMAKE_SOURCE_DIR}/tests/unit/test_wasmos_exec_format.c
           ${CMAKE_SOURCE_DIR}/tests/unit/stubs_spinlock.c
           ${KERNEL_DIR}/wasmos_exec_format.c
@@ -1789,6 +1795,7 @@ add_custom_target(run-kernel-unit-tests
           ${KERNEL_DIR}/hashmap.c
           ${KERNEL_DIR}/kmem.c
           ${CMAKE_SOURCE_DIR}/tests/unit/stubs_slab.c
+          ${LIBC_DIR}/src/string.c
           -o ${BUILD_DIR}/test_wasmos_exec_format
   COMMAND ${BUILD_DIR}/test_wasmos_exec_format
   COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
@@ -1802,6 +1809,7 @@ add_custom_target(run-kernel-unit-tests
           -iquote ${LIBC_DIR}/include
           ${CMAKE_SOURCE_DIR}/tests/unit/test_device_manager_rules.c
           ${SERVICES_DIR}/device_manager/device_manager_rules.c
+          ${LIBC_DIR}/src/string.c
           -o ${BUILD_DIR}/test_device_manager_rules
   COMMAND ${BUILD_DIR}/test_device_manager_rules
   COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
@@ -1878,6 +1886,7 @@ add_custom_target(run-kernel-unit-tests
   COMMAND ${BUILD_DIR}/test_ringbuf
   COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
           -I${KERNEL_DIR}/include
+          -iquote ${LIBC_DIR}/include
           ${CMAKE_SOURCE_DIR}/tests/unit/test_service_class_registry.c
           ${KERNEL_DIR}/service_class_registry.c
           ${KERNEL_DIR}/list.c
@@ -1885,6 +1894,7 @@ add_custom_target(run-kernel-unit-tests
           ${KERNEL_DIR}/list_array_chunk.c
           ${KERNEL_DIR}/kmem.c
           ${CMAKE_SOURCE_DIR}/tests/unit/stubs_slab.c
+          ${LIBC_DIR}/src/string.c
           -o ${BUILD_DIR}/test_service_class_registry
   COMMAND ${BUILD_DIR}/test_service_class_registry
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}

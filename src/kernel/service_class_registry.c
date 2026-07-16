@@ -3,6 +3,7 @@
 #include "service_class_registry.h"
 
 #include "list.h"
+#include "string.h"
 
 typedef struct {
     char     class_name[SVC_CLASS_NAME_MAX];
@@ -41,18 +42,11 @@ scr_streq(const char *a, const char *b)
 static int
 scr_copy_class(char *dst, const char *src)
 {
-    uint32_t i = 0;
     if (src == 0 || src[0] == '\0') {
         return -1;
     }
-    for (; src[i] != '\0'; ++i) {
-        if (i + 1u >= SVC_CLASS_NAME_MAX) {
-            return -1;
-        }
-        dst[i] = src[i];
-    }
-    dst[i] = '\0';
-    return 0;
+    /* Reject rather than truncate an over-long class name. */
+    return str_copy_bytes(dst, SVC_CLASS_NAME_MAX, (const uint8_t *)src, strlen(src));
 }
 
 static void

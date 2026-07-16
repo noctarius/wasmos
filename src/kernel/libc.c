@@ -289,6 +289,26 @@ int str_copy_bytes(char *dst, size_t dst_len, const uint8_t *src, size_t src_len
     return 0;
 }
 
+/* Truncating C-string copy shared by the service/subsystem registries and app
+ * loader; mirrors the libc str_copy. Reads src directly (no kernel_str_ptr
+ * translation), matching the hand-rolled copies it replaces. */
+size_t str_copy(char *dst, size_t dst_len, const char *src) {
+    size_t i = 0;
+    if (!dst || dst_len == 0) {
+        return 0;
+    }
+    if (!src) {
+        dst[0] = '\0';
+        return 0;
+    }
+    while (i + 1 < dst_len && src[i] != '\0') {
+        dst[i] = src[i];
+        i++;
+    }
+    dst[i] = '\0';
+    return i;
+}
+
 int str_eq_bytes(const uint8_t *bytes, size_t bytes_len, const char *lit) {
     size_t i = 0;
     if (!bytes || !lit) {

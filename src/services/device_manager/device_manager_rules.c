@@ -283,7 +283,7 @@ parse_always_spawn_rule_line(const char *line, always_spawn_rule_t *out_rule)
     out_rule->active = 1;
     out_rule->queued = 1;
     out_rule->spawned = 0;
-    wasmos_sys_strcpy(out_rule->spawn_path, sizeof(out_rule->spawn_path), path);
+    str_copy(out_rule->spawn_path, sizeof(out_rule->spawn_path), path);
     return 0;
 }
 
@@ -367,14 +367,14 @@ parse_block_fs_rule_line(const char *line, block_fs_rule_t *out_rule)
         return -1;
     }
     if (!mount[0]) {
-        wasmos_sys_strcpy(mount, sizeof(mount), "/");
+        str_copy(mount, sizeof(mount), "/");
     }
     out_rule->active = 1;
     out_rule->queued = 0;
     out_rule->spawned = 0;
     out_rule->unit = unit;
-    wasmos_sys_strcpy(out_rule->mount, sizeof(out_rule->mount), mount);
-    wasmos_sys_strcpy(out_rule->spawn_path, sizeof(out_rule->spawn_path), path);
+    str_copy(out_rule->mount, sizeof(out_rule->mount), mount);
+    str_copy(out_rule->spawn_path, sizeof(out_rule->spawn_path), path);
     return 0;
 }
 
@@ -511,7 +511,7 @@ parse_pci_match_rule_line(const char *line, pci_match_rule_t *out_rule)
     out_rule->vendor_id = vendor_id;
     out_rule->device_id = device_id;
     out_rule->spawned_device_mask = 0;
-    wasmos_sys_strcpy(out_rule->spawn_path, sizeof(out_rule->spawn_path), path);
+    str_copy(out_rule->spawn_path, sizeof(out_rule->spawn_path), path);
     return 0;
 }
 
@@ -598,7 +598,7 @@ parse_acpi_match_rule_line(const char *line, acpi_match_rule_t *out_rule)
     out_rule->class_code = class_code;
     out_rule->subclass   = subclass;
     out_rule->spawned_device_mask = 0;
-    wasmos_sys_strcpy(out_rule->spawn_path, sizeof(out_rule->spawn_path), path);
+    str_copy(out_rule->spawn_path, sizeof(out_rule->spawn_path), path);
     return 0;
 }
 

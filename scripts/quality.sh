@@ -297,13 +297,13 @@ src_db, out_db, root = sys.argv[1], sys.argv[2], os.path.abspath(sys.argv[3])
 HOST_TOOLS = ("scripts/", "src/tools/", "src/kernel/warp/posix_kernel.c")
 
 def decide(path):
-    """Return (target, extra_flags); target=None means 'exclude from linting'."""
+    """Return (kind, extra_flags). kind: None=skip, 'wasm', or 'x86'."""
     rel = os.path.relpath(os.path.abspath(path), root)
     if rel.startswith(HOST_TOOLS):
         return None, []
     if rel.startswith("src/boot/"):
         # UEFI: 16-bit wchar_t, so L"" literals need -fshort-wchar to parse.
-        return "x86_64-unknown-none-elf", ["-fshort-wchar"]
+        return "x86", ["-fshort-wchar"]
     d = os.path.dirname(os.path.abspath(path))
     while True:
         meta = os.path.join(d, "linker.metadata")
@@ -317,27 +317,38 @@ def decide(path):
                 if s.startswith("native=false"):
                     native = False
                     break
-            return ("x86_64-unknown-none-elf" if native else "wasm32-unknown-unknown"), []
+            return ("x86" if native else "wasm"), []
         if d == root or d == os.path.dirname(d):
             # No component metadata up to the repo root: kernel core.
-            return "x86_64-unknown-none-elf", []
+            return "x86", []
         d = os.path.dirname(d)
 
 out = []
 for e in json.load(open(src_db)):
-    tgt, extra = decide(e["file"])
-    if tgt is None:
+    kind, extra = decide(e["file"])
+    if kind is None:
         continue  # host tool: excluded from linting (see HOST_TOOLS)
     cmd = e.get("command") or " ".join(e.get("arguments", []))
     toks = cmd.split()
+    had_arch = "-arch" in toks
     res, i = [], 0
     while i < len(toks):
-        if toks[i] == "-arch":
+        if toks[i] == "-arch":  # strip host-arch selector (Apple driver)
             i += 2
             continue
         res.append(toks[i])
         i += 1
-    res[1:1] = ["--target=" + tgt] + extra
+    if kind == "wasm":
+        # WASM userland uses __builtin_wasm_*; the *_ide targets compile it for
+        # the host, so force the wasm32 target on every platform.
+        res[1:1] = ["--target=wasm32-unknown-unknown"]
+    elif had_arch:
+        # The IDE command targeted the host arch via -arch (macOS: arm64), which
+        # can't parse x86_64 inline asm. Replace it with the real target. Where
+        # the IDE command already targets the host correctly (no -arch, e.g.
+        # Linux x86_64), leave it untouched so host header resolution keeps
+        # working (forcing a bare -none-elf there breaks <stdint.h>).
+        res[1:1] = ["--target=x86_64-unknown-none-elf"] + extra
     e["command"] = " ".join(res)
     e.pop("arguments", None)
     out.append(e)

@@ -43,7 +43,7 @@ set(USERFS_DIR ${CMAKE_SOURCE_DIR}/userfs)
 
 set(WASM_CHARDEV_DRIVER_SRC ${DRIVER_WASM_DIR}/chardev/chardev_server.c)
 set(WASM_CHARDEV_DRIVER_WASM ${BUILD_DIR}/chardev_server.wasm)
-set(WASM_CHARDEV_DRIVER_BLOB ${BUILD_DIR}/chardev_server_blob.o)
+set(WASM_CHARDEV_SERVER_APP ${BUILD_DIR}/chardev_server.wap)
 set(WASM_CHARDEV_CLIENT_SRC ${EXAMPLES_C_DIR}/chardev_client/chardev_client.c)
 set(WASM_CHARDEV_CLIENT_WASM ${BUILD_DIR}/chardev_client.wasm)
 set(WASM_CHARDEV_CLIENT_BLOB ${BUILD_DIR}/chardev_client_blob.o)
@@ -1096,6 +1096,7 @@ add_custom_command(
           ${WASM_SHMEM_TARGET_APP}
           ${WASM_NET_SMOKE_APP}
           ${WASM_ATA_APP}
+          ${WASM_CHARDEV_SERVER_APP}
           ${WASM_FAT_APP}
           ${WASM_FS_INIT_APP}
           ${WASM_FS_MANAGER_APP}
@@ -1363,6 +1364,7 @@ set(WASMOS_ESP_POPULATE_CMDS
   ${INITFS_COPY_CMD}
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_INIT_APP} ${BUILD_DIR}/esp/apps/sysinit.wap
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_ATA_APP} ${BUILD_DIR}/esp/system/drivers/ata.wap
+  COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CHARDEV_SERVER_APP} ${BUILD_DIR}/esp/system/drivers/chardev_server.wap
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_FAT_APP} ${BUILD_DIR}/esp/system/drivers/fs_fat.wap
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CLI_APP} ${BUILD_DIR}/esp/apps/cli.wap
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_INIT_APP} ${BUILD_DIR}/esp/system/services/sysinit.wap

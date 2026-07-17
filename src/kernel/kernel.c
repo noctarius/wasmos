@@ -12,7 +12,6 @@
 #include "timer.h"
 #include "arch/x86_64/smp.h"
 #include "wasmos_app.h"
-#include "wasm_chardev.h"
 #if WASMOS_WASM_RUNTIME == 1
 #include "warp/link.h"
 #else
@@ -42,7 +41,6 @@
  * keeps policy limited to early bring-up and the kernel-owned init task.
  */
 
-static uint32_t g_chardev_service_endpoint = IPC_ENDPOINT_NONE;
 static const boot_info_t* g_boot_info;
 static boot_info_t g_boot_info_shadow;
 
@@ -72,11 +70,6 @@ static int wasmos_endpoint_resolve(uint32_t owner_context_id, const uint8_t* nam
                                    uint32_t name_len, uint32_t rights, uint32_t* out_endpoint) {
     if (!out_endpoint) {
         return -1;
-    }
-    if (str_eq_bytes(name, name_len, "chardev") &&
-        g_chardev_service_endpoint != IPC_ENDPOINT_NONE) {
-        *out_endpoint = g_chardev_service_endpoint;
-        return 0;
     }
     if (str_eq_bytes(name, name_len, "proc")) {
         uint32_t proc_ep = process_manager_endpoint();
@@ -111,14 +104,6 @@ static int wasmos_capability_grant(uint32_t owner_context_id, const uint8_t* nam
         return 0;
     }
     return -1;
-}
-
-static process_run_result_t chardev_server_entry(process_t* process, void* arg) {
-    (void)arg;
-
-    int rc = wasm_chardev_run();
-    process_set_exit_status(process, rc == 0 ? 0 : -1);
-    return PROCESS_RUN_EXITED;
 }
 
 static process_run_result_t idle_entry(process_t* process, void* arg) {
@@ -173,9 +158,6 @@ void kernel_system_reboot(void) {
 }
 
 void kmain(boot_info_t* boot_info) {
-    uint32_t chardev_pid = 0;
-    process_t* chardev_proc;
-    uint32_t chardev_endpoint = IPC_ENDPOINT_NONE;
     uint32_t mem_service_pid = 0;
     process_t* mem_service_proc = 0;
     uint32_t mem_service_endpoint = IPC_ENDPOINT_NONE;
@@ -258,27 +240,17 @@ void kmain(boot_info_t* boot_info) {
     memory_service_register(mem_service_proc->context_id, mem_service_endpoint, mem_reply_endpoint);
     klog_write("[kernel] mem service ready\n");
 
-    if (process_spawn_as(init_pid, "chardev-server", chardev_server_entry, 0, &chardev_pid) != 0) {
-        klog_write("[kernel] chardev process spawn failed\n");
-        kpanic("chardev_process_spawn_failed", 0ULL, 0ULL);
+    /* Shmem grant/isolation self-tests need a second (foreign) process context
+     * distinct from the memory service. Use init: it is spawned but not yet
+     * running here, and the tests clean up the region they create/grant.
+     * (This previously used the kernel-spawned chardev process; chardev is now
+     * a normal initfs driver started by device-manager.) */
+    process_t* init_proc = process_get(init_pid);
+    if (init_proc) {
+        kernel_shmem_owner_isolation_test(mem_service_proc->context_id, init_proc->context_id);
+        kernel_shmem_misuse_matrix_test(mem_service_proc->context_id, init_proc->context_id,
+                                        g_ring3_smoke_enabled);
     }
-
-    klog_printf("[kernel] chardev pid=%016llx\n", (unsigned long long)chardev_pid);
-
-    chardev_proc = process_get(chardev_pid);
-    if (!chardev_proc || wasm_chardev_init(chardev_proc->context_id) != 0) {
-        klog_write("[kernel] chardev service init failed\n");
-        kpanic("chardev_service_init_failed", 0ULL, 0ULL);
-    }
-
-    if (wasm_chardev_endpoint(&chardev_endpoint) != 0) {
-        klog_write("[kernel] chardev endpoint lookup failed\n");
-        kpanic("chardev_endpoint_lookup_failed", 0ULL, 0ULL);
-    }
-    g_chardev_service_endpoint = chardev_endpoint;
-    kernel_shmem_owner_isolation_test(mem_service_proc->context_id, chardev_proc->context_id);
-    kernel_shmem_misuse_matrix_test(mem_service_proc->context_id, chardev_proc->context_id,
-                                    g_ring3_smoke_enabled);
 
     wasmos_app_set_policy_hooks(wasmos_endpoint_resolve, wasmos_capability_grant);
 

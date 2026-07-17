@@ -1,8 +1,8 @@
 /* warp_driver.cpp - WARP JIT-backed WASM module loader and driver runner.
  *
  * Mirrors wasm_driver.c but uses vb::WasmModule (single-pass JIT compiler).
- * The public API is identical so callers (kernel.c, wasm_chardev.c,
- * process_manager.cpp) are unchanged.
+ * The public API is identical so callers (kernel.c, process_manager.cpp) are
+ * unchanged.
  *
  * Exception strategy: instead of try/catch (which requires a working C++
  * unwinder), we use the per-CPU warp_exception_checkpoint from cxx_abi.cpp.
@@ -15,7 +15,6 @@
 
 extern "C" {
 #include "wasm_driver.h"
-#include "wasm_chardev.h"
 #include "klog.h"
 #include "serial.h"
 #include "process.h"

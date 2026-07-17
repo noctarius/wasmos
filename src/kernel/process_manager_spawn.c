@@ -13,7 +13,6 @@
 #include "native_driver.h"
 #include "string.h"
 #include "timer.h"
-#include "wasm_chardev.h"
 #include "wasmos_app_meta.h"
 #include "wasmos_exec_format.h"
 #include "wasmos_spawn_info.h"

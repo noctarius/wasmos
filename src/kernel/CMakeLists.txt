@@ -170,7 +170,6 @@ set(KERNEL_OBJS
   ${BUILD_DIR}/wasmos_app.o
   ${BUILD_DIR}/wasmos_app_meta.o
   ${BUILD_DIR}/native_driver.o
-  ${BUILD_DIR}/wasm_chardev.o
   ${BUILD_DIR}/serial.o
   ${BUILD_DIR}/framebuffer.o
 )
@@ -306,7 +305,6 @@ set(KERNEL_SOURCES
   ${KERNEL_DIR}/wasmos_app.c
   ${KERNEL_DIR}/wasmos_app_meta.c
   ${KERNEL_DIR}/native_driver.c
-  ${KERNEL_DIR}/wasm_chardev.c
   ${KERNEL_DIR}/serial.c
   ${KERNEL_DIR}/framebuffer.c
 )
@@ -400,7 +398,6 @@ target_sources(kernel_sources INTERFACE
   ${KERNEL_DIR}/include/serial.h
   ${KERNEL_DIR}/include/arch/x86_64/spinlock.h
   ${KERNEL_DIR}/include/user_mutex.h
-  ${KERNEL_DIR}/include/wasm_chardev.h
   ${KERNEL_DIR}/include/wasm_driver.h
   ${KERNEL_DIR}/include/wasmos_app.h
   ${KERNEL_DIR}/include/wasmos_app_meta.h
@@ -438,7 +435,6 @@ add_library(kernel_ide OBJECT EXCLUDE_FROM_ALL
   ${KERNEL_DIR}/include/arch/x86_64/spinlock.h
   ${KERNEL_DIR}/include/user_mutex.h
   ${KERNEL_DIR}/include/wasm_driver.h
-  ${KERNEL_DIR}/include/wasm_chardev.h
   ${KERNEL_DIR}/include/io.h
   ${DRIVER_WASM_DIR}/include/wasmos_driver_abi.h
 )
@@ -628,7 +624,6 @@ add_custom_command(
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/wasmos_app.c -o ${BUILD_DIR}/wasmos_app.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/wasmos_app_meta.c -o ${BUILD_DIR}/wasmos_app_meta.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/native_driver.c -o ${BUILD_DIR}/native_driver.o
-  COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/wasm_chardev.c -o ${BUILD_DIR}/wasm_chardev.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/serial.c -o ${BUILD_DIR}/serial.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/framebuffer.c -o ${BUILD_DIR}/framebuffer.o
   ${WASM_RUNTIME_COMPILE_CMDS}
@@ -668,7 +663,7 @@ add_custom_command(
           ${KERNEL_DIR}/include/native_driver.h ${KERNEL_DIR}/include/arch/x86_64/spinlock.h
           ${KERNEL_DIR}/include/user_mutex.h
           ${KERNEL_DIR}/include/kallsyms.h
-          ${KERNEL_DIR}/include/wasm_driver.h ${KERNEL_DIR}/include/wasm_chardev.h
+          ${KERNEL_DIR}/include/wasm_driver.h
           ${KERNEL_DIR}/include/framebuffer.h
           ${KERNEL_DIR}/include/io.h
           ${DRIVER_WASM_DIR}/include/wasmos_driver_abi.h

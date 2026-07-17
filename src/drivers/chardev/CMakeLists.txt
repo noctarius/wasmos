@@ -1,42 +1,17 @@
-add_custom_command(
-  OUTPUT ${WASM_CHARDEV_DRIVER_WASM}
-  COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}
-  COMMAND ${CLANG} --target=wasm32 -Oz -nostdlib -fno-builtin
-          ${WASMOS_TRACE_DEFINE}
-          -fno-builtin
-          -Wl,--no-entry -Wl,--strip-all
-          -Wl,-z,stack-size=4096
-          -Wl,--initial-memory=65536
-          -Wl,--max-memory=65536
-          -Wl,--export=initialize
-          -I${LIBC_DIR}/include
-          -I${DRIVER_WASM_DIR}/include
-          ${WASM_LIBC_C_SOURCES}
-          ${WASM_CHARDEV_DRIVER_SRC}
-          -o ${WASM_CHARDEV_DRIVER_WASM}
-  DEPENDS ${WASM_CHARDEV_DRIVER_SRC} ${WASM_LIBC_C_SOURCES} ${WASMOS_LIBC_INCLUDE_DEPS}
-  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-  COMMENT "Building wasm chardev driver module"
-  VERBATIM
+# chardev-server: a normal WASM driver packed as a WASMOS-APP and loaded from
+# initfs via device-manager (see initfs.toml + devmgr rules), like every other
+# driver. (It was historically compiled into the kernel as a blob — the first
+# app, before real app loading existed.)
+wasmos_add_wasm_c_app_target(chardev_server_app
+  SOURCE ${WASM_CHARDEV_DRIVER_SRC}
+  OUTPUT_WASM ${WASM_CHARDEV_DRIVER_WASM}
+  OUTPUT_APP ${WASM_CHARDEV_SERVER_APP}
+  MANIFEST ${DRIVER_WASM_DIR}/chardev/linker.metadata
+  EXPORT initialize
+  STACK_SIZE 4096
+  INITIAL_MEMORY 65536
+  MAX_MEMORY 65536
+  NO_BUILTIN
+  BUILD_COMMENT "Building wasm chardev driver module"
+  PACK_COMMENT "Packing wasm chardev as WASMOS-APP"
 )
-
-add_custom_command(
-  OUTPUT ${WASM_CHARDEV_DRIVER_BLOB}
-  COMMAND ${OBJCOPY} --input-target=binary --output-target=elf64-x86-64
-          --binary-architecture=i386:x86-64
-          chardev_server.wasm chardev_server_blob.o
-  DEPENDS ${WASM_CHARDEV_DRIVER_WASM}
-  WORKING_DIRECTORY ${BUILD_DIR}
-  COMMENT "Embedding wasm chardev driver module"
-  VERBATIM
-)
-
-add_custom_target(chardev_driver_blob DEPENDS ${WASM_CHARDEV_DRIVER_BLOB})
-
-wasmos_add_ide_c_target(chardev_ide
-  SOURCES ${WASM_CHARDEV_DRIVER_SRC}
-  INCLUDES ${LIBC_DIR}/include ${DRIVER_WASM_DIR}/include
-)
-
-set_property(GLOBAL APPEND PROPERTY WASMOS_KERNEL_BLOBS ${WASM_CHARDEV_DRIVER_BLOB})
-set_property(GLOBAL APPEND PROPERTY WASMOS_KERNEL_BLOB_TARGETS chardev_driver_blob)

@@ -78,6 +78,12 @@ source = "ata.wap"
 [[entries]]
 kind = "wasmos_app"
 flags = ["bootstrap"]
+path = "system/drivers/chardev_server.wap"
+source = "chardev_server.wap"
+
+[[entries]]
+kind = "wasmos_app"
+flags = ["bootstrap"]
 path = "system/drivers/fs_fat.wap"
 source = "fs_fat.wap"
 

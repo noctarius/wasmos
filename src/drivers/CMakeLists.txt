@@ -23,5 +23,5 @@ add_custom_target(drivers DEPENDS
   virtio_serial_app
   framebuffer_app
   framebuffer_pci_app
-  chardev_driver_blob
+  chardev_server_app
 )

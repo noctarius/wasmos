@@ -838,7 +838,7 @@ int native_driver_start(uint32_t context_id, const uint8_t* elf_data, uint32_t e
         klog_write("[native-driver] ELF entry point outside executable segment\n");
         return -1;
     }
-    native_driver_entry_fn_t entry = addr_cast(native_driver_entry_fn_t, hdr->e_entry);
+    native_driver_entry_fn_t entry = fn_cast(native_driver_entry_fn_t, hdr->e_entry);
 
     wasmos_driver_api_t api;
     memset(&api, 0, sizeof(api));

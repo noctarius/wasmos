@@ -832,8 +832,7 @@ static void process_reap_claim(process_t* proc) {
         }
     }
     if (in_flight) {
-        __atomic_store_n((uint32_t*)&proc->state, (uint32_t)PROCESS_STATE_ZOMBIE,
-                         __ATOMIC_RELEASE);
+        __atomic_store_n((uint32_t*)&proc->state, (uint32_t)PROCESS_STATE_ZOMBIE, __ATOMIC_RELEASE);
         __atomic_store_n(&g_deferred_reap_pending, 1, __ATOMIC_RELEASE);
         return;
     }

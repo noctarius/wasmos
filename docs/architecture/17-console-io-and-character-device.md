@@ -79,13 +79,18 @@ an IPC-based read/write interface. It is not the primary I/O path for
 production services; it exists for integration testing where a service needs
 to send or receive a single byte through an IPC-fronted pipe.
 
-Service name: `"chardev"` (as registered with the process manager).
+It is a normal WASM driver packed as a WASMOS-APP, loaded from initfs and
+started at boot by device-manager (via a `SUBSYSTEM=="boot"` rule), exactly
+like every other driver. Its `initialize` export creates a service endpoint,
+self-registers under the service name `"chardev"` with the process manager,
+and then serves request/reply IPC. Clients resolve it at runtime with
+`wasmos_svc_lookup(..., "chardev", ...)`.
 
 #### State
 
 ```c
 static uint8_t g_last_byte;
-static int32_t g_has_data;
+static uint8_t g_has_data;
 ```
 
 One byte of buffering. If `g_has_data == 0` a read request returns an error

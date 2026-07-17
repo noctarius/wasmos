@@ -322,8 +322,6 @@ Compiler flags (`CFLAGS_KERNEL`):
 The kernel also embeds several **blob objects** that are compiled separately and
 linked in as raw binary data:
 
-- `chardev_server_blob.o` — the chardev WASM driver, loaded directly without a
-  filesystem
 - `ring3_native_probe_blob.o` — a minimal ring-3 ELF probe for isolation testing
 - `ring3_thread_lifecycle_probe_blob.o` — ring-3 ELF probe for thread lifecycle
   testing
@@ -505,9 +503,8 @@ driver targets, and all service targets.
 ### `wasm_driver_blobs`
 
 An aggregate target that depends on all kernel-embedded blob targets
-(`chardev_driver_blob`, `ring3_native_probe_blob`,
-`ring3_thread_lifecycle_probe_blob`). The `kernel` target depends on
-`wasm_driver_blobs` to ensure blobs are ready before linking.
+(`ring3_native_probe_blob`, `ring3_thread_lifecycle_probe_blob`). The `kernel`
+target depends on `wasm_driver_blobs` to ensure blobs are ready before linking.
 
 ---
 
@@ -669,7 +666,7 @@ make_wasmos_app (host executable, built first)
     ├── AssemblyScript / Rust / Go / Zig example targets
     │       (*.wap)
     └── kernel blob targets
-            (chardev_server_blob.o, ring3_probe blobs)
+            (ring3_probe blobs)
 
 wasm_driver_blobs
     └── depends on: all *.wap targets + all blob targets

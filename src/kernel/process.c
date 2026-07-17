@@ -1048,7 +1048,7 @@ static int process_spawn_as_internal(uint32_t parent_pid, const char* name, proc
         if (slot->stack_top >= sizeof(uint64_t)) {
             g_pm_stack_watch = ptr_cast(uint64_t, (slot->stack_top - sizeof(uint64_t)));
             trace_write("[sched] pm stack watch addr=");
-            trace_do(serial_write_hex64((uint64_t)(uintptr_t)g_pm_stack_watch));
+            trace_do(serial_write_hex64(addr_cast(uint64_t, g_pm_stack_watch)));
         }
     }
     if (name && strcmp(name, "preempt-busy") == 0) {

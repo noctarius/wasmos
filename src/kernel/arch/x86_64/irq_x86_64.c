@@ -387,7 +387,7 @@ void x86_timer_irq_handler(irq_frame_t* frame) {
     if (WASMOS_TRACE && !logged) {
         logged = 1;
         trace_write("[irq] frame ptr=");
-        trace_do(serial_write_hex64((uint64_t)(uintptr_t)frame));
+        trace_do(serial_write_hex64(addr_cast(uint64_t, frame)));
         if (frame) {
             trace_write("[irq] frame rip=");
             trace_do(serial_write_hex64(frame->rip));

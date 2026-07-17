@@ -711,12 +711,12 @@ void x86_ap_cpu_init(uint32_t cpu_id) {
     /* Load the shared IDT (table already populated by BSP). */
     descriptor_ptr_t idtr;
     idtr.limit = (uint16_t)(sizeof(g_idt) - 1);
-    idtr.base = (uint64_t)(uintptr_t)&g_idt[0];
+    idtr.base = addr_cast(uint64_t, &g_idt[0]);
     __asm__ volatile("lidt %0" : : "m"(idtr) : "memory");
 
     /* Set GS base to this CPU's per-CPU slot so cpu_local() works. */
     cpu->self = cpu;
-    x86_write_msr(IA32_GS_BASE_MSR, (uint64_t)(uintptr_t)cpu);
+    x86_write_msr(IA32_GS_BASE_MSR, addr_cast(uint64_t, cpu));
 }
 
 #endif /* WASMOS_SMP */

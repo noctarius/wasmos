@@ -47,15 +47,15 @@ extern uint8_t smp_trampoline_end[];
  * by smp_trampoline_setup() (virtual == physical for those pages).
  */
 static inline void write_slot_u64(uint64_t phys_addr, uint64_t value) {
-    *(volatile uint64_t*)(uintptr_t)phys_addr = value;
+    *ptr_cast(volatile uint64_t, phys_addr) = value;
 }
 
 static inline void write_slot_u32(uint64_t phys_addr, uint32_t value) {
-    *(volatile uint32_t*)(uintptr_t)phys_addr = value;
+    *ptr_cast(volatile uint32_t, phys_addr) = value;
 }
 
 static inline void write_slot_u16(uint64_t phys_addr, uint16_t value) {
-    *(volatile uint16_t*)(uintptr_t)phys_addr = value;
+    *ptr_cast(volatile uint16_t, phys_addr) = value;
 }
 
 /*
@@ -75,13 +75,13 @@ static void smp_trampoline_setup(cpu_local_t* ap, uint64_t ap_rsp) {
 
     /* Copy the trampoline binary to physical 0x1000. */
     uint32_t tramp_size = (uint32_t)(smp_trampoline_end - smp_trampoline_start);
-    __builtin_memcpy((void*)(uintptr_t)TRAMP_PHYS, smp_trampoline_start, tramp_size);
+    __builtin_memcpy(ptr_cast(void, TRAMP_PHYS), smp_trampoline_start, tramp_size);
 
     /* CR3: kernel page table root (physical, fits in 32 bits). */
     write_slot_u64(AP_SLOT_CR3, paging_get_root_table());
 
     /* Entry function: smp_ap_c_entry (kernel virtual address). */
-    write_slot_u64(AP_SLOT_ENTRY, (uint64_t)(uintptr_t)smp_ap_c_entry);
+    write_slot_u64(AP_SLOT_ENTRY, addr_cast(uint64_t, smp_ap_c_entry));
 
     /* Initial RSP for the AP's boot stack. */
     write_slot_u64(AP_SLOT_RSP, ap_rsp);
@@ -152,8 +152,8 @@ void smp_cpus_up(void) {
         cpu_local_t* ap = &g_cpus[i];
 
         /* Allocate static stacks (in higher-half kernel BSS). */
-        uint64_t ist1_top = (uint64_t)(uintptr_t)(g_ap_ist_stacks[i - 1u] + CPU_IST_STACK_SIZE);
-        uint64_t rsp0_top = (uint64_t)(uintptr_t)(g_ap_rsp0_stacks[i - 1u] + CPU_IST_STACK_SIZE);
+        uint64_t ist1_top = addr_cast(uint64_t, g_ap_ist_stacks[i - 1u] + CPU_IST_STACK_SIZE);
+        uint64_t rsp0_top = addr_cast(uint64_t, g_ap_rsp0_stacks[i - 1u] + CPU_IST_STACK_SIZE);
 
         /* Prepare the per-CPU GDT and TSS before the AP starts. */
         ap->cpu_id = i;

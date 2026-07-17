@@ -239,7 +239,7 @@ static void process_restore_stack_guard_mappings(uint64_t alloc_base_phys, uint3
 
 static process_run_result_t process_run_worker_on_stack(process_t* proc, thread_t* thread) {
     process_thread_worker_entry_t entry =
-        (process_thread_worker_entry_t)(uintptr_t)process_kernel_alias_addr(thread->worker_entry);
+        addr_cast(process_thread_worker_entry_t, process_kernel_alias_addr(thread->worker_entry));
     uintptr_t stack_top = thread->kstack_top - 16u;
     stack_top &= ~(uintptr_t)0xFULL;
     process_run_result_t rc = PROCESS_RUN_EXITED;

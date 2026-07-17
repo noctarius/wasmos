@@ -7,6 +7,7 @@
 #include <stdint.h>
 #include <stddef.h>
 
+#include "wasmos_cast.h"
 #include "wasmos/api.h"
 
 #ifdef __cplusplus

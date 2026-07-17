@@ -17,6 +17,9 @@ target_include_directories(bootloader_ide PRIVATE
   ${BOOT_DIR}
   ${KERNEL_DIR}/include
 )
+# Mirror the -include added to CFLAGS_EFI so compile_commands.json (hence
+# clang-tidy) resolves the cast macros used in boot.c.
+target_compile_options(bootloader_ide PRIVATE -include ${LIBC_DIR}/include/wasmos_cast.h)
 
 add_custom_command(
   OUTPUT ${BUILD_DIR}/BOOTX64.EFI

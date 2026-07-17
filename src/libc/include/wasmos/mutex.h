@@ -6,6 +6,7 @@
 #include <stdint.h>
 #include <stddef.h>
 
+#include "wasmos_cast.h"
 #include "wasmos/api.h"
 #include "wasmos/syscall_x86_64.h"
 

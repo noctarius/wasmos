@@ -501,7 +501,7 @@ static int capture_framebuffer_snapshot(EFI_SYSTEM_TABLE* system,
         }
         return -1;
     }
-    snapshot->base = (uint64_t)(uintptr_t)gop->Mode->FrameBufferBase;
+    snapshot->base = addr_cast(uint64_t, gop->Mode->FrameBufferBase);
     snapshot->size = gop->Mode->FrameBufferSize;
     snapshot->width = mode_info->HorizontalResolution;
     snapshot->height = mode_info->VerticalResolution;
@@ -517,7 +517,7 @@ static void apply_framebuffer_snapshot(boot_info_t* boot_info,
         return;
     }
 
-    boot_info->framebuffer_base = (void*)(uintptr_t)snapshot->base;
+    boot_info->framebuffer_base = ptr_cast(void, snapshot->base);
     boot_info->framebuffer_size = snapshot->size;
     boot_info->framebuffer_width = snapshot->width;
     boot_info->framebuffer_height = snapshot->height;

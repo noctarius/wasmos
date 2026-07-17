@@ -7,6 +7,11 @@
 #include "wasmos_native_driver.h"
 #include "wasmos_driver_abi.h"
 
+/* Note: this header does NOT include wasmos_cast.h and uses raw integer<->pointer
+ * double-casts (with NOLINT below) rather than ptr_cast/addr_cast. It is consumed
+ * by the native libsys Zig module (c_abi.zig @cImport), whose translate-c build
+ * does not carry the libc include path, so wasmos_cast.h is unreachable there. */
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -146,10 +151,7 @@ static inline int32_t wasmos_sys_mutex_try_lock(wasmos_driver_api_t* api,
     if (!api || !mutex || !api->mutex_try_lock) {
         return -1;
     }
-    /* Raw double-cast (not addr_cast): this header is pulled in through Zig's
-     * @cImport (translate-c), which does not get the wasmos_cast.h force-include
-     * that the C build adds, so the macros are not defined here. */
-    return api->mutex_try_lock((uint64_t)(uintptr_t)mutex);
+    return api->mutex_try_lock((uint64_t)(uintptr_t)mutex); // NOLINT(wasmos-reinterpret-cast)
 }
 
 static inline int32_t wasmos_sys_mutex_lock(wasmos_driver_api_t* api, wasmos_sys_mutex_t* mutex) {
@@ -172,7 +174,7 @@ static inline int32_t wasmos_sys_mutex_unlock(wasmos_driver_api_t* api, wasmos_s
     if (!api || !mutex || !api->mutex_unlock) {
         return -1;
     }
-    return api->mutex_unlock((uint64_t)(uintptr_t)mutex); /* raw: see mutex_try_lock note */
+    return api->mutex_unlock((uint64_t)(uintptr_t)mutex); // NOLINT(wasmos-reinterpret-cast)
 }
 
 #ifdef __cplusplus

@@ -813,7 +813,7 @@ endif ()
 get_filename_component(LLD_DIR ${LLD_PATH} DIRECTORY)
 
 set(CFLAGS_COMMON -ffreestanding -fno-stack-protector -fno-builtin -Wall -Wextra -Werror -Wno-error=c23-extensions -g)
-set(CFLAGS_EFI ${CFLAGS_COMMON} -target x86_64-unknown-uefi -fshort-wchar -mno-red-zone -B${CLANG_BIN_DIR})
+set(CFLAGS_EFI ${CFLAGS_COMMON} -target x86_64-unknown-uefi -fshort-wchar -mno-red-zone -B${CLANG_BIN_DIR} -include ${LIBC_DIR}/include/wasmos_cast.h)
 set(CFLAGS_KERNEL ${CFLAGS_COMMON} -target ${KERNEL_TARGET_TRIPLE} -mno-red-zone -mcmodel=kernel -m64 -fno-jump-tables -I${WASM_RUNTIME_INCLUDE_DIR} -I${KERNEL_DIR} -I${KERNEL_DIR}/include -I${DRIVER_WASM_DIR}/include -B${LLD_DIR} -DWASMOS_ENABLE_PREEMPT_GUARD=1 -DWASMOS_ENABLE_SAFEPOINT=1 ${WASM_RUNTIME_DEFINE} -include ${LIBC_DIR}/include/wasmos_cast.h)
 if (CMAKE_SYSTEM_NAME STREQUAL "Darwin")
   find_program(LLD_LINK_PATH ${LLD_LINK} HINTS ${LLD_HINTS})

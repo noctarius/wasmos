@@ -1312,7 +1312,7 @@ static uint32_t warp_phys_map(uint32_t phys_lo, uint32_t phys_hi, uint32_t size,
         return (uint32_t)-1;
     lmem += wasm_offset;
 
-    uint64_t scratch_va = (uint64_t)(uintptr_t)g_phys_scratch;
+    uint64_t scratch_va = addr_cast(uint64_t, g_phys_scratch);
     uint64_t scratch_phys = scratch_va - KERNEL_HIGHER_HALF_BASE;
     for (uint32_t off = 0; off < size; off += 4096) {
         paging_map_4k(scratch_va, phys + off, 3ULL);
@@ -1533,7 +1533,7 @@ static int warp_restore_linear_window(WarpCallContext* ctx, uint32_t offset, uin
     if (!base) {
         return -1;
     }
-    uint64_t virt = (uint64_t)(uintptr_t)base;
+    uint64_t virt = addr_cast(uint64_t, base);
     if (virt < KERNEL_HIGHER_HALF_BASE || (virt & 0xFFFULL) != 0) {
         return -1;
     }
@@ -1578,9 +1578,9 @@ static int warp_ring3_sync_user_range(WarpCallContext* ctx, uint32_t wasm_off, u
     }
 
     uint64_t user_range_base =
-        WARP_R3_LINMEM_BASE + ((uint64_t)(uintptr_t)linmem_base & 0xFFFULL) + wasm_off;
+        WARP_R3_LINMEM_BASE + (addr_cast(uint64_t, linmem_base) & 0xFFFULL) + wasm_off;
     uint64_t user_page_base = user_range_base & ~0xFFFULL;
-    uint64_t kernel_page_base = ((uint64_t)(uintptr_t)range_base) & ~0xFFFULL;
+    uint64_t kernel_page_base = (addr_cast(uint64_t, range_base)) & ~0xFFFULL;
     uint64_t page_count = ((user_range_base & 0xFFFULL) + (uint64_t)size + 0xFFFULL) >> 12;
 
     for (uint64_t i = 0; i < page_count; ++i) {
@@ -1607,7 +1607,7 @@ static int warp_ring3_map_user_window(uint8_t* linmem_base, uint32_t wasm_off, u
         return 0;
     }
     uint64_t user_va =
-        WARP_R3_LINMEM_BASE + ((uint64_t)(uintptr_t)linmem_base & 0xFFFULL) + wasm_off;
+        WARP_R3_LINMEM_BASE + (addr_cast(uint64_t, linmem_base) & 0xFFFULL) + wasm_off;
     for (uint64_t i = 0; i < pages; ++i) {
         if (paging_map_4k_in_root(current_root, user_va + i * 0x1000ULL, phys_base + i * 0x1000ULL,
                                   MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE |
@@ -1941,9 +1941,9 @@ static uint32_t warp_shmem_map(uint32_t id, uint32_t wasm_off, uint32_t size, vo
     }
 #endif
     uint8_t* lmem = linmem_base + wasm_off;
-    if ((uint64_t)(uintptr_t)lmem & 0xFFF)
+    if (addr_cast(uint64_t, lmem) & 0xFFF)
         return (uint32_t)-1;
-    uint64_t virt = (uint64_t)(uintptr_t)lmem;
+    uint64_t virt = addr_cast(uint64_t, lmem);
     for (uint64_t i = 0; i < shared_pages; ++i) {
         paging_map_4k(virt + i * 0x1000ULL, phys_base + i * 0x1000ULL, 3ULL);
     }
@@ -1995,7 +1995,7 @@ static int64_t warp_linmem_place_phys(WarpCallContext* ctx, uint64_t phys_base, 
     uint64_t mem_size = (uint64_t)mem_pages << 16;
     uint64_t scan_min = (uint64_t)warp_linear_memory_active_size(ctx) + 0x10000ULL;
     uint8_t* base = ctx->module->getLinearMemoryRegion(0, 0);
-    uint64_t base_mod = base ? ((uint64_t)(uintptr_t)base & 0xFFFULL) : 0;
+    uint64_t base_mod = base ? (addr_cast(uint64_t, base) & 0xFFFULL) : 0;
     if (scan_min < 0x4000ULL) {
         scan_min = 0x4000ULL;
     }
@@ -2030,7 +2030,7 @@ static int64_t warp_linmem_place_phys(WarpCallContext* ctx, uint64_t phys_base, 
         uint32_t off32 = (uint32_t)off;
         if (!warp_shmem_map_overlaps(ctx->pid, off32, window_size) && base) {
             uint8_t* p = base + off32;
-            if (((uint64_t)(uintptr_t)p & 0xFFFULL) == 0) {
+            if ((addr_cast(uint64_t, p) & 0xFFFULL) == 0) {
                 found_off = off32;
                 found = 1;
                 break;
@@ -2055,10 +2055,10 @@ static int64_t warp_linmem_place_phys(WarpCallContext* ctx, uint64_t phys_base, 
     }
 #endif
     uint8_t* lmem = linmem_base + found_off;
-    if ((uint64_t)(uintptr_t)lmem & 0xFFF)
+    if (addr_cast(uint64_t, lmem) & 0xFFF)
         return -1; /* alignment */
 
-    uint64_t virt = (uint64_t)(uintptr_t)lmem;
+    uint64_t virt = addr_cast(uint64_t, lmem);
     for (uint64_t i = 0; i < map_pages; ++i) {
         paging_map_4k(virt + i * 0x1000ULL, phys_base + i * 0x1000ULL, 3ULL);
     }
@@ -2244,7 +2244,7 @@ static uint32_t warp_shmem_flush(uint32_t id, uint32_t wasm_off, uint32_t size, 
     const uint8_t* src = warp_linear_mem_window(ctx, wasm_off, size);
     if (!src)
         return (uint32_t)-1;
-    __builtin_memcpy((void*)(uintptr_t)(phys_base | KERNEL_HIGHER_HALF_BASE), src, size);
+    __builtin_memcpy(ptr_cast(void, (phys_base | KERNEL_HIGHER_HALF_BASE)), src, size);
     return 0;
 }
 
@@ -2270,7 +2270,7 @@ static uint32_t warp_shmem_refresh(uint32_t id, uint32_t wasm_off, uint32_t size
     uint8_t* dst = warp_linear_mem_window(ctx, wasm_off, size);
     if (!dst)
         return (uint32_t)-1;
-    __builtin_memcpy(dst, (const void*)(uintptr_t)(phys_base | KERNEL_HIGHER_HALF_BASE), size);
+    __builtin_memcpy(dst, ptr_cast(const void, (phys_base | KERNEL_HIGHER_HALF_BASE)), size);
     return 0;
 }
 
@@ -2373,9 +2373,9 @@ static uint32_t warp_framebuffer_map(uint32_t wasm_off, uint32_t size, void* ctx
     if (warp_current_context_id(&context_id) != 0 || warp_require_mmio_capability(context_id) != 0)
         return (uint32_t)-1;
     uint8_t* lmem = warp_linear_mem_window(ctx, wasm_off, size);
-    if (!lmem || ((uint64_t)(uintptr_t)lmem & 0xFFF))
+    if (!lmem || (addr_cast(uint64_t, lmem) & 0xFFF))
         return (uint32_t)-1;
-    uint64_t virt = (uint64_t)(uintptr_t)lmem;
+    uint64_t virt = addr_cast(uint64_t, lmem);
     uint64_t phys = info.framebuffer_base;
     uint64_t pages = (uint64_t)size / 0x1000ULL;
     for (uint64_t i = 0; i < pages; ++i) {

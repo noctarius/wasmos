@@ -4,6 +4,7 @@
 
 #include <stdint.h>
 
+#include "wasmos_cast.h"
 #include "wasmos/api.h"
 #include "string.h"
 #include "wasmos_driver_abi.h"

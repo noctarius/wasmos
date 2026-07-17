@@ -78,7 +78,7 @@ void* mmap(void* addr, size_t length, int prot, int flags, int fd, long offset) 
     if (!phys)
         return MAP_FAILED;
 
-    uint8_t* virt = (uint8_t*)(uintptr_t)(phys | KERNEL_HIGHER_HALF_BASE);
+    uint8_t* virt = ptr_cast(uint8_t, (phys | KERNEL_HIGHER_HALF_BASE));
 
     warp_mmap_entry_t* slot = find_mmap_slot();
     if (!slot) {

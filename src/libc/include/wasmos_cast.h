@@ -21,7 +21,7 @@
 
 #include <stdint.h>
 
-#define ptr_cast(type, addr) ((type *)(uintptr_t)(addr))
+#define ptr_cast(type, addr) ((type*)(uintptr_t)(addr))
 #define addr_cast(type, ptr) ((type)(uintptr_t)(ptr))
 #define fn_cast(type, addr) ((type)(uintptr_t)(addr))
 

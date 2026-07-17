@@ -1,6 +1,8 @@
 #ifndef WASMOS_LIBUI_H
 #define WASMOS_LIBUI_H
 
+#include "wasmos_cast.h"
+
 #ifndef UI_TRACE
 #define UI_TRACE WASMOS_TRACE
 #endif

@@ -454,6 +454,42 @@ target_compile_definitions(kernel_ide PRIVATE
   WASMOS_TRACE=${WASMOS_TRACE_VALUE}
   WASMOS_IRQ_MODE=${WASMOS_IRQ_MODE_VALUE})
 
+# kernel_ide only indexes the *active* runtime's glue (KERNEL_SOURCES is
+# runtime-conditional), but clang-tidy reads compile_commands.json and should
+# lint every first-party source regardless of the selected WASM runtime. These
+# indexing-only targets (EXCLUDE_FROM_ALL, never linked) add both runtimes'
+# first-party C glue to the compile DB so a single lint pass covers all of it
+# without a per-runtime matrix. Duplicate entries for the active runtime are
+# harmless (clang-tidy uses one). The vendored runtime sources under libs/ are
+# excluded from linting anyway, so only our own glue is indexed here.
+add_library(wasm3_glue_ide OBJECT EXCLUDE_FROM_ALL
+  ${KERNEL_DIR}/wasm3/link.c
+  ${KERNEL_DIR}/wasm3/shim.c
+  ${KERNEL_DIR}/wasm_driver.c)
+target_include_directories(wasm3_glue_ide PRIVATE
+  ${KERNEL_DIR}
+  ${KERNEL_DIR}/include
+  ${LIBC_DIR}/include
+  ${DRIVER_WASM_DIR}/include
+  ${WASM3_DIR}
+  ${WASM3_DIR}/source)
+target_compile_definitions(wasm3_glue_ide PRIVATE
+  WASMOS_TRACE=${WASMOS_TRACE_VALUE}
+  WASMOS_IRQ_MODE=${WASMOS_IRQ_MODE_VALUE})
+
+add_library(warp_glue_ide OBJECT EXCLUDE_FROM_ALL
+  ${KERNEL_DIR}/warp/ring3_trampolines.c)
+target_include_directories(warp_glue_ide PRIVATE
+  ${KERNEL_DIR}
+  ${KERNEL_DIR}/include
+  ${LIBC_DIR}/include
+  ${DRIVER_WASM_DIR}/include
+  ${KERNEL_DIR}/warp/compat)
+target_compile_definitions(warp_glue_ide PRIVATE
+  WASMOS_TRACE=${WASMOS_TRACE_VALUE}
+  WASMOS_IRQ_MODE=${WASMOS_IRQ_MODE_VALUE}
+  WASMOS_WASM_RUNTIME_WARP)
+
 get_property(WASMOS_KERNEL_BLOBS GLOBAL PROPERTY WASMOS_KERNEL_BLOBS)
 if (WASMOS_KERNEL_BLOBS)
   list(APPEND KERNEL_OBJS ${WASMOS_KERNEL_BLOBS})

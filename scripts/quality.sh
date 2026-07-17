@@ -358,7 +358,14 @@ PY
         return 0
     fi
 
-    "$clang_tidy" -p "$tidy_db" --quiet "${tidy[@]}"
+    # Load the wasmos clang-tidy plugin (built by CMake) so the wasmos-* checks
+    # run; without it clang-tidy just skips those checks.
+    local -a load_args=()
+    if [[ -n "${QUALITY_TIDY_PLUGIN:-}" && -f "$QUALITY_TIDY_PLUGIN" ]]; then
+        load_args+=(--load "$QUALITY_TIDY_PLUGIN")
+    fi
+
+    "$clang_tidy" "${load_args[@]}" -p "$tidy_db" --quiet "${tidy[@]}"
 }
 
 run_go_lint() {

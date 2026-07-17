@@ -1927,7 +1927,39 @@ find_program(QUALITY_ASC asc HINTS ${CMAKE_SOURCE_DIR}/node_modules/.bin)
 find_program(QUALITY_BLACK black)
 find_program(QUALITY_RUFF ruff)
 
+# wasmos clang-tidy plugin (tools/clang_tidy_wasmos): compiled here against the
+# resolved LLVM so the loaded module's ABI matches clang-tidy exactly, then
+# loaded via --load in run_clang_tidy. Rebuilt only when the source changes.
+# Requires llvm-config + clang-tidy's dev headers; if unavailable the plugin is
+# skipped and the wasmos-* checks simply do not run.
+find_program(LLVM_CONFIG llvm-config HINTS ${CLANG_BIN_DIR} ${LLVM_HINTS})
+set(WASMOS_TIDY_PLUGIN "")
+if (QUALITY_CLANG_TIDY AND LLVM_CONFIG AND CLANGXX_PATH AND
+    EXISTS ${CMAKE_SOURCE_DIR}/tools/clang_tidy_wasmos/WasmosTidyModule.cpp)
+  set(WASMOS_TIDY_PLUGIN_SRC ${CMAKE_SOURCE_DIR}/tools/clang_tidy_wasmos/WasmosTidyModule.cpp)
+  set(WASMOS_TIDY_PLUGIN ${CMAKE_BINARY_DIR}/wasmos_tidy_plugin${CMAKE_SHARED_LIBRARY_SUFFIX})
+  execute_process(COMMAND ${LLVM_CONFIG} --cxxflags
+    OUTPUT_VARIABLE _llvm_cxxflags OUTPUT_STRIP_TRAILING_WHITESPACE)
+  separate_arguments(_llvm_cxxflags_list UNIX_COMMAND "${_llvm_cxxflags}")
+  if (APPLE)
+    set(_tidy_plugin_link -undefined dynamic_lookup)
+  else ()
+    set(_tidy_plugin_link -Wl,--allow-shlib-undefined)
+  endif ()
+  add_custom_command(
+    OUTPUT ${WASMOS_TIDY_PLUGIN}
+    COMMAND ${CLANGXX_PATH} ${_llvm_cxxflags_list} -fPIC -shared ${_tidy_plugin_link}
+            ${WASMOS_TIDY_PLUGIN_SRC} -o ${WASMOS_TIDY_PLUGIN}
+    DEPENDS ${WASMOS_TIDY_PLUGIN_SRC}
+    COMMENT "Building wasmos clang-tidy plugin"
+    VERBATIM)
+  add_custom_target(wasmos_tidy_plugin DEPENDS ${WASMOS_TIDY_PLUGIN})
+endif ()
+
 set(QUALITY_ENV QUALITY_BUILD_DIR=${CMAKE_BINARY_DIR})
+if (WASMOS_TIDY_PLUGIN)
+  list(APPEND QUALITY_ENV QUALITY_TIDY_PLUGIN=${WASMOS_TIDY_PLUGIN})
+endif ()
 foreach (_pair
     CLANG_FORMAT:QUALITY_CLANG_FORMAT
     CLANG_TIDY:QUALITY_CLANG_TIDY
@@ -1974,3 +2006,9 @@ add_custom_target(quality
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
   USES_TERMINAL VERBATIM
   COMMENT "quality: format then lint")
+
+# Build the clang-tidy plugin before any target that runs clang-tidy.
+if (TARGET wasmos_tidy_plugin)
+  add_dependencies(lint wasmos_tidy_plugin)
+  add_dependencies(quality wasmos_tidy_plugin)
+endif ()

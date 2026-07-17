@@ -14,11 +14,15 @@ Checks: >
   -clang-analyzer-core.FixedAddressDereference,
   -bugprone-casting-through-void,
   -bugprone-branch-clone,
-  -bugprone-multi-level-implicit-pointer-conversion
+  -bugprone-multi-level-implicit-pointer-conversion,
+  wasmos-standalone-block
 # Only diagnose headers inside our own source tree; vendored libs/ headers
 # (wasm3, warp) are pulled in via -I but must not be linted or modified.
 HeaderFilterRegex: '/(src|tests|examples|scripts)/'
-WarningsAsErrors: ''
+# wasmos-standalone-block is enforced as a hard error (fails lint); the
+# analyzer/bugprone findings above stay advisory. The check comes from the
+# wasmos clang-tidy plugin (tools/clang_tidy_wasmos), loaded via --load.
+WarningsAsErrors: 'wasmos-standalone-block'
 
 # Disabled checks and why:
 #   insecureAPI.DeprecatedOrUnsafeBufferHandling  fires on every memset/snprintf/

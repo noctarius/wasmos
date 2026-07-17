@@ -113,7 +113,20 @@
       "Bash(ssh -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new root@10.96.1.78 'echo CONNECTED; uname -a; nproc; echo \"--- existing tools ---\"; for t in clang clang-20 zig rustc tinygo qemu-system-x86_64 gdb make cmake node npm rsync git; do printf \"%s: \" \"$t\"; \\(command -v \"$t\" || echo MISSING\\); done; echo \"--- ovmf ---\"; ls /usr/share/OVMF/ 2>/dev/null | head; echo \"--- repo? ---\"; ls -d /root/wasmos 2>/dev/null || echo \"no repo yet\"')",
       "Bash(awk '{print $6,$7}')",
       "Bash(awk '{print $5, $9}')",
-      "Bash(echo \"started $!\")"
+      "Bash(echo \"started $!\")",
+      "Bash(bash scripts/quality.sh lint)",
+      "Bash(echo \"exit: $?\")",
+      "Read(//tmp/**)",
+      "Bash(bash -n scripts/quality.sh)",
+      "Bash(cmake --build build --target lint)",
+      "Bash(echo \"=== lint exit: $? ===\")",
+      "Bash(awk '/Linting Python sources/{f=1} f' /tmp/lint7.log)",
+      "Bash(bash -c 'ruff check --fix $\\(git ls-files \"*.py\" | grep -E \"^\\(src|tests|examples|scripts\\)/\"\\)')",
+      "Bash(bash -c 'ruff check $\\(git ls-files \"*.py\" | grep -E \"^\\(src|tests|examples|scripts\\)/\"\\)')",
+      "Bash(echo \"lint exit: $?\")",
+      "Bash(awk '/Linting Go/{p=\"go\"} /Linting Zig/{p=\"zig\"} /Linting Rust/{p=\"rust\"} /Linting AssemblyScript/{p=\"asc\"} /Linting Python/{p=\"\"} p&&!/^==>/{print p\": \"$0}' /tmp/lintB.log)",
+      "Bash(echo \"fmt-check exit: $?\")",
+      "Bash(awk '/Linting Go/{p=1} /Linting AssemblyScript/{p=0} p&&!/^==>/{print}' /tmp/lintB.log)"
     ]
   }
 }

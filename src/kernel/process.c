@@ -1035,7 +1035,7 @@ static int process_spawn_as_internal(uint32_t parent_pid, const char* name, proc
     ksync_spinlock_init(&slot->runtime_lock);
     slot->runtime_lock_owner = 0;
     sched_event_init(&slot->wait_event, SCHED_EVENT_TYPE_PROCESS);
-    if (strcmp(name, "process-manager") == 0 || strcmp(name, "native-call-min") == 0) {
+    if (name && (strcmp(name, "process-manager") == 0 || strcmp(name, "native-call-min") == 0)) {
         thread_t* watch_thread = process_main_thread(slot);
         if (watch_thread) {
             g_ctx_watch_ctx = (uint64_t)(uintptr_t)&watch_thread->ctx;
@@ -1051,7 +1051,7 @@ static int process_spawn_as_internal(uint32_t parent_pid, const char* name, proc
             trace_do(serial_write_hex64((uint64_t)(uintptr_t)g_pm_stack_watch));
         }
     }
-    if (strcmp(name, "preempt-busy") == 0) {
+    if (name && strcmp(name, "preempt-busy") == 0) {
         trace_write("[sched] spawn preempt-busy rip=");
         trace_do(serial_write_hex64(slot->ctx.rip));
         trace_write("[sched] spawn preempt-busy rsp=");

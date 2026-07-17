@@ -35,7 +35,7 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    fd = open("/boot/create.txt", O_WRONLY | O_CREAT | O_TRUNC);
+    fd = open("/boot/create.txt", O_WRONLY | O_CREAT | O_TRUNC, 0644);
     if (fd < 0) {
         puts("fs-write-smoke: create open failed");
         return 1;
@@ -118,7 +118,7 @@ int main(int argc, char** argv) {
     }
     /* Keep /create.txt for subsequent truncate/write checks; deleting this
      * grown file can trip QEMU vvfat host assertions on some versions. */
-    fd = open("/boot/create.txt", O_WRONLY | O_CREAT | O_TRUNC);
+    fd = open("/boot/create.txt", O_WRONLY | O_CREAT | O_TRUNC, 0644);
     if (fd < 0) {
         puts("fs-write-smoke: recreate open failed");
         return 1;

@@ -615,6 +615,12 @@ static EFI_STATUS read_file_alloc(EFI_BOOT_SERVICES* bs, EFI_FILE_PROTOCOL* root
     if (EFI_ERROR(status)) {
         goto done;
     }
+    if (!info) {
+        /* GetInfo reported success without ever hitting the BUFFER_TOO_SMALL
+         * allocation path; treat the missing FILE_INFO as a read failure. */
+        status = EFI_NOT_FOUND;
+        goto done;
+    }
 
     UINTN size = (UINTN)info->FileSize;
     status = bs->AllocatePool(EFI_LOADER_DATA, size, &buf);
@@ -930,7 +936,6 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE* system) {
         if (module_count > 0) {
             boot_module_t* mods = (boot_module_t*)cursor;
             memset8(mods, 0, module_table_bytes);
-            cursor += module_table_bytes;
 
             UINT32 mod_index = 0;
             const wasmos_initfs_header_t* copied_hdr = (const wasmos_initfs_header_t*)initfs_copy;

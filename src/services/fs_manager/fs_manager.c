@@ -343,9 +343,8 @@ static void backend_refresh_boot_meta(fs_backend_t* slot, int32_t req_seed) {
 }
 
 static int send_virtual_root_listing(int32_t source, int32_t req_id) {
-    char root_listing[256];
+    char root_listing[256] = {0};
     uint32_t pos = 0;
-    root_listing[0] = '\0';
     for (uint32_t i = 0; i < FS_BACKEND_CAP; ++i) {
         if (!g_backends[i].in_use) {
             continue;

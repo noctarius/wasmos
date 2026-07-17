@@ -30,7 +30,7 @@ typedef struct {
 } shmem_sync_t;
 
 static int sync_write(const shmem_sync_t* s) {
-    int fd = open(SHMEM_SYNC_PATH, O_WRONLY | O_CREAT | O_TRUNC);
+    int fd = open(SHMEM_SYNC_PATH, O_WRONLY | O_CREAT | O_TRUNC, 0644);
     if (fd < 0)
         return -1;
     ssize_t rc = write(fd, s, sizeof(*s));

@@ -23,7 +23,7 @@ static inline int32_t ui_menu_item_child_count(const ui_context_t* ctx, const ui
     int32_t n = 0;
     int32_t cid = mi->first_child_id;
     while (cid > 0) {
-        const ui_component_t* c = ui_component_by_id((ui_context_t*)(uintptr_t)ctx, cid);
+        const ui_component_t* c = ui_component_by_id(ptr_cast(ui_context_t, ctx), cid);
         if (!c)
             break;
         ++n;
@@ -83,7 +83,7 @@ static inline void ui_menu_item_popup_position(const ui_context_t* ctx, const ui
     ph = child_count * item_h;
 
     /* Determine placement based on parent type */
-    const ui_component_t* parent = ui_component_by_id((ui_context_t*)(uintptr_t)ctx, mi->parent_id);
+    const ui_component_t* parent = ui_component_by_id(ptr_cast(ui_context_t, ctx), mi->parent_id);
     if (parent && parent->type == UI_COMPONENT_MENU_ITEM) {
         /* Sub-menu: open to the right of this item's row in its parent's popup.
          * mi->bounds is updated by popup_render to the row rect in screen coords. */
@@ -198,7 +198,7 @@ static inline void ui_menu_item_popup_present(ui_context_t* ctx, ui_menu_item_da
     if (!d || !d->popup_base || d->popup_win_id == 0 || d->popup_buf_id == 0)
         return;
     int32_t status = 0;
-    wasmos_shmem_flush(d->popup_shmem_id, (int32_t)(uintptr_t)d->popup_base,
+    wasmos_shmem_flush(d->popup_shmem_id, addr_cast(int32_t, d->popup_base),
                        d->popup_w * d->popup_h * 4);
     ui_send_gfx(ctx->gfx_endpoint, ctx->reply_endpoint, ctx->req_id++, GFX_IPC_PRESENT_WINDOW,
                 d->popup_win_id, d->popup_buf_id, 0, 0, &status, 0, 0, 0);
@@ -306,7 +306,7 @@ static inline void ui_menu_item_popup_open(ui_context_t* ctx, ui_component_t* mi
     d->popup_win_id = win_id;
     d->popup_buf_id = buf_id;
     d->popup_shmem_id = shmem_id;
-    d->popup_base = (uint8_t*)(uintptr_t)(uint32_t)mapped;
+    d->popup_base = ptr_cast(uint8_t, (uint32_t)mapped);
     d->popup_w = popup_w;
     d->popup_h = popup_h;
     d->popup_hovered = -1;

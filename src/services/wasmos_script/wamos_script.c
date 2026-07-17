@@ -64,11 +64,11 @@ static int32_t wamos_script_write_spawn_buf(const char* path, const char* args,
     if (bid < 0) {
         return -1;
     }
-    if (wasmos_xfer_buffer_write(bid, (int32_t)(uintptr_t)path, (int32_t)path_len, 0) != 0) {
+    if (wasmos_xfer_buffer_write(bid, addr_cast(int32_t, path), (int32_t)path_len, 0) != 0) {
         (void)wasmos_xfer_buffer_release(bid);
         return -1;
     }
-    if (args_len > 0u && wasmos_xfer_buffer_write(bid, (int32_t)(uintptr_t)args, (int32_t)args_len,
+    if (args_len > 0u && wasmos_xfer_buffer_write(bid, addr_cast(int32_t, args), (int32_t)args_len,
                                                   (int32_t)write_off) != 0) {
         (void)wasmos_xfer_buffer_release(bid);
         return -1;

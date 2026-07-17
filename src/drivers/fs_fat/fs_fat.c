@@ -305,7 +305,7 @@ static void console_write(const char* s) {
                     break;
                 }
                 if (rc != IPC_ERR_FULL || ++tries >= FAT_STREAM_SEND_RETRIES) {
-                    wasmos_console_write((int32_t)(uintptr_t)s, len);
+                    wasmos_console_write(addr_cast(int32_t, s), len);
                     return;
                 }
                 (void)wasmos_sched_yield();
@@ -313,7 +313,7 @@ static void console_write(const char* s) {
         }
         return;
     }
-    wasmos_console_write((int32_t)(uintptr_t)s, len);
+    wasmos_console_write(addr_cast(int32_t, s), len);
 }
 
 static void fat_log(const char* msg) {
@@ -472,7 +472,7 @@ static int fat_poll_block_io(void) {
         /* When the buffer is mapped, g_sector_buf already aliases the pages the
          * block server just filled; the staging copy is only needed otherwise. */
         if (!g_block_buf_mapped &&
-            wasmos_block_buffer_copy(g_block_buf_phys, (int32_t)(uintptr_t)g_sector_buf,
+            wasmos_block_buffer_copy(g_block_buf_phys, addr_cast(int32_t, g_sector_buf),
                                      (int32_t)bytes, 0) != 0) {
             g_waiting = 0;
             fat_log("block copy failed\n");
@@ -493,7 +493,7 @@ static int fat_try_parse_mbr(uint32_t* out_lba) {
         return -1;
     }
 
-    fat_mbr_entry_t* entries = (fat_mbr_entry_t*)(uintptr_t)(g_sector_buf + 446);
+    fat_mbr_entry_t* entries = ptr_cast(fat_mbr_entry_t, (g_sector_buf + 446));
     for (uint32_t i = 0; i < 4; ++i) {
         uint8_t type = entries[i].type;
         if (type == 0x00) {
@@ -513,7 +513,7 @@ static int fat_try_parse_mbr(uint32_t* out_lba) {
 }
 
 static int fat_parse_boot(void) {
-    fat_bpb_t* bpb = (fat_bpb_t*)(uintptr_t)g_sector_buf;
+    fat_bpb_t* bpb = ptr_cast(fat_bpb_t, g_sector_buf);
     uint16_t sig = (uint16_t)g_sector_buf[510] | ((uint16_t)g_sector_buf[511] << 8);
     uint32_t bytes_per_sector = bpb->bytes_per_sector;
     if (sig != 0xAA55 || (bytes_per_sector != 512 && bytes_per_sector != 1024 &&
@@ -779,7 +779,7 @@ static int fat_sync_block_write(uint32_t lba) {
     /* When mapped, we already wrote directly into the shared pages via
      * g_sector_buf; the block server reads them by phys, so no staging write. */
     if (!g_block_buf_mapped &&
-        wasmos_block_buffer_write(g_block_buf_phys, (int32_t)(uintptr_t)g_sector_buf,
+        wasmos_block_buffer_write(g_block_buf_phys, addr_cast(int32_t, g_sector_buf),
                                   FAT_SECTOR_SIZE, 0) != 0) {
         return -1;
     }
@@ -1967,7 +1967,7 @@ static int fat_handle_read_open_file(void) {
             return -1;
         }
         if (wasmos_xfer_buffer_write(g_fs_req.arg2,
-                                     (int32_t)(uintptr_t)(g_sector_buf + sector_offset),
+                                     addr_cast(int32_t, (g_sector_buf + sector_offset)),
                                      (int32_t)chunk, (int32_t)done) != 0) {
             return -1;
         }
@@ -2062,7 +2062,7 @@ static int fat_handle_write_open_file(void) {
         /* Stage through a separate buffer before merging into the sector so
          * partial writes do not depend on host-call copies into a shifted
          * destination pointer inside linear memory. */
-        if (wasmos_xfer_buffer_read(g_fs_req.arg2, (int32_t)(uintptr_t)g_fs_stage_buf,
+        if (wasmos_xfer_buffer_read(g_fs_req.arg2, addr_cast(int32_t, g_fs_stage_buf),
                                     (int32_t)chunk, (int32_t)done) != 0) {
             return -1;
         }
@@ -3144,7 +3144,7 @@ static int fat_handle_read_app(void) {
         /* FIXME: READ_APP is dead (spawn-by-name was removed) and has no sender;
          * this path is unreachable and should be deleted along with the
          * FAT_OP_READ_APP state machine. g_fs_req.arg2 keeps it arity-correct. */
-        if (wasmos_xfer_buffer_write(g_fs_req.arg2, (int32_t)(uintptr_t)g_sector_buf,
+        if (wasmos_xfer_buffer_write(g_fs_req.arg2, addr_cast(int32_t, g_sector_buf),
                                      (int32_t)bytes, (int32_t)g_read_offset) != 0) {
             g_op = FAT_OP_NONE;
             return -1;
@@ -3818,7 +3818,7 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t block_endpo
      * (map unsupported / no window) stays correct. */
     int32_t block_buf_win = wasmos_block_buffer_map();
     if (block_buf_win >= 0) {
-        g_sector_buf = (uint8_t*)(uintptr_t)block_buf_win;
+        g_sector_buf = ptr_cast(uint8_t, block_buf_win);
         g_block_buf_mapped = 1;
     }
     g_boot_phase = FAT_BOOT_INIT;
@@ -3883,7 +3883,7 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t block_endpo
      * fs-manager on each FSMGR_IPC_BACKEND_INFO_REQ pull (including after an
      * fs-manager restart). Intentionally never released. */
     g_mount_bid = wasmos_xfer_buffer_acquire(mount_alias_len);
-    if (g_mount_bid < 0 || wasmos_xfer_buffer_write(g_mount_bid, (int32_t)(uintptr_t)mount_alias,
+    if (g_mount_bid < 0 || wasmos_xfer_buffer_write(g_mount_bid, addr_cast(int32_t, mount_alias),
                                                     mount_alias_len, 0) != 0) {
         fat_log("mount alias buffer write failed\n");
         fat_stall();

@@ -28,7 +28,7 @@ static void heap_init(void) {
     if (g_heap_ready)
         return;
     g_heap_limit = (uint32_t)__builtin_wasm_memory_size(0) * 65536u;
-    g_heap_cursor = (uint32_t)(uintptr_t)&__heap_base;
+    g_heap_cursor = addr_cast(uint32_t, &__heap_base);
     if (g_heap_cursor > g_heap_limit)
         g_heap_cursor = g_heap_limit;
     g_heap_head = NULL;
@@ -59,7 +59,7 @@ static heap_block_t* heap_request_block(size_t payload_size) {
         return NULL;
     if (heap_grow_to(end) != 0)
         return NULL;
-    heap_block_t* blk = (heap_block_t*)(uintptr_t)start;
+    heap_block_t* blk = ptr_cast(heap_block_t, start);
     blk->size = payload_size;
     blk->free = 0;
     blk->next = NULL;

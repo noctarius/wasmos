@@ -7,7 +7,7 @@
 
 #if UI_TRACE
 #define UI_DBG(msg)                                                                                \
-    ((void)wasmos_console_write((int32_t)(uintptr_t)(msg), (int32_t)(sizeof(msg) - 1)))
+    ((void)wasmos_console_write(addr_cast(int32_t, (msg)), (int32_t)(sizeof(msg) - 1)))
 #else
 #define UI_DBG(msg) ((void)0)
 #endif
@@ -463,7 +463,7 @@ static inline int32_t ui_font_ensure_shmem_buffer(int32_t* shmem_id, uint8_t** m
         return -1;
     /* TODO(libui-font-shmem): old SHMEM IDs are not reclaimed on growth. */
     *shmem_id = new_id;
-    *mapped_ptr = (uint8_t*)(uintptr_t)(uint32_t)mapped;
+    *mapped_ptr = ptr_cast(uint8_t, (uint32_t)mapped);
     *cap = bytes;
     return 0;
 }
@@ -493,7 +493,7 @@ static inline int32_t ui_font_measure_text(ui_context_t* ctx, const char* text, 
         return -1;
     memcpy(ctx->font_text_ptr, text, (size_t)text_len);
     ctx->font_text_ptr[text_len] = '\0';
-    if (wasmos_shmem_flush(ctx->font_text_shmem_id, (int32_t)(uintptr_t)ctx->font_text_ptr,
+    if (wasmos_shmem_flush(ctx->font_text_shmem_id, addr_cast(int32_t, ctx->font_text_ptr),
                            text_len + 1) != 0)
         return -1;
 
@@ -547,7 +547,7 @@ static inline int32_t ui_font_measure_and_raster_text(ui_context_t* ctx, const c
     }
     if (reply.type != FONT_IPC_RESP || reply.arg0 != FONT_STATUS_OK)
         return -1;
-    if (wasmos_shmem_refresh(ctx->font_mask_shmem_id, (int32_t)(uintptr_t)ctx->font_mask_ptr,
+    if (wasmos_shmem_refresh(ctx->font_mask_shmem_id, addr_cast(int32_t, ctx->font_mask_ptr),
                              bytes) != 0)
         return -1;
     return 0;
@@ -1039,7 +1039,7 @@ ui_apply_realloc_state(ui_context_t* ctx, int32_t new_buffer_id, int32_t new_shm
     ctx->stride_bytes = new_stride;
     ctx->width = new_w;
     ctx->height = new_h;
-    ctx->mapped_base = (uint8_t*)(uintptr_t)(uint32_t)mapped_ptr;
+    ctx->mapped_base = ptr_cast(uint8_t, (uint32_t)mapped_ptr);
     ctx->pointer_x = first_alloc ? ctx->width / 2 : prev_ptr_x;
     ctx->pointer_y = first_alloc ? ctx->height / 2 : prev_ptr_y;
 }
@@ -1177,10 +1177,10 @@ static inline int32_t ui_window_set_title(ui_context_t* ctx, const char* title) 
         (void)wasmos_shmem_unmap(shmem_id);
         return -1;
     }
-    uint8_t* ptr = (uint8_t*)(uintptr_t)(uint32_t)mapped;
+    uint8_t* ptr = ptr_cast(uint8_t, (uint32_t)mapped);
     memcpy(ptr, title, (size_t)len);
     ptr[len] = '\0';
-    if (wasmos_shmem_flush(shmem_id, (int32_t)(uintptr_t)ptr, len + 1) != 0) {
+    if (wasmos_shmem_flush(shmem_id, addr_cast(int32_t, ptr), len + 1) != 0) {
         (void)wasmos_shmem_unmap(shmem_id);
         return -1;
     }
@@ -1893,7 +1893,7 @@ static inline int32_t ui_loop_drain(ui_context_t* ctx) {
     ui_layout_vertical(ctx, root->id);
     ui_render_component(ctx, root->id);
 
-    if (wasmos_shmem_flush(ctx->shmem_id, (int32_t)(uintptr_t)ctx->mapped_base,
+    if (wasmos_shmem_flush(ctx->shmem_id, addr_cast(int32_t, ctx->mapped_base),
                            ctx->stride_bytes * ctx->height) != 0) {
         return -1;
     }

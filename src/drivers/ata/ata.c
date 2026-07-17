@@ -157,7 +157,7 @@ static int ata_read_lba28(uint8_t unit, uint32_t lba, uint8_t count, uint32_t bu
         for (uint32_t i = 0; i < 256; ++i) {
             out[i] = (uint16_t)wasmos_io_in16(ATA_PRIMARY_BASE + ATA_REG_DATA);
         }
-        if (wasmos_block_buffer_write((int32_t)buffer_phys, (int32_t)(uintptr_t)g_sector_buf,
+        if (wasmos_block_buffer_write((int32_t)buffer_phys, addr_cast(int32_t, g_sector_buf),
                                       ATA_SECTOR_SIZE, (int32_t)(sector * ATA_SECTOR_SIZE)) != 0) {
             return -1;
         }
@@ -188,7 +188,7 @@ static int ata_write_lba28(uint8_t unit, uint32_t lba, uint8_t count, uint32_t b
         if (ata_wait_drq() != 0) {
             return -1;
         }
-        if (wasmos_block_buffer_copy((int32_t)buffer_phys, (int32_t)(uintptr_t)g_sector_buf,
+        if (wasmos_block_buffer_copy((int32_t)buffer_phys, addr_cast(int32_t, g_sector_buf),
                                      ATA_SECTOR_SIZE, (int32_t)(sector * ATA_SECTOR_SIZE)) != 0) {
             return -1;
         }

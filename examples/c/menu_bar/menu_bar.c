@@ -122,7 +122,7 @@ static int32_t fetch_title(int32_t window_id, char* out, int32_t cap) {
                 window_id, g_title_shmem_id, cap - 1, 0, &status, &tlen, 0, 0);
     if (status != GFX_STATUS_OK || tlen <= 0)
         return 0;
-    wasmos_shmem_refresh(g_title_shmem_id, (int32_t)(uintptr_t)g_title_ptr, tlen + 1);
+    wasmos_shmem_refresh(g_title_shmem_id, addr_cast(int32_t, g_title_ptr), tlen + 1);
     for (int32_t k = 0; k < tlen && k < cap - 1; ++k)
         out[k] = (char)g_title_ptr[k];
     out[tlen < cap - 1 ? tlen : cap - 1] = '\0';
@@ -140,16 +140,16 @@ static int32_t context_to_name(int32_t context_id, char* out, int32_t cap) {
         wasmos_proc_stats_t stats;
         memset(&stats, 0, sizeof(stats));
         const int32_t rc =
-            wasmos_proc_info_stats(i, (int32_t)(uintptr_t)namebuf, (int32_t)sizeof(namebuf),
-                                   (int32_t)(uintptr_t)&parent_pid, (int32_t)(uintptr_t)&stats);
+            wasmos_proc_info_stats(i, addr_cast(int32_t, namebuf), (int32_t)sizeof(namebuf),
+                                   addr_cast(int32_t, &parent_pid), addr_cast(int32_t, &stats));
         if (rc < 0)
             continue;
         /* Kernel writes into WASM linear memory via mm_copy_to_user; sync
          * is required for the data to be visible on the WASM side. */
-        if (wasmos_sync_user_read((int32_t)(uintptr_t)namebuf, (int32_t)sizeof(namebuf)) != 0 ||
-            wasmos_sync_user_read((int32_t)(uintptr_t)&parent_pid, (int32_t)sizeof(parent_pid)) !=
+        if (wasmos_sync_user_read(addr_cast(int32_t, namebuf), (int32_t)sizeof(namebuf)) != 0 ||
+            wasmos_sync_user_read(addr_cast(int32_t, &parent_pid), (int32_t)sizeof(parent_pid)) !=
                 0 ||
-            wasmos_sync_user_read((int32_t)(uintptr_t)&stats, (int32_t)sizeof(stats)) != 0) {
+            wasmos_sync_user_read(addr_cast(int32_t, &stats), (int32_t)sizeof(stats)) != 0) {
             continue;
         }
         if ((int32_t)stats.context_id == context_id) {
@@ -348,7 +348,7 @@ int main(int argc, char** argv) {
     if (g_title_shmem_id > 0) {
         int32_t mapped = wasmos_shmem_map_auto(g_title_shmem_id, 4096);
         if (mapped >= 0)
-            g_title_ptr = (uint8_t*)(uintptr_t)(uint32_t)mapped;
+            g_title_ptr = ptr_cast(uint8_t, (uint32_t)mapped);
     }
 
     /* "WasmOS" system menu */

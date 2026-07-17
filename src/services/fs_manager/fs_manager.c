@@ -32,7 +32,7 @@ static uint32_t g_heap_limit = 0;
 
 /* Initialise the custom bump heap starting at &__heap_base. */
 static void fsmgr_heap_init(void) {
-    g_heap_cursor = (uint32_t)(uintptr_t)&__heap_base;
+    g_heap_cursor = addr_cast(uint32_t, &__heap_base);
     g_heap_limit = (uint32_t)__builtin_wasm_memory_size(0) * 65536u;
     if (g_heap_cursor > g_heap_limit) {
         g_heap_cursor = g_heap_limit;
@@ -62,7 +62,7 @@ static void* fsmgr_heap_alloc(uint32_t size, uint32_t align) {
         g_heap_limit += 65536u;
     }
     g_heap_cursor = end;
-    return (void*)(uintptr_t)aligned;
+    return ptr_cast(void, aligned);
 }
 
 static fs_client_chunk_t* client_chunk_alloc(void) {
@@ -552,7 +552,7 @@ static int route_root_path_request(fs_client_state_t* state, int32_t buffer_id, 
     /* fs-manager was granted R|W over the client object (client borrow -> arg3);
      * read the path and write the mount-stripped tail back in place for the
      * backend to re-read. No borrow is taken here. */
-    if (wasmos_xfer_buffer_read(buffer_id, (int32_t)(uintptr_t)scratch, path_len, 0) != 0) {
+    if (wasmos_xfer_buffer_read(buffer_id, addr_cast(int32_t, scratch), path_len, 0) != 0) {
         return -1;
     }
     scratch[path_len] = '\0';
@@ -561,7 +561,7 @@ static int route_root_path_request(fs_client_state_t* state, int32_t buffer_id, 
                                     &open_path_len, &routed_backend);
     }
     if (open_path_len <= 0 ||
-        wasmos_xfer_buffer_write(buffer_id, (int32_t)(uintptr_t)scratch, open_path_len, 0) != 0) {
+        wasmos_xfer_buffer_write(buffer_id, addr_cast(int32_t, scratch), open_path_len, 0) != 0) {
         return -1;
     }
     *inout_arg0 = open_path_len;
@@ -712,7 +712,7 @@ static int handle_read_path_req(fs_client_state_t* state, int32_t source, int32_
      * BORROWER and never unborrows it (the client releases it). fs-manager reads
      * the path via its grant, reborrows to the backend (b2, which fs-manager
      * lends and therefore unborrows), and unborrows b2 before replying. */
-    if (wasmos_xfer_buffer_read(buffer_id, (int32_t)(uintptr_t)path_scratch, path_len, 0) != 0) {
+    if (wasmos_xfer_buffer_read(buffer_id, addr_cast(int32_t, path_scratch), path_len, 0) != 0) {
         send_fs_error(source, request_id);
         return 1;
     }
@@ -729,7 +729,7 @@ static int handle_read_path_req(fs_client_state_t* state, int32_t source, int32_
         backend = fallback_boot ? fallback_boot->endpoint : -1;
     }
     if (backend < 0 || open_path_len <= 0 ||
-        wasmos_xfer_buffer_write(buffer_id, (int32_t)(uintptr_t)path_scratch, open_path_len, 0) !=
+        wasmos_xfer_buffer_write(buffer_id, addr_cast(int32_t, path_scratch), open_path_len, 0) !=
             0) {
         send_fs_error(source, request_id);
         return 1;

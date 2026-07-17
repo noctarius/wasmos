@@ -82,7 +82,7 @@ static int32_t create_damage_rect_shmem(int32_t gfx_ep, int32_t width, int32_t h
         puts("[test] gfx smoke damage map failed");
         return -1;
     }
-    gfx_rect_t* rect = (gfx_rect_t*)(uintptr_t)(uint32_t)map_ptr;
+    gfx_rect_t* rect = ptr_cast(gfx_rect_t, (uint32_t)map_ptr);
     rect->x = 0;
     rect->y = 0;
     rect->w = width;
@@ -107,14 +107,14 @@ static int map_shared_buffer_ptr(int32_t shmem_id, int32_t stride_bytes, int32_t
         puts("[test] gfx smoke shmem map failed");
         return -1;
     }
-    *out_base = (uint8_t*)(uintptr_t)(uint32_t)map_ptr;
+    *out_base = ptr_cast(uint8_t, (uint32_t)map_ptr);
     return 0;
 }
 
 static int flush_shared_buffer_ptr(int32_t shmem_id, uint8_t* base, int32_t stride_bytes,
                                    int32_t height) {
     int32_t byte_len = stride_bytes * height;
-    int32_t ptr = (int32_t)(uintptr_t)base;
+    int32_t ptr = addr_cast(int32_t, base);
     if (wasmos_shmem_flush(shmem_id, ptr, byte_len) != 0) {
         puts("[test] gfx smoke shmem flush failed");
         return -1;

@@ -274,7 +274,7 @@ static int is_mount_already_active(const char* mount) {
         (void)wasmos_xfer_buffer_release(bid);
         return 0;
     }
-    if (wasmos_xfer_buffer_read(bid, (int32_t)(uintptr_t)buf, n, 0) != 0) {
+    if (wasmos_xfer_buffer_read(bid, addr_cast(int32_t, buf), n, 0) != 0) {
         (void)wasmos_xfer_buffer_release(bid);
         return 0;
     }
@@ -404,7 +404,7 @@ static void kick_boot_rules_read_async(void) {
         console_write("[device-manager] boot rules buffer acquire failed; skipping\n");
         return;
     }
-    if (wasmos_xfer_buffer_write(bid, (int32_t)(uintptr_t)path, path_len, 0) != 0) {
+    if (wasmos_xfer_buffer_write(bid, addr_cast(int32_t, path), path_len, 0) != 0) {
         (void)wasmos_xfer_buffer_release(bid);
         g_dm.rules_boot_loaded = 1;
         g_dm.rules_boot_active = 0;
@@ -490,7 +490,7 @@ static void poll_boot_rules_async(void) {
     if (read_len >= (int32_t)sizeof(text)) {
         read_len = (int32_t)sizeof(text) - 1;
     }
-    if (read_len > 0 && wasmos_xfer_buffer_read(bid, (int32_t)(uintptr_t)text, read_len, 0) != 0) {
+    if (read_len > 0 && wasmos_xfer_buffer_read(bid, addr_cast(int32_t, text), read_len, 0) != 0) {
         if (bid >= 0) {
             (void)wasmos_xfer_buffer_release(bid);
         }
@@ -591,7 +591,7 @@ static int proc_running(const char* name) {
     for (int32_t i = 0; i < count; ++i) {
         char buf[32];
         buf[0] = '\0';
-        int32_t pid = wasmos_proc_info(i, (int32_t)(uintptr_t)buf, (int32_t)sizeof(buf));
+        int32_t pid = wasmos_proc_info(i, addr_cast(int32_t, buf), (int32_t)sizeof(buf));
         if (pid <= 0) {
             continue;
         }
@@ -614,10 +614,10 @@ static int module_index_by_name(const char* name) {
     for (int32_t i = 0; i < scan_limit; ++i) {
         char buf[32];
         buf[0] = '\0';
-        if (wasmos_boot_module_name(i, (int32_t)(uintptr_t)buf, (int32_t)sizeof(buf)) < 0) {
+        if (wasmos_boot_module_name(i, addr_cast(int32_t, buf), (int32_t)sizeof(buf)) < 0) {
             continue;
         }
-        if (wasmos_sync_user_read((int32_t)(uintptr_t)buf, (int32_t)sizeof(buf)) != 0) {
+        if (wasmos_sync_user_read(addr_cast(int32_t, buf), (int32_t)sizeof(buf)) != 0) {
             continue;
         }
         if (wasmos_sys_streq(buf, name)) {
@@ -630,14 +630,14 @@ static int module_index_by_name(const char* name) {
 static void hw_scan_acpi(void) {
     acpi_rsdp_t rsdp;
     uint32_t length = 0;
-    int32_t rc = wasmos_acpi_rsdp_info((int32_t)(uintptr_t)&rsdp, (int32_t)(uintptr_t)&length,
+    int32_t rc = wasmos_acpi_rsdp_info(addr_cast(int32_t, &rsdp), addr_cast(int32_t, &length),
                                        (int32_t)sizeof(rsdp));
     if (rc != 0) {
         console_write("[device-manager] ACPI RSDP not found\n");
         return;
     }
-    if (wasmos_sync_user_read((int32_t)(uintptr_t)&length, (int32_t)sizeof(length)) != 0 ||
-        wasmos_sync_user_read((int32_t)(uintptr_t)&rsdp, (int32_t)sizeof(rsdp)) != 0) {
+    if (wasmos_sync_user_read(addr_cast(int32_t, &length), (int32_t)sizeof(length)) != 0 ||
+        wasmos_sync_user_read(addr_cast(int32_t, &rsdp), (int32_t)sizeof(rsdp)) != 0) {
         console_write("[device-manager] ACPI sync failed\n");
         return;
     }
@@ -702,7 +702,7 @@ static int hw_spawn_driver_path(const char* path) {
     if (bid < 0) {
         return -1;
     }
-    if (wasmos_xfer_buffer_write(bid, (int32_t)(uintptr_t)path, (int32_t)path_len, 0) != 0) {
+    if (wasmos_xfer_buffer_write(bid, addr_cast(int32_t, path), (int32_t)path_len, 0) != 0) {
         (void)wasmos_xfer_buffer_release(bid);
         return -1;
     }
@@ -742,18 +742,18 @@ static int hw_spawn_driver_path_caps_args(const char* path, const spawn_caps_t* 
     if (bid < 0) {
         return -1;
     }
-    if (wasmos_xfer_buffer_write(bid, (int32_t)(uintptr_t)path, (int32_t)path_len, 0) != 0) {
+    if (wasmos_xfer_buffer_write(bid, addr_cast(int32_t, path), (int32_t)path_len, 0) != 0) {
         (void)wasmos_xfer_buffer_release(bid);
         return -1;
     }
     if (args_len > 0u &&
-        wasmos_xfer_buffer_write(bid, (int32_t)(uintptr_t)args, (int32_t)(args_len + 1u),
+        wasmos_xfer_buffer_write(bid, addr_cast(int32_t, args), (int32_t)(args_len + 1u),
                                  (int32_t)path_len) != 0) {
         (void)wasmos_xfer_buffer_release(bid);
         return -1;
     }
     if (args_len == 0u &&
-        wasmos_xfer_buffer_write(bid, (int32_t)(uintptr_t)"", 1, (int32_t)path_len) != 0) {
+        wasmos_xfer_buffer_write(bid, addr_cast(int32_t, ""), 1, (int32_t)path_len) != 0) {
         (void)wasmos_xfer_buffer_release(bid);
         return -1;
     }
@@ -864,7 +864,7 @@ static int query_module_meta_by_path(const char* path, uint32_t source, int32_t*
     if (bid < 0) {
         return -1;
     }
-    if (wasmos_xfer_buffer_write(bid, (int32_t)(uintptr_t)path, (int32_t)path_len, 0) != 0) {
+    if (wasmos_xfer_buffer_write(bid, addr_cast(int32_t, path), (int32_t)path_len, 0) != 0) {
         (void)wasmos_xfer_buffer_release(bid);
         return -1;
     }

@@ -65,7 +65,7 @@ static int32_t libc_fs_stage_path(const char* path, size_t* out_len) {
     if (bid < 0) {
         return -1;
     }
-    if (wasmos_xfer_buffer_write(bid, (int32_t)(uintptr_t)path, (int32_t)(path_len + 1u), 0) != 0) {
+    if (wasmos_xfer_buffer_write(bid, addr_cast(int32_t, path), (int32_t)(path_len + 1u), 0) != 0) {
         (void)wasmos_xfer_buffer_release(bid);
         return -1;
     }
@@ -227,7 +227,7 @@ ssize_t read(int fd, void* buf, size_t count) {
         return 0;
     }
     if (fd == STDIN_FILENO) {
-        int32_t got = wasmos_console_read((int32_t)(uintptr_t)buf, (int32_t)count);
+        int32_t got = wasmos_console_read(addr_cast(int32_t, buf), (int32_t)count);
         if (got < 0) {
             return -1;
         }
@@ -269,7 +269,7 @@ ssize_t read(int fd, void* buf, size_t count) {
         if (got == 0) {
             break;
         }
-        if (wasmos_xfer_buffer_read(bid, (int32_t)(uintptr_t)(dst + done), got, 0) != 0) {
+        if (wasmos_xfer_buffer_read(bid, addr_cast(int32_t, (dst + done)), got, 0) != 0) {
             failed = 1;
             break;
         }
@@ -302,7 +302,7 @@ ssize_t write(int fd, const void* buf, size_t count) {
         return 0;
     }
     if (fd == STDOUT_FILENO || fd == STDERR_FILENO) {
-        int32_t wrote = wasmos_console_write((int32_t)(uintptr_t)buf, (int32_t)count);
+        int32_t wrote = wasmos_console_write(addr_cast(int32_t, buf), (int32_t)count);
         if (wrote < 0) {
             return -1;
         }
@@ -335,7 +335,7 @@ ssize_t write(int fd, const void* buf, size_t count) {
         if (chunk > chunk_max) {
             chunk = chunk_max;
         }
-        if (wasmos_xfer_buffer_write(bid, (int32_t)(uintptr_t)(src + done), (int32_t)chunk, 0) !=
+        if (wasmos_xfer_buffer_write(bid, addr_cast(int32_t, (src + done)), (int32_t)chunk, 0) !=
             0) {
             failed = 1;
             break;

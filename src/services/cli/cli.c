@@ -1089,7 +1089,7 @@ static void cli_show_mounts(void) {
         console_write("mount failed\n");
         return;
     }
-    if (wasmos_xfer_buffer_read(bid, (int32_t)(uintptr_t)buf, n, 0) != 0) {
+    if (wasmos_xfer_buffer_read(bid, addr_cast(int32_t, buf), n, 0) != 0) {
         (void)wasmos_xfer_buffer_release(bid);
         console_write("mount failed\n");
         return;
@@ -1327,11 +1327,11 @@ static int cli_spawn_exec_path(const char* input, int32_t* out_pid) {
     if (bid < 0) {
         return -1;
     }
-    if (wasmos_xfer_buffer_write(bid, (int32_t)(uintptr_t)resolved, (int32_t)path_len, 0) != 0) {
+    if (wasmos_xfer_buffer_write(bid, addr_cast(int32_t, resolved), (int32_t)path_len, 0) != 0) {
         (void)wasmos_xfer_buffer_release(bid);
         return -1;
     }
-    if (args_len > 0u && wasmos_xfer_buffer_write(bid, (int32_t)(uintptr_t)args, (int32_t)args_len,
+    if (args_len > 0u && wasmos_xfer_buffer_write(bid, addr_cast(int32_t, args), (int32_t)args_len,
                                                   (int32_t)write_off) != 0) {
         (void)wasmos_xfer_buffer_release(bid);
         return -1;
@@ -1761,13 +1761,13 @@ static int cli_handle_line(void) {
             console_write("spawn failed\n");
             return 0;
         }
-        if (wasmos_xfer_buffer_write(bid, (int32_t)(uintptr_t)resolved, (int32_t)path_len, 0) !=
+        if (wasmos_xfer_buffer_write(bid, addr_cast(int32_t, resolved), (int32_t)path_len, 0) !=
             0) {
             (void)wasmos_xfer_buffer_release(bid);
             console_write("spawn failed\n");
             return 0;
         }
-        if (args_len > 0u && wasmos_xfer_buffer_write(bid, (int32_t)(uintptr_t)args,
+        if (args_len > 0u && wasmos_xfer_buffer_write(bid, addr_cast(int32_t, args),
                                                       (int32_t)args_len, (int32_t)write_off) != 0) {
             (void)wasmos_xfer_buffer_release(bid);
             console_write("spawn failed\n");
@@ -1843,12 +1843,12 @@ static int cli_handle_line(void) {
         console_write("exec failed\n");
         return 0;
     }
-    if (wasmos_xfer_buffer_write(bid, (int32_t)(uintptr_t)resolved, (int32_t)path_len, 0) != 0) {
+    if (wasmos_xfer_buffer_write(bid, addr_cast(int32_t, resolved), (int32_t)path_len, 0) != 0) {
         (void)wasmos_xfer_buffer_release(bid);
         console_write("exec failed\n");
         return 0;
     }
-    if (args_len > 0u && wasmos_xfer_buffer_write(bid, (int32_t)(uintptr_t)args, (int32_t)args_len,
+    if (args_len > 0u && wasmos_xfer_buffer_write(bid, addr_cast(int32_t, args), (int32_t)args_len,
                                                   (int32_t)write_off) != 0) {
         (void)wasmos_xfer_buffer_release(bid);
         console_write("exec failed\n");
@@ -1963,7 +1963,7 @@ static void cli_phase_read_step(void) {
         }
     }
     if (!have_ch) {
-        int32_t rc = wasmos_console_read((int32_t)(uintptr_t)&ch, 1);
+        int32_t rc = wasmos_console_read(addr_cast(int32_t, &ch), 1);
         if (rc < 0) {
             cli_fail_and_stall("[cli] console read failed\n");
         }

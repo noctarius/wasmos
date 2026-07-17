@@ -1865,6 +1865,7 @@ add_custom_target(run-kernel-unit-tests
   COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
           -I${LIBC_DIR}/include
           -I${LIBC_DIR}/src
+          -include ${LIBC_DIR}/include/wasmos_cast.h
           ${CMAKE_SOURCE_DIR}/tests/unit/test_libc_stdio.c
           ${LIBC_DIR}/src/stdio.c
           ${LIBC_DIR}/src/string.c
@@ -1876,6 +1877,7 @@ add_custom_target(run-kernel-unit-tests
           "-D__builtin_wasm_memory_grow(x,y)=((int)(-1))"
           -I${LIBC_DIR}/include
           -I${LIBC_DIR}/src
+          -include ${LIBC_DIR}/include/wasmos_cast.h
           ${CMAKE_SOURCE_DIR}/tests/unit/test_libc_stdlib.c
           ${CMAKE_SOURCE_DIR}/tests/unit/stubs_wasm_stdlib.c
           ${LIBC_DIR}/src/stdlib.c

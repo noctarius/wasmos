@@ -57,7 +57,7 @@ static inline int32_t wasmos_thread_spawn_cont(void* stack_base, size_t stack_si
     start->entry = entry;
     start->arg = arg;
 
-    rc = wasmos_sys_thread_create((uint64_t)(uintptr_t)wasmos_thread_bootstrap, (uint64_t)top);
+    rc = wasmos_sys_thread_create(addr_cast(uint64_t, wasmos_thread_bootstrap), (uint64_t)top);
     if (rc > 0 && out_tid) {
         *out_tid = (uint32_t)rc;
     }

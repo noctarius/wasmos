@@ -90,10 +90,10 @@ static int copy_path_from_xfer_buffer(int32_t buffer_id, int32_t path_len, char*
     }
     /* Owner-push: the client owns buffer_id and granted this backend READ (via
      * fs-manager's reborrow); read the path directly by buffer_id. */
-    if (wasmos_xfer_buffer_read(buffer_id, (int32_t)(uintptr_t)out, path_len, 0) != 0) {
+    if (wasmos_xfer_buffer_read(buffer_id, addr_cast(int32_t, out), path_len, 0) != 0) {
         return -1;
     }
-    if (wasmos_sync_user_read((int32_t)(uintptr_t)out, path_len) != 0) {
+    if (wasmos_sync_user_read(addr_cast(int32_t, out), path_len) != 0) {
         return -1;
     }
     out[path_len] = '\0';
@@ -226,11 +226,11 @@ static int initfs_build_index(void) {
         char raw_path[INITFS_PATH_MAX];
         char norm_path[INITFS_PATH_MAX];
         int32_t raw_len =
-            wasmos_initfs_entry_name(i, (int32_t)(uintptr_t)raw_path, (int32_t)sizeof(raw_path));
+            wasmos_initfs_entry_name(i, addr_cast(int32_t, raw_path), (int32_t)sizeof(raw_path));
         if (raw_len <= 0 || raw_len >= (int32_t)sizeof(raw_path)) {
             continue;
         }
-        if (wasmos_sync_user_read((int32_t)(uintptr_t)raw_path, raw_len + 1) != 0) {
+        if (wasmos_sync_user_read(addr_cast(int32_t, raw_path), raw_len + 1) != 0) {
             continue;
         }
         raw_path[raw_len] = '\0';
@@ -530,7 +530,7 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t ignored_arg
                             chunk = (int32_t)sizeof(tmp);
                         }
                         int32_t copied = wasmos_initfs_entry_copy(
-                            file->entry_index, (int32_t)(uintptr_t)tmp, chunk, fd->offset + total);
+                            file->entry_index, addr_cast(int32_t, tmp), chunk, fd->offset + total);
                         if (copied < 0) {
                             total = -1;
                             break;
@@ -538,7 +538,7 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t ignored_arg
                         if (copied == 0) {
                             break;
                         }
-                        if (wasmos_xfer_buffer_write(arg2, (int32_t)(uintptr_t)tmp, copied,
+                        if (wasmos_xfer_buffer_write(arg2, addr_cast(int32_t, tmp), copied,
                                                      total) != 0) {
                             total = -1;
                             break;

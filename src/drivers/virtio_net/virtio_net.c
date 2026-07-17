@@ -330,7 +330,7 @@ static int setup_queue(virtio_net_queue_t* q, uint16_t idx) {
         return -1; /* region_alloc failed (cap/window/no-linmem-window) */
     }
     /* In wasm32 a pointer is the linear-memory byte offset region_alloc returned. */
-    uint8_t* ring = (uint8_t*)(uintptr_t)(uint32_t)off;
+    uint8_t* ring = ptr_cast(uint8_t, (uint32_t)off);
     if (vring_layout(&q->vq, ring, ring_phys, (uint64_t)pages * 0x1000u, qsize,
                      VIRTIO_PCI_VRING_ALIGN) != 0) {
         return -1;
@@ -355,7 +355,7 @@ static int rx_arm(void) {
     if (off < 0) {
         return -1;
     }
-    g_rx_pool = (uint8_t*)(uintptr_t)(uint32_t)off;
+    g_rx_pool = ptr_cast(uint8_t, (uint32_t)off);
     g_rx_pool_phys = phys;
 
     for (uint32_t i = 0; i < VIRTIO_NET_RX_BUF_COUNT; ++i) {
@@ -412,7 +412,7 @@ static int tx_arm(void) {
     if (off < 0) {
         return -1;
     }
-    g_tx_pool = (uint8_t*)(uintptr_t)(uint32_t)off;
+    g_tx_pool = ptr_cast(uint8_t, (uint32_t)off);
     g_tx_pool_phys = phys;
     for (uint32_t i = 0; i < VIRTIO_NET_TX_BUF_COUNT; ++i) {
         g_tx_buf_free[i] = (uint16_t)i;

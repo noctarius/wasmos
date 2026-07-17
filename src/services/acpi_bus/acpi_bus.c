@@ -55,7 +55,7 @@ static int map_phys(uint64_t phys, uint32_t size) {
     }
     int32_t lo = (int32_t)(uint32_t)(phys & 0xFFFFFFFFu);
     int32_t hi = (int32_t)(uint32_t)(phys >> 32);
-    int32_t off = (int32_t)(uintptr_t)g_map_window;
+    int32_t off = addr_cast(int32_t, g_map_window);
     return wasmos_phys_map(lo, hi, (int32_t)aligned_size, off);
 }
 
@@ -348,13 +348,13 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t ignored_arg
     /* --- Step 1: get RSDP ------------------------------------------------- */
     acpi_rsdp_t rsdp;
     uint32_t rsdp_len = 0;
-    if (wasmos_acpi_rsdp_info((int32_t)(uintptr_t)&rsdp, (int32_t)(uintptr_t)&rsdp_len,
+    if (wasmos_acpi_rsdp_info(addr_cast(int32_t, &rsdp), addr_cast(int32_t, &rsdp_len),
                               (int32_t)sizeof(rsdp)) != 0) {
         (void)printf("[acpi-bus] RSDP not found\n");
         goto done;
     }
-    if (wasmos_sync_user_read((int32_t)(uintptr_t)&rsdp_len, (int32_t)sizeof(rsdp_len)) != 0 ||
-        wasmos_sync_user_read((int32_t)(uintptr_t)&rsdp, (int32_t)sizeof(acpi_rsdp_t)) != 0) {
+    if (wasmos_sync_user_read(addr_cast(int32_t, &rsdp_len), (int32_t)sizeof(rsdp_len)) != 0 ||
+        wasmos_sync_user_read(addr_cast(int32_t, &rsdp), (int32_t)sizeof(acpi_rsdp_t)) != 0) {
         (void)printf("[acpi-bus] RSDP sync failed\n");
         goto done;
     }

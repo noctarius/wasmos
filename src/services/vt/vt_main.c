@@ -63,7 +63,7 @@ static uint32_t vt_cell_capacity(void) {
 
 /* Initialise the custom bump heap at &__heap_base for cell-grid allocation. */
 static void vt_heap_init(void) {
-    g_heap_cursor = (uint32_t)(uintptr_t)&__heap_base;
+    g_heap_cursor = addr_cast(uint32_t, &__heap_base);
     g_heap_limit = (uint32_t)__builtin_wasm_memory_size(0) * 65536u;
     if (g_heap_cursor > g_heap_limit) {
         g_heap_cursor = g_heap_limit;
@@ -77,7 +77,7 @@ static void vt_log_alloc_failure(const char* tag, int32_t code) {
 
 static void* vt_alloc(uint32_t size, uint32_t align) {
     if (size == 0u) {
-        return (void*)(uintptr_t)g_heap_cursor;
+        return ptr_cast(void, g_heap_cursor);
     }
     if (align == 0u) {
         align = 1u;
@@ -101,7 +101,7 @@ static void* vt_alloc(uint32_t size, uint32_t align) {
         g_heap_limit += 65536u;
     }
     g_heap_cursor = end;
-    return (void*)(uintptr_t)aligned;
+    return ptr_cast(void, aligned);
 }
 
 static void vt_reset_tty_cells(void) {
@@ -624,7 +624,7 @@ static void vt_put_char_tty0(vt_tty_t* tty, uint8_t ch) {
             }
         }
     }
-    (void)wasmos_console_write((int32_t)(uintptr_t)&c, 1);
+    (void)wasmos_console_write(addr_cast(int32_t, &c), 1);
 }
 
 static void vt_put_char_virtual(vt_tty_t* tty, uint32_t tty_index, uint8_t ch) {

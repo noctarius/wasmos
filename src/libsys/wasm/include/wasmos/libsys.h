@@ -381,7 +381,7 @@ static inline int32_t wasmos_sys_buffer_read(int32_t buffer_id, void* dst, int32
     if (!dst || buffer_id <= 0 || len < 0 || offset < 0) {
         return -1;
     }
-    return wasmos_xfer_buffer_read(buffer_id, (int32_t)(uintptr_t)dst, len, offset) == 0 ? 0 : -1;
+    return wasmos_xfer_buffer_read(buffer_id, addr_cast(int32_t, dst), len, offset) == 0 ? 0 : -1;
 }
 
 /* Grantee-side write of a transfer buffer object named by `buffer_id`. The owner
@@ -391,7 +391,7 @@ static inline int32_t wasmos_sys_buffer_write(int32_t buffer_id, const void* src
     if (!src || buffer_id <= 0 || len < 0 || offset < 0) {
         return -1;
     }
-    return wasmos_xfer_buffer_write(buffer_id, (int32_t)(uintptr_t)src, len, offset) == 0 ? 0 : -1;
+    return wasmos_xfer_buffer_write(buffer_id, addr_cast(int32_t, src), len, offset) == 0 ? 0 : -1;
 }
 
 /* Read the file at `path` via FS_IPC_READ_PATH_REQ into `out_text`.
@@ -422,7 +422,7 @@ static inline int32_t wasmos_sys_fs_read_path(int32_t fs_endpoint, int32_t reply
     if (bid < 0) {
         return -1;
     }
-    if (wasmos_xfer_buffer_write(bid, (int32_t)(uintptr_t)path, path_len, 0) != 0) {
+    if (wasmos_xfer_buffer_write(bid, addr_cast(int32_t, path), path_len, 0) != 0) {
         (void)wasmos_xfer_buffer_release(bid);
         return -1;
     }
@@ -451,7 +451,7 @@ static inline int32_t wasmos_sys_fs_read_path(int32_t fs_endpoint, int32_t reply
         read_len = out_text_len - 1;
     }
     if (read_len > 0 &&
-        wasmos_xfer_buffer_read(bid, (int32_t)(uintptr_t)out_text, read_len, 0) != 0) {
+        wasmos_xfer_buffer_read(bid, addr_cast(int32_t, out_text), read_len, 0) != 0) {
         (void)wasmos_xfer_buffer_release(bid);
         return -1;
     }

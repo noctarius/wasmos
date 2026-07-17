@@ -32,7 +32,7 @@ static inline int32_t wasmos_mutex_try_lock(wasmos_mutex_t* mutex) {
     if (!mutex) {
         return -1;
     }
-    return wasmos_mutex_try_lock_host((int32_t)(uintptr_t)mutex);
+    return wasmos_mutex_try_lock_host(addr_cast(int32_t, mutex));
 }
 
 static inline int32_t wasmos_mutex_lock(wasmos_mutex_t* mutex) {
@@ -55,7 +55,7 @@ static inline int32_t wasmos_mutex_unlock(wasmos_mutex_t* mutex) {
     if (!mutex) {
         return -1;
     }
-    return wasmos_mutex_unlock_host((int32_t)(uintptr_t)mutex);
+    return wasmos_mutex_unlock_host(addr_cast(int32_t, mutex));
 }
 
 #ifdef __cplusplus

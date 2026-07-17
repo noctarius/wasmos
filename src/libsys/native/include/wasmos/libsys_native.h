@@ -146,6 +146,9 @@ static inline int32_t wasmos_sys_mutex_try_lock(wasmos_driver_api_t* api,
     if (!api || !mutex || !api->mutex_try_lock) {
         return -1;
     }
+    /* Raw double-cast (not addr_cast): this header is pulled in through Zig's
+     * @cImport (translate-c), which does not get the wasmos_cast.h force-include
+     * that the C build adds, so the macros are not defined here. */
     return api->mutex_try_lock((uint64_t)(uintptr_t)mutex);
 }
 
@@ -169,7 +172,7 @@ static inline int32_t wasmos_sys_mutex_unlock(wasmos_driver_api_t* api, wasmos_s
     if (!api || !mutex || !api->mutex_unlock) {
         return -1;
     }
-    return api->mutex_unlock((uint64_t)(uintptr_t)mutex);
+    return api->mutex_unlock((uint64_t)(uintptr_t)mutex); /* raw: see mutex_try_lock note */
 }
 
 #ifdef __cplusplus

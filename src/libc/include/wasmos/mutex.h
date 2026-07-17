@@ -33,9 +33,9 @@ static inline int32_t wasmos_mutex_try_lock(wasmos_mutex_t* mutex) {
         return -1;
     }
 #if defined(__wasm__)
-    return wasmos_mutex_try_lock_host((int32_t)(uintptr_t)mutex);
+    return wasmos_mutex_try_lock_host(addr_cast(int32_t, mutex));
 #elif defined(__x86_64__) && !defined(__wasm__)
-    return (int32_t)wasmos_sys_mutex_try_lock((uint64_t)(uintptr_t)mutex);
+    return (int32_t)wasmos_sys_mutex_try_lock(addr_cast(uint64_t, mutex));
 #else
     return -1;
 #endif
@@ -68,9 +68,9 @@ static inline int32_t wasmos_mutex_unlock(wasmos_mutex_t* mutex) {
         return -1;
     }
 #if defined(__wasm__)
-    return wasmos_mutex_unlock_host((int32_t)(uintptr_t)mutex);
+    return wasmos_mutex_unlock_host(addr_cast(int32_t, mutex));
 #elif defined(__x86_64__) && !defined(__wasm__)
-    return (int32_t)wasmos_sys_mutex_unlock((uint64_t)(uintptr_t)mutex);
+    return (int32_t)wasmos_sys_mutex_unlock(addr_cast(uint64_t, mutex));
 #else
     return -1;
 #endif

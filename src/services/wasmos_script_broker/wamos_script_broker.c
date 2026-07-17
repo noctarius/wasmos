@@ -57,7 +57,7 @@ static int32_t script_request_string_at(int32_t buffer_id, uint32_t offset, uint
     if (len + 1u > out_text_size) {
         return -1;
     }
-    if (wasmos_xfer_buffer_read(buffer_id, (int32_t)(uintptr_t)out_text, (int32_t)len,
+    if (wasmos_xfer_buffer_read(buffer_id, addr_cast(int32_t, out_text), (int32_t)len,
                                 (int32_t)offset) != 0) {
         return -1;
     }
@@ -84,7 +84,7 @@ static int32_t script_read_interpreter(int32_t buffer_id, uint32_t blob_offset, 
     if (copy_len > sizeof(head) - 1u) {
         copy_len = sizeof(head) - 1u;
     }
-    if (wasmos_xfer_buffer_read(buffer_id, (int32_t)(uintptr_t)head, (int32_t)copy_len,
+    if (wasmos_xfer_buffer_read(buffer_id, addr_cast(int32_t, head), (int32_t)copy_len,
                                 (int32_t)blob_offset) != 0) {
         return -1;
     }
@@ -119,13 +119,13 @@ static int32_t script_plan_write_string(int32_t buffer_id, uint32_t* io_offset, 
     if (*io_offset >= (uint32_t)buf_size || len + 1u > ((uint32_t)buf_size - *io_offset)) {
         return -1;
     }
-    if (wasmos_xfer_buffer_write(buffer_id, (int32_t)(uintptr_t)text, (int32_t)len,
+    if (wasmos_xfer_buffer_write(buffer_id, addr_cast(int32_t, text), (int32_t)len,
                                  (int32_t)*io_offset) != 0) {
         return -1;
     }
 
     static const char nul = '\0';
-    if (wasmos_xfer_buffer_write(buffer_id, (int32_t)(uintptr_t)&nul, 1,
+    if (wasmos_xfer_buffer_write(buffer_id, addr_cast(int32_t, &nul), 1,
                                  (int32_t)(*io_offset + len)) != 0) {
         return -1;
     }
@@ -200,7 +200,7 @@ int32_t initialize(int32_t proc_endpoint, int32_t ignored_arg1, int32_t ignored_
         /* PM owns the buffer (msg.arg2 = buffer_id) and, owner-push, granted this
          * broker R|W. Read/write by buffer_id; PM unborrows the grant on its side
          * after the reply (it holds the borrow handle), so the broker does not. */
-        if (wasmos_xfer_buffer_read(msg.arg2, (int32_t)(uintptr_t)&request,
+        if (wasmos_xfer_buffer_read(msg.arg2, addr_cast(int32_t, &request),
                                     (int32_t)sizeof(request), msg.arg0) != 0) {
             puts("[dbg-broker] request read failed");
             (void)wasmos_ipc_send(msg.source, broker_endpoint, PROC_BROKER_IPC_SPAWN_PLAN_ERROR,
@@ -254,7 +254,7 @@ int32_t initialize(int32_t proc_endpoint, int32_t ignored_arg1, int32_t ignored_
         memcpy(plan.request_tag, SCRIPT_REQUEST_TAG, sizeof(SCRIPT_REQUEST_TAG));
         memcpy(plan.runtime_tag, SCRIPT_RUNTIME_TAG, sizeof(SCRIPT_RUNTIME_TAG));
         plan_cursor = (uint32_t)sizeof(plan);
-        if (wasmos_xfer_buffer_write(msg.arg2, (int32_t)(uintptr_t)&plan, (int32_t)sizeof(plan),
+        if (wasmos_xfer_buffer_write(msg.arg2, addr_cast(int32_t, &plan), (int32_t)sizeof(plan),
                                      0) != 0 ||
             script_plan_write_string(msg.arg2, &plan_cursor, SCRIPT_HOST_PATH, &path_offset,
                                      &path_len) != 0 ||
@@ -270,7 +270,7 @@ int32_t initialize(int32_t proc_endpoint, int32_t ignored_arg1, int32_t ignored_
         plan.host_path_len = path_len;
         plan.host_args_offset = args_offset;
         plan.host_args_len = args_len;
-        if (wasmos_xfer_buffer_write(msg.arg2, (int32_t)(uintptr_t)&plan, (int32_t)sizeof(plan),
+        if (wasmos_xfer_buffer_write(msg.arg2, addr_cast(int32_t, &plan), (int32_t)sizeof(plan),
                                      0) != 0 ||
             wasmos_ipc_send(msg.source, broker_endpoint, PROC_BROKER_IPC_SPAWN_PLAN_RESP,
                             msg.request_id, 0, (int32_t)plan_cursor, 0, 0) != 0) {

@@ -25,10 +25,10 @@ static void log_line(const char* s) {
     }
     int len = (int)strlen(s);
     if (len > 0) {
-        int32_t rc = g_console_write((int32_t)(uintptr_t)s, len);
+        int32_t rc = g_console_write(addr_cast(int32_t, s), len);
         if (rc < 0) {
             char ch = '!';
-            (void)g_console_write((int32_t)(uintptr_t)&ch, 1);
+            (void)g_console_write(addr_cast(int32_t, &ch), 1);
         }
     }
 }
@@ -108,7 +108,7 @@ static int spawn_path(const char* path) {
     if (bid < 0) {
         return -1;
     }
-    if (wasmos_xfer_buffer_write(bid, (int32_t)(uintptr_t)path, (int32_t)path_len, 0) != 0) {
+    if (wasmos_xfer_buffer_write(bid, addr_cast(int32_t, path), (int32_t)path_len, 0) != 0) {
         (void)wasmos_xfer_buffer_release(bid);
         return -1;
     }
@@ -158,7 +158,7 @@ static int sysinit_on_start(void* user, const char* path) {
     if (bid < 0) {
         return -1;
     }
-    if (wasmos_xfer_buffer_write(bid, (int32_t)(uintptr_t)path, (int32_t)path_len, 0) != 0) {
+    if (wasmos_xfer_buffer_write(bid, addr_cast(int32_t, path), (int32_t)path_len, 0) != 0) {
         (void)wasmos_xfer_buffer_release(bid);
         return -1;
     }
@@ -218,7 +218,7 @@ static int sysinit_on_exec(void* user, const char* path, const char* args, int32
     if (bid < 0) {
         return -1;
     }
-    if (wasmos_xfer_buffer_write(bid, (int32_t)(uintptr_t)path, (int32_t)path_len, 0) != 0) {
+    if (wasmos_xfer_buffer_write(bid, addr_cast(int32_t, path), (int32_t)path_len, 0) != 0) {
         (void)wasmos_xfer_buffer_release(bid);
         return -1;
     }
@@ -227,7 +227,7 @@ static int sysinit_on_exec(void* user, const char* path, const char* args, int32
             (void)wasmos_xfer_buffer_release(bid);
             return -1;
         }
-        if (wasmos_xfer_buffer_write(bid, (int32_t)(uintptr_t)args, (int32_t)args_len,
+        if (wasmos_xfer_buffer_write(bid, addr_cast(int32_t, args), (int32_t)args_len,
                                      (int32_t)write_off) != 0) {
             (void)wasmos_xfer_buffer_release(bid);
             return -1;

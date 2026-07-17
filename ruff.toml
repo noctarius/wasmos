@@ -1,0 +1,10 @@
+# Ruff configuration for the repo-local `lint` target (scripts/quality.sh).
+# Uses ruff's default rule set (pycodestyle E4/E7/E9 + pyflakes F).
+#
+# The QEMU test harnesses under tests/ and several helper scripts must insert
+# the scripts/ directory onto sys.path before importing project modules, so the
+# "module import not at top of file" rule (E402) is expected there and silenced
+# per-directory rather than worked around in every file.
+[lint.per-file-ignores]
+"tests/**" = ["E402"]
+"scripts/**" = ["E402"]

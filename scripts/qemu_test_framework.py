@@ -3,7 +3,6 @@ import argparse
 import atexit
 import json
 import os
-import re
 import selectors
 import socket
 import struct

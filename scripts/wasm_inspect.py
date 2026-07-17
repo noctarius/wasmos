@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 import argparse
 import struct
-import sys
 
 WASM_MAGIC = b"\0asm"
 WASM_VERSION = 1

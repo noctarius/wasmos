@@ -80,7 +80,7 @@ class WorkStealingTest(unittest.TestCase):
                 f"No AP has performed any work steals.\n"
                 f"Per-CPU steal counts: {ap_steals}\n"
                 f"--- sched_info output ---\n"
-                + "\n".join(l for l in lines if re.search(r"\d", l))
+                + "\n".join(ln for ln in lines if re.search(r"\d", ln))
             )
 
 

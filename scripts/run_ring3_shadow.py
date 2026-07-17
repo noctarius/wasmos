@@ -21,7 +21,6 @@ Usage example (standalone iteration):
 
 import argparse
 import subprocess
-import sys
 
 
 def main() -> int:

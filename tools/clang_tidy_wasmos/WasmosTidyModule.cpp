@@ -50,6 +50,12 @@ public:
     if (!Block || Block->getLBracLoc().isInvalid() ||
         Block->getRBracLoc().isInvalid())
       return;
+    // Skip blocks whose braces come from a macro expansion. Vendored runtime
+    // macros (e.g. wasm3's m3ApiRawFunction / m3ApiReturn) expand to compound
+    // statements; those are not hand-written standalone blocks and cannot be
+    // unwrapped in source.
+    if (Block->getLBracLoc().isMacroID() || Block->getRBracLoc().isMacroID())
+      return;
     // The fixit removes just the two brace tokens (AST-precise); clang-format
     // then re-indents the freed body. Collisions from now-merged scopes surface
     // as compile errors and are resolved by hand.

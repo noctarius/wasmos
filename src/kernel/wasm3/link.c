@@ -2718,13 +2718,12 @@ m3ApiRawFunction(wasmos_initfs_entry_name) {
         wasm_copy_to_user_bytes(proc->context_id, out_user, entry.path, copy_len) != 0) {
         m3ApiReturn(-1);
     }
-    {
-        char nul = '\0';
-        if (wasm_copy_to_user_bytes(proc->context_id, out_user + (uint64_t)copy_len, &nul, 1) !=
-            0) {
-            m3ApiReturn(-1);
-        }
+
+    char nul = '\0';
+    if (wasm_copy_to_user_bytes(proc->context_id, out_user + (uint64_t)copy_len, &nul, 1) != 0) {
+        m3ApiReturn(-1);
     }
+
     m3ApiReturn((int32_t)name_len);
 }
 
@@ -3130,20 +3129,20 @@ m3ApiRawFunction(wasmos_thread_create) {
     entry_name = (const char*)((const uint8_t*)_mem + (uint32_t)entry_token);
     /* Require NUL-terminated export names in-bounds to avoid host pointer
      * leaks outside linear memory. */
-    {
-        uint64_t i = 0;
-        uint64_t max = mem_size - (uint64_t)(uint32_t)entry_token;
-        uint8_t terminated = 0;
-        for (; i < max && i < 64u; ++i) {
-            if (entry_name[i] == '\0') {
-                terminated = 1;
-                break;
-            }
-        }
-        if (!terminated) {
-            m3ApiReturn(-1);
+
+    uint64_t i = 0;
+    uint64_t max = mem_size - (uint64_t)(uint32_t)entry_token;
+    uint8_t terminated = 0;
+    for (; i < max && i < 64u; ++i) {
+        if (entry_name[i] == '\0') {
+            terminated = 1;
+            break;
         }
     }
+    if (!terminated) {
+        m3ApiReturn(-1);
+    }
+
     if ((flags & 0x1) == 0) {
         argc = 0u;
     }

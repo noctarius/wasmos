@@ -125,8 +125,14 @@ collect_files() {
         case "$file" in
             *.c|*.cc|*.cpp|*.cxx|*.h|*.hh|*.hpp)
                 c_format_files+=("$file")
+                # clang-tidy is scoped to C only. The freestanding C++ TUs
+                # (kernel/warp glue, warp_aot host tools) compile with -std=gnu++17
+                # against libc++ headers but no matching hosted C library, so
+                # clang-tidy's standalone parse chokes on libc++ <wchar.h> even
+                # though the real build compiles them. clang-format still covers
+                # C++ above. TODO: add the right --extra-arg flags to lint C++.
                 case "$file" in
-                    *.c|*.cc|*.cpp|*.cxx)
+                    *.c)
                         c_tidy_files+=("$file")
                         ;;
                 esac
@@ -262,8 +268,97 @@ run_clang_tidy() {
         exit 1
     fi
 
-    step "Linting C/C++ sources (clang-tidy)..."
-    "$clang_tidy" -p "$build_dir" --quiet "${c_tidy_files[@]}"
+    step "Linting C sources (clang-tidy)..."
+
+    # The compile DB is populated by the *_ide helper targets, which compile
+    # every source for the host arch ("-arch arm64" on Apple Silicon) with no
+    # cross target. Replaying those flags makes clang-tidy analyze the x86_64
+    # kernel (and its inline asm) as arm64 and reject it, and it also conflicts
+    # with any injected --target ("-arch" is unsupported off Darwin). So write a
+    # sanitized DB into a temp dir: drop "-arch <x>" and inject the real per-file
+    # target derived from the component's linker.metadata. native=true (kernel-
+    # native services/drivers) and sources with no linker.metadata (kernel, boot,
+    # tools) are x86_64; everything else (WASM userland) is wasm32.
+    local tidy_db
+    tidy_db="$(mktemp -d "${TMPDIR:-/tmp}/wasmos-tidy-db.XXXXXX")"
+    trap 'rm -rf "$tidy_db"' RETURN
+
+    python3 - "$build_dir/compile_commands.json" "$tidy_db/compile_commands.json" "$repo_root" <<'PY'
+import json, os, sys
+
+src_db, out_db, root = sys.argv[1], sys.argv[2], os.path.abspath(sys.argv[3])
+
+# Host build tools need a hosted libc, but the *_ide targets compile every
+# source freestanding (-nostdinc), so their DB commands can't resolve <stdio.h>
+# etc. They are build-time host tooling with little lint value, so exclude them
+# from clang-tidy entirely (dropped from the sanitized DB below). posix_kernel.c
+# is a POSIX host shim that happens to live under src/kernel/warp; only the build
+# system knows it is host-side, hence the explicit entry.
+HOST_TOOLS = ("scripts/", "src/tools/", "src/kernel/warp/posix_kernel.c")
+
+def decide(path):
+    """Return (target, extra_flags); target=None means 'exclude from linting'."""
+    rel = os.path.relpath(os.path.abspath(path), root)
+    if rel.startswith(HOST_TOOLS):
+        return None, []
+    if rel.startswith("src/boot/"):
+        # UEFI: 16-bit wchar_t, so L"" literals need -fshort-wchar to parse.
+        return "x86_64-unknown-none-elf", ["-fshort-wchar"]
+    d = os.path.dirname(os.path.abspath(path))
+    while True:
+        meta = os.path.join(d, "linker.metadata")
+        if os.path.isfile(meta):
+            native = False
+            for line in open(meta):
+                s = line.split("#", 1)[0].replace(" ", "").strip()
+                if s.startswith("native=true"):
+                    native = True
+                    break
+                if s.startswith("native=false"):
+                    native = False
+                    break
+            return ("x86_64-unknown-none-elf" if native else "wasm32-unknown-unknown"), []
+        if d == root or d == os.path.dirname(d):
+            # No component metadata up to the repo root: kernel core.
+            return "x86_64-unknown-none-elf", []
+        d = os.path.dirname(d)
+
+out = []
+for e in json.load(open(src_db)):
+    tgt, extra = decide(e["file"])
+    if tgt is None:
+        continue  # host tool: excluded from linting (see HOST_TOOLS)
+    cmd = e.get("command") or " ".join(e.get("arguments", []))
+    toks = cmd.split()
+    res, i = [], 0
+    while i < len(toks):
+        if toks[i] == "-arch":
+            i += 2
+            continue
+        res.append(toks[i])
+        i += 1
+    res[1:1] = ["--target=" + tgt] + extra
+    e["command"] = " ".join(res)
+    e.pop("arguments", None)
+    out.append(e)
+json.dump(out, open(out_db, "w"))
+PY
+
+    # clang-tidy can only analyze files that have an entry in the compile DB
+    # (the *_ide targets cover kernel/driver/service sources but not, e.g., the
+    # host unit tests or the WASM libc). Skip the rest silently.
+    local -a tidy=()
+    local f
+    for f in "${c_tidy_files[@]}"; do
+        if grep -Fq "\"$repo_root/$f\"" "$tidy_db/compile_commands.json"; then
+            tidy+=("$f")
+        fi
+    done
+    if [[ ${#tidy[@]} -eq 0 ]]; then
+        return 0
+    fi
+
+    "$clang_tidy" -p "$tidy_db" --quiet "${tidy[@]}"
 }
 
 run_go_lint() {
@@ -294,7 +389,11 @@ run_zig_lint() {
     local zig
     zig="$(require_tool ZIG "zig is required. Set ZIG or install Zig." zig)"
     step "Linting Zig sources (zig ast-check)..."
-    "$zig" ast-check "${zig_files[@]}"
+    # zig ast-check accepts a single file per invocation.
+    local f
+    for f in "${zig_files[@]}"; do
+        "$zig" ast-check "$f"
+    done
 }
 
 run_rust_lint() {
@@ -358,8 +457,11 @@ run_assemblyscript_lint() {
         fi
 
         if [[ "$file" == "src/libc/assemblyscript/runtime.ts" ]]; then
+            # runtime.ts imports main from ./app and hands it to runMain, whose
+            # parameter type is (Array<string>) => i32. Match that signature (and
+            # the real apps') or asc rejects the stub with TS2322.
             cat > "$stage_dir/app.ts" <<'EOF'
-export function main(_args: string[] | null): i32 {
+export function main(_args: Array<string>): i32 {
     return 0;
 }
 EOF

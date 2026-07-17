@@ -1932,6 +1932,14 @@ find_program(QUALITY_RUFF ruff)
 # loaded via --load in run_clang_tidy. Rebuilt only when the source changes.
 # Requires llvm-config + clang-tidy's dev headers; if unavailable the plugin is
 # skipped and the wasmos-* checks simply do not run.
+#
+# WASMOS_CLANG_TIDY_INCLUDE_DIR: extra include dir providing clang-tidy/*.h for
+# platforms that ship the clang-tidy binary but not its headers (e.g. Ubuntu's
+# apt.llvm.org packages). Point it at a clang-tools-extra checkout of the
+# matching LLVM version; leave empty where the headers sit alongside the clang
+# headers already (Homebrew's llvm).
+set(WASMOS_CLANG_TIDY_INCLUDE_DIR "" CACHE PATH
+    "Extra include dir providing clang-tidy/*.h for the wasmos clang-tidy plugin")
 find_program(LLVM_CONFIG llvm-config HINTS ${CLANG_BIN_DIR} ${LLVM_HINTS})
 set(WASMOS_TIDY_PLUGIN "")
 if (QUALITY_CLANG_TIDY AND LLVM_CONFIG AND CLANGXX_PATH AND
@@ -1941,6 +1949,10 @@ if (QUALITY_CLANG_TIDY AND LLVM_CONFIG AND CLANGXX_PATH AND
   execute_process(COMMAND ${LLVM_CONFIG} --cxxflags
     OUTPUT_VARIABLE _llvm_cxxflags OUTPUT_STRIP_TRAILING_WHITESPACE)
   separate_arguments(_llvm_cxxflags_list UNIX_COMMAND "${_llvm_cxxflags}")
+  set(_tidy_extra_inc "")
+  if (WASMOS_CLANG_TIDY_INCLUDE_DIR)
+    set(_tidy_extra_inc -I${WASMOS_CLANG_TIDY_INCLUDE_DIR})
+  endif ()
   if (APPLE)
     set(_tidy_plugin_link -undefined dynamic_lookup)
   else ()
@@ -1948,8 +1960,8 @@ if (QUALITY_CLANG_TIDY AND LLVM_CONFIG AND CLANGXX_PATH AND
   endif ()
   add_custom_command(
     OUTPUT ${WASMOS_TIDY_PLUGIN}
-    COMMAND ${CLANGXX_PATH} ${_llvm_cxxflags_list} -fPIC -shared ${_tidy_plugin_link}
-            ${WASMOS_TIDY_PLUGIN_SRC} -o ${WASMOS_TIDY_PLUGIN}
+    COMMAND ${CLANGXX_PATH} ${_llvm_cxxflags_list} ${_tidy_extra_inc} -fPIC -shared
+            ${_tidy_plugin_link} ${WASMOS_TIDY_PLUGIN_SRC} -o ${WASMOS_TIDY_PLUGIN}
     DEPENDS ${WASMOS_TIDY_PLUGIN_SRC}
     COMMENT "Building wasmos clang-tidy plugin"
     VERBATIM)

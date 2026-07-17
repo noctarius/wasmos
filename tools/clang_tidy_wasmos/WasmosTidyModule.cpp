@@ -18,6 +18,13 @@
 
 #include "clang-tidy/ClangTidyCheck.h"
 #include "clang-tidy/ClangTidyModule.h"
+// ClangTidyModuleRegistry has its own header through ~LLVM 23; it was folded
+// into ClangTidyModule.h afterward (standalone header deprecated, then removed
+// in LLVM 24). Include it only where it still exists so the plugin builds
+// against both older (CI: LLVM 20) and newer (Homebrew) toolchains.
+#if __has_include("clang-tidy/ClangTidyModuleRegistry.h")
+#include "clang-tidy/ClangTidyModuleRegistry.h"
+#endif
 #include "clang/ASTMatchers/ASTMatchFinder.h"
 #include "clang/ASTMatchers/ASTMatchers.h"
 

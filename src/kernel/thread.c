@@ -3,6 +3,7 @@
  * its owner process's address space.  THREAD_MAX_COUNT limits total live threads. */
 #include "thread.h"
 #include "arch/x86_64/smp.h"
+#include "sched.h"
 #include "sync/spinlock.h"
 
 static thread_t g_threads[THREAD_MAX_COUNT];
@@ -237,6 +238,10 @@ void thread_reap_owner(uint32_t owner_pid) {
         if (thread->state == THREAD_STATE_UNUSED || thread->owner_pid != owner_pid) {
             continue;
         }
+        /* Dequeue from any ready list BEFORE nulling the slot, or a still-enqueued
+         * sibling becomes a dangling node the scheduler later hands out with
+         * owner_pid==0 (SCHED_R_PICK panic). */
+        cpu_sched_remove_thread(thread);
         thread_reset_slot(thread);
     }
     ksync_spinlock_unlock(&g_thread_table_lock);
@@ -291,6 +296,8 @@ void thread_reap(uint32_t tid) {
         ksync_spinlock_unlock(&g_thread_table_lock);
         return;
     }
+    /* See thread_reap_owner: unlink from any ready list before reset. */
+    cpu_sched_remove_thread(thread);
     thread_reset_slot(thread);
     ksync_spinlock_unlock(&g_thread_table_lock);
 }

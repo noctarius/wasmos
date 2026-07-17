@@ -39,6 +39,19 @@ static uint32_t g_next_pid;
 static ksync_spinlock_t g_process_table_lock;
 /* Scheduler state lives in cpu_local_t (per-CPU) — see smp.h. */
 static process_t* g_idle_process;
+
+/* Per-CPU in-flight dispatch marker (owner pid, 0 = none) for the reap-vs-
+ * dispatch handshake. The dispatcher SEQ_CST-stores the pid it is about to
+ * switch into, then fences and re-reads the owner's state (aborting if it is
+ * dying); the reaper SEQ_CST-stores REAPING, fences, then SEQ_CST-loads every
+ * CPU's marker (NO global locks). Both sides do store(own-intent) -> fence ->
+ * load(other-intent) in one SEQ_CST total order, so at least one observes the
+ * other: the reaper defers or the dispatcher aborts before touching a ctx/
+ * stack the reaper would free. TODO(aarch64): accesses are already __atomic. */
+static volatile uint32_t g_dispatching[WASMOS_MAX_CPUS];
+/* Cheap gate: set when a reap is deferred (a thread was in-flight); the
+ * switch-away path only sweeps for stranded deferred zombies when this is set. */
+static volatile int g_deferred_reap_pending;
 /* g_in_context_switch removed: each CPU now tracks in_context_switch in
  * cpu_local_t (at offset 17 from GS:0) to avoid false preemption suppression
  * across CPUs when multiple context switches run simultaneously. */
@@ -795,6 +808,35 @@ static void process_reap_claim(process_t* proc) {
                                      __ATOMIC_RELAXED)) {
         return;
     }
+    /* Reap-vs-dispatch in-flight guard (lockless Dekker, reaper side). Another
+     * CPU may be mid-dispatch into a thread of this proc (its g_dispatching entry
+     * == proc->pid) and about to context_switch into a ctx/stack process_reap is
+     * about to free. We have published REAPING; full-barrier, then SEQ_CST-read
+     * every CPU's marker. Because the dispatcher does store(g_dispatching=pid) ->
+     * fence -> load(state) and we do store(REAPING) -> fence -> load(g_dispatching)
+     * in one SEQ_CST total order, at least one side observes the other: if any
+     * CPU is in-flight for this proc, revert to ZOMBIE and DEFER (the dispatcher
+     * re-triggers a sweep at switch-away via g_deferred_reap_pending); otherwise
+     * the dispatcher will have seen REAPING and aborted, so the frees are safe.
+     * No cs->locks — the reaper never serializes scheduling. */
+    __atomic_thread_fence(__ATOMIC_SEQ_CST);
+    uint32_t cpu_limit = g_cpu_count;
+    if (cpu_limit > WASMOS_MAX_CPUS) {
+        cpu_limit = WASMOS_MAX_CPUS;
+    }
+    int in_flight = 0;
+    for (uint32_t i = 0; i < cpu_limit; ++i) {
+        if (__atomic_load_n(&g_dispatching[i], __ATOMIC_SEQ_CST) == proc->pid) {
+            in_flight = 1;
+            break;
+        }
+    }
+    if (in_flight) {
+        __atomic_store_n((uint32_t*)&proc->state, (uint32_t)PROCESS_STATE_ZOMBIE,
+                         __ATOMIC_RELEASE);
+        __atomic_store_n(&g_deferred_reap_pending, 1, __ATOMIC_RELEASE);
+        return;
+    }
     process_reap(proc);
 }
 
@@ -826,6 +868,21 @@ void process_reap_zombie_pid(uint32_t pid) {
 static void process_reap(process_t* proc) {
     if (!proc) {
         return;
+    }
+    /* Teardown order: unlink every thread from its run-queue FIRST so none can
+     * be (re)dispatched, THEN free kstacks / proc-stack / mm-context, THEN reset
+     * the slots (thread_reap_owner, below). Freeing before dequeue (the old
+     * order) could hand a CPU a freed ctx/stack. process_reap_claim's in-flight
+     * guard has already ensured no thread of proc is mid-dispatch. */
+    for (uint32_t i = 0;; ++i) {
+        uint32_t tid = 0;
+        if (thread_owner_tid_at(proc->pid, i, &tid) != 0) {
+            break;
+        }
+        thread_t* thread = thread_get(tid);
+        if (thread) {
+            cpu_sched_remove_thread(thread);
+        }
     }
     for (uint32_t i = 0;; ++i) {
         uint32_t tid = 0;
@@ -1665,8 +1722,20 @@ static int process_schedule_once_impl(void) {
         }
     }
     process_t* proc = thread ? process_owner_for_thread(thread) : 0;
-    if (!thread || !proc || !proc->entry) {
+    if (!thread) {
         return SCHED_R_PICK;
+    }
+    if (!proc || !proc->entry) {
+        /* Picked a thread whose owner is gone (reaped / recycled pid) or not yet
+         * fully published (spawn in progress). DROP, don't panic: clear the
+         * in-flight marker, and if it is still a live READY thread whose proc
+         * merely hasn't finished publishing entry, re-enqueue so it isn't lost;
+         * otherwise leave it dropped. Benign retry return (not in the loop's
+         * fatal set), so the scheduler simply re-picks. */
+        if (proc && !proc->entry && thread->state == THREAD_STATE_READY) {
+            sched_enqueue_thread(thread);
+        }
+        return SCHED_R_NOTREADY;
     }
     /* Thread state alone determines runnability.
      * Note: the idle thread (RUNNING on another CPU) no longer reaches here —
@@ -1678,6 +1747,10 @@ static int process_schedule_once_impl(void) {
         return SCHED_R_NOTREADY;
     }
 
+    /* Publish the in-flight marker (owner pid) for THIS cpu before dispatch, so
+     * the reaper's lockless SEQ_CST scan sees it. Paired with the state re-read
+     * below (Dekker). */
+    __atomic_store_n(&g_dispatching[cpu_local()->cpu_id], proc->pid, __ATOMIC_SEQ_CST);
     process_set_running(proc, thread);
     if (thread->ticks_remaining == 0) {
         thread->ticks_remaining = thread->time_slice_ticks;
@@ -1702,6 +1775,26 @@ static int process_schedule_once_impl(void) {
     }
     thread_set_current(thread ? thread->tid : 0);
     critical_section_leave();
+    /* Reap-vs-dispatch handshake (dispatcher side, Dekker). We stored this cpu's
+     * g_dispatching=proc->pid above; full-barrier, then re-read the owner state.
+     * If a concurrent exit/reap advanced it to ZOMBIE/REAPING (or exiting),
+     * ABORT before touching run_ctx/proc or context-switching into a ctx/stack
+     * the reaper may free. The SEQ_CST store+fence here paired with the reaper's
+     * REAPING store+fence+load guarantees at least one side sees the other. */
+    __atomic_thread_fence(__ATOMIC_SEQ_CST);
+    if (proc->state == PROCESS_STATE_ZOMBIE || proc->state == PROCESS_STATE_REAPING ||
+        proc->exiting) {
+        __atomic_store_n(&g_dispatching[cpu_local()->cpu_id], 0u, __ATOMIC_SEQ_CST);
+        cpu_local()->in_scheduler = 1;
+        critical_section_enter();
+        cpu_local()->current_process = 0;
+        cpu_local()->current_pid = 0;
+        cpu_local()->current_thread = 0;
+        thread_set_current(0);
+        critical_section_leave();
+        process_try_auto_reap(proc);
+        return SCHED_R_ZOMBIE;
+    }
     /* Ring3 transitions use TSS.rsp0 as the kernel entry stack. Keep it aligned
      * to the scheduled process stack so user-mode interrupts/syscalls have a
      * deterministic kernel stack landing point. */
@@ -1711,6 +1804,7 @@ static int process_schedule_once_impl(void) {
     cpu_local()->sched_ctx.root_table = paging_get_root_table();
     if (!run_ctx) {
         klog_write("[sched] thread ctx missing\n");
+        __atomic_store_n(&g_dispatching[cpu_local()->cpu_id], 0u, __ATOMIC_SEQ_CST);
         cpu_local()->in_scheduler = 1;
         critical_section_enter();
         cpu_local()->current_process = 0;
@@ -1736,6 +1830,7 @@ static int process_schedule_once_impl(void) {
     }
     if (run_ctx->root_table == 0) {
         klog_write("[sched] target root missing\n");
+        __atomic_store_n(&g_dispatching[cpu_local()->cpu_id], 0u, __ATOMIC_SEQ_CST);
         cpu_local()->in_scheduler = 1;
         critical_section_enter();
         cpu_local()->current_process = 0;
@@ -1783,6 +1878,22 @@ static int process_schedule_once_impl(void) {
         }
 #endif
         context_switch_high(&cpu_local()->sched_ctx, run_ctx);
+    }
+    /* Switched away: this cpu no longer holds a thread in-flight. Clear the
+     * marker (SEQ_CST) before the post-run reap below. */
+    __atomic_store_n(&g_dispatching[cpu_local()->cpu_id], 0u, __ATOMIC_SEQ_CST);
+    /* Guaranteed deferred-reap retry: a reap deferred because THIS (or another)
+     * cpu was in-flight is otherwise stranded once its threads stop running (the
+     * per-proc auto-reap below only covers the proc this cpu just ran). Gated on
+     * the pending flag so it is free in the common case. */
+    if (__atomic_load_n(&g_deferred_reap_pending, __ATOMIC_ACQUIRE)) {
+        __atomic_store_n(&g_deferred_reap_pending, 0, __ATOMIC_RELEASE);
+        for (uint32_t i = 0; i < PROCESS_MAX_COUNT; ++i) {
+            process_t* z = &g_processes[i];
+            if (z->state == PROCESS_STATE_ZOMBIE && z->auto_reap) {
+                process_reap_claim(z);
+            }
+        }
     }
     g_sched_switch_count++;
     cpu_local()->dispatch_count++;

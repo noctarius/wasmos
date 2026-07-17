@@ -139,6 +139,43 @@ void cpu_sched_dequeue(cpu_sched_t* cs, thread_t* t) {
     }
 }
 
+void cpu_sched_remove_thread(thread_t* t) {
+    if (!t) {
+        return;
+    }
+    uint8_t prio = t->sched_prio;
+    if (prio >= SCHED_PRIO_MAX) {
+        return;
+    }
+    uint32_t limit = g_cpu_count;
+    if (limit > WASMOS_MAX_CPUS) {
+        limit = WASMOS_MAX_CPUS;
+    }
+    /* A thread is only ever linked into ready_list[t->sched_prio] of one CPU,
+     * so scan that bucket per CPU and dequeue from the queue that holds it.
+     * Reap runs without any cs->lock held and no cs->lock holder takes the
+     * thread-table lock, so taking cs->lock here is a safe order. Idempotent:
+     * if the node is in no list this is a no-op. */
+    for (uint32_t i = 0; i < limit; ++i) {
+        cpu_sched_t* cs = &g_cpus[i].sched;
+        ksync_spinlock_lock(&cs->lock);
+        int found = 0;
+        list_head_t *pos, *tmp;
+        list_for_each_safe(pos, tmp, &cs->ready_list[prio]) {
+            if (pos == &t->sched_node) {
+                found = 1;
+                break;
+            }
+        }
+        if (found) {
+            cpu_sched_dequeue(cs, t);
+            ksync_spinlock_unlock(&cs->lock);
+            return;
+        }
+        ksync_spinlock_unlock(&cs->lock);
+    }
+}
+
 thread_t* cpu_sched_pick_next(cpu_sched_t* cs) {
     /* Caller holds cs->lock. */
     int prio = cpu_sched_highest_prio(cs);
@@ -176,12 +213,27 @@ thread_t* cpu_sched_pick_next(cpu_sched_t* cs) {
     }
     g_last_dispatched_prio = (uint8_t)prio;
 
-    thread_t* t = list_first_entry(&cs->ready_list[prio], thread_t, sched_node);
-    list_head_del(&t->sched_node);
-    if (--cs->thread_count[prio] == 0) {
-        cs->ready_bitmap &= (uint8_t)(~(1u << prio));
+    /* Walk this priority band; drop any stale node whose thread was reaped while
+     * still enqueued (state==UNUSED) — a belt-and-suspenders self-heal so such a
+     * node is never handed to the dispatcher (which would panic SCHED_R_PICK).
+     * The dequeue-before-reset in the reap path should prevent these, but a
+     * wake racing a reap can re-link a dying thread. */
+    list_head_t *pos, *tmp;
+    list_for_each_safe(pos, tmp, &cs->ready_list[prio]) {
+        thread_t* t = list_entry(pos, thread_t, sched_node);
+        list_head_del(&t->sched_node);
+        if (--cs->thread_count[prio] == 0) {
+            cs->ready_bitmap &= (uint8_t)(~(1u << prio));
+        }
+        if (t->tid == 0 || t->state == THREAD_STATE_UNUSED) {
+            serial_printf_unlocked("[sched] dropped stale ready node tid=%u owner=%u state=%u\n",
+                                   (unsigned)t->tid, (unsigned)t->owner_pid, (unsigned)t->state);
+            continue;
+        }
+        return t;
     }
-    return t;
+    /* Band drained of real work (only stale nodes) — fall back to idle. */
+    return cpu_local()->idle_thread;
 }
 
 void sched_set_need_resched(void) {
@@ -329,6 +381,14 @@ static thread_t* cpu_sched_steal_pick(cpu_sched_t* cs) {
         list_head_t *pos, *tmp;
         list_for_each_safe(pos, tmp, &cs->ready_list[prio]) {
             thread_t* t = list_entry(pos, thread_t, sched_node);
+            /* Self-heal a reaped-while-enqueued stale node (see pick_next). */
+            if (t->tid == 0 || t->state == THREAD_STATE_UNUSED) {
+                list_head_del(&t->sched_node);
+                if (--cs->thread_count[prio] == 0) {
+                    cs->ready_bitmap &= (uint8_t)(~(1u << prio));
+                }
+                continue;
+            }
             if (t == cs->idle || t->sched_sticky) {
                 continue;
             }

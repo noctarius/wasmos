@@ -56,6 +56,13 @@ void cpu_sched_enqueue(cpu_sched_t* cs, struct thread* t);
  * Caller must hold cs->lock. */
 void cpu_sched_dequeue(cpu_sched_t* cs, struct thread* t);
 
+/* Remove a thread from whatever per-CPU run-queue currently holds it, if any.
+ * Locates the owning queue and takes its cs->lock itself; idempotent (no-op if
+ * the thread is not enqueued).  Used by the reap path (which cannot know which
+ * CPU last enqueued the thread) to guarantee a reaped thread is unlinked before
+ * its slot is reset. */
+void cpu_sched_remove_thread(struct thread* t);
+
 /* Return the highest-priority ready thread, or cs->idle if none.
  * Caller must hold cs->lock. */
 struct thread* cpu_sched_pick_next(cpu_sched_t* cs);

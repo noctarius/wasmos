@@ -1,0 +1,84 @@
+name: Quality
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: quality-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  format-and-lint:
+    name: Format + lint
+    # Runs on macOS (unlike ci.yml's Ubuntu jobs) because the wasmos clang-tidy
+    # plugin (tools/clang_tidy_wasmos) is compiled against clang-tidy's dev
+    # headers + llvm-config. Homebrew's `llvm` ships those; the apt.llvm.org
+    # packages used elsewhere do not, so the plugin cannot build there.
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # clang / clang-format / clang-tidy / clang-query / llvm-config / lld, plus
+      # zig and cmake. CMake's HINTS resolve the Homebrew llvm bin dir.
+      - name: Install LLVM, Zig, CMake (Homebrew)
+        run: brew install llvm zig cmake
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Add Rust wasm32 target + rustfmt
+        run: |
+          rustup target add wasm32-unknown-unknown
+          rustup component add rustfmt
+
+      - name: Install Python format/lint tools
+        run: pip install black ruff
+
+      # asc is needed both at configure time and by the AssemblyScript linter.
+      - name: Install AssemblyScript compiler
+        run: |
+          npm install
+          echo "$PWD/node_modules/.bin" >> "$GITHUB_PATH"
+
+      - name: Tool versions
+        run: |
+          "$(brew --prefix llvm)/bin/clang-format" --version
+          "$(brew --prefix llvm)/bin/clang-tidy" --version | head -1
+          zig version; go version; rustc --version; node --version
+          black --version; ruff --version; asc --version || true
+
+      # Discovers the toolchain, exports compile_commands.json, and sets up the
+      # clang-tidy plugin build. Both targets below depend on this.
+      - name: Configure
+        run: cmake -S . -B build
+
+      # Run the formatter in place; any resulting diff means something was not
+      # formatted before commit -> fail with the offending files.
+      - name: Format (fail if it changes anything)
+        run: |
+          cmake --build build --target fmt
+          if ! git diff --quiet; then
+            echo "::error::Formatter produced changes. Run 'cmake --build build --target fmt' locally and commit the result."
+            git --no-pager diff
+            exit 1
+          fi
+
+      # Builds the wasmos clang-tidy plugin, then runs every language linter;
+      # any clang-tidy error (e.g. wasmos-standalone-block) or other linter
+      # failure fails the job. Runs even if the format step failed, so a PR sees
+      # both results in one run.
+      - name: Lint (fail on any error)
+        if: ${{ !cancelled() }}
+        run: cmake --build build --target lint

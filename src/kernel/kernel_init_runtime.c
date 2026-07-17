@@ -49,8 +49,7 @@ static uint32_t boot_module_index_by_app_name(const boot_info_t* info, const cha
             continue;
         }
         wasmos_app_desc_t desc;
-        if (wasmos_app_parse((const uint8_t*)(uintptr_t)mod->base, (uint32_t)mod->size, &desc) !=
-            0) {
+        if (wasmos_app_parse(ptr_cast(uint8_t, mod->base), (uint32_t)mod->size, &desc) != 0) {
             continue;
         }
         if (str_eq_bytes(desc.name, desc.name_len, name)) {
@@ -125,7 +124,7 @@ static int init_send_spawn_path(process_t* process, init_state_t* state, const c
         (void)xfer_buffer_release_owned(&buf);
         return -1;
     }
-    p = (uint8_t*)(uintptr_t)(phys | KERNEL_HIGHER_HALF_BASE);
+    p = ptr_cast(uint8_t, (phys | KERNEL_HIGHER_HALF_BASE));
     memcpy(p, path, path_len);
     msg.type = PROC_IPC_SPAWN_PATH;
     msg.source = state->reply_endpoint;

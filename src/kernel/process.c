@@ -166,10 +166,10 @@ static int process_alloc_stack(process_t* slot, uint32_t stack_pages) {
     if (slot->stack_base && slot->stack_top > slot->stack_base + sizeof(uint64_t)) {
         /* Canaries catch in-range stack corruption that does not reach the guard
          * pages, such as smashed frames near the bottom or top of the stack. */
-        uint64_t* base_canary = (uint64_t*)(uintptr_t)slot->stack_base;
-        uint64_t* top_canary = (uint64_t*)(uintptr_t)(slot->stack_top - sizeof(uint64_t));
+        uint64_t* base_canary = ptr_cast(uint64_t, slot->stack_base);
+        uint64_t* top_canary = ptr_cast(uint64_t, (slot->stack_top - sizeof(uint64_t)));
         uintptr_t mid_addr = slot->stack_base + (slot->stack_top - slot->stack_base) / 2u;
-        uint64_t* mid_canary = (uint64_t*)(uintptr_t)(mid_addr & ~(uintptr_t)0x7u);
+        uint64_t* mid_canary = ptr_cast(uint64_t, (mid_addr & ~(uintptr_t)0x7u));
         *base_canary = STACK_CANARY_VALUE;
         *top_canary = STACK_CANARY_VALUE;
         *mid_canary = STACK_CANARY_VALUE;
@@ -395,8 +395,8 @@ static void process_validate_thread_context(process_t* proc, thread_t* thread,
     }
     uint64_t rip = ctx->rip;
     uint8_t is_user_ctx = (uint8_t)((ctx->cs & 0x3u) == 0x3u);
-    uint64_t start = (uint64_t)(uintptr_t)&__kernel_start;
-    uint64_t end = (uint64_t)(uintptr_t)&__kernel_end;
+    uint64_t start = addr_cast(uint64_t, &__kernel_start);
+    uint64_t end = addr_cast(uint64_t, &__kernel_end);
     uint64_t low_start = start;
     uint64_t low_end = end;
     uint64_t higher_half = paging_get_higher_half_base();
@@ -491,14 +491,14 @@ static void process_trampoline(void) {
     for (;;) {
         cpu_local()->in_scheduler = 0;
         if (cpu_local()->current_process) {
-            uint64_t* base = (uint64_t*)(uintptr_t)cpu_local()->current_process->stack_base;
+            uint64_t* base = ptr_cast(uint64_t, cpu_local()->current_process->stack_base);
             uint64_t* top =
-                (uint64_t*)(uintptr_t)(cpu_local()->current_process->stack_top - sizeof(uint64_t));
+                ptr_cast(uint64_t, (cpu_local()->current_process->stack_top - sizeof(uint64_t)));
             uintptr_t mid_addr = cpu_local()->current_process->stack_base +
                                  (cpu_local()->current_process->stack_top -
                                   cpu_local()->current_process->stack_base) /
                                      2u;
-            uint64_t* mid = (uint64_t*)(uintptr_t)(mid_addr & ~(uintptr_t)0x7u);
+            uint64_t* mid = ptr_cast(uint64_t, (mid_addr & ~(uintptr_t)0x7u));
             if (base && top && mid) {
                 const uint64_t canary = STACK_CANARY_VALUE;
                 if (*base != canary || *top != canary || *mid != canary) {
@@ -512,8 +512,8 @@ static void process_trampoline(void) {
                         "[sched] top val=%016llx\n",
                         cpu_local()->current_process->name ? cpu_local()->current_process->name
                                                            : "(unknown)",
-                        (unsigned long long)(uintptr_t)base, (unsigned long long)(uintptr_t)mid,
-                        (unsigned long long)(uintptr_t)top, (unsigned long long)*base,
+                        addr_cast(unsigned long long, base), addr_cast(unsigned long long, mid),
+                        addr_cast(unsigned long long, top), (unsigned long long)*base,
                         (unsigned long long)*mid, (unsigned long long)*top);
                     kpanic("stack_canary_tripped", (uintptr_t)base, (uintptr_t)top);
                 }
@@ -1038,7 +1038,7 @@ static int process_spawn_as_internal(uint32_t parent_pid, const char* name, proc
     if (name && (strcmp(name, "process-manager") == 0 || strcmp(name, "native-call-min") == 0)) {
         thread_t* watch_thread = process_main_thread(slot);
         if (watch_thread) {
-            g_ctx_watch_ctx = (uint64_t)(uintptr_t)&watch_thread->ctx;
+            g_ctx_watch_ctx = addr_cast(uint64_t, &watch_thread->ctx);
             g_ctx_watch_last_ctx = g_ctx_watch_ctx;
             g_ctx_watch_hits = 0;
             g_ctx_watch_reason = 0;
@@ -1046,7 +1046,7 @@ static int process_spawn_as_internal(uint32_t parent_pid, const char* name, proc
             trace_do(serial_write_hex64(g_ctx_watch_ctx));
         }
         if (slot->stack_top >= sizeof(uint64_t)) {
-            g_pm_stack_watch = (uint64_t*)(uintptr_t)(slot->stack_top - sizeof(uint64_t));
+            g_pm_stack_watch = ptr_cast(uint64_t, (slot->stack_top - sizeof(uint64_t)));
             trace_write("[sched] pm stack watch addr=");
             trace_do(serial_write_hex64((uint64_t)(uintptr_t)g_pm_stack_watch));
         }
@@ -2096,7 +2096,7 @@ int process_preempt_from_irq(irq_frame_t* frame) {
     process_validate_thread_context(cpu_local()->current_process, cpu_local()->current_thread, ctx,
                                     "preempt");
     cpu_local()->current_process->ctx = *ctx;
-    if (g_ctx_watch_ctx == (uint64_t)(uintptr_t)ctx) {
+    if (g_ctx_watch_ctx == addr_cast(uint64_t, ctx)) {
         g_ctx_watch_last_ctx = g_ctx_watch_ctx;
         g_ctx_watch_last_rip = ctx->rip;
         g_ctx_watch_last_rsp = ctx->rsp;
@@ -2391,8 +2391,8 @@ static void process_sched_invariant_fail(const char* msg, uint64_t a, uint64_t b
 static void process_set_blocked(process_t* proc, thread_t* thread, process_block_reason_t reason,
                                 thread_block_reason_t thread_reason) {
     if (!proc || !thread) {
-        process_sched_invariant_fail("set_blocked null", (uint64_t)(uintptr_t)proc,
-                                     (uint64_t)(uintptr_t)thread);
+        process_sched_invariant_fail("set_blocked null", addr_cast(uint64_t, proc),
+                                     addr_cast(uint64_t, thread));
     }
     proc->state = PROCESS_STATE_BLOCKED;
     proc->block_reason = reason;
@@ -2401,8 +2401,8 @@ static void process_set_blocked(process_t* proc, thread_t* thread, process_block
 
 static void process_set_ready(process_t* proc, thread_t* thread) {
     if (!proc || !thread) {
-        process_sched_invariant_fail("set_ready null", (uint64_t)(uintptr_t)proc,
-                                     (uint64_t)(uintptr_t)thread);
+        process_sched_invariant_fail("set_ready null", addr_cast(uint64_t, proc),
+                                     addr_cast(uint64_t, thread));
     }
     if (proc->state == PROCESS_STATE_ZOMBIE || proc->exiting) {
         process_sched_invariant_fail("set_ready zombie", proc->pid, thread->tid);
@@ -2414,8 +2414,8 @@ static void process_set_ready(process_t* proc, thread_t* thread) {
 
 static void process_set_running(process_t* proc, thread_t* thread) {
     if (!proc || !thread) {
-        process_sched_invariant_fail("set_running null", (uint64_t)(uintptr_t)proc,
-                                     (uint64_t)(uintptr_t)thread);
+        process_sched_invariant_fail("set_running null", addr_cast(uint64_t, proc),
+                                     addr_cast(uint64_t, thread));
     }
     if (proc->state == PROCESS_STATE_ZOMBIE || proc->exiting) {
         process_sched_invariant_fail("set_running zombie", proc->pid, thread->tid);

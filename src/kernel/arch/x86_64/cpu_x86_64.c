@@ -234,7 +234,7 @@ static void panic_render_screen(uint64_t vector, uint64_t err, uint64_t rip, uin
         panic_fb_printf("cr2      %016llx\n", (unsigned long long)cr2);
     }
     panic_fb_printf("cr3      %016llx\n", (unsigned long long)cr3);
-    panic_fb_printf("frame    %016llx\n", (unsigned long long)(uintptr_t)frame);
+    panic_fb_printf("frame    %016llx\n", addr_cast(unsigned long long, frame));
     panic_fb_printf("\n");
     panic_fb_printf("pid      %u\n", pid);
     panic_fb_printf("proc     %s\n", name ? name : "(null)");
@@ -259,7 +259,7 @@ static void panic_render_screen(uint64_t vector, uint64_t err, uint64_t rip, uin
 static void gdt_install(cpu_local_t* cpu) {
     descriptor_ptr_t gdtr;
     gdtr.limit = (uint16_t)(sizeof(cpu->gdt) - 1);
-    gdtr.base = (uint64_t)(uintptr_t)&cpu->gdt[0];
+    gdtr.base = addr_cast(uint64_t, &cpu->gdt[0]);
 
     __asm__ volatile("lgdt %0\n"
                      "pushq $0x08\n"
@@ -331,7 +331,7 @@ static void gdt_set_tss_base(cpu_local_t* cpu, uint64_t base) {
 }
 
 static void gdt_set_tss(cpu_local_t* cpu) {
-    gdt_set_tss_base(cpu, (uint64_t)(uintptr_t)&cpu->tss);
+    gdt_set_tss_base(cpu, addr_cast(uint64_t, &cpu->tss));
 }
 
 static void tss_init(cpu_local_t* cpu) {
@@ -341,9 +341,9 @@ static void tss_init(cpu_local_t* cpu) {
     for (uint32_t i = 0; i < CPU_IST_STACK_SIZE; ++i) {
         g_irq0_ist_stack[i] = 0xCC;
     }
-    *(uint64_t*)(uintptr_t)g_irq0_ist_stack = g_irq0_ist_canary;
-    uint64_t ist1_top = (uint64_t)(uintptr_t)(g_irq0_ist_stack + CPU_IST_STACK_SIZE);
-    uint64_t rsp0_top = (uint64_t)(uintptr_t)(g_bsp_rsp0_stack + CPU_IST_STACK_SIZE);
+    *ptr_cast(uint64_t, g_irq0_ist_stack) = g_irq0_ist_canary;
+    uint64_t ist1_top = addr_cast(uint64_t, (g_irq0_ist_stack + CPU_IST_STACK_SIZE));
+    uint64_t rsp0_top = addr_cast(uint64_t, (g_bsp_rsp0_stack + CPU_IST_STACK_SIZE));
     cpu->tss.rsp0 = rsp0_top;
     cpu->tss.ist1 = ist1_top;
     cpu->tss.iopb = (uint16_t)sizeof(cpu->tss);
@@ -375,7 +375,7 @@ static void idt_install(void) {
 
     descriptor_ptr_t idtr;
     idtr.limit = (uint16_t)(sizeof(g_idt) - 1);
-    idtr.base = (uint64_t)(uintptr_t)&g_idt[0];
+    idtr.base = addr_cast(uint64_t, &g_idt[0]);
     __asm__ volatile("lidt %0" : : "m"(idtr) : "memory");
 }
 
@@ -392,8 +392,8 @@ static __attribute__((noreturn)) void x86_exception_panic_common(uint64_t vector
     };
     uint64_t err = 0, rip = 0, cs = 0, rflags = 0, cr2 = 0, cr3 = 0;
     uint64_t rbp = 0, rsp = 0;
-    uint64_t kernel_start = (uint64_t)(uintptr_t)&__kernel_start;
-    uint64_t kernel_end = (uint64_t)(uintptr_t)&__kernel_end;
+    uint64_t kernel_start = addr_cast(uint64_t, &__kernel_start);
+    uint64_t kernel_end = addr_cast(uint64_t, &__kernel_end);
     uint32_t pid = process_current_pid();
     process_t* proc = process_get(pid);
     const char* name = proc && proc->name ? proc->name : 0;
@@ -412,7 +412,7 @@ static __attribute__((noreturn)) void x86_exception_panic_common(uint64_t vector
         cs = frame[2];
         rflags = frame[3];
         rbp = regs[EXC_REG_RBP];
-        rsp = ((cs & 0x3u) == 0x3u) ? frame[4] : (uint64_t)(uintptr_t)frame;
+        rsp = ((cs & 0x3u) == 0x3u) ? frame[4] : addr_cast(uint64_t, frame);
     } else {
         __asm__ volatile("lea (%%rip), %0" : "=r"(rip));
         __asm__ volatile("mov %%cs, %0" : "=r"(cs));
@@ -437,7 +437,7 @@ static __attribute__((noreturn)) void x86_exception_panic_common(uint64_t vector
                            "[cpu] name=%s\n"
                            "[cpu] stack base=%016llx\n"
                            "[cpu] stack top=%016llx\n",
-                           (unsigned long long)(uintptr_t)frame, pid, name ? name : "(null)",
+                           addr_cast(unsigned long long, frame), pid, name ? name : "(null)",
                            (unsigned long long)stack_base, (unsigned long long)stack_top);
     serial_printf_unlocked(
         "[cpu] ctxsw out ctx=%016llx rip=%016llx rsp=%016llx rflags=%016llx\n"
@@ -633,7 +633,7 @@ void x86_cpu_init(void) {
     /* Set GS base to &g_cpus[0] so cpu_local() via GS:0 works from here on.
      * The self-pointer must be written before the MSR load. */
     bsp->self = bsp;
-    x86_write_msr(IA32_GS_BASE_MSR, (uint64_t)(uintptr_t)bsp);
+    x86_write_msr(IA32_GS_BASE_MSR, addr_cast(uint64_t, bsp));
 
     irq_init();
     serial_write("[cpu] gdt/idt ready\n");
@@ -657,16 +657,16 @@ void x86_cpu_relocate_tables_high(void) {
 
     cpu->tss.rsp0 = x86_kernel_data_addr(cpu->tss.rsp0);
     cpu->tss.ist1 = x86_kernel_data_addr(cpu->tss.ist1);
-    gdt_set_tss_base(cpu, x86_kernel_data_addr((uint64_t)(uintptr_t)&cpu->tss));
+    gdt_set_tss_base(cpu, x86_kernel_data_addr(addr_cast(uint64_t, &cpu->tss)));
 
     gdtr.limit = (uint16_t)(sizeof(cpu->gdt) - 1);
-    gdtr.base = x86_kernel_data_addr((uint64_t)(uintptr_t)&cpu->gdt[0]);
+    gdtr.base = x86_kernel_data_addr(addr_cast(uint64_t, &cpu->gdt[0]));
     idtr.limit = (uint16_t)(sizeof(g_idt) - 1);
-    idtr.base = x86_kernel_data_addr((uint64_t)(uintptr_t)&g_idt[0]);
+    idtr.base = x86_kernel_data_addr(addr_cast(uint64_t, &g_idt[0]));
 
     /* Relocate the GS base MSR to the high-half address of g_cpus[0]. */
-    uint64_t bsp_high = x86_kernel_data_addr((uint64_t)(uintptr_t)cpu);
-    cpu_local_t* bsp_high_ptr = (cpu_local_t*)(uintptr_t)bsp_high;
+    uint64_t bsp_high = x86_kernel_data_addr(addr_cast(uint64_t, cpu));
+    cpu_local_t* bsp_high_ptr = ptr_cast(cpu_local_t, bsp_high);
     bsp_high_ptr->self = bsp_high_ptr;
     x86_write_msr(IA32_GS_BASE_MSR, bsp_high);
 

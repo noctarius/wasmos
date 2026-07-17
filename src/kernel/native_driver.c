@@ -307,7 +307,7 @@ static void* nd_xfer_buffer_acquire(uint32_t kind, uint32_t size, uint32_t* out_
     if (out_buffer_id) {
         *out_buffer_id = owner.buffer.buffer_id;
     }
-    return (void*)(uintptr_t)virt;
+    return ptr_cast(void, virt);
 }
 
 /* Owner-push grant: the calling driver owns `buffer_id`; grant the context that
@@ -482,7 +482,7 @@ static int nd_shmem_create(uint64_t pages, uint32_t flags, uint32_t* out_id, voi
         return -1;
     }
     if (out_ptr) {
-        *out_ptr = (void*)(uintptr_t)(phys | KERNEL_HIGHER_HALF_BASE);
+        *out_ptr = ptr_cast(void, (phys | KERNEL_HIGHER_HALF_BASE));
     }
     return 0;
 }
@@ -496,7 +496,7 @@ static void* nd_shmem_map(uint32_t id) {
     if (mm_shared_retain(0, id) != 0) {
         return 0;
     }
-    return (void*)(uintptr_t)(base | KERNEL_HIGHER_HALF_BASE);
+    return ptr_cast(void, (base | KERNEL_HIGHER_HALF_BASE));
 }
 
 static int nd_shmem_unmap(uint32_t id) {
@@ -528,7 +528,7 @@ static int nd_shmem_flush(uint32_t id, const void* ptr, uint32_t size) {
     if ((uint64_t)size > pages * PAGE_SIZE) {
         return -1;
     }
-    memcpy((void*)(uintptr_t)(phys_base | KERNEL_HIGHER_HALF_BASE), ptr, (size_t)size);
+    memcpy(ptr_cast(void, (phys_base | KERNEL_HIGHER_HALF_BASE)), ptr, (size_t)size);
     return 0;
 }
 
@@ -629,7 +629,7 @@ static int copy_into_root(uint64_t root_table, uint64_t dst_virt, const void* sr
             (void)paging_switch_root(prev_root);
             return -1;
         }
-        memcpy((void*)(uintptr_t)dst_cur, bounce, (size_t)n);
+        memcpy(ptr_cast(void, dst_cur), bounce, (size_t)n);
         if (paging_switch_root(prev_root) != 0) {
             return -1;
         }
@@ -785,7 +785,7 @@ static int nd_spawn_info(wasmos_spawn_info_t* out, char* args_buf, uint32_t args
     if (phys == 0u) {
         return -1;
     }
-    kva = (const uint8_t*)(uintptr_t)(phys | KERNEL_HIGHER_HALF_BASE);
+    kva = ptr_cast(uint8_t, (phys | KERNEL_HIGHER_HALF_BASE));
     si = (const wasmos_spawn_info_t*)kva;
     if (si->magic != WASMOS_SPAWN_INFO_MAGIC) {
         return -1;

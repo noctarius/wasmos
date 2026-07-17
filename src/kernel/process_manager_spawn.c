@@ -70,7 +70,7 @@ static uint8_t* pm_xfer_owner_ptr(const xfer_buffer_owner_t* owner) {
     if (phys == 0u) {
         return 0;
     }
-    return (uint8_t*)(uintptr_t)(phys | KERNEL_HIGHER_HALF_BASE);
+    return ptr_cast(uint8_t, (phys | KERNEL_HIGHER_HALF_BASE));
 }
 
 /* Release a PM-owned per-operation buffer and mark the binding empty so a
@@ -101,7 +101,7 @@ const uint8_t* pm_foreign_xfer_ptr(uint32_t buffer_id, uint32_t owner_context, u
     if (out_size) {
         *out_size = desc.size_bytes;
     }
-    return (const uint8_t*)(uintptr_t)(phys | KERNEL_HIGHER_HALF_BASE);
+    return ptr_cast(uint8_t, (phys | KERNEL_HIGHER_HALF_BASE));
 }
 
 static void pm_slot_release_owned_blob(pm_app_state_t* slot) {
@@ -158,7 +158,7 @@ static int pm_slot_alloc_owned_blob(pm_app_state_t* slot, const uint8_t* blob, u
     if (phys == 0) {
         return PM_SPAWN_INTERNAL_ERR_ALLOC;
     }
-    dst = (uint8_t*)(uintptr_t)(phys | KERNEL_HIGHER_HALF_BASE);
+    dst = ptr_cast(uint8_t, (phys | KERNEL_HIGHER_HALF_BASE));
     for (uint32_t i = 0; i < blob_size; ++i) {
         dst[i] = blob[i];
     }
@@ -199,8 +199,7 @@ uint32_t pm_find_module_index_by_name(const char* name) {
             continue;
         }
         wasmos_app_desc_t desc;
-        if (wasmos_app_parse((const uint8_t*)(uintptr_t)mod->base, (uint32_t)mod->size, &desc) !=
-            0) {
+        if (wasmos_app_parse(ptr_cast(uint8_t, mod->base), (uint32_t)mod->size, &desc) != 0) {
             continue;
         }
         char temp[64];
@@ -299,7 +298,7 @@ static process_run_result_t pm_app_entry(process_t* process, void* arg) {
 #endif
             return PROCESS_RUN_EXITED;
         }
-        si_buf = (uint8_t*)(uintptr_t)(si_phys | KERNEL_HIGHER_HALF_BASE);
+        si_buf = ptr_cast(uint8_t, (si_phys | KERNEL_HIGHER_HALF_BASE));
         si = (wasmos_spawn_info_t*)si_buf;
         si->magic = WASMOS_SPAWN_INFO_MAGIC;
         si->version = WASMOS_SPAWN_INFO_VERSION;
@@ -383,7 +382,7 @@ static int pm_spawn_module(uint32_t parent_pid, uint32_t module_index, uint32_t*
     wasmos_app_desc_t desc;
     wasmos_app_subsystem_info_t subsystem;
     uint8_t require_explicit_ready = 0;
-    if (wasmos_app_parse((const uint8_t*)(uintptr_t)mod->base, (uint32_t)mod->size, &desc) != 0) {
+    if (wasmos_app_parse(ptr_cast(uint8_t, mod->base), (uint32_t)mod->size, &desc) != 0) {
         klog_write("[pm] spawn_module parse failed\n");
         return PM_SPAWN_INTERNAL_ERR_BAD_ARGS;
     }
@@ -404,7 +403,7 @@ static int pm_spawn_module(uint32_t parent_pid, uint32_t module_index, uint32_t*
         return PM_SPAWN_INTERNAL_ERR_BAD_ARGS;
     }
 
-    slot->blob = (const uint8_t*)(uintptr_t)mod->base;
+    slot->blob = ptr_cast(uint8_t, mod->base);
     slot->blob_size = (uint32_t)mod->size;
     slot->started = 0;
     slot->in_use = 1;

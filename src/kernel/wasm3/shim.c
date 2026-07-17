@@ -239,7 +239,7 @@ static int wasm3_heap_grow(wasm3_heap_slot_t* slot, size_t min_total) {
         if (phys) {
             wasm3_heap_chunk_t* chunk = &slot->chunks[slot->chunk_count++];
             chunk->phys = phys;
-            chunk->base = (uint8_t*)(uintptr_t)(phys + KERNEL_HIGHER_HALF_BASE);
+            chunk->base = ptr_cast(uint8_t, (phys + KERNEL_HIGHER_HALF_BASE));
             chunk->size = (size_t)pages * 4096u;
             chunk->offset = 0;
             slot->committed_size += chunk->size;
@@ -412,7 +412,7 @@ void free(void* ptr) {
     if (wasm3_ptr_in_linmem_slot(ptr)) {
         ksync_spinlock_lock(&g_wasm3_heap_lock);
         wasm3_heap_slot_t* lslot = wasm3_heap_slot();
-        if (lslot && (uint64_t)(uintptr_t)ptr == lslot->linmem_block) {
+        if (lslot && addr_cast(uint64_t, ptr) == lslot->linmem_block) {
             wasm3_linmem_free_slot_locked(lslot);
         }
         ksync_spinlock_unlock(&g_wasm3_heap_lock);
@@ -551,7 +551,7 @@ static uint32_t wasm3_slot_context_id(const wasm3_heap_slot_t* slot) {
  * the window range is a cheap pre-filter; free()/realloc() then exact-match the
  * per-process slot->linmem_block. */
 static int wasm3_ptr_in_linmem_slot(const void* p) {
-    uint64_t v = (uint64_t)(uintptr_t)p;
+    uint64_t v = addr_cast(uint64_t, p);
     uint64_t lo = mm_user_wasm_linear_base();
     uint64_t hi = lo + WARP_LINMEM_VA_STRIDE;
     return v >= lo && v < hi;
@@ -629,7 +629,7 @@ void* wasm3_linmem_reserve(size_t total_bytes, size_t max_bytes, size_t data_off
     slot->linmem_committed_pages = need_pages;
     slot->linmem_max_pages = max_pages;
     ksync_spinlock_unlock(&g_wasm3_heap_lock);
-    return (void*)(uintptr_t)user_block;
+    return ptr_cast(void, user_block);
 }
 
 /* Grow the slot-backed block in place to `new_total_bytes` (commit tail pages).
@@ -641,7 +641,7 @@ void* wasm3_linmem_grow(void* blockp, size_t new_total_bytes) {
     ksync_spinlock_lock(&g_wasm3_heap_lock);
     wasm3_heap_slot_t* slot = wasm3_heap_slot();
     if (!slot || slot->linmem_slot == LINMEM_SLOT_NONE ||
-        (uint64_t)(uintptr_t)blockp != slot->linmem_block) {
+        addr_cast(uint64_t, blockp) != slot->linmem_block) {
         ksync_spinlock_unlock(&g_wasm3_heap_lock);
         return 0;
     }
@@ -889,7 +889,7 @@ static unsigned long parse_ul(const char* nptr, char** endptr, int base) {
         s++;
     }
     if (endptr) {
-        *endptr = (char*)(uintptr_t)s;
+        *endptr = ptr_cast(char, s);
     }
     return value;
 }

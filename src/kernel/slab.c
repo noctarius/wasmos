@@ -46,7 +46,7 @@ void slab_init(void) {
         klass->free_list = 0;
         for (uint32_t i = 0; i < klass->chunk_count; ++i) {
             uint8_t* chunk = klass->buffer + ((uint32_t)klass->chunk_size * i);
-            slab_node_t* node = (slab_node_t*)(uintptr_t)chunk;
+            slab_node_t* node = ptr_cast(slab_node_t, chunk);
             node->next = klass->free_list;
             klass->free_list = node;
         }
@@ -76,12 +76,12 @@ void* kalloc_small(size_t size) {
         return 0;
     }
     klass->free_list = node->next;
-    slab_header_t* hdr = (slab_header_t*)(uintptr_t)node;
+    slab_header_t* hdr = ptr_cast(slab_header_t, node);
     hdr->magic = SLAB_MAGIC;
     hdr->class_index = (uint8_t)c;
     hdr->reserved = 0;
     ksync_spinlock_unlock(&g_slab_lock);
-    return (void*)(uintptr_t)(hdr + 1);
+    return ptr_cast(void, (hdr + 1));
 }
 
 void kfree_small(void* ptr) {
@@ -95,7 +95,7 @@ void kfree_small(void* ptr) {
     ksync_spinlock_lock(&g_slab_lock);
     slab_class_t* klass = &g_classes[hdr->class_index];
     hdr->magic = 0;
-    slab_node_t* node = (slab_node_t*)(uintptr_t)hdr;
+    slab_node_t* node = ptr_cast(slab_node_t, hdr);
     node->next = klass->free_list;
     klass->free_list = node;
     ksync_spinlock_unlock(&g_slab_lock);

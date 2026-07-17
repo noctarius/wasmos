@@ -1081,7 +1081,7 @@ static int mm_copy_from_user_impl(void* opaque) {
                                user_cur, n);
             return -1;
         }
-        memcpy(bounce, (const void*)(uintptr_t)user_cur, (size_t)n);
+        memcpy(bounce, ptr_cast(void, user_cur), (size_t)n);
         if (paging_switch_root(args->prev_root) != 0) {
             mm_trace_copy_fail("from", "switch_to_prev", args->context_id, args->user_addr,
                                args->size, args->prev_root, paging_get_current_root_table(),
@@ -1153,7 +1153,7 @@ static int mm_copy_to_user_impl(void* opaque) {
                                user_cur, n);
             return -1;
         }
-        memcpy((void*)(uintptr_t)user_cur, bounce, (size_t)n);
+        memcpy(ptr_cast(void, user_cur), bounce, (size_t)n);
         if (paging_switch_root(args->prev_root) != 0) {
             mm_trace_copy_fail("to", "switch_to_prev", args->context_id, args->user_addr,
                                args->size, args->prev_root, paging_get_current_root_table(),

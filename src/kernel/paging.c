@@ -174,9 +174,9 @@ static uint64_t entry_phys(uint64_t entry) {
 
 static volatile uint64_t* table_ptr(uint64_t phys_addr) {
     if (g_current_pml4_phys == 0) {
-        return (volatile uint64_t*)(uintptr_t)phys_addr;
+        return ptr_cast(uint64_t, phys_addr);
     }
-    return (volatile uint64_t*)(uintptr_t)(phys_addr | KERNEL_HIGHER_HALF_BASE);
+    return ptr_cast(uint64_t, (phys_addr | KERNEL_HIGHER_HALF_BASE));
 }
 
 static int ensure_table(uint64_t* entry, uint64_t* out_phys, uint64_t table_flags) {
@@ -320,7 +320,7 @@ int paging_init(void) {
     g_current_pml4_phys = g_pml4_phys;
 
     if (bootstrap_low_slot) {
-        uint64_t high_target = (uint64_t)(uintptr_t)&&paging_init_after_bootstrap;
+        uint64_t high_target = addr_cast(uint64_t, &&paging_init_after_bootstrap);
         if (high_target < KERNEL_HIGHER_HALF_BASE) {
             high_target += KERNEL_HIGHER_HALF_BASE;
         }

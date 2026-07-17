@@ -44,7 +44,7 @@ int wasmos_app_module_desc(const boot_info_t* boot_info, uint32_t module_index,
         mod->size == 0 || mod->size > 0xFFFFFFFFULL) {
         return -1;
     }
-    return wasmos_app_parse((const uint8_t*)(uintptr_t)mod->base, (uint32_t)mod->size, out_desc);
+    return wasmos_app_parse(ptr_cast(uint8_t, mod->base), (uint32_t)mod->size, out_desc);
 }
 
 int wasmos_app_module_desc_by_initfs_path(const boot_info_t* boot_info, const char* path,
@@ -59,7 +59,7 @@ int wasmos_app_module_desc_by_initfs_path(const boot_info_t* boot_info, const ch
         return -1;
     }
 
-    initfs_base = (const uint8_t*)(uintptr_t)boot_info->initfs;
+    initfs_base = ptr_cast(uint8_t, boot_info->initfs);
     if (boot_info->initfs_size < sizeof(wasmos_initfs_header_t)) {
         return -1;
     }

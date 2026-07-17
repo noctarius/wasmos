@@ -53,7 +53,7 @@
 
 /* Kernel alias of a physical page. */
 static inline uint8_t* kptr(uint64_t phys) {
-    return (uint8_t*)(uintptr_t)(phys | KBASE);
+    return ptr_cast(uint8_t, (phys | KBASE));
 }
 
 /* Map one 4 KiB page at user VA in the given root, with specified flags. */

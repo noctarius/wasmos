@@ -221,7 +221,7 @@ static int pfa_upgrade_refcount(uint64_t* out_pages, uint64_t* out_alloc_pages) 
         return -1;
     }
 
-    uint8_t* dyn = (uint8_t*)(uintptr_t)(rc_phys + KERNEL_HIGHER_HALF_BASE);
+    uint8_t* dyn = ptr_cast(uint8_t, (rc_phys + KERNEL_HIGHER_HALF_BASE));
     memset(dyn, 0, (size_t)needed_pages);
     memcpy(dyn, g_refcount_static, (size_t)PFA_STATIC_TRACKED_PAGES);
 
@@ -263,8 +263,8 @@ void pfa_init(const boot_info_t* boot_info) {
         cursor += desc_size;
     }
 
-    uint64_t kernel_base = (uint64_t)(uintptr_t)&__kernel_start;
-    uint64_t kernel_size = (uint64_t)(uintptr_t)&__kernel_end - kernel_base;
+    uint64_t kernel_base = addr_cast(uint64_t, &__kernel_start);
+    uint64_t kernel_size = addr_cast(uint64_t, &__kernel_end) - kernel_base;
     reserve_range(kernel_base, kernel_size);
     /* Keep the fixed AP trampoline page out of the general allocator. */
     reserve_range(0x1000ULL, PAGE_SIZE);

@@ -35,8 +35,8 @@ static inline int serial_ptr_needs_kernel_alias(uintptr_t p) {
     if ((uint64_t)p >= base) {
         return 0;
     }
-    uint64_t start = (uint64_t)(uintptr_t)&__kernel_start;
-    uint64_t end = (uint64_t)(uintptr_t)&__kernel_end;
+    uint64_t start = addr_cast(uint64_t, &__kernel_start);
+    uint64_t end = addr_cast(uint64_t, &__kernel_end);
     uint64_t low_start = start - base;
     uint64_t low_end = end - base;
     return ((uint64_t)p >= low_start && (uint64_t)p < low_end) ? 1 : 0;
@@ -194,7 +194,7 @@ static void serial_ring_init(void) {
         *ring_id_slot = 0;
         return;
     }
-    *ring_slot = (console_ring_t*)(uintptr_t)phys_base;
+    *ring_slot = ptr_cast(console_ring_t, phys_base);
     (*ring_slot)->write_pos = 0;
     (*ring_slot)->read_pos = 0;
     (*ring_slot)->capacity = CONSOLE_RING_DATA_SIZE;
@@ -366,8 +366,8 @@ static void serial_ring_write(const char* s) {
      * Convert it to the kernel higher-half alias so writes reach mapped memory
      * from any CR3.  The ring is allocated well below 512 MiB so the alias
      * always falls inside the shared higher-half window. */
-    if (g_serial_high_alias_enabled && (uint64_t)(uintptr_t)ring < KERNEL_HIGHER_HALF_BASE) {
-        ring = (console_ring_t*)(uintptr_t)((uint64_t)(uintptr_t)ring + KERNEL_HIGHER_HALF_BASE);
+    if (g_serial_high_alias_enabled && addr_cast(uint64_t, ring) < KERNEL_HIGHER_HALF_BASE) {
+        ring = ptr_cast(console_ring_t, ((uint64_t)(uintptr_t)ring + KERNEL_HIGHER_HALF_BASE));
     }
     uint32_t cap = ring->capacity;
     uint32_t wp = ring->write_pos;
@@ -411,7 +411,7 @@ void serial_write(const char* s) {
 void serial_printf(const char* fmt, ...) {
     char buf[512];
     if (serial_ptr_needs_kernel_alias((uintptr_t)fmt)) {
-        fmt = (const char*)(uintptr_t)((uint64_t)(uintptr_t)fmt + KERNEL_HIGHER_HALF_BASE);
+        fmt = ptr_cast(char, ((uint64_t)(uintptr_t)fmt + KERNEL_HIGHER_HALF_BASE));
     }
     va_list ap;
     va_start(ap, fmt);
@@ -423,7 +423,7 @@ void serial_printf(const char* fmt, ...) {
 void serial_printf_unlocked(const char* fmt, ...) {
     char buf[512];
     if (serial_ptr_needs_kernel_alias((uintptr_t)fmt)) {
-        fmt = (const char*)(uintptr_t)((uint64_t)(uintptr_t)fmt + KERNEL_HIGHER_HALF_BASE);
+        fmt = ptr_cast(char, ((uint64_t)(uintptr_t)fmt + KERNEL_HIGHER_HALF_BASE));
     }
     va_list ap;
     va_start(ap, fmt);
@@ -465,7 +465,7 @@ void serial_write_unlocked(const char* s) {
     if (g_serial_high_alias_enabled) {
         uintptr_t sp = (uintptr_t)s;
         if (serial_ptr_needs_kernel_alias(sp)) {
-            s = (const char*)(uintptr_t)((uint64_t)sp + KERNEL_HIGHER_HALF_BASE);
+            s = ptr_cast(char, ((uint64_t)sp + KERNEL_HIGHER_HALF_BASE));
         }
     }
     if (!*serial_console_ring_slot()) {

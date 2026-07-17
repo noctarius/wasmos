@@ -28,7 +28,7 @@ static void* boot_shadow_alloc_low(uint64_t size_bytes, uint64_t* out_phys) {
     if (!phys) {
         return 0;
     }
-    void* low = (void*)(uintptr_t)phys;
+    void* low = ptr_cast(void, phys);
     memset(low, 0, (size_t)(pages * page_size));
     if (out_phys) {
         *out_phys = phys;
@@ -50,7 +50,7 @@ static int boot_shadow_copy_blob(void** dst_ptr, const void* src_ptr, uint64_t s
         return -1;
     }
     memcpy(dst_low, src_ptr, (size_t)size_bytes);
-    *dst_ptr = (void*)(uintptr_t)(dst_phys + KERNEL_HIGHER_HALF_BASE);
+    *dst_ptr = ptr_cast(void, (dst_phys + KERNEL_HIGHER_HALF_BASE));
     return 0;
 }
 
@@ -73,9 +73,9 @@ int kernel_boot_build_bootinfo_shadow(const boot_info_t* src, boot_info_t* dst) 
      * dereferences boot_info->initfs would need the low-identity mapping,
      * which is stripped from process page tables by the boot-time sweep. */
     if ((src->flags & BOOT_INFO_FLAG_INITFS_PRESENT) && src->initfs && src->initfs_size > 0) {
-        uint64_t phys = (uint64_t)(uintptr_t)dst->initfs;
+        uint64_t phys = addr_cast(uint64_t, dst->initfs);
         if (phys < KERNEL_HIGHER_HALF_BASE) {
-            dst->initfs = (void*)(uintptr_t)(phys + KERNEL_HIGHER_HALF_BASE);
+            dst->initfs = ptr_cast(void, (phys + KERNEL_HIGHER_HALF_BASE));
         }
     }
     if (!(src->flags & BOOT_INFO_FLAG_MODULES_PRESENT) || !src->modules || src->module_count == 0 ||
@@ -94,7 +94,7 @@ int kernel_boot_build_bootinfo_shadow(const boot_info_t* src, boot_info_t* dst) 
         return -1;
     }
     memcpy(table_low, src->modules, (size_t)table_size);
-    dst->modules = (void*)(uintptr_t)(table_phys + KERNEL_HIGHER_HALF_BASE);
+    dst->modules = ptr_cast(void, (table_phys + KERNEL_HIGHER_HALF_BASE));
 
     uint8_t* mods_low = (uint8_t*)table_low;
     for (uint32_t i = 0; i < src->module_count; ++i) {
@@ -107,11 +107,11 @@ int kernel_boot_build_bootinfo_shadow(const boot_info_t* src, boot_info_t* dst) 
             return -1;
         }
         void* shadow_blob_high = 0;
-        const void* blob_src = (const void*)(uintptr_t)mod->base;
+        const void* blob_src = ptr_cast(void, mod->base);
         if (boot_shadow_copy_blob(&shadow_blob_high, blob_src, mod->size) != 0) {
             return -1;
         }
-        mod->base = (uint64_t)(uintptr_t)shadow_blob_high;
+        mod->base = addr_cast(uint64_t, shadow_blob_high);
     }
     return 0;
 }

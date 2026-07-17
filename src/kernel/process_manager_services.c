@@ -345,7 +345,7 @@ int pm_handle_service_lookup_class(uint32_t pm_context_id, const ipc_message_t* 
     }
     /* Cast away const: the caller owns this transfer buffer and hands it in for
      * PM to fill with the result array (same write pattern as FS-read replies). */
-    buf = (uint8_t*)(uintptr_t)pm_foreign_xfer_ptr(buffer_id, owner, 0);
+    buf = ptr_cast(uint8_t, pm_foreign_xfer_ptr(buffer_id, owner, 0));
     if (!buf) {
         return -1;
     }

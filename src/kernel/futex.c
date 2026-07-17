@@ -108,7 +108,7 @@ int futex_wait(uint32_t uaddr, uint32_t expected, uint32_t timeout_ms, uint32_t 
 
     /* Re-read the futex word under the event lock to prevent the lost-wakeup
      * race: if the word already changed, return immediately. */
-    uint32_t* kaddr = (uint32_t*)(uintptr_t)(paddr + KERNEL_HIGHER_HALF_BASE);
+    uint32_t* kaddr = ptr_cast(uint32_t, (paddr + KERNEL_HIGHER_HALF_BASE));
     if (*kaddr != expected) {
         ksync_spinlock_unlock(&ft->event.lock);
         return 0;

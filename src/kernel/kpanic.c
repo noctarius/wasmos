@@ -59,7 +59,7 @@ static void panic_backtrace(uint64_t rbp) {
         if (!panic_ptr_ok(rbp)) {
             break;
         }
-        const uint64_t* frame = (const uint64_t*)(uintptr_t)rbp;
+        const uint64_t* frame = ptr_cast(uint64_t, rbp);
         uint64_t next = frame[0];
         uint64_t ret = frame[1];
         serial_printf_unlocked("    [%d] ret=%016llx", i, (unsigned long long)ret);
@@ -136,7 +136,7 @@ __attribute__((noreturn)) void kpanic(const char* reason, uint64_t a, uint64_t b
             __asm__ volatile("mov %%rbp, %0" : "=r"(rbp));
             __asm__ volatile("mov %%rsp, %0" : "=r"(rsp));
             __asm__ volatile("pushfq; pop %0" : "=r"(rflags));
-            c->rip = (uint64_t)(uintptr_t)__builtin_return_address(0);
+            c->rip = addr_cast(uint64_t, __builtin_return_address(0));
             c->rbp = rbp;
             c->rsp = rsp;
             c->rflags = rflags;

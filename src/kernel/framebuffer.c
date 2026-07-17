@@ -63,7 +63,7 @@ void framebuffer_init(const boot_info_t* info) {
     framebuffer_info_t* fb = framebuffer_info_slot();
     klog_printf(
         "[framebuffer] init 0x%016llX 0x%016llX 0x%016llX 0x%016llX 0x%016llX flags=0x%016llX\n",
-        (unsigned long long)(info ? (uint64_t)(uintptr_t)info->framebuffer_base : 0),
+        (unsigned long long)(info ? addr_cast(uint64_t, info->framebuffer_base) : 0),
         (unsigned long long)(info ? (uint64_t)info->framebuffer_size : 0),
         (unsigned long long)(info ? info->framebuffer_width : 0),
         (unsigned long long)(info ? info->framebuffer_height : 0),
@@ -75,7 +75,7 @@ void framebuffer_init(const boot_info_t* info) {
         info->framebuffer_height == 0) {
         return;
     }
-    fb->framebuffer_base = (uint64_t)(uintptr_t)info->framebuffer_base;
+    fb->framebuffer_base = addr_cast(uint64_t, info->framebuffer_base);
     fb->framebuffer_size = info->framebuffer_size;
     fb->framebuffer_width = info->framebuffer_width;
     fb->framebuffer_height = info->framebuffer_height;
@@ -137,7 +137,7 @@ int framebuffer_put_pixel(uint32_t x, uint32_t y, uint32_t color) {
     if (offset + 4 > fb->framebuffer_size) {
         return -1;
     }
-    uint32_t* pixel = (uint32_t*)(uintptr_t)(fb_va + offset);
+    uint32_t* pixel = ptr_cast(uint32_t, (fb_va + offset));
     *pixel = color;
     return 0;
 }
@@ -151,7 +151,7 @@ int framebuffer_fill(uint32_t color) {
         return -1;
     }
 
-    uint32_t* fb = (uint32_t*)(uintptr_t)fb_va;
+    uint32_t* fb = ptr_cast(uint32_t, fb_va);
     uint64_t stride = fb_info->framebuffer_stride;
     uint64_t height = fb_info->framebuffer_height;
     uint64_t total = stride * height;
@@ -188,7 +188,7 @@ static void framebuffer_draw_char(uint32_t col, uint32_t row, char ch, uint32_t 
 
     uint32_t x0 = col * PANIC_FONT_W;
     uint32_t y0 = row * PANIC_FONT_H;
-    uint32_t* fb = (uint32_t*)(uintptr_t)fb_va;
+    uint32_t* fb = ptr_cast(uint32_t, fb_va);
     uint32_t stride = fb_info->framebuffer_stride;
 
     for (uint32_t y = 0; y < PANIC_FONT_H; ++y) {

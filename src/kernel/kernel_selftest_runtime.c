@@ -66,7 +66,7 @@ static uint32_t broker_selftest_stage_path(broker_spawn_request_state_t* state, 
     if (phys == 0u) {
         return 0u;
     }
-    buf = (uint8_t*)(uintptr_t)(phys | KERNEL_HIGHER_HALF_BASE);
+    buf = ptr_cast(uint8_t, (phys | KERNEL_HIGHER_HALF_BASE));
     memcpy(buf, path, path_len);
     return (state->caller_buf.buffer.buffer_id << 12) | (path_len & 0xFFFu);
 }
@@ -215,7 +215,7 @@ static process_run_result_t page_fault_test_entry(process_t* process, void* arg)
         state->stage = 1;
     }
 
-    volatile uint8_t* ptr = (volatile uint8_t*)(uintptr_t)state->addr;
+    volatile uint8_t* ptr = ptr_cast(uint8_t, state->addr);
     uint8_t value = *ptr;
     *ptr = (uint8_t)(value + 1);
     klog_write("[test] page fault recovered\n");

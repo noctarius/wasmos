@@ -70,7 +70,7 @@ int linmem_slot_commit(uint64_t va_base, uint64_t from_page, uint64_t to_page) {
         }
         /* Zero the possibly-recycled frame via its now-mapped VA: fresh linear
          * memory must read as zero, and this prevents cross-app data leakage. */
-        __builtin_memset((void*)(uintptr_t)va, 0, (size_t)LINMEM_PAGE_SIZE);
+        __builtin_memset(ptr_cast(void, va), 0, (size_t)LINMEM_PAGE_SIZE);
     }
     return 0;
 }

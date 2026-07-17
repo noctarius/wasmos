@@ -158,7 +158,7 @@ static int boot_module_name_at(uint32_t index, char* out, uint32_t out_len,
     }
 
     wasmos_app_desc_t desc;
-    if (wasmos_app_parse((const uint8_t*)(uintptr_t)mod->base, (uint32_t)mod->size, &desc) != 0) {
+    if (wasmos_app_parse(ptr_cast(uint8_t, mod->base), (uint32_t)mod->size, &desc) != 0) {
         return -1;
     }
 
@@ -1309,7 +1309,7 @@ m3ApiRawFunction(wasmos_block_buffer_copy) {
         m3ApiReturn(-1);
     }
 
-    const uint8_t* src = (const uint8_t*)(uintptr_t)((uint32_t)phys + (uint32_t)offset);
+    const uint8_t* src = ptr_cast(uint8_t, ((uint32_t)phys + (uint32_t)offset));
     if (wasm_copy_to_user_bytes(proc->context_id, ptr_user, src, (uint32_t)len) != 0) {
         m3ApiReturn(-1);
     }
@@ -1337,7 +1337,7 @@ m3ApiRawFunction(wasmos_block_buffer_write) {
         m3ApiReturn(-1);
     }
 
-    uint8_t* dst = (uint8_t*)(uintptr_t)((uint32_t)phys + (uint32_t)offset);
+    uint8_t* dst = ptr_cast(uint8_t, ((uint32_t)phys + (uint32_t)offset));
     uint32_t copied = 0;
     uint8_t bounce[256];
     while (copied < (uint32_t)len) {
@@ -1513,7 +1513,7 @@ m3ApiRawFunction(wasmos_xfer_buffer_read) {
     if (phys == 0) {
         m3ApiReturn(XFER_BUFFER_ERR_NOT_FOUND);
     }
-    const uint8_t* src = (const uint8_t*)(uintptr_t)(phys | KERNEL_HIGHER_HALF_BASE);
+    const uint8_t* src = ptr_cast(uint8_t, (phys | KERNEL_HIGHER_HALF_BASE));
     if (wasm_copy_to_user_bytes(proc->context_id, ptr_user, src + offset, (uint32_t)len) != 0) {
         m3ApiReturn(XFER_BUFFER_ERR_RANGE);
     }
@@ -1567,7 +1567,7 @@ m3ApiRawFunction(wasmos_xfer_buffer_write) {
     if (phys == 0) {
         m3ApiReturn(XFER_BUFFER_ERR_NOT_FOUND);
     }
-    uint8_t* dst = (uint8_t*)(uintptr_t)(phys | KERNEL_HIGHER_HALF_BASE);
+    uint8_t* dst = ptr_cast(uint8_t, (phys | KERNEL_HIGHER_HALF_BASE));
     uint32_t copied = 0;
     uint8_t bounce[256];
     while (copied < (uint32_t)len) {
@@ -1678,7 +1678,7 @@ m3ApiRawFunction(wasmos_boot_config_copy) {
         mm_user_range_permitted(proc->context_id, ptr_user, count, MEM_REGION_FLAG_WRITE) != 0) {
         m3ApiReturn(-1);
     }
-    const uint8_t* src = (const uint8_t*)(uintptr_t)g_wasm_boot_info->boot_config;
+    const uint8_t* src = ptr_cast(uint8_t, g_wasm_boot_info->boot_config);
     if (wasm_copy_to_user_bytes(proc->context_id, ptr_user, src + start, count) != 0) {
         m3ApiReturn(-1);
     }
@@ -2185,8 +2185,7 @@ m3ApiRawFunction(wasmos_phys_map) {
     /* Copy physical memory into wasm3 linear-memory host buffer via the
      * kernel higher-half mapping.  wasm3 accesses linear memory exclusively
      * through this host pointer; the user-VA page table is irrelevant here. */
-    memcpy(mem_base + off32, (const void*)(uintptr_t)(phys | KERNEL_HIGHER_HALF_BASE),
-           (size_t)size32);
+    memcpy(mem_base + off32, ptr_cast(void, (phys | KERNEL_HIGHER_HALF_BASE)), (size_t)size32);
     m3ApiReturn(0);
 }
 
@@ -2463,8 +2462,7 @@ m3ApiRawFunction(wasmos_shmem_flush) {
         m3ApiReturn(-1);
     }
 
-    memcpy((void*)(uintptr_t)(phys_base | KERNEL_HIGHER_HALF_BASE), mem_base + off32,
-           (size_t)len32);
+    memcpy(ptr_cast(void, (phys_base | KERNEL_HIGHER_HALF_BASE)), mem_base + off32, (size_t)len32);
     m3ApiReturn(0);
 }
 
@@ -2505,8 +2503,7 @@ m3ApiRawFunction(wasmos_shmem_refresh) {
         m3ApiReturn(-1);
     }
 
-    memcpy(mem_base + off32, (const void*)(uintptr_t)(phys_base | KERNEL_HIGHER_HALF_BASE),
-           (size_t)len32);
+    memcpy(mem_base + off32, ptr_cast(void, (phys_base | KERNEL_HIGHER_HALF_BASE)), (size_t)len32);
     m3ApiReturn(0);
 }
 
@@ -2619,7 +2616,7 @@ m3ApiRawFunction(wasmos_acpi_rsdp_info) {
         m3ApiReturn(-1);
     }
 
-    const uint8_t* src = (const uint8_t*)(uintptr_t)g_wasm_boot_info->rsdp;
+    const uint8_t* src = ptr_cast(uint8_t, g_wasm_boot_info->rsdp);
     if (wasm_copy_to_user_bytes(proc->context_id, out_user, src, len) != 0) {
         m3ApiReturn(-1);
     }

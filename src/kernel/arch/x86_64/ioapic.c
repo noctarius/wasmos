@@ -162,14 +162,14 @@ static void madt_parse(uint64_t xsdt_phys, uint64_t* out_ioapic_phys) {
         g_gsi_map[i] = (uint8_t)i;
     }
 
-    acpi_sdt_hdr_t* xsdt = (acpi_sdt_hdr_t*)(uintptr_t)xsdt_phys;
+    acpi_sdt_hdr_t* xsdt = ptr_cast(acpi_sdt_hdr_t, xsdt_phys);
     uint32_t entry_count = (xsdt->length - 36u) / 8u;
     const uint8_t* entries = (const uint8_t*)xsdt + 36;
 
     for (uint32_t i = 0; i < entry_count; i++) {
         uint64_t tbl_phys;
         __builtin_memcpy(&tbl_phys, entries + i * 8u, 8);
-        acpi_sdt_hdr_t* tbl = (acpi_sdt_hdr_t*)(uintptr_t)tbl_phys;
+        acpi_sdt_hdr_t* tbl = ptr_cast(acpi_sdt_hdr_t, tbl_phys);
         if (__builtin_memcmp(tbl->signature, "APIC", 4) != 0) {
             continue;
         }

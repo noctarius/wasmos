@@ -27,6 +27,9 @@
 #endif
 #include "clang/ASTMatchers/ASTMatchFinder.h"
 #include "clang/ASTMatchers/ASTMatchers.h"
+#include "clang/Lex/Lexer.h"
+
+#include <string>
 
 using namespace clang::ast_matchers;
 
@@ -67,10 +70,90 @@ public:
   }
 };
 
+// Rewrites the raw integer<->pointer double casts "(T *)(uintptr_t)e" and
+// "(intT)(uintptr_t)e" to ptr_cast(T, e) / addr_cast(intT, e) (see
+// src/libc/include/wasmos_cast.h). Fixit-driven: run with clang-tidy --fix.
+class ReinterpretCastCheck : public ClangTidyCheck {
+public:
+  ReinterpretCastCheck(StringRef Name, ClangTidyContext *Context)
+      : ClangTidyCheck(Name, Context) {}
+
+  void registerMatchers(MatchFinder *Finder) override {
+    // Outer C-style cast whose operand is another C-style cast; the inner one
+    // being to uintptr_t is verified in check().
+    Finder->addMatcher(
+        cStyleCastExpr(hasSourceExpression(cStyleCastExpr().bind("inner")))
+            .bind("outer"),
+        this);
+  }
+
+  void check(const MatchFinder::MatchResult &Result) override {
+    const auto *Outer = Result.Nodes.getNodeAs<CStyleCastExpr>("outer");
+    const auto *Inner = Result.Nodes.getNodeAs<CStyleCastExpr>("inner");
+    if (!Outer || !Inner)
+      return;
+    // Inner cast must be to uintptr_t (written spelling, not the canonical
+    // unsigned long/long long).
+    if (Inner->getTypeAsWritten().getAsString() != "uintptr_t")
+      return;
+
+    // Bail on anything touching a macro; source-text rewriting there is unsafe.
+    const SourceManager &SM = *Result.SourceManager;
+    const LangOptions &LO = Result.Context->getLangOpts();
+    const Expr *Operand = Inner->getSubExprAsWritten();
+    if (Outer->getBeginLoc().isMacroID() || Outer->getEndLoc().isMacroID() ||
+        Operand->getBeginLoc().isMacroID() || Operand->getEndLoc().isMacroID())
+      return;
+
+    // Use the *written* type text, not the canonicalized type, so typedefs stay
+    // as spelled. Only rewrite plain "T *" pointers and integer types; skip
+    // typedef'd or function pointers (their written form isn't "T *", and
+    // ptr_cast's "type *" reconstruction wouldn't be valid).
+    StringRef WrittenTy = Lexer::getSourceText(
+        CharSourceRange::getTokenRange(
+            Outer->getTypeInfoAsWritten()->getTypeLoc().getSourceRange()),
+        SM, LO);
+    std::string TyStr = WrittenTy.trim().str();
+    QualType OuterTy = Outer->getTypeAsWritten();
+    std::string Macro, TypeArg;
+    if (OuterTy->isPointerType()) {
+      if (TyStr.empty() || TyStr.back() != '*' ||
+          OuterTy->getPointeeType()->isFunctionType())
+        return;
+      TyStr.pop_back(); // drop the '*'
+      while (!TyStr.empty() && (TyStr.back() == ' ' || TyStr.back() == '\t'))
+        TyStr.pop_back();
+      if (TyStr.empty())
+        return;
+      Macro = "ptr_cast";
+      TypeArg = TyStr;
+    } else if (OuterTy->isIntegerType() && !TyStr.empty()) {
+      Macro = "addr_cast";
+      TypeArg = TyStr;
+    } else {
+      return;
+    }
+
+    StringRef OperandText = Lexer::getSourceText(
+        CharSourceRange::getTokenRange(Operand->getSourceRange()), SM, LO);
+    if (OperandText.empty())
+      return;
+
+    std::string Repl =
+        Macro + "(" + TypeArg + ", " + OperandText.str() + ")";
+    diag(Outer->getBeginLoc(),
+         "use %0() instead of a raw (%1)(uintptr_t) reinterpret cast")
+        << Macro << TypeArg
+        << FixItHint::CreateReplacement(
+               CharSourceRange::getTokenRange(Outer->getSourceRange()), Repl);
+  }
+};
+
 class WasmosModule : public ClangTidyModule {
 public:
   void addCheckFactories(ClangTidyCheckFactories &Factories) override {
     Factories.registerCheck<StandaloneBlockCheck>("wasmos-standalone-block");
+    Factories.registerCheck<ReinterpretCastCheck>("wasmos-reinterpret-cast");
   }
 };
 

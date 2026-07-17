@@ -490,6 +490,13 @@ target_compile_definitions(warp_glue_ide PRIVATE
   WASMOS_IRQ_MODE=${WASMOS_IRQ_MODE_VALUE}
   WASMOS_WASM_RUNTIME_WARP)
 
+# Force-include the ptr_cast/addr_cast macros into the indexing compiles too, so
+# compile_commands.json (hence clang-tidy) sees them defined — mirroring the
+# -include added to the real build flags (CFLAGS_KERNEL).
+target_compile_options(kernel_ide PRIVATE -include ${LIBC_DIR}/include/wasmos_cast.h)
+target_compile_options(wasm3_glue_ide PRIVATE -include ${LIBC_DIR}/include/wasmos_cast.h)
+target_compile_options(warp_glue_ide PRIVATE -include ${LIBC_DIR}/include/wasmos_cast.h)
+
 get_property(WASMOS_KERNEL_BLOBS GLOBAL PROPERTY WASMOS_KERNEL_BLOBS)
 if (WASMOS_KERNEL_BLOBS)
   list(APPEND KERNEL_OBJS ${WASMOS_KERNEL_BLOBS})

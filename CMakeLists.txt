@@ -247,6 +247,9 @@ function(wasmos_add_ide_c_target target_name)
   if (WASMOS_IDE_INCLUDES)
     target_include_directories(${target_name} PRIVATE ${WASMOS_IDE_INCLUDES})
   endif ()
+  # Force-include the cast macros so compile_commands.json entries (used by
+  # clang-tidy) resolve ptr_cast/addr_cast/fn_cast, matching the real build.
+  target_compile_options(${target_name} PRIVATE -include ${LIBC_DIR}/include/wasmos_cast.h)
   target_compile_definitions(${target_name} PRIVATE
     WASMOS_TRACE=${WASMOS_TRACE_VALUE}
     WASMOS_IRQ_MODE=${WASMOS_IRQ_MODE_VALUE}
@@ -492,6 +495,7 @@ function(wasmos_add_wasm_c_app_target target_name)
     OUTPUT ${WASMOS_APP_OUTPUT_WASM}
     COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}
     COMMAND ${_wasmos_compiler} --target=wasm32 -Oz -nostdlib -ffreestanding
+            -include ${LIBC_DIR}/include/wasmos_cast.h
             ${_wasmos_extra_flags}
             ${WASMOS_TRACE_DEFINE}
             -Wl,--no-entry -Wl,--strip-all
@@ -562,6 +566,7 @@ function(wasmos_add_native_c_app_target target_name)
       OUTPUT ${_obj}
       COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}
       COMMAND ${CLANG} ${WASMOS_NATIVE_COMPILE_FLAGS} ${_native_include_flags}
+              -include ${LIBC_DIR}/include/wasmos_cast.h
               ${_src}
               -o ${_obj}
       DEPENDS ${_src} ${WASMOS_NATIVE_HEADER_DEPS}

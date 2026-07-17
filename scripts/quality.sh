@@ -342,13 +342,17 @@ for e in json.load(open(src_db)):
         # WASM userland uses __builtin_wasm_*; the *_ide targets compile it for
         # the host, so force the wasm32 target on every platform.
         res[1:1] = ["--target=wasm32-unknown-unknown"]
-    elif had_arch:
-        # The IDE command targeted the host arch via -arch (macOS: arm64), which
-        # can't parse x86_64 inline asm. Replace it with the real target. Where
-        # the IDE command already targets the host correctly (no -arch, e.g.
-        # Linux x86_64), leave it untouched so host header resolution keeps
-        # working (forcing a bare -none-elf there breaks <stdint.h>).
-        res[1:1] = ["--target=x86_64-unknown-none-elf"] + extra
+    else:
+        # Retarget only when the IDE command selected the host arch via -arch
+        # (macOS: arm64), which can't parse x86_64 inline asm. Where the command
+        # already targets the host correctly (no -arch, e.g. Linux x86_64),
+        # leave the target alone so host header resolution keeps working (a bare
+        # -none-elf there breaks <stdint.h>). But extra flags (e.g. -fshort-wchar
+        # for boot's CHAR16 literals) are needed to parse on every platform, so
+        # always apply them.
+        inject = (["--target=x86_64-unknown-none-elf"] if had_arch else []) + extra
+        if inject:
+            res[1:1] = inject
     e["command"] = " ".join(res)
     e.pop("arguments", None)
     out.append(e)

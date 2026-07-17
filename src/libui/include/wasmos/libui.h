@@ -1220,51 +1220,51 @@ static inline int32_t ui_menu_bar_init(ui_context_t* ctx, int32_t proc_endpoint,
                     0, 0, 0, &status, &a1, &a2, &a3) != 0 ||
         status != GFX_STATUS_OK || a1 <= 0)
         goto mb_fail;
-    {
-        const int32_t screen_w = a1;
-        const int32_t bar_h = 28;
 
-        if (ui_send_gfx(ctx->gfx_endpoint, reply_endpoint, ctx->req_id++, GFX_IPC_CREATE_WINDOW,
-                        screen_w, bar_h, (int32_t)GFX_IPC_ABI_MAGIC,
-                        (int32_t)gfx_ipc_header_pack(GFX_IPC_ABI_VERSION, GFX_IPC_CREATE_WINDOW),
-                        &status, &a1, &a2, &a3) != 0 ||
-            status != GFX_STATUS_OK)
-            goto mb_fail;
-        ctx->window_id = a1;
+    const int32_t screen_w = a1;
+    const int32_t bar_h = 28;
 
-        if (ui_send_gfx(ctx->gfx_endpoint, reply_endpoint, ctx->req_id++, GFX_IPC_SET_WINDOW_FLAGS,
-                        ctx->window_id,
-                        (int32_t)(GFX_WINDOW_FLAG_TOPMOST | GFX_WINDOW_FLAG_NO_CHROME |
-                                  GFX_WINDOW_FLAG_NO_TASK_LIST),
-                        0, 0, &status, 0, 0, 0) != 0 ||
-            status != GFX_STATUS_OK)
-            goto mb_fail;
+    if (ui_send_gfx(ctx->gfx_endpoint, reply_endpoint, ctx->req_id++, GFX_IPC_CREATE_WINDOW,
+                    screen_w, bar_h, (int32_t)GFX_IPC_ABI_MAGIC,
+                    (int32_t)gfx_ipc_header_pack(GFX_IPC_ABI_VERSION, GFX_IPC_CREATE_WINDOW),
+                    &status, &a1, &a2, &a3) != 0 ||
+        status != GFX_STATUS_OK)
+        goto mb_fail;
+    ctx->window_id = a1;
 
-        if (ui_send_gfx(ctx->gfx_endpoint, reply_endpoint, ctx->req_id++, GFX_IPC_MOVE_WINDOW,
-                        ctx->window_id, 0, 0, 0, &status, 0, 0, 0) != 0 ||
-            status != GFX_STATUS_OK)
-            goto mb_fail;
+    if (ui_send_gfx(ctx->gfx_endpoint, reply_endpoint, ctx->req_id++, GFX_IPC_SET_WINDOW_FLAGS,
+                    ctx->window_id,
+                    (int32_t)(GFX_WINDOW_FLAG_TOPMOST | GFX_WINDOW_FLAG_NO_CHROME |
+                              GFX_WINDOW_FLAG_NO_TASK_LIST),
+                    0, 0, &status, 0, 0, 0) != 0 ||
+        status != GFX_STATUS_OK)
+        goto mb_fail;
 
-        if (ui_realloc_buffer(ctx, screen_w, bar_h) != 0)
-            goto mb_fail;
+    if (ui_send_gfx(ctx->gfx_endpoint, reply_endpoint, ctx->req_id++, GFX_IPC_MOVE_WINDOW,
+                    ctx->window_id, 0, 0, 0, &status, 0, 0, 0) != 0 ||
+        status != GFX_STATUS_OK)
+        goto mb_fail;
 
-        ui_init_component_ops();
-        ctx->root_id = ui_component_create_menu_bar(ctx);
-        if (ctx->root_id < 0)
-            goto mb_fail;
-        {
-            ui_component_t* mbroot = ui_component_by_id(ctx, ctx->root_id);
-            mbroot->bounds.x = 0;
-            mbroot->bounds.y = 0;
-            mbroot->bounds.w = screen_w;
-            mbroot->bounds.h = bar_h;
-            mbroot->padding_px = 2;
-            mbroot->gap_px = 0;
-            mbroot->bg_color = 0xFF1A2233u;
-        }
-        ctx->dirty = 1;
-        return 0;
-    }
+    if (ui_realloc_buffer(ctx, screen_w, bar_h) != 0)
+        goto mb_fail;
+
+    ui_init_component_ops();
+    ctx->root_id = ui_component_create_menu_bar(ctx);
+    if (ctx->root_id < 0)
+        goto mb_fail;
+
+    ui_component_t* mbroot = ui_component_by_id(ctx, ctx->root_id);
+    mbroot->bounds.x = 0;
+    mbroot->bounds.y = 0;
+    mbroot->bounds.w = screen_w;
+    mbroot->bounds.h = bar_h;
+    mbroot->padding_px = 2;
+    mbroot->gap_px = 0;
+    mbroot->bg_color = 0xFF1A2233u;
+
+    ctx->dirty = 1;
+    return 0;
+
 mb_fail:
     ui_destroy(ctx);
     return -1;
@@ -1426,14 +1426,14 @@ static inline void ui_layout_vertical(ui_context_t* ctx, int32_t parent_id) {
         c->bounds.y = y;
         c->bounds.w = w;
         c->bounds.h = h;
-        {
-            const ui_component_ops_t* child_ops = &ui_component_ops[c->type];
-            if (child_ops->layout) {
-                child_ops->layout(ctx, c);
-            } else if (c->first_child_id > 0) {
-                ui_layout_vertical(ctx, c->id);
-            }
+
+        const ui_component_ops_t* child_ops = &ui_component_ops[c->type];
+        if (child_ops->layout) {
+            child_ops->layout(ctx, c);
+        } else if (c->first_child_id > 0) {
+            ui_layout_vertical(ctx, c->id);
         }
+
         y += h + p->gap_px;
         child_id = c->next_sibling_id;
     }
@@ -1661,21 +1661,20 @@ static inline int32_t ui_loop_handle_ipc(ui_context_t* ctx, const wasmos_ipc_mes
                  * (e.g. a sub-menu opened from hover).  Only dismiss when focus
                  * truly leaves the whole menu hierarchy. */
                 int32_t child_popup_open = 0;
-                {
-                    int32_t cid = route_target->first_child_id;
-                    while (cid > 0) {
-                        const ui_component_t* ch = ui_component_by_id(ctx, cid);
-                        if (!ch)
-                            break;
-                        const ui_menu_item_data_t* cd =
-                            (const ui_menu_item_data_t*)ch->component_data;
-                        if (cd && cd->popup_win_id > 0) {
-                            child_popup_open = 1;
-                            break;
-                        }
-                        cid = ch->next_sibling_id;
+
+                int32_t cid = route_target->first_child_id;
+                while (cid > 0) {
+                    const ui_component_t* ch = ui_component_by_id(ctx, cid);
+                    if (!ch)
+                        break;
+                    const ui_menu_item_data_t* cd = (const ui_menu_item_data_t*)ch->component_data;
+                    if (cd && cd->popup_win_id > 0) {
+                        child_popup_open = 1;
+                        break;
                     }
+                    cid = ch->next_sibling_id;
                 }
+
                 if (!child_popup_open) {
                     ui_menu_item_dismiss_popup(ctx, route_target);
                     return UI_MSG_CONSUMED;

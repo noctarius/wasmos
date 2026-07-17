@@ -280,43 +280,43 @@ static process_run_result_t pm_app_entry(process_t* process, void* arg) {
          * its controlling TTY, boot-module info, and argv from it. The buffer is
          * owned by the child context, so child exit reclaims it via
          * xfer_buffer_drop_context. */
-        {
-            xfer_buffer_owner_t si_xfer = {0};
-            uint32_t args_len = state->spawn_cli_args_len;
-            uint32_t need = (uint32_t)sizeof(wasmos_spawn_info_t) + args_len + 1u;
-            uint64_t si_phys = 0;
-            uint8_t* si_buf = 0;
-            wasmos_spawn_info_t* si = 0;
-            uint8_t* args_dst = 0;
-            if (xfer_buffer_acquire(BUFFER_KIND_TRANSFER, process->context_id, need, &si_xfer) !=
-                    XFER_BUFFER_OK ||
-                (si_phys = xfer_buffer_object_phys(&si_xfer.buffer)) == 0u) {
-                klog_write("[pm] spawn info alloc failed\n");
-                process_set_exit_status(process, -1);
-                pm_slot_reset(state);
+
+        xfer_buffer_owner_t si_xfer = {0};
+        uint32_t args_len = state->spawn_cli_args_len;
+        uint32_t need = (uint32_t)sizeof(wasmos_spawn_info_t) + args_len + 1u;
+        uint64_t si_phys = 0;
+        uint8_t* si_buf = 0;
+        wasmos_spawn_info_t* si = 0;
+        uint8_t* args_dst = 0;
+        if (xfer_buffer_acquire(BUFFER_KIND_TRANSFER, process->context_id, need, &si_xfer) !=
+                XFER_BUFFER_OK ||
+            (si_phys = xfer_buffer_object_phys(&si_xfer.buffer)) == 0u) {
+            klog_write("[pm] spawn info alloc failed\n");
+            process_set_exit_status(process, -1);
+            pm_slot_reset(state);
 #if defined(WASMOS_ENABLE_PREEMPT_GUARD)
-                preempt_enable();
+            preempt_enable();
 #endif
-                return PROCESS_RUN_EXITED;
-            }
-            si_buf = (uint8_t*)(uintptr_t)(si_phys | KERNEL_HIGHER_HALF_BASE);
-            si = (wasmos_spawn_info_t*)si_buf;
-            si->magic = WASMOS_SPAWN_INFO_MAGIC;
-            si->version = WASMOS_SPAWN_INFO_VERSION;
-            si->header_size = (uint32_t)sizeof(wasmos_spawn_info_t);
-            si->proc_endpoint = g_pm.proc_endpoint;
-            si->tty = (desc.flags & WASMOS_APP_FLAG_WANTS_TTY) ? pm_alloc_cli_tty() : 0u;
-            si->module_count = g_pm.module_count;
-            si->module_index = g_pm.init_module_index;
-            si->args_off = (uint32_t)sizeof(wasmos_spawn_info_t);
-            si->args_len = args_len;
-            args_dst = si_buf + sizeof(wasmos_spawn_info_t);
-            for (uint32_t i = 0; i < args_len; ++i) {
-                args_dst[i] = (uint8_t)state->spawn_cli_args[i];
-            }
-            args_dst[args_len] = '\0';
-            process->spawn_info_buffer_id = si_xfer.buffer.buffer_id;
+            return PROCESS_RUN_EXITED;
         }
+        si_buf = (uint8_t*)(uintptr_t)(si_phys | KERNEL_HIGHER_HALF_BASE);
+        si = (wasmos_spawn_info_t*)si_buf;
+        si->magic = WASMOS_SPAWN_INFO_MAGIC;
+        si->version = WASMOS_SPAWN_INFO_VERSION;
+        si->header_size = (uint32_t)sizeof(wasmos_spawn_info_t);
+        si->proc_endpoint = g_pm.proc_endpoint;
+        si->tty = (desc.flags & WASMOS_APP_FLAG_WANTS_TTY) ? pm_alloc_cli_tty() : 0u;
+        si->module_count = g_pm.module_count;
+        si->module_index = g_pm.init_module_index;
+        si->args_off = (uint32_t)sizeof(wasmos_spawn_info_t);
+        si->args_len = args_len;
+        args_dst = si_buf + sizeof(wasmos_spawn_info_t);
+        for (uint32_t i = 0; i < args_len; ++i) {
+            args_dst[i] = (uint8_t)state->spawn_cli_args[i];
+        }
+        args_dst[args_len] = '\0';
+        process->spawn_info_buffer_id = si_xfer.buffer.buffer_id;
+
         /* The 4-slot entry-arg calling convention is retired: the child pulls
          * everything from its spawn-info buffer. Pass zeros to satisfy the
          * (unchanged) wasm entry signature. */
@@ -346,17 +346,15 @@ static process_run_result_t pm_app_entry(process_t* process, void* arg) {
         state->started = 1;
     }
 
-    {
-        int entry_rc = wasmos_app_call_entry(&state->app);
-        if (entry_rc != 0) {
-            klog_write("[pm] app entry failed\n");
-            klog_write("[pm] app entry rc=");
-            serial_write_hex64((uint64_t)(int64_t)entry_rc);
-            klog_write("\n");
-            process_set_exit_status(process, -1);
-        } else {
-            process_set_exit_status(process, 0);
-        }
+    int entry_rc = wasmos_app_call_entry(&state->app);
+    if (entry_rc != 0) {
+        klog_write("[pm] app entry failed\n");
+        klog_write("[pm] app entry rc=");
+        serial_write_hex64((uint64_t)(int64_t)entry_rc);
+        klog_write("\n");
+        process_set_exit_status(process, -1);
+    } else {
+        process_set_exit_status(process, 0);
     }
 
     wasmos_app_stop(&state->app);
@@ -393,14 +391,13 @@ static int pm_spawn_module(uint32_t parent_pid, uint32_t module_index, uint32_t*
         klog_write("[pm] spawn_module subsystem resolve failed\n");
         return PM_SPAWN_INTERNAL_ERR_BINDING;
     }
-    {
-        int ready_rc = wasmos_app_requires_explicit_ready(&desc);
-        if (ready_rc < 0) {
-            klog_write("[pm] spawn_module ready policy failed\n");
-            return PM_SPAWN_INTERNAL_ERR_BINDING;
-        }
-        require_explicit_ready = ready_rc ? 1u : 0u;
+
+    int ready_rc = wasmos_app_requires_explicit_ready(&desc);
+    if (ready_rc < 0) {
+        klog_write("[pm] spawn_module ready policy failed\n");
+        return PM_SPAWN_INTERNAL_ERR_BINDING;
     }
+    require_explicit_ready = ready_rc ? 1u : 0u;
 
     if (str_copy_bytes(slot->name, sizeof(slot->name), desc.name, desc.name_len) != 0) {
         klog_write("[pm] spawn_module name copy failed\n");
@@ -534,13 +531,13 @@ static int pm_spawn_from_buffer(uint32_t parent_pid, const uint8_t* blob, uint32
         0) {
         return PM_SPAWN_INTERNAL_ERR_BAD_ARGS;
     }
-    {
-        int ready_rc = wasmos_app_requires_explicit_ready(&desc);
-        if (ready_rc < 0) {
-            return PM_SPAWN_INTERNAL_ERR_BINDING;
-        }
-        require_explicit_ready = ready_rc ? 1u : 0u;
+
+    int ready_rc = wasmos_app_requires_explicit_ready(&desc);
+    if (ready_rc < 0) {
+        return PM_SPAWN_INTERNAL_ERR_BINDING;
     }
+    require_explicit_ready = ready_rc ? 1u : 0u;
+
     if (str_copy_bytes(slot->name, sizeof(slot->name), desc.name, desc.name_len) != 0) {
         return PM_SPAWN_INTERNAL_ERR_BAD_ARGS;
     }
@@ -973,27 +970,27 @@ static int pm_fs_read_blob_for_spawn(uint32_t pm_context_id, const xfer_buffer_o
         (void)xfer_buffer_unborrow(&fs_grant);
         return PM_SPAWN_INTERNAL_ERR_SEND;
     }
-    {
-        int recv_rc = pm_recv_fs_reply(pm_context_id, g_pm.fs_reply_endpoint, req_id, &reply);
-        /* Drop PM's grant now (not at buffer release): pmbuf is reused across
-         * multiple reads in one spawn (e.g. broker: guest blob then host
-         * executor), and fs-manager is the grant's borrower so it never drops
-         * it. Leaving it active would make the next read's re-grant fail
-         * ALREADY_BORROWED. PM created the grant, so it holds the handle. */
-        (void)xfer_buffer_unborrow(&fs_grant);
-        if (recv_rc != 0 || reply.type != FS_IPC_RESP || reply.arg0 <= 0 ||
-            (uint32_t)reply.arg0 > max) {
-            klog_write("[pm] spawn_path fs read failed: ");
-            for (uint32_t i = 0; i < path_len; ++i) {
-                char c[2];
-                c[0] = path[i];
-                c[1] = '\0';
-                klog_write(c);
-            }
-            klog_write("\n");
-            return PM_SPAWN_INTERNAL_ERR_BAD_REPLY;
+
+    int recv_rc = pm_recv_fs_reply(pm_context_id, g_pm.fs_reply_endpoint, req_id, &reply);
+    /* Drop PM's grant now (not at buffer release): pmbuf is reused across
+     * multiple reads in one spawn (e.g. broker: guest blob then host
+     * executor), and fs-manager is the grant's borrower so it never drops
+     * it. Leaving it active would make the next read's re-grant fail
+     * ALREADY_BORROWED. PM created the grant, so it holds the handle. */
+    (void)xfer_buffer_unborrow(&fs_grant);
+    if (recv_rc != 0 || reply.type != FS_IPC_RESP || reply.arg0 <= 0 ||
+        (uint32_t)reply.arg0 > max) {
+        klog_write("[pm] spawn_path fs read failed: ");
+        for (uint32_t i = 0; i < path_len; ++i) {
+            char c[2];
+            c[0] = path[i];
+            c[1] = '\0';
+            klog_write(c);
         }
+        klog_write("\n");
+        return PM_SPAWN_INTERNAL_ERR_BAD_REPLY;
     }
+
     *out_blob_size = (uint32_t)reply.arg0;
     return 0;
 }
@@ -1744,15 +1741,15 @@ int pm_handle_spawn_path(uint32_t pm_context_id, const ipc_message_t* msg) {
     if (pm_xfer_acquire(pm_context_id, xfer_buffer_size(BUFFER_KIND_TRANSFER), &pmbuf) != 0) {
         return PROC_SPAWN_ERR_NO_PM_FSBUF;
     }
-    {
-        int resolve_rc = pm_resolve_spawn_path(pm_context_id, &pmbuf, path, path_len,
-                                               args_len > 0u ? cli_args : 0, args_len,
-                                               spawn_req_flags, &resolved);
-        if (resolve_rc != 0) {
-            pm_xfer_release(&pmbuf);
-            return resolve_rc;
-        }
+
+    int resolve_rc =
+        pm_resolve_spawn_path(pm_context_id, &pmbuf, path, path_len, args_len > 0u ? cli_args : 0,
+                              args_len, spawn_req_flags, &resolved);
+    if (resolve_rc != 0) {
+        pm_xfer_release(&pmbuf);
+        return resolve_rc;
     }
+
     wasmos_app_desc_t desc;
     uint32_t app_flags = 0;
     int parse_rc =

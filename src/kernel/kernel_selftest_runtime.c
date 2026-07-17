@@ -397,15 +397,14 @@ static process_run_result_t broker_spawn_request_entry(process_t* process, void*
         return PROCESS_RUN_YIELDED;
     }
 
-    {
-        int recv_rc = ipc_recv_blocking_for(process->context_id, state->reply_endpoint, &msg);
-        if (recv_rc == IPC_EMPTY) {
-            return PROCESS_RUN_YIELDED;
-        }
-        if (recv_rc != IPC_OK) {
-            return PROCESS_RUN_YIELDED;
-        }
+    int recv_rc = ipc_recv_blocking_for(process->context_id, state->reply_endpoint, &msg);
+    if (recv_rc == IPC_EMPTY) {
+        return PROCESS_RUN_YIELDED;
     }
+    if (recv_rc != IPC_OK) {
+        return PROCESS_RUN_YIELDED;
+    }
+
     if (msg.request_id != state->request_id) {
         return PROCESS_RUN_YIELDED;
     }
@@ -493,15 +492,14 @@ int kernel_selftest_spawn_baseline(uint32_t init_pid, uint8_t preempt_test_enabl
     g_broker_spawn_request_state.request_id = 1u;
     g_broker_spawn_request_state.attempts = 0u;
     g_broker_spawn_request_state.phase = 0u;
-    {
-        uint32_t broker_request_pid = 0;
-        if (process_spawn_as(init_pid, "broker-spawn-test", broker_spawn_request_entry,
-                             &g_broker_spawn_request_state, &broker_request_pid) != 0) {
-            klog_write("[kernel] broker spawn request failed\n");
-            return -1;
-        }
-        (void)process_set_auto_reap(broker_request_pid, 1);
+
+    uint32_t broker_request_pid = 0;
+    if (process_spawn_as(init_pid, "broker-spawn-test", broker_spawn_request_entry,
+                         &g_broker_spawn_request_state, &broker_request_pid) != 0) {
+        klog_write("[kernel] broker spawn request failed\n");
+        return -1;
     }
+    (void)process_set_auto_reap(broker_request_pid, 1);
 
     if (preempt_test_enabled) {
         g_preempt_test_state.observer_runs = 0;

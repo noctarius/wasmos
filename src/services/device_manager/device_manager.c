@@ -1135,13 +1135,13 @@ static void registry_add_block_from_ipc(int32_t arg0, int32_t arg1, int32_t arg2
                        (unsigned)unit);
     }
     hex16_from_sha256(rec->canonical_id, rec->hash_id);
-    {
-        char msg[224];
-        (void)snprintf(
-            msg, sizeof(msg), "[device-manager] block add id=%s hash=%s present=%u sectors=%u\n",
-            rec->canonical_id, rec->hash_id, (unsigned)rec->present, (unsigned)rec->sector_count);
-        console_write(msg);
-    }
+
+    char msg[224];
+    (void)snprintf(
+        msg, sizeof(msg), "[device-manager] block add id=%s hash=%s present=%u sectors=%u\n",
+        rec->canonical_id, rec->hash_id, (unsigned)rec->present, (unsigned)rec->sector_count);
+    console_write(msg);
+
     if (rec->present) {
         uint8_t queued_any = 0;
         for (uint32_t i = 0; i < g_dm.block_fs_rule_count; ++i) {

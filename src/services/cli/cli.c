@@ -261,22 +261,22 @@ static int cli_parse_name_value(const char* line, char* name, int name_cap, char
         name[i] = line[start + i];
     }
     name[nlen] = '\0';
-    {
-        int32_t value_start = start + eq + 1;
-        while (line[value_start] == ' ' || line[value_start] == '\t') {
-            value_start++;
-        }
-        while (line[value_start + vlen] && vlen + 1 < val_cap) {
-            value[vlen] = line[value_start + vlen];
-            vlen++;
-        }
-        value[vlen] = '\0';
-        while (vlen > 0 && (value[vlen - 1] == ' ' || value[vlen - 1] == '\t' ||
-                            value[vlen - 1] == '\r' || value[vlen - 1] == '\n')) {
-            value[vlen - 1] = '\0';
-            vlen--;
-        }
+
+    int32_t value_start = start + eq + 1;
+    while (line[value_start] == ' ' || line[value_start] == '\t') {
+        value_start++;
     }
+    while (line[value_start + vlen] && vlen + 1 < val_cap) {
+        value[vlen] = line[value_start + vlen];
+        vlen++;
+    }
+    value[vlen] = '\0';
+    while (vlen > 0 && (value[vlen - 1] == ' ' || value[vlen - 1] == '\t' ||
+                        value[vlen - 1] == '\r' || value[vlen - 1] == '\n')) {
+        value[vlen - 1] = '\0';
+        vlen--;
+    }
+
     if (out_nlen) {
         *out_nlen = nlen;
     }
@@ -1276,12 +1276,12 @@ static int cli_resolve_exec_path(const char* input, char* resolved, uint32_t res
             return -1;
         }
     }
-    {
-        uint32_t path_len = (uint32_t)wasmos_sys_strlen(resolved);
-        if (path_len == 0u || path_len >= resolved_len) {
-            return -1;
-        }
+
+    uint32_t path_len = (uint32_t)wasmos_sys_strlen(resolved);
+    if (path_len == 0u || path_len >= resolved_len) {
+        return -1;
     }
+
     return 0;
 }
 
@@ -1783,88 +1783,86 @@ static int cli_handle_line(void) {
         g_pending_kind = PENDING_SPAWN;
         return 1;
     }
-    {
-        uint32_t name_len = 0;
-        while (g_line[name_len] != '\0' && g_line[name_len] != ' ' && g_line[name_len] != '\t') {
-            name_len++;
-        }
-        if (name_len == 0) {
-            return 0;
-        }
-        char cmd_name[96];
-        if (name_len >= sizeof(cmd_name)) {
-            name_len = (uint32_t)(sizeof(cmd_name) - 1);
-        }
-        for (uint32_t i = 0; i < name_len; ++i) {
-            cmd_name[i] = g_line[i];
-        }
-        cmd_name[name_len] = '\0';
 
-        char resolved[96];
-        uint32_t path_len = 0;
-        const char* args = 0;
-        uint32_t args_len = 0;
-        uint32_t write_off = 0;
-        int32_t fs_buf_size = 0;
-        uint32_t i = 0;
-        if (cli_resolve_exec_path(cmd_name, resolved, sizeof(resolved)) != 0) {
-            char msg[140];
-            int n = snprintf(msg, sizeof(msg), "no such command found: %s\n", cmd_name);
-            if (n > 0) {
-                console_write(msg);
-            } else {
-                console_write("no such command found\n");
-            }
-            return 0;
-        }
-        while (g_line[i] == ' ' || g_line[i] == '\t') {
-            i++;
-        }
-        while (g_line[i] && g_line[i] != ' ' && g_line[i] != '\t') {
-            i++;
-        }
-        if (g_line[i] == ' ' || g_line[i] == '\t') {
-            args = &g_line[i + 1u];
-            args_len = (uint32_t)wasmos_sys_strlen(args);
-        }
-        path_len = (uint32_t)wasmos_sys_strlen(resolved);
-        fs_buf_size = wasmos_xfer_buffer_size();
-        write_off = path_len + 1u;
-        if (path_len == 0u || path_len > 0xFFFu || fs_buf_size <= 0 ||
-            (int32_t)path_len >= fs_buf_size ||
-            (args_len > 0u && ((int32_t)write_off >= fs_buf_size ||
-                               (int32_t)(write_off + args_len) > fs_buf_size))) {
-            console_write("exec failed\n");
-            return 0;
-        }
-        /* Owner-push spawn: PM reads the caller's buffer via ownership. */
-        int32_t bid = wasmos_xfer_buffer_acquire((int32_t)(write_off + args_len + 1u));
-        if (bid < 0) {
-            console_write("exec failed\n");
-            return 0;
-        }
-        if (wasmos_xfer_buffer_write(bid, (int32_t)(uintptr_t)resolved, (int32_t)path_len, 0) !=
-            0) {
-            (void)wasmos_xfer_buffer_release(bid);
-            console_write("exec failed\n");
-            return 0;
-        }
-        if (args_len > 0u && wasmos_xfer_buffer_write(bid, (int32_t)(uintptr_t)args,
-                                                      (int32_t)args_len, (int32_t)write_off) != 0) {
-            (void)wasmos_xfer_buffer_release(bid);
-            console_write("exec failed\n");
-            return 0;
-        }
-        if (cli_send_proc(PROC_IPC_SPAWN_PATH, 0, ((uint32_t)bid << 12) | (path_len & 0xFFFu),
-                          (int32_t)args_len, 0) != 0) {
-            (void)wasmos_xfer_buffer_release(bid);
-            console_write("exec failed\n");
-            return 0;
-        }
-        g_pending_spawn_bid = bid;
-        g_pending_kind = PENDING_EXEC;
-        return 1;
+    uint32_t name_len = 0;
+    while (g_line[name_len] != '\0' && g_line[name_len] != ' ' && g_line[name_len] != '\t') {
+        name_len++;
     }
+    if (name_len == 0) {
+        return 0;
+    }
+    char cmd_name[96];
+    if (name_len >= sizeof(cmd_name)) {
+        name_len = (uint32_t)(sizeof(cmd_name) - 1);
+    }
+    for (uint32_t i = 0; i < name_len; ++i) {
+        cmd_name[i] = g_line[i];
+    }
+    cmd_name[name_len] = '\0';
+
+    char resolved[96];
+    uint32_t path_len = 0;
+    const char* args = 0;
+    uint32_t args_len = 0;
+    uint32_t write_off = 0;
+    int32_t fs_buf_size = 0;
+    uint32_t i = 0;
+    if (cli_resolve_exec_path(cmd_name, resolved, sizeof(resolved)) != 0) {
+        char msg[140];
+        int n = snprintf(msg, sizeof(msg), "no such command found: %s\n", cmd_name);
+        if (n > 0) {
+            console_write(msg);
+        } else {
+            console_write("no such command found\n");
+        }
+        return 0;
+    }
+    while (g_line[i] == ' ' || g_line[i] == '\t') {
+        i++;
+    }
+    while (g_line[i] && g_line[i] != ' ' && g_line[i] != '\t') {
+        i++;
+    }
+    if (g_line[i] == ' ' || g_line[i] == '\t') {
+        args = &g_line[i + 1u];
+        args_len = (uint32_t)wasmos_sys_strlen(args);
+    }
+    path_len = (uint32_t)wasmos_sys_strlen(resolved);
+    fs_buf_size = wasmos_xfer_buffer_size();
+    write_off = path_len + 1u;
+    if (path_len == 0u || path_len > 0xFFFu || fs_buf_size <= 0 ||
+        (int32_t)path_len >= fs_buf_size ||
+        (args_len > 0u &&
+         ((int32_t)write_off >= fs_buf_size || (int32_t)(write_off + args_len) > fs_buf_size))) {
+        console_write("exec failed\n");
+        return 0;
+    }
+    /* Owner-push spawn: PM reads the caller's buffer via ownership. */
+    int32_t bid = wasmos_xfer_buffer_acquire((int32_t)(write_off + args_len + 1u));
+    if (bid < 0) {
+        console_write("exec failed\n");
+        return 0;
+    }
+    if (wasmos_xfer_buffer_write(bid, (int32_t)(uintptr_t)resolved, (int32_t)path_len, 0) != 0) {
+        (void)wasmos_xfer_buffer_release(bid);
+        console_write("exec failed\n");
+        return 0;
+    }
+    if (args_len > 0u && wasmos_xfer_buffer_write(bid, (int32_t)(uintptr_t)args, (int32_t)args_len,
+                                                  (int32_t)write_off) != 0) {
+        (void)wasmos_xfer_buffer_release(bid);
+        console_write("exec failed\n");
+        return 0;
+    }
+    if (cli_send_proc(PROC_IPC_SPAWN_PATH, 0, ((uint32_t)bid << 12) | (path_len & 0xFFFu),
+                      (int32_t)args_len, 0) != 0) {
+        (void)wasmos_xfer_buffer_release(bid);
+        console_write("exec failed\n");
+        return 0;
+    }
+    g_pending_spawn_bid = bid;
+    g_pending_kind = PENDING_EXEC;
+    return 1;
 }
 
 static void cli_fail_and_stall(const char* msg) {

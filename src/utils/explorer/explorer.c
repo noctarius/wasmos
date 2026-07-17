@@ -545,49 +545,46 @@ static void explorer_open_selected(ui_context_t* ctx, int32_t id, void* user) {
         return;
     }
 
-    {
-        char full_path[EXPLORER_PATH_MAX + EXPLORER_NAME_MAX + 2];
-        char status[128];
-        struct stat st;
+    char full_path[EXPLORER_PATH_MAX + EXPLORER_NAME_MAX + 2];
+    char status[128];
+    struct stat st;
 
-        explorer_build_selected_path(full_path, sizeof(full_path), entry);
-        if (explorer_str_ends_with(entry->name, ".wap")) {
-            const size_t path_len = strlen(full_path);
-            int32_t pid = -1;
-            /* Owner-push spawn: acquire a buffer, write the path, and pack
-             * (buffer_id << 12 | path_len) into the spawn's path arg; PM reads
-             * it via ownership.  Release after the sync call returns. */
-            if (path_len > 0 && path_len <= 0xFFFu) {
-                int32_t bid = wasmos_xfer_buffer_acquire((int32_t)path_len);
-                if (bid >= 0) {
-                    if (wasmos_xfer_buffer_write(bid, (int32_t)(uintptr_t)full_path,
-                                                 (int32_t)path_len, 0) == 0) {
-                        pid = wasmos_sys_spawn_path_sync(
-                            g_proc_endpoint, g_proc_reply_endpoint,
-                            (int32_t)(((uint32_t)bid << 12) | ((uint32_t)path_len & 0xFFFu)), 2000,
-                            g_ctx.req_id++);
-                    }
-                    (void)wasmos_xfer_buffer_release(bid);
+    explorer_build_selected_path(full_path, sizeof(full_path), entry);
+    if (explorer_str_ends_with(entry->name, ".wap")) {
+        const size_t path_len = strlen(full_path);
+        int32_t pid = -1;
+        /* Owner-push spawn: acquire a buffer, write the path, and pack
+         * (buffer_id << 12 | path_len) into the spawn's path arg; PM reads
+         * it via ownership.  Release after the sync call returns. */
+        if (path_len > 0 && path_len <= 0xFFFu) {
+            int32_t bid = wasmos_xfer_buffer_acquire((int32_t)path_len);
+            if (bid >= 0) {
+                if (wasmos_xfer_buffer_write(bid, (int32_t)(uintptr_t)full_path, (int32_t)path_len,
+                                             0) == 0) {
+                    pid = wasmos_sys_spawn_path_sync(
+                        g_proc_endpoint, g_proc_reply_endpoint,
+                        (int32_t)(((uint32_t)bid << 12) | ((uint32_t)path_len & 0xFFFu)), 2000,
+                        g_ctx.req_id++);
                 }
+                (void)wasmos_xfer_buffer_release(bid);
             }
-            if (pid > 0) {
-                snprintf(status, sizeof(status), "Spawned %s (pid %d)", entry->name, (int)pid);
-            } else {
-                snprintf(status, sizeof(status), "Spawn failed for %s", entry->name);
-            }
-            explorer_set_status(status);
-            ui_mark_dirty(&g_ctx);
-            return;
         }
-        if (stat(full_path, &st) == 0) {
-            snprintf(status, sizeof(status), "File: %s (%u bytes)", entry->name,
-                     (unsigned)st.st_size);
+        if (pid > 0) {
+            snprintf(status, sizeof(status), "Spawned %s (pid %d)", entry->name, (int)pid);
         } else {
-            snprintf(status, sizeof(status), "File: %s", entry->name);
+            snprintf(status, sizeof(status), "Spawn failed for %s", entry->name);
         }
         explorer_set_status(status);
         ui_mark_dirty(&g_ctx);
+        return;
     }
+    if (stat(full_path, &st) == 0) {
+        snprintf(status, sizeof(status), "File: %s (%u bytes)", entry->name, (unsigned)st.st_size);
+    } else {
+        snprintf(status, sizeof(status), "File: %s", entry->name);
+    }
+    explorer_set_status(status);
+    ui_mark_dirty(&g_ctx);
 }
 
 static void explorer_activate_entry(ui_context_t* ctx, int32_t component_id, int32_t item_index,
@@ -598,12 +595,12 @@ static void explorer_activate_entry(ui_context_t* ctx, int32_t component_id, int
     if (item_index < 0 || item_index >= g_entry_count) {
         return;
     }
-    {
-        ui_component_t* list = ui_component_by_id(&g_ctx, g_list_id);
-        if (list && list->type == UI_COMPONENT_LIST_VIEW && list->component_data) {
-            ((ui_list_view_data_t*)list->component_data)->list.selected = item_index;
-        }
+
+    ui_component_t* list = ui_component_by_id(&g_ctx, g_list_id);
+    if (list && list->type == UI_COMPONENT_LIST_VIEW && list->component_data) {
+        ((ui_list_view_data_t*)list->component_data)->list.selected = item_index;
     }
+
     explorer_open_selected(&g_ctx, g_open_button_id, NULL);
 }
 

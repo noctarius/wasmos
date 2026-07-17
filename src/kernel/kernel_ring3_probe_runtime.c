@@ -96,15 +96,15 @@ int kernel_ring3_spawn_native_probe(uint32_t parent_pid, uint32_t* out_pid) {
     /* Explicitly map the top stack page as user-writable.  The default
      * mm_context_alloc_region mapping may be lost after paging_strip_low_slot;
      * this mirrors the pattern in spawn_ring3_fault_probe_named. */
-    {
-        uint64_t stack_top_page_virt = (stack.base + stack.size - 1u) & ~0xFFFULL;
-        uint64_t stack_top_page_phys = (stack.phys_base + stack.size - 1u) & ~0xFFFULL;
-        if (map_linear_pages(ctx->root_table, stack_top_page_virt, stack_top_page_phys, 0x1000u,
-                             MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE | MEM_REGION_FLAG_USER) !=
-            0) {
-            return -1;
-        }
+
+    uint64_t stack_top_page_virt = (stack.base + stack.size - 1u) & ~0xFFFULL;
+    uint64_t stack_top_page_phys = (stack.phys_base + stack.size - 1u) & ~0xFFFULL;
+    if (map_linear_pages(ctx->root_table, stack_top_page_virt, stack_top_page_phys, 0x1000u,
+                         MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE | MEM_REGION_FLAG_USER) !=
+        0) {
+        return -1;
     }
+
     user_rip = linear.base;
     user_rsp = stack.base + stack.size - 16u;
     if (process_set_user_entry(*out_pid, user_rip, user_rsp) != 0) {
@@ -172,15 +172,15 @@ int kernel_ring3_spawn_thread_lifecycle_probe(uint32_t parent_pid, uint32_t* out
         }
         region = (mem_region_t*)list_next(&it);
     }
-    {
-        uint64_t stack_top_page_virt = (stack.base + stack.size - 1u) & ~0xFFFULL;
-        uint64_t stack_top_page_phys = (stack.phys_base + stack.size - 1u) & ~0xFFFULL;
-        if (map_linear_pages(ctx->root_table, stack_top_page_virt, stack_top_page_phys, 0x1000u,
-                             MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE | MEM_REGION_FLAG_USER) !=
-            0) {
-            return -1;
-        }
+
+    uint64_t stack_top_page_virt = (stack.base + stack.size - 1u) & ~0xFFFULL;
+    uint64_t stack_top_page_phys = (stack.phys_base + stack.size - 1u) & ~0xFFFULL;
+    if (map_linear_pages(ctx->root_table, stack_top_page_virt, stack_top_page_phys, 0x1000u,
+                         MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE | MEM_REGION_FLAG_USER) !=
+        0) {
+        return -1;
     }
+
     user_rip = linear.base;
     user_rsp = stack.base + stack.size - 16u;
     if (process_set_user_entry(*out_pid, user_rip, user_rsp) != 0) {

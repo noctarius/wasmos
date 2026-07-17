@@ -144,11 +144,10 @@ static inline void ui_menu_item_popup_render(ui_context_t* ctx, ui_component_t* 
 
     /* Compute global screen origin for sub-popup positioning (popup x/y in screen). */
     int32_t popup_screen_x = 0, popup_screen_y = 0;
-    {
-        int32_t pw2 = 0, ph2 = 0;
-        const int32_t nc = ui_menu_item_child_count(ctx, mi);
-        ui_menu_item_popup_position(ctx, mi, nc, &popup_screen_x, &popup_screen_y, &pw2, &ph2);
-    }
+
+    int32_t pw2 = 0, ph2 = 0;
+    const int32_t nc = ui_menu_item_child_count(ctx, mi);
+    ui_menu_item_popup_position(ctx, mi, nc, &popup_screen_x, &popup_screen_y, &pw2, &ph2);
 
     int32_t row = 0;
     int32_t cid = mi->first_child_id;

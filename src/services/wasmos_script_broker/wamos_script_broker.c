@@ -123,13 +123,13 @@ static int32_t script_plan_write_string(int32_t buffer_id, uint32_t* io_offset, 
                                  (int32_t)*io_offset) != 0) {
         return -1;
     }
-    {
-        static const char nul = '\0';
-        if (wasmos_xfer_buffer_write(buffer_id, (int32_t)(uintptr_t)&nul, 1,
-                                     (int32_t)(*io_offset + len)) != 0) {
-            return -1;
-        }
+
+    static const char nul = '\0';
+    if (wasmos_xfer_buffer_write(buffer_id, (int32_t)(uintptr_t)&nul, 1,
+                                 (int32_t)(*io_offset + len)) != 0) {
+        return -1;
     }
+
     *out_offset = *io_offset;
     *out_len = len;
     *io_offset += len + 1u;

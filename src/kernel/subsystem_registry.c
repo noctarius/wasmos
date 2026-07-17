@@ -549,13 +549,13 @@ const wasmos_subsystem_registry_entry_t* wasmos_subsystem_registry_find(const ch
         return 0;
     }
     ksync_spinlock_lock(&g_subsystem_lock);
-    {
-        wasmos_subsystem_registry_entry_t* entry = subsystem_registry_find_locked(request_tag);
-        if (entry) {
-            ksync_spinlock_unlock(&g_subsystem_lock);
-            return entry;
-        }
+
+    wasmos_subsystem_registry_entry_t* entry = subsystem_registry_find_locked(request_tag);
+    if (entry) {
+        ksync_spinlock_unlock(&g_subsystem_lock);
+        return entry;
     }
+
     ksync_spinlock_unlock(&g_subsystem_lock);
     return 0;
 }

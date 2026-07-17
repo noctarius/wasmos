@@ -71,13 +71,13 @@ void timer_handle_irq(void) {
      * All CPUs still call process_tick() for their own scheduling quantum. */
     if (cpu_local()->cpu_id == 0)
 #endif
-    {
+
         g_timer_ticks++;
-        if (g_timer_ticks == g_timer_log_threshold) {
-            g_timer_log_pending = 1;
-            g_timer_log_threshold += 100;
-        }
+    if (g_timer_ticks == g_timer_log_threshold) {
+        g_timer_log_pending = 1;
+        g_timer_log_threshold += 100;
     }
+
     /* process_tick() owns quantum accounting and reschedule triggering. */
     process_tick();
 }

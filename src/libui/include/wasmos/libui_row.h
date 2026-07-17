@@ -41,14 +41,14 @@ static inline void ui_layout_row(ui_context_t* ctx, ui_component_t* p) {
         c->bounds.y = y;
         c->bounds.w = w;
         c->bounds.h = inner_h > 8 ? inner_h : 8;
-        {
-            const ui_component_ops_t* child_ops = &ui_component_ops[c->type];
-            if (child_ops->layout) {
-                child_ops->layout(ctx, c);
-            } else if (c->first_child_id > 0) {
-                ui_layout_vertical(ctx, c->id);
-            }
+
+        const ui_component_ops_t* child_ops = &ui_component_ops[c->type];
+        if (child_ops->layout) {
+            child_ops->layout(ctx, c);
+        } else if (c->first_child_id > 0) {
+            ui_layout_vertical(ctx, c->id);
         }
+
         x += w + p->gap_px;
         child_id = c->next_sibling_id;
     }

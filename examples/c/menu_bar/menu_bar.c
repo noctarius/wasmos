@@ -223,13 +223,12 @@ static int32_t g_group_counts[MAX_APP_GROUPS];
 static void refresh_app_list(void) {
     /* Don't tear down the component tree while the Apps popup is open —
      * remove_all_children destroys sub-popups and clears focus. */
-    {
-        const ui_component_t* mi = ui_component_by_id(&g_ctx, g_apps_mi_id);
-        if (mi) {
-            const ui_menu_item_data_t* md = (const ui_menu_item_data_t*)mi->component_data;
-            if (md && md->dropdown_open)
-                return;
-        }
+
+    const ui_component_t* mi = ui_component_by_id(&g_ctx, g_apps_mi_id);
+    if (mi) {
+        const ui_menu_item_data_t* md = (const ui_menu_item_data_t*)mi->component_data;
+        if (md && md->dropdown_open)
+            return;
     }
 
     int32_t ngroups = 0;
@@ -354,46 +353,44 @@ int main(int argc, char** argv) {
 
     /* "WasmOS" system menu */
     const int32_t brand_id = ui_component_create_menu_item(&g_ctx);
-    {
-        ui_component_t* brand = ui_component_by_id(&g_ctx, brand_id);
-        if (brand) {
-            brand->bg_color = 0xFF1A2233u;
-            brand->fg_color = 0xFF88C4EEu;
-            brand->padding_px = 10;
-            brand->preferred_h = 90;
-        }
-        ui_component_set_text(&g_ctx, brand_id, "WasmOS");
-        ui_component_append_child(&g_ctx, g_ctx.root_id, brand_id);
 
-        /* Reboot and Shutdown as leaf children */
-        const int32_t reboot_id = ui_menu_item_add_item(&g_ctx, brand_id, "Reboot");
-        ui_component_t* reboot_mi = ui_component_by_id(&g_ctx, reboot_id);
-        if (reboot_mi) {
-            reboot_mi->clickable = 1;
-            reboot_mi->on_click = on_reboot;
-        }
+    ui_component_t* brand = ui_component_by_id(&g_ctx, brand_id);
+    if (brand) {
+        brand->bg_color = 0xFF1A2233u;
+        brand->fg_color = 0xFF88C4EEu;
+        brand->padding_px = 10;
+        brand->preferred_h = 90;
+    }
+    ui_component_set_text(&g_ctx, brand_id, "WasmOS");
+    ui_component_append_child(&g_ctx, g_ctx.root_id, brand_id);
 
-        const int32_t shutdown_id = ui_menu_item_add_item(&g_ctx, brand_id, "Shutdown");
-        ui_component_t* shutdown_mi = ui_component_by_id(&g_ctx, shutdown_id);
-        if (shutdown_mi) {
-            shutdown_mi->clickable = 1;
-            shutdown_mi->on_click = on_shutdown;
-        }
+    /* Reboot and Shutdown as leaf children */
+    const int32_t reboot_id = ui_menu_item_add_item(&g_ctx, brand_id, "Reboot");
+    ui_component_t* reboot_mi = ui_component_by_id(&g_ctx, reboot_id);
+    if (reboot_mi) {
+        reboot_mi->clickable = 1;
+        reboot_mi->on_click = on_reboot;
+    }
+
+    const int32_t shutdown_id = ui_menu_item_add_item(&g_ctx, brand_id, "Shutdown");
+    ui_component_t* shutdown_mi = ui_component_by_id(&g_ctx, shutdown_id);
+    if (shutdown_mi) {
+        shutdown_mi->clickable = 1;
+        shutdown_mi->on_click = on_shutdown;
     }
 
     /* "Apps" menu item */
     g_apps_mi_id = ui_component_create_menu_item(&g_ctx);
-    {
-        ui_component_t* apps_mi = ui_component_by_id(&g_ctx, g_apps_mi_id);
-        if (apps_mi) {
-            apps_mi->bg_color = 0xFF1A2233u;
-            apps_mi->fg_color = 0xFFDDE8F0u;
-            apps_mi->padding_px = 10;
-            apps_mi->preferred_h = 70;
-        }
-        ui_component_set_text(&g_ctx, g_apps_mi_id, "Apps");
-        ui_component_append_child(&g_ctx, g_ctx.root_id, g_apps_mi_id);
+
+    ui_component_t* apps_mi = ui_component_by_id(&g_ctx, g_apps_mi_id);
+    if (apps_mi) {
+        apps_mi->bg_color = 0xFF1A2233u;
+        apps_mi->fg_color = 0xFFDDE8F0u;
+        apps_mi->padding_px = 10;
+        apps_mi->preferred_h = 70;
     }
+    ui_component_set_text(&g_ctx, g_apps_mi_id, "Apps");
+    ui_component_append_child(&g_ctx, g_ctx.root_id, g_apps_mi_id);
 
     refresh_app_list();
     update_clock();

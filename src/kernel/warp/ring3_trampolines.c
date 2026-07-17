@@ -165,27 +165,26 @@ int warp_r3_setup(uint64_t* out_user_root, uint64_t* out_stack_phys) {
      * (results pointer) under the SysV ABI. */
     /* TODO(smp-tlb): replace entry-stub diagnostics with a cleaner per-call
      * capture path once WARP ring-3 bring-up is stable again. */
-    {
-        uint8_t* et = rp + 0x20;
-        uint64_t capture_va = WARP_R3_STACK_BASE + 64ULL;
-        uint64_t target_va = WARP_R3_STACK_BASE + 56ULL;
 
-        et[0] = 0x49;
-        et[1] = 0xba;
-        *(uint64_t*)(void*)&et[2] = capture_va;
-        et[10] = 0x49;
-        et[11] = 0x89;
-        et[12] = 0x22;
-        et[13] = 0x49;
-        et[14] = 0xbb;
-        *(uint64_t*)(void*)&et[15] = target_va;
-        et[23] = 0x4d;
-        et[24] = 0x8b;
-        et[25] = 0x1b;
-        et[26] = 0x41;
-        et[27] = 0xff;
-        et[28] = 0xe3;
-    }
+    uint8_t* et = rp + 0x20;
+    uint64_t capture_va = WARP_R3_STACK_BASE + 64ULL;
+    uint64_t target_va = WARP_R3_STACK_BASE + 56ULL;
+
+    et[0] = 0x49;
+    et[1] = 0xba;
+    *(uint64_t*)(void*)&et[2] = capture_va;
+    et[10] = 0x49;
+    et[11] = 0x89;
+    et[12] = 0x22;
+    et[13] = 0x49;
+    et[14] = 0xbb;
+    *(uint64_t*)(void*)&et[15] = target_va;
+    et[23] = 0x4d;
+    et[24] = 0x8b;
+    et[25] = 0x1b;
+    et[26] = 0x41;
+    et[27] = 0xff;
+    et[28] = 0xe3;
 
     if (map_user_page(root, WARP_R3_RET_TRAMPOLINE, ret_phys, rx_flags) != 0) {
         klog_write("[warp-r3] failed to map return trampoline\n");

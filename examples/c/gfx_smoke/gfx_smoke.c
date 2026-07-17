@@ -541,28 +541,27 @@ int main(int argc, char** argv) {
         return GFX_SMOKE_E_UNMAP0;
     }
 
-    {
-        int32_t new_buffer_id = 0, new_shmem_id = 0, new_stride = 0;
-        uint8_t* new_base = 0;
-        if (send_gfx(gfx_ep, reply_ep, req++, GFX_IPC_ALLOC_SHARED_BUFFER, g_ctx1.window_id,
-                     GFX_RESIZE_W, GFX_RESIZE_H, 0, &reply) != 0 ||
-            reply.status != GFX_STATUS_OK) {
-            puts("[test] gfx smoke resize-alloc failed");
-            return GFX_SMOKE_E_ALLOC1;
-        }
-        new_buffer_id = reply.arg1;
-        new_shmem_id = reply.arg2;
-        new_stride = reply.arg3;
-        if (map_shared_buffer_ptr(new_shmem_id, new_stride, GFX_RESIZE_H, &new_base) != 0) {
-            return GFX_SMOKE_E_MAP1;
-        }
-        g_ctx1.buffer_id = new_buffer_id;
-        g_ctx1.shmem_id = new_shmem_id;
-        g_ctx1.stride_bytes = new_stride;
-        g_ctx1.width = GFX_RESIZE_W;
-        g_ctx1.height = GFX_RESIZE_H;
-        g_ctx1.mapped_base = new_base;
+    int32_t new_buffer_id = 0, new_shmem_id = 0, new_stride = 0;
+    uint8_t* new_base = 0;
+    if (send_gfx(gfx_ep, reply_ep, req++, GFX_IPC_ALLOC_SHARED_BUFFER, g_ctx1.window_id,
+                 GFX_RESIZE_W, GFX_RESIZE_H, 0, &reply) != 0 ||
+        reply.status != GFX_STATUS_OK) {
+        puts("[test] gfx smoke resize-alloc failed");
+        return GFX_SMOKE_E_ALLOC1;
     }
+    new_buffer_id = reply.arg1;
+    new_shmem_id = reply.arg2;
+    new_stride = reply.arg3;
+    if (map_shared_buffer_ptr(new_shmem_id, new_stride, GFX_RESIZE_H, &new_base) != 0) {
+        return GFX_SMOKE_E_MAP1;
+    }
+    g_ctx1.buffer_id = new_buffer_id;
+    g_ctx1.shmem_id = new_shmem_id;
+    g_ctx1.stride_bytes = new_stride;
+    g_ctx1.width = GFX_RESIZE_W;
+    g_ctx1.height = GFX_RESIZE_H;
+    g_ctx1.mapped_base = new_base;
+
     damage_shmem_id = create_damage_rect_shmem(gfx_ep, GFX_RESIZE_W, GFX_RESIZE_H);
     if (damage_shmem_id < 0) {
         return GFX_SMOKE_E_DAMAGE;

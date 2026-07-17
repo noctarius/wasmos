@@ -1003,15 +1003,15 @@ static int process_spawn_as_internal(uint32_t parent_pid, const char* name, proc
                               &slot->main_tid) != 0) {
         return -1;
     }
-    {
-        thread_t* main_thread = process_main_thread(slot);
-        if (!main_thread) {
-            return -1;
-        }
-        main_thread->time_slice_ticks = PROCESS_DEFAULT_SLICE_TICKS;
-        main_thread->ticks_remaining = main_thread->time_slice_ticks;
-        main_thread->ticks_total = 0;
+
+    thread_t* main_thread = process_main_thread(slot);
+    if (!main_thread) {
+        return -1;
     }
+    main_thread->time_slice_ticks = PROCESS_DEFAULT_SLICE_TICKS;
+    main_thread->ticks_remaining = main_thread->time_slice_ticks;
+    main_thread->ticks_total = 0;
+
     slot->thread_count = 1;
     slot->live_thread_count = 1;
     uint32_t stack_pages = (PROCESS_STACK_SIZE + PAGE_SIZE - 1u) / PAGE_SIZE;
@@ -1025,13 +1025,13 @@ static int process_spawn_as_internal(uint32_t parent_pid, const char* name, proc
     slot->ctx.cs = KERNEL_CS_SELECTOR;
     slot->ctx.ss = KERNEL_DS_SELECTOR;
     slot->ctx.root_table = ctx->root_table;
-    {
-        thread_t* main_thread = process_main_thread(slot);
-        if (main_thread) {
-            main_thread->ctx = slot->ctx;
-            sched_thread_init(main_thread, sched_default_prio(slot->is_idle, 0, 0, 0));
-        }
+
+    main_thread = process_main_thread(slot);
+    if (main_thread) {
+        main_thread->ctx = slot->ctx;
+        sched_thread_init(main_thread, sched_default_prio(slot->is_idle, 0, 0, 0));
     }
+
     ksync_spinlock_init(&slot->runtime_lock);
     slot->runtime_lock_owner = 0;
     sched_event_init(&slot->wait_event, SCHED_EVENT_TYPE_PROCESS);
@@ -1170,15 +1170,15 @@ int process_spawn_idle(const char* name, process_entry_t entry, void* arg, uint3
     if (thread_spawn_main(pid, name ? name : "", &slot->main_tid) != 0) {
         return -1;
     }
-    {
-        thread_t* main_thread = process_main_thread(slot);
-        if (!main_thread) {
-            return -1;
-        }
-        main_thread->time_slice_ticks = PROCESS_DEFAULT_SLICE_TICKS;
-        main_thread->ticks_remaining = main_thread->time_slice_ticks;
-        main_thread->ticks_total = 0;
+
+    thread_t* main_thread = process_main_thread(slot);
+    if (!main_thread) {
+        return -1;
     }
+    main_thread->time_slice_ticks = PROCESS_DEFAULT_SLICE_TICKS;
+    main_thread->ticks_remaining = main_thread->time_slice_ticks;
+    main_thread->ticks_total = 0;
+
     slot->thread_count = 1;
     slot->live_thread_count = 1;
     slot->is_idle = 1;
@@ -1193,16 +1193,16 @@ int process_spawn_idle(const char* name, process_entry_t entry, void* arg, uint3
     slot->ctx.cs = KERNEL_CS_SELECTOR;
     slot->ctx.ss = KERNEL_DS_SELECTOR;
     slot->ctx.root_table = paging_get_root_table();
-    {
-        thread_t* main_thread = process_main_thread(slot);
-        if (main_thread) {
-            main_thread->ctx = slot->ctx;
-            sched_thread_init(main_thread, SCHED_PRIO_IDLE);
-            main_thread->cpu_affinity = 1u << cpu_local()->cpu_id;
-            cpu_sched()->idle = main_thread;
-            cpu_local()->idle_thread = main_thread;
-        }
+
+    main_thread = process_main_thread(slot);
+    if (main_thread) {
+        main_thread->ctx = slot->ctx;
+        sched_thread_init(main_thread, SCHED_PRIO_IDLE);
+        main_thread->cpu_affinity = 1u << cpu_local()->cpu_id;
+        cpu_sched()->idle = main_thread;
+        cpu_local()->idle_thread = main_thread;
     }
+
     ksync_spinlock_init(&slot->runtime_lock);
     slot->runtime_lock_owner = 0;
     sched_event_init(&slot->wait_event, SCHED_EVENT_TYPE_PROCESS);
@@ -1391,13 +1391,13 @@ int process_set_user_entry(uint32_t pid, uint64_t rip, uint64_t user_rsp) {
     proc->ctx.ss = USER_DS_SELECTOR;
     proc->ctx.user_rsp = user_rsp;
     proc->ctx.rflags = 0x200;
-    {
-        thread_t* main_thread = process_main_thread(proc);
-        if (main_thread) {
-            main_thread->ctx = proc->ctx;
-            main_thread->ctx.root_table = user_root;
-        }
+
+    thread_t* main_thread = process_main_thread(proc);
+    if (main_thread) {
+        main_thread->ctx = proc->ctx;
+        main_thread->ctx.root_table = user_root;
     }
+
     return 0;
 }
 
@@ -1752,26 +1752,25 @@ static int process_schedule_once_impl(void) {
          * to the return address of the upcoming call to process_run_worker_on_stack.
          * Only callee-saved regs + RSP need updating; RIP is always label-1
          * (set by the last context_switch_high(&cpu_local()->sched_ctx,...) call). */
-        {
-            process_context_t* _sctx = &cpu_local()->sched_ctx;
-            uintptr_t _rsp;
-            __asm__ volatile(
-                "mov %%rsp, %[rsp]\n"
-                "mov %%r15, %[r15]\n"
-                "mov %%r14, %[r14]\n"
-                "mov %%r13, %[r13]\n"
-                "mov %%r12, %[r12]\n"
-                "mov %%rbp, %[rbp]\n"
-                "mov %%rbx, %[rbx]\n"
-                "pushfq; pop %[rf]"
-                : [rsp] "=r"(_rsp), [r15] "=m"(_sctx->r15), [r14] "=m"(_sctx->r14),
-                  [r13] "=m"(_sctx->r13), [r12] "=m"(_sctx->r12), [rbp] "=m"(_sctx->rbp),
-                  [rbx] "=m"(_sctx->rbx), [rf] "=m"(_sctx->rflags)
-                :
-                : "memory");
-            _sctx->rax = (uint64_t)PROCESS_RUN_BLOCKED;
-            _sctx->rsp = _rsp - 8u;
-        }
+
+        process_context_t* _sctx = &cpu_local()->sched_ctx;
+        uintptr_t _rsp;
+        __asm__ volatile("mov %%rsp, %[rsp]\n"
+                         "mov %%r15, %[r15]\n"
+                         "mov %%r14, %[r14]\n"
+                         "mov %%r13, %[r13]\n"
+                         "mov %%r12, %[r12]\n"
+                         "mov %%rbp, %[rbp]\n"
+                         "mov %%rbx, %[rbx]\n"
+                         "pushfq; pop %[rf]"
+                         : [rsp] "=r"(_rsp), [r15] "=m"(_sctx->r15), [r14] "=m"(_sctx->r14),
+                           [r13] "=m"(_sctx->r13), [r12] "=m"(_sctx->r12), [rbp] "=m"(_sctx->rbp),
+                           [rbx] "=m"(_sctx->rbx), [rf] "=m"(_sctx->rflags)
+                         :
+                         : "memory");
+        _sctx->rax = (uint64_t)PROCESS_RUN_BLOCKED;
+        _sctx->rsp = _rsp - 8u;
+
         thread->ctx.rsp = 0;
         cpu_local()->last_run_result = process_run_worker_on_stack(proc, thread);
     } else {
@@ -2032,40 +2031,39 @@ int process_preempt_from_irq(irq_frame_t* frame) {
     if (cpu_local()->current_process->in_hostcall) {
         return 0;
     }
-    {
-        uint64_t cs = frame->cs;
-        uint8_t from_user = (uint8_t)((cs & 0x3u) == 0x3u);
-        uint8_t from_kernel = (uint8_t)((cs & 0x3u) == 0x0u);
-        uint8_t valid = 1;
 
-        if ((!from_user && !from_kernel) || frame->rip == 0) {
+    uint64_t cs = frame->cs;
+    uint8_t from_user = (uint8_t)((cs & 0x3u) == 0x3u);
+    uint8_t from_kernel = (uint8_t)((cs & 0x3u) == 0x0u);
+    uint8_t valid = 1;
+
+    if ((!from_user && !from_kernel) || frame->rip == 0) {
+        valid = 0;
+    } else if (from_kernel && cs != KERNEL_CS_SELECTOR) {
+        valid = 0;
+    } else if (from_user) {
+        if ((frame->user_ss & 0x3u) != 0x3u || frame->user_rsp == 0) {
             valid = 0;
-        } else if (from_kernel && cs != KERNEL_CS_SELECTOR) {
-            valid = 0;
-        } else if (from_user) {
-            if ((frame->user_ss & 0x3u) != 0x3u || frame->user_rsp == 0) {
-                valid = 0;
-            }
         }
-        if (!valid) {
-            g_trap_frame_invalid_reports++;
-            klog_write("[watchdog] trap frame invalid cs=");
-            serial_write_hex64(frame->cs);
-            klog_write("[watchdog] rip=");
-            serial_write_hex64(frame->rip);
-            klog_write("[watchdog] user_ss=");
-            serial_write_hex64(frame->user_ss);
-            klog_write("[watchdog] user_rsp=");
-            serial_write_hex64(frame->user_rsp);
-            klog_write("[watchdog] reports=");
-            serial_write_hex64(g_trap_frame_invalid_reports);
-            klog_write("\n");
-            process_clear_resched();
-            return 0;
-        }
-        if (from_kernel) {
-            return 0;
-        }
+    }
+    if (!valid) {
+        g_trap_frame_invalid_reports++;
+        klog_write("[watchdog] trap frame invalid cs=");
+        serial_write_hex64(frame->cs);
+        klog_write("[watchdog] rip=");
+        serial_write_hex64(frame->rip);
+        klog_write("[watchdog] user_ss=");
+        serial_write_hex64(frame->user_ss);
+        klog_write("[watchdog] user_rsp=");
+        serial_write_hex64(frame->user_rsp);
+        klog_write("[watchdog] reports=");
+        serial_write_hex64(g_trap_frame_invalid_reports);
+        klog_write("\n");
+        process_clear_resched();
+        return 0;
+    }
+    if (from_kernel) {
+        return 0;
     }
 
     process_context_t* ctx =
@@ -2353,10 +2351,10 @@ int process_info_at_stats(uint32_t index, uint32_t* out_pid, uint32_t* out_paren
              * accounting once per-context page presence tracking is available.
              */
             out_stats->rss_est_bytes = out_stats->vm_total_bytes;
-            {
-                thread_t* mt = thread_get(proc->main_tid);
-                out_stats->last_cpu = mt ? mt->last_cpu : 0;
-            }
+
+            thread_t* mt = thread_get(proc->main_tid);
+            out_stats->last_cpu = mt ? mt->last_cpu : 0;
+
             return 0;
         }
         current++;

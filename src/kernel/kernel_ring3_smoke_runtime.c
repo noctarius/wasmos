@@ -263,21 +263,20 @@ int kernel_ring3_spawn_smoke_process(uint32_t parent_pid, uint32_t* out_pid) {
         return -1;
     }
     memcpy(ring3_code_patched, ring3_code, sizeof(ring3_code_patched));
-    {
-        const uint32_t offsets[] = {30u, 42u, 76u, 98u, 120u, 142u, 164u};
-        const uint32_t values[] = {ring3_notify_ep,      ring3_notify_control_ep,
-                                   ring3_call_denied_ep, ring3_call_control_ep,
-                                   ring3_call_echo_ep,   ring3_call_echo_ep,
-                                   ring3_call_echo_ep};
-        for (uint32_t i = 0; i < 7u; ++i) {
-            uint32_t value = values[i];
-            uint32_t offset = offsets[i];
-            ring3_code_patched[offset + 0] = (uint8_t)(value & 0xFFu);
-            ring3_code_patched[offset + 1] = (uint8_t)((value >> 8) & 0xFFu);
-            ring3_code_patched[offset + 2] = (uint8_t)((value >> 16) & 0xFFu);
-            ring3_code_patched[offset + 3] = (uint8_t)((value >> 24) & 0xFFu);
-        }
+
+    const uint32_t offsets[] = {30u, 42u, 76u, 98u, 120u, 142u, 164u};
+    const uint32_t values[] = {ring3_notify_ep,       ring3_notify_control_ep, ring3_call_denied_ep,
+                               ring3_call_control_ep, ring3_call_echo_ep,      ring3_call_echo_ep,
+                               ring3_call_echo_ep};
+    for (uint32_t i = 0; i < 7u; ++i) {
+        uint32_t value = values[i];
+        uint32_t offset = offsets[i];
+        ring3_code_patched[offset + 0] = (uint8_t)(value & 0xFFu);
+        ring3_code_patched[offset + 1] = (uint8_t)((value >> 8) & 0xFFu);
+        ring3_code_patched[offset + 2] = (uint8_t)((value >> 16) & 0xFFu);
+        ring3_code_patched[offset + 3] = (uint8_t)((value >> 24) & 0xFFu);
     }
+
     if (mm_copy_to_user(proc->context_id, linear.base, ring3_code_patched,
                         (uint32_t)sizeof(ring3_code_patched)) != 0 ||
         map_linear_pages(ctx->root_table, linear.base, linear.phys_base,

@@ -281,16 +281,11 @@ void kmain(boot_info_t* boot_info) {
     cpu_enable_interrupts();
     smp_cpus_up();
 
-#if WASMOS_SMP
-    for (uint32_t _i = 1u; _i < g_cpu_count; _i++) {
-        if (!g_cpus[_i].started) {
-            continue;
-        }
-        if (process_spawn_idle_ap(_i) != 0) {
-            serial_printf("[kernel] idle-ap %u spawn failed\n", _i);
-        }
-    }
-#endif
+    /* Note: each AP installs its own per-CPU idle thread in smp_ap_c_entry
+     * BEFORE it joins the scheduler loop, so there is no BSP-side idle-AP spawn
+     * pass here anymore — doing it on the BSP after smp_cpus_up() left a window
+     * in which an already-running AP could schedule with a NULL idle and panic
+     * ("no runnable thread (idle not dispatchable)"). */
 
 #ifdef WASMOS_SCHED_SMP_STRESS
     /* Standalone SMP scheduler stress test, compiled in only for the dedicated

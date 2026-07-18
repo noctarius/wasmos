@@ -107,7 +107,20 @@ void smp_ap_c_entry(uint32_t cpu_id) {
      * that no timer interrupt can preempt against an uninitialized sched_ctx. */
     process_ap_init();
 
-    /* Enable this AP's LAPIC and start its periodic timer at 250 Hz. */
+    /* Install THIS AP's per-CPU idle thread BEFORE it joins the scheduler loop.
+     * cpu_sched_pick_next falls back to cpu_local()->idle_thread whenever the
+     * ready queue is empty; if the AP reached kernel_boot_run_scheduler_loop()
+     * before its idle thread existed, the first process_schedule_once() would
+     * find a NULL idle and panic ("no runnable thread (idle not dispatchable)").
+     * Installing it on the AP here (rather than on the BSP after smp_cpus_up)
+     * finishes setup before the AP ever schedules, closing that bringup race. */
+    if (process_spawn_idle_ap(cpu_id) != 0) {
+        serial_printf("[smp] idle-ap %u install failed\n", cpu_id);
+    }
+
+    /* Enable this AP's LAPIC and start its periodic timer at 250 Hz.  A tick
+     * before anything is dispatched is inert (process_tick returns early while
+     * current_pid == 0), and the idle thread is now already in place. */
     lapic_ap_enable(250u);
 
     /* Signal the BSP that this AP has completed initialisation. */

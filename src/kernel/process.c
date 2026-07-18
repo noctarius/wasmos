@@ -1367,8 +1367,11 @@ int process_spawn_idle_ap(uint32_t cpu_id) {
     thread->ticks_total = 0;
     sched_thread_init(thread, SCHED_PRIO_IDLE);
     thread->cpu_affinity = 1u << cpu_id;
-    g_idle_process->thread_count++;
-    g_idle_process->live_thread_count++;
+    /* Atomic: APs now self-install their idle threads concurrently during
+     * bringup, so these shared idle-process counters can be bumped from several
+     * CPUs at once. */
+    __atomic_fetch_add(&g_idle_process->thread_count, 1u, __ATOMIC_RELAXED);
+    __atomic_fetch_add(&g_idle_process->live_thread_count, 1u, __ATOMIC_RELAXED);
     /* AP idle threads are never enqueued; dispatched only via the per-CPU
      * fallback path in cpu_sched_pick_next. */
     g_cpus[cpu_id].idle_thread = thread;

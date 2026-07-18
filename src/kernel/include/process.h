@@ -98,6 +98,13 @@ typedef enum {
      * distinguish live vs. dead. */
     PROCESS_STATE_ALIVE = PROCESS_STATE_READY,
     PROCESS_STATE_REAPING = 6,
+    /* NEW: slot claimed + initialising; never schedulable; sole target of a
+     * free-slot claim (UNUSED/DEAD -> NEW) and sole source of ->LIVE. */
+    PROCESS_STATE_NEW = 7,
+    /* DEAD: fully reaped, resources freed, slot reclaimable. Distinct from
+     * UNUSED (pristine, never allocated) but equivalent for claim purposes.
+     * A generation ends here; the next allocation runs DEAD -> NEW. */
+    PROCESS_STATE_DEAD = 8,
 } process_state_t;
 
 typedef enum {

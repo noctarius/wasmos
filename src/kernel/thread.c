@@ -3,7 +3,6 @@
  * its owner process's address space.  THREAD_MAX_COUNT limits total live threads. */
 #include "thread.h"
 #include "arch/x86_64/smp.h"
-#include "sched.h"
 #include "sync/spinlock.h"
 
 static thread_t g_threads[THREAD_MAX_COUNT];
@@ -38,6 +37,12 @@ static void thread_clear_ctx(process_context_t* ctx) {
     ctx->root_table = 0;
 }
 
+/* thread.c-internal terminal scrub and the SOLE sanctioned sink to UNUSED(DEAD):
+ * the reaper's ZOMBIE->UNUSED, boot-init (garbage->UNUSED), and spawn-abort
+ * (NEW->UNUSED).  Because it lives inside thread.* (the state owner) and always
+ * runs under g_thread_table_lock, it is not an "external" writer — it does not
+ * need thread_transit (which gates the live edges + external callers), and
+ * cannot go through it anyway (boot-init has no valid `from`). */
 static void thread_reset_slot(thread_t* thread) {
     if (!thread) {
         return;
@@ -117,7 +122,11 @@ int thread_spawn_in_owner(uint32_t owner_pid, const char* name, thread_state_t i
     }
     slot->tid = g_next_tid++;
     slot->owner_pid = owner_pid;
-    slot->state = initial_state;
+    /* Claim the free (UNUSED/DEAD) slot into NEW first: it is never schedulable
+     * and never a legal source of ->READY until fully initialised below.  All
+     * under the table lock, so the claim + publish is atomic w.r.t. other
+     * spawns; the CAS form keeps the edge honest per the state machine. */
+    slot->state = THREAD_STATE_NEW;
     slot->block_reason = initial_reason;
     slot->is_kernel_worker = 0;
     slot->kstack_base = 0;
@@ -135,6 +144,12 @@ int thread_spawn_in_owner(uint32_t owner_pid, const char* name, thread_state_t i
     slot->detached = 0;
     slot->exit_status = 0;
     if (thread_copy_name(slot, name ? name : "") != 0) {
+        thread_reset_slot(slot);
+        ksync_spinlock_unlock(&g_thread_table_lock);
+        return -1;
+    }
+    /* Publish: NEW -> READY|BLOCKED once the slot is fully built. */
+    if (!thread_transit(slot, THREAD_STATE_NEW, initial_state)) {
         thread_reset_slot(slot);
         ksync_spinlock_unlock(&g_thread_table_lock);
         return -1;
@@ -222,7 +237,9 @@ void thread_mark_owner_exited(uint32_t owner_pid, int32_t exit_status) {
             continue;
         }
         thread->exit_status = exit_status;
-        thread->state = THREAD_STATE_ZOMBIE;
+        /* Tombstone via the state machine (*->ZOMBIE).  Legal from
+         * READY/RUNNING/BLOCKED; idempotent if already ZOMBIE. */
+        thread_transit(thread, thread->state, THREAD_STATE_ZOMBIE);
         thread->block_reason = THREAD_BLOCK_NONE;
     }
     ksync_spinlock_unlock(&g_thread_table_lock);
@@ -238,13 +255,61 @@ void thread_reap_owner(uint32_t owner_pid) {
         if (thread->state == THREAD_STATE_UNUSED || thread->owner_pid != owner_pid) {
             continue;
         }
-        /* Dequeue from any ready list BEFORE nulling the slot, or a still-enqueued
-         * sibling becomes a dangling node the scheduler later hands out with
-         * owner_pid==0 (SCHED_R_PICK panic). */
-        cpu_sched_remove_thread(thread);
         thread_reset_slot(thread);
     }
     ksync_spinlock_unlock(&g_thread_table_lock);
+}
+
+/* Legal thread state-machine edges (see design/smp-reap-fsm-reland):
+ *   UNUSED(DEAD) -> NEW                       (allocator claims a free slot)
+ *   NEW          -> READY | BLOCKED           (spawn, after init)
+ *   READY        -> RUNNING | ZOMBIE
+ *   RUNNING      -> READY | BLOCKED | ZOMBIE
+ *   BLOCKED      -> READY | ZOMBIE
+ *   ZOMBIE       -> UNUSED(DEAD)              (reaper / CPU0 only)
+ * ZOMBIE is monotonic (only the reaper leaves it), which is what makes an
+ * "all threads zombie" observation stable. */
+static int thread_transition_legal(thread_state_t from, thread_state_t to) {
+    if (from == to) {
+        return 1; /* idempotent no-op is always allowed */
+    }
+    /* The state machine enforces exactly two invariants; everything else among
+     * the live states (READY/RUNNING/BLOCKED interconversions) is permitted so
+     * we never reject a legitimate scheduler move:
+     *   1. ZOMBIE is MONOTONIC — it may only advance to UNUSED (the reaper).
+     *      Nothing may resurrect a zombie; this makes "all threads zombie"
+     *      a stable predicate for the reap gate.
+     *   2. A free (UNUSED/DEAD) slot may only enter NEW — never jump straight
+     *      to a schedulable state (the free-slot-activation hole).  NEW then
+     *      publishes to READY/BLOCKED once fully initialised. */
+    if (from == THREAD_STATE_ZOMBIE) {
+        return to == THREAD_STATE_UNUSED;
+    }
+    if (from == THREAD_STATE_UNUSED) {
+        return to == THREAD_STATE_NEW;
+    }
+    if (to == THREAD_STATE_UNUSED || to == THREAD_STATE_NEW) {
+        return 0; /* only the two edges above reach UNUSED/NEW */
+    }
+    if (from == THREAD_STATE_NEW) {
+        return to == THREAD_STATE_READY || to == THREAD_STATE_BLOCKED;
+    }
+    /* from is READY/RUNNING/BLOCKED; to is READY/RUNNING/BLOCKED/ZOMBIE — all ok. */
+    return 1;
+}
+
+int thread_transit(thread_t* thread, thread_state_t from, thread_state_t to) {
+    if (!thread) {
+        return 0;
+    }
+    if (!thread_transition_legal(from, to)) {
+        return 0;
+    }
+    uint32_t expected = (uint32_t)from;
+    return __atomic_compare_exchange_n((uint32_t*)&thread->state, &expected, (uint32_t)to, 0,
+                                       __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)
+               ? 1
+               : 0;
 }
 
 void thread_set_state(uint32_t tid, thread_state_t state, thread_block_reason_t reason) {
@@ -254,8 +319,14 @@ void thread_set_state(uint32_t tid, thread_state_t state, thread_block_reason_t 
         ksync_spinlock_unlock(&g_thread_table_lock);
         return;
     }
-    thread->state = state;
-    thread->block_reason = reason;
+    /* Enforce the state machine: reject illegal edges (notably any attempt to
+     * leave ZOMBIE, which would resurrect a thread the reaper is tearing down
+     * and break the "all threads zombie" gate).  Under the table lock so the
+     * read-decide-write is atomic. */
+    if (thread_transition_legal(thread->state, state)) {
+        thread->state = state;
+        thread->block_reason = reason;
+    }
     ksync_spinlock_unlock(&g_thread_table_lock);
 }
 
@@ -296,8 +367,6 @@ void thread_reap(uint32_t tid) {
         ksync_spinlock_unlock(&g_thread_table_lock);
         return;
     }
-    /* See thread_reap_owner: unlink from any ready list before reset. */
-    cpu_sched_remove_thread(thread);
     thread_reset_slot(thread);
     ksync_spinlock_unlock(&g_thread_table_lock);
 }

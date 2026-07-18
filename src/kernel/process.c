@@ -39,19 +39,6 @@ static uint32_t g_next_pid;
 static ksync_spinlock_t g_process_table_lock;
 /* Scheduler state lives in cpu_local_t (per-CPU) — see smp.h. */
 static process_t* g_idle_process;
-
-/* Per-CPU in-flight dispatch marker (owner pid, 0 = none) for the reap-vs-
- * dispatch handshake. The dispatcher SEQ_CST-stores the pid it is about to
- * switch into, then fences and re-reads the owner's state (aborting if it is
- * dying); the reaper SEQ_CST-stores REAPING, fences, then SEQ_CST-loads every
- * CPU's marker (NO global locks). Both sides do store(own-intent) -> fence ->
- * load(other-intent) in one SEQ_CST total order, so at least one observes the
- * other: the reaper defers or the dispatcher aborts before touching a ctx/
- * stack the reaper would free. TODO(aarch64): accesses are already __atomic. */
-static volatile uint32_t g_dispatching[WASMOS_MAX_CPUS];
-/* Cheap gate: set when a reap is deferred (a thread was in-flight); the
- * switch-away path only sweeps for stranded deferred zombies when this is set. */
-static volatile int g_deferred_reap_pending;
 /* g_in_context_switch removed: each CPU now tracks in_context_switch in
  * cpu_local_t (at offset 17 from GS:0) to avoid false preemption suppression
  * across CPUs when multiple context switches run simultaneously. */
@@ -282,7 +269,7 @@ static void process_sched_invariant_fail(const char* msg, uint64_t a, uint64_t b
 static void process_set_blocked(process_t* proc, thread_t* thread, process_block_reason_t reason,
                                 thread_block_reason_t thread_reason);
 static void process_set_ready(process_t* proc, thread_t* thread);
-static void process_set_running(process_t* proc, thread_t* thread);
+static int process_set_running(process_t* proc, thread_t* thread);
 static uint8_t process_has_waiters(uint32_t target_pid);
 static void process_try_auto_reap(process_t* proc);
 static process_run_result_t process_thread_spawn_default_worker(process_t* process, uint32_t tid,
@@ -584,6 +571,90 @@ static void process_trampoline(void) {
 
 extern void process_preempt_trampoline(void);
 
+/* Process-slot state machine (mirror of thread_transit).  Every ->state write
+ * funnels through process_transit so the whole lifecycle lives in one place:
+ *
+ *   UNUSED ─┐
+ *           ├▶ NEW ▶ LIVE(READY⇄RUNNING⇄BLOCKED) ▶ ZOMBIE ▶ REAPING ▶ DEAD ─┐
+ *   DEAD  ──┘                                                                 │
+ *      ▲──────────────────────── DEAD▶NEW (slot reuse) ───────────────────────┘
+ *
+ * Invariants enforced (everything else among LIVE states is permitted so a
+ * legitimate scheduler move is never rejected):
+ *   1. ZOMBIE is monotonic — only ▶ REAPING (the reap claim); nothing
+ *      resurrects a zombie, so "process zombie" is a stable predicate.
+ *   2. REAPING ▶ DEAD only (reap completion publishes the reusable slot).
+ *   3. A free slot (UNUSED/DEAD) may only enter NEW — never jump straight to a
+ *      schedulable state (the free-slot-activation hole).
+ *   4. NEW publishes to a LIVE state (or straight to ZOMBIE on spawn failure).
+ * UNUSED is produced ONLY by pristine table init (direct write), never as a
+ * transit target. */
+static int process_transition_legal(process_state_t from, process_state_t to) {
+    if (from == to) {
+        return 1; /* idempotent no-op is always allowed */
+    }
+    if (from == PROCESS_STATE_ZOMBIE) {
+        return to == PROCESS_STATE_REAPING;
+    }
+    if (from == PROCESS_STATE_REAPING) {
+        return to == PROCESS_STATE_DEAD;
+    }
+    if (from == PROCESS_STATE_UNUSED || from == PROCESS_STATE_DEAD) {
+        return to == PROCESS_STATE_NEW;
+    }
+    if (to == PROCESS_STATE_UNUSED || to == PROCESS_STATE_NEW ||
+        to == PROCESS_STATE_REAPING || to == PROCESS_STATE_DEAD) {
+        return 0; /* only the guarded edges above reach these */
+    }
+    if (from == PROCESS_STATE_NEW) {
+        return to == PROCESS_STATE_READY || to == PROCESS_STATE_RUNNING ||
+               to == PROCESS_STATE_BLOCKED || to == PROCESS_STATE_ZOMBIE;
+    }
+    /* from is READY/RUNNING/BLOCKED; to is READY/RUNNING/BLOCKED/ZOMBIE. */
+    return 1;
+}
+
+static int process_transit(process_t* proc, process_state_t from, process_state_t to) {
+    if (!proc) {
+        return 0;
+    }
+    if (!process_transition_legal(from, to)) {
+        return 0;
+    }
+    uint32_t expected = (uint32_t)from;
+    return __atomic_compare_exchange_n((uint32_t*)&proc->state, &expected, (uint32_t)to, 0,
+                                       __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)
+               ? 1
+               : 0;
+}
+
+/* Retrying transit for writers that know the target but not a stable `from`.
+ * Re-reads the current state and CASes to `to`, retrying if it loses a race to
+ * concurrent LIVE churn (e.g. another thread of the same process moving
+ * READY⇄RUNNING on another CPU).  Returns 1 if proc is now in `to`; 0 if a
+ * monotonic barrier forbids it (current state is a terminal/beyond `to`, most
+ * importantly ZOMBIE/REAPING/DEAD when `to` is a LIVE state).  Terminates: each
+ * losing retry re-reads a state that only ever advances toward the ZOMBIE sink,
+ * so the legality check eventually returns 0 or the CAS wins. */
+static int process_force_transit(process_t* proc, process_state_t to) {
+    if (!proc) {
+        return 0;
+    }
+    for (;;) {
+        process_state_t from =
+            (process_state_t)__atomic_load_n((uint32_t*)&proc->state, __ATOMIC_ACQUIRE);
+        if (from == to) {
+            return 1;
+        }
+        if (!process_transition_legal(from, to)) {
+            return 0;
+        }
+        if (process_transit(proc, from, to)) {
+            return 1;
+        }
+    }
+}
+
 static void process_reset_slot(process_t* proc) {
     if (!proc) {
         return;
@@ -595,7 +666,11 @@ static void process_reset_slot(process_t* proc) {
     proc->thread_count = 0;
     proc->live_thread_count = 0;
     proc->exiting = 0;
-    proc->state = PROCESS_STATE_UNUSED;
+    /* ->state is NOT written here: this zeroes the bookkeeping only.  The
+     * pristine table init publishes UNUSED directly; the reaper publishes the
+     * terminal state via process_transit(REAPING -> DEAD).  Zeroing state here
+     * would transiently expose a REAPING slot as free (UNUSED) and let another
+     * CPU claim it mid-reap. */
     proc->block_reason = PROCESS_BLOCK_NONE;
     proc->wait_target_pid = 0;
     proc->exit_status = 0;
@@ -663,7 +738,8 @@ static process_t* process_find_slot(void) {
     /* Must be called with g_process_table_lock held. */
     process_t* table = process_table();
     for (uint32_t i = 0; i < PROCESS_MAX_COUNT; ++i) {
-        if (table[i].state == PROCESS_STATE_UNUSED) {
+        /* Both free states are claimable: UNUSED (pristine) and DEAD (reaped). */
+        if (table[i].state == PROCESS_STATE_UNUSED || table[i].state == PROCESS_STATE_DEAD) {
             return &table[i];
         }
     }
@@ -705,8 +781,8 @@ static void process_wake_waiters(uint32_t target_pid) {
     for (uint32_t i = 0; i < PROCESS_MAX_COUNT; ++i) {
         process_t* proc = &g_processes[i];
         uint8_t woke_any = 0;
-        if (proc->state == PROCESS_STATE_UNUSED || proc->state == PROCESS_STATE_ZOMBIE ||
-            proc->state == PROCESS_STATE_REAPING) {
+        if (proc->state == PROCESS_STATE_UNUSED || proc->state == PROCESS_STATE_DEAD ||
+            proc->state == PROCESS_STATE_ZOMBIE || proc->state == PROCESS_STATE_REAPING) {
             continue;
         }
         for (uint32_t j = 0;; ++j) {
@@ -741,22 +817,26 @@ static void process_wake_waiters(uint32_t target_pid) {
                 sched_enqueue_thread(waiter);
             }
         }
-        if (woke_any && proc->state == PROCESS_STATE_BLOCKED) {
-            proc->state = PROCESS_STATE_READY;
+        if (woke_any && process_transit(proc, PROCESS_STATE_BLOCKED, PROCESS_STATE_READY)) {
             proc->block_reason = PROCESS_BLOCK_NONE;
         }
     }
 }
 
 static void process_mark_exited(process_t* proc, int32_t exit_status) {
-    if (!proc || proc->state == PROCESS_STATE_UNUSED) {
+    if (!proc || proc->state == PROCESS_STATE_UNUSED || proc->state == PROCESS_STATE_DEAD) {
         return;
     }
     proc->exit_status = exit_status;
     proc->exiting = 1;
     proc->block_reason = PROCESS_BLOCK_NONE;
     proc->wait_target_pid = 0;
-    proc->state = PROCESS_STATE_ZOMBIE;
+    /* Force LIVE/NEW -> ZOMBIE, retrying against concurrent LIVE churn so a
+     * racing set_ready/set_running on another CPU cannot make us drop the
+     * transition and leave the process alive.  A 0 return means the slot is
+     * ALREADY ZOMBIE/REAPING/DEAD (a concurrent kill won) — all terminal — so
+     * the postcondition "proc is dead" holds either way. */
+    (void)process_force_transit(proc, PROCESS_STATE_ZOMBIE);
     thread_mark_owner_exited(proc->pid, exit_status);
     proc->live_thread_count = 0;
     process_wake_waiters(proc->pid);
@@ -768,8 +848,8 @@ static uint8_t process_has_waiters(uint32_t target_pid) {
     }
     for (uint32_t i = 0; i < PROCESS_MAX_COUNT; ++i) {
         process_t* proc = &g_processes[i];
-        if (proc->state == PROCESS_STATE_UNUSED || proc->state == PROCESS_STATE_ZOMBIE ||
-            proc->state == PROCESS_STATE_REAPING) {
+        if (proc->state == PROCESS_STATE_UNUSED || proc->state == PROCESS_STATE_DEAD ||
+            proc->state == PROCESS_STATE_ZOMBIE || proc->state == PROCESS_STATE_REAPING) {
             continue;
         }
         for (uint32_t j = 0;; ++j) {
@@ -802,38 +882,11 @@ static void process_reap_claim(process_t* proc) {
     if (!proc) {
         return;
     }
-    uint32_t expected = (uint32_t)PROCESS_STATE_ZOMBIE;
-    if (!__atomic_compare_exchange_n((uint32_t*)&proc->state, &expected,
-                                     (uint32_t)PROCESS_STATE_REAPING, 0, __ATOMIC_ACQ_REL,
-                                     __ATOMIC_RELAXED)) {
-        return;
-    }
-    /* Reap-vs-dispatch in-flight guard (lockless Dekker, reaper side). Another
-     * CPU may be mid-dispatch into a thread of this proc (its g_dispatching entry
-     * == proc->pid) and about to context_switch into a ctx/stack process_reap is
-     * about to free. We have published REAPING; full-barrier, then SEQ_CST-read
-     * every CPU's marker. Because the dispatcher does store(g_dispatching=pid) ->
-     * fence -> load(state) and we do store(REAPING) -> fence -> load(g_dispatching)
-     * in one SEQ_CST total order, at least one side observes the other: if any
-     * CPU is in-flight for this proc, revert to ZOMBIE and DEFER (the dispatcher
-     * re-triggers a sweep at switch-away via g_deferred_reap_pending); otherwise
-     * the dispatcher will have seen REAPING and aborted, so the frees are safe.
-     * No cs->locks — the reaper never serializes scheduling. */
-    __atomic_thread_fence(__ATOMIC_SEQ_CST);
-    uint32_t cpu_limit = g_cpu_count;
-    if (cpu_limit > WASMOS_MAX_CPUS) {
-        cpu_limit = WASMOS_MAX_CPUS;
-    }
-    int in_flight = 0;
-    for (uint32_t i = 0; i < cpu_limit; ++i) {
-        if (__atomic_load_n(&g_dispatching[i], __ATOMIC_SEQ_CST) == proc->pid) {
-            in_flight = 1;
-            break;
-        }
-    }
-    if (in_flight) {
-        __atomic_store_n((uint32_t*)&proc->state, (uint32_t)PROCESS_STATE_ZOMBIE, __ATOMIC_RELEASE);
-        __atomic_store_n(&g_deferred_reap_pending, 1, __ATOMIC_RELEASE);
+    /* The single ZOMBIE -> REAPING claim: only the CPU whose CAS wins proceeds
+     * to free the slot; losers no-op.  process_transit enforces that ZOMBIE can
+     * ONLY advance to REAPING, so a concurrent state change cannot slip a
+     * non-zombie into the reaper. */
+    if (!process_transit(proc, PROCESS_STATE_ZOMBIE, PROCESS_STATE_REAPING)) {
         return;
     }
     process_reap(proc);
@@ -867,21 +920,6 @@ void process_reap_zombie_pid(uint32_t pid) {
 static void process_reap(process_t* proc) {
     if (!proc) {
         return;
-    }
-    /* Teardown order: unlink every thread from its run-queue FIRST so none can
-     * be (re)dispatched, THEN free kstacks / proc-stack / mm-context, THEN reset
-     * the slots (thread_reap_owner, below). Freeing before dequeue (the old
-     * order) could hand a CPU a freed ctx/stack. process_reap_claim's in-flight
-     * guard has already ensured no thread of proc is mid-dispatch. */
-    for (uint32_t i = 0;; ++i) {
-        uint32_t tid = 0;
-        if (thread_owner_tid_at(proc->pid, i, &tid) != 0) {
-            break;
-        }
-        thread_t* thread = thread_get(tid);
-        if (thread) {
-            cpu_sched_remove_thread(thread);
-        }
     }
     for (uint32_t i = 0;; ++i) {
         uint32_t tid = 0;
@@ -922,7 +960,18 @@ static void process_reap(process_t* proc) {
         native_driver_heap_release(proc->pid);
     }
     thread_reap_owner(proc->pid);
+    /* All owner threads are now reaped (off every queue, slots freed) and all
+     * resources released.  Zero the bookkeeping, then publish the terminal
+     * state as the single atomic step that makes the slot reclaimable.  State
+     * stays REAPING throughout the free above, so no CPU can claim it early. */
     process_reset_slot(proc);
+    /* Must succeed: this CPU owns the slot exclusively (it won the ZOMBIE ->
+     * REAPING claim), so nothing else can have moved it.  A failure means the
+     * slot would leak in REAPING forever — surface it. */
+    if (!process_transit(proc, PROCESS_STATE_REAPING, PROCESS_STATE_DEAD)) {
+        process_sched_invariant_fail("reap publish REAPING->DEAD failed", proc->pid,
+                                     (uint64_t)proc->state);
+    }
 }
 
 process_context_t* cpu_local_sched_ctx(void) {
@@ -968,6 +1017,7 @@ void process_init(void) {
     thread_init();
     for (uint32_t i = 0; i < PROCESS_MAX_COUNT; ++i) {
         process_reset_slot(&g_processes[i]);
+        g_processes[i].state = PROCESS_STATE_UNUSED; /* pristine free slot */
     }
     cpu_local()->sched_ctx.root_table = paging_get_root_table();
     cpu_sched_init(cpu_sched());
@@ -1017,8 +1067,14 @@ static int process_spawn_as_internal(uint32_t parent_pid, const char* name, proc
         ksync_spinlock_unlock(&g_process_table_lock);
         return -1;
     }
-    /* Reserve the slot immediately so no other CPU grabs it. */
-    slot->state = PROCESS_STATE_ALIVE;
+    /* Claim the free slot immediately (UNUSED/DEAD -> NEW) so no other CPU
+     * grabs it.  Stays NEW — not schedulable — until fully initialised, then
+     * publishes to a LIVE state at the end.  Must succeed: find_slot returned a
+     * free slot under this same lock, so nothing else can have raced it. */
+    if (!process_transit(slot, slot->state, PROCESS_STATE_NEW)) {
+        ksync_spinlock_unlock(&g_process_table_lock);
+        process_sched_invariant_fail("spawn claim ->NEW failed", (uint64_t)slot->state, 0);
+    }
 
     uint32_t pid = g_next_pid++;
     ksync_spinlock_unlock(&g_process_table_lock);
@@ -1038,7 +1094,7 @@ static int process_spawn_as_internal(uint32_t parent_pid, const char* name, proc
     slot->thread_count = 0;
     slot->live_thread_count = 0;
     slot->exiting = 0;
-    slot->state = PROCESS_STATE_READY;
+    /* state stays NEW here; published to LIVE below once init completes. */
     slot->block_reason = PROCESS_BLOCK_NONE;
     slot->wait_target_pid = 0;
     slot->exit_status = 0;
@@ -1117,8 +1173,15 @@ static int process_spawn_as_internal(uint32_t parent_pid, const char* name, proc
         trace_write("[sched] spawn preempt-busy stack top=");
         trace_do(serial_write_hex64(slot->stack_top));
     }
+    /* Publish: NEW -> LIVE.  Parked spawns land in BLOCKED (unparked later);
+     * normal spawns land READY and are enqueued.  Must succeed: the slot is
+     * still NEW (never published, so no scheduler/kill path can reach it). */
+    process_state_t initial_proc_state =
+        enqueue_initial ? PROCESS_STATE_READY : PROCESS_STATE_BLOCKED;
+    if (!process_transit(slot, PROCESS_STATE_NEW, initial_proc_state)) {
+        process_sched_invariant_fail("spawn publish NEW->LIVE failed", pid, (uint64_t)slot->state);
+    }
     if (!enqueue_initial) {
-        slot->state = PROCESS_STATE_BLOCKED;
         slot->block_reason = PROCESS_BLOCK_NONE;
     } else {
         sched_spawn_thread(process_main_thread(slot));
@@ -1153,8 +1216,7 @@ int process_unpark_pid(uint32_t pid) {
     if (!thread_wake_if_blocked(t->tid)) {
         return 0;
     }
-    if (proc->state == PROCESS_STATE_BLOCKED) {
-        proc->state = PROCESS_STATE_READY;
+    if (process_transit(proc, PROCESS_STATE_BLOCKED, PROCESS_STATE_READY)) {
         proc->block_reason = PROCESS_BLOCK_NONE;
     }
     if (list_head_empty(&t->sched_node)) {
@@ -1192,6 +1254,10 @@ int process_spawn_idle(const char* name, process_entry_t entry, void* arg, uint3
     if (!slot) {
         return -1;
     }
+    /* Claim the free slot (boot, single-threaded here). Must succeed. */
+    if (!process_transit(slot, slot->state, PROCESS_STATE_NEW)) {
+        process_sched_invariant_fail("idle spawn claim ->NEW failed", (uint64_t)slot->state, 0);
+    }
 
     uint32_t pid = g_next_pid++;
     mm_context_t* ctx = mm_context_create(pid);
@@ -1206,7 +1272,11 @@ int process_spawn_idle(const char* name, process_entry_t entry, void* arg, uint3
     slot->thread_count = 0;
     slot->live_thread_count = 0;
     slot->exiting = 0;
-    slot->state = PROCESS_STATE_READY;
+    /* Idle is never reaped; publish LIVE now (NEW -> READY). Must succeed. */
+    if (!process_transit(slot, PROCESS_STATE_NEW, PROCESS_STATE_READY)) {
+        process_sched_invariant_fail("idle spawn publish NEW->READY failed", pid,
+                                     (uint64_t)slot->state);
+    }
     slot->block_reason = PROCESS_BLOCK_NONE;
     slot->wait_target_pid = 0;
     slot->exit_status = 0;
@@ -1330,7 +1400,8 @@ int process_thread_spawn_worker_internal(uint32_t owner_pid, const char* name,
     if (!owner || !entry || !out_tid) {
         return -1;
     }
-    if (owner->state == PROCESS_STATE_UNUSED || owner->state == PROCESS_STATE_ZOMBIE ||
+    if (owner->state == PROCESS_STATE_UNUSED || owner->state == PROCESS_STATE_DEAD ||
+        owner->state == PROCESS_STATE_NEW || owner->state == PROCESS_STATE_ZOMBIE ||
         owner->state == PROCESS_STATE_REAPING || owner->exiting) {
         return -1;
     }
@@ -1371,7 +1442,8 @@ int process_thread_spawn_user_internal(uint32_t owner_pid, const char* name, uin
     if (!owner || !out_tid || entry_rip == 0 || user_stack_top == 0) {
         return -1;
     }
-    if (owner->state == PROCESS_STATE_UNUSED || owner->state == PROCESS_STATE_ZOMBIE ||
+    if (owner->state == PROCESS_STATE_UNUSED || owner->state == PROCESS_STATE_DEAD ||
+        owner->state == PROCESS_STATE_NEW || owner->state == PROCESS_STATE_ZOMBIE ||
         owner->state == PROCESS_STATE_REAPING || owner->exiting) {
         return -1;
     }
@@ -1721,20 +1793,8 @@ static int process_schedule_once_impl(void) {
         }
     }
     process_t* proc = thread ? process_owner_for_thread(thread) : 0;
-    if (!thread) {
+    if (!thread || !proc || !proc->entry) {
         return SCHED_R_PICK;
-    }
-    if (!proc || !proc->entry) {
-        /* Picked a thread whose owner is gone (reaped / recycled pid) or not yet
-         * fully published (spawn in progress). DROP, don't panic: clear the
-         * in-flight marker, and if it is still a live READY thread whose proc
-         * merely hasn't finished publishing entry, re-enqueue so it isn't lost;
-         * otherwise leave it dropped. Benign retry return (not in the loop's
-         * fatal set), so the scheduler simply re-picks. */
-        if (proc && !proc->entry && thread->state == THREAD_STATE_READY) {
-            sched_enqueue_thread(thread);
-        }
-        return SCHED_R_NOTREADY;
     }
     /* Thread state alone determines runnability.
      * Note: the idle thread (RUNNING on another CPU) no longer reaches here —
@@ -1746,11 +1806,11 @@ static int process_schedule_once_impl(void) {
         return SCHED_R_NOTREADY;
     }
 
-    /* Publish the in-flight marker (owner pid) for THIS cpu before dispatch, so
-     * the reaper's lockless SEQ_CST scan sees it. Paired with the state re-read
-     * below (Dekker). */
-    __atomic_store_n(&g_dispatching[cpu_local()->cpu_id], proc->pid, __ATOMIC_SEQ_CST);
-    process_set_running(proc, thread);
+    if (!process_set_running(proc, thread)) {
+        /* Process raced to a terminal state between the READY check and now;
+         * do not dispatch it.  Its thread will be reaped via the zombie path. */
+        return SCHED_R_ZOMBIE;
+    }
     if (thread->ticks_remaining == 0) {
         thread->ticks_remaining = thread->time_slice_ticks;
     }
@@ -1774,26 +1834,6 @@ static int process_schedule_once_impl(void) {
     }
     thread_set_current(thread ? thread->tid : 0);
     critical_section_leave();
-    /* Reap-vs-dispatch handshake (dispatcher side, Dekker). We stored this cpu's
-     * g_dispatching=proc->pid above; full-barrier, then re-read the owner state.
-     * If a concurrent exit/reap advanced it to ZOMBIE/REAPING (or exiting),
-     * ABORT before touching run_ctx/proc or context-switching into a ctx/stack
-     * the reaper may free. The SEQ_CST store+fence here paired with the reaper's
-     * REAPING store+fence+load guarantees at least one side sees the other. */
-    __atomic_thread_fence(__ATOMIC_SEQ_CST);
-    if (proc->state == PROCESS_STATE_ZOMBIE || proc->state == PROCESS_STATE_REAPING ||
-        proc->exiting) {
-        __atomic_store_n(&g_dispatching[cpu_local()->cpu_id], 0u, __ATOMIC_SEQ_CST);
-        cpu_local()->in_scheduler = 1;
-        critical_section_enter();
-        cpu_local()->current_process = 0;
-        cpu_local()->current_pid = 0;
-        cpu_local()->current_thread = 0;
-        thread_set_current(0);
-        critical_section_leave();
-        process_try_auto_reap(proc);
-        return SCHED_R_ZOMBIE;
-    }
     /* Ring3 transitions use TSS.rsp0 as the kernel entry stack. Keep it aligned
      * to the scheduled process stack so user-mode interrupts/syscalls have a
      * deterministic kernel stack landing point. */
@@ -1803,7 +1843,6 @@ static int process_schedule_once_impl(void) {
     cpu_local()->sched_ctx.root_table = paging_get_root_table();
     if (!run_ctx) {
         klog_write("[sched] thread ctx missing\n");
-        __atomic_store_n(&g_dispatching[cpu_local()->cpu_id], 0u, __ATOMIC_SEQ_CST);
         cpu_local()->in_scheduler = 1;
         critical_section_enter();
         cpu_local()->current_process = 0;
@@ -1829,7 +1868,6 @@ static int process_schedule_once_impl(void) {
     }
     if (run_ctx->root_table == 0) {
         klog_write("[sched] target root missing\n");
-        __atomic_store_n(&g_dispatching[cpu_local()->cpu_id], 0u, __ATOMIC_SEQ_CST);
         cpu_local()->in_scheduler = 1;
         critical_section_enter();
         cpu_local()->current_process = 0;
@@ -1877,22 +1915,6 @@ static int process_schedule_once_impl(void) {
         }
 #endif
         context_switch_high(&cpu_local()->sched_ctx, run_ctx);
-    }
-    /* Switched away: this cpu no longer holds a thread in-flight. Clear the
-     * marker (SEQ_CST) before the post-run reap below. */
-    __atomic_store_n(&g_dispatching[cpu_local()->cpu_id], 0u, __ATOMIC_SEQ_CST);
-    /* Guaranteed deferred-reap retry: a reap deferred because THIS (or another)
-     * cpu was in-flight is otherwise stranded once its threads stop running (the
-     * per-proc auto-reap below only covers the proc this cpu just ran). Gated on
-     * the pending flag so it is free in the common case. */
-    if (__atomic_load_n(&g_deferred_reap_pending, __ATOMIC_ACQUIRE)) {
-        __atomic_store_n(&g_deferred_reap_pending, 0, __ATOMIC_RELEASE);
-        for (uint32_t i = 0; i < PROCESS_MAX_COUNT; ++i) {
-            process_t* z = &g_processes[i];
-            if (z->state == PROCESS_STATE_ZOMBIE && z->auto_reap) {
-                process_reap_claim(z);
-            }
-        }
     }
     g_sched_switch_count++;
     cpu_local()->dispatch_count++;
@@ -1970,7 +1992,10 @@ static int process_schedule_once_impl(void) {
                     sched_enqueue_thread(next);
                 }
             } else {
-                proc->state = PROCESS_STATE_BLOCKED;
+                /* No runnable sibling left: park the process.  Best-effort —
+                 * a 0 return means it raced to a terminal state, in which case
+                 * there is nothing to block. */
+                (void)process_force_transit(proc, PROCESS_STATE_BLOCKED);
             }
         }
         if (reap_detached) {
@@ -2305,6 +2330,7 @@ uint32_t process_count_active(void) {
     uint32_t count = 0;
     for (uint32_t i = 0; i < PROCESS_MAX_COUNT; ++i) {
         if (g_processes[i].state != PROCESS_STATE_UNUSED &&
+            g_processes[i].state != PROCESS_STATE_DEAD &&
             g_processes[i].state != PROCESS_STATE_REAPING) {
             count++;
         }
@@ -2323,6 +2349,7 @@ int process_info_at(uint32_t index, uint32_t* out_pid, const char** out_name) {
     uint32_t current = 0;
     for (uint32_t i = 0; i < PROCESS_MAX_COUNT; ++i) {
         if (g_processes[i].state == PROCESS_STATE_UNUSED ||
+            g_processes[i].state == PROCESS_STATE_DEAD ||
             g_processes[i].state == PROCESS_STATE_ZOMBIE ||
             g_processes[i].state == PROCESS_STATE_REAPING) {
             continue;
@@ -2345,6 +2372,7 @@ int process_info_at_ex(uint32_t index, uint32_t* out_pid, uint32_t* out_parent_p
     uint32_t current = 0;
     for (uint32_t i = 0; i < PROCESS_MAX_COUNT; ++i) {
         if (g_processes[i].state == PROCESS_STATE_UNUSED ||
+            g_processes[i].state == PROCESS_STATE_DEAD ||
             g_processes[i].state == PROCESS_STATE_ZOMBIE ||
             g_processes[i].state == PROCESS_STATE_REAPING) {
             continue;
@@ -2432,7 +2460,8 @@ int process_info_at_stats(uint32_t index, uint32_t* out_pid, uint32_t* out_paren
         /* Include ZOMBIE so `ps` shows not-yet-reaped children (state "zmb"),
          * like Linux's Z/defunct — makes leaked/unreaped slots visible.  Skip
          * only truly-free slots and the transient in-reap state. */
-        if (proc->state == PROCESS_STATE_UNUSED || proc->state == PROCESS_STATE_REAPING) {
+        if (proc->state == PROCESS_STATE_UNUSED || proc->state == PROCESS_STATE_DEAD ||
+            proc->state == PROCESS_STATE_REAPING) {
             continue;
         }
         if (current == index) {
@@ -2504,7 +2533,10 @@ static void process_set_blocked(process_t* proc, thread_t* thread, process_block
         process_sched_invariant_fail("set_blocked null", addr_cast(uint64_t, proc),
                                      addr_cast(uint64_t, thread));
     }
-    proc->state = PROCESS_STATE_BLOCKED;
+    /* If the process raced to a terminal state, do not block its thread. */
+    if (!process_force_transit(proc, PROCESS_STATE_BLOCKED)) {
+        return;
+    }
     proc->block_reason = reason;
     thread_set_state(thread->tid, THREAD_STATE_BLOCKED, thread_reason);
 }
@@ -2517,12 +2549,18 @@ static void process_set_ready(process_t* proc, thread_t* thread) {
     if (proc->state == PROCESS_STATE_ZOMBIE || proc->exiting) {
         process_sched_invariant_fail("set_ready zombie", proc->pid, thread->tid);
     }
-    proc->state = PROCESS_STATE_READY;
+    /* If the process raced to ZOMBIE after the guard above, do NOT make its
+     * thread runnable — that would enqueue a thread under a dead process. */
+    if (!process_force_transit(proc, PROCESS_STATE_READY)) {
+        return;
+    }
     proc->block_reason = PROCESS_BLOCK_NONE;
     thread_set_state(thread->tid, THREAD_STATE_READY, THREAD_BLOCK_NONE);
 }
 
-static void process_set_running(process_t* proc, thread_t* thread) {
+/* Returns 1 if proc is now RUNNING, 0 if it raced to a terminal state and must
+ * NOT be dispatched. */
+static int process_set_running(process_t* proc, thread_t* thread) {
     if (!proc || !thread) {
         process_sched_invariant_fail("set_running null", addr_cast(uint64_t, proc),
                                      addr_cast(uint64_t, thread));
@@ -2530,8 +2568,11 @@ static void process_set_running(process_t* proc, thread_t* thread) {
     if (proc->state == PROCESS_STATE_ZOMBIE || proc->exiting) {
         process_sched_invariant_fail("set_running zombie", proc->pid, thread->tid);
     }
-    proc->state = PROCESS_STATE_RUNNING;
+    if (!process_force_transit(proc, PROCESS_STATE_RUNNING)) {
+        return 0;
+    }
     thread_set_state(thread->tid, THREAD_STATE_RUNNING, THREAD_BLOCK_NONE);
+    return 1;
 }
 
 static void process_wake_thread_joiner(process_t* owner, thread_t* exited) {

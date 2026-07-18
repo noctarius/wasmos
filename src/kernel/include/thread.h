@@ -11,11 +11,12 @@
 #define THREAD_NAME_MAX 64
 
 typedef enum {
-    THREAD_STATE_UNUSED = 0,
+    THREAD_STATE_UNUSED = 0, /* DEAD/free: slot reclaimable; zero-initialised = free. */
     THREAD_STATE_READY,
     THREAD_STATE_RUNNING,
     THREAD_STATE_BLOCKED,
-    THREAD_STATE_ZOMBIE
+    THREAD_STATE_ZOMBIE,
+    THREAD_STATE_NEW, /* claimed + initialising; never schedulable; sole source of ->READY/->BLOCKED */
 } thread_state_t;
 
 typedef enum {
@@ -95,6 +96,11 @@ int thread_owner_tid_at(uint32_t owner_pid, uint32_t index, uint32_t* out_tid);
 void thread_mark_owner_exited(uint32_t owner_pid, int32_t exit_status);
 void thread_reap_owner(uint32_t owner_pid);
 void thread_set_state(uint32_t tid, thread_state_t state, thread_block_reason_t reason);
+/* The SOLE sanctioned writer of thread->state: attempt an atomic (CAS) transition
+ * `from`->`to`.  Returns 1 iff the state was exactly `from` and is now `to`; 0 if
+ * another CPU changed it first or the edge is illegal per the thread state machine.
+ * Callers set block_reason and perform run-queue side-effects only on success. */
+int thread_transit(thread_t* t, thread_state_t from, thread_state_t to);
 int thread_wake_if_blocked(uint32_t tid);
 void thread_set_exit_status(uint32_t tid, int32_t exit_status);
 void thread_reap(uint32_t tid);

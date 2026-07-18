@@ -11,9 +11,11 @@
 >
 > - **[§48 Implementation Reality Baseline](#48-implementation-reality-baseline-verified-2026-07-18)** — a primitive-by-primitive
 >   mapping of what this design assumes to what actually exists, plus the required
->   adjustments (the biggest: asynchronous IPC as specified does **not** exist;
->   the clock is coarse; `futex` is the real wait/wake primitive but is not yet
->   surfaced to libc).
+>   adjustments (the biggest: synchronous request/response IPC is being **removed**
+>   and the future/promise model *replaces* it — nothing new is layered on top of
+>   synchronous IPC, and the `sys_ipc_submit`/completion-token async-IPC syscalls
+>   are neither present nor required; the clock is coarse; `futex` is the real
+>   wait/wake primitive but is not yet surfaced to libc).
 > - **[§49 Wrapper Architecture](#49-wrapper-architecture-one-contract-native-and-wasm-cores)** — how a *single* future/promise
 >   contract is wrapped across both execution substrates (native and WASM) and all
 >   five language shims (C, Rust, Go, Zig, AssemblyScript). The key finding is that
@@ -1229,20 +1231,26 @@ Potential wrappers include:
 
 ## 23. IPC Integration
 
-> **Verified 2026-07-18:** The asynchronous-IPC syscalls in this section
-> (`sys_ipc_submit`, `sys_ipc_cancel`, completion tokens) **do not exist** in
-> WASMOS today, and none are required. IPC is synchronous request/response
-> (`ipc_send` + a blocking `ipc_select_one`/`ipc_select_wait`), and a reply is an
-> ordinary message delivered to the caller's own reply endpoint, correlated by
-> `request_id`. An IPC future is therefore built entirely in user space: send the
-> request, record `request_id → promise`, keep pumping the single receiver
-> endpoint, and resolve the promise when the matching reply arrives. This is
-> exactly what the existing `wasmos_sys_event_loop` **intent** table already does
-> (`intent.on_resolve` is the continuation); the futures layer generalizes it.
-> Treat the `sys_ipc_submit`/completion-token model below as an *optional future
-> kernel optimization*, not a prerequisite. See [§48.2](#482-required-adjustments)
-> and [§23.3](#233-runtime-request-table). The concrete deadlock this whole
-> direction removes is documented in `docs/architecture/09-process-and-ipc.md`
+> **Verified 2026-07-18 (updated):** Do not conflate two separate things.
+> **(a) The synchronous request/response *pattern*** — `wasmos_ipc_call`, the
+> native `IPC_CALL` syscall, and any use of a blocking `ipc_select_one` as a
+> *nested reply-wait inside a handler* — **is being removed.** The future/promise
+> model is its **replacement**, not a layer on top of it; **nothing new is built
+> over synchronous IPC.** **(b) The non-blocking transport** — `ipc_send` (post a
+> message) plus **one per-endpoint receive pump** (`ipc_select_wait`) — remains,
+> because a reply is simply an ordinary message delivered to the caller's own
+> endpoint, correlated by `request_id`. An IPC future is built directly on (b):
+> send the request, record `request_id → promise`, keep pumping the single
+> receiver, and resolve the promise when the correlated reply arrives — never
+> parking in a nested receive. This is the existing `wasmos_sys_event_loop`
+> **intent** table promoted to a first-class promise (`intent.on_resolve` is the
+> continuation). The `sys_ipc_submit`/`sys_ipc_cancel`/completion-token syscalls
+> below **do not exist and are not required**; were a dedicated async
+> submit/completion syscall ever added it would be a *new transport primitive* —
+> still not layered on the removed synchronous path. See
+> [§48.2](#482-required-adjustments) and [§23.3](#233-runtime-request-table). The
+> deadlock that motivates removing synchronous IPC is documented in
+> `docs/architecture/09-process-and-ipc.md`
 > ("Synchronous request/response IPC — deadlock hazard").
 
 ### 23.1 Requirement
@@ -2356,7 +2364,7 @@ today. Authoritative sources: `src/kernel/include/{thread,process,sched,sched_ev
 | **Parallel** coroutines across CPUs (§6.1) | Threads are globally scheduled and stolen across all CPUs — **but** any process with `needs_runtime_lock` (the built-in wasm3/WARP runtimes) serializes runtime execution under a per-process `runtime_lock` (`process.c:539–550`). Native processes do not take it. | ⚠️ **Split.** Native = true parallelism. WASM = **concurrency only** (one runtime thread runs at a time); coroutines interleave on a single effective worker. |
 | `sys_wait_u32` / `sys_wake_u32` for worker parking (§14, §37) | `futex_wait(uaddr, expected, timeout_ms, ctx)` / `futex_wake(uaddr, count, ctx)` (`futex.c`), hostcall ids 16/17, keyed by **physical** address (cross-process via `shmem_grant`), built on `sched_event_t`. | ⚠️ **Exists but not surfaced.** No `wasmos_futex_*` in libc `api.h`; **absent from the native `int 0x80` syscall path** (`syscall.c` has no futex). Must be wired up before §14 works. `mutex.h:50` even carries a TODO to consume it. |
 | `sys_thread_yield` (§12.2, §37) | `WASMOS_SYSCALL_YIELD`(3) / `THREAD_YIELD`(8); hostcalls `sched_yield`(13) / `thread_yield`(71). | ✅ **Matches.** |
-| **Asynchronous IPC** `sys_ipc_submit` + completion tokens (§23, §37) | **Does not exist.** IPC is synchronous request/response: `ipc_send` enqueues + `sched_event_wake_one`; the reply is a separate message correlated by `request_id`, consumed by a blocking `ipc_select_one`/`ipc_select_wait`. The existing `wasmos_sys_event_loop` already tracks outgoing requests as **intents** (`request_id → on_resolve` continuation) and dispatches replies — a hand-rolled promise table. | ❌ **Biggest correction.** Rebuild §23 as a user-space request-table over the existing sync IPC + single-receiver event loop. No new syscall required. `sys_ipc_cancel` also does not exist — stale replies are discarded by `request_id`/generation. |
+| **Asynchronous IPC** `sys_ipc_submit` + completion tokens (§23, §37) | **Does not exist.** The synchronous request/response *pattern* (`wasmos_ipc_call`, native `IPC_CALL`, nested `ipc_select_one` reply-waits) **is being removed.** The non-blocking transport stays: `ipc_send` enqueues + `sched_event_wake_one`; the reply is a separate message correlated by `request_id`, drained by the one per-endpoint pump. The existing `wasmos_sys_event_loop` already tracks outgoing requests as **intents** (`request_id → on_resolve` continuation) — a hand-rolled promise table. | ❌ **Biggest correction.** The future/promise + single event-loop model **replaces** synchronous IPC; **nothing is layered on top of it.** Build the request-table directly on the non-blocking transport (`ipc_send` + one per-endpoint pump). No submit/completion/cancel syscall is needed; stale replies are discarded by `request_id`/generation. |
 | Unified `sys_wait_events` (§24) | `ipc_select_wait` / `ipc_select_wait_timeout` block on up to `IPC_SELECT_EPS_MAX = 8` endpoints; timers, process death, and IRQs are already delivered as messages/notifications to endpoints. | ⚠️ **Maps to select-sets**, not a new syscall. Note the 8-endpoint cap and that a worker's "wake doorbell" is naturally a `NOTIFICATION` endpoint or a futex word. |
 | `sys_clock_monotonic`, vDSO time page (§15, §25, §37) | `sched_ticks` hostcall → `timer_ticks()`; default **250 Hz (4 ms/tick)**, returned as truncated `int32_t` (wraps ~198 days). No ns clock, **no vDSO page**. Timeouts are expressed in **ms** and tick-quantized. | ⚠️ **Coarse.** Safe-point deadline checks (§15.2) pay a real hostcall, not a memory read; fairness/timer granularity is 4 ms. A vDSO time page is a genuine future optimization, not a current facility. |
 | Stackful `coroutine_switch` swaps `RSP` between coroutine stacks (§9) | Kernel has `context_switch.S` for **thread** switching. There is **no** user-space coroutine/fiber/`ucontext` primitive anywhere in `src/` (only WARP's `setjmp/longjmp` trap unwinding). A raw `mov rsp` stack swap is valid for **native ring-3 code** on its own native stack. | ⚠️ **Native only.** A wasm3 guest runs on an interpreter-managed value/call stack; a WARP guest runs JIT/ring-3 code the runtime (in `libs/warp`, which must not be modified) controls. Neither guest stack can be swapped by a native `coroutine_switch`. See [§49](#49-wrapper-architecture-one-contract-native-and-wasm-cores). |
@@ -2366,13 +2374,17 @@ today. Authoritative sources: `src/kernel/include/{thread,process,sched,sched_ev
 
 ### 48.2 Required adjustments
 
-1. **Replace the asynchronous-IPC model (§23) with a user-space request table over
-   synchronous IPC.** A request returns a future; the runtime records
-   `request_id → promise`; the single per-endpoint receive pump resolves the promise
-   when the correlated reply arrives. This is the existing `intent` mechanism
-   generalized into first-class promises. No `sys_ipc_submit`/`sys_ipc_cancel`/
-   completion-token syscalls are needed. This is also the documented cure for the
-   real `fs-manager ↔ device-manager` boot deadlock
+1. **The future/promise + single event-loop model *replaces* synchronous IPC — it
+   is not layered on it.** The synchronous request/response *pattern*
+   (`wasmos_ipc_call`, the native `IPC_CALL` syscall, nested `ipc_select_one`
+   reply-waits) is being **removed**, and **nothing new is added on top of it.** A
+   request returns a future; the runtime records `request_id → promise`; the single
+   per-endpoint receive pump resolves the promise when the correlated reply arrives
+   — never parking in a nested receive. This is the existing `intent` mechanism
+   promoted to first-class promises, built directly on the surviving non-blocking
+   transport (`ipc_send` + one receiver per endpoint). No
+   `sys_ipc_submit`/`sys_ipc_cancel`/completion-token syscalls are needed. This is
+   the documented cure for the real `fs-manager ↔ device-manager` boot deadlock
    (`docs/architecture/09-process-and-ipc.md`).
 
 2. **Split the coroutine substrate by execution model.** The native stackful core

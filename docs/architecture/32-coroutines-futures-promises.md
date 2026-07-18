@@ -1250,7 +1250,7 @@ Potential wrappers include:
 > still not layered on the removed synchronous path. See
 > [§48.2](#482-required-adjustments) and [§23.3](#233-runtime-request-table). The
 > deadlock that motivates removing synchronous IPC is documented in
-> `docs/architecture/09-process-and-ipc.md`
+> [`09-process-and-ipc.md`](09-process-and-ipc.md)
 > ("Synchronous request/response IPC — deadlock hazard").
 
 ### 23.1 Requirement
@@ -2353,7 +2353,11 @@ today. Authoritative sources: `src/kernel/include/{thread,process,sched,sched_ev
 `src/kernel/{process,ipc,futex,sched_event,timer}.c`, `src/kernel/syscall.c`,
 `src/kernel/include/warp_ring3.h` (hostcall enum), `src/kernel/{wasm3/link.c,warp/link.cpp}`
 (hostcall tables), `src/libc/include/wasmos/{api,thread,thread_x86_64,ipc}.h`,
-`src/drivers/include/wasmos_native_driver.h`, and `docs/architecture/{07,08,09,29}-*.md`.
+`src/drivers/include/wasmos_native_driver.h`, and the sibling architecture docs
+[`07-scheduling-and-preemption.md`](07-scheduling-and-preemption.md),
+[`08-threading-and-lifecycle.md`](08-threading-and-lifecycle.md),
+[`09-process-and-ipc.md`](09-process-and-ipc.md), and
+[`29-threadable-scheduler.md`](29-threadable-scheduler.md).
 
 ### 48.1 Primitive mapping
 
@@ -2385,7 +2389,7 @@ today. Authoritative sources: `src/kernel/include/{thread,process,sched,sched_ev
    transport (`ipc_send` + one receiver per endpoint). No
    `sys_ipc_submit`/`sys_ipc_cancel`/completion-token syscalls are needed. This is
    the documented cure for the real `fs-manager ↔ device-manager` boot deadlock
-   (`docs/architecture/09-process-and-ipc.md`).
+   ([`09-process-and-ipc.md`](09-process-and-ipc.md)).
 
 2. **Split the coroutine substrate by execution model.** The native stackful core
    (§7–§15) is implementable as written for ring-3 native services/drivers. WASM

@@ -72,6 +72,9 @@ in-kernel scheduler rather than an optional mode.
 - [Threadable Scheduler Design](architecture/29-threadable-scheduler.md)
 - [IPC Direct Switch](architecture/30-ipc-direct-switch.md)
 
+### User-Space Concurrency
+- [Coroutines, Futures, and Promises](architecture/32-coroutines-futures-promises.md) - proposed user-space coroutine/future/promise runtime (verified against the implementation); future/promise model replaces synchronous IPC; one shared future contract over separate native (stackful) and WASM (fiber/stackless) coroutine cores
+
 ### Operations and Validation
 - [Diagnostics and Status](architecture/25-diagnostics-status.md)
 - [Repository Map and Validation Baseline](architecture/26-repo-map-and-validation.md)

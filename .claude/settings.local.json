@@ -126,7 +126,9 @@
       "Bash(echo \"lint exit: $?\")",
       "Bash(awk '/Linting Go/{p=\"go\"} /Linting Zig/{p=\"zig\"} /Linting Rust/{p=\"rust\"} /Linting AssemblyScript/{p=\"asc\"} /Linting Python/{p=\"\"} p&&!/^==>/{print p\": \"$0}' /tmp/lintB.log)",
       "Bash(echo \"fmt-check exit: $?\")",
-      "Bash(awk '/Linting Go/{p=1} /Linting AssemblyScript/{p=0} p&&!/^==>/{print}' /tmp/lintB.log)"
+      "Bash(awk '/Linting Go/{p=1} /Linting AssemblyScript/{p=0} p&&!/^==>/{print}' /tmp/lintB.log)",
+      "Bash(command -v actionlint yamllint)",
+      "Bash(node -e \"const fs=require\\('fs'\\); const s=fs.readFileSync\\('.github/workflows/quality.yml','utf8'\\); /* basic structural checks */ const lines=s.split\\('\\\\n'\\); let ok=true; lines.forEach\\(\\(l,i\\)=>{ if\\(/\\\\t/.test\\(l\\)\\){console.log\\('TAB at line',i+1\\);ok=false;} }\\); console.log\\(ok?'no tabs, structure looks sane':'ISSUES'\\); console.log\\('keys:', ['name:','on:','jobs:','runs-on:','steps:'].filter\\(k=>s.includes\\(k\\)\\).join\\(' '\\)\\);\")"
     ]
   }
 }

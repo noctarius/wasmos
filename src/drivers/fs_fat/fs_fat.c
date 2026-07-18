@@ -40,14 +40,11 @@ typedef enum { FAT_TYPE_UNKNOWN = 0, FAT_TYPE_12, FAT_TYPE_16, FAT_TYPE_32 } fat
 typedef enum {
     FAT_OP_NONE = 0,
     FAT_OP_LIST,
-    FAT_OP_CAT,
     FAT_OP_LIST_DIR,
-    FAT_OP_CAT_DIR,
     FAT_OP_CHDIR,
     FAT_OP_READ_APP
 } fat_op_t;
 
-typedef enum { FAT_CAT_SCAN = 0, FAT_CAT_FILE } fat_cat_stage_t;
 
 typedef enum {
     FAT_READ_FIND_APPS = 0,
@@ -104,14 +101,12 @@ static vfs_mount_t g_cwd_mount = VFS_MOUNT_BOOT;
 static int32_t g_requested_unit = -1;
 
 static fat_op_t g_op = FAT_OP_NONE;
-static fat_cat_stage_t g_cat_stage = FAT_CAT_SCAN;
 static uint32_t g_op_sector = 0;
 static uint32_t g_op_entries_left = 0;
 static uint32_t g_file_remaining = 0;
 static uint32_t g_file_lba = 0;
 static uint32_t g_file_sector = 0;
 static uint16_t g_file_cluster = 0;
-static char g_target_name[16];
 static char g_dir_name[16];
 static char g_chdir_path[32];
 static uint32_t g_chdir_pos = 0;
@@ -755,17 +750,6 @@ static void fat_write_full(const char* name) {
         buf[pos] = '\0';
         console_write(buf);
     }
-}
-
-static uint32_t fat_str_len(const char* s) {
-    uint32_t len = 0;
-    if (!s) {
-        return 0;
-    }
-    while (s[len]) {
-        len++;
-    }
-    return len;
 }
 
 static int fat_sync_block_read(uint32_t lba) {
@@ -2387,27 +2371,6 @@ static void fat_lfn_collect(const uint8_t* ent) {
     g_lfn_seen++;
 }
 
-static void fat_emit_bytes(const uint8_t* data, uint32_t len) {
-    char buf[64];
-    uint32_t pos = 0;
-    for (uint32_t i = 0; i < len; ++i) {
-        char c = (char)data[i];
-        if (c < 0x20 || c > 0x7E) {
-            c = '.';
-        }
-        buf[pos++] = c;
-        if (pos == sizeof(buf) - 1) {
-            buf[pos] = '\0';
-            console_write(buf);
-            pos = 0;
-        }
-    }
-    if (pos > 0) {
-        buf[pos] = '\0';
-        console_write(buf);
-    }
-}
-
 static int fat_name_eq(const char* a, const char* b) {
     if (!a || !b) {
         return 0;
@@ -3460,200 +3423,6 @@ static int fat_handle_list(void) {
         return -1;
     }
     return FAT_WAITING;
-}
-
-static int fat_handle_cat(void) {
-    if (g_root_entry_count == 0 || g_root_dir_sectors == 0) {
-        return -1;
-    }
-    if (!g_cwd_root && g_dir_lba == 0) {
-        return -1;
-    }
-
-    if (g_op == FAT_OP_NONE) {
-        g_op = g_cwd_root ? FAT_OP_CAT : FAT_OP_CAT_DIR;
-        g_cat_stage = FAT_CAT_SCAN;
-        g_op_sector = 0;
-        g_op_entries_left =
-            g_cwd_root ? g_root_entry_count : (g_dir_sectors * g_bytes_per_sector) / 32u;
-        fat_lfn_reset();
-        uint32_t start_lba = g_cwd_root ? g_root_dir_lba : g_dir_lba;
-        if (fat_send_block_read(start_lba, 1) != 0) {
-            fat_log("root read send failed\n");
-            g_op = FAT_OP_NONE;
-            return -1;
-        }
-        return FAT_WAITING;
-    }
-
-    if (g_op != FAT_OP_CAT && g_op != FAT_OP_CAT_DIR) {
-        return -1;
-    }
-
-    int rc = fat_poll_block_read();
-    if (rc == FAT_WAITING) {
-        return rc;
-    }
-    if (rc != 0) {
-        g_op = FAT_OP_NONE;
-        return -1;
-    }
-
-    if (g_cat_stage == FAT_CAT_SCAN) {
-        uint32_t entries_per_sector = g_bytes_per_sector / 32u;
-        uint32_t entries_total = entries_per_sector;
-        if (g_op_entries_left < entries_total) {
-            entries_total = g_op_entries_left;
-        }
-
-        for (uint32_t i = 0; i < entries_total; ++i) {
-            uint8_t* ent = g_sector_buf + i * 32u;
-            if (ent[0] == 0x00) {
-                g_op = FAT_OP_NONE;
-                fat_lfn_reset();
-                return -1;
-            }
-            if (ent[0] == 0xE5) {
-                fat_lfn_reset();
-                continue;
-            }
-            if ((ent[11] & 0x0F) == 0x0F) {
-                fat_lfn_collect(ent);
-                continue;
-            }
-            const char* entry_name = 0;
-            if (g_lfn_valid && g_lfn_seen == g_lfn_total && g_lfn_buf[0]) {
-                fat_lfn_finalize();
-                entry_name = g_lfn_buf;
-            }
-            if (ent[11] & 0x08) {
-                fat_lfn_reset();
-                continue;
-            }
-            char name[13];
-            if (!entry_name) {
-                uint32_t pos = 0;
-                for (int j = 0; j < 8; ++j) {
-                    if (ent[j] != ' ') {
-                        name[pos++] = (char)ent[j];
-                    }
-                }
-                if (ent[8] != ' ') {
-                    name[pos++] = '.';
-                    for (int j = 0; j < 3; ++j) {
-                        if (ent[8 + j] != ' ') {
-                            name[pos++] = (char)ent[8 + j];
-                        }
-                    }
-                }
-                name[pos] = '\0';
-                entry_name = name;
-            }
-            if (!entry_name || entry_name[0] == '\0') {
-                fat_lfn_reset();
-                continue;
-            }
-            int match = fat_name_eq(entry_name, g_target_name);
-            if (!match) {
-                fat_lfn_reset();
-                continue;
-            }
-
-            if (ent[11] & 0x10) {
-                fat_lfn_reset();
-                continue;
-            }
-            uint16_t first_cluster = (uint16_t)ent[26] | ((uint16_t)ent[27] << 8);
-            if (first_cluster < 2) {
-                g_op = FAT_OP_NONE;
-                fat_lfn_reset();
-                return -1;
-            }
-            uint32_t file_size = (uint32_t)ent[28] | ((uint32_t)ent[29] << 8) |
-                                 ((uint32_t)ent[30] << 16) | ((uint32_t)ent[31] << 24);
-            if (file_size == 0) {
-                console_write("\n");
-                g_op = FAT_OP_NONE;
-                fat_lfn_reset();
-                return 0;
-            }
-            g_file_cluster = first_cluster;
-            g_file_lba = fat_lba_for_cluster(first_cluster);
-            g_file_remaining = file_size;
-            g_file_sector = 0;
-            g_cat_stage = FAT_CAT_FILE;
-            if (fat_send_block_read(g_file_lba, 1) != 0) {
-                fat_log("file read send failed\n");
-                g_op = FAT_OP_NONE;
-                fat_lfn_reset();
-                return -1;
-            }
-            fat_lfn_reset();
-            return FAT_WAITING;
-        }
-
-        if (g_op_entries_left <= entries_total) {
-            g_op = FAT_OP_NONE;
-            fat_lfn_reset();
-            return -1;
-        }
-
-        g_op_entries_left -= entries_total;
-        g_op_sector++;
-        uint32_t limit = g_cwd_root ? g_root_dir_sectors : g_dir_sectors;
-        if (g_op_sector >= limit) {
-            g_op = FAT_OP_NONE;
-            return -1;
-        }
-        uint32_t base = g_cwd_root ? g_root_dir_lba : g_dir_lba;
-        if (fat_send_block_read(base + g_op_sector, 1) != 0) {
-            fat_log("root read send failed\n");
-            g_op = FAT_OP_NONE;
-            return -1;
-        }
-        return FAT_WAITING;
-    }
-
-    if (g_cat_stage == FAT_CAT_FILE) {
-        if (g_file_remaining == 0) {
-            console_write("\n");
-            g_op = FAT_OP_NONE;
-            return 0;
-        }
-
-        uint32_t bytes =
-            g_file_remaining > g_bytes_per_sector ? g_bytes_per_sector : g_file_remaining;
-        fat_emit_bytes(g_sector_buf, bytes);
-        g_file_remaining -= bytes;
-        g_file_sector++;
-
-        if (g_file_remaining == 0) {
-            console_write("\n");
-            g_op = FAT_OP_NONE;
-            return 0;
-        }
-        if (g_file_sector >= g_sectors_per_cluster) {
-            uint16_t next_cluster = 0;
-            if (fat_next_cluster(g_file_cluster, &next_cluster) != 0) {
-                fat_log("file chain invalid\n");
-                g_op = FAT_OP_NONE;
-                return -1;
-            }
-            g_file_cluster = next_cluster;
-            g_file_lba = fat_lba_for_cluster(next_cluster);
-            g_file_sector = 0;
-        }
-
-        if (fat_send_block_read(g_file_lba + g_file_sector, 1) != 0) {
-            fat_log("file read send failed\n");
-            g_op = FAT_OP_NONE;
-            return -1;
-        }
-        return FAT_WAITING;
-    }
-
-    g_op = FAT_OP_NONE;
-    return -1;
 }
 
 WASMOS_WASM_EXPORT int32_t fat_ipc_dispatch(int32_t type, int32_t arg0, int32_t arg1, int32_t arg2,

@@ -602,8 +602,8 @@ static int process_transition_legal(process_state_t from, process_state_t to) {
     if (from == PROCESS_STATE_UNUSED || from == PROCESS_STATE_DEAD) {
         return to == PROCESS_STATE_NEW;
     }
-    if (to == PROCESS_STATE_UNUSED || to == PROCESS_STATE_NEW ||
-        to == PROCESS_STATE_REAPING || to == PROCESS_STATE_DEAD) {
+    if (to == PROCESS_STATE_UNUSED || to == PROCESS_STATE_NEW || to == PROCESS_STATE_REAPING ||
+        to == PROCESS_STATE_DEAD) {
         return 0; /* only the guarded edges above reach these */
     }
     if (from == PROCESS_STATE_NEW) {

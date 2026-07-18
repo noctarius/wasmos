@@ -13,17 +13,12 @@ static wasm_driver_t g_chardev_driver;
 static uint32_t g_owner_context_id;
 static uint32_t g_entry_args[4];
 
-static uint32_t
-wasm_chardev_module_size(void)
-{
-    return (uint32_t)(
-        (uintptr_t)_binary_chardev_server_wasm_end -
-        (uintptr_t)_binary_chardev_server_wasm_start);
+static uint32_t wasm_chardev_module_size(void) {
+    return (uint32_t)((uintptr_t)_binary_chardev_server_wasm_end -
+                      (uintptr_t)_binary_chardev_server_wasm_start);
 }
 
-int
-wasm_chardev_init(uint32_t owner_context_id)
-{
+int wasm_chardev_init(uint32_t owner_context_id) {
     wasm_driver_manifest_t manifest;
     __builtin_memset(&manifest, 0, sizeof(manifest));
 
@@ -51,24 +46,16 @@ wasm_chardev_init(uint32_t owner_context_id)
     return 0;
 }
 
-int
-wasm_chardev_endpoint(uint32_t *out_endpoint)
-{
+int wasm_chardev_endpoint(uint32_t* out_endpoint) {
     return wasm_driver_endpoint(&g_chardev_driver, out_endpoint);
 }
 
-int
-wasm_chardev_run(void)
-{
+int wasm_chardev_run(void) {
     return wasm_driver_call_entry(&g_chardev_driver);
 }
 
-int
-wasm_chardev_ipc_read_request(uint32_t client_context_id,
-                              uint32_t chardev_endpoint,
-                              uint32_t client_reply_endpoint,
-                              uint32_t request_id)
-{
+int wasm_chardev_ipc_read_request(uint32_t client_context_id, uint32_t chardev_endpoint,
+                                  uint32_t client_reply_endpoint, uint32_t request_id) {
     ipc_message_t req;
     req.type = WASM_CHARDEV_IPC_READ_REQ;
     req.source = client_reply_endpoint;
@@ -81,13 +68,9 @@ wasm_chardev_ipc_read_request(uint32_t client_context_id,
     return ipc_send_from(client_context_id, chardev_endpoint, &req);
 }
 
-int
-wasm_chardev_ipc_write_request(uint32_t client_context_id,
-                               uint32_t chardev_endpoint,
-                               uint32_t client_reply_endpoint,
-                               uint32_t request_id,
-                               uint8_t byte)
-{
+int wasm_chardev_ipc_write_request(uint32_t client_context_id, uint32_t chardev_endpoint,
+                                   uint32_t client_reply_endpoint, uint32_t request_id,
+                                   uint8_t byte) {
     ipc_message_t req;
     req.type = WASM_CHARDEV_IPC_WRITE_REQ;
     req.source = client_reply_endpoint;

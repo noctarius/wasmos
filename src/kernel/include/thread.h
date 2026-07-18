@@ -16,7 +16,8 @@ typedef enum {
     THREAD_STATE_RUNNING,
     THREAD_STATE_BLOCKED,
     THREAD_STATE_ZOMBIE,
-    THREAD_STATE_NEW, /* claimed + initialising; never schedulable; sole source of ->READY/->BLOCKED */
+    THREAD_STATE_NEW, /* claimed + initialising; never schedulable; sole source of ->READY/->BLOCKED
+                       */
 } thread_state_t;
 
 typedef enum {

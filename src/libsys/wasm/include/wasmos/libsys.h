@@ -455,8 +455,8 @@ static inline void wasmos_sys_random_reply(void* user, const wasmos_ipc_message_
     }
     wrote = reply->arg0;
     if (wrote <= 0 || wrote > request->chunk_max || wrote > request->len - request->done ||
-        wasmos_xfer_buffer_read(request->buffer_id, addr_cast(int32_t, request->out + request->done),
-                                wrote, 0) != 0) {
+        wasmos_xfer_buffer_read(request->buffer_id,
+                                addr_cast(int32_t, request->out + request->done), wrote, 0) != 0) {
         wasmos_sys_random_finish(request, WASMOS_SYS_RANDOM_STATUS_IO);
         return;
     }
@@ -487,12 +487,13 @@ static inline int32_t wasmos_sys_random_issue(wasmos_sys_random_request_t* reque
 
 /* Start a non-blocking entropy request. Callers retain `request` and `out`
  * until `on_complete` runs, and drive completion through event_loop_poll(). */
-static inline int32_t wasmos_sys_random_bytes_async(
-    wasmos_sys_event_loop_t* loop, int32_t hrng_endpoint, uint8_t* out, int32_t len,
-    wasmos_sys_random_request_t* request, wasmos_sys_random_complete_fn on_complete, void* user) {
+static inline int32_t
+wasmos_sys_random_bytes_async(wasmos_sys_event_loop_t* loop, int32_t hrng_endpoint, uint8_t* out,
+                              int32_t len, wasmos_sys_random_request_t* request,
+                              wasmos_sys_random_complete_fn on_complete, void* user) {
     int32_t buffer_size;
-    if (!loop || !request || !out || len <= 0 || hrng_endpoint < 0 ||
-        loop->receiver_endpoint < 0 || !on_complete) {
+    if (!loop || !request || !out || len <= 0 || hrng_endpoint < 0 || loop->receiver_endpoint < 0 ||
+        !on_complete) {
         return WASMOS_SYS_RANDOM_STATUS_INVALID;
     }
     request->loop = loop;
@@ -505,15 +506,15 @@ static inline int32_t wasmos_sys_random_bytes_async(
     request->on_complete = on_complete;
     request->user = user;
     buffer_size = wasmos_xfer_buffer_size();
-    request->chunk_max = buffer_size < (int32_t)HRNG_MAX_BYTES_PER_REQ ? buffer_size :
-                                                                          (int32_t)HRNG_MAX_BYTES_PER_REQ;
+    request->chunk_max = buffer_size < (int32_t)HRNG_MAX_BYTES_PER_REQ
+                             ? buffer_size
+                             : (int32_t)HRNG_MAX_BYTES_PER_REQ;
     if (request->chunk_max <= 0) {
         return WASMOS_SYS_RANDOM_STATUS_NOT_READY;
     }
     request->buffer_id = wasmos_xfer_buffer_acquire(request->chunk_max);
-    if (request->buffer_id < 0 ||
-        wasmos_xfer_buffer_borrow(hrng_endpoint, request->buffer_id,
-                                  WASMOS_BUFFER_GRANT_WRITE) < 0) {
+    if (request->buffer_id < 0 || wasmos_xfer_buffer_borrow(hrng_endpoint, request->buffer_id,
+                                                            WASMOS_BUFFER_GRANT_WRITE) < 0) {
         if (request->buffer_id >= 0) {
             (void)wasmos_xfer_buffer_release(request->buffer_id);
             request->buffer_id = -1;
@@ -528,9 +529,11 @@ static inline int32_t wasmos_sys_random_bytes_async(
     return 0;
 }
 
-static inline int32_t wasmos_sys_random_int_async(
-    wasmos_sys_event_loop_t* loop, int32_t hrng_endpoint, uint32_t* out_value,
-    wasmos_sys_random_request_t* request, wasmos_sys_random_complete_fn on_complete, void* user) {
+static inline int32_t wasmos_sys_random_int_async(wasmos_sys_event_loop_t* loop,
+                                                  int32_t hrng_endpoint, uint32_t* out_value,
+                                                  wasmos_sys_random_request_t* request,
+                                                  wasmos_sys_random_complete_fn on_complete,
+                                                  void* user) {
     if (!request) {
         return WASMOS_SYS_RANDOM_STATUS_INVALID;
     }
@@ -539,19 +542,20 @@ static inline int32_t wasmos_sys_random_int_async(
                                          (int32_t)sizeof(*out_value), request, on_complete, user);
 }
 
-static inline int32_t wasmos_sys_random_float_async(
-    wasmos_sys_event_loop_t* loop, int32_t hrng_endpoint, float* out_value,
-    wasmos_sys_random_request_t* request, wasmos_sys_random_complete_fn on_complete, void* user) {
+static inline int32_t wasmos_sys_random_float_async(wasmos_sys_event_loop_t* loop,
+                                                    int32_t hrng_endpoint, float* out_value,
+                                                    wasmos_sys_random_request_t* request,
+                                                    wasmos_sys_random_complete_fn on_complete,
+                                                    void* user) {
+    int32_t status;
     if (!request || !out_value) {
         return WASMOS_SYS_RANDOM_STATUS_INVALID;
     }
-    {
-        int32_t status = wasmos_sys_random_bytes_async(
-            loop, hrng_endpoint, (uint8_t*)&request->float_word,
-            (int32_t)sizeof(request->float_word), request, on_complete, user);
-        if (status != WASMOS_SYS_RANDOM_STATUS_OK) {
-            return status;
-        }
+    status = wasmos_sys_random_bytes_async(loop, hrng_endpoint, (uint8_t*)&request->float_word,
+                                           (int32_t)sizeof(request->float_word), request,
+                                           on_complete, user);
+    if (status != WASMOS_SYS_RANDOM_STATUS_OK) {
+        return status;
     }
     request->float_out = out_value;
     return 0;

@@ -375,8 +375,7 @@ static void native_random_finish(wasmos_sys_native_random_request_t* request, in
         request->buffer_id = 0u;
     }
     if (status == 0 && request->float_out) {
-        *request->float_out =
-            (float)(request->float_word >> 8u) * (1.0f / 16777216.0f);
+        *request->float_out = (float)(request->float_word >> 8u) * (1.0f / 16777216.0f);
     }
     if (request->on_complete) {
         request->on_complete(request->user, status);
@@ -392,8 +391,8 @@ static void native_random_reply(void* user, const nd_ipc_message_t* reply) {
         return;
     }
     if (reply->type == HRNG_IPC_ERROR) {
-        native_random_finish(request, (int32_t)reply->arg0 < 0 ? (int32_t)reply->arg0 :
-                                                               WASMOS_SYS_RANDOM_STATUS_IO);
+        native_random_finish(request, (int32_t)reply->arg0 < 0 ? (int32_t)reply->arg0
+                                                               : WASMOS_SYS_RANDOM_STATUS_IO);
         return;
     }
     if (reply->type != HRNG_IPC_RESP) {
@@ -426,21 +425,20 @@ static int32_t native_random_issue(wasmos_sys_native_random_request_t* request) 
     if (chunk > request->chunk_max) {
         chunk = request->chunk_max;
     }
-    return wasmos_sys_native_intent_send(request->loop, request->hrng_endpoint,
-                                         request->loop->receiver_endpoint,
-                                         HRNG_IPC_GET_BYTES_REQ, request->buffer_id, chunk, 0u,
-                                         0u, native_random_reply, request, 0);
+    return wasmos_sys_native_intent_send(
+        request->loop, request->hrng_endpoint, request->loop->receiver_endpoint,
+        HRNG_IPC_GET_BYTES_REQ, request->buffer_id, chunk, 0u, 0u, native_random_reply, request, 0);
 }
 
-int32_t wasmos_sys_native_random_bytes_async(
-    wasmos_sys_native_event_loop_t* loop, uint32_t hrng_endpoint, uint8_t* out, uint32_t len,
-    wasmos_sys_native_random_request_t* request,
-    wasmos_sys_native_random_complete_fn on_complete, void* user) {
+int32_t wasmos_sys_native_random_bytes_async(wasmos_sys_native_event_loop_t* loop,
+                                             uint32_t hrng_endpoint, uint8_t* out, uint32_t len,
+                                             wasmos_sys_native_random_request_t* request,
+                                             wasmos_sys_native_random_complete_fn on_complete,
+                                             void* user) {
     if (!loop || !loop->api || !loop->api->xfer_buffer_acquire || !loop->api->xfer_buffer_borrow ||
         !loop->api->xfer_buffer_release || !request || !out || len == 0u ||
         hrng_endpoint == WASMOS_SYS_NATIVE_ENDPOINT_NONE ||
-        loop->receiver_endpoint == WASMOS_SYS_NATIVE_ENDPOINT_NONE ||
-        !on_complete) {
+        loop->receiver_endpoint == WASMOS_SYS_NATIVE_ENDPOINT_NONE || !on_complete) {
         return WASMOS_SYS_RANDOM_STATUS_INVALID;
     }
     request->loop = loop;
@@ -473,23 +471,25 @@ int32_t wasmos_sys_native_random_bytes_async(
     return 0;
 }
 
-int32_t wasmos_sys_native_random_int_async(
-    wasmos_sys_native_event_loop_t* loop, uint32_t hrng_endpoint, uint32_t* out_value,
-    wasmos_sys_native_random_request_t* request,
-    wasmos_sys_native_random_complete_fn on_complete, void* user) {
+int32_t wasmos_sys_native_random_int_async(wasmos_sys_native_event_loop_t* loop,
+                                           uint32_t hrng_endpoint, uint32_t* out_value,
+                                           wasmos_sys_native_random_request_t* request,
+                                           wasmos_sys_native_random_complete_fn on_complete,
+                                           void* user) {
     if (!request) {
         return WASMOS_SYS_RANDOM_STATUS_INVALID;
     }
     request->float_out = 0;
     return wasmos_sys_native_random_bytes_async(loop, hrng_endpoint, (uint8_t*)out_value,
-                                                (uint32_t)sizeof(*out_value), request,
-                                                on_complete, user);
+                                                (uint32_t)sizeof(*out_value), request, on_complete,
+                                                user);
 }
 
-int32_t wasmos_sys_native_random_float_async(
-    wasmos_sys_native_event_loop_t* loop, uint32_t hrng_endpoint, float* out_value,
-    wasmos_sys_native_random_request_t* request,
-    wasmos_sys_native_random_complete_fn on_complete, void* user) {
+int32_t wasmos_sys_native_random_float_async(wasmos_sys_native_event_loop_t* loop,
+                                             uint32_t hrng_endpoint, float* out_value,
+                                             wasmos_sys_native_random_request_t* request,
+                                             wasmos_sys_native_random_complete_fn on_complete,
+                                             void* user) {
     if (!request || !out_value) {
         return WASMOS_SYS_RANDOM_STATUS_INVALID;
     }

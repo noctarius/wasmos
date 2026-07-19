@@ -164,18 +164,21 @@ int32_t wasmos_sys_native_intent_send_with_request_id(
     uint32_t arg3, void (*on_resolve)(void* user, const nd_ipc_message_t* msg), void* user);
 void wasmos_sys_native_intent_cancel(wasmos_sys_native_event_loop_t* loop, uint32_t request_id);
 int32_t wasmos_sys_native_event_loop_poll(wasmos_sys_native_event_loop_t* loop, uint32_t budget);
-int32_t wasmos_sys_native_random_bytes_async(
-    wasmos_sys_native_event_loop_t* loop, uint32_t hrng_endpoint, uint8_t* out, uint32_t len,
-    wasmos_sys_native_random_request_t* request,
-    wasmos_sys_native_random_complete_fn on_complete, void* user);
-int32_t wasmos_sys_native_random_int_async(
-    wasmos_sys_native_event_loop_t* loop, uint32_t hrng_endpoint, uint32_t* out_value,
-    wasmos_sys_native_random_request_t* request,
-    wasmos_sys_native_random_complete_fn on_complete, void* user);
-int32_t wasmos_sys_native_random_float_async(
-    wasmos_sys_native_event_loop_t* loop, uint32_t hrng_endpoint, float* out_value,
-    wasmos_sys_native_random_request_t* request,
-    wasmos_sys_native_random_complete_fn on_complete, void* user);
+int32_t wasmos_sys_native_random_bytes_async(wasmos_sys_native_event_loop_t* loop,
+                                             uint32_t hrng_endpoint, uint8_t* out, uint32_t len,
+                                             wasmos_sys_native_random_request_t* request,
+                                             wasmos_sys_native_random_complete_fn on_complete,
+                                             void* user);
+int32_t wasmos_sys_native_random_int_async(wasmos_sys_native_event_loop_t* loop,
+                                           uint32_t hrng_endpoint, uint32_t* out_value,
+                                           wasmos_sys_native_random_request_t* request,
+                                           wasmos_sys_native_random_complete_fn on_complete,
+                                           void* user);
+int32_t wasmos_sys_native_random_float_async(wasmos_sys_native_event_loop_t* loop,
+                                             uint32_t hrng_endpoint, float* out_value,
+                                             wasmos_sys_native_random_request_t* request,
+                                             wasmos_sys_native_random_complete_fn on_complete,
+                                             void* user);
 
 static inline void wasmos_sys_mutex_init(wasmos_sys_mutex_t* mutex) {
     if (!mutex) {

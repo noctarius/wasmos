@@ -42,25 +42,28 @@ u32_t sys_now(void) {
     return ++fallback;
 }
 
-/* Minimal xorshift PRNG for LWIP_RAND(). Seeded from sched_ticks() when
- * available. Sufficient for TCP ISN / ephemeral port selection; not
- * cryptographically secure.
- * TODO(net_stack): replace with a stronger entropy source once the net-stack
- * service is wired up. */
+/* Minimal xorshift PRNG for LWIP_RAND(). The net-stack seeds this from the
+ * `hrng` service during initialization; the tick-derived value remains only
+ * as a liveness fallback while that provider is not registered yet. */
+static uint32_t g_lwip_rand_state;
+
+void lwip_port_seed(uint32_t seed) {
+    g_lwip_rand_state = seed | 1u;
+}
+
 uint32_t lwip_port_rand(void) {
-    static uint32_t state = 0u;
-    if (state == 0u) {
+    if (g_lwip_rand_state == 0u) {
         wasmos_driver_api_t* api = net_stack_api();
         uint32_t seed = 0x2545F491u;
         if (api != NULL && api->sched_ticks != NULL) {
             seed ^= (uint32_t)api->sched_ticks();
         }
-        state = seed | 1u;
+        lwip_port_seed(seed);
     }
-    state ^= state << 13;
-    state ^= state >> 17;
-    state ^= state << 5;
-    return state;
+    g_lwip_rand_state ^= g_lwip_rand_state << 13;
+    g_lwip_rand_state ^= g_lwip_rand_state >> 17;
+    g_lwip_rand_state ^= g_lwip_rand_state << 5;
+    return g_lwip_rand_state;
 }
 
 /* atoi(): lwIP netif.c uses it to parse a numeric netif name suffix. The libc

@@ -11,7 +11,8 @@
 # Socket state/ring attachment core is built and host-unit-tested. The live
 # service registers `net.stack`, maps a client-provided descriptor and its
 # persistent TX/RX grants, dispatches socket control requests, and binds the
-# initial static virtio.net lwIP netif. Socket payload callbacks remain deferred.
+# initial static virtio.net lwIP netif. UDP payload rings are live; TCP payload
+# callbacks remain deferred.
 
 set(NET_STACK_DIR ${CMAKE_CURRENT_SOURCE_DIR})
 set(LWIP_DIR ${CMAKE_SOURCE_DIR}/libs/lwip)

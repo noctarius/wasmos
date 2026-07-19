@@ -95,6 +95,9 @@ set(WASM_MENU_BAR_APP ${BUILD_DIR}/menu_bar.wap)
 set(WASM_NET_SMOKE_SRC ${EXAMPLES_C_DIR}/net_smoke/net_smoke.c)
 set(WASM_NET_SMOKE_WASM ${BUILD_DIR}/net_smoke.wasm)
 set(WASM_NET_SMOKE_APP ${BUILD_DIR}/net_smoke.wap)
+set(WASM_NET_UDP_ECHO_SRC ${EXAMPLES_C_DIR}/net_udp_echo/net_udp_echo.c)
+set(WASM_NET_UDP_ECHO_WASM ${BUILD_DIR}/net_udp_echo.wasm)
+set(WASM_NET_UDP_ECHO_APP ${BUILD_DIR}/net_udp_echo.wap)
 set(WASM_ATA_DRIVER_SRC ${DRIVER_WASM_DIR}/ata/ata.c)
 set(WASM_ATA_DRIVER_WASM ${BUILD_DIR}/ata.wasm)
 set(WASM_ATA_APP ${BUILD_DIR}/ata.wap)
@@ -1117,6 +1120,7 @@ add_custom_command(
           ${WASM_SHMEM_OWNER_APP}
           ${WASM_SHMEM_TARGET_APP}
           ${WASM_NET_SMOKE_APP}
+          ${WASM_NET_UDP_ECHO_APP}
           ${WASM_ATA_APP}
           ${WASM_CHARDEV_SERVER_APP}
           ${WASM_FAT_APP}
@@ -1320,6 +1324,9 @@ set(MENU_BAR_COPY_CMD
 set(NET_SMOKE_COPY_CMD
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_NET_SMOKE_APP} ${BUILD_DIR}/esp/apps/net_smoke.wap
 )
+set(NET_UDP_ECHO_COPY_CMD
+  COMMAND ${CMAKE_COMMAND} -E copy ${WASM_NET_UDP_ECHO_APP} ${BUILD_DIR}/esp/apps/net_udp_echo.wap
+)
 set(LARGE_READ_COPY_CMD
   COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/scripts/large_read.txt ${BUILD_DIR}/esp/large_read.txt
 )
@@ -1417,6 +1424,7 @@ set(WASMOS_ESP_POPULATE_CMDS
   ${SHMEM_TARGET_COPY_CMD}
   ${MENU_BAR_COPY_CMD}
   ${NET_SMOKE_COPY_CMD}
+  ${NET_UDP_ECHO_COPY_CMD}
   ${IRQ_ROUTE_DENY_COPY_CMD}
   ${IRQ_ROUTE_ALLOW_COPY_CMD}
   ${RUST_HELLO_COPY_CMD}

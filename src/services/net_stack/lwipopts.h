@@ -56,6 +56,7 @@
  * lwIP u32_t typedef) is pulled in after lwipopts.h by lwip/opt.h. */
 #include <stdint.h>
 uint32_t lwip_port_rand(void);
+void lwip_port_seed(uint32_t seed);
 #define LWIP_RAND() (lwip_port_rand())
 
 #endif /* WASMOS_NET_STACK_LWIPOPTS_H */

@@ -10,7 +10,8 @@
  * DATA-PLANE BASELINE:
  *   - Binds one lwIP Ethernet netif to the virtio.net frame service.
  *   - Uses 10.0.2.15/24 with the QEMU SLIRP gateway at 10.0.2.2.
- *   - No receive callbacks, payload-ring processing, or TCP handshake state.
+ *   - UDP sockets drain client TX datagram rings and deliver received datagrams
+ *     into client RX rings. TCP payload callbacks remain deferred.
  */
 #include <stdint.h>
 #include <stdarg.h>
@@ -56,9 +57,14 @@ static struct netif g_netif;
 #define NET_STACK_RX_POLL_REQUEST_ID 0x4E530003u
 #define NET_STACK_TX_REQUEST_BASE 0x4E535000u
 #define NET_STACK_FRAME_BYTES 2048u
+#define NET_STACK_UDP_DATAGRAM_BYTES 1472u
+#define NET_STACK_HRNG_LOOKUP_REQUEST_ID 0x4E530004u
+#define NET_STACK_HRNG_REQUEST_ID 0x4E530005u
 
 static err_t net_stack_linkoutput(struct netif* netif, struct pbuf* p);
 static void net_stack_start_rx_poll(void);
+static void net_stack_udp_recv(void* arg, struct udp_pcb* pcb, struct pbuf* p,
+                               const ip_addr_t* addr, u16_t port);
 
 wasmos_driver_api_t* net_stack_api(void) {
     return g_api;
@@ -113,6 +119,89 @@ static void net_stack_send_reply(const nd_ipc_message_t* request, uint32_t type,
 
 static void net_stack_reply_error(const nd_ipc_message_t* request, int32_t status) {
     net_stack_send_reply(request, NET_IPC_ERROR, status, 0u, 0u, 0u);
+}
+
+static void net_stack_notify_rx(net_socket_t* socket) {
+    nd_ipc_message_t notice;
+    if (socket == NULL || socket->owner_endpoint == 0u || g_api == NULL ||
+        g_api->ipc_send == NULL || g_api->sched_current_pid == NULL) {
+        return;
+    }
+    notice.type = NET_IPC_RX_NOTIFY;
+    notice.source = g_endpoint;
+    notice.destination = socket->owner_endpoint;
+    notice.request_id = 0u;
+    notice.arg0 = (uint32_t)(socket - g_socket_pool.sockets);
+    notice.arg1 = 0u;
+    notice.arg2 = 0u;
+    notice.arg3 = 0u;
+    (void)g_api->ipc_send(g_api->sched_current_pid(), socket->owner_endpoint, &notice);
+}
+
+static void net_stack_udp_recv(void* arg, struct udp_pcb* pcb, struct pbuf* p,
+                               const ip_addr_t* addr, u16_t port) {
+    net_socket_t* socket = (net_socket_t*)arg;
+    uint8_t datagram[NET_STACK_UDP_DATAGRAM_BYTES];
+    u16_t copied;
+    u16_t len;
+    (void)pcb;
+    (void)addr;
+    (void)port;
+    if (socket == NULL || p == NULL || p->tot_len > sizeof(datagram)) {
+        if (socket != NULL) {
+            wasmos_ringbuf_set_flags(&socket->rx_ring, WASMOS_RINGBUF_FLAG_OVERFLOW_DROPPED);
+        }
+        if (p != NULL) {
+            pbuf_free(p);
+        }
+        return;
+    }
+    len = p->tot_len;
+    copied = pbuf_copy_partial(p, datagram, len, 0u);
+    pbuf_free(p);
+    if (copied != len ||
+        wasmos_ringbuf_write_record(&socket->rx_ring, datagram, copied) < 0) {
+        wasmos_ringbuf_set_flags(&socket->rx_ring, WASMOS_RINGBUF_FLAG_OVERFLOW_DROPPED);
+        return;
+    }
+    net_stack_notify_rx(socket);
+}
+
+static void net_stack_drain_udp_tx(net_socket_t* socket) {
+    uint8_t datagram[NET_STACK_UDP_DATAGRAM_BYTES];
+    uint32_t len;
+    int32_t got;
+    ip_addr_t address;
+    if (socket == NULL || socket->type != NET_SOCKET_DGRAM || socket->pcb == NULL ||
+        socket->state != NET_SOCKET_CONNECTED) {
+        return;
+    }
+    for (;;) {
+        got = wasmos_ringbuf_read_record(&socket->tx_ring, datagram, sizeof(datagram), &len);
+        if (got == -1) {
+            return;
+        }
+        if (got == -2) {
+            /* Drop an over-MTU record so one bad client write cannot wedge
+             * the socket's ring forever. */
+            (void)wasmos_ringbuf_skip(&socket->tx_ring, len + 4u);
+            wasmos_ringbuf_set_flags(&socket->tx_ring, WASMOS_RINGBUF_FLAG_OVERFLOW_DROPPED);
+            continue;
+        }
+        struct pbuf* p = pbuf_alloc(PBUF_TRANSPORT, (u16_t)got, PBUF_RAM);
+        if (p == NULL || pbuf_take(p, datagram, (u16_t)got) != ERR_OK) {
+            if (p != NULL) {
+                pbuf_free(p);
+            }
+            wasmos_ringbuf_set_flags(&socket->tx_ring, WASMOS_RINGBUF_FLAG_OVERFLOW_DROPPED);
+            return;
+        }
+        ip_addr_set_ip4_u32(&address, socket->remote_addr_v4);
+        if (udp_sendto((struct udp_pcb*)socket->pcb, p, &address, socket->remote_port) != ERR_OK) {
+            wasmos_ringbuf_set_flags(&socket->tx_ring, WASMOS_RINGBUF_FLAG_OVERFLOW_DROPPED);
+        }
+        pbuf_free(p);
+    }
 }
 
 static err_t net_stack_netif_init(struct netif* netif) {
@@ -266,6 +355,9 @@ static int32_t net_stack_pcb_open(net_socket_t* socket) {
     }
     if (socket->type == NET_SOCKET_DGRAM) {
         socket->pcb = udp_new_ip_type(IPADDR_TYPE_V4);
+        if (socket->pcb != NULL) {
+            udp_recv((struct udp_pcb*)socket->pcb, net_stack_udp_recv, socket);
+        }
     } else if (socket->type == NET_SOCKET_STREAM) {
         socket->pcb = tcp_new_ip_type(IPADDR_TYPE_V4);
     }
@@ -474,6 +566,14 @@ static void net_stack_dispatch(const nd_ipc_message_t* request) {
     case NET_IPC_STACK_DESTROY:
     case NET_IPC_STACK_SELECT:
     case NET_IPC_TX_NOTIFY:
+        if (request->arg0 >= NET_SOCKET_MAX ||
+            g_socket_pool.sockets[request->arg0].owner_endpoint != request->source ||
+            g_socket_pool.sockets[request->arg0].type != NET_SOCKET_DGRAM) {
+            net_stack_reply_error(request, NET_STATUS_DENIED);
+            break;
+        }
+        net_stack_drain_udp_tx(&g_socket_pool.sockets[request->arg0]);
+        break;
     case NET_IPC_RX_NOTIFY:
         net_stack_reply_error(request, NET_STATUS_NOT_READY);
         break;
@@ -481,6 +581,36 @@ static void net_stack_dispatch(const nd_ipc_message_t* request) {
         net_stack_reply_error(request, NET_STATUS_INVALID);
         break;
     }
+}
+
+static void net_stack_seed_random(void) {
+    svc_class_entry_t entry;
+    nd_ipc_message_t reply;
+    uint32_t seed = 0u;
+    uint32_t buffer_id = 0u;
+    uint8_t* buffer;
+    if (wasmos_sys_svc_lookup_class_native(g_api, g_proc_endpoint, g_control_endpoint,
+                                           (const uint8_t*)"hrng", 4u, &entry, 1u,
+                                           NET_STACK_HRNG_LOOKUP_REQUEST_ID) <= 0 ||
+        entry.endpoint == 0u) {
+        return;
+    }
+    buffer = (uint8_t*)g_api->xfer_buffer_acquire(ND_BUFFER_KIND_XFER, sizeof(seed), &buffer_id);
+    if (buffer == NULL || buffer_id == 0u ||
+        g_api->xfer_buffer_borrow(entry.endpoint, buffer_id, ND_BUFFER_BORROW_WRITE) < 0 ||
+        wasmos_sys_ipc_call_native(g_api, g_control_endpoint, entry.endpoint,
+                                   NET_STACK_HRNG_REQUEST_ID, HRNG_IPC_GET_BYTES_REQ, buffer_id,
+                                   sizeof(seed), 0u, 0u, &reply) != 0 ||
+        reply.type != HRNG_IPC_RESP || reply.arg0 != sizeof(seed)) {
+        if (buffer_id != 0u) {
+            (void)g_api->xfer_buffer_release(buffer_id);
+        }
+        return;
+    }
+    seed = (uint32_t)buffer[0] | ((uint32_t)buffer[1] << 8u) |
+           ((uint32_t)buffer[2] << 16u) | ((uint32_t)buffer[3] << 24u);
+    (void)g_api->xfer_buffer_release(buffer_id);
+    lwip_port_seed(seed);
 }
 
 /* Native service entry. Signature/ABI match gfx_compositor's initialize():
@@ -530,6 +660,7 @@ int initialize(wasmos_driver_api_t* driver_api, int module_count, int arg2, int 
     if (driver_api->proc_notify_ready != NULL) {
         driver_api->proc_notify_ready();
     }
+    net_stack_seed_random();
     if (wasmos_sys_svc_register_native(driver_api, spawn_info.proc_endpoint, g_endpoint,
                                        (const uint8_t*)"net.stack", 9u,
                                        NET_STACK_REGISTER_REQUEST_ID) < 0) {

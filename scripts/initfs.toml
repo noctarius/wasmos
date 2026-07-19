@@ -118,6 +118,11 @@ path = "system/services/net_stack.wap"
 source = "net_stack.wap"
 
 [[entries]]
+kind = "wasmos_app"
+path = "apps/net_udp_echo.wap"
+source = "net_udp_echo.wap"
+
+[[entries]]
 kind = "data"
 path = "devmgr/rules/default.rules"
 source = "devmgr_rules_init_default.rules"

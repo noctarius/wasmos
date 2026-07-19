@@ -101,10 +101,14 @@ linked feature documents for rationale and rollout plans.
   and link state, configures `eth0` as `10.0.2.15/24` with gateway `10.0.2.2`,
   and bridges Ethernet frames through driver-granted transfer buffers. RX uses
   poll plus notification hints, and the idle loop advances lwIP timeouts. It
-  registers `net.stack`, drains socket IPC, and maps the persistent TX/RX
+  registers `net.stack`, drains socket IPC, seeds `LWIP_RAND()` from the `hrng`
+  service when available, and maps the persistent TX/RX
   descriptor for its IPv4 UDP/TCP PCB control plane. The versioned ring-backed socket-pool core (`socket.c`)
   validates the persistent TX/RX grant descriptor, attaches rings, and
-  exercises lifecycle transitions in a host unit test. `ringbuf.h` and the
+  exercises lifecycle transitions in a host unit test. Connected UDP sockets
+  now drain TX datagram records into `udp_sendto` and write receive callbacks
+  back into the RX ring with `NET_IPC_RX_NOTIFY`; the SLIRP UDP echo test covers
+  that route. `ringbuf.h` and the
   wasm3/WARP pinned shared-memory mapping baseline are ready for the planned
   per-socket shared-memory data plane; that mapping must not be revalidated as
   a networking prerequisite unless its implementation changes.

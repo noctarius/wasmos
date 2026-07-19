@@ -491,8 +491,10 @@ The reusable SPSC implementation is present in
 `src/libsys/wasm/include/wasmos/ringbuf.h` and is covered by
 `tests/unit/test_ringbuf.c`. The net-stack socket pool and versioned open
 descriptor are implemented in `src/services/net_stack/socket.{h,c}` and covered
-by `tests/unit/test_net_socket.c`; live service dispatch and lwIP PCB binding
-remain future work.
+by `tests/unit/test_net_socket.c`. Connected UDP sockets drain complete TX-ring
+datagram records into lwIP `pbuf`s and `udp_sendto`; the UDP receive callback
+writes complete RX-ring records and sends `NET_IPC_RX_NOTIFY`. TCP payload
+callbacks remain future work.
 
 **Rationale.** A persistent per-socket ring avoids per-datagram borrow/release
 churn, generalizes to TCP byte streaming without an ABI change, and keeps the

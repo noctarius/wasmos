@@ -199,26 +199,26 @@ enum {
  * client unchanged.  Distinct -70 range so they don't collide with
  * PROC_SPAWN_ERR_* (-10..-20), SHMEM_ERR_* (-30..-36) or PROC_PM_ERR_* (-40..-66). */
 enum {
-    FS_ERR_BAD_ARGS = -70,     /* invalid flags/args (len 0, bad access mode, reserved arg set) */
-    FS_ERR_PATH_TOO_LONG = -71,/* path length exceeds the path buffer or the xfer buffer */
-    FS_ERR_BUFFER = -72,       /* xfer-buffer read/write/size call failed */
-    FS_ERR_TRANSLATE = -73,    /* vfs path translation failed / path routed to init overlay */
-    FS_ERR_NOT_FOUND = -74,    /* path component or target entry does not exist */
-    FS_ERR_IS_DIR = -75,       /* target is a directory where a file was required */
-    FS_ERR_NOT_DIR = -76,      /* a path component that must be a directory is not one */
-    FS_ERR_EXISTS = -77,       /* create target already exists (fail-if-exists) */
-    FS_ERR_NOT_EMPTY = -78,    /* rmdir target directory is not empty */
-    FS_ERR_NO_FD = -79,        /* open-file table is full */
-    FS_ERR_BUSY = -80,         /* backend has no free op-context slot (retryable) */
-    FS_ERR_IO = -81,           /* block-device I/O error */
-    FS_ERR_NOT_READY = -82,    /* mount/backend not ready */
-    FS_ERR_NO_SPACE = -83,     /* no free cluster or no free directory slot (disk full) */
-    FS_ERR_NAME = -84,         /* invalid name (LFN validation / short-name encode failed) */
-    FS_ERR_ACCESS = -85,       /* access-mode violation (e.g. read on a write-only fd) */
-    FS_ERR_RANGE = -86,        /* seek/offset out of range */
-    FS_ERR_UNSUPPORTED = -87,  /* unknown/unsupported request type */
-    FS_ERR_OPEN = -88,         /* operation forbidden on a currently-open file */
-    FS_ERR_CORRUPT = -89       /* on-disk structure inconsistency detected */
+    FS_ERR_BAD_ARGS = -70,      /* invalid flags/args (len 0, bad access mode, reserved arg set) */
+    FS_ERR_PATH_TOO_LONG = -71, /* path length exceeds the path buffer or the xfer buffer */
+    FS_ERR_BUFFER = -72,        /* xfer-buffer read/write/size call failed */
+    FS_ERR_TRANSLATE = -73,     /* vfs path translation failed / path routed to init overlay */
+    FS_ERR_NOT_FOUND = -74,     /* path component or target entry does not exist */
+    FS_ERR_IS_DIR = -75,        /* target is a directory where a file was required */
+    FS_ERR_NOT_DIR = -76,       /* a path component that must be a directory is not one */
+    FS_ERR_EXISTS = -77,        /* create target already exists (fail-if-exists) */
+    FS_ERR_NOT_EMPTY = -78,     /* rmdir target directory is not empty */
+    FS_ERR_NO_FD = -79,         /* open-file table is full */
+    FS_ERR_BUSY = -80,          /* backend has no free op-context slot (retryable) */
+    FS_ERR_IO = -81,            /* block-device I/O error */
+    FS_ERR_NOT_READY = -82,     /* mount/backend not ready */
+    FS_ERR_NO_SPACE = -83,      /* no free cluster or no free directory slot (disk full) */
+    FS_ERR_NAME = -84,          /* invalid name (LFN validation / short-name encode failed) */
+    FS_ERR_ACCESS = -85,        /* access-mode violation (e.g. read on a write-only fd) */
+    FS_ERR_RANGE = -86,         /* seek/offset out of range */
+    FS_ERR_UNSUPPORTED = -87,   /* unknown/unsupported request type */
+    FS_ERR_OPEN = -88,          /* operation forbidden on a currently-open file */
+    FS_ERR_CORRUPT = -89        /* on-disk structure inconsistency detected */
 };
 
 /* Flags returned in arg1 of PROC_IPC_RESP for PROC_IPC_SPAWN_PATH.

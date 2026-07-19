@@ -1,7 +1,7 @@
 /* lwipopts.h - lwIP configuration for the wasmos native ring-0 net-stack.
  *
- * STEP 0: compile + link lwIP core into the kernel image. No netif glue,
- * kernel process, socket API, or virtio-net wiring yet.
+ * Native NO_SYS service configuration for the virtio.net-backed Ethernet
+ * netif. Socket payload rings and TCP callback delivery remain deferred.
  *
  * Single-threaded NO_SYS build using the lwIP raw API. All timing/tick
  * hooks live in src/services/net_stack/port.c; compiler abstraction lives

@@ -28,21 +28,15 @@ wasmos_driver_api_t* net_stack_api(void);
 
 /* Return monotonic time in milliseconds.
  *
- * The native driver ABI exposes only sched_ticks() (a monotonic scheduler tick
- * counter) with no published tick frequency and no ticks->ms converter at this
- * layer. lwIP only requires sys_now() to be monotonic and roughly in ms for
- * NO_SYS timeout bookkeeping, which is not exercised in this compile milestone
- * (no netif, no timeouts registered yet). We therefore return the raw tick
- * count as a monotonically increasing value, falling back to a local counter if
- * the api/hook is unavailable.
- *
- * TODO(net_stack): real ms clock via libsys_native — convert sched_ticks() with
- * the actual timer frequency (or add a native ms hook) when the netif/ICMP step
- * lands and lwIP timeouts start mattering. */
+ * The kernel scheduler clock is configured at 250 Hz (timer_init(250) in
+ * kernel.c), so each tick is four milliseconds. Keep the conversion here at
+ * the native ABI boundary: lwIP timeout values are milliseconds, never ticks.
+ * TODO(net-stack-clock): expose timer milliseconds directly in a future native
+ * ABI revision if the scheduler frequency becomes configurable at runtime. */
 u32_t sys_now(void) {
     wasmos_driver_api_t* api = net_stack_api();
     if (api != NULL && api->sched_ticks != NULL) {
-        return (u32_t)api->sched_ticks();
+        return (u32_t)(api->sched_ticks() * 4u);
     }
     static u32_t fallback = 0u;
     return ++fallback;

@@ -5,14 +5,13 @@
 # and the libc string/ctype objects (as the compositor does), link with
 # `ld.lld -e initialize -static` into a native ELF, then pack with
 # make_wasmos_app. Register into the global WASM app lists so it builds with the
-# rest of the tree. NOTE: the service is intentionally NOT copied into the ESP
-# and NOT spawned at boot — the ESP service list in the root CMakeLists is
-# explicit, so registering here only wires up the build, keeping boot unchanged.
+# rest of the tree. The initfs packages this service; it is started after NIC
+# discovery by the integration path rather than blocking device-manager boot.
 #
 # Socket state/ring attachment core is built and host-unit-tested. The live
 # service registers `net.stack`, maps a client-provided descriptor and its
-# persistent TX/RX grants, then dispatches socket control requests. Netif
-# glue, lwIP PCB binding, and driver wiring remain intentionally deferred.
+# persistent TX/RX grants, dispatches socket control requests, and binds the
+# initial static virtio.net lwIP netif. Socket payload callbacks remain deferred.
 
 set(NET_STACK_DIR ${CMAKE_CURRENT_SOURCE_DIR})
 set(LWIP_DIR ${CMAKE_SOURCE_DIR}/libs/lwip)

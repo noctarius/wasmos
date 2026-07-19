@@ -97,11 +97,12 @@ linked feature documents for rationale and rollout plans.
 - `virtio-rng` registers the `hrng` service class and fills caller-owned
   transfer buffers. WASM and native `libsys` expose callback-based byte-array,
   raw-`uint32_t`, and `[0, 1)` float requests through their event loops.
-- `net-stack` is a native lwIP control-plane baseline: it registers `net.stack`
-  from its spawn-info process-manager endpoint, notifies readiness, drains
-  socket IPC requests, maps a validated client-provided open descriptor plus
-  persistent TX/RX grants, and allocates/binds IPv4 lwIP UDP/TCP PCBs. There is
-  still no netif or driver control plane. The versioned ring-backed socket-pool core (`socket.c`)
+- `net-stack` is a native lwIP baseline: it discovers `virtio.net`, reads MAC
+  and link state, configures `eth0` as `10.0.2.15/24` with gateway `10.0.2.2`,
+  and bridges Ethernet frames through driver-granted transfer buffers. RX uses
+  poll plus notification hints, and the idle loop advances lwIP timeouts. It
+  registers `net.stack`, drains socket IPC, and maps the persistent TX/RX
+  descriptor for its IPv4 UDP/TCP PCB control plane. The versioned ring-backed socket-pool core (`socket.c`)
   validates the persistent TX/RX grant descriptor, attaches rings, and
   exercises lifecycle transitions in a host unit test. `ringbuf.h` and the
   wasm3/WARP pinned shared-memory mapping baseline are ready for the planned
@@ -141,8 +142,8 @@ linked feature documents for rationale and rollout plans.
   `libs/warp` or `libs/wasm3` directly.
 - Complete PCI INTx polarity/trigger configuration before treating RX
   notifications as reliable push delivery.
-- Networking Phase 2 remains pending: netif glue, ARP/IPv4/ICMP/UDP service
-  behavior, socket IPC, and shared-memory ring wiring.
+- Networking Phase 2 remains pending: end-to-end ARP/ICMP/UDP service
+  validation, socket data callbacks, and shared-memory ring wiring.
 - Maintain the boot entry contract, C ABI boundaries, and runtime-wrapper
   parity. Record meaningful future baseline changes here as concise subsystem
   updates; keep detailed design changes in `docs/architecture/`.

@@ -44,10 +44,12 @@ Out of scope for initial rollout:
   smoke exchange through QEMU SLIRP, and offers pull plus notification-hinted
   RX delivery. PCI INTx polarity/trigger configuration remains incomplete, so
   consumers must poll defensively.
-- `net-stack` is a native lwIP control-plane baseline. It registers `net.stack`
-  using its spawn-info process-manager endpoint, drains socket IPC traffic, and
-  maps a validated open descriptor plus its persistent TX/RX grants, and binds
-  IPv4 lwIP UDP/TCP PCBs. It has no netif glue or driver control plane yet.
+- `net-stack` is a native lwIP baseline. It discovers `virtio.net`, reads its
+  MAC/link state, and installs `eth0` with static SLIRP addressing
+  `10.0.2.15/24` (gateway `10.0.2.2`). Its linkoutput flattens pbuf chains into
+  a driver-granted transfer buffer; RX polling/notifications feed
+  `ethernet_input`, and its idle loop runs `sys_check_timeouts()`. Socket
+  payload callbacks and TCP handshake delivery remain future work.
 - IPC opcode space 0x000–0x9FF is allocated; networking opcodes begin at 0xA00.
 
 ---

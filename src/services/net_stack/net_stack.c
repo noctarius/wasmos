@@ -7,8 +7,9 @@
  *   - Creates and registers the `net.stack` endpoint, then notifies ready.
  *   - Drains and dispatches every pending socket control message.
  *
- * DELIBERATELY NOT DONE YET (later netif/ICMP/socket steps):
- *   - No netif glue or driver IPC wiring.
+ * DATA-PLANE BASELINE:
+ *   - Binds one lwIP Ethernet netif to the virtio.net frame service.
+ *   - Uses 10.0.2.15/24 with the QEMU SLIRP gateway at 10.0.2.2.
  *   - No receive callbacks, payload-ring processing, or TCP handshake state.
  */
 #include <stdint.h>
@@ -16,9 +17,16 @@
 #include <stddef.h>
 
 #include "lwip/init.h"
+#include "lwip/etharp.h"
 #include "lwip/ip_addr.h"
+#include "lwip/ip4_addr.h"
+#include "lwip/netif.h"
+#include "lwip/pbuf.h"
 #include "lwip/tcp.h"
 #include "lwip/udp.h"
+#include "lwip/sys.h"
+#include "lwip/timeouts.h"
+#include "netif/ethernet.h"
 
 #include "socket.h"
 #include "wasmos/libsys_native.h"
@@ -29,10 +37,28 @@
 static wasmos_driver_api_t* g_api = NULL;
 static net_socket_pool_t g_socket_pool;
 static uint32_t g_endpoint = 0u;
+static uint32_t g_control_endpoint = 0u;
+static uint32_t g_proc_endpoint = 0u;
+static uint32_t g_netdrv_endpoint = 0u;
+static uint32_t g_rx_buffer_id = 0u;
+static uint8_t* g_rx_buffer = NULL;
+static uint32_t g_tx_buffer_id = 0u;
+static uint8_t* g_tx_buffer = NULL;
+static uint8_t g_rx_pending = 0u;
+static uint8_t g_tx_pending = 0u;
+static uint8_t g_netif_ready = 0u;
+static struct netif g_netif;
 
 #define ND_IPC_OK 0
 #define ND_IPC_EMPTY 1
 #define NET_STACK_REGISTER_REQUEST_ID 0x4E530001u
+#define NET_STACK_LINK_GET_REQUEST_ID 0x4E530002u
+#define NET_STACK_RX_POLL_REQUEST_ID 0x4E530003u
+#define NET_STACK_TX_REQUEST_BASE 0x4E535000u
+#define NET_STACK_FRAME_BYTES 2048u
+
+static err_t net_stack_linkoutput(struct netif* netif, struct pbuf* p);
+static void net_stack_start_rx_poll(void);
 
 wasmos_driver_api_t* net_stack_api(void) {
     return g_api;
@@ -87,6 +113,151 @@ static void net_stack_send_reply(const nd_ipc_message_t* request, uint32_t type,
 
 static void net_stack_reply_error(const nd_ipc_message_t* request, int32_t status) {
     net_stack_send_reply(request, NET_IPC_ERROR, status, 0u, 0u, 0u);
+}
+
+static err_t net_stack_netif_init(struct netif* netif) {
+    netif->name[0] = 'e';
+    netif->name[1] = 'n';
+    netif->output = etharp_output;
+    netif->linkoutput = net_stack_linkoutput;
+    netif->mtu = 1500u;
+    netif->hwaddr_len = ETH_HWADDR_LEN;
+    netif->flags = NETIF_FLAG_BROADCAST | NETIF_FLAG_ETHARP | NETIF_FLAG_LINK_UP;
+    return ERR_OK;
+}
+
+static int net_stack_driver_call(uint32_t request_id, uint32_t type, uint32_t arg0,
+                                 uint32_t arg1, nd_ipc_message_t* reply) {
+    if (g_netdrv_endpoint == 0u || reply == NULL) {
+        return -1;
+    }
+    if (wasmos_sys_ipc_call_native(g_api, g_control_endpoint, g_netdrv_endpoint, request_id, type, arg0,
+                                   arg1, 0u, 0u, reply) != 0) {
+        return -1;
+    }
+    return reply->type == NETDRV_IPC_RESP ? 0 : -1;
+}
+
+static err_t net_stack_linkoutput(struct netif* netif, struct pbuf* p) {
+    nd_ipc_message_t request;
+    uint16_t copied = 0u;
+    uint32_t request_id;
+    struct pbuf* q;
+    (void)netif;
+    if (p == NULL || g_tx_buffer == NULL || g_tx_pending || p->tot_len > NET_STACK_FRAME_BYTES) {
+        return ERR_BUF;
+    }
+    for (q = p; q != NULL; q = q->next) {
+        uint8_t* src = (uint8_t*)q->payload;
+        uint16_t i;
+        for (i = 0u; i < q->len; ++i) {
+            g_tx_buffer[copied + i] = src[i];
+        }
+        copied = (uint16_t)(copied + q->len);
+    }
+    request_id = NET_STACK_TX_REQUEST_BASE + (uint32_t)sys_now();
+    request.type = NETDRV_IPC_TX_FRAME;
+    request.source = g_endpoint;
+    request.destination = g_netdrv_endpoint;
+    request.request_id = request_id;
+    request.arg0 = copied;
+    request.arg1 = g_tx_buffer_id;
+    request.arg2 = 0u;
+    request.arg3 = 0u;
+    if (g_api->ipc_send(g_api->sched_current_pid(), g_netdrv_endpoint, &request) != 0) {
+        return ERR_IF;
+    }
+    g_tx_pending = 1u;
+    return ERR_OK;
+}
+
+static void net_stack_deliver_rx(uint32_t len) {
+    struct pbuf* p;
+    if (len == 0u || len > NET_STACK_FRAME_BYTES) {
+        return;
+    }
+    p = pbuf_alloc(PBUF_RAW, (u16_t)len, PBUF_POOL);
+    if (p == NULL) {
+        return;
+    }
+    if (pbuf_take(p, g_rx_buffer, (u16_t)len) != ERR_OK) {
+        pbuf_free(p);
+        return;
+    }
+    if (len >= 14u && g_rx_buffer[12] == 0x08u && g_rx_buffer[13] == 0x06u &&
+        g_api->console_write != NULL) {
+        static const char msg[] = "[net-stack] arp rx\n";
+        g_api->console_write(msg, (int)(sizeof(msg) - 1));
+    }
+    (void)ethernet_input(p, &g_netif);
+}
+
+static void net_stack_start_rx_poll(void) {
+    nd_ipc_message_t request;
+    if (g_rx_pending || g_netdrv_endpoint == 0u) {
+        return;
+    }
+    request.type = NETDRV_IPC_RX_POLL;
+    request.source = g_endpoint;
+    request.destination = g_netdrv_endpoint;
+    request.request_id = NET_STACK_RX_POLL_REQUEST_ID;
+    request.arg0 = g_rx_buffer_id;
+    request.arg1 = 0u;
+    request.arg2 = 0u;
+    request.arg3 = 0u;
+    if (g_api->ipc_send(g_api->sched_current_pid(), g_netdrv_endpoint, &request) == 0) {
+        g_rx_pending = 1u;
+    }
+}
+
+static void net_stack_bind_virtio(void) {
+    nd_ipc_message_t link_reply;
+    ip4_addr_t ipaddr;
+    ip4_addr_t netmask;
+    ip4_addr_t gateway;
+
+    if (g_netif_ready) {
+        return;
+    }
+    g_netdrv_endpoint = (uint32_t)wasmos_sys_svc_lookup_native(
+        g_api, g_proc_endpoint, g_control_endpoint, (const uint8_t*)"virtio.net", 10u,
+        NET_STACK_LINK_GET_REQUEST_ID - 1u);
+    if ((int32_t)g_netdrv_endpoint < 0) {
+        g_netdrv_endpoint = 0u;
+        return;
+    }
+    g_rx_buffer = (uint8_t*)g_api->xfer_buffer_acquire(ND_BUFFER_KIND_XFER, NET_STACK_FRAME_BYTES,
+                                                         &g_rx_buffer_id);
+    g_tx_buffer = (uint8_t*)g_api->xfer_buffer_acquire(ND_BUFFER_KIND_XFER, NET_STACK_FRAME_BYTES,
+                                                         &g_tx_buffer_id);
+    if (g_rx_buffer == NULL || g_tx_buffer == NULL ||
+        g_api->xfer_buffer_borrow(g_netdrv_endpoint, g_rx_buffer_id,
+                                  ND_BUFFER_BORROW_READ | ND_BUFFER_BORROW_WRITE) < 0 ||
+        g_api->xfer_buffer_borrow(g_netdrv_endpoint, g_tx_buffer_id,
+                                  ND_BUFFER_BORROW_READ | ND_BUFFER_BORROW_WRITE) < 0 ||
+        net_stack_driver_call(NET_STACK_LINK_GET_REQUEST_ID, NETDRV_IPC_LINK_GET, g_rx_buffer_id,
+                              0u, &link_reply) != 0 ||
+        link_reply.arg0 == 0u) {
+        return;
+    }
+    IP4_ADDR(&ipaddr, 10, 0, 2, 15);
+    IP4_ADDR(&netmask, 255, 255, 255, 0);
+    IP4_ADDR(&gateway, 10, 0, 2, 2);
+    if (netif_add(&g_netif, &ipaddr, &netmask, &gateway, NULL, net_stack_netif_init,
+                  ethernet_input) == NULL) {
+        return;
+    }
+    for (uint32_t i = 0u; i < ETH_HWADDR_LEN; ++i) {
+        g_netif.hwaddr[i] = g_rx_buffer[i];
+    }
+    netif_set_default(&g_netif);
+    netif_set_up(&g_netif);
+    etharp_request(&g_netif, &gateway);
+    g_netif_ready = 1u;
+    if (g_api->console_write != NULL) {
+        static const char msg[] = "[net-stack] eth0 10.0.2.15/24 ready\n";
+        g_api->console_write(msg, (int)(sizeof(msg) - 1));
+    }
 }
 
 static int32_t net_stack_pcb_open(net_socket_t* socket) {
@@ -214,6 +385,27 @@ static void net_stack_dispatch(const nd_ipc_message_t* request) {
         return;
     }
 
+    /* Driver replies and notification hints share this endpoint with socket
+     * traffic. Keep them asynchronous: a blocking receive here could consume
+     * and lose a socket request queued behind a netdrv reply. */
+    if (request->source == g_netdrv_endpoint) {
+        if (request->type == NETDRV_IPC_RX_FRAME_NOTIFY) {
+            net_stack_start_rx_poll();
+            return;
+        }
+        if (request->request_id == NET_STACK_RX_POLL_REQUEST_ID) {
+            g_rx_pending = 0u;
+            if (request->type == NETDRV_IPC_RESP) {
+                net_stack_deliver_rx(request->arg0);
+            }
+            return;
+        }
+        if (request->request_id >= NET_STACK_TX_REQUEST_BASE) {
+            g_tx_pending = 0u;
+            return;
+        }
+    }
+
     switch (request->type) {
     case NET_IPC_SOCKET_OPEN:
         net_stack_handle_open(request);
@@ -326,6 +518,18 @@ int initialize(wasmos_driver_api_t* driver_api, int module_count, int arg2, int 
     if (g_endpoint == 0xFFFFFFFFu) {
         return -1;
     }
+
+    g_control_endpoint = driver_api->ipc_create_endpoint();
+    if (g_control_endpoint == 0xFFFFFFFFu) {
+        return -1;
+    }
+    g_proc_endpoint = spawn_info.proc_endpoint;
+    /* Device-manager starts bootstrap services synchronously. Release that
+     * spawn before asking the process manager to service our registration; the
+     * PM cannot reply while it is still waiting for this service's ready ack. */
+    if (driver_api->proc_notify_ready != NULL) {
+        driver_api->proc_notify_ready();
+    }
     if (wasmos_sys_svc_register_native(driver_api, spawn_info.proc_endpoint, g_endpoint,
                                        (const uint8_t*)"net.stack", 9u,
                                        NET_STACK_REGISTER_REQUEST_ID) < 0) {
@@ -335,10 +539,6 @@ int initialize(wasmos_driver_api_t* driver_api, int module_count, int arg2, int 
     if (driver_api->console_write != NULL) {
         static const char msg[] = "[net-stack] registered net.stack\n";
         driver_api->console_write(msg, (int)(sizeof(msg) - 1));
-    }
-
-    if (driver_api->proc_notify_ready != NULL) {
-        driver_api->proc_notify_ready();
     }
 
     /* Drain every message before yielding. A service must not assume a later
@@ -358,6 +558,11 @@ int initialize(wasmos_driver_api_t* driver_api, int module_count, int arg2, int 
             }
             drained = 1;
             net_stack_dispatch(&request);
+        }
+        net_stack_bind_virtio();
+        sys_check_timeouts();
+        if (g_netif_ready) {
+            net_stack_start_rx_poll();
         }
         if (!drained && driver_api->sched_yield != NULL) {
             driver_api->sched_yield();

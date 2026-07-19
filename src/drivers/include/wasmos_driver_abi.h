@@ -532,6 +532,29 @@ enum {
     NETDRV_IPC_ERROR = 0xAFF
 };
 
+/* Generic hardware-RNG service protocol (virtual class "hrng"). Backend-neutral:
+ * any entropy source (virtio-rng, RDRAND, ...) registers under class "hrng" and
+ * speaks this. A client stages an output buffer via the xfer/FS-buffer API and
+ * asks the provider to fill up to `len` bytes of entropy into it; libc layers
+ * random-int / random-byte-array helpers on top of GET_BYTES. */
+enum {
+    HRNG_IPC_GET_BYTES_REQ = 0xC00, /* arg0=buffer_id, arg1=len (bytes requested) */
+    HRNG_IPC_RESP = 0xC80,          /* arg0=bytes written into the buffer */
+    HRNG_IPC_ERROR = 0xCFF          /* arg0=HRNG_STATUS_* */
+};
+
+enum {
+    HRNG_STATUS_OK = 0,
+    HRNG_STATUS_INVALID = -2,
+    HRNG_STATUS_NOT_READY = -3,
+    HRNG_STATUS_IO_ERROR = -5,
+    HRNG_STATUS_TIMEOUT = -9
+};
+
+/* Largest single GET_BYTES request the provider fills in one round-trip (its DMA
+ * pool is one page). Clients wanting more loop. */
+#define HRNG_MAX_BYTES_PER_REQ 4096u
+
 enum {
     NET_IPC_SOCKET_OPEN = 0xB00,
     NET_IPC_BIND = 0xB01,

@@ -130,6 +130,9 @@ set(WASM_VIRTIO_NET_APP ${BUILD_DIR}/virtio_net.wap)
 set(WASM_VIRTIO_SERIAL_DRIVER_SRC ${DRIVER_WASM_DIR}/virtio_serial/virtio_serial.c)
 set(WASM_VIRTIO_SERIAL_DRIVER_WASM ${BUILD_DIR}/virtio_serial.wasm)
 set(WASM_VIRTIO_SERIAL_APP ${BUILD_DIR}/virtio_serial.wap)
+set(WASM_VIRTIO_RNG_DRIVER_SRC ${DRIVER_WASM_DIR}/virtio_rng/virtio_rng.c)
+set(WASM_VIRTIO_RNG_DRIVER_WASM ${BUILD_DIR}/virtio_rng.wasm)
+set(WASM_VIRTIO_RNG_APP ${BUILD_DIR}/virtio_rng.wap)
 set(WASM_FRAMEBUFFER_APP ${BUILD_DIR}/framebuffer.wap)
 set(NATIVE_FRAMEBUFFER_DRIVER_SRC ${DRIVER_WASM_DIR}/framebuffer/framebuffer_native.c)
 set(NATIVE_FRAMEBUFFER_RENDER_SRC ${DRIVER_WASM_DIR}/framebuffer/render.c)
@@ -1397,6 +1400,7 @@ set(WASMOS_ESP_POPULATE_CMDS
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_ACPI_BUS_APP} ${BUILD_DIR}/esp/system/services/acpi_bus.wap
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CHARDEV_CLIENT_APP} ${BUILD_DIR}/esp/apps/chardevc.wap
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_VIRTIO_NET_APP} ${BUILD_DIR}/esp/system/drivers/virtio_net.wap
+  COMMAND ${CMAKE_COMMAND} -E copy ${WASM_VIRTIO_RNG_APP} ${BUILD_DIR}/esp/system/drivers/virtio_rng.wap
   ${AS_HELLO_COPY_CMD}
   ${AS_MINESWEEPER_COPY_CMD}
   ${HELLO_C_COPY_CMD}

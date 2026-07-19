@@ -1,0 +1,43 @@
+version = 1
+aot = true
+
+[package]
+name = "virtio-rng"
+entry = "initialize"
+kind = "driver"
+native = false
+
+[resources]
+stack_pages = 16
+# region_alloc maps the request virtqueue ring + entropy pool into a window above
+# live data; needs the same 512-page (2 MiB) reserve as the other DMA-capable
+# drivers to clear map_auto's 2 MiB low guard. Paired with INITIAL/MAX_MEMORY
+# 4 MiB in CMakeLists.
+heap_pages = 512
+
+[ipc]
+required_endpoint_name = "-"
+required_endpoint_rights = 0
+entry_arg_bindings = ["proc.endpoint"]
+
+[[capabilities]]
+name = "io.port"
+flags = 0
+
+# Grants DEVMGR_CAP_DMA -> a BIDIR DMA window over low memory that
+# region_alloc's capability_dma_range_allowed check requires for the ring/pool.
+[[capabilities]]
+name = "dma.buffer"
+flags = 0
+
+# QEMU presents virtio-rng-pci with PCI base class 0xFF (PCI_CLASS_OTHERS).
+[[matches]]
+bus = "pci"
+class = 0xFF
+subclass = 0x00
+prog_if = "any"
+vendor = 0x1AF4
+device = "any"
+io_port_min = 0x0CF8
+io_port_max = 0x0CFF
+priority = 100

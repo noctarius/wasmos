@@ -8,6 +8,7 @@ add_subdirectory(mouse)
 add_subdirectory(rtc)
 add_subdirectory(virtio_net)
 add_subdirectory(virtio_serial)
+add_subdirectory(virtio_rng)
 add_subdirectory(framebuffer)
 add_subdirectory(framebuffer_pci)
 
@@ -21,6 +22,7 @@ add_custom_target(drivers DEPENDS
   rtc_app
   virtio_net_app
   virtio_serial_app
+  virtio_rng_app
   framebuffer_app
   framebuffer_pci_app
   chardev_server_app

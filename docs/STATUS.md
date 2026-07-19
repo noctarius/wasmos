@@ -101,8 +101,10 @@ linked feature documents for rationale and rollout plans.
   and link state, configures `eth0` as `10.0.2.15/24` with gateway `10.0.2.2`,
   and bridges Ethernet frames through driver-granted transfer buffers. RX uses
   poll plus notification hints, and the idle loop advances lwIP timeouts. It
-  registers `net.stack`, drains socket IPC, seeds `LWIP_RAND()` from the `hrng`
-  service when available, and maps the persistent TX/RX
+  starts from the device-manager boot rule, registers `net.stack`, and discovers
+  `virtio.net`/`hrng` through asynchronous control-endpoint requests while
+  draining socket IPC. It seeds `LWIP_RAND()` from the `hrng` service when
+  available and maps the persistent TX/RX
   descriptor for its IPv4 UDP/TCP PCB control plane. The versioned ring-backed socket-pool core (`socket.c`)
   validates the persistent TX/RX grant descriptor, attaches rings, and
   exercises lifecycle transitions in a host unit test. Connected UDP sockets

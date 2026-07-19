@@ -68,6 +68,7 @@ int main(int argc, char** argv) {
         puts("[net-udp-echo] no net.stack");
         return 1;
     }
+    puts("[net-udp-echo] found net.stack");
 
     int32_t tx_bid = wasmos_xfer_buffer_acquire(RING_HEADER_BYTES + RING_BYTES);
     int32_t rx_bid = wasmos_xfer_buffer_acquire(RING_HEADER_BYTES + RING_BYTES);

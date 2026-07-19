@@ -5,8 +5,8 @@
 # and the libc string/ctype objects (as the compositor does), link with
 # `ld.lld -e initialize -static` into a native ELF, then pack with
 # make_wasmos_app. Register into the global WASM app lists so it builds with the
-# rest of the tree. The initfs packages this service; it is started after NIC
-# discovery by the integration path rather than blocking device-manager boot.
+# rest of the tree. The initfs packages this service and device-manager starts
+# it from the boot rule; its PM and driver discovery is fully asynchronous.
 #
 # Socket state/ring attachment core is built and host-unit-tested. The live
 # service registers `net.stack`, maps a client-provided descriptor and its

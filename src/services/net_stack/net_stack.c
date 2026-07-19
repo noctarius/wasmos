@@ -48,6 +48,17 @@ static uint8_t* g_tx_buffer = NULL;
 static uint8_t g_rx_pending = 0u;
 static uint8_t g_tx_pending = 0u;
 static uint8_t g_netif_ready = 0u;
+static uint8_t g_registered = 0u;
+static uint8_t g_register_pending = 0u;
+static uint8_t g_netdrv_lookup_pending = 0u;
+static uint8_t g_link_get_pending = 0u;
+static uint8_t g_hrng_lookup_pending = 0u;
+static uint8_t g_hrng_seeded = 0u;
+static uint32_t g_hrng_lookup_buffer_id = 0u;
+static uint8_t* g_hrng_lookup_buffer = NULL;
+static wasmos_sys_native_random_request_t g_hrng_request;
+static uint32_t g_hrng_word = 0u;
+static wasmos_sys_native_event_loop_t g_control_loop;
 static struct netif g_netif;
 
 #define ND_IPC_OK 0
@@ -63,6 +74,9 @@ static struct netif g_netif;
 
 static err_t net_stack_linkoutput(struct netif* netif, struct pbuf* p);
 static void net_stack_start_rx_poll(void);
+static void net_stack_begin_registration(void);
+static void net_stack_try_bind_virtio(void);
+static void net_stack_try_seed_random(void);
 static void net_stack_udp_recv(void* arg, struct udp_pcb* pcb, struct pbuf* p,
                                const ip_addr_t* addr, u16_t port);
 
@@ -215,18 +229,6 @@ static err_t net_stack_netif_init(struct netif* netif) {
     return ERR_OK;
 }
 
-static int net_stack_driver_call(uint32_t request_id, uint32_t type, uint32_t arg0,
-                                 uint32_t arg1, nd_ipc_message_t* reply) {
-    if (g_netdrv_endpoint == 0u || reply == NULL) {
-        return -1;
-    }
-    if (wasmos_sys_ipc_call_native(g_api, g_control_endpoint, g_netdrv_endpoint, request_id, type, arg0,
-                                   arg1, 0u, 0u, reply) != 0) {
-        return -1;
-    }
-    return reply->type == NETDRV_IPC_RESP ? 0 : -1;
-}
-
 static err_t net_stack_linkoutput(struct netif* netif, struct pbuf* p) {
     nd_ipc_message_t request;
     uint16_t copied = 0u;
@@ -299,36 +301,11 @@ static void net_stack_start_rx_poll(void) {
     }
 }
 
-static void net_stack_bind_virtio(void) {
-    nd_ipc_message_t link_reply;
+static void net_stack_finish_bind(void) {
     ip4_addr_t ipaddr;
     ip4_addr_t netmask;
     ip4_addr_t gateway;
 
-    if (g_netif_ready) {
-        return;
-    }
-    g_netdrv_endpoint = (uint32_t)wasmos_sys_svc_lookup_native(
-        g_api, g_proc_endpoint, g_control_endpoint, (const uint8_t*)"virtio.net", 10u,
-        NET_STACK_LINK_GET_REQUEST_ID - 1u);
-    if ((int32_t)g_netdrv_endpoint < 0) {
-        g_netdrv_endpoint = 0u;
-        return;
-    }
-    g_rx_buffer = (uint8_t*)g_api->xfer_buffer_acquire(ND_BUFFER_KIND_XFER, NET_STACK_FRAME_BYTES,
-                                                         &g_rx_buffer_id);
-    g_tx_buffer = (uint8_t*)g_api->xfer_buffer_acquire(ND_BUFFER_KIND_XFER, NET_STACK_FRAME_BYTES,
-                                                         &g_tx_buffer_id);
-    if (g_rx_buffer == NULL || g_tx_buffer == NULL ||
-        g_api->xfer_buffer_borrow(g_netdrv_endpoint, g_rx_buffer_id,
-                                  ND_BUFFER_BORROW_READ | ND_BUFFER_BORROW_WRITE) < 0 ||
-        g_api->xfer_buffer_borrow(g_netdrv_endpoint, g_tx_buffer_id,
-                                  ND_BUFFER_BORROW_READ | ND_BUFFER_BORROW_WRITE) < 0 ||
-        net_stack_driver_call(NET_STACK_LINK_GET_REQUEST_ID, NETDRV_IPC_LINK_GET, g_rx_buffer_id,
-                              0u, &link_reply) != 0 ||
-        link_reply.arg0 == 0u) {
-        return;
-    }
     IP4_ADDR(&ipaddr, 10, 0, 2, 15);
     IP4_ADDR(&netmask, 255, 255, 255, 0);
     IP4_ADDR(&gateway, 10, 0, 2, 2);
@@ -346,6 +323,141 @@ static void net_stack_bind_virtio(void) {
     if (g_api->console_write != NULL) {
         static const char msg[] = "[net-stack] eth0 10.0.2.15/24 ready\n";
         g_api->console_write(msg, (int)(sizeof(msg) - 1));
+    }
+}
+
+static void net_stack_lookup_reply(void* user, const nd_ipc_message_t* reply) {
+    (void)user;
+    g_netdrv_lookup_pending = 0u;
+    if (reply != NULL && reply->type == SVC_IPC_LOOKUP_RESP && reply->arg0 != 0xFFFFFFFFu) {
+        g_netdrv_endpoint = reply->arg0;
+    }
+}
+
+static void net_stack_register_reply(void* user, const nd_ipc_message_t* reply) {
+    (void)user;
+    g_register_pending = 0u;
+    if (reply != NULL && reply->type == SVC_IPC_REGISTER_RESP) {
+        g_registered = 1u;
+        if (g_api->console_write != NULL) {
+            static const char msg[] = "[net-stack] registered net.stack\n";
+            g_api->console_write(msg, (int)(sizeof(msg) - 1));
+        }
+    }
+}
+
+static void net_stack_hrng_seed_complete(void* user, int32_t status) {
+    (void)user;
+    if (status == WASMOS_SYS_RANDOM_STATUS_OK) {
+        lwip_port_seed(g_hrng_word);
+        g_hrng_seeded = 1u;
+    }
+}
+
+static void net_stack_hrng_lookup_reply(void* user, const nd_ipc_message_t* reply) {
+    svc_class_entry_t entry;
+    (void)user;
+    g_hrng_lookup_pending = 0u;
+    if (reply == NULL || reply->type != SVC_IPC_LOOKUP_CLASS_RESP || reply->arg0 == 0u ||
+        g_hrng_lookup_buffer_id == 0u || g_hrng_lookup_buffer == NULL) {
+        goto out;
+    }
+    __builtin_memcpy(&entry, g_hrng_lookup_buffer, sizeof(entry));
+    if (entry.endpoint != 0u) {
+        (void)wasmos_sys_native_random_int_async(&g_control_loop, entry.endpoint, &g_hrng_word,
+                                                 &g_hrng_request, net_stack_hrng_seed_complete,
+                                                 NULL);
+    }
+out:
+    if (g_hrng_lookup_buffer_id != 0u) {
+        (void)g_api->xfer_buffer_release(g_hrng_lookup_buffer_id);
+        g_hrng_lookup_buffer_id = 0u;
+    }
+    g_hrng_lookup_buffer = NULL;
+}
+
+static void net_stack_begin_registration(void) {
+    uint32_t args[4];
+    if (g_registered || g_register_pending) {
+        return;
+    }
+    wasmos_sys_ipc_pack_name16_native((const uint8_t*)"net.stack", 9u, args);
+    if (wasmos_sys_native_intent_send(&g_control_loop, g_proc_endpoint, g_control_endpoint,
+                                      SVC_IPC_REGISTER_REQ, args[0], args[1], args[2], args[3],
+                                      net_stack_register_reply, NULL, NULL) == 0) {
+        g_register_pending = 1u;
+    }
+}
+
+static void net_stack_try_seed_random(void) {
+    if (g_hrng_seeded || g_hrng_lookup_pending || g_hrng_request.buffer_id != 0u) {
+        return;
+    }
+    g_hrng_lookup_buffer = (uint8_t*)g_api->xfer_buffer_acquire(
+        ND_BUFFER_KIND_XFER, WASMOS_SVC_CLASS_MAX, &g_hrng_lookup_buffer_id);
+    if (g_hrng_lookup_buffer == NULL || g_hrng_lookup_buffer_id == 0u) {
+        return;
+    }
+    g_hrng_lookup_buffer[0] = 'h';
+    g_hrng_lookup_buffer[1] = 'r';
+    g_hrng_lookup_buffer[2] = 'n';
+    g_hrng_lookup_buffer[3] = 'g';
+    g_hrng_lookup_buffer[4] = '\0';
+    if (wasmos_sys_native_intent_send(&g_control_loop, g_proc_endpoint, g_control_endpoint,
+                                      SVC_IPC_LOOKUP_CLASS_REQ, g_hrng_lookup_buffer_id, 1u, 0u,
+                                      0u, net_stack_hrng_lookup_reply, NULL, NULL) != 0) {
+        (void)g_api->xfer_buffer_release(g_hrng_lookup_buffer_id);
+        g_hrng_lookup_buffer_id = 0u;
+        g_hrng_lookup_buffer = NULL;
+        return;
+    }
+    g_hrng_lookup_pending = 1u;
+}
+
+static void net_stack_try_bind_virtio(void) {
+    uint32_t args[4];
+    nd_ipc_message_t request;
+    if (g_netif_ready) {
+        return;
+    }
+    if (g_netdrv_endpoint == 0u) {
+        if (g_netdrv_lookup_pending) {
+            return;
+        }
+        wasmos_sys_ipc_pack_name16_native((const uint8_t*)"virtio.net", 10u, args);
+        if (wasmos_sys_native_intent_send(&g_control_loop, g_proc_endpoint, g_control_endpoint,
+                                          SVC_IPC_LOOKUP_REQ, args[0], args[1], args[2], args[3],
+                                          net_stack_lookup_reply, NULL, NULL) == 0) {
+            g_netdrv_lookup_pending = 1u;
+        }
+        return;
+    }
+    if (g_link_get_pending) {
+        return;
+    }
+    if (g_rx_buffer == NULL) {
+        g_rx_buffer = (uint8_t*)g_api->xfer_buffer_acquire(ND_BUFFER_KIND_XFER,
+                                                             NET_STACK_FRAME_BYTES, &g_rx_buffer_id);
+        g_tx_buffer = (uint8_t*)g_api->xfer_buffer_acquire(ND_BUFFER_KIND_XFER,
+                                                             NET_STACK_FRAME_BYTES, &g_tx_buffer_id);
+        if (g_rx_buffer == NULL || g_tx_buffer == NULL ||
+            g_api->xfer_buffer_borrow(g_netdrv_endpoint, g_rx_buffer_id,
+                                      ND_BUFFER_BORROW_READ | ND_BUFFER_BORROW_WRITE) < 0 ||
+            g_api->xfer_buffer_borrow(g_netdrv_endpoint, g_tx_buffer_id,
+                                      ND_BUFFER_BORROW_READ | ND_BUFFER_BORROW_WRITE) < 0) {
+            return;
+        }
+    }
+    request.type = NETDRV_IPC_LINK_GET;
+    request.source = g_endpoint;
+    request.destination = g_netdrv_endpoint;
+    request.request_id = NET_STACK_LINK_GET_REQUEST_ID;
+    request.arg0 = g_rx_buffer_id;
+    request.arg1 = 0u;
+    request.arg2 = 0u;
+    request.arg3 = 0u;
+    if (g_api->ipc_send(g_api->sched_current_pid(), g_netdrv_endpoint, &request) == 0) {
+        g_link_get_pending = 1u;
     }
 }
 
@@ -481,6 +593,13 @@ static void net_stack_dispatch(const nd_ipc_message_t* request) {
      * traffic. Keep them asynchronous: a blocking receive here could consume
      * and lose a socket request queued behind a netdrv reply. */
     if (request->source == g_netdrv_endpoint) {
+        if (request->request_id == NET_STACK_LINK_GET_REQUEST_ID) {
+            g_link_get_pending = 0u;
+            if (request->type == NETDRV_IPC_RESP && request->arg0 != 0u) {
+                net_stack_finish_bind();
+            }
+            return;
+        }
         if (request->type == NETDRV_IPC_RX_FRAME_NOTIFY) {
             net_stack_start_rx_poll();
             return;
@@ -583,36 +702,6 @@ static void net_stack_dispatch(const nd_ipc_message_t* request) {
     }
 }
 
-static void net_stack_seed_random(void) {
-    svc_class_entry_t entry;
-    nd_ipc_message_t reply;
-    uint32_t seed = 0u;
-    uint32_t buffer_id = 0u;
-    uint8_t* buffer;
-    if (wasmos_sys_svc_lookup_class_native(g_api, g_proc_endpoint, g_control_endpoint,
-                                           (const uint8_t*)"hrng", 4u, &entry, 1u,
-                                           NET_STACK_HRNG_LOOKUP_REQUEST_ID) <= 0 ||
-        entry.endpoint == 0u) {
-        return;
-    }
-    buffer = (uint8_t*)g_api->xfer_buffer_acquire(ND_BUFFER_KIND_XFER, sizeof(seed), &buffer_id);
-    if (buffer == NULL || buffer_id == 0u ||
-        g_api->xfer_buffer_borrow(entry.endpoint, buffer_id, ND_BUFFER_BORROW_WRITE) < 0 ||
-        wasmos_sys_ipc_call_native(g_api, g_control_endpoint, entry.endpoint,
-                                   NET_STACK_HRNG_REQUEST_ID, HRNG_IPC_GET_BYTES_REQ, buffer_id,
-                                   sizeof(seed), 0u, 0u, &reply) != 0 ||
-        reply.type != HRNG_IPC_RESP || reply.arg0 != sizeof(seed)) {
-        if (buffer_id != 0u) {
-            (void)g_api->xfer_buffer_release(buffer_id);
-        }
-        return;
-    }
-    seed = (uint32_t)buffer[0] | ((uint32_t)buffer[1] << 8u) |
-           ((uint32_t)buffer[2] << 16u) | ((uint32_t)buffer[3] << 24u);
-    (void)g_api->xfer_buffer_release(buffer_id);
-    lwip_port_seed(seed);
-}
-
 /* Native service entry. Signature/ABI match gfx_compositor's initialize():
  *   int initialize(wasmos_driver_api_t *api, int module_count, int, int)
  * The loader jumps here via ELF e_entry (-e initialize). */
@@ -660,17 +749,8 @@ int initialize(wasmos_driver_api_t* driver_api, int module_count, int arg2, int 
     if (driver_api->proc_notify_ready != NULL) {
         driver_api->proc_notify_ready();
     }
-    net_stack_seed_random();
-    if (wasmos_sys_svc_register_native(driver_api, spawn_info.proc_endpoint, g_endpoint,
-                                       (const uint8_t*)"net.stack", 9u,
-                                       NET_STACK_REGISTER_REQUEST_ID) < 0) {
-        return -1;
-    }
-
-    if (driver_api->console_write != NULL) {
-        static const char msg[] = "[net-stack] registered net.stack\n";
-        driver_api->console_write(msg, (int)(sizeof(msg) - 1));
-    }
+    wasmos_sys_native_event_loop_init(&g_control_loop, driver_api, g_control_endpoint,
+                                      NET_STACK_REGISTER_REQUEST_ID);
 
     /* Drain every message before yielding. A service must not assume a later
      * readiness edge will re-signal a request that was already queued; that
@@ -690,7 +770,12 @@ int initialize(wasmos_driver_api_t* driver_api, int module_count, int arg2, int 
             drained = 1;
             net_stack_dispatch(&request);
         }
-        net_stack_bind_virtio();
+        if (wasmos_sys_native_event_loop_poll(&g_control_loop, 8u) < 0) {
+            return -1;
+        }
+        net_stack_begin_registration();
+        net_stack_try_seed_random();
+        net_stack_try_bind_virtio();
         sys_check_timeouts();
         if (g_netif_ready) {
             net_stack_start_rx_poll();

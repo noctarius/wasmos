@@ -54,7 +54,6 @@ class NetStackUdpEchoE2ETest(unittest.TestCase):
 
     def test_udp_echo_via_socket_rings(self) -> None:
         assert self.session is not None
-        self.session.send("spawn /init/system/services/net_stack")
         self.assertTrue(self.session.expect(b"[net-stack] eth0 10.0.2.15/24 ready", timeout_s=90))
         self.session.send("spawn /apps/net_udp_echo")
         self.assertTrue(

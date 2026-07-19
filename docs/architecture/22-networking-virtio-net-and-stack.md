@@ -50,6 +50,10 @@ Out of scope for initial rollout:
   a driver-granted transfer buffer; RX polling/notifications feed
   `ethernet_input`, and its idle loop runs `sys_check_timeouts()`. Socket
   payload callbacks and TCP handshake delivery remain future work.
+- The bootstrap device-manager rule starts `net-stack` at boot. Its service
+  registration, `virtio.net` discovery, `hrng` lookup, and initial link query
+  are all asynchronous requests resolved by its control endpoint; startup does
+  not perform blocking PM or driver request/reply calls.
 - IPC opcode space 0x000–0x9FF is allocated; networking opcodes begin at 0xA00.
 
 ---

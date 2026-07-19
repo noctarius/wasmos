@@ -1,200 +1,174 @@
-# Tasks
+# Active Tasks
 
-This file tracks active implementation work after the architecture/docs
-reorganization.
+This file is the agent-facing work index: it lists unfinished, actionable work
+by subsystem. It is not a changelog and does not repeat completed baseline
+work. See `STATUS.md` for the current implementation snapshot, `git log` for
+history, and `ARCHITECTURE.md` for the complete document map.
 
-IMPORTANT: Keep this file aligned with `README.md` and `docs/ARCHITECTURE.md`.
-Isolation execution baseline: see
-`docs/architecture/11-ring3-isolation-and-separation.md` for the current ring-3
-separation model and deferred hardening backlog.
+## How to Use This File
 
-## Status Sweep (from `docs/architecture/*`)
+- Treat each top-level section as an independent workstream. Read its linked
+  architecture document before changing the subsystem.
+- Keep tasks concrete and remove them when their done condition is met; record
+  the resulting baseline in `STATUS.md`.
+- Preserve ABI parity across wasm3, WARP, native, libc, and libsys variants.
+- QEMU integration targets share `build/esp`; run them sequentially.
 
-### Completed / Landed
-- [x] Ring-3 strict policy enabled in normal boots; dedicated ring-3 smoke kept
-  as separate test target.
-- [x] Baseline syscall boundary and ring-3 transition plumbing (`int 0x80`,
-  scheduler/restore ring-aware paths).
-- [x] Shared-memory primitives landed for native and WASM paths
-  (`shmem_create/map/unmap`) plus console-ring transport.
-- [x] Capability/policy authorization path enforced for privileged operations
-  (including control-plane paths).
-- [x] VT baseline landed: multi-TTY model, switching, per-tty CLI ownership,
-  bounded queue-backpressure behavior, and baseline line discipline controls.
+## Kernel, Memory, and Isolation
 
-### Open / Remaining
-- [ ] Continue post-closure ring-3 hardening per
-  `docs/architecture/11-ring3-isolation-and-separation.md`
-  (boundary cleanup and CLI flake reduction).
-  - Owner: kernel-security + kernel-memory + kernel-scheduler.
-  - Includes explicit follow-ups for ring3 TODOs in `src/kernel/framebuffer.c`,
-    `src/kernel/serial.c`, `src/kernel/cpu.c`, and `src/kernel/process.c`.
-- [ ] Service registry and discoverability model (including VT endpoint
-  discovery migration away from fixed/wired assumptions).
-- [ ] Supervision and restart policy for long-running services/drivers.
-- [ ] Broader config-driven startup policy beyond current `sysinit.spawn`.
+Source: `architecture/06-memory-management.md`,
+`architecture/10-capability-and-policy.md`,
+`architecture/11-ring3-isolation-and-separation.md`, and
+`architecture/28-smp.md`.
 
-## Boot and Platform
-- [ ] Add APIC / IOAPIC support and retire PIC-only assumptions.
-- [ ] Decide whether kernel should eventually read initfs directly instead of
-  relying on synthesized bootstrap `boot_module_t` records.
+- [ ] Replace the WARP shared-linear-memory local fault retry with cross-CPU
+  TLB shootdown for mapping updates.
+- [ ] Move native `.wap` services from ring 0 to the ring-3 native execution
+  path, including syscall-backed `libsys_native` primitives and capability
+  enforcement. This unblocks isolation of `gfx-compositor`, `font-service`,
+  and `net-stack`.
+- [ ] Complete remaining ring-3 hardening TODOs: move framebuffer/serial
+  privileged paths behind explicit boundaries, finish CPU/process cleanup, and
+  retain fault-containment coverage.
+- [ ] Introduce allocation intents (`STACK`, `PGTABLE`, `DMA32`, `GENERIC`),
+  then remove low-memory DMA constraints from kernel stacks and page tables.
+- [ ] Decide and implement kernel reachability beyond the current low physical
+  window: full physmap or bounded `kmap` cache.
+- [ ] Replace the global shared-region cap, make context region sizing
+  configurable where appropriate, and add committed/resident memory accounting
+  for `ps`.
+- [ ] Extend DMA isolation from capability windows to an IOMMU domain model
+  when VT-d/AMD-Vi support is introduced; add non-coherent cache-maintenance
+  hooks before targeting non-coherent hardware.
 
-## Scheduling and Process Model
-- [x] Threading Phase C closure (current scope): native ring3 syscall baseline
-  covers `gettid`, `thread_yield`, `thread_exit`, `thread_create`,
-  `thread_join` (including self-join deny), and `thread_detach` (including
-  invalid-argument deny and detach-then-join deny) with strict lifecycle gate
-  coverage in `run-qemu-ring3-threading-test`.
-- [x] Threading Phase D closure (current scope): join/kill race handling is
-  hardened so blocked joiners are deterministically released during
-  process-group kill, with dedicated strict-threading regression markers for
-  join wake ordering and kill edges (`[test] threading join wake order ok`,
-  `[test] threading join after kill order ok`, `[test] threading join kill wake ok`,
-  `[test] threading wait kill wake ok`); stack teardown now restores guard-page
-  mappings before allocator free to keep recycled pages safely reachable in the
-  shared higher-half window.
-- [ ] Add scheduler observability and latency instrumentation beyond basic `ps`
-  metrics.
-- [ ] Add priorities and/or execution budgets.
-- [ ] Add SMP-aware scheduling only after single-core behavior is stable.
-- [ ] Evaluate tickless scheduling strategy.
-- [ ] Treat syscall/IPC boundaries as generic preemption-safe points where
-  feasible.
-- [ ] Add `fork` syscall.
-- [ ] Add `exec` syscall.
+## Scheduler, Threads, and IPC
 
-## IPC and Shared Memory
-- [ ] Add true notification objects separate from synchronous IPC endpoints.
-- [ ] Define shared-memory bulk-transfer conventions (ownership, discovery,
-  ABI contracts).
-- [ ] Define explicit unmap/remap policy for WASM `wasmos_shmem_map` overlays
-  (current unmap semantics do not restore prior mappings).
-- [ ] Add endpoint badges / richer sender identity.
-- [ ] Add service-level IPC allowlists beyond endpoint ownership checks.
-- [ ] Improve async server support for multi-hop service chains.
+Source: `architecture/07-scheduling-and-preemption.md`,
+`architecture/08-threading-and-lifecycle.md`,
+`architecture/09-process-and-ipc.md`, `architecture/29-threadable-scheduler.md`,
+`architecture/30-ipc-direct-switch.md`, and
+`architecture/32-coroutines-futures-promises.md`.
 
-## Memory and Isolation
-- [ ] Move page-fault handling/pager policy fully out of kernel-hosted scaffold
-  into user space.
-- [ ] Continue kernel/user boundary hardening under strict ring-3 defaults.
-- [ ] Extend capability-granted MMIO/PIO/DMA/IRQ resource assignment breadth
-  and policy coverage.
-- [ ] Native service isolation: native `.wap` services (`native = true`, e.g.
-  `gfx_compositor`, `font_service`) already load as separate processes with the
-  `libsys_native` runtime, but they execute in **ring-0** — not memory-isolated
-  from the kernel. Move them to the ring-3 execution path: (a) load the
-  native-service ELF into a ring-3 process (own address space + heap) rather than
-  ring-0; (b) route the `libsys_native` service primitives through the `INT 0x80`
-  syscall ABI instead of direct kernel calls, reusing existing capability checks.
-  Shared across all native services; motivating case is the embedded lwIP
-  `net-stack`. See `docs/architecture/11-ring3-isolation-and-separation.md`
-  ("Native Service Isolation").
-- [x] DMA Phase 0: define shared capability/ABI contract scaffolding.
-  - Added `DEVMGR_CAP_DMA`, DMA direction/status constants, and
-    `PROC_IPC_SPAWN_CAPS_V2` contract ids in shared ABI headers.
-  - Added `wasmos_spawn_caps_v2_t` + DMA window/direction/max-bytes schema
-    types for spawn-profile transport.
-  - Added kernel spawn-profile storage/query fields for DMA descriptors
-    (direction/max-bytes/window base+length) for future policy enforcement.
-  - Added explicit fail-closed behavior: legacy `PROC_IPC_SPAWN_CAPS` denies
-    DMA flag usage until v2 descriptor transport is implemented.
-- [x] DMA Phase 1: implement borrow-buffer-based DMA map/sync/unmap enforcement
-  in kernel (owner/context checks, direction checks, window/range checks).
-  - Added WASM hostcalls `dma_map_borrow`, `dma_sync_borrow`,
-    `dma_unmap_borrow` in kernel link layer.
-  - Enforced source-endpoint ownership checks + borrow-source context matching.
-  - Enforced borrow grant compatibility with DMA direction flags.
-  - Enforced spawn-profile DMA direction + max-bytes + window-range checks.
-  - Added fail-closed mapped-state behavior for borrow release/unmap ordering.
-- [x] DMA Phase 2: implement `PROC_IPC_SPAWN_CAPS_V2` end-to-end transport in
-  `device-manager` + process-manager and wire descriptor parsing/validation.
-  - Process-manager now accepts spawn capability descriptors via
-    `PROC_IPC_SPAWN_CAPS_V2` payload pointer/size contract.
-  - Process-manager now copies descriptors from caller memory and validates cap
-    bitmask, IO range ordering, DMA direction flags, max-bytes, and DMA window
-    overflow semantics before applying spawn profile.
-  - `PROC_IPC_SPAWN_CAPS_V2` now uses variable-length DMA window payloads and
-    rejects malformed size/count/range descriptors fail-closed.
-- [x] DMA Phase 3: integrate first storage-path driver flow on borrow-based DMA
-  with deterministic fallback path and deny-path coverage markers.
-  - ATA storage path now attempts borrow-based DMA lifecycle
-    (`buffer_borrow` + `dma_map_borrow` + `dma_sync_borrow` + `dma_unmap_borrow`)
-    for block read/write requests.
-  - Deterministic fallback remains active: deny/range/unavailable DMA results
-    fall back to existing PIO/copy transfer path without breaking bootstrap.
-  - ATA emits one-shot coverage markers for both DMA-active and fallback paths.
-  - Native framebuffer borrow path now also attempts borrow-based DMA
-    map/sync/unmap in kernel native-driver plumbing and emits one-shot active/
-    fallback markers for additional path validation.
-- [ ] Evaluate broader SLAB allocator rollout for kernel and user-space heaps.
-- [x] DMA Phase 4: expand validation/hardening around framebuffer DMA path.
-  - Kernel native-driver framebuffer borrow path now emits
-    `[test] framebuffer dma phase4 matrix ok|mismatch` covering wrong-source
-    deny, oversize/out-of-range deny, DMA-window policy checks, repeated
-    map/sync/unmap churn, and stale-unmap deny semantics.
+- [ ] Add scheduler/process observability: committed-memory-aware process
+  reporting, scheduler latency/stall counters, and useful per-process metrics.
+- [ ] Define priority/budget policy after measuring the current scheduler;
+  retain the existing preemption and SMP regression gates.
+- [ ] Promote libsys event-loop intents into the shared future/promise contract,
+  with one receive pump per endpoint and request-id/generation cancellation.
+  This replaces nested synchronous request/reply waits.
+- [ ] Surface futex wait/wake in every user ABI: WASM libc imports and native
+  `int 0x80`/`libsys_native` paths. Keep physical-address/shmem semantics and
+  runtime variants aligned.
+- [ ] Build the native stackful coroutine runtime after futex exposure: guarded
+  stacks, assembly context switch, worker queues, cancellation, joins, and
+  timers in `libsys/native`.
+- [ ] Add the WASM coroutine layer over the same future/promise contract:
+  cooperative fibers first, then language-native stackless async wrappers for
+  Rust, Go, Zig, and AssemblyScript. Do not assume WARP/wasm3 guest stacks can
+  use the native stack switch.
+- [ ] Defer true WASM parallelism and hard coroutine preemption until runtime
+  locking/reentrancy has a dedicated design and validation plan.
+- [ ] Reconcile `architecture/30-ipc-direct-switch.md` with the newer futures
+  direction before implementing its synchronous fast-path phases. Do not add a
+  direct-switch API that reintroduces nested blocking IPC.
 
-## Runtime and Loading
-- [ ] Enforce WASMOS-APP heap `max_pages` (current runtime cap is global).
-- [ ] Expand runtime diagnostics without modifying vendored runtimes.
-- [ ] Decide whether non-`wasm3` runtime experimentation should remain
-  out-of-tree or behind explicit opt-in integration points.
+## Runtime, Packaging, and Service Discovery
 
-## Drivers and Services
-- [ ] Split `device-manager` into inventory/policy/lifecycle responsibilities
-  and add dedicated bus services (`pci-bus`, `acpi-bus`).
-- [ ] Extend `device-manager` beyond ACPI/storage bootstrap.
-- [ ] Add PCI device inventory and driver matching.
-- [ ] Add hotplug/event publication.
-- [ ] Add filesystem/mountpoint manager (`mount-manager`) and VFS layer.
-- [ ] Add virtual `sys`, `dev`, and `proc` filesystems.
-- [ ] Add dynamic mount-point support and mount EFI as `/boot`.
-- [ ] Add RTC/timer device support.
-- [ ] Add NVMe support.
-- [ ] Add NVMEM support.
-- [ ] Add virtio support (`virtio-blk`, `virtio-console`, `virtio-rng`,
-  `virtio-fs`, `virtio-net`).
-- [ ] Add asynchronous I/O support.
+Source: `architecture/13-runtime-and-packaging.md`,
+`architecture/14-libsys-and-service-runtime.md`, and
+`architecture/15-drivers-and-services.md`.
 
-## Virtual Terminal
-- [ ] Complete richer ANSI/VT handling beyond current subset.
-- [ ] Add UTF-8 expansion path for VT rendering/input pipeline.
-- [ ] Add per-tty scrollback.
-- [ ] Extend VT client API where needed for richer terminal behavior.
-- [ ] Add explicit tty-switch behavior tests (`tty 1/2/3`) that verify
-  per-tty shell/input isolation across virtual terminals.
-- [ ] Add focused VT allocator stress tests (`memory.grow` / near-OOM paths).
-- [ ] Evaluate extraction of VT startup allocator helper for shared WASM
-  service reuse.
-- [ ] Add optional VT memory pressure telemetry/soft-cap reporting.
-- [ ] Revisit deferred framebuffer prompt duplication/misalignment artifact
-  under rapid `Ctrl+Shift+Fn` switching once stable repro exists.
+- [ ] Close remaining WARP hostcall gaps and provide a supported alternative to
+  the local runtime-pointer access shim without modifying `libs/warp`.
+- [ ] Make WARP multithreaded WASM either functional with explicit runtime
+  synchronization or explicitly unavailable at the API boundary.
+- [ ] Complete executable-broker handoff: ensure delegated argv/transfer-buffer
+  reads are coherent, define failure handling, and add end-to-end broker tests.
+- [ ] Finish service-class discovery lifecycle behavior: enumeration,
+  add/remove/death notifications, capability-gated registration, and consumer
+  migration where class lookup removes hardwired provider names.
+- [ ] Add driver/service supervision, restart/reincarnation, and controlled
+  capability revoke/reissue on restart.
+- [ ] Extend device-manager from bootstrap sequencing to lifecycle management:
+  normalized provider events, hotplug, and policy-driven reconciliation.
 
-## Filesystem and Userland
-- [ ] Extend `fs-fat` coverage beyond current baseline semantics.
-- [ ] Extend libc/language-shim filesystem coverage: update modes, buffering,
-  and non-ASCII filename handling.
-- [ ] Decide whether initfs should carry additional early-userland payloads
-  beyond bootstrap apps and boot config.
-- [ ] Add full FAT32 support.
-- [ ] Add ext4 support.
-- [ ] Add minimal custom filesystem (`docs/CFS_CUSTOM_FILE_SYSTEM.md`).
+## Filesystems and Storage
 
-## CLI and Userland Tools
-- [ ] Extend `ps` with richer process/memory/CPU reporting.
-- [ ] Add `top` command.
-- [ ] Add `console` command to switch serial/framebuffer views.
-- [ ] Add `mount` / `umount` commands.
-- [ ] Extend `ls` with richer file metadata.
-- [ ] Add `rm`, `cp`, `mv`, `mkdir`, `rmdir`, `touch`, `echo`, `pwd`, `clear`,
-  and `sleep` commands.
+Source: `architecture/18-filesystem-stack.md` and
+`architecture/12-dma-transfers.md`.
 
-## Buildsystem and Tooling
-- [ ] Add a `make` wrapper for common workflows.
-- [ ] Add ncurses-style build UI (`menuconfig`-like flow).
+- [ ] Apply the non-blocking reactor model to `fs-init` and preserve the
+  transfer-buffer ownership contract through all VFS relay paths.
+- [ ] Replace ATA PIO with a real bus-master DMA engine (PRDT/descriptor path)
+  once the DMA/IOMMU work provides a safe foundation.
+- [ ] Complete initfs zero-copy mapping only with an explicit entry-offset ABI
+  and correct revoke/lifetime behavior.
+- [ ] Expand FAT coverage deliberately: FAT32, update modes, non-ASCII LFN
+  creation, and behavioral tests for each added contract.
+- [ ] Evaluate additional filesystems and dynamic mount lifecycle only after the
+  existing VFS/backends have clear mount, ownership, and recovery semantics.
 
-## Documentation and Tests
-- [ ] Keep source comments aligned with architecture decisions as internals
-  evolve.
-- [ ] Add tests for new IPC notification/shared-memory paths.
-- [ ] Add broader malformed boot-config coverage and startup-policy expansion
-  tests beyond current `sysinit.spawn` list.
+## Device Drivers and Input
+
+Source: `architecture/16-device-manager-and-bus-enumeration.md`,
+`architecture/17-console-io-and-character-device.md`, and
+`architecture/21-virtual-input-testing-via-virtio-serial.md`.
+
+- [ ] Implement virtio-serial queue setup plus data/control-plane byte-stream
+  IPC. Discovery/register access alone cannot transport host data.
+- [ ] Build the `virt-input` service and host bridge after virtio-serial data
+  transport exists; inject keyboard/mouse events through the normal compositor
+  IPC path and add sequential QEMU UI automation tests.
+- [ ] Resolve PCI INTx polarity/trigger configuration so `virtio-net` RX
+  notifications become reliable push events rather than polling hints.
+- [ ] Add hotplug/event publication and future bus providers (USB/virtual)
+  through the normalized device-record contract.
+
+## Networking
+
+Source: `architecture/22-networking-virtio-net-and-stack.md`.
+
+- [ ] Phase 2: turn the native lwIP scaffold into `net-stack`: netif glue,
+  driver control plane, ARP/IPv4/ICMP/UDP, socket IPC, and UDP echo validation.
+- [ ] Implement the shared-memory socket ring data plane with explicit transfer
+  buffer grants, mapping lifetime, doorbells, and consumer-side validation.
+- [ ] Phase 3: add TCP connect/listen/accept/send/recv/close and a periodic
+  `sys_check_timeouts()` wake source, with TCP echo and retry/close tests.
+- [ ] Phase 4: add IPv6, NDP/ICMPv6, dual-stack socket behavior, multiple
+  addresses per interface, and isolated stack instances.
+- [ ] Phase 5: add negative-path/restart/link-down tests, diagnostics, and only
+  then evaluate a packet DMA fast path that removes the RX copy.
+- [ ] Decide initial address configuration (static versus DHCP), final service
+  naming, TCP baseline scope, and timer wake mechanism before committing their
+  public ABI.
+
+## Graphics, VT, and User Space
+
+Source: `architecture/19-virtual-terminal.md`,
+`architecture/20-graphics-framebuffer-and-compositor.md`,
+`architecture/23-cli-and-user-space.md`, and
+`architecture/24-environment-scopes-and-inheritance.md`.
+
+- [ ] Reclaim old libui font shared-memory objects when text buffers grow.
+- [ ] Reproduce and fix the deferred rapid-TTY-switch framebuffer prompt
+  duplication/misalignment issue; keep the issue deferred until a stable repro
+  exists.
+- [ ] Expand VT behavior only from an explicit compatibility need: richer ANSI,
+  UTF-8, scrollback, or input APIs should each include focused behavioral tests.
+- [ ] Add script-engine diagnostics for unclosed `if` blocks and preserve the
+  documented `script` versus `source` environment-scope semantics.
+
+## Validation and Documentation
+
+Source: `architecture/25-diagnostics-status.md`,
+`architecture/26-repo-map-and-validation.md`, and
+`architecture/27-python-test-framework.md`.
+
+- [ ] Add behavioral regression coverage with every new subsystem contract;
+  reject source-text assertions.
+- [ ] Add focused stress/negative tests for TLB shootdown, service restart,
+  futures cancellation, virtio-serial transport, networking, and new DMA paths.
+- [ ] Add graphical input-injection tests only after virtio-serial transport is
+  usable; use distinct sockets and never run QEMU sessions in parallel.
+- [ ] Keep architecture documents authoritative for design, `STATUS.md` concise
+  for current behavior, and this file limited to unfinished work.

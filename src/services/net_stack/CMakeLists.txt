@@ -9,7 +9,10 @@
 # and NOT spawned at boot — the ESP service list in the root CMakeLists is
 # explicit, so registering here only wires up the build, keeping boot unchanged.
 #
-# COMPILE MILESTONE ONLY: no netif glue, no driver IPC wiring, no socket API.
+# Socket state/ring attachment core is built and host-unit-tested. The live
+# service registers `net.stack`, maps a client-provided descriptor and its
+# persistent TX/RX grants, then dispatches socket control requests. Netif
+# glue, lwIP PCB binding, and driver wiring remain intentionally deferred.
 
 set(NET_STACK_DIR ${CMAKE_CURRENT_SOURCE_DIR})
 set(LWIP_DIR ${CMAKE_SOURCE_DIR}/libs/lwip)
@@ -35,6 +38,7 @@ set(NET_STACK_INCLUDES
     -I${NET_STACK_DIR}
     -I${LIBC_DIR}/include
     -I${DRIVER_WASM_DIR}/include
+    -I${LIBSYS_WASM_DIR}/include
     -I${LIBSYS_NATIVE_DIR}/include)
 
 # lwIP is a never-edited git subtree; relax warnings-as-errors and silence the
@@ -121,6 +125,23 @@ add_custom_command(
   VERBATIM
 )
 list(APPEND NET_STACK_OBJS ${NET_STACK_NETSTACK_OBJ})
+
+set(NET_STACK_SOCKET_OBJ ${BUILD_DIR}/net_stack_socket.o)
+add_custom_command(
+  OUTPUT ${NET_STACK_SOCKET_OBJ}
+  COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}
+  COMMAND ${CLANG} ${NET_STACK_CFLAGS_BASE} ${NET_STACK_LWIP_WARN_FLAGS}
+          ${NET_STACK_INCLUDES}
+          -c ${NET_STACK_DIR}/socket.c
+          -o ${NET_STACK_SOCKET_OBJ}
+  DEPENDS ${NET_STACK_DIR}/socket.c ${NET_STACK_DIR}/socket.h
+          ${LIBSYS_WASM_DIR}/include/wasmos/ringbuf.h
+          ${DRIVER_WASM_DIR}/include/wasmos_driver_abi.h
+  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+  COMMENT "Compiling socket.c (net-stack)"
+  VERBATIM
+)
+list(APPEND NET_STACK_OBJS ${NET_STACK_SOCKET_OBJ})
 
 set(NET_STACK_PORT_OBJ ${BUILD_DIR}/net_stack_port.o)
 add_custom_command(
@@ -221,7 +242,8 @@ add_custom_command(
 
 add_custom_target(net_stack_app
   DEPENDS ${WASM_NET_STACK_APP}
-  SOURCES ${NET_STACK_DIR}/net_stack.c ${NET_STACK_DIR}/port.c
+  SOURCES ${NET_STACK_DIR}/net_stack.c ${NET_STACK_DIR}/socket.c ${NET_STACK_DIR}/socket.h
+          ${NET_STACK_DIR}/port.c
           ${NET_STACK_DIR}/linker.metadata
 )
 

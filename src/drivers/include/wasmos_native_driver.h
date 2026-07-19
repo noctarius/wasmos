@@ -127,6 +127,11 @@ typedef struct wasmos_driver_api {
      *  - xfer_buffer_release: the owner destroys `buffer_id`, unmapping it and
      *    cascade-revoking every borrow of it. Returns 0 on success. */
     void* (*xfer_buffer_acquire)(uint32_t kind, uint32_t size, uint32_t* out_buffer_id);
+    /* Map a transfer buffer granted to this native service. `buffer_id` and
+     * `borrow_id` must describe the same active grant; access permissions come
+     * from that grant. Unmap it with xfer_buffer_unmap_borrowed when finished. */
+    void* (*xfer_buffer_map_borrowed)(uint32_t kind, uint32_t buffer_id, uint32_t borrow_id);
+    int (*xfer_buffer_unmap_borrowed)(uint32_t borrow_id);
     int (*xfer_buffer_borrow)(uint32_t grantee_endpoint, uint32_t buffer_id, uint32_t flags);
     int (*xfer_buffer_unborrow)(uint32_t borrow_id);
     int (*xfer_buffer_release)(uint32_t buffer_id);
@@ -138,7 +143,7 @@ typedef struct wasmos_driver_api {
 #define ND_BUFFER_BORROW_WRITE 0x2u
 
 #define WASMOS_NATIVE_ABI_MAGIC 0x574E4150u /* 'WNAP' */
-#define WASMOS_NATIVE_ABI_VERSION 8u
+#define WASMOS_NATIVE_ABI_VERSION 9u
 
 /* Entry point that every native driver must provide via ELF e_entry. */
 typedef int (*native_driver_entry_fn_t)(wasmos_driver_api_t* api, int module_count, int arg2,

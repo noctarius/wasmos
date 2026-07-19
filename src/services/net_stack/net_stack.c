@@ -1,27 +1,38 @@
 /* net_stack.c - native (non-WASM) net-stack service entry.
  *
- * COMPILE MILESTONE (compile + link + pack only):
+ * LIVE CONTROL-PLANE BASELINE:
  *   - Captures the wasmos_driver_api_t table for port.c (time/console).
  *   - Validates the native ABI magic/version (mirrors gfx_compositor).
  *   - Calls lwip_init() once to exercise the linked lwIP core.
- *   - Notifies ready and enters a benign idle loop (the native service ABI
- *     expects the entry not to return, matching gfx_compositor).
+ *   - Creates and registers the `net.stack` endpoint, then notifies ready.
+ *   - Drains and dispatches every pending socket control message.
  *
  * DELIBERATELY NOT DONE YET (later netif/ICMP/socket steps):
- *   - No IPC service loop, no svc_register, no endpoint creation.
- *   - No netif glue, no driver IPC wiring, no socket API, no netstack behavior.
+ *   - No netif glue or driver IPC wiring.
+ *   - No receive callbacks, payload-ring processing, or TCP handshake state.
  */
 #include <stdint.h>
 #include <stdarg.h>
 #include <stddef.h>
 
 #include "lwip/init.h"
+#include "lwip/ip_addr.h"
+#include "lwip/tcp.h"
+#include "lwip/udp.h"
 
+#include "socket.h"
+#include "wasmos/libsys_native.h"
 #include "wasmos_native_driver.h"
 
 /* The api table captured at initialize() time. Read by port.c (sys_now,
  * lwip_port_rand) and net_stack_lwip_diag(). NULL until initialize() runs. */
 static wasmos_driver_api_t* g_api = NULL;
+static net_socket_pool_t g_socket_pool;
+static uint32_t g_endpoint = 0u;
+
+#define ND_IPC_OK 0
+#define ND_IPC_EMPTY 1
+#define NET_STACK_REGISTER_REQUEST_ID 0x4E530001u
 
 wasmos_driver_api_t* net_stack_api(void) {
     return g_api;
@@ -53,6 +64,233 @@ void net_stack_lwip_diag(const char* fmt, ...) {
     va_end(ap);
 }
 
+static void net_stack_send_reply(const nd_ipc_message_t* request, uint32_t type, int32_t status,
+                                 uint32_t arg1, uint32_t arg2, uint32_t arg3) {
+    nd_ipc_message_t reply;
+    uint32_t context_id;
+    if (g_api == NULL || request == NULL || request->source == 0u ||
+        request->source == 0xFFFFFFFFu || g_api->ipc_send == NULL ||
+        g_api->sched_current_pid == NULL) {
+        return;
+    }
+    reply.type = type;
+    reply.source = g_endpoint;
+    reply.destination = request->source;
+    reply.request_id = request->request_id;
+    reply.arg0 = (uint32_t)status;
+    reply.arg1 = arg1;
+    reply.arg2 = arg2;
+    reply.arg3 = arg3;
+    context_id = g_api->sched_current_pid();
+    (void)g_api->ipc_send(context_id, request->source, &reply);
+}
+
+static void net_stack_reply_error(const nd_ipc_message_t* request, int32_t status) {
+    net_stack_send_reply(request, NET_IPC_ERROR, status, 0u, 0u, 0u);
+}
+
+static int32_t net_stack_pcb_open(net_socket_t* socket) {
+    if (socket == NULL || socket->family != NET_SOCKET_AF_INET) {
+        return NET_STATUS_INVALID;
+    }
+    if (socket->type == NET_SOCKET_DGRAM) {
+        socket->pcb = udp_new_ip_type(IPADDR_TYPE_V4);
+    } else if (socket->type == NET_SOCKET_STREAM) {
+        socket->pcb = tcp_new_ip_type(IPADDR_TYPE_V4);
+    }
+    return socket->pcb != NULL ? NET_STATUS_OK : NET_STATUS_NO_MEM;
+}
+
+static int32_t net_stack_pcb_bind(net_socket_t* socket, uint16_t port, uint32_t addr_v4) {
+    ip_addr_t address;
+    err_t err;
+    if (socket == NULL || socket->pcb == NULL) {
+        return NET_STATUS_INVALID;
+    }
+    ip_addr_set_ip4_u32(&address, addr_v4);
+    if (socket->type == NET_SOCKET_DGRAM) {
+        err = udp_bind((struct udp_pcb*)socket->pcb, &address, port);
+    } else {
+        err = tcp_bind((struct tcp_pcb*)socket->pcb, &address, port);
+    }
+    return err == ERR_OK ? NET_STATUS_OK : NET_STATUS_ADDR_IN_USE;
+}
+
+static int32_t net_stack_pcb_connect(net_socket_t* socket, uint16_t port, uint32_t addr_v4) {
+    ip_addr_t address;
+    err_t err;
+    if (socket == NULL || socket->pcb == NULL) {
+        return NET_STATUS_INVALID;
+    }
+    ip_addr_set_ip4_u32(&address, addr_v4);
+    if (socket->type == NET_SOCKET_DGRAM) {
+        err = udp_connect((struct udp_pcb*)socket->pcb, &address, port);
+    } else {
+        /* TODO(net_stack): install TCP receive/error callbacks and defer the
+         * response until the SYN handshake completes once a netif is bound. */
+        err = tcp_connect((struct tcp_pcb*)socket->pcb, &address, port, NULL);
+    }
+    return err == ERR_OK ? NET_STATUS_OK : NET_STATUS_IO_ERROR;
+}
+
+static void net_stack_pcb_close(net_socket_t* socket) {
+    if (socket == NULL || socket->pcb == NULL) {
+        return;
+    }
+    if (socket->type == NET_SOCKET_DGRAM) {
+        udp_remove((struct udp_pcb*)socket->pcb);
+    } else {
+        tcp_abort((struct tcp_pcb*)socket->pcb);
+    }
+    socket->pcb = NULL;
+}
+
+static void net_stack_handle_open(const nd_ipc_message_t* request) {
+    net_socket_open_descriptor_v1_t* descriptor;
+    void* tx_base;
+    void* rx_base;
+    uint32_t socket_id = 0u;
+    uint32_t tx_borrow_id;
+    uint32_t rx_borrow_id;
+    int32_t status;
+
+    if (g_api == NULL || g_api->xfer_buffer_map_borrowed == NULL ||
+        g_api->xfer_buffer_unmap_borrowed == NULL || request->arg2 != sizeof(*descriptor)) {
+        net_stack_reply_error(request, NET_STATUS_INVALID);
+        return;
+    }
+    descriptor = (net_socket_open_descriptor_v1_t*)g_api->xfer_buffer_map_borrowed(
+        ND_BUFFER_KIND_XFER, request->arg0, request->arg1);
+    if (descriptor == NULL) {
+        net_stack_reply_error(request, NET_STATUS_DENIED);
+        return;
+    }
+    if (descriptor->family != NET_SOCKET_AF_INET || descriptor->tx_bytes == 0u ||
+        descriptor->rx_bytes == 0u) {
+        (void)g_api->xfer_buffer_unmap_borrowed(request->arg1);
+        net_stack_reply_error(request, NET_STATUS_INVALID);
+        return;
+    }
+    tx_base = g_api->xfer_buffer_map_borrowed(ND_BUFFER_KIND_XFER, descriptor->tx_buffer_id,
+                                              descriptor->tx_borrow_id);
+    rx_base = g_api->xfer_buffer_map_borrowed(ND_BUFFER_KIND_XFER, descriptor->rx_buffer_id,
+                                              descriptor->rx_borrow_id);
+    tx_borrow_id = descriptor->tx_borrow_id;
+    rx_borrow_id = descriptor->rx_borrow_id;
+    if (tx_base == NULL || rx_base == NULL) {
+        if (tx_base != NULL) {
+            (void)g_api->xfer_buffer_unmap_borrowed(tx_borrow_id);
+        }
+        if (rx_base != NULL) {
+            (void)g_api->xfer_buffer_unmap_borrowed(rx_borrow_id);
+        }
+        (void)g_api->xfer_buffer_unmap_borrowed(request->arg1);
+        net_stack_reply_error(request, NET_STATUS_DENIED);
+        return;
+    }
+    status = net_socket_open(&g_socket_pool, request->source, descriptor, tx_base, rx_base,
+                             &socket_id);
+    (void)g_api->xfer_buffer_unmap_borrowed(request->arg1);
+    if (status != NET_STATUS_OK) {
+        (void)g_api->xfer_buffer_unmap_borrowed(tx_borrow_id);
+        (void)g_api->xfer_buffer_unmap_borrowed(rx_borrow_id);
+        net_stack_reply_error(request, status);
+        return;
+    }
+    status = net_stack_pcb_open(&g_socket_pool.sockets[socket_id]);
+    if (status != NET_STATUS_OK) {
+        (void)net_socket_close(&g_socket_pool, request->source, socket_id);
+        (void)g_api->xfer_buffer_unmap_borrowed(tx_borrow_id);
+        (void)g_api->xfer_buffer_unmap_borrowed(rx_borrow_id);
+        net_stack_reply_error(request, status);
+        return;
+    }
+    net_stack_send_reply(request, NET_IPC_RESP, (int32_t)socket_id, 0u, 0u, 0u);
+}
+
+static void net_stack_dispatch(const nd_ipc_message_t* request) {
+    int32_t status;
+    if (request == NULL || request->source == 0u || request->source == 0xFFFFFFFFu) {
+        return;
+    }
+
+    switch (request->type) {
+    case NET_IPC_SOCKET_OPEN:
+        net_stack_handle_open(request);
+        break;
+    case NET_IPC_BIND:
+        if (request->arg0 >= NET_SOCKET_MAX ||
+            g_socket_pool.sockets[request->arg0].owner_endpoint != request->source) {
+            net_stack_reply_error(request, NET_STATUS_DENIED);
+            break;
+        }
+        status = net_stack_pcb_bind(&g_socket_pool.sockets[request->arg0],
+                                    (uint16_t)request->arg1, request->arg2);
+        if (status == NET_STATUS_OK) {
+            status = net_socket_bind(&g_socket_pool, request->source, request->arg0,
+                                     (uint16_t)request->arg1, request->arg2);
+        }
+        if (status == NET_STATUS_OK) {
+            net_stack_send_reply(request, NET_IPC_RESP, status, 0u, 0u, 0u);
+        } else {
+            net_stack_reply_error(request, status);
+        }
+        break;
+    case NET_IPC_CONNECT:
+        if (request->arg0 >= NET_SOCKET_MAX ||
+            g_socket_pool.sockets[request->arg0].owner_endpoint != request->source) {
+            net_stack_reply_error(request, NET_STATUS_DENIED);
+            break;
+        }
+        status = net_stack_pcb_connect(&g_socket_pool.sockets[request->arg0],
+                                       (uint16_t)request->arg1, request->arg2);
+        if (status == NET_STATUS_OK) {
+            status = net_socket_connect(&g_socket_pool, request->source, request->arg0,
+                                        (uint16_t)request->arg1, request->arg2);
+        }
+        if (status == NET_STATUS_OK) {
+            net_stack_send_reply(request, NET_IPC_RESP, status, 0u, 0u, 0u);
+        } else {
+            net_stack_reply_error(request, status);
+        }
+        break;
+    case NET_IPC_CLOSE:
+        if (request->arg0 >= NET_SOCKET_MAX ||
+            g_socket_pool.sockets[request->arg0].owner_endpoint != request->source) {
+            net_stack_reply_error(request, NET_STATUS_DENIED);
+            break;
+        }
+        uint32_t tx_borrow_id = g_socket_pool.sockets[request->arg0].tx_borrow_id;
+        uint32_t rx_borrow_id = g_socket_pool.sockets[request->arg0].rx_borrow_id;
+        net_stack_pcb_close(&g_socket_pool.sockets[request->arg0]);
+        status = net_socket_close(&g_socket_pool, request->source, request->arg0);
+        if (status == NET_STATUS_OK) {
+            (void)g_api->xfer_buffer_unmap_borrowed(tx_borrow_id);
+            (void)g_api->xfer_buffer_unmap_borrowed(rx_borrow_id);
+            net_stack_send_reply(request, NET_IPC_RESP, status, 0u, 0u, 0u);
+        } else {
+            net_stack_reply_error(request, status);
+        }
+        break;
+    case NET_IPC_SEND:
+    case NET_IPC_RECV:
+    case NET_IPC_POLL:
+    case NET_IPC_IFADDR_ADD:
+    case NET_IPC_IFADDR_DEL:
+    case NET_IPC_IFADDR_LIST:
+    case NET_IPC_STACK_CREATE:
+    case NET_IPC_STACK_DESTROY:
+    case NET_IPC_STACK_SELECT:
+    case NET_IPC_TX_NOTIFY:
+    case NET_IPC_RX_NOTIFY:
+        net_stack_reply_error(request, NET_STATUS_NOT_READY);
+        break;
+    default:
+        net_stack_reply_error(request, NET_STATUS_INVALID);
+        break;
+    }
+}
+
 /* Native service entry. Signature/ABI match gfx_compositor's initialize():
  *   int initialize(wasmos_driver_api_t *api, int module_count, int, int)
  * The loader jumps here via ELF e_entry (-e initialize). */
@@ -70,9 +308,32 @@ int initialize(wasmos_driver_api_t* driver_api, int module_count, int arg2, int 
     /* Bring up the lwIP core (raw API, NO_SYS). This allocates the static
      * memory pools sized by lwipopts.h. No netif is added yet. */
     lwip_init();
+    net_socket_pool_init(&g_socket_pool);
 
     if (driver_api->console_write != NULL) {
         static const char msg[] = "[net-stack] lwip_init ok\n";
+        driver_api->console_write(msg, (int)(sizeof(msg) - 1));
+    }
+
+    wasmos_spawn_info_t spawn_info;
+    if (driver_api->spawn_info == NULL ||
+        driver_api->spawn_info(&spawn_info, NULL, 0u) != 0 ||
+        spawn_info.magic != WASMOS_SPAWN_INFO_MAGIC ||
+        spawn_info.version != WASMOS_SPAWN_INFO_VERSION || spawn_info.proc_endpoint == 0u) {
+        return -1;
+    }
+    g_endpoint = driver_api->ipc_create_endpoint();
+    if (g_endpoint == 0xFFFFFFFFu) {
+        return -1;
+    }
+    if (wasmos_sys_svc_register_native(driver_api, spawn_info.proc_endpoint, g_endpoint,
+                                       (const uint8_t*)"net.stack", 9u,
+                                       NET_STACK_REGISTER_REQUEST_ID) < 0) {
+        return -1;
+    }
+
+    if (driver_api->console_write != NULL) {
+        static const char msg[] = "[net-stack] registered net.stack\n";
         driver_api->console_write(msg, (int)(sizeof(msg) - 1));
     }
 
@@ -80,10 +341,25 @@ int initialize(wasmos_driver_api_t* driver_api, int module_count, int arg2, int 
         driver_api->proc_notify_ready();
     }
 
-    /* Benign idle loop: mirror gfx_compositor's never-return entry contract
-     * without setting up a real IPC service loop yet. */
+    /* Drain every message before yielding. A service must not assume a later
+     * readiness edge will re-signal a request that was already queued; that
+     * exact mistake previously deadlocked the virtio-net synchronous control
+     * path. */
     for (;;) {
-        if (driver_api->sched_yield != NULL) {
+        nd_ipc_message_t request;
+        int drained = 0;
+        for (;;) {
+            int rc = driver_api->ipc_recv(driver_api->sched_current_pid(), g_endpoint, &request);
+            if (rc == ND_IPC_EMPTY) {
+                break;
+            }
+            if (rc != ND_IPC_OK) {
+                return -1;
+            }
+            drained = 1;
+            net_stack_dispatch(&request);
+        }
+        if (!drained && driver_api->sched_yield != NULL) {
             driver_api->sched_yield();
         }
     }

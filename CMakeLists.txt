@@ -1916,6 +1916,14 @@ add_custom_target(run-kernel-unit-tests
           -o ${BUILD_DIR}/test_ringbuf
   COMMAND ${BUILD_DIR}/test_ringbuf
   COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
+          -I${LIBSYS_WASM_DIR}/include
+          -I${DRIVER_WASM_DIR}/include
+          -I${CMAKE_SOURCE_DIR}/src/services/net_stack
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_net_socket.c
+          ${CMAKE_SOURCE_DIR}/src/services/net_stack/socket.c
+          -o ${BUILD_DIR}/test_net_socket
+  COMMAND ${BUILD_DIR}/test_net_socket
+  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
           -I${KERNEL_DIR}/include
           -iquote ${LIBC_DIR}/include
           ${CMAKE_SOURCE_DIR}/tests/unit/test_service_class_registry.c

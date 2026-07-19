@@ -44,8 +44,10 @@ Out of scope for initial rollout:
   smoke exchange through QEMU SLIRP, and offers pull plus notification-hinted
   RX delivery. PCI INTx polarity/trigger configuration remains incomplete, so
   consumers must poll defensively.
-- `net-stack` is a native lwIP scaffold. It initializes lwIP but has no netif
-  glue, driver control plane, or socket API.
+- `net-stack` is a native lwIP control-plane baseline. It registers `net.stack`
+  using its spawn-info process-manager endpoint, drains socket IPC traffic, and
+  maps a validated open descriptor plus its persistent TX/RX grants, and binds
+  IPv4 lwIP UDP/TCP PCBs. It has no netif glue or driver control plane yet.
 - IPC opcode space 0x000–0x9FF is allocated; networking opcodes begin at 0xA00.
 
 ---
@@ -483,6 +485,13 @@ The app↔net-stack **data plane** is a pair of shared-memory SPSC ring buffers
 per socket. Socket payload never travels in an IPC message: IPC carries only the
 **control plane** (open/bind/connect/close) and lightweight **doorbells**.
 
+The reusable SPSC implementation is present in
+`src/libsys/wasm/include/wasmos/ringbuf.h` and is covered by
+`tests/unit/test_ringbuf.c`. The net-stack socket pool and versioned open
+descriptor are implemented in `src/services/net_stack/socket.{h,c}` and covered
+by `tests/unit/test_net_socket.c`; live service dispatch and lwIP PCB binding
+remain future work.
+
 **Rationale.** A persistent per-socket ring avoids per-datagram borrow/release
 churn, generalizes to TCP byte streaming without an ABI change, and keeps the
 app-facing contract stable across the UDP→TCP progression. The ring indices
@@ -505,6 +514,28 @@ of relative rate.
   Because each producer respects the consumer's read index and only writes free
   space, push has **no overwrite hazard** — the ring indices *are* the flow
   control (TCP window backpressure / UDP drop fall out of "ring full").
+
+At open time, the client writes this descriptor into a control transfer buffer,
+grants that descriptor read access to net-stack, and sends its buffer/borrow IDs
+with `NET_IPC_SOCKET_OPEN`. The descriptor's TX/RX grants remain live for the
+socket lifetime:
+
+```c
+typedef struct __attribute__((packed)) {
+    uint16_t version;  /* NET_SOCKET_OPEN_DESCRIPTOR_VERSION */
+    uint16_t bytes;    /* sizeof(net_socket_open_descriptor_v1_t) */
+    uint32_t family;
+    uint32_t type;
+    uint32_t stack_id;
+    uint32_t flags;
+    uint32_t tx_buffer_id;
+    uint32_t tx_borrow_id;
+    uint32_t tx_bytes;
+    uint32_t rx_buffer_id;
+    uint32_t rx_borrow_id;
+    uint32_t rx_bytes;
+} net_socket_open_descriptor_v1_t;
+```
 
 #### Ring layout
 
@@ -562,20 +593,24 @@ typedef struct __attribute__((packed, aligned(64))) {
   re-checks the index **after** arming its wait. (This codebase has a history
   of IPC lost-wakeup stalls — see `docs/STATUS.md` — so this must be explicit.)
 
-#### Mapping requirement (hard dependency)
+#### Mapping baseline (implemented and validated)
 
 Both endpoints must read/write the **same physical pages** for the life of the
 socket. net-stack is a native service with a stable address space, so its
 mapping never moves; all the volatility is on the WASM-app side, where the ring
-must be overlaid into the app's linear memory. That overlay must satisfy the
-**pinned shared-window invariant** and therefore depends on the WARP linear
+must be overlaid into the app's linear memory. That overlay satisfies the
+**pinned shared-window invariant** through the implemented WARP linear
 address-space rework — see
 [WARP Ring3 Implementation → Linear Memory: Reserve-and-Commit](31-warp-ring3-implementation.md#15--linear-memory-reserve-and-commit-no-relocation)
 and [Memory Management → Pinned VA Arena](06-memory-management.md#pinned-va-arena-shmem-rings-and-any-stable-mapping).
-The rings are one consumer of that arena, alongside shmem surfaces.
-This mapping contract must be proven on both wasm3 and WARP (buffer stays
-coherent across aggressive app-heap growth) **before** ring/socket code is
-built on top of it.
+The rings are one consumer of that arena, alongside shmem surfaces. The mapping
+contract is already a validated baseline for both wasm3 and WARP: shared
+buffers remain coherent across app-heap growth, and the fixed mapping is not
+relocated. The implementation anchors are the wasm3 in-place linear-memory
+growth path (`src/kernel/wasm3/shim.c`) and WARP's pinned shared-window mapping
+path (`src/kernel/warp/link.cpp`). Socket-ring work may rely on this baseline;
+it must not reopen it as a prerequisite unless either mapping implementation
+changes.
 
 ### IPC Opcode Allocation
 
@@ -608,6 +643,8 @@ enum {
     NET_IPC_STACK_DESTROY        = 0xB0B, /* arg0=stack_id */
     NET_IPC_STACK_SELECT         = 0xB0C, /* arg0=stack_id (sets default for this client endpoint) */
     NET_IPC_DATA_NOTIFY          = 0xB0D, /* push stack→client: arg0=sock_id arg1=bytes_avail */
+    NET_IPC_TX_NOTIFY            = 0xB0E, /* push client→stack: arg0=sock_id */
+    NET_IPC_RX_NOTIFY            = 0xB0F, /* push stack→client: arg0=sock_id */
     NET_IPC_RESP                 = 0xB80,
     NET_IPC_ERROR                = 0xBFF
 };
@@ -991,15 +1028,14 @@ events.
 
 ```
 initialize():
-  lookup 'virtio.net' endpoint (retry)
-  init lwIP, create default netif, set IP config
+  init lwIP
   register 'net.stack' with svc registry
   notify_ready()
   loop:
-    wasmos_ipc_recv(g_endpoint)
+    drain every pending message from g_endpoint
     dispatch message type:
       NETDRV_IPC_RX_FRAME_NOTIFY  → on_rx_frame(arg0=len)
-      NET_IPC_SOCKET_OPEN         → handle_socket_open(...)
+      NET_IPC_SOCKET_OPEN         → map descriptor/rings, handle_socket_open(...)
       NET_IPC_BIND                → handle_bind(...)
       NET_IPC_CONNECT             → handle_connect(...)
       NET_IPC_SEND                → handle_send(...)

@@ -243,7 +243,7 @@ static void nd_unmap_pages(mm_context_t* ctx, uint64_t virt, uint64_t pages) {
     }
 }
 
-/* Owner-push transfer-buffer object API for native drivers (ABI v8), mirroring
+/* Owner-push transfer-buffer object API for native drivers (ABI v9), mirroring
  * the WASM xfer_buffer_* hostcalls. Native drivers access buffer bytes through a
  * mapping, so acquire maps the owned object into the driver's address space and
  * returns the pointer; borrow grants a peer (returns a borrow_id for the wire)
@@ -308,6 +308,77 @@ static void* nd_xfer_buffer_acquire(uint32_t kind, uint32_t size, uint32_t* out_
         *out_buffer_id = owner.buffer.buffer_id;
     }
     return ptr_cast(void, virt);
+}
+
+/* Map a transfer-buffer grant owned by a peer into the calling native
+ * service. The wire carries both buffer_id and borrow_id, so validate their
+ * association rather than accepting a borrow for an unrelated object. */
+static void* nd_xfer_buffer_map_borrowed(uint32_t kind, uint32_t buffer_id, uint32_t borrow_id) {
+    process_t* proc = process_get(process_current_pid());
+    xfer_buffer_borrow_t borrow = {0};
+    mm_context_t* ctx;
+    nd_borrow_slot_t* slot;
+    uint64_t phys_base;
+    uint64_t pages;
+    uint64_t virt;
+
+    if (kind != BUFFER_KIND_TRANSFER || buffer_id == 0u || borrow_id == 0u || !proc ||
+        proc->context_id == 0u) {
+        return (void*)0;
+    }
+    ctx = mm_context_get(proc->context_id);
+    if (!ctx || ctx->root_table == 0u ||
+        xfer_buffer_get_borrowed(borrow_id, proc->context_id, &borrow, 0) != XFER_BUFFER_OK ||
+        borrow.buffer.kind != kind || borrow.buffer.buffer_id != buffer_id ||
+        borrow.buffer.size_bytes == 0u) {
+        return (void*)0;
+    }
+    slot = nd_borrow_alloc();
+    if (!slot) {
+        return (void*)0;
+    }
+    phys_base = xfer_buffer_object_phys(&borrow.buffer);
+    pages = ((uint64_t)borrow.buffer.size_bytes + PAGE_SIZE - 1u) / PAGE_SIZE;
+    if (phys_base == 0u || pages == 0u) {
+        return (void*)0;
+    }
+    virt = ND_DEVICE_VIRT_BASE + (uint64_t)(slot - g_nd_borrows) * ND_MAP_STRIDE;
+    if (nd_map_pages(ctx, virt, phys_base, pages, borrow.flags) != 0) {
+        return (void*)0;
+    }
+    slot->driver_ctx = proc->context_id;
+    slot->kind = kind;
+    slot->key_buffer_id = buffer_id;
+    slot->owner_local = 0;
+    slot->borrow = borrow;
+    slot->virt = virt;
+    slot->pages = pages;
+    return ptr_cast(void, virt);
+}
+
+static int nd_xfer_buffer_unmap_borrowed(uint32_t borrow_id) {
+    process_t* proc = process_get(process_current_pid());
+    nd_borrow_slot_t* slot = (nd_borrow_slot_t*)0;
+    mm_context_t* ctx;
+    if (!proc || proc->context_id == 0u || borrow_id == 0u) {
+        return -1;
+    }
+    for (uint32_t i = 0; i < ND_BORROW_SLOTS; ++i) {
+        if (g_nd_borrows[i].driver_ctx == proc->context_id && !g_nd_borrows[i].owner_local &&
+            g_nd_borrows[i].borrow.borrow_id == borrow_id) {
+            slot = &g_nd_borrows[i];
+            break;
+        }
+    }
+    if (!slot) {
+        return -1;
+    }
+    ctx = mm_context_get(proc->context_id);
+    if (ctx && ctx->root_table != 0u) {
+        nd_unmap_pages(ctx, slot->virt, slot->pages);
+    }
+    nd_borrow_slot_clear(slot);
+    return 0;
 }
 
 /* Owner-push grant: the calling driver owns `buffer_id`; grant the context that
@@ -875,6 +946,8 @@ int native_driver_start(uint32_t context_id, const uint8_t* elf_data, uint32_t e
     api.shmem_flush = nd_shmem_flush;
     api.spawn_info = nd_spawn_info;
     api.xfer_buffer_acquire = nd_xfer_buffer_acquire;
+    api.xfer_buffer_map_borrowed = nd_xfer_buffer_map_borrowed;
+    api.xfer_buffer_unmap_borrowed = nd_xfer_buffer_unmap_borrowed;
     api.xfer_buffer_borrow = nd_xfer_buffer_borrow;
     api.xfer_buffer_unborrow = nd_xfer_buffer_unborrow;
     api.xfer_buffer_release = nd_xfer_buffer_release;

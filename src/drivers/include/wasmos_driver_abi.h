@@ -570,6 +570,8 @@ enum {
     NET_IPC_STACK_DESTROY = 0xB0B,
     NET_IPC_STACK_SELECT = 0xB0C,
     NET_IPC_DATA_NOTIFY = 0xB0D,
+    NET_IPC_TX_NOTIFY = 0xB0E,
+    NET_IPC_RX_NOTIFY = 0xB0F,
     NET_IPC_RESP = 0xB80,
     NET_IPC_ERROR = 0xBFF
 };
@@ -586,6 +588,35 @@ enum {
     NET_STATUS_ADDR_IN_USE = -8,
     NET_STATUS_TIMEOUT = -9
 };
+
+/* Socket control-plane constants. Socket payload is never carried by IPC:
+ * SOCKET_OPEN arg0=descriptor buffer_id, arg1=descriptor borrow_id,
+ * arg2=descriptor bytes, arg3=0. The descriptor transfers persistent grants
+ * for the client-owned TX/RX SPSC rings, while TX/RX_NOTIFY are
+ * empty-to-non-empty doorbells. */
+enum {
+    NET_SOCKET_AF_INET = 2,
+    NET_SOCKET_AF_INET6 = 10,
+    NET_SOCKET_STREAM = 1,
+    NET_SOCKET_DGRAM = 2
+};
+
+#define NET_SOCKET_OPEN_DESCRIPTOR_VERSION 1u
+
+typedef struct __attribute__((packed)) {
+    uint16_t version;
+    uint16_t bytes;
+    uint32_t family;
+    uint32_t type;
+    uint32_t stack_id;
+    uint32_t flags;
+    uint32_t tx_buffer_id;
+    uint32_t tx_borrow_id;
+    uint32_t tx_bytes;
+    uint32_t rx_buffer_id;
+    uint32_t rx_borrow_id;
+    uint32_t rx_bytes;
+} net_socket_open_descriptor_v1_t;
 
 typedef struct {
     uint32_t rx_packets;

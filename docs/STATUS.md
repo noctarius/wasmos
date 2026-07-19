@@ -97,9 +97,16 @@ linked feature documents for rationale and rollout plans.
 - `virtio-rng` registers the `hrng` service class and fills caller-owned
   transfer buffers. WASM and native `libsys` expose callback-based byte-array,
   raw-`uint32_t`, and `[0, 1)` float requests through their event loops.
-- `net-stack` is a native lwIP scaffold only: it initializes lwIP but has no
-  netif glue, driver control plane, or socket API. `ringbuf.h` is ready for the
-  planned shared-memory socket data plane.
+- `net-stack` is a native lwIP control-plane baseline: it registers `net.stack`
+  from its spawn-info process-manager endpoint, notifies readiness, drains
+  socket IPC requests, maps a validated client-provided open descriptor plus
+  persistent TX/RX grants, and allocates/binds IPv4 lwIP UDP/TCP PCBs. There is
+  still no netif or driver control plane. The versioned ring-backed socket-pool core (`socket.c`)
+  validates the persistent TX/RX grant descriptor, attaches rings, and
+  exercises lifecycle transitions in a host unit test. `ringbuf.h` and the
+  wasm3/WARP pinned shared-memory mapping baseline are ready for the planned
+  per-socket shared-memory data plane; that mapping must not be revalidated as
+  a networking prerequisite unless its implementation changes.
 
 ## Graphics and User Interface
 

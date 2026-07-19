@@ -282,6 +282,41 @@ static void fat_activate_next(void) {
     }
 }
 
+/* Drive the mount coroutine to completion at init (before signalling ready).
+ * Reuses the reactor's own mount step + block-completion — not a separate
+ * synchronous read path.  Blocking on the reply here is fine: it is one-time
+ * bring-up with no client ops in flight (like the IDENTIFY / backend-info
+ * handshakes).  A mount failure is fatal, as in the original driver. */
+static void fat_mount_bringup(void) {
+    static fat_op_ctx_t boot;
+    memset(&boot, 0, sizeof(boot));
+    boot.in_use = 1;
+    for (;;) {
+        fat_r_t r;
+        fat_block_set_owner(&g_blk, &boot);
+        r = fat_geom_mount_step(&g_mnt, &g_blk);
+        if (r == FAT_R_DONE) {
+            return;
+        }
+        if (r == FAT_R_ERR) {
+            fat_log("mount failed\n");
+            fat_stall();
+        }
+        /* r == FAT_R_WAIT: a block read was submitted; wait for its reply. */
+        for (;;) {
+            int ok = 0;
+            if (fat_block_complete(&g_blk, &ok) != &boot) {
+                continue; /* spurious / unmatched reply */
+            }
+            if (!ok) {
+                fat_log("mount io error\n");
+                fat_stall();
+            }
+            break;
+        }
+    }
+}
+
 WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t block_endpoint,
                                       int32_t ignored_arg2, int32_t ignored_arg3) {
     int32_t reply_endpoint;
@@ -318,8 +353,11 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t block_endpo
         fat_log("block buffer missing\n");
         fat_stall();
     }
-    fat_mount_init(&g_mnt); /* geometry parsed lazily by the reactor */
+    fat_mount_init(&g_mnt);
     fat_open_pool_init(&g_pool);
+    /* Mount eagerly, before signalling ready, so the driver advertises a
+     * validated, parsed volume (matching the pre-rewrite fat_ensure_ready). */
+    fat_mount_bringup();
 
     /* Resolve mount identity and register under the fs.backend class. */
     if (fat_resolve_mount_alias(mount_alias, sizeof(mount_alias), &g_mount_unit) != 0) {

@@ -1,5 +1,8 @@
 ## Threadable Scheduler
 
+> **Documentation status: Implemented reference.** Historical migration notes
+> remain for context and are not pending implementation tasks.
+
 This document specifies the design for WASMOS's current scheduler, historically
 codenamed "Threadable Scheduler". It is a thread-centric priority scheduler
 that replaced the earlier process-centric FIFO scheduler and draws concrete
@@ -345,7 +348,7 @@ int sched_event_wake_all(sched_event_t *ev,
 ```c
 void sched_wake_thread(thread_t *t) {
     /* Wait for the blocking_transition flag to clear (SMP: context save
-     * must complete on the sleeping CPU before we enqueue elsewhere).
+     * must complete on the sleeping CPU before enqueueing elsewhere).
      * Mirrors ipc_recv_blocking_for's blocking_transition guard. */
     while (__atomic_load_n(&t->blocking_transition, __ATOMIC_ACQUIRE))
         cpu_relax();

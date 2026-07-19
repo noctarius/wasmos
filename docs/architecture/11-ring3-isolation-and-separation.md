@@ -1,5 +1,8 @@
 ## Ring3 Isolation and Kernel/User Separation
 
+> **Documentation status: Implemented reference with deferred native-service
+> isolation and boundary hardening.**
+
 This document describes the x86_64 privilege separation model, memory isolation
 enforcement, syscall interface, user-origin fault containment, capability system,
 IPC authentication, and the ring3 validation gates.

@@ -1,5 +1,9 @@
 ## Virtual Input Testing via Virtio-Serial
 
+> **Documentation status: Design proposal.** Existing keyboard, mouse, and
+> virtio-serial discovery behavior is reference material; virtio-serial data
+> transport and host-driven input injection are unimplemented.
+
 This document describes the implemented virtio-serial driver, the keyboard and
 mouse driver IPC contracts, the compositor's input subscription model, and the
 design for the not-yet-implemented virtual input injection layer that would sit

@@ -1,7 +1,10 @@
 ## Current System Summary
 
-WASMOS is a minimal x86_64 UEFI-booting microkernel OS hosting a wasm3 WASM
-runtime. The system boots into a working user-space stack with an interactive
+> **Documentation status: Implemented reference.** Source locations identify
+> the runtime baseline. Deferred work appears only in the final section.
+
+WASMOS is a minimal x86_64 UEFI-booting microkernel OS hosting wasm3 by default
+and the optional WARP runtime. The system boots into a working user-space stack with an interactive
 multi-tty shell, software compositor, PCI-driven driver loading, a FAT
 filesystem, and a ring3 isolation baseline.
 
@@ -18,10 +21,10 @@ filesystem, and a ring3 isolation baseline.
 - `kmain` initializes paging, physical memory, exceptions, the scheduler clock
   (PIT or LAPIC timer depending on `WASMOS_IRQ_MODE`), the interrupt controller,
   IPC, and the process manager, then starts the first user-space process.
-- A kernel-owned `init` process spawns `device-manager`, waits for FAT
-  readiness, then loads `sysinit` from disk via the process manager.
-- `sysinit` reads a binary boot-config blob (generated from `scripts/initfs.toml`
-  at build time) and starts the configured post-FAT services and user processes.
+- `init` starts `fs-manager`, `fs-init`, and `device-manager`; device-manager
+  starts bus services and applies bootstrap/runtime driver rules.
+- `sysinit` loads from `/boot` after storage is ready and starts configured
+  services and applications through `.rc` policy.
 
 The early display path uses the kernel framebuffer (from UEFI GOP) for
 pre-FAT diagnostics and panic rendering. The native framebuffer driver is loaded
@@ -47,7 +50,7 @@ Frame allocator seeded from the UEFI memory map. Several paths still use
 hardcoded physical-ceiling constraints; migration to intent-based allocation
 (zone-aware, with only true DMA paths constrained to low addresses) is in
 progress. Per-context memory regions, MM contexts, and capability state are
-list-backed with no fixed `MM_MAX_*` slot limits.
+list-backed; shared-memory objects and grants retain explicit global caps.
 See `docs/architecture/06-memory-management.md`.
 
 **Interrupts**
@@ -72,7 +75,8 @@ kernel names retained in code) with explicit grant/release semantics and
 DMA-mapping extensions.
 
 **Scheduler**
-Cooperative with preemption via IRQ0 (PIT or LAPIC timer). Single-core. A ring3-safe timer
+Thread-centric, preemptive scheduling via IRQ0 (PIT or LAPIC timer). Optional
+SMP uses per-CPU state and ready queues with work stealing. A ring3-safe timer
 trampoline rewrites CPL3 frames (redirecting return RIP to the scheduler
 trampoline and rewriting CS to kernel selector) so preemption re-enters ring0
 cleanly before context switch. Separate kernel stacks per process with TSS `rsp0`
@@ -269,13 +273,13 @@ remaining hardening work.
 
 ### Threading
 
-In-kernel thread support is production-complete for the current single-core scope:
+In-kernel thread support is implemented for single-core and SMP configurations:
 - `THREAD_CREATE`, `THREAD_EXIT`, `THREAD_JOIN`, `THREAD_YIELD`, `THREAD_SLEEP`
   syscalls.
 - Per-thread kernel stacks; scheduler tracks thread identity separately from
   process identity.
 - Blocking IPC operations block only the calling thread.
-- SMP support is future work.
+- `WASMOS_SMP` enables AP bring-up, per-CPU scheduler state, and work stealing.
 
 See `docs/architecture/08-threading-and-lifecycle.md`.
 
@@ -283,11 +287,10 @@ See `docs/architecture/08-threading-and-lifecycle.md`.
 
 ### Networking
 
-Networking is in the design phase. `virtio-serial` proves the PCI-matched WASM
-driver transport pattern. No networking driver or stack service is implemented
-yet. The full design — `virtio-net` driver, user-space lwIP stack service, socket
-IPC contract, IPv4/IPv6, multi-address, and multi-stack-instance model — is in
-`docs/architecture/22-networking-virtio-net-and-stack.md`.
+`virtio-net` is implemented through queue setup, IRQ-driven RX/TX, and an ARP
+smoke path. `net-stack` is a native lwIP scaffold without netif glue or socket
+IPC. IPv4 protocol service behavior, TCP, IPv6, multi-address, and multi-stack
+instances remain planned; see `docs/architecture/22-networking-virtio-net-and-stack.md`.
 
 ---
 
@@ -299,4 +302,4 @@ IPC contract, IPv4/IPv6, multi-address, and multi-stack-instance model — is in
 - Full IOMMU (VT-d/AMD-Vi) for DMA isolation (capability-window enforcement is
   the current substitute).
 - Hotplug and driver supervision/reincarnation.
-- SMP scheduling.
+- CPU hotplug, NUMA policy, and cross-CPU TLB shootdown.

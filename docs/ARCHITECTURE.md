@@ -4,6 +4,21 @@ This document is the architecture index and entry point for the repository.
 Detailed design and implementation status now live in focused documents under
 `docs/architecture/`.
 
+## Documentation Status Labels
+
+Architecture documents use the following labels immediately below their title:
+
+- **Implemented reference**: describes behavior present in the source tree.
+- **Mixed reference and proposal**: distinguishes existing mechanisms from
+  explicitly labelled future work.
+- **Design proposal**: describes an unimplemented design; it is not evidence of
+  runtime behavior.
+
+Implementation claims must name their source locations or validation path.
+Future work must remain under a `Future Work`, `Deferred Work`, `Rollout Plan`,
+or equivalent heading. Use `STATUS.md` for the concise current snapshot and
+`TASKS.md` for unfinished work.
+
 IMPORTANT: Keep this file and `README.md` up to date with every prompt execution
 and code iteration, but do not use as a changelog.
 IMPORTANT: Create a git commit after each prompt iteration.

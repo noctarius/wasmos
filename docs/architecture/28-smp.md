@@ -2,6 +2,9 @@
 
 ## Status
 
+> **Documentation status: Implemented reference with deferred CPU hotplug,
+> NUMA, and TLB-shootdown work.**
+
 Implemented (Phases 0–9). `WASMOS_SMP=0` is the default; enabling it requires
 `WASMOS_IRQ_IOAPIC=1`. All SMP bring-up code is live: MADT discovery,
 LAPIC ICR helpers, AP trampoline, `smp_cpus_up`, AP C entry, per-CPU spinlock
@@ -44,11 +47,10 @@ while (1) { process_yield(); }
 
 The contract for what an AP may do in steady state:
 
-- **Kernel and ring3 scheduling.** APs share the global ready queue (protected by
-  an IRQ-safe spinlock) and may dequeue and dispatch any kernel thread (ring0) or
-  user thread (ring3). Dispatch is not restricted to kernel-only: the existing
-  context-switch path loads the correct CR3 on each dispatch, so ring3 contexts
-  execute normally on any CPU.
+- **Kernel and ring3 scheduling.** APs use per-CPU ready queues with IRQ-safe
+  synchronization and work stealing. Any CPU may dispatch a kernel thread
+  (ring0) or user thread (ring3). The context-switch path loads the correct CR3
+  on each dispatch, so ring3 contexts execute normally on any CPU.
 - **Shared address space.** All CPUs share the same higher-half kernel PML4.
   User-process mappings are added during spawn but are never removed while
   SMP bring-up is active (removal requires TLB shootdown, which is out of scope
@@ -72,8 +74,8 @@ The contract for what an AP may do in steady state:
   accounting. Timer ticks decrement the current thread's `ticks_remaining` on the
   CPU that is running that thread.
 
-This is a **full multi-core kernel + ring3 scheduling model**. Per-CPU run queues
-and work stealing are future optimisations.
+This is a **full multi-core kernel + ring3 scheduling model** with per-CPU run
+queues and work stealing.
 
 ---
 
@@ -296,7 +298,7 @@ void smp_ap_c_entry(uint32_t cpu_id)
     lapic_enable();
     lapic_timer_init();
 
-    /* Signal BSP that we are live. */
+    /* Signal the BSP that this AP is live. */
     __atomic_store_n(&cpu->started, 1, __ATOMIC_RELEASE);
 
     x86_cpu_enable_interrupts();
@@ -446,7 +448,6 @@ shootdown IPIs must be added before that path is enabled.
 
 ## What is out of scope for this phase
 
-- Per-CPU ready queues and work stealing.
 - TLB shootdown IPIs (see [MM/TLB Safety Contract](#mmtlb-safety-contract) for
   why the current phase is safe without them).
 - CPU hotplug / ACPI re-enumeration.

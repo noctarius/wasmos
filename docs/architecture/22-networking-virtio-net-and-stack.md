@@ -1,5 +1,9 @@
 ## Networking via Virtio-Net and User-Space Stack
 
+> **Documentation status: Mixed reference and proposal.** The virtio-net
+> transport baseline is implemented. Net-stack protocol service behavior,
+> sockets, TCP, IPv6, and multi-instance support remain future work.
+
 ### Goal
 Introduce a deterministic, minimal networking baseline for WASMOS using:
 - a dedicated `virtio-net` driver process for device transport
@@ -27,19 +31,21 @@ Out of scope for initial rollout:
 - advanced firewall/NAT policy
 
 ### Current Baseline
-- No explicit NIC model is configured in `run-qemu*`; QEMU defaults are used.
+- QEMU run/test targets configure a user-mode network backend and a selectable
+  NIC model; `virtio-net-pci` is the default.
 - `virtio-serial` already exists as a PCI-matched WASM service and proves the
   probe/register-access pattern for early virtio device bring-up. Note it does
   **not** yet set up virtqueues (no ring allocation or queue-PFN programming),
   so it is a discovery baseline, not a virtqueue-DMA precedent.
-- The DMA capability (`CAP_DMA_BUFFER`) and the borrow-buffer DMA lifecycle
-  exist and are proven by the ATA path, but they map a **peer's transient**
-  buffer per operation — they do **not** provide the driver-owned, pinned,
-  contiguous physical memory a virtqueue ring needs. Ring memory requires the
-  planned driver-owned DMA region primitive
-  ([DMA Transfers](12-dma-transfers.md)); the borrow path is still reused for
-  the per-packet buffer case. The `virtio-net` transport is built on a
-  transport-neutral vring core ([Process and IPC](09-process-and-ipc.md)).
+- The DMA capability and borrow-buffer DMA lifecycle are implemented. The
+  driver-owned pinned `region_alloc` primitive supplies virtqueue ring and
+  packet-pool memory; `virtio-net` uses the transport-neutral `vring` core.
+- `virtio-net` initializes RX/TX queues, routes the device IRQ, performs an ARP
+  smoke exchange through QEMU SLIRP, and offers pull plus notification-hinted
+  RX delivery. PCI INTx polarity/trigger configuration remains incomplete, so
+  consumers must poll defensively.
+- `net-stack` is a native lwIP scaffold. It initializes lwIP but has no netif
+  glue, driver control plane, or socket API.
 - IPC opcode space 0x000–0x9FF is allocated; networking opcodes begin at 0xA00.
 
 ---
@@ -209,10 +215,10 @@ Allocate ring memory from a **driver-owned pinned DMA region**, not the borrow
 path. The borrow path (`wasmos_buffer_borrow` + `dma_map_borrow`) maps a peer's
 transient buffer and refuses the caller's own memory, so it cannot back a
 persistent ring; and there is no `WASMOS_BUFFER_KIND_NET_QUEUE_*` buffer kind
-(only `WASMOS_BUFFER_KIND_XFER` exists today). Instead use the planned region
-allocator (see [DMA Transfers → Driver-Owned DMA Regions](12-dma-transfers.md)):
+(only `WASMOS_BUFFER_KIND_XFER` exists today). Use the implemented
+`region_alloc` primitive (see [DMA Transfers → Driver-Owned DMA Regions](12-dma-transfers.md)):
 ```c
-/* planned: contiguous, page-aligned, pinned, low-2GB, mapped into linmem */
+/* contiguous, page-aligned, pinned, low-2GB, mapped into linear memory */
 struct dma_region r = region_alloc(VQ_ALLOC_PAGES, CACHE_WB, DMA_CAPABLE);
 uint64_t phys_addr = r.phys_addr;   /* stable for the driver's lifetime */
 ```
@@ -1081,8 +1087,8 @@ Done gate:
 Phase 1: `virtio-net` transport baseline
 - Phase 1a (probe baseline, DONE): `virtio-net` driver package + devmgr match
   rule; PCI probe, feature negotiation (MAC + STATUS only), MAC/link markers,
-  `virtio.net` svc registration. NIC wired into the QEMU harness. RX/TX not yet
-  implemented.
+  `virtio.net` svc registration, and QEMU NIC wiring. Phase 1b subsequently
+  added RX/TX transport.
 - Phase 1b (transport): the prerequisite is **not** reusing the existing borrow
   DMA plumbing — it is building (1) the driver-owned pinned DMA region primitive
   ([DMA Transfers](12-dma-transfers.md)) for ring/pool memory, and (2) the

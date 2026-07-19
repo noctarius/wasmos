@@ -1,5 +1,9 @@
 ## Filesystem Stack
 
+> **Documentation status: Mixed reference and proposal.** VFS routing and the
+> existing initfs/FAT backends are implemented; filesystem expansion is future
+> work.
+
 This document describes the filesystem stack: the `fs_manager` VFS router,
 the backend registration model, the client state allocator, the FS IPC opcode
 table, the `fs_fat` and `fs_init` backends, and the transfer-buffer borrow

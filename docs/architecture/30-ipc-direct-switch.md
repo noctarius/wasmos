@@ -1,5 +1,9 @@
 ## IPC Direct Switch
 
+> **Documentation status: Design proposal.** This optimization is not
+> implemented. It conflicts with the future/promise direction that replaces
+> nested synchronous IPC; reconcile the designs before implementation.
+
 This document specifies the IPC direct-switch optimization for WASMOS: when a
 caller makes a synchronous IPC request to a service whose receiver thread is
 currently blocked waiting for work (off the ready queue), the kernel bypasses the
@@ -112,10 +116,10 @@ direct-switch path.
 
 ### Fast-Path Guard Conditions
 
-The current scheduler uses a single global ready queue (`g_cpu_sched`).  A
-BLOCKED thread is simply off that queue; it carries no CPU affiliation.
-"Idle on the same CPU" is therefore not a meaningful concept today — if a thread
-is BLOCKED, it is available to be run on any CPU.
+The implemented scheduler uses per-CPU ready queues and work stealing. This
+proposal must treat CPU ownership and `blocking_transition` as synchronization
+requirements; a blocked receiver can be selected only after it is removed from
+its wait list under the endpoint lock and is not transitioning on another CPU.
 
 Four conditions must hold for the kernel to take the direct-switch path.  If any
 fails, the fallback path is taken silently.
@@ -123,7 +127,7 @@ fails, the fallback path is taken silently.
 | #  | Condition                                                      | Rationale                                                         |
 |----|----------------------------------------------------------------|-------------------------------------------------------------------|
 | G1 | `ep->count == 0` — endpoint queue is empty                     | No queued messages precede ours; FIFO ordering preserved          |
-| G2 | `ep->event.wait_list` has exactly one entry                    | Exactly one thread is directly waiting; we know who to switch to  |
+| G2 | `ep->event.wait_list` has exactly one entry                    | Exactly one thread is directly waiting; the receiver is unambiguous |
 | G3 | `receiver->state == THREAD_STATE_BLOCKED`                      | Receiver is not running on any CPU                                |
 | G4 | `cpu_local()->sched.chain_depth < IPC_DIRECT_SWITCH_MAX_DEPTH` | Chain depth limit not exceeded                                    |
 
@@ -439,11 +443,10 @@ caller's), so it tends to be rescheduled promptly.
 
 ### SMP Safety
 
-With a single global ready queue, the correctness argument for SMP is
-straightforward: G3 (`receiver->state == THREAD_STATE_BLOCKED`) is the decisive
-check.  A BLOCKED thread is not in the ready queue and is not executing on any
-CPU.  Removing it from `ep->event.wait_list` and switching to it on the current
-CPU is safe as long as the removal is done under `ep->lock`.
+With per-CPU ready queues, G3 (`receiver->state == THREAD_STATE_BLOCKED`) is
+necessary but not sufficient. A blocked receiver is not executing, but direct
+switch eligibility also requires endpoint-lock-protected wait-list removal and
+completion of any cross-CPU blocking transition.
 
 The one SMP race that requires care is the narrow `RUNNING→BLOCKED` window: a
 thread may have been preempted and its context save may still be completing on

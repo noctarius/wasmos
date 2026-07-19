@@ -1,5 +1,7 @@
 ## Environment Scopes and Inheritance
 
+> **Documentation status: Implemented reference with one deferred diagnostic.**
+
 This document describes the implemented environment model: the CLI variable
 store, the script engine state object, scope creation and propagation rules,
 the kernel kenv store, and how each execution context handles variable lookup,

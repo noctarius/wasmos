@@ -1,5 +1,7 @@
 ## x86_64 CPU Architecture
 
+> **Documentation status: Implemented reference with deferred hardware work.**
+
 This document describes the low-level x86_64 CPU setup: the GDT, IDT, and TSS
 structures; the interrupt controller and IRQ routing model; exception handling
 and page fault classification; and the syscall gate.

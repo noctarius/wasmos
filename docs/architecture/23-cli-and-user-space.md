@@ -1,5 +1,7 @@
 ## CLI and User Space
 
+> **Documentation status: Implemented reference.**
+
 This document describes the WASMOS interactive shell: its phase state machine,
 command set, environment model, IPC sequences for process execution, VT
 integration, keyboard input handling, and the script runner. The CLI is

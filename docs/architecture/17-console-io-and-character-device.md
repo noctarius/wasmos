@@ -1,5 +1,7 @@
 ## Console I/O and Character Device
 
+> **Documentation status: Implemented reference.**
+
 This document describes the console I/O path from WASM service to terminal
 output: the `wasmos_console_write` hostcall, the VT mirror, the chardev IPC
 protocol, and the read path.

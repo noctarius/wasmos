@@ -1,5 +1,8 @@
 ## libsys and IPC Service Runtime
 
+> **Documentation status: Implemented reference with future async-runtime
+> extensions.**
+
 This document describes the WASM-side service runtime library (`libsys`): the
 event loop, intent tracking, message handler registration, and utility
 functions used by WASM drivers and services.

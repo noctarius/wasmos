@@ -1,5 +1,7 @@
 ## Capability and Policy System
 
+> **Documentation status: Implemented reference with deferred IOMMU work.**
+
 This document describes the kernel capability model: the five capability kinds,
 per-context storage, the spawn profile, capability enforcement at each action
 site, and the IRQ-route policy table.

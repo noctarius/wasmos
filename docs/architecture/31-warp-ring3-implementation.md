@@ -1,7 +1,11 @@
-# WARP Ring 3 Implementation Plan
+# WARP Ring 3 Execution
 
-This document is the engineering specification for porting WARP JIT execution
-from ring 0 to ring 3.  It is a companion to
+> **Documentation status: Implemented reference with deferred runtime work.**
+> The ring-3 execution path is active; unresolved hostcall coverage, runtime
+> concurrency, and TLB-shootdown work remain explicitly deferred.
+
+This document is the engineering reference for WARP JIT execution in ring 3.
+It is a companion to
 `11-ring3-isolation-and-separation.md` (ring 3 kernel model) and should be
 read alongside it.
 
@@ -24,10 +28,11 @@ constraints.
 
 ---
 
-## 1  Root-Cause Analysis — Why Ring 3 Is the Right Fix
+## 1  Historical Root-Cause Analysis
 
-WARP currently runs entirely in ring 0 with the shared kernel page table.  All
-physical frames from `pfa_alloc_pages_above(WASMOS_SHMEM_PHYS_LIMIT=64MB)` are
+Before the ring-3 execution path, WARP ran entirely in ring 0 with the shared
+kernel page table. Physical frames from
+`pfa_alloc_pages_above(WASMOS_SHMEM_PHYS_LIMIT=64MB)` were
 addressed through the kernel direct map `phys | kHalfBase`.  This creates
 three aliasing classes that have all produced real bugs:
 
@@ -90,7 +95,7 @@ kernel wrapper layer.
 The user VA space is `[USER_VA_MIN, USER_VA_MAX)` = `[0x0000008000000000,
 0x000000FFFFFFFFFF]` (pml4[1]).
 
-We carve four sub-regions within it (all offsets from `USER_VA_MIN`):
+The layout defines four sub-regions (all offsets from `USER_VA_MIN`):
 
 | Offset from USER_VA_MIN | Size    | Content                    | Flags         |
 |-------------------------|---------|----------------------------|---------------|
@@ -291,7 +296,7 @@ process exit.  The kernel thread that called `warp_r3_call_export` unblocks
 and sees the process as dead → returns `-1` (export call failed).
 
 This replaces the current C++ exception / longjmp mechanism.  The only
-recoverable traps are ones we explicitly want to recover from (e.g.
+recoverable traps are explicitly handled (for example,
 `STACKFENCEBREACHED`); everything else terminates the process.
 
 ---
@@ -464,7 +469,7 @@ Alternatively, store in `wasm_driver_t` alongside `wasm_module`.
 ### 13.1  linMem base patching
 
 WARP's `syncBasedataStart` writes an updated `linMem` value after each
-`reallocAlignedMemory`.  It writes the kernel alias.  We need this to instead
+`reallocAlignedMemory`. It writes the kernel alias. The ring-3 path requires it to instead
 write the ring-3 alias.  This requires intercepting `syncBasedataStart` or
 patching the basedata field after every reallocation.
 
@@ -506,7 +511,7 @@ mod->callExportedFunctionWithName<1>(fence, name, ...);
 Some hostcalls copy data to/from the WASM process using kernel pointers.
 With ring 3, those accesses still work via the kHalfBase alias of the
 physical pages — no change needed as long as the dual-map is maintained.
-Only if we drop the kHalfBase alias do we need `mm_copy_to_user`.
+`mm_copy_to_user` is required only when the `kHalfBase` alias is removed.
 
 ---
 

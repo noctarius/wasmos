@@ -1,5 +1,7 @@
 ## Boot Contract
 
+> **Documentation status: Implemented reference.**
+
 This document describes the full boot handoff chain from UEFI to `kmain`:
 the bootloader's responsibilities, the `boot_info_t` contract, the initfs
 format, the kernel's two-stage entry sequence, and the memory layout

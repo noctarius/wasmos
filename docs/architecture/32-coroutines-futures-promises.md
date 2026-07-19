@@ -1,5 +1,9 @@
 # Coroutine, Future, and Promise Runtime Design for WASMOS
 
+> **Documentation status: Design proposal with implementation-reality audit.**
+> The future/promise and coroutine layers are not implemented; section 48 maps
+> the proposal onto existing kernel and libsys primitives.
+
 **Status:** Proposed — verified against the implementation on 2026-07-18  
 **Target:** WASMOS user-space runtime on an SMP, timer-preemptive microkernel  
 **Primary language model:** C-compatible runtime API  

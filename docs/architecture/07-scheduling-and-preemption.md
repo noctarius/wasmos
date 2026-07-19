@@ -1,5 +1,7 @@
 ## Scheduling and Preemption
 
+> **Documentation status: Implemented reference.**
+
 This document describes the WASMOS scheduler: the PIT clock, the priority-based
 ready queues, per-thread state, the context-switch assembly, the preemption path,
 and the guards that keep each phase safe.  The authoritative sources are

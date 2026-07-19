@@ -1,5 +1,7 @@
 ## Threading and Lifecycle
 
+> **Documentation status: Implemented reference with deferred runtime work.**
+
 This document describes the kernel threading model, data structures, lifecycle
 transitions, blocking primitives, and the WASM runtime thread mapping.
 
@@ -15,8 +17,9 @@ transitions, blocking primitives, and the WASM runtime thread mapping.
   capability envelope.
 - The priority queue stores thread pointers directly via intrusive list nodes;
   process ownership is derived from each dequeued thread's `owner_pid`.
-- Current scope: single-core.  The scheduler data structures are ready for SMP
-  (per-CPU `cpu_sched_t`, `cpu_affinity` per thread) but only one CPU is active.
+- `WASMOS_SMP` enables AP bring-up and multi-CPU dispatch. Scheduler state is
+  per CPU and ready queues support work stealing; CPU hotplug and NUMA policy
+  remain deferred.
 
 ---
 

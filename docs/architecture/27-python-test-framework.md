@@ -1,5 +1,7 @@
 ## Python QEMU Test Framework
 
+> **Documentation status: Implemented reference.**
+
 This document describes the Python test automation framework used for
 integration testing in WASMOS.  All test scripts and the shared library live
 in `scripts/`.  Integration test cases live in `tests/`.
@@ -239,7 +241,7 @@ import base64
 path = session.monitor.screendump()
 with open(path, "rb") as f:
     b64 = base64.b64encode(f.read()).decode()
-# Pass b64 to your LLM client as an image_url or base64 image block.
+# Provide b64 to an LLM client as an image_url or base64 image block.
 ```
 
 **Constraint**: `screendump` captures the VGA framebuffer.  In `-nographic`

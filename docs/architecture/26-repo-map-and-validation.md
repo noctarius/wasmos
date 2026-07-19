@@ -1,5 +1,7 @@
 ## Repository Map and Validation
 
+> **Documentation status: Implemented reference.**
+
 This document describes the repository layout, build configuration, artifact
 locations, and the validation targets used to gate changes.
 

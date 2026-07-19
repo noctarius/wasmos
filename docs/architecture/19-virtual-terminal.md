@@ -1,5 +1,8 @@
 ## Virtual Terminal Service
 
+> **Documentation status: Implemented reference with explicitly deferred VT
+> extensions.**
+
 This document describes the VT subsystem: the `vt` WASM service, the
 framebuffer driver's text-cell IPC interface, keyboard routing, multi-TTY
 switching, escape sequence parsing, and the line discipline.

@@ -1,5 +1,9 @@
 ## Goals
 
+> **Documentation status: Mixed reference and proposal.** Kernel and
+> user-space responsibilities describe the implemented architecture. Non-goals
+> and design principles define policy; deferred features are explicitly marked.
+
 ### Purpose
 
 WASMOS is a minimal x86_64 UEFI OS built as an experimentation platform, not a
@@ -19,16 +23,18 @@ understanding the design is a liability.
 
 The kernel does exactly five things and no more:
 
-1. **Scheduling** — preemptive, timer-driven, single-core. Provides deterministic
-   round-robin with ring3-safe preemption trampolines.
+1. **Scheduling** — preemptive, timer-driven, thread-centric scheduling with
+   optional SMP support. Provides deterministic priority/FIFO dispatch with
+   ring-3-safe preemption trampolines.
 2. **Memory management** — physical frame allocation, per-process page tables,
    higher-half kernel alias, user-pointer copy with permission checks, shared-
    memory primitives.
 3. **IPC transport** — fixed-layout message passing with bounded queues, endpoint
    ownership, and borrow-buffer bulk transfer. The kernel routes messages; it
    does not interpret them.
-4. **Interrupts and exceptions** — legacy PIC, PIT timer, trap dispatch. User-mode
-   faults terminate only the faulting process. Kernel-mode faults remain fatal.
+4. **Interrupts and exceptions** — PIC or LAPIC/IOAPIC timer and interrupt
+   dispatch. User-mode faults terminate only the faulting process. Kernel-mode
+   faults remain fatal.
 5. **Capability enforcement** — per-context grants for I/O ports, IRQ routing,
    MMIO, DMA, and system control. The kernel checks grants at every privileged
    entry point; it does not decide policy.
@@ -145,9 +151,8 @@ The following are explicitly outside the scope of WASMOS:
   correctness-first (copy path, no TSO/GRO/LRO offload). The ATA driver uses
   PIO. These choices are intentional: correctness and auditability come before
   throughput optimization.
-- **SMP.** The scheduler is single-core. SMP requires kernel-wide locking
-  discipline and significant scheduler changes; it is deferred until the single-
-  core model is fully solid.
+- **Advanced SMP features.** SMP bring-up and scheduling are implemented behind
+  `WASMOS_SMP`; CPU hotplug, NUMA policy, and TLB shootdown remain deferred.
 - **Full IOMMU.** DMA capability windows provide a capability-level policy fence;
   hardware IOMMU (VT-d/AMD-Vi) is a future hardening step, not a current
   requirement.

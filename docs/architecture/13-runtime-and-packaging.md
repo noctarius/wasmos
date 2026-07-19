@@ -1,5 +1,9 @@
 ## Runtime Hosting and WASMOS-APP Format
 
+> **Documentation status: Mixed reference and proposal.** Package loading,
+> wasm3/WARP hosting, AOT loading, and broker primitives are implemented;
+> remaining broker and runtime expansion is future work.
+
 This document describes how WASMOS loads, instantiates, and runs code: the
 WASM runtime integration (wasm3 or WARP), the WASMOS-APP binary container
 format, the `make_wasmos_app` packaging tool, and the language-shim ABI that
@@ -59,11 +63,11 @@ reclaimed until the whole runtime is torn down at process exit.
 #### Preemption Guard
 
 All wasm3 entry points (`wasm_driver_start`, `wasm_driver_call`,
-`wasm_driver_call_entry`, and the VM-thread entry) call `preempt_disable()`
-before touching runtime state. wasm3 is not thread-safe and not re-entrant;
-disabling preemption is the simplest correct guard on a single-core system.
-`preempt_enable()` is always paired in the same call frame (or the
-`wasm_driver_leave_runtime` wrapper handles it).
+`wasm_driver_call_entry`, and the VM-thread entry) enter the runtime lock before
+touching runtime state. wasm3 is not thread-safe or re-entrant; the lock
+serializes runtime execution across CPUs. Preemption guards remain paired in
+the same call frame where required by the entry path (or are handled by
+`wasm_driver_leave_runtime`).
 
 #### PID Binding
 

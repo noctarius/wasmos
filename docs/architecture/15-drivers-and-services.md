@@ -1,5 +1,9 @@
 ## Drivers and Services
 
+> **Documentation status: Mixed reference and proposal.** Existing startup,
+> discovery, and driver contracts are reference material; supervision and
+> lifecycle expansion remain future work.
+
 This document describes each implemented driver and service: its role, the IPC
 endpoints it exposes, the capabilities it requires, and the component-level
 interactions that make up the boot chain. The authoritative opcode table for

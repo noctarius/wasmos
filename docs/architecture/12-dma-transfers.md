@@ -1,5 +1,9 @@
 ## Transfer Buffers & DMA
 
+> **Documentation status: Mixed reference and proposal.** Borrow-based DMA and
+> driver-owned pinned regions are implemented; IOMMU, non-coherent cache, and
+> additional device-DMA work remain deferred.
+
 This document is the authoritative contract for the transfer-buffer subsystem:
 the object/owner/borrow capability model, the roles (grantor, borrower/grantee,
 mapper), the stateless id-based ABI, the lifecycle rules, and the DMA transfer
@@ -521,8 +525,9 @@ Design notes:
 - **Scope.** The current `region_alloc` is a one-shot pinned reservation (no
   free/reuse), sufficient for a fixed set of devices; a real region lifecycle
   (free, refcount, revoke) and write-combining cache policy are follow-ons.
-  TODO: migrate the virtqueue ring and packet pool onto `region_alloc` (see
-  Networking Phase 1); add region free/revoke and write-combining PAT support.
+  `virtio-net` uses `region_alloc` for virtqueue rings and packet pools (see
+  Networking Phase 1). Region free/revoke and write-combining PAT support
+  remain future work.
 
 ---
 

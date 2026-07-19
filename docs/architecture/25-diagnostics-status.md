@@ -1,5 +1,7 @@
 ## Diagnostics and Testing
 
+> **Documentation status: Implemented reference.**
+
 This document describes the WASMOS diagnostic infrastructure: the serial output
 pipeline, kernel logging, the trace macro system, console ring, exception
 reporting, debug hooks, and the Python-over-QEMU integration test framework.

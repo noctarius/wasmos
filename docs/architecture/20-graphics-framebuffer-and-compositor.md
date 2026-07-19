@@ -1,5 +1,7 @@
 ## Graphics, Framebuffer, and Compositor
 
+> **Documentation status: Implemented reference with deferred toolkit cleanup.**
+
 This document describes the implemented graphics stack: component topology,
 IPC opcode contracts, compositor internals, font service, and the libui toolkit.
 
@@ -478,7 +480,7 @@ Limits: `MAX_FONTS = 3`, `MAX_HANDLES = 16`, `RASTER_SCRATCH_BYTES = 4096`.
 
 ---
 
-### libui Toolkit (`src/libc/include/wasmos/libui.h`)
+### libui Toolkit (`src/libui/include/wasmos/libui.h`)
 
 Immediate-mode component tree for WASM apps. Components are laid out by
 `ui_render_component` on every dirty frame.

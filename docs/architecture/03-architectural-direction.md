@@ -1,5 +1,9 @@
 ## Architectural Direction
 
+> **Documentation status: Mixed reference and proposal.** Existing kernel and
+> service boundaries are reference material; lifecycle and allocation evolution
+> are future-direction notes.
+
 This document describes the intended structure and evolution of WASMOS: the
 key design decisions, how subsystems are expected to grow, and the structural
 invariants that all changes must preserve. It bridges between the goals
@@ -26,7 +30,7 @@ architectural contract that all other design decisions extend from.
 - Filesystem mount policy or VFS routing semantics.
 - Network protocol state or socket lifecycle.
 - Display policy, window management, or surface composition.
-- Service discovery or naming beyond endpoint ID allocation.
+- Service policy beyond PM-owned named and class-based endpoint registration.
 - Process restart or supervisor policy.
 
 The test for a proposed kernel addition: does it require kernel privilege to
@@ -280,15 +284,14 @@ the baseline end-to-end path is proven. See
 
 ### Threading Direction
 
-In-kernel threading is production-complete for single-core. The threading model:
+In-kernel threading is implemented for single-core and optional SMP operation.
+The threading model:
 - Threads within one process share a context (`context_id`) and address space.
 - Each thread has its own kernel stack and scheduler identity.
 - Blocking IPC, join, and sleep block only the calling thread.
 
-SMP is a deliberate non-goal for now. Multi-core support requires kernel-wide
-locking discipline that would substantially increase complexity before the
-single-core model is fully exercised. The single-core threading model must be
-solid first.
+SMP is implemented behind `WASMOS_SMP`. CPU hotplug, NUMA-aware placement, and
+cross-CPU TLB shootdown remain outside the current scheduler scope.
 
 ---
 

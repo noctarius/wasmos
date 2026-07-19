@@ -1,5 +1,9 @@
 ## Process Model and IPC
 
+> **Documentation status: Mixed reference and proposal.** Process, endpoint,
+> transfer-buffer, and service-registry sections describe implemented behavior.
+> Future transport and asynchronous IPC sections are labelled as proposals.
+
 This document covers the WASMOS process model, the IPC transport layer, the
 select-set and poll-hub mechanisms, the futex primitive, the `int 0x80` syscall
 ABI, the process manager (`proc` endpoint), and the `libsys` event-loop helpers.
@@ -247,12 +251,9 @@ The transport-neutral vring core is implemented as a header-only libsys library,
 used-ring consumption with consumer-side bounds validation, all as pure logic
 over a caller-provided region and a `notify` callback — no device/PCI/IPC
 knowledge. It is covered by `tests/unit/test_vring.c` (host unit test). The PCI
-backend (real device programming) and the shmem/service backend are the
-remaining pieces.
-
-TODO: add the PCI backend (unblocks virtio-net RX/TX) on top of the vring core,
-then the shmem backend for service channels once grant/revoke is proven. See
-[Networking Phase 1](22-networking-virtio-net-and-stack.md).
+backend is implemented by `virtio-net` for its RX/TX queues. The shmem/service
+backend remains future work and requires proven grant/revoke teardown. See
+[Networking](22-networking-virtio-net-and-stack.md).
 
 ---
 

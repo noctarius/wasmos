@@ -1,5 +1,7 @@
 ## Device Manager and Bus Enumeration
 
+> **Documentation status: Implemented reference with deferred lifecycle work.**
+
 This document describes the device manager service: its startup phase state
 machine, rule engine, PCI bus scanner, ACPI bus scanner, and IPC protocol for
 device inventory.

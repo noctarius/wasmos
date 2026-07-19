@@ -17,8 +17,8 @@
 #define PCI_CFG_DATA_PORT 0xCFC
 
 #define VIRTIO_PCI_VENDOR_ID 0x1AF4u
-#define VIRTIO_RNG_DEV_LEGACY 0x1005u        /* transitional/legacy entropy device */
-#define VIRTIO_RNG_DEV_MODERN 0x1044u        /* 0x1040 + virtio device type 4 */
+#define VIRTIO_RNG_DEV_LEGACY 0x1005u /* transitional/legacy entropy device */
+#define VIRTIO_RNG_DEV_MODERN 0x1044u /* 0x1040 + virtio device type 4 */
 
 /* Legacy virtqueue registers (no MSI-X: mirrors virtio_net.c). */
 #define VIRTIO_PCI_DEVICE_FEATURES 0x00u
@@ -127,7 +127,8 @@ static int probe_virtio_rng(void) {
                 g_dev.slot = slot;
                 g_dev.function = function;
                 g_dev.io_base = (uint16_t)(bar0 & 0xFFFCu);
-                g_dev.irq = (uint8_t)(pci_config_read32((uint8_t)bus, slot, function, 0x3C) & 0xFFu);
+                g_dev.irq =
+                    (uint8_t)(pci_config_read32((uint8_t)bus, slot, function, 0x3C) & 0xFFu);
                 g_dev.vendor_id = vendor_id;
                 g_dev.device_id = device_id;
                 return 0;
@@ -188,7 +189,8 @@ static int initialize_device(void) {
 
     int qsize = setup_queue();
     if (qsize < 0) {
-        io_write8(g_dev.io_base + VIRTIO_PCI_DEVICE_STATUS, (uint8_t)(status | VIRTIO_STATUS_FAILED));
+        io_write8(g_dev.io_base + VIRTIO_PCI_DEVICE_STATUS,
+                  (uint8_t)(status | VIRTIO_STATUS_FAILED));
         return -1;
     }
 
@@ -197,7 +199,8 @@ static int initialize_device(void) {
     uint64_t phys = 0;
     int32_t off = wasmos_region_alloc(pages, WASMOS_REGION_CACHE_WB, &phys);
     if (off < 0) {
-        io_write8(g_dev.io_base + VIRTIO_PCI_DEVICE_STATUS, (uint8_t)(status | VIRTIO_STATUS_FAILED));
+        io_write8(g_dev.io_base + VIRTIO_PCI_DEVICE_STATUS,
+                  (uint8_t)(status | VIRTIO_STATUS_FAILED));
         return -1;
     }
     g_pool = ptr_cast(uint8_t, (uint32_t)off);

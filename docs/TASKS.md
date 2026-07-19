@@ -40,6 +40,10 @@ Source: `architecture/06-memory-management.md`,
 - [ ] Extend DMA isolation from capability windows to an IOMMU domain model
   when VT-d/AMD-Vi support is introduced; add non-coherent cache-maintenance
   hooks before targeting non-coherent hardware.
+- [ ] Harden boot and native ELF loaders with checked arithmetic for program
+  header offsets, segment file/virtual ranges, boot-info layout totals, and
+  cursor advances; reject values that overflow allocation sizes or boot ABI
+  fields before copying.
 
 ## Scheduler, Threads, and IPC
 
@@ -74,6 +78,17 @@ Source: `architecture/07-scheduling-and-preemption.md`,
 - [ ] Reconcile `architecture/30-ipc-direct-switch.md` with the newer futures
   direction before implementing its synchronous fast-path phases. Do not add a
   direct-switch API that reintroduces nested blocking IPC.
+- [ ] Define a PM-mediated cooperative lifecycle-control protocol over IPC:
+  capability-gated shutdown/cancel requests, acknowledgement, deadline-based
+  escalation to `process_kill`, and event-loop safe points. Do not add POSIX
+  signal handlers or arbitrary asynchronous thread interruption.
+- [ ] Add asynchronous, capability-gated process-death watches for supervisors
+  and integrate notifications with the lifecycle-control event path.
+- [ ] Normalize request-id validity across WASM and native `libsys`, including
+  the signed/unsigned wire representation and the reserved invalid value.
+- [ ] Make console-backed libc `read` and `write` reject or chunk counts beyond
+  the `int32_t` ABI limit and return the actual byte count reported by the
+  console backend.
 
 ## Runtime, Packaging, and Service Discovery
 
@@ -108,6 +123,8 @@ Source: `architecture/18-filesystem-stack.md` and
   and correct revoke/lifetime behavior.
 - [ ] Expand FAT coverage deliberately: FAT32, update modes, non-ASCII LFN
   creation, and behavioral tests for each added contract.
+- [ ] Guard FAT file-capacity growth against `uint32_t` overflow and reject
+  writes that cannot be represented by the on-disk and open-file size fields.
 - [ ] Evaluate additional filesystems and dynamic mount lifecycle only after the
   existing VFS/backends have clear mount, ownership, and recovery semantics.
 
@@ -124,6 +141,10 @@ Source: `architecture/16-device-manager-and-bus-enumeration.md`,
   IPC path and add sequential QEMU UI automation tests.
 - [ ] Resolve PCI INTx polarity/trigger configuration so `virtio-net` RX
   notifications become reliable push events rather than polling hints.
+- [ ] Preserve each driver module's declared IRQ capability mask in
+  device-manager metadata instead of granting the fixed IRQ 14/15 pair.
+- [ ] Detect console-ring producer laps in the framebuffer consumer and advance
+  the read cursor to a bounded live position before replaying overwritten data.
 - [ ] Add hotplug/event publication and future bus providers (USB/virtual)
   through the normalized device-record contract.
 
@@ -153,6 +174,9 @@ Source: `architecture/19-virtual-terminal.md`,
 `architecture/24-environment-scopes-and-inheritance.md`.
 
 - [ ] Reclaim old libui font shared-memory objects when text buffers grow.
+- [ ] Make `libui`, font-service, and compositor allocation/index arithmetic
+  overflow-safe: validate dimensions before multiplication, compute buffer
+  indexes in `usize`, and cap growth before capacity doubling.
 - [ ] Reproduce and fix the deferred rapid-TTY-switch framebuffer prompt
   duplication/misalignment issue; keep the issue deferred until a stable repro
   exists.

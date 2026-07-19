@@ -1007,7 +1007,13 @@ if (WASMOS_WASM_RUNTIME_WARP)
     COMMENT "Linking warp_aot host tool"
     VERBATIM
   )
-  add_custom_target(warp_aot DEPENDS ${WARP_AOT_BIN})
+  # NOTE: the target name must differ from the produced file's build-relative
+  # path (${BUILD_DIR}/warp_aot, i.e. "warp_aot" under CMAKE_BINARY_DIR).  If
+  # they match, the Ninja generator emits both a phony rule and a build rule
+  # named "warp_aot" -> "multiple rules generate warp_aot" + a phony self-cycle
+  # (the Make generator tolerates this; Ninja/CLion does not).  Hence the
+  # "_tool" suffix on the target while the binary keeps its name.
+  add_custom_target(warp_aot_tool DEPENDS ${WARP_AOT_BIN})
 endif ()
 
 # wasmos_maybe_aot_pack(MANIFEST WASM APP)
@@ -1039,7 +1045,7 @@ function(wasmos_maybe_aot_pack MANIFEST WASM APP)
       OUTPUT "${_warpbin}"
       # Use the caching cmake script so unchanged WASM files are not recompiled
       # across clean builds.  Depend on the warp_aot BINARY file (for cache
-      # invalidation when the tool changes) AND on the warp_aot TARGET.  The
+      # invalidation when the tool changes) AND on the warp_aot_tool TARGET.  The
       # target dependency is what makes a fresh build order the host tool ahead
       # of the apps that consume it: this custom command is created in an app
       # subdirectory, and a cross-directory dependency on a custom-command
@@ -1053,7 +1059,7 @@ function(wasmos_maybe_aot_pack MANIFEST WASM APP)
               "-DWARPBIN=${_warpbin}"
               "-DCACHE_DIR=${_aot_cache_dir}"
               -P "${CMAKE_SOURCE_DIR}/cmake/warp_aot_cached.cmake"
-      DEPENDS "${WASM}" "${WARP_AOT_BIN}" warp_aot ${_extra_deps}
+      DEPENDS "${WASM}" "${WARP_AOT_BIN}" warp_aot_tool ${_extra_deps}
       WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
       COMMENT "AOT compiling ${_name}"
       VERBATIM

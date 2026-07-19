@@ -56,6 +56,9 @@ Source: `architecture/07-scheduling-and-preemption.md`,
 - [ ] Promote libsys event-loop intents into the shared future/promise contract,
   with one receive pump per endpoint and request-id/generation cancellation.
   This replaces nested synchronous request/reply waits.
+- [ ] Remove synchronous IPC from libc, libsys, native wrappers, and service
+  call sites. Replace blocking request/reply helpers and nested receive loops
+  with non-blocking sends resolved by the shared future/promise event pump.
 - [ ] Surface futex wait/wake in every user ABI: WASM libc imports and native
   `int 0x80`/`libsys_native` paths. Keep physical-address/shmem semantics and
   runtime variants aligned.

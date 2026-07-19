@@ -1061,67 +1061,65 @@ fat_r_t fat_op_readdir(fat_op_ctx_t* op, fat_block_t* blk, const fat_mount_t* mn
                 fat_lfn_collect(&s->lfn, ent);
                 continue;
             }
-            {
-                const char* entry_name = 0;
-                const int is_dir = (ent[11] & 0x10) != 0;
-                if (s->lfn.valid && s->lfn.seen == s->lfn.total && s->lfn.buf[0]) {
-                    fat_lfn_finalize(&s->lfn);
-                    entry_name = s->lfn.buf;
+            const char* entry_name = 0;
+            const int is_dir = (ent[11] & 0x10) != 0;
+            if (s->lfn.valid && s->lfn.seen == s->lfn.total && s->lfn.buf[0]) {
+                fat_lfn_finalize(&s->lfn);
+                entry_name = s->lfn.buf;
+            }
+            if (ent[11] & 0x08) {
+                fat_lfn_reset(&s->lfn);
+                continue;
+            }
+            if (entry_name) {
+                fat_readdir_stream(op, fs_endpoint, entry_name);
+            } else {
+                char name[12];
+                char ext[4];
+                uint32_t name_len;
+                uint32_t ext_len;
+                char nbuf[16];
+                uint32_t out;
+
+                for (j = 0; j < 8; ++j) {
+                    name[j] = (char)ent[j];
                 }
-                if (ent[11] & 0x08) {
-                    fat_lfn_reset(&s->lfn);
-                    continue;
+                name[8] = '\0';
+                for (j = 0; j < 3; ++j) {
+                    ext[j] = (char)ent[8 + j];
                 }
-                if (entry_name) {
-                    fat_readdir_stream(op, fs_endpoint, entry_name);
-                } else {
-                    char name[12];
-                    char ext[4];
-                    uint32_t name_len;
-                    uint32_t ext_len;
-                    char nbuf[16];
-                    uint32_t out;
+                ext[3] = '\0';
 
-                    for (j = 0; j < 8; ++j) {
-                        name[j] = (char)ent[j];
-                    }
-                    name[8] = '\0';
-                    for (j = 0; j < 3; ++j) {
-                        ext[j] = (char)ent[8 + j];
-                    }
-                    ext[3] = '\0';
+                name_len = 8;
+                while (name_len > 0 && name[name_len - 1] == ' ') {
+                    name_len--;
+                }
+                ext_len = 3;
+                while (ext_len > 0 && ext[ext_len - 1] == ' ') {
+                    ext_len--;
+                }
 
-                    name_len = 8;
-                    while (name_len > 0 && name[name_len - 1] == ' ') {
-                        name_len--;
-                    }
-                    ext_len = 3;
-                    while (ext_len > 0 && ext[ext_len - 1] == ' ') {
-                        ext_len--;
-                    }
-
+                out = 0;
+                for (j = 0; j < name_len && out + 1 < sizeof(nbuf); ++j) {
+                    nbuf[out++] = name[j];
+                }
+                nbuf[out] = '\0';
+                fat_readdir_stream(op, fs_endpoint, nbuf);
+                if (ext_len > 0) {
+                    fat_readdir_stream(op, fs_endpoint, ".");
                     out = 0;
-                    for (j = 0; j < name_len && out + 1 < sizeof(nbuf); ++j) {
-                        nbuf[out++] = name[j];
+                    for (j = 0; j < ext_len && out + 1 < sizeof(nbuf); ++j) {
+                        nbuf[out++] = ext[j];
                     }
                     nbuf[out] = '\0';
                     fat_readdir_stream(op, fs_endpoint, nbuf);
-                    if (ext_len > 0) {
-                        fat_readdir_stream(op, fs_endpoint, ".");
-                        out = 0;
-                        for (j = 0; j < ext_len && out + 1 < sizeof(nbuf); ++j) {
-                            nbuf[out++] = ext[j];
-                        }
-                        nbuf[out] = '\0';
-                        fat_readdir_stream(op, fs_endpoint, nbuf);
-                    }
                 }
-                if (is_dir) {
-                    fat_readdir_stream(op, fs_endpoint, "/");
-                }
-                fat_readdir_stream(op, fs_endpoint, "\n");
-                fat_lfn_reset(&s->lfn);
             }
+            if (is_dir) {
+                fat_readdir_stream(op, fs_endpoint, "/");
+            }
+            fat_readdir_stream(op, fs_endpoint, "\n");
+            fat_lfn_reset(&s->lfn);
         }
 
         s->entries_left -= s->entries_total;
@@ -1279,65 +1277,59 @@ fat_r_t fat_op_chdir(fat_op_ctx_t* op, fat_block_t* blk, fat_mount_t* mnt) {
                     fat_lfn_collect(&c->lfn, ent);
                     continue;
                 }
-                {
-                    const char* entry_name = 0;
-                    if (c->lfn.valid && c->lfn.seen == c->lfn.total && c->lfn.buf[0]) {
-                        fat_lfn_finalize(&c->lfn);
-                        entry_name = c->lfn.buf;
-                    }
-                    if (!(ent[11] & 0x10)) {
-                        fat_lfn_reset(&c->lfn);
-                        continue; /* not a directory */
-                    }
-                    {
-                        char entry[13];
-                        if (!entry_name) {
-                            uint32_t p = 0;
-                            for (j = 0; j < 8; ++j) {
-                                if (ent[j] != ' ') {
-                                    entry[p++] = (char)ent[j];
-                                }
-                            }
-                            entry[p] = '\0';
-                            entry_name = entry;
-                        }
-                        if (!fat_name_eq(entry_name, c->name)) {
-                            fat_lfn_reset(&c->lfn);
-                            continue;
-                        }
-                    }
-                    {
-                        uint16_t cluster = (uint16_t)ent[26] | ((uint16_t)ent[27] << 8);
-                        if (cluster < 2) {
-                            fat_lfn_reset(&c->lfn);
-                            FAT_CO_FAIL(c, blk, FS_ERR_NOT_DIR);
-                        }
-                        c->root = 0;
-                        c->cluster = cluster;
-                        c->next = fat_chdir_next_component(c);
-                        if (c->next < 0) {
-                            fat_lfn_reset(&c->lfn);
-                            FAT_CO_FAIL(c, blk, FS_ERR_NOT_FOUND);
-                        }
-                        if (c->next == 0) {
-                            mnt->cwd_mount = VFS_MOUNT_BOOT;
-                            mnt->cwd_cluster = c->cluster;
-                            mnt->dir_lba = fat_lba_for_cluster(mnt, cluster);
-                            mnt->dir_sectors = mnt->sectors_per_cluster;
-                            mnt->cwd_root = 0;
-                            mnt->cwd_source = op->source;
-                            fat_lfn_reset(&c->lfn);
-                            FAT_CO_DONE(c);
-                        }
-                        /* Descend into the matched subdirectory and restart the
-                         * scan against its sectors. */
-                        if (fat_chdir_begin_dir(c, mnt, 0, cluster) != 0) {
-                            fat_lfn_reset(&c->lfn);
-                            FAT_CO_FAIL(c, blk, FS_ERR_NOT_FOUND);
-                        }
-                        goto rescan;
-                    }
+                const char* entry_name = 0;
+                char entry[13];
+                uint16_t cluster;
+                if (c->lfn.valid && c->lfn.seen == c->lfn.total && c->lfn.buf[0]) {
+                    fat_lfn_finalize(&c->lfn);
+                    entry_name = c->lfn.buf;
                 }
+                if (!(ent[11] & 0x10)) {
+                    fat_lfn_reset(&c->lfn);
+                    continue; /* not a directory */
+                }
+                if (!entry_name) {
+                    uint32_t p = 0;
+                    for (j = 0; j < 8; ++j) {
+                        if (ent[j] != ' ') {
+                            entry[p++] = (char)ent[j];
+                        }
+                    }
+                    entry[p] = '\0';
+                    entry_name = entry;
+                }
+                if (!fat_name_eq(entry_name, c->name)) {
+                    fat_lfn_reset(&c->lfn);
+                    continue;
+                }
+                cluster = (uint16_t)ent[26] | ((uint16_t)ent[27] << 8);
+                if (cluster < 2) {
+                    fat_lfn_reset(&c->lfn);
+                    FAT_CO_FAIL(c, blk, FS_ERR_NOT_DIR);
+                }
+                c->root = 0;
+                c->cluster = cluster;
+                c->next = fat_chdir_next_component(c);
+                if (c->next < 0) {
+                    fat_lfn_reset(&c->lfn);
+                    FAT_CO_FAIL(c, blk, FS_ERR_NOT_FOUND);
+                }
+                if (c->next == 0) {
+                    mnt->cwd_mount = VFS_MOUNT_BOOT;
+                    mnt->cwd_cluster = c->cluster;
+                    mnt->dir_lba = fat_lba_for_cluster(mnt, cluster);
+                    mnt->dir_sectors = mnt->sectors_per_cluster;
+                    mnt->cwd_root = 0;
+                    mnt->cwd_source = op->source;
+                    fat_lfn_reset(&c->lfn);
+                    FAT_CO_DONE(c);
+                }
+                /* Descend into the matched subdirectory and restart the scan. */
+                if (fat_chdir_begin_dir(c, mnt, 0, cluster) != 0) {
+                    fat_lfn_reset(&c->lfn);
+                    FAT_CO_FAIL(c, blk, FS_ERR_NOT_FOUND);
+                }
+                goto rescan;
             }
 
             if (c->entries_left <= c->entries_total) {

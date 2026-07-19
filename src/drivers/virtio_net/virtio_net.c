@@ -856,40 +856,44 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t ignored_arg
 
     for (;;) {
         wasmos_ipc_message_t msg;
-        int32_t ready = wasmos_ipc_select_wait_timeout(sel, NET_RX_POLL_INTERVAL_MS);
-        if (ready < 0) {
-            /* Timeout (or the rare error): poll the RX ring + reap TX. */
-            net_service_rx();
-            continue;
+        /* Handler loop: drain and dispatch EVERY pending message each iteration,
+         * unconditionally. wasmos_ipc_select_wait_timeout only reports
+         * edge-signalled readiness (a single latched ready_ep), so a request
+         * that arrived without an edge — or while we were servicing RX — must be
+         * picked up here rather than stranded until some future signal. Draining
+         * only on the "ready" branch was a real deadlock: a client's blocking
+         * LINK_GET/TX reply never came because its message sat undrained on the
+         * timeout branch. */
+        while (wasmos_ipc_drain(g_endpoint) > 0) {
+            wasmos_ipc_message_read_last(&msg);
+            /* Hardware IRQ arrives as IPC_IRQ_EVENT_TYPE with source=NONE (< 0),
+             * so handle it before the source check that guards request traffic. */
+            if (msg.type == IPC_IRQ_EVENT_TYPE) {
+                net_handle_irq();
+                continue;
+            }
+            if (msg.source < 0) {
+                continue;
+            }
+            /* FIXME(owner-push): net protocol must carry the client buffer_id/grant;
+             * threading msg.arg0 (msg.arg1 for TX, whose arg0 is frame_len) as a
+             * placeholder buffer_id until the wire protocol is defined. */
+            if (msg.type == NETDRV_IPC_LINK_GET) {
+                handle_link_get(msg.source, msg.request_id, msg.arg0);
+            } else if (msg.type == NETDRV_IPC_STATS_GET) {
+                handle_stats_get(msg.source, msg.request_id, msg.arg0);
+            } else if (msg.type == NETDRV_IPC_RX_POLL) {
+                handle_rx_poll(msg.source, msg.request_id, msg.arg0);
+            } else if (msg.type == NETDRV_IPC_TX_FRAME) {
+                handle_tx_frame(msg.source, msg.request_id, msg.arg0, msg.arg1);
+            } else {
+                send_error(msg.source, msg.request_id, NET_STATUS_INVALID);
+            }
         }
-        /* An endpoint is ready — fetch the pending message (non-blocking). */
-        if (wasmos_ipc_drain(g_endpoint) <= 0) {
-            continue; /* claimed elsewhere / spurious */
-        }
-        wasmos_ipc_message_read_last(&msg);
-        /* Hardware IRQ arrives as IPC_IRQ_EVENT_TYPE with source=NONE (< 0), so
-         * handle it before the source check that guards request/reply traffic. */
-        if (msg.type == IPC_IRQ_EVENT_TYPE) {
-            net_handle_irq();
-            continue;
-        }
-        if (msg.source < 0) {
-            continue;
-        }
-        /* FIXME(owner-push): net protocol must carry the client buffer_id/grant;
-         * threading msg.arg0 (msg.arg1 for TX, whose arg0 is frame_len) as a
-         * placeholder buffer_id until the wire protocol is defined. */
-        if (msg.type == NETDRV_IPC_LINK_GET) {
-            handle_link_get(msg.source, msg.request_id, msg.arg0);
-        } else if (msg.type == NETDRV_IPC_STATS_GET) {
-            handle_stats_get(msg.source, msg.request_id, msg.arg0);
-        } else if (msg.type == NETDRV_IPC_RX_POLL) {
-            handle_rx_poll(msg.source, msg.request_id, msg.arg0);
-        } else if (msg.type == NETDRV_IPC_TX_FRAME) {
-            handle_tx_frame(msg.source, msg.request_id, msg.arg0, msg.arg1);
-        } else {
-            send_error(msg.source, msg.request_id, NET_STATUS_INVALID);
-        }
+        /* Idle: poll the RX ring + reap TX (INTx re-delivery workaround), then
+         * block until the next message or the poll deadline (never busy-spin). */
+        net_service_rx();
+        (void)wasmos_ipc_select_wait_timeout(sel, NET_RX_POLL_INTERVAL_MS);
     }
     return 0;
 }

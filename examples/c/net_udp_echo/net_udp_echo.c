@@ -11,17 +11,17 @@
 #define RING_HEADER_BYTES 64u
 #define RING_MAGIC 0x474E5257u /* 'WRNG' */
 
-typedef struct __attribute__((packed, aligned(64))) {
-    uint32_t magic;
-    uint16_t version;
-    uint16_t hdr_bytes;
-    uint32_t capacity;
-    uint32_t flags;
-    uint32_t write;
-    uint32_t pad_w[7];
-    uint32_t read;
-    uint32_t pad_r[3];
-} ring_header_t;
+static void put_u32(uint8_t* out, uint32_t offset, uint32_t value) {
+    out[offset] = (uint8_t)value;
+    out[offset + 1u] = (uint8_t)(value >> 8u);
+    out[offset + 2u] = (uint8_t)(value >> 16u);
+    out[offset + 3u] = (uint8_t)(value >> 24u);
+}
+
+static void put_u16(uint8_t* out, uint32_t offset, uint16_t value) {
+    out[offset] = (uint8_t)value;
+    out[offset + 1u] = (uint8_t)(value >> 8u);
+}
 
 static int recv_on(int32_t ep, wasmos_ipc_message_t* message) {
     for (int spin = 0; spin < 300000; ++spin) {
@@ -77,10 +77,15 @@ int main(int argc, char** argv) {
         puts("[net-udp-echo] buffer setup failed");
         return 1;
     }
-    ring_header_t header = {RING_MAGIC, 1u, RING_HEADER_BYTES,
-                            RING_BYTES, 0u, 0u, {0u}, 0u, {0u}};
-    if (wasmos_xfer_buffer_write(tx_bid, addr_cast(int32_t, &header), sizeof(header), 0) != 0 ||
-        wasmos_xfer_buffer_write(rx_bid, addr_cast(int32_t, &header), sizeof(header), 0) != 0) {
+    uint8_t ring_header[RING_HEADER_BYTES] = {0};
+    put_u32(ring_header, 0u, RING_MAGIC);
+    put_u16(ring_header, 4u, 1u);
+    put_u16(ring_header, 6u, RING_HEADER_BYTES);
+    put_u32(ring_header, 8u, RING_BYTES);
+    if (wasmos_xfer_buffer_write(tx_bid, addr_cast(int32_t, ring_header), sizeof(ring_header), 0) !=
+            0 ||
+        wasmos_xfer_buffer_write(rx_bid, addr_cast(int32_t, ring_header), sizeof(ring_header), 0) !=
+            0) {
         puts("[net-udp-echo] ring init failed");
         return 1;
     }
@@ -93,21 +98,18 @@ int main(int argc, char** argv) {
         puts("[net-udp-echo] grant failed");
         return 1;
     }
-    net_socket_open_descriptor_v1_t descriptor = {
-        NET_SOCKET_OPEN_DESCRIPTOR_VERSION,
-        sizeof(net_socket_open_descriptor_v1_t),
-        NET_SOCKET_AF_INET,
-        NET_SOCKET_DGRAM,
-        0u,
-        0u,
-        (uint32_t)tx_bid,
-        (uint32_t)tx_grant,
-        RING_HEADER_BYTES + RING_BYTES,
-        (uint32_t)rx_bid,
-        (uint32_t)rx_grant,
-        RING_HEADER_BYTES + RING_BYTES,
-    };
-    if (wasmos_xfer_buffer_write(desc_bid, addr_cast(int32_t, &descriptor), sizeof(descriptor), 0) !=
+    uint8_t descriptor[sizeof(net_socket_open_descriptor_v1_t)] = {0};
+    put_u16(descriptor, 0u, NET_SOCKET_OPEN_DESCRIPTOR_VERSION);
+    put_u16(descriptor, 2u, sizeof(descriptor));
+    put_u32(descriptor, 4u, NET_SOCKET_AF_INET);
+    put_u32(descriptor, 8u, NET_SOCKET_DGRAM);
+    put_u32(descriptor, 20u, (uint32_t)tx_bid);
+    put_u32(descriptor, 24u, (uint32_t)tx_grant);
+    put_u32(descriptor, 28u, RING_HEADER_BYTES + RING_BYTES);
+    put_u32(descriptor, 32u, (uint32_t)rx_bid);
+    put_u32(descriptor, 36u, (uint32_t)rx_grant);
+    put_u32(descriptor, 40u, RING_HEADER_BYTES + RING_BYTES);
+    if (wasmos_xfer_buffer_write(desc_bid, addr_cast(int32_t, descriptor), sizeof(descriptor), 0) !=
             0 ||
         wasmos_ipc_send(stack_ep, reply_ep, NET_IPC_SOCKET_OPEN, request_id, desc_bid, desc_grant,
                         sizeof(descriptor), 0) != 0 ||

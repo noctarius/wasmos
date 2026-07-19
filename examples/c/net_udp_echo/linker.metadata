@@ -5,6 +5,7 @@ name = "net-udp-echo"
 entry = "wasmos_main"
 kind = "app"
 native = false
+aot = true
 
 [resources]
 stack_pages = 16

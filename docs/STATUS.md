@@ -1,637 +1,138 @@
 # Current Status
 
-- This status file is a snapshot, not a release changelog.
-- **The FAT backend driver (`fs_fat`) was rewritten from a single blocking file into a non-blocking event reactor, split across grouped modules.** The old `fs_fat.c` served one filesystem request at a time and blocked in `select_one` on every block-device reply (both via the inline `fat_sync_block_read` helpers and the `g_waiting`/`FAT_WAITING` legacy path), holding ~50 file-scope globals as the single in-flight op's state. It is now a single-threaded reactor: it accepts and queues many client requests (a fixed pool + FIFO of per-op `fat_op_ctx_t`) but drives **one active op at a time** (the single shared 8&nbsp;KB DMA/metadata buffer serializes physical I/O), and each op is a resumable **stackless coroutine** (tiny `fat_co.h` macros: `FAT_CO_BEGIN/READ/WRITE/AWAIT/FAIL/DONE`, resume point in the ctx) advanced across block-I/O completions — the only blocking wait left is the reactor's top-level `ipc_select_wait`. There are **no module globals**: per-op state lives in `fat_op_ctx_t`, and the device singletons live in caller-owned `fat_block_t` (block channel + outstanding request + staged sector cache) and `fat_mount_t` (geometry + cwd), passed by pointer. Mount is a lazy coroutine (`fat_geom_mount_step`), not a synchronous boot step. Blanket `-1` returns were replaced with granular `FS_ERR_*` codes (`wasmos_driver_abi.h`, −70 range; fs-manager relays them to clients). The dead `FS_IPC_READ_APP` path (no sender since PM moved to `READ_PATH`) was dropped. FAT12/16 + LFN on-disk semantics are preserved; `fat_find_in_dir` additionally follows a subdirectory's cluster chain (the original scanned only the first cluster — a latent multi-cluster-dir bug). Files: `fat_types.h`, `fat_co.h`, `fat_block.{c,h}`, `fat_util.{c,h}`, `fat_geom.{c,h}`, `fat_name.{c,h}`, `fat_alloc.{c,h}`, `fat_dir.{c,h}`, `fat_file.{c,h}`, and `fs_fat.c` (the reactor). Validation (`warp_smp`, TCG): `run-qemu-test` halt gate, `test_exec_fs_write_smoke`, `test_fs_open_smoke`, and `test_cli` (14 tests) all pass. Follow-up (not in this change): a zero-copy borrow passthrough (let ata write the client's xfer buffer directly, removing the fs_fat-side copy), applying the same reactor to `fs_init`, and a real ATA bus-master DMA engine (ata is PIO-only today).
-- **The chardev server is no longer a kernel-embedded blob; it is a normal initfs WASM driver.** chardev was the project's first "app" from before real app loading existed, so it was compiled into the kernel (`wasm_chardev.{c,h}` + `chardev_server_blob.o`), spawned directly by `kmain()`, and published through a hardcoded `"chardev"` case in `wasmos_endpoint_resolve()`. It is now built via the shared `wasmos_add_wasm_c_app_target()` helper into `chardev_server.wap`, packed into initfs, and started at boot by `device-manager` (a `SUBSYSTEM=="boot"` rule), like every other driver. Its `initialize` export self-registers under the service name `"chardev"` with the process manager, so clients find it through `wasmos_svc_lookup(..., "chardev", ...)` — the registry they already query. All kernel-side chardev bootstrap (`wasm_chardev.{c,h}`, the includes, `g_chardev_service_endpoint`, `chardev_server_entry()`, the `kmain` spawn/init block, the `endpoint_resolve` case, and the blob build) is removed. The two boot-time shmem grant/isolation self-tests that used the kernel chardev process context now use `init` as their second (foreign) context. This also fixed `test_exec_chardev_preempt`, which failed on `main` because the old blob published only via `endpoint_resolve` and never entered the svc registry that the client's `svc_lookup` queries. Validation: `run-qemu-test` boots to CLI with `chardev_server.wap` loaded from initfs and started via the devmgr rule; `run-kernel-unit-tests` all pass; `test_exec_chardev_preempt` FAIL on clean `main` → PASS with this change; the remaining full-suite failures (`test_exec_fs_write_smoke`, `test_rx_frame_notify`) reproduce identically on clean `main` and are unrelated.
-- **Repo-local formatter/linter entrypoints now exist for the mixed-language tree, integrated into CMake.** Top-level CMake adds `fmt`, `fmt-check`, `lint`, and `quality` custom targets (`cmake --build build --target <t>`) as the single developer-facing quality surface; there is no separate Makefile. CMake resolves the toolchain during configure and passes the discovered `clang-format` / `clang-tidy` / `zig` / `gofmt` / `go` / `rustfmt` / `rustc` / `asc` paths into the backing helper (`scripts/quality.sh`) via its env-var overrides, falling back to `PATH` for anything it cannot find. The helper works from an explicit allowlist of first-party roots (`src/`, `tests/`, `examples/`, `scripts/` — see `allowed_roots`), so vendored trees under `libs/`, dot-folders, `others/`, and gitignored paths are excluded by omission. It formats C/C++, Go, Zig, Rust, AssemblyScript, and Python (`black`); its lint side runs `clang-tidy` against the configured build database, stages the TinyGo example with its shim for `go vet`, runs `zig ast-check`, compiles the Rust example with warnings denied, compile-checks AssemblyScript sources through `asc` with the same local shim layout the build already expects, and lints Python with `ruff`. Each per-language step prints a start marker and is skipped (silently) when it has no in-scope sources. CMake exports `compile_commands.json` by default so `lint` has a stable `clang-tidy` database after a normal configure. Validation: `bash -n scripts/quality.sh`; `cmake -S . -B build`; `cmake --build build --target fmt-check`.
-- **`fs-manager` class-based backend discovery now boots cleanly with multiple FAT providers; the breakage was provider identity, not the class model itself.** The `wip/fs-class-discovery` branch initially failed a true clean `run-qemu-test` before large `/boot` apps could even load reliably because the second `fs-fat` instance collided twice during registration. First, the class registry keys providers by `(class_name, instance)`, and both FAT backends were registering `fs.backend` with the same plain `FSMGR_BACKEND_BOOT` instance. Second, `wasmos_svc_register_class()` also publishes a concrete PM service name, and both instances were trying to own the same `"fs.boot"` name even though the class layer is intentionally multi-instance. The fix keeps the class design intact: FS backends now encode a unique `(kind, unit)` class instance via `FSMGR_BACKEND_INSTANCE(kind, unit)`, while still reporting the plain backend kind over `FSMGR_IPC_BACKEND_INFO_RESP`; `fs-fat` also registers a unique concrete PM name (`fs.boot%u`) per unit so the bundled name registration does not collide. The same debug pass exposed that `fs-fat` no longer had a structural per-device binding after the old entry-arg path was retired in favor of spawn-info buffers: it was falling back to a global `"block"` lookup and relying on ATA's first-claim behavior. `device-manager` now spawns block filesystem drivers from `/init/...` with a spawn-info argument string `unit=<n>`, `fs-fat` parses that startup argument, and ATA honors the preferred unit on the initial `BLOCK_IPC_IDENTIFY_REQ` bind for each client source endpoint. With those fixes in place, dual FAT backends register deterministically again, `/boot` reads stay coherent, and a true clean WARP build reaches `[calculator] ready`, CLI startup, and halt. Validation: `cmake --build build --target run-kernel-unit-tests`; `cmake --build build --target run-qemu-test`.
-- **WARP+SMP boots cleanly again after the linear-memory / zero-copy transition; the blocking regression was a ring-3 hostcall slot mismatch, with two additional hardening fixes uncovered during repro.** The observed "stuck after `device-manager`" failure on the current WARP+smp build was reproduced locally and traced in QEMU/GDB through the early AOT service path. `fs-manager`, `fs-init`, and `device-manager` were not hanging in place: they were exiting immediately before `notify_ready`, which left `init` waiting forever on ready-gated children. The root cause was that `block_buffer_map` had been inserted in the middle of `src/kernel/warp/link.cpp`'s `WASMOS_SYMBOLS(...)` list even though `HC_BLOCK_BUFFER_MAP` lives at the tail of the `HC_*` enum; ring-3 hostcall stubs are positional, so every later import slot shifted by one and `spawn_info_buffer` calls from AOT services were dispatched as `wasi proc_exit`. Reordering `WASMOS_SYMBOLS` back to exact enum order restores the normal `fs-manager` -> `fs-init` -> `device-manager` -> `sysinit` bring-up and returns the WARP+smp halt smoke to `[calculator] ready`. The same debug pass also fixed a real ABI bug in `WARP_R3_ENTRY_TRAMPOLINE` (the SysV fourth wrapper argument, `results`, arrives in `RCX`; the entry stub now uses `r10/r11` scratch instead of clobbering `RCX`) and kept an interim SMP hardening path for the new shared higher-half linmem slots: if a kernel-mode non-present fault lands in the WARP linmem slot range but the mapping now resolves, the page-fault handler invalidates the local TLB entry and retries instead of panicking. A `TODO` remains in the fault path because the real long-term fix is cross-CPU TLB shootdown for shared linmem slot updates, not just local retry. Validation: `cmake --build build-warp-smp --target run-qemu-test` passes through `[calculator] ready` and CLI `halt`; `cmake --build build-warp-smp --target run-kernel-unit-tests` passes.
-- **Linear memory is now generous per-process by default, and the FAT block buffer is zero-copy.** After the Stage 3b user-VA switch (both runtimes execute from the PML4[1] window; see [`docs/architecture`] and the linmem reserve-commit history), a follow-on pass on branch `zerocopy-block-initfs-overlays` did four things. (1) **Cleanup:** the wasm3 per-hostcall dual-view copy helpers (`wasm_copy_*_user_sync_views`) collapsed to plain `mm_copy_*_user` — under 3b the host pointer and the user VA resolve to the same physical backing, so the extra host-side `memcpy`/`memcmp` was a self-copy — and the four now-permanent-no-op `wasm3_sync_linear_memory_region*` rebind functions plus their six call sites were deleted. (2) **`block_buffer_map` zero-copy overlay:** a new hostcall (wasm3 + WARP, `HC_BLOCK_BUFFER_MAP`) overlays the caller's own 8 KiB block buffer into its linear memory so the FAT driver reads/writes sectors in place instead of staging through `block_buffer_copy`/`write`; `fs_fat`'s `g_sector_buf` became a pointer repointed at the overlay, with the staging copies gated to the unmapped fallback. The overlay aliases the same physical pages as `block_buffer_phys`, so the block server still fills/drains them by phys and the fallback stays correct. (3) **Generous linmem:** a wasm module's compile-time `--max-memory` no longer acts as its own resource cap. The reserved-VA slot (2 GiB, committed on demand) is the real ceiling, so `m3_env.c`'s `InitMemory` floors `maxPages` to the slot (vendored `ln:` edit) and WARP's `warp_driver.cpp` floors the reserve hint to 512 MiB; a tiny declared max (drivers baked in 64 KiB) otherwise blocked on-demand growth and overlays. This is what lets `block_buffer_map` take the zero-copy path on both runtimes rather than falling back. (4) **Correctness fixes surfaced by the audit:** the wasm3 `block_buffer_copy`/`write` validator ignored the slot and only clamped to 4 GiB, letting a guest read or write any physical address below 4 GiB via those hostcalls — now bounded to a live block slot's 8 KiB, matching WARP; the per-process 2-page block buffer, previously leaked on reap in both runtimes, is now freed; and WARP's `initfs_entry_copy` (now clamps and returns the short count) and `initfs_find_path` (now case-insensitive) were reconciled to the wasm3 behavior so both runtimes present one ABI. The initfs whole-blob zero-copy map is a tracked follow-up (cold path; the FS-client relay stays a copy; needs a new `initfs_entry_offset` hostcall and a fs_init rework). Validation: `run-qemu-test` boots to `[calculator] ready` on wasm3 and WARP; `fs_open`/`fs_write` smoke tests map the block overlay zero-copy on both; `run-kernel-unit-tests` 493/0 on both.
-- **Kernel panic logs now have a small host-side file/line decoder.** The in-kernel panic path intentionally stops at symbolized return addresses (`rip=` / `ret=` plus function names) to avoid carrying DWARF parsing logic in the kernel. A new host helper, `scripts/decode_kernel_panic.py`, now reads a captured panic log, extracts those addresses, and resolves them against `build/kernel.elf` with `llvm-addr2line` so debugging can jump directly from panic output to `function at file:line`. A behavioral unittest (`tests/test_decode_kernel_panic.py`) drives the helper through a fake `addr2line` executable to verify the parsing and rendered output shape without needing QEMU. Validation: `python3 -m unittest tests.test_decode_kernel_panic`; `cmake --build build --target run-kernel-unit-tests`; `cmake --build build --target run-qemu-test`.
-- **Kernel panics now preserve the fault-time frame chain and resolve return addresses to kernel symbol names.** The old panic path already walked `rbp`, but on the panicking CPU it was usually walking from inside `kpanic()` instead of from the interrupted fault site, and every frame printed only a raw address. The x86 exception stubs now preserve a `PUSH_REGS` snapshot for fatal exception paths, `x86_exception_panic_frame()` captures the interrupted `rbp`/best-effort `rsp` before handing off to `kpanic()`, and `kpanic()` keeps that origin context instead of overwriting it with its own frame. The kernel build is now also two-pass for `kernel.elf`: it links a base image, runs `llvm-nm` through `scripts/gen_kernel_kallsyms.py`, compiles a compact in-kernel symbol table, and relinks the final kernel so panic backtraces print `ret=<addr> (<symbol>)` in the serial dump for each CPU. Kernel C/C++ objects now build with frame pointers preserved explicitly so the backtrace walk is stable across normal optimized code paths. Validation: `cmake -S . -B build`; `cmake --build build --target kernel`; `cmake --build build --target run-kernel-unit-tests`; `cmake --build build --target run-qemu-test`.
-- **Virtio-net now comes up under both wasm3 and WARP, and both runtimes enforce the same hardware-capability contract.** There were three separate bugs in the old split behavior. First, `virtio-net` was rescanning PCI config space through `0xCF8/0xCFC` even after `device-manager` had already matched the NIC and spawned it with only the BAR-scoped `io.port` grant (`io_base..io_base+0x3F`); rule-spawned path+caps launches now preserve an optional startup-args tail, `device-manager` passes the matched PCI identity (`bus:slot.fn`, vendor/device, BAR I/O base, IRQ), and `virtio-net` binds from that startup identity before falling back to a direct PCI scan. Second, WARP had been masking the policy bug because its `io_in*`/`io_out*` hostcalls did not enforce `POLICY_ACTION_IO_PORT`; those hostcalls now mirror wasm3 capability enforcement, including `io_wait` on port `0x80`. Third, the remaining `init failed io=0xC000 dev=0x1000` path turned out to be two DMA-capability issues: `PROC_IPC_SPAWN_PATH_CAPS[_SYNC]` needed the same default DMA-window fallback as the older compact caps path, `device-manager`'s PCI-rule spawn path needed to carry `DEVMGR_CAP_DMA` for `system/drivers/virtio_net.wap`, and WARP's `region_alloc` had the DMA-window check inverted, so it only "worked" when no window was granted. With those fixes in place, wasm3 now implements `wasmos_region_alloc` for driver-owned DMA regions and the NIC reaches the normal queue/ARP bring-up on both runtimes. Validation: `cmake --build build-wasm3-real --target run-qemu-test`, `cmake --build build --target run-kernel-unit-tests`, and `cmake --build build --target run-qemu-test` all pass; the boot logs now reach `[virtio-net] vq ready ...`, `rx armed`, `tx armed`, `driver ok`, and the ARP probe reply on both builds.
-- **CLI spawn handoff, font-service startup, wasm3 gfx-smoke linear-memory binding, and Rust/Go userspace transfer-buffer compatibility are fixed on the current mainline.** The interactive CLI regression on `main` (`exec failed: path too long` for nearly every external command) was not a PM-side size failure: foreground/background path spawns in `src/services/cli/cli.c` were releasing the caller-owned transfer buffer immediately after `PROC_IPC_SPAWN_PATH` send even though PM reads that buffer later by ownership during request handling. The CLI now retains the pending spawn buffer until the matching PM `PROC_IPC_RESP`/`PROC_IPC_ERROR` is consumed, then releases it during `CLI_PHASE_WAIT_IPC`. In the same slice, `src/tools/warp_aot/warp_aot.cpp` was realigned to mirror the kernel WARP hostcall symbol order again so AOT-packed internal modules keep rebinding against the intended live symbol table. A separate packaging bug also turned out to be hiding broker fixes: `make_initfs` had not depended on `wamos_script.wap` / `wamos_script_broker.wap`, so `build/initfs.img` could silently keep stale copies even when the app targets rebuilt. After wiring those `.wap` files into the initfs dependencies, the broker self-test reaches `[wamos-script-broker] plan ok` / `[test] broker spawn delegation ok` again. Font-service had a different latent issue: its synchronous native IPC helper canceled FS requests after only 1024 empty polls, which was enough for the smaller fonts but not for `/boot/system/fonts/roboto_serif.ttf` during boot contention after the xfer-buffer/spawn-info reworks. Raising that wait budget restores `[font] loaded ok` for all three built-in fonts and reaches `[font] service ready` again. `gfx_smoke` exposed the next wasm3 regression: the process `MEM_REGION_WASM_LINEAR` metadata still described the old placeholder allocation while wasm3 startup/data and later `ResizeMemory()` calls were using a different heap-backed linear-memory block. Hostcalls that validated user pointers through the process region therefore rejected valid wasm3 addresses or, with a naive size-only fix, later double-freed pages on reap. The kernel now rebinds the wasm-linear region to the actual wasm3 heap-backed physical range, marks that backing as externally owned so `mm_context_destroy()` does not free it, and refreshes the binding before pointer/offset-based graphics and shmem hostcalls. The later Rust/Go hello-app regressions also turned out not to be SMP-specific kernel faults: the Rust and Go shims had still been bridging part of the old pre-object-model transfer-buffer contract. `src/libc/go/wasmos.go` now imports and drives the object-model `(buffer_id, ptr, len, offset)` ABI end-to-end, while `src/libc/rust/wasmos.rs` now keeps its staged-path borrow alive through the synchronous FS request instead of copying out `bid` / `b1` and immediately dropping the temporary owner. That restores relative-path create/write/read/unlink for `hello_rust` on both wasm3 and WARP. WARP also now exposes minimal `wasi_snapshot_preview1.proc_exit` / `random_get` compatibility bindings so TinyGo-built apps stop printing unresolved-import warnings during load. Validation: `run-kernel-unit-tests` passes; `python3 -m unittest tests.test_hello_rust tests.test_hello_go` passes; `run-qemu-test` reaches the normal halt path on the WARP+smp build.
-- **Baseline: the xfer-buffer object model is now the canonical buffer contract, the spawn-info startup ABI has replaced entry-arg bindings, and wasm3+WARP both boot to the CLI at smp=4.** The old process-manager buffer subsystem (`process_manager_buffers.c`, `process_manager_buffer_state.c`, and the `xfer_buffer/store.*`/`policy.*`/`state.*` single-active-borrow slot model) has been removed and replaced by `src/kernel/xfer_buffer/xfer_buffer.c`: a spinlock-guarded (`g_xfer_lock`) registry of owned objects (`buffer_id`) using an owner-push capability model — acquire / borrow (owner grants a grantee endpoint) / reborrow / unborrow (lender-only) / release (cascade-revoke), with `buffer_id`/`borrow_id` as stateless ids on the IPC wire and variable (page-rounded) sizes. Startup values now travel in a child-owned spawn-info buffer (`wasmos_spawn_info_t`, magic `WSPI`): WASM reads it via the `spawn_info_buffer` hostcall, native drivers/services via `api->spawn_info()` (native ABI v8, magic `WNAP`); the four `wasmos_main`/`initialize` entry args are always zero and service endpoints resolve via `svc_lookup`. The framebuffer, the gfx compositor backbuffer, and font_service font-data are owned xfer buffers (kind=framebuffer / kind=xfer); font files load via an owner-push `READ_PATH` transfer. The earlier "known open bug" entries below about the xfer-buffer single-active-borrow mismatch and the script-broker read-request/write-plan regression are **resolved** (the broker + `wamos-script` executor are re-enabled). **wasm3 SMP reap fix:** `kmem` (kernel container-metadata allocator) now uses the global slab (`kalloc_small`/`kfree_small`) instead of the process-bound `malloc`, because wasm3's kernel `malloc` is per-process and reaping a process dangled kernel-global list nodes → a triple fault at smp=4 during reap; WARP was unaffected (its `malloc` already forwarded to the slab). Validation: `run-kernel-unit-tests` (all pass, `test_xfer_buffer_object` 493/0); `run-qemu-test` green on both wasm3 (smp=4) and WARP (smp=4), reaching `[calculator] ready`.
-- **Script-engine `-f` conditions now use `stat()` instead of nested `fopen()` probes.** The `wasmos_script` interpreter had been checking `if -f ... then` by opening and immediately closing the candidate path even when the script file itself was already open through `fgets()`. In the current boot path this nested stdio/open sequence was implicated in the `sysinit.rc` stall right after `start fontsvc`: GDB showed `sysinit` receiving the PM ready reply for `fontsvc`, then continuing to issue filesystem reads from the script runner without ever reaching the later `spawn gfxcomp` control message. The condition check now uses `stat()` to test existence/non-directory status directly, which keeps `.rc` control flow off the nested file-stream path while preserving the shell-style `-f` semantics. Validation pending: `run-kernel-unit-tests`; `run-qemu-test`.
-- **IN PROGRESS — real shebang script broker + `wamos-script` executor replace the broker smoke fixture; registration is now capability-gated.** The hardcoded smoke fixture (`broker_smoke_service`/`broker_host_smoke`/`.bro`) is removed. In its place, `src/services/wasmos_script_broker` is a real subsystem broker: it registers the `WSCRIPT` subsystem plus a `PREFIX("#!")` executable handler, and derives its spawn plan from the guest file's `#!<interpreter>` line (data-driven, not hardcoded), returning a `WAP_PATH` plan that launches `src/services/wasmos_script` (a standalone executor that drives the existing `wasmos_script` `.rc` engine over IPC) with the guest script path as argv. Registration tightening: a new `CAP_SUBSYSTEM_REGISTER` capability (`subsystem.register`, declared in the broker manifest) gates `PROC_IPC_SUBSYSTEM_REGISTER_BROKER`/`PROC_IPC_EXEC_HANDLER_REGISTER` (new `PROC_PM_ERR_NOT_AUTHORIZED`); the registry now tracks the owner context, enforces per-owner and global broker/handler caps, and `wasmos_subsystem_registry_drop_owner()` is called from `process_reap` so a dead broker leaves no stale endpoint or matcher. The remaining current boot/runtime issue in this area is no longer broker startup or font reads: delegated scripts now execute end-to-end and font-service reaches ready, but the broader boot still reports `[test] gfx smoke setup failed`, which needs separate graphics-side debugging.
-- **The scheduler mode split is gone; the threadable scheduler is now just the scheduler.** The last transition flag (`WASMOS_SCHED_THREADABLE`) has been removed, remaining kernel-facing locking already routes through the new `sync/` wrappers, and comment/docs cleanup now treats the per-thread scheduler/event path as the default architecture rather than an alternate mode. Validation of this cleanup slice is host-native only because runtime behavior did not change.
-- **Kernel sync primitives now have explicit abstraction headers for spinlock, mutex, and semaphore, plus host-unit coverage for mutex/semaphore behavior.** `src/kernel/include/sync/` now exposes a thin `ksync_spinlock_*` wrapper for kernel-facing call sites, while the raw architecture primitive lives under `src/kernel/include/arch/x86_64/spinlock.h`; in-tree kernel users were migrated off the direct raw include/call surface. The same slice also adds kernel-backed `ksync_mutex_t` / `ksync_semaphore_t` APIs implemented on top of `sched_event_t`. The first host unit test (`test_kernel_sync_primitives`) compiles the real mutex/semaphore implementations against narrow scheduler/thread stubs so try-lock/acquire/release, non-owner rejection, wait/retry, and semaphore overflow behavior are exercised directly without booting QEMU, and the host scheduler shim now uses the shaped spinlock surface too instead of mirroring raw lock fields separately. Validation: `cmake --build build --target run-kernel-unit-tests`; `run-qemu-test` rebuilt, booted through the normal userspace startup path, and then remained gated by the separate late `[calculator] ready` halt-test wait.
-- **The generic `WASMOS_RING3` mode toggle is gone; WARP now implies ring-3 execution unconditionally.** The old Kconfig/CMake split between WARP-with-ring3 and WARP-without-ring3 has been removed from the supported configuration surface. Selecting the WARP backend now always enables the `WASMOS_WASM_RUNTIME_WARP` build gate, while wasm3-based strict ring3 smoke tests continue to use the shadow-build path for their separate probe configuration. Validation: `cmake --build build --target run-kernel-unit-tests`; `run-qemu-test` rebuilt, booted through the normal userspace startup path, and then remained gated by the separate late `[calculator] ready` halt-test wait.
-- **The wasm3 driver runtime now uses a blocking per-driver mutex instead of spinning through long export calls.** In the wasm3 backend, `wasm_driver_t` now serializes `wasm_driver_call_entry()` and `wasm_driver_call()` with `ksync_mutex_t` rather than a spinlock, so contention sleeps on the scheduler event path instead of busy-waiting across `m3_FindFunction` / `m3_Call`. The lockless `wasm_driver_call_unlocked()` path remains available for the higher-level process runtime path that already provides its own serialization. Validation: `cmake --build build --target run-kernel-unit-tests`; `run-qemu-test` rebuilt, booted through the normal userspace startup path, and then remained gated by the separate late `[calculator] ready` halt-test wait.
-- **WARP ring-3 call-entry lock policy is now explicit and host-unit-tested.** The decision about whether `warp_driver.cpp` must keep its `driver->lock` through the export call or release it before the ring-3 IRET is now centralized in `warp_driver_ring3_call_policy.*` instead of living only in duplicated `if (r3_root)` branches. The host unit test covers the two valid ring-3 states only: kernel-mode startup (`r3_root == 0`, keep the lock held) and user-mode entry (`r3_root != 0`, release before call and clear resched). This intentionally does not add new host coverage for the older non-ring-3 WARP path. Validation: `cmake --build build --target run-kernel-unit-tests`; `run-qemu-test` rebuilt, booted through the normal userspace startup path, and then remained gated by the separate late `[calculator] ready` halt-test wait.
-- **Transfer-buffer borrow policy now has a host-native helper and unit coverage.** The kind-specific request rules that used to live inline in `xfer_buffer/store.c` are now centralized in `xfer_buffer/policy.*` and exercised by `test_xfer_buffer_policy`. The helper locks down the current asymmetric contract between buffer kinds: transfer borrows must target a nonzero external source context distinct from the borrower, while framebuffer borrows are strictly local and reject any external source context. Validation: `cmake --build build --target run-kernel-unit-tests`; `run-qemu-test` rebuilt and booted through the known userspace path, then stalled again at the pre-existing `[calculator] ready` halt-test wait (no new earlier PM/shared-buffer regression observed).
-- **Transfer-buffer borrow/release/DMA slot rules now have a host-native state helper and unit coverage.** The mutable slot fields shared by transfer/framebuffer borrow paths (`borrow_active`, source/flags, and DMA map state) are now centralized in `xfer_buffer/state.*`, which is called from the xfer-buffer store implementation and exercised by `test_xfer_buffer_state`. The host test locks down invariants that were previously only implicit in the kernel path: no second borrow while one is active, release requires an active non-DMA-mapped borrow, dropping a source clears dependent borrowers fully, and DMA unmap clears DMA state without releasing the borrow itself. Validation: `cmake --build build --target run-kernel-unit-tests`; `run-qemu-test` remains blocked by the separate script-broker regression above.
-- **Subsystems can now register broker-owned executable format handlers with bounded matcher trees.** The subsystem registry now tracks a second kind of lookup alongside the existing 8-byte `.wap` subsystem-tag table: executable handlers owned by broker-backed subsystems. Each handler carries a name, copied broker identity, explicit priority, `max_probe_bytes`, and a fixed matcher-node tree composed from cheap predicates (`PREFIX`, `EXTENSION`, `FILENAME`, `AND`, `OR`, `NOT`). Registration validates tree shape, child indexes, cycles, and prefix/probe-byte budgets up front, and lookup returns the best match deterministically by priority and name. `.wap` remains the only built-in executable format that PM will actually execute today; broker-owned matches are now classified at the front door but still stop locally until the later spawn-plan handoff exists. Validation: `cmake --build build --target run-kernel-unit-tests` and `cmake --build build --target run-qemu-test`.
-- **Subsystem resolution now returns a handler kind plus future broker-routing metadata, not just built-in ops.** The subsystem registry entry model now distinguishes built-in handlers from future broker-backed handlers and stores the extra fields PM will need later (`broker_name`, `broker_endpoint`, startup gating flags, and payload/runtime traits) alongside the existing request/runtime tags. Built-in subsystems still take the current in-kernel path, but `wasmos_app_resolve_subsystem()` now returns a uniform result shape that can carry either direct ops or an external broker identity. `wasmos_app_start()` intentionally rejects broker-backed handlers for now with a local `TODO`, so this step is plumbing only, not the IPC handoff itself. Validation: `cmake --build build --target run-kernel-unit-tests` and `cmake --build build --target run-qemu-test`.
-- **Built-in subsystem registration is now explicit at kernel boot, and lookup is read-only afterwards.** `kmain()` now calls `wasmos_app_init_subsystems()` during early runtime setup, which registers the built-in handlers once before any spawn path runs. `wasmos_app_resolve_subsystem()` no longer triggers implicit built-in registration on first lookup; after boot-time init, subsystem resolution is a pure registry read. This removes first-use mutation from the spawn path and leaves a cleaner handoff point for future external subsystem endpoints. Validation: `cmake --build build --target run-kernel-unit-tests` and `cmake --build build --target run-qemu-test`.
-- **Subsystem dispatch now uses procedural in-kernel registration backed by the shared hashmap container.** `wasmos_subsystem_register(...)` inserts handlers into a hash-indexed registry keyed by subsystem tag, and `wasmos_app_resolve_subsystem()` resolves package tags through that registry instead of a central hardcoded tag array. Hash collisions are handled explicitly by re-checking full tags within each bucket, so arbitrary 8-byte subsystem tags remain valid. This keeps all implementations linked into the kernel for now, but it removes the last resolver-local hardcoding before moving handler resolution behind IPC later. Validation: `cmake --build build --target run-kernel-unit-tests` and `cmake --build build --target run-qemu-test`.
-- **The old `is_wasm` process flag is now narrowed to a behavior flag: `needs_runtime_lock`, and the per-process guard fields are now runtime-neutral.** Process state no longer stores subsystem identity as a boolean. Instead, package/runtime identity stays with subsystem tags and runtime reporting, while the scheduler keeps only the behavior it actually needs: whether process entry must run under the per-process `runtime_lock`. Sync-spawn paths no longer peek at child runtime type to force ready gating; they now rely on the same subsystem ready-policy helper used during spawn setup. Validation: `cmake --build build --target kernel`, `cmake --build build --target run-kernel-unit-tests`, and `cmake --build build --target run-qemu-test`.
-- **The in-kernel subsystem boundary now dispatches through a static ops table instead of PM native-vs-WASM branching.** `wasmos_app_instance_t` now owns a resolved subsystem handler plus runtime-specific state, and the common `wasmos_app_start/call_entry/stop` path dispatches through per-subsystem `start/call_entry/stop` ops for `WASM3`/`WARP`/`NATIVE`. Native startup now fits that same lifecycle contract via a tiny wrapper that calls `native_driver_start()` at subsystem `start` time and returns the cached result from `call_entry`, which lets `pm_app_entry()` stop branching on subsystem internals. Explicit-ready gating for services/drivers is now queried through the subsystem helper instead of being open-coded in PM. Validation: `cmake --build build --target kernel`, `cmake --build build --target run-kernel-unit-tests`, and `cmake --build build --target run-qemu-test`.
-- **WASMOS-APP packages now carry an explicit subsystem tag, and `ps` reports resolved runtime names.** The `.wap` header is now version 5 with an 8-byte ASCII subsystem tag. New packages default to `WASM` or `NATIVE`, may request explicit tags such as `WASM3` or `WARP`, and older v1-v4 packages are mapped compatibly through the same resolver. Process reporting now stores and exports a resolved runtime tag (`WASM3`, `WARP`, `NATIVE`, or `KERNEL`) instead of the old wasm/native boolean in `proc_info_stats`, and the `ps` utility now shows a `Runtime` column and tree labels keyed off that tag. Validation: `cmake --build build --target make_wasmos_app`, `cmake --build build --target kernel`, `python3 -m unittest tests.test_make_wasmos_app_capabilities`, `cmake --build build --target run-kernel-unit-tests`, and `cmake --build build --target run-qemu-test`.
-- **`chardev-client` and `chardev-preempt` now resolve the chardev service via
-  `proc.endpoint` + `wasmos_svc_lookup(...)` instead of consuming an injected
-  `chardev.endpoint` entry arg.** These examples are smoke clients, not
-  manifest-binding tests. Resolving the service at runtime matches the existing
-  `gfx`, `virtio.net`, and other user-space lookup patterns and removes one
-  startup-coupled variable from the early WARP ring-3 bring-up path.
-- **WARP ring-3 dual-map now resolves dedicated linmem pages against the live
-  CPU-local CR3.** WARP+SMP+ring3 AOT service startup was failing
-  consistently at `[warp-r3] dual-map failed` once `fs-manager` entered the
-  ring-3 setup path. The linmem alias-phys resolver reaches the dedicated
-  higher-half WARP linmem window through `paging_virt_to_phys(...)`, and that
-  walker still defaulted to the shared `g_current_pml4_phys` mirror when no
-  root was passed. Under SMP that mirror is last-writer-wins, so ring-3 setup
-  could walk another CPU's CR3 and fail to recover the backing linmem pages.
-  `paging_virt_to_phys_in_root(..., 0, ...)` now falls back to the live
-  `paging_get_current_root_table()` CR3 instead. The same startup path also
-  incorrectly treated dedicated WARP linmem-window VAs
-  (`WARP_LINMEM_VA_BASE...`) as invalid because they are below the classic
-  direct-map `kHalfBase`; ring-3 linmem mapping and basedata-length recovery
-  now accept both the direct alias and the dedicated higher-half WARP linmem
-  window. Once linmem moves into that per-app VA slot it is backed by
-  scattered physical pages, not one contiguous `g_mmap_table` range, so the
-  ring-3 linmem dual-map path now queries slot metadata and maps each
-  committed kernel-VA page into the user CR3 individually.
-- **wasm3 hostcall side-table slot allocation is now serialized under SMP.**
-  Rare wasm3+ring3+SMP boot failures showed FS transfer-buffer hostcalls
-  returning impossible errors and a later wasm3 opcode RIP with a corrupted high
-  half. A coarse global `wasm3_runtime_enter/leave` gate reproduced the expected
-  cross-WASM deadlock because it stayed held across blocking IPC. The narrower
-  fix protects the shared process-indexed wasm3 hostcall side tables
-  (`g_wasm_last_slots`, `g_wasm_block_slots`, and `g_wasm_fs_peer_slots`) during
-  slot lookup/allocation instead, avoiding duplicate slot assignment without
-  serializing full `m3_Call` execution.
-- **Process-manager shared buffer slots are now serialized under SMP.** The
-  framebuffer/filesystem transfer-buffer slot tables are global array-chunk
-  lists, and wasm3+ring3+SMP graphical app traffic can touch them from
-  different CPUs through buffer borrow/release, physical-address lookup, and
-  process teardown paths. Those list traversals and slot-state transitions now
-  share a dedicated spinlock so one CPU cannot mutate or remove a slot while
-  another CPU is iterating the same list.
-- **Kernel process trampoline now restores interrupt delivery before ring-0 process code runs.** The virtio-net RX poll timeout stall on SMP=1 was traced with QEMU/GDB to the top-level scheduler loop repeatedly dispatching ready priority-4 kernel-process work while `timer_ticks()` stayed pinned. The ready thread was `process-manager` with kernel CS and saved `rflags=0x2` (IF clear), inherited from the scheduler loop's `cli`; because it could voluntarily yield/re-enter the trampoline without re-enabling interrupts, timed IPC waits such as `wasmos_ipc_select_wait_timeout(..., 10 ms)` stopped firing once the system had no other interrupt-enabled work. `process_trampoline()` now executes `sti` after draining preemption-disable depth and before calling the process entry point, keeping LAPIC timer IRQs active while ring-0 process code runs. Validation: `run-kernel-unit-tests`, `run-qemu-test`, and the SMP=1 `tests.test_virtio_net_notify_e2e` reproducer pass.
-- **Blocking process-manager boot deadlock is fixed; the root cause was WARP's per-PID IPC last-message slot lookup, not the PM select/timeout path.** Converting process-manager from busy-polling to a blocking `ipc_select_wait(..., 50 ms)` loop exposed a reply-path bug during early service registration (`fs-manager` hung before `services registered`). GDB confirmed PM was receiving `SVC_IPC_REGISTER_DESC_REQ`, decoding the xfer-buffer descriptor correctly, and sending a valid `SVC_IPC_REGISTER_RESP` back to fs-manager's dedicated reply endpoint. The real failure was in `warp_ipc_last_field()`: its `warp_ipc_slot_for_pid()` helper treated `valid` as both "slot occupied" and "last message present", unlike the working wasm3 path, so the first `ipc_last_field(request_id)` after a successful blocking receive could allocate/return the wrong slot and yield `-1`. WARP now mirrors wasm3's slot-ownership rule (`pid` reserves the slot; `valid` only marks message presence), which lets blocking PM boots complete the `fs-manager`/`fs-init`/`device-manager` registration chain and restores the default `run-qemu-test` path to `[calculator] ready` / CLI under the blocking PM implementation.
-- **SMP work distribution now works via poll-aware work-stealing; the failures were general scheduler/IPC races, not WARP-specific.** An earlier change pushed parked children onto non-local CPU queues and destabilised boot; the initial hypothesis blamed WARP serialization, but controlled experiments (ring-0 WARP and wasm3 both failed under stealing) and GDB pinned three real, runtime-independent bugs that only manifest once work runs off CPU 0: (1) **AP work-stealing was dead** — `process_spawn_idle_ap()` set `idle_thread` but not `sched.idle`, so the steal trigger `thread == cs->idle` never fired on APs and all work piled on CPU 0; now fixed, and stealing is **poll-aware** (a thread whose last run was a voluntary yield is marked `sched_sticky` and skipped by `cpu_sched_steal_pick`, so idle CPUs no longer thrash re-running poll/yield loops — that thrash was a dispatch-storm livelock, millions of dispatches at ~0 ticks). (2) **RUNNING-orphan**: native services using the legacy `process_block_on_ipc()` (a no-op stub) + `return PROCESS_RUN_BLOCKED` were left in RUNNING state on no queue and never rescheduled; the `PROCESS_RUN_BLOCKED` handler now re-enqueues a still-RUNNING thread. (3) **Page-fault recovery race**: `memory_service_handle_fault_ipc()` round-tripped through the mem-service IPC endpoint that the mem-service worker thread also drains, so under SMP the worker could consume the fault request before the inline handler, turning a recoverable fault into a panic; faults are now resolved directly via `mm_handle_page_fault()`. WARP ring-3 per-call return state (`warp_r3_old_cr3`/`active`/`jbuf`) was also moved from per-CPU to per-thread so a ring-3 call can block and resume on another CPU. `thread->last_cpu` is updated on dispatch (fixes `ps`/`sched_info`), and `cpu_sched_online_mask()` skips not-yet-started APs. WARP+SMP boots reliably and distributes across all CPUs.
-- **Standalone SMP scheduler stress test as a runtime-independent stability gate.** Built only with `-DWASMOS_SCHED_SMP_STRESS=ON` (`run-qemu-sched-stress-test`), `kernel_sched_smp_stress_runtime.c` spawns a ring of token-passing worker threads that continuously exercise cross-CPU block/wake/steal/migration and asserts forward progress + scheduler invariants (no thread left RUNNING off-CPU). Because it is pure kernel threads, it validates the scheduler on both wasm3+SMP and WARP+SMP without needing a bootable userspace — an orphaned/lost-wakeup thread stalls the ring and fails the test deterministically instead of as a rare boot hang. wasm3+SMP passes this test (and all kernel selftests) even though its userspace bringup still has separate pre-existing bugs.
-- **Language runtime entry shims now terminate processes via `proc_exit` instead of relying on a normal `wasmos_main` return path.** Several graphical WARP apps could run normally, then fault with `vector=6` at the same user RIP when a close request let their event loop return. The same broken export-return tail could also truncate short-lived utility output such as `ps`. The common C, Zig, Rust, Go, and AssemblyScript WASM startup wrappers now store startup args, run the language `main`, and then invoke the explicit process-exit hostcall with the returned status instead of depending on the runtime/export epilogue to unwind cleanly.
-- **WARP console writes now stay contiguous through the kernel hostcall, and `ps` buffers its full report before flushing.** The intermittent `ps` corruption was not bad process metadata: WARP-backed apps were still allowed to be preempted in the middle of `console_write`, unlike the wasm3 path, so shell prompt redraws or other log writers could splice bytes into a running table dump. The WARP hostcall now brackets console emission with `preempt_disable()` / `preempt_enable()`, and the Zig `ps` utility now assembles its summary/table/tree output into one fixed buffer before writing. That keeps repeated `ps` runs from dropping the header/table or embedding stray escape/control bytes inside the final rows.
-- **Explorer tree navigation no longer clobbers its own current-path state while rebuilding the sidebar.** The tree view rollout had exposed an older coupling bug in explorer: the helper used for absolute filesystem `chdir()` also reset the UI-side `g_current_path` back to `/`, and the tree rebuild path called that helper repeatedly while probing directories. That left the right pane showing the actual directory contents while `.wap` launches were still constructed as root-relative paths like `/minesweeper.wap`. Explorer now separates raw FS cwd changes from UI path-state updates, so tree navigation, tree rebuilds, and app spawns keep using the correct full path.
-- **`libui` now has a reusable `TreeView`, and explorer uses it instead of faking hierarchy with an indented `ListView`.** The new widget keeps per-row depth metadata alongside the existing list-style label storage, reuses the same scroll/selection/activation model as `ListView`, and renders indentation/guide lines in the component itself. Shared `libui` hit-testing and pointer-gesture routing now treat tree views like list views for drag scrolling, double-click activation, and secondary-click callbacks, so explorer’s left sidebar is now a real reusable widget rather than app-specific flattened text formatting.
-- **Explorer tree/sidebar startup is now stable, and shared user-space IPC calls tolerate out-of-order endpoint traffic.** The new split-view explorer had been rendering only its first-frame chrome because the initial tree rebuild allocated a large directory scratch array on the WASM stack and blew up during `reload()`. Explorer now keeps that tree scratch buffer in static storage, so the post-reload frame reaches `Path: /`, the tree list, the file list, and the status bar correctly. In parallel, the generic user-space `wasmos_ipc_call()` helper now keeps draining an endpoint until it sees the matching `request_id` from the expected source endpoint instead of failing on the first unrelated message, which hardens `libui` and other apps that multiplex synchronous requests with asynchronous traffic on the same endpoint.
-- **Pointer gestures are now a compositor-level contract, and explorer consumes them through `libui` list-view callbacks.** The gfx compositor still emits the low-level `GFX_EVENT_POINTER` stream for hover/state updates, but it now also normalizes higher-level `GFX_EVENT_POINTER_GESTURE` events for left/right button down/up/click, left double-click, and drag start/move/end. `libui` list views use those shared gestures for row activation and drag scrolling, so `/boot/system/utils/explorer.wap` no longer reconstructs double-click timing in-app. The same list-view work also gives list/scroll views a dedicated scrollbar gutter with a contrasting track/thumb and a capped thumb size, and the shared vertical layout now always runs child component layout hooks even for leaf widgets. That last fix is what lets `ListView` and `ScrollView` compute nonzero `scroll_max` and actually show/use their scrollbars when content overflows.
-- **Explorer list sizing, drag direction, and FAT directory markers are now aligned with desktop expectations.** The explorer window now budgets its list height against the fixed path/status/button stack so the list stays inside the window content rect instead of overrunning the bottom edge. Shared `libui` drag scrolling for list/scroll views now follows desktop-style mouse dragging rather than touch-style content panning. FAT-backed `READDIR` listings also now append `/` for directory entries, which lets explorer correctly label `/boot` children such as `EFI/`, `apps/`, and `system/` as directories instead of files.
-- **Explorer activation and list rendering are now closer to a real desktop file browser.** Drag scrolling in shared `libui` list/scroll views now moves at a faster rate, list-row text clips against the content gutter instead of painting under the scrollbar, and double-clicking a `.wap` file in explorer now writes the selected boot path into the xfer buffer and issues a synchronous `PROC_IPC_SPAWN_PATH_SYNC` request so packaged apps launch directly from the browser.
-- **Explorer `.wap` launches now use a dedicated PM reply endpoint instead of the UI event channel.** Explorer was previously issuing synchronous `PROC_IPC_SPAWN_PATH_SYNC` requests on the same reply endpoint used for compositor event polling, so unrelated GFX replies could race the expected PM response and make a real double-click look like a no-op. `.wap` launches now use their own reply endpoint, which keeps process-manager spawn replies isolated from UI traffic.
-- **AssemblyScript window teardown now releases compositor buffers in the right order, and explorer rows no longer waste width on type prefixes.** The AssemblyScript `libui` window wrapper now destroys the window before releasing its shared buffer, so failed/closed graphical apps do not leave compositor buffer slots permanently busy after a retry or early exit. The shared AssemblyScript IPC call helper also now waits for the matching `request_id` instead of accepting the first reply on its endpoint. In explorer, list rows now render as `name` or `name/` instead of `[FILE] name` / `[DIR] name`, which gives long `.wap` filenames substantially more room inside the current list width.
-- **Shared `libui` drag scrolling now scales to the scrollbar travel instead of using a fixed pixel multiplier, and explorer reserves more width for filenames.** List and scroll views now convert pointer drag distance into content scroll distance based on viewport height versus scrollbar-thumb travel, so dragging behaves like moving the scrollbar itself rather than a slow touch-style pan. Explorer also now opens in a wider window, trims list padding, and stores longer names, which reduces `.wap` filename clipping in `/boot/apps`.
-- **AssemblyScript graphics now treat compositor buffer IDs as opaque nonzero handles instead of signed-positive integers.** The compositor can return any random nonzero 32-bit `buffer_id`, but the AssemblyScript `libui` shim had been rejecting IDs with the high bit set because it stored them in `i32` and tested `> 0` before the first `PRESENT_WINDOW`. That made apps such as Minesweeper appear to start and then immediately fail their first frame. The shim now treats buffer IDs as valid whenever they are nonzero, while still resetting released/uninitialized state to `0`.
-- **Explorer now uses a split view with a real folder tree sidebar, backed by a generic horizontal `libui` row container.** `libui` now has a reusable row-layout primitive for side-by-side panes and toolbars, and explorer uses it to render a path bar, horizontal toolbar, left-hand directory tree, right-hand file list, and status bar. The tree is rebuilt from the current path’s expanded branch rather than a flat mount list, so navigating into `/boot/apps` or deeper keeps ancestors expanded and lets the sidebar act as the primary folder navigator instead of a static shortcut list.
-- **A minimal graphical explorer now exists as a real utility under `/boot/system/utils`.** `src/utils/explorer/` adds a libui-based single-window browser that resets to the VFS root, lists newline-streamed `listdir()` entries in a `ListView`, and uses explicit `Open Selected`, `Up`, and `Refresh` actions to move through directories or inspect file sizes. It intentionally stays within the current FS ABI limits: directory changes still use `FS_IPC_CHDIR_REQ`'s packed short-name path form, so this first version is a pragmatic browser baseline rather than a full two-pane commander or long-path-capable shell replacement.
-- **Shutdown now uses a shared kernel power-control path across wasm3 and WARP, and halt smoke now requires actual VM exit.** The previous `halt`/menu-bar shutdown behavior diverged by runtime: wasm3 attempted legacy ACPI/QEMU poweroff ports but could fall into an interruptible `hlt` loop, while WARP skipped the poweroff ports entirely and always hung in place. Both runtimes now call shared kernel helpers for poweroff/reboot, WARP now enforces the same `system.control` policy gate as wasm3, and the QEMU halt smoke scripts now fail if `halt` does not actually terminate the VM within a short timeout.
-- **Compositor pointer events now identify the hovered target window instead of assuming the focused one.** `GFX_EVENT_POINTER` now carries the target `window_id` plus packed local coordinates/buttons, and the compositor emits pointer events for the topmost window under the cursor rather than for the keyboard-focused window only. This restores submenu hover behavior in `menu_bar` while keeping popup routing correct when one process owns multiple popup windows.
-- **libui menu hover previews now route pointer events to the focused popup instead of the deepest open submenu.** Nested `UI_COMPONENT_MENU_ITEM` popups are rendered as preview-only when opened from hover, while top-level menu-bar popups and explicit click-opened child submenus still take focus. The shared libui popup router now tracks compositor focus per popup window and dispatches pointer events to the popup that actually owns focus, which fixes the `menu_bar` Apps menu regression where hovering `gfx_smoke` opened its window-list submenu and subsequent moves across single-window entries like `Calculator` or `Minesweeper` were interpreted against the wrong submenu rows.
-- **WARP ring-3 startup no longer burns seconds re-growing VT linear memory.** The long pause between `sysinit` spawning `vt` and the later `font-service` startup was not a generic ring-3 cost: a controlled `wasm3` ring-3 shadow build reached `font-service` about 1.2 seconds after `Starting system services...`, while WARP ring-3 had been spending roughly 15 seconds in the same interval. The culprit was WARP's active linear-memory allocator path: large `warp_krealloc` growth repeatedly allocated-and-copied the whole backing block in 4 KiB-ish steps, and the ring-3 linmem mapper reinstalled the full user mapping after each move. The fix gives large WARP reallocations explicit usable-capacity tracking so growth within slack returns the same pointer, and the ring-3 mapper now only maps the newly added tail pages when the backing allocation has not moved. Validation: `cmake --build build-warp-noaot --target run-qemu-test` and `cmake --build build --target run-qemu-test` pass; in the validated WARP non-AOT run the `vt -> font-service` gap dropped from roughly 15.3 seconds to about 1.8 seconds.
-- **GFX window sizing contract now uses logical content dimensions.** `GFX_IPC_CREATE_WINDOW` and `GFX_IPC_RESIZE_WINDOW` widths/heights are now interpreted as client-content size, with compositor chrome derived outside that rect. This fixes the calculator window-height regression without requiring apps to know title-bar or border sizes, keeps shared-buffer and damage-rect validation aligned with client pixels, and preserves close/maximize/title-drag/resize hit regions in outer-window space. The Zig calculator app now requests its original `280x350` content size again. Validation: `run-qemu-test` passes.
-- **AssemblyScript graphics now have a reusable immediate-mode `libui` layer plus a Minesweeper example.** The repo still lacks a real AssemblyScript Wasm link step for compiling `libui_shim.c` into the same module, so the new `src/libui/assemblyscript/libui.ts` wrapper keeps service-lookup/gfx/shmem transport private and instead exposes a small `libui`-style surface centered on `Context`, `Surface`, `Rect`, and `Button`, while preserving the same content-size window contract used by `libui`. `examples/assemblyscript/minesweeper/` uses that layer to render a small 8x8 board with reveal/flag/reset interactions and title-bar status updates, giving AssemblyScript its first reusable graphical app baseline without depending on font-service text rendering. Validation: `run-qemu-test`.
-- **Calculator app no longer depends on WARP `f64` execution for button operations.** The ring-3 WARP build could raise `#UD` (`vector=6`) in the calculator app as soon as `=` evaluated `8 * 2`, with the fault RIP landing inside the user JIT region. The app already carried several WARP-specific float workarounds, so the pragmatic fix was to remove runtime `f64` arithmetic from the app entirely: calculator state now uses scaled fixed-point integers for parse/format/add/subtract/multiply/divide, and startup runs a tiny self-test for the exact `8 * 2 = 16` path before the UI loop starts. Validation: `zig_calculator` builds successfully and the regression path is now exercised during calculator startup under `run-qemu-test`.
-- **WARP ring-3 shared-buffer mapping now refreshes the user linear-memory view before overlaying shmem pages.** The `gfx_smoke` serial-garbage regression was not a stray logger write: `warp_shmem_map_auto()` returned a valid offset in the kernel, but ring-3 callers kept running against stale user linear-memory mappings after `ensureLinearSize()` committed or relocated the backing allocation. The first libui framebuffer auto-map therefore left app-side state reading as zeroed/stale, and the later pixel fill wrote through a bogus `mapped_base`, which streamed framebuffer bytes to serial. The fix refreshes the active ring-3 low linear-memory mapping after the probe/commit step and then overlays the shared-memory pages into both the higher-half kernel alias and the ring-3 user VA window; `shmem_unmap()` likewise refreshes the user view after restoring the direct-mapped backing. The same debugging pass also fixed the WASM libc heap bootstrap to start from `&__heap_base` instead of the byte value stored there. Validation: `run-qemu-test` passes, `gfx-smoke` keeps nonzero mapped bases across repeated buffer allocations, and the boot reaches the CLI prompt without the binary serial burst after `[test] gfx smoke main start`.
-- **Watchdog stall fix: scheduler `in_scheduler` guard + preempt-guard drain moved before native check.** Two independent sources of false `[watchdog] resched stall` messages for the `vt` process were found and fixed. (1) Scheduler cleanup races: `critical_section_enter()` only calls `preempt_disable()` with no `cli`, so the timer can fire after a context switch returns to the scheduler dispatch (line ~1810) while `current_pid` still points to the yielded process and `in_scheduler=0`. The timer ISR then sees `current_pid=vt`, `need_resched=1`, `pdc=1` and incorrectly accumulates watchdog stall ticks. Fix: set `cpu_local()->in_scheduler=1` BEFORE every `critical_section_enter()` in the scheduler cleanup paths (`process_schedule_once_impl` lines 1734, 1758, 1810 and `process_trampoline` line 590), and add an `in_scheduler` early-return guard to `process_tick()` mirroring the existing check in `process_preempt_from_irq`. (2) Preempt-guard drain placed after the native-process early-return: native processes (elf drivers like `vt`) took an early return before hitting the pdc drain, running their entire initialization with `pdc=1`. Fix: moved the `while (preempt_disable_depth() > 0) preempt_enable()` drain to before the `WASMOS_APP_FLAG_NATIVE` check so all spawn paths drain pdc. Validation: `run-qemu-test` passes with zero watchdog stall messages.
-- **Watchdog stall fix (prior): drain preempt guard before WARP JIT compilation.** When `WASMOS_ENABLE_PREEMPT_GUARD` is active, `pm_app_entry` calls `preempt_disable()` at entry to hold pdc=1 through the entire app setup and call sequence. The WARP JIT compilation path (`wasmos_app_start` → `wasm_driver_start` → `initFromBytecode`) can take multiple seconds in QEMU HVF. During that window, the timer fires every 4 ms and observes pdc=1 each tick, accumulating 512+ stall ticks and triggering repeated `[watchdog] resched stall` reports for the `vt` process (pid=30). Fix: drain pdc to 0 (via `while (preempt_disable_depth() > 0) preempt_enable()` + `process_clear_resched()`) immediately before `wasmos_app_start` is called in `pm_app_entry`. The paired `preempt_enable()` calls at every exit path safely become no-ops when pdc is already 0. The secondary drain in `wasm_driver_call_unlocked` is retained as a belt-and-suspenders guard for the call path. Temporary diagnostic logs (`[dbg-r3] call_unlocked pre/post-drain pdc=`, `[wd-dbg] pdc=1 tick=`, `[wd-dbg] stall_ticks=`, and the `pdc=` field in the watchdog stall message) have been removed. Validation: `run-qemu-test` passes with no watchdog stall messages.
-- **WARP ring-3 preemption: driver spinlock released before ring-3 IRET; IPC spurious-wake yield added.** `wasm_driver_call_entry` and `wasm_driver_call` in `warp_driver.cpp` held `driver->lock` (via `spinlock_lock`) across the ring-3 IRET, which incremented `preempt_disable_count` to 1 on the executing CPU and permanently blocked timer-based preemption for the duration of the ring-3 module's lifetime. The fix: once `warp_driver_ensure_started` succeeds and the module is fully initialised, the spinlock and the `warp_runtime_enter` heap binding are released before `call_export_mod` is invoked with a non-zero `r3_root`. The `wasm_driver_call_unlocked` path already holds no spinlock and is unaffected. Separately, `warp_ipc_select_one` in `src/kernel/warp/link.cpp` tight-looped on `IPC_EMPTY` (spurious sched_event_wait wake) without yielding; a `process_yield(PROCESS_RUN_YIELDED)` on `IPC_EMPTY` was added to avoid spinning while `in_hostcall=1`. Both changes together restore timer-driven preemption for long-running ring-3 services (notably `vt`) and allow the halt test to complete. Validation: `run-qemu-test` passes.
-- **WARP ring-3 execution baseline now reaches both default boot CLI and strict ring-3 smoke.** Internal WARP-loaded drivers/services/apps now run exports through per-module ring-3 state (`user_root`, stack backing, linmem VA) instead of the earlier shared global call state, while the same-CPU return path keeps the transient `setjmp`/CR3 state in `cpu_local_t`. The basedata patching layer now rewrites the stack proxy, stack fences, memory-helper pointer, runtime/custom context pointers, and compiled-binary aliases needed by the user JIT view. Ring-3 linear-memory growth is now serviced by a dedicated syscall trampoline (`WASMOS_SYSCALL_WARP_MEMORY_HELPER`) that lets the kernel wrapper call WARP's `MemoryHelper::extensionRequest`, remap the resized linmem into the active user CR3, and refresh the stack proxy base pointer. Validation on the current tree: `run-kernel-unit-tests`, `run-qemu-test`, and `run-qemu-ring3-test` pass.
-- **Kernel ring-3 WARP hostcall entry now preserves ABI-required stack alignment.** The IRQ0, generic IRQ, and syscall assembly entry paths now enter C via a shared aligned-call macro instead of the earlier `subq $8` shim. That fixes repeated WARP hostcall crashes where compiler-generated `movaps` spills in kernel C/C++ code faulted because the interrupt/syscall stubs reached C with a misaligned stack. Several WARP wrapper call sites were also hardened to avoid large zero-initialized stack aggregates in the hottest hostcall/memory-management paths, but the alignment fix in `cpu_isr.S` is the systemic change.
-- **Ring-3 preempt and startup timing hardening closed the remaining boot stalls.** IRQ-driven preemption from user mode now records the live CR3 into the saved thread context and rewrites the full privilege-return frame when redirecting back into the kernel scheduler trampoline, preventing stale user `SS:RSP` values from faulting on `iretq`. WARP-backed `vt` startup also now yields between large TTY-grid clears so early boot no longer spends an entire startup slice in one uninterrupted linear-memory touch burst. The remaining implementation debt is that `warp_driver.cpp` still uses a local `#define private public` include shim to patch WARP's `runtime_` pointer without modifying the vendored `libs/warp` tree.
-- **Physical memory partition: shmem vs WARP linear-memory zones.** All WARP modules run in ring 0 with a shared kernel page table. WARP linear memory is mapped via `phys | kHalfBase`. If a shmem object and a WARP module's linear memory happened to share the same 8 MiB physical window, WARP's `ensureLinearSize()` zero-fill would alias and corrupt the shmem — specifically, `menu_bar`'s growing committed range would eventually reach gfx-smoke window-2's framebuffer shmem VA and zero it. Fix: physical address space is now partitioned: shmem allocates from `[0, 64 MiB)` via `pfa_alloc_pages_below(WASMOS_SHMEM_PHYS_LIMIT)`, WARP linear memory and large kmalloc allocate from `[64 MiB, 512 MiB)` via the new `pfa_alloc_pages_above(WASMOS_SHMEM_PHYS_LIMIT)`. The two canonical VA ranges are now disjoint, eliminating the aliasing. Long-term fix: run WARP in ring 3 with per-process page tables (as wasm3 does), which eliminates the shared-VA aliasing class entirely.
-- **WARP higher-half remap hardening for committed and overlaid pages.** The kernel-side WARP allocators no longer assume that the shared higher-half direct alias always stays present after page-table splits, guard-page holes, or temporary linear-memory overlays. `MemUtils::commitVirtualMemory()` now rebinds committed pages back to their original `phys | KERNEL_HIGHER_HALF_BASE` backing before `ensureLinearSize()` zero-fills them, `warp_shmem_unmap()` restores the overlaid linear-memory window to its direct-mapped backing instead of leaving shared-buffer mappings behind, and the page-backed large-object allocator in `warp/shim.cpp` now explicitly repairs higher-half page mappings before handing memory to WARP runtime objects. This closes the `gfx_smoke` crash where a later WARP commit/copy touched an unmapped higher-half page after the AOT-heavy boot path had exercised more shared-memory and allocator churn.
-- **WARP AOT pre-compilation for internal modules.** All drivers, services, and utilities (20 modules, non-native) now carry a WARP-compiled native binary embedded in their `.wap` file (`aot = true` in their `linker.metadata`). At boot, `warp_driver` loads the pre-compiled binary via `initFromCompiledBinary` (DYNAMIC_LINK symbols), skipping JIT entirely. If the AOT binary fails to load for any reason, the driver falls back to JIT automatically. Example apps (`examples/`) and graphical apps (`gfx_smoke`, `menu_bar`) are excluded — they continue to use JIT and are not version-bound to the WARP ABI the way internal modules are. The host-native `warp_aot` tool (built from `src/tools/warp_aot/`) performs the compilation at cmake build time via a `wasmos_maybe_aot_pack()` cmake function. Halt test passes with 14+ `[warp-driver] using AOT binary` messages.
-- **WARP linear-memory `ensureLinearSize` zeroing fix.** `ActiveMemoryManager::ensureLinearSize()` zero-initialises newly committed WASM pages before marking them usable. Any hostcall that writes to an uncommitted linear-memory region before the JIT first probes it would have its write overwritten by the subsequent zeroing. Fixed by calling `getLinearMemoryRegion(last_byte_offset, 1)` (triggering `probe()` → `ensureLinearSize()` → zeroing) **before** writing in `warp_phys_map`, `warp_shmem_map`, `warp_shmem_map_auto`, `warp_shmem_refresh`, and `warp_acpi_rsdp_info`. This fix enabled the ACPI bus to parse ACPI tables correctly under WARP, which in turn allows keyboard, mouse, serial, and RTC drivers to start. The `env.abort` symbol (AssemblyScript runtime) was also added to WARP's symbol table.
-- **Script engine documentation.** `docs/SCRIPT_ENGINE.md` documents all `.rc` script commands (`start`, `spawn`, `exec`, `wait-svc`, `echo`, `export`, `set`, `script`, `source`, `if`/`else`/`endif`) with syntax, scoping rules, and examples.
-- **`sysinit.rc` spawns `menu_bar` and `gfx_smoke` after compositor ready.** `wait-svc gfx` blocks until the compositor registers, then both graphical apps are spawned conditionally (`-f` guards). CLI starts last.
-- **WARP JIT backend complete and merged to main.**  Both `wasm3` (default) and WARP (`-DWASMOS_WASM_RUNTIME_WARP=ON`) reach WAMOS CLI in `run-qemu-test`.  See `docs/architecture/31-warp-jit-backend.md` for the full design.  Known remaining gaps: `console_read` unimplemented (CLI stalls on stdin read but boot succeeds), ~30 wasmos.* host-call TODOs in `src/kernel/warp/link.cpp`, and multi-threaded WASM under WARP not yet functional.
-- WARP JIT runtime bring-up now gets through the earlier process-manager/app-slot failure and into full user-space startup. The WARP backend lazily runs module `start()` before first export call (matching the wasm3 startup contract for app/service entry paths), hostcall wrappers unwrap the runtime context through `WasmModule::getContext()` before accessing `WarpCallContext`, IPC send/last-field metadata match the WASMOS ABI (`source`/`destination` and arg field numbering), and WARP executable-page allocation explicitly maps higher-half aliases with EXEC permissions instead of assuming the shared 2 MiB kernel window stayed RWX after later page-table splits. Combined with the newer ring-3 linmem-growth, syscall/IRQ stack-alignment, and preempt-frame fixes above, the WARP build now completes the default `run-qemu-test` path to the CLI prompt and also passes `run-qemu-ring3-test`.
-- GFX window flags are now split into composable bits instead of the old overloaded single "system" meaning. Shared IPC headers now define `GFX_WINDOW_FLAG_TOPMOST`, `GFX_WINDOW_FLAG_NO_CHROME`, `GFX_WINDOW_FLAG_INVISIBLE`, `GFX_WINDOW_FLAG_PASSTHROUGH_ZERO`, `GFX_WINDOW_FLAG_NO_ACTIVATE`, and `GFX_WINDOW_FLAG_NO_CONTENT`; in-tree callers request the exact combination they need. The compositor now applies those behaviors independently: topmost controls z-order, no-chrome controls content/chrome/drag-resize handling, invisible suppresses rendering and pointer hit-testing/focus acquisition, passthrough-zero only affects zero-pixel compositing, no-activate suppresses implicit activation on click/present while still allowing explicit `GFX_IPC_FOCUS_WINDOW`, and no-content means the window has no compositor-managed client surface (shared-buffer allocation/present are rejected and placeholder body rendering is skipped). Damage rect translation now uses `window_content_rect()` so no-chrome windows repaint in the correct screen location. The menu-bar popup path now opens a dedicated no-chrome/topmost window that includes the owning header row plus submenu body, and popup interaction uses release-based toggle/pick semantics so first click opens, second header click closes, and outside-click dismissal remains clean.
-- Base struct + vtable step: `ui_component_t` is now the pure base (tree, bounds, common styling, clickable/pressed, on_click + `void *component_data`). All component-specific state moved into per-type data allocated behind component_data (ui_text_data_t / ui_list_data_t reused where helpful; full structs like ui_checkbox_data_t, ui_dropdown_data_t, ui_menu_item_data_t etc. defined in their headers). Introduced `ui_component_ops_t` vtable (render/layout + the handle_* + popup_contains + destroy_data). Core populates a static table from the functions the component headers provide. All dispatch (layout, render, ipc press/release/key/drag, find_* popup tests) now uses vtable lookup instead of type switches. Core alloc/destroy/setters updated. Smoke apps updated for the few direct field pokes they had. `run-qemu-test` passes (full UI exercised under the new model).
-- Further component extraction (after single src/libui tree): the large inline menu release block (full scan over menu items on pointer release to decide bar-item toggle vs popup pick, plus sibling close orchestration) moved to `ui_menu_item_handle_pointer_release(ctx, x, y)` in libui_menu_item.h. The "close every open dropdown on outside click" loop moved to `ui_dropdown_close_all_open(ctx)` in libui_dropdown.h. Core `ui_loop_handle_ipc` now delegates those to the owning components (matching the existing pattern for list/dropdown press, scroll drag, text/dropdown key, button/checkbox release). Generic post-release work (clear all pressed flags, clear active scroll) stays in core. The small on-click dispatch for button/checkbox (to get their pre-on_click action) remains as the lightweight central dispatcher. `run-qemu-test` (including menu_bar exercising the newly extracted paths) passes.
-- libui is now its own standalone tree (`src/libui/include/wasmos/libui.h` + the per-component `libui_*.h` headers that own their rendering, layout, popup hit-testing, and event handlers). The prior duplicated copies under the libc and libsys trees (and the thin forwarder stubs that were briefly left there) have been removed completely — "just have a libui". The two current consumers (examples/c/gfx_smoke and menu_bar) continue to use the exact same `#include "wasmos/libui.h"` with zero source changes; the `-I${CMAKE_SOURCE_DIR}/src/libui/include` (placed first for wasm app targets) makes the wasmos/ namespace resolve to the canonical for both the app includes and the inner component includes inside libui.h. Cross-headers such as wasmos/api.h and wasmos/ipc.h continue to be found via the subsequent -I entries (libc + libsys). <stdbool.h> + forward prototypes were added in the canonical for clean C99 compilation of the component headers. Component ownership model (core owns generic tree/clip/dispatch + routing; components own their specifics) is unchanged. `run-qemu-test` (gfx_smoke + menu_bar built + full boot/halt smoke) passes.
-- libui split pilot: `libui.h` is now the parent/generic aggregator. Component-specific rendering (starting with label and button) lives in their own headers (`libui_label.h`, `libui_button.h`) included by the main header in both the libc and libsys/wasm trees. The core render path now delegates to the component-owned functions (mechanical extraction + header split). Public APIs and direct `ui_component_t` usage unchanged. `run-qemu-test` (including gfx_smoke + menu_bar) passes. More components (the already-factored render helpers for checkbox/list/etc.) and layout/event ownership can follow the same pattern.
-- Extended (larger step): on_click dispatch for button/checkbox now fully through component handlers (ui_button_handle_pointer_release, ui_checkbox_handle_pointer_release) added to their headers (both trees); core on_click block dispatches to them (removing inline type-specific toggle). Event pilot now covers key/pointer reactions + release for main interactive components (dropdown, list, text, menu, button, checkbox) with core owning only routing/orchestration (finds, focus, pressed clear, scroll capture, close-outside, menu id). Added scroll drag handlers to scroll/list headers and dispatch in drag block. Finished extract for other (scrollable) components' event logic. All per design proposal for component responsibility. Tests pass after each.
-- Native `libsys` event loops now expose explicit intent cancellation, and the
-  current stack-backed synchronous IPC helpers in both `gfx-compositor` and
-  `font-service` cancel pending intents before timeout/error exits. This
-  closes the stale-reply use-after-return path where a later reply could
-  resolve into freed stack state. `gfx-compositor` also now refreshes runtime
-  keyboard/mouse subscriptions on a periodic handled-event cadence instead of
-  only during idle housekeeping, so continuous `POLL_EVENT` traffic no longer
-  starves input re-subscription. Trace markers now also distinguish overlay
-  lock/restore transitions and whether a successful `PRESENT_WINDOW` happened
-  while the compositor still believed overlay lock was off, which makes
-  invisible-cursor regressions easier to diagnose.
-- Current SMP crash instrumentation now also watches the live main
-  `thread->ctx` for `process-manager` / `native-call-min` instead of the stale
-  mirrored `proc->ctx`, and AP bring-up no longer clears the global watch
-  state after the BSP arms it. The shared ready queue now additionally halts
-  immediately if any caller tries to enqueue a `THREAD_STATE_RUNNING` thread,
-  tightening the current race hunt around duplicate-run versus post-save
-  context stomp failures.
-- SMP scheduler hardening now also removes two concrete cross-CPU bootstrap
-  races uncovered by `native-call-min` crash trapping. The scheduler fallback
-  trampoline stack is now per-CPU instead of one shared global buffer, so
-  concurrent AP low-stack scheduler ingress can no longer scribble over the
-  same temporary stack frames. The generic paging helpers also stop using the
-  shared `g_current_pml4_phys` as their implicit current-root source and now
-  read the actual local CPU `cr3` when mapping/unmapping in the current
-  address space. Parked PM children are now born blocked instead of being
-  spawned READY and "parked" afterward, closing the SMP race where another CPU
-  could dispatch the main thread before `process_spawn_as_parked()` retracted
-  it from the queue and later `process_unpark_pid()` would requeue the still-
-  running thread on a second CPU.
-- Scheduler/context-switch hardening now validates the live `thread->ctx`
-  record at dispatch and user-preempt save points instead of relying on the
-  legacy `proc->ctx` mirror, so corrupt thread RIP/RSP state trips
-  immediately with the owning PID/TID in the panic path. The x86_64
-  `context_switch.S` restore path also no longer reuses restored `%rdi`,
-  `%rsi`, `%r8`, or `%r10` as scratch registers while staging `ret`/`iretq`,
-  which previously clobbered resumed thread register state during both kernel
-  and ring-3 resumes. The shared ready queue now also rejects duplicate
-  `thread_t` inserts under its lock, closing an SMP wake/block race where a
-  thread could be concurrently re-enqueued twice during blocked-yield
-  completion and remote wake-up. Late remote wakes now also refuse to
-  re-enqueue threads that have already returned to `RUNNING`, so stale event
-  delivery cannot place a live thread back on the ready list from another CPU.
-  The wake path now uses the thread-table's atomic `BLOCKED -> READY`
-  transition helper instead of raw unlocked state stores, removing another SMP
-  window where concurrent CPUs could race on the same thread state. wasm3
-  runtime entry is now also serialized globally across CPUs, so different
-  processes/drivers can no longer race through shared wasm3 internals while
-  merely relying on per-process runtime ownership. Nonblocking IPC/notify
-  polls no longer register scheduler-event waiters on `IPC_EMPTY`, which
-  removes an SMP bug where a sender could "wake" a thread that never blocked
-  and requeue a still-running thread on another CPU.
-- User-space threading helpers now include a process-local reentrant mutex
-  surface across WASM libc/libsys, native ring3 libc, and the native
-  driver/service ABI. The mutex state lives in user memory (`owner_tid` +
-  `recursion_depth`), while the kernel serializes `try_lock` / `unlock`
-  transitions so the runtime does not depend on unsupported WASM atomic
-  instructions. Current contention handling is cooperative (`thread_yield` /
-  `sched_yield` retry) rather than a futex-style sleep queue.
-- SMP infrastructure (Phases 0–9) is complete. `WASMOS_SMP` Kconfig bool
-  (depends on `WASMOS_IRQ_IOAPIC`, default off) gates all multi-core code.
-  Per-CPU data structure (`cpu_local_t`, `g_cpus[16]`) and `cpu_local()`
-  accessor are live; the BSP fully uses `g_cpus[0]` for its GDT, TSS, and
-  scheduler state. GS base MSR is set at the end of `x86_cpu_init()`.
-  `process.c` scheduler globals (`current_process`, `current_thread`,
-  `preempt_disable_count`, `in_scheduler`) now live in `cpu_local_t`.
-  Spinlock per-CPU IRQ-disable state (`irq_disable_depth`, `irq_saved_flags`)
-  moved from file-static globals to `cpu_local_t`; ready-queue spinlock added.
-  MADT type-0 (Processor Local APIC) CPU discovery in `ioapic.c` populates
-  `g_cpus[1..N-1]` with AP APIC IDs when `WASMOS_SMP=1`. LAPIC ICR helpers
-  (`lapic_read_id`, `lapic_send_init_ipi`, `lapic_send_sipi`, `lapic_ap_enable`)
-  added to `lapic.c`. AP trampoline in `smp_trampoline.S` (physical 0x1000)
-  transitions 16-bit real → 32-bit PM → 64-bit LM and calls `smp_ap_c_entry`.
-  `smp_cpus_up()` performs INIT-SIPI-SIPI per AP, waits on `cpu->started`;
-  the trampoline code page is identity-mapped executable while the low data
-  slot page remains NX so AP startup can fetch from `0x1000` without opening
-  execute permission on the `0x0000` slot page. The fixed trampoline page at
-  physical `0x1000` is also reserved from the general page-frame allocator so
-  shared-memory/kernel allocations cannot be clobbered during AP bring-up.
-  Service/driver children that require `notify_ready` are now also marked
-  ready-gated before they enter the run queue so SMP cannot let them auto-mark
-  ready via an early IPC block before process-manager arms the sync wait.
-  `smp_ap_c_entry()` loads per-CPU GDT/TSS/IDT/GS, enables AP LAPIC timer,
-  sets `started=1`. AP CPU init now also normalizes CR0/CR4 SIMD/FPU state
-  (including `OSFXSR` / `OSXMMEXCPT`, `fninit`, and default `MXCSR`) before
-  scheduled C code runs on that CPU. The global ready queue now uses a single
-  shared spinlock instead of per-CPU queue locks, and array-chunk list
-  elements are returned 8-byte aligned so embedded atomic fields such as IPC
-  endpoint spinlocks are SMP-safe. No behavioral change at `WASMOS_SMP=0`.
-  Full design in
-  `docs/architecture/28-smp.md`.
-- SMP runtime hardening now also covers several real shared-state failures
-  exposed after APs joined the scheduler loop. The current-thread identity is
-  fully per-CPU (`thread_current_tid()` now reads `cpu_local()->current_thread`
-  instead of a shared global), so IPC waiter registration, wake targeting,
-  syscall self-thread queries, and WASM hostcalls no longer race across CPUs.
-  Nonblocking IPC pollers now use a separate `ipc_try_recv_for()` path that
-  does not arm `waiter_tid` on `IPC_EMPTY`, preventing senders from waking a
-  still-running poller thread and re-enqueueing it in `THREAD_STATE_RUNNING`.
-  Blocking kernel-side receive loops still share `ipc_recv_blocking_for()`,
-  which retries after `process_block_on_ipc()` and now leaves externally woken
-  `READY` state intact instead of forcing `RUNNING` back into the thread slot.
-  The scheduler’s low-stack
-  trampoline path now also uses a per-CPU scheduler stack instead of a shared
-  global buffer, removing cross-CPU corruption of saved scheduler frames during
-  concurrent low-stack entries. The equivalent WASM hostcall path
-  (`wasmos_ipc_recv`) still restores the current thread state on the same race.
-- Shared kernel allocators and registries now also serialize their mutable SMP
-  state: the physical page-frame allocator protects its free-range and
-  refcount arrays with a spinlock; process/thread slot allocation and PID/TID
-  assignment are serialized; MM context/shared-region registries are serialized;
-  and the early list fallback arena uses an atomic bump offset so bootstrap
-  allocations cannot overlap across CPUs. `ipc_recv_blocking_for()` now only
-  restores `RUNNING` state when the caller is still locally blocked, avoiding a
-  READY-to-RUNNING stomp after a remote wake-up. One known scheduler gap
-  remains: `g_in_context_switch` and the related context-switch diagnostics are
-  still global until the assembly path is converted to per-CPU storage.
-- SMP late-boot storage/runtime fixes now also include correct higher-half
-  aliasing for wasm block-buffer copy/write hostcalls, so ATA/FAT service
-  traffic no longer dereferences raw physical addresses once SMP bring-up
-  reaches filesystem activity. With the current SMP fixes in place, the default
-  `run-qemu-test` boot now reaches framebuffer, input, font, compositor, and
-  CLI startup and lands at the interactive prompt instead of faulting during
-  `device-manager`/storage bring-up.
-- SMP native-driver and sync-spawn hardening now fixes two additional races
-  exposed on 4-CPU boots. First, `native_driver_start` now switches CR3 to the
-  driver's own page table (`ctx->root_table`) before calling the ELF entry
-  function and restores the kernel CR3 on return; previously the entry ran with
-  the kernel's PML4, executing wrong physical pages because native driver ELFs
-  are linked at `IMAGE_BASE=0x10000000` (covered by the kernel's bootstrap
-  identity mapping, not the driver's own second-level tables). Second,
-  `process_manager_on_child_ready` no longer reads or writes `g_pm.spawn`
-  fields; that function executes on the native driver's CPU (not PM's), so any
-  `g_pm.spawn` access was an unsynchronised cross-CPU read/write. The race:
-  PM writes `in_use=1` and `sync_child_pid` in sequence; if the driver CPU
-  observed `in_use=1` before `sync_child_pid` was visible, the pid-match check
-  failed, `in_use` was cleared to 0 without sending a reply, and PM's
-  `pm_poll_sync_spawn` (which checks `in_use` before entering its polling loop)
-  skipped every subsequent iteration — leaving `device-manager` hung at the
-  `proc_notify_ready` boundary (visible as a boot stall after "acpi-bus scan
-  complete"). Fix: `process_manager_on_child_ready` now only calls
-  `process_notify_ready(proc)` (sets `proc->ready=1`); `pm_poll_sync_spawn`
-  already checks `child->ready` on every PM iteration and sends the
-  `PROC_IPC_RESP` safely from PM's own single-threaded context. Additionally,
-  the WASM driver registry now uses an explicit spinlock instead of
-  `critical_section_enter/leave`, and `thread_wake_if_blocked` atomically
-  transitions `BLOCKED→READY` under the thread-table lock to prevent double
-  enqueue from concurrent CPU wakeups. The `blocking_transition` field uses
-  acquire/release atomics to guard the `RUNNING→BLOCKED` window. After these
-  fixes, 4-CPU SMP boots reliably reach the WAMOS interactive CLI across
-  repeated runs.
-- Interrupt controller selection is now a build-time Kconfig choice
-  (`WASMOS_IRQ_PIC` / `WASMOS_IRQ_LAPIC` / `WASMOS_IRQ_IOAPIC`, mapped to
-  `WASMOS_IRQ_MODE` 0/1/2). PIC + PIT remains the default. LAPIC mode replaces
-  the 8259 with the Local APIC timer (calibrated via PIT channel 2). IOAPIC mode
-  adds full ISA IRQ routing through the I/O APIC (MADT-discovered, all 16 RTEs
-  programmed via `irq_late_init()`).  All three modes boot to the CLI halt point.
-  See `docs/architecture/05-x86-cpu-architecture.md`.
-- Ring-3 strict isolation/hardening, threading phase rollout, DMA rollout,
-  filesystem/PM service discovery, and CLI/runtime updates are tracked in the
-  dedicated docs under `docs/architecture/`.
-- CLI `ps` process diagnostics now also expose runtime kind (`wasm` true/false
-  in table view and `wasm=true|false` annotations in tree view), sourced from
-  process-manager spawn metadata.
-- Threading is production-complete for the current single-core scope; final
-  ABI/policy decisions and closure status are in
-  `docs/architecture/08-threading-and-lifecycle.md` sections 15 and 17.
-- Recent threading runtime hardening (user-thread kernel-stack setup for
-  `THREAD_CREATE` and syscall frame/context synchronization for yield/block
-  paths) is documented in `docs/architecture/08-threading-and-lifecycle.md`.
-- Graphics/compositor Phase 0 scaffold (shared ABI constants and minimal
-  native Zig `gfx-compositor` endpoint handshake path) is tracked in
-  `docs/architecture/20-graphics-framebuffer-and-compositor.md`.
-- Graphics/compositor baseline now also includes typed compositor opcode
-  dispatch and minimal window lifecycle handling (`CREATE_WINDOW` /
-  `DESTROY_WINDOW`) with owner-checked state slots and `GFX_STATUS_*` replies.
-- Graphics/compositor baseline now also includes `RESIZE_WINDOW`,
-  `ALLOC_SHARED_BUFFER` (opaque random 32-bit `buffer_id` + shmem backing),
-  `RELEASE_SHARED_BUFFER`, and `PRESENT_WINDOW` by `buffer_id` with
-  shmem-backed damage rect lists.
-- Graphics/compositor lifecycle hardening now enforces window-generation-aware
-  buffer validity (pre-resize stale buffers denied on present), explicit
-  in-use buffer release denial, and deterministic owner/binding validation for
-  present/release transitions.
-- Graphics/compositor input routing now subscribes to keyboard driver
-  notifications and exposes focused-window events through `GFX_IPC_POLL_EVENT`
-  (`FOCUS_GAINED`, `FOCUS_LOST`, `KEY`).
-- Graphics/compositor input routing now also subscribes to mouse-driver move
-  notifications, emits focused pointer events (`POINTER`) through
-  `GFX_IPC_POLL_EVENT`, and applies click-to-focus + raise-on-click policy for
-  topmost hit-tested windows.
-- Graphics/compositor now also performs runtime input subscription recovery
-  (for late-started `kbd`/`mouse` services) and idle orphan-state cleanup so
-  dead client endpoints cannot leave stale windows/buffers/events or persistent
-  overlay mode.
-- Graphics/compositor now also renders a software cursor overlay above window
-  composition and repaints old/new cursor rectangles on movement, making
-  pointer position/focus interactions directly visible during bring-up.
-- Graphics/compositor now also renders minimal window chrome (title/border with
-  close + maximize/restore hit targets), emits `GFX_EVENT_CLOSE_REQUEST` when
-  close is clicked, and toggles maximized geometry with a second top-right
-  button.
-- Graphics/compositor pointer interaction now also includes title-bar
-  drag-to-move behavior (close zone excluded), with window coordinates clamped
-  to framebuffer extents.
-- Graphics/compositor pointer interaction now also includes bottom-right
-  corner live-resize behavior with dimension clamping to framebuffer extents
-  and window min/max policy limits.
-- Graphics/compositor now emits resize notifications (`GFX_EVENT_RESIZE`) to
-  window owners during pointer-driven resize and maximize/restore toggles;
-  current smoke validation reallocates and re-presents buffers on that event.
-- WASM-side `libui` scaffold now exists as shared headers (`wasmos/libui.h` in
-  libc + libsys mirrors), providing a small struct-based component tree
-  (`Panel`/`Label`/`Button`/`Checkbox`/`TextInput`/`ScrollView`/`ListView`),
-  lightweight bitmap text rendering, pointer focus + key-input editing for text
-  inputs, clipped viewport rendering and drag scrolling for scroll/list views,
-  and app-owned IPC pass-through
-  (`ui_loop_handle_ipc`), and dirty-frame flush (`ui_loop_drain`).
-- Graphics/compositor design phase for text now targets a dedicated
-  `font-service` (glyph rasterization + metrics + shared atlas IPC) instead of
-  a fixed built-in compositor font path; current bring-up scope is TTF-only.
-- Native Zig `font-service` baseline now builds and is packaged as
-  `/boot/system/services/fontsvc.wap`, with `font` endpoint registration,
-  TTF file load from `/boot/system/fonts/*.ttf`, and owner-checked
-  `OPEN_FONT` + `GET_METRICS` IPC; glyph raster IPC is still TODO. Native
-  `libsys` buffer copy/write helpers now round their borrow windows up to
-  page size before calling the kernel ABI, which fixes sub-page native FS
-  staging/copy operations such as `fsReadPath`. `font-service` now uses
-  `FS_IPC_STAT_REQ` to size its SHMEM to the real TTF length and loads each
-  built-in font through the shared `fs.vfs` read-path helper instead of
-  manual open/read loops. The low-level native `buffer_borrow` ABI now also
-  documents and logs invalid non-page-aligned/zero-sized requests explicitly,
-  while the higher-level native helper APIs remain byte-range wrappers that
-  round their internal borrow windows up before calling the kernel hook.
-  `fs_manager` now relays `FS_IPC_READ_PATH_REQ` payloads back to callers in
-  4 KiB chunks instead of 256-byte chunks, reducing bounce-copy overhead for
-  eager native asset loads such as built-in TTF startup.
-- Input-driver baseline now also includes a wasm `mouse` driver with
-  subscription IPC (`MOUSE_IPC_SUBSCRIBE_REQ` + `MOUSE_IPC_MOVE_NOTIFY`) that
-  emits PS/2 packet-derived movement deltas and button masks to subscribers.
-- Graphics validation now also includes a wasm `gfx-smoke` app available under
-  `/boot/apps/gfx_smoke.wap` for manual CLI execution, keeping compositor tests
-  opt-in at runtime instead of sysinit auto-spawn; the smoke scenario now
-  covers two concurrent windows and close-event teardown of each window, plus
-  a `libui` component demo window.
-- Native-driver ABI now includes endpoint-owner lookup and shmem grant
-  callbacks so native services (including `gfx-compositor`) can share
-  compositor-owned shmem buffers with requesting wasm clients.
-- WASM hostcall surface now also includes kernel-managed shared-memory
-  auto-mapping (`shmem_map_auto`) that returns a process-local linear-memory
-  offset from a managed tail window, removing hardcoded map offsets in clients
-  such as `gfx-smoke`.
-- Software composition now redraws clipped dirty regions in stable z-order,
-  including overlap with higher-z windows; invalid/missing damage falls back to
-  full-frame redraw.
-- Process-manager runtime bookkeeping now grows on demand (`apps`, `waits`,
-  and `services` use internal linked-list pools), removing fixed small slot
-  caps from PM-managed state.
-- Memory-management design now includes a phased migration plan to remove
-  duplicated hardcoded physical-window limits, introduce intent-based
-  allocation policy, and decouple kernel-internal allocations from DMA-style
-  low-address constraints.
-- Kernel dynamic container baseline now includes a centralized `list`
-  interface with selectable backends (linked vs growable array-chunk);
-  process-manager list backend selection is wired through Kconfig.
-- Threadable-scheduler wakeup handling now avoids single-CPU deadlock when an
-  IPC/event sender wakes a thread during the narrow RUNNING-to-BLOCKED
-  transition after event registration but before the blocked yield path has
-  finished; scheduler selftests now cover that race.
-- WASM event-loop intent registration now arms the request-id slot before
-  sending IPC, preventing fast replies from being consumed as unhandled
-  messages during early process-manager metadata and sync-call traffic.
-- Process-manager module-metadata path lookup now accepts caller xfer-buffer
-  payloads (the shared libc contract) in addition to direct user pointers, and
-  device-manager uses that buffer path for initfs module discovery during
-  early bring-up.
-- Device-manager sync IPC waits now use a dedicated select set over both the
-  PM reply endpoint and `devmgr.query`, so bring-up stays responsive to
-  filesystem metadata queries while waiting on process-manager replies.
-- Device-manager query/inventory/reply housekeeping paths now drain endpoints
-  explicitly in nonblocking mode; this avoids a threadable-scheduler bring-up
-  stall where the new select-backed WASM event-loop poll blocked on an empty
-  `devmgr.query` wait before the next pending spawn target (for example
-  `acpi-bus`) could run.
-- Higher-level components may use C++, while low-level kernel boundaries stay
-  C/ASM. WASM C++ build policy is no exceptions/RTTI and explicit C ABI at
-  integration points.
-- Process-manager test injection hooks are now behind a dedicated Kconfig/CMake
-  switch (`WASMOS_PM_TEST_HOOKS`) and are no-op when disabled.
-- `fs-manager` no longer relies on a fixed-size client slot table; client
-  state now grows in heap-backed chunks.
-- Process-manager context buffer tracking for filesystem/framebuffer borrows is
-  list-backed instead of fixed `PROCESS_MAX_COUNT` arrays.
-- Kernel list internals include an early-boot static-arena allocator fallback
-  so list-backed modules can initialize before general heap allocation is ready.
-- MM context registration and capability state tracking are list-backed, so
-  context growth is no longer bounded by static `MM_MAX_CONTEXTS` slot arrays.
-- Per-context memory-region storage is also list-backed, removing fixed
-  `MM_MAX_REGIONS` limits within each context.
-- WASM `libui` component-tree state is heap-backed (dynamic component, text,
-  and list-item storage) instead of fixed compile-time caps, and includes list
-  views/dropdowns with text rendering through required `font-service` IPC.
-- Font IPC includes text-run measurement and client-buffer rasterization
-  (`FONT_IPC_MEASURE_GLYPH_REQ`, `FONT_IPC_RASTER_GLYPH_INTO_REQ`) with shared
-  memory payload/response packing.
-- Compositor window-title rendering uses the text-run path (measure +
-  raster-into) with per-window title-run caching to avoid compose-time per-char
-  font IPC requests.
-- Compositor pointer delivery to focused clients uses content-local
-  coordinates, and client buffers render in the content pane below window
-  chrome/titlebar.
-- WASM libc now implements a process-local linear-memory allocator
-  (`malloc/free/calloc/realloc`) backed by `memory.grow`.
-- Native driver ABI includes an explicit shared-memory flush hook for stable
-  shared-buffer publication contracts in native services/drivers.
-- WASM hostcalls include both shared-memory sync directions:
-  `shmem_flush` (WASM -> shared) and `shmem_refresh` (shared -> WASM).
-- ACPI class/subclass matching in `device-manager` includes RTC bring-up
-  (`PNP0B00` class `0x08` / subclass `0x03`) alongside serial/keyboard/mouse
-  ISA devices from `acpi-bus`.
-- The wasm `serial` driver now binds `proc.endpoint` like the other ACPI
-  input/ISA drivers, so its `PROC_IPC_NOTIFY_READY` message reaches
-  process-manager during sync spawn instead of looping respawns after the boot
-  ACPI rules load. The missing binding was a latent bug masked before SMP by
-  the old non-deterministic auto-ready path for service/driver children.
-- `sysinit` now gives `start` commands a longer sync-spawn timeout so heavier
-  native services such as `font-service` can finish boot-time warmup and send
-  their explicit ready signal before `sysinit` aborts the script. Under SMP,
-  the old 5-second timeout was too short even though the child continued
-  initializing and later reported ready correctly.
-- RTC IPC message IDs and payload packing are explicitly defined in shared
-  kernel/user headers (`rtc_ipc.h`) for a single client/driver contract.
-- CLI builtin `echo` and script `echo` share one parser/expander path in libc
-  script helpers, including `-n`/`-e`/`-E`/`--`, quoting, and `${VAR}`
-  expansion.
-- Environment-variable architecture now targets per-context scope ownership
-  with POSIX-like snapshot inheritance, including explicit `script` (child
-  scope) versus `source` (current scope) behavior.
-- A generic `virtio-serial` driver baseline is available as a PCI-matched WASM
-  service (`virtio.serial`) with discovery and register-access IPC as a
-  foundation for higher-level transport consumers.
-- Networking design baseline now has a dedicated architecture plan in
-  `docs/architecture/22-networking-virtio-net-and-stack.md`, defining explicit
-  QEMU NIC configuration, `virtio-net` driver/service boundaries, and phased
-  TCP/UDP stack rollout, including full-scope IPv6 and multi-address/
-  multi-stack instance support in later phases.
-- `virtio-net` driver Phase 1a (probe baseline) is implemented and exercised
-  end-to-end: a PCI-matched WASM service (`system/drivers/virtio_net.wap`) that
-  probes the device (vendor `0x1AF4`, class `0x02`), performs the virtio status
-  handshake (ACK|DRIVER → feature negotiation → DRIVER_OK), reads the MAC via
-  the `VIRTIO_NET_F_MAC` feature, and reports link status.  RX/TX are deferred
-  (`TODO(virtio-net-transport)`).  The IPC contract is adapter-neutral
-  (`NETDRV_IPC_*`, `0xA00`-range in `wasmos_driver_abi.h`) so it is reusable
-  across other NICs.  The QEMU test harness now attaches a NIC by default
-  (`WASMOS_QEMU_NIC_MODEL`, default `virtio-net-pci`, set to `none` to omit);
-  boot log shows `[virtio-net] driver ok link=up mtu=1500` with no regression
-  across `test_cli`, `test_device_manager`, and `test_timer_tick`.
-- Baseline finding for Phase 1b: the existing DMA plumbing (`CAP_DMA_BUFFER` +
-  `dma_map_borrow`) maps a peer's *transient* buffer per operation and refuses
-  the caller's own memory, so it cannot back persistent virtqueue rings; and no
-  `virtio-serial` virtqueue precedent exists (that driver is probe-only). Phase
-  1b therefore requires two new primitives, now specified in the architecture
-  docs: a driver-owned pinned DMA region allocator (`region_alloc`, composing
-  `pfa_alloc_pages_below` + `pfa_pin_pages` + `phys_map`) and a
-  transport-neutral vring core (PCI backend first, shmem/service backend later).
-- Phase 1b, primitive 1 implemented: the driver-owned pinned DMA region
-  allocator `wasmos_region_alloc(pages, cache_policy, out_phys)` (WARP:
-  `warp_region_alloc`, `src/kernel/warp/link.cpp`; wasm3 carries the symbol as an
-  `UNAVAILABLE` stub for ABI parity). It allocates a contiguous run below 2 GiB,
-  enforces `CAP_DMA_BUFFER` + `capability_dma_range_allowed`, remaps it into the
-  driver's linmem via `warp_linmem_place_phys` (the scan+commit+remap core
-  factored out of `shmem_map_auto`, so both share one pinned-base code path),
-  and pins it. Only write-back cache policy is implemented (WB is correct for
-  coherent x86 virtqueue rings); write-combining and region free/revoke are
-  follow-ons. Verified: `run-qemu-test` green and `shmem-e2e` still green after
-  the refactor. Next: the vring core (libsys) + virtio-net queue init/RX/TX.
-- Phase 1b, primitive 2 implemented: the transport-neutral vring core, a
-  header-only libsys library `src/libsys/wasm/include/wasmos/vring.h`. Legacy
-  split-virtqueue layout (descriptor table + avail/used rings), descriptor
-  alloc/free, publish/kick, and used-ring consumption with consumer-side bounds
-  validation — pure logic over a caller-provided region + a `notify` callback,
-  no device/PCI/IPC knowledge (keeps the kernel out of the zero-copy data path).
-  Covered by `tests/unit/test_vring.c` (full producer→device→consumer lifecycle
-  + free-list exhaustion + malicious used-id rejection), wired into
-  `run-kernel-unit-tests`; all host unit tests green. Chained descriptors and
-  EVENT_IDX suppression are follow-ons. Next: the PCI backend (device probe /
-  queue programming / doorbell / IRQ) that drives this core, then virtio-net
-  RX/TX and the shmem/service backend.
-- Phase 1b queue bring-up done: the virtio-net driver now sets up its RX(0) and
-  TX(1) virtqueues before DRIVER_OK — `setup_queue()` selects the queue, reads
-  QUEUE_SIZE, `wasmos_region_alloc`s a pinned ring region sized by
-  `vring_size(qsize, 4096)`, lays it out with the vring core, and programs
-  QUEUE_PFN = ring_phys>>12; the vring doorbell writes QUEUE_NOTIFY. Boot shows
-  `[virtio-net] vq ready rx=256 tx=256 rx_phys=… tx_phys=…` then `driver ok
-  link=up`. Enablers: virtio_net manifest gains the `dma.buffer` cap (kernel
-  grants the BIDIR [0,2 GiB) DMA window region_alloc needs) and heap_pages 512 /
-  INITIAL+MAX_MEMORY 4 MiB (so the ring window fits above live data); the AOT
-  precompiler symbol mirror gains `region_alloc`. Verified: run-qemu-test green
-  (WARP ring-0) + host unit tests green.
-- Phase 1b RX path done: the driver `region_alloc`s a 64-buffer RX packet pool
-  (2 KiB each) and posts every buffer to the RX queue as a device-writable
-  descriptor (`rx_arm()`), kicks, and boots to `[virtio-net] rx armed bufs=64`.
-  `NETDRV_IPC_RX_POLL` now drains the used ring via `rx_poll_one()`: it locates
-  the buffer from the completed descriptor's device address, strips the 10-byte
-  legacy virtio-net header, writes the frame into the caller's borrowed buffer
-  (`wasmos_sys_buffer_write_to`), bumps `rx_packets`, recycles the descriptor,
-  and re-kicks; replies RESP with arg0 = frame length (0 = none pending). Actual
-  frame reception needs traffic (Phase 1b/E). Verified: run-qemu-test green +
-  host unit tests green.
-- Phase 1b TX path done: `tx_arm()` region_allocs a 64-buffer TX pool and a
-  free-buffer stack; `NETDRV_IPC_TX_FRAME` (arg0 = frame length) -> `tx_send()`
-  reaps prior completions (`tx_reap()`), takes a free buffer, prepends a zeroed
-  10-byte virtio-net header, copies the frame from the caller's borrowed buffer
-  (`wasmos_sys_buffer_copy_from`), posts a device-readable descriptor, kicks, and
-  bumps tx_packets; replies RESP(OK) or a NET_STATUS_* error (QUEUE_FULL/INVALID
-  /IO_ERROR). `g_tx_desc_buf[]` maps desc id -> buffer for reap; setup_queue now
-  guards qsize <= 256. Boot shows `[virtio-net] tx armed bufs=64`. Actual TX/RX
-  wire exchange is the next step (e2e smoke over QEMU user-net). Verified:
-  run-qemu-test green (one device-manager rules-read boot flake on the first run,
-  passed clean on re-run — unrelated to virtio_net, which starts later) + host
-  unit tests green.
-- Phase 1b DONE (TX/RX proven on the wire): the virtio-net driver runs a
-  boot-time ARP self-probe (`net_selftest()`) — it broadcasts an ARP request for
-  the SLIRP gateway (10.0.2.2) over the region_alloc'd TX ring and polls the RX
-  ring for the reply. Boot shows `[virtio-net] selftest tx complete` then
-  `[virtio-net] selftest rx=64 ethertype=0x0806 gw_mac=52:55:0A:00:02:02`,
-  exercising the whole path: region_alloc'd rings, vring publish/kick, the device
-  doorbell, TX DMA read, SLIRP, RX DMA write, and used-ring completion. Guarded
-  by `tests/test_virtio_net_e2e.py` (asserts the ARP round-trip). This meets the
-  Phase 1b done-gate (raw Ethernet TX/RX in a smoke path). Verified: the e2e test
-  green, run-qemu-test green, host unit tests green.
-- Phase 1b RX is now IRQ-driven: the driver routes its device IRQ (line 11, from
-  the spawn profile's irq_mask = 1<<irq_hint) to its endpoint via
-  `wasmos_irq_route_ipc`, and the ARP probe's reply is delivered through the
-  interrupt rather than a poll loop. The kernel delivers a routed IRQ as an
-  IPC_IRQ_EVENT_TYPE (0xFF00) message (source = NONE, handled before the
-  source<0 guard); `net_handle_irq()` reads ISR to de-assert the level-triggered
-  line, reaps TX, drains RX, and `irq_ack`s to unmask. Boot shows
-  `[virtio-net] irq routed line=11` / `arp request sent` /
-  `[virtio-net] irq rx=64 ethertype=0x0806 gw_mac=52:55:0A:00:02:02`; the e2e
-  test asserts the IRQ-driven round-trip. Verified: e2e test green, run-qemu-test
-  green, host unit tests green. Follow-ons: RX_FRAME_NOTIFY delivery to a
-  consumer, chained descriptors, then Phase 2 (net-stack: ARP/IPv4/ICMP/UDP over
-  NET_IPC_* sockets).
-- RX frame delivery to a consumer landed: the driver has an RX ready-queue +
-  subscriber (`g_rx_sub_endpoint`, set by RX_POLL); `net_drain_rx()` is shared by
-  the IRQ handler and RX_POLL, so RX_POLL drains the vring (reliable pull) and the
-  IRQ handler enqueues + posts `NETDRV_IPC_RX_FRAME_NOTIFY` (wakeup hint). New
-  consumer `examples/c/net_smoke` looks up virtio.net, LINK_GETs the MAC,
-  subscribes, TXes an ARP, and receives the reply;
-  `tests/test_virtio_net_notify_e2e.py` CLI-spawns it and asserts the round-trip
-  (`[net-smoke] rx=64 ethertype=0x0806`). KNOWN LIMITATION: PCI INTx re-delivery
-  fires only once — the IOAPIC RTEs are all programmed active-high (`ioapic.c`)
-  but PCI INTx is active-low — so NOTIFY is a one-shot hint today and the consumer
-  polls RX_POLL defensively. The fix (pci-bus configures each INTx line
-  level/active-low via a privileged irq.configure, drivers stop touching electrical
-  config) makes push reliable and is the next change; that design + class-based
-  service discovery are recorded in docs 09/22.
+This is a compact implementation snapshot for agents, not a changelog. Use
+`git log` for history, `docs/ARCHITECTURE.md` for the document map, and the
+linked feature documents for rationale and rollout plans.
 
-- Networking Phase 2 groundwork: **lwIP 2.2.1 is vendored** as a git subtree at
-  `libs/lwip`, and the `net-stack` is scaffolded as a **native `.wap` service**
-  (`src/services/net_stack/`, modeled on `gfx_compositor`): a C binary embedding
-  lwIP, linked against `libsys_native` + kernel libc into a static ELF with entry
-  `initialize`, packed with `native = true`. `lwipopts.h` is a `NO_SYS=1`,
-  `MEM_LIBC_MALLOC=0` raw-API config (ARP/IPv4/ICMP/UDP/TCP on, IPv6 off). This
-  is compile-only: `initialize()` calls `lwip_init()` then idles; there is no
-  netif glue, driver IPC wiring, or socket API yet, and the service is built but
-  NOT embedded in initfs / not spawned (boot behavior unchanged — verified by a
-  clean `warp_smp` `run-qemu-test`). `sys_now()` returns raw ticks with a
-  `TODO(net_stack)` for a real ms clock (lands with netif/timeouts). Decision
-  record: net-stack runs as a native service (not WASM, not kernel-image),
-  ring-0 for now like all native services; isolation follows the shared
-  native-service-to-ring-3 work (see docs 11/22). Next: netif glue →
-  ARP/ICMP round-trip over SLIRP, then `NET_IPC_*` sockets; multi-driver
-  discovery via `svc_lookup_class("net.ifc")`.
+## Snapshot and Validation
 
-- Socket data-plane ring transport, foundation landed: a general
-  single-producer/single-consumer byte-ring core, header-only libsys library
-  `src/libsys/wasm/include/wasmos/ringbuf.h`, modeled structurally on the vring
-  core. It is the base for the per-socket shared-memory rings in docs/22 (socket
-  payload travels through app-owned rings, not IPC messages), but is
-  deliberately general and networking-agnostic: pure ring logic over a
-  caller-provided region + a notify callback, no IPC/buffer-object/transport
-  knowledge. It is NOT unified with vring by design — vring is the virtio
-  split-virtqueue (a spec-fixed descriptor ring whose elements point at separate
-  DMA buffers, consumed by a device), whereas ringbuf is a data ring whose
-  payload lives inside the ring and whose two ends are both our own software.
-  Fixed 64-byte header (magic `WRNG`, capacity, flags, producer/consumer indices
-  kept apart) + a power-of-two data region; free-running u32 indices (index with
-  `pos & (capacity-1)`, 2^32 wrap harmless, no read==write ambiguity); directional
-  acquire/release ordering. API: init/attach + `bytes_for()` sizing; byte stream
-  write/read/peek/skip with wraparound and free/used flow control; length-prefixed
-  datagram records published all-or-nothing; doorbell empty→non-empty edge helpers
-  (lost-wakeup re-check left to the IPC/wait layer); flags word. Covered by
-  `tests/unit/test_ringbuf.c` (init/attach validation, flow control/overrun,
-  wraparound payload, 2^32 index wrap, datagram framing incl. undersized-dst and
-  too-big-record, doorbell edges, flags), wired into `run-kernel-unit-tests`. No
-  boot-image target includes the header yet, so boot behavior is unchanged.
-  Verified: `run-kernel-unit-tests` green; `run-qemu-test` green (WARP, boots to
-  CLI). Next: acquire two xfer-buffer-backed rings on the app side and overlay
-  them into linmem (the pinned shared-window overlay proven by the zero-copy
-  linmem work), borrow both to net-stack, then wire the net-stack control plane
-  (`SOCKET_OPEN` carrying ring `buffer_id`s) + doorbells.
+- Default configuration: wasm3 runtime, ring-3 isolation, single CPU. WARP is
+  selected with `-DWASMOS_WASM_RUNTIME_WARP=ON`; SMP is separately gated by
+  `WASMOS_SMP` and requires IOAPIC.
+- Recent baseline: wasm3 and WARP+SMP boot through `init` to the CLI/halt path;
+  the WARP build uses AOT payloads for internal non-native modules and JIT for
+  examples and graphical apps.
+- Primary regression gates: `run-kernel-unit-tests`, `run-qemu-test`,
+  `run-qemu-cli-test`, `run-qemu-ring3-test`, and (when applicable)
+  `run-qemu-ring3-threading-test`. Never run QEMU integration targets in
+  parallel because they share `build/esp`.
+- Developer checks: `fmt`, `fmt-check`, `lint`, and `quality` are CMake targets
+  backed by `scripts/quality.sh`; only first-party source roots are in scope.
 
-- Two scheduler bugs affecting kernel worker threads are fixed:
-  (1) `proc->ctx.rsp` was initialized to the process stack top at spawn time,
-  causing the scheduler to treat every fresh worker as "has blocked context to
-  resume" and incorrectly invoke `context_switch_high` → `process_trampoline`
-  instead of `process_run_worker_on_stack`.  Fixed by clearing `proc->ctx.rsp`
-  to 0 after copying into `main_thread->ctx`, and teaching
-  `process_validate_context` to treat rsp==0 as a valid "no saved context"
-  sentinel.
-  (2) On SMP (4-CPU QEMU) worker threads were permanently orphaned: while the
-  main thread ran (proc->state==RUNNING), other CPUs dequeued and silently
-  dropped the workers from the ready queue (proc->state!=READY check), leaving
-  them with in_ready_queue=0 and state=READY but no re-enqueue path.  Fixed
-  by running orphaned fresh workers inline via `process_run_worker_on_stack`
-  immediately after the main thread yields and before proc->state is set back
-  to READY, exploiting the RUNNING window to guarantee exclusive access.
-  Together these allow the threading IPC stress self-test to complete 32
-  in-process IPC message exchanges and emit `[test] threading ipc stress ok`.
+## Boot and Kernel
+
+- Boot handoff is stable: `BOOTX64.EFI` loads `kernel.elf` and `initfs.img`,
+  exits boot services, then enters `_start` and `kmain(boot_info_t *)`.
+- The kernel provides paging, preemptive thread scheduling, process lifecycle,
+  IPC, capabilities, transfer buffers, shared memory, DMA policy, and panic
+  diagnostics. Fatal exception reports retain the fault-time frame chain and
+  resolve in-kernel symbols; `scripts/decode_kernel_panic.py` adds host-side
+  file/line resolution.
+- Scheduling is thread-centric. Ring-3 thread creation/join/detach/yield/exit
+  and cooperative user-space reentrant mutexes are implemented. SMP has AP
+  bring-up, per-CPU state, a shared ready queue, and hardening for cross-CPU
+  wake/reap/context races.
+- Process-manager state and core MM registries use dynamic/list-backed storage
+  rather than small fixed process/context/region tables.
+
+## Runtime, Isolation, and IPC
+
+- wasm3 is the default interpreter. WARP is the optional JIT/AOT backend and
+  follows the ring-3 execution model; internal modules can fall back to JIT if
+  an embedded AOT payload cannot load.
+- Both runtimes use reserve-and-commit linear memory and the same user virtual
+  address model. Linear-memory metadata is rebound to live backing before
+  pointer-validating hostcalls; memory is reclaimed correctly on process reap.
+- The transfer-buffer object model is canonical: objects have an owner,
+  explicit borrow/grant lifecycle, and `(buffer_id, ptr, len, offset)` ABI.
+  Keep libc/libsys wrappers and all runtime variants in sync when changing it.
+- Startup data is supplied through spawn-info buffers, not legacy entry args.
+  Path spawning first recognizes `.wap`; executable-format brokers can return
+  a validated `.wap` launch plan for other formats.
+- Service discovery supports named services and class instances. Multi-instance
+  providers must use unique class instances and unique concrete PM names.
+
+## Filesystems and Storage
+
+- `fs-manager` is the VFS endpoint and routes `/init`, `/boot`, and `/user`.
+  `fs-init` serves initfs; FAT backends mount block volumes for `/boot` and
+  optional `/user`.
+- `fs-fat` is a single-threaded, non-blocking reactor: queued operation
+  contexts are resumable stackless coroutines, while one active operation uses
+  the shared 8 KiB block/DMA buffer. It supports FAT12/16 and LFN lookup across
+  multi-cluster directories, reports `FS_ERR_*`, and binds to its requested
+  block-device unit.
+- `block_buffer_map` overlays a caller block buffer into linear memory so FAT
+  I/O normally avoids staging copies. Bounds checks limit legacy copy/write
+  calls to the live block slot.
+- Current limitations: ATA remains PIO-only; `fs-init` has not yet adopted the
+  reactor model; initfs whole-blob mapping is still copy-based.
+
+## Services and System Startup
+
+- Startup order is `init` -> `fs-manager`/`fs-init` -> `device-manager` ->
+  `sysinit`. Readiness gating prevents dependent boot steps from racing ahead.
+- `device-manager` consumes PCI/ACPI inventory and bootstrap/runtime rules,
+  spawning drivers with matched capabilities and optional startup identity.
+- `chardev` is a normal initfs WASM driver started by a boot rule and registered
+  through the service registry; it is no longer kernel-embedded.
+- `sysinit` drives `.rc` workflows, environment scopes, `script`/`source`, and
+  starts the compositor-dependent graphical apps before the CLI when enabled.
+- Native services use explicit cancellation for stack-backed synchronous IPC
+  waits. `font-service` provides TTF measurement/rasterization for compositor
+  and libui clients.
+
+## Drivers and Hardware
+
+- PCI and ACPI bus services enumerate devices for policy-driven startup. Active
+  device coverage includes ATA, FAT, framebuffer, PS/2 keyboard/mouse, serial,
+  RTC, `virtio-serial`, and `virtio-net`.
+- Capability policy covers I/O ports, IRQs, shared memory, and DMA in both
+  runtimes. Driver-owned pinned DMA regions and a transport-neutral `vring`
+  core support virtqueues.
+- `virtio-net` initializes RX/TX queues, routes its IRQ, exchanges an ARP
+  self-probe through QEMU SLIRP, and supports pull plus notification-hinted RX
+  delivery. The current INTx electrical configuration is incomplete, so
+  consumers must still poll defensively after notification.
+- `net-stack` is a native lwIP scaffold only: it initializes lwIP but has no
+  netif glue, driver control plane, or socket API. `ringbuf.h` is ready for the
+  planned shared-memory socket data plane.
+
+## Graphics and User Interface
+
+- The graphics stack comprises framebuffer driver, software compositor,
+  shared-buffer windows, input routing, clipping/damage redraw, window chrome,
+  cursor, and system/menu bars. Window flags are composable (`TOPMOST`,
+  `NO_CHROME`, `INVISIBLE`, `NO_ACTIVATE`, `NO_CONTENT`, and related flags).
+- `libui` has one canonical tree at `src/libui/`. Its component base owns common
+  tree state; component vtables own type-specific layout, render, event, popup,
+  and destruction behavior. Existing consumers are `gfx_smoke` and `menu_bar`.
+- `gfx_smoke` exercises multiple windows, close-event teardown, and libui;
+  `menu_bar` exercises popup/window interactions. Both are spawned after the
+  compositor is ready when present in `sysinit`.
+
+## Applications and Language Support
+
+- `.wap` packages cover WASM and native apps, services, and drivers. C, C++,
+  Zig, Go, Rust, and AssemblyScript examples are supported through shared libc
+  and runtime-specific libsys wrappers.
+- CLI path spawns retain transfer buffers until the matching PM response;
+  foreground/background launches and broker handoff use the same ownership
+  contract.
+- Rust and Go shims use the transfer-buffer object ABI. Minimal WARP WASI
+  compatibility includes `proc_exit` and `random_get` for TinyGo workloads.
+
+## Current Gaps and Guardrails
+
+- Shared WARP linear-memory updates need a real cross-CPU TLB shootdown; the
+  current fault-path retry is an interim SMP safeguard.
+- WARP still has incomplete hostcall coverage, no working multithreaded WASM,
+  and an internal shim used to access a vendored runtime pointer. Do not modify
+  `libs/warp` or `libs/wasm3` directly.
+- Complete PCI INTx polarity/trigger configuration before treating RX
+  notifications as reliable push delivery.
+- Networking Phase 2 remains pending: netif glue, ARP/IPv4/ICMP/UDP service
+  behavior, socket IPC, and shared-memory ring wiring.
+- Maintain the boot entry contract, C ABI boundaries, and runtime-wrapper
+  parity. Record meaningful future baseline changes here as concise subsystem
+  updates; keep detailed design changes in `docs/architecture/`.

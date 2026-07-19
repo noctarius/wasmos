@@ -532,9 +532,26 @@ syscall layer at all.
 
 ## 15  Linear Memory: Reserve-and-Commit (no relocation)
 
-**Status: planned.** This reworks how WARP linear memory is backed. It is a
+**Status: implemented (both runtimes).** This reworks how WARP linear memory is
+backed. It landed via the Stage-3b user-VA switch: both runtimes execute from a
+per-app reserved-VA slot committed on demand (WARP arms/moves the slot as
+described below; wasm3 floors `InitMemory`'s `maxPages` to the slot). It is the
 prerequisite for the cross-process shared-memory ring transport (see
 [Networking → Socket Data Plane](22-networking-virtio-net-and-stack.md#socket-data-plane--shared-memory-ring-transport-planned-canonical)).
+
+**Implementation (WARP).** WARP backs a module's linear memory with a
+non-relocating, base-pinned per-app VA slot: `warp_linmem_move` /
+`warp_linmem_grow` (`src/kernel/warp/shim.cpp`) reserve the slot VA once, commit
+scattered physical pages on demand, and never move the base for the app's
+lifetime — so any mapping into linear memory (peer shmem, dual-mapped JIT)
+stays valid. The slot is armed at spawn by `warp_linmem_reserve_hint_for`
+(`src/kernel/warp_driver.cpp`, from the module's declared heap size) and
+consumed on the linmem block's first grow; if a slot is exhausted the allocator
+falls back to the legacy contiguous realloc so the app still runs (without the
+pinned-base guarantee). Driver-owned pinned DMA regions use `warp_region_alloc`
+(`src/kernel/warp/link.cpp`) — this is what virtio-net's virtqueues and RX/TX
+pools run on, and Phase-1b RX/TX is proven on the wire. The relocation bug class
+described below is therefore closed on WARP.
 
 ### 15.1  The problem it removes
 
@@ -547,8 +564,9 @@ the same higher-half window (§1 aliasing class 3) — is silently left pointing
 the *old* pages after a grow. Memory barriers do not help; it is a
 wrong-physical-page problem, not a stale-cache problem.
 
-Relocation is a property of the current backing allocator, not a hardware
-requirement. The fix is to make the backing **non-relocating**.
+Relocation is a property of the backing allocator, not a hardware requirement.
+The fix — now implemented on WARP (see the status note above) — is to make the
+backing **non-relocating**.
 
 ### 15.2  The model
 
@@ -593,10 +611,11 @@ per WARP process. See
 
 ### 15.5  wasm3 parity
 
-The same invariant must hold on wasm3, whose linear-memory ownership redesign —
-how the dual host/user views are unified, and the resulting removal of
-`wasm_copy_*_sync_views` — is specified in
+The same invariant holds on wasm3, whose linear-memory ownership was unified in
+the same Stage-3b pass — the dual host/user views collapsed and the
+`wasm_copy_*_sync_views` helpers were removed (both views now resolve to the
+same physical backing); see
 [Memory Management → WASM Linear Memory: Unified Ownership](06-memory-management.md#wasm-linear-memory-unified-ownership-planned).
 The pinned-VA arena contract is runtime-neutral even though the backing mechanics
-differ, so the mapping proof (slice 0) must pass on **both** backends before ring
-code is layered on top.
+differ, and the mapping path is exercised on **both** backends (the `fs_open` /
+`fs_write` smokes map the block-buffer overlay zero-copy on wasm3 and WARP).

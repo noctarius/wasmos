@@ -200,16 +200,16 @@ Architectural buffer-kind constants:
 ```c
 TRANSFER_BUFFER_KIND    = 1u
 FRAMEBUFFER_BUFFER_KIND = 2u
-BUFFER_BORROW_READ  = 0x1u
-BUFFER_BORROW_WRITE = 0x2u
-PM_FS_BUFFER_SIZE = 2 MiB (2u * 1024u * 1024u)
+BUFFER_BORROW_READ      = 0x1u
+BUFFER_BORROW_WRITE     = 0x2u
+PM_FS_BUFFER_SIZE       = 2 MiB (2u * 1024u * 1024u)
 ```
 
 Limits, defined in `src/kernel/include/process_manager_internal.h` and
 `src/kernel/include/capability.h`:
 
 ```c
-PM_DMA_WINDOW_LIMIT        = 16u   // per spawn profile
+PM_DMA_WINDOW_LIMIT         = 16u   // per spawn profile
 CAPABILITY_DMA_WINDOW_LIMIT = 16   // per capability context
 ```
 

@@ -538,20 +538,20 @@ bulk transfers.
 
 **Code-facing contract matrix:**
 
-| Area | Intended rule |
-|------|---------------|
-| Ownership | A context may own multiple distinct buffer objects (each a stable `buffer_id`), including several of the same kind — one per live operation |
-| Owner access | The owner always retains implicit read/write access to its own object |
-| Borrow grant | A borrow creates one grant from one owner object to one borrower context with explicit flags |
-| Object identity | Borrower access is to the same underlying owner object, not a copied or shadow reply buffer |
-| Concurrent grants | One owner may lend to multiple borrowers, and one borrower may hold multiple grants to distinct owners at once |
-| Release | Release is grant-specific; releasing one grant must not affect other live grants |
-| Revocation | Dropping one owner revokes only grants sourced from that owner |
-| Transfer policy | Transfer borrows require a nonzero external owner distinct from the borrower |
-| Framebuffer policy | Framebuffer borrows are local-only and do not name an external owner |
-| DMA attach point | DMA mapping attaches to one grant, not to the borrower context as a whole |
-| DMA directions | `TO_DEVICE` requires read access; `FROM_DEVICE` requires write access; bidirectional DMA requires both |
-| DMA teardown | Release while mapped is invalid; unmap clears DMA state but preserves the grant |
+| Area               | Intended rule                                                                                                                               |
+|--------------------|---------------------------------------------------------------------------------------------------------------------------------------------|
+| Ownership          | A context may own multiple distinct buffer objects (each a stable `buffer_id`), including several of the same kind — one per live operation |
+| Owner access       | The owner always retains implicit read/write access to its own object                                                                       |
+| Borrow grant       | A borrow creates one grant from one owner object to one borrower context with explicit flags                                                |
+| Object identity    | Borrower access is to the same underlying owner object, not a copied or shadow reply buffer                                                 |
+| Concurrent grants  | One owner may lend to multiple borrowers, and one borrower may hold multiple grants to distinct owners at once                              |
+| Release            | Release is grant-specific; releasing one grant must not affect other live grants                                                            |
+| Revocation         | Dropping one owner revokes only grants sourced from that owner                                                                              |
+| Transfer policy    | Transfer borrows require a nonzero external owner distinct from the borrower                                                                |
+| Framebuffer policy | Framebuffer borrows are local-only and do not name an external owner                                                                        |
+| DMA attach point   | DMA mapping attaches to one grant, not to the borrower context as a whole                                                                   |
+| DMA directions     | `TO_DEVICE` requires read access; `FROM_DEVICE` requires write access; bidirectional DMA requires both                                      |
+| DMA teardown       | Release while mapped is invalid; unmap clears DMA state but preserves the grant                                                             |
 
 **Borrow constraint:**
 

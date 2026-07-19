@@ -36,11 +36,11 @@ kernel page table. Physical frames from
 addressed through the kernel direct map `phys | kHalfBase`.  This creates
 three aliasing classes that have all produced real bugs:
 
-| Aliasing class | Symptom |
-|---|---|
+| Aliasing class                                               | Symptom                                                                                         |
+|--------------------------------------------------------------|-------------------------------------------------------------------------------------------------|
 | Shmem (phys [0,64MB)) vs WARP linear mem (phys [64MB,512MB)) | menu_bar's `ensureLinearSize` memset zeroed gfx-smoke window-2 framebuffer (fixed by partition) |
-| WARP linear mem of process A vs WARP linear mem of process B | multiple potential cross-process corruptions |
-| WARP JIT code vs WARP linear mem of the **same** process | `commitVirtualMemory` memset zero-filled the calculator's JIT code → #UD panic |
+| WARP linear mem of process A vs WARP linear mem of process B | multiple potential cross-process corruptions                                                    |
+| WARP JIT code vs WARP linear mem of the **same** process     | `commitVirtualMemory` memset zero-filled the calculator's JIT code → #UD panic                  |
 
 The third class was the last major bring-up crash before the ring-3 execution
 path became viable. It occurred because:

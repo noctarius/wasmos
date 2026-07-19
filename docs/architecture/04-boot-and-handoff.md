@@ -42,14 +42,14 @@ Inside `efi_main`:
 ```
 1.  HandleProtocol(image, EFI_LOADED_IMAGE_PROTOCOL_GUID)  → loaded image
 2.  HandleProtocol(deviceHandle, EFI_SIMPLE_FILE_SYSTEM)   → volume FS
-3.  fs->OpenVolume()                                        → root dir
-4.  read_file_alloc(\kernel.elf)                            → kernel_buf
-5.  read_file_alloc(\initfs.img)                            → initfs_buf
-6.  initfs_valid(initfs_buf)                                → abort if invalid
-7.  elf_is_valid(kernel_buf)                                → abort if invalid
+3.  fs->OpenVolume()                                       → root dir
+4.  read_file_alloc(\kernel.elf)                           → kernel_buf
+5.  read_file_alloc(\initfs.img)                           → initfs_buf
+6.  initfs_valid(initfs_buf)                               → abort if invalid
+7.  elf_is_valid(kernel_buf)                               → abort if invalid
 8.  load PT_LOAD segments into physical addresses
-9.  find_acpi_rsdp(system)                                  → rsdp, rsdp_length
-10. capture_framebuffer_snapshot(system)                    → framebuffer_snapshot
+9.  find_acpi_rsdp(system)                                 → rsdp, rsdp_length
+10. capture_framebuffer_snapshot(system)                   → framebuffer_snapshot
 11. ExitBootServices() retry loop (below)
 12. fill boot_info_t blob
 13. jump to ehdr->e_entry(boot_info_t *)

@@ -50,15 +50,15 @@ typedef enum {
 Capability names used in `linker.metadata` capability declarations map to
 these kinds via `capability_grant_name`:
 
-| Metadata name      | Kind granted         |
-|--------------------|----------------------|
-| `"io.port"`        | `CAP_IO_PORT`        |
-| `"irq.route"`      | `CAP_IRQ_ROUTE`      |
-| `"mmio.map"`       | `CAP_MMIO_MAP`       |
-| `"dma.buffer"`     | `CAP_DMA_BUFFER`     |
-| `"system.control"` | `CAP_SYSTEM_CONTROL` |
+| Metadata name          | Kind granted             |
+|------------------------|--------------------------|
+| `"io.port"`            | `CAP_IO_PORT`            |
+| `"irq.route"`          | `CAP_IRQ_ROUTE`          |
+| `"mmio.map"`           | `CAP_MMIO_MAP`           |
+| `"dma.buffer"`         | `CAP_DMA_BUFFER`         |
+| `"system.control"`     | `CAP_SYSTEM_CONTROL`     |
 | `"subsystem.register"` | `CAP_SUBSYSTEM_REGISTER` |
-| `"svc.class"`      | `CAP_SVC_CLASS_REGISTER` |
+| `"svc.class"`          | `CAP_SVC_CLASS_REGISTER` |
 
 Any unrecognized name returns -1 and grants nothing. `CAP_SVC_CLASS_REGISTER`
 gates registering a service under a virtual class (class-based discovery,

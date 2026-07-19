@@ -79,12 +79,12 @@ reachable but does not need to own its startup sequence with `start`.
 
 Print `<text>` to the console after variable expansion.
 
-| Flag | Effect |
-|------|--------|
-| `-n` | Omit the trailing newline |
+| Flag | Effect                                               |
+|------|------------------------------------------------------|
+| `-n` | Omit the trailing newline                            |
 | `-e` | Interpret backslash escapes (`\n \t \r \a \b \f \v`) |
-| `-E` | Disable escape interpretation (default) |
-| `--` | Stop flag parsing; everything after is literal text |
+| `-E` | Disable escape interpretation (default)              |
+| `--` | Stop flag parsing; everything after is literal text  |
 
 Quoting inside `<text>`:
 
@@ -171,13 +171,13 @@ Both sides are variable-expanded before comparison.  If both sides parse as
 integers the comparison is numeric; otherwise only `==` and `!=` are available
 and they compare as strings.
 
-| Operator | Meaning |
-|----------|---------|
-| `==`     | equal |
-| `!=`     | not equal |
-| `<`      | less than (numeric only) |
-| `>`      | greater than (numeric only) |
-| `<=`     | less than or equal (numeric only) |
+| Operator | Meaning                              |
+|----------|--------------------------------------|
+| `==`     | equal                                |
+| `!=`     | not equal                            |
+| `<`      | less than (numeric only)             |
+| `>`      | greater than (numeric only)          |
+| `<=`     | less than or equal (numeric only)    |
 | `>=`     | greater than or equal (numeric only) |
 
 ```
@@ -205,18 +205,18 @@ endif
 ## Variable scoping
 
 | Declared with | Visible in current script | Inherited by `script` child | Inherited by `source` | Inherited by spawned processes |
-|---|---|---|---|---|
-| `set`    | yes | no  | yes (same context) | no  |
-| `export` | yes | yes | yes (same context) | yes |
+|---------------|---------------------------|-----------------------------|-----------------------|--------------------------------|
+| `set`         | yes                       | no                          | yes (same context)    | no                             |
+| `export`      | yes                       | yes                         | yes (same context)    | yes                            |
 
 ## Limits
 
-| Limit | Value |
-|-------|-------|
-| Maximum line length | 256 characters |
-| Maximum if nesting depth | 64 levels |
-| Variable name length | 32 characters |
-| Variable value length | 128 characters |
+| Limit                    | Value          |
+|--------------------------|----------------|
+| Maximum line length      | 256 characters |
+| Maximum if nesting depth | 64 levels      |
+| Variable name length     | 32 characters  |
+| Variable value length    | 128 characters |
 
 ## Example: sysinit.rc
 
@@ -249,8 +249,8 @@ start /boot/system/services/cli.wap
 
 ## Source locations
 
-| File | Role |
-|------|------|
-| `src/libc/include/wasmos/script.h` | Public API and state types |
-| `src/libc/src/script.c` | Interpreter implementation |
-| `scripts/system/sysinit.rc` | Boot-time startup script (source of truth) |
+| File                               | Role                                       |
+|------------------------------------|--------------------------------------------|
+| `src/libc/include/wasmos/script.h` | Public API and state types                 |
+| `src/libc/src/script.c`            | Interpreter implementation                 |
+| `scripts/system/sysinit.rc`        | Boot-time startup script (source of truth) |

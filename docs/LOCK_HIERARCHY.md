@@ -8,22 +8,22 @@ new lock site must be checked against this hierarchy before merging.
 
 ## Locks Inventory
 
-| Lock                          | Location         | Purpose                                 |
-|-------------------------------|------------------|-----------------------------------------|
-| `g_pfa_lock`                  | `physmem.c`      | Physical page frame allocator free-list |
-| `g_slab_lock`                 | `slab.c`         | Kernel slab/heap allocator              |
+| Lock                          | Location                    | Purpose                                 |
+|-------------------------------|-----------------------------|-----------------------------------------|
+| `g_pfa_lock`                  | `physmem.c`                 | Physical page frame allocator free-list |
+| `g_slab_lock`                 | `slab.c`                    | Kernel slab/heap allocator              |
 | `g_xfer_lock`                 | `xfer_buffer/xfer_buffer.c` | xfer-buffer registry (objects/borrows)  |
-| `g_endpoint_table_lock`       | `ipc.c`          | IPC endpoint table scan/alloc           |
-| `ep->lock`                    | `ipc_endpoint_t` | Per-endpoint queue and waiter state     |
-| `g_process_table_lock`        | `process.c`      | Process slot array reads and writes     |
-| `g_ready_queue_lock`          | `process.c`      | Scheduler ready queue                   |
-| `g_thread_table_lock`         | `thread.c`       | Thread slot array reads and writes      |
-| `g_contexts_lock`             | `memory.c`       | Virtual-address context table           |
-| `g_shared_lock`               | `memory.c`       | Shared-memory region table              |
-| `g_wasm3_heap_lock`           | `wasm3_shim.c`   | wasm3 per-process heap bookkeeping      |
-| `g_serial_lock`               | `serial.c`       | Serial port output serialisation        |
-| `g_wasm_driver_registry_lock` | `wasm_driver.c`  | WASM driver registry array              |
-| `driver->lock`                | `wasm_driver_t`  | Per-driver state                        |
+| `g_endpoint_table_lock`       | `ipc.c`                     | IPC endpoint table scan/alloc           |
+| `ep->lock`                    | `ipc_endpoint_t`            | Per-endpoint queue and waiter state     |
+| `g_process_table_lock`        | `process.c`                 | Process slot array reads and writes     |
+| `g_ready_queue_lock`          | `process.c`                 | Scheduler ready queue                   |
+| `g_thread_table_lock`         | `thread.c`                  | Thread slot array reads and writes      |
+| `g_contexts_lock`             | `memory.c`                  | Virtual-address context table           |
+| `g_shared_lock`               | `memory.c`                  | Shared-memory region table              |
+| `g_wasm3_heap_lock`           | `wasm3_shim.c`              | wasm3 per-process heap bookkeeping      |
+| `g_serial_lock`               | `serial.c`                  | Serial port output serialisation        |
+| `g_wasm_driver_registry_lock` | `wasm_driver.c`             | WASM driver registry array              |
+| `driver->lock`                | `wasm_driver_t`             | Per-driver state                        |
 
 ---
 

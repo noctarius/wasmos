@@ -124,12 +124,12 @@ its wait list under the endpoint lock and is not transitioning on another CPU.
 Four conditions must hold for the kernel to take the direct-switch path.  If any
 fails, the fallback path is taken silently.
 
-| #  | Condition                                                      | Rationale                                                         |
-|----|----------------------------------------------------------------|-------------------------------------------------------------------|
-| G1 | `ep->count == 0` — endpoint queue is empty                     | No queued messages precede ours; FIFO ordering preserved          |
+| #  | Condition                                                      | Rationale                                                           |
+|----|----------------------------------------------------------------|---------------------------------------------------------------------|
+| G1 | `ep->count == 0` — endpoint queue is empty                     | No queued messages precede ours; FIFO ordering preserved            |
 | G2 | `ep->event.wait_list` has exactly one entry                    | Exactly one thread is directly waiting; the receiver is unambiguous |
-| G3 | `receiver->state == THREAD_STATE_BLOCKED`                      | Receiver is not running on any CPU                                |
-| G4 | `cpu_local()->sched.chain_depth < IPC_DIRECT_SWITCH_MAX_DEPTH` | Chain depth limit not exceeded                                    |
+| G3 | `receiver->state == THREAD_STATE_BLOCKED`                      | Receiver is not running on any CPU                                  |
+| G4 | `cpu_local()->sched.chain_depth < IPC_DIRECT_SWITCH_MAX_DEPTH` | Chain depth limit not exceeded                                      |
 
 G1 + G2 describe the "service is idle" state: endpoint is drained and one thread
 is directly waiting for the next message.  G3 confirms the receiver is available.
@@ -635,19 +635,19 @@ Done gate: all selftests pass under `run-qemu-test`; no regressions across
 
 ### Validation Matrix
 
-| Scenario | Expected result |
-|---|---|
-| Service idle, caller makes `wasmos_ipc_call` | Fast path taken; chain-depth marker fires |
-| Service busy (running on another CPU) | G3 fails; fallback path; caller-CPU bias enqueues receiver |
-| Endpoint has queued messages | G1 fails; fallback path |
-| Chain depth reaches `IPC_DIRECT_SWITCH_MAX_DEPTH` | G6 fails; fallback path; no fault |
-| Three-hop chain (app → fs → fat) | Two direct switches; zero scheduler calls within chain |
-| Timer preempts mid-chain service | Chain resumes on next dispatch; reply fast path still fires |
-| Service killed mid-chain | Caller unblocks via `sched_event_wake_all`; `sync_prio_saved` restored |
-| Reply sent to wrong endpoint | Guard check fails; no direct switch; message queued normally |
-| `run-qemu-test` baseline | All existing boot/halt markers pass |
-| `run-qemu-ring3-test` baseline | All ring3 isolation markers pass |
-| Threading IPC stress selftest | Completes 32 exchanges; no chain-state corruption |
+| Scenario                                          | Expected result                                                        |
+|---------------------------------------------------|------------------------------------------------------------------------|
+| Service idle, caller makes `wasmos_ipc_call`      | Fast path taken; chain-depth marker fires                              |
+| Service busy (running on another CPU)             | G3 fails; fallback path; caller-CPU bias enqueues receiver             |
+| Endpoint has queued messages                      | G1 fails; fallback path                                                |
+| Chain depth reaches `IPC_DIRECT_SWITCH_MAX_DEPTH` | G6 fails; fallback path; no fault                                      |
+| Three-hop chain (app → fs → fat)                  | Two direct switches; zero scheduler calls within chain                 |
+| Timer preempts mid-chain service                  | Chain resumes on next dispatch; reply fast path still fires            |
+| Service killed mid-chain                          | Caller unblocks via `sched_event_wake_all`; `sync_prio_saved` restored |
+| Reply sent to wrong endpoint                      | Guard check fails; no direct switch; message queued normally           |
+| `run-qemu-test` baseline                          | All existing boot/halt markers pass                                    |
+| `run-qemu-ring3-test` baseline                    | All ring3 isolation markers pass                                       |
+| Threading IPC stress selftest                     | Completes 32 exchanges; no chain-state corruption                      |
 
 ---
 

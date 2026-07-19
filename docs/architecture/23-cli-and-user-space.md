@@ -14,13 +14,13 @@ implemented in `src/services/cli/cli.c` and `src/services/cli/cli_types.h`.
 The CLI is packaged as a WASMOS-APP service. Its `linker.metadata` manifest
 declares:
 
-| Field                 | Value                                  |
-|-----------------------|----------------------------------------|
-| Name                  | `cli`                                  |
-| Entry export          | `initialize`                           |
-| Kind                  | `service`                              |
-| Capabilities          | `system.control`                       |
-| `wants_tty`           | `true` (PM allocates a controlling TTY)|
+| Field        | Value                                   |
+|--------------|-----------------------------------------|
+| Name         | `cli`                                   |
+| Entry export | `initialize`                            |
+| Kind         | `service`                               |
+| Capabilities | `system.control`                        |
+| `wants_tty`  | `true` (PM allocates a controlling TTY) |
 
 The `initialize` entry args are unused (the entry-arg binding mechanism is
 retired; the manifest's `entry_arg_bindings` key is kept only for backward
@@ -163,15 +163,15 @@ order; the first match wins.
 
 #### Informational
 
-| Command     | Implementation               | Notes                                             |
-|-------------|------------------------------|---------------------------------------------------|
-| `help`      | inline `console_write`       | Lists all commands on one line                    |
+| Command     | Implementation               | Notes                                                   |
+|-------------|------------------------------|---------------------------------------------------------|
+| `help`      | inline `console_write`       | Lists all commands on one line                          |
 | `mount`     | `FSMGR_IPC_QUERY_MOUNTS_REQ` | Receives mount table as a text blob via the xfer buffer |
-| `kmaps`     | `wasmos_kmap_dump()`         | Dumps active kernel memory mappings               |
-| `kmaps all` | `wasmos_kmap_dump_all()`     | Includes all process address spaces               |
-| `ps`        | see below                    | Flat table                                        |
-| `ps tree`   | see below                    | Tree view only                                    |
-| `ps all`    | see below                    | Flat table + tree view                            |
+| `kmaps`     | `wasmos_kmap_dump()`         | Dumps active kernel memory mappings                     |
+| `kmaps all` | `wasmos_kmap_dump_all()`     | Includes all process address spaces                     |
+| `ps`        | see below                    | Flat table                                              |
+| `ps tree`   | see below                    | Tree view only                                          |
+| `ps all`    | see below                    | Flat table + tree view                                  |
 
 #### `ps` Output Format
 

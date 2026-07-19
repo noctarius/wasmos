@@ -19,12 +19,12 @@ call sites described below.
 
 The earlier process-centric scheduler had four structural defects:
 
-| Defect | Consequence |
-|--------|-------------|
+| Defect                              | Consequence                                                                                      |
+|-------------------------------------|--------------------------------------------------------------------------------------------------|
 | `proc->state == READY` dequeue gate | On SMP, workers of a RUNNING process are silently orphaned; fixed today with an inline-pass hack |
-| Shared `proc->ctx` for all workers | Only one kernel worker per process may be blocked at a time (saves to one slot) |
-| No priority model | Native IRQ-dispatch workers contend with idle WASM processes for the same queue |
-| Ad-hoc per-endpoint `waiter_tid` | No general multi-object wait; poll-hub required a new scan-on-send mechanism |
+| Shared `proc->ctx` for all workers  | Only one kernel worker per process may be blocked at a time (saves to one slot)                  |
+| No priority model                   | Native IRQ-dispatch workers contend with idle WASM processes for the same queue                  |
+| Ad-hoc per-endpoint `waiter_tid`    | No general multi-object wait; poll-hub required a new scan-on-send mechanism                     |
 
 The current scheduler eliminates all four.
 
@@ -67,13 +67,13 @@ typedef enum {
 
 Priority is per-thread.  Default assignment at spawn:
 
-| Process type | Default priority |
-|---|---|
-| `is_idle == 1` | `SCHED_PRIO_IDLE` |
-| Native kernel worker | `SCHED_PRIO_SYSTEM` |
-| WASM native driver (`FLAG_DRIVER`) | `SCHED_PRIO_DRIVER` |
+| Process type                        | Default priority     |
+|-------------------------------------|----------------------|
+| `is_idle == 1`                      | `SCHED_PRIO_IDLE`    |
+| Native kernel worker                | `SCHED_PRIO_SYSTEM`  |
+| WASM native driver (`FLAG_DRIVER`)  | `SCHED_PRIO_DRIVER`  |
 | WASM native service (`FLAG_NATIVE`) | `SCHED_PRIO_SERVICE` |
-| WASM application | `SCHED_PRIO_WASM` |
+| WASM application                    | `SCHED_PRIO_WASM`    |
 
 `thread_t` gains one new field: `uint8_t sched_prio`.  Exposed via
 `process_thread_set_priority(pid, tid, prio)` for future policy enforcement.
@@ -184,12 +184,12 @@ This requires:
 
 Fields that are now written by potentially multiple CPUs:
 
-| Field | Protection |
-|---|---|
-| `proc->live_thread_count` | `__atomic_fetch_sub(..., __ATOMIC_ACQ_REL)` |
-| `proc->state` ALIVE→ZOMBIE | `__atomic_compare_exchange` (CAS) |
-| `proc->exit_status` | set once before CAS to ZOMBIE |
-| `proc->exiting` | `__atomic_store_n(..., __ATOMIC_RELEASE)` |
+| Field                      | Protection                                  |
+|----------------------------|---------------------------------------------|
+| `proc->live_thread_count`  | `__atomic_fetch_sub(..., __ATOMIC_ACQ_REL)` |
+| `proc->state` ALIVE→ZOMBIE | `__atomic_compare_exchange` (CAS)           |
+| `proc->exit_status`        | set once before CAS to ZOMBIE               |
+| `proc->exiting`            | `__atomic_store_n(..., __ATOMIC_RELEASE)`   |
 
 `proc->state` simplifies to:
 
@@ -361,13 +361,13 @@ void sched_wake_thread(thread_t *t) {
 
 #### Migrating existing blocking sites
 
-| Current mechanism | New mechanism |
-|---|---|
+| Current mechanism                    | New mechanism                                                                |
+|--------------------------------------|------------------------------------------------------------------------------|
 | `ep->waiter_tid` in `ipc_endpoint_t` | `sched_event_t ep->event` embedded in `ipc_endpoint_t`; `waiter_tid` removed |
-| `select_set.ready / waiter_tid` | `sched_event_t sel->event` |
-| `thread->join_waiter_tid` | `sched_event_t thread->join_event` |
-| `process_wait` PID-wait | `sched_event_t proc->wait_event` |
-| `process_block_on_ipc` | `sched_event_wait(&ep->event, timeout)` |
+| `select_set.ready / waiter_tid`      | `sched_event_t sel->event`                                                   |
+| `thread->join_waiter_tid`            | `sched_event_t thread->join_event`                                           |
+| `process_wait` PID-wait              | `sched_event_t proc->wait_event`                                             |
+| `process_block_on_ipc`               | `sched_event_wait(&ep->event, timeout)`                                      |
 
 The existing `ep->waiter_tid` / `process_wake_thread` path stays as a fast
 inner path inside `ipc_endpoint_t` wakeup: `sched_event_wake_one(&ep->event, 0, SCHED_PEND_OK)`.
@@ -473,7 +473,7 @@ int futex_wake(uint32_t __user *uaddr, uint32_t count,
 ```c
 /* wasm3_link.c */
 m3ApiRawFunction(wasmos_futex_wait)  /* "i(iii)" — addr, expected, timeout_ms */
-m3ApiRawFunction(wasmos_futex_wake)  /* "i(ii)"  — addr, count             */
+m3ApiRawFunction(wasmos_futex_wake)  /* "i(ii)"  — addr, count */
 ```
 
 ```c
@@ -680,19 +680,19 @@ Rules:
 
 #### `thread_t` additions
 
-| Field | Type | Purpose |
-|---|---|---|
-| `ctx_canary_pre` | `uint64_t` | Moved from `process_t` |
-| `ctx_canary_post` | `uint64_t` | Moved from `process_t` |
-| `sched_prio` | `uint8_t` | Priority 0–6 |
-| `cpu_affinity` | `uint32_t` | Allowed CPU bitmask |
-| `sched_node` | `list_head_t` | Linkage in `cpu_sched_t.ready_list` |
-| `event_node` | `list_head_t` | Linkage in `sched_event_t.wait_list` |
-| `wait_event` | `sched_event_t *` | Event this thread is blocked on |
-| `pend_state` | `uint32_t` | `SCHED_PEND_*` set by waker |
-| `pend_data` | `uint64_t` | Value from waker (futex retcode, etc.) |
-| `blocking_transition` | `uint8_t` (atomic) | Already present; kept |
-| `last_cpu` | `uint32_t` | CPU where thread last ran |
+| Field                 | Type               | Purpose                                |
+|-----------------------|--------------------|----------------------------------------|
+| `ctx_canary_pre`      | `uint64_t`         | Moved from `process_t`                 |
+| `ctx_canary_post`     | `uint64_t`         | Moved from `process_t`                 |
+| `sched_prio`          | `uint8_t`          | Priority 0–6                           |
+| `cpu_affinity`        | `uint32_t`         | Allowed CPU bitmask                    |
+| `sched_node`          | `list_head_t`      | Linkage in `cpu_sched_t.ready_list`    |
+| `event_node`          | `list_head_t`      | Linkage in `sched_event_t.wait_list`   |
+| `wait_event`          | `sched_event_t *`  | Event this thread is blocked on        |
+| `pend_state`          | `uint32_t`         | `SCHED_PEND_*` set by waker            |
+| `pend_data`           | `uint64_t`         | Value from waker (futex retcode, etc.) |
+| `blocking_transition` | `uint8_t` (atomic) | Already present; kept                  |
+| `last_cpu`            | `uint32_t`         | CPU where thread last ran              |
 
 #### `thread_t` removals
 
@@ -701,21 +701,21 @@ transition.
 
 #### `process_t` changes
 
-| Field | Change |
-|---|---|
-| `ctx` (`process_context_t`) | Removed (was shared worker ctx) |
-| `ctx_canary_pre/post` | Removed (moved to per-thread) |
-| `state` | Simplified to UNUSED/ALIVE/REAPING/ZOMBIE |
-| `block_reason` | Removed (now per-thread `wait_event`) |
-| `in_ready_queue` | Removed (process no longer queued directly) |
-| `runtime_lock` | **New**: per-process runtime reentrancy spinlock |
-| `runtime_lock_owner` | **New**: TID of current runtime-lock occupant |
+| Field                       | Change                                           |
+|-----------------------------|--------------------------------------------------|
+| `ctx` (`process_context_t`) | Removed (was shared worker ctx)                  |
+| `ctx_canary_pre/post`       | Removed (moved to per-thread)                    |
+| `state`                     | Simplified to UNUSED/ALIVE/REAPING/ZOMBIE        |
+| `block_reason`              | Removed (now per-thread `wait_event`)            |
+| `in_ready_queue`            | Removed (process no longer queued directly)      |
+| `runtime_lock`              | **New**: per-process runtime reentrancy spinlock |
+| `runtime_lock_owner`        | **New**: TID of current runtime-lock occupant    |
 
 #### `ipc_endpoint_t` changes
 
-| Field | Change |
-|---|---|
-| `waiter_tid` | Replaced by `sched_event_t event` |
+| Field         | Change                                      |
+|---------------|---------------------------------------------|
+| `waiter_tid`  | Replaced by `sched_event_t event`           |
 | `poll_struct` | **New**: `poll_struct_t *` (lazy-allocated) |
 
 ---
@@ -757,20 +757,20 @@ as a record of how the transition was carried out.
 
 ### Relationship to Minos2 Concepts
 
-| Minos2 construct | WASMOS adaptation |
-|---|---|
-| `pcpu.local_rdy_grp` bitmap + `ffs_one_table` | `cpu_sched_t.ready_bitmap` + `ffs_table` |
-| `pcpu.ready_list[OS_PRIO_MAX]` | `cpu_sched_t.ready_list[SCHED_PRIO_MAX]` |
-| `task.prio` | `thread_t.sched_prio` |
-| `struct event` + `wait_list` | `sched_event_t` |
-| `__wait_event` / `do_wait_event` | `sched_event_wait` |
-| `__wake_up_event_waiter` | `sched_event_wake_one` / `sched_event_wake_all` |
-| `TASK_STATE_WAKING` | thread BLOCKED → READY transition (existing `blocking_transition` flag) |
-| `futex_t` hash table | `g_futex_table[FUTEX_TABLE_SIZE]` |
-| `poll_struct` + `pevent_item` | `poll_struct_t` + `poll_watcher_t` |
-| `poll_event_send` | `poll_notify` |
-| `poll_hub` + `__poll_hub_read` | `ipc_select_t` + `ipc_select_wait` (existing, with push model) |
-| `sem_pend` via `iqueue.isem` | endpoint blocking via `sched_event_wait(&ep->event, to)` |
+| Minos2 construct                              | WASMOS adaptation                                                       |
+|-----------------------------------------------|-------------------------------------------------------------------------|
+| `pcpu.local_rdy_grp` bitmap + `ffs_one_table` | `cpu_sched_t.ready_bitmap` + `ffs_table`                                |
+| `pcpu.ready_list[OS_PRIO_MAX]`                | `cpu_sched_t.ready_list[SCHED_PRIO_MAX]`                                |
+| `task.prio`                                   | `thread_t.sched_prio`                                                   |
+| `struct event` + `wait_list`                  | `sched_event_t`                                                         |
+| `__wait_event` / `do_wait_event`              | `sched_event_wait`                                                      |
+| `__wake_up_event_waiter`                      | `sched_event_wake_one` / `sched_event_wake_all`                         |
+| `TASK_STATE_WAKING`                           | thread BLOCKED → READY transition (existing `blocking_transition` flag) |
+| `futex_t` hash table                          | `g_futex_table[FUTEX_TABLE_SIZE]`                                       |
+| `poll_struct` + `pevent_item`                 | `poll_struct_t` + `poll_watcher_t`                                      |
+| `poll_event_send`                             | `poll_notify`                                                           |
+| `poll_hub` + `__poll_hub_read`                | `ipc_select_t` + `ipc_select_wait` (existing, with push model)          |
+| `sem_pend` via `iqueue.isem`                  | endpoint blocking via `sched_event_wait(&ep->event, to)`                |
 
 Key divergence from Minos2: WASMOS does not adopt Minos2's user-kernel kobject
 hierarchy (`struct kobject`, handles, `right_t`).  The existing capability model

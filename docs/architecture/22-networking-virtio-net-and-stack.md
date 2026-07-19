@@ -616,16 +616,16 @@ enum {
 Common return codes (packed in arg0 of NET_IPC_ERROR):
 ```c
 enum {
-    NET_STATUS_OK         =  0,
+    NET_STATUS_OK          =  0,
     NET_STATUS_WOULD_BLOCK = -1,
-    NET_STATUS_INVALID    = -2,
-    NET_STATUS_NOT_READY  = -3,
-    NET_STATUS_DENIED     = -4,
-    NET_STATUS_IO_ERROR   = -5,
-    NET_STATUS_QUEUE_FULL = -6,
-    NET_STATUS_NO_MEM     = -7,
+    NET_STATUS_INVALID     = -2,
+    NET_STATUS_NOT_READY   = -3,
+    NET_STATUS_DENIED      = -4,
+    NET_STATUS_IO_ERROR    = -5,
+    NET_STATUS_QUEUE_FULL  = -6,
+    NET_STATUS_NO_MEM      = -7,
     NET_STATUS_ADDR_IN_USE = -8,
-    NET_STATUS_TIMEOUT    = -9
+    NET_STATUS_TIMEOUT     = -9
 };
 ```
 
@@ -998,18 +998,18 @@ initialize():
   loop:
     wasmos_ipc_recv(g_endpoint)
     dispatch message type:
-      NETDRV_IPC_RX_FRAME_NOTIFY → on_rx_frame(arg0=len)
-      NET_IPC_SOCKET_OPEN        → handle_socket_open(...)
-      NET_IPC_BIND               → handle_bind(...)
-      NET_IPC_CONNECT            → handle_connect(...)
-      NET_IPC_SEND               → handle_send(...)
-      NET_IPC_RECV               → handle_recv(...)
-      NET_IPC_CLOSE              → handle_close(...)
-      NET_IPC_POLL               → handle_poll(...)
+      NETDRV_IPC_RX_FRAME_NOTIFY  → on_rx_frame(arg0=len)
+      NET_IPC_SOCKET_OPEN         → handle_socket_open(...)
+      NET_IPC_BIND                → handle_bind(...)
+      NET_IPC_CONNECT             → handle_connect(...)
+      NET_IPC_SEND                → handle_send(...)
+      NET_IPC_RECV                → handle_recv(...)
+      NET_IPC_CLOSE               → handle_close(...)
+      NET_IPC_POLL                → handle_poll(...)
       NET_IPC_IFADDR_ADD/DEL/LIST → handle_ifaddr(...)
-      NET_IPC_STACK_CREATE/...   → handle_stack_mgmt(...)
-      default                    → send NET_IPC_ERROR
-    sys_check_timeouts()         /* lwIP timers: ARP, TCP retransmit, etc. */
+      NET_IPC_STACK_CREATE/...    → handle_stack_mgmt(...)
+      default                     → send NET_IPC_ERROR
+    sys_check_timeouts()          /* lwIP timers: ARP, TCP retransmit, etc. */
 ```
 
 `sys_check_timeouts()` is a lwIP function that must be called periodically

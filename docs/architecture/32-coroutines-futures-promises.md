@@ -152,7 +152,7 @@ A location where coroutine code may yield without exposing partially modified ru
 | - coroutine lifecycle                                        |
 | - per-worker run queues                                      |
 | - work stealing                                              |
-| - timer queues                                                |
+| - timer queues                                               |
 | - future/promise shared state                                |
 | - cancellation                                               |
 | - completion dispatch                                        |
@@ -161,11 +161,11 @@ A location where coroutine code may yield without exposing partially modified ru
 +----------------------------v---------------------------------+
 | WASMOS syscall interface                                     |
 |                                                              |
-| - yield                                                       |
-| - wait/wake                                                   |
+| - yield                                                      |
+| - wait/wake                                                  |
 | - asynchronous IPC submission                                |
 | - completion/event waiting                                   |
-| - monotonic clock                                             |
+| - monotonic clock                                            |
 | - optional timer notification                                |
 +----------------------------+---------------------------------+
                              |
@@ -173,10 +173,10 @@ A location where coroutine code may yield without exposing partially modified ru
 | WASMOS microkernel                                           |
 |                                                              |
 | - SMP kernel scheduler                                       |
-| - timer preemption                                            |
-| - IPC routing                                                 |
-| - event delivery                                              |
-| - CPU wakeup                                                  |
+| - timer preemption                                           |
+| - IPC routing                                                |
+| - event delivery                                             |
+| - CPU wakeup                                                 |
 +--------------------------------------------------------------+
 ```
 
@@ -266,10 +266,10 @@ typedef enum coroutine_state {
           |           |   |   |  |                        |
           | yield     |   |   |  | return/exit            |
           +-----------+   |   |  +---------> DEAD         |
-                          |   |
-                          |   +-------> WAIT_TIMER --------+
-                          |
-                          +-----------> WAIT_FUTURE -------+
+                          |   |                           |
+                          |   +-------> WAIT_TIMER -------+
+                          |                               |
+                          +-----------> WAIT_FUTURE ------+
 ```
 
 Cancellation may move a waiting coroutine toward `RUNNABLE` with a cancellation result or directly toward termination depending on API policy.
@@ -1875,14 +1875,14 @@ Cross-process promises are not part of the generic runtime. IPC transports seria
 > **Verified 2026-07-18:** Mapping of the idealized names below to what the kernel
 > actually exposes (see [§48.1](#481-primitive-mapping)):
 >
-> | Idealized (below)         | Actual WASMOS facility                                                                 | Gap                                                                 |
-> |---------------------------|----------------------------------------------------------------------------------------|--------------------------------------------------------------------|
-> | `sys_thread_yield`        | `WASMOS_SYSCALL_YIELD`(3)/`THREAD_YIELD`(8); wasm hostcalls `sched_yield`/`thread_yield` | none                                                                |
-> | `sys_wait_u32`/`sys_wake_u32` | `futex_wait`/`futex_wake` (hostcall ids 16/17), keyed by physical address              | **Not declared in libc `api.h`; absent from the native `int 0x80` syscall path** — must be surfaced |
+> | Idealized (below)                 | Actual WASMOS facility                                                                     | Gap                                                                                                      |
+> |-----------------------------------|--------------------------------------------------------------------------------------------|----------------------------------------------------------------------------------------------------------|
+> | `sys_thread_yield`                | `WASMOS_SYSCALL_YIELD`(3)/`THREAD_YIELD`(8); wasm hostcalls `sched_yield`/`thread_yield`   | none                                                                                                     |
+> | `sys_wait_u32`/`sys_wake_u32`     | `futex_wait`/`futex_wake` (hostcall ids 16/17), keyed by physical address                  | **Not declared in libc `api.h`; absent from the native `int 0x80` syscall path** — must be surfaced      |
 > | `sys_ipc_submit`/`sys_ipc_cancel` | *none* — IPC is synchronous `ipc_send` + `ipc_select_*`; replies correlate by `request_id` | build IPC futures in user space ([§23](#23-ipc-integration)); no submit/completion/cancel syscalls exist |
-> | `sys_wait_events` (unified) | `ipc_select_wait` / `ipc_select_wait_timeout` (≤ `IPC_SELECT_EPS_MAX = 8` endpoints)   | no single unified event syscall; timers/proc-death/IRQ already arrive as endpoint messages/notifications |
-> | `sys_clock_monotonic`     | `sched_ticks` hostcall → `timer_ticks()`                                                | coarse (~250 Hz / 4 ms), 32-bit (wraps ~198 days), **no vDSO time page** |
-> | `sys_arm_thread_timer`    | *none* — use `ipc_select_wait_timeout(ms)` or `futex_wait(…, timeout_ms)`               | ms granularity, tick-quantized                                     |
+> | `sys_wait_events` (unified)       | `ipc_select_wait` / `ipc_select_wait_timeout` (≤ `IPC_SELECT_EPS_MAX = 8` endpoints)       | no single unified event syscall; timers/proc-death/IRQ already arrive as endpoint messages/notifications |
+> | `sys_clock_monotonic`             | `sched_ticks` hostcall → `timer_ticks()`                                                   | coarse (~250 Hz / 4 ms), 32-bit (wraps ~198 days), **no vDSO time page**                                 |
+> | `sys_arm_thread_timer`            | *none* — use `ipc_select_wait_timeout(ms)` or `futex_wait(…, timeout_ms)`                  | ms granularity, tick-quantized                                                                           |
 >
 > The `futex` gap and the missing native-side wait/wake are the two concrete
 > kernel/libc changes this runtime needs before worker parking ([§14](#14-worker-parking-and-lost-wakeups)) can be implemented as written.
@@ -2292,24 +2292,24 @@ Consider:
 
 For the first production-capable version:
 
-| Area | Decision |
-|---|---|
-| Coroutine type | Stackful |
-| Scheduler | M:N |
-| Workers | One per available CPU |
-| Run queues | Per-worker, lock-protected deque |
-| Load balancing | Work stealing |
-| Coroutine preemption | Cooperative safe points with timer deadline |
-| Kernel preemption | Existing timer-based kernel scheduling |
-| IPC | Asynchronous submission and completion events |
-| Wait API | Kernel wait-if-equal plus event wait |
-| Future waiters | Lock-protected linked list |
-| Timer structure | Per-worker binary min-heap |
-| Cancellation | Cooperative, state-transition based |
-| Join | Internal future/promise |
-| Result API | Generic core plus typed wrappers |
-| Stack growth | Fixed stack plus guard page |
-| Hard preemption | Deferred |
+| Area                 | Decision                                      |
+|----------------------|-----------------------------------------------|
+| Coroutine type       | Stackful                                      |
+| Scheduler            | M:N                                           |
+| Workers              | One per available CPU                         |
+| Run queues           | Per-worker, lock-protected deque              |
+| Load balancing       | Work stealing                                 |
+| Coroutine preemption | Cooperative safe points with timer deadline   |
+| Kernel preemption    | Existing timer-based kernel scheduling        |
+| IPC                  | Asynchronous submission and completion events |
+| Wait API             | Kernel wait-if-equal plus event wait          |
+| Future waiters       | Lock-protected linked list                    |
+| Timer structure      | Per-worker binary min-heap                    |
+| Cancellation         | Cooperative, state-transition based           |
+| Join                 | Internal future/promise                       |
+| Result API           | Generic core plus typed wrappers              |
+| Stack growth         | Fixed stack plus guard page                   |
+| Hard preemption      | Deferred                                      |
 
 ---
 
@@ -2365,20 +2365,20 @@ today. Authoritative sources: `src/kernel/include/{thread,process,sched,sched_ev
 
 ### 48.1 Primitive mapping
 
-| Design assumption (§) | What actually exists | Verdict |
-|---|---|---|
-| Kernel schedules **threads**, not coroutines (§1, §5) | `thread_t` is the schedulable unit (`thread.h:31`); per-CPU ready queues `cpu_sched_t` with 7 priority FIFOs; work-stealing `cpu_sched_try_steal` (`sched_thread.c:390`); up to `WASMOS_MAX_CPUS = 16` | ✅ **Matches.** The two-level split the design relies on is the real kernel model. |
-| **N worker threads per process** (§6) | Multiple kernel threads per process are supported: `process_t.thread_count`/`live_thread_count`; `process_thread_spawn_worker_internal` (`process.c:1396`) and `process_thread_spawn_user_internal` (`process.c:1438`). Native ring-3 uses `THREAD_CREATE` (syscall 10). WASM `thread_create` hostcall spawns a VM thread bound to a **named export** (`wasm3/link.c:3111`, `warp/link.cpp:1798`). | ✅ **Substrate exists** for both native and WASM. |
-| **Parallel** coroutines across CPUs (§6.1) | Threads are globally scheduled and stolen across all CPUs — **but** any process with `needs_runtime_lock` (the built-in wasm3/WARP runtimes) serializes runtime execution under a per-process `runtime_lock` (`process.c:539–550`). Native processes do not take it. | ⚠️ **Split.** Native = true parallelism. WASM = **concurrency only** (one runtime thread runs at a time); coroutines interleave on a single effective worker. |
-| `sys_wait_u32` / `sys_wake_u32` for worker parking (§14, §37) | `futex_wait(uaddr, expected, timeout_ms, ctx)` / `futex_wake(uaddr, count, ctx)` (`futex.c`), hostcall ids 16/17, keyed by **physical** address (cross-process via `shmem_grant`), built on `sched_event_t`. | ⚠️ **Exists but not surfaced.** No `wasmos_futex_*` in libc `api.h`; **absent from the native `int 0x80` syscall path** (`syscall.c` has no futex). Must be wired up before §14 works. `mutex.h:50` even carries a TODO to consume it. |
-| `sys_thread_yield` (§12.2, §37) | `WASMOS_SYSCALL_YIELD`(3) / `THREAD_YIELD`(8); hostcalls `sched_yield`(13) / `thread_yield`(71). | ✅ **Matches.** |
-| **Asynchronous IPC** `sys_ipc_submit` + completion tokens (§23, §37) | **Does not exist.** The synchronous request/response *pattern* (`wasmos_ipc_call`, native `IPC_CALL`, nested `ipc_select_one` reply-waits) **is being removed.** The non-blocking transport stays: `ipc_send` enqueues + `sched_event_wake_one`; the reply is a separate message correlated by `request_id`, drained by the one per-endpoint pump. The existing `wasmos_sys_event_loop` already tracks outgoing requests as **intents** (`request_id → on_resolve` continuation) — a hand-rolled promise table. | ❌ **Biggest correction.** The future/promise + single event-loop model **replaces** synchronous IPC; **nothing is layered on top of it.** Build the request-table directly on the non-blocking transport (`ipc_send` + one per-endpoint pump). No submit/completion/cancel syscall is needed; stale replies are discarded by `request_id`/generation. |
-| Unified `sys_wait_events` (§24) | `ipc_select_wait` / `ipc_select_wait_timeout` block on up to `IPC_SELECT_EPS_MAX = 8` endpoints; timers, process death, and IRQs are already delivered as messages/notifications to endpoints. | ⚠️ **Maps to select-sets**, not a new syscall. Note the 8-endpoint cap and that a worker's "wake doorbell" is naturally a `NOTIFICATION` endpoint or a futex word. |
-| `sys_clock_monotonic`, vDSO time page (§15, §25, §37) | `sched_ticks` hostcall → `timer_ticks()`; default **250 Hz (4 ms/tick)**, returned as truncated `int32_t` (wraps ~198 days). No ns clock, **no vDSO page**. Timeouts are expressed in **ms** and tick-quantized. | ⚠️ **Coarse.** Safe-point deadline checks (§15.2) pay a real hostcall, not a memory read; fairness/timer granularity is 4 ms. A vDSO time page is a genuine future optimization, not a current facility. |
-| Stackful `coroutine_switch` swaps `RSP` between coroutine stacks (§9) | Kernel has `context_switch.S` for **thread** switching. There is **no** user-space coroutine/fiber/`ucontext` primitive anywhere in `src/` (only WARP's `setjmp/longjmp` trap unwinding). A raw `mov rsp` stack swap is valid for **native ring-3 code** on its own native stack. | ⚠️ **Native only.** A wasm3 guest runs on an interpreter-managed value/call stack; a WARP guest runs JIT/ring-3 code the runtime (in `libs/warp`, which must not be modified) controls. Neither guest stack can be swapped by a native `coroutine_switch`. See [§49](#49-wrapper-architecture-one-contract-native-and-wasm-cores). |
-| Guard-page / reserve-then-commit stacks (§8) | MM supports committed regions + guard pages; reserved-VA linear-memory slots (commit-on-demand, 2 GiB reservation) already exist for both runtimes. Per-thread kernel stacks are allocated per thread. | ✅ **Feasible** for native coroutine stacks; the 1 MiB-reserve / 64 KiB-commit policy is realistic. |
-| Generic waiter abstraction (§17) | No existing implementation, but the `wasmos_sys_event_loop` intent/handler tables are the de-facto continuation-waiter today. | ✅ **Sound.** Keep it; the intent record *is* the `continuation_waiter` of §17.3. |
-| Join via internal future (§28) | Kernel `THREAD_JOIN`(11)/`WAIT`(4) block on `sched_event_t` and wake on exit. A *coroutine* join future is a user-space construct layered above. | ✅ **Compatible.** |
+| Design assumption (§)                                                 | What actually exists                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            | Verdict                                                                                                                                                                                                                                                                                                                                               |
+|-----------------------------------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Kernel schedules **threads**, not coroutines (§1, §5)                 | `thread_t` is the schedulable unit (`thread.h:31`); per-CPU ready queues `cpu_sched_t` with 7 priority FIFOs; work-stealing `cpu_sched_try_steal` (`sched_thread.c:390`); up to `WASMOS_MAX_CPUS = 16`                                                                                                                                                                                                                                                                                                          | ✅ **Matches.** The two-level split the design relies on is the real kernel model.                                                                                                                                                                                                                                                                     |
+| **N worker threads per process** (§6)                                 | Multiple kernel threads per process are supported: `process_t.thread_count`/`live_thread_count`; `process_thread_spawn_worker_internal` (`process.c:1396`) and `process_thread_spawn_user_internal` (`process.c:1438`). Native ring-3 uses `THREAD_CREATE` (syscall 10). WASM `thread_create` hostcall spawns a VM thread bound to a **named export** (`wasm3/link.c:3111`, `warp/link.cpp:1798`).                                                                                                              | ✅ **Substrate exists** for both native and WASM.                                                                                                                                                                                                                                                                                                      |
+| **Parallel** coroutines across CPUs (§6.1)                            | Threads are globally scheduled and stolen across all CPUs — **but** any process with `needs_runtime_lock` (the built-in wasm3/WARP runtimes) serializes runtime execution under a per-process `runtime_lock` (`process.c:539–550`). Native processes do not take it.                                                                                                                                                                                                                                            | ⚠️ **Split.** Native = true parallelism. WASM = **concurrency only** (one runtime thread runs at a time); coroutines interleave on a single effective worker.                                                                                                                                                                                         |
+| `sys_wait_u32` / `sys_wake_u32` for worker parking (§14, §37)         | `futex_wait(uaddr, expected, timeout_ms, ctx)` / `futex_wake(uaddr, count, ctx)` (`futex.c`), hostcall ids 16/17, keyed by **physical** address (cross-process via `shmem_grant`), built on `sched_event_t`.                                                                                                                                                                                                                                                                                                    | ⚠️ **Exists but not surfaced.** No `wasmos_futex_*` in libc `api.h`; **absent from the native `int 0x80` syscall path** (`syscall.c` has no futex). Must be wired up before §14 works. `mutex.h:50` even carries a TODO to consume it.                                                                                                                |
+| `sys_thread_yield` (§12.2, §37)                                       | `WASMOS_SYSCALL_YIELD`(3) / `THREAD_YIELD`(8); hostcalls `sched_yield`(13) / `thread_yield`(71).                                                                                                                                                                                                                                                                                                                                                                                                                | ✅ **Matches.**                                                                                                                                                                                                                                                                                                                                        |
+| **Asynchronous IPC** `sys_ipc_submit` + completion tokens (§23, §37)  | **Does not exist.** The synchronous request/response *pattern* (`wasmos_ipc_call`, native `IPC_CALL`, nested `ipc_select_one` reply-waits) **is being removed.** The non-blocking transport stays: `ipc_send` enqueues + `sched_event_wake_one`; the reply is a separate message correlated by `request_id`, drained by the one per-endpoint pump. The existing `wasmos_sys_event_loop` already tracks outgoing requests as **intents** (`request_id → on_resolve` continuation) — a hand-rolled promise table. | ❌ **Biggest correction.** The future/promise + single event-loop model **replaces** synchronous IPC; **nothing is layered on top of it.** Build the request-table directly on the non-blocking transport (`ipc_send` + one per-endpoint pump). No submit/completion/cancel syscall is needed; stale replies are discarded by `request_id`/generation. |
+| Unified `sys_wait_events` (§24)                                       | `ipc_select_wait` / `ipc_select_wait_timeout` block on up to `IPC_SELECT_EPS_MAX = 8` endpoints; timers, process death, and IRQs are already delivered as messages/notifications to endpoints.                                                                                                                                                                                                                                                                                                                  | ⚠️ **Maps to select-sets**, not a new syscall. Note the 8-endpoint cap and that a worker's "wake doorbell" is naturally a `NOTIFICATION` endpoint or a futex word.                                                                                                                                                                                    |
+| `sys_clock_monotonic`, vDSO time page (§15, §25, §37)                 | `sched_ticks` hostcall → `timer_ticks()`; default **250 Hz (4 ms/tick)**, returned as truncated `int32_t` (wraps ~198 days). No ns clock, **no vDSO page**. Timeouts are expressed in **ms** and tick-quantized.                                                                                                                                                                                                                                                                                                | ⚠️ **Coarse.** Safe-point deadline checks (§15.2) pay a real hostcall, not a memory read; fairness/timer granularity is 4 ms. A vDSO time page is a genuine future optimization, not a current facility.                                                                                                                                              |
+| Stackful `coroutine_switch` swaps `RSP` between coroutine stacks (§9) | Kernel has `context_switch.S` for **thread** switching. There is **no** user-space coroutine/fiber/`ucontext` primitive anywhere in `src/` (only WARP's `setjmp/longjmp` trap unwinding). A raw `mov rsp` stack swap is valid for **native ring-3 code** on its own native stack.                                                                                                                                                                                                                               | ⚠️ **Native only.** A wasm3 guest runs on an interpreter-managed value/call stack; a WARP guest runs JIT/ring-3 code the runtime (in `libs/warp`, which must not be modified) controls. Neither guest stack can be swapped by a native `coroutine_switch`. See [§49](#49-wrapper-architecture-one-contract-native-and-wasm-cores).                    |
+| Guard-page / reserve-then-commit stacks (§8)                          | MM supports committed regions + guard pages; reserved-VA linear-memory slots (commit-on-demand, 2 GiB reservation) already exist for both runtimes. Per-thread kernel stacks are allocated per thread.                                                                                                                                                                                                                                                                                                          | ✅ **Feasible** for native coroutine stacks; the 1 MiB-reserve / 64 KiB-commit policy is realistic.                                                                                                                                                                                                                                                    |
+| Generic waiter abstraction (§17)                                      | No existing implementation, but the `wasmos_sys_event_loop` intent/handler tables are the de-facto continuation-waiter today.                                                                                                                                                                                                                                                                                                                                                                                   | ✅ **Sound.** Keep it; the intent record *is* the `continuation_waiter` of §17.3.                                                                                                                                                                                                                                                                      |
+| Join via internal future (§28)                                        | Kernel `THREAD_JOIN`(11)/`WAIT`(4) block on `sched_event_t` and wake on exit. A *coroutine* join future is a user-space construct layered above.                                                                                                                                                                                                                                                                                                                                                                | ✅ **Compatible.**                                                                                                                                                                                                                                                                                                                                     |
 
 ### 48.2 Required adjustments
 
@@ -2525,11 +2525,11 @@ L0  Kernel primitives  ── threads · futex · sched_event · ipc_send · ipc
 
 ### 49.3 Concrete placement
 
-| Layer | Native (`src/libsys/native`, `src/libc` native build) | WASM (`src/libsys/wasm`, `src/libc/{c,rust,go,zig,assemblyscript}`) |
-|---|---|---|
+| Layer                      | Native (`src/libsys/native`, `src/libc` native build)                                                                         | WASM (`src/libsys/wasm`, `src/libc/{c,rust,go,zig,assemblyscript}`)                                                                 |
+|----------------------------|-------------------------------------------------------------------------------------------------------------------------------|-------------------------------------------------------------------------------------------------------------------------------------|
 | L1 future/promise contract | `libsys_native.c` (C) + `libsys.zig` (Zig), evolving today's `wasmos_sys_native_event_loop_t` intents into `promise`/`future` | header-only C in `src/libsys/wasm/include/wasmos/` + per-language reimpl in each `wasmos.<ext>`, evolving `wasmos_sys_event_loop_t` |
-| L2 coroutine scheduler | **one** stackful core: `coroutine_switch.S` + run queues + `THREAD_CREATE` workers, parked on futex/endpoint | per-language: cooperative fibers over `wasmos_thread_create`+futex, and/or the language's stackless async bound to `future_waiter` |
-| Kernel gaps to close first | add native `int 0x80` `futex_wait`/`futex_wake` (or park on endpoints) | add `wasmos_futex_wait`/`wasmos_futex_wake` to `api.h` (imports already exist) |
+| L2 coroutine scheduler     | **one** stackful core: `coroutine_switch.S` + run queues + `THREAD_CREATE` workers, parked on futex/endpoint                  | per-language: cooperative fibers over `wasmos_thread_create`+futex, and/or the language's stackless async bound to `future_waiter`  |
+| Kernel gaps to close first | add native `int 0x80` `futex_wait`/`futex_wake` (or park on endpoints)                                                        | add `wasmos_futex_wait`/`wasmos_futex_wake` to `api.h` (imports already exist)                                                      |
 
 ### 49.4 Recommended sequencing (supersedes §44 phase boundaries where they conflict)
 

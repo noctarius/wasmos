@@ -72,7 +72,7 @@ The caller must check before use; no fallback or retry is performed.
 
 ```
 PML4 index  Virtual range                            Use
-──────────  ────────────────────────────────--──     ───────────────────────
+──────────  ───────────────────────────────────────  ───────────────────────────
 1           0x0000008000000000 – 0x0000BFFFFF        User process regions
 511         0xFFFFFFFF80000000 – 0xFFFFFFFF9FFFFFFF  Kernel higher-half (512 MB)
 ```

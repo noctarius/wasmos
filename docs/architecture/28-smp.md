@@ -98,9 +98,9 @@ compile flags alongside the other `WASMOS_*` defines.
 
 typedef struct cpu_local {
     struct cpu_local    *self;              /* GS:0 — fast self-pointer */
-    uint32_t             cpu_id;           /* logical index 0..N-1 */
-    uint32_t             apic_id;          /* hardware LAPIC ID from MADT */
-    volatile uint8_t     started;          /* AP writes 1 when fully online */
+    uint32_t             cpu_id;            /* logical index 0..N-1 */
+    uint32_t             apic_id;           /* hardware LAPIC ID from MADT */
+    volatile uint8_t     started;           /* AP writes 1 when fully online */
 
     /* x86 per-CPU tables */
     uint64_t    gdt[GDT_ENTRY_COUNT];
@@ -198,12 +198,12 @@ stays 1.
 IRQ routing in IOAPIC mode (the only mode that supports SMP) is BSP-centric for
 Phase 0–9. The table below gives the complete picture:
 
-| Source                        | Delivered to          | Notes |
-|-------------------------------|-----------------------|-------|
-| Device IRQs (IOAPIC RTE 1–15) | BSP (LAPIC 0) only    | All 16 RTEs are programmed with physical destination LAPIC 0. Reprogramming RTE destination for per-CPU affinity is not done in this phase. |
-| Scheduler timer ticks          | Every online CPU      | Each AP calls `lapic_timer_init()` in `smp_ap_c_entry()`. Every CPU receives its own periodic LAPIC timer interrupt and runs `timer_handle_irq()` / `process_tick()` independently against its own `cpu_local()`. |
-| IRQ0 / vector 32 (timer)      | BSP (LAPIC 0) only    | In IOAPIC mode the LAPIC timer replaces the PIT. The IOAPIC RTE for IRQ0 still points to physical LAPIC 0; APs receive the timer via their *own* LAPIC timer, not the IOAPIC route. Both paths fire vector 32 and reach `x86_timer_irq_handler`. |
-| INIT/SIPI IPIs                | APs (targeted)        | Used only during bring-up. No runtime IPIs (remote wakeup, TLB shootdown) are issued in this phase. |
+| Source                        | Delivered to       | Notes                                                                                                                                                                                                                                            |
+|-------------------------------|--------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Device IRQs (IOAPIC RTE 1–15) | BSP (LAPIC 0) only | All 16 RTEs are programmed with physical destination LAPIC 0. Reprogramming RTE destination for per-CPU affinity is not done in this phase.                                                                                                      |
+| Scheduler timer ticks         | Every online CPU   | Each AP calls `lapic_timer_init()` in `smp_ap_c_entry()`. Every CPU receives its own periodic LAPIC timer interrupt and runs `timer_handle_irq()` / `process_tick()` independently against its own `cpu_local()`.                                |
+| IRQ0 / vector 32 (timer)      | BSP (LAPIC 0) only | In IOAPIC mode the LAPIC timer replaces the PIT. The IOAPIC RTE for IRQ0 still points to physical LAPIC 0; APs receive the timer via their *own* LAPIC timer, not the IOAPIC route. Both paths fire vector 32 and reach `x86_timer_irq_handler`. |
+| INIT/SIPI IPIs                | APs (targeted)     | Used only during bring-up. No runtime IPIs (remote wakeup, TLB shootdown) are issued in this phase.                                                                                                                                              |
 
 `docs/architecture/05-x86-cpu-architecture.md` describes IOAPIC RTE programming
 in detail, including how all RTEs default to fixed delivery to LAPIC 0.
@@ -471,20 +471,20 @@ qemu-system-x86_64 ... -smp 2
 
 ### Expected boot evidence (serial log)
 
-| Log fragment | Meaning |
-|---|---|
-| BSP reaches `smp_cpus_up` | SMP bring-up path entered |
-| AP `g_cpus[1].started` transitions to 1 | AP 1 came online successfully |
-| `[test] sched progress ok` | Scheduler dispatched `SCHED_PROGRESS_MARKER_SWITCHES` threads; with 2 CPUs this proves cross-CPU dispatch |
-| `[test] preempt ok` | Timer preemption fired on at least one CPU |
-| No `[smp] AP N timeout` warning | All MADT-discovered APs came online within the 100 ms window |
+| Log fragment                            | Meaning                                                                                                   |
+|-----------------------------------------|-----------------------------------------------------------------------------------------------------------|
+| BSP reaches `smp_cpus_up`               | SMP bring-up path entered                                                                                 |
+| AP `g_cpus[1].started` transitions to 1 | AP 1 came online successfully                                                                             |
+| `[test] sched progress ok`              | Scheduler dispatched `SCHED_PROGRESS_MARKER_SWITCHES` threads; with 2 CPUs this proves cross-CPU dispatch |
+| `[test] preempt ok`                     | Timer preemption fired on at least one CPU                                                                |
+| No `[smp] AP N timeout` warning         | All MADT-discovered APs came online within the 100 ms window                                              |
 
 ### Regression targets
 
-| Target | What it proves |
-|---|---|
-| `cmake --build build --target run-qemu-test` | Default `WASMOS_SMP=0` baseline is not regressed by the SMP infrastructure changes |
-| Manual SMP build with `-DWASMOS_SMP=1 -DQEMU_SMP=2` | AP comes online, scheduler dispatches on both CPUs |
+| Target                                              | What it proves                                                                     |
+|-----------------------------------------------------|------------------------------------------------------------------------------------|
+| `cmake --build build --target run-qemu-test`        | Default `WASMOS_SMP=0` baseline is not regressed by the SMP infrastructure changes |
+| Manual SMP build with `-DWASMOS_SMP=1 -DQEMU_SMP=2` | AP comes online, scheduler dispatches on both CPUs                                 |
 
 The default `run-qemu-test` CI gate always runs with `WASMOS_SMP=0`. An explicit
 SMP-enabled build must be run manually to exercise the AP bring-up path.

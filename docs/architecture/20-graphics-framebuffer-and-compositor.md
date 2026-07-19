@@ -22,7 +22,7 @@ app (WASM) ──GFX IPC (0x200–0x2FF)──► gfx-compositor (native Zig)
 
 gfx-compositor ──FONT IPC (0xA00–0xAFF)───► font-service (native Zig)
 gfx-compositor ──KBD IPC (0x800–0x8FF)────► keyboard driver (subscription)
-gfx-compositor ──MOUSE IPC ───────────────► mouse driver (subscription)
+gfx-compositor ──MOUSE IPC────────────────► mouse driver (subscription)
 ```
 
 Registered endpoint names: `gfx` (compositor), `font` (font service).
@@ -116,19 +116,19 @@ App-facing compositor interface. Defined in
 
 #### Opcodes and Argument Contracts
 
-| Opcode                          | Value  | Request args                                                                   | Reply args                                      |
-|---------------------------------|--------|--------------------------------------------------------------------------------|-------------------------------------------------|
+| Opcode                          | Value  | Request args                                                                                   | Reply args                                            |
+|---------------------------------|--------|------------------------------------------------------------------------------------------------|-------------------------------------------------------|
 | `GFX_IPC_CREATE_WINDOW`         | 0x0200 | arg0=content_width arg1=content_height arg2=GFX_IPC_ABI_MAGIC arg3=header_pack(version,opcode) | arg1=window_id arg2=content_width arg3=content_height |
-| `GFX_IPC_DESTROY_WINDOW`        | 0x0201 | arg0=window_id                                                                 | —                                               |
-| `GFX_IPC_RESIZE_WINDOW`         | 0x0202 | arg0=window_id arg1=content_width arg2=content_height                          | arg1=content_width arg2=content_height          |
-| `GFX_IPC_ALLOC_SHARED_BUFFER`   | 0x0203 | arg0=window_id (0=unbound) arg1=width arg2=height                              | arg1=buffer_id arg2=shmem_id arg3=stride        |
-| `GFX_IPC_SUBMIT_COMMANDS`       | 0x0204 | (not yet dispatched)                                                           | —                                               |
-| `GFX_IPC_PRESENT_WINDOW`        | 0x0205 | arg0=window_id arg1=buffer_id arg2=damage_count arg3=damage_shmem_id           | —                                               |
-| `GFX_IPC_POLL_EVENT`            | 0x0206 | —                                                                              | arg1=event_type arg2=event_arg1 arg3=event_arg2 |
-| `GFX_IPC_RELEASE_SHARED_BUFFER` | 0x0207 | arg0=buffer_id                                                                 | —                                               |
-| `GFX_IPC_SET_DISPLAY_MODE`      | 0x0208 | arg0=width arg1=height                                                         | arg1=width arg2=height                          |
-| `GFX_IPC_RESP`                  | 0x0280 | success reply; arg0=GFX_STATUS_*                                               | —                                               |
-| `GFX_IPC_ERROR`                 | 0x02FF | error reply                                                                    | —                                               |
+| `GFX_IPC_DESTROY_WINDOW`        | 0x0201 | arg0=window_id                                                                                 | —                                                     |
+| `GFX_IPC_RESIZE_WINDOW`         | 0x0202 | arg0=window_id arg1=content_width arg2=content_height                                          | arg1=content_width arg2=content_height                |
+| `GFX_IPC_ALLOC_SHARED_BUFFER`   | 0x0203 | arg0=window_id (0=unbound) arg1=width arg2=height                                              | arg1=buffer_id arg2=shmem_id arg3=stride              |
+| `GFX_IPC_SUBMIT_COMMANDS`       | 0x0204 | (not yet dispatched)                                                                           | —                                                     |
+| `GFX_IPC_PRESENT_WINDOW`        | 0x0205 | arg0=window_id arg1=buffer_id arg2=damage_count arg3=damage_shmem_id                           | —                                                     |
+| `GFX_IPC_POLL_EVENT`            | 0x0206 | —                                                                                              | arg1=event_type arg2=event_arg1 arg3=event_arg2       |
+| `GFX_IPC_RELEASE_SHARED_BUFFER` | 0x0207 | arg0=buffer_id                                                                                 | —                                                     |
+| `GFX_IPC_SET_DISPLAY_MODE`      | 0x0208 | arg0=width arg1=height                                                                         | arg1=width arg2=height                                |
+| `GFX_IPC_RESP`                  | 0x0280 | success reply; arg0=GFX_STATUS_*                                                               | —                                                     |
+| `GFX_IPC_ERROR`                 | 0x02FF | error reply                                                                                    | —                                                     |
 
 #### Status Codes
 

@@ -43,14 +43,14 @@ All structures are block-aligned.
 # 3. Disk Layout Overview
 
 ```
-| Boot Area (optional) |
-| Primary Superblock |
+| Boot Area (optional)         |
+| Primary Superblock           |
 | Block Group Descriptor Table |
-| Journal Area |
-| Object Table |
-| Allocation Bitmaps |
-| Data Blocks |
-| Backup Superblocks |
+| Journal Area                 |
+| Object Table                 |
+| Allocation Bitmaps           |
+| Data Blocks                  |
+| Backup Superblocks           |
 ```
 
 Visual:
@@ -145,7 +145,7 @@ Feature flags allow forward compatibility.
 ## Feature Types
 
 | Type      | Meaning              |
-| --------- | -------------------- |
+|-----------|----------------------|
 | COMPAT    | Safe if unknown      |
 | RO_COMPAT | Must mount read-only |
 | INCOMPAT  | Must refuse mount    |

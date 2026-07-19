@@ -98,7 +98,15 @@ set(WASM_NET_SMOKE_APP ${BUILD_DIR}/net_smoke.wap)
 set(WASM_ATA_DRIVER_SRC ${DRIVER_WASM_DIR}/ata/ata.c)
 set(WASM_ATA_DRIVER_WASM ${BUILD_DIR}/ata.wasm)
 set(WASM_ATA_APP ${BUILD_DIR}/ata.wap)
-set(WASM_FAT_DRIVER_SRC ${DRIVER_WASM_DIR}/fs_fat/fs_fat.c)
+set(WASM_FAT_DRIVER_SRC
+  ${DRIVER_WASM_DIR}/fs_fat/fs_fat.c
+  ${DRIVER_WASM_DIR}/fs_fat/fat_util.c
+  ${DRIVER_WASM_DIR}/fs_fat/fat_block.c
+  ${DRIVER_WASM_DIR}/fs_fat/fat_geom.c
+  ${DRIVER_WASM_DIR}/fs_fat/fat_name.c
+  ${DRIVER_WASM_DIR}/fs_fat/fat_alloc.c
+  ${DRIVER_WASM_DIR}/fs_fat/fat_dir.c
+  ${DRIVER_WASM_DIR}/fs_fat/fat_file.c)
 set(WASM_FAT_DRIVER_WASM ${BUILD_DIR}/fs_fat.wasm)
 set(WASM_FAT_APP ${BUILD_DIR}/fs_fat.wap)
 set(WASM_INITFS_DRIVER_SRC ${DRIVER_WASM_DIR}/fs_init/fs_init.c)

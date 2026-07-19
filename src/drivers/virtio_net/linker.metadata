@@ -27,12 +27,10 @@ flags = 0
 name = "irq.route"
 flags = 0
 
-# Grants DEVMGR_CAP_DMA -> the kernel gives this driver a BIDIR DMA window over
-# low memory [0, 2 GiB), which region_alloc's capability_dma_range_allowed
-# check requires for the virtqueue ring/pool allocations.
+# flags = DMA budget in pages: RX+TX rings + RX/TX pools (~70), with headroom.
 [[capabilities]]
 name = "dma.buffer"
-flags = 0
+flags = 80
 
 [[matches]]
 bus = "pci"

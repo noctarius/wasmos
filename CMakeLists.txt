@@ -1175,6 +1175,8 @@ set(WASMOS_QEMU_NIC_MODEL "virtio-net-pci" CACHE STRING
 set(WASMOS_QEMU_NETDEV_ARGS
   -netdev user,id=net0
   -device ${WASMOS_QEMU_NIC_MODEL},netdev=net0
+  # Entropy source for the virtio-rng driver (transitional 1AF4:1005).
+  -device virtio-rng-pci
 )
 add_custom_target(kconfig-defconfig
   COMMAND ${CMAKE_COMMAND} -E copy_if_different

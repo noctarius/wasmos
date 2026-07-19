@@ -143,6 +143,17 @@ Source: `architecture/16-device-manager-and-bus-enumeration.md`,
   notifications become reliable push events rather than polling hints.
 - [ ] Preserve each driver module's declared IRQ capability mask in
   device-manager metadata instead of granting the fixed IRQ 14/15 pair.
+- [ ] Remove the now-dead DMA-window defaulting still set in the individual
+  `PROC_IPC_SPAWN_*_CAPS` handlers (`process_manager_spawn.c`); DMA windows are
+  now installed from the driver's dma.buffer manifest capability
+  (`capability_grant_name`), not the spawner.
+- [ ] Consolidate the per-file `#define PAGE_SIZE 0x1000` copies
+  (physmem.c/process.c/memory.c/native_driver.c/capability.c/…) into one shared
+  header.
+- [ ] Replace the fixed `DEVMGR_RULE_TEXT_CAP` rules-file read buffer with a
+  `FS_IPC_STAT_REQ`-sized (or streaming/chunked) read so the rules file has no
+  size limit at all. A fixed buffer silently truncates and drops trailing rules
+  once the file exceeds the cap; 4096 is only an interim bump from 1024.
 - [ ] Detect console-ring producer laps in the framebuffer consumer and advance
   the read cursor to a bounded live position before replaying overwritten data.
 - [ ] Add hotplug/event publication and future bus providers (USB/virtual)

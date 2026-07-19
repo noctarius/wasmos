@@ -8,6 +8,7 @@
 #include "string.h"
 
 #define CAP_ALL_MASK ((1u << 7) - 1u)
+#define CAP_PAGE_SIZE 0x1000u
 
 typedef struct {
     uint32_t context_id;
@@ -19,6 +20,7 @@ typedef struct {
     uint16_t irq_mask;
     uint32_t dma_direction_flags;
     uint32_t dma_max_bytes;
+    uint64_t dma_pinned_bytes; /* cumulative region_alloc bytes charged against dma_max_bytes */
     uint32_t dma_window_count;
     wasmos_dma_window_t dma_windows[CAPABILITY_DMA_WINDOW_LIMIT];
     uint32_t mask;
@@ -85,7 +87,6 @@ void capability_init(void) {
 
 int capability_grant_name(uint32_t context_id, const uint8_t* name, uint32_t name_len,
                           uint32_t flags) {
-    (void)flags;
     if (!name || name_len == 0) {
         return -1;
     }
@@ -115,6 +116,16 @@ int capability_grant_name(uint32_t context_id, const uint8_t* name, uint32_t nam
     }
     ctx->configured = 1;
     ctx->mask |= mask;
+    /* dma.buffer authorizes DMA: flags = budget in pages; the window is the
+     * platform's 32-bit-DMA clamp, not a per-driver range. */
+    if (mask == kind_to_mask(CAP_DMA_BUFFER) && ctx->dma_window_count == 0) {
+        ctx->dma_direction_flags = WASMOS_DMA_DIR_BIDIR;
+        ctx->dma_max_bytes = flags * CAP_PAGE_SIZE; /* flags = budget in pages */
+        ctx->dma_pinned_bytes = 0;
+        ctx->dma_window_count = 1;
+        ctx->dma_windows[0].base = 0;
+        ctx->dma_windows[0].length = 0x80000000ull;
+    }
     return 0;
 }
 
@@ -164,15 +175,9 @@ int capability_set_spawn_profile(uint32_t context_id, uint32_t cap_flags, uint16
                 ctx->dma_windows[w].length = 0;
             }
         }
-    } else {
-        ctx->dma_direction_flags = 0;
-        ctx->dma_max_bytes = 0;
-        ctx->dma_window_count = 0;
-        for (uint32_t w = 0; w < CAPABILITY_DMA_WINDOW_LIMIT; ++w) {
-            ctx->dma_windows[w].base = 0;
-            ctx->dma_windows[w].length = 0;
-        }
     }
+    /* No spawner DMA window: DMA is owned by the dma.buffer manifest grant
+     * (capability_grant_name), so leave the DMA fields untouched here. */
     return 0;
 }
 
@@ -272,4 +277,26 @@ uint32_t capability_dma_max_bytes(uint32_t context_id) {
         return 0;
     }
     return ctx->dma_max_bytes;
+}
+
+int capability_dma_within_budget(uint32_t context_id, uint64_t bytes) {
+    const capability_context_state_t* ctx = capability_state_for_context(context_id, 0);
+    if (!ctx || bytes == 0) {
+        return 0;
+    }
+    if (!ctx->spawn_profile_configured || (ctx->mask & (1u << 3)) == 0) {
+        return 0;
+    }
+    if (ctx->dma_max_bytes == 0) {
+        return 0; /* no budget declared -> no driver-owned DMA regions */
+    }
+    return (ctx->dma_pinned_bytes + bytes) <= (uint64_t)ctx->dma_max_bytes;
+}
+
+void capability_dma_commit(uint32_t context_id, uint64_t bytes) {
+    capability_context_state_t* ctx = capability_state_for_context(context_id, 0);
+    if (!ctx) {
+        return;
+    }
+    ctx->dma_pinned_bytes += bytes;
 }

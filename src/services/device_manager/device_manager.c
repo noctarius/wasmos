@@ -948,14 +948,16 @@ static void queue_pci_match_rule_spawns(void) {
             }
             g_dm.active_rule_spawn_caps.cap_flags = 0u;
             if (rec->io_port_base != 0u) {
+                /* Grant only the device's own resources: its I/O-port window and
+                 * IRQ line. DMA is NOT granted here — a DMA window is installed
+                 * by PM only when the driver's manifest declares the dma.buffer
+                 * capability (see pm_apply_spawn_caps). The device manager does
+                 * not hand out DMA windows per spawn path. */
                 g_dm.active_rule_spawn_caps.cap_flags = DEVMGR_CAP_IO_PORT | DEVMGR_CAP_IRQ;
                 g_dm.active_rule_spawn_caps.io_port_min = rec->io_port_base;
                 g_dm.active_rule_spawn_caps.io_port_max = (uint16_t)(rec->io_port_base + 0x3Fu);
                 g_dm.active_rule_spawn_caps.irq_mask =
                     (rec->irq_hint < 16u) ? (uint16_t)(1u << rec->irq_hint) : 0u;
-            }
-            if (strcmp(rule->spawn_path, "system/drivers/virtio_net.wap") == 0) {
-                g_dm.active_rule_spawn_caps.cap_flags |= DEVMGR_CAP_DMA;
             }
             str_copy(g_dm.rule_spawn_path, sizeof(g_dm.rule_spawn_path), rule->spawn_path);
             g_dm.rule_spawn_pending = 1;

@@ -57,4 +57,14 @@ int capability_dma_direction_allowed(uint32_t context_id, uint32_t direction_fla
 int capability_dma_range_allowed(uint32_t context_id, uint64_t base, uint64_t length);
 uint32_t capability_dma_max_bytes(uint32_t context_id);
 
+/* Per-context DMA budget for driver-owned pinned regions (region_alloc). The
+ * budget (dma_max_bytes) is declared by the driver's dma.buffer manifest
+ * capability. capability_dma_within_budget returns non-zero if pinning `bytes`
+ * more would stay within it; capability_dma_commit records `bytes` as pinned
+ * after a successful allocation. Region allocations are pinned for the context's
+ * lifetime (freed at reap when the context is torn down), so there is no
+ * uncharge. */
+int capability_dma_within_budget(uint32_t context_id, uint64_t bytes);
+void capability_dma_commit(uint32_t context_id, uint64_t bytes);
+
 #endif

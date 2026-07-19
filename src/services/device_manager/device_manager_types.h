@@ -12,7 +12,12 @@
 #define DEVMGR_RULES_INIT_ROOT "/init/devmgr/rules"
 #define DEVMGR_RULES_BOOT_ROOT "/boot/system/devmgr/rules"
 #define DEVMGR_RULE_FILE "default.rules"
-#define DEVMGR_RULE_TEXT_CAP 1024
+/* INTERIM: fixed read/parse buffer for the rules file. A rules file larger than
+ * this is silently truncated, dropping its trailing rules. The rules file
+ * should not have a size limit at all — see docs/TASKS.md to size the read from
+ * FS_IPC_STAT_REQ (or stream it). Bumped 1024 -> 4096 only to unblock the
+ * current ruleset. */
+#define DEVMGR_RULE_TEXT_CAP 4096
 #define ALWAYS_SPAWN_RULE_CAP 8
 #define BLOCK_FS_RULE_CAP 8
 #define PCI_MATCH_RULE_CAP 8

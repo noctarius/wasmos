@@ -18,7 +18,3 @@ entry_arg_bindings = ["proc.endpoint"]
 [[capabilities]]
 name = "ipc.basic"
 flags = 0
-
-[[capabilities]]
-name = "dma.buffer"
-flags = 0

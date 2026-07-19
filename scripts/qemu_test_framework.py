@@ -123,6 +123,8 @@ def build_qemu_cmd(cfg: QemuConfig) -> list:
         cmd += ["-drive", f"format=raw,file=fat:rw:{cfg.userfs_dir}"]
     if cfg.nic_model and cfg.nic_model != "none":
         cmd += ["-netdev", "user,id=net0", "-device", f"{cfg.nic_model},netdev=net0"]
+    # Entropy source for the virtio-rng driver (transitional 1AF4:1005).
+    cmd += ["-device", "virtio-rng-pci"]
     if cfg.monitor_socket:
         cmd += ["-qmp", f"unix:{cfg.monitor_socket},server,wait=off"]
     return cmd

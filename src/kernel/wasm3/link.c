@@ -2077,6 +2077,11 @@ m3ApiRawFunction(wasmos_region_alloc) {
         pfa_free_pages(phys_base, (uint64_t)(uint32_t)pages);
         m3ApiReturn(WASMOS_DMA_STATUS_RANGE);
     }
+    /* Enforce the driver's declared DMA page budget (dma.buffer manifest flags). */
+    if (!capability_dma_within_budget(proc->context_id, region_bytes)) {
+        pfa_free_pages(phys_base, (uint64_t)(uint32_t)pages);
+        m3ApiReturn(WASMOS_DMA_STATUS_RANGE);
+    }
 
     uint64_t mem_size64 = (uint64_t)mem_size;
     const uint64_t map_auto_min_off = 0x200000ULL;
@@ -2146,6 +2151,7 @@ m3ApiRawFunction(wasmos_region_alloc) {
      * extra pin reference; wasm3_release_pid() returns them on reap. */
     wasm_dma_region_map_track(proc->pid, off32, (uint32_t)region_bytes, phys_base, (uint32_t)pages);
     __builtin_memcpy(mem_base + (uint32_t)out_phys_off, &phys_base, sizeof(uint64_t));
+    capability_dma_commit(proc->context_id, region_bytes); /* charge the pinned footprint */
     m3ApiReturn(off32);
 }
 

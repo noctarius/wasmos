@@ -25,9 +25,10 @@ flags = 0
 name = "irq.route"
 flags = 0
 
+# flags = DMA budget in pages; bounds one borrow-mapped transfer (DMA currently PIO-stubbed).
 [[capabilities]]
 name = "dma.buffer"
-flags = 0
+flags = 1
 
 [[matches]]
 bus = "pci"

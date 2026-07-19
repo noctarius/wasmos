@@ -8,6 +8,7 @@
 #include "wasmos/ipc.h"
 #include "wasmos/sha256.h"
 #include "wasmos/libsys_string.h"
+#include "wasmos_driver_abi.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -15,6 +16,14 @@ extern "C" {
 
 #define WASMOS_SYS_INTENT_MAX 16
 #define WASMOS_SYS_HANDLER_MAX 16
+
+enum {
+    WASMOS_SYS_RANDOM_STATUS_OK = 0,
+    WASMOS_SYS_RANDOM_STATUS_INVALID = HRNG_STATUS_INVALID,
+    WASMOS_SYS_RANDOM_STATUS_NOT_READY = HRNG_STATUS_NOT_READY,
+    WASMOS_SYS_RANDOM_STATUS_IO = HRNG_STATUS_IO_ERROR,
+    WASMOS_SYS_RANDOM_STATUS_PROTOCOL = -6
+};
 
 typedef struct {
     int32_t in_use;
@@ -39,6 +48,23 @@ typedef struct {
     wasmos_sys_intent_t intents[WASMOS_SYS_INTENT_MAX];
     wasmos_sys_handler_t handlers[WASMOS_SYS_HANDLER_MAX];
 } wasmos_sys_event_loop_t;
+
+typedef struct wasmos_sys_random_request wasmos_sys_random_request_t;
+typedef void (*wasmos_sys_random_complete_fn)(void* user, int32_t status);
+
+struct wasmos_sys_random_request {
+    wasmos_sys_event_loop_t* loop;
+    int32_t hrng_endpoint;
+    int32_t buffer_id;
+    int32_t chunk_max;
+    int32_t len;
+    int32_t done;
+    uint8_t* out;
+    uint32_t float_word;
+    float* float_out;
+    wasmos_sys_random_complete_fn on_complete;
+    void* user;
+};
 
 static inline int32_t wasmos_sys_ipc_recv_matching(int32_t reply_endpoint, int32_t request_id,
                                                    wasmos_ipc_message_t* out_reply) {
@@ -392,6 +418,143 @@ static inline int32_t wasmos_sys_buffer_write(int32_t buffer_id, const void* src
         return -1;
     }
     return wasmos_xfer_buffer_write(buffer_id, addr_cast(int32_t, src), len, offset) == 0 ? 0 : -1;
+}
+
+static inline void wasmos_sys_random_finish(wasmos_sys_random_request_t* request, int32_t status) {
+    if (!request) {
+        return;
+    }
+    if (request->buffer_id >= 0) {
+        (void)wasmos_xfer_buffer_release(request->buffer_id);
+        request->buffer_id = -1;
+    }
+    if (status == 0 && request->float_out) {
+        *request->float_out = (float)(request->float_word >> 8u) * (1.0f / 16777216.0f);
+    }
+    if (request->on_complete) {
+        request->on_complete(request->user, status);
+    }
+}
+
+static inline int32_t wasmos_sys_random_issue(wasmos_sys_random_request_t* request);
+
+static inline void wasmos_sys_random_reply(void* user, const wasmos_ipc_message_t* reply) {
+    wasmos_sys_random_request_t* request = (wasmos_sys_random_request_t*)user;
+    int32_t wrote;
+    if (!request || !reply) {
+        return;
+    }
+    if (reply->type == HRNG_IPC_ERROR) {
+        wasmos_sys_random_finish(request,
+                                 reply->arg0 < 0 ? reply->arg0 : WASMOS_SYS_RANDOM_STATUS_IO);
+        return;
+    }
+    if (reply->type != HRNG_IPC_RESP) {
+        wasmos_sys_random_finish(request, WASMOS_SYS_RANDOM_STATUS_PROTOCOL);
+        return;
+    }
+    wrote = reply->arg0;
+    if (wrote <= 0 || wrote > request->chunk_max || wrote > request->len - request->done ||
+        wasmos_xfer_buffer_read(request->buffer_id, addr_cast(int32_t, request->out + request->done),
+                                wrote, 0) != 0) {
+        wasmos_sys_random_finish(request, WASMOS_SYS_RANDOM_STATUS_IO);
+        return;
+    }
+    request->done += wrote;
+    if (request->done == request->len) {
+        wasmos_sys_random_finish(request, 0);
+        return;
+    }
+    if (wasmos_sys_random_issue(request) != 0) {
+        wasmos_sys_random_finish(request, WASMOS_SYS_RANDOM_STATUS_IO);
+    }
+}
+
+static inline int32_t wasmos_sys_random_issue(wasmos_sys_random_request_t* request) {
+    int32_t chunk;
+    if (!request || !request->loop || request->done >= request->len) {
+        return WASMOS_SYS_RANDOM_STATUS_INVALID;
+    }
+    chunk = request->len - request->done;
+    if (chunk > request->chunk_max) {
+        chunk = request->chunk_max;
+    }
+    return wasmos_sys_intent_send(request->loop, request->hrng_endpoint,
+                                  request->loop->receiver_endpoint, HRNG_IPC_GET_BYTES_REQ,
+                                  request->buffer_id, chunk, 0, 0, wasmos_sys_random_reply, request,
+                                  0);
+}
+
+/* Start a non-blocking entropy request. Callers retain `request` and `out`
+ * until `on_complete` runs, and drive completion through event_loop_poll(). */
+static inline int32_t wasmos_sys_random_bytes_async(
+    wasmos_sys_event_loop_t* loop, int32_t hrng_endpoint, uint8_t* out, int32_t len,
+    wasmos_sys_random_request_t* request, wasmos_sys_random_complete_fn on_complete, void* user) {
+    int32_t buffer_size;
+    if (!loop || !request || !out || len <= 0 || hrng_endpoint < 0 ||
+        loop->receiver_endpoint < 0 || !on_complete) {
+        return WASMOS_SYS_RANDOM_STATUS_INVALID;
+    }
+    request->loop = loop;
+    request->hrng_endpoint = hrng_endpoint;
+    request->buffer_id = -1;
+    request->len = len;
+    request->done = 0;
+    request->out = out;
+    request->float_out = 0;
+    request->on_complete = on_complete;
+    request->user = user;
+    buffer_size = wasmos_xfer_buffer_size();
+    request->chunk_max = buffer_size < (int32_t)HRNG_MAX_BYTES_PER_REQ ? buffer_size :
+                                                                          (int32_t)HRNG_MAX_BYTES_PER_REQ;
+    if (request->chunk_max <= 0) {
+        return WASMOS_SYS_RANDOM_STATUS_NOT_READY;
+    }
+    request->buffer_id = wasmos_xfer_buffer_acquire(request->chunk_max);
+    if (request->buffer_id < 0 ||
+        wasmos_xfer_buffer_borrow(hrng_endpoint, request->buffer_id,
+                                  WASMOS_BUFFER_GRANT_WRITE) < 0) {
+        if (request->buffer_id >= 0) {
+            (void)wasmos_xfer_buffer_release(request->buffer_id);
+            request->buffer_id = -1;
+        }
+        return WASMOS_SYS_RANDOM_STATUS_NOT_READY;
+    }
+    if (wasmos_sys_random_issue(request) != 0) {
+        (void)wasmos_xfer_buffer_release(request->buffer_id);
+        request->buffer_id = -1;
+        return WASMOS_SYS_RANDOM_STATUS_IO;
+    }
+    return 0;
+}
+
+static inline int32_t wasmos_sys_random_int_async(
+    wasmos_sys_event_loop_t* loop, int32_t hrng_endpoint, uint32_t* out_value,
+    wasmos_sys_random_request_t* request, wasmos_sys_random_complete_fn on_complete, void* user) {
+    if (!request) {
+        return WASMOS_SYS_RANDOM_STATUS_INVALID;
+    }
+    request->float_out = 0;
+    return wasmos_sys_random_bytes_async(loop, hrng_endpoint, (uint8_t*)out_value,
+                                         (int32_t)sizeof(*out_value), request, on_complete, user);
+}
+
+static inline int32_t wasmos_sys_random_float_async(
+    wasmos_sys_event_loop_t* loop, int32_t hrng_endpoint, float* out_value,
+    wasmos_sys_random_request_t* request, wasmos_sys_random_complete_fn on_complete, void* user) {
+    if (!request || !out_value) {
+        return WASMOS_SYS_RANDOM_STATUS_INVALID;
+    }
+    {
+        int32_t status = wasmos_sys_random_bytes_async(
+            loop, hrng_endpoint, (uint8_t*)&request->float_word,
+            (int32_t)sizeof(request->float_word), request, on_complete, user);
+        if (status != WASMOS_SYS_RANDOM_STATUS_OK) {
+            return status;
+        }
+    }
+    request->float_out = out_value;
+    return 0;
 }
 
 /* Read the file at `path` via FS_IPC_READ_PATH_REQ into `out_text`.

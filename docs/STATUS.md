@@ -86,7 +86,7 @@ linked feature documents for rationale and rollout plans.
 
 - PCI and ACPI bus services enumerate devices for policy-driven startup. Active
   device coverage includes ATA, FAT, framebuffer, PS/2 keyboard/mouse, serial,
-  RTC, `virtio-serial`, and `virtio-net`.
+  RTC, `virtio-serial`, `virtio-rng`, and `virtio-net`.
 - Capability policy covers I/O ports, IRQs, shared memory, and DMA in both
   runtimes. Driver-owned pinned DMA regions and a transport-neutral `vring`
   core support virtqueues.
@@ -94,6 +94,9 @@ linked feature documents for rationale and rollout plans.
   self-probe through QEMU SLIRP, and supports pull plus notification-hinted RX
   delivery. The current INTx electrical configuration is incomplete, so
   consumers must still poll defensively after notification.
+- `virtio-rng` registers the `hrng` service class and fills caller-owned
+  transfer buffers. WASM and native `libsys` expose callback-based byte-array,
+  raw-`uint32_t`, and `[0, 1)` float requests through their event loops.
 - `net-stack` is a native lwIP scaffold only: it initializes lwIP but has no
   netif glue, driver control plane, or socket API. `ringbuf.h` is ready for the
   planned shared-memory socket data plane.

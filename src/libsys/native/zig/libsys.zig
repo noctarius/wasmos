@@ -5,6 +5,7 @@ pub const IPC_OK: i32 = 0;
 pub const IPC_EMPTY: i32 = 1;
 pub const IPC_ENDPOINT_NONE: u32 = 0xFFFF_FFFF;
 pub const NativeEventLoop = c.wasmos_sys_native_event_loop_t;
+pub const NativeRandomRequest = c.wasmos_sys_native_random_request_t;
 pub const Mutex = extern struct {
     owner_tid: u32,
     recursion_depth: u32,
@@ -79,6 +80,18 @@ pub fn svcLookupEndpointRetry(api: anytype, proc_endpoint: u32, source_endpoint:
     const ep = svcLookupRetry(api, proc_endpoint, source_endpoint, name, request_id_base, attempts);
     if (ep < 0) return null;
     return @bitCast(ep);
+}
+
+pub fn randomBytesAsync(loop: *NativeEventLoop, hrng_endpoint: u32, out: []u8, request: *NativeRandomRequest, on_complete: *const fn (?*anyopaque, i32) callconv(.c) void, user: ?*anyopaque) i32 {
+    return c.wasmos_sys_native_random_bytes_async(loop, hrng_endpoint, out.ptr, @intCast(out.len), request, @ptrCast(on_complete), user);
+}
+
+pub fn randomIntAsync(loop: *NativeEventLoop, hrng_endpoint: u32, out_value: *u32, request: *NativeRandomRequest, on_complete: *const fn (?*anyopaque, i32) callconv(.c) void, user: ?*anyopaque) i32 {
+    return c.wasmos_sys_native_random_int_async(loop, hrng_endpoint, out_value, request, @ptrCast(on_complete), user);
+}
+
+pub fn randomFloatAsync(loop: *NativeEventLoop, hrng_endpoint: u32, out_value: *f32, request: *NativeRandomRequest, on_complete: *const fn (?*anyopaque, i32) callconv(.c) void, user: ?*anyopaque) i32 {
+    return c.wasmos_sys_native_random_float_async(loop, hrng_endpoint, out_value, request, @ptrCast(on_complete), user);
 }
 
 pub fn byteCopy(dst: [*]u8, src: [*]const u8, len: usize) void {

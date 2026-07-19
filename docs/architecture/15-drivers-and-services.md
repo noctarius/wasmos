@@ -231,6 +231,29 @@ IPC.
 | `VIRTIO_SERIAL_IPC_RESP`            | `0x8B0` | Response              |
 | `VIRTIO_SERIAL_IPC_ERROR`           | `0x8BF` | Error                 |
 
+#### `virtio-rng` — VirtIO Hardware Entropy Driver
+
+- **Kind:** WASM driver
+- **PCI match:** vendor `0x1AF4`, device `0x1005` (transitional) or `0x1044`
+  (modern)
+- **Capabilities:** `io.port`, `dma.buffer`, `svc.class`
+- **Registers:** concrete service `virtio-rng`, class `hrng`, instance `0`
+- **Entry bindings:** `proc.endpoint`
+
+The driver owns one request virtqueue and a 4096-byte DMA pool. A client grants
+the driver write access to a transfer buffer and sends `HRNG_IPC_GET_BYTES_REQ`.
+The driver completes the virtqueue request, copies produced entropy into that
+buffer, and replies asynchronously.
+
+| Opcode                   | Value   | Meaning                                      |
+|--------------------------|---------|----------------------------------------------|
+| `HRNG_IPC_GET_BYTES_REQ` | `0xC00` | `arg0=buffer_id`, `arg1=requested byte count` |
+| `HRNG_IPC_RESP`          | `0xC80` | `arg0=bytes written`                         |
+| `HRNG_IPC_ERROR`         | `0xCFF` | `arg0=HRNG_STATUS_*`                         |
+
+`HRNG_MAX_BYTES_PER_REQ` is 4096. `libsys` splits larger byte-array requests
+through its event-loop intent mechanism.
+
 ---
 
 ### Implemented Services
@@ -573,6 +596,8 @@ SUBSYSTEM=="acpi", ATTR{class}=="0x09", ATTR{subclass}=="0x00", RUN+="system/dri
 SUBSYSTEM=="acpi", ATTR{class}=="0x09", ATTR{subclass}=="0x02", RUN+="system/drivers/mouse.wap"
 SUBSYSTEM=="acpi", ATTR{class}=="0x08", ATTR{subclass}=="0x03", RUN+="system/drivers/rtc.wap"
 SUBSYSTEM=="pci", ATTR{class}=="0x07", ATTR{subclass}=="0x00", ATTR{prog_if}=="0x00", ATTR{vendor}=="0x1AF4", RUN+="system/drivers/virtio_serial.wap"
+SUBSYSTEM=="pci", ATTR{vendor}=="0x1AF4", ATTR{device}=="0x1005", RUN+="system/drivers/virtio_rng.wap"
+SUBSYSTEM=="pci", ATTR{vendor}=="0x1AF4", ATTR{device}=="0x1044", RUN+="system/drivers/virtio_rng.wap"
 ```
 
 ---
@@ -596,7 +621,7 @@ kernel init
        │    └─ queues boot-FAT "always-spawn" rules
        ├─ [boot-FAT rules loaded] spawn fs-manager
        │    └─ registers "fs.vfs" endpoint
-       ├─ [boot-FAT rules] spawn framebuffer_pci, serial, keyboard, mouse, rtc, virtio-serial
+       ├─ [boot-FAT rules] spawn framebuffer_pci, serial, keyboard, mouse, rtc, virtio-serial, virtio-rng
        └─ PROC_IPC_NOTIFY_READY (to kernel, once boot_mount_ready + rules_boot_loaded)
 
 kernel init (after device-manager NOTIFY_READY)
@@ -621,6 +646,7 @@ kernel init (after device-manager NOTIFY_READY)
 | `fs.vfs`        | `fs-manager`     | Unified virtual filesystem namespace       |
 | `initfs.rules`  | `fs-init`        | Initfs listing (pre-FAT)                   |
 | `virtio.serial` | `virtio-serial`  | VirtIO serial register access              |
+| `virtio-rng`    | `virtio-rng`     | VirtIO hardware entropy provider           |
 | `font`          | `font-service`   | Font rasterization                         |
 | `gfx`           | `gfx-compositor` | Graphics compositor                        |
 | `vt`            | `vt`             | Virtual terminal multiplexer               |

@@ -179,6 +179,27 @@ The Zig native event loop exposes:
 
 ---
 
+### Hardware Entropy Helpers
+
+`virtio-rng` and future entropy providers register the `hrng` service class.
+`libsys` exposes equivalent non-blocking client helpers in the WASM C header,
+native C ABI, and native Zig wrapper:
+
+- `random_bytes_async` fills an arbitrary byte array in chunks no larger than
+  `HRNG_MAX_BYTES_PER_REQ`.
+- `random_int_async` fills one raw `uint32_t`.
+- `random_float_async` derives one uniformly distributed `float` in `[0, 1)`
+  from 24 entropy bits.
+
+The caller obtains and retains an `hrng` endpoint, supplies a request-state
+object and output storage, and runs the existing event loop until the completion
+callback receives a status after a successful start. Helpers never issue
+synchronous request/reply waits.
+Provider status codes (`INVALID`, `NOT_READY`, `IO_ERROR`, or `TIMEOUT`) are
+preserved; malformed replies use the libsys `PROTOCOL` status.
+
+---
+
 ### Usage Pattern
 
 A typical WASM service main loop:

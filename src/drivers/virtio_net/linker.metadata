@@ -32,6 +32,12 @@ flags = 0
 name = "dma.buffer"
 flags = 80
 
+# Required to publish the adapter-neutral net.ifc class through the
+# descriptor-based service registration path.
+[[capabilities]]
+name = "svc.class"
+flags = 0
+
 [[matches]]
 bus = "pci"
 class = 0x02

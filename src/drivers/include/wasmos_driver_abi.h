@@ -528,6 +528,10 @@ enum {
     NETDRV_IPC_RX_POLL = 0xA02,
     NETDRV_IPC_STATS_GET = 0xA03,
     NETDRV_IPC_RX_FRAME_NOTIFY = 0xA04,
+    /* Pushed to the interface subscriber when carrier changes. arg0=link_up,
+     * arg1=driver status word, arg2=MTU. LINK_GET also establishes/refreshes
+     * the subscriber, so old clients need no separate subscribe request. */
+    NETDRV_IPC_LINK_NOTIFY = 0xA05,
     NETDRV_IPC_RESP = 0xA80,
     NETDRV_IPC_ERROR = 0xAFF
 };
@@ -602,6 +606,21 @@ enum {
 };
 
 #define NET_SOCKET_OPEN_DESCRIPTOR_VERSION 1u
+
+/* Datagram ring records carry endpoint metadata as well as payload. A client
+ * writes destination fields for an unconnected sendto; RX records contain the
+ * source fields supplied by lwIP. Connected sockets may leave destination at
+ * zero and use their connected peer. */
+#define NET_UDP_DATAGRAM_RECORD_VERSION 1u
+#define NET_UDP_DATAGRAM_FLAG_DESTINATION 1u
+
+typedef struct __attribute__((packed)) {
+    uint16_t version;
+    uint16_t flags;
+    uint32_t addr_v4;
+    uint16_t port;
+    uint16_t payload_bytes;
+} net_udp_datagram_record_v1_t;
 
 typedef struct __attribute__((packed)) {
     uint16_t version;

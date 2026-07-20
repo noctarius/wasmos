@@ -123,6 +123,7 @@ static uint32_t g_rx_q_head;
 static uint32_t g_rx_q_tail;
 static uint32_t g_rx_q_count;
 static int32_t g_rx_sub_endpoint = -1; /* subscriber for RX_FRAME_NOTIFY, -1 = none */
+static int32_t g_link_sub_endpoint = -1;
 
 static uint32_t pci_config_read32(uint8_t bus, uint8_t slot, uint8_t function, uint8_t reg) {
     uint32_t address = 0x80000000u | ((uint32_t)bus << 16) | ((uint32_t)slot << 11) |
@@ -721,8 +722,27 @@ static void handle_link_get(int32_t source, int32_t request_id, int32_t buffer_i
         return;
     }
     link_up = ((g_dev.status_word & VIRTIO_NET_S_LINK_UP) != 0u) ? 1 : 0;
+    g_link_sub_endpoint = source;
     (void)wasmos_ipc_send(source, g_endpoint, NETDRV_IPC_RESP, request_id, link_up,
                           (int32_t)g_dev.status_word, (int32_t)VIRTIO_NET_MTU_BASELINE, 0);
+}
+
+static void net_publish_link_change(void) {
+    uint16_t status_word;
+    if (!g_dev.present || !g_dev.ready ||
+        (g_dev.driver_features & VIRTIO_NET_F_STATUS) == 0u) {
+        return;
+    }
+    status_word = io_read16(g_dev.io_base + VIRTIO_NET_CFG_STATUS);
+    if (status_word == g_dev.status_word) {
+        return;
+    }
+    g_dev.status_word = status_word;
+    if (g_link_sub_endpoint >= 0) {
+        (void)wasmos_ipc_send(g_link_sub_endpoint, g_endpoint, NETDRV_IPC_LINK_NOTIFY, 0,
+                              (status_word & VIRTIO_NET_S_LINK_UP) != 0u ? 1 : 0,
+                              (int32_t)status_word, (int32_t)VIRTIO_NET_MTU_BASELINE, 0);
+    }
 }
 
 static void handle_stats_get(int32_t source, int32_t request_id, int32_t buffer_id) {
@@ -824,7 +844,8 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t ignored_arg
         (void)printf("[virtio-net] no device found\n");
     }
 
-    if (wasmos_svc_register(proc_endpoint, g_endpoint, "virtio.net", 1) != 0) {
+    if (wasmos_svc_register_class(proc_endpoint, g_endpoint, "virtio.net", "net.ifc", 0u,
+                                  1) < 0) {
         (void)printf("[virtio-net] register failed\n");
         return -1;
     }
@@ -890,6 +911,7 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t ignored_arg
                 send_error(msg.source, msg.request_id, NET_STATUS_INVALID);
             }
         }
+        net_publish_link_change();
         /* Idle: poll the RX ring + reap TX (INTx re-delivery workaround), then
          * block until the next message or the poll deadline (never busy-spin). */
         net_service_rx();

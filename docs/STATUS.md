@@ -6,6 +6,20 @@ linked feature documents for rationale and rollout plans.
 
 ## Snapshot and Validation
 
+### Networking
+
+- `virtio-net` now publishes `net.ifc` and reports link changes with
+  `NETDRV_IPC_LINK_NOTIFY`. `net-stack` consumes class enumeration/events,
+  retaining name lookup only as compatibility fallback.
+- The current binding lifecycle is explicit: discovered → buffers granted →
+  link queried → netif up. A bounded four-frame TX queue prevents a single
+  driver request from making lwIP output fail immediately.
+- Interface storage is a fixed eight-slot table; each slot owns its stable
+  lwIP `netif` object and provider identity rather than sharing a global netif.
+- UDP ring records now include IPv4 address/port metadata. Bound UDP sockets
+  can provide a destination record for unconnected sendto-style transmission;
+  received records retain their source endpoint.
+
 - Default configuration: wasm3 runtime, ring-3 isolation, single CPU. WARP is
   selected with `-DWASMOS_WASM_RUNTIME_WARP=ON`; SMP is separately gated by
   `WASMOS_SMP` and requires IOAPIC.

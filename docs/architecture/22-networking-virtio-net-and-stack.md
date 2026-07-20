@@ -44,14 +44,15 @@ Out of scope for initial rollout:
   smoke exchange through QEMU SLIRP, and offers pull plus notification-hinted
   RX delivery. PCI INTx polarity/trigger configuration remains incomplete, so
   consumers must poll defensively.
-- `net-stack` is a native lwIP baseline. It discovers `virtio.net`, reads its
+- `net-stack` is a native lwIP baseline. It enumerates and subscribes to the
+  `net.ifc` class (retaining `virtio.net` lookup as a compatibility fallback), reads its
   MAC/link state, and installs `eth0` with static SLIRP addressing
   `10.0.2.15/24` (gateway `10.0.2.2`). Its linkoutput flattens pbuf chains into
   a driver-granted transfer buffer; RX polling/notifications feed
   `ethernet_input`, and its idle loop runs `sys_check_timeouts()`. Socket
   payload callbacks and TCP handshake delivery remain future work.
 - The bootstrap device-manager rule starts `net-stack` at boot. Its service
-  registration, `virtio.net` discovery, `hrng` lookup, and initial link query
+  registration, `net.ifc` discovery/subscription, `hrng` lookup, and initial link query
   are all asynchronous requests resolved by its control endpoint; startup does
   not perform blocking PM or driver request/reply calls.
 - IPC opcode space 0x000–0x9FF is allocated; networking opcodes begin at 0xA00.
@@ -474,11 +475,15 @@ apps ──NET_IPC_* sockets──▶ net-stack ──netdrv IPC──▶ virtio
   driver registers `class="net.ifc"` with an instance index. A second NIC or a
   different driver (e.g. `e1000`) appears as another instance with no net-stack
   change.
+- **Interface storage is bounded and explicit.** The initial broker has eight
+  fixed interface slots. Each slot owns stable lwIP `netif` storage plus the
+  provider endpoint, class instance, carrier state, and binding lifecycle;
+  this avoids a global singleton netif while preserving freestanding bounds.
 - **Two event streams, two sources.** *Existence* events (a `net.ifc` provider
   registered / unregistered / died) come from the kernel registry's class
   subscription. *Domain* events (link up/down, media change) come from each
-  bound driver over its own protocol (`NETDRV_IPC_LINK_NOTIFY`, planned,
-  alongside `NETDRV_IPC_LINK_GET`) — the registry stays networking-ignorant.
+  bound driver over its own protocol (`NETDRV_IPC_LINK_NOTIFY`, alongside
+  `NETDRV_IPC_LINK_GET`) — the registry stays networking-ignorant.
 - **The net-stack owns all policy:** human-facing interface naming (`eth0`),
   address assignment (`NET_IPC_IFADDR_*`), routing, and which interface a flow
   egresses. Drivers expose only a frame in/out path plus link state.

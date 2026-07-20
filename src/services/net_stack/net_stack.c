@@ -41,13 +41,42 @@ static uint32_t g_endpoint = 0u;
 static uint32_t g_control_endpoint = 0u;
 static uint32_t g_proc_endpoint = 0u;
 static uint32_t g_netdrv_endpoint = 0u;
+typedef enum {
+    NET_IFC_DISCOVERED = 0,
+    NET_IFC_BUFFERS_GRANTED,
+    NET_IFC_LINK_QUERIED,
+    NET_IFC_NETIF_UP
+} net_ifc_state_t;
+#define NET_STACK_MAX_INTERFACES 8u
+typedef struct {
+    uint8_t in_use;
+    uint8_t link_up;
+    uint16_t reserved;
+    uint32_t endpoint;
+    uint32_t instance;
+    net_ifc_state_t state;
+    struct netif netif;
+} net_interface_slot_t;
+static net_interface_slot_t g_interfaces[NET_STACK_MAX_INTERFACES];
+static net_interface_slot_t* g_active_ifc = NULL;
+#define g_netif (g_active_ifc->netif)
+static net_ifc_state_t g_ifc_state = NET_IFC_DISCOVERED;
+static uint32_t g_netifc_lookup_buffer_id = 0u;
+static uint8_t* g_netifc_lookup_buffer = NULL;
+static uint32_t g_netifc_subscribe_buffer_id = 0u;
+static uint8_t* g_netifc_subscribe_buffer = NULL;
+static uint8_t g_netifc_lookup_pending = 0u;
+static uint8_t g_netifc_subscribe_pending = 0u;
+static uint8_t g_netifc_subscribed = 0u;
 static uint32_t g_rx_buffer_id = 0u;
 static uint8_t* g_rx_buffer = NULL;
-static uint32_t g_tx_buffer_id = 0u;
-static uint8_t* g_tx_buffer = NULL;
+/* A bounded queue decouples lwIP linkoutput from one driver request. */
+#define NET_STACK_TX_QUEUE_DEPTH 4u
+typedef struct { uint32_t buffer_id; uint8_t* buffer; uint8_t pending; } net_tx_slot_t;
+static net_tx_slot_t g_tx_slots[NET_STACK_TX_QUEUE_DEPTH];
 static uint8_t g_rx_pending = 0u;
-static uint8_t g_tx_pending = 0u;
 static uint8_t g_netif_ready = 0u;
+static uint8_t g_netif_installed = 0u;
 static uint8_t g_registered = 0u;
 static uint8_t g_register_pending = 0u;
 static uint8_t g_netdrv_lookup_pending = 0u;
@@ -59,7 +88,6 @@ static uint8_t* g_hrng_lookup_buffer = NULL;
 static wasmos_sys_native_random_request_t g_hrng_request;
 static uint32_t g_hrng_word = 0u;
 static wasmos_sys_native_event_loop_t g_control_loop;
-static struct netif g_netif;
 
 #define ND_IPC_OK 0
 #define ND_IPC_EMPTY 1
@@ -76,12 +104,33 @@ static err_t net_stack_linkoutput(struct netif* netif, struct pbuf* p);
 static void net_stack_start_rx_poll(void);
 static void net_stack_begin_registration(void);
 static void net_stack_try_bind_virtio(void);
+static void net_stack_try_discover_interfaces(void);
+static void net_stack_unbind_interface(uint32_t endpoint);
 static void net_stack_try_seed_random(void);
 static void net_stack_udp_recv(void* arg, struct udp_pcb* pcb, struct pbuf* p,
                                const ip_addr_t* addr, u16_t port);
 
 wasmos_driver_api_t* net_stack_api(void) {
     return g_api;
+}
+
+static net_interface_slot_t* net_stack_interface_slot(uint32_t endpoint, uint32_t instance,
+                                                       uint8_t create) {
+    for (uint32_t i = 0u; i < NET_STACK_MAX_INTERFACES; ++i) {
+        if (g_interfaces[i].in_use && g_interfaces[i].endpoint == endpoint) return &g_interfaces[i];
+    }
+    if (!create) return NULL;
+    for (uint32_t i = 0u; i < NET_STACK_MAX_INTERFACES; ++i) {
+        if (!g_interfaces[i].in_use) {
+            __builtin_memset(&g_interfaces[i], 0, sizeof(g_interfaces[i]));
+            g_interfaces[i].in_use = 1u;
+            g_interfaces[i].endpoint = endpoint;
+            g_interfaces[i].instance = instance;
+            g_interfaces[i].state = NET_IFC_DISCOVERED;
+            return &g_interfaces[i];
+        }
+    }
+    return NULL; /* fixed eight-slot policy: ignore excess providers */
 }
 
 /* Minimal string length for the raw diag path below. */
@@ -155,13 +204,12 @@ static void net_stack_notify_rx(net_socket_t* socket) {
 static void net_stack_udp_recv(void* arg, struct udp_pcb* pcb, struct pbuf* p,
                                const ip_addr_t* addr, u16_t port) {
     net_socket_t* socket = (net_socket_t*)arg;
-    uint8_t datagram[NET_STACK_UDP_DATAGRAM_BYTES];
+    uint8_t datagram[sizeof(net_udp_datagram_record_v1_t) + NET_STACK_UDP_DATAGRAM_BYTES];
+    net_udp_datagram_record_v1_t* record = (net_udp_datagram_record_v1_t*)datagram;
     u16_t copied;
     u16_t len;
     (void)pcb;
-    (void)addr;
-    (void)port;
-    if (socket == NULL || p == NULL || p->tot_len > sizeof(datagram)) {
+    if (socket == NULL || p == NULL || p->tot_len > NET_STACK_UDP_DATAGRAM_BYTES) {
         if (socket != NULL) {
             wasmos_ringbuf_set_flags(&socket->rx_ring, WASMOS_RINGBUF_FLAG_OVERFLOW_DROPPED);
         }
@@ -171,10 +219,15 @@ static void net_stack_udp_recv(void* arg, struct udp_pcb* pcb, struct pbuf* p,
         return;
     }
     len = p->tot_len;
-    copied = pbuf_copy_partial(p, datagram, len, 0u);
+    record->version = NET_UDP_DATAGRAM_RECORD_VERSION;
+    record->flags = 0u;
+    record->addr_v4 = addr != NULL ? ip4_addr_get_u32(ip_2_ip4(addr)) : 0u;
+    record->port = port;
+    record->payload_bytes = len;
+    copied = pbuf_copy_partial(p, datagram + sizeof(*record), len, 0u);
     pbuf_free(p);
     if (copied != len ||
-        wasmos_ringbuf_write_record(&socket->rx_ring, datagram, copied) < 0) {
+        wasmos_ringbuf_write_record(&socket->rx_ring, datagram, copied + sizeof(*record)) < 0) {
         wasmos_ringbuf_set_flags(&socket->rx_ring, WASMOS_RINGBUF_FLAG_OVERFLOW_DROPPED);
         return;
     }
@@ -182,12 +235,12 @@ static void net_stack_udp_recv(void* arg, struct udp_pcb* pcb, struct pbuf* p,
 }
 
 static void net_stack_drain_udp_tx(net_socket_t* socket) {
-    uint8_t datagram[NET_STACK_UDP_DATAGRAM_BYTES];
+    uint8_t datagram[sizeof(net_udp_datagram_record_v1_t) + NET_STACK_UDP_DATAGRAM_BYTES];
     uint32_t len;
     int32_t got;
     ip_addr_t address;
     if (socket == NULL || socket->type != NET_SOCKET_DGRAM || socket->pcb == NULL ||
-        socket->state != NET_SOCKET_CONNECTED) {
+        (socket->state != NET_SOCKET_BOUND && socket->state != NET_SOCKET_CONNECTED)) {
         return;
     }
     for (;;) {
@@ -202,16 +255,32 @@ static void net_stack_drain_udp_tx(net_socket_t* socket) {
             wasmos_ringbuf_set_flags(&socket->tx_ring, WASMOS_RINGBUF_FLAG_OVERFLOW_DROPPED);
             continue;
         }
-        struct pbuf* p = pbuf_alloc(PBUF_TRANSPORT, (u16_t)got, PBUF_RAM);
-        if (p == NULL || pbuf_take(p, datagram, (u16_t)got) != ERR_OK) {
+        net_udp_datagram_record_v1_t* record = (net_udp_datagram_record_v1_t*)datagram;
+        uint32_t payload_bytes;
+        uint32_t dest_addr;
+        uint16_t dest_port;
+        if ((uint32_t)got < sizeof(*record) || record->version != NET_UDP_DATAGRAM_RECORD_VERSION ||
+            record->payload_bytes != (uint16_t)((uint32_t)got - sizeof(*record))) {
+            wasmos_ringbuf_set_flags(&socket->tx_ring, WASMOS_RINGBUF_FLAG_OVERFLOW_DROPPED);
+            continue;
+        }
+        payload_bytes = record->payload_bytes;
+        dest_addr = (record->flags & NET_UDP_DATAGRAM_FLAG_DESTINATION) ? record->addr_v4 : socket->remote_addr_v4;
+        dest_port = (record->flags & NET_UDP_DATAGRAM_FLAG_DESTINATION) ? record->port : socket->remote_port;
+        if (dest_addr == 0u || dest_port == 0u) {
+            wasmos_ringbuf_set_flags(&socket->tx_ring, WASMOS_RINGBUF_FLAG_OVERFLOW_DROPPED);
+            continue;
+        }
+        struct pbuf* p = pbuf_alloc(PBUF_TRANSPORT, (u16_t)payload_bytes, PBUF_RAM);
+        if (p == NULL || pbuf_take(p, datagram + sizeof(*record), (u16_t)payload_bytes) != ERR_OK) {
             if (p != NULL) {
                 pbuf_free(p);
             }
             wasmos_ringbuf_set_flags(&socket->tx_ring, WASMOS_RINGBUF_FLAG_OVERFLOW_DROPPED);
             return;
         }
-        ip_addr_set_ip4_u32(&address, socket->remote_addr_v4);
-        if (udp_sendto((struct udp_pcb*)socket->pcb, p, &address, socket->remote_port) != ERR_OK) {
+        ip_addr_set_ip4_u32(&address, dest_addr);
+        if (udp_sendto((struct udp_pcb*)socket->pcb, p, &address, dest_port) != ERR_OK) {
             wasmos_ringbuf_set_flags(&socket->tx_ring, WASMOS_RINGBUF_FLAG_OVERFLOW_DROPPED);
         }
         pbuf_free(p);
@@ -225,7 +294,7 @@ static err_t net_stack_netif_init(struct netif* netif) {
     netif->linkoutput = net_stack_linkoutput;
     netif->mtu = 1500u;
     netif->hwaddr_len = ETH_HWADDR_LEN;
-    netif->flags = NETIF_FLAG_BROADCAST | NETIF_FLAG_ETHARP | NETIF_FLAG_LINK_UP;
+    netif->flags = NETIF_FLAG_BROADCAST | NETIF_FLAG_ETHARP;
     return ERR_OK;
 }
 
@@ -233,32 +302,37 @@ static err_t net_stack_linkoutput(struct netif* netif, struct pbuf* p) {
     nd_ipc_message_t request;
     uint16_t copied = 0u;
     uint32_t request_id;
+    net_tx_slot_t* slot = NULL;
     struct pbuf* q;
     (void)netif;
-    if (p == NULL || g_tx_buffer == NULL || g_tx_pending || p->tot_len > NET_STACK_FRAME_BYTES) {
+    if (p == NULL || p->tot_len > NET_STACK_FRAME_BYTES || g_netdrv_endpoint == 0u) {
         return ERR_BUF;
     }
+    for (uint32_t i = 0u; i < NET_STACK_TX_QUEUE_DEPTH; ++i) {
+        if (!g_tx_slots[i].pending && g_tx_slots[i].buffer != NULL) { slot = &g_tx_slots[i]; break; }
+    }
+    if (slot == NULL) return ERR_MEM;
     for (q = p; q != NULL; q = q->next) {
         uint8_t* src = (uint8_t*)q->payload;
         uint16_t i;
         for (i = 0u; i < q->len; ++i) {
-            g_tx_buffer[copied + i] = src[i];
+            slot->buffer[copied + i] = src[i];
         }
         copied = (uint16_t)(copied + q->len);
     }
-    request_id = NET_STACK_TX_REQUEST_BASE + (uint32_t)sys_now();
+    request_id = NET_STACK_TX_REQUEST_BASE + (uint32_t)(slot - g_tx_slots);
     request.type = NETDRV_IPC_TX_FRAME;
     request.source = g_endpoint;
     request.destination = g_netdrv_endpoint;
     request.request_id = request_id;
     request.arg0 = copied;
-    request.arg1 = g_tx_buffer_id;
+    request.arg1 = slot->buffer_id;
     request.arg2 = 0u;
     request.arg3 = 0u;
     if (g_api->ipc_send(g_api->sched_current_pid(), g_netdrv_endpoint, &request) != 0) {
         return ERR_IF;
     }
-    g_tx_pending = 1u;
+    slot->pending = 1u;
     return ERR_OK;
 }
 
@@ -301,7 +375,7 @@ static void net_stack_start_rx_poll(void) {
     }
 }
 
-static void net_stack_finish_bind(void) {
+static void net_stack_finish_bind(uint8_t link_up) {
     ip4_addr_t ipaddr;
     ip4_addr_t netmask;
     ip4_addr_t gateway;
@@ -309,17 +383,26 @@ static void net_stack_finish_bind(void) {
     IP4_ADDR(&ipaddr, 10, 0, 2, 15);
     IP4_ADDR(&netmask, 255, 255, 255, 0);
     IP4_ADDR(&gateway, 10, 0, 2, 2);
-    if (netif_add(&g_netif, &ipaddr, &netmask, &gateway, NULL, net_stack_netif_init,
-                  ethernet_input) == NULL) {
-        return;
+    if (!g_netif_installed) {
+        if (netif_add(&g_netif, &ipaddr, &netmask, &gateway, NULL, net_stack_netif_init,
+                      ethernet_input) == NULL) {
+            return;
+        }
+        for (uint32_t i = 0u; i < ETH_HWADDR_LEN; ++i) {
+            g_netif.hwaddr[i] = g_rx_buffer[i];
+        }
+        netif_set_default(&g_netif);
+        g_netif_installed = 1u;
     }
-    for (uint32_t i = 0u; i < ETH_HWADDR_LEN; ++i) {
-        g_netif.hwaddr[i] = g_rx_buffer[i];
-    }
-    netif_set_default(&g_netif);
     netif_set_up(&g_netif);
-    etharp_request(&g_netif, &gateway);
+    if (link_up) netif_set_link_up(&g_netif); else netif_set_link_down(&g_netif);
+    if (link_up) etharp_request(&g_netif, &gateway);
     g_netif_ready = 1u;
+    g_ifc_state = NET_IFC_NETIF_UP;
+    if (g_active_ifc != NULL) {
+        g_active_ifc->state = NET_IFC_NETIF_UP;
+        g_active_ifc->link_up = link_up;
+    }
     if (g_api->console_write != NULL) {
         static const char msg[] = "[net-stack] eth0 10.0.2.15/24 ready\n";
         g_api->console_write(msg, (int)(sizeof(msg) - 1));
@@ -331,7 +414,81 @@ static void net_stack_lookup_reply(void* user, const nd_ipc_message_t* reply) {
     g_netdrv_lookup_pending = 0u;
     if (reply != NULL && reply->type == SVC_IPC_LOOKUP_RESP && reply->arg0 != 0xFFFFFFFFu) {
         g_netdrv_endpoint = reply->arg0;
+        if (g_active_ifc == NULL) g_active_ifc = net_stack_interface_slot(reply->arg0, 0u, 1u);
     }
+}
+
+static void net_stack_class_lookup_reply(void* user, const nd_ipc_message_t* reply) {
+    svc_class_entry_t entry;
+    (void)user;
+    g_netifc_lookup_pending = 0u;
+    if (reply != NULL && reply->type == SVC_IPC_LOOKUP_CLASS_RESP && reply->arg0 != 0u &&
+        g_netifc_lookup_buffer != NULL) {
+        __builtin_memcpy(&entry, g_netifc_lookup_buffer, sizeof(entry));
+        if (entry.endpoint != 0u) {
+            net_interface_slot_t* slot = net_stack_interface_slot(entry.endpoint, entry.instance, 1u);
+            if (g_active_ifc == NULL) g_active_ifc = slot;
+            if (g_active_ifc == slot) g_netdrv_endpoint = entry.endpoint;
+        }
+    }
+    if (g_netifc_lookup_buffer_id != 0u) (void)g_api->xfer_buffer_release(g_netifc_lookup_buffer_id);
+    g_netifc_lookup_buffer_id = 0u;
+    g_netifc_lookup_buffer = NULL;
+}
+
+static void net_stack_subscribe_reply(void* user, const nd_ipc_message_t* reply) {
+    (void)user;
+    g_netifc_subscribe_pending = 0u;
+    if (reply != NULL && reply->type == SVC_IPC_SUBSCRIBE_CLASS_RESP) g_netifc_subscribed = 1u;
+    if (g_netifc_subscribe_buffer_id != 0u) (void)g_api->xfer_buffer_release(g_netifc_subscribe_buffer_id);
+    g_netifc_subscribe_buffer_id = 0u;
+    g_netifc_subscribe_buffer = NULL;
+    (void)reply;
+}
+
+static void net_stack_try_discover_interfaces(void) {
+    if (!g_netifc_subscribed && !g_netifc_subscribe_pending && g_netifc_subscribe_buffer_id == 0u) {
+        g_netifc_subscribe_buffer = (uint8_t*)g_api->xfer_buffer_acquire(
+            ND_BUFFER_KIND_XFER, WASMOS_SVC_CLASS_MAX, &g_netifc_subscribe_buffer_id);
+        if (g_netifc_subscribe_buffer != NULL) {
+            __builtin_memcpy(g_netifc_subscribe_buffer, "net.ifc", 8u);
+            if (wasmos_sys_native_intent_send(&g_control_loop, g_proc_endpoint, g_control_endpoint,
+                                              SVC_IPC_SUBSCRIBE_CLASS_REQ, g_endpoint,
+                                              g_netifc_subscribe_buffer_id, 0u, 0u,
+                                              net_stack_subscribe_reply, NULL, NULL) == 0)
+                g_netifc_subscribe_pending = 1u;
+        }
+    }
+    if (g_netdrv_endpoint != 0u || g_netifc_lookup_pending || g_netifc_lookup_buffer_id != 0u) return;
+    g_netifc_lookup_buffer = (uint8_t*)g_api->xfer_buffer_acquire(
+        ND_BUFFER_KIND_XFER, sizeof(svc_class_entry_t), &g_netifc_lookup_buffer_id);
+    if (g_netifc_lookup_buffer == NULL) return;
+    __builtin_memcpy(g_netifc_lookup_buffer, "net.ifc", 8u);
+    if (wasmos_sys_native_intent_send(&g_control_loop, g_proc_endpoint, g_control_endpoint,
+                                      SVC_IPC_LOOKUP_CLASS_REQ, g_netifc_lookup_buffer_id, 1u, 0u,
+                                      0u, net_stack_class_lookup_reply, NULL, NULL) == 0)
+        g_netifc_lookup_pending = 1u;
+}
+
+static void net_stack_unbind_interface(uint32_t endpoint) {
+    if (endpoint != g_netdrv_endpoint) return;
+    if (g_netif_ready) netif_set_down(&g_netif);
+    g_netif_ready = 0u;
+    g_netdrv_endpoint = 0u;
+    g_link_get_pending = 0u;
+    g_rx_pending = 0u;
+    if (g_rx_buffer_id != 0u) (void)g_api->xfer_buffer_release(g_rx_buffer_id);
+    g_rx_buffer_id = 0u;
+    g_rx_buffer = NULL;
+    for (uint32_t i = 0u; i < NET_STACK_TX_QUEUE_DEPTH; ++i) {
+        if (g_tx_slots[i].buffer_id != 0u) (void)g_api->xfer_buffer_release(g_tx_slots[i].buffer_id);
+        g_tx_slots[i].buffer_id = 0u;
+        g_tx_slots[i].buffer = NULL;
+        g_tx_slots[i].pending = 0u;
+    }
+    g_ifc_state = NET_IFC_DISCOVERED;
+    if (g_active_ifc != NULL) __builtin_memset(g_active_ifc, 0, sizeof(*g_active_ifc));
+    g_active_ifc = NULL;
 }
 
 static void net_stack_register_reply(void* user, const nd_ipc_message_t* reply) {
@@ -438,15 +595,22 @@ static void net_stack_try_bind_virtio(void) {
     if (g_rx_buffer == NULL) {
         g_rx_buffer = (uint8_t*)g_api->xfer_buffer_acquire(ND_BUFFER_KIND_XFER,
                                                              NET_STACK_FRAME_BYTES, &g_rx_buffer_id);
-        g_tx_buffer = (uint8_t*)g_api->xfer_buffer_acquire(ND_BUFFER_KIND_XFER,
-                                                             NET_STACK_FRAME_BYTES, &g_tx_buffer_id);
-        if (g_rx_buffer == NULL || g_tx_buffer == NULL ||
+        if (g_rx_buffer == NULL ||
             g_api->xfer_buffer_borrow(g_netdrv_endpoint, g_rx_buffer_id,
-                                      ND_BUFFER_BORROW_READ | ND_BUFFER_BORROW_WRITE) < 0 ||
-            g_api->xfer_buffer_borrow(g_netdrv_endpoint, g_tx_buffer_id,
                                       ND_BUFFER_BORROW_READ | ND_BUFFER_BORROW_WRITE) < 0) {
             return;
         }
+        for (uint32_t i = 0u; i < NET_STACK_TX_QUEUE_DEPTH; ++i) {
+            g_tx_slots[i].buffer = (uint8_t*)g_api->xfer_buffer_acquire(
+                ND_BUFFER_KIND_XFER, NET_STACK_FRAME_BYTES, &g_tx_slots[i].buffer_id);
+            if (g_tx_slots[i].buffer == NULL ||
+                g_api->xfer_buffer_borrow(g_netdrv_endpoint, g_tx_slots[i].buffer_id,
+                                          ND_BUFFER_BORROW_READ | ND_BUFFER_BORROW_WRITE) < 0) {
+                return;
+            }
+        }
+        g_ifc_state = NET_IFC_BUFFERS_GRANTED;
+        if (g_active_ifc != NULL) g_active_ifc->state = g_ifc_state;
     }
     request.type = NETDRV_IPC_LINK_GET;
     request.source = g_endpoint;
@@ -458,6 +622,8 @@ static void net_stack_try_bind_virtio(void) {
     request.arg3 = 0u;
     if (g_api->ipc_send(g_api->sched_current_pid(), g_netdrv_endpoint, &request) == 0) {
         g_link_get_pending = 1u;
+        g_ifc_state = NET_IFC_LINK_QUERIED;
+        if (g_active_ifc != NULL) g_active_ifc->state = g_ifc_state;
     }
 }
 
@@ -595,8 +761,8 @@ static void net_stack_dispatch(const nd_ipc_message_t* request) {
     if (request->source == g_netdrv_endpoint) {
         if (request->request_id == NET_STACK_LINK_GET_REQUEST_ID) {
             g_link_get_pending = 0u;
-            if (request->type == NETDRV_IPC_RESP && request->arg0 != 0u) {
-                net_stack_finish_bind();
+            if (request->type == NETDRV_IPC_RESP) {
+                net_stack_finish_bind(request->arg0 != 0u);
             }
             return;
         }
@@ -612,9 +778,30 @@ static void net_stack_dispatch(const nd_ipc_message_t* request) {
             return;
         }
         if (request->request_id >= NET_STACK_TX_REQUEST_BASE) {
-            g_tx_pending = 0u;
+            uint32_t slot = request->request_id - NET_STACK_TX_REQUEST_BASE;
+            if (slot < NET_STACK_TX_QUEUE_DEPTH) g_tx_slots[slot].pending = 0u;
             return;
         }
+        if (request->type == NETDRV_IPC_LINK_NOTIFY) {
+            if (g_netif_ready) {
+                if (request->arg0 != 0u) netif_set_link_up(&g_netif); else netif_set_link_down(&g_netif);
+            }
+            if (g_active_ifc != NULL) g_active_ifc->link_up = request->arg0 != 0u;
+            return;
+        }
+    }
+
+    if (request->type == SVC_IPC_CLASS_EVENT) {
+        if (request->arg0 == SVC_CLASS_EVENT_ADD) {
+            net_interface_slot_t* slot = net_stack_interface_slot(request->arg2, request->arg1, 1u);
+            if (g_active_ifc == NULL && slot != NULL) {
+                g_active_ifc = slot;
+                g_netdrv_endpoint = request->arg2;
+            }
+        } else if (request->arg0 == SVC_CLASS_EVENT_REMOVE) {
+            net_stack_unbind_interface(request->arg2);
+        }
+        return;
     }
 
     switch (request->type) {
@@ -775,6 +962,9 @@ int initialize(wasmos_driver_api_t* driver_api, int module_count, int arg2, int 
         }
         net_stack_begin_registration();
         net_stack_try_seed_random();
+        net_stack_try_discover_interfaces();
+        /* Keep the old name lookup below as a compatibility fallback for
+         * drivers that predate the net.ifc class registration. */
         net_stack_try_bind_virtio();
         sys_check_timeouts();
         if (g_netif_ready) {

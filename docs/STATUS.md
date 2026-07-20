@@ -54,6 +54,10 @@ linked feature documents for rationale and rollout plans.
 - wasm3 is the default interpreter. WARP is the optional JIT/AOT backend and
   follows the ring-3 execution model; internal modules can fall back to JIT if
   an embedded AOT payload cannot load.
+- WARP compiler allocations no longer consume the fixed global kernel slab:
+  its small-allocation pool grows from physical pages on demand and releases a
+  completely unused page. This keeps JIT compilation independent of service
+  metadata and transfer-buffer queue depth.
 - Both runtimes use reserve-and-commit linear memory and the same user virtual
   address model. Linear-memory metadata is rebound to live backing before
   pointer-validating hostcalls; memory is reclaimed correctly on process reap.

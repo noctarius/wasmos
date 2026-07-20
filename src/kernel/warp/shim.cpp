@@ -25,6 +25,7 @@ extern "C" {
 #include "hashmap.h"
 #include "linmem_slots.h"
 #include "arch/x86_64/smp.h"
+#include "sync/spinlock.h"
 }
 
 #ifdef WASMOS_WASM_RUNTIME_WARP
@@ -91,8 +92,8 @@ void operator delete[](void* p, size_t) noexcept {
 
 // ---------------------------------------------------------------------------
 // 2. Kernel allocator — two-tier: slab for small, page allocator for large.
-//    AllocHeader.is_pages == 0: slab-backed, size = byte count.
 //    AllocHeader.is_pages == 1: page-backed, size = page count.
+//    AllocHeader.is_pages == 3: dynamically grown WARP compiler small pool.
 //    This allows WARP to allocate the large blocks it needs for compiler
 //    scratch, JIT output code, and WASM linear memory.
 // ---------------------------------------------------------------------------
@@ -103,7 +104,7 @@ struct AllocHeader {
     size_t size;        /* requested byte count */
     size_t capacity;    /* usable byte capacity */
     size_t pages;       /* page count for page-backed allocations */
-    uint32_t is_pages;  /* 0 = slab, 1 = contiguous page-alloc, 2 = linmem VA slot */
+    uint32_t is_pages;  /* 1 = contiguous page-alloc, 2 = linmem VA slot, 3 = WARP small pool */
     uint32_t owner_pid; /* is_pages==2 only: owning pid, for slot free/dispatch */
 };
 
@@ -111,6 +112,27 @@ static constexpr size_t kLargeThreshold = 112; /* slab max usable */
 static constexpr uint64_t kHalfBase = 0xFFFFFFFF80000000ULL;
 static constexpr uint64_t kPhysLimit = 512ULL * 1024ULL * 1024ULL;
 static constexpr size_t kPageSize = 4096UL;
+static constexpr size_t kWarpSmallBlockSize = 256UL;
+
+/* WARP's compiler makes many tiny, independently freed allocations.  They
+ * must not consume the kernel-wide fixed slab classes: service metadata also
+ * uses those classes, and the net TX queue made the former coupling visible.
+ * These blocks grow one physical page at a time and return an empty page to
+ * the PFA, so compiler capacity follows available physical memory. */
+struct WarpSmallPage {
+    WarpSmallPage* next;
+    uint64_t phys;
+    uint32_t free_blocks;
+};
+struct WarpSmallFreeBlock {
+    WarpSmallFreeBlock* next;
+};
+static_assert(sizeof(WarpSmallPage) <= kWarpSmallBlockSize, "small-pool metadata fits first block");
+static constexpr uint32_t kWarpSmallBlocksPerPage =
+    static_cast<uint32_t>(kPageSize / kWarpSmallBlockSize) - 1U;
+static WarpSmallPage* g_warp_small_pages = nullptr;
+static WarpSmallFreeBlock* g_warp_small_free = nullptr;
+static ksync_spinlock_t g_warp_small_lock;
 
 static inline AllocHeader* header_of(void* p) {
     return reinterpret_cast<AllocHeader*>(static_cast<uint8_t*>(p) - sizeof(AllocHeader));
@@ -136,28 +158,100 @@ static int warp_map_page_alias(uint64_t phys, uint64_t pages) {
     return 0;
 }
 
+static WarpSmallPage* warp_small_page_for(void* raw) {
+    return reinterpret_cast<WarpSmallPage*>(reinterpret_cast<uintptr_t>(raw) & ~(kPageSize - 1U));
+}
+
+static void* warp_small_alloc(void) {
+    ksync_spinlock_lock(&g_warp_small_lock);
+    if (g_warp_small_free == nullptr) {
+        uint64_t phys = pfa_alloc_pages_above(1U, WASMOS_SHMEM_PHYS_LIMIT);
+        if (!phys || warp_map_page_alias(phys, 1U) != 0) {
+            if (phys) {
+                pfa_free_pages(phys, 1U);
+            }
+            ksync_spinlock_unlock(&g_warp_small_lock);
+            return nullptr;
+        }
+        auto* page = reinterpret_cast<WarpSmallPage*>(phys | kHalfBase);
+        page->next = g_warp_small_pages;
+        page->phys = phys;
+        page->free_blocks = kWarpSmallBlocksPerPage;
+        g_warp_small_pages = page;
+        for (uint32_t i = 1U; i <= kWarpSmallBlocksPerPage; ++i) {
+            auto* block = reinterpret_cast<WarpSmallFreeBlock*>(
+                reinterpret_cast<uint8_t*>(page) + i * kWarpSmallBlockSize);
+            block->next = g_warp_small_free;
+            g_warp_small_free = block;
+        }
+    }
+    WarpSmallFreeBlock* block = g_warp_small_free;
+    g_warp_small_free = block->next;
+    WarpSmallPage* page = warp_small_page_for(block);
+    --page->free_blocks;
+    ksync_spinlock_unlock(&g_warp_small_lock);
+    return block;
+}
+
+static void warp_small_free(void* raw) {
+    WarpSmallPage* page = warp_small_page_for(raw);
+    ksync_spinlock_lock(&g_warp_small_lock);
+    auto* block = static_cast<WarpSmallFreeBlock*>(raw);
+    block->next = g_warp_small_free;
+    g_warp_small_free = block;
+    ++page->free_blocks;
+    if (page->free_blocks != kWarpSmallBlocksPerPage) {
+        ksync_spinlock_unlock(&g_warp_small_lock);
+        return;
+    }
+
+    WarpSmallFreeBlock** link = &g_warp_small_free;
+    while (*link != nullptr) {
+        uintptr_t addr = reinterpret_cast<uintptr_t>(*link);
+        if ((addr & ~(kPageSize - 1U)) == reinterpret_cast<uintptr_t>(page)) {
+            *link = (*link)->next;
+        } else {
+            link = &(*link)->next;
+        }
+    }
+    WarpSmallPage** page_link = &g_warp_small_pages;
+    while (*page_link != nullptr && *page_link != page) {
+        page_link = &(*page_link)->next;
+    }
+    if (*page_link == page) {
+        *page_link = page->next;
+        pfa_free_pages(page->phys, 1U);
+    }
+    ksync_spinlock_unlock(&g_warp_small_lock);
+}
+
 } // namespace
 
 static void* warp_kmalloc(size_t const size) {
     size_t total = sizeof(AllocHeader) + size;
 
     if (total <= kLargeThreshold) {
-        /* Small path: slab allocator */
-        void* raw = kalloc_small(total);
-        if (!raw)
+        /* Small path: WARP-private, dynamically backed pool. */
+        void* raw = warp_small_alloc();
+        if (!raw) {
+            klog_printf("[warp-mem] small pool alloc failed size=%llu total=%llu\n",
+                        (unsigned long long)size, (unsigned long long)total);
             return nullptr;
+        }
         auto* hdr = static_cast<AllocHeader*>(raw);
         hdr->size = size;
-        hdr->capacity = size;
+        hdr->capacity = kWarpSmallBlockSize - sizeof(AllocHeader);
         hdr->pages = 0;
-        hdr->is_pages = 0;
+        hdr->is_pages = 3;
+        hdr->owner_pid = 0;
         return hdr + 1;
     } else {
         /* Large path: physical page allocator */
         uint64_t pages = (static_cast<uint64_t>(total) + kPageSize - 1) / kPageSize;
         uint64_t phys = pfa_alloc_pages_above(pages, WASMOS_SHMEM_PHYS_LIMIT);
-        if (!phys)
+        if (!phys) {
             return nullptr;
+        }
         if (warp_map_page_alias(phys, pages) != 0) {
             pfa_free_pages(phys, pages);
             return nullptr;
@@ -198,13 +292,13 @@ static void* warp_krealloc(void* const ptr, size_t const size) {
 
     if (!size) {
         /* Free only (contiguous page block or slab). */
-        if (old_hdr->is_pages) {
+        if (old_hdr->is_pages == 3) {
+            warp_small_free(old_hdr);
+        } else if (old_hdr->is_pages == 1) {
 #ifdef WASMOS_WASM_RUNTIME_WARP
             warp_mem_kmalloc_unregister(phys_of_pages_ptr(old_hdr));
 #endif
             pfa_free_pages(phys_of_pages_ptr(old_hdr), old_hdr->pages);
-        } else {
-            kfree_small(old_hdr);
         }
         return nullptr;
     }
@@ -240,19 +334,20 @@ static void* warp_krealloc(void* const ptr, size_t const size) {
     }
 
     void* n = warp_kmalloc(target);
-    if (!n)
+    if (!n) {
         return nullptr;
+    }
     header_of(n)->size = size;
     size_t copy = old_bytes < size ? old_bytes : size;
     __builtin_memcpy(n, ptr, copy);
 
-    if (old_hdr->is_pages) {
+    if (old_hdr->is_pages == 1) {
 #ifdef WASMOS_WASM_RUNTIME_WARP
         warp_mem_kmalloc_unregister(phys_of_pages_ptr(old_hdr));
 #endif
         pfa_free_pages(phys_of_pages_ptr(old_hdr), old_hdr->pages);
-    } else {
-        kfree_small(old_hdr);
+    } else if (old_hdr->is_pages == 3) {
+        warp_small_free(old_hdr);
     }
     return n;
 }
@@ -267,13 +362,13 @@ static void warp_kfree(void* const ptr) {
         warp_linmem_slot_free_pid(hdr->owner_pid);
         return;
     }
-    if (hdr->is_pages) {
+    if (hdr->is_pages == 3) {
+        warp_small_free(hdr);
+    } else if (hdr->is_pages == 1) {
 #ifdef WASMOS_WASM_RUNTIME_WARP
         warp_mem_kmalloc_unregister(phys_of_pages_ptr(hdr));
 #endif
         pfa_free_pages(phys_of_pages_ptr(hdr), hdr->pages);
-    } else {
-        kfree_small(hdr);
     }
 }
 

@@ -1125,7 +1125,6 @@ add_custom_command(
           ${WASM_SHMEM_TARGET_APP}
           ${WASM_NET_SMOKE_APP}
           ${WASM_NET_UDP_ECHO_APP}
-          ${WASM_IP_APP}
           ${WASM_ATA_APP}
           ${WASM_CHARDEV_SERVER_APP}
           ${WASM_FAT_APP}

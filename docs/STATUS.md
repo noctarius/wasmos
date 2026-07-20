@@ -31,6 +31,19 @@ linked feature documents for rationale and rollout plans.
 - UDP ring records now include IPv4 address/port metadata. Bound UDP sockets
   can provide a destination record for unconnected sendto-style transmission;
   received records retain their source endpoint.
+- Interface addressing is declarative: net-stack reads
+  `/boot/system/net/interfaces` (a minimal `/etc/network/interfaces` subset,
+  `iface <name> inet <dhcp|static>`) when the interface comes up. DHCP is
+  enabled (`LWIP_DHCP`); static applies `netif_set_addr`, dhcp calls
+  `dhcp_start`. Policy is strict: a missing/unreadable file or a DHCP no-lease
+  leaves the interface link-up but unconfigured (bounded retry absorbs the
+  storage-mount delay). The `... ready` banner and gateway ARP fire from the
+  netif status callback once an address is actually assigned.
+- `net-stack` registers its PUBLIC endpoint as `net.stack`; client
+  socket/ifaddr requests are dispatched there (registering the control endpoint
+  had silently dropped them via the async event loop).
+- `NET_IPC_IFADDR_ADD/DEL/LIST` are implemented; the `/system/utils/ip` tool
+  (`ip addr show|add|del`) inspects and edits interface addressing at runtime.
 
 - Default configuration: wasm3 runtime, ring-3 isolation, single CPU. WARP is
   selected with `-DWASMOS_WASM_RUNTIME_WARP=ON`; SMP is separately gated by

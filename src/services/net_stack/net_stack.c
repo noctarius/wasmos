@@ -844,11 +844,24 @@ static void net_stack_dispatch(const nd_ipc_message_t* request) {
             return;
         }
         if (request->type == NETDRV_IPC_LINK_NOTIFY) {
+            /* A link change updates the existing lwIP netif in place; it must
+             * never re-add, re-register, or rebind the interface. The console
+             * line reflects the netif transition and gives runtime tests an
+             * observable signal without a source-text assertion. */
             if (g_netif_ready) {
-                if (request->arg0 != 0u)
+                if (request->arg0 != 0u) {
                     netif_set_link_up(&g_netif);
-                else
+                    if (g_api->console_write != NULL) {
+                        static const char msg[] = "[net-stack] link up\n";
+                        g_api->console_write(msg, (int)(sizeof(msg) - 1));
+                    }
+                } else {
                     netif_set_link_down(&g_netif);
+                    if (g_api->console_write != NULL) {
+                        static const char msg[] = "[net-stack] link down\n";
+                        g_api->console_write(msg, (int)(sizeof(msg) - 1));
+                    }
+                }
             }
             if (g_active_ifc != NULL)
                 g_active_ifc->link_up = request->arg0 != 0u;

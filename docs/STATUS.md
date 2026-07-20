@@ -16,6 +16,13 @@ linked feature documents for rationale and rollout plans.
 - `virtio-net` now publishes `net.ifc` and reports link changes with
   `NETDRV_IPC_LINK_NOTIFY`. `net-stack` consumes class enumeration/events,
   retaining name lookup only as compatibility fallback.
+- A `NETDRV_IPC_LINK_NOTIFY` updates the existing lwIP `netif` in place
+  (`netif_set_link_up`/`_down`) and emits an observable `[net-stack] link
+  up|down` line; it never re-registers or rebinds the interface. The test
+  framework can drive this end-to-end with `QemuSession.set_link()` (QEMU
+  monitor `set_link`, requires `enable_monitor`); `test_net_stack_link_notify_e2e`
+  toggles the link down/up and asserts the same instance survives without a
+  re-register or bring-up banner.
 - The current binding lifecycle is explicit: discovered → buffers granted →
   link queried → netif up. A bounded four-frame TX queue prevents a single
   driver request from making lwIP output fail immediately.

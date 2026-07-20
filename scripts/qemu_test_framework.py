@@ -122,7 +122,9 @@ def build_qemu_cmd(cfg: QemuConfig) -> list:
     if cfg.userfs_dir:
         cmd += ["-drive", f"format=raw,file=fat:rw:{cfg.userfs_dir}"]
     if cfg.nic_model and cfg.nic_model != "none":
-        cmd += ["-netdev", "user,id=net0", "-device", f"{cfg.nic_model},netdev=net0"]
+        # Give the NIC a stable device id so the monitor can target it with
+        # `set_link nic0 on|off` (QemuSession.set_link) to exercise link events.
+        cmd += ["-netdev", "user,id=net0", "-device", f"{cfg.nic_model},netdev=net0,id=nic0"]
     # Entropy source for the virtio-rng driver (transitional 1AF4:1005).
     cmd += ["-device", "virtio-rng-pci"]
     if cfg.monitor_socket:
@@ -715,6 +717,21 @@ class QemuSession:
             self.proc.stdin.flush()
         except BrokenPipeError:
             return
+
+    def set_link(self, up: bool, nic: str = "nic0") -> str:
+        """Force the emulated NIC link up or down via the QEMU monitor.
+
+        Requires the session to have been started with a monitor
+        (QemuConfig.enable_monitor=True). QEMU flips the virtio-net
+        VIRTIO_NET_S_LINK_UP config-status bit, which the driver polls and
+        forwards to net-stack as NETDRV_IPC_LINK_NOTIFY. Returns the raw HMP
+        output (normally empty on success).
+        """
+        if self.monitor is None:
+            raise RuntimeError(
+                "set_link requires a monitor; start with enable_monitor=True"
+            )
+        return self.monitor.hmp(f"set_link {nic} {'on' if up else 'off'}")
 
     def force_stop(self) -> None:
         if not self.proc or not self.proc.stdin:

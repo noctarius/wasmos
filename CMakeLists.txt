@@ -1127,6 +1127,7 @@ add_custom_command(
           ${WASM_FS_INIT_APP}
           ${WASM_FS_MANAGER_APP}
           ${WASM_DEVICE_MANAGER_APP}
+          ${WASM_NET_STACK_APP}
           ${WASM_PCI_BUS_APP}
           ${WASM_ACPI_BUS_APP}
           make_wasmos_app

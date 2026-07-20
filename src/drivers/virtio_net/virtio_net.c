@@ -843,12 +843,6 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t ignored_arg
         (void)printf("[virtio-net] no device found\n");
     }
 
-    if (wasmos_svc_register_class(proc_endpoint, g_endpoint, "virtio.net", "net.ifc", 0u, 1) < 0) {
-        (void)printf("[virtio-net] register failed\n");
-        return -1;
-    }
-    wasmos_sys_notify_ready(proc_endpoint, g_endpoint);
-
     /* Route the device IRQ to our endpoint so RX/TX completions wake us, then
      * fire the ARP probe; its reply arrives via net_handle_irq. */
     if (g_dev.present && g_dev.ready) {
@@ -859,6 +853,15 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t ignored_arg
         }
         net_probe_send();
     }
+
+    /* Finish all local setup before publishing the endpoint. Clients may send
+     * LINK_GET as soon as registration completes, so no startup operation may
+     * run between publication and the handler loop that drains it. */
+    if (wasmos_svc_register_class(proc_endpoint, g_endpoint, "virtio.net", "net.ifc", 0u, 1) < 0) {
+        (void)printf("[virtio-net] register failed\n");
+        return -1;
+    }
+    wasmos_sys_notify_ready(proc_endpoint, g_endpoint);
 
     /* Timer-driven RX poll. The virtio INTx re-fires reliably only for the
      * first assertion on QEMU's legacy PCI-INTx path (see net_handle_irq), so

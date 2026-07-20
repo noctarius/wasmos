@@ -39,6 +39,7 @@ static wasmos_driver_api_t* g_api = NULL;
 static net_socket_pool_t g_socket_pool;
 static uint32_t g_endpoint = 0u;
 static uint32_t g_control_endpoint = 0u;
+static uint32_t g_netdrv_reply_endpoint = 0u;
 static uint32_t g_proc_endpoint = 0u;
 static uint32_t g_netdrv_endpoint = 0u;
 typedef enum {
@@ -85,6 +86,7 @@ static uint8_t g_registered = 0u;
 static uint8_t g_register_pending = 0u;
 static uint8_t g_netdrv_lookup_pending = 0u;
 static uint8_t g_link_get_pending = 0u;
+static uint32_t g_link_get_sent_tick = 0u;
 static uint8_t g_hrng_lookup_pending = 0u;
 static uint8_t g_hrng_seeded = 0u;
 static uint32_t g_hrng_lookup_buffer_id = 0u;
@@ -103,6 +105,7 @@ static wasmos_sys_native_event_loop_t g_control_loop;
 #define NET_STACK_UDP_DATAGRAM_BYTES 1472u
 #define NET_STACK_HRNG_LOOKUP_REQUEST_ID 0x4E530004u
 #define NET_STACK_HRNG_REQUEST_ID 0x4E530005u
+#define NET_STACK_LINK_GET_RETRY_TICKS 50u
 
 static err_t net_stack_linkoutput(struct netif* netif, struct pbuf* p);
 static void net_stack_start_rx_poll(void);
@@ -334,7 +337,7 @@ static err_t net_stack_linkoutput(struct netif* netif, struct pbuf* p) {
     }
     request_id = NET_STACK_TX_REQUEST_BASE + (uint32_t)(slot - g_tx_slots);
     request.type = NETDRV_IPC_TX_FRAME;
-    request.source = g_endpoint;
+    request.source = g_netdrv_reply_endpoint;
     request.destination = g_netdrv_endpoint;
     request.request_id = request_id;
     request.arg0 = copied;
@@ -375,7 +378,7 @@ static void net_stack_start_rx_poll(void) {
         return;
     }
     request.type = NETDRV_IPC_RX_POLL;
-    request.source = g_endpoint;
+    request.source = g_netdrv_reply_endpoint;
     request.destination = g_netdrv_endpoint;
     request.request_id = NET_STACK_RX_POLL_REQUEST_ID;
     request.arg0 = g_rx_buffer_id;
@@ -620,7 +623,16 @@ static void net_stack_try_bind_virtio(void) {
         return;
     }
     if (g_link_get_pending) {
-        return;
+        /* IPC delivery is asynchronous around provider startup. Do not let a
+         * request queued while the driver is transitioning into its handler
+         * loop permanently wedge interface binding. LINK_GET is idempotent,
+         * so retry until its RESP/ERROR clears the pending state. */
+        if (g_api->sched_ticks == NULL ||
+            (uint32_t)(g_api->sched_ticks() - g_link_get_sent_tick) <
+                NET_STACK_LINK_GET_RETRY_TICKS) {
+            return;
+        }
+        g_link_get_pending = 0u;
     }
     if (g_rx_buffer == NULL) {
         g_rx_buffer = (uint8_t*)g_api->xfer_buffer_acquire(ND_BUFFER_KIND_XFER,
@@ -644,7 +656,7 @@ static void net_stack_try_bind_virtio(void) {
             g_active_ifc->state = g_ifc_state;
     }
     request.type = NETDRV_IPC_LINK_GET;
-    request.source = g_endpoint;
+    request.source = g_netdrv_reply_endpoint;
     request.destination = g_netdrv_endpoint;
     request.request_id = NET_STACK_LINK_GET_REQUEST_ID;
     request.arg0 = g_rx_buffer_id;
@@ -653,6 +665,7 @@ static void net_stack_try_bind_virtio(void) {
     request.arg3 = 0u;
     if (g_api->ipc_send(g_api->sched_current_pid(), g_netdrv_endpoint, &request) == 0) {
         g_link_get_pending = 1u;
+        g_link_get_sent_tick = g_api->sched_ticks != NULL ? g_api->sched_ticks() : 0u;
         g_ifc_state = NET_IFC_LINK_QUERIED;
         if (g_active_ifc != NULL)
             g_active_ifc->state = g_ifc_state;
@@ -965,6 +978,10 @@ int initialize(wasmos_driver_api_t* driver_api, int module_count, int arg2, int 
     if (g_control_endpoint == 0xFFFFFFFFu) {
         return -1;
     }
+    g_netdrv_reply_endpoint = driver_api->ipc_create_endpoint();
+    if (g_netdrv_reply_endpoint == 0xFFFFFFFFu) {
+        return -1;
+    }
     g_proc_endpoint = spawn_info.proc_endpoint;
     /* Device-manager starts bootstrap services synchronously. Release that
      * spawn before asking the process manager to service our registration; the
@@ -984,6 +1001,18 @@ int initialize(wasmos_driver_api_t* driver_api, int module_count, int arg2, int 
         int drained = 0;
         for (;;) {
             int rc = driver_api->ipc_recv(driver_api->sched_current_pid(), g_endpoint, &request);
+            if (rc == ND_IPC_EMPTY) {
+                break;
+            }
+            if (rc != ND_IPC_OK) {
+                return -1;
+            }
+            drained = 1;
+            net_stack_dispatch(&request);
+        }
+        for (;;) {
+            int rc = driver_api->ipc_recv(driver_api->sched_current_pid(), g_netdrv_reply_endpoint,
+                                          &request);
             if (rc == ND_IPC_EMPTY) {
                 break;
             }

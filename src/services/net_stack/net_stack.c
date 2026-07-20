@@ -80,6 +80,7 @@ typedef struct {
 } net_tx_slot_t;
 static net_tx_slot_t g_tx_slots[NET_STACK_TX_QUEUE_DEPTH];
 static uint8_t g_rx_pending = 0u;
+static uint32_t g_rx_poll_next_tick = 0u;
 static uint8_t g_netif_ready = 0u;
 static uint8_t g_netif_installed = 0u;
 static uint8_t g_registered = 0u;
@@ -106,9 +107,10 @@ static wasmos_sys_native_event_loop_t g_control_loop;
 #define NET_STACK_HRNG_LOOKUP_REQUEST_ID 0x4E530004u
 #define NET_STACK_HRNG_REQUEST_ID 0x4E530005u
 #define NET_STACK_LINK_GET_RETRY_TICKS 50u
+#define NET_STACK_RX_POLL_INTERVAL_TICKS 3u
 
 static err_t net_stack_linkoutput(struct netif* netif, struct pbuf* p);
-static void net_stack_start_rx_poll(void);
+static void net_stack_start_rx_poll(uint8_t immediate);
 static void net_stack_begin_registration(void);
 static void net_stack_try_bind_virtio(void);
 static void net_stack_try_discover_interfaces(void);
@@ -372,9 +374,15 @@ static void net_stack_deliver_rx(uint32_t len) {
     (void)ethernet_input(p, &g_netif);
 }
 
-static void net_stack_start_rx_poll(void) {
+static void net_stack_start_rx_poll(uint8_t immediate) {
     nd_ipc_message_t request;
-    if (g_rx_pending || g_netdrv_endpoint == 0u) {
+    uint32_t now;
+    if (g_rx_pending || g_netdrv_endpoint == 0u || g_rx_buffer_id == 0u) {
+        return;
+    }
+    now = g_api->sched_ticks != NULL ? g_api->sched_ticks() : 0u;
+    if (!immediate && g_api->sched_ticks != NULL &&
+        (int32_t)(now - g_rx_poll_next_tick) < 0) {
         return;
     }
     request.type = NETDRV_IPC_RX_POLL;
@@ -387,6 +395,7 @@ static void net_stack_start_rx_poll(void) {
     request.arg3 = 0u;
     if (g_api->ipc_send(g_api->sched_current_pid(), g_netdrv_endpoint, &request) == 0) {
         g_rx_pending = 1u;
+        g_rx_poll_next_tick = now + NET_STACK_RX_POLL_INTERVAL_TICKS;
     }
 }
 
@@ -507,6 +516,7 @@ static void net_stack_unbind_interface(uint32_t endpoint) {
     g_netdrv_endpoint = 0u;
     g_link_get_pending = 0u;
     g_rx_pending = 0u;
+    g_rx_poll_next_tick = 0u;
     if (g_rx_buffer_id != 0u)
         (void)g_api->xfer_buffer_release(g_rx_buffer_id);
     g_rx_buffer_id = 0u;
@@ -812,13 +822,18 @@ static void net_stack_dispatch(const nd_ipc_message_t* request) {
             return;
         }
         if (request->type == NETDRV_IPC_RX_FRAME_NOTIFY) {
-            net_stack_start_rx_poll();
+            net_stack_start_rx_poll(1u);
             return;
         }
         if (request->request_id == NET_STACK_RX_POLL_REQUEST_ID) {
             g_rx_pending = 0u;
             if (request->type == NETDRV_IPC_RESP) {
                 net_stack_deliver_rx(request->arg0);
+                /* Drain frames that the driver already queued without waiting
+                 * for another notification. Empty responses wait for the
+                 * timer cadence below, avoiding a request/reply spin loop. */
+                if (request->arg1 != 0u)
+                    net_stack_start_rx_poll(1u);
             }
             return;
         }
@@ -1033,7 +1048,7 @@ int initialize(wasmos_driver_api_t* driver_api, int module_count, int arg2, int 
         net_stack_try_bind_virtio();
         sys_check_timeouts();
         if (g_netif_ready) {
-            net_stack_start_rx_poll();
+            net_stack_start_rx_poll(0u);
         }
         if (!drained && driver_api->sched_yield != NULL) {
             driver_api->sched_yield();

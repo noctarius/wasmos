@@ -10,6 +10,9 @@ linked feature documents for rationale and rollout plans.
 
 - `make_initfs` explicitly depends on the packed `net_stack.wap`, so net-stack
   changes rebuild the initfs payload that boot actually executes.
+- `net-stack` uses a dedicated virtio-net reply endpoint. RX delivery drains
+  notification-reported queued frames immediately, while empty polls are paced
+  at a 12 ms timer cadence to avoid a request/reply busy loop.
 - `virtio-net` now publishes `net.ifc` and reports link changes with
   `NETDRV_IPC_LINK_NOTIFY`. `net-stack` consumes class enumeration/events,
   retaining name lookup only as compatibility fallback.

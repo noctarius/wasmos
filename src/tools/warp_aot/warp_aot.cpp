@@ -80,16 +80,6 @@ static vb::Span<vb::NativeSymbol const> aot_symbols() {
         DYNAMIC_LINK("wasmos", "ipc_try_recv", stub_i1), /* alias */
         DYNAMIC_LINK("wasmos", "ipc_notify", stub_i1),
         DYNAMIC_LINK("wasmos", "ipc_last_field", stub_i1),
-        /* IPC select sets */
-        DYNAMIC_LINK("wasmos", "ipc_select_create", stub_i0),
-        DYNAMIC_LINK("wasmos", "ipc_select_add", stub_i2),
-        DYNAMIC_LINK("wasmos", "ipc_select_wait", stub_i1),
-        DYNAMIC_LINK("wasmos", "ipc_select_wait_timeout", stub_i2),
-        DYNAMIC_LINK("wasmos", "ipc_select_destroy", stub_i1),
-        DYNAMIC_LINK("wasmos", "sys_select_create", stub_i0),
-        DYNAMIC_LINK("wasmos", "sys_select_add", stub_i2),
-        DYNAMIC_LINK("wasmos", "sys_select_wait", stub_i1),
-        DYNAMIC_LINK("wasmos", "sys_select_destroy", stub_i1),
         /* Console */
         DYNAMIC_LINK("wasmos", "console_read", stub_i2),
         DYNAMIC_LINK("wasmos", "console_write", stub_i2),
@@ -102,6 +92,16 @@ static vb::Span<vb::NativeSymbol const> aot_symbols() {
         /* Futex */
         DYNAMIC_LINK("wasmos", "futex_wait", stub_i3),
         DYNAMIC_LINK("wasmos", "futex_wake", stub_i2),
+        /* IPC select sets. Keep this placement in sync with WASMOS_SYMBOLS
+         * and warp_hostcall_id_t; wait_timeout is deliberately in the tail. */
+        DYNAMIC_LINK("wasmos", "ipc_select_create", stub_i0),
+        DYNAMIC_LINK("wasmos", "ipc_select_add", stub_i2),
+        DYNAMIC_LINK("wasmos", "ipc_select_wait", stub_i1),
+        DYNAMIC_LINK("wasmos", "ipc_select_destroy", stub_i1),
+        DYNAMIC_LINK("wasmos", "sys_select_create", stub_i0),
+        DYNAMIC_LINK("wasmos", "sys_select_add", stub_i2),
+        DYNAMIC_LINK("wasmos", "sys_select_wait", stub_i1),
+        DYNAMIC_LINK("wasmos", "sys_select_destroy", stub_i1),
         /* Shared buffers */
         DYNAMIC_LINK("wasmos", "xfer_buffer_size", stub_i0),
         DYNAMIC_LINK("wasmos", "fs_endpoint", stub_i0),
@@ -112,7 +112,6 @@ static vb::Span<vb::NativeSymbol const> aot_symbols() {
         DYNAMIC_LINK("wasmos", "block_buffer_phys", stub_i0),
         DYNAMIC_LINK("wasmos", "block_buffer_copy", stub_i4),
         DYNAMIC_LINK("wasmos", "block_buffer_write", stub_i4),
-        DYNAMIC_LINK("wasmos", "block_buffer_map", stub_i0),
         /* I/O ports */
         DYNAMIC_LINK("wasmos", "io_in8", stub_i1),
         DYNAMIC_LINK("wasmos", "io_in16", stub_i1),
@@ -204,6 +203,7 @@ static vb::Span<vb::NativeSymbol const> aot_symbols() {
         DYNAMIC_LINK("wasmos", "spawn_info_buffer", stub_i0),
         DYNAMIC_LINK("wasi_snapshot_preview1", "proc_exit", stub_v1),
         DYNAMIC_LINK("wasi_snapshot_preview1", "random_get", stub_i2),
+        DYNAMIC_LINK("wasmos", "block_buffer_map", stub_i0),
     };
     return vb::Span<vb::NativeSymbol const>(syms, sizeof(syms) / sizeof(syms[0]));
 }

@@ -765,15 +765,12 @@ static void net_stack_unbind_interface(uint32_t endpoint) {
     g_active_ifc = NULL;
 }
 
-static void net_stack_register_reply(void* user, const nd_ipc_message_t* reply) {
-    (void)user;
+static void net_stack_registered(void) {
     g_register_pending = 0u;
-    if (reply != NULL && reply->type == SVC_IPC_REGISTER_RESP) {
-        g_registered = 1u;
-        if (g_api->console_write != NULL) {
-            static const char msg[] = "[net-stack] registered net.stack\n";
-            g_api->console_write(msg, (int)(sizeof(msg) - 1));
-        }
+    g_registered = 1u;
+    if (g_api->console_write != NULL) {
+        static const char msg[] = "[net-stack] registered net.stack\n";
+        g_api->console_write(msg, (int)(sizeof(msg) - 1));
     }
 }
 
@@ -809,13 +806,26 @@ out:
 
 static void net_stack_begin_registration(void) {
     uint32_t args[4];
-    if (g_registered || g_register_pending) {
+    nd_ipc_message_t msg;
+    if (g_registered || g_register_pending || g_api->ipc_send == NULL ||
+        g_api->sched_current_pid == NULL) {
         return;
     }
+    /* Register the PUBLIC endpoint (g_endpoint) so client socket/ifaddr requests
+     * land on the endpoint net_stack_dispatch drains. A plain SVC register uses
+     * msg.source as the registered endpoint, so it must be sent from g_endpoint
+     * (not the control endpoint); the REGISTER_RESP then arrives on g_endpoint
+     * and is handled in net_stack_dispatch. */
     wasmos_sys_ipc_pack_name16_native((const uint8_t*)"net.stack", 9u, args);
-    if (wasmos_sys_native_intent_send(&g_control_loop, g_proc_endpoint, g_control_endpoint,
-                                      SVC_IPC_REGISTER_REQ, args[0], args[1], args[2], args[3],
-                                      net_stack_register_reply, NULL, NULL) == 0) {
+    msg.type = SVC_IPC_REGISTER_REQ;
+    msg.source = g_endpoint;
+    msg.destination = g_proc_endpoint;
+    msg.request_id = NET_STACK_REGISTER_REQUEST_ID;
+    msg.arg0 = args[0];
+    msg.arg1 = args[1];
+    msg.arg2 = args[2];
+    msg.arg3 = args[3];
+    if (g_api->ipc_send(g_api->sched_current_pid(), g_proc_endpoint, &msg) == 0) {
         g_register_pending = 1u;
     }
 }
@@ -1034,6 +1044,108 @@ static void net_stack_handle_open(const nd_ipc_message_t* request) {
     net_stack_send_reply(request, NET_IPC_RESP, (int32_t)socket_id, 0u, 0u, 0u);
 }
 
+/* Interface-address control plane (the `ip` tool). The stack tracks a single
+ * active interface, so ADD/DEL operate on it and its index must match. */
+static int32_t net_stack_active_index(void) {
+    if (g_active_ifc == NULL) {
+        return -1;
+    }
+    return (int32_t)(g_active_ifc - g_interfaces);
+}
+
+static void net_stack_handle_ifaddr_add(const nd_ipc_message_t* request) {
+    net_ifaddr_record_v1_t* rec;
+    ip4_addr_t ip;
+    ip4_addr_t mask;
+    ip4_addr_t gw;
+    if (g_api == NULL || g_api->xfer_buffer_map_borrowed == NULL ||
+        g_api->xfer_buffer_unmap_borrowed == NULL || request->arg2 != sizeof(*rec)) {
+        net_stack_reply_error(request, NET_STATUS_INVALID);
+        return;
+    }
+    rec = (net_ifaddr_record_v1_t*)g_api->xfer_buffer_map_borrowed(ND_BUFFER_KIND_XFER,
+                                                                   request->arg0, request->arg1);
+    if (rec == NULL) {
+        net_stack_reply_error(request, NET_STATUS_DENIED);
+        return;
+    }
+    if (rec->version != NET_IFADDR_RECORD_VERSION) {
+        (void)g_api->xfer_buffer_unmap_borrowed(request->arg1);
+        net_stack_reply_error(request, NET_STATUS_INVALID);
+        return;
+    }
+    if (!g_netif_installed || rec->if_index != (uint32_t)net_stack_active_index()) {
+        (void)g_api->xfer_buffer_unmap_borrowed(request->arg1);
+        net_stack_reply_error(request, NET_STATUS_NOT_READY);
+        return;
+    }
+    ip4_addr_set_u32(&ip, rec->addr_v4);
+    ip4_addr_set_u32(&mask, rec->netmask_v4);
+    ip4_addr_set_u32(&gw, rec->gateway_v4);
+    /* A manual address stops any DHCP client so the two do not fight. */
+    if (g_dhcp_active) {
+        dhcp_stop(&g_netif);
+        g_dhcp_active = 0u;
+    }
+    netif_set_addr(&g_netif, &ip, &mask, &gw);
+    (void)g_api->xfer_buffer_unmap_borrowed(request->arg1);
+    net_stack_send_reply(request, NET_IPC_RESP, NET_STATUS_OK, 0u, 0u, 0u);
+}
+
+static void net_stack_handle_ifaddr_del(const nd_ipc_message_t* request) {
+    ip4_addr_t zero;
+    if (!g_netif_installed || request->arg0 != (uint32_t)net_stack_active_index()) {
+        net_stack_reply_error(request, NET_STATUS_NOT_READY);
+        return;
+    }
+    if (g_dhcp_active) {
+        dhcp_stop(&g_netif);
+        g_dhcp_active = 0u;
+    }
+    ip4_addr_set_zero(&zero);
+    netif_set_addr(&g_netif, &zero, &zero, &zero);
+    g_addr_ready = 0u;
+    net_stack_send_reply(request, NET_IPC_RESP, NET_STATUS_OK, 0u, 0u, 0u);
+}
+
+static void net_stack_handle_ifaddr_list(const nd_ipc_message_t* request) {
+    net_ifaddr_record_v1_t* out;
+    uint32_t capacity;
+    uint32_t count = 0u;
+    if (g_api == NULL || g_api->xfer_buffer_map_borrowed == NULL ||
+        g_api->xfer_buffer_unmap_borrowed == NULL || request->arg2 < sizeof(*out)) {
+        net_stack_reply_error(request, NET_STATUS_INVALID);
+        return;
+    }
+    out = (net_ifaddr_record_v1_t*)g_api->xfer_buffer_map_borrowed(ND_BUFFER_KIND_XFER,
+                                                                   request->arg0, request->arg1);
+    if (out == NULL) {
+        net_stack_reply_error(request, NET_STATUS_DENIED);
+        return;
+    }
+    capacity = request->arg2 / (uint32_t)sizeof(*out);
+    for (uint32_t i = 0u; i < NET_STACK_MAX_INTERFACES && count < capacity; ++i) {
+        if (!g_interfaces[i].in_use) {
+            continue;
+        }
+        out[count].version = NET_IFADDR_RECORD_VERSION;
+        out[count].if_index = i;
+        out[count].flags = g_interfaces[i].link_up ? NET_IFADDR_FLAG_LINK_UP : 0u;
+        if (&g_interfaces[i] == g_active_ifc && g_netif_installed) {
+            out[count].addr_v4 = ip4_addr_get_u32(ip_2_ip4(&g_netif.ip_addr));
+            out[count].netmask_v4 = ip4_addr_get_u32(ip_2_ip4(&g_netif.netmask));
+            out[count].gateway_v4 = ip4_addr_get_u32(ip_2_ip4(&g_netif.gw));
+        } else {
+            out[count].addr_v4 = 0u;
+            out[count].netmask_v4 = 0u;
+            out[count].gateway_v4 = 0u;
+        }
+        count++;
+    }
+    (void)g_api->xfer_buffer_unmap_borrowed(request->arg1);
+    net_stack_send_reply(request, NET_IPC_RESP, (int32_t)count, 0u, 0u, 0u);
+}
+
 static void net_stack_dispatch(const nd_ipc_message_t* request) {
     int32_t status;
     if (request == NULL || request->source == 0u || request->source == 0xFFFFFFFFu) {
@@ -1100,6 +1212,11 @@ static void net_stack_dispatch(const nd_ipc_message_t* request) {
                 g_active_ifc->link_up = request->arg0 != 0u;
             return;
         }
+    }
+
+    if (request->type == SVC_IPC_REGISTER_RESP) {
+        net_stack_registered();
+        return;
     }
 
     if (request->type == SVC_IPC_CLASS_EVENT) {
@@ -1173,12 +1290,18 @@ static void net_stack_dispatch(const nd_ipc_message_t* request) {
             net_stack_reply_error(request, status);
         }
         break;
+    case NET_IPC_IFADDR_ADD:
+        net_stack_handle_ifaddr_add(request);
+        break;
+    case NET_IPC_IFADDR_DEL:
+        net_stack_handle_ifaddr_del(request);
+        break;
+    case NET_IPC_IFADDR_LIST:
+        net_stack_handle_ifaddr_list(request);
+        break;
     case NET_IPC_SEND:
     case NET_IPC_RECV:
     case NET_IPC_POLL:
-    case NET_IPC_IFADDR_ADD:
-    case NET_IPC_IFADDR_DEL:
-    case NET_IPC_IFADDR_LIST:
     case NET_IPC_STACK_CREATE:
     case NET_IPC_STACK_DESTROY:
     case NET_IPC_STACK_SELECT:

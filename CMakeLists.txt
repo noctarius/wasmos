@@ -216,6 +216,9 @@ set(WASM_SYSINFO_APP ${BUILD_DIR}/sysinfo.wap)
 set(WASM_EXPLORER_SRC ${CMAKE_SOURCE_DIR}/src/utils/explorer/explorer.c)
 set(WASM_EXPLORER_WASM ${BUILD_DIR}/explorer.wasm)
 set(WASM_EXPLORER_APP ${BUILD_DIR}/explorer.wap)
+set(WASM_IP_SRC ${CMAKE_SOURCE_DIR}/src/utils/ip/ip.c)
+set(WASM_IP_WASM ${BUILD_DIR}/ip.wasm)
+set(WASM_IP_APP ${BUILD_DIR}/ip.wap)
 
 if (NOT DEFINED AS_ENABLE_INITIALIZED)
   set(AS_ENABLE ON CACHE BOOL "Enable AssemblyScript example builds" FORCE)
@@ -1122,6 +1125,7 @@ add_custom_command(
           ${WASM_SHMEM_TARGET_APP}
           ${WASM_NET_SMOKE_APP}
           ${WASM_NET_UDP_ECHO_APP}
+          ${WASM_IP_APP}
           ${WASM_ATA_APP}
           ${WASM_CHARDEV_SERVER_APP}
           ${WASM_FAT_APP}
@@ -1275,6 +1279,11 @@ if (TARGET explorer_util)
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_EXPLORER_APP} ${BUILD_DIR}/esp/system/utils/explorer.wap
   )
 endif ()
+if (TARGET ip_util)
+  set(IP_UTIL_COPY_CMD
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_IP_APP} ${BUILD_DIR}/esp/system/utils/ip.wap
+  )
+endif ()
 set(HELLO_C_COPY_CMD
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_HELLO_C_APP} ${BUILD_DIR}/esp/apps/hello_c.wap
 )
@@ -1362,6 +1371,7 @@ set(INITFS_COPY_CMD
   ${CAT_UTIL_COPY_CMD}
   ${SYSINFO_UTIL_COPY_CMD}
   ${EXPLORER_UTIL_COPY_CMD}
+  ${IP_UTIL_COPY_CMD}
   COMMAND ${CMAKE_COMMAND} -E copy
       ${CMAKE_SOURCE_DIR}/scripts/system/sysinit.rc
       ${BUILD_DIR}/esp/system/sysinit.rc

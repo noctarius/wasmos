@@ -637,6 +637,23 @@ typedef struct __attribute__((packed)) {
     uint32_t rx_bytes;
 } net_socket_open_descriptor_v1_t;
 
+/* Interface-address record for NET_IPC_IFADDR_ADD/DEL/LIST. ADD carries one
+ * record in a borrowed xfer buffer (arg0=buffer_id, arg1=borrow_id,
+ * arg2=bytes); LIST fills an array of these into a client buffer and returns
+ * the count in the reply arg0. All IPv4 words are network byte order. */
+#define NET_IFADDR_RECORD_VERSION 1u
+
+typedef struct __attribute__((packed)) {
+    uint32_t version;
+    uint32_t if_index;
+    uint32_t addr_v4;
+    uint32_t netmask_v4;
+    uint32_t gateway_v4;
+    uint32_t flags; /* bit0: link up */
+} net_ifaddr_record_v1_t;
+
+#define NET_IFADDR_FLAG_LINK_UP 1u
+
 typedef struct {
     uint32_t rx_packets;
     uint32_t tx_packets;

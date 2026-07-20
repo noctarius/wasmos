@@ -18,6 +18,7 @@
 #include <stddef.h>
 
 #include "lwip/init.h"
+#include "lwip/dhcp.h"
 #include "lwip/etharp.h"
 #include "lwip/ip_addr.h"
 #include "lwip/ip4_addr.h"
@@ -29,6 +30,7 @@
 #include "lwip/timeouts.h"
 #include "netif/ethernet.h"
 
+#include "net_stack_ifcfg.h"
 #include "socket.h"
 #include "wasmos/libsys_native.h"
 #include "wasmos_native_driver.h"
@@ -108,6 +110,28 @@ static wasmos_sys_native_event_loop_t g_control_loop;
 #define NET_STACK_HRNG_REQUEST_ID 0x4E530005u
 #define NET_STACK_LINK_GET_RETRY_TICKS 50u
 #define NET_STACK_RX_POLL_INTERVAL_TICKS 3u
+#define NET_STACK_IFCFG_PATH "/boot/system/net/interfaces"
+#define NET_STACK_IFCFG_CAP 1024u
+#define NET_STACK_IFCFG_RETRY_TICKS 25u    /* ~100 ms at 250 Hz between attempts */
+#define NET_STACK_IFCFG_MAX_ATTEMPTS 50u   /* bounded post-up retry, then give up */
+#define NET_STACK_DHCP_TIMEOUT_TICKS 3750u /* ~15 s at 250 Hz */
+
+/* Interface config (/boot/system/net/interfaces), read when the interface
+ * comes up. Strict: absence/failure or DHCP-no-lease leaves it unconfigured. */
+static int32_t g_fs_endpoint = 0;
+static uint8_t g_fs_lookup_pending = 0u;
+static uint8_t g_fs_lookup_stage = 0u; /* 0 = try "fs.vfs", 1 = try legacy "fs" */
+static uint8_t g_ifcfg_kicked = 0u;    /* link-up requested a load */
+static uint8_t g_ifcfg_loaded = 0u;    /* config applied or given up */
+static uint8_t g_ifcfg_read_pending = 0u;
+static uint32_t g_ifcfg_buffer_id = 0u;
+static uint8_t* g_ifcfg_buffer = NULL;
+static uint32_t g_ifcfg_attempts = 0u;
+static uint32_t g_ifcfg_next_tick = 0u;
+static uint8_t g_addr_ready = 0u; /* "ready" banner emitted for current address */
+static uint8_t g_dhcp_active = 0u;
+static uint32_t g_dhcp_started_tick = 0u;
+static uint8_t g_dhcp_timeout_logged = 0u;
 
 static err_t net_stack_linkoutput(struct netif* netif, struct pbuf* p);
 static void net_stack_start_rx_poll(uint8_t immediate);
@@ -118,6 +142,10 @@ static void net_stack_unbind_interface(uint32_t endpoint);
 static void net_stack_try_seed_random(void);
 static void net_stack_udp_recv(void* arg, struct udp_pcb* pcb, struct pbuf* p,
                                const ip_addr_t* addr, u16_t port);
+static void net_stack_kick_ifcfg_load(void);
+static void net_stack_try_load_ifcfg(void);
+static void net_stack_apply_ifcfg(const net_ifcfg_t* cfg);
+static void net_stack_netif_status_cb(struct netif* netif);
 
 wasmos_driver_api_t* net_stack_api(void) {
     return g_api;
@@ -381,8 +409,7 @@ static void net_stack_start_rx_poll(uint8_t immediate) {
         return;
     }
     now = g_api->sched_ticks != NULL ? g_api->sched_ticks() : 0u;
-    if (!immediate && g_api->sched_ticks != NULL &&
-        (int32_t)(now - g_rx_poll_next_tick) < 0) {
+    if (!immediate && g_api->sched_ticks != NULL && (int32_t)(now - g_rx_poll_next_tick) < 0) {
         return;
     }
     request.type = NETDRV_IPC_RX_POLL;
@@ -400,22 +427,21 @@ static void net_stack_start_rx_poll(uint8_t immediate) {
 }
 
 static void net_stack_finish_bind(uint8_t link_up) {
-    ip4_addr_t ipaddr;
-    ip4_addr_t netmask;
-    ip4_addr_t gateway;
-
-    IP4_ADDR(&ipaddr, 10, 0, 2, 15);
-    IP4_ADDR(&netmask, 255, 255, 255, 0);
-    IP4_ADDR(&gateway, 10, 0, 2, 2);
     if (!g_netif_installed) {
-        if (netif_add(&g_netif, &ipaddr, &netmask, &gateway, NULL, net_stack_netif_init,
-                      ethernet_input) == NULL) {
+        ip4_addr_t zero;
+        IP4_ADDR(&zero, 0, 0, 0, 0);
+        /* Address is assigned later from /boot/system/net/interfaces (static)
+         * or via DHCP; bring the netif up unconfigured for now so DHCP has an
+         * up, link-up interface to exchange DISCOVER/OFFER on. */
+        if (netif_add(&g_netif, &zero, &zero, &zero, NULL, net_stack_netif_init, ethernet_input) ==
+            NULL) {
             return;
         }
         for (uint32_t i = 0u; i < ETH_HWADDR_LEN; ++i) {
             g_netif.hwaddr[i] = g_rx_buffer[i];
         }
         netif_set_default(&g_netif);
+        netif_set_status_callback(&g_netif, net_stack_netif_status_cb);
         g_netif_installed = 1u;
     }
     netif_set_up(&g_netif);
@@ -423,18 +449,217 @@ static void net_stack_finish_bind(uint8_t link_up) {
         netif_set_link_up(&g_netif);
     else
         netif_set_link_down(&g_netif);
-    if (link_up)
-        etharp_request(&g_netif, &gateway);
     g_netif_ready = 1u;
     g_ifc_state = NET_IFC_NETIF_UP;
     if (g_active_ifc != NULL) {
         g_active_ifc->state = NET_IFC_NETIF_UP;
         g_active_ifc->link_up = link_up;
     }
-    if (g_api->console_write != NULL) {
-        static const char msg[] = "[net-stack] eth0 10.0.2.15/24 ready\n";
-        g_api->console_write(msg, (int)(sizeof(msg) - 1));
+    /* Read the interface config only when the interface comes up; the "ready"
+     * banner and gateway ARP are emitted from the status callback once an
+     * address is actually assigned (static apply or DHCP bind). */
+    if (link_up)
+        net_stack_kick_ifcfg_load();
+}
+
+/* Format a network-order IPv4 word as "a.b.c.d" into dst; returns the length. */
+static int net_stack_fmt_ipv4(uint32_t addr_no, char* dst, int cap) {
+    int len = 0;
+    for (int i = 0; i < 4; ++i) {
+        uint32_t octet = (addr_no >> (i * 8)) & 0xFFu;
+        if (i != 0 && len < cap)
+            dst[len++] = '.';
+        if (octet >= 100u && len < cap)
+            dst[len++] = (char)('0' + (octet / 100u));
+        if (octet >= 10u && len < cap)
+            dst[len++] = (char)('0' + ((octet / 10u) % 10u));
+        if (len < cap)
+            dst[len++] = (char)('0' + (octet % 10u));
     }
+    return len;
+}
+
+/* Count set bits in a (contiguous) netmask to derive the prefix length. */
+static int net_stack_mask_prefix(uint32_t mask_no) {
+    int count = 0;
+    for (int i = 0; i < 32; ++i) {
+        if ((mask_no >> i) & 1u)
+            count++;
+    }
+    return count;
+}
+
+/* lwIP netif status callback: fires whenever the netif state changes. When a
+ * real address first appears (static apply or DHCP bind), emit the ready banner
+ * and prime ARP for the gateway. */
+static void net_stack_netif_status_cb(struct netif* netif) {
+    uint32_t addr_no;
+    if (netif == NULL) {
+        return;
+    }
+    addr_no = ip4_addr_get_u32(ip_2_ip4(&netif->ip_addr));
+    if (addr_no == 0u || g_addr_ready) {
+        return;
+    }
+    g_addr_ready = 1u;
+    if (g_api->console_write != NULL) {
+        char line[64];
+        int n = 0;
+        int prefix;
+        static const char pfx[] = "[net-stack] eth0 ";
+        static const char sfx[] = " ready\n";
+        for (uint32_t i = 0u; i < sizeof(pfx) - 1u && n < (int)sizeof(line); ++i)
+            line[n++] = pfx[i];
+        n += net_stack_fmt_ipv4(addr_no, line + n, (int)sizeof(line) - n);
+        if (n < (int)sizeof(line))
+            line[n++] = '/';
+        prefix = net_stack_mask_prefix(ip4_addr_get_u32(ip_2_ip4(&netif->netmask)));
+        if (prefix >= 10 && n < (int)sizeof(line))
+            line[n++] = (char)('0' + prefix / 10);
+        if (n < (int)sizeof(line))
+            line[n++] = (char)('0' + prefix % 10);
+        for (uint32_t i = 0u; i < sizeof(sfx) - 1u && n < (int)sizeof(line); ++i)
+            line[n++] = sfx[i];
+        g_api->console_write(line, n);
+    }
+    if (ip4_addr_get_u32(ip_2_ip4(&netif->gw)) != 0u) {
+        (void)etharp_request(netif, ip_2_ip4(&netif->gw));
+    }
+}
+
+static void net_stack_apply_ifcfg(const net_ifcfg_t* cfg) {
+    if (cfg == NULL || !g_netif_installed) {
+        return;
+    }
+    if (cfg->dhcp) {
+        if (!g_dhcp_active && dhcp_start(&g_netif) == ERR_OK) {
+            g_dhcp_active = 1u;
+            g_dhcp_started_tick = g_api->sched_ticks != NULL ? g_api->sched_ticks() : 0u;
+        }
+        if (g_api->console_write != NULL) {
+            static const char msg[] = "[net-stack] dhcp: requesting lease\n";
+            g_api->console_write(msg, (int)(sizeof(msg) - 1));
+        }
+        return;
+    }
+    ip4_addr_t ip;
+    ip4_addr_t mask;
+    ip4_addr_t gw;
+    IP4_ADDR(&ip, cfg->addr[0], cfg->addr[1], cfg->addr[2], cfg->addr[3]);
+    IP4_ADDR(&mask, cfg->mask[0], cfg->mask[1], cfg->mask[2], cfg->mask[3]);
+    IP4_ADDR(&gw, cfg->gw[0], cfg->gw[1], cfg->gw[2], cfg->gw[3]);
+    netif_set_addr(&g_netif, &ip, &mask, &gw); /* fires status cb -> banner + ARP */
+}
+
+static void net_stack_kick_ifcfg_load(void) {
+    if (!g_ifcfg_loaded)
+        g_ifcfg_kicked = 1u;
+}
+
+static void net_stack_fs_lookup_reply(void* user, const nd_ipc_message_t* reply) {
+    (void)user;
+    g_fs_lookup_pending = 0u;
+    if (reply != NULL && reply->type == SVC_IPC_LOOKUP_RESP && reply->arg0 != 0xFFFFFFFFu) {
+        g_fs_endpoint = (int32_t)reply->arg0; /* read starts on the next tick */
+        return;
+    }
+    if (g_fs_lookup_stage == 0u) {
+        g_fs_lookup_stage = 1u; /* fall back to legacy "fs" name */
+    } else {
+        g_fs_lookup_stage = 0u;
+        g_ifcfg_attempts++;
+        if (g_ifcfg_attempts >= NET_STACK_IFCFG_MAX_ATTEMPTS) {
+            g_ifcfg_loaded = 1u; /* strict: give up unconfigured */
+            if (g_api->console_write != NULL) {
+                static const char msg[] = "[net-stack] no interface config (fs unavailable)\n";
+                g_api->console_write(msg, (int)(sizeof(msg) - 1));
+            }
+        }
+    }
+    g_ifcfg_next_tick =
+        (g_api->sched_ticks != NULL ? g_api->sched_ticks() : 0u) + NET_STACK_IFCFG_RETRY_TICKS;
+}
+
+static void net_stack_ifcfg_read_reply(void* user, const nd_ipc_message_t* reply) {
+    (void)user;
+    g_ifcfg_read_pending = 0u;
+    if (reply != NULL && reply->type == FS_IPC_RESP && (int32_t)reply->arg0 >= 0 &&
+        g_ifcfg_buffer != NULL) {
+        uint32_t n = reply->arg0;
+        net_ifcfg_t cfg;
+        if (n >= NET_STACK_IFCFG_CAP)
+            n = NET_STACK_IFCFG_CAP - 1u;
+        if (net_ifcfg_parse((const char*)g_ifcfg_buffer, n, &cfg)) {
+            net_stack_apply_ifcfg(&cfg);
+        } else if (g_api->console_write != NULL) {
+            static const char msg[] = "[net-stack] interface config invalid\n";
+            g_api->console_write(msg, (int)(sizeof(msg) - 1));
+        }
+        g_ifcfg_loaded = 1u; /* strict: stop retrying once the file was read */
+    } else {
+        /* Read error: fs.vfs is up but /boot may not be mounted yet. Retry a
+         * bounded number of times, then give up (strict: unconfigured). */
+        g_ifcfg_attempts++;
+        if (g_ifcfg_attempts >= NET_STACK_IFCFG_MAX_ATTEMPTS) {
+            g_ifcfg_loaded = 1u;
+            if (g_api->console_write != NULL) {
+                static const char msg[] = "[net-stack] no interface config\n";
+                g_api->console_write(msg, (int)(sizeof(msg) - 1));
+            }
+        }
+        g_ifcfg_next_tick =
+            (g_api->sched_ticks != NULL ? g_api->sched_ticks() : 0u) + NET_STACK_IFCFG_RETRY_TICKS;
+    }
+    if (g_ifcfg_buffer_id != 0u)
+        (void)g_api->xfer_buffer_release(g_ifcfg_buffer_id);
+    g_ifcfg_buffer_id = 0u;
+    g_ifcfg_buffer = NULL;
+}
+
+static void net_stack_try_load_ifcfg(void) {
+    uint32_t now;
+    uint32_t args[4];
+    if (!g_ifcfg_kicked || g_ifcfg_loaded || g_ifcfg_read_pending || g_fs_lookup_pending) {
+        return;
+    }
+    now = g_api->sched_ticks != NULL ? g_api->sched_ticks() : 0u;
+    if (g_api->sched_ticks != NULL && (int32_t)(now - g_ifcfg_next_tick) < 0) {
+        return;
+    }
+    if (g_fs_endpoint == 0) {
+        const char* name = g_fs_lookup_stage == 0u ? "fs.vfs" : "fs";
+        uint32_t name_len = g_fs_lookup_stage == 0u ? 6u : 2u;
+        wasmos_sys_ipc_pack_name16_native((const uint8_t*)name, name_len, args);
+        if (wasmos_sys_native_intent_send(&g_control_loop, g_proc_endpoint, g_control_endpoint,
+                                          SVC_IPC_LOOKUP_REQ, args[0], args[1], args[2], args[3],
+                                          net_stack_fs_lookup_reply, NULL, NULL) == 0)
+            g_fs_lookup_pending = 1u;
+        return;
+    }
+    /* fs endpoint known: owner-push read of the interfaces file. */
+    g_ifcfg_buffer = (uint8_t*)g_api->xfer_buffer_acquire(ND_BUFFER_KIND_XFER, NET_STACK_IFCFG_CAP,
+                                                          &g_ifcfg_buffer_id);
+    if (g_ifcfg_buffer == NULL) {
+        g_ifcfg_next_tick = now + NET_STACK_IFCFG_RETRY_TICKS;
+        return;
+    }
+    static const char path[] = NET_STACK_IFCFG_PATH;
+    uint32_t path_len = (uint32_t)(sizeof(path) - 1u);
+    int32_t borrow_id;
+    __builtin_memcpy(g_ifcfg_buffer, path, path_len);
+    borrow_id = g_api->xfer_buffer_borrow((uint32_t)g_fs_endpoint, g_ifcfg_buffer_id,
+                                          ND_BUFFER_BORROW_READ | ND_BUFFER_BORROW_WRITE);
+    if (borrow_id < 0 || wasmos_sys_native_intent_send(
+                             &g_control_loop, (uint32_t)g_fs_endpoint, g_control_endpoint,
+                             FS_IPC_READ_PATH_REQ, path_len, NET_STACK_IFCFG_CAP, g_ifcfg_buffer_id,
+                             (uint32_t)borrow_id, net_stack_ifcfg_read_reply, NULL, NULL) != 0) {
+        (void)g_api->xfer_buffer_release(g_ifcfg_buffer_id);
+        g_ifcfg_buffer_id = 0u;
+        g_ifcfg_buffer = NULL;
+        g_ifcfg_next_tick = now + NET_STACK_IFCFG_RETRY_TICKS;
+        return;
+    }
+    g_ifcfg_read_pending = 1u;
 }
 
 static void net_stack_lookup_reply(void* user, const nd_ipc_message_t* reply) {
@@ -513,6 +738,12 @@ static void net_stack_unbind_interface(uint32_t endpoint) {
     if (g_netif_ready)
         netif_set_down(&g_netif);
     g_netif_ready = 0u;
+    /* Force a fresh interface-config read when the interface next comes up. */
+    g_addr_ready = 0u;
+    g_ifcfg_kicked = 0u;
+    g_ifcfg_loaded = 0u;
+    g_dhcp_active = 0u;
+    g_dhcp_timeout_logged = 0u;
     g_netdrv_endpoint = 0u;
     g_link_get_pending = 0u;
     g_rx_pending = 0u;
@@ -637,9 +868,8 @@ static void net_stack_try_bind_virtio(void) {
          * request queued while the driver is transitioning into its handler
          * loop permanently wedge interface binding. LINK_GET is idempotent,
          * so retry until its RESP/ERROR clears the pending state. */
-        if (g_api->sched_ticks == NULL ||
-            (uint32_t)(g_api->sched_ticks() - g_link_get_sent_tick) <
-                NET_STACK_LINK_GET_RETRY_TICKS) {
+        if (g_api->sched_ticks == NULL || (uint32_t)(g_api->sched_ticks() - g_link_get_sent_tick) <
+                                              NET_STACK_LINK_GET_RETRY_TICKS) {
             return;
         }
         g_link_get_pending = 0u;
@@ -855,6 +1085,9 @@ static void net_stack_dispatch(const nd_ipc_message_t* request) {
                         static const char msg[] = "[net-stack] link up\n";
                         g_api->console_write(msg, (int)(sizeof(msg) - 1));
                     }
+                    /* If the interface came up link-down and no config has been
+                     * read yet, this up edge is the trigger to read it. */
+                    net_stack_kick_ifcfg_load();
                 } else {
                     netif_set_link_down(&g_netif);
                     if (g_api->console_write != NULL) {
@@ -1059,7 +1292,19 @@ int initialize(wasmos_driver_api_t* driver_api, int module_count, int arg2, int 
         /* Keep the old name lookup below as a compatibility fallback for
          * drivers that predate the net.ifc class registration. */
         net_stack_try_bind_virtio();
+        net_stack_try_load_ifcfg();
         sys_check_timeouts();
+        if (g_dhcp_active && !g_addr_ready && !g_dhcp_timeout_logged &&
+            g_api->sched_ticks != NULL &&
+            (uint32_t)(g_api->sched_ticks() - g_dhcp_started_tick) > NET_STACK_DHCP_TIMEOUT_TICKS) {
+            /* Strict: no lease within the timeout leaves the interface
+             * unconfigured. lwIP keeps retrying, so a late lease still binds. */
+            g_dhcp_timeout_logged = 1u;
+            if (driver_api->console_write != NULL) {
+                static const char msg[] = "[net-stack] dhcp: no lease\n";
+                driver_api->console_write(msg, (int)(sizeof(msg) - 1));
+            }
+        }
         if (g_netif_ready) {
             net_stack_start_rx_poll(0u);
         }

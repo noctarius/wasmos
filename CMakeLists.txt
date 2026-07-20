@@ -1365,6 +1365,10 @@ set(INITFS_COPY_CMD
   COMMAND ${CMAKE_COMMAND} -E copy
       ${CMAKE_SOURCE_DIR}/scripts/system/sysinit.rc
       ${BUILD_DIR}/esp/system/sysinit.rc
+  COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/system/net
+  COMMAND ${CMAKE_COMMAND} -E copy
+      ${CMAKE_SOURCE_DIR}/scripts/system/net/interfaces
+      ${BUILD_DIR}/esp/system/net/interfaces
   COMMAND ${CMAKE_COMMAND} -E make_directory ${USERFS_DIR}
 )
 if (RUST_ENABLE)
@@ -1933,6 +1937,12 @@ add_custom_target(run-kernel-unit-tests
           ${CMAKE_SOURCE_DIR}/src/services/net_stack/socket.c
           -o ${BUILD_DIR}/test_net_socket
   COMMAND ${BUILD_DIR}/test_net_socket
+  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
+          -I${CMAKE_SOURCE_DIR}/src/services/net_stack
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_net_ifcfg.c
+          ${CMAKE_SOURCE_DIR}/src/services/net_stack/net_stack_ifcfg.c
+          -o ${BUILD_DIR}/test_net_ifcfg
+  COMMAND ${BUILD_DIR}/test_net_ifcfg
   COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
           -I${KERNEL_DIR}/include
           -iquote ${LIBC_DIR}/include

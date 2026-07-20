@@ -39,7 +39,7 @@
 #define LWIP_UDP 1
 #define LWIP_TCP 1
 #define LWIP_IPV6 0
-#define LWIP_DHCP 0
+#define LWIP_DHCP 1
 
 /* --- Callbacks ----------------------------------------------------------- */
 #define LWIP_NETIF_STATUS_CALLBACK 1

@@ -143,6 +143,21 @@ add_custom_command(
 )
 list(APPEND NET_STACK_OBJS ${NET_STACK_SOCKET_OBJ})
 
+set(NET_STACK_IFCFG_OBJ ${BUILD_DIR}/net_stack_ifcfg.o)
+add_custom_command(
+  OUTPUT ${NET_STACK_IFCFG_OBJ}
+  COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}
+  COMMAND ${CLANG} ${NET_STACK_CFLAGS_BASE} ${NET_STACK_LWIP_WARN_FLAGS}
+          ${NET_STACK_INCLUDES}
+          -c ${NET_STACK_DIR}/net_stack_ifcfg.c
+          -o ${NET_STACK_IFCFG_OBJ}
+  DEPENDS ${NET_STACK_DIR}/net_stack_ifcfg.c ${NET_STACK_DIR}/net_stack_ifcfg.h
+  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+  COMMENT "Compiling net_stack_ifcfg.c (net-stack)"
+  VERBATIM
+)
+list(APPEND NET_STACK_OBJS ${NET_STACK_IFCFG_OBJ})
+
 set(NET_STACK_PORT_OBJ ${BUILD_DIR}/net_stack_port.o)
 add_custom_command(
   OUTPUT ${NET_STACK_PORT_OBJ}

@@ -1,0 +1,15 @@
+# WASMOS network interface configuration (read from /boot/system/net/interfaces
+# when the interface comes up). Minimal /etc/network/interfaces subset: the
+# first `iface <name> inet <dhcp|static>` stanza is applied.
+#
+# Strict policy: if this file is absent/unreadable, or DHCP is selected and no
+# lease arrives, the interface stays link-up but unconfigured.
+
+# Static default matching the QEMU SLIRP network.
+iface eth0 inet static
+    address 10.0.2.15
+    netmask 255.255.255.0
+    gateway 10.0.2.2
+
+# To use DHCP instead, comment out the static stanza above and use:
+# iface eth0 inet dhcp

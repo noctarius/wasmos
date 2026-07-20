@@ -179,8 +179,8 @@ static void* warp_small_alloc(void) {
         page->free_blocks = kWarpSmallBlocksPerPage;
         g_warp_small_pages = page;
         for (uint32_t i = 1U; i <= kWarpSmallBlocksPerPage; ++i) {
-            auto* block = reinterpret_cast<WarpSmallFreeBlock*>(
-                reinterpret_cast<uint8_t*>(page) + i * kWarpSmallBlockSize);
+            auto* block = reinterpret_cast<WarpSmallFreeBlock*>(reinterpret_cast<uint8_t*>(page) +
+                                                                i * kWarpSmallBlockSize);
             block->next = g_warp_small_free;
             g_warp_small_free = block;
         }

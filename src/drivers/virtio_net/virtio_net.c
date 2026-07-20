@@ -729,8 +729,7 @@ static void handle_link_get(int32_t source, int32_t request_id, int32_t buffer_i
 
 static void net_publish_link_change(void) {
     uint16_t status_word;
-    if (!g_dev.present || !g_dev.ready ||
-        (g_dev.driver_features & VIRTIO_NET_F_STATUS) == 0u) {
+    if (!g_dev.present || !g_dev.ready || (g_dev.driver_features & VIRTIO_NET_F_STATUS) == 0u) {
         return;
     }
     status_word = io_read16(g_dev.io_base + VIRTIO_NET_CFG_STATUS);
@@ -844,8 +843,7 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t ignored_arg
         (void)printf("[virtio-net] no device found\n");
     }
 
-    if (wasmos_svc_register_class(proc_endpoint, g_endpoint, "virtio.net", "net.ifc", 0u,
-                                  1) < 0) {
+    if (wasmos_svc_register_class(proc_endpoint, g_endpoint, "virtio.net", "net.ifc", 0u, 1) < 0) {
         (void)printf("[virtio-net] register failed\n");
         return -1;
     }

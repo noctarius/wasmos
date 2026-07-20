@@ -72,7 +72,11 @@ static uint32_t g_rx_buffer_id = 0u;
 static uint8_t* g_rx_buffer = NULL;
 /* A bounded queue decouples lwIP linkoutput from one driver request. */
 #define NET_STACK_TX_QUEUE_DEPTH 4u
-typedef struct { uint32_t buffer_id; uint8_t* buffer; uint8_t pending; } net_tx_slot_t;
+typedef struct {
+    uint32_t buffer_id;
+    uint8_t* buffer;
+    uint8_t pending;
+} net_tx_slot_t;
 static net_tx_slot_t g_tx_slots[NET_STACK_TX_QUEUE_DEPTH];
 static uint8_t g_rx_pending = 0u;
 static uint8_t g_netif_ready = 0u;
@@ -115,11 +119,13 @@ wasmos_driver_api_t* net_stack_api(void) {
 }
 
 static net_interface_slot_t* net_stack_interface_slot(uint32_t endpoint, uint32_t instance,
-                                                       uint8_t create) {
+                                                      uint8_t create) {
     for (uint32_t i = 0u; i < NET_STACK_MAX_INTERFACES; ++i) {
-        if (g_interfaces[i].in_use && g_interfaces[i].endpoint == endpoint) return &g_interfaces[i];
+        if (g_interfaces[i].in_use && g_interfaces[i].endpoint == endpoint)
+            return &g_interfaces[i];
     }
-    if (!create) return NULL;
+    if (!create)
+        return NULL;
     for (uint32_t i = 0u; i < NET_STACK_MAX_INTERFACES; ++i) {
         if (!g_interfaces[i].in_use) {
             __builtin_memset(&g_interfaces[i], 0, sizeof(g_interfaces[i]));
@@ -265,8 +271,10 @@ static void net_stack_drain_udp_tx(net_socket_t* socket) {
             continue;
         }
         payload_bytes = record->payload_bytes;
-        dest_addr = (record->flags & NET_UDP_DATAGRAM_FLAG_DESTINATION) ? record->addr_v4 : socket->remote_addr_v4;
-        dest_port = (record->flags & NET_UDP_DATAGRAM_FLAG_DESTINATION) ? record->port : socket->remote_port;
+        dest_addr = (record->flags & NET_UDP_DATAGRAM_FLAG_DESTINATION) ? record->addr_v4
+                                                                        : socket->remote_addr_v4;
+        dest_port = (record->flags & NET_UDP_DATAGRAM_FLAG_DESTINATION) ? record->port
+                                                                        : socket->remote_port;
         if (dest_addr == 0u || dest_port == 0u) {
             wasmos_ringbuf_set_flags(&socket->tx_ring, WASMOS_RINGBUF_FLAG_OVERFLOW_DROPPED);
             continue;
@@ -309,9 +317,13 @@ static err_t net_stack_linkoutput(struct netif* netif, struct pbuf* p) {
         return ERR_BUF;
     }
     for (uint32_t i = 0u; i < NET_STACK_TX_QUEUE_DEPTH; ++i) {
-        if (!g_tx_slots[i].pending && g_tx_slots[i].buffer != NULL) { slot = &g_tx_slots[i]; break; }
+        if (!g_tx_slots[i].pending && g_tx_slots[i].buffer != NULL) {
+            slot = &g_tx_slots[i];
+            break;
+        }
     }
-    if (slot == NULL) return ERR_MEM;
+    if (slot == NULL)
+        return ERR_MEM;
     for (q = p; q != NULL; q = q->next) {
         uint8_t* src = (uint8_t*)q->payload;
         uint16_t i;
@@ -395,8 +407,12 @@ static void net_stack_finish_bind(uint8_t link_up) {
         g_netif_installed = 1u;
     }
     netif_set_up(&g_netif);
-    if (link_up) netif_set_link_up(&g_netif); else netif_set_link_down(&g_netif);
-    if (link_up) etharp_request(&g_netif, &gateway);
+    if (link_up)
+        netif_set_link_up(&g_netif);
+    else
+        netif_set_link_down(&g_netif);
+    if (link_up)
+        etharp_request(&g_netif, &gateway);
     g_netif_ready = 1u;
     g_ifc_state = NET_IFC_NETIF_UP;
     if (g_active_ifc != NULL) {
@@ -414,7 +430,8 @@ static void net_stack_lookup_reply(void* user, const nd_ipc_message_t* reply) {
     g_netdrv_lookup_pending = 0u;
     if (reply != NULL && reply->type == SVC_IPC_LOOKUP_RESP && reply->arg0 != 0xFFFFFFFFu) {
         g_netdrv_endpoint = reply->arg0;
-        if (g_active_ifc == NULL) g_active_ifc = net_stack_interface_slot(reply->arg0, 0u, 1u);
+        if (g_active_ifc == NULL)
+            g_active_ifc = net_stack_interface_slot(reply->arg0, 0u, 1u);
     }
 }
 
@@ -426,12 +443,16 @@ static void net_stack_class_lookup_reply(void* user, const nd_ipc_message_t* rep
         g_netifc_lookup_buffer != NULL) {
         __builtin_memcpy(&entry, g_netifc_lookup_buffer, sizeof(entry));
         if (entry.endpoint != 0u) {
-            net_interface_slot_t* slot = net_stack_interface_slot(entry.endpoint, entry.instance, 1u);
-            if (g_active_ifc == NULL) g_active_ifc = slot;
-            if (g_active_ifc == slot) g_netdrv_endpoint = entry.endpoint;
+            net_interface_slot_t* slot =
+                net_stack_interface_slot(entry.endpoint, entry.instance, 1u);
+            if (g_active_ifc == NULL)
+                g_active_ifc = slot;
+            if (g_active_ifc == slot)
+                g_netdrv_endpoint = entry.endpoint;
         }
     }
-    if (g_netifc_lookup_buffer_id != 0u) (void)g_api->xfer_buffer_release(g_netifc_lookup_buffer_id);
+    if (g_netifc_lookup_buffer_id != 0u)
+        (void)g_api->xfer_buffer_release(g_netifc_lookup_buffer_id);
     g_netifc_lookup_buffer_id = 0u;
     g_netifc_lookup_buffer = NULL;
 }
@@ -439,8 +460,10 @@ static void net_stack_class_lookup_reply(void* user, const nd_ipc_message_t* rep
 static void net_stack_subscribe_reply(void* user, const nd_ipc_message_t* reply) {
     (void)user;
     g_netifc_subscribe_pending = 0u;
-    if (reply != NULL && reply->type == SVC_IPC_SUBSCRIBE_CLASS_RESP) g_netifc_subscribed = 1u;
-    if (g_netifc_subscribe_buffer_id != 0u) (void)g_api->xfer_buffer_release(g_netifc_subscribe_buffer_id);
+    if (reply != NULL && reply->type == SVC_IPC_SUBSCRIBE_CLASS_RESP)
+        g_netifc_subscribed = 1u;
+    if (g_netifc_subscribe_buffer_id != 0u)
+        (void)g_api->xfer_buffer_release(g_netifc_subscribe_buffer_id);
     g_netifc_subscribe_buffer_id = 0u;
     g_netifc_subscribe_buffer = NULL;
     (void)reply;
@@ -459,10 +482,12 @@ static void net_stack_try_discover_interfaces(void) {
                 g_netifc_subscribe_pending = 1u;
         }
     }
-    if (g_netdrv_endpoint != 0u || g_netifc_lookup_pending || g_netifc_lookup_buffer_id != 0u) return;
+    if (g_netdrv_endpoint != 0u || g_netifc_lookup_pending || g_netifc_lookup_buffer_id != 0u)
+        return;
     g_netifc_lookup_buffer = (uint8_t*)g_api->xfer_buffer_acquire(
         ND_BUFFER_KIND_XFER, sizeof(svc_class_entry_t), &g_netifc_lookup_buffer_id);
-    if (g_netifc_lookup_buffer == NULL) return;
+    if (g_netifc_lookup_buffer == NULL)
+        return;
     __builtin_memcpy(g_netifc_lookup_buffer, "net.ifc", 8u);
     if (wasmos_sys_native_intent_send(&g_control_loop, g_proc_endpoint, g_control_endpoint,
                                       SVC_IPC_LOOKUP_CLASS_REQ, g_netifc_lookup_buffer_id, 1u, 0u,
@@ -471,23 +496,28 @@ static void net_stack_try_discover_interfaces(void) {
 }
 
 static void net_stack_unbind_interface(uint32_t endpoint) {
-    if (endpoint != g_netdrv_endpoint) return;
-    if (g_netif_ready) netif_set_down(&g_netif);
+    if (endpoint != g_netdrv_endpoint)
+        return;
+    if (g_netif_ready)
+        netif_set_down(&g_netif);
     g_netif_ready = 0u;
     g_netdrv_endpoint = 0u;
     g_link_get_pending = 0u;
     g_rx_pending = 0u;
-    if (g_rx_buffer_id != 0u) (void)g_api->xfer_buffer_release(g_rx_buffer_id);
+    if (g_rx_buffer_id != 0u)
+        (void)g_api->xfer_buffer_release(g_rx_buffer_id);
     g_rx_buffer_id = 0u;
     g_rx_buffer = NULL;
     for (uint32_t i = 0u; i < NET_STACK_TX_QUEUE_DEPTH; ++i) {
-        if (g_tx_slots[i].buffer_id != 0u) (void)g_api->xfer_buffer_release(g_tx_slots[i].buffer_id);
+        if (g_tx_slots[i].buffer_id != 0u)
+            (void)g_api->xfer_buffer_release(g_tx_slots[i].buffer_id);
         g_tx_slots[i].buffer_id = 0u;
         g_tx_slots[i].buffer = NULL;
         g_tx_slots[i].pending = 0u;
     }
     g_ifc_state = NET_IFC_DISCOVERED;
-    if (g_active_ifc != NULL) __builtin_memset(g_active_ifc, 0, sizeof(*g_active_ifc));
+    if (g_active_ifc != NULL)
+        __builtin_memset(g_active_ifc, 0, sizeof(*g_active_ifc));
     g_active_ifc = NULL;
 }
 
@@ -561,8 +591,8 @@ static void net_stack_try_seed_random(void) {
     g_hrng_lookup_buffer[3] = 'g';
     g_hrng_lookup_buffer[4] = '\0';
     if (wasmos_sys_native_intent_send(&g_control_loop, g_proc_endpoint, g_control_endpoint,
-                                      SVC_IPC_LOOKUP_CLASS_REQ, g_hrng_lookup_buffer_id, 1u, 0u,
-                                      0u, net_stack_hrng_lookup_reply, NULL, NULL) != 0) {
+                                      SVC_IPC_LOOKUP_CLASS_REQ, g_hrng_lookup_buffer_id, 1u, 0u, 0u,
+                                      net_stack_hrng_lookup_reply, NULL, NULL) != 0) {
         (void)g_api->xfer_buffer_release(g_hrng_lookup_buffer_id);
         g_hrng_lookup_buffer_id = 0u;
         g_hrng_lookup_buffer = NULL;
@@ -594,7 +624,7 @@ static void net_stack_try_bind_virtio(void) {
     }
     if (g_rx_buffer == NULL) {
         g_rx_buffer = (uint8_t*)g_api->xfer_buffer_acquire(ND_BUFFER_KIND_XFER,
-                                                             NET_STACK_FRAME_BYTES, &g_rx_buffer_id);
+                                                           NET_STACK_FRAME_BYTES, &g_rx_buffer_id);
         if (g_rx_buffer == NULL ||
             g_api->xfer_buffer_borrow(g_netdrv_endpoint, g_rx_buffer_id,
                                       ND_BUFFER_BORROW_READ | ND_BUFFER_BORROW_WRITE) < 0) {
@@ -610,7 +640,8 @@ static void net_stack_try_bind_virtio(void) {
             }
         }
         g_ifc_state = NET_IFC_BUFFERS_GRANTED;
-        if (g_active_ifc != NULL) g_active_ifc->state = g_ifc_state;
+        if (g_active_ifc != NULL)
+            g_active_ifc->state = g_ifc_state;
     }
     request.type = NETDRV_IPC_LINK_GET;
     request.source = g_endpoint;
@@ -623,7 +654,8 @@ static void net_stack_try_bind_virtio(void) {
     if (g_api->ipc_send(g_api->sched_current_pid(), g_netdrv_endpoint, &request) == 0) {
         g_link_get_pending = 1u;
         g_ifc_state = NET_IFC_LINK_QUERIED;
-        if (g_active_ifc != NULL) g_active_ifc->state = g_ifc_state;
+        if (g_active_ifc != NULL)
+            g_active_ifc->state = g_ifc_state;
     }
 }
 
@@ -729,8 +761,8 @@ static void net_stack_handle_open(const nd_ipc_message_t* request) {
         net_stack_reply_error(request, NET_STATUS_DENIED);
         return;
     }
-    status = net_socket_open(&g_socket_pool, request->source, descriptor, tx_base, rx_base,
-                             &socket_id);
+    status =
+        net_socket_open(&g_socket_pool, request->source, descriptor, tx_base, rx_base, &socket_id);
     (void)g_api->xfer_buffer_unmap_borrowed(request->arg1);
     if (status != NET_STATUS_OK) {
         (void)g_api->xfer_buffer_unmap_borrowed(tx_borrow_id);
@@ -779,14 +811,19 @@ static void net_stack_dispatch(const nd_ipc_message_t* request) {
         }
         if (request->request_id >= NET_STACK_TX_REQUEST_BASE) {
             uint32_t slot = request->request_id - NET_STACK_TX_REQUEST_BASE;
-            if (slot < NET_STACK_TX_QUEUE_DEPTH) g_tx_slots[slot].pending = 0u;
+            if (slot < NET_STACK_TX_QUEUE_DEPTH)
+                g_tx_slots[slot].pending = 0u;
             return;
         }
         if (request->type == NETDRV_IPC_LINK_NOTIFY) {
             if (g_netif_ready) {
-                if (request->arg0 != 0u) netif_set_link_up(&g_netif); else netif_set_link_down(&g_netif);
+                if (request->arg0 != 0u)
+                    netif_set_link_up(&g_netif);
+                else
+                    netif_set_link_down(&g_netif);
             }
-            if (g_active_ifc != NULL) g_active_ifc->link_up = request->arg0 != 0u;
+            if (g_active_ifc != NULL)
+                g_active_ifc->link_up = request->arg0 != 0u;
             return;
         }
     }
@@ -814,8 +851,8 @@ static void net_stack_dispatch(const nd_ipc_message_t* request) {
             net_stack_reply_error(request, NET_STATUS_DENIED);
             break;
         }
-        status = net_stack_pcb_bind(&g_socket_pool.sockets[request->arg0],
-                                    (uint16_t)request->arg1, request->arg2);
+        status = net_stack_pcb_bind(&g_socket_pool.sockets[request->arg0], (uint16_t)request->arg1,
+                                    request->arg2);
         if (status == NET_STATUS_OK) {
             status = net_socket_bind(&g_socket_pool, request->source, request->arg0,
                                      (uint16_t)request->arg1, request->arg2);
@@ -914,8 +951,7 @@ int initialize(wasmos_driver_api_t* driver_api, int module_count, int arg2, int 
     }
 
     wasmos_spawn_info_t spawn_info;
-    if (driver_api->spawn_info == NULL ||
-        driver_api->spawn_info(&spawn_info, NULL, 0u) != 0 ||
+    if (driver_api->spawn_info == NULL || driver_api->spawn_info(&spawn_info, NULL, 0u) != 0 ||
         spawn_info.magic != WASMOS_SPAWN_INFO_MAGIC ||
         spawn_info.version != WASMOS_SPAWN_INFO_VERSION || spawn_info.proc_endpoint == 0u) {
         return -1;

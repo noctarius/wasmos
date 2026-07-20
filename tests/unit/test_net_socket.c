@@ -61,15 +61,18 @@ static int test_rejects_bad_descriptor_or_ring(void) {
     uint32_t id = 0;
     memset(tx_region, 0, sizeof(tx_region));
     memset(rx_region, 0, sizeof(rx_region));
-    CHECK(net_socket_open(&pool, 101u, &descriptor, tx_region, rx_region, &id) == NET_STATUS_INVALID);
+    CHECK(net_socket_open(&pool, 101u, &descriptor, tx_region, rx_region, &id) ==
+          NET_STATUS_INVALID);
     wasmos_ringbuf_t tx, rx;
     CHECK(wasmos_ringbuf_init(&tx, tx_region, sizeof(tx_region), CAPACITY) == 0);
     CHECK(wasmos_ringbuf_init(&rx, rx_region, sizeof(rx_region), CAPACITY) == 0);
     descriptor.version++;
-    CHECK(net_socket_open(&pool, 101u, &descriptor, tx_region, rx_region, &id) == NET_STATUS_INVALID);
+    CHECK(net_socket_open(&pool, 101u, &descriptor, tx_region, rx_region, &id) ==
+          NET_STATUS_INVALID);
     descriptor = valid_descriptor();
     descriptor.rx_borrow_id = 0u;
-    CHECK(net_socket_open(&pool, 101u, &descriptor, tx_region, rx_region, &id) == NET_STATUS_INVALID);
+    CHECK(net_socket_open(&pool, 101u, &descriptor, tx_region, rx_region, &id) ==
+          NET_STATUS_INVALID);
     return 0;
 }
 

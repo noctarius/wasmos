@@ -65,6 +65,39 @@ class NetStackIfaddrE2ETest(unittest.TestCase):
             session.expect_from(show2, b"[ip] eth0: 10.0.2.50/24", timeout_s=30),
             "ip addr show did not reflect the new address",
         )
+        # Interface is administratively up by default.
+        self.assertTrue(
+            session.expect_from(show2, b"state up", timeout_s=30),
+            "interface should be administratively up",
+        )
+
+        # Bring the interface administratively down, then confirm via show.
+        down = session.mark()
+        session.send("spawn /system/utils/ip dev eth0 down")
+        self.assertTrue(
+            session.expect_from(down, b"[ip] dev down ok", timeout_s=30),
+            "ip dev down did not succeed",
+        )
+        show3 = session.mark()
+        session.send("spawn /system/utils/ip addr show")
+        self.assertTrue(
+            session.expect_from(show3, b"state down", timeout_s=30),
+            "interface did not report administratively down",
+        )
+
+        # Bring it back up.
+        up = session.mark()
+        session.send("spawn /system/utils/ip dev eth0 up")
+        self.assertTrue(
+            session.expect_from(up, b"[ip] dev up ok", timeout_s=30),
+            "ip dev up did not succeed",
+        )
+        show4 = session.mark()
+        session.send("spawn /system/utils/ip addr show")
+        self.assertTrue(
+            session.expect_from(show4, b"state up", timeout_s=30),
+            "interface did not report administratively up again",
+        )
 
 
 if __name__ == "__main__":

@@ -174,7 +174,20 @@ static int recv_reply(int32_t ep, int32_t request_id, wasmos_ipc_message_t* mess
 
 static void usage(void) {
     puts("[ip] usage: ip addr show | ip addr add <a.b.c.d>/<prefix> dev <name> | ip addr del dev "
-         "<name>");
+         "<name> | ip dev <name> up|down");
+}
+
+static int cmd_dev_state(int32_t stack_ep, int32_t reply_ep, int32_t* rid, const char* dev,
+                         uint32_t up) {
+    wasmos_ipc_message_t message;
+    if (wasmos_ipc_send(stack_ep, reply_ep, NET_IPC_IF_SET_STATE, *rid, name_to_index(dev), up, 0u,
+                        0) != 0 ||
+        recv_reply(reply_ep, (*rid)++, &message) != 0 || message.type != NET_IPC_RESP) {
+        puts(up ? "[ip] dev up failed" : "[ip] dev down failed");
+        return 1;
+    }
+    puts(up ? "[ip] dev up ok" : "[ip] dev down ok");
+    return 0;
 }
 
 static int cmd_show(int32_t stack_ep, int32_t reply_ep, int32_t* rid) {
@@ -218,6 +231,8 @@ static int cmd_show(int32_t stack_ep, int32_t reply_ep, int32_t* rid) {
         app_dec(line, (int)sizeof(line), &n, mask_prefix(get_u32(r, 12u)));
         app_str(line, (int)sizeof(line), &n, " gw ");
         app_ipv4(line, (int)sizeof(line), &n, get_u32(r, 16u));
+        app_str(line, (int)sizeof(line), &n,
+                (get_u32(r, 20u) & NET_IFADDR_FLAG_ADMIN_UP) ? " state up" : " state down");
         app_str(line, (int)sizeof(line), &n,
                 (get_u32(r, 20u) & NET_IFADDR_FLAG_LINK_UP) ? " link up" : " link down");
         if (n < (int)sizeof(line))
@@ -318,7 +333,7 @@ int main(int argc, char** argv) {
         puts("[ip] setup failed");
         return 1;
     }
-    if (n < 1 || !str_eq(tok[0], "addr")) {
+    if (n < 1 || (!str_eq(tok[0], "addr") && !str_eq(tok[0], "dev"))) {
         usage();
         return 1;
     }
@@ -332,6 +347,14 @@ int main(int argc, char** argv) {
         return 1;
     }
 
+    if (str_eq(tok[0], "dev")) {
+        if (n >= 3 && str_eq(tok[2], "up"))
+            return cmd_dev_state(stack_ep, reply_ep, &rid, tok[1], 1u);
+        if (n >= 3 && str_eq(tok[2], "down"))
+            return cmd_dev_state(stack_ep, reply_ep, &rid, tok[1], 0u);
+        usage();
+        return 1;
+    }
     if (n >= 5 && str_eq(tok[1], "add") && str_eq(tok[3], "dev"))
         return cmd_add(stack_ep, reply_ep, &rid, tok[2], tok[4]);
     if (n >= 4 && str_eq(tok[1], "del") && str_eq(tok[2], "dev"))

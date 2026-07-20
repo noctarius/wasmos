@@ -576,6 +576,8 @@ enum {
     NET_IPC_DATA_NOTIFY = 0xB0D,
     NET_IPC_TX_NOTIFY = 0xB0E,
     NET_IPC_RX_NOTIFY = 0xB0F,
+    /* Administrative interface up/down: arg0 = if_index, arg1 = 1 up / 0 down. */
+    NET_IPC_IF_SET_STATE = 0xB10,
     NET_IPC_RESP = 0xB80,
     NET_IPC_ERROR = 0xBFF
 };
@@ -649,10 +651,11 @@ typedef struct __attribute__((packed)) {
     uint32_t addr_v4;
     uint32_t netmask_v4;
     uint32_t gateway_v4;
-    uint32_t flags; /* bit0: link up */
+    uint32_t flags; /* bit0: link up, bit1: administratively up */
 } net_ifaddr_record_v1_t;
 
 #define NET_IFADDR_FLAG_LINK_UP 1u
+#define NET_IFADDR_FLAG_ADMIN_UP 2u
 
 typedef struct {
     uint32_t rx_packets;

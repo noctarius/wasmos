@@ -1092,6 +1092,21 @@ static void net_stack_handle_ifaddr_add(const nd_ipc_message_t* request) {
     net_stack_send_reply(request, NET_IPC_RESP, NET_STATUS_OK, 0u, 0u, 0u);
 }
 
+static void net_stack_handle_if_set_state(const nd_ipc_message_t* request) {
+    /* arg0 = if_index, arg1 = 1 (up) / 0 (down). Administrative state only;
+     * link state is driven by the driver's LINK_NOTIFY, not this. */
+    if (!g_netif_installed || request->arg0 != (uint32_t)net_stack_active_index()) {
+        net_stack_reply_error(request, NET_STATUS_NOT_READY);
+        return;
+    }
+    if (request->arg1 != 0u) {
+        netif_set_up(&g_netif);
+    } else {
+        netif_set_down(&g_netif);
+    }
+    net_stack_send_reply(request, NET_IPC_RESP, NET_STATUS_OK, 0u, 0u, 0u);
+}
+
 static void net_stack_handle_ifaddr_del(const nd_ipc_message_t* request) {
     ip4_addr_t zero;
     if (!g_netif_installed || request->arg0 != (uint32_t)net_stack_active_index()) {
@@ -1132,6 +1147,9 @@ static void net_stack_handle_ifaddr_list(const nd_ipc_message_t* request) {
         out[count].if_index = i;
         out[count].flags = g_interfaces[i].link_up ? NET_IFADDR_FLAG_LINK_UP : 0u;
         if (&g_interfaces[i] == g_active_ifc && g_netif_installed) {
+            if (netif_is_up(&g_netif)) {
+                out[count].flags |= NET_IFADDR_FLAG_ADMIN_UP;
+            }
             out[count].addr_v4 = ip4_addr_get_u32(ip_2_ip4(&g_netif.ip_addr));
             out[count].netmask_v4 = ip4_addr_get_u32(ip_2_ip4(&g_netif.netmask));
             out[count].gateway_v4 = ip4_addr_get_u32(ip_2_ip4(&g_netif.gw));
@@ -1298,6 +1316,9 @@ static void net_stack_dispatch(const nd_ipc_message_t* request) {
         break;
     case NET_IPC_IFADDR_LIST:
         net_stack_handle_ifaddr_list(request);
+        break;
+    case NET_IPC_IF_SET_STATE:
+        net_stack_handle_if_set_state(request);
         break;
     case NET_IPC_SEND:
     case NET_IPC_RECV:

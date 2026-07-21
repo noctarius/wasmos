@@ -1181,8 +1181,22 @@ add_dependencies(kernel wasm_driver_blobs)
 set(QEMU_GDB_PORT 1234 CACHE STRING "QEMU gdb port for run-qemu-debug")
 set(WASMOS_QEMU_NIC_MODEL "virtio-net-pci" CACHE STRING
     "QEMU NIC model for developer/test runs (for example virtio-net-pci or e1000)")
+# QEMU netdev backend spec (everything after `-netdev`). Defaults to user-mode
+# (SLIRP) NAT with QEMU's built-in DHCP server. Override to bridge onto a real
+# network via the WASMOS_QEMU_NETDEV env var, then re-run `cmake -S . -B build`
+# so these run-qemu* targets pick it up. The spec MUST keep `id=net0` so the
+# `-device ...,netdev=net0` pairing below still matches. Examples (macOS vmnet
+# needs sudo; Linux tap needs a preconfigured tapN):
+#   macOS bridge to LAN:  vmnet-bridged,id=net0,ifname=en0
+#   macOS Apple NAT+DHCP:  vmnet-shared,id=net0
+#   Linux tap:             tap,id=net0,ifname=tap0,script=no,downscript=no
+set(WASMOS_QEMU_NETDEV "$ENV{WASMOS_QEMU_NETDEV}")
+if(WASMOS_QEMU_NETDEV STREQUAL "")
+  set(WASMOS_QEMU_NETDEV "user,id=net0")
+endif()
+separate_arguments(WASMOS_QEMU_NETDEV_SPEC UNIX_COMMAND "${WASMOS_QEMU_NETDEV}")
 set(WASMOS_QEMU_NETDEV_ARGS
-  -netdev user,id=net0
+  -netdev ${WASMOS_QEMU_NETDEV_SPEC}
   -device ${WASMOS_QEMU_NIC_MODEL},netdev=net0
   # Entropy source for the virtio-rng driver (transitional 1AF4:1005).
   -device virtio-rng-pci

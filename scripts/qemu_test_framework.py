@@ -33,6 +33,14 @@ class QemuConfig:
     # NIC model attached via user-mode networking so the virtio-net driver has a
     # device to probe.  Set to "none" (or WASMOS_QEMU_NIC_MODEL=none) to omit.
     nic_model: str = "virtio-net-pci"
+    # QEMU netdev backend spec (everything after `-netdev`). Defaults to
+    # user-mode (SLIRP) NAT with QEMU's built-in DHCP server. Override via the
+    # WASMOS_QEMU_NETDEV env var to bridge onto a real network. Must keep
+    # `id=net0` so the paired `-device ...,netdev=net0` still matches. Examples:
+    #   macOS bridge to LAN:  vmnet-bridged,id=net0,ifname=en0   (needs sudo)
+    #   macOS Apple NAT+DHCP:  vmnet-shared,id=net0              (needs sudo)
+    #   Linux tap:             tap,id=net0,ifname=tap0,script=no,downscript=no
+    netdev: str = "user,id=net0"
 
     def __post_init__(self) -> None:
         if self.userfs_dir:
@@ -74,6 +82,9 @@ def default_config(build_dir: str = "build") -> QemuConfig:
     nic_model = os.environ.get(
         "WASMOS_QEMU_NIC_MODEL", cache.get("WASMOS_QEMU_NIC_MODEL", "virtio-net-pci")
     )
+    netdev = os.environ.get(
+        "WASMOS_QEMU_NETDEV", cache.get("WASMOS_QEMU_NETDEV", "user,id=net0")
+    )
     if not ovmf_code:
         raise RuntimeError("OVMF_CODE not set (WASMOS_OVMF_CODE or CMakeCache.txt)")
     return QemuConfig(
@@ -86,6 +97,7 @@ def default_config(build_dir: str = "build") -> QemuConfig:
         monitor_socket=monitor_socket,
         smp_count=smp_count,
         nic_model=nic_model,
+        netdev=netdev,
     )
 
 
@@ -124,7 +136,9 @@ def build_qemu_cmd(cfg: QemuConfig) -> list:
     if cfg.nic_model and cfg.nic_model != "none":
         # Give the NIC a stable device id so the monitor can target it with
         # `set_link nic0 on|off` (QemuSession.set_link) to exercise link events.
-        cmd += ["-netdev", "user,id=net0", "-device", f"{cfg.nic_model},netdev=net0,id=nic0"]
+        # The netdev backend defaults to user-mode SLIRP but can be overridden
+        # (e.g. vmnet-bridged) via WASMOS_QEMU_NETDEV; it must keep id=net0.
+        cmd += ["-netdev", cfg.netdev, "-device", f"{cfg.nic_model},netdev=net0,id=nic0"]
     # Entropy source for the virtio-rng driver (transitional 1AF4:1005).
     cmd += ["-device", "virtio-rng-pci"]
     if cfg.monitor_socket:

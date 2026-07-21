@@ -266,7 +266,12 @@ static inline void ui_menu_item_popup_open(ui_context_t* ctx, ui_component_t* mi
     ui_menu_item_popup_position(ctx, mi, child_count, &popup_x, &popup_y, &popup_w, &popup_h);
 
     int32_t status = 0, a1 = 0, a2 = 0, a3 = 0;
-    if (ui_send_gfx(ctx->gfx_endpoint, ctx->reply_endpoint, ctx->req_id++, GFX_IPC_CREATE_WINDOW,
+    /* Source the popup window from the event endpoint so it becomes the popup's
+     * owner: the compositor then pushes the popup's pointer/focus events to the
+     * same endpoint the loop drains. (Sourcing from reply_endpoint would send
+     * them to the request/reply channel, where the sync-call loop discards
+     * them — breaking popup hover and focus-lost.) */
+    if (ui_send_gfx(ctx->gfx_endpoint, ctx->event_endpoint, ctx->req_id++, GFX_IPC_CREATE_WINDOW,
                     popup_w, popup_h, (int32_t)GFX_IPC_ABI_MAGIC,
                     (int32_t)gfx_ipc_header_pack(GFX_IPC_ABI_VERSION, GFX_IPC_CREATE_WINDOW),
                     &status, &a1, &a2, &a3) != 0 ||

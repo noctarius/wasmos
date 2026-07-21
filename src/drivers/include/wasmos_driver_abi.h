@@ -582,6 +582,16 @@ enum {
      * clears any static address so the client can bind a fresh lease; stopping
      * leaves the current address in place. */
     NET_IPC_DHCP_SET = 0xB11,
+    /* Passive-open a bound stream socket: arg0 = socket_id. Reply is immediate. */
+    NET_IPC_LISTEN = 0xB12,
+    /* Post rings for the next inbound connection on a listening socket:
+     * arg0 = listening socket_id, arg1 = descriptor buffer_id,
+     * arg2 = descriptor borrow_id, arg3 = descriptor bytes. The descriptor
+     * (net_socket_open_descriptor_v1_t) carries the accepted socket's TX/RX ring
+     * grants. The reply is deferred until a connection is paired, and its
+     * arg0 (NET_IPC_RESP) is the accepted socket_id. Each posted ACCEPT is one
+     * accept slot; post several to accept several connections. */
+    NET_IPC_ACCEPT = 0xB13,
     NET_IPC_RESP = 0xB80,
     NET_IPC_ERROR = 0xBFF
 };

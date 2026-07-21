@@ -15,6 +15,9 @@ typedef enum {
     NET_SOCKET_CONNECTING,
     NET_SOCKET_CONNECTED,
     NET_SOCKET_LISTENING,
+    /* Rings posted via NET_IPC_ACCEPT, waiting to be paired with an inbound
+     * connection on its listener. */
+    NET_SOCKET_ACCEPTING,
     NET_SOCKET_CLOSING
 } net_socket_state_t;
 
@@ -37,6 +40,9 @@ typedef struct {
      * request id so the callback can answer the original NET_IPC_CONNECT. */
     uint32_t connect_request_id;
     uint8_t connect_pending;
+    /* For a NET_SOCKET_ACCEPTING socket: index of the listening socket whose
+     * next inbound connection it will be paired with. */
+    uint32_t accept_listener_id;
     void* pcb; /* struct udp_pcb* or struct tcp_pcb*, owned by net-stack */
     wasmos_ringbuf_t tx_ring;
     wasmos_ringbuf_t rx_ring;

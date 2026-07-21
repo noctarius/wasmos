@@ -660,6 +660,8 @@ enum {
     NET_IPC_RX_NOTIFY            = 0xB0F, /* push stack→client: arg0=sock_id */
     NET_IPC_IF_SET_STATE         = 0xB10, /* arg0=if_idx arg1=1 up / 0 down (admin state) */
     NET_IPC_DHCP_SET             = 0xB11, /* arg0=if_idx arg1=1 start / 0 stop DHCP client */
+    NET_IPC_LISTEN               = 0xB12, /* arg0=sock_id; passive-open a bound stream socket */
+    NET_IPC_ACCEPT               = 0xB13, /* arg0=listen_sock arg1=desc_bid arg2=desc_grant arg3=desc_bytes; deferred resp arg0=accepted sock_id */
     NET_IPC_RESP                 = 0xB80,
     NET_IPC_ERROR                = 0xBFF
 };
@@ -1178,15 +1180,20 @@ Phase 3: TCP baseline
   segments copied into the RX ring and acked via `tcp_recved`, refused with
   `ERR_MEM` under ring pressure), and graceful `close` after detaching
   callbacks. Covered by the SLIRP TCP echo smoke test.
-- Server path (PENDING): `listen`/`accept` opcodes and the accept callback that
-  mints a new socket/ring pair.
-- Timeouts: `sys_check_timeouts()` is advanced from the idle loop; dedicated
-  RTC/timer pacing and retransmit/close-path hardening remain to be validated.
-- Add explicit error mapping and TCP server smoke tests.
+- Server path (DONE): `NET_IPC_LISTEN` turns a bound stream socket into a
+  listening pcb; `NET_IPC_ACCEPT` posts a client-owned ring pair as an accept
+  slot and its reply is deferred; the lwIP accept callback pairs an inbound
+  connection with the earliest posted slot, answers ACCEPT with the accepted
+  socket id, and rejects (ERR_MEM/RST) when no slot is posted. Multiple posted
+  ACCEPTs form the effective accept backlog. Covered by a SLIRP hostfwd echo
+  test (host connects into the guest listener).
+- Timeouts (PENDING): `sys_check_timeouts()` is advanced from the idle loop;
+  dedicated RTC/timer pacing and retransmit/close-path hardening remain to be
+  validated.
 
 Done gate:
-- stable TCP echo in `run-qemu` validation without boot regressions (client path
-  met); server-side gate pending listen/accept.
+- stable TCP echo in `run-qemu` validation without boot regressions (client and
+  server paths met); timeout/retransmit hardening still open.
 
 Phase 4: IPv6 + multi-address + multi-instance enablement
 - Set `LWIP_IPV6 1` in `lwipopts.h`; add NDP + ICMPv6 + SLAAC/static v6 config.

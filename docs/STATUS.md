@@ -166,7 +166,14 @@ linked feature documents for rationale and rollout plans.
   RX ring and acknowledge via `tcp_recved`, refusing with `ERR_MEM` when the
   ring is full so lwIP retains and redelivers. `NET_IPC_CLOSE` closes gracefully
   after detaching callbacks. The SLIRP TCP echo test covers connect + stream +
-  echo. Listen/accept (server-side TCP) is not yet wired. `ringbuf.h` and the
+  echo. Server-side TCP is wired too: `NET_IPC_LISTEN` turns a bound stream
+  socket into a listening pcb, and `NET_IPC_ACCEPT` posts a client-owned ring
+  pair as an accept slot; the lwIP accept callback pairs an inbound connection
+  with the earliest posted slot, answers the deferred ACCEPT with the accepted
+  socket id, and rejects (RST) when no slot is posted. Each posted ACCEPT is one
+  accept slot, so a server pre-posts several to accept several connections. A
+  SLIRP hostfwd e2e test drives host->guest connect + accept + echo. `ringbuf.h`
+  and the
   wasm3/WARP pinned shared-memory mapping baseline are ready for the planned
   per-socket shared-memory data plane; that mapping must not be revalidated as
   a networking prerequisite unless its implementation changes.
@@ -204,10 +211,11 @@ linked feature documents for rationale and rollout plans.
   `libs/warp` or `libs/wasm3` directly.
 - Complete PCI INTx polarity/trigger configuration before treating RX
   notifications as reliable push delivery.
-- Networking Phase 2 (ARP/ICMP/UDP) and the client-side of Phase 3 (TCP
-  connect/stream/close over rings) are validated end-to-end. Still pending:
-  server-side TCP (`listen`/`accept`), TCP timeout/retransmit hardening, and the
-  IPv6/multi-address/multi-instance and DMA fast-path phases.
+- Networking Phase 2 (ARP/ICMP/UDP) and Phase 3 (TCP client connect/stream/close
+  and server listen/accept/echo over rings) are validated end-to-end. Still
+  pending: TCP timeout/retransmit hardening (`sys_check_timeouts` is only
+  advanced from the idle loop), and the IPv6/multi-address/multi-instance and
+  DMA fast-path phases.
 - Maintain the boot entry contract, C ABI boundaries, and runtime-wrapper
   parity. Record meaningful future baseline changes here as concise subsystem
   updates; keep detailed design changes in `docs/architecture/`.

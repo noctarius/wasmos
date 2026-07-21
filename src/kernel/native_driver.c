@@ -183,10 +183,13 @@ static uint32_t nd_sched_ticks(void) {
 }
 
 /* Per-driver borrow bookkeeping so buffer_release can reverse the exact
- * borrow and page mapping established by buffer_borrow. Native drivers borrow
- * at most a few buffers at a time (a framebuffer driver holds one for its
- * lifetime), so a small fixed table suffices. */
-#define ND_BORROW_SLOTS 16
+ * borrow and page mapping established by buffer_borrow. This is a global pool
+ * shared by all native services. net-stack alone holds several persistent
+ * mappings (RX frame, four TX slots, interface class lookup/subscribe, hrng)
+ * plus two per open socket (TX/RX rings); a TCP server that listens and accepts
+ * connections needs headroom for the listening socket and each accepted one, so
+ * the table is sized well above the handful a single driver needs. */
+#define ND_BORROW_SLOTS 32
 
 typedef struct {
     uint32_t driver_ctx; /* 0 => free slot */

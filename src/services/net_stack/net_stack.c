@@ -489,6 +489,54 @@ static void net_stack_tcp_err(void* arg, err_t err) {
     net_stack_notify_rx(socket);
 }
 
+/* Find the earliest accept slot posted for a given listener (a socket that has
+ * client rings but no connection yet). Returns NULL when none is waiting. */
+static net_socket_t* net_stack_find_accept_slot(uint32_t listener_id) {
+    for (uint32_t id = 0; id < NET_SOCKET_MAX; ++id) {
+        net_socket_t* socket = &g_socket_pool.sockets[id];
+        if (socket->state == NET_SOCKET_ACCEPTING && socket->connect_pending &&
+            socket->accept_listener_id == listener_id) {
+            return socket;
+        }
+    }
+    return NULL;
+}
+
+/* An inbound connection completed its handshake on a listening socket. Pair it
+ * with a posted accept slot (its client-owned rings) and answer the deferred
+ * NET_IPC_ACCEPT with the new socket id. With no slot posted, reject the
+ * connection (ERR_MEM) so lwIP aborts it; the peer can retry once a slot is
+ * available. */
+static err_t net_stack_tcp_accept(void* arg, struct tcp_pcb* newpcb, err_t err) {
+    net_socket_t* listener = (net_socket_t*)arg;
+    net_socket_t* slot;
+    uint32_t listener_id;
+    if (listener == NULL || newpcb == NULL || err != ERR_OK) {
+        return ERR_VAL;
+    }
+    listener_id = (uint32_t)(listener - g_socket_pool.sockets);
+    slot = net_stack_find_accept_slot(listener_id);
+    if (slot == NULL) {
+        return ERR_MEM;
+    }
+    slot->pcb = newpcb;
+    slot->state = NET_SOCKET_CONNECTED;
+    slot->remote_port = newpcb->remote_port;
+    slot->remote_addr_v4 = ip4_addr_get_u32(ip_2_ip4(&newpcb->remote_ip));
+    slot->local_port = newpcb->local_port;
+    tcp_arg(newpcb, slot);
+    tcp_recv(newpcb, net_stack_tcp_recv);
+    tcp_sent(newpcb, net_stack_tcp_sent);
+    tcp_err(newpcb, net_stack_tcp_err);
+    /* Tell lwIP this backlog slot is consumed so it can accept the next one. */
+    tcp_accepted((struct tcp_pcb*)listener->pcb);
+    slot->connect_pending = 0u;
+    net_stack_reply_deferred(slot, NET_IPC_RESP, (int32_t)(slot - g_socket_pool.sockets));
+    /* A fast peer may already have data queued in the pcb. */
+    net_stack_drain_tcp_tx(slot);
+    return ERR_OK;
+}
+
 static err_t net_stack_netif_init(struct netif* netif) {
     netif->name[0] = 'e';
     netif->name[1] = 'n';
@@ -1144,6 +1192,12 @@ static void net_stack_pcb_close(net_socket_t* socket) {
     }
     if (socket->type == NET_SOCKET_DGRAM) {
         udp_remove((struct udp_pcb*)socket->pcb);
+    } else if (socket->state == NET_SOCKET_LISTENING) {
+        /* A listen pcb has an accept callback, not recv/sent/err. */
+        struct tcp_pcb* pcb = (struct tcp_pcb*)socket->pcb;
+        tcp_arg(pcb, NULL);
+        tcp_accept(pcb, NULL);
+        (void)tcp_close(pcb);
     } else {
         /* Detach callbacks before closing: tcp_close may keep the pcb alive to
          * flush pending data / linger in TIME_WAIT, and the net_socket_t is
@@ -1158,6 +1212,23 @@ static void net_stack_pcb_close(net_socket_t* socket) {
         }
     }
     socket->pcb = NULL;
+}
+
+/* Passive-open: turn a bound stream pcb into a listening pcb and install the
+ * accept callback. tcp_listen replaces the pcb with a smaller listen pcb. */
+static int32_t net_stack_pcb_listen(net_socket_t* socket) {
+    struct tcp_pcb* lpcb;
+    if (socket == NULL || socket->pcb == NULL || socket->type != NET_SOCKET_STREAM) {
+        return NET_STATUS_INVALID;
+    }
+    lpcb = tcp_listen((struct tcp_pcb*)socket->pcb);
+    if (lpcb == NULL) {
+        return NET_STATUS_NO_MEM;
+    }
+    socket->pcb = lpcb;
+    tcp_arg(lpcb, socket);
+    tcp_accept(lpcb, net_stack_tcp_accept);
+    return NET_STATUS_OK;
 }
 
 static void net_stack_handle_open(const nd_ipc_message_t* request) {
@@ -1221,6 +1292,83 @@ static void net_stack_handle_open(const nd_ipc_message_t* request) {
         return;
     }
     net_stack_send_reply(request, NET_IPC_RESP, (int32_t)socket_id, 0u, 0u, 0u);
+}
+
+/* Post an accept slot on a listening socket. Mirrors handle_open (client-owned
+ * TX/RX rings arrive in a descriptor), but the descriptor is in arg1..arg3
+ * (arg0 selects the listener) and the created socket has no pcb yet: it waits in
+ * NET_SOCKET_ACCEPTING until net_stack_tcp_accept pairs it with a connection and
+ * answers this request with the accepted socket id. */
+static void net_stack_handle_accept(const nd_ipc_message_t* request) {
+    net_socket_open_descriptor_v1_t* descriptor;
+    net_socket_t* listener;
+    net_socket_t* slot;
+    void* tx_base;
+    void* rx_base;
+    uint32_t socket_id = 0u;
+    uint32_t tx_borrow_id;
+    uint32_t rx_borrow_id;
+    int32_t status;
+
+    if (g_api == NULL || g_api->xfer_buffer_map_borrowed == NULL ||
+        g_api->xfer_buffer_unmap_borrowed == NULL || request->arg3 != sizeof(*descriptor)) {
+        net_stack_reply_error(request, NET_STATUS_INVALID);
+        return;
+    }
+    if (request->arg0 >= NET_SOCKET_MAX) {
+        net_stack_reply_error(request, NET_STATUS_DENIED);
+        return;
+    }
+    listener = &g_socket_pool.sockets[request->arg0];
+    if (listener->owner_endpoint != request->source || listener->type != NET_SOCKET_STREAM ||
+        listener->state != NET_SOCKET_LISTENING) {
+        net_stack_reply_error(request, NET_STATUS_INVALID);
+        return;
+    }
+    descriptor = (net_socket_open_descriptor_v1_t*)g_api->xfer_buffer_map_borrowed(
+        ND_BUFFER_KIND_XFER, request->arg1, request->arg2);
+    if (descriptor == NULL) {
+        net_stack_reply_error(request, NET_STATUS_DENIED);
+        return;
+    }
+    if (descriptor->family != NET_SOCKET_AF_INET || descriptor->type != NET_SOCKET_STREAM ||
+        descriptor->tx_bytes == 0u || descriptor->rx_bytes == 0u) {
+        (void)g_api->xfer_buffer_unmap_borrowed(request->arg2);
+        net_stack_reply_error(request, NET_STATUS_INVALID);
+        return;
+    }
+    tx_base = g_api->xfer_buffer_map_borrowed(ND_BUFFER_KIND_XFER, descriptor->tx_buffer_id,
+                                              descriptor->tx_borrow_id);
+    rx_base = g_api->xfer_buffer_map_borrowed(ND_BUFFER_KIND_XFER, descriptor->rx_buffer_id,
+                                              descriptor->rx_borrow_id);
+    tx_borrow_id = descriptor->tx_borrow_id;
+    rx_borrow_id = descriptor->rx_borrow_id;
+    if (tx_base == NULL || rx_base == NULL) {
+        if (tx_base != NULL) {
+            (void)g_api->xfer_buffer_unmap_borrowed(tx_borrow_id);
+        }
+        if (rx_base != NULL) {
+            (void)g_api->xfer_buffer_unmap_borrowed(rx_borrow_id);
+        }
+        (void)g_api->xfer_buffer_unmap_borrowed(request->arg2);
+        net_stack_reply_error(request, NET_STATUS_DENIED);
+        return;
+    }
+    status =
+        net_socket_open(&g_socket_pool, request->source, descriptor, tx_base, rx_base, &socket_id);
+    (void)g_api->xfer_buffer_unmap_borrowed(request->arg2);
+    if (status != NET_STATUS_OK) {
+        (void)g_api->xfer_buffer_unmap_borrowed(tx_borrow_id);
+        (void)g_api->xfer_buffer_unmap_borrowed(rx_borrow_id);
+        net_stack_reply_error(request, status);
+        return;
+    }
+    slot = &g_socket_pool.sockets[socket_id];
+    slot->state = NET_SOCKET_ACCEPTING;
+    slot->accept_listener_id = request->arg0;
+    slot->connect_request_id = request->request_id;
+    slot->connect_pending = 1u;
+    /* Reply deferred to net_stack_tcp_accept once a connection arrives. */
 }
 
 /* Interface-address control plane (the `ip` tool). The stack tracks a single
@@ -1515,6 +1663,30 @@ static void net_stack_dispatch(const nd_ipc_message_t* request) {
         }
         break;
     }
+    case NET_IPC_LISTEN:
+        if (request->arg0 >= NET_SOCKET_MAX ||
+            g_socket_pool.sockets[request->arg0].owner_endpoint != request->source) {
+            net_stack_reply_error(request, NET_STATUS_DENIED);
+            break;
+        }
+        /* net_socket_listen validates a BOUND stream socket and advances the
+         * pool state; roll it back if the lwIP listen pcb cannot be created. */
+        status = net_socket_listen(&g_socket_pool, request->source, request->arg0);
+        if (status == NET_STATUS_OK) {
+            status = net_stack_pcb_listen(&g_socket_pool.sockets[request->arg0]);
+            if (status != NET_STATUS_OK) {
+                g_socket_pool.sockets[request->arg0].state = NET_SOCKET_BOUND;
+            }
+        }
+        if (status == NET_STATUS_OK) {
+            net_stack_send_reply(request, NET_IPC_RESP, status, 0u, 0u, 0u);
+        } else {
+            net_stack_reply_error(request, status);
+        }
+        break;
+    case NET_IPC_ACCEPT:
+        net_stack_handle_accept(request);
+        break;
     case NET_IPC_CLOSE:
         if (request->arg0 >= NET_SOCKET_MAX ||
             g_socket_pool.sockets[request->arg0].owner_endpoint != request->source) {

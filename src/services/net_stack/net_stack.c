@@ -11,7 +11,10 @@
  *   - Binds one lwIP Ethernet netif to the virtio.net frame service.
  *   - Uses 10.0.2.15/24 with the QEMU SLIRP gateway at 10.0.2.2.
  *   - UDP sockets drain client TX datagram rings and deliver received datagrams
- *     into client RX rings. TCP payload callbacks remain deferred.
+ *     into client RX rings.
+ *   - TCP sockets connect asynchronously (deferred reply), stream client TX ring
+ *     bytes through tcp_write/tcp_output with tcp_sndbuf backpressure, and copy
+ *     inbound segments into the client RX ring, acknowledging via tcp_recved.
  */
 #include <stdint.h>
 #include <stdarg.h>
@@ -106,6 +109,8 @@ static wasmos_sys_native_event_loop_t g_control_loop;
 #define NET_STACK_TX_REQUEST_BASE 0x4E535000u
 #define NET_STACK_FRAME_BYTES 2048u
 #define NET_STACK_UDP_DATAGRAM_BYTES 1472u
+/* One TX-drain chunk pulled from a stream socket's TX ring per tcp_write. */
+#define NET_STACK_TCP_CHUNK_BYTES 1024u
 #define NET_STACK_HRNG_LOOKUP_REQUEST_ID 0x4E530004u
 #define NET_STACK_HRNG_REQUEST_ID 0x4E530005u
 #define NET_STACK_LINK_GET_RETRY_TICKS 50u
@@ -326,6 +331,162 @@ static void net_stack_drain_udp_tx(net_socket_t* socket) {
         }
         pbuf_free(p);
     }
+}
+
+/* Answer a request whose reply was deferred (TCP connect completing in a
+ * callback). The client's reply endpoint is its owner_endpoint; the original
+ * request id was stashed at connect time. */
+static void net_stack_reply_deferred(net_socket_t* socket, uint32_t type, int32_t status) {
+    nd_ipc_message_t reply;
+    if (g_api == NULL || socket == NULL || socket->owner_endpoint == 0u ||
+        g_api->ipc_send == NULL || g_api->sched_current_pid == NULL) {
+        return;
+    }
+    reply.type = type;
+    reply.source = g_endpoint;
+    reply.destination = socket->owner_endpoint;
+    reply.request_id = socket->connect_request_id;
+    reply.arg0 = (uint32_t)status;
+    reply.arg1 = 0u;
+    reply.arg2 = 0u;
+    reply.arg3 = 0u;
+    (void)g_api->ipc_send(g_api->sched_current_pid(), socket->owner_endpoint, &reply);
+}
+
+/* Move queued TX bytes from a stream socket's ring into the TCP send buffer.
+ * tcp_sndbuf() bounds each pass; a short send-buffer resumes from tcp_sent.
+ * Bytes are peeked and only consumed once tcp_write accepts them, so nothing
+ * is lost when the stack is momentarily full. */
+static void net_stack_drain_tcp_tx(net_socket_t* socket) {
+    uint8_t chunk[NET_STACK_TCP_CHUNK_BYTES];
+    struct tcp_pcb* pcb;
+    int wrote_any = 0;
+    if (socket == NULL || socket->type != NET_SOCKET_STREAM || socket->pcb == NULL ||
+        socket->state != NET_SOCKET_CONNECTED) {
+        return;
+    }
+    pcb = (struct tcp_pcb*)socket->pcb;
+    for (;;) {
+        uint32_t sndbuf = tcp_sndbuf(pcb);
+        uint32_t used = wasmos_ringbuf_used(&socket->tx_ring);
+        uint32_t want = sizeof(chunk);
+        uint32_t got;
+        err_t err;
+        if (sndbuf == 0u || used == 0u) {
+            break;
+        }
+        if (want > sndbuf) {
+            want = sndbuf;
+        }
+        if (want > used) {
+            want = used;
+        }
+        got = wasmos_ringbuf_peek(&socket->tx_ring, chunk, want);
+        if (got == 0u) {
+            break;
+        }
+        err = tcp_write(pcb, chunk, (u16_t)got, TCP_WRITE_FLAG_COPY);
+        if (err == ERR_MEM) {
+            /* No room in the send queue right now; retry from tcp_sent. */
+            break;
+        }
+        if (err != ERR_OK) {
+            wasmos_ringbuf_set_flags(&socket->tx_ring, WASMOS_RINGBUF_FLAG_RESET);
+            break;
+        }
+        (void)wasmos_ringbuf_skip(&socket->tx_ring, got);
+        wrote_any = 1;
+    }
+    if (wrote_any) {
+        (void)tcp_output(pcb);
+    }
+}
+
+/* SYN handshake completed: the socket is now writable. Answer the deferred
+ * connect and flush anything the client queued while connecting. */
+static err_t net_stack_tcp_connected(void* arg, struct tcp_pcb* pcb, err_t err) {
+    net_socket_t* socket = (net_socket_t*)arg;
+    (void)pcb;
+    if (socket == NULL) {
+        return ERR_OK;
+    }
+    if (err != ERR_OK) {
+        /* tcp_err follows on a failed connect; let it own the reply/teardown. */
+        return err;
+    }
+    socket->state = NET_SOCKET_CONNECTED;
+    if (socket->connect_pending) {
+        socket->connect_pending = 0u;
+        net_stack_reply_deferred(socket, NET_IPC_RESP, NET_STATUS_OK);
+    }
+    net_stack_drain_tcp_tx(socket);
+    return ERR_OK;
+}
+
+/* Inbound stream bytes (or a FIN when p == NULL). Copy the whole segment into
+ * the client RX ring and acknowledge it; if the ring cannot hold it, refuse
+ * with ERR_MEM so lwIP retains the data and redelivers (TCP flow control). */
+static err_t net_stack_tcp_recv(void* arg, struct tcp_pcb* pcb, struct pbuf* p, err_t err) {
+    net_socket_t* socket = (net_socket_t*)arg;
+    struct pbuf* q;
+    if (socket == NULL) {
+        if (p != NULL) {
+            pbuf_free(p);
+        }
+        return ERR_OK;
+    }
+    if (err != ERR_OK) {
+        if (p != NULL) {
+            pbuf_free(p);
+        }
+        return err;
+    }
+    if (p == NULL) {
+        /* Peer half-closed: surface EOF to the client and notify it. */
+        wasmos_ringbuf_set_flags(&socket->rx_ring, WASMOS_RINGBUF_FLAG_PEER_CLOSED);
+        net_stack_notify_rx(socket);
+        return ERR_OK;
+    }
+    if (wasmos_ringbuf_free(&socket->rx_ring) < p->tot_len) {
+        /* Backpressure: keep the data in lwIP and let it retry. */
+        return ERR_MEM;
+    }
+    for (q = p; q != NULL; q = q->next) {
+        (void)wasmos_ringbuf_write(&socket->rx_ring, q->payload, q->len);
+    }
+    tcp_recved(pcb, p->tot_len);
+    pbuf_free(p);
+    net_stack_notify_rx(socket);
+    return ERR_OK;
+}
+
+/* Peer acknowledged sent bytes: send-buffer space freed, resume draining TX. */
+static err_t net_stack_tcp_sent(void* arg, struct tcp_pcb* pcb, u16_t len) {
+    net_socket_t* socket = (net_socket_t*)arg;
+    (void)pcb;
+    (void)len;
+    net_stack_drain_tcp_tx(socket);
+    return ERR_OK;
+}
+
+/* Fatal error: lwIP has already freed the pcb. Drop our reference, mark the
+ * rings reset, answer any deferred connect, and wake the client. */
+static void net_stack_tcp_err(void* arg, err_t err) {
+    net_socket_t* socket = (net_socket_t*)arg;
+    (void)err;
+    if (socket == NULL) {
+        return;
+    }
+    socket->pcb = NULL;
+    wasmos_ringbuf_set_flags(&socket->tx_ring, WASMOS_RINGBUF_FLAG_RESET);
+    wasmos_ringbuf_set_flags(&socket->rx_ring,
+                             WASMOS_RINGBUF_FLAG_RESET | WASMOS_RINGBUF_FLAG_PEER_CLOSED);
+    if (socket->connect_pending) {
+        socket->connect_pending = 0u;
+        net_stack_reply_deferred(socket, NET_IPC_ERROR, NET_STATUS_IO_ERROR);
+    }
+    socket->state = NET_SOCKET_CLOSING;
+    net_stack_notify_rx(socket);
 }
 
 static err_t net_stack_netif_init(struct netif* netif) {
@@ -961,12 +1122,20 @@ static int32_t net_stack_pcb_connect(net_socket_t* socket, uint16_t port, uint32
     ip_addr_set_ip4_u32(&address, addr_v4);
     if (socket->type == NET_SOCKET_DGRAM) {
         err = udp_connect((struct udp_pcb*)socket->pcb, &address, port);
-    } else {
-        /* TODO(net_stack): install TCP receive/error callbacks and defer the
-         * response until the SYN handshake completes once a netif is bound. */
-        err = tcp_connect((struct tcp_pcb*)socket->pcb, &address, port, NULL);
+        return err == ERR_OK ? NET_STATUS_OK : NET_STATUS_IO_ERROR;
     }
-    return err == ERR_OK ? NET_STATUS_OK : NET_STATUS_IO_ERROR;
+    /* TCP: install the per-socket callbacks and start the handshake. The reply
+     * is deferred (NET_STATUS_WOULD_BLOCK) and delivered from tcp_connected or
+     * tcp_err once the SYN exchange resolves. */
+    {
+        struct tcp_pcb* pcb = (struct tcp_pcb*)socket->pcb;
+        tcp_arg(pcb, socket);
+        tcp_recv(pcb, net_stack_tcp_recv);
+        tcp_sent(pcb, net_stack_tcp_sent);
+        tcp_err(pcb, net_stack_tcp_err);
+        err = tcp_connect(pcb, &address, port, net_stack_tcp_connected);
+    }
+    return err == ERR_OK ? NET_STATUS_WOULD_BLOCK : NET_STATUS_IO_ERROR;
 }
 
 static void net_stack_pcb_close(net_socket_t* socket) {
@@ -976,7 +1145,17 @@ static void net_stack_pcb_close(net_socket_t* socket) {
     if (socket->type == NET_SOCKET_DGRAM) {
         udp_remove((struct udp_pcb*)socket->pcb);
     } else {
-        tcp_abort((struct tcp_pcb*)socket->pcb);
+        /* Detach callbacks before closing: tcp_close may keep the pcb alive to
+         * flush pending data / linger in TIME_WAIT, and the net_socket_t is
+         * freed right after this. A late callback must never touch it. */
+        struct tcp_pcb* pcb = (struct tcp_pcb*)socket->pcb;
+        tcp_arg(pcb, NULL);
+        tcp_recv(pcb, NULL);
+        tcp_sent(pcb, NULL);
+        tcp_err(pcb, NULL);
+        if (tcp_close(pcb) != ERR_OK) {
+            tcp_abort(pcb);
+        }
     }
     socket->pcb = NULL;
 }
@@ -1304,24 +1483,38 @@ static void net_stack_dispatch(const nd_ipc_message_t* request) {
             net_stack_reply_error(request, status);
         }
         break;
-    case NET_IPC_CONNECT:
+    case NET_IPC_CONNECT: {
+        net_socket_t* socket;
         if (request->arg0 >= NET_SOCKET_MAX ||
             g_socket_pool.sockets[request->arg0].owner_endpoint != request->source) {
             net_stack_reply_error(request, NET_STATUS_DENIED);
             break;
         }
-        status = net_stack_pcb_connect(&g_socket_pool.sockets[request->arg0],
-                                       (uint16_t)request->arg1, request->arg2);
-        if (status == NET_STATUS_OK) {
-            status = net_socket_connect(&g_socket_pool, request->source, request->arg0,
-                                        (uint16_t)request->arg1, request->arg2);
+        socket = &g_socket_pool.sockets[request->arg0];
+        /* Record the remote peer and advance the pool state (CONNECTING for a
+         * stream socket, CONNECTED for a datagram socket). */
+        status = net_socket_connect(&g_socket_pool, request->source, request->arg0,
+                                    (uint16_t)request->arg1, request->arg2);
+        if (status != NET_STATUS_OK) {
+            net_stack_reply_error(request, status);
+            break;
         }
+        /* Stash the request id so a deferred TCP reply can find it. */
+        socket->connect_request_id = request->request_id;
+        socket->connect_pending = 1u;
+        status = net_stack_pcb_connect(socket, (uint16_t)request->arg1, request->arg2);
+        if (status == NET_STATUS_WOULD_BLOCK) {
+            /* TCP handshake in flight: reply deferred to tcp_connected/tcp_err. */
+            break;
+        }
+        socket->connect_pending = 0u;
         if (status == NET_STATUS_OK) {
             net_stack_send_reply(request, NET_IPC_RESP, status, 0u, 0u, 0u);
         } else {
             net_stack_reply_error(request, status);
         }
         break;
+    }
     case NET_IPC_CLOSE:
         if (request->arg0 >= NET_SOCKET_MAX ||
             g_socket_pool.sockets[request->arg0].owner_endpoint != request->source) {
@@ -1361,15 +1554,23 @@ static void net_stack_dispatch(const nd_ipc_message_t* request) {
     case NET_IPC_STACK_CREATE:
     case NET_IPC_STACK_DESTROY:
     case NET_IPC_STACK_SELECT:
-    case NET_IPC_TX_NOTIFY:
+    case NET_IPC_TX_NOTIFY: {
+        net_socket_t* socket;
         if (request->arg0 >= NET_SOCKET_MAX ||
-            g_socket_pool.sockets[request->arg0].owner_endpoint != request->source ||
-            g_socket_pool.sockets[request->arg0].type != NET_SOCKET_DGRAM) {
+            g_socket_pool.sockets[request->arg0].owner_endpoint != request->source) {
             net_stack_reply_error(request, NET_STATUS_DENIED);
             break;
         }
-        net_stack_drain_udp_tx(&g_socket_pool.sockets[request->arg0]);
+        socket = &g_socket_pool.sockets[request->arg0];
+        /* A TX doorbell just advances the data plane; there is no reply. The ring
+         * type selects the transport drain. */
+        if (socket->type == NET_SOCKET_DGRAM) {
+            net_stack_drain_udp_tx(socket);
+        } else if (socket->type == NET_SOCKET_STREAM) {
+            net_stack_drain_tcp_tx(socket);
+        }
         break;
+    }
     case NET_IPC_RX_NOTIFY:
         net_stack_reply_error(request, NET_STATUS_NOT_READY);
         break;

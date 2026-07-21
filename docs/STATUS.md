@@ -158,7 +158,15 @@ linked feature documents for rationale and rollout plans.
   exercises lifecycle transitions in a host unit test. Connected UDP sockets
   now drain TX datagram records into `udp_sendto` and write receive callbacks
   back into the RX ring with `NET_IPC_RX_NOTIFY`; the SLIRP UDP echo test covers
-  that route. `ringbuf.h` and the
+  that route. Stream (TCP) sockets connect asynchronously: `NET_IPC_CONNECT`
+  starts the handshake, and the reply is deferred until the lwIP `connected`
+  (or `err`) callback fires. TX-ring bytes stream through `tcp_write`/
+  `tcp_output` with `tcp_sndbuf` backpressure (peeked, consumed only once
+  accepted, resumed from the `sent` callback); inbound segments copy into the
+  RX ring and acknowledge via `tcp_recved`, refusing with `ERR_MEM` when the
+  ring is full so lwIP retains and redelivers. `NET_IPC_CLOSE` closes gracefully
+  after detaching callbacks. The SLIRP TCP echo test covers connect + stream +
+  echo. Listen/accept (server-side TCP) is not yet wired. `ringbuf.h` and the
   wasm3/WARP pinned shared-memory mapping baseline are ready for the planned
   per-socket shared-memory data plane; that mapping must not be revalidated as
   a networking prerequisite unless its implementation changes.
@@ -196,8 +204,10 @@ linked feature documents for rationale and rollout plans.
   `libs/warp` or `libs/wasm3` directly.
 - Complete PCI INTx polarity/trigger configuration before treating RX
   notifications as reliable push delivery.
-- Networking Phase 2 remains pending: end-to-end ARP/ICMP/UDP service
-  validation, socket data callbacks, and shared-memory ring wiring.
+- Networking Phase 2 (ARP/ICMP/UDP) and the client-side of Phase 3 (TCP
+  connect/stream/close over rings) are validated end-to-end. Still pending:
+  server-side TCP (`listen`/`accept`), TCP timeout/retransmit hardening, and the
+  IPv6/multi-address/multi-instance and DMA fast-path phases.
 - Maintain the boot entry contract, C ABI boundaries, and runtime-wrapper
   parity. Record meaningful future baseline changes here as concise subsystem
   updates; keep detailed design changes in `docs/architecture/`.

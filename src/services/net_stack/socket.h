@@ -12,6 +12,7 @@ typedef enum {
     NET_SOCKET_FREE = 0,
     NET_SOCKET_OPEN,
     NET_SOCKET_BOUND,
+    NET_SOCKET_CONNECTING,
     NET_SOCKET_CONNECTED,
     NET_SOCKET_LISTENING,
     NET_SOCKET_CLOSING
@@ -31,6 +32,11 @@ typedef struct {
     uint32_t tx_borrow_id;
     uint32_t rx_buffer_id;
     uint32_t rx_borrow_id;
+    /* TCP connect is asynchronous: the reply is deferred until the SYN
+     * handshake completes (or fails) in a lwIP callback. Store the pending
+     * request id so the callback can answer the original NET_IPC_CONNECT. */
+    uint32_t connect_request_id;
+    uint8_t connect_pending;
     void* pcb; /* struct udp_pcb* or struct tcp_pcb*, owned by net-stack */
     wasmos_ringbuf_t tx_ring;
     wasmos_ringbuf_t rx_ring;

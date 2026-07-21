@@ -202,6 +202,18 @@ wasmos_add_wasm_c_app_target(net_udp_echo
   PACK_COMMENT  "Packing wasm UDP echo client as WASMOS-APP"
 )
 
+wasmos_add_wasm_c_app_target(net_tcp_echo
+  SOURCE      ${WASM_NET_TCP_ECHO_SRC}
+  OUTPUT_WASM ${WASM_NET_TCP_ECHO_WASM}
+  OUTPUT_APP  ${WASM_NET_TCP_ECHO_APP}
+  MANIFEST    ${CMAKE_CURRENT_SOURCE_DIR}/net_tcp_echo/linker.metadata
+  EXPORT      wasmos_main
+  NO_BUILTIN
+  STARTUP_SHIM
+  BUILD_COMMENT "Building wasm TCP echo client"
+  PACK_COMMENT  "Packing wasm TCP echo client as WASMOS-APP"
+)
+
 wasmos_add_wasm_c_app_target(menu_bar
   SOURCE         ${WASM_MENU_BAR_SRC}
   OUTPUT_WASM    ${WASM_MENU_BAR_WASM}
@@ -221,7 +233,7 @@ add_dependencies(c_examples
   hello_c chardev_client chardev_preempt init_smoke
   fs_open_smoke fs_write_smoke native_call_min native_call_smoke
   gfx_smoke irq_route_deny irq_route_allow shmem_owner shmem_target
-  menu_bar net_smoke net_udp_echo
+  menu_bar net_smoke net_udp_echo net_tcp_echo
 )
 
 set_property(GLOBAL APPEND PROPERTY WASMOS_KERNEL_BLOBS ${WASM_CHARDEV_CLIENT_BLOB})

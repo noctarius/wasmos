@@ -1172,13 +1172,21 @@ Done gate:
 - guest ping/UDP echo works on QEMU user-mode network.
 
 Phase 3: TCP baseline
-- Add minimal TCP connect/listen/accept/send/recv/close behavior.
-- Wire `sys_check_timeouts()` periodic tick via RTC/timer service.
-- Add timeout/retry/close-path handling and explicit error mapping.
-- Add TCP echo client/server smoke tests.
+- Client path (DONE): asynchronous `connect` (reply deferred to the lwIP
+  `connected`/`err` callback), `send`/`recv` streamed over the client TX/RX byte
+  rings (`tcp_write`/`tcp_output` with `tcp_sndbuf` backpressure; inbound
+  segments copied into the RX ring and acked via `tcp_recved`, refused with
+  `ERR_MEM` under ring pressure), and graceful `close` after detaching
+  callbacks. Covered by the SLIRP TCP echo smoke test.
+- Server path (PENDING): `listen`/`accept` opcodes and the accept callback that
+  mints a new socket/ring pair.
+- Timeouts: `sys_check_timeouts()` is advanced from the idle loop; dedicated
+  RTC/timer pacing and retransmit/close-path hardening remain to be validated.
+- Add explicit error mapping and TCP server smoke tests.
 
 Done gate:
-- stable TCP echo in `run-qemu` validation without boot regressions.
+- stable TCP echo in `run-qemu` validation without boot regressions (client path
+  met); server-side gate pending listen/accept.
 
 Phase 4: IPv6 + multi-address + multi-instance enablement
 - Set `LWIP_IPV6 1` in `lwipopts.h`; add NDP + ICMPv6 + SLAAC/static v6 config.

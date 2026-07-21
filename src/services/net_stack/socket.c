@@ -70,7 +70,10 @@ int32_t net_socket_connect(net_socket_pool_t* pool, uint32_t owner_endpoint, uin
         return NET_STATUS_INVALID;
     socket->remote_port = port;
     socket->remote_addr_v4 = addr_v4;
-    socket->state = NET_SOCKET_CONNECTED;
+    /* A datagram socket is connected immediately; a stream socket enters
+     * CONNECTING until its TCP handshake completes in a lwIP callback. */
+    socket->state =
+        (socket->type == NET_SOCKET_STREAM) ? NET_SOCKET_CONNECTING : NET_SOCKET_CONNECTED;
     return NET_STATUS_OK;
 }
 

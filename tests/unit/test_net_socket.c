@@ -76,9 +76,39 @@ static int test_rejects_bad_descriptor_or_ring(void) {
     return 0;
 }
 
+/* A stream connect enters CONNECTING (the TCP handshake is still in flight),
+ * while a datagram connect is immediately CONNECTED. Both record the peer. */
+static int test_connect_state_depends_on_type(void) {
+    net_socket_pool_t pool;
+    net_socket_pool_init(&pool);
+    CHECK(wasmos_ringbuf_init(&(wasmos_ringbuf_t){0}, tx_region, sizeof(tx_region), CAPACITY) == 0);
+    CHECK(wasmos_ringbuf_init(&(wasmos_ringbuf_t){0}, rx_region, sizeof(rx_region), CAPACITY) == 0);
+
+    net_socket_open_descriptor_v1_t stream = valid_descriptor();
+    uint32_t sid = 0;
+    CHECK(net_socket_open(&pool, 200u, &stream, tx_region, rx_region, &sid) == NET_STATUS_OK);
+    CHECK(net_socket_bind(&pool, 200u, sid, 1000u, 0u) == NET_STATUS_OK);
+    CHECK(net_socket_connect(&pool, 200u, sid, 80u, 0x01020304u) == NET_STATUS_OK);
+    CHECK(pool.sockets[sid].state == NET_SOCKET_CONNECTING);
+    CHECK(pool.sockets[sid].remote_port == 80u);
+    CHECK(pool.sockets[sid].remote_addr_v4 == 0x01020304u);
+    CHECK(net_socket_close(&pool, 200u, sid) == NET_STATUS_OK);
+
+    net_socket_open_descriptor_v1_t dgram = valid_descriptor();
+    dgram.type = NET_SOCKET_DGRAM;
+    uint32_t did = 0;
+    CHECK(net_socket_open(&pool, 200u, &dgram, tx_region, rx_region, &did) == NET_STATUS_OK);
+    CHECK(net_socket_connect(&pool, 200u, did, 53u, 0x08080808u) == NET_STATUS_OK);
+    CHECK(pool.sockets[did].state == NET_SOCKET_CONNECTED);
+    return 0;
+}
+
 int main(void) {
     int rc = test_open_lifecycle_and_owner_check();
     if (rc != 0)
         return rc;
-    return test_rejects_bad_descriptor_or_ring();
+    rc = test_rejects_bad_descriptor_or_ring();
+    if (rc != 0)
+        return rc;
+    return test_connect_state_depends_on_type();
 }

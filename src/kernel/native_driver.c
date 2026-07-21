@@ -507,6 +507,10 @@ static int nd_ipc_recv(uint32_t receiver_context_id, uint32_t endpoint,
     return ipc_recv_for(receiver_context_id, endpoint, (ipc_message_t*)out_message);
 }
 
+static int nd_ipc_wait(uint32_t receiver_context_id, uint32_t endpoint, uint32_t timeout_ms) {
+    return ipc_endpoint_wait_for(receiver_context_id, endpoint, timeout_ms);
+}
+
 static void nd_sched_yield(void) {
     process_yield(PROCESS_RUN_IDLE);
 }
@@ -924,6 +928,7 @@ int native_driver_start(uint32_t context_id, const uint8_t* elf_data, uint32_t e
     api.ipc_create_endpoint = nd_ipc_create_endpoint;
     api.ipc_send = nd_ipc_send;
     api.ipc_recv = nd_ipc_recv;
+    api.ipc_wait = nd_ipc_wait;
     api.sched_yield = nd_sched_yield;
     api.sched_ticks = nd_sched_ticks;
     api.sched_current_pid = nd_sched_current_pid;

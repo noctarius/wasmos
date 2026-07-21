@@ -8,7 +8,7 @@ const GFX_IPC_ABI_VERSION: i32 = 1;
 const GFX_IPC_CREATE_WINDOW: i32 = 0x0200;
 const GFX_IPC_ALLOC_SHARED_BUFFER: i32 = 0x0203;
 const GFX_IPC_PRESENT_WINDOW: i32 = 0x0205;
-const GFX_IPC_POLL_EVENT: i32 = 0x0206;
+const GFX_IPC_PUSH_EVENT: i32 = 0x0206;
 const GFX_IPC_RELEASE_SHARED_BUFFER: i32 = 0x0207;
 const GFX_IPC_DESTROY_WINDOW: i32 = 0x0201;
 const GFX_IPC_SET_WINDOW_TITLE: i32 = 0x020E;
@@ -107,6 +107,11 @@ export class Surface {
 export class Context {
     private procEndpoint: i32 = -1;
     private gfxEndpoint: i32 = -1;
+    // Endpoint the compositor pushes GFX_IPC_PUSH_EVENT to; it is the window's
+    // owner (source of CREATE_WINDOW). pump() blocks on it, so an idle UI sleeps
+    // rather than polling. Requests use ipc.call's private reply endpoint;
+    // compositor ownership is per-process so that separation is allowed.
+    private eventEndpoint: i32 = -1;
     private gfxOwnerPid: i32 = -1;
     private windowId: i32 = -1;
     private width: i32 = 0;
@@ -143,10 +148,18 @@ export class Context {
         if (ctx.gfxOwnerPid <= 0) {
             return null;
         }
+        ctx.eventEndpoint = ipc.createEndpoint();
+        if (ctx.eventEndpoint < 0) {
+            return null;
+        }
 
-        const create =
-            ipc.call(ctx.gfxEndpoint, GFX_IPC_CREATE_WINDOW, width, height, GFX_IPC_ABI_MAGIC,
-                     packVersionOpcode(GFX_IPC_ABI_VERSION, GFX_IPC_CREATE_WINDOW));
+        // Create the window sourced from the event endpoint so it becomes the
+        // window owner and receives pushed events; block for the reply there.
+        if (!ipc.reply(ctx.gfxEndpoint, ctx.eventEndpoint, GFX_IPC_CREATE_WINDOW, 1, width, height,
+                       GFX_IPC_ABI_MAGIC, packVersionOpcode(GFX_IPC_ABI_VERSION, GFX_IPC_CREATE_WINDOW))) {
+            return null;
+        }
+        const create = ipc.recv(ctx.eventEndpoint);
         if (create == null || create.type != 0x0280 || create.arg0 != GFX_STATUS_OK) {
             return null;
         }
@@ -228,14 +241,16 @@ export class Context {
     pump(limit: i32 = 8): i32 {
         this.previousButtons = this.pointerButtonsValue;
         let handled = 0;
-        for (let i = 0; i < limit; i++) {
-            const reply = ipc.call(this.gfxEndpoint, GFX_IPC_POLL_EVENT, 0, 0, 0, 0);
-            if (reply == null || reply.type != 0x0280 || reply.arg0 != GFX_STATUS_OK) {
-                break;
+        // Block for one pushed event, then process it. The caller loops, so the
+        // thread sleeps in the kernel between events instead of polling.
+        {
+            const reply = ipc.recv(this.eventEndpoint);
+            if (reply == null || reply.type != GFX_IPC_PUSH_EVENT) {
+                return 0;
             }
             const eventType = reply.arg1;
             if (eventType == GFX_EVENT_NONE) {
-                break;
+                return 0;
             }
             handled++;
             if (eventType == GFX_EVENT_POINTER) {

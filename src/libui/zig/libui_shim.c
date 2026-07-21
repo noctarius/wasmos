@@ -301,14 +301,12 @@ int32_t libui_zig_drain(void* ctx) {
     return ui_loop_drain((ui_context_t*)ctx);
 }
 
-/* Poll one GFX event then layout+render if dirty. */
+/* Block for one pushed GFX event, then layout+render if dirty. The blocking
+ * wait lets an idle UI sleep instead of polling the compositor in a tight loop. */
 void libui_zig_poll_and_drain(void* ctx) {
     ui_context_t* c = (ui_context_t*)ctx;
     if (!c->close_requested) {
-        wasmos_ipc_message_t ev;
-        ui_send_gfx_raw(c->gfx_endpoint, c->reply_endpoint, c->req_id++, GFX_IPC_POLL_EVENT, 0, 0,
-                        0, 0, &ev);
-        ui_loop_handle_ipc(c, &ev);
+        (void)ui_wait_and_handle(c);
     }
     ui_loop_drain(c);
 }

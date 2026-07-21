@@ -30,7 +30,7 @@ enum {
     GFX_IPC_ALLOC_SHARED_BUFFER = 0x0203,
     GFX_IPC_SUBMIT_COMMANDS = 0x0204,
     GFX_IPC_PRESENT_WINDOW = 0x0205,
-    GFX_IPC_POLL_EVENT = 0x0206,
+    GFX_IPC_PUSH_EVENT = 0x0206, /* server->client event push (was POLL_EVENT) */
     GFX_IPC_RELEASE_SHARED_BUFFER = 0x0207,
     GFX_IPC_SET_DISPLAY_MODE = 0x0208,
     GFX_IPC_LIST_WINDOWS = 0x0209,
@@ -55,7 +55,7 @@ enum {
  *                           reply: arg1=buffer_id arg2=shmem_id arg3=stride
  * - GFX_IPC_PRESENT_WINDOW: arg0=window_id arg1=buffer_id
  *                           arg2=damage_count arg3=damage_shmem_id
- * - GFX_IPC_POLL_EVENT:     arg0..arg3 reserved
+ * - GFX_IPC_PUSH_EVENT:     server->client; arg1=event_type arg2=window_id arg3=payload
  *                           reply: arg1=event_type arg2=event_arg1 arg3=event_arg2
  * - GFX_IPC_RELEASE_SHARED_BUFFER:
  *                           arg0=buffer_id arg1..arg3 reserved

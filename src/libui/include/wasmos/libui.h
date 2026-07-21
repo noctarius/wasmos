@@ -206,6 +206,11 @@ typedef struct {
 typedef struct ui_context {
     int32_t proc_endpoint;
     int32_t reply_endpoint;
+    /* Dedicated endpoint the compositor pushes GFX_IPC_PUSH_EVENT to. It is the
+     * window's owner endpoint (source of CREATE_WINDOW); the loop blocks on it.
+     * Synchronous requests use reply_endpoint so their replies never mix with
+     * pushed events (compositor ownership is per-process, not per-endpoint). */
+    int32_t event_endpoint;
     int32_t gfx_endpoint;
     int32_t req_id;
     int32_t window_id;
@@ -1117,6 +1122,9 @@ static inline int32_t ui_init(ui_context_t* ctx, int32_t proc_endpoint, int32_t 
     memset(ctx, 0, sizeof(*ctx));
     ctx->proc_endpoint = proc_endpoint;
     ctx->reply_endpoint = reply_endpoint;
+    ctx->event_endpoint = wasmos_ipc_create_endpoint();
+    if (ctx->event_endpoint < 0)
+        return -1;
     ctx->req_id = UI_REQ_BASE;
     ctx->font_px = 14;
     ctx->next_component_id = 1;
@@ -1134,8 +1142,8 @@ static inline int32_t ui_init(ui_context_t* ctx, int32_t proc_endpoint, int32_t 
     if (ui_init_font(ctx) != 0)
         goto fail;
 
-    if (ui_send_gfx(ctx->gfx_endpoint, reply_endpoint, ctx->req_id++, GFX_IPC_CREATE_WINDOW, width,
-                    height, (int32_t)GFX_IPC_ABI_MAGIC,
+    if (ui_send_gfx(ctx->gfx_endpoint, ctx->event_endpoint, ctx->req_id++, GFX_IPC_CREATE_WINDOW,
+                    width, height, (int32_t)GFX_IPC_ABI_MAGIC,
                     (int32_t)gfx_ipc_header_pack(GFX_IPC_ABI_VERSION, GFX_IPC_CREATE_WINDOW),
                     &status, &a1, &a2, &a3) != 0 ||
         status != GFX_STATUS_OK) {
@@ -1201,6 +1209,9 @@ static inline int32_t ui_menu_bar_init(ui_context_t* ctx, int32_t proc_endpoint,
     memset(ctx, 0, sizeof(*ctx));
     ctx->proc_endpoint = proc_endpoint;
     ctx->reply_endpoint = reply_endpoint;
+    ctx->event_endpoint = wasmos_ipc_create_endpoint();
+    if (ctx->event_endpoint < 0)
+        return -1;
     ctx->req_id = UI_REQ_BASE;
     ctx->font_px = 13;
     ctx->next_component_id = 1;
@@ -1226,7 +1237,7 @@ static inline int32_t ui_menu_bar_init(ui_context_t* ctx, int32_t proc_endpoint,
     const int32_t screen_w = a1;
     const int32_t bar_h = 28;
 
-    if (ui_send_gfx(ctx->gfx_endpoint, reply_endpoint, ctx->req_id++, GFX_IPC_CREATE_WINDOW,
+    if (ui_send_gfx(ctx->gfx_endpoint, ctx->event_endpoint, ctx->req_id++, GFX_IPC_CREATE_WINDOW,
                     screen_w, bar_h, (int32_t)GFX_IPC_ABI_MAGIC,
                     (int32_t)gfx_ipc_header_pack(GFX_IPC_ABI_VERSION, GFX_IPC_CREATE_WINDOW),
                     &status, &a1, &a2, &a3) != 0 ||
@@ -1582,7 +1593,9 @@ static inline int32_t ui_find_clickable_at(ui_context_t* ctx, int32_t id, int32_
 static inline int32_t ui_loop_handle_ipc(ui_context_t* ctx, const wasmos_ipc_message_t* msg) {
     if (!ctx || !msg)
         return UI_MSG_ERROR;
-    if (msg->type != GFX_IPC_RESP || msg->arg0 != GFX_STATUS_OK)
+    /* Events now arrive as server-pushed GFX_IPC_PUSH_EVENT (arg1=event_type,
+     * arg2=window_id, arg3=payload) rather than as POLL replies. */
+    if (msg->type != GFX_IPC_PUSH_EVENT)
         return UI_MSG_IGNORED;
     if (msg->arg1 == GFX_EVENT_NONE)
         return UI_MSG_CONSUMED;
@@ -1873,6 +1886,20 @@ static inline int32_t ui_loop_handle_ipc(ui_context_t* ctx, const wasmos_ipc_mes
     }
 
     return UI_MSG_IGNORED;
+}
+
+/* Block until the compositor pushes an event on the event endpoint, then
+ * dispatch it. This replaces the old poll: the thread sleeps in the kernel
+ * until a real event arrives, so an idle UI does not spin the scheduler.
+ * Returns the ui_loop_handle_ipc result, or UI_MSG_IGNORED on a spurious wake. */
+static inline int32_t ui_wait_and_handle(ui_context_t* ctx) {
+    wasmos_ipc_message_t msg;
+    if (!ctx)
+        return UI_MSG_ERROR;
+    if (wasmos_ipc_select_one(ctx->event_endpoint) != 1)
+        return UI_MSG_IGNORED;
+    wasmos_ipc_message_read_last(&msg);
+    return ui_loop_handle_ipc(ctx, &msg);
 }
 
 static inline int32_t ui_loop_drain(ui_context_t* ctx) {

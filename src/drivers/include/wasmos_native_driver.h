@@ -135,6 +135,10 @@ typedef struct wasmos_driver_api {
     int (*xfer_buffer_borrow)(uint32_t grantee_endpoint, uint32_t buffer_id, uint32_t flags);
     int (*xfer_buffer_unborrow)(uint32_t borrow_id);
     int (*xfer_buffer_release)(uint32_t buffer_id);
+    /* Block until `endpoint` has a queued message or timeout_ms elapses (0 =
+     * forever), WITHOUT dequeuing. Lets a native service sleep at idle instead
+     * of yield-spinning its poll loop; drain afterward with ipc_recv. */
+    int (*ipc_wait)(uint32_t receiver_context_id, uint32_t endpoint, uint32_t timeout_ms);
 } wasmos_driver_api_t;
 
 #define ND_BUFFER_KIND_XFER 1u
@@ -143,7 +147,7 @@ typedef struct wasmos_driver_api {
 #define ND_BUFFER_BORROW_WRITE 0x2u
 
 #define WASMOS_NATIVE_ABI_MAGIC 0x574E4150u /* 'WNAP' */
-#define WASMOS_NATIVE_ABI_VERSION 9u
+#define WASMOS_NATIVE_ABI_VERSION 10u
 
 /* Entry point that every native driver must provide via ELF e_entry. */
 typedef int (*native_driver_entry_fn_t)(wasmos_driver_api_t* api, int module_count, int arg2,

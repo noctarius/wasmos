@@ -50,6 +50,12 @@ int ipc_recv_blocking_for(uint32_t receiver_context_id, uint32_t endpoint,
                           ipc_message_t* out_message);
 int ipc_notify_from(uint32_t sender_context_id, uint32_t endpoint);
 int ipc_wait_for(uint32_t receiver_context_id, uint32_t endpoint);
+/*
+ * ipc_endpoint_wait_for — block until a MESSAGE endpoint is non-empty or
+ * timeout_ms elapses (0 = forever), WITHOUT dequeuing. Lets native services
+ * sleep at idle rather than yield-spinning; caller re-polls with ipc_recv_for.
+ */
+int ipc_endpoint_wait_for(uint32_t receiver_context_id, uint32_t endpoint, uint32_t timeout_ms);
 int ipc_send(uint32_t endpoint, const ipc_message_t* message);
 int ipc_recv(uint32_t endpoint, ipc_message_t* out_message);
 int ipc_notify(uint32_t endpoint);

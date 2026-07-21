@@ -802,6 +802,53 @@ fn active_presented_window_count() usize {
     return count;
 }
 
+// Ownership is per owning-process, not per-endpoint: a client may drive its
+// window from any endpoint its process owns (e.g. a separate reply endpoint for
+// synchronous requests, while events are pushed to the window's owner endpoint).
+// Same endpoint is the fast path; otherwise compare owning contexts.
+fn same_owner(owner_endpoint: u32, source_endpoint: u32) bool {
+    if (owner_endpoint == source_endpoint) return true;
+    if (owner_endpoint == IPC_ENDPOINT_NONE or source_endpoint == IPC_ENDPOINT_NONE) return false;
+    var oc: u32 = 0;
+    var sc: u32 = 0;
+    if (api().ipc_endpoint_owner.?(owner_endpoint, &oc) != 0) return false;
+    if (api().ipc_endpoint_owner.?(source_endpoint, &sc) != 0) return false;
+    return oc != 0 and oc == sc;
+}
+
+// Push all queued events to their owner endpoints as GFX_IPC_PUSH_EVENT
+// (arg1=event_type, arg2=window_id, arg3=payload — the layout clients decoded
+// from the old POLL reply). Best-effort: if a client's mailbox is full we stop
+// and retain the rest for the next flush rather than dropping.
+fn flush_events() void {
+    while (g_event_head != g_event_tail) {
+        const ev = g_events[g_event_head];
+        if (ev.endpoint == IPC_ENDPOINT_NONE) {
+            g_event_head = (g_event_head + 1) % g_events.len;
+            continue;
+        }
+        var m: c.nd_ipc_message_t = undefined;
+        m.type = c.GFX_IPC_PUSH_EVENT;
+        m.source = g_gfx_endpoint;
+        m.destination = ev.endpoint;
+        m.request_id = 0;
+        m.arg0 = 0;
+        m.arg1 = ev.event_type;
+        m.arg2 = ev.arg1;
+        m.arg3 = ev.arg2;
+        var tries: u32 = 0;
+        while (api().ipc_send.?(ctxId(), ev.endpoint, &m) != 0) {
+            tries +%= 1;
+            if (tries > 8) return; // mailbox full; keep queued, retry next flush
+            api().sched_yield.?();
+        }
+        g_events[g_event_head] = .{};
+        g_event_head = (g_event_head + 1) % g_events.len;
+    }
+    g_event_head = 0;
+    g_event_tail = 0;
+}
+
 fn event_push(endpoint: u32, event_type: u32, arg1: u32, arg2: u32, arg3: u32) void {
     const next_tail = (g_event_tail + 1) % g_events.len;
     if (next_tail == g_event_head) {
@@ -2436,7 +2483,7 @@ fn handle_destroy_window(msg: *const c.nd_ipc_message_t) void {
         reply_with_status(msg, c.GFX_STATUS_INVALID, 0, 0, 0);
         return;
     };
-    if (g_windows[slot_idx].owner_endpoint != msg.source) {
+    if (!same_owner(g_windows[slot_idx].owner_endpoint, msg.source)) {
         if (!g_window_owner_deny_logged) {
             g_window_owner_deny_logged = true;
             logMsg("[test] gfx window owner deny ok\n");
@@ -2465,7 +2512,7 @@ fn handle_resize_window(msg: *const c.nd_ipc_message_t) void {
         reply_with_status(msg, c.GFX_STATUS_INVALID, 0, 0, 0);
         return;
     };
-    if (g_windows[slot_idx].owner_endpoint != msg.source) {
+    if (!same_owner(g_windows[slot_idx].owner_endpoint, msg.source)) {
         if (!g_window_owner_deny_logged) {
             g_window_owner_deny_logged = true;
             logMsg("[test] gfx window owner deny ok\n");
@@ -2492,7 +2539,7 @@ fn handle_alloc_shared_buffer(msg: *const c.nd_ipc_message_t) void {
             reply_with_status(msg, c.GFX_STATUS_INVALID, 0, 0, 0);
             return;
         };
-        if (g_windows[window_idx].owner_endpoint != msg.source) {
+        if (!same_owner(g_windows[window_idx].owner_endpoint, msg.source)) {
             if (!g_window_owner_deny_logged) {
                 g_window_owner_deny_logged = true;
                 logMsg("[test] gfx window owner deny ok\n");
@@ -2536,7 +2583,7 @@ fn handle_release_shared_buffer(msg: *const c.nd_ipc_message_t) void {
         reply_with_status(msg, c.GFX_STATUS_INVALID, 0, 0, 0);
         return;
     };
-    if (g_buffers[buf_idx].owner_endpoint != msg.source) {
+    if (!same_owner(g_buffers[buf_idx].owner_endpoint, msg.source)) {
         if (!g_buffer_owner_deny_logged) {
             g_buffer_owner_deny_logged = true;
             logMsg("[test] gfx buffer owner deny ok\n");
@@ -2576,7 +2623,7 @@ fn handle_present_window(msg: *const c.nd_ipc_message_t) void {
         reply_with_status(msg, c.GFX_STATUS_INVALID, 0, 0, 0);
         return;
     };
-    if (g_windows[window_idx].owner_endpoint != msg.source) {
+    if (!same_owner(g_windows[window_idx].owner_endpoint, msg.source)) {
         if (!g_window_owner_deny_logged) {
             g_window_owner_deny_logged = true;
             logMsg("[test] gfx window owner deny ok\n");
@@ -2590,7 +2637,7 @@ fn handle_present_window(msg: *const c.nd_ipc_message_t) void {
         return;
     };
     const buf = g_buffers[buf_idx];
-    if (buf.owner_endpoint != msg.source) {
+    if (!same_owner(buf.owner_endpoint, msg.source)) {
         if (!g_buffer_owner_deny_logged) {
             g_buffer_owner_deny_logged = true;
             logMsg("[test] gfx buffer owner deny ok\n");
@@ -2695,18 +2742,6 @@ fn handle_present_window(msg: *const c.nd_ipc_message_t) void {
     reply_with_status(msg, c.GFX_STATUS_OK, 0, 0, 0);
 }
 
-fn handle_poll_event(msg: *const c.nd_ipc_message_t) void {
-    if (GFX_TRACE) {
-        logMsg("[gfx-t] poll-event\n");
-    }
-    var ev: gfx_event_t = .{};
-    if (event_pop_for(msg.source, &ev)) {
-        reply_with_status(msg, c.GFX_STATUS_OK, ev.event_type, ev.arg1, ev.arg2);
-        return;
-    }
-    reply_with_status(msg, c.GFX_STATUS_OK, c.GFX_EVENT_NONE, 0, 0);
-}
-
 fn handle_set_display_mode(msg: *const c.nd_ipc_message_t) void {
     if (g_fb_endpoint == IPC_ENDPOINT_NONE) {
         reply_with_status(msg, c.GFX_STATUS_IO, 0, 0, 0);
@@ -2807,7 +2842,7 @@ fn handle_set_window_flags(msg: *const c.nd_ipc_message_t) void {
         reply_with_status(msg, c.GFX_STATUS_INVALID, 0, 0, 0);
         return;
     };
-    if (g_windows[slot_idx].owner_endpoint != msg.source) {
+    if (!same_owner(g_windows[slot_idx].owner_endpoint, msg.source)) {
         reply_with_status(msg, c.GFX_STATUS_PERMISSION, 0, 0, 0);
         return;
     }
@@ -2856,7 +2891,7 @@ fn handle_move_window(msg: *const c.nd_ipc_message_t) void {
         reply_with_status(msg, c.GFX_STATUS_INVALID, 0, 0, 0);
         return;
     };
-    if (g_windows[slot_idx].owner_endpoint != msg.source) {
+    if (!same_owner(g_windows[slot_idx].owner_endpoint, msg.source)) {
         reply_with_status(msg, c.GFX_STATUS_PERMISSION, 0, 0, 0);
         return;
     }
@@ -2876,7 +2911,7 @@ fn handle_set_window_title(msg: *const c.nd_ipc_message_t) void {
         reply_with_status(msg, c.GFX_STATUS_INVALID, 0, 0, 0);
         return;
     };
-    if (g_windows[slot_idx].owner_endpoint != msg.source) {
+    if (!same_owner(g_windows[slot_idx].owner_endpoint, msg.source)) {
         reply_with_status(msg, c.GFX_STATUS_PERMISSION, 0, 0, 0);
         return;
     }
@@ -2954,7 +2989,6 @@ fn handle_ipc_dispatch(msg: *const c.nd_ipc_message_t) void {
         c.GFX_IPC_ALLOC_SHARED_BUFFER => handle_alloc_shared_buffer(msg),
         c.GFX_IPC_RELEASE_SHARED_BUFFER => handle_release_shared_buffer(msg),
         c.GFX_IPC_PRESENT_WINDOW => handle_present_window(msg),
-        c.GFX_IPC_POLL_EVENT => handle_poll_event(msg),
         c.GFX_IPC_SET_DISPLAY_MODE => handle_set_display_mode(msg),
         c.GFX_IPC_LIST_WINDOWS => handle_list_windows(msg),
         c.GFX_IPC_FOCUS_WINDOW => handle_focus_window(msg),
@@ -2985,7 +3019,6 @@ fn register_ipc_handlers() i32 {
     if (sys.eventRegister(&g_ipc_loop, c.GFX_IPC_ALLOC_SHARED_BUFFER, cb, null) != 0) return -1;
     if (sys.eventRegister(&g_ipc_loop, c.GFX_IPC_RELEASE_SHARED_BUFFER, cb, null) != 0) return -1;
     if (sys.eventRegister(&g_ipc_loop, c.GFX_IPC_PRESENT_WINDOW, cb, null) != 0) return -1;
-    if (sys.eventRegister(&g_ipc_loop, c.GFX_IPC_POLL_EVENT, cb, null) != 0) return -1;
     if (sys.eventRegister(&g_ipc_loop, c.GFX_IPC_SET_DISPLAY_MODE, cb, null) != 0) return -1;
     if (sys.eventRegister(&g_ipc_loop, c.GFX_IPC_LIST_WINDOWS, cb, null) != 0) return -1;
     if (sys.eventRegister(&g_ipc_loop, c.GFX_IPC_FOCUS_WINDOW, cb, null) != 0) return -1;
@@ -3057,9 +3090,16 @@ pub export fn initialize(driver_api: *c.wasmos_driver_api_t, module_count: c_int
     init_title_glyph_cache_startup();
     _ = api().proc_notify_ready.?();
 
+    // Idle sleep bound: input notifies and client requests wake the wait
+    // immediately; this only caps how long we sleep with nothing to do, so
+    // periodic housekeeping (font-title init retry, orphan cleanup) still runs.
+    const GFX_IDLE_WAIT_MS: u32 = 100;
     while (true) {
         const handled = sys.eventLoopPoll(&g_ipc_loop, 32);
         if (handled < 0) return -1;
+        // Deliver any events the dispatched messages queued (input, focus,
+        // resize, close) to their owner endpoints as GFX_IPC_PUSH_EVENT.
+        flush_events();
         if (handled > 0) {
             g_total_handled_counter +%= @intCast(handled);
             if ((g_total_handled_counter & 0xFF) == 0) {
@@ -3072,11 +3112,14 @@ pub export fn initialize(driver_api: *c.wasmos_driver_api_t, module_count: c_int
                 prime_title_glyph_step();
             }
             flush_repaint_if_pending();
+            flush_events();
             g_idle_housekeeping_counter +%= 1;
             if ((g_idle_housekeeping_counter & 0x3F) == 0) {
                 cleanup_orphaned_state();
             }
-            api().sched_yield.?();
+            // Block instead of yield-spinning: sleep until a message arrives or
+            // the housekeeping interval elapses, letting the CPU reach idle/hlt.
+            _ = api().ipc_wait.?(ctxId(), g_gfx_endpoint, GFX_IDLE_WAIT_MS);
             continue;
         }
         flush_repaint_if_pending();

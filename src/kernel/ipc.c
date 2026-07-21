@@ -330,6 +330,36 @@ int ipc_recv_blocking_for(uint32_t receiver_context_id, uint32_t endpoint,
     return IPC_OK;
 }
 
+/* Block until `endpoint` has at least one queued message, or timeout_ms elapses
+ * (0 = wait forever). Does NOT dequeue — the caller drains with ipc_recv_for
+ * afterwards. Lets a service sleep at idle instead of yield-spinning its poll
+ * loop. Returns IPC_OK once woken (message may already have been drained by a
+ * racing waiter, so the caller must re-poll and tolerate an empty read). */
+int ipc_endpoint_wait_for(uint32_t receiver_context_id, uint32_t endpoint, uint32_t timeout_ms) {
+    ipc_endpoint_t* ep = ipc_endpoint_get(endpoint);
+    if (!ep) {
+        return IPC_ERR_INVALID;
+    }
+    if (ep->type != IPC_ENDPOINT_TYPE_MESSAGE) {
+        ksync_spinlock_unlock(&ep->lock);
+        return IPC_ERR_INVALID;
+    }
+    if (receiver_context_id != IPC_CONTEXT_KERNEL && ep->owner_context_id != receiver_context_id) {
+        ksync_spinlock_unlock(&ep->lock);
+        return IPC_ERR_PERM;
+    }
+    if (ep->count != 0) {
+        ksync_spinlock_unlock(&ep->lock);
+        return IPC_OK; /* already readable */
+    }
+    /* Arm and block under event.lock (single authority), mirroring
+     * ipc_recv_blocking_for's lost-wakeup-safe handoff. */
+    ksync_spinlock_lock(&ep->event.lock);
+    ksync_spinlock_unlock(&ep->lock);
+    sched_event_wait(&ep->event, timeout_ms);
+    return IPC_OK;
+}
+
 int ipc_notify_from(uint32_t sender_context_id, uint32_t endpoint) {
     ipc_endpoint_t* ep = ipc_endpoint_get(endpoint);
     if (!ep) {

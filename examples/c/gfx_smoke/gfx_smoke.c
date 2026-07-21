@@ -207,19 +207,36 @@ static int send_gfx(int32_t gfx_ep, int32_t reply_ep, int32_t req_id, int32_t op
     return 0;
 }
 
-static int poll_gfx_focus_event(int32_t gfx_ep, int32_t reply_ep, int32_t* req,
-                                int32_t expected_window_id) {
-    gfx_reply_t ev;
+/* Drain one server-pushed GFX_IPC_PUSH_EVENT from a window's event endpoint
+ * into `out` (arg1=event_type, arg2=window_id, arg3=payload — the layout the
+ * old POLL reply used). Returns 0 if an event was drained, -1 if none pending. */
+static int recv_gfx_event(int32_t event_ep, gfx_reply_t* out) {
+    if (wasmos_ipc_drain(event_ep) <= 0) {
+        return -1;
+    }
+    wasmos_ipc_message_t m;
+    wasmos_ipc_message_read_last(&m);
+    if (m.type != GFX_IPC_PUSH_EVENT) {
+        return -1;
+    }
+    out->status = GFX_STATUS_OK;
+    out->arg1 = (int32_t)m.arg1;
+    out->arg2 = (int32_t)m.arg2;
+    out->arg3 = (int32_t)m.arg3;
+    return 0;
+}
+
+static int poll_gfx_focus_event(int32_t event_ep, int32_t expected_window_id) {
     for (int i = 0; i < 96; ++i) {
-        if (send_gfx(gfx_ep, reply_ep, (*req)++, GFX_IPC_POLL_EVENT, 0, 0, 0, 0, &ev) != 0 ||
-            ev.status != GFX_STATUS_OK) {
-            return -1;
+        if (wasmos_ipc_select_one(event_ep) != 1) {
+            continue; /* spurious wake */
         }
-        if (ev.arg1 == GFX_EVENT_NONE) {
-            (void)wasmos_sched_yield();
+        wasmos_ipc_message_t m;
+        wasmos_ipc_message_read_last(&m);
+        if (m.type != GFX_IPC_PUSH_EVENT) {
             continue;
         }
-        if (ev.arg1 == GFX_EVENT_FOCUS_GAINED && ev.arg2 == expected_window_id) {
+        if (m.arg1 == GFX_EVENT_FOCUS_GAINED && (int32_t)m.arg2 == expected_window_id) {
             puts("[test] gfx smoke event focus-gained");
             return 0;
         }
@@ -227,12 +244,10 @@ static int poll_gfx_focus_event(int32_t gfx_ep, int32_t reply_ep, int32_t* req,
     return -1;
 }
 
-static int poll_gfx_events_once(int32_t gfx_ep, int32_t reply_ep, int32_t* req,
-                                int32_t* out_close_window_id) {
+static int poll_gfx_events_once(int32_t event_ep, int32_t* out_close_window_id) {
     gfx_reply_t ev;
-    if (send_gfx(gfx_ep, reply_ep, (*req)++, GFX_IPC_POLL_EVENT, 0, 0, 0, 0, &ev) != 0 ||
-        ev.status != GFX_STATUS_OK) {
-        return -1;
+    if (recv_gfx_event(event_ep, &ev) != 0) {
+        return 0; /* nothing pending */
     }
     if (ev.arg1 == GFX_EVENT_KEY) {
         char msg[96];
@@ -444,20 +459,17 @@ static int pump_libui_demo(void) {
     ui_context_t* ui = &g_libui_ctx;
     if (ui->window_id <= 0)
         return 0;
-    wasmos_ipc_message_t ev_raw;
-    if (!ui->close_requested && ui_send_gfx_raw(ui->gfx_endpoint, ui->reply_endpoint, ui->req_id++,
-                                                GFX_IPC_POLL_EVENT, 0, 0, 0, 0, &ev_raw) == 0) {
+    if (!ui->close_requested) {
+        wasmos_ipc_message_t ev_raw;
+        while (wasmos_ipc_drain(ui->event_endpoint) > 0) {
+            wasmos_ipc_message_read_last(&ev_raw);
 #if GFX_SMOKE_TRACE
-        if (ev_raw.arg1 == GFX_EVENT_POINTER) {
-            printf("[gfx-t] libui ptr win=%d x=%d y=%d btn=%d\n", ev_raw.arg2,
-                   (int)(ev_raw.arg3 & 0xFFF), (int)((ev_raw.arg3 >> 12) & 0xFFF),
-                   (int)((ev_raw.arg3 >> 24) & 1));
-            if (((ev_raw.arg3 >> 24) & 1) != 0) {
+            if (ev_raw.arg1 == GFX_EVENT_POINTER && ((ev_raw.arg3 >> 24) & 1) != 0) {
                 puts("[dbg-libui] pointer btn-down");
             }
-        }
 #endif
-        (void)ui_loop_handle_ipc(ui, &ev_raw);
+            (void)ui_loop_handle_ipc(ui, &ev_raw);
+        }
     }
     if (ui_loop_drain(ui) != 0) {
         return -1;
@@ -525,7 +537,7 @@ int main(int argc, char** argv) {
         puts("[test] gfx smoke present1 failed");
         return GFX_SMOKE_E_PRESENT0;
     }
-    if (poll_gfx_focus_event(gfx_ep, reply_ep, &req, g_ctx1.window_id) != 0) {
+    if (poll_gfx_focus_event(g_ctx1.event_endpoint, g_ctx1.window_id) != 0) {
         puts("[test] gfx smoke event focus missing");
         return GFX_SMOKE_E_EVENT_FOCUS;
     }
@@ -584,7 +596,7 @@ int main(int argc, char** argv) {
             puts("[test] gfx smoke present-loop failed");
             return GFX_SMOKE_E_PRESENT_LOOP;
         }
-        (void)poll_gfx_events_once(gfx_ep, reply_ep, &req, 0);
+        (void)poll_gfx_events_once(g_ctx1.event_endpoint, 0);
         (void)wasmos_sched_yield();
     }
     puts("[test] gfx smoke visible done");
@@ -643,76 +655,70 @@ int main(int argc, char** argv) {
     int closed1 = 0;
     int closed2 = 0;
     int closed3 = 0;
+    // Block on the three windows' event endpoints (plus the libui demo window)
+    // instead of polling; events are now pushed by the compositor. The timeout
+    // only bounds how long we sleep with nothing happening.
+    int32_t evsel = wasmos_ipc_select_create();
+    if (evsel >= 0) {
+        (void)wasmos_ipc_select_add(evsel, g_ctx1.event_endpoint);
+        (void)wasmos_ipc_select_add(evsel, g_ctx2.event_endpoint);
+        (void)wasmos_ipc_select_add(evsel, g_ctx3.event_endpoint);
+        if (libui_started) {
+            (void)wasmos_ipc_select_add(evsel, g_libui_ctx.event_endpoint);
+        }
+    }
+    const int32_t win_eps[3] = {g_ctx1.event_endpoint, g_ctx2.event_endpoint,
+                                g_ctx3.event_endpoint};
     while (!closed1 || !closed2 || !closed3) {
-        int32_t close_id = 0;
-        gfx_reply_t ev = {0};
-        if (send_gfx(gfx_ep, reply_ep, req++, GFX_IPC_POLL_EVENT, 0, 0, 0, 0, &ev) != 0 ||
-            ev.status != GFX_STATUS_OK) {
-            return GFX_SMOKE_E_EVENT_CLOSE;
-        }
-        int rc = 0;
-        if (ev.arg1 == GFX_EVENT_CLOSE_REQUEST) {
-            close_id = ev.arg2;
-            puts("[test] gfx smoke event close-request");
-            rc = 1;
-        } else if (ev.arg1 == GFX_EVENT_RESIZE) {
-            int32_t rw = (int32_t)(ev.arg3 & 0xFFFF);
-            int32_t rh = (int32_t)((ev.arg3 >> 16) & 0xFFFF);
-            if (ev.arg2 == g_ctx1.window_id && !closed1) {
-                (void)handle_resize_realloc(gfx_ep, reply_ep, &req, &g_ctx1, rw, rh, 90u);
-            } else if (ev.arg2 == g_ctx2.window_id && !closed2) {
-                (void)handle_resize_realloc(gfx_ep, reply_ep, &req, &g_ctx2, rw, rh, 120u);
-            } else if (ev.arg2 == g_ctx3.window_id && !closed3) {
-                (void)handle_resize_realloc_logo(gfx_ep, reply_ep, &req, &g_ctx3, rw, rh);
-            }
-        } else if (ev.arg1 == GFX_EVENT_POINTER) {
-            (void)ev;
-        } else if (ev.arg1 == GFX_EVENT_FOCUS_GAINED) {
-#if GFX_SMOKE_TRACE
-            puts("[test] gfx smoke event focus-gained");
-#endif
-        } else if (ev.arg1 == GFX_EVENT_FOCUS_LOST) {
-#if GFX_SMOKE_TRACE
-            puts("[test] gfx smoke event focus-lost");
-#endif
-        }
-        if (rc == 1) {
-            if (!closed1 && close_id == g_ctx1.window_id) {
-                if (send_gfx(gfx_ep, reply_ep, req++, GFX_IPC_DESTROY_WINDOW, g_ctx1.window_id, 0,
-                             0, 0, &reply) != 0 ||
-                    reply.status != GFX_STATUS_OK) {
-                    puts("[test] gfx smoke destroy1 failed");
-                    return GFX_SMOKE_E_DESTROY;
+        (void)wasmos_ipc_select_wait_timeout(evsel, 200);
+        for (int wi = 0; wi < 3; ++wi) {
+            gfx_reply_t ev = {0};
+            while (recv_gfx_event(win_eps[wi], &ev) == 0) {
+                if (ev.arg1 == GFX_EVENT_CLOSE_REQUEST) {
+                    const int32_t close_id = ev.arg2;
+                    puts("[test] gfx smoke event close-request");
+                    if (!closed1 && close_id == g_ctx1.window_id) {
+                        if (send_gfx(gfx_ep, reply_ep, req++, GFX_IPC_DESTROY_WINDOW,
+                                     g_ctx1.window_id, 0, 0, 0, &reply) != 0 ||
+                            reply.status != GFX_STATUS_OK) {
+                            puts("[test] gfx smoke destroy1 failed");
+                            return GFX_SMOKE_E_DESTROY;
+                        }
+                        closed1 = 1;
+                    } else if (!closed2 && close_id == g_ctx2.window_id) {
+                        if (send_gfx(gfx_ep, reply_ep, req++, GFX_IPC_DESTROY_WINDOW,
+                                     g_ctx2.window_id, 0, 0, 0, &reply) != 0 ||
+                            reply.status != GFX_STATUS_OK) {
+                            puts("[test] gfx smoke destroy2 failed");
+                            return GFX_SMOKE_E_DESTROY;
+                        }
+                        closed2 = 1;
+                    } else if (!closed3 && close_id == g_ctx3.window_id) {
+                        if (send_gfx(gfx_ep, reply_ep, req++, GFX_IPC_DESTROY_WINDOW,
+                                     g_ctx3.window_id, 0, 0, 0, &reply) != 0 ||
+                            reply.status != GFX_STATUS_OK) {
+                            puts("[test] gfx smoke destroy3 failed");
+                            return GFX_SMOKE_E_DESTROY;
+                        }
+                        closed3 = 1;
+                    }
+                } else if (ev.arg1 == GFX_EVENT_RESIZE) {
+                    const int32_t rw = (int32_t)(ev.arg3 & 0xFFFF);
+                    const int32_t rh = (int32_t)((ev.arg3 >> 16) & 0xFFFF);
+                    if (ev.arg2 == g_ctx1.window_id && !closed1) {
+                        (void)handle_resize_realloc(gfx_ep, reply_ep, &req, &g_ctx1, rw, rh, 90u);
+                    } else if (ev.arg2 == g_ctx2.window_id && !closed2) {
+                        (void)handle_resize_realloc(gfx_ep, reply_ep, &req, &g_ctx2, rw, rh, 120u);
+                    } else if (ev.arg2 == g_ctx3.window_id && !closed3) {
+                        (void)handle_resize_realloc_logo(gfx_ep, reply_ep, &req, &g_ctx3, rw, rh);
+                    }
                 }
-                closed1 = 1;
-                continue;
-            }
-            if (!closed2 && close_id == g_ctx2.window_id) {
-                if (send_gfx(gfx_ep, reply_ep, req++, GFX_IPC_DESTROY_WINDOW, g_ctx2.window_id, 0,
-                             0, 0, &reply) != 0 ||
-                    reply.status != GFX_STATUS_OK) {
-                    puts("[test] gfx smoke destroy2 failed");
-                    return GFX_SMOKE_E_DESTROY;
-                }
-                closed2 = 1;
-                continue;
-            }
-            if (!closed3 && close_id == g_ctx3.window_id) {
-                if (send_gfx(gfx_ep, reply_ep, req++, GFX_IPC_DESTROY_WINDOW, g_ctx3.window_id, 0,
-                             0, 0, &reply) != 0 ||
-                    reply.status != GFX_STATUS_OK) {
-                    puts("[test] gfx smoke destroy3 failed");
-                    return GFX_SMOKE_E_DESTROY;
-                }
-                closed3 = 1;
-                continue;
             }
         }
         if (libui_started && pump_libui_demo() != 0) {
             puts("[test] libui demo pump failed");
             return 33;
         }
-        (void)wasmos_sched_yield();
     }
 
     if (send_gfx(gfx_ep, reply_ep, req++, GFX_IPC_PRESENT_WINDOW, g_ctx1.window_id,

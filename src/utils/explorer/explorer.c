@@ -846,12 +846,7 @@ int main(int argc, char** argv) {
     }
 
     while (!g_ctx.close_requested) {
-        wasmos_ipc_message_t msg;
-
-        if (ui_send_gfx_raw(g_ctx.gfx_endpoint, g_ctx.reply_endpoint, g_ctx.req_id++,
-                            GFX_IPC_POLL_EVENT, 0, 0, 0, 0, &msg) == 0) {
-            (void)ui_loop_handle_ipc(&g_ctx, &msg);
-        }
+        (void)ui_wait_and_handle(&g_ctx);
         if (ui_loop_drain(&g_ctx) != 0) {
             break;
         }

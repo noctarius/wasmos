@@ -399,25 +399,35 @@ int main(int argc, char** argv) {
     int32_t refresh_ctr = 0;
     int32_t clock_ctr = 0;
 
+    /* Block on pushed events with a periodic timeout so the clock/app-list
+     * still update at idle, instead of busy-polling the compositor. Events wake
+     * the wait immediately; the timeout (~1/4 s) only bounds the idle sleep. */
+    const int32_t MENU_BAR_TICK_MS = 250;
+    const int32_t CLOCK_WAKES = 4;    /* ~1 s clock refresh */
+    const int32_t REFRESH_WAKES = 40; /* ~10 s app-list refresh */
+    int32_t sel = wasmos_ipc_select_create();
+    if (sel < 0 || wasmos_ipc_select_add(sel, g_ctx.event_endpoint) != 0) {
+        ui_destroy(&g_ctx);
+        return 1;
+    }
+
     while (!g_ctx.close_requested) {
-        if (wasmos_ipc_call(g_ctx.gfx_endpoint, g_ctx.reply_endpoint, GFX_IPC_POLL_EVENT,
-                            g_ctx.req_id++, 0, 0, 0, 0, &msg) == 0 &&
-            msg.type == GFX_IPC_RESP && msg.arg0 == GFX_STATUS_OK) {
+        (void)wasmos_ipc_select_wait_timeout(sel, MENU_BAR_TICK_MS);
+        while (wasmos_ipc_drain(g_ctx.event_endpoint) > 0) {
+            wasmos_ipc_message_read_last(&msg);
             ui_loop_handle_ipc(&g_ctx, &msg);
         }
 
-        ui_loop_drain(&g_ctx);
-
-        if (++clock_ctr >= CLOCK_REFRESH_TICKS) {
+        if (++clock_ctr >= CLOCK_WAKES) {
             clock_ctr = 0;
             update_clock();
         }
-        if (++refresh_ctr >= MENU_REFRESH_TICKS) {
+        if (++refresh_ctr >= REFRESH_WAKES) {
             refresh_ctr = 0;
             refresh_app_list();
         }
 
-        wasmos_sched_yield();
+        ui_loop_drain(&g_ctx);
     }
 
     ui_destroy(&g_ctx);

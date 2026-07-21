@@ -4,9 +4,12 @@
  *   ip addr show                         list interfaces and their addresses
  *   ip addr add <a.b.c.d>/<prefix> dev <name>   set an interface address
  *   ip addr del dev <name>               clear an interface address
+ *   ip dev <name> up|down                administrative interface state
+ *   ip dhcp <name> on|off                start/stop the DHCP client
  *
  * `<name>` is ethN/enN; its trailing digit is the interface index. Talks to the
- * `net.stack` service via NET_IPC_IFADDR_ADD/DEL/LIST.
+ * `net.stack` service via NET_IPC_IFADDR_ADD/DEL/LIST, NET_IPC_IF_SET_STATE,
+ * and NET_IPC_DHCP_SET.
  */
 #include <stdint.h>
 
@@ -174,7 +177,19 @@ static int recv_reply(int32_t ep, int32_t request_id, wasmos_ipc_message_t* mess
 
 static void usage(void) {
     puts("[ip] usage: ip addr show | ip addr add <a.b.c.d>/<prefix> dev <name> | ip addr del dev "
-         "<name> | ip dev <name> up|down");
+         "<name> | ip dev <name> up|down | ip dhcp <name> on|off");
+}
+
+static int cmd_dhcp(int32_t stack_ep, int32_t reply_ep, int32_t* rid, const char* dev, uint32_t on) {
+    wasmos_ipc_message_t message;
+    if (wasmos_ipc_send(stack_ep, reply_ep, NET_IPC_DHCP_SET, *rid, name_to_index(dev), on, 0u, 0) !=
+            0 ||
+        recv_reply(reply_ep, (*rid)++, &message) != 0 || message.type != NET_IPC_RESP) {
+        puts(on ? "[ip] dhcp on failed" : "[ip] dhcp off failed");
+        return 1;
+    }
+    puts(on ? "[ip] dhcp on ok" : "[ip] dhcp off ok");
+    return 0;
 }
 
 static int cmd_dev_state(int32_t stack_ep, int32_t reply_ep, int32_t* rid, const char* dev,
@@ -235,6 +250,8 @@ static int cmd_show(int32_t stack_ep, int32_t reply_ep, int32_t* rid) {
                 (get_u32(r, 20u) & NET_IFADDR_FLAG_ADMIN_UP) ? " state up" : " state down");
         app_str(line, (int)sizeof(line), &n,
                 (get_u32(r, 20u) & NET_IFADDR_FLAG_LINK_UP) ? " link up" : " link down");
+        if (get_u32(r, 20u) & NET_IFADDR_FLAG_DHCP)
+            app_str(line, (int)sizeof(line), &n, " dhcp");
         if (n < (int)sizeof(line))
             line[n] = '\0';
         else
@@ -333,7 +350,8 @@ int main(int argc, char** argv) {
         puts("[ip] setup failed");
         return 1;
     }
-    if (n < 1 || (!str_eq(tok[0], "addr") && !str_eq(tok[0], "dev"))) {
+    if (n < 1 ||
+        (!str_eq(tok[0], "addr") && !str_eq(tok[0], "dev") && !str_eq(tok[0], "dhcp"))) {
         usage();
         return 1;
     }
@@ -352,6 +370,14 @@ int main(int argc, char** argv) {
             return cmd_dev_state(stack_ep, reply_ep, &rid, tok[1], 1u);
         if (n >= 3 && str_eq(tok[2], "down"))
             return cmd_dev_state(stack_ep, reply_ep, &rid, tok[1], 0u);
+        usage();
+        return 1;
+    }
+    if (str_eq(tok[0], "dhcp")) {
+        if (n >= 3 && str_eq(tok[2], "on"))
+            return cmd_dhcp(stack_ep, reply_ep, &rid, tok[1], 1u);
+        if (n >= 3 && str_eq(tok[2], "off"))
+            return cmd_dhcp(stack_ep, reply_ep, &rid, tok[1], 0u);
         usage();
         return 1;
     }

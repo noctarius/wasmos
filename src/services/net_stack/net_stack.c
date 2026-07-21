@@ -1123,6 +1123,35 @@ static void net_stack_handle_ifaddr_del(const nd_ipc_message_t* request) {
     net_stack_send_reply(request, NET_IPC_RESP, NET_STATUS_OK, 0u, 0u, 0u);
 }
 
+static void net_stack_handle_dhcp_set(const nd_ipc_message_t* request) {
+    /* arg0 = if_index, arg1 = 1 (start) / 0 (stop). */
+    if (!g_netif_installed || request->arg0 != (uint32_t)net_stack_active_index()) {
+        net_stack_reply_error(request, NET_STATUS_NOT_READY);
+        return;
+    }
+    if (request->arg1 != 0u) {
+        ip4_addr_t zero;
+        /* Clear any static address so the fresh lease is not shadowed, then
+         * (re)start the client. dhcp_start is idempotent for an active client. */
+        ip4_addr_set_zero(&zero);
+        netif_set_addr(&g_netif, &zero, &zero, &zero);
+        g_addr_ready = 0u;
+        if (dhcp_start(&g_netif) != ERR_OK) {
+            net_stack_reply_error(request, NET_STATUS_IO_ERROR);
+            return;
+        }
+        g_dhcp_active = 1u;
+        g_dhcp_started_tick = g_api->sched_ticks != NULL ? g_api->sched_ticks() : 0u;
+        g_dhcp_timeout_logged = 0u;
+    } else {
+        if (g_dhcp_active) {
+            dhcp_stop(&g_netif);
+            g_dhcp_active = 0u;
+        }
+    }
+    net_stack_send_reply(request, NET_IPC_RESP, NET_STATUS_OK, 0u, 0u, 0u);
+}
+
 static void net_stack_handle_ifaddr_list(const nd_ipc_message_t* request) {
     net_ifaddr_record_v1_t* out;
     uint32_t capacity;
@@ -1149,6 +1178,9 @@ static void net_stack_handle_ifaddr_list(const nd_ipc_message_t* request) {
         if (&g_interfaces[i] == g_active_ifc && g_netif_installed) {
             if (netif_is_up(&g_netif)) {
                 out[count].flags |= NET_IFADDR_FLAG_ADMIN_UP;
+            }
+            if (g_dhcp_active) {
+                out[count].flags |= NET_IFADDR_FLAG_DHCP;
             }
             out[count].addr_v4 = ip4_addr_get_u32(ip_2_ip4(&g_netif.ip_addr));
             out[count].netmask_v4 = ip4_addr_get_u32(ip_2_ip4(&g_netif.netmask));
@@ -1319,6 +1351,9 @@ static void net_stack_dispatch(const nd_ipc_message_t* request) {
         break;
     case NET_IPC_IF_SET_STATE:
         net_stack_handle_if_set_state(request);
+        break;
+    case NET_IPC_DHCP_SET:
+        net_stack_handle_dhcp_set(request);
         break;
     case NET_IPC_SEND:
     case NET_IPC_RECV:

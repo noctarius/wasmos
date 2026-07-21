@@ -658,6 +658,8 @@ enum {
     NET_IPC_DATA_NOTIFY          = 0xB0D, /* push stack→client: arg0=sock_id arg1=bytes_avail */
     NET_IPC_TX_NOTIFY            = 0xB0E, /* push client→stack: arg0=sock_id */
     NET_IPC_RX_NOTIFY            = 0xB0F, /* push stack→client: arg0=sock_id */
+    NET_IPC_IF_SET_STATE         = 0xB10, /* arg0=if_idx arg1=1 up / 0 down (admin state) */
+    NET_IPC_DHCP_SET             = 0xB11, /* arg0=if_idx arg1=1 start / 0 stop DHCP client */
     NET_IPC_RESP                 = 0xB80,
     NET_IPC_ERROR                = 0xBFF
 };

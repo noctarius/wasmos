@@ -42,8 +42,13 @@ linked feature documents for rationale and rollout plans.
 - `net-stack` registers its PUBLIC endpoint as `net.stack`; client
   socket/ifaddr requests are dispatched there (registering the control endpoint
   had silently dropped them via the async event loop).
-- `NET_IPC_IFADDR_ADD/DEL/LIST` are implemented; the `/system/utils/ip` tool
-  (`ip addr show|add|del`) inspects and edits interface addressing at runtime.
+- `NET_IPC_IFADDR_ADD/DEL/LIST`, `NET_IPC_IF_SET_STATE`, and `NET_IPC_DHCP_SET`
+  are implemented; the `/system/utils/ip` tool (`ip addr show|add|del`,
+  `ip dev <name> up|down`, `ip dhcp <name> on|off`) inspects and edits interface
+  addressing at runtime. `ip dhcp <name> on` clears any static address and
+  (re)starts the lwIP DHCP client; `off` stops it and leaves the current address
+  in place. lwIP is IPv4-only with a single address per netif, so static
+  addressing and DHCP are mutually exclusive on an interface (no address aliases).
 
 - Default configuration: wasm3 runtime, ring-3 isolation, single CPU. WARP is
   selected with `-DWASMOS_WASM_RUNTIME_WARP=ON`; SMP is separately gated by

@@ -578,6 +578,10 @@ enum {
     NET_IPC_RX_NOTIFY = 0xB0F,
     /* Administrative interface up/down: arg0 = if_index, arg1 = 1 up / 0 down. */
     NET_IPC_IF_SET_STATE = 0xB10,
+    /* DHCP client on/off: arg0 = if_index, arg1 = 1 start / 0 stop. Starting
+     * clears any static address so the client can bind a fresh lease; stopping
+     * leaves the current address in place. */
+    NET_IPC_DHCP_SET = 0xB11,
     NET_IPC_RESP = 0xB80,
     NET_IPC_ERROR = 0xBFF
 };
@@ -656,6 +660,7 @@ typedef struct __attribute__((packed)) {
 
 #define NET_IFADDR_FLAG_LINK_UP 1u
 #define NET_IFADDR_FLAG_ADMIN_UP 2u
+#define NET_IFADDR_FLAG_DHCP 4u /* address is (or is being) assigned by DHCP */
 
 typedef struct {
     uint32_t rx_packets;

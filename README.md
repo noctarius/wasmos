@@ -254,6 +254,32 @@ cmake -S . -B build -DWASMOS_WASM_RUNTIME_WARP=ON
 cmake --build build --target run-qemu-test
 ```
 
+## Running with Real Networking
+
+When running with real networking, QEMU needs to be configured accordingly. On macOS, you need to use the vmnet adapter
+and specify the network interface name for the `-netdev vmnet-bridged` option. The interface name depends on your system
+configuration.
+
+On Linux, you need to use the `tap` adapter and specify the network interface name for the `-netdev tap` option. The
+interface name depends on your system configuration.
+
+| Goal                                                             | Value                                           | Notes                                              |
+|------------------------------------------------------------------|-------------------------------------------------|----------------------------------------------------|
+| Bridged networking on macOS (DHCP via router)                    | vmnet-bridged,id=net0,ifname=en0                | `en0`=Wi‑Fi, `en1`/`en5`=Ethernet — check ifconfig |
+| macOS-managed NAT + its own DHCP (isolated subnet, has internet) | vmnet-shared,id=net0                            | no interface specification required                |
+| Linux                                                            | tap,id=net0,ifname=tap0,script=no,downscript=no | `tap0` needs to be configured upfront              |
+ 
+```sh
+sudo qemu-system-x86_64 -m 512M -serial mon:stdio \
+  -drive if=pflash,format=raw,readonly=on,file=/opt/homebrew/share/qemu/edk2-x86_64-code.fd \
+  -nographic \
+  -drive format=raw,file=fat:rw:build/esp \
+  -drive format=raw,file=fat:rw:/Volumes/git/wasmos/userfs \
+  -netdev vmnet-bridged,id=net0,ifname=en0 \ # depends on your operating system
+  -device virtio-net-pci,netdev=net0,id=nic0 \
+  -device virtio-rng-pci
+```
+
 ## Runtime Model (Brief)
 - Process manager loads WASMOS-APP payloads
 - Payloads can be WASM apps/services or native driver payloads

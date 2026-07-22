@@ -83,8 +83,9 @@ linked feature documents for rationale and rollout plans.
 
 - Native `libsys` now includes a caller-storage, single-worker stackful
   coroutine core and local future/promise state. It is x86-64 SysV only,
-  currently linked by the native net-stack package, and supports spawn,
-  cooperative yield, await/resolve/reject, and join. It has no timers,
+  currently linked by the native net-stack package, and exposes matching C and
+  Zig wrappers for spawn, cooperative yield, await/resolve/reject, and join.
+  It has no timers,
   cancellation, IPC/CQ wiring, multi-worker scheduling, or WASM counterpart
   yet.
 - Completion ports are documented as a design proposal only: the planned

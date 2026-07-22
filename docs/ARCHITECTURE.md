@@ -89,6 +89,7 @@ in-kernel scheduler rather than an optional mode.
 
 ### User-Space Concurrency
 - [Coroutines, Futures, and Promises](architecture/32-coroutines-futures-promises.md) - proposed user-space coroutine/future/promise runtime (verified against the implementation); future/promise model replaces synchronous IPC; one shared future contract over separate native (stackful) and WASM (fiber/stackless) coroutine cores
+- [Completion Ports](architecture/33-completion-ports.md) - proposed kernel-owned, bounded completion queues with notification doorbells; a batched completion source for the future/promise runtime and high-rate networking operations
 
 ### Operations and Validation
 - [Diagnostics and Status](architecture/25-diagnostics-status.md)

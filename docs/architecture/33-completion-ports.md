@@ -1,15 +1,19 @@
-## Completion Ports API
+# Completion Ports
 
-**Status: design proposal.** A completion queue (CQ) is a kernel-owned, bounded
-queue of terminal asynchronous-operation results.  It is a transport and
-batching primitive: a user-space future/promise runtime maps each completion to
-its local promise and decides which coroutine or continuation to wake.
+> **Documentation status: Design proposal.** Completion queues are not
+> implemented. This document specifies a kernel-owned completion transport that
+> feeds the proposed user-space coroutine, future, and promise runtime.
 
-The CQ storage is fully kernel-owned in the initial design.  `cq_dequeue()`
-copies completion records to a caller-supplied output array.  This deliberately
-avoids an initial shared-ring registration, pinning, memory-ordering, and
-consumer-index ownership ABI.  A libsys-managed shared ring may be considered
-later without changing the operation/future contract.
+## Purpose and Scope
+
+A completion queue (CQ) is a kernel-owned, bounded queue of terminal
+asynchronous-operation results. It is a transport and batching primitive: a
+user-space future/promise runtime maps each completion to its local promise and
+decides which coroutine or continuation to wake.
+
+The CQ storage is fully kernel-owned. `cq_dequeue()` copies completion records
+to a caller-supplied output array. This avoids a shared-ring registration,
+pinning, memory-ordering, and consumer-index ownership ABI.
 
 ### Kernel-level API
 

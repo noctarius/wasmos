@@ -81,6 +81,12 @@ linked feature documents for rationale and rollout plans.
 
 ## Runtime, Isolation, and IPC
 
+- Completion ports are documented as a design proposal only: the planned
+  kernel-owned bounded CQ, notification-doorbell, and generation-tagged
+  operation-token model has no implementation yet. It is intended to provide
+  batched asynchronous completions for the future/promise runtime, beginning
+  with high-rate networking operations.
+
 - wasm3 is the default interpreter. WARP is the optional JIT/AOT backend and
   follows the ring-3 execution model; internal modules can fall back to JIT if
   an embedded AOT payload cannot load.

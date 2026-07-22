@@ -9,10 +9,10 @@ typedef struct {
     wasmos_native_coroutine_t first;
     wasmos_native_coroutine_t second;
     wasmos_native_coroutine_t joiner;
-    wasmos_native_future_t future;
-    wasmos_native_promise_t promise;
-    wasmos_native_future_continuation_t first_continuation;
-    wasmos_native_future_continuation_t late_continuation;
+    wasmos_future_t future;
+    wasmos_promise_t promise;
+    wasmos_future_continuation_t first_continuation;
+    wasmos_future_continuation_t late_continuation;
     uint8_t first_stack[4096];
     uint8_t second_stack[4096];
     uint8_t joiner_stack[4096];
@@ -34,7 +34,7 @@ static void first_entry(void* arg) {
     record(state, 1u);
     wasmos_native_coroutine_yield();
     record(state, 3u);
-    if (wasmos_native_future_await(&state->future, &value) != 0 || value != 42u) {
+    if (wasmos_future_await(&state->future, &value) != 0 || value != 42u) {
         wasmos_native_coroutine_exit(-1);
     }
     record(state, 5u);
@@ -47,8 +47,8 @@ static void second_entry(void* arg) {
     record(state, 2u);
     wasmos_native_coroutine_yield();
     record(state, 4u);
-    if (!wasmos_native_promise_resolve(&state->promise, 42u) ||
-        wasmos_native_promise_resolve(&state->promise, 9u)) {
+    if (!wasmos_promise_resolve(&state->promise, 42u) ||
+        wasmos_promise_resolve(&state->promise, 9u)) {
         wasmos_native_coroutine_exit(-1);
     }
 }
@@ -79,9 +79,9 @@ static int test_yield_await_and_join(void) {
     int run_count;
 
     wasmos_native_coroutine_runtime_init(&state.runtime);
-    wasmos_native_future_init(&state.future, &state.promise);
-    if (wasmos_native_future_then(&state.runtime, &state.future, &state.first_continuation,
-                                  success_callback, error_callback, &state) != 0) {
+    wasmos_future_init(&state.future, &state.promise);
+    if (wasmos_future_then(&state.runtime, &state.future, &state.first_continuation,
+                           success_callback, error_callback, &state) != 0) {
         return __LINE__;
     }
     if (wasmos_native_coroutine_spawn(&state.runtime, &state.first, state.first_stack,
@@ -104,8 +104,8 @@ static int test_yield_await_and_join(void) {
             return __LINE__;
         }
     }
-    if (wasmos_native_future_then(&state.runtime, &state.future, &state.late_continuation,
-                                  success_callback, error_callback, &state) != 0 ||
+    if (wasmos_future_then(&state.runtime, &state.future, &state.late_continuation,
+                           success_callback, error_callback, &state) != 0 ||
         wasmos_native_coroutine_run(&state.runtime) != 0 ||
         state.event_count != sizeof(expected) / sizeof(expected[0])) {
         return __LINE__;
@@ -120,21 +120,20 @@ static int test_yield_await_and_join(void) {
 
 static int test_rejection_and_poll(void) {
     wasmos_native_coroutine_runtime_t runtime;
-    wasmos_native_future_t future;
-    wasmos_native_promise_t promise;
-    wasmos_native_future_continuation_t continuation = {0};
+    wasmos_future_t future;
+    wasmos_promise_t promise;
+    wasmos_future_continuation_t continuation = {0};
     int32_t status = 0;
     uintptr_t value = 1u;
     test_state_t state = {0};
 
     wasmos_native_coroutine_runtime_init(&runtime);
-    wasmos_native_future_init(&future, &promise);
-    if (wasmos_native_future_then(&runtime, &future, &continuation, success_callback,
-                                  error_callback, &state) != 0 ||
-        wasmos_native_future_poll(&future, &status, &value) ||
-        !wasmos_native_promise_reject(&promise, -23) ||
-        wasmos_native_promise_reject(&promise, -24) ||
-        !wasmos_native_future_poll(&future, &status, &value) || status != -23 || value != 0u) {
+    wasmos_future_init(&future, &promise);
+    if (wasmos_future_then(&runtime, &future, &continuation, success_callback, error_callback,
+                           &state) != 0 ||
+        wasmos_future_poll(&future, &status, &value) || !wasmos_promise_reject(&promise, -23) ||
+        wasmos_promise_reject(&promise, -24) || !wasmos_future_poll(&future, &status, &value) ||
+        status != -23 || value != 0u) {
         return __LINE__;
     }
     if (wasmos_native_coroutine_run(&runtime) != 0 || state.event_count != 1u ||

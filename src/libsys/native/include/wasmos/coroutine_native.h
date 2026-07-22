@@ -23,11 +23,11 @@ typedef enum wasmos_native_coroutine_state {
     WASMOS_NATIVE_COROUTINE_DEAD,
 } wasmos_native_coroutine_state_t;
 
-typedef enum wasmos_native_future_state {
-    WASMOS_NATIVE_FUTURE_PENDING = 0,
-    WASMOS_NATIVE_FUTURE_READY,
-    WASMOS_NATIVE_FUTURE_FAILED,
-} wasmos_native_future_state_t;
+typedef enum wasmos_future_state {
+    WASMOS_FUTURE_PENDING = 0,
+    WASMOS_FUTURE_READY,
+    WASMOS_FUTURE_FAILED,
+} wasmos_future_state_t;
 
 typedef struct wasmos_native_coroutine_context {
     uintptr_t rsp;
@@ -42,34 +42,34 @@ typedef struct wasmos_native_coroutine_context {
 
 typedef struct wasmos_native_coroutine wasmos_native_coroutine_t;
 typedef struct wasmos_native_coroutine_runtime wasmos_native_coroutine_runtime_t;
-typedef struct wasmos_native_future_continuation wasmos_native_future_continuation_t;
+typedef struct wasmos_future_continuation wasmos_future_continuation_t;
 
-typedef void (*wasmos_native_future_success_fn_t)(void* user, uintptr_t value);
-typedef void (*wasmos_native_future_error_fn_t)(void* user, int32_t status);
+typedef void (*wasmos_future_success_fn_t)(void* user, uintptr_t value);
+typedef void (*wasmos_future_error_fn_t)(void* user, int32_t status);
 
-typedef struct wasmos_native_future {
-    wasmos_native_future_state_t state;
+typedef struct wasmos_future {
+    wasmos_future_state_t state;
     int32_t status;
     uintptr_t value;
     wasmos_native_coroutine_runtime_t* runtime;
     wasmos_native_coroutine_t* waiters;
-    wasmos_native_future_continuation_t* continuations;
-} wasmos_native_future_t;
+    wasmos_future_continuation_t* continuations;
+} wasmos_future_t;
 
-typedef struct wasmos_native_promise {
-    wasmos_native_future_t* future;
-} wasmos_native_promise_t;
+typedef struct wasmos_promise {
+    wasmos_future_t* future;
+} wasmos_promise_t;
 
 typedef void (*wasmos_native_coroutine_entry_t)(void* arg);
 
 /* Caller-owned continuation registration. A registration may be active on one
  * future at a time and must outlive the callback or cancellation of the
  * runtime. Callbacks run from runtime_run(), never inline from resolve/reject. */
-struct wasmos_native_future_continuation {
-    wasmos_native_future_continuation_t* next;
-    wasmos_native_future_t* future;
-    wasmos_native_future_success_fn_t on_success;
-    wasmos_native_future_error_fn_t on_error;
+struct wasmos_future_continuation {
+    wasmos_future_continuation_t* next;
+    wasmos_future_t* future;
+    wasmos_future_success_fn_t on_success;
+    wasmos_future_error_fn_t on_error;
     void* user;
     bool active;
 };
@@ -83,8 +83,8 @@ struct wasmos_native_coroutine {
     int32_t result;
     wasmos_native_coroutine_t* next;
     wasmos_native_coroutine_t* wait_next;
-    wasmos_native_future_t completion;
-    wasmos_native_promise_t completion_promise;
+    wasmos_future_t completion;
+    wasmos_promise_t completion_promise;
 };
 
 struct wasmos_native_coroutine_runtime {
@@ -92,8 +92,8 @@ struct wasmos_native_coroutine_runtime {
     wasmos_native_coroutine_t* current;
     wasmos_native_coroutine_t* ready_head;
     wasmos_native_coroutine_t* ready_tail;
-    wasmos_native_future_continuation_t* continuation_head;
-    wasmos_native_future_continuation_t* continuation_tail;
+    wasmos_future_continuation_t* continuation_head;
+    wasmos_future_continuation_t* continuation_tail;
 };
 
 /* All state and stack memory remain caller-owned for their full lifetime. */
@@ -110,17 +110,15 @@ void wasmos_native_coroutine_yield(void);
 void wasmos_native_coroutine_exit(int32_t result) __attribute__((noreturn));
 int wasmos_native_coroutine_join(wasmos_native_coroutine_t* coroutine, int32_t* out_result);
 
-void wasmos_native_future_init(wasmos_native_future_t* future, wasmos_native_promise_t* promise);
-bool wasmos_native_future_poll(const wasmos_native_future_t* future, int32_t* out_status,
-                               uintptr_t* out_value);
-int wasmos_native_future_await(wasmos_native_future_t* future, uintptr_t* out_value);
-int wasmos_native_future_then(wasmos_native_coroutine_runtime_t* runtime,
-                              wasmos_native_future_t* future,
-                              wasmos_native_future_continuation_t* continuation,
-                              wasmos_native_future_success_fn_t on_success,
-                              wasmos_native_future_error_fn_t on_error, void* user);
-bool wasmos_native_promise_resolve(wasmos_native_promise_t* promise, uintptr_t value);
-bool wasmos_native_promise_reject(wasmos_native_promise_t* promise, int32_t status);
+void wasmos_future_init(wasmos_future_t* future, wasmos_promise_t* promise);
+bool wasmos_future_poll(const wasmos_future_t* future, int32_t* out_status, uintptr_t* out_value);
+int wasmos_future_await(wasmos_future_t* future, uintptr_t* out_value);
+int wasmos_future_then(wasmos_native_coroutine_runtime_t* runtime, wasmos_future_t* future,
+                       wasmos_future_continuation_t* continuation,
+                       wasmos_future_success_fn_t on_success, wasmos_future_error_fn_t on_error,
+                       void* user);
+bool wasmos_promise_resolve(wasmos_promise_t* promise, uintptr_t value);
+bool wasmos_promise_reject(wasmos_promise_t* promise, int32_t status);
 
 #ifdef __cplusplus
 }

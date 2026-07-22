@@ -8,12 +8,12 @@ pub const NativeEventLoop = c.wasmos_sys_native_event_loop_t;
 pub const NativeRandomRequest = c.wasmos_sys_native_random_request_t;
 pub const NativeCoroutineRuntime = c.wasmos_native_coroutine_runtime_t;
 pub const NativeCoroutine = c.wasmos_native_coroutine_t;
-pub const NativeFuture = c.wasmos_native_future_t;
-pub const NativePromise = c.wasmos_native_promise_t;
-pub const NativeFutureContinuation = c.wasmos_native_future_continuation_t;
+pub const Future = c.wasmos_future_t;
+pub const Promise = c.wasmos_promise_t;
+pub const FutureContinuation = c.wasmos_future_continuation_t;
 pub const NativeCoroutineEntry = *const fn (?*anyopaque) callconv(.c) void;
-pub const NativeFutureSuccess = c.wasmos_native_future_success_fn_t;
-pub const NativeFutureError = c.wasmos_native_future_error_fn_t;
+pub const FutureSuccess = c.wasmos_future_success_fn_t;
+pub const FutureError = c.wasmos_future_error_fn_t;
 
 pub fn coroutineRuntimeInit(runtime: *NativeCoroutineRuntime) void {
     c.wasmos_native_coroutine_runtime_init(runtime);
@@ -39,28 +39,28 @@ pub fn coroutineJoin(coroutine: *NativeCoroutine, out_result: ?*i32) i32 {
     return c.wasmos_native_coroutine_join(coroutine, out_result);
 }
 
-pub fn futureInit(future: *NativeFuture, promise: *NativePromise) void {
-    c.wasmos_native_future_init(future, promise);
+pub fn futureInit(future: *Future, promise: *Promise) void {
+    c.wasmos_future_init(future, promise);
 }
 
-pub fn promiseResolve(promise: *NativePromise, value: usize) bool {
-    return c.wasmos_native_promise_resolve(promise, value);
+pub fn promiseResolve(promise: *Promise, value: usize) bool {
+    return c.wasmos_promise_resolve(promise, value);
 }
 
-pub fn promiseReject(promise: *NativePromise, status: i32) bool {
-    return c.wasmos_native_promise_reject(promise, status);
+pub fn promiseReject(promise: *Promise, status: i32) bool {
+    return c.wasmos_promise_reject(promise, status);
 }
 
-pub fn futurePoll(future: *const NativeFuture, out_status: ?*i32, out_value: ?*usize) bool {
-    return c.wasmos_native_future_poll(future, out_status, out_value);
+pub fn futurePoll(future: *const Future, out_status: ?*i32, out_value: ?*usize) bool {
+    return c.wasmos_future_poll(future, out_status, out_value);
 }
 
-pub fn futureAwait(future: *NativeFuture, out_value: ?*usize) i32 {
-    return c.wasmos_native_future_await(future, out_value);
+pub fn futureAwait(future: *Future, out_value: ?*usize) i32 {
+    return c.wasmos_future_await(future, out_value);
 }
 
-pub fn futureThen(runtime: *NativeCoroutineRuntime, future: *NativeFuture, continuation: *NativeFutureContinuation, on_success: NativeFutureSuccess, on_error: NativeFutureError, user: ?*anyopaque) i32 {
-    return c.wasmos_native_future_then(runtime, future, continuation, on_success, on_error, user);
+pub fn futureThen(runtime: *NativeCoroutineRuntime, future: *Future, continuation: *FutureContinuation, on_success: FutureSuccess, on_error: FutureError, user: ?*anyopaque) i32 {
+    return c.wasmos_future_then(runtime, future, continuation, on_success, on_error, user);
 }
 pub const Mutex = extern struct {
     owner_tid: u32,

@@ -2560,6 +2560,9 @@ The initial future/promise core is intentionally local and single-worker:
 - a future is `PENDING`, `READY`, or `FAILED`;
 - `await` parks the current coroutine in the future's waiter list;
 - resolve/reject settles exactly once and makes all waiters runnable;
+- caller-owned `future_then` registrations provide separate success/error
+  callbacks; they are queued by `runtime_run()` and never invoked inline by
+  registration or settlement;
 - every coroutine exposes its exit result as a join future.
 
 Cancellation, deadlines, multi-worker synchronization, IPC intent adaptation,
@@ -2579,3 +2582,7 @@ pending-future suspension/wakeup, duplicate promise settlement rejection, and
 join on x86-64 hosts. Non-x86-64 development hosts cross-compile the actual
 x86-64 objects instead; target-package compilation is additionally validated by
 the net-stack build.
+
+`future_then` does not yet return a chained child future. It is the deliberate
+first continuation primitive shared by native C and Zig; future chaining and
+the WASM continuation adapter build on this scheduled-callback rule.

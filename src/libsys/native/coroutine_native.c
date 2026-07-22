@@ -50,6 +50,39 @@ static void coroutine_make_ready(wasmos_native_coroutine_t* coroutine) {
     coroutine_enqueue(coroutine->runtime, coroutine);
 }
 
+static void continuation_enqueue(wasmos_native_coroutine_runtime_t* runtime,
+                                 wasmos_native_future_continuation_t* continuation) {
+    continuation->next = NULL;
+    if (runtime->continuation_tail) {
+        runtime->continuation_tail->next = continuation;
+    } else {
+        runtime->continuation_head = continuation;
+    }
+    runtime->continuation_tail = continuation;
+}
+
+static wasmos_native_future_continuation_t*
+continuation_dequeue(wasmos_native_coroutine_runtime_t* runtime) {
+    wasmos_native_future_continuation_t* continuation = runtime->continuation_head;
+    if (!continuation) {
+        return NULL;
+    }
+    runtime->continuation_head = continuation->next;
+    if (!runtime->continuation_head) {
+        runtime->continuation_tail = NULL;
+    }
+    continuation->next = NULL;
+    return continuation;
+}
+
+static void continuation_schedule(wasmos_native_coroutine_runtime_t* runtime,
+                                  wasmos_native_future_continuation_t* continuation) {
+    if (!runtime || !continuation || !continuation->active) {
+        return;
+    }
+    continuation_enqueue(runtime, continuation);
+}
+
 static void coroutine_trampoline(void) {
     wasmos_native_coroutine_runtime_t* runtime;
     wasmos_native_coroutine_t* coroutine;
@@ -78,6 +111,8 @@ void wasmos_native_coroutine_runtime_init(wasmos_native_coroutine_runtime_t* run
     runtime->current = NULL;
     runtime->ready_head = NULL;
     runtime->ready_tail = NULL;
+    runtime->continuation_head = NULL;
+    runtime->continuation_tail = NULL;
 }
 
 void wasmos_native_future_init(wasmos_native_future_t* future, wasmos_native_promise_t* promise) {
@@ -87,7 +122,9 @@ void wasmos_native_future_init(wasmos_native_future_t* future, wasmos_native_pro
     future->state = WASMOS_NATIVE_FUTURE_PENDING;
     future->status = 0;
     future->value = 0;
+    future->runtime = NULL;
     future->waiters = NULL;
+    future->continuations = NULL;
     promise->future = future;
 }
 
@@ -131,12 +168,33 @@ int wasmos_native_coroutine_run(wasmos_native_coroutine_runtime_t* runtime) {
     if (!runtime || runtime->current) {
         return -1;
     }
-    while ((coroutine = coroutine_dequeue(runtime)) != NULL) {
-        runtime->current = coroutine;
-        coroutine->state = WASMOS_NATIVE_COROUTINE_RUNNING;
-        resumed++;
-        wasmos_native_coroutine_context_switch(&runtime->scheduler_context, &coroutine->context);
-        runtime->current = NULL;
+    for (;;) {
+        while ((coroutine = coroutine_dequeue(runtime)) != NULL) {
+            runtime->current = coroutine;
+            coroutine->state = WASMOS_NATIVE_COROUTINE_RUNNING;
+            resumed++;
+            wasmos_native_coroutine_context_switch(&runtime->scheduler_context,
+                                                   &coroutine->context);
+            runtime->current = NULL;
+        }
+        wasmos_native_future_continuation_t* continuation = continuation_dequeue(runtime);
+        wasmos_native_future_t* future;
+        if (!continuation) {
+            break;
+        }
+        future = continuation->future;
+        continuation->active = false;
+        continuation->future = NULL;
+        if (!future || future->state == WASMOS_NATIVE_FUTURE_PENDING) {
+            continue;
+        }
+        if (future->status == 0) {
+            if (continuation->on_success) {
+                continuation->on_success(continuation->user, future->value);
+            }
+        } else if (continuation->on_error) {
+            continuation->on_error(continuation->user, future->status);
+        }
     }
     return resumed;
 }
@@ -189,6 +247,7 @@ bool wasmos_native_future_poll(const wasmos_native_future_t* future, int32_t* ou
 static bool promise_complete(wasmos_native_promise_t* promise, int32_t status, uintptr_t value) {
     wasmos_native_future_t* future;
     wasmos_native_coroutine_t* waiter;
+    wasmos_native_future_continuation_t* continuation;
 
     if (!promise || !(future = promise->future) || future->state != WASMOS_NATIVE_FUTURE_PENDING) {
         return false;
@@ -203,6 +262,13 @@ static bool promise_complete(wasmos_native_promise_t* promise, int32_t status, u
         waiter->wait_next = NULL;
         coroutine_make_ready(waiter);
         waiter = next;
+    }
+    continuation = future->continuations;
+    future->continuations = NULL;
+    while (continuation) {
+        wasmos_native_future_continuation_t* next = continuation->next;
+        continuation_schedule(future->runtime, continuation);
+        continuation = next;
     }
     return true;
 }
@@ -231,6 +297,10 @@ int wasmos_native_future_await(wasmos_native_future_t* future, uintptr_t* out_va
         if (!coroutine || coroutine->state != WASMOS_NATIVE_COROUTINE_RUNNING) {
             return -1;
         }
+        if (future->runtime && future->runtime != runtime) {
+            return -1;
+        }
+        future->runtime = runtime;
         coroutine->wait_next = future->waiters;
         future->waiters = coroutine;
         coroutine->state = WASMOS_NATIVE_COROUTINE_WAITING;
@@ -243,6 +313,34 @@ int wasmos_native_future_await(wasmos_native_future_t* future, uintptr_t* out_va
         *out_value = future->value;
     }
     return future->status;
+}
+
+int wasmos_native_future_then(wasmos_native_coroutine_runtime_t* runtime,
+                              wasmos_native_future_t* future,
+                              wasmos_native_future_continuation_t* continuation,
+                              wasmos_native_future_success_fn_t on_success,
+                              wasmos_native_future_error_fn_t on_error, void* user) {
+    if (!runtime || !future || !continuation || continuation->active ||
+        (!on_success && !on_error)) {
+        return -1;
+    }
+    if (future->runtime && future->runtime != runtime) {
+        return -1;
+    }
+    future->runtime = runtime;
+    continuation->next = NULL;
+    continuation->future = future;
+    continuation->on_success = on_success;
+    continuation->on_error = on_error;
+    continuation->user = user;
+    continuation->active = true;
+    if (future->state == WASMOS_NATIVE_FUTURE_PENDING) {
+        continuation->next = future->continuations;
+        future->continuations = continuation;
+    } else {
+        continuation_schedule(runtime, continuation);
+    }
+    return 0;
 }
 
 int wasmos_native_coroutine_join(wasmos_native_coroutine_t* coroutine, int32_t* out_result) {

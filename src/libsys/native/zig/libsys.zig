@@ -10,7 +10,10 @@ pub const NativeCoroutineRuntime = c.wasmos_native_coroutine_runtime_t;
 pub const NativeCoroutine = c.wasmos_native_coroutine_t;
 pub const NativeFuture = c.wasmos_native_future_t;
 pub const NativePromise = c.wasmos_native_promise_t;
+pub const NativeFutureContinuation = c.wasmos_native_future_continuation_t;
 pub const NativeCoroutineEntry = *const fn (?*anyopaque) callconv(.c) void;
+pub const NativeFutureSuccess = c.wasmos_native_future_success_fn_t;
+pub const NativeFutureError = c.wasmos_native_future_error_fn_t;
 
 pub fn coroutineRuntimeInit(runtime: *NativeCoroutineRuntime) void {
     c.wasmos_native_coroutine_runtime_init(runtime);
@@ -54,6 +57,10 @@ pub fn futurePoll(future: *const NativeFuture, out_status: ?*i32, out_value: ?*u
 
 pub fn futureAwait(future: *NativeFuture, out_value: ?*usize) i32 {
     return c.wasmos_native_future_await(future, out_value);
+}
+
+pub fn futureThen(runtime: *NativeCoroutineRuntime, future: *NativeFuture, continuation: *NativeFutureContinuation, on_success: NativeFutureSuccess, on_error: NativeFutureError, user: ?*anyopaque) i32 {
+    return c.wasmos_native_future_then(runtime, future, continuation, on_success, on_error, user);
 }
 pub const Mutex = extern struct {
     owner_tid: u32,

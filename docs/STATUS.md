@@ -85,7 +85,8 @@ linked feature documents for rationale and rollout plans.
   coroutine core and local future/promise state. It is x86-64 SysV only,
   currently linked by the native net-stack package, and exposes matching C and
   Zig wrappers for spawn, cooperative yield, await/resolve/reject, and join.
-  It has no timers,
+  Caller-owned `future_then` registrations schedule separate success/error
+  callbacks through the runtime rather than invoking them inline. It has no timers,
   cancellation, IPC/CQ wiring, multi-worker scheduling, or WASM counterpart
   yet.
 - Completion ports are documented as a design proposal only: the planned

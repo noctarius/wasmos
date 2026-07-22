@@ -48,6 +48,7 @@ It defines repository workflow and documentation/update conventions.
 - Directory-based mount namespace (`/init`, `/boot`, `/user`) through `fs-manager` VFS routing across initfs and FAT-backed filesystems.
 - Buffer-borrow-based DMA support integrated across capability policy, runtime transport, and driver paths.
 - End-to-end threading support (`thread_create`, `thread_join`, `thread_detach`, `thread_yield`, `thread_exit`) for ring-3 workloads, with user-space reentrant mutex across WASM and native runtimes.
+- Native user-space coroutine baseline with caller-owned stacks, cooperative scheduling, futures/promises, and joins; initially single-worker and used as the foundation for asynchronous networking work.
 - Full windowing and graphics stack: framebuffer driver, software compositor, shared-buffer rendering, input routing, window chrome (title bar, close/maximize/restore, drag-to-move, live resize), software cursor, popup menus, and a system menu bar with date/time display and per-app window lists; backed by a native Zig TTF `font-service` for text rendering.
 - `libui` component toolkit — vtable-dispatched widget tree (panels, labels, buttons, checkboxes, text inputs, scroll views, list views, dropdowns, and menus) shared across WASM and native ring-3 apps.
 - Practical interactive environment with VT/CLI, multi-TTY switching, and scriptable boot-time userspace workflows.

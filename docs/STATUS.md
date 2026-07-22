@@ -81,6 +81,12 @@ linked feature documents for rationale and rollout plans.
 
 ## Runtime, Isolation, and IPC
 
+- Native `libsys` now includes a caller-storage, single-worker stackful
+  coroutine core and local future/promise state. It is x86-64 SysV only,
+  currently linked by the native net-stack package, and supports spawn,
+  cooperative yield, await/resolve/reject, and join. It has no timers,
+  cancellation, IPC/CQ wiring, multi-worker scheduling, or WASM counterpart
+  yet.
 - Completion ports are documented as a design proposal only: the planned
   kernel-owned bounded CQ, notification-doorbell, and generation-tagged
   operation-token model has no implementation yet. It is intended to provide

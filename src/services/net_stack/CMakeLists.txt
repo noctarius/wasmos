@@ -174,6 +174,39 @@ add_custom_command(
 )
 list(APPEND NET_STACK_OBJS ${NET_STACK_PORT_OBJ})
 
+# Single-worker native coroutine/future runtime. It is linked now so the
+# native ring-3 service package continuously validates the x86_64 context
+# switch ABI; net-stack adopts it for asynchronous socket operations next.
+set(NET_STACK_COROUTINE_OBJ ${BUILD_DIR}/net_stack_coroutine_native.o)
+add_custom_command(
+  OUTPUT ${NET_STACK_COROUTINE_OBJ}
+  COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}
+  COMMAND ${CLANG} ${NET_STACK_CFLAGS_BASE} ${NET_STACK_INCLUDES}
+          -c ${LIBSYS_NATIVE_DIR}/coroutine_native.c
+          -o ${NET_STACK_COROUTINE_OBJ}
+  DEPENDS ${LIBSYS_NATIVE_DIR}/coroutine_native.c
+          ${LIBSYS_NATIVE_DIR}/include/wasmos/coroutine_native.h
+  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+  COMMENT "Compiling native coroutine runtime (net-stack)"
+  VERBATIM
+)
+list(APPEND NET_STACK_OBJS ${NET_STACK_COROUTINE_OBJ})
+
+set(NET_STACK_COROUTINE_SWITCH_OBJ ${BUILD_DIR}/net_stack_coroutine_native_x86_64.o)
+add_custom_command(
+  OUTPUT ${NET_STACK_COROUTINE_SWITCH_OBJ}
+  COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}
+  COMMAND ${CLANG} -target ${KERNEL_TARGET_TRIPLE}
+          -c ${LIBSYS_NATIVE_DIR}/coroutine_native_x86_64.S
+          -o ${NET_STACK_COROUTINE_SWITCH_OBJ}
+  DEPENDS ${LIBSYS_NATIVE_DIR}/coroutine_native_x86_64.S
+          ${LIBSYS_NATIVE_DIR}/include/wasmos/coroutine_native.h
+  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+  COMMENT "Compiling native coroutine context switch (net-stack)"
+  VERBATIM
+)
+list(APPEND NET_STACK_OBJS ${NET_STACK_COROUTINE_SWITCH_OBJ})
+
 # libsys_native exports object (same as gfx_compositor).
 set(NET_STACK_LIBSYS_EXPORTS_OBJ ${BUILD_DIR}/net_stack_libsys_exports.o)
 add_custom_command(

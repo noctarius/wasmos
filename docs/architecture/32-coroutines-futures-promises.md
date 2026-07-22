@@ -1,8 +1,10 @@
 # Coroutine, Future, and Promise Runtime Design for WASMOS
 
-> **Documentation status: Design proposal with implementation-reality audit.**
-> The future/promise and coroutine layers are not implemented; section 48 maps
-> the proposal onto existing kernel and libsys primitives.
+> **Documentation status: Mixed reference and proposal.** A native,
+> single-worker cooperative coroutine and future/promise core is implemented;
+> multi-worker scheduling, timers, cancellation, IPC/CQ integration, and the
+> WASM coroutine substrate remain proposed. Section 48 maps the broader design
+> onto existing kernel and libsys primitives.
 
 **Status:** Proposed — verified against the implementation on 2026-07-18  
 **Target:** WASMOS user-space runtime on an SMP, timer-preemptive microkernel  
@@ -2533,13 +2535,47 @@ L0  Kernel primitives  ── threads · futex · sched_event · ipc_send · ipc
 
 ### 49.4 Recommended sequencing (supersedes §44 phase boundaries where they conflict)
 
-1. **L1 first, everywhere.** Generalize the existing intent/handler event loop into
-   `future`/`promise` in the C wasm shim and `libsys_native.c`; this alone removes
-   the synchronous-IPC deadlock class with no coroutine machinery. Wrap into
-   Rust/Go/Zig/AS shims in sync.
-2. **Native L2 stackful core.** Implement §7–§15 in `src/libsys/native` for native
-   services/drivers, after surfacing a native wait/wake.
+1. **Native single-worker core first.** Implement the caller-owned native
+   stackful runtime and its local future/promise state in `src/libsys/native`;
+   this is the implemented first slice described in §50.
+2. **L1 across shims.** Generalize the existing intent/handler event loop into
+   the same `future`/`promise` contract in the C WASM shim and then the language
+   shims. This removes the synchronous-IPC deadlock class without requiring a
+   WASM stackful coroutine core.
 3. **WASM L2 cooperative fibers** (option 1) as the portable baseline, then
    opt-in **stackless async** (option 2) per language where the toolchain supports it.
 4. Defer WASM parallelism (the `runtime_lock` question) and hard preemption (§15.5)
    as originally planned.
+
+## 50. Native Single-Worker Baseline (implemented)
+
+`src/libsys/native/{coroutine_native.c,coroutine_native_x86_64.S}` implements
+the first native-only slice. It uses caller-owned coroutine records and stacks,
+one cooperative ready queue, and an x86-64 SysV context switch that preserves
+the callee-saved registers plus `RSP`/`RIP`. No kernel worker is created: the
+runtime runs on the calling native ring-3 thread.
+
+The initial future/promise core is intentionally local and single-worker:
+
+- a future is `PENDING`, `READY`, or `FAILED`;
+- `await` parks the current coroutine in the future's waiter list;
+- resolve/reject settles exactly once and makes all waiters runnable;
+- every coroutine exposes its exit result as a join future.
+
+Cancellation, deadlines, multi-worker synchronization, IPC intent adaptation,
+CQ dispatch, allocator ownership, and guard-page stack allocation are deferred.
+The caller must retain all coroutine and stack storage until the coroutine is
+dead and no joiner can reference it.
+
+The public C ABI is in
+`src/libsys/native/include/wasmos/coroutine_native.h`. `libsys.zig` exposes the
+same C types and initial runtime/future helpers, so Zig native services can use
+the core when their package links the C and assembly objects. The native
+`net-stack` package links those objects now, providing continuous target-build
+validation before it adopts coroutines for socket operations.
+
+`tests/unit/test_native_coroutine.c` validates cooperative yield order,
+pending-future suspension/wakeup, duplicate promise settlement rejection, and
+join on x86-64 hosts. Non-x86-64 development hosts cross-compile the actual
+x86-64 objects instead; target-package compilation is additionally validated by
+the net-stack build.

@@ -6,6 +6,26 @@ pub const IPC_EMPTY: i32 = 1;
 pub const IPC_ENDPOINT_NONE: u32 = 0xFFFF_FFFF;
 pub const NativeEventLoop = c.wasmos_sys_native_event_loop_t;
 pub const NativeRandomRequest = c.wasmos_sys_native_random_request_t;
+pub const NativeCoroutineRuntime = c.wasmos_native_coroutine_runtime_t;
+pub const NativeCoroutine = c.wasmos_native_coroutine_t;
+pub const NativeFuture = c.wasmos_native_future_t;
+pub const NativePromise = c.wasmos_native_promise_t;
+
+pub fn coroutineRuntimeInit(runtime: *NativeCoroutineRuntime) void {
+    c.wasmos_native_coroutine_runtime_init(runtime);
+}
+
+pub fn coroutineRun(runtime: *NativeCoroutineRuntime) i32 {
+    return c.wasmos_native_coroutine_run(runtime);
+}
+
+pub fn futureInit(future: *NativeFuture, promise: *NativePromise) void {
+    c.wasmos_native_future_init(future, promise);
+}
+
+pub fn promiseResolve(promise: *NativePromise, value: usize) bool {
+    return c.wasmos_native_promise_resolve(promise, value);
+}
 pub const Mutex = extern struct {
     owner_tid: u32,
     recursion_depth: u32,

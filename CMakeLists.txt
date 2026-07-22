@@ -2000,6 +2000,31 @@ add_custom_target(run-kernel-unit-tests
   VERBATIM
 )
 
+if(CMAKE_HOST_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
+  add_custom_command(TARGET run-kernel-unit-tests POST_BUILD
+    COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
+            -I${LIBSYS_NATIVE_DIR}/include
+            ${CMAKE_SOURCE_DIR}/tests/unit/test_native_coroutine.c
+            ${LIBSYS_NATIVE_DIR}/coroutine_native.c
+            ${LIBSYS_NATIVE_DIR}/coroutine_native_x86_64.S
+            -o ${BUILD_DIR}/test_native_coroutine
+    COMMAND ${BUILD_DIR}/test_native_coroutine
+    COMMENT "Running native x86_64 coroutine unit tests"
+    VERBATIM)
+else()
+  add_custom_command(TARGET run-kernel-unit-tests POST_BUILD
+    COMMAND ${CLANG} -target ${KERNEL_TARGET_TRIPLE} -std=c11 -ffreestanding
+            -fno-stack-protector -fno-pic -fno-pie
+            -I${LIBSYS_NATIVE_DIR}/include
+            -c ${LIBSYS_NATIVE_DIR}/coroutine_native.c
+            -o ${BUILD_DIR}/test_native_coroutine_target.o
+    COMMAND ${CLANG} -target ${KERNEL_TARGET_TRIPLE}
+            -c ${LIBSYS_NATIVE_DIR}/coroutine_native_x86_64.S
+            -o ${BUILD_DIR}/test_native_coroutine_switch_target.o
+    COMMENT "Cross-compiling native x86_64 coroutine runtime"
+    VERBATIM)
+endif()
+
 # ---------------------------------------------------------------------------
 # Developer quality targets: formatting and linting.
 #

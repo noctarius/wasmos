@@ -91,6 +91,10 @@ static uint8_t g_netif_installed = 0u;
 static uint8_t g_registered = 0u;
 static uint8_t g_register_pending = 0u;
 static uint8_t g_netdrv_lookup_pending = 0u;
+static wasmos_native_coroutine_runtime_t g_control_runtime;
+static wasmos_native_coroutine_t g_netdrv_lookup_coroutine;
+static wasmos_sys_native_ipc_future_t g_netdrv_lookup_future;
+static uint8_t g_netdrv_lookup_stack[4096] __attribute__((aligned(16)));
 static uint8_t g_link_get_pending = 0u;
 static uint32_t g_link_get_sent_tick = 0u;
 static uint8_t g_hrng_lookup_pending = 0u;
@@ -871,13 +875,52 @@ static void net_stack_try_load_ifcfg(void) {
     g_ifcfg_read_pending = 1u;
 }
 
-static void net_stack_lookup_reply(void* user, const nd_ipc_message_t* reply) {
+static int32_t net_stack_lookup_reply_status(void* user, const nd_ipc_message_t* reply) {
     (void)user;
+    if (reply == NULL || reply->type != SVC_IPC_LOOKUP_RESP || reply->arg0 == 0xFFFFFFFFu) {
+        return -1;
+    }
+    return 0;
+}
+
+static void net_stack_lookup_coroutine(void* arg) {
+    uintptr_t value = 0u;
+    nd_ipc_message_t* reply;
+
+    (void)arg;
+    if (wasmos_future_await(&g_netdrv_lookup_future.future, &value) != 0 || value == 0u) {
+        g_netdrv_lookup_pending = 0u;
+        return;
+    }
+    reply = (nd_ipc_message_t*)value;
+    g_netdrv_endpoint = reply->arg0;
+    if (g_active_ifc == NULL) {
+        g_active_ifc = net_stack_interface_slot(reply->arg0, 0u, 1u);
+    }
     g_netdrv_lookup_pending = 0u;
-    if (reply != NULL && reply->type == SVC_IPC_LOOKUP_RESP && reply->arg0 != 0xFFFFFFFFu) {
-        g_netdrv_endpoint = reply->arg0;
-        if (g_active_ifc == NULL)
-            g_active_ifc = net_stack_interface_slot(reply->arg0, 0u, 1u);
+}
+
+static void net_stack_start_lookup_coroutine(void) {
+    uint32_t args[4];
+
+    if (g_netdrv_lookup_pending) {
+        return;
+    }
+    wasmos_sys_ipc_pack_name16_native((const uint8_t*)"virtio.net", 10u, args);
+    wasmos_sys_native_ipc_future_init(&g_netdrv_lookup_future, net_stack_lookup_reply_status,
+                                      NULL);
+    if (!wasmos_sys_native_ipc_future_send(&g_control_loop, &g_netdrv_lookup_future,
+                                           g_proc_endpoint, g_control_endpoint,
+                                           SVC_IPC_LOOKUP_REQ, args[0], args[1], args[2], args[3],
+                                           NULL)) {
+        return;
+    }
+    g_netdrv_lookup_pending = 1u;
+    if (!wasmos_async_start(&g_control_runtime, &g_netdrv_lookup_coroutine,
+                            g_netdrv_lookup_stack, sizeof(g_netdrv_lookup_stack),
+                            net_stack_lookup_coroutine, NULL)) {
+        wasmos_sys_native_ipc_future_cancel(&g_netdrv_lookup_future, -1);
+        g_netdrv_lookup_pending = 0u;
     }
 }
 
@@ -1065,21 +1108,12 @@ static void net_stack_try_seed_random(void) {
 }
 
 static void net_stack_try_bind_virtio(void) {
-    uint32_t args[4];
     nd_ipc_message_t request;
     if (g_netif_ready) {
         return;
     }
     if (g_netdrv_endpoint == 0u) {
-        if (g_netdrv_lookup_pending) {
-            return;
-        }
-        wasmos_sys_ipc_pack_name16_native((const uint8_t*)"virtio.net", 10u, args);
-        if (wasmos_sys_native_intent_send(&g_control_loop, g_proc_endpoint, g_control_endpoint,
-                                          SVC_IPC_LOOKUP_REQ, args[0], args[1], args[2], args[3],
-                                          net_stack_lookup_reply, NULL, NULL) == 0) {
-            g_netdrv_lookup_pending = 1u;
-        }
+        net_stack_start_lookup_coroutine();
         return;
     }
     if (g_link_get_pending) {
@@ -1804,6 +1838,7 @@ int initialize(wasmos_driver_api_t* driver_api, int module_count, int arg2, int 
     }
     wasmos_sys_native_event_loop_init(&g_control_loop, driver_api, g_control_endpoint,
                                       NET_STACK_REGISTER_REQUEST_ID);
+    wasmos_native_coroutine_runtime_init(&g_control_runtime);
 
     /* Drain every message before yielding. A service must not assume a later
      * readiness edge will re-signal a request that was already queued; that
@@ -1836,6 +1871,9 @@ int initialize(wasmos_driver_api_t* driver_api, int module_count, int arg2, int 
             net_stack_dispatch(&request);
         }
         if (wasmos_sys_native_event_loop_poll(&g_control_loop, 8u) < 0) {
+            return -1;
+        }
+        if (wasmos_native_coroutine_run(&g_control_runtime) < 0) {
             return -1;
         }
         net_stack_begin_registration();

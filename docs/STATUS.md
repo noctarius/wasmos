@@ -99,9 +99,10 @@ linked feature documents for rationale and rollout plans.
   Native `wasmos_sys_native_ipc_future_t` now adapts one non-blocking event-loop
   intent into a caller-owned future, copying its correlated reply before
   resolution; protocol callbacks reject error replies, while local cancellation
-  discards late replies without cancelling transport work. It has no timers,
-  generic future cancellation, CQ wiring, multi-worker scheduling, or WASM
-  counterpart yet.
+  discards late replies without cancelling transport work. Net-stack uses this
+  path for its `virtio.net` service lookup: a native coroutine awaits the reply
+  before it installs the driver endpoint. It has no timers, generic future
+  cancellation, CQ wiring, multi-worker scheduling, or WASM counterpart yet.
 - Completion ports are documented as a design proposal only: the planned
   kernel-owned bounded CQ, notification-doorbell, and generation-tagged
   operation-token model has no implementation yet. It is intended to provide

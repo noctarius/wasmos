@@ -2591,6 +2591,8 @@ A protocol-specific reply-status callback may reject the future. Local
 `wasmos_sys_native_ipc_future_cancel()` removes the intent and rejects it; it
 does not cancel transport work, so a later reply is discarded by request ID.
 The C and Zig wrappers expose the same caller-storage contract.
+The native net-stack uses this path for its `virtio.net` service lookup: its
+control coroutine awaits the future and only then records the driver endpoint.
 
 Deadlines, generic future cancellation, multi-worker synchronization, CQ
 dispatch, allocator ownership, and guard-page stack allocation are deferred.

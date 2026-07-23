@@ -987,6 +987,8 @@ Responsibilities:
 - expose socket-style IPC to clients
 - mediate packet flow to/from `virtio-net` via `NETDRV_IPC_TX_FRAME` and
   `NETDRV_IPC_RX_FRAME_NOTIFY`
+- await its `virtio.net` service-discovery reply through the native
+  IPC-to-future adapter before binding the driver endpoint
 - support multiple addresses per interface
 - support multiple isolated stack instances with explicit instance selection
 

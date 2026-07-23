@@ -62,6 +62,11 @@ typedef struct {
     uint32_t instance;
     net_ifc_state_t state;
     struct netif netif;
+    uint8_t link_get_pending;
+    uint8_t link_get_retire;
+    wasmos_native_coroutine_t link_get_coroutine;
+    wasmos_sys_native_ipc_future_t link_get_future;
+    uint8_t link_get_stack[4096] __attribute__((aligned(16)));
 } net_interface_slot_t;
 static net_interface_slot_t g_interfaces[NET_STACK_MAX_INTERFACES];
 static net_interface_slot_t* g_active_ifc = NULL;
@@ -103,8 +108,6 @@ wasmos_sys_native_async_service_config_t wasmos_async_service = {
     .root_stack_size = sizeof(g_service_root_stack),
     .main = wasmos_async_main,
 };
-static uint8_t g_link_get_pending = 0u;
-static uint32_t g_link_get_sent_tick = 0u;
 static uint8_t g_hrng_lookup_pending = 0u;
 static uint8_t g_hrng_seeded = 0u;
 static uint32_t g_hrng_lookup_buffer_id = 0u;
@@ -112,11 +115,11 @@ static uint8_t* g_hrng_lookup_buffer = NULL;
 static wasmos_sys_native_random_request_t g_hrng_request;
 static uint32_t g_hrng_word = 0u;
 static wasmos_sys_native_event_loop_t g_control_loop;
+static wasmos_sys_native_event_loop_t g_netdrv_loop;
 
 #define ND_IPC_OK 0
 #define ND_IPC_EMPTY 1
 #define NET_STACK_REGISTER_REQUEST_ID 0x4E530001u
-#define NET_STACK_LINK_GET_REQUEST_ID 0x4E530002u
 #define NET_STACK_RX_POLL_REQUEST_ID 0x4E530003u
 #define NET_STACK_TX_REQUEST_BASE 0x4E535000u
 #define NET_STACK_FRAME_BYTES 2048u
@@ -125,7 +128,6 @@ static wasmos_sys_native_event_loop_t g_control_loop;
 #define NET_STACK_TCP_CHUNK_BYTES 1024u
 #define NET_STACK_HRNG_LOOKUP_REQUEST_ID 0x4E530004u
 #define NET_STACK_HRNG_REQUEST_ID 0x4E530005u
-#define NET_STACK_LINK_GET_RETRY_TICKS 50u
 #define NET_STACK_RX_POLL_INTERVAL_TICKS 3u
 #define NET_STACK_IFCFG_PATH "/boot/system/net/interfaces"
 #define NET_STACK_IFCFG_CAP 1024u
@@ -156,6 +158,7 @@ static void net_stack_begin_registration(void);
 static void net_stack_try_bind_virtio(void);
 static void net_stack_try_discover_interfaces(void);
 static void net_stack_unbind_interface(uint32_t endpoint);
+static void net_stack_reap_interfaces(void);
 static void net_stack_try_seed_random(void);
 static void net_stack_udp_recv(void* arg, struct udp_pcb* pcb, struct pbuf* p,
                                const ip_addr_t* addr, u16_t port);
@@ -163,6 +166,8 @@ static void net_stack_kick_ifcfg_load(void);
 static void net_stack_try_load_ifcfg(void);
 static void net_stack_apply_ifcfg(const net_ifcfg_t* cfg);
 static void net_stack_netif_status_cb(struct netif* netif);
+static void net_stack_dispatch(const nd_ipc_message_t* request);
+static void net_stack_netdrv_event(void* user, const nd_ipc_message_t* request);
 
 wasmos_driver_api_t* net_stack_api(void) {
     return g_api;
@@ -171,7 +176,8 @@ wasmos_driver_api_t* net_stack_api(void) {
 static net_interface_slot_t* net_stack_interface_slot(uint32_t endpoint, uint32_t instance,
                                                       uint8_t create) {
     for (uint32_t i = 0u; i < NET_STACK_MAX_INTERFACES; ++i) {
-        if (g_interfaces[i].in_use && g_interfaces[i].endpoint == endpoint)
+        if (g_interfaces[i].in_use && !g_interfaces[i].link_get_retire &&
+            g_interfaces[i].endpoint == endpoint)
             return &g_interfaces[i];
     }
     if (!create)
@@ -891,6 +897,11 @@ static int32_t net_stack_lookup_reply_status(void* user, const nd_ipc_message_t*
     return 0;
 }
 
+static int32_t net_stack_link_get_reply_status(void* user, const nd_ipc_message_t* reply) {
+    (void)user;
+    return reply != NULL && reply->type == NETDRV_IPC_RESP ? 0 : -1;
+}
+
 static void net_stack_lookup_coroutine(void* arg) {
     uintptr_t value = 0u;
     nd_ipc_message_t* reply;
@@ -906,6 +917,24 @@ static void net_stack_lookup_coroutine(void* arg) {
         g_active_ifc = net_stack_interface_slot(reply->arg0, 0u, 1u);
     }
     g_netdrv_lookup_pending = 0u;
+}
+
+static void net_stack_link_get_coroutine(void* arg) {
+    net_interface_slot_t* slot = (net_interface_slot_t*)arg;
+    uintptr_t value = 0u;
+    nd_ipc_message_t* reply;
+
+    if (slot == NULL ||
+        wasmos_future_await(&slot->link_get_future.future, &value) != 0 || value == 0u) {
+        if (slot != NULL)
+            slot->link_get_pending = 0u;
+        return;
+    }
+    reply = (nd_ipc_message_t*)value;
+    slot->link_get_pending = 0u;
+    if (slot == g_active_ifc && slot->endpoint == g_netdrv_endpoint) {
+        net_stack_finish_bind(reply->arg0 != 0u);
+    }
 }
 
 static void net_stack_start_lookup_coroutine(void) {
@@ -992,7 +1021,19 @@ static void net_stack_try_discover_interfaces(void) {
         g_netifc_lookup_pending = 1u;
 }
 
+static void net_stack_reap_interfaces(void) {
+    for (uint32_t i = 0u; i < NET_STACK_MAX_INTERFACES; ++i) {
+        net_interface_slot_t* slot = &g_interfaces[i];
+        if (slot->in_use && slot->link_get_retire &&
+            slot->link_get_coroutine.state == WASMOS_NATIVE_COROUTINE_DEAD) {
+            __builtin_memset(slot, 0, sizeof(*slot));
+        }
+    }
+}
+
 static void net_stack_unbind_interface(uint32_t endpoint) {
+    net_interface_slot_t* slot = g_active_ifc;
+
     if (endpoint != g_netdrv_endpoint)
         return;
     if (g_netif_ready)
@@ -1004,8 +1045,9 @@ static void net_stack_unbind_interface(uint32_t endpoint) {
     g_ifcfg_loaded = 0u;
     g_dhcp_active = 0u;
     g_dhcp_timeout_logged = 0u;
+    if (slot != NULL)
+        wasmos_sys_native_ipc_future_cancel(&slot->link_get_future, -1);
     g_netdrv_endpoint = 0u;
-    g_link_get_pending = 0u;
     g_rx_pending = 0u;
     g_rx_poll_next_tick = 0u;
     if (g_rx_buffer_id != 0u)
@@ -1020,8 +1062,14 @@ static void net_stack_unbind_interface(uint32_t endpoint) {
         g_tx_slots[i].pending = 0u;
     }
     g_ifc_state = NET_IFC_DISCOVERED;
-    if (g_active_ifc != NULL)
-        __builtin_memset(g_active_ifc, 0, sizeof(*g_active_ifc));
+    if (slot != NULL) {
+        if (slot->link_get_coroutine.state == WASMOS_NATIVE_COROUTINE_NEW ||
+            slot->link_get_coroutine.state == WASMOS_NATIVE_COROUTINE_DEAD) {
+            __builtin_memset(slot, 0, sizeof(*slot));
+        } else {
+            slot->link_get_retire = 1u;
+        }
+    }
     g_active_ifc = NULL;
 }
 
@@ -1116,7 +1164,8 @@ static void net_stack_try_seed_random(void) {
 }
 
 static void net_stack_try_bind_virtio(void) {
-    nd_ipc_message_t request;
+    net_interface_slot_t* slot = g_active_ifc;
+
     if (g_netif_ready) {
         return;
     }
@@ -1124,16 +1173,15 @@ static void net_stack_try_bind_virtio(void) {
         net_stack_start_lookup_coroutine();
         return;
     }
-    if (g_link_get_pending) {
-        /* IPC delivery is asynchronous around provider startup. Do not let a
-         * request queued while the driver is transitioning into its handler
-         * loop permanently wedge interface binding. LINK_GET is idempotent,
-         * so retry until its RESP/ERROR clears the pending state. */
-        if (g_api->sched_ticks == NULL || (uint32_t)(g_api->sched_ticks() - g_link_get_sent_tick) <
-                                              NET_STACK_LINK_GET_RETRY_TICKS) {
-            return;
-        }
-        g_link_get_pending = 0u;
+    if (slot == NULL || slot->endpoint != g_netdrv_endpoint || slot->link_get_pending) {
+        return;
+    }
+    /* Cancellation wakes the awaiting coroutine on the next runtime turn.
+     * Do not reinitialize its caller-owned future/stack until that turn has
+     * retired the old operation. */
+    if (slot->link_get_coroutine.state != WASMOS_NATIVE_COROUTINE_NEW &&
+        slot->link_get_coroutine.state != WASMOS_NATIVE_COROUTINE_DEAD) {
+        return;
     }
     if (g_rx_buffer == NULL) {
         g_rx_buffer = (uint8_t*)g_api->xfer_buffer_acquire(ND_BUFFER_KIND_XFER,
@@ -1156,20 +1204,24 @@ static void net_stack_try_bind_virtio(void) {
         if (g_active_ifc != NULL)
             g_active_ifc->state = g_ifc_state;
     }
-    request.type = NETDRV_IPC_LINK_GET;
-    request.source = g_netdrv_reply_endpoint;
-    request.destination = g_netdrv_endpoint;
-    request.request_id = NET_STACK_LINK_GET_REQUEST_ID;
-    request.arg0 = g_rx_buffer_id;
-    request.arg1 = 0u;
-    request.arg2 = 0u;
-    request.arg3 = 0u;
-    if (g_api->ipc_send(g_api->sched_current_pid(), g_netdrv_endpoint, &request) == 0) {
-        g_link_get_pending = 1u;
-        g_link_get_sent_tick = g_api->sched_ticks != NULL ? g_api->sched_ticks() : 0u;
-        g_ifc_state = NET_IFC_LINK_QUERIED;
-        if (g_active_ifc != NULL)
-            g_active_ifc->state = g_ifc_state;
+    wasmos_sys_native_ipc_future_init(&slot->link_get_future, net_stack_link_get_reply_status,
+                                      NULL);
+    if (!wasmos_sys_native_ipc_future_send(&g_netdrv_loop, &slot->link_get_future,
+                                           g_netdrv_endpoint,
+                                           g_netdrv_reply_endpoint, NETDRV_IPC_LINK_GET,
+                                           g_rx_buffer_id, 0u, 0u, 0u, NULL)) {
+        return;
+    }
+    slot->link_get_pending = 1u;
+    g_ifc_state = NET_IFC_LINK_QUERIED;
+    if (g_active_ifc != NULL)
+        g_active_ifc->state = g_ifc_state;
+    if (!g_control_runtime || !wasmos_async_start(g_control_runtime, &slot->link_get_coroutine,
+                                                   slot->link_get_stack,
+                                                   sizeof(slot->link_get_stack),
+                                                   net_stack_link_get_coroutine, slot)) {
+        wasmos_sys_native_ipc_future_cancel(&slot->link_get_future, -1);
+        slot->link_get_pending = 0u;
     }
 }
 
@@ -1575,13 +1627,6 @@ static void net_stack_dispatch(const nd_ipc_message_t* request) {
      * traffic. Keep them asynchronous: a blocking receive here could consume
      * and lose a socket request queued behind a netdrv reply. */
     if (request->source == g_netdrv_endpoint) {
-        if (request->request_id == NET_STACK_LINK_GET_REQUEST_ID) {
-            g_link_get_pending = 0u;
-            if (request->type == NETDRV_IPC_RESP) {
-                net_stack_finish_bind(request->arg0 != 0u);
-            }
-            return;
-        }
         if (request->type == NETDRV_IPC_RX_FRAME_NOTIFY) {
             net_stack_start_rx_poll(1u);
             return;
@@ -1794,6 +1839,14 @@ static void net_stack_dispatch(const nd_ipc_message_t* request) {
     }
 }
 
+/* The reply endpoint has one correlated LINK_GET request plus recurring driver
+ * notifications. Event-loop intent matching consumes the former before this
+ * handler runs; registered notification and default paths retain the latter. */
+static void net_stack_netdrv_event(void* user, const nd_ipc_message_t* request) {
+    (void)user;
+    net_stack_dispatch(request);
+}
+
 /* Native async root. libsys's async_initialize is the ELF entry and invokes
  * this inside the predefined root coroutine. */
 int32_t wasmos_async_main(wasmos_driver_api_t* driver_api,
@@ -1844,15 +1897,24 @@ int32_t wasmos_async_main(wasmos_driver_api_t* driver_api,
     }
     wasmos_sys_native_event_loop_init(&g_control_loop, driver_api, g_control_endpoint,
                                       NET_STACK_REGISTER_REQUEST_ID);
+    wasmos_sys_native_event_loop_init(&g_netdrv_loop, driver_api, g_netdrv_reply_endpoint,
+                                      NET_STACK_TX_REQUEST_BASE + NET_STACK_TX_QUEUE_DEPTH);
+    if (wasmos_sys_native_event_register(&g_netdrv_loop, NETDRV_IPC_RX_FRAME_NOTIFY,
+                                         net_stack_netdrv_event, NULL) != 0 ||
+        wasmos_sys_native_event_register(&g_netdrv_loop, NETDRV_IPC_LINK_NOTIFY,
+                                         net_stack_netdrv_event, NULL) != 0 ||
+        wasmos_sys_native_event_set_default(&g_netdrv_loop, net_stack_netdrv_event, NULL) != 0) {
+        return -1;
+    }
     g_control_runtime = runtime;
 
-    /* Drain every message before yielding. A service must not assume a later
-     * readiness edge will re-signal a request that was already queued; that
-     * exact mistake previously deadlocked the virtio-net synchronous control
-     * path. */
+    /* Drain socket requests and both native event loops before yielding. A
+     * service must not assume a later readiness edge will re-signal work that
+     * was already queued. */
     for (;;) {
         nd_ipc_message_t request;
         int drained = 0;
+        net_stack_reap_interfaces();
         for (;;) {
             int rc = driver_api->ipc_recv(driver_api->sched_current_pid(), g_endpoint, &request);
             if (rc == ND_IPC_EMPTY) {
@@ -1864,19 +1926,10 @@ int32_t wasmos_async_main(wasmos_driver_api_t* driver_api,
             drained = 1;
             net_stack_dispatch(&request);
         }
-        for (;;) {
-            int rc = driver_api->ipc_recv(driver_api->sched_current_pid(), g_netdrv_reply_endpoint,
-                                          &request);
-            if (rc == ND_IPC_EMPTY) {
-                break;
-            }
-            if (rc != ND_IPC_OK) {
-                return -1;
-            }
-            drained = 1;
-            net_stack_dispatch(&request);
-        }
         if (wasmos_sys_native_event_loop_poll(&g_control_loop, 8u) < 0) {
+            return -1;
+        }
+        if (wasmos_sys_native_event_loop_poll(&g_netdrv_loop, 8u) < 0) {
             return -1;
         }
         net_stack_begin_registration();

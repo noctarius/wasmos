@@ -2008,6 +2008,16 @@ elseif(CMAKE_HOST_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64|ARM64)$")
   set(NATIVE_COROUTINE_HOST_LABEL "aarch64")
 endif()
 
+set(NATIVE_COROUTINE_ZIG_TARGET_ARGS)
+set(NATIVE_COROUTINE_ZIG_LINK_ARGS)
+if(APPLE AND DEFINED NATIVE_COROUTINE_HOST_ASM)
+  # Pin the deployment target so Zig links the host SDK's libSystem rather
+  # than requesting APIs newer than the installed SDK exports.
+  list(APPEND NATIVE_COROUTINE_ZIG_TARGET_ARGS
+       -target ${NATIVE_COROUTINE_HOST_LABEL}-macos.15.0)
+  list(APPEND NATIVE_COROUTINE_ZIG_LINK_ARGS -lSystem)
+endif()
+
 if(DEFINED NATIVE_COROUTINE_HOST_ASM)
   add_custom_command(TARGET run-kernel-unit-tests POST_BUILD
     COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
@@ -2019,6 +2029,25 @@ if(DEFINED NATIVE_COROUTINE_HOST_ASM)
     COMMAND ${BUILD_DIR}/test_native_coroutine
     COMMENT "Running native ${NATIVE_COROUTINE_HOST_LABEL} coroutine unit tests"
     VERBATIM)
+  if (ZIG_AVAILABLE)
+    add_custom_command(TARGET run-kernel-unit-tests POST_BUILD
+      COMMAND ${ZIG_EXECUTABLE} test
+              ${NATIVE_COROUTINE_ZIG_TARGET_ARGS}
+              ${LIBSYS_NATIVE_DIR}/coroutine_native.c
+              ${NATIVE_COROUTINE_HOST_ASM}
+              -I${LIBSYS_NATIVE_DIR}/include
+              -I${CMAKE_SOURCE_DIR}/src/drivers/include
+              --cache-dir ${BUILD_DIR}/zig-native-coroutine-cache
+              --global-cache-dir ${BUILD_DIR}/zig-global-cache
+              --dep libsys
+              -Mroot=${CMAKE_SOURCE_DIR}/tests/unit/test_native_coroutine.zig
+              -Mlibsys=${LIBSYS_NATIVE_DIR}/zig/libsys.zig
+              -I${LIBSYS_NATIVE_DIR}/include
+              -I${CMAKE_SOURCE_DIR}/src/drivers/include
+              ${NATIVE_COROUTINE_ZIG_LINK_ARGS}
+      COMMENT "Running native ${NATIVE_COROUTINE_HOST_LABEL} Zig coroutine wrapper unit tests"
+      VERBATIM)
+  endif ()
 else()
   add_custom_command(TARGET run-kernel-unit-tests POST_BUILD
     COMMAND ${CLANG} -target ${KERNEL_TARGET_TRIPLE} -std=c11 -ffreestanding

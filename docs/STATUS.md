@@ -93,6 +93,9 @@ linked feature documents for rationale and rollout plans.
   chains. Caller-owned `race`/`all` groups and variadic C macros provide
   first-outcome and all-success aggregation; group storage remains live until
   every input settles because continuation cancellation is not implemented.
+  The host unit suite exercises both the C runtime and native Zig wrapper,
+  including `asyncStart`, chained callbacks, slice-based `race`/`all`, and
+  invalid slice contracts.
   It has no timers, cancellation, IPC/CQ wiring, multi-worker scheduling, or
   WASM counterpart yet.
 - Completion ports are documented as a design proposal only: the planned

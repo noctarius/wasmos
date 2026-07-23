@@ -2668,5 +2668,11 @@ the scheduling semantics. `tests/unit/test_wasm_coroutine.rs` links that Rust
 wrapper to the host build of the same C core and exercises task wakeup, join,
 deferred chaining, race, and all.
 
+`src/libc/zig/coroutine.zig` provides the matching Zig method surface under
+`wasmos.coroutine`. Its `Runtime`, `Future`, `Promise`, `Coroutine`, and
+`FutureGroup` methods bind directly to the same C symbols. Zig WASM app builds
+now compile and link `coroutine_wasm.c`; the host Zig wrapper test covers
+task wakeup/join, deferred chaining, and race behavior against that C core.
+
 WASM IPC-future adaptation, deadlines, cancellation, CQ dispatch, parallel
 workers, and language wrappers remain deferred.

@@ -25,6 +25,11 @@ wasmos_add_zig_wasm_app(
   OUTPUT_WASM ${WASM_HELLO_ZIG_WASM}
   OUTPUT_APP  ${WASM_HELLO_ZIG_APP}
   MANIFEST    ${CMAKE_CURRENT_SOURCE_DIR}/linker.metadata
+  EXTRA_SRCS
+    ${LIBC_DIR}/zig/coroutine.zig
+    ${LIBSYS_WASM_DIR}/coroutine_wasm.c
+  INCLUDE_DIRS
+    ${LIBSYS_WASM_DIR}/include
 )
 
 wasmos_add_zig_wasm_app(
@@ -40,9 +45,12 @@ wasmos_add_zig_wasm_app(
   # the framebuffer shmem mapping; 8 WASM pages (512 KB) is the minimum.
   INITIAL_MEMORY 2097152
   EXTRA_SRCS
+    ${LIBC_DIR}/zig/coroutine.zig
+    ${LIBSYS_WASM_DIR}/coroutine_wasm.c
     ${CMAKE_SOURCE_DIR}/src/libui/zig/libui.zig
     ${CMAKE_SOURCE_DIR}/src/libui/zig/libui_shim.c
   INCLUDE_DIRS
+    ${LIBSYS_WASM_DIR}/include
     ${CMAKE_SOURCE_DIR}/src/libc/zig/compat
     ${CMAKE_SOURCE_DIR}/src/libui/include
     ${CMAKE_SOURCE_DIR}/src/libc/include

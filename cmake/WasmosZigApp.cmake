@@ -72,6 +72,8 @@ function(wasmos_add_zig_wasm_app)
   set(_stage  "${BUILD_DIR}/zig_${ARG_NAME}_src")
   set(_cache  "${BUILD_DIR}/zig_cache")
   set(_gcache "${BUILD_DIR}/zig_global_cache")
+  get_filename_component(_libc_src_dir "${ARG_LIBC_SRC}" DIRECTORY)
+  set(_coroutine_zig "${_libc_src_dir}/coroutine.zig")
 
   # Build -I flag list from INCLUDE_DIRS
   set(_include_flags "")
@@ -111,7 +113,11 @@ function(wasmos_add_zig_wasm_app)
 
   set(_c_compile_flags "")
   if (_extra_c)
-    set(_c_compile_flags -cflags -mno-bulk-memory --)
+    set(_c_compile_flags -cflags -mno-bulk-memory)
+    foreach(_dir ${ARG_INCLUDE_DIRS})
+      list(APPEND _c_compile_flags "-I${_dir}")
+    endforeach()
+    list(APPEND _c_compile_flags --)
   endif ()
 
   add_custom_command(
@@ -122,6 +128,7 @@ function(wasmos_add_zig_wasm_app)
     COMMAND ${CMAKE_COMMAND} -E make_directory ${_gcache}
     COMMAND ${CMAKE_COMMAND} -E copy_if_different ${ARG_SRC}      ${_stage}/${ARG_NAME}.zig
     COMMAND ${CMAKE_COMMAND} -E copy_if_different ${ARG_LIBC_SRC} ${_stage}/wasmos.zig
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different ${_coroutine_zig} ${_stage}/coroutine.zig
     ${_stage_cmds}
     COMMAND ${ZIG_EXECUTABLE}
             build-exe
@@ -149,7 +156,7 @@ function(wasmos_add_zig_wasm_app)
             ${ARG_OUTPUT_WASM}
             --stack-size ${WASMOS_ZIG_STACK_SIZE}
             --max-addr   ${WASMOS_ZIG_USER_VA_LIMIT}
-    DEPENDS ${ARG_SRC} ${ARG_LIBC_SRC} ${ARG_EXTRA_SRCS}
+    DEPENDS ${ARG_SRC} ${ARG_LIBC_SRC} ${_coroutine_zig} ${ARG_EXTRA_SRCS}
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     COMMENT "Building and validating Zig WASM app: ${ARG_NAME}"
     VERBATIM

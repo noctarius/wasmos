@@ -2098,6 +2098,21 @@ if(DEFINED NATIVE_COROUTINE_HOST_ASM)
       COMMENT "Running Rust WASM coroutine wrapper unit tests"
       VERBATIM)
   endif ()
+  if (ZIG_AVAILABLE)
+    add_custom_command(TARGET run-kernel-unit-tests POST_BUILD
+      COMMAND ${ZIG_EXECUTABLE} test
+              ${NATIVE_COROUTINE_ZIG_TARGET_ARGS}
+              ${LIBSYS_WASM_DIR}/coroutine_wasm.c
+              -I${LIBSYS_WASM_DIR}/include
+              --cache-dir ${BUILD_DIR}/zig-wasm-coroutine-cache
+              --global-cache-dir ${BUILD_DIR}/zig-wasm-coroutine-global-cache
+              --dep coroutine
+              -Mroot=${CMAKE_SOURCE_DIR}/tests/unit/test_wasm_coroutine.zig
+              -Mcoroutine=${LIBC_DIR}/zig/coroutine.zig
+              ${NATIVE_COROUTINE_ZIG_LINK_ARGS}
+      COMMENT "Running WASM Zig coroutine wrapper unit tests"
+      VERBATIM)
+  endif ()
   add_custom_command(TARGET run-kernel-unit-tests POST_BUILD
     COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
             -I${LIBSYS_WASM_DIR}/include

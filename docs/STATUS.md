@@ -128,7 +128,10 @@ linked feature documents for rationale and rollout plans.
   exposes method-based `Runtime`, `Future`, `Promise`, `Coroutine`,
   `Continuation`, and `FutureGroup` bindings; host Rust tests execute those
   methods against the same C implementation. Zig, Go, and AssemblyScript
-  wrappers remain deferred.
+  wrappers remain deferred. Zig now has the matching `wasmos.coroutine`
+  method wrapper and links the same C object into its WASM applications; its
+  host wrapper test runs against the C core. Go and AssemblyScript wrappers
+  remain deferred.
 - Completion ports are documented as a design proposal only: the planned
   kernel-owned bounded CQ, notification-doorbell, and generation-tagged
   operation-token model has no implementation yet. It is intended to provide

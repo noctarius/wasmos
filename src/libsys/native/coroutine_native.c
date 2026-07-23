@@ -134,6 +134,7 @@ void wasmos_native_coroutine_runtime_init(wasmos_native_coroutine_runtime_t* run
     runtime->ready_tail = NULL;
     runtime->continuation_head = NULL;
     runtime->continuation_tail = NULL;
+    runtime->running = false;
 }
 
 void wasmos_future_init(wasmos_future_t* future, wasmos_promise_t* promise) {
@@ -209,9 +210,10 @@ int wasmos_native_coroutine_run(wasmos_native_coroutine_runtime_t* runtime) {
     int resumed = 0;
     wasmos_native_coroutine_t* coroutine;
 
-    if (!runtime || runtime->current) {
+    if (!runtime || runtime->running) {
         return -1;
     }
+    runtime->running = true;
     for (;;) {
         while ((coroutine = coroutine_dequeue(runtime)) != NULL) {
             runtime->current = coroutine;
@@ -258,6 +260,7 @@ int wasmos_native_coroutine_run(wasmos_native_coroutine_runtime_t* runtime) {
             (void)wasmos_promise_reject(&continuation->child_promise, future->status);
         }
     }
+    runtime->running = false;
     return resumed;
 }
 
@@ -402,6 +405,118 @@ wasmos_future_t* wasmos_future_then(wasmos_native_coroutine_runtime_t* runtime,
         continuation_schedule(runtime, continuation);
     }
     return &continuation->child;
+}
+
+static void future_group_callback_complete(wasmos_future_group_t* group) {
+    group->completed++;
+    if (group->completed == group->count) {
+        group->active = false;
+    }
+}
+
+static int32_t future_group_success(void* user, uintptr_t value, uintptr_t* out_value) {
+    wasmos_future_continuation_t* continuation = user;
+    wasmos_future_group_t* group = continuation ? continuation->group : NULL;
+
+    if (!group || !group->active) {
+        return -1;
+    }
+    if (group->kind == WASMOS_FUTURE_GROUP_ALL) {
+        group->values[continuation->group_index] = value;
+        future_group_callback_complete(group);
+        if (!group->settled && group->completed == group->count) {
+            group->settled = true;
+            (void)wasmos_promise_resolve(&group->promise, (uintptr_t)group->values);
+        }
+    } else {
+        if (!group->settled) {
+            group->settled = true;
+            (void)wasmos_promise_resolve(&group->promise, value);
+        }
+        future_group_callback_complete(group);
+    }
+    *out_value = value;
+    return 0;
+}
+
+static int32_t future_group_error(void* user, int32_t status, uintptr_t* out_value) {
+    wasmos_future_continuation_t* continuation = user;
+    wasmos_future_group_t* group = continuation ? continuation->group : NULL;
+    int32_t error = status < 0 ? status : -1;
+
+    if (!group || !group->active) {
+        return -1;
+    }
+    if (!group->settled) {
+        group->settled = true;
+        (void)wasmos_promise_reject(&group->promise, error);
+    }
+    future_group_callback_complete(group);
+    *out_value = 0;
+    return error;
+}
+
+static bool future_group_inputs_valid(wasmos_native_coroutine_runtime_t* runtime,
+                                      wasmos_future_group_t* group, wasmos_future_t* const* inputs,
+                                      size_t count, uintptr_t* values,
+                                      wasmos_future_continuation_t* continuations,
+                                      wasmos_future_group_kind_t kind) {
+    if (!runtime || !group || !inputs || !continuations || count == 0 || group->active ||
+        (kind == WASMOS_FUTURE_GROUP_ALL && !values)) {
+        return false;
+    }
+    for (size_t i = 0; i < count; ++i) {
+        if (!inputs[i] || continuations[i].active ||
+            (inputs[i]->runtime && inputs[i]->runtime != runtime)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static wasmos_future_t*
+future_group_start(wasmos_native_coroutine_runtime_t* runtime, wasmos_future_group_t* group,
+                   wasmos_future_t* const* inputs, size_t count, uintptr_t* values,
+                   wasmos_future_continuation_t* continuations, wasmos_future_group_kind_t kind) {
+    /* TODO: add continuation cancellation so a settled race/fail-fast all can
+     * release caller group storage without waiting for every source. */
+    if (!future_group_inputs_valid(runtime, group, inputs, count, values, continuations, kind)) {
+        return NULL;
+    }
+    group->runtime = runtime;
+    group->values = values;
+    group->count = count;
+    group->completed = 0;
+    group->kind = kind;
+    group->settled = false;
+    group->active = true;
+    wasmos_future_init(&group->future, &group->promise);
+    group->future.runtime = runtime;
+
+    for (size_t i = 0; i < count; ++i) {
+        continuations[i].group = group;
+        continuations[i].group_index = i;
+        if (!wasmos_future_then(runtime, inputs[i], &continuations[i], future_group_success,
+                                future_group_error, &continuations[i])) {
+            __builtin_trap();
+        }
+    }
+    return &group->future;
+}
+
+wasmos_future_t* wasmos_future_race(wasmos_native_coroutine_runtime_t* runtime,
+                                    wasmos_future_group_t* group, wasmos_future_t* const* inputs,
+                                    size_t count, wasmos_future_continuation_t* continuations) {
+    return future_group_start(runtime, group, inputs, count, NULL, continuations,
+                              WASMOS_FUTURE_GROUP_RACE);
+}
+
+wasmos_future_t* wasmos_future_all(wasmos_native_coroutine_runtime_t* runtime,
+                                   wasmos_future_group_t* group, wasmos_future_t* const* inputs,
+                                   size_t count, uintptr_t* values,
+                                   wasmos_future_continuation_t* continuations) {
+    return future_group_start(runtime, group, inputs, count, values, continuations,
+                              WASMOS_FUTURE_GROUP_ALL);
 }
 
 int wasmos_native_coroutine_join(wasmos_native_coroutine_t* coroutine, int32_t* out_result) {

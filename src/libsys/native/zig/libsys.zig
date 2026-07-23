@@ -11,6 +11,7 @@ pub const NativeCoroutine = c.wasmos_native_coroutine_t;
 pub const Future = c.wasmos_future_t;
 pub const Promise = c.wasmos_promise_t;
 pub const FutureContinuation = c.wasmos_future_continuation_t;
+pub const FutureGroup = c.wasmos_future_group_t;
 pub const NativeCoroutineEntry = *const fn (?*anyopaque) callconv(.c) void;
 pub const FutureSuccess = c.wasmos_future_success_fn_t;
 pub const FutureError = c.wasmos_future_error_fn_t;
@@ -65,6 +66,16 @@ pub fn futureAwait(future: *Future, out_value: ?*usize) i32 {
 
 pub fn futureThen(runtime: *NativeCoroutineRuntime, future: *Future, continuation: *FutureContinuation, on_success: ?FutureSuccess, on_error: ?FutureError, user: ?*anyopaque) ?*Future {
     return c.wasmos_future_then(runtime, future, continuation, on_success, on_error, user);
+}
+
+pub fn futureRace(runtime: *NativeCoroutineRuntime, group: *FutureGroup, inputs: []const *Future, continuations: []FutureContinuation) ?*Future {
+    if (inputs.len == 0 or inputs.len != continuations.len) return null;
+    return c.wasmos_future_race(runtime, group, @ptrCast(inputs.ptr), inputs.len, continuations.ptr);
+}
+
+pub fn futureAll(runtime: *NativeCoroutineRuntime, group: *FutureGroup, inputs: []const *Future, values: []usize, continuations: []FutureContinuation) ?*Future {
+    if (inputs.len == 0 or inputs.len != values.len or inputs.len != continuations.len) return null;
+    return c.wasmos_future_all(runtime, group, @ptrCast(inputs.ptr), inputs.len, values.ptr, continuations.ptr);
 }
 pub const Mutex = extern struct {
     owner_tid: u32,

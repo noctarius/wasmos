@@ -90,8 +90,11 @@ linked feature documents for rationale and rollout plans.
   Caller-owned `future_then` registrations schedule separate success/error
   callbacks through the runtime rather than invoking them inline, and return a
   caller-owned child future for value-transforming, rejection-propagating
-  chains. It has no timers, cancellation, IPC/CQ wiring, multi-worker
-  scheduling, or WASM counterpart yet.
+  chains. Caller-owned `race`/`all` groups and variadic C macros provide
+  first-outcome and all-success aggregation; group storage remains live until
+  every input settles because continuation cancellation is not implemented.
+  It has no timers, cancellation, IPC/CQ wiring, multi-worker scheduling, or
+  WASM counterpart yet.
 - Completion ports are documented as a design proposal only: the planned
   kernel-owned bounded CQ, notification-doorbell, and generation-tagged
   operation-token model has no implementation yet. It is intended to provide

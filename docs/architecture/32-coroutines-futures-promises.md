@@ -2572,6 +2572,16 @@ The initial future/promise core is intentionally local and single-worker:
 caller-owned coroutine and returns that coroutine's completion future. The
 worker body remains an ordinary C function and can use `await` and `yield`.
 
+The same caller-storage model supports `wasmos_future_race()` and
+`wasmos_future_all()`, with `WASMOS_FUTURE_RACE(...)` and
+`WASMOS_FUTURE_ALL(...)` variadic convenience macros. `race` settles from the
+first source outcome; `all` resolves to the caller's value array after every
+source succeeds, or rejects on the first failure. Neither combinator can
+unregister its source continuations yet, so its group state and continuation
+array must remain live until every source future has settled.
+The Zig wrappers take slices for inputs, values, and continuations, checking
+their matching lengths before registering the group.
+
 Cancellation, deadlines, multi-worker synchronization, IPC intent adaptation,
 CQ dispatch, allocator ownership, and guard-page stack allocation are deferred.
 The caller must retain all coroutine and stack storage until the coroutine is
@@ -2588,9 +2598,11 @@ validation before it adopts coroutines for socket operations.
 pending-future suspension/wakeup, duplicate promise settlement rejection,
 join, value-transforming chains, rejection recovery, callback-caused
 rejection, and `wasmos_async_start()` completion-future return on x86-64 and
-AArch64 hosts. Other development hosts cross-compile the x86-64 target
-objects instead; target-package compilation is additionally validated by the
-net-stack build.
+AArch64 hosts. It also covers waiter and joiner fan-out, terminal callback
+registration, unchanged-outcome forwarding, re-entrant callback dispatch,
+contract rejection, yield stress, and race/all success and failure paths.
+Other development hosts cross-compile the x86-64 target objects instead;
+target-package compilation is additionally validated by the net-stack build.
 
 `future_then` now returns the continuation record's caller-owned child future,
 so native C and Zig can build value-transforming, rejection-propagating chains

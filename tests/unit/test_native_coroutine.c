@@ -109,6 +109,9 @@ static int test_yield_await_and_join(void) {
     static const uint32_t expected[] = {1u, 2u, 3u, 4u, 5u, 6u, 7u, 7u};
     test_state_t state = {0};
     wasmos_future_t* first_completion;
+    wasmos_future_t* late_child;
+    int32_t late_status = -1;
+    uintptr_t late_value = 0;
     int run_count;
 
     wasmos_native_coroutine_runtime_init(&state.runtime);
@@ -138,10 +141,12 @@ static int test_yield_await_and_join(void) {
             return __LINE__;
         }
     }
-    if (!wasmos_future_then(&state.runtime, &state.future, &state.late_continuation,
-                            success_callback, error_callback, &state) ||
-        wasmos_native_coroutine_run(&state.runtime) != 0 ||
-        state.event_count != sizeof(expected) / sizeof(expected[0])) {
+    late_child = wasmos_future_then(&state.runtime, &state.future, &state.late_continuation,
+                                    success_callback, error_callback, &state);
+    if (!late_child || wasmos_native_coroutine_run(&state.runtime) != 0 ||
+        state.event_count != sizeof(expected) / sizeof(expected[0]) ||
+        !wasmos_future_poll(late_child, &late_status, &late_value) || late_status != 0 ||
+        late_value != 42u) {
         return __LINE__;
     }
     for (uint32_t i = 0; i < state.event_count; ++i) {
@@ -185,10 +190,16 @@ static int test_future_chains(void) {
     wasmos_promise_t rejected_promise;
     wasmos_future_t failed_callback;
     wasmos_promise_t failed_callback_promise;
+    wasmos_future_t forwarded;
+    wasmos_promise_t forwarded_promise;
+    wasmos_future_t forwarded_error;
+    wasmos_promise_t forwarded_error_promise;
     wasmos_future_continuation_t increment = {0};
     wasmos_future_continuation_t double_value = {0};
     wasmos_future_continuation_t recover = {0};
     wasmos_future_continuation_t reject = {0};
+    wasmos_future_continuation_t forward = {0};
+    wasmos_future_continuation_t forward_error = {0};
     wasmos_future_t* child;
     wasmos_future_t* grandchild;
     wasmos_future_t* recovered;
@@ -225,6 +236,348 @@ static int test_future_chains(void) {
         !wasmos_future_poll(callback_failed, &status, &value) || status != -41 || value != 0u) {
         return __LINE__;
     }
+
+    wasmos_future_init(&forwarded, &forwarded_promise);
+    child = wasmos_future_then(&runtime, &forwarded, &forward, NULL, NULL, NULL);
+    if (!child || !wasmos_promise_resolve(&forwarded_promise, 88u) ||
+        wasmos_native_coroutine_run(&runtime) != 0 || !wasmos_future_poll(child, &status, &value) ||
+        status != 0 || value != 88u) {
+        return __LINE__;
+    }
+
+    wasmos_future_init(&forwarded_error, &forwarded_error_promise);
+    child = wasmos_future_then(&runtime, &forwarded_error, &forward_error, NULL, NULL, NULL);
+    if (!child || !wasmos_promise_reject(&forwarded_error_promise, -77) ||
+        wasmos_native_coroutine_run(&runtime) != 0 || !wasmos_future_poll(child, &status, &value) ||
+        status != -77 || value != 0u) {
+        return __LINE__;
+    }
+    return 0;
+}
+
+enum {
+    TEST_WAITER_COUNT = 3,
+    TEST_STRESS_COUNT = 12,
+    TEST_STRESS_YIELDS = 24,
+};
+
+typedef struct waiter_state waiter_state_t;
+
+typedef struct {
+    waiter_state_t* state;
+    size_t index;
+} waiter_arg_t;
+
+struct waiter_state {
+    wasmos_native_coroutine_runtime_t runtime;
+    wasmos_future_t future;
+    wasmos_promise_t promise;
+    wasmos_native_coroutine_t coroutines[TEST_WAITER_COUNT];
+    waiter_arg_t args[TEST_WAITER_COUNT];
+    uint8_t stacks[TEST_WAITER_COUNT][4096];
+    int32_t statuses[TEST_WAITER_COUNT];
+    uintptr_t values[TEST_WAITER_COUNT];
+};
+
+static void waiter_entry(void* arg) {
+    waiter_arg_t* waiter = arg;
+    waiter_state_t* state = waiter->state;
+    size_t index = waiter->index;
+
+    state->statuses[index] = wasmos_future_await(&state->future, &state->values[index]);
+}
+
+static int test_multiple_waiters(void) {
+    waiter_state_t success = {0};
+    waiter_state_t failure = {0};
+
+    wasmos_native_coroutine_runtime_init(&success.runtime);
+    wasmos_future_init(&success.future, &success.promise);
+    for (size_t i = 0; i < TEST_WAITER_COUNT; ++i) {
+        success.args[i] = (waiter_arg_t){.state = &success, .index = i};
+        if (!wasmos_async_start(&success.runtime, &success.coroutines[i], success.stacks[i],
+                                sizeof(success.stacks[i]), waiter_entry, &success.args[i])) {
+            return __LINE__;
+        }
+    }
+    if (wasmos_native_coroutine_run(&success.runtime) != TEST_WAITER_COUNT ||
+        !wasmos_promise_resolve(&success.promise, 77u) ||
+        wasmos_native_coroutine_run(&success.runtime) != TEST_WAITER_COUNT) {
+        return __LINE__;
+    }
+    for (size_t i = 0; i < TEST_WAITER_COUNT; ++i) {
+        if (success.statuses[i] != 0 || success.values[i] != 77u ||
+            success.coroutines[i].state != WASMOS_NATIVE_COROUTINE_DEAD) {
+            return __LINE__;
+        }
+    }
+
+    wasmos_native_coroutine_runtime_init(&failure.runtime);
+    wasmos_future_init(&failure.future, &failure.promise);
+    for (size_t i = 0; i < TEST_WAITER_COUNT; ++i) {
+        failure.args[i] = (waiter_arg_t){.state = &failure, .index = i};
+        if (!wasmos_async_start(&failure.runtime, &failure.coroutines[i], failure.stacks[i],
+                                sizeof(failure.stacks[i]), waiter_entry, &failure.args[i])) {
+            return __LINE__;
+        }
+    }
+    if (wasmos_native_coroutine_run(&failure.runtime) != TEST_WAITER_COUNT ||
+        !wasmos_promise_reject(&failure.promise, -31) ||
+        wasmos_native_coroutine_run(&failure.runtime) != TEST_WAITER_COUNT) {
+        return __LINE__;
+    }
+    for (size_t i = 0; i < TEST_WAITER_COUNT; ++i) {
+        if (failure.statuses[i] != -31 || failure.values[i] != 0u ||
+            failure.coroutines[i].state != WASMOS_NATIVE_COROUTINE_DEAD) {
+            return __LINE__;
+        }
+    }
+    return 0;
+}
+
+typedef struct join_many_state join_many_state_t;
+
+typedef struct {
+    join_many_state_t* state;
+    size_t index;
+} join_many_arg_t;
+
+struct join_many_state {
+    wasmos_native_coroutine_runtime_t runtime;
+    wasmos_native_coroutine_t target;
+    wasmos_native_coroutine_t joiners[TEST_WAITER_COUNT];
+    join_many_arg_t args[TEST_WAITER_COUNT];
+    uint8_t target_stack[4096];
+    uint8_t joiner_stacks[TEST_WAITER_COUNT][4096];
+    int32_t statuses[TEST_WAITER_COUNT];
+    int32_t results[TEST_WAITER_COUNT];
+};
+
+static void join_many_target(void* arg) {
+    (void)arg;
+    wasmos_native_coroutine_yield();
+    wasmos_native_coroutine_exit(23);
+}
+
+static void join_many_entry(void* arg) {
+    join_many_arg_t* joiner = arg;
+    join_many_state_t* state = joiner->state;
+    state->statuses[joiner->index] =
+        wasmos_native_coroutine_join(&state->target, &state->results[joiner->index]);
+}
+
+static int test_multiple_joiners_and_return(void) {
+    join_many_state_t state = {0};
+    wasmos_future_t* completion;
+    int32_t returned = 1;
+
+    wasmos_native_coroutine_runtime_init(&state.runtime);
+    completion = wasmos_async_start(&state.runtime, &state.target, state.target_stack,
+                                    sizeof(state.target_stack), join_many_target, NULL);
+    if (!completion) {
+        return __LINE__;
+    }
+    for (size_t i = 0; i < TEST_WAITER_COUNT; ++i) {
+        state.args[i] = (join_many_arg_t){.state = &state, .index = i};
+        if (!wasmos_async_start(&state.runtime, &state.joiners[i], state.joiner_stacks[i],
+                                sizeof(state.joiner_stacks[i]), join_many_entry, &state.args[i])) {
+            return __LINE__;
+        }
+    }
+    if (wasmos_native_coroutine_run(&state.runtime) != 8 ||
+        wasmos_native_coroutine_join(&state.target, &returned) != 0 || returned != 23) {
+        return __LINE__;
+    }
+    for (size_t i = 0; i < TEST_WAITER_COUNT; ++i) {
+        if (state.statuses[i] != 0 || state.results[i] != 23) {
+            return __LINE__;
+        }
+    }
+    if (!wasmos_future_poll(completion, NULL, NULL)) {
+        return __LINE__;
+    }
+    return 0;
+}
+
+typedef struct {
+    wasmos_native_coroutine_runtime_t runtime;
+    wasmos_native_coroutine_t coroutines[TEST_STRESS_COUNT];
+    uint8_t stacks[TEST_STRESS_COUNT][4096];
+    uint32_t completed;
+} stress_state_t;
+
+static void stress_entry(void* arg) {
+    stress_state_t* state = arg;
+    for (uint32_t i = 0; i < TEST_STRESS_YIELDS; ++i) {
+        wasmos_native_coroutine_yield();
+    }
+    state->completed++;
+}
+
+static int test_scheduler_stress(void) {
+    stress_state_t state = {0};
+
+    wasmos_native_coroutine_runtime_init(&state.runtime);
+    for (size_t i = 0; i < TEST_STRESS_COUNT; ++i) {
+        if (!wasmos_async_start(&state.runtime, &state.coroutines[i], state.stacks[i],
+                                sizeof(state.stacks[i]), stress_entry, &state)) {
+            return __LINE__;
+        }
+    }
+    if (wasmos_native_coroutine_run(&state.runtime) !=
+            TEST_STRESS_COUNT * (TEST_STRESS_YIELDS + 1) ||
+        state.completed != TEST_STRESS_COUNT) {
+        return __LINE__;
+    }
+    for (size_t i = 0; i < TEST_STRESS_COUNT; ++i) {
+        int32_t status = -1;
+        uintptr_t value = 1u;
+        if (!wasmos_future_poll(&state.coroutines[i].completion, &status, &value) || status != 0 ||
+            value != 0u) {
+            return __LINE__;
+        }
+    }
+    return 0;
+}
+
+typedef struct {
+    wasmos_native_coroutine_runtime_t* runtime;
+    wasmos_future_t* settled;
+    wasmos_future_continuation_t nested;
+    wasmos_future_t* nested_child;
+    int32_t reentrant_run_result;
+} reentrant_state_t;
+
+static int32_t reentrant_nested(void* user, uintptr_t value, uintptr_t* out_value) {
+    (void)user;
+    *out_value = value + 1u;
+    return 0;
+}
+
+static int32_t reentrant_callback(void* user, uintptr_t value, uintptr_t* out_value) {
+    reentrant_state_t* state = user;
+    state->reentrant_run_result = wasmos_native_coroutine_run(state->runtime);
+    state->nested_child = wasmos_future_then(state->runtime, state->settled, &state->nested,
+                                             reentrant_nested, NULL, NULL);
+    *out_value = value;
+    return state->nested_child ? 0 : -1;
+}
+
+static int test_reentrant_callbacks_and_contracts(void) {
+    wasmos_native_coroutine_runtime_t runtime = {0};
+    wasmos_native_coroutine_runtime_t other_runtime = {0};
+    wasmos_future_t source;
+    wasmos_promise_t source_promise;
+    wasmos_future_t settled;
+    wasmos_promise_t settled_promise;
+    wasmos_future_continuation_t continuation = {0};
+    wasmos_future_continuation_t other_continuation = {0};
+    reentrant_state_t state = {.runtime = &runtime, .settled = &settled};
+    wasmos_native_coroutine_t coroutine = {0};
+    uint8_t stack[1024];
+
+    wasmos_native_coroutine_runtime_init(&runtime);
+    wasmos_native_coroutine_runtime_init(&other_runtime);
+    wasmos_future_init(&source, &source_promise);
+    wasmos_future_init(&settled, &settled_promise);
+    if (wasmos_native_coroutine_run(NULL) != -1 || wasmos_future_await(&source, NULL) != -1 ||
+        wasmos_promise_reject(&source_promise, 0) ||
+        wasmos_async_start(NULL, &coroutine, stack, sizeof(stack), stress_entry, NULL) ||
+        wasmos_native_coroutine_spawn(&runtime, &coroutine, stack, sizeof(stack) - 1u, stress_entry,
+                                      NULL) != -1 ||
+        !wasmos_promise_resolve(&settled_promise, 9u) ||
+        !wasmos_future_then(&runtime, &source, &continuation, reentrant_callback, NULL, &state) ||
+        wasmos_future_then(&other_runtime, &source, &other_continuation, NULL, NULL, NULL) ||
+        !wasmos_promise_resolve(&source_promise, 7u) ||
+        wasmos_native_coroutine_run(&runtime) != 0 || state.reentrant_run_result != -1 ||
+        !state.nested_child) {
+        return __LINE__;
+    }
+    uintptr_t value = 0;
+    if (!wasmos_future_poll(state.nested_child, NULL, &value) || value != 10u) {
+        return __LINE__;
+    }
+    return 0;
+}
+
+static int test_future_race_and_all(void) {
+    wasmos_native_coroutine_runtime_t runtime;
+    wasmos_future_t first;
+    wasmos_future_t second;
+    wasmos_future_t third;
+    wasmos_promise_t first_promise;
+    wasmos_promise_t second_promise;
+    wasmos_promise_t third_promise;
+    wasmos_future_group_t race_group = {0};
+    wasmos_future_group_t failed_race_group = {0};
+    wasmos_future_group_t all_group = {0};
+    wasmos_future_group_t failed_all_group = {0};
+    wasmos_future_continuation_t race_continuations[3] = {0};
+    wasmos_future_continuation_t failed_race_continuations[2] = {0};
+    wasmos_future_continuation_t all_continuations[3] = {0};
+    wasmos_future_continuation_t failed_all_continuations[3] = {0};
+    uintptr_t values[3] = {0};
+    uintptr_t failed_values[3] = {0};
+    wasmos_future_t* result;
+    int32_t status = 0;
+    uintptr_t value = 0;
+
+    wasmos_native_coroutine_runtime_init(&runtime);
+    wasmos_future_init(&first, &first_promise);
+    wasmos_future_init(&second, &second_promise);
+    wasmos_future_init(&third, &third_promise);
+    result = WASMOS_FUTURE_RACE(&runtime, &race_group, race_continuations, &first, &second, &third);
+    if (!result || !wasmos_promise_resolve(&second_promise, 22u) ||
+        !wasmos_promise_reject(&first_promise, -9) ||
+        !wasmos_promise_resolve(&third_promise, 33u) ||
+        wasmos_native_coroutine_run(&runtime) != 0 ||
+        !wasmos_future_poll(result, &status, &value) || status != 0 || value != 22u ||
+        race_group.active) {
+        return __LINE__;
+    }
+
+    wasmos_future_init(&first, &first_promise);
+    wasmos_future_init(&second, &second_promise);
+    result = WASMOS_FUTURE_RACE(&runtime, &failed_race_group, failed_race_continuations, &first,
+                                &second);
+    if (!result || !wasmos_promise_reject(&first_promise, -13) ||
+        wasmos_native_coroutine_run(&runtime) != 0 ||
+        !wasmos_future_poll(result, &status, &value) || status != -13 ||
+        !failed_race_group.settled || !failed_race_group.active ||
+        !wasmos_promise_resolve(&second_promise, 2u) ||
+        wasmos_native_coroutine_run(&runtime) != 0 || failed_race_group.active) {
+        return __LINE__;
+    }
+
+    wasmos_future_init(&first, &first_promise);
+    wasmos_future_init(&second, &second_promise);
+    wasmos_future_init(&third, &third_promise);
+    result =
+        WASMOS_FUTURE_ALL(&runtime, &all_group, values, all_continuations, &first, &second, &third);
+    if (!result || !wasmos_promise_resolve(&third_promise, 3u) ||
+        !wasmos_promise_resolve(&first_promise, 1u) ||
+        !wasmos_promise_resolve(&second_promise, 2u) ||
+        wasmos_native_coroutine_run(&runtime) != 0 ||
+        !wasmos_future_poll(result, &status, &value) || status != 0 || value != (uintptr_t)values ||
+        values[0] != 1u || values[1] != 2u || values[2] != 3u || all_group.active) {
+        return __LINE__;
+    }
+
+    wasmos_future_init(&first, &first_promise);
+    wasmos_future_init(&second, &second_promise);
+    wasmos_future_init(&third, &third_promise);
+    result = WASMOS_FUTURE_ALL(&runtime, &failed_all_group, failed_values, failed_all_continuations,
+                               &first, &second, &third);
+    if (!result || !wasmos_promise_reject(&second_promise, -44) ||
+        wasmos_native_coroutine_run(&runtime) != 0 ||
+        !wasmos_future_poll(result, &status, &value) || status != -44 ||
+        !failed_all_group.settled || !failed_all_group.active ||
+        !wasmos_promise_resolve(&first_promise, 1u) ||
+        !wasmos_promise_resolve(&third_promise, 3u) || wasmos_native_coroutine_run(&runtime) != 0 ||
+        failed_all_group.active || wasmos_future_race(&runtime, NULL, NULL, 0, NULL) ||
+        wasmos_future_all(&runtime, NULL, NULL, 0, NULL, NULL)) {
+        return __LINE__;
+    }
     return 0;
 }
 
@@ -235,6 +588,21 @@ int main(void) {
     }
     if (rc == 0) {
         rc = test_future_chains();
+    }
+    if (rc == 0) {
+        rc = test_multiple_waiters();
+    }
+    if (rc == 0) {
+        rc = test_multiple_joiners_and_return();
+    }
+    if (rc == 0) {
+        rc = test_scheduler_stress();
+    }
+    if (rc == 0) {
+        rc = test_reentrant_callbacks_and_contracts();
+    }
+    if (rc == 0) {
+        rc = test_future_race_and_all();
     }
     if (rc != 0) {
         fprintf(stderr, "native coroutine test failed at line %d\n", rc);

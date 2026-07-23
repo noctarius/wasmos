@@ -63,6 +63,7 @@ typedef struct wasmos_native_coroutine_context {
 typedef struct wasmos_native_coroutine wasmos_native_coroutine_t;
 typedef struct wasmos_native_coroutine_runtime wasmos_native_coroutine_runtime_t;
 typedef struct wasmos_future_continuation wasmos_future_continuation_t;
+typedef struct wasmos_future_group wasmos_future_group_t;
 
 /* Return zero to resolve the chained future with out_value, or a negative
  * status to reject it. */
@@ -82,6 +83,25 @@ typedef struct wasmos_promise {
     wasmos_future_t* future;
 } wasmos_promise_t;
 
+typedef enum wasmos_future_group_kind {
+    WASMOS_FUTURE_GROUP_RACE = 0,
+    WASMOS_FUTURE_GROUP_ALL,
+} wasmos_future_group_kind_t;
+
+/* Caller-owned state for race/all. It remains live until every source future
+ * has settled, including after a race or fail-fast all result is available. */
+struct wasmos_future_group {
+    wasmos_native_coroutine_runtime_t* runtime;
+    wasmos_future_t future;
+    wasmos_promise_t promise;
+    uintptr_t* values;
+    size_t count;
+    size_t completed;
+    wasmos_future_group_kind_t kind;
+    bool settled;
+    bool active;
+};
+
 typedef void (*wasmos_native_coroutine_entry_t)(void* arg);
 
 /* Caller-owned continuation registration. A registration may be active on one
@@ -95,6 +115,8 @@ struct wasmos_future_continuation {
     wasmos_future_success_fn_t on_success;
     wasmos_future_error_fn_t on_error;
     void* user;
+    wasmos_future_group_t* group;
+    size_t group_index;
     wasmos_future_t child;
     wasmos_promise_t child_promise;
     bool active;
@@ -120,6 +142,7 @@ struct wasmos_native_coroutine_runtime {
     wasmos_native_coroutine_t* ready_tail;
     wasmos_future_continuation_t* continuation_head;
     wasmos_future_continuation_t* continuation_tail;
+    bool running;
 };
 
 /* All state and stack memory remain caller-owned for their full lifetime. */
@@ -152,6 +175,29 @@ wasmos_future_t* wasmos_future_then(wasmos_native_coroutine_runtime_t* runtime,
                                     wasmos_future_continuation_t* continuation,
                                     wasmos_future_success_fn_t on_success,
                                     wasmos_future_error_fn_t on_error, void* user);
+
+/* Register every source before returning. The inputs array is consumed during
+ * this call, but group and continuations[count] must remain live until every
+ * source settles. race resolves/rejects from the first source outcome; all
+ * resolves with values on complete success or rejects on the first failure. */
+wasmos_future_t* wasmos_future_race(wasmos_native_coroutine_runtime_t* runtime,
+                                    wasmos_future_group_t* group, wasmos_future_t* const* inputs,
+                                    size_t count, wasmos_future_continuation_t* continuations);
+wasmos_future_t* wasmos_future_all(wasmos_native_coroutine_runtime_t* runtime,
+                                   wasmos_future_group_t* group, wasmos_future_t* const* inputs,
+                                   size_t count, uintptr_t* values,
+                                   wasmos_future_continuation_t* continuations);
+
+#define WASMOS_FUTURE_RACE(runtime, group, continuations, ...)                                     \
+    wasmos_future_race((runtime), (group), (wasmos_future_t*[]){__VA_ARGS__},                      \
+                       sizeof((wasmos_future_t*[]){__VA_ARGS__}) / sizeof(wasmos_future_t*),       \
+                       (continuations))
+
+#define WASMOS_FUTURE_ALL(runtime, group, values, continuations, ...)                              \
+    wasmos_future_all((runtime), (group), (wasmos_future_t*[]){__VA_ARGS__},                       \
+                      sizeof((wasmos_future_t*[]){__VA_ARGS__}) / sizeof(wasmos_future_t*),        \
+                      (values), (continuations))
+
 bool wasmos_promise_resolve(wasmos_promise_t* promise, uintptr_t value);
 bool wasmos_promise_reject(wasmos_promise_t* promise, int32_t status);
 

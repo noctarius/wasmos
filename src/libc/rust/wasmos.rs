@@ -2,6 +2,8 @@
 
 use core::fmt::{self, Write};
 
+pub mod coroutine;
+
 const FS_IPC_OPEN_REQ: i32 = 0x400;
 const FS_IPC_READ_REQ: i32 = 0x401;
 const FS_IPC_WRITE_REQ: i32 = 0x406;

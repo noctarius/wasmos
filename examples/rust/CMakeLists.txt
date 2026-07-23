@@ -1,10 +1,23 @@
 set(WASM_HELLO_RUST_LIBC_SRC ${LIBC_DIR}/rust/wasmos.rs)
+set(WASM_HELLO_RUST_COROUTINE_SRC ${LIBC_DIR}/rust/coroutine.rs)
+set(WASM_HELLO_RUST_COROUTINE_OBJ ${BUILD_DIR}/wasmos_rust_coroutine.o)
 
 if (RUST_ENABLE)
   find_program(RUSTC_EXECUTABLE rustc)
   if (NOT RUSTC_EXECUTABLE)
     message(FATAL_ERROR "Rust compiler 'rustc' not found. Install Rust and add the wasm32-unknown-unknown target (rustup target add wasm32-unknown-unknown).")
   endif ()
+  add_custom_command(
+    OUTPUT ${WASM_HELLO_RUST_COROUTINE_OBJ}
+    COMMAND ${CLANG} --target=wasm32 -Oz -ffreestanding
+            -I${LIBSYS_WASM_DIR}/include
+            -c ${LIBSYS_WASM_DIR}/coroutine_wasm.c
+            -o ${WASM_HELLO_RUST_COROUTINE_OBJ}
+    DEPENDS ${LIBSYS_WASM_DIR}/coroutine_wasm.c
+            ${LIBSYS_WASM_DIR}/include/wasmos/coroutine_wasm.h
+    COMMENT "Building WASM coroutine core for Rust"
+    VERBATIM
+  )
   add_custom_command(
     OUTPUT ${WASM_HELLO_RUST_WASM}
     COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}
@@ -19,10 +32,12 @@ if (RUST_ENABLE)
             -C link-arg=--strip-all
             -C link-arg=--initial-memory=2097152
             -C link-arg=--max-memory=2097152
+            -C link-arg=${WASM_HELLO_RUST_COROUTINE_OBJ}
             --crate-type=cdylib
             ${WASM_HELLO_RUST_SRC}
             -o ${WASM_HELLO_RUST_WASM}
     DEPENDS ${WASM_HELLO_RUST_SRC} ${WASM_HELLO_RUST_LIBC_SRC}
+            ${WASM_HELLO_RUST_COROUTINE_SRC} ${WASM_HELLO_RUST_COROUTINE_OBJ}
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     COMMENT "Building wasm hello-rust module"
     VERBATIM

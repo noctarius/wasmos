@@ -2082,6 +2082,22 @@ if(APPLE AND DEFINED NATIVE_COROUTINE_HOST_ASM)
 endif()
 
 if(DEFINED NATIVE_COROUTINE_HOST_ASM)
+  if (RUST_ENABLE)
+    find_program(RUST_COROUTINE_TEST_RUSTC rustc)
+  endif ()
+  if (RUST_COROUTINE_TEST_RUSTC)
+    add_custom_command(TARGET run-kernel-unit-tests POST_BUILD
+      COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
+              -I${LIBSYS_WASM_DIR}/include
+              -c ${LIBSYS_WASM_DIR}/coroutine_wasm.c
+              -o ${BUILD_DIR}/test_wasm_coroutine_rust_core.o
+      COMMAND ${RUST_COROUTINE_TEST_RUSTC} --test ${CMAKE_SOURCE_DIR}/tests/unit/test_wasm_coroutine.rs
+              -C link-arg=${BUILD_DIR}/test_wasm_coroutine_rust_core.o
+              -o ${BUILD_DIR}/test_wasm_coroutine_rust
+      COMMAND ${BUILD_DIR}/test_wasm_coroutine_rust
+      COMMENT "Running Rust WASM coroutine wrapper unit tests"
+      VERBATIM)
+  endif ()
   add_custom_command(TARGET run-kernel-unit-tests POST_BUILD
     COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
             -I${LIBSYS_WASM_DIR}/include

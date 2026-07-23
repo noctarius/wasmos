@@ -2658,5 +2658,15 @@ x86-64-host-only `warp_wasm_coroutine_test` target additionally compiles
 the WARP JIT; it is deliberately excluded on ARM64 hosts while WARP's host
 AArch64 execution path is not yet suitable for this validation.
 
+`src/libc/rust/coroutine.rs` is the first language wrapper. It links the same
+`coroutine_wasm.c` object into Rust WASM modules and presents `Runtime`,
+`Future`, `Promise`, `Coroutine`, `Continuation`, and `FutureGroup` as Rust
+types with methods. Thus `Future::poll`, `Future::await_value`,
+`Future::then`, `Promise::resolve`, `Promise::reject`, `Coroutine::start`,
+`Coroutine::join`, and `FutureGroup::{race,all}` do not duplicate or reinterpret
+the scheduling semantics. `tests/unit/test_wasm_coroutine.rs` links that Rust
+wrapper to the host build of the same C core and exercises task wakeup, join,
+deferred chaining, race, and all.
+
 WASM IPC-future adaptation, deadlines, cancellation, CQ dispatch, parallel
 workers, and language wrappers remain deferred.

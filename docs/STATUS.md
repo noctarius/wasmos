@@ -124,6 +124,11 @@ linked feature documents for rationale and rollout plans.
   scheduler and future contracts directly; an x86-64-host WARP fixture target
   compiles and runs the same core as wasm32. WASM IPC adaptation and the Zig,
   Rust, Go, and AssemblyScript wrappers remain deferred.
+  Rust is now the first exception: its `coroutine` module links the C core and
+  exposes method-based `Runtime`, `Future`, `Promise`, `Coroutine`,
+  `Continuation`, and `FutureGroup` bindings; host Rust tests execute those
+  methods against the same C implementation. Zig, Go, and AssemblyScript
+  wrappers remain deferred.
 - Completion ports are documented as a design proposal only: the planned
   kernel-owned bounded CQ, notification-doorbell, and generation-tagged
   operation-token model has no implementation yet. It is intended to provide

@@ -12,6 +12,8 @@ pub const Future = c.wasmos_future_t;
 pub const Promise = c.wasmos_promise_t;
 pub const FutureContinuation = c.wasmos_future_continuation_t;
 pub const FutureGroup = c.wasmos_future_group_t;
+pub const NativeIpcFuture = c.wasmos_sys_native_ipc_future_t;
+pub const NativeIpcFutureReplyStatus = c.wasmos_sys_native_ipc_future_reply_status_fn;
 pub const NativeCoroutineEntry = *const fn (?*anyopaque) callconv(.c) void;
 pub const FutureSuccess = c.wasmos_future_success_fn_t;
 pub const FutureError = c.wasmos_future_error_fn_t;
@@ -76,6 +78,18 @@ pub fn futureRace(runtime: *NativeCoroutineRuntime, group: *FutureGroup, inputs:
 pub fn futureAll(runtime: *NativeCoroutineRuntime, group: *FutureGroup, inputs: []const *Future, values: []usize, continuations: []FutureContinuation) ?*Future {
     if (inputs.len == 0 or inputs.len != values.len or inputs.len != continuations.len) return null;
     return c.wasmos_future_all(runtime, group, @ptrCast(inputs.ptr), inputs.len, values.ptr, continuations.ptr);
+}
+
+pub fn ipcFutureInit(operation: *NativeIpcFuture, reply_status: NativeIpcFutureReplyStatus, user: ?*anyopaque) void {
+    c.wasmos_sys_native_ipc_future_init(operation, reply_status, user);
+}
+
+pub fn ipcFutureSend(loop: *NativeEventLoop, operation: *NativeIpcFuture, destination_endpoint: u32, source_endpoint: u32, msg_type: u32, arg0: u32, arg1: u32, arg2: u32, arg3: u32, out_request_id: ?*u32) ?*Future {
+    return c.wasmos_sys_native_ipc_future_send(loop, operation, destination_endpoint, source_endpoint, msg_type, arg0, arg1, arg2, arg3, out_request_id);
+}
+
+pub fn ipcFutureCancel(operation: *NativeIpcFuture, status: i32) void {
+    c.wasmos_sys_native_ipc_future_cancel(operation, status);
 }
 pub const Mutex = extern struct {
     owner_tid: u32,

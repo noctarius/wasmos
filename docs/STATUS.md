@@ -96,8 +96,12 @@ linked feature documents for rationale and rollout plans.
   The host unit suite exercises both the C runtime and native Zig wrapper,
   including `asyncStart`, chained callbacks, slice-based `race`/`all`, and
   invalid slice contracts.
-  It has no timers, cancellation, IPC/CQ wiring, multi-worker scheduling, or
-  WASM counterpart yet.
+  Native `wasmos_sys_native_ipc_future_t` now adapts one non-blocking event-loop
+  intent into a caller-owned future, copying its correlated reply before
+  resolution; protocol callbacks reject error replies, while local cancellation
+  discards late replies without cancelling transport work. It has no timers,
+  generic future cancellation, CQ wiring, multi-worker scheduling, or WASM
+  counterpart yet.
 - Completion ports are documented as a design proposal only: the planned
   kernel-owned bounded CQ, notification-doorbell, and generation-tagged
   operation-token model has no implementation yet. It is intended to provide

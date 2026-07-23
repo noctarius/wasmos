@@ -2,9 +2,10 @@
 
 > **Documentation status: Mixed reference and proposal.** A native,
 > single-worker cooperative coroutine and future/promise core is implemented;
-> multi-worker scheduling, timers, cancellation, IPC/CQ integration, and the
-> WASM coroutine substrate remain proposed. Section 48 maps the broader design
-> onto existing kernel and libsys primitives.
+> native non-blocking IPC-to-future adaptation is also implemented. Multi-worker
+> scheduling, timers, CQ integration, and the WASM coroutine substrate remain
+> proposed. Section 48 maps the broader design onto existing kernel and libsys
+> primitives.
 
 **Status:** Proposed — verified against the implementation on 2026-07-18  
 **Target:** WASMOS user-space runtime on an SMP, timer-preemptive microkernel  
@@ -2582,8 +2583,17 @@ array must remain live until every source future has settled.
 The Zig wrappers take slices for inputs, values, and continuations, checking
 their matching lengths before registering the group.
 
-Cancellation, deadlines, multi-worker synchronization, IPC intent adaptation,
-CQ dispatch, allocator ownership, and guard-page stack allocation are deferred.
+`wasmos_sys_native_ipc_future_t` promotes one native event-loop intent into a
+caller-owned future. `wasmos_sys_native_ipc_future_send()` posts the ordinary
+non-blocking IPC request and records its generated `request_id`; the existing
+single endpoint pump resolves the operation with a copy of the matched reply.
+A protocol-specific reply-status callback may reject the future. Local
+`wasmos_sys_native_ipc_future_cancel()` removes the intent and rejects it; it
+does not cancel transport work, so a later reply is discarded by request ID.
+The C and Zig wrappers expose the same caller-storage contract.
+
+Deadlines, generic future cancellation, multi-worker synchronization, CQ
+dispatch, allocator ownership, and guard-page stack allocation are deferred.
 The caller must retain all coroutine and stack storage until the coroutine is
 dead and no joiner can reference it.
 
@@ -2603,6 +2613,10 @@ registration, unchanged-outcome forwarding, re-entrant callback dispatch,
 contract rejection, yield stress, and race/all success and failure paths.
 Other development hosts cross-compile the x86-64 target objects instead;
 target-package compilation is additionally validated by the net-stack build.
+
+`tests/unit/test_native_ipc_future.c` validates request construction and reply
+copying, protocol-directed rejection, immediate transport-send failure, and
+local cancellation/late-reply discard through a fake native driver API.
 
 `future_then` now returns the continuation record's caller-owned child future,
 so native C and Zig can build value-transforming, rejection-propagating chains

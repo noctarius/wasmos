@@ -6,6 +6,7 @@
 #include <stdint.h>
 #include "wasmos_native_driver.h"
 #include "wasmos_driver_abi.h"
+#include "wasmos/coroutine_native.h"
 
 /* Note: this header does NOT include wasmos_cast.h and uses raw integer<->pointer
  * double-casts (with NOLINT below) rather than ptr_cast/addr_cast. It is consumed
@@ -64,6 +65,24 @@ typedef struct {
 
 typedef struct wasmos_sys_native_random_request wasmos_sys_native_random_request_t;
 typedef void (*wasmos_sys_native_random_complete_fn)(void* user, int32_t status);
+
+/* Caller-owned bridge between one non-blocking IPC request and a local future.
+ * reply is copied before the future resolves, so its address remains valid for
+ * the caller's operation lifetime. A reply_status callback returns zero to
+ * resolve or a negative protocol status to reject. */
+typedef int32_t (*wasmos_sys_native_ipc_future_reply_status_fn)(
+    void* user, const nd_ipc_message_t* reply);
+
+typedef struct {
+    wasmos_future_t future;
+    wasmos_promise_t promise;
+    wasmos_sys_native_event_loop_t* loop;
+    nd_ipc_message_t reply;
+    wasmos_sys_native_ipc_future_reply_status_fn reply_status;
+    void* user;
+    uint32_t request_id;
+    uint8_t active;
+} wasmos_sys_native_ipc_future_t;
 
 struct wasmos_sys_native_random_request {
     wasmos_sys_native_event_loop_t* loop;
@@ -164,6 +183,17 @@ int32_t wasmos_sys_native_intent_send_with_request_id(
     uint32_t arg3, void (*on_resolve)(void* user, const nd_ipc_message_t* msg), void* user);
 void wasmos_sys_native_intent_cancel(wasmos_sys_native_event_loop_t* loop, uint32_t request_id);
 int32_t wasmos_sys_native_event_loop_poll(wasmos_sys_native_event_loop_t* loop, uint32_t budget);
+void wasmos_sys_native_ipc_future_init(
+    wasmos_sys_native_ipc_future_t* operation,
+    wasmos_sys_native_ipc_future_reply_status_fn reply_status, void* user);
+wasmos_future_t* wasmos_sys_native_ipc_future_send(
+    wasmos_sys_native_event_loop_t* loop, wasmos_sys_native_ipc_future_t* operation,
+    uint32_t destination_endpoint, uint32_t source_endpoint, uint32_t msg_type, uint32_t arg0,
+    uint32_t arg1, uint32_t arg2, uint32_t arg3, uint32_t* out_request_id);
+/* Stops local reply tracking and rejects the future. This does not cancel the
+ * transport request; a late reply is discarded by its request_id. */
+void wasmos_sys_native_ipc_future_cancel(wasmos_sys_native_ipc_future_t* operation,
+                                         int32_t status);
 int32_t wasmos_sys_native_random_bytes_async(wasmos_sys_native_event_loop_t* loop,
                                              uint32_t hrng_endpoint, uint8_t* out, uint32_t len,
                                              wasmos_sys_native_random_request_t* request,

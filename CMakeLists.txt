@@ -2029,14 +2029,33 @@ if(DEFINED NATIVE_COROUTINE_HOST_ASM)
     COMMAND ${BUILD_DIR}/test_native_coroutine
     COMMENT "Running native ${NATIVE_COROUTINE_HOST_LABEL} coroutine unit tests"
     VERBATIM)
+  add_custom_command(TARGET run-kernel-unit-tests POST_BUILD
+    COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
+            -I${LIBSYS_NATIVE_DIR}/include
+            -I${DRIVER_WASM_DIR}/include
+            -I${LIBC_DIR}/include
+            ${CMAKE_SOURCE_DIR}/tests/unit/test_native_ipc_future.c
+            ${CMAKE_SOURCE_DIR}/tests/unit/stubs_native_libsys.c
+            ${LIBSYS_NATIVE_DIR}/coroutine_native.c
+            ${LIBSYS_NATIVE_DIR}/ipc_future_native.c
+            ${LIBSYS_NATIVE_DIR}/zig/libsys_native.c
+            ${NATIVE_COROUTINE_HOST_ASM}
+            -o ${BUILD_DIR}/test_native_ipc_future
+    COMMAND ${BUILD_DIR}/test_native_ipc_future
+    COMMENT "Running native ${NATIVE_COROUTINE_HOST_LABEL} IPC future unit tests"
+    VERBATIM)
   if (ZIG_AVAILABLE)
     add_custom_command(TARGET run-kernel-unit-tests POST_BUILD
       COMMAND ${ZIG_EXECUTABLE} test
               ${NATIVE_COROUTINE_ZIG_TARGET_ARGS}
               ${LIBSYS_NATIVE_DIR}/coroutine_native.c
+              ${LIBSYS_NATIVE_DIR}/ipc_future_native.c
+              ${LIBSYS_NATIVE_DIR}/zig/libsys_native.c
+              ${CMAKE_SOURCE_DIR}/tests/unit/stubs_native_libsys.c
               ${NATIVE_COROUTINE_HOST_ASM}
               -I${LIBSYS_NATIVE_DIR}/include
               -I${CMAKE_SOURCE_DIR}/src/drivers/include
+              -I${LIBC_DIR}/include
               --cache-dir ${BUILD_DIR}/zig-native-coroutine-cache
               --global-cache-dir ${BUILD_DIR}/zig-global-cache
               --dep libsys

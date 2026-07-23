@@ -134,3 +134,10 @@ test "native coroutine Zig wrapper rejects empty and mismatched slices" {
     try std.testing.expect(libsys.futureAll(&runtime, &group, &one_input, &.{}, &one_continuation) == null);
     try std.testing.expect(libsys.futureAll(&runtime, &group, &one_input, &one_value, &empty_continuations) == null);
 }
+
+test "native coroutine Zig wrapper initializes an IPC future" {
+    var operation: libsys.NativeIpcFuture = undefined;
+
+    libsys.ipcFutureInit(&operation, null, null);
+    try std.testing.expect(!libsys.futurePoll(&operation.future, null, null));
+}

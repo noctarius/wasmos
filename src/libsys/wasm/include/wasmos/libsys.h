@@ -8,6 +8,7 @@
 #include "wasmos/ipc.h"
 #include "wasmos/sha256.h"
 #include "wasmos/libsys_string.h"
+#include "wasmos/coroutine_wasm.h"
 #include "wasmos_driver_abi.h"
 
 #ifdef __cplusplus

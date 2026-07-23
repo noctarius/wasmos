@@ -429,6 +429,7 @@ set(WASMOS_LIBC_C_SOURCES
   ${LIBC_DIR}/src/stdio.c
   ${LIBC_DIR}/src/unistd.c
   ${LIBC_DIR}/src/spawn_info.c
+  ${LIBSYS_WASM_DIR}/coroutine_wasm.c
 )
 
 set(WASMOS_LIBC_INCLUDE_DEPS
@@ -441,6 +442,7 @@ set(WASMOS_LIBC_INCLUDE_DEPS
   ${LIBC_DIR}/include/wasmos/imports.h
   ${LIBC_DIR}/include/wasmos/script.h
   ${LIBSYS_WASM_DIR}/include/wasmos/libsys.h
+  ${LIBSYS_WASM_DIR}/include/wasmos/coroutine_wasm.h
   ${LIBSYS_WASM_DIR}/include/wasmos/libsys_string.h
   ${LIBSYS_WASM_DIR}/include/wasmos/sha256.h
   ${SERVICES_DIR}/fs_manager/fs_manager_types.h
@@ -1030,6 +1032,63 @@ if (WASMOS_WASM_RUNTIME_WARP)
   # (the Make generator tolerates this; Ninja/CLion does not).  Hence the
   # "_tool" suffix on the target while the binary keeps its name.
   add_custom_target(warp_aot_tool DEPENDS ${WARP_AOT_BIN})
+
+  # Execute a small wasm32 coroutine fixture through WARP on the build host.
+  # This deliberately uses the host ISA, unlike warp_aot which always emits
+  # x86-64 code for the kernel target.
+  if(CMAKE_HOST_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
+    set(WARP_HOST_TEST_TARGET_FLAG -DJIT_TARGET_X86_64)
+  endif()
+  if(DEFINED WARP_HOST_TEST_TARGET_FLAG)
+    set(WARP_HOST_TEST_FIXTURE ${BUILD_DIR}/test_wasm_coroutine_fixture.wasm)
+    add_custom_command(
+      OUTPUT ${WARP_HOST_TEST_FIXTURE}
+      COMMAND ${CLANG} --target=wasm32 -Oz -nostdlib -ffreestanding
+              -Wl,--no-entry -Wl,--strip-all -Wl,--export=wasmos_coroutine_wasm_test
+              -I${LIBSYS_WASM_DIR}/include
+              ${CMAKE_SOURCE_DIR}/tests/unit/wasm_coroutine_warp_fixture.c
+              ${LIBSYS_WASM_DIR}/coroutine_wasm.c
+              -o ${WARP_HOST_TEST_FIXTURE}
+      DEPENDS ${CMAKE_SOURCE_DIR}/tests/unit/wasm_coroutine_warp_fixture.c
+              ${LIBSYS_WASM_DIR}/coroutine_wasm.c
+              ${LIBSYS_WASM_DIR}/include/wasmos/coroutine_wasm.h
+      COMMENT "Building wasm32 coroutine fixture for host WARP"
+      VERBATIM)
+    set(WARP_HOST_TEST_SRCS ${WARP_AOT_SRCS})
+    list(REMOVE_ITEM WARP_HOST_TEST_SRCS ${WARP_AOT_TOOL_DIR}/warp_aot.cpp)
+    list(APPEND WARP_HOST_TEST_SRCS ${CMAKE_SOURCE_DIR}/tests/unit/test_warp_wasm_coroutine.cpp)
+    set(WARP_HOST_TEST_FLAGS ${WARP_AOT_FLAGS})
+    list(REMOVE_ITEM WARP_HOST_TEST_FLAGS -DJIT_TARGET_X86_64)
+    list(APPEND WARP_HOST_TEST_FLAGS ${WARP_HOST_TEST_TARGET_FLAG})
+    set(WARP_HOST_TEST_OBJ_DIR ${BUILD_DIR}/warp_host_test_objs)
+    set(WARP_HOST_TEST_OBJS "")
+    foreach(_src ${WARP_HOST_TEST_SRCS})
+      file(RELATIVE_PATH _rel ${CMAKE_SOURCE_DIR} ${_src})
+      string(REPLACE "/" "_" _obj_name "${_rel}")
+      string(REPLACE ".cpp" ".o" _obj_name "${_obj_name}")
+      set(_obj "${WARP_HOST_TEST_OBJ_DIR}/${_obj_name}")
+      add_custom_command(
+        OUTPUT "${_obj}"
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${WARP_HOST_TEST_OBJ_DIR}"
+        COMMAND ${CLANGXX_PATH} ${WARP_HOST_TEST_FLAGS} -c "${_src}" -o "${_obj}"
+        DEPENDS "${_src}"
+        COMMENT "Compiling WARP host test: ${_rel}"
+        VERBATIM)
+      list(APPEND WARP_HOST_TEST_OBJS "${_obj}")
+    endforeach()
+    set(WARP_HOST_TEST_BIN ${BUILD_DIR}/test_warp_wasm_coroutine)
+    add_custom_command(
+      OUTPUT ${WARP_HOST_TEST_BIN}
+      COMMAND ${CLANGXX_PATH} ${WARP_HOST_TEST_OBJS} -o ${WARP_HOST_TEST_BIN}
+      DEPENDS ${WARP_HOST_TEST_OBJS}
+      COMMENT "Linking WARP host coroutine test"
+      VERBATIM)
+    add_custom_target(warp_wasm_coroutine_test
+      COMMAND ${WARP_HOST_TEST_BIN} ${WARP_HOST_TEST_FIXTURE}
+      DEPENDS ${WARP_HOST_TEST_BIN} ${WARP_HOST_TEST_FIXTURE}
+      COMMENT "Running wasm coroutine fixture through host WARP"
+      VERBATIM)
+  endif()
 endif ()
 
 # wasmos_maybe_aot_pack(MANIFEST WASM APP)
@@ -2000,6 +2059,10 @@ add_custom_target(run-kernel-unit-tests
   VERBATIM
 )
 
+if(TARGET warp_wasm_coroutine_test)
+  add_dependencies(run-kernel-unit-tests warp_wasm_coroutine_test)
+endif()
+
 if(CMAKE_HOST_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
   set(NATIVE_COROUTINE_HOST_ASM ${LIBSYS_NATIVE_DIR}/coroutine_native_x86_64.S)
   set(NATIVE_COROUTINE_HOST_LABEL "x86_64")
@@ -2019,6 +2082,15 @@ if(APPLE AND DEFINED NATIVE_COROUTINE_HOST_ASM)
 endif()
 
 if(DEFINED NATIVE_COROUTINE_HOST_ASM)
+  add_custom_command(TARGET run-kernel-unit-tests POST_BUILD
+    COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
+            -I${LIBSYS_WASM_DIR}/include
+            ${CMAKE_SOURCE_DIR}/tests/unit/test_wasm_coroutine.c
+            ${LIBSYS_WASM_DIR}/coroutine_wasm.c
+            -o ${BUILD_DIR}/test_wasm_coroutine
+    COMMAND ${BUILD_DIR}/test_wasm_coroutine
+    COMMENT "Running host WASM stackless coroutine unit tests"
+    VERBATIM)
   add_custom_command(TARGET run-kernel-unit-tests POST_BUILD
     COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
             -I${LIBSYS_NATIVE_DIR}/include

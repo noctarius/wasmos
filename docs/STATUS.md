@@ -116,8 +116,14 @@ linked feature documents for rationale and rollout plans.
   coroutine stack is never interpreted as a kernel physical alias. The normal
   QEMU halt smoke now requires the net-stack lwIP and service-registration
   banners, covering this root-coroutine-to-kernel-callback boundary. It has no
-  timers, generic future cancellation, CQ wiring, multi-worker scheduling, or
-  WASM counterpart yet.
+  timers, generic future cancellation, CQ wiring, or multi-worker scheduling.
+- WASM `libsys` now includes the corresponding caller-storage stackless C
+  coroutine/future/promise core. Its explicit resume-function state machines
+  provide `async_start`, yield, await, join, deferred `then`, and `race`/`all`
+  without trying to save a WASM C stack. Host unit coverage validates its
+  scheduler and future contracts directly; an x86-64-host WARP fixture target
+  compiles and runs the same core as wasm32. WASM IPC adaptation and the Zig,
+  Rust, Go, and AssemblyScript wrappers remain deferred.
 - Completion ports are documented as a design proposal only: the planned
   kernel-owned bounded CQ, notification-doorbell, and generation-tagged
   operation-token model has no implementation yet. It is intended to provide

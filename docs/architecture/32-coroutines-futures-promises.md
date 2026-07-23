@@ -1,11 +1,11 @@
 # Coroutine, Future, and Promise Runtime Design for WASMOS
 
 > **Documentation status: Mixed reference and proposal.** A native,
-> single-worker cooperative coroutine and future/promise core is implemented;
-> native non-blocking IPC-to-future adaptation is also implemented. Multi-worker
-> scheduling, timers, CQ integration, and the WASM coroutine substrate remain
-> proposed. Section 48 maps the broader design onto existing kernel and libsys
-> primitives.
+> single-worker cooperative coroutine and future/promise cores are implemented
+> for native and C WASM guests; native non-blocking IPC-to-future adaptation is
+> also implemented. Multi-worker scheduling, timers, CQ integration, WASM IPC
+> adaptation, and language-specific WASM wrappers remain proposed. Section 48
+> maps the broader design onto existing kernel and libsys primitives.
 
 **Status:** Proposed — verified against the implementation on 2026-07-18  
 **Target:** WASMOS user-space runtime on an SMP, timer-preemptive microkernel  
@@ -2539,12 +2539,12 @@ L0  Kernel primitives  ── threads · futex · sched_event · ipc_send · ipc
 1. **Native single-worker core first.** Implement the caller-owned native
    stackful runtime and its local future/promise state in `src/libsys/native`;
    this is the implemented first slice described in §50.
-2. **L1 across shims.** Generalize the existing intent/handler event loop into
-   the same `future`/`promise` contract in the C WASM shim and then the language
-   shims. This removes the synchronous-IPC deadlock class without requiring a
-   WASM stackful coroutine core.
-3. **WASM L2 cooperative fibers** (option 1) as the portable baseline, then
-   opt-in **stackless async** (option 2) per language where the toolchain supports it.
+2. **C WASM L1/L2 baseline.** The C guest runtime in `src/libsys/wasm` now
+   provides the contract plus explicit stackless resumable tasks. It removes
+   the need for a WASM stackful coroutine core.
+3. **Language shims.** Generalize the existing intent/handler event loop into
+   that contract for Zig, Rust, Go, and AssemblyScript, then expose each
+   language's ergonomic async/state-machine surface.
 4. Defer WASM parallelism (the `runtime_lock` question) and hard preemption (§15.5)
    as originally planned.
 
@@ -2625,4 +2625,38 @@ local cancellation/late-reply discard through a fake native driver API.
 
 `future_then` now returns the continuation record's caller-owned child future,
 so native C and Zig can build value-transforming, rejection-propagating chains
-without allocation. The WASM continuation adapter remains deferred.
+without allocation.
+
+## 51. WASM Stackless C Baseline (implemented)
+
+`src/libsys/wasm/{coroutine_wasm.c,include/wasmos/coroutine_wasm.h}` provides
+the C WASM counterpart. It has the same caller-owned `Future`, `Promise`,
+`then`, `race`, `all`, completion-future, and `wasmos_async_start()` concepts
+as the native core, but it never attempts to capture a C/WASM call stack.
+
+A task supplies `wasmos_wasm_task_resume_fn` and records its own program
+counter in caller-owned state. When `wasmos_future_await()` returns
+`WASMOS_WASM_AWAIT_PENDING`, the task is parked and its resume function must
+return `WASMOS_WASM_TASK_YIELDED`; after settlement the scheduler invokes it
+again. A task returns zero with an output value to resolve its completion
+future, or a negative status to reject it. This is the portable C substrate
+that later Zig, Rust, Go, and AssemblyScript wrappers will hide behind their
+own async/state-machine mechanisms.
+
+Future callbacks are always queued through `wasmos_wasm_coroutine_run()`;
+neither registration nor promise settlement invokes user callbacks inline.
+`race` settles on the first source outcome, and `all` resolves to the supplied
+value array only after every input succeeds. Group and continuation storage is
+caller-owned and must remain live until all source futures settle.
+
+`tests/unit/test_wasm_coroutine.c` runs the C core as host code and validates
+cooperative yield order, plain pending-future runtime binding, parking/wakeup,
+completion join, duplicate settlement rejection, deferred `then` callbacks,
+value and error propagation, and race/all success and failure behavior. An
+x86-64-host-only `warp_wasm_coroutine_test` target additionally compiles
+`tests/unit/wasm_coroutine_warp_fixture.c` to wasm32 and executes it through
+the WARP JIT; it is deliberately excluded on ARM64 hosts while WARP's host
+AArch64 execution path is not yet suitable for this validation.
+
+WASM IPC-future adaptation, deadlines, cancellation, CQ dispatch, parallel
+workers, and language wrappers remain deferred.

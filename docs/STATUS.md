@@ -86,9 +86,10 @@ linked feature documents for rationale and rollout plans.
   currently linked by the native net-stack package, and exposes matching C and
   Zig wrappers for spawn, cooperative yield, await/resolve/reject, and join.
   Caller-owned `future_then` registrations schedule separate success/error
-  callbacks through the runtime rather than invoking them inline. It has no timers,
-  cancellation, IPC/CQ wiring, multi-worker scheduling, or WASM counterpart
-  yet.
+  callbacks through the runtime rather than invoking them inline, and return a
+  caller-owned child future for value-transforming, rejection-propagating
+  chains. It has no timers, cancellation, IPC/CQ wiring, multi-worker
+  scheduling, or WASM counterpart yet.
 - Completion ports are documented as a design proposal only: the planned
   kernel-owned bounded CQ, notification-doorbell, and generation-tagged
   operation-token model has no implementation yet. It is intended to provide

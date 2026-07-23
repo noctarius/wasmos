@@ -59,7 +59,7 @@ pub fn futureAwait(future: *Future, out_value: ?*usize) i32 {
     return c.wasmos_future_await(future, out_value);
 }
 
-pub fn futureThen(runtime: *NativeCoroutineRuntime, future: *Future, continuation: *FutureContinuation, on_success: FutureSuccess, on_error: FutureError, user: ?*anyopaque) i32 {
+pub fn futureThen(runtime: *NativeCoroutineRuntime, future: *Future, continuation: *FutureContinuation, on_success: ?FutureSuccess, on_error: ?FutureError, user: ?*anyopaque) ?*Future {
     return c.wasmos_future_then(runtime, future, continuation, on_success, on_error, user);
 }
 pub const Mutex = extern struct {

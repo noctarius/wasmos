@@ -190,10 +190,28 @@ int wasmos_native_coroutine_run(wasmos_native_coroutine_runtime_t* runtime) {
         }
         if (future->status == 0) {
             if (continuation->on_success) {
-                continuation->on_success(continuation->user, future->value);
+                uintptr_t value = 0;
+                int32_t status =
+                    continuation->on_success(continuation->user, future->value, &value);
+                if (status == 0) {
+                    (void)wasmos_promise_resolve(&continuation->child_promise, value);
+                } else {
+                    (void)wasmos_promise_reject(&continuation->child_promise,
+                                                status < 0 ? status : -1);
+                }
+            } else {
+                (void)wasmos_promise_resolve(&continuation->child_promise, future->value);
             }
         } else if (continuation->on_error) {
-            continuation->on_error(continuation->user, future->status);
+            uintptr_t value = 0;
+            int32_t status = continuation->on_error(continuation->user, future->status, &value);
+            if (status == 0) {
+                (void)wasmos_promise_resolve(&continuation->child_promise, value);
+            } else {
+                (void)wasmos_promise_reject(&continuation->child_promise, status < 0 ? status : -1);
+            }
+        } else {
+            (void)wasmos_promise_reject(&continuation->child_promise, future->status);
         }
     }
     return resumed;
@@ -313,18 +331,20 @@ int wasmos_future_await(wasmos_future_t* future, uintptr_t* out_value) {
     return future->status;
 }
 
-int wasmos_future_then(wasmos_native_coroutine_runtime_t* runtime, wasmos_future_t* future,
-                       wasmos_future_continuation_t* continuation,
-                       wasmos_future_success_fn_t on_success, wasmos_future_error_fn_t on_error,
-                       void* user) {
-    if (!runtime || !future || !continuation || continuation->active ||
-        (!on_success && !on_error)) {
-        return -1;
+wasmos_future_t* wasmos_future_then(wasmos_native_coroutine_runtime_t* runtime,
+                                    wasmos_future_t* future,
+                                    wasmos_future_continuation_t* continuation,
+                                    wasmos_future_success_fn_t on_success,
+                                    wasmos_future_error_fn_t on_error, void* user) {
+    if (!runtime || !future || !continuation || continuation->active) {
+        return NULL;
     }
     if (future->runtime && future->runtime != runtime) {
-        return -1;
+        return NULL;
     }
     future->runtime = runtime;
+    wasmos_future_init(&continuation->child, &continuation->child_promise);
+    continuation->child.runtime = runtime;
     continuation->next = NULL;
     continuation->future = future;
     continuation->on_success = on_success;
@@ -337,7 +357,7 @@ int wasmos_future_then(wasmos_native_coroutine_runtime_t* runtime, wasmos_future
     } else {
         continuation_schedule(runtime, continuation);
     }
-    return 0;
+    return &continuation->child;
 }
 
 int wasmos_native_coroutine_join(wasmos_native_coroutine_t* coroutine, int32_t* out_result) {

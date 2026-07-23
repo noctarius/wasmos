@@ -2561,7 +2561,10 @@ The initial future/promise core is intentionally local and single-worker:
 - `await` parks the current coroutine in the future's waiter list;
 - resolve/reject settles exactly once and makes all waiters runnable;
 - caller-owned `future_then` registrations provide separate success/error
-  callbacks; they are queued by `runtime_run()` and never invoked inline by
+  callbacks and return a child future held by the continuation record; a
+  callback resolves that child with its output value or rejects it by returning
+  a negative status, while a missing callback forwards the parent outcome;
+  callbacks are queued by `runtime_run()` and never invoked inline by
   registration or settlement;
 - every coroutine exposes its exit result as a join future.
 
@@ -2578,11 +2581,12 @@ the core when their package links the C and assembly objects. The native
 validation before it adopts coroutines for socket operations.
 
 `tests/unit/test_native_coroutine.c` validates cooperative yield order,
-pending-future suspension/wakeup, duplicate promise settlement rejection, and
-join on x86-64 hosts. Non-x86-64 development hosts cross-compile the actual
-x86-64 objects instead; target-package compilation is additionally validated by
-the net-stack build.
+pending-future suspension/wakeup, duplicate promise settlement rejection,
+join, value-transforming chains, rejection recovery, and callback-caused
+rejection on x86-64 hosts. Non-x86-64 development hosts cross-compile the
+actual x86-64 objects instead; target-package compilation is additionally
+validated by the net-stack build.
 
-`future_then` does not yet return a chained child future. It is the deliberate
-first continuation primitive shared by native C and Zig; future chaining and
-the WASM continuation adapter build on this scheduled-callback rule.
+`future_then` now returns the continuation record's caller-owned child future,
+so native C and Zig can build value-transforming, rejection-propagating chains
+without allocation. The WASM continuation adapter remains deferred.

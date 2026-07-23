@@ -44,8 +44,10 @@ typedef struct wasmos_native_coroutine wasmos_native_coroutine_t;
 typedef struct wasmos_native_coroutine_runtime wasmos_native_coroutine_runtime_t;
 typedef struct wasmos_future_continuation wasmos_future_continuation_t;
 
-typedef void (*wasmos_future_success_fn_t)(void* user, uintptr_t value);
-typedef void (*wasmos_future_error_fn_t)(void* user, int32_t status);
+/* Return zero to resolve the chained future with out_value, or a negative
+ * status to reject it. */
+typedef int32_t (*wasmos_future_success_fn_t)(void* user, uintptr_t value, uintptr_t* out_value);
+typedef int32_t (*wasmos_future_error_fn_t)(void* user, int32_t status, uintptr_t* out_value);
 
 typedef struct wasmos_future {
     wasmos_future_state_t state;
@@ -64,13 +66,17 @@ typedef void (*wasmos_native_coroutine_entry_t)(void* arg);
 
 /* Caller-owned continuation registration. A registration may be active on one
  * future at a time and must outlive the callback or cancellation of the
- * runtime. Callbacks run from runtime_run(), never inline from resolve/reject. */
+ * runtime. The record owns the child future returned by future_then(); do not
+ * reuse it while that child or a future chained from it is still referenced.
+ * Callbacks run from runtime_run(), never inline from resolve/reject. */
 struct wasmos_future_continuation {
     wasmos_future_continuation_t* next;
     wasmos_future_t* future;
     wasmos_future_success_fn_t on_success;
     wasmos_future_error_fn_t on_error;
     void* user;
+    wasmos_future_t child;
+    wasmos_promise_t child_promise;
     bool active;
 };
 
@@ -113,10 +119,13 @@ int wasmos_native_coroutine_join(wasmos_native_coroutine_t* coroutine, int32_t* 
 void wasmos_future_init(wasmos_future_t* future, wasmos_promise_t* promise);
 bool wasmos_future_poll(const wasmos_future_t* future, int32_t* out_status, uintptr_t* out_value);
 int wasmos_future_await(wasmos_future_t* future, uintptr_t* out_value);
-int wasmos_future_then(wasmos_native_coroutine_runtime_t* runtime, wasmos_future_t* future,
-                       wasmos_future_continuation_t* continuation,
-                       wasmos_future_success_fn_t on_success, wasmos_future_error_fn_t on_error,
-                       void* user);
+/* Registers a scheduled transformation and returns its child future, or NULL
+ * on invalid input. A missing success/error callback forwards that outcome. */
+wasmos_future_t* wasmos_future_then(wasmos_native_coroutine_runtime_t* runtime,
+                                    wasmos_future_t* future,
+                                    wasmos_future_continuation_t* continuation,
+                                    wasmos_future_success_fn_t on_success,
+                                    wasmos_future_error_fn_t on_error, void* user);
 bool wasmos_promise_resolve(wasmos_promise_t* promise, uintptr_t value);
 bool wasmos_promise_reject(wasmos_promise_t* promise, int32_t status);
 

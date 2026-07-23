@@ -108,6 +108,12 @@ int wasmos_native_coroutine_spawn(wasmos_native_coroutine_runtime_t* runtime,
                                   wasmos_native_coroutine_t* coroutine, void* stack_base,
                                   size_t stack_size, wasmos_native_coroutine_entry_t entry,
                                   void* arg);
+/* Starts a caller-owned native async task and returns its completion future,
+ * or NULL if the coroutine cannot be started. */
+wasmos_future_t* wasmos_async_start(wasmos_native_coroutine_runtime_t* runtime,
+                                    wasmos_native_coroutine_t* coroutine, void* stack_base,
+                                    size_t stack_size, wasmos_native_coroutine_entry_t entry,
+                                    void* arg);
 
 /* Run ready work until no coroutine is runnable. Returns the number resumed,
  * or -1 for invalid/reentrant use. */

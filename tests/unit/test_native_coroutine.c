@@ -108,6 +108,7 @@ static int32_t reject_callback(void* user, uintptr_t value, uintptr_t* out_value
 static int test_yield_await_and_join(void) {
     static const uint32_t expected[] = {1u, 2u, 3u, 4u, 5u, 6u, 7u, 7u};
     test_state_t state = {0};
+    wasmos_future_t* first_completion;
     int run_count;
 
     wasmos_native_coroutine_runtime_init(&state.runtime);
@@ -116,8 +117,9 @@ static int test_yield_await_and_join(void) {
                             success_callback, error_callback, &state)) {
         return __LINE__;
     }
-    if (wasmos_native_coroutine_spawn(&state.runtime, &state.first, state.first_stack,
-                                      sizeof(state.first_stack), first_entry, &state) != 0 ||
+    first_completion = wasmos_async_start(&state.runtime, &state.first, state.first_stack,
+                                          sizeof(state.first_stack), first_entry, &state);
+    if (first_completion != &state.first.completion ||
         wasmos_native_coroutine_spawn(&state.runtime, &state.second, state.second_stack,
                                       sizeof(state.second_stack), second_entry, &state) != 0 ||
         wasmos_native_coroutine_spawn(&state.runtime, &state.joiner, state.joiner_stack,

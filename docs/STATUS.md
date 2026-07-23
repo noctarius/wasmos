@@ -84,7 +84,8 @@ linked feature documents for rationale and rollout plans.
 - Native `libsys` now includes a caller-storage, single-worker stackful
   coroutine core and local future/promise state. It is x86-64 SysV only,
   currently linked by the native net-stack package, and exposes matching C and
-  Zig wrappers for spawn, cooperative yield, await/resolve/reject, and join.
+  Zig wrappers for spawn, async-task start, cooperative yield, await/resolve/reject,
+  and join.
   Caller-owned `future_then` registrations schedule separate success/error
   callbacks through the runtime rather than invoking them inline, and return a
   caller-owned child future for value-transforming, rejection-propagating

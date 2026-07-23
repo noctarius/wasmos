@@ -161,6 +161,17 @@ int wasmos_native_coroutine_spawn(wasmos_native_coroutine_runtime_t* runtime,
     return 0;
 }
 
+wasmos_future_t* wasmos_async_start(wasmos_native_coroutine_runtime_t* runtime,
+                                    wasmos_native_coroutine_t* coroutine, void* stack_base,
+                                    size_t stack_size, wasmos_native_coroutine_entry_t entry,
+                                    void* arg) {
+    if (wasmos_native_coroutine_spawn(runtime, coroutine, stack_base, stack_size, entry, arg) !=
+        0) {
+        return NULL;
+    }
+    return &coroutine->completion;
+}
+
 int wasmos_native_coroutine_run(wasmos_native_coroutine_runtime_t* runtime) {
     int resumed = 0;
     wasmos_native_coroutine_t* coroutine;

@@ -27,6 +27,10 @@ pub fn coroutineSpawn(runtime: *NativeCoroutineRuntime, coroutine: *NativeCorout
     return c.wasmos_native_coroutine_spawn(runtime, coroutine, stack.ptr, stack.len, @ptrCast(entry), arg);
 }
 
+pub fn asyncStart(runtime: *NativeCoroutineRuntime, coroutine: *NativeCoroutine, stack: []u8, entry: NativeCoroutineEntry, arg: ?*anyopaque) ?*Future {
+    return c.wasmos_async_start(runtime, coroutine, stack.ptr, stack.len, @ptrCast(entry), arg);
+}
+
 pub fn coroutineYield() void {
     c.wasmos_native_coroutine_yield();
 }

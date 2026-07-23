@@ -2568,6 +2568,10 @@ The initial future/promise core is intentionally local and single-worker:
   registration or settlement;
 - every coroutine exposes its exit result as a join future.
 
+`wasmos_async_start()` is the native C async-function boundary: it starts a
+caller-owned coroutine and returns that coroutine's completion future. The
+worker body remains an ordinary C function and can use `await` and `yield`.
+
 Cancellation, deadlines, multi-worker synchronization, IPC intent adaptation,
 CQ dispatch, allocator ownership, and guard-page stack allocation are deferred.
 The caller must retain all coroutine and stack storage until the coroutine is
@@ -2582,8 +2586,9 @@ validation before it adopts coroutines for socket operations.
 
 `tests/unit/test_native_coroutine.c` validates cooperative yield order,
 pending-future suspension/wakeup, duplicate promise settlement rejection,
-join, value-transforming chains, rejection recovery, and callback-caused
-rejection on x86-64 hosts. Non-x86-64 development hosts cross-compile the
+join, value-transforming chains, rejection recovery, callback-caused
+rejection, and `wasmos_async_start()` completion-future return on x86-64 hosts.
+Non-x86-64 development hosts cross-compile the
 actual x86-64 objects instead; target-package compilation is additionally
 validated by the net-stack build.
 

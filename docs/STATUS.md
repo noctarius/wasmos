@@ -106,7 +106,10 @@ linked feature documents for rationale and rollout plans.
   storage for its link future/coroutine/stack, lwIP netif, and driver RX/TX
   transfer-buffer state. The link request is correlated by a second event loop
   on the dedicated driver-reply endpoint. RX/link notifications and RX/TX
-  state-machine replies remain handler/default-dispatch paths. Its ELF entry is
+  state-machine replies remain handler/default-dispatch paths. Address, admin,
+  and DHCP control operations select an interface index and keep their state in
+  that interface slot; the selector-less boot config still targets default.
+  Its ELF entry is
   now libsys's generic `async_initialize`, which runs the service's
   `wasmos_async_main` callback in the root coroutine. It has no timers, generic future
   cancellation, CQ wiring, multi-worker scheduling, or WASM counterpart yet.

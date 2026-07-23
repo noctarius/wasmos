@@ -75,6 +75,10 @@ typedef struct {
     uint32_t rx_poll_next_tick;
     uint8_t netif_ready;
     uint8_t netif_installed;
+    uint8_t addr_ready;
+    uint8_t dhcp_active;
+    uint32_t dhcp_started_tick;
+    uint8_t dhcp_timeout_logged;
     uint8_t link_get_pending;
     uint8_t link_get_retire;
     wasmos_native_coroutine_t link_get_coroutine;
@@ -146,10 +150,6 @@ static uint32_t g_ifcfg_buffer_id = 0u;
 static uint8_t* g_ifcfg_buffer = NULL;
 static uint32_t g_ifcfg_attempts = 0u;
 static uint32_t g_ifcfg_next_tick = 0u;
-static uint8_t g_addr_ready = 0u; /* "ready" banner emitted for current address */
-static uint8_t g_dhcp_active = 0u;
-static uint32_t g_dhcp_started_tick = 0u;
-static uint8_t g_dhcp_timeout_logged = 0u;
 
 static err_t net_stack_linkoutput(struct netif* netif, struct pbuf* p);
 static void net_stack_start_rx_poll(net_interface_slot_t* interface, uint8_t immediate);
@@ -164,7 +164,7 @@ static void net_stack_udp_recv(void* arg, struct udp_pcb* pcb, struct pbuf* p,
                                const ip_addr_t* addr, u16_t port);
 static void net_stack_kick_ifcfg_load(void);
 static void net_stack_try_load_ifcfg(void);
-static void net_stack_apply_ifcfg(const net_ifcfg_t* cfg);
+static void net_stack_apply_ifcfg(net_interface_slot_t* interface, const net_ifcfg_t* cfg);
 static void net_stack_netif_status_cb(struct netif* netif);
 static void net_stack_dispatch(const nd_ipc_message_t* request);
 static void net_stack_netdrv_event(void* user, const nd_ipc_message_t* request);
@@ -536,6 +536,13 @@ static net_interface_slot_t* net_stack_interface_from_endpoint(uint32_t endpoint
     return net_stack_interface_slot(endpoint, 0u, 0u);
 }
 
+static net_interface_slot_t* net_stack_interface_from_index(uint32_t index) {
+    if (index >= NET_STACK_MAX_INTERFACES || !g_interfaces[index].in_use) {
+        return NULL;
+    }
+    return &g_interfaces[index];
+}
+
 /* An inbound connection completed its handshake on a listening socket. Pair it
  * with a posted accept slot (its client-owned rings) and answer the deferred
  * NET_IPC_ACCEPT with the new socket id. With no slot posted, reject the
@@ -740,15 +747,16 @@ static int net_stack_mask_prefix(uint32_t mask_no) {
  * real address first appears (static apply or DHCP bind), emit the ready banner
  * and prime ARP for the gateway. */
 static void net_stack_netif_status_cb(struct netif* netif) {
+    net_interface_slot_t* interface = net_stack_interface_from_netif(netif);
     uint32_t addr_no;
-    if (netif == NULL) {
+    if (netif == NULL || interface == NULL) {
         return;
     }
     addr_no = ip4_addr_get_u32(ip_2_ip4(&netif->ip_addr));
-    if (addr_no == 0u || g_addr_ready) {
+    if (addr_no == 0u || interface->addr_ready) {
         return;
     }
-    g_addr_ready = 1u;
+    interface->addr_ready = 1u;
     if (g_api->console_write != NULL) {
         char line[64];
         int n = 0;
@@ -774,14 +782,14 @@ static void net_stack_netif_status_cb(struct netif* netif) {
     }
 }
 
-static void net_stack_apply_ifcfg(const net_ifcfg_t* cfg) {
-    if (cfg == NULL || g_active_ifc == NULL || !g_active_ifc->netif_installed) {
+static void net_stack_apply_ifcfg(net_interface_slot_t* interface, const net_ifcfg_t* cfg) {
+    if (cfg == NULL || interface == NULL || !interface->netif_installed) {
         return;
     }
     if (cfg->dhcp) {
-        if (!g_dhcp_active && dhcp_start(&g_netif) == ERR_OK) {
-            g_dhcp_active = 1u;
-            g_dhcp_started_tick = g_api->sched_ticks != NULL ? g_api->sched_ticks() : 0u;
+        if (!interface->dhcp_active && dhcp_start(&interface->netif) == ERR_OK) {
+            interface->dhcp_active = 1u;
+            interface->dhcp_started_tick = g_api->sched_ticks != NULL ? g_api->sched_ticks() : 0u;
         }
         if (g_api->console_write != NULL) {
             static const char msg[] = "[net-stack] dhcp: requesting lease\n";
@@ -795,7 +803,7 @@ static void net_stack_apply_ifcfg(const net_ifcfg_t* cfg) {
     IP4_ADDR(&ip, cfg->addr[0], cfg->addr[1], cfg->addr[2], cfg->addr[3]);
     IP4_ADDR(&mask, cfg->mask[0], cfg->mask[1], cfg->mask[2], cfg->mask[3]);
     IP4_ADDR(&gw, cfg->gw[0], cfg->gw[1], cfg->gw[2], cfg->gw[3]);
-    netif_set_addr(&g_netif, &ip, &mask, &gw); /* fires status cb -> banner + ARP */
+    netif_set_addr(&interface->netif, &ip, &mask, &gw); /* fires status cb -> banner + ARP */
 }
 
 static void net_stack_kick_ifcfg_load(void) {
@@ -837,7 +845,9 @@ static void net_stack_ifcfg_read_reply(void* user, const nd_ipc_message_t* reply
         if (n >= NET_STACK_IFCFG_CAP)
             n = NET_STACK_IFCFG_CAP - 1u;
         if (net_ifcfg_parse((const char*)g_ifcfg_buffer, n, &cfg)) {
-            net_stack_apply_ifcfg(&cfg);
+            /* FIXME(multinet-ifcfg): the current file format has no interface
+             * selector, so boot configuration deliberately targets default. */
+            net_stack_apply_ifcfg(g_active_ifc, &cfg);
         } else if (g_api->console_write != NULL) {
             static const char msg[] = "[net-stack] interface config invalid\n";
             g_api->console_write(msg, (int)(sizeof(msg) - 1));
@@ -1076,11 +1086,8 @@ static void net_stack_unbind_interface(uint32_t endpoint) {
     slot->state = NET_IFC_DISCOVERED;
     if (was_active) {
         /* Force a fresh active-interface config read on replacement. */
-        g_addr_ready = 0u;
         g_ifcfg_kicked = 0u;
         g_ifcfg_loaded = 0u;
-        g_dhcp_active = 0u;
-        g_dhcp_timeout_logged = 0u;
         g_netdrv_endpoint = 0u;
         g_active_ifc = NULL;
     }
@@ -1486,8 +1493,8 @@ static void net_stack_handle_accept(const nd_ipc_message_t* request) {
     /* Reply deferred to net_stack_tcp_accept once a connection arrives. */
 }
 
-/* Interface-address control plane (the `ip` tool). The stack tracks a single
- * active interface, so ADD/DEL operate on it and its index must match. */
+/* Interface-address control plane (the `ip` tool). Each operation selects its
+ * target by interface index; the default interface is only for route choice. */
 static int32_t net_stack_active_index(void) {
     if (g_active_ifc == NULL) {
         return -1;
@@ -1496,6 +1503,7 @@ static int32_t net_stack_active_index(void) {
 }
 
 static void net_stack_handle_ifaddr_add(const nd_ipc_message_t* request) {
+    net_interface_slot_t* interface;
     net_ifaddr_record_v1_t* rec;
     ip4_addr_t ip;
     ip4_addr_t mask;
@@ -1516,8 +1524,8 @@ static void net_stack_handle_ifaddr_add(const nd_ipc_message_t* request) {
         net_stack_reply_error(request, NET_STATUS_INVALID);
         return;
     }
-    if (g_active_ifc == NULL || !g_active_ifc->netif_installed ||
-        rec->if_index != (uint32_t)net_stack_active_index()) {
+    interface = net_stack_interface_from_index(rec->if_index);
+    if (interface == NULL || !interface->netif_installed) {
         (void)g_api->xfer_buffer_unmap_borrowed(request->arg1);
         net_stack_reply_error(request, NET_STATUS_NOT_READY);
         return;
@@ -1526,52 +1534,55 @@ static void net_stack_handle_ifaddr_add(const nd_ipc_message_t* request) {
     ip4_addr_set_u32(&mask, rec->netmask_v4);
     ip4_addr_set_u32(&gw, rec->gateway_v4);
     /* A manual address stops any DHCP client so the two do not fight. */
-    if (g_dhcp_active) {
-        dhcp_stop(&g_netif);
-        g_dhcp_active = 0u;
+    if (interface->dhcp_active) {
+        dhcp_stop(&interface->netif);
+        interface->dhcp_active = 0u;
     }
-    netif_set_addr(&g_netif, &ip, &mask, &gw);
+    netif_set_addr(&interface->netif, &ip, &mask, &gw);
     (void)g_api->xfer_buffer_unmap_borrowed(request->arg1);
     net_stack_send_reply(request, NET_IPC_RESP, NET_STATUS_OK, 0u, 0u, 0u);
 }
 
 static void net_stack_handle_if_set_state(const nd_ipc_message_t* request) {
+    net_interface_slot_t* interface;
     /* arg0 = if_index, arg1 = 1 (up) / 0 (down). Administrative state only;
      * link state is driven by the driver's LINK_NOTIFY, not this. */
-    if (g_active_ifc == NULL || !g_active_ifc->netif_installed ||
-        request->arg0 != (uint32_t)net_stack_active_index()) {
+    interface = net_stack_interface_from_index(request->arg0);
+    if (interface == NULL || !interface->netif_installed) {
         net_stack_reply_error(request, NET_STATUS_NOT_READY);
         return;
     }
     if (request->arg1 != 0u) {
-        netif_set_up(&g_netif);
+        netif_set_up(&interface->netif);
     } else {
-        netif_set_down(&g_netif);
+        netif_set_down(&interface->netif);
     }
     net_stack_send_reply(request, NET_IPC_RESP, NET_STATUS_OK, 0u, 0u, 0u);
 }
 
 static void net_stack_handle_ifaddr_del(const nd_ipc_message_t* request) {
+    net_interface_slot_t* interface;
     ip4_addr_t zero;
-    if (g_active_ifc == NULL || !g_active_ifc->netif_installed ||
-        request->arg0 != (uint32_t)net_stack_active_index()) {
+    interface = net_stack_interface_from_index(request->arg0);
+    if (interface == NULL || !interface->netif_installed) {
         net_stack_reply_error(request, NET_STATUS_NOT_READY);
         return;
     }
-    if (g_dhcp_active) {
-        dhcp_stop(&g_netif);
-        g_dhcp_active = 0u;
+    if (interface->dhcp_active) {
+        dhcp_stop(&interface->netif);
+        interface->dhcp_active = 0u;
     }
     ip4_addr_set_zero(&zero);
-    netif_set_addr(&g_netif, &zero, &zero, &zero);
-    g_addr_ready = 0u;
+    netif_set_addr(&interface->netif, &zero, &zero, &zero);
+    interface->addr_ready = 0u;
     net_stack_send_reply(request, NET_IPC_RESP, NET_STATUS_OK, 0u, 0u, 0u);
 }
 
 static void net_stack_handle_dhcp_set(const nd_ipc_message_t* request) {
+    net_interface_slot_t* interface;
     /* arg0 = if_index, arg1 = 1 (start) / 0 (stop). */
-    if (g_active_ifc == NULL || !g_active_ifc->netif_installed ||
-        request->arg0 != (uint32_t)net_stack_active_index()) {
+    interface = net_stack_interface_from_index(request->arg0);
+    if (interface == NULL || !interface->netif_installed) {
         net_stack_reply_error(request, NET_STATUS_NOT_READY);
         return;
     }
@@ -1580,19 +1591,19 @@ static void net_stack_handle_dhcp_set(const nd_ipc_message_t* request) {
         /* Clear any static address so the fresh lease is not shadowed, then
          * (re)start the client. dhcp_start is idempotent for an active client. */
         ip4_addr_set_zero(&zero);
-        netif_set_addr(&g_netif, &zero, &zero, &zero);
-        g_addr_ready = 0u;
-        if (dhcp_start(&g_netif) != ERR_OK) {
+        netif_set_addr(&interface->netif, &zero, &zero, &zero);
+        interface->addr_ready = 0u;
+        if (dhcp_start(&interface->netif) != ERR_OK) {
             net_stack_reply_error(request, NET_STATUS_IO_ERROR);
             return;
         }
-        g_dhcp_active = 1u;
-        g_dhcp_started_tick = g_api->sched_ticks != NULL ? g_api->sched_ticks() : 0u;
-        g_dhcp_timeout_logged = 0u;
+        interface->dhcp_active = 1u;
+        interface->dhcp_started_tick = g_api->sched_ticks != NULL ? g_api->sched_ticks() : 0u;
+        interface->dhcp_timeout_logged = 0u;
     } else {
-        if (g_dhcp_active) {
-            dhcp_stop(&g_netif);
-            g_dhcp_active = 0u;
+        if (interface->dhcp_active) {
+            dhcp_stop(&interface->netif);
+            interface->dhcp_active = 0u;
         }
     }
     net_stack_send_reply(request, NET_IPC_RESP, NET_STATUS_OK, 0u, 0u, 0u);
@@ -1625,7 +1636,7 @@ static void net_stack_handle_ifaddr_list(const nd_ipc_message_t* request) {
             if (netif_is_up(&g_interfaces[i].netif)) {
                 out[count].flags |= NET_IFADDR_FLAG_ADMIN_UP;
             }
-            if (&g_interfaces[i] == g_active_ifc && g_dhcp_active) {
+            if (g_interfaces[i].dhcp_active) {
                 out[count].flags |= NET_IFADDR_FLAG_DHCP;
             }
             out[count].addr_v4 = ip4_addr_get_u32(ip_2_ip4(&g_interfaces[i].netif.ip_addr));
@@ -1967,15 +1978,19 @@ int32_t wasmos_async_main(wasmos_driver_api_t* driver_api,
         net_stack_try_bind_virtio();
         net_stack_try_load_ifcfg();
         sys_check_timeouts();
-        if (g_dhcp_active && !g_addr_ready && !g_dhcp_timeout_logged &&
-            g_api->sched_ticks != NULL &&
-            (uint32_t)(g_api->sched_ticks() - g_dhcp_started_tick) > NET_STACK_DHCP_TIMEOUT_TICKS) {
-            /* Strict: no lease within the timeout leaves the interface
-             * unconfigured. lwIP keeps retrying, so a late lease still binds. */
-            g_dhcp_timeout_logged = 1u;
-            if (driver_api->console_write != NULL) {
-                static const char msg[] = "[net-stack] dhcp: no lease\n";
-                driver_api->console_write(msg, (int)(sizeof(msg) - 1));
+        for (uint32_t i = 0u; i < NET_STACK_MAX_INTERFACES; ++i) {
+            net_interface_slot_t* interface = &g_interfaces[i];
+            if (interface->in_use && interface->dhcp_active && !interface->addr_ready &&
+                !interface->dhcp_timeout_logged && g_api->sched_ticks != NULL &&
+                (uint32_t)(g_api->sched_ticks() - interface->dhcp_started_tick) >
+                    NET_STACK_DHCP_TIMEOUT_TICKS) {
+                /* Strict: no lease within the timeout leaves the interface
+                 * unconfigured. lwIP keeps retrying, so a late lease still binds. */
+                interface->dhcp_timeout_logged = 1u;
+                if (driver_api->console_write != NULL) {
+                    static const char msg[] = "[net-stack] dhcp: no lease\n";
+                    driver_api->console_write(msg, (int)(sizeof(msg) - 1));
+                }
             }
         }
         for (uint32_t i = 0u; i < NET_STACK_MAX_INTERFACES; ++i) {

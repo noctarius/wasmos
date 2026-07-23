@@ -59,6 +59,10 @@ Out of scope for initial rollout:
   driver RX/TX transfer-buffer state, so independent link requests suspend and
   frame paths progress independently. RX/link notifications and RX/TX
   state-machine replies remain registered-handler/default-dispatch paths.
+  `NET_IPC_IFADDR_*`, `NET_IPC_IF_SET_STATE`, and `NET_IPC_DHCP_SET` select an
+  interface by index and maintain address/DHCP lifecycle in that interface's
+  slot. The boot interface-config file still applies to the default interface
+  because its current format has no interface selector.
   Startup does not perform blocking PM or driver request/reply calls.
 - IPC opcode space 0x000–0x9FF is allocated; networking opcodes begin at 0xA00.
 

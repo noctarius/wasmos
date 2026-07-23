@@ -111,8 +111,13 @@ linked feature documents for rationale and rollout plans.
   that interface slot; the selector-less boot config still targets default.
   Its ELF entry is
   now libsys's generic `async_initialize`, which runs the service's
-  `wasmos_async_main` callback in the root coroutine. It has no timers, generic future
-  cancellation, CQ wiring, multi-worker scheduling, or WASM counterpart yet.
+  `wasmos_async_main` callback in the root coroutine. Native kernel console
+  callbacks stage output in higher-half kernel storage so a low driver-owned
+  coroutine stack is never interpreted as a kernel physical alias. The normal
+  QEMU halt smoke now requires the net-stack lwIP and service-registration
+  banners, covering this root-coroutine-to-kernel-callback boundary. It has no
+  timers, generic future cancellation, CQ wiring, multi-worker scheduling, or
+  WASM counterpart yet.
 - Completion ports are documented as a design proposal only: the planned
   kernel-owned bounded CQ, notification-doorbell, and generation-tagged
   operation-token model has no implementation yet. It is intended to provide

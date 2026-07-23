@@ -29,15 +29,14 @@ _Static_assert(sizeof(wasmos_native_coroutine_context_t) == 104u,
                "context-switch assembly context size changed");
 #endif
 
-static wasmos_native_coroutine_runtime_t* coroutine_current_runtime(void) {
-    wasmos_native_coroutine_runtime_t* runtime;
+/* A native service links one copy of this single-worker runtime. Keeping the
+ * active runtime in ordinary static storage is deliberate: r12/x19 are ABI
+ * callee-saved registers, not reserved registers, and C code is free to reuse
+ * them while a coroutine is running. */
+static wasmos_native_coroutine_runtime_t* g_current_runtime;
 
-#if defined(__x86_64__)
-    __asm__ volatile("mov %%r12, %0" : "=r"(runtime));
-#elif defined(__aarch64__)
-    __asm__ volatile("mov %0, x19" : "=r"(runtime));
-#endif
-    return runtime;
+static wasmos_native_coroutine_runtime_t* coroutine_current_runtime(void) {
+    return g_current_runtime;
 }
 
 static void coroutine_enqueue(wasmos_native_coroutine_runtime_t* runtime,
@@ -113,9 +112,8 @@ static void coroutine_trampoline(void) {
      * stack, so no per-stack bootstrap object is needed. */
     __asm__ volatile("" : : : "memory");
     runtime = coroutine_current_runtime();
-    /* The current coroutine is recoverable through the entry's record. The
-     * trampoline receives its runtime in a callee-saved register restored by
-     * the context switch before control reaches this function. */
+    /* The current coroutine is recoverable through the scheduler's active
+     * runtime and entry record. */
     coroutine = runtime ? runtime->current : NULL;
     if (!coroutine || !coroutine->entry) {
         __builtin_trap();
@@ -176,11 +174,9 @@ int wasmos_native_coroutine_spawn(wasmos_native_coroutine_runtime_t* runtime,
     coroutine->context = (wasmos_native_coroutine_context_t){0};
 #if defined(__x86_64__)
     coroutine->context.rsp = top;
-    coroutine->context.r12 = (uintptr_t)runtime;
     coroutine->context.rip = (uintptr_t)coroutine_trampoline;
 #elif defined(__aarch64__)
     coroutine->context.sp = top;
-    coroutine->context.x19 = (uintptr_t)runtime;
     coroutine->context.x30 = (uintptr_t)coroutine_trampoline;
 #endif
     coroutine->runtime = runtime;
@@ -220,8 +216,10 @@ int wasmos_native_coroutine_run_budget(wasmos_native_coroutine_runtime_t* runtim
             coroutine->state = WASMOS_NATIVE_COROUTINE_RUNNING;
             resumed++;
             budget--;
+            g_current_runtime = runtime;
             wasmos_native_coroutine_context_switch(&runtime->scheduler_context,
                                                    &coroutine->context);
+            g_current_runtime = NULL;
             runtime->current = NULL;
             continue;
         }

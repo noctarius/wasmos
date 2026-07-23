@@ -18,6 +18,7 @@
 #include "policy.h"
 #include "wasmos_driver_abi.h"
 #include "capability.h"
+#include "sync/spinlock.h"
 #include "timer.h"
 #include "xfer_buffer.h"
 #include <string.h>
@@ -79,6 +80,13 @@ typedef struct {
 
 static uint32_t g_nd_heap_pid[ND_HEAP_SLOTS];
 static uint64_t g_nd_heap_bytes[ND_HEAP_SLOTS];
+
+/* Native coroutines may run on a driver-owned low virtual stack. Keep the
+ * console staging buffer in the shared higher-half kernel mapping: serial's
+ * kernel-alias handling must never mistake a driver stack address for a
+ * physical kernel pointer. */
+static char g_nd_console_buffer[128];
+static ksync_spinlock_t g_nd_console_lock = {0};
 
 static void nd_heap_set(uint32_t pid, uint64_t bytes) {
     uint32_t empty = ND_HEAP_SLOTS;
@@ -142,15 +150,18 @@ static int nd_console_write(const char* ptr, int len) {
     if (!ptr || len <= 0) {
         return -1;
     }
-    char buf[128];
     int remaining = len;
+    ksync_spinlock_lock_noirq(&g_nd_console_lock);
     while (remaining > 0) {
-        int chunk = remaining > (int)(sizeof(buf) - 1) ? (int)(sizeof(buf) - 1) : remaining;
-        memcpy(buf, ptr + (len - remaining), (uint32_t)chunk);
-        buf[chunk] = '\0';
-        klog_write(buf);
+        int chunk = remaining > (int)(sizeof(g_nd_console_buffer) - 1)
+                        ? (int)(sizeof(g_nd_console_buffer) - 1)
+                        : remaining;
+        memcpy(g_nd_console_buffer, ptr + (len - remaining), (uint32_t)chunk);
+        g_nd_console_buffer[chunk] = '\0';
+        klog_write(g_nd_console_buffer);
         remaining -= chunk;
     }
+    ksync_spinlock_unlock_noirq(&g_nd_console_lock);
     return 0;
 }
 

@@ -45,6 +45,17 @@ def main():
             sys.stderr.write("FAIL: calculator did not fully initialise\n")
             sys.stderr.write(session.tail() + "\n")
             return 1
+        # net-stack is the native async-service consumer. Its root coroutine
+        # must be able to call the native kernel API before the generic boot
+        # smoke can pass; the CLI alone does not prove that boundary.
+        if not session.expect(b"[net-stack] lwip_init ok"):
+            sys.stderr.write("FAIL: net-stack native async startup did not complete\n")
+            sys.stderr.write(session.tail() + "\n")
+            return 1
+        if not session.expect(b"[net-stack] registered net.stack"):
+            sys.stderr.write("FAIL: net-stack did not register after async startup\n")
+            sys.stderr.write(session.tail() + "\n")
+            return 1
         # Wait for CLI
         if not session.expect(b"wamos> "):
             return 1

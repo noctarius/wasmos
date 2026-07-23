@@ -7,6 +7,8 @@ static nd_ipc_message_t sent_message;
 static nd_ipc_message_t queued_reply;
 static int32_t send_status;
 static uint8_t reply_queued;
+static uint32_t service_steps;
+static uint32_t service_yields;
 
 static int fake_ipc_send(uint32_t sender_context_id, uint32_t endpoint,
                          const nd_ipc_message_t* message) {
@@ -30,6 +32,21 @@ static int fake_ipc_recv(uint32_t receiver_context_id, uint32_t endpoint,
 
 static uint32_t fake_current_pid(void) {
     return 9u;
+}
+
+static void fake_sched_yield(void) {
+    service_yields++;
+}
+
+static int32_t service_main(wasmos_driver_api_t* api,
+                            wasmos_native_coroutine_runtime_t* runtime, void* user) {
+    if (api == NULL || runtime == NULL || user != (void*)(uintptr_t)0x1234u) {
+        return -1;
+    }
+    service_steps++;
+    wasmos_native_coroutine_yield();
+    service_steps++;
+    return 37;
 }
 
 static int32_t reject_from_arg0(void* user, const nd_ipc_message_t* reply) {
@@ -134,10 +151,31 @@ static int test_reject_send_failure_and_cancel(void) {
     return 0;
 }
 
+static int test_service_root_runtime(void) {
+    wasmos_driver_api_t api = {0};
+    wasmos_sys_native_service_t service;
+    uint8_t root_stack[4096] __attribute__((aligned(16)));
+
+    service_steps = 0u;
+    service_yields = 0u;
+    api.sched_yield = fake_sched_yield;
+    wasmos_sys_native_service_init(&service, root_stack, sizeof(root_stack));
+    if (wasmos_sys_native_service_run(&service, &api, service_main,
+                                      (void*)(uintptr_t)0x1234u) != 37 ||
+        service_steps != 2u || service_yields != 1u ||
+        service.root.state != WASMOS_NATIVE_COROUTINE_DEAD) {
+        return __LINE__;
+    }
+    return 0;
+}
+
 int main(void) {
     int rc = test_resolve_and_copy_reply();
     if (rc == 0) {
         rc = test_reject_send_failure_and_cancel();
+    }
+    if (rc == 0) {
+        rc = test_service_root_runtime();
     }
     if (rc != 0) {
         return 1;

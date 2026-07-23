@@ -84,6 +84,31 @@ typedef struct {
     uint8_t active;
 } wasmos_sys_native_ipc_future_t;
 
+typedef int32_t (*wasmos_sys_native_service_main_fn)(
+    wasmos_driver_api_t* api, wasmos_native_coroutine_runtime_t* runtime, void* user);
+
+/* Caller-owned native service bootstrap. The loader-facing initialize() keeps
+ * its ABI and delegates to service_run(), which executes main in root. */
+typedef struct {
+    wasmos_native_coroutine_runtime_t runtime;
+    wasmos_native_coroutine_t root;
+    void* root_stack;
+    size_t root_stack_size;
+    wasmos_driver_api_t* api;
+    wasmos_sys_native_service_main_fn main;
+    void* user;
+} wasmos_sys_native_service_t;
+
+/* A native async service defines this one global configuration and implements
+ * its main callback. libsys supplies async_initialize as the ELF entry point. */
+typedef struct {
+    wasmos_sys_native_service_t service;
+    void* root_stack;
+    size_t root_stack_size;
+    wasmos_sys_native_service_main_fn main;
+    void* user;
+} wasmos_sys_native_async_service_config_t;
+
 struct wasmos_sys_native_random_request {
     wasmos_sys_native_event_loop_t* loop;
     uint32_t hrng_endpoint;
@@ -194,6 +219,11 @@ wasmos_future_t* wasmos_sys_native_ipc_future_send(
  * transport request; a late reply is discarded by its request_id. */
 void wasmos_sys_native_ipc_future_cancel(wasmos_sys_native_ipc_future_t* operation,
                                          int32_t status);
+void wasmos_sys_native_service_init(wasmos_sys_native_service_t* service, void* root_stack,
+                                    size_t root_stack_size);
+int32_t wasmos_sys_native_service_run(wasmos_sys_native_service_t* service,
+                                      wasmos_driver_api_t* api,
+                                      wasmos_sys_native_service_main_fn main, void* user);
 int32_t wasmos_sys_native_random_bytes_async(wasmos_sys_native_event_loop_t* loop,
                                              uint32_t hrng_endpoint, uint8_t* out, uint32_t len,
                                              wasmos_sys_native_random_request_t* request,

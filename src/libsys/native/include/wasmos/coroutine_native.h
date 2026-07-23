@@ -158,6 +158,9 @@ wasmos_future_t* wasmos_async_start(wasmos_native_coroutine_runtime_t* runtime,
                                     size_t stack_size, wasmos_native_coroutine_entry_t entry,
                                     void* arg);
 
+/* Run at most budget ready coroutines, while still dispatching queued future
+ * continuations. Returns the number resumed, or -1 for invalid/reentrant use. */
+int wasmos_native_coroutine_run_budget(wasmos_native_coroutine_runtime_t* runtime, size_t budget);
 /* Run ready work until no coroutine is runnable. Returns the number resumed,
  * or -1 for invalid/reentrant use. */
 int wasmos_native_coroutine_run(wasmos_native_coroutine_runtime_t* runtime);

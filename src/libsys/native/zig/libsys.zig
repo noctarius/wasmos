@@ -14,6 +14,9 @@ pub const FutureContinuation = c.wasmos_future_continuation_t;
 pub const FutureGroup = c.wasmos_future_group_t;
 pub const NativeIpcFuture = c.wasmos_sys_native_ipc_future_t;
 pub const NativeIpcFutureReplyStatus = c.wasmos_sys_native_ipc_future_reply_status_fn;
+pub const NativeService = c.wasmos_sys_native_service_t;
+pub const NativeServiceMain = c.wasmos_sys_native_service_main_fn;
+pub const NativeAsyncServiceConfig = c.wasmos_sys_native_async_service_config_t;
 pub const NativeCoroutineEntry = *const fn (?*anyopaque) callconv(.c) void;
 pub const FutureSuccess = c.wasmos_future_success_fn_t;
 pub const FutureError = c.wasmos_future_error_fn_t;
@@ -24,6 +27,10 @@ pub fn coroutineRuntimeInit(runtime: *NativeCoroutineRuntime) void {
 
 pub fn coroutineRun(runtime: *NativeCoroutineRuntime) i32 {
     return c.wasmos_native_coroutine_run(runtime);
+}
+
+pub fn coroutineRunBudget(runtime: *NativeCoroutineRuntime, budget: usize) i32 {
+    return c.wasmos_native_coroutine_run_budget(runtime, budget);
 }
 
 pub fn coroutineSpawn(runtime: *NativeCoroutineRuntime, coroutine: *NativeCoroutine, stack: []u8, entry: NativeCoroutineEntry, arg: ?*anyopaque) i32 {
@@ -90,6 +97,14 @@ pub fn ipcFutureSend(loop: *NativeEventLoop, operation: *NativeIpcFuture, destin
 
 pub fn ipcFutureCancel(operation: *NativeIpcFuture, status: i32) void {
     c.wasmos_sys_native_ipc_future_cancel(operation, status);
+}
+
+pub fn serviceInit(service: *NativeService, root_stack: []u8) void {
+    c.wasmos_sys_native_service_init(service, root_stack.ptr, root_stack.len);
+}
+
+pub fn serviceRun(service: *NativeService, api: anytype, main: NativeServiceMain, user: ?*anyopaque) i32 {
+    return c.wasmos_sys_native_service_run(service, asApi(api), main, user);
 }
 pub const Mutex = extern struct {
     owner_tid: u32,

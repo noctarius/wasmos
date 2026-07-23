@@ -91,10 +91,18 @@ static uint8_t g_netif_installed = 0u;
 static uint8_t g_registered = 0u;
 static uint8_t g_register_pending = 0u;
 static uint8_t g_netdrv_lookup_pending = 0u;
-static wasmos_native_coroutine_runtime_t g_control_runtime;
+static wasmos_native_coroutine_runtime_t* g_control_runtime = NULL;
 static wasmos_native_coroutine_t g_netdrv_lookup_coroutine;
 static wasmos_sys_native_ipc_future_t g_netdrv_lookup_future;
 static uint8_t g_netdrv_lookup_stack[4096] __attribute__((aligned(16)));
+static uint8_t g_service_root_stack[8192] __attribute__((aligned(16)));
+int32_t wasmos_async_main(wasmos_driver_api_t* driver_api,
+                          wasmos_native_coroutine_runtime_t* runtime, void* user);
+wasmos_sys_native_async_service_config_t wasmos_async_service = {
+    .root_stack = g_service_root_stack,
+    .root_stack_size = sizeof(g_service_root_stack),
+    .main = wasmos_async_main,
+};
 static uint8_t g_link_get_pending = 0u;
 static uint32_t g_link_get_sent_tick = 0u;
 static uint8_t g_hrng_lookup_pending = 0u;
@@ -916,7 +924,7 @@ static void net_stack_start_lookup_coroutine(void) {
         return;
     }
     g_netdrv_lookup_pending = 1u;
-    if (!wasmos_async_start(&g_control_runtime, &g_netdrv_lookup_coroutine,
+    if (!g_control_runtime || !wasmos_async_start(g_control_runtime, &g_netdrv_lookup_coroutine,
                             g_netdrv_lookup_stack, sizeof(g_netdrv_lookup_stack),
                             net_stack_lookup_coroutine, NULL)) {
         wasmos_sys_native_ipc_future_cancel(&g_netdrv_lookup_future, -1);
@@ -1786,13 +1794,11 @@ static void net_stack_dispatch(const nd_ipc_message_t* request) {
     }
 }
 
-/* Native service entry. Signature/ABI match gfx_compositor's initialize():
- *   int initialize(wasmos_driver_api_t *api, int module_count, int, int)
- * The loader jumps here via ELF e_entry (-e initialize). */
-int initialize(wasmos_driver_api_t* driver_api, int module_count, int arg2, int arg3) {
-    (void)module_count;
-    (void)arg2;
-    (void)arg3;
+/* Native async root. libsys's async_initialize is the ELF entry and invokes
+ * this inside the predefined root coroutine. */
+int32_t wasmos_async_main(wasmos_driver_api_t* driver_api,
+                          wasmos_native_coroutine_runtime_t* runtime, void* user) {
+    (void)user;
 
     g_api = driver_api;
     if (driver_api == NULL || driver_api->abi_magic != WASMOS_NATIVE_ABI_MAGIC ||
@@ -1838,7 +1844,7 @@ int initialize(wasmos_driver_api_t* driver_api, int module_count, int arg2, int 
     }
     wasmos_sys_native_event_loop_init(&g_control_loop, driver_api, g_control_endpoint,
                                       NET_STACK_REGISTER_REQUEST_ID);
-    wasmos_native_coroutine_runtime_init(&g_control_runtime);
+    g_control_runtime = runtime;
 
     /* Drain every message before yielding. A service must not assume a later
      * readiness edge will re-signal a request that was already queued; that
@@ -1873,9 +1879,6 @@ int initialize(wasmos_driver_api_t* driver_api, int module_count, int arg2, int 
         if (wasmos_sys_native_event_loop_poll(&g_control_loop, 8u) < 0) {
             return -1;
         }
-        if (wasmos_native_coroutine_run(&g_control_runtime) < 0) {
-            return -1;
-        }
         net_stack_begin_registration();
         net_stack_try_seed_random();
         net_stack_try_discover_interfaces();
@@ -1898,9 +1901,8 @@ int initialize(wasmos_driver_api_t* driver_api, int module_count, int arg2, int 
         if (g_netif_ready) {
             net_stack_start_rx_poll(0u);
         }
-        if (!drained && driver_api->sched_yield != NULL) {
-            driver_api->sched_yield();
-        }
+        (void)drained;
+        wasmos_native_coroutine_yield();
     }
 
     /* Not reached. */

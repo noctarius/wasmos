@@ -206,7 +206,7 @@ wasmos_future_t* wasmos_async_start(wasmos_native_coroutine_runtime_t* runtime,
     return &coroutine->completion;
 }
 
-int wasmos_native_coroutine_run(wasmos_native_coroutine_runtime_t* runtime) {
+int wasmos_native_coroutine_run_budget(wasmos_native_coroutine_runtime_t* runtime, size_t budget) {
     int resumed = 0;
     wasmos_native_coroutine_t* coroutine;
 
@@ -215,13 +215,15 @@ int wasmos_native_coroutine_run(wasmos_native_coroutine_runtime_t* runtime) {
     }
     runtime->running = true;
     for (;;) {
-        while ((coroutine = coroutine_dequeue(runtime)) != NULL) {
+        if (budget != 0u && (coroutine = coroutine_dequeue(runtime)) != NULL) {
             runtime->current = coroutine;
             coroutine->state = WASMOS_NATIVE_COROUTINE_RUNNING;
             resumed++;
+            budget--;
             wasmos_native_coroutine_context_switch(&runtime->scheduler_context,
                                                    &coroutine->context);
             runtime->current = NULL;
+            continue;
         }
         wasmos_future_continuation_t* continuation = continuation_dequeue(runtime);
         wasmos_future_t* future;
@@ -262,6 +264,10 @@ int wasmos_native_coroutine_run(wasmos_native_coroutine_runtime_t* runtime) {
     }
     runtime->running = false;
     return resumed;
+}
+
+int wasmos_native_coroutine_run(wasmos_native_coroutine_runtime_t* runtime) {
+    return wasmos_native_coroutine_run_budget(runtime, (size_t)-1);
 }
 
 void wasmos_native_coroutine_yield(void) {

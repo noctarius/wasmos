@@ -2593,6 +2593,9 @@ does not cancel transport work, so a later reply is discarded by request ID.
 The C and Zig wrappers expose the same caller-storage contract.
 The native net-stack uses this path for its `virtio.net` service lookup: its
 control coroutine awaits the future and only then records the driver endpoint.
+Native services may use libsys's `async_initialize` ELF entry: it starts a
+caller-owned service runtime and invokes `wasmos_async_main` as its predefined
+root coroutine with the loader-provided `wasmos_driver_api_t *`.
 
 Deadlines, generic future cancellation, multi-worker synchronization, CQ
 dispatch, allocator ownership, and guard-page stack allocation are deferred.

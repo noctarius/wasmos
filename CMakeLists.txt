@@ -2038,6 +2038,7 @@ if(DEFINED NATIVE_COROUTINE_HOST_ASM)
             ${CMAKE_SOURCE_DIR}/tests/unit/stubs_native_libsys.c
             ${LIBSYS_NATIVE_DIR}/coroutine_native.c
             ${LIBSYS_NATIVE_DIR}/ipc_future_native.c
+            ${LIBSYS_NATIVE_DIR}/service_runtime_native.c
             ${LIBSYS_NATIVE_DIR}/zig/libsys_native.c
             ${NATIVE_COROUTINE_HOST_ASM}
             -o ${BUILD_DIR}/test_native_ipc_future
@@ -2050,6 +2051,7 @@ if(DEFINED NATIVE_COROUTINE_HOST_ASM)
               ${NATIVE_COROUTINE_ZIG_TARGET_ARGS}
               ${LIBSYS_NATIVE_DIR}/coroutine_native.c
               ${LIBSYS_NATIVE_DIR}/ipc_future_native.c
+              ${LIBSYS_NATIVE_DIR}/service_runtime_native.c
               ${LIBSYS_NATIVE_DIR}/zig/libsys_native.c
               ${CMAKE_SOURCE_DIR}/tests/unit/stubs_native_libsys.c
               ${NATIVE_COROUTINE_HOST_ASM}

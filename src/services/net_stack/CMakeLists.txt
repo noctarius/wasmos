@@ -208,6 +208,37 @@ add_custom_command(
 )
 list(APPEND NET_STACK_OBJS ${NET_STACK_IPC_FUTURE_OBJ})
 
+set(NET_STACK_SERVICE_RUNTIME_OBJ ${BUILD_DIR}/net_stack_service_runtime_native.o)
+add_custom_command(
+  OUTPUT ${NET_STACK_SERVICE_RUNTIME_OBJ}
+  COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}
+  COMMAND ${CLANG} ${NET_STACK_CFLAGS_BASE} ${NET_STACK_INCLUDES}
+          -c ${LIBSYS_NATIVE_DIR}/service_runtime_native.c
+          -o ${NET_STACK_SERVICE_RUNTIME_OBJ}
+  DEPENDS ${LIBSYS_NATIVE_DIR}/service_runtime_native.c
+          ${LIBSYS_NATIVE_DIR}/include/wasmos/libsys_native.h
+          ${LIBSYS_NATIVE_DIR}/include/wasmos/coroutine_native.h
+  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+  COMMENT "Compiling native service coroutine runtime (net-stack)"
+  VERBATIM
+)
+list(APPEND NET_STACK_OBJS ${NET_STACK_SERVICE_RUNTIME_OBJ})
+
+set(NET_STACK_ASYNC_ENTRY_OBJ ${BUILD_DIR}/net_stack_service_async_entry_native.o)
+add_custom_command(
+  OUTPUT ${NET_STACK_ASYNC_ENTRY_OBJ}
+  COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}
+  COMMAND ${CLANG} ${NET_STACK_CFLAGS_BASE} ${NET_STACK_INCLUDES}
+          -c ${LIBSYS_NATIVE_DIR}/service_async_entry_native.c
+          -o ${NET_STACK_ASYNC_ENTRY_OBJ}
+  DEPENDS ${LIBSYS_NATIVE_DIR}/service_async_entry_native.c
+          ${LIBSYS_NATIVE_DIR}/include/wasmos/libsys_native.h
+  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+  COMMENT "Compiling native async service entry (net-stack)"
+  VERBATIM
+)
+list(APPEND NET_STACK_OBJS ${NET_STACK_ASYNC_ENTRY_OBJ})
+
 set(NET_STACK_COROUTINE_SWITCH_OBJ ${BUILD_DIR}/net_stack_coroutine_native_x86_64.o)
 add_custom_command(
   OUTPUT ${NET_STACK_COROUTINE_SWITCH_OBJ}
@@ -281,7 +312,7 @@ list(APPEND NET_STACK_OBJS ${NET_STACK_LIBC_CTYPE_OBJ})
 add_custom_command(
   OUTPUT ${WASM_NET_STACK_ELF}
   COMMAND ${LLD_PATH}
-          -e initialize
+          -e async_initialize
           -static
           ${NET_STACK_OBJS}
           -o ${WASM_NET_STACK_ELF}

@@ -101,7 +101,9 @@ linked feature documents for rationale and rollout plans.
   resolution; protocol callbacks reject error replies, while local cancellation
   discards late replies without cancelling transport work. Net-stack uses this
   path for its `virtio.net` service lookup: a native coroutine awaits the reply
-  before it installs the driver endpoint. It has no timers, generic future
+  before it installs the driver endpoint. Its ELF entry is now libsys's generic
+  `async_initialize`, which runs the service's `wasmos_async_main` callback in
+  the root coroutine. It has no timers, generic future
   cancellation, CQ wiring, multi-worker scheduling, or WASM counterpart yet.
 - Completion ports are documented as a design proposal only: the planned
   kernel-owned bounded CQ, notification-doorbell, and generation-tagged

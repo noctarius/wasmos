@@ -141,3 +141,11 @@ test "native coroutine Zig wrapper initializes an IPC future" {
     libsys.ipcFutureInit(&operation, null, null);
     try std.testing.expect(!libsys.futurePoll(&operation.future, null, null));
 }
+
+test "native coroutine Zig wrapper initializes a service runtime" {
+    var service: libsys.NativeService = undefined;
+    var stack: [4096]u8 align(16) = undefined;
+
+    libsys.serviceInit(&service, &stack);
+    try std.testing.expect(service.root_stack != null);
+}

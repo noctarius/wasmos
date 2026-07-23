@@ -311,5 +311,21 @@ add_custom_target(net_stack_app
           ${NET_STACK_DIR}/linker.metadata
 )
 
+# The packaged service is assembled through custom commands, which CMake does
+# not export to compile_commands.json. Keep a matching object target solely
+# for IDE navigation, diagnostics, and clangd/CLion indexing.
+wasmos_add_ide_c_target(net_stack_ide
+  SOURCES ${NET_STACK_DIR}/net_stack.c
+          ${NET_STACK_DIR}/socket.c
+          ${NET_STACK_DIR}/net_stack_ifcfg.c
+          ${NET_STACK_DIR}/port.c
+  INCLUDES ${LWIP_DIR}/src/include
+           ${NET_STACK_DIR}
+           ${LIBC_DIR}/include
+           ${DRIVER_WASM_DIR}/include
+           ${LIBSYS_WASM_DIR}/include
+           ${LIBSYS_NATIVE_DIR}/include)
+target_compile_options(net_stack_ide PRIVATE ${NET_STACK_CFLAGS_BASE})
+
 set_property(GLOBAL APPEND PROPERTY WASMOS_WASM_APPS ${WASM_NET_STACK_APP})
 set_property(GLOBAL APPEND PROPERTY WASMOS_WASM_APP_TARGETS net_stack_app)

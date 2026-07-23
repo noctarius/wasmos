@@ -3,8 +3,16 @@ if (GO_ENABLE)
   if (NOT TINYGO_EXECUTABLE)
     message(WARNING "TinyGo compiler 'tinygo' not found. Go example builds are disabled.")
   else ()
-    set(GO_AVAILABLE ON)
-    set(GO_AVAILABLE ON PARENT_SCOPE)
+    # TinyGo's wasm target invokes Binaryen itself. Resolve it here rather
+    # than relying on the child process's PATH from BUILD_DIR.
+    find_program(WASMOPT_EXECUTABLE wasm-opt
+      HINTS ${CMAKE_SOURCE_DIR}/node_modules/.bin)
+    if (NOT WASMOPT_EXECUTABLE)
+      message(WARNING "Binaryen tool 'wasm-opt' not found. Go example builds are disabled.")
+    else ()
+      set(GO_AVAILABLE ON)
+      set(GO_AVAILABLE ON PARENT_SCOPE)
+    endif ()
   endif ()
 endif ()
 
@@ -17,7 +25,7 @@ if (GO_AVAILABLE)
     COMMAND ${CMAKE_COMMAND} -E make_directory ${WASM_HELLO_GO_STAGE_DIR}
     COMMAND ${CMAKE_COMMAND} -E copy_if_different ${WASM_HELLO_GO_SRC} ${WASM_HELLO_GO_STAGE_DIR}/hello_go.go
     COMMAND ${CMAKE_COMMAND} -E copy_if_different ${WASM_HELLO_GO_LIBC_SRC} ${WASM_HELLO_GO_STAGE_DIR}/wasmos.go
-    COMMAND ${CMAKE_COMMAND} -E env GO111MODULE=off
+    COMMAND ${CMAKE_COMMAND} -E env GO111MODULE=off WASMOPT=${WASMOPT_EXECUTABLE}
             ${TINYGO_EXECUTABLE}
             build
             -target=wasm

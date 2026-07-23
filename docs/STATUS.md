@@ -82,10 +82,11 @@ linked feature documents for rationale and rollout plans.
 ## Runtime, Isolation, and IPC
 
 - Native `libsys` now includes a caller-storage, single-worker stackful
-  coroutine core and local future/promise state. It is x86-64 SysV only,
-  currently linked by the native net-stack package, and exposes matching C and
-  Zig wrappers for spawn, async-task start, cooperative yield, await/resolve/reject,
-  and join.
+  coroutine core and local future/promise state. The target backend is x86-64
+  SysV; an AArch64 AAPCS64 backend runs the same runtime behavior in native
+  ARM64 host tests. It is currently linked by the native net-stack package and
+  exposes matching C and Zig wrappers for spawn, async-task start, cooperative
+  yield, await/resolve/reject, and join.
   Caller-owned `future_then` registrations schedule separate success/error
   callbacks through the runtime rather than invoking them inline, and return a
   caller-owned child future for value-transforming, rejection-propagating

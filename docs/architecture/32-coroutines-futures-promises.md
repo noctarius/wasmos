@@ -2550,10 +2550,10 @@ L0  Kernel primitives  ── threads · futex · sched_event · ipc_send · ipc
 ## 50. Native Single-Worker Baseline (implemented)
 
 `src/libsys/native/{coroutine_native.c,coroutine_native_x86_64.S}` implements
-the first native-only slice. It uses caller-owned coroutine records and stacks,
-one cooperative ready queue, and an x86-64 SysV context switch that preserves
-the callee-saved registers plus `RSP`/`RIP`. No kernel worker is created: the
-runtime runs on the calling native ring-3 thread.
+the x86-64 target slice; `coroutine_native_aarch64.S` adds the matching AAPCS64
+host backend for native ARM64 validation. Both use caller-owned coroutine
+records and stacks plus one cooperative ready queue. No kernel worker is
+created: the runtime runs on the calling native thread.
 
 The initial future/promise core is intentionally local and single-worker:
 
@@ -2587,10 +2587,10 @@ validation before it adopts coroutines for socket operations.
 `tests/unit/test_native_coroutine.c` validates cooperative yield order,
 pending-future suspension/wakeup, duplicate promise settlement rejection,
 join, value-transforming chains, rejection recovery, callback-caused
-rejection, and `wasmos_async_start()` completion-future return on x86-64 hosts.
-Non-x86-64 development hosts cross-compile the
-actual x86-64 objects instead; target-package compilation is additionally
-validated by the net-stack build.
+rejection, and `wasmos_async_start()` completion-future return on x86-64 and
+AArch64 hosts. Other development hosts cross-compile the x86-64 target
+objects instead; target-package compilation is additionally validated by the
+net-stack build.
 
 `future_then` now returns the continuation record's caller-owned child future,
 so native C and Zig can build value-transforming, rejection-propagating chains

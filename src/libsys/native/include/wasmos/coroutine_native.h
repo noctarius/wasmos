@@ -29,6 +29,7 @@ typedef enum wasmos_future_state {
     WASMOS_FUTURE_FAILED,
 } wasmos_future_state_t;
 
+#if defined(__x86_64__) && !defined(__wasm__)
 typedef struct wasmos_native_coroutine_context {
     uintptr_t rsp;
     uintptr_t rbx;
@@ -39,6 +40,25 @@ typedef struct wasmos_native_coroutine_context {
     uintptr_t r15;
     uintptr_t rip;
 } wasmos_native_coroutine_context_t;
+#elif defined(__aarch64__)
+typedef struct wasmos_native_coroutine_context {
+    uintptr_t sp;
+    uintptr_t x19;
+    uintptr_t x20;
+    uintptr_t x21;
+    uintptr_t x22;
+    uintptr_t x23;
+    uintptr_t x24;
+    uintptr_t x25;
+    uintptr_t x26;
+    uintptr_t x27;
+    uintptr_t x28;
+    uintptr_t x29;
+    uintptr_t x30;
+} wasmos_native_coroutine_context_t;
+#else
+#error "native coroutines require x86_64 or aarch64 native code"
+#endif
 
 typedef struct wasmos_native_coroutine wasmos_native_coroutine_t;
 typedef struct wasmos_native_coroutine_runtime wasmos_native_coroutine_runtime_t;

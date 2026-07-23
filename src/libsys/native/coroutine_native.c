@@ -1,7 +1,7 @@
 #include "wasmos/coroutine_native.h"
 
-#if !defined(__x86_64__) || defined(__wasm__)
-#error "native coroutines require x86_64 native code"
+#if (!defined(__x86_64__) && !defined(__aarch64__)) || defined(__wasm__)
+#error "native coroutines require x86_64 or aarch64 native code"
 #endif
 
 extern void wasmos_native_coroutine_context_switch(wasmos_native_coroutine_context_t* from,
@@ -9,6 +9,7 @@ extern void wasmos_native_coroutine_context_switch(wasmos_native_coroutine_conte
 
 #define WASMOS_NATIVE_COROUTINE_MIN_STACK 1024u
 
+#if defined(__x86_64__)
 _Static_assert(offsetof(wasmos_native_coroutine_context_t, rsp) == 0u,
                "context-switch assembly offset for rsp changed");
 _Static_assert(offsetof(wasmos_native_coroutine_context_t, rbx) == 8u,
@@ -17,6 +18,27 @@ _Static_assert(offsetof(wasmos_native_coroutine_context_t, rip) == 56u,
                "context-switch assembly offset for rip changed");
 _Static_assert(sizeof(wasmos_native_coroutine_context_t) == 64u,
                "context-switch assembly context size changed");
+#elif defined(__aarch64__)
+_Static_assert(offsetof(wasmos_native_coroutine_context_t, sp) == 0u,
+               "context-switch assembly offset for sp changed");
+_Static_assert(offsetof(wasmos_native_coroutine_context_t, x19) == 8u,
+               "context-switch assembly offset for x19 changed");
+_Static_assert(offsetof(wasmos_native_coroutine_context_t, x30) == 96u,
+               "context-switch assembly offset for x30 changed");
+_Static_assert(sizeof(wasmos_native_coroutine_context_t) == 104u,
+               "context-switch assembly context size changed");
+#endif
+
+static wasmos_native_coroutine_runtime_t* coroutine_current_runtime(void) {
+    wasmos_native_coroutine_runtime_t* runtime;
+
+#if defined(__x86_64__)
+    __asm__ volatile("mov %%r12, %0" : "=r"(runtime));
+#elif defined(__aarch64__)
+    __asm__ volatile("mov %0, x19" : "=r"(runtime));
+#endif
+    return runtime;
+}
 
 static void coroutine_enqueue(wasmos_native_coroutine_runtime_t* runtime,
                               wasmos_native_coroutine_t* coroutine) {
@@ -90,11 +112,10 @@ static void coroutine_trampoline(void) {
     /* The scheduler publishes current before entering this freshly prepared
      * stack, so no per-stack bootstrap object is needed. */
     __asm__ volatile("" : : : "memory");
-    runtime = NULL;
+    runtime = coroutine_current_runtime();
     /* The current coroutine is recoverable through the entry's record. The
-     * trampoline receives it in r12, a callee-saved register restored by the
-     * context switch before control reaches this function. */
-    __asm__ volatile("mov %%r12, %0" : "=r"(runtime));
+     * trampoline receives its runtime in a callee-saved register restored by
+     * the context switch before control reaches this function. */
     coroutine = runtime ? runtime->current : NULL;
     if (!coroutine || !coroutine->entry) {
         __builtin_trap();
@@ -139,16 +160,28 @@ int wasmos_native_coroutine_spawn(wasmos_native_coroutine_runtime_t* runtime,
         return -1;
     }
     top = ((uintptr_t)stack_base + stack_size) & ~(uintptr_t)0xFu;
+#if defined(__x86_64__)
     if (top <= (uintptr_t)stack_base + sizeof(uintptr_t)) {
         return -1;
     }
     top -= sizeof(uintptr_t);
     *(uintptr_t*)top = 0;
+#elif defined(__aarch64__)
+    if (top <= (uintptr_t)stack_base) {
+        return -1;
+    }
+#endif
 
     coroutine->context = (wasmos_native_coroutine_context_t){0};
+#if defined(__x86_64__)
     coroutine->context.rsp = top;
     coroutine->context.r12 = (uintptr_t)runtime;
     coroutine->context.rip = (uintptr_t)coroutine_trampoline;
+#elif defined(__aarch64__)
+    coroutine->context.sp = top;
+    coroutine->context.x19 = (uintptr_t)runtime;
+    coroutine->context.x30 = (uintptr_t)coroutine_trampoline;
+#endif
     coroutine->runtime = runtime;
     coroutine->entry = entry;
     coroutine->arg = arg;
@@ -232,7 +265,7 @@ void wasmos_native_coroutine_yield(void) {
     wasmos_native_coroutine_runtime_t* runtime;
     wasmos_native_coroutine_t* coroutine;
 
-    __asm__ volatile("mov %%r12, %0" : "=r"(runtime));
+    runtime = coroutine_current_runtime();
     coroutine = runtime ? runtime->current : NULL;
     if (!coroutine || coroutine->state != WASMOS_NATIVE_COROUTINE_RUNNING) {
         __builtin_trap();
@@ -246,7 +279,7 @@ void wasmos_native_coroutine_exit(int32_t result) {
     wasmos_native_coroutine_runtime_t* runtime;
     wasmos_native_coroutine_t* coroutine;
 
-    __asm__ volatile("mov %%r12, %0" : "=r"(runtime));
+    runtime = coroutine_current_runtime();
     coroutine = runtime ? runtime->current : NULL;
     if (!coroutine || coroutine->state != WASMOS_NATIVE_COROUTINE_RUNNING) {
         __builtin_trap();
@@ -319,7 +352,7 @@ int wasmos_future_await(wasmos_future_t* future, uintptr_t* out_value) {
         return -1;
     }
     if (future->state == WASMOS_FUTURE_PENDING) {
-        __asm__ volatile("mov %%r12, %0" : "=r"(runtime));
+        runtime = coroutine_current_runtime();
         coroutine = runtime ? runtime->current : NULL;
         if (!coroutine || coroutine->state != WASMOS_NATIVE_COROUTINE_RUNNING) {
             return -1;

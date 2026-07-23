@@ -2001,15 +2001,23 @@ add_custom_target(run-kernel-unit-tests
 )
 
 if(CMAKE_HOST_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
+  set(NATIVE_COROUTINE_HOST_ASM ${LIBSYS_NATIVE_DIR}/coroutine_native_x86_64.S)
+  set(NATIVE_COROUTINE_HOST_LABEL "x86_64")
+elseif(CMAKE_HOST_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64|ARM64)$")
+  set(NATIVE_COROUTINE_HOST_ASM ${LIBSYS_NATIVE_DIR}/coroutine_native_aarch64.S)
+  set(NATIVE_COROUTINE_HOST_LABEL "aarch64")
+endif()
+
+if(DEFINED NATIVE_COROUTINE_HOST_ASM)
   add_custom_command(TARGET run-kernel-unit-tests POST_BUILD
     COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
             -I${LIBSYS_NATIVE_DIR}/include
             ${CMAKE_SOURCE_DIR}/tests/unit/test_native_coroutine.c
             ${LIBSYS_NATIVE_DIR}/coroutine_native.c
-            ${LIBSYS_NATIVE_DIR}/coroutine_native_x86_64.S
+            ${NATIVE_COROUTINE_HOST_ASM}
             -o ${BUILD_DIR}/test_native_coroutine
     COMMAND ${BUILD_DIR}/test_native_coroutine
-    COMMENT "Running native x86_64 coroutine unit tests"
+    COMMENT "Running native ${NATIVE_COROUTINE_HOST_LABEL} coroutine unit tests"
     VERBATIM)
 else()
   add_custom_command(TARGET run-kernel-unit-tests POST_BUILD

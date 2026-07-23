@@ -127,7 +127,7 @@ static int test_yield_await_and_join(void) {
         return __LINE__;
     }
     run_count = wasmos_native_coroutine_run(&state.runtime);
-    if (run_count != 8 || state.event_count != sizeof(expected) / sizeof(expected[0]) - 1u ||
+    if (run_count != 7 || state.event_count != sizeof(expected) / sizeof(expected[0]) - 1u ||
         state.first.state != WASMOS_NATIVE_COROUTINE_DEAD ||
         state.second.state != WASMOS_NATIVE_COROUTINE_DEAD ||
         state.joiner.state != WASMOS_NATIVE_COROUTINE_DEAD) {

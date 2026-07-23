@@ -2640,8 +2640,8 @@ counter in caller-owned state. When `wasmos_future_await()` returns
 return `WASMOS_WASM_TASK_YIELDED`; after settlement the scheduler invokes it
 again. A task returns zero with an output value to resolve its completion
 future, or a negative status to reject it. This is the portable C substrate
-that later Zig, Rust, Go, and AssemblyScript wrappers will hide behind their
-own async/state-machine mechanisms.
+that language wrappers bind directly while retaining their own task-state
+machines.
 
 Future callbacks are always queued through `wasmos_wasm_coroutine_run()`;
 neither registration nor promise settlement invokes user callbacks inline.
@@ -2674,5 +2674,13 @@ deferred chaining, race, and all.
 now compile and link `coroutine_wasm.c`; the host Zig wrapper test covers
 task wakeup/join, deferred chaining, and race behavior against that C core.
 
+`src/libc/go/coroutine.go` provides the matching TinyGo caller-storage surface.
+`Runtime`, `Future`, `Promise`, `Coroutine`, `Continuation`, and `FutureGroup`
+bind to the C ABI through TinyGo extern declarations; a custom TinyGo wasm
+target compiles and links the same `coroutine_wasm.c` source into Go modules.
+Go has no portable C function-pointer value, so `Coroutine.Start` and
+`Future.Then` take a wasm table-address `Callback`; language-level callback
+adapters remain future work.
+
 WASM IPC-future adaptation, deadlines, cancellation, CQ dispatch, parallel
-workers, and language wrappers remain deferred.
+workers, AssemblyScript support, and Go callback adapters remain deferred.

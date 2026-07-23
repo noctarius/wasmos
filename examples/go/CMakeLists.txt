@@ -17,6 +17,17 @@ if (GO_ENABLE)
 endif ()
 
 if (GO_AVAILABLE)
+  execute_process(
+    COMMAND ${TINYGO_EXECUTABLE} env TINYGOROOT
+    OUTPUT_VARIABLE TINYGO_ROOT
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+  )
+  if (NOT TINYGO_ROOT)
+    message(FATAL_ERROR "TinyGo did not report TINYGOROOT")
+  endif ()
+  file(RELATIVE_PATH TINYGO_COROUTINE_C
+    "${TINYGO_ROOT}" "${LIBSYS_WASM_DIR}/coroutine_wasm.c")
+  configure_file(${LIBC_DIR}/go/wasmos-tinygo.json.in ${BUILD_DIR}/wasmos-tinygo.json @ONLY)
   set(WASM_HELLO_GO_STAGE_DIR ${BUILD_DIR}/go_hello_src)
   set(WASM_HELLO_GO_LIBC_SRC ${LIBC_DIR}/go/wasmos.go)
   add_custom_command(
@@ -25,10 +36,11 @@ if (GO_AVAILABLE)
     COMMAND ${CMAKE_COMMAND} -E make_directory ${WASM_HELLO_GO_STAGE_DIR}
     COMMAND ${CMAKE_COMMAND} -E copy_if_different ${WASM_HELLO_GO_SRC} ${WASM_HELLO_GO_STAGE_DIR}/hello_go.go
     COMMAND ${CMAKE_COMMAND} -E copy_if_different ${WASM_HELLO_GO_LIBC_SRC} ${WASM_HELLO_GO_STAGE_DIR}/wasmos.go
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different ${LIBC_DIR}/go/coroutine.go ${WASM_HELLO_GO_STAGE_DIR}/coroutine.go
     COMMAND ${CMAKE_COMMAND} -E env GO111MODULE=off WASMOPT=${WASMOPT_EXECUTABLE}
             ${TINYGO_EXECUTABLE}
             build
-            -target=wasm
+            -target=${BUILD_DIR}/wasmos-tinygo.json
             -opt=z
             -no-debug
             -panic=trap
@@ -36,7 +48,8 @@ if (GO_AVAILABLE)
             -gc=leaking
             -o ${WASM_HELLO_GO_WASM}
             ./go_hello_src
-    DEPENDS ${WASM_HELLO_GO_SRC} ${WASM_HELLO_GO_LIBC_SRC}
+    DEPENDS ${WASM_HELLO_GO_SRC} ${WASM_HELLO_GO_LIBC_SRC} ${LIBC_DIR}/go/coroutine.go
+            ${LIBC_DIR}/go/wasmos-tinygo.json.in ${LIBSYS_WASM_DIR}/coroutine_wasm.c
     WORKING_DIRECTORY ${BUILD_DIR}
     COMMENT "Building wasm hello-go module"
     VERBATIM

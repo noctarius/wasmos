@@ -55,8 +55,9 @@ Out of scope for initial rollout:
   registration, `net.ifc` discovery/subscription, and `hrng` lookup are
   asynchronous requests resolved by its control endpoint. The dedicated
   net-driver reply endpoint is a native event loop: each bounded interface slot
-  owns its `NETDRV_IPC_LINK_GET` future, coroutine, and stack, so independent
-  link requests suspend independently. RX/link notifications and RX/TX
+  owns its `NETDRV_IPC_LINK_GET` future, coroutine, stack, lwIP netif, and
+  driver RX/TX transfer-buffer state, so independent link requests suspend and
+  frame paths progress independently. RX/link notifications and RX/TX
   state-machine replies remain registered-handler/default-dispatch paths.
   Startup does not perform blocking PM or driver request/reply calls.
 - IPC opcode space 0x000–0x9FF is allocated; networking opcodes begin at 0xA00.

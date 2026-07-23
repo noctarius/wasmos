@@ -54,6 +54,12 @@ typedef enum {
     NET_IFC_NETIF_UP
 } net_ifc_state_t;
 #define NET_STACK_MAX_INTERFACES 8u
+#define NET_STACK_TX_QUEUE_DEPTH 4u
+typedef struct {
+    uint32_t buffer_id;
+    uint8_t* buffer;
+    uint8_t pending;
+} net_tx_slot_t;
 typedef struct {
     uint8_t in_use;
     uint8_t link_up;
@@ -62,6 +68,13 @@ typedef struct {
     uint32_t instance;
     net_ifc_state_t state;
     struct netif netif;
+    uint32_t rx_buffer_id;
+    uint8_t* rx_buffer;
+    net_tx_slot_t tx_slots[NET_STACK_TX_QUEUE_DEPTH];
+    uint8_t rx_pending;
+    uint32_t rx_poll_next_tick;
+    uint8_t netif_ready;
+    uint8_t netif_installed;
     uint8_t link_get_pending;
     uint8_t link_get_retire;
     wasmos_native_coroutine_t link_get_coroutine;
@@ -79,20 +92,6 @@ static uint8_t* g_netifc_subscribe_buffer = NULL;
 static uint8_t g_netifc_lookup_pending = 0u;
 static uint8_t g_netifc_subscribe_pending = 0u;
 static uint8_t g_netifc_subscribed = 0u;
-static uint32_t g_rx_buffer_id = 0u;
-static uint8_t* g_rx_buffer = NULL;
-/* A bounded queue decouples lwIP linkoutput from one driver request. */
-#define NET_STACK_TX_QUEUE_DEPTH 4u
-typedef struct {
-    uint32_t buffer_id;
-    uint8_t* buffer;
-    uint8_t pending;
-} net_tx_slot_t;
-static net_tx_slot_t g_tx_slots[NET_STACK_TX_QUEUE_DEPTH];
-static uint8_t g_rx_pending = 0u;
-static uint32_t g_rx_poll_next_tick = 0u;
-static uint8_t g_netif_ready = 0u;
-static uint8_t g_netif_installed = 0u;
 static uint8_t g_registered = 0u;
 static uint8_t g_register_pending = 0u;
 static uint8_t g_netdrv_lookup_pending = 0u;
@@ -153,9 +152,10 @@ static uint32_t g_dhcp_started_tick = 0u;
 static uint8_t g_dhcp_timeout_logged = 0u;
 
 static err_t net_stack_linkoutput(struct netif* netif, struct pbuf* p);
-static void net_stack_start_rx_poll(uint8_t immediate);
+static void net_stack_start_rx_poll(net_interface_slot_t* interface, uint8_t immediate);
 static void net_stack_begin_registration(void);
 static void net_stack_try_bind_virtio(void);
+static void net_stack_try_bind_interface(net_interface_slot_t* slot);
 static void net_stack_try_discover_interfaces(void);
 static void net_stack_unbind_interface(uint32_t endpoint);
 static void net_stack_reap_interfaces(void);
@@ -520,6 +520,22 @@ static net_socket_t* net_stack_find_accept_slot(uint32_t listener_id) {
     return NULL;
 }
 
+static net_interface_slot_t* net_stack_interface_from_netif(struct netif* netif) {
+    if (netif == NULL) {
+        return NULL;
+    }
+    for (uint32_t i = 0u; i < NET_STACK_MAX_INTERFACES; ++i) {
+        if (g_interfaces[i].in_use && &g_interfaces[i].netif == netif) {
+            return &g_interfaces[i];
+        }
+    }
+    return NULL;
+}
+
+static net_interface_slot_t* net_stack_interface_from_endpoint(uint32_t endpoint) {
+    return net_stack_interface_slot(endpoint, 0u, 0u);
+}
+
 /* An inbound connection completed its handshake on a listening socket. Pair it
  * with a posted accept slot (its client-owned rings) and answer the deferred
  * NET_IPC_ACCEPT with the new socket id. With no slot posted, reject the
@@ -567,18 +583,19 @@ static err_t net_stack_netif_init(struct netif* netif) {
 }
 
 static err_t net_stack_linkoutput(struct netif* netif, struct pbuf* p) {
+    net_interface_slot_t* interface = net_stack_interface_from_netif(netif);
     nd_ipc_message_t request;
     uint16_t copied = 0u;
     uint32_t request_id;
     net_tx_slot_t* slot = NULL;
     struct pbuf* q;
-    (void)netif;
-    if (p == NULL || p->tot_len > NET_STACK_FRAME_BYTES || g_netdrv_endpoint == 0u) {
+    if (p == NULL || p->tot_len > NET_STACK_FRAME_BYTES || interface == NULL ||
+        interface->endpoint == 0u) {
         return ERR_BUF;
     }
     for (uint32_t i = 0u; i < NET_STACK_TX_QUEUE_DEPTH; ++i) {
-        if (!g_tx_slots[i].pending && g_tx_slots[i].buffer != NULL) {
-            slot = &g_tx_slots[i];
+        if (!interface->tx_slots[i].pending && interface->tx_slots[i].buffer != NULL) {
+            slot = &interface->tx_slots[i];
             break;
         }
     }
@@ -592,100 +609,103 @@ static err_t net_stack_linkoutput(struct netif* netif, struct pbuf* p) {
         }
         copied = (uint16_t)(copied + q->len);
     }
-    request_id = NET_STACK_TX_REQUEST_BASE + (uint32_t)(slot - g_tx_slots);
+    request_id = NET_STACK_TX_REQUEST_BASE + (uint32_t)(slot - interface->tx_slots);
     request.type = NETDRV_IPC_TX_FRAME;
     request.source = g_netdrv_reply_endpoint;
-    request.destination = g_netdrv_endpoint;
+    request.destination = interface->endpoint;
     request.request_id = request_id;
     request.arg0 = copied;
     request.arg1 = slot->buffer_id;
     request.arg2 = 0u;
     request.arg3 = 0u;
-    if (g_api->ipc_send(g_api->sched_current_pid(), g_netdrv_endpoint, &request) != 0) {
+    if (g_api->ipc_send(g_api->sched_current_pid(), interface->endpoint, &request) != 0) {
         return ERR_IF;
     }
     slot->pending = 1u;
     return ERR_OK;
 }
 
-static void net_stack_deliver_rx(uint32_t len) {
+static void net_stack_deliver_rx(net_interface_slot_t* interface, uint32_t len) {
     struct pbuf* p;
-    if (len == 0u || len > NET_STACK_FRAME_BYTES) {
+    if (interface == NULL || len == 0u || len > NET_STACK_FRAME_BYTES) {
         return;
     }
     p = pbuf_alloc(PBUF_RAW, (u16_t)len, PBUF_POOL);
     if (p == NULL) {
         return;
     }
-    if (pbuf_take(p, g_rx_buffer, (u16_t)len) != ERR_OK) {
+    if (pbuf_take(p, interface->rx_buffer, (u16_t)len) != ERR_OK) {
         pbuf_free(p);
         return;
     }
-    if (len >= 14u && g_rx_buffer[12] == 0x08u && g_rx_buffer[13] == 0x06u &&
+    if (len >= 14u && interface->rx_buffer[12] == 0x08u && interface->rx_buffer[13] == 0x06u &&
         g_api->console_write != NULL) {
         static const char msg[] = "[net-stack] arp rx\n";
         g_api->console_write(msg, (int)(sizeof(msg) - 1));
     }
-    (void)ethernet_input(p, &g_netif);
+    (void)ethernet_input(p, &interface->netif);
 }
 
-static void net_stack_start_rx_poll(uint8_t immediate) {
+static void net_stack_start_rx_poll(net_interface_slot_t* interface, uint8_t immediate) {
     nd_ipc_message_t request;
     uint32_t now;
-    if (g_rx_pending || g_netdrv_endpoint == 0u || g_rx_buffer_id == 0u) {
+    if (interface == NULL || interface->rx_pending || interface->endpoint == 0u ||
+        interface->rx_buffer_id == 0u) {
         return;
     }
     now = g_api->sched_ticks != NULL ? g_api->sched_ticks() : 0u;
-    if (!immediate && g_api->sched_ticks != NULL && (int32_t)(now - g_rx_poll_next_tick) < 0) {
+    if (!immediate && g_api->sched_ticks != NULL &&
+        (int32_t)(now - interface->rx_poll_next_tick) < 0) {
         return;
     }
     request.type = NETDRV_IPC_RX_POLL;
     request.source = g_netdrv_reply_endpoint;
-    request.destination = g_netdrv_endpoint;
+    request.destination = interface->endpoint;
     request.request_id = NET_STACK_RX_POLL_REQUEST_ID;
-    request.arg0 = g_rx_buffer_id;
+    request.arg0 = interface->rx_buffer_id;
     request.arg1 = 0u;
     request.arg2 = 0u;
     request.arg3 = 0u;
-    if (g_api->ipc_send(g_api->sched_current_pid(), g_netdrv_endpoint, &request) == 0) {
-        g_rx_pending = 1u;
-        g_rx_poll_next_tick = now + NET_STACK_RX_POLL_INTERVAL_TICKS;
+    if (g_api->ipc_send(g_api->sched_current_pid(), interface->endpoint, &request) == 0) {
+        interface->rx_pending = 1u;
+        interface->rx_poll_next_tick = now + NET_STACK_RX_POLL_INTERVAL_TICKS;
     }
 }
 
-static void net_stack_finish_bind(uint8_t link_up) {
-    if (!g_netif_installed) {
+static void net_stack_finish_bind(net_interface_slot_t* interface, uint8_t link_up) {
+    if (interface == NULL) {
+        return;
+    }
+    if (!interface->netif_installed) {
         ip4_addr_t zero;
         IP4_ADDR(&zero, 0, 0, 0, 0);
         /* Address is assigned later from /boot/system/net/interfaces (static)
          * or via DHCP; bring the netif up unconfigured for now so DHCP has an
          * up, link-up interface to exchange DISCOVER/OFFER on. */
-        if (netif_add(&g_netif, &zero, &zero, &zero, NULL, net_stack_netif_init, ethernet_input) ==
+        if (netif_add(&interface->netif, &zero, &zero, &zero, NULL, net_stack_netif_init, ethernet_input) ==
             NULL) {
             return;
         }
         for (uint32_t i = 0u; i < ETH_HWADDR_LEN; ++i) {
-            g_netif.hwaddr[i] = g_rx_buffer[i];
+            interface->netif.hwaddr[i] = interface->rx_buffer[i];
         }
-        netif_set_default(&g_netif);
-        netif_set_status_callback(&g_netif, net_stack_netif_status_cb);
-        g_netif_installed = 1u;
+        if (g_active_ifc == interface)
+            netif_set_default(&interface->netif);
+        netif_set_status_callback(&interface->netif, net_stack_netif_status_cb);
+        interface->netif_installed = 1u;
     }
-    netif_set_up(&g_netif);
+    netif_set_up(&interface->netif);
     if (link_up)
-        netif_set_link_up(&g_netif);
+        netif_set_link_up(&interface->netif);
     else
-        netif_set_link_down(&g_netif);
-    g_netif_ready = 1u;
-    g_ifc_state = NET_IFC_NETIF_UP;
-    if (g_active_ifc != NULL) {
-        g_active_ifc->state = NET_IFC_NETIF_UP;
-        g_active_ifc->link_up = link_up;
-    }
+        netif_set_link_down(&interface->netif);
+    interface->netif_ready = 1u;
+    interface->state = NET_IFC_NETIF_UP;
+    interface->link_up = link_up;
     /* Read the interface config only when the interface comes up; the "ready"
      * banner and gateway ARP are emitted from the status callback once an
      * address is actually assigned (static apply or DHCP bind). */
-    if (link_up)
+    if (link_up && g_active_ifc == interface)
         net_stack_kick_ifcfg_load();
 }
 
@@ -755,7 +775,7 @@ static void net_stack_netif_status_cb(struct netif* netif) {
 }
 
 static void net_stack_apply_ifcfg(const net_ifcfg_t* cfg) {
-    if (cfg == NULL || !g_netif_installed) {
+    if (cfg == NULL || g_active_ifc == NULL || !g_active_ifc->netif_installed) {
         return;
     }
     if (cfg->dhcp) {
@@ -932,9 +952,7 @@ static void net_stack_link_get_coroutine(void* arg) {
     }
     reply = (nd_ipc_message_t*)value;
     slot->link_get_pending = 0u;
-    if (slot == g_active_ifc && slot->endpoint == g_netdrv_endpoint) {
-        net_stack_finish_bind(reply->arg0 != 0u);
-    }
+    net_stack_finish_bind(slot, reply->arg0 != 0u);
 }
 
 static void net_stack_start_lookup_coroutine(void) {
@@ -1032,45 +1050,46 @@ static void net_stack_reap_interfaces(void) {
 }
 
 static void net_stack_unbind_interface(uint32_t endpoint) {
-    net_interface_slot_t* slot = g_active_ifc;
+    net_interface_slot_t* slot = net_stack_interface_from_endpoint(endpoint);
+    uint8_t was_active;
 
-    if (endpoint != g_netdrv_endpoint)
+    if (slot == NULL)
         return;
-    if (g_netif_ready)
-        netif_set_down(&g_netif);
-    g_netif_ready = 0u;
-    /* Force a fresh interface-config read when the interface next comes up. */
-    g_addr_ready = 0u;
-    g_ifcfg_kicked = 0u;
-    g_ifcfg_loaded = 0u;
-    g_dhcp_active = 0u;
-    g_dhcp_timeout_logged = 0u;
-    if (slot != NULL)
-        wasmos_sys_native_ipc_future_cancel(&slot->link_get_future, -1);
-    g_netdrv_endpoint = 0u;
-    g_rx_pending = 0u;
-    g_rx_poll_next_tick = 0u;
-    if (g_rx_buffer_id != 0u)
-        (void)g_api->xfer_buffer_release(g_rx_buffer_id);
-    g_rx_buffer_id = 0u;
-    g_rx_buffer = NULL;
+    was_active = slot == g_active_ifc;
+    if (slot->netif_ready)
+        netif_set_down(&slot->netif);
+    slot->netif_ready = 0u;
+    wasmos_sys_native_ipc_future_cancel(&slot->link_get_future, -1);
+    slot->rx_pending = 0u;
+    slot->rx_poll_next_tick = 0u;
+    if (slot->rx_buffer_id != 0u)
+        (void)g_api->xfer_buffer_release(slot->rx_buffer_id);
+    slot->rx_buffer_id = 0u;
+    slot->rx_buffer = NULL;
     for (uint32_t i = 0u; i < NET_STACK_TX_QUEUE_DEPTH; ++i) {
-        if (g_tx_slots[i].buffer_id != 0u)
-            (void)g_api->xfer_buffer_release(g_tx_slots[i].buffer_id);
-        g_tx_slots[i].buffer_id = 0u;
-        g_tx_slots[i].buffer = NULL;
-        g_tx_slots[i].pending = 0u;
+        if (slot->tx_slots[i].buffer_id != 0u)
+            (void)g_api->xfer_buffer_release(slot->tx_slots[i].buffer_id);
+        slot->tx_slots[i].buffer_id = 0u;
+        slot->tx_slots[i].buffer = NULL;
+        slot->tx_slots[i].pending = 0u;
     }
-    g_ifc_state = NET_IFC_DISCOVERED;
-    if (slot != NULL) {
-        if (slot->link_get_coroutine.state == WASMOS_NATIVE_COROUTINE_NEW ||
-            slot->link_get_coroutine.state == WASMOS_NATIVE_COROUTINE_DEAD) {
-            __builtin_memset(slot, 0, sizeof(*slot));
-        } else {
-            slot->link_get_retire = 1u;
-        }
+    slot->state = NET_IFC_DISCOVERED;
+    if (was_active) {
+        /* Force a fresh active-interface config read on replacement. */
+        g_addr_ready = 0u;
+        g_ifcfg_kicked = 0u;
+        g_ifcfg_loaded = 0u;
+        g_dhcp_active = 0u;
+        g_dhcp_timeout_logged = 0u;
+        g_netdrv_endpoint = 0u;
+        g_active_ifc = NULL;
     }
-    g_active_ifc = NULL;
+    if (slot->link_get_coroutine.state == WASMOS_NATIVE_COROUTINE_NEW ||
+        slot->link_get_coroutine.state == WASMOS_NATIVE_COROUTINE_DEAD) {
+        __builtin_memset(slot, 0, sizeof(*slot));
+    } else {
+        slot->link_get_retire = 1u;
+    }
 }
 
 static void net_stack_registered(void) {
@@ -1163,17 +1182,11 @@ static void net_stack_try_seed_random(void) {
     g_hrng_lookup_pending = 1u;
 }
 
-static void net_stack_try_bind_virtio(void) {
-    net_interface_slot_t* slot = g_active_ifc;
-
-    if (g_netif_ready) {
+static void net_stack_try_bind_interface(net_interface_slot_t* slot) {
+    if (slot != NULL && slot->netif_ready) {
         return;
     }
-    if (g_netdrv_endpoint == 0u) {
-        net_stack_start_lookup_coroutine();
-        return;
-    }
-    if (slot == NULL || slot->endpoint != g_netdrv_endpoint || slot->link_get_pending) {
+    if (slot == NULL || slot->endpoint == 0u || slot->link_get_pending) {
         return;
     }
     /* Cancellation wakes the awaiting coroutine on the next runtime turn.
@@ -1183,45 +1196,53 @@ static void net_stack_try_bind_virtio(void) {
         slot->link_get_coroutine.state != WASMOS_NATIVE_COROUTINE_DEAD) {
         return;
     }
-    if (g_rx_buffer == NULL) {
-        g_rx_buffer = (uint8_t*)g_api->xfer_buffer_acquire(ND_BUFFER_KIND_XFER,
-                                                           NET_STACK_FRAME_BYTES, &g_rx_buffer_id);
-        if (g_rx_buffer == NULL ||
-            g_api->xfer_buffer_borrow(g_netdrv_endpoint, g_rx_buffer_id,
+    if (slot->rx_buffer == NULL) {
+        slot->rx_buffer = (uint8_t*)g_api->xfer_buffer_acquire(ND_BUFFER_KIND_XFER,
+                                                                 NET_STACK_FRAME_BYTES,
+                                                                 &slot->rx_buffer_id);
+        if (slot->rx_buffer == NULL ||
+            g_api->xfer_buffer_borrow(slot->endpoint, slot->rx_buffer_id,
                                       ND_BUFFER_BORROW_READ | ND_BUFFER_BORROW_WRITE) < 0) {
             return;
         }
         for (uint32_t i = 0u; i < NET_STACK_TX_QUEUE_DEPTH; ++i) {
-            g_tx_slots[i].buffer = (uint8_t*)g_api->xfer_buffer_acquire(
-                ND_BUFFER_KIND_XFER, NET_STACK_FRAME_BYTES, &g_tx_slots[i].buffer_id);
-            if (g_tx_slots[i].buffer == NULL ||
-                g_api->xfer_buffer_borrow(g_netdrv_endpoint, g_tx_slots[i].buffer_id,
+            slot->tx_slots[i].buffer = (uint8_t*)g_api->xfer_buffer_acquire(
+                ND_BUFFER_KIND_XFER, NET_STACK_FRAME_BYTES, &slot->tx_slots[i].buffer_id);
+            if (slot->tx_slots[i].buffer == NULL ||
+                g_api->xfer_buffer_borrow(slot->endpoint, slot->tx_slots[i].buffer_id,
                                           ND_BUFFER_BORROW_READ | ND_BUFFER_BORROW_WRITE) < 0) {
                 return;
             }
         }
-        g_ifc_state = NET_IFC_BUFFERS_GRANTED;
-        if (g_active_ifc != NULL)
-            g_active_ifc->state = g_ifc_state;
+        slot->state = NET_IFC_BUFFERS_GRANTED;
     }
     wasmos_sys_native_ipc_future_init(&slot->link_get_future, net_stack_link_get_reply_status,
                                       NULL);
-    if (!wasmos_sys_native_ipc_future_send(&g_netdrv_loop, &slot->link_get_future,
-                                           g_netdrv_endpoint,
+    if (!wasmos_sys_native_ipc_future_send(&g_netdrv_loop, &slot->link_get_future, slot->endpoint,
                                            g_netdrv_reply_endpoint, NETDRV_IPC_LINK_GET,
-                                           g_rx_buffer_id, 0u, 0u, 0u, NULL)) {
+                                           slot->rx_buffer_id, 0u, 0u, 0u, NULL)) {
         return;
     }
     slot->link_get_pending = 1u;
-    g_ifc_state = NET_IFC_LINK_QUERIED;
-    if (g_active_ifc != NULL)
-        g_active_ifc->state = g_ifc_state;
+    slot->state = NET_IFC_LINK_QUERIED;
     if (!g_control_runtime || !wasmos_async_start(g_control_runtime, &slot->link_get_coroutine,
                                                    slot->link_get_stack,
                                                    sizeof(slot->link_get_stack),
                                                    net_stack_link_get_coroutine, slot)) {
         wasmos_sys_native_ipc_future_cancel(&slot->link_get_future, -1);
         slot->link_get_pending = 0u;
+    }
+}
+
+static void net_stack_try_bind_virtio(void) {
+    if (g_netdrv_endpoint == 0u) {
+        net_stack_start_lookup_coroutine();
+        return;
+    }
+    for (uint32_t i = 0u; i < NET_STACK_MAX_INTERFACES; ++i) {
+        if (g_interfaces[i].in_use && !g_interfaces[i].link_get_retire) {
+            net_stack_try_bind_interface(&g_interfaces[i]);
+        }
     }
 }
 
@@ -1495,7 +1516,8 @@ static void net_stack_handle_ifaddr_add(const nd_ipc_message_t* request) {
         net_stack_reply_error(request, NET_STATUS_INVALID);
         return;
     }
-    if (!g_netif_installed || rec->if_index != (uint32_t)net_stack_active_index()) {
+    if (g_active_ifc == NULL || !g_active_ifc->netif_installed ||
+        rec->if_index != (uint32_t)net_stack_active_index()) {
         (void)g_api->xfer_buffer_unmap_borrowed(request->arg1);
         net_stack_reply_error(request, NET_STATUS_NOT_READY);
         return;
@@ -1516,7 +1538,8 @@ static void net_stack_handle_ifaddr_add(const nd_ipc_message_t* request) {
 static void net_stack_handle_if_set_state(const nd_ipc_message_t* request) {
     /* arg0 = if_index, arg1 = 1 (up) / 0 (down). Administrative state only;
      * link state is driven by the driver's LINK_NOTIFY, not this. */
-    if (!g_netif_installed || request->arg0 != (uint32_t)net_stack_active_index()) {
+    if (g_active_ifc == NULL || !g_active_ifc->netif_installed ||
+        request->arg0 != (uint32_t)net_stack_active_index()) {
         net_stack_reply_error(request, NET_STATUS_NOT_READY);
         return;
     }
@@ -1530,7 +1553,8 @@ static void net_stack_handle_if_set_state(const nd_ipc_message_t* request) {
 
 static void net_stack_handle_ifaddr_del(const nd_ipc_message_t* request) {
     ip4_addr_t zero;
-    if (!g_netif_installed || request->arg0 != (uint32_t)net_stack_active_index()) {
+    if (g_active_ifc == NULL || !g_active_ifc->netif_installed ||
+        request->arg0 != (uint32_t)net_stack_active_index()) {
         net_stack_reply_error(request, NET_STATUS_NOT_READY);
         return;
     }
@@ -1546,7 +1570,8 @@ static void net_stack_handle_ifaddr_del(const nd_ipc_message_t* request) {
 
 static void net_stack_handle_dhcp_set(const nd_ipc_message_t* request) {
     /* arg0 = if_index, arg1 = 1 (start) / 0 (stop). */
-    if (!g_netif_installed || request->arg0 != (uint32_t)net_stack_active_index()) {
+    if (g_active_ifc == NULL || !g_active_ifc->netif_installed ||
+        request->arg0 != (uint32_t)net_stack_active_index()) {
         net_stack_reply_error(request, NET_STATUS_NOT_READY);
         return;
     }
@@ -1596,16 +1621,17 @@ static void net_stack_handle_ifaddr_list(const nd_ipc_message_t* request) {
         out[count].version = NET_IFADDR_RECORD_VERSION;
         out[count].if_index = i;
         out[count].flags = g_interfaces[i].link_up ? NET_IFADDR_FLAG_LINK_UP : 0u;
-        if (&g_interfaces[i] == g_active_ifc && g_netif_installed) {
-            if (netif_is_up(&g_netif)) {
+        if (g_interfaces[i].netif_installed) {
+            if (netif_is_up(&g_interfaces[i].netif)) {
                 out[count].flags |= NET_IFADDR_FLAG_ADMIN_UP;
             }
-            if (g_dhcp_active) {
+            if (&g_interfaces[i] == g_active_ifc && g_dhcp_active) {
                 out[count].flags |= NET_IFADDR_FLAG_DHCP;
             }
-            out[count].addr_v4 = ip4_addr_get_u32(ip_2_ip4(&g_netif.ip_addr));
-            out[count].netmask_v4 = ip4_addr_get_u32(ip_2_ip4(&g_netif.netmask));
-            out[count].gateway_v4 = ip4_addr_get_u32(ip_2_ip4(&g_netif.gw));
+            out[count].addr_v4 = ip4_addr_get_u32(ip_2_ip4(&g_interfaces[i].netif.ip_addr));
+            out[count].netmask_v4 =
+                ip4_addr_get_u32(ip_2_ip4(&g_interfaces[i].netif.netmask));
+            out[count].gateway_v4 = ip4_addr_get_u32(ip_2_ip4(&g_interfaces[i].netif.gw));
         } else {
             out[count].addr_v4 = 0u;
             out[count].netmask_v4 = 0u;
@@ -1618,6 +1644,7 @@ static void net_stack_handle_ifaddr_list(const nd_ipc_message_t* request) {
 }
 
 static void net_stack_dispatch(const nd_ipc_message_t* request) {
+    net_interface_slot_t* interface;
     int32_t status;
     if (request == NULL || request->source == 0u || request->source == 0xFFFFFFFFu) {
         return;
@@ -1626,27 +1653,28 @@ static void net_stack_dispatch(const nd_ipc_message_t* request) {
     /* Driver replies and notification hints share this endpoint with socket
      * traffic. Keep them asynchronous: a blocking receive here could consume
      * and lose a socket request queued behind a netdrv reply. */
-    if (request->source == g_netdrv_endpoint) {
+    interface = net_stack_interface_from_endpoint(request->source);
+    if (interface != NULL) {
         if (request->type == NETDRV_IPC_RX_FRAME_NOTIFY) {
-            net_stack_start_rx_poll(1u);
+            net_stack_start_rx_poll(interface, 1u);
             return;
         }
         if (request->request_id == NET_STACK_RX_POLL_REQUEST_ID) {
-            g_rx_pending = 0u;
+            interface->rx_pending = 0u;
             if (request->type == NETDRV_IPC_RESP) {
-                net_stack_deliver_rx(request->arg0);
+                net_stack_deliver_rx(interface, request->arg0);
                 /* Drain frames that the driver already queued without waiting
                  * for another notification. Empty responses wait for the
                  * timer cadence below, avoiding a request/reply spin loop. */
                 if (request->arg1 != 0u)
-                    net_stack_start_rx_poll(1u);
+                    net_stack_start_rx_poll(interface, 1u);
             }
             return;
         }
         if (request->request_id >= NET_STACK_TX_REQUEST_BASE) {
             uint32_t slot = request->request_id - NET_STACK_TX_REQUEST_BASE;
             if (slot < NET_STACK_TX_QUEUE_DEPTH)
-                g_tx_slots[slot].pending = 0u;
+                interface->tx_slots[slot].pending = 0u;
             return;
         }
         if (request->type == NETDRV_IPC_LINK_NOTIFY) {
@@ -1654,9 +1682,9 @@ static void net_stack_dispatch(const nd_ipc_message_t* request) {
              * never re-add, re-register, or rebind the interface. The console
              * line reflects the netif transition and gives runtime tests an
              * observable signal without a source-text assertion. */
-            if (g_netif_ready) {
+            if (interface->netif_ready) {
                 if (request->arg0 != 0u) {
-                    netif_set_link_up(&g_netif);
+                    netif_set_link_up(&interface->netif);
                     if (g_api->console_write != NULL) {
                         static const char msg[] = "[net-stack] link up\n";
                         g_api->console_write(msg, (int)(sizeof(msg) - 1));
@@ -1665,15 +1693,14 @@ static void net_stack_dispatch(const nd_ipc_message_t* request) {
                      * read yet, this up edge is the trigger to read it. */
                     net_stack_kick_ifcfg_load();
                 } else {
-                    netif_set_link_down(&g_netif);
+                    netif_set_link_down(&interface->netif);
                     if (g_api->console_write != NULL) {
                         static const char msg[] = "[net-stack] link down\n";
                         g_api->console_write(msg, (int)(sizeof(msg) - 1));
                     }
                 }
             }
-            if (g_active_ifc != NULL)
-                g_active_ifc->link_up = request->arg0 != 0u;
+            interface->link_up = request->arg0 != 0u;
             return;
         }
     }
@@ -1951,8 +1978,10 @@ int32_t wasmos_async_main(wasmos_driver_api_t* driver_api,
                 driver_api->console_write(msg, (int)(sizeof(msg) - 1));
             }
         }
-        if (g_netif_ready) {
-            net_stack_start_rx_poll(0u);
+        for (uint32_t i = 0u; i < NET_STACK_MAX_INTERFACES; ++i) {
+            if (g_interfaces[i].in_use && g_interfaces[i].netif_ready) {
+                net_stack_start_rx_poll(&g_interfaces[i], 0u);
+            }
         }
         (void)drained;
         wasmos_native_coroutine_yield();

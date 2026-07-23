@@ -27,6 +27,8 @@ if (GO_AVAILABLE)
   endif ()
   file(RELATIVE_PATH TINYGO_COROUTINE_C
     "${TINYGO_ROOT}" "${LIBSYS_WASM_DIR}/coroutine_wasm.c")
+  file(RELATIVE_PATH TINYGO_IPC_FUTURE_C
+    "${TINYGO_ROOT}" "${LIBSYS_WASM_DIR}/ipc_future_wasm.c")
   configure_file(${LIBC_DIR}/go/wasmos-tinygo.json.in ${BUILD_DIR}/wasmos-tinygo.json @ONLY)
   set(WASM_HELLO_GO_STAGE_DIR ${BUILD_DIR}/go_hello_src)
   set(WASM_HELLO_GO_LIBC_SRC ${LIBC_DIR}/go/wasmos.go)
@@ -50,6 +52,7 @@ if (GO_AVAILABLE)
             ./go_hello_src
     DEPENDS ${WASM_HELLO_GO_SRC} ${WASM_HELLO_GO_LIBC_SRC} ${LIBC_DIR}/go/coroutine.go
             ${LIBC_DIR}/go/wasmos-tinygo.json.in ${LIBSYS_WASM_DIR}/coroutine_wasm.c
+            ${LIBSYS_WASM_DIR}/ipc_future_wasm.c
     WORKING_DIRECTORY ${BUILD_DIR}
     COMMENT "Building wasm hello-go module"
     VERBATIM

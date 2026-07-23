@@ -1,8 +1,74 @@
 /* Runtime-behaviour tests for the WASM stackless coroutine/future core. */
 #include <stdint.h>
-#include <stdio.h>
 
-#include "wasmos/coroutine_wasm.h"
+#include "wasmos/libsys.h"
+
+static wasmos_ipc_message_t sent_message;
+static wasmos_ipc_message_t queued_message;
+static int queued_reply;
+static int send_status;
+
+int32_t wasmos_ipc_send(int32_t destination, int32_t source, int32_t type, int32_t request_id,
+                        int32_t arg0, int32_t arg1, int32_t arg2, int32_t arg3) {
+    sent_message = (wasmos_ipc_message_t){.type = type,
+                                          .request_id = request_id,
+                                          .arg0 = arg0,
+                                          .arg1 = arg1,
+                                          .arg2 = arg2,
+                                          .arg3 = arg3,
+                                          .source = source,
+                                          .destination = destination};
+    return send_status;
+}
+
+int32_t wasmos_ipc_drain(int32_t endpoint) {
+    (void)endpoint;
+    if (!queued_reply) {
+        return 0;
+    }
+    queued_reply = 0;
+    return 1;
+}
+
+int32_t wasmos_ipc_last_field(int32_t field) {
+    switch (field) {
+    case 0:
+        return queued_message.type;
+    case 1:
+        return queued_message.request_id;
+    case 2:
+        return queued_message.arg0;
+    case 3:
+        return queued_message.arg1;
+    case 4:
+        return queued_message.source;
+    case 5:
+        return queued_message.destination;
+    case 6:
+        return queued_message.arg2;
+    case 7:
+        return queued_message.arg3;
+    default:
+        return 0;
+    }
+}
+
+int32_t wasmos_ipc_select_create(void) {
+    return -1;
+}
+int32_t wasmos_ipc_select_add(int32_t select_id, int32_t endpoint) {
+    (void)select_id;
+    (void)endpoint;
+    return -1;
+}
+int32_t wasmos_ipc_select_wait(int32_t select_id) {
+    (void)select_id;
+    return -1;
+}
+int32_t wasmos_ipc_select_destroy(int32_t select_id) {
+    (void)select_id;
+    return 0;
+}
 
 typedef struct {
     int pc;
@@ -34,11 +100,13 @@ static int32_t waiter_task(void* user, uintptr_t* out_value) {
     if (state->pc == 0) {
         state->pc = 1;
         state->status = wasmos_future_await(state->future, &state->value);
-        if (state->status == WASMOS_WASM_AWAIT_PENDING) return WASMOS_WASM_TASK_YIELDED;
+        if (state->status == WASMOS_WASM_AWAIT_PENDING)
+            return WASMOS_WASM_TASK_YIELDED;
     }
     if (state->pc == 1) {
         state->status = wasmos_future_await(state->future, &state->value);
-        if (state->status == WASMOS_WASM_AWAIT_PENDING) return WASMOS_WASM_TASK_YIELDED;
+        if (state->status == WASMOS_WASM_AWAIT_PENDING)
+            return WASMOS_WASM_TASK_YIELDED;
         *out_value = state->value;
         return state->status;
     }
@@ -52,7 +120,8 @@ typedef struct {
 
 static int32_t resolver_task(void* user, uintptr_t* out_value) {
     resolver_state_t* state = user;
-    if (!wasmos_promise_resolve(state->promise, state->value)) return -1;
+    if (!wasmos_promise_resolve(state->promise, state->value))
+        return -1;
     *out_value = state->value;
     return 0;
 }
@@ -77,11 +146,10 @@ static int test_yield_await_and_join(void) {
         !wasmos_async_start(&runtime, &waiter, waiter_task, &waiter_state) ||
         !wasmos_async_start(&runtime, &resolver, resolver_task, &resolver_state) ||
         wasmos_wasm_coroutine_run(&runtime) != 5 || event_count != 2u || events[0] != 1u ||
-        events[1] != 3u || waiter.state != WASMOS_WASM_COROUTINE_DEAD ||
-        waiter_state.status != 0 || waiter_state.value != 42u ||
-        wasmos_wasm_coroutine_join(&first, &joined) != 0 || joined != 7 ||
-        !wasmos_future_poll(&waiter.completion, &status, &value) || status != 0 || value != 42u ||
-        wasmos_promise_resolve(&promise, 9u)) {
+        events[1] != 3u || waiter.state != WASMOS_WASM_COROUTINE_DEAD || waiter_state.status != 0 ||
+        waiter_state.value != 42u || wasmos_wasm_coroutine_join(&first, &joined) != 0 ||
+        joined != 7 || !wasmos_future_poll(&waiter.completion, &status, &value) || status != 0 ||
+        value != 42u || wasmos_promise_resolve(&promise, 9u)) {
         return __LINE__;
     }
     return 0;
@@ -101,7 +169,8 @@ static int32_t increment(void* user, uintptr_t value, uintptr_t* out_value) {
 static int32_t recover(void* user, int32_t status, uintptr_t* out_value) {
     callback_state_t* state = user;
     state->calls++;
-    if (status >= 0) return -1;
+    if (status >= 0)
+        return -1;
     *out_value = 55u;
     return 0;
 }
@@ -117,7 +186,8 @@ static int test_future_chains_and_deferred_callbacks(void) {
     wasmos_wasm_runtime_t runtime = {0};
     wasmos_future_t source, rejected;
     wasmos_promise_t source_promise, rejected_promise;
-    wasmos_future_continuation_t plus_one = {0}, recover_continuation = {0}, reject_continuation = {0};
+    wasmos_future_continuation_t plus_one = {0}, recover_continuation = {0},
+                                 reject_continuation = {0};
     wasmos_future_t* child;
     callback_state_t state = {0};
     int32_t status = 0;
@@ -139,7 +209,8 @@ static int test_future_chains_and_deferred_callbacks(void) {
         return __LINE__;
     }
     wasmos_future_init(&source, &source_promise);
-    child = wasmos_future_then(&runtime, &source, &reject_continuation, reject_callback, NULL, NULL);
+    child =
+        wasmos_future_then(&runtime, &source, &reject_continuation, reject_callback, NULL, NULL);
     if (!child || !wasmos_promise_resolve(&source_promise, 1u) ||
         wasmos_wasm_coroutine_run(&runtime) != 0 || !wasmos_future_poll(child, &status, &value) ||
         status != -41 || value != 0u) {
@@ -175,17 +246,19 @@ static int test_race_and_all(void) {
     wasmos_future_init(&first, &first_promise);
     wasmos_future_init(&second, &second_promise);
     wasmos_future_init(&third, &third_promise);
-    result = WASMOS_FUTURE_ALL(&runtime, &all_group, values, all_continuations, &first, &second, &third);
+    result =
+        WASMOS_FUTURE_ALL(&runtime, &all_group, values, all_continuations, &first, &second, &third);
     if (!result || !wasmos_promise_resolve(&third_promise, 3u) ||
-        !wasmos_promise_resolve(&first_promise, 1u) || !wasmos_promise_resolve(&second_promise, 2u) ||
-        wasmos_wasm_coroutine_run(&runtime) != 0 || !wasmos_future_poll(result, &status, &value) ||
-        status != 0 || value != (uintptr_t)values || values[0] != 1u || values[1] != 2u ||
-        values[2] != 3u || all_group.active) {
+        !wasmos_promise_resolve(&first_promise, 1u) ||
+        !wasmos_promise_resolve(&second_promise, 2u) || wasmos_wasm_coroutine_run(&runtime) != 0 ||
+        !wasmos_future_poll(result, &status, &value) || status != 0 || value != (uintptr_t)values ||
+        values[0] != 1u || values[1] != 2u || values[2] != 3u || all_group.active) {
         return __LINE__;
     }
     wasmos_future_init(&first, &first_promise);
     wasmos_future_init(&second, &second_promise);
-    result = WASMOS_FUTURE_ALL(&runtime, &failed_group, values, failed_continuations, &first, &second);
+    result =
+        WASMOS_FUTURE_ALL(&runtime, &failed_group, values, failed_continuations, &first, &second);
     if (!result || !wasmos_promise_reject(&first_promise, -7) ||
         wasmos_wasm_coroutine_run(&runtime) != 0 || !wasmos_future_poll(result, &status, &value) ||
         status != -7 || !failed_group.active || !wasmos_promise_resolve(&second_promise, 2u) ||
@@ -206,8 +279,8 @@ static int test_contracts(void) {
     wasmos_wasm_runtime_init(&other);
     wasmos_future_init(&future, &promise);
     if (wasmos_wasm_coroutine_run(NULL) != -1 || wasmos_future_await(&future, NULL) != -1 ||
-        wasmos_promise_reject(&promise, 0) || !wasmos_future_then(&runtime, &future, &continuation,
-                                                                   NULL, NULL, NULL) ||
+        wasmos_promise_reject(&promise, 0) ||
+        !wasmos_future_then(&runtime, &future, &continuation, NULL, NULL, NULL) ||
         wasmos_future_then(&other, &future, &(wasmos_future_continuation_t){0}, NULL, NULL, NULL) ||
         !wasmos_async_start(&runtime, &coroutine, yield_task, NULL) ||
         wasmos_async_start(&runtime, &coroutine, yield_task, NULL) ||
@@ -218,13 +291,67 @@ static int test_contracts(void) {
     return 0;
 }
 
+static int32_t reject_arg0(void* user, const wasmos_ipc_message_t* reply) {
+    (void)user;
+    return reply->arg0 < 0 ? reply->arg0 : 0;
+}
+
+static int test_ipc_future(void) {
+    wasmos_sys_event_loop_t loop;
+    wasmos_sys_wasm_ipc_future_t operation;
+    wasmos_future_t* future;
+    int32_t request_id = 0;
+    int32_t status = 0;
+    uintptr_t value = 0;
+
+    send_status = 0;
+    queued_reply = 0;
+    wasmos_sys_event_loop_init(&loop, 55, 700);
+    wasmos_sys_wasm_ipc_future_init(&operation, NULL, NULL);
+    future =
+        wasmos_sys_wasm_ipc_future_send(&loop, &operation, 44, 55, 0x123, 1, 2, 3, 4, &request_id);
+    if (future != &operation.future || request_id != 700 || !operation.active ||
+        sent_message.destination != 44 || sent_message.source != 55 ||
+        sent_message.request_id != request_id) {
+        return __LINE__;
+    }
+    queued_message = (wasmos_ipc_message_t){
+        .type = 0x280, .request_id = request_id, .arg0 = 77, .source = 44, .destination = 55};
+    queued_reply = 1;
+    if (wasmos_sys_event_loop_poll(&loop, 1) != 1 || operation.active ||
+        !wasmos_future_poll(future, &status, &value) || status != 0 ||
+        value != (uintptr_t)&operation.reply || operation.reply.arg0 != 77) {
+        return __LINE__;
+    }
+    wasmos_sys_wasm_ipc_future_init(&operation, reject_arg0, NULL);
+    future = wasmos_sys_wasm_ipc_future_send(&loop, &operation, 44, 55, 1, 0, 0, 0, 0, NULL);
+    queued_message = (wasmos_ipc_message_t){.request_id = sent_message.request_id, .arg0 = -29};
+    queued_reply = 1;
+    if (!future || wasmos_sys_event_loop_poll(&loop, 1) != 1 ||
+        !wasmos_future_poll(future, &status, &value) || status != -29 || value != 0) {
+        return __LINE__;
+    }
+    send_status = 1;
+    wasmos_sys_wasm_ipc_future_init(&operation, NULL, NULL);
+    future = wasmos_sys_wasm_ipc_future_send(&loop, &operation, 44, 55, 1, 0, 0, 0, 0, NULL);
+    if (future != &operation.future || operation.active ||
+        !wasmos_future_poll(future, &status, &value) || status != -1) {
+        return __LINE__;
+    }
+    return 0;
+}
+
 int main(void) {
     int rc = test_yield_await_and_join();
-    if (rc == 0) rc = test_future_chains_and_deferred_callbacks();
-    if (rc == 0) rc = test_race_and_all();
-    if (rc == 0) rc = test_contracts();
+    if (rc == 0)
+        rc = test_future_chains_and_deferred_callbacks();
+    if (rc == 0)
+        rc = test_race_and_all();
+    if (rc == 0)
+        rc = test_contracts();
+    if (rc == 0)
+        rc = test_ipc_future();
     if (rc != 0) {
-        fprintf(stderr, "wasm coroutine test failed at line %d\n", rc);
         return 1;
     }
     return 0;

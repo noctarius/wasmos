@@ -122,8 +122,13 @@ linked feature documents for rationale and rollout plans.
   provide `async_start`, yield, await, join, deferred `then`, and `race`/`all`
   without trying to save a WASM C stack. Host unit coverage validates its
   scheduler and future contracts directly; an x86-64-host WARP fixture target
-  compiles and runs the same core as wasm32. WASM IPC adaptation and
-  AssemblyScript support remain deferred.
+  compiles and runs the same core as wasm32. The shared
+  `wasmos_sys_wasm_ipc_future_t` now promotes one non-blocking event-loop
+  intent into a caller-owned future: replies are copied before resolution,
+  protocol callbacks can reject them, send failures reject immediately, and
+  local cancellation stops only reply tracking. Rust, Zig, and Go expose the
+  corresponding event-loop/IPC-future records. AssemblyScript support remains
+  deferred.
   Rust is now the first exception: its `coroutine` module links the C core and
   exposes method-based `Runtime`, `Future`, `Promise`, `Coroutine`,
   `Continuation`, and `FutureGroup` bindings; host Rust tests execute those

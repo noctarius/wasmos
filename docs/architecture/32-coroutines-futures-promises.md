@@ -2682,5 +2682,13 @@ Go has no portable C function-pointer value, so `Coroutine.Start` and
 `Future.Then` take a wasm table-address `Callback`; language-level callback
 adapters remain future work.
 
-WASM IPC-future adaptation, deadlines, cancellation, CQ dispatch, parallel
-workers, AssemblyScript support, and Go callback adapters remain deferred.
+`wasmos_sys_wasm_ipc_future_t` now adapts one `wasmos_sys_event_loop_t` intent
+into a caller-owned future. It copies the correlated reply before resolving,
+allows a protocol callback to reject it, and rejects immediately on local send
+failure. Local cancellation removes the intent and rejects the future; it does
+not cancel transport work, so any late reply follows ordinary event-loop
+dispatch. Rust, Zig, and Go expose the same event-loop and IPC-future storage
+records over that C implementation.
+
+Deadlines, transport cancellation, CQ dispatch, parallel workers,
+AssemblyScript support, and Go callback adapters remain deferred.

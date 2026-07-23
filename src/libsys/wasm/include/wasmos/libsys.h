@@ -50,6 +50,25 @@ typedef struct {
     wasmos_sys_handler_t handlers[WASMOS_SYS_HANDLER_MAX];
 } wasmos_sys_event_loop_t;
 
+/* Caller-owned bridge between one non-blocking IPC intent and a local future.
+ * The reply is copied before settlement. reply_status returns zero to resolve
+ * or a negative protocol status to reject. Cancellation only stops local
+ * reply tracking; transport work may still complete and its late reply is
+ * dispatched normally. */
+typedef int32_t (*wasmos_sys_wasm_ipc_future_reply_status_fn)(void* user,
+                                                              const wasmos_ipc_message_t* reply);
+
+typedef struct {
+    wasmos_future_t future;
+    wasmos_promise_t promise;
+    wasmos_sys_event_loop_t* loop;
+    wasmos_ipc_message_t reply;
+    wasmos_sys_wasm_ipc_future_reply_status_fn reply_status;
+    void* user;
+    int32_t request_id;
+    uint8_t active;
+} wasmos_sys_wasm_ipc_future_t;
+
 typedef struct wasmos_sys_random_request wasmos_sys_random_request_t;
 typedef void (*wasmos_sys_random_complete_fn)(void* user, int32_t status);
 
@@ -225,6 +244,34 @@ static inline int32_t wasmos_sys_intent_send_with_request_id(
     }
     return -1;
 }
+
+static inline void wasmos_sys_intent_cancel(wasmos_sys_event_loop_t* loop, int32_t request_id) {
+    if (!loop || request_id <= 0) {
+        return;
+    }
+    for (int32_t i = 0; i < WASMOS_SYS_INTENT_MAX; ++i) {
+        if (loop->intents[i].in_use && loop->intents[i].request_id == request_id) {
+            loop->intents[i].in_use = 0;
+            loop->intents[i].request_id = 0;
+            loop->intents[i].on_resolve = 0;
+            loop->intents[i].user = 0;
+            return;
+        }
+    }
+}
+
+void wasmos_sys_wasm_ipc_future_init(wasmos_sys_wasm_ipc_future_t* operation,
+                                     wasmos_sys_wasm_ipc_future_reply_status_fn reply_status,
+                                     void* user);
+wasmos_future_t* wasmos_sys_wasm_ipc_future_send(wasmos_sys_event_loop_t* loop,
+                                                 wasmos_sys_wasm_ipc_future_t* operation,
+                                                 int32_t destination_endpoint,
+                                                 int32_t source_endpoint, int32_t msg_type,
+                                                 int32_t arg0, int32_t arg1, int32_t arg2,
+                                                 int32_t arg3, int32_t* out_request_id);
+void wasmos_sys_wasm_ipc_future_cancel(wasmos_sys_wasm_ipc_future_t* operation, int32_t status);
+const wasmos_ipc_message_t*
+wasmos_sys_wasm_ipc_future_reply(const wasmos_sys_wasm_ipc_future_t* operation);
 
 static inline int32_t wasmos_sys_event_loop_poll(wasmos_sys_event_loop_t* loop, int32_t budget) {
     int32_t handled = 0;

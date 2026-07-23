@@ -114,6 +114,44 @@ pub struct FutureGroup {
     active: bool,
 }
 
+#[repr(C)]
+pub struct IpcMessage {
+    pub type_: i32,
+    pub request_id: i32,
+    pub arg0: i32,
+    pub arg1: i32,
+    pub arg2: i32,
+    pub arg3: i32,
+    pub source: i32,
+    pub destination: i32,
+}
+
+pub type IpcReplyStatus = unsafe extern "C" fn(*mut c_void, *const IpcMessage) -> i32;
+
+#[repr(C)]
+pub struct EventLoop {
+    receiver_endpoint: i32,
+    select_id: i32,
+    next_request_id: i32,
+    default_on_message: Option<unsafe extern "C" fn(*mut c_void, *const IpcMessage)>,
+    default_user: *mut c_void,
+    intents: [u32; 64],
+    handlers: [u32; 64],
+}
+
+#[repr(C)]
+pub struct IpcFuture {
+    future: Future,
+    promise: Promise,
+    r#loop: *mut EventLoop,
+    reply: IpcMessage,
+    reply_status: Option<IpcReplyStatus>,
+    user: *mut c_void,
+    request_id: i32,
+    active: u8,
+    _padding: [u8; 3],
+}
+
 unsafe extern "C" {
     fn wasmos_wasm_runtime_init(runtime: *mut Runtime);
     fn wasmos_async_start(
@@ -153,6 +191,31 @@ unsafe extern "C" {
         values: *mut usize,
         continuations: *mut Continuation,
     ) -> *mut Future;
+    fn wasmos_sys_event_loop_init(
+        loop_: *mut EventLoop,
+        receiver_endpoint: i32,
+        request_id_base: i32,
+    );
+    fn wasmos_sys_event_loop_poll(loop_: *mut EventLoop, budget: i32) -> i32;
+    fn wasmos_sys_wasm_ipc_future_init(
+        operation: *mut IpcFuture,
+        reply_status: Option<IpcReplyStatus>,
+        user: *mut c_void,
+    );
+    fn wasmos_sys_wasm_ipc_future_send(
+        loop_: *mut EventLoop,
+        operation: *mut IpcFuture,
+        destination: i32,
+        source: i32,
+        msg_type: i32,
+        arg0: i32,
+        arg1: i32,
+        arg2: i32,
+        arg3: i32,
+        out_request_id: *mut i32,
+    ) -> *mut Future;
+    fn wasmos_sys_wasm_ipc_future_cancel(operation: *mut IpcFuture, status: i32);
+    fn wasmos_sys_wasm_ipc_future_reply(operation: *const IpcFuture) -> *const IpcMessage;
 }
 
 impl Runtime {
@@ -166,12 +229,20 @@ impl Runtime {
 
     pub fn run(&mut self) -> Result<i32, ()> {
         let count = unsafe { wasmos_wasm_coroutine_run(self) };
-        if count < 0 { Err(()) } else { Ok(count) }
+        if count < 0 {
+            Err(())
+        } else {
+            Ok(count)
+        }
     }
 
     pub fn run_budget(&mut self, budget: usize) -> Result<i32, ()> {
         let count = unsafe { wasmos_wasm_coroutine_run_budget(self, budget) };
-        if count < 0 { Err(()) } else { Ok(count) }
+        if count < 0 {
+            Err(())
+        } else {
+            Ok(count)
+        }
     }
 }
 
@@ -214,14 +285,17 @@ impl Future {
         error: Option<ErrorCallback>,
         user: *mut c_void,
     ) -> Option<&mut Future> {
-        let child = unsafe { wasmos_future_then(runtime, self, continuation, success, error, user) };
+        let child =
+            unsafe { wasmos_future_then(runtime, self, continuation, success, error, user) };
         unsafe { child.as_mut() }
     }
 }
 
 impl Promise {
     pub const fn new() -> Self {
-        Self { future: core::ptr::null_mut() }
+        Self {
+            future: core::ptr::null_mut(),
+        }
     }
 
     pub fn resolve(&mut self, value: usize) -> bool {
@@ -276,10 +350,17 @@ impl FutureGroup {
         inputs: &mut [&mut Future],
         continuations: &mut [Continuation],
     ) -> Option<&'a mut Future> {
-        if inputs.is_empty() || inputs.len() != continuations.len() { return None; }
+        if inputs.is_empty() || inputs.len() != continuations.len() {
+            return None;
+        }
         let result = unsafe {
-            wasmos_future_race(runtime, self, inputs.as_mut_ptr() as *const *mut Future,
-                                inputs.len(), continuations.as_mut_ptr())
+            wasmos_future_race(
+                runtime,
+                self,
+                inputs.as_mut_ptr() as *const *mut Future,
+                inputs.len(),
+                continuations.as_mut_ptr(),
+            )
         };
         unsafe { result.as_mut() }
     }
@@ -291,13 +372,72 @@ impl FutureGroup {
         values: &mut [usize],
         continuations: &mut [Continuation],
     ) -> Option<&'a mut Future> {
-        if inputs.is_empty() || inputs.len() != values.len() || inputs.len() != continuations.len() {
+        if inputs.is_empty() || inputs.len() != values.len() || inputs.len() != continuations.len()
+        {
             return None;
         }
         let result = unsafe {
-            wasmos_future_all(runtime, self, inputs.as_mut_ptr() as *const *mut Future,
-                              inputs.len(), values.as_mut_ptr(), continuations.as_mut_ptr())
+            wasmos_future_all(
+                runtime,
+                self,
+                inputs.as_mut_ptr() as *const *mut Future,
+                inputs.len(),
+                values.as_mut_ptr(),
+                continuations.as_mut_ptr(),
+            )
         };
         unsafe { result.as_mut() }
+    }
+}
+
+impl EventLoop {
+    pub const fn new() -> Self {
+        unsafe { core::mem::zeroed() }
+    }
+    pub fn init(&mut self, receiver_endpoint: i32, request_id_base: i32) {
+        unsafe { wasmos_sys_event_loop_init(self, receiver_endpoint, request_id_base) }
+    }
+    pub fn poll(&mut self, budget: i32) -> i32 {
+        unsafe { wasmos_sys_event_loop_poll(self, budget) }
+    }
+}
+
+impl IpcFuture {
+    pub const fn new() -> Self {
+        unsafe { core::mem::zeroed() }
+    }
+    pub fn init(&mut self, reply_status: Option<IpcReplyStatus>, user: *mut c_void) {
+        unsafe { wasmos_sys_wasm_ipc_future_init(self, reply_status, user) }
+    }
+    pub fn send(
+        &mut self,
+        loop_: &mut EventLoop,
+        destination: i32,
+        source: i32,
+        msg_type: i32,
+        args: [i32; 4],
+    ) -> Option<(&mut Future, i32)> {
+        let mut request_id = 0;
+        let future = unsafe {
+            wasmos_sys_wasm_ipc_future_send(
+                loop_,
+                self,
+                destination,
+                source,
+                msg_type,
+                args[0],
+                args[1],
+                args[2],
+                args[3],
+                &mut request_id,
+            )
+        };
+        unsafe { future.as_mut().map(|future| (future, request_id)) }
+    }
+    pub fn cancel(&mut self, status: i32) {
+        unsafe { wasmos_sys_wasm_ipc_future_cancel(self, status) }
+    }
+    pub fn reply(&self) -> &IpcMessage {
+        unsafe { &*wasmos_sys_wasm_ipc_future_reply(self) }
     }
 }

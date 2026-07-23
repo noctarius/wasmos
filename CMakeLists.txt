@@ -2116,8 +2116,11 @@ if(DEFINED NATIVE_COROUTINE_HOST_ASM)
   add_custom_command(TARGET run-kernel-unit-tests POST_BUILD
     COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
             -I${LIBSYS_WASM_DIR}/include
+            -I${LIBC_DIR}/include
+            -I${DRIVER_WASM_DIR}/include
             ${CMAKE_SOURCE_DIR}/tests/unit/test_wasm_coroutine.c
             ${LIBSYS_WASM_DIR}/coroutine_wasm.c
+            ${LIBSYS_WASM_DIR}/ipc_future_wasm.c
             -o ${BUILD_DIR}/test_wasm_coroutine
     COMMAND ${BUILD_DIR}/test_wasm_coroutine
     COMMENT "Running host WASM stackless coroutine unit tests"

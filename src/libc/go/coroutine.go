@@ -11,6 +11,11 @@ type Promise struct{ storage [1]uint32 }
 type Coroutine struct{ storage [13]uint32 }
 type Continuation struct{ storage [15]uint32 }
 type FutureGroup struct{ storage [14]uint32 }
+type EventLoop struct{ storage [133]uint32 }
+type IPCFuture struct{ storage [20]uint32 }
+type IPCFutureReply struct {
+	Type, RequestID, Arg0, Arg1, Arg2, Arg3, Source, Destination int32
+}
 
 const (
 	TaskComplete int32 = 0
@@ -22,6 +27,7 @@ const (
 // Go callback with TinyGo and pass its table address when callback support is
 // needed; Go has no portable representation for a C function pointer.
 type Callback uintptr
+type IPCReplyStatus Callback
 
 //go:extern wasmos_wasm_runtime_init
 func wasmRuntimeInit(*Runtime)
@@ -61,6 +67,24 @@ func wasmFutureRace(*Runtime, *FutureGroup, unsafe.Pointer, uintptr, *Continuati
 
 //go:extern wasmos_future_all
 func wasmFutureAll(*Runtime, *FutureGroup, unsafe.Pointer, uintptr, *uintptr, *Continuation) *Future
+
+//go:extern wasmos_sys_event_loop_init
+func wasmEventLoopInit(*EventLoop, int32, int32)
+
+//go:extern wasmos_sys_event_loop_poll
+func wasmEventLoopPoll(*EventLoop, int32) int32
+
+//go:extern wasmos_sys_wasm_ipc_future_init
+func wasmIPCFutureInit(*IPCFuture, IPCReplyStatus, unsafe.Pointer)
+
+//go:extern wasmos_sys_wasm_ipc_future_send
+func wasmIPCFutureSend(*EventLoop, *IPCFuture, int32, int32, int32, int32, int32, int32, int32, *int32) *Future
+
+//go:extern wasmos_sys_wasm_ipc_future_cancel
+func wasmIPCFutureCancel(*IPCFuture, int32)
+
+//go:extern wasmos_sys_wasm_ipc_future_reply
+func wasmIPCFutureReply(*IPCFuture) *IPCFutureReply
 
 func (r *Runtime) Init()                          { wasmRuntimeInit(r) }
 func (r *Runtime) Run() int32                     { return wasmCoroutineRun(r) }
@@ -109,6 +133,45 @@ func (f *Future) Then(runtime *Runtime, continuation *Continuation, success Call
 func (p *Promise) Resolve(value uintptr) bool { return p != nil && wasmPromiseResolve(p, value) }
 func (p *Promise) Reject(status int32) bool {
 	return p != nil && status < 0 && wasmPromiseReject(p, status)
+}
+
+func (loop *EventLoop) Init(receiverEndpoint, requestIDBase int32) {
+	if loop != nil {
+		wasmEventLoopInit(loop, receiverEndpoint, requestIDBase)
+	}
+}
+func (loop *EventLoop) Poll(budget int32) int32 {
+	if loop == nil {
+		return 0
+	}
+	return wasmEventLoopPoll(loop, budget)
+}
+
+// Init connects this caller-owned operation to a reply-status callback. The
+// callback is a wasm table address and returns zero to resolve or a negative
+// status to reject.
+func (op *IPCFuture) Init(replyStatus IPCReplyStatus, user unsafe.Pointer) {
+	if op != nil {
+		wasmIPCFutureInit(op, replyStatus, user)
+	}
+}
+func (op *IPCFuture) Send(loop *EventLoop, destination, source, msgType, arg0, arg1, arg2, arg3 int32) (*Future, int32) {
+	if op == nil || loop == nil {
+		return nil, 0
+	}
+	var requestID int32
+	return wasmIPCFutureSend(loop, op, destination, source, msgType, arg0, arg1, arg2, arg3, &requestID), requestID
+}
+func (op *IPCFuture) Cancel(status int32) {
+	if op != nil {
+		wasmIPCFutureCancel(op, status)
+	}
+}
+func (op *IPCFuture) Reply() *IPCFutureReply {
+	if op == nil {
+		return nil
+	}
+	return wasmIPCFutureReply(op)
 }
 
 // Race settles with the first input result. inputs and continuations must have

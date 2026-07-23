@@ -28,8 +28,11 @@ wasmos_add_zig_wasm_app(
   EXTRA_SRCS
     ${LIBC_DIR}/zig/coroutine.zig
     ${LIBSYS_WASM_DIR}/coroutine_wasm.c
+    ${LIBSYS_WASM_DIR}/ipc_future_wasm.c
   INCLUDE_DIRS
     ${LIBSYS_WASM_DIR}/include
+    ${LIBC_DIR}/include
+    ${DRIVER_WASM_DIR}/include
 )
 
 wasmos_add_zig_wasm_app(
@@ -47,6 +50,7 @@ wasmos_add_zig_wasm_app(
   EXTRA_SRCS
     ${LIBC_DIR}/zig/coroutine.zig
     ${LIBSYS_WASM_DIR}/coroutine_wasm.c
+    ${LIBSYS_WASM_DIR}/ipc_future_wasm.c
     ${CMAKE_SOURCE_DIR}/src/libui/zig/libui.zig
     ${CMAKE_SOURCE_DIR}/src/libui/zig/libui_shim.c
   INCLUDE_DIRS

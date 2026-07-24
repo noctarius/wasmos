@@ -158,6 +158,13 @@ int wasmos_native_coroutine_spawn(wasmos_native_coroutine_runtime_t* runtime,
         !entry) {
         return -1;
     }
+    /* Match the WASM runtime: a record may only be (re)spawned when it is fresh
+     * or has completed. Re-spawning a queued/running/waiting coroutine would
+     * corrupt the ready list through its reused link fields. */
+    if (coroutine->state != WASMOS_NATIVE_COROUTINE_NEW &&
+        coroutine->state != WASMOS_NATIVE_COROUTINE_DEAD) {
+        return -1;
+    }
     top = ((uintptr_t)stack_base + stack_size) & ~(uintptr_t)0xFu;
 #if defined(__x86_64__)
     if (top <= (uintptr_t)stack_base + sizeof(uintptr_t)) {

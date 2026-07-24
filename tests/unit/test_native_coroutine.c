@@ -581,6 +581,46 @@ static int test_future_race_and_all(void) {
     return 0;
 }
 
+static void respawn_entry(void* arg) {
+    uint32_t* runs = arg;
+    if (runs) {
+        (*runs)++;
+    }
+}
+
+static int test_respawn_guard(void) {
+    wasmos_native_coroutine_runtime_t runtime = {0};
+    wasmos_native_coroutine_t coroutine = {0};
+    uint32_t runs = 0;
+    uint8_t stack[1024];
+
+    wasmos_native_coroutine_runtime_init(&runtime);
+
+    /* A fresh (NEW) record spawns. */
+    if (wasmos_native_coroutine_spawn(&runtime, &coroutine, stack, sizeof(stack), respawn_entry,
+                                      &runs) != 0) {
+        return __LINE__;
+    }
+    /* Re-spawning a queued record must be rejected so it cannot be linked into
+     * the ready list twice. */
+    if (wasmos_native_coroutine_spawn(&runtime, &coroutine, stack, sizeof(stack), respawn_entry,
+                                      &runs) != -1) {
+        return __LINE__;
+    }
+    /* Draining runs it exactly once and leaves it DEAD. */
+    if (wasmos_native_coroutine_run(&runtime) != 1 || runs != 1u ||
+        coroutine.state != WASMOS_NATIVE_COROUTINE_DEAD) {
+        return __LINE__;
+    }
+    /* A DEAD record may be reused. */
+    if (wasmos_native_coroutine_spawn(&runtime, &coroutine, stack, sizeof(stack), respawn_entry,
+                                      &runs) != 0 ||
+        wasmos_native_coroutine_run(&runtime) != 1 || runs != 2u) {
+        return __LINE__;
+    }
+    return 0;
+}
+
 int main(void) {
     int rc = test_yield_await_and_join();
     if (rc == 0) {
@@ -603,6 +643,9 @@ int main(void) {
     }
     if (rc == 0) {
         rc = test_future_race_and_all();
+    }
+    if (rc == 0) {
+        rc = test_respawn_guard();
     }
     if (rc != 0) {
         fprintf(stderr, "native coroutine test failed at line %d\n", rc);

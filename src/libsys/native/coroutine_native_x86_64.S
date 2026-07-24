@@ -1,9 +1,17 @@
+#if defined(__APPLE__)
+#define WASMOS_NATIVE_CONTEXT_SWITCH _wasmos_native_coroutine_context_switch
+#else
+#define WASMOS_NATIVE_CONTEXT_SWITCH wasmos_native_coroutine_context_switch
+#endif
+
 .text
-.globl wasmos_native_coroutine_context_switch
-.type wasmos_native_coroutine_context_switch,@function
+.globl WASMOS_NATIVE_CONTEXT_SWITCH
+#if !defined(__APPLE__)
+.type WASMOS_NATIVE_CONTEXT_SWITCH,@function
+#endif
 /* Save the SysV callee-saved register set and resume another context.
  * Context layout is wasmos_native_coroutine_context_t in coroutine_native.h. */
-wasmos_native_coroutine_context_switch:
+WASMOS_NATIVE_CONTEXT_SWITCH:
     movq %rsp, 0(%rdi)
     movq %rbx, 8(%rdi)
     movq %rbp, 16(%rdi)
@@ -24,4 +32,6 @@ wasmos_native_coroutine_context_switch:
     jmp *56(%rsi)
 .Lresume:
     ret
-.size wasmos_native_coroutine_context_switch, .-wasmos_native_coroutine_context_switch
+#if !defined(__APPLE__)
+.size WASMOS_NATIVE_CONTEXT_SWITCH, .-WASMOS_NATIVE_CONTEXT_SWITCH
+#endif

@@ -1,79 +1,185 @@
 #![no_std]
 #![no_main]
 
-use core::ffi::c_void;
 use core::panic::PanicInfo;
 #[path = "../../../src/libc/rust/wasmos.rs"]
 mod wasmos;
+
+use wasmos::coroutine::{self, AsyncFsOp, Future};
+use wasmos::{O_CREAT, O_RDONLY, O_TRUNC, O_WRONLY};
 
 #[panic_handler]
 fn panic(_info: &PanicInfo) -> ! {
     loop {}
 }
 
-struct TaskState {
-    phase: u32,
+const PATH: &str = "rust-long-file-check.txt";
+const CONTENT: &[u8] = b"rust shim long filename\n";
+
+// The promise callbacks are `extern "C"` function pointers and therefore cannot
+// capture, so the small amount of state threaded through the chain (the active
+// fd and the read scratch buffers) lives in this app-owned singleton.
+struct App {
+    fd: i32,
+    startup: [u8; 1],
+    check: [u8; 32],
 }
-unsafe extern "C" fn resume_task(user: *mut c_void, out: *mut usize) -> i32 {
-    let state = unsafe { &mut *(user as *mut TaskState) };
-    if state.phase == 0 {
-        state.phase = 1;
-        wasmos::coroutine::TaskResult::YIELDED
-    } else {
-        unsafe { *out = 42 };
-        wasmos::coroutine::TaskResult::COMPLETE
+static mut APP: App = App {
+    fd: -1,
+    startup: [0u8; 1],
+    check: [0u8; 32],
+};
+
+fn null_future() -> *mut Future {
+    core::ptr::null_mut()
+}
+
+fn fail_startup() -> *mut Future {
+    let _ = wasmos::std::puts(b"startup.nsh readable: false\n");
+    null_future()
+}
+
+fn fail_write() -> *mut Future {
+    let _ = wasmos::std::puts(b"long filename write: false\n");
+    null_future()
+}
+
+fn fail_unlink() -> *mut Future {
+    let _ = wasmos::std::puts(b"long filename unlink: false\n");
+    null_future()
+}
+
+extern "C" fn app_start() -> *mut Future {
+    match coroutine::open_async("/boot/startup.nsh", O_RDONLY) {
+        Some(op) => op.then(startup_opened),
+        None => fail_startup(),
     }
 }
 
-fn main(_args: &[&str]) -> i32 {
-    static mut PRINTED: bool = false;
-    const PATH: &str = "rust-long-file-check.txt";
-    const CONTENT: &[u8] = b"rust shim long filename\n";
-    unsafe {
-        if !PRINTED {
-            let mut file_ok = false;
-            if let Ok(file) = wasmos::fs::create(PATH) {
-                if file.write(CONTENT).ok() == Some(CONTENT.len()) && file.close().is_ok() {
-                    let mut buffer = [0u8; 32];
-                    if let Ok(read_file) = wasmos::fs::open_read(PATH) {
-                        if read_file.read(&mut buffer).ok() == Some(CONTENT.len())
-                            && read_file.close().is_ok()
-                        {
-                            file_ok = &buffer[..CONTENT.len()] == CONTENT;
-                        }
-                    }
-                }
-            }
-            let mut runtime = wasmos::coroutine::Runtime::new();
-            let mut coroutine = wasmos::coroutine::Coroutine::new();
-            let mut state = TaskState { phase: 0 };
-            runtime.init();
-            let coroutine_ok = coroutine
-                .start(
-                    &mut runtime,
-                    resume_task,
-                    &mut state as *mut _ as *mut c_void,
-                )
-                .is_some()
-                && runtime.run().is_ok()
-                && matches!(coroutine.join(), Ok(42));
-            PRINTED = true;
-            let _ = wasmos::std::puts(b"Hello from Rust on WASMOS!\n");
-            let _ = wasmos::std::puts(b"This is a tiny WASMOS-APP written in Rust.\n");
-            let _ = wasmos::std::printf(format_args!("Entry: {}\n", "main"));
-            let _ = wasmos::std::printf(format_args!("long filename write: {}\n", file_ok));
-            let unlink_ok = if file_ok {
-                wasmos::fs::unlink(PATH).is_ok() && wasmos::fs::stat(PATH).is_err()
-            } else {
-                false
-            };
-            let _ = wasmos::std::printf(format_args!("long filename unlink: {}\n", unlink_ok));
-            let _ = wasmos::std::puts(if coroutine_ok {
-                b"coroutine task: ready\n"
-            } else {
-                b"coroutine task: failed\n"
-            });
-        }
+extern "C" fn startup_opened(open: &mut AsyncFsOp) -> *mut Future {
+    let fd = open.result();
+    if fd < 0 {
+        return fail_startup();
     }
+    unsafe { APP.fd = fd };
+    let dst = unsafe { core::ptr::addr_of_mut!(APP.startup) as *mut u8 };
+    match coroutine::read_async(fd, dst, 1) {
+        Some(op) => op.then(startup_read),
+        None => fail_startup(),
+    }
+}
+
+extern "C" fn startup_read(read: &mut AsyncFsOp) -> *mut Future {
+    if read.result() != 1 {
+        return fail_startup();
+    }
+    match coroutine::close_async(unsafe { APP.fd }) {
+        Some(op) => op.then(startup_closed),
+        None => fail_startup(),
+    }
+}
+
+extern "C" fn startup_closed(close: &mut AsyncFsOp) -> *mut Future {
+    if close.result() < 0 {
+        return fail_startup();
+    }
+    let _ = wasmos::std::puts(b"startup.nsh readable: true\n");
+    match coroutine::open_async(PATH, O_WRONLY | O_CREAT | O_TRUNC) {
+        Some(op) => op.then(file_created),
+        None => fail_write(),
+    }
+}
+
+extern "C" fn file_created(create: &mut AsyncFsOp) -> *mut Future {
+    let fd = create.result();
+    if fd < 0 {
+        return fail_write();
+    }
+    unsafe { APP.fd = fd };
+    match coroutine::write_async(fd, CONTENT.as_ptr(), CONTENT.len() as i32) {
+        Some(op) => op.then(file_written),
+        None => fail_write(),
+    }
+}
+
+extern "C" fn file_written(write: &mut AsyncFsOp) -> *mut Future {
+    if write.result() != CONTENT.len() as i32 {
+        return fail_write();
+    }
+    match coroutine::close_async(unsafe { APP.fd }) {
+        Some(op) => op.then(write_closed),
+        None => fail_write(),
+    }
+}
+
+extern "C" fn write_closed(close: &mut AsyncFsOp) -> *mut Future {
+    if close.result() < 0 {
+        return fail_write();
+    }
+    match coroutine::open_async(PATH, O_RDONLY) {
+        Some(op) => op.then(verify_opened),
+        None => fail_write(),
+    }
+}
+
+extern "C" fn verify_opened(open: &mut AsyncFsOp) -> *mut Future {
+    let fd = open.result();
+    if fd < 0 {
+        return fail_write();
+    }
+    unsafe { APP.fd = fd };
+    let dst = unsafe { core::ptr::addr_of_mut!(APP.check) as *mut u8 };
+    match coroutine::read_async(fd, dst, 32) {
+        Some(op) => op.then(verify_read),
+        None => fail_write(),
+    }
+}
+
+extern "C" fn verify_read(read: &mut AsyncFsOp) -> *mut Future {
+    let matched = read.result() == CONTENT.len() as i32
+        && unsafe {
+            core::slice::from_raw_parts(core::ptr::addr_of!(APP.check) as *const u8, CONTENT.len())
+        } == CONTENT;
+    if !matched {
+        return fail_write();
+    }
+    match coroutine::close_async(unsafe { APP.fd }) {
+        Some(op) => op.then(verify_closed),
+        None => fail_write(),
+    }
+}
+
+extern "C" fn verify_closed(close: &mut AsyncFsOp) -> *mut Future {
+    if close.result() < 0 {
+        return fail_write();
+    }
+    match coroutine::unlink_async(PATH) {
+        Some(op) => op.then(file_unlinked),
+        None => fail_unlink(),
+    }
+}
+
+extern "C" fn file_unlinked(unlink: &mut AsyncFsOp) -> *mut Future {
+    if unlink.result() < 0 {
+        return fail_unlink();
+    }
+    // A stat of the just-unlinked path is expected to reject; catch converts
+    // that rejection into the success report.
+    match coroutine::stat_async(PATH) {
+        Some(op) => op.catch(stat_rejected),
+        None => fail_unlink(),
+    }
+}
+
+extern "C" fn stat_rejected(_status: i32) -> i32 {
+    let _ = wasmos::std::puts(b"long filename write: true\n");
+    let _ = wasmos::std::puts(b"long filename unlink: true\n");
     0
+}
+
+fn main(_args: &[&str]) -> i32 {
+    let _ = wasmos::std::puts(b"Hello from Rust on WASMOS!\n");
+    let _ = wasmos::std::puts(b"This is a tiny WASMOS-APP written in Rust.\n");
+    let _ = wasmos::std::printf(format_args!("Entry: {}\n", "main"));
+    coroutine::run_async_app(app_start)
 }

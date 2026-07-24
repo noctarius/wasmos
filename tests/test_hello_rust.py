@@ -49,6 +49,7 @@ class HelloRustTest(unittest.TestCase):
             "hello_rust",
             [
                 b"Hello from Rust on WASMOS!",
+                b"startup.nsh readable: true",
                 b"long filename write: true",
                 b"long filename unlink: true",
             ],

@@ -149,6 +149,14 @@ linked feature documents for rationale and rollout plans.
   caller-storage API and its custom TinyGo target compiles and links
   `coroutine_wasm.c`; Go callback entries are wasm table addresses because Go
   has no portable C function-pointer value.
+- The Go and Rust hello examples both run as C-owned async applications
+  (`RunAsyncApp` / `run_async_app` over `wasmos_sys_wasm_async_run`) that express
+  their filesystem workflow as a typed FS promise chain (`open/read/write/close/
+  unlink/stat_async` + `.then` / `.catch`).  Rust links `service_runtime_wasm.c`
+  and, unlike TinyGo, passes buffer pointers straight through the C boundary and
+  uses `extern "C"` functions directly as continuation callbacks (no staging
+  copy, no trampoline); its promise operations come from a fixed leak pool
+  because the WASM target is `no_std` with no heap.
 - Completion ports are documented as a design proposal only: the planned
   kernel-owned bounded CQ, notification-doorbell, and generation-tagged
   operation-token model has no implementation yet. It is intended to provide

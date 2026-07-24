@@ -33,6 +33,7 @@ enum {
     WASMOS_WASM_TASK_COMPLETE = 0,
     WASMOS_WASM_TASK_YIELDED = 1,
     WASMOS_WASM_AWAIT_PENDING = 1,
+    WASMOS_FUTURE_CHAIN_NEXT = 2,
 };
 
 typedef struct wasmos_wasm_runtime wasmos_wasm_runtime_t;
@@ -126,12 +127,18 @@ wasmos_future_t* wasmos_future_then(wasmos_wasm_runtime_t* runtime, wasmos_futur
                                     wasmos_future_continuation_t* continuation,
                                     wasmos_future_success_fn_t on_success,
                                     wasmos_future_error_fn_t on_error, void* user);
-wasmos_future_t* wasmos_future_race(wasmos_wasm_runtime_t* runtime,
-                                    wasmos_future_group_t* group, wasmos_future_t* const* inputs,
-                                    size_t count, wasmos_future_continuation_t* continuations);
-wasmos_future_t* wasmos_future_all(wasmos_wasm_runtime_t* runtime,
-                                   wasmos_future_group_t* group, wasmos_future_t* const* inputs,
-                                   size_t count, uintptr_t* values,
+/* A success callback may return WASMOS_FUTURE_CHAIN_NEXT with the next future
+ * in out_value. The returned child adopts that future's eventual result. */
+wasmos_future_t* wasmos_future_then_flat(wasmos_wasm_runtime_t* runtime, wasmos_future_t* future,
+                                         wasmos_future_continuation_t* continuation,
+                                         wasmos_future_continuation_t* adopt_continuation,
+                                         wasmos_future_success_fn_t on_success,
+                                         wasmos_future_error_fn_t on_error, void* user);
+wasmos_future_t* wasmos_future_race(wasmos_wasm_runtime_t* runtime, wasmos_future_group_t* group,
+                                    wasmos_future_t* const* inputs, size_t count,
+                                    wasmos_future_continuation_t* continuations);
+wasmos_future_t* wasmos_future_all(wasmos_wasm_runtime_t* runtime, wasmos_future_group_t* group,
+                                   wasmos_future_t* const* inputs, size_t count, uintptr_t* values,
                                    wasmos_future_continuation_t* continuations);
 
 #define WASMOS_FUTURE_RACE(runtime, group, continuations, ...)                                     \

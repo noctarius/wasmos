@@ -1,11 +1,25 @@
 #include "slab.h"
 #include "sync/spinlock.h"
+#include "physmem.h"
+#include "paging.h"
 #include <stdint.h>
 
 /*
  * Minimal fixed-size slab allocator for small kernel objects. This is optional
  * infrastructure for now; existing static-table paths remain the default.
+ *
+ * Each size class starts on a fixed static buffer and, once that is exhausted,
+ * grows on demand: a fresh 4 KiB frame is allocated from the physical page
+ * allocator (constrained to the kernel higher-half direct-map window so it is
+ * reachable at phys | KERNEL_HIGHER_HALF_BASE) and carved into chunks that are
+ * pushed onto the class free list. Growth is therefore bounded only by physical
+ * memory, never by a compile-time count.
  */
+
+/* Must not exceed paging.c's higher-half direct-map window: frames above it are
+ * not mapped at phys | KERNEL_HIGHER_HALF_BASE and could not be dereferenced. */
+#define SLAB_GROW_WINDOW_BYTES (512u * 1024u * 1024u)
+#define SLAB_GROW_FRAME_BYTES 4096u
 
 #define SLAB_CLASS_COUNT 3u
 
@@ -62,6 +76,25 @@ static int find_class(size_t total_size) {
     return -1;
 }
 
+/* Grow a size class by one frame's worth of chunks. Caller holds g_slab_lock.
+ * Returns 0 if at least one chunk was added, -1 if no backing was available
+ * (e.g. the page allocator is not yet initialised during very early boot, in
+ * which case the caller falls back to reporting exhaustion). */
+static int slab_class_grow(slab_class_t* klass) {
+    uint64_t phys = pfa_alloc_pages_below(1, SLAB_GROW_WINDOW_BYTES);
+    if (!phys) {
+        return -1;
+    }
+    uint8_t* frame = (uint8_t*)(uintptr_t)(phys | KERNEL_HIGHER_HALF_BASE);
+    uint32_t count = SLAB_GROW_FRAME_BYTES / klass->chunk_size;
+    for (uint32_t i = 0; i < count; ++i) {
+        slab_node_t* node = ptr_cast(slab_node_t, frame + (uint32_t)klass->chunk_size * i);
+        node->next = klass->free_list;
+        klass->free_list = node;
+    }
+    return count > 0 ? 0 : -1;
+}
+
 void* kalloc_small(size_t size) {
     size_t total = size + sizeof(slab_header_t);
     int c = find_class(total);
@@ -71,6 +104,9 @@ void* kalloc_small(size_t size) {
     ksync_spinlock_lock(&g_slab_lock);
     slab_class_t* klass = &g_classes[c];
     slab_node_t* node = klass->free_list;
+    if (!node && slab_class_grow(klass) == 0) {
+        node = klass->free_list;
+    }
     if (!node) {
         ksync_spinlock_unlock(&g_slab_lock);
         return 0;

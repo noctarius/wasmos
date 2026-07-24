@@ -6,7 +6,9 @@ extern crate core;
 mod coroutine;
 
 use core::ffi::c_void;
-use coroutine::{AwaitResult, Continuation, Coroutine, Future, FutureGroup, Promise, Runtime, TaskResult};
+use coroutine::{
+    AwaitResult, Continuation, Coroutine, Future, FutureGroup, Promise, Runtime, TaskResult,
+};
 
 struct WaiterState {
     pc: i32,
@@ -47,8 +49,18 @@ fn futures_promises_and_object_methods() {
     let mut promise = Promise::new();
     future.init(&mut promise);
     let mut waiter_coro = Coroutine::new();
-    let mut waiter_state = WaiterState { pc: 0, future: &mut future, status: None };
-    assert!(waiter_coro.start(&mut runtime, waiter, (&mut waiter_state as *mut WaiterState).cast()).is_some());
+    let mut waiter_state = WaiterState {
+        pc: 0,
+        future: &mut future,
+        status: None,
+    };
+    assert!(waiter_coro
+        .start(
+            &mut runtime,
+            waiter,
+            (&mut waiter_state as *mut WaiterState).cast()
+        )
+        .is_some());
     assert_eq!(runtime.run(), Ok(1));
     assert_eq!(waiter_state.status, Some(AwaitResult::Pending));
     assert!(promise.resolve(42));
@@ -60,8 +72,15 @@ fn futures_promises_and_object_methods() {
     let mut source_promise = Promise::new();
     source.init(&mut source_promise);
     let mut continuation = Continuation::new();
-    let child = source.then(&mut runtime, &mut continuation, Some(increment), None,
-                            core::ptr::null_mut()).unwrap() as *mut Future;
+    let child = source
+        .then(
+            &mut runtime,
+            &mut continuation,
+            Some(increment),
+            None,
+            core::ptr::null_mut(),
+        )
+        .unwrap() as *mut Future;
     assert!(source_promise.resolve(20));
     assert_eq!(unsafe { (&*child).poll() }, None);
     assert_eq!(runtime.run(), Ok(0));
@@ -76,7 +95,9 @@ fn futures_promises_and_object_methods() {
     let mut group = FutureGroup::new();
     let mut continuations = [Continuation::new(), Continuation::new()];
     let mut inputs = [&mut first, &mut second];
-    assert!(group.race(&mut runtime, &mut inputs, &mut continuations).is_some());
+    assert!(group
+        .race(&mut runtime, &mut inputs, &mut continuations)
+        .is_some());
     assert!(second_promise.resolve(7));
     assert!(first_promise.reject(-2));
     assert_eq!(runtime.run(), Ok(0));
@@ -91,11 +112,20 @@ fn futures_promises_and_object_methods() {
     let mut all_continuations = [Continuation::new(), Continuation::new()];
     let mut all_inputs = [&mut all_first, &mut all_second];
     let mut values = [0usize; 2];
-    let all = all_group.all(&mut runtime, &mut all_inputs, &mut values, &mut all_continuations)
+    let all = all_group
+        .all(
+            &mut runtime,
+            &mut all_inputs,
+            &mut values,
+            &mut all_continuations,
+        )
         .unwrap() as *mut Future;
     assert!(all_second_promise.resolve(2));
     assert!(all_first_promise.resolve(1));
     assert_eq!(runtime.run(), Ok(0));
-    assert_eq!(unsafe { (&*all).poll() }, Some(Ok(values.as_ptr() as usize)));
+    assert_eq!(
+        unsafe { (&*all).poll() },
+        Some(Ok(values.as_ptr() as usize))
+    );
     assert_eq!(values, [1, 2]);
 }

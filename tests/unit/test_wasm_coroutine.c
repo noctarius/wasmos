@@ -8,6 +8,37 @@ static wasmos_ipc_message_t queued_message;
 static int queued_reply;
 static int send_status;
 
+/* Typed filesystem operations use transfer buffers.  This coroutine unit
+ * fixture only validates IPC/future behaviour, so minimal hostcall stubs keep
+ * that ABI linkable; transfer-copy semantics are covered by FS tests. */
+int32_t wasmos_xfer_buffer_acquire(int32_t size) {
+    return size > 0 ? 1 : -1;
+}
+int32_t wasmos_xfer_buffer_borrow(int32_t endpoint, int32_t buffer, int32_t flags) {
+    (void)endpoint;
+    (void)buffer;
+    (void)flags;
+    return 1;
+}
+int32_t wasmos_xfer_buffer_release(int32_t buffer) {
+    (void)buffer;
+    return 0;
+}
+int32_t wasmos_xfer_buffer_write(int32_t buffer, int32_t ptr, int32_t len, int32_t offset) {
+    (void)buffer;
+    (void)ptr;
+    (void)len;
+    (void)offset;
+    return 0;
+}
+int32_t wasmos_xfer_buffer_read(int32_t buffer, int32_t ptr, int32_t len, int32_t offset) {
+    (void)buffer;
+    (void)ptr;
+    (void)len;
+    (void)offset;
+    return 0;
+}
+
 int32_t wasmos_ipc_send(int32_t destination, int32_t source, int32_t type, int32_t request_id,
                         int32_t arg0, int32_t arg1, int32_t arg2, int32_t arg3) {
     sent_message = (wasmos_ipc_message_t){.type = type,
@@ -341,6 +372,41 @@ static int test_ipc_future(void) {
     return 0;
 }
 
+static int test_fs_request_future(void) {
+    wasmos_sys_event_loop_t loop;
+    wasmos_sys_wasm_fs_request_t request;
+    wasmos_future_t* future;
+    int32_t status = 0;
+    uintptr_t value = 0;
+
+    send_status = 0;
+    queued_reply = 0;
+    wasmos_sys_event_loop_init(&loop, 55, 900);
+    wasmos_sys_wasm_fs_request_init(&request);
+    future =
+        wasmos_sys_wasm_fs_request_send(&loop, &request, 44, 55, FS_IPC_OPEN_REQ, 1, 2, 3, 4, NULL);
+    if (future != &request.ipc.future || sent_message.request_id != 900) {
+        return __LINE__;
+    }
+    queued_message = (wasmos_ipc_message_t){
+        .type = FS_IPC_RESP, .request_id = sent_message.request_id, .arg0 = 17};
+    queued_reply = 1;
+    if (wasmos_sys_event_loop_poll(&loop, 1) != 1 || !wasmos_future_poll(future, &status, &value) ||
+        status != 0 || wasmos_sys_wasm_fs_request_reply(&request)->arg0 != 17) {
+        return __LINE__;
+    }
+    wasmos_sys_wasm_fs_request_init(&request);
+    future =
+        wasmos_sys_wasm_fs_request_send(&loop, &request, 44, 55, FS_IPC_OPEN_REQ, 0, 0, 0, 0, NULL);
+    queued_message = (wasmos_ipc_message_t){.type = 0x77, .request_id = sent_message.request_id};
+    queued_reply = 1;
+    if (!future || wasmos_sys_event_loop_poll(&loop, 1) != 1 ||
+        !wasmos_future_poll(future, &status, &value) || status >= 0) {
+        return __LINE__;
+    }
+    return 0;
+}
+
 int main(void) {
     int rc = test_yield_await_and_join();
     if (rc == 0)
@@ -351,6 +417,8 @@ int main(void) {
         rc = test_contracts();
     if (rc == 0)
         rc = test_ipc_future();
+    if (rc == 0)
+        rc = test_fs_request_future();
     if (rc != 0) {
         return 1;
     }

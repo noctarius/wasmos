@@ -15,10 +15,12 @@ static int32_t waiter(void* user, uintptr_t* out_value) {
     if (state->pc == 0) {
         state->pc = 1;
         state->status = wasmos_future_await(state->future, &state->value);
-        if (state->status == WASMOS_WASM_AWAIT_PENDING) return WASMOS_WASM_TASK_YIELDED;
+        if (state->status == WASMOS_WASM_AWAIT_PENDING)
+            return WASMOS_WASM_TASK_YIELDED;
     }
     state->status = wasmos_future_await(state->future, &state->value);
-    if (state->status == WASMOS_WASM_AWAIT_PENDING) return WASMOS_WASM_TASK_YIELDED;
+    if (state->status == WASMOS_WASM_AWAIT_PENDING)
+        return WASMOS_WASM_TASK_YIELDED;
     *out_value = state->value;
     return state->status;
 }
@@ -29,7 +31,8 @@ typedef struct {
 
 static int32_t resolver(void* user, uintptr_t* out_value) {
     resolver_state_t* state = user;
-    if (!wasmos_promise_resolve(state->promise, 42u)) return -1;
+    if (!wasmos_promise_resolve(state->promise, 42u))
+        return -1;
     *out_value = 42u;
     return 0;
 }

@@ -69,6 +69,24 @@ typedef struct {
     uint8_t active;
 } wasmos_sys_wasm_ipc_future_t;
 
+/* Filesystem-specialized IPC future. The generic IPC bridge remains available
+ * for protocols with their own response shape; this record rejects replies
+ * that are not FS_IPC_RESP before application state machines observe them. */
+typedef struct {
+    wasmos_sys_wasm_ipc_future_t ipc;
+} wasmos_sys_wasm_fs_request_t;
+
+/* A typed asynchronous filesystem operation.  It owns the transfer buffer
+ * used for its path or payload until finish() is called after its future has
+ * settled.  The caller owns this record and its destination/source memory. */
+typedef struct {
+    wasmos_sys_wasm_fs_request_t request;
+    int32_t buffer_id;
+    int32_t buffer_borrow;
+    int32_t length;
+    uint8_t has_buffer;
+} wasmos_sys_wasm_fs_operation_t;
+
 typedef struct wasmos_sys_random_request wasmos_sys_random_request_t;
 typedef void (*wasmos_sys_random_complete_fn)(void* user, int32_t status);
 
@@ -272,6 +290,50 @@ wasmos_future_t* wasmos_sys_wasm_ipc_future_send(wasmos_sys_event_loop_t* loop,
 void wasmos_sys_wasm_ipc_future_cancel(wasmos_sys_wasm_ipc_future_t* operation, int32_t status);
 const wasmos_ipc_message_t*
 wasmos_sys_wasm_ipc_future_reply(const wasmos_sys_wasm_ipc_future_t* operation);
+
+void wasmos_sys_wasm_fs_request_init(wasmos_sys_wasm_fs_request_t* request);
+wasmos_future_t* wasmos_sys_wasm_fs_request_send(wasmos_sys_event_loop_t* loop,
+                                                 wasmos_sys_wasm_fs_request_t* request,
+                                                 int32_t fs_endpoint, int32_t reply_endpoint,
+                                                 int32_t msg_type, int32_t arg0, int32_t arg1,
+                                                 int32_t arg2, int32_t arg3,
+                                                 int32_t* out_request_id);
+const wasmos_ipc_message_t*
+wasmos_sys_wasm_fs_request_reply(const wasmos_sys_wasm_fs_request_t* request);
+
+void wasmos_sys_wasm_fs_operation_init(wasmos_sys_wasm_fs_operation_t* operation);
+wasmos_future_t* wasmos_sys_wasm_fs_open_async(wasmos_sys_event_loop_t* loop,
+                                               wasmos_sys_wasm_fs_operation_t* operation,
+                                               int32_t fs_endpoint, int32_t reply_endpoint,
+                                               const char* path, int32_t flags,
+                                               int32_t* out_request_id);
+wasmos_future_t* wasmos_sys_wasm_fs_read_async(wasmos_sys_event_loop_t* loop,
+                                               wasmos_sys_wasm_fs_operation_t* operation,
+                                               int32_t fs_endpoint, int32_t reply_endpoint,
+                                               int32_t fd, void* dst, int32_t len,
+                                               int32_t* out_request_id);
+wasmos_future_t* wasmos_sys_wasm_fs_write_async(wasmos_sys_event_loop_t* loop,
+                                                wasmos_sys_wasm_fs_operation_t* operation,
+                                                int32_t fs_endpoint, int32_t reply_endpoint,
+                                                int32_t fd, const void* src, int32_t len,
+                                                int32_t* out_request_id);
+wasmos_future_t* wasmos_sys_wasm_fs_close_async(wasmos_sys_event_loop_t* loop,
+                                                wasmos_sys_wasm_fs_operation_t* operation,
+                                                int32_t fs_endpoint, int32_t reply_endpoint,
+                                                int32_t fd, int32_t* out_request_id);
+wasmos_future_t* wasmos_sys_wasm_fs_unlink_async(wasmos_sys_event_loop_t* loop,
+                                                 wasmos_sys_wasm_fs_operation_t* operation,
+                                                 int32_t fs_endpoint, int32_t reply_endpoint,
+                                                 const char* path, int32_t* out_request_id);
+wasmos_future_t* wasmos_sys_wasm_fs_stat_async(wasmos_sys_event_loop_t* loop,
+                                               wasmos_sys_wasm_fs_operation_t* operation,
+                                               int32_t fs_endpoint, int32_t reply_endpoint,
+                                               const char* path, int32_t* out_request_id);
+/* Copies a completed read payload, releases an owned buffer, and returns the
+ * response status/arg0.  finish() is idempotent for buffer release. */
+int32_t wasmos_sys_wasm_fs_operation_finish(wasmos_sys_wasm_fs_operation_t* operation,
+                                            void* read_dst, int32_t read_capacity,
+                                            wasmos_ipc_message_t* out_reply);
 
 static inline int32_t wasmos_sys_event_loop_poll(wasmos_sys_event_loop_t* loop, int32_t budget) {
     int32_t handled = 0;

@@ -38,8 +38,8 @@ static void fake_sched_yield(void) {
     service_yields++;
 }
 
-static int32_t service_main(wasmos_driver_api_t* api,
-                            wasmos_native_coroutine_runtime_t* runtime, void* user) {
+static int32_t service_main(wasmos_driver_api_t* api, wasmos_native_coroutine_runtime_t* runtime,
+                            void* user) {
     if (api == NULL || runtime == NULL || user != (void*)(uintptr_t)0x1234u) {
         return -1;
     }
@@ -76,18 +76,16 @@ static int test_resolve_and_copy_reply(void) {
     api.sched_current_pid = fake_current_pid;
     wasmos_sys_native_event_loop_init(&loop, &api, 55u, 700u);
     wasmos_sys_native_ipc_future_init(&operation, NULL, NULL);
-    future = wasmos_sys_native_ipc_future_send(&loop, &operation, 44u, 55u, 0x123u, 1u, 2u, 3u,
-                                                4u, &request_id);
+    future = wasmos_sys_native_ipc_future_send(&loop, &operation, 44u, 55u, 0x123u, 1u, 2u, 3u, 4u,
+                                               &request_id);
     if (future != &operation.future || request_id != 700u || !operation.active ||
-        sent_message.type != 0x123u || sent_message.source != 55u || sent_message.destination != 44u ||
-        sent_message.request_id != request_id || wasmos_future_poll(future, &status, &value)) {
+        sent_message.type != 0x123u || sent_message.source != 55u ||
+        sent_message.destination != 44u || sent_message.request_id != request_id ||
+        wasmos_future_poll(future, &status, &value)) {
         return __LINE__;
     }
-    queued_reply = (nd_ipc_message_t){.type = 0x280u,
-                                      .source = 44u,
-                                      .destination = 55u,
-                                      .request_id = request_id,
-                                      .arg0 = 77u};
+    queued_reply = (nd_ipc_message_t){
+        .type = 0x280u, .source = 44u, .destination = 55u, .request_id = request_id, .arg0 = 77u};
     reply_queued = 1u;
     if (wasmos_sys_native_event_loop_poll(&loop, 1u) != 1 || operation.active ||
         !wasmos_future_poll(future, &status, &value) || status != 0 ||
@@ -115,7 +113,8 @@ static int test_reject_send_failure_and_cancel(void) {
     wasmos_sys_native_event_loop_init(&loop, &api, 55u, 800u);
 
     wasmos_sys_native_ipc_future_init(&rejected, reject_from_arg0, NULL);
-    future = wasmos_sys_native_ipc_future_send(&loop, &rejected, 44u, 55u, 1u, 0u, 0u, 0u, 0u, NULL);
+    future =
+        wasmos_sys_native_ipc_future_send(&loop, &rejected, 44u, 55u, 1u, 0u, 0u, 0u, 0u, NULL);
     queued_reply = (nd_ipc_message_t){.request_id = sent_message.request_id, .arg0 = (uint32_t)-29};
     reply_queued = 1u;
     if (!future || wasmos_sys_native_event_loop_poll(&loop, 1u) != 1 ||
@@ -125,7 +124,8 @@ static int test_reject_send_failure_and_cancel(void) {
 
     send_status = 1;
     wasmos_sys_native_ipc_future_init(&failed_send, NULL, NULL);
-    future = wasmos_sys_native_ipc_future_send(&loop, &failed_send, 44u, 55u, 1u, 0u, 0u, 0u, 0u, NULL);
+    future =
+        wasmos_sys_native_ipc_future_send(&loop, &failed_send, 44u, 55u, 1u, 0u, 0u, 0u, 0u, NULL);
     if (future != &failed_send.future || failed_send.active ||
         !wasmos_future_poll(future, &status, &value) || status != -1 || value != 0u) {
         return __LINE__;
@@ -133,7 +133,8 @@ static int test_reject_send_failure_and_cancel(void) {
 
     send_status = 0;
     wasmos_sys_native_ipc_future_init(&cancelled, NULL, NULL);
-    future = wasmos_sys_native_ipc_future_send(&loop, &cancelled, 44u, 55u, 1u, 0u, 0u, 0u, 0u, NULL);
+    future =
+        wasmos_sys_native_ipc_future_send(&loop, &cancelled, 44u, 55u, 1u, 0u, 0u, 0u, 0u, NULL);
     if (!future || !cancelled.active) {
         return __LINE__;
     }
@@ -160,8 +161,8 @@ static int test_service_root_runtime(void) {
     service_yields = 0u;
     api.sched_yield = fake_sched_yield;
     wasmos_sys_native_service_init(&service, root_stack, sizeof(root_stack));
-    if (wasmos_sys_native_service_run(&service, &api, service_main,
-                                      (void*)(uintptr_t)0x1234u) != 37 ||
+    if (wasmos_sys_native_service_run(&service, &api, service_main, (void*)(uintptr_t)0x1234u) !=
+            37 ||
         service_steps != 2u || service_yields != 1u ||
         service.root.state != WASMOS_NATIVE_COROUTINE_DEAD) {
         return __LINE__;

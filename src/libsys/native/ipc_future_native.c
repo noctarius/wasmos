@@ -25,9 +25,9 @@ static void native_ipc_future_reply(void* user, const nd_ipc_message_t* reply) {
     }
 }
 
-void wasmos_sys_native_ipc_future_init(
-    wasmos_sys_native_ipc_future_t* operation,
-    wasmos_sys_native_ipc_future_reply_status_fn reply_status, void* user) {
+void wasmos_sys_native_ipc_future_init(wasmos_sys_native_ipc_future_t* operation,
+                                       wasmos_sys_native_ipc_future_reply_status_fn reply_status,
+                                       void* user) {
     if (!operation) {
         return;
     }
@@ -37,10 +37,12 @@ void wasmos_sys_native_ipc_future_init(
     operation->user = user;
 }
 
-wasmos_future_t* wasmos_sys_native_ipc_future_send(
-    wasmos_sys_native_event_loop_t* loop, wasmos_sys_native_ipc_future_t* operation,
-    uint32_t destination_endpoint, uint32_t source_endpoint, uint32_t msg_type, uint32_t arg0,
-    uint32_t arg1, uint32_t arg2, uint32_t arg3, uint32_t* out_request_id) {
+wasmos_future_t* wasmos_sys_native_ipc_future_send(wasmos_sys_native_event_loop_t* loop,
+                                                   wasmos_sys_native_ipc_future_t* operation,
+                                                   uint32_t destination_endpoint,
+                                                   uint32_t source_endpoint, uint32_t msg_type,
+                                                   uint32_t arg0, uint32_t arg1, uint32_t arg2,
+                                                   uint32_t arg3, uint32_t* out_request_id) {
     uint32_t request_id = 0u;
     int32_t status;
 

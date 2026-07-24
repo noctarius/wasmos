@@ -6,5 +6,5 @@
   "libc": "wasmbuiltins", "scheduler": "none", "gc": "leaking", "default-stack-size": 4096,
   "cflags": ["-mnontrapping-fptoint", "-mno-bulk-memory", "-mno-multivalue", "-mno-reference-types", "-msign-ext", "-I@LIBSYS_WASM_DIR@/include", "-I@LIBC_DIR@/include", "-I@DRIVER_WASM_DIR@/include"],
   "ldflags": ["--stack-first", "--no-demangle", "--no-entry"],
-  "extra-files": ["src/runtime/asm_tinygowasm.S", "@TINYGO_COROUTINE_C@", "@TINYGO_IPC_FUTURE_C@"]
+  "extra-files": ["src/runtime/asm_tinygowasm.S", "@TINYGO_COROUTINE_C@", "@TINYGO_IPC_FUTURE_C@", "@TINYGO_GO_COROUTINE_TRAMPOLINE_C@", "@TINYGO_SERVICE_RUNTIME_C@", "@TINYGO_GO_ASYNC_APP_C@"]
 }

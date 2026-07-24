@@ -129,6 +129,16 @@ linked feature documents for rationale and rollout plans.
   local cancellation stops only reply tracking. Rust, Zig, and Go expose the
   corresponding event-loop/IPC-future records. AssemblyScript support remains
   deferred.
+  The existing synchronous filesystem shims are unchanged; Go, Rust, and Zig
+  now also expose an additive non-blocking FS-request entry point over that
+  bridge. Its caller owns the request and referenced transfer buffer until its
+  future settles.
+  The Go typed async FS write stages its payload through the operation's own
+  fixed-array storage before entering C: TinyGo delivers a null pointer when the
+  address of a caller-supplied slice element (`&slice[0]`) is passed through a
+  `//go:linkname` C function, so the source must be an array field for the
+  pointer to marshal correctly. A single async write is bounded by one transfer
+  buffer.
   Rust is now the first exception: its `coroutine` module links the C core and
   exposes method-based `Runtime`, `Future`, `Promise`, `Coroutine`,
   `Continuation`, and `FutureGroup` bindings; host Rust tests execute those
@@ -152,6 +162,15 @@ linked feature documents for rationale and rollout plans.
   its small-allocation pool grows from physical pages on demand and releases a
   completely unused page. This keeps JIT compilation independent of service
   metadata and transfer-buffer queue depth.
+- The general kernel small-object slab (`kalloc_small`) grows on demand as
+  well: when a size class's static free list is exhausted it carves a fresh
+  direct-mapped physical frame (allocated below the higher-half window) into
+  chunks and links them onto the free list, so kernel metadata (IPC select-set
+  poll watchers, futexes, container nodes) is bounded by physical memory rather
+  than a fixed count. A WASM application that registered a kernel select-set
+  late in boot previously exhausted the fixed 64-byte class; its endpoint then
+  carried no poll watcher, so a reply delivered to it never woke the waiter and
+  the application blocked forever.
 - Both runtimes use reserve-and-commit linear memory and the same user virtual
   address model. Linear-memory metadata is rebound to live backing before
   pointer-validating hostcalls; memory is reclaimed correctly on process reap.

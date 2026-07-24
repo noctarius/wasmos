@@ -506,6 +506,7 @@ pub mod fs {
         FS_IPC_RMDIR_REQ, FS_IPC_SEEK_REQ, FS_IPC_STAT_REQ, FS_IPC_UNLINK_REQ, FS_IPC_WRITE_REQ,
         O_APPEND, O_CREAT, O_RDONLY, O_TRUNC, O_WRONLY, S_IFDIR, S_IFREG, XFER_GRANT_RW,
     };
+    use crate::wasmos::coroutine::{EventLoop, FsRequest, Future};
 
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
     pub struct Stat {
@@ -515,6 +516,27 @@ pub mod fs {
 
     pub struct File {
         fd: i32,
+    }
+
+    /// Submit a filesystem protocol request through the non-blocking event
+    /// loop. Existing synchronous File APIs remain unchanged. The caller keeps
+    /// request and any transfer buffer named by args[2]/args[3] alive until
+    /// the returned future settles.
+    pub fn request_async<'a>(
+        loop_: &'a mut EventLoop,
+        request: &'a mut FsRequest,
+        reply_endpoint: i32,
+        msg_type: i32,
+        args: [i32; 4],
+    ) -> Result<(&'a mut Future, i32), Error> {
+        let endpoint = unsafe { fs_endpoint() };
+        if endpoint < 0 || reply_endpoint < 0 {
+            return Err(Error::NotAvailable);
+        }
+        request.init();
+        request
+            .send(loop_, endpoint, reply_endpoint, msg_type, args)
+            .ok_or(Error::HostCallFailed)
     }
 
     struct BorrowedBuffer {

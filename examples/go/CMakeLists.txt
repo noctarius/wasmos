@@ -29,6 +29,12 @@ if (GO_AVAILABLE)
     "${TINYGO_ROOT}" "${LIBSYS_WASM_DIR}/coroutine_wasm.c")
   file(RELATIVE_PATH TINYGO_IPC_FUTURE_C
     "${TINYGO_ROOT}" "${LIBSYS_WASM_DIR}/ipc_future_wasm.c")
+  file(RELATIVE_PATH TINYGO_GO_COROUTINE_TRAMPOLINE_C
+    "${TINYGO_ROOT}" "${LIBSYS_WASM_DIR}/go_coroutine_trampoline.c")
+  file(RELATIVE_PATH TINYGO_SERVICE_RUNTIME_C
+    "${TINYGO_ROOT}" "${LIBSYS_WASM_DIR}/service_runtime_wasm.c")
+  file(RELATIVE_PATH TINYGO_GO_ASYNC_APP_C
+    "${TINYGO_ROOT}" "${LIBSYS_WASM_DIR}/go_async_app_wasm.c")
   configure_file(${LIBC_DIR}/go/wasmos-tinygo.json.in ${BUILD_DIR}/wasmos-tinygo.json @ONLY)
   set(WASM_HELLO_GO_STAGE_DIR ${BUILD_DIR}/go_hello_src)
   set(WASM_HELLO_GO_LIBC_SRC ${LIBC_DIR}/go/wasmos.go)
@@ -52,7 +58,9 @@ if (GO_AVAILABLE)
             ./go_hello_src
     DEPENDS ${WASM_HELLO_GO_SRC} ${WASM_HELLO_GO_LIBC_SRC} ${LIBC_DIR}/go/coroutine.go
             ${LIBC_DIR}/go/wasmos-tinygo.json.in ${LIBSYS_WASM_DIR}/coroutine_wasm.c
-            ${LIBSYS_WASM_DIR}/ipc_future_wasm.c
+            ${LIBSYS_WASM_DIR}/ipc_future_wasm.c ${LIBSYS_WASM_DIR}/go_coroutine_trampoline.c
+            ${LIBSYS_WASM_DIR}/service_runtime_wasm.c ${LIBSYS_WASM_DIR}/go_async_app_wasm.c
+            ${LIBSYS_WASM_DIR}/include/wasmos/service_runtime_wasm.h
     WORKING_DIRECTORY ${BUILD_DIR}
     COMMENT "Building wasm hello-go module"
     VERBATIM

@@ -269,6 +269,22 @@ type fsAPI struct{}
 
 var fs = fsAPI{}
 
+// RequestAsync submits one filesystem protocol request without blocking. The
+// caller owns request and any transfer buffer referenced by arg2/arg3 until
+// the returned future settles; replyEndpoint must be the EventLoop endpoint.
+func (fsAPI) RequestAsync(loop *EventLoop, request *FSRequest, replyEndpoint int32, msgType int32, arg0 int32, arg1 int32, arg2 int32, arg3 int32) (*Future, int32, Error) {
+	endpoint := fsEndpoint()
+	if endpoint < 0 || replyEndpoint < 0 || loop == nil || request == nil {
+		return nil, 0, ErrNotAvailable
+	}
+	request.Init()
+	future, requestID := request.Send(loop, endpoint, replyEndpoint, msgType, arg0, arg1, arg2, arg3)
+	if future == nil {
+		return nil, 0, ErrHostCallFailed
+	}
+	return future, requestID, ErrOK
+}
+
 type stagedPath struct {
 	bid     int32
 	b1      int32

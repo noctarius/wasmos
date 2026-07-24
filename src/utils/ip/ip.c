@@ -180,10 +180,11 @@ static void usage(void) {
          "<name> | ip dev <name> up|down | ip dhcp <name> on|off");
 }
 
-static int cmd_dhcp(int32_t stack_ep, int32_t reply_ep, int32_t* rid, const char* dev, uint32_t on) {
+static int cmd_dhcp(int32_t stack_ep, int32_t reply_ep, int32_t* rid, const char* dev,
+                    uint32_t on) {
     wasmos_ipc_message_t message;
-    if (wasmos_ipc_send(stack_ep, reply_ep, NET_IPC_DHCP_SET, *rid, name_to_index(dev), on, 0u, 0) !=
-            0 ||
+    if (wasmos_ipc_send(stack_ep, reply_ep, NET_IPC_DHCP_SET, *rid, name_to_index(dev), on, 0u,
+                        0) != 0 ||
         recv_reply(reply_ep, (*rid)++, &message) != 0 || message.type != NET_IPC_RESP) {
         puts(on ? "[ip] dhcp on failed" : "[ip] dhcp off failed");
         return 1;
@@ -350,8 +351,7 @@ int main(int argc, char** argv) {
         puts("[ip] setup failed");
         return 1;
     }
-    if (n < 1 ||
-        (!str_eq(tok[0], "addr") && !str_eq(tok[0], "dev") && !str_eq(tok[0], "dhcp"))) {
+    if (n < 1 || (!str_eq(tok[0], "addr") && !str_eq(tok[0], "dev") && !str_eq(tok[0], "dhcp"))) {
         usage();
         return 1;
     }

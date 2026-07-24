@@ -152,6 +152,9 @@ pub struct IpcFuture {
     _padding: [u8; 3],
 }
 
+#[repr(transparent)]
+pub struct FsRequest(pub IpcFuture);
+
 unsafe extern "C" {
     fn wasmos_wasm_runtime_init(runtime: *mut Runtime);
     fn wasmos_async_start(
@@ -216,6 +219,20 @@ unsafe extern "C" {
     ) -> *mut Future;
     fn wasmos_sys_wasm_ipc_future_cancel(operation: *mut IpcFuture, status: i32);
     fn wasmos_sys_wasm_ipc_future_reply(operation: *const IpcFuture) -> *const IpcMessage;
+    fn wasmos_sys_wasm_fs_request_init(request: *mut FsRequest);
+    fn wasmos_sys_wasm_fs_request_send(
+        loop_: *mut EventLoop,
+        request: *mut FsRequest,
+        fs_endpoint: i32,
+        reply_endpoint: i32,
+        msg_type: i32,
+        arg0: i32,
+        arg1: i32,
+        arg2: i32,
+        arg3: i32,
+        out_request_id: *mut i32,
+    ) -> *mut Future;
+    fn wasmos_sys_wasm_fs_request_reply(request: *const FsRequest) -> *const IpcMessage;
 }
 
 impl Runtime {
@@ -439,5 +456,42 @@ impl IpcFuture {
     }
     pub fn reply(&self) -> &IpcMessage {
         unsafe { &*wasmos_sys_wasm_ipc_future_reply(self) }
+    }
+}
+
+impl FsRequest {
+    pub const fn new() -> Self {
+        Self(unsafe { core::mem::zeroed() })
+    }
+    pub fn init(&mut self) {
+        unsafe { wasmos_sys_wasm_fs_request_init(self) }
+    }
+    pub fn send(
+        &mut self,
+        loop_: &mut EventLoop,
+        fs_endpoint: i32,
+        reply_endpoint: i32,
+        msg_type: i32,
+        args: [i32; 4],
+    ) -> Option<(&mut Future, i32)> {
+        let mut request_id = 0;
+        let future = unsafe {
+            wasmos_sys_wasm_fs_request_send(
+                loop_,
+                self,
+                fs_endpoint,
+                reply_endpoint,
+                msg_type,
+                args[0],
+                args[1],
+                args[2],
+                args[3],
+                &mut request_id,
+            )
+        };
+        unsafe { future.as_mut().map(|future| (future, request_id)) }
+    }
+    pub fn reply(&self) -> &IpcMessage {
+        unsafe { &*wasmos_sys_wasm_fs_request_reply(self) }
     }
 }

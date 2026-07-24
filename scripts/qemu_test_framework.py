@@ -138,7 +138,12 @@ def build_qemu_cmd(cfg: QemuConfig) -> list:
         # `set_link nic0 on|off` (QemuSession.set_link) to exercise link events.
         # The netdev backend defaults to user-mode SLIRP but can be overridden
         # (e.g. vmnet-bridged) via WASMOS_QEMU_NETDEV; it must keep id=net0.
-        cmd += ["-netdev", cfg.netdev, "-device", f"{cfg.nic_model},netdev=net0,id=nic0"]
+        cmd += [
+            "-netdev",
+            cfg.netdev,
+            "-device",
+            f"{cfg.nic_model},netdev=net0,id=nic0",
+        ]
     # Entropy source for the virtio-rng driver (transitional 1AF4:1005).
     cmd += ["-device", "virtio-rng-pci"]
     if cfg.monitor_socket:

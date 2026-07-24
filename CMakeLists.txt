@@ -465,7 +465,7 @@ set(WASMOS_LIBC_INCLUDE_DEPS
 )
 
 function(wasmos_add_wasm_c_app_target target_name)
-  set(options NO_BUILTIN STARTUP_SHIM CXX)
+  set(options NO_BUILTIN STARTUP_SHIM CXX ASYNC_SERVICE ASYNC_APP)
   set(oneValueArgs SOURCE OUTPUT_WASM OUTPUT_APP MANIFEST EXPORT STACK_SIZE INITIAL_MEMORY MAX_MEMORY BUILD_COMMENT PACK_COMMENT)
   set(multiValueArgs SOURCES)
   cmake_parse_arguments(WASMOS_APP "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
@@ -491,6 +491,16 @@ function(wasmos_add_wasm_c_app_target target_name)
   endif ()
 
   set(_wasmos_libc_sources ${WASMOS_LIBC_C_SOURCES})
+  if (WASMOS_APP_ASYNC_SERVICE AND WASMOS_APP_ASYNC_APP)
+    message(FATAL_ERROR "async WASM target may be a service/driver or an app, not both")
+  endif ()
+  if (WASMOS_APP_ASYNC_SERVICE)
+    list(APPEND _wasmos_libc_sources ${LIBSYS_WASM_DIR}/service_runtime_wasm.c
+         ${LIBSYS_WASM_DIR}/service_async_entry_wasm.c)
+  elseif (WASMOS_APP_ASYNC_APP)
+    list(APPEND _wasmos_libc_sources ${LIBSYS_WASM_DIR}/service_runtime_wasm.c
+         ${LIBSYS_WASM_DIR}/app_async_entry_wasm.c)
+  endif ()
   if (WASMOS_APP_STARTUP_SHIM)
     list(APPEND _wasmos_libc_sources ${LIBC_DIR}/src/startup.c)
   endif ()

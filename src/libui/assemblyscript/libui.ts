@@ -156,7 +156,8 @@ export class Context {
         // Create the window sourced from the event endpoint so it becomes the
         // window owner and receives pushed events; block for the reply there.
         if (!ipc.reply(ctx.gfxEndpoint, ctx.eventEndpoint, GFX_IPC_CREATE_WINDOW, 1, width, height,
-                       GFX_IPC_ABI_MAGIC, packVersionOpcode(GFX_IPC_ABI_VERSION, GFX_IPC_CREATE_WINDOW))) {
+                       GFX_IPC_ABI_MAGIC,
+                       packVersionOpcode(GFX_IPC_ABI_VERSION, GFX_IPC_CREATE_WINDOW))) {
             return null;
         }
         const create = ipc.recv(ctx.eventEndpoint);

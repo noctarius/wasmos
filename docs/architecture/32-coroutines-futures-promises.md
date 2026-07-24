@@ -2690,5 +2690,12 @@ not cancel transport work, so any late reply follows ordinary event-loop
 dispatch. Rust, Zig, and Go expose the same event-loop and IPC-future storage
 records over that C implementation.
 
+The synchronous filesystem shims remain available. Their additive async entry
+points (`fs.RequestAsync`, `wasmos::fs::request_async`, and
+`wasmos.fs.requestAsync`) submit an FS protocol message through a caller-owned
+`FSRequest` and return its future. Any transfer buffer named by the request
+remains caller-owned until that future settles; this is the building block for
+typed async open/read/write/close/unlink/stat state machines.
+
 Deadlines, transport cancellation, CQ dispatch, parallel workers,
 AssemblyScript support, and Go callback adapters remain deferred.

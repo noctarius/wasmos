@@ -598,6 +598,16 @@ pub const fs = struct {
         }
     };
 
+    /// Submits one filesystem protocol request without blocking. Synchronous
+    /// File APIs remain unchanged. request and any transfer buffer named by
+    /// args[2]/args[3] stay caller-owned until the future settles.
+    pub fn requestAsync(loop: *coroutine.EventLoop, request: *coroutine.FsRequest, reply_endpoint: i32, msg_type: i32, args: [4]i32, request_id: *i32) Error!?*coroutine.Future {
+        const endpoint = fs_endpoint();
+        if (endpoint < 0 or reply_endpoint < 0) return Error.NotAvailable;
+        request.init();
+        return request.send(loop, endpoint, reply_endpoint, msg_type, args, request_id);
+    }
+
     // Owner-push staging: own a buffer holding the NUL-terminated path, grant the
     // FS manager R|W over it, and return the handles + path length (excluding
     // NUL). The caller passes path_len (arg0), bid (arg2) and b1 (arg3) to

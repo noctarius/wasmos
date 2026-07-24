@@ -188,6 +188,19 @@ pub const IpcFuture = extern struct {
     }
 };
 
+pub const FsRequest = extern struct {
+    ipc: IpcFuture = .{},
+    pub fn init(self: *FsRequest) void {
+        wasmos_sys_wasm_fs_request_init(self);
+    }
+    pub fn send(self: *FsRequest, loop: *EventLoop, fs_endpoint: i32, reply_endpoint: i32, msg_type: i32, args: [4]i32, request_id: *i32) ?*Future {
+        return wasmos_sys_wasm_fs_request_send(loop, self, fs_endpoint, reply_endpoint, msg_type, args[0], args[1], args[2], args[3], request_id);
+    }
+    pub fn reply(self: *const FsRequest) *const IpcMessage {
+        return wasmos_sys_wasm_fs_request_reply(self);
+    }
+};
+
 extern fn wasmos_wasm_runtime_init(*Runtime) void;
 extern fn wasmos_async_start(*Runtime, *Coroutine, TaskResume, ?*anyopaque) ?*Future;
 extern fn wasmos_wasm_coroutine_run(*Runtime) i32;
@@ -207,3 +220,6 @@ extern fn wasmos_sys_wasm_ipc_future_init(*IpcFuture, ?IpcReplyStatus, ?*anyopaq
 extern fn wasmos_sys_wasm_ipc_future_send(*EventLoop, *IpcFuture, i32, i32, i32, i32, i32, i32, i32, *i32) ?*Future;
 extern fn wasmos_sys_wasm_ipc_future_cancel(*IpcFuture, i32) void;
 extern fn wasmos_sys_wasm_ipc_future_reply(*const IpcFuture) *const IpcMessage;
+extern fn wasmos_sys_wasm_fs_request_init(*FsRequest) void;
+extern fn wasmos_sys_wasm_fs_request_send(*EventLoop, *FsRequest, i32, i32, i32, i32, i32, i32, i32, *i32) ?*Future;
+extern fn wasmos_sys_wasm_fs_request_reply(*const FsRequest) *const IpcMessage;

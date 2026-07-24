@@ -689,8 +689,8 @@ static void net_stack_finish_bind(net_interface_slot_t* interface, uint8_t link_
         /* Address is assigned later from /boot/system/net/interfaces (static)
          * or via DHCP; bring the netif up unconfigured for now so DHCP has an
          * up, link-up interface to exchange DISCOVER/OFFER on. */
-        if (netif_add(&interface->netif, &zero, &zero, &zero, NULL, net_stack_netif_init, ethernet_input) ==
-            NULL) {
+        if (netif_add(&interface->netif, &zero, &zero, &zero, NULL, net_stack_netif_init,
+                      ethernet_input) == NULL) {
             return;
         }
         for (uint32_t i = 0u; i < ETH_HWADDR_LEN; ++i) {
@@ -954,8 +954,8 @@ static void net_stack_link_get_coroutine(void* arg) {
     uintptr_t value = 0u;
     nd_ipc_message_t* reply;
 
-    if (slot == NULL ||
-        wasmos_future_await(&slot->link_get_future.future, &value) != 0 || value == 0u) {
+    if (slot == NULL || wasmos_future_await(&slot->link_get_future.future, &value) != 0 ||
+        value == 0u) {
         if (slot != NULL)
             slot->link_get_pending = 0u;
         return;
@@ -972,18 +972,16 @@ static void net_stack_start_lookup_coroutine(void) {
         return;
     }
     wasmos_sys_ipc_pack_name16_native((const uint8_t*)"virtio.net", 10u, args);
-    wasmos_sys_native_ipc_future_init(&g_netdrv_lookup_future, net_stack_lookup_reply_status,
-                                      NULL);
+    wasmos_sys_native_ipc_future_init(&g_netdrv_lookup_future, net_stack_lookup_reply_status, NULL);
     if (!wasmos_sys_native_ipc_future_send(&g_control_loop, &g_netdrv_lookup_future,
-                                           g_proc_endpoint, g_control_endpoint,
-                                           SVC_IPC_LOOKUP_REQ, args[0], args[1], args[2], args[3],
-                                           NULL)) {
+                                           g_proc_endpoint, g_control_endpoint, SVC_IPC_LOOKUP_REQ,
+                                           args[0], args[1], args[2], args[3], NULL)) {
         return;
     }
     g_netdrv_lookup_pending = 1u;
-    if (!g_control_runtime || !wasmos_async_start(g_control_runtime, &g_netdrv_lookup_coroutine,
-                            g_netdrv_lookup_stack, sizeof(g_netdrv_lookup_stack),
-                            net_stack_lookup_coroutine, NULL)) {
+    if (!g_control_runtime ||
+        !wasmos_async_start(g_control_runtime, &g_netdrv_lookup_coroutine, g_netdrv_lookup_stack,
+                            sizeof(g_netdrv_lookup_stack), net_stack_lookup_coroutine, NULL)) {
         wasmos_sys_native_ipc_future_cancel(&g_netdrv_lookup_future, -1);
         g_netdrv_lookup_pending = 0u;
     }
@@ -1204,9 +1202,8 @@ static void net_stack_try_bind_interface(net_interface_slot_t* slot) {
         return;
     }
     if (slot->rx_buffer == NULL) {
-        slot->rx_buffer = (uint8_t*)g_api->xfer_buffer_acquire(ND_BUFFER_KIND_XFER,
-                                                                 NET_STACK_FRAME_BYTES,
-                                                                 &slot->rx_buffer_id);
+        slot->rx_buffer = (uint8_t*)g_api->xfer_buffer_acquire(
+            ND_BUFFER_KIND_XFER, NET_STACK_FRAME_BYTES, &slot->rx_buffer_id);
         if (slot->rx_buffer == NULL ||
             g_api->xfer_buffer_borrow(slot->endpoint, slot->rx_buffer_id,
                                       ND_BUFFER_BORROW_READ | ND_BUFFER_BORROW_WRITE) < 0) {
@@ -1232,10 +1229,9 @@ static void net_stack_try_bind_interface(net_interface_slot_t* slot) {
     }
     slot->link_get_pending = 1u;
     slot->state = NET_IFC_LINK_QUERIED;
-    if (!g_control_runtime || !wasmos_async_start(g_control_runtime, &slot->link_get_coroutine,
-                                                   slot->link_get_stack,
-                                                   sizeof(slot->link_get_stack),
-                                                   net_stack_link_get_coroutine, slot)) {
+    if (!g_control_runtime ||
+        !wasmos_async_start(g_control_runtime, &slot->link_get_coroutine, slot->link_get_stack,
+                            sizeof(slot->link_get_stack), net_stack_link_get_coroutine, slot)) {
         wasmos_sys_native_ipc_future_cancel(&slot->link_get_future, -1);
         slot->link_get_pending = 0u;
     }
@@ -1640,8 +1636,7 @@ static void net_stack_handle_ifaddr_list(const nd_ipc_message_t* request) {
                 out[count].flags |= NET_IFADDR_FLAG_DHCP;
             }
             out[count].addr_v4 = ip4_addr_get_u32(ip_2_ip4(&g_interfaces[i].netif.ip_addr));
-            out[count].netmask_v4 =
-                ip4_addr_get_u32(ip_2_ip4(&g_interfaces[i].netif.netmask));
+            out[count].netmask_v4 = ip4_addr_get_u32(ip_2_ip4(&g_interfaces[i].netif.netmask));
             out[count].gateway_v4 = ip4_addr_get_u32(ip_2_ip4(&g_interfaces[i].netif.gw));
         } else {
             out[count].addr_v4 = 0u;

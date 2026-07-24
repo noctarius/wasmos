@@ -1,82 +1,125 @@
 const std = @import("std");
 const wasmos = @import("wasmos.zig");
-var printed: bool = false;
-const TaskState = struct { phase: u32 = 0 };
-fn resumeTask(user: ?*anyopaque, out: *usize) callconv(.c) i32 {
-    const state: *TaskState = @ptrCast(@alignCast(user.?));
-    if (state.phase == 0) {
-        state.phase = 1;
-        return wasmos.coroutine.TaskResult.yielded;
-    }
-    out.* = 42;
-    return wasmos.coroutine.TaskResult.complete;
+const coroutine = wasmos.coroutine;
+const Future = coroutine.Future;
+const AsyncFsOp = coroutine.AsyncFsOp;
+const O_RDONLY = wasmos.O_RDONLY;
+const O_WRONLY = wasmos.O_WRONLY;
+const O_CREAT = wasmos.O_CREAT;
+const O_TRUNC = wasmos.O_TRUNC;
+
+const path = "zig-long-file-check.txt";
+const content = "zig shim long filename\n";
+
+// The promise callbacks are plain function pointers and therefore cannot
+// capture, so the small amount of state threaded through the chain (the active
+// fd and the read scratch buffers) lives in these app-owned globals.
+var app_fd: i32 = -1;
+var startup_buf: [1]u8 = undefined;
+var check_buf: [32]u8 = undefined;
+
+fn failStartup() ?*Future {
+    _ = wasmos.stdlib.println("startup.nsh readable: false", .{}) catch {};
+    return null;
 }
+
+fn failWrite() ?*Future {
+    _ = wasmos.stdlib.println("long filename write: false", .{}) catch {};
+    return null;
+}
+
+fn failUnlink() ?*Future {
+    _ = wasmos.stdlib.println("long filename unlink: false", .{}) catch {};
+    return null;
+}
+
+fn appStart() ?*Future {
+    const op = coroutine.openAsync("/boot/startup.nsh", O_RDONLY) orelse return failStartup();
+    return op.then(startupOpened);
+}
+
+fn startupOpened(open: *AsyncFsOp) ?*Future {
+    const fd = open.result();
+    if (fd < 0) return failStartup();
+    app_fd = fd;
+    const op = coroutine.readAsync(fd, startup_buf[0..]) orelse return failStartup();
+    return op.then(startupRead);
+}
+
+fn startupRead(read: *AsyncFsOp) ?*Future {
+    if (read.result() != 1) return failStartup();
+    const op = coroutine.closeAsync(app_fd) orelse return failStartup();
+    return op.then(startupClosed);
+}
+
+fn startupClosed(close: *AsyncFsOp) ?*Future {
+    if (close.result() < 0) return failStartup();
+    _ = wasmos.stdlib.println("startup.nsh readable: true", .{}) catch {};
+    const op = coroutine.openAsync(path, O_WRONLY | O_CREAT | O_TRUNC) orelse return failWrite();
+    return op.then(fileCreated);
+}
+
+fn fileCreated(create: *AsyncFsOp) ?*Future {
+    const fd = create.result();
+    if (fd < 0) return failWrite();
+    app_fd = fd;
+    const op = coroutine.writeAsync(fd, content) orelse return failWrite();
+    return op.then(fileWritten);
+}
+
+fn fileWritten(write: *AsyncFsOp) ?*Future {
+    if (write.result() != @as(i32, @intCast(content.len))) return failWrite();
+    const op = coroutine.closeAsync(app_fd) orelse return failWrite();
+    return op.then(writeClosed);
+}
+
+fn writeClosed(close: *AsyncFsOp) ?*Future {
+    if (close.result() < 0) return failWrite();
+    const op = coroutine.openAsync(path, O_RDONLY) orelse return failWrite();
+    return op.then(verifyOpened);
+}
+
+fn verifyOpened(open: *AsyncFsOp) ?*Future {
+    const fd = open.result();
+    if (fd < 0) return failWrite();
+    app_fd = fd;
+    const op = coroutine.readAsync(fd, check_buf[0..]) orelse return failWrite();
+    return op.then(verifyRead);
+}
+
+fn verifyRead(read: *AsyncFsOp) ?*Future {
+    const matched = read.result() == @as(i32, @intCast(content.len)) and
+        std.mem.eql(u8, check_buf[0..content.len], content);
+    if (!matched) return failWrite();
+    const op = coroutine.closeAsync(app_fd) orelse return failWrite();
+    return op.then(verifyClosed);
+}
+
+fn verifyClosed(close: *AsyncFsOp) ?*Future {
+    if (close.result() < 0) return failWrite();
+    const op = coroutine.unlinkAsync(path) orelse return failUnlink();
+    return op.then(fileUnlinked);
+}
+
+fn fileUnlinked(unlink: *AsyncFsOp) ?*Future {
+    if (unlink.result() < 0) return failUnlink();
+    // A stat of the just-unlinked path is expected to reject; catch converts
+    // that rejection into the success report.
+    const op = coroutine.statAsync(path) orelse return failUnlink();
+    return op.catchReject(statRejected);
+}
+
+fn statRejected(status: i32) i32 {
+    _ = status;
+    _ = wasmos.stdlib.println("long filename write: true", .{}) catch {};
+    _ = wasmos.stdlib.println("long filename unlink: true", .{}) catch {};
+    return 0;
+}
+
 pub fn main() u8 {
-    if (!printed) {
-        const path = "zig-long-file-check.txt";
-        const content = "zig shim long filename\n";
-        var long_file_ok = false;
-        var file = wasmos.fs.openRead("/boot/startup.nsh") catch |err| {
-            printed = true;
-            _ = wasmos.stdlib.println("Hello from Zig on WASMOS!", .{}) catch {};
-            _ = wasmos.stdlib.println("This is a tiny WASMOS-APP written in Zig.", .{}) catch {};
-            _ = wasmos.stdlib.printf("Entry: {s}\n", .{"main"}) catch {};
-            _ = wasmos.stdlib.println("startup.nsh: {s}", .{@errorName(err)}) catch {};
-            return 0;
-        };
-        defer file.close() catch {};
-        var out = wasmos.fs.create(path) catch |err| {
-            printed = true;
-            _ = wasmos.stdlib.println("Hello from Zig on WASMOS!", .{}) catch {};
-            _ = wasmos.stdlib.println("This is a tiny WASMOS-APP written in Zig.", .{}) catch {};
-            _ = wasmos.stdlib.printf("Entry: {s}\n", .{"main"}) catch {};
-            _ = wasmos.stdlib.println("long filename write: {s}", .{@errorName(err)}) catch {};
-            return 0;
-        };
-        _ = out.write(content) catch 0;
-        out.close() catch {};
-        var verify = wasmos.fs.openRead(path) catch |err| {
-            printed = true;
-            _ = wasmos.stdlib.println("Hello from Zig on WASMOS!", .{}) catch {};
-            _ = wasmos.stdlib.println("This is a tiny WASMOS-APP written in Zig.", .{}) catch {};
-            _ = wasmos.stdlib.printf("Entry: {s}\n", .{"main"}) catch {};
-            _ = wasmos.stdlib.println("long filename write: {s}", .{@errorName(err)}) catch {};
-            return 0;
-        };
-        var verify_buf: [32]u8 = undefined;
-        const verify_count = verify.read(verify_buf[0..]) catch 0;
-        verify.close() catch {};
-        long_file_ok = std.mem.eql(u8, verify_buf[0..verify_count], content);
-        const unlink_ok = if (long_file_ok) blk: {
-            wasmos.fs.unlink(path) catch break :blk false;
-            _ = wasmos.fs.stat(path) catch break :blk true;
-            break :blk false;
-        } else false;
-        var buffer: [96]u8 = undefined;
-        const count = file.read(buffer[0..]) catch 0;
-        const readable = std.mem.indexOf(u8, buffer[0..count], "BOOTX64.EFI") != null;
-        var runtime: wasmos.coroutine.Runtime = .{};
-        var coroutine: wasmos.coroutine.Coroutine = .{};
-        var state: TaskState = .{};
-        runtime.init();
-        const coroutine_ok = coroutine.start(&runtime, resumeTask, &state) != null and
-            runtime.run() >= 0 and
-            if (coroutine.completion.poll()) |result| switch (result) {
-                .ready => |value| value == 42,
-                else => false,
-            } else false;
-        printed = true;
-        _ = wasmos.stdlib.println("Hello from Zig on WASMOS!", .{}) catch {};
-        _ = wasmos.stdlib.println("This is a tiny WASMOS-APP written in Zig.", .{}) catch {};
-        _ = wasmos.stdlib.printf("Entry: {s}\n", .{"main"}) catch {};
-        _ = wasmos.stdlib.println("startup.nsh readable: {}", .{readable}) catch {};
-        _ = wasmos.stdlib.println("long filename write: {}", .{long_file_ok}) catch {};
-        _ = wasmos.stdlib.println("long filename unlink: {}", .{unlink_ok}) catch {};
-        if (coroutine_ok) {
-            _ = wasmos.stdlib.println("coroutine task: ready", .{}) catch {};
-        } else {
-            _ = wasmos.stdlib.println("coroutine task: failed", .{}) catch {};
-        }
-    }
+    _ = wasmos.stdlib.println("Hello from Zig on WASMOS!", .{}) catch {};
+    _ = wasmos.stdlib.println("This is a tiny WASMOS-APP written in Zig.", .{}) catch {};
+    _ = wasmos.stdlib.printf("Entry: {s}\n", .{"main"}) catch {};
+    _ = coroutine.runAsyncApp(appStart);
     return 0;
 }

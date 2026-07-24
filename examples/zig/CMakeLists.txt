@@ -29,6 +29,7 @@ wasmos_add_zig_wasm_app(
     ${LIBC_DIR}/zig/coroutine.zig
     ${LIBSYS_WASM_DIR}/coroutine_wasm.c
     ${LIBSYS_WASM_DIR}/ipc_future_wasm.c
+    ${LIBSYS_WASM_DIR}/service_runtime_wasm.c
   INCLUDE_DIRS
     ${LIBSYS_WASM_DIR}/include
     ${LIBC_DIR}/include

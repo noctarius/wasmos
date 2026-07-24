@@ -223,3 +223,243 @@ extern fn wasmos_sys_wasm_ipc_future_reply(*const IpcFuture) *const IpcMessage;
 extern fn wasmos_sys_wasm_fs_request_init(*FsRequest) void;
 extern fn wasmos_sys_wasm_fs_request_send(*EventLoop, *FsRequest, i32, i32, i32, i32, i32, i32, i32, *i32) ?*Future;
 extern fn wasmos_sys_wasm_fs_request_reply(*const FsRequest) *const IpcMessage;
+
+// ============================================================================
+// Typed asynchronous filesystem operations and the C-owned application wrapper.
+//
+// These mirror the Go `AsyncFSOperation` / `RunAsyncApp` API so a Zig app can
+// express a filesystem workflow as a Promise-style chain of `.then` callbacks
+// driven by the shared C coroutine runtime.  Zig passes buffer pointers
+// straight through the linked C boundary and uses its own function pointers as
+// continuation callbacks; the promise operations come from a fixed leak pool
+// because the WASM target is freestanding with no heap.
+// ============================================================================
+
+/// A success callback returns this to hand its returned future back to the
+/// runtime; the child future then adopts that future's eventual result.
+pub const FUTURE_CHAIN_NEXT: i32 = 2;
+
+/// Matches `wasmos_sys_wasm_fs_operation_t`.
+pub const FsOperation = extern struct {
+    request: FsRequest = .{},
+    buffer_id: i32 = 0,
+    buffer_borrow: i32 = 0,
+    length: i32 = 0,
+    has_buffer: u8 = 0,
+};
+
+pub const PrepareFn = *const fn (?*anyopaque, i32, i32, i32, i32) callconv(.c) void;
+
+/// Matches `wasmos_sys_wasm_async_config_t`: the C wrapper owns the runtime,
+/// root coroutine, event loop, and private reply endpoint for the whole app.
+pub const AsyncAppConfig = extern struct {
+    runtime: Runtime = .{},
+    root: Coroutine = .{},
+    event_loop: EventLoop = .{},
+    reply_endpoint: i32 = 0,
+    @"resume": ?TaskResume = null,
+    prepare: ?PrepareFn = null,
+    user: ?*anyopaque = null,
+};
+
+pub const ChainCallback = *const fn (*AsyncFsOp) ?*Future;
+pub const CatchCallback = *const fn (i32) i32;
+
+/// One typed asynchronous filesystem operation plus the owner storage its
+/// promise chain needs.  Instances come from a fixed leak pool: the WASM app
+/// target is freestanding with no heap, and every op in a chain must stay live
+/// until the whole chain settles (the flattened futures adopt one another).
+pub const AsyncFsOp = struct {
+    operation: FsOperation = .{},
+    future: ?*Future = null,
+    continuation: Continuation = .{},
+    adopt: Continuation = .{},
+    reply: IpcMessage = undefined,
+    read_ptr: ?[*]u8 = null,
+    read_len: i32 = 0,
+    path: [256]u8 = undefined,
+    chain: ?ChainCallback = null,
+    catch_fn: ?CatchCallback = null,
+
+    /// Copy out a settled read payload and return the response status/result.
+    pub fn result(self: *AsyncFsOp) i32 {
+        const dst: ?*anyopaque = if (self.read_ptr) |p| @ptrCast(p) else null;
+        return wasmos_sys_wasm_fs_operation_finish(&self.operation, dst, self.read_len, &self.reply);
+    }
+
+    /// JavaScript-Promise `then`: the callback returns the next future and the
+    /// returned future adopts its eventual result.
+    pub fn then(self: *AsyncFsOp, chain: ChainCallback) ?*Future {
+        const future = self.future orelse return null;
+        self.chain = chain;
+        return wasmos_future_then_flat(wasmos_sys_wasm_async_runtime().?, future, &self.continuation, &self.adopt, asyncFsChainSuccess, asyncFsChainError, @ptrCast(self));
+    }
+
+    /// Promise `catch`: convert a rejected operation into a resolved one. The
+    /// handler returns zero to resolve or a negative status to keep rejecting.
+    pub fn catchReject(self: *AsyncFsOp, handler: CatchCallback) ?*Future {
+        const future = self.future orelse return null;
+        self.catch_fn = handler;
+        return wasmos_future_then(wasmos_sys_wasm_async_runtime().?, future, &self.continuation, null, asyncFsCatchError, @ptrCast(self));
+    }
+};
+
+fn asyncFsChainSuccess(user: ?*anyopaque, value: usize, out: *usize) callconv(.c) i32 {
+    _ = value;
+    const op: *AsyncFsOp = @ptrCast(@alignCast(user.?));
+    if (op.chain) |chain| {
+        const next = chain(op) orelse return -1;
+        out.* = @intFromPtr(next);
+        return FUTURE_CHAIN_NEXT;
+    }
+    return -1;
+}
+
+fn asyncFsChainError(user: ?*anyopaque, status: i32, out: *usize) callconv(.c) i32 {
+    _ = user;
+    out.* = 0;
+    return status;
+}
+
+fn asyncFsCatchError(user: ?*anyopaque, status: i32, out: *usize) callconv(.c) i32 {
+    const op: *AsyncFsOp = @ptrCast(@alignCast(user.?));
+    out.* = 0;
+    return if (op.catch_fn) |handler| handler(status) else status;
+}
+
+const ASYNC_FS_OP_MAX = 24;
+var fs_op_pool: [ASYNC_FS_OP_MAX]AsyncFsOp = [_]AsyncFsOp{.{}} ** ASYNC_FS_OP_MAX;
+var fs_op_next: usize = 0;
+
+fn allocOp() ?*AsyncFsOp {
+    if (fs_op_next >= ASYNC_FS_OP_MAX) return null;
+    const op = &fs_op_pool[fs_op_next];
+    fs_op_next += 1;
+    op.* = .{};
+    return op;
+}
+
+fn stagePath(op: *AsyncFsOp, path: []const u8) bool {
+    if (path.len == 0 or path.len + 1 > op.path.len) return false;
+    @memcpy(op.path[0..path.len], path);
+    op.path[path.len] = 0;
+    return true;
+}
+
+/// Open `path` with `flags`; returns a promise-chainable operation.
+pub fn openAsync(path: []const u8, flags: i32) ?*AsyncFsOp {
+    const op = allocOp() orelse return null;
+    if (!stagePath(op, path)) return null;
+    var request_id: i32 = 0;
+    const future = wasmos_sys_wasm_fs_open_async(wasmos_sys_wasm_async_event_loop().?, &op.operation, host.fs_endpoint(), wasmos_sys_wasm_async_reply_endpoint(), op.path[0..].ptr, flags, &request_id) orelse return null;
+    op.future = future;
+    return op;
+}
+
+/// Read up to `dst.len` bytes for `fd`; `dst` must stay live until the
+/// operation settles and `result` copies the payload into it.
+pub fn readAsync(fd: i32, dst: []u8) ?*AsyncFsOp {
+    if (dst.len == 0) return null;
+    const op = allocOp() orelse return null;
+    op.read_ptr = dst.ptr;
+    op.read_len = @intCast(dst.len);
+    var request_id: i32 = 0;
+    const future = wasmos_sys_wasm_fs_read_async(wasmos_sys_wasm_async_event_loop().?, &op.operation, host.fs_endpoint(), wasmos_sys_wasm_async_reply_endpoint(), fd, @ptrCast(dst.ptr), @intCast(dst.len), &request_id) orelse return null;
+    op.future = future;
+    return op;
+}
+
+/// Write `src` to `fd`; `src` is copied synchronously into the transfer buffer.
+pub fn writeAsync(fd: i32, src: []const u8) ?*AsyncFsOp {
+    if (src.len == 0) return null;
+    const op = allocOp() orelse return null;
+    var request_id: i32 = 0;
+    const future = wasmos_sys_wasm_fs_write_async(wasmos_sys_wasm_async_event_loop().?, &op.operation, host.fs_endpoint(), wasmos_sys_wasm_async_reply_endpoint(), fd, @ptrCast(src.ptr), @intCast(src.len), &request_id) orelse return null;
+    op.future = future;
+    return op;
+}
+
+/// Close `fd`.
+pub fn closeAsync(fd: i32) ?*AsyncFsOp {
+    const op = allocOp() orelse return null;
+    var request_id: i32 = 0;
+    const future = wasmos_sys_wasm_fs_close_async(wasmos_sys_wasm_async_event_loop().?, &op.operation, host.fs_endpoint(), wasmos_sys_wasm_async_reply_endpoint(), fd, &request_id) orelse return null;
+    op.future = future;
+    return op;
+}
+
+/// Unlink `path`.
+pub fn unlinkAsync(path: []const u8) ?*AsyncFsOp {
+    const op = allocOp() orelse return null;
+    if (!stagePath(op, path)) return null;
+    var request_id: i32 = 0;
+    const future = wasmos_sys_wasm_fs_unlink_async(wasmos_sys_wasm_async_event_loop().?, &op.operation, host.fs_endpoint(), wasmos_sys_wasm_async_reply_endpoint(), op.path[0..].ptr, &request_id) orelse return null;
+    op.future = future;
+    return op;
+}
+
+/// Stat `path`; rejects when the path does not exist.
+pub fn statAsync(path: []const u8) ?*AsyncFsOp {
+    const op = allocOp() orelse return null;
+    if (!stagePath(op, path)) return null;
+    var request_id: i32 = 0;
+    const future = wasmos_sys_wasm_fs_stat_async(wasmos_sys_wasm_async_event_loop().?, &op.operation, host.fs_endpoint(), wasmos_sys_wasm_async_reply_endpoint(), op.path[0..].ptr, &request_id) orelse return null;
+    op.future = future;
+    return op;
+}
+
+const AppState = struct {
+    start: ?*const fn () ?*Future = null,
+    completion: ?*Future = null,
+    started: bool = false,
+};
+var app_state: AppState = .{};
+var app_config: AsyncAppConfig = .{};
+
+fn appResume(user: ?*anyopaque, out: *usize) callconv(.c) i32 {
+    _ = user;
+    if (!app_state.started) {
+        app_state.started = true;
+        app_state.completion = if (app_state.start) |s| s() else null;
+    }
+    const completion = app_state.completion orelse return -1;
+    return switch (completion.awaitValue()) {
+        .pending => TaskResult.yielded,
+        .ready => |value| ret: {
+            out.* = value;
+            break :ret TaskResult.complete;
+        },
+        .failed => |status| status,
+        .invalid => -1,
+    };
+}
+
+/// Enter the C-owned application wrapper. `start` runs once from the root
+/// coroutine and returns the terminal future for the app's promise chain; the
+/// wrapper owns the runtime, event loop, and private reply endpoint.
+pub fn runAsyncApp(start: *const fn () ?*Future) i32 {
+    app_state = .{ .start = start, .completion = null, .started = false };
+    app_config.@"resume" = appResume;
+    app_config.prepare = null;
+    app_config.user = null;
+    return wasmos_sys_wasm_async_run(&app_config, 0, 0, 0, 0);
+}
+
+// Scoped so the `fs_endpoint` host import does not collide with the
+// `fs_endpoint` parameters used by the request/ipc-future send methods above.
+const host = struct {
+    extern "wasmos" fn fs_endpoint() callconv(.c) i32;
+};
+extern fn wasmos_sys_wasm_fs_operation_init(*FsOperation) void;
+extern fn wasmos_sys_wasm_fs_open_async(*EventLoop, *FsOperation, i32, i32, [*]const u8, i32, *i32) ?*Future;
+extern fn wasmos_sys_wasm_fs_read_async(*EventLoop, *FsOperation, i32, i32, i32, ?*anyopaque, i32, *i32) ?*Future;
+extern fn wasmos_sys_wasm_fs_write_async(*EventLoop, *FsOperation, i32, i32, i32, ?*const anyopaque, i32, *i32) ?*Future;
+extern fn wasmos_sys_wasm_fs_close_async(*EventLoop, *FsOperation, i32, i32, i32, *i32) ?*Future;
+extern fn wasmos_sys_wasm_fs_unlink_async(*EventLoop, *FsOperation, i32, i32, [*]const u8, *i32) ?*Future;
+extern fn wasmos_sys_wasm_fs_stat_async(*EventLoop, *FsOperation, i32, i32, [*]const u8, *i32) ?*Future;
+extern fn wasmos_sys_wasm_fs_operation_finish(*FsOperation, ?*anyopaque, i32, *IpcMessage) i32;
+extern fn wasmos_future_then_flat(*Runtime, *Future, *Continuation, *Continuation, ?SuccessCallback, ?ErrorCallback, ?*anyopaque) ?*Future;
+extern fn wasmos_sys_wasm_async_run(*AsyncAppConfig, i32, i32, i32, i32) i32;
+extern fn wasmos_sys_wasm_async_event_loop() ?*EventLoop;
+extern fn wasmos_sys_wasm_async_reply_endpoint() i32;
+extern fn wasmos_sys_wasm_async_runtime() ?*Runtime;

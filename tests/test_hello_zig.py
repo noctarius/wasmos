@@ -49,6 +49,9 @@ class HelloZigTest(unittest.TestCase):
             "hello_zig",
             [
                 b"Hello from Zig on WASMOS!",
+                b"startup.nsh readable: true",
+                b"long filename write: true",
+                b"long filename unlink: true",
             ],
         )
 

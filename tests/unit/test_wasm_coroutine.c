@@ -290,9 +290,14 @@ static int test_race_and_all(void) {
     wasmos_future_init(&second, &second_promise);
     result =
         WASMOS_FUTURE_ALL(&runtime, &failed_group, values, failed_continuations, &first, &second);
+    /* A fail-fast all settles on the first rejection, immediately marks the
+     * group inactive, and unlinks the still-pending source so its later
+     * completion is a no-op that never touches group storage. */
     if (!result || !wasmos_promise_reject(&first_promise, -7) ||
         wasmos_wasm_coroutine_run(&runtime) != 0 || !wasmos_future_poll(result, &status, &value) ||
-        status != -7 || !failed_group.active || !wasmos_promise_resolve(&second_promise, 2u) ||
+        status != -7 || !failed_group.settled || failed_group.active ||
+        failed_continuations[1].active || second.continuations != NULL ||
+        !wasmos_promise_resolve(&second_promise, 2u) ||
         wasmos_wasm_coroutine_run(&runtime) != 0 || failed_group.active) {
         return __LINE__;
     }

@@ -425,6 +425,64 @@ static void future_group_callback_complete(wasmos_future_group_t* group) {
     }
 }
 
+static void continuation_list_remove(wasmos_future_continuation_t** head,
+                                     wasmos_future_continuation_t** tail,
+                                     wasmos_future_continuation_t* target) {
+    wasmos_future_continuation_t* prev = NULL;
+    wasmos_future_continuation_t* cur = *head;
+
+    while (cur) {
+        if (cur == target) {
+            if (prev) {
+                prev->next = cur->next;
+            } else {
+                *head = cur->next;
+            }
+            if (tail && *tail == target) {
+                *tail = prev;
+            }
+            return;
+        }
+        prev = cur;
+        cur = cur->next;
+    }
+}
+
+/* Detach a still-registered continuation from wherever it currently sits: the
+ * pending source future's continuation list, or the runtime's dispatch queue if
+ * its source already settled. A dispatched continuation has active == false and
+ * is left untouched. */
+static void continuation_cancel(wasmos_native_coroutine_runtime_t* runtime,
+                                wasmos_future_continuation_t* continuation) {
+    wasmos_future_t* future;
+
+    if (!continuation || !continuation->active) {
+        return;
+    }
+    future = continuation->future;
+    if (future && future->state == WASMOS_FUTURE_PENDING) {
+        continuation_list_remove(&future->continuations, NULL, continuation);
+    } else if (runtime) {
+        continuation_list_remove(&runtime->continuation_head, &runtime->continuation_tail,
+                                 continuation);
+    }
+    continuation->next = NULL;
+    continuation->future = NULL;
+    continuation->active = false;
+}
+
+/* Called once a group has settled to release its remaining source
+ * continuations so caller-owned group storage need not outlive slow sources. */
+static void future_group_abandon(wasmos_future_group_t* group) {
+    if (!group || !group->continuations) {
+        return;
+    }
+    for (size_t i = 0; i < group->count; ++i) {
+        continuation_cancel(group->runtime, &group->continuations[i]);
+    }
+    group->active = false;
+}
+
 static int32_t future_group_success(void* user, uintptr_t value, uintptr_t* out_value) {
     wasmos_future_continuation_t* continuation = user;
     wasmos_future_group_t* group = continuation ? continuation->group : NULL;
@@ -438,11 +496,13 @@ static int32_t future_group_success(void* user, uintptr_t value, uintptr_t* out_
         if (!group->settled && group->completed == group->count) {
             group->settled = true;
             (void)wasmos_promise_resolve(&group->promise, (uintptr_t)group->values);
+            future_group_abandon(group);
         }
     } else {
         if (!group->settled) {
             group->settled = true;
             (void)wasmos_promise_resolve(&group->promise, value);
+            future_group_abandon(group);
         }
         future_group_callback_complete(group);
     }
@@ -461,6 +521,7 @@ static int32_t future_group_error(void* user, int32_t status, uintptr_t* out_val
     if (!group->settled) {
         group->settled = true;
         (void)wasmos_promise_reject(&group->promise, error);
+        future_group_abandon(group);
     }
     future_group_callback_complete(group);
     *out_value = 0;
@@ -489,12 +550,14 @@ static wasmos_future_t*
 future_group_start(wasmos_native_coroutine_runtime_t* runtime, wasmos_future_group_t* group,
                    wasmos_future_t* const* inputs, size_t count, uintptr_t* values,
                    wasmos_future_continuation_t* continuations, wasmos_future_group_kind_t kind) {
-    /* TODO: add continuation cancellation so a settled race/fail-fast all can
-     * release caller group storage without waiting for every source. */
+    /* Once the group settles, future_group_abandon() unlinks the remaining
+     * source continuations, so caller group storage only needs to outlive the
+     * group future, not every source. */
     if (!future_group_inputs_valid(runtime, group, inputs, count, values, continuations, kind)) {
         return NULL;
     }
     group->runtime = runtime;
+    group->continuations = continuations;
     group->values = values;
     group->count = count;
     group->completed = 0;

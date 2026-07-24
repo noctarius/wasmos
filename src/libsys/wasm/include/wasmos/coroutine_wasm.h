@@ -86,10 +86,14 @@ struct wasmos_future_continuation {
 };
 
 typedef enum { WASMOS_FUTURE_GROUP_RACE = 0, WASMOS_FUTURE_GROUP_ALL } wasmos_future_group_kind_t;
+/* Once the group future settles the runtime unlinks every still-pending source
+ * continuation, so group, continuations, and values only need to stay live
+ * until the group future settles - not until every source settles. */
 struct wasmos_future_group {
     wasmos_wasm_runtime_t* runtime;
     wasmos_future_t future;
     wasmos_promise_t promise;
+    wasmos_future_continuation_t* continuations;
     uintptr_t* values;
     size_t count;
     size_t completed;

@@ -88,12 +88,16 @@ typedef enum wasmos_future_group_kind {
     WASMOS_FUTURE_GROUP_ALL,
 } wasmos_future_group_kind_t;
 
-/* Caller-owned state for race/all. It remains live until every source future
- * has settled, including after a race or fail-fast all result is available. */
+/* Caller-owned state for race/all. Once the group future settles (a race
+ * result, or a fail-fast all failure/complete all success) the runtime unlinks
+ * every still-pending source continuation, so the group, its continuations, and
+ * its values array only need to remain live until the group future settles -
+ * not until every source future settles. */
 struct wasmos_future_group {
     wasmos_native_coroutine_runtime_t* runtime;
     wasmos_future_t future;
     wasmos_promise_t promise;
+    wasmos_future_continuation_t* continuations;
     uintptr_t* values;
     size_t count;
     size_t completed;
@@ -180,9 +184,10 @@ wasmos_future_t* wasmos_future_then(wasmos_native_coroutine_runtime_t* runtime,
                                     wasmos_future_error_fn_t on_error, void* user);
 
 /* Register every source before returning. The inputs array is consumed during
- * this call, but group and continuations[count] must remain live until every
- * source settles. race resolves/rejects from the first source outcome; all
- * resolves with values on complete success or rejects on the first failure. */
+ * this call, but group and continuations[count] must remain live until the
+ * group future settles (the runtime unlinks unsettled sources at that point).
+ * race resolves/rejects from the first source outcome; all resolves with values
+ * on complete success or rejects on the first failure. */
 wasmos_future_t* wasmos_future_race(wasmos_native_coroutine_runtime_t* runtime,
                                     wasmos_future_group_t* group, wasmos_future_t* const* inputs,
                                     size_t count, wasmos_future_continuation_t* continuations);

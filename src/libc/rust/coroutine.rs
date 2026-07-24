@@ -106,6 +106,7 @@ pub struct FutureGroup {
     runtime: *mut Runtime,
     future: Future,
     promise: Promise,
+    continuations: *mut Continuation,
     values: *mut usize,
     count: usize,
     completed: usize,

@@ -91,8 +91,9 @@ linked feature documents for rationale and rollout plans.
   callbacks through the runtime rather than invoking them inline, and return a
   caller-owned child future for value-transforming, rejection-propagating
   chains. Caller-owned `race`/`all` groups and variadic C macros provide
-  first-outcome and all-success aggregation; group storage remains live until
-  every input settles because continuation cancellation is not implemented.
+  first-outcome and all-success aggregation; once the group future settles the
+  runtime unlinks the remaining source continuations, so group storage only
+  needs to stay live until the group future settles, not until every input does.
   The host unit suite exercises both the C runtime and native Zig wrapper,
   including `asyncStart`, chained callbacks, slice-based `race`/`all`, and
   invalid slice contracts.

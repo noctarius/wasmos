@@ -305,6 +305,55 @@ static void group_callback_complete(wasmos_future_group_t* group) {
         group->active = false;
 }
 
+static void continuation_list_remove(wasmos_future_continuation_t** head,
+                                     wasmos_future_continuation_t** tail,
+                                     wasmos_future_continuation_t* target) {
+    wasmos_future_continuation_t* prev = NULL;
+    wasmos_future_continuation_t* cur = *head;
+    while (cur) {
+        if (cur == target) {
+            if (prev)
+                prev->next = cur->next;
+            else
+                *head = cur->next;
+            if (tail && *tail == target)
+                *tail = prev;
+            return;
+        }
+        prev = cur;
+        cur = cur->next;
+    }
+}
+
+/* Detach a still-registered continuation from its pending source future's list,
+ * or from the runtime dispatch queue if its source already settled. A
+ * dispatched continuation has active == false and is left untouched. */
+static void continuation_cancel(wasmos_wasm_runtime_t* runtime,
+                                wasmos_future_continuation_t* continuation) {
+    wasmos_future_t* future;
+    if (!continuation || !continuation->active)
+        return;
+    future = continuation->future;
+    if (future && future->state == WASMOS_FUTURE_PENDING)
+        continuation_list_remove(&future->continuations, NULL, continuation);
+    else if (runtime)
+        continuation_list_remove(&runtime->continuation_head, &runtime->continuation_tail,
+                                 continuation);
+    continuation->next = NULL;
+    continuation->future = NULL;
+    continuation->active = false;
+}
+
+/* Called once a group has settled to release its remaining source continuations
+ * so caller-owned group storage need not outlive slow sources. */
+static void future_group_abandon(wasmos_future_group_t* group) {
+    if (!group || !group->continuations)
+        return;
+    for (size_t i = 0; i < group->count; ++i)
+        continuation_cancel(group->runtime, &group->continuations[i]);
+    group->active = false;
+}
+
 static int32_t group_success(void* user, uintptr_t value, uintptr_t* out_value) {
     wasmos_future_continuation_t* continuation = user;
     wasmos_future_group_t* group = continuation ? continuation->group : NULL;
@@ -314,12 +363,14 @@ static int32_t group_success(void* user, uintptr_t value, uintptr_t* out_value) 
         if (!group->settled) {
             group->settled = true;
             (void)wasmos_promise_resolve(&group->promise, value);
+            future_group_abandon(group);
         }
     } else {
         group->values[continuation->group_index] = value;
         if (!group->settled && group->completed + 1u == group->count) {
             group->settled = true;
             (void)wasmos_promise_resolve(&group->promise, (uintptr_t)group->values);
+            future_group_abandon(group);
         }
     }
     group_callback_complete(group);
@@ -336,6 +387,7 @@ static int32_t group_error(void* user, int32_t status, uintptr_t* out_value) {
     if (!group->settled) {
         group->settled = true;
         (void)wasmos_promise_reject(&group->promise, status);
+        future_group_abandon(group);
     }
     group_callback_complete(group);
     if (out_value)
@@ -356,8 +408,12 @@ future_group_start(wasmos_wasm_runtime_t* runtime, wasmos_future_group_t* group,
             return NULL;
         }
     }
-    *group = (wasmos_future_group_t){
-        .runtime = runtime, .values = values, .count = count, .kind = kind, .active = true};
+    *group = (wasmos_future_group_t){.runtime = runtime,
+                                     .continuations = continuations,
+                                     .values = values,
+                                     .count = count,
+                                     .kind = kind,
+                                     .active = true};
     wasmos_future_init(&group->future, &group->promise);
     group->future.runtime = runtime;
     for (size_t i = 0; i < count; ++i) {

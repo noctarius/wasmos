@@ -540,10 +540,13 @@ static int test_future_race_and_all(void) {
     wasmos_future_init(&second, &second_promise);
     result = WASMOS_FUTURE_RACE(&runtime, &failed_race_group, failed_race_continuations, &first,
                                 &second);
+    /* A fail-fast settles the group immediately, marks it inactive, and unlinks
+     * the still-pending source so its later completion is a no-op. */
     if (!result || !wasmos_promise_reject(&first_promise, -13) ||
         wasmos_native_coroutine_run(&runtime) != 0 ||
         !wasmos_future_poll(result, &status, &value) || status != -13 ||
-        !failed_race_group.settled || !failed_race_group.active ||
+        !failed_race_group.settled || failed_race_group.active ||
+        failed_race_continuations[1].active || second.continuations != NULL ||
         !wasmos_promise_resolve(&second_promise, 2u) ||
         wasmos_native_coroutine_run(&runtime) != 0 || failed_race_group.active) {
         return __LINE__;
@@ -571,7 +574,9 @@ static int test_future_race_and_all(void) {
     if (!result || !wasmos_promise_reject(&second_promise, -44) ||
         wasmos_native_coroutine_run(&runtime) != 0 ||
         !wasmos_future_poll(result, &status, &value) || status != -44 ||
-        !failed_all_group.settled || !failed_all_group.active ||
+        !failed_all_group.settled || failed_all_group.active ||
+        failed_all_continuations[0].active || failed_all_continuations[2].active ||
+        first.continuations != NULL || third.continuations != NULL ||
         !wasmos_promise_resolve(&first_promise, 1u) ||
         !wasmos_promise_resolve(&third_promise, 3u) || wasmos_native_coroutine_run(&runtime) != 0 ||
         failed_all_group.active || wasmos_future_race(&runtime, NULL, NULL, 0, NULL) ||

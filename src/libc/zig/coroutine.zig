@@ -116,6 +116,7 @@ pub const FutureGroup = extern struct {
     runtime: ?*Runtime = null,
     future: Future = .{},
     promise: Promise = .{},
+    continuations: ?[*]Continuation = null,
     values: ?[*]usize = null,
     count: usize = 0,
     completed: usize = 0,

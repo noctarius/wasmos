@@ -158,6 +158,21 @@ int32_t wasmos_sys_ipc_call_native(wasmos_driver_api_t* api, uint32_t source_end
                                    uint32_t destination, uint32_t request_id, uint32_t msg_type,
                                    uint32_t arg0, uint32_t arg1, uint32_t arg2, uint32_t arg3,
                                    nd_ipc_message_t* out_message);
+
+/* Resolve `hostname` (length `hostname_len`, no NUL required) to an IPv4 address
+ * through net.stack (NET_IPC_RESOLVE) - the native mirror of the WASM/libc
+ * wasmos_net_resolve() helper (src/libc/include/wasmos/net.h). Synchronous from
+ * the caller's view: it borrows the name to net-stack read-only and blocks on
+ * `source_endpoint` for the reply via wasmos_sys_ipc_call_native(); net-stack
+ * itself defers the reply until lwIP's DNS callback fires and never blocks. Use
+ * only from native contexts that may block (not a single-threaded reactor - such
+ * a service should issue NET_IPC_RESOLVE as an async intent instead). On success
+ * returns 0 and writes the resolved address as a network-order IPv4 word (octet a
+ * in the low byte) to *out_addr_no; returns a negative value on any failure. */
+int32_t wasmos_sys_net_resolve_native(wasmos_driver_api_t* api, uint32_t source_endpoint,
+                                      uint32_t stack_endpoint, const char* hostname,
+                                      uint32_t hostname_len, uint32_t request_id,
+                                      uint32_t* out_addr_no);
 int32_t wasmos_sys_svc_register_native(wasmos_driver_api_t* api, uint32_t proc_endpoint,
                                        uint32_t source_endpoint, const uint8_t* name,
                                        uint32_t name_len, uint32_t request_id);

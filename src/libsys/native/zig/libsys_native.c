@@ -646,6 +646,44 @@ int32_t wasmos_sys_ipc_call_native(wasmos_driver_api_t* api, uint32_t source_end
     return wasmos_sys_ipc_recv_matching_native(api, source_endpoint, request_id, out_message);
 }
 
+int32_t wasmos_sys_net_resolve_native(wasmos_driver_api_t* api, uint32_t source_endpoint,
+                                      uint32_t stack_endpoint, const char* hostname,
+                                      uint32_t hostname_len, uint32_t request_id,
+                                      uint32_t* out_addr_no) {
+    nd_ipc_message_t reply;
+    uint8_t* buf;
+    uint32_t buffer_id = 0;
+    int32_t grant;
+    int32_t rc;
+    if (!api || !api->xfer_buffer_acquire || !api->xfer_buffer_borrow ||
+        !api->xfer_buffer_release || !hostname || hostname_len == 0u) {
+        return -1;
+    }
+    buf = (uint8_t*)api->xfer_buffer_acquire(ND_BUFFER_KIND_XFER, hostname_len, &buffer_id);
+    if (!buf) {
+        return -1;
+    }
+    byte_copy(buf, (const uint8_t*)hostname, hostname_len);
+    /* Borrow the name read-only to net-stack; it maps, copies, and unmaps before
+     * it can reply, so the buffer is safe to release once the reply arrives. */
+    grant = api->xfer_buffer_borrow(stack_endpoint, buffer_id, ND_BUFFER_BORROW_READ);
+    if (grant < 0) {
+        (void)api->xfer_buffer_release(buffer_id);
+        return -1;
+    }
+    rc = wasmos_sys_ipc_call_native(api, source_endpoint, stack_endpoint, request_id,
+                                    NET_IPC_RESOLVE, buffer_id, (uint32_t)grant, hostname_len, 0u,
+                                    &reply);
+    (void)api->xfer_buffer_release(buffer_id);
+    if (rc != 0 || reply.type != NET_IPC_RESP || (int32_t)reply.arg0 != NET_STATUS_OK) {
+        return -1;
+    }
+    if (out_addr_no) {
+        *out_addr_no = reply.arg1;
+    }
+    return 0;
+}
+
 int32_t wasmos_sys_svc_register_native(wasmos_driver_api_t* api, uint32_t proc_endpoint,
                                        uint32_t source_endpoint, const uint8_t* name,
                                        uint32_t name_len, uint32_t request_id) {

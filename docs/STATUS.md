@@ -51,6 +51,14 @@ linked feature documents for rationale and rollout plans.
   line (up to two servers) overrides that: net-stack re-applies it from the
   netif status callback once an address is assigned, so it wins over DHCP; with
   static addressing it is the only resolver source. Omit it to keep DHCP's.
+- Name resolution is exposed via `NET_IPC_RESOLVE`: the caller borrows the
+  hostname read-only and net-stack drives `dns_gethostbyname()`, answering
+  immediately for cached names and deferring the reply (from lwIP's DNS callback)
+  otherwise, so a slow lookup never blocks the reactor. A static local host list
+  maps `localhost` to `127.0.0.1` with no network round-trip. Clients use the
+  shared helpers `wasmos_net_resolve()` (WASM/libc, `wasmos/net.h`) and
+  `wasmos_sys_net_resolve_native()` (native libsys); the `/system/utils/host`
+  tool (`host <name>`) resolves and prints an address.
 - `net-stack` registers its PUBLIC endpoint as `net.stack`; client
   socket/ifaddr requests are dispatched there (registering the control endpoint
   had silently dropped them via the async event loop).

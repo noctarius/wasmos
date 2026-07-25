@@ -1691,6 +1691,103 @@ static void net_stack_handle_dns_list(const nd_ipc_message_t* request) {
     net_stack_send_reply(request, NET_IPC_RESP, NET_STATUS_OK, count, words[0], words[1]);
 }
 
+/* Deferred DNS resolutions in flight. A slot survives until dns_gethostbyname's
+ * callback fires (from dns_tmr via sys_check_timeouts in the main loop). */
+#define NET_STACK_DNS_PENDING_MAX 8u
+#define NET_STACK_DNS_HOSTNAME_MAX 256u
+typedef struct {
+    uint8_t in_use;
+    uint32_t source;
+    uint32_t request_id;
+} net_dns_pending_t;
+static net_dns_pending_t g_dns_pending[NET_STACK_DNS_PENDING_MAX];
+
+static net_dns_pending_t* net_stack_dns_pending_alloc(uint32_t source, uint32_t request_id) {
+    for (uint32_t i = 0u; i < NET_STACK_DNS_PENDING_MAX; ++i) {
+        if (!g_dns_pending[i].in_use) {
+            g_dns_pending[i].in_use = 1u;
+            g_dns_pending[i].source = source;
+            g_dns_pending[i].request_id = request_id;
+            return &g_dns_pending[i];
+        }
+    }
+    return NULL;
+}
+
+/* Reply to the original requester whose reply was deferred. */
+static void net_stack_dns_reply(const net_dns_pending_t* slot, uint32_t type, int32_t status,
+                                uint32_t addr_no) {
+    nd_ipc_message_t stub;
+    for (uint32_t i = 0u; i < sizeof(stub); ++i) {
+        ((uint8_t*)&stub)[i] = 0u;
+    }
+    stub.source = slot->source;
+    stub.request_id = slot->request_id;
+    net_stack_send_reply(&stub, type, status, addr_no, 0u, 0u);
+}
+
+/* lwIP DNS completion: ipaddr == NULL means not found / timeout. */
+static void net_stack_dns_found(const char* name, const ip_addr_t* ipaddr, void* arg) {
+    net_dns_pending_t* slot = (net_dns_pending_t*)arg;
+    (void)name;
+    if (slot == NULL || !slot->in_use) {
+        return;
+    }
+    if (ipaddr != NULL) {
+        net_stack_dns_reply(slot, NET_IPC_RESP, NET_STATUS_OK, ip4_addr_get_u32(ip_2_ip4(ipaddr)));
+    } else {
+        net_stack_dns_reply(slot, NET_IPC_ERROR, NET_STATUS_TIMEOUT, 0u);
+    }
+    slot->in_use = 0u;
+}
+
+/* arg0 = name buffer_id, arg1 = borrow_id, arg2 = name length. The reply is
+ * deferred (RESP arg1 = resolved IPv4 network-order word) unless the name is
+ * already cached, in which case it is answered immediately. */
+static void net_stack_handle_resolve(const nd_ipc_message_t* request) {
+    void* name_base;
+    char hostname[NET_STACK_DNS_HOSTNAME_MAX];
+    uint32_t len = request->arg2;
+    ip_addr_t addr;
+    err_t err;
+    net_dns_pending_t* slot;
+    uint32_t i;
+
+    if (g_api == NULL || g_api->xfer_buffer_map_borrowed == NULL ||
+        g_api->xfer_buffer_unmap_borrowed == NULL || len == 0u ||
+        len >= NET_STACK_DNS_HOSTNAME_MAX) {
+        net_stack_reply_error(request, NET_STATUS_INVALID);
+        return;
+    }
+    name_base = g_api->xfer_buffer_map_borrowed(ND_BUFFER_KIND_XFER, request->arg0, request->arg1);
+    if (name_base == NULL) {
+        net_stack_reply_error(request, NET_STATUS_DENIED);
+        return;
+    }
+    for (i = 0u; i < len; ++i) {
+        hostname[i] = ((const char*)name_base)[i];
+    }
+    hostname[len] = '\0';
+    (void)g_api->xfer_buffer_unmap_borrowed(request->arg1);
+
+    slot = net_stack_dns_pending_alloc(request->source, request->request_id);
+    if (slot == NULL) {
+        net_stack_reply_error(request, NET_STATUS_QUEUE_FULL);
+        return;
+    }
+    err = dns_gethostbyname(hostname, &addr, net_stack_dns_found, slot);
+    if (err == ERR_OK) {
+        slot->in_use = 0u; /* cached: answer now */
+        net_stack_send_reply(request, NET_IPC_RESP, NET_STATUS_OK, ip4_addr_get_u32(ip_2_ip4(&addr)),
+                             0u, 0u);
+    } else if (err == ERR_INPROGRESS) {
+        /* Deferred: net_stack_dns_found() answers when the query completes. */
+    } else {
+        slot->in_use = 0u;
+        net_stack_reply_error(request, NET_STATUS_IO_ERROR);
+    }
+}
+
 static void net_stack_handle_ifaddr_list(const nd_ipc_message_t* request) {
     net_ifaddr_record_v1_t* out;
     uint32_t capacity;
@@ -1931,6 +2028,9 @@ static void net_stack_dispatch(const nd_ipc_message_t* request) {
         break;
     case NET_IPC_DNS_LIST:
         net_stack_handle_dns_list(request);
+        break;
+    case NET_IPC_RESOLVE:
+        net_stack_handle_resolve(request);
         break;
     case NET_IPC_SEND:
     case NET_IPC_RECV:

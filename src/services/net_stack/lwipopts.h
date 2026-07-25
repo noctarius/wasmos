@@ -45,6 +45,12 @@
  * them via dns_setserver; ifcfg `dns-nameservers` and `ip dns` can override at
  * runtime. Resolution is exposed to clients as the async NET_IPC_RESOLVE op. */
 #define LWIP_DNS 1
+/* Static local name resolution, consulted before any network query. Maps
+ * "localhost" to the IPv4 loopback so name lookups have a reliable, offline
+ * baseline (and a hermetic resolver path independent of the SLIRP resolver). */
+#define DNS_LOCAL_HOSTLIST 1
+#define DNS_LOCAL_HOSTLIST_INIT \
+    {DNS_LOCAL_HOSTLIST_ELEM("localhost", IPADDR4_INIT_BYTES(127, 0, 0, 1))}
 
 /* --- Callbacks ----------------------------------------------------------- */
 #define LWIP_NETIF_STATUS_CALLBACK 1

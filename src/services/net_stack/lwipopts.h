@@ -44,6 +44,11 @@
 /* DNS resolver. The DHCP client requests DNS servers (option 6) and installs
  * them via dns_setserver; ifcfg `dns-nameservers` and `ip dns` can override at
  * runtime. Resolution is exposed to clients as the async NET_IPC_RESOLVE op. */
+/* Application-layer TCP abstraction: net-stack drives sockets through altcp so a
+ * plain TCP connection and a TLS connection share one code path. Plaintext today
+ * (altcp_tcp); altcp_tls is layered on later. */
+#define LWIP_ALTCP 1
+
 #define LWIP_DNS 1
 /* Static local name resolution, consulted before any network query. Maps
  * "localhost" to the IPv4 loopback so name lookups have a reliable, offline

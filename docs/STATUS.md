@@ -48,6 +48,10 @@ linked feature documents for rationale and rollout plans.
   ring phys). The shared `wasmos_net_tcp_connect/send/recv/close` helper
   (`wasmos/net.h`) implements a TCP stream socket on top; `examples/c/net_tcp_echo`
   runs on it (validated by `test_net_stack_tcp_echo_e2e`).
+- net-stack drives stream sockets through lwIP's `altcp` layer (`LWIP_ALTCP`)
+  rather than raw `tcp_*`, so plaintext TCP (`altcp_tcp`) and TLS (`altcp_tls`,
+  future) share one code path. This is a transparent refactor — no behavior
+  change; the tcp-echo, curl, and tcp-server e2e are unchanged.
 - `/system/utils/curl` (`curl <host>[:port][/path] [-o <file>]`) is a minimal
   HTTP/1.0 GET client on that helper: it resolves the host (DNS, or an IPv4
   literal directly), fetches the URL, strips the response headers, and writes the

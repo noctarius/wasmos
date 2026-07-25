@@ -20,6 +20,8 @@
 #include <stdarg.h>
 #include <stddef.h>
 
+#include "lwip/altcp.h"
+#include "lwip/altcp_tcp.h"
 #include "lwip/init.h"
 #include "lwip/dhcp.h"
 #include "lwip/dns.h"
@@ -391,15 +393,15 @@ static void net_stack_reply_deferred(net_socket_t* socket, uint32_t type, int32_
  * is lost when the stack is momentarily full. */
 static void net_stack_drain_tcp_tx(net_socket_t* socket) {
     uint8_t chunk[NET_STACK_TCP_CHUNK_BYTES];
-    struct tcp_pcb* pcb;
+    struct altcp_pcb* pcb;
     int wrote_any = 0;
     if (socket == NULL || socket->type != NET_SOCKET_STREAM || socket->pcb == NULL ||
         socket->state != NET_SOCKET_CONNECTED) {
         return;
     }
-    pcb = (struct tcp_pcb*)socket->pcb;
+    pcb = (struct altcp_pcb*)socket->pcb;
     for (;;) {
-        uint32_t sndbuf = tcp_sndbuf(pcb);
+        uint32_t sndbuf = altcp_sndbuf(pcb);
         uint32_t used = wasmos_ringbuf_used(&socket->tx_ring);
         uint32_t want = sizeof(chunk);
         uint32_t got;
@@ -417,9 +419,9 @@ static void net_stack_drain_tcp_tx(net_socket_t* socket) {
         if (got == 0u) {
             break;
         }
-        err = tcp_write(pcb, chunk, (u16_t)got, TCP_WRITE_FLAG_COPY);
+        err = altcp_write(pcb, chunk, (u16_t)got, TCP_WRITE_FLAG_COPY);
         if (err == ERR_MEM) {
-            /* No room in the send queue right now; retry from tcp_sent. */
+            /* No room in the send queue right now; retry from the sent callback. */
             break;
         }
         if (err != ERR_OK) {
@@ -430,13 +432,13 @@ static void net_stack_drain_tcp_tx(net_socket_t* socket) {
         wrote_any = 1;
     }
     if (wrote_any) {
-        (void)tcp_output(pcb);
+        (void)altcp_output(pcb);
     }
 }
 
 /* SYN handshake completed: the socket is now writable. Answer the deferred
  * connect and flush anything the client queued while connecting. */
-static err_t net_stack_tcp_connected(void* arg, struct tcp_pcb* pcb, err_t err) {
+static err_t net_stack_tcp_connected(void* arg, struct altcp_pcb* pcb, err_t err) {
     net_socket_t* socket = (net_socket_t*)arg;
     (void)pcb;
     if (socket == NULL) {
@@ -458,7 +460,7 @@ static err_t net_stack_tcp_connected(void* arg, struct tcp_pcb* pcb, err_t err) 
 /* Inbound stream bytes (or a FIN when p == NULL). Copy the whole segment into
  * the client RX ring and acknowledge it; if the ring cannot hold it, refuse
  * with ERR_MEM so lwIP retains the data and redelivers (TCP flow control). */
-static err_t net_stack_tcp_recv(void* arg, struct tcp_pcb* pcb, struct pbuf* p, err_t err) {
+static err_t net_stack_tcp_recv(void* arg, struct altcp_pcb* pcb, struct pbuf* p, err_t err) {
     net_socket_t* socket = (net_socket_t*)arg;
     struct pbuf* q;
     if (socket == NULL) {
@@ -486,14 +488,14 @@ static err_t net_stack_tcp_recv(void* arg, struct tcp_pcb* pcb, struct pbuf* p, 
     for (q = p; q != NULL; q = q->next) {
         (void)wasmos_ringbuf_write(&socket->rx_ring, q->payload, q->len);
     }
-    tcp_recved(pcb, p->tot_len);
+    altcp_recved(pcb, p->tot_len);
     pbuf_free(p);
     net_stack_notify_rx(socket);
     return ERR_OK;
 }
 
 /* Peer acknowledged sent bytes: send-buffer space freed, resume draining TX. */
-static err_t net_stack_tcp_sent(void* arg, struct tcp_pcb* pcb, u16_t len) {
+static err_t net_stack_tcp_sent(void* arg, struct altcp_pcb* pcb, u16_t len) {
     net_socket_t* socket = (net_socket_t*)arg;
     (void)pcb;
     (void)len;
@@ -562,7 +564,7 @@ static net_interface_slot_t* net_stack_interface_from_index(uint32_t index) {
  * NET_IPC_ACCEPT with the new socket id. With no slot posted, reject the
  * connection (ERR_MEM) so lwIP aborts it; the peer can retry once a slot is
  * available. */
-static err_t net_stack_tcp_accept(void* arg, struct tcp_pcb* newpcb, err_t err) {
+static err_t net_stack_tcp_accept(void* arg, struct altcp_pcb* newpcb, err_t err) {
     net_socket_t* listener = (net_socket_t*)arg;
     net_socket_t* slot;
     uint32_t listener_id;
@@ -576,15 +578,15 @@ static err_t net_stack_tcp_accept(void* arg, struct tcp_pcb* newpcb, err_t err) 
     }
     slot->pcb = newpcb;
     slot->state = NET_SOCKET_CONNECTED;
-    slot->remote_port = newpcb->remote_port;
-    slot->remote_addr_v4 = ip4_addr_get_u32(ip_2_ip4(&newpcb->remote_ip));
-    slot->local_port = newpcb->local_port;
-    tcp_arg(newpcb, slot);
-    tcp_recv(newpcb, net_stack_tcp_recv);
-    tcp_sent(newpcb, net_stack_tcp_sent);
-    tcp_err(newpcb, net_stack_tcp_err);
-    /* Tell lwIP this backlog slot is consumed so it can accept the next one. */
-    tcp_accepted((struct tcp_pcb*)listener->pcb);
+    slot->remote_port = altcp_get_port(newpcb, 0);
+    slot->remote_addr_v4 = ip4_addr_get_u32(ip_2_ip4(altcp_get_ip(newpcb, 0)));
+    slot->local_port = altcp_get_port(newpcb, 1);
+    altcp_arg(newpcb, slot);
+    altcp_recv(newpcb, net_stack_tcp_recv);
+    altcp_sent(newpcb, net_stack_tcp_sent);
+    altcp_err(newpcb, net_stack_tcp_err);
+    /* altcp consumes the underlying listen backlog slot internally; with
+     * TCP_LISTEN_BACKLOG off there is nothing further to acknowledge. */
     slot->connect_pending = 0u;
     net_stack_reply_deferred(slot, NET_IPC_RESP, (int32_t)(slot - g_socket_pool.sockets));
     /* A fast peer may already have data queued in the pcb. */
@@ -1296,7 +1298,7 @@ static int32_t net_stack_pcb_open(net_socket_t* socket) {
             udp_recv((struct udp_pcb*)socket->pcb, net_stack_udp_recv, socket);
         }
     } else if (socket->type == NET_SOCKET_STREAM) {
-        socket->pcb = tcp_new_ip_type(IPADDR_TYPE_V4);
+        socket->pcb = altcp_tcp_new_ip_type(IPADDR_TYPE_V4);
     }
     return socket->pcb != NULL ? NET_STATUS_OK : NET_STATUS_NO_MEM;
 }
@@ -1311,7 +1313,7 @@ static int32_t net_stack_pcb_bind(net_socket_t* socket, uint16_t port, uint32_t 
     if (socket->type == NET_SOCKET_DGRAM) {
         err = udp_bind((struct udp_pcb*)socket->pcb, &address, port);
     } else {
-        err = tcp_bind((struct tcp_pcb*)socket->pcb, &address, port);
+        err = altcp_bind((struct altcp_pcb*)socket->pcb, &address, port);
     }
     return err == ERR_OK ? NET_STATUS_OK : NET_STATUS_ADDR_IN_USE;
 }
@@ -1328,15 +1330,15 @@ static int32_t net_stack_pcb_connect(net_socket_t* socket, uint16_t port, uint32
         return err == ERR_OK ? NET_STATUS_OK : NET_STATUS_IO_ERROR;
     }
     /* TCP: install the per-socket callbacks and start the handshake. The reply
-     * is deferred (NET_STATUS_WOULD_BLOCK) and delivered from tcp_connected or
-     * tcp_err once the SYN exchange resolves. */
+     * is deferred (NET_STATUS_WOULD_BLOCK) and delivered from the connected or
+     * error callback once the SYN exchange resolves. */
     {
-        struct tcp_pcb* pcb = (struct tcp_pcb*)socket->pcb;
-        tcp_arg(pcb, socket);
-        tcp_recv(pcb, net_stack_tcp_recv);
-        tcp_sent(pcb, net_stack_tcp_sent);
-        tcp_err(pcb, net_stack_tcp_err);
-        err = tcp_connect(pcb, &address, port, net_stack_tcp_connected);
+        struct altcp_pcb* pcb = (struct altcp_pcb*)socket->pcb;
+        altcp_arg(pcb, socket);
+        altcp_recv(pcb, net_stack_tcp_recv);
+        altcp_sent(pcb, net_stack_tcp_sent);
+        altcp_err(pcb, net_stack_tcp_err);
+        err = altcp_connect(pcb, &address, port, net_stack_tcp_connected);
     }
     return err == ERR_OK ? NET_STATUS_WOULD_BLOCK : NET_STATUS_IO_ERROR;
 }
@@ -1349,40 +1351,41 @@ static void net_stack_pcb_close(net_socket_t* socket) {
         udp_remove((struct udp_pcb*)socket->pcb);
     } else if (socket->state == NET_SOCKET_LISTENING) {
         /* A listen pcb has an accept callback, not recv/sent/err. */
-        struct tcp_pcb* pcb = (struct tcp_pcb*)socket->pcb;
-        tcp_arg(pcb, NULL);
-        tcp_accept(pcb, NULL);
-        (void)tcp_close(pcb);
+        struct altcp_pcb* pcb = (struct altcp_pcb*)socket->pcb;
+        altcp_arg(pcb, NULL);
+        altcp_accept(pcb, NULL);
+        (void)altcp_close(pcb);
     } else {
-        /* Detach callbacks before closing: tcp_close may keep the pcb alive to
+        /* Detach callbacks before closing: altcp_close may keep the pcb alive to
          * flush pending data / linger in TIME_WAIT, and the net_socket_t is
          * freed right after this. A late callback must never touch it. */
-        struct tcp_pcb* pcb = (struct tcp_pcb*)socket->pcb;
-        tcp_arg(pcb, NULL);
-        tcp_recv(pcb, NULL);
-        tcp_sent(pcb, NULL);
-        tcp_err(pcb, NULL);
-        if (tcp_close(pcb) != ERR_OK) {
-            tcp_abort(pcb);
+        struct altcp_pcb* pcb = (struct altcp_pcb*)socket->pcb;
+        altcp_arg(pcb, NULL);
+        altcp_recv(pcb, NULL);
+        altcp_sent(pcb, NULL);
+        altcp_err(pcb, NULL);
+        if (altcp_close(pcb) != ERR_OK) {
+            altcp_abort(pcb);
         }
     }
     socket->pcb = NULL;
 }
 
 /* Passive-open: turn a bound stream pcb into a listening pcb and install the
- * accept callback. tcp_listen replaces the pcb with a smaller listen pcb. */
+ * accept callback. altcp_listen swaps the inner pcb for a listen pcb, keeping
+ * the same altcp wrapper. */
 static int32_t net_stack_pcb_listen(net_socket_t* socket) {
-    struct tcp_pcb* lpcb;
+    struct altcp_pcb* lpcb;
     if (socket == NULL || socket->pcb == NULL || socket->type != NET_SOCKET_STREAM) {
         return NET_STATUS_INVALID;
     }
-    lpcb = tcp_listen((struct tcp_pcb*)socket->pcb);
+    lpcb = altcp_listen((struct altcp_pcb*)socket->pcb);
     if (lpcb == NULL) {
         return NET_STATUS_NO_MEM;
     }
     socket->pcb = lpcb;
-    tcp_arg(lpcb, socket);
-    tcp_accept(lpcb, net_stack_tcp_accept);
+    altcp_arg(lpcb, socket);
+    altcp_accept(lpcb, net_stack_tcp_accept);
     return NET_STATUS_OK;
 }
 

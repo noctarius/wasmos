@@ -43,7 +43,7 @@ typedef struct {
     /* For a NET_SOCKET_ACCEPTING socket: index of the listening socket whose
      * next inbound connection it will be paired with. */
     uint32_t accept_listener_id;
-    void* pcb; /* struct udp_pcb* or struct tcp_pcb*, owned by net-stack */
+    void* pcb; /* struct udp_pcb* or struct altcp_pcb*, owned by net-stack */
     wasmos_ringbuf_t tx_ring;
     wasmos_ringbuf_t rx_ring;
 } net_socket_t;

@@ -49,6 +49,17 @@
  * (altcp_tcp); altcp_tls is layered on later. */
 #define LWIP_ALTCP 1
 
+/* TLS via mbedTLS behind the altcp API (milestone B). A TLS stream socket is
+ * created with altcp_tls_new() instead of altcp_tcp_new; every other tcp_/altcp_
+ * call in the socket path is unchanged. */
+#define LWIP_ALTCP_TLS 1
+#define LWIP_ALTCP_TLS_MBEDTLS 1
+/* Milestone B is NO-verify: skip certificate chain / hostname validation so an
+ * encrypted handshake + GET works against any server (verification is milestone
+ * C). altcp_tls_mbedtls.c passes this to mbedtls_ssl_conf_authmode(); the token
+ * resolves at its use site, after mbedtls/ssl.h is included. */
+#define ALTCP_MBEDTLS_AUTHMODE MBEDTLS_SSL_VERIFY_NONE
+
 #define LWIP_DNS 1
 /* Static local name resolution, consulted before any network query. Maps
  * "localhost" to the IPv4 loopback so name lookups have a reliable, offline

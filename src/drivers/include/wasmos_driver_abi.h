@@ -634,6 +634,9 @@ enum {
 
 #define NET_SOCKET_OPEN_DESCRIPTOR_VERSION 1u
 
+/* net_socket_open_descriptor_v1_t.flags bits. */
+#define NET_SOCKET_OPEN_FLAG_TLS 1u /* stream socket is wrapped in TLS (altcp_tls) */
+
 /* Datagram ring records carry endpoint metadata as well as payload. A client
  * writes destination fields for an unconnected sendto; RX records contain the
  * source fields supplied by lwIP. Connected sockets may leave destination at

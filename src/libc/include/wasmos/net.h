@@ -141,16 +141,13 @@ static inline void wasmos_net_tcp_close(wasmos_net_tcp_t* s) {
     s->socket_id = -1;
 }
 
-/* Open a TCP socket and connect to `addr_no`:`port` (addr_no is a network-order
- * IPv4 word, octet a in the low byte — the form wasmos_net_resolve yields).
- * `ring_capacity` is the per-direction data-region size and MUST be a power of
- * two; ~16-64 KiB is typical. `request_id_base` seeds the socket's private id
- * counter on `reply_ep`. Returns 0 connected, -1 on any failure (the socket is
- * cleaned up). TCP connect is asynchronous in the stack, so this blocks on
- * `reply_ep` until the handshake completes. */
-static inline int32_t wasmos_net_tcp_connect(wasmos_net_tcp_t* s, int32_t stack_ep,
-                                             int32_t reply_ep, uint32_t addr_no, uint16_t port,
-                                             uint32_t ring_capacity, int32_t request_id_base) {
+/* Shared implementation for the plain-TCP and TLS connect helpers. `open_flags`
+ * is written into the socket-open descriptor (NET_SOCKET_OPEN_FLAG_TLS selects a
+ * TLS stream socket); everything else is identical. */
+static inline int32_t wasmos_net__connect_flags(wasmos_net_tcp_t* s, int32_t stack_ep,
+                                                int32_t reply_ep, uint32_t addr_no, uint16_t port,
+                                                uint32_t ring_capacity, int32_t request_id_base,
+                                                uint32_t open_flags) {
     wasmos_ipc_message_t reply;
     net_socket_open_descriptor_v1_t desc;
     uint32_t region;
@@ -205,6 +202,7 @@ static inline int32_t wasmos_net_tcp_connect(wasmos_net_tcp_t* s, int32_t stack_
     desc.bytes = (uint16_t)sizeof(desc);
     desc.family = NET_SOCKET_AF_INET;
     desc.type = NET_SOCKET_STREAM;
+    desc.flags = open_flags;
     desc.tx_buffer_id = (uint32_t)s->tx_bid;
     desc.tx_borrow_id = (uint32_t)s->tx_grant;
     desc.tx_bytes = region;
@@ -236,6 +234,33 @@ static inline int32_t wasmos_net_tcp_connect(wasmos_net_tcp_t* s, int32_t stack_
         return -1;
     }
     return 0;
+}
+
+/* Open a TCP socket and connect to `addr_no`:`port` (addr_no is a network-order
+ * IPv4 word, octet a in the low byte — the form wasmos_net_resolve yields).
+ * `ring_capacity` is the per-direction data-region size and MUST be a power of
+ * two; ~16-64 KiB is typical. `request_id_base` seeds the socket's private id
+ * counter on `reply_ep`. Returns 0 connected, -1 on any failure (the socket is
+ * cleaned up). TCP connect is asynchronous in the stack, so this blocks on
+ * `reply_ep` until the handshake completes. */
+static inline int32_t wasmos_net_tcp_connect(wasmos_net_tcp_t* s, int32_t stack_ep,
+                                             int32_t reply_ep, uint32_t addr_no, uint16_t port,
+                                             uint32_t ring_capacity, int32_t request_id_base) {
+    return wasmos_net__connect_flags(s, stack_ep, reply_ep, addr_no, port, ring_capacity,
+                                     request_id_base, 0u);
+}
+
+/* Same as wasmos_net_tcp_connect but wraps the stream in TLS (net-stack creates
+ * an altcp_tls pcb). Milestone B is NO certificate verification: the handshake
+ * is encrypted but the server certificate/hostname are not validated. The
+ * connect reply is deferred until the TLS handshake completes. The subsequent
+ * wasmos_net_tcp_send/recv/close calls are unchanged — payload is plaintext to
+ * the app and encrypted on the wire by net-stack. */
+static inline int32_t wasmos_net_tls_connect(wasmos_net_tcp_t* s, int32_t stack_ep,
+                                             int32_t reply_ep, uint32_t addr_no, uint16_t port,
+                                             uint32_t ring_capacity, int32_t request_id_base) {
+    return wasmos_net__connect_flags(s, stack_ep, reply_ep, addr_no, port, ring_capacity,
+                                     request_id_base, NET_SOCKET_OPEN_FLAG_TLS);
 }
 
 /* Send all `len` bytes, blocking (yield) on ring-full backpressure until they

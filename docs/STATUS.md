@@ -49,9 +49,19 @@ linked feature documents for rationale and rollout plans.
   (`wasmos/net.h`) implements a TCP stream socket on top; `examples/c/net_tcp_echo`
   runs on it (validated by `test_net_stack_tcp_echo_e2e`).
 - net-stack drives stream sockets through lwIP's `altcp` layer (`LWIP_ALTCP`)
-  rather than raw `tcp_*`, so plaintext TCP (`altcp_tcp`) and TLS (`altcp_tls`,
-  future) share one code path. This is a transparent refactor — no behavior
-  change; the tcp-echo, curl, and tcp-server e2e are unchanged.
+  rather than raw `tcp_*`, so plaintext TCP (`altcp_tcp`) and TLS (`altcp_tls`)
+  share one code path.
+- TLS client (milestone B): net-stack embeds mbedTLS 3.6 (freestanding config in
+  `src/services/net_stack/net_stack_mbedtls_config.h`, static buffer allocator,
+  entropy from the `hrng` pool via `mbedtls_hardware_poll`) behind lwIP's
+  `altcp_tls`. A stream socket opened with `NET_SOCKET_OPEN_FLAG_TLS` is created
+  with `altcp_tls_new` over a single shared no-verify client config; the socket
+  send/recv/close path is otherwise unchanged. `wasmos_net_tls_connect`
+  (libc `wasmos/net.h`) and `curl https://` use it. This is a TLS 1.2 ECDHE
+  handshake with **no certificate verification** (chain/hostname validation is
+  milestone C); validated by `test_net_stack_https_e2e`. The lwIP 2.2.1 mbedTLS
+  glue is a 2.x-era subtree bridged to 3.6 without editing `libs/` (shim headers
+  + a force-included compat header under `src/services/net_stack/`).
 - `/system/utils/curl` (`curl <host>[:port][/path] [-o <file>]`) is a minimal
   HTTP/1.0 GET client on that helper: it resolves the host (DNS, or an IPv4
   literal directly), fetches the URL, strips the response headers, and writes the

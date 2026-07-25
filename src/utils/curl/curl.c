@@ -240,13 +240,11 @@ int main(void) {
         puts("[curl] bad url");
         return 1;
     }
-    /* TLS is not implemented; only plain http is supported. */
-    if (strcmp(u.scheme, "http") != 0) {
-        if (strcmp(u.scheme, "https") == 0) {
-            puts("[curl] https/TLS is not supported; use http://");
-        } else {
-            puts("[curl] unsupported url scheme");
-        }
+    /* http is plaintext; https wraps the same request path in TLS (no-verify,
+     * milestone B). The url parser already defaulted the port to 443 for https. */
+    int use_tls = strcmp(u.scheme, "https") == 0;
+    if (!use_tls && strcmp(u.scheme, "http") != 0) {
+        puts("[curl] unsupported url scheme");
         return 1;
     }
 
@@ -265,8 +263,12 @@ int main(void) {
         puts("[curl] resolve failed");
         return 1;
     }
-    if (wasmos_net_tcp_connect(&sock, stack_ep, reply_ep, addr, (uint16_t)u.port, RING_CAP, rid) !=
-        0) {
+    int connected =
+        use_tls
+            ? wasmos_net_tls_connect(&sock, stack_ep, reply_ep, addr, (uint16_t)u.port, RING_CAP, rid)
+            : wasmos_net_tcp_connect(&sock, stack_ep, reply_ep, addr, (uint16_t)u.port, RING_CAP,
+                                     rid);
+    if (connected != 0) {
         puts("[curl] connect failed");
         return 1;
     }

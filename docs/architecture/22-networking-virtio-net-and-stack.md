@@ -25,8 +25,14 @@ In scope:
 - app-facing IPC contract for datagram and stream sockets
 - boot-time integration through existing `device-manager` policy rules
 
+TLS: the initial stack service was plaintext-only; a user-space TLS client now
+layers on via lwIP `altcp_tls` + mbedTLS 3.6 embedded in `net-stack` (opt-in per
+socket with `NET_SOCKET_OPEN_FLAG_TLS`). Milestone B is a no-verify TLS 1.2
+handshake (no certificate/hostname validation — that is milestone C). See
+`docs/STATUS.md` for the current implementation snapshot.
+
 Out of scope for initial rollout:
-- TLS in kernel or first-pass stack service
+- TLS in the kernel
 - high-throughput offload features (TSO/GSO/GRO/LRO)
 - advanced firewall/NAT policy
 

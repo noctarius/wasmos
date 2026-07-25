@@ -16,6 +16,7 @@
 
 set(NET_STACK_DIR ${CMAKE_CURRENT_SOURCE_DIR})
 set(LWIP_DIR ${CMAKE_SOURCE_DIR}/libs/lwip)
+set(MBEDTLS_DIR ${CMAKE_SOURCE_DIR}/libs/mbedtls)
 
 set(WASM_NET_STACK_ELF ${BUILD_DIR}/net_stack.elf)
 set(WASM_NET_STACK_APP ${BUILD_DIR}/net_stack.wap)
@@ -39,7 +40,13 @@ set(NET_STACK_INCLUDES
     -I${LIBC_DIR}/include
     -I${DRIVER_WASM_DIR}/include
     -I${LIBSYS_WASM_DIR}/include
-    -I${LIBSYS_NATIVE_DIR}/include)
+    -I${LIBSYS_NATIVE_DIR}/include
+    # mbedTLS headers + the net-stack's slim freestanding config. net_stack.c and
+    # the lwIP altcp_tls glue include mbedTLS; every TU that sees an mbedTLS
+    # header MUST use the same MBEDTLS_CONFIG_FILE so struct layouts match. lwIP
+    # core TUs get these too (harmless: they include no mbedTLS header).
+    -I${MBEDTLS_DIR}/include
+    -DMBEDTLS_CONFIG_FILE=\"net_stack_mbedtls_config.h\")
 
 # lwIP is a never-edited git subtree; relax warnings-as-errors and silence the
 # noisy-but-harmless diagnostics it emits under -Wall -Wextra.
@@ -108,6 +115,68 @@ foreach(_lwip_src ${NET_STACK_LWIP_SOURCES})
   )
 endforeach()
 
+# --- mbedTLS (TLS backend for altcp_tls, milestone B) ----------------------
+# mbedTLS is a never-edited git subtree. Compile every library/*.c the same way
+# lwIP is built (freestanding, subtree warnings relaxed) against the slim
+# freestanding config in net_stack_mbedtls_config.h. Modules the config leaves off compile
+# to near-empty objects, so globbing the whole library is safe and self-pruning.
+file(GLOB NET_STACK_MBEDTLS_SOURCES ${MBEDTLS_DIR}/library/*.c)
+foreach(_mb_src ${NET_STACK_MBEDTLS_SOURCES})
+  get_filename_component(_mb_name ${_mb_src} NAME_WE)
+  set(_mb_obj ${BUILD_DIR}/net_stack_mbedtls_${_mb_name}.o)
+  list(APPEND NET_STACK_OBJS ${_mb_obj})
+  add_custom_command(
+    OUTPUT ${_mb_obj}
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}
+    COMMAND ${CLANG} ${NET_STACK_CFLAGS_BASE} ${NET_STACK_LWIP_WARN_FLAGS}
+            -I${NET_STACK_DIR}/freestanding
+            -I${MBEDTLS_DIR}/include -I${NET_STACK_DIR} -I${LIBC_DIR}/include
+            -DMBEDTLS_CONFIG_FILE=\"net_stack_mbedtls_config.h\"
+            -c ${_mb_src}
+            -o ${_mb_obj}
+    DEPENDS ${_mb_src} ${NET_STACK_DIR}/net_stack_mbedtls_config.h
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    COMMENT "Compiling mbedTLS ${_mb_name}.c (net-stack)"
+    VERBATIM
+  )
+endforeach()
+
+# lwIP's mbedTLS glue (altcp_tls_mbedtls.c + its mem helper). lwIP 2.2.1 targets
+# the mbedTLS 2.x API; the 2.x/3.x gap is bridged WITHOUT editing libs/ by:
+#   - shim headers under lwip_mbedtls_shim/mbedtls/ (certs.h, ssl_internal.h),
+#     placed on an include path AHEAD of the real mbedTLS include, and
+#   - net_stack_mbedtls3_compat.h force-included first (MBEDTLS_ALLOW_PRIVATE_ACCESS
+#     + a mbedtls_pk_parse_key arity bridge).
+set(NET_STACK_ALTCP_TLS_SOURCES
+  ${LWIP_DIR}/src/apps/altcp_tls/altcp_tls_mbedtls.c
+  ${LWIP_DIR}/src/apps/altcp_tls/altcp_tls_mbedtls_mem.c)
+set(NET_STACK_ALTCP_TLS_DEPS
+  ${NET_STACK_LWIP_HEADER_DEPS}
+  ${NET_STACK_DIR}/net_stack_mbedtls_config.h
+  ${NET_STACK_DIR}/net_stack_mbedtls3_compat.h
+  ${NET_STACK_DIR}/lwip_mbedtls_shim/mbedtls/certs.h
+  ${NET_STACK_DIR}/lwip_mbedtls_shim/mbedtls/ssl_internal.h)
+foreach(_tls_src ${NET_STACK_ALTCP_TLS_SOURCES})
+  get_filename_component(_tls_name ${_tls_src} NAME_WE)
+  set(_tls_obj ${BUILD_DIR}/net_stack_lwip_${_tls_name}.o)
+  list(APPEND NET_STACK_OBJS ${_tls_obj})
+  add_custom_command(
+    OUTPUT ${_tls_obj}
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}
+    COMMAND ${CLANG} ${NET_STACK_CFLAGS_BASE} ${NET_STACK_LWIP_WARN_FLAGS}
+            -I${NET_STACK_DIR}/lwip_mbedtls_shim
+            -I${NET_STACK_DIR}/freestanding
+            ${NET_STACK_INCLUDES}
+            -include ${NET_STACK_DIR}/net_stack_mbedtls3_compat.h
+            -c ${_tls_src}
+            -o ${_tls_obj}
+    DEPENDS ${_tls_src} ${NET_STACK_ALTCP_TLS_DEPS}
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    COMMENT "Compiling lwIP mbedTLS glue ${_tls_name}.c (net-stack)"
+    VERBATIM
+  )
+endforeach()
+
 # Service glue objects (our own code — build with warnings-as-errors relaxed
 # only where lwIP headers force it; keep them lenient for parity with lwIP).
 set(NET_STACK_NETSTACK_OBJ ${BUILD_DIR}/net_stack_net_stack.o)
@@ -119,6 +188,7 @@ add_custom_command(
           -c ${NET_STACK_DIR}/net_stack.c
           -o ${NET_STACK_NETSTACK_OBJ}
   DEPENDS ${NET_STACK_DIR}/net_stack.c ${NET_STACK_LWIP_HEADER_DEPS}
+          ${NET_STACK_DIR}/net_stack_mbedtls_config.h
           ${DRIVER_WASM_DIR}/include/wasmos_native_driver.h
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
   COMMENT "Compiling net_stack.c (net-stack)"
@@ -355,8 +425,10 @@ wasmos_add_ide_c_target(net_stack_ide
            ${LIBC_DIR}/include
            ${DRIVER_WASM_DIR}/include
            ${LIBSYS_WASM_DIR}/include
-           ${LIBSYS_NATIVE_DIR}/include)
-target_compile_options(net_stack_ide PRIVATE ${NET_STACK_CFLAGS_BASE})
+           ${LIBSYS_NATIVE_DIR}/include
+           ${MBEDTLS_DIR}/include)
+target_compile_options(net_stack_ide PRIVATE ${NET_STACK_CFLAGS_BASE}
+    -DMBEDTLS_CONFIG_FILE=\"net_stack_mbedtls_config.h\")
 
 set_property(GLOBAL APPEND PROPERTY WASMOS_WASM_APPS ${WASM_NET_STACK_APP})
 set_property(GLOBAL APPEND PROPERTY WASMOS_WASM_APP_TARGETS net_stack_app)

@@ -22,6 +22,7 @@
 
 #include "lwip/altcp.h"
 #include "lwip/altcp_tcp.h"
+#include "lwip/altcp_tls.h"
 #include "lwip/init.h"
 #include "lwip/dhcp.h"
 #include "lwip/dns.h"
@@ -36,10 +37,51 @@
 #include "lwip/timeouts.h"
 #include "netif/ethernet.h"
 
+#include "mbedtls/memory_buffer_alloc.h"
+
 #include "net_stack_ifcfg.h"
 #include "socket.h"
 #include "wasmos/libsys_native.h"
 #include "wasmos_native_driver.h"
+
+/* --- TLS (milestone B: no-verify TLS 1.2 client via mbedTLS + altcp_tls) ----
+ *
+ * mbedTLS runs with no malloc: its static buffer allocator owns g_tls_heap and
+ * is installed at startup (before any TLS config is built). Entropy is
+ * synchronous inside mbedTLS but net-stack is a non-blocking reactor, so the
+ * hrng service pre-fills g_entropy_pool at startup and mbedtls_hardware_poll()
+ * drains it. A single shared client config (no cert, VERIFY_NONE) backs every
+ * TLS socket; it is built lazily on the first TLS open once entropy is ready. */
+#define NET_STACK_TLS_HEAP_BYTES (96u * 1024u)
+#define NET_STACK_ENTROPY_POOL_BYTES 256u
+static uint8_t g_tls_heap[NET_STACK_TLS_HEAP_BYTES] __attribute__((aligned(16)));
+static uint8_t g_tls_heap_ready = 0u;
+static struct altcp_tls_config* g_tls_config = NULL;
+static uint8_t g_tls_config_failed = 0u;
+static uint8_t g_entropy_pool[NET_STACK_ENTROPY_POOL_BYTES];
+static uint32_t g_entropy_pool_len = 0u; /* valid bytes available */
+static uint32_t g_entropy_pool_pos = 0u; /* next unread byte */
+static uint8_t g_entropy_underflow_logged = 0u;
+
+/* Freestanding mbedTLS platform stubs (see net_stack_mbedtls_config.h). The
+ * static buffer allocator overwrites mbedtls_calloc/free at init, so these
+ * pre-init values are never invoked; snprintf is only used by unused X.509/debug
+ * string helpers. Providing them here keeps the link free of libc stdio/stdlib. */
+void* net_stack_mbedtls_std_calloc(size_t nmemb, size_t size) {
+    (void)nmemb;
+    (void)size;
+    return NULL;
+}
+void net_stack_mbedtls_std_free(void* ptr) {
+    (void)ptr;
+}
+int net_stack_mbedtls_snprintf(char* buf, size_t size, const char* fmt, ...) {
+    (void)fmt;
+    if (buf != NULL && size > 0u) {
+        buf[0] = '\0';
+    }
+    return 0;
+}
 
 /* The api table captured at initialize() time. Read by port.c (sys_now,
  * lwip_port_rand) and net_stack_lwip_diag(). NULL until initialize() runs. */
@@ -128,7 +170,6 @@ static uint8_t g_hrng_seeded = 0u;
 static uint32_t g_hrng_lookup_buffer_id = 0u;
 static uint8_t* g_hrng_lookup_buffer = NULL;
 static wasmos_sys_native_random_request_t g_hrng_request;
-static uint32_t g_hrng_word = 0u;
 static wasmos_sys_native_event_loop_t g_control_loop;
 static wasmos_sys_native_event_loop_t g_netdrv_loop;
 
@@ -1148,7 +1189,14 @@ static void net_stack_registered(void) {
 static void net_stack_hrng_seed_complete(void* user, int32_t status) {
     (void)user;
     if (status == WASMOS_SYS_RANDOM_STATUS_OK) {
-        lwip_port_seed(g_hrng_word);
+        /* g_entropy_pool now holds fresh hardware randomness. Publish it for
+         * mbedtls_hardware_poll() to drain during the TLS handshake, and seed
+         * lwIP's PRNG (TCP ISN / ephemeral ports) from the same fill. */
+        g_entropy_pool_len = NET_STACK_ENTROPY_POOL_BYTES;
+        g_entropy_pool_pos = 0u;
+        uint32_t seed = (uint32_t)g_entropy_pool[0] | ((uint32_t)g_entropy_pool[1] << 8) |
+                        ((uint32_t)g_entropy_pool[2] << 16) | ((uint32_t)g_entropy_pool[3] << 24);
+        lwip_port_seed(seed);
         g_hrng_seeded = 1u;
     }
 }
@@ -1163,9 +1211,12 @@ static void net_stack_hrng_lookup_reply(void* user, const nd_ipc_message_t* repl
     }
     __builtin_memcpy(&entry, g_hrng_lookup_buffer, sizeof(entry));
     if (entry.endpoint != 0u) {
-        (void)wasmos_sys_native_random_int_async(&g_control_loop, entry.endpoint, &g_hrng_word,
-                                                 &g_hrng_request, net_stack_hrng_seed_complete,
-                                                 NULL);
+        /* Fill the whole entropy pool (not just one word) so the TLS DRBG has a
+         * synchronous source. A single startup fill is sufficient for milestone
+         * B; mbedtls_hardware_poll() logs and falls back if it ever underflows. */
+        (void)wasmos_sys_native_random_bytes_async(&g_control_loop, entry.endpoint, g_entropy_pool,
+                                                   NET_STACK_ENTROPY_POOL_BYTES, &g_hrng_request,
+                                                   net_stack_hrng_seed_complete, NULL);
     }
 out:
     if (g_hrng_lookup_buffer_id != 0u) {
@@ -1288,7 +1339,69 @@ static void net_stack_try_bind_virtio(void) {
     }
 }
 
-static int32_t net_stack_pcb_open(net_socket_t* socket) {
+/* mbedTLS synchronous entropy source (MBEDTLS_ENTROPY_HARDWARE_ALT). Serves the
+ * hrng-filled pool; on underflow it keeps the handshake progressing with a weak
+ * xorshift fallback and logs once. Milestone B is no-verify, so a robust
+ * mid-handshake entropy refill is deferred (see net_stack_hrng_seed_complete). */
+int mbedtls_hardware_poll(void* data, unsigned char* output, size_t len, size_t* olen) {
+    size_t produced = 0u;
+    (void)data;
+    while (produced < len && g_entropy_pool_pos < g_entropy_pool_len) {
+        output[produced++] = g_entropy_pool[g_entropy_pool_pos++];
+    }
+    if (produced < len) {
+        static uint32_t s = 0x9E3779B9u;
+        if (!g_entropy_underflow_logged && g_api != NULL && g_api->console_write != NULL) {
+            static const char msg[] = "[net-stack] tls entropy pool underflow (weak fallback)\n";
+            g_api->console_write(msg, (int)(sizeof(msg) - 1));
+        }
+        g_entropy_underflow_logged = 1u;
+        if (g_entropy_pool_len > 0u) {
+            s ^= (uint32_t)g_entropy_pool[g_entropy_pool_len - 1u];
+        }
+        while (produced < len) {
+            s ^= s << 13;
+            s ^= s >> 17;
+            s ^= s << 5;
+            output[produced++] = (unsigned char)(s & 0xFFu);
+        }
+    }
+    if (olen != NULL) {
+        *olen = produced;
+    }
+    return 0;
+}
+
+/* Build the shared no-verify TLS client config on first use, once the hrng pool
+ * is filled (ctr_drbg seeding calls mbedtls_hardware_poll synchronously). The
+ * mbedTLS static heap is installed before any TLS allocation. Returns NULL and
+ * latches failure on error so TLS opens fail cleanly rather than retrying. */
+static struct altcp_tls_config* net_stack_ensure_tls_config(void) {
+    if (g_tls_config != NULL) {
+        return g_tls_config;
+    }
+    if (g_tls_config_failed || !g_hrng_seeded || g_entropy_pool_len == 0u) {
+        return NULL;
+    }
+    if (!g_tls_heap_ready) {
+        mbedtls_memory_buffer_alloc_init(g_tls_heap, sizeof(g_tls_heap));
+        g_tls_heap_ready = 1u;
+    }
+    g_tls_config = altcp_tls_create_config_client(NULL, 0);
+    if (g_tls_config == NULL) {
+        g_tls_config_failed = 1u;
+        if (g_api != NULL && g_api->console_write != NULL) {
+            static const char msg[] = "[net-stack] tls config create failed\n";
+            g_api->console_write(msg, (int)(sizeof(msg) - 1));
+        }
+    } else if (g_api != NULL && g_api->console_write != NULL) {
+        static const char msg[] = "[net-stack] tls client config ready\n";
+        g_api->console_write(msg, (int)(sizeof(msg) - 1));
+    }
+    return g_tls_config;
+}
+
+static int32_t net_stack_pcb_open(net_socket_t* socket, uint32_t open_flags) {
     if (socket == NULL || socket->family != NET_SOCKET_AF_INET) {
         return NET_STATUS_INVALID;
     }
@@ -1298,7 +1411,18 @@ static int32_t net_stack_pcb_open(net_socket_t* socket) {
             udp_recv((struct udp_pcb*)socket->pcb, net_stack_udp_recv, socket);
         }
     } else if (socket->type == NET_SOCKET_STREAM) {
-        socket->pcb = altcp_tcp_new_ip_type(IPADDR_TYPE_V4);
+        if (open_flags & NET_SOCKET_OPEN_FLAG_TLS) {
+            /* TLS stream: same altcp_* socket path, but the pcb is a TLS layer
+             * over TCP. The handshake is driven by the connect/recv/sent
+             * callbacks the CONNECT handler attaches, exactly as for plain TCP. */
+            struct altcp_tls_config* cfg = net_stack_ensure_tls_config();
+            if (cfg == NULL) {
+                return NET_STATUS_NOT_READY;
+            }
+            socket->pcb = altcp_tls_new(cfg, IPADDR_TYPE_V4);
+        } else {
+            socket->pcb = altcp_tcp_new_ip_type(IPADDR_TYPE_V4);
+        }
     }
     return socket->pcb != NULL ? NET_STATUS_OK : NET_STATUS_NO_MEM;
 }
@@ -1396,6 +1520,7 @@ static void net_stack_handle_open(const nd_ipc_message_t* request) {
     uint32_t socket_id = 0u;
     uint32_t tx_borrow_id;
     uint32_t rx_borrow_id;
+    uint32_t open_flags = 0u;
     int32_t status;
 
     if (g_api == NULL || g_api->xfer_buffer_map_borrowed == NULL ||
@@ -1415,6 +1540,9 @@ static void net_stack_handle_open(const nd_ipc_message_t* request) {
         net_stack_reply_error(request, NET_STATUS_INVALID);
         return;
     }
+    /* Capture the socket-open flags (e.g. NET_SOCKET_OPEN_FLAG_TLS) before the
+     * descriptor buffer is unmapped below; pcb creation consumes them. */
+    open_flags = descriptor->flags;
     tx_base = g_api->xfer_buffer_map_borrowed(ND_BUFFER_KIND_XFER, descriptor->tx_buffer_id,
                                               descriptor->tx_borrow_id);
     rx_base = g_api->xfer_buffer_map_borrowed(ND_BUFFER_KIND_XFER, descriptor->rx_buffer_id,
@@ -1441,7 +1569,7 @@ static void net_stack_handle_open(const nd_ipc_message_t* request) {
         net_stack_reply_error(request, status);
         return;
     }
-    status = net_stack_pcb_open(&g_socket_pool.sockets[socket_id]);
+    status = net_stack_pcb_open(&g_socket_pool.sockets[socket_id], open_flags);
     if (status != NET_STATUS_OK) {
         (void)net_socket_close(&g_socket_pool, request->source, socket_id);
         (void)g_api->xfer_buffer_unmap_borrowed(tx_borrow_id);

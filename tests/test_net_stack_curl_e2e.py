@@ -116,13 +116,8 @@ class NetStackCurlE2ETest(unittest.TestCase):
             "curl did not handle a full http:// URL with a query string",
         )
 
-        # 4) https is rejected up front (no TLS), not mis-parsed as a bad host
-        mark = session.mark()
-        session.send("spawn /system/utils/curl https://10.0.2.2:%d/" % _PORT)
-        self.assertTrue(
-            session.expect_from(mark, b"[curl] https/TLS is not supported", timeout_s=20),
-            "curl did not reject https:// with a clear message",
-        )
+        # NOTE: https:// is now supported (no-verify TLS, milestone B) and is
+        # exercised end-to-end against a TLS server in test_net_stack_https_e2e.py.
 
 
 if __name__ == "__main__":

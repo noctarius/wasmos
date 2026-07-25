@@ -37,7 +37,7 @@
 #include "lwip/timeouts.h"
 #include "netif/ethernet.h"
 
-#include "mbedtls/memory_buffer_alloc.h"
+#include "stdlib.h"
 
 #include "net_stack_ifcfg.h"
 #include "socket.h"
@@ -46,16 +46,13 @@
 
 /* --- TLS (milestone B: no-verify TLS 1.2 client via mbedTLS + altcp_tls) ----
  *
- * mbedTLS runs with no malloc: its static buffer allocator owns g_tls_heap and
- * is installed at startup (before any TLS config is built). Entropy is
- * synchronous inside mbedTLS but net-stack is a non-blocking reactor, so the
- * hrng service pre-fills g_entropy_pool at startup and mbedtls_hardware_poll()
- * drains it. A single shared client config (no cert, VERIFY_NONE) backs every
- * TLS socket; it is built lazily on the first TLS open once entropy is ready. */
-#define NET_STACK_TLS_HEAP_BYTES (96u * 1024u)
+ * mbedTLS's calloc/free are the native slab allocator (heap_native.c, backed by
+ * kernel pages), so the TLS heap grows on demand. Entropy is synchronous inside
+ * mbedTLS but net-stack is a non-blocking reactor, so the hrng service pre-fills
+ * g_entropy_pool at startup and mbedtls_hardware_poll() drains it. A single
+ * shared client config (no cert, VERIFY_NONE) backs every TLS socket; it is
+ * built lazily on the first TLS open once entropy is ready. */
 #define NET_STACK_ENTROPY_POOL_BYTES 256u
-static uint8_t g_tls_heap[NET_STACK_TLS_HEAP_BYTES] __attribute__((aligned(16)));
-static uint8_t g_tls_heap_ready = 0u;
 static struct altcp_tls_config* g_tls_config = NULL;
 static uint8_t g_tls_config_failed = 0u;
 static uint8_t g_entropy_pool[NET_STACK_ENTROPY_POOL_BYTES];
@@ -68,12 +65,10 @@ static uint8_t g_entropy_underflow_logged = 0u;
  * pre-init values are never invoked; snprintf is only used by unused X.509/debug
  * string helpers. Providing them here keeps the link free of libc stdio/stdlib. */
 void* net_stack_mbedtls_std_calloc(size_t nmemb, size_t size) {
-    (void)nmemb;
-    (void)size;
-    return NULL;
+    return calloc(nmemb, size);
 }
 void net_stack_mbedtls_std_free(void* ptr) {
-    (void)ptr;
+    free(ptr);
 }
 int net_stack_mbedtls_snprintf(char* buf, size_t size, const char* fmt, ...) {
     (void)fmt;
@@ -1383,10 +1378,6 @@ static struct altcp_tls_config* net_stack_ensure_tls_config(void) {
     if (g_tls_config_failed || !g_hrng_seeded || g_entropy_pool_len == 0u) {
         return NULL;
     }
-    if (!g_tls_heap_ready) {
-        mbedtls_memory_buffer_alloc_init(g_tls_heap, sizeof(g_tls_heap));
-        g_tls_heap_ready = 1u;
-    }
     g_tls_config = altcp_tls_create_config_client(NULL, 0);
     if (g_tls_config == NULL) {
         g_tls_config_failed = 1u;
@@ -2245,6 +2236,9 @@ int32_t wasmos_async_main(wasmos_driver_api_t* driver_api,
         driver_api->abi_version != WASMOS_NATIVE_ABI_VERSION) {
         return -2;
     }
+    /* Bind the native slab allocator to the driver_api page hooks before any
+     * malloc/free/calloc/realloc (mbedTLS uses these). */
+    wasmos_native_heap_init(driver_api);
 
     /* Bring up the lwIP core (raw API, NO_SYS). This allocates the static
      * memory pools sized by lwipopts.h. No netif is added yet. */

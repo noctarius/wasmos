@@ -17,6 +17,10 @@
 extern "C" {
 #endif
 
+/* Bind the native slab allocator (heap_native.c) to the driver_api page hooks.
+ * Call once at service startup before the first malloc/free/calloc/realloc. */
+void wasmos_native_heap_init(wasmos_driver_api_t* api);
+
 void wasmos_sys_ipc_pack_name16_native(const uint8_t* name, uint32_t name_len,
                                        uint32_t out_args[4]);
 void wasmos_sys_ipc_unpack_name16_native(uint32_t arg0, uint32_t arg1, uint32_t arg2, uint32_t arg3,

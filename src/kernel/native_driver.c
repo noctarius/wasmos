@@ -590,6 +590,37 @@ static int nd_shmem_create(uint64_t pages, uint32_t flags, uint32_t* out_id, voi
     return 0;
 }
 
+/* Anonymous page mapping for a native service's heap. Native services run
+ * supervisor and share the kernel higher-half, so raw physical pages returned as
+ * higher-half pointers are directly usable — no per-service VA window needed
+ * (same model as nd_shmem_map). The native stdlib slab allocator layers
+ * malloc/free/calloc/realloc on top. TODO(nd-vm): track per-pid so a reaped
+ * service's heap pages are reclaimed (native services are long-lived today). */
+static void* nd_vm_map(uint32_t size) {
+    uint64_t pages;
+    uint64_t phys;
+    if (size == 0) {
+        return 0;
+    }
+    pages = ((uint64_t)size + (PAGE_SIZE - 1u)) / PAGE_SIZE;
+    phys = pfa_alloc_pages(pages);
+    if (!phys) {
+        return 0;
+    }
+    return ptr_cast(void, (phys | KERNEL_HIGHER_HALF_BASE));
+}
+
+static void nd_vm_unmap(void* addr, uint32_t size) {
+    uint64_t pages;
+    uint64_t phys;
+    if (!addr || size == 0) {
+        return;
+    }
+    pages = ((uint64_t)size + (PAGE_SIZE - 1u)) / PAGE_SIZE;
+    phys = (uint64_t)(uintptr_t)addr - KERNEL_HIGHER_HALF_BASE;
+    pfa_free_pages(phys, pages);
+}
+
 static void* nd_shmem_map(uint32_t id) {
     uint64_t base = 0;
     uint64_t pages = 0;
@@ -987,6 +1018,8 @@ int native_driver_start(uint32_t context_id, const uint8_t* elf_data, uint32_t e
     api.xfer_buffer_borrow = nd_xfer_buffer_borrow;
     api.xfer_buffer_unborrow = nd_xfer_buffer_unborrow;
     api.xfer_buffer_release = nd_xfer_buffer_release;
+    api.vm_map = nd_vm_map;
+    api.vm_unmap = nd_vm_unmap;
 
     klog_write("[native-driver] calling initialize\n");
     /* The ELF is mapped only in the driver's address space (low VA, e.g.

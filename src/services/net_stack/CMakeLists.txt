@@ -262,6 +262,22 @@ add_custom_command(
 )
 list(APPEND NET_STACK_OBJS ${NET_STACK_COROUTINE_OBJ})
 
+set(NET_STACK_HEAP_OBJ ${BUILD_DIR}/net_stack_heap_native.o)
+add_custom_command(
+  OUTPUT ${NET_STACK_HEAP_OBJ}
+  COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}
+  COMMAND ${CLANG} ${NET_STACK_CFLAGS_BASE} ${NET_STACK_INCLUDES}
+          -c ${LIBSYS_NATIVE_DIR}/heap_native.c
+          -o ${NET_STACK_HEAP_OBJ}
+  DEPENDS ${LIBSYS_NATIVE_DIR}/heap_native.c
+          ${DRIVER_WASM_DIR}/include/wasmos_native_driver.h
+          ${LIBSYS_NATIVE_DIR}/include/wasmos/libsys_native.h
+  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+  COMMENT "Compiling native slab allocator (net-stack)"
+  VERBATIM
+)
+list(APPEND NET_STACK_OBJS ${NET_STACK_HEAP_OBJ})
+
 set(NET_STACK_IPC_FUTURE_OBJ ${BUILD_DIR}/net_stack_ipc_future_native.o)
 add_custom_command(
   OUTPUT ${NET_STACK_IPC_FUTURE_OBJ}

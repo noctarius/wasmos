@@ -51,9 +51,20 @@ linked feature documents for rationale and rollout plans.
 - net-stack drives stream sockets through lwIP's `altcp` layer (`LWIP_ALTCP`)
   rather than raw `tcp_*`, so plaintext TCP (`altcp_tcp`) and TLS (`altcp_tls`)
   share one code path.
+- Native services have a real growable heap: the `driver_api` exposes
+  `vm_map`/`vm_unmap` (anonymous kernel pages returned as higher-half pointers,
+  usable directly since native services run supervisor), and
+  `src/libsys/native/heap_native.c` layers a slab allocator (size-class slabs +
+  per-mapping large allocations) providing standard `malloc/free/calloc/realloc`.
+  Each native service links its own copy (per-service state, single-threaded).
+  This exists because the only libc malloc is WASM-specific and the kernel slab
+  (`kmem`) is small-object-only (<=128 B). `heap_corruption_detected` logs and
+  `proc_exit`s. (ABI bumped 11->12.) Reap reclamation of heap pages is a TODO
+  (native services are long-lived).
 - TLS client (milestone B): net-stack embeds mbedTLS 3.6 (freestanding config in
-  `src/services/net_stack/net_stack_mbedtls_config.h`, static buffer allocator,
-  entropy from the `hrng` pool via `mbedtls_hardware_poll`) behind lwIP's
+  `src/services/net_stack/net_stack_mbedtls_config.h`; `mbedtls_calloc/free` use
+  the native slab allocator so the TLS heap grows on demand; entropy from the
+  `hrng` pool via `mbedtls_hardware_poll`) behind lwIP's
   `altcp_tls`. A stream socket opened with `NET_SOCKET_OPEN_FLAG_TLS` is created
   with `altcp_tls_new` over a single shared no-verify client config; the socket
   send/recv/close path is otherwise unchanged. `wasmos_net_tls_connect`

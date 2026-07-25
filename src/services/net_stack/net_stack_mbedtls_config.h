@@ -24,7 +24,9 @@
  * (returns NULL, never actually called), so no stdlib calloc is linked. */
 #define MBEDTLS_PLATFORM_C
 #define MBEDTLS_PLATFORM_MEMORY
-#define MBEDTLS_MEMORY_BUFFER_ALLOC_C
+/* mbedtls_calloc/free resolve to the native slab allocator (heap_native.c) via
+ * the MBEDTLS_PLATFORM_STD_CALLOC/FREE stubs below, so the TLS heap grows on
+ * demand (kernel pages) instead of a fixed static pool. */
 /* No stdlib in this freestanding service. Route mbedtls_exit (only ever reached
  * from buffer-allocator verify paths, which are disabled) to a trap so nothing
  * pulls in libc exit(). calloc/free are installed at runtime by the buffer

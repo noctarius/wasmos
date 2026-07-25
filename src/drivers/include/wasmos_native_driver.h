@@ -151,6 +151,15 @@ typedef struct wasmos_driver_api {
     int (*ipc_select_wait)(uint32_t select_id, uint32_t owner_context_id, uint32_t* out_ready_ep,
                            uint32_t timeout_ms);
     void (*ipc_select_destroy)(uint32_t select_id, uint32_t owner_context_id);
+    /* Anonymous page mapping for a native service's heap. `vm_map` returns a
+     * page-aligned, writable region of at least `size` bytes (rounded up to
+     * whole pages) or NULL; `vm_unmap` returns a region from `vm_map` given the
+     * same size. The pointers are kernel higher-half (native services run
+     * supervisor and can touch them directly); never hand them across the IPC
+     * boundary. The native stdlib shim (a slab allocator) layers
+     * malloc/free/calloc/realloc on top of these. */
+    void* (*vm_map)(uint32_t size);
+    void (*vm_unmap)(void* addr, uint32_t size);
 } wasmos_driver_api_t;
 
 #define ND_BUFFER_KIND_XFER 1u
@@ -159,7 +168,7 @@ typedef struct wasmos_driver_api {
 #define ND_BUFFER_BORROW_WRITE 0x2u
 
 #define WASMOS_NATIVE_ABI_MAGIC 0x574E4150u /* 'WNAP' */
-#define WASMOS_NATIVE_ABI_VERSION 11u
+#define WASMOS_NATIVE_ABI_VERSION 12u
 
 /* Entry point that every native driver must provide via ELF e_entry. */
 typedef int (*native_driver_entry_fn_t)(wasmos_driver_api_t* api, int module_count, int arg2,

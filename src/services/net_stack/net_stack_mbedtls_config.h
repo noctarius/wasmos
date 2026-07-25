@@ -10,7 +10,8 @@
  *
  * This runs inside the native (ring-0, NO_SYS) net-stack reactor which has:
  *   - no filesystem, no sockets, no host time, no threads,
- *   - no malloc (mbedTLS uses its own static buffer allocator, see below),
+ *   - mbedtls_calloc/free routed to the native slab allocator (heap_native.c),
+ *     so the TLS heap grows on demand from kernel pages,
  *   - a pre-seeded hardware entropy pool drained by mbedtls_hardware_poll()
  *     (net_stack.c), fed by the `hrng` virtual service at startup.
  *
@@ -21,20 +22,13 @@
 #define WASMOS_NET_STACK_MBEDTLS_CONFIG_H
 
 /* --- Platform / freestanding ------------------------------------------------
- * PLATFORM_C + PLATFORM_MEMORY let the buffer allocator install itself as
- * mbedtls_calloc/free at runtime (mbedtls_memory_buffer_alloc_init). The
- * pre-init calloc default resolves to mbedTLS's internal platform_calloc_uninit
- * (returns NULL, never actually called), so no stdlib calloc is linked. */
+ * PLATFORM_C + PLATFORM_MEMORY make mbedtls_calloc/free resolve to the
+ * MBEDTLS_PLATFORM_STD_CALLOC/FREE stubs below, which forward to the native slab
+ * allocator (heap_native.c) — so the TLS heap grows on demand from kernel pages
+ * (no fixed static pool). Route mbedtls_exit to a trap so nothing pulls in a
+ * libc exit(); it is only reachable from disabled self-test/verify paths. */
 #define MBEDTLS_PLATFORM_C
 #define MBEDTLS_PLATFORM_MEMORY
-/* mbedtls_calloc/free resolve to the native slab allocator (heap_native.c) via
- * the MBEDTLS_PLATFORM_STD_CALLOC/FREE stubs below, so the TLS heap grows on
- * demand (kernel pages) instead of a fixed static pool. */
-/* No stdlib in this freestanding service. Route mbedtls_exit (only ever reached
- * from buffer-allocator verify paths, which are disabled) to a trap so nothing
- * pulls in libc exit(). calloc/free are installed at runtime by the buffer
- * allocator; their pre-init default resolves to mbedTLS's internal
- * platform_calloc_uninit, so no stdlib allocator is linked either. */
 #define MBEDTLS_PLATFORM_EXIT_MACRO(status) __builtin_trap()
 
 /* No host services: MBEDTLS_FS_IO, MBEDTLS_NET_C, MBEDTLS_TIMING_C,

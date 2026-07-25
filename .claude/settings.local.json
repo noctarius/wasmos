@@ -128,7 +128,20 @@
       "Bash(echo \"fmt-check exit: $?\")",
       "Bash(awk '/Linting Go/{p=1} /Linting AssemblyScript/{p=0} p&&!/^==>/{print}' /tmp/lintB.log)",
       "Bash(command -v actionlint yamllint)",
-      "Bash(node -e \"const fs=require\\('fs'\\); const s=fs.readFileSync\\('.github/workflows/quality.yml','utf8'\\); /* basic structural checks */ const lines=s.split\\('\\\\n'\\); let ok=true; lines.forEach\\(\\(l,i\\)=>{ if\\(/\\\\t/.test\\(l\\)\\){console.log\\('TAB at line',i+1\\);ok=false;} }\\); console.log\\(ok?'no tabs, structure looks sane':'ISSUES'\\); console.log\\('keys:', ['name:','on:','jobs:','runs-on:','steps:'].filter\\(k=>s.includes\\(k\\)\\).join\\(' '\\)\\);\")"
+      "Bash(node -e \"const fs=require\\('fs'\\); const s=fs.readFileSync\\('.github/workflows/quality.yml','utf8'\\); /* basic structural checks */ const lines=s.split\\('\\\\n'\\); let ok=true; lines.forEach\\(\\(l,i\\)=>{ if\\(/\\\\t/.test\\(l\\)\\){console.log\\('TAB at line',i+1\\);ok=false;} }\\); console.log\\(ok?'no tabs, structure looks sane':'ISSUES'\\); console.log\\('keys:', ['name:','on:','jobs:','runs-on:','steps:'].filter\\(k=>s.includes\\(k\\)\\).join\\(' '\\)\\);\")",
+      "Bash(grep -vE 'Author|Date|^\\\\s*$')",
+      "Bash(./build/test_native_coroutine)",
+      "Bash(echo \"exit=$?\")",
+      "Bash(./build/test_native_ipc_future)",
+      "Bash(./build/test_wasm_coroutine)",
+      "Bash(PYTHONPATH=/Volumes/git/wasmos python3 tests/test_net_stack_link_notify_e2e.py)",
+      "Bash(break)",
+      "Bash(PYTHONPATH=/Volumes/git/wasmos python3 /private/tmp/claude-501/-Volumes-git-wasmos/745f842d-5006-492b-bb00-a1bb5a54e774/scratchpad/net_trace.py)",
+      "Bash(echo \"configure exit=$?\")",
+      "Bash(echo \"build exit=$?\")",
+      "Bash(awk 'NR>=1220 && NR<=1400 && /add_custom_target\\\\\\(/' CMakeLists.txt)",
+      "Bash(awk 'NR>=1250 && NR<=1345 && /add_custom_target\\\\\\(\\([A-Za-z0-9_]+\\)/ {print NR\": \"$0}' CMakeLists.txt)",
+      "Bash(awk '/^typedef struct/{s=1} s&&/ipc_message_t;/{print; exit} s{print}' src/kernel/include/ipc.h)"
     ]
   }
 }

@@ -108,6 +108,22 @@ class NetStackCurlE2ETest(unittest.TestCase):
             "the downloaded file did not contain the HTTP body",
         )
 
+        # 3) a full URL with scheme + query + fragment still resolves and fetches
+        mark = session.mark()
+        session.send("spawn /system/utils/curl http://10.0.2.2:%d/hello?a=1#frag" % _PORT)
+        self.assertTrue(
+            session.expect_from(mark, _BODY, timeout_s=45),
+            "curl did not handle a full http:// URL with a query string",
+        )
+
+        # 4) https is rejected up front (no TLS), not mis-parsed as a bad host
+        mark = session.mark()
+        session.send("spawn /system/utils/curl https://10.0.2.2:%d/" % _PORT)
+        self.assertTrue(
+            session.expect_from(mark, b"[curl] https/TLS is not supported", timeout_s=20),
+            "curl did not reject https:// with a clear message",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

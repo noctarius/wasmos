@@ -51,6 +51,123 @@ static int parse_ipv4_literal(const char* s, uint32_t* out) {
     return 1;
 }
 
+/* A decomposed URL: scheme://[userinfo@]host[:port][/path][?query][#fragment]. */
+typedef struct {
+    char scheme[8];
+    char userinfo[64];
+    char host[128];
+    uint32_t port;
+    char path[160];
+    char query[256];
+    char fragment[64];
+} url_t;
+
+/* Copy s[a..b) into dst (bounded by cap), NUL-terminated. */
+static void slice(char* dst, int cap, const char* s, int a, int b) {
+    int j = 0;
+    for (int i = a; i < b && j < cap - 1; ++i) {
+        dst[j++] = s[i];
+    }
+    dst[j] = '\0';
+}
+
+/* Decompose a URL into its parts. A missing scheme defaults to "http", a missing
+ * path to "/", and the port defaults to 443 for https else 80. query and
+ * fragment are captured without their '?'/'#'. Returns 0, or -1 if the host is
+ * empty. */
+static int parse_url(const char* url, url_t* u) {
+    int n = 0;
+    while (url[n] != '\0') {
+        n++;
+    }
+    int i = 0;
+
+    /* scheme:// (only if a "://" appears before any '/') */
+    u->scheme[0] = '\0';
+    for (int k = 0; url[k] != '\0'; ++k) {
+        if (url[k] == '/') {
+            break;
+        }
+        if (url[k] == ':' && url[k + 1] == '/' && url[k + 2] == '/') {
+            slice(u->scheme, (int)sizeof(u->scheme), url, 0, k);
+            i = k + 3;
+            break;
+        }
+    }
+    if (u->scheme[0] == '\0') {
+        slice(u->scheme, (int)sizeof(u->scheme), "http", 0, 4);
+    }
+    int is_https = strcmp(u->scheme, "https") == 0;
+
+    /* authority = [i, auth_end): up to the first '/', '?' or '#' */
+    int auth_end = i;
+    while (auth_end < n && url[auth_end] != '/' && url[auth_end] != '?' && url[auth_end] != '#') {
+        auth_end++;
+    }
+
+    /* optional userinfo@ */
+    int host_start = i;
+    u->userinfo[0] = '\0';
+    for (int k = i; k < auth_end; ++k) {
+        if (url[k] == '@') {
+            slice(u->userinfo, (int)sizeof(u->userinfo), url, i, k);
+            host_start = k + 1;
+            break;
+        }
+    }
+
+    /* host[:port] */
+    int host_end = host_start;
+    while (host_end < auth_end && url[host_end] != ':') {
+        host_end++;
+    }
+    slice(u->host, (int)sizeof(u->host), url, host_start, host_end);
+    u->port = is_https ? 443u : 80u;
+    if (host_end < auth_end && url[host_end] == ':') {
+        uint32_t p = 0u;
+        for (int k = host_end + 1; k < auth_end && url[k] >= '0' && url[k] <= '9'; ++k) {
+            p = p * 10u + (uint32_t)(url[k] - '0');
+        }
+        if (p > 0u && p < 65536u) {
+            u->port = p;
+        }
+    }
+    if (u->host[0] == '\0') {
+        return -1;
+    }
+
+    /* path (up to '?' or '#'); default "/" */
+    int path_end = auth_end;
+    while (path_end < n && url[path_end] != '?' && url[path_end] != '#') {
+        path_end++;
+    }
+    if (auth_end < path_end && url[auth_end] == '/') {
+        slice(u->path, (int)sizeof(u->path), url, auth_end, path_end);
+    } else {
+        u->path[0] = '/';
+        u->path[1] = '\0';
+    }
+
+    /* query (?...) up to '#' */
+    u->query[0] = '\0';
+    int q = path_end;
+    if (q < n && url[q] == '?') {
+        int qe = q + 1;
+        while (qe < n && url[qe] != '#') {
+            qe++;
+        }
+        slice(u->query, (int)sizeof(u->query), url, q + 1, qe);
+        q = qe;
+    }
+
+    /* fragment (#...) — client-side only, never sent to the server */
+    u->fragment[0] = '\0';
+    if (q < n && url[q] == '#') {
+        slice(u->fragment, (int)sizeof(u->fragment), url, q + 1, n);
+    }
+    return 0;
+}
+
 /* Append the NUL-terminated `src` to dst[*len], bounded by cap. */
 static void sappend(char* dst, int cap, int* len, const char* src) {
     for (int i = 0; src[i] != '\0' && *len < cap - 1; ++i) {
@@ -84,9 +201,7 @@ int main(void) {
     char* tok[8];
     const char* url = 0;
     const char* outfile = 0;
-    char host[128];
-    char path[160];
-    uint32_t port = 80u;
+    url_t u;
     int32_t proc_ep = wasmos_startup_arg(0);
     int32_t reply_ep = wasmos_ipc_create_endpoint();
     int32_t rid = 1;
@@ -121,49 +236,17 @@ int main(void) {
         return 1;
     }
 
-    /* Parse url -> host, port, path (strip an optional http:// prefix). TLS is
-     * not implemented, so reject https:// up front rather than mis-parsing
-     * "https" as the hostname and reporting a bogus resolve failure. */
-    if (strncmp(url, "https://", 8) == 0) {
-        puts("[curl] https/TLS is not supported; use http://");
+    if (parse_url(url, &u) != 0) {
+        puts("[curl] bad url");
         return 1;
     }
-    if (strncmp(url, "http://", 7) == 0) {
-        url += 7;
-    }
-    {
-        int hi = 0;
-        int ui = 0;
-        while (url[ui] != '\0' && url[ui] != '/' && url[ui] != ':' && hi < (int)sizeof(host) - 1) {
-            host[hi++] = url[ui++];
-        }
-        host[hi] = '\0';
-        if (url[ui] == ':') {
-            uint32_t p = 0u;
-            ui++;
-            while (url[ui] >= '0' && url[ui] <= '9') {
-                p = p * 10u + (uint32_t)(url[ui++] - '0');
-            }
-            if (p > 0u && p < 65536u) {
-                port = p;
-            }
-            while (url[ui] != '\0' && url[ui] != '/') {
-                ui++;
-            }
-        }
-        if (url[ui] == '/') {
-            int pi = 0;
-            while (url[ui] != '\0' && pi < (int)sizeof(path) - 1) {
-                path[pi++] = url[ui++];
-            }
-            path[pi] = '\0';
+    /* TLS is not implemented; only plain http is supported. */
+    if (strcmp(u.scheme, "http") != 0) {
+        if (strcmp(u.scheme, "https") == 0) {
+            puts("[curl] https/TLS is not supported; use http://");
         } else {
-            path[0] = '/';
-            path[1] = '\0';
+            puts("[curl] unsupported url scheme");
         }
-    }
-    if (host[0] == '\0') {
-        puts("[curl] bad url");
         return 1;
     }
 
@@ -177,20 +260,26 @@ int main(void) {
         puts("[curl] no net.stack");
         return 1;
     }
-    if (!parse_ipv4_literal(host, &addr) &&
-        wasmos_net_resolve(stack_ep, reply_ep, host, rid++, &addr) != 0) {
+    if (!parse_ipv4_literal(u.host, &addr) &&
+        wasmos_net_resolve(stack_ep, reply_ep, u.host, rid++, &addr) != 0) {
         puts("[curl] resolve failed");
         return 1;
     }
-    if (wasmos_net_tcp_connect(&sock, stack_ep, reply_ep, addr, (uint16_t)port, RING_CAP, rid) != 0) {
+    if (wasmos_net_tcp_connect(&sock, stack_ep, reply_ep, addr, (uint16_t)u.port, RING_CAP, rid) !=
+        0) {
         puts("[curl] connect failed");
         return 1;
     }
 
+    /* Request-target is path[?query]; the fragment is never sent. */
     sappend(req, (int)sizeof(req), &rlen, "GET ");
-    sappend(req, (int)sizeof(req), &rlen, path);
+    sappend(req, (int)sizeof(req), &rlen, u.path);
+    if (u.query[0] != '\0') {
+        sappend(req, (int)sizeof(req), &rlen, "?");
+        sappend(req, (int)sizeof(req), &rlen, u.query);
+    }
     sappend(req, (int)sizeof(req), &rlen, " HTTP/1.0\r\nHost: ");
-    sappend(req, (int)sizeof(req), &rlen, host);
+    sappend(req, (int)sizeof(req), &rlen, u.host);
     sappend(req, (int)sizeof(req), &rlen, "\r\nConnection: close\r\n\r\n");
     if (wasmos_net_tcp_send(&sock, req, rlen) != rlen) {
         puts("[curl] send failed");

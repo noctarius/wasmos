@@ -20,42 +20,65 @@ _RESPONSE = (
 )
 
 
-def _make_self_signed(dirpath: str) -> tuple[str, str]:
-    """Generate a throwaway self-signed RSA cert/key with openssl.
-
-    Returns (cert_path, key_path). Raises if openssl is unavailable or fails so
-    the caller can skip the test cleanly.
-    """
-    cert = os.path.join(dirpath, "c.pem")
-    key = os.path.join(dirpath, "k.pem")
+def _run_openssl(args: list) -> None:
     subprocess.run(
-        [
-            "openssl", "req", "-x509", "-newkey", "rsa:2048",
-            "-keyout", key, "-out", cert,
-            "-days", "1", "-nodes", "-subj", "/CN=localhost",
-        ],
+        ["openssl"] + args,
         check=True,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
-    return cert, key
+
+
+def _make_ca_signed(d: str) -> tuple[str, str, str]:
+    """Generate a throwaway CA and a CA-signed server cert (SAN IP:10.0.2.2).
+
+    Milestone C verifies the chain and hostname, so a plain self-signed cert no
+    longer works: the guest curl reaches the server by the IP literal 10.0.2.2 and
+    checks that name against the certificate SAN, and the chain must validate to
+    the CA that the test installs into the ESP trust store.
+
+    Returns (ca_pem, server_cert, server_key). Raises if openssl is unavailable.
+    """
+    ca_key = os.path.join(d, "ca.key")
+    ca_pem = os.path.join(d, "ca.pem")
+    srv_key = os.path.join(d, "srv.key")
+    srv_csr = os.path.join(d, "srv.csr")
+    srv_pem = os.path.join(d, "srv.pem")
+    ext = os.path.join(d, "ext.cnf")
+    with open(ext, "w") as fh:
+        fh.write("subjectAltName=IP:10.0.2.2\n")
+    _run_openssl([
+        "req", "-x509", "-newkey", "rsa:2048", "-keyout", ca_key, "-out", ca_pem,
+        "-days", "1", "-nodes", "-subj", "/CN=WASMOS Test CA",
+        "-addext", "basicConstraints=critical,CA:TRUE",
+        "-addext", "keyUsage=critical,keyCertSign,cRLSign",
+    ])
+    _run_openssl([
+        "req", "-newkey", "rsa:2048", "-keyout", srv_key, "-out", srv_csr,
+        "-nodes", "-subj", "/CN=10.0.2.2",
+    ])
+    _run_openssl([
+        "x509", "-req", "-in", srv_csr, "-CA", ca_pem, "-CAkey", ca_key,
+        "-CAcreateserial", "-out", srv_pem, "-days", "1", "-extfile", ext,
+    ])
+    return ca_pem, srv_pem, srv_key
 
 
 class NetStackHttpsE2ETest(unittest.TestCase):
-    """Fetch a body over TLS through curl https:// (no-verify, milestone B).
+    """Fetch a body over TLS through curl https:// with full verification.
 
-    A host TLS server (reached from the guest via the SLIRP gateway 10.0.2.2,
-    the same local, no-internet path the plain curl/echo tests use) presents a
-    runtime-generated self-signed cert and returns a fixed body. The guest curl
+    A host TLS server (reached from the guest via the SLIRP gateway 10.0.2.2)
+    presents a runtime-generated cert signed by a throwaway CA, whose SAN is
+    IP:10.0.2.2. The CA is installed into the ESP trust store, so the guest curl
     performs a TLS 1.2 ECDHE-RSA handshake (net-stack drives mbedTLS via
-    altcp_tls), does NOT verify the certificate, strips the response headers, and
-    prints the body to stdout.
+    altcp_tls), verifies the chain and the 10.0.2.2 hostname, strips the response
+    headers, and prints the body to stdout.
     """
 
-    session: QemuSession | None = None
-    server: socket.socket | None = None
-    thread: threading.Thread | None = None
-    tmpdir: tempfile.TemporaryDirectory | None = None
+    session: "QemuSession | None" = None
+    server: "socket.socket | None" = None
+    thread: "threading.Thread | None" = None
+    tmpdir: "tempfile.TemporaryDirectory | None" = None
 
     @classmethod
     def setUpClass(cls) -> None:
@@ -63,11 +86,11 @@ class NetStackHttpsE2ETest(unittest.TestCase):
             raise unittest.SkipTest("openssl not available to generate a TLS cert")
         cls.tmpdir = tempfile.TemporaryDirectory()
         try:
-            cert, key = _make_self_signed(cls.tmpdir.name)
+            ca, cert, key = _make_ca_signed(cls.tmpdir.name)
         except (OSError, subprocess.CalledProcessError) as exc:
             cls.tmpdir.cleanup()
             cls.tmpdir = None
-            raise unittest.SkipTest("could not generate a self-signed cert: %r" % exc)
+            raise unittest.SkipTest("could not generate a CA-signed cert: %r" % exc)
 
         ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         ctx.load_cert_chain(certfile=cert, keyfile=key)
@@ -102,6 +125,13 @@ class NetStackHttpsE2ETest(unittest.TestCase):
         cls.thread.start()
 
         cfg = default_config()
+        if not os.path.isdir(cfg.esp_dir):
+            raise unittest.SkipTest("ESP dir missing; build the project first")
+        # Install the test CA into the ESP trust store so net-stack trusts it.
+        ca_dst_dir = os.path.join(cfg.esp_dir, "system", "net", "certificates")
+        os.makedirs(ca_dst_dir, exist_ok=True)
+        shutil.copyfile(ca, os.path.join(ca_dst_dir, "ca-certs.pem"))
+
         kernel_src = os.path.join("build", "kernel.elf")
         kernel_dst = os.path.join(cfg.esp_dir, "kernel.elf")
         if os.path.exists(kernel_src) and os.path.isdir(cfg.esp_dir):
@@ -130,6 +160,10 @@ class NetStackHttpsE2ETest(unittest.TestCase):
         self.assertTrue(
             session.expect(b"[net-stack] eth0 10.0.2.15/24 ready", timeout_s=90),
             "net-stack interface not ready",
+        )
+        self.assertTrue(
+            session.expect(b"[net-stack] tls: CA trust store loaded", timeout_s=60),
+            "net-stack CA trust store not loaded",
         )
         target = "https://10.0.2.2:%d/hello" % _PORT
         mark = session.mark()

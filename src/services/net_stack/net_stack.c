@@ -23,6 +23,9 @@
 #include "lwip/altcp.h"
 #include "lwip/altcp_tcp.h"
 #include "lwip/altcp_tls.h"
+/* mbedTLS SSL context handle, for per-connection SNI / hostname verification
+ * (milestone C: mbedtls_ssl_set_hostname on the pcb's ssl_context). */
+#include "mbedtls/ssl.h"
 #include "lwip/init.h"
 #include "lwip/dhcp.h"
 #include "lwip/dns.h"
@@ -44,14 +47,21 @@
 #include "wasmos/libsys_native.h"
 #include "wasmos_native_driver.h"
 
-/* --- TLS (milestone B: no-verify TLS 1.2 client via mbedTLS + altcp_tls) ----
+/* --- TLS (milestone C: verifying TLS 1.2 client via mbedTLS + altcp_tls) -----
  *
  * mbedTLS's calloc/free are the native slab allocator (heap_native.c, backed by
  * kernel pages), so the TLS heap grows on demand. Entropy is synchronous inside
  * mbedTLS but net-stack is a non-blocking reactor, so the hrng service pre-fills
- * g_entropy_pool at startup and mbedtls_hardware_poll() drains it. A single
- * shared client config (no cert, VERIFY_NONE) backs every TLS socket; it is
- * built lazily on the first TLS open once entropy is ready. */
+ * g_entropy_pool at startup and mbedtls_hardware_poll() drains it.
+ *
+ * Milestone C makes the client verify: a single shared client config carries the
+ * CA trust store loaded from /boot/system/net/certificates/ca-certs.pem (async FS
+ * read, mirroring the interfaces loader) and authmode is MBEDTLS_SSL_VERIFY_REQUIRED
+ * (ALTCP_MBEDTLS_AUTHMODE in lwipopts.h). The config is built lazily on the first
+ * TLS open once entropy AND the CA store are ready. Each TLS pcb additionally gets
+ * mbedtls_ssl_set_hostname() so the server certificate's CN/SAN is checked against
+ * the requested hostname (and SNI is sent). If the CA file is missing/unreadable
+ * the config is never built and TLS opens fail (no silent fall back to no-verify). */
 #define NET_STACK_ENTROPY_POOL_BYTES 256u
 static struct altcp_tls_config* g_tls_config = NULL;
 static uint8_t g_tls_config_failed = 0u;
@@ -190,6 +200,16 @@ static wasmos_sys_native_event_loop_t g_netdrv_loop;
 #define NET_STACK_IFCFG_MAX_ATTEMPTS 50u   /* bounded post-up retry, then give up */
 #define NET_STACK_DHCP_TIMEOUT_TICKS 3750u /* ~15 s at 250 Hz */
 
+/* TLS CA trust store (milestone C). Loaded once, asynchronously, mirroring the
+ * interfaces loader. The bundle is PEM (concatenated certificates); mbedTLS
+ * requires PEM input to be NUL terminated and the length to include that NUL, so
+ * the loader appends a NUL and passes ca_len = bytes + 1. The full Mozilla bundle
+ * is ~250 KiB; the hermetic test uses a tiny self-signed CA. */
+#define NET_STACK_CA_PATH "/boot/system/net/certificates/ca-certs.pem"
+#define NET_STACK_CA_CAP (512u * 1024u)   /* xfer buffer for the read (<= ~2 MiB) */
+#define NET_STACK_CA_RETRY_TICKS 25u      /* ~100 ms at 250 Hz between attempts */
+#define NET_STACK_CA_MAX_ATTEMPTS 50u     /* bounded retry, then give up (TLS off) */
+
 /* Interface config (/boot/system/net/interfaces), read when the interface
  * comes up. Strict: absence/failure or DHCP-no-lease leaves it unconfigured. */
 static int32_t g_fs_endpoint = 0;
@@ -202,6 +222,20 @@ static uint32_t g_ifcfg_buffer_id = 0u;
 static uint8_t* g_ifcfg_buffer = NULL;
 static uint32_t g_ifcfg_attempts = 0u;
 static uint32_t g_ifcfg_next_tick = 0u;
+
+/* TLS CA trust store loader state (milestone C), symmetric to the ifcfg loader
+ * above. It shares g_fs_endpoint discovery with the ifcfg loader. On success
+ * g_ca_bytes/g_ca_len hold the NUL-terminated PEM bundle for the process life. */
+static uint8_t g_ca_kicked = 0u;       /* startup requested a load */
+static uint8_t g_ca_loaded = 0u;       /* bundle available or given up */
+static uint8_t g_ca_read_pending = 0u;
+static uint32_t g_ca_buffer_id = 0u;
+static uint8_t* g_ca_buffer = NULL;
+static uint32_t g_ca_attempts = 0u;
+static uint32_t g_ca_next_tick = 0u;
+static uint8_t* g_ca_bytes = NULL;     /* NUL-terminated PEM, malloc'd for life */
+static uint32_t g_ca_len = 0u;         /* bytes + 1 (includes trailing NUL) */
+static uint8_t g_ca_missing_logged = 0u;
 
 static err_t net_stack_linkoutput(struct netif* netif, struct pbuf* p);
 static void net_stack_start_rx_poll(net_interface_slot_t* interface, uint8_t immediate);
@@ -216,6 +250,7 @@ static void net_stack_udp_recv(void* arg, struct udp_pcb* pcb, struct pbuf* p,
                                const ip_addr_t* addr, u16_t port);
 static void net_stack_kick_ifcfg_load(void);
 static void net_stack_try_load_ifcfg(void);
+static void net_stack_try_load_ca(void);
 static void net_stack_apply_ifcfg(net_interface_slot_t* interface, const net_ifcfg_t* cfg);
 static void net_stack_netif_status_cb(struct netif* netif);
 static void net_stack_dispatch(const nd_ipc_message_t* request);
@@ -995,6 +1030,87 @@ static void net_stack_try_load_ifcfg(void) {
     g_ifcfg_read_pending = 1u;
 }
 
+/* Completion for the CA-bundle FS read. On success, copy the bytes into a
+ * process-lifetime heap buffer with a trailing NUL (mbedTLS PEM requirement) and
+ * mark the store loaded; on error, retry a bounded number of times then give up
+ * (TLS opens fail; no fall back to no-verify). */
+static void net_stack_ca_read_reply(void* user, const nd_ipc_message_t* reply) {
+    (void)user;
+    g_ca_read_pending = 0u;
+    if (reply != NULL && reply->type == FS_IPC_RESP && (int32_t)reply->arg0 >= 0 &&
+        g_ca_buffer != NULL) {
+        uint32_t n = reply->arg0;
+        if (n >= NET_STACK_CA_CAP)
+            n = NET_STACK_CA_CAP - 1u;
+        uint8_t* bytes = (uint8_t*)malloc(n + 1u);
+        if (bytes != NULL) {
+            __builtin_memcpy(bytes, g_ca_buffer, n);
+            bytes[n] = 0u; /* NUL-terminate PEM */
+            g_ca_bytes = bytes;
+            g_ca_len = n + 1u; /* length must include the trailing NUL for PEM */
+            if (g_api->console_write != NULL) {
+                static const char msg[] = "[net-stack] tls: CA trust store loaded\n";
+                g_api->console_write(msg, (int)(sizeof(msg) - 1));
+            }
+        }
+        g_ca_loaded = 1u; /* strict: stop retrying once the file was read */
+    } else {
+        g_ca_attempts++;
+        if (g_ca_attempts >= NET_STACK_CA_MAX_ATTEMPTS) {
+            g_ca_loaded = 1u; /* give up: g_ca_bytes stays NULL, TLS opens fail */
+            if (g_api->console_write != NULL) {
+                static const char msg[] = "[net-stack] tls: no CA trust store\n";
+                g_api->console_write(msg, (int)(sizeof(msg) - 1));
+            }
+        }
+        g_ca_next_tick =
+            (g_api->sched_ticks != NULL ? g_api->sched_ticks() : 0u) + NET_STACK_CA_RETRY_TICKS;
+    }
+    if (g_ca_buffer_id != 0u)
+        (void)g_api->xfer_buffer_release(g_ca_buffer_id);
+    g_ca_buffer_id = 0u;
+    g_ca_buffer = NULL;
+}
+
+/* Owner-push read of the CA bundle, mirroring net_stack_try_load_ifcfg. Relies on
+ * the ifcfg loader (kicked on the same link-up) to discover g_fs_endpoint; until
+ * that is known this defers. Kicked once at startup so the store is ready well
+ * before the first TLS open (curl is spawned manually from the CLI). */
+static void net_stack_try_load_ca(void) {
+    uint32_t now;
+    if (!g_ca_kicked || g_ca_loaded || g_ca_read_pending || g_fs_lookup_pending ||
+        g_fs_endpoint == 0) {
+        return;
+    }
+    now = g_api->sched_ticks != NULL ? g_api->sched_ticks() : 0u;
+    if (g_api->sched_ticks != NULL && (int32_t)(now - g_ca_next_tick) < 0) {
+        return;
+    }
+    g_ca_buffer = (uint8_t*)g_api->xfer_buffer_acquire(ND_BUFFER_KIND_XFER, NET_STACK_CA_CAP,
+                                                       &g_ca_buffer_id);
+    if (g_ca_buffer == NULL) {
+        g_ca_next_tick = now + NET_STACK_CA_RETRY_TICKS;
+        return;
+    }
+    static const char path[] = NET_STACK_CA_PATH;
+    uint32_t path_len = (uint32_t)(sizeof(path) - 1u);
+    int32_t borrow_id;
+    __builtin_memcpy(g_ca_buffer, path, path_len);
+    borrow_id = g_api->xfer_buffer_borrow((uint32_t)g_fs_endpoint, g_ca_buffer_id,
+                                          ND_BUFFER_BORROW_READ | ND_BUFFER_BORROW_WRITE);
+    if (borrow_id < 0 || wasmos_sys_native_intent_send(
+                             &g_control_loop, (uint32_t)g_fs_endpoint, g_control_endpoint,
+                             FS_IPC_READ_PATH_REQ, path_len, NET_STACK_CA_CAP, g_ca_buffer_id,
+                             (uint32_t)borrow_id, net_stack_ca_read_reply, NULL, NULL) != 0) {
+        (void)g_api->xfer_buffer_release(g_ca_buffer_id);
+        g_ca_buffer_id = 0u;
+        g_ca_buffer = NULL;
+        g_ca_next_tick = now + NET_STACK_CA_RETRY_TICKS;
+        return;
+    }
+    g_ca_read_pending = 1u;
+}
+
 static int32_t net_stack_lookup_reply_status(void* user, const nd_ipc_message_t* reply) {
     (void)user;
     if (reply == NULL || reply->type != SVC_IPC_LOOKUP_RESP || reply->arg0 == 0xFFFFFFFFu) {
@@ -1367,10 +1483,13 @@ int mbedtls_hardware_poll(void* data, unsigned char* output, size_t len, size_t*
     return 0;
 }
 
-/* Build the shared no-verify TLS client config on first use, once the hrng pool
- * is filled (ctr_drbg seeding calls mbedtls_hardware_poll synchronously). The
- * mbedTLS static heap is installed before any TLS allocation. Returns NULL and
- * latches failure on error so TLS opens fail cleanly rather than retrying. */
+/* Build the shared verifying TLS client config on first use, once the hrng pool
+ * is filled (ctr_drbg seeding calls mbedtls_hardware_poll synchronously) AND the
+ * CA trust store has finished loading. The mbedTLS static heap is installed
+ * before any TLS allocation. The config carries the CA bundle so the handshake
+ * verifies the server chain (authmode VERIFY_REQUIRED, ALTCP_MBEDTLS_AUTHMODE).
+ * Returns NULL and latches failure on error so TLS opens fail cleanly rather than
+ * retrying. If the CA store is unavailable, TLS is refused (no no-verify fallback). */
 static struct altcp_tls_config* net_stack_ensure_tls_config(void) {
     if (g_tls_config != NULL) {
         return g_tls_config;
@@ -1378,7 +1497,19 @@ static struct altcp_tls_config* net_stack_ensure_tls_config(void) {
     if (g_tls_config_failed || !g_hrng_seeded || g_entropy_pool_len == 0u) {
         return NULL;
     }
-    g_tls_config = altcp_tls_create_config_client(NULL, 0);
+    if (!g_ca_loaded) {
+        return NULL; /* wait for the async CA read to finish */
+    }
+    if (g_ca_bytes == NULL || g_ca_len == 0u) {
+        /* CA read gave up: refuse TLS rather than silently skip verification. */
+        if (!g_ca_missing_logged && g_api != NULL && g_api->console_write != NULL) {
+            static const char msg[] = "[net-stack] tls: no CA trust store\n";
+            g_api->console_write(msg, (int)(sizeof(msg) - 1));
+            g_ca_missing_logged = 1u;
+        }
+        return NULL;
+    }
+    g_tls_config = altcp_tls_create_config_client(g_ca_bytes, g_ca_len);
     if (g_tls_config == NULL) {
         g_tls_config_failed = 1u;
         if (g_api != NULL && g_api->console_write != NULL) {
@@ -1410,7 +1541,27 @@ static int32_t net_stack_pcb_open(net_socket_t* socket, uint32_t open_flags) {
             if (cfg == NULL) {
                 return NET_STATUS_NOT_READY;
             }
+            /* Milestone C requires a hostname for verification (VERIFY_REQUIRED
+             * checks the chain but NOT the name without it — a MITM hole). Refuse
+             * a TLS open with no SNI. */
+            if (socket->sni_len == 0u) {
+                return NET_STATUS_INVALID;
+            }
             socket->pcb = altcp_tls_new(cfg, IPADDR_TYPE_V4);
+            if (socket->pcb != NULL) {
+                /* Set the SNI extension AND the name checked against the server
+                 * cert CN/SAN. altcp_tls_new has already run mbedtls_ssl_setup, so
+                 * the ssl_context is live; this must happen before altcp_connect
+                 * (the CONNECT handler) starts the handshake. */
+                mbedtls_ssl_context* ssl =
+                    (mbedtls_ssl_context*)altcp_tls_context((struct altcp_pcb*)socket->pcb);
+                if (ssl == NULL ||
+                    mbedtls_ssl_set_hostname(ssl, (const char*)socket->sni) != 0) {
+                    (void)altcp_close((struct altcp_pcb*)socket->pcb);
+                    socket->pcb = NULL;
+                    return NET_STATUS_NO_MEM;
+                }
+            }
         } else {
             socket->pcb = altcp_tcp_new_ip_type(IPADDR_TYPE_V4);
         }
@@ -2240,6 +2391,11 @@ int32_t wasmos_async_main(wasmos_driver_api_t* driver_api,
      * malloc/free/calloc/realloc (mbedTLS uses these). */
     wasmos_native_heap_init(driver_api);
 
+    /* Kick the TLS CA trust-store load (milestone C). It defers until the fs
+     * service endpoint is discovered by the interfaces loader on link-up, then
+     * reads /boot/system/net/certificates/ca-certs.pem once. */
+    g_ca_kicked = 1u;
+
     /* Bring up the lwIP core (raw API, NO_SYS). This allocates the static
      * memory pools sized by lwipopts.h. No netif is added yet. */
     lwip_init();
@@ -2331,6 +2487,7 @@ int32_t wasmos_async_main(wasmos_driver_api_t* driver_api,
          * drivers that predate the net.ifc class registration. */
         net_stack_try_bind_virtio();
         net_stack_try_load_ifcfg();
+        net_stack_try_load_ca();
         sys_check_timeouts();
         for (uint32_t i = 0u; i < NET_STACK_MAX_INTERFACES; ++i) {
             net_interface_slot_t* interface = &g_interfaces[i];

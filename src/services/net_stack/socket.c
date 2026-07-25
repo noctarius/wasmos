@@ -46,6 +46,18 @@ int32_t net_socket_open(net_socket_pool_t* pool, uint32_t owner_endpoint,
         socket->tx_borrow_id = descriptor->tx_borrow_id;
         socket->rx_buffer_id = descriptor->rx_buffer_id;
         socket->rx_borrow_id = descriptor->rx_borrow_id;
+        /* Copy the SNI/verification hostname (bounded, NUL terminated) so the
+         * pcb-open path can hand it to mbedTLS. */
+        socket->sni_len = 0u;
+        if (descriptor->sni_len > 0u) {
+            uint16_t n = descriptor->sni_len;
+            if (n > NET_SOCKET_SNI_MAX - 1u)
+                n = NET_SOCKET_SNI_MAX - 1u;
+            for (uint16_t i = 0u; i < n; ++i)
+                socket->sni[i] = descriptor->sni[i];
+            socket->sni[n] = 0u;
+            socket->sni_len = n;
+        }
         *out_socket_id = id;
         return NET_STATUS_OK;
     }

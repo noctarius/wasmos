@@ -43,6 +43,11 @@ typedef struct {
     /* For a NET_SOCKET_ACCEPTING socket: index of the listening socket whose
      * next inbound connection it will be paired with. */
     uint32_t accept_listener_id;
+    /* NUL-terminated SNI / verification hostname for a TLS stream socket
+     * (milestone C); empty for plain TCP/UDP. Consumed by net_stack_pcb_open to
+     * drive mbedtls_ssl_set_hostname before the handshake. */
+    uint16_t sni_len;
+    uint8_t sni[NET_SOCKET_SNI_MAX];
     void* pcb; /* struct udp_pcb* or struct altcp_pcb*, owned by net-stack */
     wasmos_ringbuf_t tx_ring;
     wasmos_ringbuf_t rx_ring;

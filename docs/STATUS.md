@@ -43,9 +43,14 @@ linked feature documents for rationale and rollout plans.
   linear memory with the new `xfer_buffer_map`/`xfer_buffer_unmap` hostcalls
   (wired in both runtimes + the WARP AOT stub table) and drives them with
   `ringbuf.h` in place, instead of copy-based `xfer_buffer_read/write` poking.
-  The overlay is a mapping only: unmap clears the PTEs and the xfer-buffer's
-  owner frees the backing (WARP's slot decommit no longer frees the borrowed
-  ring phys). The shared `wasmos_net_tcp_connect/send/recv/close` helper
+  The overlay is a mapping only: the xfer-buffer's owner frees the backing, never
+  the overlay. On WARP the mapped overlay holds a phys refcount (`pfa_pin_pages`
+  at `xfer_buffer_map`, released at `xfer_buffer_unmap`) so that if a process
+  exits or **traps** with the overlay still mapped, the linear-memory slot
+  decommit's page free is a harmless refcount decrement rather than a double-free
+  against the owner's later release/reap (previously this crashed the kernel with
+  a `pfa double-free` when e.g. `curl` trapped mid-connect). This mirrors the
+  existing region-overlay pin. The shared `wasmos_net_tcp_connect/send/recv/close` helper
   (`wasmos/net.h`) implements a TCP stream socket on top; `examples/c/net_tcp_echo`
   runs on it (validated by `test_net_stack_tcp_echo_e2e`).
 - net-stack drives stream sockets through lwIP's `altcp` layer (`LWIP_ALTCP`)
@@ -61,18 +66,44 @@ linked feature documents for rationale and rollout plans.
   (`kmem`) is small-object-only (<=128 B). `heap_corruption_detected` logs and
   `proc_exit`s. (ABI bumped 11->12.) Reap reclamation of heap pages is a TODO
   (native services are long-lived).
-- TLS client (milestone B): net-stack embeds mbedTLS 3.6 (freestanding config in
-  `src/services/net_stack/net_stack_mbedtls_config.h`; `mbedtls_calloc/free` use
-  the native slab allocator so the TLS heap grows on demand; entropy from the
-  `hrng` pool via `mbedtls_hardware_poll`) behind lwIP's
-  `altcp_tls`. A stream socket opened with `NET_SOCKET_OPEN_FLAG_TLS` is created
-  with `altcp_tls_new` over a single shared no-verify client config; the socket
-  send/recv/close path is otherwise unchanged. `wasmos_net_tls_connect`
-  (libc `wasmos/net.h`) and `curl https://` use it. This is a TLS 1.2 ECDHE
-  handshake with **no certificate verification** (chain/hostname validation is
-  milestone C); validated by `test_net_stack_https_e2e`. The lwIP 2.2.1 mbedTLS
-  glue is a 2.x-era subtree bridged to 3.6 without editing `libs/` (shim headers
-  + a force-included compat header under `src/services/net_stack/`).
+- TLS client (milestone C, verifying): net-stack embeds mbedTLS 3.6 (freestanding
+  config in `src/services/net_stack/net_stack_mbedtls_config.h`; `mbedtls_calloc/free`
+  use the native slab allocator so the TLS heap grows on demand — a ~KB..hundreds-of-KB
+  CA bundle parses fine; entropy from the `hrng` pool via `mbedtls_hardware_poll`)
+  behind lwIP's `altcp_tls`. A stream socket opened with `NET_SOCKET_OPEN_FLAG_TLS`
+  is created with `altcp_tls_new`; the socket send/recv/close path is otherwise
+  unchanged. `wasmos_net_tls_connect(..., sni)` (libc `wasmos/net.h`) and
+  `curl https://` use it. This is a TLS 1.2 ECDHE handshake with **full server
+  certificate chain + hostname verification** (`ALTCP_MBEDTLS_AUTHMODE =
+  MBEDTLS_SSL_VERIFY_REQUIRED`):
+  - **Trust store.** net-stack loads a PEM CA bundle from
+    `/boot/system/net/certificates/ca-certs.pem` at startup via an async FS read
+    (mirroring the interfaces loader), keeps it in a heap buffer for the process
+    life, and builds the shared client config with it
+    (`altcp_tls_create_config_client(ca_bytes, ca_len)`). PEM input is passed
+    NUL-terminated with `ca_len = bytes + 1` (mbedTLS PEM requirement;
+    `MBEDTLS_PEM_PARSE_C`/`MBEDTLS_BASE64_C` are enabled for this). If the file is
+    missing/unreadable the config is never built and TLS opens fail — there is no
+    silent fall back to no-verify (`[net-stack] tls: no CA trust store`).
+  - **Hostname.** The client passes the server hostname (or IP literal) in a new
+    `sni[256]`/`sni_len` field of `net_socket_open_descriptor_v1_t`; net-stack calls
+    `mbedtls_ssl_set_hostname()` on the TLS pcb before the handshake so the server
+    certificate CN/SAN is checked (and SNI is sent). A TLS open with no SNI is
+    refused (verification without a name would be a MITM hole).
+  - **Real trust bundle.** `scripts/fetch-ca-certs.sh` downloads and SHA-256-pins a
+    dated curl.se Mozilla CA bundle into `scripts/system/net/certificates/ca-certs.pem`;
+    the ESP assembly copies it to the guest path above (empty placeholder when not
+    fetched, so the build never needs the network).
+  - Certificate **date validity is not checked** (`MBEDTLS_HAVE_TIME`/`HAVE_TIME_DATE`
+    stay off — no RTC is wired to mbedTLS yet); wiring RTC time is a follow-up.
+    Large TLS transfers can also still stall on RX-ring backpressure (the app must
+    drain fast enough) — RX-ring flow-control hardening is a separate follow-up.
+  Validated hermetically by `test_net_stack_https_verify_e2e` (positive: a CA-signed
+  server with `SAN=IP:10.0.2.2` verifies and the body is fetched; negative: a rogue
+  self-signed server is rejected and no body is printed) and by the verifying
+  `test_net_stack_https_e2e`. The lwIP 2.2.1 mbedTLS glue is a 2.x-era subtree bridged
+  to 3.6 without editing `libs/` (shim headers + a force-included compat header under
+  `src/services/net_stack/`).
 - `/system/utils/curl` (`curl <host>[:port][/path] [-o <file>]`) is a minimal
   HTTP/1.0 GET client on that helper: it resolves the host (DNS, or an IPv4
   literal directly), fetches the URL, strips the response headers, and writes the

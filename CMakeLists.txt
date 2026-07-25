@@ -1493,6 +1493,17 @@ set(INITFS_COPY_CMD
   COMMAND ${CMAKE_COMMAND} -E copy
       ${CMAKE_SOURCE_DIR}/scripts/system/net/interfaces
       ${BUILD_DIR}/esp/system/net/interfaces
+  # TLS CA trust store (milestone C). scripts/fetch-ca-certs.sh downloads and
+  # pins the real Mozilla/curl.se bundle to
+  # scripts/system/net/certificates/ca-certs.pem; copy it into the ESP when
+  # present so it lands at guest /system/net/certificates/ca-certs.pem. Fall back
+  # to an empty placeholder when it has not been fetched so the build never
+  # depends on the network (net-stack then logs "no CA trust store" and TLS opens
+  # fail; the hermetic verify test overwrites this file with its own test CA).
+  COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/system/net/certificates
+  COMMAND sh ${CMAKE_SOURCE_DIR}/scripts/copy-ca-into-esp.sh
+      ${CMAKE_SOURCE_DIR}/scripts/system/net/certificates/ca-certs.pem
+      ${BUILD_DIR}/esp/system/net/certificates/ca-certs.pem
   COMMAND ${CMAKE_COMMAND} -E make_directory ${USERFS_DIR}
 )
 if (RUST_ENABLE)

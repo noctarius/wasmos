@@ -27,9 +27,13 @@ In scope:
 
 TLS: the initial stack service was plaintext-only; a user-space TLS client now
 layers on via lwIP `altcp_tls` + mbedTLS 3.6 embedded in `net-stack` (opt-in per
-socket with `NET_SOCKET_OPEN_FLAG_TLS`). Milestone B is a no-verify TLS 1.2
-handshake (no certificate/hostname validation — that is milestone C). See
-`docs/STATUS.md` for the current implementation snapshot.
+socket with `NET_SOCKET_OPEN_FLAG_TLS`). Milestone B was a no-verify TLS 1.2
+handshake; milestone C adds full server certificate chain + hostname verification
+against a FS-loaded PEM CA trust store (`/boot/system/net/certificates/ca-certs.pem`,
+`MBEDTLS_SSL_VERIFY_REQUIRED`), with the SNI/verify hostname carried in the socket
+open descriptor and applied via `mbedtls_ssl_set_hostname`. Certificate date checks
+remain off (no RTC wired to mbedTLS). See `docs/STATUS.md` for the current
+implementation snapshot.
 
 Out of scope for initial rollout:
 - TLS in the kernel

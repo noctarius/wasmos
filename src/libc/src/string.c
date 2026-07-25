@@ -197,6 +197,27 @@ char* strrchr(const char* s, int ch) {
     return (char*)last;
 }
 
+char* strstr(const char* haystack, const char* needle) {
+    if (!haystack || !needle) {
+        return 0;
+    }
+    if (needle[0] == '\0') {
+        return (char*)haystack;
+    }
+    for (; *haystack != '\0'; haystack++) {
+        const char* h = haystack;
+        const char* n = needle;
+        while (*h != '\0' && *n != '\0' && *h == *n) {
+            h++;
+            n++;
+        }
+        if (*n == '\0') {
+            return (char*)haystack;
+        }
+    }
+    return 0;
+}
+
 void* memcpy(void* dest, const void* src, size_t count) {
     unsigned char* out = (unsigned char*)dest;
     const unsigned char* in = (const unsigned char*)src;

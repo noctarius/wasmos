@@ -1494,6 +1494,7 @@ static void warp_shmem_map_untrack(uint32_t pid, uint32_t id) {
             g_warp_shmem_maps[i].valid = 0;
 }
 
+
 static WarpShmemLinearMap* warp_shmem_map_find(uint32_t pid, uint32_t id) {
     for (uint32_t i = 0; i < WARP_SHMEM_MAP_SLOTS; ++i) {
         WarpShmemLinearMap* slot = &g_warp_shmem_maps[i];
@@ -2219,9 +2220,16 @@ static uint32_t warp_block_buffer_map(void* ctx_) {
  * rings are driven by pointer (ringbuf.h) rather than copy hostcalls — the
  * zero-copy data plane of docs/architecture/22. Mirrors warp_shmem_map_auto but
  * resolves the phys backing from the xfer-buffer object; owner-only, so no DMA
- * capability is required. Idempotent per buffer_id. The pages are owned by the
- * object (freed on release/reap, which also untracks the window) so they are NOT
- * pinned here; unmap before releasing the buffer so the window never dangles. */
+ * capability is required. Idempotent per buffer_id.
+ *
+ * The overlay takes a phys refcount (pfa_pin_pages) for the lifetime of the
+ * mapping, released in warp_xfer_buffer_unmap. This mirrors the region overlay
+ * path and is required for correctness: linmem_slot_decommit frees the phys of
+ * every page still mapped in the slot at teardown, so if the process exits or
+ * TRAPS before unmapping, decommit would free these object-owned pages and the
+ * xfer-buffer owner would then double-free them on release/reap. The pin makes
+ * decommit's free a harmless refcount decrement, leaving the single real free to
+ * the object's owner. */
 static uint32_t warp_xfer_buffer_map(uint32_t buffer_id, void* ctx_) {
     auto* ctx = warp_call_ctx(ctx_);
     if (!ctx || (int32_t)buffer_id <= 0)
@@ -2247,17 +2255,21 @@ static uint32_t warp_xfer_buffer_map(uint32_t buffer_id, void* ctx_) {
     int64_t placed = warp_linmem_place_phys(ctx, phys_base, pages, window);
     if (placed < 0)
         return (uint32_t)placed;
+    /* Hold a refcount on the object pages while the overlay is mapped so a slot
+     * decommit at teardown (process exit/trap without an unmap) cannot free them
+     * out from under the xfer-buffer owner. Released in warp_xfer_buffer_unmap. */
+    pfa_pin_pages(phys_base, pages);
     warp_shmem_map_track(ctx->pid, track_id, (uint32_t)placed, window);
     return (uint32_t)placed;
 }
 
-/* Tear an xfer-buffer overlay window down. This is a MAPPING teardown only: it
- * unmaps the overlay pages and never frees the underlying physical backing —
- * that belongs to the xfer-buffer's owner (this process), which frees it when it
- * releases the object or on reap. Unlike warp_shmem_unmap it therefore does NOT
- * restore placeholder phys or release a shmem region; it simply clears the PTEs
- * so a later slot decommit (paging_virt_to_phys) sees nothing to free. Returns 0
- * when there was nothing mapped. */
+/* Tear an xfer-buffer overlay window down. This is a MAPPING teardown: it clears
+ * the overlay PTEs and drops the phys refcount that warp_xfer_buffer_map took
+ * (pfa_free_pages here is that pin release, NOT the object's owning free — the
+ * object's backing is freed by its owner on release/reap). Clearing the PTEs
+ * means a later slot decommit (paging_virt_to_phys) sees nothing to free; the pin
+ * release balances the map-time pin so the object refcount returns to just the
+ * owner's. Returns 0 when there was nothing mapped. */
 static uint32_t warp_xfer_buffer_unmap(uint32_t buffer_id, void* ctx_) {
     auto* ctx = warp_call_ctx(ctx_);
     if (!ctx || (int32_t)buffer_id <= 0)
@@ -2266,10 +2278,10 @@ static uint32_t warp_xfer_buffer_unmap(uint32_t buffer_id, void* ctx_) {
     WarpShmemLinearMap* slot = warp_shmem_map_find(ctx->pid, track_id);
     if (!slot)
         return 0;
+    uint64_t pages = ((uint64_t)slot->size + 0xFFFULL) / 0x1000ULL;
     uint8_t* base = warp_linear_mem_window(ctx, slot->offset, slot->size);
     if (base) {
         uint64_t virt = addr_cast(uint64_t, base);
-        uint64_t pages = ((uint64_t)slot->size + 0xFFFULL) / 0x1000ULL;
         for (uint64_t i = 0; i < pages; ++i) {
             (void)paging_unmap_4k(virt + i * 0x1000ULL);
         }
@@ -2280,6 +2292,18 @@ static uint32_t warp_xfer_buffer_unmap(uint32_t buffer_id, void* ctx_) {
         (void)warp_ring3_sync_linmem_user_window(linmem_base);
     }
 #endif
+    /* Release the map-time pin. Re-resolve the object's phys from the still-owned
+     * buffer; if it cannot be resolved (already released), skip — the object free
+     * path already balanced the refcount. */
+    uint32_t context_id = 0;
+    xfer_buffer_t buf;
+    if (warp_current_context_id(&context_id) == 0 &&
+        xfer_buffer_describe(buffer_id, BUFFER_KIND_TRANSFER, context_id, &buf) == XFER_BUFFER_OK) {
+        uint64_t phys_base = xfer_buffer_object_phys(&buf);
+        if (phys_base != 0 && (phys_base & 0xFFFULL) == 0) {
+            pfa_free_pages(phys_base, pages);
+        }
+    }
     warp_shmem_map_untrack(ctx->pid, track_id);
     return 0;
 }

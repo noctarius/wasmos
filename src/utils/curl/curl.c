@@ -240,8 +240,9 @@ int main(void) {
         puts("[curl] bad url");
         return 1;
     }
-    /* http is plaintext; https wraps the same request path in TLS (no-verify,
-     * milestone B). The url parser already defaulted the port to 443 for https. */
+    /* http is plaintext; https wraps the same request path in TLS with server
+     * certificate + hostname verification (milestone C) — u.host is passed as the
+     * SNI/verify name below. The url parser already defaulted the port to 443. */
     int use_tls = strcmp(u.scheme, "https") == 0;
     if (!use_tls && strcmp(u.scheme, "http") != 0) {
         puts("[curl] unsupported url scheme");
@@ -265,7 +266,8 @@ int main(void) {
     }
     int connected =
         use_tls
-            ? wasmos_net_tls_connect(&sock, stack_ep, reply_ep, addr, (uint16_t)u.port, RING_CAP, rid)
+            ? wasmos_net_tls_connect(&sock, stack_ep, reply_ep, addr, (uint16_t)u.port, RING_CAP,
+                                     rid, u.host)
             : wasmos_net_tcp_connect(&sock, stack_ep, reply_ep, addr, (uint16_t)u.port, RING_CAP,
                                      rid);
     if (connected != 0) {

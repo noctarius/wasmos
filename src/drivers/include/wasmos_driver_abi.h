@@ -637,6 +637,12 @@ enum {
 /* net_socket_open_descriptor_v1_t.flags bits. */
 #define NET_SOCKET_OPEN_FLAG_TLS 1u /* stream socket is wrapped in TLS (altcp_tls) */
 
+/* Maximum SNI / certificate-verification hostname carried in the open descriptor
+ * (a DNS name is at most 253 bytes; the extra room leaves space for the NUL that
+ * mbedtls_ssl_set_hostname needs). Milestone C: for a TLS socket this is the name
+ * checked against the server certificate CN/SAN and sent in the SNI extension. */
+#define NET_SOCKET_SNI_MAX 256u
+
 /* Datagram ring records carry endpoint metadata as well as payload. A client
  * writes destination fields for an unconnected sendto; RX records contain the
  * source fields supplied by lwIP. Connected sockets may leave destination at
@@ -665,6 +671,11 @@ typedef struct __attribute__((packed)) {
     uint32_t rx_buffer_id;
     uint32_t rx_borrow_id;
     uint32_t rx_bytes;
+    /* SNI / certificate-verification hostname for a TLS stream socket (milestone
+     * C). sni_len is the byte count (<= NET_SOCKET_SNI_MAX - 1, not NUL
+     * terminated in-band); 0 for plain TCP and UDP. */
+    uint16_t sni_len;
+    uint8_t sni[NET_SOCKET_SNI_MAX];
 } net_socket_open_descriptor_v1_t;
 
 /* Interface-address record for NET_IPC_IFADDR_ADD/DEL/LIST. ADD carries one

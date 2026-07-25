@@ -28,6 +28,7 @@ int str_copy_bytes(char* dst, size_t dst_len, const uint8_t* src, size_t src_len
 size_t str_copy(char* dst, size_t dst_len, const char* src);
 char* strchr(const char* s, int ch);
 char* strrchr(const char* s, int ch);
+char* strstr(const char* haystack, const char* needle);
 void* memcpy(void* dest, const void* src, size_t count);
 void* memmove(void* dest, const void* src, size_t count);
 void* memset(void* dest, int value, size_t count);

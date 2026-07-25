@@ -1,9 +1,12 @@
 /* mbedtls_config.h - freestanding mbedTLS 3.6 config for the net-stack service.
  *
- * Milestone B scope: a TLS 1.2 *client* that performs an encrypted handshake and
- * GET with NO certificate verification (authmode is forced to
- * MBEDTLS_SSL_VERIFY_NONE by ALTCP_MBEDTLS_AUTHMODE in lwipopts.h). Certificate
- * chain / hostname verification is milestone C.
+ * Milestone C scope: a TLS 1.2 *client* that performs an encrypted handshake and
+ * GET, verifying the server certificate chain against a FS-loaded CA trust store
+ * and checking the hostname (authmode is MBEDTLS_SSL_VERIFY_REQUIRED via
+ * ALTCP_MBEDTLS_AUTHMODE in lwipopts.h; net_stack.c calls mbedtls_ssl_set_hostname
+ * per connection). Certificate date validity is NOT checked: MBEDTLS_HAVE_TIME /
+ * MBEDTLS_HAVE_TIME_DATE stay off (no RTC wired to mbedTLS yet), so notBefore/
+ * notAfter are skipped. X.509 chain + name verification below is fully enabled.
  *
  * This runs inside the native (ring-0, NO_SYS) net-stack reactor which has:
  *   - no filesystem, no sockets, no host time, no threads,
@@ -99,9 +102,15 @@ int net_stack_mbedtls_snprintf(char* buf, size_t size, const char* fmt, ...);
 #define MBEDTLS_SHA384_C
 #define MBEDTLS_SHA512_C
 
-/* --- X.509 (parse the server certificate chain; no verification) ------------ */
+/* --- X.509 (parse AND verify the server certificate chain + hostname) ------- */
 #define MBEDTLS_X509_USE_C
 #define MBEDTLS_X509_CRT_PARSE_C
+/* The CA trust store is a PEM bundle (concatenated base64 certificates) loaded
+ * from the filesystem, so PEM decoding must be enabled (milestone B was no-verify
+ * and never parsed a CA file, so it only needed the DER-over-the-wire path).
+ * MBEDTLS_PEM_PARSE_C pulls in base64 decoding. */
+#define MBEDTLS_PEM_PARSE_C
+#define MBEDTLS_BASE64_C
 
 /* --- TLS 1.2 client --------------------------------------------------------- */
 #define MBEDTLS_SSL_TLS_C

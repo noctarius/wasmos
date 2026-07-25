@@ -143,11 +143,13 @@ static inline void wasmos_net_tcp_close(wasmos_net_tcp_t* s) {
 
 /* Shared implementation for the plain-TCP and TLS connect helpers. `open_flags`
  * is written into the socket-open descriptor (NET_SOCKET_OPEN_FLAG_TLS selects a
- * TLS stream socket); everything else is identical. */
+ * TLS stream socket). `sni` is the server hostname for TLS certificate/hostname
+ * verification (milestone C); it is written into the descriptor's sni field and
+ * ignored (may be NULL) for plain TCP. everything else is identical. */
 static inline int32_t wasmos_net__connect_flags(wasmos_net_tcp_t* s, int32_t stack_ep,
                                                 int32_t reply_ep, uint32_t addr_no, uint16_t port,
                                                 uint32_t ring_capacity, int32_t request_id_base,
-                                                uint32_t open_flags) {
+                                                uint32_t open_flags, const char* sni) {
     wasmos_ipc_message_t reply;
     net_socket_open_descriptor_v1_t desc;
     uint32_t region;
@@ -209,6 +211,17 @@ static inline int32_t wasmos_net__connect_flags(wasmos_net_tcp_t* s, int32_t sta
     desc.rx_buffer_id = (uint32_t)s->rx_bid;
     desc.rx_borrow_id = (uint32_t)s->rx_grant;
     desc.rx_bytes = region;
+    /* Copy the SNI/verification hostname into the descriptor for a TLS socket
+     * (bounded; net-stack NUL-terminates on its side). */
+    desc.sni_len = 0u;
+    if ((open_flags & NET_SOCKET_OPEN_FLAG_TLS) && sni != 0) {
+        uint32_t i = 0u;
+        while (sni[i] != '\0' && i < NET_SOCKET_SNI_MAX - 1u) {
+            desc.sni[i] = (uint8_t)sni[i];
+            i++;
+        }
+        desc.sni_len = (uint16_t)i;
+    }
     rid = s->request_id++;
     if (wasmos_xfer_buffer_write(s->desc_bid, addr_cast(int32_t, &desc), (int32_t)sizeof(desc), 0) !=
             0 ||
@@ -247,20 +260,24 @@ static inline int32_t wasmos_net_tcp_connect(wasmos_net_tcp_t* s, int32_t stack_
                                              int32_t reply_ep, uint32_t addr_no, uint16_t port,
                                              uint32_t ring_capacity, int32_t request_id_base) {
     return wasmos_net__connect_flags(s, stack_ep, reply_ep, addr_no, port, ring_capacity,
-                                     request_id_base, 0u);
+                                     request_id_base, 0u, 0);
 }
 
 /* Same as wasmos_net_tcp_connect but wraps the stream in TLS (net-stack creates
- * an altcp_tls pcb). Milestone B is NO certificate verification: the handshake
- * is encrypted but the server certificate/hostname are not validated. The
- * connect reply is deferred until the TLS handshake completes. The subsequent
+ * an altcp_tls pcb). Milestone C verifies: net-stack validates the server
+ * certificate chain against its CA trust store and checks `sni` against the
+ * certificate CN/SAN (also sent as the SNI extension). `sni` MUST be the server
+ * hostname (or the IP literal for an IP-based connection); an empty/NULL sni is
+ * rejected by net-stack for a TLS socket. The connect reply is deferred until the
+ * TLS handshake completes (it fails if verification fails). The subsequent
  * wasmos_net_tcp_send/recv/close calls are unchanged — payload is plaintext to
  * the app and encrypted on the wire by net-stack. */
 static inline int32_t wasmos_net_tls_connect(wasmos_net_tcp_t* s, int32_t stack_ep,
                                              int32_t reply_ep, uint32_t addr_no, uint16_t port,
-                                             uint32_t ring_capacity, int32_t request_id_base) {
+                                             uint32_t ring_capacity, int32_t request_id_base,
+                                             const char* sni) {
     return wasmos_net__connect_flags(s, stack_ep, reply_ep, addr_no, port, ring_capacity,
-                                     request_id_base, NET_SOCKET_OPEN_FLAG_TLS);
+                                     request_id_base, NET_SOCKET_OPEN_FLAG_TLS, sni);
 }
 
 /* Send all `len` bytes, blocking (yield) on ring-full backpressure until they

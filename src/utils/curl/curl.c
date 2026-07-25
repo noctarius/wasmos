@@ -121,7 +121,13 @@ int main(void) {
         return 1;
     }
 
-    /* Parse url -> host, port, path (strip an optional http:// prefix). */
+    /* Parse url -> host, port, path (strip an optional http:// prefix). TLS is
+     * not implemented, so reject https:// up front rather than mis-parsing
+     * "https" as the hostname and reporting a bogus resolve failure. */
+    if (strncmp(url, "https://", 8) == 0) {
+        puts("[curl] https/TLS is not supported; use http://");
+        return 1;
+    }
     if (strncmp(url, "http://", 7) == 0) {
         url += 7;
     }

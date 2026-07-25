@@ -177,7 +177,8 @@ static int recv_reply(int32_t ep, int32_t request_id, wasmos_ipc_message_t* mess
 
 static void usage(void) {
     puts("[ip] usage: ip addr show | ip addr add <a.b.c.d>/<prefix> dev <name> | ip addr del dev "
-         "<name> | ip dev <name> up|down | ip dhcp <name> on|off");
+         "<name> | ip dev <name> up|down | ip dhcp <name> on|off | ip dns show | ip dns set <ip> "
+         "[<ip2>] | ip dns del <ip>");
 }
 
 static int cmd_dhcp(int32_t stack_ep, int32_t reply_ep, int32_t* rid, const char* dev,
@@ -190,6 +191,104 @@ static int cmd_dhcp(int32_t stack_ep, int32_t reply_ep, int32_t* rid, const char
         return 1;
     }
     puts(on ? "[ip] dhcp on ok" : "[ip] dhcp off ok");
+    return 0;
+}
+
+static int dns_query(int32_t stack_ep, int32_t reply_ep, int32_t* rid, uint32_t servers[2],
+                     uint32_t* out_count) {
+    wasmos_ipc_message_t message;
+    if (wasmos_ipc_send(stack_ep, reply_ep, NET_IPC_DNS_LIST, *rid, 0, 0, 0, 0) != 0 ||
+        recv_reply(reply_ep, (*rid)++, &message) != 0 || message.type != NET_IPC_RESP) {
+        return 1;
+    }
+    *out_count = message.arg1 > 2u ? 2u : message.arg1;
+    servers[0] = message.arg2;
+    servers[1] = message.arg3;
+    return 0;
+}
+
+static int dns_apply(int32_t stack_ep, int32_t reply_ep, int32_t* rid, uint32_t count, uint32_t s0,
+                     uint32_t s1) {
+    wasmos_ipc_message_t message;
+    return (wasmos_ipc_send(stack_ep, reply_ep, NET_IPC_DNS_SET, *rid, count, s0, s1, 0) != 0 ||
+            recv_reply(reply_ep, (*rid)++, &message) != 0 || message.type != NET_IPC_RESP)
+               ? 1
+               : 0;
+}
+
+static int cmd_dns_show(int32_t stack_ep, int32_t reply_ep, int32_t* rid) {
+    uint32_t servers[2];
+    uint32_t count = 0u;
+    if (dns_query(stack_ep, reply_ep, rid, servers, &count) != 0) {
+        puts("[ip] dns show failed");
+        return 1;
+    }
+    if (count == 0u) {
+        puts("[ip] dns: (none)");
+        return 0;
+    }
+    for (uint32_t i = 0u; i < count; ++i) {
+        char line[32];
+        int n = 0;
+        app_str(line, (int)sizeof(line), &n, "[ip] dns ");
+        app_ipv4(line, (int)sizeof(line), &n, servers[i]);
+        if (n < (int)sizeof(line))
+            line[n] = '\0';
+        puts(line);
+    }
+    return 0;
+}
+
+static int cmd_dns_set(int32_t stack_ep, int32_t reply_ep, int32_t* rid, const char* ip1,
+                       const char* ip2) {
+    uint32_t s0 = 0u;
+    uint32_t s1 = 0u;
+    uint32_t count = 0u;
+    if (ip1 != 0 && parse_ipv4_no(ip1, &s0) == 0) {
+        count = 1u;
+    } else if (ip1 != 0) {
+        puts("[ip] bad dns address");
+        return 1;
+    }
+    if (ip2 != 0) {
+        if (parse_ipv4_no(ip2, &s1) != 0) {
+            puts("[ip] bad dns address");
+            return 1;
+        }
+        count = 2u;
+    }
+    if (dns_apply(stack_ep, reply_ep, rid, count, s0, s1) != 0) {
+        puts("[ip] dns set failed");
+        return 1;
+    }
+    puts("[ip] dns set ok");
+    return 0;
+}
+
+static int cmd_dns_del(int32_t stack_ep, int32_t reply_ep, int32_t* rid, const char* ip) {
+    uint32_t target = 0u;
+    uint32_t servers[2];
+    uint32_t count = 0u;
+    uint32_t keep[2] = {0u, 0u};
+    uint32_t kept = 0u;
+    uint32_t i;
+    if (parse_ipv4_no(ip, &target) != 0) {
+        puts("[ip] bad dns address");
+        return 1;
+    }
+    if (dns_query(stack_ep, reply_ep, rid, servers, &count) != 0) {
+        puts("[ip] dns del failed");
+        return 1;
+    }
+    for (i = 0u; i < count; ++i) {
+        if (servers[i] != target)
+            keep[kept++] = servers[i];
+    }
+    if (dns_apply(stack_ep, reply_ep, rid, kept, keep[0], keep[1]) != 0) {
+        puts("[ip] dns del failed");
+        return 1;
+    }
+    puts("[ip] dns del ok");
     return 0;
 }
 
@@ -351,7 +450,8 @@ int main(int argc, char** argv) {
         puts("[ip] setup failed");
         return 1;
     }
-    if (n < 1 || (!str_eq(tok[0], "addr") && !str_eq(tok[0], "dev") && !str_eq(tok[0], "dhcp"))) {
+    if (n < 1 || (!str_eq(tok[0], "addr") && !str_eq(tok[0], "dev") && !str_eq(tok[0], "dhcp") &&
+                  !str_eq(tok[0], "dns"))) {
         usage();
         return 1;
     }
@@ -378,6 +478,16 @@ int main(int argc, char** argv) {
             return cmd_dhcp(stack_ep, reply_ep, &rid, tok[1], 1u);
         if (n >= 3 && str_eq(tok[2], "off"))
             return cmd_dhcp(stack_ep, reply_ep, &rid, tok[1], 0u);
+        usage();
+        return 1;
+    }
+    if (str_eq(tok[0], "dns")) {
+        if (n == 1 || str_eq(tok[1], "show") || str_eq(tok[1], "list"))
+            return cmd_dns_show(stack_ep, reply_ep, &rid);
+        if (n >= 3 && str_eq(tok[1], "set"))
+            return cmd_dns_set(stack_ep, reply_ep, &rid, tok[2], n >= 4 ? tok[3] : 0);
+        if (n >= 3 && str_eq(tok[1], "del"))
+            return cmd_dns_del(stack_ep, reply_ep, &rid, tok[2]);
         usage();
         return 1;
     }

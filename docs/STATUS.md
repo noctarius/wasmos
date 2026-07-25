@@ -56,8 +56,11 @@ linked feature documents for rationale and rollout plans.
   had silently dropped them via the async event loop).
 - `NET_IPC_IFADDR_ADD/DEL/LIST`, `NET_IPC_IF_SET_STATE`, and `NET_IPC_DHCP_SET`
   are implemented; the `/system/utils/ip` tool (`ip addr show|add|del`,
-  `ip dev <name> up|down`, `ip dhcp <name> on|off`) inspects and edits interface
-  addressing at runtime. `ip dhcp <name> on` clears any static address and
+  `ip dev <name> up|down`, `ip dhcp <name> on|off`, `ip dns show|set|del`)
+  inspects and edits interface addressing and the resolver at runtime.
+  `ip dns set <ip> [<ip2>]` replaces the resolver list (via `NET_IPC_DNS_SET`,
+  overriding DHCP), `ip dns del <ip>` removes one, and `ip dns show`
+  (`NET_IPC_DNS_LIST`) reports the current servers. `ip dhcp <name> on` clears any static address and
   (re)starts the lwIP DHCP client; `off` stops it and leaves the current address
   in place. lwIP is IPv4-only with a single address per netif, so static
   addressing and DHCP are mutually exclusive on an interface (no address aliases).

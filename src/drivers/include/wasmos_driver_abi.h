@@ -592,6 +592,17 @@ enum {
      * arg0 (NET_IPC_RESP) is the accepted socket_id. Each posted ACCEPT is one
      * accept slot; post several to accept several connections. */
     NET_IPC_ACCEPT = 0xB13,
+    /* Resolve a hostname to an IPv4 address. The name is carried in a borrowed
+     * xfer buffer: arg0 = buffer_id, arg1 = borrow_id, arg2 = name length. The
+     * reply is deferred until the lwIP DNS callback fires; RESP arg0 is the
+     * resolved IPv4 (network-order word), or NET_IPC_ERROR on failure. */
+    NET_IPC_RESOLVE = 0xB14,
+    /* Replace the resolver list: arg0 = count (0..2), arg1/arg2 = server IPv4
+     * (network-order words). count=0 clears all servers. Reply is immediate. */
+    NET_IPC_DNS_SET = 0xB15,
+    /* List configured resolvers. RESP arg0 = count, arg1/arg2 = server IPv4
+     * (network-order words). Reply is immediate. */
+    NET_IPC_DNS_LIST = 0xB16,
     NET_IPC_RESP = 0xB80,
     NET_IPC_ERROR = 0xBFF
 };

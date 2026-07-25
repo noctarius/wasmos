@@ -1642,6 +1642,55 @@ static void net_stack_handle_dhcp_set(const nd_ipc_message_t* request) {
     net_stack_send_reply(request, NET_IPC_RESP, NET_STATUS_OK, 0u, 0u, 0u);
 }
 
+/* arg0 = count (0..NET_IFCFG_MAX_DNS), arg1/arg2 = server IPv4 network-order
+ * words. Replaces the whole resolver list; count=0 clears it. Also mirrors the
+ * choice onto the active interface so a later DHCP renew re-applies it. */
+static void net_stack_handle_dns_set(const nd_ipc_message_t* request) {
+    uint32_t count = request->arg0;
+    uint32_t i;
+    if (count > NET_IFCFG_MAX_DNS) {
+        net_stack_reply_error(request, NET_STATUS_INVALID);
+        return;
+    }
+    for (i = 0u; i < NET_IFCFG_MAX_DNS; ++i) {
+        uint32_t word = (i == 0u) ? request->arg1 : request->arg2;
+        ip_addr_t server;
+        if (i < count) {
+            IP_ADDR4(&server, word & 0xFFu, (word >> 8) & 0xFFu, (word >> 16) & 0xFFu,
+                     (word >> 24) & 0xFFu);
+        } else {
+            IP_ADDR4(&server, 0u, 0u, 0u, 0u); /* clear the slot */
+        }
+        dns_setserver((uint8_t)i, &server);
+    }
+    if (g_active_ifc != NULL) {
+        g_active_ifc->cfg_dns_count = (uint8_t)count;
+        for (i = 0u; i < count && i < NET_IFCFG_MAX_DNS; ++i) {
+            uint32_t word = (i == 0u) ? request->arg1 : request->arg2;
+            g_active_ifc->cfg_dns[i][0] = (uint8_t)(word & 0xFFu);
+            g_active_ifc->cfg_dns[i][1] = (uint8_t)((word >> 8) & 0xFFu);
+            g_active_ifc->cfg_dns[i][2] = (uint8_t)((word >> 16) & 0xFFu);
+            g_active_ifc->cfg_dns[i][3] = (uint8_t)((word >> 24) & 0xFFu);
+        }
+    }
+    net_stack_send_reply(request, NET_IPC_RESP, NET_STATUS_OK, 0u, 0u, 0u);
+}
+
+/* RESP arg1 = count, arg2/arg3 = server IPv4 network-order words. */
+static void net_stack_handle_dns_list(const nd_ipc_message_t* request) {
+    uint32_t words[NET_IFCFG_MAX_DNS] = {0u, 0u};
+    uint32_t count = 0u;
+    uint32_t i;
+    for (i = 0u; i < NET_IFCFG_MAX_DNS; ++i) {
+        const ip_addr_t* s = dns_getserver((uint8_t)i);
+        uint32_t word = (s != NULL) ? ip4_addr_get_u32(ip_2_ip4(s)) : 0u;
+        if (word != 0u && count < NET_IFCFG_MAX_DNS) {
+            words[count++] = word;
+        }
+    }
+    net_stack_send_reply(request, NET_IPC_RESP, NET_STATUS_OK, count, words[0], words[1]);
+}
+
 static void net_stack_handle_ifaddr_list(const nd_ipc_message_t* request) {
     net_ifaddr_record_v1_t* out;
     uint32_t capacity;
@@ -1876,6 +1925,12 @@ static void net_stack_dispatch(const nd_ipc_message_t* request) {
         break;
     case NET_IPC_DHCP_SET:
         net_stack_handle_dhcp_set(request);
+        break;
+    case NET_IPC_DNS_SET:
+        net_stack_handle_dns_set(request);
+        break;
+    case NET_IPC_DNS_LIST:
+        net_stack_handle_dns_list(request);
         break;
     case NET_IPC_SEND:
     case NET_IPC_RECV:

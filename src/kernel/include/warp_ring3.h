@@ -163,7 +163,9 @@ typedef enum {
     HC_WASI_PROC_EXIT = 111,
     HC_WASI_RANDOM_GET = 112,
     HC_BLOCK_BUFFER_MAP = 113,
-    HC_COUNT = 114,
+    HC_XFER_BUFFER_MAP = 114,
+    HC_XFER_BUFFER_UNMAP = 115,
+    HC_COUNT = 116,
 } warp_hostcall_id_t;
 
 /* ring3_trampolines.c

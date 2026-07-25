@@ -210,6 +210,10 @@ wasmos_add_wasm_c_app_target(net_tcp_echo
   EXPORT      wasmos_main
   NO_BUILTIN
   STARTUP_SHIM
+  # Room for the socket rings overlaid into linear memory (scanned in above the
+  # 2 MiB floor, clear of the heap) via wasmos_xfer_buffer_map.
+  INITIAL_MEMORY 4194304
+  MAX_MEMORY     4194304
   BUILD_COMMENT "Building wasm TCP echo client"
   PACK_COMMENT  "Packing wasm TCP echo client as WASMOS-APP"
 )

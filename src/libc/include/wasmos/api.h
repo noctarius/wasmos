@@ -196,6 +196,16 @@ extern int32_t wasmos_xfer_buffer_read(int32_t buffer_id, int32_t ptr, int32_t l
     WASMOS_WASM_IMPORT("wasmos", "xfer_buffer_read");
 extern int32_t wasmos_xfer_buffer_write(int32_t buffer_id, int32_t ptr, int32_t len, int32_t offset)
     WASMOS_WASM_IMPORT("wasmos", "xfer_buffer_write");
+/* Overlay an OWNED xfer-buffer's backing into this process's WASM linear memory
+ * (zero-copy, same pinned-window baseline as shmem/block_buffer_map). Returns the
+ * linmem byte offset (>= 0) of the mapping; the buffer's bytes are then directly
+ * addressable at that offset for the socket-ring fast path. Idempotent per
+ * buffer_id. unmap tears the window down; always unmap before releasing the
+ * buffer so the linmem window never outlives its backing. Negative on failure. */
+extern int32_t wasmos_xfer_buffer_map(int32_t buffer_id)
+    WASMOS_WASM_IMPORT("wasmos", "xfer_buffer_map");
+extern int32_t wasmos_xfer_buffer_unmap(int32_t buffer_id)
+    WASMOS_WASM_IMPORT("wasmos", "xfer_buffer_unmap");
 extern int32_t wasmos_early_log_size(void) WASMOS_WASM_IMPORT("wasmos", "early_log_size");
 extern int32_t wasmos_early_log_copy(int32_t ptr, int32_t len, int32_t offset)
     WASMOS_WASM_IMPORT("wasmos", "early_log_copy");

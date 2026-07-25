@@ -1452,6 +1452,119 @@ m3ApiRawFunction(wasmos_block_buffer_map) {
     m3ApiReturn((int32_t)off32);
 }
 
+/* Synthetic tracking-id namespace for xfer-buffer linmem overlays (bit 30),
+ * disjoint from real shmem ids and the region/DMA windows, so they share the
+ * overlap-tracking table without colliding. Mirrors WARP_XFER_TRACK_ID. */
+#define WASM_XFER_TRACK_ID(id) ((uint32_t)(id) | 0x40000000u)
+
+/* Overlay an OWNED xfer-buffer's backing into the caller's WASM linear memory,
+ * mirroring wasmos_block_buffer_map but resolving the phys/size from the
+ * xfer-buffer object. Zero-copy socket-ring data plane (docs/architecture/22):
+ * the app drives its TX/RX rings with ringbuf.h at the returned offset instead
+ * of copy hostcalls. Owner-only; idempotent per buffer_id. The pages are owned
+ * by the object (freed on release/reap) so they are NOT pinned here. */
+m3ApiRawFunction(wasmos_xfer_buffer_map) {
+    m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, buffer_id)
+
+        process_t* proc = process_get(process_current_pid());
+    xfer_buffer_t desc = {0};
+    xfer_buffer_owner_t owner = {0};
+    uint64_t phys = 0;
+    if (buffer_id <= 0 || !proc || proc->context_id == 0) {
+        m3ApiReturn(-1);
+    }
+    if (xfer_buffer_describe((uint32_t)buffer_id, BUFFER_KIND_TRANSFER, proc->context_id, &desc) !=
+            XFER_BUFFER_OK ||
+        xfer_buffer_get_owned(&desc, proc->context_id, &owner) != XFER_BUFFER_OK) {
+        m3ApiReturn(-1); /* owner-only: the overlay is the owner's private view */
+    }
+    phys = xfer_buffer_object_phys(&desc);
+    if (phys == 0 || (phys & 0xFFFULL) != 0 || desc.size_bytes == 0) {
+        m3ApiReturn(-1);
+    }
+    uint32_t track_id = WASM_XFER_TRACK_ID((uint32_t)buffer_id);
+    for (uint32_t i = 0; i < WASM_SHMEM_MAP_SLOTS; ++i) {
+        if (g_wasm_shmem_maps[i].valid && g_wasm_shmem_maps[i].pid == proc->pid &&
+            g_wasm_shmem_maps[i].shmem_id == track_id) {
+            m3ApiReturn((int32_t)g_wasm_shmem_maps[i].offset); /* idempotent */
+        }
+    }
+
+    uint32_t mem_size = 0;
+    uint8_t* mem_base = m3_GetMemory(runtime, &mem_size, 0);
+    if (!mem_base || mem_size == 0) {
+        m3ApiReturn(-1);
+    }
+    const uint64_t region_bytes = ((uint64_t)desc.size_bytes + 0xFFFULL) & ~0xFFFULL;
+    uint64_t mem_size64 = (uint64_t)mem_size;
+    uint64_t off64 = 0;
+    uint8_t found = 0;
+    for (off64 = 0x200000ULL; off64 + region_bytes <= mem_size64; off64 += 0x1000ULL) {
+        uint64_t probe_virt = 0;
+        if (wasm_linear_window_overlaps(proc->pid, (uint32_t)off64, (uint32_t)region_bytes)) {
+            continue;
+        }
+        if (wasm_user_va_from_offset(proc->context_id, (uint32_t)off64, (uint32_t)region_bytes,
+                                     &probe_virt) != 0) {
+            continue;
+        }
+        if (mm_user_range_permitted(proc->context_id, probe_virt, region_bytes,
+                                    MEM_REGION_FLAG_WRITE) != 0) {
+            continue;
+        }
+        if ((probe_virt & 0xFFFULL) != 0) {
+            continue;
+        }
+        found = 1;
+        break;
+    }
+    if (!found) {
+        off64 = (mem_size64 + 0xFFFULL) & ~0xFFFULL;
+        uint64_t required = off64 + region_bytes;
+        if (required > mem_size64) {
+            uint32_t target_pages = (uint32_t)((required + 0xFFFFULL) >> 16);
+            if (ResizeMemory(runtime, target_pages) != m3Err_none) {
+                m3ApiReturn(-1);
+            }
+            mem_size64 = (uint64_t)m3_GetMemorySize(runtime);
+            if (required > mem_size64) {
+                m3ApiReturn(-1);
+            }
+        }
+    }
+
+    uint32_t off32 = (uint32_t)off64;
+    uint64_t virt = 0;
+    if (wasm_user_va_from_offset(proc->context_id, off32, (uint32_t)region_bytes, &virt) != 0 ||
+        mm_user_range_permitted(proc->context_id, virt, region_bytes, MEM_REGION_FLAG_WRITE) != 0 ||
+        (virt & 0xFFFULL) != 0) {
+        m3ApiReturn(-1);
+    }
+    if (mm_context_map_physical(proc->context_id, virt, phys, region_bytes,
+                                MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE |
+                                    MEM_REGION_FLAG_USER) != 0) {
+        m3ApiReturn(-1);
+    }
+    wasm_shmem_map_track(proc->pid, track_id, off32, (uint32_t)region_bytes);
+    m3ApiReturn((int32_t)off32);
+}
+
+/* Untrack an xfer-buffer overlay window. Like wasmos_shmem_unmap this does not
+ * yet restore the previous linear-memory page mappings (same FIXME); the object
+ * backing is reclaimed on process reap. Callers must therefore keep the buffer
+ * alive (do not release it) until process exit. Returns 0. */
+m3ApiRawFunction(wasmos_xfer_buffer_unmap) {
+    m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, buffer_id)
+
+        process_t* proc = process_get(process_current_pid());
+    if (buffer_id <= 0 || !proc || proc->context_id == 0) {
+        m3ApiReturn(-1);
+    }
+    /* FIXME(xfer-unmap): mirror wasmos_shmem_unmap — restore the prior PTEs. */
+    wasm_shmem_map_untrack(proc->pid, WASM_XFER_TRACK_ID((uint32_t)buffer_id));
+    m3ApiReturn(0);
+}
+
 m3ApiRawFunction(wasmos_xfer_buffer_size) {
     m3ApiReturnType(int32_t) m3ApiReturn((int32_t)xfer_buffer_size(BUFFER_KIND_TRANSFER));
 }
@@ -3617,6 +3730,8 @@ int wasm3_link_wasmos(IM3Module module) {
     rc |= wasm3_link_raw(module, "wasmos", "block_buffer_write", "i(i*ii)",
                          wasmos_block_buffer_write);
     rc |= wasm3_link_raw(module, "wasmos", "block_buffer_map", "i()", wasmos_block_buffer_map);
+    rc |= wasm3_link_raw(module, "wasmos", "xfer_buffer_map", "i(i)", wasmos_xfer_buffer_map);
+    rc |= wasm3_link_raw(module, "wasmos", "xfer_buffer_unmap", "i(i)", wasmos_xfer_buffer_unmap);
     rc |= wasm3_link_raw(module, "wasmos", "xfer_buffer_size", "i()", wasmos_xfer_buffer_size);
     rc |= wasm3_link_raw(module, "wasmos", "fs_endpoint", "i()", wasmos_fs_endpoint);
     rc |= wasm3_link_raw(module, "wasmos", "xfer_buffer_read", "i(i*ii)", wasmos_xfer_buffer_read);

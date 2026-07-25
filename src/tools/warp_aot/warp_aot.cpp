@@ -204,6 +204,8 @@ static vb::Span<vb::NativeSymbol const> aot_symbols() {
         DYNAMIC_LINK("wasi_snapshot_preview1", "proc_exit", stub_v1),
         DYNAMIC_LINK("wasi_snapshot_preview1", "random_get", stub_i2),
         DYNAMIC_LINK("wasmos", "block_buffer_map", stub_i0),
+        DYNAMIC_LINK("wasmos", "xfer_buffer_map", stub_i1),
+        DYNAMIC_LINK("wasmos", "xfer_buffer_unmap", stub_i1),
     };
     return vb::Span<vb::NativeSymbol const>(syms, sizeof(syms) / sizeof(syms[0]));
 }

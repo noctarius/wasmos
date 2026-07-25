@@ -38,6 +38,16 @@ linked feature documents for rationale and rollout plans.
 - UDP ring records now include IPv4 address/port metadata. Bound UDP sockets
   can provide a destination record for unconnected sendto-style transmission;
   received records retain their source endpoint.
+- The socket TX/RX rings are now the zero-copy data plane the design intended
+  (docs/architecture/22): a WASM app overlays its own ring xfer-buffers into
+  linear memory with the new `xfer_buffer_map`/`xfer_buffer_unmap` hostcalls
+  (wired in both runtimes + the WARP AOT stub table) and drives them with
+  `ringbuf.h` in place, instead of copy-based `xfer_buffer_read/write` poking.
+  The overlay is a mapping only: unmap clears the PTEs and the xfer-buffer's
+  owner frees the backing (WARP's slot decommit no longer frees the borrowed
+  ring phys). The shared `wasmos_net_tcp_connect/send/recv/close` helper
+  (`wasmos/net.h`) implements a TCP stream socket on top; `examples/c/net_tcp_echo`
+  runs on it (validated by `test_net_stack_tcp_echo_e2e`).
 - Interface addressing is declarative: net-stack reads
   `/boot/system/net/interfaces` (a minimal `/etc/network/interfaces` subset,
   `iface <name> inet <dhcp|static>`) when the interface comes up. DHCP is

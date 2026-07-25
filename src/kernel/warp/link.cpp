@@ -2210,6 +2210,80 @@ static uint32_t warp_block_buffer_map(void* ctx_) {
     return off;
 }
 
+/* Synthetic tracking-id namespace for xfer-buffer linmem overlays: bit 30 set
+ * keeps them out of the small positive shmem id space AND the region-window
+ * namespace (bit 31), so all three participate in overlap checks collision-free. */
+#define WARP_XFER_TRACK_ID(id) ((uint32_t)(id) | 0x40000000u)
+
+/* Overlay the caller's OWNED xfer-buffer into its linear memory so the socket
+ * rings are driven by pointer (ringbuf.h) rather than copy hostcalls — the
+ * zero-copy data plane of docs/architecture/22. Mirrors warp_shmem_map_auto but
+ * resolves the phys backing from the xfer-buffer object; owner-only, so no DMA
+ * capability is required. Idempotent per buffer_id. The pages are owned by the
+ * object (freed on release/reap, which also untracks the window) so they are NOT
+ * pinned here; unmap before releasing the buffer so the window never dangles. */
+static uint32_t warp_xfer_buffer_map(uint32_t buffer_id, void* ctx_) {
+    auto* ctx = warp_call_ctx(ctx_);
+    if (!ctx || (int32_t)buffer_id <= 0)
+        return (uint32_t)-1;
+    uint32_t context_id = 0;
+    if (warp_current_context_id(&context_id) != 0)
+        return (uint32_t)-1;
+    xfer_buffer_t buf;
+    if (xfer_buffer_describe(buffer_id, BUFFER_KIND_TRANSFER, context_id, &buf) != XFER_BUFFER_OK)
+        return (uint32_t)-1;
+    xfer_buffer_owner_t owner;
+    if (xfer_buffer_get_owned(&buf, context_id, &owner) != XFER_BUFFER_OK)
+        return (uint32_t)-1; /* the overlay is the owner's private in-place view */
+    uint64_t phys_base = xfer_buffer_object_phys(&buf);
+    if (phys_base == 0 || (phys_base & 0xFFFULL) != 0 || buf.size_bytes == 0)
+        return (uint32_t)-1;
+    uint32_t track_id = WARP_XFER_TRACK_ID(buffer_id);
+    WarpShmemLinearMap* existing = warp_shmem_map_find(ctx->pid, track_id);
+    if (existing)
+        return existing->offset; /* idempotent */
+    uint64_t pages = ((uint64_t)buf.size_bytes + 0xFFFULL) >> 12;
+    uint32_t window = (uint32_t)(pages << 12);
+    int64_t placed = warp_linmem_place_phys(ctx, phys_base, pages, window);
+    if (placed < 0)
+        return (uint32_t)placed;
+    warp_shmem_map_track(ctx->pid, track_id, (uint32_t)placed, window);
+    return (uint32_t)placed;
+}
+
+/* Tear an xfer-buffer overlay window down. This is a MAPPING teardown only: it
+ * unmaps the overlay pages and never frees the underlying physical backing —
+ * that belongs to the xfer-buffer's owner (this process), which frees it when it
+ * releases the object or on reap. Unlike warp_shmem_unmap it therefore does NOT
+ * restore placeholder phys or release a shmem region; it simply clears the PTEs
+ * so a later slot decommit (paging_virt_to_phys) sees nothing to free. Returns 0
+ * when there was nothing mapped. */
+static uint32_t warp_xfer_buffer_unmap(uint32_t buffer_id, void* ctx_) {
+    auto* ctx = warp_call_ctx(ctx_);
+    if (!ctx || (int32_t)buffer_id <= 0)
+        return (uint32_t)-1;
+    uint32_t track_id = WARP_XFER_TRACK_ID(buffer_id);
+    WarpShmemLinearMap* slot = warp_shmem_map_find(ctx->pid, track_id);
+    if (!slot)
+        return 0;
+    uint8_t* base = warp_linear_mem_window(ctx, slot->offset, slot->size);
+    if (base) {
+        uint64_t virt = addr_cast(uint64_t, base);
+        uint64_t pages = ((uint64_t)slot->size + 0xFFFULL) / 0x1000ULL;
+        for (uint64_t i = 0; i < pages; ++i) {
+            (void)paging_unmap_4k(virt + i * 0x1000ULL);
+        }
+    }
+#ifdef WASMOS_WASM_RUNTIME_WARP
+    uint8_t* linmem_base = ctx->module->getLinearMemoryRegion(0, 0);
+    if (linmem_base) {
+        (void)warp_ring3_sync_linmem_user_window(linmem_base);
+    }
+#endif
+    warp_shmem_map_untrack(ctx->pid, track_id);
+    return 0;
+}
+
 static uint32_t warp_shmem_unmap(uint32_t id, void* ctx_) {
     auto* ctx = warp_call_ctx(ctx_);
     if ((int32_t)id <= 0)
@@ -2690,7 +2764,12 @@ static void warp_env_abort(uint32_t msg, uint32_t file, uint32_t line, uint32_t 
         LINK("wasmos", "spawn_info_buffer", warp_spawn_info_buffer),                                 \
         LINK("wasi_snapshot_preview1", "proc_exit", warp_wasi_proc_exit),                            \
         LINK("wasi_snapshot_preview1", "random_get", warp_wasi_random_get),                          \
-        LINK("wasmos", "block_buffer_map", warp_block_buffer_map)
+        LINK("wasmos", "block_buffer_map", warp_block_buffer_map), /* HC 114/115 appended at the  \
+                                                                    * tail: xfer-buffer linmem    \
+                                                                    * overlay (socket-ring        \
+                                                                    * zero-copy). */               \
+        LINK("wasmos", "xfer_buffer_map", warp_xfer_buffer_map),                                   \
+        LINK("wasmos", "xfer_buffer_unmap", warp_xfer_buffer_unmap)
 
 vb::Span<vb::NativeSymbol const> warp_wasmos_symbols(void) {
     // STATIC_LINK: bakes function pointers into call stubs at JIT compile time.
@@ -2943,6 +3022,10 @@ extern "C" uint32_t warp_ring3_dispatch(uint32_t hc_id, void* frame_ptr) {
                                        ctx5);
     /* 113 */ case HC_BLOCK_BUFFER_MAP:
         return warp_block_buffer_map(reinterpret_cast<void*>(a0));
+    /* 114 */ case HC_XFER_BUFFER_MAP:
+        return warp_xfer_buffer_map((uint32_t)a0, ctx2);
+    /* 115 */ case HC_XFER_BUFFER_UNMAP:
+        return warp_xfer_buffer_unmap((uint32_t)a0, ctx2);
     /* 35 */ case HC_IO_IN8:
         return warp_io_in8((uint32_t)a0, ctx2);
     /* 36 */ case HC_IO_IN16:

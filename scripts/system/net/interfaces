@@ -10,6 +10,11 @@ iface eth0 inet static
     address 10.0.2.15
     netmask 255.255.255.0
     gateway 10.0.2.2
+    dns-nameservers 10.0.2.3
 
 # To use DHCP instead, comment out the static stanza above and use:
 # iface eth0 inet dhcp
+#
+# `dns-nameservers <ip> [<ip2>]` sets the resolver (up to two servers). With
+# DHCP it overrides the server handed out via option 6; with static addressing
+# it is the only way to configure a resolver. Omit it to keep DHCP's default.

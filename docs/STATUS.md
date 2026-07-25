@@ -46,6 +46,11 @@ linked feature documents for rationale and rollout plans.
   leaves the interface link-up but unconfigured (bounded retry absorbs the
   storage-mount delay). The `... ready` banner and gateway ARP fire from the
   netif status callback once an address is actually assigned.
+- DNS is enabled (`LWIP_DNS`); the DHCP client installs the leased resolver
+  (option 6) automatically. An optional ifcfg `dns-nameservers <ip> [<ip2>]`
+  line (up to two servers) overrides that: net-stack re-applies it from the
+  netif status callback once an address is assigned, so it wins over DHCP; with
+  static addressing it is the only resolver source. Omit it to keep DHCP's.
 - `net-stack` registers its PUBLIC endpoint as `net.stack`; client
   socket/ifaddr requests are dispatched there (registering the control endpoint
   had silently dropped them via the async event loop).

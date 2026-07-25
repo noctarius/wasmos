@@ -10,12 +10,17 @@
 
 #include <stdint.h>
 
+/* Matches lwIP DNS_MAX_SERVERS. */
+#define NET_IFCFG_MAX_DNS 2u
+
 typedef struct {
     uint8_t valid; /* 1 if a usable `iface ... inet` stanza was parsed */
     uint8_t dhcp;  /* 1 = dhcp, 0 = static */
     uint8_t addr[4];
     uint8_t mask[4];
     uint8_t gw[4];
+    uint8_t dns[NET_IFCFG_MAX_DNS][4]; /* explicit DNS servers, overrides DHCP */
+    uint8_t dns_count;                 /* number of parsed dns servers (0 = none) */
     char name[16];
 } net_ifcfg_t;
 

@@ -22,6 +22,7 @@
 
 #include "lwip/init.h"
 #include "lwip/dhcp.h"
+#include "lwip/dns.h"
 #include "lwip/etharp.h"
 #include "lwip/ip_addr.h"
 #include "lwip/ip4_addr.h"
@@ -82,6 +83,10 @@ typedef struct {
     uint8_t dhcp_active;
     uint32_t dhcp_started_tick;
     uint8_t dhcp_timeout_logged;
+    /* Explicit DNS servers from ifcfg; re-applied when an address is assigned so
+     * they override any the DHCP client installed from option 6. */
+    uint8_t cfg_dns[NET_IFCFG_MAX_DNS][4];
+    uint8_t cfg_dns_count;
     uint8_t link_get_pending;
     uint8_t link_get_retire;
     wasmos_native_coroutine_t link_get_coroutine;
@@ -755,6 +760,17 @@ static int net_stack_mask_prefix(uint32_t mask_no) {
 /* lwIP netif status callback: fires whenever the netif state changes. When a
  * real address first appears (static apply or DHCP bind), emit the ready banner
  * and prime ARP for the gateway. */
+/* Install explicit DNS servers into lwIP's resolver. Called at address-assign
+ * time so it runs after the DHCP client set its own (option 6), giving ifcfg /
+ * `ip dns` precedence over the leased resolver. */
+static void net_stack_apply_dns_servers(const uint8_t (*dns)[4], uint8_t count) {
+    for (uint8_t i = 0u; i < count && i < NET_IFCFG_MAX_DNS; ++i) {
+        ip_addr_t server;
+        IP_ADDR4(&server, dns[i][0], dns[i][1], dns[i][2], dns[i][3]);
+        dns_setserver(i, &server);
+    }
+}
+
 static void net_stack_netif_status_cb(struct netif* netif) {
     net_interface_slot_t* interface = net_stack_interface_from_netif(netif);
     uint32_t addr_no;
@@ -766,6 +782,10 @@ static void net_stack_netif_status_cb(struct netif* netif) {
         return;
     }
     interface->addr_ready = 1u;
+    /* Override any DHCP-provided resolver with the explicit ifcfg servers. */
+    if (interface->cfg_dns_count > 0u) {
+        net_stack_apply_dns_servers(interface->cfg_dns, interface->cfg_dns_count);
+    }
     if (g_api->console_write != NULL) {
         char line[64];
         int n = 0;
@@ -794,6 +814,15 @@ static void net_stack_netif_status_cb(struct netif* netif) {
 static void net_stack_apply_ifcfg(net_interface_slot_t* interface, const net_ifcfg_t* cfg) {
     if (cfg == NULL || interface == NULL || !interface->netif_installed) {
         return;
+    }
+    /* Stash explicit resolver servers; the status callback installs them once an
+     * address is assigned (after DHCP, so they override the leased resolver). */
+    interface->cfg_dns_count = cfg->dns_count;
+    for (uint8_t i = 0u; i < cfg->dns_count && i < NET_IFCFG_MAX_DNS; ++i) {
+        interface->cfg_dns[i][0] = cfg->dns[i][0];
+        interface->cfg_dns[i][1] = cfg->dns[i][1];
+        interface->cfg_dns[i][2] = cfg->dns[i][2];
+        interface->cfg_dns[i][3] = cfg->dns[i][3];
     }
     if (cfg->dhcp) {
         if (!interface->dhcp_active && dhcp_start(&interface->netif) == ERR_OK) {

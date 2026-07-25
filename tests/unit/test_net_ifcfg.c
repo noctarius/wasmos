@@ -94,6 +94,47 @@ static void test_no_trailing_newline(void) {
     assert(cfg.dhcp == 1u);
 }
 
+static void test_no_dns_defaults_empty(void) {
+    net_ifcfg_t cfg;
+    const char* text = "iface eth0 inet static\n"
+                       "address 10.0.2.15\n";
+    assert(net_ifcfg_parse(text, (uint32_t)strlen(text), &cfg) == 1);
+    assert(cfg.dns_count == 0u);
+}
+
+static void test_static_with_dns(void) {
+    net_ifcfg_t cfg;
+    const char* text = "iface eth0 inet static\n"
+                       "    address 10.0.2.15\n"
+                       "    gateway 10.0.2.2\n"
+                       "    dns-nameservers 10.0.2.3 8.8.8.8\n";
+    assert(net_ifcfg_parse(text, (uint32_t)strlen(text), &cfg) == 1);
+    assert(cfg.valid == 1u && cfg.dhcp == 0u);
+    assert(cfg.dns_count == 2u);
+    assert(cfg.dns[0][0] == 10u && cfg.dns[0][1] == 0u && cfg.dns[0][2] == 2u && cfg.dns[0][3] == 3u);
+    assert(cfg.dns[1][0] == 8u && cfg.dns[1][1] == 8u && cfg.dns[1][2] == 8u && cfg.dns[1][3] == 8u);
+}
+
+static void test_dhcp_with_dns_override(void) {
+    net_ifcfg_t cfg;
+    /* DHCP for addressing, but an explicit resolver overrides the leased one. */
+    const char* text = "iface eth0 inet dhcp\n"
+                       "    dns-nameserver 1.1.1.1\n";
+    assert(net_ifcfg_parse(text, (uint32_t)strlen(text), &cfg) == 1);
+    assert(cfg.valid == 1u && cfg.dhcp == 1u);
+    assert(cfg.dns_count == 1u);
+    assert(cfg.dns[0][0] == 1u && cfg.dns[0][3] == 1u);
+}
+
+static void test_dns_caps_at_max(void) {
+    net_ifcfg_t cfg;
+    const char* text = "iface eth0 inet dhcp\n"
+                       "dns-nameservers 1.1.1.1 2.2.2.2 3.3.3.3\n";
+    assert(net_ifcfg_parse(text, (uint32_t)strlen(text), &cfg) == 1);
+    /* Third server beyond NET_IFCFG_MAX_DNS is dropped. */
+    assert(cfg.dns_count == NET_IFCFG_MAX_DNS);
+}
+
 int main(void) {
     test_dhcp_stanza();
     test_static_dotted();
@@ -104,6 +145,10 @@ int main(void) {
     test_empty_and_comments_only();
     test_rejects_bad_octet();
     test_no_trailing_newline();
+    test_no_dns_defaults_empty();
+    test_static_with_dns();
+    test_dhcp_with_dns_override();
+    test_dns_caps_at_max();
     printf("test_net_ifcfg: ok\n");
     return 0;
 }

@@ -41,6 +41,11 @@
 #define LWIP_IPV6 0
 #define LWIP_DHCP 1
 
+/* DNS resolver. The DHCP client requests DNS servers (option 6) and installs
+ * them via dns_setserver; ifcfg `dns-nameservers` and `ip dns` can override at
+ * runtime. Resolution is exposed to clients as the async NET_IPC_RESOLVE op. */
+#define LWIP_DNS 1
+
 /* --- Callbacks ----------------------------------------------------------- */
 #define LWIP_NETIF_STATUS_CALLBACK 1
 

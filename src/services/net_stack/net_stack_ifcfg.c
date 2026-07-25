@@ -105,7 +105,8 @@ static void ifcfg_copy_name(char* dst, uint32_t cap, const char* p, uint32_t n) 
 
 int net_ifcfg_parse(const char* text, uint32_t len, net_ifcfg_t* out) {
     uint32_t pos = 0u;
-    int in_static = 0;
+    int in_stanza = 0; /* inside the honored iface stanza (dhcp or static) */
+    int in_static = 0; /* stanza is static: address/netmask/gateway apply */
     int have_addr = 0;
     int have_mask = 0;
 
@@ -139,7 +140,7 @@ int net_ifcfg_parse(const char* text, uint32_t len, net_ifcfg_t* out) {
         }
 
         if (ifcfg_tok_eq(tok[0], "iface")) {
-            if (in_static || out->valid) {
+            if (in_stanza) {
                 break; /* only the first stanza is honored */
             }
             /* iface <name> inet <dhcp|static> */
@@ -150,14 +151,30 @@ int net_ifcfg_parse(const char* text, uint32_t len, net_ifcfg_t* out) {
             if (ifcfg_tok_eq(tok[3], "dhcp")) {
                 out->dhcp = 1u;
                 out->valid = 1u;
-                break;
+                in_stanza = 1; /* keep reading indented lines (dns-nameservers) */
+                continue;
             }
             if (ifcfg_tok_eq(tok[3], "static")) {
                 in_static = 1;
+                in_stanza = 1;
             }
             continue;
         }
 
+        if (!in_stanza) {
+            continue;
+        }
+        /* dns-nameservers applies in both dhcp (override) and static stanzas. */
+        if (ifcfg_tok_eq(tok[0], "dns-nameservers") || ifcfg_tok_eq(tok[0], "dns-nameserver")) {
+            uint32_t t = 1u;
+            out->dns_count = 0u;
+            for (; t < ntok && out->dns_count < NET_IFCFG_MAX_DNS; ++t) {
+                if (ifcfg_parse_ipv4(tok[t].p, tok[t].n, out->dns[out->dns_count]) == 0) {
+                    out->dns_count++;
+                }
+            }
+            continue;
+        }
         if (!in_static) {
             continue;
         }

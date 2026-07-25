@@ -139,6 +139,18 @@ typedef struct wasmos_driver_api {
      * forever), WITHOUT dequeuing. Lets a native service sleep at idle instead
      * of yield-spinning its poll loop; drain afterward with ipc_recv. */
     int (*ipc_wait)(uint32_t receiver_context_id, uint32_t endpoint, uint32_t timeout_ms);
+    /* Multi-endpoint blocking wait. ipc_select_listen registers a set watching
+     * endpoints[0..count) (<= 8) owned by owner_context_id and returns its id.
+     * ipc_select_wait blocks until any watched endpoint has a message/notify or
+     * timeout_ms elapses (0 = forever), reporting the ready endpoint; drain it
+     * afterward with ipc_recv. ipc_select_destroy releases the set. Lets a
+     * native service that listens on several endpoints sleep at idle instead of
+     * yield-spinning. */
+    int (*ipc_select_listen)(uint32_t owner_context_id, const uint32_t* endpoints, uint32_t count,
+                             uint32_t* out_select_id);
+    int (*ipc_select_wait)(uint32_t select_id, uint32_t owner_context_id, uint32_t* out_ready_ep,
+                           uint32_t timeout_ms);
+    void (*ipc_select_destroy)(uint32_t select_id, uint32_t owner_context_id);
 } wasmos_driver_api_t;
 
 #define ND_BUFFER_KIND_XFER 1u
@@ -147,7 +159,7 @@ typedef struct wasmos_driver_api {
 #define ND_BUFFER_BORROW_WRITE 0x2u
 
 #define WASMOS_NATIVE_ABI_MAGIC 0x574E4150u /* 'WNAP' */
-#define WASMOS_NATIVE_ABI_VERSION 10u
+#define WASMOS_NATIVE_ABI_VERSION 11u
 
 /* Entry point that every native driver must provide via ELF e_entry. */
 typedef int (*native_driver_entry_fn_t)(wasmos_driver_api_t* api, int module_count, int arg2,

@@ -525,6 +525,20 @@ static int nd_ipc_wait(uint32_t receiver_context_id, uint32_t endpoint, uint32_t
     return ipc_endpoint_wait_for(receiver_context_id, endpoint, timeout_ms);
 }
 
+static int nd_ipc_select_listen(uint32_t owner_context_id, const uint32_t* endpoints,
+                                uint32_t count, uint32_t* out_select_id) {
+    return ipc_select_listen(owner_context_id, endpoints, count, out_select_id);
+}
+
+static int nd_ipc_select_wait(uint32_t select_id, uint32_t owner_context_id,
+                              uint32_t* out_ready_ep, uint32_t timeout_ms) {
+    return ipc_select_wait(select_id, owner_context_id, out_ready_ep, timeout_ms);
+}
+
+static void nd_ipc_select_destroy(uint32_t select_id, uint32_t owner_context_id) {
+    ipc_select_destroy(select_id, owner_context_id);
+}
+
 static void nd_sched_yield(void) {
     process_yield(PROCESS_RUN_IDLE);
 }
@@ -943,6 +957,9 @@ int native_driver_start(uint32_t context_id, const uint8_t* elf_data, uint32_t e
     api.ipc_send = nd_ipc_send;
     api.ipc_recv = nd_ipc_recv;
     api.ipc_wait = nd_ipc_wait;
+    api.ipc_select_listen = nd_ipc_select_listen;
+    api.ipc_select_wait = nd_ipc_select_wait;
+    api.ipc_select_destroy = nd_ipc_select_destroy;
     api.sched_yield = nd_sched_yield;
     api.sched_ticks = nd_sched_ticks;
     api.sched_current_pid = nd_sched_current_pid;

@@ -46,6 +46,9 @@ static uint32_t g_endpoint = 0u;
 static uint32_t g_control_endpoint = 0u;
 static uint32_t g_netdrv_reply_endpoint = 0u;
 static uint32_t g_proc_endpoint = 0u;
+static uint32_t g_select_id = 0u;
+static uint8_t g_select_ready = 0u;
+static uint8_t g_net_want_block = 0u;
 static uint32_t g_netdrv_endpoint = 0u;
 typedef enum {
     NET_IFC_DISCOVERED = 0,
@@ -106,10 +109,12 @@ static uint8_t g_netdrv_lookup_stack[4096] __attribute__((aligned(16)));
 static uint8_t g_service_root_stack[8192] __attribute__((aligned(16)));
 int32_t wasmos_async_main(wasmos_driver_api_t* driver_api,
                           wasmos_native_coroutine_runtime_t* runtime, void* user);
+static void net_stack_idle(void* user);
 wasmos_sys_native_async_service_config_t wasmos_async_service = {
     .root_stack = g_service_root_stack,
     .root_stack_size = sizeof(g_service_root_stack),
     .main = wasmos_async_main,
+    .idle = net_stack_idle,
 };
 static uint8_t g_hrng_lookup_pending = 0u;
 static uint8_t g_hrng_seeded = 0u;
@@ -132,6 +137,10 @@ static wasmos_sys_native_event_loop_t g_netdrv_loop;
 #define NET_STACK_HRNG_LOOKUP_REQUEST_ID 0x4E530004u
 #define NET_STACK_HRNG_REQUEST_ID 0x4E530005u
 #define NET_STACK_RX_POLL_INTERVAL_TICKS 3u
+/* Upper bound on the idle select-wait so the empty-RX poll and other periodic
+ * work still run when no watched endpoint fires (~12 ms, matching the RX poll
+ * cadence at 250 Hz). Incoming frames and IPC replies wake the wait earlier. */
+#define NET_STACK_IDLE_WAIT_MS 12u
 #define NET_STACK_IFCFG_PATH "/boot/system/net/interfaces"
 #define NET_STACK_IFCFG_CAP 1024u
 #define NET_STACK_IFCFG_RETRY_TICKS 25u    /* ~100 ms at 250 Hz between attempts */
@@ -953,7 +962,6 @@ static void net_stack_link_get_coroutine(void* arg) {
     net_interface_slot_t* slot = (net_interface_slot_t*)arg;
     uintptr_t value = 0u;
     nd_ipc_message_t* reply;
-
     if (slot == NULL || wasmos_future_await(&slot->link_get_future.future, &value) != 0 ||
         value == 0u) {
         if (slot != NULL)
@@ -1880,6 +1888,37 @@ static void net_stack_netdrv_event(void* user, const nd_ipc_message_t* request) 
     net_stack_dispatch(request);
 }
 
+/* Bound the idle block by lwIP's next timer so TCP/DHCP timers still fire, but
+ * never longer than the empty-RX poll cadence, and never 0 (which ipc_select_wait
+ * treats as "block forever"). */
+static uint32_t net_stack_idle_wait_ms(void) {
+    uint32_t ms = sys_timeouts_sleeptime();
+    if (ms > NET_STACK_IDLE_WAIT_MS) {
+        ms = NET_STACK_IDLE_WAIT_MS;
+    }
+    if (ms == 0u) {
+        ms = 1u;
+    }
+    return ms;
+}
+
+/* Service idle hook. The pump calls this on the kernel-thread stack after the
+ * root coroutine yields, so blocking here suspends the thread with a valid rsp.
+ * Block on the watched endpoints only when the root reported the runtime idle;
+ * otherwise cooperatively yield so ready child coroutines still get scheduled. */
+static void net_stack_idle(void* user) {
+    (void)user;
+    if (g_net_want_block && g_select_ready && g_api != NULL && g_api->ipc_select_wait != NULL) {
+        uint32_t ready_ep = 0u;
+        int rc;
+        rc = g_api->ipc_select_wait(g_select_id, g_api->sched_current_pid(), &ready_ep,
+                                    net_stack_idle_wait_ms());
+        (void)rc;
+    } else if (g_api != NULL && g_api->sched_yield != NULL) {
+        g_api->sched_yield();
+    }
+}
+
 /* Native async root. libsys's async_initialize is the ELF entry and invokes
  * this inside the predefined root coroutine. */
 int32_t wasmos_async_main(wasmos_driver_api_t* driver_api,
@@ -1941,7 +1980,18 @@ int32_t wasmos_async_main(wasmos_driver_api_t* driver_api,
     }
     g_control_runtime = runtime;
 
-    /* Drain socket requests and both native event loops before yielding. A
+    /* Watch all three endpoints net-stack listens on so the idle path can block
+     * on the set rather than yield-spinning. A failure here is non-fatal: the
+     * loop falls back to cooperative yielding. */
+    if (driver_api->ipc_select_listen != NULL) {
+        const uint32_t endpoints[3] = {g_endpoint, g_control_endpoint, g_netdrv_reply_endpoint};
+        if (driver_api->ipc_select_listen(driver_api->sched_current_pid(), endpoints, 3u,
+                                          &g_select_id) == ND_IPC_OK) {
+            g_select_ready = 1u;
+        }
+    }
+
+    /* Drain socket requests and both native event loops before blocking. A
      * service must not assume a later readiness edge will re-signal work that
      * was already queued. */
     for (;;) {
@@ -1994,6 +2044,14 @@ int32_t wasmos_async_main(wasmos_driver_api_t* driver_api,
             }
         }
         (void)drained;
+        /* Record whether the runtime is idle (no runnable child coroutine)
+         * while we can still observe it accurately - the root is RUNNING here,
+         * so has_ready() reflects only other coroutines. The service idle hook,
+         * which runs on the kernel-thread stack after this yield, uses the flag
+         * to decide whether to block on the endpoints or keep cooperating.
+         * The blocking wait must NOT happen here: it would run on the coroutine
+         * stack and the scheduler rejects a thread suspended with that rsp. */
+        g_net_want_block = !wasmos_native_coroutine_runtime_has_ready(runtime);
         wasmos_native_coroutine_yield();
     }
 

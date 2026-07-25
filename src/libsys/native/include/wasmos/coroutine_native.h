@@ -168,6 +168,10 @@ int wasmos_native_coroutine_run_budget(wasmos_native_coroutine_runtime_t* runtim
 /* Run ready work until no coroutine is runnable. Returns the number resumed,
  * or -1 for invalid/reentrant use. */
 int wasmos_native_coroutine_run(wasmos_native_coroutine_runtime_t* runtime);
+/* Returns true when the runtime has a ready coroutine or a queued continuation,
+ * i.e. run_budget still has work to do. A running coroutine can use this to tell
+ * "other coroutines are runnable" (keep yielding) from "idle" (safe to block). */
+bool wasmos_native_coroutine_runtime_has_ready(const wasmos_native_coroutine_runtime_t* runtime);
 void wasmos_native_coroutine_yield(void);
 void wasmos_native_coroutine_exit(int32_t result) __attribute__((noreturn));
 int wasmos_native_coroutine_join(wasmos_native_coroutine_t* coroutine, int32_t* out_result);

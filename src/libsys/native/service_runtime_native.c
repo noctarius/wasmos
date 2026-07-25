@@ -41,8 +41,14 @@ int32_t wasmos_sys_native_service_run(wasmos_sys_native_service_t* service,
         if (wasmos_native_coroutine_run_budget(&service->runtime, 1u) < 0) {
             return -1;
         }
-        if (service->root.state != WASMOS_NATIVE_COROUTINE_DEAD && api->sched_yield) {
-            api->sched_yield();
+        if (service->root.state != WASMOS_NATIVE_COROUTINE_DEAD) {
+            /* Runs on the kernel-thread stack: a service idle hook may safely
+             * block here, unlike inside the root coroutine. */
+            if (service->idle) {
+                service->idle(service->user);
+            } else if (api->sched_yield) {
+                api->sched_yield();
+            }
         }
     }
     if (wasmos_native_coroutine_join(&service->root, &result) != 0) {

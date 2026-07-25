@@ -88,6 +88,15 @@ typedef int32_t (*wasmos_sys_native_service_main_fn)(wasmos_driver_api_t* api,
                                                      wasmos_native_coroutine_runtime_t* runtime,
                                                      void* user);
 
+/* Optional idle hook. The pump calls it, on the kernel-thread stack, in place
+ * of a bare sched_yield whenever the root coroutine has yielded and no other
+ * coroutine ran. A service that listens on endpoints can block here (e.g. via
+ * ipc_wait/ipc_select_wait) instead of yield-spinning; it must fall back to
+ * sched_yield when it is not safe to block so cooperative scheduling continues.
+ * Blocking here is safe (unlike inside a coroutine, whose stack the scheduler
+ * rejects as an invalid suspended rsp). */
+typedef void (*wasmos_sys_native_service_idle_fn)(void* user);
+
 /* Caller-owned native service bootstrap. The loader-facing initialize() keeps
  * its ABI and delegates to service_run(), which executes main in root. */
 typedef struct {
@@ -97,6 +106,7 @@ typedef struct {
     size_t root_stack_size;
     wasmos_driver_api_t* api;
     wasmos_sys_native_service_main_fn main;
+    wasmos_sys_native_service_idle_fn idle;
     void* user;
 } wasmos_sys_native_service_t;
 
@@ -107,6 +117,7 @@ typedef struct {
     void* root_stack;
     size_t root_stack_size;
     wasmos_sys_native_service_main_fn main;
+    wasmos_sys_native_service_idle_fn idle;
     void* user;
 } wasmos_sys_native_async_service_config_t;
 

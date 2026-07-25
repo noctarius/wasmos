@@ -275,6 +275,10 @@ int wasmos_native_coroutine_run(wasmos_native_coroutine_runtime_t* runtime) {
     return wasmos_native_coroutine_run_budget(runtime, (size_t)-1);
 }
 
+bool wasmos_native_coroutine_runtime_has_ready(const wasmos_native_coroutine_runtime_t* runtime) {
+    return runtime && (runtime->ready_head != NULL || runtime->continuation_head != NULL);
+}
+
 void wasmos_native_coroutine_yield(void) {
     wasmos_native_coroutine_runtime_t* runtime;
     wasmos_native_coroutine_t* coroutine;

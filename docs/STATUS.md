@@ -13,6 +13,13 @@ linked feature documents for rationale and rollout plans.
 - `net-stack` uses a dedicated virtio-net reply endpoint. RX delivery drains
   notification-reported queued frames immediately, while empty polls are paced
   at a 12 ms timer cadence to avoid a request/reply busy loop.
+- When its coroutine runtime has no runnable work, net-stack now blocks on a
+  select set covering its public, control, and driver-reply endpoints. The
+  service pump invokes this idle wait on the kernel-thread stack (never a
+  suspended coroutine stack), with a bounded timeout so lwIP timers and RX
+  polling continue to advance. The native-driver ABI exposes the corresponding
+  select hooks; the kernel build explicitly depends on that ABI header so a
+  header change cannot leave `native_driver.o` stale.
 - `virtio-net` now publishes `net.ifc` and reports link changes with
   `NETDRV_IPC_LINK_NOTIFY`. `net-stack` consumes class enumeration/events,
   retaining name lookup only as compatibility fallback.

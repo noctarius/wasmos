@@ -667,6 +667,7 @@ add_custom_command(
           ${KERNEL_DIR}/include/framebuffer.h
           ${KERNEL_DIR}/include/io.h
           ${DRIVER_WASM_DIR}/include/wasmos_driver_abi.h
+          ${DRIVER_WASM_DIR}/include/wasmos_native_driver.h
           ${CMAKE_SOURCE_DIR}/scripts/gen_kernel_kallsyms.py
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
   COMMENT "Building kernel"

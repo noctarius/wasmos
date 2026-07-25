@@ -48,6 +48,13 @@ linked feature documents for rationale and rollout plans.
   ring phys). The shared `wasmos_net_tcp_connect/send/recv/close` helper
   (`wasmos/net.h`) implements a TCP stream socket on top; `examples/c/net_tcp_echo`
   runs on it (validated by `test_net_stack_tcp_echo_e2e`).
+- `/system/utils/curl` (`curl <host>[:port][/path] [-o <file>]`) is a minimal
+  HTTP/1.0 GET client on that helper: it resolves the host (DNS, or an IPv4
+  literal directly), fetches the URL, strips the response headers, and writes the
+  body to stdout or a file (libc `open`/`write`). `test_net_stack_curl_e2e`
+  exercises both against a local HTTP server reached via the SLIRP gateway.
+  Note: guest-to-guest requests (an in-guest HTTP server) need `LWIP_NETIF_LOOPBACK`
+  and net-stack loopback polling — a follow-up.
 - Interface addressing is declarative: net-stack reads
   `/boot/system/net/interfaces` (a minimal `/etc/network/interfaces` subset,
   `iface <name> inet <dhcp|static>`) when the interface comes up. DHCP is

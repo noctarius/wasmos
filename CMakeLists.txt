@@ -228,6 +228,9 @@ set(WASM_IP_APP ${BUILD_DIR}/ip.wap)
 set(WASM_HOST_SRC ${CMAKE_SOURCE_DIR}/src/utils/host/host.c)
 set(WASM_HOST_WASM ${BUILD_DIR}/host.wasm)
 set(WASM_HOST_APP ${BUILD_DIR}/host.wap)
+set(WASM_CURL_SRC ${CMAKE_SOURCE_DIR}/src/utils/curl/curl.c)
+set(WASM_CURL_WASM ${BUILD_DIR}/curl.wasm)
+set(WASM_CURL_APP ${BUILD_DIR}/curl.wap)
 
 if (NOT DEFINED AS_ENABLE_INITIALIZED)
   set(AS_ENABLE ON CACHE BOOL "Enable AssemblyScript example builds" FORCE)
@@ -1382,6 +1385,11 @@ if (TARGET host_util)
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_HOST_APP} ${BUILD_DIR}/esp/system/utils/host.wap
   )
 endif ()
+if (TARGET curl_util)
+  set(CURL_UTIL_COPY_CMD
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CURL_APP} ${BUILD_DIR}/esp/system/utils/curl.wap
+  )
+endif ()
 set(HELLO_C_COPY_CMD
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_HELLO_C_APP} ${BUILD_DIR}/esp/apps/hello_c.wap
 )
@@ -1477,6 +1485,7 @@ set(INITFS_COPY_CMD
   ${EXPLORER_UTIL_COPY_CMD}
   ${IP_UTIL_COPY_CMD}
   ${HOST_UTIL_COPY_CMD}
+  ${CURL_UTIL_COPY_CMD}
   COMMAND ${CMAKE_COMMAND} -E copy
       ${CMAKE_SOURCE_DIR}/scripts/system/sysinit.rc
       ${BUILD_DIR}/esp/system/sysinit.rc

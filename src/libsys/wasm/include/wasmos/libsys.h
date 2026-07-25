@@ -433,8 +433,27 @@ static inline void wasmos_sys_ipc_recv_loop(void) {
  * and prevents the race where a short-lived process (e.g. pci-bus) destroys
  * its endpoint before PM processes the IPC. */
 static inline void wasmos_sys_notify_ready(int32_t proc_endpoint, int32_t source_endpoint) {
+    /* Wait for the PM's ack on a DEDICATED endpoint, never on the service
+     * endpoint. The wait is load-bearing: a one-shot service (pci-bus, acpi-bus)
+     * exits right after this and must stay alive until the PM has marked it
+     * ready and completed the parent's sync spawn, so it cannot fire-and-forget.
+     * But blocking a request-id-matching receive on the *service* endpoint
+     * drains and DROPS any request that races in right after registration
+     * (e.g. a driver client's first request), silently breaking its
+     * request/response contract. The PM identifies the notifier by the owner
+     * context of the message source and marks readiness by process, so any
+     * endpoint owned by this process is equivalent for readiness while a private
+     * one isolates the ack from real request traffic. */
+    static int32_t s_ready_reply_ep = -1;
     wasmos_ipc_message_t reply;
-    (void)wasmos_ipc_call(proc_endpoint, source_endpoint, PROC_IPC_NOTIFY_READY, 0, 0, 0, 0, 0,
+    (void)source_endpoint;
+    if (s_ready_reply_ep < 0) {
+        s_ready_reply_ep = wasmos_ipc_create_endpoint();
+    }
+    if (s_ready_reply_ep < 0) {
+        return;
+    }
+    (void)wasmos_ipc_call(proc_endpoint, s_ready_reply_ep, PROC_IPC_NOTIFY_READY, 0, 0, 0, 0, 0,
                           &reply);
 }
 

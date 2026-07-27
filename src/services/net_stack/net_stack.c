@@ -1614,10 +1614,35 @@ static struct altcp_tls_config* net_stack_ensure_tls_config(void) {
     {
         uint32_t filtered_len = 0u;
         uint8_t* filtered = net_stack_filter_ca_pem(g_ca_bytes, &filtered_len);
-        if (filtered != NULL && filtered_len > 1u) {
-            g_tls_config = altcp_tls_create_config_client(filtered, filtered_len);
-        } else {
-            g_tls_config = altcp_tls_create_config_client(g_ca_bytes, g_ca_len);
+        const uint8_t* ca = (filtered != NULL && filtered_len > 1u) ? filtered : g_ca_bytes;
+        uint32_t ca_len = (filtered != NULL && filtered_len > 1u) ? filtered_len : g_ca_len;
+        g_tls_config = altcp_tls_create_config_client(ca, ca_len);
+        if (g_tls_config == NULL && g_api != NULL && g_api->console_write != NULL) {
+            /* altcp hides why it failed; re-parse the bundle ourselves and report
+             * the code + length so a failure is diagnosable from the serial log
+             * (negative = alloc/format error, positive = failing cert count). */
+            mbedtls_x509_crt probe;
+            int pr;
+            char b[80];
+            int i = 0;
+            const char* pre = "[net-stack] tls config create failed: parse=";
+            mbedtls_x509_crt_init(&probe);
+            pr = mbedtls_x509_crt_parse(&probe, ca, ca_len);
+            mbedtls_x509_crt_free(&probe);
+            for (const char* q = pre; *q != '\0'; ++q) {
+                b[i++] = *q;
+            }
+            if (pr < 0) {
+                b[i++] = '-';
+            }
+            i += net_stack_u32_dec(b + i, (uint32_t)(pr < 0 ? -pr : pr));
+            const char* mid = " len=";
+            for (const char* q = mid; *q != '\0'; ++q) {
+                b[i++] = *q;
+            }
+            i += net_stack_u32_dec(b + i, ca_len);
+            b[i++] = '\n';
+            g_api->console_write(b, i);
         }
         if (filtered != NULL) {
             free(filtered); /* mbedtls_x509_crt_parse copied the certs into the config */
@@ -1625,10 +1650,6 @@ static struct altcp_tls_config* net_stack_ensure_tls_config(void) {
     }
     if (g_tls_config == NULL) {
         g_tls_config_failed = 1u;
-        if (g_api != NULL && g_api->console_write != NULL) {
-            static const char msg[] = "[net-stack] tls config create failed\n";
-            g_api->console_write(msg, (int)(sizeof(msg) - 1));
-        }
     } else if (g_api != NULL && g_api->console_write != NULL) {
         static const char msg[] = "[net-stack] tls client config ready\n";
         g_api->console_write(msg, (int)(sizeof(msg) - 1));

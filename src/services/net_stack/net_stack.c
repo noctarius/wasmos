@@ -41,6 +41,8 @@
 #include "netif/ethernet.h"
 
 #include "stdlib.h"
+#include "string.h"
+#include "mbedtls/x509_crt.h"
 
 #include "net_stack_ifcfg.h"
 #include "socket.h"
@@ -1490,6 +1492,100 @@ int mbedtls_hardware_poll(void* data, unsigned char* output, size_t len, size_t*
  * verifies the server chain (authmode VERIFY_REQUIRED, ALTCP_MBEDTLS_AUTHMODE).
  * Returns NULL and latches failure on error so TLS opens fail cleanly rather than
  * retrying. If the CA store is unavailable, TLS is refused (no no-verify fallback). */
+/* Append the decimal form of `v` to `dst`; returns the number of chars written. */
+static int net_stack_u32_dec(char* dst, uint32_t v) {
+    char tmp[12];
+    int t = 0;
+    if (v == 0u) {
+        tmp[t++] = '0';
+    }
+    while (v > 0u) {
+        tmp[t++] = (char)('0' + (v % 10u));
+        v /= 10u;
+    }
+    int n = t;
+    while (t > 0) {
+        *dst++ = tmp[--t];
+    }
+    return n;
+}
+
+/* Build a NUL-terminated PEM bundle holding only the certificates in `pem` (a
+ * NUL-terminated PEM bundle) that THIS mbedTLS build can parse, so
+ * altcp_tls_create_config_client (which rejects the whole bundle on any parse
+ * failure) sees a clean input. Roots we cannot parse could never anchor a chain
+ * anyway. Returns a malloc'd buffer (caller frees), *out_len including the NUL. */
+static uint8_t* net_stack_filter_ca_pem(const uint8_t* pem, uint32_t* out_len) {
+    static const char kBegin[] = "-----BEGIN CERTIFICATE-----";
+    static const char kEnd[] = "-----END CERTIFICATE-----";
+    const char* s = (const char*)pem;
+    uint32_t total = 0u;
+    while (s[total] != '\0') {
+        total++;
+    }
+    uint8_t* out = (uint8_t*)malloc(total + 1u); /* filtered is <= original */
+    if (out == NULL) {
+        return NULL;
+    }
+    uint32_t o = 0u;
+    uint32_t kept = 0u;
+    uint32_t dropped = 0u;
+    const char* p = s;
+    for (;;) {
+        const char* b = strstr(p, kBegin);
+        if (b == NULL) {
+            break;
+        }
+        const char* e = strstr(b, kEnd);
+        if (e == NULL) {
+            break;
+        }
+        e += sizeof(kEnd) - 1u; /* past the END marker */
+        while (*e == '\r' || *e == '\n') {
+            e++; /* include the trailing newline(s) */
+        }
+        uint32_t block = (uint32_t)(e - b);
+        uint8_t* one = (uint8_t*)malloc(block + 1u);
+        if (one != NULL) {
+            mbedtls_x509_crt c;
+            int r;
+            __builtin_memcpy(one, b, block);
+            one[block] = 0u;
+            mbedtls_x509_crt_init(&c);
+            r = mbedtls_x509_crt_parse(&c, one, block + 1u);
+            mbedtls_x509_crt_free(&c);
+            free(one);
+            if (r == 0) {
+                __builtin_memcpy(out + o, b, block);
+                o += block;
+                kept++;
+            } else {
+                dropped++;
+            }
+        }
+        p = e;
+    }
+    out[o] = 0u;
+    *out_len = o + 1u; /* include NUL */
+    if (g_api != NULL && g_api->console_write != NULL) {
+        char buf[80];
+        int i = 0;
+        const char* pre = "[net-stack] tls: trust store kept ";
+        for (const char* q = pre; *q != '\0'; ++q) {
+            buf[i++] = *q;
+        }
+        i += net_stack_u32_dec(buf + i, kept);
+        const char* mid = ", dropped ";
+        for (const char* q = mid; *q != '\0'; ++q) {
+            buf[i++] = *q;
+        }
+        i += net_stack_u32_dec(buf + i, dropped);
+        buf[i++] = '\n';
+        g_api->console_write(buf, i);
+    }
+    return out;
+}
+
 static struct altcp_tls_config* net_stack_ensure_tls_config(void) {
     if (g_tls_config != NULL) {
         return g_tls_config;
@@ -1509,7 +1605,24 @@ static struct altcp_tls_config* net_stack_ensure_tls_config(void) {
         }
         return NULL;
     }
-    g_tls_config = altcp_tls_create_config_client(g_ca_bytes, g_ca_len);
+    /* altcp_tls_create_config_client rejects the WHOLE bundle if mbedtls_x509_crt_parse
+     * reports any failed cert (its check is `ret != 0`). A general trust store
+     * (Mozilla) contains roots using curves/algorithms this trimmed mbedTLS build
+     * omits, so a few always fail to parse. Filter to the certs we can parse — we
+     * could not verify a chain to an unparseable root anyway — so the create sees
+     * a clean bundle. */
+    {
+        uint32_t filtered_len = 0u;
+        uint8_t* filtered = net_stack_filter_ca_pem(g_ca_bytes, &filtered_len);
+        if (filtered != NULL && filtered_len > 1u) {
+            g_tls_config = altcp_tls_create_config_client(filtered, filtered_len);
+        } else {
+            g_tls_config = altcp_tls_create_config_client(g_ca_bytes, g_ca_len);
+        }
+        if (filtered != NULL) {
+            free(filtered); /* mbedtls_x509_crt_parse copied the certs into the config */
+        }
+    }
     if (g_tls_config == NULL) {
         g_tls_config_failed = 1u;
         if (g_api != NULL && g_api->console_write != NULL) {

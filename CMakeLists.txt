@@ -536,7 +536,7 @@ function(wasmos_add_wasm_c_app_target target_name)
   add_custom_command(
     OUTPUT ${WASMOS_APP_OUTPUT_WASM}
     COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}
-    COMMAND ${_wasmos_compiler} --target=wasm32 -Oz -nostdlib -ffreestanding
+    COMMAND ${_wasmos_compiler} --target=wasm32 -mno-bulk-memory -Oz -nostdlib -ffreestanding
             -include ${LIBC_DIR}/include/wasmos_cast.h
             ${_wasmos_extra_flags}
             ${WASMOS_TRACE_DEFINE}
@@ -2066,6 +2066,19 @@ add_custom_target(run-kernel-unit-tests
           ${CMAKE_SOURCE_DIR}/tests/unit/test_ringbuf.c
           -o ${BUILD_DIR}/test_ringbuf
   COMMAND ${BUILD_DIR}/test_ringbuf
+  # Native slab allocator (heap_native.c): compiled with malloc/free/calloc/realloc
+  # renamed to hn_* so it links beside host libc; vm_map/vm_unmap mocked in the test.
+  COMMAND ${CLANG} -std=c11 -Wno-error=c23-extensions
+          -Dmalloc=hn_malloc -Dfree=hn_free -Dcalloc=hn_calloc -Drealloc=hn_realloc
+          -I${CMAKE_SOURCE_DIR}/src/drivers/include
+          -c ${CMAKE_SOURCE_DIR}/src/libsys/native/heap_native.c
+          -o ${BUILD_DIR}/test_heap_native_alloc.o
+  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
+          -I${CMAKE_SOURCE_DIR}/src/drivers/include
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_heap_native.c
+          ${BUILD_DIR}/test_heap_native_alloc.o
+          -o ${BUILD_DIR}/test_heap_native
+  COMMAND ${BUILD_DIR}/test_heap_native
   COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
           -I${LIBSYS_WASM_DIR}/include
           -I${DRIVER_WASM_DIR}/include

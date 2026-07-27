@@ -155,11 +155,16 @@ typedef struct Slab {
     size_t free_blocks;
 } Slab;
 
+/* `allocation` MUST be the last member: free()/realloc() recover the header as
+ * (user_ptr - sizeof(AllocationHeader)), and the returned user pointer is
+ * &large[1] (= base + sizeof(LargeAllocationHeader)). Placing the AllocationHeader
+ * anywhere but immediately before the user data makes that recovered pointer miss
+ * the real header (a garbage magic -> spurious "invalid free"). */
 typedef struct LargeAllocationHeader {
-    AllocationHeader allocation;
     uint32_t large_magic;
     uint32_t reserved;
     size_t mapping_size;
+    AllocationHeader allocation;
 } LargeAllocationHeader;
 
 typedef struct SizeClass {

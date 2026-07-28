@@ -708,13 +708,16 @@ static int cli_is_foreground(void) {
     }
     int32_t active_tty = cli_query_active_tty(NULL);
     if (active_tty >= 0) {
-        if (!(g_home_tty == 1 && active_tty == 0)) {
-            g_last_seen_active_tty = active_tty;
-        }
+        g_last_seen_active_tty = active_tty;
     }
     g_fg_query_backoff = (g_last_seen_active_tty == g_home_tty) ? 31 : 3;
-    /* Do not forcibly reclaim tty1 while tty0 is active; compositor may
-     * temporarily own tty0 for graphics presentation. */
+    /* When the compositor owns tty0 for graphics presentation, the active tty
+     * is 0, not our home tty. Report background so we stop consuming keyboard
+     * input (which the keyboard driver broadcasts to every subscriber); the
+     * compositor's focused window then gets keys exclusively. We do not
+     * forcibly reclaim tty1 here. Serial-driven input is unaffected: once the
+     * CLI falls back to serial (g_vt_endpoint < 0) it is always foreground
+     * per the early return above. */
     return g_last_seen_active_tty == g_home_tty;
 }
 

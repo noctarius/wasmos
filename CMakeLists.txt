@@ -189,6 +189,9 @@ set(WASM_HELLO_C_APP ${BUILD_DIR}/hello_c.wap)
 set(WASM_HELLO_RUST_SRC ${EXAMPLES_RUST_DIR}/hello/hello_rust.rs)
 set(WASM_HELLO_RUST_WASM ${BUILD_DIR}/hello_rust.wasm)
 set(WASM_HELLO_RUST_APP ${BUILD_DIR}/hello_rust.wap)
+set(WASM_TETRIS_RUST_SRC ${EXAMPLES_RUST_DIR}/tetris/tetris.rs)
+set(WASM_TETRIS_RUST_WASM ${BUILD_DIR}/tetris.wasm)
+set(WASM_TETRIS_RUST_APP ${BUILD_DIR}/tetris.wap)
 set(WASM_HELLO_GO_SRC ${EXAMPLES_GO_DIR}/hello/hello_go.go)
 set(WASM_HELLO_GO_WASM ${BUILD_DIR}/hello_go.wasm)
 set(WASM_HELLO_GO_APP ${BUILD_DIR}/hello_go.wap)
@@ -1510,6 +1513,9 @@ if (RUST_ENABLE)
   set(RUST_HELLO_COPY_CMD
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_HELLO_RUST_APP} ${BUILD_DIR}/esp/apps/hello_rust.wap
   )
+  set(TETRIS_COPY_CMD
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_TETRIS_RUST_APP} ${BUILD_DIR}/esp/apps/tetris.wap
+  )
 endif ()
 if (GO_AVAILABLE)
   set(GO_HELLO_COPY_CMD
@@ -1571,6 +1577,7 @@ set(WASMOS_ESP_POPULATE_CMDS
   ${IRQ_ROUTE_DENY_COPY_CMD}
   ${IRQ_ROUTE_ALLOW_COPY_CMD}
   ${RUST_HELLO_COPY_CMD}
+  ${TETRIS_COPY_CMD}
   ${GO_HELLO_COPY_CMD}
   ${ZIG_HELLO_COPY_CMD}
   ${ZIG_CALCULATOR_COPY_CMD}

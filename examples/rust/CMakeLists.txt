@@ -81,7 +81,58 @@ if (RUST_ENABLE)
     COMMENT "Packing wasm hello-rust as WASMOS-APP"
     VERBATIM
   )
-  add_custom_target(rust_examples DEPENDS ${WASM_HELLO_RUST_APP})
-  set_property(GLOBAL APPEND PROPERTY WASMOS_WASM_APPS ${WASM_HELLO_RUST_APP})
+  # --- Tetris: two-player networked graphical Rust app ---------------------
+  set(WASM_TETRIS_SHIM_SRC ${CMAKE_CURRENT_SOURCE_DIR}/tetris/net_shim.c)
+  set(WASM_TETRIS_SHIM_OBJ ${BUILD_DIR}/tetris_net_shim.o)
+  add_custom_command(
+    OUTPUT ${WASM_TETRIS_SHIM_OBJ}
+    COMMAND ${CLANG} --target=wasm32 -Oz -ffreestanding
+            -I${LIBC_DIR}/include -I${LIBSYS_WASM_DIR}/include -I${DRIVER_WASM_DIR}/include
+            -c ${WASM_TETRIS_SHIM_SRC}
+            -o ${WASM_TETRIS_SHIM_OBJ}
+    DEPENDS ${WASM_TETRIS_SHIM_SRC}
+            ${LIBC_DIR}/include/wasmos/net.h
+            ${LIBSYS_WASM_DIR}/include/wasmos/ringbuf.h
+    COMMENT "Building WASM net transport shim for Rust tetris"
+    VERBATIM
+  )
+  add_custom_command(
+    OUTPUT ${WASM_TETRIS_RUST_WASM}
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}
+    COMMAND ${RUSTC_EXECUTABLE}
+            --target=wasm32-unknown-unknown
+            -O
+            -C opt-level=z
+            -C panic=abort
+            -C codegen-units=1
+            -C link-arg=--no-entry
+            -C link-arg=--export=wasmos_main
+            -C link-arg=--strip-all
+            -C link-arg=--initial-memory=16777216
+            -C link-arg=--max-memory=16777216
+            -C link-arg=${WASM_TETRIS_SHIM_OBJ}
+            --crate-type=cdylib
+            ${WASM_TETRIS_RUST_SRC}
+            -o ${WASM_TETRIS_RUST_WASM}
+    DEPENDS ${WASM_TETRIS_RUST_SRC} ${WASM_TETRIS_SHIM_OBJ}
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    COMMENT "Building wasm tetris module"
+    VERBATIM
+  )
+  add_custom_command(
+    OUTPUT ${WASM_TETRIS_RUST_APP}
+    COMMAND ${WASMOS_APP_PACKER}
+            --manifest ${CMAKE_CURRENT_SOURCE_DIR}/tetris/linker.metadata
+            --in ${WASM_TETRIS_RUST_WASM}
+            --out ${WASM_TETRIS_RUST_APP}
+    DEPENDS ${WASM_TETRIS_RUST_WASM} make_wasmos_app
+            ${CMAKE_CURRENT_SOURCE_DIR}/tetris/linker.metadata
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    COMMENT "Packing wasm tetris as WASMOS-APP"
+    VERBATIM
+  )
+
+  add_custom_target(rust_examples DEPENDS ${WASM_HELLO_RUST_APP} ${WASM_TETRIS_RUST_APP})
+  set_property(GLOBAL APPEND PROPERTY WASMOS_WASM_APPS ${WASM_HELLO_RUST_APP} ${WASM_TETRIS_RUST_APP})
   set_property(GLOBAL APPEND PROPERTY WASMOS_WASM_APP_TARGETS rust_examples)
 endif ()

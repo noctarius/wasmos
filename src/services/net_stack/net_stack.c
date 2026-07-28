@@ -72,10 +72,11 @@ static uint32_t g_entropy_pool_len = 0u; /* valid bytes available */
 static uint32_t g_entropy_pool_pos = 0u; /* next unread byte */
 static uint8_t g_entropy_underflow_logged = 0u;
 
-/* Freestanding mbedTLS platform stubs (see net_stack_mbedtls_config.h). The
- * static buffer allocator overwrites mbedtls_calloc/free at init, so these
- * pre-init values are never invoked; snprintf is only used by unused X.509/debug
- * string helpers. Providing them here keeps the link free of libc stdio/stdlib. */
+/* Freestanding mbedTLS platform functions (bound at compile time via the
+ * MBEDTLS_PLATFORM_*_MACRO forms in net_stack_mbedtls_config.h). calloc/free
+ * forward to the native slab allocator so the TLS heap grows on demand from
+ * kernel pages; snprintf is a stub only reached from unused X.509/debug string
+ * helpers. Providing them here keeps the link free of libc stdio/stdlib. */
 void* net_stack_mbedtls_std_calloc(size_t nmemb, size_t size) {
     return calloc(nmemb, size);
 }
@@ -1614,35 +1615,25 @@ static struct altcp_tls_config* net_stack_ensure_tls_config(void) {
     {
         uint32_t filtered_len = 0u;
         uint8_t* filtered = net_stack_filter_ca_pem(g_ca_bytes, &filtered_len);
-        const uint8_t* ca = (filtered != NULL && filtered_len > 1u) ? filtered : g_ca_bytes;
-        uint32_t ca_len = (filtered != NULL && filtered_len > 1u) ? filtered_len : g_ca_len;
+        const uint8_t* ca;
+        uint32_t ca_len;
+        if (filtered != NULL && filtered_len > 1u) {
+            /* The filtered copy is self-contained; free the raw bundle now so its
+             * pages are available for the (memory-heavy) parse that follows.
+             * g_ca_bytes is only needed to build the config this once. */
+            free(g_ca_bytes);
+            g_ca_bytes = NULL;
+            g_ca_len = 0u;
+            ca = filtered;
+            ca_len = filtered_len;
+        } else {
+            ca = g_ca_bytes;
+            ca_len = g_ca_len;
+        }
         g_tls_config = altcp_tls_create_config_client(ca, ca_len);
         if (g_tls_config == NULL && g_api != NULL && g_api->console_write != NULL) {
-            /* altcp hides why it failed; re-parse the bundle ourselves and report
-             * the code + length so a failure is diagnosable from the serial log
-             * (negative = alloc/format error, positive = failing cert count). */
-            mbedtls_x509_crt probe;
-            int pr;
-            char b[80];
-            int i = 0;
-            const char* pre = "[net-stack] tls config create failed: parse=";
-            mbedtls_x509_crt_init(&probe);
-            pr = mbedtls_x509_crt_parse(&probe, ca, ca_len);
-            mbedtls_x509_crt_free(&probe);
-            for (const char* q = pre; *q != '\0'; ++q) {
-                b[i++] = *q;
-            }
-            if (pr < 0) {
-                b[i++] = '-';
-            }
-            i += net_stack_u32_dec(b + i, (uint32_t)(pr < 0 ? -pr : pr));
-            const char* mid = " len=";
-            for (const char* q = mid; *q != '\0'; ++q) {
-                b[i++] = *q;
-            }
-            i += net_stack_u32_dec(b + i, ca_len);
-            b[i++] = '\n';
-            g_api->console_write(b, i);
+            static const char msg[] = "[net-stack] tls: config create failed\n";
+            g_api->console_write(msg, (int)(sizeof(msg) - 1));
         }
         if (filtered != NULL) {
             free(filtered); /* mbedtls_x509_crt_parse copied the certs into the config */

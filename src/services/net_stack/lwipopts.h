@@ -59,7 +59,8 @@
  * and net-stack additionally sets a per-connection hostname (mbedtls_ssl_set_hostname)
  * so the server certificate CN/SAN is checked. altcp_tls_mbedtls.c passes this to
  * mbedtls_ssl_conf_authmode(); the token resolves at its use site, after
- * mbedtls/ssl.h is included. */
+ * mbedtls/ssl.h is included. REQUIRED aborts the handshake when the chain or
+ * hostname does not verify, so an untrusted server certificate is rejected. */
 #define ALTCP_MBEDTLS_AUTHMODE MBEDTLS_SSL_VERIFY_REQUIRED
 
 #define LWIP_DNS 1

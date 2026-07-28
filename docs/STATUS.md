@@ -68,9 +68,14 @@ linked feature documents for rationale and rollout plans.
   (native services are long-lived).
 - TLS client (milestone C, verifying): net-stack embeds mbedTLS 3.6 (freestanding
   config in `src/services/net_stack/net_stack_mbedtls_config.h`; `mbedtls_calloc/free`
-  use the native slab allocator so the TLS heap grows on demand — a ~KB..hundreds-of-KB
-  CA bundle parses fine; entropy from the `hrng` pool via `mbedtls_hardware_poll`)
-  behind lwIP's `altcp_tls`. A stream socket opened with `NET_SOCKET_OPEN_FLAG_TLS`
+  are bound at compile time via the `MBEDTLS_PLATFORM_*_MACRO` forms to the native
+  slab allocator so the TLS heap grows on demand — the full Mozilla CA bundle
+  (119 certs, ~180 KB PEM) parses fine. The macro forms are load-bearing: they
+  also make lwIP's `altcp_tls` layer skip its `mbedtls_platform_set_calloc_free`
+  override, which would otherwise redirect all mbedTLS allocation into lwIP's
+  fixed `MEM_SIZE` (64 KiB) heap and fail the bundle parse after ~20 certs with
+  `X509_ALLOC_FAILED`. Entropy comes from the `hrng` pool via
+  `mbedtls_hardware_poll`) behind lwIP's `altcp_tls`. A stream socket opened with `NET_SOCKET_OPEN_FLAG_TLS`
   is created with `altcp_tls_new`; the socket send/recv/close path is otherwise
   unchanged. `wasmos_net_tls_connect(..., sni)` (libc `wasmos/net.h`) and
   `curl https://` use it. This is a TLS 1.2 ECDHE handshake with **full server

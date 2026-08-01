@@ -32,6 +32,13 @@ static int32_t g_home_tty = 1;
 static int32_t g_last_seen_active_tty = 1;
 static uint32_t g_vt_switch_generation = 1;
 static int32_t g_request_id = 1;
+/* Select set over the CLI's own endpoints, used to park (with a short timeout)
+ * when idle instead of yield-spinning.  A backgrounded CLI (compositor owns
+ * tty0) would otherwise spin cli_phase_prompt/read_step forever and peg a CPU,
+ * starving the compositor.  The timeout also paces the serial (COM1) poll, which
+ * has no IPC wake, so serial input still arrives within one interval. */
+static int32_t g_idle_select = -1;
+#define CLI_IDLE_POLL_MS 15
 static int32_t g_pending_req = -1;
 static char g_cwd[64] = "/";
 static int32_t g_pending_kind = 0;
@@ -1886,6 +1893,13 @@ static void cli_phase_init_step(int32_t proc_endpoint, int32_t home_tty_arg) {
         cli_fail_and_stall("[cli] failed to create vt endpoint\n");
     }
     g_proc_endpoint = proc_endpoint;
+    /* Build the idle select set from the CLI's own endpoints so cli_idle_wait()
+     * can park on them with a timeout rather than yield-spinning. */
+    g_idle_select = wasmos_ipc_select_create();
+    if (g_idle_select >= 0) {
+        (void)wasmos_ipc_select_add(g_idle_select, g_reply_endpoint);
+        (void)wasmos_ipc_select_add(g_idle_select, g_vt_client_endpoint);
+    }
     g_fs_endpoint = wasmos_sys_svc_lookup_retry(g_proc_endpoint, g_reply_endpoint, "fs.vfs", 1, 64);
     if (g_fs_endpoint < 0) {
         g_fs_endpoint = wasmos_sys_svc_lookup_retry(g_proc_endpoint, g_reply_endpoint, "fs", 1, 64);
@@ -1922,11 +1936,22 @@ static void cli_phase_init_step(int32_t proc_endpoint, int32_t home_tty_arg) {
     g_phase = CLI_PHASE_PROMPT;
 }
 
-static void cli_phase_prompt_step(void) {
-    if (!cli_is_foreground()) {
+/* Park until an endpoint in the idle set has traffic or the poll interval
+ * elapses, instead of yield-spinning.  Serial (COM1) has no IPC wake, so the
+ * timeout is what re-checks it; IPC (vt/reply) wakes us immediately. */
+static void cli_idle_wait(void) {
+    if (g_idle_select >= 0) {
+        (void)wasmos_ipc_select_wait_timeout(g_idle_select, CLI_IDLE_POLL_MS);
+    } else {
         (void)wasmos_sched_yield();
-        return;
     }
+}
+
+static void cli_phase_prompt_step(void) {
+    /* Always emit the prompt: console_write() routes it to the VT when we own the
+     * visible TTY and to serial otherwise, so serial stays usable even while the
+     * compositor owns tty0.  We do NOT gate on foreground here — that only
+     * governs whether we pull keyboard input from the VT (see read step). */
     console_prompt();
     g_line_len = 0;
     g_esc_state = 0;
@@ -1935,10 +1960,6 @@ static void cli_phase_prompt_step(void) {
 }
 
 static void cli_phase_read_step(void) {
-    if (!cli_is_foreground()) {
-        (void)wasmos_sched_yield();
-        return;
-    }
     if (g_line_len >= (int32_t)(sizeof(g_line) - 1)) {
         console_write("\n");
         g_line_len = 0;
@@ -1948,7 +1969,12 @@ static void cli_phase_read_step(void) {
     int32_t have_ch = 0;
     int32_t from_vt = 0;
     char ch = '\0';
-    if (g_vt_endpoint >= 0) {
+    /* Pull keyboard input from the VT only while we own the visible TTY.  When
+     * the compositor owns tty0 the keyboard is broadcast to every subscriber and
+     * the focused gfx window must receive keys exclusively, so we stay off the VT
+     * path and let serial (below) drive us.  Serial is an independent channel and
+     * is always serviced regardless of focus. */
+    if (g_vt_endpoint >= 0 && cli_is_foreground()) {
         if (g_vt_read_backoff > 0) {
             g_vt_read_backoff--;
         } else {
@@ -1975,7 +2001,7 @@ static void cli_phase_read_step(void) {
         }
     }
     if (!have_ch) {
-        (void)wasmos_sched_yield();
+        cli_idle_wait();
         return;
     }
     if (from_vt) {

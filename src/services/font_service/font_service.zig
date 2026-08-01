@@ -35,6 +35,10 @@ const loaded_font_t = struct {
     line_gap: i16 = 0,
 };
 
+// Liveness backstop for the idle block in the main loop; requests wake it
+// immediately, so this only caps how long it sleeps with nothing to do.
+const FONT_IDLE_WAIT_MS: u32 = 1000;
+
 var g_api: ?*c.wasmos_driver_api_t = null;
 var g_proc_endpoint: u32 = IPC_ENDPOINT_NONE;
 var g_font_endpoint: u32 = IPC_ENDPOINT_NONE;
@@ -918,7 +922,14 @@ pub export fn initialize(driver_api: *c.wasmos_driver_api_t, module_count: c_int
         const handled = sys.eventLoopPoll(&g_ipc_loop, 32);
         if (handled < 0) return -1;
         if (handled == 0) {
-            api().sched_yield.?();
+            // Block until a request arrives instead of yield-spinning, so the
+            // host CPU can reach idle/hlt. font-service is purely reactive: every
+            // request lands on g_font_endpoint and it does no periodic work, so
+            // there is nothing to poll for. The bounded wait is only a liveness
+            // backstop (1 wake/sec, negligible); a request wakes it immediately.
+            // Runs on the kernel-thread stack (directly in initialize), so
+            // blocking here is safe (unlike inside a coroutine).
+            _ = api().ipc_wait.?(ctxId(), g_font_endpoint, FONT_IDLE_WAIT_MS);
             continue;
         }
     }

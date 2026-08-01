@@ -43,6 +43,15 @@ static uint8_t g_text_plane_enabled = 1;
 static uint8_t g_gfx_overlay_lock = 0;
 static uint32_t g_fb_bytes_limit = 0;
 
+/* Idle-block bounds so the main loop reaches idle/hlt instead of yield-spinning.
+ * Control IPC (tty switch, overlay lock/unlock) wakes the endpoint immediately;
+ * these only cap how long we sleep with nothing to do.  The console ring is fed
+ * over shared memory with no IPC doorbell, so while the text plane is active we
+ * re-poll it at FB_CONSOLE_POLL_MS; when the gfx overlay owns the framebuffer
+ * there is nothing to drain, so we block longer. */
+#define FB_CONSOLE_POLL_MS 15u
+#define FB_IDLE_WAIT_MS 200u
+
 typedef struct {
     uint16_t width;
     uint16_t height;
@@ -319,12 +328,27 @@ int initialize(wasmos_driver_api_t* api, int module_count, int arg2, int arg3) {
     for (;;) {
         int rc = api->ipc_recv(ctx, ep, &msg);
         if (rc == ND_IPC_EMPTY) {
-            /* Drain ring output in bounded chunks and yield cooperatively so
-             * other processes get CPU time during console ring backlog replay. */
             if (g_console_ring_enabled && !g_gfx_overlay_lock) {
-                drain_console_ring(ring, 256u);
+                /* Text plane active: flush backlog in bounded chunks.  If a chunk
+                 * was drained more may be pending, so loop immediately; only once
+                 * the ring is empty do we block (bounded) to re-poll it for new
+                 * text, since ring writes carry no IPC wake. */
+                if (drain_console_ring(ring, 256u)) {
+                    continue;
+                }
+                if (api->ipc_wait) {
+                    api->ipc_wait(ctx, ep, FB_CONSOLE_POLL_MS);
+                } else {
+                    api->sched_yield();
+                }
+            } else if (api->ipc_wait) {
+                /* GFX overlay owns the framebuffer (or console disabled): nothing
+                 * to drain and only control IPC matters, which wakes ep — block so
+                 * the CPU can reach idle/hlt instead of yield-spinning. */
+                api->ipc_wait(ctx, ep, FB_IDLE_WAIT_MS);
+            } else {
+                api->sched_yield();
             }
-            api->sched_yield();
             continue;
         }
         if (rc != ND_IPC_OK) {

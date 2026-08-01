@@ -11,6 +11,12 @@
 
 static const uint8_t g_skip_wasm_boot = 0;
 
+/* Terminal idle wait for init (see the phase-5 park in kernel_init_entry).  init
+ * has no work left after boot handoff; a bounded park lets the CPU reach idle/hlt
+ * while keeping a low-rate heartbeat, instead of the no-op process_block_on_ipc()
+ * stub that spun the scheduler. */
+#define KERNEL_INIT_IDLE_WAIT_MS 100u
+
 void kernel_init_state_reset(init_state_t* state, const boot_info_t* boot_info) {
     if (!state) {
         return;
@@ -413,6 +419,15 @@ process_run_result_t kernel_init_entry(process_t* process, void* arg) {
         state->phase = 5;
     }
 
-    process_block_on_ipc(process);
-    return PROCESS_RUN_BLOCKED;
+    /* Phase 5: boot handoff complete; init has no further work.  Park (bounded)
+     * on the reply endpoint so the thread yields the CPU to idle/hlt.  The old
+     * process_block_on_ipc() is a no-op stub, so returning PROCESS_RUN_BLOCKED
+     * left the thread RUNNING and on no wait_list; the scheduler then treats
+     * PROCESS_RUN_BLOCKED from a still-RUNNING thread as a voluntary yield and
+     * re-dispatches init every scheduling round (see process.c) — a spin that
+     * kept the run queue non-empty so the idle thread's sti;hlt never ran and the
+     * host vCPU spun at full load.  The timeout keeps a low-rate heartbeat. */
+    (void)ipc_endpoint_wait_for(process->context_id, state->reply_endpoint,
+                                KERNEL_INIT_IDLE_WAIT_MS);
+    return PROCESS_RUN_YIELDED;
 }

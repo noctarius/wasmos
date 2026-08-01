@@ -92,7 +92,7 @@ if (RUST_ENABLE)
             -o ${WASM_TETRIS_SHIM_OBJ}
     DEPENDS ${WASM_TETRIS_SHIM_SRC}
             ${LIBC_DIR}/include/wasmos/net.h
-            ${LIBSYS_WASM_DIR}/include/wasmos/ringbuf.h
+            ${DRIVER_WASM_DIR}/include/wasmos/ringbuf.h
     COMMENT "Building WASM net transport shim for Rust tetris"
     VERBATIM
   )

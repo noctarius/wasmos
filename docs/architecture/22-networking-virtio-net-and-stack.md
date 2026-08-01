@@ -516,7 +516,8 @@ per socket. Socket payload never travels in an IPC message: IPC carries only the
 **control plane** (open/bind/connect/close) and lightweight **doorbells**.
 
 The reusable SPSC implementation is present in
-`src/libsys/wasm/include/wasmos/ringbuf.h` and is covered by
+`src/drivers/include/wasmos/ringbuf.h` (a shared ABI include reachable from both
+userspace services and the kernel) and is covered by
 `tests/unit/test_ringbuf.c`. The net-stack socket pool and versioned open
 descriptor are implemented in `src/services/net_stack/socket.{h,c}` and covered
 by `tests/unit/test_net_socket.c`. Connected UDP sockets drain complete TX-ring

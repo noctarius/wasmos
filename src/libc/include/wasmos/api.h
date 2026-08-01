@@ -256,6 +256,12 @@ extern int32_t wasmos_framebuffer_pixel(int32_t x, int32_t y, int32_t color)
  * flush/refresh synchronise dirty regions between processes. */
 extern int32_t wasmos_shmem_create(int32_t pages, int32_t flags)
     WASMOS_WASM_IMPORT("wasmos", "shmem_create");
+/* klog ring (VT I/O multiplexer, phase 4): register a shared-memory region the
+ * caller created + mapped + wasmos_ringbuf_init'd as the kernel klog ring, so
+ * serial_write publishes klog text into it for the VT to drain into vt-1.
+ * Returns 0 on success, -1 on a bad/foreign id. */
+extern int32_t wasmos_klog_register_ring(int32_t id)
+    WASMOS_WASM_IMPORT("wasmos", "klog_register_ring");
 extern int32_t wasmos_shmem_grant(int32_t id, int32_t target_pid)
     WASMOS_WASM_IMPORT("wasmos", "shmem_grant");
 extern int32_t wasmos_shmem_revoke(int32_t id, int32_t target_pid)

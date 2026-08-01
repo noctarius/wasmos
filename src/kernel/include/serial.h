@@ -42,6 +42,15 @@ const serial_driver_t* serial_get_driver(void);
 int serial_register_remote_driver(uint32_t endpoint);
 uint32_t serial_console_ring_id(void);
 void* serial_console_ring_ptr(void);
+
+/* klog ring (VT I/O multiplexer, phase 4): the VT owns an SPSC byte ring
+ * (wasmos/ringbuf.h) in a shared-memory region and registers its shmem id
+ * here.  serial_write then additionally publishes klog text into that ring for
+ * the VT to drain into vt-1.  This is additive to the legacy console_ring (the
+ * framebuffer driver still drains console_ring for early-boot on-screen klog).
+ * owner_context_id must own the shared region.  Returns 0 on success, -1 on a
+ * bad/foreign id or a region that is not an initialized ring. */
+int klog_register_ring(uint32_t owner_context_id, uint32_t id);
 void serial_input_push(uint8_t ch);
 int serial_input_read(uint8_t* out);
 

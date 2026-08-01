@@ -165,7 +165,8 @@ typedef enum {
     HC_BLOCK_BUFFER_MAP = 113,
     HC_XFER_BUFFER_MAP = 114,
     HC_XFER_BUFFER_UNMAP = 115,
-    HC_COUNT = 116,
+    HC_KLOG_REGISTER_RING = 116,
+    HC_COUNT = 117,
 } warp_hostcall_id_t;
 
 /* ring3_trampolines.c

@@ -205,7 +205,7 @@ add_custom_command(
           -c ${NET_STACK_DIR}/socket.c
           -o ${NET_STACK_SOCKET_OBJ}
   DEPENDS ${NET_STACK_DIR}/socket.c ${NET_STACK_DIR}/socket.h
-          ${LIBSYS_WASM_DIR}/include/wasmos/ringbuf.h
+          ${DRIVER_WASM_DIR}/include/wasmos/ringbuf.h
           ${DRIVER_WASM_DIR}/include/wasmos_driver_abi.h
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
   COMMENT "Compiling socket.c (net-stack)"

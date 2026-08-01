@@ -2332,6 +2332,21 @@ m3ApiRawFunction(wasmos_shmem_create) {
     m3ApiReturn((int32_t)id);
 }
 
+/* Register the caller's shared-memory region (id) as the kernel klog ring.  The
+ * caller (the VT) has already created + mapped + wasmos_ringbuf_init'd it; the
+ * kernel retains it and reaches it through the higher-half alias.  Ownership is
+ * enforced by mm_shared_get_phys inside klog_register_ring, so no extra
+ * capability gate is needed here beyond the one the caller used to create it. */
+m3ApiRawFunction(wasmos_klog_register_ring) {
+    m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, id)
+
+        process_t* proc = process_get(process_current_pid());
+    if (!proc || proc->context_id == 0 || id <= 0) {
+        m3ApiReturn(-1);
+    }
+    m3ApiReturn(klog_register_ring(proc->context_id, (uint32_t)id));
+}
+
 m3ApiRawFunction(wasmos_shmem_map) {
     m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, id) m3ApiGetArg(int32_t, ptr)
         m3ApiGetArg(int32_t, size)
@@ -3767,6 +3782,8 @@ int wasm3_link_wasmos(IM3Module module) {
     rc |= wasm3_link_raw(module, "wasmos", "region_alloc", "i(iii)", wasmos_region_alloc);
     rc |= wasm3_link_raw(module, "wasmos", "framebuffer_pixel", "i(iii)", wasmos_framebuffer_pixel);
     rc |= wasm3_link_raw(module, "wasmos", "shmem_create", "i(ii)", wasmos_shmem_create);
+    rc |= wasm3_link_raw(module, "wasmos", "klog_register_ring", "i(i)",
+                         wasmos_klog_register_ring);
     rc |= wasm3_link_raw(module, "wasmos", "shmem_grant", "i(ii)", wasmos_shmem_grant);
     rc |= wasm3_link_raw(module, "wasmos", "shmem_revoke", "i(ii)", wasmos_shmem_revoke);
     rc |= wasm3_link_raw(module, "wasmos", "shmem_map", "i(iii)", wasmos_shmem_map);

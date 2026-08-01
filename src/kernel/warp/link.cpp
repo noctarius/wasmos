@@ -1891,6 +1891,18 @@ static uint32_t warp_shmem_create(uint32_t pages, uint32_t flags, void* ctx_) {
     return id;
 }
 
+static uint32_t warp_klog_register_ring(uint32_t id, void* ctx_) {
+    (void)ctx_;
+    if ((int32_t)id <= 0)
+        return (uint32_t)-1;
+    uint32_t context_id = 0;
+    if (warp_current_context_id(&context_id) != 0)
+        return (uint32_t)-1;
+    /* Ownership of the shared region is enforced inside klog_register_ring
+     * (mm_shared_get_phys), matching the wasm3 path. */
+    return (uint32_t)klog_register_ring(context_id, id);
+}
+
 static uint32_t warp_shmem_grant(uint32_t id, uint32_t target_pid, void* ctx_) {
     (void)ctx_;
     if ((int32_t)id <= 0 || (int32_t)target_pid <= 0)
@@ -2793,7 +2805,9 @@ static void warp_env_abort(uint32_t msg, uint32_t file, uint32_t line, uint32_t 
                                                                     * overlay (socket-ring        \
                                                                     * zero-copy). */               \
         LINK("wasmos", "xfer_buffer_map", warp_xfer_buffer_map),                                   \
-        LINK("wasmos", "xfer_buffer_unmap", warp_xfer_buffer_unmap)
+        LINK("wasmos", "xfer_buffer_unmap", warp_xfer_buffer_unmap),                               \
+        LINK("wasmos", "klog_register_ring", warp_klog_register_ring) /* HC 116: VT-owned klog  \
+                                                                       * ring (phase 4). */
 
 vb::Span<vb::NativeSymbol const> warp_wasmos_symbols(void) {
     // STATIC_LINK: bakes function pointers into call stubs at JIT compile time.

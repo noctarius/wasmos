@@ -12,6 +12,7 @@
 #include "process.h"
 #include "sync/spinlock.h"
 #include "paging.h"
+#include "wasmos/ringbuf.h"
 
 #define COM1_PORT 0x3F8
 #define COM1_STATUS (COM1_PORT + 5)
@@ -62,6 +63,12 @@ static uint8_t g_serial_high_alias_enabled = 0;
 static uint32_t g_console_ring_shmem_id = 0;
 static console_ring_t* g_console_ring = 0;
 
+/* klog ring (phase 4): physical base + byte size of the VT-owned SPSC ring.
+ * phys == 0 means no VT ring is registered yet, so klog_ring_write is a no-op
+ * and early boot keeps flowing only to console_ring + COM1 TX. */
+static uint64_t g_klog_ring_phys = 0;
+static uint32_t g_klog_ring_bytes = 0;
+
 static inline ksync_spinlock_t* serial_lock_ptr(void) {
     uintptr_t addr = (uintptr_t)&g_serial_lock;
     if (g_serial_high_alias_enabled && (uint64_t)addr < KERNEL_HIGHER_HALF_BASE) {
@@ -88,6 +95,22 @@ static inline console_ring_t** serial_console_ring_slot(void) {
 
 static inline uint32_t* serial_console_ring_id_slot(void) {
     uintptr_t addr = (uintptr_t)&g_console_ring_shmem_id;
+    if (g_serial_high_alias_enabled && (uint64_t)addr < KERNEL_HIGHER_HALF_BASE) {
+        addr = (uintptr_t)((uint64_t)addr + KERNEL_HIGHER_HALF_BASE);
+    }
+    return (uint32_t*)(void*)addr;
+}
+
+static inline uint64_t* serial_klog_ring_phys_slot(void) {
+    uintptr_t addr = (uintptr_t)&g_klog_ring_phys;
+    if (g_serial_high_alias_enabled && (uint64_t)addr < KERNEL_HIGHER_HALF_BASE) {
+        addr = (uintptr_t)((uint64_t)addr + KERNEL_HIGHER_HALF_BASE);
+    }
+    return (uint64_t*)(void*)addr;
+}
+
+static inline uint32_t* serial_klog_ring_bytes_slot(void) {
+    uintptr_t addr = (uintptr_t)&g_klog_ring_bytes;
     if (g_serial_high_alias_enabled && (uint64_t)addr < KERNEL_HIGHER_HALF_BASE) {
         addr = (uintptr_t)((uint64_t)addr + KERNEL_HIGHER_HALF_BASE);
     }
@@ -381,6 +404,68 @@ static void serial_ring_write(const char* s) {
     ring->write_pos = wp;
 }
 
+/* Publish a klog string into the VT-owned SPSC ring, if one is registered.
+ * Additive to serial_ring_write; a short write (ring near full) silently drops
+ * the tail — klog is advisory and COM1 TX carries the full log regardless. */
+static void klog_ring_write(const char* s) {
+    uint64_t phys = *serial_klog_ring_phys_slot();
+    if (!phys || !s) {
+        return;
+    }
+    uint32_t bytes = *serial_klog_ring_bytes_slot();
+    /* The stored base is a raw physical address; reach it through the kernel
+     * higher-half alias so writes land from any CR3, exactly as
+     * serial_ring_write does for console_ring. */
+    if (g_serial_high_alias_enabled && phys < KERNEL_HIGHER_HALF_BASE) {
+        phys += KERNEL_HIGHER_HALF_BASE;
+    }
+    wasmos_ringbuf_t rb;
+    if (wasmos_ringbuf_attach(&rb, ptr_cast(void, phys), bytes) != 0) {
+        return;
+    }
+    uint32_t len = 0;
+    while (s[len]) {
+        len++;
+    }
+    if (len) {
+        (void)wasmos_ringbuf_write(&rb, s, len);
+    }
+}
+
+int klog_register_ring(uint32_t owner_context_id, uint32_t id) {
+    if (id == 0) {
+        return -1;
+    }
+    uint64_t base = 0;
+    uint64_t pages = 0;
+    if (mm_shared_get_phys(owner_context_id, id, &base, &pages) != 0 || pages == 0) {
+        return -1;
+    }
+    uint64_t region_bytes64 = pages * 0x1000ull;
+    if (region_bytes64 == 0 || region_bytes64 > 0xFFFFFFFFull) {
+        return -1;
+    }
+    uint32_t region_bytes = (uint32_t)region_bytes64;
+    uint64_t alias = base;
+    if (g_serial_high_alias_enabled && alias < KERNEL_HIGHER_HALF_BASE) {
+        alias += KERNEL_HIGHER_HALF_BASE;
+    }
+    /* Validate the region is an initialized ringbuf before retaining it, so a
+     * bad/foreign id cannot pin memory or wedge klog output. */
+    wasmos_ringbuf_t rb;
+    if (wasmos_ringbuf_attach(&rb, ptr_cast(void, alias), region_bytes) != 0) {
+        return -1;
+    }
+    if (mm_shared_retain(owner_context_id, id) != 0) {
+        return -1;
+    }
+    *serial_klog_ring_bytes_slot() = region_bytes;
+    /* Publish phys last: klog_ring_write reads phys first, so a non-zero phys
+     * always implies a valid bytes value is already visible. */
+    *serial_klog_ring_phys_slot() = base;
+    return 0;
+}
+
 static void serial_transmit(char c) {
     /* Always use the direct driver for output.  Per-character IPC to the
      * remote serial service overflows the depth-32 endpoint queue for any
@@ -476,6 +561,7 @@ void serial_write_unlocked(const char* s) {
     uint32_t* early_count = serial_early_log_count_slot();
     preempt_disable();
     serial_ring_write(s);
+    klog_ring_write(s);
     for (const char* p = s; *p; ++p) {
         if (*p == '\n') {
             serial_transmit('\r');

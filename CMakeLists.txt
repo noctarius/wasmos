@@ -1475,6 +1475,10 @@ set(INITFS_COPY_CMD
   COMMAND ${CMAKE_COMMAND} -E copy_directory
           ${CMAKE_SOURCE_DIR}/scripts/system/devmgr/rules
           ${BUILD_DIR}/esp/system/devmgr/rules
+  COMMAND ${CMAKE_COMMAND} -E rm -rf ${BUILD_DIR}/esp/system/keymaps
+  COMMAND ${CMAKE_COMMAND} -E copy_directory
+          ${CMAKE_SOURCE_DIR}/scripts/system/keymaps
+          ${BUILD_DIR}/esp/system/keymaps
   COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/system/fonts
   COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/system/utils
   COMMAND ${CMAKE_COMMAND} -E rm -f ${BUILD_DIR}/esp/system/fonts/noto_serif.ttf

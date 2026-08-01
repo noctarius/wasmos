@@ -469,9 +469,17 @@ enum {
     VT_IPC_GET_ACTIVE_TTY = 0x704,
     VT_IPC_REGISTER_WRITER = 0x705,
     VT_IPC_SET_MODE_REQ = 0x706,
+    /* serial driver -> vt: RX bytes for the serial-bound slot, packed like
+     * VT_IPC_WRITE_REQ (arg0[27:24]=byte_count, arg0[7:0]..arg3[7:0]=bytes). */
+    VT_IPC_SERIAL_INPUT_REQ = 0x707,
     VT_IPC_RESP = 0x780,
     VT_IPC_ERROR = 0x7FF
 };
+
+/* Serial driver subscription: a client (the vt service) registers to receive
+ * COM1 RX bytes as VT_IPC_SERIAL_INPUT_REQ pushes.  Mirrors the keyboard
+ * driver's subscribe/notify pattern. */
+enum { SERIAL_IPC_SUBSCRIBE_REQ = 0x502, SERIAL_IPC_SUBSCRIBE_RESP = 0x582 };
 
 enum { VT_INPUT_MODE_RAW = 0, VT_INPUT_MODE_CANONICAL = 1 << 0, VT_INPUT_MODE_ECHO = 1 << 1 };
 

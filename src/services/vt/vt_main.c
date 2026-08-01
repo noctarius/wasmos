@@ -18,6 +18,10 @@ static int32_t g_kbd_ep = -1;
 static int32_t g_fb_ep = -1;
 static vt_tty_t g_ttys[VT_MAX_TTYS];
 static uint32_t g_active_tty = 0;
+/* Slot bound to the serial console: RX from the serial driver is injected here,
+ * regardless of which slot is visible.  Default vt-1 (the system console). */
+static uint32_t g_serial_tty = 1;
+static int32_t g_serial_in_ep = -1;
 static int32_t g_tty_reader_ep[VT_MAX_TTYS] = {-1, -1, -1, -1};
 static int32_t g_tty_writer_ep[VT_MAX_TTYS] = {-1, -1, -1, -1};
 static uint32_t g_switch_generation = 1;
@@ -1294,6 +1298,19 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t arg1, int32
         (void)wasmos_ipc_send(g_kbd_ep, g_vt_ep, KBD_IPC_SUBSCRIBE_REQ, 1, 0, 0, 0, 0);
     }
 
+    /* Subscribe to the serial driver so COM1 RX is delivered as
+     * VT_IPC_SERIAL_INPUT_REQ pushes into the serial-bound slot.  The serial
+     * driver comes up before the vt, but retry a few times to cover boot skew. */
+    for (int attempt = 0; attempt < 8 && g_serial_in_ep < 0; ++attempt) {
+        g_serial_in_ep = wasmos_svc_lookup(proc_endpoint, g_vt_ep, "sin", 4);
+        if (g_serial_in_ep < 0) {
+            wasmos_sched_yield();
+        }
+    }
+    if (g_serial_in_ep >= 0) {
+        (void)wasmos_ipc_send(g_serial_in_ep, g_vt_ep, SERIAL_IPC_SUBSCRIBE_REQ, 1, 0, 0, 0, 0);
+    }
+
     if (g_fb_ep != -1) {
         vt_fb_console_mode(1);
     }
@@ -1349,6 +1366,25 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t arg1, int32
             }
             break;
         }
+
+        case VT_IPC_SERIAL_INPUT_REQ: {
+            /* COM1 RX from the serial driver -> the serial-bound slot's input
+             * queue (line discipline), regardless of which slot is visible.
+             * Bytes are packed like VT_IPC_WRITE_REQ. */
+            int32_t args[4] = {msg.arg0, msg.arg1, msg.arg2, msg.arg3};
+            int count = (args[0] >> 24) & 0xF;
+            if (count > 4)
+                count = 4;
+            args[0] &= 0xFF;
+            for (int i = 0; i < count; ++i) {
+                vt_input_handle_char(g_serial_tty, (uint8_t)(args[i] & 0xFF));
+            }
+            break;
+        }
+
+        case SERIAL_IPC_SUBSCRIBE_RESP:
+            /* Ack of our serial subscription; nothing to do. */
+            break;
 
         case VT_IPC_SET_ATTR_REQ: {
             int32_t tty_index = vt_tty_index_for_source(msg.source);

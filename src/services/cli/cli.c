@@ -1924,9 +1924,10 @@ static void cli_phase_init_step(int32_t proc_endpoint, int32_t home_tty_arg) {
         g_vt_client_endpoint = -1;
     }
     g_last_seen_active_tty = 0;
-    if (g_vt_endpoint >= 0 && g_home_tty == 1) {
-        (void)cli_switch_tty(1, 1, 0);
-    }
+    /* The CLI does NOT force the visible slot: the compositor owns framebuffer
+     * visibility (vt-0), and we read/write our own slot (vt-1) regardless of
+     * which slot is on screen.  Forcing a switch here also fought the compositor
+     * and could wedge the VT's switch path while the gfx overlay was locked. */
     if (g_home_tty == 1) {
         console_write("WAMOS CLI\ncommands: help, kmaps [all], ls, cd <path>, mount, script "
                       "<file>, source <file>, spawn <cmd>, export VAR=<value>, set VAR=<value>, "
@@ -1969,12 +1970,15 @@ static void cli_phase_read_step(void) {
     int32_t have_ch = 0;
     int32_t from_vt = 0;
     char ch = '\0';
-    /* Pull keyboard input from the VT only while we own the visible TTY.  When
-     * the compositor owns tty0 the keyboard is broadcast to every subscriber and
-     * the focused gfx window must receive keys exclusively, so we stay off the VT
-     * path and let serial (below) drive us.  Serial is an independent channel and
-     * is always serviced regardless of focus. */
-    if (g_vt_endpoint >= 0 && cli_is_foreground()) {
+    /* Refresh our view of the active TTY so console_write() routes output to the
+     * VT framebuffer when vt-1 is visible and to serial otherwise (the query is
+     * self-throttled).  We read the VT queue unconditionally regardless: serial
+     * RX for the serial-bound slot (vt-1) is injected by the VT no matter which
+     * slot is visible, and keyboard input only reaches our slot when it is the
+     * active one — so an unconditional read yields serial always and keyboard
+     * only when focused, without the CLI gating on focus itself. */
+    (void)cli_is_foreground();
+    if (g_vt_endpoint >= 0) {
         if (g_vt_read_backoff > 0) {
             g_vt_read_backoff--;
         } else {

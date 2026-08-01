@@ -623,8 +623,13 @@ without buffering or editing. Echo still applies if `input_echo = 1`.
 | Phase | Scope                                                        | Status   |
 |-------|--------------------------------------------------------------|----------|
 | 0     | Idle spin fixes (init/cli/font/fbpci) — CPU/mouse relief     | Shipped  |
-| 1     | Serial IRQ4 → `VT_IPC_SERIAL_INPUT_REQ` → serial-bound slot  | Proposed |
-| 2     | Push input (`VT_IPC_INPUT_NOTIFY`); event-driven CLI         | Proposed |
-| 3     | Single keyboard decoder in VT; compositor consumes key events; enriched `GFX_EVENT_KEY` | Proposed |
+| 1     | Serial IRQ4 → `VT_IPC_SERIAL_INPUT_REQ` → serial-bound slot  | Shipped  |
+| 2     | Push input (`VT_IPC_INPUT_NOTIFY`); event-driven CLI         | Shipped  |
+| 3     | Single keyboard decoder in VT (loadable `.kmap` layouts); compositor consumes `VT_IPC_KEY_FORWARD`; enriched `GFX_EVENT_KEY` (scancode) | Shipped  |
 | 4     | klog/console ring drained by VT into vt-1; FB = blit surface | Proposed |
-| 5     | Default visible vt-1; serial-bound selector; lazy CLI spawn  | Proposed |
+| 5     | Default visible vt-1; serial-bound selector; lazy CLI spawn; `vt_switch_tty` overlay-wedge fix | Proposed |
+
+Keymap layouts are data files under `system/keymaps/` (`us-qwerty.kmap`,
+`de-nodeadkeys.kmap`), loaded by the VT at init (built-in US fallback).  Runtime
+layout switching and extracting a dedicated `keymapd` service remain future work;
+the compositor's now-unused legacy keymap awaits a cleanup pass.

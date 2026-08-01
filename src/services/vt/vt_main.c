@@ -1322,6 +1322,24 @@ static void vt_set_input_mode(vt_tty_t* tty, uint8_t mode) {
     }
 }
 
+/* Forward a decoded key event to the compositor (the vt-0 key sink), which maps
+ * it to a GFX_EVENT_KEY for the focused window.  The vt is the single decoder,
+ * so we ship the decoded character plus the raw scancode and modifier state.
+ * arg0=ascii(keysym, 0 if none), arg1=scancode, arg2=flags
+ * (bit0=down, bit1=extended, bit2=shift, bit3=ctrl, bit4=altgr). */
+static void vt_forward_key_to_compositor(int32_t scancode, int32_t keyup, int32_t extended) {
+    int32_t sink = g_tty_reader_ep[0];
+    if (sink < 0) {
+        return; /* compositor has not claimed vt-0 yet */
+    }
+    uint8_t ascii = (!extended && scancode > 0 && scancode < 58)
+                        ? vt_keymap_decode((uint32_t)scancode)
+                        : 0;
+    int32_t flags = (keyup == 0 ? 1 : 0) | (extended ? 2 : 0) | (g_shift_down ? 4 : 0) |
+                    (g_ctrl_down ? 8 : 0) | (g_altgr_down ? 16 : 0);
+    (void)wasmos_ipc_send(sink, g_vt_ep, VT_IPC_KEY_FORWARD, 0, (int32_t)ascii, scancode, flags, 0);
+}
+
 static void vt_handle_key_notify(int32_t scancode, int32_t keyup, int32_t extended) {
     if (scancode == 0x1D) { /* Ctrl (left + extended right) */
         g_ctrl_down = keyup ? 0 : 1;
@@ -1336,17 +1354,28 @@ static void vt_handle_key_notify(int32_t scancode, int32_t keyup, int32_t extend
         return;
     }
 
-    if (keyup != 0) {
+    /* vt-0 is the compositor's slot: forward every event (press and release) to
+     * it after the vt-owned switch hotkeys.  This is the sole keyboard path for
+     * gfx apps; the compositor no longer subscribes to the keyboard driver. */
+    if (g_active_tty == 0) {
+        if (keyup == 0) {
+            if (scancode >= 0x3C && scancode <= 0x3E) { /* F2..F4 => tty1..tty3 */
+                (void)vt_switch_tty((uint32_t)(scancode - 0x3B));
+                return;
+            }
+            if (g_ctrl_down && g_shift_down && scancode >= 0x3B &&
+                scancode <= 0x3E) { /* Ctrl+Shift+F1..F4 => tty0..tty3 */
+                (void)vt_switch_tty((uint32_t)(scancode - 0x3B));
+                return;
+            }
+        }
+        vt_forward_key_to_compositor(scancode, keyup, extended);
         return;
     }
 
-    if (g_active_tty == 0) {
-        /* tty0 is read-only: allow direct escape back to shell ttys even if
-         * modifier state tracking is out of sync for a host/PS2 sequence. */
-        if (scancode >= 0x3C && scancode <= 0x3E) { /* F2..F4 => tty1..tty3 */
-            (void)vt_switch_tty((uint32_t)(scancode - 0x3B));
-            return;
-        }
+    /* Text slots: only key-down produces input. */
+    if (keyup != 0) {
+        return;
     }
 
     if (extended && g_active_tty != 0) {
@@ -1614,6 +1643,11 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t arg1, int32
         }
 
         case VT_IPC_SWITCH_TTY: {
+            if (msg.arg0 == 0 && msg.source >= 0) {
+                /* Whoever takes vt-0 (the compositor) becomes its key sink; the
+                 * vt forwards decoded keys there as VT_IPC_KEY_FORWARD. */
+                g_tty_reader_ep[0] = msg.source;
+            }
             int32_t sw = vt_switch_tty((uint32_t)msg.arg0);
             if (msg.source >= 0 && msg.request_id != 0) {
                 (void)vt_ipc_reply_retry(

@@ -556,16 +556,6 @@ fn refresh_input_subscriptions_runtime() void {
         g_mouse_endpoint = IPC_ENDPOINT_NONE;
     }
 
-    if (!g_kbd_subscribed) {
-        if (g_kbd_endpoint == IPC_ENDPOINT_NONE or !endpoint_alive(g_kbd_endpoint)) {
-            const ep = svc_lookup("kbd", g_runtime_lookup_req_id);
-            g_runtime_lookup_req_id +%= 1;
-            if (ep >= 0) g_kbd_endpoint = @bitCast(ep);
-        }
-        if (g_kbd_endpoint != IPC_ENDPOINT_NONE and subscribe_keyboard() != 0) {
-            g_kbd_subscribed = false;
-        }
-    }
     if (!g_mouse_subscribed) {
         if (g_mouse_endpoint == IPC_ENDPOINT_NONE or !endpoint_alive(g_mouse_endpoint)) {
             const ep = svc_lookup("mouse", g_runtime_lookup_req_id);
@@ -2960,25 +2950,20 @@ fn handle_ipc_dispatch(msg: *const c.nd_ipc_message_t) void {
         opcode = gfx_header_opcode(msg.arg3);
     }
     switch (opcode) {
-        c.KBD_IPC_KEY_NOTIFY => {
-            const scancode: u8 = @intCast(msg.arg0 & 0xFF);
-            const keyup = (msg.arg1 & 1) != 0;
-            const extended = (msg.arg2 & 1) != 0;
-            if (scancode == 0x2A or scancode == 0x36) {
-                g_shift_down = !keyup;
-            }
-            if (scancode == 0x38 and extended) {
-                g_altgr_down = !keyup;
-            }
+        c.VT_IPC_KEY_FORWARD => {
+            // The vt is the single scancode decoder now; it forwards decoded key
+            // events for vt-0.  arg0=ascii/keysym, arg1=scancode, arg2=flags
+            // (bit0=down, bit1=extended, bit2=shift, bit3=ctrl, bit4=altgr).
+            const ascii: u32 = msg.arg0 & 0xFF;
+            const scancode: u32 = msg.arg1 & 0xFF;
+            const flags: u32 = msg.arg2;
             if (g_focused_window_id != 0) {
                 if (window_find_by_id(g_focused_window_id)) |focused_idx| {
                     const focused = g_windows[focused_idx];
-                    const key_flags: u32 = (if ((msg.arg1 & 1) == 0) @as(u32, 1) else @as(u32, 0)) | ((msg.arg2 & 1) << 1);
-                    var key_code: u32 = 0;
-                    if (!extended) {
-                        key_code = scancode_to_ascii(scancode, g_shift_down, g_altgr_down);
-                    }
-                    event_push(focused.owner_endpoint, c.GFX_EVENT_KEY, key_code, key_flags, 0);
+                    // key_code low byte = ascii (backward compatible); high byte =
+                    // scancode so apps can read extended keys (arrows/function).
+                    const key_code: u32 = ascii | (scancode << 8);
+                    event_push(focused.owner_endpoint, c.GFX_EVENT_KEY, key_code, flags, 0);
                 }
             }
         },
@@ -3011,7 +2996,7 @@ fn register_ipc_handlers() i32 {
             }
         }
     }.onMessage;
-    if (sys.eventRegister(&g_ipc_loop, c.KBD_IPC_KEY_NOTIFY, cb, null) != 0) return -1;
+    if (sys.eventRegister(&g_ipc_loop, c.VT_IPC_KEY_FORWARD, cb, null) != 0) return -1;
     if (sys.eventRegister(&g_ipc_loop, c.MOUSE_IPC_MOVE_NOTIFY, cb, null) != 0) return -1;
     if (sys.eventRegister(&g_ipc_loop, c.GFX_IPC_CREATE_WINDOW, cb, null) != 0) return -1;
     if (sys.eventRegister(&g_ipc_loop, c.GFX_IPC_DESTROY_WINDOW, cb, null) != 0) return -1;
@@ -3063,9 +3048,8 @@ pub export fn initialize(driver_api: *c.wasmos_driver_api_t, module_count: c_int
         logMsg("[gfx] fb endpoint unavailable\n");
     } else {
         _ = lookup_vt_endpoint();
-        if (lookup_kbd_endpoint() == 0) {
-            _ = subscribe_keyboard();
-        }
+        // Keyboard is routed through the vt (we are the vt-0 key sink, registered
+        // when we take vt-0); no direct keyboard-driver subscription.
         if (lookup_mouse_endpoint() == 0) {
             _ = subscribe_mouse();
         }

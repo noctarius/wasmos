@@ -476,6 +476,10 @@ enum {
     /* vt -> a slot's registered reader: input is available on your slot; drain
      * it with VT_IPC_READ_REQ.  Fire-and-forget (request_id 0), arg0=slot. */
     VT_IPC_INPUT_NOTIFY = 0x781,
+    /* vt -> compositor (the vt-0 key sink): a decoded key event for the focused
+     * window.  Fire-and-forget.  arg0=ascii/keysym (0 if none), arg1=scancode,
+     * arg2=flags (bit0=down, bit1=extended, bit2=shift, bit3=ctrl, bit4=altgr). */
+    VT_IPC_KEY_FORWARD = 0x782,
     VT_IPC_ERROR = 0x7FF
 };
 

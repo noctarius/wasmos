@@ -151,6 +151,18 @@ static uint16_t vt_input_q_next(uint16_t v) {
     return (uint16_t)((v + 1u) & 0xFFu);
 }
 
+/* Wake a slot's registered reader so it drains the input queue (push model),
+ * instead of the reader polling VT_IPC_READ_REQ. */
+static void vt_notify_reader(uint32_t tty_index) {
+    if (tty_index >= VT_MAX_TTYS) {
+        return;
+    }
+    int32_t reader = g_tty_reader_ep[tty_index];
+    if (reader >= 0) {
+        (void)wasmos_ipc_send(reader, g_vt_ep, VT_IPC_INPUT_NOTIFY, 0, (int32_t)tty_index, 0, 0, 0);
+    }
+}
+
 static int vt_input_q_push(vt_tty_t* tty, uint8_t ch) {
     if (!tty) {
         return -1;
@@ -159,8 +171,15 @@ static int vt_input_q_push(vt_tty_t* tty, uint8_t ch) {
     if (next == tty->input_q_head) {
         return -1;
     }
+    /* Edge-triggered: only notify on the empty -> non-empty transition.  The
+     * reader drains fully before blocking again, so one wake per burst suffices;
+     * a later arrival after the queue drains re-triggers. */
+    int was_empty = (tty->input_q_head == tty->input_q_tail);
     tty->input_q[tty->input_q_tail] = ch;
     tty->input_q_tail = next;
+    if (was_empty) {
+        vt_notify_reader((uint32_t)(tty - g_ttys));
+    }
     return 0;
 }
 

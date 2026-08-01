@@ -473,6 +473,9 @@ enum {
      * VT_IPC_WRITE_REQ (arg0[27:24]=byte_count, arg0[7:0]..arg3[7:0]=bytes). */
     VT_IPC_SERIAL_INPUT_REQ = 0x707,
     VT_IPC_RESP = 0x780,
+    /* vt -> a slot's registered reader: input is available on your slot; drain
+     * it with VT_IPC_READ_REQ.  Fire-and-forget (request_id 0), arg0=slot. */
+    VT_IPC_INPUT_NOTIFY = 0x781,
     VT_IPC_ERROR = 0x7FF
 };
 

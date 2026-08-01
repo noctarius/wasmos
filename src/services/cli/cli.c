@@ -32,13 +32,12 @@ static int32_t g_home_tty = 1;
 static int32_t g_last_seen_active_tty = 1;
 static uint32_t g_vt_switch_generation = 1;
 static int32_t g_request_id = 1;
-/* Select set over the CLI's own endpoints, used to park (with a short timeout)
- * when idle instead of yield-spinning.  A backgrounded CLI (compositor owns
- * tty0) would otherwise spin cli_phase_prompt/read_step forever and peg a CPU,
- * starving the compositor.  The timeout also paces the serial (COM1) poll, which
- * has no IPC wake, so serial input still arrives within one interval. */
+/* Select set over the CLI's own endpoints, used to park when idle instead of
+ * yield-spinning.  Input now arrives as a VT_IPC_INPUT_NOTIFY push on our VT
+ * client endpoint (in this set), so the wait wakes immediately on input; the
+ * timeout is only a liveness/foreground-refresh backstop. */
 static int32_t g_idle_select = -1;
-#define CLI_IDLE_POLL_MS 15
+#define CLI_IDLE_WAIT_MS 1000
 static int32_t g_pending_req = -1;
 static char g_cwd[64] = "/";
 static int32_t g_pending_kind = 0;
@@ -1937,12 +1936,11 @@ static void cli_phase_init_step(int32_t proc_endpoint, int32_t home_tty_arg) {
     g_phase = CLI_PHASE_PROMPT;
 }
 
-/* Park until an endpoint in the idle set has traffic or the poll interval
- * elapses, instead of yield-spinning.  Serial (COM1) has no IPC wake, so the
- * timeout is what re-checks it; IPC (vt/reply) wakes us immediately. */
+/* Block until input (a VT_IPC_INPUT_NOTIFY push) or a reply arrives on one of the
+ * CLI's endpoints, or the backstop interval elapses.  No yield-spin, no poll. */
 static void cli_idle_wait(void) {
     if (g_idle_select >= 0) {
-        (void)wasmos_ipc_select_wait_timeout(g_idle_select, CLI_IDLE_POLL_MS);
+        (void)wasmos_ipc_select_wait_timeout(g_idle_select, CLI_IDLE_WAIT_MS);
     } else {
         (void)wasmos_sched_yield();
     }
@@ -1984,10 +1982,11 @@ static void cli_phase_read_step(void) {
         } else {
             have_ch = cli_vt_read_char(&ch);
             if (have_ch < 0) {
-                console_write("[cli] vt read failed; serial fallback\n");
-                g_vt_endpoint = -1;
-                g_vt_client_endpoint = -1;
+                /* Transient VT read error: retry after a short backoff.  All
+                 * input (keyboard and serial) now arrives through the VT, so
+                 * there is no serial-console fallback to drop to. */
                 have_ch = 0;
+                g_vt_read_backoff = 7;
             } else if (have_ch == 0) {
                 g_vt_read_backoff = 7;
             } else {
@@ -1996,15 +1995,7 @@ static void cli_phase_read_step(void) {
         }
     }
     if (!have_ch) {
-        int32_t rc = wasmos_console_read(addr_cast(int32_t, &ch), 1);
-        if (rc < 0) {
-            cli_fail_and_stall("[cli] console read failed\n");
-        }
-        if (rc > 0) {
-            have_ch = 1;
-        }
-    }
-    if (!have_ch) {
+        /* Nothing queued: block until the VT pushes VT_IPC_INPUT_NOTIFY. */
         cli_idle_wait();
         return;
     }

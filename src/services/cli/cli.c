@@ -54,7 +54,6 @@ static char g_history_scratch[sizeof(g_line)];
 static int32_t g_history_scratch_len = 0;
 static uint8_t g_history_have_scratch = 0;
 static uint8_t g_esc_state = 0;
-static uint8_t g_vt_read_backoff = 0;
 static uint8_t g_fg_query_backoff = 0;
 static cli_env_var_t* g_env = 0;
 static wasmos_script_state_t g_cli_script_state;
@@ -1977,21 +1976,17 @@ static void cli_phase_read_step(void) {
      * only when focused, without the CLI gating on focus itself. */
     (void)cli_is_foreground();
     if (g_vt_endpoint >= 0) {
-        if (g_vt_read_backoff > 0) {
-            g_vt_read_backoff--;
-        } else {
-            have_ch = cli_vt_read_char(&ch);
-            if (have_ch < 0) {
-                /* Transient VT read error: retry after a short backoff.  All
-                 * input (keyboard and serial) now arrives through the VT, so
-                 * there is no serial-console fallback to drop to. */
-                have_ch = 0;
-                g_vt_read_backoff = 7;
-            } else if (have_ch == 0) {
-                g_vt_read_backoff = 7;
-            } else {
-                from_vt = 1;
-            }
+        /* Push model: read whenever we are woken (by VT_IPC_INPUT_NOTIFY or the
+         * backstop), draining the queue one char per loop iteration until empty.
+         * No poll backoff — a stale backoff would make us skip the read that a
+         * notify just woke us for, stalling input until the 1s backstop. */
+        have_ch = cli_vt_read_char(&ch);
+        if (have_ch < 0) {
+            /* Transient VT read error; treat as empty and retry on next wake.
+             * All input arrives through the VT now — no serial fallback. */
+            have_ch = 0;
+        } else if (have_ch > 0) {
+            from_vt = 1;
         }
     }
     if (!have_ch) {

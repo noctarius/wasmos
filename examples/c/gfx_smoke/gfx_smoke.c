@@ -702,6 +702,18 @@ int main(int argc, char** argv) {
                         }
                         closed3 = 1;
                     }
+                } else if (ev.arg1 == GFX_EVENT_KEY) {
+                    /* Echo key events to serial so keyboard-delivery tests have
+                     * an observable channel in the steady-state wait loop (the
+                     * animation-phase poll_gfx_events_once path is long gone by
+                     * the time a test can inject keys). */
+                    char kmsg[96];
+                    int kn = snprintf(kmsg, sizeof(kmsg),
+                                      "[test] gfx smoke event key sc=%d flags=%d\n", ev.arg2,
+                                      ev.arg3);
+                    if (kn > 0) {
+                        (void)putsn(kmsg, (size_t)kn);
+                    }
                 } else if (ev.arg1 == GFX_EVENT_RESIZE) {
                     const int32_t rw = (int32_t)(ev.arg3 & 0xFFFF);
                     const int32_t rh = (int32_t)((ev.arg3 >> 16) & 0xFFFF);

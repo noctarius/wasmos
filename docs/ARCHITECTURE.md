@@ -71,7 +71,7 @@ in-kernel scheduler rather than an optional mode.
 - [Device Manager and Bus Enumeration](architecture/16-device-manager-and-bus-enumeration.md)
 - [Console I/O and Character Device](architecture/17-console-io-and-character-device.md)
 - [Filesystem Stack](architecture/18-filesystem-stack.md)
-- [Virtual Terminal](architecture/19-virtual-terminal.md)
+- [Virtual Terminal — I/O Multiplexer](architecture/19-virtual-terminal.md) - keyboard/serial input routing, slot mux, klog-to-vt-1 (redesign in phases)
 - [Graphics, Framebuffer, and Compositor](architecture/20-graphics-framebuffer-and-compositor.md)
 - [Virtual Input Testing via Virtio-Serial](architecture/21-virtual-input-testing-via-virtio-serial.md)
 - [Networking via Virtio-Net and User-Space Stack](architecture/22-networking-virtio-net-and-stack.md)

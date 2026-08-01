@@ -1,36 +1,97 @@
-## Virtual Terminal Service
+## Virtual Terminal Service — I/O Multiplexer
 
-> **Documentation status: Implemented reference with explicitly deferred VT
-> extensions.**
+> **Documentation status: Mixed reference and proposal.** The escape parser,
+> line discipline, cell/TTY state, framebuffer cell IPC, and TTY switching are
+> implemented reference. The multiplexer model (slot roles, two selectors,
+> keyboard-through-VT single decoder, serial-over-IRQ into the VT, push-based
+> input notifications, and klog routed to vt-1) is a redesign landing in phases;
+> each redesign section is tagged **Shipped** or **Proposed (phase N)**, and the
+> Rollout section tracks status.
 
-This document describes the VT subsystem: the `vt` WASM service, the
-framebuffer driver's text-cell IPC interface, keyboard routing, multi-TTY
-switching, escape sequence parsing, and the line discipline.
+This document describes the `vt` WASM service as the system's single
+input/output multiplexer: the framebuffer driver's text-cell IPC, keyboard and
+serial input routing, multi-slot switching, escape-sequence parsing, and the
+line discipline. Implementation lives in `src/services/vt/vt_main.c`,
+`src/services/vt/vt_types.h`, the framebuffer drivers
+(`src/drivers/framebuffer_pci/framebuffer_pci_native.c`,
+`src/drivers/framebuffer/framebuffer_native.c`), the serial driver
+(`src/drivers/serial/serial.ts`), the CLI (`src/services/cli/cli.c`), and the
+compositor (`src/services/gfx_compositor/gfx_compositor.zig`). See also
+`17-console-io-and-character-device.md` (console hostcalls),
+`20-graphics-framebuffer-and-compositor.md` (compositor),
+`21-virtual-input-testing-via-virtio-serial.md` (input drivers), and
+`09-process-and-ipc.md` (select-set / blocking primitives).
 
 ---
 
-### Component Split
+### Role: the VT is the sole I/O multiplexer
+
+Every text console's input and output is routed through a VT **slot**. A slot is
+rendered to the framebuffer only when it is the *visible* slot, and mirrored to
+serial only when it is the *serial-bound* slot. Keyboard and serial input both
+flow into the VT, which routes them to the active slot's reader. This makes the
+VT the single point that owns keymap/modifier state, framebuffer arbitration,
+and the serial console binding.
+
+#### Slot model (Proposed — phase 5)
+
+| Slot     | Role                                                                   |
+|----------|------------------------------------------------------------------------|
+| `vt-0`   | GUI — owned by the compositor. No CLI. Not a text slot.                |
+| `vt-1`   | System console. Default *visible* and default *serial-bound* slot.     |
+| `vt-2..N`| Additional text consoles, each owning its own CLI (spawned lazily).    |
+
+`VT_MAX_TTYS` is 4 today (vt-0..vt-3).
+
+**Shipped model (being superseded):** today `tty0` is the serial-mirrored,
+read-only system console (`vt_put_char_tty0` → `wasmos_console_write`) which the
+compositor overlays via the framebuffer overlay lock; `tty1..tty3` are text VTs.
+Phase 5 moves the serial-mirrored console to **vt-1** and makes **vt-0** a pure
+GUI slot, so the framebuffer is exclusively either the compositor (vt-0) or the
+VT's text render of one vt-x.
+
+#### Two independent selectors (Proposed — phase 5)
+
+| Selector           | Default | Set by                                            |
+|--------------------|---------|---------------------------------------------------|
+| *visible* slot     | `vt-1`  | keyboard hotkeys / `tty N` issued on the keyboard  |
+| *serial-bound* slot| `vt-1`  | `VT_IPC_BIND_SERIAL_REQ` / `tty N` issued on serial |
+
+The compositor requests the visible slot switch to `vt-0` when the first UI app
+starts (`try_switch_to_gfx_tty` → `VT_IPC_SWITCH_TTY 0`) and back to a text slot
+when the last window closes. `tty N` retargets whichever channel issued it:
+issued on the keyboard it changes the visible slot; issued on serial it rebinds
+the serial-bound slot. `tty 0` on serial is rejected (the GUI cannot render over
+a serial line). vt-1 mirrors to serial even while vt-0 is visible.
+
+#### Per-slot output fan-out (Proposed — phase 4/5)
+
+Each slot's output goes to: its own cell/scrollback buffer **always**; the
+framebuffer **iff** it is the visible slot; serial **iff** it is the
+serial-bound slot.
+
+---
+
+### Component topology
 
 ```
-keyboard driver ──KBD_IPC_KEY_NOTIFY──▶ vt (WASM service)
-                                         │  escape parser
-                                         │  TTY mux
-                                         │  line discipline
-                                         │
-          ┌──────────────────────────────┘
-          │  FBTEXT_IPC_CELL_WRITE_REQ / CURSOR_SET_REQ
-          │  FBTEXT_IPC_SCROLL_REQ / CLEAR_REQ
-          │  FBTEXT_IPC_CONSOLE_MODE_REQ / GEOMETRY_REQ
-          ▼
-  framebuffer_pci driver (native ELF)
-  cell grid · font rasterization · direct pixel writes
-
-kernel/services ──VT_IPC_WRITE_REQ──▶ vt
+keyboard driver ─KBD_IPC_KEY_NOTIFY─▶ vt ◀─VT_IPC_SERIAL_INPUT_REQ─ serial driver (IRQ4)
+                                       │  single scancode decoder
+                                       │  slot mux · escape parser · line discipline
+        ┌──────────────┬───────────────┼───────────────┐
+        │ VT_IPC_KEY_  │ VT_IPC_INPUT_ │ FBTEXT_IPC_*   │ VT_IPC_WRITE_REQ (in)
+        │ FORWARD      │ NOTIFY (push) │ (cell/cursor)  │
+        ▼              ▼               ▼                └── kernel / CLI / services
+   gfx-compositor    CLI (awaits)   framebuffer driver
+   (vt-0 keys)       drains slot    (blit surface)
+                                       ▲
+   kernel console ring ────────────────┘  (klog → vt-1, phase 4)
 ```
 
 `vt` is the sole owner of the framebuffer driver's text-cell endpoint. Clients
-write bytes to `vt`; `vt` parses escapes, updates per-TTY cell state, and
-forwards cell/cursor/scroll operations to the framebuffer driver.
+write bytes with `VT_IPC_WRITE_REQ`; `vt` parses escapes, updates per-slot cell
+state, and forwards cell/cursor/scroll operations to the framebuffer driver only
+for the visible slot.
 
 ---
 
@@ -93,7 +154,7 @@ typedef struct {
 
 | Constant                    | Value | Meaning                                    |
 |-----------------------------|-------|--------------------------------------------|
-| `VT_MAX_TTYS`               | 4     | Total TTY count (tty0..tty3)               |
+| `VT_MAX_TTYS`               | 4     | Total slot count (vt-0..vt-3)              |
 | `VT_COLS_DEFAULT`           | 80    | Default columns (used when FB unavailable) |
 | `VT_ROWS_DEFAULT`           | 25    | Default rows                               |
 | `VT_MAX_COLS`               | 160   | Maximum columns after geometry clamp       |
@@ -111,44 +172,25 @@ typedef struct {
 | `g_vt_ep`             | -1   | VT's own IPC endpoint                             |
 | `g_fb_ep`             | -1   | Framebuffer driver endpoint                       |
 | `g_kbd_ep`            | -1   | Keyboard driver endpoint                          |
-| `g_active_tty`        | 0    | Currently displayed TTY index                     |
-| `g_tty_writer_ep[4]`  | -1   | Registered writer endpoint per TTY                |
-| `g_tty_reader_ep[4]`  | -1   | Registered reader endpoint per TTY                |
-| `g_switch_generation` | 1    | Monotonic counter, incremented on each TTY switch |
-| `g_switch_barrier`    | 0    | Set to 1 during an in-progress TTY switch         |
+| `g_active_tty`        | 0→1  | Visible slot index (default becomes 1 in phase 5) |
+| `g_serial_tty`        | 1    | Serial-bound slot index (proposed, phase 5)       |
+| `g_tty_writer_ep[4]`  | -1   | Registered writer endpoint per slot               |
+| `g_tty_reader_ep[4]`  | -1   | Registered reader endpoint per slot (push target) |
+| `g_switch_generation` | 1    | Monotonic counter, incremented on each switch     |
+| `g_switch_barrier`    | 0    | Set to 1 during an in-progress switch             |
 | `g_ctrl_down`         | 0    | Ctrl modifier state                               |
 | `g_shift_down`        | 0    | Shift modifier state                              |
+| `g_altgr_down`        | 0    | AltGr modifier state (proposed, phase 3)          |
 | `g_vt_cols`           | 80   | Active column count (updated from FB geometry)    |
 | `g_vt_rows`           | 25   | Active row count (updated from FB geometry)       |
 
 ---
 
-### Initialization Sequence
-
-`initialize(proc_endpoint, arg1, arg2, arg3)` in `src/services/vt/vt_main.c`:
-
-1. `wasmos_ipc_create_endpoint()` → `g_vt_ep`
-2. `wasmos_svc_register(proc_endpoint, g_vt_ep, "vt", 1)`
-3. `wasmos_svc_lookup(proc_endpoint, g_vt_ep, "fb", 2)` → `g_fb_ep`
-4. `wasmos_svc_lookup(proc_endpoint, g_vt_ep, "kbd", 3)` → `g_kbd_ep`
-5. `vt_query_geometry()` — sends `FBTEXT_IPC_GEOMETRY_REQ`; clamps result to
-   `[40, VT_MAX_COLS]` × `[16, VT_MAX_ROWS]`
-6. `vt_heap_init()` + `vt_alloc_tty_cells()` — bump-allocate cell grids for
-   all 4 TTYs from WASM heap (`__heap_base`, grows via `wasm_memory_grow`)
-7. If allocation fails: fall back to `VT_COLS_DEFAULT × VT_ROWS_DEFAULT` and
-   retry; returns -1 if fallback also fails
-8. `vt_init_ttys()` — zero all TTY state; `g_active_tty=0`,
-   `g_switch_generation=1`, `g_switch_barrier=0`
-9. If `g_kbd_ep >= 0`: send `KBD_IPC_SUBSCRIBE_REQ`
-10. If `g_fb_ep >= 0`: `vt_fb_console_mode(1)` — enable console ring drain
-11. `wasmos_sys_notify_ready(proc_endpoint, g_vt_ep)`
-12. Enter main `wasmos_ipc_recv` loop
-
----
-
 ### Framebuffer Driver IPC Interface
 
-`vt` is the only caller of the framebuffer driver's text-cell endpoint.
+`vt` is the only caller of the framebuffer driver's text-cell endpoint. Under
+the redesign the framebuffer driver is a pure blit surface: it renders the cells
+`vt` sends and (phase 4) no longer drains the kernel console ring itself.
 
 | Opcode                          | Value | Arguments                                            |
 |---------------------------------|-------|------------------------------------------------------|
@@ -167,49 +209,70 @@ typedef struct {
 
 Cell color packing: `arg3 = (fg & 0x0F) << 8 | (bg & 0x0F)`.
 
-`FBTEXT_IPC_CONSOLE_MODE_REQ` toggles whether the framebuffer driver drains
-the kernel console ring (the shared-memory path fed by `serial_write`). The VT
-service disables ring draining before replaying a non-tty0 virtual terminal and
-re-enables it when switching back to tty0.
+`FBTEXT_IPC_CONSOLE_MODE_REQ` toggles whether the framebuffer driver drains the
+kernel console ring. **Shipped:** the framebuffer driver owns the ring drain and
+`vt` toggles it around switches. **Proposed (phase 4):** the *VT* drains the ring
+into vt-1 and the framebuffer driver stops draining entirely, becoming a blit
+surface only; `FBTEXT_IPC_GFX_OVERLAY_REQ` still gates whether the compositor or
+the VT owns the framebuffer.
 
 ---
 
 ### VT Public IPC Interface
 
-| Opcode                   | Value  | Caller → vt                                            |
-|--------------------------|--------|--------------------------------------------------------|
-| `VT_IPC_WRITE_REQ`       | 0x700  | Write up to 4 bytes: arg0–arg3, each zero-terminated   |
-| `VT_IPC_READ_REQ`        | 0x701  | Request next input byte; arg0=tty index                |
-| `VT_IPC_SET_ATTR_REQ`    | 0x702  | Set fg/bg/attr; arg0=fg, arg1=bg, arg2=attr            |
-| `VT_IPC_SWITCH_TTY`      | 0x703  | Switch active TTY; arg0=tty index                      |
-| `VT_IPC_GET_ACTIVE_TTY`  | 0x704  | Query; reply: arg0=switch_generation, arg1=active_tty  |
-| `VT_IPC_REGISTER_WRITER` | 0x705  | Register caller as writer; arg0=tty index              |
-| `VT_IPC_SET_MODE_REQ`    | 0x706  | Set input mode bits; arg0=mode flags                   |
-| `VT_IPC_RESP`            | 0x780  | Success response                                       |
-| `VT_IPC_ERROR`           | 0x7FF  | Error response                                         |
+| Opcode                    | Value  | Caller → vt / vt → peer                                |
+|---------------------------|--------|--------------------------------------------------------|
+| `VT_IPC_WRITE_REQ`        | 0x700  | Write up to 4 bytes: arg0–arg3, each zero-terminated   |
+| `VT_IPC_READ_REQ`         | 0x701  | Drain next input byte; arg0=slot index                 |
+| `VT_IPC_SET_ATTR_REQ`     | 0x702  | Set fg/bg/attr; arg0=fg, arg1=bg, arg2=attr            |
+| `VT_IPC_SWITCH_TTY`       | 0x703  | Switch visible slot; arg0=slot index                   |
+| `VT_IPC_GET_ACTIVE_TTY`   | 0x704  | Query; reply: arg0=switch_generation, arg1=active_tty  |
+| `VT_IPC_REGISTER_WRITER`  | 0x705  | Register caller as writer; arg0=slot index             |
+| `VT_IPC_SET_MODE_REQ`     | 0x706  | Set input mode bits; arg0=mode flags                   |
+| `VT_IPC_SERIAL_INPUT_REQ` | 0x707  | *(phase 1)* serial driver → vt: RX bytes for bound slot |
+| `VT_IPC_BIND_SERIAL_REQ`  | 0x708  | *(phase 5)* bind serial to slot; arg0=slot (≥1)        |
+| `VT_IPC_RESP`             | 0x780  | Success response                                       |
+| `VT_IPC_INPUT_NOTIFY`     | 0x781  | *(phase 2)* vt → reader: input available on your slot  |
+| `VT_IPC_KEY_FORWARD`      | 0x782  | *(phase 3)* vt → compositor: key event for vt-0        |
+| `VT_IPC_ERROR`            | 0x7FF  | Error response                                          |
 
 #### VT_IPC_WRITE_REQ
 
-Bytes are packed one per arg word (arg0..arg3). Processing stops at the first
-zero byte. Kernel-originated writes (source < 0) target `g_active_tty`
-unconditionally and bypass ownership and generation checks. Client writes from
-registered writers are validated against `g_switch_generation`; writes with a
-stale generation are dropped silently.
+Bytes are packed one per arg word (arg0..arg3), high nibble of arg0 optionally
+carrying a byte count; processing stops at the first zero byte. Kernel-originated
+writes (source < 0) target `g_active_tty` unconditionally and bypass ownership
+and generation checks. Client writes from registered writers are validated
+against `g_switch_generation`; writes with a stale generation are dropped
+silently.
 
 #### VT_IPC_READ_REQ Response
 
 - `VT_IPC_RESP`, arg0=0, arg1=byte: byte available
 - `VT_IPC_RESP`, arg0=1, arg1=0: queue empty
 
-#### VT_IPC_REGISTER_WRITER Response
+The first client to read from a slot claims its reader slot
+(`g_tty_reader_ep[slot]`). Under the redesign readers are notified via
+`VT_IPC_INPUT_NOTIFY` when input arrives and drain with `VT_IPC_READ_REQ`
+(no polling).
 
-- `VT_IPC_RESP`, arg0=g_switch_generation, arg1=tty_id: registered
-- Conflicts: previous owner is replaced (recovery semantics, not rejection)
+#### VT_IPC_SERIAL_INPUT_REQ *(Proposed — phase 1)*
 
-#### VT_IPC_SWITCH_TTY Response
+The serial driver forwards COM1 RX bytes to `vt`, packed like
+`VT_IPC_WRITE_REQ`. `vt` feeds them into the **serial-bound slot** (`g_serial_tty`,
+default 1) through the same line discipline as keyboard input.
 
-- `VT_IPC_RESP`, arg0=g_switch_generation, arg1=g_active_tty: switched
-- `VT_IPC_ERROR`, arg0=error_code, arg1=g_active_tty: failed
+#### VT_IPC_INPUT_NOTIFY *(Proposed — phase 2)*
+
+Fire-and-forget push from `vt` to `g_tty_reader_ep[slot]` when a byte is enqueued
+for that slot. The reader (a CLI) blocks on its VT endpoint and drains via
+`VT_IPC_READ_REQ` on receipt. Replaces the CLI's poll of `VT_IPC_READ_REQ`.
+
+#### VT_IPC_KEY_FORWARD *(Proposed — phase 3)*
+
+When `vt-0` is the active slot, `vt` forwards a decoded key event (keysym +
+modifier bitmask + up/down + extended) to the compositor instead of injecting
+bytes into a text slot. The compositor no longer subscribes to the keyboard
+driver directly.
 
 #### Input Mode Flags
 
@@ -217,7 +280,64 @@ stale generation are dropped silently.
 |---------------------------|-------|-----------------------------------------|
 | `VT_INPUT_MODE_RAW`       | 0     | Raw; bytes pass directly to input queue |
 | `VT_INPUT_MODE_CANONICAL` | 1<<0  | Line-buffered; commit on Enter          |
-| `VT_INPUT_MODE_ECHO`      | 1<<1  | Echo input back to the TTY cell grid    |
+| `VT_INPUT_MODE_ECHO`      | 1<<1  | Echo input back to the slot cell grid   |
+
+---
+
+### Input Routing
+
+#### Keyboard → VT → active slot *(single decoder; phase 3)*
+
+The VT is the sole scancode decoder. `KBD_IPC_KEY_NOTIFY` (fire-and-forget) is
+decoded once into a canonical key event using a 3-layer keymap
+(`plain`/`shift`/`altgr`) plus modifier state (Ctrl/Shift/AltGr), up/down, and
+the extended flag. The key event is then projected per active slot:
+
+- **vt-0:** forwarded to the compositor as `VT_IPC_KEY_FORWARD`.
+- **vt-x (text):** run through the line discipline into bytes / escape sequences,
+  then the reader is push-notified.
+
+**Shipped today:** both the VT and the compositor subscribe to the keyboard
+driver and each decode scancodes independently (two keymaps that can drift). The
+CLI voluntarily stops pulling VT input when it is background (`cli_is_foreground`)
+to avoid double-consume. Phase 3 removes the compositor's subscription/keymap and
+the `cli_is_foreground` read gate.
+
+#### Serial → VT → serial-bound slot *(phase 1/2)*
+
+The serial driver (`serial.ts`) enables the COM1 RX interrupt, routes IRQ4 to its
+endpoint via `irq_register(ctx, 4, ep)` (the model `keyboard.ts` uses for IRQ1),
+blocks on `ipc_recv`, and on each `IPC_IRQ_EVENT_TYPE (0xFF00)` reads the ready RX
+bytes, forwards them to `vt` as `VT_IPC_SERIAL_INPUT_REQ`, and calls `irq_ack(4)`.
+The kernel keeps COM1 **TX** for klog/panic but stops consuming COM1 RX for CLI
+input.
+
+**Shipped today:** COM1 RX is consumed by the kernel `console_read` syscall
+(`serial_read_char` → remote serial driver if registered, else direct
+`com1_serial_read_char`), which the CLI polls. Phases 1–2 move serial input onto
+the IRQ→VT path and make the CLI event-driven.
+
+---
+
+### Output Routing
+
+- **Per-slot fan-out (phase 4/5):** cell/scrollback buffer always; framebuffer
+  iff the slot is visible (`render_now = (slot == g_active_tty) && !g_switch_barrier`);
+  serial iff the slot is serial-bound.
+- **Framebuffer exclusivity (phase 5):** the framebuffer is owned by exactly one
+  of {compositor (vt-0), the VT's text render of one vt-x}. The compositor takes
+  it by asking `vt` to switch to vt-0 and by locking the overlay
+  (`FBTEXT_IPC_GFX_OVERLAY_REQ 1`); it releases by switching back to a text slot.
+  Single-owner-per-frame removes the competing-writer flicker.
+- **klog (phase 4):** normal kernel log text reaches vt-1 by the VT draining the
+  kernel **console ring** (`console_ring_t`, `src/kernel/include/console_ring.h`,
+  mapped via `shmem_map(console_ring_id())`) into vt-1's buffer, rendered when
+  vt-1 is visible. klog additionally always writes COM1 **TX** directly, so serial
+  shows it regardless of the visible slot.
+- **Panic bypass:** panic/fault output writes COM1 directly (`serial_printf_unlocked`)
+  and paints the framebuffer directly (`src/kernel/framebuffer.c`,
+  `panic_render_screen`), bypassing the ring and the VT — the kernel may be in an
+  illegal state. This is unchanged by the redesign.
 
 ---
 
@@ -229,15 +349,14 @@ stale generation are dropped silently.
 | `KBD_IPC_SUBSCRIBE_RESP` | 0x880 | keyboard → vt        | Acknowledgment                           |
 | `KBD_IPC_KEY_NOTIFY`     | 0x801 | keyboard → vt        | arg0=scancode, arg1=keyup, arg2=extended |
 
-`KBD_IPC_KEY_NOTIFY` is fire-and-forget (`request_id = 0`). Multiple
-subscribers can coexist; the keyboard driver does not know what `vt` does with
-the event.
+`KBD_IPC_KEY_NOTIFY` is fire-and-forget (`request_id = 0`). After phase 3 the VT
+is the sole subscriber.
 
 ---
 
 ### Escape Sequence Parser
 
-The parser state machine operates per-TTY on each byte fed by `vt_process_byte`.
+The parser state machine operates per-slot on each byte fed by `vt_process_byte`.
 
 ```
 ESC_NORMAL ──(0x1B)──▶ ESC_ESC ──('[')──▶ ESC_CSI ──(final 0x40–0x7E)──▶ ESC_NORMAL
@@ -294,7 +413,7 @@ Multiple SGR params in a single `m` sequence are processed left to right.
 
 ### Character Rendering
 
-`vt_put_char_virtual` handles special characters for tty1..tty3:
+`vt_put_char_virtual` handles special characters for text slots:
 
 | Character | Action                                                     |
 |-----------|------------------------------------------------------------|
@@ -304,41 +423,41 @@ Multiple SGR params in a single `m` sequence are processed left to right.
 | `\t`      | advance to next multiple of 8 (recursive space expansion)  |
 | other     | store in cell; advance cursor; wrap and scroll at edge     |
 
-For tty0: `vt_put_char_tty0` tracks the cursor for cell state but routes
-output through `wasmos_console_write` (serial + console ring) instead of
-directly sending cell writes to the framebuffer.
+**Shipped:** `vt_put_char_tty0` tracks the cursor but routes tty0 output through
+`wasmos_console_write` (serial + console ring). Phase 4/5 relocate the
+serial-mirrored console to vt-1's fan-out; vt-0 becomes GUI-only.
 
-Scroll: `vt_scroll_up` copies rows 1..N-1 down over rows 0..N-2, clears the
-last row, and sends `FBTEXT_IPC_SCROLL_REQ(n=1)` to the framebuffer driver.
+Scroll: `vt_scroll_up` copies rows 1..N-1 down over rows 0..N-2, clears the last
+row, and sends `FBTEXT_IPC_SCROLL_REQ(n=1)` to the framebuffer driver.
 
 ---
 
 ### TTY Switching
 
-`vt_switch_tty(tty_index)` in `vt_main.c`:
+`vt_switch_tty(slot_index)` in `vt_main.c`:
 
-1. If `g_fb_ep < 0` (framebuffer unavailable): logical switch only —
-   increment `g_switch_generation`, update `g_active_tty`, return 0.
+1. If `g_fb_ep < 0` (framebuffer unavailable): logical switch only — increment
+   `g_switch_generation`, update `g_active_tty`, return 0.
 2. Set `g_switch_barrier = 1`.
-3. If previous TTY was tty0: send `FBTEXT_IPC_CONSOLE_MODE_REQ(0)` to pause
-   ring drain. On failure: clear barrier, return `VT_SWITCH_ERR_MODE_OFF`.
-4. Send `FBTEXT_IPC_CLEAR_REQ`. On failure: restore console mode, clear
-   barrier, return `VT_SWITCH_ERR_CLEAR`.
-5. `vt_replay_tty(tty_index, reliable=1)`: replay all cells row by row;
-   yield between rows to reduce framebuffer queue saturation. On failure:
-   restore console mode, clear barrier, return `VT_SWITCH_ERR_REPLAY`.
-6. If next TTY is tty0: send `FBTEXT_IPC_CONSOLE_MODE_REQ(1)`. On failure:
+3. If previous slot was a console slot: send `FBTEXT_IPC_CONSOLE_MODE_REQ(0)`.
+   On failure: clear barrier, return `VT_SWITCH_ERR_MODE_OFF`.
+4. Send `FBTEXT_IPC_CLEAR_REQ`. On failure: restore console mode, clear barrier,
+   return `VT_SWITCH_ERR_CLEAR`.
+5. `vt_replay_tty(slot_index, reliable=1)`: replay all cells row by row; yield
+   between rows to reduce framebuffer queue saturation. On failure: restore
+   console mode, clear barrier, return `VT_SWITCH_ERR_REPLAY`.
+6. Console-mode re-enable / overlay handshake for the target slot. On failure:
    return `VT_SWITCH_ERR_MODE_ON`.
-7. Increment `g_switch_generation`. Set `g_active_tty = tty_index`.
+7. Increment `g_switch_generation`. Set `g_active_tty = slot_index`.
 8. Emit `VT_TRACE_SWITCH`. Clear `g_switch_barrier`.
-9. If tty0: call `vt_draw_tty0_hint` to display the "tty0 system console
-   (read-only)" banner.
+9. Switching to vt-0 locks the gfx overlay (`FBTEXT_IPC_GFX_OVERLAY_REQ 1`);
+   switching away unlocks it.
 
 #### Switch Error Codes
 
 | Code                        | Value | Meaning                                     |
 |-----------------------------|-------|---------------------------------------------|
-| `VT_SWITCH_ERR_INVALID_TTY` | -1    | tty_index ≥ VT_MAX_TTYS                     |
+| `VT_SWITCH_ERR_INVALID_TTY` | -1    | slot_index ≥ VT_MAX_TTYS                    |
 | `VT_SWITCH_ERR_MODE_OFF`    | -11   | CONSOLE_MODE_REQ(0) failed on fb endpoint   |
 | `VT_SWITCH_ERR_CLEAR`       | -12   | CLEAR_REQ failed on fb endpoint             |
 | `VT_SWITCH_ERR_REPLAY`      | -13   | Cell replay returned error                  |
@@ -346,32 +465,44 @@ last row, and sends `FBTEXT_IPC_SCROLL_REQ(n=1)` to the framebuffer driver.
 
 #### Stale Write Detection
 
-Every `VT_IPC_WRITE_REQ` from a registered client carries `request_id` set to
-the switch generation at write time. If `msg.request_id != g_switch_generation`
-the write is dropped with `VT_TRACE_DROP_STALE`. This prevents cell writes
-queued before a switch from corrupting the newly displayed TTY.
+Every `VT_IPC_WRITE_REQ` from a registered client carries `request_id` set to the
+switch generation at write time. If `msg.request_id != g_switch_generation` the
+write is dropped with `VT_TRACE_DROP_STALE`, preventing cell writes queued before
+a switch from corrupting the newly displayed slot.
 
 ---
 
 ### Writer and Reader Registration
 
 **Writer** (`VT_IPC_REGISTER_WRITER`): a client registers its endpoint as the
-owner of a TTY's write path. Conflicts (a second client claiming the same slot)
-replace the previous owner rather than rejecting; this keeps CLI recovery
-robust when a prior process exits without an explicit unregister.
+owner of a slot's write path. Conflicts replace the previous owner rather than
+rejecting, keeping CLI recovery robust when a prior process exits without an
+explicit unregister.
 
-**Reader** (`VT_IPC_READ_REQ`): the first client to read from a TTY claims its
-reader slot (`g_tty_reader_ep[tty_id]`). Subsequent read requests from a
-different endpoint are rejected with `VT_IPC_ERROR`. The VT service does not
-block; if the input queue is empty it returns immediately with arg0=1.
+**Reader** (`VT_IPC_READ_REQ`): the first client to read from a slot claims its
+reader slot (`g_tty_reader_ep[slot]`). Under the redesign the reader is
+push-notified (`VT_IPC_INPUT_NOTIFY`) and blocks between notifications.
+
+---
+
+### Lazy CLI Spawn *(Proposed — phase 5)*
+
+Text slots spawn their CLI on demand: on the first switch to an empty text slot,
+`vt` asks the process manager (via `PROC_IPC_SPAWN_PATH`) to spawn `cli.wap`
+**pinned to that slot** (a new spawn flag forces `si->tty = N` rather than the
+`pm_alloc_cli_tty()` round-robin at `src/kernel/process_manager_spawn.c`). The
+CLI reads its slot from the spawn-info contract (`wasmos_startup_tty()`). sysinit
+no longer eagerly starts the single CLI.
 
 ---
 
 ### Keyboard Scancode Handling
 
-Scancode tables: `g_sc_to_ascii[58]` and `g_sc_to_ascii_shift[58]`
-(PS/2 Set-1 scancodes, indices 0–57). CapsLock and AltGr are not currently
-tracked.
+**Proposed (phase 3):** a single 3-layer keymap (`plain`/`shift`/`altgr`, adopted
+from the compositor's `KeyMap`) plus Ctrl/Shift/AltGr modifier tracking, produced
+as a canonical key event. **Shipped:** the VT uses 2-layer `g_sc_to_ascii[58]` /
+`g_sc_to_ascii_shift[58]` (PS/2 Set-1, indices 0–57); CapsLock and AltGr are not
+yet tracked in the VT.
 
 #### Modifier Tracking
 
@@ -380,6 +511,7 @@ tracked.
 | 0x1D      | Ctrl (L + E ext) | `g_ctrl_down`     |
 | 0x2A      | Left Shift       | `g_shift_down`    |
 | 0x36      | Right Shift      | `g_shift_down`    |
+| 0x38 ext  | AltGr            | `g_altgr_down` (phase 3) |
 
 Key-up events update modifier state and return immediately (no character output).
 
@@ -387,10 +519,10 @@ Key-up events update modifier state and return immediately (no character output)
 
 | Condition            | Scancodes          | Action               |
 |----------------------|--------------------|----------------------|
-| Ctrl+Shift held      | 0x3B–0x3E (F1–F4)  | Switch to tty0–tty3  |
-| Active tty = 0       | 0x3C–0x3E (F2–F4)  | Switch to tty1–tty3  |
+| Ctrl+Shift held      | 0x3B–0x3E (F1–F4)  | Switch to vt-0–vt-3  |
+| Active slot is text  | 0x3C–0x3E (F2–F4)  | Switch to vt-1–vt-3  |
 
-#### Extended Key Mapping (raw mode, `csi_private` path)
+#### Extended Key Mapping (raw mode)
 
 | Scancode | Key       | Output in input queue            |
 |----------|-----------|----------------------------------|
@@ -408,6 +540,11 @@ Key-up events update modifier state and return immediately (no character output)
 In canonical mode, Up/Down arrows instead invoke history navigation
 (`Ctrl+P` / `Ctrl+N` semantics) rather than emitting escape sequences.
 
+For `vt-0` the canonical key event (including extended keys) is forwarded to the
+compositor via `VT_IPC_KEY_FORWARD`; the enriched `GFX_EVENT_KEY` carries the
+keysym + modifiers + up/down, so GUI apps get arrow/function keys (previously they
+arrived as code 0, forcing games onto WASD).
+
 #### Ctrl Chord Mapping
 
 | Chord  | Scancode | Byte sent  |
@@ -417,14 +554,14 @@ In canonical mode, Up/Down arrows instead invoke history navigation
 | Ctrl+P | 0x19     | 0x10 (DLE) |
 | Ctrl+N | 0x31     | 0x0E (SO)  |
 
-tty0 receives no keyboard input; it is a read-only system console mirror.
+vt-0 receives no text-queue keyboard input; keys route to the compositor.
 
 ---
 
 ### Line Discipline (Canonical Mode)
 
-When `input_canonical = 1`, `vt_input_handle_char` processes each byte before
-it enters the input queue:
+When `input_canonical = 1`, `vt_input_handle_char` processes each byte before it
+enters the input queue:
 
 | Input           | Action                                               |
 |-----------------|------------------------------------------------------|
@@ -437,10 +574,10 @@ it enters the input queue:
 | `< 0x20`        | Ignored (other control bytes)                        |
 | printable       | Append to `input_line` (max 127 bytes); echo if set  |
 
-History ring: 8 entries × 128 bytes per TTY. `input_history_head` advances
-forward on each commit. Navigation index -1 means the live (uncommitted) line.
-Navigating to -1 restores the original input. Duplicate suppression: if the
-newest history entry matches the current line, it is not re-stored.
+History ring: 8 entries × 128 bytes per slot. `input_history_head` advances on
+each commit. Navigation index -1 means the live (uncommitted) line. Duplicate
+suppression: if the newest history entry matches the current line, it is not
+re-stored.
 
 In raw mode (`input_canonical = 0`) bytes pass directly to the input queue
 without buffering or editing. Echo still applies if `input_echo = 1`.
@@ -453,9 +590,9 @@ without buffering or editing. Echo still applies if `input_echo = 1`.
 
 | Event                      | Value | Meaning                                             |
 |----------------------------|-------|-----------------------------------------------------|
-| `VT_TRACE_SWITCH`          | 0xA1  | TTY switch completed; arg0=new_tty, arg1=generation |
-| `VT_TRACE_WRITER_OK`       | 0xA2  | Writer registered; arg0=tty, arg1=ep                |
-| `VT_TRACE_WRITER_CONFLICT` | 0xA3  | Writer conflict resolved; arg0=tty, arg1=ep         |
+| `VT_TRACE_SWITCH`          | 0xA1  | Slot switch completed; arg0=new_slot, arg1=generation |
+| `VT_TRACE_WRITER_OK`       | 0xA2  | Writer registered; arg0=slot, arg1=ep               |
+| `VT_TRACE_WRITER_CONFLICT` | 0xA3  | Writer conflict resolved; arg0=slot, arg1=ep        |
 | `VT_TRACE_DROP_UNOWNED`    | 0xA4  | Write dropped: source not a registered writer       |
 | `VT_TRACE_DROP_STALE`      | 0xA5  | Write dropped: stale switch generation              |
 
@@ -463,21 +600,31 @@ without buffering or editing. Echo still applies if `input_echo = 1`.
 
 ### Structural Invariants
 
-1. **tty0 is read-only.** Keyboard input never routes to tty0's input queue.
-   Output to tty0 goes through `wasmos_console_write` (serial + console ring),
-   not directly to the framebuffer cell IPC path.
+1. **The framebuffer has a single owner per frame.** Either the compositor
+   (vt-0) or the VT's text render of one vt-x draws the framebuffer, never both.
+   The overlay lock (`FBTEXT_IPC_GFX_OVERLAY_REQ`) enforces the handoff. *(phase 5)*
+2. **vt-0 has no text-input queue.** Keyboard input to vt-0 is forwarded to the
+   compositor; serial cannot bind to vt-0.
+3. **Serial is bound to exactly one slot** (`g_serial_tty`, default 1), and that
+   slot's output mirrors to serial even when it is not visible. *(phase 5)*
+4. **Panic bypasses the VT.** Panic/fault output writes COM1 and the framebuffer
+   directly, unlocked, because the kernel may be in an illegal state.
+5. **Framebuffer text-cell endpoint is private to `vt`.** Other services write
+   through `VT_IPC_WRITE_REQ`.
+6. **g_switch_barrier + generation counter serialize switches.** Writes queued
+   before a switch are invalidated by the generation mismatch after it completes.
+7. **Input is push, then pull-to-drain.** `VT_IPC_INPUT_NOTIFY` wakes the reader;
+   `VT_IPC_READ_REQ` drains. The VT never blocks a reader inside a read. *(phase 2)*
 
-2. **g_switch_barrier serializes switches.** Writes during an in-progress
-   switch that target the active TTY are not guarded by the barrier; they may
-   land on either the old or new TTY. The generation counter handles stale
-   detection after the switch completes.
+---
 
-3. **Replay is best-effort.** Cell updates dropped during `vt_replay_tty` due
-   to persistent framebuffer backpressure are tolerated. The switch does not
-   abort on dropped cells to avoid user-visible failure on replay under load.
+### Rollout
 
-4. **Framebuffer endpoint is private.** Only `vt` sends `FBTEXT_IPC_*` opcodes.
-   Other services must write through the `VT_IPC_WRITE_REQ` path.
-
-5. **No blocking reads.** `VT_IPC_READ_REQ` always replies immediately. The
-   caller is responsible for polling if the queue is empty.
+| Phase | Scope                                                        | Status   |
+|-------|--------------------------------------------------------------|----------|
+| 0     | Idle spin fixes (init/cli/font/fbpci) — CPU/mouse relief     | Shipped  |
+| 1     | Serial IRQ4 → `VT_IPC_SERIAL_INPUT_REQ` → serial-bound slot  | Proposed |
+| 2     | Push input (`VT_IPC_INPUT_NOTIFY`); event-driven CLI         | Proposed |
+| 3     | Single keyboard decoder in VT; compositor consumes key events; enriched `GFX_EVENT_KEY` | Proposed |
+| 4     | klog/console ring drained by VT into vt-1; FB = blit surface | Proposed |
+| 5     | Default visible vt-1; serial-bound selector; lazy CLI spawn  | Proposed |

@@ -106,6 +106,8 @@ def build_qemu_cmd(cfg: QemuConfig) -> list:
         "qemu-system-x86_64",
         "-m",
         "512M",
+        "-cpu",
+        "max",
     ]
     # Acceleration: prefer KVM when the host exposes a usable /dev/kvm (e.g. Linux
     # CI runners) so TCG emulation does not dominate boot time; otherwise fall back
@@ -633,6 +635,8 @@ class QemuSession:
                 enable_monitor=self.cfg.enable_monitor,
                 monitor_socket=self.cfg.monitor_socket,
                 smp_count=self.cfg.smp_count,
+                nic_model=self.cfg.nic_model,
+                netdev=self.cfg.netdev,
             )
             self._esp_runtime_dir = temp_root
             atexit.register(self._cleanup_esp_runtime_dir)
@@ -657,6 +661,8 @@ class QemuSession:
                 enable_monitor=True,
                 monitor_socket=monitor_socket,
                 smp_count=runtime_cfg.smp_count,
+                nic_model=runtime_cfg.nic_model,
+                netdev=runtime_cfg.netdev,
             )
 
         cmd = build_qemu_cmd(runtime_cfg)

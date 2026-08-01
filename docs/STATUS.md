@@ -154,6 +154,11 @@ linked feature documents for rationale and rollout plans.
 - Default configuration: wasm3 runtime, ring-3 isolation, single CPU. WARP is
   selected with `-DWASMOS_WASM_RUNTIME_WARP=ON`; SMP is separately gated by
   `WASMOS_SMP` and requires IOAPIC.
+- WARP QEMU CPU model: the run/test QEMU commands pass `-cpu max`
+  (`WASMOS_QEMU_CPU_ARGS` in CMake; also in `scripts/qemu_test_framework.py`).
+  WARP's single-pass JIT emits modern x86-64 instructions unconditionally (e.g.
+  `POPCNT`/`LZCNT`/`TZCNT` for wasm `i32.popcnt`/`clz`/`ctz`) with no CPUID
+  guard, so the default `qemu64` model faults them with `#UD`.
 - Recent baseline: wasm3 and WARP+SMP boot through `init` to the CLI/halt path;
   the WARP build uses AOT payloads for internal non-native modules and JIT for
   examples and graphical apps.

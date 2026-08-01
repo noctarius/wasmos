@@ -748,6 +748,13 @@ else ()
 endif ()
 set(WASMOS_SMP_DEFINE -DWASMOS_SMP=${WASMOS_SMP_VALUE})
 
+# WARP's single-pass JIT emits modern x86-64 instructions (e.g. POPCNT/LZCNT/TZCNT
+# for wasm i32.popcnt/clz/ctz) unconditionally, without a CPUID feature check. The
+# QEMU default CPU model (qemu64) does not advertise those, so such instructions
+# fault with #UD. Advertise a full modern CPU so the JIT-emitted instructions are
+# valid (real x86-64 hardware has them). See docs/architecture/warp notes.
+set(WASMOS_QEMU_CPU_ARGS "-cpu" "max")
+
 # Wall-clock timeout (seconds) for the QEMU halt/boot smoke test. Defaults to
 # 120 for fast local (KVM/HVF) runs; bump it for slow TCG environments such as
 # CI runners without hardware acceleration: -DWASMOS_QEMU_TEST_TIMEOUT=600.
@@ -1603,7 +1610,7 @@ endif ()
 if (OVMF_VARS)
   add_custom_target(run-qemu
     ${WASMOS_ESP_POPULATE_CMDS}
-    COMMAND qemu-system-x86_64 -m 512M ${WASMOS_QEMU_SMP_ARGS} -nographic -serial mon:stdio
+    COMMAND qemu-system-x86_64 -m 512M ${WASMOS_QEMU_CPU_ARGS} ${WASMOS_QEMU_SMP_ARGS} -nographic -serial mon:stdio
             ${WASMOS_QEMU_NETDEV_ARGS}
             -drive if=pflash,format=raw,readonly=on,file=${OVMF_CODE}
             -drive if=pflash,format=raw,file=${OVMF_VARS}
@@ -1616,7 +1623,7 @@ if (OVMF_VARS)
   )
   add_custom_target(run-qemu-debug
     ${WASMOS_ESP_POPULATE_CMDS}
-    COMMAND qemu-system-x86_64 -m 512M ${WASMOS_QEMU_SMP_ARGS} -nographic -serial mon:stdio
+    COMMAND qemu-system-x86_64 -m 512M ${WASMOS_QEMU_CPU_ARGS} ${WASMOS_QEMU_SMP_ARGS} -nographic -serial mon:stdio
             -S -gdb tcp::${QEMU_GDB_PORT}
             ${WASMOS_QEMU_NETDEV_ARGS}
             -drive if=pflash,format=raw,readonly=on,file=${OVMF_CODE}
@@ -1630,7 +1637,7 @@ if (OVMF_VARS)
   )
   add_custom_target(run-qemu-ui
     ${WASMOS_ESP_POPULATE_CMDS}
-    COMMAND qemu-system-x86_64 -m 512M ${WASMOS_QEMU_SMP_ARGS} -serial mon:stdio
+    COMMAND qemu-system-x86_64 -m 512M ${WASMOS_QEMU_CPU_ARGS} ${WASMOS_QEMU_SMP_ARGS} -serial mon:stdio
             ${WASMOS_QEMU_NETDEV_ARGS}
             -drive if=pflash,format=raw,readonly=on,file=${OVMF_CODE}
             -drive if=pflash,format=raw,file=${OVMF_VARS}
@@ -1703,7 +1710,7 @@ else ()
   if (OVMF_CODE)
     add_custom_target(run-qemu
       ${WASMOS_ESP_POPULATE_CMDS}
-      COMMAND qemu-system-x86_64 -m 512M ${WASMOS_QEMU_SMP_ARGS} -nographic -serial mon:stdio
+      COMMAND qemu-system-x86_64 -m 512M ${WASMOS_QEMU_CPU_ARGS} ${WASMOS_QEMU_SMP_ARGS} -nographic -serial mon:stdio
               ${WASMOS_QEMU_NETDEV_ARGS}
               -drive if=pflash,format=raw,readonly=on,file=${OVMF_CODE}
               -drive format=raw,file=fat:rw:${BUILD_DIR}/esp
@@ -1715,7 +1722,7 @@ else ()
     )
     add_custom_target(run-qemu-debug
       ${WASMOS_ESP_POPULATE_CMDS}
-      COMMAND qemu-system-x86_64 -m 512M ${WASMOS_QEMU_SMP_ARGS} -nographic -serial mon:stdio
+      COMMAND qemu-system-x86_64 -m 512M ${WASMOS_QEMU_CPU_ARGS} ${WASMOS_QEMU_SMP_ARGS} -nographic -serial mon:stdio
               -S -gdb tcp::${QEMU_GDB_PORT}
               ${WASMOS_QEMU_NETDEV_ARGS}
               -drive if=pflash,format=raw,readonly=on,file=${OVMF_CODE}
@@ -1728,7 +1735,7 @@ else ()
     )
     add_custom_target(run-qemu-ui
       ${WASMOS_ESP_POPULATE_CMDS}
-      COMMAND qemu-system-x86_64 -m 512M ${WASMOS_QEMU_SMP_ARGS} -serial mon:stdio
+      COMMAND qemu-system-x86_64 -m 512M ${WASMOS_QEMU_CPU_ARGS} ${WASMOS_QEMU_SMP_ARGS} -serial mon:stdio
               ${WASMOS_QEMU_NETDEV_ARGS}
               -drive if=pflash,format=raw,readonly=on,file=${OVMF_CODE}
               -drive format=raw,file=fat:rw:${BUILD_DIR}/esp

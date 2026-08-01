@@ -52,8 +52,13 @@ unsafe extern "C" {
 
 // Provided by net_shim.c (linked object).
 unsafe extern "C" {
-    fn tnet_join(proc_ep: i32, addr_no: u32, port: u32) -> i32;
-    fn tnet_host(proc_ep: i32, port: u32) -> i32;
+    // Non-blocking handshake: *_begin arms it and returns immediately; the game
+    // loop calls tnet_net_advance whenever the reply-endpoint doorbell wakes it.
+    // Return codes: begin -> 0 armed / <0 setup error; advance -> 1 ready /
+    // 0 still handshaking / <0 failed.
+    fn tnet_join_begin(proc_ep: i32, addr_no: u32, port: u32) -> i32;
+    fn tnet_host_begin(proc_ep: i32, port: u32) -> i32;
+    fn tnet_net_advance() -> i32;
     fn tnet_reply_ep() -> i32;
     fn tnet_send(data: *const u8, len: i32) -> i32;
     fn tnet_poll(buf: *mut u8, cap: i32) -> i32;
@@ -1073,6 +1078,9 @@ impl Button {
 #[derive(PartialEq)]
 enum Phase {
     Menu,
+    // Non-blocking handshake in flight (host or join). The main loop advances it
+    // from the reply-endpoint doorbell; no separate loop, no blocking.
+    Connecting(Mode),
     Playing,
     Done,
 }
@@ -1143,38 +1151,40 @@ fn run(proc_ep: i32) -> i32 {
                 }
 
                 if let Some(m) = choice {
-                    let ok = match m {
-                        Mode::Solo => true,
+                    match m {
+                        Mode::Solo => {
+                            mode = m;
+                            begin_match(
+                                &win,
+                                &mut me,
+                                &mut peer,
+                                &mut rx_len,
+                                &mut seq,
+                                &mut net_sel,
+                                &mut last_gravity,
+                                m,
+                            );
+                            phase = Phase::Playing;
+                        }
+                        // Host/Join arm a non-blocking handshake and hand off to
+                        // Phase::Connecting; the match itself begins once the
+                        // handshake completes (see the Connecting arm below).
                         Mode::Host => {
                             connect_screen(&mut win, b"WAITING FOR OPPONENT", b"PORT 7000");
-                            let rc = unsafe { tnet_host(proc_ep, GAME_PORT) };
-                            if rc != 0 {
+                            if unsafe { tnet_host_begin(proc_ep, GAME_PORT) } < 0 {
                                 error_screen(&mut win, b"HOST FAILED");
+                            } else {
+                                phase = Phase::Connecting(m);
                             }
-                            rc == 0
                         }
                         Mode::Join => {
                             connect_screen(&mut win, b"CONNECTING", b"10.0.2.2:7000");
-                            let rc = unsafe { tnet_join(proc_ep, PEER_ADDR_V4, GAME_PORT) };
-                            if rc != 0 {
+                            if unsafe { tnet_join_begin(proc_ep, PEER_ADDR_V4, GAME_PORT) } < 0 {
                                 error_screen(&mut win, b"JOIN FAILED");
+                            } else {
+                                phase = Phase::Connecting(m);
                             }
-                            rc == 0
                         }
-                    };
-                    if ok {
-                        mode = m;
-                        begin_match(
-                            &win,
-                            &mut me,
-                            &mut peer,
-                            &mut rx_len,
-                            &mut seq,
-                            &mut net_sel,
-                            &mut last_gravity,
-                            m,
-                        );
-                        phase = Phase::Playing;
                     }
                 }
                 if phase == Phase::Menu {
@@ -1183,6 +1193,38 @@ fn run(proc_ep: i32) -> i32 {
                     }
                 }
             }
+
+            // Non-blocking handshake in flight. net-stack answers each step with
+            // an IPC doorbell on the reply endpoint; the loop blocks on the select
+            // set {event_ep, reply_ep} and steps the state machine on each wake.
+            // The "waiting" screen was drawn on entry; win.pump() (loop top) keeps
+            // the window closeable while we wait.
+            Phase::Connecting(m) => match unsafe { tnet_net_advance() } {
+                1 => {
+                    mode = m;
+                    begin_match(
+                        &win,
+                        &mut me,
+                        &mut peer,
+                        &mut rx_len,
+                        &mut seq,
+                        &mut net_sel,
+                        &mut last_gravity,
+                        m,
+                    );
+                    phase = Phase::Playing;
+                }
+                rc if rc < 0 => {
+                    error_screen(
+                        &mut win,
+                        if m == Mode::Host { b"HOST FAILED" } else { b"JOIN FAILED" },
+                    );
+                    phase = Phase::Menu;
+                }
+                _ => unsafe {
+                    let _ = ipc_select_wait_timeout(conn_sel(&win), 250);
+                },
+            },
 
             Phase::Playing => {
                 if !me.over {
@@ -1269,6 +1311,26 @@ fn win_menu_sel(win: &Window) -> i32 {
             let _ = ipc_select_add(MENU_SEL, win.event_ep);
         }
         MENU_SEL
+    }
+}
+
+// Handshake select set {event_ep, net reply_ep}, built lazily once the reply
+// endpoint exists (after a *_begin call). The loop blocks on this while
+// connecting so it wakes on either a compositor event (e.g. window close) or a
+// net-stack handshake doorbell. The reply endpoint id is stable across matches,
+// so caching is safe.
+static mut CONN_SEL: i32 = -1;
+fn conn_sel(win: &Window) -> i32 {
+    unsafe {
+        if CONN_SEL < 0 {
+            CONN_SEL = ipc_select_create();
+            let _ = ipc_select_add(CONN_SEL, win.event_ep);
+            let rep = tnet_reply_ep();
+            if rep >= 0 {
+                let _ = ipc_select_add(CONN_SEL, rep);
+            }
+        }
+        CONN_SEL
     }
 }
 

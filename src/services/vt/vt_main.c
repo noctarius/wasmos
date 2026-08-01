@@ -22,12 +22,14 @@ static uint32_t g_active_tty = 0;
  * regardless of which slot is visible.  Default vt-1 (the system console). */
 static uint32_t g_serial_tty = 1;
 static int32_t g_serial_in_ep = -1;
+static int32_t g_fs_ep = -1;
 static int32_t g_tty_reader_ep[VT_MAX_TTYS] = {-1, -1, -1, -1};
 static int32_t g_tty_writer_ep[VT_MAX_TTYS] = {-1, -1, -1, -1};
 static uint32_t g_switch_generation = 1;
 static uint8_t g_switch_barrier = 0;
 static uint8_t g_ctrl_down = 0;
 static uint8_t g_shift_down = 0;
+static uint8_t g_altgr_down = 0;
 static uint16_t g_vt_cols = VT_COLS_DEFAULT;
 static uint16_t g_vt_rows = VT_ROWS_DEFAULT;
 static uint32_t g_heap_cursor = 0;
@@ -946,17 +948,190 @@ static int32_t vt_switch_tty(uint32_t tty_index) {
     return 0;
 }
 
-static const uint8_t g_sc_to_ascii[58] = {
+/* Active keyboard keymap (single decoder for the whole system).  Three layers,
+ * indexed by PS/2 set-1 scancode 0..57.  Built-in default is US QWERTY (AltGr
+ * layer all zero); vt_load_keymap() replaces it at init with a layout loaded
+ * from /boot/system/keymaps, falling back to this built-in on any failure. */
+static uint8_t g_km_plain[58] = {
     0,    0x1B, '1', '2', '3', '4', '5', '6', '7', '8', '9',  '0', '-', '=',  '\b',
     '\t', 'q',  'w', 'e', 'r', 't', 'y', 'u', 'i', 'o', 'p',  '[', ']', '\n', 0,
     'a',  's',  'd', 'f', 'g', 'h', 'j', 'k', 'l', ';', '\'', '`', 0,   '\\', 'z',
     'x',  'c',  'v', 'b', 'n', 'm', ',', '.', '/', 0,   '*',  0,   ' '};
 
-static const uint8_t g_sc_to_ascii_shift[58] = {
+static uint8_t g_km_shift[58] = {
     0,    0x1B, '!', '@', '#', '$', '%', '^', '&', '*', '(', ')', '_', '+',  '\b',
     '\t', 'Q',  'W', 'E', 'R', 'T', 'Y', 'U', 'I', 'O', 'P', '{', '}', '\n', 0,
     'A',  'S',  'D', 'F', 'G', 'H', 'J', 'K', 'L', ':', '"', '~', 0,   '|',  'Z',
     'X',  'C',  'V', 'B', 'N', 'M', '<', '>', '?', 0,   '*', 0,   ' '};
+
+static uint8_t g_km_altgr[58] = {0};
+
+/* scancode -> character using the active keymap and modifier state.  AltGr wins
+ * when its layer has a glyph for the key; otherwise Shift/plain.  Matches the
+ * compositor's scancode_to_ascii precedence. */
+static uint8_t vt_keymap_decode(uint32_t sc) {
+    if (sc >= 58u) {
+        return 0;
+    }
+    if (g_altgr_down && g_km_altgr[sc] != 0) {
+        return g_km_altgr[sc];
+    }
+    return g_shift_down ? g_km_shift[sc] : g_km_plain[sc];
+}
+
+static uint32_t vt_strlen(const char* s) {
+    uint32_t n = 0;
+    while (s[n] != 0) {
+        n++;
+    }
+    return n;
+}
+
+/* Parse one "0xNN" token starting at *p (skipping leading spaces/tabs). */
+static int vt_parse_hex(const char** p, const char* end, uint32_t* out) {
+    const char* q = *p;
+    while (q < end && (*q == ' ' || *q == '\t')) {
+        q++;
+    }
+    if (q + 2 > end || q[0] != '0' || (q[1] != 'x' && q[1] != 'X')) {
+        return -1;
+    }
+    q += 2;
+    uint32_t v = 0;
+    int digits = 0;
+    while (q < end) {
+        char c = *q;
+        int d;
+        if (c >= '0' && c <= '9') {
+            d = c - '0';
+        } else if (c >= 'a' && c <= 'f') {
+            d = c - 'a' + 10;
+        } else if (c >= 'A' && c <= 'F') {
+            d = c - 'A' + 10;
+        } else {
+            break;
+        }
+        v = v * 16u + (uint32_t)d;
+        digits++;
+        q++;
+    }
+    if (digits == 0) {
+        return -1;
+    }
+    *p = q;
+    *out = v;
+    return 0;
+}
+
+/* Parse a .kmap file (rows "<scancode> <plain> <shift> <altgr>" in hex) into the
+ * active keymap.  Comment (#), blank, and non-data lines (e.g. "name ...") are
+ * skipped.  Returns the number of scancode rows applied. */
+static int vt_parse_keymap(const char* data, uint32_t len) {
+    const char* p = data;
+    const char* end = data + len;
+    int rows = 0;
+    while (p < end) {
+        while (p < end && (*p == ' ' || *p == '\t')) {
+            p++;
+        }
+        if (p < end && (*p == '#' || *p == '\n' || *p == '\r')) {
+            while (p < end && *p != '\n') {
+                p++;
+            }
+            if (p < end) {
+                p++;
+            }
+            continue;
+        }
+        const char* save = p;
+        uint32_t sc, pl, sh, ag;
+        if (vt_parse_hex(&p, end, &sc) == 0 && vt_parse_hex(&p, end, &pl) == 0 &&
+            vt_parse_hex(&p, end, &sh) == 0 && vt_parse_hex(&p, end, &ag) == 0 && sc < 58u) {
+            g_km_plain[sc] = (uint8_t)pl;
+            g_km_shift[sc] = (uint8_t)sh;
+            g_km_altgr[sc] = (uint8_t)ag;
+            rows++;
+        } else {
+            p = save;
+        }
+        while (p < end && *p != '\n') {
+            p++;
+        }
+        if (p < end) {
+            p++;
+        }
+    }
+    return rows;
+}
+
+/* Read a file by path through the fs (owner-push: acquire a buffer, stage the
+ * path, grant fs RW, fs writes the contents back).  Runs during init before we
+ * subscribe to keyboard/serial, so no stray messages contend for g_vt_ep. */
+static int vt_read_keymap_file(const char* path, char* out, uint32_t out_cap, uint32_t* out_len) {
+    if (g_fs_ep < 0) {
+        return -1;
+    }
+    uint32_t plen = vt_strlen(path);
+    if (plen == 0 || plen >= out_cap) {
+        return -1;
+    }
+    int32_t bid = wasmos_xfer_buffer_acquire((int32_t)out_cap);
+    if (bid < 0) {
+        return -1;
+    }
+    if (wasmos_xfer_buffer_write(bid, addr_cast(int32_t, path), (int32_t)plen, 0) != 0) {
+        (void)wasmos_xfer_buffer_release(bid);
+        return -1;
+    }
+    int32_t b1 = wasmos_xfer_buffer_borrow(g_fs_ep, bid,
+                                           WASMOS_BUFFER_GRANT_READ | WASMOS_BUFFER_GRANT_WRITE);
+    if (b1 < 0) {
+        (void)wasmos_xfer_buffer_release(bid);
+        return -1;
+    }
+    int32_t req = 0x4B4D; /* "KM" */
+    if (wasmos_ipc_send(g_fs_ep, g_vt_ep, FS_IPC_READ_PATH_REQ, req, (int32_t)plen, 0, bid, b1) != 0) {
+        (void)wasmos_xfer_buffer_release(bid);
+        return -1;
+    }
+    int32_t total = -1;
+    for (int i = 0; i < 64; ++i) {
+        if (wasmos_ipc_select_one(g_vt_ep) < 0) {
+            break;
+        }
+        if (wasmos_ipc_last_field(WASMOS_IPC_FIELD_REQUEST_ID) != req) {
+            continue;
+        }
+        if (wasmos_ipc_last_field(WASMOS_IPC_FIELD_TYPE) == FS_IPC_RESP) {
+            total = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG0);
+        }
+        break;
+    }
+    if (total <= 0 || (uint32_t)total > out_cap) {
+        (void)wasmos_xfer_buffer_release(bid);
+        return -1;
+    }
+    if (wasmos_xfer_buffer_read(bid, addr_cast(int32_t, out), total, 0) != 0) {
+        (void)wasmos_xfer_buffer_release(bid);
+        return -1;
+    }
+    (void)wasmos_xfer_buffer_release(bid);
+    *out_len = (uint32_t)total;
+    return 0;
+}
+
+/* Load the active layout from /boot/system/keymaps; keep the built-in US on
+ * failure so keyboard input always works. */
+static void vt_load_keymap(const char* path) {
+    static char km_buf[4096];
+    uint32_t len = 0;
+    if (vt_read_keymap_file(path, km_buf, sizeof(km_buf), &len) != 0) {
+        printf("[vt] keymap load failed (%s); using built-in US\n", path);
+        return;
+    }
+    int rows = vt_parse_keymap(km_buf, len);
+    printf("[vt] keymap loaded: %s (%d rows)\n", path, rows);
+}
 
 static void vt_input_echo_char(uint32_t tty_index, uint8_t ch) {
     if (tty_index >= VT_MAX_TTYS || tty_index != g_active_tty) {
@@ -1156,6 +1331,10 @@ static void vt_handle_key_notify(int32_t scancode, int32_t keyup, int32_t extend
         g_shift_down = keyup ? 0 : 1;
         return;
     }
+    if (scancode == 0x38 && extended) { /* AltGr (right Alt) */
+        g_altgr_down = keyup ? 0 : 1;
+        return;
+    }
 
     if (keyup != 0) {
         return;
@@ -1256,13 +1435,10 @@ static void vt_handle_key_notify(int32_t scancode, int32_t keyup, int32_t extend
         }
     }
     if (ch == 0) {
-        if (scancode <= 0 || scancode >= (int32_t)(sizeof(g_sc_to_ascii))) {
+        if (scancode <= 0 || scancode >= 58) {
             return;
         }
-        ch = g_shift_down ? g_sc_to_ascii_shift[(uint32_t)scancode]
-                          : g_sc_to_ascii[(uint32_t)scancode];
-        /* FIXME: this Set-1 map currently ignores CapsLock and AltGr states;
-         * add modifier-state-aware keymap handling when layouts expand. */
+        ch = vt_keymap_decode((uint32_t)scancode);
     }
     if (ch == 0) {
         return;
@@ -1312,6 +1488,13 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t arg1, int32
         }
     }
     vt_init_ttys();
+
+    /* Load the active keyboard layout from the FS before subscribing to input,
+     * so the FS reply is the only traffic on g_vt_ep during the synchronous
+     * read.  Falls back to the built-in US keymap if the FS or file is
+     * unavailable. */
+    g_fs_ep = wasmos_sys_svc_lookup_retry(proc_endpoint, g_vt_ep, "fs.vfs", 4, 64);
+    vt_load_keymap("/boot/system/keymaps/de-nodeadkeys.kmap");
 
     if (g_kbd_ep != -1) {
         (void)wasmos_ipc_send(g_kbd_ep, g_vt_ep, KBD_IPC_SUBSCRIBE_REQ, 1, 0, 0, 0, 0);

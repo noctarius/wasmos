@@ -243,7 +243,11 @@ function handleMessage(): void {
         return;
     }
 
-    ipc_send(source, g_rtc_ep, RTC_IPC_ERROR, reqId, RTC_STATUS_INVALID, 0, 0, 0);
+    // Unrecognised type: ignore it, exactly like the keyboard/mouse/serial
+    // drivers do.  Anything landing here is an unsolicited message (e.g. PM's
+    // PROC_IPC_RESP ack for our NOTIFY_READY, or a stray PROC_IPC_ERROR) rather
+    // than a real RTC request.  Bouncing RTC_IPC_ERROR back at `source` would
+    // ping-pong forever with PM's own error path and peg a CPU.
 }
 
 export function initialize(procEndpoint: i32, _arg1: i32, _arg2: i32, _arg3: i32): i32 {

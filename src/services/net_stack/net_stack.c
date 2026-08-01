@@ -156,6 +156,15 @@ static uint8_t* g_netifc_subscribe_buffer = NULL;
 static uint8_t g_netifc_lookup_pending = 0u;
 static uint8_t g_netifc_subscribe_pending = 0u;
 static uint8_t g_netifc_subscribed = 0u;
+/* One-shot guards: once the class subscription is live, the device-manager
+ * pushes SVC_IPC_CLASS_EVENT(ADD) whenever a net.ifc provider registers, and
+ * net_stack_dispatch() binds it.  We therefore fire each discovery lookup only
+ * ONCE (to catch a provider that registered before we subscribed) and then wait
+ * for the event instead of re-polling PM every loop iteration, which otherwise
+ * pegged the process-manager with SVC_IPC_LOOKUP(_CLASS)_REQ traffic while no
+ * interface existed. */
+static uint8_t g_netifc_lookup_kicked = 0u;
+static uint8_t g_netdrv_lookup_kicked = 0u;
 static uint8_t g_registered = 0u;
 static uint8_t g_register_pending = 0u;
 static uint8_t g_netdrv_lookup_pending = 0u;
@@ -177,6 +186,12 @@ static uint8_t g_hrng_lookup_pending = 0u;
 static uint8_t g_hrng_seeded = 0u;
 static uint32_t g_hrng_lookup_buffer_id = 0u;
 static uint8_t* g_hrng_lookup_buffer = NULL;
+/* Backoff between hrng-class lookups.  virtio-rng normally registers early and
+ * the first lookup seeds us, but on a host with no entropy device the class
+ * never appears; without a delay this would re-poll PM every loop iteration and
+ * peg it.  ~100 ms between attempts still finds a late provider. */
+#define NET_STACK_HRNG_RETRY_TICKS 25u /* ~100 ms at 250 Hz */
+static uint32_t g_hrng_next_tick = 0u;
 static wasmos_sys_native_random_request_t g_hrng_request;
 static wasmos_sys_native_event_loop_t g_control_loop;
 static wasmos_sys_native_event_loop_t g_netdrv_loop;
@@ -1228,7 +1243,11 @@ static void net_stack_try_discover_interfaces(void) {
                 g_netifc_subscribe_pending = 1u;
         }
     }
-    if (g_netdrv_endpoint != 0u || g_netifc_lookup_pending || g_netifc_lookup_buffer_id != 0u)
+    /* One-shot: only look up pre-existing providers once the subscription is
+     * live.  After that, arrivals come via SVC_IPC_CLASS_EVENT(ADD); a removed
+     * interface is re-added by the same event, so we never need to re-poll. */
+    if (!g_netifc_subscribed || g_netifc_lookup_kicked || g_netdrv_endpoint != 0u ||
+        g_netifc_lookup_pending || g_netifc_lookup_buffer_id != 0u)
         return;
     g_netifc_lookup_buffer = (uint8_t*)g_api->xfer_buffer_acquire(
         ND_BUFFER_KIND_XFER, sizeof(svc_class_entry_t), &g_netifc_lookup_buffer_id);
@@ -1237,8 +1256,10 @@ static void net_stack_try_discover_interfaces(void) {
     __builtin_memcpy(g_netifc_lookup_buffer, "net.ifc", 8u);
     if (wasmos_sys_native_intent_send(&g_control_loop, g_proc_endpoint, g_control_endpoint,
                                       SVC_IPC_LOOKUP_CLASS_REQ, g_netifc_lookup_buffer_id, 1u, 0u,
-                                      0u, net_stack_class_lookup_reply, NULL, NULL) == 0)
+                                      0u, net_stack_class_lookup_reply, NULL, NULL) == 0) {
         g_netifc_lookup_pending = 1u;
+        g_netifc_lookup_kicked = 1u;
+    }
 }
 
 static void net_stack_reap_interfaces(void) {
@@ -1367,9 +1388,15 @@ static void net_stack_begin_registration(void) {
 }
 
 static void net_stack_try_seed_random(void) {
+    uint32_t now;
     if (g_hrng_seeded || g_hrng_lookup_pending || g_hrng_request.buffer_id != 0u) {
         return;
     }
+    now = g_api->sched_ticks != NULL ? g_api->sched_ticks() : 0u;
+    if (g_api->sched_ticks != NULL && (int32_t)(now - g_hrng_next_tick) < 0) {
+        return; /* wait out the backoff before re-polling PM for the hrng class */
+    }
+    g_hrng_next_tick = now + NET_STACK_HRNG_RETRY_TICKS;
     g_hrng_lookup_buffer = (uint8_t*)g_api->xfer_buffer_acquire(
         ND_BUFFER_KIND_XFER, WASMOS_SVC_CLASS_MAX, &g_hrng_lookup_buffer_id);
     if (g_hrng_lookup_buffer == NULL || g_hrng_lookup_buffer_id == 0u) {
@@ -1443,7 +1470,15 @@ static void net_stack_try_bind_interface(net_interface_slot_t* slot) {
 
 static void net_stack_try_bind_virtio(void) {
     if (g_netdrv_endpoint == 0u) {
-        net_stack_start_lookup_coroutine();
+        /* Legacy name-based fallback for drivers that predate net.ifc class
+         * registration.  Fire it once, not every loop: modern drivers (e.g.
+         * virtio.net) register the net.ifc class and are discovered via the
+         * class event above, so re-polling this name lookup only spammed PM. */
+        if (!g_netdrv_lookup_kicked && !g_netdrv_lookup_pending) {
+            net_stack_start_lookup_coroutine();
+            if (g_netdrv_lookup_pending)
+                g_netdrv_lookup_kicked = 1u;
+        }
         return;
     }
     for (uint32_t i = 0u; i < NET_STACK_MAX_INTERFACES; ++i) {

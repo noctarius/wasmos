@@ -425,8 +425,12 @@ class ProcessManager {
             rc = pm_handle_class_subscribe(process->context_id, &msg);
             break;
         default:
-            rc = -1;
-            break;
+            /* Unknown/unsolicited type — almost always a stray reply (a *_RESP
+             * or *_ERROR) that got misrouted to PM's well-known proc endpoint.
+             * Drop it silently.  Never bounce an error back here: a peer that
+             * likewise error-replies to unrecognised types (e.g. the RTC
+             * driver) would ping-pong with PM forever and peg a CPU. */
+            return PROCESS_RUN_YIELDED;
         }
 
         if (rc != 0) {

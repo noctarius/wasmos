@@ -12,6 +12,7 @@
 #include "process.h"
 #include "sync/spinlock.h"
 #include "paging.h"
+#include "xfer_buffer.h"
 #include "wasmos/ringbuf.h"
 
 #define COM1_PORT 0x3F8
@@ -436,27 +437,27 @@ int klog_register_ring(uint32_t owner_context_id, uint32_t id) {
     if (id == 0) {
         return -1;
     }
-    uint64_t base = 0;
-    uint64_t pages = 0;
-    if (mm_shared_get_phys(owner_context_id, id, &base, &pages) != 0 || pages == 0) {
+    /* The VT owns the ring as a BUFFER_KIND_TRANSFER xfer-buffer (the same
+     * zero-copy transport the socket rings use); resolve it by (id, owner) and
+     * take its physical base.  No pin/retain: the VT holds the buffer for its
+     * whole lifetime, matching the kernel's fixed-region console_ring model. */
+    xfer_buffer_t buf;
+    if (xfer_buffer_describe(id, BUFFER_KIND_TRANSFER, owner_context_id, &buf) != XFER_BUFFER_OK) {
         return -1;
     }
-    uint64_t region_bytes64 = pages * 0x1000ull;
-    if (region_bytes64 == 0 || region_bytes64 > 0xFFFFFFFFull) {
+    uint64_t base = xfer_buffer_object_phys(&buf);
+    uint32_t region_bytes = buf.size_bytes;
+    if (base == 0 || (base & 0xFFFull) != 0 || region_bytes == 0) {
         return -1;
     }
-    uint32_t region_bytes = (uint32_t)region_bytes64;
     uint64_t alias = base;
     if (g_serial_high_alias_enabled && alias < KERNEL_HIGHER_HALF_BASE) {
         alias += KERNEL_HIGHER_HALF_BASE;
     }
-    /* Validate the region is an initialized ringbuf before retaining it, so a
-     * bad/foreign id cannot pin memory or wedge klog output. */
+    /* Validate the region is an initialized ringbuf before accepting it, so a
+     * bad/foreign id cannot wedge klog output. */
     wasmos_ringbuf_t rb;
     if (wasmos_ringbuf_attach(&rb, ptr_cast(void, alias), region_bytes) != 0) {
-        return -1;
-    }
-    if (mm_shared_retain(owner_context_id, id) != 0) {
         return -1;
     }
     *serial_klog_ring_bytes_slot() = region_bytes;

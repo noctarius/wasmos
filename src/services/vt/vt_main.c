@@ -6,6 +6,7 @@
 #include "wasmos/ipc.h"
 #include "wasmos/libsys.h"
 #include "wasmos/startup.h"
+#include "wasmos/ringbuf.h"
 #include "wasmos_driver_abi.h"
 #include "vt_types.h"
 
@@ -35,6 +36,16 @@ static uint16_t g_vt_rows = VT_ROWS_DEFAULT;
 static uint32_t g_heap_cursor = 0;
 static uint32_t g_heap_limit = 0;
 static int32_t g_alloc_failure = 0;
+
+/* klog ring (phase 4): the VT owns an SPSC byte ring in shared memory; the
+ * kernel publishes klog text into it (serial_write) and the VT drains it into
+ * vt-1 (the system console).  The ring carries no IPC wake, so the main loop
+ * polls it on a bounded timed wait — klog latency into an off-screen slot is
+ * not critical, and interactive input still wakes the endpoint immediately. */
+#define VT_KLOG_TTY 1u
+#define VT_KLOG_RING_CAPACITY 4096u /* SPSC data capacity (power of two) */
+static wasmos_ringbuf_t g_klog_ring;
+static int32_t g_klog_ring_ready = 0;
 
 extern uint8_t __heap_base;
 
@@ -1484,6 +1495,59 @@ static void vt_handle_key_notify(int32_t scancode, int32_t keyup, int32_t extend
  * subscribes to keyboard events and enters the main IPC receive loop.
  * g_switch_generation is a monotonic counter incremented on TTY switches;
  * write messages with a stale generation are silently dropped. */
+/* Create the VT-owned klog ring, map it into our linear memory, initialize the
+ * SPSC header, and hand its xfer-buffer id to the kernel.  Best-effort: on any
+ * failure g_klog_ring_ready stays 0 and the VT runs exactly as before (klog then
+ * only reaches the legacy console_ring / COM1 TX). */
+static void vt_klog_ring_init(void) {
+    /* Overlay the SPSC ring on a BUFFER_KIND_TRANSFER xfer-buffer — the same
+     * zero-copy transport the socket rings use (net.h), which handles WARP's
+     * non-page-aligned linear-memory base for us (unlike raw shmem_map).  The
+     * VT's heap_pages/INITIAL_MEMORY (see CMakeLists + linker.metadata) keep
+     * WARP's scan ceiling under the 2 MiB low-guard so the overlay window lands
+     * just above the VT's active memory, inside declared linear memory — a cheap
+     * page-fault-in, not a multi-MiB commit that would stall the CLI handshake
+     * or force the commit-probe to extend the module (which throws under WARP). */
+    uint32_t region = wasmos_ringbuf_bytes_for(VT_KLOG_RING_CAPACITY);
+    int32_t bid = wasmos_xfer_buffer_acquire((int32_t)region);
+    if (bid <= 0) {
+        return;
+    }
+    int32_t off = wasmos_xfer_buffer_map(bid);
+    if (off < 0) {
+        return;
+    }
+    void* base = ptr_cast(void, (uint32_t)off);
+    if (wasmos_ringbuf_init(&g_klog_ring, base, region, VT_KLOG_RING_CAPACITY) != 0) {
+        return;
+    }
+    if (wasmos_klog_register_ring(bid) != 0) {
+        return;
+    }
+    g_klog_ring_ready = 1;
+}
+
+/* Drain any pending klog bytes into vt-1 through the normal per-slot byte path
+ * (cell buffer updated; rendered only if vt-1 is the visible slot).  Never
+ * targets vt-0 (tty0's byte path calls wasmos_console_write, which would loop
+ * back into klog). */
+static void vt_drain_klog_ring(void) {
+    if (!g_klog_ring_ready) {
+        return;
+    }
+    vt_tty_t* tty = &g_ttys[VT_KLOG_TTY];
+    uint8_t buf[128];
+    for (;;) {
+        uint32_t n = wasmos_ringbuf_read(&g_klog_ring, buf, (uint32_t)sizeof(buf));
+        if (n == 0) {
+            break;
+        }
+        for (uint32_t i = 0; i < n; ++i) {
+            vt_process_byte(VT_KLOG_TTY, tty, buf[i]);
+        }
+    }
+}
+
 WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t arg1, int32_t arg2,
                                       int32_t arg3) {
     /* proc.endpoint now comes from the spawn-info contract, not an entry arg. */
@@ -1545,6 +1609,15 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t arg1, int32
     if (g_fb_ep != -1) {
         vt_fb_console_mode(1);
     }
+
+    /* Bring up the VT-owned klog ring (small, cheap overlay — see
+     * vt_klog_ring_init).  The VT drains it into vt-1 on every wake below: it
+     * blocks on g_vt_ep with wasmos_ipc_select_one (a timed select set strands
+     * serial input under WARP), so klog reaches vt-1 whenever any IPC arrives.
+     * An idle VT does not drain until the next event, which is fine: vt-1 is not
+     * the visible slot yet (phase 5), and COM1 TX always carries the full log. */
+    vt_klog_ring_init();
+
     wasmos_sys_notify_ready(proc_endpoint, g_vt_ep);
 
     for (;;) {
@@ -1553,6 +1626,7 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t arg1, int32
             wasmos_sched_yield();
             continue;
         }
+        vt_drain_klog_ring();
 
         wasmos_ipc_message_t msg;
         wasmos_ipc_message_read_last(&msg);

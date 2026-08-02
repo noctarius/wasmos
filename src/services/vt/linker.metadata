@@ -9,7 +9,13 @@ native = false
 
 [resources]
 stack_pages = 16
-heap_pages = 16
+# Raised from 16: heap_pages sets the WARP reserved-linmem slot (heap_size), the
+# scan ceiling xfer_buffer_map uses to place the klog ring's overlay window
+# (phase 4).  Kept UNDER the 2 MiB low-guard (mem_size < ~2.13 MiB) so the window
+# is placed just above the VT's active memory (~a few hundred KiB) instead of at
+# 2 MiB — a cheap page-fault-in rather than a multi-MiB commit that would stall
+# the CLI handshake.  Must exceed the cell grids + the window + scan guards.
+heap_pages = 256
 
 [ipc]
 required_endpoint_name = "proc"

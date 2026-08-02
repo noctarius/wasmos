@@ -328,6 +328,21 @@ linked feature documents for rationale and rollout plans.
 - Native services use explicit cancellation for stack-backed synchronous IPC
   waits. `font-service` provides TTF measurement/rasterization for compositor
   and libui clients.
+- The `vt` service is the I/O multiplexer (`docs/architecture/19`). Phases 0–4
+  are shipped: idle-spin fixes, serial RX via IRQ4 into the serial-bound slot,
+  push-based CLI input, a single loadable-keymap decoder, and (phase 4) kernel
+  klog into vt-1. klog rides a VT-owned SPSC ring (`wasmos/ringbuf.h`) overlaid
+  on a `BUFFER_KIND_TRANSFER` xfer-buffer — the socket-ring transport, not raw
+  shmem — registered with the kernel via `klog_register_ring`; `serial_write`
+  publishes into it additively (legacy `console_ring` + fbpci drain retained for
+  early-boot on-screen klog, retired in phase 5). The VT blocks on
+  `wasmos_ipc_select_one` and drains the ring on each wake (a timed select set
+  stranded serial input under WARP; there is no ring doorbell yet). WARP notes:
+  the overlay needs the VT's `INITIAL_MEMORY`/`heap_pages` tuned so the window
+  lands in declared linear memory below the 2 MiB low-guard (a cheap page-fault,
+  not a multi-MiB commit); a new hostcall needs the numbered `warp_ring3_dispatch`
+  case plus the AOT tool's symbol table, and `--initial/max-memory` changes are
+  content-cached under `.cache/warp_aot`.
 
 ## Drivers and Hardware
 

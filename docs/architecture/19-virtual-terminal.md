@@ -189,8 +189,10 @@ typedef struct {
 ### Framebuffer Driver IPC Interface
 
 `vt` is the only caller of the framebuffer driver's text-cell endpoint. Under
-the redesign the framebuffer driver is a pure blit surface: it renders the cells
-`vt` sends and (phase 4) no longer drains the kernel console ring itself.
+the redesign the framebuffer driver becomes a pure blit surface: it renders the
+cells `vt` sends and, in phase 5, will no longer drain the kernel console ring
+itself. Phase 4 routes klog into vt-1 through a separate VT-owned ring
+(additively); the framebuffer's console-ring drain is retired in phase 5.
 
 | Opcode                          | Value | Arguments                                            |
 |---------------------------------|-------|------------------------------------------------------|
@@ -210,11 +212,12 @@ the redesign the framebuffer driver is a pure blit surface: it renders the cells
 Cell color packing: `arg3 = (fg & 0x0F) << 8 | (bg & 0x0F)`.
 
 `FBTEXT_IPC_CONSOLE_MODE_REQ` toggles whether the framebuffer driver drains the
-kernel console ring. **Shipped:** the framebuffer driver owns the ring drain and
-`vt` toggles it around switches. **Proposed (phase 4):** the *VT* drains the ring
-into vt-1 and the framebuffer driver stops draining entirely, becoming a blit
-surface only; `FBTEXT_IPC_GFX_OVERLAY_REQ` still gates whether the compositor or
-the VT owns the framebuffer.
+kernel console ring. **Shipped:** the framebuffer driver owns the console-ring
+drain and `vt` toggles it around switches; **phase 4** adds a *separate*
+VT-owned klog ring drained into vt-1 without disturbing this. **Proposed
+(phase 5):** the framebuffer driver stops draining the console ring entirely,
+becoming a blit surface only; `FBTEXT_IPC_GFX_OVERLAY_REQ` still gates whether
+the compositor or the VT owns the framebuffer.
 
 ---
 
@@ -329,11 +332,19 @@ the IRQ→VT path and make the CLI event-driven.
   it by asking `vt` to switch to vt-0 and by locking the overlay
   (`FBTEXT_IPC_GFX_OVERLAY_REQ 1`); it releases by switching back to a text slot.
   Single-owner-per-frame removes the competing-writer flicker.
-- **klog (phase 4):** normal kernel log text reaches vt-1 by the VT draining the
-  kernel **console ring** (`console_ring_t`, `src/kernel/include/console_ring.h`,
-  mapped via `shmem_map(console_ring_id())`) into vt-1's buffer, rendered when
-  vt-1 is visible. klog additionally always writes COM1 **TX** directly, so serial
-  shows it regardless of the visible slot.
+- **klog (phase 4, Shipped):** normal kernel log text reaches vt-1 through a
+  VT-owned SPSC byte ring (`wasmos/ringbuf.h`) overlaid on a
+  `BUFFER_KIND_TRANSFER` xfer-buffer — the same zero-copy transport the socket
+  rings use. The VT acquires + maps the buffer, `wasmos_ringbuf_init`s it, and
+  registers its id with the kernel (`klog_register_ring`); `serial_write` then
+  publishes klog into that ring in addition to COM1 TX, and the VT drains it into
+  vt-1 on each wake of its main loop. This is **additive**: the kernel still
+  writes the legacy `console_ring` and the framebuffer driver still drains it for
+  early-boot on-screen klog. Retiring that console-ring drain (making the
+  framebuffer a pure blit surface) moves to phase 5, alongside the default-visible
+  flip to vt-1 — until vt-1 is visible, dropping it would blank the boot screen.
+  klog additionally always writes COM1 **TX** directly, so serial shows it
+  regardless of the visible slot.
 - **Panic bypass:** panic/fault output writes COM1 directly (`serial_printf_unlocked`)
   and paints the framebuffer directly (`src/kernel/framebuffer.c`,
   `panic_render_screen`), bypassing the ring and the VT — the kernel may be in an
@@ -626,8 +637,8 @@ without buffering or editing. Echo still applies if `input_echo = 1`.
 | 1     | Serial IRQ4 → `VT_IPC_SERIAL_INPUT_REQ` → serial-bound slot  | Shipped  |
 | 2     | Push input (`VT_IPC_INPUT_NOTIFY`); event-driven CLI         | Shipped  |
 | 3     | Single keyboard decoder in VT (loadable `.kmap` layouts); compositor consumes `VT_IPC_KEY_FORWARD`; enriched `GFX_EVENT_KEY` (scancode) | Shipped  |
-| 4     | klog/console ring drained by VT into vt-1; FB = blit surface | Proposed |
-| 5     | Default visible vt-1; serial-bound selector; lazy CLI spawn; `vt_switch_tty` overlay-wedge fix | Proposed |
+| 4     | klog into vt-1 via VT-owned xfer-buffer SPSC ring (additive; drained on each VT wake). FB→blit-surface retirement deferred to phase 5 | Shipped  |
+| 5     | Default visible vt-1 (retires the fbpci console-ring drain); serial-bound selector; lazy CLI spawn; `vt_switch_tty` overlay-wedge fix | Proposed |
 
 Keymap layouts are data files under `system/keymaps/` (`us-qwerty.kmap`,
 `de-nodeadkeys.kmap`), loaded by the VT at init (built-in US fallback).  Runtime

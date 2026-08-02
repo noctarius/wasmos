@@ -3064,6 +3064,8 @@ extern "C" uint32_t warp_ring3_dispatch(uint32_t hc_id, void* frame_ptr) {
         return warp_xfer_buffer_map((uint32_t)a0, ctx2);
     /* 115 */ case HC_XFER_BUFFER_UNMAP:
         return warp_xfer_buffer_unmap((uint32_t)a0, ctx2);
+    /* 116 */ case HC_KLOG_REGISTER_RING:
+        return warp_klog_register_ring((uint32_t)a0, ctx2);
     /* 35 */ case HC_IO_IN8:
         return warp_io_in8((uint32_t)a0, ctx2);
     /* 36 */ case HC_IO_IN16:

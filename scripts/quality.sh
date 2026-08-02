@@ -397,6 +397,7 @@ run_go_lint() {
 
     cp "examples/go/hello/hello_go.go" "$stage_dir/hello_go.go"
     cp "src/libc/go/wasmos.go" "$stage_dir/wasmos.go"
+    cp "src/libc/go/coroutine.go" "$stage_dir/coroutine.go"
 
     (
         cd "$stage_dir"

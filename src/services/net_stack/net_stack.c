@@ -1647,32 +1647,30 @@ static struct altcp_tls_config* net_stack_ensure_tls_config(void) {
      * omits, so a few always fail to parse. Filter to the certs we can parse — we
      * could not verify a chain to an unparseable root anyway — so the create sees
      * a clean bundle. */
-    {
-        uint32_t filtered_len = 0u;
-        uint8_t* filtered = net_stack_filter_ca_pem(g_ca_bytes, &filtered_len);
-        const uint8_t* ca;
-        uint32_t ca_len;
-        if (filtered != NULL && filtered_len > 1u) {
-            /* The filtered copy is self-contained; free the raw bundle now so its
-             * pages are available for the (memory-heavy) parse that follows.
-             * g_ca_bytes is only needed to build the config this once. */
-            free(g_ca_bytes);
-            g_ca_bytes = NULL;
-            g_ca_len = 0u;
-            ca = filtered;
-            ca_len = filtered_len;
-        } else {
-            ca = g_ca_bytes;
-            ca_len = g_ca_len;
-        }
-        g_tls_config = altcp_tls_create_config_client(ca, ca_len);
-        if (g_tls_config == NULL && g_api != NULL && g_api->console_write != NULL) {
-            static const char msg[] = "[net-stack] tls: config create failed\n";
-            g_api->console_write(msg, (int)(sizeof(msg) - 1));
-        }
-        if (filtered != NULL) {
-            free(filtered); /* mbedtls_x509_crt_parse copied the certs into the config */
-        }
+    uint32_t filtered_len = 0u;
+    uint8_t* filtered = net_stack_filter_ca_pem(g_ca_bytes, &filtered_len);
+    const uint8_t* ca;
+    uint32_t ca_len;
+    if (filtered != NULL && filtered_len > 1u) {
+        /* The filtered copy is self-contained; free the raw bundle now so its
+         * pages are available for the (memory-heavy) parse that follows.
+         * g_ca_bytes is only needed to build the config this once. */
+        free(g_ca_bytes);
+        g_ca_bytes = NULL;
+        g_ca_len = 0u;
+        ca = filtered;
+        ca_len = filtered_len;
+    } else {
+        ca = g_ca_bytes;
+        ca_len = g_ca_len;
+    }
+    g_tls_config = altcp_tls_create_config_client(ca, ca_len);
+    if (g_tls_config == NULL && g_api != NULL && g_api->console_write != NULL) {
+        static const char msg[] = "[net-stack] tls: config create failed\n";
+        g_api->console_write(msg, (int)(sizeof(msg) - 1));
+    }
+    if (filtered != NULL) {
+        free(filtered); /* mbedtls_x509_crt_parse copied the certs into the config */
     }
     if (g_tls_config == NULL) {
         g_tls_config_failed = 1u;
@@ -1757,14 +1755,12 @@ static int32_t net_stack_pcb_connect(net_socket_t* socket, uint16_t port, uint32
     /* TCP: install the per-socket callbacks and start the handshake. The reply
      * is deferred (NET_STATUS_WOULD_BLOCK) and delivered from the connected or
      * error callback once the SYN exchange resolves. */
-    {
-        struct altcp_pcb* pcb = (struct altcp_pcb*)socket->pcb;
-        altcp_arg(pcb, socket);
-        altcp_recv(pcb, net_stack_tcp_recv);
-        altcp_sent(pcb, net_stack_tcp_sent);
-        altcp_err(pcb, net_stack_tcp_err);
-        err = altcp_connect(pcb, &address, port, net_stack_tcp_connected);
-    }
+    struct altcp_pcb* pcb = (struct altcp_pcb*)socket->pcb;
+    altcp_arg(pcb, socket);
+    altcp_recv(pcb, net_stack_tcp_recv);
+    altcp_sent(pcb, net_stack_tcp_sent);
+    altcp_err(pcb, net_stack_tcp_err);
+    err = altcp_connect(pcb, &address, port, net_stack_tcp_connected);
     return err == ERR_OK ? NET_STATUS_WOULD_BLOCK : NET_STATUS_IO_ERROR;
 }
 

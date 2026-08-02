@@ -580,6 +580,13 @@ fn ipc_call(destination: u32, request_id: u32, msg_type: u32, arg0: u32, arg1: u
     return ipc_call_budgeted(destination, request_id, msg_type, arg0, arg1, arg2, arg3, out, 1024);
 }
 
+// Reply-wait tuning for synchronous ipc_call_budgeted when blocking (below).
+// Each empty wait blocks the reply endpoint up to GFX_CALL_WAIT_MS; the caller's
+// max_empty_polls (a legacy spin count) is capped to GFX_CALL_MAX_EMPTY_WAITS so
+// a lost reply gives up in ~5s rather than tens of seconds of blocking.
+const GFX_CALL_WAIT_MS: u32 = 20;
+const GFX_CALL_MAX_EMPTY_WAITS: u32 = 250;
+
 fn ipc_call_budgeted(destination: u32, request_id: u32, msg_type: u32, arg0: u32, arg1: u32, arg2: u32, arg3: u32, out: *c.nd_ipc_message_t, max_empty_polls: u32) i32 {
     const cb_store = struct {
         fn onResolve(user: ?*anyopaque, msg_raw: ?*const anyopaque) callconv(.c) void {
@@ -596,6 +603,9 @@ fn ipc_call_budgeted(destination: u32, request_id: u32, msg_type: u32, arg0: u32
     var empty_polls: u32 = 0;
     var total_polls: u32 = 0;
     const poll_limit = if (max_empty_polls == 0) 1 else max_empty_polls;
+    // Cap the number of blocking reply-waits so a legacy spin budget (e.g. 1024)
+    // does not translate into tens of seconds of blocking.
+    const wait_limit = if (poll_limit > GFX_CALL_MAX_EMPTY_WAITS) GFX_CALL_MAX_EMPTY_WAITS else poll_limit;
     // total_limit caps the loop even when continuous non-empty events (e.g. mouse
     // moves) keep preventing empty_polls from incrementing — without this, the
     // loop would spin forever as long as mouse input floods the queue.
@@ -608,12 +618,15 @@ fn ipc_call_budgeted(destination: u32, request_id: u32, msg_type: u32, arg0: u32
         }
         total_polls +%= 1;
         if (handled == 0) {
-            if (empty_polls >= poll_limit) {
+            if (empty_polls >= wait_limit) {
                 sys.intentCancel(&g_ipc_loop, request_id);
                 return -1;
             }
             empty_polls +%= 1;
-            api().sched_yield.?();
+            // Block on the reply endpoint instead of yield-spinning: the CPU
+            // reaches idle/hlt until the reply (or another message) arrives,
+            // then the poll above dispatches it.
+            _ = api().ipc_wait.?(ctxId(), g_gfx_endpoint, GFX_CALL_WAIT_MS);
         }
         if (total_polls >= total_limit) {
             if (GFX_TRACE) {

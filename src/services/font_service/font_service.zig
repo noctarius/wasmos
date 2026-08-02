@@ -8,7 +8,12 @@ const IPC_EMPTY: i32 = 1;
 const IPC_ENDPOINT_NONE: u32 = 0xFFFF_FFFF;
 const REQ_BASE: u32 = 0xA000;
 const PM_XFER_BUFFER_SIZE: usize = 256 * 1024;
-const IPC_CALL_EMPTY_POLL_LIMIT: u32 = 32768;
+// Reply-wait budget for a synchronous ipc_call: block on the reply endpoint up
+// to IPC_CALL_WAIT_MS per empty wait and give up after IPC_CALL_MAX_EMPTY_WAITS
+// (~10s) so a lost reply cannot hang the call forever.  Replaces a spin that
+// yielded up to 32768 times waiting for the reply.
+const IPC_CALL_WAIT_MS: u32 = 50;
+const IPC_CALL_MAX_EMPTY_WAITS: u32 = 200;
 const MAX_FONTS: usize = 3;
 const MAX_HANDLES: usize = 16;
 const RASTER_SCRATCH_BYTES: usize = 4096;
@@ -126,12 +131,15 @@ fn ipc_call(destination: u32, request_id: u32, msg_type: u32, arg0: u32, arg1: u
             return -1;
         }
         if (handled == 0) {
-            if (empty_polls >= IPC_CALL_EMPTY_POLL_LIMIT) {
+            if (empty_polls >= IPC_CALL_MAX_EMPTY_WAITS) {
                 sys.intentCancel(&g_ipc_loop, request_id);
                 return -1;
             }
             empty_polls +%= 1;
-            api().sched_yield.?();
+            // Block on the reply endpoint instead of yield-spinning: the CPU
+            // reaches idle/hlt until the reply (or another message) arrives,
+            // then the poll above dispatches it.
+            _ = api().ipc_wait.?(ctxId(), g_font_endpoint, IPC_CALL_WAIT_MS);
         }
     }
     out.* = state.resp;

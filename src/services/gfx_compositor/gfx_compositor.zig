@@ -74,7 +74,15 @@ var g_font_title_handle: u32 = 0;
 var g_font_init_failed: bool = false;
 var g_font_init_attempts: u32 = 0;
 var g_font_prime_index: usize = 0;
+// True while vt-0 (the compositor) is the visible slot and thus owns the
+// framebuffer.  Set at startup and thereafter driven by the vt's
+// VT_IPC_VIS_NOTIFY as the user switches ttys; the compositor only draws to the
+// framebuffer while this is true.
 var g_overlay_locked: bool = false;
+// The compositor requests the framebuffer once, when the first window appears.
+// After that it never auto-switches away from or back to vt-0 — switching is
+// user-driven (Ctrl+Shift+Fn / the CLI `tty` command).
+var g_did_startup_switch: bool = false;
 var g_next_window_id: u32 = 1;
 var g_next_z: u32 = 1;
 var g_focused_window_id: u32 = 0;
@@ -750,27 +758,6 @@ fn try_switch_to_gfx_tty() void {
         reply.type == c.VT_IPC_RESP)
     {
         logMsg("[gfx] switched to tty0 for compositor output\n");
-    }
-}
-
-fn try_restore_cli_tty() void {
-    if (g_vt_endpoint == IPC_ENDPOINT_NONE) return;
-    if (GFX_TRACE) {
-        logMsg("[gfx-t] try_restore_cli_tty ENTER\n");
-    }
-    var reply: c.nd_ipc_message_t = undefined;
-    const req_id: u32 = GFX_REQUEST_BASE + GFX_FB_LOOKUP_RETRIES + 3;
-    if (ipc_call(g_vt_endpoint, req_id, c.VT_IPC_SWITCH_TTY, 1, 0, 0, 0, &reply) == 0 and
-        reply.type == c.VT_IPC_RESP)
-    {
-        if (GFX_TRACE) {
-            logMsg("[gfx-t] try_restore_cli_tty OK\n");
-        }
-        logMsg("[gfx] restored tty1 for CLI\n");
-    } else {
-        if (GFX_TRACE) {
-            logMsg("[gfx-t] try_restore_cli_tty FAILED\n");
-        }
     }
 }
 
@@ -1475,26 +1462,24 @@ fn fb_set_overlay_lock(lock: bool) void {
 }
 
 fn sync_console_mode_for_windows() void {
-    const cnt = active_presented_window_count();
-    const has_presented_windows = cnt > 0;
-    if (has_presented_windows and !g_overlay_locked) {
-        if (GFX_TRACE) {
-            logMsg("[gfx-t] sync: lock\n");
-        }
-        try_switch_to_gfx_tty();
-        fb_set_overlay_lock(true);
-        g_overlay_locked = true;
-        request_repaint_full();
-        return;
+    // One-time: take the framebuffer for the GUI when the first window appears.
+    // After this the compositor never auto-grabs vt-0 again — if the user
+    // switches to a text slot it stays there until an explicit switch back
+    // (the vt drives g_overlay_locked via VT_IPC_VIS_NOTIFY).  Previously this
+    // re-grabbed vt-0 whenever windows were present, fighting a user switch-away.
+    if (g_did_startup_switch) return;
+    if (active_presented_window_count() == 0) return;
+    if (GFX_TRACE) {
+        logMsg("[gfx-t] sync: startup lock\n");
     }
-    if (!has_presented_windows and g_overlay_locked) {
-        if (GFX_TRACE) {
-            logMsg("[gfx-t] sync: restore cnt=0 locked=true\n");
-        }
-        fb_set_overlay_lock(false);
-        g_overlay_locked = false;
-        try_restore_cli_tty();
-    }
+    try_switch_to_gfx_tty();
+    // The vt locks the overlay as part of switching to vt-0, but at startup it
+    // is already on vt-0 (a no-op switch that does not touch the overlay), so
+    // lock it explicitly here for that first grab.
+    fb_set_overlay_lock(true);
+    g_overlay_locked = true;
+    g_did_startup_switch = true;
+    request_repaint_full();
 }
 
 fn reply_with_status(msg: *const c.nd_ipc_message_t, status: i32, arg1: u32, arg2: u32, arg3: u32) void {
@@ -2341,6 +2326,10 @@ fn draw_window_buffer(win: window_slot_t, buf: buffer_slot_t, clip: c.gfx_rect_t
 
 fn compose_region(region: c.gfx_rect_t) i32 {
     if (!g_fb_info_valid or g_fb_pixels == null or region.w <= 0 or region.h <= 0) return c.GFX_STATUS_OK;
+    // The framebuffer belongs to the vt's text render whenever vt-0 is not the
+    // visible slot; do not paint over it.  Window state still updates; a full
+    // repaint is issued when vt-0 becomes visible again (VT_IPC_VIS_NOTIFY).
+    if (!g_overlay_locked) return c.GFX_STATUS_OK;
 
     fill_rect(region.x, region.y, region.w, region.h, 0x101820);
 
@@ -2967,6 +2956,19 @@ fn handle_ipc_dispatch(msg: *const c.nd_ipc_message_t) void {
                 }
             }
         },
+        c.VT_IPC_VIS_NOTIFY => {
+            // The visible slot changed.  We own the framebuffer only while vt-0
+            // is visible: relinquish (stop drawing) when hidden, and repaint the
+            // whole screen when we become visible again (the vt's text render
+            // left the framebuffer with console content).
+            const visible = (msg.arg0 != 0);
+            if (visible != g_overlay_locked) {
+                g_overlay_locked = visible;
+                if (visible) {
+                    request_repaint_full();
+                }
+            }
+        },
         c.MOUSE_IPC_MOVE_NOTIFY => handle_mouse_notify(msg),
         c.GFX_IPC_CREATE_WINDOW => handle_create_window(msg),
         c.GFX_IPC_DESTROY_WINDOW => handle_destroy_window(msg),
@@ -2997,6 +2999,7 @@ fn register_ipc_handlers() i32 {
         }
     }.onMessage;
     if (sys.eventRegister(&g_ipc_loop, c.VT_IPC_KEY_FORWARD, cb, null) != 0) return -1;
+    if (sys.eventRegister(&g_ipc_loop, c.VT_IPC_VIS_NOTIFY, cb, null) != 0) return -1;
     if (sys.eventRegister(&g_ipc_loop, c.MOUSE_IPC_MOVE_NOTIFY, cb, null) != 0) return -1;
     if (sys.eventRegister(&g_ipc_loop, c.GFX_IPC_CREATE_WINDOW, cb, null) != 0) return -1;
     if (sys.eventRegister(&g_ipc_loop, c.GFX_IPC_DESTROY_WINDOW, cb, null) != 0) return -1;

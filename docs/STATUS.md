@@ -348,10 +348,14 @@ linked feature documents for rationale and rollout plans.
   VT-owned xfer-buffer granted READ to the framebuffer driver) instead of a
   per-cell `CELL_WRITE` IPC loop. The per-cell loop stormed the driver's queue
   and, under SMP, starved it — an ~80 s switch wedge; the blit is one IPC.
-  Verified by `tests/test_vt_tty_switch.py`. Still to do in phase 5: default-
-  visible vt-1 + retiring the fbpci console-ring drain, the serial-bound-slot
-  selector, lazy per-slot CLI spawn, and compositor framebuffer ownership (switch
-  to vt-0 once at startup, then relinquish until an explicit switch back).
+  Verified by `tests/test_vt_tty_switch.py`. The compositor now owns the
+  framebuffer only while vt-0 is visible: it switches to vt-0 once (first window),
+  never auto-grabs again, and draws only while the vt reports vt-0 visible
+  (`VT_IPC_VIS_NOTIFY`, sent on every switch; "hidden" is sent before the vt
+  repaints the text slot so the compositor stops first). Switching is user-driven
+  (`Ctrl+Shift+Fn` / `tty N`). Still to do in phase 5: default-visible vt-1 +
+  retiring the fbpci console-ring drain, the serial-bound-slot selector, and lazy
+  per-slot CLI spawn.
 
 ## Drivers and Hardware
 

@@ -57,12 +57,23 @@ VT's text render of one vt-x.
 | *visible* slot     | `vt-1`  | keyboard hotkeys / `tty N` issued on the keyboard  |
 | *serial-bound* slot| `vt-1`  | `VT_IPC_BIND_SERIAL_REQ` / `tty N` issued on serial |
 
-The compositor requests the visible slot switch to `vt-0` when the first UI app
-starts (`try_switch_to_gfx_tty` → `VT_IPC_SWITCH_TTY 0`) and back to a text slot
-when the last window closes. `tty N` retargets whichever channel issued it:
-issued on the keyboard it changes the visible slot; issued on serial it rebinds
-the serial-bound slot. `tty 0` on serial is rejected (the GUI cannot render over
-a serial line). vt-1 mirrors to serial even while vt-0 is visible.
+The compositor requests the visible slot switch to `vt-0` **once**, when the
+first UI app appears (`try_switch_to_gfx_tty` → `VT_IPC_SWITCH_TTY 0`), and then
+never auto-switches again: switching is user-driven from there (`Ctrl+Shift+Fn`
+or `tty N`). `tty N` retargets whichever channel issued it: issued on the
+keyboard it changes the visible slot; issued on serial it rebinds the
+serial-bound slot. `tty 0` on serial is rejected (the GUI cannot render over a
+serial line). vt-1 mirrors to serial even while vt-0 is visible.
+
+**Framebuffer ownership (phase 5, Shipped).** The compositor owns the framebuffer
+only while `vt-0` is the visible slot: it draws to it exclusively when visible
+and relinquishes it (draws nothing) when a text slot is shown, so it never fights
+the vt's text render. The vt is the authority — on every switch it sends
+`VT_IPC_VIS_NOTIFY` (arg0 = whether `vt-0` is now visible) to the compositor,
+which resumes drawing (with a full repaint) or stops accordingly. The "hidden"
+notify is sent *before* the vt repaints the text slot, so the compositor stops
+first. The compositor claims the notify/key-forward endpoint on its first switch
+to `vt-0`; a later `tty 0` that only changes the visible slot does not reclaim it.
 
 #### Per-slot output fan-out (Proposed — phase 4/5)
 
@@ -250,6 +261,7 @@ the compositor or the VT owns the framebuffer.
 | `VT_IPC_RESP`             | 0x780  | Success response                                       |
 | `VT_IPC_INPUT_NOTIFY`     | 0x781  | *(phase 2)* vt → reader: input available on your slot  |
 | `VT_IPC_KEY_FORWARD`      | 0x782  | *(phase 3)* vt → compositor: key event for vt-0        |
+| `VT_IPC_VIS_NOTIFY`       | 0x783  | *(phase 5)* vt → compositor: arg0=1 if vt-0 is now visible, else 0 |
 | `VT_IPC_ERROR`            | 0x7FF  | Error response                                          |
 
 #### VT_IPC_WRITE_REQ

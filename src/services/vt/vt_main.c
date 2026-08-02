@@ -922,6 +922,16 @@ static void vt_init_ttys(void) {
     g_switch_barrier = 0;
 }
 
+/* Tell the compositor (the vt-0 key sink) whether vt-0 is the visible slot, so
+ * it owns the framebuffer only while visible. */
+static void vt_notify_gfx_visibility(int32_t visible) {
+    int32_t sink = g_tty_reader_ep[0];
+    if (sink < 0) {
+        return; /* compositor has not claimed vt-0 yet */
+    }
+    (void)wasmos_ipc_send(sink, g_vt_ep, VT_IPC_VIS_NOTIFY, 0, visible ? 1 : 0, 0, 0, 0);
+}
+
 static int32_t vt_switch_tty(uint32_t tty_index) {
     if (tty_index >= VT_MAX_TTYS) {
         return VT_SWITCH_ERR_INVALID_TTY;
@@ -954,6 +964,9 @@ static int32_t vt_switch_tty(uint32_t tty_index) {
      * IPC queue and spins vt_fb_send_switch's per-cell retry (up to
      * VT_FB_SWITCH_CELL_RETRIES) — an ~80 s wedge that looks like a hang. */
     if (prev_active == 0 && tty_index != 0) {
+        /* Tell the compositor to stop drawing BEFORE we repaint the text slot,
+         * so it does not paint one more frame over our fresh grid. */
+        vt_notify_gfx_visibility(0);
         (void)vt_fb_send_switch(FBTEXT_IPC_GFX_OVERLAY_REQ, 0, 0, 0, 0);
     }
 
@@ -1000,10 +1013,13 @@ static int32_t vt_switch_tty(uint32_t tty_index) {
         /* Compositor is taking the framebuffer: lock the overlay so the fb
          * driver stops draining the console ring onto the gfx surface. */
         (void)vt_fb_send_switch(FBTEXT_IPC_GFX_OVERLAY_REQ, 1, 0, 0, 0);
-        /* Keep tty0 visibly intentional even when no fresh ring data exists. */
-        vt_draw_tty0_hint();
+        /* vt-0 is visible again: the compositor owns the framebuffer, so let it
+         * repaint.  The overlay is already locked above, so its render lands on
+         * a surface the framebuffer driver will not draw text over. */
+        vt_notify_gfx_visibility(1);
     }
-    /* The vt-0 -> text unlock now happens before the replay above. */
+    /* (The vt-0 -> text "hidden" notify + overlay unlock happen before the
+     * replay above, so the compositor stops before we repaint the text slot.) */
     return 0;
 }
 
@@ -1799,9 +1815,12 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t arg1, int32
         }
 
         case VT_IPC_SWITCH_TTY: {
-            if (msg.arg0 == 0 && msg.source >= 0) {
-                /* Whoever takes vt-0 (the compositor) becomes its key sink; the
-                 * vt forwards decoded keys there as VT_IPC_KEY_FORWARD. */
+            if (msg.arg0 == 0 && msg.source >= 0 && g_tty_reader_ep[0] < 0) {
+                /* The first client to take vt-0 (the compositor, at startup)
+                 * becomes its key/visibility sink; the vt forwards decoded keys
+                 * (VT_IPC_KEY_FORWARD) and visibility (VT_IPC_VIS_NOTIFY) there.
+                 * A later `tty 0` (e.g. from a CLI switching the visible slot
+                 * back) must NOT reclaim it, or those notifies would misroute. */
                 g_tty_reader_ep[0] = msg.source;
             }
             int32_t sw = vt_switch_tty((uint32_t)msg.arg0);

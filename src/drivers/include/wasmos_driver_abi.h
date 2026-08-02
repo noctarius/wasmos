@@ -499,6 +499,11 @@ enum {
      * window.  Fire-and-forget.  arg0=ascii/keysym (0 if none), arg1=scancode,
      * arg2=flags (bit0=down, bit1=extended, bit2=shift, bit3=ctrl, bit4=altgr). */
     VT_IPC_KEY_FORWARD = 0x782,
+    /* vt -> compositor (the vt-0 key sink): the visible slot changed.  The
+     * compositor owns the framebuffer only while vt-0 is visible; on this notify
+     * it resumes/relinquishes drawing.  Fire-and-forget.  arg0=1 if vt-0 is now
+     * the visible slot, 0 otherwise. */
+    VT_IPC_VIS_NOTIFY = 0x783,
     VT_IPC_ERROR = 0x7FF
 };
 

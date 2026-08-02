@@ -71,8 +71,16 @@ static wasmos_sys_event_loop_t g_dm_inventory_loop;
 static wasmos_sys_event_loop_t g_dm_query_loop;
 static wasmos_sys_event_loop_t g_dm_rules_loop;
 static int32_t g_dm_call_select_id = -1;
+/* Select set the IDLE phase blocks on (reply/query/inventory) instead of
+ * yield-spinning.  rule_reply is deliberately excluded: it is owned by
+ * g_dm_rules_loop and only relevant during boot, when the IDLE wait is timed. */
+static int32_t g_dm_idle_select_id = -1;
 
 #define DM_SPAWN_TIMEOUT_MS 5000
+/* IDLE wait cadence while boot-time rule loading is still in flight (retrying FS
+ * reads until the fs service is up, and polling the async boot-rules read).
+ * Once everything is loaded and ready, IDLE blocks indefinitely on real events. */
+#define DM_IDLE_HOUSEKEEP_MS 25
 #define DM_SPAWN_POLL_MAX 65536
 /* Sync spawns rely on PM's own DM_SPAWN_TIMEOUT_MS deadline for termination;
  * the DM-side poll cap must not fire first. */
@@ -1683,6 +1691,14 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t module_coun
         console_write("[device-manager] rules reply endpoint create failed\n");
         wasmos_sys_ipc_recv_loop();
     }
+    g_dm_idle_select_id = wasmos_ipc_select_create();
+    if (g_dm_idle_select_id < 0 ||
+        wasmos_ipc_select_add(g_dm_idle_select_id, g_dm.reply_endpoint) != 0 ||
+        wasmos_ipc_select_add(g_dm_idle_select_id, g_dm.query_endpoint) != 0 ||
+        wasmos_ipc_select_add(g_dm_idle_select_id, g_dm.inventory_endpoint) != 0) {
+        console_write("[device-manager] idle select init failed\n");
+        wasmos_sys_ipc_recv_loop();
+    }
     wasmos_sys_event_loop_init(&g_dm_rules_loop, g_dm.rule_reply_endpoint, 0xE100);
     if (dm_register_rules_handlers() != 0) {
         console_write("[device-manager] rules handler registration failed\n");
@@ -1924,7 +1940,25 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t module_coun
                 g_dm.ready_notified = 1;
                 wasmos_sys_notify_ready(g_dm.proc_endpoint, g_dm.reply_endpoint);
             }
-            wasmos_sched_yield();
+            /* Block on real events instead of yield-spinning (which pegged a CPU
+             * forever once idle).  While boot-time rule loading is still in
+             * flight, wake periodically to retry FS reads and poll the async
+             * boot-rules read; once everything is loaded and ready, block
+             * indefinitely and wake only on a query, inventory, or reply.  The
+             * nonblocking drains above already consumed anything queued, and
+             * select wakes immediately if a message arrived since — no lost
+             * wakeup. */
+            int32_t settled = g_dm.rules_init_loaded && g_dm.rules_boot_loaded &&
+                              g_dm.ready_notified && !g_dm.rules_boot_request_pending;
+            if (g_dm_idle_select_id >= 0) {
+                if (settled) {
+                    (void)wasmos_ipc_select_wait(g_dm_idle_select_id);
+                } else {
+                    (void)wasmos_ipc_select_wait_timeout(g_dm_idle_select_id, DM_IDLE_HOUSEKEEP_MS);
+                }
+            } else {
+                wasmos_sched_yield();
+            }
             continue;
         }
 

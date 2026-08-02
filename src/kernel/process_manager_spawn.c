@@ -16,8 +16,26 @@
 #include "wasmos_app_meta.h"
 #include "wasmos_exec_format.h"
 #include "wasmos_spawn_info.h"
+#include "sched.h"
 #include "string.h"
 #include "serial.h"
+
+/* Scheduler band for a spawned app based on its exec-format flags, wiring up the
+ * previously-dead priority scheme (every non-idle process used to run at
+ * SCHED_PRIO_WASM).  Drivers get SCHED_PRIO_DRIVER so latency-critical device
+ * work -- e.g. the serial driver draining the UART RX FIFO on its IRQ before it
+ * overruns -- outranks ordinary apps under load.
+ *
+ * Services are intentionally NOT boosted yet: several still yield-spin their
+ * main loops instead of blocking, so raising them above the app band lets them
+ * hog CPU and actually slows apps.  Boosting services must wait until those
+ * loops are converted to blocking waits (see the busy-spin cleanup). */
+static uint8_t pm_sched_prio_for_flags(uint32_t flags) {
+    if (flags & WASMOS_APP_FLAG_DRIVER) {
+        return (uint8_t)SCHED_PRIO_DRIVER;
+    }
+    return (uint8_t)SCHED_PRIO_WASM;
+}
 
 typedef enum {
     PM_SPAWN_INTERNAL_ERR_BAD_ARGS = -1000,
@@ -437,6 +455,8 @@ static int pm_spawn_module(uint32_t parent_pid, uint32_t module_index, uint32_t*
         pm_slot_reset(slot);
         return PM_SPAWN_INTERNAL_ERR_BAD_PROCESS;
     }
+    /* Child is still parked (not enqueued): safe to set its scheduler band. */
+    (void)process_set_main_prio(*out_pid, pm_sched_prio_for_flags(desc.flags));
     if (pm_apply_post_spawn_bindings(slot, *out_pid) != 0) {
         klog_write("[pm] spawn_module post bindings failed: ");
         klog_write(slot->name);
@@ -575,6 +595,8 @@ static int pm_spawn_from_buffer(uint32_t parent_pid, const uint8_t* blob, uint32
         pm_slot_reset(slot);
         return PM_SPAWN_INTERNAL_ERR_BAD_PROCESS;
     }
+    /* Child is still parked (not enqueued): safe to set its scheduler band. */
+    (void)process_set_main_prio(*out_pid, pm_sched_prio_for_flags(desc.flags));
     if (pm_apply_post_spawn_bindings(slot, *out_pid) != 0) {
         pm_slot_reset(slot);
         return PM_SPAWN_INTERNAL_ERR_BINDING;

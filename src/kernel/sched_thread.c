@@ -258,6 +258,18 @@ void sched_wake_thread(thread_t* t) {
          * CPU they last ran on; work-stealing handles redistribution. */
         cpu_sched_enqueue(cpu_sched(), t);
     }
+
+    /* Priority preemption: if we just made a thread runnable that outranks what
+     * this CPU is currently running, request a reschedule so it preempts at the
+     * next preemption point (typically IRQ return) instead of waiting for the
+     * running thread's time slice to expire.  Lower sched_prio == higher band.
+     * This is what lets a driver woken by its device IRQ (e.g. the serial
+     * driver on RX) run promptly and drain the hardware before it overruns,
+     * rather than sitting ready behind an equal-or-lower-priority app. */
+    thread_t* cur = cpu_local()->current_thread;
+    if (!cur || (uint8_t)t->sched_prio < cur->sched_prio) {
+        sched_set_need_resched();
+    }
 }
 
 void sched_thread_init(thread_t* t, sched_prio_t prio) {

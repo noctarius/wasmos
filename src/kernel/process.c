@@ -2520,6 +2520,25 @@ int process_set_runtime_tag(uint32_t pid, const char* tag) {
     }
     return process_copy_runtime_tag(proc, tag);
 }
+
+int process_set_main_prio(uint32_t pid, uint8_t prio) {
+    if (prio >= SCHED_PRIO_MAX) {
+        return -1;
+    }
+    process_t* proc = process_get(pid);
+    if (!proc) {
+        return -1;
+    }
+    thread_t* t = process_main_thread(proc);
+    if (!t) {
+        return -1;
+    }
+    /* Safe only before the child is first scheduled: the PM sets this on a
+     * freshly parked (blocked, not-yet-enqueued) process, so the main thread is
+     * not in any ready_list and re-banding it cannot corrupt a runqueue. */
+    t->sched_prio = prio;
+    return 0;
+}
 static void process_sched_invariant_fail(const char* msg, uint64_t a, uint64_t b) {
     klog_write("[sched] invariant fail: ");
     klog_write(msg ? msg : "(unknown)");

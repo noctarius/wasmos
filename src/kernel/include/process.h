@@ -262,6 +262,10 @@ int process_info_at_stats(uint32_t index, uint32_t* out_pid, uint32_t* out_paren
                           const char** out_name, process_stats_t* out_stats);
 int process_set_runtime_lock_required(uint32_t pid, uint8_t required);
 int process_set_runtime_tag(uint32_t pid, const char* tag);
+/* Set the scheduler priority band (SCHED_PRIO_*) of a process's main thread.
+ * Only valid before the child is first scheduled (e.g. on a freshly parked
+ * process, before unpark): the thread must not yet be enqueued in a runqueue. */
+int process_set_main_prio(uint32_t pid, uint8_t prio);
 int process_set_user_entry(uint32_t pid, uint64_t rip, uint64_t user_rsp);
 
 #endif

@@ -22,9 +22,16 @@ set(WASM_NET_STACK_ELF ${BUILD_DIR}/net_stack.elf)
 set(WASM_NET_STACK_APP ${BUILD_DIR}/net_stack.wap)
 
 # Freestanding compile flags matching the compositor's native objects.
+# -nostdlibinc drops the host libc system-include paths (keeping clang's builtin
+# headers): this build is fully -nostdlib, so it must never see /usr/include.
+# Without it, clang's `__has_include(<arpa/inet.h>)` in mbedTLS x509_crt.c
+# resolves against the host glibc and drags in multiarch bits/wordsize.h that
+# the bare-metal target can't find; with it, mbedTLS falls back to its bundled
+# software inet_pton (the only correct choice when we can't link host inet_pton).
 set(NET_STACK_CFLAGS_BASE
     -target ${KERNEL_TARGET_TRIPLE}
     -ffreestanding
+    -nostdlibinc
     -fno-stack-protector
     -fno-pic
     -fno-pie

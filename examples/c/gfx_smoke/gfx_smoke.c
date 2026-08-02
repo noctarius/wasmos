@@ -708,9 +708,9 @@ int main(int argc, char** argv) {
                      * animation-phase poll_gfx_events_once path is long gone by
                      * the time a test can inject keys). */
                     char kmsg[96];
-                    int kn = snprintf(kmsg, sizeof(kmsg),
-                                      "[test] gfx smoke event key sc=%d flags=%d\n", ev.arg2,
-                                      ev.arg3);
+                    int kn =
+                        snprintf(kmsg, sizeof(kmsg), "[test] gfx smoke event key sc=%d flags=%d\n",
+                                 ev.arg2, ev.arg3);
                     if (kn > 0) {
                         (void)putsn(kmsg, (size_t)kn);
                     }

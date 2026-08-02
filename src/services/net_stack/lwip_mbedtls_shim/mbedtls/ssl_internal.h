@@ -16,7 +16,7 @@
 extern "C" {
 #endif
 
-int mbedtls_ssl_flush_output(mbedtls_ssl_context *ssl);
+int mbedtls_ssl_flush_output(mbedtls_ssl_context* ssl);
 
 #ifdef __cplusplus
 }

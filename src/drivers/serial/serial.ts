@@ -51,14 +51,14 @@ let g_endpoint: i32 = -1;
 let g_subscriber: i32 = -1;
 
 function serial_init_hw(): void {
-    io_out8(COM1_IER, 0x00); /* disable interrupts during setup */
+    io_out8(COM1_IER, 0x00);      /* disable interrupts during setup */
     io_out8(COM1_PORT + 3, 0x80); /* DLAB on */
     io_out8(COM1_PORT + 0, 0x01); /* divisor low (115200) */
     io_out8(COM1_PORT + 1, 0x00); /* divisor high */
     io_out8(COM1_PORT + 3, 0x03); /* 8N1, DLAB off */
     io_out8(COM1_PORT + 2, 0xC7); /* FIFO enable, clear, 14-byte threshold */
     io_out8(COM1_PORT + 4, 0x0B); /* DTR|RTS|OUT2 (OUT2 gates IRQ to the PIC) */
-    io_out8(COM1_IER, 0x01); /* enable "received data available" interrupt */
+    io_out8(COM1_IER, 0x01);      /* enable "received data available" interrupt */
 }
 
 function tx_ready(): bool {

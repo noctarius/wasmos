@@ -144,7 +144,7 @@ struct Window {
     stride: i32,   // bytes per row
     rid: i32,
     // deferred input state harvested from pushed events
-    key: u8,      // last key-down ASCII (0 = none), consumed by caller
+    key: u8, // last key-down ASCII (0 = none), consumed by caller
     close: bool,
     ptr_x: i32,
     ptr_y: i32,
@@ -272,7 +272,16 @@ impl Window {
         // display, center the window, and move it there before allocating.
         let rid = w.next_rid();
         unsafe {
-            let _ = ipc_send(w.gfx_ep, w.reply_ep, GFX_IPC_GET_DISPLAY_INFO, rid, 0, 0, 0, 0);
+            let _ = ipc_send(
+                w.gfx_ep,
+                w.reply_ep,
+                GFX_IPC_GET_DISPLAY_INFO,
+                rid,
+                0,
+                0,
+                0,
+                0,
+            );
         }
         if let Some((ty, a0, a1, a2, _)) = w.wait_reply(w.reply_ep, rid) {
             if ty == GFX_IPC_RESP && a0 == GFX_STATUS_OK {
@@ -280,10 +289,23 @@ impl Window {
                 let fb_h = a2;
                 // Content top sits ~26px below the window's y (title bar + border).
                 let px = if fb_w > W { (fb_w - W) / 2 } else { 0 };
-                let py = if fb_h > H + 32 { (fb_h - H - 32) / 2 } else { 4 };
+                let py = if fb_h > H + 32 {
+                    (fb_h - H - 32) / 2
+                } else {
+                    4
+                };
                 let rid = w.next_rid();
                 unsafe {
-                    let _ = ipc_send(w.gfx_ep, w.reply_ep, GFX_IPC_MOVE_WINDOW, rid, w.window_id, px, py, 0);
+                    let _ = ipc_send(
+                        w.gfx_ep,
+                        w.reply_ep,
+                        GFX_IPC_MOVE_WINDOW,
+                        rid,
+                        w.window_id,
+                        px,
+                        py,
+                        0,
+                    );
                 }
                 let _ = w.wait_reply(w.reply_ep, rid);
             }
@@ -464,7 +486,16 @@ impl Window {
     fn focus(&mut self) {
         let rid = self.next_rid();
         unsafe {
-            let _ = ipc_send(self.gfx_ep, self.reply_ep, GFX_IPC_FOCUS_WINDOW, rid, self.window_id, 0, 0, 0);
+            let _ = ipc_send(
+                self.gfx_ep,
+                self.reply_ep,
+                GFX_IPC_FOCUS_WINDOW,
+                rid,
+                self.window_id,
+                0,
+                0,
+                0,
+            );
         }
         let _ = self.wait_reply(self.reply_ep, rid);
     }
@@ -574,7 +605,11 @@ fn draw_char(x: i32, y: i32, ch: u8, scale: i32, color: u32) {
 fn draw_text(x: i32, y: i32, text: &[u8], scale: i32, color: u32) {
     let mut cx = x;
     for &ch in text {
-        let up = if ch >= b'a' && ch <= b'z' { ch - 32 } else { ch };
+        let up = if ch >= b'a' && ch <= b'z' {
+            ch - 32
+        } else {
+            ch
+        };
         draw_char(cx, y, up, scale, color);
         cx += 6 * scale;
     }
@@ -914,8 +949,10 @@ fn decode_packet(buf: &[u8], peer: &mut PeerState) {
     peer.over = buf[2] & 1 != 0;
     peer.lines = buf[4] as u32 | ((buf[5] as u32) << 8);
     peer.garbage_out = buf[6] as u16 | ((buf[7] as u16) << 8);
-    peer.score =
-        buf[8] as u32 | ((buf[9] as u32) << 8) | ((buf[10] as u32) << 16) | ((buf[11] as u32) << 24);
+    peer.score = buf[8] as u32
+        | ((buf[9] as u32) << 8)
+        | ((buf[10] as u32) << 16)
+        | ((buf[11] as u32) << 24);
     let mut i = 12;
     for y in 0..BH {
         for x in 0..BW {
@@ -1048,8 +1085,20 @@ fn banner(text: &[u8], sub: &[u8]) {
     fill_rect(bx, by, bw, bh, 0xFF10_1820);
     stroke_rect(bx, by, bw, bh, TEXT);
     stroke_rect(bx + 3, by + 3, bw - 6, bh - 6, GRID);
-    draw_text(bx + (bw - text_width(text.len(), 4)) / 2, by + 34, text, 4, TEXT);
-    draw_text(bx + (bw - text_width(sub.len(), 1)) / 2, by + 104, sub, 1, DIM);
+    draw_text(
+        bx + (bw - text_width(text.len(), 4)) / 2,
+        by + 34,
+        text,
+        4,
+        TEXT,
+    );
+    draw_text(
+        bx + (bw - text_width(sub.len(), 1)) / 2,
+        by + 104,
+        sub,
+        1,
+        DIM,
+    );
 }
 
 struct Button {
@@ -1067,7 +1116,13 @@ impl Button {
         fill_rect(self.x, self.y, self.w, self.h, bg);
         stroke_rect(self.x, self.y, self.w, self.h, TEXT);
         let tw = label.len() as i32 * 12;
-        draw_text(self.x + (self.w - tw) / 2, self.y + self.h / 2 - 7, label, 2, TEXT);
+        draw_text(
+            self.x + (self.w - tw) / 2,
+            self.y + self.h / 2 - 7,
+            label,
+            2,
+            TEXT,
+        );
     }
 }
 
@@ -1097,9 +1152,24 @@ fn run(proc_ep: i32) -> i32 {
     win.focus();
 
     let bx = (W - 360) / 2;
-    let solo_btn = Button { x: bx, y: 300, w: 360, h: 64 };
-    let host_btn = Button { x: bx, y: 384, w: 360, h: 64 };
-    let join_btn = Button { x: bx, y: 468, w: 360, h: 64 };
+    let solo_btn = Button {
+        x: bx,
+        y: 300,
+        w: 360,
+        h: 64,
+    };
+    let host_btn = Button {
+        x: bx,
+        y: 384,
+        w: 360,
+        h: 64,
+    };
+    let join_btn = Button {
+        x: bx,
+        y: 468,
+        w: 360,
+        h: 64,
+    };
 
     let mut phase = Phase::Menu;
     let mut mode = Mode::Solo;
@@ -1127,8 +1197,20 @@ fn run(proc_ep: i32) -> i32 {
                 solo_btn.draw(b"SINGLE PLAYER", solo_btn.hit(win.ptr_x, win.ptr_y));
                 host_btn.draw(b"BE HOST", host_btn.hit(win.ptr_x, win.ptr_y));
                 join_btn.draw(b"JOIN SESSION", join_btn.hit(win.ptr_x, win.ptr_y));
-                draw_text((W - text_width(29, 1)) / 2, 574, b"KEYS  1 SOLO   H HOST   J JOIN", 1, DIM);
-                draw_text((W - text_width(30, 1)) / 2, 606, b"A D MOVE   W ROTATE   S DOWN", 1, DIM);
+                draw_text(
+                    (W - text_width(29, 1)) / 2,
+                    574,
+                    b"KEYS  1 SOLO   H HOST   J JOIN",
+                    1,
+                    DIM,
+                );
+                draw_text(
+                    (W - text_width(30, 1)) / 2,
+                    606,
+                    b"A D MOVE   W ROTATE   S DOWN",
+                    1,
+                    DIM,
+                );
                 draw_text((W - text_width(22, 1)) / 2, 626, b"SPACE HARD DROP", 1, DIM);
                 win.present();
 
@@ -1217,7 +1299,11 @@ fn run(proc_ep: i32) -> i32 {
                 rc if rc < 0 => {
                     error_screen(
                         &mut win,
-                        if m == Mode::Host { b"HOST FAILED" } else { b"JOIN FAILED" },
+                        if m == Mode::Host {
+                            b"HOST FAILED"
+                        } else {
+                            b"JOIN FAILED"
+                        },
                     );
                     phase = Phase::Menu;
                 }
@@ -1263,7 +1349,11 @@ fn run(proc_ep: i32) -> i32 {
                 render_game(&me, &peer, mode);
                 win.present();
 
-                let done = if mode == Mode::Solo { me.over } else { me.over || peer.over };
+                let done = if mode == Mode::Solo {
+                    me.over
+                } else {
+                    me.over || peer.over
+                };
                 if done {
                     phase = Phase::Done;
                 }
@@ -1461,10 +1551,8 @@ fn proc_endpoint_from_spawn_info() -> i32 {
     if unsafe { xfer_buffer_read(bid, hdr.as_mut_ptr() as i32, 16, 0) } != 0 {
         return 0;
     }
-    (hdr[12] as u32
-        | ((hdr[13] as u32) << 8)
-        | ((hdr[14] as u32) << 16)
-        | ((hdr[15] as u32) << 24)) as i32
+    (hdr[12] as u32 | ((hdr[13] as u32) << 8) | ((hdr[14] as u32) << 16) | ((hdr[15] as u32) << 24))
+        as i32
 }
 
 #[no_mangle]

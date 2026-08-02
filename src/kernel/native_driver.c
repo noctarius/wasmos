@@ -530,8 +530,8 @@ static int nd_ipc_select_listen(uint32_t owner_context_id, const uint32_t* endpo
     return ipc_select_listen(owner_context_id, endpoints, count, out_select_id);
 }
 
-static int nd_ipc_select_wait(uint32_t select_id, uint32_t owner_context_id,
-                              uint32_t* out_ready_ep, uint32_t timeout_ms) {
+static int nd_ipc_select_wait(uint32_t select_id, uint32_t owner_context_id, uint32_t* out_ready_ep,
+                              uint32_t timeout_ms) {
     return ipc_select_wait(select_id, owner_context_id, out_ready_ep, timeout_ms);
 }
 

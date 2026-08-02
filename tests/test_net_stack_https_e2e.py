@@ -47,20 +47,60 @@ def _make_ca_signed(d: str) -> tuple[str, str, str]:
     ext = os.path.join(d, "ext.cnf")
     with open(ext, "w") as fh:
         fh.write("subjectAltName=IP:10.0.2.2\n")
-    _run_openssl([
-        "req", "-x509", "-newkey", "rsa:2048", "-keyout", ca_key, "-out", ca_pem,
-        "-days", "1", "-nodes", "-subj", "/CN=WASMOS Test CA",
-        "-addext", "basicConstraints=critical,CA:TRUE",
-        "-addext", "keyUsage=critical,keyCertSign,cRLSign",
-    ])
-    _run_openssl([
-        "req", "-newkey", "rsa:2048", "-keyout", srv_key, "-out", srv_csr,
-        "-nodes", "-subj", "/CN=10.0.2.2",
-    ])
-    _run_openssl([
-        "x509", "-req", "-in", srv_csr, "-CA", ca_pem, "-CAkey", ca_key,
-        "-CAcreateserial", "-out", srv_pem, "-days", "1", "-extfile", ext,
-    ])
+    _run_openssl(
+        [
+            "req",
+            "-x509",
+            "-newkey",
+            "rsa:2048",
+            "-keyout",
+            ca_key,
+            "-out",
+            ca_pem,
+            "-days",
+            "1",
+            "-nodes",
+            "-subj",
+            "/CN=WASMOS Test CA",
+            "-addext",
+            "basicConstraints=critical,CA:TRUE",
+            "-addext",
+            "keyUsage=critical,keyCertSign,cRLSign",
+        ]
+    )
+    _run_openssl(
+        [
+            "req",
+            "-newkey",
+            "rsa:2048",
+            "-keyout",
+            srv_key,
+            "-out",
+            srv_csr,
+            "-nodes",
+            "-subj",
+            "/CN=10.0.2.2",
+        ]
+    )
+    _run_openssl(
+        [
+            "x509",
+            "-req",
+            "-in",
+            srv_csr,
+            "-CA",
+            ca_pem,
+            "-CAkey",
+            ca_key,
+            "-CAcreateserial",
+            "-out",
+            srv_pem,
+            "-days",
+            "1",
+            "-extfile",
+            ext,
+        ]
+    )
     return ca_pem, srv_pem, srv_key
 
 

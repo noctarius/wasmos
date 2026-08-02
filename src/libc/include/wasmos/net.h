@@ -88,15 +88,15 @@ typedef struct {
     wasmos_ringbuf_t rx; /* app is consumer */
     /* Non-blocking handshake state (all zero / WASMOS_NET_HS_IDLE until a
      * *_begin call arms it; stepped by wasmos_net_tcp_advance on each doorbell). */
-    int32_t hs_state;        /* WASMOS_NET_HS_* */
-    int32_t hs_err;          /* last error code once hs_state == ERROR */
-    int32_t hs_pending_rid;  /* request_id of the in-flight step */
-    int32_t hs_listen_id;    /* passive open: the listening socket id */
-    int32_t hs_l_tx_bid;     /* passive open: listen placeholder ring bids */
+    int32_t hs_state;       /* WASMOS_NET_HS_* */
+    int32_t hs_err;         /* last error code once hs_state == ERROR */
+    int32_t hs_pending_rid; /* request_id of the in-flight step */
+    int32_t hs_listen_id;   /* passive open: the listening socket id */
+    int32_t hs_l_tx_bid;    /* passive open: listen placeholder ring bids */
     int32_t hs_l_rx_bid;
-    uint32_t hs_cap;         /* per-direction data-ring capacity */
-    uint32_t hs_port;        /* bind (passive) / connect (active) port */
-    uint32_t hs_addr;        /* connect address, network order (active) */
+    uint32_t hs_cap;  /* per-direction data-ring capacity */
+    uint32_t hs_port; /* bind (passive) / connect (active) port */
+    uint32_t hs_addr; /* connect address, network order (active) */
 } wasmos_net_tcp_t;
 
 /* Handshake states for wasmos_net_tcp_advance (see wasmos_net_tcp_connect_begin /
@@ -335,8 +335,8 @@ static inline int32_t wasmos_net__connect_flags(wasmos_net_tcp_t* s, int32_t sta
     wasmos_net__fill_desc(&desc, s->tx_bid, s->tx_grant, s->rx_bid, s->rx_grant, region, open_flags,
                           sni);
     rid = s->request_id++;
-    if (wasmos_xfer_buffer_write(s->desc_bid, addr_cast(int32_t, &desc), (int32_t)sizeof(desc), 0) !=
-            0 ||
+    if (wasmos_xfer_buffer_write(s->desc_bid, addr_cast(int32_t, &desc), (int32_t)sizeof(desc),
+                                 0) != 0 ||
         wasmos_ipc_send(stack_ep, reply_ep, NET_IPC_SOCKET_OPEN, rid, s->desc_bid, desc_grant,
                         (int32_t)sizeof(desc), 0) != 0 ||
         wasmos_net__recv_reply(reply_ep, rid, &reply) != 0 || reply.type != NET_IPC_RESP ||
@@ -404,19 +404,19 @@ static inline int32_t wasmos_net_tls_connect(wasmos_net_tcp_t* s, int32_t stack_
 
 static inline int32_t wasmos_net__hs_err_for(int32_t state) {
     switch (state) {
-        case WASMOS_NET_HS_C_OPEN:
-        case WASMOS_NET_HS_L_OPEN:
-            return WASMOS_NET_HS_ERR_OPEN;
-        case WASMOS_NET_HS_L_BIND:
-            return WASMOS_NET_HS_ERR_BIND;
-        case WASMOS_NET_HS_L_LISTEN:
-            return WASMOS_NET_HS_ERR_LISTEN;
-        case WASMOS_NET_HS_L_ACCEPT:
-            return WASMOS_NET_HS_ERR_ACCEPT;
-        case WASMOS_NET_HS_C_CONNECT:
-            return WASMOS_NET_HS_ERR_CONNECT;
-        default:
-            return WASMOS_NET_HS_ERR_SETUP;
+    case WASMOS_NET_HS_C_OPEN:
+    case WASMOS_NET_HS_L_OPEN:
+        return WASMOS_NET_HS_ERR_OPEN;
+    case WASMOS_NET_HS_L_BIND:
+        return WASMOS_NET_HS_ERR_BIND;
+    case WASMOS_NET_HS_L_LISTEN:
+        return WASMOS_NET_HS_ERR_LISTEN;
+    case WASMOS_NET_HS_L_ACCEPT:
+        return WASMOS_NET_HS_ERR_ACCEPT;
+    case WASMOS_NET_HS_C_CONNECT:
+        return WASMOS_NET_HS_ERR_CONNECT;
+    default:
+        return WASMOS_NET_HS_ERR_SETUP;
     }
 }
 
@@ -433,9 +433,10 @@ static inline int32_t wasmos_net__hs_fail(wasmos_net_tcp_t* s, int32_t code) {
  * mirror wasmos_net_tls_connect (pass 0/NULL for plain TCP). Returns 0 armed, or
  * a negative WASMOS_NET_HS_ERR_* if the initial setup/send failed. */
 static inline int32_t wasmos_net_tcp_connect_begin(wasmos_net_tcp_t* s, int32_t stack_ep,
-                                                   int32_t reply_ep, uint32_t addr_no, uint16_t port,
-                                                   uint32_t ring_capacity, int32_t request_id_base,
-                                                   uint32_t flags, const char* sni) {
+                                                   int32_t reply_ep, uint32_t addr_no,
+                                                   uint16_t port, uint32_t ring_capacity,
+                                                   int32_t request_id_base, uint32_t flags,
+                                                   const char* sni) {
     net_socket_open_descriptor_v1_t desc;
     uint32_t region;
     int32_t desc_grant;
@@ -455,10 +456,11 @@ static inline int32_t wasmos_net_tcp_connect_begin(wasmos_net_tcp_t* s, int32_t 
     if (desc_grant < 0) {
         return wasmos_net__hs_fail(s, WASMOS_NET_HS_ERR_SETUP);
     }
-    wasmos_net__fill_desc(&desc, s->tx_bid, s->tx_grant, s->rx_bid, s->rx_grant, region, flags, sni);
+    wasmos_net__fill_desc(&desc, s->tx_bid, s->tx_grant, s->rx_bid, s->rx_grant, region, flags,
+                          sni);
     s->hs_pending_rid = s->request_id++;
-    if (wasmos_xfer_buffer_write(s->desc_bid, addr_cast(int32_t, &desc), (int32_t)sizeof(desc), 0) !=
-            0 ||
+    if (wasmos_xfer_buffer_write(s->desc_bid, addr_cast(int32_t, &desc), (int32_t)sizeof(desc),
+                                 0) != 0 ||
         wasmos_ipc_send(stack_ep, reply_ep, NET_IPC_SOCKET_OPEN, s->hs_pending_rid, s->desc_bid,
                         desc_grant, (int32_t)sizeof(desc), 0) != 0) {
         return wasmos_net__hs_fail(s, WASMOS_NET_HS_ERR_SETUP);
@@ -503,8 +505,8 @@ static inline int32_t wasmos_net_tcp_listen_begin(wasmos_net_tcp_t* s, int32_t s
     }
     wasmos_net__fill_desc(&desc, s->hs_l_tx_bid, l_txg, s->hs_l_rx_bid, l_rxg, l_region, 0u, 0);
     s->hs_pending_rid = s->request_id++;
-    if (wasmos_xfer_buffer_write(s->desc_bid, addr_cast(int32_t, &desc), (int32_t)sizeof(desc), 0) !=
-            0 ||
+    if (wasmos_xfer_buffer_write(s->desc_bid, addr_cast(int32_t, &desc), (int32_t)sizeof(desc),
+                                 0) != 0 ||
         wasmos_ipc_send(stack_ep, reply_ep, NET_IPC_SOCKET_OPEN, s->hs_pending_rid, s->desc_bid,
                         desc_grant, (int32_t)sizeof(desc), 0) != 0) {
         return wasmos_net__hs_fail(s, WASMOS_NET_HS_ERR_SETUP);
@@ -549,90 +551,90 @@ static inline int32_t wasmos_net_tcp_advance(wasmos_net_tcp_t* s) {
             return wasmos_net__hs_fail(s, wasmos_net__hs_err_for(s->hs_state));
         }
         switch (s->hs_state) {
-            case WASMOS_NET_HS_C_OPEN:
-                if (arg0 < 0) {
-                    return wasmos_net__hs_fail(s, WASMOS_NET_HS_ERR_OPEN);
-                }
-                s->socket_id = arg0;
-                (void)wasmos_xfer_buffer_release(s->desc_bid);
-                s->desc_bid = -1;
-                s->hs_pending_rid = s->request_id++;
-                if (wasmos_ipc_send(s->stack_ep, s->reply_ep, NET_IPC_CONNECT, s->hs_pending_rid,
-                                    (uint32_t)s->socket_id, (int32_t)s->hs_port,
-                                    (int32_t)s->hs_addr, 0) != 0) {
-                    return wasmos_net__hs_fail(s, WASMOS_NET_HS_ERR_CONNECT);
-                }
-                s->hs_state = WASMOS_NET_HS_C_CONNECT;
-                break;
-            case WASMOS_NET_HS_C_CONNECT:
-                if (arg0 != NET_STATUS_OK) {
-                    return wasmos_net__hs_fail(s, WASMOS_NET_HS_ERR_CONNECT);
-                }
-                s->hs_state = WASMOS_NET_HS_READY;
-                return 1;
-            case WASMOS_NET_HS_L_OPEN:
-                if (arg0 < 0) {
-                    return wasmos_net__hs_fail(s, WASMOS_NET_HS_ERR_OPEN);
-                }
-                s->hs_listen_id = arg0;
-                (void)wasmos_xfer_buffer_release(s->desc_bid);
-                s->desc_bid = -1;
-                s->hs_pending_rid = s->request_id++;
-                if (wasmos_ipc_send(s->stack_ep, s->reply_ep, NET_IPC_BIND, s->hs_pending_rid,
-                                    s->hs_listen_id, (int32_t)s->hs_port, 0, 0) != 0) {
-                    return wasmos_net__hs_fail(s, WASMOS_NET_HS_ERR_BIND);
-                }
-                s->hs_state = WASMOS_NET_HS_L_BIND;
-                break;
-            case WASMOS_NET_HS_L_BIND:
-                s->hs_pending_rid = s->request_id++;
-                if (wasmos_ipc_send(s->stack_ep, s->reply_ep, NET_IPC_LISTEN, s->hs_pending_rid,
-                                    s->hs_listen_id, 0, 0, 0) != 0) {
-                    return wasmos_net__hs_fail(s, WASMOS_NET_HS_ERR_LISTEN);
-                }
-                s->hs_state = WASMOS_NET_HS_L_LISTEN;
-                break;
-            case WASMOS_NET_HS_L_LISTEN: {
-                /* Listener is live: overlay the accepted connection's real data
-                 * rings and post the (deferred) accept slot. */
-                net_socket_open_descriptor_v1_t desc;
-                int32_t desc_grant;
-                if (wasmos_net__setup_rings(s, s->stack_ep, s->hs_cap) != 0) {
-                    return wasmos_net__hs_fail(s, WASMOS_NET_HS_ERR_SETUP);
-                }
-                s->desc_bid = wasmos_xfer_buffer_acquire((int32_t)sizeof(desc));
-                if (s->desc_bid < 0) {
-                    return wasmos_net__hs_fail(s, WASMOS_NET_HS_ERR_SETUP);
-                }
-                desc_grant =
-                    wasmos_xfer_buffer_borrow(s->stack_ep, s->desc_bid, WASMOS_BUFFER_GRANT_READ);
-                if (desc_grant < 0) {
-                    return wasmos_net__hs_fail(s, WASMOS_NET_HS_ERR_SETUP);
-                }
-                wasmos_net__fill_desc(&desc, s->tx_bid, s->tx_grant, s->rx_bid, s->rx_grant,
-                                      wasmos_ringbuf_bytes_for(s->hs_cap), 0u, 0);
-                s->hs_pending_rid = s->request_id++;
-                if (wasmos_xfer_buffer_write(s->desc_bid, addr_cast(int32_t, &desc),
-                                             (int32_t)sizeof(desc), 0) != 0 ||
-                    wasmos_ipc_send(s->stack_ep, s->reply_ep, NET_IPC_ACCEPT, s->hs_pending_rid,
-                                    s->hs_listen_id, s->desc_bid, desc_grant,
-                                    (int32_t)sizeof(desc)) != 0) {
-                    return wasmos_net__hs_fail(s, WASMOS_NET_HS_ERR_ACCEPT);
-                }
-                s->hs_state = WASMOS_NET_HS_L_ACCEPT;
-                break;
+        case WASMOS_NET_HS_C_OPEN:
+            if (arg0 < 0) {
+                return wasmos_net__hs_fail(s, WASMOS_NET_HS_ERR_OPEN);
             }
-            case WASMOS_NET_HS_L_ACCEPT:
-                if (arg0 < 0) {
-                    return wasmos_net__hs_fail(s, WASMOS_NET_HS_ERR_ACCEPT);
-                }
-                s->socket_id = arg0;
-                (void)wasmos_xfer_buffer_release(s->desc_bid);
-                s->desc_bid = -1;
-                s->hs_state = WASMOS_NET_HS_READY;
-                return 1;
-            default:
+            s->socket_id = arg0;
+            (void)wasmos_xfer_buffer_release(s->desc_bid);
+            s->desc_bid = -1;
+            s->hs_pending_rid = s->request_id++;
+            if (wasmos_ipc_send(s->stack_ep, s->reply_ep, NET_IPC_CONNECT, s->hs_pending_rid,
+                                (uint32_t)s->socket_id, (int32_t)s->hs_port, (int32_t)s->hs_addr,
+                                0) != 0) {
+                return wasmos_net__hs_fail(s, WASMOS_NET_HS_ERR_CONNECT);
+            }
+            s->hs_state = WASMOS_NET_HS_C_CONNECT;
+            break;
+        case WASMOS_NET_HS_C_CONNECT:
+            if (arg0 != NET_STATUS_OK) {
+                return wasmos_net__hs_fail(s, WASMOS_NET_HS_ERR_CONNECT);
+            }
+            s->hs_state = WASMOS_NET_HS_READY;
+            return 1;
+        case WASMOS_NET_HS_L_OPEN:
+            if (arg0 < 0) {
+                return wasmos_net__hs_fail(s, WASMOS_NET_HS_ERR_OPEN);
+            }
+            s->hs_listen_id = arg0;
+            (void)wasmos_xfer_buffer_release(s->desc_bid);
+            s->desc_bid = -1;
+            s->hs_pending_rid = s->request_id++;
+            if (wasmos_ipc_send(s->stack_ep, s->reply_ep, NET_IPC_BIND, s->hs_pending_rid,
+                                s->hs_listen_id, (int32_t)s->hs_port, 0, 0) != 0) {
+                return wasmos_net__hs_fail(s, WASMOS_NET_HS_ERR_BIND);
+            }
+            s->hs_state = WASMOS_NET_HS_L_BIND;
+            break;
+        case WASMOS_NET_HS_L_BIND:
+            s->hs_pending_rid = s->request_id++;
+            if (wasmos_ipc_send(s->stack_ep, s->reply_ep, NET_IPC_LISTEN, s->hs_pending_rid,
+                                s->hs_listen_id, 0, 0, 0) != 0) {
+                return wasmos_net__hs_fail(s, WASMOS_NET_HS_ERR_LISTEN);
+            }
+            s->hs_state = WASMOS_NET_HS_L_LISTEN;
+            break;
+        case WASMOS_NET_HS_L_LISTEN: {
+            /* Listener is live: overlay the accepted connection's real data
+             * rings and post the (deferred) accept slot. */
+            net_socket_open_descriptor_v1_t desc;
+            int32_t desc_grant;
+            if (wasmos_net__setup_rings(s, s->stack_ep, s->hs_cap) != 0) {
                 return wasmos_net__hs_fail(s, WASMOS_NET_HS_ERR_SETUP);
+            }
+            s->desc_bid = wasmos_xfer_buffer_acquire((int32_t)sizeof(desc));
+            if (s->desc_bid < 0) {
+                return wasmos_net__hs_fail(s, WASMOS_NET_HS_ERR_SETUP);
+            }
+            desc_grant =
+                wasmos_xfer_buffer_borrow(s->stack_ep, s->desc_bid, WASMOS_BUFFER_GRANT_READ);
+            if (desc_grant < 0) {
+                return wasmos_net__hs_fail(s, WASMOS_NET_HS_ERR_SETUP);
+            }
+            wasmos_net__fill_desc(&desc, s->tx_bid, s->tx_grant, s->rx_bid, s->rx_grant,
+                                  wasmos_ringbuf_bytes_for(s->hs_cap), 0u, 0);
+            s->hs_pending_rid = s->request_id++;
+            if (wasmos_xfer_buffer_write(s->desc_bid, addr_cast(int32_t, &desc),
+                                         (int32_t)sizeof(desc), 0) != 0 ||
+                wasmos_ipc_send(s->stack_ep, s->reply_ep, NET_IPC_ACCEPT, s->hs_pending_rid,
+                                s->hs_listen_id, s->desc_bid, desc_grant,
+                                (int32_t)sizeof(desc)) != 0) {
+                return wasmos_net__hs_fail(s, WASMOS_NET_HS_ERR_ACCEPT);
+            }
+            s->hs_state = WASMOS_NET_HS_L_ACCEPT;
+            break;
+        }
+        case WASMOS_NET_HS_L_ACCEPT:
+            if (arg0 < 0) {
+                return wasmos_net__hs_fail(s, WASMOS_NET_HS_ERR_ACCEPT);
+            }
+            s->socket_id = arg0;
+            (void)wasmos_xfer_buffer_release(s->desc_bid);
+            s->desc_bid = -1;
+            s->hs_state = WASMOS_NET_HS_READY;
+            return 1;
+        default:
+            return wasmos_net__hs_fail(s, WASMOS_NET_HS_ERR_SETUP);
         }
         /* Stepped one state; loop to consume the next reply if it is already
          * queued, otherwise the drain returns 0 and we wait for the next

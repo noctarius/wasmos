@@ -264,12 +264,10 @@ int main(void) {
         puts("[curl] resolve failed");
         return 1;
     }
-    int connected =
-        use_tls
-            ? wasmos_net_tls_connect(&sock, stack_ep, reply_ep, addr, (uint16_t)u.port, RING_CAP,
-                                     rid, u.host)
-            : wasmos_net_tcp_connect(&sock, stack_ep, reply_ep, addr, (uint16_t)u.port, RING_CAP,
-                                     rid);
+    int connected = use_tls ? wasmos_net_tls_connect(&sock, stack_ep, reply_ep, addr,
+                                                     (uint16_t)u.port, RING_CAP, rid, u.host)
+                            : wasmos_net_tcp_connect(&sock, stack_ep, reply_ep, addr,
+                                                     (uint16_t)u.port, RING_CAP, rid);
     if (connected != 0) {
         puts("[curl] connect failed");
         return 1;

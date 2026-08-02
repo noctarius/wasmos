@@ -3782,8 +3782,7 @@ int wasm3_link_wasmos(IM3Module module) {
     rc |= wasm3_link_raw(module, "wasmos", "region_alloc", "i(iii)", wasmos_region_alloc);
     rc |= wasm3_link_raw(module, "wasmos", "framebuffer_pixel", "i(iii)", wasmos_framebuffer_pixel);
     rc |= wasm3_link_raw(module, "wasmos", "shmem_create", "i(ii)", wasmos_shmem_create);
-    rc |= wasm3_link_raw(module, "wasmos", "klog_register_ring", "i(i)",
-                         wasmos_klog_register_ring);
+    rc |= wasm3_link_raw(module, "wasmos", "klog_register_ring", "i(i)", wasmos_klog_register_ring);
     rc |= wasm3_link_raw(module, "wasmos", "shmem_grant", "i(ii)", wasmos_shmem_grant);
     rc |= wasm3_link_raw(module, "wasmos", "shmem_revoke", "i(ii)", wasmos_shmem_revoke);
     rc |= wasm3_link_raw(module, "wasmos", "shmem_map", "i(iii)", wasmos_shmem_map);

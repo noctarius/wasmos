@@ -53,27 +53,81 @@ def _gen_pki(d: str) -> dict:
         fh.write("subjectAltName=IP:10.0.2.2\n")
 
     # Self-signed CA (CN=WASMOS Test CA), explicitly a signing CA.
-    _run_openssl([
-        "req", "-x509", "-newkey", "rsa:2048", "-keyout", ca_key, "-out", ca_pem,
-        "-days", "1", "-nodes", "-subj", "/CN=WASMOS Test CA",
-        "-addext", "basicConstraints=critical,CA:TRUE",
-        "-addext", "keyUsage=critical,keyCertSign,cRLSign",
-    ])
+    _run_openssl(
+        [
+            "req",
+            "-x509",
+            "-newkey",
+            "rsa:2048",
+            "-keyout",
+            ca_key,
+            "-out",
+            ca_pem,
+            "-days",
+            "1",
+            "-nodes",
+            "-subj",
+            "/CN=WASMOS Test CA",
+            "-addext",
+            "basicConstraints=critical,CA:TRUE",
+            "-addext",
+            "keyUsage=critical,keyCertSign,cRLSign",
+        ]
+    )
     # Server cert signed by the CA, SAN IP:10.0.2.2.
-    _run_openssl([
-        "req", "-newkey", "rsa:2048", "-keyout", srv_key, "-out", srv_csr,
-        "-nodes", "-subj", "/CN=10.0.2.2",
-    ])
-    _run_openssl([
-        "x509", "-req", "-in", srv_csr, "-CA", ca_pem, "-CAkey", ca_key,
-        "-CAcreateserial", "-out", srv_pem, "-days", "1", "-extfile", ext,
-    ])
+    _run_openssl(
+        [
+            "req",
+            "-newkey",
+            "rsa:2048",
+            "-keyout",
+            srv_key,
+            "-out",
+            srv_csr,
+            "-nodes",
+            "-subj",
+            "/CN=10.0.2.2",
+        ]
+    )
+    _run_openssl(
+        [
+            "x509",
+            "-req",
+            "-in",
+            srv_csr,
+            "-CA",
+            ca_pem,
+            "-CAkey",
+            ca_key,
+            "-CAcreateserial",
+            "-out",
+            srv_pem,
+            "-days",
+            "1",
+            "-extfile",
+            ext,
+        ]
+    )
     # Rogue self-signed cert (same name/SAN, but NOT chained to the CA).
-    _run_openssl([
-        "req", "-x509", "-newkey", "rsa:2048", "-keyout", rogue_key, "-out", rogue_pem,
-        "-days", "1", "-nodes", "-subj", "/CN=10.0.2.2",
-        "-addext", "subjectAltName=IP:10.0.2.2",
-    ])
+    _run_openssl(
+        [
+            "req",
+            "-x509",
+            "-newkey",
+            "rsa:2048",
+            "-keyout",
+            rogue_key,
+            "-out",
+            rogue_pem,
+            "-days",
+            "1",
+            "-nodes",
+            "-subj",
+            "/CN=10.0.2.2",
+            "-addext",
+            "subjectAltName=IP:10.0.2.2",
+        ]
+    )
     return {
         "ca": ca_pem,
         "srv_cert": srv_pem,
@@ -156,7 +210,9 @@ class NetStackHttpsVerifyE2ETest(unittest.TestCase):
         shutil.copyfile(pki["ca"], os.path.join(ca_dst_dir, "ca-certs.pem"))
 
         cls.ok_server = _spawn_tls_server(pki["srv_cert"], pki["srv_key"], _PORT_OK)
-        cls.bad_server = _spawn_tls_server(pki["rogue_cert"], pki["rogue_key"], _PORT_BAD)
+        cls.bad_server = _spawn_tls_server(
+            pki["rogue_cert"], pki["rogue_key"], _PORT_BAD
+        )
 
         kernel_src = os.path.join("build", "kernel.elf")
         kernel_dst = os.path.join(cfg.esp_dir, "kernel.elf")
@@ -172,7 +228,9 @@ class NetStackHttpsVerifyE2ETest(unittest.TestCase):
         if not cls.session.expect(b"[net-stack] eth0 10.0.2.15/24 ready", timeout_s=90):
             cls.session.close()
             raise RuntimeError("net-stack interface not ready")
-        if not cls.session.expect(b"[net-stack] tls: CA trust store loaded", timeout_s=60):
+        if not cls.session.expect(
+            b"[net-stack] tls: CA trust store loaded", timeout_s=60
+        ):
             cls.session.close()
             raise RuntimeError("net-stack CA trust store not loaded")
 
@@ -211,7 +269,8 @@ class NetStackHttpsVerifyE2ETest(unittest.TestCase):
         )
         # And the body must NEVER appear for the rejected connection.
         self.assertNotIn(
-            _BODY, session.buf[mark:],
+            _BODY,
+            session.buf[mark:],
             "curl printed the body for an untrusted server (verification bypassed!)",
         )
 

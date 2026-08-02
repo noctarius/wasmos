@@ -224,9 +224,9 @@ static wasmos_sys_native_event_loop_t g_netdrv_loop;
  * the loader appends a NUL and passes ca_len = bytes + 1. The full Mozilla bundle
  * is ~250 KiB; the hermetic test uses a tiny self-signed CA. */
 #define NET_STACK_CA_PATH "/boot/system/net/certificates/ca-certs.pem"
-#define NET_STACK_CA_CAP (512u * 1024u)   /* xfer buffer for the read (<= ~2 MiB) */
-#define NET_STACK_CA_RETRY_TICKS 25u      /* ~100 ms at 250 Hz between attempts */
-#define NET_STACK_CA_MAX_ATTEMPTS 50u     /* bounded retry, then give up (TLS off) */
+#define NET_STACK_CA_CAP (512u * 1024u) /* xfer buffer for the read (<= ~2 MiB) */
+#define NET_STACK_CA_RETRY_TICKS 25u    /* ~100 ms at 250 Hz between attempts */
+#define NET_STACK_CA_MAX_ATTEMPTS 50u   /* bounded retry, then give up (TLS off) */
 
 /* Interface config (/boot/system/net/interfaces), read when the interface
  * comes up. Strict: absence/failure or DHCP-no-lease leaves it unconfigured. */
@@ -244,15 +244,15 @@ static uint32_t g_ifcfg_next_tick = 0u;
 /* TLS CA trust store loader state (milestone C), symmetric to the ifcfg loader
  * above. It shares g_fs_endpoint discovery with the ifcfg loader. On success
  * g_ca_bytes/g_ca_len hold the NUL-terminated PEM bundle for the process life. */
-static uint8_t g_ca_kicked = 0u;       /* startup requested a load */
-static uint8_t g_ca_loaded = 0u;       /* bundle available or given up */
+static uint8_t g_ca_kicked = 0u; /* startup requested a load */
+static uint8_t g_ca_loaded = 0u; /* bundle available or given up */
 static uint8_t g_ca_read_pending = 0u;
 static uint32_t g_ca_buffer_id = 0u;
 static uint8_t* g_ca_buffer = NULL;
 static uint32_t g_ca_attempts = 0u;
 static uint32_t g_ca_next_tick = 0u;
-static uint8_t* g_ca_bytes = NULL;     /* NUL-terminated PEM, malloc'd for life */
-static uint32_t g_ca_len = 0u;         /* bytes + 1 (includes trailing NUL) */
+static uint8_t* g_ca_bytes = NULL; /* NUL-terminated PEM, malloc'd for life */
+static uint32_t g_ca_len = 0u;     /* bytes + 1 (includes trailing NUL) */
 static uint8_t g_ca_missing_logged = 0u;
 
 static err_t net_stack_linkoutput(struct netif* netif, struct pbuf* p);
@@ -1715,8 +1715,7 @@ static int32_t net_stack_pcb_open(net_socket_t* socket, uint32_t open_flags) {
                  * (the CONNECT handler) starts the handshake. */
                 mbedtls_ssl_context* ssl =
                     (mbedtls_ssl_context*)altcp_tls_context((struct altcp_pcb*)socket->pcb);
-                if (ssl == NULL ||
-                    mbedtls_ssl_set_hostname(ssl, (const char*)socket->sni) != 0) {
+                if (ssl == NULL || mbedtls_ssl_set_hostname(ssl, (const char*)socket->sni) != 0) {
                     (void)altcp_close((struct altcp_pcb*)socket->pcb);
                     socket->pcb = NULL;
                     return NET_STATUS_NO_MEM;
@@ -2211,8 +2210,8 @@ static void net_stack_handle_resolve(const nd_ipc_message_t* request) {
     err = dns_gethostbyname(hostname, &addr, net_stack_dns_found, slot);
     if (err == ERR_OK) {
         slot->in_use = 0u; /* cached: answer now */
-        net_stack_send_reply(request, NET_IPC_RESP, NET_STATUS_OK, ip4_addr_get_u32(ip_2_ip4(&addr)),
-                             0u, 0u);
+        net_stack_send_reply(request, NET_IPC_RESP, NET_STATUS_OK,
+                             ip4_addr_get_u32(ip_2_ip4(&addr)), 0u, 0u);
     } else if (err == ERR_INPROGRESS) {
         /* Deferred: net_stack_dns_found() answers when the query completes. */
     } else {

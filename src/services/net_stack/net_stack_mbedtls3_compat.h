@@ -43,7 +43,7 @@
 
 #include "mbedtls/pk.h"
 
-#define mbedtls_pk_parse_key(ctx, key, keylen, pwd, pwdlen) \
+#define mbedtls_pk_parse_key(ctx, key, keylen, pwd, pwdlen)                                        \
     (mbedtls_pk_parse_key)((ctx), (key), (keylen), (pwd), (pwdlen), NULL, NULL)
 
 #endif /* WASMOS_NET_STACK_MBEDTLS3_COMPAT_H */

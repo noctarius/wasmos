@@ -15,8 +15,8 @@ typedef struct {
 
 /* Drivers/services define wasmos_async_service; applications define
  * wasmos_async_app. Their root state owns the corresponding entry arguments. */
-int32_t wasmos_sys_wasm_async_run(wasmos_sys_wasm_async_config_t* config, int32_t arg0, int32_t arg1,
-                                   int32_t arg2, int32_t arg3);
+int32_t wasmos_sys_wasm_async_run(wasmos_sys_wasm_async_config_t* config, int32_t arg0,
+                                  int32_t arg1, int32_t arg2, int32_t arg3);
 int32_t async_initialize(int32_t arg0, int32_t arg1, int32_t arg2, int32_t arg3);
 int32_t async_wasmos_main(int32_t arg0, int32_t arg1, int32_t arg2, int32_t arg3);
 /* Valid while an async app/service wrapper is running.  Applications submit

@@ -666,7 +666,12 @@ impl AsyncFsOp {
             } else {
                 (*op).read_ptr as *mut c_void
             };
-            wasmos_sys_wasm_fs_operation_finish(&mut (*op).operation, dst, (*op).read_len, &mut (*op).reply)
+            wasmos_sys_wasm_fs_operation_finish(
+                &mut (*op).operation,
+                dst,
+                (*op).read_len,
+                &mut (*op).reply,
+            )
         }
     }
 
@@ -712,7 +717,11 @@ impl AsyncFsOp {
     }
 }
 
-unsafe extern "C" fn async_fs_chain_success(user: *mut c_void, _value: usize, out: *mut usize) -> i32 {
+unsafe extern "C" fn async_fs_chain_success(
+    user: *mut c_void,
+    _value: usize,
+    out: *mut usize,
+) -> i32 {
     let op = user as *mut AsyncFsOp;
     unsafe {
         if let Some(chain) = (*op).chain {

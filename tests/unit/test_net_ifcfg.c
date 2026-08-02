@@ -111,8 +111,10 @@ static void test_static_with_dns(void) {
     assert(net_ifcfg_parse(text, (uint32_t)strlen(text), &cfg) == 1);
     assert(cfg.valid == 1u && cfg.dhcp == 0u);
     assert(cfg.dns_count == 2u);
-    assert(cfg.dns[0][0] == 10u && cfg.dns[0][1] == 0u && cfg.dns[0][2] == 2u && cfg.dns[0][3] == 3u);
-    assert(cfg.dns[1][0] == 8u && cfg.dns[1][1] == 8u && cfg.dns[1][2] == 8u && cfg.dns[1][3] == 8u);
+    assert(cfg.dns[0][0] == 10u && cfg.dns[0][1] == 0u && cfg.dns[0][2] == 2u &&
+           cfg.dns[0][3] == 3u);
+    assert(cfg.dns[1][0] == 8u && cfg.dns[1][1] == 8u && cfg.dns[1][2] == 8u &&
+           cfg.dns[1][3] == 8u);
 }
 
 static void test_dhcp_with_dns_override(void) {

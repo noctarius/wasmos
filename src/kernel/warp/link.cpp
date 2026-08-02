@@ -1494,7 +1494,6 @@ static void warp_shmem_map_untrack(uint32_t pid, uint32_t id) {
             g_warp_shmem_maps[i].valid = 0;
 }
 
-
 static WarpShmemLinearMap* warp_shmem_map_find(uint32_t pid, uint32_t id) {
     for (uint32_t i = 0; i < WARP_SHMEM_MAP_SLOTS; ++i) {
         WarpShmemLinearMap* slot = &g_warp_shmem_maps[i];
@@ -2800,13 +2799,13 @@ static void warp_env_abort(uint32_t msg, uint32_t file, uint32_t line, uint32_t 
         LINK("wasmos", "spawn_info_buffer", warp_spawn_info_buffer),                                 \
         LINK("wasi_snapshot_preview1", "proc_exit", warp_wasi_proc_exit),                            \
         LINK("wasi_snapshot_preview1", "random_get", warp_wasi_random_get),                          \
-        LINK("wasmos", "block_buffer_map", warp_block_buffer_map), /* HC 114/115 appended at the  \
-                                                                    * tail: xfer-buffer linmem    \
-                                                                    * overlay (socket-ring        \
-                                                                    * zero-copy). */               \
-        LINK("wasmos", "xfer_buffer_map", warp_xfer_buffer_map),                                   \
-        LINK("wasmos", "xfer_buffer_unmap", warp_xfer_buffer_unmap),                               \
-        LINK("wasmos", "klog_register_ring", warp_klog_register_ring) /* HC 116: VT-owned klog  \
+        LINK("wasmos", "block_buffer_map", warp_block_buffer_map), /* HC 114/115 appended at the     \
+                                                                    * tail: xfer-buffer linmem       \
+                                                                    * overlay (socket-ring           \
+                                                                    * zero-copy). */                 \
+        LINK("wasmos", "xfer_buffer_map", warp_xfer_buffer_map),                                     \
+        LINK("wasmos", "xfer_buffer_unmap", warp_xfer_buffer_unmap),                                 \
+        LINK("wasmos", "klog_register_ring", warp_klog_register_ring) /* HC 116: VT-owned klog       \
                                                                        * ring (phase 4). */
 
 vb::Span<vb::NativeSymbol const> warp_wasmos_symbols(void) {

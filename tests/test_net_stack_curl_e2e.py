@@ -98,7 +98,9 @@ class NetStackCurlE2ETest(unittest.TestCase):
         mark = session.mark()
         session.send("spawn /system/utils/curl " + target + " -o /boot/curl_dl.txt")
         self.assertTrue(
-            session.expect_from(mark, b"[curl] wrote 19 bytes to /boot/curl_dl.txt", timeout_s=45),
+            session.expect_from(
+                mark, b"[curl] wrote 19 bytes to /boot/curl_dl.txt", timeout_s=45
+            ),
             "curl did not report writing the body to the file",
         )
         mark = session.mark()
@@ -110,7 +112,9 @@ class NetStackCurlE2ETest(unittest.TestCase):
 
         # 3) a full URL with scheme + query + fragment still resolves and fetches
         mark = session.mark()
-        session.send("spawn /system/utils/curl http://10.0.2.2:%d/hello?a=1#frag" % _PORT)
+        session.send(
+            "spawn /system/utils/curl http://10.0.2.2:%d/hello?a=1#frag" % _PORT
+        )
         self.assertTrue(
             session.expect_from(mark, _BODY, timeout_s=45),
             "curl did not handle a full http:// URL with a query string",

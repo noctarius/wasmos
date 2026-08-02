@@ -1027,17 +1027,17 @@ static int32_t vt_switch_tty(uint32_t tty_index) {
  * indexed by PS/2 set-1 scancode 0..57.  Built-in default is US QWERTY (AltGr
  * layer all zero); vt_load_keymap() replaces it at init with a layout loaded
  * from /boot/system/keymaps, falling back to this built-in on any failure. */
-static uint8_t g_km_plain[58] = {
-    0,    0x1B, '1', '2', '3', '4', '5', '6', '7', '8', '9',  '0', '-', '=',  '\b',
-    '\t', 'q',  'w', 'e', 'r', 't', 'y', 'u', 'i', 'o', 'p',  '[', ']', '\n', 0,
-    'a',  's',  'd', 'f', 'g', 'h', 'j', 'k', 'l', ';', '\'', '`', 0,   '\\', 'z',
-    'x',  'c',  'v', 'b', 'n', 'm', ',', '.', '/', 0,   '*',  0,   ' '};
+static uint8_t g_km_plain[58] = {0,   0x1B, '1',  '2',  '3',  '4', '5', '6',  '7', '8', '9', '0',
+                                 '-', '=',  '\b', '\t', 'q',  'w', 'e', 'r',  't', 'y', 'u', 'i',
+                                 'o', 'p',  '[',  ']',  '\n', 0,   'a', 's',  'd', 'f', 'g', 'h',
+                                 'j', 'k',  'l',  ';',  '\'', '`', 0,   '\\', 'z', 'x', 'c', 'v',
+                                 'b', 'n',  'm',  ',',  '.',  '/', 0,   '*',  0,   ' '};
 
-static uint8_t g_km_shift[58] = {
-    0,    0x1B, '!', '@', '#', '$', '%', '^', '&', '*', '(', ')', '_', '+',  '\b',
-    '\t', 'Q',  'W', 'E', 'R', 'T', 'Y', 'U', 'I', 'O', 'P', '{', '}', '\n', 0,
-    'A',  'S',  'D', 'F', 'G', 'H', 'J', 'K', 'L', ':', '"', '~', 0,   '|',  'Z',
-    'X',  'C',  'V', 'B', 'N', 'M', '<', '>', '?', 0,   '*', 0,   ' '};
+static uint8_t g_km_shift[58] = {0,   0x1B, '!',  '@',  '#',  '$', '%', '^', '&', '*', '(', ')',
+                                 '_', '+',  '\b', '\t', 'Q',  'W', 'E', 'R', 'T', 'Y', 'U', 'I',
+                                 'O', 'P',  '{',  '}',  '\n', 0,   'A', 'S', 'D', 'F', 'G', 'H',
+                                 'J', 'K',  'L',  ':',  '"',  '~', 0,   '|', 'Z', 'X', 'C', 'V',
+                                 'B', 'N',  'M',  '<',  '>',  '?', 0,   '*', 0,   ' '};
 
 static uint8_t g_km_altgr[58] = {0};
 
@@ -1165,7 +1165,8 @@ static int vt_read_keymap_file(const char* path, char* out, uint32_t out_cap, ui
         return -1;
     }
     int32_t req = 0x4B4D; /* "KM" */
-    if (wasmos_ipc_send(g_fs_ep, g_vt_ep, FS_IPC_READ_PATH_REQ, req, (int32_t)plen, 0, bid, b1) != 0) {
+    if (wasmos_ipc_send(g_fs_ep, g_vt_ep, FS_IPC_READ_PATH_REQ, req, (int32_t)plen, 0, bid, b1) !=
+        0) {
         (void)wasmos_xfer_buffer_release(bid);
         return -1;
     }
@@ -1407,9 +1408,8 @@ static void vt_forward_key_to_compositor(int32_t scancode, int32_t keyup, int32_
     if (sink < 0) {
         return; /* compositor has not claimed vt-0 yet */
     }
-    uint8_t ascii = (!extended && scancode > 0 && scancode < 58)
-                        ? vt_keymap_decode((uint32_t)scancode)
-                        : 0;
+    uint8_t ascii =
+        (!extended && scancode > 0 && scancode < 58) ? vt_keymap_decode((uint32_t)scancode) : 0;
     int32_t flags = (keyup == 0 ? 1 : 0) | (extended ? 2 : 0) | (g_shift_down ? 4 : 0) |
                     (g_ctrl_down ? 8 : 0) | (g_altgr_down ? 16 : 0);
     (void)wasmos_ipc_send(sink, g_vt_ep, VT_IPC_KEY_FORWARD, 0, (int32_t)ascii, scancode, flags, 0);

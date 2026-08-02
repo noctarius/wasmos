@@ -68,7 +68,7 @@
  * "localhost" to the IPv4 loopback so name lookups have a reliable, offline
  * baseline (and a hermetic resolver path independent of the SLIRP resolver). */
 #define DNS_LOCAL_HOSTLIST 1
-#define DNS_LOCAL_HOSTLIST_INIT \
+#define DNS_LOCAL_HOSTLIST_INIT                                                                    \
     {DNS_LOCAL_HOSTLIST_ELEM("localhost", IPADDR4_INIT_BYTES(127, 0, 0, 1))}
 
 /* --- Callbacks ----------------------------------------------------------- */

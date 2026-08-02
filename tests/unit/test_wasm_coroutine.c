@@ -297,8 +297,8 @@ static int test_race_and_all(void) {
         wasmos_wasm_coroutine_run(&runtime) != 0 || !wasmos_future_poll(result, &status, &value) ||
         status != -7 || !failed_group.settled || failed_group.active ||
         failed_continuations[1].active || second.continuations != NULL ||
-        !wasmos_promise_resolve(&second_promise, 2u) ||
-        wasmos_wasm_coroutine_run(&runtime) != 0 || failed_group.active) {
+        !wasmos_promise_resolve(&second_promise, 2u) || wasmos_wasm_coroutine_run(&runtime) != 0 ||
+        failed_group.active) {
         return __LINE__;
     }
     return 0;

@@ -28,7 +28,7 @@ struct timespec {
 #define CLOCK_BOOTTIME 7
 #endif
 
-time_t time(time_t *t);
-int clock_gettime(int clk_id, struct timespec *tp);
+time_t time(time_t* t);
+int clock_gettime(int clk_id, struct timespec* tp);
 
 #endif /* WASMOS_NET_STACK_TIME_SHIM_H */

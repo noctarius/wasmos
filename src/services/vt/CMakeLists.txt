@@ -6,10 +6,12 @@ wasmos_add_wasm_c_app_target(vt_app
   EXPORT initialize
   STACK_SIZE 4096
   # Initial memory sized to hold the VT's active memory (cell grids) plus the
-  # klog ring's low overlay window (phase 4), so the window falls inside the
-  # module's declared initial linear memory — the kernel commit-probe then only
-  # faults pages in, never extends the module (extending under WARP throws).
-  INITIAL_MEMORY 1048576
+  # phase-4 klog ring and the phase-5 cell-grid blit buffer (~80 KiB), all
+  # overlaid via xfer_buffer_map.  Kept below the 2 MiB low-guard (with
+  # heap_pages) so each overlay window falls inside declared linear memory — the
+  # kernel commit-probe then only faults pages in, never extends the module
+  # (extending under WARP throws).
+  INITIAL_MEMORY 1572864
   # Raised from 1 MiB: the klog ring (phase 4) is overlaid into the VT's linear
   # memory via xfer_buffer_map.  Under WARP the overlay window is placed above
   # the VT's active memory (past the 2 MiB low-guard), so the WASM linear memory

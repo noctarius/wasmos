@@ -43,6 +43,11 @@ static uint8_t g_text_plane_enabled = 1;
 static uint8_t g_gfx_overlay_lock = 0;
 static uint32_t g_fb_bytes_limit = 0;
 
+/* Bulk grid blit (phase 5): the VT grants us READ access to a cell-grid
+ * xfer-buffer; on FBTEXT_IPC_BLIT_GRID_REQ we repaint the whole grid from it in
+ * one shot, replacing the per-cell CELL_WRITE storm that wedged tty switches. */
+static const fbtext_blit_cell_t* g_blit_grid = 0;
+
 /* Idle-block bounds so the main loop reaches idle/hlt instead of yield-spinning.
  * Control IPC (tty switch, overlay lock/unlock) wakes the endpoint immediately;
  * these only cap how long we sleep with nothing to do.  The console ring is fed
@@ -427,6 +432,43 @@ int initialize(wasmos_driver_api_t* api, int module_count, int arg2, int arg3) {
         case FBTEXT_IPC_GFX_OVERLAY_REQ:
             g_gfx_overlay_lock = (msg.arg0 != 0) ? 1u : 0u;
             break;
+        case FBTEXT_IPC_BLIT_ATTACH_REQ:
+            /* Map the VT's cell-grid buffer once; render from it on BLIT_GRID. */
+            if (api->xfer_buffer_map_borrowed) {
+                const void* p =
+                    api->xfer_buffer_map_borrowed(ND_BUFFER_KIND_XFER, msg.arg0, msg.arg1);
+                if (p) {
+                    g_blit_grid = (const fbtext_blit_cell_t*)p;
+                }
+            }
+            break;
+        case FBTEXT_IPC_BLIT_GRID_REQ: {
+            if (!g_text_plane_enabled || g_gfx_overlay_lock || !g_blit_grid) {
+                break;
+            }
+            /* Clamp the grid stride/extent to our own geometry so a bad request
+             * can never read past the granted buffer (bounded by cols*rows). */
+            uint32_t stride = (uint32_t)msg.arg0;
+            if (stride > g_state.cols) {
+                stride = g_state.cols;
+            }
+            uint32_t rows = (uint32_t)msg.arg1;
+            if (rows > g_state.rows) {
+                rows = g_state.rows;
+            }
+            for (uint32_t row = 0; row < rows; ++row) {
+                for (uint32_t col = 0; col < stride; ++col) {
+                    const fbtext_blit_cell_t* s = &g_blit_grid[row * stride + col];
+                    fbtext_cell_t* d = &g_state.cells[row * g_state.cols + col];
+                    d->ch = s->ch;
+                    d->fg = s->fg;
+                    d->bg = s->bg;
+                    d->attr = s->attr;
+                    fbtext_render_cell(&g_state, (uint16_t)col, (uint16_t)row);
+                }
+            }
+            break;
+        }
         case FBTEXT_IPC_QUERY_CAPS_REQ:
             resp.arg0 = FBTEXT_CAP_SET_RESOLUTION | FBTEXT_CAP_QUERY_MODES;
             resp.arg1 = count_supported_modes();

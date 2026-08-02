@@ -206,8 +206,21 @@ itself. Phase 4 routes klog into vt-1 through a separate VT-owned ring
 | `FBTEXT_IPC_QUERY_CAPS_REQ`     | 0x607 | Request; response: arg0=FBTEXT_CAP_* bitmask         |
 | `FBTEXT_IPC_QUERY_MODES_REQ`    | 0x608 | arg0=index; response: arg0=w, arg1=h, arg2=stride    |
 | `FBTEXT_IPC_SET_RESOLUTION_REQ` | 0x609 | arg0=width, arg1=height                              |
+| `FBTEXT_IPC_BLIT_ATTACH_REQ`    | 0x60A | arg0=buffer_id, arg1=borrow_id, arg2=cols, arg3=rows |
+| `FBTEXT_IPC_BLIT_GRID_REQ`      | 0x60B | arg0=cols, arg1=rows (repaint the attached grid)     |
 | `FBTEXT_IPC_RESP`               | 0x680 | Acknowledgment from framebuffer                      |
 | `FBTEXT_IPC_ERROR`              | 0x6FF | Error from framebuffer                               |
+
+**Bulk grid blit (phase 5).** `vt` shares a cell-grid xfer-buffer
+(`fbtext_blit_cell_t[]`, layout-identical to the driver's `fbtext_cell_t` and
+`vt`'s `vt_cell_t`) with the framebuffer driver: `BLIT_ATTACH` (once, at init)
+grants the driver READ access to the buffer to map; `BLIT_GRID` (per repaint)
+tells the driver to render `cols*rows` cells from it in one shot. This replaces
+the per-cell `CELL_WRITE` loop on the full-screen replay path — that loop issued
+one IPC per cell (thousands per switch), which overflowed the driver's IPC queue
+and, under SMP, starved the driver so a tty switch spun `vt_fb_send_switch`'s
+retry for ~80 s. `CELL_WRITE` remains for incremental single-cell updates. A per-
+cell path is kept as a fallback when the blit buffer cannot be allocated.
 
 Cell color packing: `arg3 = (fg & 0x0F) << 8 | (bg & 0x0F)`.
 
@@ -454,9 +467,16 @@ row, and sends `FBTEXT_IPC_SCROLL_REQ(n=1)` to the framebuffer driver.
    On failure: clear barrier, return `VT_SWITCH_ERR_MODE_OFF`.
 4. Send `FBTEXT_IPC_CLEAR_REQ`. On failure: restore console mode, clear barrier,
    return `VT_SWITCH_ERR_CLEAR`.
-5. `vt_replay_tty(slot_index, reliable=1)`: replay all cells row by row; yield
-   between rows to reduce framebuffer queue saturation. On failure: restore
-   console mode, clear barrier, return `VT_SWITCH_ERR_REPLAY`.
+5. `vt_replay_tty(slot_index, reliable=1)`: repaint the target slot. When the
+   shared blit buffer is available (the common case) this copies the slot's grid
+   into it and sends a single `FBTEXT_IPC_BLIT_GRID_REQ` — no per-cell IPC. The
+   fallback path replays cells row by row (skipping blanks that already match the
+   cleared framebuffer), yielding between rows. On failure: restore console mode,
+   clear barrier, return `VT_SWITCH_ERR_REPLAY`.
+
+   When leaving vt-0 for a text slot the gfx overlay is unlocked *before* this
+   repaint, so the framebuffer driver actually renders the cells (it drops cell
+   ops while the overlay is locked).
 6. Console-mode re-enable / overlay handshake for the target slot. On failure:
    return `VT_SWITCH_ERR_MODE_ON`.
 7. Increment `g_switch_generation`. Set `g_active_tty = slot_index`.

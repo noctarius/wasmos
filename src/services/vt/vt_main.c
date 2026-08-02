@@ -47,6 +47,17 @@ static int32_t g_alloc_failure = 0;
 static wasmos_ringbuf_t g_klog_ring;
 static int32_t g_klog_ring_ready = 0;
 
+/* Bulk grid blit (phase 5): a shared xfer-buffer holding the visible slot's cell
+ * grid, granted READ to the framebuffer driver.  A tty switch repaints the whole
+ * screen with a single FBTEXT_IPC_BLIT_GRID_REQ instead of one cell-write IPC per
+ * cell — the per-cell loop stormed the driver's queue and wedged switching under
+ * SMP.  Sized for the maximum grid so it survives any geometry. */
+#define VT_BLIT_MAX_CELLS ((uint32_t)VT_MAX_COLS * (uint32_t)VT_MAX_ROWS)
+static fbtext_blit_cell_t* g_blit_grid = 0; /* VT-side mapped write pointer */
+static int32_t g_blit_ready = 0;
+_Static_assert(sizeof(fbtext_blit_cell_t) == sizeof(vt_cell_t),
+               "blit cell must match vt_cell_t so the grid copies without conversion");
+
 extern uint8_t __heap_base;
 
 /* Emit a 32-bit debug_mark tag encoding event (8 bits) and two 12-bit values.
@@ -821,6 +832,16 @@ static int32_t vt_tty_index_for_source(int32_t source_ep) {
  * reliable=1: uses vt_render_cell_switch and yields between rows to reduce
  *   FB queue saturation; dropped cells are tolerated (best-effort).
  * reliable=0: fast path for non-switch redraws. */
+/* A cell that matches the framebuffer's cleared state (a blank space on the
+ * default background) does not need replaying after an FBTEXT_IPC_CLEAR_REQ.
+ * Skipping these collapses the replay of a mostly-empty slot (e.g. a CLI with a
+ * prompt) from rows*cols cell writes to just the non-blank ones — the fix for
+ * the ~80 s tty-switch wedge, where replaying a full 160x45 grid into the
+ * framebuffer's depth-limited queue spun vt_fb_send_switch's per-cell retry. */
+static int vt_cell_is_blank(const vt_cell_t* cell) {
+    return (cell->ch == (uint32_t)' ' || cell->ch == 0u) && cell->bg == 0u;
+}
+
 static int32_t vt_replay_tty(uint32_t tty_index, uint8_t reliable) {
     if (tty_index >= VT_MAX_TTYS) {
         return -1;
@@ -829,10 +850,30 @@ static int32_t vt_replay_tty(uint32_t tty_index, uint8_t reliable) {
     if (!tty->cells) {
         return -1;
     }
+
+    /* Fast path: copy the whole grid into the shared blit buffer and repaint it
+     * with a single IPC.  No per-cell loop, no yield, no queue storm. */
+    if (g_blit_ready && g_blit_grid) {
+        uint32_t cells = (uint32_t)g_vt_rows * (uint32_t)g_vt_cols;
+        if (cells > VT_BLIT_MAX_CELLS) {
+            cells = VT_BLIT_MAX_CELLS;
+        }
+        memcpy(g_blit_grid, tty->cells, cells * (uint32_t)sizeof(fbtext_blit_cell_t));
+        (void)vt_fb_send_switch(FBTEXT_IPC_BLIT_GRID_REQ, (int32_t)g_vt_cols, (int32_t)g_vt_rows, 0,
+                                0);
+        vt_fb_set_cursor(tty);
+        return 0;
+    }
+
     uint32_t dropped_cells = 0;
 
     for (uint16_t row = 0; row < g_vt_rows; ++row) {
         for (uint16_t col = 0; col < g_vt_cols; ++col) {
+            /* The framebuffer was just cleared to blanks; only paint the cells
+             * that differ from that cleared state. */
+            if (vt_cell_is_blank(&tty->cells[vt_cell_index(row, col)])) {
+                continue;
+            }
             if (reliable) {
                 if (vt_render_cell_switch(tty, row, col) != 0) {
                     dropped_cells++;
@@ -906,6 +947,16 @@ static int32_t vt_switch_tty(uint32_t tty_index) {
         return 0;
     }
 
+    /* Leaving vt-0 for a text slot: the gfx overlay is locked (the compositor
+     * owned the framebuffer), so unlock it BEFORE the clear/replay below.  The
+     * framebuffer driver does not service cell writes while the overlay is
+     * locked, so replaying ~rows*cols cells into a locked surface backs up its
+     * IPC queue and spins vt_fb_send_switch's per-cell retry (up to
+     * VT_FB_SWITCH_CELL_RETRIES) — an ~80 s wedge that looks like a hang. */
+    if (prev_active == 0 && tty_index != 0) {
+        (void)vt_fb_send_switch(FBTEXT_IPC_GFX_OVERLAY_REQ, 0, 0, 0, 0);
+    }
+
     if (prev_console_mode != 0u) {
         if (vt_fb_send_switch(FBTEXT_IPC_CONSOLE_MODE_REQ, 0, 0, 0, 0) != 0) {
             g_switch_barrier = 0;
@@ -940,7 +991,6 @@ static int32_t vt_switch_tty(uint32_t tty_index) {
         g_switch_barrier = 0;
         return VT_SWITCH_ERR_MODE_ON;
     }
-
     g_switch_generation++;
     g_active_tty = tty_index;
     vt_trace_mark(VT_TRACE_SWITCH, (uint16_t)(tty_index & 0x0FFFu),
@@ -952,10 +1002,8 @@ static int32_t vt_switch_tty(uint32_t tty_index) {
         (void)vt_fb_send_switch(FBTEXT_IPC_GFX_OVERLAY_REQ, 1, 0, 0, 0);
         /* Keep tty0 visibly intentional even when no fresh ring data exists. */
         vt_draw_tty0_hint();
-    } else if (prev_active == 0) {
-        /* Returning to text mode: unlock overlay so ring drain can resume. */
-        (void)vt_fb_send_switch(FBTEXT_IPC_GFX_OVERLAY_REQ, 0, 0, 0, 0);
     }
+    /* The vt-0 -> text unlock now happens before the replay above. */
     return 0;
 }
 
@@ -1548,6 +1596,37 @@ static void vt_drain_klog_ring(void) {
     }
 }
 
+/* Set up the shared cell-grid blit buffer (phase 5): acquire an xfer-buffer, map
+ * it into our linear memory (write side), grant the framebuffer driver READ
+ * access, and hand it the buffer/borrow ids so it can map and render from it.
+ * Best-effort: on failure g_blit_ready stays 0 and vt_replay_tty falls back to
+ * per-cell writes. */
+static void vt_blit_init(void) {
+    if (g_fb_ep < 0) {
+        return;
+    }
+    uint32_t bytes = VT_BLIT_MAX_CELLS * (uint32_t)sizeof(fbtext_blit_cell_t);
+    int32_t bid = wasmos_xfer_buffer_acquire((int32_t)bytes);
+    if (bid <= 0) {
+        return;
+    }
+    int32_t off = wasmos_xfer_buffer_map(bid);
+    if (off < 0) {
+        return;
+    }
+    int32_t grant = wasmos_xfer_buffer_borrow(g_fb_ep, bid, WASMOS_BUFFER_GRANT_READ);
+    if (grant < 0) {
+        return;
+    }
+    /* Hand the driver the ids to map; it renders on FBTEXT_IPC_BLIT_GRID_REQ. */
+    if (vt_fb_send_switch(FBTEXT_IPC_BLIT_ATTACH_REQ, bid, grant, (int32_t)g_vt_cols,
+                          (int32_t)g_vt_rows) != 0) {
+        return;
+    }
+    g_blit_grid = ptr_cast(fbtext_blit_cell_t, (uint32_t)off);
+    g_blit_ready = 1;
+}
+
 WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t arg1, int32_t arg2,
                                       int32_t arg3) {
     /* proc.endpoint now comes from the spawn-info contract, not an entry arg. */
@@ -1608,6 +1687,9 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t arg1, int32
 
     if (g_fb_ep != -1) {
         vt_fb_console_mode(1);
+        /* Share the cell-grid blit buffer with the framebuffer driver so tty
+         * switches repaint in one IPC instead of a per-cell storm. */
+        vt_blit_init();
     }
 
     /* Bring up the VT-owned klog ring (small, cheap overlay — see

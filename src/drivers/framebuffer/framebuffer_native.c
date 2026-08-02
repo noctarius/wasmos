@@ -34,6 +34,10 @@ static uint8_t g_console_ring_enabled = 1;
 static uint8_t g_text_plane_enabled = 1;
 static uint8_t g_gfx_overlay_lock = 0;
 
+/* Bulk grid blit (phase 5): repaint the whole grid from the VT's shared
+ * cell-grid buffer in one IPC instead of a per-cell CELL_WRITE storm. */
+static const fbtext_blit_cell_t* g_blit_grid = 0;
+
 /* Idle-block bounds so the main loop reaches idle/hlt instead of yield-spinning.
  * Control IPC wakes the endpoint immediately; these only cap idle sleep.  The
  * console ring is fed over shared memory with no IPC doorbell, so while the text
@@ -313,6 +317,41 @@ int initialize(wasmos_driver_api_t* api, int module_count, int arg2, int arg3) {
         case FBTEXT_IPC_GFX_OVERLAY_REQ:
             g_gfx_overlay_lock = (msg.arg0 != 0) ? 1u : 0u;
             break;
+        case FBTEXT_IPC_BLIT_ATTACH_REQ:
+            if (api->xfer_buffer_map_borrowed) {
+                const void* p =
+                    api->xfer_buffer_map_borrowed(ND_BUFFER_KIND_XFER, msg.arg0, msg.arg1);
+                if (p) {
+                    g_blit_grid = (const fbtext_blit_cell_t*)p;
+                }
+            }
+            break;
+        case FBTEXT_IPC_BLIT_GRID_REQ: {
+            if (!g_text_plane_enabled || g_gfx_overlay_lock || !g_blit_grid) {
+                break;
+            }
+            /* Clamp to our geometry so a bad request cannot read past the buffer. */
+            uint32_t stride = (uint32_t)msg.arg0;
+            if (stride > g_state.cols) {
+                stride = g_state.cols;
+            }
+            uint32_t rows = (uint32_t)msg.arg1;
+            if (rows > g_state.rows) {
+                rows = g_state.rows;
+            }
+            for (uint32_t row = 0; row < rows; ++row) {
+                for (uint32_t col = 0; col < stride; ++col) {
+                    const fbtext_blit_cell_t* s = &g_blit_grid[row * stride + col];
+                    fbtext_cell_t* d = &g_state.cells[row * g_state.cols + col];
+                    d->ch = s->ch;
+                    d->fg = s->fg;
+                    d->bg = s->bg;
+                    d->attr = s->attr;
+                    fbtext_render_cell(&g_state, (uint16_t)col, (uint16_t)row);
+                }
+            }
+            break;
+        }
         case FBTEXT_IPC_QUERY_CAPS_REQ:
             /* UEFI-backed path does not provide runtime mode switching. */
             resp.arg0 = 0;

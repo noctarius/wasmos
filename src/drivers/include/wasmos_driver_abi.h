@@ -455,9 +455,28 @@ enum {
     FBTEXT_IPC_QUERY_CAPS_REQ = 0x607,     /* resp: arg0=FBTEXT_CAP_* bitmask */
     FBTEXT_IPC_QUERY_MODES_REQ = 0x608,    /* req: arg0=index, resp: arg0=w arg1=h arg2=stride */
     FBTEXT_IPC_SET_RESOLUTION_REQ = 0x609, /* req: arg0=w arg1=h */
+    /* Bulk grid blit: instead of one CELL_WRITE per cell (a per-cell IPC loop
+     * that storms the driver's queue and wedges tty switching under SMP), the VT
+     * shares a cell-grid xfer-buffer and repaints the whole visible grid with a
+     * single IPC. ATTACH (once) hands the driver a borrowed grid buffer to map;
+     * BLIT_GRID (per repaint) tells it to render cols*rows fbtext_blit_cell_t
+     * entries from that buffer. */
+    FBTEXT_IPC_BLIT_ATTACH_REQ = 0x60A, /* arg0=buffer_id arg1=borrow_id arg2=cols arg3=rows */
+    FBTEXT_IPC_BLIT_GRID_REQ = 0x60B,   /* arg0=cols arg1=rows (from the attached buffer) */
     FBTEXT_IPC_RESP = 0x680,
     FBTEXT_IPC_ERROR = 0x6FF
 };
+
+/* One cell in a shared FBTEXT_IPC_BLIT grid buffer.  Layout is identical to the
+ * framebuffer driver's fbtext_cell_t and the VT's vt_cell_t (8 bytes), so both
+ * sides copy grids without per-cell conversion. */
+typedef struct {
+    uint32_t ch;  /* Unicode codepoint; 0 or ' ' = blank */
+    uint8_t fg;   /* 4-bit foreground palette index */
+    uint8_t bg;   /* 4-bit background palette index */
+    uint8_t attr; /* reserved (bold/underline/blink) */
+    uint8_t _pad;
+} fbtext_blit_cell_t;
 
 enum { FBTEXT_CAP_SET_RESOLUTION = 1u << 0, FBTEXT_CAP_QUERY_MODES = 1u << 1 };
 

@@ -343,6 +343,15 @@ linked feature documents for rationale and rollout plans.
   not a multi-MiB commit); a new hostcall needs the numbered `warp_ring3_dispatch`
   case plus the AOT tool's symbol table, and `--initial/max-memory` changes are
   content-cached under `.cache/warp_aot`.
+- Phase 5 (in progress): tty switching repaints the target slot with a single
+  shared-buffer grid blit (`FBTEXT_IPC_BLIT_ATTACH`/`BLIT_GRID`, cell grid in a
+  VT-owned xfer-buffer granted READ to the framebuffer driver) instead of a
+  per-cell `CELL_WRITE` IPC loop. The per-cell loop stormed the driver's queue
+  and, under SMP, starved it — an ~80 s switch wedge; the blit is one IPC.
+  Verified by `tests/test_vt_tty_switch.py`. Still to do in phase 5: default-
+  visible vt-1 + retiring the fbpci console-ring drain, the serial-bound-slot
+  selector, lazy per-slot CLI spawn, and compositor framebuffer ownership (switch
+  to vt-0 once at startup, then relinquish until an explicit switch back).
 
 ## Drivers and Hardware
 

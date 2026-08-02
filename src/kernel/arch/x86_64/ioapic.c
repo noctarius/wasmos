@@ -6,6 +6,7 @@
 #include "irq.h"
 #include "paging.h"
 #include "serial.h"
+#include "sync/spinlock.h"
 #if WASMOS_SMP
 #include "arch/x86_64/smp.h"
 #include "arch/x86_64/lapic.h"
@@ -72,6 +73,18 @@
 
 static uintptr_t g_ioapic_base;
 static uint8_t g_gsi_map[16]; /* g_gsi_map[isa_irq] = gsi; default identity */
+
+/*
+ * Serialises access to the indirect IOREGSEL/IOWIN register pair.  Every RTE
+ * update is a read-modify-write across two MMIO steps (write IOREGSEL, then
+ * read/write IOWIN) against a single global selector register.  Under SMP an
+ * IRQ handler masking one line on one CPU and a driver's irq_ack unmasking a
+ * different line on another CPU would otherwise clobber IOREGSEL mid-sequence,
+ * writing one line's value into another line's RTE and permanently masking or
+ * misrouting an IRQ (observed as the mouse IRQ 12 wedging under load).  The
+ * lock is the IRQ-safe variant (holds IF=0) so a mask from interrupt context
+ * cannot deadlock against an unmask on the same CPU. */
+static ksync_spinlock_t g_ioapic_lock;
 
 /* ------------------------------------------------------------------ MMIO I/O */
 
@@ -241,6 +254,7 @@ static void ioapic_program_rtes(void) {
 /* ----------------------------------------------------------------------- API */
 
 void ioapic_init(const boot_info_t* boot_info) {
+    ksync_spinlock_init(&g_ioapic_lock);
     uint64_t ioapic_phys;
     madt_parse(find_xsdt_phys(boot_info), &ioapic_phys);
     ioapic_map(ioapic_phys);
@@ -256,8 +270,10 @@ void ioapic_mask_irq(uint32_t irq_line) {
         return;
     }
     uint32_t gsi = g_gsi_map[irq_line];
+    ksync_spinlock_lock(&g_ioapic_lock);
     uint32_t lo = ioapic_read_reg(IOAPIC_RTE_LO(gsi));
     ioapic_write_reg(IOAPIC_RTE_LO(gsi), lo | IOAPIC_RTE_MASK_BIT);
+    ksync_spinlock_unlock(&g_ioapic_lock);
 }
 
 void ioapic_unmask_irq(uint32_t irq_line) {
@@ -265,8 +281,10 @@ void ioapic_unmask_irq(uint32_t irq_line) {
         return;
     }
     uint32_t gsi = g_gsi_map[irq_line];
+    ksync_spinlock_lock(&g_ioapic_lock);
     uint32_t lo = ioapic_read_reg(IOAPIC_RTE_LO(gsi));
     ioapic_write_reg(IOAPIC_RTE_LO(gsi), lo & ~IOAPIC_RTE_MASK_BIT);
+    ksync_spinlock_unlock(&g_ioapic_lock);
 }
 
 /* Reprogram an IRQ line's trigger mode and polarity, preserving its
@@ -277,6 +295,7 @@ void ioapic_configure_irq(uint32_t irq_line, int level, int active_low) {
         return;
     }
     uint32_t gsi = g_gsi_map[irq_line];
+    ksync_spinlock_lock(&g_ioapic_lock);
     uint32_t lo = ioapic_read_reg(IOAPIC_RTE_LO(gsi));
     lo &= ~(IOAPIC_RTE_LEVEL | IOAPIC_RTE_ACTLO);
     if (level) {
@@ -286,4 +305,5 @@ void ioapic_configure_irq(uint32_t irq_line, int level, int active_low) {
         lo |= IOAPIC_RTE_ACTLO;
     }
     ioapic_write_reg(IOAPIC_RTE_LO(gsi), lo);
+    ksync_spinlock_unlock(&g_ioapic_lock);
 }

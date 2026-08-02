@@ -26,13 +26,19 @@
  * work -- e.g. the serial driver draining the UART RX FIFO on its IRQ before it
  * overruns -- outranks ordinary apps under load.
  *
- * Services are intentionally NOT boosted yet: several still yield-spin their
- * main loops instead of blocking, so raising them above the app band lets them
- * hog CPU and actually slows apps.  Boosting services must wait until those
- * loops are converted to blocking waits (see the busy-spin cleanup). */
+ * Services get SCHED_PRIO_SERVICE so they respond to app requests promptly
+ * instead of competing in the WASM band; the VT input multiplexer in particular
+ * must run to process serial input the driver hands it, or input stalls during a
+ * spawn storm.  (This became safe once the perpetual device-manager idle-spin
+ * and the font/gfx synchronous-call spins were converted to blocking waits;
+ * before that, boosted services hogged CPU and slowed apps.)  Plain apps keep
+ * the WASM band. */
 static uint8_t pm_sched_prio_for_flags(uint32_t flags) {
     if (flags & WASMOS_APP_FLAG_DRIVER) {
         return (uint8_t)SCHED_PRIO_DRIVER;
+    }
+    if (flags & WASMOS_APP_FLAG_SERVICE) {
+        return (uint8_t)SCHED_PRIO_SERVICE;
     }
     return (uint8_t)SCHED_PRIO_WASM;
 }

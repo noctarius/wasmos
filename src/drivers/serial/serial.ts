@@ -50,6 +50,48 @@ let g_endpoint: i32 = -1;
 /* The single RX subscriber (the vt service). -1 = none yet. */
 let g_subscriber: i32 = -1;
 
+/* Software RX ring.  The one hard deadline is draining the 16-byte UART FIFO
+ * before it overruns; delivering to the vt has no deadline.  So the IRQ handler
+ * always empties the FIFO into this ring immediately, and forwarding to the vt
+ * happens opportunistically from the ring (flush_rx).  When the vt's IPC queue
+ * is full we keep the bytes here and retry, rather than blocking the FIFO drain
+ * (which would cause a real, unrecoverable hardware overrun) or dropping them
+ * (the pre-ring behavior, which corrupted long command lines under load).
+ * 512 bytes >> any interactive burst, so it effectively never fills. */
+const RXBUF_CAP: i32 = 512;
+let g_rxbuf = new StaticArray<u8>(RXBUF_CAP);
+let g_rxbuf_head: i32 = 0; /* index of the oldest buffered byte */
+let g_rxbuf_count: i32 = 0; /* number of bytes currently buffered */
+
+function rxbuf_empty(): bool {
+    return g_rxbuf_count == 0;
+}
+
+function rxbuf_push(byte: i32): void {
+    if (g_rxbuf_count >= RXBUF_CAP) {
+        /* Sustained overload with no consumer draining: drop the newest byte.
+         * Bounded and effectively unreachable for interactive input. */
+        return;
+    }
+    let tail = (g_rxbuf_head + g_rxbuf_count) % RXBUF_CAP;
+    g_rxbuf[tail] = <u8>(byte & 0xFF);
+    g_rxbuf_count++;
+}
+
+function rxbuf_pop(): i32 {
+    if (g_rxbuf_count == 0) {
+        return -1;
+    }
+    let b = g_rxbuf[g_rxbuf_head] & 0xFF;
+    g_rxbuf_head = (g_rxbuf_head + 1) % RXBUF_CAP;
+    g_rxbuf_count--;
+    return b;
+}
+
+function rxbuf_peek(offset: i32): i32 {
+    return g_rxbuf[(g_rxbuf_head + offset) % RXBUF_CAP] & 0xFF;
+}
+
 function serial_init_hw(): void {
     io_out8(COM1_IER, 0x00);      /* disable interrupts during setup */
     io_out8(COM1_PORT + 3, 0x80); /* DLAB on */
@@ -96,36 +138,52 @@ function handle_write(request_id: i32, source: i32): void {
     send_response(source, request_id, 0, 0);
 }
 
-/* Legacy pull path.  RX is now drained by the IRQ handler and forwarded to the
- * subscribed vt, so this reports empty (the kernel console_read fallback keeps
- * working during early boot before a subscriber exists). */
+/* Dead pull path.  All serial RX is now owned by the vt (drained here into the
+ * ring and pushed to the vt), so the legacy console_read route must never
+ * consume input -- doing so would steal bytes from the vt's stream.  Always
+ * report empty until the console_read path is removed entirely. */
 function handle_read(request_id: i32, source: i32): void {
-    let char_code = read_port();
-    if (char_code >= 0) {
-        send_response(source, request_id, char_code, SERIAL_READ_STATUS_CHAR);
-        return;
-    }
     send_response(source, request_id, 0, SERIAL_READ_STATUS_EMPTY);
 }
 
-/* Forward one RX byte to the subscribed vt as VT_IPC_SERIAL_INPUT_REQ. */
-function push_rx_byte(byte: i32): void {
-    if (g_subscriber < 0) {
-        return;
-    }
-    let packed = (1 << 24) | (byte & 0xFF);
-    ipc_send(g_subscriber, g_endpoint, VT_IPC_SERIAL_INPUT_REQ, 0, packed, 0, 0, 0);
-}
-
-/* Drain all bytes currently in the UART RX FIFO to the subscriber. */
-function drain_rx(): void {
+/* Empty the UART RX FIFO into the software ring.  Must run promptly on every RX
+ * IRQ so the 16-byte hardware FIFO cannot overrun. */
+function drain_uart_to_ring(): void {
     for (;;) {
         let c = read_port();
         if (c < 0) {
             break;
         }
-        push_rx_byte(c);
+        rxbuf_push(c);
     }
+}
+
+/* Forward buffered RX bytes to the subscribed vt, up to 4 bytes per
+ * VT_IPC_SERIAL_INPUT_REQ (the vt unpacks a count in arg0[27:24]).  Stops and
+ * leaves the remaining bytes in the ring when the vt's IPC queue is full
+ * (IPC_ERR_FULL) so the caller can retry after yielding, rather than dropping.
+ * Returns true when the ring has been fully flushed. */
+function flush_rx(): bool {
+    if (g_subscriber < 0) {
+        /* No vt yet: keep bytes for the console_read pull path. */
+        return rxbuf_empty();
+    }
+    while (g_rxbuf_count > 0) {
+        let n = g_rxbuf_count < 4 ? g_rxbuf_count : 4;
+        let b0 = rxbuf_peek(0);
+        let b1 = n > 1 ? rxbuf_peek(1) : 0;
+        let b2 = n > 2 ? rxbuf_peek(2) : 0;
+        let b3 = n > 3 ? rxbuf_peek(3) : 0;
+        let arg0 = (n << 24) | b0;
+        let rc = ipc_send(g_subscriber, g_endpoint, VT_IPC_SERIAL_INPUT_REQ, 0, arg0, b1, b2, b3);
+        if (rc < 0) {
+            /* vt queue full: retry these bytes later, do not drop them. */
+            return false;
+        }
+        g_rxbuf_head = (g_rxbuf_head + n) % RXBUF_CAP;
+        g_rxbuf_count -= n;
+    }
+    return true;
 }
 
 function handle_subscribe(request_id: i32, source: i32): void {
@@ -148,6 +206,26 @@ function register_service(proc_endpoint: i32): bool {
     }
     return ipc_last_field(0) == SVC_IPC_REGISTER_RESP && ipc_last_field(1) == req_id &&
            ipc_last_field(2) == 0;
+}
+
+/* Handle one already-received IPC message (fields live in ipc_last_field). */
+function dispatch_message(): void {
+    let kind = ipc_last_field(IPC_FIELD_TYPE);
+    let request_id = ipc_last_field(IPC_FIELD_REQUEST_ID);
+    let source = ipc_last_field(IPC_FIELD_SOURCE);
+    if (kind == SERIAL_IPC_IRQ_EVENT) {
+        drain_uart_to_ring();
+        /* Ack after emptying the FIFO so the line deasserts before unmask. */
+        irq_ack(SERIAL_IRQ);
+    } else if (kind == SERIAL_DRIVER_WRITE_REQ) {
+        handle_write(request_id, source);
+    } else if (kind == SERIAL_IPC_SUBSCRIBE_REQ) {
+        handle_subscribe(request_id, source);
+    } else if (kind == SERIAL_DRIVER_READ_REQ) {
+        handle_read(request_id, source);
+    } else {
+        send_response(source, request_id, 0, SERIAL_READ_STATUS_ERROR);
+    }
 }
 
 export function initialize(_proc_endpoint: i32, _module_count: i32, _arg2: i32, _arg3: i32): i32 {
@@ -181,23 +259,14 @@ export function initialize(_proc_endpoint: i32, _module_count: i32, _arg2: i32, 
     ipc_send(_proc_endpoint, g_endpoint, PROC_IPC_NOTIFY_READY, 0, 0, 0, 0, 0);
 
     if (irq_ok != 0) {
-        /* Polling fallback: interleave IPC servicing with RX polling. */
+        /* Polling fallback: interleave IPC servicing with RX polling + flush. */
         io_out8(COM1_IER, 0x00); /* no interrupts; we poll */
         for (;;) {
-            let rc = ipc_try_recv(g_endpoint);
-            if (rc == 1) {
-                let kind = ipc_last_field(IPC_FIELD_TYPE);
-                let request_id = ipc_last_field(IPC_FIELD_REQUEST_ID);
-                let source = ipc_last_field(IPC_FIELD_SOURCE);
-                if (kind == SERIAL_DRIVER_WRITE_REQ) {
-                    handle_write(request_id, source);
-                } else if (kind == SERIAL_IPC_SUBSCRIBE_REQ) {
-                    handle_subscribe(request_id, source);
-                } else if (kind == SERIAL_DRIVER_READ_REQ) {
-                    handle_read(request_id, source);
-                }
+            if (ipc_try_recv(g_endpoint) == 1) {
+                dispatch_message();
             }
-            drain_rx();
+            drain_uart_to_ring();
+            flush_rx();
             io_wait();
             sched_yield();
         }
@@ -205,25 +274,24 @@ export function initialize(_proc_endpoint: i32, _module_count: i32, _arg2: i32, 
     }
 
     for (;;) {
-        /* Block until a client message or an RX IRQ event arrives. */
-        if (ipc_recv(g_endpoint) != 1) {
-            continue;
-        }
-        let kind = ipc_last_field(IPC_FIELD_TYPE);
-        let request_id = ipc_last_field(IPC_FIELD_REQUEST_ID);
-        let source = ipc_last_field(IPC_FIELD_SOURCE);
-        if (kind == SERIAL_IPC_IRQ_EVENT) {
-            drain_rx();
-            /* Ack after reading the FIFO so the line deasserts before unmask. */
-            irq_ack(SERIAL_IRQ);
-        } else if (kind == SERIAL_DRIVER_WRITE_REQ) {
-            handle_write(request_id, source);
-        } else if (kind == SERIAL_IPC_SUBSCRIBE_REQ) {
-            handle_subscribe(request_id, source);
-        } else if (kind == SERIAL_DRIVER_READ_REQ) {
-            handle_read(request_id, source);
+        /* Push whatever is buffered to the vt first. */
+        let flushed = flush_rx();
+        if (flushed) {
+            /* Ring drained: block until the next client message or RX IRQ. */
+            if (ipc_recv(g_endpoint) != 1) {
+                continue;
+            }
+            dispatch_message();
         } else {
-            send_response(source, request_id, 0, SERIAL_READ_STATUS_ERROR);
+            /* vt queue was full (backpressure).  We must retry the flush, so do
+             * not block: service any pending event without blocking, then yield
+             * so the vt runs and drains its queue.  This spins only while
+             * backpressured (transient) and self-terminates once the ring
+             * drains, at which point we return to blocking above. */
+            if (ipc_try_recv(g_endpoint) == 1) {
+                dispatch_message();
+            }
+            sched_yield();
         }
     }
 

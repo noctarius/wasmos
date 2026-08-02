@@ -1,6 +1,13 @@
 # Ruff configuration for the repo-local `lint` target (scripts/quality.sh).
-# Uses ruff's default rule set (pycodestyle E4/E7/E9 + pyflakes F).
 #
+# Pin the rule set explicitly to pycodestyle E4/E7/E9 + pyflakes F. This is
+# ruff's historical default, but the default drifts between ruff releases (0.16
+# began selecting flake8-bugbear/blind-except/bandit rules), which silently
+# changes what `lint` enforces across contributor and CI ruff versions. Pinning
+# `select` keeps the policy stable regardless of the installed ruff version.
+[lint]
+select = ["E4", "E7", "E9", "F"]
+
 # The QEMU test harnesses under tests/ and several helper scripts must insert
 # the scripts/ directory onto sys.path before importing project modules, so the
 # "module import not at top of file" rule (E402) is expected there and silenced

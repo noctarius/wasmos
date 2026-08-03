@@ -60,7 +60,7 @@ typedef struct __attribute__((packed)) {
 
 Constants:
 - `IRQ0_IST_INDEX = 1` — timer uses IST slot 1
-- `IRQ0_IST_STACK_SIZE = 16384` — 16 KiB for IST1 and rsp0 stacks
+- `CPU_IST_STACK_SIZE = 16384` — 16 KiB for IST1 and rsp0 stacks
 - `g_irq0_ist_canary = 0xCAFEBABEDEADC0DE` — stack underflow sentinel written to IST1 base
 
 `tss_init()` fills `g_irq0_ist_stack` with `0xCC` bytes, writes the canary at
@@ -162,9 +162,9 @@ level-triggered re-fire before the driver reads the device register.
 
 `lapic_init(hz)`:
 1. Reads the LAPIC physical base from `IA32_APIC_BASE MSR (0x1B)`, bits [51:12].
-2. Maps one 4 KB MMIO page at kernel VA `0xFFFFFFFF80001000`
-   (in the unmapped 2 MB gap below the kernel image) with cache-disable flags
-   (`PT_FLAG_PCD`).
+2. Maps one 4 KB MMIO page at kernel VA `0xFFFFFFFF800FE000`
+   (a VA whose PT index lands in the reserved BIOS ROM region, guaranteed
+   PFA-unreachable) with cache-disable flags (`PT_FLAG_PCD`).
 3. Enables the LAPIC via the SVR register (bit 8) and sets the spurious vector
    to `0xFF` (255).
 4. Masks all 8259 PIC lines (`outb(0x21, 0xFF); outb(0xA1, 0xFF)`).
@@ -189,7 +189,7 @@ Builds on LAPIC mode (LAPIC timer and EOI are identical). `ioapic_init(boot_info
    - type-1 entry: I/O APIC physical base (default `0xFEC00000`)
    - type-2 entries: ISA IRQ source overrides → GSI map (`g_gsi_map[isa_irq] = gsi`)
 
-2. **MMIO mapping**: maps the I/O APIC MMIO page at kernel VA `0xFFFFFFFF80002000`
+2. **MMIO mapping**: maps the I/O APIC MMIO page at kernel VA `0xFFFFFFFF800FF000`
    (one page above the LAPIC) using `paging_map_4k()` with cache-disable flags.
 
 3. **RTE programming**: programs all 16 ISA Redirection Table Entries via
@@ -370,7 +370,7 @@ mm_init() + further kernel init ...         ← paging/physmem ready
 timer_init(250)                             ← phase 1.5
   ├─ [mode 0] PIT channel 0 → sq-wave 250 Hz, irq_unmask(0)
   └─ [mode >= 1] lapic_init(250)
-       ├─ lapic_map()       ← paging_map_4k at 0xFFFFFFFF80001000
+       ├─ lapic_map()       ← paging_map_4k at 0xFFFFFFFF800FE000
        ├─ lapic_enable()    ← SVR write, MSR global enable
        ├─ pic_disable()     ← outb(0x21/0xA1, 0xFF)
        └─ lapic_timer_set_hz(250) ← calibrate via PIT ch.2, program LVT_TIMER
@@ -378,7 +378,7 @@ timer_init(250)                             ← phase 1.5
 irq_late_init(boot_info)                    ← phase 2
   └─ [mode 2] ioapic_init(boot_info)
        ├─ madt_parse()      ← RSDP → XSDT → "APIC" table, GSI overrides
-       ├─ ioapic_map()      ← paging_map_4k at 0xFFFFFFFF80002000
+       ├─ ioapic_map()      ← paging_map_4k at 0xFFFFFFFF800FF000
        └─ ioapic_program_rtes() ← 16 RTEs, all masked, vectors 32–47
 
 cpu_enable_interrupts()                     ← sti

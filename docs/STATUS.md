@@ -66,7 +66,7 @@ linked feature documents for rationale and rollout plans.
   (`kmem`) is small-object-only (<=128 B). `heap_corruption_detected` logs and
   `proc_exit`s. (ABI bumped 11->12.) Reap reclamation of heap pages is a TODO
   (native services are long-lived).
-- TLS client (milestone C, verifying): net-stack embeds mbedTLS 3.6 (freestanding
+- TLS client (milestone C): net-stack embeds mbedTLS 3.6 (freestanding
   config in `src/services/net_stack/net_stack_mbedtls_config.h`; `mbedtls_calloc/free`
   are bound at compile time via the `MBEDTLS_PLATFORM_*_MACRO` forms to the native
   slab allocator so the TLS heap grows on demand — the full Mozilla CA bundle
@@ -151,6 +151,8 @@ linked feature documents for rationale and rollout plans.
   in place. lwIP is IPv4-only with a single address per netif, so static
   addressing and DHCP are mutually exclusive on an interface (no address aliases).
 
+### Build, Configuration, and Validation
+
 - Default configuration: wasm3 runtime, ring-3 isolation, single CPU. WARP is
   selected with `-DWASMOS_WASM_RUNTIME_WARP=ON`; SMP is separately gated by
   `WASMOS_SMP` and requires IOAPIC.
@@ -180,8 +182,8 @@ linked feature documents for rationale and rollout plans.
   file/line resolution.
 - Scheduling is thread-centric. Ring-3 thread creation/join/detach/yield/exit
   and cooperative user-space reentrant mutexes are implemented. SMP has AP
-  bring-up, per-CPU state, a shared ready queue, and hardening for cross-CPU
-  wake/reap/context races.
+  bring-up, per-CPU state, per-CPU ready queues with work-stealing, and
+  hardening for cross-CPU wake/reap/context races.
 - Process-manager state and core MM registries use dynamic/list-backed storage
   rather than small fixed process/context/region tables.
 
@@ -307,7 +309,8 @@ linked feature documents for rationale and rollout plans.
 - `fs-fat` is a single-threaded, non-blocking reactor: queued operation
   contexts are resumable stackless coroutines, while one active operation uses
   the shared 8 KiB block/DMA buffer. It supports FAT12/16 and LFN lookup across
-  multi-cluster directories, reports `FS_ERR_*`, and binds to its requested
+  multi-cluster directories (FAT32 is detected at mount but its cluster
+  read/write is unimplemented), reports `FS_ERR_*`, and binds to its requested
   block-device unit.
 - `block_buffer_map` overlays a caller block buffer into linear memory so FAT
   I/O normally avoids staging copies. Bounds checks limit legacy copy/write
@@ -410,7 +413,8 @@ linked feature documents for rationale and rollout plans.
 - The graphics stack comprises framebuffer driver, software compositor,
   shared-buffer windows, input routing, clipping/damage redraw, window chrome,
   cursor, and system/menu bars. Window flags are composable (`TOPMOST`,
-  `NO_CHROME`, `INVISIBLE`, `NO_ACTIVATE`, `NO_CONTENT`, and related flags).
+  `NO_CHROME`, `INVISIBLE`, `PASSTHROUGH_ZERO`, `NO_ACTIVATE`, `NO_CONTENT`,
+  `NO_TASK_LIST`, and related flags).
 - `libui` has one canonical tree at `src/libui/`. Its component base owns common
   tree state; component vtables own type-specific layout, render, event, popup,
   and destruction behavior. Existing consumers are `gfx_smoke` and `menu_bar`.
@@ -431,8 +435,10 @@ linked feature documents for rationale and rollout plans.
 - `examples/rust/tetris` is a graphical, double-buffered Rust game for the gfx
   compositor: it talks the GFX IPC directly (create window, alloc BGRA32 shared
   buffer, present), renders into an app-owned back buffer, and reads keyboard via
-  the compositor event endpoint (WASD + space; the compositor forwards only
-  translated ASCII, so arrow keys are unusable). A start menu offers Single
+  the compositor event endpoint (WASD + space; the compositor now forwards
+  `ascii | (scancode << 8)`, so arrow/function keys are delivered — whether the
+  Tetris app itself reads the scancode byte is a separate app concern; arrow
+  keys were previously unusable because only ASCII was forwarded). A start menu offers Single
   Player / Be Host / Join Session; single-player is fully functional. The
   two-player path streams a fixed board snapshot over net-stack TCP (client via
   the `net.h` connect helper, server via a hand-rolled listen/accept in
@@ -450,8 +456,9 @@ linked feature documents for rationale and rollout plans.
 
 - Shared WARP linear-memory updates need a real cross-CPU TLB shootdown; the
   current fault-path retry is an interim SMP safeguard.
-- WARP still has incomplete hostcall coverage, no working multithreaded WASM,
-  and an internal shim used to access a vendored runtime pointer. Do not modify
+- WARP still has a few hostcall refinements pending (SMP sync, shmem auto-map
+  growth, PAT, irq.configure split), no working multithreaded WASM, and an
+  internal shim used to access a vendored runtime pointer. Do not modify
   `libs/warp` or `libs/wasm3` directly.
 - Complete PCI INTx polarity/trigger configuration before treating RX
   notifications as reliable push delivery.

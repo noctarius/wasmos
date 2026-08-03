@@ -239,7 +239,7 @@ physical address `0x1000` (vector `0x01` for SIPI). It transitions through
 | `0x500`          | 8 bytes  | CR3 — kernel PML4 physical address      |
 | `0x508`          | 8 bytes  | 64-bit C entry point (`smp_ap_c_entry`) |
 | `0x510`          | 8 bytes  | Initial RSP (top of AP kernel stack)    |
-| `0x518`          | 10 bytes | GDT pseudo-descriptor (limit + base)    |
+| `0x518`          | 6 bytes  | GDT pseudo-descriptor (limit + base)    |
 
 The trampoline is either linked as a raw `.bin` section or embedded via
 `.incbin` into a C array in `smp.c` and copied to `0x1000` at runtime. Two

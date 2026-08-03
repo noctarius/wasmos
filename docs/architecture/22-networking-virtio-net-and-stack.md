@@ -1,8 +1,11 @@
 ## Networking via Virtio-Net and User-Space Stack
 
 > **Documentation status: Mixed reference and proposal.** The virtio-net
-> transport baseline is implemented. Net-stack protocol service behavior,
-> sockets, TCP, IPv6, and multi-instance support remain future work.
+> transport baseline, the net-stack protocol service, sockets, UDP, and TCP
+> (client connect/stream/close **and** server listen/accept/echo) are
+> implemented and e2e-validated, as are DNS resolution and a verifying TLS 1.2
+> client. Only IPv6, multi-address interfaces, and multi-stack instances remain
+> future work.
 
 ### Goal
 Introduce a deterministic, minimal networking baseline for WASMOS using:
@@ -60,7 +63,8 @@ Out of scope for initial rollout:
   `10.0.2.15/24` (gateway `10.0.2.2`). Its linkoutput flattens pbuf chains into
   a driver-granted transfer buffer; RX polling/notifications feed
   `ethernet_input`, and its idle loop runs `sys_check_timeouts()`. Socket
-  payload callbacks and TCP handshake delivery remain future work.
+  payload callbacks and TCP handshake delivery are implemented via lwIP
+  `altcp` (`src/services/net_stack/net_stack.c`).
 - The bootstrap device-manager rule starts `net-stack` at boot. Its service
   registration, `net.ifc` discovery/subscription, and `hrng` lookup are
   asynchronous requests resolved by its control endpoint. The dedicated
@@ -470,7 +474,7 @@ TX completions are reclaimed lazily (before the next TX) by scanning
 
 ---
 
-### Net-Stack as Interface Broker (planned)
+### Net-Stack as Interface Broker
 
 The net-stack service is the networking analog of the filesystem manager: the
 single broker between NIC drivers below and applications above. Drivers stay
@@ -509,7 +513,7 @@ apps ──NET_IPC_* sockets──▶ net-stack ──netdrv IPC──▶ virtio
 
 ---
 
-### Socket Data Plane — Shared-Memory Ring Transport (planned, canonical)
+### Socket Data Plane — Shared-Memory Ring Transport (implemented, canonical)
 
 The app↔net-stack **data plane** is a pair of shared-memory SPSC ring buffers
 per socket. Socket payload never travels in an IPC message: IPC carries only the
@@ -522,8 +526,10 @@ userspace services and the kernel) and is covered by
 descriptor are implemented in `src/services/net_stack/socket.{h,c}` and covered
 by `tests/unit/test_net_socket.c`. Connected UDP sockets drain complete TX-ring
 datagram records into lwIP `pbuf`s and `udp_sendto`; the UDP receive callback
-writes complete RX-ring records and sends `NET_IPC_RX_NOTIFY`. TCP payload
-callbacks remain future work.
+writes complete RX-ring records and sends `NET_IPC_RX_NOTIFY`. TCP payload is
+implemented over the same rings: outbound data drains the TX ring via
+`tcp_write`/`tcp_output` (with `tcp_sndbuf` backpressure) and inbound segments
+are copied into the RX ring and acked with `tcp_recved`.
 
 **Rationale.** A persistent per-socket ring avoids per-datagram borrow/release
 churn, generalizes to TCP byte streaming without an ABI change, and keeps the
@@ -657,7 +663,7 @@ enum {
     NETDRV_IPC_RX_POLL           = 0xA02, /* req: –; resp: arg0=frame_len (0=empty); frame in xfer buf */
     NETDRV_IPC_STATS_GET         = 0xA03, /* req: –; resp: stats struct in xfer buf */
     NETDRV_IPC_RX_FRAME_NOTIFY   = 0xA04, /* push driver→stack: arg0=frame_len; frame in xfer buf */
-    NETDRV_IPC_LINK_NOTIFY       = 0xA05, /* planned; push driver→stack: arg0=link up/down */
+    NETDRV_IPC_LINK_NOTIFY       = 0xA05, /* push driver→stack: arg0=link up/down */
     NETDRV_IPC_RESP              = 0xA80,
     NETDRV_IPC_ERROR             = 0xAFF,
 
@@ -682,10 +688,19 @@ enum {
     NET_IPC_DHCP_SET             = 0xB11, /* arg0=if_idx arg1=1 start / 0 stop DHCP client */
     NET_IPC_LISTEN               = 0xB12, /* arg0=sock_id; passive-open a bound stream socket */
     NET_IPC_ACCEPT               = 0xB13, /* arg0=listen_sock arg1=desc_bid arg2=desc_grant arg3=desc_bytes; deferred resp arg0=accepted sock_id */
+    NET_IPC_RESOLVE              = 0xB14, /* arg0=buffer_id arg1=borrow_id arg2=name_len; name in xfer buf; deferred resp arg0=IPv4 (nbo) */
+    NET_IPC_DNS_SET              = 0xB15, /* arg0=count(0..2) arg1/arg2=server IPv4 (nbo); count=0 clears; immediate resp */
+    NET_IPC_DNS_LIST             = 0xB16, /* resp: arg0=count arg1/arg2=server IPv4 (nbo); immediate */
     NET_IPC_RESP                 = 0xB80,
     NET_IPC_ERROR                = 0xBFF
 };
 ```
+
+`NET_IPC_RESOLVE`/`NET_IPC_DNS_SET`/`NET_IPC_DNS_LIST` back the implemented
+system-wide DNS resolver (lwIP `LWIP_DNS`, deferred resolve reply on the DNS
+callback). A verifying TLS 1.2 client (mbedTLS 3.6 via lwIP `altcp_tls`, full
+certificate-chain + hostname verification) is also implemented, opt-in per
+socket via `NET_SOCKET_OPEN_FLAG_TLS`.
 
 Common return codes (packed in arg0 of NET_IPC_ERROR):
 ```c
@@ -712,7 +727,7 @@ through the xfer buffer.
 
 > **Note:** the socket *data-plane* opcodes below (`NET_IPC_SEND`,
 > `NET_IPC_RECV`, and their xfer-buffer payload path) are **superseded** by the
-> [Socket Data Plane — Shared-Memory Ring Transport](#socket-data-plane--shared-memory-ring-transport-planned-canonical)
+> [Socket Data Plane — Shared-Memory Ring Transport](#socket-data-plane--shared-memory-ring-transport-implemented-canonical)
 > above: payload moves through the per-socket rings, not through these
 > messages. The control-plane opcodes (`SOCKET_OPEN`, `BIND`, `CONNECT`,
 > `CLOSE`, `IFADDR_*`, `STACK_*`) remain as specified, with `SOCKET_OPEN`

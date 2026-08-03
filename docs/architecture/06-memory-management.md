@@ -73,7 +73,7 @@ The caller must check before use; no fallback or retry is performed.
 ```
 PML4 index  Virtual range                            Use
 ──────────  ───────────────────────────────────────  ───────────────────────────
-1           0x0000008000000000 – 0x0000BFFFFF        User process regions
+1           0x0000008000000000 – 0x000000FFFFFFFFFF  User process regions
 511         0xFFFFFFFF80000000 – 0xFFFFFFFF9FFFFFFF  Kernel higher-half (512 MB)
 ```
 
@@ -159,7 +159,7 @@ three regions:
 
 | Region type              | Pages | Flags    |
 |--------------------------|-------|----------|
-| `MEM_REGION_WASM_LINEAR` | 8     | R+W+User |
+| `MEM_REGION_WASM_LINEAR` | 16    | R+W+User |
 | `MEM_REGION_STACK`       | 2     | R+W+User |
 | `MEM_REGION_HEAP`        | 4     | R+W+User |
 
@@ -503,7 +503,7 @@ Deliverable: kernel can operate on arbitrary physical pages without any
 - **Shared region limit** (`MM_MAX_SHARED`): fixed cap vs. dynamic list with
   no global cap.
 - **Region sizing at context create**: whether WASMOS-APP metadata should
-  control initial region pages rather than the fixed defaults (8/2/4).
+  control initial region pages rather than the fixed defaults (16/2/4).
 - **RSS tracking**: `process_stats_t` currently returns `vm_total_bytes` as
   the RSS estimate. Real per-page presence tracking requires per-context page
   walk or dirty-bit accounting, deferred until the paging model stabilizes.

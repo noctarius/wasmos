@@ -324,7 +324,7 @@ returns `WASMOS_DMA_STATUS_DENY`.
 ### Hostcall API
 
 Declared in `src/libc/include/wasmos/api.h`; implemented in
-`src/kernel/wasm3_link.c`. All three functions are Wasm imports under
+`src/kernel/wasm3/link.c`. All three functions are Wasm imports under
 the `"wasmos"` module namespace.
 
 #### `wasmos_dma_map_borrow`
@@ -533,8 +533,15 @@ Design notes:
 
 ### ATA Storage Integration
 
-The ATA driver (`src/drivers/ata/ata.c`) exercises the full DMA lifecycle
-on every read and write request.
+> **Currently deferred/aspirational.** The borrow-based DMA fast-path below is
+> disabled pending the owner-push migration: `ata_dma_prepare()` returns
+> `WASMOS_DMA_STATUS_DENY` unconditionally (`src/drivers/ata/ata.c`), so every
+> ATA read and write is presently PIO (matching invariant 5, "PIO fallback is
+> unconditional"). The lifecycle described here is the intended shape once the
+> block IPC protocol carries the buffer grant.
+
+The ATA driver (`src/drivers/ata/ata.c`) is written around the full DMA
+lifecycle on every read and write request.
 
 #### Helper Functions
 

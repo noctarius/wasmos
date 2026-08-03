@@ -649,7 +649,7 @@ cause response stealing.
 
 ---
 
-### Synchronous request/response IPC — deadlock hazard (planned direction: futures)
+### Synchronous request/response IPC — deadlock hazard (futures bridge implemented; migration pending)
 
 The prevailing service pattern issues a request and then **blocks** on a reply
 (`wasmos_ipc_send` + `wasmos_ipc_select_one`, or `wasmos_ipc_call`). When two
@@ -665,13 +665,22 @@ not an incidental bug:
   independent work and make boot ordering timing-sensitive (a caller that
   blocks cannot service unrelated requests that arrive meanwhile).
 
-**Planned direction: remove blocking request/response entirely.** A request
-returns a future/promise; the caller keeps pumping its single generic
-`wasmos_sys_event_loop` (one receiver per endpoint), and the reply is delivered
-as an event that resolves the future and runs its continuation. No service ever
-parks inside a nested receive, so cross-service call cycles cannot deadlock and
-a service always keeps serving. Until that lands, avoid synchronous
-service→service calls inside a handler for another service's request.
+**Direction: futures/promises IPC-future bridge (implemented; adoption in
+progress).** A request returns a future/promise; the caller keeps pumping its
+single generic `wasmos_sys_event_loop` (one receiver per endpoint), and the
+reply is delivered as an event that resolves the future and runs its
+continuation. No service ever parks inside a nested receive, so cross-service
+call cycles cannot deadlock and a service always keeps serving.
+
+The IPC-future bridge itself is now implemented — `src/libsys/native/ipc_future_native.c`
+and `src/libsys/wasm/ipc_future_wasm.c` — and is already adopted by the
+net-stack (its `virtio.net` service lookup and initial `NETDRV_IPC_LINK_GET`
+run as native coroutines awaiting future resolution; see `docs/STATUS.md` and
+[Coroutines, Futures, Promises](32-coroutines-futures-promises.md) §50/§51).
+The pending work is not the bridge but the migration: removing synchronous
+request/reply from the remaining call sites. Until that migration completes,
+avoid synchronous service→service calls inside a handler for another service's
+request.
 
 ---
 

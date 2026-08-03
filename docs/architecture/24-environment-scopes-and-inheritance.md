@@ -17,7 +17,7 @@ The system has three separate, loosely coupled env layers:
 |------------------------------|---------------------|-----------------------------------|----------------------------|
 | CLI variable list (`g_env`)  | `cli.c`             | heap-allocated singly-linked list | CLI session only           |
 | Script state tables          | `libc/src/script.c` | `wasmos_script_state_t`           | per script run             |
-| Kernel kenv store (`g_kenv`) | `wasm3_link.c`      | flat static array                 | global, all WASM processes |
+| Kernel kenv store (`g_kenv`) | `wasm3/link.c`      | flat static array                 | global, all WASM processes |
 
 These layers are bridged explicitly at CLI–script transitions and when
 sysinit runs `export` commands. They are not automatically synchronized.
@@ -302,7 +302,7 @@ store directly if they call `wasmos_env_get`.
 
 ### Kernel kenv Store
 
-Implemented in `src/kernel/wasm3_link.c`. This is a flat, global,
+Implemented in `src/kernel/wasm3/link.c`. This is a flat, global,
 process-agnostic key-value store accessible via WASM hostcalls.
 
 #### `kenv_entry_t`
@@ -366,13 +366,33 @@ The live `sysinit.rc`:
 
 ```sh
 # sysinit.rc -- boot-time service startup script
+# Processed by sysinit using the wasmos script engine.
+
 echo "Starting system services..."
+
 spawn /boot/apps/chardevc.wap
+
 start /boot/system/services/vt.wap
+
 if -f /boot/system/services/fontsvc.wap then
     start /boot/system/services/fontsvc.wap
 endif
+
 spawn /boot/system/services/gfxcomp.wap
+wait-svc gfx
+
+if -f /boot/apps/menu_bar.wap then
+    spawn /boot/apps/menu_bar.wap
+endif
+
+if -f /boot/apps/gfx_smoke.wap then
+    spawn /boot/apps/gfx_smoke.wap
+endif
+
+if -f /boot/apps/calculator.wap then
+    spawn /boot/apps/calculator.wap
+endif
+
 start /boot/system/services/cli.wap
 ```
 

@@ -21,7 +21,7 @@ on top of those contracts.
 | PS/2 mouse driver (IRQ-driven + polling)         | Implemented     | `src/drivers/mouse/mouse.ts`                     |
 | Compositor keyboard + mouse subscription         | Implemented     | `src/services/gfx_compositor/gfx_compositor.zig` |
 | Python QEMU test framework                       | Implemented     | `scripts/qemu_test_framework.py`                 |
-| Virtio-serial queue setup and data plane         | **Deferred**    | See TODO in `virtio_serial.c:189`                |
+| Virtio-serial queue setup and data plane         | **Deferred**    | See TODO in `virtio_serial.c:160`                |
 | Virt-input service (protocol parser + injection) | **Not started** | —                                                |
 
 ---

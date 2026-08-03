@@ -508,9 +508,8 @@ order.  The existing `cpu_sched_enqueue` path (fallback) already respects this.
 Existing hierarchy (outermost → innermost):
   cpu_sched_t.lock
     sched_event_t.lock
-      thread_t.s_lock
-        ipc_endpoint_t.lock
-          futex_table_bucket.lock
+      ipc_endpoint_t.lock
+        futex_table_bucket.lock
 
 Direct-switch path acquires:
   ipc_endpoint_t.lock  (step 1)

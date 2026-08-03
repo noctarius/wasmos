@@ -2,7 +2,7 @@
 
 > **Documentation status: Implemented reference with deferred IOMMU work.**
 
-This document describes the kernel capability model: the five capability kinds,
+This document describes the kernel capability model: the seven capability kinds,
 per-context storage, the spawn profile, capability enforcement at each action
 site, and the IRQ-route policy table.
 
@@ -36,14 +36,16 @@ All other contexts start with no capabilities.
 
 ```c
 typedef enum {
-    CAP_IO_PORT       = 0,   // mask bit 0: access x86 I/O ports
-    CAP_IRQ_ROUTE     = 1,   // mask bit 1: route hardware IRQ lines to an endpoint
-    CAP_MMIO_MAP      = 2,   // mask bit 2: map MMIO physical regions
-    CAP_DMA_BUFFER    = 3,   // mask bit 3: use PM DMA buffer hostcalls
-    CAP_SYSTEM_CONTROL= 4,   // mask bit 4: system halt, reboot, power-off
+    CAP_IO_PORT           = 0,   // mask bit 0: access x86 I/O ports
+    CAP_IRQ_ROUTE         = 1,   // mask bit 1: route hardware IRQ lines to an endpoint
+    CAP_MMIO_MAP          = 2,   // mask bit 2: map MMIO physical regions
+    CAP_DMA_BUFFER        = 3,   // mask bit 3: use PM DMA buffer hostcalls
+    CAP_SYSTEM_CONTROL    = 4,   // mask bit 4: system halt, reboot, power-off
+    CAP_SUBSYSTEM_REGISTER= 5,   // mask bit 5: register broker subsystems + exec-format handlers
+    CAP_SVC_CLASS_REGISTER= 6,   // mask bit 6: register a service under a virtual class
 } capability_kind_t;
 
-#define CAP_ALL_MASK  ((1u << 5) - 1u)   // 0x1F — all five bits
+#define CAP_ALL_MASK  ((1u << 7) - 1u)   // 0x7F — all seven bits
 #define CAPABILITY_DMA_WINDOW_LIMIT 16u
 ```
 
@@ -214,7 +216,7 @@ short-circuits to return 1).
 
 ### Structural Invariants
 
-1. **Kernel context is omnipotent.** Context id 0 holds all five capability
+1. **Kernel context is omnipotent.** Context id 0 holds all seven capability
    bits at init and bypasses the IRQ policy table.
 
 2. **Spawn profile is optional but binding once set.** Without a profile,

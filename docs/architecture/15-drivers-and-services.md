@@ -26,6 +26,7 @@ subsystem; opcodes within a range are not scattered into other ranges.
 | `0x700–0x7FF` | virtual terminal (VT)                              |
 | `0x800–0x8FF` | input (keyboard, mouse, RTC, virtio-serial)        |
 | `0x900–0x9FF` | device-manager                                     |
+| `0xC00–0xCFF` | hrng (hardware entropy)                            |
 
 ---
 
@@ -538,7 +539,7 @@ parser is in `src/services/device_manager/device_manager_rules.c`.
 | `/boot/system/devmgr/rules/default.rules` | After `boot_mount_ready`; loaded from FAT | Runtime override             |
 
 Both files use the filename `DEVMGR_RULE_FILE = "default.rules"`.
-Rule text buffer cap: `DEVMGR_RULE_TEXT_CAP = 1024` bytes per file.
+Rule text buffer cap: `DEVMGR_RULE_TEXT_CAP = 4096` bytes per file.
 
 #### Rule Families and Capacity
 

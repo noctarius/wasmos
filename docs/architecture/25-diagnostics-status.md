@@ -455,7 +455,7 @@ Tests must NOT be run in parallel — they share `build/esp` artifacts.
 | CMake target                       | Script                                        | Pass condition                                            |
 |------------------------------------|-----------------------------------------------|-----------------------------------------------------------|
 | `run-qemu-test`                    | `qemu_halt_test.py`                           | `wamos>` prompt appears; `halt` accepted                  |
-| `run-qemu-cli-test`                | `qemu_halt_test.py`                           | Same (CLI smoke)                                          |
+| `run-qemu-cli-test`                | `run_unittest_suite.py --start-dir tests`     | Same (CLI smoke)                                          |
 | `run-qemu-ring3-check`             | `qemu_ring3_halt_test.py`                     | All ring3 markers appear in order (see below)             |
 | `run-qemu-ring3-threading-check`   | `qemu_ring3_halt_test.py --require-threading` | Ring3 markers + threading markers                         |
 | `run-qemu-ring3-fault-storm-check` | `qemu_ring3_fault_storm_test.py`              | Fault-storm markers + ud/gp count ≥ 2 each; up to 3 tries |

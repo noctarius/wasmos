@@ -84,7 +84,11 @@ typedef enum {
 } sched_prio_t;
 ```
 
-Default priority assigned at thread spawn:
+Priority by process type. The main thread always spawns at `SCHED_PRIO_WASM`
+(or `SCHED_PRIO_IDLE` for the idle task) via
+`sched_default_prio(is_idle, 0, 0, 0)` in `process.c`; the DRIVER/SERVICE/SYSTEM
+bands below are assigned by PM launch policy (post-spawn), where the process
+manager calls `process_set_main_prio` with `pm_sched_prio_for_flags(flags)`:
 
 | Process type                       | Default priority     |
 |------------------------------------|----------------------|
@@ -134,7 +138,8 @@ This is equivalent to Minos2's `ffs_one_table[pcpu->local_rdy_grp]`.
 non-empty list, removes the head entry, clears the bitmap bit if the list
 empties.  Returns the idle thread when the bitmap is zero.
 
-**Anti-starvation**: `cpu_sched_pick_next` tracks a `streak` counter.  After
+**Anti-starvation**: `cpu_sched_pick_next` consults a file-global streak counter
+(`g_high_prio_streak` in `sched_thread.c`, not a `cpu_sched_t` field).  After
 `SCHED_ANTISTARVATION_STREAK` consecutive picks from priority level N, the next
 pick is forced from any non-empty level > N, preventing lower-priority threads
 from starving permanently.

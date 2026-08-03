@@ -59,7 +59,7 @@ as DS/SS. `(cs & 0x3u) == 0x3u` is the kernel's user-mode origin check.
 
 #### TSS and Interrupt Stacks
 
-- `g_rsp0_stack`: 16 KiB (`IRQ0_IST_STACK_SIZE = 16384u`) — RSP0 for general
+- `g_bsp_rsp0_stack`: 16 KiB (`CPU_IST_STACK_SIZE = 16384u`) — RSP0 for general
   privilege-level changes at interrupt/trap entry
 - `g_irq0_ist_stack`: 16 KiB, pre-filled with `0xCC`, guarded by canary at
   bottom — IST1 for timer and critical interrupt vectors
@@ -145,6 +145,10 @@ ABI convention for the first three arguments). Return value in RAX.
 | 11     | `WASMOS_SYSCALL_THREAD_JOIN`   | RDI = tid                                        |
 | 12     | `WASMOS_SYSCALL_THREAD_DETACH` | RDI = tid                                        |
 | 13     | `WASMOS_SYSCALL_NOTIFY_READY`  | —                                                |
+| 14     | `WASMOS_SYSCALL_MUTEX_TRY_LOCK`| RDI = mutex handle                              |
+| 15     | `WASMOS_SYSCALL_MUTEX_UNLOCK`  | RDI = mutex handle                              |
+| 16     | `WASMOS_SYSCALL_WARP_RETURN`   | ring-3 WARP return trampoline                    |
+| 17     | `WASMOS_SYSCALL_WARP_MEMORY_HELPER` | ring-3 WARP memory helper trampoline        |
 
 #### Argument Validation
 
@@ -211,23 +215,26 @@ user-space attempt to access a kernel address produces `USER_TO_KERNEL`.
 
 Source: `src/kernel/include/capability.h`, `src/kernel/capability.c`
 
-Five capability kinds, stored as a bitmask per context:
+Seven capability kinds, stored as a bitmask per context:
 
-| Kind                  | Enum value | Bit | Grants                                    |
-|-----------------------|------------|-----|-------------------------------------------|
-| `CAP_IO_PORT`         | 0          | 0   | IN/OUT port access within declared range  |
-| `CAP_IRQ_ROUTE`       | 1          | 1   | IRQ routing to a process                  |
-| `CAP_MMIO_MAP`        | 2          | 2   | MMIO physical-memory mapping              |
-| `CAP_DMA_BUFFER`      | 3          | 3   | DMA buffer allocation within window       |
-| `CAP_SYSTEM_CONTROL`  | 4          | 4   | Kernel control-plane access               |
+| Kind                     | Enum value | Bit | Grants                                    |
+|--------------------------|------------|-----|-------------------------------------------|
+| `CAP_IO_PORT`            | 0          | 0   | IN/OUT port access within declared range  |
+| `CAP_IRQ_ROUTE`          | 1          | 1   | IRQ routing to a process                  |
+| `CAP_MMIO_MAP`           | 2          | 2   | MMIO physical-memory mapping              |
+| `CAP_DMA_BUFFER`         | 3          | 3   | DMA buffer allocation within window       |
+| `CAP_SYSTEM_CONTROL`     | 4          | 4   | Kernel control-plane access               |
+| `CAP_SUBSYSTEM_REGISTER` | 5          | 5   | Register broker subsystems + exec-format handlers |
+| `CAP_SVC_CLASS_REGISTER` | 6          | 6   | Register a service under a virtual class  |
 
-`CAP_ALL_MASK = (1<<5) - 1 = 0x1F`. The kernel context (`context_id=0`) is
+`CAP_ALL_MASK = (1<<7) - 1 = 0x7F`. The kernel context (`context_id=0`) is
 initialized with `CAP_ALL_MASK`. User processes start with no capabilities.
 
 Capabilities are granted by name at spawn time via `capability_grant_name`.
-The allowlist is the six strings in `make_wasmos_app` (`ipc.basic`, `io.port`,
-`irq.route`, `mmio.map`, `dma.buffer`, `system.control`). Packed apps carrying
-unknown names are rejected at pack time before the kernel ever sees them.
+The allowlist is the eight strings in `make_wasmos_app` (`ipc.basic`, `io.port`,
+`irq.route`, `mmio.map`, `dma.buffer`, `system.control`, `subsystem.register`,
+`svc.class`). Packed apps carrying unknown names are rejected at pack time
+before the kernel ever sees them.
 
 DMA capability additionally carries a spawn profile: `CAPABILITY_DMA_WINDOW_LIMIT=16`
 physical address windows, direction flags, and a `dma_max_bytes` ceiling.

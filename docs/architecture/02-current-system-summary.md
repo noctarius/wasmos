@@ -246,7 +246,12 @@ supervised driver restart, capability manifests) is tracked in
 - **`virtio-serial`** driver (WASM): PCI-matched driver for `virtio.serial`
   (device IDs 0x1003/0x1043, vendor 0x1AF4). Provides PCI discovery and
   register-access IPC. Serves as the transport pattern baseline for higher-level
-  virtio consumers (including the planned `virtio-net`).
+  virtio consumers (including `virtio-net`).
+- **`virtio-net`** driver (native C): PCI-matched virtio network driver
+  (`src/drivers/virtio_net/`) with queue setup, IRQ-driven RX/TX, and an ARP
+  smoke path.
+- **`virtio-rng`** driver (native C): PCI-matched virtio entropy driver
+  (`src/drivers/virtio_rng/`); registers the `hrng` class.
 
 ---
 
@@ -288,9 +293,10 @@ See `docs/architecture/08-threading-and-lifecycle.md`.
 ### Networking
 
 `virtio-net` is implemented through queue setup, IRQ-driven RX/TX, and an ARP
-smoke path. `net-stack` is a native lwIP scaffold without netif glue or socket
-IPC. IPv4 protocol service behavior, TCP, IPv6, multi-address, and multi-stack
-instances remain planned; see `docs/architecture/22-networking-virtio-net-and-stack.md`.
+smoke path. `net-stack` is a functional native lwIP service: netif bring-up,
+socket IPC, UDP and TCP (client + server), DHCP, DNS, and a verifying TLS 1.2
+client are implemented. IPv6, multi-address, and multi-stack instances remain
+planned; see `docs/architecture/22-networking-virtio-net-and-stack.md`.
 
 ---
 

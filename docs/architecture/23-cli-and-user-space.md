@@ -85,7 +85,7 @@ CLI_PHASE_READ (2)
   │    → returns 1 (async IPC command) → advance to WAIT_IPC
   ▼
 CLI_PHASE_WAIT_IPC (3)
-  │  blocking wasmos_ipc_recv() on reply endpoint
+  │  select/idle-wait (wasmos_ipc_select_wait_timeout) on reply endpoint
   │  on FS_IPC_STREAM: stream bytes to console, stay in WAIT_IPC
   │  on final response: clear pending state, back to PROMPT
   ▼
@@ -169,11 +169,14 @@ order; the first match wins.
 | `mount`     | `FSMGR_IPC_QUERY_MOUNTS_REQ` | Receives mount table as a text blob via the xfer buffer |
 | `kmaps`     | `wasmos_kmap_dump()`         | Dumps active kernel memory mappings                     |
 | `kmaps all` | `wasmos_kmap_dump_all()`     | Includes all process address spaces                     |
-| `ps`        | see below                    | Flat table                                              |
-| `ps tree`   | see below                    | Tree view only                                          |
-| `ps all`    | see below                    | Flat table + tree view                                  |
 
-#### `ps` Output Format
+`ps` and `cat` are **not** CLI built-ins (they have no dispatch in `cli.c` and
+do not appear in `help`). They are standalone user-space tools installed in the
+ESP at `system/utils/{ps,cat}.wap` and spawned by path — e.g.
+`spawn /boot/system/utils/ps`, or simply `ps` since `/boot/system/utils` is on
+the default `PATH`. Their behavior is documented below.
+
+#### `ps` Output Format (standalone `ps` tool)
 
 ```
 processes: <count>
@@ -228,14 +231,15 @@ by truncation.
 
 #### File Listing and Reading
 
-`ls` sends `FS_IPC_LIST_REQ` and enters `PENDING_LIST`. The FS manager
+`ls` sends `FS_IPC_READDIR_REQ` (0x410) and enters `PENDING_LIST`. The FS manager
 streams directory entries back as `FS_IPC_STREAM` messages (4 bytes per
 message, packed as `arg0..arg3`); the CLI prints them until the final
 `FS_IPC_RESP` is received.
 
-`cat <path>` uses libc `fopen`/`fread`, which routes through the `fs.vfs`
-endpoint. Output is written to the console via `console_write`. No streaming
-IPC is involved; the file is read synchronously.
+`cat <path>` is the standalone `cat` tool (ESP `system/utils/cat.wap`, spawned
+by path or via `PATH`), not a CLI built-in. It uses libc `fopen`/`fread`, which
+routes through the `fs.vfs` endpoint. Output is written to the console via
+`console_write`. No streaming IPC is involved; the file is read synchronously.
 
 #### TTY Switching
 
@@ -349,20 +353,18 @@ until it terminates or crashes.
 
 #### Input Sources
 
-The CLI reads input from two sources, tried in order each `READ` phase step:
+All input arrives through the VT — there is no serial fallback. The READ step
+is push-driven:
 
-1. **VT (virtual terminal)**: `VT_IPC_READ_REQ` sent to the VT service on the
-   CLI's registered TTY. Response contains one byte or a "no char" status.
-   Up to 32 poll iterations before giving up and yielding.
-   - If the VT read fails (`rc < 0`), the CLI falls back permanently to serial
-     and clears the VT endpoints.
-   - A `vt_read_backoff` counter (7 cycles) throttles requests when no
-     character was available.
-2. **Serial fallback**: `wasmos_console_read()`. Always tried if VT yields no
-   character.
-
-If neither source has a character, `wasmos_sched_yield()` is called and the
-READ step returns.
+1. The CLI drains the VT queue with `cli_vt_read_char` (`VT_IPC_READ_REQ` on its
+   registered TTY), one character per loop iteration until the queue is empty.
+   There is no poll-count loop and no `vt_read_backoff`.
+2. If a transient VT read error occurs (`rc < 0`) it is treated as "no char" and
+   retried on the next wake (the endpoints are not torn down, and no serial
+   `wasmos_console_read()` fallback is used).
+3. When nothing is queued, the CLI blocks in `cli_idle_wait`
+   (`wasmos_ipc_select_wait_timeout`) until the VT pushes `VT_IPC_INPUT_NOTIFY`
+   (or the backstop interval elapses) — no yield-spin.
 
 #### Keyboard Handling
 

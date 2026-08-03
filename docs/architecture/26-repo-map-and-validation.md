@@ -27,6 +27,8 @@ wasmos/
 │   │   ├── mouse/          PS/2 mouse driver
 │   │   ├── rtc/            RTC (real-time clock) driver
 │   │   ├── serial/         UART serial driver
+│   │   ├── virtio_net/     VirtIO network driver (native ELF)
+│   │   ├── virtio_rng/     VirtIO entropy driver (native ELF; hrng class)
 │   │   ├── virtio_serial/  VirtIO serial port driver
 │   │   └── include/        Shared driver ABI headers
 │   │       ├── wasmos_driver_abi.h   IPC opcode enums for all driver/service types
@@ -38,9 +40,12 @@ wasmos/
 │   │   ├── font_service/   Font rasterization service (native ELF)
 │   │   ├── fs_manager/     VFS routing and mount manager
 │   │   ├── gfx_compositor/ Graphics compositor (native ELF)
+│   │   ├── net_stack/      lwIP network stack service (native ELF)
 │   │   ├── pci_bus/        PCI bus enumerator service
 │   │   ├── sysinit/        System initializer (reads sysinit.rc)
-│   │   └── vt/             Virtual terminal service
+│   │   ├── vt/             Virtual terminal service
+│   │   ├── wasmos_script/  Script runner service
+│   │   └── wasmos_script_broker/ Script broker service
 │   ├── libc/               User-space libc surface and language shims
 │   │   ├── src/            C implementation (startup, stdio, stdlib, etc.)
 │   │   ├── include/        Standard C headers + wasmos/api.h (WASM imports)
@@ -52,8 +57,18 @@ wasmos/
 │   │   ├── wasm/           WASM-side libsys (IPC helpers, script runner, shmem)
 │   │   │   └── include/wasmos/  libsys.h, libsys_string.h, sha256.h, rtc_ipc.h
 │   │   └── native/         Native (Zig) libsys for native ELF components
-│   └── utils/              Small standalone utilities
-│       └── date/           Date/time command (AssemblyScript)
+│   ├── utils/              Small standalone utilities
+│   │   ├── cat/            Concatenate/print files
+│   │   ├── curl/           HTTP client
+│   │   ├── date/           Date/time command
+│   │   ├── explorer/       File explorer
+│   │   ├── host/           DNS lookup tool
+│   │   ├── ip/             Network interface/config tool
+│   │   ├── ps/             Process listing
+│   │   ├── sched_info/     Scheduler info tool
+│   │   └── sysinfo/        System info tool
+│   └── tools/              Host build tools
+│       └── warp_aot/       WARP ahead-of-time compiler
 ├── examples/               Language example applications
 │   ├── c/                  C hello-world
 │   ├── rust/               Rust hello-world
@@ -62,7 +77,11 @@ wasmos/
 │   └── assemblyscript/     AssemblyScript hello-world
 ├── libs/                   Third-party dependencies (do not modify)
 │   ├── wasm3/              wasm3 interpreter (git subtree)
-│   └── stb/                stb_truetype for font rendering
+│   ├── warp/               WARP single-pass JIT runtime (git subtree)
+│   ├── stb/                stb_truetype for font rendering
+│   ├── lwip/               lwIP TCP/IP stack
+│   ├── mbedtls/            mbedTLS (TLS 1.2 client)
+│   └── minilua/            Minimal Lua interpreter
 ├── scripts/                Build tooling and test scripts
 │   ├── make_wasmos_app.c   WASMOS-APP packer tool source
 │   ├── make_initfs.py      Initfs image builder
@@ -102,7 +121,7 @@ wasmos/
 │   ├── ARCHITECTURE.md     Index and entry point
 │   ├── STATUS.md           Implementation snapshot
 │   ├── TASKS.md            Open work tracking
-│   └── architecture/       Per-topic doc files (01–20)
+│   └── architecture/       Per-topic doc files (01–33)
 └── CMakeLists.txt          Single top-level build file
 ```
 
@@ -257,13 +276,21 @@ driving a `QemuSession` against the fresh ESP copy.
 cmake --build build --target run-kernel-unit-tests
 ```
 
-Compiles and runs three host-native C programs:
+Compiles and runs ~22 host-native test binaries. A representative subset:
 
 | Binary                            | Source file                              | Tests                             |
 |-----------------------------------|------------------------------------------|-----------------------------------|
 | `build/test_list`                 | `tests/unit/test_list.c`                 | Chunked + linked list correctness |
 | `build/test_device_manager_rules` | `tests/unit/test_device_manager_rules.c` | Rule parser all four families     |
 | `build/test_fs_manager_path`      | `tests/unit/test_fs_manager_path.c`      | Path normalization edge cases     |
+
+The full suite is much larger, covering `test_hashmap`,
+`test_subsystem_registry`, `test_wasmos_exec_format`, `test_user_mutex`,
+`test_libc_stdio`, `test_libc_stdlib`, `test_vring`, `test_ringbuf`,
+`test_heap_native`, `test_net_socket`, `test_net_ifcfg`,
+`test_service_class_registry`, `test_xfer_buffer_object`,
+`test_kernel_sync_primitives`, `test_warp_driver_ring3_call_policy`, and the
+native/WASM coroutine and IPC-future suites.
 
 Built with `clang -std=c11 -Wall -Wextra -Werror`. No QEMU required.
 
@@ -276,7 +303,7 @@ cmake --build build --target strict-ring3
 Runs `run-qemu-test` followed by `run-qemu-ring3-test` (in a shadow build
 tree). The ring3 test asserts ~30 serial markers covering ABI correctness,
 syscall enforcement, IPC ownership, fault isolation, and shared-memory
-permission checks. See `11-diagnostics-status.md` for the full marker list.
+permission checks. See `25-diagnostics-status.md` for the full marker list.
 
 #### Fault Storm Liveness
 

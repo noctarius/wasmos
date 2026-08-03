@@ -241,7 +241,7 @@ the process. The child retrieves it by execution model:
 - **WASM** processes call the `wasmos_spawn_info_buffer()` hostcall to get the
   `buffer_id` (0 if none), then read the header + args with `xfer_buffer_read`.
 - **Native** drivers/services call `api->spawn_info(&hdr, args_buf, args_cap)`
-  (native ABI v8), which fills the header and copies the args directly.
+  (native ABI v7), which fills the header and copies the args directly.
 
 The header carries `proc_endpoint`, `tty`, `module_count`, `module_index`, and
 the argv offset/length; it is versioned (`magic`/`version`/`header_size`) so new
@@ -650,7 +650,7 @@ layer in `src/kernel/warp/`:
 
 | File                   | Purpose                                                                                                          |
 |------------------------|------------------------------------------------------------------------------------------------------------------|
-| `compat/`              | 30+ freestanding C++14 standard-library headers (type_traits, tuple, array, mutex, atomic, exception, …)         |
+| `compat/`              | nearly 30 freestanding C++14 standard-library headers (type_traits, tuple, array, mutex, atomic, exception, …)         |
 | `cxx_abi.cpp`          | Exception ABI: `__cxa_throw` longjmps to a per-CPU `__builtin_setjmp` checkpoint — no Dwarf/SJLJ unwinder needed |
 | `link.cpp`             | ~50 `wasmos.*` V1 host-call wrappers (IPC, xfer buffers, block DMA, initfs, I/O ports, ACPI, scheduler, …)       |
 | `shim.cpp`             | Two-tier kernel allocator (slab ≤ 112 bytes, page allocator for larger blocks), `operator new/delete`            |
@@ -692,6 +692,10 @@ Host functions follow WARP's V1 import convention — `ReturnType fn(Args..., vo
 
 #### Known gaps
 
-- `wasmos.console_read` is not implemented; the CLI traps on stdin reads (boot still succeeds).
-- ~30 `wasmos.*` host-call TODOs remain in `src/kernel/warp/link.cpp` (shmem, IRQ routing, additional thread/sched ops).
+- `wasmos.console_read` is implemented (`warp_console_read`), but the WARP input
+  path is polling-only: there is no ring doorbell, so a reader must poll the
+  serial-backed source (see `docs/STATUS.md`).
+- A few refinement TODOs remain in `src/kernel/warp/link.cpp` (SMP sync, shmem
+  auto-map growth, PAT attrs, `irq.configure` split); host-call coverage itself
+  is broad.
 - Multi-threaded WASM (`wasm_driver_spawn_vm_thread`) is not yet functional under WARP.

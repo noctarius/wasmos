@@ -191,6 +191,14 @@ pause between keystrokes (default 0).
 | `query_status()` | `{"running": bool, "status": str, …}` |
 | `query_mice()`   | List of mouse device dicts            |
 
+#### Link control
+
+`QemuSession.set_link(up: bool, nic: str = "nic0")` forces the emulated NIC
+link up or down via the QEMU monitor (requires `enable_monitor=True`). QEMU
+flips the virtio-net `VIRTIO_NET_S_LINK_UP` config-status bit, which the driver
+forwards to net-stack as `NETDRV_IPC_LINK_NOTIFY`. Used by
+`test_net_stack_link_notify_e2e`.
+
 #### HMP passthrough and raw execute
 
 ```python

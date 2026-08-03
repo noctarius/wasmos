@@ -184,6 +184,8 @@ handler captures the result.
 
 ## 5  New Syscalls
 
+> **Superseded sketch.** The shipped mechanism differs from the syscall numbers below: syscalls 14/15 are `MUTEX_TRY_LOCK`/`MUTEX_UNLOCK`, WARP uses `WASMOS_SYSCALL_WARP_RETURN=16` and `WASMOS_SYSCALL_WARP_MEMORY_HELPER=17`, and ring-3 hostcalls dispatch via `int 0x80` with `RAX = 0x100 + hc_id` → `warp_ring3_dispatch()` (see §0 and `src/kernel/syscall.c` / `src/kernel/warp/link.cpp`), not a dedicated `WARP_HOSTCALL` syscall.
+
 Add to `src/kernel/include/syscall.h`:
 
 ```c

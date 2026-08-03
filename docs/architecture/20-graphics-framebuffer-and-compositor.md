@@ -21,7 +21,7 @@ app (WASM) ──GFX IPC (0x200–0x2FF)──► gfx-compositor (native Zig)
                                     (wasmos_driver_api_t)
 
 gfx-compositor ──FONT IPC (0xA00–0xAFF)───► font-service (native Zig)
-gfx-compositor ──KBD IPC (0x800–0x8FF)────► keyboard driver (subscription)
+gfx-compositor ◄─VT_IPC_KEY_FORWARD (0x782)── vt service (vt-0 key sink)
 gfx-compositor ──MOUSE IPC────────────────► mouse driver (subscription)
 ```
 
@@ -83,6 +83,8 @@ framebuffer text/graphics plane. Both `framebuffer` (UEFI-backed) and
 | `FBTEXT_IPC_QUERY_CAPS_REQ`     | 0x607 | reply: arg0=FBTEXT_CAP_* bitmask                  |
 | `FBTEXT_IPC_QUERY_MODES_REQ`    | 0x608 | req: arg0=index; reply: arg0=w arg1=h arg2=stride |
 | `FBTEXT_IPC_SET_RESOLUTION_REQ` | 0x609 | req: arg0=w arg1=h                                |
+| `FBTEXT_IPC_BLIT_ATTACH_REQ`    | 0x60A | arg0=buffer_id arg1=borrow_id arg2=cols arg3=rows |
+| `FBTEXT_IPC_BLIT_GRID_REQ`      | 0x60B | arg0=cols arg1=rows (from the attached buffer)    |
 | `FBTEXT_IPC_RESP`               | 0x680 | success reply                                     |
 | `FBTEXT_IPC_ERROR`              | 0x6FF | error reply                                       |
 
@@ -104,8 +106,12 @@ FBTEXT_CAP_QUERY_MODES    = 1u << 1
 
 `FBTEXT_IPC_GFX_OVERLAY_REQ` sets `g_gfx_overlay_lock` on both drivers.
 While locked, `CELL_WRITE`, `CURSOR_SET`, `SCROLL`, and `CLEAR` requests
-are silently dropped. The compositor locks the overlay when any window is
-presenting (`active_presented_window_count() > 0`) and unlocks when none are.
+are silently dropped. The compositor locks the overlay **once**, at startup,
+when the first window appears (`active_presented_window_count() > 0`,
+`sync_console_mode_for_windows` → `try_switch_to_gfx_tty`). After that the VT
+owns the handoff: it drives `g_overlay_locked` from `VT_IPC_VIS_NOTIFY`
+(locked while vt-0 is visible, released when a text slot is shown). The
+compositor does not unlock when the window count returns to zero.
 
 ---
 
@@ -124,9 +130,15 @@ App-facing compositor interface. Defined in
 | `GFX_IPC_ALLOC_SHARED_BUFFER`   | 0x0203 | arg0=window_id (0=unbound) arg1=width arg2=height                                              | arg1=buffer_id arg2=shmem_id arg3=stride              |
 | `GFX_IPC_SUBMIT_COMMANDS`       | 0x0204 | (not yet dispatched)                                                                           | —                                                     |
 | `GFX_IPC_PRESENT_WINDOW`        | 0x0205 | arg0=window_id arg1=buffer_id arg2=damage_count arg3=damage_shmem_id                           | —                                                     |
-| `GFX_IPC_POLL_EVENT`            | 0x0206 | —                                                                                              | arg1=event_type arg2=event_arg1 arg3=event_arg2       |
+| `GFX_IPC_PUSH_EVENT`            | 0x0206 | server→client push; arg1=event_type arg2=window_id arg3=payload                                | arg1=event_type arg2=event_arg1 arg3=event_arg2       |
 | `GFX_IPC_RELEASE_SHARED_BUFFER` | 0x0207 | arg0=buffer_id                                                                                 | —                                                     |
 | `GFX_IPC_SET_DISPLAY_MODE`      | 0x0208 | arg0=width arg1=height                                                                         | arg1=width arg2=height                                |
+| `GFX_IPC_LIST_WINDOWS`          | 0x0209 | arg0=index (0-based)                                                                           | arg1=window_id(0=end) arg2=owner_endpoint arg3=total  |
+| `GFX_IPC_FOCUS_WINDOW`          | 0x020A | arg0=window_id                                                                                 | —                                                     |
+| `GFX_IPC_SET_WINDOW_FLAGS`      | 0x020B | arg0=window_id arg1=flags (GFX_WINDOW_FLAG_*)                                                   | —                                                     |
+| `GFX_IPC_GET_DISPLAY_INFO`      | 0x020C | —                                                                                              | arg1=width arg2=height                                |
+| `GFX_IPC_MOVE_WINDOW`           | 0x020D | arg0=window_id arg1=x arg2=y                                                                    | —                                                     |
+| `GFX_IPC_SET_WINDOW_TITLE`      | 0x020E | arg0=window_id arg1=shmem_id arg2=title_len arg3=0 (owner only)                                 | —                                                     |
 | `GFX_IPC_RESP`                  | 0x0280 | success reply; arg0=GFX_STATUS_*                                                               | —                                                     |
 | `GFX_IPC_ERROR`                 | 0x02FF | error reply                                                                                    | —                                                     |
 
@@ -141,7 +153,7 @@ GFX_STATUS_BUSY        = -4   // resource in use; retryable
 GFX_STATUS_IO          = -5   // device or shmem failure
 ```
 
-#### Event Types (`GFX_POLL_EVENT` replies)
+#### Event Types (`GFX_IPC_PUSH_EVENT` payloads)
 
 ```c
 GFX_EVENT_NONE          = 0
@@ -231,7 +243,7 @@ ND_BUFFER_BORROW_WRITE     = 0x2u
 
 // ABI versioning
 WASMOS_NATIVE_ABI_MAGIC   = 0x574E4150u  /* 'WNAP' */
-WASMOS_NATIVE_ABI_VERSION = 8u
+WASMOS_NATIVE_ABI_VERSION = 12u
 ```
 
 The compositor acquires the framebuffer as an owned xfer buffer via
@@ -281,6 +293,7 @@ const window_slot_t = struct {
     current_buffer_id: u32,  // buffer presented via PRESENT_WINDOW
     is_maximized: bool,
     restore_x/y/w/h,         // pre-maximize geometry
+    flags: u32,              // GFX_WINDOW_FLAG_* bitmask (set via SET_WINDOW_FLAGS)
 };
 
 const buffer_slot_t = struct {
@@ -312,15 +325,22 @@ const glyph_cache_entry_t = struct {
 };
 ```
 
+`handle_set_window_flags` (`GFX_IPC_SET_WINDOW_FLAGS`) writes `window.flags`.
+The defined bits are `GFX_WINDOW_FLAG_TOPMOST`, `NO_CHROME`, `INVISIBLE`,
+`PASSTHROUGH_ZERO`, `NO_ACTIVATE`, `NO_CONTENT`, and `NO_TASK_LIST` (they
+compose).
+
 #### Initialization Sequence
 
 `initialize()` performs these steps in order:
 
-1. Validate `abi_magic`/`abi_version` against `WASMOS_NATIVE_ABI_MAGIC` / version 8.
+1. Validate `abi_magic`/`abi_version` against `WASMOS_NATIVE_ABI_MAGIC` / version 12.
 2. Create `g_gfx_endpoint`, initialize `NativeEventLoop`, register IPC handlers.
 3. `svc_register("gfx", 1)` — publish endpoint name.
 4. `lookup_fb_endpoint()` via proc IPC; if found:
-   - `lookup_vt_endpoint()`, subscribe keyboard and mouse.
+   - `lookup_vt_endpoint()`, `subscribe_mouse()`. The compositor does **not**
+     subscribe to the keyboard driver: keys arrive from the VT as
+     `VT_IPC_KEY_FORWARD` once it registers as the vt-0 key sink.
    - Probe geometry (`FBTEXT_IPC_GEOMETRY_REQ`) and capabilities (`FBTEXT_IPC_QUERY_CAPS_REQ`).
    - Emit `[test] gfx compositor handshake ok`.
 5. `refresh_framebuffer_mapping()` — query `framebuffer_info`, acquire
@@ -491,13 +511,17 @@ Immediate-mode component tree for WASM apps. Components are laid out by
 typedef enum {
     UI_COMPONENT_NONE        = 0,
     UI_COMPONENT_PANEL       = 1,
-    UI_COMPONENT_LABEL       = 2,
-    UI_COMPONENT_BUTTON      = 3,
-    UI_COMPONENT_CHECKBOX    = 4,
-    UI_COMPONENT_TEXT_INPUT  = 5,
-    UI_COMPONENT_SCROLL_VIEW = 6,
-    UI_COMPONENT_LIST_VIEW   = 7,
-    UI_COMPONENT_DROPDOWN    = 8
+    UI_COMPONENT_ROW         = 2,
+    UI_COMPONENT_LABEL       = 3,
+    UI_COMPONENT_BUTTON      = 4,
+    UI_COMPONENT_CHECKBOX    = 5,
+    UI_COMPONENT_TEXT_INPUT  = 6,
+    UI_COMPONENT_SCROLL_VIEW = 7,
+    UI_COMPONENT_LIST_VIEW   = 8,
+    UI_COMPONENT_TREE_VIEW   = 9,
+    UI_COMPONENT_DROPDOWN    = 10,
+    UI_COMPONENT_MENU_BAR    = 11,
+    UI_COMPONENT_MENU_ITEM   = 12
 } ui_component_type_t;
 ```
 
@@ -518,8 +542,8 @@ Initial capacity: `UI_COMPONENTS_INITIAL_CAP = 16`.
 
 #### Key API Functions
 
-- `ui_loop_handle_ipc(ctx, msg)` — consume compositor event replies
-  (POLL_EVENT responses, resize, close events).
+- `ui_loop_handle_ipc(ctx, msg)` — consume compositor event pushes
+  (`GFX_IPC_PUSH_EVENT` key/pointer/resize/close events).
 - `ui_loop_drain(ctx)` — layout + render root component + `PRESENT_WINDOW`.
 - `ui_mark_dirty(ctx)` — schedule repaint on next drain.
 - `ui_font_measure_text(ctx, text, ...)` — measure string width/height
@@ -569,9 +593,12 @@ before resize is rejected after the resize increments `generation`.
    second `PRESENT_WINDOW` for a different buffer while one is active,
    unless it is the same buffer already acquired for that window.
 
-4. **Overlay lock gates text plane.** When any window is presenting, the
-   compositor sends `FBTEXT_IPC_GFX_OVERLAY_REQ(1)` to suppress VT text
-   rendering and owns the scanout surface exclusively.
+4. **Overlay lock gates text plane, VT-driven.** The compositor locks the
+   overlay once at startup (first window) with `FBTEXT_IPC_GFX_OVERLAY_REQ(1)`;
+   thereafter the VT drives ownership via `VT_IPC_VIS_NOTIFY` — the compositor
+   suppresses VT text rendering and owns the scanout surface exclusively only
+   while vt-0 is the visible slot, and stops drawing (relinquishes) when a text
+   slot is shown.
 
 5. **Font handles are owner-scoped.** Every `OPEN_FONT` records
    `owner_endpoint`; `GET_METRICS`, `RASTER_GLYPH`, and related calls

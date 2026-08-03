@@ -6,7 +6,7 @@ This document describes the console I/O path from WASM service to terminal
 output: the `wasmos_console_write` hostcall, the VT mirror, the chardev IPC
 protocol, and the read path.
 
-**Sources**: `src/kernel/wasm3_link.c`,
+**Sources**: `src/kernel/wasm3/link.c`,
 `src/drivers/chardev/chardev_server.c`,
 `src/kernel/include/wasmos_ipc.h`
 
@@ -31,7 +31,7 @@ any knowledge of which output channel is active.
 
 ### `wasmos_console_write` Hostcall
 
-**Source**: `src/kernel/wasm3_link.c`
+**Source**: `src/kernel/wasm3/link.c`
 
 Signature (wasm3 import descriptor): `"i(*i*i)"`
 

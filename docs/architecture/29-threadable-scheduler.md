@@ -96,8 +96,6 @@ typedef struct {
     thread_t    *running;                     /* currently executing thread */
     thread_t    *idle;                        /* this CPU's idle thread */
     uint32_t     nr_threads;                  /* total threads on this CPU */
-    struct timer sched_timer;                 /* round-robin quantum timer */
-    list_head_t  new_list;                    /* cross-CPU wakeup arrivals */
 } cpu_sched_t;
 ```
 
@@ -148,16 +146,19 @@ thread_t *cpu_sched_pick_next(cpu_sched_t *cs) {
 }
 ```
 
-**Round-robin timer:** when two or more threads share the highest ready priority,
-`sched_timer` fires at the end of the current thread's quantum and calls
-`set_need_resched()`.  The timer is armed/disarmed based on
-`cs->thread_count[cs->running->sched_prio] > 1` — identical to Minos2's
-`sched_update_sched_timer()`.
+**Round-robin / anti-starvation:** there is no per-CPU quantum timer.
+Preemption is driven by the global PIT via `process_tick()`, which expires the
+running thread's quantum and sets `g_need_resched`.  When several threads share
+the highest ready priority, `cpu_sched_pick_next` rotates among them via the
+per-priority FIFO plus a streak counter: after `SCHED_ANTISTARVATION_STREAK`
+consecutive picks at one priority, the next pick is forced from a lower-priority
+list so lower bands cannot starve.
 
 **Thread affinity:** `thread_t.cpu_affinity` (new field, `uint32_t`) is a CPU
 mask.  Default `~0u` = any CPU.  `cpu_sched_enqueue` picks the least-loaded
-eligible CPU; cross-CPU enqueue appends to `cpu_sched_t.new_list` and sends a
-rescheduling IPI to the target.
+eligible CPU; cross-CPU redistribution is pull-based work stealing — an idle CPU
+whose local queue is empty calls `cpu_sched_try_steal` to take a ready thread
+from another CPU's queue, rather than a push onto a remote list.
 
 ---
 
@@ -476,8 +477,13 @@ m3ApiRawFunction(wasmos_futex_wait)  /* "i(iii)" — addr, expected, timeout_ms 
 m3ApiRawFunction(wasmos_futex_wake)  /* "i(ii)"  — addr, count */
 ```
 
+`futex_wait` / `futex_wake` are raw `"wasmos"` imports registered directly as
+hostcalls in `src/kernel/wasm3/link.c` (via `wasm3_link_raw`); they are not
+declared in `src/libc/include/wasmos/api.h`.  A WASM-side declaration would look
+like:
+
 ```c
-/* api.h */
+/* not yet surfaced in api.h; raw "wasmos" imports */
 extern int32_t wasmos_futex_wait(int32_t addr, int32_t expected, int32_t timeout_ms)
     WASMOS_WASM_IMPORT("wasmos", "futex_wait");
 extern int32_t wasmos_futex_wake(int32_t addr, int32_t count)
@@ -657,11 +663,9 @@ cpu_sched_t.lock         (per-CPU ready queue)
         │
         └─► sched_event_t.lock   (event wait list)
               │
-              └─► thread_t.s_lock  (transition guard, held briefly)
+              └─► ipc_endpoint_t.lock  (message queue + poll_struct)
                     │
-                    └─► ipc_endpoint_t.lock  (message queue + poll_struct)
-                          │
-                          └─► futex_table_bucket.lock  (futex hash bucket)
+                    └─► futex_table_bucket.lock  (futex hash bucket)
 ```
 
 Rules:

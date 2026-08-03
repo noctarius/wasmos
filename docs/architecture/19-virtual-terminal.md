@@ -191,7 +191,7 @@ typedef struct {
 | `g_switch_barrier`    | 0    | Set to 1 during an in-progress switch             |
 | `g_ctrl_down`         | 0    | Ctrl modifier state                               |
 | `g_shift_down`        | 0    | Shift modifier state                              |
-| `g_altgr_down`        | 0    | AltGr modifier state (proposed, phase 3)          |
+| `g_altgr_down`        | 0    | AltGr modifier state (shipped)                    |
 | `g_vt_cols`           | 80   | Active column count (updated from FB geometry)    |
 | `g_vt_rows`           | 25   | Active row count (updated from FB geometry)       |
 
@@ -541,11 +541,13 @@ no longer eagerly starts the single CLI.
 
 ### Keyboard Scancode Handling
 
-**Proposed (phase 3):** a single 3-layer keymap (`plain`/`shift`/`altgr`, adopted
-from the compositor's `KeyMap`) plus Ctrl/Shift/AltGr modifier tracking, produced
-as a canonical key event. **Shipped:** the VT uses 2-layer `g_sc_to_ascii[58]` /
-`g_sc_to_ascii_shift[58]` (PS/2 Set-1, indices 0–57); CapsLock and AltGr are not
-yet tracked in the VT.
+**Shipped (phase 3):** the VT is the single system keyboard decoder. It uses a
+3-layer keymap (`g_km_plain` / `g_km_shift` / `g_km_altgr`, each `[58]`, PS/2
+Set-1 indices 0–57) plus Ctrl/Shift/AltGr modifier tracking, produced as a
+canonical key event. The built-in default is US QWERTY; `vt_load_keymap()`
+replaces it at init with a layout parsed from a `.kmap` file under
+`system/keymaps/` (falling back to the built-in on any failure). CapsLock is not
+tracked; AltGr is (`g_altgr_down`).
 
 #### Modifier Tracking
 
@@ -554,7 +556,7 @@ yet tracked in the VT.
 | 0x1D      | Ctrl (L + E ext) | `g_ctrl_down`     |
 | 0x2A      | Left Shift       | `g_shift_down`    |
 | 0x36      | Right Shift      | `g_shift_down`    |
-| 0x38 ext  | AltGr            | `g_altgr_down` (phase 3) |
+| 0x38 ext  | AltGr            | `g_altgr_down`    |
 
 Key-up events update modifier state and return immediately (no character output).
 
@@ -670,7 +672,8 @@ without buffering or editing. Echo still applies if `input_echo = 1`.
 | 2     | Push input (`VT_IPC_INPUT_NOTIFY`); event-driven CLI         | Shipped  |
 | 3     | Single keyboard decoder in VT (loadable `.kmap` layouts); compositor consumes `VT_IPC_KEY_FORWARD`; enriched `GFX_EVENT_KEY` (scancode) | Shipped  |
 | 4     | klog into vt-1 via VT-owned xfer-buffer SPSC ring (additive; drained on each VT wake). FB→blit-surface retirement deferred to phase 5 | Shipped  |
-| 5     | Default visible vt-1 (retires the fbpci console-ring drain); serial-bound selector; lazy CLI spawn; `vt_switch_tty` overlay-wedge fix | Proposed |
+| 5a    | tty-switch grid-blit (`FBTEXT_IPC_BLIT_ATTACH`/`GRID`) + VT-driven framebuffer ownership (`VT_IPC_VIS_NOTIFY`) — the `vt_switch_tty` overlay-wedge fix | Shipped  |
+| 5b    | Default visible vt-1 (retires the fbpci console-ring drain); serial-bound selector; lazy CLI spawn | Proposed |
 
 Keymap layouts are data files under `system/keymaps/` (`us-qwerty.kmap`,
 `de-nodeadkeys.kmap`), loaded by the VT at init (built-in US fallback).  Runtime

@@ -370,10 +370,13 @@ Same runtime model as the C variant. The only differences are:
 **Output:** `.elf` → `.wap`  
 **Runtime:** loaded and executed directly as ring-0 code (no WASM sandbox)
 
-Used for drivers that need direct hardware access: `framebuffer`,
-`framebuffer_pci`. The ELF is a static freestanding binary. The process manager
-identifies it as a native payload through the manifest metadata and maps it
-directly rather than passing it to wasm3.
+Used for drivers that need direct hardware access (`framebuffer`,
+`framebuffer_pci`, `virtio_net`, `virtio_rng`) and for the native C
+`net_stack` service (registered as `net_stack_app`,
+`src/services/net_stack/CMakeLists.txt`), which links the lwIP core the same
+way. The ELF is a static freestanding binary. The process manager identifies it
+as a native payload through the manifest metadata and maps it directly rather
+than passing it to wasm3.
 
 ---
 
@@ -530,13 +533,27 @@ Compiles and runs host-native unit tests from `tests/unit/` using the system C
 compiler. Current suites:
 
 - `test_list` — kernel list data-structure correctness
+- `test_hashmap` — hashmap correctness
 - `test_device_manager_rules` — device manager rule matching
 - `test_fs_manager_path` — VFS path resolution
-- `test_xfer_buffer_access` — xfer-buffer owner/relay routing invariants
-- `test_xfer_buffer_policy` — kind-specific xfer-buffer borrow request rules
-- `test_xfer_buffer_state` — xfer-buffer borrow/release/DMA state-transition invariants
-- `test_xfer_buffer_contract` — intended multi-grant borrow contract and DMA semantics against the current subsystem
+- `test_subsystem_registry` — subsystem registry behavior
+- `test_service_class_registry` — service class registry behavior
+- `test_wasmos_exec_format` — WASMOS-APP exec-format parsing
+- `test_user_mutex` — user-space mutex behavior
+- `test_libc_stdio` — libc stdio surface
+- `test_libc_stdlib` — libc stdlib surface
+- `test_vring` — virtio vring transport
+- `test_ringbuf` — SPSC byte-ring transport
+- `test_heap_native` — native-service heap slab allocator
+- `test_net_socket` — net-stack socket state/ring core
+- `test_net_ifcfg` — net interface configuration
+- `test_xfer_buffer_object` — xfer-buffer owner/relay routing, borrow/release/DMA
+  state transitions, and multi-grant borrow contract (a single binary; not the
+  earlier per-aspect split)
 - `test_kernel_sync_primitives` — kernel mutex/semaphore primitive behavior with host scheduler/thread stubs
+- `test_warp_driver_ring3_call_policy` — WARP ring3 driver-ring call policy
+- native/WASM coroutine and IPC-future suites (`test_native_coroutine`,
+  `test_native_ipc_future`, `test_wasm_coroutine`, `test_wasm_coroutine_rust`)
 
 These tests run on the host (no QEMU) and do not depend on `bootloader` or
 `kernel`.

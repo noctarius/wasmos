@@ -111,7 +111,7 @@ Rules are loaded at two path roots (tried in order):
 Text buffer capacity for the combined rule file:
 
 ```c
-#define DEVMGR_RULE_TEXT_CAP 1024
+#define DEVMGR_RULE_TEXT_CAP 4096
 ```
 
 #### Rule Syntax
@@ -119,7 +119,7 @@ Text buffer capacity for the combined rule file:
 Each line is a comma-separated list of `key==value` tokens, optionally
 quoted. `#` begins a line comment.
 
-Example from `scripts/system/devmgr/rules/default.rules`:
+Example from `scripts/system/devmgr/rules/default.rules` (excerpt):
 
 ```
 SUBSYSTEM=="block", ATTR{unit}=="1", ENV{MOUNT}="/user", RUN+="system/drivers/fs_fat.wap"

@@ -243,7 +243,7 @@ The bootstrap image format is minimal and append-only.
 |---------------|------------|------------------------------------------|
 | `magic`       | `char[8]`  | `"WMINITFS"` (no null terminator)        |
 | `version`     | `uint16_t` | `WASMOS_INITFS_VERSION = 1`              |
-| `header_size` | `uint16_t` | `sizeof(wasmos_initfs_header_t)` = 24    |
+| `header_size` | `uint16_t` | `sizeof(wasmos_initfs_header_t)` = 28    |
 | `entry_count` | `uint32_t` | number of entries                        |
 | `entry_size`  | `uint32_t` | `sizeof(wasmos_initfs_entry_t)` = 112    |
 | `total_size`  | `uint32_t` | total blob size in bytes                 |

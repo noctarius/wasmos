@@ -10,8 +10,8 @@ table, the `fs_fat` and `fs_init` backends, and the transfer-buffer borrow
 semantics used for data transfers.
 
 **Sources**: `src/services/fs_manager/`,
-`src/services/fs_fat/`,
-`src/services/fs_init/`,
+`src/drivers/fs_fat/`,
+`src/drivers/fs_init/`,
 `src/kernel/include/wasmos_ipc.h`
 
 ---
@@ -26,7 +26,7 @@ WASM service (client)
        ▼
   fs_manager  ← VFS router; multiplexes by path prefix
        │  FS IPC (forwarded)
-       ├──► fs_fat    ← FAT12/16/32 on a block device
+       ├──► fs_fat    ← FAT12/16 (FAT32 detected but read/write unimplemented)
        └──► fs_init   ← read-only in-memory initramfs
 ```
 
@@ -100,7 +100,7 @@ All filesystem operations use opcodes in the range `0x400–0x4FF`.
 | `FS_IPC_RMDIR`     | 0x409 | Remove a directory                             |
 | `FS_IPC_READDIR`   | 0x410 | Read directory entries                         |
 | `FS_IPC_CHDIR`     | 0x412 | Change working directory                       |
-| `FS_IPC_READ_APP`  | 0x413 | Read an application blob (used by PM at spawn) |
+| `FS_IPC_READ_APP`  | 0x413 | Retired; range sentinel only (see below)       |
 | `FS_IPC_READ_PATH` | 0x414 | Read a file by absolute path in one shot       |
 
 #### Responses (backend → fs_manager → client)
@@ -156,11 +156,12 @@ the caller-owned object by ownership (`pm_foreign_xfer_ptr`).
 
 ### `fs_fat` Backend
 
-**Source**: `src/services/fs_fat/`
+**Source**: `src/drivers/fs_fat/`
 
-Implements FAT12/16/32 on a block device. The block device endpoint is
-provided at spawn time via the device manager's block-device registration
-mechanism.
+Implements FAT12/16 on a block device. FAT32 is detected at mount but its
+cluster read/write is unimplemented (`fat_fatent_read`/`fat_fatent_write`
+return `FS_ERR_CORRUPT`). The block device endpoint is provided at spawn time
+via the device manager's block-device registration mechanism.
 
 - Supports `OPEN`, `READ`, `SEEK`, `CLOSE`, `STAT`, `READDIR`.
 - Write operations (`WRITE`, `MKDIR`, `UNLINK`, `RMDIR`) are implemented for
@@ -173,14 +174,15 @@ mechanism.
 
 ### `fs_init` Backend
 
-**Source**: `src/services/fs_init/`
+**Source**: `src/drivers/fs_init/`
 
 A read-only in-memory filesystem used for early boot content before the FAT
 volume is available. The initramfs image is embedded in the kernel ELF or
 provided via a known physical address from the bootloader.
 
-- Handles `OPEN`, `READ`, `SEEK`, `STAT`, `READDIR`, `CLOSE` only.
-- Write operations return `FS_IPC_ERROR` with `EROFS`.
+- Handles `OPEN`, `READ`, `CLOSE`, `READDIR`, `CHDIR`, `READY` only (no `SEEK`,
+  no `STAT`).
+- Unhandled/write opcodes return `FS_IPC_ERROR` (arg0 = -1).
 - Registers as the `"/init"` mount.
 
 ---
@@ -208,10 +210,9 @@ provided via a known physical address from the bootloader.
    are both registered, a path under `/boot/system` goes to the more-specific
    backend.
 
-3. **`FS_IPC_READ_APP` bypasses normal handle state.** It performs a
-   single-shot read of an entire application blob into a caller-supplied
-   buffer. The process manager uses this opcode exclusively during spawn; it
-   does not open a handle and does not update per-client state.
+3. **`FS_IPC_READ_APP` is retired.** PM spawn now reads app blobs via
+   `FS_IPC_READ_PATH` (see `process_manager_spawn.c`); `FS_IPC_READ_APP_REQ`
+   (0x413) survives only as a range sentinel and has no live handler.
 
 4. **`fs_manager` is the sole client-facing endpoint.** Services never talk
    directly to `fs_fat` or `fs_init`. All FS traffic goes through

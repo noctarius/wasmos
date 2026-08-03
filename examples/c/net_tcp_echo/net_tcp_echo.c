@@ -60,7 +60,8 @@ static int32_t connect_resume(void* user, uintptr_t* out_value) {
         if (wasmos_net__setup_rings(s, c->stack_ep, c->cap) != 0 || c->desc_bid < 0) {
             return connect_fail(c, out_value);
         }
-        c->desc_grant = wasmos_xfer_buffer_borrow(c->stack_ep, c->desc_bid, WASMOS_BUFFER_GRANT_READ);
+        c->desc_grant =
+            wasmos_xfer_buffer_borrow(c->stack_ep, c->desc_bid, WASMOS_BUFFER_GRANT_READ);
         if (c->desc_grant < 0) {
             return connect_fail(c, out_value);
         }

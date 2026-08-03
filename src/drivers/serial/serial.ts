@@ -60,7 +60,7 @@ let g_subscriber: i32 = -1;
  * 512 bytes >> any interactive burst, so it effectively never fills. */
 const RXBUF_CAP: i32 = 512;
 let g_rxbuf = new StaticArray<u8>(RXBUF_CAP);
-let g_rxbuf_head: i32 = 0; /* index of the oldest buffered byte */
+let g_rxbuf_head: i32 = 0;  /* index of the oldest buffered byte */
 let g_rxbuf_count: i32 = 0; /* number of bytes currently buffered */
 
 function rxbuf_empty(): bool {

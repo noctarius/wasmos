@@ -5,11 +5,13 @@ Generates (into abi/generated/c/):
   - wasmos_hostcall_ids.h    the kernel HC_* id enum
   - wasmos_symbols_warp.inc  the WARP WASMOS_SYMBOLS(LINK) table
   - wasmos_link_wasm3.inc    the wasm3 link X-macro WASMOS_WASM3_LINKS(X) (m3 sigs)
+  - wasmos_symbols_aot.inc   the WARP AOT symbol table WASMOS_AOT_SYMBOLS(LINK)
 
 and verifies them against the live hand-written sources
 (src/kernel/include/warp_ring3.h, src/kernel/warp/link.cpp,
-src/kernel/wasm3/link.c). These are parallel artifacts used to prove the IDL is
-faithful before the kernel is rewired; wrapper *bodies* stay hand-written.
+src/kernel/wasm3/link.c, src/tools/warp_aot/warp_aot.cpp). These are parallel
+artifacts used to prove the IDL is faithful before the kernel is rewired;
+wrapper *bodies* stay hand-written.
 
 See docs/architecture/34-abi-idl-and-error-model.md.
 
@@ -21,8 +23,10 @@ Usage:
       (no args)        regenerate all generated host-call files
       --check          fail (exit 2) if any on-disk file differs from the IDL
       --verify-source  fail (exit 3) if the IDL does not reproduce the live
-                       HC_* enum, the WARP WASMOS_SYMBOLS table, and the wasm3
-                       link table (ids, symbols, sigs, wrapper fn names)
+                       HC_* enum, the WARP WASMOS_SYMBOLS table, the wasm3 link
+                       table, and the WARP AOT symbol table (ids, symbols, m3
+                       sigs, wrapper fn names, arg-count stubs; the AOT table may
+                       be a superset since it is name-resolved)
 """
 
 import argparse
@@ -36,10 +40,12 @@ GEN_DIR = os.path.join(REPO_ROOT, "abi", "generated", "c")
 IDS_OUT = os.path.join(GEN_DIR, "wasmos_hostcall_ids.h")
 WARP_OUT = os.path.join(GEN_DIR, "wasmos_symbols_warp.inc")
 WASM3_OUT = os.path.join(GEN_DIR, "wasmos_link_wasm3.inc")
+AOT_OUT = os.path.join(GEN_DIR, "wasmos_symbols_aot.inc")
 
 WARP_RING3_H = os.path.join(REPO_ROOT, "src", "kernel", "include", "warp_ring3.h")
 WARP_LINK_CPP = os.path.join(REPO_ROOT, "src", "kernel", "warp", "link.cpp")
 WASM3_LINK_C = os.path.join(REPO_ROOT, "src", "kernel", "wasm3", "link.c")
+WARP_AOT_CPP = os.path.join(REPO_ROOT, "src", "tools", "warp_aot", "warp_aot.cpp")
 
 # HC_* symbol prefix and warp_/wasmos_ fn prefix, keyed by module.
 SYM_PREFIX = {"wasmos": "", "env": "ENV_", "wasi_snapshot_preview1": "WASI_"}
@@ -143,6 +149,10 @@ class Model:
         chars = "".join(self._sig_char(p) for p in (t.get("params") or []))
         return f"{ret}({chars})"
 
+    def arity(self, e):
+        """Number of wasm u32 params (excludes the trailing ctx)."""
+        return len(self._target(e).get("params") or [])
+
     @staticmethod
     def _sig_char(p):
         if p.get("wasm3") == "i32":
@@ -236,10 +246,34 @@ def emit_wasm3_links(m):
     return "\n".join(o)
 
 
+def emit_aot_symbols(m):
+    """WARP AOT symbol table — mirrors WASMOS_SYMBOLS in id order, but binds each
+    entry to an arity-sized stub (stub_i<N>, N = wasm param count) that
+    initFromCompiledBinary() rebinds to the live kernel fn at load. Emitted as a
+    macro; the AOT tool expands it into its NativeSymbol[] initializer."""
+    o = list(BANNER)
+    w = o.append
+    w("/* WARP AOT symbol table (name-resolved at load; kept in id order for")
+    w(" * readability). Each entry binds a stub_i<N> of matching arity (N = wasm")
+    w(" * param count, ctx excluded); initFromCompiledBinary() rebinds stubs to the")
+    w(" * live kernel fns by name. The full host-call set is listed — an available")
+    w(" * symbol no AOT module imports is harmless. Expand:")
+    w(" *   static vb::NativeSymbol syms[] = { WASMOS_AOT_SYMBOLS(DYNAMIC_LINK) }; */")
+    w("#define WASMOS_AOT_SYMBOLS(LINK) \\")
+    lines = [
+        f'    LINK("{m.module(e)}", "{e["name"]}", stub_i{m.arity(e)})'
+        for e in m.ordered
+    ]
+    w(" , \\\n".join(lines))
+    w("")
+    return "\n".join(o)
+
+
 OUTPUTS = [
     (IDS_OUT, emit_hostcall_ids),
     (WARP_OUT, emit_warp_symbols),
     (WASM3_OUT, emit_wasm3_links),
+    (AOT_OUT, emit_aot_symbols),
 ]
 
 
@@ -314,8 +348,41 @@ def verify_wasm3(m):
     return problems
 
 
+def verify_aot(m):
+    text = _read(WARP_AOT_CPP)
+    region = text.split("aot_symbols", 1)[1]
+    region = re.sub(r"/\*.*?\*/", " ", region, flags=re.S)
+    region = region.replace("\\", " ")
+    src = re.findall(
+        r'DYNAMIC_LINK\(\s*"([^"]+)"\s*,\s*"([^"]+)"\s*,\s*(stub_i\d+)\s*\)', region
+    )
+    # AOT is name-resolved, so the generated table may be a superset of the live
+    # one: every current entry must be reproduced (name + arity), extras are OK.
+    gen_stub = {(m.module(e), e["name"]): f"stub_i{m.arity(e)}" for e in m.ordered}
+    problems = []
+    for mod, name, stub in src:
+        g = gen_stub.get((mod, name))
+        if g is None:
+            problems.append(f"AOT entry {mod}.{name} in warp_aot.cpp but not generated")
+        elif g != stub:
+            problems.append(f"AOT stub arity mismatch {mod}.{name}: src={stub} idl={g}")
+    src_names = {(mod, name) for mod, name, _ in src}
+    additions = [
+        (m.module(e), e["name"])
+        for e in m.ordered
+        if (m.module(e), e["name"]) not in src_names
+    ]
+    if additions:
+        print(
+            f"gen_abi_hostcalls: AOT table completes the live set (safe, "
+            f"name-resolved additions): {additions}",
+            file=sys.stderr,
+        )
+    return problems
+
+
 def verify_source(m):
-    problems = verify_enum(m) + verify_warp(m) + verify_wasm3(m)
+    problems = verify_enum(m) + verify_warp(m) + verify_wasm3(m) + verify_aot(m)
     if problems:
         for p in problems:
             print(f"gen_abi_hostcalls: {p}", file=sys.stderr)

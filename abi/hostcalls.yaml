@@ -8,8 +8,10 @@
 # the impls cannot drift. See docs/architecture/34-abi-idl-and-error-model.md.
 #
 # ID RULES (load-bearing — do not break):
-#   - `id` is the ring-3 syscall number (RAX = 0x100 + id) AND the AOT rebind
-#     index; table position == id.
+#   - `id` is the ring-3 syscall number (RAX = 0x100 + id): position in the WARP
+#     WASMOS_SYMBOLS table == id, so ring-3 dispatch is position-coupled. (The AOT
+#     symbol table is name-resolved, NOT position-indexed; the full host-call set
+#     is emitted, kept in id order only for readability.)
 #   - The id space is APPEND-ONLY: a new host call takes the next free id; never
 #     renumber or reorder existing ids (that shifts every ring-3 number and
 #     invalidates already-compiled/cached AOT payloads).

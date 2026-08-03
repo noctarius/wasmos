@@ -1,0 +1,271 @@
+# WASMOS IPC opcode ABI — single source of truth for the wasmos_driver_abi.h
+# opcode (positive IPC message `type`) space. Generated C enums + the
+# opcode->name diagnostic tables + doc opcode tables come from this file via
+# scripts/gen_abi_opcodes.py. Negative *_ERR_* codes live in abi/errors.yaml;
+# flags/descriptors stay hand-written in the header. See
+# docs/architecture/34-abi-idl-and-error-model.md.
+#
+# `kind`: req | resp | error | notify (diagnostic/doc only). `doc` (optional):
+# emitted as a comment into the generated enum + doc tables.
+
+abi_version: 1
+
+subsystems:
+  - name: chardev
+    id: 0
+    range: [0x100, 0x1ff]
+    opcodes:
+      - { symbol: WASM_CHARDEV_IPC_READ_REQ, value: 0x100, kind: req }
+      - { symbol: WASM_CHARDEV_IPC_WRITE_REQ, value: 0x101, kind: req }
+      - { symbol: WASM_CHARDEV_IPC_READ_RESP, value: 0x180, kind: resp }
+      - { symbol: WASM_CHARDEV_IPC_WRITE_RESP, value: 0x181, kind: resp }
+      - { symbol: WASM_CHARDEV_IPC_ERROR_RESP, value: 0x1ff, kind: error }
+
+  - name: proc_manager
+    id: 1
+    range: [0x200, 0x2ff]
+    opcodes:
+      - { symbol: PROC_IPC_SPAWN, value: 0x200, kind: req }
+      - { symbol: PROC_IPC_WAIT, value: 0x201, kind: req }
+      - { symbol: PROC_IPC_KILL, value: 0x202, kind: req }
+      - { symbol: PROC_IPC_STATUS, value: 0x203, kind: req }
+      - { symbol: PROC_IPC_SPAWN_NAME, value: 0x204, kind: req }
+      - { symbol: PROC_IPC_SPAWN_CAPS, value: 0x205, kind: req }
+      - { symbol: PROC_IPC_MODULE_META, value: 0x206, kind: req }
+      - { symbol: PROC_IPC_MODULE_META_PATH, value: 0x207, kind: req }
+      - { symbol: PROC_IPC_SPAWN_CAPS_V2, value: 0x208, kind: req }
+      - { symbol: PROC_IPC_SPAWN_PATH, value: 0x209, kind: req }
+      - { symbol: PROC_IPC_SPAWN_PATH_CAPS, value: 0x20a, kind: req }
+      - { symbol: PROC_IPC_SPAWN_SYNC, value: 0x20b, kind: req }
+      - { symbol: PROC_IPC_NOTIFY_READY, value: 0x20c, kind: notify }
+      - { symbol: PROC_IPC_SPAWN_CAPS_SYNC, value: 0x20d, kind: req }
+      - { symbol: PROC_IPC_SPAWN_PATH_SYNC, value: 0x20e, kind: req }
+      - { symbol: PROC_IPC_SPAWN_PATH_CAPS_SYNC, value: 0x20f, kind: req }
+      - { symbol: PROC_IPC_SUBSYSTEM_REGISTER_BROKER, value: 0x210, kind: req }
+      - { symbol: PROC_IPC_EXEC_HANDLER_REGISTER, value: 0x211, kind: req }
+      - { symbol: PROC_IPC_RESP, value: 0x280, kind: resp }
+      - { symbol: PROC_IPC_ERROR, value: 0x2ff, kind: error }
+
+  - name: proc_broker
+    id: 2
+    range: [0x223, 0x2e3]
+    opcodes:
+      - { symbol: PROC_BROKER_IPC_SPAWN_PLAN_REQ, value: 0x223, kind: req }
+      - { symbol: PROC_BROKER_IPC_SPAWN_PLAN_RESP, value: 0x2a3, kind: resp }
+      - { symbol: PROC_BROKER_IPC_SPAWN_PLAN_ERROR, value: 0x2e3, kind: error }
+
+  - name: service_registry
+    id: 3
+    range: [0x220, 0x2af]
+    opcodes:
+      - { symbol: SVC_IPC_REGISTER_REQ, value: 0x220, kind: req }
+      - { symbol: SVC_IPC_LOOKUP_REQ, value: 0x221, kind: req }
+      - { symbol: SVC_IPC_REGISTER_DESC_REQ, value: 0x222, kind: req }
+      - { symbol: SVC_IPC_LOOKUP_CLASS_REQ, value: 0x223, kind: req }
+      - { symbol: SVC_IPC_SUBSCRIBE_CLASS_REQ, value: 0x224, kind: req }
+      - { symbol: SVC_IPC_REGISTER_RESP, value: 0x2a0, kind: resp }
+      - { symbol: SVC_IPC_LOOKUP_RESP, value: 0x2a1, kind: resp }
+      - { symbol: SVC_IPC_LOOKUP_CLASS_RESP, value: 0x2a2, kind: resp }
+      - { symbol: SVC_IPC_SUBSCRIBE_CLASS_RESP, value: 0x2a3, kind: resp }
+      - { symbol: SVC_IPC_CLASS_EVENT, value: 0x2a4, kind: notify }
+      - { symbol: SVC_IPC_ERROR, value: 0x2af, kind: error }
+
+  - name: block
+    id: 4
+    range: [0x300, 0x3ff]
+    opcodes:
+      - { symbol: BLOCK_IPC_READ_REQ, value: 0x300, kind: req }
+      - { symbol: BLOCK_IPC_WRITE_REQ, value: 0x301, kind: req }
+      - { symbol: BLOCK_IPC_IDENTIFY_REQ, value: 0x302, kind: req }
+      - { symbol: BLOCK_IPC_READ_RESP, value: 0x380, kind: resp }
+      - { symbol: BLOCK_IPC_WRITE_RESP, value: 0x381, kind: resp }
+      - { symbol: BLOCK_IPC_IDENTIFY_RESP, value: 0x382, kind: resp }
+      - { symbol: BLOCK_IPC_ERROR, value: 0x3ff, kind: error }
+
+  - name: fs
+    id: 5
+    range: [0x400, 0x4ff]
+    opcodes:
+      - { symbol: FS_IPC_OPEN_REQ, value: 0x400, kind: req }
+      - { symbol: FS_IPC_READ_REQ, value: 0x401, kind: req }
+      - { symbol: FS_IPC_CLOSE_REQ, value: 0x402, kind: req }
+      - { symbol: FS_IPC_STAT_REQ, value: 0x403, kind: req }
+      - { symbol: FS_IPC_READY_REQ, value: 0x404, kind: req }
+      - { symbol: FS_IPC_SEEK_REQ, value: 0x405, kind: req }
+      - { symbol: FS_IPC_WRITE_REQ, value: 0x406, kind: req }
+      - { symbol: FS_IPC_UNLINK_REQ, value: 0x407, kind: req }
+      - { symbol: FS_IPC_MKDIR_REQ, value: 0x408, kind: req }
+      - { symbol: FS_IPC_RMDIR_REQ, value: 0x409, kind: req }
+      - { symbol: FS_IPC_READDIR_REQ, value: 0x410, kind: req }
+      - { symbol: FS_IPC_CHDIR_REQ, value: 0x412, kind: req }
+      - { symbol: FS_IPC_READ_APP_REQ, value: 0x413, kind: req }
+      - { symbol: FS_IPC_READ_PATH_REQ, value: 0x414, kind: req }
+      - { symbol: FS_IPC_RESP, value: 0x480, kind: resp }
+      - { symbol: FS_IPC_STREAM, value: 0x481, kind: resp }
+      - { symbol: FS_IPC_ERROR, value: 0x4ff, kind: error }
+
+  - name: fs_manager
+    id: 6
+    range: [0x420, 0x4a2]
+    opcodes:
+      - { symbol: FSMGR_IPC_BACKEND_INFO_REQ, value: 0x420, kind: req }
+      - { symbol: FSMGR_IPC_CLONE_CWD_REQ, value: 0x421, kind: req }
+      - { symbol: FSMGR_IPC_QUERY_MOUNTS_REQ, value: 0x422, kind: req }
+      - { symbol: FSMGR_IPC_BACKEND_INFO_RESP, value: 0x4a0, kind: resp }
+      - { symbol: FSMGR_IPC_CLONE_CWD_RESP, value: 0x4a1, kind: resp }
+      - { symbol: FSMGR_IPC_QUERY_MOUNTS_RESP, value: 0x4a2, kind: resp }
+
+  - name: fbtext
+    id: 7
+    range: [0x600, 0x6ff]
+    opcodes:
+      - { symbol: FBTEXT_IPC_CELL_WRITE_REQ, value: 0x600, kind: req }
+      - { symbol: FBTEXT_IPC_CURSOR_SET_REQ, value: 0x601, kind: req }
+      - { symbol: FBTEXT_IPC_SCROLL_REQ, value: 0x602, kind: req }
+      - { symbol: FBTEXT_IPC_CLEAR_REQ, value: 0x603, kind: req }
+      - { symbol: FBTEXT_IPC_CONSOLE_MODE_REQ, value: 0x604, kind: req }
+      - { symbol: FBTEXT_IPC_GEOMETRY_REQ, value: 0x605, kind: req }
+      - { symbol: FBTEXT_IPC_GFX_OVERLAY_REQ, value: 0x606, kind: req }
+      - { symbol: FBTEXT_IPC_QUERY_CAPS_REQ, value: 0x607, kind: req }
+      - { symbol: FBTEXT_IPC_QUERY_MODES_REQ, value: 0x608, kind: req }
+      - { symbol: FBTEXT_IPC_SET_RESOLUTION_REQ, value: 0x609, kind: req }
+      - { symbol: FBTEXT_IPC_BLIT_ATTACH_REQ, value: 0x60a, kind: req }
+      - { symbol: FBTEXT_IPC_BLIT_GRID_REQ, value: 0x60b, kind: req }
+      - { symbol: FBTEXT_IPC_RESP, value: 0x680, kind: resp }
+      - { symbol: FBTEXT_IPC_ERROR, value: 0x6ff, kind: error }
+
+  - name: vt
+    id: 8
+    range: [0x700, 0x7ff]
+    opcodes:
+      - { symbol: VT_IPC_WRITE_REQ, value: 0x700, kind: req }
+      - { symbol: VT_IPC_READ_REQ, value: 0x701, kind: req }
+      - { symbol: VT_IPC_SET_ATTR_REQ, value: 0x702, kind: req }
+      - { symbol: VT_IPC_SWITCH_TTY, value: 0x703, kind: req }
+      - { symbol: VT_IPC_GET_ACTIVE_TTY, value: 0x704, kind: req }
+      - { symbol: VT_IPC_REGISTER_WRITER, value: 0x705, kind: req }
+      - { symbol: VT_IPC_SET_MODE_REQ, value: 0x706, kind: req }
+      - { symbol: VT_IPC_SERIAL_INPUT_REQ, value: 0x707, kind: req }
+      - { symbol: VT_IPC_RESP, value: 0x780, kind: resp }
+      - { symbol: VT_IPC_INPUT_NOTIFY, value: 0x781, kind: notify }
+      - { symbol: VT_IPC_KEY_FORWARD, value: 0x782, kind: notify }
+      - { symbol: VT_IPC_VIS_NOTIFY, value: 0x783, kind: notify }
+      - { symbol: VT_IPC_ERROR, value: 0x7ff, kind: error }
+
+  - name: serial
+    id: 9
+    range: [0x502, 0x582]
+    opcodes:
+      - { symbol: SERIAL_IPC_SUBSCRIBE_REQ, value: 0x502, kind: req }
+      - { symbol: SERIAL_IPC_SUBSCRIBE_RESP, value: 0x582, kind: resp }
+
+  - name: keyboard
+    id: 10
+    range: [0x800, 0x880]
+    opcodes:
+      - { symbol: KBD_IPC_SUBSCRIBE_REQ, value: 0x800, kind: req }
+      - { symbol: KBD_IPC_SUBSCRIBE_RESP, value: 0x880, kind: resp }
+      - { symbol: KBD_IPC_KEY_NOTIFY, value: 0x801, kind: notify }
+
+  - name: mouse
+    id: 11
+    range: [0x810, 0x890]
+    opcodes:
+      - { symbol: MOUSE_IPC_SUBSCRIBE_REQ, value: 0x810, kind: req }
+      - { symbol: MOUSE_IPC_SUBSCRIBE_RESP, value: 0x890, kind: resp }
+      - { symbol: MOUSE_IPC_MOVE_NOTIFY, value: 0x811, kind: notify }
+
+  - name: rtc
+    id: 12
+    range: [0x820, 0x8ff]
+    opcodes:
+      - { symbol: RTC_IPC_READ_REQ, value: 0x820, kind: req }
+      - { symbol: RTC_IPC_SET_REQ, value: 0x821, kind: req }
+      - { symbol: RTC_IPC_READ_RESP, value: 0x8a0, kind: resp }
+      - { symbol: RTC_IPC_SET_RESP, value: 0x8a1, kind: resp }
+      - { symbol: RTC_IPC_ERROR, value: 0x8ff, kind: error }
+
+  - name: virtio_serial
+    id: 13
+    range: [0x830, 0x8bf]
+    opcodes:
+      - { symbol: VIRTIO_SERIAL_IPC_QUERY_REQ, value: 0x830, kind: req }
+      - { symbol: VIRTIO_SERIAL_IPC_READ_REG32_REQ, value: 0x831, kind: req }
+      - { symbol: VIRTIO_SERIAL_IPC_WRITE_REG32_REQ, value: 0x832, kind: req }
+      - { symbol: VIRTIO_SERIAL_IPC_RESP, value: 0x8b0, kind: resp }
+      - { symbol: VIRTIO_SERIAL_IPC_ERROR, value: 0x8bf, kind: error }
+
+  - name: device_manager
+    id: 14
+    range: [0x900, 0x982]
+    opcodes:
+      - { symbol: DEVMGR_PUBLISH_DEVICE, value: 0x900, kind: req }
+      - { symbol: DEVMGR_PCI_SCAN_DONE, value: 0x901, kind: resp }
+      - { symbol: DEVMGR_QUERY_MOUNT_REQ, value: 0x902, kind: req }
+      - { symbol: DEVMGR_PUBLISH_BLOCK_DEVICE, value: 0x903, kind: req }
+      - { symbol: DEVMGR_QUERY_BLOCK_MOUNT_REQ, value: 0x904, kind: req }
+      - { symbol: DEVMGR_ACPI_SCAN_DONE, value: 0x905, kind: resp }
+      - { symbol: DEVMGR_MOUNT_INFO, value: 0x980, kind: resp }
+      - { symbol: DEVMGR_BLOCK_MOUNT_INFO, value: 0x982, kind: resp }
+      - { symbol: DEVMGR_QUERY_DONE, value: 0x981, kind: resp }
+
+  - name: netdrv
+    id: 15
+    range: [0xa00, 0xaff]
+    opcodes:
+      - { symbol: NETDRV_IPC_LINK_GET, value: 0xa00, kind: req }
+      - { symbol: NETDRV_IPC_TX_FRAME, value: 0xa01, kind: req }
+      - { symbol: NETDRV_IPC_RX_POLL, value: 0xa02, kind: req }
+      - { symbol: NETDRV_IPC_STATS_GET, value: 0xa03, kind: req }
+      - { symbol: NETDRV_IPC_RX_FRAME_NOTIFY, value: 0xa04, kind: notify }
+      - { symbol: NETDRV_IPC_LINK_NOTIFY, value: 0xa05, kind: notify }
+      - { symbol: NETDRV_IPC_RESP, value: 0xa80, kind: resp }
+      - { symbol: NETDRV_IPC_ERROR, value: 0xaff, kind: error }
+
+  - name: hrng
+    id: 16
+    range: [0xc00, 0xcff]
+    opcodes:
+      - { symbol: HRNG_IPC_GET_BYTES_REQ, value: 0xc00, kind: req }
+      - { symbol: HRNG_IPC_RESP, value: 0xc80, kind: resp }
+      - { symbol: HRNG_IPC_ERROR, value: 0xcff, kind: error }
+
+  - name: net
+    id: 17
+    range: [0xb00, 0xbff]
+    opcodes:
+      - { symbol: NET_IPC_SOCKET_OPEN, value: 0xb00, kind: req }
+      - { symbol: NET_IPC_BIND, value: 0xb01, kind: req }
+      - { symbol: NET_IPC_CONNECT, value: 0xb02, kind: req }
+      - { symbol: NET_IPC_SEND, value: 0xb03, kind: req }
+      - { symbol: NET_IPC_RECV, value: 0xb04, kind: req }
+      - { symbol: NET_IPC_CLOSE, value: 0xb05, kind: req }
+      - { symbol: NET_IPC_POLL, value: 0xb06, kind: req }
+      - { symbol: NET_IPC_IFADDR_ADD, value: 0xb07, kind: req }
+      - { symbol: NET_IPC_IFADDR_DEL, value: 0xb08, kind: req }
+      - { symbol: NET_IPC_IFADDR_LIST, value: 0xb09, kind: req }
+      - { symbol: NET_IPC_STACK_CREATE, value: 0xb0a, kind: req }
+      - { symbol: NET_IPC_STACK_DESTROY, value: 0xb0b, kind: req }
+      - { symbol: NET_IPC_STACK_SELECT, value: 0xb0c, kind: req }
+      - { symbol: NET_IPC_DATA_NOTIFY, value: 0xb0d, kind: notify }
+      - { symbol: NET_IPC_TX_NOTIFY, value: 0xb0e, kind: notify }
+      - { symbol: NET_IPC_RX_NOTIFY, value: 0xb0f, kind: notify }
+      - { symbol: NET_IPC_IF_SET_STATE, value: 0xb10, kind: req }
+      - { symbol: NET_IPC_DHCP_SET, value: 0xb11, kind: req }
+      - { symbol: NET_IPC_LISTEN, value: 0xb12, kind: req }
+      - { symbol: NET_IPC_ACCEPT, value: 0xb13, kind: req }
+      - { symbol: NET_IPC_RESOLVE, value: 0xb14, kind: req }
+      - { symbol: NET_IPC_DNS_SET, value: 0xb15, kind: req }
+      - { symbol: NET_IPC_DNS_LIST, value: 0xb16, kind: req }
+      - { symbol: NET_IPC_RESP, value: 0xb80, kind: resp }
+      - { symbol: NET_IPC_ERROR, value: 0xbff, kind: error }
+
+  - name: proc_dma
+    id: 18
+    range: [0x230, 0x2bf]
+    opcodes:
+      - { symbol: PROC_IPC_DMA_MAP_BORROW_REQ, value: 0x230, kind: req }
+      - { symbol: PROC_IPC_DMA_SYNC_BORROW_REQ, value: 0x231, kind: req }
+      - { symbol: PROC_IPC_DMA_UNMAP_BORROW_REQ, value: 0x232, kind: req }
+      - { symbol: PROC_IPC_DMA_BORROW_RESP, value: 0x2b0, kind: resp }
+      - { symbol: PROC_IPC_DMA_BORROW_ERROR, value: 0x2bf, kind: error }

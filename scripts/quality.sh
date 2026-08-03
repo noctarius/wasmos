@@ -544,6 +544,10 @@ run_abi_gen_check() {
     "$py" "$repo_root/scripts/gen_abi_hostcalls.py" --check
     step "Verifying host-call ids match warp_ring3.h..."
     "$py" "$repo_root/scripts/gen_abi_hostcalls.py" --verify-source
+    step "Checking generated opcode ABI is in sync with abi/opcodes.yaml..."
+    "$py" "$repo_root/scripts/gen_abi_opcodes.py" --check
+    step "Verifying opcodes match wasmos_driver_abi.h..."
+    "$py" "$repo_root/scripts/gen_abi_opcodes.py" --verify-source
 }
 
 case "$mode" in

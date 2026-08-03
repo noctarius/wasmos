@@ -57,6 +57,10 @@ Source: `architecture/06-memory-management.md`,
   (`src/kernel/process.c:2492` `TODO(memory-rss)`; `architecture/06`:507-512).
 - [ ] Wire the kernel-thread trampoline into PM launch policy and delete the
   legacy trampoline (`src/kernel/process.c:1503,1771`).
+- [ ] Fix the `dma_map_borrow` capability-enforcement divergence: the WARP
+  wrapper (`src/kernel/warp/link.cpp`) omits the DMA-capability + max-bytes/range
+  check that the wasm3 wrapper (`src/kernel/wasm3/link.c`) enforces, so the WARP
+  path is weaker. Bring WARP to parity. Found during the host-call ABI inventory.
 - [ ] Extend DMA isolation to an IOMMU domain model (VT-d/AMD-Vi) and add
   non-coherent cache-maintenance hooks before targeting non-coherent hardware
   (`architecture/12`:88,618,625).

@@ -117,13 +117,27 @@ Illustrative entry:
 
 ### `abi/opcodes.yaml`
 
-Each entry declares an IPC opcode and its request/reply message shape, grouped by
-the existing allocation ranges (`fs`, `net`, `gfx`, `fbtext`, `hrng`, …).
-Generates the `wasmos_driver_abi.h` opcode enum, a runtime `opcode → name` table
-(for diagnostics and the IPC trace), and the opcode tables in the drivers/services
-and subsystem docs. Optionally generates typed request/reply stubs: a client stub
-that returns a future and a server dispatch skeleton, with the transfer-buffer
-borrow/release ownership contract emitted in one place.
+Declares the IPC opcodes (positive `ipc_message_t.type` values) grouped by
+subsystem, each with an optional `kind` (req/resp/error/notify) and `doc:`.
+`scripts/gen_abi_opcodes.py` generates the per-subsystem C enums
+(`abi/generated/c/wasmos_opcodes.h`), a best-effort runtime `opcode → name`
+lookup for diagnostics/the IPC trace, and the opcode reference tables
+(`abi/generated/docs/opcodes.md`). `wasmos_driver_abi.h` `#include`s the
+generated enums; `--verify-source` guards symbol/value parity while any enum
+stays hand-written and self-skips once swapped.
+
+Opcodes are **endpoint-scoped**, not a global namespace: the same value can name
+different messages on different endpoints (e.g. `0x223` is both a proc-broker and
+a service-registry request), so the per-subsystem enums preserve the collisions
+and the global name lookup is first-wins/best-effort. Negative `*_ERR_*` codes
+belong to `abi/errors.yaml`, not here; flags and descriptor structs stay
+hand-written in the header.
+
+Landed as Phase 3a (the `wasmos_driver_abi.h` core). Deferred (3b): consolidating
+the scattered opcode headers (`rtc_ipc.h` ×3, `font_ipc.h`, `gfx_ipc.h`,
+`serial.c`) and per-language opcode constants. Optional (3c): typed
+future-returning request/reply stubs that emit the transfer-buffer
+borrow/release ownership contract in one place.
 
 ### `abi/errors.yaml`
 

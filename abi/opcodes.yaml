@@ -33,16 +33,81 @@ subsystems:
       - { symbol: PROC_IPC_SPAWN_CAPS, value: 0x205, kind: req }
       - { symbol: PROC_IPC_MODULE_META, value: 0x206, kind: req }
       - { symbol: PROC_IPC_MODULE_META_PATH, value: 0x207, kind: req }
-      - { symbol: PROC_IPC_SPAWN_CAPS_V2, value: 0x208, kind: req }
-      - { symbol: PROC_IPC_SPAWN_PATH, value: 0x209, kind: req }
-      - { symbol: PROC_IPC_SPAWN_PATH_CAPS, value: 0x20a, kind: req }
-      - { symbol: PROC_IPC_SPAWN_SYNC, value: 0x20b, kind: req }
-      - { symbol: PROC_IPC_NOTIFY_READY, value: 0x20c, kind: notify }
-      - { symbol: PROC_IPC_SPAWN_CAPS_SYNC, value: 0x20d, kind: req }
+      - symbol: PROC_IPC_SPAWN_CAPS_V2
+        value: 0x208
+        kind: req
+        doc: |
+          Spawn with extended capability descriptor payload:
+          arg0=module_index arg1=user_ptr(wasmos_spawn_caps_v2_t + windows[])
+          arg2=payload_size_bytes arg3=reserved(0).
+      - symbol: PROC_IPC_SPAWN_PATH
+        value: 0x209
+        kind: req
+        doc: |
+          Spawn from explicit app path:
+          caller must place path bytes at xfer buffer offset 0.
+          optional raw command argument text is placed at offset (path_len + 1).
+          arg0=reserved(0) arg1=path_len arg2=args_len arg3=reserved.
+          On success (app kind): PROC_IPC_RESP, arg0=child_pid, arg1=app_flags.
+          For service/driver kinds the PM delays the PROC_IPC_RESP until the child
+          calls PROC_IPC_NOTIFY_READY (behaves like SPAWN_PATH_SYNC internally).
+      - symbol: PROC_IPC_SPAWN_PATH_CAPS
+        value: 0x20a
+        kind: req
+        doc: |
+          Spawn from explicit app path with I/O-port + IRQ capabilities:
+          caller must place path bytes at xfer buffer offset 0.
+          arg0=((irq_mask<<16)|(cap_flags&0xFFFF)) arg1=path_len
+          arg2=((io_port_max<<16)|io_port_min)     arg3=reserved.
+      - symbol: PROC_IPC_SPAWN_SYNC
+        value: 0x20b
+        kind: req
+        doc: |
+          Spawn by module index and block until the child calls NOTIFY_READY (or
+          first blocks on IPC as an implicit signal), or until the timeout expires.
+          arg0=module_index  arg1=timeout_ms (0 = wait forever)
+          arg2=reserved(0)   arg3=reserved(0).
+          On success: PROC_IPC_RESP, arg0=child_pid.
+          On timeout or child death before ready: PROC_IPC_ERROR, arg1=error_code.
+      - symbol: PROC_IPC_NOTIFY_READY
+        value: 0x20c
+        kind: notify
+        doc: |
+          Service sends this to proc_endpoint when it has finished initialising and
+          is ready to accept requests.  Fire-and-forget — no reply is sent back.
+          arg0..arg3 = reserved(0).
+      - symbol: PROC_IPC_SPAWN_CAPS_SYNC
+        value: 0x20d
+        kind: req
+        doc: |
+          Sync variants of SPAWN_CAPS / SPAWN_PATH / SPAWN_PATH_CAPS.
+          Same cap/path encoding as their async counterparts, with one arg
+          repurposed for timeout_ms:
+          SPAWN_CAPS_SYNC:      arg0=module_index arg1=cap_flags arg2=io_packed
+          arg3=(irq_mask&0xFFFF)|((timeout_ms&0xFFFF)<<16)
+          SPAWN_PATH_SYNC:      path at FS buf[0], arg0=0 arg1=path_len
+          arg2=0 arg3=timeout_ms
+          SPAWN_PATH_CAPS_SYNC: path at FS buf[0],
+          arg0=(irq<<16)|cap_flags arg1=path_len
+          arg2=io_packed           arg3=timeout_ms
+          On success: PROC_IPC_RESP, arg0=child_pid.
+          On timeout or child death before ready: PROC_IPC_ERROR.
       - { symbol: PROC_IPC_SPAWN_PATH_SYNC, value: 0x20e, kind: req }
       - { symbol: PROC_IPC_SPAWN_PATH_CAPS_SYNC, value: 0x20f, kind: req }
-      - { symbol: PROC_IPC_SUBSYSTEM_REGISTER_BROKER, value: 0x210, kind: req }
-      - { symbol: PROC_IPC_EXEC_HANDLER_REGISTER, value: 0x211, kind: req }
+      - symbol: PROC_IPC_SUBSYSTEM_REGISTER_BROKER
+        value: 0x210
+        kind: req
+        doc: |
+          Descriptor-based broker subsystem registration.
+          arg0=offset(0) arg1=byte_len(sizeof(wasmos_subsystem_broker_register_desc_t))
+          arg2=reserved(0) arg3=reserved(0).
+      - symbol: PROC_IPC_EXEC_HANDLER_REGISTER
+        value: 0x211
+        kind: req
+        doc: |
+          Descriptor-based exec handler registration.
+          arg0=offset(0) arg1=byte_len(sizeof(desc)+node_bytes)
+          arg2=reserved(0) arg3=reserved(0).
       - { symbol: PROC_IPC_RESP, value: 0x280, kind: resp }
       - { symbol: PROC_IPC_ERROR, value: 0x2ff, kind: error }
 
@@ -50,7 +115,16 @@ subsystems:
     id: 2
     range: [0x223, 0x2e3]
     opcodes:
-      - { symbol: PROC_BROKER_IPC_SPAWN_PLAN_REQ, value: 0x223, kind: req }
+      - symbol: PROC_BROKER_IPC_SPAWN_PLAN_REQ
+        value: 0x223
+        kind: req
+        doc: |
+          Broker spawn-plan handoff:
+          PM lends its xfer buffer to the broker read-only, writes a
+          wasmos_broker_spawn_plan_request_t into that borrowed view, then sends
+          this request with arg0=request_offset and arg1=request_size.
+          The broker replies on msg->source with the same request_id. On success
+          arg0=plan_offset and arg1=plan_size in the broker's own xfer buffer.
       - { symbol: PROC_BROKER_IPC_SPAWN_PLAN_RESP, value: 0x2a3, kind: resp }
       - { symbol: PROC_BROKER_IPC_SPAWN_PLAN_ERROR, value: 0x2e3, kind: error }
 
@@ -58,10 +132,42 @@ subsystems:
     id: 3
     range: [0x220, 0x2af]
     opcodes:
-      - { symbol: SVC_IPC_REGISTER_REQ, value: 0x220, kind: req }
+      - symbol: SVC_IPC_REGISTER_REQ
+        value: 0x220
+        kind: req
+        doc: |
+          Legacy arg-packed register (reply lands on the service endpoint).
+          TODO: migrate the remaining senders (AssemblyScript rtc/mouse/keyboard,
+          native zig libsys) to SVC_IPC_REGISTER_DESC_REQ and remove this path.
       - { symbol: SVC_IPC_LOOKUP_REQ, value: 0x221, kind: req }
-      - { symbol: SVC_IPC_REGISTER_DESC_REQ, value: 0x222, kind: req }
-      - { symbol: SVC_IPC_LOOKUP_CLASS_REQ, value: 0x223, kind: req }
+      - symbol: SVC_IPC_REGISTER_DESC_REQ
+        value: 0x222
+        kind: req
+        doc: |
+          Descriptor-based register: the request payload is a svc_register_desc_t
+          placed by the caller at FS-buffer offset 0; arg0=offset(0), arg1=byte len.
+          msg->source is a DEDICATED reply endpoint (not the service endpoint), so
+          the SVC_IPC_REGISTER_RESP cannot collide with serve traffic on the service
+          endpoint.  This replaces the arg-packed SVC_IPC_REGISTER_REQ, whose 16-byte
+          name consumed all four args and forced the reply onto the serve endpoint
+          (a latent races that deadlocked boot once PM stopped busy-polling).
+      - symbol: SVC_IPC_LOOKUP_CLASS_REQ
+        value: 0x223
+        kind: req
+        doc: |
+          Class-based discovery (see docs/architecture/09-process-and-ipc.md).
+          LOOKUP_CLASS: enumerate every provider registered under a virtual class.
+          req  arg0=buffer_id (class name NUL-terminated at offset 0 on input;
+          PM overwrites it with a svc_class_entry_t[] on output),
+          arg1=max_entries the buffer can hold;
+          resp SVC_IPC_LOOKUP_CLASS_RESP arg0=provider count (may exceed
+          max_entries; only min(count,max_entries) entries are written).
+          SUBSCRIBE_CLASS: receive existence events for a class.
+          req  arg0=notify_endpoint (where SVC_IPC_CLASS_EVENT is delivered),
+          arg1=buffer_id (class name NUL-terminated at offset 0);
+          resp SVC_IPC_SUBSCRIBE_CLASS_RESP arg0=0.
+          CLASS_EVENT is pushed to a subscriber's notify_endpoint on add/remove/die:
+          arg0=SVC_CLASS_EVENT_* arg1=instance arg2=endpoint arg3=pid.
       - { symbol: SVC_IPC_SUBSCRIBE_CLASS_REQ, value: 0x224, kind: req }
       - { symbol: SVC_IPC_REGISTER_RESP, value: 0x2a0, kind: resp }
       - { symbol: SVC_IPC_LOOKUP_RESP, value: 0x2a1, kind: resp }
@@ -108,7 +214,15 @@ subsystems:
     id: 6
     range: [0x420, 0x4a2]
     opcodes:
-      - { symbol: FSMGR_IPC_BACKEND_INFO_REQ, value: 0x420, kind: req }
+      - symbol: FSMGR_IPC_BACKEND_INFO_REQ
+        value: 0x420
+        kind: req
+        doc: |
+          fs-manager -> backend pull: report kind/mount/unit. Reply RESP packs
+          arg0=kind, arg2=(mount_buffer_id<<12)|mount_len (backend owns the buffer
+          and borrows it READ to fs-manager), arg3=unit. Backends are discovered
+          via svc class FSMGR_BACKEND_CLASS, not a push, so fs-manager rebuilds its
+          backend set from the registry on (re)start.
       - { symbol: FSMGR_IPC_CLONE_CWD_REQ, value: 0x421, kind: req }
       - { symbol: FSMGR_IPC_QUERY_MOUNTS_REQ, value: 0x422, kind: req }
       - { symbol: FSMGR_IPC_BACKEND_INFO_RESP, value: 0x4a0, kind: resp }
@@ -123,14 +237,51 @@ subsystems:
       - { symbol: FBTEXT_IPC_CURSOR_SET_REQ, value: 0x601, kind: req }
       - { symbol: FBTEXT_IPC_SCROLL_REQ, value: 0x602, kind: req }
       - { symbol: FBTEXT_IPC_CLEAR_REQ, value: 0x603, kind: req }
-      - { symbol: FBTEXT_IPC_CONSOLE_MODE_REQ, value: 0x604, kind: req }
-      - { symbol: FBTEXT_IPC_GEOMETRY_REQ, value: 0x605, kind: req }
-      - { symbol: FBTEXT_IPC_GFX_OVERLAY_REQ, value: 0x606, kind: req }
-      - { symbol: FBTEXT_IPC_QUERY_CAPS_REQ, value: 0x607, kind: req }
-      - { symbol: FBTEXT_IPC_QUERY_MODES_REQ, value: 0x608, kind: req }
-      - { symbol: FBTEXT_IPC_SET_RESOLUTION_REQ, value: 0x609, kind: req }
-      - { symbol: FBTEXT_IPC_BLIT_ATTACH_REQ, value: 0x60a, kind: req }
-      - { symbol: FBTEXT_IPC_BLIT_GRID_REQ, value: 0x60b, kind: req }
+      - symbol: FBTEXT_IPC_CONSOLE_MODE_REQ
+        value: 0x604
+        kind: req
+        doc: |
+          arg0: 0=ring off, 1=ring on
+      - symbol: FBTEXT_IPC_GEOMETRY_REQ
+        value: 0x605
+        kind: req
+        doc: |
+          resp: arg0=cols arg1=rows
+      - symbol: FBTEXT_IPC_GFX_OVERLAY_REQ
+        value: 0x606
+        kind: req
+        doc: |
+          arg0: 0=unlock, 1=lock
+      - symbol: FBTEXT_IPC_QUERY_CAPS_REQ
+        value: 0x607
+        kind: req
+        doc: |
+          resp: arg0=FBTEXT_CAP_* bitmask
+      - symbol: FBTEXT_IPC_QUERY_MODES_REQ
+        value: 0x608
+        kind: req
+        doc: |
+          req: arg0=index, resp: arg0=w arg1=h arg2=stride
+      - symbol: FBTEXT_IPC_SET_RESOLUTION_REQ
+        value: 0x609
+        kind: req
+        doc: |
+          req: arg0=w arg1=h
+      - symbol: FBTEXT_IPC_BLIT_ATTACH_REQ
+        value: 0x60a
+        kind: req
+        doc: |
+          Bulk grid blit: instead of one CELL_WRITE per cell (a per-cell IPC loop
+          that storms the driver's queue and wedges tty switching under SMP), the VT
+          shares a cell-grid xfer-buffer and repaints the whole visible grid with a
+          single IPC. ATTACH (once) hands the driver a borrowed grid buffer to map;
+          BLIT_GRID (per repaint) tells it to render cols*rows fbtext_blit_cell_t
+          entries from that buffer.
+      - symbol: FBTEXT_IPC_BLIT_GRID_REQ
+        value: 0x60b
+        kind: req
+        doc: |
+          arg0=cols arg1=rows (from the attached buffer)
       - { symbol: FBTEXT_IPC_RESP, value: 0x680, kind: resp }
       - { symbol: FBTEXT_IPC_ERROR, value: 0x6ff, kind: error }
 
@@ -138,18 +289,45 @@ subsystems:
     id: 8
     range: [0x700, 0x7ff]
     opcodes:
-      - { symbol: VT_IPC_WRITE_REQ, value: 0x700, kind: req }
+      - symbol: VT_IPC_WRITE_REQ
+        value: 0x700
+        kind: req
+        doc: |
+          arg0[27:24]=byte_count(1-4), arg0[7:0]..arg3[7:0]=bytes
       - { symbol: VT_IPC_READ_REQ, value: 0x701, kind: req }
       - { symbol: VT_IPC_SET_ATTR_REQ, value: 0x702, kind: req }
       - { symbol: VT_IPC_SWITCH_TTY, value: 0x703, kind: req }
       - { symbol: VT_IPC_GET_ACTIVE_TTY, value: 0x704, kind: req }
       - { symbol: VT_IPC_REGISTER_WRITER, value: 0x705, kind: req }
       - { symbol: VT_IPC_SET_MODE_REQ, value: 0x706, kind: req }
-      - { symbol: VT_IPC_SERIAL_INPUT_REQ, value: 0x707, kind: req }
+      - symbol: VT_IPC_SERIAL_INPUT_REQ
+        value: 0x707
+        kind: req
+        doc: |
+          serial driver -> vt: RX bytes for the serial-bound slot, packed like
+          VT_IPC_WRITE_REQ (arg0[27:24]=byte_count, arg0[7:0]..arg3[7:0]=bytes).
       - { symbol: VT_IPC_RESP, value: 0x780, kind: resp }
-      - { symbol: VT_IPC_INPUT_NOTIFY, value: 0x781, kind: notify }
-      - { symbol: VT_IPC_KEY_FORWARD, value: 0x782, kind: notify }
-      - { symbol: VT_IPC_VIS_NOTIFY, value: 0x783, kind: notify }
+      - symbol: VT_IPC_INPUT_NOTIFY
+        value: 0x781
+        kind: notify
+        doc: |
+          vt -> a slot's registered reader: input is available on your slot; drain
+          it with VT_IPC_READ_REQ.  Fire-and-forget (request_id 0), arg0=slot.
+      - symbol: VT_IPC_KEY_FORWARD
+        value: 0x782
+        kind: notify
+        doc: |
+          vt -> compositor (the vt-0 key sink): a decoded key event for the focused
+          window.  Fire-and-forget.  arg0=ascii/keysym (0 if none), arg1=scancode,
+          arg2=flags (bit0=down, bit1=extended, bit2=shift, bit3=ctrl, bit4=altgr).
+      - symbol: VT_IPC_VIS_NOTIFY
+        value: 0x783
+        kind: notify
+        doc: |
+          vt -> compositor (the vt-0 key sink): the visible slot changed.  The
+          compositor owns the framebuffer only while vt-0 is visible; on this notify
+          it resumes/relinquishes drawing.  Fire-and-forget.  arg0=1 if vt-0 is now
+          the visible slot, 0 otherwise.
       - { symbol: VT_IPC_ERROR, value: 0x7ff, kind: error }
 
   - name: serial
@@ -173,7 +351,12 @@ subsystems:
     opcodes:
       - { symbol: MOUSE_IPC_SUBSCRIBE_REQ, value: 0x810, kind: req }
       - { symbol: MOUSE_IPC_SUBSCRIBE_RESP, value: 0x890, kind: resp }
-      - { symbol: MOUSE_IPC_MOVE_NOTIFY, value: 0x811, kind: notify }
+      - symbol: MOUSE_IPC_MOVE_NOTIFY
+        value: 0x811
+        kind: notify
+        doc: |
+          arg0=dx (signed 8-bit in low byte), arg1=dy (signed 8-bit in low byte),
+          arg2=buttons (bit0=left bit1=right bit2=middle), arg3=flags reserved.
 
   - name: rtc
     id: 12
@@ -204,7 +387,12 @@ subsystems:
       - { symbol: DEVMGR_QUERY_MOUNT_REQ, value: 0x902, kind: req }
       - { symbol: DEVMGR_PUBLISH_BLOCK_DEVICE, value: 0x903, kind: req }
       - { symbol: DEVMGR_QUERY_BLOCK_MOUNT_REQ, value: 0x904, kind: req }
-      - { symbol: DEVMGR_ACPI_SCAN_DONE, value: 0x905, kind: resp }
+      - symbol: DEVMGR_ACPI_SCAN_DONE
+        value: 0x905
+        kind: resp
+        doc: |
+          ISA/ACPI devices: bus=0xFF in PUBLISH_DEVICE marks a non-PCI device;
+          device_id field carries the I/O base address for serial (class 0x07).
       - { symbol: DEVMGR_MOUNT_INFO, value: 0x980, kind: resp }
       - { symbol: DEVMGR_BLOCK_MOUNT_INFO, value: 0x982, kind: resp }
       - { symbol: DEVMGR_QUERY_DONE, value: 0x981, kind: resp }
@@ -218,7 +406,13 @@ subsystems:
       - { symbol: NETDRV_IPC_RX_POLL, value: 0xa02, kind: req }
       - { symbol: NETDRV_IPC_STATS_GET, value: 0xa03, kind: req }
       - { symbol: NETDRV_IPC_RX_FRAME_NOTIFY, value: 0xa04, kind: notify }
-      - { symbol: NETDRV_IPC_LINK_NOTIFY, value: 0xa05, kind: notify }
+      - symbol: NETDRV_IPC_LINK_NOTIFY
+        value: 0xa05
+        kind: notify
+        doc: |
+          Pushed to the interface subscriber when carrier changes. arg0=link_up,
+          arg1=driver status word, arg2=MTU. LINK_GET also establishes/refreshes
+          the subscriber, so old clients need no separate subscribe request.
       - { symbol: NETDRV_IPC_RESP, value: 0xa80, kind: resp }
       - { symbol: NETDRV_IPC_ERROR, value: 0xaff, kind: error }
 
@@ -226,9 +420,21 @@ subsystems:
     id: 16
     range: [0xc00, 0xcff]
     opcodes:
-      - { symbol: HRNG_IPC_GET_BYTES_REQ, value: 0xc00, kind: req }
-      - { symbol: HRNG_IPC_RESP, value: 0xc80, kind: resp }
-      - { symbol: HRNG_IPC_ERROR, value: 0xcff, kind: error }
+      - symbol: HRNG_IPC_GET_BYTES_REQ
+        value: 0xc00
+        kind: req
+        doc: |
+          arg0=buffer_id, arg1=len (bytes requested)
+      - symbol: HRNG_IPC_RESP
+        value: 0xc80
+        kind: resp
+        doc: |
+          arg0=bytes written into the buffer
+      - symbol: HRNG_IPC_ERROR
+        value: 0xcff
+        kind: error
+        doc: |
+          arg0=HRNG_STATUS_*
 
   - name: net
     id: 17
@@ -250,13 +456,54 @@ subsystems:
       - { symbol: NET_IPC_DATA_NOTIFY, value: 0xb0d, kind: notify }
       - { symbol: NET_IPC_TX_NOTIFY, value: 0xb0e, kind: notify }
       - { symbol: NET_IPC_RX_NOTIFY, value: 0xb0f, kind: notify }
-      - { symbol: NET_IPC_IF_SET_STATE, value: 0xb10, kind: req }
-      - { symbol: NET_IPC_DHCP_SET, value: 0xb11, kind: req }
-      - { symbol: NET_IPC_LISTEN, value: 0xb12, kind: req }
-      - { symbol: NET_IPC_ACCEPT, value: 0xb13, kind: req }
-      - { symbol: NET_IPC_RESOLVE, value: 0xb14, kind: req }
-      - { symbol: NET_IPC_DNS_SET, value: 0xb15, kind: req }
-      - { symbol: NET_IPC_DNS_LIST, value: 0xb16, kind: req }
+      - symbol: NET_IPC_IF_SET_STATE
+        value: 0xb10
+        kind: req
+        doc: |
+          Administrative interface up/down: arg0 = if_index, arg1 = 1 up / 0 down.
+      - symbol: NET_IPC_DHCP_SET
+        value: 0xb11
+        kind: req
+        doc: |
+          DHCP client on/off: arg0 = if_index, arg1 = 1 start / 0 stop. Starting
+          clears any static address so the client can bind a fresh lease; stopping
+          leaves the current address in place.
+      - symbol: NET_IPC_LISTEN
+        value: 0xb12
+        kind: req
+        doc: |
+          Passive-open a bound stream socket: arg0 = socket_id. Reply is immediate.
+      - symbol: NET_IPC_ACCEPT
+        value: 0xb13
+        kind: req
+        doc: |
+          Post rings for the next inbound connection on a listening socket:
+          arg0 = listening socket_id, arg1 = descriptor buffer_id,
+          arg2 = descriptor borrow_id, arg3 = descriptor bytes. The descriptor
+          (net_socket_open_descriptor_v1_t) carries the accepted socket's TX/RX ring
+          grants. The reply is deferred until a connection is paired, and its
+          arg0 (NET_IPC_RESP) is the accepted socket_id. Each posted ACCEPT is one
+          accept slot; post several to accept several connections.
+      - symbol: NET_IPC_RESOLVE
+        value: 0xb14
+        kind: req
+        doc: |
+          Resolve a hostname to an IPv4 address. The name is carried in a borrowed
+          xfer buffer: arg0 = buffer_id, arg1 = borrow_id, arg2 = name length. The
+          reply is deferred until the lwIP DNS callback fires; RESP arg0 is the
+          resolved IPv4 (network-order word), or NET_IPC_ERROR on failure.
+      - symbol: NET_IPC_DNS_SET
+        value: 0xb15
+        kind: req
+        doc: |
+          Replace the resolver list: arg0 = count (0..2), arg1/arg2 = server IPv4
+          (network-order words). count=0 clears all servers. Reply is immediate.
+      - symbol: NET_IPC_DNS_LIST
+        value: 0xb16
+        kind: req
+        doc: |
+          List configured resolvers. RESP arg0 = count, arg1/arg2 = server IPv4
+          (network-order words). Reply is immediate.
       - { symbol: NET_IPC_RESP, value: 0xb80, kind: resp }
       - { symbol: NET_IPC_ERROR, value: 0xbff, kind: error }
 

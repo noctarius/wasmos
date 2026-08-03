@@ -20,6 +20,7 @@
 #define WASMOS_DRIVER_ABI_H
 
 #include <stdint.h>
+#include "../../../abi/generated/c/wasmos_opcodes.h" /* generated opcode enums (abi/opcodes.yaml) */
 
 #ifndef WASMOS_CONSOLE_RING_SHARED_H
 #define WASMOS_CONSOLE_RING_SHARED_H
@@ -33,91 +34,6 @@ typedef struct {
     uint8_t data[CONSOLE_RING_DATA_SIZE];
 } console_ring_t;
 #endif
-
-enum {
-    WASM_CHARDEV_IPC_READ_REQ = 0x100,
-    WASM_CHARDEV_IPC_WRITE_REQ = 0x101,
-    WASM_CHARDEV_IPC_READ_RESP = 0x180,
-    WASM_CHARDEV_IPC_WRITE_RESP = 0x181,
-    WASM_CHARDEV_IPC_ERROR_RESP = 0x1FF
-};
-
-enum {
-    PROC_IPC_SPAWN = 0x200,
-    PROC_IPC_WAIT = 0x201,
-    PROC_IPC_KILL = 0x202,
-    PROC_IPC_STATUS = 0x203,
-    PROC_IPC_SPAWN_NAME = 0x204,
-    PROC_IPC_SPAWN_CAPS = 0x205,
-    PROC_IPC_MODULE_META = 0x206,
-    PROC_IPC_MODULE_META_PATH = 0x207,
-    /* Spawn with extended capability descriptor payload:
-     * arg0=module_index arg1=user_ptr(wasmos_spawn_caps_v2_t + windows[])
-     * arg2=payload_size_bytes arg3=reserved(0). */
-    PROC_IPC_SPAWN_CAPS_V2 = 0x208,
-    /* Spawn from explicit app path:
-     * caller must place path bytes at xfer buffer offset 0.
-     * optional raw command argument text is placed at offset (path_len + 1).
-     * arg0=reserved(0) arg1=path_len arg2=args_len arg3=reserved.
-     * On success (app kind): PROC_IPC_RESP, arg0=child_pid, arg1=app_flags.
-     * For service/driver kinds the PM delays the PROC_IPC_RESP until the child
-     * calls PROC_IPC_NOTIFY_READY (behaves like SPAWN_PATH_SYNC internally). */
-    PROC_IPC_SPAWN_PATH = 0x209,
-    /* Spawn from explicit app path with I/O-port + IRQ capabilities:
-     * caller must place path bytes at xfer buffer offset 0.
-     * arg0=((irq_mask<<16)|(cap_flags&0xFFFF)) arg1=path_len
-     * arg2=((io_port_max<<16)|io_port_min)     arg3=reserved. */
-    PROC_IPC_SPAWN_PATH_CAPS = 0x20A,
-    /* Spawn by module index and block until the child calls NOTIFY_READY (or
-     * first blocks on IPC as an implicit signal), or until the timeout expires.
-     * arg0=module_index  arg1=timeout_ms (0 = wait forever)
-     * arg2=reserved(0)   arg3=reserved(0).
-     * On success: PROC_IPC_RESP, arg0=child_pid.
-     * On timeout or child death before ready: PROC_IPC_ERROR, arg1=error_code. */
-    PROC_IPC_SPAWN_SYNC = 0x20B,
-    /* Service sends this to proc_endpoint when it has finished initialising and
-     * is ready to accept requests.  Fire-and-forget — no reply is sent back.
-     * arg0..arg3 = reserved(0). */
-    PROC_IPC_NOTIFY_READY = 0x20C,
-    /* Sync variants of SPAWN_CAPS / SPAWN_PATH / SPAWN_PATH_CAPS.
-     * Same cap/path encoding as their async counterparts, with one arg
-     * repurposed for timeout_ms:
-     *   SPAWN_CAPS_SYNC:      arg0=module_index arg1=cap_flags arg2=io_packed
-     *                         arg3=(irq_mask&0xFFFF)|((timeout_ms&0xFFFF)<<16)
-     *   SPAWN_PATH_SYNC:      path at FS buf[0], arg0=0 arg1=path_len
-     *                         arg2=0 arg3=timeout_ms
-     *   SPAWN_PATH_CAPS_SYNC: path at FS buf[0],
-     *                         arg0=(irq<<16)|cap_flags arg1=path_len
-     *                         arg2=io_packed           arg3=timeout_ms
-     * On success: PROC_IPC_RESP, arg0=child_pid.
-     * On timeout or child death before ready: PROC_IPC_ERROR. */
-    PROC_IPC_SPAWN_CAPS_SYNC = 0x20D,
-    PROC_IPC_SPAWN_PATH_SYNC = 0x20E,
-    PROC_IPC_SPAWN_PATH_CAPS_SYNC = 0x20F,
-    /* Descriptor-based broker subsystem registration.
-     * arg0=offset(0) arg1=byte_len(sizeof(wasmos_subsystem_broker_register_desc_t))
-     * arg2=reserved(0) arg3=reserved(0). */
-    PROC_IPC_SUBSYSTEM_REGISTER_BROKER = 0x210,
-    /* Descriptor-based exec handler registration.
-     * arg0=offset(0) arg1=byte_len(sizeof(desc)+node_bytes)
-     * arg2=reserved(0) arg3=reserved(0). */
-    PROC_IPC_EXEC_HANDLER_REGISTER = 0x211,
-    PROC_IPC_RESP = 0x280,
-    PROC_IPC_ERROR = 0x2FF
-};
-
-enum {
-    /* Broker spawn-plan handoff:
-     * PM lends its xfer buffer to the broker read-only, writes a
-     * wasmos_broker_spawn_plan_request_t into that borrowed view, then sends
-     * this request with arg0=request_offset and arg1=request_size.
-     *
-     * The broker replies on msg->source with the same request_id. On success
-     * arg0=plan_offset and arg1=plan_size in the broker's own xfer buffer. */
-    PROC_BROKER_IPC_SPAWN_PLAN_REQ = 0x223,
-    PROC_BROKER_IPC_SPAWN_PLAN_RESP = 0x2A3,
-    PROC_BROKER_IPC_SPAWN_PLAN_ERROR = 0x2E3
-};
 
 enum { PROC_MODULE_SOURCE_INITFS = 0, PROC_MODULE_SOURCE_FS = 1 };
 
@@ -317,43 +233,6 @@ typedef struct __attribute__((packed)) {
     char handler_name[WASMOS_EXEC_HANDLER_NAME_LEN + 1];
 } wasmos_exec_handler_register_desc_t;
 
-enum {
-    /* Legacy arg-packed register (reply lands on the service endpoint).
-     * TODO: migrate the remaining senders (AssemblyScript rtc/mouse/keyboard,
-     * native zig libsys) to SVC_IPC_REGISTER_DESC_REQ and remove this path. */
-    SVC_IPC_REGISTER_REQ = 0x220,
-    SVC_IPC_LOOKUP_REQ = 0x221,
-    /* Descriptor-based register: the request payload is a svc_register_desc_t
-     * placed by the caller at FS-buffer offset 0; arg0=offset(0), arg1=byte len.
-     * msg->source is a DEDICATED reply endpoint (not the service endpoint), so
-     * the SVC_IPC_REGISTER_RESP cannot collide with serve traffic on the service
-     * endpoint.  This replaces the arg-packed SVC_IPC_REGISTER_REQ, whose 16-byte
-     * name consumed all four args and forced the reply onto the serve endpoint
-     * (a latent races that deadlocked boot once PM stopped busy-polling). */
-    SVC_IPC_REGISTER_DESC_REQ = 0x222,
-    /* Class-based discovery (see docs/architecture/09-process-and-ipc.md).
-     * LOOKUP_CLASS: enumerate every provider registered under a virtual class.
-     *   req  arg0=buffer_id (class name NUL-terminated at offset 0 on input;
-     *        PM overwrites it with a svc_class_entry_t[] on output),
-     *        arg1=max_entries the buffer can hold;
-     *   resp SVC_IPC_LOOKUP_CLASS_RESP arg0=provider count (may exceed
-     *        max_entries; only min(count,max_entries) entries are written).
-     * SUBSCRIBE_CLASS: receive existence events for a class.
-     *   req  arg0=notify_endpoint (where SVC_IPC_CLASS_EVENT is delivered),
-     *        arg1=buffer_id (class name NUL-terminated at offset 0);
-     *   resp SVC_IPC_SUBSCRIBE_CLASS_RESP arg0=0.
-     * CLASS_EVENT is pushed to a subscriber's notify_endpoint on add/remove/die:
-     *        arg0=SVC_CLASS_EVENT_* arg1=instance arg2=endpoint arg3=pid. */
-    SVC_IPC_LOOKUP_CLASS_REQ = 0x223,
-    SVC_IPC_SUBSCRIBE_CLASS_REQ = 0x224,
-    SVC_IPC_REGISTER_RESP = 0x2A0,
-    SVC_IPC_LOOKUP_RESP = 0x2A1,
-    SVC_IPC_LOOKUP_CLASS_RESP = 0x2A2,
-    SVC_IPC_SUBSCRIBE_CLASS_RESP = 0x2A3,
-    SVC_IPC_CLASS_EVENT = 0x2A4,
-    SVC_IPC_ERROR = 0x2AF
-};
-
 #define WASMOS_SVC_REGISTER_DESC_VERSION 2u
 #define WASMOS_SVC_NAME_MAX 36u
 #define WASMOS_SVC_CLASS_MAX 16u /* incl. NUL; keep == SVC_CLASS_NAME_MAX */
@@ -391,50 +270,6 @@ typedef struct {
 
 enum { PROC_STATUS_UNKNOWN = 0, PROC_STATUS_RUNNING = 1, PROC_STATUS_ZOMBIE = 2 };
 
-enum {
-    BLOCK_IPC_READ_REQ = 0x300,
-    BLOCK_IPC_WRITE_REQ = 0x301,
-    BLOCK_IPC_IDENTIFY_REQ = 0x302,
-    BLOCK_IPC_READ_RESP = 0x380,
-    BLOCK_IPC_WRITE_RESP = 0x381,
-    BLOCK_IPC_IDENTIFY_RESP = 0x382,
-    BLOCK_IPC_ERROR = 0x3FF
-};
-
-enum {
-    FS_IPC_OPEN_REQ = 0x400,
-    FS_IPC_READ_REQ = 0x401,
-    FS_IPC_CLOSE_REQ = 0x402,
-    FS_IPC_STAT_REQ = 0x403,
-    FS_IPC_READY_REQ = 0x404,
-    FS_IPC_SEEK_REQ = 0x405,
-    FS_IPC_WRITE_REQ = 0x406,
-    FS_IPC_UNLINK_REQ = 0x407,
-    FS_IPC_MKDIR_REQ = 0x408,
-    FS_IPC_RMDIR_REQ = 0x409,
-    FS_IPC_READDIR_REQ = 0x410,
-    FS_IPC_CHDIR_REQ = 0x412,
-    FS_IPC_READ_APP_REQ = 0x413,
-    FS_IPC_READ_PATH_REQ = 0x414,
-    FS_IPC_RESP = 0x480,
-    FS_IPC_STREAM = 0x481,
-    FS_IPC_ERROR = 0x4FF
-};
-
-enum {
-    /* fs-manager -> backend pull: report kind/mount/unit. Reply RESP packs
-     * arg0=kind, arg2=(mount_buffer_id<<12)|mount_len (backend owns the buffer
-     * and borrows it READ to fs-manager), arg3=unit. Backends are discovered
-     * via svc class FSMGR_BACKEND_CLASS, not a push, so fs-manager rebuilds its
-     * backend set from the registry on (re)start. */
-    FSMGR_IPC_BACKEND_INFO_REQ = 0x420,
-    FSMGR_IPC_CLONE_CWD_REQ = 0x421,
-    FSMGR_IPC_QUERY_MOUNTS_REQ = 0x422,
-    FSMGR_IPC_BACKEND_INFO_RESP = 0x4A0,
-    FSMGR_IPC_CLONE_CWD_RESP = 0x4A1,
-    FSMGR_IPC_QUERY_MOUNTS_RESP = 0x4A2
-};
-
 /* Virtual class FS backends register under. Class instances must be unique per
  * provider, so backends encode (kind, unit) into the registry instance while
  * still reporting the plain kind over FSMGR_IPC_BACKEND_INFO_RESP arg0. */
@@ -443,29 +278,6 @@ enum {
 enum { FSMGR_BACKEND_BOOT = 1, FSMGR_BACKEND_INIT = 2 };
 
 #define FSMGR_BACKEND_INSTANCE(kind, unit) ((((uint32_t)(kind)) << 8) | ((uint32_t)(unit) & 0xFFu))
-
-enum {
-    FBTEXT_IPC_CELL_WRITE_REQ = 0x600,
-    FBTEXT_IPC_CURSOR_SET_REQ = 0x601,
-    FBTEXT_IPC_SCROLL_REQ = 0x602,
-    FBTEXT_IPC_CLEAR_REQ = 0x603,
-    FBTEXT_IPC_CONSOLE_MODE_REQ = 0x604,   /* arg0: 0=ring off, 1=ring on */
-    FBTEXT_IPC_GEOMETRY_REQ = 0x605,       /* resp: arg0=cols arg1=rows */
-    FBTEXT_IPC_GFX_OVERLAY_REQ = 0x606,    /* arg0: 0=unlock, 1=lock */
-    FBTEXT_IPC_QUERY_CAPS_REQ = 0x607,     /* resp: arg0=FBTEXT_CAP_* bitmask */
-    FBTEXT_IPC_QUERY_MODES_REQ = 0x608,    /* req: arg0=index, resp: arg0=w arg1=h arg2=stride */
-    FBTEXT_IPC_SET_RESOLUTION_REQ = 0x609, /* req: arg0=w arg1=h */
-    /* Bulk grid blit: instead of one CELL_WRITE per cell (a per-cell IPC loop
-     * that storms the driver's queue and wedges tty switching under SMP), the VT
-     * shares a cell-grid xfer-buffer and repaints the whole visible grid with a
-     * single IPC. ATTACH (once) hands the driver a borrowed grid buffer to map;
-     * BLIT_GRID (per repaint) tells it to render cols*rows fbtext_blit_cell_t
-     * entries from that buffer. */
-    FBTEXT_IPC_BLIT_ATTACH_REQ = 0x60A, /* arg0=buffer_id arg1=borrow_id arg2=cols arg3=rows */
-    FBTEXT_IPC_BLIT_GRID_REQ = 0x60B,   /* arg0=cols arg1=rows (from the attached buffer) */
-    FBTEXT_IPC_RESP = 0x680,
-    FBTEXT_IPC_ERROR = 0x6FF
-};
 
 /* One cell in a shared FBTEXT_IPC_BLIT grid buffer.  Layout is identical to the
  * framebuffer driver's fbtext_cell_t and the VT's vt_cell_t (8 bytes), so both
@@ -480,79 +292,11 @@ typedef struct {
 
 enum { FBTEXT_CAP_SET_RESOLUTION = 1u << 0, FBTEXT_CAP_QUERY_MODES = 1u << 1 };
 
-enum {
-    VT_IPC_WRITE_REQ = 0x700, /* arg0[27:24]=byte_count(1-4), arg0[7:0]..arg3[7:0]=bytes */
-    VT_IPC_READ_REQ = 0x701,
-    VT_IPC_SET_ATTR_REQ = 0x702,
-    VT_IPC_SWITCH_TTY = 0x703,
-    VT_IPC_GET_ACTIVE_TTY = 0x704,
-    VT_IPC_REGISTER_WRITER = 0x705,
-    VT_IPC_SET_MODE_REQ = 0x706,
-    /* serial driver -> vt: RX bytes for the serial-bound slot, packed like
-     * VT_IPC_WRITE_REQ (arg0[27:24]=byte_count, arg0[7:0]..arg3[7:0]=bytes). */
-    VT_IPC_SERIAL_INPUT_REQ = 0x707,
-    VT_IPC_RESP = 0x780,
-    /* vt -> a slot's registered reader: input is available on your slot; drain
-     * it with VT_IPC_READ_REQ.  Fire-and-forget (request_id 0), arg0=slot. */
-    VT_IPC_INPUT_NOTIFY = 0x781,
-    /* vt -> compositor (the vt-0 key sink): a decoded key event for the focused
-     * window.  Fire-and-forget.  arg0=ascii/keysym (0 if none), arg1=scancode,
-     * arg2=flags (bit0=down, bit1=extended, bit2=shift, bit3=ctrl, bit4=altgr). */
-    VT_IPC_KEY_FORWARD = 0x782,
-    /* vt -> compositor (the vt-0 key sink): the visible slot changed.  The
-     * compositor owns the framebuffer only while vt-0 is visible; on this notify
-     * it resumes/relinquishes drawing.  Fire-and-forget.  arg0=1 if vt-0 is now
-     * the visible slot, 0 otherwise. */
-    VT_IPC_VIS_NOTIFY = 0x783,
-    VT_IPC_ERROR = 0x7FF
-};
-
 /* Serial driver subscription: a client (the vt service) registers to receive
  * COM1 RX bytes as VT_IPC_SERIAL_INPUT_REQ pushes.  Mirrors the keyboard
  * driver's subscribe/notify pattern. */
-enum { SERIAL_IPC_SUBSCRIBE_REQ = 0x502, SERIAL_IPC_SUBSCRIBE_RESP = 0x582 };
 
 enum { VT_INPUT_MODE_RAW = 0, VT_INPUT_MODE_CANONICAL = 1 << 0, VT_INPUT_MODE_ECHO = 1 << 1 };
-
-enum { KBD_IPC_SUBSCRIBE_REQ = 0x800, KBD_IPC_SUBSCRIBE_RESP = 0x880, KBD_IPC_KEY_NOTIFY = 0x801 };
-
-enum {
-    MOUSE_IPC_SUBSCRIBE_REQ = 0x810,
-    MOUSE_IPC_SUBSCRIBE_RESP = 0x890,
-    /* arg0=dx (signed 8-bit in low byte), arg1=dy (signed 8-bit in low byte),
-     * arg2=buttons (bit0=left bit1=right bit2=middle), arg3=flags reserved. */
-    MOUSE_IPC_MOVE_NOTIFY = 0x811
-};
-
-enum {
-    RTC_IPC_READ_REQ = 0x820,
-    RTC_IPC_SET_REQ = 0x821,
-    RTC_IPC_READ_RESP = 0x8A0,
-    RTC_IPC_SET_RESP = 0x8A1,
-    RTC_IPC_ERROR = 0x8FF
-};
-
-enum {
-    VIRTIO_SERIAL_IPC_QUERY_REQ = 0x830,
-    VIRTIO_SERIAL_IPC_READ_REG32_REQ = 0x831,
-    VIRTIO_SERIAL_IPC_WRITE_REG32_REQ = 0x832,
-    VIRTIO_SERIAL_IPC_RESP = 0x8B0,
-    VIRTIO_SERIAL_IPC_ERROR = 0x8BF
-};
-
-enum {
-    DEVMGR_PUBLISH_DEVICE = 0x900,
-    DEVMGR_PCI_SCAN_DONE = 0x901,
-    DEVMGR_QUERY_MOUNT_REQ = 0x902,
-    DEVMGR_PUBLISH_BLOCK_DEVICE = 0x903,
-    DEVMGR_QUERY_BLOCK_MOUNT_REQ = 0x904,
-    /* ISA/ACPI devices: bus=0xFF in PUBLISH_DEVICE marks a non-PCI device;
-     * device_id field carries the I/O base address for serial (class 0x07). */
-    DEVMGR_ACPI_SCAN_DONE = 0x905,
-    DEVMGR_MOUNT_INFO = 0x980,
-    DEVMGR_BLOCK_MOUNT_INFO = 0x982,
-    DEVMGR_QUERY_DONE = 0x981
-};
 
 enum {
     DEVMGR_CAP_IO_PORT = 1 << 0,
@@ -561,30 +305,11 @@ enum {
     DEVMGR_CAP_DMA = 1 << 3
 };
 
-enum {
-    NETDRV_IPC_LINK_GET = 0xA00,
-    NETDRV_IPC_TX_FRAME = 0xA01,
-    NETDRV_IPC_RX_POLL = 0xA02,
-    NETDRV_IPC_STATS_GET = 0xA03,
-    NETDRV_IPC_RX_FRAME_NOTIFY = 0xA04,
-    /* Pushed to the interface subscriber when carrier changes. arg0=link_up,
-     * arg1=driver status word, arg2=MTU. LINK_GET also establishes/refreshes
-     * the subscriber, so old clients need no separate subscribe request. */
-    NETDRV_IPC_LINK_NOTIFY = 0xA05,
-    NETDRV_IPC_RESP = 0xA80,
-    NETDRV_IPC_ERROR = 0xAFF
-};
-
 /* Generic hardware-RNG service protocol (virtual class "hrng"). Backend-neutral:
  * any entropy source (virtio-rng, RDRAND, ...) registers under class "hrng" and
  * speaks this. A client stages an output buffer via the xfer/FS-buffer API and
  * asks the provider to fill up to `len` bytes of entropy into it; libc layers
  * random-int / random-byte-array helpers on top of GET_BYTES. */
-enum {
-    HRNG_IPC_GET_BYTES_REQ = 0xC00, /* arg0=buffer_id, arg1=len (bytes requested) */
-    HRNG_IPC_RESP = 0xC80,          /* arg0=bytes written into the buffer */
-    HRNG_IPC_ERROR = 0xCFF          /* arg0=HRNG_STATUS_* */
-};
 
 enum {
     HRNG_STATUS_OK = 0,
@@ -597,54 +322,6 @@ enum {
 /* Largest single GET_BYTES request the provider fills in one round-trip (its DMA
  * pool is one page). Clients wanting more loop. */
 #define HRNG_MAX_BYTES_PER_REQ 4096u
-
-enum {
-    NET_IPC_SOCKET_OPEN = 0xB00,
-    NET_IPC_BIND = 0xB01,
-    NET_IPC_CONNECT = 0xB02,
-    NET_IPC_SEND = 0xB03,
-    NET_IPC_RECV = 0xB04,
-    NET_IPC_CLOSE = 0xB05,
-    NET_IPC_POLL = 0xB06,
-    NET_IPC_IFADDR_ADD = 0xB07,
-    NET_IPC_IFADDR_DEL = 0xB08,
-    NET_IPC_IFADDR_LIST = 0xB09,
-    NET_IPC_STACK_CREATE = 0xB0A,
-    NET_IPC_STACK_DESTROY = 0xB0B,
-    NET_IPC_STACK_SELECT = 0xB0C,
-    NET_IPC_DATA_NOTIFY = 0xB0D,
-    NET_IPC_TX_NOTIFY = 0xB0E,
-    NET_IPC_RX_NOTIFY = 0xB0F,
-    /* Administrative interface up/down: arg0 = if_index, arg1 = 1 up / 0 down. */
-    NET_IPC_IF_SET_STATE = 0xB10,
-    /* DHCP client on/off: arg0 = if_index, arg1 = 1 start / 0 stop. Starting
-     * clears any static address so the client can bind a fresh lease; stopping
-     * leaves the current address in place. */
-    NET_IPC_DHCP_SET = 0xB11,
-    /* Passive-open a bound stream socket: arg0 = socket_id. Reply is immediate. */
-    NET_IPC_LISTEN = 0xB12,
-    /* Post rings for the next inbound connection on a listening socket:
-     * arg0 = listening socket_id, arg1 = descriptor buffer_id,
-     * arg2 = descriptor borrow_id, arg3 = descriptor bytes. The descriptor
-     * (net_socket_open_descriptor_v1_t) carries the accepted socket's TX/RX ring
-     * grants. The reply is deferred until a connection is paired, and its
-     * arg0 (NET_IPC_RESP) is the accepted socket_id. Each posted ACCEPT is one
-     * accept slot; post several to accept several connections. */
-    NET_IPC_ACCEPT = 0xB13,
-    /* Resolve a hostname to an IPv4 address. The name is carried in a borrowed
-     * xfer buffer: arg0 = buffer_id, arg1 = borrow_id, arg2 = name length. The
-     * reply is deferred until the lwIP DNS callback fires; RESP arg0 is the
-     * resolved IPv4 (network-order word), or NET_IPC_ERROR on failure. */
-    NET_IPC_RESOLVE = 0xB14,
-    /* Replace the resolver list: arg0 = count (0..2), arg1/arg2 = server IPv4
-     * (network-order words). count=0 clears all servers. Reply is immediate. */
-    NET_IPC_DNS_SET = 0xB15,
-    /* List configured resolvers. RESP arg0 = count, arg1/arg2 = server IPv4
-     * (network-order words). Reply is immediate. */
-    NET_IPC_DNS_LIST = 0xB16,
-    NET_IPC_RESP = 0xB80,
-    NET_IPC_ERROR = 0xBFF
-};
 
 enum {
     NET_STATUS_OK = 0,
@@ -796,14 +473,6 @@ typedef struct __attribute__((packed)) {
 #define WASMOS_SPAWN_CAPS_V2_SIZE(window_count)                                                    \
     (sizeof(wasmos_spawn_caps_v2_t) +                                                              \
      ((uint32_t)(window_count) * (uint32_t)sizeof(wasmos_dma_window_t)))
-
-enum {
-    PROC_IPC_DMA_MAP_BORROW_REQ = 0x230,
-    PROC_IPC_DMA_SYNC_BORROW_REQ = 0x231,
-    PROC_IPC_DMA_UNMAP_BORROW_REQ = 0x232,
-    PROC_IPC_DMA_BORROW_RESP = 0x2B0,
-    PROC_IPC_DMA_BORROW_ERROR = 0x2BF
-};
 
 enum {
     WASMOS_IPC_FIELD_TYPE = 0,

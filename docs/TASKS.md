@@ -271,10 +271,26 @@ returns; `FS_ERR_*`/`PROC_*` ride IPC opcodes), so the migration depends on them
     Kernel — not a table swap. A client-side ABI-version `static_assert` was
     dropped as meaningless: the guest has no second source of truth to assert
     the count/version against.)
-- [ ] Phase 3: add `abi/opcodes.yaml` + generator producing the
-  `wasmos_driver_abi.h` opcode enum, a runtime `opcode → name` table (feeds
-  diagnostics), and the doc opcode tables; optionally typed future-returning
-  request/reply stubs carrying the transfer-buffer ownership contract.
+- [x] Phase 3a (opcodes, ABI-header core): `abi/opcodes.yaml` (164 opcodes /
+  19 subsystems, extracted faithfully from the header) + `scripts/gen_abi_opcodes.py`
+  generating per-subsystem C enums (`abi/generated/c/wasmos_opcodes.h`), a
+  best-effort `wasmos_opcode_name()` diagnostic lookup, and a doc reference table
+  (`abi/generated/docs/opcodes.md`). Per-opcode doc comments migrated into the IDL
+  (39 documented). `wasmos_driver_abi.h` now `#include`s the generated enums (the
+  19 opcode enum blocks retired; error enums/flags/descriptors stay hand-written);
+  `--verify-source` proved symbol/value parity before the swap and now self-skips,
+  with `--check` + `--verify-source` wired into `quality`. Opcodes are
+  endpoint-scoped, so value collisions across subsystems are expected (0x223,
+  0x2A3 documented in the name table).
+- [ ] Phase 3b (opcodes, consolidation): fold the scattered opcode definitions
+  into the IDL and retire the drift — `rtc_ipc.h` (triplicated across
+  kernel/libc/libsys), `font_ipc.h`, `gfx_ipc.h`, `serial.c` — plus generate the
+  per-language opcode constants (the Go/Zig/AS/Rust FS subsets + the `.ts` driver
+  opcode literals). Resolve the two bugs this surfaced: `font_ipc.h` `FONT_IPC_* =
+  0xA00` vs the font service's `REQ_BASE 0xA000` (16× mismatch, and 0xA00 collides
+  with netdrv), and the RTC triplication.
+- [ ] Phase 3c (optional): typed future-returning request/reply stubs carrying the
+  transfer-buffer ownership contract.
 - [ ] Phase 4 (after 2 and 3): migrate the tree onto the packed error model —
   the legacy `PROC_SPAWN_ERR_*`/`PROC_PM_ERR_*`/`FS_ERR_*` (IPC opcodes) and
   `SHMEM_ERR_*` (host calls) definitions and call sites move onto the generated

@@ -357,9 +357,18 @@ returns; `FS_ERR_*`/`PROC_*` ride IPC opcodes), so the migration depends on them
     (process_manager_spawn/services, selftest) + services (cli, init, broker) now
     use negated packed `WASMOS_ERR_PROC_{SPAWN,PM}_*` directly (returned as the
     negative rc in `PROC_IPC_ERROR.arg1`). Booted both runtimes.
-  - [ ] Clear the bare-`return -1;` backlog per subsystem; then flip the advisory
-    `-1` gate to a hard failure (allow-listing genuine POSIX-ABI boundaries and
-    internal helpers where a named code adds nothing).
+  - [ ] Scoped boundary pass (DEFERRED — needs new error domains; picked the
+    "boundary-crossing returns only" scope, not the full 438-site sweep). The
+    bare `-1`s that actually leave a service (IPC reply code arg / host-call
+    return a peer decodes) mostly can't be migrated yet because their subsystems
+    have **no error domain** in `abi/errors.yaml`: VT, font, chardev,
+    device_manager, block, net, virtio_serial, hrng. And `fs_manager`'s own
+    fallback `-1`s (e.g. `send_fs_error`, `fs_manager.c:483`; the open/read/close
+    reply defaults) need either per-path FS reasons or a new **generic** fs code
+    (existing FS codes are all specific). NEXT: add those domains (+ a generic
+    reason where a call site truly has no specific one), then migrate the
+    boundary `-1`s to negated-packed codes. Internal-helper `-1`s stay; keep the
+    `-1` lint advisory (not hard-fail) until the boundary set is clean.
 - [ ] Extend the `quality` re-gen guard to the host-call and opcode generators
   as they land (the errors guard already exists), so generated output can never
   silently drift from the IDL.

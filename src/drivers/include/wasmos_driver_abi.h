@@ -97,23 +97,16 @@ enum {
     PROC_PM_ERR_NO_PM_FSBUF = -66      /* PM could not acquire its own xfer buffer */
 };
 
-/* Distinct shmem map/map_auto failure reasons, returned (as a negative int) by
- * wasmos_shmem_map / wasmos_shmem_map_auto instead of a blanket -1, so a failed
- * map reports WHY.  Mirrored in both runtimes (warp/link.cpp, wasm3/link.c).
- * Distinct -30 range so they don't collide with PROC_SPAWN_ERR_* (-10..-20). */
-#define SHMEM_ERR_BAD_ARGS (-30)  /* id/size invalid or size not page-aligned */
-#define SHMEM_ERR_NO_CAP (-31)    /* caller lacks the DMA capability / no context */
-#define SHMEM_ERR_BAD_ID (-32)    /* shmem id unknown / no backing pages */
-#define SHMEM_ERR_BAD_SIZE (-33)  /* requested size smaller than the shared region */
-#define SHMEM_ERR_UNALIGNED (-34) /* fixed offset cannot yield a page-aligned host addr */
-#define SHMEM_ERR_NO_WINDOW (-35) /* no free page-aligned window fits in linear memory */
-#define SHMEM_ERR_MAP (-36)       /* paging/linear-memory mapping step failed */
+/* shmem map/map_auto failure reasons migrated to the packed error model: the
+ * host calls now return a negated packed WASMOS_ERR_SHMEM_* code (domain 3, see
+ * abi/errors.yaml / abi/generated/c/wasmos_status.h) instead of the legacy
+ * SHMEM_ERR_* -30 range. Recover with `(uint32_t)(-ret)` then wasmos_error_*. */
 
 /* Distinct filesystem failure reasons returned (as a negative int in the
  * FS_IPC_ERROR / FS_IPC_RESP arg0) by the FAT backend instead of a blanket -1,
  * so a failed FS op reports WHY.  fs-manager relays the backend's arg0 to the
  * client unchanged.  Distinct -70 range so they don't collide with
- * PROC_SPAWN_ERR_* (-10..-20), SHMEM_ERR_* (-30..-36) or PROC_PM_ERR_* (-40..-66). */
+ * PROC_SPAWN_ERR_* (-10..-20) or PROC_PM_ERR_* (-40..-66). */
 enum {
     FS_ERR_BAD_ARGS = -70,      /* invalid flags/args (len 0, bad access mode, reserved arg set) */
     FS_ERR_PATH_TOO_LONG = -71, /* path length exceeds the path buffer or the xfer buffer */

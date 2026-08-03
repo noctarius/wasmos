@@ -13,6 +13,7 @@
 #include "link.h"
 #include "wasmos_app.h"
 #include "wasmos_driver_abi.h"
+#include "wasmos_status.h"
 #include "framebuffer.h"
 #include "irq.h"
 #include "policy.h"
@@ -2412,29 +2413,29 @@ m3ApiRawFunction(wasmos_shmem_map_auto) {
     m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, id) m3ApiGetArg(int32_t, size)
 
         if (id <= 0 || size <= 0 || (size & 0xFFF) != 0) {
-        m3ApiReturn(SHMEM_ERR_BAD_ARGS);
+        m3ApiReturn(-(int32_t)WASMOS_ERR_SHMEM_BAD_ARGS);
     }
 
     process_t* proc = process_get(process_current_pid());
     if (!proc || proc->context_id == 0 || require_dma_capability(proc->context_id) != 0) {
-        m3ApiReturn(SHMEM_ERR_NO_CAP);
+        m3ApiReturn(-(int32_t)WASMOS_ERR_SHMEM_NO_CAP);
     }
     mm_context_t* ctx = mm_context_get(proc->context_id);
     if (!ctx || ctx->root_table == 0) {
-        m3ApiReturn(SHMEM_ERR_NO_CAP);
+        m3ApiReturn(-(int32_t)WASMOS_ERR_SHMEM_NO_CAP);
     }
 
     uint64_t phys_base = 0;
     uint64_t shared_pages = 0;
     int get_phys_rc = mm_shared_get_phys(proc->context_id, (uint32_t)id, &phys_base, &shared_pages);
     if (get_phys_rc != 0 || shared_pages == 0) {
-        m3ApiReturn(SHMEM_ERR_BAD_ID);
+        m3ApiReturn(-(int32_t)WASMOS_ERR_SHMEM_BAD_ID);
     }
 
     uint64_t map_size = (uint64_t)(uint32_t)size;
     uint64_t needed_size = shared_pages * 0x1000ULL;
     if (map_size < needed_size) {
-        m3ApiReturn(SHMEM_ERR_BAD_SIZE);
+        m3ApiReturn(-(int32_t)WASMOS_ERR_SHMEM_BAD_SIZE);
     }
 
     uint64_t mem_size = (uint64_t)m3_GetMemorySize(runtime);
@@ -2474,11 +2475,11 @@ m3ApiRawFunction(wasmos_shmem_map_auto) {
         if (required > mem_size) {
             uint32_t pages = (uint32_t)((required + 0xFFFFULL) >> 16);
             if (ResizeMemory(runtime, pages) != m3Err_none) {
-                m3ApiReturn(SHMEM_ERR_NO_WINDOW);
+                m3ApiReturn(-(int32_t)WASMOS_ERR_SHMEM_NO_WINDOW);
             }
             mem_size = (uint64_t)m3_GetMemorySize(runtime);
             if (required > mem_size) {
-                m3ApiReturn(SHMEM_ERR_NO_WINDOW);
+                m3ApiReturn(-(int32_t)WASMOS_ERR_SHMEM_NO_WINDOW);
             }
         }
     }
@@ -2489,19 +2490,19 @@ m3ApiRawFunction(wasmos_shmem_map_auto) {
     if (wasm_user_va_from_offset(proc->context_id, off32, map_size32, &virt) != 0 ||
         mm_user_range_permitted(proc->context_id, virt, (uint64_t)map_size32,
                                 MEM_REGION_FLAG_WRITE) != 0) {
-        m3ApiReturn(SHMEM_ERR_MAP);
+        m3ApiReturn(-(int32_t)WASMOS_ERR_SHMEM_MAP);
     }
     if ((virt & 0xFFFULL) != 0) {
-        m3ApiReturn(SHMEM_ERR_UNALIGNED);
+        m3ApiReturn(-(int32_t)WASMOS_ERR_SHMEM_UNALIGNED);
     }
 
     if (mm_context_map_physical(proc->context_id, virt, phys_base, needed_size,
                                 MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE |
                                     MEM_REGION_FLAG_USER) != 0) {
-        m3ApiReturn(SHMEM_ERR_MAP);
+        m3ApiReturn(-(int32_t)WASMOS_ERR_SHMEM_MAP);
     }
     if (mm_shared_retain(proc->context_id, (uint32_t)id) != 0) {
-        m3ApiReturn(SHMEM_ERR_MAP);
+        m3ApiReturn(-(int32_t)WASMOS_ERR_SHMEM_MAP);
     }
     wasm_shmem_map_track(proc->pid, (uint32_t)id, off32, map_size32);
 

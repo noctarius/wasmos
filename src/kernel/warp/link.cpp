@@ -49,6 +49,7 @@ extern "C" {
 #include "system_control.h"
 #include "wasm_driver.h"
 #include "wasmos_driver_abi.h"
+#include "wasmos_status.h"
 #include "arch/x86_64/smp.h"
 }
 
@@ -1977,7 +1978,7 @@ static uint32_t warp_shmem_map(uint32_t id, uint32_t wasm_off, uint32_t size, vo
  * (peer-granted shared phys) and warp_region_alloc (driver-owned pinned phys) —
  * one code path so the pinned-linmem-base invariants only live in one place.
  * Caller owns tracking/retain and the physical backing.  Returns the wasm
- * offset (>= 0) on success, or a negative SHMEM_ERR_* / -1 on failure. */
+ * offset (>= 0) on success, or a negated packed WASMOS_ERR_SHMEM_* code (domain error) on failure. */
 static int64_t warp_linmem_place_phys(WarpCallContext* ctx, uint64_t phys_base, uint64_t map_pages,
                                       uint32_t window_size) {
     /* Scan linear memory for a free, page-aligned, non-overlapping window.
@@ -2020,7 +2021,7 @@ static int64_t warp_linmem_place_phys(WarpCallContext* ctx, uint64_t phys_base, 
      * and the top-of-memory tail, where WARP keeps private runtime state
      * outside the app's explicit globals. */
     if (mem_size < (uint64_t)window_size) {
-        return (int64_t)SHMEM_ERR_NO_WINDOW;
+        return -(int64_t)WASMOS_ERR_SHMEM_NO_WINDOW;
     }
     const uint64_t low_guard = 0x200000ULL;
     const uint64_t high_guard = 0x20000ULL;
@@ -2032,7 +2033,7 @@ static int64_t warp_linmem_place_phys(WarpCallContext* ctx, uint64_t phys_base, 
         scan_limit -= high_guard;
     }
     if (scan_limit < (uint64_t)window_size || scan_min + (uint64_t)window_size > scan_limit) {
-        return (int64_t)SHMEM_ERR_NO_WINDOW;
+        return -(int64_t)WASMOS_ERR_SHMEM_NO_WINDOW;
     }
     uint64_t start_off = ((scan_min + base_mod + 0xFFFULL) & ~0xFFFULL) - base_mod;
     if (start_off < scan_min) {
@@ -2050,7 +2051,7 @@ static int64_t warp_linmem_place_phys(WarpCallContext* ctx, uint64_t phys_base, 
         }
     }
     if (!found) {
-        return (int64_t)SHMEM_ERR_NO_WINDOW;
+        return -(int64_t)WASMOS_ERR_SHMEM_NO_WINDOW;
     }
     /* Commit the target range via probe() BEFORE paging_map_4k.
      * ensureLinearSize() zero-initialises newly committed WASM pages.  If the
@@ -2085,19 +2086,19 @@ static int64_t warp_linmem_place_phys(WarpCallContext* ctx, uint64_t phys_base, 
 static uint32_t warp_shmem_map_auto(uint32_t id, uint32_t size, void* ctx_) {
     auto* ctx = warp_call_ctx(ctx_);
     if ((int32_t)id <= 0 || (int32_t)size <= 0 || (size & 0xFFF)) {
-        return (uint32_t)SHMEM_ERR_BAD_ARGS;
+        return (uint32_t)(-(int32_t)WASMOS_ERR_SHMEM_BAD_ARGS);
     }
     uint32_t context_id = 0;
     if (warp_current_context_id(&context_id) != 0 || warp_require_dma_capability(context_id) != 0) {
-        return (uint32_t)SHMEM_ERR_NO_CAP;
+        return (uint32_t)(-(int32_t)WASMOS_ERR_SHMEM_NO_CAP);
     }
     uint64_t phys_base = 0;
     uint64_t shared_pages = 0;
     if (mm_shared_get_phys(context_id, id, &phys_base, &shared_pages) != 0 || shared_pages == 0) {
-        return (uint32_t)SHMEM_ERR_BAD_ID;
+        return (uint32_t)(-(int32_t)WASMOS_ERR_SHMEM_BAD_ID);
     }
     if ((uint64_t)size < shared_pages * 0x1000ULL) {
-        return (uint32_t)SHMEM_ERR_BAD_SIZE;
+        return (uint32_t)(-(int32_t)WASMOS_ERR_SHMEM_BAD_SIZE);
     }
 #if WASMOS_TRACE
     klog_printf("[trace-shmem] map_auto pid=%u size=%llx shpg=%llx reserved=%llx "

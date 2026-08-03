@@ -258,6 +258,17 @@ result appears:
   effectively always OK (or it traps/kills the process); most host calls just
   return the scalar domain status (see the `xfer_buffer_read` example). The
   two-field struct is an IPC-path construct, not a per-host-call one.
+
+  Concrete sign convention for a **value-or-error** host call (one that returns a
+  non-negative datum — an offset, id, or count — on success): return that value
+  (`>= 0`) on success, or **`-(int32_t)WASMOS_ERR_MAKE(domain, code)`** — a
+  *negated packed domain code* — on failure. Negation both signals failure
+  (`ret < 0`) and carries the specific reason; the caller recovers it with
+  `(uint32_t)(-ret)` and the `wasmos_error_*` accessors. A plain-status host call
+  (no datum) returns `0` or the same negated packed code. `shmem_map` /
+  `shmem_map_auto` are the first migration onto this: their negated
+  `WASMOS_ERR_SHMEM_*` returns replace the legacy `SHMEM_ERR_*` -30 range
+  (Phase-4 subsystem 1).
 - **Language projection** is generated: C gets the flat struct (or an out-param);
   Rust maps to a domain `Result<T, DomainError>` nested inside a transport
   `Result<_, TransportError>`. The flat struct is the canonical wire/C form and

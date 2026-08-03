@@ -334,14 +334,26 @@ returns; `FS_ERR_*`/`PROC_*` ride IPC opcodes), so the migration depends on them
   a native (`wasmos_sys_native_*`) flavor, and adoption (e.g. migrate `date.ts`
   onto `rtcIpcRead`). Roll out to more opcode families only if the ergonomics pay
   off — it is the optional tail of the ABI effort.
-- [ ] Phase 4 (after 2 and 3): migrate the tree onto the packed error model —
-  the legacy `PROC_SPAWN_ERR_*`/`PROC_PM_ERR_*`/`FS_ERR_*` (IPC opcodes) and
-  `SHMEM_ERR_*` (host calls) definitions and call sites move onto the generated
-  `(domain, code)` reply status; wire the pass-through-with-provenance
-  propagation policy (wrap = append a frame, only at deliberate abstraction
-  seams); clear the bare-`return -1;` backlog; then flip the advisory `-1` gate
-  to a hard failure (allow-listing genuine POSIX-ABI boundaries). One subsystem
-  at a time.
+- [~] Phase 4 (after 2 and 3): migrate the tree onto the packed error model, one
+  subsystem at a time. **Real scope (measured 2026-08-03, larger than the earlier
+  "~24" estimate):** ~413 legacy refs (`PROC_PM_ERR_` 188, `FS_ERR_` 111,
+  `PROC_SPAWN_ERR_` 89, `SHMEM_ERR_` 25) + **438 bare `return -1;`** in
+  services/drivers. Transport convention established (doc 34, Result
+  representation): a value-or-error host call returns the datum (`>= 0`) or a
+  **negated packed** `-(int32_t)WASMOS_ERR_MAKE(domain, code)`; IPC replies carry
+  the `{flags, chain}` block. Provenance wraps only at deliberate abstraction
+  seams.
+  - [x] Subsystem 1 — **SHMEM** (host calls): `SHMEM_ERR_*` (-30 range) →
+    negated packed `WASMOS_ERR_SHMEM_*` in both `link.c`/`link.cpp` wrappers;
+    legacy defs removed; no consumer decoded the specific reason so the wire
+    change is safe. Booted both runtimes.
+  - [ ] Subsystem 2 — **FS** (`FS_ERR_*`, 111 refs, mostly the FAT backend;
+    travels in `FS_IPC_ERROR`/`RESP` arg0 relayed by fs-manager).
+  - [ ] Subsystem 3 — **PROC** (`PROC_SPAWN_ERR_*` + `PROC_PM_ERR_*`, ~277 refs,
+    process_manager + selftest + spawn call sites).
+  - [ ] Clear the bare-`return -1;` backlog per subsystem; then flip the advisory
+    `-1` gate to a hard failure (allow-listing genuine POSIX-ABI boundaries and
+    internal helpers where a named code adds nothing).
 - [ ] Extend the `quality` re-gen guard to the host-call and opcode generators
   as they land (the errors guard already exists), so generated output can never
   silently drift from the IDL.

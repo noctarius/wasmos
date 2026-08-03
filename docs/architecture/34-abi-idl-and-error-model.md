@@ -119,25 +119,28 @@ Illustrative entry:
 
 Declares the IPC opcodes (positive `ipc_message_t.type` values) grouped by
 subsystem, each with an optional `kind` (req/resp/error/notify) and `doc:`.
-`scripts/gen_abi_opcodes.py` generates the per-subsystem C enums
-(`abi/generated/c/wasmos_opcodes.h`), a best-effort runtime `opcode → name`
-lookup for diagnostics/the IPC trace, and the opcode reference tables
-(`abi/generated/docs/opcodes.md`). `wasmos_driver_abi.h` `#include`s the
-generated enums; `--verify-source` guards symbol/value parity while any enum
-stays hand-written and self-skips once swapped.
+`scripts/gen_abi_opcodes.py` generates the per-subsystem C enums + subsystem-id
+constants + a `wasmos_opcode_name(subsystem_id, type)` diagnostic lookup
+(`abi/generated/c/wasmos_opcodes.h`), the per-language constants
+(`abi/generated/{rust,go,zig,assemblyscript}/wasmos_opcodes.*`), and the opcode
+reference tables (`abi/generated/docs/opcodes.md`). Every consumer — the core
+`wasmos_driver_abi.h` and the per-service headers `rtc_ipc.h`/`font_ipc.h`/
+`gfx_ipc.h` plus `serial.c` — `#include`s the generated enums; `--verify-source`
+guarded symbol/value parity against the hand-written header before the swap and
+self-skips now.
 
-Opcodes are **endpoint-scoped**, not a global namespace: the same value can name
-different messages on different endpoints (e.g. `0x223` is both a proc-broker and
-a service-registry request), so the per-subsystem enums preserve the collisions
-and the global name lookup is first-wins/best-effort. Negative `*_ERR_*` codes
-belong to `abi/errors.yaml`, not here; flags and descriptor structs stay
-hand-written in the header.
+Opcodes are **endpoint-scoped**, not a global namespace: distinct services reuse
+the same value ranges on their own endpoints (`gfx` and `proc_manager` both at
+`0x200`; `font` and `netdrv` both at `0xA00`; `0x223` is both a proc-broker and a
+service-registry request). Each service is its own subsystem, so the per-subsystem
+enums preserve the reuse and the name lookup is subsystem-scoped (exact, not
+best-effort). Negative `*_ERR_*` codes belong to `abi/errors.yaml`, not here;
+flags and descriptor structs stay hand-written in the per-service headers.
 
-Landed as Phase 3a (the `wasmos_driver_abi.h` core). Deferred (3b): consolidating
-the scattered opcode headers (`rtc_ipc.h` ×3, `font_ipc.h`, `gfx_ipc.h`,
-`serial.c`) and per-language opcode constants. Optional (3c): typed
-future-returning request/reply stubs that emit the transfer-buffer
-borrow/release ownership contract in one place.
+Landed as Phase 3a (the `wasmos_driver_abi.h` core) + 3b (the per-service
+subsystems `rtc`/`font`/`gfx`/`serial` folded in, and per-language constants).
+Optional (3c): typed future-returning request/reply stubs that emit the
+transfer-buffer borrow/release ownership contract in one place.
 
 ### `abi/errors.yaml`
 

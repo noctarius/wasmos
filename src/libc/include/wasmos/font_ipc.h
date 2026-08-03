@@ -6,16 +6,8 @@
 
 #include <stdint.h>
 
-enum {
-    FONT_IPC_OPEN_FONT_REQ = 0xA00,
-    FONT_IPC_GET_METRICS_REQ = 0xA01,
-    FONT_IPC_RASTER_GLYPH_REQ = 0xA02,
-    FONT_IPC_MEASURE_GLYPH_REQ = 0xA03,
-    FONT_IPC_RASTER_GLYPH_INTO_REQ = 0xA04,
-
-    FONT_IPC_RESP = 0xA80,
-    FONT_IPC_ERROR = 0xAFF
-};
+/* FONT_IPC_* opcodes come from the generated IPC opcode ABI (abi/opcodes.yaml). */
+#include "../../../../abi/generated/c/wasmos_opcodes.h"
 
 enum { FONT_ID_ROBOTO = 1, FONT_ID_ROBOTO_MONO = 2, FONT_ID_NOTO_SERIF = 3 };
 

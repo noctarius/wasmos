@@ -20,16 +20,22 @@ Generated from the IDL (do **not** hand-edit — `GENERATED` banner):
 
 | Generated file | Contents |
 |---|---|
-| `abi/generated/c/wasmos_opcodes.h` | per-subsystem C enums + best-effort `wasmos_opcode_name()` |
+| `abi/generated/c/wasmos_opcodes.h` | per-subsystem C enums + subsystem-id constants + `wasmos_opcode_name(subsystem_id, type)` |
 | `abi/generated/docs/opcodes.md` | per-subsystem reference tables |
 | `abi/generated/rust/wasmos_opcodes.rs` | `pub const <SYM>: i32` |
 | `abi/generated/go/wasmos_opcodes.go` | `const <SYM> int32` (`package wasmos`) |
 | `abi/generated/zig/wasmos_opcodes.zig` | `pub const <SYM>: i32` |
 | `abi/generated/assemblyscript/wasmos_opcodes.ts` | `export const <SYM>: i32` |
 
-`wasmos_driver_abi.h` consumes the C header via a relative `#include`; the
-negative `*_ERR_*` codes (→ `abi/errors.yaml`), flags, and descriptor structs
-stay hand-written there.
+`wasmos_driver_abi.h` and the per-service headers (`rtc_ipc.h`, `font_ipc.h`,
+`gfx_ipc.h`) plus `serial.c` all consume the generated C header via a relative
+`#include`; the negative `*_ERR_*` codes (→ `abi/errors.yaml`), flags, and
+descriptor structs stay hand-written in those headers.
+
+Opcode values are **endpoint-scoped**: distinct services reuse the same ranges
+on their own endpoints (e.g. `gfx` and `proc_manager` both use `0x200`; `font`
+and `netdrv` both use `0xA00`). Each is its own subsystem in the IDL; the name
+lookup is subsystem-scoped so it stays exact.
 
 ## Workflow
 
@@ -102,9 +108,8 @@ cmake -S . -B build-warp  -DWASMOS_DOTCONFIG=configs/warp_smp_defconfig  && \
 
 - Negative operation-error codes are NOT opcodes — they live in `abi/errors.yaml`
   (`skills/wasmos-add-error`). Opcodes are the positive `type` values only.
-- Some opcode families are still hand-written OUTSIDE the IDL (Phase 3b): the
-  scattered `rtc_ipc.h` copies, `font_ipc.h`, `gfx_ipc.h`, and `serial.c`. If you
-  touch those, they are not generated yet — prefer folding them into
-  `abi/opcodes.yaml` over hand-editing.
+- All opcode families are now in the IDL (`wasmos_driver_abi.h` core + the
+  per-service `rtc`/`font`/`gfx`/`serial` subsystems). Add a new service's
+  opcodes as a new subsystem here — don't hand-write a fresh `*_ipc.h` enum.
 - Never hand-edit `abi/generated/**` — regenerate from `abi/opcodes.yaml`.
 - Flags, sizes, and descriptor structs stay hand-written in `wasmos_driver_abi.h`.

@@ -217,7 +217,11 @@ pub const VT_IPC_KEY_FORWARD: i32 = 0x782;
 pub const VT_IPC_VIS_NOTIFY: i32 = 0x783;
 pub const VT_IPC_ERROR: i32 = 0x7FF;
 
-// serial (0x502..0x582)
+// serial (0x500..0x5FF)
+pub const SERIAL_DRIVER_WRITE_REQ: i32 = 0x500;
+pub const SERIAL_DRIVER_READ_REQ: i32 = 0x501;
+pub const SERIAL_DRIVER_RESP: i32 = 0x580;
+pub const SERIAL_DRIVER_ERROR: i32 = 0x5FF;
 pub const SERIAL_IPC_SUBSCRIBE_REQ: i32 = 0x502;
 pub const SERIAL_IPC_SUBSCRIBE_RESP: i32 = 0x582;
 
@@ -334,3 +338,32 @@ pub const PROC_IPC_DMA_SYNC_BORROW_REQ: i32 = 0x231;
 pub const PROC_IPC_DMA_UNMAP_BORROW_REQ: i32 = 0x232;
 pub const PROC_IPC_DMA_BORROW_RESP: i32 = 0x2B0;
 pub const PROC_IPC_DMA_BORROW_ERROR: i32 = 0x2BF;
+
+// font (0xA00..0xAFF)
+pub const FONT_IPC_OPEN_FONT_REQ: i32 = 0xA00;
+pub const FONT_IPC_GET_METRICS_REQ: i32 = 0xA01;
+pub const FONT_IPC_RASTER_GLYPH_REQ: i32 = 0xA02;
+pub const FONT_IPC_MEASURE_GLYPH_REQ: i32 = 0xA03;
+pub const FONT_IPC_RASTER_GLYPH_INTO_REQ: i32 = 0xA04;
+pub const FONT_IPC_RESP: i32 = 0xA80;
+pub const FONT_IPC_ERROR: i32 = 0xAFF;
+
+// gfx (0x200..0x2FF)
+pub const GFX_IPC_CREATE_WINDOW: i32 = 0x200;
+pub const GFX_IPC_DESTROY_WINDOW: i32 = 0x201;
+pub const GFX_IPC_RESIZE_WINDOW: i32 = 0x202;
+pub const GFX_IPC_ALLOC_SHARED_BUFFER: i32 = 0x203;
+pub const GFX_IPC_SUBMIT_COMMANDS: i32 = 0x204;
+pub const GFX_IPC_PRESENT_WINDOW: i32 = 0x205;
+pub const GFX_IPC_PUSH_EVENT: i32 = 0x206;
+pub const GFX_IPC_RELEASE_SHARED_BUFFER: i32 = 0x207;
+pub const GFX_IPC_SET_DISPLAY_MODE: i32 = 0x208;
+pub const GFX_IPC_LIST_WINDOWS: i32 = 0x209;
+pub const GFX_IPC_FOCUS_WINDOW: i32 = 0x20A;
+pub const GFX_IPC_SET_WINDOW_FLAGS: i32 = 0x20B;
+pub const GFX_IPC_GET_DISPLAY_INFO: i32 = 0x20C;
+pub const GFX_IPC_MOVE_WINDOW: i32 = 0x20D;
+pub const GFX_IPC_SET_WINDOW_TITLE: i32 = 0x20E;
+pub const GFX_IPC_GET_WINDOW_TITLE: i32 = 0x20F;
+pub const GFX_IPC_RESP: i32 = 0x280;
+pub const GFX_IPC_ERROR: i32 = 0x2FF;

@@ -145,10 +145,14 @@ endpoint-scoped and may repeat across subsystems.
 | `VT_IPC_VIS_NOTIFY` | 0x783 | notify | vt -> compositor (the vt-0 key sink): the visible slot changed.  The compositor owns the framebuffer only while vt-0 is visible; on this notify it resumes/relinquishes drawing.  Fire-and-forget.  arg0=1 if vt-0 is now the visible slot, 0 otherwise.  |
 | `VT_IPC_ERROR` | 0x7FF | error |  |
 
-## serial (0x502–0x582)
+## serial (0x500–0x5FF)
 
 | Opcode | Value | Kind | Description |
 |---|---|---|---|
+| `SERIAL_DRIVER_WRITE_REQ` | 0x500 | req |  |
+| `SERIAL_DRIVER_READ_REQ` | 0x501 | req |  |
+| `SERIAL_DRIVER_RESP` | 0x580 | resp |  |
+| `SERIAL_DRIVER_ERROR` | 0x5FF | error |  |
 | `SERIAL_IPC_SUBSCRIBE_REQ` | 0x502 | req |  |
 | `SERIAL_IPC_SUBSCRIBE_RESP` | 0x582 | resp |  |
 
@@ -262,3 +266,38 @@ endpoint-scoped and may repeat across subsystems.
 | `PROC_IPC_DMA_UNMAP_BORROW_REQ` | 0x232 | req |  |
 | `PROC_IPC_DMA_BORROW_RESP` | 0x2B0 | resp |  |
 | `PROC_IPC_DMA_BORROW_ERROR` | 0x2BF | error |  |
+
+## font (0xA00–0xAFF)
+
+| Opcode | Value | Kind | Description |
+|---|---|---|---|
+| `FONT_IPC_OPEN_FONT_REQ` | 0xA00 | req |  |
+| `FONT_IPC_GET_METRICS_REQ` | 0xA01 | req |  |
+| `FONT_IPC_RASTER_GLYPH_REQ` | 0xA02 | req |  |
+| `FONT_IPC_MEASURE_GLYPH_REQ` | 0xA03 | req |  |
+| `FONT_IPC_RASTER_GLYPH_INTO_REQ` | 0xA04 | req |  |
+| `FONT_IPC_RESP` | 0xA80 | resp |  |
+| `FONT_IPC_ERROR` | 0xAFF | error |  |
+
+## gfx (0x200–0x2FF)
+
+| Opcode | Value | Kind | Description |
+|---|---|---|---|
+| `GFX_IPC_CREATE_WINDOW` | 0x200 | req |  |
+| `GFX_IPC_DESTROY_WINDOW` | 0x201 | req |  |
+| `GFX_IPC_RESIZE_WINDOW` | 0x202 | req |  |
+| `GFX_IPC_ALLOC_SHARED_BUFFER` | 0x203 | req |  |
+| `GFX_IPC_SUBMIT_COMMANDS` | 0x204 | req |  |
+| `GFX_IPC_PRESENT_WINDOW` | 0x205 | req |  |
+| `GFX_IPC_PUSH_EVENT` | 0x206 | notify |  |
+| `GFX_IPC_RELEASE_SHARED_BUFFER` | 0x207 | req |  |
+| `GFX_IPC_SET_DISPLAY_MODE` | 0x208 | req |  |
+| `GFX_IPC_LIST_WINDOWS` | 0x209 | req |  |
+| `GFX_IPC_FOCUS_WINDOW` | 0x20A | req |  |
+| `GFX_IPC_SET_WINDOW_FLAGS` | 0x20B | req |  |
+| `GFX_IPC_GET_DISPLAY_INFO` | 0x20C | req |  |
+| `GFX_IPC_MOVE_WINDOW` | 0x20D | req |  |
+| `GFX_IPC_SET_WINDOW_TITLE` | 0x20E | req |  |
+| `GFX_IPC_GET_WINDOW_TITLE` | 0x20F | req |  |
+| `GFX_IPC_RESP` | 0x280 | resp |  |
+| `GFX_IPC_ERROR` | 0x2FF | error |  |

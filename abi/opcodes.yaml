@@ -332,8 +332,12 @@ subsystems:
 
   - name: serial
     id: 9
-    range: [0x502, 0x582]
+    range: [0x500, 0x5FF]
     opcodes:
+      - { symbol: SERIAL_DRIVER_WRITE_REQ, value: 0x500, kind: req }
+      - { symbol: SERIAL_DRIVER_READ_REQ, value: 0x501, kind: req }
+      - { symbol: SERIAL_DRIVER_RESP, value: 0x580, kind: resp }
+      - { symbol: SERIAL_DRIVER_ERROR, value: 0x5FF, kind: error }
       - { symbol: SERIAL_IPC_SUBSCRIBE_REQ, value: 0x502, kind: req }
       - { symbol: SERIAL_IPC_SUBSCRIBE_RESP, value: 0x582, kind: resp }
 
@@ -516,3 +520,39 @@ subsystems:
       - { symbol: PROC_IPC_DMA_UNMAP_BORROW_REQ, value: 0x232, kind: req }
       - { symbol: PROC_IPC_DMA_BORROW_RESP, value: 0x2b0, kind: resp }
       - { symbol: PROC_IPC_DMA_BORROW_ERROR, value: 0x2bf, kind: error }
+
+  - name: font
+    id: 19
+    range: [0xA00, 0xAFF]
+    opcodes:
+      - { symbol: FONT_IPC_OPEN_FONT_REQ, value: 0xA00, kind: req }
+      - { symbol: FONT_IPC_GET_METRICS_REQ, value: 0xA01, kind: req }
+      - { symbol: FONT_IPC_RASTER_GLYPH_REQ, value: 0xA02, kind: req }
+      - { symbol: FONT_IPC_MEASURE_GLYPH_REQ, value: 0xA03, kind: req }
+      - { symbol: FONT_IPC_RASTER_GLYPH_INTO_REQ, value: 0xA04, kind: req }
+      - { symbol: FONT_IPC_RESP, value: 0xA80, kind: resp }
+      - { symbol: FONT_IPC_ERROR, value: 0xAFF, kind: error }
+
+  - name: gfx
+    id: 20
+    range: [0x200, 0x2FF]
+    opcodes:
+      - { symbol: GFX_IPC_CREATE_WINDOW, value: 0x200, kind: req }
+      - { symbol: GFX_IPC_DESTROY_WINDOW, value: 0x201, kind: req }
+      - { symbol: GFX_IPC_RESIZE_WINDOW, value: 0x202, kind: req }
+      - { symbol: GFX_IPC_ALLOC_SHARED_BUFFER, value: 0x203, kind: req }
+      - { symbol: GFX_IPC_SUBMIT_COMMANDS, value: 0x204, kind: req }
+      - { symbol: GFX_IPC_PRESENT_WINDOW, value: 0x205, kind: req }
+      - { symbol: GFX_IPC_PUSH_EVENT, value: 0x206, kind: notify }
+      - { symbol: GFX_IPC_RELEASE_SHARED_BUFFER, value: 0x207, kind: req }
+      - { symbol: GFX_IPC_SET_DISPLAY_MODE, value: 0x208, kind: req }
+      - { symbol: GFX_IPC_LIST_WINDOWS, value: 0x209, kind: req }
+      - { symbol: GFX_IPC_FOCUS_WINDOW, value: 0x20A, kind: req }
+      - { symbol: GFX_IPC_SET_WINDOW_FLAGS, value: 0x20B, kind: req }
+      - { symbol: GFX_IPC_GET_DISPLAY_INFO, value: 0x20C, kind: req }
+      - { symbol: GFX_IPC_MOVE_WINDOW, value: 0x20D, kind: req }
+      - { symbol: GFX_IPC_SET_WINDOW_TITLE, value: 0x20E, kind: req }
+      - { symbol: GFX_IPC_GET_WINDOW_TITLE, value: 0x20F, kind: req }
+      - { symbol: GFX_IPC_RESP, value: 0x280, kind: resp }
+      - { symbol: GFX_IPC_ERROR, value: 0x2FF, kind: error }
+

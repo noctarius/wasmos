@@ -14,14 +14,11 @@
 #include "paging.h"
 #include "xfer_buffer.h"
 #include "wasmos/ringbuf.h"
+/* SERIAL_DRIVER_* opcodes come from the generated IPC opcode ABI (abi/opcodes.yaml). */
+#include "../../abi/generated/c/wasmos_opcodes.h"
 
 #define COM1_PORT 0x3F8
 #define COM1_STATUS (COM1_PORT + 5)
-
-#define SERIAL_DRIVER_WRITE_REQ 0x500
-#define SERIAL_DRIVER_READ_REQ 0x501
-#define SERIAL_DRIVER_RESP 0x580
-#define SERIAL_DRIVER_ERROR 0x5FF
 
 #define SERIAL_READ_STATUS_CHAR 1
 #define SERIAL_READ_STATUS_EMPTY 0

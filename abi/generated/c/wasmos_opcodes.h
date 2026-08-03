@@ -260,8 +260,12 @@ enum {
     VT_IPC_ERROR = 0x7FF,
 };
 
-/* serial (0x502..0x582) */
+/* serial (0x500..0x5FF) */
 enum {
+    SERIAL_DRIVER_WRITE_REQ = 0x500,
+    SERIAL_DRIVER_READ_REQ = 0x501,
+    SERIAL_DRIVER_RESP = 0x580,
+    SERIAL_DRIVER_ERROR = 0x5FF,
     SERIAL_IPC_SUBSCRIBE_REQ = 0x502,
     SERIAL_IPC_SUBSCRIBE_RESP = 0x582,
 };
@@ -406,176 +410,346 @@ enum {
     PROC_IPC_DMA_BORROW_ERROR = 0x2BF,
 };
 
-/* Best-effort opcode -> symbol name for diagnostics/logging. Opcode values
- * are endpoint-scoped, so on a cross-subsystem value collision the first
- * subsystem (in id order) wins here:
- *   0x223 SVC_IPC_LOOKUP_CLASS_REQ shadowed by PROC_BROKER_IPC_SPAWN_PLAN_REQ
- *   0x2A3 SVC_IPC_SUBSCRIBE_CLASS_RESP shadowed by PROC_BROKER_IPC_SPAWN_PLAN_RESP
- * Callers that know the peer subsystem should prefer the enum directly. */
-static inline const char* wasmos_opcode_name(uint32_t type) {
-    switch (type) {
-    case 0x100: return "WASM_CHARDEV_IPC_READ_REQ";
-    case 0x101: return "WASM_CHARDEV_IPC_WRITE_REQ";
-    case 0x180: return "WASM_CHARDEV_IPC_READ_RESP";
-    case 0x181: return "WASM_CHARDEV_IPC_WRITE_RESP";
-    case 0x1FF: return "WASM_CHARDEV_IPC_ERROR_RESP";
-    case 0x200: return "PROC_IPC_SPAWN";
-    case 0x201: return "PROC_IPC_WAIT";
-    case 0x202: return "PROC_IPC_KILL";
-    case 0x203: return "PROC_IPC_STATUS";
-    case 0x204: return "PROC_IPC_SPAWN_NAME";
-    case 0x205: return "PROC_IPC_SPAWN_CAPS";
-    case 0x206: return "PROC_IPC_MODULE_META";
-    case 0x207: return "PROC_IPC_MODULE_META_PATH";
-    case 0x208: return "PROC_IPC_SPAWN_CAPS_V2";
-    case 0x209: return "PROC_IPC_SPAWN_PATH";
-    case 0x20A: return "PROC_IPC_SPAWN_PATH_CAPS";
-    case 0x20B: return "PROC_IPC_SPAWN_SYNC";
-    case 0x20C: return "PROC_IPC_NOTIFY_READY";
-    case 0x20D: return "PROC_IPC_SPAWN_CAPS_SYNC";
-    case 0x20E: return "PROC_IPC_SPAWN_PATH_SYNC";
-    case 0x20F: return "PROC_IPC_SPAWN_PATH_CAPS_SYNC";
-    case 0x210: return "PROC_IPC_SUBSYSTEM_REGISTER_BROKER";
-    case 0x211: return "PROC_IPC_EXEC_HANDLER_REGISTER";
-    case 0x220: return "SVC_IPC_REGISTER_REQ";
-    case 0x221: return "SVC_IPC_LOOKUP_REQ";
-    case 0x222: return "SVC_IPC_REGISTER_DESC_REQ";
-    case 0x223: return "PROC_BROKER_IPC_SPAWN_PLAN_REQ";
-    case 0x224: return "SVC_IPC_SUBSCRIBE_CLASS_REQ";
-    case 0x230: return "PROC_IPC_DMA_MAP_BORROW_REQ";
-    case 0x231: return "PROC_IPC_DMA_SYNC_BORROW_REQ";
-    case 0x232: return "PROC_IPC_DMA_UNMAP_BORROW_REQ";
-    case 0x280: return "PROC_IPC_RESP";
-    case 0x2A0: return "SVC_IPC_REGISTER_RESP";
-    case 0x2A1: return "SVC_IPC_LOOKUP_RESP";
-    case 0x2A2: return "SVC_IPC_LOOKUP_CLASS_RESP";
-    case 0x2A3: return "PROC_BROKER_IPC_SPAWN_PLAN_RESP";
-    case 0x2A4: return "SVC_IPC_CLASS_EVENT";
-    case 0x2AF: return "SVC_IPC_ERROR";
-    case 0x2B0: return "PROC_IPC_DMA_BORROW_RESP";
-    case 0x2BF: return "PROC_IPC_DMA_BORROW_ERROR";
-    case 0x2E3: return "PROC_BROKER_IPC_SPAWN_PLAN_ERROR";
-    case 0x2FF: return "PROC_IPC_ERROR";
-    case 0x300: return "BLOCK_IPC_READ_REQ";
-    case 0x301: return "BLOCK_IPC_WRITE_REQ";
-    case 0x302: return "BLOCK_IPC_IDENTIFY_REQ";
-    case 0x380: return "BLOCK_IPC_READ_RESP";
-    case 0x381: return "BLOCK_IPC_WRITE_RESP";
-    case 0x382: return "BLOCK_IPC_IDENTIFY_RESP";
-    case 0x3FF: return "BLOCK_IPC_ERROR";
-    case 0x400: return "FS_IPC_OPEN_REQ";
-    case 0x401: return "FS_IPC_READ_REQ";
-    case 0x402: return "FS_IPC_CLOSE_REQ";
-    case 0x403: return "FS_IPC_STAT_REQ";
-    case 0x404: return "FS_IPC_READY_REQ";
-    case 0x405: return "FS_IPC_SEEK_REQ";
-    case 0x406: return "FS_IPC_WRITE_REQ";
-    case 0x407: return "FS_IPC_UNLINK_REQ";
-    case 0x408: return "FS_IPC_MKDIR_REQ";
-    case 0x409: return "FS_IPC_RMDIR_REQ";
-    case 0x410: return "FS_IPC_READDIR_REQ";
-    case 0x412: return "FS_IPC_CHDIR_REQ";
-    case 0x413: return "FS_IPC_READ_APP_REQ";
-    case 0x414: return "FS_IPC_READ_PATH_REQ";
-    case 0x420: return "FSMGR_IPC_BACKEND_INFO_REQ";
-    case 0x421: return "FSMGR_IPC_CLONE_CWD_REQ";
-    case 0x422: return "FSMGR_IPC_QUERY_MOUNTS_REQ";
-    case 0x480: return "FS_IPC_RESP";
-    case 0x481: return "FS_IPC_STREAM";
-    case 0x4A0: return "FSMGR_IPC_BACKEND_INFO_RESP";
-    case 0x4A1: return "FSMGR_IPC_CLONE_CWD_RESP";
-    case 0x4A2: return "FSMGR_IPC_QUERY_MOUNTS_RESP";
-    case 0x4FF: return "FS_IPC_ERROR";
-    case 0x502: return "SERIAL_IPC_SUBSCRIBE_REQ";
-    case 0x582: return "SERIAL_IPC_SUBSCRIBE_RESP";
-    case 0x600: return "FBTEXT_IPC_CELL_WRITE_REQ";
-    case 0x601: return "FBTEXT_IPC_CURSOR_SET_REQ";
-    case 0x602: return "FBTEXT_IPC_SCROLL_REQ";
-    case 0x603: return "FBTEXT_IPC_CLEAR_REQ";
-    case 0x604: return "FBTEXT_IPC_CONSOLE_MODE_REQ";
-    case 0x605: return "FBTEXT_IPC_GEOMETRY_REQ";
-    case 0x606: return "FBTEXT_IPC_GFX_OVERLAY_REQ";
-    case 0x607: return "FBTEXT_IPC_QUERY_CAPS_REQ";
-    case 0x608: return "FBTEXT_IPC_QUERY_MODES_REQ";
-    case 0x609: return "FBTEXT_IPC_SET_RESOLUTION_REQ";
-    case 0x60A: return "FBTEXT_IPC_BLIT_ATTACH_REQ";
-    case 0x60B: return "FBTEXT_IPC_BLIT_GRID_REQ";
-    case 0x680: return "FBTEXT_IPC_RESP";
-    case 0x6FF: return "FBTEXT_IPC_ERROR";
-    case 0x700: return "VT_IPC_WRITE_REQ";
-    case 0x701: return "VT_IPC_READ_REQ";
-    case 0x702: return "VT_IPC_SET_ATTR_REQ";
-    case 0x703: return "VT_IPC_SWITCH_TTY";
-    case 0x704: return "VT_IPC_GET_ACTIVE_TTY";
-    case 0x705: return "VT_IPC_REGISTER_WRITER";
-    case 0x706: return "VT_IPC_SET_MODE_REQ";
-    case 0x707: return "VT_IPC_SERIAL_INPUT_REQ";
-    case 0x780: return "VT_IPC_RESP";
-    case 0x781: return "VT_IPC_INPUT_NOTIFY";
-    case 0x782: return "VT_IPC_KEY_FORWARD";
-    case 0x783: return "VT_IPC_VIS_NOTIFY";
-    case 0x7FF: return "VT_IPC_ERROR";
-    case 0x800: return "KBD_IPC_SUBSCRIBE_REQ";
-    case 0x801: return "KBD_IPC_KEY_NOTIFY";
-    case 0x810: return "MOUSE_IPC_SUBSCRIBE_REQ";
-    case 0x811: return "MOUSE_IPC_MOVE_NOTIFY";
-    case 0x820: return "RTC_IPC_READ_REQ";
-    case 0x821: return "RTC_IPC_SET_REQ";
-    case 0x830: return "VIRTIO_SERIAL_IPC_QUERY_REQ";
-    case 0x831: return "VIRTIO_SERIAL_IPC_READ_REG32_REQ";
-    case 0x832: return "VIRTIO_SERIAL_IPC_WRITE_REG32_REQ";
-    case 0x880: return "KBD_IPC_SUBSCRIBE_RESP";
-    case 0x890: return "MOUSE_IPC_SUBSCRIBE_RESP";
-    case 0x8A0: return "RTC_IPC_READ_RESP";
-    case 0x8A1: return "RTC_IPC_SET_RESP";
-    case 0x8B0: return "VIRTIO_SERIAL_IPC_RESP";
-    case 0x8BF: return "VIRTIO_SERIAL_IPC_ERROR";
-    case 0x8FF: return "RTC_IPC_ERROR";
-    case 0x900: return "DEVMGR_PUBLISH_DEVICE";
-    case 0x901: return "DEVMGR_PCI_SCAN_DONE";
-    case 0x902: return "DEVMGR_QUERY_MOUNT_REQ";
-    case 0x903: return "DEVMGR_PUBLISH_BLOCK_DEVICE";
-    case 0x904: return "DEVMGR_QUERY_BLOCK_MOUNT_REQ";
-    case 0x905: return "DEVMGR_ACPI_SCAN_DONE";
-    case 0x980: return "DEVMGR_MOUNT_INFO";
-    case 0x981: return "DEVMGR_QUERY_DONE";
-    case 0x982: return "DEVMGR_BLOCK_MOUNT_INFO";
-    case 0xA00: return "NETDRV_IPC_LINK_GET";
-    case 0xA01: return "NETDRV_IPC_TX_FRAME";
-    case 0xA02: return "NETDRV_IPC_RX_POLL";
-    case 0xA03: return "NETDRV_IPC_STATS_GET";
-    case 0xA04: return "NETDRV_IPC_RX_FRAME_NOTIFY";
-    case 0xA05: return "NETDRV_IPC_LINK_NOTIFY";
-    case 0xA80: return "NETDRV_IPC_RESP";
-    case 0xAFF: return "NETDRV_IPC_ERROR";
-    case 0xB00: return "NET_IPC_SOCKET_OPEN";
-    case 0xB01: return "NET_IPC_BIND";
-    case 0xB02: return "NET_IPC_CONNECT";
-    case 0xB03: return "NET_IPC_SEND";
-    case 0xB04: return "NET_IPC_RECV";
-    case 0xB05: return "NET_IPC_CLOSE";
-    case 0xB06: return "NET_IPC_POLL";
-    case 0xB07: return "NET_IPC_IFADDR_ADD";
-    case 0xB08: return "NET_IPC_IFADDR_DEL";
-    case 0xB09: return "NET_IPC_IFADDR_LIST";
-    case 0xB0A: return "NET_IPC_STACK_CREATE";
-    case 0xB0B: return "NET_IPC_STACK_DESTROY";
-    case 0xB0C: return "NET_IPC_STACK_SELECT";
-    case 0xB0D: return "NET_IPC_DATA_NOTIFY";
-    case 0xB0E: return "NET_IPC_TX_NOTIFY";
-    case 0xB0F: return "NET_IPC_RX_NOTIFY";
-    case 0xB10: return "NET_IPC_IF_SET_STATE";
-    case 0xB11: return "NET_IPC_DHCP_SET";
-    case 0xB12: return "NET_IPC_LISTEN";
-    case 0xB13: return "NET_IPC_ACCEPT";
-    case 0xB14: return "NET_IPC_RESOLVE";
-    case 0xB15: return "NET_IPC_DNS_SET";
-    case 0xB16: return "NET_IPC_DNS_LIST";
-    case 0xB80: return "NET_IPC_RESP";
-    case 0xBFF: return "NET_IPC_ERROR";
-    case 0xC00: return "HRNG_IPC_GET_BYTES_REQ";
-    case 0xC80: return "HRNG_IPC_RESP";
-    case 0xCFF: return "HRNG_IPC_ERROR";
+/* font (0xA00..0xAFF) */
+enum {
+    FONT_IPC_OPEN_FONT_REQ = 0xA00,
+    FONT_IPC_GET_METRICS_REQ = 0xA01,
+    FONT_IPC_RASTER_GLYPH_REQ = 0xA02,
+    FONT_IPC_MEASURE_GLYPH_REQ = 0xA03,
+    FONT_IPC_RASTER_GLYPH_INTO_REQ = 0xA04,
+    FONT_IPC_RESP = 0xA80,
+    FONT_IPC_ERROR = 0xAFF,
+};
+
+/* gfx (0x200..0x2FF) */
+enum {
+    GFX_IPC_CREATE_WINDOW = 0x200,
+    GFX_IPC_DESTROY_WINDOW = 0x201,
+    GFX_IPC_RESIZE_WINDOW = 0x202,
+    GFX_IPC_ALLOC_SHARED_BUFFER = 0x203,
+    GFX_IPC_SUBMIT_COMMANDS = 0x204,
+    GFX_IPC_PRESENT_WINDOW = 0x205,
+    GFX_IPC_PUSH_EVENT = 0x206,
+    GFX_IPC_RELEASE_SHARED_BUFFER = 0x207,
+    GFX_IPC_SET_DISPLAY_MODE = 0x208,
+    GFX_IPC_LIST_WINDOWS = 0x209,
+    GFX_IPC_FOCUS_WINDOW = 0x20A,
+    GFX_IPC_SET_WINDOW_FLAGS = 0x20B,
+    GFX_IPC_GET_DISPLAY_INFO = 0x20C,
+    GFX_IPC_MOVE_WINDOW = 0x20D,
+    GFX_IPC_SET_WINDOW_TITLE = 0x20E,
+    GFX_IPC_GET_WINDOW_TITLE = 0x20F,
+    GFX_IPC_RESP = 0x280,
+    GFX_IPC_ERROR = 0x2FF,
+};
+
+/* Subsystem ids for wasmos_opcode_name(). */
+enum {
+    WASMOS_OPCODE_SUBSYS_CHARDEV = 0,
+    WASMOS_OPCODE_SUBSYS_PROC_MANAGER = 1,
+    WASMOS_OPCODE_SUBSYS_PROC_BROKER = 2,
+    WASMOS_OPCODE_SUBSYS_SERVICE_REGISTRY = 3,
+    WASMOS_OPCODE_SUBSYS_BLOCK = 4,
+    WASMOS_OPCODE_SUBSYS_FS = 5,
+    WASMOS_OPCODE_SUBSYS_FS_MANAGER = 6,
+    WASMOS_OPCODE_SUBSYS_FBTEXT = 7,
+    WASMOS_OPCODE_SUBSYS_VT = 8,
+    WASMOS_OPCODE_SUBSYS_SERIAL = 9,
+    WASMOS_OPCODE_SUBSYS_KEYBOARD = 10,
+    WASMOS_OPCODE_SUBSYS_MOUSE = 11,
+    WASMOS_OPCODE_SUBSYS_RTC = 12,
+    WASMOS_OPCODE_SUBSYS_VIRTIO_SERIAL = 13,
+    WASMOS_OPCODE_SUBSYS_DEVICE_MANAGER = 14,
+    WASMOS_OPCODE_SUBSYS_NETDRV = 15,
+    WASMOS_OPCODE_SUBSYS_HRNG = 16,
+    WASMOS_OPCODE_SUBSYS_NET = 17,
+    WASMOS_OPCODE_SUBSYS_PROC_DMA = 18,
+    WASMOS_OPCODE_SUBSYS_FONT = 19,
+    WASMOS_OPCODE_SUBSYS_GFX = 20,
+};
+
+/* Opcode -> symbol name within a subsystem (diagnostics/logging). Pass the
+ * WASMOS_OPCODE_SUBSYS_* the endpoint speaks; values are endpoint-scoped so
+ * a subsystem-scoped lookup is exact, unlike a global one. */
+static inline const char* wasmos_opcode_name(uint32_t subsystem_id, uint32_t type) {
+    switch (subsystem_id) {
+    case WASMOS_OPCODE_SUBSYS_CHARDEV:
+        switch (type) {
+        case 0x100: return "WASM_CHARDEV_IPC_READ_REQ";
+        case 0x101: return "WASM_CHARDEV_IPC_WRITE_REQ";
+        case 0x180: return "WASM_CHARDEV_IPC_READ_RESP";
+        case 0x181: return "WASM_CHARDEV_IPC_WRITE_RESP";
+        case 0x1FF: return "WASM_CHARDEV_IPC_ERROR_RESP";
+        default: return "UNKNOWN";
+        }
+    case WASMOS_OPCODE_SUBSYS_PROC_MANAGER:
+        switch (type) {
+        case 0x200: return "PROC_IPC_SPAWN";
+        case 0x201: return "PROC_IPC_WAIT";
+        case 0x202: return "PROC_IPC_KILL";
+        case 0x203: return "PROC_IPC_STATUS";
+        case 0x204: return "PROC_IPC_SPAWN_NAME";
+        case 0x205: return "PROC_IPC_SPAWN_CAPS";
+        case 0x206: return "PROC_IPC_MODULE_META";
+        case 0x207: return "PROC_IPC_MODULE_META_PATH";
+        case 0x208: return "PROC_IPC_SPAWN_CAPS_V2";
+        case 0x209: return "PROC_IPC_SPAWN_PATH";
+        case 0x20A: return "PROC_IPC_SPAWN_PATH_CAPS";
+        case 0x20B: return "PROC_IPC_SPAWN_SYNC";
+        case 0x20C: return "PROC_IPC_NOTIFY_READY";
+        case 0x20D: return "PROC_IPC_SPAWN_CAPS_SYNC";
+        case 0x20E: return "PROC_IPC_SPAWN_PATH_SYNC";
+        case 0x20F: return "PROC_IPC_SPAWN_PATH_CAPS_SYNC";
+        case 0x210: return "PROC_IPC_SUBSYSTEM_REGISTER_BROKER";
+        case 0x211: return "PROC_IPC_EXEC_HANDLER_REGISTER";
+        case 0x280: return "PROC_IPC_RESP";
+        case 0x2FF: return "PROC_IPC_ERROR";
+        default: return "UNKNOWN";
+        }
+    case WASMOS_OPCODE_SUBSYS_PROC_BROKER:
+        switch (type) {
+        case 0x223: return "PROC_BROKER_IPC_SPAWN_PLAN_REQ";
+        case 0x2A3: return "PROC_BROKER_IPC_SPAWN_PLAN_RESP";
+        case 0x2E3: return "PROC_BROKER_IPC_SPAWN_PLAN_ERROR";
+        default: return "UNKNOWN";
+        }
+    case WASMOS_OPCODE_SUBSYS_SERVICE_REGISTRY:
+        switch (type) {
+        case 0x220: return "SVC_IPC_REGISTER_REQ";
+        case 0x221: return "SVC_IPC_LOOKUP_REQ";
+        case 0x222: return "SVC_IPC_REGISTER_DESC_REQ";
+        case 0x223: return "SVC_IPC_LOOKUP_CLASS_REQ";
+        case 0x224: return "SVC_IPC_SUBSCRIBE_CLASS_REQ";
+        case 0x2A0: return "SVC_IPC_REGISTER_RESP";
+        case 0x2A1: return "SVC_IPC_LOOKUP_RESP";
+        case 0x2A2: return "SVC_IPC_LOOKUP_CLASS_RESP";
+        case 0x2A3: return "SVC_IPC_SUBSCRIBE_CLASS_RESP";
+        case 0x2A4: return "SVC_IPC_CLASS_EVENT";
+        case 0x2AF: return "SVC_IPC_ERROR";
+        default: return "UNKNOWN";
+        }
+    case WASMOS_OPCODE_SUBSYS_BLOCK:
+        switch (type) {
+        case 0x300: return "BLOCK_IPC_READ_REQ";
+        case 0x301: return "BLOCK_IPC_WRITE_REQ";
+        case 0x302: return "BLOCK_IPC_IDENTIFY_REQ";
+        case 0x380: return "BLOCK_IPC_READ_RESP";
+        case 0x381: return "BLOCK_IPC_WRITE_RESP";
+        case 0x382: return "BLOCK_IPC_IDENTIFY_RESP";
+        case 0x3FF: return "BLOCK_IPC_ERROR";
+        default: return "UNKNOWN";
+        }
+    case WASMOS_OPCODE_SUBSYS_FS:
+        switch (type) {
+        case 0x400: return "FS_IPC_OPEN_REQ";
+        case 0x401: return "FS_IPC_READ_REQ";
+        case 0x402: return "FS_IPC_CLOSE_REQ";
+        case 0x403: return "FS_IPC_STAT_REQ";
+        case 0x404: return "FS_IPC_READY_REQ";
+        case 0x405: return "FS_IPC_SEEK_REQ";
+        case 0x406: return "FS_IPC_WRITE_REQ";
+        case 0x407: return "FS_IPC_UNLINK_REQ";
+        case 0x408: return "FS_IPC_MKDIR_REQ";
+        case 0x409: return "FS_IPC_RMDIR_REQ";
+        case 0x410: return "FS_IPC_READDIR_REQ";
+        case 0x412: return "FS_IPC_CHDIR_REQ";
+        case 0x413: return "FS_IPC_READ_APP_REQ";
+        case 0x414: return "FS_IPC_READ_PATH_REQ";
+        case 0x480: return "FS_IPC_RESP";
+        case 0x481: return "FS_IPC_STREAM";
+        case 0x4FF: return "FS_IPC_ERROR";
+        default: return "UNKNOWN";
+        }
+    case WASMOS_OPCODE_SUBSYS_FS_MANAGER:
+        switch (type) {
+        case 0x420: return "FSMGR_IPC_BACKEND_INFO_REQ";
+        case 0x421: return "FSMGR_IPC_CLONE_CWD_REQ";
+        case 0x422: return "FSMGR_IPC_QUERY_MOUNTS_REQ";
+        case 0x4A0: return "FSMGR_IPC_BACKEND_INFO_RESP";
+        case 0x4A1: return "FSMGR_IPC_CLONE_CWD_RESP";
+        case 0x4A2: return "FSMGR_IPC_QUERY_MOUNTS_RESP";
+        default: return "UNKNOWN";
+        }
+    case WASMOS_OPCODE_SUBSYS_FBTEXT:
+        switch (type) {
+        case 0x600: return "FBTEXT_IPC_CELL_WRITE_REQ";
+        case 0x601: return "FBTEXT_IPC_CURSOR_SET_REQ";
+        case 0x602: return "FBTEXT_IPC_SCROLL_REQ";
+        case 0x603: return "FBTEXT_IPC_CLEAR_REQ";
+        case 0x604: return "FBTEXT_IPC_CONSOLE_MODE_REQ";
+        case 0x605: return "FBTEXT_IPC_GEOMETRY_REQ";
+        case 0x606: return "FBTEXT_IPC_GFX_OVERLAY_REQ";
+        case 0x607: return "FBTEXT_IPC_QUERY_CAPS_REQ";
+        case 0x608: return "FBTEXT_IPC_QUERY_MODES_REQ";
+        case 0x609: return "FBTEXT_IPC_SET_RESOLUTION_REQ";
+        case 0x60A: return "FBTEXT_IPC_BLIT_ATTACH_REQ";
+        case 0x60B: return "FBTEXT_IPC_BLIT_GRID_REQ";
+        case 0x680: return "FBTEXT_IPC_RESP";
+        case 0x6FF: return "FBTEXT_IPC_ERROR";
+        default: return "UNKNOWN";
+        }
+    case WASMOS_OPCODE_SUBSYS_VT:
+        switch (type) {
+        case 0x700: return "VT_IPC_WRITE_REQ";
+        case 0x701: return "VT_IPC_READ_REQ";
+        case 0x702: return "VT_IPC_SET_ATTR_REQ";
+        case 0x703: return "VT_IPC_SWITCH_TTY";
+        case 0x704: return "VT_IPC_GET_ACTIVE_TTY";
+        case 0x705: return "VT_IPC_REGISTER_WRITER";
+        case 0x706: return "VT_IPC_SET_MODE_REQ";
+        case 0x707: return "VT_IPC_SERIAL_INPUT_REQ";
+        case 0x780: return "VT_IPC_RESP";
+        case 0x781: return "VT_IPC_INPUT_NOTIFY";
+        case 0x782: return "VT_IPC_KEY_FORWARD";
+        case 0x783: return "VT_IPC_VIS_NOTIFY";
+        case 0x7FF: return "VT_IPC_ERROR";
+        default: return "UNKNOWN";
+        }
+    case WASMOS_OPCODE_SUBSYS_SERIAL:
+        switch (type) {
+        case 0x500: return "SERIAL_DRIVER_WRITE_REQ";
+        case 0x501: return "SERIAL_DRIVER_READ_REQ";
+        case 0x580: return "SERIAL_DRIVER_RESP";
+        case 0x5FF: return "SERIAL_DRIVER_ERROR";
+        case 0x502: return "SERIAL_IPC_SUBSCRIBE_REQ";
+        case 0x582: return "SERIAL_IPC_SUBSCRIBE_RESP";
+        default: return "UNKNOWN";
+        }
+    case WASMOS_OPCODE_SUBSYS_KEYBOARD:
+        switch (type) {
+        case 0x800: return "KBD_IPC_SUBSCRIBE_REQ";
+        case 0x880: return "KBD_IPC_SUBSCRIBE_RESP";
+        case 0x801: return "KBD_IPC_KEY_NOTIFY";
+        default: return "UNKNOWN";
+        }
+    case WASMOS_OPCODE_SUBSYS_MOUSE:
+        switch (type) {
+        case 0x810: return "MOUSE_IPC_SUBSCRIBE_REQ";
+        case 0x890: return "MOUSE_IPC_SUBSCRIBE_RESP";
+        case 0x811: return "MOUSE_IPC_MOVE_NOTIFY";
+        default: return "UNKNOWN";
+        }
+    case WASMOS_OPCODE_SUBSYS_RTC:
+        switch (type) {
+        case 0x820: return "RTC_IPC_READ_REQ";
+        case 0x821: return "RTC_IPC_SET_REQ";
+        case 0x8A0: return "RTC_IPC_READ_RESP";
+        case 0x8A1: return "RTC_IPC_SET_RESP";
+        case 0x8FF: return "RTC_IPC_ERROR";
+        default: return "UNKNOWN";
+        }
+    case WASMOS_OPCODE_SUBSYS_VIRTIO_SERIAL:
+        switch (type) {
+        case 0x830: return "VIRTIO_SERIAL_IPC_QUERY_REQ";
+        case 0x831: return "VIRTIO_SERIAL_IPC_READ_REG32_REQ";
+        case 0x832: return "VIRTIO_SERIAL_IPC_WRITE_REG32_REQ";
+        case 0x8B0: return "VIRTIO_SERIAL_IPC_RESP";
+        case 0x8BF: return "VIRTIO_SERIAL_IPC_ERROR";
+        default: return "UNKNOWN";
+        }
+    case WASMOS_OPCODE_SUBSYS_DEVICE_MANAGER:
+        switch (type) {
+        case 0x900: return "DEVMGR_PUBLISH_DEVICE";
+        case 0x901: return "DEVMGR_PCI_SCAN_DONE";
+        case 0x902: return "DEVMGR_QUERY_MOUNT_REQ";
+        case 0x903: return "DEVMGR_PUBLISH_BLOCK_DEVICE";
+        case 0x904: return "DEVMGR_QUERY_BLOCK_MOUNT_REQ";
+        case 0x905: return "DEVMGR_ACPI_SCAN_DONE";
+        case 0x980: return "DEVMGR_MOUNT_INFO";
+        case 0x982: return "DEVMGR_BLOCK_MOUNT_INFO";
+        case 0x981: return "DEVMGR_QUERY_DONE";
+        default: return "UNKNOWN";
+        }
+    case WASMOS_OPCODE_SUBSYS_NETDRV:
+        switch (type) {
+        case 0xA00: return "NETDRV_IPC_LINK_GET";
+        case 0xA01: return "NETDRV_IPC_TX_FRAME";
+        case 0xA02: return "NETDRV_IPC_RX_POLL";
+        case 0xA03: return "NETDRV_IPC_STATS_GET";
+        case 0xA04: return "NETDRV_IPC_RX_FRAME_NOTIFY";
+        case 0xA05: return "NETDRV_IPC_LINK_NOTIFY";
+        case 0xA80: return "NETDRV_IPC_RESP";
+        case 0xAFF: return "NETDRV_IPC_ERROR";
+        default: return "UNKNOWN";
+        }
+    case WASMOS_OPCODE_SUBSYS_HRNG:
+        switch (type) {
+        case 0xC00: return "HRNG_IPC_GET_BYTES_REQ";
+        case 0xC80: return "HRNG_IPC_RESP";
+        case 0xCFF: return "HRNG_IPC_ERROR";
+        default: return "UNKNOWN";
+        }
+    case WASMOS_OPCODE_SUBSYS_NET:
+        switch (type) {
+        case 0xB00: return "NET_IPC_SOCKET_OPEN";
+        case 0xB01: return "NET_IPC_BIND";
+        case 0xB02: return "NET_IPC_CONNECT";
+        case 0xB03: return "NET_IPC_SEND";
+        case 0xB04: return "NET_IPC_RECV";
+        case 0xB05: return "NET_IPC_CLOSE";
+        case 0xB06: return "NET_IPC_POLL";
+        case 0xB07: return "NET_IPC_IFADDR_ADD";
+        case 0xB08: return "NET_IPC_IFADDR_DEL";
+        case 0xB09: return "NET_IPC_IFADDR_LIST";
+        case 0xB0A: return "NET_IPC_STACK_CREATE";
+        case 0xB0B: return "NET_IPC_STACK_DESTROY";
+        case 0xB0C: return "NET_IPC_STACK_SELECT";
+        case 0xB0D: return "NET_IPC_DATA_NOTIFY";
+        case 0xB0E: return "NET_IPC_TX_NOTIFY";
+        case 0xB0F: return "NET_IPC_RX_NOTIFY";
+        case 0xB10: return "NET_IPC_IF_SET_STATE";
+        case 0xB11: return "NET_IPC_DHCP_SET";
+        case 0xB12: return "NET_IPC_LISTEN";
+        case 0xB13: return "NET_IPC_ACCEPT";
+        case 0xB14: return "NET_IPC_RESOLVE";
+        case 0xB15: return "NET_IPC_DNS_SET";
+        case 0xB16: return "NET_IPC_DNS_LIST";
+        case 0xB80: return "NET_IPC_RESP";
+        case 0xBFF: return "NET_IPC_ERROR";
+        default: return "UNKNOWN";
+        }
+    case WASMOS_OPCODE_SUBSYS_PROC_DMA:
+        switch (type) {
+        case 0x230: return "PROC_IPC_DMA_MAP_BORROW_REQ";
+        case 0x231: return "PROC_IPC_DMA_SYNC_BORROW_REQ";
+        case 0x232: return "PROC_IPC_DMA_UNMAP_BORROW_REQ";
+        case 0x2B0: return "PROC_IPC_DMA_BORROW_RESP";
+        case 0x2BF: return "PROC_IPC_DMA_BORROW_ERROR";
+        default: return "UNKNOWN";
+        }
+    case WASMOS_OPCODE_SUBSYS_FONT:
+        switch (type) {
+        case 0xA00: return "FONT_IPC_OPEN_FONT_REQ";
+        case 0xA01: return "FONT_IPC_GET_METRICS_REQ";
+        case 0xA02: return "FONT_IPC_RASTER_GLYPH_REQ";
+        case 0xA03: return "FONT_IPC_MEASURE_GLYPH_REQ";
+        case 0xA04: return "FONT_IPC_RASTER_GLYPH_INTO_REQ";
+        case 0xA80: return "FONT_IPC_RESP";
+        case 0xAFF: return "FONT_IPC_ERROR";
+        default: return "UNKNOWN";
+        }
+    case WASMOS_OPCODE_SUBSYS_GFX:
+        switch (type) {
+        case 0x200: return "GFX_IPC_CREATE_WINDOW";
+        case 0x201: return "GFX_IPC_DESTROY_WINDOW";
+        case 0x202: return "GFX_IPC_RESIZE_WINDOW";
+        case 0x203: return "GFX_IPC_ALLOC_SHARED_BUFFER";
+        case 0x204: return "GFX_IPC_SUBMIT_COMMANDS";
+        case 0x205: return "GFX_IPC_PRESENT_WINDOW";
+        case 0x206: return "GFX_IPC_PUSH_EVENT";
+        case 0x207: return "GFX_IPC_RELEASE_SHARED_BUFFER";
+        case 0x208: return "GFX_IPC_SET_DISPLAY_MODE";
+        case 0x209: return "GFX_IPC_LIST_WINDOWS";
+        case 0x20A: return "GFX_IPC_FOCUS_WINDOW";
+        case 0x20B: return "GFX_IPC_SET_WINDOW_FLAGS";
+        case 0x20C: return "GFX_IPC_GET_DISPLAY_INFO";
+        case 0x20D: return "GFX_IPC_MOVE_WINDOW";
+        case 0x20E: return "GFX_IPC_SET_WINDOW_TITLE";
+        case 0x20F: return "GFX_IPC_GET_WINDOW_TITLE";
+        case 0x280: return "GFX_IPC_RESP";
+        case 0x2FF: return "GFX_IPC_ERROR";
+        default: return "UNKNOWN";
+        }
     default: return "UNKNOWN";
     }
 }

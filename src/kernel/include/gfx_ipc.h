@@ -21,27 +21,8 @@ enum {
     FB_IPC_QUERY_MODES = 0x0107
 };
 
-enum {
-    GFX_IPC_CREATE_WINDOW = 0x0200,
-    GFX_IPC_DESTROY_WINDOW = 0x0201,
-    GFX_IPC_RESIZE_WINDOW = 0x0202,
-    GFX_IPC_ALLOC_SHARED_BUFFER = 0x0203,
-    GFX_IPC_SUBMIT_COMMANDS = 0x0204,
-    GFX_IPC_PRESENT_WINDOW = 0x0205,
-    GFX_IPC_PUSH_EVENT = 0x0206, /* server->client event push (was POLL_EVENT) */
-    GFX_IPC_RELEASE_SHARED_BUFFER = 0x0207,
-    GFX_IPC_SET_DISPLAY_MODE = 0x0208,
-    GFX_IPC_LIST_WINDOWS = 0x0209,
-    GFX_IPC_FOCUS_WINDOW = 0x020A,
-    GFX_IPC_SET_WINDOW_FLAGS = 0x020B,
-    GFX_IPC_GET_DISPLAY_INFO = 0x020C,
-    GFX_IPC_MOVE_WINDOW = 0x020D,
-    GFX_IPC_SET_WINDOW_TITLE = 0x020E, /* arg0=window_id arg1=shmem_id arg2=title_len arg3=0 */
-    GFX_IPC_GET_WINDOW_TITLE =
-        0x020F, /* arg0=window_id arg1=shmem_id arg2=max_len arg3=0; reply arg1=actual_len */
-    GFX_IPC_RESP = 0x0280,
-    GFX_IPC_ERROR = 0x02FF
-};
+/* GFX_IPC_* opcodes come from the generated IPC opcode ABI (abi/opcodes.yaml). */
+#include "../../../abi/generated/c/wasmos_opcodes.h"
 
 /* Window flags for GFX_IPC_SET_WINDOW_FLAGS. These bits compose. */
 #define GFX_WINDOW_FLAG_TOPMOST (1u << 0)

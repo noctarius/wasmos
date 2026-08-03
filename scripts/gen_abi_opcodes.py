@@ -1,26 +1,26 @@
 #!/usr/bin/env python3
 """Generate the WASM/IPC opcode ABI from abi/opcodes.yaml.
 
-Opcodes are the POSITIVE `type` field of ipc_message_t, owned per subsystem in
-`src/drivers/include/wasmos_driver_abi.h`. This is the ABI-header core: negative
-`*_ERR_*` codes live in abi/errors.yaml, and flags/descriptor structs stay
-hand-written in the header.
+Opcodes are the POSITIVE `type` field of ipc_message_t, owned per subsystem.
+The IDL is the single source; consumers `#include` the generated enums
+(`wasmos_driver_abi.h` for the core subsystems, and the per-service headers
+`rtc_ipc.h`/`font_ipc.h`/`gfx_ipc.h` + `serial.c` for theirs). Negative
+`*_ERR_*` codes live in abi/errors.yaml; flags/descriptor structs stay
+hand-written in the per-service headers.
 
-Generates (into abi/generated/c/):
-  - wasmos_opcodes.h   per-subsystem opcode enums (reproducing the header) +
-                       a best-effort wasmos_opcode_name(type) diagnostic lookup
-
-and (into abi/generated/docs/):
-  - opcodes.md         per-subsystem reference tables for the docs
+Generates:
+  - abi/generated/c/wasmos_opcodes.h   per-subsystem opcode enums + subsystem-id
+       constants + wasmos_opcode_name(subsystem_id, type) diagnostic lookup
+  - abi/generated/docs/opcodes.md      per-subsystem reference tables
+  - abi/generated/{rust,go,zig,assemblyscript}/wasmos_opcodes.*  per-language consts
 
 See docs/architecture/34-abi-idl-and-error-model.md.
 
 Opcode values are NOT globally unique — they are endpoint-scoped, so the same
-value can appear in two subsystems (e.g. 0x223 is both a proc_broker and a
-service_registry request). C enums do not require cross-enum value uniqueness,
-so the per-subsystem enums reproduce that faithfully; the global name lookup is
-best-effort (first subsystem in id order wins; shadowed symbols are listed in a
-comment).
+value can appear in two subsystems (e.g. gfx and pm both at 0x200, font and
+netdrv both at 0xA00). The per-subsystem enums reproduce that faithfully, and
+the name lookup is subsystem-scoped (the caller passes the subsystem the
+endpoint speaks) so it is exact rather than best-effort.
 
 Usage:
     gen_abi_opcodes.py [--check] [--verify-source]
@@ -151,30 +151,31 @@ def emit_opcodes_h(m):
             o.extend(_doc_block(op.get("doc"), "    "))
             w(f"    {op['symbol']} = 0x{m.value(op):X},")
         w("};")
-    # best-effort global name lookup (first subsystem in id order wins on a
-    # value collision; shadowed symbols are listed for the reader).
-    seen = {}
-    shadowed = []
-    for s in m.by_id:
-        for op in s["opcodes"]:
-            v = m.value(op)
-            if v in seen:
-                shadowed.append((op["symbol"], v, seen[v]))
-            else:
-                seen[v] = op["symbol"]
+    # Subsystem ids, so the name lookup can be scoped. Opcode values are
+    # endpoint-scoped and reuse ranges across subsystems (e.g. gfx and pm both at
+    # 0x200), so a *global* value->name table would mislabel; the caller passes
+    # the subsystem it is speaking.
     w("")
-    w("/* Best-effort opcode -> symbol name for diagnostics/logging. Opcode values")
-    w(" * are endpoint-scoped, so on a cross-subsystem value collision the first")
-    w(" * subsystem (in id order) wins here:")
-    for sym, v, winner in shadowed:
-        w(f" *   0x{v:X} {sym} shadowed by {winner}")
-    if not shadowed:
-        w(" *   (no value collisions)")
-    w(" * Callers that know the peer subsystem should prefer the enum directly. */")
-    w("static inline const char* wasmos_opcode_name(uint32_t type) {")
-    w("    switch (type) {")
-    for v in sorted(seen):
-        w(f'    case 0x{v:X}: return "{seen[v]}";')
+    w("/* Subsystem ids for wasmos_opcode_name(). */")
+    w("enum {")
+    for s in m.by_id:
+        w(f"    WASMOS_OPCODE_SUBSYS_{s['name'].upper()} = {int(s['id'])},")
+    w("};")
+    w("")
+    w("/* Opcode -> symbol name within a subsystem (diagnostics/logging). Pass the")
+    w(" * WASMOS_OPCODE_SUBSYS_* the endpoint speaks; values are endpoint-scoped so")
+    w(" * a subsystem-scoped lookup is exact, unlike a global one. */")
+    w(
+        "static inline const char* wasmos_opcode_name(uint32_t subsystem_id, uint32_t type) {"
+    )
+    w("    switch (subsystem_id) {")
+    for s in m.by_id:
+        w(f"    case WASMOS_OPCODE_SUBSYS_{s['name'].upper()}:")
+        w("        switch (type) {")
+        for op in s["opcodes"]:
+            w(f'        case 0x{m.value(op):X}: return "{op["symbol"]}";')
+        w('        default: return "UNKNOWN";')
+        w("        }")
     w('    default: return "UNKNOWN";')
     w("    }")
     w("}")

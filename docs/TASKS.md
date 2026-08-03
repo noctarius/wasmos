@@ -282,13 +282,24 @@ returns; `FS_ERR_*`/`PROC_*` ride IPC opcodes), so the migration depends on them
   with `--check` + `--verify-source` wired into `quality`. Opcodes are
   endpoint-scoped, so value collisions across subsystems are expected (0x223,
   0x2A3 documented in the name table).
-- [ ] Phase 3b (opcodes, consolidation): fold the scattered opcode definitions
-  into the IDL and retire the drift — `rtc_ipc.h` (triplicated across
-  kernel/libc/libsys), `font_ipc.h`, `gfx_ipc.h`, `serial.c` — plus generate the
-  per-language opcode constants (the Go/Zig/AS/Rust FS subsets + the `.ts` driver
-  opcode literals). Resolve the two bugs this surfaced: `font_ipc.h` `FONT_IPC_* =
-  0xA00` vs the font service's `REQ_BASE 0xA000` (16× mismatch, and 0xA00 collides
-  with netdrv), and the RTC triplication.
+- [x] Phase 3b (opcodes, consolidation): the scattered opcode definitions are
+  folded into `abi/opcodes.yaml` (now 193 opcodes / 21 subsystems) and the drift
+  retired — `rtc_ipc.h` (was triplicated across kernel/libc/libsys),
+  `font_ipc.h`, `gfx_ipc.h` (was duplicated kernel/libc), and the `serial.c`
+  0x500 driver opcodes now all `#include` the generated `wasmos_opcodes.h`
+  instead of hand-defining enums; their `*_STATUS_*`/structs stay hand-written.
+  Per-language opcode constants generated (`abi/generated/{rust,go,zig,
+  assemblyscript}/wasmos_opcodes.*`). `font`/`gfx` are modeled as their own
+  subsystems (distinct services/endpoints), so their range reuse (`gfx`+`pm` at
+  0x200, `font`+`netdrv` at 0xA00) is faithful endpoint-scoping; the diagnostic
+  lookup is therefore **subsystem-scoped** — `wasmos_opcode_name(subsystem_id,
+  type)`. NOTE: the earlier "font 0xA00 vs 0xA000" bug was a misread —
+  `font_service.zig` `REQ_BASE 0xA000` is the request-id counter seed, not an
+  opcode base; font clients and server agree on 0xA00. Not force-migrated: the
+  pre-existing hand-rolled per-language subsets (libc Go/Zig/AS/Rust FS
+  constants, the `.ts` driver literals) — they can adopt the generated files
+  incrementally. Deferred: `gfx_ipc.h`'s struct layouts still differ kernel-vs-libc
+  (96 lines) — a separate (non-opcode) consolidation.
 - [ ] Phase 3c (optional): typed future-returning request/reply stubs carrying the
   transfer-buffer ownership contract.
 - [ ] Phase 4 (after 2 and 3): migrate the tree onto the packed error model —

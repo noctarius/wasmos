@@ -25,6 +25,10 @@
 
 #include "futex.h"
 
+/* Generated wasm3 host-call link table (WASMOS_WASM3_LINKS); see
+ * abi/hostcalls.yaml + scripts/gen_abi_hostcalls.py. */
+#include "wasmos_link_wasm3.inc"
+
 #include <stdint.h>
 #include <string.h>
 
@@ -3671,134 +3675,12 @@ int wasm3_link_wasmos(IM3Module module) {
         return -1;
     }
     int rc = 0;
-    rc |=
-        wasm3_link_raw(module, "wasmos", "ipc_create_endpoint", "i()", wasmos_ipc_create_endpoint);
-    rc |= wasm3_link_raw(module, "wasmos", "ipc_endpoint_owner", "i(i)", wasmos_ipc_endpoint_owner);
-    rc |= wasm3_link_raw(module, "wasmos", "ipc_send", "i(iiiiiiii)", wasmos_ipc_send);
-    rc |=
-        wasm3_link_raw(module, "wasmos", "xfer_buffer_acquire", "i(i)", wasmos_xfer_buffer_acquire);
-    rc |= wasm3_link_raw(module, "wasmos", "spawn_info_buffer", "i()", wasmos_spawn_info_buffer);
-    rc |=
-        wasm3_link_raw(module, "wasmos", "xfer_buffer_borrow", "i(iii)", wasmos_xfer_buffer_borrow);
-    rc |= wasm3_link_raw(module, "wasmos", "xfer_buffer_reborrow", "i(iii)",
-                         wasmos_xfer_buffer_reborrow);
-    rc |=
-        wasm3_link_raw(module, "wasmos", "xfer_buffer_release", "i(i)", wasmos_xfer_buffer_release);
-    rc |= wasm3_link_raw(module, "wasmos", "xfer_buffer_unborrow", "i(i)",
-                         wasmos_xfer_buffer_unborrow);
-    rc |= wasm3_link_raw(module, "wasmos", "buffer_acquire", "i(ii)", wasmos_buffer_acquire);
-    rc |= wasm3_link_raw(module, "wasmos", "buffer_borrow", "i(iiii)", wasmos_buffer_borrow);
-    rc |= wasm3_link_raw(module, "wasmos", "buffer_reborrow", "i(iiii)", wasmos_buffer_reborrow);
-    rc |= wasm3_link_raw(module, "wasmos", "buffer_release", "i(ii)", wasmos_buffer_release);
-    rc |= wasm3_link_raw(module, "wasmos", "buffer_unborrow", "i(i)", wasmos_buffer_unborrow);
-    rc |= wasm3_link_raw(module, "wasmos", "dma_map_borrow", "i(iiii)", wasmos_dma_map_borrow);
-    rc |= wasm3_link_raw(module, "wasmos", "dma_sync_borrow", "i(iiii)", wasmos_dma_sync_borrow);
-    rc |= wasm3_link_raw(module, "wasmos", "dma_unmap_borrow", "i(i)", wasmos_dma_unmap_borrow);
-    rc |= wasm3_link_raw(module, "wasmos", "ipc_select_one", "i(i)", wasmos_ipc_select_one);
-    rc |= wasm3_link_raw(module, "wasmos", "ipc_recv", "i(i)",
-                         wasmos_ipc_select_one); /* legacy alias */
-    /* Both naming conventions: sys_select_* (new) and ipc_select_* (legacy ESP binaries). */
-    rc |= wasm3_link_raw(module, "wasmos", "sys_select_create", "i()", wasmos_sys_select_create);
-    rc |= wasm3_link_raw(module, "wasmos", "sys_select_add", "i(ii)", wasmos_sys_select_add);
-    rc |= wasm3_link_raw(module, "wasmos", "sys_select_wait", "i(i)", wasmos_sys_select_wait);
-    rc |= wasm3_link_raw(module, "wasmos", "sys_select_destroy", "i(i)", wasmos_sys_select_destroy);
-    rc |= wasm3_link_raw(module, "wasmos", "ipc_select_create", "i()", wasmos_sys_select_create);
-    rc |= wasm3_link_raw(module, "wasmos", "ipc_select_add", "i(ii)", wasmos_sys_select_add);
-    rc |= wasm3_link_raw(module, "wasmos", "ipc_select_wait", "i(i)", wasmos_sys_select_wait);
-    rc |= wasm3_link_raw(module, "wasmos", "ipc_select_wait_timeout", "i(ii)",
-                         wasmos_sys_select_wait_timeout);
-    rc |= wasm3_link_raw(module, "wasmos", "ipc_select_destroy", "i(i)", wasmos_sys_select_destroy);
-    rc |= wasm3_link_raw(module, "wasmos", "ipc_drain", "i(i)", wasmos_ipc_drain);
-    rc |= wasm3_link_raw(module, "wasmos", "ipc_try_recv", "i(i)",
-                         wasmos_ipc_drain); /* legacy alias */
-    rc |= wasm3_link_raw(module, "wasmos", "ipc_notify", "i(i)", wasmos_ipc_notify);
-    rc |= wasm3_link_raw(module, "wasmos", "ipc_last_field", "i(i)", wasmos_ipc_last_field);
-    rc |= wasm3_link_raw(module, "wasmos", "console_write", "i(*i)", wasmos_console_write);
-    rc |= wasm3_link_raw(module, "wasmos", "debug_mark", "i(i)", wasmos_debug_mark);
-    rc |= wasm3_link_raw(module, "wasmos", "kmap_dump", "i()", wasmos_kmap_dump);
-    rc |= wasm3_link_raw(module, "wasmos", "kmap_dump_all", "i()", wasmos_kmap_dump_all);
-    rc |= wasm3_link_raw(module, "wasmos", "console_read", "i(*i)", wasmos_console_read);
-    rc |= wasm3_link_raw(module, "wasmos", "sync_user_read", "i(*i)", wasmos_sync_user_read);
-    rc |= wasm3_link_raw(module, "wasmos", "proc_count", "i()", wasmos_proc_count);
-    rc |= wasm3_link_raw(module, "wasmos", "proc_exit", "i(i)", wasmos_proc_exit);
-    rc |= wasm3_link_raw(module, "wasmos", "proc_notify_ready", "i()", wasmos_proc_notify_ready);
-    rc |= wasm3_link_raw(module, "wasmos", "sched_ticks", "i()", wasmos_sched_ticks);
-    rc |= wasm3_link_raw(module, "wasmos", "sched_ready_count", "i()", wasmos_sched_ready_count);
-    rc |= wasm3_link_raw(module, "wasmos", "sched_current_pid", "i()", wasmos_sched_current_pid);
-    rc |= wasm3_link_raw(module, "wasmos", "sched_cpu_count", "i()", wasmos_sched_cpu_count);
-    rc |= wasm3_link_raw(module, "wasmos", "sched_cpu_stats", "i(i*)", wasmos_sched_cpu_stats);
-    rc |= wasm3_link_raw(module, "wasmos", "physmem_stats", "i(*)", wasmos_physmem_stats);
-    rc |= wasm3_link_raw(module, "wasmos", "kernel_runtime", "i()", wasmos_kernel_runtime);
-    rc |= wasm3_link_raw(module, "wasmos", "sched_yield", "i()", wasmos_sched_yield);
-    rc |= wasm3_link_raw(module, "wasmos", "thread_gettid", "i()", wasmos_thread_gettid);
-    rc |= wasm3_link_raw(module, "wasmos", "thread_create", "i(iiii)", wasmos_thread_create);
-    rc |= wasm3_link_raw(module, "wasmos", "thread_yield", "i()", wasmos_thread_yield);
-    rc |= wasm3_link_raw(module, "wasmos", "thread_exit", "i(i)", wasmos_thread_exit);
-    rc |= wasm3_link_raw(module, "wasmos", "thread_join", "i(i)", wasmos_thread_join);
-    rc |= wasm3_link_raw(module, "wasmos", "thread_detach", "i(i)", wasmos_thread_detach);
-    rc |= wasm3_link_raw(module, "wasmos", "proc_info", "i(i*i)", wasmos_proc_info);
-    rc |= wasm3_link_raw(module, "wasmos", "proc_info_ex", "i(i*i*)", wasmos_proc_info_ex);
-    rc |= wasm3_link_raw(module, "wasmos", "proc_info_stats", "i(i*i**)", wasmos_proc_info_stats);
-    rc |= wasm3_link_raw(module, "wasmos", "block_buffer_phys", "i()", wasmos_block_buffer_phys);
-    rc |=
-        wasm3_link_raw(module, "wasmos", "block_buffer_copy", "i(i*ii)", wasmos_block_buffer_copy);
-    rc |= wasm3_link_raw(module, "wasmos", "block_buffer_write", "i(i*ii)",
-                         wasmos_block_buffer_write);
-    rc |= wasm3_link_raw(module, "wasmos", "block_buffer_map", "i()", wasmos_block_buffer_map);
-    rc |= wasm3_link_raw(module, "wasmos", "xfer_buffer_map", "i(i)", wasmos_xfer_buffer_map);
-    rc |= wasm3_link_raw(module, "wasmos", "xfer_buffer_unmap", "i(i)", wasmos_xfer_buffer_unmap);
-    rc |= wasm3_link_raw(module, "wasmos", "xfer_buffer_size", "i()", wasmos_xfer_buffer_size);
-    rc |= wasm3_link_raw(module, "wasmos", "fs_endpoint", "i()", wasmos_fs_endpoint);
-    rc |= wasm3_link_raw(module, "wasmos", "xfer_buffer_read", "i(i*ii)", wasmos_xfer_buffer_read);
-    rc |=
-        wasm3_link_raw(module, "wasmos", "xfer_buffer_write", "i(i*ii)", wasmos_xfer_buffer_write);
-    rc |= wasm3_link_raw(module, "wasmos", "early_log_size", "i()", wasmos_early_log_size);
-    rc |= wasm3_link_raw(module, "wasmos", "early_log_copy", "i(*ii)", wasmos_early_log_copy);
-    rc |= wasm3_link_raw(module, "wasmos", "boot_config_size", "i()", wasmos_boot_config_size);
-    rc |= wasm3_link_raw(module, "wasmos", "boot_config_copy", "i(*ii)", wasmos_boot_config_copy);
-    rc |= wasm3_link_raw(module, "wasmos", "env_get", "i(*i*i)", wasmos_env_get);
-    rc |= wasm3_link_raw(module, "wasmos", "env_set", "i(*i*i)", wasmos_env_set);
-    rc |= wasm3_link_raw(module, "wasmos", "env_unset", "i(*i)", wasmos_env_unset);
-    rc |= wasm3_link_raw(module, "wasmos", "system_halt", "i()", wasmos_system_halt);
-    rc |= wasm3_link_raw(module, "wasmos", "system_reboot", "i()", wasmos_system_reboot);
-    rc |= wasm3_link_raw(module, "wasmos", "acpi_rsdp_info", "i(**i)", wasmos_acpi_rsdp_info);
-    rc |= wasm3_link_raw(module, "wasmos", "boot_module_name", "i(i*i)", wasmos_boot_module_name);
-    rc |= wasm3_link_raw(module, "wasmos", "initfs_entry_count", "i()", wasmos_initfs_entry_count);
-    rc |= wasm3_link_raw(module, "wasmos", "initfs_entry_name", "i(i*i)", wasmos_initfs_entry_name);
-    rc |= wasm3_link_raw(module, "wasmos", "initfs_entry_size", "i(i)", wasmos_initfs_entry_size);
-    rc |=
-        wasm3_link_raw(module, "wasmos", "initfs_entry_copy", "i(i*ii)", wasmos_initfs_entry_copy);
-    rc |= wasm3_link_raw(module, "wasmos", "initfs_find_path", "i(*i)", wasmos_initfs_find_path);
-    rc |= wasm3_link_raw(module, "wasmos", "io_in8", "i(i)", wasmos_io_in8);
-    rc |= wasm3_link_raw(module, "wasmos", "io_in16", "i(i)", wasmos_io_in16);
-    rc |= wasm3_link_raw(module, "wasmos", "io_in32", "i(i)", wasmos_io_in32);
-    rc |= wasm3_link_raw(module, "wasmos", "io_out8", "i(ii)", wasmos_io_out8);
-    rc |= wasm3_link_raw(module, "wasmos", "io_out16", "i(ii)", wasmos_io_out16);
-    rc |= wasm3_link_raw(module, "wasmos", "io_out32", "i(ii)", wasmos_io_out32);
-    rc |= wasm3_link_raw(module, "wasmos", "io_wait", "i()", wasmos_io_wait);
-    rc |= wasm3_link_raw(module, "wasmos", "framebuffer_info", "i(ii)", wasmos_framebuffer_info);
-    rc |= wasm3_link_raw(module, "wasmos", "framebuffer_map", "i(ii)", wasmos_framebuffer_map);
-    rc |= wasm3_link_raw(module, "wasmos", "phys_map", "i(iiii)", wasmos_phys_map);
-    rc |= wasm3_link_raw(module, "wasmos", "region_alloc", "i(iii)", wasmos_region_alloc);
-    rc |= wasm3_link_raw(module, "wasmos", "framebuffer_pixel", "i(iii)", wasmos_framebuffer_pixel);
-    rc |= wasm3_link_raw(module, "wasmos", "shmem_create", "i(ii)", wasmos_shmem_create);
-    rc |= wasm3_link_raw(module, "wasmos", "klog_register_ring", "i(i)", wasmos_klog_register_ring);
-    rc |= wasm3_link_raw(module, "wasmos", "shmem_grant", "i(ii)", wasmos_shmem_grant);
-    rc |= wasm3_link_raw(module, "wasmos", "shmem_revoke", "i(ii)", wasmos_shmem_revoke);
-    rc |= wasm3_link_raw(module, "wasmos", "shmem_map", "i(iii)", wasmos_shmem_map);
-    rc |= wasm3_link_raw(module, "wasmos", "shmem_map_auto", "i(ii)", wasmos_shmem_map_auto);
-    rc |= wasm3_link_raw(module, "wasmos", "shmem_flush", "i(iii)", wasmos_shmem_flush);
-    rc |= wasm3_link_raw(module, "wasmos", "shmem_refresh", "i(iii)", wasmos_shmem_refresh);
-    rc |= wasm3_link_raw(module, "wasmos", "shmem_unmap", "i(i)", wasmos_shmem_unmap);
-    rc |= wasm3_link_raw(module, "wasmos", "irq_route_ipc", "i(ii)", wasmos_irq_route_ipc);
-    rc |= wasm3_link_raw(module, "wasmos", "irq_ack", "i(i)", wasmos_irq_ack);
-    rc |= wasm3_link_raw(module, "wasmos", "irq_configure", "i(ii)", wasmos_irq_configure);
-    rc |= wasm3_link_raw(module, "wasmos", "irq_unroute", "i(i)", wasmos_irq_unroute);
-    rc |= wasm3_link_raw(module, "wasmos", "serial_register", "i(i)", wasmos_serial_register);
-    rc |= wasm3_link_raw(module, "wasmos", "input_push", "i(i)", wasmos_input_push);
-    rc |= wasm3_link_raw(module, "wasmos", "input_read", "i()", wasmos_input_read);
-    rc |= wasm3_link_raw(module, "wasmos", "futex_wait", "i(iii)", wasmos_futex_wait);
-    rc |= wasm3_link_raw(module, "wasmos", "futex_wake", "i(ii)", wasmos_futex_wake);
+    /* Host-call links generated from abi/hostcalls.yaml
+     * (scripts/gen_abi_hostcalls.py); env/wasi links stay hand-written
+     * in wasm3_link_env below. */
+#define X(mod, name, sig, fn) rc |= wasm3_link_raw(module, mod, name, sig, fn);
+    WASMOS_WASM3_LINKS(X)
+#undef X
     if (rc != 0) {
         klog_write("[kernel] wasm3 link errors\n");
         return -1;

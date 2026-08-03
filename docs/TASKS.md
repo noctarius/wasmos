@@ -222,12 +222,18 @@ returns; `FS_ERR_*`/`PROC_*` ride IPC opcodes), so the migration depends on them
   `clang++ -Wall -Wextra -Werror` against arity-derived wrapper decls (proves
   every case's arg count matches its wrapper); `--verify-source` also confirms
   the per-id wrapper fn matches the live switch.
-- [ ] Phase 2c (remaining): generate the per-language client stubs
-  (C/Rust/Go/Zig/AS) and wrapper forward-decls; emit an ABI-version
-  `static_assert` across variants. Then swap the generated tables/enum/dispatch
-  into the kernel (`warp_ring3.h`, `link.cpp`, `link.c`, `warp_aot.cpp`) one site
-  at a time, each `run-qemu-test`-gated (this is where the `proc_info_stats` +
-  `dma_map_borrow` fixes actually land).
+- [x] First swap (proves the loop): `wasm3_link_wasmos` (`src/kernel/wasm3/link.c`)
+  now `#include`s the generated `wasmos_link_wasm3.inc` and expands
+  `WASMOS_WASM3_LINKS(X)` instead of the hand-written `rc |= wasm3_link_raw(...)`
+  cascade (129 lines retired). `abi/generated/c` added to `CFLAGS_KERNEL`. Live in
+  the default wasm3 build: `run-qemu-test` boots through to CLI + calculator +
+  halt, and `run-kernel-unit-tests` pass.
+- [ ] Phase 2c (remaining): swap the WARP surfaces into the kernel — HC enum
+  (`warp_ring3.h`), `WASMOS_SYMBOLS` (`link.cpp`), the ring-3 dispatch
+  (`warp_ring3_dispatch` → `warp_ring3_dispatch_table`), and the AOT table
+  (`warp_aot.cpp`), each gated by a WARP `run-qemu-test` (this is where the
+  `proc_info_stats` + `dma_map_borrow` fixes land). Then generate the
+  per-language client stubs (C/Rust/Go/Zig/AS) and an ABI-version `static_assert`.
 - [ ] Phase 3: add `abi/opcodes.yaml` + generator producing the
   `wasmos_driver_abi.h` opcode enum, a runtime `opcode → name` table (feeds
   diagnostics), and the doc opcode tables; optionally typed future-returning

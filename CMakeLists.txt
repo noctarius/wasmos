@@ -2380,3 +2380,54 @@ if (TARGET wasmos_tidy_plugin)
   add_dependencies(lint wasmos_tidy_plugin)
   add_dependencies(quality wasmos_tidy_plugin)
 endif ()
+
+# ---------------------------------------------------------------------------
+# IDE index targets
+# ---------------------------------------------------------------------------
+# The wasmos_add_*_app_target helpers already emit a per-app `<name>_ide` target,
+# and the kernel/net_stack declare their own. The shared/support areas below are
+# NOT built through those helpers, so their sources were missing from
+# compile_commands.json and showed up in CLion as "not in a project target".
+#
+# wasmos_ide_index globs each area (CONFIGURE_DEPENDS, so a new file is picked up
+# on the next configure — no per-file CMake edit for IDE coverage) into an
+# EXCLUDE_FROM_ALL OBJECT library. These are never linked, so they cannot affect
+# the real build or the boot; they exist only for clangd/CLion indexing and
+# clang-tidy. See wasmos_add_ide_c_target above for the shared compile options.
+function(wasmos_ide_index name)
+  cmake_parse_arguments(II "" "" "DIRS;INCLUDES" ${ARGN})
+  set(_srcs)
+  foreach(_d ${II_DIRS})
+    file(GLOB_RECURSE _g CONFIGURE_DEPENDS
+      "${_d}/*.c" "${_d}/*.cc" "${_d}/*.cpp" "${_d}/*.cxx")
+    list(APPEND _srcs ${_g})
+  endforeach()
+  if (_srcs)
+    wasmos_add_ide_c_target(${name} SOURCES ${_srcs} INCLUDES ${II_INCLUDES})
+  endif ()
+endfunction()
+
+wasmos_ide_index(wasmos_ide_libc
+  DIRS ${LIBC_DIR}
+  INCLUDES ${LIBC_DIR}/include ${DRIVER_WASM_DIR}/include ${LIBSYS_WASM_DIR}/include)
+
+wasmos_ide_index(wasmos_ide_libsys
+  DIRS ${LIBSYS_WASM_DIR} ${LIBSYS_NATIVE_DIR}
+  INCLUDES ${LIBSYS_WASM_DIR}/include ${LIBSYS_NATIVE_DIR}/include
+           ${LIBC_DIR}/include ${DRIVER_WASM_DIR}/include)
+
+wasmos_ide_index(wasmos_ide_libui
+  DIRS ${CMAKE_SOURCE_DIR}/src/libui
+  INCLUDES ${CMAKE_SOURCE_DIR}/src/libui/include ${LIBC_DIR}/include
+           ${DRIVER_WASM_DIR}/include)
+
+wasmos_ide_index(wasmos_ide_unit
+  DIRS ${CMAKE_SOURCE_DIR}/tests/unit
+  INCLUDES ${KERNEL_DIR}/include ${CMAKE_SOURCE_DIR}/tests/unit/include
+           ${DRIVER_WASM_DIR}/include ${LIBC_DIR}/include
+           ${LIBSYS_WASM_DIR}/include ${LIBSYS_NATIVE_DIR}/include)
+
+wasmos_ide_index(wasmos_ide_tools
+  DIRS ${CMAKE_SOURCE_DIR}/src/tools
+  INCLUDES ${WARP_DIR} ${WARP_DIR}/src ${DRIVER_WASM_DIR}/include
+           ${KERNEL_DIR}/include ${CMAKE_SOURCE_DIR}/abi/generated/c)

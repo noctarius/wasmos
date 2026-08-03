@@ -43,6 +43,25 @@ Adding a kernel `.c` requires updating all three or the link fails:
   `src/libsys/native/zig/libsys_native.c`. Keep both sides in sync (AGENTS rule).
 - Design: `docs/architecture/09-process-and-ipc.md`.
 
+## IDE indexing (CLion / clangd) — how sources get a "project target"
+- CLion/clangd + clang-tidy index a file only if it has an entry in
+  `build/compile_commands.json` (exported by a normal configure). The real
+  kernel/app builds use `add_custom_command` (raw clang), which CMake does NOT
+  export — so coverage comes from parallel **`EXCLUDE_FROM_ALL` OBJECT targets**
+  (never linked; indexing only).
+- Apps/drivers/services/utils built via `wasmos_add_*_app_target` get a
+  `<name>_ide` target automatically from their `SOURCES`. The kernel derives
+  `kernel_ide` from `KERNEL_SOURCES`; `net_stack` declares its own (lwIP/mbedTLS
+  includes).
+- The shared support areas (`libc`, `libsys`, `libui`, `tests/unit`,
+  `src/tools`) are globbed by `wasmos_ide_index(...)` at the end of the root
+  `CMakeLists.txt` (`file(GLOB … CONFIGURE_DEPENDS)`), so a new file there is
+  picked up on the next configure with no CMake edit.
+- If you add a source in a NEW bespoke build area (not under those globs and not
+  via an app helper), add a `wasmos_ide_index(...)` call, or it will show up in
+  CLion as "not in a project target." Verify coverage: a file's realpath appears
+  in `build/compile_commands.json`.
+
 ## Host unit tests
 - Live in `tests/unit/`, wired into the `run-kernel-unit-tests` target in the root
   `CMakeLists.txt` (one `COMMAND` per test: compile with `-I${KERNEL_DIR}/include`

@@ -4,7 +4,7 @@
 Generates (into abi/generated/c/):
   - wasmos_hostcall_ids.h    the kernel HC_* id enum
   - wasmos_symbols_warp.inc  the WARP WASMOS_SYMBOLS(LINK) table
-  - wasmos_link_wasm3.inc    the wasm3 link table (wasm3_link_raw calls + m3 sigs)
+  - wasmos_link_wasm3.inc    the wasm3 link X-macro WASMOS_WASM3_LINKS(X) (m3 sigs)
 
 and verifies them against the live hand-written sources
 (src/kernel/include/warp_ring3.h, src/kernel/warp/link.cpp,
@@ -200,18 +200,38 @@ def emit_warp_symbols(m):
 
 
 def emit_wasm3_links(m):
-    """wasm3 link table for the "wasmos" module (env/wasi live in separate tables)."""
+    """wasm3 host-call links for module "wasmos" as an X-macro.
+
+    Pure data — no `rc`/`module` in scope, no accumulation policy baked in
+    (mirroring WARP's WASMOS_SYMBOLS(LINK)). The hand-written linker owns the
+    mechanism, e.g.:
+        int rc = 0;
+        #define X(mod, name, sig, fn) rc |= wasm3_link_raw(module, mod, name, sig, fn);
+        WASMOS_WASM3_LINKS(X)
+        #undef X
+        if (rc != 0) { ... }
+    env/wasi links live in separate tables.
+    """
     o = list(BANNER)
     w = o.append
-    w('/* wasm3 link calls for module "wasmos" (m3 sig strings derived from the')
-    w(" * IDL param kinds; `*` = m3-translated guest pointer, `i` = raw i32). */")
+    w('/* wasm3 host-call links for module "wasmos", as an X-macro so the linking')
+    w(" * mechanism (rc accumulation, error check) stays in the hand-written caller:")
+    w(
+        " *   #define X(mod, name, sig, fn) rc |= wasm3_link_raw(module, mod, name, sig, fn);"
+    )
+    w(" *   WASMOS_WASM3_LINKS(X)  #undef X")
+    w(
+        " * m3 sig: `*` = m3-translated guest pointer, `i` = raw i32 (incl. wasm3:i32). */"
+    )
+    w("#define WASMOS_WASM3_LINKS(X) \\")
+    lines = []
     for e in m.ordered:
         if m.module(e) != "wasmos" or "wasm3" not in m.runtimes(e):
             continue
-        w(
-            f'    rc |= wasm3_link_raw(module, "wasmos", "{e["name"]}", '
-            f'"{m.wasm3_sig(e)}", {m.wasm3_fn(e)});'
+        lines.append(
+            f'    X("wasmos", "{e["name"]}", "{m.wasm3_sig(e)}", {m.wasm3_fn(e)})'
         )
+    w(" \\\n".join(lines))
     w("")
     return "\n".join(o)
 

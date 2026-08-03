@@ -20,6 +20,9 @@ This repository uses Codex CLI to assist with development. Follow these conventi
   - `skills/wasmos-system-util` — create a one-shot CLI utility under `src/utils/`.
   - `skills/wasmos-ide-targets` — keep CLion/clangd IDE coverage in sync (audit +
     fix "not in a project target").
+  - `skills/wasmos-build-and-run` — build/run QEMU + test targets with the right
+    runtime (wasm3 vs WARP) via Kconfig `.config` / `configs/*_defconfig`; the
+    one-build-dir-per-config rule and why `-D` runtime flags can be overridden.
   - `skills/wasmos-kernel-internals` — kernel internals reference.
 
 ## Always Do

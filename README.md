@@ -45,10 +45,14 @@ It defines repository workflow and documentation/update conventions.
 - Early generic `virtio-serial` driver service (`virtio.serial`) for host/guest automation plumbing and future transport consumers.
 - `virtio-rng` hardware entropy driver with non-blocking `libsys` byte-array,
   integer, and unit-interval float helpers for WASM and native clients.
+- Networking stack: `virtio-net` transport driver plus a native lwIP `net-stack`
+  service providing IPv4 UDP/TCP stream sockets, DHCP/static addressing, DNS
+  resolution, and a verifying TLS 1.2 client (mbedTLS, full chain + hostname
+  verification), with `curl`, `host`, and `ip` user-space tools.
 - Directory-based mount namespace (`/init`, `/boot`, `/user`) through `fs-manager` VFS routing across initfs and FAT-backed filesystems.
 - Buffer-borrow-based DMA support integrated across capability policy, runtime transport, and driver paths.
 - End-to-end threading support (`thread_create`, `thread_join`, `thread_detach`, `thread_yield`, `thread_exit`) for ring-3 workloads, with user-space reentrant mutex across WASM and native runtimes.
-- Native user-space coroutine baseline with caller-owned stacks, cooperative scheduling, futures/promises, and joins; initially single-worker and used as the foundation for asynchronous networking work.
+- User-space coroutine/future/promise runtime across both runtimes (native stackful, WASM stackless) with caller-owned storage, cooperative scheduling, `then`/`race`/`all` combinators, and joins; it underpins the asynchronous networking stack.
 - Full windowing and graphics stack: framebuffer driver, software compositor, shared-buffer rendering, input routing, window chrome (title bar, close/maximize/restore, drag-to-move, live resize), software cursor, popup menus, and a system menu bar with date/time display and per-app window lists; backed by a native Zig TTF `font-service` for text rendering.
 - `libui` component toolkit — vtable-dispatched widget tree (panels, labels, buttons, checkboxes, text inputs, scroll views, list views, dropdowns, and menus) shared across WASM and native ring-3 apps.
 - Practical interactive environment with VT/CLI, multi-TTY switching, and scriptable boot-time userspace workflows.
@@ -56,9 +60,7 @@ It defines repository workflow and documentation/update conventions.
 - Path-based executable lookup now classifies valid `.wap` blobs first, can synchronously ask a broker-owned external format handler for a spawn plan, and can then launch a validated broker-returned `.wap` host path through the normal PM path flow.
 
 <p align="center">
-  <picture>
-    <img src="wasmos-ui.png" alt="Wasmo the WASMOS mascot" width="600">
-  </picture>
+  <img src="wasmos-ui.png" alt="WASMOS graphical desktop and compositor" width="600">
 </p>
 
 ## Quick Start

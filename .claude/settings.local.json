@@ -179,7 +179,12 @@
       "Bash(echo \"run1 exit=$? -> $\\(grep -aE '^OK|^FAILED' /private/tmp/claude-501/-Volumes-git-wasmos/368b3708-6ba8-4069-a031-33b80d4cf750/scratchpad/ifaddr_smp1_a.log\\)  rxovr=$\\(grep -ac dbg-rxovr /private/tmp/claude-501/-Volumes-git-wasmos/368b3708-6ba8-4069-a031-33b80d4cf750/scratchpad/ifaddr_smp1_a.log\\) rxdrop=$\\(grep -ac dbg-rxdrop /private/tmp/claude-501/-Volumes-git-wasmos/368b3708-6ba8-4069-a031-33b80d4cf750/scratchpad/ifaddr_smp1_a.log\\)\")",
       "Bash(awk 'NR>=1040 && NR<=1145 && /^[a-zA-Z].*\\\\\\(/{print NR\": \"$0}' src/kernel/process.c)",
       "Bash(awk 'NR<=1915 && \\(/for \\\\\\(;;\\\\\\)/ || /while \\\\\\(1\\\\\\)/ || /while \\\\\\(true\\\\\\)/\\){print NR\": \"$0}' src/services/device_manager/device_manager.c)",
-      "Bash(grep -v \"\\\\.h$\")"
+      "Bash(grep -v \"\\\\.h$\")",
+      "Bash(echo \"\\(exit=$?\\)\")",
+      "Bash(awk '/^int mm_context_create|mm_context_create\\\\\\(uint32_t id\\\\\\)/{f=1} f{print NR\": \"$0} f&&/^}/{c++; if\\(c>=1 && /^}/\\){exit}}' src/kernel/memory.c)",
+      "Bash(grep -oE '\\\\-o \\\\$\\\\{BUILD_DIR\\\\}/test_[a-z0-9_]+')",
+      "Bash(awk 'NR>=1949 && NR<=2320' CMakeLists.txt)",
+      "Bash(grep -oE 'COMMAND \\\\$\\\\{BUILD_DIR\\\\}/test_[a-z0-9_]+')"
     ]
   }
 }

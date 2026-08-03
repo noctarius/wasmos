@@ -34,7 +34,7 @@ fat_r_t fat_chain_next(fat_chain_ctx_t* c, fat_block_t* blk, const fat_mount_t* 
  * (clusters visited, >= 1). */
 fat_r_t fat_chain_walk(fat_chainwalk_ctx_t* w, fat_block_t* blk, const fat_mount_t* mnt);
 
-/* Find the first free cluster into f->result.  FAT_R_ERR with FS_ERR_NO_SPACE if
+/* Find the first free cluster into f->result.  FAT_R_ERR with -(int32_t)WASMOS_ERR_FS_NO_SPACE if
  * the volume is full. */
 fat_r_t fat_find_free_cluster(fat_findfree_ctx_t* f, fat_block_t* blk, const fat_mount_t* mnt);
 

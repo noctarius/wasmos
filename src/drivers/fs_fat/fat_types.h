@@ -61,7 +61,7 @@ typedef enum {
 typedef enum {
     FAT_R_DONE = 0, /* op complete: send FS_IPC_RESP using ctx->resp_* */
     FAT_R_WAIT = 1, /* op submitted block I/O: resume on completion */
-    FAT_R_ERR = 2   /* op failed: send FS_IPC_ERROR using ctx->err (an FS_ERR_*) */
+    FAT_R_ERR = 2   /* op failed: send FS_IPC_ERROR using ctx->err (an WASMOS_ERR_FS_*) */
 } fat_r_t;
 
 #pragma pack(push, 1)
@@ -492,7 +492,7 @@ typedef struct fat_op_ctx {
     uint8_t in_use;
     fat_op_t op;
     int cont;    /* op-level coroutine resume point (fat_co.h) */
-    int32_t err; /* FS_ERR_* to report on FAT_R_ERR */
+    int32_t err; /* WASMOS_ERR_FS_* to report on FAT_R_ERR */
 
     /* Request identity (was g_fs_req). */
     int32_t type;

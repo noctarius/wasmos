@@ -147,7 +147,7 @@ fat_r_t fat_geom_mount_step(fat_mount_t* mnt, fat_block_t* blk) {
         /* LBA 0 is an MBR, not a BPB: locate the first FAT partition. */
         if (fat_try_parse_mbr(sector, &part_lba) != 0) {
             fat_log("no FAT boot sector\n");
-            FAT_CO_FAIL(mnt, blk, FS_ERR_NOT_READY);
+            FAT_CO_FAIL(mnt, blk, -(int32_t)WASMOS_ERR_FS_NOT_READY);
         }
         mnt->tried_mbr = 1;
         mnt->boot_lba = part_lba;
@@ -156,7 +156,7 @@ fat_r_t fat_geom_mount_step(fat_mount_t* mnt, fat_block_t* blk) {
 
     if (fat_parse_boot(mnt, fat_block_sector(blk)) != 0) {
         fat_log("boot parse failed\n");
-        FAT_CO_FAIL(mnt, blk, FS_ERR_CORRUPT);
+        FAT_CO_FAIL(mnt, blk, -(int32_t)WASMOS_ERR_FS_CORRUPT);
     }
     mnt->mounted = 1;
     FAT_CO_END(mnt);

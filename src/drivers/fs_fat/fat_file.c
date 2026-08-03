@@ -146,7 +146,7 @@ fat_r_t fat_store_open_file_size(fat_storesize_ctx_t* c, fat_block_t* blk, const
 
     FAT_CO_BEGIN(c);
     if (!c->file || c->file->dir_lba == 0 || c->file->dir_index >= (mnt->bytes_per_sector / 32u)) {
-        FAT_CO_FAIL(c, blk, FS_ERR_CORRUPT);
+        FAT_CO_FAIL(c, blk, -(int32_t)WASMOS_ERR_FS_CORRUPT);
     }
     FAT_CO_READ(c, blk, c->file->dir_lba + c->file->dir_sector);
     ent = fat_block_sector(blk) + c->file->dir_index * 32u;
@@ -165,7 +165,7 @@ fat_r_t fat_store_open_file_cluster(fat_storecluster_ctx_t* c, fat_block_t* blk,
 
     FAT_CO_BEGIN(c);
     if (!c->file || c->file->dir_lba == 0 || c->file->dir_index >= (mnt->bytes_per_sector / 32u)) {
-        FAT_CO_FAIL(c, blk, FS_ERR_CORRUPT);
+        FAT_CO_FAIL(c, blk, -(int32_t)WASMOS_ERR_FS_CORRUPT);
     }
     FAT_CO_READ(c, blk, c->file->dir_lba + c->file->dir_sector);
     ent = fat_block_sector(blk) + c->file->dir_index * 32u;
@@ -184,7 +184,7 @@ fat_r_t fat_reposition_open_file(fat_reposition_ctx_t* c, fat_block_t* blk,
 
     FAT_CO_BEGIN(c);
     if (!c->file || c->offset > c->limit) {
-        FAT_CO_FAIL(c, blk, FS_ERR_RANGE);
+        FAT_CO_FAIL(c, blk, -(int32_t)WASMOS_ERR_FS_RANGE);
     }
     c->file->offset = c->offset;
     if (c->offset == 0) {
@@ -195,7 +195,7 @@ fat_r_t fat_reposition_open_file(fat_reposition_ctx_t* c, fat_block_t* blk,
         FAT_CO_DONE(c);
     }
     if (c->file->first_cluster < 2 || mnt->sectors_per_cluster == 0 || mnt->bytes_per_sector == 0) {
-        FAT_CO_FAIL(c, blk, FS_ERR_RANGE);
+        FAT_CO_FAIL(c, blk, -(int32_t)WASMOS_ERR_FS_RANGE);
     }
 
     cluster_bytes = (uint32_t)mnt->sectors_per_cluster * mnt->bytes_per_sector;
@@ -216,7 +216,7 @@ fat_r_t fat_reposition_open_file(fat_reposition_ctx_t* c, fat_block_t* blk,
         c->step.cluster = c->file->current_cluster;
         FAT_CO_AWAIT(c, fat_chain_next(&c->step, blk, mnt));
         if (c->step.next == 0) {
-            FAT_CO_FAIL(c, blk, FS_ERR_RANGE);
+            FAT_CO_FAIL(c, blk, -(int32_t)WASMOS_ERR_FS_RANGE);
         }
         c->file->current_cluster = c->step.next;
         c->cluster_skip--;
@@ -224,7 +224,7 @@ fat_r_t fat_reposition_open_file(fat_reposition_ctx_t* c, fat_block_t* blk,
 
     c->file->file_lba = fat_lba_for_cluster(mnt, c->file->current_cluster);
     if (c->file->file_lba == 0) {
-        FAT_CO_FAIL(c, blk, FS_ERR_RANGE);
+        FAT_CO_FAIL(c, blk, -(int32_t)WASMOS_ERR_FS_RANGE);
     }
     FAT_CO_END(c);
 }
@@ -232,11 +232,11 @@ fat_r_t fat_reposition_open_file(fat_reposition_ctx_t* c, fat_block_t* blk,
 fat_r_t fat_append_cluster_to_file(fat_append_ctx_t* c, fat_block_t* blk, const fat_mount_t* mnt) {
     FAT_CO_BEGIN(c);
     if (!c->file) {
-        FAT_CO_FAIL(c, blk, FS_ERR_BAD_ARGS);
+        FAT_CO_FAIL(c, blk, -(int32_t)WASMOS_ERR_FS_BAD_ARGS);
     }
     c->end_marker = fat_end_of_chain_marker(mnt);
     if (c->end_marker == 0) {
-        FAT_CO_FAIL(c, blk, FS_ERR_CORRUPT);
+        FAT_CO_FAIL(c, blk, -(int32_t)WASMOS_ERR_FS_CORRUPT);
     }
 
     c->findfree.cont = 0;
@@ -272,7 +272,7 @@ fat_r_t fat_ensure_open_file_capacity(fat_ensurecap_ctx_t* c, fat_block_t* blk,
                                       const fat_mount_t* mnt) {
     FAT_CO_BEGIN(c);
     if (!c->file) {
-        FAT_CO_FAIL(c, blk, FS_ERR_BAD_ARGS);
+        FAT_CO_FAIL(c, blk, -(int32_t)WASMOS_ERR_FS_BAD_ARGS);
     }
     if (c->min_size == 0 || c->file->capacity >= c->min_size) {
         FAT_CO_DONE(c);
@@ -297,24 +297,24 @@ fat_r_t fat_ensure_open_file_capacity(fat_ensurecap_ctx_t* c, fat_block_t* blk,
 
 /* Shared path-read prologue used by the path-taking ops: validate arg1/len,
  * read the client path into op->path, translate into op->fat_path.  Returns an
- * FS_ERR_* (<0) on failure, 0 on success.  Pure (no yields), so it is a plain
+ * WASMOS_ERR_FS_* (<0) on failure, 0 on success.  Pure (no yields), so it is a plain
  * helper the op invokes on its first step. */
 static int fat_read_and_translate_path(fat_op_ctx_t* op, uint8_t* out_is_init) {
     uint32_t path_len = (uint32_t)op->arg0;
 
     if (op->arg1 != 0 || path_len == 0 || path_len >= sizeof(op->path)) {
-        return FS_ERR_BAD_ARGS;
+        return -(int32_t)WASMOS_ERR_FS_BAD_ARGS;
     }
     if (path_len + 1u > (uint32_t)wasmos_xfer_buffer_size()) {
-        return FS_ERR_PATH_TOO_LONG;
+        return -(int32_t)WASMOS_ERR_FS_PATH_TOO_LONG;
     }
     if (wasmos_sys_buffer_read(op->arg2, op->path, (int32_t)path_len, 0) != 0) {
-        return FS_ERR_BUFFER;
+        return -(int32_t)WASMOS_ERR_FS_BUFFER;
     }
     op->path[path_len] = '\0';
     if (vfs_translate_path(op->path, op->fat_path, sizeof(op->fat_path), out_is_init) != 0 ||
         *out_is_init) {
-        return FS_ERR_TRANSLATE;
+        return -(int32_t)WASMOS_ERR_FS_TRANSLATE;
     }
     return 0;
 }
@@ -334,22 +334,22 @@ fat_r_t fat_op_open(fat_op_ctx_t* op, fat_block_t* blk, const fat_mount_t* mnt,
     if ((op->arg1 & ~((int32_t)FAT_OPEN_APPEND | (int32_t)FAT_OPEN_CREAT | (int32_t)FAT_OPEN_TRUNC |
                       1)) != 0 ||
         path_len == 0 || path_len >= sizeof(op->path)) {
-        FAT_CO_FAIL(op, blk, FS_ERR_BAD_ARGS);
+        FAT_CO_FAIL(op, blk, -(int32_t)WASMOS_ERR_FS_BAD_ARGS);
     }
     if ((access_mode != 0 && access_mode != 1) ||
         ((op->arg1 & (FAT_OPEN_APPEND | FAT_OPEN_TRUNC)) != 0 && access_mode != 1)) {
-        FAT_CO_FAIL(op, blk, FS_ERR_BAD_ARGS);
+        FAT_CO_FAIL(op, blk, -(int32_t)WASMOS_ERR_FS_BAD_ARGS);
     }
     if (path_len + 1u > (uint32_t)wasmos_xfer_buffer_size()) {
-        FAT_CO_FAIL(op, blk, FS_ERR_PATH_TOO_LONG);
+        FAT_CO_FAIL(op, blk, -(int32_t)WASMOS_ERR_FS_PATH_TOO_LONG);
     }
     if (wasmos_sys_buffer_read(op->arg2, op->path, (int32_t)path_len, 0) != 0) {
-        FAT_CO_FAIL(op, blk, FS_ERR_BUFFER);
+        FAT_CO_FAIL(op, blk, -(int32_t)WASMOS_ERR_FS_BUFFER);
     }
     op->path[path_len] = '\0';
     if (vfs_translate_path(op->path, op->fat_path, sizeof(op->fat_path), &path_is_init) != 0 ||
         path_is_init) {
-        FAT_CO_FAIL(op, blk, FS_ERR_TRANSLATE);
+        FAT_CO_FAIL(op, blk, -(int32_t)WASMOS_ERR_FS_TRANSLATE);
     }
 
     op->resolve.cont = 0;
@@ -360,30 +360,30 @@ fat_r_t fat_op_open(fat_op_ctx_t* op, fat_block_t* blk, const fat_mount_t* mnt,
 
     if (!op->open_entry.valid) {
         if ((op->arg1 & FAT_OPEN_CREAT) == 0) {
-            FAT_CO_FAIL(op, blk, FS_ERR_NOT_FOUND);
+            FAT_CO_FAIL(op, blk, -(int32_t)WASMOS_ERR_FS_NOT_FOUND);
         }
         op->create.cont = 0;
         op->create.path = op->fat_path;
         op->create.source = op->source;
         FAT_CO_AWAIT(op, fat_create_empty_file(&op->create, blk, mnt));
         if (!op->create.found.valid) {
-            FAT_CO_FAIL(op, blk, FS_ERR_IO);
+            FAT_CO_FAIL(op, blk, -(int32_t)WASMOS_ERR_FS_IO);
         }
         op->open_entry = op->create.found;
     }
     if (op->open_entry.attr & 0x10) {
-        FAT_CO_FAIL(op, blk, FS_ERR_IS_DIR);
+        FAT_CO_FAIL(op, blk, -(int32_t)WASMOS_ERR_FS_IS_DIR);
     }
     if (op->open_entry.size > 0 && op->open_entry.cluster < 2) {
-        FAT_CO_FAIL(op, blk, FS_ERR_CORRUPT);
+        FAT_CO_FAIL(op, blk, -(int32_t)WASMOS_ERR_FS_CORRUPT);
     }
 
     if (fat_open_file_alloc(pool, op->source, &op->fd) != 0) {
-        FAT_CO_FAIL(op, blk, FS_ERR_NO_FD);
+        FAT_CO_FAIL(op, blk, -(int32_t)WASMOS_ERR_FS_NO_FD);
     }
     file = fat_open_file_for_fd(pool, op->source, op->fd);
     if (!file) {
-        FAT_CO_FAIL(op, blk, FS_ERR_NO_FD);
+        FAT_CO_FAIL(op, blk, -(int32_t)WASMOS_ERR_FS_NO_FD);
     }
     file->flags = op->arg1;
     file->first_cluster = op->open_entry.cluster;
@@ -406,7 +406,7 @@ fat_r_t fat_op_open(fat_op_ctx_t* op, fat_block_t* blk, const fat_mount_t* mnt,
          * it from the fd stored in the op ctx. */
         file = fat_open_file_for_fd(pool, op->source, op->fd);
         if (!file) {
-            FAT_CO_FAIL(op, blk, FS_ERR_NO_FD);
+            FAT_CO_FAIL(op, blk, -(int32_t)WASMOS_ERR_FS_NO_FD);
         }
         file->capacity =
             op->capwalk.hops * (uint32_t)mnt->sectors_per_cluster * mnt->bytes_per_sector;
@@ -417,7 +417,7 @@ fat_r_t fat_op_open(fat_op_ctx_t* op, fat_block_t* blk, const fat_mount_t* mnt,
     if ((op->arg1 & FAT_OPEN_TRUNC) != 0) {
         file = fat_open_file_for_fd(pool, op->source, op->fd);
         if (!file) {
-            FAT_CO_FAIL(op, blk, FS_ERR_NO_FD);
+            FAT_CO_FAIL(op, blk, -(int32_t)WASMOS_ERR_FS_NO_FD);
         }
         op->storesize.cont = 0;
         op->storesize.file = file;
@@ -425,16 +425,16 @@ fat_r_t fat_op_open(fat_op_ctx_t* op, fat_block_t* blk, const fat_mount_t* mnt,
         FAT_CO_AWAIT(op, fat_store_open_file_size(&op->storesize, blk, mnt));
         file = fat_open_file_for_fd(pool, op->source, op->fd);
         if (!file) {
-            FAT_CO_FAIL(op, blk, FS_ERR_NO_FD);
+            FAT_CO_FAIL(op, blk, -(int32_t)WASMOS_ERR_FS_NO_FD);
         }
         if (fat_set_open_file_offset(mnt, file, 0, file->capacity) != 0) {
             file->in_use = 0;
-            FAT_CO_FAIL(op, blk, FS_ERR_IO);
+            FAT_CO_FAIL(op, blk, -(int32_t)WASMOS_ERR_FS_IO);
         }
     } else if ((op->arg1 & FAT_OPEN_APPEND) != 0) {
         file = fat_open_file_for_fd(pool, op->source, op->fd);
         if (!file) {
-            FAT_CO_FAIL(op, blk, FS_ERR_NO_FD);
+            FAT_CO_FAIL(op, blk, -(int32_t)WASMOS_ERR_FS_NO_FD);
         }
         op->repos.cont = 0;
         op->repos.file = file;
@@ -461,7 +461,7 @@ fat_r_t fat_op_read(fat_op_ctx_t* op, fat_block_t* blk, const fat_mount_t* mnt,
     max_buffer = (uint32_t)wasmos_xfer_buffer_size();
 
     if (!file || fat_open_file_access_mode(file) != 0 || op->arg1 < 0) {
-        FAT_CO_FAIL(op, blk, FS_ERR_ACCESS);
+        FAT_CO_FAIL(op, blk, -(int32_t)WASMOS_ERR_FS_ACCESS);
     }
 
     remaining = file->offset < file->size ? file->size - file->offset : 0;
@@ -481,13 +481,13 @@ fat_r_t fat_op_read(fat_op_ctx_t* op, fat_block_t* blk, const fat_mount_t* mnt,
             op->io_chunk = op->requested - op->done;
         }
         if (file->current_cluster < 2 || file->file_lba == 0) {
-            FAT_CO_FAIL(op, blk, FS_ERR_CORRUPT);
+            FAT_CO_FAIL(op, blk, -(int32_t)WASMOS_ERR_FS_CORRUPT);
         }
         FAT_CO_READ(op, blk, file->file_lba + file->current_sector);
         if (wasmos_xfer_buffer_write(
                 op->arg2, addr_cast(int32_t, (fat_block_sector(blk) + op->io_sector_offset)),
                 (int32_t)op->io_chunk, (int32_t)op->done) != 0) {
-            FAT_CO_FAIL(op, blk, FS_ERR_BUFFER);
+            FAT_CO_FAIL(op, blk, -(int32_t)WASMOS_ERR_FS_BUFFER);
         }
         file->offset += op->io_chunk;
         op->done += op->io_chunk;
@@ -504,7 +504,7 @@ fat_r_t fat_op_read(fat_op_ctx_t* op, fat_block_t* blk, const fat_mount_t* mnt,
         op->chain.cluster = file->current_cluster;
         FAT_CO_AWAIT(op, fat_chain_next(&op->chain, blk, mnt));
         if (op->chain.next == 0) {
-            FAT_CO_FAIL(op, blk, FS_ERR_CORRUPT);
+            FAT_CO_FAIL(op, blk, -(int32_t)WASMOS_ERR_FS_CORRUPT);
         }
         file->current_cluster = op->chain.next;
         file->current_sector = 0;
@@ -529,7 +529,7 @@ fat_r_t fat_op_write(fat_op_ctx_t* op, fat_block_t* blk, const fat_mount_t* mnt,
     max_buffer = (uint32_t)wasmos_xfer_buffer_size();
 
     if (!file || fat_open_file_access_mode(file) != 1 || op->arg1 < 0) {
-        FAT_CO_FAIL(op, blk, FS_ERR_ACCESS);
+        FAT_CO_FAIL(op, blk, -(int32_t)WASMOS_ERR_FS_ACCESS);
     }
     if ((file->flags & FAT_OPEN_APPEND) != 0) {
         op->repos.cont = 0;
@@ -549,7 +549,7 @@ fat_r_t fat_op_write(fat_op_ctx_t* op, fat_block_t* blk, const fat_mount_t* mnt,
     }
     op->target_end = file->offset + op->requested;
     if (op->target_end < file->offset) {
-        FAT_CO_FAIL(op, blk, FS_ERR_RANGE);
+        FAT_CO_FAIL(op, blk, -(int32_t)WASMOS_ERR_FS_RANGE);
     }
     op->ensurecap.cont = 0;
     op->ensurecap.file = file;
@@ -566,7 +566,7 @@ fat_r_t fat_op_write(fat_op_ctx_t* op, fat_block_t* blk, const fat_mount_t* mnt,
         next_end = file->offset + op->io_chunk;
         op->old_size = file->size;
         if (file->current_cluster < 2 || file->file_lba == 0) {
-            FAT_CO_FAIL(op, blk, FS_ERR_CORRUPT);
+            FAT_CO_FAIL(op, blk, -(int32_t)WASMOS_ERR_FS_CORRUPT);
         }
         if (next_end > file->size) {
             /* Grow the visible file size before writing past the current EOF. */
@@ -590,7 +590,7 @@ fat_r_t fat_op_write(fat_op_ctx_t* op, fat_block_t* blk, const fat_mount_t* mnt,
          * stack buffer is safe. */
         if (wasmos_xfer_buffer_read(op->arg2, addr_cast(int32_t, stage), (int32_t)op->io_chunk,
                                     (int32_t)op->done) != 0) {
-            FAT_CO_FAIL(op, blk, FS_ERR_BUFFER);
+            FAT_CO_FAIL(op, blk, -(int32_t)WASMOS_ERR_FS_BUFFER);
         }
         for (i = 0; i < op->io_chunk; ++i) {
             fat_block_sector(blk)[op->io_sector_offset + i] = stage[i];
@@ -611,7 +611,7 @@ fat_r_t fat_op_write(fat_op_ctx_t* op, fat_block_t* blk, const fat_mount_t* mnt,
         op->chain.cluster = file->current_cluster;
         FAT_CO_AWAIT(op, fat_chain_next(&op->chain, blk, mnt));
         if (op->chain.next == 0) {
-            FAT_CO_FAIL(op, blk, FS_ERR_CORRUPT);
+            FAT_CO_FAIL(op, blk, -(int32_t)WASMOS_ERR_FS_CORRUPT);
         }
         file->current_cluster = op->chain.next;
         file->current_sector = 0;
@@ -640,7 +640,7 @@ fat_r_t fat_op_stat(fat_op_ctx_t* op, fat_block_t* blk, const fat_mount_t* mnt,
     op->resolve.source = op->source;
     FAT_CO_AWAIT(op, fat_resolve_path(&op->resolve, blk, mnt));
     if (!op->resolve.found.valid) {
-        FAT_CO_FAIL(op, blk, FS_ERR_NOT_FOUND);
+        FAT_CO_FAIL(op, blk, -(int32_t)WASMOS_ERR_FS_NOT_FOUND);
     }
     op->resp_override = 1;
     op->resp_arg0 = (int32_t)op->resolve.found.size;
@@ -722,7 +722,7 @@ fat_r_t fat_op_seek(fat_op_ctx_t* op, fat_block_t* blk, const fat_mount_t* mnt,
     FAT_CO_BEGIN(op);
     file = fat_open_file_for_fd(pool, op->source, op->arg0);
     if (!file) {
-        FAT_CO_FAIL(op, blk, FS_ERR_BAD_ARGS);
+        FAT_CO_FAIL(op, blk, -(int32_t)WASMOS_ERR_FS_BAD_ARGS);
     }
     if (op->arg2 == 0) {
         base = 0;
@@ -731,11 +731,11 @@ fat_r_t fat_op_seek(fat_op_ctx_t* op, fat_block_t* blk, const fat_mount_t* mnt,
     } else if (op->arg2 == 2) {
         base = (int32_t)file->size;
     } else {
-        FAT_CO_FAIL(op, blk, FS_ERR_BAD_ARGS);
+        FAT_CO_FAIL(op, blk, -(int32_t)WASMOS_ERR_FS_BAD_ARGS);
     }
     target = (int64_t)base + (int64_t)op->arg1;
     if (target < 0 || (uint64_t)target > file->size) {
-        FAT_CO_FAIL(op, blk, FS_ERR_RANGE);
+        FAT_CO_FAIL(op, blk, -(int32_t)WASMOS_ERR_FS_RANGE);
     }
     op->repos.cont = 0;
     op->repos.file = file;
@@ -757,7 +757,7 @@ fat_r_t fat_op_close(fat_op_ctx_t* op, fat_block_t* blk, const fat_mount_t* mnt,
     FAT_CO_BEGIN(op);
     file = fat_open_file_for_fd(pool, op->source, op->arg0);
     if (!file) {
-        FAT_CO_FAIL(op, blk, FS_ERR_BAD_ARGS);
+        FAT_CO_FAIL(op, blk, -(int32_t)WASMOS_ERR_FS_BAD_ARGS);
     }
     file->in_use = 0;
     file->owner = -1;

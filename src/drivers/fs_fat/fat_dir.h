@@ -113,7 +113,7 @@ fat_r_t fat_op_readdir(fat_op_ctx_t* op, fat_block_t* blk, const fat_mount_t* mn
  * "/"-only resets the cwd to the mount root.  Otherwise walks the components
  * (relative to the cwd unless the name starts with '/'), descending each matched
  * subdirectory, and on success repoints mnt's cwd_* / dir_lba / dir_sectors and
- * cwd_source.  Uses op->chdir.  FAT_CO_FAIL(FS_ERR_NOT_FOUND / FS_ERR_NOT_DIR)
+ * cwd_source.  Uses op->chdir.  FAT_CO_FAIL(-(int32_t)WASMOS_ERR_FS_NOT_FOUND / -(int32_t)WASMOS_ERR_FS_NOT_DIR)
  * on a missing / non-directory component. */
 fat_r_t fat_op_chdir(fat_op_ctx_t* op, fat_block_t* blk, fat_mount_t* mnt);
 

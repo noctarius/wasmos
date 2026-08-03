@@ -69,7 +69,7 @@
     }                                                                                              \
     } while (0)
 
-/* Fail the op with an FS_ERR_* code (recorded on the active op via blk). */
+/* Fail the op with an WASMOS_ERR_FS_* code (recorded on the active op via blk). */
 #define FAT_CO_FAIL(c, blk, code)                                                                  \
     do {                                                                                           \
         (c)->cont = 0;                                                                             \

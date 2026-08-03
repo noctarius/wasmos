@@ -347,8 +347,11 @@ returns; `FS_ERR_*`/`PROC_*` ride IPC opcodes), so the migration depends on them
     negated packed `WASMOS_ERR_SHMEM_*` in both `link.c`/`link.cpp` wrappers;
     legacy defs removed; no consumer decoded the specific reason so the wire
     change is safe. Booted both runtimes.
-  - [ ] Subsystem 2 — **FS** (`FS_ERR_*`, 111 refs, mostly the FAT backend;
-    travels in `FS_IPC_ERROR`/`RESP` arg0 relayed by fs-manager).
+  - [x] Subsystem 2 — **FS**: `FS_ERR_*` deleted; all 91 FAT-backend/relay sites
+    now use negated packed `WASMOS_ERR_FS_*` directly (no compat/alias layer — we
+    own every caller). `driver_abi.h` includes `wasmos_status.h`; wire =
+    negated-packed in `FS_IPC_ERROR`/`RESP` arg0, transparent to fs-manager/libc
+    (they only test `< 0`). Booted both runtimes.
   - [ ] Subsystem 3 — **PROC** (`PROC_SPAWN_ERR_*` + `PROC_PM_ERR_*`, ~277 refs,
     process_manager + selftest + spawn call sites).
   - [ ] Clear the bare-`return -1;` backlog per subsystem; then flip the advisory

@@ -82,7 +82,7 @@ fat_r_t fat_need_sector(fat_block_t* blk, uint32_t lba) {
         return FAT_R_DONE; /* cache hit */
     }
     if (fat_block_start(blk, lba, 0) != 0) {
-        fat_block_set_err(blk, FS_ERR_IO);
+        fat_block_set_err(blk, -(int32_t)WASMOS_ERR_FS_IO);
         return FAT_R_ERR;
     }
     return FAT_R_WAIT;
@@ -94,7 +94,7 @@ fat_r_t fat_block_write(fat_block_t* blk, uint32_t lba) {
         return FAT_R_DONE;
     }
     if (fat_block_start(blk, lba, 1) != 0) {
-        fat_block_set_err(blk, FS_ERR_IO);
+        fat_block_set_err(blk, -(int32_t)WASMOS_ERR_FS_IO);
         return FAT_R_ERR;
     }
     blk->write_pending = 1;

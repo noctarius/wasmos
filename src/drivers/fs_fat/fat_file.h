@@ -11,7 +11,7 @@
  * milestone and is NOT implemented here.
  *
  * Error reporting: input validation and error paths that returned a blanket -1
- * in the original now FAIL with a granular FS_ERR_* via FAT_CO_FAIL. */
+ * in the original now FAIL with a granular WASMOS_ERR_FS_* via FAT_CO_FAIL. */
 #ifndef FS_FAT_FAT_FILE_H
 #define FS_FAT_FAT_FILE_H
 

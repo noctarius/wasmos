@@ -21,6 +21,7 @@
 
 #include <stdint.h>
 #include "../../../abi/generated/c/wasmos_opcodes.h" /* generated opcode enums (abi/opcodes.yaml) */
+#include "../../../abi/generated/c/wasmos_status.h"  /* packed error codes (abi/errors.yaml) */
 
 #ifndef WASMOS_CONSOLE_RING_SHARED_H
 #define WASMOS_CONSOLE_RING_SHARED_H
@@ -102,33 +103,11 @@ enum {
  * abi/errors.yaml / abi/generated/c/wasmos_status.h) instead of the legacy
  * SHMEM_ERR_* -30 range. Recover with `(uint32_t)(-ret)` then wasmos_error_*. */
 
-/* Distinct filesystem failure reasons returned (as a negative int in the
- * FS_IPC_ERROR / FS_IPC_RESP arg0) by the FAT backend instead of a blanket -1,
- * so a failed FS op reports WHY.  fs-manager relays the backend's arg0 to the
- * client unchanged.  Distinct -70 range so they don't collide with
- * PROC_SPAWN_ERR_* (-10..-20) or PROC_PM_ERR_* (-40..-66). */
-enum {
-    FS_ERR_BAD_ARGS = -70,      /* invalid flags/args (len 0, bad access mode, reserved arg set) */
-    FS_ERR_PATH_TOO_LONG = -71, /* path length exceeds the path buffer or the xfer buffer */
-    FS_ERR_BUFFER = -72,        /* xfer-buffer read/write/size call failed */
-    FS_ERR_TRANSLATE = -73,     /* vfs path translation failed / path routed to init overlay */
-    FS_ERR_NOT_FOUND = -74,     /* path component or target entry does not exist */
-    FS_ERR_IS_DIR = -75,        /* target is a directory where a file was required */
-    FS_ERR_NOT_DIR = -76,       /* a path component that must be a directory is not one */
-    FS_ERR_EXISTS = -77,        /* create target already exists (fail-if-exists) */
-    FS_ERR_NOT_EMPTY = -78,     /* rmdir target directory is not empty */
-    FS_ERR_NO_FD = -79,         /* open-file table is full */
-    FS_ERR_BUSY = -80,          /* backend has no free op-context slot (retryable) */
-    FS_ERR_IO = -81,            /* block-device I/O error */
-    FS_ERR_NOT_READY = -82,     /* mount/backend not ready */
-    FS_ERR_NO_SPACE = -83,      /* no free cluster or no free directory slot (disk full) */
-    FS_ERR_NAME = -84,          /* invalid name (LFN validation / short-name encode failed) */
-    FS_ERR_ACCESS = -85,        /* access-mode violation (e.g. read on a write-only fd) */
-    FS_ERR_RANGE = -86,         /* seek/offset out of range */
-    FS_ERR_UNSUPPORTED = -87,   /* unknown/unsupported request type */
-    FS_ERR_OPEN = -88,          /* operation forbidden on a currently-open file */
-    FS_ERR_CORRUPT = -89        /* on-disk structure inconsistency detected */
-};
+/* Filesystem failure reasons migrated to the packed error model: the FAT backend
+ * returns a negated packed WASMOS_ERR_FS_* code (domain 4, abi/errors.yaml) as a
+ * negative int in FS_IPC_ERROR / FS_IPC_RESP arg0, so a failed FS op reports WHY;
+ * fs-manager relays arg0 unchanged. Recover with `(uint32_t)(-arg0)` +
+ * wasmos_error_*. (WASMOS_ERR_FS_* come from wasmos_status.h, included above.) */
 
 /* Flags returned in arg1 of PROC_IPC_RESP for PROC_IPC_SPAWN_PATH.
  * Mirror of WASMOS_APP_FLAG_* in the kernel's wasmos_app.h. */

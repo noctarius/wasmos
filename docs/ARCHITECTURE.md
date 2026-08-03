@@ -91,7 +91,7 @@ in-kernel scheduler rather than an optional mode.
 - [IPC Direct Switch](architecture/30-ipc-direct-switch.md)
 
 ### User-Space Concurrency
-- [Coroutines, Futures, and Promises](architecture/32-coroutines-futures-promises.md) - proposed user-space coroutine/future/promise runtime (verified against the implementation); future/promise model replaces synchronous IPC; one shared future contract over separate native (stackful) and WASM (fiber/stackless) coroutine cores
+- [Coroutines, Futures, and Promises](architecture/32-coroutines-futures-promises.md) - proposed user-space coroutine/future/promise runtime (verified against the implementation); future/promise model replaces synchronous IPC; one shared future contract over separate native (stackful) and WASM (fiber/stackless) coroutine cores; §52 spike revisits the WASM-stackless conclusion with a green-thread (M:1) mechanism that suspends WASM guests at the host-call boundary with the engines untouched, unifying all languages (incl. AssemblyScript) and giving the AS gap a first-class fix
 - [Completion Ports](architecture/33-completion-ports.md) - proposed kernel-owned, bounded completion queues with notification doorbells; a batched completion source for the future/promise runtime and high-rate networking operations
 
 ### Tooling and ABI

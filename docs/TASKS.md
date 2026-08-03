@@ -132,6 +132,25 @@ and `architecture/33-completion-ports.md`.
   kernel-owned bounded CQ with notification doorbells and generation-tagged
   operation tokens, as a batched completion source for the future/promise
   runtime and high-rate networking.
+- [ ] Green-thread coroutine runtime (`architecture/32` §52, spike): re-base the
+  WASM coroutine substrate onto stackful **green threads** (M:1 — many coroutines
+  on one OS-scheduled entity per instance), suspending guests at the host-call
+  boundary rather than the §51 stackless C baseline. Public API stays
+  coroutine/future vocabulary (never `thread_create`; `thread_*` demoted to hidden
+  substrate). Engines stay untouched (0 `libs/warp`; 0–10 `libs/wasm3`): WARP rides
+  the kernel thread switch at the ring-3 host-call trap (single-invocation already
+  works via `process_yield`; concurrent coroutines need per-coroutine ring-3 stacks,
+  ~100–200 LOC glue), wasm3 runs `m3_Call` on a switchable C stack (per-coroutine
+  operand buffers). Expose the primitives as a generated host-call family so all
+  languages — including **AssemblyScript**, which cannot link the C runtime — are
+  first-class (closes the AS-has-no-coroutines gap and retires `coroutine.{rs,go,zig}`).
+  Invariants: waits yield through the scheduler (never block the OS entity);
+  cooperative safepoints for compute-bound coroutines. Boundary: concurrency
+  in-process (coroutines), parallelism across processes (no M:N). Decision record:
+  native stackless engine support (stack-switching proposal / split state machines)
+  **declined** — only buys a coroutine-count scale WASMOS won't reach, at the cost
+  of forking two vendored engines + continuation surgery on a single-pass JIT.
+  Migration must keep the net stack + TLS green throughout.
 
 ## Runtime, Packaging, and Service Discovery
 

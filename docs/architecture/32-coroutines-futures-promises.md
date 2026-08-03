@@ -2699,3 +2699,128 @@ typed async open/read/write/close/unlink/stat state machines.
 
 Deadlines, transport cancellation, CQ dispatch, parallel workers,
 AssemblyScript support, and Go callback adapters remain deferred.
+
+---
+
+## 52. Green-thread coroutines for WASM guests (spike)
+
+> **Status: spike / proposal (2026-08-03).** This section revisits §49's
+> conclusion that WASM guests must be stackless. It is not implemented; it
+> records a mechanism §49 did not evaluate, and the design decisions taken on it.
+
+### 52.1 What this revisits
+
+§49 concluded that the coroutine context-switch layer cannot be shared because
+the user-space `coroutine_switch` cannot swap a wasm3-interpreted or WARP-JIT
+**guest** stack, and it therefore adopted the stackless C baseline (§51) for WASM.
+That reasoning holds for `coroutine_switch`. It does not consider a different
+switch that never touches the guest's wasm stack at all: **suspension at the
+host-call boundary.** Both WASM backends already return control to kernel-side
+glue on every host call; suspending there is a context switch the system already
+performs. On that mechanism, stackful coroutines are available to WASM guests —
+reopening the door §49 closed.
+
+### 52.2 Model: coroutine (concept) over green threads (mechanism)
+
+The public surface is unchanged from §1–§47: cooperative **coroutines** with
+futures and promises (`wasmos_async_start`, `wasmos_future_await/then/race/all`,
+`wasmos_promise_*`). "Coroutine" is the concept apps hold.
+
+The mechanism is **green threads, M:1**: N coroutines multiplexed onto **one**
+OS-scheduled entity per instance. The kernel scheduler never sees a coroutine.
+This deliberately trades away in-instance parallelism for the property that makes
+it usable in WASM: with only one coroutine touching linear memory at a time there
+are no data races and no atomics, so shared state "just works" — the opposite of
+the shared-memory WASM threading model, which the toolchains barely support.
+
+Vocabulary discipline: the guest-facing API speaks `coroutine`/`future`. "Green
+thread" is an implementation detail and never a public name. In particular the
+wired-but-unused `thread_*` host calls are **not** the coroutine API — they may
+become the hidden green-thread substrate, but the public verb stays `coroutine`.
+
+### 52.3 Suspension mechanism, per backend (engines untouched)
+
+Both engines treat a host call as an ordinary C call returning a value and cannot
+distinguish a suspended host call from a slow one. Suspension is therefore a
+context switch performed in **our** glue at that boundary.
+
+- **WARP.** The guest runs as ring-3 native code; a host call traps via
+  `int 0x80` into `x86_syscall_handler`, which already mirrors the full ring-3
+  frame into `thread_t::ctx` for resumption. Suspend/resume is the kernel thread
+  context switch at that boundary — already working today (`warp_thread_yield` is
+  `process_yield()` in a host call; blocking IPC resumes the guest identically).
+  Zero lines in `libs/warp`. Concurrent coroutines of one instance need
+  per-coroutine ring-3 stacks (today one fixed 256 KiB stack per address space):
+  ~100–200 LOC of glue in `ring3_trampolines.c` / `warp_driver.cpp`.
+- **wasm3.** The interpreter runs kernel-side. Run `m3_Call` on a switchable C
+  stack (the existing `coroutine_native` context switch) and yield at the
+  `op_CallRawFunction` host-call seam. The threaded/`musttail` interpreter keeps
+  all hot state (`pc, sp, mem, regs`) in C parameters, not globals, so a C-stack
+  switch preserves a suspended invocation. Zero lines required in `libs/wasm3`;
+  optional ≤10 LOC for a public `m3_SetRuntimeStack()` / a `m3_Yield` weak
+  override. Concurrent coroutines of one instance need a per-coroutine
+  operand-stack buffer with `runtime->stack` repointed at resume.
+
+Per-invocation register/PC state is already carried on the switched stack; the
+only per-instance state that must become per-coroutine is the WARP ring-3 stack
+and the wasm3 operand buffer. Linear memory and WASM globals stay shared — the
+same semantics as threads sharing memory, which is safe here because execution is
+cooperative and non-parallel.
+
+### 52.4 Invariants
+
+1. **A wait must yield through the scheduler, never block the OS entity.** If one
+   coroutine issues a genuinely blocking host call, every sibling stalls. Awaits
+   route through the scheduler; the OS entity blocks only when all coroutines are
+   idle. This is §1's central rule, specialised to M:1.
+2. **Cooperative scheduling needs safepoints.** A compute-bound coroutine that
+   never awaits starves siblings. wasm3 provides a safepoint for free (the weak
+   `m3_Yield` hook fires on every wasm call); WARP relies on explicit yields.
+
+### 52.5 Language parity and the AssemblyScript story
+
+The coroutine primitives are exposed as a generated **host-call family**
+(`abi/hostcalls.yaml`; shared across WARP and wasm3 by construction via the
+generated dispatch — see doc 34). Every guest language reaches the same surface.
+
+This supersedes §51's "stackless C baseline" as the cross-language story.
+AssemblyScript — which cannot link the C coroutine runtime (`asc` has no external
+linking) and so had no coroutines at all — becomes first-class by calling the
+host-call family, exactly as it reaches any other host call via `@external`. The
+`coroutine.{rs,go,zig}` bindings collapse onto the same surface. For I/O-bound
+coroutines the per-yield cost is largely absorbed, because the yield rides the
+same host-call trap the awaited IPC already performs.
+
+### 52.6 Concurrency boundary
+
+This buys in-instance **concurrency**, not parallelism. A single instance runs on
+one core. Cross-core **parallelism** stays at the process level — separate
+services/drivers on separate CPUs, which the microkernel already provides. The
+rule: coroutines for concurrency within a process; processes for parallelism
+across cores. M:N (kernel worker threads each running a coroutine scheduler, per
+§1's original diagram) is declined for WASM guests — it reintroduces the
+shared-memory WASM threading problem this model exists to avoid.
+
+### 52.7 Decision record: native stackless engine support declined
+
+Modifying the engines to provide stackless coroutines (compiler-split resumable
+state machines, or the WebAssembly stack-switching / typed-continuations
+proposal) was evaluated and **declined**. Its only advantage over stackful green
+threads is scale — heap-sized activation frames instead of a full stack per
+coroutine, i.e. millions of coroutines — a regime WASMOS's driver / service / CLI
+/ network workloads do not approach. The cost is disproportionate: a permanent
+fork of two vendored engines, and adding suspension to a **single-pass JIT**
+(WARP) is research-grade (single-pass compilers lack the IR/liveness needed to
+split functions; the standard fallback is spilling to native stacks — i.e. the
+stackful approach obtained here for free). The stackful ceiling (per-coroutine
+stacks/buffers, bounded to hundreds/low-thousands) is sufficient. Adopt the
+stack-switching proposal only if a tracked upstream engine ships it.
+
+### 52.8 Status and remaining work
+
+Single-invocation suspend/resume already works on both backends (`process_yield`
+/ blocking host calls). To realise multi-coroutine-per-instance: the per-coroutine
+stack/buffer isolation (§52.3), the coroutine host-call family (§52.5), and
+rebasing the native (§50) and WASM (§51) baselines onto this one mechanism. The
+async runtime is load-bearing (net stack, TLS), so migration must keep those
+green throughout.

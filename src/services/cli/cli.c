@@ -2078,37 +2078,37 @@ static void cli_phase_wait_ipc_step(void) {
         int32_t spawn_rc = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG1);
         const char* reason = 0;
         switch (spawn_rc) {
-        case PROC_SPAWN_ERR_BAD_ENDPOINT:
+        case -(int32_t)WASMOS_ERR_PROC_SPAWN_BAD_ENDPOINT:
             reason = "bad request endpoint";
             break;
-        case PROC_SPAWN_ERR_NO_CALLER:
+        case -(int32_t)WASMOS_ERR_PROC_SPAWN_NO_CALLER:
             reason = "caller not found";
             break;
-        case PROC_SPAWN_ERR_BAD_PATH:
+        case -(int32_t)WASMOS_ERR_PROC_SPAWN_BAD_PATH:
             reason = "bad path";
             break;
-        case PROC_SPAWN_ERR_CALLER_FSBUF:
+        case -(int32_t)WASMOS_ERR_PROC_SPAWN_CALLER_FSBUF:
             reason = "path too long";
             break;
-        case PROC_SPAWN_ERR_ARGS_TOOBIG:
+        case -(int32_t)WASMOS_ERR_PROC_SPAWN_ARGS_TOOBIG:
             reason = "args too long";
             break;
-        case PROC_SPAWN_ERR_NO_PM_FSBUF:
+        case -(int32_t)WASMOS_ERR_PROC_SPAWN_NO_PM_FSBUF:
             reason = "transfer buffer unavailable";
             break;
-        case PROC_SPAWN_ERR_FS_READ:
+        case -(int32_t)WASMOS_ERR_PROC_SPAWN_FS_READ:
             reason = "cannot read executable";
             break;
-        case PROC_SPAWN_ERR_BROKER_IPC:
+        case -(int32_t)WASMOS_ERR_PROC_SPAWN_BROKER_IPC:
             reason = "broker plan IPC failed";
             break;
-        case PROC_SPAWN_ERR_BROKER_PLAN:
+        case -(int32_t)WASMOS_ERR_PROC_SPAWN_BROKER_PLAN:
             reason = "broker returned an invalid spawn plan";
             break;
-        case PROC_SPAWN_ERR_BROKER_DEFERRED:
+        case -(int32_t)WASMOS_ERR_PROC_SPAWN_BROKER_DEFERRED:
             reason = "broker plan validated but launch is not implemented yet";
             break;
-        case PROC_SPAWN_ERR_SPAWN_FAILED:
+        case -(int32_t)WASMOS_ERR_PROC_SPAWN_SPAWN_FAILED:
             reason = "cannot start process (no free slot?)";
             break;
         default:

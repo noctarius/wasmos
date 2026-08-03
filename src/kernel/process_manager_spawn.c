@@ -712,18 +712,18 @@ static int pm_request_broker_spawn_plan(uint32_t pm_context_id, const xfer_buffe
     const uint8_t* broker_fs_buf = 0;
 
     if (!handler || !path || path_len == 0u || !out_plan) {
-        return PROC_SPAWN_ERR_BROKER_PLAN;
+        return -(int32_t)WASMOS_ERR_PROC_SPAWN_BROKER_PLAN;
     }
     if (g_pm.broker_reply_endpoint == IPC_ENDPOINT_NONE ||
         handler->broker_endpoint == IPC_ENDPOINT_NONE ||
         ipc_endpoint_owner(handler->broker_endpoint, &broker_context_id) != IPC_OK ||
         broker_context_id == 0u) {
-        return PROC_SPAWN_ERR_BROKER_IPC;
+        return -(int32_t)WASMOS_ERR_PROC_SPAWN_BROKER_IPC;
     }
     pm_fs_buf = pm_xfer_owner_ptr(pmbuf);
     pm_fs_buf_size = xfer_buffer_size(BUFFER_KIND_TRANSFER);
     if (!pm_fs_buf || blob_size > pm_fs_buf_size || request_size > (pm_fs_buf_size - blob_size)) {
-        return PROC_SPAWN_ERR_BROKER_PLAN;
+        return -(int32_t)WASMOS_ERR_PROC_SPAWN_BROKER_PLAN;
     }
 
     request_offset = blob_size;
@@ -734,7 +734,7 @@ static int pm_request_broker_spawn_plan(uint32_t pm_context_id, const xfer_buffe
                            1) != 0 ||
         pm_exec_tail_write(pm_fs_buf, pm_fs_buf_size, &tail_offset, cli_args, args_len,
                            &args_offset, args_len > 0u ? 1 : 0) != 0) {
-        return PROC_SPAWN_ERR_BROKER_PLAN;
+        return -(int32_t)WASMOS_ERR_PROC_SPAWN_BROKER_PLAN;
     }
 
     memset(&request, 0, sizeof(request));
@@ -760,7 +760,7 @@ static int pm_request_broker_spawn_plan(uint32_t pm_context_id, const xfer_buffe
      * PM revokes the borrow once it has read the plan. */
     if (xfer_buffer_borrow(pmbuf, broker_context_id, BUFFER_BORROW_READ | BUFFER_BORROW_WRITE,
                            &broker_borrow) != XFER_BUFFER_OK) {
-        return PROC_SPAWN_ERR_BROKER_IPC;
+        return -(int32_t)WASMOS_ERR_PROC_SPAWN_BROKER_IPC;
     }
     broker_has_borrow = 1;
 
@@ -814,13 +814,13 @@ broker_ipc_fail:
     if (broker_has_borrow) {
         (void)xfer_buffer_unborrow(&broker_borrow);
     }
-    return PROC_SPAWN_ERR_BROKER_IPC;
+    return -(int32_t)WASMOS_ERR_PROC_SPAWN_BROKER_IPC;
 
 broker_plan_fail:
     if (broker_has_borrow) {
         (void)xfer_buffer_unborrow(&broker_borrow);
     }
-    return PROC_SPAWN_ERR_BROKER_PLAN;
+    return -(int32_t)WASMOS_ERR_PROC_SPAWN_BROKER_PLAN;
 }
 
 static int pm_fs_read_blob_for_spawn(uint32_t pm_context_id, const xfer_buffer_owner_t* pmbuf,
@@ -847,7 +847,7 @@ static int pm_resolve_spawn_path(uint32_t pm_context_id, const xfer_buffer_owner
     int broker_rc = 0;
 
     if (!path || !out_resolved || path_len == 0u || path_len >= sizeof(out_resolved->path)) {
-        return PROC_SPAWN_ERR_BAD_PATH;
+        return -(int32_t)WASMOS_ERR_PROC_SPAWN_BAD_PATH;
     }
     memset(out_resolved, 0, sizeof(*out_resolved));
     memcpy(out_resolved->path, path, path_len);
@@ -855,7 +855,7 @@ static int pm_resolve_spawn_path(uint32_t pm_context_id, const xfer_buffer_owner
     out_resolved->path_len = path_len;
     if (args_len > 0u) {
         if (!cli_args || args_len >= sizeof(out_resolved->args)) {
-            return PROC_SPAWN_ERR_ARGS_TOOBIG;
+            return -(int32_t)WASMOS_ERR_PROC_SPAWN_ARGS_TOOBIG;
         }
         memcpy(out_resolved->args, cli_args, args_len);
         out_resolved->args[args_len] = '\0';
@@ -864,15 +864,15 @@ static int pm_resolve_spawn_path(uint32_t pm_context_id, const xfer_buffer_owner
 
     pm_fs_buf = (const uint8_t*)pm_xfer_owner_ptr(pmbuf);
     if (!pm_fs_buf) {
-        return PROC_SPAWN_ERR_NO_PM_FSBUF;
+        return -(int32_t)WASMOS_ERR_PROC_SPAWN_NO_PM_FSBUF;
     }
     if (pm_fs_read_blob_for_spawn(pm_context_id, pmbuf, out_resolved->path, out_resolved->path_len,
                                   &out_resolved->blob_size) != 0) {
-        return PROC_SPAWN_ERR_FS_READ;
+        return -(int32_t)WASMOS_ERR_PROC_SPAWN_FS_READ;
     }
     if (wasmos_exec_format_classify(out_resolved->path, pm_fs_buf, out_resolved->blob_size,
                                     &format_match) != 0) {
-        return PROC_SPAWN_ERR_SPAWN_FAILED;
+        return -(int32_t)WASMOS_ERR_PROC_SPAWN_SPAWN_FAILED;
     }
     if (format_match.kind != WASMOS_EXEC_FORMAT_BROKER) {
         return 0;
@@ -887,7 +887,7 @@ static int pm_resolve_spawn_path(uint32_t pm_context_id, const xfer_buffer_owner
     if (!broker_plan.host_path || broker_plan.host_path_len == 0u ||
         broker_plan.host_path_len >= sizeof(out_resolved->path) ||
         broker_plan.host_args_len >= sizeof(out_resolved->args)) {
-        return PROC_SPAWN_ERR_BROKER_PLAN;
+        return -(int32_t)WASMOS_ERR_PROC_SPAWN_BROKER_PLAN;
     }
     memset(out_resolved->path, 0, sizeof(out_resolved->path));
     memcpy(out_resolved->path, broker_plan.host_path, broker_plan.host_path_len);
@@ -905,12 +905,12 @@ static int pm_resolve_spawn_path(uint32_t pm_context_id, const xfer_buffer_owner
 
     if (pm_fs_read_blob_for_spawn(pm_context_id, pmbuf, out_resolved->path, out_resolved->path_len,
                                   &out_resolved->blob_size) != 0) {
-        return PROC_SPAWN_ERR_BROKER_PLAN;
+        return -(int32_t)WASMOS_ERR_PROC_SPAWN_BROKER_PLAN;
     }
     if (wasmos_exec_format_classify(out_resolved->path, pm_fs_buf, out_resolved->blob_size,
                                     &format_match) != 0 ||
         format_match.kind != WASMOS_EXEC_FORMAT_WAP) {
-        return PROC_SPAWN_ERR_BROKER_PLAN;
+        return -(int32_t)WASMOS_ERR_PROC_SPAWN_BROKER_PLAN;
     }
     return 0;
 }
@@ -1028,19 +1028,19 @@ int pm_handle_spawn_sync(uint32_t pm_context_id, const ipc_message_t* msg) {
     uint32_t child_pid = 0;
 
     if (g_pm.spawn.in_use) {
-        return PROC_PM_ERR_BUSY;
+        return -(int32_t)WASMOS_ERR_PROC_PM_BUSY;
     }
     if (ipc_endpoint_owner(msg->source, &owner_context) != IPC_OK) {
-        return PROC_PM_ERR_BAD_ENDPOINT;
+        return -(int32_t)WASMOS_ERR_PROC_PM_BAD_ENDPOINT;
     }
     caller = process_find_by_context(owner_context);
     if (!caller) {
-        return PROC_PM_ERR_NO_CALLER;
+        return -(int32_t)WASMOS_ERR_PROC_PM_NO_CALLER;
     }
     parent_pid = caller->pid;
 
     if (pm_spawn_module(parent_pid, (uint32_t)msg->arg0, &child_pid) != 0) {
-        return PROC_PM_ERR_SPAWN_FAILED;
+        return -(int32_t)WASMOS_ERR_PROC_PM_SPAWN_FAILED;
     }
     (void)pm_inherit_child_cwd(pm_context_id, owner_context, child_pid);
 
@@ -1067,14 +1067,14 @@ int pm_handle_spawn_caps_sync(uint32_t pm_context_id, const ipc_message_t* msg) 
     uint32_t child_pid = 0;
 
     if (g_pm.spawn.in_use) {
-        return PROC_PM_ERR_BUSY;
+        return -(int32_t)WASMOS_ERR_PROC_PM_BUSY;
     }
     if (ipc_endpoint_owner(msg->source, &owner_context) != IPC_OK) {
-        return PROC_PM_ERR_BAD_ENDPOINT;
+        return -(int32_t)WASMOS_ERR_PROC_PM_BAD_ENDPOINT;
     }
     caller = process_find_by_context(owner_context);
     if (!caller) {
-        return PROC_PM_ERR_NO_CALLER;
+        return -(int32_t)WASMOS_ERR_PROC_PM_NO_CALLER;
     }
     parent_pid = caller->pid;
 
@@ -1097,12 +1097,12 @@ int pm_handle_spawn_caps_sync(uint32_t pm_context_id, const ipc_message_t* msg) 
     }
 
     if (pm_spawn_module(parent_pid, (uint32_t)msg->arg0, &child_pid) != 0) {
-        return PROC_PM_ERR_SPAWN_FAILED;
+        return -(int32_t)WASMOS_ERR_PROC_PM_SPAWN_FAILED;
     }
     (void)pm_inherit_child_cwd(pm_context_id, owner_context, child_pid);
     if (pm_apply_spawn_caps(child_pid, &caps) != 0) {
         (void)process_kill(child_pid, -1);
-        return PROC_PM_ERR_CAPS_APPLY;
+        return -(int32_t)WASMOS_ERR_PROC_PM_CAPS_APPLY;
     }
     /* Index caps-sync spawns come from the device manager (ready-gated, never
      * exit-waited); auto-reap on exit so one-shot enumerators (pci-bus/acpi-bus,
@@ -1139,40 +1139,40 @@ int pm_handle_spawn_path_sync(uint32_t pm_context_id, const ipc_message_t* msg) 
     xfer_buffer_owner_t pmbuf = {0};
 
     if (g_pm.spawn.in_use) {
-        return PROC_PM_ERR_BUSY;
+        return -(int32_t)WASMOS_ERR_PROC_PM_BUSY;
     }
     if (ipc_endpoint_owner(msg->source, &owner_context) != IPC_OK) {
-        return PROC_PM_ERR_BAD_ENDPOINT;
+        return -(int32_t)WASMOS_ERR_PROC_PM_BAD_ENDPOINT;
     }
     caller = process_find_by_context(owner_context);
     if (!caller) {
-        return PROC_PM_ERR_NO_CALLER;
+        return -(int32_t)WASMOS_ERR_PROC_PM_NO_CALLER;
     }
     parent_pid = caller->pid;
     if (g_pm.fs_endpoint == IPC_ENDPOINT_NONE || path_len == 0 || path_len >= sizeof(path)) {
-        return PROC_PM_ERR_BAD_PATH;
+        return -(int32_t)WASMOS_ERR_PROC_PM_BAD_PATH;
     }
     caller_fs_buf = pm_foreign_xfer_ptr(caller_buffer_id, owner_context, 0);
     if (!caller_fs_buf || path_len >= xfer_buffer_size(BUFFER_KIND_TRANSFER)) {
-        return PROC_PM_ERR_CALLER_FSBUF;
+        return -(int32_t)WASMOS_ERR_PROC_PM_CALLER_FSBUF;
     }
     for (uint32_t i = 0; i < path_len; ++i) {
         path[i] = (char)caller_fs_buf[i];
     }
     path[path_len] = '\0';
     if (pm_xfer_acquire(pm_context_id, xfer_buffer_size(BUFFER_KIND_TRANSFER), &pmbuf) != 0) {
-        return PROC_PM_ERR_NO_PM_FSBUF;
+        return -(int32_t)WASMOS_ERR_PROC_PM_NO_PM_FSBUF;
     }
     if (pm_resolve_spawn_path(pm_context_id, &pmbuf, path, path_len, 0, 0, spawn_req_flags,
                               &resolved) != 0) {
         pm_xfer_release(&pmbuf);
-        return PROC_PM_ERR_PATH_RESOLVE;
+        return -(int32_t)WASMOS_ERR_PROC_PM_PATH_RESOLVE;
     }
     if (pm_spawn_from_buffer(parent_pid, (const uint8_t*)pm_xfer_owner_ptr(&pmbuf),
                              resolved.blob_size, resolved.args_len > 0u ? resolved.args : 0,
                              resolved.args_len, &child_pid) != 0) {
         pm_xfer_release(&pmbuf);
-        return PROC_PM_ERR_SPAWN_FAILED;
+        return -(int32_t)WASMOS_ERR_PROC_PM_SPAWN_FAILED;
     }
     pm_xfer_release(&pmbuf);
     (void)pm_inherit_child_cwd(pm_context_id, owner_context, child_pid);
@@ -1226,21 +1226,21 @@ int pm_handle_spawn_path_caps_sync(uint32_t pm_context_id, const ipc_message_t* 
     caps.dma_window_count = 0;
 
     if (g_pm.spawn.in_use) {
-        return PROC_PM_ERR_BUSY;
+        return -(int32_t)WASMOS_ERR_PROC_PM_BUSY;
     }
     if (ipc_endpoint_owner(msg->source, &owner_context) != IPC_OK) {
-        return PROC_PM_ERR_BAD_ENDPOINT;
+        return -(int32_t)WASMOS_ERR_PROC_PM_BAD_ENDPOINT;
     }
     caller = process_find_by_context(owner_context);
     if (!caller) {
-        return PROC_PM_ERR_NO_CALLER;
+        return -(int32_t)WASMOS_ERR_PROC_PM_NO_CALLER;
     }
     parent_pid = caller->pid;
     if ((caps.cap_flags & DEVMGR_CAP_IO_PORT) == 0) {
         caps.io_port_min = 0;
         caps.io_port_max = 0;
     } else if (caps.io_port_min > caps.io_port_max) {
-        return PROC_PM_ERR_BAD_CAPS;
+        return -(int32_t)WASMOS_ERR_PROC_PM_BAD_CAPS;
     }
     if ((caps.cap_flags & DEVMGR_CAP_DMA) != 0) {
         /* Keep the path+caps sync ABI aligned with the compact spawn-caps
@@ -1253,11 +1253,11 @@ int pm_handle_spawn_path_caps_sync(uint32_t pm_context_id, const ipc_message_t* 
         caps.dma_windows[0].length = 0x80000000ull;
     }
     if (g_pm.fs_endpoint == IPC_ENDPOINT_NONE || path_len == 0 || path_len >= sizeof(path)) {
-        return PROC_PM_ERR_BAD_PATH;
+        return -(int32_t)WASMOS_ERR_PROC_PM_BAD_PATH;
     }
     caller_fs_buf = pm_foreign_xfer_ptr(caller_buffer_id, owner_context, 0);
     if (!caller_fs_buf || path_len >= xfer_buffer_size(BUFFER_KIND_TRANSFER)) {
-        return PROC_PM_ERR_CALLER_FSBUF;
+        return -(int32_t)WASMOS_ERR_PROC_PM_CALLER_FSBUF;
     }
     for (uint32_t i = 0; i < path_len; ++i) {
         path[i] = (char)caller_fs_buf[i];
@@ -1270,34 +1270,34 @@ int pm_handle_spawn_path_caps_sync(uint32_t pm_context_id, const ipc_message_t* 
                 break;
             }
             if (cli_args_len + 1u >= sizeof(cli_args)) {
-                return PROC_PM_ERR_BAD_PATH;
+                return -(int32_t)WASMOS_ERR_PROC_PM_BAD_PATH;
             }
             cli_args[cli_args_len] = (char)ch;
         }
         if (path_len + cli_args_len >= xfer_buffer_size(BUFFER_KIND_TRANSFER)) {
-            return PROC_PM_ERR_BAD_PATH;
+            return -(int32_t)WASMOS_ERR_PROC_PM_BAD_PATH;
         }
     }
     cli_args[cli_args_len] = '\0';
     if (pm_xfer_acquire(pm_context_id, xfer_buffer_size(BUFFER_KIND_TRANSFER), &pmbuf) != 0) {
-        return PROC_PM_ERR_NO_PM_FSBUF;
+        return -(int32_t)WASMOS_ERR_PROC_PM_NO_PM_FSBUF;
     }
     if (pm_resolve_spawn_path(pm_context_id, &pmbuf, path, path_len,
                               cli_args_len > 0u ? cli_args : 0, cli_args_len, 0, &resolved) != 0) {
         pm_xfer_release(&pmbuf);
-        return PROC_PM_ERR_PATH_RESOLVE;
+        return -(int32_t)WASMOS_ERR_PROC_PM_PATH_RESOLVE;
     }
     if (pm_spawn_from_buffer(parent_pid, (const uint8_t*)pm_xfer_owner_ptr(&pmbuf),
                              resolved.blob_size, resolved.args_len > 0u ? resolved.args : 0,
                              resolved.args_len, &child_pid) != 0) {
         pm_xfer_release(&pmbuf);
-        return PROC_PM_ERR_SPAWN_FAILED;
+        return -(int32_t)WASMOS_ERR_PROC_PM_SPAWN_FAILED;
     }
     pm_xfer_release(&pmbuf);
     (void)pm_inherit_child_cwd(pm_context_id, owner_context, child_pid);
     if (pm_apply_spawn_caps(child_pid, &caps) != 0) {
         (void)process_kill(child_pid, -1);
-        return PROC_PM_ERR_CAPS_APPLY;
+        return -(int32_t)WASMOS_ERR_PROC_PM_CAPS_APPLY;
     }
     /* This caps-sync path is used only by the device manager, which sync-spawns
      * drivers waiting for READY (never for exit).  Auto-reap on exit so one-shot
@@ -1399,11 +1399,11 @@ int pm_handle_notify_ready(uint32_t pm_context_id, const ipc_message_t* msg) {
     process_t* sender = 0;
 
     if (ipc_endpoint_owner(msg->source, &owner_context) != IPC_OK) {
-        return PROC_PM_ERR_BAD_ENDPOINT;
+        return -(int32_t)WASMOS_ERR_PROC_PM_BAD_ENDPOINT;
     }
     sender = process_find_by_context(owner_context);
     if (!sender) {
-        return PROC_PM_ERR_NO_CALLER;
+        return -(int32_t)WASMOS_ERR_PROC_PM_NO_CALLER;
     }
     process_notify_ready(sender);
 
@@ -1419,7 +1419,7 @@ int pm_handle_notify_ready(uint32_t pm_context_id, const ipc_message_t* msg) {
         resp.arg3 = 0;
         g_pm.spawn.in_use = 0;
         if (ipc_send_from(pm_context_id, g_pm.spawn.reply_endpoint, &resp) != IPC_OK) {
-            return PROC_PM_ERR_REPLY_SEND;
+            return -(int32_t)WASMOS_ERR_PROC_PM_REPLY_SEND;
         }
     }
 
@@ -1435,7 +1435,7 @@ int pm_handle_notify_ready(uint32_t pm_context_id, const ipc_message_t* msg) {
     ack.arg1 = 0;
     ack.arg2 = 0;
     ack.arg3 = 0;
-    return ipc_send_from(pm_context_id, msg->source, &ack) == IPC_OK ? 0 : PROC_PM_ERR_REPLY_SEND;
+    return ipc_send_from(pm_context_id, msg->source, &ack) == IPC_OK ? 0 : -(int32_t)WASMOS_ERR_PROC_PM_REPLY_SEND;
 }
 
 void pm_check_waits(uint32_t pm_context_id) {
@@ -1513,7 +1513,7 @@ int pm_handle_spawn(uint32_t pm_context_id, const ipc_message_t* msg) {
     uint32_t parent_pid = 0;
     uint32_t pid = 0;
     if (ipc_endpoint_owner(msg->source, &owner_context) != IPC_OK) {
-        return PROC_PM_ERR_BAD_ENDPOINT;
+        return -(int32_t)WASMOS_ERR_PROC_PM_BAD_ENDPOINT;
     }
     caller = process_find_by_context(owner_context);
     if (!caller) {
@@ -1521,12 +1521,12 @@ int pm_handle_spawn(uint32_t pm_context_id, const ipc_message_t* msg) {
             g_pm_spawn_owner_deny_logged = 1;
             klog_write("[test] pm spawn owner deny ok\n");
         }
-        return PROC_PM_ERR_NO_CALLER;
+        return -(int32_t)WASMOS_ERR_PROC_PM_NO_CALLER;
     }
     parent_pid = caller->pid;
 
     if (pm_spawn_module(parent_pid, msg->arg0, &pid) != 0) {
-        return PROC_PM_ERR_INVALID_MODULE;
+        return -(int32_t)WASMOS_ERR_PROC_PM_INVALID_MODULE;
     }
     (void)pm_inherit_child_cwd(pm_context_id, owner_context, pid);
     process_unpark_pid(pid);
@@ -1547,7 +1547,7 @@ int pm_handle_spawn(uint32_t pm_context_id, const ipc_message_t* msg) {
     resp.arg1 = 0;
     resp.arg2 = 0;
     resp.arg3 = 0;
-    return ipc_send_from(pm_context_id, msg->source, &resp) == IPC_OK ? 0 : PROC_PM_ERR_REPLY_SEND;
+    return ipc_send_from(pm_context_id, msg->source, &resp) == IPC_OK ? 0 : -(int32_t)WASMOS_ERR_PROC_PM_REPLY_SEND;
 }
 
 int pm_handle_spawn_caps(uint32_t pm_context_id, const ipc_message_t* msg) {
@@ -1557,11 +1557,11 @@ int pm_handle_spawn_caps(uint32_t pm_context_id, const ipc_message_t* msg) {
     uint32_t parent_pid = 0;
     uint32_t pid = 0;
     if (ipc_endpoint_owner(msg->source, &owner_context) != IPC_OK) {
-        return PROC_PM_ERR_BAD_ENDPOINT;
+        return -(int32_t)WASMOS_ERR_PROC_PM_BAD_ENDPOINT;
     }
     caller = process_find_by_context(owner_context);
     if (!caller) {
-        return PROC_PM_ERR_NO_CALLER;
+        return -(int32_t)WASMOS_ERR_PROC_PM_NO_CALLER;
     }
     parent_pid = caller->pid;
     caps.valid = 1;
@@ -1576,7 +1576,7 @@ int pm_handle_spawn_caps(uint32_t pm_context_id, const ipc_message_t* msg) {
         caps.io_port_min = 0;
         caps.io_port_max = 0;
     } else if (caps.io_port_min > caps.io_port_max) {
-        return PROC_PM_ERR_BAD_CAPS;
+        return -(int32_t)WASMOS_ERR_PROC_PM_BAD_CAPS;
     }
     if ((caps.cap_flags & DEVMGR_CAP_DMA) != 0) {
         /* Legacy fallback for in-tree storage DMA rollout: when callers use the
@@ -1589,12 +1589,12 @@ int pm_handle_spawn_caps(uint32_t pm_context_id, const ipc_message_t* msg) {
         caps.dma_windows[0].length = 0x80000000ull;
     }
     if (pm_spawn_module(parent_pid, msg->arg0, &pid) != 0) {
-        return PROC_PM_ERR_INVALID_MODULE;
+        return -(int32_t)WASMOS_ERR_PROC_PM_INVALID_MODULE;
     }
     (void)pm_inherit_child_cwd(pm_context_id, owner_context, pid);
     if (pm_apply_spawn_caps(pid, &caps) != 0) {
         (void)process_kill(pid, -1);
-        return PROC_PM_ERR_CAPS_APPLY;
+        return -(int32_t)WASMOS_ERR_PROC_PM_CAPS_APPLY;
     }
     process_unpark_pid(pid);
     ipc_message_t resp;
@@ -1606,7 +1606,7 @@ int pm_handle_spawn_caps(uint32_t pm_context_id, const ipc_message_t* msg) {
     resp.arg1 = 0;
     resp.arg2 = 0;
     resp.arg3 = 0;
-    return ipc_send_from(pm_context_id, msg->source, &resp) == IPC_OK ? 0 : PROC_PM_ERR_REPLY_SEND;
+    return ipc_send_from(pm_context_id, msg->source, &resp) == IPC_OK ? 0 : -(int32_t)WASMOS_ERR_PROC_PM_REPLY_SEND;
 }
 
 int pm_handle_spawn_caps_v2(uint32_t pm_context_id, const ipc_message_t* msg) {
@@ -1624,31 +1624,31 @@ int pm_handle_spawn_caps_v2(uint32_t pm_context_id, const ipc_message_t* msg) {
     uint64_t win_end = 0;
 
     if (ipc_endpoint_owner(msg->source, &owner_context) != IPC_OK) {
-        return PROC_PM_ERR_BAD_ENDPOINT;
+        return -(int32_t)WASMOS_ERR_PROC_PM_BAD_ENDPOINT;
     }
     caller = process_find_by_context(owner_context);
     if (!caller) {
-        return PROC_PM_ERR_NO_CALLER;
+        return -(int32_t)WASMOS_ERR_PROC_PM_NO_CALLER;
     }
     parent_pid = caller->pid;
     payload_size = (uint32_t)msg->arg2;
     if (msg->arg1 == 0 || payload_size < (uint32_t)sizeof(in_caps)) {
-        return PROC_PM_ERR_BAD_CAPS;
+        return -(int32_t)WASMOS_ERR_PROC_PM_BAD_CAPS;
     }
     if (pm_resolve_user_ptr(owner_context, (uint32_t)msg->arg1, (uint32_t)sizeof(in_caps),
                             &caps_user_va) != 0) {
-        return PROC_PM_ERR_BAD_USER_PTR;
+        return -(int32_t)WASMOS_ERR_PROC_PM_BAD_USER_PTR;
     }
     if (mm_copy_from_user(owner_context, &in_caps, caps_user_va, sizeof(in_caps)) != 0) {
-        return PROC_PM_ERR_USER_COPY;
+        return -(int32_t)WASMOS_ERR_PROC_PM_USER_COPY;
     }
 
     if ((in_caps.cap_flags & ~known_cap_mask) != 0) {
-        return PROC_PM_ERR_BAD_CAPS;
+        return -(int32_t)WASMOS_ERR_PROC_PM_BAD_CAPS;
     }
     if ((in_caps.cap_flags & DEVMGR_CAP_IO_PORT) != 0 &&
         in_caps.io_port_min > in_caps.io_port_max) {
-        return PROC_PM_ERR_BAD_CAPS;
+        return -(int32_t)WASMOS_ERR_PROC_PM_BAD_CAPS;
     }
 
     caps.valid = 1;
@@ -1668,40 +1668,40 @@ int pm_handle_spawn_caps_v2(uint32_t pm_context_id, const ipc_message_t* msg) {
         if ((in_caps.dma.direction_flags & ~WASMOS_DMA_DIR_BIDIR) != 0 ||
             in_caps.dma.direction_flags == 0 || in_caps.dma.max_bytes == 0 ||
             in_caps.dma.window_count == 0 || in_caps.dma.window_count > PM_DMA_WINDOW_LIMIT) {
-            return PROC_PM_ERR_BAD_CAPS;
+            return -(int32_t)WASMOS_ERR_PROC_PM_BAD_CAPS;
         }
         expected_size = WASMOS_SPAWN_CAPS_V2_SIZE(in_caps.dma.window_count);
         if (payload_size != expected_size) {
-            return PROC_PM_ERR_BAD_CAPS;
+            return -(int32_t)WASMOS_ERR_PROC_PM_BAD_CAPS;
         }
         if (mm_copy_from_user(owner_context, caps.dma_windows, caps_user_va + sizeof(in_caps),
                               (uint64_t)in_caps.dma.window_count * sizeof(wasmos_dma_window_t)) !=
             0) {
-            return PROC_PM_ERR_USER_COPY;
+            return -(int32_t)WASMOS_ERR_PROC_PM_USER_COPY;
         }
         for (uint32_t i = 0; i < in_caps.dma.window_count; ++i) {
             if (caps.dma_windows[i].length == 0) {
-                return PROC_PM_ERR_BAD_CAPS;
+                return -(int32_t)WASMOS_ERR_PROC_PM_BAD_CAPS;
             }
             win_end = caps.dma_windows[i].base + caps.dma_windows[i].length;
             if (win_end < caps.dma_windows[i].base) {
-                return PROC_PM_ERR_BAD_CAPS;
+                return -(int32_t)WASMOS_ERR_PROC_PM_BAD_CAPS;
             }
         }
         caps.dma_direction_flags = in_caps.dma.direction_flags;
         caps.dma_max_bytes = in_caps.dma.max_bytes;
         caps.dma_window_count = in_caps.dma.window_count;
     } else if (payload_size != (uint32_t)sizeof(in_caps)) {
-        return PROC_PM_ERR_BAD_CAPS;
+        return -(int32_t)WASMOS_ERR_PROC_PM_BAD_CAPS;
     }
 
     if (pm_spawn_module(parent_pid, msg->arg0, &pid) != 0) {
-        return PROC_PM_ERR_INVALID_MODULE;
+        return -(int32_t)WASMOS_ERR_PROC_PM_INVALID_MODULE;
     }
     (void)pm_inherit_child_cwd(pm_context_id, owner_context, pid);
     if (pm_apply_spawn_caps(pid, &caps) != 0) {
         (void)process_kill(pid, -1);
-        return PROC_PM_ERR_CAPS_APPLY;
+        return -(int32_t)WASMOS_ERR_PROC_PM_CAPS_APPLY;
     }
     process_unpark_pid(pid);
     ipc_message_t resp;
@@ -1713,7 +1713,7 @@ int pm_handle_spawn_caps_v2(uint32_t pm_context_id, const ipc_message_t* msg) {
     resp.arg1 = 0;
     resp.arg2 = 0;
     resp.arg3 = 0;
-    return ipc_send_from(pm_context_id, msg->source, &resp) == IPC_OK ? 0 : PROC_PM_ERR_REPLY_SEND;
+    return ipc_send_from(pm_context_id, msg->source, &resp) == IPC_OK ? 0 : -(int32_t)WASMOS_ERR_PROC_PM_REPLY_SEND;
 }
 
 int pm_handle_spawn_path(uint32_t pm_context_id, const ipc_message_t* msg) {
@@ -1732,19 +1732,19 @@ int pm_handle_spawn_path(uint32_t pm_context_id, const ipc_message_t* msg) {
     xfer_buffer_owner_t pmbuf = {0};
 
     if (ipc_endpoint_owner(msg->source, &owner_context) != IPC_OK) {
-        return PROC_SPAWN_ERR_BAD_ENDPOINT;
+        return -(int32_t)WASMOS_ERR_PROC_SPAWN_BAD_ENDPOINT;
     }
     caller = process_find_by_context(owner_context);
     if (!caller) {
-        return PROC_SPAWN_ERR_NO_CALLER;
+        return -(int32_t)WASMOS_ERR_PROC_SPAWN_NO_CALLER;
     }
     parent_pid = caller->pid;
     if (g_pm.fs_endpoint == IPC_ENDPOINT_NONE || path_len == 0 || path_len >= sizeof(path)) {
-        return PROC_SPAWN_ERR_BAD_PATH;
+        return -(int32_t)WASMOS_ERR_PROC_SPAWN_BAD_PATH;
     }
     caller_fs_buf = pm_foreign_xfer_ptr(caller_buffer_id, owner_context, 0);
     if (!caller_fs_buf || path_len >= xfer_buffer_size(BUFFER_KIND_TRANSFER)) {
-        return PROC_SPAWN_ERR_CALLER_FSBUF;
+        return -(int32_t)WASMOS_ERR_PROC_SPAWN_CALLER_FSBUF;
     }
     for (uint32_t i = 0; i < path_len; ++i) {
         path[i] = (char)caller_fs_buf[i];
@@ -1755,7 +1755,7 @@ int pm_handle_spawn_path(uint32_t pm_context_id, const ipc_message_t* msg) {
         uint32_t args_off = path_len + 1u;
         if (args_len >= sizeof(cli_args) || args_off >= fs_buf_size ||
             args_len > (fs_buf_size - args_off)) {
-            return PROC_SPAWN_ERR_ARGS_TOOBIG;
+            return -(int32_t)WASMOS_ERR_PROC_SPAWN_ARGS_TOOBIG;
         }
         for (uint32_t i = 0; i < args_len; ++i) {
             cli_args[i] = (char)caller_fs_buf[args_off + i];
@@ -1765,7 +1765,7 @@ int pm_handle_spawn_path(uint32_t pm_context_id, const ipc_message_t* msg) {
         cli_args[0] = '\0';
     }
     if (pm_xfer_acquire(pm_context_id, xfer_buffer_size(BUFFER_KIND_TRANSFER), &pmbuf) != 0) {
-        return PROC_SPAWN_ERR_NO_PM_FSBUF;
+        return -(int32_t)WASMOS_ERR_PROC_SPAWN_NO_PM_FSBUF;
     }
 
     int resolve_rc =
@@ -1788,19 +1788,19 @@ int pm_handle_spawn_path(uint32_t pm_context_id, const ipc_message_t* msg) {
         ready_policy = wasmos_app_requires_explicit_ready(&desc);
         if (ready_policy < 0) {
             pm_xfer_release(&pmbuf);
-            return PROC_SPAWN_ERR_SPAWN_FAILED;
+            return -(int32_t)WASMOS_ERR_PROC_SPAWN_SPAWN_FAILED;
         }
     }
     int needs_ready = ready_policy != 0 && !(spawn_req_flags & PROC_SPAWN_PATH_FLAG_DETACH);
     if (needs_ready && g_pm.spawn.in_use) {
         pm_xfer_release(&pmbuf);
-        return PROC_PM_ERR_BUSY;
+        return -(int32_t)WASMOS_ERR_PROC_PM_BUSY;
     }
     if (pm_spawn_from_buffer(parent_pid, (const uint8_t*)pm_xfer_owner_ptr(&pmbuf),
                              resolved.blob_size, resolved.args_len > 0u ? resolved.args : 0,
                              resolved.args_len, &pid) != 0) {
         pm_xfer_release(&pmbuf);
-        return PROC_SPAWN_ERR_SPAWN_FAILED;
+        return -(int32_t)WASMOS_ERR_PROC_SPAWN_SPAWN_FAILED;
     }
     pm_xfer_release(&pmbuf);
     (void)pm_inherit_child_cwd(pm_context_id, owner_context, pid);
@@ -1839,7 +1839,7 @@ int pm_handle_spawn_path(uint32_t pm_context_id, const ipc_message_t* msg) {
     resp.arg1 = app_flags;
     resp.arg2 = 0;
     resp.arg3 = 0;
-    return ipc_send_from(pm_context_id, msg->source, &resp) == IPC_OK ? 0 : PROC_PM_ERR_REPLY_SEND;
+    return ipc_send_from(pm_context_id, msg->source, &resp) == IPC_OK ? 0 : -(int32_t)WASMOS_ERR_PROC_PM_REPLY_SEND;
 }
 
 int pm_handle_spawn_path_caps(uint32_t pm_context_id, const ipc_message_t* msg) {
@@ -1872,18 +1872,18 @@ int pm_handle_spawn_path_caps(uint32_t pm_context_id, const ipc_message_t* msg) 
     caps.dma_window_count = 0;
 
     if (ipc_endpoint_owner(msg->source, &owner_context) != IPC_OK) {
-        return PROC_PM_ERR_BAD_ENDPOINT;
+        return -(int32_t)WASMOS_ERR_PROC_PM_BAD_ENDPOINT;
     }
     caller = process_find_by_context(owner_context);
     if (!caller) {
-        return PROC_PM_ERR_NO_CALLER;
+        return -(int32_t)WASMOS_ERR_PROC_PM_NO_CALLER;
     }
     parent_pid = caller->pid;
     if ((caps.cap_flags & DEVMGR_CAP_IO_PORT) == 0) {
         caps.io_port_min = 0;
         caps.io_port_max = 0;
     } else if (caps.io_port_min > caps.io_port_max) {
-        return PROC_PM_ERR_BAD_CAPS;
+        return -(int32_t)WASMOS_ERR_PROC_PM_BAD_CAPS;
     }
     if ((caps.cap_flags & DEVMGR_CAP_DMA) != 0) {
         caps.dma_direction_flags = WASMOS_DMA_DIR_BIDIR;
@@ -1893,11 +1893,11 @@ int pm_handle_spawn_path_caps(uint32_t pm_context_id, const ipc_message_t* msg) 
         caps.dma_windows[0].length = 0x80000000ull;
     }
     if (g_pm.fs_endpoint == IPC_ENDPOINT_NONE || path_len == 0 || path_len >= sizeof(path)) {
-        return PROC_PM_ERR_BAD_PATH;
+        return -(int32_t)WASMOS_ERR_PROC_PM_BAD_PATH;
     }
     caller_fs_buf = pm_foreign_xfer_ptr(caller_buffer_id, owner_context, 0);
     if (!caller_fs_buf || path_len >= xfer_buffer_size(BUFFER_KIND_TRANSFER)) {
-        return PROC_PM_ERR_CALLER_FSBUF;
+        return -(int32_t)WASMOS_ERR_PROC_PM_CALLER_FSBUF;
     }
     for (uint32_t i = 0; i < path_len; ++i) {
         path[i] = (char)caller_fs_buf[i];
@@ -1910,34 +1910,34 @@ int pm_handle_spawn_path_caps(uint32_t pm_context_id, const ipc_message_t* msg) 
                 break;
             }
             if (cli_args_len + 1u >= sizeof(cli_args)) {
-                return PROC_PM_ERR_BAD_PATH;
+                return -(int32_t)WASMOS_ERR_PROC_PM_BAD_PATH;
             }
             cli_args[cli_args_len] = (char)ch;
         }
         if (path_len + cli_args_len >= xfer_buffer_size(BUFFER_KIND_TRANSFER)) {
-            return PROC_PM_ERR_BAD_PATH;
+            return -(int32_t)WASMOS_ERR_PROC_PM_BAD_PATH;
         }
     }
     cli_args[cli_args_len] = '\0';
     if (pm_xfer_acquire(pm_context_id, xfer_buffer_size(BUFFER_KIND_TRANSFER), &pmbuf) != 0) {
-        return PROC_PM_ERR_NO_PM_FSBUF;
+        return -(int32_t)WASMOS_ERR_PROC_PM_NO_PM_FSBUF;
     }
     if (pm_resolve_spawn_path(pm_context_id, &pmbuf, path, path_len,
                               cli_args_len > 0u ? cli_args : 0, cli_args_len, 0, &resolved) != 0) {
         pm_xfer_release(&pmbuf);
-        return PROC_PM_ERR_PATH_RESOLVE;
+        return -(int32_t)WASMOS_ERR_PROC_PM_PATH_RESOLVE;
     }
     if (pm_spawn_from_buffer(parent_pid, (const uint8_t*)pm_xfer_owner_ptr(&pmbuf),
                              resolved.blob_size, resolved.args_len > 0u ? resolved.args : 0,
                              resolved.args_len, &pid) != 0) {
         pm_xfer_release(&pmbuf);
-        return PROC_PM_ERR_SPAWN_FAILED;
+        return -(int32_t)WASMOS_ERR_PROC_PM_SPAWN_FAILED;
     }
     pm_xfer_release(&pmbuf);
     (void)pm_inherit_child_cwd(pm_context_id, owner_context, pid);
     if (pm_apply_spawn_caps(pid, &caps) != 0) {
         (void)process_kill(pid, -1);
-        return PROC_PM_ERR_CAPS_APPLY;
+        return -(int32_t)WASMOS_ERR_PROC_PM_CAPS_APPLY;
     }
     process_unpark_pid(pid);
 
@@ -1950,7 +1950,7 @@ int pm_handle_spawn_path_caps(uint32_t pm_context_id, const ipc_message_t* msg) 
     resp.arg1 = 0;
     resp.arg2 = 0;
     resp.arg3 = 0;
-    return ipc_send_from(pm_context_id, msg->source, &resp) == IPC_OK ? 0 : PROC_PM_ERR_REPLY_SEND;
+    return ipc_send_from(pm_context_id, msg->source, &resp) == IPC_OK ? 0 : -(int32_t)WASMOS_ERR_PROC_PM_REPLY_SEND;
 }
 
 int pm_handle_module_meta(uint32_t pm_context_id, const ipc_message_t* msg) {
@@ -1967,21 +1967,21 @@ int pm_handle_module_meta(uint32_t pm_context_id, const ipc_message_t* msg) {
     uint32_t packed_io = 0;
 
     if (ipc_endpoint_owner(msg->source, &owner_context) != IPC_OK) {
-        return PROC_PM_ERR_BAD_ENDPOINT;
+        return -(int32_t)WASMOS_ERR_PROC_PM_BAD_ENDPOINT;
     }
     caller = process_find_by_context(owner_context);
     if (!caller) {
-        return PROC_PM_ERR_NO_CALLER;
+        return -(int32_t)WASMOS_ERR_PROC_PM_NO_CALLER;
     }
     if (wasmos_app_module_desc(g_pm.boot_info, msg->arg0, &desc) != 0) {
-        return PROC_PM_ERR_META_LOOKUP;
+        return -(int32_t)WASMOS_ERR_PROC_PM_META_LOOKUP;
     }
     if ((desc.flags & WASMOS_APP_FLAG_DRIVER) == 0) {
-        return PROC_PM_ERR_META_NOT_DRIVER;
+        return -(int32_t)WASMOS_ERR_PROC_PM_META_NOT_DRIVER;
     }
     match_count = desc.driver_match_count;
     if (match_count == 0 || match_index >= match_count) {
-        return PROC_PM_ERR_META_BAD_INDEX;
+        return -(int32_t)WASMOS_ERR_PROC_PM_META_BAD_INDEX;
     }
     match = &desc.driver_matches[match_index];
     cap_flags = wasmos_app_driver_cap_flags(&desc);
@@ -2003,7 +2003,7 @@ int pm_handle_module_meta(uint32_t pm_context_id, const ipc_message_t* msg) {
     resp.arg1 = packed_match;
     resp.arg2 = packed_vendor_device;
     resp.arg3 = packed_caps;
-    return ipc_send_from(pm_context_id, msg->source, &resp) == IPC_OK ? 0 : PROC_PM_ERR_REPLY_SEND;
+    return ipc_send_from(pm_context_id, msg->source, &resp) == IPC_OK ? 0 : -(int32_t)WASMOS_ERR_PROC_PM_REPLY_SEND;
 }
 
 int pm_handle_module_meta_path(uint32_t pm_context_id, const ipc_message_t* msg) {
@@ -2021,38 +2021,38 @@ int pm_handle_module_meta_path(uint32_t pm_context_id, const ipc_message_t* msg)
     ipc_message_t resp;
 
     if (ipc_endpoint_owner(msg->source, &owner_context) != IPC_OK) {
-        return PROC_PM_ERR_BAD_ENDPOINT;
+        return -(int32_t)WASMOS_ERR_PROC_PM_BAD_ENDPOINT;
     }
     caller = process_find_by_context(owner_context);
     if (!caller) {
-        return PROC_PM_ERR_NO_CALLER;
+        return -(int32_t)WASMOS_ERR_PROC_PM_NO_CALLER;
     }
     if (path_len == 0 || path_len >= sizeof(path)) {
-        return PROC_PM_ERR_BAD_PATH;
+        return -(int32_t)WASMOS_ERR_PROC_PM_BAD_PATH;
     }
     if (path_ptr == 0) {
         caller_fs_buf = pm_foreign_xfer_ptr(caller_buffer_id, owner_context, 0);
         if (!caller_fs_buf || path_len >= xfer_buffer_size(BUFFER_KIND_TRANSFER)) {
-            return PROC_PM_ERR_CALLER_FSBUF;
+            return -(int32_t)WASMOS_ERR_PROC_PM_CALLER_FSBUF;
         }
         for (uint32_t i = 0; i < path_len; ++i) {
             path[i] = (char)caller_fs_buf[i];
         }
     } else {
         if (mm_copy_from_user(owner_context, path, (uint64_t)path_ptr, path_len) != 0) {
-            return PROC_PM_ERR_USER_COPY;
+            return -(int32_t)WASMOS_ERR_PROC_PM_USER_COPY;
         }
     }
     path[path_len] = '\0';
     if (source == PROC_MODULE_SOURCE_INITFS) {
         if (wasmos_app_module_desc_by_initfs_path(g_pm.boot_info, path, &module_index, &desc) !=
             0) {
-            return PROC_PM_ERR_META_LOOKUP;
+            return -(int32_t)WASMOS_ERR_PROC_PM_META_LOOKUP;
         }
     } else if (source == PROC_MODULE_SOURCE_FS) {
-        return PROC_PM_ERR_META_BAD_SOURCE;
+        return -(int32_t)WASMOS_ERR_PROC_PM_META_BAD_SOURCE;
     } else {
-        return PROC_PM_ERR_META_BAD_SOURCE;
+        return -(int32_t)WASMOS_ERR_PROC_PM_META_BAD_SOURCE;
     }
 
     cap_flags = wasmos_app_driver_cap_flags(&desc);
@@ -2064,5 +2064,5 @@ int pm_handle_module_meta_path(uint32_t pm_context_id, const ipc_message_t* msg)
     resp.arg1 = desc.flags;
     resp.arg2 = cap_flags;
     resp.arg3 = 0;
-    return ipc_send_from(pm_context_id, msg->source, &resp) == IPC_OK ? 0 : PROC_PM_ERR_REPLY_SEND;
+    return ipc_send_from(pm_context_id, msg->source, &resp) == IPC_OK ? 0 : -(int32_t)WASMOS_ERR_PROC_PM_REPLY_SEND;
 }

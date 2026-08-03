@@ -47,56 +47,11 @@ enum { PROC_MODULE_SOURCE_INITFS = 0, PROC_MODULE_SOURCE_FS = 1 };
  * Must NOT be set when the spawner will PROC_IPC_WAIT for the exit status. */
 #define PROC_SPAWN_PATH_FLAG_AUTOREAP (1u << 1)
 
-enum {
-    /* Distinct path-spawn failure reasons, returned as the rc in
-     * PROC_IPC_ERROR.arg1 so a failed spawn reports WHY instead of a blanket
-     * "exec failed".  Kept as small negative ints so they don't collide with
-     * success (0). */
-    PROC_SPAWN_ERR_BAD_ENDPOINT = -10, /* request endpoint owner lookup failed */
-    PROC_SPAWN_ERR_NO_CALLER = -11,    /* caller process/context not found */
-    PROC_SPAWN_ERR_BAD_PATH = -12,     /* fs endpoint missing or bad path length */
-    PROC_SPAWN_ERR_CALLER_FSBUF = -13, /* caller xfer buffer missing / path too big */
-    PROC_SPAWN_ERR_ARGS_TOOBIG = -14,  /* args exceed the xfer buffer */
-    PROC_SPAWN_ERR_NO_PM_FSBUF = -15,  /* PM xfer buffer missing */
-    PROC_SPAWN_ERR_FS_READ = -16,      /* reading the app blob from FS failed */
-    PROC_SPAWN_ERR_SPAWN_FAILED = -17, /* process create/start failed (e.g. no free slot) */
-    PROC_SPAWN_ERR_BROKER_IPC = -18,   /* broker plan IPC transport/reply failed */
-    PROC_SPAWN_ERR_BROKER_PLAN = -19,  /* broker replied with malformed/unsupported plan */
-    PROC_SPAWN_ERR_BROKER_DEFERRED =
-        -20 /* valid broker plan returned; PM launch step still deferred */
-};
-
-enum {
-    /* Non-path PM IPC failures used by spawn/module-meta service entry points
-     * that previously collapsed to raw -1/-2 error responses. */
-    PROC_PM_ERR_BUSY = -40,            /* PM already has an incompatible in-flight operation */
-    PROC_PM_ERR_BAD_ENDPOINT = -41,    /* source endpoint owner lookup failed */
-    PROC_PM_ERR_NO_CALLER = -42,       /* source endpoint owner has no live process */
-    PROC_PM_ERR_INVALID_NAME = -43,    /* packed module/service name was empty or invalid */
-    PROC_PM_ERR_INVALID_MODULE = -44,  /* requested module or descriptor was invalid */
-    PROC_PM_ERR_FS_UNAVAILABLE = -45,  /* PM filesystem service channel was unavailable */
-    PROC_PM_ERR_FS_REQUEST = -46,      /* PM could not issue the filesystem read request */
-    PROC_PM_ERR_BAD_PATH = -47,        /* explicit path input was empty or invalid */
-    PROC_PM_ERR_PATH_RESOLVE = -48,    /* path-based resolve/classify/reload failed */
-    PROC_PM_ERR_SPAWN_FAILED = -49,    /* PM failed to create or prepare the child process */
-    PROC_PM_ERR_CAPS_APPLY = -50,      /* capability profile application failed after spawn */
-    PROC_PM_ERR_BAD_CAPS = -51,        /* capability payload or compact cap fields were invalid */
-    PROC_PM_ERR_BAD_USER_PTR = -52,    /* supplied user pointer could not be resolved safely */
-    PROC_PM_ERR_USER_COPY = -53,       /* mm_copy_from_user failed for PM input payload */
-    PROC_PM_ERR_META_LOOKUP = -54,     /* module metadata lookup failed */
-    PROC_PM_ERR_META_NOT_DRIVER = -55, /* requested module metadata was not for a driver */
-    PROC_PM_ERR_META_BAD_INDEX = -56,  /* requested driver match index was out of range */
-    PROC_PM_ERR_META_BAD_SOURCE = -57, /* unsupported module metadata source selector */
-    PROC_PM_ERR_CALLER_FSBUF = -58,    /* caller filesystem transfer buffer was missing/invalid */
-    PROC_PM_ERR_REPLY_SEND = -59,      /* PM failed to send the final IPC response */
-    PROC_PM_ERR_FS_REPLY = -60,        /* PM received an unexpected filesystem reply */
-    PROC_PM_ERR_BAD_BROKER = -61,      /* broker registration payload or endpoint was invalid */
-    PROC_PM_ERR_BAD_HANDLER = -62,     /* exec-handler registration payload was invalid */
-    PROC_PM_ERR_SUBSYSTEM_REG = -63,   /* subsystem broker registration failed */
-    PROC_PM_ERR_HANDLER_REG = -64,     /* exec-handler registration failed */
-    PROC_PM_ERR_NOT_AUTHORIZED = -65,  /* caller lacks the subsystem.register capability */
-    PROC_PM_ERR_NO_PM_FSBUF = -66      /* PM could not acquire its own xfer buffer */
-};
+/* Process-manager failure reasons migrated to the packed error model: spawn
+ * paths use negated packed WASMOS_ERR_PROC_SPAWN_* (domain 1) and non-path PM
+ * IPC uses WASMOS_ERR_PROC_PM_* (domain 2), returned as the negative rc in
+ * PROC_IPC_ERROR.arg1 so a failed op reports WHY. Recover with
+ * `(uint32_t)(-arg1)` + wasmos_error_*. (Codes from wasmos_status.h, above.) */
 
 /* shmem map/map_auto failure reasons migrated to the packed error model: the
  * host calls now return a negated packed WASMOS_ERR_SHMEM_* code (domain 3, see

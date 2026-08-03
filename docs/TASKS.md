@@ -352,8 +352,11 @@ returns; `FS_ERR_*`/`PROC_*` ride IPC opcodes), so the migration depends on them
     own every caller). `driver_abi.h` includes `wasmos_status.h`; wire =
     negated-packed in `FS_IPC_ERROR`/`RESP` arg0, transparent to fs-manager/libc
     (they only test `< 0`). Booted both runtimes.
-  - [ ] Subsystem 3 — **PROC** (`PROC_SPAWN_ERR_*` + `PROC_PM_ERR_*`, ~277 refs,
-    process_manager + selftest + spawn call sites).
+  - [x] Subsystem 3 — **PROC**: both `PROC_SPAWN_ERR_*` (domain 1) and
+    `PROC_PM_ERR_*` (domain 2) enums deleted; all 239 sites across the kernel
+    (process_manager_spawn/services, selftest) + services (cli, init, broker) now
+    use negated packed `WASMOS_ERR_PROC_{SPAWN,PM}_*` directly (returned as the
+    negative rc in `PROC_IPC_ERROR.arg1`). Booted both runtimes.
   - [ ] Clear the bare-`return -1;` backlog per subsystem; then flip the advisory
     `-1` gate to a hard failure (allow-listing genuine POSIX-ABI boundaries and
     internal helpers where a named code adds nothing).

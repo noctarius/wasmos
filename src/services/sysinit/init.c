@@ -40,29 +40,29 @@ static void fatal_stall(const char* msg) {
 
 static const char* sysinit_spawn_error_reason(int32_t rc) {
     switch (rc) {
-    case PROC_SPAWN_ERR_BAD_ENDPOINT:
+    case -(int32_t)WASMOS_ERR_PROC_SPAWN_BAD_ENDPOINT:
         return "bad request endpoint";
-    case PROC_SPAWN_ERR_NO_CALLER:
+    case -(int32_t)WASMOS_ERR_PROC_SPAWN_NO_CALLER:
         return "caller not found";
-    case PROC_SPAWN_ERR_BAD_PATH:
+    case -(int32_t)WASMOS_ERR_PROC_SPAWN_BAD_PATH:
         return "bad path";
-    case PROC_SPAWN_ERR_CALLER_FSBUF:
+    case -(int32_t)WASMOS_ERR_PROC_SPAWN_CALLER_FSBUF:
         return "caller transfer buffer unavailable";
-    case PROC_SPAWN_ERR_ARGS_TOOBIG:
+    case -(int32_t)WASMOS_ERR_PROC_SPAWN_ARGS_TOOBIG:
         return "args too long";
-    case PROC_SPAWN_ERR_NO_PM_FSBUF:
+    case -(int32_t)WASMOS_ERR_PROC_SPAWN_NO_PM_FSBUF:
         return "pm transfer buffer unavailable";
-    case PROC_SPAWN_ERR_FS_READ:
+    case -(int32_t)WASMOS_ERR_PROC_SPAWN_FS_READ:
         return "cannot read executable";
-    case PROC_SPAWN_ERR_SPAWN_FAILED:
+    case -(int32_t)WASMOS_ERR_PROC_SPAWN_SPAWN_FAILED:
         return "process create/start failed";
-    case PROC_SPAWN_ERR_BROKER_IPC:
+    case -(int32_t)WASMOS_ERR_PROC_SPAWN_BROKER_IPC:
         return "broker plan IPC failed";
-    case PROC_SPAWN_ERR_BROKER_PLAN:
+    case -(int32_t)WASMOS_ERR_PROC_SPAWN_BROKER_PLAN:
         return "broker returned an invalid spawn plan";
-    case PROC_SPAWN_ERR_BROKER_DEFERRED:
+    case -(int32_t)WASMOS_ERR_PROC_SPAWN_BROKER_DEFERRED:
         return "broker plan deferred";
-    case PROC_PM_ERR_BUSY:
+    case -(int32_t)WASMOS_ERR_PROC_PM_BUSY:
         return "process manager busy";
     default:
         return 0;
@@ -88,7 +88,7 @@ static void sysinit_log_spawn_failure(const char* op, const char* path, int32_t 
 
 /* Fire-and-forget spawn: writes path into the xfer buffer and sends
  * PROC_IPC_SPAWN_PATH.  Retries up to SYSINIT_MAX_SPAWN_ATTEMPTS on
- * PROC_IPC_ERROR with arg1==PROC_PM_ERR_BUSY. */
+ * PROC_IPC_ERROR with arg1==-(int32_t)WASMOS_ERR_PROC_PM_BUSY. */
 static int spawn_path(const char* path) {
     wasmos_ipc_message_t reply;
     uint32_t path_len = 0;
@@ -126,7 +126,7 @@ static int spawn_path(const char* path) {
             (void)wasmos_xfer_buffer_release(bid);
             return 0;
         }
-        if (reply.type == PROC_IPC_ERROR && (int32_t)reply.arg1 == PROC_PM_ERR_BUSY) {
+        if (reply.type == PROC_IPC_ERROR && (int32_t)reply.arg1 == -(int32_t)WASMOS_ERR_PROC_PM_BUSY) {
             wasmos_sched_yield();
             continue;
         }
@@ -136,7 +136,7 @@ static int spawn_path(const char* path) {
         (void)wasmos_xfer_buffer_release(bid);
         return -1;
     }
-    sysinit_log_spawn_failure("spawn", path, PROC_PM_ERR_BUSY);
+    sysinit_log_spawn_failure("spawn", path, -(int32_t)WASMOS_ERR_PROC_PM_BUSY);
     (void)wasmos_xfer_buffer_release(bid);
     return -1;
 }

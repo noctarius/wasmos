@@ -139,8 +139,16 @@ flags and descriptor structs stay hand-written in the per-service headers.
 
 Landed as Phase 3a (the `wasmos_driver_abi.h` core) + 3b (the per-service
 subsystems `rtc`/`font`/`gfx`/`serial` folded in, and per-language constants).
-Optional (3c): typed future-returning request/reply stubs that emit the
-transfer-buffer borrow/release ownership contract in one place.
+
+Phase 3c (typed request/reply stubs) is a proof-of-concept: an optional `rpc:`
+block on a request opcode (`reply`/`error` opcodes + `request`/`reply_args`
+arg-word names) generates a typed reply struct + reply-status decoder + a client
+stub — a C **future** stub over the libsys ipc-future bridge
+(`wasmos_rpc_wasm.h`) and an AS **synchronous** stub over `ipc.call`
+(`wasmos_rpc.ts`), proven on the `rtc` family. Bit-level arg packing, the
+transfer-buffer borrow/release ownership contract for payload-carrying opcodes,
+a native runtime flavor, and consumer adoption remain if the pattern is rolled
+out further.
 
 ### `abi/errors.yaml`
 

@@ -42,7 +42,10 @@ GEN_DOCS_DIR = os.path.join(REPO_ROOT, "abi", "generated", "docs")
 OPCODES_H = os.path.join(GEN_C_DIR, "wasmos_opcodes.h")
 OPCODES_MD = os.path.join(GEN_DOCS_DIR, "opcodes.md")
 
+RPC_WASM_OUT = os.path.join(GEN_C_DIR, "wasmos_rpc_wasm.h")
+
 GEN_ROOT = os.path.join(REPO_ROOT, "abi", "generated")
+AS_RPC_OUT = os.path.join(GEN_ROOT, "assemblyscript", "wasmos_rpc.ts")
 RUST_OUT = os.path.join(GEN_ROOT, "rust", "wasmos_opcodes.rs")
 GO_OUT = os.path.join(GEN_ROOT, "go", "wasmos_opcodes.go")
 ZIG_OUT = os.path.join(GEN_ROOT, "zig", "wasmos_opcodes.zig")
@@ -280,9 +283,164 @@ def emit_as(m):
     )
 
 
+def emit_rpc_wasm(m):
+    """Typed future-returning request/reply client stubs (wasm) over the libsys
+    ipc-future bridge, for opcodes that declare `rpc:` in the IDL (Phase 3c
+    proof-of-concept). Included from a wasm app/service (which has the libsys -I).
+    """
+    o = list(BANNER)
+    w = o.append
+    w("#ifndef WASMOS_GENERATED_RPC_WASM_H")
+    w("#define WASMOS_GENERATED_RPC_WASM_H")
+    w("")
+    w('#include "wasmos/libsys.h"  /* ipc-future bridge + the opcode enums */')
+    w("")
+    w("/* Each stub inits a caller-owned ipc-future op with a generated reply-status")
+    w(" * decoder, sends the request, and returns the future. request/reply_args map")
+    w(" * to arg0..argN in order; bit-level packing stays hand-written. */")
+    for s in m.by_id:
+        for op in s["opcodes"]:
+            rpc = op.get("rpc")
+            if not rpc:
+                continue
+            base = op["symbol"].lower()
+            if base.endswith("_req"):
+                base = base[:-4]
+            req_args = rpc.get("request") or []
+            reply_args = rpc.get("reply_args") or []
+            if len(req_args) > 4 or len(reply_args) > 4:
+                die(f"{op['symbol']}: rpc request/reply_args exceed 4 arg words")
+            reply_sym, err_sym = rpc["reply"], rpc.get("error")
+            w("")
+            w("typedef struct {")
+            for a in reply_args:
+                w(f"    int32_t {a};")
+            if not reply_args:
+                w("    int32_t _unused;")
+            w(f"}} {base}_reply_t;")
+            w(f"static inline int32_t {base}_reply_status(void* user,")
+            w(
+                "                                          const wasmos_ipc_message_t* r) {"
+            )
+            w(f"    {base}_reply_t* out = ({base}_reply_t*)user;")
+            if err_sym:
+                w(f"    if (r->type == {err_sym}) return r->arg0 ? r->arg0 : -1;")
+            w(f"    if (r->type != {reply_sym}) return -1;")
+            if reply_args:
+                w("    if (out) {")
+                for i, a in enumerate(reply_args):
+                    w(f"        out->{a} = r->arg{i};")
+                w("    }")
+            else:
+                w("    (void)out;")
+            w("    return 0;")
+            w("}")
+            params = [
+                "wasmos_sys_event_loop_t* loop",
+                "wasmos_sys_wasm_ipc_future_t* op",
+                "int32_t dest_endpoint",
+                "int32_t reply_endpoint",
+            ]
+            params += [f"int32_t {a}" for a in req_args]
+            params += [f"{base}_reply_t* out_reply", "int32_t* out_request_id"]
+            argvals = [req_args[i] if i < len(req_args) else "0" for i in range(4)]
+            w(f"static inline wasmos_future_t* wasmos_rpc_{base}(")
+            w("        " + ", ".join(params) + ") {")
+            w(
+                f"    wasmos_sys_wasm_ipc_future_init(op, {base}_reply_status, out_reply);"
+            )
+            w(
+                "    return wasmos_sys_wasm_ipc_future_send(loop, op, dest_endpoint, reply_endpoint,"
+            )
+            w(
+                f"        {op['symbol']}, {argvals[0]}, {argvals[1]}, {argvals[2]}, {argvals[3]},"
+            )
+            w("        out_request_id);")
+            w("}")
+    w("")
+    w("#endif /* WASMOS_GENERATED_RPC_WASM_H */")
+    w("")
+    return "\n".join(o)
+
+
+def _rpc_ops(m):
+    """(subsystem, opcode) pairs that declare an `rpc:` stub, in id order."""
+    return [(s, op) for s in m.by_id for op in s["opcodes"] if op.get("rpc")]
+
+
+def _rpc_base(op):
+    b = op["symbol"].lower()
+    return b[:-4] if b.endswith("_req") else b
+
+
+def _camel(base, upper_first):
+    parts = base.split("_")
+    out = "".join(p[:1].upper() + p[1:] for p in parts)
+    return out if upper_first else out[:1].lower() + out[1:]
+
+
+def emit_rpc_as(m):
+    """AssemblyScript typed request/reply client stubs (Phase 3c PoC). AS has no
+    future bridge, so these are synchronous wrappers over ipc.call (the idiom
+    date.ts uses). Drop into an AS app project alongside wasmos.ts +
+    wasmos_opcodes.ts."""
+    ops = _rpc_ops(m)
+    imports = sorted(
+        {op["symbol"] for _, op in ops}
+        | {op["rpc"]["reply"] for _, op in ops}
+        | {op["rpc"]["error"] for _, op in ops if op["rpc"].get("error")}
+    )
+    o = [
+        "// GENERATED by scripts/gen_abi_opcodes.py from abi/opcodes.yaml — DO NOT EDIT.",
+        "// See docs/architecture/34-abi-idl-and-error-model.md.",
+        "",
+        'import { ipc } from "./wasmos";',
+        "import {",
+    ]
+    o += [f"    {sym}," for sym in imports]
+    o += ['} from "./wasmos_opcodes";', ""]
+    for _s, op in ops:
+        base = _rpc_base(op)
+        rpc = op["rpc"]
+        req = rpc.get("request") or []
+        rep = rpc.get("reply_args") or []
+        if len(req) > 4 or len(rep) > 4:
+            die(f"{op['symbol']}: rpc request/reply_args exceed 4 arg words")
+        cls = _camel(base, True) + "Reply"
+        fn = _camel(base, False)
+        o.append(f"export class {cls} {{")
+        for a in rep:
+            o.append(f"    {a}: i32 = 0;")
+        if not rep:
+            o.append("    _unused: i32 = 0;")
+        o.append("}")
+        # request args -> function params; fill arg0..3
+        argvals = [req[i] if i < len(req) else "0" for i in range(4)]
+        params = ["server: i32"] + [f"{a}: i32" for a in req] + [f"out: {cls}"]
+        o.append(f"export function {fn}({', '.join(params)}): i32 {{")
+        o.append(
+            f"    const reply = ipc.call(server, {op['symbol']}, "
+            f"{argvals[0]}, {argvals[1]}, {argvals[2]}, {argvals[3]});"
+        )
+        o.append("    if (reply == null) return -1;")
+        if rpc.get("error"):
+            o.append(
+                f"    if (reply.type == {rpc['error']}) return reply.arg0 != 0 ? reply.arg0 : -1;"
+            )
+        o.append(f"    if (reply.type != {rpc['reply']}) return -1;")
+        for i, a in enumerate(rep):
+            o.append(f"    out.{a} = reply.arg{i};")
+        o.append("    return 0;")
+        o.append("}")
+        o.append("")
+    return "\n".join(o)
+
+
 OUTPUTS = [
     (OPCODES_H, emit_opcodes_h),
     (OPCODES_MD, emit_opcodes_md),
+    (RPC_WASM_OUT, emit_rpc_wasm),
+    (AS_RPC_OUT, emit_rpc_as),
     (RUST_OUT, emit_rust),
     (GO_OUT, emit_go),
     (ZIG_OUT, emit_zig),

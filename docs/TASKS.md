@@ -300,8 +300,21 @@ returns; `FS_ERR_*`/`PROC_*` ride IPC opcodes), so the migration depends on them
   constants, the `.ts` driver literals) — they can adopt the generated files
   incrementally. Deferred: `gfx_ipc.h`'s struct layouts still differ kernel-vs-libc
   (96 lines) — a separate (non-opcode) consolidation.
-- [ ] Phase 3c (optional): typed future-returning request/reply stubs carrying the
-  transfer-buffer ownership contract.
+- [~] Phase 3c (optional, PoC landed): typed request/reply client stubs. An
+  optional `rpc:` block on a request opcode in `abi/opcodes.yaml` (`reply`/`error`
+  opcodes + `request`/`reply_args` arg-word names) drives generation of a typed
+  reply struct + reply-status decoder + a stub. Proven on the `rtc` read/set
+  family in two shapes: a C **future**-returning stub over the libsys ipc-future
+  bridge (`abi/generated/c/wasmos_rpc_wasm.h`, `wasmos_rpc_<op>()` returns a
+  `wasmos_future_t*`) and an AS **synchronous** stub over `ipc.call`
+  (`abi/generated/assemblyscript/wasmos_rpc.ts`, mirroring the idiom `date.ts`
+  uses). Both compile-verified against the real runtime APIs; wired into `--check`.
+  Remaining if pursued: model bit-packed args (RTC packs time into arg words —
+  the stub currently exposes raw arg words, packing stays hand-written), the
+  transfer-buffer borrow/release ownership contract for payload-carrying opcodes,
+  a native (`wasmos_sys_native_*`) flavor, and adoption (e.g. migrate `date.ts`
+  onto `rtcIpcRead`). Roll out to more opcode families only if the ergonomics pay
+  off — it is the optional tail of the ABI effort.
 - [ ] Phase 4 (after 2 and 3): migrate the tree onto the packed error model —
   the legacy `PROC_SPAWN_ERR_*`/`PROC_PM_ERR_*`/`FS_ERR_*` (IPC opcodes) and
   `SHMEM_ERR_*` (host calls) definitions and call sites move onto the generated

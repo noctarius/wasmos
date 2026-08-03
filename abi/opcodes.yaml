@@ -366,8 +366,25 @@ subsystems:
     id: 12
     range: [0x820, 0x8ff]
     opcodes:
-      - { symbol: RTC_IPC_READ_REQ, value: 0x820, kind: req }
-      - { symbol: RTC_IPC_SET_REQ, value: 0x821, kind: req }
+      # `rpc:` opts a request opcode into a generated typed future stub (Phase 3c
+      # proof-of-concept). request/reply_args name the arg0..argN words in order;
+      # bit-level packing stays hand-written (rtc_ipc_pack_time_*).
+      - symbol: RTC_IPC_READ_REQ
+        value: 0x820
+        kind: req
+        rpc:
+          reply: RTC_IPC_READ_RESP
+          error: RTC_IPC_ERROR
+          request: []
+          reply_args: [time_packed_lo, time_packed_hi]
+      - symbol: RTC_IPC_SET_REQ
+        value: 0x821
+        kind: req
+        rpc:
+          reply: RTC_IPC_SET_RESP
+          error: RTC_IPC_ERROR
+          request: [time_packed_lo, time_packed_hi]
+          reply_args: [status]
       - { symbol: RTC_IPC_READ_RESP, value: 0x8a0, kind: resp }
       - { symbol: RTC_IPC_SET_RESP, value: 0x8a1, kind: resp }
       - { symbol: RTC_IPC_ERROR, value: 0x8ff, kind: error }

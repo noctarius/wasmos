@@ -17,6 +17,7 @@ This repository uses Codex CLI to assist with development. Follow these conventi
     the hand-written kernel wrapper bodies).
   - `skills/wasmos-wasm-driver` — create and wire a new wasm device driver.
   - `skills/wasmos-system-service` — create and wire a new system service.
+  - `skills/wasmos-system-util` — create a one-shot CLI utility under `src/utils/`.
   - `skills/wasmos-kernel-internals` — kernel internals reference.
 
 ## Always Do

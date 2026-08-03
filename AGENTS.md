@@ -18,6 +18,8 @@ This repository uses Codex CLI to assist with development. Follow these conventi
   - `skills/wasmos-wasm-driver` — create and wire a new wasm device driver.
   - `skills/wasmos-system-service` — create and wire a new system service.
   - `skills/wasmos-system-util` — create a one-shot CLI utility under `src/utils/`.
+  - `skills/wasmos-ide-targets` — keep CLion/clangd IDE coverage in sync (audit +
+    fix "not in a project target").
   - `skills/wasmos-kernel-internals` — kernel internals reference.
 
 ## Always Do

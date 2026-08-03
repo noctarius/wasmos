@@ -1,93 +1,170 @@
 ---
 name: wasmos-wasm-driver
-description: Create, wire, and validate a new WASMOS wasm-based device driver (block, chardev, fs, etc.) including IPC ABI usage, build integration, kernel host wiring, and boot-time bring-up. Use when adding a new wasm driver module or converting an in-kernel driver to wasm in the WASMOS repo.
+description: Create, wire, and validate a new WASMOS device driver (WASM or native) — the `.wap` package model: an `initialize` entry that owns an event loop, service/class registration, capabilities declared in linker.metadata, build via the wasmos_add_*_app_target helpers, and boot-time bring-up through device-manager rules. Use when adding a driver under src/drivers/.
 ---
 
-# Wasmos Wasm Driver
+# WASMOS Device Driver
 
 ## Overview
 
-Use this skill to add a new wasm-based driver for a device in WASMOS. It covers the full path:
-driver module source, IPC ABI, kernel host glue, build/packaging, and boot-time wiring.
+A driver is a `.wap` package under `src/drivers/<name>/` that the **device
+manager** spawns from disk at boot. It exports a single `initialize` entry that
+creates an endpoint, registers a service, and runs its own event loop. WASM
+drivers (C/C++/Rust/Zig/AssemblyScript, `native = false`) run ring-3 through
+wasm3 or WARP; native drivers (C/Zig, `native = true`) run against the kernel
+`wasmos_driver_api_t` table.
+
+Legacy patterns that are GONE — do not use them:
+- kernel-embedded blobs (`WASMOS_KERNEL_BLOBS`, a hand-written
+  `src/kernel/wasm_foo.c` wrapper, `wasm_driver_start`);
+- `foo_init` + `foo_ipc_dispatch` exports;
+- `wasmos_endpoint_resolve` kernel wiring;
+- hand-written wasm3 signature strings.
 
 ## Workflow
 
-1. Define the driver’s IPC contract.
-2. Implement the wasm driver module under `src/drivers/<driver-name>/`.
-3. Integrate build rules to compile the wasm and embed it.
-4. Add kernel host glue to start the driver and dispatch IPC.
-5. Wire endpoint resolution and boot sequencing.
-6. Verify in QEMU and remove debug logs.
+1. Choose runtime (WASM vs native) and create the source under `src/drivers/<name>/`.
+2. Export `initialize`; register a service; run a blocking/event-loop.
+3. Declare `linker.metadata` (package + capabilities + optional PCI match).
+4. Add `CMakeLists.txt` with a `wasmos_add_*_app_target` helper; register it.
+5. Add a device-manager rule that spawns the `.wap`.
+6. Build and boot in QEMU.
 
-## Step 1: Define the IPC contract
+## Step 1: Source + runtime
 
-- Add opcodes in `src/drivers/include/wasmos_driver_abi.h`.
-- Keep requests small; use shared memory for bulk data if needed.
-- Use request/response pairs and set clear error codes.
+All drivers live under `src/drivers/<name>/`. Representative examples:
+`src/drivers/virtio_rng/` (WASM/C, DMA + PCI-matched), `src/drivers/chardev/`
+(WASM/C, trivial), `src/drivers/serial/` (AssemblyScript), and
+`src/drivers/framebuffer_pci/` (native/C).
 
-Example (new device `foo`):
+- WASM includes: `wasmos/api.h`, `wasmos/ipc.h`, `wasmos/libsys.h`,
+  `wasmos/startup.h`, plus `wasmos_driver_abi.h` for opcodes (DMA adds
+  `wasmos/vring.h`).
+- Native includes: `wasmos_driver_abi.h` + `wasmos_native_driver.h` (the
+  `wasmos_driver_api_t` table, ABI version at `wasmos_native_driver.h:171`).
+
+## Step 2: The `initialize` entry + event loop
+
+Export exactly one entry with `WASMOS_WASM_EXPORT`
+(`src/libc/include/wasmos/imports.h:13`); it owns the driver's main loop and does
+not return.
+
+- WASM entry: `WASMOS_WASM_EXPORT int32_t initialize(int32_t, int32_t, int32_t, int32_t)`
+  (`src/drivers/virtio_rng/virtio_rng.c:374`). Ignore the entry args — fetch the
+  process-manager endpoint via `wasmos_startup_proc_endpoint()` (spawn-info
+  contract, not entry args).
+- Native entry: `int initialize(wasmos_driver_api_t* api, int module_count, int, int)`
+  (`src/drivers/framebuffer_pci/framebuffer_pci_native.c:252`).
+
+Inside `initialize`:
+1. `ep = wasmos_ipc_create_endpoint()`.
+2. Register the service:
+   - plain name: `wasmos_svc_register(proc_ep, ep, "chardev", 1)`
+     (`chardev_server.c:44`); or
+   - **class** (preferred for backend-neutral drivers): `wasmos_svc_register_class(proc_ep, ep, "virtio-rng", "hrng", 0, 1)` — concrete name + virtual class (`virtio_rng.c:411`; needs the `svc.class` capability).
+3. `wasmos_sys_notify_ready(proc_ep, ep)`.
+4. Event loop that **blocks at idle** (hard rule: never busy-spin —
+   `[[feedback_no_busy_spin_prefer_event_loops]]`): drain with
+   `wasmos_ipc_drain(ep)` + `wasmos_ipc_message_read_last(&msg)`, dispatch, then
+   `wasmos_ipc_select_wait_timeout(sel, ms)` (`virtio_rng.c:417-431`); or the
+   simpler blocking `wasmos_ipc_select_one(ep)` (`chardev_server.c:50`).
+
+Reply with `wasmos_ipc_send(dest, ep, type, req_id, a0..a3)` /
+`wasmos_ipc_reply(...)`. Move bulk data through **borrowed transfer buffers**
+(`wasmos_sys_buffer_write(buffer_id, ptr, n, 0)`), never inline; DMA drivers pin
+device memory with `wasmos_region_alloc(pages, WASMOS_REGION_CACHE_WB, &phys)` +
+`vring.h`. (AssemblyScript declares imports directly with
+`@external("wasmos", ...)` — `serial.ts:34-47` — same wire protocol.)
+
+## Step 3: `linker.metadata`
+
+A TOML sidecar is the source of truth for identity + capabilities (not the code).
+Real example (`src/drivers/virtio_rng/linker.metadata`):
+
+```toml
+version = 1
+aot = true
+[package]
+name = "virtio-rng"
+entry = "initialize"
+kind = "driver"
+native = false          # true selects the native ELF toolchain/runtime
+[resources]
+stack_pages = 16
+heap_pages = 512        # native drivers use 0/0 and get heap via vm_map
+[ipc]
+entry_arg_bindings = ["proc.endpoint"]
+[[capabilities]]        # one block per capability the driver needs
+name = "io.port"
+flags = 0
+[[capabilities]]
+name = "dma.buffer"
+flags = 4               # DMA budget in pages
+[[capabilities]]
+name = "svc.class"
+flags = 0
+[[matches]]             # optional: device-manager PCI auto-match
+bus = "pci"
+vendor = 0x1AF4
+device = 0x1005
+priority = 100
 ```
-FOO_IPC_READ_REQ  = 0x500
-FOO_IPC_READ_RESP = 0x580
-FOO_IPC_ERROR     = 0x5FF
+
+Capability names in the tree: `io.port`, `irq.route`, `mmio.map`, `dma.buffer`,
+`system.control`, `subsystem.register`, `svc.class`, `ipc.basic`.
+
+## Step 4: Build (CMake)
+
+The `wasmos_add_*_app_target` helpers are defined in the **root `CMakeLists.txt`**:
+- WASM/C: `wasmos_add_wasm_c_app_target(...)` (`CMakeLists.txt:476`); real call at
+  `src/drivers/virtio_rng/CMakeLists.txt` (`SOURCE OUTPUT_WASM OUTPUT_APP MANIFEST
+  EXPORT initialize STACK_SIZE INITIAL_MEMORY MAX_MEMORY`). It compiles with
+  `clang --target=wasm32 … --export=initialize`, packs via `make_wasmos_app`
+  (`wasmos_maybe_aot_pack`), and appends to the globals `WASMOS_WASM_APPS` +
+  `WASMOS_WASM_APP_TARGETS`.
+- WASM/C++: `wasmos_add_wasm_cpp_app_target`. Zig: `wasmos_add_zig_wasm_app`
+  (`cmake/WasmosZigApp.cmake`). Native C/Zig: `wasmos_add_native_c_app_target`
+  (`CMakeLists.txt:589`; e.g. `src/drivers/framebuffer_pci/CMakeLists.txt`).
+  AssemblyScript is bespoke — invoke `asc` then `wasmos_maybe_aot_pack` and append
+  to the two globals manually (`src/drivers/serial/CMakeLists.txt`).
+- Register the dir in `src/drivers/CMakeLists.txt` (`add_subdirectory` + the
+  `drivers` aggregate target). Output lands at `build/esp/system/drivers/<name>.wap`.
+
+## Step 5: Boot wiring — device-manager rules
+
+The device manager spawns drivers from udev-style rules, two locations:
+`scripts/initfs/devmgr/rules/default.rules` (initfs bootstrap, boot-critical) and
+`scripts/system/devmgr/rules/default.rules` (boot-FAT, after storage is online).
+
+```
+SUBSYSTEM=="boot", RUN+="system/drivers/chardev_server.wap"
+SUBSYSTEM=="acpi", ATTR{class}=="0x09", ATTR{subclass}=="0x00", RUN+="system/drivers/keyboard.wap"
+SUBSYSTEM=="pci",  ATTR{vendor}=="0x1AF4", ATTR{device}=="0x1005", RUN+="system/drivers/virtio_rng.wap"
+SUBSYSTEM=="block", ATTR{unit}=="1", ENV{MOUNT}="/user", RUN+="system/drivers/fs_fat.wap"
 ```
 
-## Step 2: Implement the wasm driver
+Rules are parsed by `src/services/device_manager/device_manager_rules.c`
+(`always_spawn` / `block_fs` / `pci_match` / `acpi_match`) and applied as PCI/ACPI
+inventory arrives (`device_manager.c` `queue_*_rule_spawns`). The device manager
+spawns via the owner-push path (`hw_spawn_driver_path*` →
+`PROC_IPC_SPAWN_PATH_SYNC` / `_CAPS_SYNC`), packing caps + PCI identity (BAR/IRQ)
+from the manifest into startup args, which a PCI driver parses (e.g.
+`virtio_rng.c` `probe_virtio_rng_from_startup_args`).
 
-Location rule: **all wasm drivers live in subdirectories of `src/drivers/`**.
+## Step 6: Verify
 
-Create `src/drivers/foo/foo.c` (or `examples/` only for test clients).
+```sh
+cmake -S . -B build && cmake --build build --target run-qemu-test   # wasm3 (default)
+cmake -S . -B build -DWASMOS_WASM_RUNTIME_WARP=ON && \
+  cmake --build build --target run-qemu-test                        # WARP
+cmake -S . -B build   # leave the tree in the default config
+```
 
-Minimum exports:
-1. `foo_init(...)` — called once by the kernel host (use args for endpoints, buffers).
-2. `foo_ipc_dispatch(type, arg0, arg1, arg2, arg3)` — handles IPC requests.
+Confirm the driver's ready log and exercise its IPC from a client. Remove debug
+markers before committing.
 
-Use `WASMOS_WASM_IMPORT` to access IPC and console primitives:
-- `ipc_create_endpoint`, `ipc_send`, `ipc_recv`, `ipc_last_field`
-- `console_write` (for minimal logging)
-
-Keep heap/stack tiny and avoid dynamic allocation.
-
-## Step 3: Build integration (CMake)
-
-Add to `src/drivers/<driver-name>/CMakeLists.txt`:
-- `WASM_FOO_DRIVER_SRC`, `WASM_FOO_DRIVER_WASM`, `WASM_FOO_DRIVER_BLOB`
-- A `clang --target=wasm32` build rule (similar to chardev or FAT)
-- An `llvm-objcopy` rule to embed the wasm as a blob (if it is kernel-embedded)
-- For disk-loaded drivers: pack with `make_wasmos_app` and register via `WASMOS_WASM_APPS`
-- For kernel-embedded blobs: register via `WASMOS_KERNEL_BLOBS`
-- Create a target (e.g. `foo_app` or `foo_blob`) and append it to `WASMOS_WASM_APP_TARGETS`
-  or `WASMOS_KERNEL_BLOB_TARGETS` so aggregate builds pull it in
-
-Add the subdirectory in `src/drivers/CMakeLists.txt` so the driver is built.
-
-## Step 4: Kernel host glue
-
-Add a kernel wrapper like `src/kernel/wasm_foo.c` and header:
-- Start the driver with `wasm_driver_start`.
-- Provide `wasm_foo_endpoint()` and `wasm_foo_service_once()`.
-- Translate IPC into driver dispatch and reply.
-
-If the driver needs extra init args (endpoints, buffer phys):
-- Extend `wasm_driver_manifest_t` `init_argc/init_argv`.
-- Pass args from the kernel wrapper before `wasm_driver_start`.
-
-## Step 5: Endpoint wiring
-
-- Expose the service in `wasmos_endpoint_resolve` (kernel).
-- If needed, pass endpoints via PM to apps (e.g. CLI).
-- Ensure ownership permissions are correct (context-bound endpoints).
-
-## Step 6: Bring-up checklist
-
-1. Build: `cmake --build build --target run-qemu`
-2. Confirm logs: `[wasm-driver] started` and driver-specific ready log
-3. Run a minimal client (CLI or test module) to hit IPC paths
-4. Remove debug logs before committing
-
-## Pitfalls
-
-- wasm3 native signatures must match exactly (e.g. `(iiii)i` vs `(*~)i`).
-- Don’t use `*~` unless you want the runtime to translate pointers.
-- Kernel IPC send requires the source endpoint to be owned by the caller’s context.
-- For block drivers, only pass physical addresses the kernel can access.
+## Guardrails
+- Keep `libc`/`libsys` and their per-runtime wrappers in sync (repo rule).
+- Never modify `libs/warp` or `libs/wasm3`.
+- Never busy-spin; block on a select set at idle.
+- Prefer `svc.class` registration + class discovery over hardwired names.

@@ -54,8 +54,16 @@ Adding a kernel `.c` requires updating all three or the link fails:
 
 ## Runtimes and packaging
 - Two WASM runtimes: wasm3 (default interpreter) and WARP
-  (`-DWASMOS_WASM_RUNTIME_WARP=ON`, single-pass JIT, ring 0). `libs/wasm3`/`libs/warp`
-  are git subtrees — never edit them.
+  (`-DWASMOS_WASM_RUNTIME_WARP=ON`, single-pass JIT). Both run guests under
+  **ring-3 isolation** (the standard execution model — selecting WARP implies
+  ring-3; non-ring3 is unsupported). `libs/wasm3`/`libs/warp` are git subtrees —
+  never edit them.
+- WASM host calls (`wasmos.*` / `wasi` / `env` imports) are generated from
+  `abi/hostcalls.yaml` via `scripts/gen_abi_hostcalls.py` (the `HC_*` enum, the
+  WARP `WASMOS_SYMBOLS` table + ring-3 dispatch, the wasm3 link table, and the
+  AOT symbol table all come from it); only the kernel wrapper bodies stay
+  hand-written. The error/status vocabulary is generated from `abi/errors.yaml`.
+  See `skills/wasmos-add-hostcall` and `docs/architecture/34-abi-idl-and-error-model.md`.
 - A component is a native `.wap` ELF vs a WASM app per `native = true|false` in its
   `linker.metadata`. Native services enter at `initialize(...)`; WASM apps export
   `initialize` / `wasmos_main`. Startup values arrive via the spawn-info buffer, not

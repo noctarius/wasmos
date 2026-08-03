@@ -60,14 +60,16 @@ hostcalls:
   - { name: sched_yield, id: 13, returns: status }
   - { name: sched_current_pid, id: 14, returns: value }
   - { name: thread_gettid, id: 15, returns: value }
-  - { name: futex_wait, id: 16, returns: status, params: [{name: addr, kind: ptr}, {name: val, kind: scalar}, {name: timeout_ms, kind: scalar}] }
-  - { name: futex_wake, id: 17, returns: value, params: [{name: addr, kind: ptr}, {name: count, kind: scalar}] }
+  - { name: futex_wait, id: 16, returns: status, params: [{name: addr, kind: ptr, wasm3: i32}, {name: val, kind: scalar}, {name: timeout_ms, kind: scalar}] }
+  - { name: futex_wake, id: 17, returns: value, params: [{name: addr, kind: ptr, wasm3: i32}, {name: count, kind: scalar}] }
 
   # --- IPC select set -------------------------------------------------------
-  - { name: ipc_select_create, id: 18, returns: value }
-  - { name: ipc_select_add, id: 19, returns: status, params: [{name: sel, kind: handle}, {name: endpoint, kind: handle}] }
-  - { name: ipc_select_wait, id: 20, returns: value, params: [{name: sel, kind: handle}] }
-  - { name: ipc_select_destroy, id: 21, returns: status, params: [{name: sel, kind: handle}] }
+  # wasm3 links the ipc_select_* / sys_select_* family to shared wasmos_sys_select_*
+  # wrappers (the only wasm3 fn names not of the form wasmos_<name>).
+  - { name: ipc_select_create, id: 18, returns: value, wasm3_fn: wasmos_sys_select_create }
+  - { name: ipc_select_add, id: 19, returns: status, wasm3_fn: wasmos_sys_select_add, params: [{name: sel, kind: handle}, {name: endpoint, kind: handle}] }
+  - { name: ipc_select_wait, id: 20, returns: value, wasm3_fn: wasmos_sys_select_wait, params: [{name: sel, kind: handle}] }
+  - { name: ipc_select_destroy, id: 21, returns: status, wasm3_fn: wasmos_sys_select_destroy, params: [{name: sel, kind: handle}] }
   - { name: sys_select_create, id: 22, alias_of: ipc_select_create }
   - { name: sys_select_add, id: 23, alias_of: ipc_select_add }
   - { name: sys_select_wait, id: 24, alias_of: ipc_select_wait }
@@ -124,7 +126,7 @@ hostcalls:
   - { name: dma_sync_borrow, id: 61, returns: status, params: [{name: borrow_id, kind: handle}, {name: offset, kind: scalar}, {name: length, kind: scalar}, {name: op, kind: scalar}] }
   - { name: dma_unmap_borrow, id: 62, returns: status, params: [{name: borrow_id, kind: handle}] }
 
-  - { name: phys_map, id: 63, returns: status, params: [{name: phys_lo, kind: scalar}, {name: phys_hi, kind: scalar}, {name: size, kind: scalar}, {name: wasm_offset, kind: ptr}] }
+  - { name: phys_map, id: 63, returns: status, params: [{name: phys_lo, kind: scalar}, {name: phys_hi, kind: scalar}, {name: size, kind: scalar}, {name: wasm_offset, kind: ptr, wasm3: i32}] }
 
   # --- proc info ------------------------------------------------------------
   - { name: proc_info, id: 64, returns: value, params: [{name: index, kind: scalar}, {name: buf, kind: out, len: buf_len}, {name: buf_len, kind: scalar}] }
@@ -136,7 +138,7 @@ hostcalls:
   - { name: sched_cpu_stats, id: 69, returns: status, params: [{name: cpu_id, kind: scalar}, {name: out, kind: out}] }
 
   # --- threads --------------------------------------------------------------
-  - { name: thread_create, id: 70, returns: value, params: [{name: entry, kind: buf}, {name: arg0, kind: scalar}, {name: arg1, kind: scalar}, {name: flags, kind: scalar}] }
+  - { name: thread_create, id: 70, returns: value, params: [{name: entry, kind: buf, wasm3: i32}, {name: arg0, kind: scalar}, {name: arg1, kind: scalar}, {name: flags, kind: scalar}] }
   - { name: thread_yield, id: 71, returns: status }
   - { name: thread_exit, id: 72, returns: status, params: [{name: status, kind: scalar}] }
   - { name: thread_join, id: 73, returns: value, params: [{name: tid, kind: handle}] }
@@ -146,10 +148,10 @@ hostcalls:
   - { name: shmem_create, id: 75, returns: value, params: [{name: pages, kind: scalar}, {name: flags, kind: scalar}] }
   - { name: shmem_grant, id: 76, returns: status, params: [{name: id, kind: handle}, {name: target_pid, kind: handle}] }
   - { name: shmem_revoke, id: 77, returns: status, params: [{name: id, kind: handle}, {name: target_pid, kind: handle}] }
-  - { name: shmem_map, id: 78, returns: status, params: [{name: id, kind: handle}, {name: wasm_off, kind: ptr}, {name: size, kind: scalar}] }
+  - { name: shmem_map, id: 78, returns: status, params: [{name: id, kind: handle}, {name: wasm_off, kind: ptr, wasm3: i32}, {name: size, kind: scalar}] }
   - { name: shmem_map_auto, id: 79, returns: value, params: [{name: id, kind: handle}, {name: size, kind: scalar}] }
-  - { name: shmem_flush, id: 80, returns: status, params: [{name: id, kind: handle}, {name: wasm_off, kind: buf, len: size}, {name: size, kind: scalar}] }
-  - { name: shmem_refresh, id: 81, returns: status, params: [{name: id, kind: handle}, {name: wasm_off, kind: out, len: size}, {name: size, kind: scalar}] }
+  - { name: shmem_flush, id: 80, returns: status, params: [{name: id, kind: handle}, {name: wasm_off, kind: buf, len: size, wasm3: i32}, {name: size, kind: scalar}] }
+  - { name: shmem_refresh, id: 81, returns: status, params: [{name: id, kind: handle}, {name: wasm_off, kind: out, len: size, wasm3: i32}, {name: size, kind: scalar}] }
   - { name: shmem_unmap, id: 82, returns: status, params: [{name: id, kind: handle}] }
 
   # --- irq ------------------------------------------------------------------
@@ -161,8 +163,8 @@ hostcalls:
   - { name: serial_register, id: 86, returns: status, params: [{name: endpoint, kind: handle}] }
   - { name: input_push, id: 87, returns: status, params: [{name: ch, kind: scalar}] }
   - { name: input_read, id: 88, returns: value }
-  - { name: framebuffer_info, id: 89, returns: status, params: [{name: out, kind: out, len: len}, {name: len, kind: scalar}] }
-  - { name: framebuffer_map, id: 90, returns: status, params: [{name: wasm_off, kind: ptr}, {name: size, kind: scalar}] }
+  - { name: framebuffer_info, id: 89, returns: status, params: [{name: out, kind: out, len: len, wasm3: i32}, {name: len, kind: scalar}] }
+  - { name: framebuffer_map, id: 90, returns: status, params: [{name: wasm_off, kind: ptr, wasm3: i32}, {name: size, kind: scalar}] }
   - { name: framebuffer_pixel, id: 91, returns: status, params: [{name: x, kind: scalar}, {name: y, kind: scalar}, {name: color, kind: scalar}] }
 
   # --- boot config / early log / env ---------------------------------------
@@ -177,9 +179,9 @@ hostcalls:
 
   - { name: abort, id: 100, module: env, returns: void, params: [{name: msg, kind: scalar}, {name: file, kind: scalar}, {name: line, kind: scalar}, {name: column, kind: scalar}] }
 
-  - { name: region_alloc, id: 101, returns: value, params: [{name: pages, kind: scalar}, {name: cache_policy, kind: scalar}, {name: out_phys, kind: out}] }
+  - { name: region_alloc, id: 101, returns: value, params: [{name: pages, kind: scalar}, {name: cache_policy, kind: scalar}, {name: out_phys, kind: out, wasm3: i32}] }
   - { name: irq_configure, id: 102, returns: status, params: [{name: irq_line, kind: scalar}, {name: flags, kind: scalar}] }
-  - { name: ipc_select_wait_timeout, id: 103, returns: value, params: [{name: sel, kind: handle}, {name: timeout_ms, kind: scalar}] }
+  - { name: ipc_select_wait_timeout, id: 103, returns: value, wasm3_fn: wasmos_sys_select_wait_timeout, params: [{name: sel, kind: handle}, {name: timeout_ms, kind: scalar}] }
 
   # --- buffer acquire / (un)borrow / reborrow ------------------------------
   - { name: xfer_buffer_acquire, id: 104, returns: value, params: [{name: minimum_size, kind: scalar}] }

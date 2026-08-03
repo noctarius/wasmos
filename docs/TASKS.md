@@ -193,15 +193,19 @@ returns; `FS_ERR_*`/`PROC_*` ride IPC opcodes), so the migration depends on them
   retirements) and `--verify-source` proving the IDL's `(symbol, id)` set matches
   the live `src/kernel/include/warp_ring3.h` exactly. Wired into `quality`
   (`--check` + `--verify-source`). Param **kinds** captured but not yet emitted.
-- [ ] Phase 2b: emit the remaining surfaces from the IDL — the WARP
-  `WASMOS_SYMBOLS` tables (STATIC/DYNAMIC/ring-3), the wasm3 link table + m3 sig
-  strings (needs a per-param `wasm3: i32` override for the pointers wasm3 passes
-  as a raw offset rather than an m3-translated `*`: `futex_wait`/`wake`,
-  `phys_map`, `thread_create`, `shmem_map`/`flush`/`refresh`, `framebuffer_info`/
-  `map`, `region_alloc`), the ring-3 dispatch, the AOT symbol table, the
-  per-language client stubs, and wrapper forward-decls; emit an ABI-version
-  `static_assert` across variants. Validate by equivalence-diff, then swap into
-  the kernel one site at a time (each `run-qemu-test`-gated). Fix the
+- [x] Phase 2b: generate the WARP `WASMOS_SYMBOLS(LINK)` table
+  (`abi/generated/c/wasmos_symbols_warp.inc`) and the wasm3 link table
+  (`wasmos_link_wasm3.inc`, m3 sig strings derived from param kinds + the
+  `wasm3: i32` overrides for the 10 pointers wasm3 passes as a raw offset). Both
+  `--verify-source`-proven to reproduce the live `link.cpp`/`link.c` exactly
+  (117 host calls; ids, names, wrapper fn names, and sigs all match), wired into
+  `quality`. `warp_fn`/`wasm3_fn` are derived (only the 5 `ipc_select_*` family
+  fns need an explicit `wasm3_fn` override). Still parallel artifacts — not wired.
+- [ ] Phase 2c: generate the remaining surfaces — ring-3 trampoline dispatch,
+  AOT symbol table, per-language client stubs (C/Rust/Go/Zig/AS), and wrapper
+  forward-decls; emit an ABI-version `static_assert` across variants. Then swap
+  the generated tables/enum into the kernel (`warp_ring3.h`, `link.cpp`,
+  `link.c`) one site at a time, each `run-qemu-test`-gated. Fix the
   `dma_map_borrow` WARP/wasm3 capability-check divergence during the swap.
 - [ ] Phase 3: add `abi/opcodes.yaml` + generator producing the
   `wasmos_driver_abi.h` opcode enum, a runtime `opcode → name` table (feeds

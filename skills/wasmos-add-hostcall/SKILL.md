@@ -1,6 +1,6 @@
 ---
 name: wasmos-add-hostcall
-description: Add a new WASM host call (wasmos.* / wasi / env import) to WASMOS and regenerate the ABI. Covers the single-source-of-truth IDL (abi/hostcalls.yaml), the generator (scripts/gen_abi_hostcalls.py), the parts that are generated vs. still hand-written (the two kernel wrapper bodies + language client stubs), and how to validate on both runtimes. Use whenever adding, changing, or retiring a wasmos host call.
+description: Add a new WASM host call (wasmos.* / wasi / env import) to WASMOS and regenerate the ABI. Covers the single-source-of-truth IDL (abi/hostcalls.yaml), the generator (scripts/gen_abi_hostcalls.py), the parts that are generated (the kernel tables + the Rust/Go/Zig/AS guest bindings) vs. still hand-written (the two kernel wrapper bodies + the C client decl, which is guarded not generated), and how to validate on both runtimes. Use whenever adding, changing, or retiring a wasmos host call.
 ---
 
 # WASMOS: Add a Host Call
@@ -28,10 +28,23 @@ Generated from the IDL (do **not** hand-edit — they carry a `GENERATED` banner
 | `wasmos_ring3_dispatch.inc` (`warp_ring3_dispatch_table`) | `src/kernel/warp/link.cpp` |
 | `wasmos_symbols_aot.inc` (`WASMOS_AOT_SYMBOLS`) | `src/tools/warp_aot/warp_aot.cpp` |
 
+Also generated — the guest import bindings for the four languages that hand-roll
+them (raw wasm signature: all params `i32`, `i32` return, one entry per
+`wasmos` call incl. aliases):
+
+| Generated file | Idiom |
+|---|---|
+| `abi/generated/rust/wasmos_imports.rs` | `#[link(wasm_import_module="wasmos")] extern` |
+| `abi/generated/go/wasmos_imports.go` | `//go:wasmimport wasmos <sym>` |
+| `abi/generated/zig/wasmos_imports.zig` | `pub extern "wasmos" fn … callconv(.c)` |
+| `abi/generated/assemblyscript/wasmos_imports.ts` | `@external("wasmos", …)` |
+
 Still hand-written (the generator emits references/decls; you supply the logic):
 - the WARP wrapper body `warp_<name>(...)` in `src/kernel/warp/link.cpp`;
 - the wasm3 wrapper body `wasmos_<name>(...)` in `src/kernel/wasm3/link.c`;
-- the user-space client binding (libc/libsys + per-language import).
+- the **C** client decl in `src/libc/include/wasmos/api.h` (+ libsys). C is
+  *guarded, not generated* — api.h keeps its ergonomic typed signatures, and
+  `--verify-source` checks it against the IDL (see Step 4).
 
 ## Workflow
 
@@ -77,15 +90,16 @@ Notes:
 ## Step 2: Regenerate and verify
 
 ```sh
-python3 scripts/gen_abi_hostcalls.py            # regenerates all abi/generated/c/*.{h,inc}
+python3 scripts/gen_abi_hostcalls.py            # regenerates abi/generated/{c,rust,go,zig,assemblyscript}/*
 python3 scripts/gen_abi_hostcalls.py --check    # confirm generated files match the IDL
-python3 scripts/gen_abi_hostcalls.py --verify-source  # cross-checks any still-hand-written table
+python3 scripts/gen_abi_hostcalls.py --verify-source  # kernel tables self-skip; guards the C api.h decls
 ```
 
 Requires PyYAML (`pip install pyyaml`). The generator validates ids (unique,
-dense, ordered) and refuses gaps/duplicates. `--check` is also wired into the
-`quality` lint target, so a stale checked-in generated file fails CI. Commit the
-regenerated `abi/generated/c/` files alongside the IDL.
+dense, ordered) and refuses gaps/duplicates. `--check` and `--verify-source` are
+both wired into the `quality` lint target, so a stale checked-in generated file —
+or a C `api.h` decl that names a non-existent host call or has the wrong arity —
+fails CI. Commit the regenerated `abi/generated/` files alongside the IDL.
 
 ## Step 3: Write the two kernel wrapper bodies
 

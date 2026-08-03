@@ -51,8 +51,19 @@ into per entry. Generates:
 - the WARP JIT `LINK("wasmos", …)` table entries,
 - the WARP ring-3 numbered dispatch case,
 - the WARP AOT symbol-table entry,
-- per-language client stubs (C `api.h` + libsys; Rust, Go, Zig, AssemblyScript),
+- the guest import stubs for the four languages that hand-roll them —
+  `abi/generated/{rust,go,zig,assemblyscript}/wasmos_imports.*` (every
+  `wasmos`-module call, incl. aliases, as its raw wasm signature),
 - the host-call reference table in `architecture/13-runtime-and-packaging.md`.
+
+The C client (`src/libc/include/wasmos/api.h` + libsys) is the exception: it is
+a hand-ergonomic surface (typed pointers, struct-by-reference params,
+`_host` fn-name conventions, doc comments) carrying C types the language-neutral
+IDL does not model, so it is **guarded, not generated**. `gen_abi_hostcalls.py
+--verify-source` asserts every `WASMOS_WASM_IMPORT("wasmos", …)` decl names a
+real host call with a matching arity, so the hand-written header can never
+silently drift from the IDL. The wasi/env-module calls are toolchain-provided
+and are declared by neither side.
 
 #### Parameter model
 

@@ -1,18 +1,27 @@
 #!/usr/bin/env python3
 """Generate the WASM host-call ABI from abi/hostcalls.yaml.
 
-Generates (into abi/generated/c/):
+Kernel-side surfaces (into abi/generated/c/):
   - wasmos_hostcall_ids.h    the kernel HC_* id enum
   - wasmos_symbols_warp.inc  the WARP WASMOS_SYMBOLS(LINK) table
   - wasmos_link_wasm3.inc    the wasm3 link X-macro WASMOS_WASM3_LINKS(X) (m3 sigs)
   - wasmos_symbols_aot.inc   the WARP AOT symbol table WASMOS_AOT_SYMBOLS(LINK)
   - wasmos_ring3_dispatch.inc  warp_ring3_dispatch_table() (arg-unpack switch)
 
-and verifies them against the live hand-written sources
-(src/kernel/include/warp_ring3.h, src/kernel/warp/link.cpp,
-src/kernel/wasm3/link.c, src/tools/warp_aot/warp_aot.cpp). These are parallel
-artifacts used to prove the IDL is faithful before the kernel is rewired;
-wrapper *bodies* stay hand-written.
+These are all live in the kernel/AOT-tool now (link.cpp/link.c/warp_ring3.h/
+warp_aot.cpp #include them); only the wrapper *bodies* stay hand-written.
+
+Client-side guest import stubs (into abi/generated/<lang>/wasmos_imports.<ext>):
+  - rust/wasmos_imports.rs            #[link(wasm_import_module="wasmos")] extern
+  - go/wasmos_imports.go              //go:wasmimport wasmos <sym>
+  - zig/wasmos_imports.zig            pub extern "wasmos" fn … callconv(.c)
+  - assemblyscript/wasmos_imports.ts  @external("wasmos", …) declare function
+Every "wasmos"-module host call (incl. aliases) as its raw wasm ABI signature
+(all params i32, i32 return). These are authoritative bindings a guest app opts
+into per symbol; the wasi/env-module calls are toolchain-provided, not ours to
+declare. C is deliberately NOT regenerated: src/libc/include/wasmos/api.h is a
+hand-ergonomic surface (typed pointers, struct params, doc comments) that would
+lose those types under codegen — instead --verify-source guards it against drift.
 
 See docs/architecture/34-abi-idl-and-error-model.md.
 
@@ -24,10 +33,12 @@ Usage:
       (no args)        regenerate all generated host-call files
       --check          fail (exit 2) if any on-disk file differs from the IDL
       --verify-source  fail (exit 3) if the IDL does not reproduce the live
-                       HC_* enum, the WARP WASMOS_SYMBOLS table, the wasm3 link
-                       table, and the WARP AOT symbol table (ids, symbols, m3
-                       sigs, wrapper fn names, arg-count stubs; the AOT table may
-                       be a superset since it is name-resolved)
+                       hand-written sources. The kernel-table checks self-skip
+                       once a surface is swapped to the generated include (all
+                       are now), so the enduring job is the C client guard:
+                       every WASMOS_WASM_IMPORT("wasmos", …) decl in src/libc +
+                       src/libsys must name a real IDL host call with a matching
+                       arity (so api.h can never silently drift from the IDL)
 """
 
 import argparse
@@ -43,6 +54,23 @@ WARP_OUT = os.path.join(GEN_DIR, "wasmos_symbols_warp.inc")
 WASM3_OUT = os.path.join(GEN_DIR, "wasmos_link_wasm3.inc")
 AOT_OUT = os.path.join(GEN_DIR, "wasmos_symbols_aot.inc")
 RING3_OUT = os.path.join(GEN_DIR, "wasmos_ring3_dispatch.inc")
+
+GEN_ROOT = os.path.join(REPO_ROOT, "abi", "generated")
+RUST_OUT = os.path.join(GEN_ROOT, "rust", "wasmos_imports.rs")
+GO_OUT = os.path.join(GEN_ROOT, "go", "wasmos_imports.go")
+ZIG_OUT = os.path.join(GEN_ROOT, "zig", "wasmos_imports.zig")
+AS_OUT = os.path.join(GEN_ROOT, "assemblyscript", "wasmos_imports.ts")
+
+# Where hand-written C client import decls live (guarded, not regenerated).
+C_CLIENT_DIRS = [
+    os.path.join(REPO_ROOT, "src", "libc"),
+    os.path.join(REPO_ROOT, "src", "libsys"),
+]
+# WASM import names that api.h declares but that are NOT WASM host calls: they
+# are native driver_api vtable entries (native_driver.c) reached only on the
+# native build via the WASMOS_WASM_IMPORT no-op shim. Pending the futex-backed
+# user-mutex migration (TODO(user-mutex-futex) in wasmos/mutex.h).
+C_CLIENT_ALLOWLIST = {"mutex_try_lock", "mutex_unlock"}
 
 WARP_RING3_H = os.path.join(REPO_ROOT, "src", "kernel", "include", "warp_ring3.h")
 WARP_LINK_CPP = os.path.join(REPO_ROOT, "src", "kernel", "warp", "link.cpp")
@@ -191,6 +219,28 @@ class Model:
             return " /* reserved (retired host call; slot kept for id stability) */"
         return ""
 
+    def client_hostcalls(self):
+        """The guest-importable "wasmos"-module host calls (incl. aliases), in id
+        order. wasi/env-module calls are toolchain-provided, not ours to declare;
+        reserved slots are skipped."""
+        return [
+            e
+            for e in self.ordered
+            if self.module(e) == "wasmos" and not e.get("reserved")
+        ]
+
+    def client_note(self, e):
+        """A trailing per-symbol note for a client binding: alias target and/or a
+        runtime restriction (a call linked in only one runtime is unresolved if a
+        guest on the other runtime imports it)."""
+        bits = []
+        if "alias_of" in e:
+            bits.append(f"alias of {e['alias_of']}")
+        rt = self.runtimes(e)
+        if set(rt) != {"warp", "wasm3"}:
+            bits.append(f"{'/'.join(rt)}-only")
+        return f"  // {'; '.join(bits)}" if bits else ""
+
 
 BANNER = [
     "/*",
@@ -337,12 +387,106 @@ def emit_ring3_dispatch(m):
     return "\n".join(o)
 
 
+# --------------------------------------------------------------------------- client stubs
+
+_GEN_LINE = (
+    "GENERATED by scripts/gen_abi_hostcalls.py from abi/hostcalls.yaml — DO NOT EDIT."
+)
+_REF_LINE = "See docs/architecture/34-abi-idl-and-error-model.md."
+
+
+def _line_banner():
+    return [f"// {_GEN_LINE}", f"// {_REF_LINE}"]
+
+
+def _pascal(name):
+    return "".join(p.capitalize() for p in name.split("_"))
+
+
+def emit_rust(m):
+    """Rust guest bindings — one extern block linking the "wasmos" import module.
+    The fn name is the import name, so it must equal the host-call symbol."""
+    o = _line_banner()
+    o += [
+        "",
+        "#![allow(dead_code)]",
+        "",
+        '#[link(wasm_import_module = "wasmos")]',
+        'unsafe extern "C" {',
+    ]
+    for e in m.client_hostcalls():
+        params = ", ".join(f"a{i}: i32" for i in range(m.arity(e)))
+        ret = "" if m.returns(e) == "void" else " -> i32"
+        o.append(f"    pub fn {e['name']}({params}){ret};{m.client_note(e)}")
+    o += ["}", ""]
+    return "\n".join(o)
+
+
+def emit_go(m):
+    """Go/TinyGo guest bindings. //go:wasmimport carries the import name, so the
+    exported PascalCase func name is free-form; the file imports unsafe as the
+    directive requires."""
+    o = _line_banner()
+    o += [
+        "",
+        "package wasmos",
+        "",
+        'import _ "unsafe" // required by //go:wasmimport',
+        "",
+    ]
+    for e in m.client_hostcalls():
+        params = ", ".join(f"a{i} int32" for i in range(m.arity(e)))
+        ret = "" if m.returns(e) == "void" else " int32"
+        note = m.client_note(e)
+        if note:
+            o.append(note.strip())  # a clean "// …" line; keep //go: directive bare
+        o.append(f"//go:wasmimport wasmos {e['name']}")
+        o.append(f"func {_pascal(e['name'])}({params}){ret}")
+        o.append("")
+    return "\n".join(o)
+
+
+def emit_zig(m):
+    """Zig guest bindings — the extern module string is the import module and the
+    fn name is the import name."""
+    o = _line_banner()
+    o += [""]
+    for e in m.client_hostcalls():
+        params = ", ".join(f"a{i}: i32" for i in range(m.arity(e)))
+        ret = "void" if m.returns(e) == "void" else "i32"
+        o.append(
+            f'pub extern "wasmos" fn {e["name"]}({params}) callconv(.c) {ret};'
+            f"{m.client_note(e)}"
+        )
+    o += [""]
+    return "\n".join(o)
+
+
+def emit_as(m):
+    """AssemblyScript guest bindings — @external names the (module, import)."""
+    o = _line_banner()
+    o += [""]
+    for e in m.client_hostcalls():
+        params = ", ".join(f"a{i}: i32" for i in range(m.arity(e)))
+        ret = "void" if m.returns(e) == "void" else "i32"
+        o.append(f'@external("wasmos", "{e["name"]}")')
+        o.append(
+            f"export declare function {e['name']}({params}): {ret};{m.client_note(e)}"
+        )
+    o += [""]
+    return "\n".join(o)
+
+
 OUTPUTS = [
     (IDS_OUT, emit_hostcall_ids),
     (WARP_OUT, emit_warp_symbols),
     (WASM3_OUT, emit_wasm3_links),
     (AOT_OUT, emit_aot_symbols),
     (RING3_OUT, emit_ring3_dispatch),
+    (RUST_OUT, emit_rust),
+    (GO_OUT, emit_go),
+    (ZIG_OUT, emit_zig),
+    (AS_OUT, emit_as),
 ]
 
 
@@ -425,6 +569,8 @@ def verify_wasm3(m):
 
 def verify_aot(m):
     text = _read(WARP_AOT_CPP)
+    if "WASMOS_AOT_SYMBOLS(" in text:
+        return []  # AOT table already swapped to the generated macro; --check guards it
     region = text.split("aot_symbols", 1)[1]
     region = re.sub(r"/\*.*?\*/", " ", region, flags=re.S)
     region = region.replace("\\", " ")
@@ -481,6 +627,53 @@ def verify_ring3(m):
     return problems
 
 
+_C_IMPORT_RE = re.compile(
+    r'([A-Za-z_]\w*)\s*\(([^;{}()]*)\)\s*WASMOS_WASM_IMPORT\(\s*"wasmos"\s*,\s*"([^"]+)"\s*\)',
+    re.S,
+)
+
+
+def _c_client_imports():
+    """Every `<fn>(<params>) WASMOS_WASM_IMPORT("wasmos", "<sym>")` decl in the
+    hand-written libc/libsys headers, as (sym, arity, relpath). Params here are
+    flat (scalars + one-level pointers, no function-pointer params), so a
+    top-level comma count is the arity; `(void)`/empty is zero."""
+    out = []
+    for base in C_CLIENT_DIRS:
+        for dp, _dirs, files in os.walk(base):
+            for f in files:
+                if not f.endswith((".h", ".hpp", ".c", ".cpp")):
+                    continue
+                path = os.path.join(dp, f)
+                for fn, params, sym in _C_IMPORT_RE.findall(_read(path)):
+                    p = params.strip()
+                    arity = 0 if p in ("", "void") else p.count(",") + 1
+                    out.append((sym, arity, os.path.relpath(path, REPO_ROOT), fn))
+    return out
+
+
+def verify_c_client(m):
+    """Guard the hand-written C client (api.h et al.) against IDL drift: every
+    WASM import it declares must name a real host call with a matching arity.
+    The C client is a *subset* (native-only / toolchain-provided calls have no
+    libc decl), so missing coverage is fine — only wrong or stale decls fail."""
+    idl = {e["name"]: m.arity(e) for e in m.ordered if m.module(e) == "wasmos"}
+    problems = []
+    for sym, arity, rel, fn in _c_client_imports():
+        if sym in C_CLIENT_ALLOWLIST:
+            continue
+        if sym not in idl:
+            problems.append(
+                f"C client declares WASM import '{sym}' ({fn}, {rel}) that is not "
+                f"an IDL host call (stale/typo, or add it to the IDL)"
+            )
+        elif arity != idl[sym]:
+            problems.append(
+                f"C client '{sym}' arity {arity} != IDL {idl[sym]} ({fn}, {rel})"
+            )
+    return problems
+
+
 def verify_source(m):
     problems = (
         verify_enum(m)
@@ -488,14 +681,16 @@ def verify_source(m):
         + verify_wasm3(m)
         + verify_aot(m)
         + verify_ring3(m)
+        + verify_c_client(m)
     )
     if problems:
         for p in problems:
             print(f"gen_abi_hostcalls: {p}", file=sys.stderr)
         die("IDL does not match the live sources — reconcile before generating", code=3)
     print(
-        f"gen_abi_hostcalls: IDL verified against all still-hand-written host-call "
-        f"sources (swapped-in surfaces skip; {m.count} host calls, ids 0..{m.count - 1})"
+        f"gen_abi_hostcalls: IDL verified against the hand-written host-call sources "
+        f"(swapped-in kernel tables self-skip; C client decls guarded against drift; "
+        f"{m.count} host calls, ids 0..{m.count - 1})"
     )
 
 
@@ -541,8 +736,8 @@ def main():
         print("gen_abi_hostcalls: all generated host-call files are up to date")
         return
 
-    os.makedirs(GEN_DIR, exist_ok=True)
     for path, emit in OUTPUTS:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "w", encoding="utf-8") as f:
             f.write(emit(model))
         print(f"gen_abi_hostcalls: wrote {os.path.relpath(path, REPO_ROOT)}")

@@ -297,16 +297,9 @@ extern int32_t wasmos_env_set(const char* name, int32_t name_len, const char* va
                               int32_t val_len) WASMOS_WASM_IMPORT("wasmos", "env_set");
 extern int32_t wasmos_env_unset(const char* name, int32_t name_len)
     WASMOS_WASM_IMPORT("wasmos", "env_unset");
-/* select-set API: multi-endpoint blocking wait */
-extern int32_t wasmos_ipc_select_create(void) WASMOS_WASM_IMPORT("wasmos", "ipc_select_create");
-extern int32_t wasmos_ipc_select_add(int32_t select_id, int32_t endpoint_id)
-    WASMOS_WASM_IMPORT("wasmos", "ipc_select_add");
-extern int32_t wasmos_ipc_select_wait(int32_t select_id)
-    WASMOS_WASM_IMPORT("wasmos", "ipc_select_wait");
-extern int32_t wasmos_ipc_select_wait_timeout(int32_t select_id, int32_t timeout_ms)
-    WASMOS_WASM_IMPORT("wasmos", "ipc_select_wait_timeout");
-extern int32_t wasmos_ipc_select_destroy(int32_t select_id)
-    WASMOS_WASM_IMPORT("wasmos", "ipc_select_destroy");
+/* NB: the ipc_select_* set is declared once above (near ipc_select_one); the
+ * generated per-language guest stubs come from abi/hostcalls.yaml, and
+ * gen_abi_hostcalls.py --verify-source guards these decls against IDL drift. */
 
 #ifdef __cplusplus
 }

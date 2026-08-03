@@ -7,12 +7,11 @@ formatters cannot fight the byte-exact --check guard). The runtime/IPC wrappers
 that USE these codes live in src/libsys/{wasm,native}; see
 docs/architecture/34-abi-idl-and-error-model.md.
 
-Scope per language:
-  - C            full: constants + fixed wasmos_error_t + chain helpers (reference)
-  - Rust/Go/Zig  constants + packed accessors + decode lookups
-  - AssemblyScript constants + packed accessors + decode lookups
-The fixed struct + wrap/is/as chain helpers for the non-C languages are emitted
-alongside the libsys wrappers in a later increment.
+Every language gets the full value ABI: constants + packed accessors + decode
+lookups + the fixed error object and chain helpers (wrap/unwrap/is/as/root).
+C/Rust/Zig/Go use a C-layout struct; AssemblyScript (which has no C-layout value
+struct) gets pointer-based helpers over the 40-byte block. Only the IPC framing
+(serialize the block to/from a reply payload) lives in the libsys wrappers.
 
 Usage:
     gen_abi_errors.py [--check] [--lang LANG]
@@ -242,6 +241,355 @@ static inline size_t wasmos_strerror_chain(const wasmos_error_t *e, char *buf, s
 """
 
 
+RUST_HELPERS = r"""
+// Fixed error object (value ABI) + chain helpers (pure value ops). IPC framing
+// lives in the libsys wrappers.
+pub const WASMOS_ERR_CHAIN_DEPTH: usize = 4;
+pub const WASMOS_ERR_FLAG_TRUNCATED: u32 = 1;
+
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct WasmosFrame {
+    pub domain: u16,
+    pub code: u16,
+    pub origin: u32,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct WasmosError {
+    pub transport: i32,
+    pub flags: u32,
+    pub chain: [WasmosFrame; WASMOS_ERR_CHAIN_DEPTH],
+}
+
+impl WasmosError {
+    pub const fn new() -> Self {
+        WasmosError {
+            transport: WASMOS_OK,
+            flags: 0,
+            chain: [WasmosFrame { domain: 0, code: 0, origin: 0 }; WASMOS_ERR_CHAIN_DEPTH],
+        }
+    }
+    pub fn is_ok(&self) -> bool {
+        self.transport == WASMOS_OK && self.chain[0].domain == 0
+    }
+    pub fn head(&self) -> u32 {
+        wasmos_err_make(self.chain[0].domain, self.chain[0].code)
+    }
+    pub fn root(&self) -> u32 {
+        let mut i = 0;
+        while i + 1 < WASMOS_ERR_CHAIN_DEPTH && self.chain[i + 1].domain != 0 {
+            i += 1;
+        }
+        wasmos_err_make(self.chain[i].domain, self.chain[i].code)
+    }
+    pub fn unwrap_cause(&self) -> u32 {
+        if WASMOS_ERR_CHAIN_DEPTH < 2 || self.chain[1].domain == 0 {
+            return WASMOS_ERR_NONE;
+        }
+        wasmos_err_make(self.chain[1].domain, self.chain[1].code)
+    }
+    pub fn is(&self, sentinel: u32) -> bool {
+        for f in &self.chain {
+            if f.domain == 0 {
+                break;
+            }
+            if wasmos_err_make(f.domain, f.code) == sentinel {
+                return true;
+            }
+        }
+        false
+    }
+    pub fn as_domain(&self, dom: u16) -> Option<u16> {
+        for f in &self.chain {
+            if f.domain == 0 {
+                break;
+            }
+            if f.domain == dom {
+                return Some(f.code);
+            }
+        }
+        None
+    }
+    pub fn set(&mut self, dom: u16, code: u16, origin: u32) {
+        *self = WasmosError::new();
+        self.chain[0] = WasmosFrame { domain: dom, code, origin };
+    }
+    pub fn wrap(&mut self, dom: u16, code: u16, origin: u32) {
+        let last = WASMOS_ERR_CHAIN_DEPTH - 1;
+        let start = if self.chain[last].domain != 0 {
+            self.flags |= WASMOS_ERR_FLAG_TRUNCATED;
+            last - 1
+        } else {
+            last
+        };
+        let mut i = start;
+        while i >= 1 {
+            self.chain[i] = self.chain[i - 1];
+            i -= 1;
+        }
+        self.chain[0] = WasmosFrame { domain: dom, code, origin };
+    }
+}
+"""
+
+
+GO_HELPERS = r"""
+// Fixed error object (value ABI) + chain helpers (pure value ops). IPC framing
+// lives in the libsys wrappers.
+const WASMOS_ERR_CHAIN_DEPTH = 4
+const WASMOS_ERR_FLAG_TRUNCATED uint32 = 1
+
+type WasmosFrame struct {
+    Domain uint16
+    Code   uint16
+    Origin uint32
+}
+
+type WasmosError struct {
+    Transport int32
+    Flags     uint32
+    Chain     [WASMOS_ERR_CHAIN_DEPTH]WasmosFrame
+}
+
+func (e *WasmosError) Init() {
+    e.Transport = WASMOS_OK
+    e.Flags = 0
+    for i := 0; i < WASMOS_ERR_CHAIN_DEPTH; i++ {
+        e.Chain[i] = WasmosFrame{}
+    }
+}
+
+func (e *WasmosError) IsOk() bool {
+    return e.Transport == WASMOS_OK && e.Chain[0].Domain == 0
+}
+
+func (e *WasmosError) Head() uint32 {
+    return WasmosErrMake(e.Chain[0].Domain, e.Chain[0].Code)
+}
+
+func (e *WasmosError) Root() uint32 {
+    i := 0
+    for i+1 < WASMOS_ERR_CHAIN_DEPTH && e.Chain[i+1].Domain != 0 {
+        i++
+    }
+    return WasmosErrMake(e.Chain[i].Domain, e.Chain[i].Code)
+}
+
+func (e *WasmosError) UnwrapCause() uint32 {
+    if WASMOS_ERR_CHAIN_DEPTH < 2 || e.Chain[1].Domain == 0 {
+        return WASMOS_ERR_NONE
+    }
+    return WasmosErrMake(e.Chain[1].Domain, e.Chain[1].Code)
+}
+
+func (e *WasmosError) Is(sentinel uint32) bool {
+    for i := 0; i < WASMOS_ERR_CHAIN_DEPTH; i++ {
+        if e.Chain[i].Domain == 0 {
+            break
+        }
+        if WasmosErrMake(e.Chain[i].Domain, e.Chain[i].Code) == sentinel {
+            return true
+        }
+    }
+    return false
+}
+
+func (e *WasmosError) As(dom uint16) (uint16, bool) {
+    for i := 0; i < WASMOS_ERR_CHAIN_DEPTH; i++ {
+        if e.Chain[i].Domain == 0 {
+            break
+        }
+        if e.Chain[i].Domain == dom {
+            return e.Chain[i].Code, true
+        }
+    }
+    return 0, false
+}
+
+func (e *WasmosError) Set(dom uint16, code uint16, origin uint32) {
+    e.Init()
+    e.Chain[0] = WasmosFrame{Domain: dom, Code: code, Origin: origin}
+}
+
+func (e *WasmosError) Wrap(dom uint16, code uint16, origin uint32) {
+    last := WASMOS_ERR_CHAIN_DEPTH - 1
+    start := last
+    if e.Chain[last].Domain != 0 {
+        start = last - 1
+        e.Flags |= WASMOS_ERR_FLAG_TRUNCATED
+    }
+    for i := start; i >= 1; i-- {
+        e.Chain[i] = e.Chain[i-1]
+    }
+    e.Chain[0] = WasmosFrame{Domain: dom, Code: code, Origin: origin}
+}
+"""
+
+
+ZIG_HELPERS = r"""
+// Fixed error object (value ABI) + chain helpers (pure value ops). IPC framing
+// lives in the libsys wrappers.
+pub const WASMOS_ERR_CHAIN_DEPTH: usize = 4;
+pub const WASMOS_ERR_FLAG_TRUNCATED: u32 = 1;
+
+pub const Frame = extern struct {
+    domain: u16,
+    code: u16,
+    origin: u32,
+};
+
+pub const Error = extern struct {
+    transport: i32,
+    flags: u32,
+    chain: [WASMOS_ERR_CHAIN_DEPTH]Frame,
+
+    pub fn init() Error {
+        return .{
+            .transport = WASMOS_OK,
+            .flags = 0,
+            .chain = [_]Frame{.{ .domain = 0, .code = 0, .origin = 0 }} ** WASMOS_ERR_CHAIN_DEPTH,
+        };
+    }
+    pub fn isOk(self: *const Error) bool {
+        return self.transport == WASMOS_OK and self.chain[0].domain == 0;
+    }
+    pub fn head(self: *const Error) u32 {
+        return errMake(self.chain[0].domain, self.chain[0].code);
+    }
+    pub fn root(self: *const Error) u32 {
+        var i: usize = 0;
+        while (i + 1 < WASMOS_ERR_CHAIN_DEPTH and self.chain[i + 1].domain != 0) : (i += 1) {}
+        return errMake(self.chain[i].domain, self.chain[i].code);
+    }
+    pub fn unwrapCause(self: *const Error) u32 {
+        if (WASMOS_ERR_CHAIN_DEPTH < 2 or self.chain[1].domain == 0) return WASMOS_ERR_NONE;
+        return errMake(self.chain[1].domain, self.chain[1].code);
+    }
+    pub fn is(self: *const Error, sentinel: u32) bool {
+        var i: usize = 0;
+        while (i < WASMOS_ERR_CHAIN_DEPTH) : (i += 1) {
+            if (self.chain[i].domain == 0) break;
+            if (errMake(self.chain[i].domain, self.chain[i].code) == sentinel) return true;
+        }
+        return false;
+    }
+    pub fn asDomain(self: *const Error, dom: u16) ?u16 {
+        var i: usize = 0;
+        while (i < WASMOS_ERR_CHAIN_DEPTH) : (i += 1) {
+            if (self.chain[i].domain == 0) break;
+            if (self.chain[i].domain == dom) return self.chain[i].code;
+        }
+        return null;
+    }
+    pub fn set(self: *Error, dom: u16, code: u16, origin: u32) void {
+        self.* = Error.init();
+        self.chain[0] = .{ .domain = dom, .code = code, .origin = origin };
+    }
+    pub fn wrap(self: *Error, dom: u16, code: u16, origin: u32) void {
+        const last: usize = WASMOS_ERR_CHAIN_DEPTH - 1;
+        var start: usize = last;
+        if (self.chain[last].domain != 0) {
+            start = last - 1;
+            self.flags |= WASMOS_ERR_FLAG_TRUNCATED;
+        }
+        var i: usize = start;
+        while (i >= 1) : (i -= 1) {
+            self.chain[i] = self.chain[i - 1];
+        }
+        self.chain[0] = .{ .domain = dom, .code = code, .origin = origin };
+    }
+
+    comptime {
+        if (@sizeOf(Frame) != 8) @compileError("Frame must be 8 bytes");
+        if (@sizeOf(Error) != 40) @compileError("Error must be 40 bytes");
+    }
+};
+"""
+
+
+AS_HELPERS = r"""
+// Fixed error object (value ABI) + chain helpers over a 40-byte block in linear
+// memory (AS has no C-layout value struct). Layout: transport:i32@0, flags:u32@4,
+// chain[4]@8; frame = domain:u16@0, code:u16@2, origin:u32@4. `e` is a pointer to
+// the block. IPC framing lives in the libsys wrappers.
+export const WASMOS_ERR_CHAIN_DEPTH: i32 = 4;
+export const WASMOS_ERR_FLAG_TRUNCATED: u32 = 1;
+export const WASMOS_ERR_SIZE: usize = 40;
+
+function fBase(e: usize, i: i32): usize { return e + 8 + (<usize>i) * 8; }
+
+export function errorInit(e: usize): void {
+  for (let i: usize = 0; i < WASMOS_ERR_SIZE; i++) store<u8>(e + i, 0);
+}
+export function errorTransport(e: usize): i32 { return load<i32>(e); }
+export function errorSetTransport(e: usize, s: i32): void { store<i32>(e, s); }
+export function errorFlags(e: usize): u32 { return load<u32>(e + 4); }
+export function errorIsOk(e: usize): bool {
+  return load<i32>(e) == WASMOS_OK && load<u16>(e + 8) == 0;
+}
+export function errorHead(e: usize): u32 {
+  const b = fBase(e, 0);
+  return errMake(load<u16>(b), load<u16>(b + 2));
+}
+export function errorRoot(e: usize): u32 {
+  let i: i32 = 0;
+  while (i + 1 < WASMOS_ERR_CHAIN_DEPTH && load<u16>(fBase(e, i + 1)) != 0) i++;
+  const b = fBase(e, i);
+  return errMake(load<u16>(b), load<u16>(b + 2));
+}
+export function errorUnwrap(e: usize): u32 {
+  if (WASMOS_ERR_CHAIN_DEPTH < 2 || load<u16>(fBase(e, 1)) == 0) return WASMOS_ERR_NONE;
+  const b = fBase(e, 1);
+  return errMake(load<u16>(b), load<u16>(b + 2));
+}
+export function errorIs(e: usize, sentinel: u32): bool {
+  for (let i: i32 = 0; i < WASMOS_ERR_CHAIN_DEPTH; i++) {
+    const b = fBase(e, i);
+    if (load<u16>(b) == 0) break;
+    if (errMake(load<u16>(b), load<u16>(b + 2)) == sentinel) return true;
+  }
+  return false;
+}
+// returns the code, or -1 when `dom` is not present in the chain
+export function errorAs(e: usize, dom: u16): i32 {
+  for (let i: i32 = 0; i < WASMOS_ERR_CHAIN_DEPTH; i++) {
+    const b = fBase(e, i);
+    if (load<u16>(b) == 0) break;
+    if (load<u16>(b) == dom) return <i32>load<u16>(b + 2);
+  }
+  return -1;
+}
+export function errorSet(e: usize, dom: u16, code: u16, origin: u32): void {
+  errorInit(e);
+  const b = fBase(e, 0);
+  store<u16>(b, dom);
+  store<u16>(b + 2, code);
+  store<u32>(b + 4, origin);
+}
+export function errorWrap(e: usize, dom: u16, code: u16, origin: u32): void {
+  const last: i32 = WASMOS_ERR_CHAIN_DEPTH - 1;
+  let start: i32 = last;
+  if (load<u16>(fBase(e, last)) != 0) {
+    start = last - 1;
+    store<u32>(e + 4, load<u32>(e + 4) | WASMOS_ERR_FLAG_TRUNCATED);
+  }
+  for (let i: i32 = start; i >= 1; i--) {
+    const d = fBase(e, i);
+    const s = fBase(e, i - 1);
+    store<u16>(d, load<u16>(s));
+    store<u16>(d + 2, load<u16>(s + 2));
+    store<u32>(d + 4, load<u32>(s + 4));
+  }
+  const b = fBase(e, 0);
+  store<u16>(b, dom);
+  store<u16>(b + 2, code);
+  store<u32>(b + 4, origin);
+}
+"""
+
+
 def emit_c(m):
     o = []
     w = o.append
@@ -370,8 +718,8 @@ def emit_rust(m):
     w = o.append
     w(f"// {BANNER}")
     w(f"// {BANNER2}")
-    w("// Value ABI only (constants + accessors + decode). The fixed wasmos_error_t")
-    w("// and chain helpers live with the libsys wrappers.")
+    w("// Value ABI: constants, packed accessors, decode lookups, and the fixed")
+    w("// error object + chain helpers (pure value ops). IPC framing lives in libsys.")
     w("")
     w(f"pub const WASMOS_ABI_ERRORS_VERSION: u32 = {m.version};")
     w("")
@@ -428,6 +776,7 @@ def emit_rust(m):
     w("    }")
     w("}")
     w("")
+    w(RUST_HELPERS)
     return "\n".join(o)
 
 
@@ -439,8 +788,8 @@ def emit_go(m):
     w = o.append
     w(f"// {BANNER}")
     w(f"// {BANNER2}")
-    w("// Value ABI only (constants + accessors + decode). The fixed error object")
-    w("// and chain helpers live with the libsys wrappers.")
+    w("// Value ABI: constants, packed accessors, decode lookups, and the fixed")
+    w("// error object + chain helpers (pure value ops). IPC framing lives in libsys.")
     w("")
     w("package wasmosstatus")
     w("")
@@ -506,6 +855,7 @@ def emit_go(m):
     w("\t}")
     w("}")
     w("")
+    w(GO_HELPERS)
     return "\n".join(o)
 
 
@@ -517,8 +867,8 @@ def emit_zig(m):
     w = o.append
     w(f"// {BANNER}")
     w(f"// {BANNER2}")
-    w("// Value ABI only (constants + accessors + decode). The fixed error object")
-    w("// and chain helpers live with the libsys wrappers.")
+    w("// Value ABI: constants, packed accessors, decode lookups, and the fixed")
+    w("// error object + chain helpers (pure value ops). IPC framing lives in libsys.")
     w("")
     w(f"pub const WASMOS_ABI_ERRORS_VERSION: u32 = {m.version};")
     w("")
@@ -572,6 +922,7 @@ def emit_zig(m):
     w("    };")
     w("}")
     w("")
+    w(ZIG_HELPERS)
     return "\n".join(o)
 
 
@@ -583,8 +934,8 @@ def emit_as(m):
     w = o.append
     w(f"// {BANNER}")
     w(f"// {BANNER2}")
-    w("// Value ABI only (constants + accessors + decode). The fixed error object")
-    w("// and chain helpers live with the libsys wrappers.")
+    w("// Value ABI: constants, packed accessors, decode lookups, and the fixed")
+    w("// error object + chain helpers (pointer-based over the 40-byte block).")
     w("")
     w(f"export const WASMOS_ABI_ERRORS_VERSION: u32 = {m.version};")
     w("")
@@ -634,6 +985,7 @@ def emit_as(m):
     w("  }")
     w("}")
     w("")
+    w(AS_HELPERS)
     return "\n".join(o)
 
 

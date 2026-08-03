@@ -172,9 +172,16 @@ Source: `architecture/34-abi-idl-and-error-model.md`.
   the fixed 40-byte `wasmos_error_t`, and the chain helpers
   (`wrap`/`unwrap`/`root`/`is`/`as`/`strerror_chain`); plus a `quality` re-gen
   guard (`gen_abi_errors.py --check`).
-- [ ] Phase 1 remaining: emit per-language constant tables (Rust/Go/Zig/AS) from
-  the IDL, and migrate the legacy `PROC_SPAWN_ERR_*`/`PROC_PM_ERR_*`/`SHMEM_ERR_*`/
-  `FS_ERR_*` definitions and call sites onto the generated packed model.
+- [x] Per-language value ABI generated under `abi/generated/<lang>/`
+  (Rust/Go/Zig/AssemblyScript): constants + packed accessors + decode lookups,
+  each verified to compile with its native toolchain. Generated files live
+  outside the `src/` format/lint scope so their formatters cannot fight the
+  byte-exact re-gen guard.
+- [ ] Phase 1 remaining: emit the fixed error object + chain helpers
+  (`wrap`/`is`/`as`) for the non-C languages alongside their
+  `src/libsys/{wasm,native}` runtime wrappers, and migrate the legacy
+  `PROC_SPAWN_ERR_*`/`PROC_PM_ERR_*`/`SHMEM_ERR_*`/`FS_ERR_*` definitions and
+  call sites onto the packed model.
 - [x] Advisory `return -1;` inventory gate landed in `scripts/quality.sh`
   (services/drivers, ~24 sites reported).
 - [ ] Clear the bare-`return -1;` backlog, then flip the gate to a hard failure

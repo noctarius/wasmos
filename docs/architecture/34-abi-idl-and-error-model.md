@@ -116,6 +116,16 @@ Declares the error vocabulary (see the error model below). Generates the C
 `enum`s, the domain registry, per-language constants, a `wasmos_strerror`-style
 decoder, and the error tables in the capability/diagnostics docs.
 
+Generated layout: each language's value ABI is emitted to
+`abi/generated/<lang>/wasmos_status.{h,rs,go,zig,ts}` — kept out of the `src/`
+format/lint scope so per-language formatters cannot fight the byte-exact re-gen
+guard, and un-duplicated across the wasm/native split. C carries the full
+reference (constants + the fixed `wasmos_error_t` + chain helpers); the other
+languages get constants + packed accessors + decode lookups, with the fixed
+error object and `wrap`/`is`/`as` chain helpers emitted alongside the runtime
+wrappers. The runtime/IPC wrappers that consume these codes live in
+`src/libsys/{wasm,native}`, not in libc — errors are a service-runtime concern.
+
 ## ABI version
 
 The active ABI version is derived from the IDL (an explicit field or a content

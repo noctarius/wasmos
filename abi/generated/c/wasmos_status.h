@@ -326,12 +326,10 @@ static inline bool wasmos_error_ok(const wasmos_error_t *e) {
     return e->transport == WASMOS_OK && e->chain[0].domain == 0;
 }
 
-/* Head (most recently wrapped) domain error, or WASMOS_ERR_NONE. */
 static inline wasmos_error_code_t wasmos_error_head(const wasmos_error_t *e) {
     return WASMOS_ERR_MAKE(e->chain[0].domain, e->chain[0].code);
 }
 
-/* Root cause: the deepest non-empty frame. */
 static inline wasmos_error_code_t wasmos_error_root(const wasmos_error_t *e) {
     int i = 0;
     while (i + 1 < WASMOS_ERR_CHAIN_DEPTH && e->chain[i + 1].domain != 0) {
@@ -340,7 +338,6 @@ static inline wasmos_error_code_t wasmos_error_root(const wasmos_error_t *e) {
     return WASMOS_ERR_MAKE(e->chain[i].domain, e->chain[i].code);
 }
 
-/* errors.Unwrap: the next cause after the head, or WASMOS_ERR_NONE. */
 static inline wasmos_error_code_t wasmos_error_unwrap(const wasmos_error_t *e) {
     if (WASMOS_ERR_CHAIN_DEPTH < 2 || e->chain[1].domain == 0) {
         return WASMOS_ERR_NONE;
@@ -348,7 +345,6 @@ static inline wasmos_error_code_t wasmos_error_unwrap(const wasmos_error_t *e) {
     return WASMOS_ERR_MAKE(e->chain[1].domain, e->chain[1].code);
 }
 
-/* errors.Is: true if any frame matches the sentinel packed code. */
 static inline bool wasmos_error_is(const wasmos_error_t *e, wasmos_error_code_t sentinel) {
     for (int i = 0; i < WASMOS_ERR_CHAIN_DEPTH; ++i) {
         if (e->chain[i].domain == 0) {
@@ -361,7 +357,6 @@ static inline bool wasmos_error_is(const wasmos_error_t *e, wasmos_error_code_t 
     return false;
 }
 
-/* errors.As: extract the local code of the first frame in `dom`. */
 static inline bool wasmos_error_as(const wasmos_error_t *e, wasmos_error_domain_t dom,
                                    uint16_t *out_code) {
     for (int i = 0; i < WASMOS_ERR_CHAIN_DEPTH; ++i) {
@@ -378,7 +373,6 @@ static inline bool wasmos_error_as(const wasmos_error_t *e, wasmos_error_domain_
     return false;
 }
 
-/* Set the head error, discarding any existing chain. */
 static inline void wasmos_error_set(wasmos_error_t *e, wasmos_error_domain_t dom,
                                     uint16_t code, uint32_t origin) {
     wasmos_error_init(e);
@@ -387,13 +381,10 @@ static inline void wasmos_error_set(wasmos_error_t *e, wasmos_error_domain_t dom
     e->chain[0].origin = origin;
 }
 
-/* Wrap: push a new head frame, preserving the cause chain. On overflow the head
- * and the root cause are kept, a middle frame is dropped, and TRUNCATED is set. */
 static inline void wasmos_error_wrap(wasmos_error_t *e, wasmos_error_domain_t dom,
                                      uint16_t code, uint32_t origin) {
     int last = WASMOS_ERR_CHAIN_DEPTH - 1;
     if (e->chain[last].domain != 0) {
-        /* Full: keep the root (last), shift [0..last-2] down into [1..last-1]. */
         for (int i = last - 1; i >= 1; --i) {
             e->chain[i] = e->chain[i - 1];
         }
@@ -408,9 +399,6 @@ static inline void wasmos_error_wrap(wasmos_error_t *e, wasmos_error_domain_t do
     e->chain[0].origin = origin;
 }
 
-/* Render the chain as "domain: desc <- domain: desc ..." into buf (bounded,
- * NUL-terminated). Returns the number of characters written (excluding NUL).
- * Freestanding: no stdio. */
 static inline size_t wasmos_strerror_chain(const wasmos_error_t *e, char *buf, size_t n) {
     size_t w = 0;
     if (n == 0) {

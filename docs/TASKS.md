@@ -61,6 +61,13 @@ Source: `architecture/06-memory-management.md`,
   wrapper (`src/kernel/warp/link.cpp`) omits the DMA-capability + max-bytes/range
   check that the wasm3 wrapper (`src/kernel/wasm3/link.c`) enforces, so the WARP
   path is weaker. Bring WARP to parity. Found during the host-call ABI inventory.
+- [ ] Fix the `warp_ring3_dispatch` `proc_info_stats` ctx bug: the case passes
+  `ctx5` (== `a4`, the `stats` param) as the kernel ctx, but a 5-param host call
+  needs ctx in `a5` (R9) — there is no `ctx6`, so the hand-written case silently
+  reused `ctx5`. Ring-3 `proc_info_stats` therefore gets a garbage ctx (a user
+  offset) → wrong `warp_mem` resolution. The generated dispatch computes
+  `ctx = a<arity>` and fixes it; fix lands when the ring-3 dispatch is swapped in.
+  Found during host-call dispatch codegen (`src/kernel/warp/link.cpp:3130`).
 - [ ] Extend DMA isolation to an IOMMU domain model (VT-d/AMD-Vi) and add
   non-coherent cache-maintenance hooks before targeting non-coherent hardware
   (`architecture/12`:88,618,625).
@@ -208,13 +215,19 @@ returns; `FS_ERR_*`/`PROC_*` ride IPC opcodes), so the migration depends on them
   generator emits the full host-call set and `--verify-source` asserts the live
   table is a subset (it currently omits `env.abort`/`wasi.proc_exit`; the
   generated set completes it, a safe additive change to validate at swap time).
-- [ ] Phase 2c (remaining): generate the ring-3 trampoline dispatch (arg-unpack
-  `switch` keyed by param count, fall-through for aliases), the per-language
-  client stubs (C/Rust/Go/Zig/AS), and wrapper forward-decls; emit an ABI-version
-  `static_assert` across variants. Then swap the generated tables/enum into the
-  kernel (`warp_ring3.h`, `link.cpp`, `link.c`, `warp_aot.cpp`) one site at a
-  time, each `run-qemu-test`-gated. Fix the `dma_map_borrow` WARP/wasm3
-  capability-check divergence during the swap.
+- [x] Phase 2c (ring-3 dispatch): generate `warp_ring3_dispatch_table()`
+  (`wasmos_ring3_dispatch.inc`) — a self-contained inline function
+  (frame-decode stays hand-written, dispatch is generated). ctx is the computed
+  `a<arity>`, which fixes the `proc_info_stats` bug. Compile-checked clean under
+  `clang++ -Wall -Wextra -Werror` against arity-derived wrapper decls (proves
+  every case's arg count matches its wrapper); `--verify-source` also confirms
+  the per-id wrapper fn matches the live switch.
+- [ ] Phase 2c (remaining): generate the per-language client stubs
+  (C/Rust/Go/Zig/AS) and wrapper forward-decls; emit an ABI-version
+  `static_assert` across variants. Then swap the generated tables/enum/dispatch
+  into the kernel (`warp_ring3.h`, `link.cpp`, `link.c`, `warp_aot.cpp`) one site
+  at a time, each `run-qemu-test`-gated (this is where the `proc_info_stats` +
+  `dma_map_borrow` fixes actually land).
 - [ ] Phase 3: add `abi/opcodes.yaml` + generator producing the
   `wasmos_driver_abi.h` opcode enum, a runtime `opcode → name` table (feeds
   diagnostics), and the doc opcode tables; optionally typed future-returning

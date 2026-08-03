@@ -6,6 +6,7 @@ Generates (into abi/generated/c/):
   - wasmos_symbols_warp.inc  the WARP WASMOS_SYMBOLS(LINK) table
   - wasmos_link_wasm3.inc    the wasm3 link X-macro WASMOS_WASM3_LINKS(X) (m3 sigs)
   - wasmos_symbols_aot.inc   the WARP AOT symbol table WASMOS_AOT_SYMBOLS(LINK)
+  - wasmos_ring3_dispatch.inc  warp_ring3_dispatch_table() (arg-unpack switch)
 
 and verifies them against the live hand-written sources
 (src/kernel/include/warp_ring3.h, src/kernel/warp/link.cpp,
@@ -41,6 +42,7 @@ IDS_OUT = os.path.join(GEN_DIR, "wasmos_hostcall_ids.h")
 WARP_OUT = os.path.join(GEN_DIR, "wasmos_symbols_warp.inc")
 WASM3_OUT = os.path.join(GEN_DIR, "wasmos_link_wasm3.inc")
 AOT_OUT = os.path.join(GEN_DIR, "wasmos_symbols_aot.inc")
+RING3_OUT = os.path.join(GEN_DIR, "wasmos_ring3_dispatch.inc")
 
 WARP_RING3_H = os.path.join(REPO_ROOT, "src", "kernel", "include", "warp_ring3.h")
 WARP_LINK_CPP = os.path.join(REPO_ROOT, "src", "kernel", "warp", "link.cpp")
@@ -152,6 +154,29 @@ class Model:
     def arity(self, e):
         """Number of wasm u32 params (excludes the trailing ctx)."""
         return len(self._target(e).get("params") or [])
+
+    def returns(self, e):
+        return self._target(e).get("returns")
+
+    def ring3_call(self, e):
+        """C++ call expr for a ring-3 dispatch case. The wrapper takes N u32
+        params + a trailing void* ctx; ring-3 supplies ctx as the (N+1)-th arg.
+        SysV puts the first 6 args in a0..a5, the rest on the user stack.
+        ctx is therefore a<N> (register) or stack_u64(N-6) — computed, so the
+        5-param case gets a5, not the hand-written a4 (ctx5) bug."""
+        fn = self.warp_fn(e)
+        n = self.arity(e)
+        if n == 0:
+            return f"{fn}(reinterpret_cast<void*>(a0))"
+        if n + 1 <= 6:  # N params + ctx all in registers a0..a<N>
+            args = [f"(uint32_t)a{i}" for i in range(n)]
+            args.append(f"reinterpret_cast<void*>(a{n})")
+            return f"{fn}({', '.join(args)})"
+        # N+1 > 6: first 6 args in a0..a5, the remaining params + ctx on the stack
+        args = [f"(uint32_t)a{i}" for i in range(6)]
+        args += [f"(uint32_t)stack_u64({j - 6})" for j in range(6, n)]
+        args.append(f"reinterpret_cast<void*>(stack_u64({n - 6}))")
+        return f"{fn}({', '.join(args)})"
 
     @staticmethod
     def _sig_char(p):
@@ -269,11 +294,52 @@ def emit_aot_symbols(m):
     return "\n".join(o)
 
 
+def emit_ring3_dispatch(m):
+    """Ring-3 hostcall dispatch as a self-contained inline function.
+
+    warp_ring3_dispatch decodes the syscall frame into a0..a5 + user_rsp and
+    calls this; the dispatch logic (the arg-unpacking switch) is generated, the
+    frame decode stays hand-written. Needs only the HC_* enum and the warp_*
+    wrapper declarations in scope. ctx is the computed (arity+1)-th arg (a<N> for
+    register calls), so the 5-param case gets a5 — fixing the hand-written
+    proc_info_stats ctx bug.
+    """
+    o = list(BANNER)
+    w = o.append
+    w("/* Generated ring-3 hostcall dispatch. Call from warp_ring3_dispatch after")
+    w(" * decoding the syscall frame:")
+    w(" *   return warp_ring3_dispatch_table(hc_id, a0,a1,a2,a3,a4,a5, user_rsp); */")
+    w("static inline uint32_t warp_ring3_dispatch_table(uint32_t hc_id, uint64_t a0,")
+    w("        uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5,")
+    w("        uint64_t user_rsp) {")
+    w("    /* Stack args live past the return address at [user_rsp + 0]. */")
+    w("    auto stack_u64 = [user_rsp](uint32_t n) -> uint64_t {")
+    w("        return *reinterpret_cast<uint64_t*>(user_rsp + 8 + (uint64_t)n * 8);")
+    w("    };")
+    w("    (void)stack_u64;")
+    w("    switch (hc_id) {")
+    for e in m.ordered:
+        w(f"    case {hc_symbol(e)}:")
+        call = m.ring3_call(e)
+        if m.returns(e) == "void":
+            w(f"        {call};")
+            w("        return 0;")
+        else:
+            w(f"        return {call};")
+    w("    default:")
+    w("        return (uint32_t)-1;")
+    w("    }")
+    w("}")
+    w("")
+    return "\n".join(o)
+
+
 OUTPUTS = [
     (IDS_OUT, emit_hostcall_ids),
     (WARP_OUT, emit_warp_symbols),
     (WASM3_OUT, emit_wasm3_links),
     (AOT_OUT, emit_aot_symbols),
+    (RING3_OUT, emit_ring3_dispatch),
 ]
 
 
@@ -381,8 +447,44 @@ def verify_aot(m):
     return problems
 
 
+def verify_ring3(m):
+    """Verify each hc_id in the live warp_ring3_dispatch switch calls the same
+    warp_* wrapper the IDL derives. (Per-arg register placement is validated
+    behaviorally by run-qemu-test at swap time; the generator fixes the known
+    proc_info_stats ctx-register bug, so that case is expected to differ.)"""
+    text = _read(WARP_LINK_CPP)
+    region = text.split("switch (hc_id)", 1)[1].split("\n    default:", 1)[0]
+    region = re.sub(r"/\*.*?\*/", " ", region, flags=re.S)
+    # Associate each warp_* call with the case labels that precede it (handles
+    # fall-through: multiple labels share one call).
+    src, pending = {}, []
+    for label, fn in re.findall(r"case\s+(HC_[A-Z0-9_]+)\s*:|(warp_\w+)\s*\(", region):
+        if label:
+            pending.append(label)
+        elif fn:
+            for lbl in pending:
+                src[lbl] = fn
+            pending = []
+    problems = []
+    for e in m.ordered:
+        sym = hc_symbol(e)
+        want = m.warp_fn(e)
+        got = src.get(sym)
+        if got is None:
+            problems.append(f"ring-3 dispatch: no case for {sym}")
+        elif got != want:
+            problems.append(f"ring-3 dispatch {sym}: calls {got}, IDL derives {want}")
+    return problems
+
+
 def verify_source(m):
-    problems = verify_enum(m) + verify_warp(m) + verify_wasm3(m) + verify_aot(m)
+    problems = (
+        verify_enum(m)
+        + verify_warp(m)
+        + verify_wasm3(m)
+        + verify_aot(m)
+        + verify_ring3(m)
+    )
     if problems:
         for p in problems:
             print(f"gen_abi_hostcalls: {p}", file=sys.stderr)

@@ -201,12 +201,20 @@ returns; `FS_ERR_*`/`PROC_*` ride IPC opcodes), so the migration depends on them
   (117 host calls; ids, names, wrapper fn names, and sigs all match), wired into
   `quality`. `warp_fn`/`wasm3_fn` are derived (only the 5 `ipc_select_*` family
   fns need an explicit `wasm3_fn` override). Still parallel artifacts — not wired.
-- [ ] Phase 2c: generate the remaining surfaces — ring-3 trampoline dispatch,
-  AOT symbol table, per-language client stubs (C/Rust/Go/Zig/AS), and wrapper
-  forward-decls; emit an ABI-version `static_assert` across variants. Then swap
-  the generated tables/enum into the kernel (`warp_ring3.h`, `link.cpp`,
-  `link.c`) one site at a time, each `run-qemu-test`-gated. Fix the
-  `dma_map_borrow` WARP/wasm3 capability-check divergence during the swap.
+- [x] Phase 2c (AOT): generate the WARP AOT symbol table
+  (`wasmos_symbols_aot.inc`, `WASMOS_AOT_SYMBOLS(LINK)`) — each entry a
+  `stub_i<arity>`; validated against `warp_aot.cpp`. The AOT table is
+  name-resolved (not position-coupled — only ring-3 dispatch is), so the
+  generator emits the full host-call set and `--verify-source` asserts the live
+  table is a subset (it currently omits `env.abort`/`wasi.proc_exit`; the
+  generated set completes it, a safe additive change to validate at swap time).
+- [ ] Phase 2c (remaining): generate the ring-3 trampoline dispatch (arg-unpack
+  `switch` keyed by param count, fall-through for aliases), the per-language
+  client stubs (C/Rust/Go/Zig/AS), and wrapper forward-decls; emit an ABI-version
+  `static_assert` across variants. Then swap the generated tables/enum into the
+  kernel (`warp_ring3.h`, `link.cpp`, `link.c`, `warp_aot.cpp`) one site at a
+  time, each `run-qemu-test`-gated. Fix the `dma_map_borrow` WARP/wasm3
+  capability-check divergence during the swap.
 - [ ] Phase 3: add `abi/opcodes.yaml` + generator producing the
   `wasmos_driver_abi.h` opcode enum, a runtime `opcode → name` table (feeds
   diagnostics), and the doc opcode tables; optionally typed future-returning

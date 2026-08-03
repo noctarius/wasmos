@@ -1019,7 +1019,7 @@ if (WASMOS_WASM_RUNTIME_WARP)
     -DJIT_TARGET_X86_64
     -DACTIVE_STACK_OVERFLOW_CHECK=1 -DLINEAR_MEMORY_BOUNDS_CHECKS=1
     -DVB_POSIX -DVB_WIN32_OR_POSIX -DNVALGRIND
-    -I${WARP_DIR} -I${WARP_DIR}/src
+    -I${WARP_DIR} -I${WARP_DIR}/src -I${CMAKE_SOURCE_DIR}/abi/generated/c
     -Wno-deprecated -Wno-unused-variable -Wno-macro-redefined
     -Wno-c++20-extensions -Wno-deprecated-copy -Wno-unused-parameter
     -Wno-unsequenced "-Wno-#pragma-messages"

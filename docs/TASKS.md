@@ -234,12 +234,17 @@ returns; `FS_ERR_*`/`PROC_*` ride IPC opcodes), so the migration depends on them
   `warp_ring3_dispatch_table`). Validated by a WARP `run-qemu-test` (boots to
   CLI + calculator + halt) and the default wasm3 `run-qemu-test` (the enum header
   is shared). The `proc_info_stats` ctx fix is now live in the WARP kernel.
-- [ ] Phase 2c (remaining): swap the AOT tool's symbol table
-  (`src/tools/warp_aot/warp_aot.cpp` → `WASMOS_AOT_SYMBOLS(DYNAMIC_LINK)`; needs
-  the tool's include path + it completes the table to the full 117). Then
-  generate the per-language client stubs (C/Rust/Go/Zig/AS) and an ABI-version
-  `static_assert`. (`dma_map_borrow` is a wrapper-body divergence, tracked
-  separately under Kernel — not a table swap.)
+- [x] AOT tool table swapped in: `src/tools/warp_aot/warp_aot.cpp` now
+  `#include`s the generated `wasmos_symbols_aot.inc` and expands
+  `WASMOS_AOT_SYMBOLS(DYNAMIC_LINK)` (return-matched `stub_i<N>`/`stub_v<N>`).
+  All kernel-side + AOT host-call tables are now generated from the IDL. WARP
+  `run-qemu-test` boots with "using AOT binary" (payloads rebind against the
+  generated table).
+- [ ] Phase 2c (remaining): generate the per-language client stubs
+  (C/Rust/Go/Zig/AS) and an ABI-version `static_assert`; then `--verify-source`
+  can be retired (all surfaces swapped) with `--check` as the durable guard.
+  (`dma_map_borrow` is a wrapper-body divergence, tracked separately under
+  Kernel — not a table swap.)
 - [ ] Phase 3: add `abi/opcodes.yaml` + generator producing the
   `wasmos_driver_abi.h` opcode enum, a runtime `opcode → name` table (feeds
   diagnostics), and the doc opcode tables; optionally typed future-returning

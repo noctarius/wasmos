@@ -1,0 +1,205 @@
+# WASMOS WASM host-call ABI — single source of truth.
+#
+# `scripts/gen_abi_hostcalls.py` generates (from this file): the kernel HC_* id
+# enum, the WARP WASMOS_SYMBOLS tables (STATIC/JIT, DYNAMIC/AOT, ring-3), the
+# wasm3 link table + m3 signature strings, the ring-3 dispatch, the WARP AOT
+# symbol table, and the per-language client stubs. Wrapper *bodies* stay
+# hand-written; the generator emits their forward declarations so the IDL and
+# the impls cannot drift. See docs/architecture/34-abi-idl-and-error-model.md.
+#
+# ID RULES (load-bearing — do not break):
+#   - `id` is the ring-3 syscall number (RAX = 0x100 + id) AND the AOT rebind
+#     index; table position == id.
+#   - The id space is APPEND-ONLY: a new host call takes the next free id; never
+#     renumber or reorder existing ids (that shifts every ring-3 number and
+#     invalidates already-compiled/cached AOT payloads).
+#   - The generator enforces: ids unique, dense 0..N-1, emitted in id order.
+#     A retired host call must stay as a `reserved: true` slot (keeps density);
+#     it must never leave a gap.
+#   - Entries without an `id` (e.g. the wasm3-only `env.strlen`) are extra links
+#     outside the ring-3/AOT id space and are excluded from the density check.
+#
+# Param `kind`: scalar (plain value) | handle (an id: endpoint/buffer/pid/...) |
+#   ptr (a linmem offset used as a mapping window) | buf (linmem read, `len`
+#   names the length param) | out (linmem write, `len` names the bound).
+# `returns`: status (0/named-negative rc) | value (meaningful datum, -1 err) | void.
+# `module` defaults to "wasmos" (omit); `runtimes` defaults to [warp, wasm3].
+
+abi_version: 1
+
+hostcalls:
+  # --- IPC ------------------------------------------------------------------
+  - { name: ipc_create_endpoint, id: 0, returns: value }
+  - { name: ipc_endpoint_owner, id: 1, returns: value, params: [{name: endpoint, kind: handle}] }
+  - name: ipc_send
+    id: 2
+    returns: status
+    params:
+      - { name: dest, kind: handle }
+      - { name: src, kind: handle }
+      - { name: type, kind: scalar }
+      - { name: request_id, kind: scalar }
+      - { name: arg0, kind: scalar }
+      - { name: arg1, kind: scalar }
+      - { name: arg2, kind: scalar }
+      - { name: arg3, kind: scalar }
+  - { name: ipc_select_one, id: 3, returns: value, params: [{name: endpoint, kind: handle}] }
+  - { name: ipc_recv, id: 4, alias_of: ipc_select_one }
+  - { name: ipc_drain, id: 5, returns: value, params: [{name: endpoint, kind: handle}] }
+  - { name: ipc_try_recv, id: 6, alias_of: ipc_drain }
+  - { name: ipc_notify, id: 7, returns: status, params: [{name: endpoint, kind: handle}] }
+  - { name: ipc_last_field, id: 8, returns: value, params: [{name: field, kind: scalar}] }
+
+  # --- console --------------------------------------------------------------
+  - { name: console_read, id: 9, returns: value, params: [{name: buf, kind: out, len: len}, {name: len, kind: scalar}] }
+  - { name: console_write, id: 10, returns: status, params: [{name: buf, kind: buf, len: len}, {name: len, kind: scalar}] }
+
+  # --- proc / thread / sched / futex ---------------------------------------
+  - { name: proc_exit, id: 11, returns: status, params: [{name: code, kind: scalar}] }
+  - { name: proc_notify_ready, id: 12, returns: status }
+  - { name: sched_yield, id: 13, returns: status }
+  - { name: sched_current_pid, id: 14, returns: value }
+  - { name: thread_gettid, id: 15, returns: value }
+  - { name: futex_wait, id: 16, returns: status, params: [{name: addr, kind: ptr}, {name: val, kind: scalar}, {name: timeout_ms, kind: scalar}] }
+  - { name: futex_wake, id: 17, returns: value, params: [{name: addr, kind: ptr}, {name: count, kind: scalar}] }
+
+  # --- IPC select set -------------------------------------------------------
+  - { name: ipc_select_create, id: 18, returns: value }
+  - { name: ipc_select_add, id: 19, returns: status, params: [{name: sel, kind: handle}, {name: endpoint, kind: handle}] }
+  - { name: ipc_select_wait, id: 20, returns: value, params: [{name: sel, kind: handle}] }
+  - { name: ipc_select_destroy, id: 21, returns: status, params: [{name: sel, kind: handle}] }
+  - { name: sys_select_create, id: 22, alias_of: ipc_select_create }
+  - { name: sys_select_add, id: 23, alias_of: ipc_select_add }
+  - { name: sys_select_wait, id: 24, alias_of: ipc_select_wait }
+  - { name: sys_select_destroy, id: 25, alias_of: ipc_select_destroy }
+
+  # --- xfer / generic buffer -----------------------------------------------
+  - { name: xfer_buffer_size, id: 26, returns: value }
+  - { name: fs_endpoint, id: 27, returns: value }
+  - { name: xfer_buffer_read, id: 28, returns: status, params: [{name: buffer_id, kind: handle}, {name: dst, kind: out, len: len}, {name: len, kind: scalar}, {name: offset, kind: scalar}] }
+  - { name: xfer_buffer_write, id: 29, returns: status, params: [{name: buffer_id, kind: handle}, {name: src, kind: buf, len: len}, {name: len, kind: scalar}, {name: offset, kind: scalar}] }
+  - { name: buffer_borrow, id: 30, returns: value, params: [{name: kind, kind: scalar}, {name: grantee, kind: handle}, {name: buffer_id, kind: handle}, {name: flags, kind: scalar}] }
+  - { name: buffer_release, id: 31, returns: status, params: [{name: kind, kind: scalar}, {name: buffer_id, kind: handle}] }
+
+  # --- block DMA buffer -----------------------------------------------------
+  - { name: block_buffer_phys, id: 32, returns: value }
+  - { name: block_buffer_copy, id: 33, returns: status, params: [{name: phys, kind: handle}, {name: dst, kind: out, len: len}, {name: len, kind: scalar}, {name: offset, kind: scalar}] }
+  - { name: block_buffer_write, id: 34, returns: status, params: [{name: phys, kind: handle}, {name: src, kind: buf, len: len}, {name: len, kind: scalar}, {name: offset, kind: scalar}] }
+
+  # --- io ports -------------------------------------------------------------
+  - { name: io_in8, id: 35, returns: value, params: [{name: port, kind: scalar}] }
+  - { name: io_in16, id: 36, returns: value, params: [{name: port, kind: scalar}] }
+  - { name: io_in32, id: 37, returns: value, params: [{name: port, kind: scalar}] }
+  - { name: io_out8, id: 38, returns: status, params: [{name: port, kind: scalar}, {name: val, kind: scalar}] }
+  - { name: io_out16, id: 39, returns: status, params: [{name: port, kind: scalar}, {name: val, kind: scalar}] }
+  - { name: io_out32, id: 40, returns: status, params: [{name: port, kind: scalar}, {name: val, kind: scalar}] }
+  - { name: io_wait, id: 41, returns: status }
+
+  # --- acpi / boot / sync / system -----------------------------------------
+  - { name: acpi_rsdp_info, id: 42, returns: status, params: [{name: out, kind: out, len: max_len}, {name: out_len, kind: out}, {name: max_len, kind: scalar}] }
+  - { name: boot_module_name, id: 43, returns: value, params: [{name: index, kind: scalar}, {name: out, kind: out, len: out_len}, {name: out_len, kind: scalar}] }
+  - { name: sync_user_read, id: 44, returns: status, params: [{name: ptr, kind: buf, len: len}, {name: len, kind: scalar}] }
+  - { name: system_halt, id: 45, returns: status }
+  - { name: system_reboot, id: 46, returns: status }
+
+  # --- sched / mem stats ----------------------------------------------------
+  - { name: sched_ticks, id: 47, returns: value }
+  - { name: proc_count, id: 48, returns: value }
+  - { name: sched_ready_count, id: 49, returns: value }
+  - { name: sched_cpu_count, id: 50, returns: value }
+  - { name: physmem_stats, id: 51, returns: status, params: [{name: out, kind: out}] }
+  - { name: kernel_runtime, id: 52, returns: value }
+  - { name: debug_mark, id: 53, returns: status, params: [{name: tag, kind: scalar}] }
+  - { name: kmap_dump, id: 54, returns: value }
+  - { name: kmap_dump_all, id: 55, returns: value }
+
+  # --- initfs ---------------------------------------------------------------
+  - { name: initfs_entry_count, id: 56, returns: value }
+  - { name: initfs_entry_name, id: 57, returns: value, params: [{name: index, kind: scalar}, {name: out, kind: out, len: out_len}, {name: out_len, kind: scalar}] }
+  - { name: initfs_entry_size, id: 58, returns: value, params: [{name: index, kind: scalar}] }
+  - { name: initfs_entry_copy, id: 59, returns: value, params: [{name: index, kind: scalar}, {name: out, kind: out, len: len}, {name: len, kind: scalar}, {name: offset, kind: scalar}] }
+
+  # --- DMA (borrow-based) ---------------------------------------------------
+  - { name: dma_map_borrow, id: 60, returns: value, params: [{name: borrow_id, kind: handle}, {name: offset, kind: scalar}, {name: length, kind: scalar}, {name: flags, kind: scalar}] }
+  - { name: dma_sync_borrow, id: 61, returns: status, params: [{name: borrow_id, kind: handle}, {name: offset, kind: scalar}, {name: length, kind: scalar}, {name: op, kind: scalar}] }
+  - { name: dma_unmap_borrow, id: 62, returns: status, params: [{name: borrow_id, kind: handle}] }
+
+  - { name: phys_map, id: 63, returns: status, params: [{name: phys_lo, kind: scalar}, {name: phys_hi, kind: scalar}, {name: size, kind: scalar}, {name: wasm_offset, kind: ptr}] }
+
+  # --- proc info ------------------------------------------------------------
+  - { name: proc_info, id: 64, returns: value, params: [{name: index, kind: scalar}, {name: buf, kind: out, len: buf_len}, {name: buf_len, kind: scalar}] }
+  - { name: proc_info_ex, id: 65, returns: value, params: [{name: index, kind: scalar}, {name: buf, kind: out, len: buf_len}, {name: buf_len, kind: scalar}, {name: parent, kind: out}] }
+  - { name: proc_info_stats, id: 66, returns: value, params: [{name: index, kind: scalar}, {name: buf, kind: out, len: buf_len}, {name: buf_len, kind: scalar}, {name: parent, kind: out}, {name: stats, kind: out}] }
+
+  - { name: xfer_buffer_borrow, id: 67, returns: value, params: [{name: grantee, kind: handle}, {name: buffer_id, kind: handle}, {name: flags, kind: scalar}] }
+  - { name: xfer_buffer_release, id: 68, returns: status, params: [{name: buffer_id, kind: handle}] }
+  - { name: sched_cpu_stats, id: 69, returns: status, params: [{name: cpu_id, kind: scalar}, {name: out, kind: out}] }
+
+  # --- threads --------------------------------------------------------------
+  - { name: thread_create, id: 70, returns: value, params: [{name: entry, kind: buf}, {name: arg0, kind: scalar}, {name: arg1, kind: scalar}, {name: flags, kind: scalar}] }
+  - { name: thread_yield, id: 71, returns: status }
+  - { name: thread_exit, id: 72, returns: status, params: [{name: status, kind: scalar}] }
+  - { name: thread_join, id: 73, returns: value, params: [{name: tid, kind: handle}] }
+  - { name: thread_detach, id: 74, returns: status, params: [{name: tid, kind: handle}] }
+
+  # --- shmem ----------------------------------------------------------------
+  - { name: shmem_create, id: 75, returns: value, params: [{name: pages, kind: scalar}, {name: flags, kind: scalar}] }
+  - { name: shmem_grant, id: 76, returns: status, params: [{name: id, kind: handle}, {name: target_pid, kind: handle}] }
+  - { name: shmem_revoke, id: 77, returns: status, params: [{name: id, kind: handle}, {name: target_pid, kind: handle}] }
+  - { name: shmem_map, id: 78, returns: status, params: [{name: id, kind: handle}, {name: wasm_off, kind: ptr}, {name: size, kind: scalar}] }
+  - { name: shmem_map_auto, id: 79, returns: value, params: [{name: id, kind: handle}, {name: size, kind: scalar}] }
+  - { name: shmem_flush, id: 80, returns: status, params: [{name: id, kind: handle}, {name: wasm_off, kind: buf, len: size}, {name: size, kind: scalar}] }
+  - { name: shmem_refresh, id: 81, returns: status, params: [{name: id, kind: handle}, {name: wasm_off, kind: out, len: size}, {name: size, kind: scalar}] }
+  - { name: shmem_unmap, id: 82, returns: status, params: [{name: id, kind: handle}] }
+
+  # --- irq ------------------------------------------------------------------
+  - { name: irq_route_ipc, id: 83, returns: status, params: [{name: irq_line, kind: scalar}, {name: endpoint, kind: handle}] }
+  - { name: irq_ack, id: 84, returns: status, params: [{name: irq_line, kind: scalar}] }
+  - { name: irq_unroute, id: 85, returns: status, params: [{name: irq_line, kind: scalar}] }
+
+  # --- serial / input / framebuffer ----------------------------------------
+  - { name: serial_register, id: 86, returns: status, params: [{name: endpoint, kind: handle}] }
+  - { name: input_push, id: 87, returns: status, params: [{name: ch, kind: scalar}] }
+  - { name: input_read, id: 88, returns: value }
+  - { name: framebuffer_info, id: 89, returns: status, params: [{name: out, kind: out, len: len}, {name: len, kind: scalar}] }
+  - { name: framebuffer_map, id: 90, returns: status, params: [{name: wasm_off, kind: ptr}, {name: size, kind: scalar}] }
+  - { name: framebuffer_pixel, id: 91, returns: status, params: [{name: x, kind: scalar}, {name: y, kind: scalar}, {name: color, kind: scalar}] }
+
+  # --- boot config / early log / env ---------------------------------------
+  - { name: boot_config_size, id: 92, returns: value }
+  - { name: boot_config_copy, id: 93, returns: status, params: [{name: buf, kind: out, len: len}, {name: len, kind: scalar}, {name: offset, kind: scalar}] }
+  - { name: initfs_find_path, id: 94, returns: value, params: [{name: path, kind: buf, len: path_len}, {name: path_len, kind: scalar}] }
+  - { name: early_log_size, id: 95, returns: value }
+  - { name: early_log_copy, id: 96, returns: status, params: [{name: buf, kind: out, len: len}, {name: len, kind: scalar}, {name: offset, kind: scalar}] }
+  - { name: env_get, id: 97, returns: value, params: [{name: name, kind: buf, len: name_len}, {name: name_len, kind: scalar}, {name: buf, kind: out, len: buf_len}, {name: buf_len, kind: scalar}] }
+  - { name: env_set, id: 98, returns: status, params: [{name: name, kind: buf, len: name_len}, {name: name_len, kind: scalar}, {name: val, kind: buf, len: val_len}, {name: val_len, kind: scalar}] }
+  - { name: env_unset, id: 99, returns: status, params: [{name: name, kind: buf, len: name_len}, {name: name_len, kind: scalar}] }
+
+  - { name: abort, id: 100, module: env, returns: void, params: [{name: msg, kind: scalar}, {name: file, kind: scalar}, {name: line, kind: scalar}, {name: column, kind: scalar}] }
+
+  - { name: region_alloc, id: 101, returns: value, params: [{name: pages, kind: scalar}, {name: cache_policy, kind: scalar}, {name: out_phys, kind: out}] }
+  - { name: irq_configure, id: 102, returns: status, params: [{name: irq_line, kind: scalar}, {name: flags, kind: scalar}] }
+  - { name: ipc_select_wait_timeout, id: 103, returns: value, params: [{name: sel, kind: handle}, {name: timeout_ms, kind: scalar}] }
+
+  # --- buffer acquire / (un)borrow / reborrow ------------------------------
+  - { name: xfer_buffer_acquire, id: 104, returns: value, params: [{name: minimum_size, kind: scalar}] }
+  - { name: xfer_buffer_unborrow, id: 105, returns: status, params: [{name: borrow_id, kind: handle}] }
+  - { name: buffer_acquire, id: 106, returns: value, params: [{name: kind, kind: scalar}, {name: minimum_size, kind: scalar}] }
+  - { name: buffer_unborrow, id: 107, returns: status, params: [{name: borrow_id, kind: handle}] }
+  - { name: xfer_buffer_reborrow, id: 108, returns: value, params: [{name: grantee, kind: handle}, {name: borrow_id, kind: handle}, {name: flags, kind: scalar}] }
+  - { name: buffer_reborrow, id: 109, returns: value, params: [{name: kind, kind: scalar}, {name: grantee, kind: handle}, {name: borrow_id, kind: handle}, {name: flags, kind: scalar}] }
+  - { name: spawn_info_buffer, id: 110, returns: value }
+
+  # --- WASI (WARP-only) -----------------------------------------------------
+  - { name: proc_exit, id: 111, module: wasi_snapshot_preview1, runtimes: [warp], returns: void, params: [{name: code, kind: scalar}] }
+  - { name: random_get, id: 112, module: wasi_snapshot_preview1, runtimes: [warp], returns: status, params: [{name: buf, kind: out, len: len}, {name: len, kind: scalar}] }
+
+  # --- late additions -------------------------------------------------------
+  - { name: block_buffer_map, id: 113, returns: value }
+  - { name: xfer_buffer_map, id: 114, returns: value, params: [{name: buffer_id, kind: handle}] }
+  - { name: xfer_buffer_unmap, id: 115, returns: status, params: [{name: buffer_id, kind: handle}] }
+  - { name: klog_register_ring, id: 116, returns: status, params: [{name: id, kind: handle}] }
+
+# Extra links outside the ring-3/AOT id space (no `id`).
+extra:
+  - { name: strlen, module: env, runtimes: [wasm3], returns: value, params: [{name: s, kind: ptr}] }

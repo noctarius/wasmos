@@ -540,6 +540,10 @@ run_abi_gen_check() {
     command -v "$py" >/dev/null 2>&1 || { echo "abi gen check: no python3, skipping"; return 0; }
     step "Checking generated ABI is in sync with abi/errors.yaml..."
     "$py" "$repo_root/scripts/gen_abi_errors.py" --check
+    step "Checking generated host-call ABI is in sync with abi/hostcalls.yaml..."
+    "$py" "$repo_root/scripts/gen_abi_hostcalls.py" --check
+    step "Verifying host-call ids match warp_ring3.h..."
+    "$py" "$repo_root/scripts/gen_abi_hostcalls.py" --verify-source
 }
 
 case "$mode" in

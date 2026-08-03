@@ -187,14 +187,22 @@ returns; `FS_ERR_*`/`PROC_*` ride IPC opcodes), so the migration depends on them
   outside the `src/` format/lint scope. `quality` gained a `--check` re-gen
   guard and an advisory bare-`return -1;` inventory (services/drivers, ~24
   sites). Not yet wired into the OS — wiring is Phase 4.
-- [ ] Phase 2: add `abi/hostcalls.yaml` + generator emitting the wasm3, WARP JIT
-  (`LINK`), WARP ring-3 numbered dispatch, WARP AOT symbol-table, and per-language
-  (C/Rust/Go/Zig/AS) sites for each host call. Each entry must declare the full
-  typed **parameter set** (wire type + semantic kind: `scalar`/`handle`/`ptr`/
-  `buf`/`out`), so the generator can emit the per-backend linmem resolve +
-  bounds-check (`warp_mem` vs wasm3 memory base) that is hand-written today.
-  Convert the existing host calls and emit an ABI-version `static_assert` across
-  all variants.
+- [x] Phase 2a: `abi/hostcalls.yaml` (all 117 host calls + the id-less wasm3-only
+  `env.strlen`) + `scripts/gen_abi_hostcalls.py` generating the `HC_*` id enum,
+  with Model validation (ids unique, dense `0..N-1`, ordered; `reserved` slots for
+  retirements) and `--verify-source` proving the IDL's `(symbol, id)` set matches
+  the live `src/kernel/include/warp_ring3.h` exactly. Wired into `quality`
+  (`--check` + `--verify-source`). Param **kinds** captured but not yet emitted.
+- [ ] Phase 2b: emit the remaining surfaces from the IDL — the WARP
+  `WASMOS_SYMBOLS` tables (STATIC/DYNAMIC/ring-3), the wasm3 link table + m3 sig
+  strings (needs a per-param `wasm3: i32` override for the pointers wasm3 passes
+  as a raw offset rather than an m3-translated `*`: `futex_wait`/`wake`,
+  `phys_map`, `thread_create`, `shmem_map`/`flush`/`refresh`, `framebuffer_info`/
+  `map`, `region_alloc`), the ring-3 dispatch, the AOT symbol table, the
+  per-language client stubs, and wrapper forward-decls; emit an ABI-version
+  `static_assert` across variants. Validate by equivalence-diff, then swap into
+  the kernel one site at a time (each `run-qemu-test`-gated). Fix the
+  `dma_map_borrow` WARP/wasm3 capability-check divergence during the swap.
 - [ ] Phase 3: add `abi/opcodes.yaml` + generator producing the
   `wasmos_driver_abi.h` opcode enum, a runtime `opcode → name` table (feeds
   diagnostics), and the doc opcode tables; optionally typed future-returning

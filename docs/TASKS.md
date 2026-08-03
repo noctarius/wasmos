@@ -165,27 +165,24 @@ Source: `architecture/13-runtime-and-packaging.md`,
 
 Source: `architecture/34-abi-idl-and-error-model.md`.
 
-- [x] Phase 1 foundation: `abi/errors.yaml` IDL + `scripts/gen_abi_errors.py`
-  generator + checked-in `abi/generated/wasmos_status.h` — transport
+Phase order: 1 (error foundation, done) → 2 (host calls) → 3 (opcodes) → 4
+(migrate call sites onto the generated surfaces). The error call-site migration
+is deliberately last: it rewrites service/driver code that Phases 2/3 also
+rewrite, so doing it after the generated host-call/opcode surfaces exist touches
+each site once. Error domains ride those surfaces (`SHMEM_ERR_*` are host-call
+returns; `FS_ERR_*`/`PROC_*` ride IPC opcodes), so the migration depends on them.
+
+- [x] Phase 1 (error foundation) — COMPLETE: `abi/errors.yaml` IDL +
+  `scripts/gen_abi_errors.py` generator + the per-language value ABI under
+  `abi/generated/<lang>/wasmos_status.{h,rs,go,zig,ts}` — transport
   `wasmos_status_t`, generated domain registry (stable ids), packed
-  `(domain, code)` constants seeded from the legacy taxonomy, `wasmos_strerror`,
-  the fixed 40-byte `wasmos_error_t`, and the chain helpers
-  (`wrap`/`unwrap`/`root`/`is`/`as`/`strerror_chain`); plus a `quality` re-gen
-  guard (`gen_abi_errors.py --check`).
-- [x] Per-language value ABI generated under `abi/generated/<lang>/`
-  (Rust/Go/Zig/AssemblyScript): constants + packed accessors + decode lookups,
-  each verified to compile with its native toolchain. Generated files live
-  outside the `src/` format/lint scope so their formatters cannot fight the
-  byte-exact re-gen guard.
-- [ ] Phase 1 remaining: emit the fixed error object + chain helpers
-  (`wrap`/`is`/`as`) for the non-C languages alongside their
-  `src/libsys/{wasm,native}` runtime wrappers, and migrate the legacy
-  `PROC_SPAWN_ERR_*`/`PROC_PM_ERR_*`/`SHMEM_ERR_*`/`FS_ERR_*` definitions and
-  call sites onto the packed model.
-- [x] Advisory `return -1;` inventory gate landed in `scripts/quality.sh`
-  (services/drivers, ~24 sites reported).
-- [ ] Clear the bare-`return -1;` backlog, then flip the gate to a hard failure
-  (with an allow-list for genuine POSIX-ABI boundaries).
+  `(domain, code)` constants seeded from the legacy taxonomy, decode lookups
+  (`wasmos_strerror`), the fixed 8-byte frame / 40-byte error object, and the
+  chain helpers (`wrap`/`unwrap`/`root`/`is`/`as`), each verified to compile
+  (Rust/Go/C also run-tested) with its native toolchain. Generated files sit
+  outside the `src/` format/lint scope. `quality` gained a `--check` re-gen
+  guard and an advisory bare-`return -1;` inventory (services/drivers, ~24
+  sites). Not yet wired into the OS — wiring is Phase 4.
 - [ ] Phase 2: add `abi/hostcalls.yaml` + generator emitting the wasm3, WARP JIT
   (`LINK`), WARP ring-3 numbered dispatch, WARP AOT symbol-table, and per-language
   (C/Rust/Go/Zig/AS) sites for each host call. Each entry must declare the full
@@ -198,14 +195,17 @@ Source: `architecture/34-abi-idl-and-error-model.md`.
   `wasmos_driver_abi.h` opcode enum, a runtime `opcode → name` table (feeds
   diagnostics), and the doc opcode tables; optionally typed future-returning
   request/reply stubs carrying the transfer-buffer ownership contract.
-- [ ] Phase 4: adopt the fixed error object (transport status + a reserved
-  four-frame `(domain, code, origin)` chain, always carried in full — no
-  optional/head-only path) and the pass-through-with-provenance propagation
-  policy (wrap = append a frame; wrap only at deliberate abstraction seams),
-  one subsystem at a time.
-- [ ] Add a `quality` sub-check that re-runs each generator and fails when the
-  checked-in generated files differ from the IDL, so generated output cannot
-  silently drift.
+- [ ] Phase 4 (after 2 and 3): migrate the tree onto the packed error model —
+  the legacy `PROC_SPAWN_ERR_*`/`PROC_PM_ERR_*`/`FS_ERR_*` (IPC opcodes) and
+  `SHMEM_ERR_*` (host calls) definitions and call sites move onto the generated
+  `(domain, code)` reply status; wire the pass-through-with-provenance
+  propagation policy (wrap = append a frame, only at deliberate abstraction
+  seams); clear the bare-`return -1;` backlog; then flip the advisory `-1` gate
+  to a hard failure (allow-listing genuine POSIX-ABI boundaries). One subsystem
+  at a time.
+- [ ] Extend the `quality` re-gen guard to the host-call and opcode generators
+  as they land (the errors guard already exists), so generated output can never
+  silently drift from the IDL.
 
 ## Filesystems and Storage
 

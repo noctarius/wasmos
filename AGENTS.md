@@ -15,6 +15,11 @@ This repository uses Codex CLI to assist with development. Follow these conventi
   - `skills/wasmos-add-hostcall` — add/change/retire a WASM host call
     (`abi/hostcalls.yaml` IDL + `scripts/gen_abi_hostcalls.py` regeneration +
     the hand-written kernel wrapper bodies).
+  - `skills/wasmos-add-opcode` — add/change an IPC opcode (`abi/opcodes.yaml` IDL
+    + `scripts/gen_abi_opcodes.py`; generated C enums + per-language constants).
+  - `skills/wasmos-add-error` — add/change an error/status code or domain
+    (`abi/errors.yaml` IDL + `scripts/gen_abi_errors.py`; transport axis vs packed
+    `(domain, code)` + chain helpers).
   - `skills/wasmos-wasm-driver` — create and wire a new wasm device driver.
   - `skills/wasmos-system-service` — create and wire a new system service.
   - `skills/wasmos-system-util` — create a one-shot CLI utility under `src/utils/`.

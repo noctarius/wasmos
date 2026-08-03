@@ -272,21 +272,24 @@ def emit_wasm3_links(m):
 
 
 def emit_aot_symbols(m):
-    """WARP AOT symbol table — mirrors WASMOS_SYMBOLS in id order, but binds each
-    entry to an arity-sized stub (stub_i<N>, N = wasm param count) that
-    initFromCompiledBinary() rebinds to the live kernel fn at load. Emitted as a
-    macro; the AOT tool expands it into its NativeSymbol[] initializer."""
+    """WARP AOT symbol table — mirrors WASMOS_SYMBOLS in id order (position == id;
+    rebind is positional). Each entry binds an arity- AND return-matched stub so
+    its type signature matches the kernel wrapper: stub_i<N> for a uint32_t
+    return, stub_v<N> for void (N = wasm param count). initFromCompiledBinary()
+    rebinds the stub to the live kernel fn. Emitted as a macro the AOT tool
+    expands into its NativeSymbol[] initializer."""
     o = list(BANNER)
     w = o.append
-    w("/* WARP AOT symbol table (name-resolved at load; kept in id order for")
-    w(" * readability). Each entry binds a stub_i<N> of matching arity (N = wasm")
-    w(" * param count, ctx excluded); initFromCompiledBinary() rebinds stubs to the")
-    w(" * live kernel fns by name. The full host-call set is listed — an available")
-    w(" * symbol no AOT module imports is harmless. Expand:")
+    w("/* WARP AOT symbol table — mirrors WASMOS_SYMBOLS in id order (position ==")
+    w(" * id; rebind is positional). Each entry binds an arity- AND return-matched")
+    w(" * stub so the type signature matches the kernel wrapper: stub_i<N> for a")
+    w(" * uint32_t return, stub_v<N> for void; N = wasm param count (ctx excluded).")
+    w(" * initFromCompiledBinary() rebinds the stub to the live kernel fn. Expand:")
     w(" *   static vb::NativeSymbol syms[] = { WASMOS_AOT_SYMBOLS(DYNAMIC_LINK) }; */")
     w("#define WASMOS_AOT_SYMBOLS(LINK) \\")
     lines = [
-        f'    LINK("{m.module(e)}", "{e["name"]}", stub_i{m.arity(e)})'
+        f'    LINK("{m.module(e)}", "{e["name"]}", '
+        f'stub_{"v" if m.returns(e) == "void" else "i"}{m.arity(e)})'
         for e in m.ordered
     ]
     w(" , \\\n".join(lines))
@@ -354,6 +357,8 @@ def _read(path):
 def verify_enum(m):
     text = _read(WARP_RING3_H)
     src = {s: int(v) for s, v in re.findall(r"\b(HC_[A-Z0-9_]+)\s*=\s*(\d+)", text)}
+    if not src:
+        return []  # enum already swapped to the generated header; --check guards it
     src_count = src.pop("HC_COUNT", None)
     problems = []
     if set(src) != set(m.symbols):
@@ -371,6 +376,8 @@ def verify_enum(m):
 
 def verify_warp(m):
     text = _read(WARP_LINK_CPP)
+    if "#define WASMOS_SYMBOLS(LINK)" not in text:
+        return []  # WASMOS_SYMBOLS already swapped to the generated include
     region = text.split("#define WASMOS_SYMBOLS(LINK)", 1)[1]
     region = region.split("warp_wasmos_symbols", 1)[0]
     # The macro uses C block comments and `\` line-continuations, some splitting
@@ -397,6 +404,8 @@ def verify_wasm3(m):
             text,
         )
     }
+    if not src:
+        return []  # wasm3 link table already swapped to the generated include
     gen = {
         e["name"]: (m.wasm3_sig(e), m.wasm3_fn(e))
         for e in m.ordered
@@ -419,31 +428,24 @@ def verify_aot(m):
     region = text.split("aot_symbols", 1)[1]
     region = re.sub(r"/\*.*?\*/", " ", region, flags=re.S)
     region = region.replace("\\", " ")
+    # Match both stub_i<N> (uint32_t return) and stub_v<N> (void return).
     src = re.findall(
-        r'DYNAMIC_LINK\(\s*"([^"]+)"\s*,\s*"([^"]+)"\s*,\s*(stub_i\d+)\s*\)', region
+        r'DYNAMIC_LINK\(\s*"([^"]+)"\s*,\s*"([^"]+)"\s*,\s*(stub_[iv]\d+)\s*\)', region
     )
-    # AOT is name-resolved, so the generated table may be a superset of the live
-    # one: every current entry must be reproduced (name + arity), extras are OK.
-    gen_stub = {(m.module(e), e["name"]): f"stub_i{m.arity(e)}" for e in m.ordered}
-    problems = []
-    for mod, name, stub in src:
-        g = gen_stub.get((mod, name))
-        if g is None:
-            problems.append(f"AOT entry {mod}.{name} in warp_aot.cpp but not generated")
-        elif g != stub:
-            problems.append(f"AOT stub arity mismatch {mod}.{name}: src={stub} idl={g}")
-    src_names = {(mod, name) for mod, name, _ in src}
-    additions = [
-        (m.module(e), e["name"])
-        for e in m.ordered
-        if (m.module(e), e["name"]) not in src_names
-    ]
-    if additions:
-        print(
-            f"gen_abi_hostcalls: AOT table completes the live set (safe, "
-            f"name-resolved additions): {additions}",
-            file=sys.stderr,
+    gen = [
+        (
+            m.module(e),
+            e["name"],
+            f'stub_{"v" if m.returns(e) == "void" else "i"}{m.arity(e)}',
         )
+        for e in m.ordered
+    ]
+    problems = []
+    if len(src) != len(gen):
+        problems.append(f"AOT table length differs: src={len(src)} idl={len(gen)}")
+    for i, (s, g) in enumerate(zip(src, gen)):
+        if s != g:
+            problems.append(f"AOT entry {i} differs: src={s} idl={g}")
     return problems
 
 
@@ -453,6 +455,8 @@ def verify_ring3(m):
     behaviorally by run-qemu-test at swap time; the generator fixes the known
     proc_info_stats ctx-register bug, so that case is expected to differ.)"""
     text = _read(WARP_LINK_CPP)
+    if "switch (hc_id)" not in text:
+        return []  # ring-3 dispatch already swapped to warp_ring3_dispatch_table
     region = text.split("switch (hc_id)", 1)[1].split("\n    default:", 1)[0]
     region = re.sub(r"/\*.*?\*/", " ", region, flags=re.S)
     # Associate each warp_* call with the case labels that precede it (handles
@@ -490,8 +494,8 @@ def verify_source(m):
             print(f"gen_abi_hostcalls: {p}", file=sys.stderr)
         die("IDL does not match the live sources — reconcile before generating", code=3)
     print(
-        f"gen_abi_hostcalls: IDL matches warp_ring3.h + WASMOS_SYMBOLS + wasm3 link table "
-        f"({m.count} host calls, ids 0..{m.count - 1})"
+        f"gen_abi_hostcalls: IDL verified against all still-hand-written host-call "
+        f"sources (swapped-in surfaces skip; {m.count} host calls, ids 0..{m.count - 1})"
     )
 
 

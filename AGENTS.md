@@ -9,6 +9,16 @@ This repository uses Codex CLI to assist with development. Follow these conventi
   (single-pass JIT compiler, `libs/warp`, enabled with `-DWASMOS_WASM_RUNTIME_WARP=ON`), and
   **stb** (`libs/stb`).
 
+## Skills
+- `skills/` holds task-specific playbooks (each a `SKILL.md`). Consult the
+  relevant one before starting that kind of task:
+  - `skills/wasmos-add-hostcall` — add/change/retire a WASM host call
+    (`abi/hostcalls.yaml` IDL + `scripts/gen_abi_hostcalls.py` regeneration +
+    the hand-written kernel wrapper bodies).
+  - `skills/wasmos-wasm-driver` — create and wire a new wasm device driver.
+  - `skills/wasmos-system-service` — create and wire a new system service.
+  - `skills/wasmos-kernel-internals` — kernel internals reference.
+
 ## Always Do
 - Read `README.md` and `docs/ARCHITECTURE.md` at the start of a new task.
 - Keep `README.md` and `docs/ARCHITECTURE.md` updated with meaningful changes and new behaviors.

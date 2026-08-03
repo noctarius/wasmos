@@ -35,7 +35,10 @@ Ring3 smoke validation note: `run-qemu-ring3-test` configures process-manager
 test injection hooks so owner-deny marker checks (`wait`/`kill`/`status`/`spawn`)
 remain deterministic in strict ring3 runs.
 WARP runtime note: selecting the WARP backend now implies the ring-3 execution
-model; non-ring3 WARP is no longer a supported configuration mode.
+model; non-ring3 WARP is no longer a supported configuration mode. Ring-3 is the
+standard execution model, not a configuration choice: do not add new non-ring3
+execution paths, ring0-only code paths, or mode toggles. Remaining ring-0 native
+services are to be moved onto the ring-3 native path, not extended in place.
 Scheduler note: the thread-centric scheduler described in
 `architecture/29-threadable-scheduler.md` is now the only scheduler model.
 The filename is retained for continuity, but it documents the current
@@ -90,6 +93,9 @@ in-kernel scheduler rather than an optional mode.
 ### User-Space Concurrency
 - [Coroutines, Futures, and Promises](architecture/32-coroutines-futures-promises.md) - proposed user-space coroutine/future/promise runtime (verified against the implementation); future/promise model replaces synchronous IPC; one shared future contract over separate native (stackful) and WASM (fiber/stackless) coroutine cores
 - [Completion Ports](architecture/33-completion-ports.md) - proposed kernel-owned, bounded completion queues with notification doorbells; a batched completion source for the future/promise runtime and high-rate networking operations
+
+### Tooling and ABI
+- [ABI IDL, Code Generation, and Error Model](architecture/34-abi-idl-and-error-model.md) - proposed single-source-of-truth IDL that generates the WASM host-call, IPC opcode, and error-code surfaces across wasm3/WARP(JIT+AOT) and all language variants; Zircon/Mach-style layered error model with a generated domain registry
 
 ### Operations and Validation
 - [Diagnostics and Status](architecture/25-diagnostics-status.md)

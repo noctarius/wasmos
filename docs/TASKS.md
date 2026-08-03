@@ -161,6 +161,38 @@ Source: `architecture/13-runtime-and-packaging.md`,
 - [ ] Add driver/service supervision, restart/reincarnation, and controlled
   capability revoke/reissue on restart.
 
+## ABI, Code Generation, and Error Handling
+
+Source: `architecture/34-abi-idl-and-error-model.md`.
+
+- [ ] Phase 1: add `abi/errors.yaml` + generator producing `wasmos_status_t`, the
+  domain registry (generated stable domain ids), per-language constants, and a
+  `wasmos_strerror` decoder; consolidate the scattered `IPC_ERR_*`/`PROC_PM_ERR_*`
+  fragments onto it.
+- [ ] Land a `scripts/quality.sh` lint gate that flags `return -1;` in
+  `src/services`/`src/drivers` (allow-listing genuine POSIX-ABI boundaries),
+  turning the named-error rule into a checked rule. Standalone quick win.
+- [ ] Phase 2: add `abi/hostcalls.yaml` + generator emitting the wasm3, WARP JIT
+  (`LINK`), WARP ring-3 numbered dispatch, WARP AOT symbol-table, and per-language
+  (C/Rust/Go/Zig/AS) sites for each host call. Each entry must declare the full
+  typed **parameter set** (wire type + semantic kind: `scalar`/`handle`/`ptr`/
+  `buf`/`out`), so the generator can emit the per-backend linmem resolve +
+  bounds-check (`warp_mem` vs wasm3 memory base) that is hand-written today.
+  Convert the existing host calls and emit an ABI-version `static_assert` across
+  all variants.
+- [ ] Phase 3: add `abi/opcodes.yaml` + generator producing the
+  `wasmos_driver_abi.h` opcode enum, a runtime `opcode → name` table (feeds
+  diagnostics), and the doc opcode tables; optionally typed future-returning
+  request/reply stubs carrying the transfer-buffer ownership contract.
+- [ ] Phase 4: adopt the fixed error object (transport status + a reserved
+  four-frame `(domain, code, origin)` chain, always carried in full — no
+  optional/head-only path) and the pass-through-with-provenance propagation
+  policy (wrap = append a frame; wrap only at deliberate abstraction seams),
+  one subsystem at a time.
+- [ ] Add a `quality` sub-check that re-runs each generator and fails when the
+  checked-in generated files differ from the IDL, so generated output cannot
+  silently drift.
+
 ## Filesystems and Storage
 
 Source: `architecture/18-filesystem-stack.md` and

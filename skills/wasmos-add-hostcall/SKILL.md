@@ -1,6 +1,6 @@
 ---
 name: wasmos-add-hostcall
-description: Add a new WASM host call (wasmos.* / wasi / env import) to WASMOS and regenerate the ABI. Covers the single-source-of-truth IDL (abi/hostcalls.yaml), the generator (scripts/gen_abi_hostcalls.py), the parts that are generated (the kernel tables + the Rust/Go/Zig/AS guest bindings) vs. still hand-written (the two kernel wrapper bodies + the C client decl, which is guarded not generated), and how to validate on both runtimes. Use whenever adding, changing, or retiring a wasmos host call.
+description: Add a new WASM host call (wasmos.* / wasi / env import) to WASMOS and regenerate the ABI. Covers the single-source-of-truth IDL (abi/hostcalls.yaml), the generator (scripts/gen_abi_hostcalls.py), the parts that are generated (the kernel tables + the C/Rust/Go/Zig/AS guest bindings + docs) vs. still hand-written (the two kernel wrapper bodies), and how to validate on both runtimes. Use whenever adding, changing, or retiring a wasmos host call.
 ---
 
 # WASMOS: Add a Host Call
@@ -28,12 +28,12 @@ Generated from the IDL (do **not** hand-edit — they carry a `GENERATED` banner
 | `wasmos_ring3_dispatch.inc` (`warp_ring3_dispatch_table`) | `src/kernel/warp/link.cpp` |
 | `wasmos_symbols_aot.inc` (`WASMOS_AOT_SYMBOLS`) | `src/tools/warp_aot/warp_aot.cpp` |
 
-Also generated — the guest import bindings for the four languages that hand-roll
-them (raw wasm signature: all params `i32`, `i32` return, one entry per
-`wasmos` call incl. aliases):
+Also generated — the guest import bindings for all five languages (one entry per
+`wasmos` call incl. aliases, with the call's `doc:` as a comment):
 
 | Generated file | Idiom |
 |---|---|
+| `abi/generated/c/wasmos_imports.h` | `extern … WASMOS_WASM_IMPORT` (included by `api.h`) |
 | `abi/generated/rust/wasmos_imports.rs` | `#[link(wasm_import_module="wasmos")] extern` |
 | `abi/generated/go/wasmos_imports.go` | `//go:wasmimport wasmos <sym>` |
 | `abi/generated/zig/wasmos_imports.zig` | `pub extern "wasmos" fn … callconv(.c)` |
@@ -41,17 +41,20 @@ them (raw wasm signature: all params `i32`, `i32` return, one entry per
 
 Still hand-written (the generator emits references/decls; you supply the logic):
 - the WARP wrapper body `warp_<name>(...)` in `src/kernel/warp/link.cpp`;
-- the wasm3 wrapper body `wasmos_<name>(...)` in `src/kernel/wasm3/link.c`;
-- the **C** client decl in `src/libc/include/wasmos/api.h` (+ libsys). C is
-  *guarded, not generated* — api.h keeps its ergonomic typed signatures, and
-  `--verify-source` checks it against the IDL (see Step 4).
+- the wasm3 wrapper body `wasmos_<name>(...)` in `src/kernel/wasm3/link.c`.
+
+The C client is generated too: `src/libc/include/wasmos/api.h` is now its struct
+typedefs + `#define`s + the two native-only `mutex_*` decls + a relative
+`#include` of `wasmos_imports.h`. It keeps ergonomic typed signatures via the
+per-param `c_type:` override (see Step 1). `--verify-source` guards any decl
+still hand-written under `src/libc`/`src/libsys` against IDL drift.
 
 ## Workflow
 
 1. Add the entry to `abi/hostcalls.yaml`.
 2. Regenerate and verify.
 3. Write the two kernel wrapper bodies (WARP + wasm3).
-4. Add the user-space client binding.
+4. (Optional) add an ergonomic libc/libsys wrapper around the generated import.
 5. Build and boot both runtimes.
 
 ## Step 1: Add the entry to `abi/hostcalls.yaml`
@@ -66,6 +69,9 @@ its entry with `{ id: N, reserved: true }` (keeps the slot; never delete it).
   - name: my_call
     id: 117            # HC_COUNT was 117 → next free id
     returns: status    # status (0/named-negative rc) | value (datum, -1 err) | void
+    doc: |             # emitted as a comment into every language stub — REQUIRED
+      One-line-or-more description: what it does, the params' roles, and the
+      return convention (what success means + the failure code family).
     params:
       - { name: endpoint, kind: handle }        # an id (endpoint/buffer/pid/...)
       - { name: buf,      kind: out, len: len }  # linmem the call WRITES; len bounds it
@@ -80,9 +86,15 @@ Param `kind`:
 - `out` — a `(ptr, len)` the call WRITES; `len` names the bound.
 
 Notes:
+- `doc:` is expected on every host call — it is the single source for the
+  documentation emitted into all five language stubs; do not duplicate it in api.h.
 - `module` defaults to `wasmos`; set `env` or `wasi_snapshot_preview1` for those.
 - `runtimes` defaults to `[warp, wasm3]`; set `[warp]` for a WARP-only call.
 - Alias of an existing call: `{ name: my_alias, id: 118, alias_of: my_call }`.
+- `c_type:` on a param overrides the C client stub's type (default `int32_t`);
+  use it to keep an ergonomic typed signature — `const char*`, `uint64_t*`, or a
+  struct pointer whose typedef `api.h` declares before the generated `#include`
+  (e.g. `wasmos_physmem_stats_t*`).
 - Rare: if the wasm3 wrapper takes a pointer param as a raw `i32` offset
   (resolved by hand) instead of an m3-translated `*`, mark that param
   `wasm3: i32` so the generated m3 signature matches.
@@ -137,13 +149,14 @@ m3ApiRawFunction(wasmos_my_call) {
 Do NOT touch the link tables/dispatch by hand — they are regenerated. The
 `ctx`/register placement in the ring-3 dispatch is computed by the generator.
 
-## Step 4: Add the user-space client binding
+## Step 4: (Optional) add an ergonomic wrapper
 
-Declare the import in libc/libsys and the language binding so guests can call it
-(this layer is not generated yet). For C, add the `wasmos.*` import declaration in
-the libc header; for AssemblyScript use `@external("wasmos", "my_call")`; Rust/Zig
-use their `extern`/import forms; Go uses `//go:wasmimport` / `//go:linkname`.
-Keep libc and its per-runtime wrappers in sync (repo rule).
+The raw client import is already generated in Step 2 — `wasmos_my_call(...)` is
+available to C (via `api.h`), Rust, Go, Zig, and AssemblyScript with no further
+edit. You only touch libc/libsys if you want a higher-level *wrapper* around the
+raw import (e.g. packing a struct, a `(ptr, len)` convenience, ret/errno mapping).
+If so, add it in the libc header and keep the per-runtime libsys variants in sync
+(repo rule) — but the import declaration itself is not hand-written anymore.
 
 ## Step 5: Build and boot both runtimes
 

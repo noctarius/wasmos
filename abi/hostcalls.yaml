@@ -26,16 +26,40 @@
 #   names the length param) | out (linmem write, `len` names the bound).
 # `returns`: status (0/named-negative rc) | value (meaningful datum, -1 err) | void.
 # `module` defaults to "wasmos" (omit); `runtimes` defaults to [warp, wasm3].
+# `c_type` (per-param, optional): the C type the generated C client stub uses for
+#   this param; defaults to int32_t (a wasm32 pointer crosses as an i32 offset).
+#   Set it to keep an ergonomic typed signature — const char*, uint64_t*, or a
+#   struct pointer whose typedef api.h declares before including the generated
+#   header (wasmos_physmem_stats_t*, wasmos_framebuffer_info_t*).
+# `doc` (per-hostcall, optional): documentation emitted as a comment into every
+#   generated client stub (C + Rust/Go/Zig/AssemblyScript). Single source — do
+#   not duplicate it in api.h.
 
 abi_version: 1
 
 hostcalls:
   # --- IPC ------------------------------------------------------------------
-  - { name: ipc_create_endpoint, id: 0, returns: value }
-  - { name: ipc_endpoint_owner, id: 1, returns: value, params: [{name: endpoint, kind: handle}] }
+  - name: ipc_create_endpoint
+    id: 0
+    returns: value
+    doc: |
+      Create a new IPC endpoint owned by the calling context; returns the new
+      endpoint ID, or -1 on failure.
+  - name: ipc_endpoint_owner
+    id: 1
+    returns: value
+    doc: |
+      Return the context ID that owns `endpoint`; returns the owner context ID, or
+      -1 if the endpoint is invalid or has no owner.
+    params:
+      - { name: endpoint, kind: handle }
   - name: ipc_send
     id: 2
     returns: status
+    doc: |
+      Send an IPC message to endpoint `dest` carrying `type`, `req_id`, declared
+      sender `src`, and payload words `a0..a3`; returns 0 (IPC_OK) on success,
+      negative on failure.
     params:
       - { name: dest, kind: handle }
       - { name: src, kind: handle }
@@ -45,164 +69,1140 @@ hostcalls:
       - { name: arg1, kind: scalar }
       - { name: arg2, kind: scalar }
       - { name: arg3, kind: scalar }
-  - { name: ipc_select_one, id: 3, returns: value, params: [{name: endpoint, kind: handle}] }
-  - { name: ipc_recv, id: 4, alias_of: ipc_select_one }
-  - { name: ipc_drain, id: 5, returns: value, params: [{name: endpoint, kind: handle}] }
-  - { name: ipc_try_recv, id: 6, alias_of: ipc_drain }
-  - { name: ipc_notify, id: 7, returns: status, params: [{name: endpoint, kind: handle}] }
-  - { name: ipc_last_field, id: 8, returns: value, params: [{name: field, kind: scalar}] }
+  - name: ipc_select_one
+    id: 3
+    returns: value
+    doc: |
+      Block until a message arrives on `endpoint`, recording it as the caller's
+      last-received message (yielding on spurious wake); returns 1 on success, -1 on
+      invalid endpoint or receive error.
+    params:
+      - { name: endpoint, kind: handle }
+  - name: ipc_recv
+    id: 4
+    alias_of: ipc_select_one
+    doc: |
+      Alias of ipc_select_one (identical ABI): block until a message arrives on
+      `endpoint` and record it as the last-received message; returns 1 on success,
+      -1 on error.
+  - name: ipc_drain
+    id: 5
+    returns: value
+    doc: |
+      Non-blocking dequeue of one pending message on `endpoint` into the caller's
+      last-received slot; returns 1 if a message was received, 0 if the queue was
+      empty, -1 on invalid endpoint or error.
+    params:
+      - { name: endpoint, kind: handle }
+  - name: ipc_try_recv
+    id: 6
+    alias_of: ipc_drain
+    doc: |
+      Alias of ipc_drain (identical ABI): non-blocking dequeue of one message on
+      `endpoint` into the last-received slot; returns 1 if received, 0 if empty, -1
+      on error.
+  - name: ipc_notify
+    id: 7
+    returns: status
+    doc: |
+      Send a contentless notification to `endpoint`; returns 0 (IPC_OK) on success,
+      negative on failure.
+    params:
+      - { name: endpoint, kind: handle }
+  - name: ipc_last_field
+    id: 8
+    returns: value
+    doc: |
+      Read field `field` of the caller's last-received message, where 0=type,
+      1=request_id, 2=arg0, 3=arg1, 4=source, 5=destination, 6=arg2, 7=arg3; returns
+      the field value, or -1 if no valid message is stored or `field` is out of
+      range.
+    params:
+      - { name: field, kind: scalar }
 
   # --- console --------------------------------------------------------------
-  - { name: console_read, id: 9, returns: value, params: [{name: buf, kind: out, len: len}, {name: len, kind: scalar}] }
-  - { name: console_write, id: 10, returns: status, params: [{name: buf, kind: buf, len: len}, {name: len, kind: scalar}] }
+  - name: console_read
+    id: 9
+    returns: value
+    doc: |
+      Read a single byte from the serial console into guest memory at buf_offset
+      (len is the buffer capacity, must be > 0). Returns 1 when a byte was stored, 0
+      or a negative rc when no byte is available, and (uint32_t)-1 on invalid length
+      or bad buffer offset.
+    params:
+      - { name: buf, kind: out, len: len }
+      - { name: len, kind: scalar }
+  - name: console_write
+    id: 10
+    returns: status
+    doc: |
+      Write len bytes from guest memory at buf_offset to the kernel log, emitted in
+      NUL-terminated 127-byte chunks. Returns 0 on success, (uint32_t)-1 on
+      non-positive len or bad buffer offset.
+    params:
+      - { name: buf, kind: buf, len: len }
+      - { name: len, kind: scalar }
 
   # --- proc / thread / sched / futex ---------------------------------------
-  - { name: proc_exit, id: 11, returns: status, params: [{name: code, kind: scalar}] }
-  - { name: proc_notify_ready, id: 12, returns: status }
-  - { name: sched_yield, id: 13, returns: status }
-  - { name: sched_current_pid, id: 14, returns: value }
-  - { name: thread_gettid, id: 15, returns: value }
-  - { name: futex_wait, id: 16, returns: status, params: [{name: addr, kind: ptr, wasm3: i32}, {name: val, kind: scalar}, {name: timeout_ms, kind: scalar}] }
-  - { name: futex_wake, id: 17, returns: value, params: [{name: addr, kind: ptr, wasm3: i32}, {name: count, kind: scalar}] }
+  - name: proc_exit
+    id: 11
+    returns: status
+    doc: |
+      Terminate the calling process with exit code `code`; records the exit status
+      and yields as EXITED so the process is reaped. Does not return to the caller.
+    params:
+      - { name: code, kind: scalar }
+  - name: proc_notify_ready
+    id: 12
+    returns: status
+    doc: |
+      Mark the calling process as ready (initialization complete), signaling any
+      waiter that the service has finished starting. Returns 0.
+  - name: sched_yield
+    id: 13
+    returns: status
+    doc: |
+      Voluntarily yield the CPU (YIELDED state), letting the scheduler run another
+      ready process. Returns 0.
+  - name: sched_current_pid
+    id: 14
+    returns: value
+    doc: |
+      Returns the PID of the calling process.
+  - name: thread_gettid
+    id: 15
+    returns: value
+    doc: |
+      Returns the thread ID (TID) of the calling thread within the current process.
+  - name: futex_wait
+    id: 16
+    returns: status
+    doc: |
+      Block the calling context while the WASM linear-memory word at offset
+      `addr_off` still equals `val`, for up to `timeout_ms` milliseconds (0 = wait
+      indefinitely); returns 0 when woken or when the word already differs, -1 on
+      timeout or invalid offset, and negative IPC_ERR_FULL when the futex table is
+      exhausted.
+    params:
+      - { name: addr, kind: ptr, wasm3: i32 }
+      - { name: val, kind: scalar }
+      - { name: timeout_ms, kind: scalar }
+  - name: futex_wake
+    id: 17
+    returns: value
+    doc: |
+      Wake up to `count` contexts waiting on the WASM linear-memory word at offset
+      `addr_off`; returns the number of contexts actually woken (0 if none were
+      waiting or the offset is invalid).
+    params:
+      - { name: addr, kind: ptr, wasm3: i32 }
+      - { name: count, kind: scalar }
 
   # --- IPC select set -------------------------------------------------------
   # wasm3 links the ipc_select_* / sys_select_* family to shared wasmos_sys_select_*
   # wrappers (the only wasm3 fn names not of the form wasmos_<name>).
-  - { name: ipc_select_create, id: 18, returns: value, wasm3_fn: wasmos_sys_select_create }
-  - { name: ipc_select_add, id: 19, returns: status, wasm3_fn: wasmos_sys_select_add, params: [{name: sel, kind: handle}, {name: endpoint, kind: handle}] }
-  - { name: ipc_select_wait, id: 20, returns: value, wasm3_fn: wasmos_sys_select_wait, params: [{name: sel, kind: handle}] }
-  - { name: ipc_select_destroy, id: 21, returns: status, wasm3_fn: wasmos_sys_select_destroy, params: [{name: sel, kind: handle}] }
-  - { name: sys_select_create, id: 22, alias_of: ipc_select_create }
-  - { name: sys_select_add, id: 23, alias_of: ipc_select_add }
-  - { name: sys_select_wait, id: 24, alias_of: ipc_select_wait }
-  - { name: sys_select_destroy, id: 25, alias_of: ipc_select_destroy }
+  - name: ipc_select_create
+    id: 18
+    returns: value
+    wasm3_fn: wasmos_sys_select_create
+    doc: |
+      Select sets: block until any one of N endpoints is ready.
+  - name: ipc_select_add
+    id: 19
+    returns: status
+    wasm3_fn: wasmos_sys_select_add
+    doc: |
+      Add endpoint `ep_id` to select set `sel_id` for the calling context; returns 0
+      on success, -1 on failure.
+    params:
+      - { name: sel, kind: handle }
+      - { name: endpoint, kind: handle }
+  - name: ipc_select_wait
+    id: 20
+    returns: value
+    wasm3_fn: wasmos_sys_select_wait
+    doc: |
+      Block until any watched endpoint is ready; returns the ready endpoint ID.
+    params:
+      - { name: sel, kind: handle }
+  - name: ipc_select_destroy
+    id: 21
+    returns: status
+    wasm3_fn: wasmos_sys_select_destroy
+    doc: |
+      Destroy the select set `sel_id` owned by the calling context; always returns 0
+      (returns -1 only if the caller's context cannot be resolved).
+    params:
+      - { name: sel, kind: handle }
+  - name: sys_select_create
+    id: 22
+    alias_of: ipc_select_create
+    doc: |
+      Create a new IPC select set for the calling context and return its select-set
+      ID, or -1 on failure. Alias of ipc_select_create (identical ABI).
+  - name: sys_select_add
+    id: 23
+    alias_of: ipc_select_add
+    doc: |
+      Add endpoint `ep_id` to select set `sel_id` for the calling context; returns 0
+      on success, -1 on failure. Alias of ipc_select_add (identical ABI).
+  - name: sys_select_wait
+    id: 24
+    alias_of: ipc_select_wait
+    doc: |
+      Block until any endpoint in select set `sel_id` becomes ready and return that
+      endpoint ID, retrying internally on spurious wake; returns -1 on error. Alias
+      of ipc_select_wait (identical ABI).
+  - name: sys_select_destroy
+    id: 25
+    alias_of: ipc_select_destroy
+    doc: |
+      Destroy the select set `sel_id` owned by the calling context; returns 0 (or -1
+      if the caller's context cannot be resolved). Alias of ipc_select_destroy
+      (identical ABI).
 
   # --- xfer / generic buffer -----------------------------------------------
-  - { name: xfer_buffer_size, id: 26, returns: value }
-  - { name: fs_endpoint, id: 27, returns: value }
-  - { name: xfer_buffer_read, id: 28, returns: status, params: [{name: buffer_id, kind: handle}, {name: dst, kind: out, len: len}, {name: len, kind: scalar}, {name: offset, kind: scalar}] }
-  - { name: xfer_buffer_write, id: 29, returns: status, params: [{name: buffer_id, kind: handle}, {name: src, kind: buf, len: len}, {name: len, kind: scalar}, {name: offset, kind: scalar}] }
-  - { name: buffer_borrow, id: 30, returns: value, params: [{name: kind, kind: scalar}, {name: grantee, kind: handle}, {name: buffer_id, kind: handle}, {name: flags, kind: scalar}] }
-  - { name: buffer_release, id: 31, returns: status, params: [{name: kind, kind: scalar}, {name: buffer_id, kind: handle}] }
+  - name: xfer_buffer_size
+    id: 26
+    returns: value
+    doc: |
+      Returns the fixed capacity in bytes of the transfer-buffer kind
+      (BUFFER_KIND_TRANSFER); the maximum extent addressable by
+      xfer_buffer_read/write and the size backing an acquired transfer buffer.
+  - name: fs_endpoint
+    id: 27
+    returns: value
+    doc: |
+      Returns the IPC endpoint of the registered filesystem service as known to the
+      process manager. Returns the endpoint id on success, or (uint32_t)-1 when no
+      FS endpoint is registered (IPC_ENDPOINT_NONE).
+  - name: xfer_buffer_read
+    id: 28
+    returns: status
+    doc: |
+      Copies `len` bytes from transfer buffer `buffer_id` starting at `offset` into
+      the caller's WASM linear memory at `ptr_off`; requires the caller (owner or
+      borrower) to hold the READ right. Returns XFER_BUFFER_OK (0) on success, 0 for
+      a zero `len`, otherwise a negative XFER_BUFFER_ERR_* code (NOT_FOUND,
+      INVALID_CONTEXT, NO_ACCESS, RANGE).
+    params:
+      - { name: buffer_id, kind: handle }
+      - { name: dst, kind: out, len: len }
+      - { name: len, kind: scalar }
+      - { name: offset, kind: scalar }
+  - name: xfer_buffer_write
+    id: 29
+    returns: status
+    doc: |
+      Copies `len` bytes from the caller's WASM linear memory at `ptr_off` into
+      transfer buffer `buffer_id` starting at `offset`; requires the caller (owner
+      or borrower) to hold the WRITE right. Returns XFER_BUFFER_OK (0) on success, 0
+      for a zero `len`, otherwise a negative XFER_BUFFER_ERR_* code (NOT_FOUND,
+      INVALID_CONTEXT, NO_ACCESS, RANGE).
+    params:
+      - { name: buffer_id, kind: handle }
+      - { name: src, kind: buf, len: len }
+      - { name: len, kind: scalar }
+      - { name: offset, kind: scalar }
+  - name: buffer_borrow
+    id: 30
+    returns: value
+    doc: |
+      OWNER assigns `flags` rights (bitmask of BUFFER_BORROW_READ/WRITE, must be
+      non-zero and within 0x3) over buffer `buffer_id` of `kind` to the context that
+      owns `grantee_ep`; returns the grantee's borrow_id. On failure returns a
+      negative XFER_BUFFER_ERR_* code (INVALID_KIND, NOT_FOUND, INVALID_FLAGS,
+      INVALID_CONTEXT, NO_ACCESS).
+    params:
+      - { name: kind, kind: scalar }
+      - { name: grantee, kind: handle }
+      - { name: buffer_id, kind: handle }
+      - { name: flags, kind: scalar }
+  - name: buffer_release
+    id: 31
+    returns: status
+    doc: |
+      OWNER releases buffer `buffer_id` of `kind` (only BUFFER_KIND_TRANSFER
+      supported), dropping its acquisition and backing; caller must be the owning
+      context. Returns XFER_BUFFER_OK (0) on success, otherwise a negative
+      XFER_BUFFER_ERR_* code (INVALID_KIND, NOT_FOUND, INVALID_CONTEXT, NO_ACCESS).
+    params:
+      - { name: kind, kind: scalar }
+      - { name: buffer_id, kind: handle }
 
   # --- block DMA buffer -----------------------------------------------------
-  - { name: block_buffer_phys, id: 32, returns: value }
-  - { name: block_buffer_copy, id: 33, returns: status, params: [{name: phys, kind: handle}, {name: dst, kind: out, len: len}, {name: len, kind: scalar}, {name: offset, kind: scalar}] }
-  - { name: block_buffer_write, id: 34, returns: status, params: [{name: phys, kind: handle}, {name: src, kind: buf, len: len}, {name: len, kind: scalar}, {name: offset, kind: scalar}] }
+  - name: block_buffer_phys
+    id: 32
+    returns: value
+    doc: |
+      Returns the physical address of the calling process's per-process 8 KiB
+      (2-page) block buffer, allocating it below 512 MiB on first use (kernel
+      higher-half identity window and 32-bit ATA DMA range). Returns the u32
+      physical address on success, or (uint32_t)-1 on failure.
+  - name: block_buffer_copy
+    id: 33
+    returns: status
+    doc: |
+      Copies `len` bytes out of the block buffer identified by physical address
+      `phys` starting at `offset` into the caller's WASM linear memory at `ptr_off`.
+      Returns 0 on success, or (uint32_t)-1 if the slot is unknown, the range
+      exceeds the 8 KiB buffer, or `ptr_off`/`len` is out of linear-memory bounds.
+    params:
+      - { name: phys, kind: handle }
+      - { name: dst, kind: out, len: len }
+      - { name: len, kind: scalar }
+      - { name: offset, kind: scalar }
+  - name: block_buffer_write
+    id: 34
+    returns: status
+    doc: |
+      Copies `len` bytes from the caller's WASM linear memory at `ptr_off` into the
+      block buffer identified by physical address `phys` starting at `offset`.
+      Returns 0 on success, or (uint32_t)-1 if the slot is unknown, the range
+      exceeds the 8 KiB buffer, or `ptr_off`/`len` is out of linear-memory bounds.
+    params:
+      - { name: phys, kind: handle }
+      - { name: src, kind: buf, len: len }
+      - { name: len, kind: scalar }
+      - { name: offset, kind: scalar }
 
   # --- io ports -------------------------------------------------------------
-  - { name: io_in8, id: 35, returns: value, params: [{name: port, kind: scalar}] }
-  - { name: io_in16, id: 36, returns: value, params: [{name: port, kind: scalar}] }
-  - { name: io_in32, id: 37, returns: value, params: [{name: port, kind: scalar}] }
-  - { name: io_out8, id: 38, returns: status, params: [{name: port, kind: scalar}, {name: val, kind: scalar}] }
-  - { name: io_out16, id: 39, returns: status, params: [{name: port, kind: scalar}, {name: val, kind: scalar}] }
-  - { name: io_out32, id: 40, returns: status, params: [{name: port, kind: scalar}, {name: val, kind: scalar}] }
-  - { name: io_wait, id: 41, returns: status }
+  - name: io_in8
+    id: 35
+    returns: value
+    doc: |
+      Read a byte from x86 I/O port `port` (0..0xFFFF). Returns the byte value, or
+      (uint32_t)-1 if the port is out of range or the caller lacks access. Requires
+      the io.port capability for that port.
+    params:
+      - { name: port, kind: scalar }
+  - name: io_in16
+    id: 36
+    returns: value
+    doc: |
+      Read a 16-bit word from x86 I/O port `port` (0..0xFFFF). Returns the word
+      value, or (uint32_t)-1 if the port is out of range or the caller lacks access.
+      Requires the io.port capability for that port.
+    params:
+      - { name: port, kind: scalar }
+  - name: io_in32
+    id: 37
+    returns: value
+    doc: |
+      Read a 32-bit dword from x86 I/O port `port` (0..0xFFFF). Returns the dword
+      value, or (uint32_t)-1 if the port is out of range or the caller lacks access.
+      Requires the io.port capability for that port.
+    params:
+      - { name: port, kind: scalar }
+  - name: io_out8
+    id: 38
+    returns: status
+    doc: |
+      Write byte `val` to x86 I/O port `port` (0..0xFFFF). Returns 0 on success,
+      (uint32_t)-1 if the port is out of range or the caller lacks access. Requires
+      the io.port capability for that port.
+    params:
+      - { name: port, kind: scalar }
+      - { name: val, kind: scalar }
+  - name: io_out16
+    id: 39
+    returns: status
+    doc: |
+      Write 16-bit word `val` to x86 I/O port `port` (0..0xFFFF). Returns 0 on
+      success, (uint32_t)-1 if the port is out of range or the caller lacks access.
+      Requires the io.port capability for that port.
+    params:
+      - { name: port, kind: scalar }
+      - { name: val, kind: scalar }
+  - name: io_out32
+    id: 40
+    returns: status
+    doc: |
+      Write 32-bit dword `val` to x86 I/O port `port` (0..0xFFFF). Returns 0 on
+      success, (uint32_t)-1 if the port is out of range or the caller lacks access.
+      Requires the io.port capability for that port.
+    params:
+      - { name: port, kind: scalar }
+      - { name: val, kind: scalar }
+  - name: io_wait
+    id: 41
+    returns: status
+    doc: |
+      Issue a short I/O-port delay (a dummy write to port 0x80). Returns 0 on
+      success, (uint32_t)-1 if the caller lacks access. Requires the io.port
+      capability (checked against port 0x80).
 
   # --- acpi / boot / sync / system -----------------------------------------
-  - { name: acpi_rsdp_info, id: 42, returns: status, params: [{name: out, kind: out, len: max_len}, {name: out_len, kind: out}, {name: max_len, kind: scalar}] }
-  - { name: boot_module_name, id: 43, returns: value, params: [{name: index, kind: scalar}, {name: out, kind: out, len: out_len}, {name: out_len, kind: scalar}] }
-  - { name: sync_user_read, id: 44, returns: status, params: [{name: ptr, kind: buf, len: len}, {name: len, kind: scalar}] }
-  - { name: system_halt, id: 45, returns: status }
-  - { name: system_reboot, id: 46, returns: status }
+  - name: acpi_rsdp_info
+    id: 42
+    returns: status
+    doc: |
+      Copy the ACPI RSDP blob into guest memory at out_off (bounded by max_len) and
+      store its byte length at out_len_off. Returns 0 on success, (uint32_t)-1 if no
+      RSDP is present, the blob exceeds max_len, or the buffer offsets are invalid.
+    params:
+      - { name: out, kind: out, len: max_len }
+      - { name: out_len, kind: out }
+      - { name: max_len, kind: scalar }
+  - name: boot_module_name
+    id: 43
+    returns: value
+    doc: |
+      Copy the NUL-terminated name of boot module `index` into guest memory at
+      out_off, truncated to out_len-1 bytes. Returns the written name length, or
+      (uint32_t)-1 if there is no boot info, index is out of range, or the buffer
+      offset is invalid.
+    params:
+      - { name: index, kind: scalar }
+      - { name: out, kind: out, len: out_len }
+      - { name: out_len, kind: scalar }
+  - name: sync_user_read
+    id: 44
+    returns: status
+    doc: |
+      Touch `len` bytes of guest linear memory starting at `ptr_off` with volatile
+      reads to fault them in / synchronize the mapping. Returns 0 (0 immediately if
+      `len` is 0), or -1 if the offset/length is out of bounds.
+    params:
+      - { name: ptr, kind: buf, len: len }
+      - { name: len, kind: scalar }
+  - name: system_halt
+    id: 45
+    returns: status
+    doc: |
+      Power off the machine. Requires the caller to hold the system-control
+      capability; returns -1 if the capability check fails, otherwise does not
+      return.
+  - name: system_reboot
+    id: 46
+    returns: status
+    doc: |
+      Reboot the machine. Requires the caller to hold the system-control capability;
+      returns -1 if the capability check fails, otherwise does not return.
 
   # --- sched / mem stats ----------------------------------------------------
-  - { name: sched_ticks, id: 47, returns: value }
-  - { name: proc_count, id: 48, returns: value }
-  - { name: sched_ready_count, id: 49, returns: value }
-  - { name: sched_cpu_count, id: 50, returns: value }
-  - { name: physmem_stats, id: 51, returns: status, params: [{name: out, kind: out}] }
-  - { name: kernel_runtime, id: 52, returns: value }
-  - { name: debug_mark, id: 53, returns: status, params: [{name: tag, kind: scalar}] }
-  - { name: kmap_dump, id: 54, returns: value }
-  - { name: kmap_dump_all, id: 55, returns: value }
+  - name: sched_ticks
+    id: 47
+    returns: value
+    doc: |
+      Returns the current global timer tick count (monotonic scheduler ticks).
+  - name: proc_count
+    id: 48
+    returns: value
+    doc: |
+      Returns the number of currently active processes.
+  - name: sched_ready_count
+    id: 49
+    returns: value
+    doc: |
+      Returns the number of processes in the ready queue. (WARP backend returns 0 as
+      a stub; the wasm3 backend returns the live ready count.)
+  - name: sched_cpu_count
+    id: 50
+    returns: value
+    doc: |
+      Returns the number of scheduler CPUs (SMP core count) baked into the running
+      kernel.
+  - name: physmem_stats
+    id: 51
+    returns: status
+    doc: |
+      Fill the wasmos_physmem_stats_t at `out` with a physical-memory snapshot
+      (total and free bytes as seen by the kernel page-frame allocator). Returns 0
+      on success, -1 if the buffer offset is invalid.
+    params:
+      - { name: out, kind: out, c_type: "wasmos_physmem_stats_t*" }
+  - name: kernel_runtime
+    id: 52
+    returns: value
+    doc: |
+      Returns 0=wasm3, 1=WARP. Compile-time constant baked into the kernel.
+  - name: debug_mark
+    id: 53
+    returns: status
+    doc: |
+      Emit a debug marker (tag value `tag` plus the current PID) to the kernel trace
+      log. Returns 0. (WARP backend is a no-op stub; the wasm3 backend writes the
+      trace.)
+    params:
+      - { name: tag, kind: scalar }
+  - name: kmap_dump
+    id: 54
+    returns: value
+    doc: |
+      Dump the calling process's user page-table kernel mappings to the kernel log
+      and verify no low-half slots remain for ring-3 contexts. Returns 0 on success,
+      -1 on error or verification failure. (WARP backend is a no-op stub returning
+      0.)
+  - name: kmap_dump_all
+    id: 55
+    returns: value
+    doc: |
+      Dump the user page-table kernel mappings for every active process to the
+      kernel log, verifying no low-half slots for ring-3 contexts. Returns 0 if all
+      contexts pass, -1 if any fail. (WARP backend is a no-op stub returning 0.)
 
   # --- initfs ---------------------------------------------------------------
-  - { name: initfs_entry_count, id: 56, returns: value }
-  - { name: initfs_entry_name, id: 57, returns: value, params: [{name: index, kind: scalar}, {name: out, kind: out, len: out_len}, {name: out_len, kind: scalar}] }
-  - { name: initfs_entry_size, id: 58, returns: value, params: [{name: index, kind: scalar}] }
-  - { name: initfs_entry_copy, id: 59, returns: value, params: [{name: index, kind: scalar}, {name: out, kind: out, len: len}, {name: len, kind: scalar}, {name: offset, kind: scalar}] }
+  - name: initfs_entry_count
+    id: 56
+    returns: value
+    doc: |
+      Return the number of entries in the boot initramfs (initfs). Returns the entry
+      count, or (uint32_t)-1 if the initfs is absent or its header is invalid.
+  - name: initfs_entry_name
+    id: 57
+    returns: value
+    doc: |
+      Copy the NUL-terminated path of initfs entry `index` into guest memory at
+      out_off, truncated to out_len-1 bytes. Returns the written name length, or
+      (uint32_t)-1 if the entry does not exist or the buffer offset is invalid.
+    params:
+      - { name: index, kind: scalar }
+      - { name: out, kind: out, len: out_len }
+      - { name: out_len, kind: scalar }
+  - name: initfs_entry_size
+    id: 58
+    returns: value
+    doc: |
+      Return the byte size of initfs entry `index`. Returns the size, or
+      (uint32_t)-1 if the entry does not exist.
+    params:
+      - { name: index, kind: scalar }
+  - name: initfs_entry_copy
+    id: 59
+    returns: value
+    doc: |
+      Copy up to len bytes of initfs entry `index` starting at byte `offset` into
+      guest memory at out_off, clamping a trailing chunk to the remaining bytes.
+      Returns the number of bytes copied (0 when offset is at or past end), or
+      (uint32_t)-1 on invalid index/len/offset, missing entry, or bad buffer offset.
+    params:
+      - { name: index, kind: scalar }
+      - { name: out, kind: out, len: len }
+      - { name: len, kind: scalar }
+      - { name: offset, kind: scalar }
 
   # --- DMA (borrow-based) ---------------------------------------------------
-  - { name: dma_map_borrow, id: 60, returns: value, params: [{name: borrow_id, kind: handle}, {name: offset, kind: scalar}, {name: length, kind: scalar}, {name: flags, kind: scalar}] }
-  - { name: dma_sync_borrow, id: 61, returns: status, params: [{name: borrow_id, kind: handle}, {name: offset, kind: scalar}, {name: length, kind: scalar}, {name: op, kind: scalar}] }
-  - { name: dma_unmap_borrow, id: 62, returns: status, params: [{name: borrow_id, kind: handle}] }
+  - name: dma_map_borrow
+    id: 60
+    returns: value
+    doc: |
+      Maps a `length`-byte, `offset`-based range of the caller's borrowed buffer
+      `borrow_id` for device DMA in direction `flags` (which must be non-zero and a
+      subset of the borrow's rights); returns the device DMA address
+      (0..0x7FFFFFFF). On failure returns a negative WASMOS_DMA_STATUS_* code
+      (INVALID for bad args, DENY for context/borrow/mapping denial, UNAVAILABLE
+      when the address exceeds the signed-32-bit device window).
+    params:
+      - { name: borrow_id, kind: handle }
+      - { name: offset, kind: scalar }
+      - { name: length, kind: scalar }
+      - { name: flags, kind: scalar }
+  - name: dma_sync_borrow
+    id: 61
+    returns: status
+    doc: |
+      Synchronizes the DMA mapping of borrowed buffer `borrow_id` over the
+      `offset`/`length` range (cache coherency for the transfer; `op` direction is
+      accepted but not distinguished). Returns WASMOS_DMA_STATUS_OK (0) on success,
+      otherwise a negative WASMOS_DMA_STATUS_* code (INVALID for a bad borrow_id,
+      DENY when the borrow/mapping cannot be resolved or the sync fails).
+    params:
+      - { name: borrow_id, kind: handle }
+      - { name: offset, kind: scalar }
+      - { name: length, kind: scalar }
+      - { name: op, kind: scalar }
+  - name: dma_unmap_borrow
+    id: 62
+    returns: status
+    doc: |
+      Unmaps the DMA mapping of borrowed buffer `borrow_id`, tearing down the device
+      mapping established by dma_map_borrow. Returns WASMOS_DMA_STATUS_OK (0) on
+      success, otherwise a negative WASMOS_DMA_STATUS_* code (INVALID for a bad
+      borrow_id, DENY when the borrow/mapping cannot be resolved or the unmap
+      fails).
+    params:
+      - { name: borrow_id, kind: handle }
 
-  - { name: phys_map, id: 63, returns: status, params: [{name: phys_lo, kind: scalar}, {name: phys_hi, kind: scalar}, {name: size, kind: scalar}, {name: wasm_offset, kind: ptr, wasm3: i32}] }
+  - name: phys_map
+    id: 63
+    returns: status
+    doc: |
+      Map a physical address range into WASM linear memory at wasm_offset.
+      phys_lo/phys_hi form a 64-bit physical address; size and wasm_offset must
+      be page-aligned (multiples of 4096). Requires the mmio.map capability.
+    params:
+      - { name: phys_lo, kind: scalar }
+      - { name: phys_hi, kind: scalar }
+      - { name: size, kind: scalar }
+      - { name: wasm_offset, kind: ptr, wasm3: i32 }
 
   # --- proc info ------------------------------------------------------------
-  - { name: proc_info, id: 64, returns: value, params: [{name: index, kind: scalar}, {name: buf, kind: out, len: buf_len}, {name: buf_len, kind: scalar}] }
-  - { name: proc_info_ex, id: 65, returns: value, params: [{name: index, kind: scalar}, {name: buf, kind: out, len: buf_len}, {name: buf_len, kind: scalar}, {name: parent, kind: out}] }
-  - { name: proc_info_stats, id: 66, returns: value, params: [{name: index, kind: scalar}, {name: buf, kind: out, len: buf_len}, {name: buf_len, kind: scalar}, {name: parent, kind: out}, {name: stats, kind: out}] }
+  - name: proc_info
+    id: 64
+    returns: value
+    doc: |
+      Look up the process at enumeration `index`; write its NUL-terminated name into
+      the guest buffer at `buf_off` (capacity `buf_len`, truncated to fit). Returns
+      the process PID, or -1 if `index` is out of range or the buffer is invalid.
+    params:
+      - { name: index, kind: scalar }
+      - { name: buf, kind: out, len: buf_len }
+      - { name: buf_len, kind: scalar }
+  - name: proc_info_ex
+    id: 65
+    returns: value
+    doc: |
+      Like proc_info but also writes the parent PID as a u32 into `parent_off`.
+      Writes the process name into `buf_off`/`buf_len` (truncated to fit) and
+      returns the process PID; returns -1 if `index` is out of range or either
+      buffer is invalid.
+    params:
+      - { name: index, kind: scalar }
+      - { name: buf, kind: out, len: buf_len }
+      - { name: buf_len, kind: scalar }
+      - { name: parent, kind: out }
+  - name: proc_info_stats
+    id: 66
+    returns: value
+    doc: |
+      Extended process enumeration for entry `index`: writes the name into
+      `buf_off`/`buf_len` (truncated), the parent PID (u32) into `parent_off`, and a
+      full stats record into `stats_off` (state, block_reason, runtime_tag[8],
+      thread_count, live_thread_count, current_tid, context_id, cpu_ticks,
+      vm_total_bytes, thread_kstack_total_bytes, heap_committed_bytes,
+      rss_est_bytes, last_cpu). Returns the process PID, or -1 if `index` is out of
+      range or any buffer is invalid.
+    params:
+      - { name: index, kind: scalar }
+      - { name: buf, kind: out, len: buf_len }
+      - { name: buf_len, kind: scalar }
+      - { name: parent, kind: out }
+      - { name: stats, kind: out }
 
-  - { name: xfer_buffer_borrow, id: 67, returns: value, params: [{name: grantee, kind: handle}, {name: buffer_id, kind: handle}, {name: flags, kind: scalar}] }
-  - { name: xfer_buffer_release, id: 68, returns: status, params: [{name: buffer_id, kind: handle}] }
-  - { name: sched_cpu_stats, id: 69, returns: status, params: [{name: cpu_id, kind: scalar}, {name: out, kind: out}] }
+  - name: xfer_buffer_borrow
+    id: 67
+    returns: value
+    doc: |
+      OWNER assigns `flags` rights over `buffer_id` to the context that owns
+      `grantee_endpoint`; returns the grantee's borrow_id.
+    params:
+      - { name: grantee, kind: handle }
+      - { name: buffer_id, kind: handle }
+      - { name: flags, kind: scalar }
+  - name: xfer_buffer_release
+    id: 68
+    returns: status
+    doc: |
+      Owner-only release of transfer buffer `buffer_id`, dropping the owner's
+      acquisition and its backing. Returns XFER_BUFFER_OK (0) on success, otherwise
+      a negative XFER_BUFFER_ERR_* code.
+    params:
+      - { name: buffer_id, kind: handle }
+  - name: sched_cpu_stats
+    id: 69
+    returns: status
+    doc: |
+      Fill the caller's buffer at `out_off` with a per-CPU stats record for CPU
+      `cpu_id` (ready_count, running_pid, steal_count, dispatch_count, last_pid).
+      Returns 0 on success, or -1 if `cpu_id` is out of range or the buffer offset
+      is invalid.
+    params:
+      - { name: cpu_id, kind: scalar }
+      - { name: out, kind: out }
 
   # --- threads --------------------------------------------------------------
-  - { name: thread_create, id: 70, returns: value, params: [{name: entry, kind: buf, wasm3: i32}, {name: arg0, kind: scalar}, {name: arg1, kind: scalar}, {name: flags, kind: scalar}] }
-  - { name: thread_yield, id: 71, returns: status }
-  - { name: thread_exit, id: 72, returns: status, params: [{name: status, kind: scalar}] }
-  - { name: thread_join, id: 73, returns: value, params: [{name: tid, kind: handle}] }
-  - { name: thread_detach, id: 74, returns: status, params: [{name: tid, kind: handle}] }
+  - name: thread_create
+    id: 70
+    returns: value
+    doc: |
+      Spawn a new VM thread in the calling process running the exported function
+      whose NUL-terminated name is at `entry_off` (scanned within 64 bytes); when
+      `flags & 1`, `arg0` and `arg1` are passed as the two thread arguments. Returns
+      the new TID, or -1 on invalid name/offset or spawn failure.
+    params:
+      - { name: entry, kind: buf, wasm3: i32 }
+      - { name: arg0, kind: scalar }
+      - { name: arg1, kind: scalar }
+      - { name: flags, kind: scalar }
+  - name: thread_yield
+    id: 71
+    returns: status
+    doc: |
+      Yield the calling thread's CPU (YIELDED state) to the scheduler. Returns 0.
+  - name: thread_exit
+    id: 72
+    returns: status
+    doc: |
+      Terminate the calling thread with exit code `status`; records the status and
+      yields as THREAD_EXITED. Returns -1 if the process lookup fails, otherwise
+      does not return normally.
+    params:
+      - { name: status, kind: scalar }
+  - name: thread_join
+    id: 73
+    returns: value
+    doc: |
+      Wait for thread `tid` in the calling process to finish and return its exit
+      status. If the thread is still running the caller blocks (returns 0 and is
+      resumed later); returns -1 on error (no such process/thread).
+    params:
+      - { name: tid, kind: handle }
+  - name: thread_detach
+    id: 74
+    returns: status
+    doc: |
+      Detach thread `tid` in the calling process so it is reaped automatically and
+      cannot be joined. Returns the underlying detach result (0 on success, non-zero
+      on failure), or -1 if the process lookup fails.
+    params:
+      - { name: tid, kind: handle }
 
   # --- shmem ----------------------------------------------------------------
-  - { name: shmem_create, id: 75, returns: value, params: [{name: pages, kind: scalar}, {name: flags, kind: scalar}] }
-  - { name: shmem_grant, id: 76, returns: status, params: [{name: id, kind: handle}, {name: target_pid, kind: handle}] }
-  - { name: shmem_revoke, id: 77, returns: status, params: [{name: id, kind: handle}, {name: target_pid, kind: handle}] }
-  - { name: shmem_map, id: 78, returns: status, params: [{name: id, kind: handle}, {name: wasm_off, kind: ptr, wasm3: i32}, {name: size, kind: scalar}] }
-  - { name: shmem_map_auto, id: 79, returns: value, params: [{name: id, kind: handle}, {name: size, kind: scalar}] }
-  - { name: shmem_flush, id: 80, returns: status, params: [{name: id, kind: handle}, {name: wasm_off, kind: buf, len: size, wasm3: i32}, {name: size, kind: scalar}] }
-  - { name: shmem_refresh, id: 81, returns: status, params: [{name: id, kind: handle}, {name: wasm_off, kind: out, len: size, wasm3: i32}, {name: size, kind: scalar}] }
-  - { name: shmem_unmap, id: 82, returns: status, params: [{name: id, kind: handle}] }
+  - name: shmem_create
+    id: 75
+    returns: value
+    doc: |
+      Shared memory API: shmem_create allocates pages of shared memory and
+      returns an id; shmem_grant/revoke control which PIDs may map it;
+      shmem_map/map_auto map the region into WASM linear memory;
+      flush/refresh synchronise dirty regions between processes.
+    params:
+      - { name: pages, kind: scalar }
+      - { name: flags, kind: scalar }
+  - name: shmem_grant
+    id: 76
+    returns: status
+    doc: |
+      Grants the caller's shared-memory region `id` to the process `target_pid`
+      (resolved to its context); gated by the caller's DMA capability. Returns the
+      mm_shared_grant result (0 on success) or (uint32_t)-1 on bad arguments,
+      missing capability/context, or an unknown target.
+    params:
+      - { name: id, kind: handle }
+      - { name: target_pid, kind: handle }
+  - name: shmem_revoke
+    id: 77
+    returns: status
+    doc: |
+      Revokes a prior grant of the caller's shared-memory region `id` from process
+      `target_pid`; gated by the caller's DMA capability. Returns the
+      mm_shared_revoke result (0 on success) or (uint32_t)-1 on bad arguments,
+      missing capability/context, or an unknown target.
+    params:
+      - { name: id, kind: handle }
+      - { name: target_pid, kind: handle }
+  - name: shmem_map
+    id: 78
+    returns: status
+    doc: |
+      On success wasmos_shmem_map/_auto return the mapped guest offset (>= 0).  On
+      failure they return a negative SHMEM_ERR_* reason code (see
+      drivers/include/wasmos_driver_abi.h) rather than a blanket -1, so callers can
+      report why a map failed.
+    params:
+      - { name: id, kind: handle }
+      - { name: wasm_off, kind: ptr, wasm3: i32 }
+      - { name: size, kind: scalar }
+  - name: shmem_map_auto
+    id: 79
+    returns: value
+    doc: |
+      Overlays shared-memory region `id` into the caller's WASM linear memory at an
+      automatically chosen page-aligned window of `size` bytes (must be non-zero,
+      page-aligned, and at least the region's size); gated by the caller's DMA
+      capability. On success returns the mapped guest offset (>= 0); on failure a
+      negative SHMEM_ERR_* reason code (BAD_ARGS, NO_CAP, BAD_ID, BAD_SIZE,
+      NO_WINDOW, MAP).
+    params:
+      - { name: id, kind: handle }
+      - { name: size, kind: scalar }
+  - name: shmem_flush
+    id: 80
+    returns: status
+    doc: |
+      Pushes `size` bytes from the caller's WASM linear memory at `wasm_off` into
+      the backing physical pages of shared-memory region `id` (local-to-shared
+      copy); gated by the caller's DMA capability and bounded by the region size.
+      Returns 0 on success, or (uint32_t)-1 on bad arguments, missing
+      capability/context, unknown/unbacked id, oversize, or an out-of-bounds linear
+      window.
+    params:
+      - { name: id, kind: handle }
+      - { name: wasm_off, kind: buf, len: size, wasm3: i32 }
+      - { name: size, kind: scalar }
+  - name: shmem_refresh
+    id: 81
+    returns: status
+    doc: |
+      Pulls `size` bytes from the backing physical pages of shared-memory region
+      `id` into the caller's WASM linear memory at `wasm_off` (shared-to-local copy
+      into an already-mapped window); gated by the caller's DMA capability and
+      bounded by the region size. Returns 0 on success, or (uint32_t)-1 on bad
+      arguments, missing capability/context, unknown/unbacked id, oversize, or an
+      out-of-bounds linear window.
+    params:
+      - { name: id, kind: handle }
+      - { name: wasm_off, kind: out, len: size, wasm3: i32 }
+      - { name: size, kind: scalar }
+  - name: shmem_unmap
+    id: 82
+    returns: status
+    doc: |
+      Removes the caller's overlay of shared-memory region `id` from linear memory,
+      restoring the original linear window, untracking the mapping, and releasing
+      the caller's retain on the region. Returns the mm_shared_release result (0 on
+      success) or (uint32_t)-1 on a bad id, missing context, or a failed window
+      restore.
+    params:
+      - { name: id, kind: handle }
 
   # --- irq ------------------------------------------------------------------
-  - { name: irq_route_ipc, id: 83, returns: status, params: [{name: irq_line, kind: scalar}, {name: endpoint, kind: handle}] }
-  - { name: irq_ack, id: 84, returns: status, params: [{name: irq_line, kind: scalar}] }
-  - { name: irq_unroute, id: 85, returns: status, params: [{name: irq_line, kind: scalar}] }
+  - name: irq_route_ipc
+    id: 83
+    returns: status
+    doc: |
+      Route hardware IRQ line `irq_line` so its interrupts are delivered as IPC to
+      `endpoint` for the calling context. Returns the registration result (0 on
+      success), or (uint32_t)-1 if the caller lacks the IRQ capability or has no
+      context. Requires the irq.route capability.
+    params:
+      - { name: irq_line, kind: scalar }
+      - { name: endpoint, kind: handle }
+  - name: irq_ack
+    id: 84
+    returns: status
+    doc: |
+      Acknowledge/re-arm IRQ line `irq_line` for the calling context after handling
+      a delivered interrupt. Returns the ack result, or (uint32_t)-1 if the caller
+      has no context. No capability is enforced.
+    params:
+      - { name: irq_line, kind: scalar }
+  - name: irq_unroute
+    id: 85
+    returns: status
+    doc: |
+      Remove the calling context's routing of IRQ line `irq_line`. Returns the
+      unregister result, or (uint32_t)-1 if the caller lacks the IRQ capability or
+      has no context. Requires the irq.route capability.
+    params:
+      - { name: irq_line, kind: scalar }
 
   # --- serial / input / framebuffer ----------------------------------------
-  - { name: serial_register, id: 86, returns: status, params: [{name: endpoint, kind: handle}] }
-  - { name: input_push, id: 87, returns: status, params: [{name: ch, kind: scalar}] }
-  - { name: input_read, id: 88, returns: value }
-  - { name: framebuffer_info, id: 89, returns: status, params: [{name: out, kind: out, len: len, wasm3: i32}, {name: len, kind: scalar}] }
-  - { name: framebuffer_map, id: 90, returns: status, params: [{name: wasm_off, kind: ptr, wasm3: i32}, {name: size, kind: scalar}] }
-  - { name: framebuffer_pixel, id: 91, returns: status, params: [{name: x, kind: scalar}, {name: y, kind: scalar}, {name: color, kind: scalar}] }
+  - name: serial_register
+    id: 86
+    returns: status
+    doc: |
+      Register the context that owns `endpoint` as the remote serial backend driver
+      (resetting remote serial state); returns 0 on success, -1 if `endpoint` is
+      IPC_ENDPOINT_NONE, unowned, or kernel-owned.
+    params:
+      - { name: endpoint, kind: handle }
+  - name: input_push
+    id: 87
+    returns: status
+    doc: |
+      vt keyboard input integration
+    params:
+      - { name: ch, kind: scalar }
+  - name: input_read
+    id: 88
+    returns: value
+    doc: |
+      Read one byte from the serial input ring (input pushed by the keyboard/serial
+      front end). Returns the byte value (0..255), or (uint32_t)-1 if the ring is
+      empty.
+  - name: framebuffer_info
+    id: 89
+    returns: status
+    doc: |
+      Copy the GOP framebuffer descriptor (framebuffer_info_t: base, size, width,
+      height, stride, format) into guest memory at out_off (len must be at least
+      sizeof the struct). Returns 0 on success, (uint32_t)-1 if no framebuffer is
+      available or the buffer is too small/invalid.
+    params:
+      - { name: out, kind: out, len: len, wasm3: i32, c_type: "wasmos_framebuffer_info_t*" }
+      - { name: len, kind: scalar }
+  - name: framebuffer_map
+    id: 90
+    returns: status
+    doc: |
+      Map the GOP framebuffer's physical pages into guest linear memory at wasm_off;
+      size must be page-aligned, non-zero, and at least the framebuffer size, and
+      both wasm_off and the resolved host address must be page-aligned. Returns 0 on
+      success, (uint32_t)-1 on bad size/alignment, missing framebuffer, or mapping
+      failure. Requires the MMIO capability.
+    params:
+      - { name: wasm_off, kind: ptr, wasm3: i32 }
+      - { name: size, kind: scalar }
+  - name: framebuffer_pixel
+    id: 91
+    returns: status
+    doc: |
+      Write 32-bit `color` to the framebuffer pixel at (x, y). Returns 0 on success,
+      (uint32_t)-1 if the framebuffer is uninitialized or (x, y) is out of bounds.
+    params:
+      - { name: x, kind: scalar }
+      - { name: y, kind: scalar }
+      - { name: color, kind: scalar }
 
   # --- boot config / early log / env ---------------------------------------
-  - { name: boot_config_size, id: 92, returns: value }
-  - { name: boot_config_copy, id: 93, returns: status, params: [{name: buf, kind: out, len: len}, {name: len, kind: scalar}, {name: offset, kind: scalar}] }
-  - { name: initfs_find_path, id: 94, returns: value, params: [{name: path, kind: buf, len: path_len}, {name: path_len, kind: scalar}] }
-  - { name: early_log_size, id: 95, returns: value }
-  - { name: early_log_copy, id: 96, returns: status, params: [{name: buf, kind: out, len: len}, {name: len, kind: scalar}, {name: offset, kind: scalar}] }
-  - { name: env_get, id: 97, returns: value, params: [{name: name, kind: buf, len: name_len}, {name: name_len, kind: scalar}, {name: buf, kind: out, len: buf_len}, {name: buf_len, kind: scalar}] }
-  - { name: env_set, id: 98, returns: status, params: [{name: name, kind: buf, len: name_len}, {name: name_len, kind: scalar}, {name: val, kind: buf, len: val_len}, {name: val_len, kind: scalar}] }
-  - { name: env_unset, id: 99, returns: status, params: [{name: name, kind: buf, len: name_len}, {name: name_len, kind: scalar}] }
+  - name: boot_config_size
+    id: 92
+    returns: value
+    doc: |
+      Return the byte size of the kernel boot-config blob. Returns the size, or
+      (uint32_t)-1 if no boot config is present.
+  - name: boot_config_copy
+    id: 93
+    returns: status
+    doc: |
+      Copy len bytes of the boot-config blob starting at byte `offset` into guest
+      memory at buf_off. Returns 0 on success (0 also for len==0), (uint32_t)-1 if
+      the range exceeds the blob or the buffer offset is invalid.
+    params:
+      - { name: buf, kind: out, len: len }
+      - { name: len, kind: scalar }
+      - { name: offset, kind: scalar }
+  - name: initfs_find_path
+    id: 94
+    returns: value
+    doc: |
+      Look up an initfs entry by path at path_off (path_len bytes, < 112), stripping
+      leading '/' and an optional 'init/' prefix and matching either the full stored
+      path or its basename case-insensitively. Returns the entry index, or
+      (uint32_t)-1 on invalid/empty path or no match.
+    params:
+      - { name: path, kind: buf, len: path_len }
+      - { name: path_len, kind: scalar }
+  - name: early_log_size
+    id: 95
+    returns: value
+    doc: |
+      Return the number of bytes currently held in the kernel early-log buffer.
+  - name: early_log_copy
+    id: 96
+    returns: status
+    doc: |
+      Copy len bytes of the early-log buffer starting at byte `offset` into guest
+      memory at buf_off. Returns 0 on success (0 also for len==0), (uint32_t)-1 if
+      the range exceeds the log or the buffer offset is invalid.
+    params:
+      - { name: buf, kind: out, len: len }
+      - { name: len, kind: scalar }
+      - { name: offset, kind: scalar }
+  - name: env_get
+    id: 97
+    returns: value
+    doc: |
+      Look up the process-environment variable named by name_off/name_len (name_len
+      < key max) and copy its value into guest memory at buf_off, truncated to
+      buf_len-1 bytes and NUL-terminated. Returns the written value length, or
+      (uint32_t)-1 on invalid args, oversized name, or a missing variable.
+    params:
+      - { name: name, kind: buf, len: name_len, c_type: "const char*" }
+      - { name: name_len, kind: scalar }
+      - { name: buf, kind: out, len: buf_len, c_type: "char*" }
+      - { name: buf_len, kind: scalar }
+  - name: env_set
+    id: 98
+    returns: status
+    doc: |
+      Set the process-environment variable named by name_off/name_len to the value
+      at val_off/val_len (val_len may be 0), creating a new slot or overwriting an
+      existing one. Returns 0 on success, (uint32_t)-1 on invalid/oversized name or
+      value, bad buffer offset, or when the table is full.
+    params:
+      - { name: name, kind: buf, len: name_len, c_type: "const char*" }
+      - { name: name_len, kind: scalar }
+      - { name: val, kind: buf, len: val_len, c_type: "const char*" }
+      - { name: val_len, kind: scalar }
+  - name: env_unset
+    id: 99
+    returns: status
+    doc: |
+      Remove the process-environment variable named by name_off/name_len, freeing
+      its slot if present. Always returns 0, including for invalid names or a
+      variable that does not exist.
+    params:
+      - { name: name, kind: buf, len: name_len, c_type: "const char*" }
+      - { name: name_len, kind: scalar }
 
   - { name: abort, id: 100, module: env, returns: void, params: [{name: msg, kind: scalar}, {name: file, kind: scalar}, {name: line, kind: scalar}, {name: column, kind: scalar}] }
 
-  - { name: region_alloc, id: 101, returns: value, params: [{name: pages, kind: scalar}, {name: cache_policy, kind: scalar}, {name: out_phys, kind: out, wasm3: i32}] }
-  - { name: irq_configure, id: 102, returns: status, params: [{name: irq_line, kind: scalar}, {name: flags, kind: scalar}] }
-  - { name: ipc_select_wait_timeout, id: 103, returns: value, wasm3_fn: wasmos_sys_select_wait_timeout, params: [{name: sel, kind: handle}, {name: timeout_ms, kind: scalar}] }
+  - name: region_alloc
+    id: 101
+    returns: value
+    doc: |
+      Allocate a driver-owned, pinned, contiguous DMA region below 2 GiB and map it
+      into the caller's WASM linear memory (a real page remap, so writes reach the
+      exact physical pages the device DMAs).  cache_policy is WASMOS_REGION_CACHE_*.
+      Returns the wasm linmem offset of the mapped region (>= 0) and writes the u64
+      physical base to *out_phys, or a negative WASMOS_DMA_STATUS_* on failure.
+      Requires CAP_DMA_BUFFER and an approved DMA window covering the allocation.
+      out_phys must point into the caller's linear memory.
+    params:
+      - { name: pages, kind: scalar }
+      - { name: cache_policy, kind: scalar }
+      - { name: out_phys, kind: out, wasm3: i32, c_type: "uint64_t*" }
+  - name: irq_configure
+    id: 102
+    returns: status
+    doc: |
+      Configure an IRQ line's trigger/polarity (flags: WASMOS_IRQ_TRIGGER_LEVEL /
+      WASMOS_IRQ_POLARITY_LOW). Used by pci-bus to mark PCI INTx lines level/low.
+      Requires the IRQ capability.
+    params:
+      - { name: irq_line, kind: scalar }
+      - { name: flags, kind: scalar }
+  - name: ipc_select_wait_timeout
+    id: 103
+    returns: value
+    wasm3_fn: wasmos_sys_select_wait_timeout
+    doc: |
+      Like ipc_select_wait but bounded by timeout_ms (0 = wait forever). Returns the
+      ready endpoint ID (>= 0), -1 on timeout/spurious wake (poll and retry), or -2
+      on error. Lets a driver poll (e.g. RX rings) on a timer without busy-yielding.
+    params:
+      - { name: sel, kind: handle }
+      - { name: timeout_ms, kind: scalar }
 
   # --- buffer acquire / (un)borrow / reborrow ------------------------------
-  - { name: xfer_buffer_acquire, id: 104, returns: value, params: [{name: minimum_size, kind: scalar}] }
-  - { name: xfer_buffer_unborrow, id: 105, returns: status, params: [{name: borrow_id, kind: handle}] }
-  - { name: buffer_acquire, id: 106, returns: value, params: [{name: kind, kind: scalar}, {name: minimum_size, kind: scalar}] }
-  - { name: buffer_unborrow, id: 107, returns: status, params: [{name: borrow_id, kind: handle}] }
-  - { name: xfer_buffer_reborrow, id: 108, returns: value, params: [{name: grantee, kind: handle}, {name: borrow_id, kind: handle}, {name: flags, kind: scalar}] }
-  - { name: buffer_reborrow, id: 109, returns: value, params: [{name: kind, kind: scalar}, {name: grantee, kind: handle}, {name: borrow_id, kind: handle}, {name: flags, kind: scalar}] }
-  - { name: spawn_info_buffer, id: 110, returns: value }
+  - name: xfer_buffer_acquire
+    id: 104
+    returns: value
+    doc: |
+      Object/owner/borrow xfer-buffer ABI (stateless, id-based, capability-style).
+
+      The OWNER acquires a buffer (buffer_id, held like an fd) and drives all
+      access grants: it calls `borrow` to assign a named grantee endpoint specific
+      rights, receiving a borrow_id that it hands to the grantee. A grantee may
+      `reborrow` its own borrow to a further context with rights that are a subset
+      of its own. `release` is owner-only and requires all borrows gone first;
+      `unborrow` drops one (re)borrow and cascade-revokes anything reborrowed from
+      it. read/write name the object by buffer_id (the kernel checks the caller is
+      the owner or a grantee with the required right).
+
+      All return >= 0 on success (buffer_id / borrow_id / device address / 0) and a
+      negative xfer_buffer_status_t code on failure.
+    params:
+      - { name: minimum_size, kind: scalar }
+  - name: xfer_buffer_unborrow
+    id: 105
+    returns: status
+    doc: |
+      Grantor-side drop of a transfer-buffer (re)borrow named by `borrow_id`; the
+      lender revokes a grant it previously extended (resolved via the lent set, not
+      the borrowed set). Returns XFER_BUFFER_OK (0) on success, otherwise a negative
+      XFER_BUFFER_ERR_* code (INACTIVE_BORROW, INVALID_CONTEXT).
+    params:
+      - { name: borrow_id, kind: handle }
+  - name: buffer_acquire
+    id: 106
+    returns: value
+    doc: |
+      OWNER acquires a new buffer of `kind` (only BUFFER_KIND_TRANSFER is supported)
+      sized at least `minimum_size` bytes. Returns the positive `buffer_id` on
+      success, otherwise a negative XFER_BUFFER_ERR_* code (INVALID_KIND,
+      INVALID_SIZE, INVALID_CONTEXT, NO_ACCESS).
+    params:
+      - { name: kind, kind: scalar }
+      - { name: minimum_size, kind: scalar }
+  - name: buffer_unborrow
+    id: 107
+    returns: status
+    doc: |
+      Grantor-side drop of a (re)borrow named by `borrow_id`: the lender revokes a
+      grant it previously extended (resolved via the lent set). Returns
+      XFER_BUFFER_OK (0) on success, otherwise a negative XFER_BUFFER_ERR_* code
+      (INACTIVE_BORROW, INVALID_CONTEXT).
+    params:
+      - { name: borrow_id, kind: handle }
+  - name: xfer_buffer_reborrow
+    id: 108
+    returns: value
+    doc: |
+      A grantee sub-grants its own `borrow_id` (rights ⊆ its own) to the context
+      that owns `grantee_endpoint`; returns the downstream borrow_id.
+    params:
+      - { name: grantee, kind: handle }
+      - { name: borrow_id, kind: handle }
+      - { name: flags, kind: scalar }
+  - name: buffer_reborrow
+    id: 109
+    returns: value
+    doc: |
+      A current BORROWER sub-grants its own borrow `borrow_id` of `kind` to the
+      context that owns `grantee_ep`, narrowing rights to `flags` (non-zero, within
+      0x3); returns the new grantee's borrow_id. On failure returns a negative
+      XFER_BUFFER_ERR_* code (INVALID_KIND, INACTIVE_BORROW, INVALID_FLAGS,
+      INVALID_CONTEXT).
+    params:
+      - { name: kind, kind: scalar }
+      - { name: grantee, kind: handle }
+      - { name: borrow_id, kind: handle }
+      - { name: flags, kind: scalar }
+  - name: spawn_info_buffer
+    id: 110
+    returns: value
+    doc: |
+      Returns this process's spawn-info buffer_id (holding its wasmos_spawn_info_t
+      header + args blob), or 0 if none. The buffer is owned by this process.
 
   # --- WASI (WARP-only) -----------------------------------------------------
-  - { name: proc_exit, id: 111, module: wasi_snapshot_preview1, runtimes: [warp], returns: void, params: [{name: code, kind: scalar}] }
+  - name: proc_exit
+    id: 111
+    module: wasi_snapshot_preview1
+    runtimes: [warp]
+    returns: void
+    doc: |
+      Terminate the calling process with exit code `code`; records the exit status
+      and yields as EXITED so the process is reaped. Does not return to the caller.
+    params:
+      - { name: code, kind: scalar }
   - { name: random_get, id: 112, module: wasi_snapshot_preview1, runtimes: [warp], returns: status, params: [{name: buf, kind: out, len: len}, {name: len, kind: scalar}] }
 
   # --- late additions -------------------------------------------------------
-  - { name: block_buffer_map, id: 113, returns: value }
-  - { name: xfer_buffer_map, id: 114, returns: value, params: [{name: buffer_id, kind: handle}] }
-  - { name: xfer_buffer_unmap, id: 115, returns: status, params: [{name: buffer_id, kind: handle}] }
-  - { name: klog_register_ring, id: 116, returns: status, params: [{name: id, kind: handle}] }
+  - name: block_buffer_map
+    id: 113
+    returns: value
+    doc: |
+      Zero-copy: overlay the caller's own 8 KiB block buffer into linear memory and
+      return its wasm offset (or -1).  Idempotent.  The mapped bytes alias the same
+      physical pages named by wasmos_block_buffer_phys(), so a peer block server
+      filling the buffer by phys is visible here without a block_buffer_copy.
+  - name: xfer_buffer_map
+    id: 114
+    returns: value
+    doc: |
+      Overlay an OWNED xfer-buffer's backing into this process's WASM linear memory
+      (zero-copy, same pinned-window baseline as shmem/block_buffer_map). Returns the
+      linmem byte offset (>= 0) of the mapping; the buffer's bytes are then directly
+      addressable at that offset for the socket-ring fast path. Idempotent per
+      buffer_id. unmap tears the window down; always unmap before releasing the
+      buffer so the linmem window never outlives its backing. Negative on failure.
+    params:
+      - { name: buffer_id, kind: handle }
+  - name: xfer_buffer_unmap
+    id: 115
+    returns: status
+    doc: |
+      Tears down the owner's zero-copy overlay of transfer buffer `buffer_id` from
+      linear memory: clears the overlay PTEs and releases the phys refcount taken at
+      map time. Returns 0 (also 0 when nothing was mapped); returns -1 on an invalid
+      buffer_id or context.
+    params:
+      - { name: buffer_id, kind: handle }
+  - name: klog_register_ring
+    id: 116
+    returns: status
+    doc: |
+      klog ring (VT I/O multiplexer, phase 4): register a BUFFER_KIND_TRANSFER
+      xfer-buffer the caller acquired + mapped + wasmos_ringbuf_init'd as the kernel
+      klog ring, so serial_write publishes klog text into it for the VT to drain
+      into vt-1.  Returns 0 on success, -1 on a bad/foreign buffer id.
+    params:
+      - { name: id, kind: handle }
 
 # Extra links outside the ring-3/AOT id space (no `id`).
 extra:

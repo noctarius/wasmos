@@ -5,350 +5,730 @@ package wasmos
 
 import _ "unsafe" // required by //go:wasmimport
 
+// Create a new IPC endpoint owned by the calling context; returns the new
+// endpoint ID, or -1 on failure.
 //go:wasmimport wasmos ipc_create_endpoint
 func IpcCreateEndpoint() int32
 
+// Return the context ID that owns `endpoint`; returns the owner context ID, or
+// -1 if the endpoint is invalid or has no owner.
 //go:wasmimport wasmos ipc_endpoint_owner
 func IpcEndpointOwner(a0 int32) int32
 
+// Send an IPC message to endpoint `dest` carrying `type`, `req_id`, declared
+// sender `src`, and payload words `a0..a3`; returns 0 (IPC_OK) on success,
+// negative on failure.
 //go:wasmimport wasmos ipc_send
 func IpcSend(a0 int32, a1 int32, a2 int32, a3 int32, a4 int32, a5 int32, a6 int32, a7 int32) int32
 
+// Block until a message arrives on `endpoint`, recording it as the caller's
+// last-received message (yielding on spurious wake); returns 1 on success, -1 on
+// invalid endpoint or receive error.
 //go:wasmimport wasmos ipc_select_one
 func IpcSelectOne(a0 int32) int32
 
+// Alias of ipc_select_one (identical ABI): block until a message arrives on
+// `endpoint` and record it as the last-received message; returns 1 on success,
+// -1 on error.
 // alias of ipc_select_one
 //go:wasmimport wasmos ipc_recv
 func IpcRecv(a0 int32) int32
 
+// Non-blocking dequeue of one pending message on `endpoint` into the caller's
+// last-received slot; returns 1 if a message was received, 0 if the queue was
+// empty, -1 on invalid endpoint or error.
 //go:wasmimport wasmos ipc_drain
 func IpcDrain(a0 int32) int32
 
+// Alias of ipc_drain (identical ABI): non-blocking dequeue of one message on
+// `endpoint` into the last-received slot; returns 1 if received, 0 if empty, -1
+// on error.
 // alias of ipc_drain
 //go:wasmimport wasmos ipc_try_recv
 func IpcTryRecv(a0 int32) int32
 
+// Send a contentless notification to `endpoint`; returns 0 (IPC_OK) on success,
+// negative on failure.
 //go:wasmimport wasmos ipc_notify
 func IpcNotify(a0 int32) int32
 
+// Read field `field` of the caller's last-received message, where 0=type,
+// 1=request_id, 2=arg0, 3=arg1, 4=source, 5=destination, 6=arg2, 7=arg3; returns
+// the field value, or -1 if no valid message is stored or `field` is out of
+// range.
 //go:wasmimport wasmos ipc_last_field
 func IpcLastField(a0 int32) int32
 
+// Read a single byte from the serial console into guest memory at buf_offset
+// (len is the buffer capacity, must be > 0). Returns 1 when a byte was stored, 0
+// or a negative rc when no byte is available, and (uint32_t)-1 on invalid length
+// or bad buffer offset.
 //go:wasmimport wasmos console_read
 func ConsoleRead(a0 int32, a1 int32) int32
 
+// Write len bytes from guest memory at buf_offset to the kernel log, emitted in
+// NUL-terminated 127-byte chunks. Returns 0 on success, (uint32_t)-1 on
+// non-positive len or bad buffer offset.
 //go:wasmimport wasmos console_write
 func ConsoleWrite(a0 int32, a1 int32) int32
 
+// Terminate the calling process with exit code `code`; records the exit status
+// and yields as EXITED so the process is reaped. Does not return to the caller.
 //go:wasmimport wasmos proc_exit
 func ProcExit(a0 int32) int32
 
+// Mark the calling process as ready (initialization complete), signaling any
+// waiter that the service has finished starting. Returns 0.
 //go:wasmimport wasmos proc_notify_ready
 func ProcNotifyReady() int32
 
+// Voluntarily yield the CPU (YIELDED state), letting the scheduler run another
+// ready process. Returns 0.
 //go:wasmimport wasmos sched_yield
 func SchedYield() int32
 
+// Returns the PID of the calling process.
 //go:wasmimport wasmos sched_current_pid
 func SchedCurrentPid() int32
 
+// Returns the thread ID (TID) of the calling thread within the current process.
 //go:wasmimport wasmos thread_gettid
 func ThreadGettid() int32
 
+// Block the calling context while the WASM linear-memory word at offset
+// `addr_off` still equals `val`, for up to `timeout_ms` milliseconds (0 = wait
+// indefinitely); returns 0 when woken or when the word already differs, -1 on
+// timeout or invalid offset, and negative IPC_ERR_FULL when the futex table is
+// exhausted.
 //go:wasmimport wasmos futex_wait
 func FutexWait(a0 int32, a1 int32, a2 int32) int32
 
+// Wake up to `count` contexts waiting on the WASM linear-memory word at offset
+// `addr_off`; returns the number of contexts actually woken (0 if none were
+// waiting or the offset is invalid).
 //go:wasmimport wasmos futex_wake
 func FutexWake(a0 int32, a1 int32) int32
 
+// Select sets: block until any one of N endpoints is ready.
 //go:wasmimport wasmos ipc_select_create
 func IpcSelectCreate() int32
 
+// Add endpoint `ep_id` to select set `sel_id` for the calling context; returns 0
+// on success, -1 on failure.
 //go:wasmimport wasmos ipc_select_add
 func IpcSelectAdd(a0 int32, a1 int32) int32
 
+// Block until any watched endpoint is ready; returns the ready endpoint ID.
 //go:wasmimport wasmos ipc_select_wait
 func IpcSelectWait(a0 int32) int32
 
+// Destroy the select set `sel_id` owned by the calling context; always returns 0
+// (returns -1 only if the caller's context cannot be resolved).
 //go:wasmimport wasmos ipc_select_destroy
 func IpcSelectDestroy(a0 int32) int32
 
+// Create a new IPC select set for the calling context and return its select-set
+// ID, or -1 on failure. Alias of ipc_select_create (identical ABI).
 // alias of ipc_select_create
 //go:wasmimport wasmos sys_select_create
 func SysSelectCreate() int32
 
+// Add endpoint `ep_id` to select set `sel_id` for the calling context; returns 0
+// on success, -1 on failure. Alias of ipc_select_add (identical ABI).
 // alias of ipc_select_add
 //go:wasmimport wasmos sys_select_add
 func SysSelectAdd(a0 int32, a1 int32) int32
 
+// Block until any endpoint in select set `sel_id` becomes ready and return that
+// endpoint ID, retrying internally on spurious wake; returns -1 on error. Alias
+// of ipc_select_wait (identical ABI).
 // alias of ipc_select_wait
 //go:wasmimport wasmos sys_select_wait
 func SysSelectWait(a0 int32) int32
 
+// Destroy the select set `sel_id` owned by the calling context; returns 0 (or -1
+// if the caller's context cannot be resolved). Alias of ipc_select_destroy
+// (identical ABI).
 // alias of ipc_select_destroy
 //go:wasmimport wasmos sys_select_destroy
 func SysSelectDestroy(a0 int32) int32
 
+// Returns the fixed capacity in bytes of the transfer-buffer kind
+// (BUFFER_KIND_TRANSFER); the maximum extent addressable by
+// xfer_buffer_read/write and the size backing an acquired transfer buffer.
 //go:wasmimport wasmos xfer_buffer_size
 func XferBufferSize() int32
 
+// Returns the IPC endpoint of the registered filesystem service as known to the
+// process manager. Returns the endpoint id on success, or (uint32_t)-1 when no
+// FS endpoint is registered (IPC_ENDPOINT_NONE).
 //go:wasmimport wasmos fs_endpoint
 func FsEndpoint() int32
 
+// Copies `len` bytes from transfer buffer `buffer_id` starting at `offset` into
+// the caller's WASM linear memory at `ptr_off`; requires the caller (owner or
+// borrower) to hold the READ right. Returns XFER_BUFFER_OK (0) on success, 0 for
+// a zero `len`, otherwise a negative XFER_BUFFER_ERR_* code (NOT_FOUND,
+// INVALID_CONTEXT, NO_ACCESS, RANGE).
 //go:wasmimport wasmos xfer_buffer_read
 func XferBufferRead(a0 int32, a1 int32, a2 int32, a3 int32) int32
 
+// Copies `len` bytes from the caller's WASM linear memory at `ptr_off` into
+// transfer buffer `buffer_id` starting at `offset`; requires the caller (owner
+// or borrower) to hold the WRITE right. Returns XFER_BUFFER_OK (0) on success, 0
+// for a zero `len`, otherwise a negative XFER_BUFFER_ERR_* code (NOT_FOUND,
+// INVALID_CONTEXT, NO_ACCESS, RANGE).
 //go:wasmimport wasmos xfer_buffer_write
 func XferBufferWrite(a0 int32, a1 int32, a2 int32, a3 int32) int32
 
+// OWNER assigns `flags` rights (bitmask of BUFFER_BORROW_READ/WRITE, must be
+// non-zero and within 0x3) over buffer `buffer_id` of `kind` to the context that
+// owns `grantee_ep`; returns the grantee's borrow_id. On failure returns a
+// negative XFER_BUFFER_ERR_* code (INVALID_KIND, NOT_FOUND, INVALID_FLAGS,
+// INVALID_CONTEXT, NO_ACCESS).
 //go:wasmimport wasmos buffer_borrow
 func BufferBorrow(a0 int32, a1 int32, a2 int32, a3 int32) int32
 
+// OWNER releases buffer `buffer_id` of `kind` (only BUFFER_KIND_TRANSFER
+// supported), dropping its acquisition and backing; caller must be the owning
+// context. Returns XFER_BUFFER_OK (0) on success, otherwise a negative
+// XFER_BUFFER_ERR_* code (INVALID_KIND, NOT_FOUND, INVALID_CONTEXT, NO_ACCESS).
 //go:wasmimport wasmos buffer_release
 func BufferRelease(a0 int32, a1 int32) int32
 
+// Returns the physical address of the calling process's per-process 8 KiB
+// (2-page) block buffer, allocating it below 512 MiB on first use (kernel
+// higher-half identity window and 32-bit ATA DMA range). Returns the u32
+// physical address on success, or (uint32_t)-1 on failure.
 //go:wasmimport wasmos block_buffer_phys
 func BlockBufferPhys() int32
 
+// Copies `len` bytes out of the block buffer identified by physical address
+// `phys` starting at `offset` into the caller's WASM linear memory at `ptr_off`.
+// Returns 0 on success, or (uint32_t)-1 if the slot is unknown, the range
+// exceeds the 8 KiB buffer, or `ptr_off`/`len` is out of linear-memory bounds.
 //go:wasmimport wasmos block_buffer_copy
 func BlockBufferCopy(a0 int32, a1 int32, a2 int32, a3 int32) int32
 
+// Copies `len` bytes from the caller's WASM linear memory at `ptr_off` into the
+// block buffer identified by physical address `phys` starting at `offset`.
+// Returns 0 on success, or (uint32_t)-1 if the slot is unknown, the range
+// exceeds the 8 KiB buffer, or `ptr_off`/`len` is out of linear-memory bounds.
 //go:wasmimport wasmos block_buffer_write
 func BlockBufferWrite(a0 int32, a1 int32, a2 int32, a3 int32) int32
 
+// Read a byte from x86 I/O port `port` (0..0xFFFF). Returns the byte value, or
+// (uint32_t)-1 if the port is out of range or the caller lacks access. Requires
+// the io.port capability for that port.
 //go:wasmimport wasmos io_in8
 func IoIn8(a0 int32) int32
 
+// Read a 16-bit word from x86 I/O port `port` (0..0xFFFF). Returns the word
+// value, or (uint32_t)-1 if the port is out of range or the caller lacks access.
+// Requires the io.port capability for that port.
 //go:wasmimport wasmos io_in16
 func IoIn16(a0 int32) int32
 
+// Read a 32-bit dword from x86 I/O port `port` (0..0xFFFF). Returns the dword
+// value, or (uint32_t)-1 if the port is out of range or the caller lacks access.
+// Requires the io.port capability for that port.
 //go:wasmimport wasmos io_in32
 func IoIn32(a0 int32) int32
 
+// Write byte `val` to x86 I/O port `port` (0..0xFFFF). Returns 0 on success,
+// (uint32_t)-1 if the port is out of range or the caller lacks access. Requires
+// the io.port capability for that port.
 //go:wasmimport wasmos io_out8
 func IoOut8(a0 int32, a1 int32) int32
 
+// Write 16-bit word `val` to x86 I/O port `port` (0..0xFFFF). Returns 0 on
+// success, (uint32_t)-1 if the port is out of range or the caller lacks access.
+// Requires the io.port capability for that port.
 //go:wasmimport wasmos io_out16
 func IoOut16(a0 int32, a1 int32) int32
 
+// Write 32-bit dword `val` to x86 I/O port `port` (0..0xFFFF). Returns 0 on
+// success, (uint32_t)-1 if the port is out of range or the caller lacks access.
+// Requires the io.port capability for that port.
 //go:wasmimport wasmos io_out32
 func IoOut32(a0 int32, a1 int32) int32
 
+// Issue a short I/O-port delay (a dummy write to port 0x80). Returns 0 on
+// success, (uint32_t)-1 if the caller lacks access. Requires the io.port
+// capability (checked against port 0x80).
 //go:wasmimport wasmos io_wait
 func IoWait() int32
 
+// Copy the ACPI RSDP blob into guest memory at out_off (bounded by max_len) and
+// store its byte length at out_len_off. Returns 0 on success, (uint32_t)-1 if no
+// RSDP is present, the blob exceeds max_len, or the buffer offsets are invalid.
 //go:wasmimport wasmos acpi_rsdp_info
 func AcpiRsdpInfo(a0 int32, a1 int32, a2 int32) int32
 
+// Copy the NUL-terminated name of boot module `index` into guest memory at
+// out_off, truncated to out_len-1 bytes. Returns the written name length, or
+// (uint32_t)-1 if there is no boot info, index is out of range, or the buffer
+// offset is invalid.
 //go:wasmimport wasmos boot_module_name
 func BootModuleName(a0 int32, a1 int32, a2 int32) int32
 
+// Touch `len` bytes of guest linear memory starting at `ptr_off` with volatile
+// reads to fault them in / synchronize the mapping. Returns 0 (0 immediately if
+// `len` is 0), or -1 if the offset/length is out of bounds.
 //go:wasmimport wasmos sync_user_read
 func SyncUserRead(a0 int32, a1 int32) int32
 
+// Power off the machine. Requires the caller to hold the system-control
+// capability; returns -1 if the capability check fails, otherwise does not
+// return.
 //go:wasmimport wasmos system_halt
 func SystemHalt() int32
 
+// Reboot the machine. Requires the caller to hold the system-control capability;
+// returns -1 if the capability check fails, otherwise does not return.
 //go:wasmimport wasmos system_reboot
 func SystemReboot() int32
 
+// Returns the current global timer tick count (monotonic scheduler ticks).
 //go:wasmimport wasmos sched_ticks
 func SchedTicks() int32
 
+// Returns the number of currently active processes.
 //go:wasmimport wasmos proc_count
 func ProcCount() int32
 
+// Returns the number of processes in the ready queue. (WARP backend returns 0 as
+// a stub; the wasm3 backend returns the live ready count.)
 //go:wasmimport wasmos sched_ready_count
 func SchedReadyCount() int32
 
+// Returns the number of scheduler CPUs (SMP core count) baked into the running
+// kernel.
 //go:wasmimport wasmos sched_cpu_count
 func SchedCpuCount() int32
 
+// Fill the wasmos_physmem_stats_t at `out` with a physical-memory snapshot
+// (total and free bytes as seen by the kernel page-frame allocator). Returns 0
+// on success, -1 if the buffer offset is invalid.
 //go:wasmimport wasmos physmem_stats
 func PhysmemStats(a0 int32) int32
 
+// Returns 0=wasm3, 1=WARP. Compile-time constant baked into the kernel.
 //go:wasmimport wasmos kernel_runtime
 func KernelRuntime() int32
 
+// Emit a debug marker (tag value `tag` plus the current PID) to the kernel trace
+// log. Returns 0. (WARP backend is a no-op stub; the wasm3 backend writes the
+// trace.)
 //go:wasmimport wasmos debug_mark
 func DebugMark(a0 int32) int32
 
+// Dump the calling process's user page-table kernel mappings to the kernel log
+// and verify no low-half slots remain for ring-3 contexts. Returns 0 on success,
+// -1 on error or verification failure. (WARP backend is a no-op stub returning
+// 0.)
 //go:wasmimport wasmos kmap_dump
 func KmapDump() int32
 
+// Dump the user page-table kernel mappings for every active process to the
+// kernel log, verifying no low-half slots for ring-3 contexts. Returns 0 if all
+// contexts pass, -1 if any fail. (WARP backend is a no-op stub returning 0.)
 //go:wasmimport wasmos kmap_dump_all
 func KmapDumpAll() int32
 
+// Return the number of entries in the boot initramfs (initfs). Returns the entry
+// count, or (uint32_t)-1 if the initfs is absent or its header is invalid.
 //go:wasmimport wasmos initfs_entry_count
 func InitfsEntryCount() int32
 
+// Copy the NUL-terminated path of initfs entry `index` into guest memory at
+// out_off, truncated to out_len-1 bytes. Returns the written name length, or
+// (uint32_t)-1 if the entry does not exist or the buffer offset is invalid.
 //go:wasmimport wasmos initfs_entry_name
 func InitfsEntryName(a0 int32, a1 int32, a2 int32) int32
 
+// Return the byte size of initfs entry `index`. Returns the size, or
+// (uint32_t)-1 if the entry does not exist.
 //go:wasmimport wasmos initfs_entry_size
 func InitfsEntrySize(a0 int32) int32
 
+// Copy up to len bytes of initfs entry `index` starting at byte `offset` into
+// guest memory at out_off, clamping a trailing chunk to the remaining bytes.
+// Returns the number of bytes copied (0 when offset is at or past end), or
+// (uint32_t)-1 on invalid index/len/offset, missing entry, or bad buffer offset.
 //go:wasmimport wasmos initfs_entry_copy
 func InitfsEntryCopy(a0 int32, a1 int32, a2 int32, a3 int32) int32
 
+// Maps a `length`-byte, `offset`-based range of the caller's borrowed buffer
+// `borrow_id` for device DMA in direction `flags` (which must be non-zero and a
+// subset of the borrow's rights); returns the device DMA address
+// (0..0x7FFFFFFF). On failure returns a negative WASMOS_DMA_STATUS_* code
+// (INVALID for bad args, DENY for context/borrow/mapping denial, UNAVAILABLE
+// when the address exceeds the signed-32-bit device window).
 //go:wasmimport wasmos dma_map_borrow
 func DmaMapBorrow(a0 int32, a1 int32, a2 int32, a3 int32) int32
 
+// Synchronizes the DMA mapping of borrowed buffer `borrow_id` over the
+// `offset`/`length` range (cache coherency for the transfer; `op` direction is
+// accepted but not distinguished). Returns WASMOS_DMA_STATUS_OK (0) on success,
+// otherwise a negative WASMOS_DMA_STATUS_* code (INVALID for a bad borrow_id,
+// DENY when the borrow/mapping cannot be resolved or the sync fails).
 //go:wasmimport wasmos dma_sync_borrow
 func DmaSyncBorrow(a0 int32, a1 int32, a2 int32, a3 int32) int32
 
+// Unmaps the DMA mapping of borrowed buffer `borrow_id`, tearing down the device
+// mapping established by dma_map_borrow. Returns WASMOS_DMA_STATUS_OK (0) on
+// success, otherwise a negative WASMOS_DMA_STATUS_* code (INVALID for a bad
+// borrow_id, DENY when the borrow/mapping cannot be resolved or the unmap
+// fails).
 //go:wasmimport wasmos dma_unmap_borrow
 func DmaUnmapBorrow(a0 int32) int32
 
+// Map a physical address range into WASM linear memory at wasm_offset.
+// phys_lo/phys_hi form a 64-bit physical address; size and wasm_offset must
+// be page-aligned (multiples of 4096). Requires the mmio.map capability.
 //go:wasmimport wasmos phys_map
 func PhysMap(a0 int32, a1 int32, a2 int32, a3 int32) int32
 
+// Look up the process at enumeration `index`; write its NUL-terminated name into
+// the guest buffer at `buf_off` (capacity `buf_len`, truncated to fit). Returns
+// the process PID, or -1 if `index` is out of range or the buffer is invalid.
 //go:wasmimport wasmos proc_info
 func ProcInfo(a0 int32, a1 int32, a2 int32) int32
 
+// Like proc_info but also writes the parent PID as a u32 into `parent_off`.
+// Writes the process name into `buf_off`/`buf_len` (truncated to fit) and
+// returns the process PID; returns -1 if `index` is out of range or either
+// buffer is invalid.
 //go:wasmimport wasmos proc_info_ex
 func ProcInfoEx(a0 int32, a1 int32, a2 int32, a3 int32) int32
 
+// Extended process enumeration for entry `index`: writes the name into
+// `buf_off`/`buf_len` (truncated), the parent PID (u32) into `parent_off`, and a
+// full stats record into `stats_off` (state, block_reason, runtime_tag[8],
+// thread_count, live_thread_count, current_tid, context_id, cpu_ticks,
+// vm_total_bytes, thread_kstack_total_bytes, heap_committed_bytes,
+// rss_est_bytes, last_cpu). Returns the process PID, or -1 if `index` is out of
+// range or any buffer is invalid.
 //go:wasmimport wasmos proc_info_stats
 func ProcInfoStats(a0 int32, a1 int32, a2 int32, a3 int32, a4 int32) int32
 
+// OWNER assigns `flags` rights over `buffer_id` to the context that owns
+// `grantee_endpoint`; returns the grantee's borrow_id.
 //go:wasmimport wasmos xfer_buffer_borrow
 func XferBufferBorrow(a0 int32, a1 int32, a2 int32) int32
 
+// Owner-only release of transfer buffer `buffer_id`, dropping the owner's
+// acquisition and its backing. Returns XFER_BUFFER_OK (0) on success, otherwise
+// a negative XFER_BUFFER_ERR_* code.
 //go:wasmimport wasmos xfer_buffer_release
 func XferBufferRelease(a0 int32) int32
 
+// Fill the caller's buffer at `out_off` with a per-CPU stats record for CPU
+// `cpu_id` (ready_count, running_pid, steal_count, dispatch_count, last_pid).
+// Returns 0 on success, or -1 if `cpu_id` is out of range or the buffer offset
+// is invalid.
 //go:wasmimport wasmos sched_cpu_stats
 func SchedCpuStats(a0 int32, a1 int32) int32
 
+// Spawn a new VM thread in the calling process running the exported function
+// whose NUL-terminated name is at `entry_off` (scanned within 64 bytes); when
+// `flags & 1`, `arg0` and `arg1` are passed as the two thread arguments. Returns
+// the new TID, or -1 on invalid name/offset or spawn failure.
 //go:wasmimport wasmos thread_create
 func ThreadCreate(a0 int32, a1 int32, a2 int32, a3 int32) int32
 
+// Yield the calling thread's CPU (YIELDED state) to the scheduler. Returns 0.
 //go:wasmimport wasmos thread_yield
 func ThreadYield() int32
 
+// Terminate the calling thread with exit code `status`; records the status and
+// yields as THREAD_EXITED. Returns -1 if the process lookup fails, otherwise
+// does not return normally.
 //go:wasmimport wasmos thread_exit
 func ThreadExit(a0 int32) int32
 
+// Wait for thread `tid` in the calling process to finish and return its exit
+// status. If the thread is still running the caller blocks (returns 0 and is
+// resumed later); returns -1 on error (no such process/thread).
 //go:wasmimport wasmos thread_join
 func ThreadJoin(a0 int32) int32
 
+// Detach thread `tid` in the calling process so it is reaped automatically and
+// cannot be joined. Returns the underlying detach result (0 on success, non-zero
+// on failure), or -1 if the process lookup fails.
 //go:wasmimport wasmos thread_detach
 func ThreadDetach(a0 int32) int32
 
+// Shared memory API: shmem_create allocates pages of shared memory and
+// returns an id; shmem_grant/revoke control which PIDs may map it;
+// shmem_map/map_auto map the region into WASM linear memory;
+// flush/refresh synchronise dirty regions between processes.
 //go:wasmimport wasmos shmem_create
 func ShmemCreate(a0 int32, a1 int32) int32
 
+// Grants the caller's shared-memory region `id` to the process `target_pid`
+// (resolved to its context); gated by the caller's DMA capability. Returns the
+// mm_shared_grant result (0 on success) or (uint32_t)-1 on bad arguments,
+// missing capability/context, or an unknown target.
 //go:wasmimport wasmos shmem_grant
 func ShmemGrant(a0 int32, a1 int32) int32
 
+// Revokes a prior grant of the caller's shared-memory region `id` from process
+// `target_pid`; gated by the caller's DMA capability. Returns the
+// mm_shared_revoke result (0 on success) or (uint32_t)-1 on bad arguments,
+// missing capability/context, or an unknown target.
 //go:wasmimport wasmos shmem_revoke
 func ShmemRevoke(a0 int32, a1 int32) int32
 
+// On success wasmos_shmem_map/_auto return the mapped guest offset (>= 0).  On
+// failure they return a negative SHMEM_ERR_* reason code (see
+// drivers/include/wasmos_driver_abi.h) rather than a blanket -1, so callers can
+// report why a map failed.
 //go:wasmimport wasmos shmem_map
 func ShmemMap(a0 int32, a1 int32, a2 int32) int32
 
+// Overlays shared-memory region `id` into the caller's WASM linear memory at an
+// automatically chosen page-aligned window of `size` bytes (must be non-zero,
+// page-aligned, and at least the region's size); gated by the caller's DMA
+// capability. On success returns the mapped guest offset (>= 0); on failure a
+// negative SHMEM_ERR_* reason code (BAD_ARGS, NO_CAP, BAD_ID, BAD_SIZE,
+// NO_WINDOW, MAP).
 //go:wasmimport wasmos shmem_map_auto
 func ShmemMapAuto(a0 int32, a1 int32) int32
 
+// Pushes `size` bytes from the caller's WASM linear memory at `wasm_off` into
+// the backing physical pages of shared-memory region `id` (local-to-shared
+// copy); gated by the caller's DMA capability and bounded by the region size.
+// Returns 0 on success, or (uint32_t)-1 on bad arguments, missing
+// capability/context, unknown/unbacked id, oversize, or an out-of-bounds linear
+// window.
 //go:wasmimport wasmos shmem_flush
 func ShmemFlush(a0 int32, a1 int32, a2 int32) int32
 
+// Pulls `size` bytes from the backing physical pages of shared-memory region
+// `id` into the caller's WASM linear memory at `wasm_off` (shared-to-local copy
+// into an already-mapped window); gated by the caller's DMA capability and
+// bounded by the region size. Returns 0 on success, or (uint32_t)-1 on bad
+// arguments, missing capability/context, unknown/unbacked id, oversize, or an
+// out-of-bounds linear window.
 //go:wasmimport wasmos shmem_refresh
 func ShmemRefresh(a0 int32, a1 int32, a2 int32) int32
 
+// Removes the caller's overlay of shared-memory region `id` from linear memory,
+// restoring the original linear window, untracking the mapping, and releasing
+// the caller's retain on the region. Returns the mm_shared_release result (0 on
+// success) or (uint32_t)-1 on a bad id, missing context, or a failed window
+// restore.
 //go:wasmimport wasmos shmem_unmap
 func ShmemUnmap(a0 int32) int32
 
+// Route hardware IRQ line `irq_line` so its interrupts are delivered as IPC to
+// `endpoint` for the calling context. Returns the registration result (0 on
+// success), or (uint32_t)-1 if the caller lacks the IRQ capability or has no
+// context. Requires the irq.route capability.
 //go:wasmimport wasmos irq_route_ipc
 func IrqRouteIpc(a0 int32, a1 int32) int32
 
+// Acknowledge/re-arm IRQ line `irq_line` for the calling context after handling
+// a delivered interrupt. Returns the ack result, or (uint32_t)-1 if the caller
+// has no context. No capability is enforced.
 //go:wasmimport wasmos irq_ack
 func IrqAck(a0 int32) int32
 
+// Remove the calling context's routing of IRQ line `irq_line`. Returns the
+// unregister result, or (uint32_t)-1 if the caller lacks the IRQ capability or
+// has no context. Requires the irq.route capability.
 //go:wasmimport wasmos irq_unroute
 func IrqUnroute(a0 int32) int32
 
+// Register the context that owns `endpoint` as the remote serial backend driver
+// (resetting remote serial state); returns 0 on success, -1 if `endpoint` is
+// IPC_ENDPOINT_NONE, unowned, or kernel-owned.
 //go:wasmimport wasmos serial_register
 func SerialRegister(a0 int32) int32
 
+// vt keyboard input integration
 //go:wasmimport wasmos input_push
 func InputPush(a0 int32) int32
 
+// Read one byte from the serial input ring (input pushed by the keyboard/serial
+// front end). Returns the byte value (0..255), or (uint32_t)-1 if the ring is
+// empty.
 //go:wasmimport wasmos input_read
 func InputRead() int32
 
+// Copy the GOP framebuffer descriptor (framebuffer_info_t: base, size, width,
+// height, stride, format) into guest memory at out_off (len must be at least
+// sizeof the struct). Returns 0 on success, (uint32_t)-1 if no framebuffer is
+// available or the buffer is too small/invalid.
 //go:wasmimport wasmos framebuffer_info
 func FramebufferInfo(a0 int32, a1 int32) int32
 
+// Map the GOP framebuffer's physical pages into guest linear memory at wasm_off;
+// size must be page-aligned, non-zero, and at least the framebuffer size, and
+// both wasm_off and the resolved host address must be page-aligned. Returns 0 on
+// success, (uint32_t)-1 on bad size/alignment, missing framebuffer, or mapping
+// failure. Requires the MMIO capability.
 //go:wasmimport wasmos framebuffer_map
 func FramebufferMap(a0 int32, a1 int32) int32
 
+// Write 32-bit `color` to the framebuffer pixel at (x, y). Returns 0 on success,
+// (uint32_t)-1 if the framebuffer is uninitialized or (x, y) is out of bounds.
 //go:wasmimport wasmos framebuffer_pixel
 func FramebufferPixel(a0 int32, a1 int32, a2 int32) int32
 
+// Return the byte size of the kernel boot-config blob. Returns the size, or
+// (uint32_t)-1 if no boot config is present.
 //go:wasmimport wasmos boot_config_size
 func BootConfigSize() int32
 
+// Copy len bytes of the boot-config blob starting at byte `offset` into guest
+// memory at buf_off. Returns 0 on success (0 also for len==0), (uint32_t)-1 if
+// the range exceeds the blob or the buffer offset is invalid.
 //go:wasmimport wasmos boot_config_copy
 func BootConfigCopy(a0 int32, a1 int32, a2 int32) int32
 
+// Look up an initfs entry by path at path_off (path_len bytes, < 112), stripping
+// leading '/' and an optional 'init/' prefix and matching either the full stored
+// path or its basename case-insensitively. Returns the entry index, or
+// (uint32_t)-1 on invalid/empty path or no match.
 //go:wasmimport wasmos initfs_find_path
 func InitfsFindPath(a0 int32, a1 int32) int32
 
+// Return the number of bytes currently held in the kernel early-log buffer.
 //go:wasmimport wasmos early_log_size
 func EarlyLogSize() int32
 
+// Copy len bytes of the early-log buffer starting at byte `offset` into guest
+// memory at buf_off. Returns 0 on success (0 also for len==0), (uint32_t)-1 if
+// the range exceeds the log or the buffer offset is invalid.
 //go:wasmimport wasmos early_log_copy
 func EarlyLogCopy(a0 int32, a1 int32, a2 int32) int32
 
+// Look up the process-environment variable named by name_off/name_len (name_len
+// < key max) and copy its value into guest memory at buf_off, truncated to
+// buf_len-1 bytes and NUL-terminated. Returns the written value length, or
+// (uint32_t)-1 on invalid args, oversized name, or a missing variable.
 //go:wasmimport wasmos env_get
 func EnvGet(a0 int32, a1 int32, a2 int32, a3 int32) int32
 
+// Set the process-environment variable named by name_off/name_len to the value
+// at val_off/val_len (val_len may be 0), creating a new slot or overwriting an
+// existing one. Returns 0 on success, (uint32_t)-1 on invalid/oversized name or
+// value, bad buffer offset, or when the table is full.
 //go:wasmimport wasmos env_set
 func EnvSet(a0 int32, a1 int32, a2 int32, a3 int32) int32
 
+// Remove the process-environment variable named by name_off/name_len, freeing
+// its slot if present. Always returns 0, including for invalid names or a
+// variable that does not exist.
 //go:wasmimport wasmos env_unset
 func EnvUnset(a0 int32, a1 int32) int32
 
+// Allocate a driver-owned, pinned, contiguous DMA region below 2 GiB and map it
+// into the caller's WASM linear memory (a real page remap, so writes reach the
+// exact physical pages the device DMAs).  cache_policy is WASMOS_REGION_CACHE_*.
+// Returns the wasm linmem offset of the mapped region (>= 0) and writes the u64
+// physical base to *out_phys, or a negative WASMOS_DMA_STATUS_* on failure.
+// Requires CAP_DMA_BUFFER and an approved DMA window covering the allocation.
+// out_phys must point into the caller's linear memory.
 //go:wasmimport wasmos region_alloc
 func RegionAlloc(a0 int32, a1 int32, a2 int32) int32
 
+// Configure an IRQ line's trigger/polarity (flags: WASMOS_IRQ_TRIGGER_LEVEL /
+// WASMOS_IRQ_POLARITY_LOW). Used by pci-bus to mark PCI INTx lines level/low.
+// Requires the IRQ capability.
 //go:wasmimport wasmos irq_configure
 func IrqConfigure(a0 int32, a1 int32) int32
 
+// Like ipc_select_wait but bounded by timeout_ms (0 = wait forever). Returns the
+// ready endpoint ID (>= 0), -1 on timeout/spurious wake (poll and retry), or -2
+// on error. Lets a driver poll (e.g. RX rings) on a timer without busy-yielding.
 //go:wasmimport wasmos ipc_select_wait_timeout
 func IpcSelectWaitTimeout(a0 int32, a1 int32) int32
 
+// Object/owner/borrow xfer-buffer ABI (stateless, id-based, capability-style).
+//
+// The OWNER acquires a buffer (buffer_id, held like an fd) and drives all
+// access grants: it calls `borrow` to assign a named grantee endpoint specific
+// rights, receiving a borrow_id that it hands to the grantee. A grantee may
+// `reborrow` its own borrow to a further context with rights that are a subset
+// of its own. `release` is owner-only and requires all borrows gone first;
+// `unborrow` drops one (re)borrow and cascade-revokes anything reborrowed from
+// it. read/write name the object by buffer_id (the kernel checks the caller is
+// the owner or a grantee with the required right).
+//
+// All return >= 0 on success (buffer_id / borrow_id / device address / 0) and a
+// negative xfer_buffer_status_t code on failure.
 //go:wasmimport wasmos xfer_buffer_acquire
 func XferBufferAcquire(a0 int32) int32
 
+// Grantor-side drop of a transfer-buffer (re)borrow named by `borrow_id`; the
+// lender revokes a grant it previously extended (resolved via the lent set, not
+// the borrowed set). Returns XFER_BUFFER_OK (0) on success, otherwise a negative
+// XFER_BUFFER_ERR_* code (INACTIVE_BORROW, INVALID_CONTEXT).
 //go:wasmimport wasmos xfer_buffer_unborrow
 func XferBufferUnborrow(a0 int32) int32
 
+// OWNER acquires a new buffer of `kind` (only BUFFER_KIND_TRANSFER is supported)
+// sized at least `minimum_size` bytes. Returns the positive `buffer_id` on
+// success, otherwise a negative XFER_BUFFER_ERR_* code (INVALID_KIND,
+// INVALID_SIZE, INVALID_CONTEXT, NO_ACCESS).
 //go:wasmimport wasmos buffer_acquire
 func BufferAcquire(a0 int32, a1 int32) int32
 
+// Grantor-side drop of a (re)borrow named by `borrow_id`: the lender revokes a
+// grant it previously extended (resolved via the lent set). Returns
+// XFER_BUFFER_OK (0) on success, otherwise a negative XFER_BUFFER_ERR_* code
+// (INACTIVE_BORROW, INVALID_CONTEXT).
 //go:wasmimport wasmos buffer_unborrow
 func BufferUnborrow(a0 int32) int32
 
+// A grantee sub-grants its own `borrow_id` (rights ⊆ its own) to the context
+// that owns `grantee_endpoint`; returns the downstream borrow_id.
 //go:wasmimport wasmos xfer_buffer_reborrow
 func XferBufferReborrow(a0 int32, a1 int32, a2 int32) int32
 
+// A current BORROWER sub-grants its own borrow `borrow_id` of `kind` to the
+// context that owns `grantee_ep`, narrowing rights to `flags` (non-zero, within
+// 0x3); returns the new grantee's borrow_id. On failure returns a negative
+// XFER_BUFFER_ERR_* code (INVALID_KIND, INACTIVE_BORROW, INVALID_FLAGS,
+// INVALID_CONTEXT).
 //go:wasmimport wasmos buffer_reborrow
 func BufferReborrow(a0 int32, a1 int32, a2 int32, a3 int32) int32
 
+// Returns this process's spawn-info buffer_id (holding its wasmos_spawn_info_t
+// header + args blob), or 0 if none. The buffer is owned by this process.
 //go:wasmimport wasmos spawn_info_buffer
 func SpawnInfoBuffer() int32
 
+// Zero-copy: overlay the caller's own 8 KiB block buffer into linear memory and
+// return its wasm offset (or -1).  Idempotent.  The mapped bytes alias the same
+// physical pages named by wasmos_block_buffer_phys(), so a peer block server
+// filling the buffer by phys is visible here without a block_buffer_copy.
 //go:wasmimport wasmos block_buffer_map
 func BlockBufferMap() int32
 
+// Overlay an OWNED xfer-buffer's backing into this process's WASM linear memory
+// (zero-copy, same pinned-window baseline as shmem/block_buffer_map). Returns the
+// linmem byte offset (>= 0) of the mapping; the buffer's bytes are then directly
+// addressable at that offset for the socket-ring fast path. Idempotent per
+// buffer_id. unmap tears the window down; always unmap before releasing the
+// buffer so the linmem window never outlives its backing. Negative on failure.
 //go:wasmimport wasmos xfer_buffer_map
 func XferBufferMap(a0 int32) int32
 
+// Tears down the owner's zero-copy overlay of transfer buffer `buffer_id` from
+// linear memory: clears the overlay PTEs and releases the phys refcount taken at
+// map time. Returns 0 (also 0 when nothing was mapped); returns -1 on an invalid
+// buffer_id or context.
 //go:wasmimport wasmos xfer_buffer_unmap
 func XferBufferUnmap(a0 int32) int32
 
+// klog ring (VT I/O multiplexer, phase 4): register a BUFFER_KIND_TRANSFER
+// xfer-buffer the caller acquired + mapped + wasmos_ringbuf_init'd as the kernel
+// klog ring, so serial_write publishes klog text into it for the VT to drain
+// into vt-1.  Returns 0 on success, -1 on a bad/foreign buffer id.
 //go:wasmimport wasmos klog_register_ring
 func KlogRegisterRing(a0 int32) int32

@@ -54,6 +54,7 @@ WARP_OUT = os.path.join(GEN_DIR, "wasmos_symbols_warp.inc")
 WASM3_OUT = os.path.join(GEN_DIR, "wasmos_link_wasm3.inc")
 AOT_OUT = os.path.join(GEN_DIR, "wasmos_symbols_aot.inc")
 RING3_OUT = os.path.join(GEN_DIR, "wasmos_ring3_dispatch.inc")
+C_IMPORTS_OUT = os.path.join(GEN_DIR, "wasmos_imports.h")
 
 GEN_ROOT = os.path.join(REPO_ROOT, "abi", "generated")
 RUST_OUT = os.path.join(GEN_ROOT, "rust", "wasmos_imports.rs")
@@ -403,6 +404,61 @@ def _pascal(name):
     return "".join(p.capitalize() for p in name.split("_"))
 
 
+def _doc_block_c(text, indent=""):
+    """A `doc:` string as a C block comment (empty list if no doc)."""
+    if not text:
+        return []
+    lines = text.rstrip("\n").split("\n")
+    if len(lines) == 1:
+        return [f"{indent}/* {lines[0]} */"]
+    out = [f"{indent}/* {lines[0]}"]
+    out += [f"{indent} * {ln}".rstrip() for ln in lines[1:]]
+    out.append(f"{indent} */")
+    return out
+
+
+def _doc_lines(text, prefix):
+    """A `doc:` string as line comments with the given prefix (e.g. `///`, `//`)."""
+    if not text:
+        return []
+    return [f"{prefix} {ln}".rstrip() for ln in text.rstrip("\n").split("\n")]
+
+
+def emit_c_client(m):
+    """C guest import decls for the "wasmos" module. api.h #includes this after its
+    struct typedefs + the WASMOS_WASM_IMPORT duality macro. Param C types default
+    to int32_t (a wasm32 pointer crosses as an i32 offset); a param may override
+    with `c_type` to keep an ergonomic typed signature (const char*, a struct*,
+    uint64_t*). The native-only mutex_* pair and the toolchain-provided wasi/env
+    imports are declared elsewhere, not here."""
+    o = list(BANNER)
+    w = o.append
+    w("#ifndef WASMOS_GENERATED_CLIENT_IMPORTS_H")
+    w("#define WASMOS_GENERATED_CLIENT_IMPORTS_H")
+    w("/* Included by src/libc/include/wasmos/api.h AFTER <stdint.h>, the")
+    w(" * WASMOS_WASM_IMPORT macro (wasmos/imports.h), and the struct typedefs")
+    w(" * referenced below (wasmos_physmem_stats_t, wasmos_framebuffer_info_t). */")
+    w("")
+    for e in m.client_hostcalls():
+        o.extend(_doc_block_c(e.get("doc", "")))
+        ret = "void" if m.returns(e) == "void" else "int32_t"
+        t = m._target(e)
+        ps = t.get("params") or []
+        params = (
+            "void"
+            if not ps
+            else ", ".join(f"{p.get('c_type', 'int32_t')} {p['name']}" for p in ps)
+        )
+        w(
+            f'extern {ret} wasmos_{e["name"]}({params}) '
+            f'WASMOS_WASM_IMPORT("wasmos", "{e["name"]}");'
+        )
+    w("")
+    w("#endif /* WASMOS_GENERATED_CLIENT_IMPORTS_H */")
+    w("")
+    return "\n".join(o)
+
+
 def emit_rust(m):
     """Rust guest bindings — one extern block linking the "wasmos" import module.
     The fn name is the import name, so it must equal the host-call symbol."""
@@ -415,6 +471,7 @@ def emit_rust(m):
         'unsafe extern "C" {',
     ]
     for e in m.client_hostcalls():
+        o.extend(_doc_lines(e.get("doc", ""), "    ///"))
         params = ", ".join(f"a{i}: i32" for i in range(m.arity(e)))
         ret = "" if m.returns(e) == "void" else " -> i32"
         o.append(f"    pub fn {e['name']}({params}){ret};{m.client_note(e)}")
@@ -437,6 +494,7 @@ def emit_go(m):
     for e in m.client_hostcalls():
         params = ", ".join(f"a{i} int32" for i in range(m.arity(e)))
         ret = "" if m.returns(e) == "void" else " int32"
+        o.extend(_doc_lines(e.get("doc", ""), "//"))
         note = m.client_note(e)
         if note:
             o.append(note.strip())  # a clean "// …" line; keep //go: directive bare
@@ -452,6 +510,7 @@ def emit_zig(m):
     o = _line_banner()
     o += [""]
     for e in m.client_hostcalls():
+        o.extend(_doc_lines(e.get("doc", ""), "///"))
         params = ", ".join(f"a{i}: i32" for i in range(m.arity(e)))
         ret = "void" if m.returns(e) == "void" else "i32"
         o.append(
@@ -467,6 +526,7 @@ def emit_as(m):
     o = _line_banner()
     o += [""]
     for e in m.client_hostcalls():
+        o.extend(_doc_lines(e.get("doc", ""), "//"))
         params = ", ".join(f"a{i}: i32" for i in range(m.arity(e)))
         ret = "void" if m.returns(e) == "void" else "i32"
         o.append(f'@external("wasmos", "{e["name"]}")')
@@ -483,6 +543,7 @@ OUTPUTS = [
     (WASM3_OUT, emit_wasm3_links),
     (AOT_OUT, emit_aot_symbols),
     (RING3_OUT, emit_ring3_dispatch),
+    (C_IMPORTS_OUT, emit_c_client),
     (RUST_OUT, emit_rust),
     (GO_OUT, emit_go),
     (ZIG_OUT, emit_zig),

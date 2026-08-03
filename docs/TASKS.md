@@ -240,32 +240,37 @@ returns; `FS_ERR_*`/`PROC_*` ride IPC opcodes), so the migration depends on them
   All kernel-side + AOT host-call tables are now generated from the IDL. WARP
   `run-qemu-test` boots with "using AOT binary" (payloads rebind against the
   generated table).
-- [x] Phase 2c (client stubs): generate the guest import bindings for the four
-  languages that hand-roll them — `abi/generated/{rust,go,zig,assemblyscript}/wasmos_imports.*`
-  — every `wasmos`-module host call (incl. aliases) as its raw wasm ABI signature
-  (all params `i32`, `i32` return), idioms matched to the in-tree examples
-  (Rust `#[link(wasm_import_module)]`, Go `//go:wasmimport`, Zig `pub extern
-  "wasmos" … callconv(.c)`, AS `@external`). Each compile-verified with its real
-  toolchain (`zig ast-check`, `rustc --target wasm32 -Dwarnings`, `go vet`
-  `GOOS=wasip1`, `asc`) and wired into the `quality` `--check` guard. C is
-  deliberately NOT regenerated: `src/libc/include/wasmos/api.h` is a
-  hand-ergonomic surface (typed pointers, struct params like
-  `wasmos_physmem_stats_t*`, `_host` fn-name conventions, doc comments) whose
-  types are not in the language-neutral IDL — regenerating it would either break
-  ~112 call sites or force a full C type/fn-name/doc vocabulary into the IDL.
-  Instead `--verify-source` now guards it: every `WASMOS_WASM_IMPORT("wasmos", …)`
-  decl in `src/libc`/`src/libsys` must name a real IDL host call with a matching
-  arity, so `api.h` can never silently drift (found + removed a duplicate
-  `ipc_select_*` decl block; the native-vtable-only `mutex_try_lock`/`mutex_unlock`
-  pair is allow-listed pending the futex migration). The wasi/env-module calls
-  are toolchain-provided, not ours to declare. `--verify-source` is therefore
-  repurposed as the permanent hand-written-C-surface guard (not retired); the
-  swapped kernel tables self-skip, and `--check` guards the generated files.
-  (`dma_map_borrow` is a wrapper-body divergence, tracked separately under
-  Kernel — not a table swap. An ABI-version `static_assert` was dropped as
-  meaningless client-side: the guest has no second source of truth to assert the
-  count/version against — that check only makes sense kernel-side, where
-  `HC_COUNT` is itself generated.)
+- [x] Phase 2c (client stubs): generate the guest import bindings for **all five**
+  languages from the IDL — `abi/generated/{c/wasmos_imports.h,rust,go,zig,
+  assemblyscript}/wasmos_imports.*` — every `wasmos`-module host call (incl.
+  aliases) with its signature, idioms matched to the in-tree examples (C
+  `extern … WASMOS_WASM_IMPORT`, Rust `#[link(wasm_import_module)]`, Go
+  `//go:wasmimport`, Zig `pub extern "wasmos" … callconv(.c)`, AS `@external`).
+  Each compile-verified with its real toolchain (`zig ast-check`, `rustc --target
+  wasm32 -Dwarnings`, `go vet GOOS=wasip1`, `asc`, and a wasm32 `clang` compile of
+  `api.h`), all wired into the `quality` `--check` guard.
+  - C keeps its **ergonomic typed signatures** (`const char*`, `uint64_t*`,
+    struct pointers) via a per-param `c_type:` override in the IDL (default
+    `int32_t`, a wasm32 pointer being an i32 offset). `src/libc/include/wasmos/api.h`
+    is now just its struct typedefs + `#define`s + the two native-only `mutex_*`
+    decls + a relative `#include` of the generated header (relative-path include
+    avoids threading `-Iabi/generated/c` through every app/driver/service/test
+    compile that pulls in libc). The `mutex_try_lock`/`mutex_unlock` pair stays
+    hand-written because it is a driver_api vtable entry (native), not a WASM
+    host call — pending the futex migration.
+  - **Docs are single-sourced.** Each host call carries a `doc:` field in the IDL,
+    emitted as a comment into all five client stubs. Migrated the 17 legacy
+    `api.h` comments and authored the remaining ~80 from the wrapper bodies so
+    every call is documented in one place.
+  - `--verify-source` is repurposed as the permanent hand-written-C-surface guard
+    (not retired): every residual `WASMOS_WASM_IMPORT("wasmos", …)` decl in
+    `src/libc`/`src/libsys` must name a real IDL host call with a matching arity
+    (only the allow-listed `mutex_*` pair remains). The swapped kernel tables
+    self-skip; `--check` guards every generated file.
+  - (`dma_map_borrow` is a wrapper-body divergence, tracked separately under
+    Kernel — not a table swap. A client-side ABI-version `static_assert` was
+    dropped as meaningless: the guest has no second source of truth to assert
+    the count/version against.)
 - [ ] Phase 3: add `abi/opcodes.yaml` + generator producing the
   `wasmos_driver_abi.h` opcode enum, a runtime `opcode → name` table (feeds
   diagnostics), and the doc opcode tables; optionally typed future-returning

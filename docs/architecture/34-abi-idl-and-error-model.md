@@ -51,19 +51,23 @@ into per entry. Generates:
 - the WARP JIT `LINK("wasmos", …)` table entries,
 - the WARP ring-3 numbered dispatch case,
 - the WARP AOT symbol-table entry,
-- the guest import stubs for the four languages that hand-roll them —
-  `abi/generated/{rust,go,zig,assemblyscript}/wasmos_imports.*` (every
-  `wasmos`-module call, incl. aliases, as its raw wasm signature),
+- the guest import stubs for all five languages —
+  `abi/generated/{c/wasmos_imports.h,rust,go,zig,assemblyscript}/wasmos_imports.*`
+  (every `wasmos`-module call, incl. aliases, with its signature + `doc:` as a
+  comment),
 - the host-call reference table in `architecture/13-runtime-and-packaging.md`.
 
-The C client (`src/libc/include/wasmos/api.h` + libsys) is the exception: it is
-a hand-ergonomic surface (typed pointers, struct-by-reference params,
-`_host` fn-name conventions, doc comments) carrying C types the language-neutral
-IDL does not model, so it is **guarded, not generated**. `gen_abi_hostcalls.py
---verify-source` asserts every `WASMOS_WASM_IMPORT("wasmos", …)` decl names a
-real host call with a matching arity, so the hand-written header can never
-silently drift from the IDL. The wasi/env-module calls are toolchain-provided
-and are declared by neither side.
+The C stub keeps ergonomic typed signatures (`const char*`, `uint64_t*`, struct
+pointers) via a per-param `c_type:` override — default `int32_t`, since a wasm32
+pointer crosses as an i32 offset. `src/libc/include/wasmos/api.h` reduces to its
+struct typedefs, `#define`s, the two native-only `mutex_*` decls (a driver_api
+vtable entry, not a WASM host call), and a `#include` of the generated header.
+Anything still hand-declared there is guarded by `gen_abi_hostcalls.py
+--verify-source` (every `WASMOS_WASM_IMPORT("wasmos", …)` must name a real host
+call with a matching arity), so it can never silently drift. Per-call
+documentation lives in the IDL's `doc:` field — one source, emitted into every
+language stub. The wasi/env-module calls are toolchain-provided and declared by
+neither side.
 
 #### Parameter model
 

@@ -443,11 +443,12 @@ linked feature documents for rationale and rollout plans.
   two-player path streams a fixed board snapshot over net-stack TCP (client via
   the `net.h` connect helper, server via a hand-rolled listen/accept in
   `net_shim.c`), with line clears sending garbage rows. It is NOT auto-started by
-  sysinit; spawn it from the CLI (`spawn /boot/apps/tetris`). Two pre-existing
-  system issues it exposes are out of scope here: keyboard is not focus-arbitrated
-  between the compositor and the CLI/VT (both consume keys), and the networked
-  host accept slot does not pair with an incoming connection (single-player is
-  unaffected). A load bug to note: the WARP shmem mapper
+  sysinit; spawn it from the CLI (`spawn /boot/apps/tetris`). Two system gaps it
+  originally exposed are now fixed: keyboard focus arbitration (the CLI reports
+  itself background and stops consuming keys while the compositor owns tty0), and
+  the two-player host accept pairing (the host handshake is a non-blocking
+  doorbell path and the QEMU commands pass `-cpu max` so WARP's `POPCNT`-based
+  ring pow2 check no longer `#UD`s). A load bug to note: the WARP shmem mapper
   places a mapped window just above currently-committed linear memory, so a large
   app-owned back buffer must be touched/committed before `shmem_map_auto` or the
   shared window overlaps it (Tetris commits `BACK` before mapping).

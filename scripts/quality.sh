@@ -507,6 +507,41 @@ run_python_lint() {
     "$ruff" check "${py_files[@]}"
 }
 
+# Advisory: report bare `return -1;` in first-party service/driver code. Distinct
+# named/packed errors are required (see docs/architecture/34 + the named-error
+# rule); this inventories the remaining offenders. Non-fatal until the backlog is
+# cleared, then it should be flipped to a hard failure.
+run_error_code_lint() {
+    step "Scanning for bare 'return -1' in services/drivers (advisory)..."
+    local -a hits=()
+    local f
+    for f in "${c_format_files[@]}" "${as_files[@]}" "${zig_files[@]}"; do
+        case "$f" in
+            src/services/*|src/drivers/*) ;;
+            *) continue ;;
+        esac
+        case "$f" in *.h|*.hh|*.hpp) continue ;; esac
+        while IFS= read -r line; do
+            hits+=("$f:$line")
+        done < <(grep -nE 'return[[:space:]]*\(?-1\)?[[:space:]]*;' "$f" 2>/dev/null | cut -d: -f1)
+    done
+    if [[ ${#hits[@]} -eq 0 ]]; then
+        echo "  none"
+        return 0
+    fi
+    echo "  ${#hits[@]} occurrence(s) of bare 'return -1;' (advisory, not a failure):"
+    printf '    %s\n' "${hits[@]}"
+}
+
+# Verify the generated ABI header matches abi/errors.yaml. Skips (does not fail)
+# when PyYAML is unavailable, since the checked-in header drives normal builds.
+run_abi_gen_check() {
+    local py="${PYTHON:-python3}"
+    command -v "$py" >/dev/null 2>&1 || { echo "abi gen check: no python3, skipping"; return 0; }
+    step "Checking generated ABI is in sync with abi/errors.yaml..."
+    "$py" "$repo_root/scripts/gen_abi_errors.py" --check
+}
+
 case "$mode" in
     format)
         run_clang_format
@@ -522,6 +557,8 @@ case "$mode" in
         run_rust_lint
         run_assemblyscript_lint
         run_python_lint
+        run_abi_gen_check
+        run_error_code_lint
         ;;
     *)
         echo "error: unknown mode: $mode" >&2

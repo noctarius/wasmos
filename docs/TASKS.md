@@ -165,13 +165,20 @@ Source: `architecture/13-runtime-and-packaging.md`,
 
 Source: `architecture/34-abi-idl-and-error-model.md`.
 
-- [ ] Phase 1: add `abi/errors.yaml` + generator producing `wasmos_status_t`, the
-  domain registry (generated stable domain ids), per-language constants, and a
-  `wasmos_strerror` decoder; consolidate the scattered `IPC_ERR_*`/`PROC_PM_ERR_*`
-  fragments onto it.
-- [ ] Land a `scripts/quality.sh` lint gate that flags `return -1;` in
-  `src/services`/`src/drivers` (allow-listing genuine POSIX-ABI boundaries),
-  turning the named-error rule into a checked rule. Standalone quick win.
+- [x] Phase 1 foundation: `abi/errors.yaml` IDL + `scripts/gen_abi_errors.py`
+  generator + checked-in `abi/generated/wasmos_status.h` — transport
+  `wasmos_status_t`, generated domain registry (stable ids), packed
+  `(domain, code)` constants seeded from the legacy taxonomy, `wasmos_strerror`,
+  the fixed 40-byte `wasmos_error_t`, and the chain helpers
+  (`wrap`/`unwrap`/`root`/`is`/`as`/`strerror_chain`); plus a `quality` re-gen
+  guard (`gen_abi_errors.py --check`).
+- [ ] Phase 1 remaining: emit per-language constant tables (Rust/Go/Zig/AS) from
+  the IDL, and migrate the legacy `PROC_SPAWN_ERR_*`/`PROC_PM_ERR_*`/`SHMEM_ERR_*`/
+  `FS_ERR_*` definitions and call sites onto the generated packed model.
+- [x] Advisory `return -1;` inventory gate landed in `scripts/quality.sh`
+  (services/drivers, ~24 sites reported).
+- [ ] Clear the bare-`return -1;` backlog, then flip the gate to a hard failure
+  (with an allow-list for genuine POSIX-ABI boundaries).
 - [ ] Phase 2: add `abi/hostcalls.yaml` + generator emitting the wasm3, WARP JIT
   (`LINK`), WARP ring-3 numbered dispatch, WARP AOT symbol-table, and per-language
   (C/Rust/Go/Zig/AS) sites for each host call. Each entry must declare the full

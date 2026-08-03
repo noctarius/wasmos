@@ -1,0 +1,141 @@
+# WASMOS error / status vocabulary — single source of truth.
+#
+# This file is the ONLY place error domains, domain ids, and codes are defined.
+# `scripts/gen_abi_errors.py` generates `abi/generated/wasmos_status.h` (and,
+# in later increments, the per-language constant tables) from it. Never edit the
+# generated output; edit this file and regenerate.
+#
+# Model (see docs/architecture/34-abi-idl-and-error-model.md):
+#   - `transport` is the global wasmos_status_t axis: did the call mechanism work.
+#   - `domains` is the namespaced operation-error space. Each domain gets a STABLE
+#     numeric id assigned here and nowhere else, so ids/codes can never collide or
+#     drift across languages. A packed error code is (domain << 16) | local_code.
+#   - Domain 0 (`none`) is reserved: success / empty chain frame.
+
+abi_version: 1
+
+# --- Transport / kernel-IPC result axis (wasmos_status_t) --------------------
+# Global, small, negative-on-error. Returned when the call mechanism or the
+# service itself fails (as opposed to a domain-level operation error).
+transport:
+  - { name: OK,          value: 0,  description: "success" }
+  - { name: INVAL,       value: -1, description: "invalid argument" }
+  - { name: DENIED,      value: -2, description: "capability or policy denied the operation" }
+  - { name: FULL,        value: -3, description: "destination queue is full" }   # legacy IPC_ERR_FULL
+  - { name: NOENT,       value: -4, description: "no such object or endpoint" }
+  - { name: TIMEOUT,     value: -5, description: "operation timed out" }
+  - { name: NOMEM,       value: -6, description: "out of memory" }
+  - { name: UNSUPPORTED, value: -7, description: "operation not supported" }
+  - { name: PEER_GONE,   value: -8, description: "peer process or endpoint no longer exists" }
+  - { name: AGAIN,       value: -9, description: "retryable: resource temporarily unavailable" }
+
+# --- Domain registry ---------------------------------------------------------
+# Codes are seeded faithfully from the existing negative-int taxonomy in
+# src/drivers/include/wasmos_driver_abi.h. Local code ids start at 1 per domain
+# (0 within a domain is reserved). Migrating legacy call sites onto these packed
+# (domain, code) constants is the next Phase-1 increment.
+domains:
+  none:
+    id: 0
+    description: "no domain — success / empty chain frame"
+    codes: []
+
+  proc_spawn:
+    id: 1
+    description: "process-manager path-spawn failures (was PROC_SPAWN_ERR_*)"
+    codes:
+      - { name: BAD_ENDPOINT,    description: "request endpoint owner lookup failed" }
+      - { name: NO_CALLER,       description: "caller process/context not found" }
+      - { name: BAD_PATH,        description: "fs endpoint missing or bad path length" }
+      - { name: CALLER_FSBUF,    description: "caller xfer buffer missing / path too big" }
+      - { name: ARGS_TOOBIG,     description: "args exceed the xfer buffer" }
+      - { name: NO_PM_FSBUF,     description: "PM xfer buffer missing" }
+      - { name: FS_READ,         description: "reading the app blob from FS failed" }
+      - { name: SPAWN_FAILED,    description: "process create/start failed (e.g. no free slot)" }
+      - { name: BROKER_IPC,      description: "broker plan IPC transport/reply failed" }
+      - { name: BROKER_PLAN,     description: "broker replied with malformed/unsupported plan" }
+      - { name: BROKER_DEFERRED, description: "valid broker plan returned; PM launch step deferred" }
+
+  proc_pm:
+    id: 2
+    description: "non-path process-manager IPC failures (was PROC_PM_ERR_*)"
+    codes:
+      - { name: BUSY,            description: "PM already has an incompatible in-flight operation" }
+      - { name: BAD_ENDPOINT,    description: "source endpoint owner lookup failed" }
+      - { name: NO_CALLER,       description: "source endpoint owner has no live process" }
+      - { name: INVALID_NAME,    description: "packed module/service name was empty or invalid" }
+      - { name: INVALID_MODULE,  description: "requested module or descriptor was invalid" }
+      - { name: FS_UNAVAILABLE,  description: "PM filesystem service channel was unavailable" }
+      - { name: FS_REQUEST,      description: "PM could not issue the filesystem read request" }
+      - { name: BAD_PATH,        description: "explicit path input was empty or invalid" }
+      - { name: PATH_RESOLVE,    description: "path-based resolve/classify/reload failed" }
+      - { name: SPAWN_FAILED,    description: "PM failed to create or prepare the child process" }
+      - { name: CAPS_APPLY,      description: "capability profile application failed after spawn" }
+      - { name: BAD_CAPS,        description: "capability payload or compact cap fields were invalid" }
+      - { name: BAD_USER_PTR,    description: "supplied user pointer could not be resolved safely" }
+      - { name: USER_COPY,       description: "mm_copy_from_user failed for PM input payload" }
+      - { name: META_LOOKUP,     description: "module metadata lookup failed" }
+      - { name: META_NOT_DRIVER, description: "requested module metadata was not for a driver" }
+      - { name: META_BAD_INDEX,  description: "requested driver match index was out of range" }
+      - { name: META_BAD_SOURCE, description: "unsupported module metadata source selector" }
+      - { name: CALLER_FSBUF,    description: "caller filesystem transfer buffer was missing/invalid" }
+      - { name: REPLY_SEND,      description: "PM failed to send the final IPC response" }
+      - { name: FS_REPLY,        description: "PM received an unexpected filesystem reply" }
+      - { name: BAD_BROKER,      description: "broker registration payload or endpoint was invalid" }
+      - { name: BAD_HANDLER,     description: "exec-handler registration payload was invalid" }
+      - { name: SUBSYSTEM_REG,   description: "subsystem broker registration failed" }
+      - { name: HANDLER_REG,     description: "exec-handler registration failed" }
+      - { name: NOT_AUTHORIZED,  description: "caller lacks the subsystem.register capability" }
+      - { name: NO_PM_FSBUF,     description: "PM could not acquire its own xfer buffer" }
+
+  shmem:
+    id: 3
+    description: "shared-memory map/map_auto failures (was SHMEM_ERR_*)"
+    codes:
+      - { name: BAD_ARGS,  description: "id/size invalid or size not page-aligned" }
+      - { name: NO_CAP,    description: "caller lacks the DMA capability / no context" }
+      - { name: BAD_ID,    description: "shmem id unknown / no backing pages" }
+      - { name: BAD_SIZE,  description: "requested size smaller than the shared region" }
+      - { name: UNALIGNED, description: "fixed offset cannot yield a page-aligned host addr" }
+      - { name: NO_WINDOW, description: "no free page-aligned window fits in linear memory" }
+      - { name: MAP,       description: "paging/linear-memory mapping step failed" }
+
+  fs:
+    id: 4
+    description: "filesystem backend/VFS failures (was FS_ERR_*)"
+    codes:
+      - { name: BAD_ARGS,      description: "invalid flags/args (len 0, bad access mode, reserved arg set)" }
+      - { name: PATH_TOO_LONG, description: "path length exceeds the path or xfer buffer" }
+      - { name: BUFFER,        description: "xfer-buffer read/write/size call failed" }
+      - { name: TRANSLATE,     description: "vfs path translation failed / routed to init overlay" }
+      - { name: NOT_FOUND,     description: "path component or target entry does not exist" }
+      - { name: IS_DIR,        description: "target is a directory where a file was required" }
+      - { name: NOT_DIR,       description: "a path component that must be a directory is not one" }
+      - { name: EXISTS,        description: "create target already exists (fail-if-exists)" }
+      - { name: NOT_EMPTY,     description: "rmdir target directory is not empty" }
+      - { name: NO_FD,         description: "open-file table is full" }
+      - { name: BUSY,          description: "backend has no free op-context slot (retryable)" }
+      - { name: IO,            description: "block-device I/O error" }
+      - { name: NOT_READY,     description: "mount/backend not ready" }
+      - { name: NO_SPACE,      description: "no free cluster or directory slot (disk full)" }
+      - { name: NAME,          description: "invalid name (LFN/short-name encode failed)" }
+      - { name: ACCESS,        description: "access-mode violation (e.g. read on write-only fd)" }
+      - { name: RANGE,         description: "seek/offset out of range" }
+      - { name: UNSUPPORTED,   description: "unknown/unsupported request type" }
+      - { name: OPEN,          description: "operation forbidden on a currently-open file" }
+      - { name: CORRUPT,       description: "on-disk structure inconsistency detected" }
+
+  # Reserved domains: ids fixed here so future codes cannot collide. Populate as
+  # each subsystem migrates its errors onto the packed model.
+  net:
+    id: 5
+    description: "networking stack / socket failures (reserved)"
+    codes: []
+  gfx:
+    id: 6
+    description: "compositor / framebuffer failures (reserved)"
+    codes: []
+  driver:
+    id: 7
+    description: "generic device-driver failures (reserved)"
+    codes: []

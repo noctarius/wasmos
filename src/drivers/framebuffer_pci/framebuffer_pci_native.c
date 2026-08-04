@@ -479,7 +479,7 @@ int initialize(wasmos_driver_api_t* api, int module_count, int arg2, int arg3) {
             uint32_t stride = 0;
             if (query_mode_by_index(msg.arg0, &w, &h, &stride) != 0) {
                 resp.type = FBTEXT_IPC_ERROR;
-                resp.arg0 = (uint32_t)-1;
+                resp.arg0 = (uint32_t)WASMOS_ERR_GFX_BAD_MODE_INDEX;
                 break;
             }
             resp.arg0 = w;
@@ -491,7 +491,8 @@ int initialize(wasmos_driver_api_t* api, int module_count, int arg2, int arg3) {
             int set_rc = set_resolution(api, msg.arg0, msg.arg1);
             if (set_rc != 0) {
                 resp.type = FBTEXT_IPC_ERROR;
-                resp.arg0 = (set_rc == -2) ? (uint32_t)-3 : (uint32_t)-1;
+                resp.arg0 = (set_rc == -2) ? (uint32_t)WASMOS_ERR_GFX_MODE_TOO_LARGE
+                                           : (uint32_t)WASMOS_ERR_GFX_MODE_SET_FAILED;
                 break;
             }
             resp.arg0 = msg.arg0;
@@ -500,7 +501,7 @@ int initialize(wasmos_driver_api_t* api, int module_count, int arg2, int arg3) {
         }
         default:
             resp.type = FBTEXT_IPC_ERROR;
-            resp.arg0 = (uint32_t)-1;
+            resp.arg0 = (uint32_t)WASMOS_ERR_GFX_UNSUPPORTED_REQUEST;
             break;
         }
 

@@ -124,6 +124,7 @@ enum {
     WASMOS_ERR_FS_REBORROW = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_FS, 25), /* reborrowing the client's xfer-buffer grant to the backend failed */
     WASMOS_ERR_FS_BACKEND_IPC = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_FS, 26), /* request could not be delivered to the backend, or no reply arrived */
     WASMOS_ERR_FS_BAD_FD = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_FS, 27), /* fd is not present in this client's fd table */
+    WASMOS_ERR_FS_REPLY_SEND = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_FS, 28), /* the reply could not be delivered to the client */
     WASMOS_ERR_GFX_UNSUPPORTED_REQUEST = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_GFX, 1), /* unknown or unsupported request type for this framebuffer backend */
     WASMOS_ERR_GFX_NO_RUNTIME_MODES = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_GFX, 2), /* backend cannot enumerate or switch modes at runtime (firmware-provided framebuffer) */
     WASMOS_ERR_GFX_BAD_MODE_INDEX = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_GFX, 3), /* mode index is out of range for this backend */
@@ -268,6 +269,7 @@ static inline const char *wasmos_error_code_name(wasmos_error_code_t c) {
     case WASMOS_ERR_FS_REBORROW: return "fs.REBORROW";
     case WASMOS_ERR_FS_BACKEND_IPC: return "fs.BACKEND_IPC";
     case WASMOS_ERR_FS_BAD_FD: return "fs.BAD_FD";
+    case WASMOS_ERR_FS_REPLY_SEND: return "fs.REPLY_SEND";
     case WASMOS_ERR_GFX_UNSUPPORTED_REQUEST: return "gfx.UNSUPPORTED_REQUEST";
     case WASMOS_ERR_GFX_NO_RUNTIME_MODES: return "gfx.NO_RUNTIME_MODES";
     case WASMOS_ERR_GFX_BAD_MODE_INDEX: return "gfx.BAD_MODE_INDEX";
@@ -361,6 +363,7 @@ static inline const char *wasmos_strerror(wasmos_error_code_t c) {
     case WASMOS_ERR_FS_REBORROW: return "reborrowing the client's xfer-buffer grant to the backend failed";
     case WASMOS_ERR_FS_BACKEND_IPC: return "request could not be delivered to the backend, or no reply arrived";
     case WASMOS_ERR_FS_BAD_FD: return "fd is not present in this client's fd table";
+    case WASMOS_ERR_FS_REPLY_SEND: return "the reply could not be delivered to the client";
     case WASMOS_ERR_GFX_UNSUPPORTED_REQUEST: return "unknown or unsupported request type for this framebuffer backend";
     case WASMOS_ERR_GFX_NO_RUNTIME_MODES: return "backend cannot enumerate or switch modes at runtime (firmware-provided framebuffer)";
     case WASMOS_ERR_GFX_BAD_MODE_INDEX: return "mode index is out of range for this backend";

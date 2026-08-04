@@ -1487,7 +1487,9 @@ static void handle_query_message_fields(const wasmos_ipc_message_t* msg) {
     int32_t source = msg ? msg->source : 0;
     int32_t index = msg ? msg->arg0 : 0;
     if (type != DEVMGR_QUERY_MOUNT_REQ && type != DEVMGR_QUERY_BLOCK_MOUNT_REQ) {
-        (void)wasmos_ipc_send(source, g_dm.query_endpoint, FS_IPC_ERROR, req_id, type, 0, 0, 0);
+        /* arg1 echoes the rejected type for diagnostics. */
+        (void)wasmos_ipc_send(source, g_dm.query_endpoint, FS_IPC_ERROR, req_id,
+                              WASMOS_ERR_DEVMGR_UNSUPPORTED_QUERY, type, 0, 0);
         return;
     }
     if (type == DEVMGR_QUERY_BLOCK_MOUNT_REQ) {
@@ -1505,7 +1507,8 @@ static void handle_query_message_fields(const wasmos_ipc_message_t* msg) {
             }
         }
         if (!mount || mount[0] == '\0') {
-            (void)wasmos_ipc_send(source, g_dm.query_endpoint, FS_IPC_ERROR, req_id, -1, 0, 0, 0);
+            (void)wasmos_ipc_send(source, g_dm.query_endpoint, FS_IPC_ERROR, req_id,
+                                  WASMOS_ERR_DEVMGR_NO_MOUNT_RULE, 0, 0, 0);
             return;
         }
         for (uint32_t i = 0; mount[i] && i < 16u; ++i) {

@@ -59,7 +59,8 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t arg1, int32
         switch ((uint32_t)msg.type) {
         case WASM_CHARDEV_IPC_READ_REQ:
             if (!g_has_data) {
-                chardev_reply(msg.source, WASM_CHARDEV_IPC_READ_RESP, msg.request_id, -1, 0);
+                chardev_reply(msg.source, WASM_CHARDEV_IPC_READ_RESP, msg.request_id,
+                              WASMOS_ERR_CHARDEV_NO_DATA, 0);
             } else {
                 chardev_reply(msg.source, WASM_CHARDEV_IPC_READ_RESP, msg.request_id, 0,
                               (int32_t)g_last_byte);
@@ -72,7 +73,8 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t arg1, int32
                           msg.arg0 & 0xFF);
             break;
         default:
-            chardev_reply(msg.source, WASM_CHARDEV_IPC_ERROR_RESP, msg.request_id, -1, msg.type);
+            chardev_reply(msg.source, WASM_CHARDEV_IPC_ERROR_RESP, msg.request_id,
+                          WASMOS_ERR_CHARDEV_UNSUPPORTED_REQUEST, msg.type);
             break;
         }
     }

@@ -131,6 +131,7 @@ domains:
       - { name: REBORROW,       description: "reborrowing the client's xfer-buffer grant to the backend failed" }
       - { name: BACKEND_IPC,    description: "request could not be delivered to the backend, or no reply arrived" }
       - { name: BAD_FD,         description: "fd is not present in this client's fd table" }
+      - { name: REPLY_SEND,     description: "the reply could not be delivered to the client" }
 
   net:
     id: 5

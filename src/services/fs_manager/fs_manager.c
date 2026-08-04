@@ -377,7 +377,8 @@ static int send_virtual_root_listing(int32_t source, int32_t req_id) {
     return wasmos_ipc_send(source, g_fs_endpoint, FS_IPC_RESP, req_id, 0, 0, 0, 0);
 }
 
-static int fsmgr_emit_mounts(int32_t source, int32_t req_id, int32_t buffer_id) {
+/* Returns WASMOS_ERR_NONE, or the packed reason the listing could not be sent. */
+static wasmos_error_code_t fsmgr_emit_mounts(int32_t source, int32_t req_id, int32_t buffer_id) {
     char mounts[384];
     uint32_t pos = 0;
     str_copy(mounts, sizeof(mounts), "mounts:\n");
@@ -422,11 +423,17 @@ static int fsmgr_emit_mounts(int32_t source, int32_t req_id, int32_t buffer_id) 
             break;
         }
     }
-    if (buffer_id <= 0 || wasmos_sys_buffer_write(buffer_id, mounts, (int32_t)pos, 0) != 0) {
-        return -1;
+    if (buffer_id <= 0) {
+        return WASMOS_ERR_FS_BAD_ARGS;
     }
-    return wasmos_ipc_send(source, g_fs_endpoint, FSMGR_IPC_QUERY_MOUNTS_RESP, req_id, (int32_t)pos,
-                           0, 0, 0);
+    if (wasmos_sys_buffer_write(buffer_id, mounts, (int32_t)pos, 0) != 0) {
+        return WASMOS_ERR_FS_BUFFER;
+    }
+    if (wasmos_ipc_send(source, g_fs_endpoint, FSMGR_IPC_QUERY_MOUNTS_RESP, req_id, (int32_t)pos, 0,
+                        0, 0) != 0) {
+        return WASMOS_ERR_FS_REPLY_SEND;
+    }
+    return WASMOS_ERR_NONE;
 }
 
 /* Forward an IPC request to a backend, relaying FS_IPC_STREAM chunks back to
@@ -476,12 +483,14 @@ static int forward_request(int32_t backend_endpoint, int32_t type, int32_t req_i
     }
 }
 
-static void send_fs_error(int32_t source, int32_t request_id) {
+/* `reason` is a packed WASMOS_ERR_FS_* code, or a code relayed unchanged from a
+ * backend reply. */
+static void send_fs_error(int32_t source, int32_t request_id, wasmos_error_code_t reason) {
     /* Retry with yield for the same reason as forward_request's STREAM relay:
      * if the client's endpoint is temporarily full we must not drop the error
      * notification, otherwise the client hangs forever in select_one. */
-    (void)wasmos_sys_ipc_send_retry(source, g_fs_endpoint, FS_IPC_ERROR, request_id, -1, 0, 0, 0,
-                                    4096);
+    (void)wasmos_sys_ipc_send_retry(source, g_fs_endpoint, FS_IPC_ERROR, request_id, reason, 0, 0,
+                                    0, 4096);
 }
 
 static int32_t resolve_backend_for_state(const fs_client_state_t* state) {
@@ -662,15 +671,19 @@ static int handle_clone_cwd_req(int32_t source, int32_t source_owner, int32_t re
     int32_t src_context_id = arg0;
     int32_t dst_context_id = arg1f;
     int32_t proc_owner = wasmos_ipc_endpoint_owner(g_proc_endpoint);
-    if (source_owner < 0 || proc_owner < 0 || source_owner != proc_owner || src_context_id <= 0 ||
-        dst_context_id <= 0) {
-        send_fs_error(source, request_id);
+    /* Cloning another context's cwd is process-manager only. */
+    if (source_owner < 0 || proc_owner < 0 || source_owner != proc_owner) {
+        send_fs_error(source, request_id, WASMOS_ERR_FS_NOT_AUTHORIZED);
+        return 1;
+    }
+    if (src_context_id <= 0 || dst_context_id <= 0) {
+        send_fs_error(source, request_id, WASMOS_ERR_FS_BAD_ARGS);
         return 1;
     }
     src_state = client_state(src_context_id);
     dst_state = client_state(dst_context_id);
     if (!src_state || !dst_state) {
-        send_fs_error(source, request_id);
+        send_fs_error(source, request_id, WASMOS_ERR_FS_NO_CLIENT_SLOT);
         return 1;
     }
     dst_state->mount = src_state->mount;
@@ -703,9 +716,12 @@ static int handle_read_path_req(fs_client_state_t* state, int32_t source, int32_
     int32_t open_path_len = 0;
     int32_t backend_borrow = -1;
 
-    if (buffer_id <= 0 || path_len <= 0 || path_len >= fs_buf_size ||
-        path_len >= (int32_t)sizeof(path_scratch) - 1) {
-        send_fs_error(source, request_id);
+    if (buffer_id <= 0 || path_len <= 0) {
+        send_fs_error(source, request_id, WASMOS_ERR_FS_BAD_ARGS);
+        return 1;
+    }
+    if (path_len >= fs_buf_size || path_len >= (int32_t)sizeof(path_scratch) - 1) {
+        send_fs_error(source, request_id, WASMOS_ERR_FS_PATH_TOO_LONG);
         return 1;
     }
     /* client_borrow (b1) is the client's grant to fs-manager; fs-manager is its
@@ -713,12 +729,12 @@ static int handle_read_path_req(fs_client_state_t* state, int32_t source, int32_
      * the path via its grant, reborrows to the backend (b2, which fs-manager
      * lends and therefore unborrows), and unborrows b2 before replying. */
     if (wasmos_xfer_buffer_read(buffer_id, addr_cast(int32_t, path_scratch), path_len, 0) != 0) {
-        send_fs_error(source, request_id);
+        send_fs_error(source, request_id, WASMOS_ERR_FS_BUFFER);
         return 1;
     }
     path_scratch[path_len] = '\0';
     if (path_scratch[0] != '/') {
-        send_fs_error(source, request_id);
+        send_fs_error(source, request_id, WASMOS_ERR_FS_NOT_ABSOLUTE);
         return 1;
     }
     open_path_len = path_len;
@@ -728,17 +744,24 @@ static int handle_read_path_req(fs_client_state_t* state, int32_t source, int32_
         fs_backend_t* fallback_boot = backend_first_of_kind(FSMGR_BACKEND_BOOT);
         backend = fallback_boot ? fallback_boot->endpoint : -1;
     }
-    if (backend < 0 || open_path_len <= 0 ||
-        wasmos_xfer_buffer_write(buffer_id, addr_cast(int32_t, path_scratch), open_path_len, 0) !=
-            0) {
-        send_fs_error(source, request_id);
+    if (backend < 0) {
+        send_fs_error(source, request_id, WASMOS_ERR_FS_NO_BACKEND);
+        return 1;
+    }
+    if (open_path_len <= 0) {
+        send_fs_error(source, request_id, WASMOS_ERR_FS_TRANSLATE);
+        return 1;
+    }
+    if (wasmos_xfer_buffer_write(buffer_id, addr_cast(int32_t, path_scratch), open_path_len, 0) !=
+        0) {
+        send_fs_error(source, request_id, WASMOS_ERR_FS_BUFFER);
         return 1;
     }
     /* Reborrow to the backend (R|W: reads the path, writes the blob). */
     backend_borrow = wasmos_xfer_buffer_reborrow(
         backend, client_borrow, WASMOS_BUFFER_GRANT_READ | WASMOS_BUFFER_GRANT_WRITE);
     if (backend_borrow < 0) {
-        send_fs_error(source, request_id);
+        send_fs_error(source, request_id, WASMOS_ERR_FS_REBORROW);
         return 1;
     }
 
@@ -746,19 +769,33 @@ static int handle_read_path_req(fs_client_state_t* state, int32_t source, int32_
         forward_request(backend, FS_IPC_OPEN_REQ, request_id, open_path_len, 0, buffer_id,
                         backend_borrow, source, &open_t, &open0, &open1, &open2, &open3);
     if (open_rc != 0 || open_t != FS_IPC_RESP || open0 < 0) {
+        /* Relay the backend's own reason when it sent one — it names the failure
+         * better than anything this relay could substitute. */
+        wasmos_error_code_t open_err =
+            (open_rc == 0 && open0 < 0) ? open0 : WASMOS_ERR_FS_BACKEND_IPC;
         (void)wasmos_xfer_buffer_unborrow(backend_borrow);
-        send_fs_error(source, request_id);
+        send_fs_error(source, request_id, open_err);
         return 1;
     }
 
     fd = open0;
-    if (forward_request(backend, FS_IPC_READ_REQ, request_id, fd, read_cap, buffer_id,
-                        backend_borrow, source, &read_t, &read0, &read1, &read2, &read3) != 0 ||
-        read_t != FS_IPC_RESP || read0 <= 0 || read0 > read_cap) {
+    int32_t read_rc =
+        forward_request(backend, FS_IPC_READ_REQ, request_id, fd, read_cap, buffer_id,
+                        backend_borrow, source, &read_t, &read0, &read1, &read2, &read3);
+    wasmos_error_code_t read_err = WASMOS_ERR_NONE;
+    if (read_rc != 0) {
+        read_err = WASMOS_ERR_FS_BACKEND_IPC;
+    } else if (read_t != FS_IPC_RESP || read0 < 0) {
+        read_err = (read0 < 0) ? read0 : WASMOS_ERR_FS_BACKEND_IPC;
+    } else if (read0 == 0 || read0 > read_cap) {
+        /* Backend reported a length outside the requested capacity. */
+        read_err = WASMOS_ERR_FS_RANGE;
+    }
+    if (read_err != WASMOS_ERR_NONE) {
         (void)forward_request(backend, FS_IPC_CLOSE_REQ, request_id, fd, 0, 0, 0, source, &close_t,
                               &close0, &close1, &close2, &close3);
         (void)wasmos_xfer_buffer_unborrow(backend_borrow);
-        send_fs_error(source, request_id);
+        send_fs_error(source, request_id, read_err);
         return 1;
     }
     (void)forward_request(backend, FS_IPC_CLOSE_REQ, request_id, fd, 0, 0, 0, source, &close_t,
@@ -817,7 +854,7 @@ static int handle_chdir_mount(fs_client_state_t* state, int32_t source, int32_t 
                             &rr_t, &rr0, &rr1, &rr2, &rr3) != 0) {
             state->mount = FS_MOUNT_ROOT;
             state->backend_endpoint = -1;
-            send_fs_error(source, request_id);
+            send_fs_error(source, request_id, WASMOS_ERR_FS_BACKEND_IPC);
             return 1;
         }
         (void)wasmos_ipc_send(source, g_fs_endpoint, rr_t, request_id, rr0, rr1, rr2, rr3);
@@ -886,8 +923,9 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t arg1, int32
             /* Client owns the listing buffer (arg2) and granted fs-manager W;
              * fs-manager writes it and replies. fs-manager is the grant's
              * BORROWER, so it does not unborrow — the client releases (cascade). */
-            if (fsmgr_emit_mounts(source, request_id, arg2f) != 0) {
-                send_fs_error(source, request_id);
+            wasmos_error_code_t mounts_err = fsmgr_emit_mounts(source, request_id, arg2f);
+            if (mounts_err != WASMOS_ERR_NONE) {
+                send_fs_error(source, request_id, mounts_err);
             }
             continue;
         }
@@ -898,7 +936,7 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t arg1, int32
 
         fs_client_state_t* state = client_state(client_key);
         if (!state) {
-            send_fs_error(source, request_id);
+            send_fs_error(source, request_id, WASMOS_ERR_FS_NO_CLIENT_SLOT);
             continue;
         }
 
@@ -936,14 +974,14 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t arg1, int32
         int32_t fwd_arg3 = arg3f;
         if (is_path_op_type(type)) {
             if (route_root_path_request(state, arg2f, type, &req_arg0, &backend) < 0) {
-                send_fs_error(source, request_id);
+                send_fs_error(source, request_id, WASMOS_ERR_FS_TRANSLATE);
                 continue;
             }
         }
         if (fsmgr_is_fd_op_type(type)) {
             fsmgr_client_fd_t* fd_entry = fsmgr_fd_entry(state, arg0);
             if (!fd_entry) {
-                send_fs_error(source, request_id);
+                send_fs_error(source, request_id, WASMOS_ERR_FS_BAD_FD);
                 continue;
             }
             client_fd = arg0;
@@ -954,7 +992,7 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t arg1, int32
             backend_borrow = wasmos_xfer_buffer_reborrow(
                 backend, client_borrow, WASMOS_BUFFER_GRANT_READ | WASMOS_BUFFER_GRANT_WRITE);
             if (backend_borrow < 0) {
-                send_fs_error(source, request_id);
+                send_fs_error(source, request_id, WASMOS_ERR_FS_REBORROW);
                 continue;
             }
             fwd_arg3 = backend_borrow;
@@ -976,7 +1014,7 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t arg1, int32
                     continue;
                 }
             }
-            send_fs_error(source, request_id);
+            send_fs_error(source, request_id, WASMOS_ERR_FS_BACKEND_IPC);
             continue;
         }
         if (type == FS_IPC_OPEN_REQ && resp_type == FS_IPC_RESP && r0 >= 0) {
@@ -989,7 +1027,7 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t arg1, int32
                 if (backend_borrow >= 0) {
                     (void)wasmos_xfer_buffer_unborrow(backend_borrow);
                 }
-                send_fs_error(source, request_id);
+                send_fs_error(source, request_id, WASMOS_ERR_FS_NO_FD);
                 continue;
             }
         }

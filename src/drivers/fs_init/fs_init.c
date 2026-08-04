@@ -491,7 +491,10 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t ignored_arg
         int32_t* cwd_dir = client_cwd_for_source(source);
         int32_t status = -1;
         if (!cwd_dir) {
-            (void)wasmos_ipc_send(source, g_fs_endpoint, FS_IPC_ERROR, req_id, -1, 0, 0, 0);
+            /* Every INITFS_MAX_CLIENTS slot is taken, so this client's cwd
+             * cannot be tracked. */
+            (void)wasmos_ipc_send(source, g_fs_endpoint, FS_IPC_ERROR, req_id,
+                                  WASMOS_ERR_FS_NO_CLIENT_SLOT, 0, 0, 0);
             continue;
         }
 

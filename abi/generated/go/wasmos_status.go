@@ -112,6 +112,7 @@ const (
 	WASMOS_ERR_FS_REBORROW int32 = -0x00040019 // reborrowing the client's xfer-buffer grant to the backend failed
 	WASMOS_ERR_FS_BACKEND_IPC int32 = -0x0004001A // request could not be delivered to the backend, or no reply arrived
 	WASMOS_ERR_FS_BAD_FD int32 = -0x0004001B // fd is not present in this client's fd table
+	WASMOS_ERR_FS_REPLY_SEND int32 = -0x0004001C // the reply could not be delivered to the client
 	WASMOS_ERR_GFX_UNSUPPORTED_REQUEST int32 = -0x00060001 // unknown or unsupported request type for this framebuffer backend
 	WASMOS_ERR_GFX_NO_RUNTIME_MODES int32 = -0x00060002 // backend cannot enumerate or switch modes at runtime (firmware-provided framebuffer)
 	WASMOS_ERR_GFX_BAD_MODE_INDEX int32 = -0x00060003 // mode index is out of range for this backend
@@ -344,6 +345,8 @@ func WasmosStrerror(c int32) string {
 		return "request could not be delivered to the backend, or no reply arrived"
 	case WASMOS_ERR_FS_BAD_FD:
 		return "fd is not present in this client's fd table"
+	case WASMOS_ERR_FS_REPLY_SEND:
+		return "the reply could not be delivered to the client"
 	case WASMOS_ERR_GFX_UNSUPPORTED_REQUEST:
 		return "unknown or unsupported request type for this framebuffer backend"
 	case WASMOS_ERR_GFX_NO_RUNTIME_MODES:

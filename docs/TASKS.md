@@ -357,18 +357,34 @@ returns; `FS_ERR_*`/`PROC_*` ride IPC opcodes), so the migration depends on them
     (process_manager_spawn/services, selftest) + services (cli, init, broker) now
     use packed `WASMOS_ERR_PROC_{SPAWN,PM}_*` directly (returned as the
     negative rc in `PROC_IPC_ERROR.arg1`). Booted both runtimes.
-  - [ ] Scoped boundary pass (DEFERRED — needs new error domains; picked the
-    "boundary-crossing returns only" scope, not the full 438-site sweep). The
-    bare `-1`s that actually leave a service (IPC reply code arg / host-call
-    return a peer decodes) mostly can't be migrated yet because their subsystems
-    have **no error domain** in `abi/errors.yaml`: VT, font, chardev,
-    device_manager, block, net, virtio_serial, hrng. And `fs_manager`'s own
-    fallback `-1`s (e.g. `send_fs_error`, `fs_manager.c:483`; the open/read/close
-    reply defaults) need either per-path FS reasons or a new **generic** fs code
-    (existing FS codes are all specific). NEXT: add those domains (+ a generic
-    reason where a call site truly has no specific one), then migrate the
-    boundary `-1`s to packed codes. Internal-helper `-1`s stay; keep the
-    `-1` lint advisory (not hard-fail) until the boundary set is clean.
+  - [x] Subsystem 4 — **scoped boundary pass**: every bare `-1` that leaves a
+    service in an IPC reply code arg now carries a specific packed code. Scope was
+    "boundary-crossing returns only", not the full 438-site sweep;
+    internal-helper `-1`s stay and the `-1` lint stays advisory. New vocabulary:
+    8 specific `fs` codes (`NOT_AUTHORIZED`, `NO_CLIENT_SLOT`, `NOT_ABSOLUTE`,
+    `NO_BACKEND`, `REBORROW`, `BACKEND_IPC`, `BAD_FD`, `REPLY_SEND`), the `gfx`
+    domain populated, and new `vt` (8) / `chardev` (9) / `devmgr` (10) domains.
+    No **generic** fs code was added — an unspecific packed code is `-1` with
+    extra steps, so each site names its actual failure instead. Three structural
+    findings drove the shape:
+    - Six `-1`s covered ORed conditions with unrelated causes and had to be split
+      before they could be named (e.g. `handle_read_path_req`'s
+      `backend < 0 || open_path_len <= 0 || xfer_buffer_write() != 0`).
+    - `handle_read_path_req` was **discarding** the backend's own reason: it
+      replaced a specific `WASMOS_ERR_FS_*` from the OPEN/READ leg with `-1`. It
+      now relays that code and only mints `BACKEND_IPC` when `forward_request`
+      itself failed at the transport level. The main dispatch loop already
+      relayed backend replies verbatim, so its error path is transport-only.
+    - The `open0`/`read0`/`close0`/`r0` reply defaults no longer reach a client:
+      every path now selects a specific code, so those `-1`s are purely internal
+      "unset" markers.
+    Also migrated: `fs_init` (client-slot exhaustion), `device_manager` (the
+    unsupported-query path was leaking the request `type` as its code arg; now
+    `DEVMGR_UNSUPPORTED_QUERY` with `type` echoed in arg1), and both framebuffer
+    drivers (where the ad-hoc `-3` meant *two different things* across the two
+    drivers — `NO_RUNTIME_MODES` vs `MODE_TOO_LARGE`). `net`, `font`, `block`,
+    `virtio_serial` and `hrng` needed no domains: their `-1`s are all internal
+    helper returns. Booted both runtimes.
 - [ ] Extend the `quality` re-gen guard to the host-call and opcode generators
   as they land (the errors guard already exists), so generated output can never
   silently drift from the IDL.

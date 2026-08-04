@@ -1793,7 +1793,8 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t arg1, int32
             int32_t tty_index = vt_tty_index_for_source(msg.source);
             if (tty_index < 0 || tty_index >= (int32_t)VT_MAX_TTYS) {
                 if (msg.source >= 0 && msg.request_id != 0) {
-                    (void)vt_ipc_reply_retry(msg.source, VT_IPC_ERROR, msg.request_id, -1, 0);
+                    (void)vt_ipc_reply_retry(msg.source, VT_IPC_ERROR, msg.request_id,
+                                             WASMOS_ERR_VT_NO_TTY_FOR_SOURCE, 0);
                 }
                 break;
             }
@@ -1845,7 +1846,8 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t arg1, int32
             }
             int32_t tty_id = msg.arg0;
             if (tty_id < 0 || tty_id >= (int32_t)VT_MAX_TTYS) {
-                (void)vt_ipc_reply_retry(msg.source, VT_IPC_ERROR, msg.request_id, -1, 0);
+                (void)vt_ipc_reply_retry(msg.source, VT_IPC_ERROR, msg.request_id,
+                                         WASMOS_ERR_VT_BAD_TTY_ID, 0);
                 break;
             }
             uint32_t idx = (uint32_t)tty_id;
@@ -1870,13 +1872,15 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t arg1, int32
             }
             int32_t tty_id = msg.arg0;
             if (tty_id < 0 || tty_id >= (int32_t)VT_MAX_TTYS) {
-                (void)vt_ipc_reply_retry(msg.source, VT_IPC_ERROR, msg.request_id, -1, 0);
+                (void)vt_ipc_reply_retry(msg.source, VT_IPC_ERROR, msg.request_id,
+                                         WASMOS_ERR_VT_BAD_TTY_ID, 0);
                 break;
             }
             if (g_tty_reader_ep[(uint32_t)tty_id] < 0) {
                 g_tty_reader_ep[(uint32_t)tty_id] = msg.source;
             } else if (g_tty_reader_ep[(uint32_t)tty_id] != msg.source) {
-                (void)vt_ipc_reply_retry(msg.source, VT_IPC_ERROR, msg.request_id, -1, 0);
+                (void)vt_ipc_reply_retry(msg.source, VT_IPC_ERROR, msg.request_id,
+                                         WASMOS_ERR_VT_READER_BUSY, 0);
                 break;
             }
             uint8_t ch = 0;
@@ -1894,7 +1898,8 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t arg1, int32
             }
             int32_t tty_index = vt_tty_index_for_source(msg.source);
             if (tty_index < 0 || tty_index >= (int32_t)VT_MAX_TTYS) {
-                (void)vt_ipc_reply_retry(msg.source, VT_IPC_ERROR, msg.request_id, -1, 0);
+                (void)vt_ipc_reply_retry(msg.source, VT_IPC_ERROR, msg.request_id,
+                                         WASMOS_ERR_VT_NO_TTY_FOR_SOURCE, 0);
                 break;
             }
             uint8_t mode = (uint8_t)(msg.arg0 & (VT_INPUT_MODE_CANONICAL | VT_INPUT_MODE_ECHO));
@@ -1913,7 +1918,8 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t arg1, int32
 
         default:
             if (msg.source >= 0 && msg.request_id != 0) {
-                (void)vt_ipc_reply_retry(msg.source, VT_IPC_ERROR, msg.request_id, -1, 0);
+                (void)vt_ipc_reply_retry(msg.source, VT_IPC_ERROR, msg.request_id,
+                                         WASMOS_ERR_VT_UNSUPPORTED_REQUEST, 0);
             }
             break;
         }

@@ -104,6 +104,7 @@ pub const WASMOS_ERR_FS_NO_BACKEND: i32 = -0x00040018; // no registered backend 
 pub const WASMOS_ERR_FS_REBORROW: i32 = -0x00040019; // reborrowing the client's xfer-buffer grant to the backend failed
 pub const WASMOS_ERR_FS_BACKEND_IPC: i32 = -0x0004001A; // request could not be delivered to the backend, or no reply arrived
 pub const WASMOS_ERR_FS_BAD_FD: i32 = -0x0004001B; // fd is not present in this client's fd table
+pub const WASMOS_ERR_FS_REPLY_SEND: i32 = -0x0004001C; // the reply could not be delivered to the client
 pub const WASMOS_ERR_GFX_UNSUPPORTED_REQUEST: i32 = -0x00060001; // unknown or unsupported request type for this framebuffer backend
 pub const WASMOS_ERR_GFX_NO_RUNTIME_MODES: i32 = -0x00060002; // backend cannot enumerate or switch modes at runtime (firmware-provided framebuffer)
 pub const WASMOS_ERR_GFX_BAD_MODE_INDEX: i32 = -0x00060003; // mode index is out of range for this backend
@@ -239,6 +240,7 @@ pub fn wasmos_strerror(c: i32) -> &'static str {
         WASMOS_ERR_FS_REBORROW => "reborrowing the client's xfer-buffer grant to the backend failed",
         WASMOS_ERR_FS_BACKEND_IPC => "request could not be delivered to the backend, or no reply arrived",
         WASMOS_ERR_FS_BAD_FD => "fd is not present in this client's fd table",
+        WASMOS_ERR_FS_REPLY_SEND => "the reply could not be delivered to the client",
         WASMOS_ERR_GFX_UNSUPPORTED_REQUEST => "unknown or unsupported request type for this framebuffer backend",
         WASMOS_ERR_GFX_NO_RUNTIME_MODES => "backend cannot enumerate or switch modes at runtime (firmware-provided framebuffer)",
         WASMOS_ERR_GFX_BAD_MODE_INDEX => "mode index is out of range for this backend",

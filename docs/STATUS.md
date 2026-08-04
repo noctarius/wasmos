@@ -300,6 +300,20 @@ linked feature documents for rationale and rollout plans.
   a validated `.wap` launch plan for other formats.
 - Service discovery supports named services and class instances. Multi-instance
   providers must use unique class instances and unique concrete PM names.
+- Error and status codes are single-sourced in `abi/errors.yaml` and generated for
+  C, Rust, Go, Zig and AssemblyScript; `gen_abi_errors.py --check` guards the
+  checked-in output against IDL drift. Both axes are negative on error: the
+  transport `wasmos_status_t` and the packed `(domain, code)` operation errors,
+  where a code is the negative of `(domain << 16) | local_code`. A code is
+  returned, compared and decoded as-is — `WASMOS_ERR_MAKE` / `_DOMAIN_OF` /
+  `_CODE_OF` are the only places the sign is applied or removed, and
+  `wasmos_frame_t`'s unsigned 16-bit fields are the wire encoding of a chain
+  frame. No legacy `*_ERR_*` enum remains. Every `-1` that leaves a service in an
+  IPC reply code arg now carries a specific code; bare `-1` survives only in
+  internal helper returns, where the `quality` lint flags it advisorily.
+  The 4-frame cause chain is generated in every language but has no call sites
+  yet — wrapping is unused, and an IPC reply can carry at most two frames in
+  `arg0..arg3`, so a deeper chain needs a transfer buffer.
 
 ## Filesystems and Storage
 

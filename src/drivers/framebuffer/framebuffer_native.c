@@ -358,15 +358,15 @@ int initialize(wasmos_driver_api_t* api, int module_count, int arg2, int arg3) {
             break;
         case FBTEXT_IPC_QUERY_MODES_REQ:
             resp.type = FBTEXT_IPC_ERROR;
-            resp.arg0 = (uint32_t)-3;
+            resp.arg0 = (uint32_t)WASMOS_ERR_GFX_NO_RUNTIME_MODES;
             break;
         case FBTEXT_IPC_SET_RESOLUTION_REQ:
             resp.type = FBTEXT_IPC_ERROR;
-            resp.arg0 = (uint32_t)-3;
+            resp.arg0 = (uint32_t)WASMOS_ERR_GFX_NO_RUNTIME_MODES;
             break;
         default:
             resp.type = FBTEXT_IPC_ERROR;
-            resp.arg0 = (uint32_t)-1;
+            resp.arg0 = (uint32_t)WASMOS_ERR_GFX_UNSUPPORTED_REQUEST;
             break;
         }
 

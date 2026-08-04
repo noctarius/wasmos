@@ -116,6 +116,7 @@ and **domains** (namespaced operation errors: the negative of `(domain << 16) | 
 | `WASMOS_ERR_FS_REBORROW` | -0x00040019 | reborrowing the client's xfer-buffer grant to the backend failed |
 | `WASMOS_ERR_FS_BACKEND_IPC` | -0x0004001A | request could not be delivered to the backend, or no reply arrived |
 | `WASMOS_ERR_FS_BAD_FD` | -0x0004001B | fd is not present in this client's fd table |
+| `WASMOS_ERR_FS_REPLY_SEND` | -0x0004001C | the reply could not be delivered to the client |
 
 ### `net` (domain 5) — networking stack / socket failures (reserved)
 

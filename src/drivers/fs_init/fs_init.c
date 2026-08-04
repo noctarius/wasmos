@@ -83,21 +83,25 @@ static void unpack_name(uint32_t arg0, uint32_t arg1, uint32_t arg2, uint32_t ar
     out[pos] = '\0';
 }
 
-static int copy_path_from_xfer_buffer(int32_t buffer_id, int32_t path_len, char* out,
-                                      uint32_t out_len) {
-    if (!out || out_len == 0 || path_len <= 0 || path_len >= (int32_t)out_len || buffer_id <= 0) {
-        return -1;
+/* Returns WASMOS_ERR_NONE, or the packed reason the path could not be read. */
+static wasmos_error_code_t copy_path_from_xfer_buffer(int32_t buffer_id, int32_t path_len,
+                                                      char* out, uint32_t out_len) {
+    if (!out || out_len == 0 || path_len <= 0 || buffer_id <= 0) {
+        return WASMOS_ERR_FS_BAD_ARGS;
+    }
+    if (path_len >= (int32_t)out_len) {
+        return WASMOS_ERR_FS_PATH_TOO_LONG;
     }
     /* Owner-push: the client owns buffer_id and granted this backend READ (via
      * fs-manager's reborrow); read the path directly by buffer_id. */
     if (wasmos_xfer_buffer_read(buffer_id, addr_cast(int32_t, out), path_len, 0) != 0) {
-        return -1;
+        return WASMOS_ERR_FS_BUFFER;
     }
     if (wasmos_sync_user_read(addr_cast(int32_t, out), path_len) != 0) {
-        return -1;
+        return WASMOS_ERR_FS_BUFFER;
     }
     out[path_len] = '\0';
-    return 0;
+    return WASMOS_ERR_NONE;
 }
 
 static int initfs_has_init_prefix(const char* s) {
@@ -343,7 +347,8 @@ static int emit_stream_text(int32_t source, int32_t req_id, const char* text) {
     return 0;
 }
 
-static int emit_init_listing(int32_t source, int32_t req_id) {
+/* Returns WASMOS_ERR_NONE, or the packed reason the listing could not be sent. */
+static wasmos_error_code_t emit_init_listing(int32_t source, int32_t req_id) {
     char line[INITFS_PATH_MAX + 4];
     int32_t cwd_dir = 0;
     for (int32_t i = 0; i < INITFS_MAX_CLIENTS; ++i) {
@@ -358,7 +363,7 @@ static int emit_init_listing(int32_t source, int32_t req_id) {
         }
         snprintf(line, sizeof(line), "%s/\n", g_dirs[i].name);
         if (emit_stream_text(source, req_id, line) != 0) {
-            return -1;
+            return WASMOS_ERR_FS_REPLY_SEND;
         }
     }
     for (int32_t i = 0; i < g_file_count; ++i) {
@@ -367,37 +372,38 @@ static int emit_init_listing(int32_t source, int32_t req_id) {
         }
         snprintf(line, sizeof(line), "%s\n", g_files[i].name);
         if (emit_stream_text(source, req_id, line) != 0) {
-            return -1;
+            return WASMOS_ERR_FS_REPLY_SEND;
         }
     }
-    return 0;
+    return WASMOS_ERR_NONE;
 }
 
-static int chdir_to_path(int32_t* cwd_dir, const char* path) {
+/* Returns WASMOS_ERR_NONE, or the packed reason the cwd could not be changed. */
+static wasmos_error_code_t chdir_to_path(int32_t* cwd_dir, const char* path) {
     char full[INITFS_PATH_MAX];
     if (!cwd_dir) {
-        return -1;
+        return WASMOS_ERR_FS_BAD_ARGS;
     }
     if (!path || path[0] == '\0' || strcasecmp(path, "/") == 0 || strcasecmp(path, "init") == 0 ||
         strcasecmp(path, "/init") == 0) {
         *cwd_dir = 0;
-        return 0;
+        return WASMOS_ERR_NONE;
     }
     if (strcasecmp(path, "..") == 0) {
         if (*cwd_dir > 0) {
             *cwd_dir = g_dirs[*cwd_dir].parent_index >= 0 ? g_dirs[*cwd_dir].parent_index : 0;
         }
-        return 0;
+        return WASMOS_ERR_NONE;
     }
     if (initfs_build_absolute_path(*cwd_dir, path, full, sizeof(full)) != 0) {
-        return -1;
+        return WASMOS_ERR_FS_PATH_TOO_LONG;
     }
     int32_t dir_index = dir_find_by_path(full);
     if (dir_index < 0) {
-        return -1;
+        return WASMOS_ERR_FS_NOT_FOUND;
     }
     *cwd_dir = dir_index;
-    return 0;
+    return WASMOS_ERR_NONE;
 }
 
 static int32_t* client_cwd_for_source(int32_t source) {
@@ -489,7 +495,9 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t ignored_arg
             continue;
         }
         int32_t* cwd_dir = client_cwd_for_source(source);
-        int32_t status = -1;
+        /* `status` is the reply code arg: a datum (>= 0) or a packed reason. It
+         * defaults to UNSUPPORTED so an unmatched request type says so. */
+        int32_t status = WASMOS_ERR_FS_UNSUPPORTED;
         if (!cwd_dir) {
             /* Every INITFS_MAX_CLIENTS slot is taken, so this client's cwd
              * cannot be tracked. */
@@ -503,16 +511,27 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t ignored_arg
             /* OPEN always carries the path in the client buffer (arg2 = buffer_id,
              * arg0 = path_len); the old name-packed variant is gone with
              * spawn-by-name. */
-            if (copy_path_from_xfer_buffer(arg2, arg0, path, sizeof(path)) == 0) {
+            wasmos_error_code_t path_err =
+                copy_path_from_xfer_buffer(arg2, arg0, path, sizeof(path));
+            if (path_err != WASMOS_ERR_NONE) {
+                status = path_err;
+            } else {
                 int32_t file_index = initfs_find_file_record(*cwd_dir, path);
-                if (file_index >= 0) {
-                    status = initfs_fd_alloc(file_index);
+                if (file_index < 0) {
+                    status = WASMOS_ERR_FS_NOT_FOUND;
+                } else {
+                    int32_t fd = initfs_fd_alloc(file_index);
+                    status = (fd >= 0) ? fd : WASMOS_ERR_FS_NO_FD;
                 }
             }
         } else if (type == FS_IPC_READ_REQ) {
             initfs_fd_t* fd = initfs_fd_lookup(arg0);
             int32_t req_len = arg1;
-            if (fd && req_len >= 0) {
+            if (!fd) {
+                status = WASMOS_ERR_FS_BAD_FD;
+            } else if (req_len < 0) {
+                status = WASMOS_ERR_FS_BAD_ARGS;
+            } else {
                 initfs_file_t* file = &g_files[fd->entry_index];
                 int32_t fs_buf_size = wasmos_xfer_buffer_size();
                 uint8_t tmp[512];
@@ -521,6 +540,7 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t ignored_arg
                 } else {
                     int32_t remaining = file->size - fd->offset;
                     int32_t total = 0;
+                    wasmos_error_code_t copy_err = WASMOS_ERR_NONE;
                     if (req_len > fs_buf_size) {
                         req_len = fs_buf_size;
                     }
@@ -535,7 +555,7 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t ignored_arg
                         int32_t copied = wasmos_initfs_entry_copy(
                             file->entry_index, addr_cast(int32_t, tmp), chunk, fd->offset + total);
                         if (copied < 0) {
-                            total = -1;
+                            copy_err = WASMOS_ERR_FS_IO;
                             break;
                         }
                         if (copied == 0) {
@@ -543,12 +563,14 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t ignored_arg
                         }
                         if (wasmos_xfer_buffer_write(arg2, addr_cast(int32_t, tmp), copied,
                                                      total) != 0) {
-                            total = -1;
+                            copy_err = WASMOS_ERR_FS_BUFFER;
                             break;
                         }
                         total += copied;
                     }
-                    if (total >= 0) {
+                    if (copy_err != WASMOS_ERR_NONE) {
+                        status = copy_err;
+                    } else {
                         fd->offset += total;
                         status = total;
                     }
@@ -556,7 +578,9 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t ignored_arg
             }
         } else if (type == FS_IPC_CLOSE_REQ) {
             initfs_fd_t* fd = initfs_fd_lookup(arg0);
-            if (fd) {
+            if (!fd) {
+                status = WASMOS_ERR_FS_BAD_FD;
+            } else {
                 fd->in_use = 0;
                 fd->entry_index = -1;
                 fd->offset = 0;

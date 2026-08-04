@@ -28,6 +28,8 @@ export const WASMOS_ERR_DOMAIN_GFX: u16 = 6;
 export const WASMOS_ERR_DOMAIN_DRIVER: u16 = 7;
 export const WASMOS_ERR_DOMAIN_VT: u16 = 8;
 export const WASMOS_ERR_DOMAIN_CHARDEV: u16 = 9;
+export const WASMOS_ERR_DOMAIN_FONT: u16 = 12;
+export const WASMOS_ERR_DOMAIN_RTC: u16 = 13;
 export const WASMOS_ERR_DOMAIN_XFER_BUFFER: u16 = 11;
 export const WASMOS_ERR_DOMAIN_DEVMGR: u16 = 10;
 
@@ -117,6 +119,15 @@ export const WASMOS_ERR_VT_READER_BUSY: i32 = -0x00080003; // another endpoint i
 export const WASMOS_ERR_VT_UNSUPPORTED_REQUEST: i32 = -0x00080004; // unknown or unsupported request type
 export const WASMOS_ERR_CHARDEV_NO_DATA: i32 = -0x00090001; // no byte is buffered yet (retryable)
 export const WASMOS_ERR_CHARDEV_UNSUPPORTED_REQUEST: i32 = -0x00090002; // unknown or unsupported request type
+export const WASMOS_ERR_FONT_INVALID: i32 = -0x000C0001; // invalid request arguments (font id, size, glyph, or buffer)
+export const WASMOS_ERR_FONT_PERMISSION: i32 = -0x000C0002; // caller is not permitted to use the requested font resource
+export const WASMOS_ERR_FONT_UNSUPPORTED: i32 = -0x000C0003; // unknown or unsupported request type
+export const WASMOS_ERR_FONT_IO: i32 = -0x000C0004; // reading or decoding the font file failed
+export const WASMOS_ERR_FONT_BUSY: i32 = -0x000C0005; // no free rasterizer slot (retryable)
+export const WASMOS_ERR_RTC_INVALID: i32 = -0x000D0001; // invalid request arguments
+export const WASMOS_ERR_RTC_IO: i32 = -0x000D0002; // reading the CMOS/RTC registers failed
+export const WASMOS_ERR_RTC_TIMEOUT: i32 = -0x000D0003; // the RTC did not settle within the read window
+export const WASMOS_ERR_RTC_DENIED: i32 = -0x000D0004; // caller lacks the capability for this operation
 export const WASMOS_ERR_XFER_BUFFER_NULL_ARG: i32 = -0x000B0001; // a required pointer argument was NULL
 export const WASMOS_ERR_XFER_BUFFER_INVALID_KIND: i32 = -0x000B0002; // unknown or unsupported buffer kind
 export const WASMOS_ERR_XFER_BUFFER_INVALID_CONTEXT: i32 = -0x000B0003; // a context id argument was zero
@@ -179,6 +190,8 @@ export function errorDomainName(d: u16): string {
     case WASMOS_ERR_DOMAIN_DRIVER: return "driver";
     case WASMOS_ERR_DOMAIN_VT: return "vt";
     case WASMOS_ERR_DOMAIN_CHARDEV: return "chardev";
+    case WASMOS_ERR_DOMAIN_FONT: return "font";
+    case WASMOS_ERR_DOMAIN_RTC: return "rtc";
     case WASMOS_ERR_DOMAIN_XFER_BUFFER: return "xfer_buffer";
     case WASMOS_ERR_DOMAIN_DEVMGR: return "devmgr";
     default: return "unknown";
@@ -272,6 +285,15 @@ export function strerror(c: i32): string {
     case WASMOS_ERR_VT_UNSUPPORTED_REQUEST: return "unknown or unsupported request type";
     case WASMOS_ERR_CHARDEV_NO_DATA: return "no byte is buffered yet (retryable)";
     case WASMOS_ERR_CHARDEV_UNSUPPORTED_REQUEST: return "unknown or unsupported request type";
+    case WASMOS_ERR_FONT_INVALID: return "invalid request arguments (font id, size, glyph, or buffer)";
+    case WASMOS_ERR_FONT_PERMISSION: return "caller is not permitted to use the requested font resource";
+    case WASMOS_ERR_FONT_UNSUPPORTED: return "unknown or unsupported request type";
+    case WASMOS_ERR_FONT_IO: return "reading or decoding the font file failed";
+    case WASMOS_ERR_FONT_BUSY: return "no free rasterizer slot (retryable)";
+    case WASMOS_ERR_RTC_INVALID: return "invalid request arguments";
+    case WASMOS_ERR_RTC_IO: return "reading the CMOS/RTC registers failed";
+    case WASMOS_ERR_RTC_TIMEOUT: return "the RTC did not settle within the read window";
+    case WASMOS_ERR_RTC_DENIED: return "caller lacks the capability for this operation";
     case WASMOS_ERR_XFER_BUFFER_NULL_ARG: return "a required pointer argument was NULL";
     case WASMOS_ERR_XFER_BUFFER_INVALID_KIND: return "unknown or unsupported buffer kind";
     case WASMOS_ERR_XFER_BUFFER_INVALID_CONTEXT: return "a context id argument was zero";

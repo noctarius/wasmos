@@ -383,7 +383,7 @@ fn open_title_font_handle() i32 {
     if (font_ipc_call_budgeted(g_font_endpoint, req_id, c.FONT_IPC_OPEN_FONT_REQ, c.FONT_ID_ROBOTO, CHROME_TITLE_FONT_PX, 0, 0, &reply, 32) != 0) {
         return -1;
     }
-    if (reply.type != c.FONT_IPC_RESP or @as(i32, @bitCast(reply.arg0)) != c.FONT_STATUS_OK) {
+    if (reply.type != c.FONT_IPC_RESP or @as(i32, @bitCast(reply.arg0)) != c.WASMOS_ERR_NONE) {
         return -1;
     }
     g_font_title_handle = reply.arg1;
@@ -2025,7 +2025,7 @@ fn font_measure_and_raster_text(text: []const u8, out_w: *i32, out_h: *i32, out_
     if (font_ipc_call_budgeted(g_font_endpoint, req_id_measure, c.FONT_IPC_MEASURE_GLYPH_REQ, g_font_title_handle, g_font_text_shmem_id, @intCast(text.len), 0, &reply, 32) != 0) {
         return false;
     }
-    if (reply.type != c.FONT_IPC_RESP or @as(i32, @bitCast(reply.arg0)) != c.FONT_STATUS_OK) {
+    if (reply.type != c.FONT_IPC_RESP or @as(i32, @bitCast(reply.arg0)) != c.WASMOS_ERR_NONE) {
         return false;
     }
     const packed_wh = reply.arg1;
@@ -2054,7 +2054,7 @@ fn font_measure_and_raster_text(text: []const u8, out_w: *i32, out_h: *i32, out_
     if (font_ipc_call_budgeted(g_font_endpoint, req_id_into, c.FONT_IPC_RASTER_GLYPH_INTO_REQ, g_font_title_handle, g_font_text_shmem_id, @intCast(text.len), g_font_mask_shmem_id, &reply, 32) != 0) {
         return false;
     }
-    if (reply.type != c.FONT_IPC_RESP or @as(i32, @bitCast(reply.arg0)) != c.FONT_STATUS_OK) {
+    if (reply.type != c.FONT_IPC_RESP or @as(i32, @bitCast(reply.arg0)) != c.WASMOS_ERR_NONE) {
         return false;
     }
     return true;
@@ -2173,7 +2173,7 @@ fn glyph_cache_insert_from_font(codepoint: u32) bool {
     if (font_ipc_call_budgeted(g_font_endpoint, req_id, c.FONT_IPC_MEASURE_GLYPH_REQ, g_font_title_handle, g_font_text_shmem_id, @intCast(utf8_len), 0, &reply, 32) != 0) {
         return false;
     }
-    if (reply.type != c.FONT_IPC_RESP or @as(i32, @bitCast(reply.arg0)) != c.FONT_STATUS_OK) {
+    if (reply.type != c.FONT_IPC_RESP or @as(i32, @bitCast(reply.arg0)) != c.WASMOS_ERR_NONE) {
         return false;
     }
 
@@ -2208,7 +2208,7 @@ fn glyph_cache_insert_from_font(codepoint: u32) bool {
         if (font_ipc_call_budgeted(g_font_endpoint, req_id_into, c.FONT_IPC_RASTER_GLYPH_INTO_REQ, g_font_title_handle, g_font_text_shmem_id, @intCast(utf8_len), g_font_mask_shmem_id, &reply, 32) != 0) {
             return false;
         }
-        if (reply.type != c.FONT_IPC_RESP or @as(i32, @bitCast(reply.arg0)) != c.FONT_STATUS_OK) {
+        if (reply.type != c.FONT_IPC_RESP or @as(i32, @bitCast(reply.arg0)) != c.WASMOS_ERR_NONE) {
             return false;
         }
         const mask_src: [*]const u8 = g_font_mask_ptr.?;

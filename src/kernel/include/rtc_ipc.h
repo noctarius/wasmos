@@ -6,14 +6,10 @@
 
 /* RTC_IPC_* opcodes come from the generated IPC opcode ABI (abi/opcodes.yaml). */
 #include "../../../abi/generated/c/wasmos_opcodes.h"
+#include "../../../abi/generated/c/wasmos_status.h"
 
-enum {
-    RTC_STATUS_OK = 0,
-    RTC_STATUS_INVALID = -1,
-    RTC_STATUS_IO = -2,
-    RTC_STATUS_TIMEOUT = -3,
-    RTC_STATUS_DENIED = -4
-};
+/* Status codes are the packed rtc domain in abi/errors.yaml:
+ * WASMOS_ERR_NONE (0) on success, else a negative WASMOS_ERR_RTC_*. */
 
 /* RTC v1 payload contract:
  * - RTC_IPC_READ_REQ:

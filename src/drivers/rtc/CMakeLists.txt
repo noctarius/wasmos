@@ -12,6 +12,7 @@ if (AS_ENABLE)
     COMMAND ${CMAKE_COMMAND} -E make_directory ${WASM_RTC_STAGE_DIR}
     COMMAND ${CMAKE_COMMAND} -E copy_if_different ${WASM_RTC_DRIVER_SRC} ${WASM_RTC_STAGE_DIR}/rtc.ts
     COMMAND ${CMAKE_COMMAND} -E copy_if_different ${LIBC_DIR}/assemblyscript/wasmos.ts ${WASM_RTC_STAGE_DIR}/wasmos.ts
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different ${CMAKE_SOURCE_DIR}/abi/generated/assemblyscript/wasmos_status.ts ${WASM_RTC_STAGE_DIR}/wasmos_status.ts
     COMMAND ${ASC_EXECUTABLE}
             ${WASM_RTC_ENTRY_SRC}
             --target release
@@ -20,6 +21,7 @@ if (AS_ENABLE)
             --noAssert
             --outFile ${WASM_RTC_DRIVER_WASM}
     DEPENDS ${WASM_RTC_DRIVER_SRC} ${LIBC_DIR}/assemblyscript/wasmos.ts
+            ${CMAKE_SOURCE_DIR}/abi/generated/assemblyscript/wasmos_status.ts
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     COMMENT "Building AssemblyScript rtc driver module"
     VERBATIM

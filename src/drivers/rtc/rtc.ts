@@ -1,4 +1,10 @@
 import {std, startup} from "./wasmos";
+import {
+    WASMOS_ERR_NONE,
+    WASMOS_ERR_RTC_INVALID,
+    WASMOS_ERR_RTC_IO,
+    WASMOS_ERR_RTC_TIMEOUT
+} from "./wasmos_status";
 
 const CMOS_INDEX_PORT: i32 = 0x70;
 const CMOS_DATA_PORT: i32 = 0x71;
@@ -12,11 +18,6 @@ const RTC_IPC_SET_REQ: i32 = 0x821;
 const RTC_IPC_READ_RESP: i32 = 0x8A0;
 const RTC_IPC_SET_RESP: i32 = 0x8A1;
 const RTC_IPC_ERROR: i32 = 0x8FF;
-
-const RTC_STATUS_OK: i32 = 0;
-const RTC_STATUS_INVALID: i32 = -1;
-const RTC_STATUS_IO: i32 = -2;
-const RTC_STATUS_TIMEOUT: i32 = -3;
 
 @external("wasmos", "io_in8") declare function io_in8(port: i32): i32;
 @external("wasmos", "io_out8") declare function io_out8(port: i32, value: i32): i32;
@@ -106,7 +107,7 @@ function validateTime(vals: StaticArray<i32>): bool {
 
 function readTime(outVals: StaticArray<i32>): i32 {
     if (!waitNotUpdating()) {
-        return RTC_STATUS_TIMEOUT;
+        return WASMOS_ERR_RTC_TIMEOUT;
     }
 
     let sec = rtcReadReg(0x00);
@@ -146,15 +147,15 @@ function readTime(outVals: StaticArray<i32>): i32 {
     unchecked(outVals[3] = day);
     unchecked(outVals[4] = mon);
     unchecked(outVals[5] = fullYear);
-    return RTC_STATUS_OK;
+    return WASMOS_ERR_NONE;
 }
 
 function setTime(vals: StaticArray<i32>): i32 {
     if (!validateTime(vals)) {
-        return RTC_STATUS_INVALID;
+        return WASMOS_ERR_RTC_INVALID;
     }
     if (!waitNotUpdating()) {
-        return RTC_STATUS_TIMEOUT;
+        return WASMOS_ERR_RTC_TIMEOUT;
     }
 
     let sec = unchecked(vals[0]);
@@ -204,7 +205,7 @@ function setTime(vals: StaticArray<i32>): i32 {
     rtcWriteReg(0x08, mon);
     rtcWriteReg(0x09, year);
     rtcWriteReg(0x0B, regB & 0x7F);
-    return RTC_STATUS_OK;
+    return WASMOS_ERR_NONE;
 }
 
 function handleMessage(): void {
@@ -223,7 +224,7 @@ function handleMessage(): void {
     if (type == RTC_IPC_READ_REQ) {
         let vals = new StaticArray<i32>(6);
         let rc = readTime(vals);
-        if (rc != RTC_STATUS_OK) {
+        if (rc != WASMOS_ERR_NONE) {
             ipc_send(source, g_rtc_ep, RTC_IPC_ERROR, reqId, rc, 0, 0, 0);
             return;
         }
@@ -235,11 +236,11 @@ function handleMessage(): void {
         let vals = new StaticArray<i32>(6);
         unpackTime(ipc_last_field(2), ipc_last_field(3), vals);
         let rc = setTime(vals);
-        if (rc != RTC_STATUS_OK) {
+        if (rc != WASMOS_ERR_NONE) {
             ipc_send(source, g_rtc_ep, RTC_IPC_ERROR, reqId, rc, 0, 0, 0);
             return;
         }
-        ipc_send(source, g_rtc_ep, RTC_IPC_SET_RESP, reqId, RTC_STATUS_OK, 0, 0, 0);
+        ipc_send(source, g_rtc_ep, RTC_IPC_SET_RESP, reqId, WASMOS_ERR_NONE, 0, 0, 0);
         return;
     }
 

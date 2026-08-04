@@ -510,7 +510,7 @@ static inline int32_t ui_font_measure_text(ui_context_t* ctx, const char* text, 
                         &reply) != 0) {
         return -1;
     }
-    if (reply.type != FONT_IPC_RESP || reply.arg0 != FONT_STATUS_OK)
+    if (reply.type != FONT_IPC_RESP || reply.arg0 != WASMOS_ERR_NONE)
         return -1;
     if (out_w)
         *out_w = ui_u16_lo(reply.arg1);
@@ -552,7 +552,7 @@ static inline int32_t ui_font_measure_and_raster_text(ui_context_t* ctx, const c
                         ctx->font_text_shmem_id, text_len, ctx->font_mask_shmem_id, &reply) != 0) {
         return -1;
     }
-    if (reply.type != FONT_IPC_RESP || reply.arg0 != FONT_STATUS_OK)
+    if (reply.type != FONT_IPC_RESP || reply.arg0 != WASMOS_ERR_NONE)
         return -1;
     if (wasmos_shmem_refresh(ctx->font_mask_shmem_id, addr_cast(int32_t, ctx->font_mask_ptr),
                              bytes) != 0)
@@ -1105,7 +1105,7 @@ static inline int32_t ui_init_font(ui_context_t* ctx) {
     if (wasmos_ipc_call(ctx->font_endpoint, ctx->font_reply_endpoint, FONT_IPC_OPEN_FONT_REQ,
                         ctx->req_id++, FONT_ID_ROBOTO, ctx->font_px, 0, 0, &reply) != 0)
         return -1;
-    if (reply.type != FONT_IPC_RESP || reply.arg0 != FONT_STATUS_OK || reply.arg1 <= 0)
+    if (reply.type != FONT_IPC_RESP || reply.arg0 != WASMOS_ERR_NONE || reply.arg1 <= 0)
         return -1;
     ctx->font_handle = reply.arg1;
     return 0;

@@ -152,6 +152,25 @@ and **domains** (namespaced operation errors: the negative of `(domain << 16) | 
 | `WASMOS_ERR_CHARDEV_NO_DATA` | -0x00090001 | no byte is buffered yet (retryable) |
 | `WASMOS_ERR_CHARDEV_UNSUPPORTED_REQUEST` | -0x00090002 | unknown or unsupported request type |
 
+### `font` (domain 12) — font-rasterizer service failures (was FONT_STATUS_*)
+
+| Code | Value | Description |
+|---|---|---|
+| `WASMOS_ERR_FONT_INVALID` | -0x000C0001 | invalid request arguments (font id, size, glyph, or buffer) |
+| `WASMOS_ERR_FONT_PERMISSION` | -0x000C0002 | caller is not permitted to use the requested font resource |
+| `WASMOS_ERR_FONT_UNSUPPORTED` | -0x000C0003 | unknown or unsupported request type |
+| `WASMOS_ERR_FONT_IO` | -0x000C0004 | reading or decoding the font file failed |
+| `WASMOS_ERR_FONT_BUSY` | -0x000C0005 | no free rasterizer slot (retryable) |
+
+### `rtc` (domain 13) — real-time-clock service failures (was RTC_STATUS_*)
+
+| Code | Value | Description |
+|---|---|---|
+| `WASMOS_ERR_RTC_INVALID` | -0x000D0001 | invalid request arguments |
+| `WASMOS_ERR_RTC_IO` | -0x000D0002 | reading the CMOS/RTC registers failed |
+| `WASMOS_ERR_RTC_TIMEOUT` | -0x000D0003 | the RTC did not settle within the read window |
+| `WASMOS_ERR_RTC_DENIED` | -0x000D0004 | caller lacks the capability for this operation |
+
 ### `xfer_buffer` (domain 11) — transfer-buffer object registry / borrow / DMA failures (was XFER_BUFFER_ERR_*)
 
 | Code | Value | Description |

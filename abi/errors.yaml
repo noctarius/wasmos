@@ -169,6 +169,25 @@ domains:
       - { name: NO_DATA,             description: "no byte is buffered yet (retryable)" }
       - { name: UNSUPPORTED_REQUEST, description: "unknown or unsupported request type" }
 
+  font:
+    id: 12
+    description: "font-rasterizer service failures (was FONT_STATUS_*)"
+    codes:
+      - { name: INVALID,     description: "invalid request arguments (font id, size, glyph, or buffer)" }
+      - { name: PERMISSION,  description: "caller is not permitted to use the requested font resource" }
+      - { name: UNSUPPORTED, description: "unknown or unsupported request type" }
+      - { name: IO,          description: "reading or decoding the font file failed" }
+      - { name: BUSY,        description: "no free rasterizer slot (retryable)" }
+
+  rtc:
+    id: 13
+    description: "real-time-clock service failures (was RTC_STATUS_*)"
+    codes:
+      - { name: INVALID, description: "invalid request arguments" }
+      - { name: IO,      description: "reading the CMOS/RTC registers failed" }
+      - { name: TIMEOUT, description: "the RTC did not settle within the read window" }
+      - { name: DENIED,  description: "caller lacks the capability for this operation" }
+
   xfer_buffer:
     id: 11
     description: "transfer-buffer object registry / borrow / DMA failures (was XFER_BUFFER_ERR_*)"

@@ -39,6 +39,8 @@ enum {
     WASMOS_ERR_DOMAIN_DRIVER = 7, /* generic device-driver failures (reserved) */
     WASMOS_ERR_DOMAIN_VT = 8, /* virtual-terminal multiplexer failures */
     WASMOS_ERR_DOMAIN_CHARDEV = 9, /* character-device sample driver failures */
+    WASMOS_ERR_DOMAIN_FONT = 12, /* font-rasterizer service failures (was FONT_STATUS_*) */
+    WASMOS_ERR_DOMAIN_RTC = 13, /* real-time-clock service failures (was RTC_STATUS_*) */
     WASMOS_ERR_DOMAIN_XFER_BUFFER = 11, /* transfer-buffer object registry / borrow / DMA failures (was XFER_BUFFER_ERR_*) */
     WASMOS_ERR_DOMAIN_DEVMGR = 10, /* device-manager query failures */
 };
@@ -137,6 +139,15 @@ enum {
     WASMOS_ERR_VT_UNSUPPORTED_REQUEST = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_VT, 4), /* unknown or unsupported request type */
     WASMOS_ERR_CHARDEV_NO_DATA = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_CHARDEV, 1), /* no byte is buffered yet (retryable) */
     WASMOS_ERR_CHARDEV_UNSUPPORTED_REQUEST = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_CHARDEV, 2), /* unknown or unsupported request type */
+    WASMOS_ERR_FONT_INVALID = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_FONT, 1), /* invalid request arguments (font id, size, glyph, or buffer) */
+    WASMOS_ERR_FONT_PERMISSION = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_FONT, 2), /* caller is not permitted to use the requested font resource */
+    WASMOS_ERR_FONT_UNSUPPORTED = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_FONT, 3), /* unknown or unsupported request type */
+    WASMOS_ERR_FONT_IO = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_FONT, 4), /* reading or decoding the font file failed */
+    WASMOS_ERR_FONT_BUSY = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_FONT, 5), /* no free rasterizer slot (retryable) */
+    WASMOS_ERR_RTC_INVALID = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_RTC, 1), /* invalid request arguments */
+    WASMOS_ERR_RTC_IO = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_RTC, 2), /* reading the CMOS/RTC registers failed */
+    WASMOS_ERR_RTC_TIMEOUT = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_RTC, 3), /* the RTC did not settle within the read window */
+    WASMOS_ERR_RTC_DENIED = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_RTC, 4), /* caller lacks the capability for this operation */
     WASMOS_ERR_XFER_BUFFER_NULL_ARG = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_XFER_BUFFER, 1), /* a required pointer argument was NULL */
     WASMOS_ERR_XFER_BUFFER_INVALID_KIND = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_XFER_BUFFER, 2), /* unknown or unsupported buffer kind */
     WASMOS_ERR_XFER_BUFFER_INVALID_CONTEXT = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_XFER_BUFFER, 3), /* a context id argument was zero */
@@ -214,6 +225,8 @@ static inline const char *wasmos_error_domain_name(wasmos_error_domain_t d) {
     case WASMOS_ERR_DOMAIN_DRIVER: return "driver";
     case WASMOS_ERR_DOMAIN_VT: return "vt";
     case WASMOS_ERR_DOMAIN_CHARDEV: return "chardev";
+    case WASMOS_ERR_DOMAIN_FONT: return "font";
+    case WASMOS_ERR_DOMAIN_RTC: return "rtc";
     case WASMOS_ERR_DOMAIN_XFER_BUFFER: return "xfer_buffer";
     case WASMOS_ERR_DOMAIN_DEVMGR: return "devmgr";
     default: return "unknown";
@@ -308,6 +321,15 @@ static inline const char *wasmos_error_code_name(wasmos_error_code_t c) {
     case WASMOS_ERR_VT_UNSUPPORTED_REQUEST: return "vt.UNSUPPORTED_REQUEST";
     case WASMOS_ERR_CHARDEV_NO_DATA: return "chardev.NO_DATA";
     case WASMOS_ERR_CHARDEV_UNSUPPORTED_REQUEST: return "chardev.UNSUPPORTED_REQUEST";
+    case WASMOS_ERR_FONT_INVALID: return "font.INVALID";
+    case WASMOS_ERR_FONT_PERMISSION: return "font.PERMISSION";
+    case WASMOS_ERR_FONT_UNSUPPORTED: return "font.UNSUPPORTED";
+    case WASMOS_ERR_FONT_IO: return "font.IO";
+    case WASMOS_ERR_FONT_BUSY: return "font.BUSY";
+    case WASMOS_ERR_RTC_INVALID: return "rtc.INVALID";
+    case WASMOS_ERR_RTC_IO: return "rtc.IO";
+    case WASMOS_ERR_RTC_TIMEOUT: return "rtc.TIMEOUT";
+    case WASMOS_ERR_RTC_DENIED: return "rtc.DENIED";
     case WASMOS_ERR_XFER_BUFFER_NULL_ARG: return "xfer_buffer.NULL_ARG";
     case WASMOS_ERR_XFER_BUFFER_INVALID_KIND: return "xfer_buffer.INVALID_KIND";
     case WASMOS_ERR_XFER_BUFFER_INVALID_CONTEXT: return "xfer_buffer.INVALID_CONTEXT";
@@ -427,6 +449,15 @@ static inline const char *wasmos_strerror(wasmos_error_code_t c) {
     case WASMOS_ERR_VT_UNSUPPORTED_REQUEST: return "unknown or unsupported request type";
     case WASMOS_ERR_CHARDEV_NO_DATA: return "no byte is buffered yet (retryable)";
     case WASMOS_ERR_CHARDEV_UNSUPPORTED_REQUEST: return "unknown or unsupported request type";
+    case WASMOS_ERR_FONT_INVALID: return "invalid request arguments (font id, size, glyph, or buffer)";
+    case WASMOS_ERR_FONT_PERMISSION: return "caller is not permitted to use the requested font resource";
+    case WASMOS_ERR_FONT_UNSUPPORTED: return "unknown or unsupported request type";
+    case WASMOS_ERR_FONT_IO: return "reading or decoding the font file failed";
+    case WASMOS_ERR_FONT_BUSY: return "no free rasterizer slot (retryable)";
+    case WASMOS_ERR_RTC_INVALID: return "invalid request arguments";
+    case WASMOS_ERR_RTC_IO: return "reading the CMOS/RTC registers failed";
+    case WASMOS_ERR_RTC_TIMEOUT: return "the RTC did not settle within the read window";
+    case WASMOS_ERR_RTC_DENIED: return "caller lacks the capability for this operation";
     case WASMOS_ERR_XFER_BUFFER_NULL_ARG: return "a required pointer argument was NULL";
     case WASMOS_ERR_XFER_BUFFER_INVALID_KIND: return "unknown or unsupported buffer kind";
     case WASMOS_ERR_XFER_BUFFER_INVALID_CONTEXT: return "a context id argument was zero";

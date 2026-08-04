@@ -446,7 +446,7 @@ fn compute_text_metrics(f: *const loaded_font_t, px_size: u32, text_ptr: [*]cons
 fn reply_with_status(req: *const c.nd_ipc_message_t, status: i32, arg1: u32, arg2: u32, arg3: u32) void {
     if (req.source == IPC_ENDPOINT_NONE or req.request_id == 0) return;
     var resp: c.nd_ipc_message_t = undefined;
-    resp.type = if (status == c.FONT_STATUS_OK) c.FONT_IPC_RESP else c.FONT_IPC_ERROR;
+    resp.type = if (status == c.WASMOS_ERR_NONE) c.FONT_IPC_RESP else c.FONT_IPC_ERROR;
     resp.source = g_font_endpoint;
     resp.destination = req.source;
     resp.request_id = req.request_id;
@@ -461,11 +461,11 @@ fn handle_open_font(req: *const c.nd_ipc_message_t) void {
     const font_id = req.arg0;
     const px_size = req.arg1;
     if (px_size == 0 or px_size > 256) {
-        reply_with_status(req, c.FONT_STATUS_INVALID, 0, 0, 0);
+        reply_with_status(req, c.WASMOS_ERR_FONT_INVALID, 0, 0, 0);
         return;
     }
     if (font_slot_by_id(font_id) == null) {
-        reply_with_status(req, c.FONT_STATUS_INVALID, 0, 0, 0);
+        reply_with_status(req, c.WASMOS_ERR_FONT_INVALID, 0, 0, 0);
         return;
     }
 
@@ -482,58 +482,58 @@ fn handle_open_font(req: *const c.nd_ipc_message_t) void {
             .font_id = font_id,
             .px_size = px_size,
         };
-        reply_with_status(req, c.FONT_STATUS_OK, hid, 0, 0);
+        reply_with_status(req, c.WASMOS_ERR_NONE, hid, 0, 0);
         return;
     }
 
-    reply_with_status(req, c.FONT_STATUS_BUSY, 0, 0, 0);
+    reply_with_status(req, c.WASMOS_ERR_FONT_BUSY, 0, 0, 0);
 }
 
 fn handle_get_metrics(req: *const c.nd_ipc_message_t) void {
     const handle_id = req.arg0;
     const hs = handle_slot_by_id(handle_id) orelse {
-        reply_with_status(req, c.FONT_STATUS_INVALID, 0, 0, 0);
+        reply_with_status(req, c.WASMOS_ERR_FONT_INVALID, 0, 0, 0);
         return;
     };
     const h = g_handles[hs];
     if (h.owner_endpoint != req.source) {
-        reply_with_status(req, c.FONT_STATUS_PERMISSION, 0, 0, 0);
+        reply_with_status(req, c.WASMOS_ERR_FONT_PERMISSION, 0, 0, 0);
         return;
     }
     const fs = font_slot_by_id(h.font_id) orelse {
-        reply_with_status(req, c.FONT_STATUS_INVALID, 0, 0, 0);
+        reply_with_status(req, c.WASMOS_ERR_FONT_INVALID, 0, 0, 0);
         return;
     };
     const f = g_fonts[fs];
     if (!f.available or f.units_per_em == 0) {
-        reply_with_status(req, c.FONT_STATUS_IO, 0, 0, 0);
+        reply_with_status(req, c.WASMOS_ERR_FONT_IO, 0, 0, 0);
         return;
     }
     const asc = scaled_i16(f.ascent, h.px_size, f.units_per_em);
     const desc = scaled_i16(f.descent, h.px_size, f.units_per_em);
     const gap = scaled_i16(f.line_gap, h.px_size, f.units_per_em);
-    reply_with_status(req, c.FONT_STATUS_OK, @bitCast(asc), @bitCast(desc), @bitCast(gap));
+    reply_with_status(req, c.WASMOS_ERR_NONE, @bitCast(asc), @bitCast(desc), @bitCast(gap));
 }
 
 fn handle_raster_glyph(req: *const c.nd_ipc_message_t) void {
     const handle_id = req.arg0;
     const codepoint = req.arg1;
     const hs = handle_slot_by_id(handle_id) orelse {
-        reply_with_status(req, c.FONT_STATUS_INVALID, 0, 0, 0);
+        reply_with_status(req, c.WASMOS_ERR_FONT_INVALID, 0, 0, 0);
         return;
     };
     const h = g_handles[hs];
     if (h.owner_endpoint != req.source) {
-        reply_with_status(req, c.FONT_STATUS_PERMISSION, 0, 0, 0);
+        reply_with_status(req, c.WASMOS_ERR_FONT_PERMISSION, 0, 0, 0);
         return;
     }
     const fs = font_slot_by_id(h.font_id) orelse {
-        reply_with_status(req, c.FONT_STATUS_INVALID, 0, 0, 0);
+        reply_with_status(req, c.WASMOS_ERR_FONT_INVALID, 0, 0, 0);
         return;
     };
     const f = &g_fonts[fs];
     if (!f.available or !f.font_info_ready) {
-        reply_with_status(req, c.FONT_STATUS_IO, 0, 0, 0);
+        reply_with_status(req, c.WASMOS_ERR_FONT_IO, 0, 0, 0);
         return;
     }
 
@@ -547,13 +547,13 @@ fn handle_raster_glyph(req: *const c.nd_ipc_message_t) void {
     const w: i32 = x1 - x0;
     const hgt: i32 = y1 - y0;
     if (w <= 0 or hgt <= 0) {
-        reply_with_status(req, c.FONT_STATUS_OK, 0, 0, sys.packS16Pair(x0, y0));
+        reply_with_status(req, c.WASMOS_ERR_NONE, 0, 0, sys.packS16Pair(x0, y0));
         return;
     }
 
     const pixel_count: usize = @intCast(w * hgt);
     if (pixel_count > RASTER_SCRATCH_BYTES) {
-        reply_with_status(req, c.FONT_STATUS_IO, 0, 0, 0);
+        reply_with_status(req, c.WASMOS_ERR_FONT_IO, 0, 0, 0);
         return;
     }
 
@@ -567,7 +567,7 @@ fn handle_raster_glyph(req: *const c.nd_ipc_message_t) void {
         var scratch_ptr_raw: ?*anyopaque = null;
         const pages = (pixel_count + 4095) / 4096;
         if (api().shmem_create.?(pages, 0, &scratch_id, @ptrCast(&scratch_ptr_raw)) != 0 or scratch_id == 0 or scratch_ptr_raw == null) {
-            reply_with_status(req, c.FONT_STATUS_IO, 0, 0, 0);
+            reply_with_status(req, c.WASMOS_ERR_FONT_IO, 0, 0, 0);
             return;
         }
         g_raster_scratch_shmem_id = scratch_id;
@@ -580,19 +580,19 @@ fn handle_raster_glyph(req: *const c.nd_ipc_message_t) void {
         api().ipc_endpoint_owner.?(req.source, &owner_context_id) != 0 or
         owner_context_id == 0)
     {
-        reply_with_status(req, c.FONT_STATUS_IO, 0, 0, 0);
+        reply_with_status(req, c.WASMOS_ERR_FONT_IO, 0, 0, 0);
         return;
     }
     if (api().shmem_grant == null or
         api().shmem_grant.?(g_raster_scratch_shmem_id, owner_context_id) != 0)
     {
-        reply_with_status(req, c.FONT_STATUS_IO, 0, 0, 0);
+        reply_with_status(req, c.WASMOS_ERR_FONT_IO, 0, 0, 0);
         return;
     }
 
     const dst: [*]u8 = g_raster_scratch_ptr.?;
     c.stbtt_MakeCodepointBitmap(&f.font_info, dst, @intCast(w), @intCast(hgt), @intCast(w), scale, scale, @bitCast(codepoint));
-    reply_with_status(req, c.FONT_STATUS_OK, g_raster_scratch_shmem_id, sys.packU16Pair(@intCast(w), @intCast(hgt)), sys.packS16Pair(x0, y0));
+    reply_with_status(req, c.WASMOS_ERR_NONE, g_raster_scratch_shmem_id, sys.packU16Pair(@intCast(w), @intCast(hgt)), sys.packS16Pair(x0, y0));
 }
 
 fn handle_measure_text(req: *const c.nd_ipc_message_t) void {
@@ -600,31 +600,31 @@ fn handle_measure_text(req: *const c.nd_ipc_message_t) void {
     const text_shmem_id = req.arg1;
     const text_len = req.arg2;
     const hs = handle_slot_by_id(handle_id) orelse {
-        reply_with_status(req, c.FONT_STATUS_INVALID, 0, 0, 0);
+        reply_with_status(req, c.WASMOS_ERR_FONT_INVALID, 0, 0, 0);
         return;
     };
     const h = g_handles[hs];
     if (h.owner_endpoint != req.source) {
-        reply_with_status(req, c.FONT_STATUS_PERMISSION, 0, 0, 0);
+        reply_with_status(req, c.WASMOS_ERR_FONT_PERMISSION, 0, 0, 0);
         return;
     }
     const fs = font_slot_by_id(h.font_id) orelse {
-        reply_with_status(req, c.FONT_STATUS_INVALID, 0, 0, 0);
+        reply_with_status(req, c.WASMOS_ERR_FONT_INVALID, 0, 0, 0);
         return;
     };
     const f = &g_fonts[fs];
     if (!f.available or !f.font_info_ready or f.units_per_em == 0) {
-        reply_with_status(req, c.FONT_STATUS_IO, 0, 0, 0);
+        reply_with_status(req, c.WASMOS_ERR_FONT_IO, 0, 0, 0);
         return;
     }
     if (text_shmem_id == 0 or text_len == 0) {
-        reply_with_status(req, c.FONT_STATUS_INVALID, 0, 0, 0);
+        reply_with_status(req, c.WASMOS_ERR_FONT_INVALID, 0, 0, 0);
         return;
     }
 
     const text_ptr_raw = api().shmem_map.?(text_shmem_id);
     if (text_ptr_raw == null) {
-        reply_with_status(req, c.FONT_STATUS_IO, 0, 0, 0);
+        reply_with_status(req, c.WASMOS_ERR_FONT_IO, 0, 0, 0);
         return;
     }
     defer _ = api().shmem_unmap.?(text_shmem_id);
@@ -644,7 +644,7 @@ fn handle_measure_text(req: *const c.nd_ipc_message_t) void {
     const h16: u16 = @intCast(clamp_i32(metrics.height, 0, 0xFFFF));
     const x016: i16 = @intCast(clamp_i32(metrics.x0, -32768, 32767));
     const y016: i16 = @intCast(clamp_i32(metrics.y0, -32768, 32767));
-    reply_with_status(req, c.FONT_STATUS_OK, sys.packU16Pair(w16, h16), sys.packS16Pair(x016, y016), @bitCast(metrics.advance_x));
+    reply_with_status(req, c.WASMOS_ERR_NONE, sys.packU16Pair(w16, h16), sys.packS16Pair(x016, y016), @bitCast(metrics.advance_x));
 }
 
 fn handle_raster_text_into(req: *const c.nd_ipc_message_t) void {
@@ -653,31 +653,31 @@ fn handle_raster_text_into(req: *const c.nd_ipc_message_t) void {
     const text_len = req.arg2;
     const dst_shmem_id = req.arg3;
     const hs = handle_slot_by_id(handle_id) orelse {
-        reply_with_status(req, c.FONT_STATUS_INVALID, 0, 0, 0);
+        reply_with_status(req, c.WASMOS_ERR_FONT_INVALID, 0, 0, 0);
         return;
     };
     const h = g_handles[hs];
     if (h.owner_endpoint != req.source) {
-        reply_with_status(req, c.FONT_STATUS_PERMISSION, 0, 0, 0);
+        reply_with_status(req, c.WASMOS_ERR_FONT_PERMISSION, 0, 0, 0);
         return;
     }
     const fs = font_slot_by_id(h.font_id) orelse {
-        reply_with_status(req, c.FONT_STATUS_INVALID, 0, 0, 0);
+        reply_with_status(req, c.WASMOS_ERR_FONT_INVALID, 0, 0, 0);
         return;
     };
     const f = &g_fonts[fs];
     if (!f.available or !f.font_info_ready or f.units_per_em == 0) {
-        reply_with_status(req, c.FONT_STATUS_IO, 0, 0, 0);
+        reply_with_status(req, c.WASMOS_ERR_FONT_IO, 0, 0, 0);
         return;
     }
     if (text_shmem_id == 0 or text_len == 0 or dst_shmem_id == 0) {
-        reply_with_status(req, c.FONT_STATUS_INVALID, 0, 0, 0);
+        reply_with_status(req, c.WASMOS_ERR_FONT_INVALID, 0, 0, 0);
         return;
     }
 
     const text_ptr_raw = api().shmem_map.?(text_shmem_id);
     if (text_ptr_raw == null) {
-        reply_with_status(req, c.FONT_STATUS_IO, 0, 0, 0);
+        reply_with_status(req, c.WASMOS_ERR_FONT_IO, 0, 0, 0);
         return;
     }
     defer _ = api().shmem_unmap.?(text_shmem_id);
@@ -692,20 +692,20 @@ fn handle_raster_text_into(req: *const c.nd_ipc_message_t) void {
         const h16: u16 = @intCast(clamp_i32(out_h, 0, 0xFFFF));
         const x016: i16 = @intCast(clamp_i32(metrics.x0, -32768, 32767));
         const y016: i16 = @intCast(clamp_i32(metrics.y0, -32768, 32767));
-        reply_with_status(req, c.FONT_STATUS_OK, sys.packU16Pair(w16, h16), sys.packS16Pair(x016, y016), @bitCast(metrics.advance_x));
+        reply_with_status(req, c.WASMOS_ERR_NONE, sys.packU16Pair(w16, h16), sys.packS16Pair(x016, y016), @bitCast(metrics.advance_x));
         return;
     }
 
     const dst_ptr_raw = api().shmem_map.?(dst_shmem_id);
     if (dst_ptr_raw == null) {
-        reply_with_status(req, c.FONT_STATUS_IO, 0, 0, 0);
+        reply_with_status(req, c.WASMOS_ERR_FONT_IO, 0, 0, 0);
         return;
     }
     defer _ = api().shmem_unmap.?(dst_shmem_id);
     const dst: [*]u8 = @ptrCast(@alignCast(dst_ptr_raw.?));
     const out_size_i32 = out_w * out_h;
     if (out_size_i32 <= 0) {
-        reply_with_status(req, c.FONT_STATUS_INVALID, 0, 0, 0);
+        reply_with_status(req, c.WASMOS_ERR_FONT_INVALID, 0, 0, 0);
         return;
     }
     const out_size: usize = @intCast(out_size_i32);
@@ -730,12 +730,12 @@ fn handle_raster_text_into(req: *const c.nd_ipc_message_t) void {
         if (w > 0 and hgt > 0) {
             const pixel_count_i32 = w * hgt;
             if (pixel_count_i32 <= 0) {
-                reply_with_status(req, c.FONT_STATUS_IO, 0, 0, 0);
+                reply_with_status(req, c.WASMOS_ERR_FONT_IO, 0, 0, 0);
                 return;
             }
             const pixel_count: usize = @intCast(pixel_count_i32);
             if (pixel_count > RASTER_SCRATCH_BYTES) {
-                reply_with_status(req, c.FONT_STATUS_IO, 0, 0, 0);
+                reply_with_status(req, c.WASMOS_ERR_FONT_IO, 0, 0, 0);
                 return;
             }
             var scratch: [RASTER_SCRATCH_BYTES]u8 = undefined;
@@ -793,10 +793,10 @@ fn handle_raster_text_into(req: *const c.nd_ipc_message_t) void {
     const x016: i16 = @intCast(clamp_i32(metrics.x0, -32768, 32767));
     const y016: i16 = @intCast(clamp_i32(metrics.y0, -32768, 32767));
     if (api().shmem_flush.?(dst_shmem_id, @ptrCast(dst), @intCast(out_size)) != 0) {
-        reply_with_status(req, c.FONT_STATUS_IO, 0, 0, 0);
+        reply_with_status(req, c.WASMOS_ERR_FONT_IO, 0, 0, 0);
         return;
     }
-    reply_with_status(req, c.FONT_STATUS_OK, sys.packU16Pair(w16, h16), sys.packS16Pair(x016, y016), @bitCast(metrics.advance_x));
+    reply_with_status(req, c.WASMOS_ERR_NONE, sys.packU16Pair(w16, h16), sys.packS16Pair(x016, y016), @bitCast(metrics.advance_x));
 }
 
 fn handle_font_ipc_message(msg: *const c.nd_ipc_message_t) void {
@@ -814,7 +814,7 @@ fn handle_font_ipc_message(msg: *const c.nd_ipc_message_t) void {
         c.FS_IPC_RESP, c.FS_IPC_STREAM, c.FS_IPC_ERROR => {},
         else => {
             logHex32("[font] warning: unhandled event type ", msg.type);
-            reply_with_status(msg, c.FONT_STATUS_UNSUPPORTED, 0, 0, 0);
+            reply_with_status(msg, c.WASMOS_ERR_FONT_UNSUPPORTED, 0, 0, 0);
         },
     }
 }

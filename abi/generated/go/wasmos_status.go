@@ -33,6 +33,8 @@ const (
 	WASMOS_ERR_DOMAIN_DRIVER uint16 = 7
 	WASMOS_ERR_DOMAIN_VT uint16 = 8
 	WASMOS_ERR_DOMAIN_CHARDEV uint16 = 9
+	WASMOS_ERR_DOMAIN_FONT uint16 = 12
+	WASMOS_ERR_DOMAIN_RTC uint16 = 13
 	WASMOS_ERR_DOMAIN_XFER_BUFFER uint16 = 11
 	WASMOS_ERR_DOMAIN_DEVMGR uint16 = 10
 )
@@ -125,6 +127,15 @@ const (
 	WASMOS_ERR_VT_UNSUPPORTED_REQUEST int32 = -0x00080004 // unknown or unsupported request type
 	WASMOS_ERR_CHARDEV_NO_DATA int32 = -0x00090001 // no byte is buffered yet (retryable)
 	WASMOS_ERR_CHARDEV_UNSUPPORTED_REQUEST int32 = -0x00090002 // unknown or unsupported request type
+	WASMOS_ERR_FONT_INVALID int32 = -0x000C0001 // invalid request arguments (font id, size, glyph, or buffer)
+	WASMOS_ERR_FONT_PERMISSION int32 = -0x000C0002 // caller is not permitted to use the requested font resource
+	WASMOS_ERR_FONT_UNSUPPORTED int32 = -0x000C0003 // unknown or unsupported request type
+	WASMOS_ERR_FONT_IO int32 = -0x000C0004 // reading or decoding the font file failed
+	WASMOS_ERR_FONT_BUSY int32 = -0x000C0005 // no free rasterizer slot (retryable)
+	WASMOS_ERR_RTC_INVALID int32 = -0x000D0001 // invalid request arguments
+	WASMOS_ERR_RTC_IO int32 = -0x000D0002 // reading the CMOS/RTC registers failed
+	WASMOS_ERR_RTC_TIMEOUT int32 = -0x000D0003 // the RTC did not settle within the read window
+	WASMOS_ERR_RTC_DENIED int32 = -0x000D0004 // caller lacks the capability for this operation
 	WASMOS_ERR_XFER_BUFFER_NULL_ARG int32 = -0x000B0001 // a required pointer argument was NULL
 	WASMOS_ERR_XFER_BUFFER_INVALID_KIND int32 = -0x000B0002 // unknown or unsupported buffer kind
 	WASMOS_ERR_XFER_BUFFER_INVALID_CONTEXT int32 = -0x000B0003 // a context id argument was zero
@@ -216,6 +227,10 @@ func WasmosErrorDomainName(d uint16) string {
 		return "vt"
 	case WASMOS_ERR_DOMAIN_CHARDEV:
 		return "chardev"
+	case WASMOS_ERR_DOMAIN_FONT:
+		return "font"
+	case WASMOS_ERR_DOMAIN_RTC:
+		return "rtc"
 	case WASMOS_ERR_DOMAIN_XFER_BUFFER:
 		return "xfer_buffer"
 	case WASMOS_ERR_DOMAIN_DEVMGR:
@@ -397,6 +412,24 @@ func WasmosStrerror(c int32) string {
 		return "no byte is buffered yet (retryable)"
 	case WASMOS_ERR_CHARDEV_UNSUPPORTED_REQUEST:
 		return "unknown or unsupported request type"
+	case WASMOS_ERR_FONT_INVALID:
+		return "invalid request arguments (font id, size, glyph, or buffer)"
+	case WASMOS_ERR_FONT_PERMISSION:
+		return "caller is not permitted to use the requested font resource"
+	case WASMOS_ERR_FONT_UNSUPPORTED:
+		return "unknown or unsupported request type"
+	case WASMOS_ERR_FONT_IO:
+		return "reading or decoding the font file failed"
+	case WASMOS_ERR_FONT_BUSY:
+		return "no free rasterizer slot (retryable)"
+	case WASMOS_ERR_RTC_INVALID:
+		return "invalid request arguments"
+	case WASMOS_ERR_RTC_IO:
+		return "reading the CMOS/RTC registers failed"
+	case WASMOS_ERR_RTC_TIMEOUT:
+		return "the RTC did not settle within the read window"
+	case WASMOS_ERR_RTC_DENIED:
+		return "caller lacks the capability for this operation"
 	case WASMOS_ERR_XFER_BUFFER_NULL_ARG:
 		return "a required pointer argument was NULL"
 	case WASMOS_ERR_XFER_BUFFER_INVALID_KIND:

@@ -453,9 +453,10 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t block_endpo
             }
             op = fat_op_alloc();
             if (!op) {
-                (void)wasmos_ipc_send(
-                    wasmos_ipc_last_field(WASMOS_IPC_FIELD_SOURCE), g_fs_endpoint, FS_IPC_ERROR,
-                    wasmos_ipc_last_field(WASMOS_IPC_FIELD_REQUEST_ID), WASMOS_ERR_FS_BUSY, 0, 0, 0);
+                (void)wasmos_ipc_send(wasmos_ipc_last_field(WASMOS_IPC_FIELD_SOURCE), g_fs_endpoint,
+                                      FS_IPC_ERROR,
+                                      wasmos_ipc_last_field(WASMOS_IPC_FIELD_REQUEST_ID),
+                                      WASMOS_ERR_FS_BUSY, 0, 0, 0);
                 continue;
             }
             op->type = type;

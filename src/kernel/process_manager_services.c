@@ -444,7 +444,9 @@ int pm_handle_subsystem_register_broker(uint32_t pm_context_id, const ipc_messag
     resp.arg1 = 0;
     resp.arg2 = 0;
     resp.arg3 = 0;
-    return ipc_send_from(pm_context_id, msg->source, &resp) == IPC_OK ? 0 : WASMOS_ERR_PROC_PM_REPLY_SEND;
+    return ipc_send_from(pm_context_id, msg->source, &resp) == IPC_OK
+               ? 0
+               : WASMOS_ERR_PROC_PM_REPLY_SEND;
 }
 
 int pm_handle_exec_handler_register(uint32_t pm_context_id, const ipc_message_t* msg) {
@@ -498,5 +500,7 @@ int pm_handle_exec_handler_register(uint32_t pm_context_id, const ipc_message_t*
     resp.arg1 = 0;
     resp.arg2 = 0;
     resp.arg3 = 0;
-    return ipc_send_from(pm_context_id, msg->source, &resp) == IPC_OK ? 0 : WASMOS_ERR_PROC_PM_REPLY_SEND;
+    return ipc_send_from(pm_context_id, msg->source, &resp) == IPC_OK
+               ? 0
+               : WASMOS_ERR_PROC_PM_REPLY_SEND;
 }

@@ -1435,7 +1435,9 @@ int pm_handle_notify_ready(uint32_t pm_context_id, const ipc_message_t* msg) {
     ack.arg1 = 0;
     ack.arg2 = 0;
     ack.arg3 = 0;
-    return ipc_send_from(pm_context_id, msg->source, &ack) == IPC_OK ? 0 : WASMOS_ERR_PROC_PM_REPLY_SEND;
+    return ipc_send_from(pm_context_id, msg->source, &ack) == IPC_OK
+               ? 0
+               : WASMOS_ERR_PROC_PM_REPLY_SEND;
 }
 
 void pm_check_waits(uint32_t pm_context_id) {
@@ -1547,7 +1549,9 @@ int pm_handle_spawn(uint32_t pm_context_id, const ipc_message_t* msg) {
     resp.arg1 = 0;
     resp.arg2 = 0;
     resp.arg3 = 0;
-    return ipc_send_from(pm_context_id, msg->source, &resp) == IPC_OK ? 0 : WASMOS_ERR_PROC_PM_REPLY_SEND;
+    return ipc_send_from(pm_context_id, msg->source, &resp) == IPC_OK
+               ? 0
+               : WASMOS_ERR_PROC_PM_REPLY_SEND;
 }
 
 int pm_handle_spawn_caps(uint32_t pm_context_id, const ipc_message_t* msg) {
@@ -1606,7 +1610,9 @@ int pm_handle_spawn_caps(uint32_t pm_context_id, const ipc_message_t* msg) {
     resp.arg1 = 0;
     resp.arg2 = 0;
     resp.arg3 = 0;
-    return ipc_send_from(pm_context_id, msg->source, &resp) == IPC_OK ? 0 : WASMOS_ERR_PROC_PM_REPLY_SEND;
+    return ipc_send_from(pm_context_id, msg->source, &resp) == IPC_OK
+               ? 0
+               : WASMOS_ERR_PROC_PM_REPLY_SEND;
 }
 
 int pm_handle_spawn_caps_v2(uint32_t pm_context_id, const ipc_message_t* msg) {
@@ -1713,7 +1719,9 @@ int pm_handle_spawn_caps_v2(uint32_t pm_context_id, const ipc_message_t* msg) {
     resp.arg1 = 0;
     resp.arg2 = 0;
     resp.arg3 = 0;
-    return ipc_send_from(pm_context_id, msg->source, &resp) == IPC_OK ? 0 : WASMOS_ERR_PROC_PM_REPLY_SEND;
+    return ipc_send_from(pm_context_id, msg->source, &resp) == IPC_OK
+               ? 0
+               : WASMOS_ERR_PROC_PM_REPLY_SEND;
 }
 
 int pm_handle_spawn_path(uint32_t pm_context_id, const ipc_message_t* msg) {
@@ -1839,7 +1847,9 @@ int pm_handle_spawn_path(uint32_t pm_context_id, const ipc_message_t* msg) {
     resp.arg1 = app_flags;
     resp.arg2 = 0;
     resp.arg3 = 0;
-    return ipc_send_from(pm_context_id, msg->source, &resp) == IPC_OK ? 0 : WASMOS_ERR_PROC_PM_REPLY_SEND;
+    return ipc_send_from(pm_context_id, msg->source, &resp) == IPC_OK
+               ? 0
+               : WASMOS_ERR_PROC_PM_REPLY_SEND;
 }
 
 int pm_handle_spawn_path_caps(uint32_t pm_context_id, const ipc_message_t* msg) {
@@ -1950,7 +1960,9 @@ int pm_handle_spawn_path_caps(uint32_t pm_context_id, const ipc_message_t* msg) 
     resp.arg1 = 0;
     resp.arg2 = 0;
     resp.arg3 = 0;
-    return ipc_send_from(pm_context_id, msg->source, &resp) == IPC_OK ? 0 : WASMOS_ERR_PROC_PM_REPLY_SEND;
+    return ipc_send_from(pm_context_id, msg->source, &resp) == IPC_OK
+               ? 0
+               : WASMOS_ERR_PROC_PM_REPLY_SEND;
 }
 
 int pm_handle_module_meta(uint32_t pm_context_id, const ipc_message_t* msg) {
@@ -2003,7 +2015,9 @@ int pm_handle_module_meta(uint32_t pm_context_id, const ipc_message_t* msg) {
     resp.arg1 = packed_match;
     resp.arg2 = packed_vendor_device;
     resp.arg3 = packed_caps;
-    return ipc_send_from(pm_context_id, msg->source, &resp) == IPC_OK ? 0 : WASMOS_ERR_PROC_PM_REPLY_SEND;
+    return ipc_send_from(pm_context_id, msg->source, &resp) == IPC_OK
+               ? 0
+               : WASMOS_ERR_PROC_PM_REPLY_SEND;
 }
 
 int pm_handle_module_meta_path(uint32_t pm_context_id, const ipc_message_t* msg) {
@@ -2064,5 +2078,7 @@ int pm_handle_module_meta_path(uint32_t pm_context_id, const ipc_message_t* msg)
     resp.arg1 = desc.flags;
     resp.arg2 = cap_flags;
     resp.arg3 = 0;
-    return ipc_send_from(pm_context_id, msg->source, &resp) == IPC_OK ? 0 : WASMOS_ERR_PROC_PM_REPLY_SEND;
+    return ipc_send_from(pm_context_id, msg->source, &resp) == IPC_OK
+               ? 0
+               : WASMOS_ERR_PROC_PM_REPLY_SEND;
 }

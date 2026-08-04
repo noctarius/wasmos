@@ -2820,10 +2820,10 @@ extern "C" uint32_t warp_ring3_dispatch(uint32_t hc_id, void* frame_ptr) {
     syscall_frame_t* frame = static_cast<syscall_frame_t*>(frame_ptr);
     /* user_rsp sits just past syscall_frame_t (pushed by the CPU on the
      * ring-3 -> ring-0 INT transition); stack args live past [user_rsp+0]. */
-    uint64_t user_rsp = *reinterpret_cast<uint64_t*>(
-        reinterpret_cast<uint8_t*>(frame) + sizeof(syscall_frame_t));
-    return warp_ring3_dispatch_table(hc_id, frame->rdi, frame->rsi, frame->rdx,
-                                     frame->rcx, frame->r8, frame->r9, user_rsp);
+    uint64_t user_rsp =
+        *reinterpret_cast<uint64_t*>(reinterpret_cast<uint8_t*>(frame) + sizeof(syscall_frame_t));
+    return warp_ring3_dispatch_table(hc_id, frame->rdi, frame->rsi, frame->rdx, frame->rcx,
+                                     frame->r8, frame->r9, user_rsp);
 }
 #endif /* WASMOS_WASM_RUNTIME_WARP */
 

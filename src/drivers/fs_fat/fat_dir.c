@@ -443,7 +443,7 @@ fat_r_t fat_find_free_dir_slots(fat_findslots_ctx_t* f, fat_block_t* blk, const 
 
     f->result = -1;
     if (f->needed == 0) {
-        FAT_CO_FAIL(f, blk, -(int32_t)WASMOS_ERR_FS_NO_SPACE);
+        FAT_CO_FAIL(f, blk, WASMOS_ERR_FS_NO_SPACE);
     }
     f->run = 0;
     f->run_start = 0;
@@ -454,7 +454,7 @@ fat_r_t fat_find_free_dir_slots(fat_findslots_ctx_t* f, fat_block_t* blk, const 
         index = f->entry % entries_per_sector;
 
         if (f->sector >= f->dir_sectors) {
-            FAT_CO_FAIL(f, blk, -(int32_t)WASMOS_ERR_FS_NO_SPACE);
+            FAT_CO_FAIL(f, blk, WASMOS_ERR_FS_NO_SPACE);
         }
         /* Load the sector once at its first entry (index 0). */
         if (index == 0) {
@@ -478,7 +478,7 @@ fat_r_t fat_find_free_dir_slots(fat_findslots_ctx_t* f, fat_block_t* blk, const 
         f->run = 0;
     }
 
-    FAT_CO_FAIL(f, blk, -(int32_t)WASMOS_ERR_FS_NO_SPACE);
+    FAT_CO_FAIL(f, blk, WASMOS_ERR_FS_NO_SPACE);
     FAT_CO_END(f);
 }
 
@@ -559,7 +559,7 @@ fat_r_t fat_create_path_entry(fat_create_ctx_t* c, fat_block_t* blk, const fat_m
 
     c->found.valid = 0;
     if (!c->path) {
-        FAT_CO_FAIL(c, blk, -(int32_t)WASMOS_ERR_FS_BAD_ARGS);
+        FAT_CO_FAIL(c, blk, WASMOS_ERR_FS_BAD_ARGS);
     }
 
     /* Resolve the parent directory + leaf name. */
@@ -568,7 +568,7 @@ fat_r_t fat_create_path_entry(fat_create_ctx_t* c, fat_block_t* blk, const fat_m
     c->parent.source = c->source;
     FAT_CO_AWAIT(c, fat_resolve_parent_dir(&c->parent, blk, mnt));
     if (!c->parent.found.valid) {
-        FAT_CO_FAIL(c, blk, -(int32_t)WASMOS_ERR_FS_NOT_FOUND);
+        FAT_CO_FAIL(c, blk, WASMOS_ERR_FS_NOT_FOUND);
     }
     c->dir_lba = c->parent.found.dir_lba;
     c->dir_sectors = c->parent.found.dir_sector; /* span, per parent contract */
@@ -580,7 +580,7 @@ fat_r_t fat_create_path_entry(fat_create_ctx_t* c, fat_block_t* blk, const fat_m
     c->entry_limit = fat_dir_entry_limit(mnt, c->root, c->dir_sectors);
 
     if (fat_validate_lfn_name(c->name, &c->name_len) != 0) {
-        FAT_CO_FAIL(c, blk, -(int32_t)WASMOS_ERR_FS_NAME);
+        FAT_CO_FAIL(c, blk, WASMOS_ERR_FS_NAME);
     }
 
     /* Existence pre-check (reuse the read-side directory scan). */
@@ -594,7 +594,7 @@ fat_r_t fat_create_path_entry(fat_create_ctx_t* c, fat_block_t* blk, const fat_m
     FAT_CO_AWAIT(c, fat_find_in_dir(&c->scan, blk, mnt));
     if (c->scan.found.valid) {
         if (c->fail_if_exists) {
-            FAT_CO_FAIL(c, blk, -(int32_t)WASMOS_ERR_FS_EXISTS);
+            FAT_CO_FAIL(c, blk, WASMOS_ERR_FS_EXISTS);
         }
         c->found = c->scan.found;
         FAT_CO_DONE(c);
@@ -607,7 +607,7 @@ fat_r_t fat_create_path_entry(fat_create_ctx_t* c, fat_block_t* blk, const fat_m
         c->exact_short = 0;
         for (c->ordinal = 1; c->ordinal <= 9; ++c->ordinal) {
             if (fat_build_short_alias(c->name, c->ordinal, c->short_name) != 0) {
-                FAT_CO_FAIL(c, blk, -(int32_t)WASMOS_ERR_FS_NAME);
+                FAT_CO_FAIL(c, blk, WASMOS_ERR_FS_NAME);
             }
             c->shortscan.cont = 0;
             c->shortscan.dir_lba = c->dir_lba;
@@ -621,7 +621,7 @@ fat_r_t fat_create_path_entry(fat_create_ctx_t* c, fat_block_t* blk, const fat_m
                 break;
             }
             if (c->ordinal == 9) {
-                FAT_CO_FAIL(c, blk, -(int32_t)WASMOS_ERR_FS_NAME);
+                FAT_CO_FAIL(c, blk, WASMOS_ERR_FS_NAME);
             }
         }
     }
@@ -751,7 +751,7 @@ fat_r_t fat_create_directory(fat_mkdir_ctx_t* m, fat_block_t* blk, const fat_mou
     FAT_CO_BEGIN(m);
 
     if (!m->path) {
-        FAT_CO_FAIL(m, blk, -(int32_t)WASMOS_ERR_FS_BAD_ARGS);
+        FAT_CO_FAIL(m, blk, WASMOS_ERR_FS_BAD_ARGS);
     }
 
     /* Resolve the parent to derive the parent cluster (for the '..' entry). */
@@ -760,7 +760,7 @@ fat_r_t fat_create_directory(fat_mkdir_ctx_t* m, fat_block_t* blk, const fat_mou
     m->parent.source = m->source;
     FAT_CO_AWAIT(m, fat_resolve_parent_dir(&m->parent, blk, mnt));
     if (!m->parent.found.valid) {
-        FAT_CO_FAIL(m, blk, -(int32_t)WASMOS_ERR_FS_NOT_FOUND);
+        FAT_CO_FAIL(m, blk, WASMOS_ERR_FS_NOT_FOUND);
     }
     m->dir_lba = m->parent.found.dir_lba;
     m->dir_sectors = m->parent.found.dir_sector;
@@ -774,7 +774,7 @@ fat_r_t fat_create_directory(fat_mkdir_ctx_t* m, fat_block_t* blk, const fat_mou
     } else if (fat_dir_cluster_from_lba(mnt, m->dir_lba, &m->parent_cluster) != 0) {
         /* TODO: assumes the parent starts on a cluster boundary; wider chains
          * need explicit parent-cluster tracking. */
-        FAT_CO_FAIL(m, blk, -(int32_t)WASMOS_ERR_FS_CORRUPT);
+        FAT_CO_FAIL(m, blk, WASMOS_ERR_FS_CORRUPT);
     }
 
     /* Allocate a cluster + mark it end-of-chain. */
@@ -794,7 +794,7 @@ fat_r_t fat_create_directory(fat_mkdir_ctx_t* m, fat_block_t* blk, const fat_mou
      * '.' and '..' in the first sector. */
     m->cluster_lba = fat_lba_for_cluster(mnt, m->cluster);
     if (m->cluster_lba == 0) {
-        FAT_CO_FAIL(m, blk, -(int32_t)WASMOS_ERR_FS_CORRUPT);
+        FAT_CO_FAIL(m, blk, WASMOS_ERR_FS_CORRUPT);
     }
     for (m->sector = 0; m->sector < mnt->sectors_per_cluster; ++m->sector) {
         for (i = 0; i < mnt->bytes_per_sector; ++i) {
@@ -888,7 +888,7 @@ fat_r_t fat_remove_path(fat_remove_ctx_t* r, fat_block_t* blk, const fat_mount_t
     FAT_CO_BEGIN(r);
 
     if (!r->path) {
-        FAT_CO_FAIL(r, blk, -(int32_t)WASMOS_ERR_FS_BAD_ARGS);
+        FAT_CO_FAIL(r, blk, WASMOS_ERR_FS_BAD_ARGS);
     }
 
     /* Resolve the target entry. */
@@ -897,19 +897,19 @@ fat_r_t fat_remove_path(fat_remove_ctx_t* r, fat_block_t* blk, const fat_mount_t
     r->resolve.source = r->source;
     FAT_CO_AWAIT(r, fat_resolve_path(&r->resolve, blk, mnt));
     if (!r->resolve.found.valid) {
-        FAT_CO_FAIL(r, blk, -(int32_t)WASMOS_ERR_FS_NOT_FOUND);
+        FAT_CO_FAIL(r, blk, WASMOS_ERR_FS_NOT_FOUND);
     }
     r->entry = r->resolve.found;
 
     if (r->is_rmdir) {
         /* rmdir: must be a directory with a real cluster. */
         if ((r->entry.attr & 0x10) == 0 || r->entry.cluster < 2) {
-            FAT_CO_FAIL(r, blk, -(int32_t)WASMOS_ERR_FS_NOT_DIR);
+            FAT_CO_FAIL(r, blk, WASMOS_ERR_FS_NOT_DIR);
         }
         /* Refuse to remove the endpoint's current working directory. */
         if (mnt->cwd_source == r->source && !mnt->cwd_root &&
             mnt->dir_lba == fat_lba_for_cluster(mnt, r->entry.cluster)) {
-            FAT_CO_FAIL(r, blk, -(int32_t)WASMOS_ERR_FS_BUSY);
+            FAT_CO_FAIL(r, blk, WASMOS_ERR_FS_BUSY);
         }
         /* Must be empty. */
         r->empty.cont = 0;
@@ -917,7 +917,7 @@ fat_r_t fat_remove_path(fat_remove_ctx_t* r, fat_block_t* blk, const fat_mount_t
         r->empty.dir_sectors = mnt->sectors_per_cluster;
         FAT_CO_AWAIT(r, fat_dir_is_empty_step(&r->empty, blk, mnt));
         if (r->empty.result <= 0) {
-            FAT_CO_FAIL(r, blk, -(int32_t)WASMOS_ERR_FS_NOT_EMPTY);
+            FAT_CO_FAIL(r, blk, WASMOS_ERR_FS_NOT_EMPTY);
         }
         /* rmdir order: delete the entry chain, THEN free the clusters. */
         r->entry_index = r->entry.dir_sector * (mnt->bytes_per_sector / 32u) + r->entry.dir_index;
@@ -933,11 +933,11 @@ fat_r_t fat_remove_path(fat_remove_ctx_t* r, fat_block_t* blk, const fat_mount_t
 
     /* unlink: must NOT be a directory. */
     if (r->entry.attr & 0x10) {
-        FAT_CO_FAIL(r, blk, -(int32_t)WASMOS_ERR_FS_IS_DIR);
+        FAT_CO_FAIL(r, blk, WASMOS_ERR_FS_IS_DIR);
     }
     /* Refuse to unlink a file that is currently open. */
     if (fat_entry_is_open(&r->entry, files, file_count)) {
-        FAT_CO_FAIL(r, blk, -(int32_t)WASMOS_ERR_FS_OPEN);
+        FAT_CO_FAIL(r, blk, WASMOS_ERR_FS_OPEN);
     }
     /* unlink order: free the clusters, THEN delete the entry chain. */
     if (r->entry.cluster >= 2) {
@@ -1019,11 +1019,11 @@ fat_r_t fat_op_readdir(fat_op_ctx_t* op, fat_block_t* blk, const fat_mount_t* mn
     /* Root region must exist; a non-root cwd must be valid (matches original). */
     if (mnt->root_entry_count == 0 || mnt->root_dir_sectors == 0) {
         fat_log("root listing unsupported\n");
-        FAT_CO_FAIL(s, blk, -(int32_t)WASMOS_ERR_FS_NOT_FOUND);
+        FAT_CO_FAIL(s, blk, WASMOS_ERR_FS_NOT_FOUND);
     }
     if (!mnt->cwd_root && mnt->dir_lba == 0) {
         fat_log("cwd invalid\n");
-        FAT_CO_FAIL(s, blk, -(int32_t)WASMOS_ERR_FS_NOT_FOUND);
+        FAT_CO_FAIL(s, blk, WASMOS_ERR_FS_NOT_FOUND);
     }
 
     /* Latch the region kind so a concurrent CHDIR cannot shift it mid-scan. */
@@ -1210,7 +1210,7 @@ fat_r_t fat_op_chdir(fat_op_ctx_t* op, fat_block_t* blk, fat_mount_t* mnt) {
     }
 
     if (mnt->root_entry_count == 0 || mnt->root_dir_sectors == 0) {
-        FAT_CO_FAIL(c, blk, -(int32_t)WASMOS_ERR_FS_NOT_FOUND);
+        FAT_CO_FAIL(c, blk, WASMOS_ERR_FS_NOT_FOUND);
     }
 
     /* Copy the target into the working buffer and seed the running target from
@@ -1231,7 +1231,7 @@ fat_r_t fat_op_chdir(fat_op_ctx_t* op, fat_block_t* blk, fat_mount_t* mnt) {
 
     c->next = fat_chdir_next_component(c);
     if (c->next < 0) {
-        FAT_CO_FAIL(c, blk, -(int32_t)WASMOS_ERR_FS_NOT_FOUND);
+        FAT_CO_FAIL(c, blk, WASMOS_ERR_FS_NOT_FOUND);
     }
     if (c->next == 0) {
         /* Path resolved to a directory without any real component to descend. */
@@ -1250,7 +1250,7 @@ fat_r_t fat_op_chdir(fat_op_ctx_t* op, fat_block_t* blk, fat_mount_t* mnt) {
     }
 
     if (fat_chdir_begin_dir(c, mnt, c->root, c->cluster) != 0) {
-        FAT_CO_FAIL(c, blk, -(int32_t)WASMOS_ERR_FS_NOT_FOUND);
+        FAT_CO_FAIL(c, blk, WASMOS_ERR_FS_NOT_FOUND);
     }
 
     /* Walk directories: for each we scan sectors looking for c->name; on a match
@@ -1267,7 +1267,7 @@ fat_r_t fat_op_chdir(fat_op_ctx_t* op, fat_block_t* blk, fat_mount_t* mnt) {
                 ent = fat_block_sector(blk) + c->scan_index * 32u;
                 if (ent[0] == 0x00) {
                     fat_lfn_reset(&c->lfn);
-                    FAT_CO_FAIL(c, blk, -(int32_t)WASMOS_ERR_FS_NOT_FOUND); /* end-of-dir: miss */
+                    FAT_CO_FAIL(c, blk, WASMOS_ERR_FS_NOT_FOUND); /* end-of-dir: miss */
                 }
                 if (ent[0] == 0xE5) {
                     fat_lfn_reset(&c->lfn);
@@ -1305,14 +1305,14 @@ fat_r_t fat_op_chdir(fat_op_ctx_t* op, fat_block_t* blk, fat_mount_t* mnt) {
                 cluster = (uint16_t)ent[26] | ((uint16_t)ent[27] << 8);
                 if (cluster < 2) {
                     fat_lfn_reset(&c->lfn);
-                    FAT_CO_FAIL(c, blk, -(int32_t)WASMOS_ERR_FS_NOT_DIR);
+                    FAT_CO_FAIL(c, blk, WASMOS_ERR_FS_NOT_DIR);
                 }
                 c->root = 0;
                 c->cluster = cluster;
                 c->next = fat_chdir_next_component(c);
                 if (c->next < 0) {
                     fat_lfn_reset(&c->lfn);
-                    FAT_CO_FAIL(c, blk, -(int32_t)WASMOS_ERR_FS_NOT_FOUND);
+                    FAT_CO_FAIL(c, blk, WASMOS_ERR_FS_NOT_FOUND);
                 }
                 if (c->next == 0) {
                     mnt->cwd_mount = VFS_MOUNT_BOOT;
@@ -1327,18 +1327,18 @@ fat_r_t fat_op_chdir(fat_op_ctx_t* op, fat_block_t* blk, fat_mount_t* mnt) {
                 /* Descend into the matched subdirectory and restart the scan. */
                 if (fat_chdir_begin_dir(c, mnt, 0, cluster) != 0) {
                     fat_lfn_reset(&c->lfn);
-                    FAT_CO_FAIL(c, blk, -(int32_t)WASMOS_ERR_FS_NOT_FOUND);
+                    FAT_CO_FAIL(c, blk, WASMOS_ERR_FS_NOT_FOUND);
                 }
                 goto rescan;
             }
 
             if (c->entries_left <= c->entries_total) {
-                FAT_CO_FAIL(c, blk, -(int32_t)WASMOS_ERR_FS_NOT_FOUND);
+                FAT_CO_FAIL(c, blk, WASMOS_ERR_FS_NOT_FOUND);
             }
             c->entries_left -= c->entries_total;
         }
         /* Exhausted the directory's sectors without a match. */
-        FAT_CO_FAIL(c, blk, -(int32_t)WASMOS_ERR_FS_NOT_FOUND);
+        FAT_CO_FAIL(c, blk, WASMOS_ERR_FS_NOT_FOUND);
     rescan:;
     }
 

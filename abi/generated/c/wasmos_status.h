@@ -35,17 +35,20 @@ enum {
     WASMOS_ERR_DOMAIN_SHMEM = 3, /* shared-memory map/map_auto failures (was SHMEM_ERR_*) */
     WASMOS_ERR_DOMAIN_FS = 4, /* filesystem backend/VFS failures (was FS_ERR_*) */
     WASMOS_ERR_DOMAIN_NET = 5, /* networking stack / socket failures (reserved) */
-    WASMOS_ERR_DOMAIN_GFX = 6, /* compositor / framebuffer failures (reserved) */
+    WASMOS_ERR_DOMAIN_GFX = 6, /* compositor / framebuffer text-console failures */
     WASMOS_ERR_DOMAIN_DRIVER = 7, /* generic device-driver failures (reserved) */
+    WASMOS_ERR_DOMAIN_VT = 8, /* virtual-terminal multiplexer failures */
+    WASMOS_ERR_DOMAIN_CHARDEV = 9, /* character-device sample driver failures */
+    WASMOS_ERR_DOMAIN_DEVMGR = 10, /* device-manager query failures */
 };
 
-/* A domain error packs (domain << 16) | local_code into 32 bits. */
-typedef uint32_t wasmos_error_code_t;
+/* A domain error is the negative of (domain << 16) | local_code. */
+typedef int32_t wasmos_error_code_t;
 #define WASMOS_ERR_MAKE(dom, code) \
-    ((wasmos_error_code_t)(((uint32_t)(dom) << 16) | ((uint32_t)(code) & 0xFFFFu)))
-#define WASMOS_ERR_DOMAIN_OF(x) ((wasmos_error_domain_t)((uint32_t)(x) >> 16))
-#define WASMOS_ERR_CODE_OF(x)   ((uint16_t)((uint32_t)(x) & 0xFFFFu))
-#define WASMOS_ERR_NONE ((wasmos_error_code_t)0u) /* success / empty frame */
+    ((wasmos_error_code_t)(-(int32_t)(((uint32_t)(dom) << 16) | ((uint32_t)(code) & 0xFFFFu))))
+#define WASMOS_ERR_DOMAIN_OF(x) ((wasmos_error_domain_t)((uint32_t)(-(int32_t)(x)) >> 16))
+#define WASMOS_ERR_CODE_OF(x)   ((uint16_t)((uint32_t)(-(int32_t)(x)) & 0xFFFFu))
+#define WASMOS_ERR_NONE ((wasmos_error_code_t)0) /* success / empty frame */
 
 /* Packed domain error constants (use with wasmos_error_is / _as). */
 enum {
@@ -114,6 +117,26 @@ enum {
     WASMOS_ERR_FS_UNSUPPORTED = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_FS, 18), /* unknown/unsupported request type */
     WASMOS_ERR_FS_OPEN = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_FS, 19), /* operation forbidden on a currently-open file */
     WASMOS_ERR_FS_CORRUPT = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_FS, 20), /* on-disk structure inconsistency detected */
+    WASMOS_ERR_FS_NOT_AUTHORIZED = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_FS, 21), /* caller is not permitted to issue this request (e.g. clone-cwd is process-manager only) */
+    WASMOS_ERR_FS_NO_CLIENT_SLOT = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_FS, 22), /* per-client state could not be tracked (slot table full / allocation failed) */
+    WASMOS_ERR_FS_NOT_ABSOLUTE = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_FS, 23), /* path must be absolute (does not start with '/') */
+    WASMOS_ERR_FS_NO_BACKEND = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_FS, 24), /* no registered backend serves the requested mount */
+    WASMOS_ERR_FS_REBORROW = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_FS, 25), /* reborrowing the client's xfer-buffer grant to the backend failed */
+    WASMOS_ERR_FS_BACKEND_IPC = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_FS, 26), /* request could not be delivered to the backend, or no reply arrived */
+    WASMOS_ERR_FS_BAD_FD = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_FS, 27), /* fd is not present in this client's fd table */
+    WASMOS_ERR_GFX_UNSUPPORTED_REQUEST = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_GFX, 1), /* unknown or unsupported request type for this framebuffer backend */
+    WASMOS_ERR_GFX_NO_RUNTIME_MODES = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_GFX, 2), /* backend cannot enumerate or switch modes at runtime (firmware-provided framebuffer) */
+    WASMOS_ERR_GFX_BAD_MODE_INDEX = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_GFX, 3), /* mode index is out of range for this backend */
+    WASMOS_ERR_GFX_MODE_TOO_LARGE = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_GFX, 4), /* requested mode does not fit the framebuffer mapping established at boot */
+    WASMOS_ERR_GFX_MODE_SET_FAILED = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_GFX, 5), /* requested geometry is not a supported mode, or the mode-set path is unavailable */
+    WASMOS_ERR_VT_BAD_TTY_ID = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_VT, 1), /* requested tty id is out of range */
+    WASMOS_ERR_VT_NO_TTY_FOR_SOURCE = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_VT, 2), /* no tty is associated with the requesting endpoint */
+    WASMOS_ERR_VT_READER_BUSY = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_VT, 3), /* another endpoint is already the reader for this tty */
+    WASMOS_ERR_VT_UNSUPPORTED_REQUEST = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_VT, 4), /* unknown or unsupported request type */
+    WASMOS_ERR_CHARDEV_NO_DATA = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_CHARDEV, 1), /* no byte is buffered yet (retryable) */
+    WASMOS_ERR_CHARDEV_UNSUPPORTED_REQUEST = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_CHARDEV, 2), /* unknown or unsupported request type */
+    WASMOS_ERR_DEVMGR_NO_MOUNT_RULE = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_DEVMGR, 1), /* no block/filesystem mount rule matches the requested unit */
+    WASMOS_ERR_DEVMGR_UNSUPPORTED_QUERY = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_DEVMGR, 2), /* unknown or unsupported device-manager query type */
 };
 
 #define WASMOS_ERR_CHAIN_DEPTH 4
@@ -162,6 +185,9 @@ static inline const char *wasmos_error_domain_name(wasmos_error_domain_t d) {
     case WASMOS_ERR_DOMAIN_NET: return "net";
     case WASMOS_ERR_DOMAIN_GFX: return "gfx";
     case WASMOS_ERR_DOMAIN_DRIVER: return "driver";
+    case WASMOS_ERR_DOMAIN_VT: return "vt";
+    case WASMOS_ERR_DOMAIN_CHARDEV: return "chardev";
+    case WASMOS_ERR_DOMAIN_DEVMGR: return "devmgr";
     default: return "unknown";
     }
 }
@@ -235,6 +261,26 @@ static inline const char *wasmos_error_code_name(wasmos_error_code_t c) {
     case WASMOS_ERR_FS_UNSUPPORTED: return "fs.UNSUPPORTED";
     case WASMOS_ERR_FS_OPEN: return "fs.OPEN";
     case WASMOS_ERR_FS_CORRUPT: return "fs.CORRUPT";
+    case WASMOS_ERR_FS_NOT_AUTHORIZED: return "fs.NOT_AUTHORIZED";
+    case WASMOS_ERR_FS_NO_CLIENT_SLOT: return "fs.NO_CLIENT_SLOT";
+    case WASMOS_ERR_FS_NOT_ABSOLUTE: return "fs.NOT_ABSOLUTE";
+    case WASMOS_ERR_FS_NO_BACKEND: return "fs.NO_BACKEND";
+    case WASMOS_ERR_FS_REBORROW: return "fs.REBORROW";
+    case WASMOS_ERR_FS_BACKEND_IPC: return "fs.BACKEND_IPC";
+    case WASMOS_ERR_FS_BAD_FD: return "fs.BAD_FD";
+    case WASMOS_ERR_GFX_UNSUPPORTED_REQUEST: return "gfx.UNSUPPORTED_REQUEST";
+    case WASMOS_ERR_GFX_NO_RUNTIME_MODES: return "gfx.NO_RUNTIME_MODES";
+    case WASMOS_ERR_GFX_BAD_MODE_INDEX: return "gfx.BAD_MODE_INDEX";
+    case WASMOS_ERR_GFX_MODE_TOO_LARGE: return "gfx.MODE_TOO_LARGE";
+    case WASMOS_ERR_GFX_MODE_SET_FAILED: return "gfx.MODE_SET_FAILED";
+    case WASMOS_ERR_VT_BAD_TTY_ID: return "vt.BAD_TTY_ID";
+    case WASMOS_ERR_VT_NO_TTY_FOR_SOURCE: return "vt.NO_TTY_FOR_SOURCE";
+    case WASMOS_ERR_VT_READER_BUSY: return "vt.READER_BUSY";
+    case WASMOS_ERR_VT_UNSUPPORTED_REQUEST: return "vt.UNSUPPORTED_REQUEST";
+    case WASMOS_ERR_CHARDEV_NO_DATA: return "chardev.NO_DATA";
+    case WASMOS_ERR_CHARDEV_UNSUPPORTED_REQUEST: return "chardev.UNSUPPORTED_REQUEST";
+    case WASMOS_ERR_DEVMGR_NO_MOUNT_RULE: return "devmgr.NO_MOUNT_RULE";
+    case WASMOS_ERR_DEVMGR_UNSUPPORTED_QUERY: return "devmgr.UNSUPPORTED_QUERY";
     default: return "unknown";
     }
 }
@@ -308,6 +354,26 @@ static inline const char *wasmos_strerror(wasmos_error_code_t c) {
     case WASMOS_ERR_FS_UNSUPPORTED: return "unknown/unsupported request type";
     case WASMOS_ERR_FS_OPEN: return "operation forbidden on a currently-open file";
     case WASMOS_ERR_FS_CORRUPT: return "on-disk structure inconsistency detected";
+    case WASMOS_ERR_FS_NOT_AUTHORIZED: return "caller is not permitted to issue this request (e.g. clone-cwd is process-manager only)";
+    case WASMOS_ERR_FS_NO_CLIENT_SLOT: return "per-client state could not be tracked (slot table full / allocation failed)";
+    case WASMOS_ERR_FS_NOT_ABSOLUTE: return "path must be absolute (does not start with '/')";
+    case WASMOS_ERR_FS_NO_BACKEND: return "no registered backend serves the requested mount";
+    case WASMOS_ERR_FS_REBORROW: return "reborrowing the client's xfer-buffer grant to the backend failed";
+    case WASMOS_ERR_FS_BACKEND_IPC: return "request could not be delivered to the backend, or no reply arrived";
+    case WASMOS_ERR_FS_BAD_FD: return "fd is not present in this client's fd table";
+    case WASMOS_ERR_GFX_UNSUPPORTED_REQUEST: return "unknown or unsupported request type for this framebuffer backend";
+    case WASMOS_ERR_GFX_NO_RUNTIME_MODES: return "backend cannot enumerate or switch modes at runtime (firmware-provided framebuffer)";
+    case WASMOS_ERR_GFX_BAD_MODE_INDEX: return "mode index is out of range for this backend";
+    case WASMOS_ERR_GFX_MODE_TOO_LARGE: return "requested mode does not fit the framebuffer mapping established at boot";
+    case WASMOS_ERR_GFX_MODE_SET_FAILED: return "requested geometry is not a supported mode, or the mode-set path is unavailable";
+    case WASMOS_ERR_VT_BAD_TTY_ID: return "requested tty id is out of range";
+    case WASMOS_ERR_VT_NO_TTY_FOR_SOURCE: return "no tty is associated with the requesting endpoint";
+    case WASMOS_ERR_VT_READER_BUSY: return "another endpoint is already the reader for this tty";
+    case WASMOS_ERR_VT_UNSUPPORTED_REQUEST: return "unknown or unsupported request type";
+    case WASMOS_ERR_CHARDEV_NO_DATA: return "no byte is buffered yet (retryable)";
+    case WASMOS_ERR_CHARDEV_UNSUPPORTED_REQUEST: return "unknown or unsupported request type";
+    case WASMOS_ERR_DEVMGR_NO_MOUNT_RULE: return "no block/filesystem mount rule matches the requested unit";
+    case WASMOS_ERR_DEVMGR_UNSUPPORTED_QUERY: return "unknown or unsupported device-manager query type";
     default: return "unknown error";
     }
 }

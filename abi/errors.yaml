@@ -124,18 +124,53 @@ domains:
       - { name: UNSUPPORTED,   description: "unknown/unsupported request type" }
       - { name: OPEN,          description: "operation forbidden on a currently-open file" }
       - { name: CORRUPT,       description: "on-disk structure inconsistency detected" }
+      - { name: NOT_AUTHORIZED, description: "caller is not permitted to issue this request (e.g. clone-cwd is process-manager only)" }
+      - { name: NO_CLIENT_SLOT, description: "per-client state could not be tracked (slot table full / allocation failed)" }
+      - { name: NOT_ABSOLUTE,   description: "path must be absolute (does not start with '/')" }
+      - { name: NO_BACKEND,     description: "no registered backend serves the requested mount" }
+      - { name: REBORROW,       description: "reborrowing the client's xfer-buffer grant to the backend failed" }
+      - { name: BACKEND_IPC,    description: "request could not be delivered to the backend, or no reply arrived" }
+      - { name: BAD_FD,         description: "fd is not present in this client's fd table" }
 
-  # Reserved domains: ids fixed here so future codes cannot collide. Populate as
-  # each subsystem migrates its errors onto the packed model.
   net:
     id: 5
     description: "networking stack / socket failures (reserved)"
     codes: []
+
   gfx:
     id: 6
-    description: "compositor / framebuffer failures (reserved)"
-    codes: []
+    description: "compositor / framebuffer text-console failures"
+    codes:
+      - { name: UNSUPPORTED_REQUEST, description: "unknown or unsupported request type for this framebuffer backend" }
+      - { name: NO_RUNTIME_MODES,    description: "backend cannot enumerate or switch modes at runtime (firmware-provided framebuffer)" }
+      - { name: BAD_MODE_INDEX,      description: "mode index is out of range for this backend" }
+      - { name: MODE_TOO_LARGE,      description: "requested mode does not fit the framebuffer mapping established at boot" }
+      - { name: MODE_SET_FAILED,     description: "requested geometry is not a supported mode, or the mode-set path is unavailable" }
+
   driver:
     id: 7
     description: "generic device-driver failures (reserved)"
     codes: []
+
+  vt:
+    id: 8
+    description: "virtual-terminal multiplexer failures"
+    codes:
+      - { name: BAD_TTY_ID,          description: "requested tty id is out of range" }
+      - { name: NO_TTY_FOR_SOURCE,   description: "no tty is associated with the requesting endpoint" }
+      - { name: READER_BUSY,         description: "another endpoint is already the reader for this tty" }
+      - { name: UNSUPPORTED_REQUEST, description: "unknown or unsupported request type" }
+
+  chardev:
+    id: 9
+    description: "character-device sample driver failures"
+    codes:
+      - { name: NO_DATA,             description: "no byte is buffered yet (retryable)" }
+      - { name: UNSUPPORTED_REQUEST, description: "unknown or unsupported request type" }
+
+  devmgr:
+    id: 10
+    description: "device-manager query failures"
+    codes:
+      - { name: NO_MOUNT_RULE,     description: "no block/filesystem mount rule matches the requested unit" }
+      - { name: UNSUPPORTED_QUERY, description: "unknown or unsupported device-manager query type" }

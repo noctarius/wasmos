@@ -34,14 +34,14 @@ fat_r_t fat_fatent_read(fat_fatent_ctx_t* e, fat_block_t* blk, const fat_mount_t
 
     FAT_CO_BEGIN(e);
     if (e->cluster < 2) {
-        FAT_CO_FAIL(e, blk, -(int32_t)WASMOS_ERR_FS_CORRUPT);
+        FAT_CO_FAIL(e, blk, WASMOS_ERR_FS_CORRUPT);
     }
     if (mnt->fat_type == FAT_TYPE_12) {
         fat_offset = e->cluster + (e->cluster / 2u);
     } else if (mnt->fat_type == FAT_TYPE_16) {
         fat_offset = (uint32_t)e->cluster * 2u;
     } else {
-        FAT_CO_FAIL(e, blk, -(int32_t)WASMOS_ERR_FS_CORRUPT);
+        FAT_CO_FAIL(e, blk, WASMOS_ERR_FS_CORRUPT);
     }
     e->fat_lba = fat_table_lba(mnt) + (fat_offset / mnt->bytes_per_sector);
     e->sector_offset = fat_offset % mnt->bytes_per_sector;
@@ -74,14 +74,14 @@ fat_r_t fat_fatent_write(fat_fatent_ctx_t* e, fat_block_t* blk, const fat_mount_
 
     FAT_CO_BEGIN(e);
     if (e->cluster < 2) {
-        FAT_CO_FAIL(e, blk, -(int32_t)WASMOS_ERR_FS_CORRUPT);
+        FAT_CO_FAIL(e, blk, WASMOS_ERR_FS_CORRUPT);
     }
     if (mnt->fat_type == FAT_TYPE_12) {
         e->fat_offset = e->cluster + (e->cluster / 2u);
     } else if (mnt->fat_type == FAT_TYPE_16) {
         e->fat_offset = (uint32_t)e->cluster * 2u;
     } else {
-        FAT_CO_FAIL(e, blk, -(int32_t)WASMOS_ERR_FS_CORRUPT);
+        FAT_CO_FAIL(e, blk, WASMOS_ERR_FS_CORRUPT);
     }
 
     if (mnt->fat_type == FAT_TYPE_12) {
@@ -176,7 +176,7 @@ fat_r_t fat_find_free_cluster(fat_findfree_ctx_t* f, fat_block_t* blk, const fat
     FAT_CO_BEGIN(f);
     f->total = fat_total_clusters(mnt);
     if (f->total == 0) {
-        FAT_CO_FAIL(f, blk, -(int32_t)WASMOS_ERR_FS_NO_SPACE);
+        FAT_CO_FAIL(f, blk, WASMOS_ERR_FS_NO_SPACE);
     }
     for (f->cursor = 2; f->cursor < f->total + 2u; ++f->cursor) {
         f->ent.cont = 0;
@@ -187,6 +187,6 @@ fat_r_t fat_find_free_cluster(fat_findfree_ctx_t* f, fat_block_t* blk, const fat
             FAT_CO_DONE(f);
         }
     }
-    FAT_CO_FAIL(f, blk, -(int32_t)WASMOS_ERR_FS_NO_SPACE);
+    FAT_CO_FAIL(f, blk, WASMOS_ERR_FS_NO_SPACE);
     FAT_CO_END(f);
 }

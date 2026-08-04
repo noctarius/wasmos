@@ -340,22 +340,22 @@ returns; `FS_ERR_*`/`PROC_*` ride IPC opcodes), so the migration depends on them
   `PROC_SPAWN_ERR_` 89, `SHMEM_ERR_` 25) + **438 bare `return -1;`** in
   services/drivers. Transport convention established (doc 34, Result
   representation): a value-or-error host call returns the datum (`>= 0`) or a
-  **negated packed** `-(int32_t)WASMOS_ERR_MAKE(domain, code)`; IPC replies carry
+  packed code, which is **negative** (`WASMOS_ERR_MAKE(domain, code)`); IPC replies carry
   the `{flags, chain}` block. Provenance wraps only at deliberate abstraction
   seams.
   - [x] Subsystem 1 — **SHMEM** (host calls): `SHMEM_ERR_*` (-30 range) →
-    negated packed `WASMOS_ERR_SHMEM_*` in both `link.c`/`link.cpp` wrappers;
+    packed `WASMOS_ERR_SHMEM_*` in both `link.c`/`link.cpp` wrappers;
     legacy defs removed; no consumer decoded the specific reason so the wire
     change is safe. Booted both runtimes.
   - [x] Subsystem 2 — **FS**: `FS_ERR_*` deleted; all 91 FAT-backend/relay sites
-    now use negated packed `WASMOS_ERR_FS_*` directly (no compat/alias layer — we
+    now use packed `WASMOS_ERR_FS_*` directly (no compat/alias layer — we
     own every caller). `driver_abi.h` includes `wasmos_status.h`; wire =
-    negated-packed in `FS_IPC_ERROR`/`RESP` arg0, transparent to fs-manager/libc
+    the packed code in `FS_IPC_ERROR`/`RESP` arg0, transparent to fs-manager/libc
     (they only test `< 0`). Booted both runtimes.
   - [x] Subsystem 3 — **PROC**: both `PROC_SPAWN_ERR_*` (domain 1) and
     `PROC_PM_ERR_*` (domain 2) enums deleted; all 239 sites across the kernel
     (process_manager_spawn/services, selftest) + services (cli, init, broker) now
-    use negated packed `WASMOS_ERR_PROC_{SPAWN,PM}_*` directly (returned as the
+    use packed `WASMOS_ERR_PROC_{SPAWN,PM}_*` directly (returned as the
     negative rc in `PROC_IPC_ERROR.arg1`). Booted both runtimes.
   - [ ] Scoped boundary pass (DEFERRED — needs new error domains; picked the
     "boundary-crossing returns only" scope, not the full 438-site sweep). The
@@ -367,7 +367,7 @@ returns; `FS_ERR_*`/`PROC_*` ride IPC opcodes), so the migration depends on them
     reply defaults) need either per-path FS reasons or a new **generic** fs code
     (existing FS codes are all specific). NEXT: add those domains (+ a generic
     reason where a call site truly has no specific one), then migrate the
-    boundary `-1`s to negated-packed codes. Internal-helper `-1`s stay; keep the
+    boundary `-1`s to packed codes. Internal-helper `-1`s stay; keep the
     `-1` lint advisory (not hard-fail) until the boundary set is clean.
 - [ ] Extend the `quality` re-gen guard to the host-call and opcode generators
   as they land (the errors guard already exists), so generated output can never

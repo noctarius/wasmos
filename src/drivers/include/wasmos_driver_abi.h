@@ -47,22 +47,19 @@ enum { PROC_MODULE_SOURCE_INITFS = 0, PROC_MODULE_SOURCE_FS = 1 };
  * Must NOT be set when the spawner will PROC_IPC_WAIT for the exit status. */
 #define PROC_SPAWN_PATH_FLAG_AUTOREAP (1u << 1)
 
-/* Process-manager failure reasons migrated to the packed error model: spawn
- * paths use negated packed WASMOS_ERR_PROC_SPAWN_* (domain 1) and non-path PM
- * IPC uses WASMOS_ERR_PROC_PM_* (domain 2), returned as the negative rc in
- * PROC_IPC_ERROR.arg1 so a failed op reports WHY. Recover with
- * `(uint32_t)(-arg1)` + wasmos_error_*. (Codes from wasmos_status.h, above.) */
+/* Process-manager failure reasons: spawn paths use WASMOS_ERR_PROC_SPAWN_*
+ * (domain 1), non-path PM IPC uses WASMOS_ERR_PROC_PM_* (domain 2), carried in
+ * PROC_IPC_ERROR.arg1 so a failed op reports WHY. Codes are negative; decode
+ * arg1 with wasmos_error_* / wasmos_strerror. (From wasmos_status.h, above.) */
 
-/* shmem map/map_auto failure reasons migrated to the packed error model: the
- * host calls now return a negated packed WASMOS_ERR_SHMEM_* code (domain 3, see
- * abi/errors.yaml / abi/generated/c/wasmos_status.h) instead of the legacy
- * SHMEM_ERR_* -30 range. Recover with `(uint32_t)(-ret)` then wasmos_error_*. */
+/* shmem map/map_auto failure reasons: the host calls return WASMOS_ERR_SHMEM_*
+ * (domain 3, see abi/errors.yaml / abi/generated/c/wasmos_status.h). Codes are
+ * negative; decode the return value with wasmos_error_* / wasmos_strerror. */
 
-/* Filesystem failure reasons migrated to the packed error model: the FAT backend
- * returns a negated packed WASMOS_ERR_FS_* code (domain 4, abi/errors.yaml) as a
- * negative int in FS_IPC_ERROR / FS_IPC_RESP arg0, so a failed FS op reports WHY;
- * fs-manager relays arg0 unchanged. Recover with `(uint32_t)(-arg0)` +
- * wasmos_error_*. (WASMOS_ERR_FS_* come from wasmos_status.h, included above.) */
+/* Filesystem failure reasons: the FAT backend returns WASMOS_ERR_FS_* (domain 4,
+ * abi/errors.yaml) in FS_IPC_ERROR / FS_IPC_RESP arg0, so a failed FS op reports
+ * WHY; fs-manager relays arg0 unchanged. Codes are negative; decode arg0 with
+ * wasmos_error_* / wasmos_strerror. (From wasmos_status.h, included above.) */
 
 /* Flags returned in arg1 of PROC_IPC_RESP for PROC_IPC_SPAWN_PATH.
  * Mirror of WASMOS_APP_FLAG_* in the kernel's wasmos_app.h. */

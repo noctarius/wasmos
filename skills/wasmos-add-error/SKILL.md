@@ -13,8 +13,8 @@ WASMOS has two error axes, both single-sourced in `abi/errors.yaml`:
   when the *call mechanism* or service itself failed (`INVAL`, `DENIED`, `FULL`,
   `NOENT`, `TIMEOUT`, …).
 - **domains**: the namespaced *operation-error* space. Each domain has a STABLE
-  numeric id; a packed error is `(domain << 16) | local_code`. Domain `0` (`none`)
-  is reserved for success / an empty chain frame.
+  numeric id; a packed error is the **negative** of `(domain << 16) | local_code`.
+  Domain `0` (`none`) is reserved for success / an empty chain frame.
 
 `scripts/gen_abi_errors.py` generates the full value ABI for every language; you
 never hand-write these constants. See
@@ -80,11 +80,13 @@ Optionally re-verify the generated files compile with their toolchains (`clang`,
 
 ## Step 3: Use it
 
-Return the packed constant (e.g. `WASMOS_ERR_PROC_PM_QUOTA`) as the reply status,
-and use the chain helpers to attach provenance at a deliberate abstraction seam:
-`wasmos_error_wrap(higher, lower)` appends a frame; `unwrap`/`root`/`is`/`as`
-inspect the chain (max depth 4). The transport axis rides the IPC result; domain
-errors ride the reply payload / opcode status field.
+Return the packed constant (e.g. `WASMOS_ERR_PROC_PM_QUOTA`) as the reply status
+or host-call result — it is already negative, so it needs no cast or re-signing,
+and `wasmos_strerror(rc)` decodes a return value directly. Use the chain helpers
+to attach provenance at a deliberate abstraction seam: `wasmos_error_wrap(higher,
+lower)` appends a frame; `unwrap`/`root`/`is`/`as` inspect the chain (max depth
+4). The transport axis rides the IPC result; domain errors ride the reply payload
+/ opcode status field.
 
 ## Guardrails
 

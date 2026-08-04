@@ -26,86 +26,109 @@ pub const WASMOS_ERR_DOMAIN_FS: u16 = 4;
 pub const WASMOS_ERR_DOMAIN_NET: u16 = 5;
 pub const WASMOS_ERR_DOMAIN_GFX: u16 = 6;
 pub const WASMOS_ERR_DOMAIN_DRIVER: u16 = 7;
+pub const WASMOS_ERR_DOMAIN_VT: u16 = 8;
+pub const WASMOS_ERR_DOMAIN_CHARDEV: u16 = 9;
+pub const WASMOS_ERR_DOMAIN_DEVMGR: u16 = 10;
 
-pub const WASMOS_ERR_NONE: u32 = 0;
-// Packed domain error constants: (domain << 16) | local_code.
-pub const WASMOS_ERR_PROC_SPAWN_BAD_ENDPOINT: u32 = 0x00010001; // request endpoint owner lookup failed
-pub const WASMOS_ERR_PROC_SPAWN_NO_CALLER: u32 = 0x00010002; // caller process/context not found
-pub const WASMOS_ERR_PROC_SPAWN_BAD_PATH: u32 = 0x00010003; // fs endpoint missing or bad path length
-pub const WASMOS_ERR_PROC_SPAWN_CALLER_FSBUF: u32 = 0x00010004; // caller xfer buffer missing / path too big
-pub const WASMOS_ERR_PROC_SPAWN_ARGS_TOOBIG: u32 = 0x00010005; // args exceed the xfer buffer
-pub const WASMOS_ERR_PROC_SPAWN_NO_PM_FSBUF: u32 = 0x00010006; // PM xfer buffer missing
-pub const WASMOS_ERR_PROC_SPAWN_FS_READ: u32 = 0x00010007; // reading the app blob from FS failed
-pub const WASMOS_ERR_PROC_SPAWN_SPAWN_FAILED: u32 = 0x00010008; // process create/start failed (e.g. no free slot)
-pub const WASMOS_ERR_PROC_SPAWN_BROKER_IPC: u32 = 0x00010009; // broker plan IPC transport/reply failed
-pub const WASMOS_ERR_PROC_SPAWN_BROKER_PLAN: u32 = 0x0001000A; // broker replied with malformed/unsupported plan
-pub const WASMOS_ERR_PROC_SPAWN_BROKER_DEFERRED: u32 = 0x0001000B; // valid broker plan returned; PM launch step deferred
-pub const WASMOS_ERR_PROC_PM_BUSY: u32 = 0x00020001; // PM already has an incompatible in-flight operation
-pub const WASMOS_ERR_PROC_PM_BAD_ENDPOINT: u32 = 0x00020002; // source endpoint owner lookup failed
-pub const WASMOS_ERR_PROC_PM_NO_CALLER: u32 = 0x00020003; // source endpoint owner has no live process
-pub const WASMOS_ERR_PROC_PM_INVALID_NAME: u32 = 0x00020004; // packed module/service name was empty or invalid
-pub const WASMOS_ERR_PROC_PM_INVALID_MODULE: u32 = 0x00020005; // requested module or descriptor was invalid
-pub const WASMOS_ERR_PROC_PM_FS_UNAVAILABLE: u32 = 0x00020006; // PM filesystem service channel was unavailable
-pub const WASMOS_ERR_PROC_PM_FS_REQUEST: u32 = 0x00020007; // PM could not issue the filesystem read request
-pub const WASMOS_ERR_PROC_PM_BAD_PATH: u32 = 0x00020008; // explicit path input was empty or invalid
-pub const WASMOS_ERR_PROC_PM_PATH_RESOLVE: u32 = 0x00020009; // path-based resolve/classify/reload failed
-pub const WASMOS_ERR_PROC_PM_SPAWN_FAILED: u32 = 0x0002000A; // PM failed to create or prepare the child process
-pub const WASMOS_ERR_PROC_PM_CAPS_APPLY: u32 = 0x0002000B; // capability profile application failed after spawn
-pub const WASMOS_ERR_PROC_PM_BAD_CAPS: u32 = 0x0002000C; // capability payload or compact cap fields were invalid
-pub const WASMOS_ERR_PROC_PM_BAD_USER_PTR: u32 = 0x0002000D; // supplied user pointer could not be resolved safely
-pub const WASMOS_ERR_PROC_PM_USER_COPY: u32 = 0x0002000E; // mm_copy_from_user failed for PM input payload
-pub const WASMOS_ERR_PROC_PM_META_LOOKUP: u32 = 0x0002000F; // module metadata lookup failed
-pub const WASMOS_ERR_PROC_PM_META_NOT_DRIVER: u32 = 0x00020010; // requested module metadata was not for a driver
-pub const WASMOS_ERR_PROC_PM_META_BAD_INDEX: u32 = 0x00020011; // requested driver match index was out of range
-pub const WASMOS_ERR_PROC_PM_META_BAD_SOURCE: u32 = 0x00020012; // unsupported module metadata source selector
-pub const WASMOS_ERR_PROC_PM_CALLER_FSBUF: u32 = 0x00020013; // caller filesystem transfer buffer was missing/invalid
-pub const WASMOS_ERR_PROC_PM_REPLY_SEND: u32 = 0x00020014; // PM failed to send the final IPC response
-pub const WASMOS_ERR_PROC_PM_FS_REPLY: u32 = 0x00020015; // PM received an unexpected filesystem reply
-pub const WASMOS_ERR_PROC_PM_BAD_BROKER: u32 = 0x00020016; // broker registration payload or endpoint was invalid
-pub const WASMOS_ERR_PROC_PM_BAD_HANDLER: u32 = 0x00020017; // exec-handler registration payload was invalid
-pub const WASMOS_ERR_PROC_PM_SUBSYSTEM_REG: u32 = 0x00020018; // subsystem broker registration failed
-pub const WASMOS_ERR_PROC_PM_HANDLER_REG: u32 = 0x00020019; // exec-handler registration failed
-pub const WASMOS_ERR_PROC_PM_NOT_AUTHORIZED: u32 = 0x0002001A; // caller lacks the subsystem.register capability
-pub const WASMOS_ERR_PROC_PM_NO_PM_FSBUF: u32 = 0x0002001B; // PM could not acquire its own xfer buffer
-pub const WASMOS_ERR_SHMEM_BAD_ARGS: u32 = 0x00030001; // id/size invalid or size not page-aligned
-pub const WASMOS_ERR_SHMEM_NO_CAP: u32 = 0x00030002; // caller lacks the DMA capability / no context
-pub const WASMOS_ERR_SHMEM_BAD_ID: u32 = 0x00030003; // shmem id unknown / no backing pages
-pub const WASMOS_ERR_SHMEM_BAD_SIZE: u32 = 0x00030004; // requested size smaller than the shared region
-pub const WASMOS_ERR_SHMEM_UNALIGNED: u32 = 0x00030005; // fixed offset cannot yield a page-aligned host addr
-pub const WASMOS_ERR_SHMEM_NO_WINDOW: u32 = 0x00030006; // no free page-aligned window fits in linear memory
-pub const WASMOS_ERR_SHMEM_MAP: u32 = 0x00030007; // paging/linear-memory mapping step failed
-pub const WASMOS_ERR_FS_BAD_ARGS: u32 = 0x00040001; // invalid flags/args (len 0, bad access mode, reserved arg set)
-pub const WASMOS_ERR_FS_PATH_TOO_LONG: u32 = 0x00040002; // path length exceeds the path or xfer buffer
-pub const WASMOS_ERR_FS_BUFFER: u32 = 0x00040003; // xfer-buffer read/write/size call failed
-pub const WASMOS_ERR_FS_TRANSLATE: u32 = 0x00040004; // vfs path translation failed / routed to init overlay
-pub const WASMOS_ERR_FS_NOT_FOUND: u32 = 0x00040005; // path component or target entry does not exist
-pub const WASMOS_ERR_FS_IS_DIR: u32 = 0x00040006; // target is a directory where a file was required
-pub const WASMOS_ERR_FS_NOT_DIR: u32 = 0x00040007; // a path component that must be a directory is not one
-pub const WASMOS_ERR_FS_EXISTS: u32 = 0x00040008; // create target already exists (fail-if-exists)
-pub const WASMOS_ERR_FS_NOT_EMPTY: u32 = 0x00040009; // rmdir target directory is not empty
-pub const WASMOS_ERR_FS_NO_FD: u32 = 0x0004000A; // open-file table is full
-pub const WASMOS_ERR_FS_BUSY: u32 = 0x0004000B; // backend has no free op-context slot (retryable)
-pub const WASMOS_ERR_FS_IO: u32 = 0x0004000C; // block-device I/O error
-pub const WASMOS_ERR_FS_NOT_READY: u32 = 0x0004000D; // mount/backend not ready
-pub const WASMOS_ERR_FS_NO_SPACE: u32 = 0x0004000E; // no free cluster or directory slot (disk full)
-pub const WASMOS_ERR_FS_NAME: u32 = 0x0004000F; // invalid name (LFN/short-name encode failed)
-pub const WASMOS_ERR_FS_ACCESS: u32 = 0x00040010; // access-mode violation (e.g. read on write-only fd)
-pub const WASMOS_ERR_FS_RANGE: u32 = 0x00040011; // seek/offset out of range
-pub const WASMOS_ERR_FS_UNSUPPORTED: u32 = 0x00040012; // unknown/unsupported request type
-pub const WASMOS_ERR_FS_OPEN: u32 = 0x00040013; // operation forbidden on a currently-open file
-pub const WASMOS_ERR_FS_CORRUPT: u32 = 0x00040014; // on-disk structure inconsistency detected
+pub const WASMOS_ERR_NONE: i32 = 0;
+// A domain error is the negative of (domain << 16) | local_code.
+pub const WASMOS_ERR_PROC_SPAWN_BAD_ENDPOINT: i32 = -0x00010001; // request endpoint owner lookup failed
+pub const WASMOS_ERR_PROC_SPAWN_NO_CALLER: i32 = -0x00010002; // caller process/context not found
+pub const WASMOS_ERR_PROC_SPAWN_BAD_PATH: i32 = -0x00010003; // fs endpoint missing or bad path length
+pub const WASMOS_ERR_PROC_SPAWN_CALLER_FSBUF: i32 = -0x00010004; // caller xfer buffer missing / path too big
+pub const WASMOS_ERR_PROC_SPAWN_ARGS_TOOBIG: i32 = -0x00010005; // args exceed the xfer buffer
+pub const WASMOS_ERR_PROC_SPAWN_NO_PM_FSBUF: i32 = -0x00010006; // PM xfer buffer missing
+pub const WASMOS_ERR_PROC_SPAWN_FS_READ: i32 = -0x00010007; // reading the app blob from FS failed
+pub const WASMOS_ERR_PROC_SPAWN_SPAWN_FAILED: i32 = -0x00010008; // process create/start failed (e.g. no free slot)
+pub const WASMOS_ERR_PROC_SPAWN_BROKER_IPC: i32 = -0x00010009; // broker plan IPC transport/reply failed
+pub const WASMOS_ERR_PROC_SPAWN_BROKER_PLAN: i32 = -0x0001000A; // broker replied with malformed/unsupported plan
+pub const WASMOS_ERR_PROC_SPAWN_BROKER_DEFERRED: i32 = -0x0001000B; // valid broker plan returned; PM launch step deferred
+pub const WASMOS_ERR_PROC_PM_BUSY: i32 = -0x00020001; // PM already has an incompatible in-flight operation
+pub const WASMOS_ERR_PROC_PM_BAD_ENDPOINT: i32 = -0x00020002; // source endpoint owner lookup failed
+pub const WASMOS_ERR_PROC_PM_NO_CALLER: i32 = -0x00020003; // source endpoint owner has no live process
+pub const WASMOS_ERR_PROC_PM_INVALID_NAME: i32 = -0x00020004; // packed module/service name was empty or invalid
+pub const WASMOS_ERR_PROC_PM_INVALID_MODULE: i32 = -0x00020005; // requested module or descriptor was invalid
+pub const WASMOS_ERR_PROC_PM_FS_UNAVAILABLE: i32 = -0x00020006; // PM filesystem service channel was unavailable
+pub const WASMOS_ERR_PROC_PM_FS_REQUEST: i32 = -0x00020007; // PM could not issue the filesystem read request
+pub const WASMOS_ERR_PROC_PM_BAD_PATH: i32 = -0x00020008; // explicit path input was empty or invalid
+pub const WASMOS_ERR_PROC_PM_PATH_RESOLVE: i32 = -0x00020009; // path-based resolve/classify/reload failed
+pub const WASMOS_ERR_PROC_PM_SPAWN_FAILED: i32 = -0x0002000A; // PM failed to create or prepare the child process
+pub const WASMOS_ERR_PROC_PM_CAPS_APPLY: i32 = -0x0002000B; // capability profile application failed after spawn
+pub const WASMOS_ERR_PROC_PM_BAD_CAPS: i32 = -0x0002000C; // capability payload or compact cap fields were invalid
+pub const WASMOS_ERR_PROC_PM_BAD_USER_PTR: i32 = -0x0002000D; // supplied user pointer could not be resolved safely
+pub const WASMOS_ERR_PROC_PM_USER_COPY: i32 = -0x0002000E; // mm_copy_from_user failed for PM input payload
+pub const WASMOS_ERR_PROC_PM_META_LOOKUP: i32 = -0x0002000F; // module metadata lookup failed
+pub const WASMOS_ERR_PROC_PM_META_NOT_DRIVER: i32 = -0x00020010; // requested module metadata was not for a driver
+pub const WASMOS_ERR_PROC_PM_META_BAD_INDEX: i32 = -0x00020011; // requested driver match index was out of range
+pub const WASMOS_ERR_PROC_PM_META_BAD_SOURCE: i32 = -0x00020012; // unsupported module metadata source selector
+pub const WASMOS_ERR_PROC_PM_CALLER_FSBUF: i32 = -0x00020013; // caller filesystem transfer buffer was missing/invalid
+pub const WASMOS_ERR_PROC_PM_REPLY_SEND: i32 = -0x00020014; // PM failed to send the final IPC response
+pub const WASMOS_ERR_PROC_PM_FS_REPLY: i32 = -0x00020015; // PM received an unexpected filesystem reply
+pub const WASMOS_ERR_PROC_PM_BAD_BROKER: i32 = -0x00020016; // broker registration payload or endpoint was invalid
+pub const WASMOS_ERR_PROC_PM_BAD_HANDLER: i32 = -0x00020017; // exec-handler registration payload was invalid
+pub const WASMOS_ERR_PROC_PM_SUBSYSTEM_REG: i32 = -0x00020018; // subsystem broker registration failed
+pub const WASMOS_ERR_PROC_PM_HANDLER_REG: i32 = -0x00020019; // exec-handler registration failed
+pub const WASMOS_ERR_PROC_PM_NOT_AUTHORIZED: i32 = -0x0002001A; // caller lacks the subsystem.register capability
+pub const WASMOS_ERR_PROC_PM_NO_PM_FSBUF: i32 = -0x0002001B; // PM could not acquire its own xfer buffer
+pub const WASMOS_ERR_SHMEM_BAD_ARGS: i32 = -0x00030001; // id/size invalid or size not page-aligned
+pub const WASMOS_ERR_SHMEM_NO_CAP: i32 = -0x00030002; // caller lacks the DMA capability / no context
+pub const WASMOS_ERR_SHMEM_BAD_ID: i32 = -0x00030003; // shmem id unknown / no backing pages
+pub const WASMOS_ERR_SHMEM_BAD_SIZE: i32 = -0x00030004; // requested size smaller than the shared region
+pub const WASMOS_ERR_SHMEM_UNALIGNED: i32 = -0x00030005; // fixed offset cannot yield a page-aligned host addr
+pub const WASMOS_ERR_SHMEM_NO_WINDOW: i32 = -0x00030006; // no free page-aligned window fits in linear memory
+pub const WASMOS_ERR_SHMEM_MAP: i32 = -0x00030007; // paging/linear-memory mapping step failed
+pub const WASMOS_ERR_FS_BAD_ARGS: i32 = -0x00040001; // invalid flags/args (len 0, bad access mode, reserved arg set)
+pub const WASMOS_ERR_FS_PATH_TOO_LONG: i32 = -0x00040002; // path length exceeds the path or xfer buffer
+pub const WASMOS_ERR_FS_BUFFER: i32 = -0x00040003; // xfer-buffer read/write/size call failed
+pub const WASMOS_ERR_FS_TRANSLATE: i32 = -0x00040004; // vfs path translation failed / routed to init overlay
+pub const WASMOS_ERR_FS_NOT_FOUND: i32 = -0x00040005; // path component or target entry does not exist
+pub const WASMOS_ERR_FS_IS_DIR: i32 = -0x00040006; // target is a directory where a file was required
+pub const WASMOS_ERR_FS_NOT_DIR: i32 = -0x00040007; // a path component that must be a directory is not one
+pub const WASMOS_ERR_FS_EXISTS: i32 = -0x00040008; // create target already exists (fail-if-exists)
+pub const WASMOS_ERR_FS_NOT_EMPTY: i32 = -0x00040009; // rmdir target directory is not empty
+pub const WASMOS_ERR_FS_NO_FD: i32 = -0x0004000A; // open-file table is full
+pub const WASMOS_ERR_FS_BUSY: i32 = -0x0004000B; // backend has no free op-context slot (retryable)
+pub const WASMOS_ERR_FS_IO: i32 = -0x0004000C; // block-device I/O error
+pub const WASMOS_ERR_FS_NOT_READY: i32 = -0x0004000D; // mount/backend not ready
+pub const WASMOS_ERR_FS_NO_SPACE: i32 = -0x0004000E; // no free cluster or directory slot (disk full)
+pub const WASMOS_ERR_FS_NAME: i32 = -0x0004000F; // invalid name (LFN/short-name encode failed)
+pub const WASMOS_ERR_FS_ACCESS: i32 = -0x00040010; // access-mode violation (e.g. read on write-only fd)
+pub const WASMOS_ERR_FS_RANGE: i32 = -0x00040011; // seek/offset out of range
+pub const WASMOS_ERR_FS_UNSUPPORTED: i32 = -0x00040012; // unknown/unsupported request type
+pub const WASMOS_ERR_FS_OPEN: i32 = -0x00040013; // operation forbidden on a currently-open file
+pub const WASMOS_ERR_FS_CORRUPT: i32 = -0x00040014; // on-disk structure inconsistency detected
+pub const WASMOS_ERR_FS_NOT_AUTHORIZED: i32 = -0x00040015; // caller is not permitted to issue this request (e.g. clone-cwd is process-manager only)
+pub const WASMOS_ERR_FS_NO_CLIENT_SLOT: i32 = -0x00040016; // per-client state could not be tracked (slot table full / allocation failed)
+pub const WASMOS_ERR_FS_NOT_ABSOLUTE: i32 = -0x00040017; // path must be absolute (does not start with '/')
+pub const WASMOS_ERR_FS_NO_BACKEND: i32 = -0x00040018; // no registered backend serves the requested mount
+pub const WASMOS_ERR_FS_REBORROW: i32 = -0x00040019; // reborrowing the client's xfer-buffer grant to the backend failed
+pub const WASMOS_ERR_FS_BACKEND_IPC: i32 = -0x0004001A; // request could not be delivered to the backend, or no reply arrived
+pub const WASMOS_ERR_FS_BAD_FD: i32 = -0x0004001B; // fd is not present in this client's fd table
+pub const WASMOS_ERR_GFX_UNSUPPORTED_REQUEST: i32 = -0x00060001; // unknown or unsupported request type for this framebuffer backend
+pub const WASMOS_ERR_GFX_NO_RUNTIME_MODES: i32 = -0x00060002; // backend cannot enumerate or switch modes at runtime (firmware-provided framebuffer)
+pub const WASMOS_ERR_GFX_BAD_MODE_INDEX: i32 = -0x00060003; // mode index is out of range for this backend
+pub const WASMOS_ERR_GFX_MODE_TOO_LARGE: i32 = -0x00060004; // requested mode does not fit the framebuffer mapping established at boot
+pub const WASMOS_ERR_GFX_MODE_SET_FAILED: i32 = -0x00060005; // requested geometry is not a supported mode, or the mode-set path is unavailable
+pub const WASMOS_ERR_VT_BAD_TTY_ID: i32 = -0x00080001; // requested tty id is out of range
+pub const WASMOS_ERR_VT_NO_TTY_FOR_SOURCE: i32 = -0x00080002; // no tty is associated with the requesting endpoint
+pub const WASMOS_ERR_VT_READER_BUSY: i32 = -0x00080003; // another endpoint is already the reader for this tty
+pub const WASMOS_ERR_VT_UNSUPPORTED_REQUEST: i32 = -0x00080004; // unknown or unsupported request type
+pub const WASMOS_ERR_CHARDEV_NO_DATA: i32 = -0x00090001; // no byte is buffered yet (retryable)
+pub const WASMOS_ERR_CHARDEV_UNSUPPORTED_REQUEST: i32 = -0x00090002; // unknown or unsupported request type
+pub const WASMOS_ERR_DEVMGR_NO_MOUNT_RULE: i32 = -0x000A0001; // no block/filesystem mount rule matches the requested unit
+pub const WASMOS_ERR_DEVMGR_UNSUPPORTED_QUERY: i32 = -0x000A0002; // unknown or unsupported device-manager query type
 
 #[inline]
-pub const fn wasmos_err_make(dom: u16, code: u16) -> u32 {
-    ((dom as u32) << 16) | (code as u32)
+pub const fn wasmos_err_make(dom: u16, code: u16) -> i32 {
+    -((((dom as u32) << 16) | (code as u32)) as i32)
 }
 #[inline]
-pub const fn wasmos_err_domain_of(x: u32) -> u16 {
-    (x >> 16) as u16
+pub const fn wasmos_err_domain_of(x: i32) -> u16 {
+    (((-x) as u32) >> 16) as u16
 }
 #[inline]
-pub const fn wasmos_err_code_of(x: u32) -> u16 {
-    (x & 0xffff) as u16
+pub const fn wasmos_err_code_of(x: i32) -> u16 {
+    (((-x) as u32) & 0xffff) as u16
 }
 
 pub fn wasmos_status_str(s: i32) -> &'static str {
@@ -134,11 +157,14 @@ pub fn wasmos_error_domain_name(d: u16) -> &'static str {
         WASMOS_ERR_DOMAIN_NET => "net",
         WASMOS_ERR_DOMAIN_GFX => "gfx",
         WASMOS_ERR_DOMAIN_DRIVER => "driver",
+        WASMOS_ERR_DOMAIN_VT => "vt",
+        WASMOS_ERR_DOMAIN_CHARDEV => "chardev",
+        WASMOS_ERR_DOMAIN_DEVMGR => "devmgr",
         _ => "unknown",
     }
 }
 
-pub fn wasmos_strerror(c: u32) -> &'static str {
+pub fn wasmos_strerror(c: i32) -> &'static str {
     match c {
         WASMOS_ERR_NONE => "success",
         WASMOS_ERR_PROC_SPAWN_BAD_ENDPOINT => "request endpoint owner lookup failed",
@@ -206,6 +232,26 @@ pub fn wasmos_strerror(c: u32) -> &'static str {
         WASMOS_ERR_FS_UNSUPPORTED => "unknown/unsupported request type",
         WASMOS_ERR_FS_OPEN => "operation forbidden on a currently-open file",
         WASMOS_ERR_FS_CORRUPT => "on-disk structure inconsistency detected",
+        WASMOS_ERR_FS_NOT_AUTHORIZED => "caller is not permitted to issue this request (e.g. clone-cwd is process-manager only)",
+        WASMOS_ERR_FS_NO_CLIENT_SLOT => "per-client state could not be tracked (slot table full / allocation failed)",
+        WASMOS_ERR_FS_NOT_ABSOLUTE => "path must be absolute (does not start with '/')",
+        WASMOS_ERR_FS_NO_BACKEND => "no registered backend serves the requested mount",
+        WASMOS_ERR_FS_REBORROW => "reborrowing the client's xfer-buffer grant to the backend failed",
+        WASMOS_ERR_FS_BACKEND_IPC => "request could not be delivered to the backend, or no reply arrived",
+        WASMOS_ERR_FS_BAD_FD => "fd is not present in this client's fd table",
+        WASMOS_ERR_GFX_UNSUPPORTED_REQUEST => "unknown or unsupported request type for this framebuffer backend",
+        WASMOS_ERR_GFX_NO_RUNTIME_MODES => "backend cannot enumerate or switch modes at runtime (firmware-provided framebuffer)",
+        WASMOS_ERR_GFX_BAD_MODE_INDEX => "mode index is out of range for this backend",
+        WASMOS_ERR_GFX_MODE_TOO_LARGE => "requested mode does not fit the framebuffer mapping established at boot",
+        WASMOS_ERR_GFX_MODE_SET_FAILED => "requested geometry is not a supported mode, or the mode-set path is unavailable",
+        WASMOS_ERR_VT_BAD_TTY_ID => "requested tty id is out of range",
+        WASMOS_ERR_VT_NO_TTY_FOR_SOURCE => "no tty is associated with the requesting endpoint",
+        WASMOS_ERR_VT_READER_BUSY => "another endpoint is already the reader for this tty",
+        WASMOS_ERR_VT_UNSUPPORTED_REQUEST => "unknown or unsupported request type",
+        WASMOS_ERR_CHARDEV_NO_DATA => "no byte is buffered yet (retryable)",
+        WASMOS_ERR_CHARDEV_UNSUPPORTED_REQUEST => "unknown or unsupported request type",
+        WASMOS_ERR_DEVMGR_NO_MOUNT_RULE => "no block/filesystem mount rule matches the requested unit",
+        WASMOS_ERR_DEVMGR_UNSUPPORTED_QUERY => "unknown or unsupported device-manager query type",
         _ => "unknown error",
     }
 }
@@ -243,23 +289,23 @@ impl WasmosError {
     pub fn is_ok(&self) -> bool {
         self.transport == WASMOS_OK && self.chain[0].domain == 0
     }
-    pub fn head(&self) -> u32 {
+    pub fn head(&self) -> i32 {
         wasmos_err_make(self.chain[0].domain, self.chain[0].code)
     }
-    pub fn root(&self) -> u32 {
+    pub fn root(&self) -> i32 {
         let mut i = 0;
         while i + 1 < WASMOS_ERR_CHAIN_DEPTH && self.chain[i + 1].domain != 0 {
             i += 1;
         }
         wasmos_err_make(self.chain[i].domain, self.chain[i].code)
     }
-    pub fn unwrap_cause(&self) -> u32 {
+    pub fn unwrap_cause(&self) -> i32 {
         if WASMOS_ERR_CHAIN_DEPTH < 2 || self.chain[1].domain == 0 {
             return WASMOS_ERR_NONE;
         }
         wasmos_err_make(self.chain[1].domain, self.chain[1].code)
     }
-    pub fn is(&self, sentinel: u32) -> bool {
+    pub fn is(&self, sentinel: i32) -> bool {
         for f in &self.chain {
             if f.domain == 0 {
                 break;

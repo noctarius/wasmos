@@ -194,7 +194,7 @@ int32_t initialize(int32_t proc_endpoint, int32_t ignored_arg1, int32_t ignored_
         if (msg.arg1 < (int32_t)sizeof(request) || msg.arg0 < 0) {
             puts("[dbg-broker] bad request envelope");
             (void)wasmos_ipc_send(msg.source, broker_endpoint, PROC_BROKER_IPC_SPAWN_PLAN_ERROR,
-                                  msg.request_id, 0, -(int32_t)WASMOS_ERR_PROC_SPAWN_BROKER_PLAN, 0, 0);
+                                  msg.request_id, 0, WASMOS_ERR_PROC_SPAWN_BROKER_PLAN, 0, 0);
             continue;
         }
         /* PM owns the buffer (msg.arg2 = buffer_id) and, owner-push, granted this
@@ -204,7 +204,7 @@ int32_t initialize(int32_t proc_endpoint, int32_t ignored_arg1, int32_t ignored_
                                     (int32_t)sizeof(request), msg.arg0) != 0) {
             puts("[dbg-broker] request read failed");
             (void)wasmos_ipc_send(msg.source, broker_endpoint, PROC_BROKER_IPC_SPAWN_PLAN_ERROR,
-                                  msg.request_id, 0, -(int32_t)WASMOS_ERR_PROC_SPAWN_BROKER_IPC, 0, 0);
+                                  msg.request_id, 0, WASMOS_ERR_PROC_SPAWN_BROKER_IPC, 0, 0);
             continue;
         }
         /* Validate the request identity, extract the guest path (used as the
@@ -213,39 +213,39 @@ int32_t initialize(int32_t proc_endpoint, int32_t ignored_arg1, int32_t ignored_
         if (request.version != WASMOS_BROKER_SPAWN_PLAN_VERSION) {
             puts("[dbg-broker] bad version");
             (void)wasmos_ipc_send(msg.source, broker_endpoint, PROC_BROKER_IPC_SPAWN_PLAN_ERROR,
-                                  msg.request_id, 0, -(int32_t)WASMOS_ERR_PROC_SPAWN_BROKER_PLAN, 0, 0);
+                                  msg.request_id, 0, WASMOS_ERR_PROC_SPAWN_BROKER_PLAN, 0, 0);
             continue;
         }
         if (strcmp(request.request_tag, SCRIPT_REQUEST_TAG) != 0) {
             puts("[dbg-broker] bad request tag");
             (void)wasmos_ipc_send(msg.source, broker_endpoint, PROC_BROKER_IPC_SPAWN_PLAN_ERROR,
-                                  msg.request_id, 0, -(int32_t)WASMOS_ERR_PROC_SPAWN_BROKER_PLAN, 0, 0);
+                                  msg.request_id, 0, WASMOS_ERR_PROC_SPAWN_BROKER_PLAN, 0, 0);
             continue;
         }
         if (script_request_string_at(msg.arg2, request.path_offset, request.path_len, guest_path,
                                      sizeof(guest_path)) != 0) {
             puts("[dbg-broker] guest path read failed");
             (void)wasmos_ipc_send(msg.source, broker_endpoint, PROC_BROKER_IPC_SPAWN_PLAN_ERROR,
-                                  msg.request_id, 0, -(int32_t)WASMOS_ERR_PROC_SPAWN_BROKER_PLAN, 0, 0);
+                                  msg.request_id, 0, WASMOS_ERR_PROC_SPAWN_BROKER_PLAN, 0, 0);
             continue;
         }
         if (guest_path[0] == '\0') {
             puts("[dbg-broker] empty guest path");
             (void)wasmos_ipc_send(msg.source, broker_endpoint, PROC_BROKER_IPC_SPAWN_PLAN_ERROR,
-                                  msg.request_id, 0, -(int32_t)WASMOS_ERR_PROC_SPAWN_BROKER_PLAN, 0, 0);
+                                  msg.request_id, 0, WASMOS_ERR_PROC_SPAWN_BROKER_PLAN, 0, 0);
             continue;
         }
         if (script_read_interpreter(msg.arg2, request.blob_offset, request.blob_size, interp,
                                     sizeof(interp)) != 0) {
             puts("[dbg-broker] interpreter read failed");
             (void)wasmos_ipc_send(msg.source, broker_endpoint, PROC_BROKER_IPC_SPAWN_PLAN_ERROR,
-                                  msg.request_id, 0, -(int32_t)WASMOS_ERR_PROC_SPAWN_BROKER_PLAN, 0, 0);
+                                  msg.request_id, 0, WASMOS_ERR_PROC_SPAWN_BROKER_PLAN, 0, 0);
             continue;
         }
         if (strcmp(interp, SCRIPT_INTERP_NAME) != 0) {
             puts("[dbg-broker] interpreter mismatch");
             (void)wasmos_ipc_send(msg.source, broker_endpoint, PROC_BROKER_IPC_SPAWN_PLAN_ERROR,
-                                  msg.request_id, 0, -(int32_t)WASMOS_ERR_PROC_SPAWN_BROKER_PLAN, 0, 0);
+                                  msg.request_id, 0, WASMOS_ERR_PROC_SPAWN_BROKER_PLAN, 0, 0);
             continue;
         }
         memset(&plan, 0, sizeof(plan));
@@ -262,7 +262,7 @@ int32_t initialize(int32_t proc_endpoint, int32_t ignored_arg1, int32_t ignored_
                 0) {
             puts("[dbg-broker] plan write failed");
             (void)wasmos_ipc_send(msg.source, broker_endpoint, PROC_BROKER_IPC_SPAWN_PLAN_ERROR,
-                                  msg.request_id, 0, -(int32_t)WASMOS_ERR_PROC_SPAWN_BROKER_PLAN, 0, 0);
+                                  msg.request_id, 0, WASMOS_ERR_PROC_SPAWN_BROKER_PLAN, 0, 0);
             continue;
         }
 

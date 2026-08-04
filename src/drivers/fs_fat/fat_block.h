@@ -57,7 +57,7 @@ void fat_block_set_err(fat_block_t* blk, int32_t err);
 /* Op-facing, coroutine-driven I/O (return fat_r_t):
  *  fat_need_sector: ensure `lba` is staged in fat_block_sector(); FAT_R_DONE if
  *    already cached, FAT_R_WAIT if a read was submitted (resume on completion),
- *    FAT_R_ERR on a hard send failure (owner->err set to -(int32_t)WASMOS_ERR_FS_IO).
+ *    FAT_R_ERR on a hard send failure (owner->err set to WASMOS_ERR_FS_IO).
  *  fat_block_write: push fat_block_sector() to `lba`; FAT_R_WAIT or FAT_R_ERR. */
 fat_r_t fat_need_sector(fat_block_t* blk, uint32_t lba);
 fat_r_t fat_block_write(fat_block_t* blk, uint32_t lba);

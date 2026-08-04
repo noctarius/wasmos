@@ -274,23 +274,23 @@ impl WasmosError {
     pub fn is_ok(&self) -> bool {
         self.transport == WASMOS_OK && self.chain[0].domain == 0
     }
-    pub fn head(&self) -> u32 {
+    pub fn head(&self) -> i32 {
         wasmos_err_make(self.chain[0].domain, self.chain[0].code)
     }
-    pub fn root(&self) -> u32 {
+    pub fn root(&self) -> i32 {
         let mut i = 0;
         while i + 1 < WASMOS_ERR_CHAIN_DEPTH && self.chain[i + 1].domain != 0 {
             i += 1;
         }
         wasmos_err_make(self.chain[i].domain, self.chain[i].code)
     }
-    pub fn unwrap_cause(&self) -> u32 {
+    pub fn unwrap_cause(&self) -> i32 {
         if WASMOS_ERR_CHAIN_DEPTH < 2 || self.chain[1].domain == 0 {
             return WASMOS_ERR_NONE;
         }
         wasmos_err_make(self.chain[1].domain, self.chain[1].code)
     }
-    pub fn is(&self, sentinel: u32) -> bool {
+    pub fn is(&self, sentinel: i32) -> bool {
         for f in &self.chain {
             if f.domain == 0 {
                 break;
@@ -365,11 +365,11 @@ func (e *WasmosError) IsOk() bool {
     return e.Transport == WASMOS_OK && e.Chain[0].Domain == 0
 }
 
-func (e *WasmosError) Head() uint32 {
+func (e *WasmosError) Head() int32 {
     return WasmosErrMake(e.Chain[0].Domain, e.Chain[0].Code)
 }
 
-func (e *WasmosError) Root() uint32 {
+func (e *WasmosError) Root() int32 {
     i := 0
     for i+1 < WASMOS_ERR_CHAIN_DEPTH && e.Chain[i+1].Domain != 0 {
         i++
@@ -377,14 +377,14 @@ func (e *WasmosError) Root() uint32 {
     return WasmosErrMake(e.Chain[i].Domain, e.Chain[i].Code)
 }
 
-func (e *WasmosError) UnwrapCause() uint32 {
+func (e *WasmosError) UnwrapCause() int32 {
     if WASMOS_ERR_CHAIN_DEPTH < 2 || e.Chain[1].Domain == 0 {
         return WASMOS_ERR_NONE
     }
     return WasmosErrMake(e.Chain[1].Domain, e.Chain[1].Code)
 }
 
-func (e *WasmosError) Is(sentinel uint32) bool {
+func (e *WasmosError) Is(sentinel int32) bool {
     for i := 0; i < WASMOS_ERR_CHAIN_DEPTH; i++ {
         if e.Chain[i].Domain == 0 {
             break
@@ -455,19 +455,19 @@ pub const Error = extern struct {
     pub fn isOk(self: *const Error) bool {
         return self.transport == WASMOS_OK and self.chain[0].domain == 0;
     }
-    pub fn head(self: *const Error) u32 {
+    pub fn head(self: *const Error) i32 {
         return errMake(self.chain[0].domain, self.chain[0].code);
     }
-    pub fn root(self: *const Error) u32 {
+    pub fn root(self: *const Error) i32 {
         var i: usize = 0;
         while (i + 1 < WASMOS_ERR_CHAIN_DEPTH and self.chain[i + 1].domain != 0) : (i += 1) {}
         return errMake(self.chain[i].domain, self.chain[i].code);
     }
-    pub fn unwrapCause(self: *const Error) u32 {
+    pub fn unwrapCause(self: *const Error) i32 {
         if (WASMOS_ERR_CHAIN_DEPTH < 2 or self.chain[1].domain == 0) return WASMOS_ERR_NONE;
         return errMake(self.chain[1].domain, self.chain[1].code);
     }
-    pub fn is(self: *const Error, sentinel: u32) bool {
+    pub fn is(self: *const Error, sentinel: i32) bool {
         var i: usize = 0;
         while (i < WASMOS_ERR_CHAIN_DEPTH) : (i += 1) {
             if (self.chain[i].domain == 0) break;
@@ -529,22 +529,22 @@ export function errorFlags(e: usize): u32 { return load<u32>(e + 4); }
 export function errorIsOk(e: usize): bool {
   return load<i32>(e) == WASMOS_OK && load<u16>(e + 8) == 0;
 }
-export function errorHead(e: usize): u32 {
+export function errorHead(e: usize): i32 {
   const b = fBase(e, 0);
   return errMake(load<u16>(b), load<u16>(b + 2));
 }
-export function errorRoot(e: usize): u32 {
+export function errorRoot(e: usize): i32 {
   let i: i32 = 0;
   while (i + 1 < WASMOS_ERR_CHAIN_DEPTH && load<u16>(fBase(e, i + 1)) != 0) i++;
   const b = fBase(e, i);
   return errMake(load<u16>(b), load<u16>(b + 2));
 }
-export function errorUnwrap(e: usize): u32 {
+export function errorUnwrap(e: usize): i32 {
   if (WASMOS_ERR_CHAIN_DEPTH < 2 || load<u16>(fBase(e, 1)) == 0) return WASMOS_ERR_NONE;
   const b = fBase(e, 1);
   return errMake(load<u16>(b), load<u16>(b + 2));
 }
-export function errorIs(e: usize, sentinel: u32): bool {
+export function errorIs(e: usize, sentinel: i32): bool {
   for (let i: i32 = 0; i < WASMOS_ERR_CHAIN_DEPTH; i++) {
     const b = fBase(e, i);
     if (load<u16>(b) == 0) break;
@@ -624,15 +624,19 @@ def emit_c(m):
         )
     w("};")
     w("")
-    w("/* A domain error packs (domain << 16) | local_code into 32 bits. */")
-    w("typedef uint32_t wasmos_error_code_t;")
+    w("/* A domain error is the negative of (domain << 16) | local_code. */")
+    w("typedef int32_t wasmos_error_code_t;")
     w("#define WASMOS_ERR_MAKE(dom, code) \\")
     w(
-        "    ((wasmos_error_code_t)(((uint32_t)(dom) << 16) | ((uint32_t)(code) & 0xFFFFu)))"
+        "    ((wasmos_error_code_t)(-(int32_t)(((uint32_t)(dom) << 16) | ((uint32_t)(code) & 0xFFFFu))))"
     )
-    w("#define WASMOS_ERR_DOMAIN_OF(x) ((wasmos_error_domain_t)((uint32_t)(x) >> 16))")
-    w("#define WASMOS_ERR_CODE_OF(x)   ((uint16_t)((uint32_t)(x) & 0xFFFFu))")
-    w("#define WASMOS_ERR_NONE ((wasmos_error_code_t)0u) /* success / empty frame */")
+    w(
+        "#define WASMOS_ERR_DOMAIN_OF(x) ((wasmos_error_domain_t)((uint32_t)(-(int32_t)(x)) >> 16))"
+    )
+    w(
+        "#define WASMOS_ERR_CODE_OF(x)   ((uint16_t)((uint32_t)(-(int32_t)(x)) & 0xFFFFu))"
+    )
+    w("#define WASMOS_ERR_NONE ((wasmos_error_code_t)0) /* success / empty frame */")
     w("")
     w("/* Packed domain error constants (use with wasmos_error_is / _as). */")
     w("enum {")
@@ -733,22 +737,22 @@ def emit_rust(m):
     for name, d in m.domains.items():
         w(f"pub const WASMOS_ERR_DOMAIN_{name.upper()}: u16 = {int(d['id'])};")
     w("")
-    w("pub const WASMOS_ERR_NONE: u32 = 0;")
-    w("// Packed domain error constants: (domain << 16) | local_code.")
+    w("pub const WASMOS_ERR_NONE: i32 = 0;")
+    w("// A domain error is the negative of (domain << 16) | local_code.")
     for p in m.packed:
-        w(f"pub const {p['const']}: u32 = 0x{p['packed']:08X}; // {p['desc']}")
+        w(f"pub const {p['const']}: i32 = -0x{p['packed']:08X}; // {p['desc']}")
     w("")
     w("#[inline]")
-    w("pub const fn wasmos_err_make(dom: u16, code: u16) -> u32 {")
-    w("    ((dom as u32) << 16) | (code as u32)")
+    w("pub const fn wasmos_err_make(dom: u16, code: u16) -> i32 {")
+    w("    -((((dom as u32) << 16) | (code as u32)) as i32)")
     w("}")
     w("#[inline]")
-    w("pub const fn wasmos_err_domain_of(x: u32) -> u16 {")
-    w("    (x >> 16) as u16")
+    w("pub const fn wasmos_err_domain_of(x: i32) -> u16 {")
+    w("    (((-x) as u32) >> 16) as u16")
     w("}")
     w("#[inline]")
-    w("pub const fn wasmos_err_code_of(x: u32) -> u16 {")
-    w("    (x & 0xffff) as u16")
+    w("pub const fn wasmos_err_code_of(x: i32) -> u16 {")
+    w("    (((-x) as u32) & 0xffff) as u16")
     w("}")
     w("")
     w("pub fn wasmos_status_str(s: i32) -> &'static str {")
@@ -767,7 +771,7 @@ def emit_rust(m):
     w("    }")
     w("}")
     w("")
-    w("pub fn wasmos_strerror(c: u32) -> &'static str {")
+    w("pub fn wasmos_strerror(c: i32) -> &'static str {")
     w("    match c {")
     w('        WASMOS_ERR_NONE => "success",')
     for p in m.packed:
@@ -809,19 +813,26 @@ def emit_go(m):
         w(f"\tWASMOS_ERR_DOMAIN_{name.upper()} uint16 = {int(d['id'])}")
     w(")")
     w("")
-    w("const WASMOS_ERR_NONE uint32 = 0")
+    w("const WASMOS_ERR_NONE int32 = 0")
     w("")
-    w("// Packed domain error constants: (domain << 16) | local_code.")
+    w("// A domain error is the negative of (domain << 16) | local_code.")
     w("const (")
     for p in m.packed:
-        w(f"\t{p['const']} uint32 = 0x{p['packed']:08X} // {p['desc']}")
+        w(f"\t{p['const']} int32 = -0x{p['packed']:08X} // {p['desc']}")
     w(")")
     w("")
-    w("func WasmosErrMake(dom uint16, code uint16) uint32 {")
-    w("\treturn (uint32(dom) << 16) | uint32(code)")
+    w("func WasmosErrMake(dom uint16, code uint16) int32 {")
+    w("\treturn -int32((uint32(dom) << 16) | uint32(code))")
     w("}")
-    w("func WasmosErrDomainOf(x uint32) uint16 { return uint16(x >> 16) }")
-    w("func WasmosErrCodeOf(x uint32) uint16   { return uint16(x & 0xffff) }")
+    w("func WasmosErrDomainOf(x int32) uint16 { return uint16(uint32(-x) >> 16) }")
+    w("func WasmosErrCodeOf(x int32) uint16   { return uint16(uint32(-x) & 0xffff) }")
+    w("")
+    w("// Sign convention for the value-or-error axis: a scalar host-call return or an")
+    w("// IPC reply code arg gives a non-negative datum on success, or the packed code")
+    w("// NEGATED on failure. The packed constants stay unsigned because they are also")
+    w("// the chain-frame value; the negation belongs to that one transport.")
+    w("func WasmosErrRet(code uint32) int32  { return -int32(code) }")
+    w("func WasmosErrOfRet(ret int32) uint32 { return uint32(-ret) }")
     w("")
     w("func WasmosStatusStr(s int32) string {")
     w("\tswitch s {")
@@ -843,7 +854,7 @@ def emit_go(m):
     w("\t}")
     w("}")
     w("")
-    w("func WasmosStrerror(c uint32) string {")
+    w("func WasmosStrerror(c int32) string {")
     w("\tswitch c {")
     w("\tcase WASMOS_ERR_NONE:")
     w('\t\treturn "success"')
@@ -882,19 +893,19 @@ def emit_zig(m):
     for name, d in m.domains.items():
         w(f"pub const WASMOS_ERR_DOMAIN_{name.upper()}: u16 = {int(d['id'])};")
     w("")
-    w("pub const WASMOS_ERR_NONE: u32 = 0;")
-    w("// Packed domain error constants: (domain << 16) | local_code.")
+    w("pub const WASMOS_ERR_NONE: i32 = 0;")
+    w("// A domain error is the negative of (domain << 16) | local_code.")
     for p in m.packed:
-        w(f"pub const {p['const']}: u32 = 0x{p['packed']:08X}; // {p['desc']}")
+        w(f"pub const {p['const']}: i32 = -0x{p['packed']:08X}; // {p['desc']}")
     w("")
-    w("pub fn errMake(dom: u16, code: u16) u32 {")
-    w("    return (@as(u32, dom) << 16) | @as(u32, code);")
+    w("pub fn errMake(dom: u16, code: u16) i32 {")
+    w("    return -@as(i32, @intCast((@as(u32, dom) << 16) | @as(u32, code)));")
     w("}")
-    w("pub fn errDomainOf(x: u32) u16 {")
-    w("    return @intCast(x >> 16);")
+    w("pub fn errDomainOf(x: i32) u16 {")
+    w("    return @intCast(@as(u32, @intCast(-x)) >> 16);")
     w("}")
-    w("pub fn errCodeOf(x: u32) u16 {")
-    w("    return @intCast(x & 0xffff);")
+    w("pub fn errCodeOf(x: i32) u16 {")
+    w("    return @intCast(@as(u32, @intCast(-x)) & 0xffff);")
     w("}")
     w("")
     w("pub fn statusStr(s: i32) []const u8 {")
@@ -913,7 +924,7 @@ def emit_zig(m):
     w("    };")
     w("}")
     w("")
-    w("pub fn strerror(c: u32) []const u8 {")
+    w("pub fn strerror(c: i32) []const u8 {")
     w("    return switch (c) {")
     w('        WASMOS_ERR_NONE => "success",')
     for p in m.packed:
@@ -949,16 +960,16 @@ def emit_as(m):
     for name, d in m.domains.items():
         w(f"export const WASMOS_ERR_DOMAIN_{name.upper()}: u16 = {int(d['id'])};")
     w("")
-    w("export const WASMOS_ERR_NONE: u32 = 0;")
-    w("// Packed domain error constants: (domain << 16) | local_code.")
+    w("export const WASMOS_ERR_NONE: i32 = 0;")
+    w("// A domain error is the negative of (domain << 16) | local_code.")
     for p in m.packed:
-        w(f"export const {p['const']}: u32 = 0x{p['packed']:08X}; // {p['desc']}")
+        w(f"export const {p['const']}: i32 = -0x{p['packed']:08X}; // {p['desc']}")
     w("")
-    w("export function errMake(dom: u16, code: u16): u32 {")
-    w("  return ((<u32>dom) << 16) | (<u32>code);")
+    w("export function errMake(dom: u16, code: u16): i32 {")
+    w("  return -(<i32>(((<u32>dom) << 16) | (<u32>code)));")
     w("}")
-    w("export function errDomainOf(x: u32): u16 { return <u16>(x >> 16); }")
-    w("export function errCodeOf(x: u32): u16 { return <u16>(x & 0xffff); }")
+    w("export function errDomainOf(x: i32): u16 { return <u16>((<u32>(-x)) >> 16); }")
+    w("export function errCodeOf(x: i32): u16 { return <u16>((<u32>(-x)) & 0xffff); }")
     w("")
     w("export function statusStr(s: i32): string {")
     w("  switch (s) {")
@@ -976,7 +987,7 @@ def emit_as(m):
     w("  }")
     w("}")
     w("")
-    w("export function strerror(c: u32): string {")
+    w("export function strerror(c: i32): string {")
     w("  switch (c) {")
     w('    case WASMOS_ERR_NONE: return "success";')
     for p in m.packed:
@@ -996,7 +1007,7 @@ def emit_docs(m):
         "# WASMOS Error / Status Codes",
         "",
         "Two axes: **transport** (`wasmos_status_t`, the global call-mechanism result)",
-        "and **domains** (namespaced operation errors, packed as `(domain << 16) | code`).",
+        "and **domains** (namespaced operation errors: the negative of `(domain << 16) | code`).",
         "",
         "## Transport (`wasmos_status_t`)",
         "",
@@ -1019,11 +1030,11 @@ def emit_docs(m):
             o.append("*(no codes)*")
             o.append("")
             continue
-        o.append("| Code | Packed | Description |")
+        o.append("| Code | Value | Description |")
         o.append("|---|---|---|")
         for p in codes:
             desc = str(p["desc"]).replace("|", "\\|")
-            o.append(f"| `{p['const']}` | 0x{p['packed']:08X} | {desc} |")
+            o.append(f"| `{p['const']}` | -0x{p['packed']:08X} | {desc} |")
         o.append("")
     return "\n".join(o)
 

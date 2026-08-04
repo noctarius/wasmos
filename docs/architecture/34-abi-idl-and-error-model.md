@@ -261,14 +261,21 @@ result appears:
 
   Concrete sign convention for a **value-or-error** host call (one that returns a
   non-negative datum — an offset, id, or count — on success): return that value
-  (`>= 0`) on success, or **`-(int32_t)WASMOS_ERR_MAKE(domain, code)`** — a
-  *negated packed domain code* — on failure. Negation both signals failure
-  (`ret < 0`) and carries the specific reason; the caller recovers it with
-  `(uint32_t)(-ret)` and the `wasmos_error_*` accessors. A plain-status host call
-  (no datum) returns `0` or the same negated packed code. `shmem_map` /
-  `shmem_map_auto` are the first migration onto this: their negated
-  `WASMOS_ERR_SHMEM_*` returns replace the legacy `SHMEM_ERR_*` -30 range
-  (Phase-4 subsystem 1).
+  (`>= 0`) on success, or the packed domain code on failure. **Packed codes are
+  negative**, like the transport axis: `WASMOS_ERR_MAKE(domain, code)` is the
+  negative of `(domain << 16) | local_code`, so a code is returned, compared and
+  decoded as-is — the sign both signals failure (`ret < 0`) and carries the
+  reason, and no call site re-signs it. A plain-status host call (no datum)
+  returns `0` or the same code. `shmem_map` / `shmem_map_auto` are the first
+  migration onto this: their `WASMOS_ERR_SHMEM_*` returns replace the legacy
+  `SHMEM_ERR_*` -30 range (Phase-4 subsystem 1).
+
+  `wasmos_frame_t` stores the pair in unsigned 16-bit fields (`domain`, `code`) —
+  that is the wire encoding of a frame, and `WASMOS_ERR_MAKE` / `_DOMAIN_OF` /
+  `_CODE_OF` are the only places the sign is applied or removed. Every accessor
+  that yields a packed code (`wasmos_error_head` / `_root` / `_unwrap`) therefore
+  returns the negative form, so `wasmos_error_head(e) == WASMOS_ERR_FS_NOT_FOUND`
+  holds and `wasmos_strerror(rc)` takes a return value directly.
 - **Language projection** is generated: C gets the flat struct (or an out-param);
   Rust maps to a domain `Result<T, DomainError>` nested inside a transport
   `Result<_, TransportError>`. The flat struct is the canonical wire/C form and

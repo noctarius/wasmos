@@ -224,7 +224,7 @@ static fat_r_t fat_op_dispatch(fat_op_ctx_t* op) {
     case FAT_OP_CHDIR:
         return fat_op_chdir(op, &g_blk, &g_mnt);
     default:
-        op->err = -(int32_t)WASMOS_ERR_FS_UNSUPPORTED;
+        op->err = WASMOS_ERR_FS_UNSUPPORTED;
         return FAT_R_ERR;
     }
 }
@@ -422,7 +422,7 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t block_endpo
             if (o && o == g_active) {
                 if (!ok) {
                     if (!g_active->err) {
-                        g_active->err = -(int32_t)WASMOS_ERR_FS_IO;
+                        g_active->err = WASMOS_ERR_FS_IO;
                     }
                     fat_send_response(g_active, FAT_R_ERR);
                     fat_op_free(g_active);
@@ -455,7 +455,7 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t block_endpo
             if (!op) {
                 (void)wasmos_ipc_send(
                     wasmos_ipc_last_field(WASMOS_IPC_FIELD_SOURCE), g_fs_endpoint, FS_IPC_ERROR,
-                    wasmos_ipc_last_field(WASMOS_IPC_FIELD_REQUEST_ID), -(int32_t)WASMOS_ERR_FS_BUSY, 0, 0, 0);
+                    wasmos_ipc_last_field(WASMOS_IPC_FIELD_REQUEST_ID), WASMOS_ERR_FS_BUSY, 0, 0, 0);
                 continue;
             }
             op->type = type;

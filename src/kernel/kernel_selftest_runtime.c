@@ -75,80 +75,80 @@ static broker_spawn_request_state_t g_broker_spawn_request_state;
 
 static const char* kernel_selftest_spawn_error_name(int32_t err) {
     switch (err) {
-    case -(int32_t)WASMOS_ERR_PROC_SPAWN_BAD_ENDPOINT:
-        return "-(int32_t)WASMOS_ERR_PROC_SPAWN_BAD_ENDPOINT";
-    case -(int32_t)WASMOS_ERR_PROC_SPAWN_NO_CALLER:
-        return "-(int32_t)WASMOS_ERR_PROC_SPAWN_NO_CALLER";
-    case -(int32_t)WASMOS_ERR_PROC_SPAWN_BAD_PATH:
-        return "-(int32_t)WASMOS_ERR_PROC_SPAWN_BAD_PATH";
-    case -(int32_t)WASMOS_ERR_PROC_SPAWN_CALLER_FSBUF:
-        return "-(int32_t)WASMOS_ERR_PROC_SPAWN_CALLER_FSBUF";
-    case -(int32_t)WASMOS_ERR_PROC_SPAWN_ARGS_TOOBIG:
-        return "-(int32_t)WASMOS_ERR_PROC_SPAWN_ARGS_TOOBIG";
-    case -(int32_t)WASMOS_ERR_PROC_SPAWN_NO_PM_FSBUF:
-        return "-(int32_t)WASMOS_ERR_PROC_SPAWN_NO_PM_FSBUF";
-    case -(int32_t)WASMOS_ERR_PROC_SPAWN_FS_READ:
-        return "-(int32_t)WASMOS_ERR_PROC_SPAWN_FS_READ";
-    case -(int32_t)WASMOS_ERR_PROC_SPAWN_SPAWN_FAILED:
-        return "-(int32_t)WASMOS_ERR_PROC_SPAWN_SPAWN_FAILED";
-    case -(int32_t)WASMOS_ERR_PROC_SPAWN_BROKER_IPC:
-        return "-(int32_t)WASMOS_ERR_PROC_SPAWN_BROKER_IPC";
-    case -(int32_t)WASMOS_ERR_PROC_SPAWN_BROKER_PLAN:
-        return "-(int32_t)WASMOS_ERR_PROC_SPAWN_BROKER_PLAN";
-    case -(int32_t)WASMOS_ERR_PROC_SPAWN_BROKER_DEFERRED:
-        return "-(int32_t)WASMOS_ERR_PROC_SPAWN_BROKER_DEFERRED";
-    case -(int32_t)WASMOS_ERR_PROC_PM_BUSY:
-        return "-(int32_t)WASMOS_ERR_PROC_PM_BUSY";
-    case -(int32_t)WASMOS_ERR_PROC_PM_BAD_ENDPOINT:
-        return "-(int32_t)WASMOS_ERR_PROC_PM_BAD_ENDPOINT";
-    case -(int32_t)WASMOS_ERR_PROC_PM_NO_CALLER:
-        return "-(int32_t)WASMOS_ERR_PROC_PM_NO_CALLER";
-    case -(int32_t)WASMOS_ERR_PROC_PM_INVALID_NAME:
-        return "-(int32_t)WASMOS_ERR_PROC_PM_INVALID_NAME";
-    case -(int32_t)WASMOS_ERR_PROC_PM_INVALID_MODULE:
-        return "-(int32_t)WASMOS_ERR_PROC_PM_INVALID_MODULE";
-    case -(int32_t)WASMOS_ERR_PROC_PM_FS_UNAVAILABLE:
-        return "-(int32_t)WASMOS_ERR_PROC_PM_FS_UNAVAILABLE";
-    case -(int32_t)WASMOS_ERR_PROC_PM_FS_REQUEST:
-        return "-(int32_t)WASMOS_ERR_PROC_PM_FS_REQUEST";
-    case -(int32_t)WASMOS_ERR_PROC_PM_BAD_PATH:
-        return "-(int32_t)WASMOS_ERR_PROC_PM_BAD_PATH";
-    case -(int32_t)WASMOS_ERR_PROC_PM_PATH_RESOLVE:
-        return "-(int32_t)WASMOS_ERR_PROC_PM_PATH_RESOLVE";
-    case -(int32_t)WASMOS_ERR_PROC_PM_SPAWN_FAILED:
-        return "-(int32_t)WASMOS_ERR_PROC_PM_SPAWN_FAILED";
-    case -(int32_t)WASMOS_ERR_PROC_PM_CAPS_APPLY:
-        return "-(int32_t)WASMOS_ERR_PROC_PM_CAPS_APPLY";
-    case -(int32_t)WASMOS_ERR_PROC_PM_BAD_CAPS:
-        return "-(int32_t)WASMOS_ERR_PROC_PM_BAD_CAPS";
-    case -(int32_t)WASMOS_ERR_PROC_PM_BAD_USER_PTR:
-        return "-(int32_t)WASMOS_ERR_PROC_PM_BAD_USER_PTR";
-    case -(int32_t)WASMOS_ERR_PROC_PM_USER_COPY:
-        return "-(int32_t)WASMOS_ERR_PROC_PM_USER_COPY";
-    case -(int32_t)WASMOS_ERR_PROC_PM_META_LOOKUP:
-        return "-(int32_t)WASMOS_ERR_PROC_PM_META_LOOKUP";
-    case -(int32_t)WASMOS_ERR_PROC_PM_META_NOT_DRIVER:
-        return "-(int32_t)WASMOS_ERR_PROC_PM_META_NOT_DRIVER";
-    case -(int32_t)WASMOS_ERR_PROC_PM_META_BAD_INDEX:
-        return "-(int32_t)WASMOS_ERR_PROC_PM_META_BAD_INDEX";
-    case -(int32_t)WASMOS_ERR_PROC_PM_META_BAD_SOURCE:
-        return "-(int32_t)WASMOS_ERR_PROC_PM_META_BAD_SOURCE";
-    case -(int32_t)WASMOS_ERR_PROC_PM_CALLER_FSBUF:
-        return "-(int32_t)WASMOS_ERR_PROC_PM_CALLER_FSBUF";
-    case -(int32_t)WASMOS_ERR_PROC_PM_REPLY_SEND:
-        return "-(int32_t)WASMOS_ERR_PROC_PM_REPLY_SEND";
-    case -(int32_t)WASMOS_ERR_PROC_PM_FS_REPLY:
-        return "-(int32_t)WASMOS_ERR_PROC_PM_FS_REPLY";
-    case -(int32_t)WASMOS_ERR_PROC_PM_BAD_BROKER:
-        return "-(int32_t)WASMOS_ERR_PROC_PM_BAD_BROKER";
-    case -(int32_t)WASMOS_ERR_PROC_PM_BAD_HANDLER:
-        return "-(int32_t)WASMOS_ERR_PROC_PM_BAD_HANDLER";
-    case -(int32_t)WASMOS_ERR_PROC_PM_SUBSYSTEM_REG:
-        return "-(int32_t)WASMOS_ERR_PROC_PM_SUBSYSTEM_REG";
-    case -(int32_t)WASMOS_ERR_PROC_PM_HANDLER_REG:
-        return "-(int32_t)WASMOS_ERR_PROC_PM_HANDLER_REG";
-    case -(int32_t)WASMOS_ERR_PROC_PM_NOT_AUTHORIZED:
-        return "-(int32_t)WASMOS_ERR_PROC_PM_NOT_AUTHORIZED";
+    case WASMOS_ERR_PROC_SPAWN_BAD_ENDPOINT:
+        return "WASMOS_ERR_PROC_SPAWN_BAD_ENDPOINT";
+    case WASMOS_ERR_PROC_SPAWN_NO_CALLER:
+        return "WASMOS_ERR_PROC_SPAWN_NO_CALLER";
+    case WASMOS_ERR_PROC_SPAWN_BAD_PATH:
+        return "WASMOS_ERR_PROC_SPAWN_BAD_PATH";
+    case WASMOS_ERR_PROC_SPAWN_CALLER_FSBUF:
+        return "WASMOS_ERR_PROC_SPAWN_CALLER_FSBUF";
+    case WASMOS_ERR_PROC_SPAWN_ARGS_TOOBIG:
+        return "WASMOS_ERR_PROC_SPAWN_ARGS_TOOBIG";
+    case WASMOS_ERR_PROC_SPAWN_NO_PM_FSBUF:
+        return "WASMOS_ERR_PROC_SPAWN_NO_PM_FSBUF";
+    case WASMOS_ERR_PROC_SPAWN_FS_READ:
+        return "WASMOS_ERR_PROC_SPAWN_FS_READ";
+    case WASMOS_ERR_PROC_SPAWN_SPAWN_FAILED:
+        return "WASMOS_ERR_PROC_SPAWN_SPAWN_FAILED";
+    case WASMOS_ERR_PROC_SPAWN_BROKER_IPC:
+        return "WASMOS_ERR_PROC_SPAWN_BROKER_IPC";
+    case WASMOS_ERR_PROC_SPAWN_BROKER_PLAN:
+        return "WASMOS_ERR_PROC_SPAWN_BROKER_PLAN";
+    case WASMOS_ERR_PROC_SPAWN_BROKER_DEFERRED:
+        return "WASMOS_ERR_PROC_SPAWN_BROKER_DEFERRED";
+    case WASMOS_ERR_PROC_PM_BUSY:
+        return "WASMOS_ERR_PROC_PM_BUSY";
+    case WASMOS_ERR_PROC_PM_BAD_ENDPOINT:
+        return "WASMOS_ERR_PROC_PM_BAD_ENDPOINT";
+    case WASMOS_ERR_PROC_PM_NO_CALLER:
+        return "WASMOS_ERR_PROC_PM_NO_CALLER";
+    case WASMOS_ERR_PROC_PM_INVALID_NAME:
+        return "WASMOS_ERR_PROC_PM_INVALID_NAME";
+    case WASMOS_ERR_PROC_PM_INVALID_MODULE:
+        return "WASMOS_ERR_PROC_PM_INVALID_MODULE";
+    case WASMOS_ERR_PROC_PM_FS_UNAVAILABLE:
+        return "WASMOS_ERR_PROC_PM_FS_UNAVAILABLE";
+    case WASMOS_ERR_PROC_PM_FS_REQUEST:
+        return "WASMOS_ERR_PROC_PM_FS_REQUEST";
+    case WASMOS_ERR_PROC_PM_BAD_PATH:
+        return "WASMOS_ERR_PROC_PM_BAD_PATH";
+    case WASMOS_ERR_PROC_PM_PATH_RESOLVE:
+        return "WASMOS_ERR_PROC_PM_PATH_RESOLVE";
+    case WASMOS_ERR_PROC_PM_SPAWN_FAILED:
+        return "WASMOS_ERR_PROC_PM_SPAWN_FAILED";
+    case WASMOS_ERR_PROC_PM_CAPS_APPLY:
+        return "WASMOS_ERR_PROC_PM_CAPS_APPLY";
+    case WASMOS_ERR_PROC_PM_BAD_CAPS:
+        return "WASMOS_ERR_PROC_PM_BAD_CAPS";
+    case WASMOS_ERR_PROC_PM_BAD_USER_PTR:
+        return "WASMOS_ERR_PROC_PM_BAD_USER_PTR";
+    case WASMOS_ERR_PROC_PM_USER_COPY:
+        return "WASMOS_ERR_PROC_PM_USER_COPY";
+    case WASMOS_ERR_PROC_PM_META_LOOKUP:
+        return "WASMOS_ERR_PROC_PM_META_LOOKUP";
+    case WASMOS_ERR_PROC_PM_META_NOT_DRIVER:
+        return "WASMOS_ERR_PROC_PM_META_NOT_DRIVER";
+    case WASMOS_ERR_PROC_PM_META_BAD_INDEX:
+        return "WASMOS_ERR_PROC_PM_META_BAD_INDEX";
+    case WASMOS_ERR_PROC_PM_META_BAD_SOURCE:
+        return "WASMOS_ERR_PROC_PM_META_BAD_SOURCE";
+    case WASMOS_ERR_PROC_PM_CALLER_FSBUF:
+        return "WASMOS_ERR_PROC_PM_CALLER_FSBUF";
+    case WASMOS_ERR_PROC_PM_REPLY_SEND:
+        return "WASMOS_ERR_PROC_PM_REPLY_SEND";
+    case WASMOS_ERR_PROC_PM_FS_REPLY:
+        return "WASMOS_ERR_PROC_PM_FS_REPLY";
+    case WASMOS_ERR_PROC_PM_BAD_BROKER:
+        return "WASMOS_ERR_PROC_PM_BAD_BROKER";
+    case WASMOS_ERR_PROC_PM_BAD_HANDLER:
+        return "WASMOS_ERR_PROC_PM_BAD_HANDLER";
+    case WASMOS_ERR_PROC_PM_SUBSYSTEM_REG:
+        return "WASMOS_ERR_PROC_PM_SUBSYSTEM_REG";
+    case WASMOS_ERR_PROC_PM_HANDLER_REG:
+        return "WASMOS_ERR_PROC_PM_HANDLER_REG";
+    case WASMOS_ERR_PROC_PM_NOT_AUTHORIZED:
+        return "WASMOS_ERR_PROC_PM_NOT_AUTHORIZED";
     default:
         return "UNKNOWN";
     }
@@ -419,9 +419,9 @@ static process_run_result_t broker_spawn_request_entry(process_t* process, void*
         return PROCESS_RUN_EXITED;
     }
     if (msg.type == PROC_IPC_ERROR && state->attempts < BROKER_TEST_MAX_ATTEMPTS &&
-        ((uint32_t)msg.arg1 == (uint32_t)-(int32_t)WASMOS_ERR_PROC_SPAWN_FS_READ ||
-         (uint32_t)msg.arg1 == (uint32_t)-(int32_t)WASMOS_ERR_PROC_SPAWN_SPAWN_FAILED ||
-         (uint32_t)msg.arg1 == (uint32_t)-(int32_t)WASMOS_ERR_PROC_PM_BUSY)) {
+        ((uint32_t)msg.arg1 == (uint32_t)WASMOS_ERR_PROC_SPAWN_FS_READ ||
+         (uint32_t)msg.arg1 == (uint32_t)WASMOS_ERR_PROC_SPAWN_SPAWN_FAILED ||
+         (uint32_t)msg.arg1 == (uint32_t)WASMOS_ERR_PROC_PM_BUSY)) {
         state->attempts++;
         state->request_id++;
         state->phase = (state->phase == 1u) ? 0u : 2u;

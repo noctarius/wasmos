@@ -2,7 +2,7 @@
 # WASMOS Error / Status Codes
 
 Two axes: **transport** (`wasmos_status_t`, the global call-mechanism result)
-and **domains** (namespaced operation errors, packed as `(domain << 16) | code`).
+and **domains** (namespaced operation errors: the negative of `(domain << 16) | code`).
 
 ## Transport (`wasmos_status_t`)
 
@@ -27,97 +27,133 @@ and **domains** (namespaced operation errors, packed as `(domain << 16) | code`)
 
 ### `proc_spawn` (domain 1) — process-manager path-spawn failures (was PROC_SPAWN_ERR_*)
 
-| Code | Packed | Description |
+| Code | Value | Description |
 |---|---|---|
-| `WASMOS_ERR_PROC_SPAWN_BAD_ENDPOINT` | 0x00010001 | request endpoint owner lookup failed |
-| `WASMOS_ERR_PROC_SPAWN_NO_CALLER` | 0x00010002 | caller process/context not found |
-| `WASMOS_ERR_PROC_SPAWN_BAD_PATH` | 0x00010003 | fs endpoint missing or bad path length |
-| `WASMOS_ERR_PROC_SPAWN_CALLER_FSBUF` | 0x00010004 | caller xfer buffer missing / path too big |
-| `WASMOS_ERR_PROC_SPAWN_ARGS_TOOBIG` | 0x00010005 | args exceed the xfer buffer |
-| `WASMOS_ERR_PROC_SPAWN_NO_PM_FSBUF` | 0x00010006 | PM xfer buffer missing |
-| `WASMOS_ERR_PROC_SPAWN_FS_READ` | 0x00010007 | reading the app blob from FS failed |
-| `WASMOS_ERR_PROC_SPAWN_SPAWN_FAILED` | 0x00010008 | process create/start failed (e.g. no free slot) |
-| `WASMOS_ERR_PROC_SPAWN_BROKER_IPC` | 0x00010009 | broker plan IPC transport/reply failed |
-| `WASMOS_ERR_PROC_SPAWN_BROKER_PLAN` | 0x0001000A | broker replied with malformed/unsupported plan |
-| `WASMOS_ERR_PROC_SPAWN_BROKER_DEFERRED` | 0x0001000B | valid broker plan returned; PM launch step deferred |
+| `WASMOS_ERR_PROC_SPAWN_BAD_ENDPOINT` | -0x00010001 | request endpoint owner lookup failed |
+| `WASMOS_ERR_PROC_SPAWN_NO_CALLER` | -0x00010002 | caller process/context not found |
+| `WASMOS_ERR_PROC_SPAWN_BAD_PATH` | -0x00010003 | fs endpoint missing or bad path length |
+| `WASMOS_ERR_PROC_SPAWN_CALLER_FSBUF` | -0x00010004 | caller xfer buffer missing / path too big |
+| `WASMOS_ERR_PROC_SPAWN_ARGS_TOOBIG` | -0x00010005 | args exceed the xfer buffer |
+| `WASMOS_ERR_PROC_SPAWN_NO_PM_FSBUF` | -0x00010006 | PM xfer buffer missing |
+| `WASMOS_ERR_PROC_SPAWN_FS_READ` | -0x00010007 | reading the app blob from FS failed |
+| `WASMOS_ERR_PROC_SPAWN_SPAWN_FAILED` | -0x00010008 | process create/start failed (e.g. no free slot) |
+| `WASMOS_ERR_PROC_SPAWN_BROKER_IPC` | -0x00010009 | broker plan IPC transport/reply failed |
+| `WASMOS_ERR_PROC_SPAWN_BROKER_PLAN` | -0x0001000A | broker replied with malformed/unsupported plan |
+| `WASMOS_ERR_PROC_SPAWN_BROKER_DEFERRED` | -0x0001000B | valid broker plan returned; PM launch step deferred |
 
 ### `proc_pm` (domain 2) — non-path process-manager IPC failures (was PROC_PM_ERR_*)
 
-| Code | Packed | Description |
+| Code | Value | Description |
 |---|---|---|
-| `WASMOS_ERR_PROC_PM_BUSY` | 0x00020001 | PM already has an incompatible in-flight operation |
-| `WASMOS_ERR_PROC_PM_BAD_ENDPOINT` | 0x00020002 | source endpoint owner lookup failed |
-| `WASMOS_ERR_PROC_PM_NO_CALLER` | 0x00020003 | source endpoint owner has no live process |
-| `WASMOS_ERR_PROC_PM_INVALID_NAME` | 0x00020004 | packed module/service name was empty or invalid |
-| `WASMOS_ERR_PROC_PM_INVALID_MODULE` | 0x00020005 | requested module or descriptor was invalid |
-| `WASMOS_ERR_PROC_PM_FS_UNAVAILABLE` | 0x00020006 | PM filesystem service channel was unavailable |
-| `WASMOS_ERR_PROC_PM_FS_REQUEST` | 0x00020007 | PM could not issue the filesystem read request |
-| `WASMOS_ERR_PROC_PM_BAD_PATH` | 0x00020008 | explicit path input was empty or invalid |
-| `WASMOS_ERR_PROC_PM_PATH_RESOLVE` | 0x00020009 | path-based resolve/classify/reload failed |
-| `WASMOS_ERR_PROC_PM_SPAWN_FAILED` | 0x0002000A | PM failed to create or prepare the child process |
-| `WASMOS_ERR_PROC_PM_CAPS_APPLY` | 0x0002000B | capability profile application failed after spawn |
-| `WASMOS_ERR_PROC_PM_BAD_CAPS` | 0x0002000C | capability payload or compact cap fields were invalid |
-| `WASMOS_ERR_PROC_PM_BAD_USER_PTR` | 0x0002000D | supplied user pointer could not be resolved safely |
-| `WASMOS_ERR_PROC_PM_USER_COPY` | 0x0002000E | mm_copy_from_user failed for PM input payload |
-| `WASMOS_ERR_PROC_PM_META_LOOKUP` | 0x0002000F | module metadata lookup failed |
-| `WASMOS_ERR_PROC_PM_META_NOT_DRIVER` | 0x00020010 | requested module metadata was not for a driver |
-| `WASMOS_ERR_PROC_PM_META_BAD_INDEX` | 0x00020011 | requested driver match index was out of range |
-| `WASMOS_ERR_PROC_PM_META_BAD_SOURCE` | 0x00020012 | unsupported module metadata source selector |
-| `WASMOS_ERR_PROC_PM_CALLER_FSBUF` | 0x00020013 | caller filesystem transfer buffer was missing/invalid |
-| `WASMOS_ERR_PROC_PM_REPLY_SEND` | 0x00020014 | PM failed to send the final IPC response |
-| `WASMOS_ERR_PROC_PM_FS_REPLY` | 0x00020015 | PM received an unexpected filesystem reply |
-| `WASMOS_ERR_PROC_PM_BAD_BROKER` | 0x00020016 | broker registration payload or endpoint was invalid |
-| `WASMOS_ERR_PROC_PM_BAD_HANDLER` | 0x00020017 | exec-handler registration payload was invalid |
-| `WASMOS_ERR_PROC_PM_SUBSYSTEM_REG` | 0x00020018 | subsystem broker registration failed |
-| `WASMOS_ERR_PROC_PM_HANDLER_REG` | 0x00020019 | exec-handler registration failed |
-| `WASMOS_ERR_PROC_PM_NOT_AUTHORIZED` | 0x0002001A | caller lacks the subsystem.register capability |
-| `WASMOS_ERR_PROC_PM_NO_PM_FSBUF` | 0x0002001B | PM could not acquire its own xfer buffer |
+| `WASMOS_ERR_PROC_PM_BUSY` | -0x00020001 | PM already has an incompatible in-flight operation |
+| `WASMOS_ERR_PROC_PM_BAD_ENDPOINT` | -0x00020002 | source endpoint owner lookup failed |
+| `WASMOS_ERR_PROC_PM_NO_CALLER` | -0x00020003 | source endpoint owner has no live process |
+| `WASMOS_ERR_PROC_PM_INVALID_NAME` | -0x00020004 | packed module/service name was empty or invalid |
+| `WASMOS_ERR_PROC_PM_INVALID_MODULE` | -0x00020005 | requested module or descriptor was invalid |
+| `WASMOS_ERR_PROC_PM_FS_UNAVAILABLE` | -0x00020006 | PM filesystem service channel was unavailable |
+| `WASMOS_ERR_PROC_PM_FS_REQUEST` | -0x00020007 | PM could not issue the filesystem read request |
+| `WASMOS_ERR_PROC_PM_BAD_PATH` | -0x00020008 | explicit path input was empty or invalid |
+| `WASMOS_ERR_PROC_PM_PATH_RESOLVE` | -0x00020009 | path-based resolve/classify/reload failed |
+| `WASMOS_ERR_PROC_PM_SPAWN_FAILED` | -0x0002000A | PM failed to create or prepare the child process |
+| `WASMOS_ERR_PROC_PM_CAPS_APPLY` | -0x0002000B | capability profile application failed after spawn |
+| `WASMOS_ERR_PROC_PM_BAD_CAPS` | -0x0002000C | capability payload or compact cap fields were invalid |
+| `WASMOS_ERR_PROC_PM_BAD_USER_PTR` | -0x0002000D | supplied user pointer could not be resolved safely |
+| `WASMOS_ERR_PROC_PM_USER_COPY` | -0x0002000E | mm_copy_from_user failed for PM input payload |
+| `WASMOS_ERR_PROC_PM_META_LOOKUP` | -0x0002000F | module metadata lookup failed |
+| `WASMOS_ERR_PROC_PM_META_NOT_DRIVER` | -0x00020010 | requested module metadata was not for a driver |
+| `WASMOS_ERR_PROC_PM_META_BAD_INDEX` | -0x00020011 | requested driver match index was out of range |
+| `WASMOS_ERR_PROC_PM_META_BAD_SOURCE` | -0x00020012 | unsupported module metadata source selector |
+| `WASMOS_ERR_PROC_PM_CALLER_FSBUF` | -0x00020013 | caller filesystem transfer buffer was missing/invalid |
+| `WASMOS_ERR_PROC_PM_REPLY_SEND` | -0x00020014 | PM failed to send the final IPC response |
+| `WASMOS_ERR_PROC_PM_FS_REPLY` | -0x00020015 | PM received an unexpected filesystem reply |
+| `WASMOS_ERR_PROC_PM_BAD_BROKER` | -0x00020016 | broker registration payload or endpoint was invalid |
+| `WASMOS_ERR_PROC_PM_BAD_HANDLER` | -0x00020017 | exec-handler registration payload was invalid |
+| `WASMOS_ERR_PROC_PM_SUBSYSTEM_REG` | -0x00020018 | subsystem broker registration failed |
+| `WASMOS_ERR_PROC_PM_HANDLER_REG` | -0x00020019 | exec-handler registration failed |
+| `WASMOS_ERR_PROC_PM_NOT_AUTHORIZED` | -0x0002001A | caller lacks the subsystem.register capability |
+| `WASMOS_ERR_PROC_PM_NO_PM_FSBUF` | -0x0002001B | PM could not acquire its own xfer buffer |
 
 ### `shmem` (domain 3) — shared-memory map/map_auto failures (was SHMEM_ERR_*)
 
-| Code | Packed | Description |
+| Code | Value | Description |
 |---|---|---|
-| `WASMOS_ERR_SHMEM_BAD_ARGS` | 0x00030001 | id/size invalid or size not page-aligned |
-| `WASMOS_ERR_SHMEM_NO_CAP` | 0x00030002 | caller lacks the DMA capability / no context |
-| `WASMOS_ERR_SHMEM_BAD_ID` | 0x00030003 | shmem id unknown / no backing pages |
-| `WASMOS_ERR_SHMEM_BAD_SIZE` | 0x00030004 | requested size smaller than the shared region |
-| `WASMOS_ERR_SHMEM_UNALIGNED` | 0x00030005 | fixed offset cannot yield a page-aligned host addr |
-| `WASMOS_ERR_SHMEM_NO_WINDOW` | 0x00030006 | no free page-aligned window fits in linear memory |
-| `WASMOS_ERR_SHMEM_MAP` | 0x00030007 | paging/linear-memory mapping step failed |
+| `WASMOS_ERR_SHMEM_BAD_ARGS` | -0x00030001 | id/size invalid or size not page-aligned |
+| `WASMOS_ERR_SHMEM_NO_CAP` | -0x00030002 | caller lacks the DMA capability / no context |
+| `WASMOS_ERR_SHMEM_BAD_ID` | -0x00030003 | shmem id unknown / no backing pages |
+| `WASMOS_ERR_SHMEM_BAD_SIZE` | -0x00030004 | requested size smaller than the shared region |
+| `WASMOS_ERR_SHMEM_UNALIGNED` | -0x00030005 | fixed offset cannot yield a page-aligned host addr |
+| `WASMOS_ERR_SHMEM_NO_WINDOW` | -0x00030006 | no free page-aligned window fits in linear memory |
+| `WASMOS_ERR_SHMEM_MAP` | -0x00030007 | paging/linear-memory mapping step failed |
 
 ### `fs` (domain 4) — filesystem backend/VFS failures (was FS_ERR_*)
 
-| Code | Packed | Description |
+| Code | Value | Description |
 |---|---|---|
-| `WASMOS_ERR_FS_BAD_ARGS` | 0x00040001 | invalid flags/args (len 0, bad access mode, reserved arg set) |
-| `WASMOS_ERR_FS_PATH_TOO_LONG` | 0x00040002 | path length exceeds the path or xfer buffer |
-| `WASMOS_ERR_FS_BUFFER` | 0x00040003 | xfer-buffer read/write/size call failed |
-| `WASMOS_ERR_FS_TRANSLATE` | 0x00040004 | vfs path translation failed / routed to init overlay |
-| `WASMOS_ERR_FS_NOT_FOUND` | 0x00040005 | path component or target entry does not exist |
-| `WASMOS_ERR_FS_IS_DIR` | 0x00040006 | target is a directory where a file was required |
-| `WASMOS_ERR_FS_NOT_DIR` | 0x00040007 | a path component that must be a directory is not one |
-| `WASMOS_ERR_FS_EXISTS` | 0x00040008 | create target already exists (fail-if-exists) |
-| `WASMOS_ERR_FS_NOT_EMPTY` | 0x00040009 | rmdir target directory is not empty |
-| `WASMOS_ERR_FS_NO_FD` | 0x0004000A | open-file table is full |
-| `WASMOS_ERR_FS_BUSY` | 0x0004000B | backend has no free op-context slot (retryable) |
-| `WASMOS_ERR_FS_IO` | 0x0004000C | block-device I/O error |
-| `WASMOS_ERR_FS_NOT_READY` | 0x0004000D | mount/backend not ready |
-| `WASMOS_ERR_FS_NO_SPACE` | 0x0004000E | no free cluster or directory slot (disk full) |
-| `WASMOS_ERR_FS_NAME` | 0x0004000F | invalid name (LFN/short-name encode failed) |
-| `WASMOS_ERR_FS_ACCESS` | 0x00040010 | access-mode violation (e.g. read on write-only fd) |
-| `WASMOS_ERR_FS_RANGE` | 0x00040011 | seek/offset out of range |
-| `WASMOS_ERR_FS_UNSUPPORTED` | 0x00040012 | unknown/unsupported request type |
-| `WASMOS_ERR_FS_OPEN` | 0x00040013 | operation forbidden on a currently-open file |
-| `WASMOS_ERR_FS_CORRUPT` | 0x00040014 | on-disk structure inconsistency detected |
+| `WASMOS_ERR_FS_BAD_ARGS` | -0x00040001 | invalid flags/args (len 0, bad access mode, reserved arg set) |
+| `WASMOS_ERR_FS_PATH_TOO_LONG` | -0x00040002 | path length exceeds the path or xfer buffer |
+| `WASMOS_ERR_FS_BUFFER` | -0x00040003 | xfer-buffer read/write/size call failed |
+| `WASMOS_ERR_FS_TRANSLATE` | -0x00040004 | vfs path translation failed / routed to init overlay |
+| `WASMOS_ERR_FS_NOT_FOUND` | -0x00040005 | path component or target entry does not exist |
+| `WASMOS_ERR_FS_IS_DIR` | -0x00040006 | target is a directory where a file was required |
+| `WASMOS_ERR_FS_NOT_DIR` | -0x00040007 | a path component that must be a directory is not one |
+| `WASMOS_ERR_FS_EXISTS` | -0x00040008 | create target already exists (fail-if-exists) |
+| `WASMOS_ERR_FS_NOT_EMPTY` | -0x00040009 | rmdir target directory is not empty |
+| `WASMOS_ERR_FS_NO_FD` | -0x0004000A | open-file table is full |
+| `WASMOS_ERR_FS_BUSY` | -0x0004000B | backend has no free op-context slot (retryable) |
+| `WASMOS_ERR_FS_IO` | -0x0004000C | block-device I/O error |
+| `WASMOS_ERR_FS_NOT_READY` | -0x0004000D | mount/backend not ready |
+| `WASMOS_ERR_FS_NO_SPACE` | -0x0004000E | no free cluster or directory slot (disk full) |
+| `WASMOS_ERR_FS_NAME` | -0x0004000F | invalid name (LFN/short-name encode failed) |
+| `WASMOS_ERR_FS_ACCESS` | -0x00040010 | access-mode violation (e.g. read on write-only fd) |
+| `WASMOS_ERR_FS_RANGE` | -0x00040011 | seek/offset out of range |
+| `WASMOS_ERR_FS_UNSUPPORTED` | -0x00040012 | unknown/unsupported request type |
+| `WASMOS_ERR_FS_OPEN` | -0x00040013 | operation forbidden on a currently-open file |
+| `WASMOS_ERR_FS_CORRUPT` | -0x00040014 | on-disk structure inconsistency detected |
+| `WASMOS_ERR_FS_NOT_AUTHORIZED` | -0x00040015 | caller is not permitted to issue this request (e.g. clone-cwd is process-manager only) |
+| `WASMOS_ERR_FS_NO_CLIENT_SLOT` | -0x00040016 | per-client state could not be tracked (slot table full / allocation failed) |
+| `WASMOS_ERR_FS_NOT_ABSOLUTE` | -0x00040017 | path must be absolute (does not start with '/') |
+| `WASMOS_ERR_FS_NO_BACKEND` | -0x00040018 | no registered backend serves the requested mount |
+| `WASMOS_ERR_FS_REBORROW` | -0x00040019 | reborrowing the client's xfer-buffer grant to the backend failed |
+| `WASMOS_ERR_FS_BACKEND_IPC` | -0x0004001A | request could not be delivered to the backend, or no reply arrived |
+| `WASMOS_ERR_FS_BAD_FD` | -0x0004001B | fd is not present in this client's fd table |
 
 ### `net` (domain 5) — networking stack / socket failures (reserved)
 
 *(no codes)*
 
-### `gfx` (domain 6) — compositor / framebuffer failures (reserved)
+### `gfx` (domain 6) — compositor / framebuffer text-console failures
 
-*(no codes)*
+| Code | Value | Description |
+|---|---|---|
+| `WASMOS_ERR_GFX_UNSUPPORTED_REQUEST` | -0x00060001 | unknown or unsupported request type for this framebuffer backend |
+| `WASMOS_ERR_GFX_NO_RUNTIME_MODES` | -0x00060002 | backend cannot enumerate or switch modes at runtime (firmware-provided framebuffer) |
+| `WASMOS_ERR_GFX_BAD_MODE_INDEX` | -0x00060003 | mode index is out of range for this backend |
+| `WASMOS_ERR_GFX_MODE_TOO_LARGE` | -0x00060004 | requested mode does not fit the framebuffer mapping established at boot |
+| `WASMOS_ERR_GFX_MODE_SET_FAILED` | -0x00060005 | requested geometry is not a supported mode, or the mode-set path is unavailable |
 
 ### `driver` (domain 7) — generic device-driver failures (reserved)
 
 *(no codes)*
+
+### `vt` (domain 8) — virtual-terminal multiplexer failures
+
+| Code | Value | Description |
+|---|---|---|
+| `WASMOS_ERR_VT_BAD_TTY_ID` | -0x00080001 | requested tty id is out of range |
+| `WASMOS_ERR_VT_NO_TTY_FOR_SOURCE` | -0x00080002 | no tty is associated with the requesting endpoint |
+| `WASMOS_ERR_VT_READER_BUSY` | -0x00080003 | another endpoint is already the reader for this tty |
+| `WASMOS_ERR_VT_UNSUPPORTED_REQUEST` | -0x00080004 | unknown or unsupported request type |
+
+### `chardev` (domain 9) — character-device sample driver failures
+
+| Code | Value | Description |
+|---|---|---|
+| `WASMOS_ERR_CHARDEV_NO_DATA` | -0x00090001 | no byte is buffered yet (retryable) |
+| `WASMOS_ERR_CHARDEV_UNSUPPORTED_REQUEST` | -0x00090002 | unknown or unsupported request type |
+
+### `devmgr` (domain 10) — device-manager query failures
+
+| Code | Value | Description |
+|---|---|---|
+| `WASMOS_ERR_DEVMGR_NO_MOUNT_RULE` | -0x000A0001 | no block/filesystem mount rule matches the requested unit |
+| `WASMOS_ERR_DEVMGR_UNSUPPORTED_QUERY` | -0x000A0002 | unknown or unsupported device-manager query type |

@@ -2078,37 +2078,37 @@ static void cli_phase_wait_ipc_step(void) {
         int32_t spawn_rc = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG1);
         const char* reason = 0;
         switch (spawn_rc) {
-        case -(int32_t)WASMOS_ERR_PROC_SPAWN_BAD_ENDPOINT:
+        case WASMOS_ERR_PROC_SPAWN_BAD_ENDPOINT:
             reason = "bad request endpoint";
             break;
-        case -(int32_t)WASMOS_ERR_PROC_SPAWN_NO_CALLER:
+        case WASMOS_ERR_PROC_SPAWN_NO_CALLER:
             reason = "caller not found";
             break;
-        case -(int32_t)WASMOS_ERR_PROC_SPAWN_BAD_PATH:
+        case WASMOS_ERR_PROC_SPAWN_BAD_PATH:
             reason = "bad path";
             break;
-        case -(int32_t)WASMOS_ERR_PROC_SPAWN_CALLER_FSBUF:
+        case WASMOS_ERR_PROC_SPAWN_CALLER_FSBUF:
             reason = "path too long";
             break;
-        case -(int32_t)WASMOS_ERR_PROC_SPAWN_ARGS_TOOBIG:
+        case WASMOS_ERR_PROC_SPAWN_ARGS_TOOBIG:
             reason = "args too long";
             break;
-        case -(int32_t)WASMOS_ERR_PROC_SPAWN_NO_PM_FSBUF:
+        case WASMOS_ERR_PROC_SPAWN_NO_PM_FSBUF:
             reason = "transfer buffer unavailable";
             break;
-        case -(int32_t)WASMOS_ERR_PROC_SPAWN_FS_READ:
+        case WASMOS_ERR_PROC_SPAWN_FS_READ:
             reason = "cannot read executable";
             break;
-        case -(int32_t)WASMOS_ERR_PROC_SPAWN_BROKER_IPC:
+        case WASMOS_ERR_PROC_SPAWN_BROKER_IPC:
             reason = "broker plan IPC failed";
             break;
-        case -(int32_t)WASMOS_ERR_PROC_SPAWN_BROKER_PLAN:
+        case WASMOS_ERR_PROC_SPAWN_BROKER_PLAN:
             reason = "broker returned an invalid spawn plan";
             break;
-        case -(int32_t)WASMOS_ERR_PROC_SPAWN_BROKER_DEFERRED:
+        case WASMOS_ERR_PROC_SPAWN_BROKER_DEFERRED:
             reason = "broker plan validated but launch is not implemented yet";
             break;
-        case -(int32_t)WASMOS_ERR_PROC_SPAWN_SPAWN_FAILED:
+        case WASMOS_ERR_PROC_SPAWN_SPAWN_FAILED:
             reason = "cannot start process (no free slot?)";
             break;
         default:

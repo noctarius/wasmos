@@ -358,7 +358,9 @@ returns; `FS_ERR_*`/`PROC_*` ride IPC opcodes), so the migration depends on them
     use packed `WASMOS_ERR_PROC_{SPAWN,PM}_*` directly (returned as the
     negative rc in `PROC_IPC_ERROR.arg1`). Booted both runtimes.
   - [x] Subsystem 4 — **scoped boundary pass**: every bare `-1` that leaves a
-    service in an IPC reply code arg now carries a specific packed code. Scope was
+    service in an IPC reply code arg now carries a specific packed code. This
+    covers *bare* `-1`s only — the named negative-int taxonomies are subsystem 5
+    below, so the edges are not yet uniformly on the packed model. Scope was
     "boundary-crossing returns only", not the full 438-site sweep;
     internal-helper `-1`s stay and the `-1` lint stays advisory. New vocabulary:
     8 specific `fs` codes (`NOT_AUTHORIZED`, `NO_CLIENT_SLOT`, `NOT_ABSOLUTE`,
@@ -385,9 +387,33 @@ returns; `FS_ERR_*`/`PROC_*` ride IPC opcodes), so the migration depends on them
     drivers — `NO_RUNTIME_MODES` vs `MODE_TOO_LARGE`). `net`, `font`, `block`,
     `virtio_serial` and `hrng` needed no domains: their `-1`s are all internal
     helper returns. Booted both runtimes.
+  - [ ] Subsystem 5 — the **named** negative-int status vocabularies. The `-1`
+    framing of subsystem 4 was too narrow: it hunted *bare* `-1`s and so never
+    saw the named constants doing the same job with the same ambiguity. Each of
+    these is a per-subsystem taxonomy defined outside `abi/errors.yaml`, and each
+    has its own `-1` meaning "invalid":
+    - `XFER_BUFFER_ERR_*` (254 refs, `kernel/include/xfer_buffer.h`) — the
+      largest, and a **host-call** edge: both `link.c`/`link.cpp` return these
+      straight to guests, so peers decode them.
+    - `NET_STATUS_*` (117) and `HRNG_STATUS_*` (17) in `wasmos_driver_abi.h`.
+      `HRNG_STATUS_*` values are non-contiguous (-2, -3, -5, -9), suggesting they
+      were hand-aligned to something and drifted.
+    - `GFX_STATUS_*` (112, `libc/include/wasmos/gfx_ipc.h`) — compositor replies.
+    - `FONT_STATUS_*` (61) and `RTC_STATUS_*` (27) — **duplicated** across
+      headers (`font_ipc.h` ×2, `rtc_ipc.h` ×3), as is the transport `IPC_ERR_*`
+      (×3). Single-sourcing these is the point of the IDL.
+    - `VT_SWITCH_ERR_*` (10, `services/vt/vt_types.h`).
+    `PM_SPAWN_INTERNAL_ERR_*` (58) is explicitly internal and stays. Ordering by
+    value: xfer-buffer first (largest and a host-call edge), then the duplicated
+    ones (font/rtc) since deduplication is most of the benefit.
 - [ ] Extend the `quality` re-gen guard to the host-call and opcode generators
   as they land (the errors guard already exists), so generated output can never
   silently drift from the IDL.
+- [ ] Widen the advisory `-1` lint: it greps for a literal `return -1;`, which is
+  why both the `fs_init` reply-code default and every named `*_STATUS_-1` above
+  escaped subsystem 4. It should also flag a reply code arg that is a variable
+  reaching `-1`, and any negative-int status enum defined outside
+  `abi/errors.yaml`.
 
 ## Filesystems and Storage
 

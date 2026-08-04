@@ -308,9 +308,19 @@ linked feature documents for rationale and rollout plans.
   returned, compared and decoded as-is — `WASMOS_ERR_MAKE` / `_DOMAIN_OF` /
   `_CODE_OF` are the only places the sign is applied or removed, and
   `wasmos_frame_t`'s unsigned 16-bit fields are the wire encoding of a chain
-  frame. No legacy `*_ERR_*` enum remains. Every `-1` that leaves a service in an
-  IPC reply code arg now carries a specific code; bare `-1` survives only in
-  internal helper returns, where the `quality` lint flags it advisorily.
+  frame. Migrated onto it so far: SHMEM, FS and PROC (their `*_ERR_*` enums are
+  gone), plus every bare `-1` that left a service in an IPC reply code arg. Bare
+  `-1` survives in internal helper returns, where the `quality` lint flags it
+  advisorily.
+- Not yet on the packed model: several subsystems still define their own
+  negative-int status vocabularies at service and host-call edges —
+  `XFER_BUFFER_ERR_*` (254 refs, returned by host calls), `NET_STATUS_*` (117),
+  `GFX_STATUS_*` (112), `FONT_STATUS_*` (61), `RTC_STATUS_*` (27),
+  `HRNG_STATUS_*` (17), `VT_SWITCH_ERR_*` (10). Each carries its own `-1` for
+  "invalid", so the ambiguity the packed model removes is still present at those
+  edges. Some are also duplicated across headers rather than single-sourced
+  (`font_ipc.h` ×2, `rtc_ipc.h` ×3, `IPC_ERR_*` ×3), which is the drift the IDL
+  exists to prevent. `PM_SPAWN_INTERNAL_ERR_*` (58) is deliberately internal.
   The 4-frame cause chain is generated in every language but has no call sites
   yet — wrapping is unused, and an IPC reply can carry at most two frames in
   `arg0..arg3`, so a deeper chain needs a transfer buffer.

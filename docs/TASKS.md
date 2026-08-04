@@ -104,6 +104,20 @@ and `architecture/33-completion-ports.md`.
   future/promise bridge has landed and net-stack uses it, but the
   fs-manager↔device-manager sync-round-trip deadlock hazard remains
   (`architecture/09` synchronous-IPC section; `src/services/fs_manager/fs_manager.c:608`).
+  - [x] CLI VT path: the three post-init VT round-trips (`GET_ACTIVE_TTY`,
+    `SWITCH_TTY`, `READ_REQ`) now go through one owned `wasmos_sys_event_loop`
+    pump as IPC futures. This fixed a real character-loss bug — see below.
+  - [ ] CLI, rest of the way to a coroutine app. Remaining synchronous receives:
+    `cli_register_vt_writer` / `cli_set_vt_mode` still drain the VT endpoint
+    directly (init-only, before the pump is in use), and the PM/FS/spawn paths
+    still block on `wasmos_ipc_select_one(g_reply_endpoint)`
+    (`cli.c` ~1111, ~1381, ~1404, ~2076), which is why the CLI is structurally
+    blind to input while a command waits (Ctrl+C during a long command cannot
+    work). Converting those is the prerequisite for collapsing the CLI's two
+    endpoints onto one, and then for replacing the `g_phase`
+    (`INIT/PROMPT/READ/WAIT_IPC/FAILED`) machine with a coroutine per command.
+    Do not collapse the endpoints first: sharing one endpoint while those
+    blocking receives remain just moves the input loss into them.
 - [ ] Publish `POLL_EV_IN` on the notification path so NOTIFICATION endpoints
   are visible to `ipc_select_wait`: `ipc_notify_from` does not call
   `poll_notify` (`src/kernel/ipc.c:363-385`). Prerequisite for completion ports.

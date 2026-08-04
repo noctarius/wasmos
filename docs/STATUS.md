@@ -300,6 +300,17 @@ linked feature documents for rationale and rollout plans.
   a validated `.wap` launch plan for other formats.
 - Service discovery supports named services and class instances. Multi-instance
   providers must use unique class instances and unique concrete PM names.
+- The CLI's VT traffic runs through a single owned receive pump
+  (`wasmos_sys_event_loop`): replies match pending requests by request id, pushes
+  match registered handlers by type (`VT_IPC_INPUT_NOTIFY`), and anything
+  unclaimed reaches a default handler that logs instead of dropping. It replaced
+  per-call drain loops that consumed a message and discarded it when it was not
+  the reply they wanted, which lost typed characters outright: a read that timed
+  out left its request registered, and the next read discarded that reply on an
+  id mismatch — `halt` at the prompt arriving as `alt`. Measured on wasm3:
+  1-in-5 halt-test failures before (identical at the pre-change baseline),
+  20/20 passes after. The CLI's PM/FS paths still use blocking
+  `ipc_select_one`, so it stays blind to input while a command runs.
 - Error and status codes are single-sourced in `abi/errors.yaml` and generated for
   C, Rust, Go, Zig and AssemblyScript; `gen_abi_errors.py --check` guards the
   checked-in output against IDL drift. Both axes are negative on error: the

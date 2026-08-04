@@ -38,6 +38,17 @@ static int32_t g_request_id = 1;
  * timeout is only a liveness/foreground-refresh backstop. */
 static int32_t g_idle_select = -1;
 #define CLI_IDLE_WAIT_MS 1000
+
+/* One owned receive pump over the CLI's endpoint.  The loop matches replies to
+ * pending requests by request id, pushes to handlers by message type, and sends
+ * anything unclaimed to the default handler.  This replaces the per-call drain
+ * loops, each of which consumed a message and then discarded it when it was not
+ * the reply it wanted -- silently losing VT_IPC_INPUT_NOTIFY pushes, each
+ * other's replies, and (when a read timed out with its request still in flight)
+ * a reply carrying a typed character. */
+static wasmos_sys_event_loop_t g_loop;
+/* Set by the INPUT_NOTIFY handler; the read path consumes it. */
+static int32_t g_input_notified = 0;
 static int32_t g_pending_req = -1;
 static char g_cwd[64] = "/";
 static int32_t g_pending_kind = 0;
@@ -598,6 +609,75 @@ static void console_write(const char* s) {
 
 /* Ask the VT service for the current active TTY index and its switch generation.
  * Updates g_vt_switch_generation from the response; returns TTY index or -1. */
+static void cli_on_input_notify(void* user, const wasmos_ipc_message_t* msg) {
+    (void)user;
+    (void)msg;
+    g_input_notified = 1;
+}
+
+/* Anything the pump cannot match to a pending request or a registered push is
+ * reported rather than dropped: a silent drop here is what made input loss
+ * invisible before.  Kept to one line and rate-limited to the first few. */
+static void cli_on_unclaimed(void* user, const wasmos_ipc_message_t* msg) {
+    static int32_t reported = 0;
+    (void)user;
+    if (!msg || reported >= 8) {
+        return;
+    }
+    reported++;
+    printf("[cli] unclaimed ipc type=0x%x req=%d src=%d\n", (unsigned)msg->type,
+           (int)msg->request_id, (int)msg->source);
+}
+
+static int32_t cli_reply_status(void* user, const wasmos_ipc_message_t* msg) {
+    (void)user;
+    (void)msg;
+    /* Every reply settles the future; the caller inspects type/args itself. */
+    return 0;
+}
+
+/* Send one request to the VT and pump the loop until its reply lands.
+ *
+ * The pump owns the endpoint, so while this call waits, INPUT_NOTIFY pushes and
+ * any other reply are dispatched instead of being consumed-and-discarded.
+ * Returns 0 and fills *out_reply on success, -1 on send failure or budget
+ * exhaustion.  `budget` bounds the pump iterations so a lost reply cannot wedge
+ * the CLI. */
+static int cli_vt_call(int32_t msg_type, int32_t arg0, int32_t arg1, int32_t arg2, int32_t arg3,
+                       wasmos_ipc_message_t* out_reply, int32_t budget) {
+    if (g_vt_endpoint < 0 || g_vt_client_endpoint < 0) {
+        return -1;
+    }
+    wasmos_sys_wasm_ipc_future_t op;
+    wasmos_sys_wasm_ipc_future_init(&op, cli_reply_status, 0);
+    int32_t req_id = 0;
+    wasmos_future_t* future =
+        wasmos_sys_wasm_ipc_future_send(&g_loop, &op, g_vt_endpoint, g_vt_client_endpoint, msg_type,
+                                        arg0, arg1, arg2, arg3, &req_id);
+    if (!future) {
+        return -1;
+    }
+    for (int32_t i = 0; i < budget; ++i) {
+        int32_t status = 0;
+        uintptr_t value = 0;
+        if (wasmos_future_poll(future, &status, &value)) {
+            const wasmos_ipc_message_t* reply = wasmos_sys_wasm_ipc_future_reply(&op);
+            if (!reply) {
+                return -1;
+            }
+            if (out_reply) {
+                *out_reply = *reply;
+            }
+            return 0;
+        }
+        (void)wasmos_sys_event_loop_poll(&g_loop, 4);
+    }
+    /* Give up, but retract the intent so a late reply cannot be mistaken for a
+     * later request's (the old code left it registered and then dropped it). */
+    wasmos_sys_wasm_ipc_future_cancel(&op, -1);
+    return -1;
+}
+
 static int32_t cli_query_active_tty(uint32_t* out_generation) {
     if (g_vt_endpoint < 0 || g_vt_client_endpoint < 0) {
         if (out_generation) {
@@ -605,40 +685,21 @@ static int32_t cli_query_active_tty(uint32_t* out_generation) {
         }
         return g_home_tty;
     }
-    int32_t req_id = g_request_id++;
-    if (wasmos_ipc_send(g_vt_endpoint, g_vt_client_endpoint, VT_IPC_GET_ACTIVE_TTY, req_id, 0, 0, 0,
-                        0) != 0) {
+    wasmos_ipc_message_t reply;
+    if (cli_vt_call(VT_IPC_GET_ACTIVE_TTY, 0, 0, 0, 0, &reply, CLI_VT_RESP_RETRIES) != 0) {
         return -1;
     }
-
-    for (int tries = 0; tries < CLI_VT_RESP_RETRIES; ++tries) {
-        int32_t rc = wasmos_ipc_drain(g_vt_client_endpoint);
-        if (rc < 0) {
-            return -1;
-        }
-        if (rc == 0) {
-            (void)wasmos_sched_yield();
-            continue;
-        }
-        int32_t resp_type = wasmos_ipc_last_field(WASMOS_IPC_FIELD_TYPE);
-        int32_t resp_req = wasmos_ipc_last_field(WASMOS_IPC_FIELD_REQUEST_ID);
-        if (resp_req != req_id) {
-            continue;
-        }
-        if (resp_type != VT_IPC_RESP) {
-            return -1;
-        }
-        uint32_t gen = (uint32_t)wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG0);
-        if (gen != 0) {
-            g_vt_switch_generation = gen;
-            if (out_generation) {
-                *out_generation = gen;
-            }
-        }
-        return wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG1);
+    if (reply.type != VT_IPC_RESP) {
+        return -1;
     }
-
-    return -1;
+    uint32_t gen = (uint32_t)reply.arg0;
+    if (gen != 0) {
+        g_vt_switch_generation = gen;
+        if (out_generation) {
+            *out_generation = gen;
+        }
+    }
+    return reply.arg1;
 }
 
 static int cli_switch_tty(int32_t tty, int wait_resp, int32_t* out_error) {
@@ -652,53 +713,37 @@ static int cli_switch_tty(int32_t tty, int wait_resp, int32_t* out_error) {
         return -1;
     }
 
-    int32_t req_id = wait_resp ? g_request_id++ : 0;
-    int32_t send_rc =
-        wasmos_sys_ipc_send_retry(g_vt_endpoint, g_vt_client_endpoint, VT_IPC_SWITCH_TTY, req_id,
-                                  tty, 0, 0, 0, CLI_VT_SEND_RETRIES);
-    if (send_rc != 0) {
-        if (out_error) {
-            *out_error = send_rc;
-        }
-        return -1;
-    }
-
     if (!wait_resp) {
-        return 0;
-    }
-
-    for (int tries_resp = 0; tries_resp < CLI_VT_RESP_RETRIES; ++tries_resp) {
-        int32_t rc = wasmos_ipc_drain(g_vt_client_endpoint);
-        if (rc < 0) {
+        /* Fire-and-forget: no reply is awaited, so no request id is needed. */
+        int32_t send_rc =
+            wasmos_sys_ipc_send_retry(g_vt_endpoint, g_vt_client_endpoint, VT_IPC_SWITCH_TTY, 0,
+                                      tty, 0, 0, 0, CLI_VT_SEND_RETRIES);
+        if (send_rc != 0) {
             if (out_error) {
-                *out_error = rc;
+                *out_error = send_rc;
             }
             return -1;
         }
-        if (rc == 0) {
-            (void)wasmos_sched_yield();
-            continue;
-        }
-        int32_t resp_type = wasmos_ipc_last_field(WASMOS_IPC_FIELD_TYPE);
-        int32_t resp_req = wasmos_ipc_last_field(WASMOS_IPC_FIELD_REQUEST_ID);
-        if (resp_req != req_id) {
-            continue;
-        }
-        if (resp_type == VT_IPC_RESP) {
-            uint32_t gen = (uint32_t)wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG0);
-            if (gen != 0) {
-                g_vt_switch_generation = gen;
-            }
-            g_last_seen_active_tty = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG1);
-            return 0;
-        }
+        return 0;
+    }
+
+    wasmos_ipc_message_t reply;
+    if (cli_vt_call(VT_IPC_SWITCH_TTY, tty, 0, 0, 0, &reply, CLI_VT_RESP_RETRIES) != 0) {
         if (out_error) {
-            *out_error = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG0);
+            *out_error = -2;
         }
         return -1;
     }
+    if (reply.type == VT_IPC_RESP) {
+        uint32_t gen = (uint32_t)reply.arg0;
+        if (gen != 0) {
+            g_vt_switch_generation = gen;
+        }
+        g_last_seen_active_tty = reply.arg1;
+        return 0;
+    }
     if (out_error) {
-        *out_error = -2;
+        *out_error = reply.arg0;
     }
     return -1;
 }
@@ -801,40 +846,24 @@ static int32_t cli_vt_read_char(char* out_ch) {
         return -1;
     }
 
-    int32_t req_id = g_request_id++;
-    int32_t send_rc =
-        wasmos_sys_ipc_send_retry(g_vt_endpoint, g_vt_client_endpoint, VT_IPC_READ_REQ, req_id,
-                                  g_home_tty, 0, 0, 0, CLI_VT_SEND_RETRIES);
-    if (send_rc != 0) {
+    /* The read must never abandon an in-flight request: the VT answers every
+     * READ_REQ, and its reply can carry a character.  The old loop gave up after
+     * 32 tries with the request still registered, so the next read discarded
+     * that reply on a request-id mismatch and the character was lost for good --
+     * the `halt` typed at the prompt arriving as `alt`.  cli_vt_call keeps the
+     * intent until the reply settles and cancels it if it truly gives up. */
+    wasmos_ipc_message_t reply;
+    if (cli_vt_call(VT_IPC_READ_REQ, g_home_tty, 0, 0, 0, &reply, CLI_VT_RESP_RETRIES) != 0) {
         return -1;
     }
-
-    for (int wait = 0; wait < 32; ++wait) {
-        int32_t rc = wasmos_ipc_drain(g_vt_client_endpoint);
-        if (rc < 0) {
-            return -1;
-        }
-        if (rc == 0) {
-            (void)wasmos_sched_yield();
-            continue;
-        }
-        int32_t resp_type = wasmos_ipc_last_field(WASMOS_IPC_FIELD_TYPE);
-        int32_t resp_req = wasmos_ipc_last_field(WASMOS_IPC_FIELD_REQUEST_ID);
-        if (resp_req != req_id) {
-            continue;
-        }
-        if (resp_type != VT_IPC_RESP) {
-            return -1;
-        }
-        int32_t status = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG0);
-        if (status != 0) {
-            return 0;
-        }
-        int32_t ch = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG1);
-        *out_ch = (char)(ch & 0xFF);
-        return 1;
+    if (reply.type != VT_IPC_RESP) {
+        return -1;
     }
-    return 0;
+    if (reply.arg0 != 0) {
+        return 0; /* queue empty */
+    }
+    *out_ch = (char)(reply.arg1 & 0xFF);
+    return 1;
 }
 
 static void console_prompt(void) {
@@ -1890,9 +1919,18 @@ static void cli_phase_init_step(int32_t proc_endpoint, int32_t home_tty_arg) {
     if (g_vt_client_endpoint < 0) {
         cli_fail_and_stall("[cli] failed to create vt endpoint\n");
     }
+    /* The pump owns the VT endpoint only.  Collapsing it onto g_reply_endpoint
+     * has to wait until the PM/FS paths stop doing their own
+     * select_one(g_reply_endpoint): those are blocking single-endpoint receives
+     * that discard what they did not ask for, so sharing one endpoint today
+     * would just move the input loss into them. */
+    wasmos_sys_event_loop_init(&g_loop, g_vt_client_endpoint, 0xC000);
+    (void)wasmos_sys_event_register(&g_loop, VT_IPC_INPUT_NOTIFY, cli_on_input_notify, 0);
+    (void)wasmos_sys_event_set_default(&g_loop, cli_on_unclaimed, 0);
     g_proc_endpoint = proc_endpoint;
-    /* Build the idle select set from the CLI's own endpoints so cli_idle_wait()
-     * can park on them with a timeout rather than yield-spinning. */
+    /* Idle park over both endpoints.  The park keeps its timeout as a
+     * liveness/foreground-refresh backstop; the pump must not be used to park
+     * because it blocks with no timeout once its queue is empty. */
     g_idle_select = wasmos_ipc_select_create();
     if (g_idle_select >= 0) {
         (void)wasmos_ipc_select_add(g_idle_select, g_reply_endpoint);
@@ -1979,7 +2017,11 @@ static void cli_phase_read_step(void) {
         /* Push model: read whenever we are woken (by VT_IPC_INPUT_NOTIFY or the
          * backstop), draining the queue one char per loop iteration until empty.
          * No poll backoff — a stale backoff would make us skip the read that a
-         * notify just woke us for, stalling input until the 1s backstop. */
+         * notify just woke us for, stalling input until the 1s backstop.  The
+         * notify is now routed to cli_on_input_notify by the pump rather than
+         * being swallowed by a drain loop; consume the flag here so a push that
+         * lands mid-read is not mistaken for a fresh one. */
+        g_input_notified = 0;
         have_ch = cli_vt_read_char(&ch);
         if (have_ch < 0) {
             /* Transient VT read error; treat as empty and retry on next wake.

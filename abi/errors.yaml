@@ -197,6 +197,16 @@ domains:
       - { name: NOT_READY, description: "entropy source is not initialized or has no entropy yet" }
       - { name: IO_ERROR,  description: "the RNG device reported a failure" }
       - { name: TIMEOUT,   description: "the device did not produce entropy within its window" }
+      - { name: PROTOCOL,  description: "the provider's reply did not match the request protocol" }
+
+  dma:
+    id: 15
+    description: "DMA map/sync capability and range failures (was WASMOS_DMA_STATUS_*)"
+    codes:
+      - { name: DENY,        description: "the DMA capability or policy denied the operation" }
+      - { name: INVALID,     description: "invalid DMA arguments (direction, handle, or length)" }
+      - { name: RANGE,       description: "the requested subrange lies outside the mapped object" }
+      - { name: UNAVAILABLE, description: "no DMA mapping slot or backing is available" }
 
   font:
     id: 12

@@ -1323,7 +1323,7 @@ static void net_stack_registered(void) {
 
 static void net_stack_hrng_seed_complete(void* user, int32_t status) {
     (void)user;
-    if (status == WASMOS_SYS_RANDOM_STATUS_OK) {
+    if (status == WASMOS_ERR_NONE) {
         /* g_entropy_pool now holds fresh hardware randomness. Publish it for
          * mbedtls_hardware_poll() to drain during the TLS handshake, and seed
          * lwIP's PRNG (TCP ISN / ephemeral ports) from the same fill. */

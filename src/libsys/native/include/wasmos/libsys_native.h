@@ -31,13 +31,8 @@ void wasmos_sys_ipc_recv_loop_native(wasmos_driver_api_t* api, uint32_t receiver
 #define WASMOS_SYS_NATIVE_HANDLER_MAX 24u
 #define WASMOS_SYS_NATIVE_ENDPOINT_NONE 0xFFFFFFFFu
 
-enum {
-    WASMOS_SYS_RANDOM_STATUS_OK = 0,
-    WASMOS_SYS_RANDOM_STATUS_INVALID = WASMOS_ERR_HRNG_INVALID,
-    WASMOS_SYS_RANDOM_STATUS_NOT_READY = WASMOS_ERR_HRNG_NOT_READY,
-    WASMOS_SYS_RANDOM_STATUS_IO = WASMOS_ERR_HRNG_IO_ERROR,
-    WASMOS_SYS_RANDOM_STATUS_PROTOCOL = -6
-};
+/* Random-helper statuses are the packed hrng domain in abi/errors.yaml:
+ * WASMOS_ERR_NONE (0) on success, else a negative WASMOS_ERR_HRNG_*. */
 
 /* Pending request awaiting a reply matched by request_id. */
 typedef struct {

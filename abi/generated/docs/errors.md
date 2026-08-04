@@ -179,6 +179,16 @@ and **domains** (namespaced operation errors: the negative of `(domain << 16) | 
 | `WASMOS_ERR_HRNG_NOT_READY` | -0x000E0002 | entropy source is not initialized or has no entropy yet |
 | `WASMOS_ERR_HRNG_IO_ERROR` | -0x000E0003 | the RNG device reported a failure |
 | `WASMOS_ERR_HRNG_TIMEOUT` | -0x000E0004 | the device did not produce entropy within its window |
+| `WASMOS_ERR_HRNG_PROTOCOL` | -0x000E0005 | the provider's reply did not match the request protocol |
+
+### `dma` (domain 15) — DMA map/sync capability and range failures (was WASMOS_DMA_STATUS_*)
+
+| Code | Value | Description |
+|---|---|---|
+| `WASMOS_ERR_DMA_DENY` | -0x000F0001 | the DMA capability or policy denied the operation |
+| `WASMOS_ERR_DMA_INVALID` | -0x000F0002 | invalid DMA arguments (direction, handle, or length) |
+| `WASMOS_ERR_DMA_RANGE` | -0x000F0003 | the requested subrange lies outside the mapped object |
+| `WASMOS_ERR_DMA_UNAVAILABLE` | -0x000F0004 | no DMA mapping slot or backing is available |
 
 ### `font` (domain 12) — font-rasterizer service failures (was FONT_STATUS_*)
 

@@ -1211,20 +1211,20 @@ static uint32_t warp_dma_map_borrow(uint32_t borrow_id, uint32_t offset, uint32_
     (void)ctx_;
     uint32_t context_id = 0;
     if ((int32_t)borrow_id <= 0 || (int32_t)length <= 0 || flags == 0)
-        return (uint32_t)WASMOS_DMA_STATUS_INVALID;
+        return (uint32_t)WASMOS_ERR_DMA_INVALID;
     if (warp_current_context_id(&context_id) != 0)
-        return (uint32_t)WASMOS_DMA_STATUS_DENY;
+        return (uint32_t)WASMOS_ERR_DMA_DENY;
     /* Resolve the caller's borrow handle; dma_map_borrow enforces
      * direction ⊆ borrow rights and the range check. */
     xfer_buffer_borrow_t borrow;
     if (xfer_buffer_get_borrowed(borrow_id, context_id, &borrow, nullptr) != WASMOS_ERR_NONE)
-        return (uint32_t)WASMOS_DMA_STATUS_DENY;
+        return (uint32_t)WASMOS_ERR_DMA_DENY;
     xfer_buffer_dma_mapping_t mapping;
     if (xfer_buffer_dma_map_borrow(&borrow, offset, length, flags, &mapping) != WASMOS_ERR_NONE)
-        return (uint32_t)WASMOS_DMA_STATUS_DENY;
+        return (uint32_t)WASMOS_ERR_DMA_DENY;
     if (mapping.device_addr > 0x7FFFFFFFULL) {
         (void)xfer_buffer_dma_unmap(&mapping);
-        return (uint32_t)WASMOS_DMA_STATUS_UNAVAILABLE;
+        return (uint32_t)WASMOS_ERR_DMA_UNAVAILABLE;
     }
     return (uint32_t)mapping.device_addr;
 }
@@ -1235,32 +1235,32 @@ static uint32_t warp_dma_sync_borrow(uint32_t borrow_id, uint32_t offset, uint32
     (void)op;
     uint32_t context_id = 0;
     if ((int32_t)borrow_id <= 0)
-        return (uint32_t)WASMOS_DMA_STATUS_INVALID;
+        return (uint32_t)WASMOS_ERR_DMA_INVALID;
     if (warp_current_context_id(&context_id) != 0)
-        return (uint32_t)WASMOS_DMA_STATUS_DENY;
+        return (uint32_t)WASMOS_ERR_DMA_DENY;
     xfer_buffer_borrow_t borrow;
     xfer_buffer_dma_mapping_t mapping;
     if (xfer_buffer_get_borrowed(borrow_id, context_id, &borrow, &mapping) != WASMOS_ERR_NONE)
-        return (uint32_t)WASMOS_DMA_STATUS_DENY;
+        return (uint32_t)WASMOS_ERR_DMA_DENY;
     if (xfer_buffer_dma_sync(&mapping, offset, length) != WASMOS_ERR_NONE)
-        return (uint32_t)WASMOS_DMA_STATUS_DENY;
-    return (uint32_t)WASMOS_DMA_STATUS_OK;
+        return (uint32_t)WASMOS_ERR_DMA_DENY;
+    return (uint32_t)WASMOS_ERR_NONE;
 }
 
 static uint32_t warp_dma_unmap_borrow(uint32_t borrow_id, void* ctx_) {
     (void)ctx_;
     uint32_t context_id = 0;
     if ((int32_t)borrow_id <= 0)
-        return (uint32_t)WASMOS_DMA_STATUS_INVALID;
+        return (uint32_t)WASMOS_ERR_DMA_INVALID;
     if (warp_current_context_id(&context_id) != 0)
-        return (uint32_t)WASMOS_DMA_STATUS_DENY;
+        return (uint32_t)WASMOS_ERR_DMA_DENY;
     xfer_buffer_borrow_t borrow;
     xfer_buffer_dma_mapping_t mapping;
     if (xfer_buffer_get_borrowed(borrow_id, context_id, &borrow, &mapping) != WASMOS_ERR_NONE)
-        return (uint32_t)WASMOS_DMA_STATUS_DENY;
+        return (uint32_t)WASMOS_ERR_DMA_DENY;
     if (xfer_buffer_dma_unmap(&mapping) != WASMOS_ERR_NONE)
-        return (uint32_t)WASMOS_DMA_STATUS_DENY;
-    return (uint32_t)WASMOS_DMA_STATUS_OK;
+        return (uint32_t)WASMOS_ERR_DMA_DENY;
+    return (uint32_t)WASMOS_ERR_NONE;
 }
 
 // ---------------------------------------------------------------------------
@@ -2141,45 +2141,45 @@ static uint32_t warp_region_alloc(uint32_t pages, uint32_t cache_policy, uint32_
                                   void* ctx_) {
     auto* ctx = warp_call_ctx(ctx_);
     if (pages == 0 || pages > WARP_REGION_MAX_PAGES) {
-        return (uint32_t)WASMOS_DMA_STATUS_INVALID;
+        return (uint32_t)WASMOS_ERR_DMA_INVALID;
     }
     /* TODO(region-alloc): write-combining PAT attributes for framebuffer/scanout
      * regions; only write-back (coherent DMA rings) is implemented today. */
     if (cache_policy != WASMOS_REGION_CACHE_WB) {
-        return (uint32_t)WASMOS_DMA_STATUS_INVALID;
+        return (uint32_t)WASMOS_ERR_DMA_INVALID;
     }
     uint32_t context_id = 0;
     if (warp_current_context_id(&context_id) != 0 || warp_require_dma_capability(context_id) != 0) {
-        return (uint32_t)WASMOS_DMA_STATUS_DENY;
+        return (uint32_t)WASMOS_ERR_DMA_DENY;
     }
     uint64_t region_bytes = (uint64_t)pages * 0x1000ULL;
     /* Out pointer must hold a u64 and sit inside the caller's linmem. */
     uint8_t* out_ptr = warp_mem(ctx, out_phys_off, sizeof(uint64_t));
     if (!out_ptr) {
-        return (uint32_t)WASMOS_DMA_STATUS_INVALID;
+        return (uint32_t)WASMOS_ERR_DMA_INVALID;
     }
     /* Below 2 GiB so the legacy virtqueue PFN register and the signed-32-bit
      * device_addr contract hold (same clamp as the borrow DMA path). */
     uint64_t phys_base = pfa_alloc_pages_below(pages, 0x80000000ULL);
     if (!phys_base) {
-        return (uint32_t)WASMOS_DMA_STATUS_UNAVAILABLE;
+        return (uint32_t)WASMOS_ERR_DMA_UNAVAILABLE;
     }
     /* Enforce the driver's approved DMA window on allocated regions exactly as on
      * borrow mappings — a general "give me physical memory" primitive without
      * this check would be a DMA-anywhere hole. */
     if (capability_dma_range_allowed(context_id, phys_base, region_bytes) == 0) {
         pfa_free_pages(phys_base, pages);
-        return (uint32_t)WASMOS_DMA_STATUS_RANGE;
+        return (uint32_t)WASMOS_ERR_DMA_RANGE;
     }
     /* Enforce the driver's declared DMA page budget (dma.buffer manifest flags). */
     if (capability_dma_within_budget(context_id, region_bytes) == 0) {
         pfa_free_pages(phys_base, pages);
-        return (uint32_t)WASMOS_DMA_STATUS_RANGE;
+        return (uint32_t)WASMOS_ERR_DMA_RANGE;
     }
     int64_t placed = warp_linmem_place_phys(ctx, phys_base, pages, (uint32_t)region_bytes);
     if (placed < 0) {
         pfa_free_pages(phys_base, pages);
-        return (uint32_t)WASMOS_DMA_STATUS_UNAVAILABLE;
+        return (uint32_t)WASMOS_ERR_DMA_UNAVAILABLE;
     }
     uint32_t found_off = (uint32_t)placed;
     /* Pin AFTER the remap so the run is never reused/relocated for the driver's

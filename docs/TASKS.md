@@ -399,6 +399,15 @@ returns; `FS_ERR_*`/`PROC_*` ride IPC opcodes), so the migration depends on them
     numbering, which namespaced domains make unnecessary; `abi/hostcalls.yaml`
     and `abi/opcodes.yaml` documented the old names in prose and were updated so
     all three re-gen guards stay clean.
+- [ ] Unify the transport axis: `IPC_ERR_INVALID/PERM/FULL` in
+  `src/kernel/include/ipc.h` duplicates `wasmos_status_t`'s `INVAL`/`DENIED`/
+  `FULL` at the same values, and the same three names are redeclared in
+  `fs_fat/fat_types.h` and `services/vt/vt_types.h`. Replace them with the
+  generated transport constants. Out of the subsystem-5 scope (that pass covered
+  the domain axis), but it is the last duplicated status vocabulary.
+  Deliberately left alone: `PM_SPAWN_INTERNAL_ERR_*` (internal by name) and
+  `WAMOS_SCRIPT_ERR_*` / `SCRIPT_BROKER_ERR_*`, which are service startup/exit
+  statuses returned from `initialize()`, not IPC reply codes.
 - [ ] Extend the `quality` re-gen guard to the host-call and opcode generators
   as they land (the errors guard already exists), so generated output can never
   silently drift from the IDL.

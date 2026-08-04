@@ -29,6 +29,7 @@ export const WASMOS_ERR_DOMAIN_DRIVER: u16 = 7;
 export const WASMOS_ERR_DOMAIN_VT: u16 = 8;
 export const WASMOS_ERR_DOMAIN_CHARDEV: u16 = 9;
 export const WASMOS_ERR_DOMAIN_HRNG: u16 = 14;
+export const WASMOS_ERR_DOMAIN_DMA: u16 = 15;
 export const WASMOS_ERR_DOMAIN_FONT: u16 = 12;
 export const WASMOS_ERR_DOMAIN_RTC: u16 = 13;
 export const WASMOS_ERR_DOMAIN_XFER_BUFFER: u16 = 11;
@@ -142,6 +143,11 @@ export const WASMOS_ERR_HRNG_INVALID: i32 = -0x000E0001; // invalid request argu
 export const WASMOS_ERR_HRNG_NOT_READY: i32 = -0x000E0002; // entropy source is not initialized or has no entropy yet
 export const WASMOS_ERR_HRNG_IO_ERROR: i32 = -0x000E0003; // the RNG device reported a failure
 export const WASMOS_ERR_HRNG_TIMEOUT: i32 = -0x000E0004; // the device did not produce entropy within its window
+export const WASMOS_ERR_HRNG_PROTOCOL: i32 = -0x000E0005; // the provider's reply did not match the request protocol
+export const WASMOS_ERR_DMA_DENY: i32 = -0x000F0001; // the DMA capability or policy denied the operation
+export const WASMOS_ERR_DMA_INVALID: i32 = -0x000F0002; // invalid DMA arguments (direction, handle, or length)
+export const WASMOS_ERR_DMA_RANGE: i32 = -0x000F0003; // the requested subrange lies outside the mapped object
+export const WASMOS_ERR_DMA_UNAVAILABLE: i32 = -0x000F0004; // no DMA mapping slot or backing is available
 export const WASMOS_ERR_FONT_INVALID: i32 = -0x000C0001; // invalid request arguments (font id, size, glyph, or buffer)
 export const WASMOS_ERR_FONT_PERMISSION: i32 = -0x000C0002; // caller is not permitted to use the requested font resource
 export const WASMOS_ERR_FONT_UNSUPPORTED: i32 = -0x000C0003; // unknown or unsupported request type
@@ -214,6 +220,7 @@ export function errorDomainName(d: u16): string {
     case WASMOS_ERR_DOMAIN_VT: return "vt";
     case WASMOS_ERR_DOMAIN_CHARDEV: return "chardev";
     case WASMOS_ERR_DOMAIN_HRNG: return "hrng";
+    case WASMOS_ERR_DOMAIN_DMA: return "dma";
     case WASMOS_ERR_DOMAIN_FONT: return "font";
     case WASMOS_ERR_DOMAIN_RTC: return "rtc";
     case WASMOS_ERR_DOMAIN_XFER_BUFFER: return "xfer_buffer";
@@ -331,6 +338,11 @@ export function strerror(c: i32): string {
     case WASMOS_ERR_HRNG_NOT_READY: return "entropy source is not initialized or has no entropy yet";
     case WASMOS_ERR_HRNG_IO_ERROR: return "the RNG device reported a failure";
     case WASMOS_ERR_HRNG_TIMEOUT: return "the device did not produce entropy within its window";
+    case WASMOS_ERR_HRNG_PROTOCOL: return "the provider's reply did not match the request protocol";
+    case WASMOS_ERR_DMA_DENY: return "the DMA capability or policy denied the operation";
+    case WASMOS_ERR_DMA_INVALID: return "invalid DMA arguments (direction, handle, or length)";
+    case WASMOS_ERR_DMA_RANGE: return "the requested subrange lies outside the mapped object";
+    case WASMOS_ERR_DMA_UNAVAILABLE: return "no DMA mapping slot or backing is available";
     case WASMOS_ERR_FONT_INVALID: return "invalid request arguments (font id, size, glyph, or buffer)";
     case WASMOS_ERR_FONT_PERMISSION: return "caller is not permitted to use the requested font resource";
     case WASMOS_ERR_FONT_UNSUPPORTED: return "unknown or unsupported request type";

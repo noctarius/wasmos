@@ -320,8 +320,12 @@ linked feature documents for rationale and rollout plans.
   duplicated status declarations (`font_ipc.h` ×2, `rtc_ipc.h` ×3, plus local
   copies in `rtc.ts`, `libui.ts` and `tetris.rs`) are collapsed onto the IDL; the
   headers remain duplicated only for opcode/struct content, which belongs to the
-  opcodes IDL. `PM_SPAWN_INTERNAL_ERR_*` is deliberately internal and stays, as
-  does the transport `IPC_ERR_*` axis.
+  opcodes IDL. Also migrated: `WASMOS_DMA_STATUS_*` -> the `dma` domain (a
+  host-call edge both runtimes return to guests), and libsys' random-helper
+  statuses onto `hrng`. What deliberately stays: `PM_SPAWN_INTERNAL_ERR_*`
+  (internal by name), `WAMOS_SCRIPT_ERR_*` / `SCRIPT_BROKER_ERR_*` (service
+  startup/exit statuses, not reply codes), and the transport `IPC_ERR_*` axis,
+  which duplicates `wasmos_status_t` and is tracked separately.
 - AssemblyScript consumes the generated status ABI: the AS app helper and the rtc
   driver build stage `abi/generated/assemblyscript/wasmos_status.ts`, which
   previously existed but was wired into no build. `tetris.rs` still declares its

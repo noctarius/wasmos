@@ -907,35 +907,35 @@ m3ApiRawFunction(wasmos_dma_map_borrow) {
     xfer_buffer_dma_mapping_t mapping;
 
     if (borrow_id <= 0 || offset < 0 || length <= 0 || direction_flags <= 0) {
-        m3ApiReturn(WASMOS_DMA_STATUS_INVALID);
+        m3ApiReturn(WASMOS_ERR_DMA_INVALID);
     }
     if (current_process_context(&context_id) != 0 || require_dma_capability(context_id) != 0) {
-        m3ApiReturn(WASMOS_DMA_STATUS_DENY);
+        m3ApiReturn(WASMOS_ERR_DMA_DENY);
     }
     /* Resolve the caller's borrow handle; get_borrowed enforces the caller is
      * the borrower, and dma_map_borrow enforces direction ⊆ borrow rights. */
     if (xfer_buffer_get_borrowed((uint32_t)borrow_id, context_id, &borrow, 0) != WASMOS_ERR_NONE) {
-        m3ApiReturn(WASMOS_DMA_STATUS_DENY);
+        m3ApiReturn(WASMOS_ERR_DMA_DENY);
     }
     if (!capability_dma_direction_allowed(context_id, (uint32_t)direction_flags)) {
-        m3ApiReturn(WASMOS_DMA_STATUS_DENY);
+        m3ApiReturn(WASMOS_ERR_DMA_DENY);
     }
     max_bytes = capability_dma_max_bytes(context_id);
     if (max_bytes == 0 || (uint32_t)length > max_bytes) {
-        m3ApiReturn(WASMOS_DMA_STATUS_RANGE);
+        m3ApiReturn(WASMOS_ERR_DMA_RANGE);
     }
     if (xfer_buffer_dma_map_borrow(&borrow, (uint32_t)offset, (uint32_t)length,
                                    (uint32_t)direction_flags, &mapping) != WASMOS_ERR_NONE) {
-        m3ApiReturn(WASMOS_DMA_STATUS_DENY);
+        m3ApiReturn(WASMOS_ERR_DMA_DENY);
     }
     if (!capability_dma_range_allowed(context_id, mapping.device_addr,
                                       (uint64_t)(uint32_t)length)) {
         (void)xfer_buffer_dma_unmap(&mapping);
-        m3ApiReturn(WASMOS_DMA_STATUS_RANGE);
+        m3ApiReturn(WASMOS_ERR_DMA_RANGE);
     }
     if (mapping.device_addr > 0x7FFFFFFFULL) {
         (void)xfer_buffer_dma_unmap(&mapping);
-        m3ApiReturn(WASMOS_DMA_STATUS_UNAVAILABLE);
+        m3ApiReturn(WASMOS_ERR_DMA_UNAVAILABLE);
     }
     m3ApiReturn((int32_t)mapping.device_addr);
 }
@@ -949,19 +949,19 @@ m3ApiRawFunction(wasmos_dma_sync_borrow) {
     if (borrow_id <= 0 || offset < 0 || length <= 0 ||
         (sync_op != WASMOS_DMA_SYNC_TO_DEVICE && sync_op != WASMOS_DMA_SYNC_FROM_DEVICE &&
          sync_op != WASMOS_DMA_SYNC_BIDIR)) {
-        m3ApiReturn(WASMOS_DMA_STATUS_INVALID);
+        m3ApiReturn(WASMOS_ERR_DMA_INVALID);
     }
     if (current_process_context(&context_id) != 0 || require_dma_capability(context_id) != 0) {
-        m3ApiReturn(WASMOS_DMA_STATUS_DENY);
+        m3ApiReturn(WASMOS_ERR_DMA_DENY);
     }
     if (xfer_buffer_get_borrowed((uint32_t)borrow_id, context_id, &borrow, &mapping) !=
         WASMOS_ERR_NONE) {
-        m3ApiReturn(WASMOS_DMA_STATUS_DENY);
+        m3ApiReturn(WASMOS_ERR_DMA_DENY);
     }
     if (xfer_buffer_dma_sync(&mapping, (uint32_t)offset, (uint32_t)length) != WASMOS_ERR_NONE) {
-        m3ApiReturn(WASMOS_DMA_STATUS_DENY);
+        m3ApiReturn(WASMOS_ERR_DMA_DENY);
     }
-    m3ApiReturn(WASMOS_DMA_STATUS_OK);
+    m3ApiReturn(WASMOS_ERR_NONE);
 }
 
 m3ApiRawFunction(wasmos_dma_unmap_borrow) {
@@ -970,19 +970,19 @@ m3ApiRawFunction(wasmos_dma_unmap_borrow) {
     xfer_buffer_dma_mapping_t mapping;
 
     if (borrow_id <= 0) {
-        m3ApiReturn(WASMOS_DMA_STATUS_INVALID);
+        m3ApiReturn(WASMOS_ERR_DMA_INVALID);
     }
     if (current_process_context(&context_id) != 0 || require_dma_capability(context_id) != 0) {
-        m3ApiReturn(WASMOS_DMA_STATUS_DENY);
+        m3ApiReturn(WASMOS_ERR_DMA_DENY);
     }
     if (xfer_buffer_get_borrowed((uint32_t)borrow_id, context_id, &borrow, &mapping) !=
         WASMOS_ERR_NONE) {
-        m3ApiReturn(WASMOS_DMA_STATUS_DENY);
+        m3ApiReturn(WASMOS_ERR_DMA_DENY);
     }
     if (xfer_buffer_dma_unmap(&mapping) != WASMOS_ERR_NONE) {
-        m3ApiReturn(WASMOS_DMA_STATUS_DENY);
+        m3ApiReturn(WASMOS_ERR_DMA_DENY);
     }
-    m3ApiReturn(WASMOS_DMA_STATUS_OK);
+    m3ApiReturn(WASMOS_ERR_NONE);
 }
 
 m3ApiRawFunction(wasmos_xfer_buffer_acquire) {
@@ -2168,37 +2168,37 @@ m3ApiRawFunction(wasmos_region_alloc) {
         m3ApiGetArg(int32_t, out_phys_off)
 
             if (pages <= 0 || pages > 1024 || out_phys_off < 0) {
-        m3ApiReturn(WASMOS_DMA_STATUS_INVALID);
+        m3ApiReturn(WASMOS_ERR_DMA_INVALID);
     }
     if (cache_policy != WASMOS_REGION_CACHE_WB) {
-        m3ApiReturn(WASMOS_DMA_STATUS_INVALID);
+        m3ApiReturn(WASMOS_ERR_DMA_INVALID);
     }
 
     process_t* proc = process_get(process_current_pid());
     if (!proc || proc->context_id == 0 || require_dma_capability(proc->context_id) != 0) {
-        m3ApiReturn(WASMOS_DMA_STATUS_DENY);
+        m3ApiReturn(WASMOS_ERR_DMA_DENY);
     }
 
     uint32_t mem_size = 0;
     uint8_t* mem_base = m3_GetMemory(runtime, &mem_size, 0);
     if (!mem_base || mem_size == 0 ||
         (uint64_t)(uint32_t)out_phys_off + sizeof(uint64_t) > (uint64_t)mem_size) {
-        m3ApiReturn(WASMOS_DMA_STATUS_INVALID);
+        m3ApiReturn(WASMOS_ERR_DMA_INVALID);
     }
 
     uint64_t region_bytes = (uint64_t)(uint32_t)pages * 0x1000ULL;
     uint64_t phys_base = pfa_alloc_pages_below((uint64_t)(uint32_t)pages, 0x80000000ULL);
     if (!phys_base) {
-        m3ApiReturn(WASMOS_DMA_STATUS_UNAVAILABLE);
+        m3ApiReturn(WASMOS_ERR_DMA_UNAVAILABLE);
     }
     if (!capability_dma_range_allowed(proc->context_id, phys_base, region_bytes)) {
         pfa_free_pages(phys_base, (uint64_t)(uint32_t)pages);
-        m3ApiReturn(WASMOS_DMA_STATUS_RANGE);
+        m3ApiReturn(WASMOS_ERR_DMA_RANGE);
     }
     /* Enforce the driver's declared DMA page budget (dma.buffer manifest flags). */
     if (!capability_dma_within_budget(proc->context_id, region_bytes)) {
         pfa_free_pages(phys_base, (uint64_t)(uint32_t)pages);
-        m3ApiReturn(WASMOS_DMA_STATUS_RANGE);
+        m3ApiReturn(WASMOS_ERR_DMA_RANGE);
     }
 
     uint64_t mem_size64 = (uint64_t)mem_size;
@@ -2234,17 +2234,17 @@ m3ApiRawFunction(wasmos_region_alloc) {
             uint32_t target_pages = (uint32_t)((required + 0xFFFFULL) >> 16);
             if (ResizeMemory(runtime, target_pages) != m3Err_none) {
                 pfa_free_pages(phys_base, (uint64_t)(uint32_t)pages);
-                m3ApiReturn(WASMOS_DMA_STATUS_UNAVAILABLE);
+                m3ApiReturn(WASMOS_ERR_DMA_UNAVAILABLE);
             }
             mem_base = m3_GetMemory(runtime, &mem_size, 0);
             if (!mem_base || mem_size == 0) {
                 pfa_free_pages(phys_base, (uint64_t)(uint32_t)pages);
-                m3ApiReturn(WASMOS_DMA_STATUS_UNAVAILABLE);
+                m3ApiReturn(WASMOS_ERR_DMA_UNAVAILABLE);
             }
             mem_size64 = (uint64_t)m3_GetMemorySize(runtime);
             if (required > mem_size64) {
                 pfa_free_pages(phys_base, (uint64_t)(uint32_t)pages);
-                m3ApiReturn(WASMOS_DMA_STATUS_UNAVAILABLE);
+                m3ApiReturn(WASMOS_ERR_DMA_UNAVAILABLE);
             }
         }
     }
@@ -2255,13 +2255,13 @@ m3ApiRawFunction(wasmos_region_alloc) {
         mm_user_range_permitted(proc->context_id, virt, region_bytes, MEM_REGION_FLAG_WRITE) != 0 ||
         (virt & 0xFFFULL) != 0) {
         pfa_free_pages(phys_base, (uint64_t)(uint32_t)pages);
-        m3ApiReturn(WASMOS_DMA_STATUS_INVALID);
+        m3ApiReturn(WASMOS_ERR_DMA_INVALID);
     }
     if (mm_context_map_physical(proc->context_id, virt, phys_base, region_bytes,
                                 MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE |
                                     MEM_REGION_FLAG_USER) != 0) {
         pfa_free_pages(phys_base, (uint64_t)(uint32_t)pages);
-        m3ApiReturn(WASMOS_DMA_STATUS_UNAVAILABLE);
+        m3ApiReturn(WASMOS_ERR_DMA_UNAVAILABLE);
     }
 
     /* The pages are already exclusively allocated from the PFA, so unlike

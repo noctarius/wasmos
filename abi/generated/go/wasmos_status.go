@@ -34,6 +34,7 @@ const (
 	WASMOS_ERR_DOMAIN_VT uint16 = 8
 	WASMOS_ERR_DOMAIN_CHARDEV uint16 = 9
 	WASMOS_ERR_DOMAIN_HRNG uint16 = 14
+	WASMOS_ERR_DOMAIN_DMA uint16 = 15
 	WASMOS_ERR_DOMAIN_FONT uint16 = 12
 	WASMOS_ERR_DOMAIN_RTC uint16 = 13
 	WASMOS_ERR_DOMAIN_XFER_BUFFER uint16 = 11
@@ -150,6 +151,11 @@ const (
 	WASMOS_ERR_HRNG_NOT_READY int32 = -0x000E0002 // entropy source is not initialized or has no entropy yet
 	WASMOS_ERR_HRNG_IO_ERROR int32 = -0x000E0003 // the RNG device reported a failure
 	WASMOS_ERR_HRNG_TIMEOUT int32 = -0x000E0004 // the device did not produce entropy within its window
+	WASMOS_ERR_HRNG_PROTOCOL int32 = -0x000E0005 // the provider's reply did not match the request protocol
+	WASMOS_ERR_DMA_DENY int32 = -0x000F0001 // the DMA capability or policy denied the operation
+	WASMOS_ERR_DMA_INVALID int32 = -0x000F0002 // invalid DMA arguments (direction, handle, or length)
+	WASMOS_ERR_DMA_RANGE int32 = -0x000F0003 // the requested subrange lies outside the mapped object
+	WASMOS_ERR_DMA_UNAVAILABLE int32 = -0x000F0004 // no DMA mapping slot or backing is available
 	WASMOS_ERR_FONT_INVALID int32 = -0x000C0001 // invalid request arguments (font id, size, glyph, or buffer)
 	WASMOS_ERR_FONT_PERMISSION int32 = -0x000C0002 // caller is not permitted to use the requested font resource
 	WASMOS_ERR_FONT_UNSUPPORTED int32 = -0x000C0003 // unknown or unsupported request type
@@ -252,6 +258,8 @@ func WasmosErrorDomainName(d uint16) string {
 		return "chardev"
 	case WASMOS_ERR_DOMAIN_HRNG:
 		return "hrng"
+	case WASMOS_ERR_DOMAIN_DMA:
+		return "dma"
 	case WASMOS_ERR_DOMAIN_FONT:
 		return "font"
 	case WASMOS_ERR_DOMAIN_RTC:
@@ -481,6 +489,16 @@ func WasmosStrerror(c int32) string {
 		return "the RNG device reported a failure"
 	case WASMOS_ERR_HRNG_TIMEOUT:
 		return "the device did not produce entropy within its window"
+	case WASMOS_ERR_HRNG_PROTOCOL:
+		return "the provider's reply did not match the request protocol"
+	case WASMOS_ERR_DMA_DENY:
+		return "the DMA capability or policy denied the operation"
+	case WASMOS_ERR_DMA_INVALID:
+		return "invalid DMA arguments (direction, handle, or length)"
+	case WASMOS_ERR_DMA_RANGE:
+		return "the requested subrange lies outside the mapped object"
+	case WASMOS_ERR_DMA_UNAVAILABLE:
+		return "no DMA mapping slot or backing is available"
 	case WASMOS_ERR_FONT_INVALID:
 		return "invalid request arguments (font id, size, glyph, or buffer)"
 	case WASMOS_ERR_FONT_PERMISSION:

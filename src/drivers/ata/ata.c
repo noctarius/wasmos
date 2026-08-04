@@ -260,7 +260,7 @@ static int ata_dma_prepare(int32_t source_endpoint, uint32_t offset, uint32_t le
     (void)length;
     (void)direction_flags;
     (void)out_device_addr;
-    return WASMOS_DMA_STATUS_DENY; /* force PIO fallback */
+    return WASMOS_ERR_DMA_DENY; /* force PIO fallback */
 }
 
 static int ata_dma_finish(int32_t source_endpoint, uint32_t offset, uint32_t length,
@@ -357,7 +357,7 @@ static int ata_handle_ipc(int32_t type, int32_t source, int32_t req_id, int32_t 
     }
 
     if (type == BLOCK_IPC_READ_REQ) {
-        int32_t dma_rc = WASMOS_DMA_STATUS_DENY;
+        int32_t dma_rc = WASMOS_ERR_DMA_DENY;
         int32_t dma_addr = 0;
         uint32_t byte_count = 0;
         if (arg2 <= 0 || arg2 > (int32_t)ATA_MAX_READ_SECTORS || arg0 <= 0) {
@@ -366,20 +366,20 @@ static int ata_handle_ipc(int32_t type, int32_t source, int32_t req_id, int32_t 
         }
         byte_count = (uint32_t)arg2 * ATA_SECTOR_SIZE;
         dma_rc = ata_dma_prepare(source, 0u, byte_count, WASMOS_DMA_DIR_FROM_DEVICE, &dma_addr);
-        if (dma_rc != WASMOS_DMA_STATUS_OK) {
+        if (dma_rc != WASMOS_ERR_NONE) {
             ata_log_dma_fallback(0, dma_rc);
         } else {
             (void)dma_addr;
             ata_log_dma_active(0);
         }
         if (ata_read_lba28(unit, (uint32_t)arg1, (uint8_t)arg2, (uint32_t)arg0) != 0) {
-            if (dma_rc == WASMOS_DMA_STATUS_OK) {
+            if (dma_rc == WASMOS_ERR_NONE) {
                 (void)ata_dma_finish(source, 0u, byte_count, WASMOS_DMA_DIR_FROM_DEVICE);
             }
             ata_send_resp(source, req_id, BLOCK_IPC_ERROR, 3, 0);
             return 0;
         }
-        if (dma_rc == WASMOS_DMA_STATUS_OK &&
+        if (dma_rc == WASMOS_ERR_NONE &&
             ata_dma_finish(source, 0u, byte_count, WASMOS_DMA_DIR_FROM_DEVICE) != 0) {
             ata_send_resp(source, req_id, BLOCK_IPC_ERROR, 3, 0);
             return 0;
@@ -389,7 +389,7 @@ static int ata_handle_ipc(int32_t type, int32_t source, int32_t req_id, int32_t 
     }
 
     if (type == BLOCK_IPC_WRITE_REQ) {
-        int32_t dma_rc = WASMOS_DMA_STATUS_DENY;
+        int32_t dma_rc = WASMOS_ERR_DMA_DENY;
         int32_t dma_addr = 0;
         uint32_t byte_count = 0;
         if (arg2 <= 0 || arg2 > (int32_t)ATA_MAX_READ_SECTORS || arg0 <= 0) {
@@ -398,20 +398,20 @@ static int ata_handle_ipc(int32_t type, int32_t source, int32_t req_id, int32_t 
         }
         byte_count = (uint32_t)arg2 * ATA_SECTOR_SIZE;
         dma_rc = ata_dma_prepare(source, 0u, byte_count, WASMOS_DMA_DIR_TO_DEVICE, &dma_addr);
-        if (dma_rc != WASMOS_DMA_STATUS_OK) {
+        if (dma_rc != WASMOS_ERR_NONE) {
             ata_log_dma_fallback(1, dma_rc);
         } else {
             (void)dma_addr;
             ata_log_dma_active(1);
         }
         if (ata_write_lba28(unit, (uint32_t)arg1, (uint8_t)arg2, (uint32_t)arg0) != 0) {
-            if (dma_rc == WASMOS_DMA_STATUS_OK) {
+            if (dma_rc == WASMOS_ERR_NONE) {
                 (void)ata_dma_finish(source, 0u, byte_count, WASMOS_DMA_DIR_TO_DEVICE);
             }
             ata_send_resp(source, req_id, BLOCK_IPC_ERROR, 5, 0);
             return 0;
         }
-        if (dma_rc == WASMOS_DMA_STATUS_OK &&
+        if (dma_rc == WASMOS_ERR_NONE &&
             ata_dma_finish(source, 0u, byte_count, WASMOS_DMA_DIR_TO_DEVICE) != 0) {
             ata_send_resp(source, req_id, BLOCK_IPC_ERROR, 5, 0);
             return 0;

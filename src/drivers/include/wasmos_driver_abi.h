@@ -337,13 +337,8 @@ enum {
     WASMOS_DMA_DIR_BIDIR = WASMOS_DMA_DIR_TO_DEVICE | WASMOS_DMA_DIR_FROM_DEVICE
 };
 
-enum {
-    WASMOS_DMA_STATUS_OK = 0,
-    WASMOS_DMA_STATUS_DENY = -1,
-    WASMOS_DMA_STATUS_INVALID = -2,
-    WASMOS_DMA_STATUS_RANGE = -3,
-    WASMOS_DMA_STATUS_UNAVAILABLE = -4
-};
+/* DMA statuses are the packed dma domain in abi/errors.yaml:
+ * WASMOS_ERR_NONE (0) on success, else a negative WASMOS_ERR_DMA_*. */
 
 enum { WASMOS_DMA_SYNC_TO_DEVICE = 1, WASMOS_DMA_SYNC_FROM_DEVICE = 2, WASMOS_DMA_SYNC_BIDIR = 3 };
 

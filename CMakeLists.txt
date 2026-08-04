@@ -2019,6 +2019,7 @@ add_custom_target(run-kernel-unit-tests
   COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
           -I${KERNEL_DIR}/include
           -I${DRIVER_WASM_DIR}/include
+          -I${CMAKE_SOURCE_DIR}/abi/generated/c
           ${CMAKE_SOURCE_DIR}/tests/unit/test_xfer_buffer/xfer_buffer.c
           ${CMAKE_SOURCE_DIR}/tests/unit/stubs_xfer_buffer_platform.c
           ${CMAKE_SOURCE_DIR}/tests/unit/stubs_spinlock.c
@@ -2425,7 +2426,8 @@ wasmos_ide_index(wasmos_ide_unit
   DIRS ${CMAKE_SOURCE_DIR}/tests/unit
   INCLUDES ${KERNEL_DIR}/include ${CMAKE_SOURCE_DIR}/tests/unit/include
            ${DRIVER_WASM_DIR}/include ${LIBC_DIR}/include
-           ${LIBSYS_WASM_DIR}/include ${LIBSYS_NATIVE_DIR}/include)
+           ${LIBSYS_WASM_DIR}/include ${LIBSYS_NATIVE_DIR}/include
+           ${CMAKE_SOURCE_DIR}/abi/generated/c)
 
 wasmos_ide_index(wasmos_ide_tools
   DIRS ${CMAKE_SOURCE_DIR}/src/tools

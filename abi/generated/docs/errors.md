@@ -152,6 +152,36 @@ and **domains** (namespaced operation errors: the negative of `(domain << 16) | 
 | `WASMOS_ERR_CHARDEV_NO_DATA` | -0x00090001 | no byte is buffered yet (retryable) |
 | `WASMOS_ERR_CHARDEV_UNSUPPORTED_REQUEST` | -0x00090002 | unknown or unsupported request type |
 
+### `xfer_buffer` (domain 11) — transfer-buffer object registry / borrow / DMA failures (was XFER_BUFFER_ERR_*)
+
+| Code | Value | Description |
+|---|---|---|
+| `WASMOS_ERR_XFER_BUFFER_NULL_ARG` | -0x000B0001 | a required pointer argument was NULL |
+| `WASMOS_ERR_XFER_BUFFER_INVALID_KIND` | -0x000B0002 | unknown or unsupported buffer kind |
+| `WASMOS_ERR_XFER_BUFFER_INVALID_CONTEXT` | -0x000B0003 | a context id argument was zero |
+| `WASMOS_ERR_XFER_BUFFER_INVALID_SIZE` | -0x000B0004 | a requested size was zero |
+| `WASMOS_ERR_XFER_BUFFER_CAPACITY_EXCEEDED` | -0x000B0005 | requested size exceeds the kind's intrinsic capacity |
+| `WASMOS_ERR_XFER_BUFFER_NO_BACKING` | -0x000B0006 | no physical backing could be obtained for the object |
+| `WASMOS_ERR_XFER_BUFFER_INTERNAL` | -0x000B0007 | registry storage could not be initialized or grown |
+| `WASMOS_ERR_XFER_BUFFER_NOT_FOUND` | -0x000B0008 | the referenced object does not exist (stale or destroyed) |
+| `WASMOS_ERR_XFER_BUFFER_NOT_OWNER` | -0x000B0009 | the binding does not match the object's current owner |
+| `WASMOS_ERR_XFER_BUFFER_INVALID_FLAGS` | -0x000B000A | requested access flags are empty or contain invalid bits |
+| `WASMOS_ERR_XFER_BUFFER_SELF_BORROW` | -0x000B000B | a transfer object cannot be borrowed by its own owner |
+| `WASMOS_ERR_XFER_BUFFER_ALREADY_BORROWED` | -0x000B000C | the borrower already holds an active borrow on this object |
+| `WASMOS_ERR_XFER_BUFFER_KIND_NOT_BORROWABLE` | -0x000B000D | the kind may not be borrowed by the requested borrower |
+| `WASMOS_ERR_XFER_BUFFER_KIND_NOT_TRANSFERABLE` | -0x000B000E | the kind does not support ownership transfer |
+| `WASMOS_ERR_XFER_BUFFER_ACTIVE_BORROWS` | -0x000B000F | the object still has active borrows |
+| `WASMOS_ERR_XFER_BUFFER_DMA_MAPPED` | -0x000B0010 | dMA is still mapped and blocks this operation |
+| `WASMOS_ERR_XFER_BUFFER_SAME_OWNER` | -0x000B0011 | ownership transfer to the current owner is a no-op and rejected |
+| `WASMOS_ERR_XFER_BUFFER_RIGHTS_AMPLIFICATION` | -0x000B0012 | downstream rights would exceed the upstream borrow's rights |
+| `WASMOS_ERR_XFER_BUFFER_NOT_REBORROWABLE` | -0x000B0013 | the kind may not be reborrowed |
+| `WASMOS_ERR_XFER_BUFFER_INACTIVE_BORROW` | -0x000B0014 | the referenced borrow is inactive, stale, or forged |
+| `WASMOS_ERR_XFER_BUFFER_RANGE` | -0x000B0015 | an offset/length subrange lies outside its bounds |
+| `WASMOS_ERR_XFER_BUFFER_DIRECTION` | -0x000B0016 | the DMA direction is not permitted by the access rights |
+| `WASMOS_ERR_XFER_BUFFER_DMA_ACTIVE` | -0x000B0017 | a DMA mapping is already active on this object or borrow |
+| `WASMOS_ERR_XFER_BUFFER_INACTIVE_MAPPING` | -0x000B0018 | the DMA mapping is inactive |
+| `WASMOS_ERR_XFER_BUFFER_NO_ACCESS` | -0x000B0019 | the object exists but the context is neither its owner nor a borrower |
+
 ### `devmgr` (domain 10) — device-manager query failures
 
 | Code | Value | Description |

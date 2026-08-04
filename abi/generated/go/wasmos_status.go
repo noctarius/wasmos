@@ -33,6 +33,7 @@ const (
 	WASMOS_ERR_DOMAIN_DRIVER uint16 = 7
 	WASMOS_ERR_DOMAIN_VT uint16 = 8
 	WASMOS_ERR_DOMAIN_CHARDEV uint16 = 9
+	WASMOS_ERR_DOMAIN_XFER_BUFFER uint16 = 11
 	WASMOS_ERR_DOMAIN_DEVMGR uint16 = 10
 )
 
@@ -124,6 +125,31 @@ const (
 	WASMOS_ERR_VT_UNSUPPORTED_REQUEST int32 = -0x00080004 // unknown or unsupported request type
 	WASMOS_ERR_CHARDEV_NO_DATA int32 = -0x00090001 // no byte is buffered yet (retryable)
 	WASMOS_ERR_CHARDEV_UNSUPPORTED_REQUEST int32 = -0x00090002 // unknown or unsupported request type
+	WASMOS_ERR_XFER_BUFFER_NULL_ARG int32 = -0x000B0001 // a required pointer argument was NULL
+	WASMOS_ERR_XFER_BUFFER_INVALID_KIND int32 = -0x000B0002 // unknown or unsupported buffer kind
+	WASMOS_ERR_XFER_BUFFER_INVALID_CONTEXT int32 = -0x000B0003 // a context id argument was zero
+	WASMOS_ERR_XFER_BUFFER_INVALID_SIZE int32 = -0x000B0004 // a requested size was zero
+	WASMOS_ERR_XFER_BUFFER_CAPACITY_EXCEEDED int32 = -0x000B0005 // requested size exceeds the kind's intrinsic capacity
+	WASMOS_ERR_XFER_BUFFER_NO_BACKING int32 = -0x000B0006 // no physical backing could be obtained for the object
+	WASMOS_ERR_XFER_BUFFER_INTERNAL int32 = -0x000B0007 // registry storage could not be initialized or grown
+	WASMOS_ERR_XFER_BUFFER_NOT_FOUND int32 = -0x000B0008 // the referenced object does not exist (stale or destroyed)
+	WASMOS_ERR_XFER_BUFFER_NOT_OWNER int32 = -0x000B0009 // the binding does not match the object's current owner
+	WASMOS_ERR_XFER_BUFFER_INVALID_FLAGS int32 = -0x000B000A // requested access flags are empty or contain invalid bits
+	WASMOS_ERR_XFER_BUFFER_SELF_BORROW int32 = -0x000B000B // a transfer object cannot be borrowed by its own owner
+	WASMOS_ERR_XFER_BUFFER_ALREADY_BORROWED int32 = -0x000B000C // the borrower already holds an active borrow on this object
+	WASMOS_ERR_XFER_BUFFER_KIND_NOT_BORROWABLE int32 = -0x000B000D // the kind may not be borrowed by the requested borrower
+	WASMOS_ERR_XFER_BUFFER_KIND_NOT_TRANSFERABLE int32 = -0x000B000E // the kind does not support ownership transfer
+	WASMOS_ERR_XFER_BUFFER_ACTIVE_BORROWS int32 = -0x000B000F // the object still has active borrows
+	WASMOS_ERR_XFER_BUFFER_DMA_MAPPED int32 = -0x000B0010 // dMA is still mapped and blocks this operation
+	WASMOS_ERR_XFER_BUFFER_SAME_OWNER int32 = -0x000B0011 // ownership transfer to the current owner is a no-op and rejected
+	WASMOS_ERR_XFER_BUFFER_RIGHTS_AMPLIFICATION int32 = -0x000B0012 // downstream rights would exceed the upstream borrow's rights
+	WASMOS_ERR_XFER_BUFFER_NOT_REBORROWABLE int32 = -0x000B0013 // the kind may not be reborrowed
+	WASMOS_ERR_XFER_BUFFER_INACTIVE_BORROW int32 = -0x000B0014 // the referenced borrow is inactive, stale, or forged
+	WASMOS_ERR_XFER_BUFFER_RANGE int32 = -0x000B0015 // an offset/length subrange lies outside its bounds
+	WASMOS_ERR_XFER_BUFFER_DIRECTION int32 = -0x000B0016 // the DMA direction is not permitted by the access rights
+	WASMOS_ERR_XFER_BUFFER_DMA_ACTIVE int32 = -0x000B0017 // a DMA mapping is already active on this object or borrow
+	WASMOS_ERR_XFER_BUFFER_INACTIVE_MAPPING int32 = -0x000B0018 // the DMA mapping is inactive
+	WASMOS_ERR_XFER_BUFFER_NO_ACCESS int32 = -0x000B0019 // the object exists but the context is neither its owner nor a borrower
 	WASMOS_ERR_DEVMGR_NO_MOUNT_RULE int32 = -0x000A0001 // no block/filesystem mount rule matches the requested unit
 	WASMOS_ERR_DEVMGR_UNSUPPORTED_QUERY int32 = -0x000A0002 // unknown or unsupported device-manager query type
 )
@@ -190,6 +216,8 @@ func WasmosErrorDomainName(d uint16) string {
 		return "vt"
 	case WASMOS_ERR_DOMAIN_CHARDEV:
 		return "chardev"
+	case WASMOS_ERR_DOMAIN_XFER_BUFFER:
+		return "xfer_buffer"
 	case WASMOS_ERR_DOMAIN_DEVMGR:
 		return "devmgr"
 	default:
@@ -369,6 +397,56 @@ func WasmosStrerror(c int32) string {
 		return "no byte is buffered yet (retryable)"
 	case WASMOS_ERR_CHARDEV_UNSUPPORTED_REQUEST:
 		return "unknown or unsupported request type"
+	case WASMOS_ERR_XFER_BUFFER_NULL_ARG:
+		return "a required pointer argument was NULL"
+	case WASMOS_ERR_XFER_BUFFER_INVALID_KIND:
+		return "unknown or unsupported buffer kind"
+	case WASMOS_ERR_XFER_BUFFER_INVALID_CONTEXT:
+		return "a context id argument was zero"
+	case WASMOS_ERR_XFER_BUFFER_INVALID_SIZE:
+		return "a requested size was zero"
+	case WASMOS_ERR_XFER_BUFFER_CAPACITY_EXCEEDED:
+		return "requested size exceeds the kind's intrinsic capacity"
+	case WASMOS_ERR_XFER_BUFFER_NO_BACKING:
+		return "no physical backing could be obtained for the object"
+	case WASMOS_ERR_XFER_BUFFER_INTERNAL:
+		return "registry storage could not be initialized or grown"
+	case WASMOS_ERR_XFER_BUFFER_NOT_FOUND:
+		return "the referenced object does not exist (stale or destroyed)"
+	case WASMOS_ERR_XFER_BUFFER_NOT_OWNER:
+		return "the binding does not match the object's current owner"
+	case WASMOS_ERR_XFER_BUFFER_INVALID_FLAGS:
+		return "requested access flags are empty or contain invalid bits"
+	case WASMOS_ERR_XFER_BUFFER_SELF_BORROW:
+		return "a transfer object cannot be borrowed by its own owner"
+	case WASMOS_ERR_XFER_BUFFER_ALREADY_BORROWED:
+		return "the borrower already holds an active borrow on this object"
+	case WASMOS_ERR_XFER_BUFFER_KIND_NOT_BORROWABLE:
+		return "the kind may not be borrowed by the requested borrower"
+	case WASMOS_ERR_XFER_BUFFER_KIND_NOT_TRANSFERABLE:
+		return "the kind does not support ownership transfer"
+	case WASMOS_ERR_XFER_BUFFER_ACTIVE_BORROWS:
+		return "the object still has active borrows"
+	case WASMOS_ERR_XFER_BUFFER_DMA_MAPPED:
+		return "dMA is still mapped and blocks this operation"
+	case WASMOS_ERR_XFER_BUFFER_SAME_OWNER:
+		return "ownership transfer to the current owner is a no-op and rejected"
+	case WASMOS_ERR_XFER_BUFFER_RIGHTS_AMPLIFICATION:
+		return "downstream rights would exceed the upstream borrow's rights"
+	case WASMOS_ERR_XFER_BUFFER_NOT_REBORROWABLE:
+		return "the kind may not be reborrowed"
+	case WASMOS_ERR_XFER_BUFFER_INACTIVE_BORROW:
+		return "the referenced borrow is inactive, stale, or forged"
+	case WASMOS_ERR_XFER_BUFFER_RANGE:
+		return "an offset/length subrange lies outside its bounds"
+	case WASMOS_ERR_XFER_BUFFER_DIRECTION:
+		return "the DMA direction is not permitted by the access rights"
+	case WASMOS_ERR_XFER_BUFFER_DMA_ACTIVE:
+		return "a DMA mapping is already active on this object or borrow"
+	case WASMOS_ERR_XFER_BUFFER_INACTIVE_MAPPING:
+		return "the DMA mapping is inactive"
+	case WASMOS_ERR_XFER_BUFFER_NO_ACCESS:
+		return "the object exists but the context is neither its owner nor a borrower"
 	case WASMOS_ERR_DEVMGR_NO_MOUNT_RULE:
 		return "no block/filesystem mount rule matches the requested unit"
 	case WASMOS_ERR_DEVMGR_UNSUPPORTED_QUERY:

@@ -39,6 +39,7 @@ enum {
     WASMOS_ERR_DOMAIN_DRIVER = 7, /* generic device-driver failures (reserved) */
     WASMOS_ERR_DOMAIN_VT = 8, /* virtual-terminal multiplexer failures */
     WASMOS_ERR_DOMAIN_CHARDEV = 9, /* character-device sample driver failures */
+    WASMOS_ERR_DOMAIN_XFER_BUFFER = 11, /* transfer-buffer object registry / borrow / DMA failures (was XFER_BUFFER_ERR_*) */
     WASMOS_ERR_DOMAIN_DEVMGR = 10, /* device-manager query failures */
 };
 
@@ -136,6 +137,31 @@ enum {
     WASMOS_ERR_VT_UNSUPPORTED_REQUEST = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_VT, 4), /* unknown or unsupported request type */
     WASMOS_ERR_CHARDEV_NO_DATA = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_CHARDEV, 1), /* no byte is buffered yet (retryable) */
     WASMOS_ERR_CHARDEV_UNSUPPORTED_REQUEST = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_CHARDEV, 2), /* unknown or unsupported request type */
+    WASMOS_ERR_XFER_BUFFER_NULL_ARG = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_XFER_BUFFER, 1), /* a required pointer argument was NULL */
+    WASMOS_ERR_XFER_BUFFER_INVALID_KIND = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_XFER_BUFFER, 2), /* unknown or unsupported buffer kind */
+    WASMOS_ERR_XFER_BUFFER_INVALID_CONTEXT = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_XFER_BUFFER, 3), /* a context id argument was zero */
+    WASMOS_ERR_XFER_BUFFER_INVALID_SIZE = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_XFER_BUFFER, 4), /* a requested size was zero */
+    WASMOS_ERR_XFER_BUFFER_CAPACITY_EXCEEDED = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_XFER_BUFFER, 5), /* requested size exceeds the kind's intrinsic capacity */
+    WASMOS_ERR_XFER_BUFFER_NO_BACKING = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_XFER_BUFFER, 6), /* no physical backing could be obtained for the object */
+    WASMOS_ERR_XFER_BUFFER_INTERNAL = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_XFER_BUFFER, 7), /* registry storage could not be initialized or grown */
+    WASMOS_ERR_XFER_BUFFER_NOT_FOUND = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_XFER_BUFFER, 8), /* the referenced object does not exist (stale or destroyed) */
+    WASMOS_ERR_XFER_BUFFER_NOT_OWNER = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_XFER_BUFFER, 9), /* the binding does not match the object's current owner */
+    WASMOS_ERR_XFER_BUFFER_INVALID_FLAGS = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_XFER_BUFFER, 10), /* requested access flags are empty or contain invalid bits */
+    WASMOS_ERR_XFER_BUFFER_SELF_BORROW = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_XFER_BUFFER, 11), /* a transfer object cannot be borrowed by its own owner */
+    WASMOS_ERR_XFER_BUFFER_ALREADY_BORROWED = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_XFER_BUFFER, 12), /* the borrower already holds an active borrow on this object */
+    WASMOS_ERR_XFER_BUFFER_KIND_NOT_BORROWABLE = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_XFER_BUFFER, 13), /* the kind may not be borrowed by the requested borrower */
+    WASMOS_ERR_XFER_BUFFER_KIND_NOT_TRANSFERABLE = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_XFER_BUFFER, 14), /* the kind does not support ownership transfer */
+    WASMOS_ERR_XFER_BUFFER_ACTIVE_BORROWS = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_XFER_BUFFER, 15), /* the object still has active borrows */
+    WASMOS_ERR_XFER_BUFFER_DMA_MAPPED = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_XFER_BUFFER, 16), /* dMA is still mapped and blocks this operation */
+    WASMOS_ERR_XFER_BUFFER_SAME_OWNER = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_XFER_BUFFER, 17), /* ownership transfer to the current owner is a no-op and rejected */
+    WASMOS_ERR_XFER_BUFFER_RIGHTS_AMPLIFICATION = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_XFER_BUFFER, 18), /* downstream rights would exceed the upstream borrow's rights */
+    WASMOS_ERR_XFER_BUFFER_NOT_REBORROWABLE = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_XFER_BUFFER, 19), /* the kind may not be reborrowed */
+    WASMOS_ERR_XFER_BUFFER_INACTIVE_BORROW = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_XFER_BUFFER, 20), /* the referenced borrow is inactive, stale, or forged */
+    WASMOS_ERR_XFER_BUFFER_RANGE = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_XFER_BUFFER, 21), /* an offset/length subrange lies outside its bounds */
+    WASMOS_ERR_XFER_BUFFER_DIRECTION = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_XFER_BUFFER, 22), /* the DMA direction is not permitted by the access rights */
+    WASMOS_ERR_XFER_BUFFER_DMA_ACTIVE = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_XFER_BUFFER, 23), /* a DMA mapping is already active on this object or borrow */
+    WASMOS_ERR_XFER_BUFFER_INACTIVE_MAPPING = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_XFER_BUFFER, 24), /* the DMA mapping is inactive */
+    WASMOS_ERR_XFER_BUFFER_NO_ACCESS = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_XFER_BUFFER, 25), /* the object exists but the context is neither its owner nor a borrower */
     WASMOS_ERR_DEVMGR_NO_MOUNT_RULE = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_DEVMGR, 1), /* no block/filesystem mount rule matches the requested unit */
     WASMOS_ERR_DEVMGR_UNSUPPORTED_QUERY = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_DEVMGR, 2), /* unknown or unsupported device-manager query type */
 };
@@ -188,6 +214,7 @@ static inline const char *wasmos_error_domain_name(wasmos_error_domain_t d) {
     case WASMOS_ERR_DOMAIN_DRIVER: return "driver";
     case WASMOS_ERR_DOMAIN_VT: return "vt";
     case WASMOS_ERR_DOMAIN_CHARDEV: return "chardev";
+    case WASMOS_ERR_DOMAIN_XFER_BUFFER: return "xfer_buffer";
     case WASMOS_ERR_DOMAIN_DEVMGR: return "devmgr";
     default: return "unknown";
     }
@@ -281,6 +308,31 @@ static inline const char *wasmos_error_code_name(wasmos_error_code_t c) {
     case WASMOS_ERR_VT_UNSUPPORTED_REQUEST: return "vt.UNSUPPORTED_REQUEST";
     case WASMOS_ERR_CHARDEV_NO_DATA: return "chardev.NO_DATA";
     case WASMOS_ERR_CHARDEV_UNSUPPORTED_REQUEST: return "chardev.UNSUPPORTED_REQUEST";
+    case WASMOS_ERR_XFER_BUFFER_NULL_ARG: return "xfer_buffer.NULL_ARG";
+    case WASMOS_ERR_XFER_BUFFER_INVALID_KIND: return "xfer_buffer.INVALID_KIND";
+    case WASMOS_ERR_XFER_BUFFER_INVALID_CONTEXT: return "xfer_buffer.INVALID_CONTEXT";
+    case WASMOS_ERR_XFER_BUFFER_INVALID_SIZE: return "xfer_buffer.INVALID_SIZE";
+    case WASMOS_ERR_XFER_BUFFER_CAPACITY_EXCEEDED: return "xfer_buffer.CAPACITY_EXCEEDED";
+    case WASMOS_ERR_XFER_BUFFER_NO_BACKING: return "xfer_buffer.NO_BACKING";
+    case WASMOS_ERR_XFER_BUFFER_INTERNAL: return "xfer_buffer.INTERNAL";
+    case WASMOS_ERR_XFER_BUFFER_NOT_FOUND: return "xfer_buffer.NOT_FOUND";
+    case WASMOS_ERR_XFER_BUFFER_NOT_OWNER: return "xfer_buffer.NOT_OWNER";
+    case WASMOS_ERR_XFER_BUFFER_INVALID_FLAGS: return "xfer_buffer.INVALID_FLAGS";
+    case WASMOS_ERR_XFER_BUFFER_SELF_BORROW: return "xfer_buffer.SELF_BORROW";
+    case WASMOS_ERR_XFER_BUFFER_ALREADY_BORROWED: return "xfer_buffer.ALREADY_BORROWED";
+    case WASMOS_ERR_XFER_BUFFER_KIND_NOT_BORROWABLE: return "xfer_buffer.KIND_NOT_BORROWABLE";
+    case WASMOS_ERR_XFER_BUFFER_KIND_NOT_TRANSFERABLE: return "xfer_buffer.KIND_NOT_TRANSFERABLE";
+    case WASMOS_ERR_XFER_BUFFER_ACTIVE_BORROWS: return "xfer_buffer.ACTIVE_BORROWS";
+    case WASMOS_ERR_XFER_BUFFER_DMA_MAPPED: return "xfer_buffer.DMA_MAPPED";
+    case WASMOS_ERR_XFER_BUFFER_SAME_OWNER: return "xfer_buffer.SAME_OWNER";
+    case WASMOS_ERR_XFER_BUFFER_RIGHTS_AMPLIFICATION: return "xfer_buffer.RIGHTS_AMPLIFICATION";
+    case WASMOS_ERR_XFER_BUFFER_NOT_REBORROWABLE: return "xfer_buffer.NOT_REBORROWABLE";
+    case WASMOS_ERR_XFER_BUFFER_INACTIVE_BORROW: return "xfer_buffer.INACTIVE_BORROW";
+    case WASMOS_ERR_XFER_BUFFER_RANGE: return "xfer_buffer.RANGE";
+    case WASMOS_ERR_XFER_BUFFER_DIRECTION: return "xfer_buffer.DIRECTION";
+    case WASMOS_ERR_XFER_BUFFER_DMA_ACTIVE: return "xfer_buffer.DMA_ACTIVE";
+    case WASMOS_ERR_XFER_BUFFER_INACTIVE_MAPPING: return "xfer_buffer.INACTIVE_MAPPING";
+    case WASMOS_ERR_XFER_BUFFER_NO_ACCESS: return "xfer_buffer.NO_ACCESS";
     case WASMOS_ERR_DEVMGR_NO_MOUNT_RULE: return "devmgr.NO_MOUNT_RULE";
     case WASMOS_ERR_DEVMGR_UNSUPPORTED_QUERY: return "devmgr.UNSUPPORTED_QUERY";
     default: return "unknown";
@@ -375,6 +427,31 @@ static inline const char *wasmos_strerror(wasmos_error_code_t c) {
     case WASMOS_ERR_VT_UNSUPPORTED_REQUEST: return "unknown or unsupported request type";
     case WASMOS_ERR_CHARDEV_NO_DATA: return "no byte is buffered yet (retryable)";
     case WASMOS_ERR_CHARDEV_UNSUPPORTED_REQUEST: return "unknown or unsupported request type";
+    case WASMOS_ERR_XFER_BUFFER_NULL_ARG: return "a required pointer argument was NULL";
+    case WASMOS_ERR_XFER_BUFFER_INVALID_KIND: return "unknown or unsupported buffer kind";
+    case WASMOS_ERR_XFER_BUFFER_INVALID_CONTEXT: return "a context id argument was zero";
+    case WASMOS_ERR_XFER_BUFFER_INVALID_SIZE: return "a requested size was zero";
+    case WASMOS_ERR_XFER_BUFFER_CAPACITY_EXCEEDED: return "requested size exceeds the kind's intrinsic capacity";
+    case WASMOS_ERR_XFER_BUFFER_NO_BACKING: return "no physical backing could be obtained for the object";
+    case WASMOS_ERR_XFER_BUFFER_INTERNAL: return "registry storage could not be initialized or grown";
+    case WASMOS_ERR_XFER_BUFFER_NOT_FOUND: return "the referenced object does not exist (stale or destroyed)";
+    case WASMOS_ERR_XFER_BUFFER_NOT_OWNER: return "the binding does not match the object's current owner";
+    case WASMOS_ERR_XFER_BUFFER_INVALID_FLAGS: return "requested access flags are empty or contain invalid bits";
+    case WASMOS_ERR_XFER_BUFFER_SELF_BORROW: return "a transfer object cannot be borrowed by its own owner";
+    case WASMOS_ERR_XFER_BUFFER_ALREADY_BORROWED: return "the borrower already holds an active borrow on this object";
+    case WASMOS_ERR_XFER_BUFFER_KIND_NOT_BORROWABLE: return "the kind may not be borrowed by the requested borrower";
+    case WASMOS_ERR_XFER_BUFFER_KIND_NOT_TRANSFERABLE: return "the kind does not support ownership transfer";
+    case WASMOS_ERR_XFER_BUFFER_ACTIVE_BORROWS: return "the object still has active borrows";
+    case WASMOS_ERR_XFER_BUFFER_DMA_MAPPED: return "dMA is still mapped and blocks this operation";
+    case WASMOS_ERR_XFER_BUFFER_SAME_OWNER: return "ownership transfer to the current owner is a no-op and rejected";
+    case WASMOS_ERR_XFER_BUFFER_RIGHTS_AMPLIFICATION: return "downstream rights would exceed the upstream borrow's rights";
+    case WASMOS_ERR_XFER_BUFFER_NOT_REBORROWABLE: return "the kind may not be reborrowed";
+    case WASMOS_ERR_XFER_BUFFER_INACTIVE_BORROW: return "the referenced borrow is inactive, stale, or forged";
+    case WASMOS_ERR_XFER_BUFFER_RANGE: return "an offset/length subrange lies outside its bounds";
+    case WASMOS_ERR_XFER_BUFFER_DIRECTION: return "the DMA direction is not permitted by the access rights";
+    case WASMOS_ERR_XFER_BUFFER_DMA_ACTIVE: return "a DMA mapping is already active on this object or borrow";
+    case WASMOS_ERR_XFER_BUFFER_INACTIVE_MAPPING: return "the DMA mapping is inactive";
+    case WASMOS_ERR_XFER_BUFFER_NO_ACCESS: return "the object exists but the context is neither its owner nor a borrower";
     case WASMOS_ERR_DEVMGR_NO_MOUNT_RULE: return "no block/filesystem mount rule matches the requested unit";
     case WASMOS_ERR_DEVMGR_UNSUPPORTED_QUERY: return "unknown or unsupported device-manager query type";
     default: return "unknown error";

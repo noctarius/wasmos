@@ -122,7 +122,7 @@ static int init_send_spawn_path(process_t* process, init_state_t* state, const c
         return -1;
     }
     if (xfer_buffer_acquire(BUFFER_KIND_TRANSFER, process->context_id, path_len, &buf) !=
-        XFER_BUFFER_OK) {
+        WASMOS_ERR_NONE) {
         return -1;
     }
     phys = xfer_buffer_object_phys(&buf.buffer);

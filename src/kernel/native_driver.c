@@ -293,7 +293,7 @@ static void* nd_xfer_buffer_acquire(uint32_t kind, uint32_t size, uint32_t* out_
     }
 
     xfer_buffer_owner_t owner = {0};
-    if (xfer_buffer_acquire(kind, driver_ctx, size, &owner) != XFER_BUFFER_OK) {
+    if (xfer_buffer_acquire(kind, driver_ctx, size, &owner) != WASMOS_ERR_NONE) {
         return (void*)0;
     }
     uint64_t phys_base = xfer_buffer_object_phys(&owner.buffer);
@@ -342,7 +342,7 @@ static void* nd_xfer_buffer_map_borrowed(uint32_t kind, uint32_t buffer_id, uint
     }
     ctx = mm_context_get(proc->context_id);
     if (!ctx || ctx->root_table == 0u ||
-        xfer_buffer_get_borrowed(borrow_id, proc->context_id, &borrow, 0) != XFER_BUFFER_OK ||
+        xfer_buffer_get_borrowed(borrow_id, proc->context_id, &borrow, 0) != WASMOS_ERR_NONE ||
         borrow.buffer.kind != kind || borrow.buffer.buffer_id != buffer_id ||
         borrow.buffer.size_bytes == 0u) {
         return (void*)0;
@@ -414,11 +414,11 @@ static int nd_xfer_buffer_borrow(uint32_t grantee_endpoint, uint32_t buffer_id, 
 
     xfer_buffer_t key = {BUFFER_KIND_TRANSFER, buffer_id, 0u};
     xfer_buffer_owner_t owner = {0};
-    if (xfer_buffer_get_owned(&key, proc->context_id, &owner) != XFER_BUFFER_OK) {
+    if (xfer_buffer_get_owned(&key, proc->context_id, &owner) != WASMOS_ERR_NONE) {
         return -1;
     }
     xfer_buffer_borrow_t borrow = {0};
-    if (xfer_buffer_borrow(&owner, grantee_ctx, flags, &borrow) != XFER_BUFFER_OK) {
+    if (xfer_buffer_borrow(&owner, grantee_ctx, flags, &borrow) != WASMOS_ERR_NONE) {
         return -1;
     }
     return (int)borrow.borrow_id;
@@ -431,10 +431,10 @@ static int nd_xfer_buffer_unborrow(uint32_t borrow_id) {
         return -1;
     }
     xfer_buffer_borrow_t borrow = {0};
-    if (xfer_buffer_get_lent(borrow_id, proc->context_id, &borrow) != XFER_BUFFER_OK) {
+    if (xfer_buffer_get_lent(borrow_id, proc->context_id, &borrow) != WASMOS_ERR_NONE) {
         return -1;
     }
-    return xfer_buffer_unborrow(&borrow) == XFER_BUFFER_OK ? 0 : -1;
+    return xfer_buffer_unborrow(&borrow) == WASMOS_ERR_NONE ? 0 : -1;
 }
 
 /* The owner destroys `buffer_id`: unmap it and release the object (which
@@ -462,7 +462,7 @@ static int nd_xfer_buffer_release(uint32_t buffer_id) {
     if (ctx && ctx->root_table != 0) {
         nd_unmap_pages(ctx, slot->virt, slot->pages);
     }
-    int rc = xfer_buffer_release_owned(&slot->owner) == XFER_BUFFER_OK ? 0 : -1;
+    int rc = xfer_buffer_release_owned(&slot->owner) == WASMOS_ERR_NONE ? 0 : -1;
     nd_borrow_slot_clear(slot);
     return rc;
 }
@@ -912,7 +912,7 @@ static int nd_spawn_info(wasmos_spawn_info_t* out, char* args_buf, uint32_t args
     key.kind = BUFFER_KIND_TRANSFER;
     key.buffer_id = proc->spawn_info_buffer_id;
     key.size_bytes = 0;
-    if (xfer_buffer_get_owned(&key, proc->context_id, &owner) != XFER_BUFFER_OK) {
+    if (xfer_buffer_get_owned(&key, proc->context_id, &owner) != WASMOS_ERR_NONE) {
         return -1;
     }
     phys = xfer_buffer_object_phys(&owner.buffer);

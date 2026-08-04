@@ -312,28 +312,32 @@ static void test_unborrow_lender_authority(test_stats_t* stats) {
           "owner (80) grants borrow to context 81");
     /* The grantee (81) is NOT the lender of its own borrow — it may not unborrow it. */
     check(stats,
-          xfer_buffer_get_lent(borrow.borrow_id, 81u, &resolved) == XFER_BUFFER_ERR_NO_ACCESS,
+          xfer_buffer_get_lent(borrow.borrow_id, 81u, &resolved) ==
+              WASMOS_ERR_XFER_BUFFER_NO_ACCESS,
           "grantee cannot resolve-as-lender its own borrow");
     /* An unrelated context is likewise denied. */
     check(stats,
-          xfer_buffer_get_lent(borrow.borrow_id, 99u, &resolved) == XFER_BUFFER_ERR_NO_ACCESS,
+          xfer_buffer_get_lent(borrow.borrow_id, 99u, &resolved) ==
+              WASMOS_ERR_XFER_BUFFER_NO_ACCESS,
           "unrelated context cannot resolve-as-lender someone else's borrow");
     /* A denied resolve must be a no-op: the borrow is still fully active. */
     check(stats, xfer_buffer_can_access(&owner.buffer, 81u, BUFFER_BORROW_READ),
           "borrow survives denied non-lender unborrow attempts");
     /* The owner (80) is the lender of the top-level borrow — it may. */
-    check(stats, xfer_buffer_get_lent(borrow.borrow_id, 80u, &resolved) == XFER_BUFFER_OK,
+    check(stats, xfer_buffer_get_lent(borrow.borrow_id, 80u, &resolved) == WASMOS_ERR_NONE,
           "owner resolves-as-lender the top-level borrow it granted");
     /* 81 reborrows to 82; 81 is now the lender of the reborrow, the owner is not. */
     check(stats, xfer_buffer_reborrow(&borrow, 82u, BUFFER_BORROW_READ, &reborrow) == 0,
           "context 81 reborrows to 82");
     check(stats,
-          xfer_buffer_get_lent(reborrow.borrow_id, 80u, &resolved) == XFER_BUFFER_ERR_NO_ACCESS,
+          xfer_buffer_get_lent(reborrow.borrow_id, 80u, &resolved) ==
+              WASMOS_ERR_XFER_BUFFER_NO_ACCESS,
           "object owner is not the lender of a downstream reborrow");
     check(stats,
-          xfer_buffer_get_lent(reborrow.borrow_id, 82u, &resolved) == XFER_BUFFER_ERR_NO_ACCESS,
+          xfer_buffer_get_lent(reborrow.borrow_id, 82u, &resolved) ==
+              WASMOS_ERR_XFER_BUFFER_NO_ACCESS,
           "reborrow grantee (82) is not its own lender");
-    check(stats, xfer_buffer_get_lent(reborrow.borrow_id, 81u, &resolved) == XFER_BUFFER_OK,
+    check(stats, xfer_buffer_get_lent(reborrow.borrow_id, 81u, &resolved) == WASMOS_ERR_NONE,
           "reborrow lender (81, the reborrowing context) may resolve it");
     /* Lender-authorized unborrow of the reborrow, downstream-only cascade. */
     check(stats, xfer_buffer_unborrow(&resolved) == 0, "reborrow lender unborrows the reborrow");

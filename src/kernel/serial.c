@@ -439,7 +439,7 @@ int klog_register_ring(uint32_t owner_context_id, uint32_t id) {
      * take its physical base.  No pin/retain: the VT holds the buffer for its
      * whole lifetime, matching the kernel's fixed-region console_ring model. */
     xfer_buffer_t buf;
-    if (xfer_buffer_describe(id, BUFFER_KIND_TRANSFER, owner_context_id, &buf) != XFER_BUFFER_OK) {
+    if (xfer_buffer_describe(id, BUFFER_KIND_TRANSFER, owner_context_id, &buf) != WASMOS_ERR_NONE) {
         return -1;
     }
     uint64_t base = xfer_buffer_object_phys(&buf);

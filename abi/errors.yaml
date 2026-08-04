@@ -169,6 +169,36 @@ domains:
       - { name: NO_DATA,             description: "no byte is buffered yet (retryable)" }
       - { name: UNSUPPORTED_REQUEST, description: "unknown or unsupported request type" }
 
+  xfer_buffer:
+    id: 11
+    description: "transfer-buffer object registry / borrow / DMA failures (was XFER_BUFFER_ERR_*)"
+    codes:
+      - { name: NULL_ARG,               description: "a required pointer argument was NULL" }
+      - { name: INVALID_KIND,           description: "unknown or unsupported buffer kind" }
+      - { name: INVALID_CONTEXT,        description: "a context id argument was zero" }
+      - { name: INVALID_SIZE,           description: "a requested size was zero" }
+      - { name: CAPACITY_EXCEEDED,      description: "requested size exceeds the kind's intrinsic capacity" }
+      - { name: NO_BACKING,             description: "no physical backing could be obtained for the object" }
+      - { name: INTERNAL,               description: "registry storage could not be initialized or grown" }
+      - { name: NOT_FOUND,              description: "the referenced object does not exist (stale or destroyed)" }
+      - { name: NOT_OWNER,              description: "the binding does not match the object's current owner" }
+      - { name: INVALID_FLAGS,          description: "requested access flags are empty or contain invalid bits" }
+      - { name: SELF_BORROW,            description: "a transfer object cannot be borrowed by its own owner" }
+      - { name: ALREADY_BORROWED,       description: "the borrower already holds an active borrow on this object" }
+      - { name: KIND_NOT_BORROWABLE,    description: "the kind may not be borrowed by the requested borrower" }
+      - { name: KIND_NOT_TRANSFERABLE,  description: "the kind does not support ownership transfer" }
+      - { name: ACTIVE_BORROWS,         description: "the object still has active borrows" }
+      - { name: DMA_MAPPED,             description: "dMA is still mapped and blocks this operation" }
+      - { name: SAME_OWNER,             description: "ownership transfer to the current owner is a no-op and rejected" }
+      - { name: RIGHTS_AMPLIFICATION,   description: "downstream rights would exceed the upstream borrow's rights" }
+      - { name: NOT_REBORROWABLE,       description: "the kind may not be reborrowed" }
+      - { name: INACTIVE_BORROW,        description: "the referenced borrow is inactive, stale, or forged" }
+      - { name: RANGE,                  description: "an offset/length subrange lies outside its bounds" }
+      - { name: DIRECTION,              description: "the DMA direction is not permitted by the access rights" }
+      - { name: DMA_ACTIVE,             description: "a DMA mapping is already active on this object or borrow" }
+      - { name: INACTIVE_MAPPING,       description: "the DMA mapping is inactive" }
+      - { name: NO_ACCESS,              description: "the object exists but the context is neither its owner nor a borrower" }
+
   devmgr:
     id: 10
     description: "device-manager query failures"

@@ -77,7 +77,7 @@ static int pm_xfer_acquire(uint32_t pm_context_id, uint32_t minimum_size,
         minimum_size = 1u;
     }
     return xfer_buffer_acquire(BUFFER_KIND_TRANSFER, pm_context_id, minimum_size, out) ==
-                   XFER_BUFFER_OK
+                   WASMOS_ERR_NONE
                ? 0
                : -1;
 }
@@ -114,7 +114,7 @@ const uint8_t* pm_foreign_xfer_ptr(uint32_t buffer_id, uint32_t owner_context, u
     uint64_t phys = 0u;
 
     if (xfer_buffer_describe(buffer_id, BUFFER_KIND_TRANSFER, owner_context, &desc) !=
-        XFER_BUFFER_OK) {
+        WASMOS_ERR_NONE) {
         return 0;
     }
     phys = xfer_buffer_object_phys(&desc);
@@ -311,7 +311,7 @@ static process_run_result_t pm_app_entry(process_t* process, void* arg) {
         wasmos_spawn_info_t* si = 0;
         uint8_t* args_dst = 0;
         if (xfer_buffer_acquire(BUFFER_KIND_TRANSFER, process->context_id, need, &si_xfer) !=
-                XFER_BUFFER_OK ||
+                WASMOS_ERR_NONE ||
             (si_phys = xfer_buffer_object_phys(&si_xfer.buffer)) == 0u) {
             klog_write("[pm] spawn info alloc failed\n");
             process_set_exit_status(process, -1);
@@ -759,7 +759,7 @@ static int pm_request_broker_spawn_plan(uint32_t pm_context_id, const xfer_buffe
      * same buffer. buffer_id is carried in arg2 so the broker can resolve it.
      * PM revokes the borrow once it has read the plan. */
     if (xfer_buffer_borrow(pmbuf, broker_context_id, BUFFER_BORROW_READ | BUFFER_BORROW_WRITE,
-                           &broker_borrow) != XFER_BUFFER_OK) {
+                           &broker_borrow) != WASMOS_ERR_NONE) {
         return WASMOS_ERR_PROC_SPAWN_BROKER_IPC;
     }
     broker_has_borrow = 1;
@@ -980,7 +980,7 @@ static int pm_fs_read_blob_for_spawn(uint32_t pm_context_id, const xfer_buffer_o
         return PM_SPAWN_INTERNAL_ERR_SEND;
     }
     if (xfer_buffer_borrow(pmbuf, fsmgr_ctx, BUFFER_BORROW_READ | BUFFER_BORROW_WRITE, &fs_grant) !=
-        XFER_BUFFER_OK) {
+        WASMOS_ERR_NONE) {
         return PM_SPAWN_INTERNAL_ERR_SEND;
     }
     req_id = g_pm.fs_request_id++;

@@ -295,29 +295,29 @@ static int xfer_buffer_describe_locked(uint32_t buffer_id, uint32_t kind, uint32
     object_slot_t* slot = 0;
 
     if (!out) {
-        return XFER_BUFFER_ERR_NULL_ARG;
+        return WASMOS_ERR_XFER_BUFFER_NULL_ARG;
     }
     if (context_id == 0u) {
-        return XFER_BUFFER_ERR_INVALID_CONTEXT;
+        return WASMOS_ERR_XFER_BUFFER_INVALID_CONTEXT;
     }
     if (buffer_id == 0u) {
         /* Ids are issued from 1; 0 never names a live object. */
-        return XFER_BUFFER_ERR_NOT_FOUND;
+        return WASMOS_ERR_XFER_BUFFER_NOT_FOUND;
     }
     key.kind = kind;
     key.buffer_id = buffer_id;
     key.size_bytes = 0u;
     slot = object_find(&key);
     if (!slot) {
-        return XFER_BUFFER_ERR_NOT_FOUND;
+        return WASMOS_ERR_XFER_BUFFER_NOT_FOUND;
     }
     if (slot->owner_context_id != context_id && !borrow_find_for(slot->buffer_id, context_id)) {
-        return XFER_BUFFER_ERR_NO_ACCESS;
+        return WASMOS_ERR_XFER_BUFFER_NO_ACCESS;
     }
     out->kind = slot->kind;
     out->buffer_id = slot->buffer_id;
     out->size_bytes = slot->size_bytes;
-    return XFER_BUFFER_OK;
+    return WASMOS_ERR_NONE;
 }
 
 static int xfer_buffer_get_borrowed_locked(uint32_t borrow_id, uint32_t context_id,
@@ -327,24 +327,24 @@ static int xfer_buffer_get_borrowed_locked(uint32_t borrow_id, uint32_t context_
     object_slot_t* object = 0;
 
     if (!out_borrow) {
-        return XFER_BUFFER_ERR_NULL_ARG;
+        return WASMOS_ERR_XFER_BUFFER_NULL_ARG;
     }
     if (context_id == 0u) {
-        return XFER_BUFFER_ERR_INVALID_CONTEXT;
+        return WASMOS_ERR_XFER_BUFFER_INVALID_CONTEXT;
     }
     if (borrow_id == 0u) {
-        return XFER_BUFFER_ERR_INACTIVE_BORROW;
+        return WASMOS_ERR_XFER_BUFFER_INACTIVE_BORROW;
     }
     slot = borrow_find(borrow_id);
     if (!slot) {
-        return XFER_BUFFER_ERR_INACTIVE_BORROW;
+        return WASMOS_ERR_XFER_BUFFER_INACTIVE_BORROW;
     }
     if (slot->borrower_context_id != context_id) {
-        return XFER_BUFFER_ERR_NO_ACCESS;
+        return WASMOS_ERR_XFER_BUFFER_NO_ACCESS;
     }
     object = object_find_by_id(slot->buffer_id);
     if (!object) {
-        return XFER_BUFFER_ERR_NOT_FOUND;
+        return WASMOS_ERR_XFER_BUFFER_NOT_FOUND;
     }
 
     out_borrow->buffer.kind = slot->kind;
@@ -382,7 +382,7 @@ static int xfer_buffer_get_borrowed_locked(uint32_t borrow_id, uint32_t context_
             out_mapping->active = 0u;
         }
     }
-    return XFER_BUFFER_OK;
+    return WASMOS_ERR_NONE;
 }
 
 static uint64_t object_alloc_backing(uint32_t kind, uint32_t size_bytes) {
@@ -436,35 +436,35 @@ static int xfer_buffer_acquire_locked(uint32_t kind, uint32_t owner_context_id,
     object_slot_t* slot = 0;
 
     if (!out_owner) {
-        return XFER_BUFFER_ERR_NULL_ARG;
+        return WASMOS_ERR_XFER_BUFFER_NULL_ARG;
     }
     if (kind != BUFFER_KIND_TRANSFER && kind != BUFFER_KIND_FRAMEBUFFER) {
-        return XFER_BUFFER_ERR_INVALID_KIND;
+        return WASMOS_ERR_XFER_BUFFER_INVALID_KIND;
     }
     if (owner_context_id == 0u) {
-        return XFER_BUFFER_ERR_INVALID_CONTEXT;
+        return WASMOS_ERR_XFER_BUFFER_INVALID_CONTEXT;
     }
     if (minimum_size == 0u) {
-        return XFER_BUFFER_ERR_INVALID_SIZE;
+        return WASMOS_ERR_XFER_BUFFER_INVALID_SIZE;
     }
     if (registry_init_once() != 0) {
-        return XFER_BUFFER_ERR_INTERNAL;
+        return WASMOS_ERR_XFER_BUFFER_INTERNAL;
     }
     if (kind == BUFFER_KIND_FRAMEBUFFER) {
         /* The FRAMEBUFFER object always spans the whole hardware framebuffer. */
         size = framebuffer_capacity();
         if (size == 0u) {
-            return XFER_BUFFER_ERR_NO_BACKING;
+            return WASMOS_ERR_XFER_BUFFER_NO_BACKING;
         }
         if (minimum_size > size) {
-            return XFER_BUFFER_ERR_CAPACITY_EXCEEDED;
+            return WASMOS_ERR_XFER_BUFFER_CAPACITY_EXCEEDED;
         }
     } else {
         /* TRANSFER buffers are right-sized to the request, rounded up to a whole
          * number of pages (backing is always mapped page-by-page), bounded by
          * XFER_TRANSFER_MAX_SIZE. */
         if (minimum_size > XFER_TRANSFER_MAX_SIZE) {
-            return XFER_BUFFER_ERR_CAPACITY_EXCEEDED;
+            return WASMOS_ERR_XFER_BUFFER_CAPACITY_EXCEEDED;
         }
         size = (minimum_size + (XFER_PAGE_SIZE - 1u)) & ~(XFER_PAGE_SIZE - 1u);
     }
@@ -472,11 +472,11 @@ static int xfer_buffer_acquire_locked(uint32_t kind, uint32_t owner_context_id,
     /* Object backing is mapped as whole pages by callers, so the base must be
      * page-aligned. DMA device addresses (base + offset) may be sub-page. */
     if (phys_base == 0u || (phys_base & (XFER_PAGE_SIZE - 1u)) != 0u) {
-        return XFER_BUFFER_ERR_NO_BACKING;
+        return WASMOS_ERR_XFER_BUFFER_NO_BACKING;
     }
     slot = object_alloc();
     if (!slot) {
-        return XFER_BUFFER_ERR_INTERNAL;
+        return WASMOS_ERR_XFER_BUFFER_INTERNAL;
     }
     slot->active = 1u;
     slot->kind = kind;
@@ -493,7 +493,7 @@ static int xfer_buffer_acquire_locked(uint32_t kind, uint32_t owner_context_id,
     out_owner->buffer.buffer_id = slot->buffer_id;
     out_owner->buffer.size_bytes = size;
     out_owner->owner_context_id = owner_context_id;
-    return XFER_BUFFER_OK;
+    return WASMOS_ERR_NONE;
 }
 
 static int xfer_buffer_get_owned_locked(const xfer_buffer_t* buffer, uint32_t context_id,
@@ -501,42 +501,42 @@ static int xfer_buffer_get_owned_locked(const xfer_buffer_t* buffer, uint32_t co
     object_slot_t* slot = 0;
 
     if (!buffer || !out_owner) {
-        return XFER_BUFFER_ERR_NULL_ARG;
+        return WASMOS_ERR_XFER_BUFFER_NULL_ARG;
     }
     if (context_id == 0u) {
-        return XFER_BUFFER_ERR_INVALID_CONTEXT;
+        return WASMOS_ERR_XFER_BUFFER_INVALID_CONTEXT;
     }
     slot = object_find(buffer);
     if (!slot) {
-        return XFER_BUFFER_ERR_NOT_FOUND;
+        return WASMOS_ERR_XFER_BUFFER_NOT_FOUND;
     }
     if (slot->owner_context_id != context_id) {
-        return XFER_BUFFER_ERR_NOT_OWNER;
+        return WASMOS_ERR_XFER_BUFFER_NOT_OWNER;
     }
     out_owner->buffer.kind = slot->kind;
     out_owner->buffer.buffer_id = slot->buffer_id;
     out_owner->buffer.size_bytes = slot->size_bytes;
     out_owner->owner_context_id = context_id;
-    return XFER_BUFFER_OK;
+    return WASMOS_ERR_NONE;
 }
 
 static int xfer_buffer_release_owned_locked(const xfer_buffer_owner_t* owner) {
     object_slot_t* slot = 0;
 
     if (!owner) {
-        return XFER_BUFFER_ERR_NULL_ARG;
+        return WASMOS_ERR_XFER_BUFFER_NULL_ARG;
     }
     slot = object_find(&owner->buffer);
     if (!slot) {
-        return XFER_BUFFER_ERR_NOT_FOUND;
+        return WASMOS_ERR_XFER_BUFFER_NOT_FOUND;
     }
     if (slot->owner_context_id != owner->owner_context_id) {
-        return XFER_BUFFER_ERR_NOT_OWNER;
+        return WASMOS_ERR_XFER_BUFFER_NOT_OWNER;
     }
     if (slot->dma_active) {
         /* Owner-side DMA must be unmapped first (a device may still be reading
          * the object). Borrow-side DMA is force-cleared by the cascade below. */
-        return XFER_BUFFER_ERR_DMA_MAPPED;
+        return WASMOS_ERR_XFER_BUFFER_DMA_MAPPED;
     }
     /* Transient unborrow: destroying the object cascade-revokes every borrow of
      * it. The owner holds the lifecycle (owner-push), so release alone tears the
@@ -544,7 +544,7 @@ static int xfer_buffer_release_owned_locked(const xfer_buffer_owner_t* owner) {
     object_revoke_all_borrows(slot->buffer_id);
     object_free_backing(slot);
     slot->active = 0u;
-    return XFER_BUFFER_OK;
+    return WASMOS_ERR_NONE;
 }
 
 static int xfer_buffer_transfer_ownership_locked(const xfer_buffer_owner_t* current_owner,
@@ -552,29 +552,29 @@ static int xfer_buffer_transfer_ownership_locked(const xfer_buffer_owner_t* curr
     object_slot_t* slot = 0;
 
     if (!current_owner) {
-        return XFER_BUFFER_ERR_NULL_ARG;
+        return WASMOS_ERR_XFER_BUFFER_NULL_ARG;
     }
     slot = object_find(&current_owner->buffer);
     if (!slot) {
-        return XFER_BUFFER_ERR_NOT_FOUND;
+        return WASMOS_ERR_XFER_BUFFER_NOT_FOUND;
     }
     if (slot->owner_context_id != current_owner->owner_context_id) {
-        return XFER_BUFFER_ERR_NOT_OWNER;
+        return WASMOS_ERR_XFER_BUFFER_NOT_OWNER;
     }
     if (new_owner_context_id == 0u) {
-        return XFER_BUFFER_ERR_INVALID_CONTEXT;
+        return WASMOS_ERR_XFER_BUFFER_INVALID_CONTEXT;
     }
     if (new_owner_context_id == current_owner->owner_context_id) {
-        return XFER_BUFFER_ERR_SAME_OWNER;
+        return WASMOS_ERR_XFER_BUFFER_SAME_OWNER;
     }
     if (slot->kind != BUFFER_KIND_TRANSFER) {
-        return XFER_BUFFER_ERR_KIND_NOT_TRANSFERABLE;
+        return WASMOS_ERR_XFER_BUFFER_KIND_NOT_TRANSFERABLE;
     }
     if (object_has_active_borrow(slot->buffer_id)) {
-        return XFER_BUFFER_ERR_ACTIVE_BORROWS;
+        return WASMOS_ERR_XFER_BUFFER_ACTIVE_BORROWS;
     }
     slot->owner_context_id = new_owner_context_id;
-    return XFER_BUFFER_OK;
+    return WASMOS_ERR_NONE;
 }
 
 static int attach_borrow(object_slot_t* object, uint32_t parent_borrow_id,
@@ -583,7 +583,7 @@ static int attach_borrow(object_slot_t* object, uint32_t parent_borrow_id,
     borrow_slot_t* slot = borrow_alloc();
 
     if (!slot) {
-        return XFER_BUFFER_ERR_INTERNAL;
+        return WASMOS_ERR_XFER_BUFFER_INTERNAL;
     }
     slot->active = 1u;
     slot->borrow_id = g_next_borrow_id++;
@@ -605,7 +605,7 @@ static int attach_borrow(object_slot_t* object, uint32_t parent_borrow_id,
     out_borrow->borrower_context_id = borrower_context_id;
     out_borrow->flags = flags;
     out_borrow->borrow_id = slot->borrow_id;
-    return XFER_BUFFER_OK;
+    return WASMOS_ERR_NONE;
 }
 
 static int xfer_buffer_borrow_locked(const xfer_buffer_owner_t* owner, uint32_t borrower_context_id,
@@ -613,36 +613,36 @@ static int xfer_buffer_borrow_locked(const xfer_buffer_owner_t* owner, uint32_t 
     object_slot_t* slot = 0;
 
     if (!owner || !out_borrow) {
-        return XFER_BUFFER_ERR_NULL_ARG;
+        return WASMOS_ERR_XFER_BUFFER_NULL_ARG;
     }
     if (borrower_context_id == 0u) {
-        return XFER_BUFFER_ERR_INVALID_CONTEXT;
+        return WASMOS_ERR_XFER_BUFFER_INVALID_CONTEXT;
     }
     if (!valid_flags(flags)) {
-        return XFER_BUFFER_ERR_INVALID_FLAGS;
+        return WASMOS_ERR_XFER_BUFFER_INVALID_FLAGS;
     }
     slot = object_find(&owner->buffer);
     if (!slot) {
-        return XFER_BUFFER_ERR_NOT_FOUND;
+        return WASMOS_ERR_XFER_BUFFER_NOT_FOUND;
     }
     if (slot->owner_context_id != owner->owner_context_id) {
-        return XFER_BUFFER_ERR_NOT_OWNER;
+        return WASMOS_ERR_XFER_BUFFER_NOT_OWNER;
     }
     if (slot->kind == BUFFER_KIND_FRAMEBUFFER) {
         /* Framebuffer is local-only: only the owner may borrow it, and only one
          * borrow may be active at a time. */
         if (borrower_context_id != slot->owner_context_id) {
-            return XFER_BUFFER_ERR_KIND_NOT_BORROWABLE;
+            return WASMOS_ERR_XFER_BUFFER_KIND_NOT_BORROWABLE;
         }
     } else {
         /* A transfer object may not be borrowed by its own owner. */
         if (borrower_context_id == slot->owner_context_id) {
-            return XFER_BUFFER_ERR_SELF_BORROW;
+            return WASMOS_ERR_XFER_BUFFER_SELF_BORROW;
         }
     }
     /* A borrower holds at most one active borrow per object. */
     if (borrow_find_for(slot->buffer_id, borrower_context_id)) {
-        return XFER_BUFFER_ERR_ALREADY_BORROWED;
+        return WASMOS_ERR_XFER_BUFFER_ALREADY_BORROWED;
     }
     return attach_borrow(slot, 0u, slot->owner_context_id, borrower_context_id, flags, out_borrow);
 }
@@ -654,31 +654,31 @@ static int xfer_buffer_reborrow_locked(const xfer_buffer_borrow_t* upstream,
     object_slot_t* object = 0;
 
     if (!upstream || !out_borrow) {
-        return XFER_BUFFER_ERR_NULL_ARG;
+        return WASMOS_ERR_XFER_BUFFER_NULL_ARG;
     }
     if (borrower_context_id == 0u) {
-        return XFER_BUFFER_ERR_INVALID_CONTEXT;
+        return WASMOS_ERR_XFER_BUFFER_INVALID_CONTEXT;
     }
     if (!valid_flags(flags)) {
-        return XFER_BUFFER_ERR_INVALID_FLAGS;
+        return WASMOS_ERR_XFER_BUFFER_INVALID_FLAGS;
     }
     up = borrow_find(upstream->borrow_id);
     if (!up) {
-        return XFER_BUFFER_ERR_INACTIVE_BORROW;
+        return WASMOS_ERR_XFER_BUFFER_INACTIVE_BORROW;
     }
     if ((flags & up->flags) != flags) {
-        return XFER_BUFFER_ERR_RIGHTS_AMPLIFICATION;
+        return WASMOS_ERR_XFER_BUFFER_RIGHTS_AMPLIFICATION;
     }
     if (up->kind == BUFFER_KIND_FRAMEBUFFER) {
-        return XFER_BUFFER_ERR_NOT_REBORROWABLE;
+        return WASMOS_ERR_XFER_BUFFER_NOT_REBORROWABLE;
     }
     object = object_find_by_id(up->buffer_id);
     if (!object) {
-        return XFER_BUFFER_ERR_NOT_FOUND;
+        return WASMOS_ERR_XFER_BUFFER_NOT_FOUND;
     }
     /* A borrower holds at most one active borrow per object. */
     if (borrow_find_for(up->buffer_id, borrower_context_id)) {
-        return XFER_BUFFER_ERR_ALREADY_BORROWED;
+        return WASMOS_ERR_XFER_BUFFER_ALREADY_BORROWED;
     }
     return attach_borrow(object, up->borrow_id, up->borrower_context_id, borrower_context_id, flags,
                          out_borrow);
@@ -688,21 +688,21 @@ static int xfer_buffer_unborrow_locked(const xfer_buffer_borrow_t* borrow) {
     borrow_slot_t* slot = 0;
 
     if (!borrow) {
-        return XFER_BUFFER_ERR_NULL_ARG;
+        return WASMOS_ERR_XFER_BUFFER_NULL_ARG;
     }
     slot = borrow_find(borrow->borrow_id);
     if (!slot) {
-        return XFER_BUFFER_ERR_INACTIVE_BORROW;
+        return WASMOS_ERR_XFER_BUFFER_INACTIVE_BORROW;
     }
     /* The DMA window is the mapper's transient, operational concern (scoped to
      * the device access); a borrow can't be torn down while its DMA is still
      * mapped — the mapper must unmap it first. Buffer/borrow lifecycle (this
      * unborrow) is separate and the lender's. */
     if (slot->dma_active) {
-        return XFER_BUFFER_ERR_DMA_MAPPED;
+        return WASMOS_ERR_XFER_BUFFER_DMA_MAPPED;
     }
     borrow_revoke_tree(slot->borrow_id);
-    return XFER_BUFFER_OK;
+    return WASMOS_ERR_NONE;
 }
 
 /* Resolve a borrow binding for its GRANTOR (owner-push): authorizes the context
@@ -716,24 +716,24 @@ static int xfer_buffer_get_lent_locked(uint32_t borrow_id, uint32_t lender_conte
     object_slot_t* object = 0;
 
     if (!out_borrow) {
-        return XFER_BUFFER_ERR_NULL_ARG;
+        return WASMOS_ERR_XFER_BUFFER_NULL_ARG;
     }
     if (lender_context_id == 0u) {
-        return XFER_BUFFER_ERR_INVALID_CONTEXT;
+        return WASMOS_ERR_XFER_BUFFER_INVALID_CONTEXT;
     }
     if (borrow_id == 0u) {
-        return XFER_BUFFER_ERR_INACTIVE_BORROW;
+        return WASMOS_ERR_XFER_BUFFER_INACTIVE_BORROW;
     }
     slot = borrow_find(borrow_id);
     if (!slot) {
-        return XFER_BUFFER_ERR_INACTIVE_BORROW;
+        return WASMOS_ERR_XFER_BUFFER_INACTIVE_BORROW;
     }
     if (slot->lender_context_id != lender_context_id) {
-        return XFER_BUFFER_ERR_NO_ACCESS;
+        return WASMOS_ERR_XFER_BUFFER_NO_ACCESS;
     }
     object = object_find_by_id(slot->buffer_id);
     if (!object) {
-        return XFER_BUFFER_ERR_NOT_FOUND;
+        return WASMOS_ERR_XFER_BUFFER_NOT_FOUND;
     }
     out_borrow->buffer.kind = slot->kind;
     out_borrow->buffer.buffer_id = slot->buffer_id;
@@ -742,7 +742,7 @@ static int xfer_buffer_get_lent_locked(uint32_t borrow_id, uint32_t lender_conte
     out_borrow->borrower_context_id = slot->borrower_context_id;
     out_borrow->flags = slot->flags;
     out_borrow->borrow_id = slot->borrow_id;
-    return XFER_BUFFER_OK;
+    return WASMOS_ERR_NONE;
 }
 
 static int xfer_buffer_can_access_locked(const xfer_buffer_t* buffer, uint32_t accessor_context_id,
@@ -785,24 +785,24 @@ static int xfer_buffer_dma_map_owned_locked(const xfer_buffer_owner_t* owner, ui
     object_slot_t* slot = 0;
 
     if (!owner || !out_mapping) {
-        return XFER_BUFFER_ERR_NULL_ARG;
+        return WASMOS_ERR_XFER_BUFFER_NULL_ARG;
     }
     slot = object_find(&owner->buffer);
     if (!slot) {
-        return XFER_BUFFER_ERR_NOT_FOUND;
+        return WASMOS_ERR_XFER_BUFFER_NOT_FOUND;
     }
     if (slot->owner_context_id != owner->owner_context_id) {
-        return XFER_BUFFER_ERR_NOT_OWNER;
+        return WASMOS_ERR_XFER_BUFFER_NOT_OWNER;
     }
     if (!range_within(slot->size_bytes, offset, length)) {
-        return XFER_BUFFER_ERR_RANGE;
+        return WASMOS_ERR_XFER_BUFFER_RANGE;
     }
     /* Owner has implicit read/write, so any nonzero direction is permitted. */
     if (direction_flags == 0u) {
-        return XFER_BUFFER_ERR_DIRECTION;
+        return WASMOS_ERR_XFER_BUFFER_DIRECTION;
     }
     if (slot->dma_active) {
-        return XFER_BUFFER_ERR_DMA_ACTIVE;
+        return WASMOS_ERR_XFER_BUFFER_DMA_ACTIVE;
     }
     slot->dma_active = 1u;
     slot->dma_offset = offset;
@@ -820,7 +820,7 @@ static int xfer_buffer_dma_map_owned_locked(const xfer_buffer_owner_t* owner, ui
     out_mapping->device_addr = slot->phys_base + (uint64_t)offset;
     out_mapping->attached_via_borrow = 0u;
     out_mapping->active = 1u;
-    return XFER_BUFFER_OK;
+    return WASMOS_ERR_NONE;
 }
 
 static int xfer_buffer_dma_map_borrow_locked(const xfer_buffer_borrow_t* borrow, uint32_t offset,
@@ -830,24 +830,24 @@ static int xfer_buffer_dma_map_borrow_locked(const xfer_buffer_borrow_t* borrow,
     object_slot_t* object = 0;
 
     if (!borrow || !out_mapping) {
-        return XFER_BUFFER_ERR_NULL_ARG;
+        return WASMOS_ERR_XFER_BUFFER_NULL_ARG;
     }
     slot = borrow_find(borrow->borrow_id);
     if (!slot) {
-        return XFER_BUFFER_ERR_INACTIVE_BORROW;
+        return WASMOS_ERR_XFER_BUFFER_INACTIVE_BORROW;
     }
     object = object_find_by_id(slot->buffer_id);
     if (!object) {
-        return XFER_BUFFER_ERR_NOT_FOUND;
+        return WASMOS_ERR_XFER_BUFFER_NOT_FOUND;
     }
     if (!range_within(object->size_bytes, offset, length)) {
-        return XFER_BUFFER_ERR_RANGE;
+        return WASMOS_ERR_XFER_BUFFER_RANGE;
     }
     if (!dma_direction_allowed(slot->flags, direction_flags)) {
-        return XFER_BUFFER_ERR_DIRECTION;
+        return WASMOS_ERR_XFER_BUFFER_DIRECTION;
     }
     if (slot->dma_active) {
-        return XFER_BUFFER_ERR_DMA_ACTIVE;
+        return WASMOS_ERR_XFER_BUFFER_DMA_ACTIVE;
     }
     slot->dma_active = 1u;
     slot->dma_offset = offset;
@@ -865,29 +865,29 @@ static int xfer_buffer_dma_map_borrow_locked(const xfer_buffer_borrow_t* borrow,
     out_mapping->device_addr = object->phys_base + (uint64_t)offset;
     out_mapping->attached_via_borrow = 1u;
     out_mapping->active = 1u;
-    return XFER_BUFFER_OK;
+    return WASMOS_ERR_NONE;
 }
 
 static int xfer_buffer_dma_sync_locked(const xfer_buffer_dma_mapping_t* mapping, uint32_t offset,
                                        uint32_t length) {
     if (!mapping) {
-        return XFER_BUFFER_ERR_NULL_ARG;
+        return WASMOS_ERR_XFER_BUFFER_NULL_ARG;
     }
     if (!mapping->active) {
-        return XFER_BUFFER_ERR_INACTIVE_MAPPING;
+        return WASMOS_ERR_XFER_BUFFER_INACTIVE_MAPPING;
     }
     if (!range_within(mapping->length, offset, length)) {
-        return XFER_BUFFER_ERR_RANGE;
+        return WASMOS_ERR_XFER_BUFFER_RANGE;
     }
-    return XFER_BUFFER_OK;
+    return WASMOS_ERR_NONE;
 }
 
 static int xfer_buffer_dma_unmap_locked(xfer_buffer_dma_mapping_t* mapping) {
     if (!mapping) {
-        return XFER_BUFFER_ERR_NULL_ARG;
+        return WASMOS_ERR_XFER_BUFFER_NULL_ARG;
     }
     if (!mapping->active) {
-        return XFER_BUFFER_ERR_INACTIVE_MAPPING;
+        return WASMOS_ERR_XFER_BUFFER_INACTIVE_MAPPING;
     }
     if (mapping->attached_via_borrow) {
         borrow_slot_t* slot = borrow_find(mapping->borrow_id);
@@ -901,7 +901,7 @@ static int xfer_buffer_dma_unmap_locked(xfer_buffer_dma_mapping_t* mapping) {
         }
     }
     mapping->active = 0u;
-    return XFER_BUFFER_OK;
+    return WASMOS_ERR_NONE;
 }
 
 static void xfer_buffer_drop_context_locked(uint32_t context_id) {

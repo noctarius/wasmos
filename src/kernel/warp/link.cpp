@@ -658,33 +658,33 @@ static uint32_t warp_xfer_buffer_read(uint32_t buffer_id, uint32_t ptr_off, uint
         return 0;
     uint32_t context_id = 0;
     if ((int32_t)buffer_id <= 0)
-        return (uint32_t)XFER_BUFFER_ERR_NOT_FOUND;
+        return (uint32_t)WASMOS_ERR_XFER_BUFFER_NOT_FOUND;
     if (warp_current_context_id(&context_id) != 0)
-        return (uint32_t)XFER_BUFFER_ERR_INVALID_CONTEXT;
+        return (uint32_t)WASMOS_ERR_XFER_BUFFER_INVALID_CONTEXT;
     /* Look up the object the caller named; describe confirms owner-or-borrower
      * access, can_access confirms the READ right for this operation. */
     xfer_buffer_t desc = {};
     int rc = xfer_buffer_describe(buffer_id, BUFFER_KIND_TRANSFER, context_id, &desc);
-    if (rc != XFER_BUFFER_OK)
+    if (rc != WASMOS_ERR_NONE)
         return (uint32_t)rc;
     if (!xfer_buffer_can_access(&desc, context_id, BUFFER_BORROW_READ))
-        return (uint32_t)XFER_BUFFER_ERR_NO_ACCESS;
+        return (uint32_t)WASMOS_ERR_XFER_BUFFER_NO_ACCESS;
     if (offset + len > desc.size_bytes)
-        return (uint32_t)XFER_BUFFER_ERR_RANGE;
+        return (uint32_t)WASMOS_ERR_XFER_BUFFER_RANGE;
     uint8_t* wasm_ptr = warp_mem(ctx, ptr_off, len);
     if (!wasm_ptr)
-        return (uint32_t)XFER_BUFFER_ERR_RANGE;
+        return (uint32_t)WASMOS_ERR_XFER_BUFFER_RANGE;
     uint64_t phys = xfer_buffer_object_phys(&desc);
     if (!phys)
-        return (uint32_t)XFER_BUFFER_ERR_NOT_FOUND;
+        return (uint32_t)WASMOS_ERR_XFER_BUFFER_NOT_FOUND;
     const uint8_t* src =
         reinterpret_cast<const uint8_t*>(uintptr_t(phys | KERNEL_HIGHER_HALF_BASE));
     __builtin_memcpy(wasm_ptr, src + offset, len);
 #ifdef WASMOS_WASM_RUNTIME_WARP
     if (warp_ring3_sync_user_range(ctx, ptr_off, len) != 0)
-        return (uint32_t)XFER_BUFFER_ERR_RANGE;
+        return (uint32_t)WASMOS_ERR_XFER_BUFFER_RANGE;
 #endif
-    return (uint32_t)XFER_BUFFER_OK;
+    return (uint32_t)WASMOS_ERR_NONE;
 }
 
 static uint32_t warp_xfer_buffer_write(uint32_t buffer_id, uint32_t ptr_off, uint32_t len,
@@ -694,26 +694,26 @@ static uint32_t warp_xfer_buffer_write(uint32_t buffer_id, uint32_t ptr_off, uin
         return 0;
     uint32_t context_id = 0;
     if ((int32_t)buffer_id <= 0)
-        return (uint32_t)XFER_BUFFER_ERR_NOT_FOUND;
+        return (uint32_t)WASMOS_ERR_XFER_BUFFER_NOT_FOUND;
     if (warp_current_context_id(&context_id) != 0)
-        return (uint32_t)XFER_BUFFER_ERR_INVALID_CONTEXT;
+        return (uint32_t)WASMOS_ERR_XFER_BUFFER_INVALID_CONTEXT;
     xfer_buffer_t desc = {};
     int rc = xfer_buffer_describe(buffer_id, BUFFER_KIND_TRANSFER, context_id, &desc);
-    if (rc != XFER_BUFFER_OK)
+    if (rc != WASMOS_ERR_NONE)
         return (uint32_t)rc;
     if (!xfer_buffer_can_access(&desc, context_id, BUFFER_BORROW_WRITE))
-        return (uint32_t)XFER_BUFFER_ERR_NO_ACCESS;
+        return (uint32_t)WASMOS_ERR_XFER_BUFFER_NO_ACCESS;
     if (offset + len > desc.size_bytes)
-        return (uint32_t)XFER_BUFFER_ERR_RANGE;
+        return (uint32_t)WASMOS_ERR_XFER_BUFFER_RANGE;
     uint8_t* wasm_ptr = warp_mem(ctx, ptr_off, len);
     if (!wasm_ptr)
-        return (uint32_t)XFER_BUFFER_ERR_RANGE;
+        return (uint32_t)WASMOS_ERR_XFER_BUFFER_RANGE;
     uint64_t phys = xfer_buffer_object_phys(&desc);
     if (!phys)
-        return (uint32_t)XFER_BUFFER_ERR_NOT_FOUND;
+        return (uint32_t)WASMOS_ERR_XFER_BUFFER_NOT_FOUND;
     uint8_t* dst = reinterpret_cast<uint8_t*>(uintptr_t(phys | KERNEL_HIGHER_HALF_BASE));
     __builtin_memcpy(dst + offset, wasm_ptr, len);
-    return (uint32_t)XFER_BUFFER_OK;
+    return (uint32_t)WASMOS_ERR_NONE;
 }
 
 // ---------------------------------------------------------------------------
@@ -735,16 +735,16 @@ static uint32_t warp_buffer_acquire(uint32_t kind, uint32_t minimum_size, void* 
     uint32_t context_id = 0;
     process_t* proc = process_get(process_current_pid());
     if (kind != (uint32_t)BUFFER_KIND_TRANSFER)
-        return (uint32_t)XFER_BUFFER_ERR_INVALID_KIND;
+        return (uint32_t)WASMOS_ERR_XFER_BUFFER_INVALID_KIND;
     if ((int32_t)minimum_size <= 0)
-        return (uint32_t)XFER_BUFFER_ERR_INVALID_SIZE;
+        return (uint32_t)WASMOS_ERR_XFER_BUFFER_INVALID_SIZE;
     if (warp_current_context_id(&context_id) != 0)
-        return (uint32_t)XFER_BUFFER_ERR_INVALID_CONTEXT;
+        return (uint32_t)WASMOS_ERR_XFER_BUFFER_INVALID_CONTEXT;
     if (!warp_buffer_role_allowed(context_id, proc))
-        return (uint32_t)XFER_BUFFER_ERR_NO_ACCESS;
+        return (uint32_t)WASMOS_ERR_XFER_BUFFER_NO_ACCESS;
     xfer_buffer_owner_t owner;
     int rc = xfer_buffer_acquire(kind, context_id, minimum_size, &owner);
-    if (rc != XFER_BUFFER_OK)
+    if (rc != WASMOS_ERR_NONE)
         return (uint32_t)rc;
     return owner.buffer.buffer_id;
 }
@@ -758,25 +758,25 @@ static uint32_t warp_buffer_borrow(uint32_t kind, uint32_t grantee_ep, uint32_t 
     uint32_t context_id = 0, grantee_context = 0;
     process_t* proc = process_get(process_current_pid());
     if (kind != (uint32_t)BUFFER_KIND_TRANSFER)
-        return (uint32_t)XFER_BUFFER_ERR_INVALID_KIND;
+        return (uint32_t)WASMOS_ERR_XFER_BUFFER_INVALID_KIND;
     if ((int32_t)buffer_id <= 0)
-        return (uint32_t)XFER_BUFFER_ERR_NOT_FOUND;
+        return (uint32_t)WASMOS_ERR_XFER_BUFFER_NOT_FOUND;
     if (flags == 0 || (flags & ~0x3u) != 0)
-        return (uint32_t)XFER_BUFFER_ERR_INVALID_FLAGS;
+        return (uint32_t)WASMOS_ERR_XFER_BUFFER_INVALID_FLAGS;
     if (warp_current_context_id(&context_id) != 0)
-        return (uint32_t)XFER_BUFFER_ERR_INVALID_CONTEXT;
+        return (uint32_t)WASMOS_ERR_XFER_BUFFER_INVALID_CONTEXT;
     if (!warp_buffer_role_allowed(context_id, proc))
-        return (uint32_t)XFER_BUFFER_ERR_NO_ACCESS;
+        return (uint32_t)WASMOS_ERR_XFER_BUFFER_NO_ACCESS;
     if (ipc_endpoint_owner(grantee_ep, &grantee_context) != IPC_OK || grantee_context == 0)
-        return (uint32_t)XFER_BUFFER_ERR_INVALID_CONTEXT;
+        return (uint32_t)WASMOS_ERR_XFER_BUFFER_INVALID_CONTEXT;
     xfer_buffer_t key = {kind, buffer_id, 0u};
     xfer_buffer_owner_t owner;
     int rc = xfer_buffer_get_owned(&key, context_id, &owner); /* caller must be owner */
-    if (rc != XFER_BUFFER_OK)
+    if (rc != WASMOS_ERR_NONE)
         return (uint32_t)rc;
     xfer_buffer_borrow_t out;
     rc = xfer_buffer_borrow(&owner, grantee_context, flags, &out);
-    if (rc != XFER_BUFFER_OK)
+    if (rc != WASMOS_ERR_NONE)
         return (uint32_t)rc;
     return out.borrow_id;
 }
@@ -789,23 +789,23 @@ static uint32_t warp_buffer_reborrow(uint32_t kind, uint32_t grantee_ep, uint32_
     (void)ctx_;
     uint32_t context_id = 0, grantee_context = 0;
     if (kind != (uint32_t)BUFFER_KIND_TRANSFER)
-        return (uint32_t)XFER_BUFFER_ERR_INVALID_KIND;
+        return (uint32_t)WASMOS_ERR_XFER_BUFFER_INVALID_KIND;
     if ((int32_t)borrow_id <= 0)
-        return (uint32_t)XFER_BUFFER_ERR_INACTIVE_BORROW;
+        return (uint32_t)WASMOS_ERR_XFER_BUFFER_INACTIVE_BORROW;
     if (flags == 0 || (flags & ~0x3u) != 0)
-        return (uint32_t)XFER_BUFFER_ERR_INVALID_FLAGS;
+        return (uint32_t)WASMOS_ERR_XFER_BUFFER_INVALID_FLAGS;
     if (warp_current_context_id(&context_id) != 0)
-        return (uint32_t)XFER_BUFFER_ERR_INVALID_CONTEXT;
+        return (uint32_t)WASMOS_ERR_XFER_BUFFER_INVALID_CONTEXT;
     if (ipc_endpoint_owner(grantee_ep, &grantee_context) != IPC_OK || grantee_context == 0)
-        return (uint32_t)XFER_BUFFER_ERR_INVALID_CONTEXT;
+        return (uint32_t)WASMOS_ERR_XFER_BUFFER_INVALID_CONTEXT;
     xfer_buffer_borrow_t upstream;
     int rc =
         xfer_buffer_get_borrowed(borrow_id, context_id, &upstream, 0); /* caller must be borrower */
-    if (rc != XFER_BUFFER_OK)
+    if (rc != WASMOS_ERR_NONE)
         return (uint32_t)rc;
     xfer_buffer_borrow_t out;
     rc = xfer_buffer_reborrow(&upstream, grantee_context, flags, &out);
-    if (rc != XFER_BUFFER_OK)
+    if (rc != WASMOS_ERR_NONE)
         return (uint32_t)rc;
     return out.borrow_id;
 }
@@ -815,17 +815,17 @@ static uint32_t warp_buffer_release(uint32_t kind, uint32_t buffer_id, void* ctx
     uint32_t context_id = 0;
     process_t* proc = process_get(process_current_pid());
     if (kind != (uint32_t)BUFFER_KIND_TRANSFER)
-        return (uint32_t)XFER_BUFFER_ERR_INVALID_KIND;
+        return (uint32_t)WASMOS_ERR_XFER_BUFFER_INVALID_KIND;
     if ((int32_t)buffer_id <= 0)
-        return (uint32_t)XFER_BUFFER_ERR_NOT_FOUND;
+        return (uint32_t)WASMOS_ERR_XFER_BUFFER_NOT_FOUND;
     if (warp_current_context_id(&context_id) != 0)
-        return (uint32_t)XFER_BUFFER_ERR_INVALID_CONTEXT;
+        return (uint32_t)WASMOS_ERR_XFER_BUFFER_INVALID_CONTEXT;
     if (!warp_buffer_role_allowed(context_id, proc))
-        return (uint32_t)XFER_BUFFER_ERR_NO_ACCESS;
+        return (uint32_t)WASMOS_ERR_XFER_BUFFER_NO_ACCESS;
     xfer_buffer_t key = {kind, buffer_id, 0u};
     xfer_buffer_owner_t owner;
     int rc = xfer_buffer_get_owned(&key, context_id, &owner);
-    if (rc != XFER_BUFFER_OK)
+    if (rc != WASMOS_ERR_NONE)
         return (uint32_t)rc;
     return (uint32_t)xfer_buffer_release_owned(&owner);
 }
@@ -836,12 +836,12 @@ static uint32_t warp_buffer_unborrow(uint32_t borrow_id, void* ctx_) {
     (void)ctx_;
     uint32_t context_id = 0;
     if ((int32_t)borrow_id <= 0)
-        return (uint32_t)XFER_BUFFER_ERR_INACTIVE_BORROW;
+        return (uint32_t)WASMOS_ERR_XFER_BUFFER_INACTIVE_BORROW;
     if (warp_current_context_id(&context_id) != 0)
-        return (uint32_t)XFER_BUFFER_ERR_INVALID_CONTEXT;
+        return (uint32_t)WASMOS_ERR_XFER_BUFFER_INVALID_CONTEXT;
     xfer_buffer_borrow_t borrow;
     int rc = xfer_buffer_get_lent(borrow_id, context_id, &borrow);
-    if (rc != XFER_BUFFER_OK)
+    if (rc != WASMOS_ERR_NONE)
         return (uint32_t)rc;
     return (uint32_t)xfer_buffer_unborrow(&borrow);
 }
@@ -1217,10 +1217,10 @@ static uint32_t warp_dma_map_borrow(uint32_t borrow_id, uint32_t offset, uint32_
     /* Resolve the caller's borrow handle; dma_map_borrow enforces
      * direction ⊆ borrow rights and the range check. */
     xfer_buffer_borrow_t borrow;
-    if (xfer_buffer_get_borrowed(borrow_id, context_id, &borrow, nullptr) != XFER_BUFFER_OK)
+    if (xfer_buffer_get_borrowed(borrow_id, context_id, &borrow, nullptr) != WASMOS_ERR_NONE)
         return (uint32_t)WASMOS_DMA_STATUS_DENY;
     xfer_buffer_dma_mapping_t mapping;
-    if (xfer_buffer_dma_map_borrow(&borrow, offset, length, flags, &mapping) != XFER_BUFFER_OK)
+    if (xfer_buffer_dma_map_borrow(&borrow, offset, length, flags, &mapping) != WASMOS_ERR_NONE)
         return (uint32_t)WASMOS_DMA_STATUS_DENY;
     if (mapping.device_addr > 0x7FFFFFFFULL) {
         (void)xfer_buffer_dma_unmap(&mapping);
@@ -1240,9 +1240,9 @@ static uint32_t warp_dma_sync_borrow(uint32_t borrow_id, uint32_t offset, uint32
         return (uint32_t)WASMOS_DMA_STATUS_DENY;
     xfer_buffer_borrow_t borrow;
     xfer_buffer_dma_mapping_t mapping;
-    if (xfer_buffer_get_borrowed(borrow_id, context_id, &borrow, &mapping) != XFER_BUFFER_OK)
+    if (xfer_buffer_get_borrowed(borrow_id, context_id, &borrow, &mapping) != WASMOS_ERR_NONE)
         return (uint32_t)WASMOS_DMA_STATUS_DENY;
-    if (xfer_buffer_dma_sync(&mapping, offset, length) != XFER_BUFFER_OK)
+    if (xfer_buffer_dma_sync(&mapping, offset, length) != WASMOS_ERR_NONE)
         return (uint32_t)WASMOS_DMA_STATUS_DENY;
     return (uint32_t)WASMOS_DMA_STATUS_OK;
 }
@@ -1256,9 +1256,9 @@ static uint32_t warp_dma_unmap_borrow(uint32_t borrow_id, void* ctx_) {
         return (uint32_t)WASMOS_DMA_STATUS_DENY;
     xfer_buffer_borrow_t borrow;
     xfer_buffer_dma_mapping_t mapping;
-    if (xfer_buffer_get_borrowed(borrow_id, context_id, &borrow, &mapping) != XFER_BUFFER_OK)
+    if (xfer_buffer_get_borrowed(borrow_id, context_id, &borrow, &mapping) != WASMOS_ERR_NONE)
         return (uint32_t)WASMOS_DMA_STATUS_DENY;
-    if (xfer_buffer_dma_unmap(&mapping) != XFER_BUFFER_OK)
+    if (xfer_buffer_dma_unmap(&mapping) != WASMOS_ERR_NONE)
         return (uint32_t)WASMOS_DMA_STATUS_DENY;
     return (uint32_t)WASMOS_DMA_STATUS_OK;
 }
@@ -2250,10 +2250,10 @@ static uint32_t warp_xfer_buffer_map(uint32_t buffer_id, void* ctx_) {
     if (warp_current_context_id(&context_id) != 0)
         return (uint32_t)-1;
     xfer_buffer_t buf;
-    if (xfer_buffer_describe(buffer_id, BUFFER_KIND_TRANSFER, context_id, &buf) != XFER_BUFFER_OK)
+    if (xfer_buffer_describe(buffer_id, BUFFER_KIND_TRANSFER, context_id, &buf) != WASMOS_ERR_NONE)
         return (uint32_t)-1;
     xfer_buffer_owner_t owner;
-    if (xfer_buffer_get_owned(&buf, context_id, &owner) != XFER_BUFFER_OK)
+    if (xfer_buffer_get_owned(&buf, context_id, &owner) != WASMOS_ERR_NONE)
         return (uint32_t)-1; /* the overlay is the owner's private in-place view */
     uint64_t phys_base = xfer_buffer_object_phys(&buf);
     if (phys_base == 0 || (phys_base & 0xFFFULL) != 0 || buf.size_bytes == 0)
@@ -2310,7 +2310,8 @@ static uint32_t warp_xfer_buffer_unmap(uint32_t buffer_id, void* ctx_) {
     uint32_t context_id = 0;
     xfer_buffer_t buf;
     if (warp_current_context_id(&context_id) == 0 &&
-        xfer_buffer_describe(buffer_id, BUFFER_KIND_TRANSFER, context_id, &buf) == XFER_BUFFER_OK) {
+        xfer_buffer_describe(buffer_id, BUFFER_KIND_TRANSFER, context_id, &buf) ==
+            WASMOS_ERR_NONE) {
         uint64_t phys_base = xfer_buffer_object_phys(&buf);
         if (phys_base != 0 && (phys_base & 0xFFFULL) == 0) {
             pfa_free_pages(phys_base, pages);

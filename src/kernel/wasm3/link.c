@@ -733,19 +733,19 @@ static int32_t wasm_buffer_acquire_impl(int32_t kind, int32_t minimum_size) {
     int rc = 0;
 
     if (kind != (int32_t)BUFFER_KIND_TRANSFER) {
-        return XFER_BUFFER_ERR_INVALID_KIND;
+        return WASMOS_ERR_XFER_BUFFER_INVALID_KIND;
     }
     if (minimum_size <= 0) {
-        return XFER_BUFFER_ERR_INVALID_SIZE;
+        return WASMOS_ERR_XFER_BUFFER_INVALID_SIZE;
     }
     if (current_process_context(&context_id) != 0) {
-        return XFER_BUFFER_ERR_INVALID_CONTEXT;
+        return WASMOS_ERR_XFER_BUFFER_INVALID_CONTEXT;
     }
     if (!wasm_buffer_role_allowed(context_id, proc)) {
-        return XFER_BUFFER_ERR_NO_ACCESS;
+        return WASMOS_ERR_XFER_BUFFER_NO_ACCESS;
     }
     rc = xfer_buffer_acquire((uint32_t)kind, context_id, (uint32_t)minimum_size, &owner);
-    if (rc != XFER_BUFFER_OK) {
+    if (rc != WASMOS_ERR_NONE) {
         return rc;
     }
     return (int32_t)owner.buffer.buffer_id;
@@ -774,35 +774,35 @@ static int32_t wasm_buffer_borrow_impl(int32_t kind, int32_t grantee_endpoint, i
     int rc = 0;
 
     if (kind != (int32_t)BUFFER_KIND_TRANSFER) {
-        return XFER_BUFFER_ERR_INVALID_KIND;
+        return WASMOS_ERR_XFER_BUFFER_INVALID_KIND;
     }
     if (buffer_id <= 0) {
-        return XFER_BUFFER_ERR_NOT_FOUND;
+        return WASMOS_ERR_XFER_BUFFER_NOT_FOUND;
     }
     if (flags <= 0 || (flags & ~0x3) != 0) {
-        return XFER_BUFFER_ERR_INVALID_FLAGS;
+        return WASMOS_ERR_XFER_BUFFER_INVALID_FLAGS;
     }
     if (current_process_context(&context_id) != 0) {
-        return XFER_BUFFER_ERR_INVALID_CONTEXT;
+        return WASMOS_ERR_XFER_BUFFER_INVALID_CONTEXT;
     }
     if (!wasm_buffer_role_allowed(context_id, proc)) {
-        return XFER_BUFFER_ERR_NO_ACCESS;
+        return WASMOS_ERR_XFER_BUFFER_NO_ACCESS;
     }
     /* Owner-driven grant: the caller must own buffer_id and names the grantee by
      * an endpoint it owns. This is where access rights are assigned. */
     if (ipc_endpoint_owner((uint32_t)grantee_endpoint, &grantee_context) != IPC_OK ||
         grantee_context == 0) {
-        return XFER_BUFFER_ERR_INVALID_CONTEXT;
+        return WASMOS_ERR_XFER_BUFFER_INVALID_CONTEXT;
     }
     key.kind = (uint32_t)kind;
     key.buffer_id = (uint32_t)buffer_id;
     key.size_bytes = 0u;
     rc = xfer_buffer_get_owned(&key, context_id, &owner); /* caller must be owner */
-    if (rc != XFER_BUFFER_OK) {
+    if (rc != WASMOS_ERR_NONE) {
         return rc;
     }
     rc = xfer_buffer_borrow(&owner, grantee_context, (uint32_t)flags, &out);
-    if (rc != XFER_BUFFER_OK) {
+    if (rc != WASMOS_ERR_NONE) {
         return rc;
     }
     return (int32_t)out.borrow_id;
@@ -821,28 +821,28 @@ static int32_t wasm_buffer_reborrow_impl(int32_t kind, int32_t grantee_endpoint,
     int rc = 0;
 
     if (kind != (int32_t)BUFFER_KIND_TRANSFER) {
-        return XFER_BUFFER_ERR_INVALID_KIND;
+        return WASMOS_ERR_XFER_BUFFER_INVALID_KIND;
     }
     if (borrow_id <= 0) {
-        return XFER_BUFFER_ERR_INACTIVE_BORROW;
+        return WASMOS_ERR_XFER_BUFFER_INACTIVE_BORROW;
     }
     if (flags <= 0 || (flags & ~0x3) != 0) {
-        return XFER_BUFFER_ERR_INVALID_FLAGS;
+        return WASMOS_ERR_XFER_BUFFER_INVALID_FLAGS;
     }
     if (current_process_context(&context_id) != 0) {
-        return XFER_BUFFER_ERR_INVALID_CONTEXT;
+        return WASMOS_ERR_XFER_BUFFER_INVALID_CONTEXT;
     }
     if (ipc_endpoint_owner((uint32_t)grantee_endpoint, &grantee_context) != IPC_OK ||
         grantee_context == 0) {
-        return XFER_BUFFER_ERR_INVALID_CONTEXT;
+        return WASMOS_ERR_XFER_BUFFER_INVALID_CONTEXT;
     }
     /* Resolve the caller's own upstream borrow, then sub-grant it. */
     rc = xfer_buffer_get_borrowed((uint32_t)borrow_id, context_id, &upstream, 0);
-    if (rc != XFER_BUFFER_OK) {
+    if (rc != WASMOS_ERR_NONE) {
         return rc;
     }
     rc = xfer_buffer_reborrow(&upstream, grantee_context, (uint32_t)flags, &out);
-    if (rc != XFER_BUFFER_OK) {
+    if (rc != WASMOS_ERR_NONE) {
         return rc;
     }
     return (int32_t)out.borrow_id;
@@ -857,22 +857,22 @@ static int32_t wasm_buffer_release_impl(int32_t kind, int32_t buffer_id) {
     int rc = 0;
 
     if (kind != (int32_t)BUFFER_KIND_TRANSFER) {
-        return XFER_BUFFER_ERR_INVALID_KIND;
+        return WASMOS_ERR_XFER_BUFFER_INVALID_KIND;
     }
     if (buffer_id <= 0) {
-        return XFER_BUFFER_ERR_NOT_FOUND;
+        return WASMOS_ERR_XFER_BUFFER_NOT_FOUND;
     }
     if (current_process_context(&context_id) != 0) {
-        return XFER_BUFFER_ERR_INVALID_CONTEXT;
+        return WASMOS_ERR_XFER_BUFFER_INVALID_CONTEXT;
     }
     if (!wasm_buffer_role_allowed(context_id, proc)) {
-        return XFER_BUFFER_ERR_NO_ACCESS;
+        return WASMOS_ERR_XFER_BUFFER_NO_ACCESS;
     }
     key.kind = (uint32_t)kind;
     key.buffer_id = (uint32_t)buffer_id;
     key.size_bytes = 0u;
     rc = xfer_buffer_get_owned(&key, context_id, &owner);
-    if (rc != XFER_BUFFER_OK) {
+    if (rc != WASMOS_ERR_NONE) {
         return rc;
     }
     return xfer_buffer_release_owned(&owner);
@@ -887,13 +887,13 @@ static int32_t wasm_buffer_unborrow_impl(int32_t borrow_id) {
     int rc = 0;
 
     if (borrow_id <= 0) {
-        return XFER_BUFFER_ERR_INACTIVE_BORROW;
+        return WASMOS_ERR_XFER_BUFFER_INACTIVE_BORROW;
     }
     if (current_process_context(&context_id) != 0) {
-        return XFER_BUFFER_ERR_INVALID_CONTEXT;
+        return WASMOS_ERR_XFER_BUFFER_INVALID_CONTEXT;
     }
     rc = xfer_buffer_get_lent((uint32_t)borrow_id, context_id, &borrow);
-    if (rc != XFER_BUFFER_OK) {
+    if (rc != WASMOS_ERR_NONE) {
         return rc;
     }
     return xfer_buffer_unborrow(&borrow);
@@ -914,7 +914,7 @@ m3ApiRawFunction(wasmos_dma_map_borrow) {
     }
     /* Resolve the caller's borrow handle; get_borrowed enforces the caller is
      * the borrower, and dma_map_borrow enforces direction ⊆ borrow rights. */
-    if (xfer_buffer_get_borrowed((uint32_t)borrow_id, context_id, &borrow, 0) != XFER_BUFFER_OK) {
+    if (xfer_buffer_get_borrowed((uint32_t)borrow_id, context_id, &borrow, 0) != WASMOS_ERR_NONE) {
         m3ApiReturn(WASMOS_DMA_STATUS_DENY);
     }
     if (!capability_dma_direction_allowed(context_id, (uint32_t)direction_flags)) {
@@ -925,7 +925,7 @@ m3ApiRawFunction(wasmos_dma_map_borrow) {
         m3ApiReturn(WASMOS_DMA_STATUS_RANGE);
     }
     if (xfer_buffer_dma_map_borrow(&borrow, (uint32_t)offset, (uint32_t)length,
-                                   (uint32_t)direction_flags, &mapping) != XFER_BUFFER_OK) {
+                                   (uint32_t)direction_flags, &mapping) != WASMOS_ERR_NONE) {
         m3ApiReturn(WASMOS_DMA_STATUS_DENY);
     }
     if (!capability_dma_range_allowed(context_id, mapping.device_addr,
@@ -955,10 +955,10 @@ m3ApiRawFunction(wasmos_dma_sync_borrow) {
         m3ApiReturn(WASMOS_DMA_STATUS_DENY);
     }
     if (xfer_buffer_get_borrowed((uint32_t)borrow_id, context_id, &borrow, &mapping) !=
-        XFER_BUFFER_OK) {
+        WASMOS_ERR_NONE) {
         m3ApiReturn(WASMOS_DMA_STATUS_DENY);
     }
-    if (xfer_buffer_dma_sync(&mapping, (uint32_t)offset, (uint32_t)length) != XFER_BUFFER_OK) {
+    if (xfer_buffer_dma_sync(&mapping, (uint32_t)offset, (uint32_t)length) != WASMOS_ERR_NONE) {
         m3ApiReturn(WASMOS_DMA_STATUS_DENY);
     }
     m3ApiReturn(WASMOS_DMA_STATUS_OK);
@@ -976,10 +976,10 @@ m3ApiRawFunction(wasmos_dma_unmap_borrow) {
         m3ApiReturn(WASMOS_DMA_STATUS_DENY);
     }
     if (xfer_buffer_get_borrowed((uint32_t)borrow_id, context_id, &borrow, &mapping) !=
-        XFER_BUFFER_OK) {
+        WASMOS_ERR_NONE) {
         m3ApiReturn(WASMOS_DMA_STATUS_DENY);
     }
-    if (xfer_buffer_dma_unmap(&mapping) != XFER_BUFFER_OK) {
+    if (xfer_buffer_dma_unmap(&mapping) != WASMOS_ERR_NONE) {
         m3ApiReturn(WASMOS_DMA_STATUS_DENY);
     }
     m3ApiReturn(WASMOS_DMA_STATUS_OK);
@@ -1479,8 +1479,8 @@ m3ApiRawFunction(wasmos_xfer_buffer_map) {
         m3ApiReturn(-1);
     }
     if (xfer_buffer_describe((uint32_t)buffer_id, BUFFER_KIND_TRANSFER, proc->context_id, &desc) !=
-            XFER_BUFFER_OK ||
-        xfer_buffer_get_owned(&desc, proc->context_id, &owner) != XFER_BUFFER_OK) {
+            WASMOS_ERR_NONE ||
+        xfer_buffer_get_owned(&desc, proc->context_id, &owner) != WASMOS_ERR_NONE) {
         m3ApiReturn(-1); /* owner-only: the overlay is the owner's private view */
     }
     phys = xfer_buffer_object_phys(&desc);
@@ -1590,28 +1590,28 @@ m3ApiRawFunction(wasmos_xfer_buffer_read) {
     int rc = 0;
 
     if (buffer_id <= 0) {
-        m3ApiReturn(XFER_BUFFER_ERR_NOT_FOUND);
+        m3ApiReturn(WASMOS_ERR_XFER_BUFFER_NOT_FOUND);
     }
     if (len <= 0) {
-        m3ApiReturn(XFER_BUFFER_ERR_INVALID_SIZE);
+        m3ApiReturn(WASMOS_ERR_XFER_BUFFER_INVALID_SIZE);
     }
     if (offset < 0) {
-        m3ApiReturn(XFER_BUFFER_ERR_RANGE);
+        m3ApiReturn(WASMOS_ERR_XFER_BUFFER_RANGE);
     }
     if (current_process_context(&context_id) != 0) {
-        m3ApiReturn(XFER_BUFFER_ERR_INVALID_CONTEXT);
+        m3ApiReturn(WASMOS_ERR_XFER_BUFFER_INVALID_CONTEXT);
     }
     /* Look up the object the caller named; describe confirms the caller owns or
      * borrows it, and can_access confirms the READ right for this operation. */
     rc = xfer_buffer_describe((uint32_t)buffer_id, BUFFER_KIND_TRANSFER, context_id, &desc);
-    if (rc != XFER_BUFFER_OK) {
+    if (rc != WASMOS_ERR_NONE) {
         m3ApiReturn(rc);
     }
     if (!xfer_buffer_can_access(&desc, context_id, BUFFER_BORROW_READ)) {
-        m3ApiReturn(XFER_BUFFER_ERR_NO_ACCESS);
+        m3ApiReturn(WASMOS_ERR_XFER_BUFFER_NO_ACCESS);
     }
     if ((uint32_t)offset + (uint32_t)len > desc.size_bytes) {
-        m3ApiReturn(XFER_BUFFER_ERR_RANGE);
+        m3ApiReturn(WASMOS_ERR_XFER_BUFFER_RANGE);
     }
     m3ApiCheckMem(ptr, (uint32_t)len);
     uint64_t ptr_user = 0;
@@ -1620,22 +1620,22 @@ m3ApiRawFunction(wasmos_xfer_buffer_read) {
                                    &ptr_user) != 0 ||
         mm_user_range_permitted(context_id, ptr_user, (uint64_t)(uint32_t)len,
                                 MEM_REGION_FLAG_WRITE) != 0) {
-        m3ApiReturn(XFER_BUFFER_ERR_RANGE);
+        m3ApiReturn(WASMOS_ERR_XFER_BUFFER_RANGE);
     }
 
     process_t* proc = process_get(process_current_pid());
     if (!proc || proc->context_id == 0) {
-        m3ApiReturn(XFER_BUFFER_ERR_INVALID_CONTEXT);
+        m3ApiReturn(WASMOS_ERR_XFER_BUFFER_INVALID_CONTEXT);
     }
     phys = xfer_buffer_object_phys(&desc);
     if (phys == 0) {
-        m3ApiReturn(XFER_BUFFER_ERR_NOT_FOUND);
+        m3ApiReturn(WASMOS_ERR_XFER_BUFFER_NOT_FOUND);
     }
     const uint8_t* src = ptr_cast(uint8_t, (phys | KERNEL_HIGHER_HALF_BASE));
     if (wasm_copy_to_user_bytes(proc->context_id, ptr_user, src + offset, (uint32_t)len) != 0) {
-        m3ApiReturn(XFER_BUFFER_ERR_RANGE);
+        m3ApiReturn(WASMOS_ERR_XFER_BUFFER_RANGE);
     }
-    m3ApiReturn(XFER_BUFFER_OK);
+    m3ApiReturn(WASMOS_ERR_NONE);
 }
 
 m3ApiRawFunction(wasmos_xfer_buffer_write) {
@@ -1646,26 +1646,26 @@ m3ApiRawFunction(wasmos_xfer_buffer_write) {
     int rc = 0;
 
     if (buffer_id <= 0) {
-        m3ApiReturn(XFER_BUFFER_ERR_NOT_FOUND);
+        m3ApiReturn(WASMOS_ERR_XFER_BUFFER_NOT_FOUND);
     }
     if (len <= 0) {
-        m3ApiReturn(XFER_BUFFER_ERR_INVALID_SIZE);
+        m3ApiReturn(WASMOS_ERR_XFER_BUFFER_INVALID_SIZE);
     }
     if (offset < 0) {
-        m3ApiReturn(XFER_BUFFER_ERR_RANGE);
+        m3ApiReturn(WASMOS_ERR_XFER_BUFFER_RANGE);
     }
     if (current_process_context(&context_id) != 0) {
-        m3ApiReturn(XFER_BUFFER_ERR_INVALID_CONTEXT);
+        m3ApiReturn(WASMOS_ERR_XFER_BUFFER_INVALID_CONTEXT);
     }
     rc = xfer_buffer_describe((uint32_t)buffer_id, BUFFER_KIND_TRANSFER, context_id, &desc);
-    if (rc != XFER_BUFFER_OK) {
+    if (rc != WASMOS_ERR_NONE) {
         m3ApiReturn(rc);
     }
     if (!xfer_buffer_can_access(&desc, context_id, BUFFER_BORROW_WRITE)) {
-        m3ApiReturn(XFER_BUFFER_ERR_NO_ACCESS);
+        m3ApiReturn(WASMOS_ERR_XFER_BUFFER_NO_ACCESS);
     }
     if ((uint32_t)offset + (uint32_t)len > desc.size_bytes) {
-        m3ApiReturn(XFER_BUFFER_ERR_RANGE);
+        m3ApiReturn(WASMOS_ERR_XFER_BUFFER_RANGE);
     }
     m3ApiCheckMem(ptr, (uint32_t)len);
     uint64_t ptr_user = 0;
@@ -1674,16 +1674,16 @@ m3ApiRawFunction(wasmos_xfer_buffer_write) {
                                    &ptr_user) != 0 ||
         mm_user_range_permitted(context_id, ptr_user, (uint64_t)(uint32_t)len,
                                 MEM_REGION_FLAG_READ) != 0) {
-        m3ApiReturn(XFER_BUFFER_ERR_RANGE);
+        m3ApiReturn(WASMOS_ERR_XFER_BUFFER_RANGE);
     }
 
     process_t* proc = process_get(process_current_pid());
     if (!proc || proc->context_id == 0) {
-        m3ApiReturn(XFER_BUFFER_ERR_INVALID_CONTEXT);
+        m3ApiReturn(WASMOS_ERR_XFER_BUFFER_INVALID_CONTEXT);
     }
     phys = xfer_buffer_object_phys(&desc);
     if (phys == 0) {
-        m3ApiReturn(XFER_BUFFER_ERR_NOT_FOUND);
+        m3ApiReturn(WASMOS_ERR_XFER_BUFFER_NOT_FOUND);
     }
     uint8_t* dst = ptr_cast(uint8_t, (phys | KERNEL_HIGHER_HALF_BASE));
     uint32_t copied = 0;
@@ -1695,14 +1695,14 @@ m3ApiRawFunction(wasmos_xfer_buffer_write) {
         }
         if (wasm_copy_from_user_bytes(proc->context_id, ptr_user + (uint64_t)copied, bounce,
                                       chunk) != 0) {
-            m3ApiReturn(XFER_BUFFER_ERR_RANGE);
+            m3ApiReturn(WASMOS_ERR_XFER_BUFFER_RANGE);
         }
         for (uint32_t i = 0; i < chunk; ++i) {
             dst[(uint32_t)offset + copied + i] = bounce[i];
         }
         copied += chunk;
     }
-    m3ApiReturn(XFER_BUFFER_OK);
+    m3ApiReturn(WASMOS_ERR_NONE);
 }
 
 m3ApiRawFunction(wasmos_early_log_size) {

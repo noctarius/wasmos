@@ -59,7 +59,7 @@ static uint32_t broker_selftest_stage_path(broker_spawn_request_state_t* state, 
         return 0u;
     }
     if (xfer_buffer_acquire(BUFFER_KIND_TRANSFER, context_id, path_len, &state->caller_buf) !=
-        XFER_BUFFER_OK) {
+        WASMOS_ERR_NONE) {
         return 0u;
     }
     phys = xfer_buffer_object_phys(&state->caller_buf.buffer);

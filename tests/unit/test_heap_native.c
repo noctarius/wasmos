@@ -77,7 +77,7 @@ int main(void) {
     wasmos_native_heap_init(&api);
 
     /* Basic small alloc/free with data integrity. */
-    {
+    { // NOLINT(wasmos-standalone-block): scopes a per-case `p` reused below
         uint8_t* p = hn_malloc(100);
         expect(p != NULL, "malloc(100) non-NULL");
         memset(p, 0xAB, 100);
@@ -86,7 +86,7 @@ int main(void) {
     }
 
     /* calloc zeroes. */
-    {
+    { // NOLINT(wasmos-standalone-block): scopes a per-case `p` reused below
         uint8_t* p = hn_calloc(64, 4);
         expect(p != NULL, "calloc non-NULL");
         expect(filled_with(p, 256, 0), "calloc zeroes the block");
@@ -95,7 +95,7 @@ int main(void) {
 
     /* Large (> 4096) alloc/free — regression guard for the header-offset bug
      * where free() miscomputed the header for large allocations. */
-    {
+    { // NOLINT(wasmos-standalone-block): scopes a per-case `p` reused below
         uint8_t* p = hn_malloc(20000);
         expect(p != NULL, "malloc(20000) large non-NULL");
         memset(p, 0x5A, 20000);
@@ -106,7 +106,7 @@ int main(void) {
     }
 
     /* realloc: grow (copy path) preserves the prefix. */
-    {
+    { // NOLINT(wasmos-standalone-block): scopes a per-case `p` reused below
         uint8_t* p = hn_malloc(50);
         memset(p, 0x11, 50);
         uint8_t* q = hn_realloc(p, 5000); /* small -> large */
@@ -116,7 +116,7 @@ int main(void) {
     }
 
     /* realloc: shrink within the same size class preserves data (in place). */
-    {
+    { // NOLINT(wasmos-standalone-block): scopes a per-case `p` reused below
         uint8_t* p = hn_malloc(2000);
         memset(p, 0x22, 2000);
         uint8_t* q = hn_realloc(p, 100);
@@ -126,7 +126,7 @@ int main(void) {
     }
 
     /* realloc(NULL, n) == malloc; realloc(p, 0) frees and returns NULL. */
-    {
+    { // NOLINT(wasmos-standalone-block): scopes a per-case `p` reused below
         uint8_t* p = hn_realloc(NULL, 128);
         expect(p != NULL, "realloc(NULL, n) allocates");
         uint8_t* q = hn_realloc(p, 0);
@@ -139,7 +139,7 @@ int main(void) {
     expect(g_corrupt == 0, "free(NULL) is safe");
 
     /* Double free is detected. */
-    {
+    { // NOLINT(wasmos-standalone-block): scopes a per-case `p` reused below
         uint8_t* p = hn_malloc(64);
         hn_free(p);
         g_corrupt = 0;

@@ -2422,12 +2422,20 @@ wasmos_ide_index(wasmos_ide_libui
   INCLUDES ${CMAKE_SOURCE_DIR}/src/libui/include ${LIBC_DIR}/include
            ${DRIVER_WASM_DIR}/include)
 
+# LIBC_DIR/include precedes KERNEL_DIR/include: both define stdlib.h/stdio.h/
+# string.h, and tests that include "stdlib.h" want the fuller libc one (the
+# kernel's declares no strtol). WASM3_DIR is needed because kernel headers reach
+# wasm3.h on the interpreter backend. The service dirs carry the headers the
+# service-level unit tests include directly.
 wasmos_ide_index(wasmos_ide_unit
   DIRS ${CMAKE_SOURCE_DIR}/tests/unit
-  INCLUDES ${KERNEL_DIR}/include ${CMAKE_SOURCE_DIR}/tests/unit/include
-           ${DRIVER_WASM_DIR}/include ${LIBC_DIR}/include
+  INCLUDES ${CMAKE_SOURCE_DIR}/tests/unit/include ${LIBC_DIR}/include
+           ${KERNEL_DIR}/include ${DRIVER_WASM_DIR}/include
            ${LIBSYS_WASM_DIR}/include ${LIBSYS_NATIVE_DIR}/include
-           ${CMAKE_SOURCE_DIR}/abi/generated/c)
+           ${CMAKE_SOURCE_DIR}/abi/generated/c
+           ${SERVICES_DIR}/fs_manager ${SERVICES_DIR}/device_manager
+           ${SERVICES_DIR}/net_stack
+           ${WASM3_DIR} ${WASM3_DIR}/source)
 
 wasmos_ide_index(wasmos_ide_tools
   DIRS ${CMAKE_SOURCE_DIR}/src/tools

@@ -283,10 +283,20 @@ run_clang_tidy() {
     tidy_db="$(mktemp -d "${TMPDIR:-/tmp}/wasmos-tidy-db.XXXXXX")"
     trap 'rm -rf "$tidy_db"' RETURN
 
-    python3 - "$build_dir/compile_commands.json" "$tidy_db/compile_commands.json" "$repo_root" <<'PY'
+    # The top-level CMakeLists blanks CMAKE_OSX_SYSROOT so freestanding targets do
+    # not pick up the macOS SDK. The host-built unit tests do need it (they use
+    # <pthread.h>, <stdio.h>, ...), so pass it in for those entries only.
+    local host_sysroot=""
+    if [[ "$(uname -s)" == "Darwin" ]]; then
+        host_sysroot="$(xcrun --sdk macosx --show-sdk-path 2>/dev/null || true)"
+    fi
+
+    python3 - "$build_dir/compile_commands.json" "$tidy_db/compile_commands.json" \
+        "$repo_root" "$host_sysroot" <<'PY'
 import json, os, sys
 
 src_db, out_db, root = sys.argv[1], sys.argv[2], os.path.abspath(sys.argv[3])
+host_sysroot = sys.argv[4] if len(sys.argv) > 4 else ""
 
 # Host build tools need a hosted libc, but the *_ide targets compile every
 # source freestanding (-nostdinc), so their DB commands can't resolve <stdio.h>
@@ -296,11 +306,22 @@ src_db, out_db, root = sys.argv[1], sys.argv[2], os.path.abspath(sys.argv[3])
 # system knows it is host-side, hence the explicit entry.
 HOST_TOOLS = ("scripts/", "src/tools/", "src/kernel/warp/posix_kernel.c")
 
+# WASM userland with no linker.metadata of its own: the freestanding libc, the
+# wasm libsys variant and libui are all compiled for wasm32 by the real build and
+# use __builtin_wasm_*, so they must not be linted as x86.
+WASM_TREES = ("src/libc/", "src/libsys/wasm/", "src/libui/")
+
 def decide(path):
-    """Return (kind, extra_flags). kind: None=skip, 'wasm', or 'x86'."""
+    """Return (kind, extra_flags). kind: None=skip, 'wasm', 'x86', or 'host'."""
     rel = os.path.relpath(os.path.abspath(path), root)
     if rel.startswith(HOST_TOOLS):
         return None, []
+    # Unit tests are built and run on the host against the host libc, not
+    # freestanding: they must keep the host target and host header resolution.
+    if rel.startswith("tests/"):
+        return "host", []
+    if rel.startswith(WASM_TREES):
+        return "wasm", []
     if rel.startswith("src/boot/"):
         # UEFI: 16-bit wchar_t, so L"" literals need -fshort-wchar to parse.
         return "x86", ["-fshort-wchar"]
@@ -338,7 +359,24 @@ for e in json.load(open(src_db)):
             continue
         res.append(toks[i])
         i += 1
-    if kind == "wasm":
+    if kind == "host":
+        # Host-built unit tests. Two things would break them here: the indexing
+        # command puts the project include dirs on -I, so src/kernel/include's
+        # freestanding stdlib.h / stdio.h / string.h shadow the host's (hiding
+        # e.g. strtol), and injecting a freestanding target hides <pthread.h> and
+        # <sched.h> entirely. Demote the project dirs to -iquote so only "..."
+        # includes see them while <...> resolves to the host libc, and inject no
+        # target so the host arch and sysroot stand.
+        quoted = []
+        for t in res:
+            if t.startswith("-I") and len(t) > 2:
+                quoted += ["-iquote", t[2:]]
+            else:
+                quoted.append(t)
+        res = quoted
+        if host_sysroot:
+            res[1:1] = ["-isysroot", host_sysroot]
+    elif kind == "wasm":
         # WASM userland uses __builtin_wasm_*; the *_ide targets compile it for
         # the host, so force the wasm32 target on every platform.
         res[1:1] = ["--target=wasm32-unknown-unknown"]
@@ -477,6 +515,14 @@ run_assemblyscript_lint() {
         if grep -q '"\./libui"' "$file"; then
             copy_if_needed "src/libui/assemblyscript/libui.ts" "$stage_dir/libui.ts"
             copy_if_needed "src/libc/assemblyscript/wasmos.ts" "$stage_dir/wasmos.ts"
+        fi
+
+        # The generated status ABI is imported by AS drivers/libui the same way
+        # the real builds stage it next to wasmos.ts.
+        if grep -q '"\./wasmos_status"' "$file" \
+            || grep -q '"\./wasmos_status"' "$stage_dir/libui.ts" 2>/dev/null; then
+            copy_if_needed "abi/generated/assemblyscript/wasmos_status.ts" \
+                "$stage_dir/wasmos_status.ts"
         fi
 
         if [[ "$file" == "src/libc/assemblyscript/runtime.ts" ]]; then

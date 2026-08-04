@@ -443,6 +443,7 @@ target_include_directories(kernel_ide PRIVATE
   ${KERNEL_DIR}/include
   ${LIBC_DIR}/include
   ${DRIVER_WASM_DIR}/include
+  ${CMAKE_SOURCE_DIR}/abi/generated/c
   ${WASM3_DIR}
   ${WASM3_DIR}/source
 )
@@ -467,6 +468,7 @@ target_include_directories(wasm3_glue_ide PRIVATE
   ${KERNEL_DIR}/include
   ${LIBC_DIR}/include
   ${DRIVER_WASM_DIR}/include
+  ${CMAKE_SOURCE_DIR}/abi/generated/c
   ${WASM3_DIR}
   ${WASM3_DIR}/source)
 target_compile_definitions(wasm3_glue_ide PRIVATE
@@ -480,6 +482,9 @@ target_include_directories(warp_glue_ide PRIVATE
   ${KERNEL_DIR}/include
   ${LIBC_DIR}/include
   ${DRIVER_WASM_DIR}/include
+  ${CMAKE_SOURCE_DIR}/abi/generated/c
+  ${WASM3_DIR}
+  ${WASM3_DIR}/source
   ${KERNEL_DIR}/warp/compat)
 target_compile_definitions(warp_glue_ide PRIVATE
   WASMOS_TRACE=${WASMOS_TRACE_VALUE}

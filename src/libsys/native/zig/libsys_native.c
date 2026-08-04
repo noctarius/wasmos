@@ -493,13 +493,11 @@ int32_t wasmos_sys_native_random_float_async(wasmos_sys_native_event_loop_t* loo
     if (!request || !out_value) {
         return WASMOS_ERR_HRNG_INVALID;
     }
-    {
-        int32_t status = wasmos_sys_native_random_bytes_async(
-            loop, hrng_endpoint, (uint8_t*)&request->float_word,
-            (uint32_t)sizeof(request->float_word), request, on_complete, user);
-        if (status != WASMOS_ERR_NONE) {
-            return status;
-        }
+    int32_t status = wasmos_sys_native_random_bytes_async(
+        loop, hrng_endpoint, (uint8_t*)&request->float_word, (uint32_t)sizeof(request->float_word),
+        request, on_complete, user);
+    if (status != WASMOS_ERR_NONE) {
+        return status;
     }
     request->float_out = out_value;
     return WASMOS_ERR_NONE;
@@ -526,18 +524,16 @@ int32_t wasmos_sys_native_event_loop_poll(wasmos_sys_native_event_loop_t* loop, 
             return -1;
         }
         handled++;
-        {
-            wasmos_sys_native_intent_t* intent = native_intent_find(loop, msg.request_id);
-            if (intent) {
-                void (*cb)(void*, const nd_ipc_message_t*) = intent->on_resolve;
-                void* user = intent->user;
-                intent->in_use = 0;
-                intent->request_id = 0;
-                intent->on_resolve = 0;
-                intent->user = 0;
-                cb(user, &msg);
-                continue;
-            }
+        wasmos_sys_native_intent_t* intent = native_intent_find(loop, msg.request_id);
+        if (intent) {
+            void (*cb)(void*, const nd_ipc_message_t*) = intent->on_resolve;
+            void* user = intent->user;
+            intent->in_use = 0;
+            intent->request_id = 0;
+            intent->on_resolve = 0;
+            intent->user = 0;
+            cb(user, &msg);
+            continue;
         }
         uint8_t dispatched = 0;
         for (uint32_t h = 0; h < WASMOS_SYS_NATIVE_HANDLER_MAX; ++h) {

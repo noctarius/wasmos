@@ -184,7 +184,17 @@
       "Bash(awk '/^int mm_context_create|mm_context_create\\\\\\(uint32_t id\\\\\\)/{f=1} f{print NR\": \"$0} f&&/^}/{c++; if\\(c>=1 && /^}/\\){exit}}' src/kernel/memory.c)",
       "Bash(grep -oE '\\\\-o \\\\$\\\\{BUILD_DIR\\\\}/test_[a-z0-9_]+')",
       "Bash(awk 'NR>=1949 && NR<=2320' CMakeLists.txt)",
-      "Bash(grep -oE 'COMMAND \\\\$\\\\{BUILD_DIR\\\\}/test_[a-z0-9_]+')"
+      "Bash(grep -oE 'COMMAND \\\\$\\\\{BUILD_DIR\\\\}/test_[a-z0-9_]+')",
+      "Bash(.venv/bin/python3 scripts/gen_abi_errors.py)",
+      "Bash(.venv/bin/python3 -m black scripts/gen_abi_hostcalls.py)",
+      "Bash(.venv/bin/python3 -m ruff check scripts/gen_abi_hostcalls.py)",
+      "Bash(.venv/bin/python3 scripts/gen_abi_hostcalls.py)",
+      "Bash(.venv/bin/python3 scripts/gen_abi_hostcalls.py --check)",
+      "Bash(.venv/bin/python3 scripts/gen_abi_hostcalls.py --verify-source)",
+      "Bash(grep -i 'WARP_LINK\\\\|REGISTER\\\\|WARP_FN\\\\|{ \"\\\\|\",')",
+      "Bash(awk '/^  shmem:/{p=1} p{print} p&&/^  [a-z_]+:/&&!/shmem/{exit}' abi/errors.yaml)",
+      "Bash(awk '/### Result representation/{p=1} p{print} p&&/^### [A-Z]/&&!/Result representation/{c++} c==1{exit}' docs/architecture/34-abi-idl-and-error-model.md)",
+      "Bash(< 0)"
     ]
   }
 }

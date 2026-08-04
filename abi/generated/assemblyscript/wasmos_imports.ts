@@ -129,29 +129,29 @@ export declare function xfer_buffer_size(): i32;
 export declare function fs_endpoint(): i32;
 // Copies `len` bytes from transfer buffer `buffer_id` starting at `offset` into
 // the caller's WASM linear memory at `ptr_off`; requires the caller (owner or
-// borrower) to hold the READ right. Returns XFER_BUFFER_OK (0) on success, 0 for
-// a zero `len`, otherwise a negative XFER_BUFFER_ERR_* code (NOT_FOUND,
+// borrower) to hold the READ right. Returns WASMOS_ERR_NONE (0) on success, 0 for
+// a zero `len`, otherwise a negative WASMOS_ERR_XFER_BUFFER_* code (NOT_FOUND,
 // INVALID_CONTEXT, NO_ACCESS, RANGE).
 @external("wasmos", "xfer_buffer_read")
 export declare function xfer_buffer_read(a0: i32, a1: i32, a2: i32, a3: i32): i32;
 // Copies `len` bytes from the caller's WASM linear memory at `ptr_off` into
 // transfer buffer `buffer_id` starting at `offset`; requires the caller (owner
-// or borrower) to hold the WRITE right. Returns XFER_BUFFER_OK (0) on success, 0
-// for a zero `len`, otherwise a negative XFER_BUFFER_ERR_* code (NOT_FOUND,
+// or borrower) to hold the WRITE right. Returns WASMOS_ERR_NONE (0) on success, 0
+// for a zero `len`, otherwise a negative WASMOS_ERR_XFER_BUFFER_* code (NOT_FOUND,
 // INVALID_CONTEXT, NO_ACCESS, RANGE).
 @external("wasmos", "xfer_buffer_write")
 export declare function xfer_buffer_write(a0: i32, a1: i32, a2: i32, a3: i32): i32;
 // OWNER assigns `flags` rights (bitmask of BUFFER_BORROW_READ/WRITE, must be
 // non-zero and within 0x3) over buffer `buffer_id` of `kind` to the context that
 // owns `grantee_ep`; returns the grantee's borrow_id. On failure returns a
-// negative XFER_BUFFER_ERR_* code (INVALID_KIND, NOT_FOUND, INVALID_FLAGS,
+// negative WASMOS_ERR_XFER_BUFFER_* code (INVALID_KIND, NOT_FOUND, INVALID_FLAGS,
 // INVALID_CONTEXT, NO_ACCESS).
 @external("wasmos", "buffer_borrow")
 export declare function buffer_borrow(a0: i32, a1: i32, a2: i32, a3: i32): i32;
 // OWNER releases buffer `buffer_id` of `kind` (only BUFFER_KIND_TRANSFER
 // supported), dropping its acquisition and backing; caller must be the owning
-// context. Returns XFER_BUFFER_OK (0) on success, otherwise a negative
-// XFER_BUFFER_ERR_* code (INVALID_KIND, NOT_FOUND, INVALID_CONTEXT, NO_ACCESS).
+// context. Returns WASMOS_ERR_NONE (0) on success, otherwise a negative
+// WASMOS_ERR_XFER_BUFFER_* code (INVALID_KIND, NOT_FOUND, INVALID_CONTEXT, NO_ACCESS).
 @external("wasmos", "buffer_release")
 export declare function buffer_release(a0: i32, a1: i32): i32;
 // Returns the physical address of the calling process's per-process 8 KiB
@@ -341,8 +341,8 @@ export declare function proc_info_stats(a0: i32, a1: i32, a2: i32, a3: i32, a4: 
 @external("wasmos", "xfer_buffer_borrow")
 export declare function xfer_buffer_borrow(a0: i32, a1: i32, a2: i32): i32;
 // Owner-only release of transfer buffer `buffer_id`, dropping the owner's
-// acquisition and its backing. Returns XFER_BUFFER_OK (0) on success, otherwise
-// a negative XFER_BUFFER_ERR_* code.
+// acquisition and its backing. Returns WASMOS_ERR_NONE (0) on success, otherwise
+// a negative WASMOS_ERR_XFER_BUFFER_* code.
 @external("wasmos", "xfer_buffer_release")
 export declare function xfer_buffer_release(a0: i32): i32;
 // Fill the caller's buffer at `out_off` with a per-CPU stats record for CPU
@@ -552,19 +552,19 @@ export declare function ipc_select_wait_timeout(a0: i32, a1: i32): i32;
 export declare function xfer_buffer_acquire(a0: i32): i32;
 // Grantor-side drop of a transfer-buffer (re)borrow named by `borrow_id`; the
 // lender revokes a grant it previously extended (resolved via the lent set, not
-// the borrowed set). Returns XFER_BUFFER_OK (0) on success, otherwise a negative
-// XFER_BUFFER_ERR_* code (INACTIVE_BORROW, INVALID_CONTEXT).
+// the borrowed set). Returns WASMOS_ERR_NONE (0) on success, otherwise a negative
+// WASMOS_ERR_XFER_BUFFER_* code (INACTIVE_BORROW, INVALID_CONTEXT).
 @external("wasmos", "xfer_buffer_unborrow")
 export declare function xfer_buffer_unborrow(a0: i32): i32;
 // OWNER acquires a new buffer of `kind` (only BUFFER_KIND_TRANSFER is supported)
 // sized at least `minimum_size` bytes. Returns the positive `buffer_id` on
-// success, otherwise a negative XFER_BUFFER_ERR_* code (INVALID_KIND,
+// success, otherwise a negative WASMOS_ERR_XFER_BUFFER_* code (INVALID_KIND,
 // INVALID_SIZE, INVALID_CONTEXT, NO_ACCESS).
 @external("wasmos", "buffer_acquire")
 export declare function buffer_acquire(a0: i32, a1: i32): i32;
 // Grantor-side drop of a (re)borrow named by `borrow_id`: the lender revokes a
 // grant it previously extended (resolved via the lent set). Returns
-// XFER_BUFFER_OK (0) on success, otherwise a negative XFER_BUFFER_ERR_* code
+// WASMOS_ERR_NONE (0) on success, otherwise a negative WASMOS_ERR_XFER_BUFFER_* code
 // (INACTIVE_BORROW, INVALID_CONTEXT).
 @external("wasmos", "buffer_unborrow")
 export declare function buffer_unborrow(a0: i32): i32;
@@ -575,7 +575,7 @@ export declare function xfer_buffer_reborrow(a0: i32, a1: i32, a2: i32): i32;
 // A current BORROWER sub-grants its own borrow `borrow_id` of `kind` to the
 // context that owns `grantee_ep`, narrowing rights to `flags` (non-zero, within
 // 0x3); returns the new grantee's borrow_id. On failure returns a negative
-// XFER_BUFFER_ERR_* code (INVALID_KIND, INACTIVE_BORROW, INVALID_FLAGS,
+// WASMOS_ERR_XFER_BUFFER_* code (INVALID_KIND, INACTIVE_BORROW, INVALID_FLAGS,
 // INVALID_CONTEXT).
 @external("wasmos", "buffer_reborrow")
 export declare function buffer_reborrow(a0: i32, a1: i32, a2: i32, a3: i32): i32;

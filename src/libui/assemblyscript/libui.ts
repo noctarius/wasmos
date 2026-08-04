@@ -1,4 +1,5 @@
 import {ipc, startup} from "./wasmos";
+import {WASMOS_ERR_NONE} from "./wasmos_status";
 
 const SVC_IPC_LOOKUP_REQ: i32 = 0x221;
 const SVC_IPC_LOOKUP_RESP: i32 = 0x2A1;
@@ -13,7 +14,6 @@ const GFX_IPC_RELEASE_SHARED_BUFFER: i32 = 0x0207;
 const GFX_IPC_DESTROY_WINDOW: i32 = 0x0201;
 const GFX_IPC_SET_WINDOW_TITLE: i32 = 0x020E;
 
-const GFX_STATUS_OK: i32 = 0;
 const GFX_EVENT_NONE: i32 = 0;
 const GFX_EVENT_POINTER: i32 = 4;
 const GFX_EVENT_CLOSE_REQUEST: i32 = 5;
@@ -161,7 +161,7 @@ export class Context {
             return null;
         }
         const create = ipc.recv(ctx.eventEndpoint);
-        if (create == null || create.type != 0x0280 || create.arg0 != GFX_STATUS_OK) {
+        if (create == null || create.type != 0x0280 || create.arg0 != WASMOS_ERR_NONE) {
             return null;
         }
 
@@ -236,7 +236,7 @@ export class Context {
         }
         const reply =
             ipc.call(this.gfxEndpoint, GFX_IPC_PRESENT_WINDOW, this.windowId, this.bufferId, 0, 0);
-        return reply != null && reply.type == 0x0280 && reply.arg0 == GFX_STATUS_OK;
+        return reply != null && reply.type == 0x0280 && reply.arg0 == WASMOS_ERR_NONE;
     }
 
     pump(limit: i32 = 8): i32 {
@@ -294,7 +294,7 @@ export class Context {
         }
         const reply = ipc.call(this.gfxEndpoint, GFX_IPC_SET_WINDOW_TITLE, this.windowId,
                                this.titleShmemId, len, 0);
-        return reply != null && reply.type == 0x0280 && reply.arg0 == GFX_STATUS_OK;
+        return reply != null && reply.type == 0x0280 && reply.arg0 == WASMOS_ERR_NONE;
     }
 
     hitTest(rect: Rect): bool {
@@ -447,7 +447,7 @@ export class Context {
 
         const reply = ipc.call(this.gfxEndpoint, GFX_IPC_ALLOC_SHARED_BUFFER, this.windowId, width,
                                height, 0);
-        if (reply == null || reply.type != 0x0280 || reply.arg0 != GFX_STATUS_OK) {
+        if (reply == null || reply.type != 0x0280 || reply.arg0 != WASMOS_ERR_NONE) {
             return false;
         }
         this.bufferId = reply.arg1;

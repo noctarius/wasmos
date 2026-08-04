@@ -121,6 +121,11 @@ const (
 	WASMOS_ERR_GFX_BAD_MODE_INDEX int32 = -0x00060003 // mode index is out of range for this backend
 	WASMOS_ERR_GFX_MODE_TOO_LARGE int32 = -0x00060004 // requested mode does not fit the framebuffer mapping established at boot
 	WASMOS_ERR_GFX_MODE_SET_FAILED int32 = -0x00060005 // requested geometry is not a supported mode, or the mode-set path is unavailable
+	WASMOS_ERR_GFX_INVALID int32 = -0x00060006 // invalid request arguments (window id, geometry, buffer, or opcode header)
+	WASMOS_ERR_GFX_PERMISSION int32 = -0x00060007 // caller is not permitted to act on the requested window or buffer
+	WASMOS_ERR_GFX_UNSUPPORTED int32 = -0x00060008 // unknown or unsupported compositor request
+	WASMOS_ERR_GFX_BUSY int32 = -0x00060009 // compositor has no free window/buffer slot (retryable)
+	WASMOS_ERR_GFX_IO int32 = -0x0006000A // framebuffer or shared-buffer operation failed
 	WASMOS_ERR_VT_BAD_TTY_ID int32 = -0x00080001 // requested tty id is out of range
 	WASMOS_ERR_VT_NO_TTY_FOR_SOURCE int32 = -0x00080002 // no tty is associated with the requesting endpoint
 	WASMOS_ERR_VT_READER_BUSY int32 = -0x00080003 // another endpoint is already the reader for this tty
@@ -400,6 +405,16 @@ func WasmosStrerror(c int32) string {
 		return "requested mode does not fit the framebuffer mapping established at boot"
 	case WASMOS_ERR_GFX_MODE_SET_FAILED:
 		return "requested geometry is not a supported mode, or the mode-set path is unavailable"
+	case WASMOS_ERR_GFX_INVALID:
+		return "invalid request arguments (window id, geometry, buffer, or opcode header)"
+	case WASMOS_ERR_GFX_PERMISSION:
+		return "caller is not permitted to act on the requested window or buffer"
+	case WASMOS_ERR_GFX_UNSUPPORTED:
+		return "unknown or unsupported compositor request"
+	case WASMOS_ERR_GFX_BUSY:
+		return "compositor has no free window/buffer slot (retryable)"
+	case WASMOS_ERR_GFX_IO:
+		return "framebuffer or shared-buffer operation failed"
 	case WASMOS_ERR_VT_BAD_TTY_ID:
 		return "requested tty id is out of range"
 	case WASMOS_ERR_VT_NO_TTY_FOR_SOURCE:

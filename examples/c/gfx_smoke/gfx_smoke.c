@@ -219,7 +219,7 @@ static int recv_gfx_event(int32_t event_ep, gfx_reply_t* out) {
     if (m.type != GFX_IPC_PUSH_EVENT) {
         return -1;
     }
-    out->status = GFX_STATUS_OK;
+    out->status = WASMOS_ERR_NONE;
     out->arg1 = (int32_t)m.arg1;
     out->arg2 = (int32_t)m.arg2;
     out->arg3 = (int32_t)m.arg3;
@@ -309,7 +309,7 @@ static int handle_resize_realloc_logo(int32_t gfx_ep, int32_t reply_ep, int32_t*
     }
     if (send_gfx(gfx_ep, reply_ep, (*req)++, GFX_IPC_PRESENT_WINDOW, ctx->window_id, ctx->buffer_id,
                  0, 0, &reply) != 0 ||
-        reply.status != GFX_STATUS_OK) {
+        reply.status != WASMOS_ERR_NONE) {
         puts("[test] gfx smoke resize3 present failed");
         return -1;
     }
@@ -335,7 +335,7 @@ static int handle_resize_realloc(int32_t gfx_ep, int32_t reply_ep, int32_t* req,
     }
     if (send_gfx(gfx_ep, reply_ep, (*req)++, GFX_IPC_PRESENT_WINDOW, ctx->window_id, ctx->buffer_id,
                  0, 0, &reply) != 0 ||
-        reply.status != GFX_STATUS_OK) {
+        reply.status != WASMOS_ERR_NONE) {
         puts("[test] gfx smoke resize present failed");
         return -1;
     }
@@ -533,7 +533,7 @@ int main(int argc, char** argv) {
 
     if (send_gfx(gfx_ep, reply_ep, req++, GFX_IPC_PRESENT_WINDOW, g_ctx1.window_id,
                  g_ctx1.buffer_id, 0, 0, &reply) != 0 ||
-        reply.status != GFX_STATUS_OK) {
+        reply.status != WASMOS_ERR_NONE) {
         puts("[test] gfx smoke present1 failed");
         return GFX_SMOKE_E_PRESENT0;
     }
@@ -544,7 +544,7 @@ int main(int argc, char** argv) {
 
     if (send_gfx(gfx_ep, reply_ep, req++, GFX_IPC_RESIZE_WINDOW, g_ctx1.window_id, GFX_RESIZE_W,
                  GFX_RESIZE_H, 0, &reply) != 0 ||
-        reply.status != GFX_STATUS_OK) {
+        reply.status != WASMOS_ERR_NONE) {
         puts("[test] gfx smoke resize failed");
         return GFX_SMOKE_E_RESIZE;
     }
@@ -557,7 +557,7 @@ int main(int argc, char** argv) {
     uint8_t* new_base = 0;
     if (send_gfx(gfx_ep, reply_ep, req++, GFX_IPC_ALLOC_SHARED_BUFFER, g_ctx1.window_id,
                  GFX_RESIZE_W, GFX_RESIZE_H, 0, &reply) != 0 ||
-        reply.status != GFX_STATUS_OK) {
+        reply.status != WASMOS_ERR_NONE) {
         puts("[test] gfx smoke resize-alloc failed");
         return GFX_SMOKE_E_ALLOC1;
     }
@@ -592,7 +592,7 @@ int main(int argc, char** argv) {
         }
         if (send_gfx(gfx_ep, reply_ep, req++, GFX_IPC_PRESENT_WINDOW, g_ctx1.window_id,
                      g_ctx1.buffer_id, 1, damage_shmem_id, &reply) != 0 ||
-            reply.status != GFX_STATUS_OK) {
+            reply.status != WASMOS_ERR_NONE) {
             puts("[test] gfx smoke present-loop failed");
             return GFX_SMOKE_E_PRESENT_LOOP;
         }
@@ -618,7 +618,7 @@ int main(int argc, char** argv) {
     }
     if (send_gfx(gfx_ep, reply_ep, req++, GFX_IPC_PRESENT_WINDOW, g_ctx2.window_id,
                  g_ctx2.buffer_id, 0, 0, &reply) != 0 ||
-        reply.status != GFX_STATUS_OK) {
+        reply.status != WASMOS_ERR_NONE) {
         puts("[test] gfx smoke present2 failed");
         return GFX_SMOKE_E_PRESENT_LOOP;
     }
@@ -640,7 +640,7 @@ int main(int argc, char** argv) {
     }
     if (send_gfx(gfx_ep, reply_ep, req++, GFX_IPC_PRESENT_WINDOW, g_ctx3.window_id,
                  g_ctx3.buffer_id, 0, 0, &reply) != 0 ||
-        reply.status != GFX_STATUS_OK) {
+        reply.status != WASMOS_ERR_NONE) {
         puts("[test] gfx smoke present3 failed");
         return GFX_SMOKE_E_PRESENT_LOOP;
     }
@@ -680,7 +680,7 @@ int main(int argc, char** argv) {
                     if (!closed1 && close_id == g_ctx1.window_id) {
                         if (send_gfx(gfx_ep, reply_ep, req++, GFX_IPC_DESTROY_WINDOW,
                                      g_ctx1.window_id, 0, 0, 0, &reply) != 0 ||
-                            reply.status != GFX_STATUS_OK) {
+                            reply.status != WASMOS_ERR_NONE) {
                             puts("[test] gfx smoke destroy1 failed");
                             return GFX_SMOKE_E_DESTROY;
                         }
@@ -688,7 +688,7 @@ int main(int argc, char** argv) {
                     } else if (!closed2 && close_id == g_ctx2.window_id) {
                         if (send_gfx(gfx_ep, reply_ep, req++, GFX_IPC_DESTROY_WINDOW,
                                      g_ctx2.window_id, 0, 0, 0, &reply) != 0 ||
-                            reply.status != GFX_STATUS_OK) {
+                            reply.status != WASMOS_ERR_NONE) {
                             puts("[test] gfx smoke destroy2 failed");
                             return GFX_SMOKE_E_DESTROY;
                         }
@@ -696,7 +696,7 @@ int main(int argc, char** argv) {
                     } else if (!closed3 && close_id == g_ctx3.window_id) {
                         if (send_gfx(gfx_ep, reply_ep, req++, GFX_IPC_DESTROY_WINDOW,
                                      g_ctx3.window_id, 0, 0, 0, &reply) != 0 ||
-                            reply.status != GFX_STATUS_OK) {
+                            reply.status != WASMOS_ERR_NONE) {
                             puts("[test] gfx smoke destroy3 failed");
                             return GFX_SMOKE_E_DESTROY;
                         }
@@ -735,32 +735,32 @@ int main(int argc, char** argv) {
 
     if (send_gfx(gfx_ep, reply_ep, req++, GFX_IPC_PRESENT_WINDOW, g_ctx1.window_id,
                  g_ctx1.buffer_id + 1, 0, 0, &reply) != 0 ||
-        reply.status != GFX_STATUS_INVALID) {
+        reply.status != WASMOS_ERR_GFX_INVALID) {
         puts("[test] gfx smoke invalid-buffer deny failed");
         return GFX_SMOKE_E_INVALID_DENY;
     }
     if (send_gfx(gfx_ep, reply_ep, req++, GFX_IPC_RESIZE_WINDOW, g_ctx1.window_id, 200, 120, 0,
                  &reply) != 0 ||
-        reply.status != GFX_STATUS_INVALID) {
+        reply.status != WASMOS_ERR_GFX_INVALID) {
         puts("[test] gfx smoke post-destroy deny failed");
         return GFX_SMOKE_E_POST_DESTROY;
     }
 
     if (send_gfx(gfx_ep, reply_ep, req++, GFX_IPC_RELEASE_SHARED_BUFFER, g_ctx1.buffer_id, 0, 0, 0,
                  &reply) != 0 ||
-        reply.status != GFX_STATUS_OK) {
+        reply.status != WASMOS_ERR_NONE) {
         puts("[test] gfx smoke release1 failed");
         return GFX_SMOKE_E_RELEASE1;
     }
     if (send_gfx(gfx_ep, reply_ep, req++, GFX_IPC_RELEASE_SHARED_BUFFER, g_ctx2.buffer_id, 0, 0, 0,
                  &reply) != 0 ||
-        reply.status != GFX_STATUS_OK) {
+        reply.status != WASMOS_ERR_NONE) {
         puts("[test] gfx smoke release2a failed");
         return GFX_SMOKE_E_RELEASE1;
     }
     if (send_gfx(gfx_ep, reply_ep, req++, GFX_IPC_RELEASE_SHARED_BUFFER, g_ctx3.buffer_id, 0, 0, 0,
                  &reply) != 0 ||
-        reply.status != GFX_STATUS_OK) {
+        reply.status != WASMOS_ERR_NONE) {
         puts("[test] gfx smoke release3a failed");
         return GFX_SMOKE_E_RELEASE1;
     }
@@ -771,19 +771,19 @@ int main(int argc, char** argv) {
     }
     if (send_gfx(gfx_ep, reply_ep, req++, GFX_IPC_RELEASE_SHARED_BUFFER, g_ctx1.buffer_id, 0, 0, 0,
                  &reply) != 0 ||
-        reply.status != GFX_STATUS_INVALID) {
+        reply.status != WASMOS_ERR_GFX_INVALID) {
         puts("[test] gfx smoke release2 deny failed");
         return GFX_SMOKE_E_RELEASE2;
     }
     if (send_gfx(gfx_ep, reply_ep, req++, GFX_IPC_RELEASE_SHARED_BUFFER, g_ctx2.buffer_id, 0, 0, 0,
                  &reply) != 0 ||
-        reply.status != GFX_STATUS_INVALID) {
+        reply.status != WASMOS_ERR_GFX_INVALID) {
         puts("[test] gfx smoke release2b deny failed");
         return GFX_SMOKE_E_RELEASE2;
     }
     if (send_gfx(gfx_ep, reply_ep, req++, GFX_IPC_RELEASE_SHARED_BUFFER, g_ctx3.buffer_id, 0, 0, 0,
                  &reply) != 0 ||
-        reply.status != GFX_STATUS_INVALID) {
+        reply.status != WASMOS_ERR_GFX_INVALID) {
         puts("[test] gfx smoke release3b deny failed");
         return GFX_SMOKE_E_RELEASE2;
     }

@@ -25,6 +25,7 @@ enum {
 
 /* GFX_IPC_* opcodes come from the generated IPC opcode ABI (abi/opcodes.yaml). */
 #include "../../../../abi/generated/c/wasmos_opcodes.h"
+#include "../../../../abi/generated/c/wasmos_status.h"
 
 /* Provisional v1 message argument contracts:
  * - GFX_IPC_CREATE_WINDOW:  arg0=content_width arg1=content_height arg2=GFX_IPC_ABI_MAGIC
@@ -77,14 +78,8 @@ typedef struct {
     int32_t h;
 } gfx_rect_t;
 
-enum {
-    GFX_STATUS_OK = 0,
-    GFX_STATUS_INVALID = -1,
-    GFX_STATUS_PERMISSION = -2,
-    GFX_STATUS_UNSUPPORTED = -3,
-    GFX_STATUS_BUSY = -4,
-    GFX_STATUS_IO = -5
-};
+/* Request statuses are the packed gfx domain in abi/errors.yaml:
+ * WASMOS_ERR_NONE (0) on success, else a negative WASMOS_ERR_GFX_*. */
 
 enum {
     GFX_EVENT_NONE = 0,

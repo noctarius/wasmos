@@ -101,26 +101,26 @@ pub extern "wasmos" fn xfer_buffer_size() callconv(.c) i32;
 pub extern "wasmos" fn fs_endpoint() callconv(.c) i32;
 /// Copies `len` bytes from transfer buffer `buffer_id` starting at `offset` into
 /// the caller's WASM linear memory at `ptr_off`; requires the caller (owner or
-/// borrower) to hold the READ right. Returns XFER_BUFFER_OK (0) on success, 0 for
-/// a zero `len`, otherwise a negative XFER_BUFFER_ERR_* code (NOT_FOUND,
+/// borrower) to hold the READ right. Returns WASMOS_ERR_NONE (0) on success, 0 for
+/// a zero `len`, otherwise a negative WASMOS_ERR_XFER_BUFFER_* code (NOT_FOUND,
 /// INVALID_CONTEXT, NO_ACCESS, RANGE).
 pub extern "wasmos" fn xfer_buffer_read(a0: i32, a1: i32, a2: i32, a3: i32) callconv(.c) i32;
 /// Copies `len` bytes from the caller's WASM linear memory at `ptr_off` into
 /// transfer buffer `buffer_id` starting at `offset`; requires the caller (owner
-/// or borrower) to hold the WRITE right. Returns XFER_BUFFER_OK (0) on success, 0
-/// for a zero `len`, otherwise a negative XFER_BUFFER_ERR_* code (NOT_FOUND,
+/// or borrower) to hold the WRITE right. Returns WASMOS_ERR_NONE (0) on success, 0
+/// for a zero `len`, otherwise a negative WASMOS_ERR_XFER_BUFFER_* code (NOT_FOUND,
 /// INVALID_CONTEXT, NO_ACCESS, RANGE).
 pub extern "wasmos" fn xfer_buffer_write(a0: i32, a1: i32, a2: i32, a3: i32) callconv(.c) i32;
 /// OWNER assigns `flags` rights (bitmask of BUFFER_BORROW_READ/WRITE, must be
 /// non-zero and within 0x3) over buffer `buffer_id` of `kind` to the context that
 /// owns `grantee_ep`; returns the grantee's borrow_id. On failure returns a
-/// negative XFER_BUFFER_ERR_* code (INVALID_KIND, NOT_FOUND, INVALID_FLAGS,
+/// negative WASMOS_ERR_XFER_BUFFER_* code (INVALID_KIND, NOT_FOUND, INVALID_FLAGS,
 /// INVALID_CONTEXT, NO_ACCESS).
 pub extern "wasmos" fn buffer_borrow(a0: i32, a1: i32, a2: i32, a3: i32) callconv(.c) i32;
 /// OWNER releases buffer `buffer_id` of `kind` (only BUFFER_KIND_TRANSFER
 /// supported), dropping its acquisition and backing; caller must be the owning
-/// context. Returns XFER_BUFFER_OK (0) on success, otherwise a negative
-/// XFER_BUFFER_ERR_* code (INVALID_KIND, NOT_FOUND, INVALID_CONTEXT, NO_ACCESS).
+/// context. Returns WASMOS_ERR_NONE (0) on success, otherwise a negative
+/// WASMOS_ERR_XFER_BUFFER_* code (INVALID_KIND, NOT_FOUND, INVALID_CONTEXT, NO_ACCESS).
 pub extern "wasmos" fn buffer_release(a0: i32, a1: i32) callconv(.c) i32;
 /// Returns the physical address of the calling process's per-process 8 KiB
 /// (2-page) block buffer, allocating it below 512 MiB on first use (kernel
@@ -273,8 +273,8 @@ pub extern "wasmos" fn proc_info_stats(a0: i32, a1: i32, a2: i32, a3: i32, a4: i
 /// `grantee_endpoint`; returns the grantee's borrow_id.
 pub extern "wasmos" fn xfer_buffer_borrow(a0: i32, a1: i32, a2: i32) callconv(.c) i32;
 /// Owner-only release of transfer buffer `buffer_id`, dropping the owner's
-/// acquisition and its backing. Returns XFER_BUFFER_OK (0) on success, otherwise
-/// a negative XFER_BUFFER_ERR_* code.
+/// acquisition and its backing. Returns WASMOS_ERR_NONE (0) on success, otherwise
+/// a negative WASMOS_ERR_XFER_BUFFER_* code.
 pub extern "wasmos" fn xfer_buffer_release(a0: i32) callconv(.c) i32;
 /// Fill the caller's buffer at `out_off` with a per-CPU stats record for CPU
 /// `cpu_id` (ready_count, running_pid, steal_count, dispatch_count, last_pid).
@@ -448,17 +448,17 @@ pub extern "wasmos" fn ipc_select_wait_timeout(a0: i32, a1: i32) callconv(.c) i3
 pub extern "wasmos" fn xfer_buffer_acquire(a0: i32) callconv(.c) i32;
 /// Grantor-side drop of a transfer-buffer (re)borrow named by `borrow_id`; the
 /// lender revokes a grant it previously extended (resolved via the lent set, not
-/// the borrowed set). Returns XFER_BUFFER_OK (0) on success, otherwise a negative
-/// XFER_BUFFER_ERR_* code (INACTIVE_BORROW, INVALID_CONTEXT).
+/// the borrowed set). Returns WASMOS_ERR_NONE (0) on success, otherwise a negative
+/// WASMOS_ERR_XFER_BUFFER_* code (INACTIVE_BORROW, INVALID_CONTEXT).
 pub extern "wasmos" fn xfer_buffer_unborrow(a0: i32) callconv(.c) i32;
 /// OWNER acquires a new buffer of `kind` (only BUFFER_KIND_TRANSFER is supported)
 /// sized at least `minimum_size` bytes. Returns the positive `buffer_id` on
-/// success, otherwise a negative XFER_BUFFER_ERR_* code (INVALID_KIND,
+/// success, otherwise a negative WASMOS_ERR_XFER_BUFFER_* code (INVALID_KIND,
 /// INVALID_SIZE, INVALID_CONTEXT, NO_ACCESS).
 pub extern "wasmos" fn buffer_acquire(a0: i32, a1: i32) callconv(.c) i32;
 /// Grantor-side drop of a (re)borrow named by `borrow_id`: the lender revokes a
 /// grant it previously extended (resolved via the lent set). Returns
-/// XFER_BUFFER_OK (0) on success, otherwise a negative XFER_BUFFER_ERR_* code
+/// WASMOS_ERR_NONE (0) on success, otherwise a negative WASMOS_ERR_XFER_BUFFER_* code
 /// (INACTIVE_BORROW, INVALID_CONTEXT).
 pub extern "wasmos" fn buffer_unborrow(a0: i32) callconv(.c) i32;
 /// A grantee sub-grants its own `borrow_id` (rights ⊆ its own) to the context
@@ -467,7 +467,7 @@ pub extern "wasmos" fn xfer_buffer_reborrow(a0: i32, a1: i32, a2: i32) callconv(
 /// A current BORROWER sub-grants its own borrow `borrow_id` of `kind` to the
 /// context that owns `grantee_ep`, narrowing rights to `flags` (non-zero, within
 /// 0x3); returns the new grantee's borrow_id. On failure returns a negative
-/// XFER_BUFFER_ERR_* code (INVALID_KIND, INACTIVE_BORROW, INVALID_FLAGS,
+/// WASMOS_ERR_XFER_BUFFER_* code (INVALID_KIND, INACTIVE_BORROW, INVALID_FLAGS,
 /// INVALID_CONTEXT).
 pub extern "wasmos" fn buffer_reborrow(a0: i32, a1: i32, a2: i32, a3: i32) callconv(.c) i32;
 /// Returns this process's spawn-info buffer_id (holding its wasmos_spawn_info_t

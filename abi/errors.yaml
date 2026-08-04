@@ -147,6 +147,12 @@ domains:
       - { name: BAD_MODE_INDEX,      description: "mode index is out of range for this backend" }
       - { name: MODE_TOO_LARGE,      description: "requested mode does not fit the framebuffer mapping established at boot" }
       - { name: MODE_SET_FAILED,     description: "requested geometry is not a supported mode, or the mode-set path is unavailable" }
+      # Compositor request statuses (was GFX_STATUS_*).
+      - { name: INVALID,             description: "invalid request arguments (window id, geometry, buffer, or opcode header)" }
+      - { name: PERMISSION,          description: "caller is not permitted to act on the requested window or buffer" }
+      - { name: UNSUPPORTED,         description: "unknown or unsupported compositor request" }
+      - { name: BUSY,                description: "compositor has no free window/buffer slot (retryable)" }
+      - { name: IO,                  description: "framebuffer or shared-buffer operation failed" }
 
   driver:
     id: 7

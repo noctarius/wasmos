@@ -113,6 +113,11 @@ export const WASMOS_ERR_GFX_NO_RUNTIME_MODES: i32 = -0x00060002; // backend cann
 export const WASMOS_ERR_GFX_BAD_MODE_INDEX: i32 = -0x00060003; // mode index is out of range for this backend
 export const WASMOS_ERR_GFX_MODE_TOO_LARGE: i32 = -0x00060004; // requested mode does not fit the framebuffer mapping established at boot
 export const WASMOS_ERR_GFX_MODE_SET_FAILED: i32 = -0x00060005; // requested geometry is not a supported mode, or the mode-set path is unavailable
+export const WASMOS_ERR_GFX_INVALID: i32 = -0x00060006; // invalid request arguments (window id, geometry, buffer, or opcode header)
+export const WASMOS_ERR_GFX_PERMISSION: i32 = -0x00060007; // caller is not permitted to act on the requested window or buffer
+export const WASMOS_ERR_GFX_UNSUPPORTED: i32 = -0x00060008; // unknown or unsupported compositor request
+export const WASMOS_ERR_GFX_BUSY: i32 = -0x00060009; // compositor has no free window/buffer slot (retryable)
+export const WASMOS_ERR_GFX_IO: i32 = -0x0006000A; // framebuffer or shared-buffer operation failed
 export const WASMOS_ERR_VT_BAD_TTY_ID: i32 = -0x00080001; // requested tty id is out of range
 export const WASMOS_ERR_VT_NO_TTY_FOR_SOURCE: i32 = -0x00080002; // no tty is associated with the requesting endpoint
 export const WASMOS_ERR_VT_READER_BUSY: i32 = -0x00080003; // another endpoint is already the reader for this tty
@@ -279,6 +284,11 @@ export function strerror(c: i32): string {
     case WASMOS_ERR_GFX_BAD_MODE_INDEX: return "mode index is out of range for this backend";
     case WASMOS_ERR_GFX_MODE_TOO_LARGE: return "requested mode does not fit the framebuffer mapping established at boot";
     case WASMOS_ERR_GFX_MODE_SET_FAILED: return "requested geometry is not a supported mode, or the mode-set path is unavailable";
+    case WASMOS_ERR_GFX_INVALID: return "invalid request arguments (window id, geometry, buffer, or opcode header)";
+    case WASMOS_ERR_GFX_PERMISSION: return "caller is not permitted to act on the requested window or buffer";
+    case WASMOS_ERR_GFX_UNSUPPORTED: return "unknown or unsupported compositor request";
+    case WASMOS_ERR_GFX_BUSY: return "compositor has no free window/buffer slot (retryable)";
+    case WASMOS_ERR_GFX_IO: return "framebuffer or shared-buffer operation failed";
     case WASMOS_ERR_VT_BAD_TTY_ID: return "requested tty id is out of range";
     case WASMOS_ERR_VT_NO_TTY_FOR_SOURCE: return "no tty is associated with the requesting endpoint";
     case WASMOS_ERR_VT_READER_BUSY: return "another endpoint is already the reader for this tty";

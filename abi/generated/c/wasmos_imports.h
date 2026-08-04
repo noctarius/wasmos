@@ -132,29 +132,29 @@ extern int32_t wasmos_xfer_buffer_size(void) WASMOS_WASM_IMPORT("wasmos", "xfer_
 extern int32_t wasmos_fs_endpoint(void) WASMOS_WASM_IMPORT("wasmos", "fs_endpoint");
 /* Copies `len` bytes from transfer buffer `buffer_id` starting at `offset` into
  * the caller's WASM linear memory at `ptr_off`; requires the caller (owner or
- * borrower) to hold the READ right. Returns XFER_BUFFER_OK (0) on success, 0 for
- * a zero `len`, otherwise a negative XFER_BUFFER_ERR_* code (NOT_FOUND,
+ * borrower) to hold the READ right. Returns WASMOS_ERR_NONE (0) on success, 0 for
+ * a zero `len`, otherwise a negative WASMOS_ERR_XFER_BUFFER_* code (NOT_FOUND,
  * INVALID_CONTEXT, NO_ACCESS, RANGE).
  */
 extern int32_t wasmos_xfer_buffer_read(int32_t buffer_id, int32_t dst, int32_t len, int32_t offset) WASMOS_WASM_IMPORT("wasmos", "xfer_buffer_read");
 /* Copies `len` bytes from the caller's WASM linear memory at `ptr_off` into
  * transfer buffer `buffer_id` starting at `offset`; requires the caller (owner
- * or borrower) to hold the WRITE right. Returns XFER_BUFFER_OK (0) on success, 0
- * for a zero `len`, otherwise a negative XFER_BUFFER_ERR_* code (NOT_FOUND,
+ * or borrower) to hold the WRITE right. Returns WASMOS_ERR_NONE (0) on success, 0
+ * for a zero `len`, otherwise a negative WASMOS_ERR_XFER_BUFFER_* code (NOT_FOUND,
  * INVALID_CONTEXT, NO_ACCESS, RANGE).
  */
 extern int32_t wasmos_xfer_buffer_write(int32_t buffer_id, int32_t src, int32_t len, int32_t offset) WASMOS_WASM_IMPORT("wasmos", "xfer_buffer_write");
 /* OWNER assigns `flags` rights (bitmask of BUFFER_BORROW_READ/WRITE, must be
  * non-zero and within 0x3) over buffer `buffer_id` of `kind` to the context that
  * owns `grantee_ep`; returns the grantee's borrow_id. On failure returns a
- * negative XFER_BUFFER_ERR_* code (INVALID_KIND, NOT_FOUND, INVALID_FLAGS,
+ * negative WASMOS_ERR_XFER_BUFFER_* code (INVALID_KIND, NOT_FOUND, INVALID_FLAGS,
  * INVALID_CONTEXT, NO_ACCESS).
  */
 extern int32_t wasmos_buffer_borrow(int32_t kind, int32_t grantee, int32_t buffer_id, int32_t flags) WASMOS_WASM_IMPORT("wasmos", "buffer_borrow");
 /* OWNER releases buffer `buffer_id` of `kind` (only BUFFER_KIND_TRANSFER
  * supported), dropping its acquisition and backing; caller must be the owning
- * context. Returns XFER_BUFFER_OK (0) on success, otherwise a negative
- * XFER_BUFFER_ERR_* code (INVALID_KIND, NOT_FOUND, INVALID_CONTEXT, NO_ACCESS).
+ * context. Returns WASMOS_ERR_NONE (0) on success, otherwise a negative
+ * WASMOS_ERR_XFER_BUFFER_* code (INVALID_KIND, NOT_FOUND, INVALID_CONTEXT, NO_ACCESS).
  */
 extern int32_t wasmos_buffer_release(int32_t kind, int32_t buffer_id) WASMOS_WASM_IMPORT("wasmos", "buffer_release");
 /* Returns the physical address of the calling process's per-process 8 KiB
@@ -341,8 +341,8 @@ extern int32_t wasmos_proc_info_stats(int32_t index, int32_t buf, int32_t buf_le
  */
 extern int32_t wasmos_xfer_buffer_borrow(int32_t grantee, int32_t buffer_id, int32_t flags) WASMOS_WASM_IMPORT("wasmos", "xfer_buffer_borrow");
 /* Owner-only release of transfer buffer `buffer_id`, dropping the owner's
- * acquisition and its backing. Returns XFER_BUFFER_OK (0) on success, otherwise
- * a negative XFER_BUFFER_ERR_* code.
+ * acquisition and its backing. Returns WASMOS_ERR_NONE (0) on success, otherwise
+ * a negative WASMOS_ERR_XFER_BUFFER_* code.
  */
 extern int32_t wasmos_xfer_buffer_release(int32_t buffer_id) WASMOS_WASM_IMPORT("wasmos", "xfer_buffer_release");
 /* Fill the caller's buffer at `out_off` with a per-CPU stats record for CPU
@@ -549,19 +549,19 @@ extern int32_t wasmos_ipc_select_wait_timeout(int32_t sel, int32_t timeout_ms) W
 extern int32_t wasmos_xfer_buffer_acquire(int32_t minimum_size) WASMOS_WASM_IMPORT("wasmos", "xfer_buffer_acquire");
 /* Grantor-side drop of a transfer-buffer (re)borrow named by `borrow_id`; the
  * lender revokes a grant it previously extended (resolved via the lent set, not
- * the borrowed set). Returns XFER_BUFFER_OK (0) on success, otherwise a negative
- * XFER_BUFFER_ERR_* code (INACTIVE_BORROW, INVALID_CONTEXT).
+ * the borrowed set). Returns WASMOS_ERR_NONE (0) on success, otherwise a negative
+ * WASMOS_ERR_XFER_BUFFER_* code (INACTIVE_BORROW, INVALID_CONTEXT).
  */
 extern int32_t wasmos_xfer_buffer_unborrow(int32_t borrow_id) WASMOS_WASM_IMPORT("wasmos", "xfer_buffer_unborrow");
 /* OWNER acquires a new buffer of `kind` (only BUFFER_KIND_TRANSFER is supported)
  * sized at least `minimum_size` bytes. Returns the positive `buffer_id` on
- * success, otherwise a negative XFER_BUFFER_ERR_* code (INVALID_KIND,
+ * success, otherwise a negative WASMOS_ERR_XFER_BUFFER_* code (INVALID_KIND,
  * INVALID_SIZE, INVALID_CONTEXT, NO_ACCESS).
  */
 extern int32_t wasmos_buffer_acquire(int32_t kind, int32_t minimum_size) WASMOS_WASM_IMPORT("wasmos", "buffer_acquire");
 /* Grantor-side drop of a (re)borrow named by `borrow_id`: the lender revokes a
  * grant it previously extended (resolved via the lent set). Returns
- * XFER_BUFFER_OK (0) on success, otherwise a negative XFER_BUFFER_ERR_* code
+ * WASMOS_ERR_NONE (0) on success, otherwise a negative WASMOS_ERR_XFER_BUFFER_* code
  * (INACTIVE_BORROW, INVALID_CONTEXT).
  */
 extern int32_t wasmos_buffer_unborrow(int32_t borrow_id) WASMOS_WASM_IMPORT("wasmos", "buffer_unborrow");
@@ -572,7 +572,7 @@ extern int32_t wasmos_xfer_buffer_reborrow(int32_t grantee, int32_t borrow_id, i
 /* A current BORROWER sub-grants its own borrow `borrow_id` of `kind` to the
  * context that owns `grantee_ep`, narrowing rights to `flags` (non-zero, within
  * 0x3); returns the new grantee's borrow_id. On failure returns a negative
- * XFER_BUFFER_ERR_* code (INVALID_KIND, INACTIVE_BORROW, INVALID_FLAGS,
+ * WASMOS_ERR_XFER_BUFFER_* code (INVALID_KIND, INACTIVE_BORROW, INVALID_FLAGS,
  * INVALID_CONTEXT).
  */
 extern int32_t wasmos_buffer_reborrow(int32_t kind, int32_t grantee, int32_t borrow_id, int32_t flags) WASMOS_WASM_IMPORT("wasmos", "buffer_reborrow");

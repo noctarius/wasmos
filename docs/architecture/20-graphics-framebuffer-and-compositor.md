@@ -139,18 +139,19 @@ App-facing compositor interface. Defined in
 | `GFX_IPC_GET_DISPLAY_INFO`      | 0x020C | —                                                                                              | arg1=width arg2=height                                |
 | `GFX_IPC_MOVE_WINDOW`           | 0x020D | arg0=window_id arg1=x arg2=y                                                                    | —                                                     |
 | `GFX_IPC_SET_WINDOW_TITLE`      | 0x020E | arg0=window_id arg1=shmem_id arg2=title_len arg3=0 (owner only)                                 | —                                                     |
-| `GFX_IPC_RESP`                  | 0x0280 | success reply; arg0=GFX_STATUS_*                                                               | —                                                     |
+| `GFX_IPC_RESP`                  | 0x0280 | success reply; arg0=WASMOS_ERR_GFX_*                                                               | —                                                     |
 | `GFX_IPC_ERROR`                 | 0x02FF | error reply                                                                                    | —                                                     |
 
 #### Status Codes
 
 ```c
-GFX_STATUS_OK          =  0
-GFX_STATUS_INVALID     = -1   // bad argument or malformed request
-GFX_STATUS_PERMISSION  = -2   // window/buffer not owned by caller
-GFX_STATUS_UNSUPPORTED = -3   // operation not available
-GFX_STATUS_BUSY        = -4   // resource in use; retryable
-GFX_STATUS_IO          = -5   // device or shmem failure
+WASMOS_ERR_NONE            // success
+WASMOS_ERR_GFX_INVALID     // bad argument or malformed request
+WASMOS_ERR_GFX_PERMISSION  // window/buffer not owned by caller
+WASMOS_ERR_GFX_UNSUPPORTED // operation not available
+WASMOS_ERR_GFX_BUSY        // resource in use; retryable
+WASMOS_ERR_GFX_IO          // device or shmem failure
+// Values are generated from the gfx domain in abi/errors.yaml.
 ```
 
 #### Event Types (`GFX_IPC_PUSH_EVENT` payloads)
@@ -190,8 +191,8 @@ Font service interface. Defined in `src/libc/include/wasmos/font_ipc.h`.
 | `FONT_IPC_RASTER_GLYPH_REQ`      | 0xA02 | arg0=handle_id arg1=codepoint                                     | arg1=shmem_id arg2=pack(w,h) arg3=pack(x0,y0)         |
 | `FONT_IPC_MEASURE_GLYPH_REQ`     | 0xA03 | arg0=handle_id arg1=text_shmem_id arg2=text_len                   | arg1=pack(w,h) arg2=pack(x0,y0) arg3=advance_x        |
 | `FONT_IPC_RASTER_GLYPH_INTO_REQ` | 0xA04 | arg0=handle_id arg1=text_shmem_id arg2=text_len arg3=dst_shmem_id | arg1=pack(w,h) arg2=pack(x0,y0) arg3=advance_x        |
-| `FONT_IPC_RESP`                  | 0xA80 | success reply; arg0=FONT_STATUS_OK                                | —                                                     |
-| `FONT_IPC_ERROR`                 | 0xAFF | error reply; arg0=FONT_STATUS_*                                   | —                                                     |
+| `FONT_IPC_RESP`                  | 0xA80 | success reply; arg0=WASMOS_ERR_NONE                                | —                                                     |
+| `FONT_IPC_ERROR`                 | 0xAFF | error reply; arg0=WASMOS_ERR_FONT_*                                   | —                                                     |
 
 `pack(w,h)` uses `sys.packU16Pair` (w in low 16, h in high 16);
 `pack(x0,y0)` uses `sys.packS16Pair`.
@@ -207,12 +208,13 @@ FONT_ID_NOTO_SERIF  = 3   // /boot/system/fonts/roboto_serif.ttf
 #### Status Codes
 
 ```c
-FONT_STATUS_OK          =  0
-FONT_STATUS_INVALID     = -1
-FONT_STATUS_PERMISSION  = -2
-FONT_STATUS_UNSUPPORTED = -3
-FONT_STATUS_IO          = -4
-FONT_STATUS_BUSY        = -5
+WASMOS_ERR_NONE             // success
+WASMOS_ERR_FONT_INVALID
+WASMOS_ERR_FONT_PERMISSION
+WASMOS_ERR_FONT_UNSUPPORTED
+WASMOS_ERR_FONT_IO
+WASMOS_ERR_FONT_BUSY
+// Values are generated from the font domain in abi/errors.yaml.
 ```
 
 ---
@@ -418,7 +420,7 @@ region is written to the scanout buffer on each compose cycle.
 
 #### Display Mode Switch (`handle_set_display_mode`)
 
-1. Query `FBTEXT_IPC_QUERY_CAPS_REQ`; reject with `GFX_STATUS_UNSUPPORTED` if
+1. Query `FBTEXT_IPC_QUERY_CAPS_REQ`; reject with `WASMOS_ERR_GFX_UNSUPPORTED` if
    `FBTEXT_CAP_SET_RESOLUTION` is absent.
 2. Send `FBTEXT_IPC_SET_RESOLUTION_REQ` with requested width/height.
 3. On success: re-call `refresh_framebuffer_mapping()`, rebuild backbuffer
@@ -563,7 +565,7 @@ TODO: libui font shmem IDs are not reclaimed on buffer growth.
 
 All window and buffer operations check `owner_endpoint == msg.source`
 before mutation. First violation per session logs a one-shot marker and
-returns `GFX_STATUS_PERMISSION`:
+returns `WASMOS_ERR_GFX_PERMISSION`:
 
 | Scenario                                     | Marker                               |
 |----------------------------------------------|--------------------------------------|
@@ -602,7 +604,7 @@ before resize is rejected after the resize increments `generation`.
 
 5. **Font handles are owner-scoped.** Every `OPEN_FONT` records
    `owner_endpoint`; `GET_METRICS`, `RASTER_GLYPH`, and related calls
-   reject requests from non-owner endpoints with `FONT_STATUS_PERMISSION`.
+   reject requests from non-owner endpoints with `WASMOS_ERR_FONT_PERMISSION`.
 
 6. **Runtime input recovery survives event floods.** Every 256 delivered IPC
    events, `refresh_input_subscriptions_runtime()` re-checks keyboard/mouse

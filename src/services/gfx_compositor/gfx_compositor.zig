@@ -709,11 +709,11 @@ fn refresh_framebuffer_mapping() i32 {
         info.framebuffer_height == 0 or
         info.framebuffer_stride == 0)
     {
-        return c.GFX_STATUS_IO;
+        return c.WASMOS_ERR_GFX_IO;
     }
     const fb_size_u64: u64 = @as(u64, info.framebuffer_stride) * @as(u64, info.framebuffer_height) * 4;
     if (fb_size_u64 == 0 or fb_size_u64 > 0xFFFF_FFFF) {
-        return c.GFX_STATUS_IO;
+        return c.WASMOS_ERR_GFX_IO;
     }
     if (g_fb_pixels != null) {
         _ = api().xfer_buffer_release.?(g_fb_buffer_id);
@@ -725,18 +725,18 @@ fn refresh_framebuffer_mapping() i32 {
     // retained so a later mode change can release + re-acquire.
     const fb_ptr = api().xfer_buffer_acquire.?(c.ND_BUFFER_KIND_FRAMEBUFFER, @intCast(fb_size_u64), &g_fb_buffer_id);
     if (fb_ptr == null) {
-        return c.GFX_STATUS_IO;
+        return c.WASMOS_ERR_GFX_IO;
     }
     g_fb_info = info;
     g_fb_info_valid = true;
     g_fb_pixels = @ptrCast(@alignCast(fb_ptr.?));
     clamp_runtime_state_to_framebuffer();
-    return c.GFX_STATUS_OK;
+    return c.WASMOS_ERR_NONE;
 }
 
 fn ensure_backbuffer_capacity(required_bytes: u32) i32 {
-    if (required_bytes == 0) return c.GFX_STATUS_IO;
-    if (g_backbuffer_pixels != null and g_backbuffer_capacity_bytes >= required_bytes) return c.GFX_STATUS_OK;
+    if (required_bytes == 0) return c.WASMOS_ERR_GFX_IO;
+    if (g_backbuffer_pixels != null and g_backbuffer_capacity_bytes >= required_bytes) return c.WASMOS_ERR_NONE;
 
     // Release any previous backbuffer first (xfer_buffer_release destroys +
     // unmaps), so a resize reclaims the old one instead of leaking it.
@@ -755,12 +755,12 @@ fn ensure_backbuffer_capacity(required_bytes: u32) i32 {
     const raw = api().xfer_buffer_acquire.?(c.ND_BUFFER_KIND_XFER, required_bytes, &buffer_id);
     if (raw == null or buffer_id == 0) {
         logMsg("[gfx] backbuffer acquire failed\n");
-        return c.GFX_STATUS_IO;
+        return c.WASMOS_ERR_GFX_IO;
     }
     g_backbuffer_buffer_id = buffer_id;
     g_backbuffer_pixels = @ptrCast(@alignCast(raw.?));
     g_backbuffer_capacity_bytes = required_bytes;
-    return c.GFX_STATUS_OK;
+    return c.WASMOS_ERR_NONE;
 }
 
 fn try_switch_to_gfx_tty() void {
@@ -1522,7 +1522,7 @@ fn reply_with_status(msg: *const c.nd_ipc_message_t, status: i32, arg1: u32, arg
 }
 
 fn reply_unsupported(msg: *const c.nd_ipc_message_t) void {
-    reply_with_status(msg, c.GFX_STATUS_UNSUPPORTED, 0, 0, 0);
+    reply_with_status(msg, c.WASMOS_ERR_GFX_UNSUPPORTED, 0, 0, 0);
 }
 
 fn gfx_header_valid(magic: u32, ver_opcode: u32) bool {
@@ -2338,11 +2338,11 @@ fn draw_window_buffer(win: window_slot_t, buf: buffer_slot_t, clip: c.gfx_rect_t
 }
 
 fn compose_region(region: c.gfx_rect_t) i32 {
-    if (!g_fb_info_valid or g_fb_pixels == null or region.w <= 0 or region.h <= 0) return c.GFX_STATUS_OK;
+    if (!g_fb_info_valid or g_fb_pixels == null or region.w <= 0 or region.h <= 0) return c.WASMOS_ERR_NONE;
     // The framebuffer belongs to the vt's text render whenever vt-0 is not the
     // visible slot; do not paint over it.  Window state still updates; a full
     // repaint is issued when vt-0 becomes visible again (VT_IPC_VIS_NOTIFY).
-    if (!g_overlay_locked) return c.GFX_STATUS_OK;
+    if (!g_overlay_locked) return c.WASMOS_ERR_NONE;
 
     fill_rect(region.x, region.y, region.w, region.h, 0x101820);
 
@@ -2399,7 +2399,7 @@ fn compose_region(region: c.gfx_rect_t) i32 {
         draw_cursor_overlay(region);
     }
 
-    const src = g_backbuffer_pixels orelse return c.GFX_STATUS_OK;
+    const src = g_backbuffer_pixels orelse return c.WASMOS_ERR_NONE;
     const dst = g_fb_pixels.?;
     const stride: usize = @intCast(g_fb_info.framebuffer_stride);
     const max_x: i32 = @intCast(g_fb_info.framebuffer_width);
@@ -2412,7 +2412,7 @@ fn compose_region(region: c.gfx_rect_t) i32 {
     if (sy < 0) sy = 0;
     if (ex > max_x) ex = max_x;
     if (ey > max_y) ey = max_y;
-    if (sx >= ex or sy >= ey) return c.GFX_STATUS_OK;
+    if (sx >= ex or sy >= ey) return c.WASMOS_ERR_NONE;
 
     const width_pixels: usize = @intCast(ex - sx);
     const col_off: usize = @intCast(sx);
@@ -2432,11 +2432,11 @@ fn compose_region(region: c.gfx_rect_t) i32 {
         }
     }
 
-    return c.GFX_STATUS_OK;
+    return c.WASMOS_ERR_NONE;
 }
 
 fn compose_full() i32 {
-    if (!g_fb_info_valid) return c.GFX_STATUS_IO;
+    if (!g_fb_info_valid) return c.WASMOS_ERR_GFX_IO;
     return compose_region(.{
         .x = 0,
         .y = 0,
@@ -2454,25 +2454,25 @@ fn handle_create_window(msg: *const c.nd_ipc_message_t) void {
     const width = msg.arg0;
     const height = msg.arg1;
     if (!validate_window_dims(width, height)) {
-        reply_with_status(msg, c.GFX_STATUS_INVALID, 0, 0, 0);
+        reply_with_status(msg, c.WASMOS_ERR_GFX_INVALID, 0, 0, 0);
         return;
     }
     const slot_idx = window_alloc(msg.source, width, height) orelse {
-        reply_with_status(msg, c.GFX_STATUS_BUSY, 0, 0, 0);
+        reply_with_status(msg, c.WASMOS_ERR_GFX_BUSY, 0, 0, 0);
         return;
     };
     const win = g_windows[slot_idx];
-    reply_with_status(msg, c.GFX_STATUS_OK, win.window_id, win.width, win.height);
+    reply_with_status(msg, c.WASMOS_ERR_NONE, win.window_id, win.width, win.height);
 }
 
 fn handle_destroy_window(msg: *const c.nd_ipc_message_t) void {
     const window_id = msg.arg0;
     if (window_id == 0) {
-        reply_with_status(msg, c.GFX_STATUS_INVALID, 0, 0, 0);
+        reply_with_status(msg, c.WASMOS_ERR_GFX_INVALID, 0, 0, 0);
         return;
     }
     const slot_idx = window_find_by_id(window_id) orelse {
-        reply_with_status(msg, c.GFX_STATUS_INVALID, 0, 0, 0);
+        reply_with_status(msg, c.WASMOS_ERR_GFX_INVALID, 0, 0, 0);
         return;
     };
     if (!same_owner(g_windows[slot_idx].owner_endpoint, msg.source)) {
@@ -2480,7 +2480,7 @@ fn handle_destroy_window(msg: *const c.nd_ipc_message_t) void {
             g_window_owner_deny_logged = true;
             logMsg("[test] gfx window owner deny ok\n");
         }
-        reply_with_status(msg, c.GFX_STATUS_PERMISSION, 0, 0, 0);
+        reply_with_status(msg, c.WASMOS_ERR_GFX_PERMISSION, 0, 0, 0);
         return;
     }
     if (g_focused_window_id == window_id) {
@@ -2489,7 +2489,7 @@ fn handle_destroy_window(msg: *const c.nd_ipc_message_t) void {
     g_windows[slot_idx] = .{};
     sync_console_mode_for_windows();
     request_repaint_full();
-    reply_with_status(msg, c.GFX_STATUS_OK, 0, 0, 0);
+    reply_with_status(msg, c.WASMOS_ERR_NONE, 0, 0, 0);
 }
 
 fn handle_resize_window(msg: *const c.nd_ipc_message_t) void {
@@ -2497,11 +2497,11 @@ fn handle_resize_window(msg: *const c.nd_ipc_message_t) void {
     const width = msg.arg1;
     const height = msg.arg2;
     if (window_id == 0 or !validate_window_dims(width, height)) {
-        reply_with_status(msg, c.GFX_STATUS_INVALID, 0, 0, 0);
+        reply_with_status(msg, c.WASMOS_ERR_GFX_INVALID, 0, 0, 0);
         return;
     }
     const slot_idx = window_find_by_id(window_id) orelse {
-        reply_with_status(msg, c.GFX_STATUS_INVALID, 0, 0, 0);
+        reply_with_status(msg, c.WASMOS_ERR_GFX_INVALID, 0, 0, 0);
         return;
     };
     if (!same_owner(g_windows[slot_idx].owner_endpoint, msg.source)) {
@@ -2509,12 +2509,12 @@ fn handle_resize_window(msg: *const c.nd_ipc_message_t) void {
             g_window_owner_deny_logged = true;
             logMsg("[test] gfx window owner deny ok\n");
         }
-        reply_with_status(msg, c.GFX_STATUS_PERMISSION, 0, 0, 0);
+        reply_with_status(msg, c.WASMOS_ERR_GFX_PERMISSION, 0, 0, 0);
         return;
     }
     g_windows[slot_idx].is_maximized = false;
     resize_window_and_notify(slot_idx, g_windows[slot_idx].x, g_windows[slot_idx].y, width, height);
-    reply_with_status(msg, c.GFX_STATUS_OK, width, height, 0);
+    reply_with_status(msg, c.WASMOS_ERR_NONE, width, height, 0);
 }
 
 fn handle_alloc_shared_buffer(msg: *const c.nd_ipc_message_t) void {
@@ -2522,13 +2522,13 @@ fn handle_alloc_shared_buffer(msg: *const c.nd_ipc_message_t) void {
     const width = msg.arg1;
     const height = msg.arg2;
     if (!validate_window_dims(width, height)) {
-        reply_with_status(msg, c.GFX_STATUS_INVALID, 0, 0, 0);
+        reply_with_status(msg, c.WASMOS_ERR_GFX_INVALID, 0, 0, 0);
         return;
     }
 
     if (window_id != 0) {
         const window_idx = window_find_by_id(window_id) orelse {
-            reply_with_status(msg, c.GFX_STATUS_INVALID, 0, 0, 0);
+            reply_with_status(msg, c.WASMOS_ERR_GFX_INVALID, 0, 0, 0);
             return;
         };
         if (!same_owner(g_windows[window_idx].owner_endpoint, msg.source)) {
@@ -2536,21 +2536,21 @@ fn handle_alloc_shared_buffer(msg: *const c.nd_ipc_message_t) void {
                 g_window_owner_deny_logged = true;
                 logMsg("[test] gfx window owner deny ok\n");
             }
-            reply_with_status(msg, c.GFX_STATUS_PERMISSION, 0, 0, 0);
+            reply_with_status(msg, c.WASMOS_ERR_GFX_PERMISSION, 0, 0, 0);
             return;
         }
         if (window_has_no_content(g_windows[window_idx])) {
-            reply_with_status(msg, c.GFX_STATUS_UNSUPPORTED, 0, 0, 0);
+            reply_with_status(msg, c.WASMOS_ERR_GFX_UNSUPPORTED, 0, 0, 0);
             return;
         }
         if (g_windows[window_idx].width != width or g_windows[window_idx].height != height) {
-            reply_with_status(msg, c.GFX_STATUS_INVALID, 0, 0, 0);
+            reply_with_status(msg, c.WASMOS_ERR_GFX_INVALID, 0, 0, 0);
             return;
         }
     }
 
     const buf_idx = buffer_alloc(msg.source, width, height) orelse {
-        reply_with_status(msg, c.GFX_STATUS_BUSY, 0, 0, 0);
+        reply_with_status(msg, c.WASMOS_ERR_GFX_BUSY, 0, 0, 0);
         return;
     };
     const buf = g_buffers[buf_idx];
@@ -2562,17 +2562,17 @@ fn handle_alloc_shared_buffer(msg: *const c.nd_ipc_message_t) void {
         }
     }
 
-    reply_with_status(msg, c.GFX_STATUS_OK, buf.buffer_id, buf.shmem_id, buf.stride_bytes);
+    reply_with_status(msg, c.WASMOS_ERR_NONE, buf.buffer_id, buf.shmem_id, buf.stride_bytes);
 }
 
 fn handle_release_shared_buffer(msg: *const c.nd_ipc_message_t) void {
     const buffer_id = msg.arg0;
     if (buffer_id == 0) {
-        reply_with_status(msg, c.GFX_STATUS_INVALID, 0, 0, 0);
+        reply_with_status(msg, c.WASMOS_ERR_GFX_INVALID, 0, 0, 0);
         return;
     }
     const buf_idx = buffer_find_by_id(buffer_id) orelse {
-        reply_with_status(msg, c.GFX_STATUS_INVALID, 0, 0, 0);
+        reply_with_status(msg, c.WASMOS_ERR_GFX_INVALID, 0, 0, 0);
         return;
     };
     if (!same_owner(g_buffers[buf_idx].owner_endpoint, msg.source)) {
@@ -2580,12 +2580,12 @@ fn handle_release_shared_buffer(msg: *const c.nd_ipc_message_t) void {
             g_buffer_owner_deny_logged = true;
             logMsg("[test] gfx buffer owner deny ok\n");
         }
-        reply_with_status(msg, c.GFX_STATUS_PERMISSION, 0, 0, 0);
+        reply_with_status(msg, c.WASMOS_ERR_GFX_PERMISSION, 0, 0, 0);
         return;
     }
 
     if (window_buffer_in_use(buffer_id)) {
-        reply_with_status(msg, c.GFX_STATUS_BUSY, 0, 0, 0);
+        reply_with_status(msg, c.WASMOS_ERR_GFX_BUSY, 0, 0, 0);
         return;
     }
 
@@ -2597,7 +2597,7 @@ fn handle_release_shared_buffer(msg: *const c.nd_ipc_message_t) void {
     if (changed) {
         request_repaint_full();
     }
-    reply_with_status(msg, c.GFX_STATUS_OK, 0, 0, 0);
+    reply_with_status(msg, c.WASMOS_ERR_NONE, 0, 0, 0);
 }
 
 fn handle_present_window(msg: *const c.nd_ipc_message_t) void {
@@ -2607,12 +2607,12 @@ fn handle_present_window(msg: *const c.nd_ipc_message_t) void {
     const damage_shmem_id = msg.arg3;
 
     if (window_id == 0 or buffer_id == 0) {
-        reply_with_status(msg, c.GFX_STATUS_INVALID, 0, 0, 0);
+        reply_with_status(msg, c.WASMOS_ERR_GFX_INVALID, 0, 0, 0);
         return;
     }
 
     const window_idx = window_find_by_id(window_id) orelse {
-        reply_with_status(msg, c.GFX_STATUS_INVALID, 0, 0, 0);
+        reply_with_status(msg, c.WASMOS_ERR_GFX_INVALID, 0, 0, 0);
         return;
     };
     if (!same_owner(g_windows[window_idx].owner_endpoint, msg.source)) {
@@ -2620,12 +2620,12 @@ fn handle_present_window(msg: *const c.nd_ipc_message_t) void {
             g_window_owner_deny_logged = true;
             logMsg("[test] gfx window owner deny ok\n");
         }
-        reply_with_status(msg, c.GFX_STATUS_PERMISSION, 0, 0, 0);
+        reply_with_status(msg, c.WASMOS_ERR_GFX_PERMISSION, 0, 0, 0);
         return;
     }
 
     const buf_idx = buffer_find_by_id(buffer_id) orelse {
-        reply_with_status(msg, c.GFX_STATUS_INVALID, 0, 0, 0);
+        reply_with_status(msg, c.WASMOS_ERR_GFX_INVALID, 0, 0, 0);
         return;
     };
     const buf = g_buffers[buf_idx];
@@ -2634,12 +2634,12 @@ fn handle_present_window(msg: *const c.nd_ipc_message_t) void {
             g_buffer_owner_deny_logged = true;
             logMsg("[test] gfx buffer owner deny ok\n");
         }
-        reply_with_status(msg, c.GFX_STATUS_PERMISSION, 0, 0, 0);
+        reply_with_status(msg, c.WASMOS_ERR_GFX_PERMISSION, 0, 0, 0);
         return;
     }
 
     if (buf.width < g_windows[window_idx].width or buf.height < g_windows[window_idx].height) {
-        reply_with_status(msg, c.GFX_STATUS_INVALID, 0, 0, 0);
+        reply_with_status(msg, c.WASMOS_ERR_GFX_INVALID, 0, 0, 0);
         return;
     }
 
@@ -2647,18 +2647,18 @@ fn handle_present_window(msg: *const c.nd_ipc_message_t) void {
         if (buf.bound_window_id != window_id or
             buf.bound_window_generation != g_windows[window_idx].generation)
         {
-            reply_with_status(msg, c.GFX_STATUS_INVALID, 0, 0, 0);
+            reply_with_status(msg, c.WASMOS_ERR_GFX_INVALID, 0, 0, 0);
             return;
         }
     }
 
     if (buf.state == .acquired and g_windows[window_idx].current_buffer_id != buffer_id) {
-        reply_with_status(msg, c.GFX_STATUS_BUSY, 0, 0, 0);
+        reply_with_status(msg, c.WASMOS_ERR_GFX_BUSY, 0, 0, 0);
         return;
     }
 
     if (window_has_no_content(g_windows[window_idx])) {
-        reply_with_status(msg, c.GFX_STATUS_UNSUPPORTED, 0, 0, 0);
+        reply_with_status(msg, c.WASMOS_ERR_GFX_UNSUPPORTED, 0, 0, 0);
         return;
     }
 
@@ -2684,14 +2684,14 @@ fn handle_present_window(msg: *const c.nd_ipc_message_t) void {
         if (GFX_TRACE) {
             logMsg("[gfx-t] present-reply OK\n");
         }
-        reply_with_status(msg, c.GFX_STATUS_OK, 0, 0, 0);
+        reply_with_status(msg, c.WASMOS_ERR_NONE, 0, 0, 0);
         return;
     }
 
     const dmg_ptr_raw = api().shmem_map.?(damage_shmem_id);
     if (dmg_ptr_raw == null) {
         request_repaint_full();
-        reply_with_status(msg, c.GFX_STATUS_OK, 0, 0, 0);
+        reply_with_status(msg, c.WASMOS_ERR_NONE, 0, 0, 0);
         return;
     }
     defer _ = api().shmem_unmap.?(damage_shmem_id);
@@ -2702,7 +2702,7 @@ fn handle_present_window(msg: *const c.nd_ipc_message_t) void {
         const r = dmg_rects[@intCast(i)];
         if (r.w <= 0 or r.h <= 0 or r.x < 0 or r.y < 0) {
             request_repaint_full();
-            reply_with_status(msg, c.GFX_STATUS_OK, 0, 0, 0);
+            reply_with_status(msg, c.WASMOS_ERR_NONE, 0, 0, 0);
             return;
         }
         const rw: u32 = @intCast(r.w);
@@ -2713,7 +2713,7 @@ fn handle_present_window(msg: *const c.nd_ipc_message_t) void {
             rw > (g_windows[window_idx].width - rx) or rh > (g_windows[window_idx].height - ry))
         {
             request_repaint_full();
-            reply_with_status(msg, c.GFX_STATUS_OK, 0, 0, 0);
+            reply_with_status(msg, c.WASMOS_ERR_NONE, 0, 0, 0);
             return;
         }
 
@@ -2731,18 +2731,18 @@ fn handle_present_window(msg: *const c.nd_ipc_message_t) void {
         g_damage_marker_logged = true;
         logMsg("[test] gfx damage present path ok\n");
     }
-    reply_with_status(msg, c.GFX_STATUS_OK, 0, 0, 0);
+    reply_with_status(msg, c.WASMOS_ERR_NONE, 0, 0, 0);
 }
 
 fn handle_set_display_mode(msg: *const c.nd_ipc_message_t) void {
     if (g_fb_endpoint == IPC_ENDPOINT_NONE) {
-        reply_with_status(msg, c.GFX_STATUS_IO, 0, 0, 0);
+        reply_with_status(msg, c.WASMOS_ERR_GFX_IO, 0, 0, 0);
         return;
     }
     const width = msg.arg0;
     const height = msg.arg1;
     if (width == 0 or height == 0) {
-        reply_with_status(msg, c.GFX_STATUS_INVALID, 0, 0, 0);
+        reply_with_status(msg, c.WASMOS_ERR_GFX_INVALID, 0, 0, 0);
         return;
     }
 
@@ -2751,44 +2751,44 @@ fn handle_set_display_mode(msg: *const c.nd_ipc_message_t) void {
     if (ipc_call(g_fb_endpoint, caps_req_id, c.FBTEXT_IPC_QUERY_CAPS_REQ, 0, 0, 0, 0, &caps_reply) != 0 or
         caps_reply.type != c.FBTEXT_IPC_RESP)
     {
-        reply_with_status(msg, c.GFX_STATUS_IO, 0, 0, 0);
+        reply_with_status(msg, c.WASMOS_ERR_GFX_IO, 0, 0, 0);
         return;
     }
     if ((caps_reply.arg0 & c.FBTEXT_CAP_SET_RESOLUTION) == 0) {
-        reply_with_status(msg, c.GFX_STATUS_UNSUPPORTED, 0, 0, 0);
+        reply_with_status(msg, c.WASMOS_ERR_GFX_UNSUPPORTED, 0, 0, 0);
         return;
     }
 
     var mode_reply: c.nd_ipc_message_t = undefined;
     const mode_req_id: u32 = GFX_REQUEST_BASE + GFX_FB_LOOKUP_RETRIES + 12;
     if (ipc_call(g_fb_endpoint, mode_req_id, c.FBTEXT_IPC_SET_RESOLUTION_REQ, width, height, 0, 0, &mode_reply) != 0) {
-        reply_with_status(msg, c.GFX_STATUS_IO, 0, 0, 0);
+        reply_with_status(msg, c.WASMOS_ERR_GFX_IO, 0, 0, 0);
         return;
     }
     if (mode_reply.type != c.FBTEXT_IPC_RESP) {
         const fb_status: i32 = @bitCast(mode_reply.arg0);
-        if (fb_status == c.GFX_STATUS_UNSUPPORTED or fb_status == -3) {
-            reply_with_status(msg, c.GFX_STATUS_UNSUPPORTED, 0, 0, 0);
+        if (fb_status == c.WASMOS_ERR_GFX_UNSUPPORTED or fb_status == -3) {
+            reply_with_status(msg, c.WASMOS_ERR_GFX_UNSUPPORTED, 0, 0, 0);
             return;
         }
-        reply_with_status(msg, c.GFX_STATUS_INVALID, 0, 0, 0);
+        reply_with_status(msg, c.WASMOS_ERR_GFX_INVALID, 0, 0, 0);
         return;
     }
 
     const refresh_rc = refresh_framebuffer_mapping();
-    if (refresh_rc != c.GFX_STATUS_OK) {
+    if (refresh_rc != c.WASMOS_ERR_NONE) {
         reply_with_status(msg, refresh_rc, 0, 0, 0);
         return;
     }
     const fb_bytes_u64: u64 = @as(u64, g_fb_info.framebuffer_stride) * @as(u64, g_fb_info.framebuffer_height) * 4;
     if (fb_bytes_u64 == 0 or fb_bytes_u64 > 0xFFFF_FFFF or
-        ensure_backbuffer_capacity(@intCast(fb_bytes_u64)) != c.GFX_STATUS_OK)
+        ensure_backbuffer_capacity(@intCast(fb_bytes_u64)) != c.WASMOS_ERR_NONE)
     {
-        reply_with_status(msg, c.GFX_STATUS_IO, 0, 0, 0);
+        reply_with_status(msg, c.WASMOS_ERR_GFX_IO, 0, 0, 0);
         return;
     }
     request_repaint_full();
-    reply_with_status(msg, c.GFX_STATUS_OK, g_fb_info.framebuffer_width, g_fb_info.framebuffer_height, g_fb_info.framebuffer_stride);
+    reply_with_status(msg, c.WASMOS_ERR_NONE, g_fb_info.framebuffer_width, g_fb_info.framebuffer_height, g_fb_info.framebuffer_stride);
 }
 
 fn handle_list_windows(msg: *const c.nd_ipc_message_t) void {
@@ -2805,18 +2805,18 @@ fn handle_list_windows(msg: *const c.nd_ipc_message_t) void {
                 if (g_windows[m].in_use and
                     (g_windows[m].flags & GFX_WINDOW_FLAG_NO_TASK_LIST) == 0) total += 1;
             }
-            reply_with_status(msg, c.GFX_STATUS_OK, @intCast(g_windows[k].window_id), @intCast(g_windows[k].owner_endpoint), @intCast(total));
+            reply_with_status(msg, c.WASMOS_ERR_NONE, @intCast(g_windows[k].window_id), @intCast(g_windows[k].owner_endpoint), @intCast(total));
             return;
         }
         count += 1;
     }
-    reply_with_status(msg, c.GFX_STATUS_OK, 0, 0, @intCast(count));
+    reply_with_status(msg, c.WASMOS_ERR_NONE, 0, 0, @intCast(count));
 }
 
 fn handle_focus_window(msg: *const c.nd_ipc_message_t) void {
     const window_id: u32 = @intCast(if (msg.arg0 > 0) @as(u32, @intCast(msg.arg0)) else 0);
     const slot_idx = window_find_by_id(window_id) orelse {
-        reply_with_status(msg, c.GFX_STATUS_INVALID, 0, 0, 0);
+        reply_with_status(msg, c.WASMOS_ERR_GFX_INVALID, 0, 0, 0);
         return;
     };
     if (!window_is_topmost(g_windows[slot_idx])) {
@@ -2824,18 +2824,18 @@ fn handle_focus_window(msg: *const c.nd_ipc_message_t) void {
     }
     focus_window(slot_idx);
     request_repaint_full();
-    reply_with_status(msg, c.GFX_STATUS_OK, 0, 0, 0);
+    reply_with_status(msg, c.WASMOS_ERR_NONE, 0, 0, 0);
 }
 
 fn handle_set_window_flags(msg: *const c.nd_ipc_message_t) void {
     const window_id: u32 = @intCast(if (msg.arg0 > 0) @as(u32, @intCast(msg.arg0)) else 0);
     const flags: u32 = @bitCast(msg.arg1);
     const slot_idx = window_find_by_id(window_id) orelse {
-        reply_with_status(msg, c.GFX_STATUS_INVALID, 0, 0, 0);
+        reply_with_status(msg, c.WASMOS_ERR_GFX_INVALID, 0, 0, 0);
         return;
     };
     if (!same_owner(g_windows[slot_idx].owner_endpoint, msg.source)) {
-        reply_with_status(msg, c.GFX_STATUS_PERMISSION, 0, 0, 0);
+        reply_with_status(msg, c.WASMOS_ERR_GFX_PERMISSION, 0, 0, 0);
         return;
     }
     const old_no_content = window_has_no_content(g_windows[slot_idx]);
@@ -2864,15 +2864,15 @@ fn handle_set_window_flags(msg: *const c.nd_ipc_message_t) void {
         sync_console_mode_for_windows();
     }
     request_repaint_full();
-    reply_with_status(msg, c.GFX_STATUS_OK, 0, 0, 0);
+    reply_with_status(msg, c.WASMOS_ERR_NONE, 0, 0, 0);
 }
 
 fn handle_get_display_info(msg: *const c.nd_ipc_message_t) void {
     if (!g_fb_info_valid) {
-        reply_with_status(msg, c.GFX_STATUS_IO, 0, 0, 0);
+        reply_with_status(msg, c.WASMOS_ERR_GFX_IO, 0, 0, 0);
         return;
     }
-    reply_with_status(msg, c.GFX_STATUS_OK, @intCast(g_fb_info.framebuffer_width), @intCast(g_fb_info.framebuffer_height), 0);
+    reply_with_status(msg, c.WASMOS_ERR_NONE, @intCast(g_fb_info.framebuffer_width), @intCast(g_fb_info.framebuffer_height), 0);
 }
 
 fn handle_move_window(msg: *const c.nd_ipc_message_t) void {
@@ -2880,15 +2880,15 @@ fn handle_move_window(msg: *const c.nd_ipc_message_t) void {
     const x: i32 = @intCast(msg.arg1);
     const y: i32 = @intCast(msg.arg2);
     const slot_idx = window_find_by_id(window_id) orelse {
-        reply_with_status(msg, c.GFX_STATUS_INVALID, 0, 0, 0);
+        reply_with_status(msg, c.WASMOS_ERR_GFX_INVALID, 0, 0, 0);
         return;
     };
     if (!same_owner(g_windows[slot_idx].owner_endpoint, msg.source)) {
-        reply_with_status(msg, c.GFX_STATUS_PERMISSION, 0, 0, 0);
+        reply_with_status(msg, c.WASMOS_ERR_GFX_PERMISSION, 0, 0, 0);
         return;
     }
     resize_window_and_notify(slot_idx, x, y, g_windows[slot_idx].width, g_windows[slot_idx].height);
-    reply_with_status(msg, c.GFX_STATUS_OK, 0, 0, 0);
+    reply_with_status(msg, c.WASMOS_ERR_NONE, 0, 0, 0);
 }
 
 fn handle_set_window_title(msg: *const c.nd_ipc_message_t) void {
@@ -2896,19 +2896,19 @@ fn handle_set_window_title(msg: *const c.nd_ipc_message_t) void {
     const shmem_id: u32 = @bitCast(msg.arg1);
     const title_len: u32 = @bitCast(msg.arg2);
     if (title_len == 0 or title_len > GFX_WINDOW_TITLE_MAX) {
-        reply_with_status(msg, c.GFX_STATUS_INVALID, 0, 0, 0);
+        reply_with_status(msg, c.WASMOS_ERR_GFX_INVALID, 0, 0, 0);
         return;
     }
     const slot_idx = window_find_by_id(window_id) orelse {
-        reply_with_status(msg, c.GFX_STATUS_INVALID, 0, 0, 0);
+        reply_with_status(msg, c.WASMOS_ERR_GFX_INVALID, 0, 0, 0);
         return;
     };
     if (!same_owner(g_windows[slot_idx].owner_endpoint, msg.source)) {
-        reply_with_status(msg, c.GFX_STATUS_PERMISSION, 0, 0, 0);
+        reply_with_status(msg, c.WASMOS_ERR_GFX_PERMISSION, 0, 0, 0);
         return;
     }
     const ptr_raw = api().shmem_map.?(shmem_id) orelse {
-        reply_with_status(msg, c.GFX_STATUS_IO, 0, 0, 0);
+        reply_with_status(msg, c.WASMOS_ERR_GFX_IO, 0, 0, 0);
         return;
     };
     defer _ = api().shmem_unmap.?(shmem_id);
@@ -2918,23 +2918,23 @@ fn handle_set_window_title(msg: *const c.nd_ipc_message_t) void {
     g_windows[slot_idx].title[n] = 0;
     g_windows[slot_idx].title_len = @intCast(n);
     g_title_run_cache[slot_idx].valid = false;
-    reply_with_status(msg, c.GFX_STATUS_OK, 0, 0, 0);
+    reply_with_status(msg, c.WASMOS_ERR_NONE, 0, 0, 0);
 }
 
 fn handle_get_window_title(msg: *const c.nd_ipc_message_t) void {
     const window_id: u32 = @bitCast(msg.arg0);
     const shmem_id: u32 = @bitCast(msg.arg1);
     const slot_idx = window_find_by_id(window_id) orelse {
-        reply_with_status(msg, c.GFX_STATUS_INVALID, 0, 0, 0);
+        reply_with_status(msg, c.WASMOS_ERR_GFX_INVALID, 0, 0, 0);
         return;
     };
     const tlen = g_windows[slot_idx].title_len;
     if (shmem_id == 0 or tlen == 0) {
-        reply_with_status(msg, c.GFX_STATUS_OK, @as(u32, tlen), 0, 0);
+        reply_with_status(msg, c.WASMOS_ERR_NONE, @as(u32, tlen), 0, 0);
         return;
     }
     const ptr_raw = api().shmem_map.?(shmem_id) orelse {
-        reply_with_status(msg, c.GFX_STATUS_IO, 0, 0, 0);
+        reply_with_status(msg, c.WASMOS_ERR_GFX_IO, 0, 0, 0);
         return;
     };
     defer _ = api().shmem_unmap.?(shmem_id);
@@ -2943,7 +2943,7 @@ fn handle_get_window_title(msg: *const c.nd_ipc_message_t) void {
     @memcpy(dst[0..n], g_windows[slot_idx].title[0..n]);
     dst[n] = 0;
     _ = api().shmem_flush.?(shmem_id, ptr_raw, @intCast(n + 1));
-    reply_with_status(msg, c.GFX_STATUS_OK, @as(u32, @intCast(n)), 0, 0);
+    reply_with_status(msg, c.WASMOS_ERR_NONE, @as(u32, @intCast(n)), 0, 0);
 }
 
 fn handle_ipc_dispatch(msg: *const c.nd_ipc_message_t) void {
@@ -3074,10 +3074,10 @@ pub export fn initialize(driver_api: *c.wasmos_driver_api_t, module_count: c_int
         logMsg("[test] gfx compositor handshake ok\n");
     }
 
-    if (refresh_framebuffer_mapping() == c.GFX_STATUS_OK) {
+    if (refresh_framebuffer_mapping() == c.WASMOS_ERR_NONE) {
         const fb_bytes_u64: u64 = @as(u64, g_fb_info.framebuffer_stride) * @as(u64, g_fb_info.framebuffer_height) * 4;
         if (fb_bytes_u64 == 0 or fb_bytes_u64 > 0xFFFF_FFFF or
-            ensure_backbuffer_capacity(@intCast(fb_bytes_u64)) != c.GFX_STATUS_OK)
+            ensure_backbuffer_capacity(@intCast(fb_bytes_u64)) != c.WASMOS_ERR_NONE)
         {
             logMsg("[gfx] backbuffer init failed\n");
             return -1;

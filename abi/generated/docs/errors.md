@@ -131,6 +131,11 @@ and **domains** (namespaced operation errors: the negative of `(domain << 16) | 
 | `WASMOS_ERR_GFX_BAD_MODE_INDEX` | -0x00060003 | mode index is out of range for this backend |
 | `WASMOS_ERR_GFX_MODE_TOO_LARGE` | -0x00060004 | requested mode does not fit the framebuffer mapping established at boot |
 | `WASMOS_ERR_GFX_MODE_SET_FAILED` | -0x00060005 | requested geometry is not a supported mode, or the mode-set path is unavailable |
+| `WASMOS_ERR_GFX_INVALID` | -0x00060006 | invalid request arguments (window id, geometry, buffer, or opcode header) |
+| `WASMOS_ERR_GFX_PERMISSION` | -0x00060007 | caller is not permitted to act on the requested window or buffer |
+| `WASMOS_ERR_GFX_UNSUPPORTED` | -0x00060008 | unknown or unsupported compositor request |
+| `WASMOS_ERR_GFX_BUSY` | -0x00060009 | compositor has no free window/buffer slot (retryable) |
+| `WASMOS_ERR_GFX_IO` | -0x0006000A | framebuffer or shared-buffer operation failed |
 
 ### `driver` (domain 7) — generic device-driver failures (reserved)
 

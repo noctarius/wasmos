@@ -167,16 +167,16 @@ func FsEndpoint() int32
 
 // Copies `len` bytes from transfer buffer `buffer_id` starting at `offset` into
 // the caller's WASM linear memory at `ptr_off`; requires the caller (owner or
-// borrower) to hold the READ right. Returns XFER_BUFFER_OK (0) on success, 0 for
-// a zero `len`, otherwise a negative XFER_BUFFER_ERR_* code (NOT_FOUND,
+// borrower) to hold the READ right. Returns WASMOS_ERR_NONE (0) on success, 0 for
+// a zero `len`, otherwise a negative WASMOS_ERR_XFER_BUFFER_* code (NOT_FOUND,
 // INVALID_CONTEXT, NO_ACCESS, RANGE).
 //go:wasmimport wasmos xfer_buffer_read
 func XferBufferRead(a0 int32, a1 int32, a2 int32, a3 int32) int32
 
 // Copies `len` bytes from the caller's WASM linear memory at `ptr_off` into
 // transfer buffer `buffer_id` starting at `offset`; requires the caller (owner
-// or borrower) to hold the WRITE right. Returns XFER_BUFFER_OK (0) on success, 0
-// for a zero `len`, otherwise a negative XFER_BUFFER_ERR_* code (NOT_FOUND,
+// or borrower) to hold the WRITE right. Returns WASMOS_ERR_NONE (0) on success, 0
+// for a zero `len`, otherwise a negative WASMOS_ERR_XFER_BUFFER_* code (NOT_FOUND,
 // INVALID_CONTEXT, NO_ACCESS, RANGE).
 //go:wasmimport wasmos xfer_buffer_write
 func XferBufferWrite(a0 int32, a1 int32, a2 int32, a3 int32) int32
@@ -184,15 +184,15 @@ func XferBufferWrite(a0 int32, a1 int32, a2 int32, a3 int32) int32
 // OWNER assigns `flags` rights (bitmask of BUFFER_BORROW_READ/WRITE, must be
 // non-zero and within 0x3) over buffer `buffer_id` of `kind` to the context that
 // owns `grantee_ep`; returns the grantee's borrow_id. On failure returns a
-// negative XFER_BUFFER_ERR_* code (INVALID_KIND, NOT_FOUND, INVALID_FLAGS,
+// negative WASMOS_ERR_XFER_BUFFER_* code (INVALID_KIND, NOT_FOUND, INVALID_FLAGS,
 // INVALID_CONTEXT, NO_ACCESS).
 //go:wasmimport wasmos buffer_borrow
 func BufferBorrow(a0 int32, a1 int32, a2 int32, a3 int32) int32
 
 // OWNER releases buffer `buffer_id` of `kind` (only BUFFER_KIND_TRANSFER
 // supported), dropping its acquisition and backing; caller must be the owning
-// context. Returns XFER_BUFFER_OK (0) on success, otherwise a negative
-// XFER_BUFFER_ERR_* code (INVALID_KIND, NOT_FOUND, INVALID_CONTEXT, NO_ACCESS).
+// context. Returns WASMOS_ERR_NONE (0) on success, otherwise a negative
+// WASMOS_ERR_XFER_BUFFER_* code (INVALID_KIND, NOT_FOUND, INVALID_CONTEXT, NO_ACCESS).
 //go:wasmimport wasmos buffer_release
 func BufferRelease(a0 int32, a1 int32) int32
 
@@ -419,8 +419,8 @@ func ProcInfoStats(a0 int32, a1 int32, a2 int32, a3 int32, a4 int32) int32
 func XferBufferBorrow(a0 int32, a1 int32, a2 int32) int32
 
 // Owner-only release of transfer buffer `buffer_id`, dropping the owner's
-// acquisition and its backing. Returns XFER_BUFFER_OK (0) on success, otherwise
-// a negative XFER_BUFFER_ERR_* code.
+// acquisition and its backing. Returns WASMOS_ERR_NONE (0) on success, otherwise
+// a negative WASMOS_ERR_XFER_BUFFER_* code.
 //go:wasmimport wasmos xfer_buffer_release
 func XferBufferRelease(a0 int32) int32
 
@@ -666,21 +666,21 @@ func XferBufferAcquire(a0 int32) int32
 
 // Grantor-side drop of a transfer-buffer (re)borrow named by `borrow_id`; the
 // lender revokes a grant it previously extended (resolved via the lent set, not
-// the borrowed set). Returns XFER_BUFFER_OK (0) on success, otherwise a negative
-// XFER_BUFFER_ERR_* code (INACTIVE_BORROW, INVALID_CONTEXT).
+// the borrowed set). Returns WASMOS_ERR_NONE (0) on success, otherwise a negative
+// WASMOS_ERR_XFER_BUFFER_* code (INACTIVE_BORROW, INVALID_CONTEXT).
 //go:wasmimport wasmos xfer_buffer_unborrow
 func XferBufferUnborrow(a0 int32) int32
 
 // OWNER acquires a new buffer of `kind` (only BUFFER_KIND_TRANSFER is supported)
 // sized at least `minimum_size` bytes. Returns the positive `buffer_id` on
-// success, otherwise a negative XFER_BUFFER_ERR_* code (INVALID_KIND,
+// success, otherwise a negative WASMOS_ERR_XFER_BUFFER_* code (INVALID_KIND,
 // INVALID_SIZE, INVALID_CONTEXT, NO_ACCESS).
 //go:wasmimport wasmos buffer_acquire
 func BufferAcquire(a0 int32, a1 int32) int32
 
 // Grantor-side drop of a (re)borrow named by `borrow_id`: the lender revokes a
 // grant it previously extended (resolved via the lent set). Returns
-// XFER_BUFFER_OK (0) on success, otherwise a negative XFER_BUFFER_ERR_* code
+// WASMOS_ERR_NONE (0) on success, otherwise a negative WASMOS_ERR_XFER_BUFFER_* code
 // (INACTIVE_BORROW, INVALID_CONTEXT).
 //go:wasmimport wasmos buffer_unborrow
 func BufferUnborrow(a0 int32) int32
@@ -693,7 +693,7 @@ func XferBufferReborrow(a0 int32, a1 int32, a2 int32) int32
 // A current BORROWER sub-grants its own borrow `borrow_id` of `kind` to the
 // context that owns `grantee_ep`, narrowing rights to `flags` (non-zero, within
 // 0x3); returns the new grantee's borrow_id. On failure returns a negative
-// XFER_BUFFER_ERR_* code (INVALID_KIND, INACTIVE_BORROW, INVALID_FLAGS,
+// WASMOS_ERR_XFER_BUFFER_* code (INVALID_KIND, INACTIVE_BORROW, INVALID_FLAGS,
 // INVALID_CONTEXT).
 //go:wasmimport wasmos buffer_reborrow
 func BufferReborrow(a0 int32, a1 int32, a2 int32, a3 int32) int32

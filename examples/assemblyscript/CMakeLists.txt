@@ -32,6 +32,7 @@ if (AS_ENABLE)
       COMMAND ${CMAKE_COMMAND} -E make_directory ${_stage_dir}
       COMMAND ${CMAKE_COMMAND} -E copy_if_different ${ARG_SRC} ${_stage_dir}/app.ts
       COMMAND ${CMAKE_COMMAND} -E copy_if_different ${LIBC_DIR}/assemblyscript/wasmos.ts ${_stage_dir}/wasmos.ts
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different ${CMAKE_SOURCE_DIR}/abi/generated/assemblyscript/wasmos_status.ts ${_stage_dir}/wasmos_status.ts
       COMMAND ${CMAKE_COMMAND} -E copy_if_different ${LIBC_DIR}/assemblyscript/runtime.ts ${_entry_src}
       ${_stage_cmds}
       COMMAND ${ASC_EXECUTABLE}
@@ -44,6 +45,7 @@ if (AS_ENABLE)
               --outFile ${ARG_OUTPUT_WASM}
       DEPENDS ${ARG_SRC} ${LIBC_DIR}/assemblyscript/wasmos.ts
               ${LIBC_DIR}/assemblyscript/runtime.ts ${ARG_EXTRA_STAGE_FILES}
+              ${CMAKE_SOURCE_DIR}/abi/generated/assemblyscript/wasmos_status.ts
       WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
       COMMENT "Building AssemblyScript ${ARG_NAME} module"
       VERBATIM

@@ -89,7 +89,7 @@ const GFX_IPC_GET_DISPLAY_INFO: i32 = 0x020C;
 const GFX_IPC_MOVE_WINDOW: i32 = 0x020D;
 const GFX_IPC_SET_WINDOW_TITLE: i32 = 0x020E;
 const GFX_IPC_RESP: i32 = 0x0280;
-const GFX_STATUS_OK: i32 = 0;
+const WASMOS_ERR_NONE: i32 = 0;
 
 const GFX_EVENT_KEY: i32 = 3;
 const GFX_EVENT_POINTER: i32 = 4;
@@ -256,7 +256,7 @@ impl Window {
             );
         }
         match w.wait_reply(w.event_ep, 1) {
-            Some((ty, a0, a1, _, _)) if ty == GFX_IPC_RESP && a0 == GFX_STATUS_OK => {
+            Some((ty, a0, a1, _, _)) if ty == GFX_IPC_RESP && a0 == WASMOS_ERR_NONE => {
                 w.window_id = a1;
             }
             _ => {
@@ -284,7 +284,7 @@ impl Window {
             );
         }
         if let Some((ty, a0, a1, a2, _)) = w.wait_reply(w.reply_ep, rid) {
-            if ty == GFX_IPC_RESP && a0 == GFX_STATUS_OK {
+            if ty == GFX_IPC_RESP && a0 == WASMOS_ERR_NONE {
                 let fb_w = a1;
                 let fb_h = a2;
                 // Content top sits ~26px below the window's y (title bar + border).
@@ -326,7 +326,7 @@ impl Window {
             );
         }
         match w.wait_reply(w.reply_ep, rid) {
-            Some((ty, a0, a1, a2, a3)) if ty == GFX_IPC_RESP && a0 == GFX_STATUS_OK => {
+            Some((ty, a0, a1, a2, a3)) if ty == GFX_IPC_RESP && a0 == WASMOS_ERR_NONE => {
                 w.buffer_id = a1;
                 w.shmem_id = a2;
                 w.stride = a3;

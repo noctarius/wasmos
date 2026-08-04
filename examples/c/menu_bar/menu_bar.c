@@ -120,7 +120,7 @@ static int32_t fetch_title(int32_t window_id, char* out, int32_t cap) {
     int32_t status = 0, tlen = 0;
     ui_send_gfx(g_ctx.gfx_endpoint, g_ctx.reply_endpoint, g_ctx.req_id++, GFX_IPC_GET_WINDOW_TITLE,
                 window_id, g_title_shmem_id, cap - 1, 0, &status, &tlen, 0, 0);
-    if (status != GFX_STATUS_OK || tlen <= 0)
+    if (status != WASMOS_ERR_NONE || tlen <= 0)
         return 0;
     wasmos_shmem_refresh(g_title_shmem_id, addr_cast(int32_t, g_title_ptr), tlen + 1);
     for (int32_t k = 0; k < tlen && k < cap - 1; ++k)
@@ -240,7 +240,7 @@ static void refresh_app_list(void) {
         if (ui_send_gfx(g_ctx.gfx_endpoint, g_ctx.reply_endpoint, g_ctx.req_id++,
                         GFX_IPC_LIST_WINDOWS, idx, 0, 0, 0, &status, &wid, &owner_ep, 0) != 0)
             break;
-        if (status != GFX_STATUS_OK || wid == 0)
+        if (status != WASMOS_ERR_NONE || wid == 0)
             break;
 
         const int32_t ctx_id = wasmos_ipc_endpoint_owner(owner_ep);

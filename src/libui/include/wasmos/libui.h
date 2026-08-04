@@ -1063,7 +1063,7 @@ static inline int32_t ui_realloc_buffer(ui_context_t* ctx, int32_t new_w, int32_
     if (ui_send_gfx(ctx->gfx_endpoint, ctx->reply_endpoint, ctx->req_id++,
                     GFX_IPC_ALLOC_SHARED_BUFFER, ctx->window_id, new_w, new_h, 0, &status,
                     &new_buffer_id, &new_shmem_id, &new_stride) != 0 ||
-        status != GFX_STATUS_OK) {
+        status != WASMOS_ERR_NONE) {
         return -1;
     }
     const int32_t bytes = (new_stride * new_h + (UI_PAGE_SIZE - 1)) & ~(UI_PAGE_SIZE - 1);
@@ -1146,7 +1146,7 @@ static inline int32_t ui_init(ui_context_t* ctx, int32_t proc_endpoint, int32_t 
                     width, height, (int32_t)GFX_IPC_ABI_MAGIC,
                     (int32_t)gfx_ipc_header_pack(GFX_IPC_ABI_VERSION, GFX_IPC_CREATE_WINDOW),
                     &status, &a1, &a2, &a3) != 0 ||
-        status != GFX_STATUS_OK) {
+        status != WASMOS_ERR_NONE) {
         goto fail;
     }
     ctx->window_id = a1;
@@ -1198,7 +1198,7 @@ static inline int32_t ui_window_set_title(ui_context_t* ctx, const char* title) 
     ui_send_gfx(ctx->gfx_endpoint, ctx->reply_endpoint, ctx->req_id++, GFX_IPC_SET_WINDOW_TITLE,
                 ctx->window_id, shmem_id, len, 0, &status, 0, 0, 0);
     (void)wasmos_shmem_unmap(shmem_id);
-    return (status == GFX_STATUS_OK) ? 0 : -1;
+    return (status == WASMOS_ERR_NONE) ? 0 : -1;
 }
 
 static inline int32_t ui_menu_bar_init(ui_context_t* ctx, int32_t proc_endpoint,
@@ -1231,7 +1231,7 @@ static inline int32_t ui_menu_bar_init(ui_context_t* ctx, int32_t proc_endpoint,
 
     if (ui_send_gfx(ctx->gfx_endpoint, reply_endpoint, ctx->req_id++, GFX_IPC_GET_DISPLAY_INFO, 0,
                     0, 0, 0, &status, &a1, &a2, &a3) != 0 ||
-        status != GFX_STATUS_OK || a1 <= 0)
+        status != WASMOS_ERR_NONE || a1 <= 0)
         goto mb_fail;
 
     const int32_t screen_w = a1;
@@ -1241,7 +1241,7 @@ static inline int32_t ui_menu_bar_init(ui_context_t* ctx, int32_t proc_endpoint,
                     screen_w, bar_h, (int32_t)GFX_IPC_ABI_MAGIC,
                     (int32_t)gfx_ipc_header_pack(GFX_IPC_ABI_VERSION, GFX_IPC_CREATE_WINDOW),
                     &status, &a1, &a2, &a3) != 0 ||
-        status != GFX_STATUS_OK)
+        status != WASMOS_ERR_NONE)
         goto mb_fail;
     ctx->window_id = a1;
 
@@ -1250,12 +1250,12 @@ static inline int32_t ui_menu_bar_init(ui_context_t* ctx, int32_t proc_endpoint,
                     (int32_t)(GFX_WINDOW_FLAG_TOPMOST | GFX_WINDOW_FLAG_NO_CHROME |
                               GFX_WINDOW_FLAG_NO_TASK_LIST),
                     0, 0, &status, 0, 0, 0) != 0 ||
-        status != GFX_STATUS_OK)
+        status != WASMOS_ERR_NONE)
         goto mb_fail;
 
     if (ui_send_gfx(ctx->gfx_endpoint, reply_endpoint, ctx->req_id++, GFX_IPC_MOVE_WINDOW,
                     ctx->window_id, 0, 0, 0, &status, 0, 0, 0) != 0 ||
-        status != GFX_STATUS_OK)
+        status != WASMOS_ERR_NONE)
         goto mb_fail;
 
     if (ui_realloc_buffer(ctx, screen_w, bar_h) != 0)
@@ -1931,12 +1931,12 @@ static inline int32_t ui_loop_drain(ui_context_t* ctx) {
                     ctx->window_id, ctx->buffer_id, 0, 0, &status, 0, 0, 0) != 0) {
         return -1;
     }
-    if (status == GFX_STATUS_INVALID || status == GFX_STATUS_BUSY) {
+    if (status == WASMOS_ERR_GFX_INVALID || status == WASMOS_ERR_GFX_BUSY) {
         /* Window resized between render and present — RESIZE event is incoming. */
         ctx->dirty = 0;
         return 0;
     }
-    if (status != GFX_STATUS_OK) {
+    if (status != WASMOS_ERR_NONE) {
         return -1;
     }
 

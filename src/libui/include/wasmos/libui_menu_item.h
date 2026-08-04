@@ -275,7 +275,7 @@ static inline void ui_menu_item_popup_open(ui_context_t* ctx, ui_component_t* mi
                     popup_w, popup_h, (int32_t)GFX_IPC_ABI_MAGIC,
                     (int32_t)gfx_ipc_header_pack(GFX_IPC_ABI_VERSION, GFX_IPC_CREATE_WINDOW),
                     &status, &a1, &a2, &a3) != 0 ||
-        status != GFX_STATUS_OK)
+        status != WASMOS_ERR_NONE)
         return;
     const int32_t win_id = a1;
 
@@ -285,19 +285,19 @@ static inline void ui_menu_item_popup_open(ui_context_t* ctx, ui_component_t* mi
                     (int32_t)(GFX_WINDOW_FLAG_TOPMOST | GFX_WINDOW_FLAG_NO_CHROME |
                               GFX_WINDOW_FLAG_NO_TASK_LIST | GFX_WINDOW_FLAG_INVISIBLE),
                     0, 0, &status, 0, 0, 0) != 0 ||
-        status != GFX_STATUS_OK)
+        status != WASMOS_ERR_NONE)
         goto fail;
 
     if (ui_send_gfx(ctx->gfx_endpoint, ctx->reply_endpoint, ctx->req_id++, GFX_IPC_MOVE_WINDOW,
                     win_id, popup_x, popup_y, 0, &status, 0, 0, 0) != 0 ||
-        status != GFX_STATUS_OK)
+        status != WASMOS_ERR_NONE)
         goto fail;
 
     int32_t buf_id = 0, shmem_id = 0, stride = 0;
     if (ui_send_gfx(ctx->gfx_endpoint, ctx->reply_endpoint, ctx->req_id++,
                     GFX_IPC_ALLOC_SHARED_BUFFER, win_id, popup_w, popup_h, 0, &status, &buf_id,
                     &shmem_id, &stride) != 0 ||
-        status != GFX_STATUS_OK)
+        status != WASMOS_ERR_NONE)
         goto fail;
 
     const int32_t bytes = (popup_w * popup_h * 4 + (UI_PAGE_SIZE - 1)) & ~(UI_PAGE_SIZE - 1);

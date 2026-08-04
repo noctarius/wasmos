@@ -463,14 +463,14 @@ static int tx_post(uint16_t b, uint32_t total_len) {
     return 0;
 }
 
-/* Transmit one Ethernet frame from the client's granted buffer. NET_STATUS_*. */
+/* Transmit one Ethernet frame from the client's granted buffer. WASMOS_ERR_NET_*. */
 static int tx_send(int32_t buffer_id, int32_t frame_len) {
     if (frame_len <= 0 || frame_len > (int32_t)VIRTIO_NET_MAX_FRAME) {
-        return NET_STATUS_INVALID;
+        return WASMOS_ERR_NET_INVALID;
     }
     int32_t b = tx_take_buf();
     if (b < 0) {
-        return NET_STATUS_QUEUE_FULL;
+        return WASMOS_ERR_NET_QUEUE_FULL;
     }
     uint8_t* buf = g_tx_pool + (uint64_t)b * VIRTIO_NET_TX_BUF_SIZE;
     for (uint32_t i = 0; i < VIRTIO_NET_HDR_LEN; ++i) {
@@ -480,12 +480,12 @@ static int tx_send(int32_t buffer_id, int32_t frame_len) {
      * placeholder */
     if (wasmos_sys_buffer_read(buffer_id, buf + VIRTIO_NET_HDR_LEN, frame_len, 0) != 0) {
         g_tx_buf_free[g_tx_buf_top++] = (uint16_t)b; /* return the buffer */
-        return NET_STATUS_IO_ERROR;
+        return WASMOS_ERR_NET_IO_ERROR;
     }
     if (tx_post((uint16_t)b, VIRTIO_NET_HDR_LEN + (uint32_t)frame_len) != 0) {
-        return NET_STATUS_QUEUE_FULL;
+        return WASMOS_ERR_NET_QUEUE_FULL;
     }
-    return NET_STATUS_OK;
+    return WASMOS_ERR_NONE;
 }
 
 /* Transmit a driver-local frame (used by the ARP self-probe). Returns 0 or -1. */
@@ -712,13 +712,13 @@ static void send_error(int32_t dest, int32_t request_id, int32_t code) {
 static void handle_link_get(int32_t source, int32_t request_id, int32_t buffer_id) {
     int32_t link_up;
     if (!g_dev.present || !g_dev.ready) {
-        send_error(source, request_id, NET_STATUS_NOT_READY);
+        send_error(source, request_id, WASMOS_ERR_NET_NOT_READY);
         return;
     }
     /* FIXME(owner-push): net protocol must carry the client buffer_id/grant; using msg.arg0 as
      * placeholder */
     if (wasmos_sys_buffer_write(buffer_id, g_dev.mac, 6, 0) != 0) {
-        send_error(source, request_id, NET_STATUS_IO_ERROR);
+        send_error(source, request_id, WASMOS_ERR_NET_IO_ERROR);
         return;
     }
     link_up = ((g_dev.status_word & VIRTIO_NET_S_LINK_UP) != 0u) ? 1 : 0;
@@ -746,16 +746,17 @@ static void net_publish_link_change(void) {
 
 static void handle_stats_get(int32_t source, int32_t request_id, int32_t buffer_id) {
     if (!g_dev.present || !g_dev.ready) {
-        send_error(source, request_id, NET_STATUS_NOT_READY);
+        send_error(source, request_id, WASMOS_ERR_NET_NOT_READY);
         return;
     }
     /* FIXME(owner-push): net protocol must carry the client buffer_id/grant; using msg.arg0 as
      * placeholder */
     if (wasmos_sys_buffer_write(buffer_id, &g_stats, (int32_t)sizeof(g_stats), 0) != 0) {
-        send_error(source, request_id, NET_STATUS_IO_ERROR);
+        send_error(source, request_id, WASMOS_ERR_NET_IO_ERROR);
         return;
     }
-    (void)wasmos_ipc_send(source, g_endpoint, NETDRV_IPC_RESP, request_id, NET_STATUS_OK, 0, 0, 0);
+    (void)wasmos_ipc_send(source, g_endpoint, NETDRV_IPC_RESP, request_id, WASMOS_ERR_NONE, 0, 0,
+                          0);
 }
 
 /* NETDRV_IPC_RX_POLL: register the caller as the RX_FRAME_NOTIFY subscriber and
@@ -763,7 +764,7 @@ static void handle_stats_get(int32_t source, int32_t request_id, int32_t buffer_
  * with arg0 = frame length (0 = queue empty) and arg1 = frames still queued. */
 static void handle_rx_poll(int32_t source, int32_t request_id, int32_t buffer_id) {
     if (!g_dev.present || !g_dev.ready) {
-        send_error(source, request_id, NET_STATUS_NOT_READY);
+        send_error(source, request_id, WASMOS_ERR_NET_NOT_READY);
         return;
     }
     g_rx_sub_endpoint = source; /* subscribe / refresh */
@@ -775,7 +776,7 @@ static void handle_rx_poll(int32_t source, int32_t request_id, int32_t buffer_id
         /* FIXME(owner-push): net protocol must carry the client buffer_id/grant; using msg.arg0 as
          * placeholder */
         if (wasmos_sys_buffer_write(buffer_id, frame, (int32_t)len, 0) != 0) {
-            send_error(source, request_id, NET_STATUS_IO_ERROR);
+            send_error(source, request_id, WASMOS_ERR_NET_IO_ERROR);
             return;
         }
     }
@@ -784,19 +785,20 @@ static void handle_rx_poll(int32_t source, int32_t request_id, int32_t buffer_id
 }
 
 /* NETDRV_IPC_TX_FRAME: transmit the frame in the caller's borrowed buffer.
- * arg0 carries the frame length. Replies RESP(NET_STATUS_OK) once queued. */
+ * arg0 carries the frame length. Replies RESP(WASMOS_ERR_NONE) once queued. */
 static void handle_tx_frame(int32_t source, int32_t request_id, int32_t frame_len,
                             int32_t buffer_id) {
     if (!g_dev.present || !g_dev.ready) {
-        send_error(source, request_id, NET_STATUS_NOT_READY);
+        send_error(source, request_id, WASMOS_ERR_NET_NOT_READY);
         return;
     }
     int rc = tx_send(buffer_id, frame_len);
-    if (rc != NET_STATUS_OK) {
+    if (rc != WASMOS_ERR_NONE) {
         send_error(source, request_id, rc);
         return;
     }
-    (void)wasmos_ipc_send(source, g_endpoint, NETDRV_IPC_RESP, request_id, NET_STATUS_OK, 0, 0, 0);
+    (void)wasmos_ipc_send(source, g_endpoint, NETDRV_IPC_RESP, request_id, WASMOS_ERR_NONE, 0, 0,
+                          0);
 }
 
 WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t ignored_arg1,
@@ -909,7 +911,7 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t ignored_arg
             } else if (msg.type == NETDRV_IPC_TX_FRAME) {
                 handle_tx_frame(msg.source, msg.request_id, msg.arg0, msg.arg1);
             } else {
-                send_error(msg.source, msg.request_id, NET_STATUS_INVALID);
+                send_error(msg.source, msg.request_id, WASMOS_ERR_NET_INVALID);
             }
         }
         net_publish_link_change();

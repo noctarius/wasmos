@@ -934,7 +934,7 @@ static void vt_notify_gfx_visibility(int32_t visible) {
 
 static int32_t vt_switch_tty(uint32_t tty_index) {
     if (tty_index >= VT_MAX_TTYS) {
-        return VT_SWITCH_ERR_INVALID_TTY;
+        return WASMOS_ERR_VT_BAD_TTY_ID;
     }
     if (tty_index == g_active_tty) {
         return 0;
@@ -973,7 +973,7 @@ static int32_t vt_switch_tty(uint32_t tty_index) {
     if (prev_console_mode != 0u) {
         if (vt_fb_send_switch(FBTEXT_IPC_CONSOLE_MODE_REQ, 0, 0, 0, 0) != 0) {
             g_switch_barrier = 0;
-            return VT_SWITCH_ERR_MODE_OFF;
+            return WASMOS_ERR_VT_SWITCH_MODE_OFF;
         }
     }
     if (vt_fb_send_switch(FBTEXT_IPC_CLEAR_REQ, 0, 0, 0, 0) != 0) {
@@ -983,7 +983,7 @@ static int32_t vt_switch_tty(uint32_t tty_index) {
             (void)vt_fb_send_switch(FBTEXT_IPC_CONSOLE_MODE_REQ, 0, 0, 0, 0);
         }
         g_switch_barrier = 0;
-        return VT_SWITCH_ERR_CLEAR;
+        return WASMOS_ERR_VT_SWITCH_CLEAR;
     }
     if (vt_replay_tty(tty_index, 1) != 0) {
         if (prev_console_mode != 0u) {
@@ -992,7 +992,7 @@ static int32_t vt_switch_tty(uint32_t tty_index) {
             (void)vt_fb_send_switch(FBTEXT_IPC_CONSOLE_MODE_REQ, 0, 0, 0, 0);
         }
         g_switch_barrier = 0;
-        return VT_SWITCH_ERR_REPLAY;
+        return WASMOS_ERR_VT_SWITCH_REPLAY;
     }
     if (next_console_mode != 0u &&
         vt_fb_send_switch(FBTEXT_IPC_CONSOLE_MODE_REQ, 1, 0, 0, 0) != 0) {
@@ -1002,7 +1002,7 @@ static int32_t vt_switch_tty(uint32_t tty_index) {
             (void)vt_fb_send_switch(FBTEXT_IPC_CONSOLE_MODE_REQ, 0, 0, 0, 0);
         }
         g_switch_barrier = 0;
-        return VT_SWITCH_ERR_MODE_ON;
+        return WASMOS_ERR_VT_SWITCH_MODE_ON;
     }
     g_switch_generation++;
     g_active_tty = tty_index;

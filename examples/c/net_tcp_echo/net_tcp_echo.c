@@ -109,7 +109,7 @@ static int32_t connect_resume(void* user, uintptr_t* out_value) {
         if (st != 0) {
             return connect_fail(c, out_value);
         }
-        if (c->op.reply.arg0 != NET_STATUS_OK) {
+        if (c->op.reply.arg0 != WASMOS_ERR_NONE) {
             return connect_fail(c, out_value);
         }
         c->result = 0;

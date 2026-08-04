@@ -44,7 +44,7 @@
 /* Bounded wait for the device to complete a fill (it is effectively immediate on
  * QEMU); we poll the used ring, sleeping between checks rather than busy-spin. */
 #define RNG_POLL_INTERVAL_MS 2
-#define RNG_POLL_MAX_TRIES 500 /* ~1s ceiling before HRNG_STATUS_TIMEOUT */
+#define RNG_POLL_MAX_TRIES 500 /* ~1s ceiling before WASMOS_ERR_HRNG_TIMEOUT */
 
 typedef struct {
     uint8_t present;
@@ -352,20 +352,20 @@ static void send_error(int32_t dest, int32_t request_id, int32_t code) {
 static void handle_get_bytes(int32_t source, int32_t request_id, int32_t buffer_id,
                              int32_t req_len) {
     if (!g_dev.present || !g_dev.ready) {
-        send_error(source, request_id, HRNG_STATUS_NOT_READY);
+        send_error(source, request_id, WASMOS_ERR_HRNG_NOT_READY);
         return;
     }
     if (req_len <= 0) {
-        send_error(source, request_id, HRNG_STATUS_INVALID);
+        send_error(source, request_id, WASMOS_ERR_HRNG_INVALID);
         return;
     }
     int n = rng_fill((uint32_t)req_len);
     if (n < 0) {
-        send_error(source, request_id, HRNG_STATUS_TIMEOUT);
+        send_error(source, request_id, WASMOS_ERR_HRNG_TIMEOUT);
         return;
     }
     if (n > 0 && wasmos_sys_buffer_write(buffer_id, g_pool, n, 0) != 0) {
-        send_error(source, request_id, HRNG_STATUS_IO_ERROR);
+        send_error(source, request_id, WASMOS_ERR_HRNG_IO_ERROR);
         return;
     }
     (void)wasmos_ipc_send(source, g_endpoint, HRNG_IPC_RESP, request_id, n, 0, 0, 0);
@@ -424,7 +424,7 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t ignored_arg
             if (msg.type == HRNG_IPC_GET_BYTES_REQ) {
                 handle_get_bytes(msg.source, msg.request_id, msg.arg0, msg.arg1);
             } else {
-                send_error(msg.source, msg.request_id, HRNG_STATUS_INVALID);
+                send_error(msg.source, msg.request_id, WASMOS_ERR_HRNG_INVALID);
             }
         }
         (void)wasmos_ipc_select_wait_timeout(g_select, 1000);

@@ -118,9 +118,19 @@ and **domains** (namespaced operation errors: the negative of `(domain << 16) | 
 | `WASMOS_ERR_FS_BAD_FD` | -0x0004001B | fd is not present in this client's fd table |
 | `WASMOS_ERR_FS_REPLY_SEND` | -0x0004001C | the reply could not be delivered to the client |
 
-### `net` (domain 5) — networking stack / socket failures (reserved)
+### `net` (domain 5) — networking stack / socket failures (was NET_STATUS_*)
 
-*(no codes)*
+| Code | Value | Description |
+|---|---|---|
+| `WASMOS_ERR_NET_WOULD_BLOCK` | -0x00050001 | operation is deferred; completion arrives as a later event (retryable) |
+| `WASMOS_ERR_NET_INVALID` | -0x00050002 | invalid request arguments (socket, address, or length) |
+| `WASMOS_ERR_NET_NOT_READY` | -0x00050003 | interface or socket is not in a state that permits the operation |
+| `WASMOS_ERR_NET_DENIED` | -0x00050004 | caller lacks the capability for this operation |
+| `WASMOS_ERR_NET_IO_ERROR` | -0x00050005 | the underlying stack or driver reported a failure |
+| `WASMOS_ERR_NET_QUEUE_FULL` | -0x00050006 | send/receive queue has no space (retryable) |
+| `WASMOS_ERR_NET_NO_MEM` | -0x00050007 | no buffer or pcb could be allocated |
+| `WASMOS_ERR_NET_ADDR_IN_USE` | -0x00050008 | the requested address or port is already bound |
+| `WASMOS_ERR_NET_TIMEOUT` | -0x00050009 | the operation did not complete within its window |
 
 ### `gfx` (domain 6) — compositor / framebuffer text-console failures
 
@@ -149,6 +159,10 @@ and **domains** (namespaced operation errors: the negative of `(domain << 16) | 
 | `WASMOS_ERR_VT_NO_TTY_FOR_SOURCE` | -0x00080002 | no tty is associated with the requesting endpoint |
 | `WASMOS_ERR_VT_READER_BUSY` | -0x00080003 | another endpoint is already the reader for this tty |
 | `WASMOS_ERR_VT_UNSUPPORTED_REQUEST` | -0x00080004 | unknown or unsupported request type |
+| `WASMOS_ERR_VT_SWITCH_MODE_OFF` | -0x00080005 | tty switch could not disable framebuffer rendering |
+| `WASMOS_ERR_VT_SWITCH_CLEAR` | -0x00080006 | tty switch could not clear the screen |
+| `WASMOS_ERR_VT_SWITCH_REPLAY` | -0x00080007 | tty switch could not replay the cell buffer |
+| `WASMOS_ERR_VT_SWITCH_MODE_ON` | -0x00080008 | tty switch could not re-enable framebuffer rendering |
 
 ### `chardev` (domain 9) — character-device sample driver failures
 
@@ -156,6 +170,15 @@ and **domains** (namespaced operation errors: the negative of `(domain << 16) | 
 |---|---|---|
 | `WASMOS_ERR_CHARDEV_NO_DATA` | -0x00090001 | no byte is buffered yet (retryable) |
 | `WASMOS_ERR_CHARDEV_UNSUPPORTED_REQUEST` | -0x00090002 | unknown or unsupported request type |
+
+### `hrng` (domain 14) — hardware RNG provider failures (was HRNG_STATUS_*)
+
+| Code | Value | Description |
+|---|---|---|
+| `WASMOS_ERR_HRNG_INVALID` | -0x000E0001 | invalid request arguments (byte count or buffer) |
+| `WASMOS_ERR_HRNG_NOT_READY` | -0x000E0002 | entropy source is not initialized or has no entropy yet |
+| `WASMOS_ERR_HRNG_IO_ERROR` | -0x000E0003 | the RNG device reported a failure |
+| `WASMOS_ERR_HRNG_TIMEOUT` | -0x000E0004 | the device did not produce entropy within its window |
 
 ### `font` (domain 12) — font-rasterizer service failures (was FONT_STATUS_*)
 

@@ -675,7 +675,7 @@ int32_t wasmos_sys_net_resolve_native(wasmos_driver_api_t* api, uint32_t source_
                                     NET_IPC_RESOLVE, buffer_id, (uint32_t)grant, hostname_len, 0u,
                                     &reply);
     (void)api->xfer_buffer_release(buffer_id);
-    if (rc != 0 || reply.type != NET_IPC_RESP || (int32_t)reply.arg0 != NET_STATUS_OK) {
+    if (rc != 0 || reply.type != NET_IPC_RESP || (int32_t)reply.arg0 != WASMOS_ERR_NONE) {
         return -1;
     }
     if (out_addr_no) {

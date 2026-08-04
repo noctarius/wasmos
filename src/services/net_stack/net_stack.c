@@ -540,7 +540,7 @@ static err_t net_stack_tcp_connected(void* arg, struct altcp_pcb* pcb, err_t err
     socket->state = NET_SOCKET_CONNECTED;
     if (socket->connect_pending) {
         socket->connect_pending = 0u;
-        net_stack_reply_deferred(socket, NET_IPC_RESP, NET_STATUS_OK);
+        net_stack_reply_deferred(socket, NET_IPC_RESP, WASMOS_ERR_NONE);
     }
     net_stack_drain_tcp_tx(socket);
     return ERR_OK;
@@ -606,7 +606,7 @@ static void net_stack_tcp_err(void* arg, err_t err) {
                              WASMOS_RINGBUF_FLAG_RESET | WASMOS_RINGBUF_FLAG_PEER_CLOSED);
     if (socket->connect_pending) {
         socket->connect_pending = 0u;
-        net_stack_reply_deferred(socket, NET_IPC_ERROR, NET_STATUS_IO_ERROR);
+        net_stack_reply_deferred(socket, NET_IPC_ERROR, WASMOS_ERR_NET_IO_ERROR);
     }
     socket->state = NET_SOCKET_CLOSING;
     net_stack_notify_rx(socket);
@@ -1683,7 +1683,7 @@ static struct altcp_tls_config* net_stack_ensure_tls_config(void) {
 
 static int32_t net_stack_pcb_open(net_socket_t* socket, uint32_t open_flags) {
     if (socket == NULL || socket->family != NET_SOCKET_AF_INET) {
-        return NET_STATUS_INVALID;
+        return WASMOS_ERR_NET_INVALID;
     }
     if (socket->type == NET_SOCKET_DGRAM) {
         socket->pcb = udp_new_ip_type(IPADDR_TYPE_V4);
@@ -1697,13 +1697,13 @@ static int32_t net_stack_pcb_open(net_socket_t* socket, uint32_t open_flags) {
              * callbacks the CONNECT handler attaches, exactly as for plain TCP. */
             struct altcp_tls_config* cfg = net_stack_ensure_tls_config();
             if (cfg == NULL) {
-                return NET_STATUS_NOT_READY;
+                return WASMOS_ERR_NET_NOT_READY;
             }
             /* Milestone C requires a hostname for verification (VERIFY_REQUIRED
              * checks the chain but NOT the name without it — a MITM hole). Refuse
              * a TLS open with no SNI. */
             if (socket->sni_len == 0u) {
-                return NET_STATUS_INVALID;
+                return WASMOS_ERR_NET_INVALID;
             }
             socket->pcb = altcp_tls_new(cfg, IPADDR_TYPE_V4);
             if (socket->pcb != NULL) {
@@ -1716,21 +1716,21 @@ static int32_t net_stack_pcb_open(net_socket_t* socket, uint32_t open_flags) {
                 if (ssl == NULL || mbedtls_ssl_set_hostname(ssl, (const char*)socket->sni) != 0) {
                     (void)altcp_close((struct altcp_pcb*)socket->pcb);
                     socket->pcb = NULL;
-                    return NET_STATUS_NO_MEM;
+                    return WASMOS_ERR_NET_NO_MEM;
                 }
             }
         } else {
             socket->pcb = altcp_tcp_new_ip_type(IPADDR_TYPE_V4);
         }
     }
-    return socket->pcb != NULL ? NET_STATUS_OK : NET_STATUS_NO_MEM;
+    return socket->pcb != NULL ? WASMOS_ERR_NONE : WASMOS_ERR_NET_NO_MEM;
 }
 
 static int32_t net_stack_pcb_bind(net_socket_t* socket, uint16_t port, uint32_t addr_v4) {
     ip_addr_t address;
     err_t err;
     if (socket == NULL || socket->pcb == NULL) {
-        return NET_STATUS_INVALID;
+        return WASMOS_ERR_NET_INVALID;
     }
     ip_addr_set_ip4_u32(&address, addr_v4);
     if (socket->type == NET_SOCKET_DGRAM) {
@@ -1738,22 +1738,22 @@ static int32_t net_stack_pcb_bind(net_socket_t* socket, uint16_t port, uint32_t 
     } else {
         err = altcp_bind((struct altcp_pcb*)socket->pcb, &address, port);
     }
-    return err == ERR_OK ? NET_STATUS_OK : NET_STATUS_ADDR_IN_USE;
+    return err == ERR_OK ? WASMOS_ERR_NONE : WASMOS_ERR_NET_ADDR_IN_USE;
 }
 
 static int32_t net_stack_pcb_connect(net_socket_t* socket, uint16_t port, uint32_t addr_v4) {
     ip_addr_t address;
     err_t err;
     if (socket == NULL || socket->pcb == NULL) {
-        return NET_STATUS_INVALID;
+        return WASMOS_ERR_NET_INVALID;
     }
     ip_addr_set_ip4_u32(&address, addr_v4);
     if (socket->type == NET_SOCKET_DGRAM) {
         err = udp_connect((struct udp_pcb*)socket->pcb, &address, port);
-        return err == ERR_OK ? NET_STATUS_OK : NET_STATUS_IO_ERROR;
+        return err == ERR_OK ? WASMOS_ERR_NONE : WASMOS_ERR_NET_IO_ERROR;
     }
     /* TCP: install the per-socket callbacks and start the handshake. The reply
-     * is deferred (NET_STATUS_WOULD_BLOCK) and delivered from the connected or
+     * is deferred (WASMOS_ERR_NET_WOULD_BLOCK) and delivered from the connected or
      * error callback once the SYN exchange resolves. */
     struct altcp_pcb* pcb = (struct altcp_pcb*)socket->pcb;
     altcp_arg(pcb, socket);
@@ -1761,7 +1761,7 @@ static int32_t net_stack_pcb_connect(net_socket_t* socket, uint16_t port, uint32
     altcp_sent(pcb, net_stack_tcp_sent);
     altcp_err(pcb, net_stack_tcp_err);
     err = altcp_connect(pcb, &address, port, net_stack_tcp_connected);
-    return err == ERR_OK ? NET_STATUS_WOULD_BLOCK : NET_STATUS_IO_ERROR;
+    return err == ERR_OK ? WASMOS_ERR_NET_WOULD_BLOCK : WASMOS_ERR_NET_IO_ERROR;
 }
 
 static void net_stack_pcb_close(net_socket_t* socket) {
@@ -1798,16 +1798,16 @@ static void net_stack_pcb_close(net_socket_t* socket) {
 static int32_t net_stack_pcb_listen(net_socket_t* socket) {
     struct altcp_pcb* lpcb;
     if (socket == NULL || socket->pcb == NULL || socket->type != NET_SOCKET_STREAM) {
-        return NET_STATUS_INVALID;
+        return WASMOS_ERR_NET_INVALID;
     }
     lpcb = altcp_listen((struct altcp_pcb*)socket->pcb);
     if (lpcb == NULL) {
-        return NET_STATUS_NO_MEM;
+        return WASMOS_ERR_NET_NO_MEM;
     }
     socket->pcb = lpcb;
     altcp_arg(lpcb, socket);
     altcp_accept(lpcb, net_stack_tcp_accept);
-    return NET_STATUS_OK;
+    return WASMOS_ERR_NONE;
 }
 
 static void net_stack_handle_open(const nd_ipc_message_t* request) {
@@ -1822,19 +1822,19 @@ static void net_stack_handle_open(const nd_ipc_message_t* request) {
 
     if (g_api == NULL || g_api->xfer_buffer_map_borrowed == NULL ||
         g_api->xfer_buffer_unmap_borrowed == NULL || request->arg2 != sizeof(*descriptor)) {
-        net_stack_reply_error(request, NET_STATUS_INVALID);
+        net_stack_reply_error(request, WASMOS_ERR_NET_INVALID);
         return;
     }
     descriptor = (net_socket_open_descriptor_v1_t*)g_api->xfer_buffer_map_borrowed(
         ND_BUFFER_KIND_XFER, request->arg0, request->arg1);
     if (descriptor == NULL) {
-        net_stack_reply_error(request, NET_STATUS_DENIED);
+        net_stack_reply_error(request, WASMOS_ERR_NET_DENIED);
         return;
     }
     if (descriptor->family != NET_SOCKET_AF_INET || descriptor->tx_bytes == 0u ||
         descriptor->rx_bytes == 0u) {
         (void)g_api->xfer_buffer_unmap_borrowed(request->arg1);
-        net_stack_reply_error(request, NET_STATUS_INVALID);
+        net_stack_reply_error(request, WASMOS_ERR_NET_INVALID);
         return;
     }
     /* Capture the socket-open flags (e.g. NET_SOCKET_OPEN_FLAG_TLS) before the
@@ -1854,20 +1854,20 @@ static void net_stack_handle_open(const nd_ipc_message_t* request) {
             (void)g_api->xfer_buffer_unmap_borrowed(rx_borrow_id);
         }
         (void)g_api->xfer_buffer_unmap_borrowed(request->arg1);
-        net_stack_reply_error(request, NET_STATUS_DENIED);
+        net_stack_reply_error(request, WASMOS_ERR_NET_DENIED);
         return;
     }
     status =
         net_socket_open(&g_socket_pool, request->source, descriptor, tx_base, rx_base, &socket_id);
     (void)g_api->xfer_buffer_unmap_borrowed(request->arg1);
-    if (status != NET_STATUS_OK) {
+    if (status != WASMOS_ERR_NONE) {
         (void)g_api->xfer_buffer_unmap_borrowed(tx_borrow_id);
         (void)g_api->xfer_buffer_unmap_borrowed(rx_borrow_id);
         net_stack_reply_error(request, status);
         return;
     }
     status = net_stack_pcb_open(&g_socket_pool.sockets[socket_id], open_flags);
-    if (status != NET_STATUS_OK) {
+    if (status != WASMOS_ERR_NONE) {
         (void)net_socket_close(&g_socket_pool, request->source, socket_id);
         (void)g_api->xfer_buffer_unmap_borrowed(tx_borrow_id);
         (void)g_api->xfer_buffer_unmap_borrowed(rx_borrow_id);
@@ -1895,29 +1895,29 @@ static void net_stack_handle_accept(const nd_ipc_message_t* request) {
 
     if (g_api == NULL || g_api->xfer_buffer_map_borrowed == NULL ||
         g_api->xfer_buffer_unmap_borrowed == NULL || request->arg3 != sizeof(*descriptor)) {
-        net_stack_reply_error(request, NET_STATUS_INVALID);
+        net_stack_reply_error(request, WASMOS_ERR_NET_INVALID);
         return;
     }
     if (request->arg0 >= NET_SOCKET_MAX) {
-        net_stack_reply_error(request, NET_STATUS_DENIED);
+        net_stack_reply_error(request, WASMOS_ERR_NET_DENIED);
         return;
     }
     listener = &g_socket_pool.sockets[request->arg0];
     if (listener->owner_endpoint != request->source || listener->type != NET_SOCKET_STREAM ||
         listener->state != NET_SOCKET_LISTENING) {
-        net_stack_reply_error(request, NET_STATUS_INVALID);
+        net_stack_reply_error(request, WASMOS_ERR_NET_INVALID);
         return;
     }
     descriptor = (net_socket_open_descriptor_v1_t*)g_api->xfer_buffer_map_borrowed(
         ND_BUFFER_KIND_XFER, request->arg1, request->arg2);
     if (descriptor == NULL) {
-        net_stack_reply_error(request, NET_STATUS_DENIED);
+        net_stack_reply_error(request, WASMOS_ERR_NET_DENIED);
         return;
     }
     if (descriptor->family != NET_SOCKET_AF_INET || descriptor->type != NET_SOCKET_STREAM ||
         descriptor->tx_bytes == 0u || descriptor->rx_bytes == 0u) {
         (void)g_api->xfer_buffer_unmap_borrowed(request->arg2);
-        net_stack_reply_error(request, NET_STATUS_INVALID);
+        net_stack_reply_error(request, WASMOS_ERR_NET_INVALID);
         return;
     }
     tx_base = g_api->xfer_buffer_map_borrowed(ND_BUFFER_KIND_XFER, descriptor->tx_buffer_id,
@@ -1934,13 +1934,13 @@ static void net_stack_handle_accept(const nd_ipc_message_t* request) {
             (void)g_api->xfer_buffer_unmap_borrowed(rx_borrow_id);
         }
         (void)g_api->xfer_buffer_unmap_borrowed(request->arg2);
-        net_stack_reply_error(request, NET_STATUS_DENIED);
+        net_stack_reply_error(request, WASMOS_ERR_NET_DENIED);
         return;
     }
     status =
         net_socket_open(&g_socket_pool, request->source, descriptor, tx_base, rx_base, &socket_id);
     (void)g_api->xfer_buffer_unmap_borrowed(request->arg2);
-    if (status != NET_STATUS_OK) {
+    if (status != WASMOS_ERR_NONE) {
         (void)g_api->xfer_buffer_unmap_borrowed(tx_borrow_id);
         (void)g_api->xfer_buffer_unmap_borrowed(rx_borrow_id);
         net_stack_reply_error(request, status);
@@ -1971,24 +1971,24 @@ static void net_stack_handle_ifaddr_add(const nd_ipc_message_t* request) {
     ip4_addr_t gw;
     if (g_api == NULL || g_api->xfer_buffer_map_borrowed == NULL ||
         g_api->xfer_buffer_unmap_borrowed == NULL || request->arg2 != sizeof(*rec)) {
-        net_stack_reply_error(request, NET_STATUS_INVALID);
+        net_stack_reply_error(request, WASMOS_ERR_NET_INVALID);
         return;
     }
     rec = (net_ifaddr_record_v1_t*)g_api->xfer_buffer_map_borrowed(ND_BUFFER_KIND_XFER,
                                                                    request->arg0, request->arg1);
     if (rec == NULL) {
-        net_stack_reply_error(request, NET_STATUS_DENIED);
+        net_stack_reply_error(request, WASMOS_ERR_NET_DENIED);
         return;
     }
     if (rec->version != NET_IFADDR_RECORD_VERSION) {
         (void)g_api->xfer_buffer_unmap_borrowed(request->arg1);
-        net_stack_reply_error(request, NET_STATUS_INVALID);
+        net_stack_reply_error(request, WASMOS_ERR_NET_INVALID);
         return;
     }
     interface = net_stack_interface_from_index(rec->if_index);
     if (interface == NULL || !interface->netif_installed) {
         (void)g_api->xfer_buffer_unmap_borrowed(request->arg1);
-        net_stack_reply_error(request, NET_STATUS_NOT_READY);
+        net_stack_reply_error(request, WASMOS_ERR_NET_NOT_READY);
         return;
     }
     ip4_addr_set_u32(&ip, rec->addr_v4);
@@ -2001,7 +2001,7 @@ static void net_stack_handle_ifaddr_add(const nd_ipc_message_t* request) {
     }
     netif_set_addr(&interface->netif, &ip, &mask, &gw);
     (void)g_api->xfer_buffer_unmap_borrowed(request->arg1);
-    net_stack_send_reply(request, NET_IPC_RESP, NET_STATUS_OK, 0u, 0u, 0u);
+    net_stack_send_reply(request, NET_IPC_RESP, WASMOS_ERR_NONE, 0u, 0u, 0u);
 }
 
 static void net_stack_handle_if_set_state(const nd_ipc_message_t* request) {
@@ -2010,7 +2010,7 @@ static void net_stack_handle_if_set_state(const nd_ipc_message_t* request) {
      * link state is driven by the driver's LINK_NOTIFY, not this. */
     interface = net_stack_interface_from_index(request->arg0);
     if (interface == NULL || !interface->netif_installed) {
-        net_stack_reply_error(request, NET_STATUS_NOT_READY);
+        net_stack_reply_error(request, WASMOS_ERR_NET_NOT_READY);
         return;
     }
     if (request->arg1 != 0u) {
@@ -2018,7 +2018,7 @@ static void net_stack_handle_if_set_state(const nd_ipc_message_t* request) {
     } else {
         netif_set_down(&interface->netif);
     }
-    net_stack_send_reply(request, NET_IPC_RESP, NET_STATUS_OK, 0u, 0u, 0u);
+    net_stack_send_reply(request, NET_IPC_RESP, WASMOS_ERR_NONE, 0u, 0u, 0u);
 }
 
 static void net_stack_handle_ifaddr_del(const nd_ipc_message_t* request) {
@@ -2026,7 +2026,7 @@ static void net_stack_handle_ifaddr_del(const nd_ipc_message_t* request) {
     ip4_addr_t zero;
     interface = net_stack_interface_from_index(request->arg0);
     if (interface == NULL || !interface->netif_installed) {
-        net_stack_reply_error(request, NET_STATUS_NOT_READY);
+        net_stack_reply_error(request, WASMOS_ERR_NET_NOT_READY);
         return;
     }
     if (interface->dhcp_active) {
@@ -2036,7 +2036,7 @@ static void net_stack_handle_ifaddr_del(const nd_ipc_message_t* request) {
     ip4_addr_set_zero(&zero);
     netif_set_addr(&interface->netif, &zero, &zero, &zero);
     interface->addr_ready = 0u;
-    net_stack_send_reply(request, NET_IPC_RESP, NET_STATUS_OK, 0u, 0u, 0u);
+    net_stack_send_reply(request, NET_IPC_RESP, WASMOS_ERR_NONE, 0u, 0u, 0u);
 }
 
 static void net_stack_handle_dhcp_set(const nd_ipc_message_t* request) {
@@ -2044,7 +2044,7 @@ static void net_stack_handle_dhcp_set(const nd_ipc_message_t* request) {
     /* arg0 = if_index, arg1 = 1 (start) / 0 (stop). */
     interface = net_stack_interface_from_index(request->arg0);
     if (interface == NULL || !interface->netif_installed) {
-        net_stack_reply_error(request, NET_STATUS_NOT_READY);
+        net_stack_reply_error(request, WASMOS_ERR_NET_NOT_READY);
         return;
     }
     if (request->arg1 != 0u) {
@@ -2055,7 +2055,7 @@ static void net_stack_handle_dhcp_set(const nd_ipc_message_t* request) {
         netif_set_addr(&interface->netif, &zero, &zero, &zero);
         interface->addr_ready = 0u;
         if (dhcp_start(&interface->netif) != ERR_OK) {
-            net_stack_reply_error(request, NET_STATUS_IO_ERROR);
+            net_stack_reply_error(request, WASMOS_ERR_NET_IO_ERROR);
             return;
         }
         interface->dhcp_active = 1u;
@@ -2067,7 +2067,7 @@ static void net_stack_handle_dhcp_set(const nd_ipc_message_t* request) {
             interface->dhcp_active = 0u;
         }
     }
-    net_stack_send_reply(request, NET_IPC_RESP, NET_STATUS_OK, 0u, 0u, 0u);
+    net_stack_send_reply(request, NET_IPC_RESP, WASMOS_ERR_NONE, 0u, 0u, 0u);
 }
 
 /* arg0 = count (0..NET_IFCFG_MAX_DNS), arg1/arg2 = server IPv4 network-order
@@ -2077,7 +2077,7 @@ static void net_stack_handle_dns_set(const nd_ipc_message_t* request) {
     uint32_t count = request->arg0;
     uint32_t i;
     if (count > NET_IFCFG_MAX_DNS) {
-        net_stack_reply_error(request, NET_STATUS_INVALID);
+        net_stack_reply_error(request, WASMOS_ERR_NET_INVALID);
         return;
     }
     for (i = 0u; i < NET_IFCFG_MAX_DNS; ++i) {
@@ -2101,7 +2101,7 @@ static void net_stack_handle_dns_set(const nd_ipc_message_t* request) {
             g_active_ifc->cfg_dns[i][3] = (uint8_t)((word >> 24) & 0xFFu);
         }
     }
-    net_stack_send_reply(request, NET_IPC_RESP, NET_STATUS_OK, 0u, 0u, 0u);
+    net_stack_send_reply(request, NET_IPC_RESP, WASMOS_ERR_NONE, 0u, 0u, 0u);
 }
 
 /* RESP arg1 = count, arg2/arg3 = server IPv4 network-order words. */
@@ -2116,7 +2116,7 @@ static void net_stack_handle_dns_list(const nd_ipc_message_t* request) {
             words[count++] = word;
         }
     }
-    net_stack_send_reply(request, NET_IPC_RESP, NET_STATUS_OK, count, words[0], words[1]);
+    net_stack_send_reply(request, NET_IPC_RESP, WASMOS_ERR_NONE, count, words[0], words[1]);
 }
 
 /* Deferred DNS resolutions in flight. A slot survives until dns_gethostbyname's
@@ -2162,9 +2162,10 @@ static void net_stack_dns_found(const char* name, const ip_addr_t* ipaddr, void*
         return;
     }
     if (ipaddr != NULL) {
-        net_stack_dns_reply(slot, NET_IPC_RESP, NET_STATUS_OK, ip4_addr_get_u32(ip_2_ip4(ipaddr)));
+        net_stack_dns_reply(slot, NET_IPC_RESP, WASMOS_ERR_NONE,
+                            ip4_addr_get_u32(ip_2_ip4(ipaddr)));
     } else {
-        net_stack_dns_reply(slot, NET_IPC_ERROR, NET_STATUS_TIMEOUT, 0u);
+        net_stack_dns_reply(slot, NET_IPC_ERROR, WASMOS_ERR_NET_TIMEOUT, 0u);
     }
     slot->in_use = 0u;
 }
@@ -2184,12 +2185,12 @@ static void net_stack_handle_resolve(const nd_ipc_message_t* request) {
     if (g_api == NULL || g_api->xfer_buffer_map_borrowed == NULL ||
         g_api->xfer_buffer_unmap_borrowed == NULL || len == 0u ||
         len >= NET_STACK_DNS_HOSTNAME_MAX) {
-        net_stack_reply_error(request, NET_STATUS_INVALID);
+        net_stack_reply_error(request, WASMOS_ERR_NET_INVALID);
         return;
     }
     name_base = g_api->xfer_buffer_map_borrowed(ND_BUFFER_KIND_XFER, request->arg0, request->arg1);
     if (name_base == NULL) {
-        net_stack_reply_error(request, NET_STATUS_DENIED);
+        net_stack_reply_error(request, WASMOS_ERR_NET_DENIED);
         return;
     }
     for (i = 0u; i < len; ++i) {
@@ -2200,19 +2201,19 @@ static void net_stack_handle_resolve(const nd_ipc_message_t* request) {
 
     slot = net_stack_dns_pending_alloc(request->source, request->request_id);
     if (slot == NULL) {
-        net_stack_reply_error(request, NET_STATUS_QUEUE_FULL);
+        net_stack_reply_error(request, WASMOS_ERR_NET_QUEUE_FULL);
         return;
     }
     err = dns_gethostbyname(hostname, &addr, net_stack_dns_found, slot);
     if (err == ERR_OK) {
         slot->in_use = 0u; /* cached: answer now */
-        net_stack_send_reply(request, NET_IPC_RESP, NET_STATUS_OK,
+        net_stack_send_reply(request, NET_IPC_RESP, WASMOS_ERR_NONE,
                              ip4_addr_get_u32(ip_2_ip4(&addr)), 0u, 0u);
     } else if (err == ERR_INPROGRESS) {
         /* Deferred: net_stack_dns_found() answers when the query completes. */
     } else {
         slot->in_use = 0u;
-        net_stack_reply_error(request, NET_STATUS_IO_ERROR);
+        net_stack_reply_error(request, WASMOS_ERR_NET_IO_ERROR);
     }
 }
 
@@ -2222,13 +2223,13 @@ static void net_stack_handle_ifaddr_list(const nd_ipc_message_t* request) {
     uint32_t count = 0u;
     if (g_api == NULL || g_api->xfer_buffer_map_borrowed == NULL ||
         g_api->xfer_buffer_unmap_borrowed == NULL || request->arg2 < sizeof(*out)) {
-        net_stack_reply_error(request, NET_STATUS_INVALID);
+        net_stack_reply_error(request, WASMOS_ERR_NET_INVALID);
         return;
     }
     out = (net_ifaddr_record_v1_t*)g_api->xfer_buffer_map_borrowed(ND_BUFFER_KIND_XFER,
                                                                    request->arg0, request->arg1);
     if (out == NULL) {
-        net_stack_reply_error(request, NET_STATUS_DENIED);
+        net_stack_reply_error(request, WASMOS_ERR_NET_DENIED);
         return;
     }
     capacity = request->arg2 / (uint32_t)sizeof(*out);
@@ -2347,16 +2348,16 @@ static void net_stack_dispatch(const nd_ipc_message_t* request) {
     case NET_IPC_BIND:
         if (request->arg0 >= NET_SOCKET_MAX ||
             g_socket_pool.sockets[request->arg0].owner_endpoint != request->source) {
-            net_stack_reply_error(request, NET_STATUS_DENIED);
+            net_stack_reply_error(request, WASMOS_ERR_NET_DENIED);
             break;
         }
         status = net_stack_pcb_bind(&g_socket_pool.sockets[request->arg0], (uint16_t)request->arg1,
                                     request->arg2);
-        if (status == NET_STATUS_OK) {
+        if (status == WASMOS_ERR_NONE) {
             status = net_socket_bind(&g_socket_pool, request->source, request->arg0,
                                      (uint16_t)request->arg1, request->arg2);
         }
-        if (status == NET_STATUS_OK) {
+        if (status == WASMOS_ERR_NONE) {
             net_stack_send_reply(request, NET_IPC_RESP, status, 0u, 0u, 0u);
         } else {
             net_stack_reply_error(request, status);
@@ -2366,7 +2367,7 @@ static void net_stack_dispatch(const nd_ipc_message_t* request) {
         net_socket_t* socket;
         if (request->arg0 >= NET_SOCKET_MAX ||
             g_socket_pool.sockets[request->arg0].owner_endpoint != request->source) {
-            net_stack_reply_error(request, NET_STATUS_DENIED);
+            net_stack_reply_error(request, WASMOS_ERR_NET_DENIED);
             break;
         }
         socket = &g_socket_pool.sockets[request->arg0];
@@ -2374,7 +2375,7 @@ static void net_stack_dispatch(const nd_ipc_message_t* request) {
          * stream socket, CONNECTED for a datagram socket). */
         status = net_socket_connect(&g_socket_pool, request->source, request->arg0,
                                     (uint16_t)request->arg1, request->arg2);
-        if (status != NET_STATUS_OK) {
+        if (status != WASMOS_ERR_NONE) {
             net_stack_reply_error(request, status);
             break;
         }
@@ -2382,12 +2383,12 @@ static void net_stack_dispatch(const nd_ipc_message_t* request) {
         socket->connect_request_id = request->request_id;
         socket->connect_pending = 1u;
         status = net_stack_pcb_connect(socket, (uint16_t)request->arg1, request->arg2);
-        if (status == NET_STATUS_WOULD_BLOCK) {
+        if (status == WASMOS_ERR_NET_WOULD_BLOCK) {
             /* TCP handshake in flight: reply deferred to tcp_connected/tcp_err. */
             break;
         }
         socket->connect_pending = 0u;
-        if (status == NET_STATUS_OK) {
+        if (status == WASMOS_ERR_NONE) {
             net_stack_send_reply(request, NET_IPC_RESP, status, 0u, 0u, 0u);
         } else {
             net_stack_reply_error(request, status);
@@ -2397,19 +2398,19 @@ static void net_stack_dispatch(const nd_ipc_message_t* request) {
     case NET_IPC_LISTEN:
         if (request->arg0 >= NET_SOCKET_MAX ||
             g_socket_pool.sockets[request->arg0].owner_endpoint != request->source) {
-            net_stack_reply_error(request, NET_STATUS_DENIED);
+            net_stack_reply_error(request, WASMOS_ERR_NET_DENIED);
             break;
         }
         /* net_socket_listen validates a BOUND stream socket and advances the
          * pool state; roll it back if the lwIP listen pcb cannot be created. */
         status = net_socket_listen(&g_socket_pool, request->source, request->arg0);
-        if (status == NET_STATUS_OK) {
+        if (status == WASMOS_ERR_NONE) {
             status = net_stack_pcb_listen(&g_socket_pool.sockets[request->arg0]);
-            if (status != NET_STATUS_OK) {
+            if (status != WASMOS_ERR_NONE) {
                 g_socket_pool.sockets[request->arg0].state = NET_SOCKET_BOUND;
             }
         }
-        if (status == NET_STATUS_OK) {
+        if (status == WASMOS_ERR_NONE) {
             net_stack_send_reply(request, NET_IPC_RESP, status, 0u, 0u, 0u);
         } else {
             net_stack_reply_error(request, status);
@@ -2421,14 +2422,14 @@ static void net_stack_dispatch(const nd_ipc_message_t* request) {
     case NET_IPC_CLOSE:
         if (request->arg0 >= NET_SOCKET_MAX ||
             g_socket_pool.sockets[request->arg0].owner_endpoint != request->source) {
-            net_stack_reply_error(request, NET_STATUS_DENIED);
+            net_stack_reply_error(request, WASMOS_ERR_NET_DENIED);
             break;
         }
         uint32_t tx_borrow_id = g_socket_pool.sockets[request->arg0].tx_borrow_id;
         uint32_t rx_borrow_id = g_socket_pool.sockets[request->arg0].rx_borrow_id;
         net_stack_pcb_close(&g_socket_pool.sockets[request->arg0]);
         status = net_socket_close(&g_socket_pool, request->source, request->arg0);
-        if (status == NET_STATUS_OK) {
+        if (status == WASMOS_ERR_NONE) {
             (void)g_api->xfer_buffer_unmap_borrowed(tx_borrow_id);
             (void)g_api->xfer_buffer_unmap_borrowed(rx_borrow_id);
             net_stack_send_reply(request, NET_IPC_RESP, status, 0u, 0u, 0u);
@@ -2470,7 +2471,7 @@ static void net_stack_dispatch(const nd_ipc_message_t* request) {
         net_socket_t* socket;
         if (request->arg0 >= NET_SOCKET_MAX ||
             g_socket_pool.sockets[request->arg0].owner_endpoint != request->source) {
-            net_stack_reply_error(request, NET_STATUS_DENIED);
+            net_stack_reply_error(request, WASMOS_ERR_NET_DENIED);
             break;
         }
         socket = &g_socket_pool.sockets[request->arg0];
@@ -2484,10 +2485,10 @@ static void net_stack_dispatch(const nd_ipc_message_t* request) {
         break;
     }
     case NET_IPC_RX_NOTIFY:
-        net_stack_reply_error(request, NET_STATUS_NOT_READY);
+        net_stack_reply_error(request, WASMOS_ERR_NET_NOT_READY);
         break;
     default:
-        net_stack_reply_error(request, NET_STATUS_INVALID);
+        net_stack_reply_error(request, WASMOS_ERR_NET_INVALID);
         break;
     }
 }

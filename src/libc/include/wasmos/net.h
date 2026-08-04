@@ -57,7 +57,7 @@ static inline int32_t wasmos_net_resolve(int32_t stack_ep, int32_t reply_ep, con
     rc = wasmos_ipc_call(stack_ep, reply_ep, NET_IPC_RESOLVE, request_id, bid, grant, len, 0,
                          &reply);
     (void)wasmos_xfer_buffer_release(bid);
-    if (rc != 0 || reply.type != NET_IPC_RESP || (int32_t)reply.arg0 != NET_STATUS_OK) {
+    if (rc != 0 || reply.type != NET_IPC_RESP || (int32_t)reply.arg0 != WASMOS_ERR_NONE) {
         return -1;
     }
     if (out_addr_no != 0) {
@@ -354,7 +354,7 @@ static inline int32_t wasmos_net__connect_flags(wasmos_net_tcp_t* s, int32_t sta
     if (wasmos_ipc_send(stack_ep, reply_ep, NET_IPC_CONNECT, rid, (uint32_t)s->socket_id, port,
                         addr_no, 0) != 0 ||
         wasmos_net__recv_reply(reply_ep, rid, &reply) != 0 || reply.type != NET_IPC_RESP ||
-        (int32_t)reply.arg0 != NET_STATUS_OK) {
+        (int32_t)reply.arg0 != WASMOS_ERR_NONE) {
         wasmos_net_tcp_close(s);
         return -1;
     }
@@ -567,7 +567,7 @@ static inline int32_t wasmos_net_tcp_advance(wasmos_net_tcp_t* s) {
             s->hs_state = WASMOS_NET_HS_C_CONNECT;
             break;
         case WASMOS_NET_HS_C_CONNECT:
-            if (arg0 != NET_STATUS_OK) {
+            if (arg0 != WASMOS_ERR_NONE) {
                 return wasmos_net__hs_fail(s, WASMOS_NET_HS_ERR_CONNECT);
             }
             s->hs_state = WASMOS_NET_HS_READY;

@@ -135,8 +135,17 @@ domains:
 
   net:
     id: 5
-    description: "networking stack / socket failures (reserved)"
-    codes: []
+    description: "networking stack / socket failures (was NET_STATUS_*)"
+    codes:
+      - { name: WOULD_BLOCK,  description: "operation is deferred; completion arrives as a later event (retryable)" }
+      - { name: INVALID,      description: "invalid request arguments (socket, address, or length)" }
+      - { name: NOT_READY,    description: "interface or socket is not in a state that permits the operation" }
+      - { name: DENIED,       description: "caller lacks the capability for this operation" }
+      - { name: IO_ERROR,     description: "the underlying stack or driver reported a failure" }
+      - { name: QUEUE_FULL,   description: "send/receive queue has no space (retryable)" }
+      - { name: NO_MEM,       description: "no buffer or pcb could be allocated" }
+      - { name: ADDR_IN_USE,  description: "the requested address or port is already bound" }
+      - { name: TIMEOUT,      description: "the operation did not complete within its window" }
 
   gfx:
     id: 6
@@ -167,6 +176,11 @@ domains:
       - { name: NO_TTY_FOR_SOURCE,   description: "no tty is associated with the requesting endpoint" }
       - { name: READER_BUSY,         description: "another endpoint is already the reader for this tty" }
       - { name: UNSUPPORTED_REQUEST, description: "unknown or unsupported request type" }
+      # VT_IPC_SWITCH_TTY step failures (was VT_SWITCH_ERR_*).
+      - { name: SWITCH_MODE_OFF,     description: "tty switch could not disable framebuffer rendering" }
+      - { name: SWITCH_CLEAR,        description: "tty switch could not clear the screen" }
+      - { name: SWITCH_REPLAY,       description: "tty switch could not replay the cell buffer" }
+      - { name: SWITCH_MODE_ON,      description: "tty switch could not re-enable framebuffer rendering" }
 
   chardev:
     id: 9
@@ -174,6 +188,15 @@ domains:
     codes:
       - { name: NO_DATA,             description: "no byte is buffered yet (retryable)" }
       - { name: UNSUPPORTED_REQUEST, description: "unknown or unsupported request type" }
+
+  hrng:
+    id: 14
+    description: "hardware RNG provider failures (was HRNG_STATUS_*)"
+    codes:
+      - { name: INVALID,   description: "invalid request arguments (byte count or buffer)" }
+      - { name: NOT_READY, description: "entropy source is not initialized or has no entropy yet" }
+      - { name: IO_ERROR,  description: "the RNG device reported a failure" }
+      - { name: TIMEOUT,   description: "the device did not produce entropy within its window" }
 
   font:
     id: 12

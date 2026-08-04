@@ -33,6 +33,7 @@ const (
 	WASMOS_ERR_DOMAIN_DRIVER uint16 = 7
 	WASMOS_ERR_DOMAIN_VT uint16 = 8
 	WASMOS_ERR_DOMAIN_CHARDEV uint16 = 9
+	WASMOS_ERR_DOMAIN_HRNG uint16 = 14
 	WASMOS_ERR_DOMAIN_FONT uint16 = 12
 	WASMOS_ERR_DOMAIN_RTC uint16 = 13
 	WASMOS_ERR_DOMAIN_XFER_BUFFER uint16 = 11
@@ -116,6 +117,15 @@ const (
 	WASMOS_ERR_FS_BACKEND_IPC int32 = -0x0004001A // request could not be delivered to the backend, or no reply arrived
 	WASMOS_ERR_FS_BAD_FD int32 = -0x0004001B // fd is not present in this client's fd table
 	WASMOS_ERR_FS_REPLY_SEND int32 = -0x0004001C // the reply could not be delivered to the client
+	WASMOS_ERR_NET_WOULD_BLOCK int32 = -0x00050001 // operation is deferred; completion arrives as a later event (retryable)
+	WASMOS_ERR_NET_INVALID int32 = -0x00050002 // invalid request arguments (socket, address, or length)
+	WASMOS_ERR_NET_NOT_READY int32 = -0x00050003 // interface or socket is not in a state that permits the operation
+	WASMOS_ERR_NET_DENIED int32 = -0x00050004 // caller lacks the capability for this operation
+	WASMOS_ERR_NET_IO_ERROR int32 = -0x00050005 // the underlying stack or driver reported a failure
+	WASMOS_ERR_NET_QUEUE_FULL int32 = -0x00050006 // send/receive queue has no space (retryable)
+	WASMOS_ERR_NET_NO_MEM int32 = -0x00050007 // no buffer or pcb could be allocated
+	WASMOS_ERR_NET_ADDR_IN_USE int32 = -0x00050008 // the requested address or port is already bound
+	WASMOS_ERR_NET_TIMEOUT int32 = -0x00050009 // the operation did not complete within its window
 	WASMOS_ERR_GFX_UNSUPPORTED_REQUEST int32 = -0x00060001 // unknown or unsupported request type for this framebuffer backend
 	WASMOS_ERR_GFX_NO_RUNTIME_MODES int32 = -0x00060002 // backend cannot enumerate or switch modes at runtime (firmware-provided framebuffer)
 	WASMOS_ERR_GFX_BAD_MODE_INDEX int32 = -0x00060003 // mode index is out of range for this backend
@@ -130,8 +140,16 @@ const (
 	WASMOS_ERR_VT_NO_TTY_FOR_SOURCE int32 = -0x00080002 // no tty is associated with the requesting endpoint
 	WASMOS_ERR_VT_READER_BUSY int32 = -0x00080003 // another endpoint is already the reader for this tty
 	WASMOS_ERR_VT_UNSUPPORTED_REQUEST int32 = -0x00080004 // unknown or unsupported request type
+	WASMOS_ERR_VT_SWITCH_MODE_OFF int32 = -0x00080005 // tty switch could not disable framebuffer rendering
+	WASMOS_ERR_VT_SWITCH_CLEAR int32 = -0x00080006 // tty switch could not clear the screen
+	WASMOS_ERR_VT_SWITCH_REPLAY int32 = -0x00080007 // tty switch could not replay the cell buffer
+	WASMOS_ERR_VT_SWITCH_MODE_ON int32 = -0x00080008 // tty switch could not re-enable framebuffer rendering
 	WASMOS_ERR_CHARDEV_NO_DATA int32 = -0x00090001 // no byte is buffered yet (retryable)
 	WASMOS_ERR_CHARDEV_UNSUPPORTED_REQUEST int32 = -0x00090002 // unknown or unsupported request type
+	WASMOS_ERR_HRNG_INVALID int32 = -0x000E0001 // invalid request arguments (byte count or buffer)
+	WASMOS_ERR_HRNG_NOT_READY int32 = -0x000E0002 // entropy source is not initialized or has no entropy yet
+	WASMOS_ERR_HRNG_IO_ERROR int32 = -0x000E0003 // the RNG device reported a failure
+	WASMOS_ERR_HRNG_TIMEOUT int32 = -0x000E0004 // the device did not produce entropy within its window
 	WASMOS_ERR_FONT_INVALID int32 = -0x000C0001 // invalid request arguments (font id, size, glyph, or buffer)
 	WASMOS_ERR_FONT_PERMISSION int32 = -0x000C0002 // caller is not permitted to use the requested font resource
 	WASMOS_ERR_FONT_UNSUPPORTED int32 = -0x000C0003 // unknown or unsupported request type
@@ -232,6 +250,8 @@ func WasmosErrorDomainName(d uint16) string {
 		return "vt"
 	case WASMOS_ERR_DOMAIN_CHARDEV:
 		return "chardev"
+	case WASMOS_ERR_DOMAIN_HRNG:
+		return "hrng"
 	case WASMOS_ERR_DOMAIN_FONT:
 		return "font"
 	case WASMOS_ERR_DOMAIN_RTC:
@@ -395,6 +415,24 @@ func WasmosStrerror(c int32) string {
 		return "fd is not present in this client's fd table"
 	case WASMOS_ERR_FS_REPLY_SEND:
 		return "the reply could not be delivered to the client"
+	case WASMOS_ERR_NET_WOULD_BLOCK:
+		return "operation is deferred; completion arrives as a later event (retryable)"
+	case WASMOS_ERR_NET_INVALID:
+		return "invalid request arguments (socket, address, or length)"
+	case WASMOS_ERR_NET_NOT_READY:
+		return "interface or socket is not in a state that permits the operation"
+	case WASMOS_ERR_NET_DENIED:
+		return "caller lacks the capability for this operation"
+	case WASMOS_ERR_NET_IO_ERROR:
+		return "the underlying stack or driver reported a failure"
+	case WASMOS_ERR_NET_QUEUE_FULL:
+		return "send/receive queue has no space (retryable)"
+	case WASMOS_ERR_NET_NO_MEM:
+		return "no buffer or pcb could be allocated"
+	case WASMOS_ERR_NET_ADDR_IN_USE:
+		return "the requested address or port is already bound"
+	case WASMOS_ERR_NET_TIMEOUT:
+		return "the operation did not complete within its window"
 	case WASMOS_ERR_GFX_UNSUPPORTED_REQUEST:
 		return "unknown or unsupported request type for this framebuffer backend"
 	case WASMOS_ERR_GFX_NO_RUNTIME_MODES:
@@ -423,10 +461,26 @@ func WasmosStrerror(c int32) string {
 		return "another endpoint is already the reader for this tty"
 	case WASMOS_ERR_VT_UNSUPPORTED_REQUEST:
 		return "unknown or unsupported request type"
+	case WASMOS_ERR_VT_SWITCH_MODE_OFF:
+		return "tty switch could not disable framebuffer rendering"
+	case WASMOS_ERR_VT_SWITCH_CLEAR:
+		return "tty switch could not clear the screen"
+	case WASMOS_ERR_VT_SWITCH_REPLAY:
+		return "tty switch could not replay the cell buffer"
+	case WASMOS_ERR_VT_SWITCH_MODE_ON:
+		return "tty switch could not re-enable framebuffer rendering"
 	case WASMOS_ERR_CHARDEV_NO_DATA:
 		return "no byte is buffered yet (retryable)"
 	case WASMOS_ERR_CHARDEV_UNSUPPORTED_REQUEST:
 		return "unknown or unsupported request type"
+	case WASMOS_ERR_HRNG_INVALID:
+		return "invalid request arguments (byte count or buffer)"
+	case WASMOS_ERR_HRNG_NOT_READY:
+		return "entropy source is not initialized or has no entropy yet"
+	case WASMOS_ERR_HRNG_IO_ERROR:
+		return "the RNG device reported a failure"
+	case WASMOS_ERR_HRNG_TIMEOUT:
+		return "the device did not produce entropy within its window"
 	case WASMOS_ERR_FONT_INVALID:
 		return "invalid request arguments (font id, size, glyph, or buffer)"
 	case WASMOS_ERR_FONT_PERMISSION:

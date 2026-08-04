@@ -90,13 +90,7 @@ enum {
     VT_TRACE_DROP_STALE = 0xA5    /* write's generation < g_switch_generation */
 };
 
-/* Error codes returned in VT_IPC_SWITCH_TTY replies. */
-enum {
-    VT_SWITCH_ERR_INVALID_TTY = -1,
-    VT_SWITCH_ERR_MODE_OFF = -11, /* failed to disable framebuffer rendering */
-    VT_SWITCH_ERR_CLEAR = -12,    /* failed to clear the screen */
-    VT_SWITCH_ERR_REPLAY = -13,   /* failed to replay cell buffer */
-    VT_SWITCH_ERR_MODE_ON = -14   /* failed to re-enable framebuffer rendering */
-};
+/* VT_IPC_SWITCH_TTY reply codes are the packed vt domain in abi/errors.yaml
+ * (WASMOS_ERR_VT_BAD_TTY_ID, WASMOS_ERR_VT_SWITCH_*). */
 
 #endif

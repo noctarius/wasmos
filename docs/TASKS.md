@@ -387,25 +387,18 @@ returns; `FS_ERR_*`/`PROC_*` ride IPC opcodes), so the migration depends on them
     drivers — `NO_RUNTIME_MODES` vs `MODE_TOO_LARGE`). `net`, `font`, `block`,
     `virtio_serial` and `hrng` needed no domains: their `-1`s are all internal
     helper returns. Booted both runtimes.
-  - [ ] Subsystem 5 — the **named** negative-int status vocabularies. The `-1`
-    framing of subsystem 4 was too narrow: it hunted *bare* `-1`s and so never
-    saw the named constants doing the same job with the same ambiguity. Each of
-    these is a per-subsystem taxonomy defined outside `abi/errors.yaml`, and each
-    has its own `-1` meaning "invalid":
-    - `XFER_BUFFER_ERR_*` (254 refs, `kernel/include/xfer_buffer.h`) — the
-      largest, and a **host-call** edge: both `link.c`/`link.cpp` return these
-      straight to guests, so peers decode them.
-    - `NET_STATUS_*` (117) and `HRNG_STATUS_*` (17) in `wasmos_driver_abi.h`.
-      `HRNG_STATUS_*` values are non-contiguous (-2, -3, -5, -9), suggesting they
-      were hand-aligned to something and drifted.
-    - `GFX_STATUS_*` (112, `libc/include/wasmos/gfx_ipc.h`) — compositor replies.
-    - `FONT_STATUS_*` (61) and `RTC_STATUS_*` (27) — **duplicated** across
-      headers (`font_ipc.h` ×2, `rtc_ipc.h` ×3), as is the transport `IPC_ERR_*`
-      (×3). Single-sourcing these is the point of the IDL.
-    - `VT_SWITCH_ERR_*` (10, `services/vt/vt_types.h`).
-    `PM_SPAWN_INTERNAL_ERR_*` (58) is explicitly internal and stays. Ordering by
-    value: xfer-buffer first (largest and a host-call edge), then the duplicated
-    ones (font/rtc) since deduplication is most of the benefit.
+  - [x] Subsystem 5 — the **named** negative-int status vocabularies. All seven
+    migrated onto packed domains: `XFER_BUFFER_ERR_*` (254 refs, host-call edge)
+    -> `xfer_buffer` (11); `NET_STATUS_*` (117) -> `net` (5, was reserved);
+    `GFX_STATUS_*` (112) -> appended to `gfx` (6); `FONT_STATUS_*` (61) ->
+    `font` (12); `RTC_STATUS_*` (27) -> `rtc` (13); `HRNG_STATUS_*` (17) ->
+    `hrng` (14); `VT_SWITCH_ERR_*` (10) -> appended to `vt` (8), reusing
+    `BAD_TTY_ID` for its `INVALID_TTY` rather than duplicating it. Each legacy
+    `*_OK` became `WASMOS_ERR_NONE` (both 0, so comparisons held). Notes worth
+    keeping: `HRNG_STATUS_*`'s value gaps were an alignment to `NET_STATUS_*`'s
+    numbering, which namespaced domains make unnecessary; `abi/hostcalls.yaml`
+    and `abi/opcodes.yaml` documented the old names in prose and were updated so
+    all three re-gen guards stay clean.
 - [ ] Extend the `quality` re-gen guard to the host-call and opcode generators
   as they land (the errors guard already exists), so generated output can never
   silently drift from the IDL.

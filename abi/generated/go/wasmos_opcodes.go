@@ -282,7 +282,7 @@ const NETDRV_IPC_ERROR int32 = 0xAFF
 const HRNG_IPC_GET_BYTES_REQ int32 = 0xC00
 // arg0=bytes written into the buffer
 const HRNG_IPC_RESP int32 = 0xC80
-// arg0=HRNG_STATUS_*
+// arg0=WASMOS_ERR_HRNG_*
 const HRNG_IPC_ERROR int32 = 0xCFF
 
 // net (0xB00..0xBFF)

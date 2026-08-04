@@ -38,16 +38,16 @@ static int test_open_lifecycle_and_owner_check(void) {
     CHECK(wasmos_ringbuf_init(&rx, rx_region, sizeof(rx_region), CAPACITY) == 0);
     net_socket_open_descriptor_v1_t descriptor = valid_descriptor();
     uint32_t id = 0;
-    CHECK(net_socket_open(&pool, 101u, &descriptor, tx_region, rx_region, &id) == NET_STATUS_OK);
+    CHECK(net_socket_open(&pool, 101u, &descriptor, tx_region, rx_region, &id) == WASMOS_ERR_NONE);
     CHECK(pool.sockets[id].state == NET_SOCKET_OPEN);
     CHECK(pool.sockets[id].tx_ring.hdr == tx.hdr);
     CHECK(pool.sockets[id].rx_ring.hdr == rx.hdr);
-    CHECK(net_socket_bind(&pool, 102u, id, 1234u, 0u) == NET_STATUS_INVALID);
-    CHECK(net_socket_bind(&pool, 101u, id, 1234u, 0u) == NET_STATUS_OK);
-    CHECK(net_socket_listen(&pool, 101u, id) == NET_STATUS_OK);
-    CHECK(net_socket_connect(&pool, 101u, id, 80u, 0x01020304u) == NET_STATUS_INVALID);
-    CHECK(net_socket_close(&pool, 102u, id) == NET_STATUS_DENIED);
-    CHECK(net_socket_close(&pool, 101u, id) == NET_STATUS_OK);
+    CHECK(net_socket_bind(&pool, 102u, id, 1234u, 0u) == WASMOS_ERR_NET_INVALID);
+    CHECK(net_socket_bind(&pool, 101u, id, 1234u, 0u) == WASMOS_ERR_NONE);
+    CHECK(net_socket_listen(&pool, 101u, id) == WASMOS_ERR_NONE);
+    CHECK(net_socket_connect(&pool, 101u, id, 80u, 0x01020304u) == WASMOS_ERR_NET_INVALID);
+    CHECK(net_socket_close(&pool, 102u, id) == WASMOS_ERR_NET_DENIED);
+    CHECK(net_socket_close(&pool, 101u, id) == WASMOS_ERR_NONE);
     CHECK(pool.sockets[id].state == NET_SOCKET_FREE);
     CHECK((wasmos_ringbuf_flags(&tx) & WASMOS_RINGBUF_FLAG_PEER_CLOSED) != 0u);
     CHECK((wasmos_ringbuf_flags(&rx) & WASMOS_RINGBUF_FLAG_PEER_CLOSED) != 0u);
@@ -62,17 +62,17 @@ static int test_rejects_bad_descriptor_or_ring(void) {
     memset(tx_region, 0, sizeof(tx_region));
     memset(rx_region, 0, sizeof(rx_region));
     CHECK(net_socket_open(&pool, 101u, &descriptor, tx_region, rx_region, &id) ==
-          NET_STATUS_INVALID);
+          WASMOS_ERR_NET_INVALID);
     wasmos_ringbuf_t tx, rx;
     CHECK(wasmos_ringbuf_init(&tx, tx_region, sizeof(tx_region), CAPACITY) == 0);
     CHECK(wasmos_ringbuf_init(&rx, rx_region, sizeof(rx_region), CAPACITY) == 0);
     descriptor.version++;
     CHECK(net_socket_open(&pool, 101u, &descriptor, tx_region, rx_region, &id) ==
-          NET_STATUS_INVALID);
+          WASMOS_ERR_NET_INVALID);
     descriptor = valid_descriptor();
     descriptor.rx_borrow_id = 0u;
     CHECK(net_socket_open(&pool, 101u, &descriptor, tx_region, rx_region, &id) ==
-          NET_STATUS_INVALID);
+          WASMOS_ERR_NET_INVALID);
     return 0;
 }
 
@@ -86,19 +86,19 @@ static int test_connect_state_depends_on_type(void) {
 
     net_socket_open_descriptor_v1_t stream = valid_descriptor();
     uint32_t sid = 0;
-    CHECK(net_socket_open(&pool, 200u, &stream, tx_region, rx_region, &sid) == NET_STATUS_OK);
-    CHECK(net_socket_bind(&pool, 200u, sid, 1000u, 0u) == NET_STATUS_OK);
-    CHECK(net_socket_connect(&pool, 200u, sid, 80u, 0x01020304u) == NET_STATUS_OK);
+    CHECK(net_socket_open(&pool, 200u, &stream, tx_region, rx_region, &sid) == WASMOS_ERR_NONE);
+    CHECK(net_socket_bind(&pool, 200u, sid, 1000u, 0u) == WASMOS_ERR_NONE);
+    CHECK(net_socket_connect(&pool, 200u, sid, 80u, 0x01020304u) == WASMOS_ERR_NONE);
     CHECK(pool.sockets[sid].state == NET_SOCKET_CONNECTING);
     CHECK(pool.sockets[sid].remote_port == 80u);
     CHECK(pool.sockets[sid].remote_addr_v4 == 0x01020304u);
-    CHECK(net_socket_close(&pool, 200u, sid) == NET_STATUS_OK);
+    CHECK(net_socket_close(&pool, 200u, sid) == WASMOS_ERR_NONE);
 
     net_socket_open_descriptor_v1_t dgram = valid_descriptor();
     dgram.type = NET_SOCKET_DGRAM;
     uint32_t did = 0;
-    CHECK(net_socket_open(&pool, 200u, &dgram, tx_region, rx_region, &did) == NET_STATUS_OK);
-    CHECK(net_socket_connect(&pool, 200u, did, 53u, 0x08080808u) == NET_STATUS_OK);
+    CHECK(net_socket_open(&pool, 200u, &dgram, tx_region, rx_region, &did) == WASMOS_ERR_NONE);
+    CHECK(net_socket_connect(&pool, 200u, did, 53u, 0x08080808u) == WASMOS_ERR_NONE);
     CHECK(pool.sockets[did].state == NET_SOCKET_CONNECTED);
     return 0;
 }

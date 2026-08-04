@@ -28,6 +28,7 @@ export const WASMOS_ERR_DOMAIN_GFX: u16 = 6;
 export const WASMOS_ERR_DOMAIN_DRIVER: u16 = 7;
 export const WASMOS_ERR_DOMAIN_VT: u16 = 8;
 export const WASMOS_ERR_DOMAIN_CHARDEV: u16 = 9;
+export const WASMOS_ERR_DOMAIN_HRNG: u16 = 14;
 export const WASMOS_ERR_DOMAIN_FONT: u16 = 12;
 export const WASMOS_ERR_DOMAIN_RTC: u16 = 13;
 export const WASMOS_ERR_DOMAIN_XFER_BUFFER: u16 = 11;
@@ -108,6 +109,15 @@ export const WASMOS_ERR_FS_REBORROW: i32 = -0x00040019; // reborrowing the clien
 export const WASMOS_ERR_FS_BACKEND_IPC: i32 = -0x0004001A; // request could not be delivered to the backend, or no reply arrived
 export const WASMOS_ERR_FS_BAD_FD: i32 = -0x0004001B; // fd is not present in this client's fd table
 export const WASMOS_ERR_FS_REPLY_SEND: i32 = -0x0004001C; // the reply could not be delivered to the client
+export const WASMOS_ERR_NET_WOULD_BLOCK: i32 = -0x00050001; // operation is deferred; completion arrives as a later event (retryable)
+export const WASMOS_ERR_NET_INVALID: i32 = -0x00050002; // invalid request arguments (socket, address, or length)
+export const WASMOS_ERR_NET_NOT_READY: i32 = -0x00050003; // interface or socket is not in a state that permits the operation
+export const WASMOS_ERR_NET_DENIED: i32 = -0x00050004; // caller lacks the capability for this operation
+export const WASMOS_ERR_NET_IO_ERROR: i32 = -0x00050005; // the underlying stack or driver reported a failure
+export const WASMOS_ERR_NET_QUEUE_FULL: i32 = -0x00050006; // send/receive queue has no space (retryable)
+export const WASMOS_ERR_NET_NO_MEM: i32 = -0x00050007; // no buffer or pcb could be allocated
+export const WASMOS_ERR_NET_ADDR_IN_USE: i32 = -0x00050008; // the requested address or port is already bound
+export const WASMOS_ERR_NET_TIMEOUT: i32 = -0x00050009; // the operation did not complete within its window
 export const WASMOS_ERR_GFX_UNSUPPORTED_REQUEST: i32 = -0x00060001; // unknown or unsupported request type for this framebuffer backend
 export const WASMOS_ERR_GFX_NO_RUNTIME_MODES: i32 = -0x00060002; // backend cannot enumerate or switch modes at runtime (firmware-provided framebuffer)
 export const WASMOS_ERR_GFX_BAD_MODE_INDEX: i32 = -0x00060003; // mode index is out of range for this backend
@@ -122,8 +132,16 @@ export const WASMOS_ERR_VT_BAD_TTY_ID: i32 = -0x00080001; // requested tty id is
 export const WASMOS_ERR_VT_NO_TTY_FOR_SOURCE: i32 = -0x00080002; // no tty is associated with the requesting endpoint
 export const WASMOS_ERR_VT_READER_BUSY: i32 = -0x00080003; // another endpoint is already the reader for this tty
 export const WASMOS_ERR_VT_UNSUPPORTED_REQUEST: i32 = -0x00080004; // unknown or unsupported request type
+export const WASMOS_ERR_VT_SWITCH_MODE_OFF: i32 = -0x00080005; // tty switch could not disable framebuffer rendering
+export const WASMOS_ERR_VT_SWITCH_CLEAR: i32 = -0x00080006; // tty switch could not clear the screen
+export const WASMOS_ERR_VT_SWITCH_REPLAY: i32 = -0x00080007; // tty switch could not replay the cell buffer
+export const WASMOS_ERR_VT_SWITCH_MODE_ON: i32 = -0x00080008; // tty switch could not re-enable framebuffer rendering
 export const WASMOS_ERR_CHARDEV_NO_DATA: i32 = -0x00090001; // no byte is buffered yet (retryable)
 export const WASMOS_ERR_CHARDEV_UNSUPPORTED_REQUEST: i32 = -0x00090002; // unknown or unsupported request type
+export const WASMOS_ERR_HRNG_INVALID: i32 = -0x000E0001; // invalid request arguments (byte count or buffer)
+export const WASMOS_ERR_HRNG_NOT_READY: i32 = -0x000E0002; // entropy source is not initialized or has no entropy yet
+export const WASMOS_ERR_HRNG_IO_ERROR: i32 = -0x000E0003; // the RNG device reported a failure
+export const WASMOS_ERR_HRNG_TIMEOUT: i32 = -0x000E0004; // the device did not produce entropy within its window
 export const WASMOS_ERR_FONT_INVALID: i32 = -0x000C0001; // invalid request arguments (font id, size, glyph, or buffer)
 export const WASMOS_ERR_FONT_PERMISSION: i32 = -0x000C0002; // caller is not permitted to use the requested font resource
 export const WASMOS_ERR_FONT_UNSUPPORTED: i32 = -0x000C0003; // unknown or unsupported request type
@@ -195,6 +213,7 @@ export function errorDomainName(d: u16): string {
     case WASMOS_ERR_DOMAIN_DRIVER: return "driver";
     case WASMOS_ERR_DOMAIN_VT: return "vt";
     case WASMOS_ERR_DOMAIN_CHARDEV: return "chardev";
+    case WASMOS_ERR_DOMAIN_HRNG: return "hrng";
     case WASMOS_ERR_DOMAIN_FONT: return "font";
     case WASMOS_ERR_DOMAIN_RTC: return "rtc";
     case WASMOS_ERR_DOMAIN_XFER_BUFFER: return "xfer_buffer";
@@ -279,6 +298,15 @@ export function strerror(c: i32): string {
     case WASMOS_ERR_FS_BACKEND_IPC: return "request could not be delivered to the backend, or no reply arrived";
     case WASMOS_ERR_FS_BAD_FD: return "fd is not present in this client's fd table";
     case WASMOS_ERR_FS_REPLY_SEND: return "the reply could not be delivered to the client";
+    case WASMOS_ERR_NET_WOULD_BLOCK: return "operation is deferred; completion arrives as a later event (retryable)";
+    case WASMOS_ERR_NET_INVALID: return "invalid request arguments (socket, address, or length)";
+    case WASMOS_ERR_NET_NOT_READY: return "interface or socket is not in a state that permits the operation";
+    case WASMOS_ERR_NET_DENIED: return "caller lacks the capability for this operation";
+    case WASMOS_ERR_NET_IO_ERROR: return "the underlying stack or driver reported a failure";
+    case WASMOS_ERR_NET_QUEUE_FULL: return "send/receive queue has no space (retryable)";
+    case WASMOS_ERR_NET_NO_MEM: return "no buffer or pcb could be allocated";
+    case WASMOS_ERR_NET_ADDR_IN_USE: return "the requested address or port is already bound";
+    case WASMOS_ERR_NET_TIMEOUT: return "the operation did not complete within its window";
     case WASMOS_ERR_GFX_UNSUPPORTED_REQUEST: return "unknown or unsupported request type for this framebuffer backend";
     case WASMOS_ERR_GFX_NO_RUNTIME_MODES: return "backend cannot enumerate or switch modes at runtime (firmware-provided framebuffer)";
     case WASMOS_ERR_GFX_BAD_MODE_INDEX: return "mode index is out of range for this backend";
@@ -293,8 +321,16 @@ export function strerror(c: i32): string {
     case WASMOS_ERR_VT_NO_TTY_FOR_SOURCE: return "no tty is associated with the requesting endpoint";
     case WASMOS_ERR_VT_READER_BUSY: return "another endpoint is already the reader for this tty";
     case WASMOS_ERR_VT_UNSUPPORTED_REQUEST: return "unknown or unsupported request type";
+    case WASMOS_ERR_VT_SWITCH_MODE_OFF: return "tty switch could not disable framebuffer rendering";
+    case WASMOS_ERR_VT_SWITCH_CLEAR: return "tty switch could not clear the screen";
+    case WASMOS_ERR_VT_SWITCH_REPLAY: return "tty switch could not replay the cell buffer";
+    case WASMOS_ERR_VT_SWITCH_MODE_ON: return "tty switch could not re-enable framebuffer rendering";
     case WASMOS_ERR_CHARDEV_NO_DATA: return "no byte is buffered yet (retryable)";
     case WASMOS_ERR_CHARDEV_UNSUPPORTED_REQUEST: return "unknown or unsupported request type";
+    case WASMOS_ERR_HRNG_INVALID: return "invalid request arguments (byte count or buffer)";
+    case WASMOS_ERR_HRNG_NOT_READY: return "entropy source is not initialized or has no entropy yet";
+    case WASMOS_ERR_HRNG_IO_ERROR: return "the RNG device reported a failure";
+    case WASMOS_ERR_HRNG_TIMEOUT: return "the device did not produce entropy within its window";
     case WASMOS_ERR_FONT_INVALID: return "invalid request arguments (font id, size, glyph, or buffer)";
     case WASMOS_ERR_FONT_PERMISSION: return "caller is not permitted to use the requested font resource";
     case WASMOS_ERR_FONT_UNSUPPORTED: return "unknown or unsupported request type";

@@ -225,7 +225,7 @@ endpoint-scoped and may repeat across subsystems.
 |---|---|---|---|
 | `HRNG_IPC_GET_BYTES_REQ` | 0xC00 | req | arg0=buffer_id, arg1=len (bytes requested)  |
 | `HRNG_IPC_RESP` | 0xC80 | resp | arg0=bytes written into the buffer  |
-| `HRNG_IPC_ERROR` | 0xCFF | error | arg0=HRNG_STATUS_*  |
+| `HRNG_IPC_ERROR` | 0xCFF | error | arg0=WASMOS_ERR_HRNG_*  |
 
 ## net (0xB00–0xBFF)
 

@@ -235,30 +235,15 @@ enum {
  * asks the provider to fill up to `len` bytes of entropy into it; libc layers
  * random-int / random-byte-array helpers on top of GET_BYTES. */
 
-enum {
-    HRNG_STATUS_OK = 0,
-    HRNG_STATUS_INVALID = -2,
-    HRNG_STATUS_NOT_READY = -3,
-    HRNG_STATUS_IO_ERROR = -5,
-    HRNG_STATUS_TIMEOUT = -9
-};
+/* Status codes are the packed hrng domain in abi/errors.yaml:
+ * WASMOS_ERR_NONE (0) on success, else a negative WASMOS_ERR_HRNG_*. */
 
 /* Largest single GET_BYTES request the provider fills in one round-trip (its DMA
  * pool is one page). Clients wanting more loop. */
 #define HRNG_MAX_BYTES_PER_REQ 4096u
 
-enum {
-    NET_STATUS_OK = 0,
-    NET_STATUS_WOULD_BLOCK = -1,
-    NET_STATUS_INVALID = -2,
-    NET_STATUS_NOT_READY = -3,
-    NET_STATUS_DENIED = -4,
-    NET_STATUS_IO_ERROR = -5,
-    NET_STATUS_QUEUE_FULL = -6,
-    NET_STATUS_NO_MEM = -7,
-    NET_STATUS_ADDR_IN_USE = -8,
-    NET_STATUS_TIMEOUT = -9
-};
+/* Status codes are the packed net domain in abi/errors.yaml:
+ * WASMOS_ERR_NONE (0) on success, else a negative WASMOS_ERR_NET_*. */
 
 /* Socket control-plane constants. Socket payload is never carried by IPC:
  * SOCKET_OPEN arg0=descriptor buffer_id, arg1=descriptor borrow_id,

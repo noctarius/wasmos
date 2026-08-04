@@ -312,15 +312,21 @@ linked feature documents for rationale and rollout plans.
   gone), plus every bare `-1` that left a service in an IPC reply code arg. Bare
   `-1` survives in internal helper returns, where the `quality` lint flags it
   advisorily.
-- Not yet on the packed model: several subsystems still define their own
-  negative-int status vocabularies at service and host-call edges —
-  `XFER_BUFFER_ERR_*` (254 refs, returned by host calls), `NET_STATUS_*` (117),
-  `GFX_STATUS_*` (112), `FONT_STATUS_*` (61), `RTC_STATUS_*` (27),
-  `HRNG_STATUS_*` (17), `VT_SWITCH_ERR_*` (10). Each carries its own `-1` for
-  "invalid", so the ambiguity the packed model removes is still present at those
-  edges. Some are also duplicated across headers rather than single-sourced
-  (`font_ipc.h` ×2, `rtc_ipc.h` ×3, `IPC_ERR_*` ×3), which is the drift the IDL
-  exists to prevent. `PM_SPAWN_INTERNAL_ERR_*` (58) is deliberately internal.
+- The per-subsystem negative-int status vocabularies are gone: `XFER_BUFFER_ERR_*`,
+  `NET_STATUS_*`, `GFX_STATUS_*`, `FONT_STATUS_*`, `RTC_STATUS_*`,
+  `HRNG_STATUS_*` and `VT_SWITCH_ERR_*` are now the `xfer_buffer`, `net`, `gfx`,
+  `font`, `rtc`, `hrng` and `vt` domains in `abi/errors.yaml`, and the headers
+  that declared them include the generated `wasmos_status.h` instead. The
+  duplicated status declarations (`font_ipc.h` ×2, `rtc_ipc.h` ×3, plus local
+  copies in `rtc.ts`, `libui.ts` and `tetris.rs`) are collapsed onto the IDL; the
+  headers remain duplicated only for opcode/struct content, which belongs to the
+  opcodes IDL. `PM_SPAWN_INTERNAL_ERR_*` is deliberately internal and stays, as
+  does the transport `IPC_ERR_*` axis.
+- AssemblyScript consumes the generated status ABI: the AS app helper and the rtc
+  driver build stage `abi/generated/assemblyscript/wasmos_status.ts`, which
+  previously existed but was wired into no build. `tetris.rs` still declares its
+  own success constant — a standalone single-file rustc crate with no module
+  staging.
   The 4-frame cause chain is generated in every language but has no call sites
   yet — wrapping is unused, and an IPC reply can carry at most two frames in
   `arg0..arg3`, so a deeper chain needs a transfer buffer.

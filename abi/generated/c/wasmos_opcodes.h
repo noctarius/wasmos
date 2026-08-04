@@ -343,7 +343,7 @@ enum {
     HRNG_IPC_GET_BYTES_REQ = 0xC00,
     /* arg0=bytes written into the buffer */
     HRNG_IPC_RESP = 0xC80,
-    /* arg0=HRNG_STATUS_* */
+    /* arg0=WASMOS_ERR_HRNG_* */
     HRNG_IPC_ERROR = 0xCFF,
 };
 

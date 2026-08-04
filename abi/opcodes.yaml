@@ -455,7 +455,7 @@ subsystems:
         value: 0xcff
         kind: error
         doc: |
-          arg0=HRNG_STATUS_*
+          arg0=WASMOS_ERR_HRNG_*
 
   - name: net
     id: 17

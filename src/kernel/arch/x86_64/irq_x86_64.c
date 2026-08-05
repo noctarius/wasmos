@@ -5,6 +5,7 @@
 #include "kpanic.h"
 #include "timer.h"
 #include "policy.h"
+#include "sync/spinlock.h"
 #include "paging.h"
 #if WASMOS_IRQ_MODE >= 1
 #include "arch/x86_64/lapic.h"
@@ -34,8 +35,17 @@
 #define IPC_IRQ_EVENT_TYPE 0xFF00u
 
 /* Per-line sharer bookkeeping lives in irq_sharing.c (arch-neutral and
- * host-unit-tested); this file supplies the hardware effects and the table. */
+ * host-unit-tested); this file supplies the hardware effects and the table.
+ *
+ * The table is mutated from interrupt context on any CPU (dispatch, tick scan)
+ * and from hostcalls on any other (register/ack/unregister), so every entry into
+ * the module is serialised by this lock.  It is NOT optional under SMP: the state
+ * includes counters (pending_acks, the dispatch budget) whose read-modify-write
+ * races on real concurrent CPUs, and a lost decrement leaves the line masked
+ * forever — i.e. the device dead.  spinlock_lock() disables interrupts and
+ * preemption, so it is safe to take from an ISR. */
 static irq_line_t g_irq_lines[IRQ_COUNT];
+static ksync_spinlock_t g_irq_lines_lock;
 /* PIC mask state used in modes 0 (direct PIC) and 1 (PIC via LINT0 ExtINT). */
 #if WASMOS_IRQ_MODE <= 1
 static uint8_t g_pic_mask1 = 0xFF;
@@ -160,6 +170,7 @@ static void irq_send_eoi(uint32_t irq_line) {
 }
 
 void x86_irq_init(void) {
+    ksync_spinlock_init(&g_irq_lines_lock);
     irq_sharing_init(irq_lines_ptr(), IRQ_COUNT);
 
 /*
@@ -316,28 +327,38 @@ int x86_irq_register(uint32_t context_id, uint32_t irq_line, uint32_t endpoint) 
         owner_context_id != context_id) {
         return WASMOS_ERR_IRQ_BAD_ENDPOINT;
     }
-    return irq_sharing_register(irq_lines_ptr(), irq_line, context_id, endpoint, &g_irq_ops);
+    ksync_spinlock_lock(&g_irq_lines_lock);
+    int rc = irq_sharing_register(irq_lines_ptr(), irq_line, context_id, endpoint, &g_irq_ops);
+    ksync_spinlock_unlock(&g_irq_lines_lock);
+    return rc;
 }
 
 int x86_irq_ack(uint32_t context_id, uint32_t irq_line) {
     if (irq_line >= IRQ_COUNT) {
         return WASMOS_ERR_IRQ_BAD_LINE;
     }
-    return irq_sharing_ack(irq_lines_ptr(), irq_line, context_id, &g_irq_ops);
+    ksync_spinlock_lock(&g_irq_lines_lock);
+    int rc = irq_sharing_ack(irq_lines_ptr(), irq_line, context_id, &g_irq_ops);
+    ksync_spinlock_unlock(&g_irq_lines_lock);
+    return rc;
 }
 
 int x86_irq_unregister(uint32_t context_id, uint32_t irq_line) {
     if (irq_line >= IRQ_COUNT) {
         return WASMOS_ERR_IRQ_BAD_LINE;
     }
-    if (context_id == IPC_CONTEXT_KERNEL) {
-        return irq_sharing_unregister_all(irq_lines_ptr(), irq_line, &g_irq_ops);
-    }
-    return irq_sharing_unregister(irq_lines_ptr(), irq_line, context_id, &g_irq_ops);
+    ksync_spinlock_lock(&g_irq_lines_lock);
+    int rc = (context_id == IPC_CONTEXT_KERNEL)
+                 ? irq_sharing_unregister_all(irq_lines_ptr(), irq_line, &g_irq_ops)
+                 : irq_sharing_unregister(irq_lines_ptr(), irq_line, context_id, &g_irq_ops);
+    ksync_spinlock_unlock(&g_irq_lines_lock);
+    return rc;
 }
 
 void x86_irq_release_context(uint32_t context_id) {
+    ksync_spinlock_lock(&g_irq_lines_lock);
     irq_sharing_release_context(irq_lines_ptr(), IRQ_COUNT, context_id, &g_irq_ops);
+    ksync_spinlock_unlock(&g_irq_lines_lock);
 }
 
 void x86_irq_handler(uint64_t vector) {
@@ -364,9 +385,13 @@ void x86_irq_handler(uint64_t vector) {
      * notification endpoints are serviced. */
     if (irq_line == 0) {
         timer_handle_irq();
+    }
+    ksync_spinlock_lock(&g_irq_lines_lock);
+    if (irq_line == 0) {
         irq_sharing_tick(irq_lines_ptr(), IRQ_COUNT, &g_irq_ops);
     }
     irq_sharing_dispatch(irq_lines_ptr(), irq_line, &g_irq_ops);
+    ksync_spinlock_unlock(&g_irq_lines_lock);
     irq_send_eoi(irq_line);
 }
 

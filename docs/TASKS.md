@@ -524,10 +524,31 @@ Remaining:
   on a full RX ring (app-side flow control).
 - [ ] Enable guest-to-guest loopback (`LWIP_NETIF_LOOPBACK` + net-stack loopback
   polling) so an in-guest server is reachable.
-- [ ] Complete PCI INTx polarity/trigger configuration, then migrate virtio-net
-  to per-vq MSI-X so RX interrupts re-deliver per notification and the
-  timed-poll workaround drops to a plain blocking wait
-  (`src/drivers/virtio_net/virtio_net.c:631,871` `TODO(msi-x)`).
+- [ ] Make virtio-rng interrupt-driven. It shares PCI INTx line 11 with
+  virtio-net (QEMU `info pci`: both "IRQ 11, pin A") but routes no IRQ; it reads
+  the virtio ISR only from its `rng_fill` poll loop, and not at all on the
+  timeout path, so the line stays asserted between poll ticks. That re-fires on
+  every unmask and used to livelock the single-CPU wasm3 config; the kernel's
+  dispatch throttle now contains it, but the driver is still wrong — a device
+  interrupt acknowledged on a timer is the poll-loop antipattern. Route line 11
+  (now possible without stealing virtio-net's route), read the ISR and drain the
+  used ring from the IRQ event, and replace the
+  `wasmos_ipc_select_wait_timeout` completion wait with an awaited event.
+- [ ] Extract the IRQ sharer bookkeeping (register/dispatch/ack/deadline/
+  throttle/teardown) from `irq_x86_64.c` into an arch-neutral unit so it can be
+  host-unit-tested. It cannot be tested today: the TU carries x86 inline asm and
+  will not compile on an arm64 host, so the logic is currently covered only by
+  QEMU boot tests.
+- [ ] Migrate virtio-net to per-vq MSI-X so RX interrupts re-deliver per
+  notification and the timed-poll workaround drops to a plain blocking wait
+  (`src/drivers/virtio_net/virtio_net.c:631,871` `TODO(msi-x)`). Needs the MSI
+  platform first: PCI capability walk (cap `0x05`/`0x11`), a vector allocator
+  beyond the 16 ISA stubs in `x86_irq_stub_table`, kernel-side MSI/MSI-X
+  programming, and hostcalls to bind a vector to an endpoint. The LAPIC side
+  (`lapic_init`/`lapic_eoi`/`lapic_read_id`) already exists. Note that enabling
+  MSI-X shifts the legacy virtio register layout: device config moves from
+  `0x14` to `0x18`. PCI INTx polarity/trigger config is already done
+  (`pci_bus.c` sets level/active-low per device with an interrupt pin).
 - [ ] Define the net owner-push wire protocol so TX/RX carry an explicit
   client `buffer_id`/grant instead of overloading `msg.arg0`/`arg1`
   (`src/drivers/virtio_net/virtio_net.c:479,718,752,775,900` `FIXME(owner-push)`).

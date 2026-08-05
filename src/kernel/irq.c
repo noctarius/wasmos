@@ -20,6 +20,9 @@ int irq_ack(uint32_t context_id, uint32_t irq_line) {
 int irq_unregister(uint32_t context_id, uint32_t irq_line) {
     return x86_irq_unregister(context_id, irq_line);
 }
+void irq_release_context(uint32_t context_id) {
+    x86_irq_release_context(context_id);
+}
 int irq_mask(uint32_t irq_line) {
     return x86_irq_mask(irq_line);
 }

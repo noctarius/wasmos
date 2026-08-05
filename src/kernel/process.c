@@ -8,6 +8,7 @@
 #include "cpu.h"
 #include "wasm3/shim.h"
 #include "ipc.h"
+#include "irq.h"
 #include "timer.h"
 #include "thread.h"
 #include "process_manager.h"
@@ -949,6 +950,7 @@ static void process_reap(process_t* proc) {
     }
     if (proc->context_id != 0) {
         wasmos_subsystem_registry_drop_owner(proc->context_id);
+        irq_release_context(proc->context_id);
         ipc_endpoints_release_owner(proc->context_id);
         xfer_buffer_drop_context(proc->context_id);
         (void)mm_context_destroy(proc->context_id);

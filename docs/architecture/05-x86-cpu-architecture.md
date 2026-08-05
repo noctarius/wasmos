@@ -220,32 +220,62 @@ signal) to all I/O APICs when EOI is written, clearing the Remote IRR bit and
 allowing re-delivery once the RTE is unmasked.  No separate IOAPIC EOI write is
 needed from software.
 
-#### IRQ Route Table
+#### IRQ Line Table
+
+A line carries up to `IRQ_SHARERS_MAX` handlers. PCI INTx is wire-OR'd: the
+chipset routes several devices onto one input, so more than one device can assert
+a line and the kernel cannot tell which one did — every sharer must inspect its
+own device. ISA lines (keyboard 1, mouse 12, COM1 4, RTC 8) have a single sharer.
 
 ```c
 typedef struct {
     uint8_t  in_use;
+    uint8_t  ack_pending;    /* dispatched to this sharer, awaiting its ack */
     uint32_t owner_context_id;
     uint32_t endpoint;
-} irq_route_t;
+} irq_sharer_t;
 
-static irq_route_t g_irq_routes[IRQ_COUNT];
+typedef struct {
+    irq_sharer_t sharers[IRQ_SHARERS_MAX];
+    uint8_t  sharer_count;
+    uint8_t  pending_acks;   /* unmask when this reaches 0 */
+    uint8_t  throttled;      /* dispatch budget for this tick is spent */
+    uint8_t  throttle_logged;
+    uint64_t ack_deadline;   /* tick by which acks must land */
+    uint64_t budget_tick;
+    uint32_t budget_used;
+} irq_line_t;
+
+static irq_line_t g_irq_lines[IRQ_COUNT];
 ```
 
 `x86_irq_register(context_id, irq_line, endpoint)`:
 - Validates policy via `policy_authorize(POLICY_ACTION_IRQ_ROUTE, irq_line)`.
 - Verifies the endpoint is owned by `context_id`.
-- Stores the endpoint and owner in `g_irq_routes[irq_line]`.
-- Calls `x86_irq_unmask(irq_line)` — dispatches to PIC unmask or IOAPIC RTE
-  clear depending on `WASMOS_IRQ_MODE`.
+- Re-registration by the same context updates its endpoint in place; a different
+  context is **added** as a sharer. It never replaces an existing sharer —
+  replacing silently stole the line and stopped the first driver's interrupts.
+- Returns `-1` when the line already holds `IRQ_SHARERS_MAX` handlers.
+- Unmasks only when no ack is outstanding, so a late registration cannot reopen a
+  line an earlier sharer has not finished with.
 
 `x86_irq_ack(context_id, irq_line)`:
-- Verifies the caller owns the route.
-- Calls `x86_irq_unmask(irq_line)` to re-enable the line after the driver has
-  read the device register.
+- Reports that this sharer has looked at its device. Clears that sharer's
+  `ack_pending` and unmasks **only when the last outstanding ack lands**.
+  Unmasking on the first ack would re-fire the still-asserted line for the
+  sharers that have not looked yet.
+- Acking with nothing outstanding is a successful no-op: drivers may ack
+  defensively, and a deadline expiry may already have cleared it.
 
 `x86_irq_unregister(context_id, irq_line)`:
-- Clears the route entry and masks the line.
+- Drops that sharer and forgives any ack it owed, so a departing driver cannot
+  leave the line masked for the others. Masks only when the last sharer leaves.
+- With `IPC_CONTEXT_KERNEL` it drops every sharer on the line.
+
+`x86_irq_release_context(context_id)` drops every route held by a dying context;
+process teardown calls it before releasing the context's endpoints. Without it a
+reaped driver left a slot pointing at a dead endpoint, and any ack it owed kept
+the line masked permanently.
 
 #### IRQ Dispatch
 
@@ -254,10 +284,22 @@ static irq_route_t g_irq_routes[IRQ_COUNT];
 2. In PIC mode: checks for spurious IRQ (reads ISR from PIC1/PIC2; discards if
    the corresponding ISR bit is clear).
 3. For IRQ0 (timer), calls `timer_handle_irq()`.
-4. If the route has an endpoint and `irq_line != 0`, masks the line to prevent
-   re-fire before the driver reads the device register.
-5. Sends `IPC_IRQ_EVENT_TYPE (0xFF00)` to the routed endpoint.
-6. Calls `irq_send_eoi(irq_line)`: PIC EOI in mode 0, `lapic_eoi()` in modes 1
+4. If the line has sharers and `irq_line != 0`, masks it. The line stays masked
+   until every sharer has acked.
+5. Charges the line's per-tick dispatch budget (`IRQ_DISPATCH_BUDGET_PER_TICK`).
+   Exceeding it throttles the line for the rest of the tick and logs once. This
+   bounds an assertion that no sharer clears: such a line re-fires on every
+   unmask, which livelocks a single-CPU system outright and burns one CPU on an
+   SMP one. Throttling turns that into bounded overhead plus a diagnostic naming
+   the line.
+6. Sends `IPC_IRQ_EVENT_TYPE (0xFF00)` to **every** sharer, counting one pending
+   ack per successful send. A send that fails (full endpoint queue) is not
+   counted, so an unreachable sharer cannot strand the line; if no send
+   succeeded the line is reopened immediately.
+7. Stamps `ack_deadline`. The IRQ0 path runs `irq_tick_scan()`, which
+   force-completes acks past their deadline and releases throttled lines, so one
+   wedged driver cannot disable a shared device for its co-sharers.
+8. Calls `irq_send_eoi(irq_line)`: PIC EOI in mode 0, `lapic_eoi()` in modes 1
    and 2.
 
 ---

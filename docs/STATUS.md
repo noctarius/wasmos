@@ -300,6 +300,19 @@ linked feature documents for rationale and rollout plans.
   a validated `.wap` launch plan for other formats.
 - Service discovery supports named services and class instances. Multi-instance
   providers must use unique class instances and unique concrete PM names.
+- Hardware IRQ lines support multiple handlers. A line keeps up to
+  `IRQ_SHARERS_MAX` sharers, dispatches to all of them, and reopens only when
+  every sharer has acked — required because PCI INTx is wire-OR'd (QEMU puts
+  virtio-net and virtio-rng on IRQ 11 together). Registration adds a sharer
+  instead of replacing one, and process teardown releases a dying driver's
+  routes. Two escapes bound the failure modes: acks past a deadline are
+  force-completed so one wedged driver cannot disable a shared device, and a
+  per-tick dispatch budget throttles a line whose assertion no sharer clears,
+  logging `[irq] dispatch budget exhausted ... line=`. That last case is live
+  today: virtio-rng asserts IRQ 11 and services it only from a poll loop, which
+  used to livelock the single-CPU wasm3 config (`build-wasm3-single` failed ~2/5;
+  now 20/20 with the throttle logging the cause). Making virtio-rng
+  interrupt-driven is the outstanding fix.
 - The CLI's VT traffic runs through a single owned receive pump
   (`wasmos_sys_event_loop`): replies match pending requests by request id, pushes
   match registered handlers by type (`VT_IPC_INPUT_NOTIFY`), and anything

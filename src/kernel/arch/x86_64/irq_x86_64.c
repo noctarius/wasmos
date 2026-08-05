@@ -302,30 +302,33 @@ static const irq_sharing_ops_t g_irq_ops = {
 };
 
 int x86_irq_register(uint32_t context_id, uint32_t irq_line, uint32_t endpoint) {
-    if (irq_line >= IRQ_COUNT || endpoint == IPC_ENDPOINT_NONE) {
-        return -1;
+    if (irq_line >= IRQ_COUNT) {
+        return WASMOS_ERR_IRQ_BAD_LINE;
+    }
+    if (endpoint == IPC_ENDPOINT_NONE) {
+        return WASMOS_ERR_IRQ_BAD_ENDPOINT;
     }
     if (policy_authorize(context_id, POLICY_ACTION_IRQ_ROUTE, irq_line) != 0) {
-        return -1;
+        return WASMOS_ERR_IRQ_NOT_AUTHORIZED;
     }
     uint32_t owner_context_id = 0;
     if (ipc_endpoint_owner(endpoint, &owner_context_id) != IPC_OK ||
         owner_context_id != context_id) {
-        return -1;
+        return WASMOS_ERR_IRQ_BAD_ENDPOINT;
     }
     return irq_sharing_register(irq_lines_ptr(), irq_line, context_id, endpoint, &g_irq_ops);
 }
 
 int x86_irq_ack(uint32_t context_id, uint32_t irq_line) {
     if (irq_line >= IRQ_COUNT) {
-        return -1;
+        return WASMOS_ERR_IRQ_BAD_LINE;
     }
     return irq_sharing_ack(irq_lines_ptr(), irq_line, context_id, &g_irq_ops);
 }
 
 int x86_irq_unregister(uint32_t context_id, uint32_t irq_line) {
     if (irq_line >= IRQ_COUNT) {
-        return -1;
+        return WASMOS_ERR_IRQ_BAD_LINE;
     }
     if (context_id == IPC_CONTEXT_KERNEL) {
         return irq_sharing_unregister_all(irq_lines_ptr(), irq_line, &g_irq_ops);

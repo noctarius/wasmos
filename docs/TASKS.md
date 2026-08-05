@@ -524,16 +524,6 @@ Remaining:
   on a full RX ring (app-side flow control).
 - [ ] Enable guest-to-guest loopback (`LWIP_NETIF_LOOPBACK` + net-stack loopback
   polling) so an in-guest server is reachable.
-- [ ] Make virtio-rng interrupt-driven. It shares PCI INTx line 11 with
-  virtio-net (QEMU `info pci`: both "IRQ 11, pin A") but routes no IRQ; it reads
-  the virtio ISR only from its `rng_fill` poll loop, and not at all on the
-  timeout path, so the line stays asserted between poll ticks. That re-fires on
-  every unmask and used to livelock the single-CPU wasm3 config; the kernel's
-  dispatch throttle now contains it, but the driver is still wrong — a device
-  interrupt acknowledged on a timer is the poll-loop antipattern. Route line 11
-  (now possible without stealing virtio-net's route), read the ISR and drain the
-  used ring from the IRQ event, and replace the
-  `wasmos_ipc_select_wait_timeout` completion wait with an awaited event.
 - [ ] Migrate virtio-net to per-vq MSI-X so RX interrupts re-deliver per
   notification and the timed-poll workaround drops to a plain blocking wait
   (`src/drivers/virtio_net/virtio_net.c:631,871` `TODO(msi-x)`). Needs the MSI

@@ -143,8 +143,8 @@ static void test_register_full_line_rejected(void) {
         expect(irq_sharing_register(g_lines, LINE, 10 + i, 0x100 + i, &OPS) == 0,
                "register within capacity");
     }
-    expect(irq_sharing_register(g_lines, LINE, 99, 0x999, &OPS) == -1,
-           "register beyond IRQ_SHARERS_MAX rejected");
+    expect(irq_sharing_register(g_lines, LINE, 99, 0x999, &OPS) == WASMOS_ERR_IRQ_LINE_FULL,
+           "register beyond IRQ_SHARERS_MAX returns LINE_FULL");
 }
 
 /* The core rule: the line must stay masked until the LAST sharer acks. Reopening
@@ -169,7 +169,8 @@ static void test_ack_from_non_sharer_and_duplicate(void) {
     reset();
     (void)irq_sharing_register(g_lines, LINE, 10, 0x100, &OPS);
     irq_sharing_dispatch(g_lines, LINE, &OPS);
-    expect(irq_sharing_ack(g_lines, LINE, 77, &OPS) == -1, "ack from non-sharer rejected");
+    expect(irq_sharing_ack(g_lines, LINE, 77, &OPS) == WASMOS_ERR_IRQ_NOT_A_SHARER,
+           "ack from non-sharer returns NOT_A_SHARER");
     expect(irq_sharing_ack(g_lines, LINE, 10, &OPS) == 0, "ack accepted");
     g_unmask_count = 0;
     /* Drivers may ack defensively; a second ack must be a successful no-op and
@@ -280,7 +281,8 @@ static void test_last_sharer_leaving_masks_line(void) {
     expect(irq_sharing_unregister(g_lines, LINE, 10, &OPS) == 0, "unregister ok");
     expect(g_mask_count == 1, "line masked when the last sharer leaves");
     expect(irq_sharing_has_sharers(g_lines, LINE) == 0, "line has no sharers");
-    expect(irq_sharing_unregister(g_lines, LINE, 10, &OPS) == -1, "second unregister rejected");
+    expect(irq_sharing_unregister(g_lines, LINE, 10, &OPS) == WASMOS_ERR_IRQ_NOT_A_SHARER,
+           "second unregister returns NOT_A_SHARER");
 }
 
 /* A reaped driver used to leave a slot pointing at a dead endpoint, and any ack

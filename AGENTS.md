@@ -55,6 +55,15 @@ This repository uses Codex CLI to assist with development. Follow these conventi
 - Do not add extra documentation files unless explicitly asked.
 - Do not break the boot flow or kernel entry contract.
 - NEVER modify code in `libs/wasm3` or `libs/warp` or in any other dependency imported via git subtree.
+- NEVER return a bare `-1` as an error code on a subsystem boundary. Any value
+  that leaves a subsystem — a host-call return, an IPC reply's code argument, or a
+  status a peer decodes — must be a generated packed code from `abi/errors.yaml`
+  (see `skills/wasmos-add-error`). Add a domain or a code if none fits; a
+  deliberately unspecific code is not acceptable either, because it reintroduces
+  exactly the ambiguity the packed model removes. Codes are negative, so return
+  the constant directly (`return WASMOS_ERR_FS_NOT_FOUND;`) — never re-sign it.
+  Bare `-1` stays acceptable only for internal helper returns that never cross a
+  boundary; `scripts/quality.sh lint` reports those advisorily.
 
 ## Code Style
 - Keep C/ASM code minimal and explicit.

@@ -24,6 +24,7 @@
 #define WASMOS_IRQ_SHARING_H
 
 #include <stdint.h>
+#include "wasmos_status.h" /* packed WASMOS_ERR_IRQ_* returns */
 
 /* Handlers allowed on one line. */
 #define IRQ_SHARERS_MAX 4
@@ -63,21 +64,23 @@ typedef struct {
 void irq_sharing_init(irq_line_t* lines, uint32_t line_count);
 
 /* Add `context_id` as a sharer of `line`, or update its endpoint if already one.
- * Returns 0, or -1 when the line already holds IRQ_SHARERS_MAX sharers. */
+ * Returns 0, or WASMOS_ERR_IRQ_LINE_FULL. */
 int irq_sharing_register(irq_line_t* lines, uint32_t line, uint32_t context_id, uint32_t endpoint,
                          const irq_sharing_ops_t* ops);
 
 /* Report that `context_id` has inspected its device. Returns 0 (including when
- * nothing was outstanding — drivers may ack defensively), -1 when the caller is
- * not a sharer of the line. */
+ * nothing was outstanding — drivers may ack defensively), or
+ * WASMOS_ERR_IRQ_NOT_A_SHARER. */
 int irq_sharing_ack(irq_line_t* lines, uint32_t line, uint32_t context_id,
                     const irq_sharing_ops_t* ops);
 
-/* Remove one sharer, forgiving any ack it owed. Returns 0, or -1 if not a sharer. */
+/* Remove one sharer, forgiving any ack it owed. Returns 0, or
+ * WASMOS_ERR_IRQ_NOT_A_SHARER. */
 int irq_sharing_unregister(irq_line_t* lines, uint32_t line, uint32_t context_id,
                            const irq_sharing_ops_t* ops);
 
-/* Remove every sharer of `line`. Returns 0 if any were removed, else -1. */
+/* Remove every sharer of `line`. Returns 0 if any were removed, else
+ * WASMOS_ERR_IRQ_NOT_A_SHARER. */
 int irq_sharing_unregister_all(irq_line_t* lines, uint32_t line, const irq_sharing_ops_t* ops);
 
 /* Drop every route held by a dying context across all lines. */

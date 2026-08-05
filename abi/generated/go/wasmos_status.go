@@ -35,6 +35,7 @@ const (
 	WASMOS_ERR_DOMAIN_CHARDEV uint16 = 9
 	WASMOS_ERR_DOMAIN_HRNG uint16 = 14
 	WASMOS_ERR_DOMAIN_DMA uint16 = 15
+	WASMOS_ERR_DOMAIN_IRQ uint16 = 16
 	WASMOS_ERR_DOMAIN_FONT uint16 = 12
 	WASMOS_ERR_DOMAIN_RTC uint16 = 13
 	WASMOS_ERR_DOMAIN_XFER_BUFFER uint16 = 11
@@ -156,6 +157,11 @@ const (
 	WASMOS_ERR_DMA_INVALID int32 = -0x000F0002 // invalid DMA arguments (direction, handle, or length)
 	WASMOS_ERR_DMA_RANGE int32 = -0x000F0003 // the requested subrange lies outside the mapped object
 	WASMOS_ERR_DMA_UNAVAILABLE int32 = -0x000F0004 // no DMA mapping slot or backing is available
+	WASMOS_ERR_IRQ_BAD_LINE int32 = -0x00100001 // irq line is outside the supported range
+	WASMOS_ERR_IRQ_NOT_AUTHORIZED int32 = -0x00100002 // caller lacks irq.route, or the line is not in its allowlist
+	WASMOS_ERR_IRQ_BAD_ENDPOINT int32 = -0x00100003 // target endpoint is invalid or not owned by the caller
+	WASMOS_ERR_IRQ_LINE_FULL int32 = -0x00100004 // the line already has the maximum number of registered sharers
+	WASMOS_ERR_IRQ_NOT_A_SHARER int32 = -0x00100005 // caller has no registered handler on this line
 	WASMOS_ERR_FONT_INVALID int32 = -0x000C0001 // invalid request arguments (font id, size, glyph, or buffer)
 	WASMOS_ERR_FONT_PERMISSION int32 = -0x000C0002 // caller is not permitted to use the requested font resource
 	WASMOS_ERR_FONT_UNSUPPORTED int32 = -0x000C0003 // unknown or unsupported request type
@@ -260,6 +266,8 @@ func WasmosErrorDomainName(d uint16) string {
 		return "hrng"
 	case WASMOS_ERR_DOMAIN_DMA:
 		return "dma"
+	case WASMOS_ERR_DOMAIN_IRQ:
+		return "irq"
 	case WASMOS_ERR_DOMAIN_FONT:
 		return "font"
 	case WASMOS_ERR_DOMAIN_RTC:
@@ -499,6 +507,16 @@ func WasmosStrerror(c int32) string {
 		return "the requested subrange lies outside the mapped object"
 	case WASMOS_ERR_DMA_UNAVAILABLE:
 		return "no DMA mapping slot or backing is available"
+	case WASMOS_ERR_IRQ_BAD_LINE:
+		return "irq line is outside the supported range"
+	case WASMOS_ERR_IRQ_NOT_AUTHORIZED:
+		return "caller lacks irq.route, or the line is not in its allowlist"
+	case WASMOS_ERR_IRQ_BAD_ENDPOINT:
+		return "target endpoint is invalid or not owned by the caller"
+	case WASMOS_ERR_IRQ_LINE_FULL:
+		return "the line already has the maximum number of registered sharers"
+	case WASMOS_ERR_IRQ_NOT_A_SHARER:
+		return "caller has no registered handler on this line"
 	case WASMOS_ERR_FONT_INVALID:
 		return "invalid request arguments (font id, size, glyph, or buffer)"
 	case WASMOS_ERR_FONT_PERMISSION:

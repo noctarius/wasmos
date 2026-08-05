@@ -2020,6 +2020,7 @@ add_custom_target(run-kernel-unit-tests
   # the host (the x86 IRQ backend itself cannot — it carries inline asm).
   COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
           -I${KERNEL_DIR}/include
+          -I${CMAKE_SOURCE_DIR}/abi/generated/c
           ${CMAKE_SOURCE_DIR}/tests/unit/test_irq_sharing.c
           ${KERNEL_DIR}/irq_sharing.c
           -o ${BUILD_DIR}/test_irq_sharing

@@ -308,11 +308,23 @@ linked feature documents for rationale and rollout plans.
   routes. Two escapes bound the failure modes: acks past a deadline are
   force-completed so one wedged driver cannot disable a shared device, and a
   per-tick dispatch budget throttles a line whose assertion no sharer clears,
-  logging `[irq] dispatch budget exhausted ... line=`. That last case is live
-  today: virtio-rng asserts IRQ 11 and services it only from a poll loop, which
-  used to livelock the single-CPU wasm3 config (`build-wasm3-single` failed ~2/5;
-  now 20/20 with the throttle logging the cause). Making virtio-rng
-  interrupt-driven is the outstanding fix.
+  logging `[irq] dispatch budget exhausted ... line=`.
+- virtio-net and virtio-rng are both registered sharers of IRQ 11 and each
+  services its own device from the IRQ event (reading the virtio ISR to de-assert,
+  then acking to unmask). virtio-rng previously routed no interrupt and
+  acknowledged the device from a `rng_fill` poll loop — and not at all on its
+  timeout path — so the shared line stayed asserted between poll ticks, re-fired on
+  every unmask, and livelocked the single-CPU wasm3 config. Its completion wait is
+  now the routed IRQ event on a dedicated endpoint (so it cannot swallow pending
+  HRNG requests), with a timed wait left only as a safety net for a lost
+  interrupt. It also acks on every main-loop pass, not just while a fill is in
+  flight: on a shared line, withholding an ack keeps the line masked for the
+  co-sharer too. `build-wasm3-single` went from ~2/5 failures to 8/8 with the
+  throttle no longer firing at all — the storm is gone at the source rather than
+  contained.
+- IRQ routing errors are packed `WASMOS_ERR_IRQ_*` codes (`BAD_LINE`,
+  `NOT_AUTHORIZED`, `BAD_ENDPOINT`, `LINE_FULL`, `NOT_A_SHARER`), so a driver can
+  tell a capability denial from a full line.
 - The CLI's VT traffic runs through a single owned receive pump
   (`wasmos_sys_event_loop`): replies match pending requests by request id, pushes
   match registered handlers by type (`VT_IPC_INPUT_NOTIFY`), and anything

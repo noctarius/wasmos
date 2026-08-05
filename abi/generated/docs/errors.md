@@ -190,6 +190,16 @@ and **domains** (namespaced operation errors: the negative of `(domain << 16) | 
 | `WASMOS_ERR_DMA_RANGE` | -0x000F0003 | the requested subrange lies outside the mapped object |
 | `WASMOS_ERR_DMA_UNAVAILABLE` | -0x000F0004 | no DMA mapping slot or backing is available |
 
+### `irq` (domain 16) — hardware IRQ routing failures
+
+| Code | Value | Description |
+|---|---|---|
+| `WASMOS_ERR_IRQ_BAD_LINE` | -0x00100001 | irq line is outside the supported range |
+| `WASMOS_ERR_IRQ_NOT_AUTHORIZED` | -0x00100002 | caller lacks irq.route, or the line is not in its allowlist |
+| `WASMOS_ERR_IRQ_BAD_ENDPOINT` | -0x00100003 | target endpoint is invalid or not owned by the caller |
+| `WASMOS_ERR_IRQ_LINE_FULL` | -0x00100004 | the line already has the maximum number of registered sharers |
+| `WASMOS_ERR_IRQ_NOT_A_SHARER` | -0x00100005 | caller has no registered handler on this line |
+
 ### `font` (domain 12) — font-rasterizer service failures (was FONT_STATUS_*)
 
 | Code | Value | Description |

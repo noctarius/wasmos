@@ -208,6 +208,16 @@ domains:
       - { name: RANGE,       description: "the requested subrange lies outside the mapped object" }
       - { name: UNAVAILABLE, description: "no DMA mapping slot or backing is available" }
 
+  irq:
+    id: 16
+    description: "hardware IRQ routing failures"
+    codes:
+      - { name: BAD_LINE,       description: "irq line is outside the supported range" }
+      - { name: NOT_AUTHORIZED, description: "caller lacks irq.route, or the line is not in its allowlist" }
+      - { name: BAD_ENDPOINT,   description: "target endpoint is invalid or not owned by the caller" }
+      - { name: LINE_FULL,      description: "the line already has the maximum number of registered sharers" }
+      - { name: NOT_A_SHARER,   description: "caller has no registered handler on this line" }
+
   font:
     id: 12
     description: "font-rasterizer service failures (was FONT_STATUS_*)"

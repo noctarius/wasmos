@@ -66,7 +66,7 @@ void irq_sharing_init(irq_line_t* lines, uint32_t line_count) {
 int irq_sharing_register(irq_line_t* lines, uint32_t line, uint32_t context_id, uint32_t endpoint,
                          const irq_sharing_ops_t* ops) {
     if (!lines) {
-        return -1;
+        return WASMOS_ERR_IRQ_BAD_LINE;
     }
     irq_line_t* l = &lines[line];
     irq_sharer_t* slot = sharer_of(l, context_id);
@@ -78,7 +78,7 @@ int irq_sharing_register(irq_line_t* lines, uint32_t line, uint32_t context_id, 
             }
         }
         if (!slot) {
-            return -1; /* line is full */
+            return WASMOS_ERR_IRQ_LINE_FULL;
         }
         slot->in_use = 1;
         slot->ack_pending = 0;
@@ -97,12 +97,12 @@ int irq_sharing_register(irq_line_t* lines, uint32_t line, uint32_t context_id, 
 int irq_sharing_ack(irq_line_t* lines, uint32_t line, uint32_t context_id,
                     const irq_sharing_ops_t* ops) {
     if (!lines) {
-        return -1;
+        return WASMOS_ERR_IRQ_BAD_LINE;
     }
     irq_line_t* l = &lines[line];
     irq_sharer_t* slot = sharer_of(l, context_id);
     if (!slot) {
-        return -1;
+        return WASMOS_ERR_IRQ_NOT_A_SHARER;
     }
     if (!slot->ack_pending) {
         return 0; /* nothing outstanding: a defensive or late ack */
@@ -139,12 +139,12 @@ static void drop_sharer(irq_line_t* l, uint32_t line, irq_sharer_t* slot,
 int irq_sharing_unregister(irq_line_t* lines, uint32_t line, uint32_t context_id,
                            const irq_sharing_ops_t* ops) {
     if (!lines) {
-        return -1;
+        return WASMOS_ERR_IRQ_BAD_LINE;
     }
     irq_line_t* l = &lines[line];
     irq_sharer_t* slot = sharer_of(l, context_id);
     if (!slot) {
-        return -1;
+        return WASMOS_ERR_IRQ_NOT_A_SHARER;
     }
     drop_sharer(l, line, slot, ops);
     return 0;
@@ -152,10 +152,10 @@ int irq_sharing_unregister(irq_line_t* lines, uint32_t line, uint32_t context_id
 
 int irq_sharing_unregister_all(irq_line_t* lines, uint32_t line, const irq_sharing_ops_t* ops) {
     if (!lines) {
-        return -1;
+        return WASMOS_ERR_IRQ_BAD_LINE;
     }
     irq_line_t* l = &lines[line];
-    int found = -1;
+    int found = WASMOS_ERR_IRQ_NOT_A_SHARER;
     for (uint32_t i = 0; i < IRQ_SHARERS_MAX; ++i) {
         if (l->sharers[i].in_use) {
             drop_sharer(l, line, &l->sharers[i], ops);

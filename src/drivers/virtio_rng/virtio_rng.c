@@ -41,10 +41,13 @@
 
 /* One page of DMA-visible scratch the device fills with entropy per request. */
 #define RNG_POOL_SIZE 4096u
-/* Bounded wait for the device to complete a fill (it is effectively immediate on
- * QEMU); we poll the used ring, sleeping between checks rather than busy-spin. */
-#define RNG_POLL_INTERVAL_MS 2
-#define RNG_POLL_MAX_TRIES 500 /* ~1s ceiling before WASMOS_ERR_HRNG_TIMEOUT */
+/* Completion is interrupt-driven: the device raises its INTx line when it has
+ * used a buffer, and the driver blocks on the routed IRQ event.  The interval and
+ * try count below are only a safety net for a lost or unroutable interrupt, not
+ * the mechanism — acknowledging a device interrupt on a timer is what left the
+ * shared line asserted between ticks and livelocked a single-CPU guest. */
+#define RNG_IRQ_WAIT_MS 50
+#define RNG_IRQ_MAX_WAITS 20 /* ~1s ceiling before WASMOS_ERR_HRNG_TIMEOUT */
 
 typedef struct {
     uint8_t present;
@@ -61,6 +64,11 @@ typedef struct {
 
 static int32_t g_endpoint = -1;
 static int32_t g_select = -1;
+/* The IRQ event has its own endpoint and select set so the completion wait can
+ * drain it without consuming (and discarding) pending HRNG service requests. */
+static int32_t g_irq_endpoint = -1;
+static int32_t g_irq_select = -1;
+static uint8_t g_irq_routed;
 static virtio_rng_device_t g_dev;
 
 static vring_t g_rq; /* the single request virtqueue (device -> driver) */
@@ -311,6 +319,24 @@ static int initialize_device(void) {
     return 0;
 }
 
+/* Service the device's interrupt: reading the virtio ISR de-asserts the
+ * level-triggered INTx line, then the line is unmasked via irq_ack.  Both halves
+ * matter — the kernel keeps a dispatched line masked until every sharer acks, and
+ * the device keeps asserting until its ISR is read.  This device shares IRQ 11
+ * with virtio-net under QEMU, so an unserviced assertion here re-fires for both
+ * drivers on every unmask. */
+static void rng_service_irq(void) {
+    if (!g_irq_routed) {
+        return;
+    }
+    /* Drain the IRQ endpoint: several events may have been queued. */
+    while (wasmos_ipc_drain(g_irq_endpoint) > 0) {
+        /* The payload carries only the line number; the work is the same. */
+    }
+    (void)wasmos_io_in8((int32_t)(g_dev.io_base + VIRTIO_PCI_ISR_STATUS));
+    (void)wasmos_irq_ack((int32_t)g_dev.irq);
+}
+
 /* Fill up to `want` bytes of entropy into the DMA pool and return the count the
  * device produced, or -1 on ring/timeout failure. Posts the pool device-writable,
  * kicks, then polls the used ring (sleeping between checks). */
@@ -326,21 +352,33 @@ static int rng_fill(uint32_t want) {
     vring_kick(&g_rq);
 
     uint32_t used_len = 0;
-    for (int tries = 0; tries < RNG_POLL_MAX_TRIES; ++tries) {
+    for (int waits = 0; waits <= RNG_IRQ_MAX_WAITS; ++waits) {
         int32_t id = vring_get_used(&g_rq, &used_len);
         if (id >= 0) {
             vring_free_desc(&g_rq, (uint16_t)id);
-            /* Read the ISR to de-assert any pending device interrupt line. */
-            (void)wasmos_io_in8((int32_t)(g_dev.io_base + VIRTIO_PCI_ISR_STATUS));
             if (used_len > want) {
                 used_len = want;
             }
             return (int)used_len;
         }
-        (void)wasmos_ipc_select_wait_timeout(g_select, RNG_POLL_INTERVAL_MS);
+        if (waits == RNG_IRQ_MAX_WAITS) {
+            break;
+        }
+        /* Block until the device's completion interrupt arrives (or the safety-net
+         * interval elapses).  Only IRQ events land on this endpoint, so draining
+         * it cannot swallow an HRNG request. */
+        if (g_irq_routed) {
+            (void)wasmos_ipc_select_wait_timeout(g_irq_select, RNG_IRQ_WAIT_MS);
+            rng_service_irq();
+        } else {
+            (void)wasmos_ipc_select_wait_timeout(g_select, RNG_IRQ_WAIT_MS);
+        }
     }
     vring_free_desc(&g_rq, (uint16_t)d);
-    return -1; /* timed out */
+    /* Time out only after servicing the line: leaving it asserted here is what
+     * turned a lost completion into an unbounded interrupt storm. */
+    rng_service_irq();
+    return -1;
 }
 
 static void send_error(int32_t dest, int32_t request_id, int32_t code) {
@@ -406,6 +444,25 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t ignored_arg
         (void)printf("[virtio-rng] no device found\n");
     }
 
+    /* Route the completion interrupt to its own endpoint.  Without this the
+     * device asserts its shared INTx line on every completed fill and nothing
+     * ever clears it, which re-fires the line for every sharer on each unmask.
+     * Failure is not fatal: the fill falls back to the timed safety net. */
+    if (g_dev.ready && g_dev.irq < 16u) {
+        g_irq_endpoint = wasmos_ipc_create_endpoint();
+        g_irq_select = (g_irq_endpoint >= 0) ? wasmos_ipc_select_create() : -1;
+        if (g_irq_endpoint >= 0 && g_irq_select >= 0 &&
+            wasmos_ipc_select_add(g_irq_select, g_irq_endpoint) == 0 &&
+            wasmos_ipc_select_add(g_select, g_irq_endpoint) == 0 &&
+            wasmos_irq_route_ipc((int32_t)g_dev.irq, g_irq_endpoint) == 0) {
+            g_irq_routed = 1;
+            (void)printf("[virtio-rng] irq routed line=%u\n", (unsigned)g_dev.irq);
+        } else {
+            (void)printf("[virtio-rng] irq route failed line=%u; using timed waits\n",
+                         (unsigned)g_dev.irq);
+        }
+    }
+
     /* Register under the generic "hrng" class so class-based lookup finds any
      * entropy provider uniformly; the concrete service name is "virtio-rng". */
     if (wasmos_svc_register_class(proc_endpoint, g_endpoint, "virtio-rng", "hrng", 0, 1) < 0) {
@@ -415,6 +472,11 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t ignored_arg
     wasmos_sys_notify_ready(proc_endpoint, g_endpoint);
 
     for (;;) {
+        /* Ack the line whenever an event has arrived, not only while a fill is
+         * waiting.  IRQ 11 is shared with virtio-net and the kernel keeps a
+         * dispatched line masked until EVERY sharer acks, so deferring our ack
+         * stalls the other driver's interrupts as well. */
+        rng_service_irq();
         while (wasmos_ipc_drain(g_endpoint) > 0) {
             wasmos_ipc_message_t msg;
             wasmos_ipc_message_read_last(&msg);

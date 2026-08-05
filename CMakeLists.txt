@@ -2016,6 +2016,14 @@ add_custom_target(run-kernel-unit-tests
           ${SERVICES_DIR}/fs_manager/fs_manager_path.c
           -o ${BUILD_DIR}/test_fs_manager_path
   COMMAND ${BUILD_DIR}/test_fs_manager_path
+  # Per-line IRQ sharer bookkeeping: pure logic, no arch dependency, so it runs on
+  # the host (the x86 IRQ backend itself cannot — it carries inline asm).
+  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
+          -I${KERNEL_DIR}/include
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_irq_sharing.c
+          ${KERNEL_DIR}/irq_sharing.c
+          -o ${BUILD_DIR}/test_irq_sharing
+  COMMAND ${BUILD_DIR}/test_irq_sharing
   COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
           -I${KERNEL_DIR}/include
           -I${DRIVER_WASM_DIR}/include

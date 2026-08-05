@@ -9,20 +9,10 @@
 #include <stdint.h>
 #include "boot.h"
 #include "process.h"
+#include "irq_sharing.h" /* sharer limits + per-line bookkeeping */
 
 #define IRQ_VECTOR_BASE 32 /* x86 hardware IRQs start at IDT vector 32 (after exceptions) */
 #define IRQ_COUNT 16       /* legacy PIC has 16 lines (IRQ0–IRQ15) */
-
-/* Handlers allowed on one line.  PCI INTx is wire-OR'd, so several devices can
- * share an input; ISA lines use one. */
-#define IRQ_SHARERS_MAX 4
-/* Ticks a sharer may take to ack before the line is reopened without it, so one
- * wedged driver cannot disable a shared device for the others. */
-#define IRQ_ACK_DEADLINE_TICKS 50
-/* Dispatches one line may cause per tick.  Bounds the cost of an assertion that
- * no sharer clears (which would otherwise re-fire on every unmask and livelock a
- * single-CPU system) instead of letting it consume the machine. */
-#define IRQ_DISPATCH_BUDGET_PER_TICK 64u
 
 /* Early IRQ init: mask all PIC lines, set up dispatch table. */
 void irq_init(void);

@@ -534,11 +534,6 @@ Remaining:
   (now possible without stealing virtio-net's route), read the ISR and drain the
   used ring from the IRQ event, and replace the
   `wasmos_ipc_select_wait_timeout` completion wait with an awaited event.
-- [ ] Extract the IRQ sharer bookkeeping (register/dispatch/ack/deadline/
-  throttle/teardown) from `irq_x86_64.c` into an arch-neutral unit so it can be
-  host-unit-tested. It cannot be tested today: the TU carries x86 inline asm and
-  will not compile on an arm64 host, so the logic is currently covered only by
-  QEMU boot tests.
 - [ ] Migrate virtio-net to per-vq MSI-X so RX interrupts re-deliver per
   notification and the timed-poll workaround drops to a plain blocking wait
   (`src/drivers/virtio_net/virtio_net.c:631,871` `TODO(msi-x)`). Needs the MSI

@@ -2104,6 +2104,17 @@ add_custom_target(run-kernel-unit-tests
           ${CMAKE_SOURCE_DIR}/tests/unit/test_ringbuf.c
           -o ${BUILD_DIR}/test_ringbuf
   COMMAND ${BUILD_DIR}/test_ringbuf
+  # libui GFX_EVENT_KEY decoding: the compositor packs scancode:character into
+  # one code, so the handlers must mask before treating it as a character.
+  # Header-only widgets, so the test compiles them straight into the host binary.
+  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
+          -I${CMAKE_SOURCE_DIR}/src/libui/include
+          -I${LIBC_DIR}/include
+          -I${CMAKE_SOURCE_DIR}/src/drivers/include
+          -I${CMAKE_SOURCE_DIR}/abi/generated/c
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_libui_key_decode.c
+          -o ${BUILD_DIR}/test_libui_key_decode
+  COMMAND ${BUILD_DIR}/test_libui_key_decode
   # Native slab allocator (heap_native.c): compiled with malloc/free/calloc/realloc
   # renamed to hn_* so it links beside host libc; vm_map/vm_unmap mocked in the test.
   COMMAND ${CLANG} -std=c11 -Wno-error=c23-extensions

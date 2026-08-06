@@ -105,6 +105,8 @@ typedef struct {
 
     void (*handle_pointer_press)(struct ui_context* ctx, ui_component_t* c, int32_t x, int32_t y);
     void (*handle_pointer_release)(struct ui_context* ctx, ui_component_t* c);
+    /* `key` is the packed GFX_EVENT_KEY code: decode it with ui_key_char() /
+     * ui_key_scancode(), never compare it against a character directly. */
     void (*handle_key)(struct ui_context* ctx, ui_component_t* c, uint32_t key);
     void (*handle_scroll_drag)(struct ui_context* ctx, ui_component_t* c, int32_t dy);
 
@@ -409,6 +411,19 @@ static inline uint32_t ui_blend_u8(uint32_t dst, uint32_t src, uint8_t alpha) {
     const uint32_t g = (sg * a + dg * inv) / 255u;
     const uint32_t b = (sb * a + db * inv) / 255u;
     return 0xFF000000u | (r << 16) | (g << 8) | b;
+}
+
+/* GFX_EVENT_KEY packs two values into one code: the low byte is the character
+ * the vt decoded with the active keymap (0 for keys with no character, such as
+ * the arrows and function keys), the high byte is the raw set-1 scancode.
+ * Handlers must never use the packed code as a character — 'a' arrives as
+ * 0x1E61 (scancode 0x1E, 'a'), which as a codepoint is an unrelated glyph. */
+static inline uint32_t ui_key_char(uint32_t key) {
+    return key & 0xFFu;
+}
+
+static inline uint32_t ui_key_scancode(uint32_t key) {
+    return (key >> 8) & 0xFFu;
 }
 
 static inline int32_t ui_utf8_encode(uint32_t cp, uint8_t out[4]) {
@@ -1704,8 +1719,6 @@ static inline int32_t ui_loop_handle_ipc(ui_context_t* ctx, const wasmos_ipc_mes
             return UI_MSG_CONSUMED;
         const int32_t new_x = ui_ptr_evt_x(msg->arg3);
         const int32_t new_y = ui_ptr_evt_y(msg->arg3);
-        const int32_t dx = new_x - ctx->pointer_x;
-        const int32_t dy = new_y - ctx->pointer_y;
         const uint32_t buttons = ui_ptr_evt_buttons(msg->arg3);
 
         ctx->pointer_x = new_x;

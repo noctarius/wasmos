@@ -522,6 +522,9 @@ linked feature documents for rationale and rollout plans.
 - `libui` has one canonical tree at `src/libui/`. Its component base owns common
   tree state; component vtables own type-specific layout, render, event, popup,
   and destruction behavior. Existing consumers are `gfx_smoke` and `menu_bar`.
+  `GFX_EVENT_KEY` carries `ascii | (scancode << 8)`, so key handlers decode it
+  with `ui_key_char()` / `ui_key_scancode()` rather than using the packed code
+  as a character; `tests/unit/test_libui_key_decode.c` pins that contract.
 - `gfx_smoke` exercises multiple windows, close-event teardown, and libui;
   `menu_bar` exercises popup/window interactions. Both are spawned after the
   compositor is ready when present in `sysinit`.

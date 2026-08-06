@@ -590,6 +590,11 @@ compositor via `VT_IPC_KEY_FORWARD`; the enriched `GFX_EVENT_KEY` carries the
 keysym + modifiers + up/down, so GUI apps get arrow/function keys (previously they
 arrived as code 0, forcing games onto WASD).
 
+The compositor packs both halves into one `GFX_EVENT_KEY` code — low byte the
+decoded character (0 for keys without one), high byte the raw scancode — so the
+code is not a codepoint. Clients mask before use; `libui` exposes `ui_key_char()`
+and `ui_key_scancode()` for this.
+
 #### Ctrl Chord Mapping
 
 | Chord  | Scancode | Byte sent  |

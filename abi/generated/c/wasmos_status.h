@@ -36,7 +36,7 @@ enum {
     WASMOS_ERR_DOMAIN_FS = 4, /* filesystem backend/VFS failures (was FS_ERR_*) */
     WASMOS_ERR_DOMAIN_NET = 5, /* networking stack / socket failures (was NET_STATUS_*) */
     WASMOS_ERR_DOMAIN_GFX = 6, /* compositor / framebuffer text-console failures */
-    WASMOS_ERR_DOMAIN_DRIVER = 7, /* generic device-driver failures (reserved) */
+    WASMOS_ERR_DOMAIN_DRIVER = 7, /* generic device-driver startup/lifecycle failures */
     WASMOS_ERR_DOMAIN_VT = 8, /* virtual-terminal multiplexer failures */
     WASMOS_ERR_DOMAIN_CHARDEV = 9, /* character-device sample driver failures */
     WASMOS_ERR_DOMAIN_HRNG = 14, /* hardware RNG provider failures (was HRNG_STATUS_*) */
@@ -150,6 +150,12 @@ enum {
     WASMOS_ERR_GFX_UNSUPPORTED = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_GFX, 8), /* unknown or unsupported compositor request */
     WASMOS_ERR_GFX_BUSY = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_GFX, 9), /* compositor has no free window/buffer slot (retryable) */
     WASMOS_ERR_GFX_IO = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_GFX, 10), /* framebuffer or shared-buffer operation failed */
+    WASMOS_ERR_DRIVER_NO_PROC_ENDPOINT = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_DRIVER, 1), /* spawn info carried no process-manager endpoint */
+    WASMOS_ERR_DRIVER_ENDPOINT_CREATE = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_DRIVER, 2), /* the driver could not create its own IPC endpoint */
+    WASMOS_ERR_DRIVER_NO_DEVICE_IDENTITY = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_DRIVER, 3), /* startup args carry no valid device identity for this driver */
+    WASMOS_ERR_DRIVER_DEVICE_INIT = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_DRIVER, 4), /* bringing the identified device up failed */
+    WASMOS_ERR_DRIVER_REGISTER = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_DRIVER, 5), /* publishing the driver endpoint to the service registry failed */
+    WASMOS_ERR_DRIVER_SELECT_SETUP = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_DRIVER, 6), /* the driver could not build its IPC select set */
     WASMOS_ERR_VT_BAD_TTY_ID = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_VT, 1), /* requested tty id is out of range */
     WASMOS_ERR_VT_NO_TTY_FOR_SOURCE = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_VT, 2), /* no tty is associated with the requesting endpoint */
     WASMOS_ERR_VT_READER_BUSY = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_VT, 3), /* another endpoint is already the reader for this tty */
@@ -367,6 +373,12 @@ static inline const char *wasmos_error_code_name(wasmos_error_code_t c) {
     case WASMOS_ERR_GFX_UNSUPPORTED: return "gfx.UNSUPPORTED";
     case WASMOS_ERR_GFX_BUSY: return "gfx.BUSY";
     case WASMOS_ERR_GFX_IO: return "gfx.IO";
+    case WASMOS_ERR_DRIVER_NO_PROC_ENDPOINT: return "driver.NO_PROC_ENDPOINT";
+    case WASMOS_ERR_DRIVER_ENDPOINT_CREATE: return "driver.ENDPOINT_CREATE";
+    case WASMOS_ERR_DRIVER_NO_DEVICE_IDENTITY: return "driver.NO_DEVICE_IDENTITY";
+    case WASMOS_ERR_DRIVER_DEVICE_INIT: return "driver.DEVICE_INIT";
+    case WASMOS_ERR_DRIVER_REGISTER: return "driver.REGISTER";
+    case WASMOS_ERR_DRIVER_SELECT_SETUP: return "driver.SELECT_SETUP";
     case WASMOS_ERR_VT_BAD_TTY_ID: return "vt.BAD_TTY_ID";
     case WASMOS_ERR_VT_NO_TTY_FOR_SOURCE: return "vt.NO_TTY_FOR_SOURCE";
     case WASMOS_ERR_VT_READER_BUSY: return "vt.READER_BUSY";
@@ -527,6 +539,12 @@ static inline const char *wasmos_strerror(wasmos_error_code_t c) {
     case WASMOS_ERR_GFX_UNSUPPORTED: return "unknown or unsupported compositor request";
     case WASMOS_ERR_GFX_BUSY: return "compositor has no free window/buffer slot (retryable)";
     case WASMOS_ERR_GFX_IO: return "framebuffer or shared-buffer operation failed";
+    case WASMOS_ERR_DRIVER_NO_PROC_ENDPOINT: return "spawn info carried no process-manager endpoint";
+    case WASMOS_ERR_DRIVER_ENDPOINT_CREATE: return "the driver could not create its own IPC endpoint";
+    case WASMOS_ERR_DRIVER_NO_DEVICE_IDENTITY: return "startup args carry no valid device identity for this driver";
+    case WASMOS_ERR_DRIVER_DEVICE_INIT: return "bringing the identified device up failed";
+    case WASMOS_ERR_DRIVER_REGISTER: return "publishing the driver endpoint to the service registry failed";
+    case WASMOS_ERR_DRIVER_SELECT_SETUP: return "the driver could not build its IPC select set";
     case WASMOS_ERR_VT_BAD_TTY_ID: return "requested tty id is out of range";
     case WASMOS_ERR_VT_NO_TTY_FOR_SOURCE: return "no tty is associated with the requesting endpoint";
     case WASMOS_ERR_VT_READER_BUSY: return "another endpoint is already the reader for this tty";

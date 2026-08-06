@@ -10,9 +10,6 @@
 #include "wasmos/vring.h"
 #include "wasmos_driver_abi.h"
 
-#define PCI_CFG_ADDR_PORT 0xCF8
-#define PCI_CFG_DATA_PORT 0xCFC
-
 #define VIRTIO_PCI_VENDOR_ID 0x1AF4u
 #define VIRTIO_NET_DEV_LEGACY 0x1000u
 #define VIRTIO_NET_DEV_TRANSITIONAL 0x1041u
@@ -125,13 +122,6 @@ static uint32_t g_rx_q_count;
 static int32_t g_rx_sub_endpoint = -1; /* subscriber for RX_FRAME_NOTIFY, -1 = none */
 static int32_t g_link_sub_endpoint = -1;
 
-static uint32_t pci_config_read32(uint8_t bus, uint8_t slot, uint8_t function, uint8_t reg) {
-    uint32_t address = 0x80000000u | ((uint32_t)bus << 16) | ((uint32_t)slot << 11) |
-                       ((uint32_t)function << 8) | ((uint32_t)reg & 0xFCu);
-    (void)wasmos_io_out32(PCI_CFG_ADDR_PORT, (int32_t)address);
-    return (uint32_t)wasmos_io_in32(PCI_CFG_DATA_PORT);
-}
-
 static uint16_t io_read16(uint16_t port) {
     return (uint16_t)((uint32_t)wasmos_io_in16((int32_t)port) & 0xFFFFu);
 }
@@ -211,10 +201,8 @@ static const char* find_token_value(const char* args, const char* key) {
     }
 }
 
-/* PCI rule spawns pass the matched BAR/IRQ identity through startup args
- * because the driver's io.port grant is scoped to the device BAR, not the PCI
- * config ports needed for a fresh scan. When no startup identity is present,
- * keep the direct config-space probe as a fallback for manual launches. */
+/* Startup args carry the device identity: pci=BB:SS.FF vendor= device= io= irq=
+ * The driver is bound to that device and to no other. */
 static int probe_virtio_net_from_startup_args(void) {
     char args[128];
     const char* pci = 0;
@@ -254,48 +242,6 @@ static int probe_virtio_net_from_startup_args(void) {
     g_dev.vendor_id = (uint16_t)vendor_id;
     g_dev.device_id = (uint16_t)device_id;
     return 0;
-}
-
-static int probe_virtio_net(void) {
-    for (uint16_t bus = 0; bus < 256; ++bus) {
-        for (uint8_t slot = 0; slot < 32; ++slot) {
-            for (uint8_t function = 0; function < 8; ++function) {
-                uint32_t id = pci_config_read32((uint8_t)bus, slot, function, 0x00);
-                uint16_t vendor_id = (uint16_t)(id & 0xFFFFu);
-                uint16_t device_id = (uint16_t)((id >> 16) & 0xFFFFu);
-                uint32_t class_reg;
-                uint32_t bar0;
-                if (vendor_id == 0xFFFFu) {
-                    if (function == 0u) {
-                        break;
-                    }
-                    continue;
-                }
-                if (!is_virtio_net_device(vendor_id, device_id)) {
-                    continue;
-                }
-                class_reg = pci_config_read32((uint8_t)bus, slot, function, 0x08);
-                if (((class_reg >> 24) & 0xFFu) != 0x02u || ((class_reg >> 16) & 0xFFu) != 0x00u) {
-                    continue;
-                }
-                bar0 = pci_config_read32((uint8_t)bus, slot, function, 0x10);
-                if ((bar0 & 0x1u) == 0u) {
-                    continue;
-                }
-                g_dev.present = 1u;
-                g_dev.bus = (uint8_t)bus;
-                g_dev.slot = slot;
-                g_dev.function = function;
-                g_dev.io_base = (uint16_t)(bar0 & 0xFFFCu);
-                g_dev.irq =
-                    (uint8_t)(pci_config_read32((uint8_t)bus, slot, function, 0x3C) & 0xFFu);
-                g_dev.vendor_id = vendor_id;
-                g_dev.device_id = device_id;
-                return 0;
-            }
-        }
-    }
-    return -1;
 }
 
 static void read_mac(void) {
@@ -809,59 +755,53 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t ignored_arg
     (void)ignored_arg2;
     (void)ignored_arg3;
     if (proc_endpoint < 0) {
-        return -1;
+        return WASMOS_ERR_DRIVER_NO_PROC_ENDPOINT;
     }
 
     g_endpoint = wasmos_ipc_create_endpoint();
     if (g_endpoint < 0) {
-        return -1;
+        return WASMOS_ERR_DRIVER_ENDPOINT_CREATE;
     }
 
     g_dev.present = 0u;
     g_dev.ready = 0u;
     g_dev.status_word = 0u;
     if (probe_virtio_net_from_startup_args() != 0) {
-        (void)probe_virtio_net();
+        (void)printf("[virtio-net] no device identity in startup args\n");
+        return WASMOS_ERR_DRIVER_NO_DEVICE_IDENTITY;
     }
-    if (g_dev.present) {
-        if (initialize_device() != 0) {
-            (void)printf("[virtio-net] init failed io=0x%04X dev=0x%04X\n", (unsigned)g_dev.io_base,
-                         (unsigned)g_dev.device_id);
-        } else {
-            (void)printf("[virtio-net] probe ok bus=%u slot=%u dev=0x%04X irq=%u\n",
-                         (unsigned)g_dev.bus, (unsigned)g_dev.slot, (unsigned)g_dev.device_id,
-                         (unsigned)g_dev.irq);
-            (void)printf("[virtio-net] mac %02X:%02X:%02X:%02X:%02X:%02X io=0x%04X\n",
-                         (unsigned)g_dev.mac[0], (unsigned)g_dev.mac[1], (unsigned)g_dev.mac[2],
-                         (unsigned)g_dev.mac[3], (unsigned)g_dev.mac[4], (unsigned)g_dev.mac[5],
-                         (unsigned)g_dev.io_base);
-            (void)printf("[virtio-net] features dev=0x%08X drv=0x%08X\n",
-                         (unsigned)g_dev.device_features, (unsigned)g_dev.driver_features);
-            (void)printf("[virtio-net] driver ok link=%s mtu=%u\n",
-                         ((g_dev.status_word & VIRTIO_NET_S_LINK_UP) != 0u) ? "up" : "down",
-                         (unsigned)VIRTIO_NET_MTU_BASELINE);
-        }
-    } else {
-        (void)printf("[virtio-net] no device found\n");
+    if (initialize_device() != 0) {
+        (void)printf("[virtio-net] init failed io=0x%04X dev=0x%04X\n", (unsigned)g_dev.io_base,
+                     (unsigned)g_dev.device_id);
+        return WASMOS_ERR_DRIVER_DEVICE_INIT;
     }
+    (void)printf("[virtio-net] probe ok bus=%u slot=%u dev=0x%04X irq=%u\n", (unsigned)g_dev.bus,
+                 (unsigned)g_dev.slot, (unsigned)g_dev.device_id, (unsigned)g_dev.irq);
+    (void)printf("[virtio-net] mac %02X:%02X:%02X:%02X:%02X:%02X io=0x%04X\n",
+                 (unsigned)g_dev.mac[0], (unsigned)g_dev.mac[1], (unsigned)g_dev.mac[2],
+                 (unsigned)g_dev.mac[3], (unsigned)g_dev.mac[4], (unsigned)g_dev.mac[5],
+                 (unsigned)g_dev.io_base);
+    (void)printf("[virtio-net] features dev=0x%08X drv=0x%08X\n", (unsigned)g_dev.device_features,
+                 (unsigned)g_dev.driver_features);
+    (void)printf("[virtio-net] driver ok link=%s mtu=%u\n",
+                 ((g_dev.status_word & VIRTIO_NET_S_LINK_UP) != 0u) ? "up" : "down",
+                 (unsigned)VIRTIO_NET_MTU_BASELINE);
 
     /* Route the device IRQ to our endpoint so RX/TX completions wake us, then
      * fire the ARP probe; its reply arrives via net_handle_irq. */
-    if (g_dev.present && g_dev.ready) {
-        if (wasmos_irq_route_ipc((int32_t)g_dev.irq, g_endpoint) == 0) {
-            (void)printf("[virtio-net] irq routed line=%u\n", (unsigned)g_dev.irq);
-        } else {
-            (void)printf("[virtio-net] irq route failed line=%u\n", (unsigned)g_dev.irq);
-        }
-        net_probe_send();
+    if (wasmos_irq_route_ipc((int32_t)g_dev.irq, g_endpoint) == 0) {
+        (void)printf("[virtio-net] irq routed line=%u\n", (unsigned)g_dev.irq);
+    } else {
+        (void)printf("[virtio-net] irq route failed line=%u\n", (unsigned)g_dev.irq);
     }
+    net_probe_send();
 
     /* Finish all local setup before publishing the endpoint. Clients may send
      * LINK_GET as soon as registration completes, so no startup operation may
      * run between publication and the handler loop that drains it. */
     if (wasmos_svc_register_class(proc_endpoint, g_endpoint, "virtio.net", "net.ifc", 0u, 1) < 0) {
         (void)printf("[virtio-net] register failed\n");
-        return -1;
+        return WASMOS_ERR_DRIVER_REGISTER;
     }
     wasmos_sys_notify_ready(proc_endpoint, g_endpoint);
 
@@ -875,7 +815,7 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t ignored_arg
     int32_t sel = wasmos_ipc_select_create();
     if (sel < 0 || wasmos_ipc_select_add(sel, g_endpoint) != 0) {
         (void)printf("[virtio-net] select setup failed\n");
-        return -1;
+        return WASMOS_ERR_DRIVER_SELECT_SETUP;
     }
 
     for (;;) {

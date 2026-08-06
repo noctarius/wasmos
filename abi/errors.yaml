@@ -165,8 +165,14 @@ domains:
 
   driver:
     id: 7
-    description: "generic device-driver failures (reserved)"
-    codes: []
+    description: "generic device-driver startup/lifecycle failures"
+    codes:
+      - { name: NO_PROC_ENDPOINT,   description: "spawn info carried no process-manager endpoint" }
+      - { name: ENDPOINT_CREATE,    description: "the driver could not create its own IPC endpoint" }
+      - { name: NO_DEVICE_IDENTITY, description: "startup args carry no valid device identity for this driver" }
+      - { name: DEVICE_INIT,        description: "bringing the identified device up failed" }
+      - { name: REGISTER,           description: "publishing the driver endpoint to the service registry failed" }
+      - { name: SELECT_SETUP,       description: "the driver could not build its IPC select set" }
 
   vt:
     id: 8

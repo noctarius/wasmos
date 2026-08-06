@@ -130,6 +130,12 @@ export const WASMOS_ERR_GFX_PERMISSION: i32 = -0x00060007; // caller is not perm
 export const WASMOS_ERR_GFX_UNSUPPORTED: i32 = -0x00060008; // unknown or unsupported compositor request
 export const WASMOS_ERR_GFX_BUSY: i32 = -0x00060009; // compositor has no free window/buffer slot (retryable)
 export const WASMOS_ERR_GFX_IO: i32 = -0x0006000A; // framebuffer or shared-buffer operation failed
+export const WASMOS_ERR_DRIVER_NO_PROC_ENDPOINT: i32 = -0x00070001; // spawn info carried no process-manager endpoint
+export const WASMOS_ERR_DRIVER_ENDPOINT_CREATE: i32 = -0x00070002; // the driver could not create its own IPC endpoint
+export const WASMOS_ERR_DRIVER_NO_DEVICE_IDENTITY: i32 = -0x00070003; // startup args carry no valid device identity for this driver
+export const WASMOS_ERR_DRIVER_DEVICE_INIT: i32 = -0x00070004; // bringing the identified device up failed
+export const WASMOS_ERR_DRIVER_REGISTER: i32 = -0x00070005; // publishing the driver endpoint to the service registry failed
+export const WASMOS_ERR_DRIVER_SELECT_SETUP: i32 = -0x00070006; // the driver could not build its IPC select set
 export const WASMOS_ERR_VT_BAD_TTY_ID: i32 = -0x00080001; // requested tty id is out of range
 export const WASMOS_ERR_VT_NO_TTY_FOR_SOURCE: i32 = -0x00080002; // no tty is associated with the requesting endpoint
 export const WASMOS_ERR_VT_READER_BUSY: i32 = -0x00080003; // another endpoint is already the reader for this tty
@@ -331,6 +337,12 @@ export function strerror(c: i32): string {
     case WASMOS_ERR_GFX_UNSUPPORTED: return "unknown or unsupported compositor request";
     case WASMOS_ERR_GFX_BUSY: return "compositor has no free window/buffer slot (retryable)";
     case WASMOS_ERR_GFX_IO: return "framebuffer or shared-buffer operation failed";
+    case WASMOS_ERR_DRIVER_NO_PROC_ENDPOINT: return "spawn info carried no process-manager endpoint";
+    case WASMOS_ERR_DRIVER_ENDPOINT_CREATE: return "the driver could not create its own IPC endpoint";
+    case WASMOS_ERR_DRIVER_NO_DEVICE_IDENTITY: return "startup args carry no valid device identity for this driver";
+    case WASMOS_ERR_DRIVER_DEVICE_INIT: return "bringing the identified device up failed";
+    case WASMOS_ERR_DRIVER_REGISTER: return "publishing the driver endpoint to the service registry failed";
+    case WASMOS_ERR_DRIVER_SELECT_SETUP: return "the driver could not build its IPC select set";
     case WASMOS_ERR_VT_BAD_TTY_ID: return "requested tty id is out of range";
     case WASMOS_ERR_VT_NO_TTY_FOR_SOURCE: return "no tty is associated with the requesting endpoint";
     case WASMOS_ERR_VT_READER_BUSY: return "another endpoint is already the reader for this tty";

@@ -20,6 +20,11 @@ linked feature documents for rationale and rollout plans.
   polling continue to advance. The native-driver ABI exposes the corresponding
   select hooks; the kernel build explicitly depends on that ABI header so a
   header change cannot leave `native_driver.o` stale.
+- `virtio-net` takes its device identity solely from the startup args written
+  by the device manager (`pci= vendor= device= io= irq=`). The driver carries
+  no PCI config-space scan; a spawn without a valid identity fails immediately
+  with `WASMOS_ERR_DRIVER_NO_DEVICE_IDENTITY` rather than binding to a device
+  it found itself.
 - `virtio-net` now publishes `net.ifc` and reports link changes with
   `NETDRV_IPC_LINK_NOTIFY`. `net-stack` consumes class enumeration/events,
   retaining name lookup only as compatibility fallback.

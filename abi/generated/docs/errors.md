@@ -147,9 +147,16 @@ and **domains** (namespaced operation errors: the negative of `(domain << 16) | 
 | `WASMOS_ERR_GFX_BUSY` | -0x00060009 | compositor has no free window/buffer slot (retryable) |
 | `WASMOS_ERR_GFX_IO` | -0x0006000A | framebuffer or shared-buffer operation failed |
 
-### `driver` (domain 7) — generic device-driver failures (reserved)
+### `driver` (domain 7) — generic device-driver startup/lifecycle failures
 
-*(no codes)*
+| Code | Value | Description |
+|---|---|---|
+| `WASMOS_ERR_DRIVER_NO_PROC_ENDPOINT` | -0x00070001 | spawn info carried no process-manager endpoint |
+| `WASMOS_ERR_DRIVER_ENDPOINT_CREATE` | -0x00070002 | the driver could not create its own IPC endpoint |
+| `WASMOS_ERR_DRIVER_NO_DEVICE_IDENTITY` | -0x00070003 | startup args carry no valid device identity for this driver |
+| `WASMOS_ERR_DRIVER_DEVICE_INIT` | -0x00070004 | bringing the identified device up failed |
+| `WASMOS_ERR_DRIVER_REGISTER` | -0x00070005 | publishing the driver endpoint to the service registry failed |
+| `WASMOS_ERR_DRIVER_SELECT_SETUP` | -0x00070006 | the driver could not build its IPC select set |
 
 ### `vt` (domain 8) — virtual-terminal multiplexer failures
 

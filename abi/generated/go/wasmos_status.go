@@ -138,6 +138,12 @@ const (
 	WASMOS_ERR_GFX_UNSUPPORTED int32 = -0x00060008 // unknown or unsupported compositor request
 	WASMOS_ERR_GFX_BUSY int32 = -0x00060009 // compositor has no free window/buffer slot (retryable)
 	WASMOS_ERR_GFX_IO int32 = -0x0006000A // framebuffer or shared-buffer operation failed
+	WASMOS_ERR_DRIVER_NO_PROC_ENDPOINT int32 = -0x00070001 // spawn info carried no process-manager endpoint
+	WASMOS_ERR_DRIVER_ENDPOINT_CREATE int32 = -0x00070002 // the driver could not create its own IPC endpoint
+	WASMOS_ERR_DRIVER_NO_DEVICE_IDENTITY int32 = -0x00070003 // startup args carry no valid device identity for this driver
+	WASMOS_ERR_DRIVER_DEVICE_INIT int32 = -0x00070004 // bringing the identified device up failed
+	WASMOS_ERR_DRIVER_REGISTER int32 = -0x00070005 // publishing the driver endpoint to the service registry failed
+	WASMOS_ERR_DRIVER_SELECT_SETUP int32 = -0x00070006 // the driver could not build its IPC select set
 	WASMOS_ERR_VT_BAD_TTY_ID int32 = -0x00080001 // requested tty id is out of range
 	WASMOS_ERR_VT_NO_TTY_FOR_SOURCE int32 = -0x00080002 // no tty is associated with the requesting endpoint
 	WASMOS_ERR_VT_READER_BUSY int32 = -0x00080003 // another endpoint is already the reader for this tty
@@ -469,6 +475,18 @@ func WasmosStrerror(c int32) string {
 		return "compositor has no free window/buffer slot (retryable)"
 	case WASMOS_ERR_GFX_IO:
 		return "framebuffer or shared-buffer operation failed"
+	case WASMOS_ERR_DRIVER_NO_PROC_ENDPOINT:
+		return "spawn info carried no process-manager endpoint"
+	case WASMOS_ERR_DRIVER_ENDPOINT_CREATE:
+		return "the driver could not create its own IPC endpoint"
+	case WASMOS_ERR_DRIVER_NO_DEVICE_IDENTITY:
+		return "startup args carry no valid device identity for this driver"
+	case WASMOS_ERR_DRIVER_DEVICE_INIT:
+		return "bringing the identified device up failed"
+	case WASMOS_ERR_DRIVER_REGISTER:
+		return "publishing the driver endpoint to the service registry failed"
+	case WASMOS_ERR_DRIVER_SELECT_SETUP:
+		return "the driver could not build its IPC select set"
 	case WASMOS_ERR_VT_BAD_TTY_ID:
 		return "requested tty id is out of range"
 	case WASMOS_ERR_VT_NO_TTY_FOR_SOURCE:

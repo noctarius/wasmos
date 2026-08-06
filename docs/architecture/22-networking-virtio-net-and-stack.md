@@ -53,10 +53,9 @@ Out of scope for initial rollout:
 - The DMA capability and borrow-buffer DMA lifecycle are implemented. The
   driver-owned pinned `region_alloc` primitive supplies virtqueue ring and
   packet-pool memory; `virtio-net` uses the transport-neutral `vring` core.
-- `virtio-net` initializes RX/TX queues, routes the device IRQ, performs an ARP
+- `virtio-net` initializes RX/TX queues, binds MSI-X vectors, performs an ARP
   smoke exchange through QEMU SLIRP, and offers pull plus notification-hinted
-  RX delivery. PCI INTx polarity/trigger configuration remains incomplete, so
-  consumers must poll defensively.
+  RX delivery.
 - `net-stack` is a native lwIP baseline. It enumerates and subscribes to the
   `net.ifc` class (retaining `virtio.net` lookup as a compatibility fallback), reads its
   MAC/link state, and installs `eth0` with static SLIRP addressing
@@ -1076,10 +1075,29 @@ initialize():
       default              → send NETDRV_IPC_ERROR
 ```
 
-The driver reads the ISR register on every recv iteration (not only on IRQ
-delivery), because WASM IRQ delivery is mediated by the kernel waking the
-process—the driver simply polls the ISR after each wake to check for hardware
-events.
+#### Interrupt Delivery
+
+The driver takes three MSI-X vectors — RX queue, TX queue, and config change —
+and falls back to the shared INTx line only when the device or pci-bus cannot
+provide them. The two paths differ in more than latency:
+
+| | MSI-X (default) | INTx (fallback) |
+|---|---|---|
+| Event | `WASMOS_IPC_MSI_EVENT_TYPE`, `arg0` = table entry | `IPC_IRQ_EVENT_TYPE`, `arg0` = line |
+| Source identification | the vector itself | read the ISR register |
+| Epilogue | none | read ISR to de-assert, `irq_ack` to unmask |
+| Idle wait | blocking | bounded timeout + ring drain |
+
+The timed drain exists only on the fallback path. QEMU's legacy PCI-INTx path
+re-delivers a reasserted level line unreliably on a steadily-unmasked RTE
+(confirmed with `-d int`: the vector is injected once and never again), so
+continuous RX could not depend on the interrupt. A message-signalled vector
+re-delivers per notification, so under MSI-X the loop is a plain blocking wait.
+
+Enabling MSI-X shifts the legacy virtio register layout: two 16-bit vector
+registers appear at `0x14`/`0x16` and the device-specific config region moves
+from `0x14` to `0x18`. MSI-X setup therefore runs after feature negotiation and
+before any config or queue register access.
 
 ---
 

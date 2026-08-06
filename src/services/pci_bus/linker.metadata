@@ -26,3 +26,10 @@ flags = 0
 [[capabilities]]
 name = "irq.route"
 flags = 0
+
+# An MSI-X table lives in a device BAR, so binding a vector is a memory write
+# rather than a config-space write (wasmos_mmio_write32). The kernel refuses any
+# address overlapping system RAM, so this reaches device registers only.
+[[capabilities]]
+name = "mmio.map"
+flags = 0

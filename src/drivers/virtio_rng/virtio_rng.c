@@ -29,6 +29,13 @@
 #define VIRTIO_PCI_QUEUE_NOTIFY 0x10u /* u16: doorbell — write the queue index */
 #define VIRTIO_PCI_DEVICE_STATUS 0x12u
 #define VIRTIO_PCI_ISR_STATUS 0x13u
+/* Enabling MSI-X inserts these two vector registers at 0x14/0x16. This device
+ * reads no device-specific config, so unlike virtio-net nothing else shifts. */
+#define VIRTIO_PCI_MSIX_CONFIG_VECTOR 0x14u
+#define VIRTIO_PCI_MSIX_QUEUE_VECTOR 0x16u
+#define VIRTIO_MSIX_NO_VECTOR 0xFFFFu
+/* One source, one entry: the request queue's completion. */
+#define VIRTIO_RNG_MSIX_ENTRY_QUEUE 0u
 
 #define VIRTIO_PCI_VRING_ALIGN 4096u
 #define VIRTIO_RNG_REQUEST_QUEUE 0u
@@ -60,6 +67,8 @@ typedef struct {
     uint16_t vendor_id;
     uint16_t device_id;
     uint32_t device_features;
+    uint8_t msix_enabled; /* MSI-X bound: the device no longer drives INTx */
+    uint32_t msix_vector; /* kernel vector behind entry 0 */
 } virtio_rng_device_t;
 
 static int32_t g_endpoint = -1;
@@ -69,6 +78,7 @@ static int32_t g_select = -1;
 static int32_t g_irq_endpoint = -1;
 static int32_t g_irq_select = -1;
 static uint8_t g_irq_routed;
+static int32_t g_pci_endpoint = -1; /* pci-bus: owns config space, programs MSI-X */
 static virtio_rng_device_t g_dev;
 
 static vring_t g_rq; /* the single request virtqueue (device -> driver) */
@@ -273,7 +283,56 @@ static int setup_queue(void) {
     }
     vring_set_notify(&g_rq, virtio_rng_notify, 0);
     io_write32(g_dev.io_base + VIRTIO_PCI_QUEUE_PFN, (uint32_t)(ring_phys >> 12));
+
+    /* Bind the request queue to its MSI-X entry. QUEUE_SELECT above still points
+     * at this queue; virtio reports refusal through the readback. */
+    if (g_dev.msix_enabled) {
+        io_write16(g_dev.io_base + VIRTIO_PCI_MSIX_QUEUE_VECTOR, VIRTIO_RNG_MSIX_ENTRY_QUEUE);
+        if (io_read16(g_dev.io_base + VIRTIO_PCI_MSIX_QUEUE_VECTOR) == VIRTIO_MSIX_NO_VECTOR) {
+            (void)printf("[virtio-rng] msix queue vector refused\n");
+            return -1;
+        }
+    }
     return (int)qsize;
+}
+
+/* Take one kernel MSI vector for the completion interrupt and have pci-bus
+ * program it into the device's MSI-X table. See net_setup_msix in virtio_net.c
+ * for why the work is split across driver, kernel and pci-bus.
+ *
+ * Moving this device off INTx matters beyond its own latency: under QEMU it
+ * shares IRQ 11 with virtio-net, and a shared wire is what forced the whole
+ * sharer/ack/deadline machinery in the kernel. A message-signalled vector is
+ * nobody else's. Returns 0 when MSI-X is live. */
+static int rng_setup_msix(void) {
+    if (g_pci_endpoint < 0) {
+        return -1;
+    }
+    uint32_t bdf =
+        ((uint32_t)g_dev.bus << 8) | ((uint32_t)g_dev.slot << 3) | (uint32_t)g_dev.function;
+    wasmos_ipc_message_t reply;
+
+    if (wasmos_ipc_call(g_pci_endpoint, g_endpoint, PCI_IPC_MSI_QUERY, 1, (int32_t)bdf, 0, 0, 0,
+                        &reply) != 0 ||
+        reply.type != PCI_IPC_RESP || reply.arg0 != WASMOS_PCI_MSI_KIND_MSIX || reply.arg1 < 1) {
+        return -1;
+    }
+
+    wasmos_msi_desc_t desc;
+    if (g_irq_endpoint < 0 || wasmos_msi_alloc(g_irq_endpoint, &desc) != 0) {
+        return -1;
+    }
+    int32_t arg0 = (int32_t)((bdf << 8) | VIRTIO_RNG_MSIX_ENTRY_QUEUE);
+    if (wasmos_ipc_call(g_pci_endpoint, g_endpoint, PCI_IPC_MSI_BIND, 2, arg0,
+                        (int32_t)desc.address_lo, (int32_t)desc.address_hi, (int32_t)desc.data,
+                        &reply) != 0 ||
+        reply.type != PCI_IPC_RESP) {
+        (void)wasmos_msi_free((int32_t)desc.vector);
+        return -1;
+    }
+    g_dev.msix_vector = desc.vector;
+    g_dev.msix_enabled = 1u;
+    return 0;
 }
 
 static int initialize_device(void) {
@@ -291,6 +350,15 @@ static int initialize_device(void) {
     /* virtio-rng has no driver-relevant feature bits; accept none. */
     g_dev.device_features = io_read32(g_dev.io_base + VIRTIO_PCI_DEVICE_FEATURES);
     io_write32(g_dev.io_base + VIRTIO_PCI_DRIVER_FEATURES, 0u);
+
+    /* Before queue setup: the queue's vector register only exists once MSI-X is
+     * enabled, and setup_queue writes it. */
+    if (rng_setup_msix() == 0) {
+        (void)printf("[virtio-rng] msix enabled vector=%u\n", (unsigned)g_dev.msix_vector);
+    } else {
+        (void)printf("[virtio-rng] msix unavailable; falling back to intx line=%u\n",
+                     (unsigned)g_dev.irq);
+    }
 
     int qsize = setup_queue();
     if (qsize < 0) {
@@ -326,12 +394,17 @@ static int initialize_device(void) {
  * with virtio-net under QEMU, so an unserviced assertion here re-fires for both
  * drivers on every unmask. */
 static void rng_service_irq(void) {
-    if (!g_irq_routed) {
+    if (!g_irq_routed && !g_dev.msix_enabled) {
         return;
     }
-    /* Drain the IRQ endpoint: several events may have been queued. */
+    /* Drain the interrupt endpoint: several events may have been queued. */
     while (wasmos_ipc_drain(g_irq_endpoint) > 0) {
-        /* The payload carries only the line number; the work is the same. */
+        /* The payload names only the source; the work is the same. */
+    }
+    if (g_dev.msix_enabled) {
+        /* Nothing to de-assert and nothing to ack: the vector is edge-triggered
+         * and exclusively ours, so none of the shared-line ceremony applies. */
+        return;
     }
     (void)wasmos_io_in8((int32_t)(g_dev.io_base + VIRTIO_PCI_ISR_STATUS));
     (void)wasmos_irq_ack((int32_t)g_dev.irq);
@@ -367,7 +440,7 @@ static int rng_fill(uint32_t want) {
         /* Block until the device's completion interrupt arrives (or the safety-net
          * interval elapses).  Only IRQ events land on this endpoint, so draining
          * it cannot swallow an HRNG request. */
-        if (g_irq_routed) {
+        if (g_irq_routed || g_dev.msix_enabled) {
             (void)wasmos_ipc_select_wait_timeout(g_irq_select, RNG_IRQ_WAIT_MS);
             rng_service_irq();
         } else {
@@ -429,6 +502,27 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t ignored_arg
         return -1;
     }
 
+    /* Interrupts get their own endpoint, whether they arrive as a routed INTx
+     * line or as an MSI vector: the completion wait drains it, and draining the
+     * service endpoint instead would discard pending HRNG requests. It must
+     * exist before device init, because that is where the MSI vector is bound. */
+    g_irq_endpoint = wasmos_ipc_create_endpoint();
+    g_irq_select = (g_irq_endpoint >= 0) ? wasmos_ipc_select_create() : -1;
+    if (g_irq_endpoint < 0 || g_irq_select < 0 ||
+        wasmos_ipc_select_add(g_irq_select, g_irq_endpoint) != 0 ||
+        wasmos_ipc_select_add(g_select, g_irq_endpoint) != 0) {
+        (void)printf("[virtio-rng] irq endpoint setup failed; using timed waits\n");
+        g_irq_endpoint = -1;
+        g_irq_select = -1;
+    }
+
+    /* pci-bus owns config space and is the only party that can program our MSI-X
+     * table; its absence just means the INTx fallback below. */
+    g_pci_endpoint = wasmos_sys_svc_lookup_retry(proc_endpoint, g_endpoint, "pci", 1, 1024);
+    if (g_pci_endpoint < 0) {
+        (void)printf("[virtio-rng] pci service unavailable; msi-x disabled\n");
+    }
+
     g_dev.present = 0u;
     g_dev.ready = 0u;
     if (probe_virtio_rng_from_startup_args() == 0 || probe_virtio_rng() == 0) {
@@ -444,17 +538,14 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t ignored_arg
         (void)printf("[virtio-rng] no device found\n");
     }
 
-    /* Route the completion interrupt to its own endpoint.  Without this the
-     * device asserts its shared INTx line on every completed fill and nothing
-     * ever clears it, which re-fires the line for every sharer on each unmask.
+    /* INTx fallback only. With MSI-X bound the device's INTx is disabled, so
+     * routing the shared line would just subscribe us to other devices'
+     * interrupts — and the point of moving to MSI-X was to stop sharing.
+     * Without it, routing is what keeps the line from re-firing forever: the
+     * device asserts on every completed fill and nothing else clears it.
      * Failure is not fatal: the fill falls back to the timed safety net. */
-    if (g_dev.ready && g_dev.irq < 16u) {
-        g_irq_endpoint = wasmos_ipc_create_endpoint();
-        g_irq_select = (g_irq_endpoint >= 0) ? wasmos_ipc_select_create() : -1;
-        if (g_irq_endpoint >= 0 && g_irq_select >= 0 &&
-            wasmos_ipc_select_add(g_irq_select, g_irq_endpoint) == 0 &&
-            wasmos_ipc_select_add(g_select, g_irq_endpoint) == 0 &&
-            wasmos_irq_route_ipc((int32_t)g_dev.irq, g_irq_endpoint) == 0) {
+    if (!g_dev.msix_enabled && g_dev.ready && g_dev.irq < 16u && g_irq_endpoint >= 0) {
+        if (wasmos_irq_route_ipc((int32_t)g_dev.irq, g_irq_endpoint) == 0) {
             g_irq_routed = 1;
             (void)printf("[virtio-rng] irq routed line=%u\n", (unsigned)g_dev.irq);
         } else {

@@ -1757,7 +1757,11 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t module_coun
 
             if (target == HW_SPAWN_PCI_BUS) {
                 spawn_caps_t pci_caps;
-                pci_caps.cap_flags = DEVMGR_CAP_IO_PORT;
+                /* MMIO on top of the config ports: an MSI-X table lives in a
+                 * device BAR, so programming one is a memory write, not a
+                 * config-space write. wasmos_mmio_write32 refuses any address
+                 * overlapping system RAM, so this grants device access only. */
+                pci_caps.cap_flags = DEVMGR_CAP_IO_PORT | DEVMGR_CAP_MMIO_MAP;
                 pci_caps.io_port_min = 0x0CF8;
                 pci_caps.io_port_max = 0x0CFF;
                 pci_caps.irq_mask = 0;

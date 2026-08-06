@@ -162,6 +162,46 @@ After the full scan, sends `DEVMGR_PCI_SCAN_DONE (0x901)` to signal completion.
 The scanner locates the device manager's inventory endpoint by looking up the
 service `"devmgr.inv"` with 1024 retries (to handle startup ordering races).
 
+#### Resident Phase: Configuration-Space Owner
+
+pci-bus does not exit after the scan. It registers the service name `"pci"`
+**before** scanning — publishing devices is what makes device-manager spawn
+drivers, and a driver must never find the bus service missing — and then serves
+requests for the rest of the boot.
+
+It stays resident because it is the only holder of the 0xCF8/0xCFC configuration
+window: device-manager grants each driver an I/O-port range covering that
+device's own BAR, which excludes config space. Widening that grant would give
+every driver read/write access to every device on the bus.
+
+Requests are served on a **dedicated endpoint**, separate from the one used for
+device-manager traffic: a reply-matching loop discards messages it did not ask
+for, which is how a driver's request would otherwise vanish during a lookup.
+
+| Opcode                | Value | Purpose |
+|-----------------------|-------|---------|
+| `PCI_IPC_MSI_QUERY`   | 0xd00 | `arg0 = bdf` → `arg0 = WASMOS_PCI_MSI_KIND_*`, `arg1 = vector count` |
+| `PCI_IPC_MSI_BIND`    | 0xd01 | `arg0 = (bdf << 8) \| entry`, `arg1/arg2 = address`, `arg3 = data` |
+| `PCI_IPC_MSI_UNBIND`  | 0xd02 | `arg0 = (bdf << 8) \| entry` |
+
+`MSI_BIND` walks the capability list (`0x11` MSI-X, preferred; `0x05` MSI),
+writes the address/data pair the caller obtained from `wasmos_msi_alloc` into the
+device, then sets bus-mastering (a message write is DMA) and `INTX_DISABLE` (so
+the device stops driving its shared wire). A function is claimed by the first
+endpoint that binds it and refuses a different one afterwards, so a driver cannot
+redirect another device's interrupts to itself. See
+`docs/architecture/05-x86-cpu-architecture.md` §Message-Signalled Interrupts for
+the full ownership split.
+
+MSI-X is reported in preference to MSI because it addresses each vector
+independently; plain MSI needs one naturally-aligned block of consecutive
+vectors, which the kernel allocator does not hand out, so it is reported as
+exactly one vector.
+
+Staying resident is also the prerequisite for hot-plug: a rescan opcode over the
+scan function is a small addition, but knowing *when* to rescan needs an ACPI
+GPE/SCI path that does not exist yet.
+
 ---
 
 ### ACPI Bus Scanner

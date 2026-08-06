@@ -352,6 +352,18 @@ enum {
  * edge-triggered active-high (ISA). PCI INTx lines are level + active-low. */
 enum { WASMOS_IRQ_TRIGGER_LEVEL = 1 << 0, WASMOS_IRQ_POLARITY_LOW = 1 << 1 };
 
+/* Message-signalled interrupt style a PCI function supports, reported by
+ * PCI_IPC_MSI_QUERY. MSI-X wins when a device offers both: it addresses each
+ * vector independently, where plain MSI needs one naturally-aligned block of
+ * consecutive vectors and so is limited to a single message here. */
+enum { WASMOS_PCI_MSI_KIND_NONE = 0, WASMOS_PCI_MSI_KIND_MSI = 1, WASMOS_PCI_MSI_KIND_MSIX = 2 };
+
+/* IPC message type the kernel sends for an MSI event (see src/kernel/include/msi.h).
+ * arg0 is the table entry index the driver programmed, i.e. which of its own
+ * interrupt sources fired. Unlike IPC_IRQ_EVENT_TYPE no ack is owed: the vector
+ * is edge-triggered and exclusively owned, so nothing is masked waiting for one. */
+#define WASMOS_IPC_MSI_EVENT_TYPE 0xFF01
+
 typedef struct __attribute__((packed)) {
     uint64_t base;
     uint64_t length;

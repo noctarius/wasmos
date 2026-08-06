@@ -230,12 +230,10 @@ void sched_wake_thread(thread_t* t) {
         return;
     }
 
-    /* Single-CPU race: a sender can wake the thread after ipc_recv_for()
-     * registered it but before the blocked yield path has finished saving
-     * context and cleared blocking_transition.  Spinning here deadlocks the
-     * current CPU.  Mark it READY and let the blocked-yield completion path
-     * enqueue it once the transition finishes. */
-    if (__atomic_load_n(&t->blocking_transition, __ATOMIC_ACQUIRE)) {
+    /* Promote first, then claim: sched_wake_claim_enqueue (thread.h) publishes
+     * our half of the handshake before reading the completion path's. */
+    if (!sched_wake_claim_enqueue(t)) {
+        /* Completion path owns the enqueue; leave it something to enqueue. */
         if (sched_mark_ready_if_live(t)) {
             t->block_reason = THREAD_BLOCK_NONE;
         }

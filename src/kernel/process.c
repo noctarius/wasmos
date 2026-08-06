@@ -810,11 +810,9 @@ static void process_wake_waiters(uint32_t target_pid) {
             } else {
                 process_set_ready(proc, waiter);
             }
-            /* Only enqueue if the thread is not mid-transition to blocked on
-             * another CPU.  If blocking_transition is set, the owning CPU's
-             * PROCESS_RUN_BLOCKED handler will re-enqueue once the yield
-             * completes and sees state == READY. */
-            if (!__atomic_load_n(&waiter->blocking_transition, __ATOMIC_ACQUIRE)) {
+            /* Enqueue only if we win the wake/block handshake; otherwise the
+             * owning CPU's PROCESS_RUN_BLOCKED handler does it. */
+            if (sched_wake_claim_enqueue(waiter)) {
                 sched_enqueue_thread(waiter);
             }
         }
@@ -2013,7 +2011,11 @@ static int process_schedule_once_impl(void) {
         /* The thread is already in BLOCKED state
          * (set by sched_event_wait → thread_set_state before yield).
          * The blocking_transition flag is cleared here once context is saved. */
-        __atomic_store_n(&thread->blocking_transition, 0, __ATOMIC_RELEASE);
+        if (sched_block_complete_claim(thread) && thread->state == THREAD_STATE_BLOCKED) {
+            /* We claimed the token: a waker deferred the enqueue to us and has
+             * not (or not yet) promoted the thread, so do it here. */
+            thread_set_state(thread->tid, THREAD_STATE_READY, THREAD_BLOCK_NONE);
+        }
         /* If the thread was woken by a concurrent sched_wake_thread before we
          * got here, it is already READY — re-enqueue it rather than leaving it
          * stranded. */
@@ -2051,7 +2053,11 @@ static int process_schedule_once_impl(void) {
             }
             thread->wait_event = 0;
             ksync_spinlock_unlock(&_ev->lock);
-            __atomic_store_n(&thread->blocking_transition, 0, __ATOMIC_RELEASE);
+            __atomic_store_n(&thread->blocking_transition, 0, __ATOMIC_SEQ_CST);
+            /* This path promotes to READY and enqueues unconditionally below, so
+             * the wake is satisfied here; consume the Dekker token to avoid a
+             * stale one forcing a spurious wake on the next real block. */
+            __atomic_store_n(&thread->wake_pending, 0, __ATOMIC_SEQ_CST);
         }
         thread_set_state(thread->tid, THREAD_STATE_READY, THREAD_BLOCK_NONE);
         /* This thread voluntarily yielded (PROCESS_RUN_YIELDED) — mark it sticky
@@ -2621,7 +2627,7 @@ static void process_wake_thread_joiner(process_t* owner, thread_t* exited) {
         return;
     }
     process_set_ready(owner, waiter);
-    if (!__atomic_load_n(&waiter->blocking_transition, __ATOMIC_ACQUIRE)) {
+    if (sched_wake_claim_enqueue(waiter)) {
         sched_enqueue_thread(waiter);
     }
 }

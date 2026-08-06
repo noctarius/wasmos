@@ -53,6 +53,7 @@ static void thread_reset_slot(thread_t* thread) {
     thread->block_reason = THREAD_BLOCK_NONE;
     thread->is_kernel_worker = 0;
     thread->blocking_transition = 0;
+    thread->wake_pending = 0;
     thread->kstack_base = 0;
     thread->kstack_top = 0;
     thread->kstack_alloc_base_phys = 0;

@@ -35,6 +35,7 @@ typedef struct thread {
     thread_block_reason_t block_reason;
     uint8_t is_kernel_worker;
     uint8_t blocking_transition; /* RUNNING→BLOCKED in-progress (atomic) */
+    uint8_t wake_pending;        /* waker's half of the wake/block Dekker (atomic) */
     uintptr_t kstack_base;
     uintptr_t kstack_top;
     uintptr_t kstack_alloc_base_phys;
@@ -83,6 +84,32 @@ typedef struct thread {
     /* Thread-join event (replaces join_waiter_tid for new scheduler). */
     sched_event_t join_event;
 } thread_t;
+
+/* Wake/block Dekker.  A waker on one CPU and the blocked-yield completion path
+ * (PROCESS_RUN_BLOCKED in process_schedule_once_impl) can race around the same
+ * thread; exactly one of them must enqueue it.  Both sides publish their own
+ * flag BEFORE reading the other's, and both use seq_cst — which also supplies
+ * the StoreLoad barrier that x86 does not give for free.  That makes "waker
+ * sees blocking_transition set" and "completion sees wake_pending clear"
+ * mutually exclusive, so the wake can never be dropped.  wake_pending is a
+ * claim token: whoever swaps it to 0 owns the enqueue, so it also cannot be
+ * done twice.
+ *
+ * Use these instead of open-coding the handshake — a site that reads the other
+ * side's flag without publishing first strands the thread READY on no run
+ * queue, and every CPU then idles forever with runnable work outstanding. */
+static inline int sched_wake_claim_enqueue(thread_t* t) {
+    __atomic_store_n(&t->wake_pending, 1, __ATOMIC_SEQ_CST);
+    if (__atomic_load_n(&t->blocking_transition, __ATOMIC_SEQ_CST)) {
+        return 0; /* completion path will consume the token and enqueue */
+    }
+    return __atomic_exchange_n(&t->wake_pending, 0, __ATOMIC_SEQ_CST) ? 1 : 0;
+}
+
+static inline int sched_block_complete_claim(thread_t* t) {
+    __atomic_store_n(&t->blocking_transition, 0, __ATOMIC_SEQ_CST);
+    return __atomic_exchange_n(&t->wake_pending, 0, __ATOMIC_SEQ_CST) ? 1 : 0;
+}
 
 void thread_init(void);
 int thread_spawn_main(uint32_t owner_pid, const char* name, uint32_t* out_tid);

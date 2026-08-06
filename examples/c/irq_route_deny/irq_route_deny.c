@@ -14,8 +14,10 @@ int main(int argc, char** argv) {
         return 1;
     }
 
+    /* This app holds no irq.route capability at all, so the host call refuses it
+     * before any per-line policy check — same reason code either way. */
     rc = wasmos_irq_route_ipc(1, endpoint);
-    if (rc != -1) {
+    if (rc != WASMOS_ERR_IRQ_NOT_AUTHORIZED) {
         puts("irq-route-deny: expected deny");
         return 1;
     }

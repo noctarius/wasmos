@@ -14,8 +14,11 @@ int main(int argc, char** argv) {
         return 1;
     }
 
+    /* Line 2 is outside this app's per-line allowlist (see the irq-route policy
+     * table in src/kernel/policy.c), so the route must be refused with the
+     * specific reason rather than a bare -1. */
     rc = wasmos_irq_route_ipc(2, endpoint);
-    if (rc != -1) {
+    if (rc != WASMOS_ERR_IRQ_NOT_AUTHORIZED) {
         puts("irq-route-allow: policy deny failed");
         return 1;
     }

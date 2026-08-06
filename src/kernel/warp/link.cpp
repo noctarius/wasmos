@@ -2399,7 +2399,7 @@ static uint32_t warp_irq_route_ipc(uint32_t irq_line, uint32_t endpoint, void* c
     (void)ctx_;
     uint32_t context_id = 0;
     if (warp_current_context_id(&context_id) != 0 || warp_require_irq_capability(context_id) != 0)
-        return (uint32_t)-1;
+        return (uint32_t)WASMOS_ERR_IRQ_NOT_AUTHORIZED;
     return (uint32_t)irq_register(context_id, irq_line, endpoint);
 }
 
@@ -2407,7 +2407,7 @@ static uint32_t warp_irq_ack(uint32_t irq_line, void* ctx_) {
     (void)ctx_;
     uint32_t context_id = 0;
     if (warp_current_context_id(&context_id) != 0)
-        return (uint32_t)-1;
+        return (uint32_t)WASMOS_ERR_IRQ_NOT_AUTHORIZED;
     return (uint32_t)irq_ack(context_id, irq_line);
 }
 
@@ -2427,7 +2427,7 @@ static uint32_t warp_irq_unroute(uint32_t irq_line, void* ctx_) {
     (void)ctx_;
     uint32_t context_id = 0;
     if (warp_current_context_id(&context_id) != 0 || warp_require_irq_capability(context_id) != 0)
-        return (uint32_t)-1;
+        return (uint32_t)WASMOS_ERR_IRQ_NOT_AUTHORIZED;
     return (uint32_t)irq_unregister(context_id, irq_line);
 }
 

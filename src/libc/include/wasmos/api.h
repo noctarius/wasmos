@@ -12,6 +12,10 @@
 #define WASMOS_LIBC_WASMOS_API_H
 
 #include "wasmos/imports.h"
+/* Packed error codes returned by host calls (single-sourced in
+ * abi/errors.yaml); host-call returns are a subsystem boundary, so they
+ * carry a named code rather than a bare -1. */
+#include "../../../../abi/generated/c/wasmos_status.h"
 
 #ifdef __cplusplus
 extern "C" {

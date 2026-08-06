@@ -2650,12 +2650,15 @@ m3ApiRawFunction(wasmos_irq_route_ipc) {
     m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, irq_line) m3ApiGetArg(int32_t, msg_endpoint)
 
         uint32_t context_id = 0;
-    if (irq_line < 0 || msg_endpoint < 0) {
-        m3ApiReturn(-1);
+    if (irq_line < 0) {
+        m3ApiReturn(WASMOS_ERR_IRQ_BAD_LINE);
+    }
+    if (msg_endpoint < 0) {
+        m3ApiReturn(WASMOS_ERR_IRQ_BAD_ENDPOINT);
     }
     if (current_process_context(&context_id) != 0 ||
         require_irq_route_capability(context_id) != 0) {
-        m3ApiReturn(-1);
+        m3ApiReturn(WASMOS_ERR_IRQ_NOT_AUTHORIZED);
     }
     m3ApiReturn(irq_register(context_id, (uint32_t)irq_line, (uint32_t)msg_endpoint));
 }
@@ -2665,10 +2668,10 @@ m3ApiRawFunction(wasmos_irq_ack) {
 
         uint32_t context_id = 0;
     if (irq_line < 0) {
-        m3ApiReturn(-1);
+        m3ApiReturn(WASMOS_ERR_IRQ_BAD_LINE);
     }
     if (current_process_context(&context_id) != 0) {
-        m3ApiReturn(-1);
+        m3ApiReturn(WASMOS_ERR_IRQ_NOT_AUTHORIZED);
     }
     m3ApiReturn(irq_ack(context_id, (uint32_t)irq_line));
 }
@@ -2678,11 +2681,11 @@ m3ApiRawFunction(wasmos_irq_configure) {
 
         uint32_t context_id = 0;
     if (irq_line < 0) {
-        m3ApiReturn(-1);
+        m3ApiReturn(WASMOS_ERR_IRQ_BAD_LINE);
     }
     if (current_process_context(&context_id) != 0 ||
         require_irq_route_capability(context_id) != 0) {
-        m3ApiReturn(-1);
+        m3ApiReturn(WASMOS_ERR_IRQ_NOT_AUTHORIZED);
     }
     m3ApiReturn(irq_configure((uint32_t)irq_line, (uint32_t)flags));
 }
@@ -2692,11 +2695,11 @@ m3ApiRawFunction(wasmos_irq_unroute) {
 
         uint32_t context_id = 0;
     if (irq_line < 0) {
-        m3ApiReturn(-1);
+        m3ApiReturn(WASMOS_ERR_IRQ_BAD_LINE);
     }
     if (current_process_context(&context_id) != 0 ||
         require_irq_route_capability(context_id) != 0) {
-        m3ApiReturn(-1);
+        m3ApiReturn(WASMOS_ERR_IRQ_NOT_AUTHORIZED);
     }
     m3ApiReturn(irq_unregister(context_id, (uint32_t)irq_line));
 }

@@ -36,4 +36,9 @@ uint64_t pfa_total_bytes(void);
 /* Current free physical bytes (sum of all free ranges under lock). */
 uint64_t pfa_free_bytes(void);
 
+/* Non-zero if [base, base+length) overlaps any region the UEFI memory map
+ * reported as usable RAM. Device MMIO never does, so this is the predicate that
+ * keeps a bus driver's MMIO access (mmio_write32) off system memory. */
+int pfa_range_overlaps_ram(uint64_t base, uint64_t length);
+
 #endif

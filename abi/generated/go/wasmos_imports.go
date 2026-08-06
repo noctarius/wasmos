@@ -752,3 +752,12 @@ func MsiAlloc(a0 int32, a1 int32) int32
 // WASMOS_ERR_MSI_* code.
 //go:wasmimport wasmos msi_free
 func MsiFree(a0 int32) int32
+
+// Write `value` to the 32-bit memory-mapped device register at physical
+// address phys_lo/phys_hi, which must be 4-byte aligned and outside system
+// RAM. Exists because wasmos_phys_map COPIES physical bytes into linear memory
+// (right for reading ACPI tables, useless for programming hardware), and a bus
+// driver has to place MSI-X table entries. Returns 0, or a negative
+// WASMOS_ERR_MSI_* code. Requires the mmio.map capability.
+//go:wasmimport wasmos mmio_write32
+func MmioWrite32(a0 int32, a1 int32, a2 int32) int32

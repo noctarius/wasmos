@@ -108,8 +108,8 @@ int msi_free(uint32_t context_id, uint32_t vector) {
         return WASMOS_ERR_MSI_BAD_VECTOR;
     }
     ksync_spinlock_lock(&g_msi_lock);
-    int rc = msi_vectors_free(msi_vectors_ptr(), MSI_VECTOR_COUNT, vector - MSI_VECTOR_BASE,
-                              context_id);
+    int rc =
+        msi_vectors_free(msi_vectors_ptr(), MSI_VECTOR_COUNT, vector - MSI_VECTOR_BASE, context_id);
     ksync_spinlock_unlock(&g_msi_lock);
     return rc;
 }

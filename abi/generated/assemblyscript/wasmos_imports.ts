@@ -627,3 +627,11 @@ export declare function msi_alloc(a0: i32, a1: i32): i32;
 // WASMOS_ERR_MSI_* code.
 @external("wasmos", "msi_free")
 export declare function msi_free(a0: i32): i32;
+// Write `value` to the 32-bit memory-mapped device register at physical
+// address phys_lo/phys_hi, which must be 4-byte aligned and outside system
+// RAM. Exists because wasmos_phys_map COPIES physical bytes into linear memory
+// (right for reading ACPI tables, useless for programming hardware), and a bus
+// driver has to place MSI-X table entries. Returns 0, or a negative
+// WASMOS_ERR_MSI_* code. Requires the mmio.map capability.
+@external("wasmos", "mmio_write32")
+export declare function mmio_write32(a0: i32, a1: i32, a2: i32): i32;

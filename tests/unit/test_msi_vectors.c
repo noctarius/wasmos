@@ -89,7 +89,8 @@ static void test_dispatch_reaches_the_owner_with_its_index(void) {
     (void)msi_vectors_alloc(g_vectors, TEST_VECTORS, 7, 0x100, &a);
     (void)msi_vectors_alloc(g_vectors, TEST_VECTORS, 9, 0x200, &b);
 
-    expect(msi_vectors_dispatch(g_vectors, TEST_VECTORS, b, &OPS) == 1, "dispatch reports delivery");
+    expect(msi_vectors_dispatch(g_vectors, TEST_VECTORS, b, &OPS) == 1,
+           "dispatch reports delivery");
     expect(g_deliver_count == 1, "exactly one endpoint is notified");
     expect(g_delivered_to[0] == 0x200, "the event goes to the vector's own owner only");
     /* This is what INTx could never do: the index tells the driver which of its
@@ -165,7 +166,8 @@ static void test_release_context_drops_only_its_own(void) {
     (void)msi_vectors_alloc(g_vectors, TEST_VECTORS, 7, 0x101, &mine_b);
 
     msi_vectors_release_context(g_vectors, TEST_VECTORS, 7);
-    expect(!msi_vectors_in_use(g_vectors, TEST_VECTORS, mine_a), "reaped context's vector is freed");
+    expect(!msi_vectors_in_use(g_vectors, TEST_VECTORS, mine_a),
+           "reaped context's vector is freed");
     expect(!msi_vectors_in_use(g_vectors, TEST_VECTORS, mine_b), "all of its vectors are freed");
     expect(msi_vectors_in_use(g_vectors, TEST_VECTORS, theirs), "another context is untouched");
 

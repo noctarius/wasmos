@@ -511,3 +511,10 @@ pub extern "wasmos" fn msi_alloc(a0: i32, a1: i32) callconv(.c) i32;
 /// can raise a vector that is no longer bound. Returns 0, or a negative
 /// WASMOS_ERR_MSI_* code.
 pub extern "wasmos" fn msi_free(a0: i32) callconv(.c) i32;
+/// Write `value` to the 32-bit memory-mapped device register at physical
+/// address phys_lo/phys_hi, which must be 4-byte aligned and outside system
+/// RAM. Exists because wasmos_phys_map COPIES physical bytes into linear memory
+/// (right for reading ACPI tables, useless for programming hardware), and a bus
+/// driver has to place MSI-X table entries. Returns 0, or a negative
+/// WASMOS_ERR_MSI_* code. Requires the mmio.map capability.
+pub extern "wasmos" fn mmio_write32(a0: i32, a1: i32, a2: i32) callconv(.c) i32;

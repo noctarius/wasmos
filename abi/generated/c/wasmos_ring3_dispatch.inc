@@ -254,6 +254,8 @@ static inline uint32_t warp_ring3_dispatch_table(uint32_t hc_id, uint64_t a0,
         return warp_msi_alloc((uint32_t)a0, (uint32_t)a1, reinterpret_cast<void*>(a2));
     case HC_MSI_FREE:
         return warp_msi_free((uint32_t)a0, reinterpret_cast<void*>(a1));
+    case HC_MMIO_WRITE32:
+        return warp_mmio_write32((uint32_t)a0, (uint32_t)a1, (uint32_t)a2, reinterpret_cast<void*>(a3));
     default:
         return (uint32_t)-1;
     }

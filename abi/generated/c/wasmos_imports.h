@@ -624,5 +624,13 @@ extern int32_t wasmos_msi_alloc(int32_t endpoint, wasmos_msi_desc_t* out) WASMOS
  * WASMOS_ERR_MSI_* code.
  */
 extern int32_t wasmos_msi_free(int32_t vector) WASMOS_WASM_IMPORT("wasmos", "msi_free");
+/* Write `value` to the 32-bit memory-mapped device register at physical
+ * address phys_lo/phys_hi, which must be 4-byte aligned and outside system
+ * RAM. Exists because wasmos_phys_map COPIES physical bytes into linear memory
+ * (right for reading ACPI tables, useless for programming hardware), and a bus
+ * driver has to place MSI-X table entries. Returns 0, or a negative
+ * WASMOS_ERR_MSI_* code. Requires the mmio.map capability.
+ */
+extern int32_t wasmos_mmio_write32(int32_t phys_lo, int32_t phys_hi, int32_t value) WASMOS_WASM_IMPORT("wasmos", "mmio_write32");
 
 #endif /* WASMOS_GENERATED_CLIENT_IMPORTS_H */

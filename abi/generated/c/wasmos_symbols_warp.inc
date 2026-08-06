@@ -123,4 +123,5 @@
     LINK("wasmos", "xfer_buffer_unmap", warp_xfer_buffer_unmap) , \
     LINK("wasmos", "klog_register_ring", warp_klog_register_ring) , \
     LINK("wasmos", "msi_alloc", warp_msi_alloc) , \
-    LINK("wasmos", "msi_free", warp_msi_free)
+    LINK("wasmos", "msi_free", warp_msi_free) , \
+    LINK("wasmos", "mmio_write32", warp_mmio_write32)

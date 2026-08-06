@@ -41,6 +41,7 @@ extern "C" {
 #include "io.h"
 #include "irq.h"
 #include "msi.h"
+#include "mmio.h"
 #include "serial.h"
 #include "capability.h"
 #include "timer.h"
@@ -2450,8 +2451,8 @@ static uint32_t warp_msi_alloc(uint32_t endpoint, uint32_t out_off, void* ctx_) 
     if (warp_current_context_id(&context_id) != 0 || warp_require_irq_capability(context_id) != 0)
         return (uint32_t)WASMOS_ERR_MSI_NOT_AUTHORIZED;
     msi_desc_t tmp;
-    int rc = msi_alloc(context_id, endpoint, &tmp.address_lo, &tmp.address_hi, &tmp.data,
-                       &tmp.vector);
+    int rc =
+        msi_alloc(context_id, endpoint, &tmp.address_lo, &tmp.address_hi, &tmp.data, &tmp.vector);
     if (rc != 0)
         return (uint32_t)rc;
     __builtin_memcpy(raw, &tmp, sizeof(tmp));
@@ -2464,6 +2465,18 @@ static uint32_t warp_msi_free(uint32_t vector, void* ctx_) {
     if (warp_current_context_id(&context_id) != 0 || warp_require_irq_capability(context_id) != 0)
         return (uint32_t)WASMOS_ERR_MSI_NOT_AUTHORIZED;
     return (uint32_t)msi_free(context_id, vector);
+}
+
+/* Poke a memory-mapped device register (pci-bus placing an MSI-X table entry).
+ * mmio_write32_phys refuses anything overlapping system RAM, so the mmio.map
+ * capability buys MMIO access, not arbitrary physical memory access. */
+static uint32_t warp_mmio_write32(uint32_t phys_lo, uint32_t phys_hi, uint32_t value, void* ctx_) {
+    (void)ctx_;
+    uint32_t context_id = 0;
+    if (warp_current_context_id(&context_id) != 0 || warp_require_mmio_capability(context_id) != 0)
+        return (uint32_t)WASMOS_ERR_MSI_NOT_AUTHORIZED;
+    uint64_t phys = ((uint64_t)phys_hi << 32) | (uint64_t)phys_lo;
+    return (uint32_t)mmio_write32_phys(phys, value);
 }
 
 // ---------------------------------------------------------------------------

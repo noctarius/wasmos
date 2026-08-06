@@ -126,7 +126,8 @@ typedef enum {
     HC_KLOG_REGISTER_RING = 116,
     HC_MSI_ALLOC = 117,
     HC_MSI_FREE = 118,
-    HC_COUNT = 119,
+    HC_MMIO_WRITE32 = 119,
+    HC_COUNT = 120,
 } warp_hostcall_id_t;
 
 #endif /* WASMOS_HOSTCALL_IDS_H */

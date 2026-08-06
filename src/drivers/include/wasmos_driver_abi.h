@@ -352,6 +352,12 @@ enum {
  * edge-triggered active-high (ISA). PCI INTx lines are level + active-low. */
 enum { WASMOS_IRQ_TRIGGER_LEVEL = 1 << 0, WASMOS_IRQ_POLARITY_LOW = 1 << 1 };
 
+/* Whole sectors one BLOCK_IPC_READ_ZC_REQ may carry. A bound is needed because
+ * the request names a single contiguous run; the server is free to transfer
+ * fewer and reports the count it managed in BLOCK_IPC_READ_RESP.arg1, so a
+ * server with a smaller limit stays correct without the client knowing. */
+#define WASMOS_BLOCK_ZC_MAX_SECTORS 8u
+
 /* Message-signalled interrupt style a PCI function supports, reported by
  * PCI_IPC_MSI_QUERY. MSI-X wins when a device offers both: it addresses each
  * vector independently, where plain MSI needs one naturally-aligned block of

@@ -70,6 +70,7 @@ endpoint-scoped and may repeat across subsystems.
 | `BLOCK_IPC_READ_REQ` | 0x300 | req |  |
 | `BLOCK_IPC_WRITE_REQ` | 0x301 | req |  |
 | `BLOCK_IPC_IDENTIFY_REQ` | 0x302 | req |  |
+| `BLOCK_IPC_READ_ZC_REQ` | 0x303 | req | Zero-copy read: land whole sectors straight into a transfer buffer the caller has reborrowed to this server, instead of staging them through the server's own block buffer. arg0=buffer_id arg1=lba arg2=sector_count arg3=dst_byte_offset. arg0 names the OBJECT (xfer_buffer read/write are object-addressed and the kernel admits the owner or any grantee); the caller separately reborrows its own borrow to this server's endpoint to create that grant, and unborrows when the operation completes. The destination range is [dst_offset, dst_offset + count*512) and must lie inside the buffer; only WHOLE sectors may be requested, because a partial sector would overwrite bytes around it that the client did not ask for (callers stage head/tail remainders through BLOCK_IPC_READ_REQ). On success: BLOCK_IPC_READ_RESP, arg1 = sectors transferred. On failure: BLOCK_IPC_ERROR, arg0 = reason.  |
 | `BLOCK_IPC_READ_RESP` | 0x380 | resp |  |
 | `BLOCK_IPC_WRITE_RESP` | 0x381 | resp |  |
 | `BLOCK_IPC_IDENTIFY_RESP` | 0x382 | resp |  |

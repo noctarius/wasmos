@@ -123,6 +123,21 @@ pub const SVC_IPC_ERROR: i32 = 0x2AF;
 pub const BLOCK_IPC_READ_REQ: i32 = 0x300;
 pub const BLOCK_IPC_WRITE_REQ: i32 = 0x301;
 pub const BLOCK_IPC_IDENTIFY_REQ: i32 = 0x302;
+/// Zero-copy read: land whole sectors straight into a transfer buffer the
+/// caller has reborrowed to this server, instead of staging them through
+/// the server's own block buffer.
+/// arg0=buffer_id arg1=lba arg2=sector_count arg3=dst_byte_offset.
+/// arg0 names the OBJECT (xfer_buffer read/write are object-addressed and
+/// the kernel admits the owner or any grantee); the caller separately
+/// reborrows its own borrow to this server's endpoint to create that
+/// grant, and unborrows when the operation completes.
+/// The destination range is [dst_offset, dst_offset + count*512) and must
+/// lie inside the buffer; only WHOLE sectors may be requested, because a
+/// partial sector would overwrite bytes around it that the client did not
+/// ask for (callers stage head/tail remainders through BLOCK_IPC_READ_REQ).
+/// On success: BLOCK_IPC_READ_RESP, arg1 = sectors transferred.
+/// On failure: BLOCK_IPC_ERROR, arg0 = reason.
+pub const BLOCK_IPC_READ_ZC_REQ: i32 = 0x303;
 pub const BLOCK_IPC_READ_RESP: i32 = 0x380;
 pub const BLOCK_IPC_WRITE_RESP: i32 = 0x381;
 pub const BLOCK_IPC_IDENTIFY_RESP: i32 = 0x382;

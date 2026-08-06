@@ -146,6 +146,13 @@ static fat_op_ctx_t* fat_op_alloc(void) {
 }
 
 static void fat_op_free(fat_op_ctx_t* op) {
+    /* Drop the grant the read path may have extended to the block server. Doing
+     * it here — the single teardown path for both success and failure — is what
+     * keeps a request from leaking a writable grant to the client's buffer. */
+    if (op->zc_borrow > 0) {
+        (void)wasmos_xfer_buffer_unborrow(op->zc_borrow);
+    }
+    op->zc_borrow = 0;
     fat_block_release(&g_blk, op);
     op->in_use = 0;
 }

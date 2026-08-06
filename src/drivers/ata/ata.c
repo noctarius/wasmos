@@ -76,6 +76,7 @@ static uint8_t g_unit_present[ATA_UNIT_COUNT];
 static uint8_t g_sector_buf[ATA_SECTOR_SIZE];
 static uint8_t g_dma_read_ok_logged = 0;
 static uint8_t g_dma_write_ok_logged = 0;
+static uint8_t g_zc_logged = 0;
 static int32_t g_client_owner[ATA_CLIENT_MAP_CAP];
 static uint8_t g_client_unit[ATA_CLIENT_MAP_CAP];
 
@@ -221,8 +222,30 @@ static void ata_publish_block_device(uint8_t unit, uint32_t sectors, uint8_t pre
                           (int32_t)unit, (int32_t)sectors, (int32_t)flags, 0);
 }
 
-static int ata_read_lba28(uint8_t unit, uint32_t lba, uint8_t count, uint32_t buffer_phys) {
-    if (count == 0 || count > ATA_MAX_READ_SECTORS || buffer_phys == 0) {
+/* Where a read deposits each sector. The block buffer is the caller's own
+ * staging area addressed by physical address; the transfer buffer belongs to the
+ * original client and reaches us as a reborrow, so the kernel admits the write
+ * on the strength of that grant. Only the destination differs — the sector loop
+ * is identical. */
+typedef struct {
+    uint8_t to_xfer;     /* 0 = block buffer (phys), 1 = client transfer buffer */
+    int32_t id;          /* buffer_phys, or the transfer buffer's object id */
+    uint32_t dst_offset; /* byte offset of sector 0 within the destination */
+} ata_sink_t;
+
+static int ata_sink_write(const ata_sink_t* sink, const uint8_t* src, uint32_t len,
+                          uint32_t sector_offset) {
+    uint32_t offset = sink->dst_offset + sector_offset;
+    if (sink->to_xfer) {
+        return wasmos_xfer_buffer_write(sink->id, addr_cast(int32_t, src), (int32_t)len,
+                                        (int32_t)offset);
+    }
+    return wasmos_block_buffer_write(sink->id, addr_cast(int32_t, src), (int32_t)len,
+                                     (int32_t)offset);
+}
+
+static int ata_read_lba28(uint8_t unit, uint32_t lba, uint8_t count, const ata_sink_t* sink) {
+    if (count == 0 || count > ATA_MAX_READ_SECTORS || !sink || sink->id <= 0) {
         return -1;
     }
 
@@ -239,8 +262,9 @@ static int ata_read_lba28(uint8_t unit, uint32_t lba, uint8_t count, uint32_t bu
     wasmos_io_out8(ATA_PRIMARY_BASE + ATA_REG_LBA2, (uint8_t)((lba >> 16) & 0xFF));
     wasmos_io_out8(ATA_PRIMARY_BASE + ATA_REG_COMMAND, ATA_CMD_READ_SECTORS);
 
-    /* Reads are staged through a local 512-byte sector buffer and then copied
-     * into the shared block buffer owned by the kernel/consumer side. */
+    /* Reads are staged through a local 512-byte sector buffer and then handed to
+     * the sink, which is either the caller's block buffer or the original
+     * client's transfer buffer. */
     for (uint8_t sector = 0; sector < count; ++sector) {
         if (ata_wait_drq() != 0) {
             return -1;
@@ -249,8 +273,7 @@ static int ata_read_lba28(uint8_t unit, uint32_t lba, uint8_t count, uint32_t bu
         for (uint32_t i = 0; i < 256; ++i) {
             out[i] = (uint16_t)wasmos_io_in16(ATA_PRIMARY_BASE + ATA_REG_DATA);
         }
-        if (wasmos_block_buffer_write((int32_t)buffer_phys, addr_cast(int32_t, g_sector_buf),
-                                      ATA_SECTOR_SIZE, (int32_t)(sector * ATA_SECTOR_SIZE)) != 0) {
+        if (ata_sink_write(sink, g_sector_buf, ATA_SECTOR_SIZE, sector * ATA_SECTOR_SIZE) != 0) {
             return -1;
         }
     }
@@ -327,8 +350,7 @@ static void ata_log_dma_active(uint8_t is_write) {
  * per-direction "dma fallback rc=-N", which reads like an intermittent runtime
  * failure; it is neither intermittent nor a failure — see ata_dma_prepare. */
 static void ata_log_transfer_mode(void) {
-    (void)printf("[ata] transfers are PIO; zero-copy borrow mapping disabled "
-                 "(block protocol carries no grant)\n");
+    (void)printf("[ata] transfers are PIO (no bus-master DMA)\n");
 }
 
 /* TODO(xfer-buffer owner-push): the zero-copy borrow fast-path is disabled since
@@ -338,7 +360,9 @@ static void ata_log_transfer_mode(void) {
  * ata a borrow (borrow_id), which the block IPC protocol must carry; then ata
  * would dma_map_borrow(borrow_id, ...)/dma_sync_borrow/dma_unmap_borrow. Until
  * then this denies unconditionally and the transfer goes through the dedicated
- * block_buffer, which is unaffected by the migration.
+ * block_buffer, which is unaffected by the migration. Note BLOCK_IPC_READ_ZC_REQ
+ * now carries a reborrowed client buffer for whole-sector reads, so the read
+ * path no longer needs this; what is left is the write direction.
  *
  * Note this was never IDE bus-master DMA either way: there is no BMIDE/PRD
  * programming in this driver, and the sector loop is PIO in both branches. Real
@@ -426,7 +450,7 @@ static int ata_assign_unit_for_source(int32_t source, int32_t preferred_unit, ui
 }
 
 static int ata_handle_ipc(int32_t type, int32_t source, int32_t req_id, int32_t arg0, int32_t arg1,
-                          int32_t arg2) {
+                          int32_t arg2, int32_t arg3) {
     uint8_t unit = 0;
     int32_t preferred_unit = -1;
     if (!g_present) {
@@ -461,7 +485,8 @@ static int ata_handle_ipc(int32_t type, int32_t source, int32_t req_id, int32_t 
             (void)dma_addr;
             ata_log_dma_active(0);
         }
-        if (ata_read_lba28(unit, (uint32_t)arg1, (uint8_t)arg2, (uint32_t)arg0) != 0) {
+        ata_sink_t sink = {0u, arg0, 0u};
+        if (ata_read_lba28(unit, (uint32_t)arg1, (uint8_t)arg2, &sink) != 0) {
             if (dma_rc == WASMOS_ERR_NONE) {
                 (void)ata_dma_finish(source, 0u, byte_count, WASMOS_DMA_DIR_FROM_DEVICE);
             }
@@ -470,6 +495,28 @@ static int ata_handle_ipc(int32_t type, int32_t source, int32_t req_id, int32_t 
         }
         if (dma_rc == WASMOS_ERR_NONE &&
             ata_dma_finish(source, 0u, byte_count, WASMOS_DMA_DIR_FROM_DEVICE) != 0) {
+            ata_send_resp(source, req_id, BLOCK_IPC_ERROR, 3, 0);
+            return 0;
+        }
+        wasmos_ipc_send(source, g_block_endpoint, BLOCK_IPC_READ_RESP, req_id, 0, arg2, 0, 0);
+        return 0;
+    }
+
+    /* Zero-copy read: land whole sectors straight in the client's transfer
+     * buffer. The requester reborrowed it to us, so the kernel admits the write
+     * on that grant; we never learn whose buffer it is or map it ourselves.
+     * arg0 = buffer_id, arg1 = lba, arg2 = sector count, arg3 = dst byte offset. */
+    if (type == BLOCK_IPC_READ_ZC_REQ) {
+        if (arg2 <= 0 || arg2 > (int32_t)ATA_MAX_READ_SECTORS || arg0 <= 0 || arg3 < 0) {
+            ata_send_resp(source, req_id, BLOCK_IPC_ERROR, 2, 0);
+            return 0;
+        }
+        ata_sink_t sink = {1u, arg0, (uint32_t)arg3};
+        if (!g_zc_logged) {
+            g_zc_logged = 1;
+            (void)printf("[ata] zero-copy reads active\n");
+        }
+        if (ata_read_lba28(unit, (uint32_t)arg1, (uint8_t)arg2, &sink) != 0) {
             ata_send_resp(source, req_id, BLOCK_IPC_ERROR, 3, 0);
             return 0;
         }
@@ -606,6 +653,7 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t ignored_arg
         int32_t arg0 = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG0);
         int32_t arg1 = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG1);
         int32_t arg2 = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG2);
+        int32_t arg3 = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG3);
         int32_t source = wasmos_ipc_last_field(WASMOS_IPC_FIELD_SOURCE);
 
         /* Settle anything the previous command left behind. A completion that
@@ -613,7 +661,7 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t ignored_arg
          * the line stays masked until someone acks it. */
         (void)ata_service_irq();
 
-        ata_handle_ipc(req_type, source, req_id, arg0, arg1, arg2);
+        ata_handle_ipc(req_type, source, req_id, arg0, arg1, arg2, arg3);
     }
     return 0;
 }

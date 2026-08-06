@@ -15,6 +15,9 @@ void fat_block_configure(fat_block_t* blk, int32_t block_endpoint, int32_t reply
     blk->wait_lba = 0;
     blk->wait_resp_type = 0;
     blk->copy_into_sector = 0;
+    blk->direct_read = 0;
+    blk->direct_pending = 0;
+    blk->direct_sectors = 0;
     blk->write_pending = 0;
     blk->loaded_lba = FAT_BLOCK_NO_LBA;
     blk->owner = 0;
@@ -77,6 +80,49 @@ static int fat_block_start(fat_block_t* blk, uint32_t lba, int rw) {
     return 0;
 }
 
+uint32_t fat_block_direct_sectors(const fat_block_t* blk) {
+    return blk->direct_sectors;
+}
+
+int32_t fat_block_server_endpoint(const fat_block_t* blk) {
+    return blk->block_endpoint;
+}
+
+fat_r_t fat_block_read_direct(fat_block_t* blk, uint32_t lba, uint32_t count, int32_t buffer_id,
+                              uint32_t dst_offset) {
+    /* The coroutine macros re-invoke this on resume (the case label sits before
+     * the call), so completion must be reported on the second entry — the same
+     * yield-once contract fat_block_write uses. fat_need_sector gets away
+     * without a flag only because its sector cache answers the repeat call. */
+    if (blk->direct_pending) {
+        blk->direct_pending = 0;
+        return FAT_R_DONE;
+    }
+    if (blk->block_endpoint < 0 || blk->reply_endpoint < 0 || buffer_id < 0 || count == 0) {
+        return FAT_R_ERR;
+    }
+    blk->cur_req_id = blk->next_req_id++;
+    if (blk->next_req_id < 1) {
+        blk->next_req_id = 1;
+    }
+    blk->wait_lba = lba;
+    blk->wait_resp_type = BLOCK_IPC_READ_RESP;
+    /* Nothing lands in the staged sector, so do not pull it on completion and do
+     * not retag the cache: whatever it held before is still what it holds. */
+    blk->copy_into_sector = 0u;
+    blk->direct_read = 1u;
+
+    if (wasmos_ipc_send(blk->block_endpoint, blk->reply_endpoint, BLOCK_IPC_READ_ZC_REQ,
+                        blk->cur_req_id, buffer_id, (int32_t)lba, (int32_t)count,
+                        (int32_t)dst_offset) != 0) {
+        blk->cur_req_id = 0;
+        blk->direct_read = 0u;
+        return FAT_R_ERR;
+    }
+    blk->direct_pending = 1u;
+    return FAT_R_WAIT;
+}
+
 fat_r_t fat_need_sector(fat_block_t* blk, uint32_t lba) {
     if (blk->loaded_lba == lba) {
         return FAT_R_DONE; /* cache hit */
@@ -104,6 +150,11 @@ fat_r_t fat_block_write(fat_block_t* blk, uint32_t lba) {
 void fat_block_release(fat_block_t* blk, fat_op_ctx_t* ctx) {
     if (blk->owner == ctx) {
         blk->owner = 0;
+        /* An op torn down mid-flight (a failed completion) must not leave the
+         * yield-once latch armed, or the next op's first direct read would
+         * report completion without ever submitting one. */
+        blk->direct_pending = 0u;
+        blk->direct_read = 0u;
     }
 }
 
@@ -125,6 +176,19 @@ fat_op_ctx_t* fat_block_complete(fat_block_t* blk, int* out_ok) {
         return 0; /* stale/unmatched reply */
     }
     blk->cur_req_id = 0;
+
+    /* A direct read never touched the staged sector, so its outcome says nothing
+     * about the cache either way — leave loaded_lba exactly as it was. */
+    if (blk->direct_read) {
+        int32_t rsectors = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG1);
+        uint8_t ok = (rtype == blk->wait_resp_type && rstatus == 0 && rsectors > 0) ? 1u : 0u;
+        blk->direct_sectors = ok ? (uint32_t)rsectors : 0u;
+        blk->direct_read = 0u;
+        if (out_ok) {
+            *out_ok = ok;
+        }
+        return owner;
+    }
 
     if (rtype == BLOCK_IPC_ERROR || rstatus != 0 || rtype != blk->wait_resp_type) {
         blk->loaded_lba = FAT_BLOCK_NO_LBA;

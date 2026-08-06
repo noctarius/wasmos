@@ -45,6 +45,19 @@
     }                                                                                              \
     } while (0)
 
+/* Land `count` whole sectors from `lba` directly into the client's transfer
+ * buffer at `dst_offset` (nothing is staged); yield until it completes, resuming
+ * here.  The buffer must already be reborrowed to the block server. */
+#define FAT_CO_READ_DIRECT(c, blk, lba, count, buffer_id, dst_offset)                              \
+    do {                                                                                           \
+        (c)->cont = __LINE__;                                                                      \
+    case __LINE__: {                                                                               \
+        fat_r_t _cr = fat_block_read_direct((blk), (lba), (count), (buffer_id), (dst_offset));     \
+        if (_cr != FAT_R_DONE)                                                                     \
+            return _cr;                                                                            \
+    }                                                                                              \
+    } while (0)
+
 /* Push fat_block_sector(blk) to `lba` (a write); yield until it completes,
  * resuming here.  Fill the sector before invoking this. */
 #define FAT_CO_WRITE(c, blk, lba)                                                                  \

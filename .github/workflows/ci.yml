@@ -61,10 +61,12 @@ jobs:
     env:
       # Force TCG (software emulation). wasmos is only validated under TCG (the
       # dev environment is macOS QEMU); under KVM the bootloader->kernel handoff
-      # fails ("[kernel] invalid boot_info"). TCG is slower, hence the long
-      # timeout below.
+      # fails ("[kernel] invalid boot_info").
       WASMOS_QEMU_ACCEL: "tcg"
-      WASMOS_QEMU_TEST_TIMEOUT: "600"
+      # Boot outcome is bimodal: a healthy boot halts in ~30 s, a wedged one never
+      # recovers. 600 s only made every failure cost ten minutes; 120 s still
+      # leaves ~4x headroom over a good boot.
+      WASMOS_QEMU_TEST_TIMEOUT: "120"
     steps:
       - uses: actions/checkout@v4
 

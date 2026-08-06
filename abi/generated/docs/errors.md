@@ -207,6 +207,22 @@ and **domains** (namespaced operation errors: the negative of `(domain << 16) | 
 | `WASMOS_ERR_IRQ_LINE_FULL` | -0x00100004 | the line already has the maximum number of registered sharers |
 | `WASMOS_ERR_IRQ_NOT_A_SHARER` | -0x00100005 | caller has no registered handler on this line |
 
+### `msi` (domain 17) — message-signalled interrupt failures (kernel vector allocation + pci-bus device programming)
+
+| Code | Value | Description |
+|---|---|---|
+| `WASMOS_ERR_MSI_NOT_AUTHORIZED` | -0x00110001 | caller lacks the irq.route capability |
+| `WASMOS_ERR_MSI_UNSUPPORTED` | -0x00110002 | this build's interrupt controller cannot deliver message-signalled interrupts (no LAPIC) |
+| `WASMOS_ERR_MSI_BAD_ENDPOINT` | -0x00110003 | target endpoint is invalid or not owned by the caller |
+| `WASMOS_ERR_MSI_NO_VECTORS` | -0x00110004 | the MSI vector space is exhausted |
+| `WASMOS_ERR_MSI_BAD_VECTOR` | -0x00110005 | vector is outside the MSI range or not allocated |
+| `WASMOS_ERR_MSI_NOT_OWNER` | -0x00110006 | caller does not own the vector it is trying to release |
+| `WASMOS_ERR_MSI_BAD_DEVICE` | -0x00110007 | bus/device/function does not name a present PCI function |
+| `WASMOS_ERR_MSI_NO_CAPABILITY` | -0x00110008 | device exposes neither an MSI-X (0x11) nor an MSI (0x05) capability |
+| `WASMOS_ERR_MSI_BAD_ENTRY` | -0x00110009 | table entry index is beyond the device's supported vector count |
+| `WASMOS_ERR_MSI_MAP_FAILED` | -0x0011000A | the MSI-X table BAR could not be mapped |
+| `WASMOS_ERR_MSI_NOT_DEVICE_OWNER` | -0x0011000B | another endpoint already programmed interrupts for this device |
+
 ### `font` (domain 12) — font-rasterizer service failures (was FONT_STATUS_*)
 
 | Code | Value | Description |

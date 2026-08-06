@@ -40,6 +40,7 @@ extern "C" {
 #include "klog.h"
 #include "io.h"
 #include "irq.h"
+#include "msi.h"
 #include "serial.h"
 #include "capability.h"
 #include "timer.h"
@@ -2429,6 +2430,40 @@ static uint32_t warp_irq_unroute(uint32_t irq_line, void* ctx_) {
     if (warp_current_context_id(&context_id) != 0 || warp_require_irq_capability(context_id) != 0)
         return (uint32_t)WASMOS_ERR_IRQ_NOT_AUTHORIZED;
     return (uint32_t)irq_unregister(context_id, irq_line);
+}
+
+/* Allocate an MSI vector bound to one of the caller's endpoints. The kernel owns
+ * the vector namespace; the caller passes the returned address/data pair to the
+ * bus driver that programs the device (pci-bus, PCI_IPC_MSI_BIND). */
+static uint32_t warp_msi_alloc(uint32_t endpoint, uint32_t out_off, void* ctx_) {
+    auto* ctx = warp_call_ctx(ctx_);
+    typedef struct {
+        uint32_t address_lo;
+        uint32_t address_hi;
+        uint32_t data;
+        uint32_t vector;
+    } msi_desc_t;
+    uint8_t* raw = warp_mem(ctx, out_off, sizeof(msi_desc_t));
+    if (!raw)
+        return (uint32_t)WASMOS_ERR_MSI_BAD_ENDPOINT;
+    uint32_t context_id = 0;
+    if (warp_current_context_id(&context_id) != 0 || warp_require_irq_capability(context_id) != 0)
+        return (uint32_t)WASMOS_ERR_MSI_NOT_AUTHORIZED;
+    msi_desc_t tmp;
+    int rc = msi_alloc(context_id, endpoint, &tmp.address_lo, &tmp.address_hi, &tmp.data,
+                       &tmp.vector);
+    if (rc != 0)
+        return (uint32_t)rc;
+    __builtin_memcpy(raw, &tmp, sizeof(tmp));
+    return 0;
+}
+
+static uint32_t warp_msi_free(uint32_t vector, void* ctx_) {
+    (void)ctx_;
+    uint32_t context_id = 0;
+    if (warp_current_context_id(&context_id) != 0 || warp_require_irq_capability(context_id) != 0)
+        return (uint32_t)WASMOS_ERR_MSI_NOT_AUTHORIZED;
+    return (uint32_t)msi_free(context_id, vector);
 }
 
 // ---------------------------------------------------------------------------

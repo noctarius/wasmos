@@ -606,5 +606,23 @@ extern int32_t wasmos_xfer_buffer_unmap(int32_t buffer_id) WASMOS_WASM_IMPORT("w
  * into vt-1.  Returns 0 on success, -1 on a bad/foreign buffer id.
  */
 extern int32_t wasmos_klog_register_ring(int32_t id) WASMOS_WASM_IMPORT("wasmos", "klog_register_ring");
+/* Allocate one message-signalled interrupt vector and bind it to `endpoint`,
+ * which must be owned by the caller. Fills the wasmos_msi_desc_t at `out` with
+ * the interrupt-controller address/data pair that makes a device raise that
+ * vector, plus the vector number itself. The caller hands the pair to the bus
+ * driver that owns PCI config space (pci-bus, PCI_IPC_MSI_BIND) — the kernel
+ * owns the vector namespace but never touches the device. Unlike an IRQ line an
+ * MSI vector is edge-triggered and exclusively owned, so its events need no
+ * irq_ack and the vector is never masked. Delivered as IPC_MSI_EVENT_TYPE.
+ * Returns 0, or a negative WASMOS_ERR_MSI_* code. Requires irq.route.
+ */
+extern int32_t wasmos_msi_alloc(int32_t endpoint, wasmos_msi_desc_t* out) WASMOS_WASM_IMPORT("wasmos", "msi_alloc");
+/* Release MSI vector `vector`, which must have been allocated by the caller.
+ * The vector stops being delivered and returns to the free pool. Mask the
+ * device's table entry (PCI_IPC_MSI_UNBIND) before calling this, or the device
+ * can raise a vector that is no longer bound. Returns 0, or a negative
+ * WASMOS_ERR_MSI_* code.
+ */
+extern int32_t wasmos_msi_free(int32_t vector) WASMOS_WASM_IMPORT("wasmos", "msi_free");
 
 #endif /* WASMOS_GENERATED_CLIENT_IMPORTS_H */

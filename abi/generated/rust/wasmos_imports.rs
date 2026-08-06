@@ -499,4 +499,20 @@ unsafe extern "C" {
     /// klog ring, so serial_write publishes klog text into it for the VT to drain
     /// into vt-1.  Returns 0 on success, -1 on a bad/foreign buffer id.
     pub fn klog_register_ring(a0: i32) -> i32;
+    /// Allocate one message-signalled interrupt vector and bind it to `endpoint`,
+    /// which must be owned by the caller. Fills the wasmos_msi_desc_t at `out` with
+    /// the interrupt-controller address/data pair that makes a device raise that
+    /// vector, plus the vector number itself. The caller hands the pair to the bus
+    /// driver that owns PCI config space (pci-bus, PCI_IPC_MSI_BIND) — the kernel
+    /// owns the vector namespace but never touches the device. Unlike an IRQ line an
+    /// MSI vector is edge-triggered and exclusively owned, so its events need no
+    /// irq_ack and the vector is never masked. Delivered as IPC_MSI_EVENT_TYPE.
+    /// Returns 0, or a negative WASMOS_ERR_MSI_* code. Requires irq.route.
+    pub fn msi_alloc(a0: i32, a1: i32) -> i32;
+    /// Release MSI vector `vector`, which must have been allocated by the caller.
+    /// The vector stops being delivered and returns to the free pool. Mask the
+    /// device's table entry (PCI_IPC_MSI_UNBIND) before calling this, or the device
+    /// can raise a vector that is no longer bound. Returns 0, or a negative
+    /// WASMOS_ERR_MSI_* code.
+    pub fn msi_free(a0: i32) -> i32;
 }

@@ -732,3 +732,23 @@ func XferBufferUnmap(a0 int32) int32
 // into vt-1.  Returns 0 on success, -1 on a bad/foreign buffer id.
 //go:wasmimport wasmos klog_register_ring
 func KlogRegisterRing(a0 int32) int32
+
+// Allocate one message-signalled interrupt vector and bind it to `endpoint`,
+// which must be owned by the caller. Fills the wasmos_msi_desc_t at `out` with
+// the interrupt-controller address/data pair that makes a device raise that
+// vector, plus the vector number itself. The caller hands the pair to the bus
+// driver that owns PCI config space (pci-bus, PCI_IPC_MSI_BIND) — the kernel
+// owns the vector namespace but never touches the device. Unlike an IRQ line an
+// MSI vector is edge-triggered and exclusively owned, so its events need no
+// irq_ack and the vector is never masked. Delivered as IPC_MSI_EVENT_TYPE.
+// Returns 0, or a negative WASMOS_ERR_MSI_* code. Requires irq.route.
+//go:wasmimport wasmos msi_alloc
+func MsiAlloc(a0 int32, a1 int32) int32
+
+// Release MSI vector `vector`, which must have been allocated by the caller.
+// The vector stops being delivered and returns to the free pool. Mask the
+// device's table entry (PCI_IPC_MSI_UNBIND) before calling this, or the device
+// can raise a vector that is no longer bound. Returns 0, or a negative
+// WASMOS_ERR_MSI_* code.
+//go:wasmimport wasmos msi_free
+func MsiFree(a0 int32) int32

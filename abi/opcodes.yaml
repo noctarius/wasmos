@@ -573,3 +573,39 @@ subsystems:
       - { symbol: GFX_IPC_RESP, value: 0x280, kind: resp }
       - { symbol: GFX_IPC_ERROR, value: 0x2FF, kind: error }
 
+  - name: pci
+    id: 21
+    range: [0xd00, 0xdff]
+    opcodes:
+      - symbol: PCI_IPC_MSI_QUERY
+        value: 0xd00
+        kind: req
+        doc: |
+          Ask what message-signalled interrupt support a PCI function has.
+          arg0=bdf ((bus<<8)|(device<<3)|function) arg1..arg3=reserved(0).
+          On success: PCI_IPC_RESP, arg0=WASMOS_PCI_MSI_KIND_* (MSIX preferred
+          over MSI when both are present), arg1=number of vectors the device
+          supports. On failure: PCI_IPC_ERROR, arg1=packed msi domain code.
+      - symbol: PCI_IPC_MSI_BIND
+        value: 0xd01
+        kind: req
+        doc: |
+          Program one MSI/MSI-X table entry of a PCI function with an
+          address/data pair the caller obtained from wasmos_msi_alloc, enable the
+          capability, and set INTX_DISABLE so the device stops driving its shared
+          INTx line.
+          arg0=((bdf<<8)|entry) arg1=address_lo arg2=address_hi arg3=data.
+          On success: PCI_IPC_RESP, arg0=entry. On failure: PCI_IPC_ERROR,
+          arg1=packed msi domain code.
+      - symbol: PCI_IPC_MSI_UNBIND
+        value: 0xd02
+        kind: req
+        doc: |
+          Mask one MSI/MSI-X table entry again. Disables the whole capability
+          when the last bound entry of the function is released.
+          arg0=((bdf<<8)|entry) arg1..arg3=reserved(0).
+          On success: PCI_IPC_RESP, arg0=entry. On failure: PCI_IPC_ERROR,
+          arg1=packed msi domain code.
+      - { symbol: PCI_IPC_RESP, value: 0xd80, kind: resp }
+      - { symbol: PCI_IPC_ERROR, value: 0xdff, kind: error }
+

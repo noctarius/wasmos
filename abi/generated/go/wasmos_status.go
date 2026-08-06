@@ -36,6 +36,7 @@ const (
 	WASMOS_ERR_DOMAIN_HRNG uint16 = 14
 	WASMOS_ERR_DOMAIN_DMA uint16 = 15
 	WASMOS_ERR_DOMAIN_IRQ uint16 = 16
+	WASMOS_ERR_DOMAIN_MSI uint16 = 17
 	WASMOS_ERR_DOMAIN_FONT uint16 = 12
 	WASMOS_ERR_DOMAIN_RTC uint16 = 13
 	WASMOS_ERR_DOMAIN_XFER_BUFFER uint16 = 11
@@ -168,6 +169,17 @@ const (
 	WASMOS_ERR_IRQ_BAD_ENDPOINT int32 = -0x00100003 // target endpoint is invalid or not owned by the caller
 	WASMOS_ERR_IRQ_LINE_FULL int32 = -0x00100004 // the line already has the maximum number of registered sharers
 	WASMOS_ERR_IRQ_NOT_A_SHARER int32 = -0x00100005 // caller has no registered handler on this line
+	WASMOS_ERR_MSI_NOT_AUTHORIZED int32 = -0x00110001 // caller lacks the irq.route capability
+	WASMOS_ERR_MSI_UNSUPPORTED int32 = -0x00110002 // this build's interrupt controller cannot deliver message-signalled interrupts (no LAPIC)
+	WASMOS_ERR_MSI_BAD_ENDPOINT int32 = -0x00110003 // target endpoint is invalid or not owned by the caller
+	WASMOS_ERR_MSI_NO_VECTORS int32 = -0x00110004 // the MSI vector space is exhausted
+	WASMOS_ERR_MSI_BAD_VECTOR int32 = -0x00110005 // vector is outside the MSI range or not allocated
+	WASMOS_ERR_MSI_NOT_OWNER int32 = -0x00110006 // caller does not own the vector it is trying to release
+	WASMOS_ERR_MSI_BAD_DEVICE int32 = -0x00110007 // bus/device/function does not name a present PCI function
+	WASMOS_ERR_MSI_NO_CAPABILITY int32 = -0x00110008 // device exposes neither an MSI-X (0x11) nor an MSI (0x05) capability
+	WASMOS_ERR_MSI_BAD_ENTRY int32 = -0x00110009 // table entry index is beyond the device's supported vector count
+	WASMOS_ERR_MSI_MAP_FAILED int32 = -0x0011000A // the MSI-X table BAR could not be mapped
+	WASMOS_ERR_MSI_NOT_DEVICE_OWNER int32 = -0x0011000B // another endpoint already programmed interrupts for this device
 	WASMOS_ERR_FONT_INVALID int32 = -0x000C0001 // invalid request arguments (font id, size, glyph, or buffer)
 	WASMOS_ERR_FONT_PERMISSION int32 = -0x000C0002 // caller is not permitted to use the requested font resource
 	WASMOS_ERR_FONT_UNSUPPORTED int32 = -0x000C0003 // unknown or unsupported request type
@@ -274,6 +286,8 @@ func WasmosErrorDomainName(d uint16) string {
 		return "dma"
 	case WASMOS_ERR_DOMAIN_IRQ:
 		return "irq"
+	case WASMOS_ERR_DOMAIN_MSI:
+		return "msi"
 	case WASMOS_ERR_DOMAIN_FONT:
 		return "font"
 	case WASMOS_ERR_DOMAIN_RTC:
@@ -535,6 +549,28 @@ func WasmosStrerror(c int32) string {
 		return "the line already has the maximum number of registered sharers"
 	case WASMOS_ERR_IRQ_NOT_A_SHARER:
 		return "caller has no registered handler on this line"
+	case WASMOS_ERR_MSI_NOT_AUTHORIZED:
+		return "caller lacks the irq.route capability"
+	case WASMOS_ERR_MSI_UNSUPPORTED:
+		return "this build's interrupt controller cannot deliver message-signalled interrupts (no LAPIC)"
+	case WASMOS_ERR_MSI_BAD_ENDPOINT:
+		return "target endpoint is invalid or not owned by the caller"
+	case WASMOS_ERR_MSI_NO_VECTORS:
+		return "the MSI vector space is exhausted"
+	case WASMOS_ERR_MSI_BAD_VECTOR:
+		return "vector is outside the MSI range or not allocated"
+	case WASMOS_ERR_MSI_NOT_OWNER:
+		return "caller does not own the vector it is trying to release"
+	case WASMOS_ERR_MSI_BAD_DEVICE:
+		return "bus/device/function does not name a present PCI function"
+	case WASMOS_ERR_MSI_NO_CAPABILITY:
+		return "device exposes neither an MSI-X (0x11) nor an MSI (0x05) capability"
+	case WASMOS_ERR_MSI_BAD_ENTRY:
+		return "table entry index is beyond the device's supported vector count"
+	case WASMOS_ERR_MSI_MAP_FAILED:
+		return "the MSI-X table BAR could not be mapped"
+	case WASMOS_ERR_MSI_NOT_DEVICE_OWNER:
+		return "another endpoint already programmed interrupts for this device"
 	case WASMOS_ERR_FONT_INVALID:
 		return "invalid request arguments (font id, size, glyph, or buffer)"
 	case WASMOS_ERR_FONT_PERMISSION:

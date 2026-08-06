@@ -11,6 +11,7 @@
 #include "process.h"
 #include "memory_service.h"
 #include "irq.h"
+#include "msi.h"
 #include "framebuffer.h"
 #include "paging.h"
 #include "stdio.h"
@@ -58,6 +59,7 @@ typedef struct __attribute__((packed)) {
 
 extern void* x86_exception_stub_table[];
 extern void* x86_irq_stub_table[];
+extern void* x86_msi_stub_table[];
 extern void isr_syscall_128(void);
 extern uint8_t __kernel_start;
 extern uint8_t __kernel_end;
@@ -635,6 +637,14 @@ void x86_cpu_init(void) {
         }
     }
 #if WASMOS_IRQ_MODE >= 1
+    /* MSI vectors sit directly above the IRQ lines.  They are only reachable
+     * where a LAPIC exists to receive the device's message write, so mode 0
+     * (pure 8259) installs no gates and msi_alloc refuses. */
+    for (uint32_t i = 0; i < MSI_VECTOR_COUNT; ++i) {
+        idt_set_gate((uint8_t)(MSI_VECTOR_BASE + i),
+                     x86_kernel_handler_addr((uintptr_t)x86_msi_stub_table[i]),
+                     IDT_TYPE_INTERRUPT_GATE);
+    }
     /* Spurious LAPIC interrupts arrive at vector 255.  No EOI is needed; the
      * handler just returns.  Intel SDM Vol 3A §10.9 explicitly states that
      * the processor does not latch the spurious-interrupt vector. */

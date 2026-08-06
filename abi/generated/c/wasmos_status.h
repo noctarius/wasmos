@@ -42,6 +42,7 @@ enum {
     WASMOS_ERR_DOMAIN_HRNG = 14, /* hardware RNG provider failures (was HRNG_STATUS_*) */
     WASMOS_ERR_DOMAIN_DMA = 15, /* DMA map/sync capability and range failures (was WASMOS_DMA_STATUS_*) */
     WASMOS_ERR_DOMAIN_IRQ = 16, /* hardware IRQ routing failures */
+    WASMOS_ERR_DOMAIN_MSI = 17, /* message-signalled interrupt failures (kernel vector allocation + pci-bus device programming) */
     WASMOS_ERR_DOMAIN_FONT = 12, /* font-rasterizer service failures (was FONT_STATUS_*) */
     WASMOS_ERR_DOMAIN_RTC = 13, /* real-time-clock service failures (was RTC_STATUS_*) */
     WASMOS_ERR_DOMAIN_XFER_BUFFER = 11, /* transfer-buffer object registry / borrow / DMA failures (was XFER_BUFFER_ERR_*) */
@@ -180,6 +181,17 @@ enum {
     WASMOS_ERR_IRQ_BAD_ENDPOINT = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_IRQ, 3), /* target endpoint is invalid or not owned by the caller */
     WASMOS_ERR_IRQ_LINE_FULL = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_IRQ, 4), /* the line already has the maximum number of registered sharers */
     WASMOS_ERR_IRQ_NOT_A_SHARER = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_IRQ, 5), /* caller has no registered handler on this line */
+    WASMOS_ERR_MSI_NOT_AUTHORIZED = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_MSI, 1), /* caller lacks the irq.route capability */
+    WASMOS_ERR_MSI_UNSUPPORTED = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_MSI, 2), /* this build's interrupt controller cannot deliver message-signalled interrupts (no LAPIC) */
+    WASMOS_ERR_MSI_BAD_ENDPOINT = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_MSI, 3), /* target endpoint is invalid or not owned by the caller */
+    WASMOS_ERR_MSI_NO_VECTORS = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_MSI, 4), /* the MSI vector space is exhausted */
+    WASMOS_ERR_MSI_BAD_VECTOR = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_MSI, 5), /* vector is outside the MSI range or not allocated */
+    WASMOS_ERR_MSI_NOT_OWNER = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_MSI, 6), /* caller does not own the vector it is trying to release */
+    WASMOS_ERR_MSI_BAD_DEVICE = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_MSI, 7), /* bus/device/function does not name a present PCI function */
+    WASMOS_ERR_MSI_NO_CAPABILITY = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_MSI, 8), /* device exposes neither an MSI-X (0x11) nor an MSI (0x05) capability */
+    WASMOS_ERR_MSI_BAD_ENTRY = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_MSI, 9), /* table entry index is beyond the device's supported vector count */
+    WASMOS_ERR_MSI_MAP_FAILED = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_MSI, 10), /* the MSI-X table BAR could not be mapped */
+    WASMOS_ERR_MSI_NOT_DEVICE_OWNER = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_MSI, 11), /* another endpoint already programmed interrupts for this device */
     WASMOS_ERR_FONT_INVALID = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_FONT, 1), /* invalid request arguments (font id, size, glyph, or buffer) */
     WASMOS_ERR_FONT_PERMISSION = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_FONT, 2), /* caller is not permitted to use the requested font resource */
     WASMOS_ERR_FONT_UNSUPPORTED = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_FONT, 3), /* unknown or unsupported request type */
@@ -269,6 +281,7 @@ static inline const char *wasmos_error_domain_name(wasmos_error_domain_t d) {
     case WASMOS_ERR_DOMAIN_HRNG: return "hrng";
     case WASMOS_ERR_DOMAIN_DMA: return "dma";
     case WASMOS_ERR_DOMAIN_IRQ: return "irq";
+    case WASMOS_ERR_DOMAIN_MSI: return "msi";
     case WASMOS_ERR_DOMAIN_FONT: return "font";
     case WASMOS_ERR_DOMAIN_RTC: return "rtc";
     case WASMOS_ERR_DOMAIN_XFER_BUFFER: return "xfer_buffer";
@@ -403,6 +416,17 @@ static inline const char *wasmos_error_code_name(wasmos_error_code_t c) {
     case WASMOS_ERR_IRQ_BAD_ENDPOINT: return "irq.BAD_ENDPOINT";
     case WASMOS_ERR_IRQ_LINE_FULL: return "irq.LINE_FULL";
     case WASMOS_ERR_IRQ_NOT_A_SHARER: return "irq.NOT_A_SHARER";
+    case WASMOS_ERR_MSI_NOT_AUTHORIZED: return "msi.NOT_AUTHORIZED";
+    case WASMOS_ERR_MSI_UNSUPPORTED: return "msi.UNSUPPORTED";
+    case WASMOS_ERR_MSI_BAD_ENDPOINT: return "msi.BAD_ENDPOINT";
+    case WASMOS_ERR_MSI_NO_VECTORS: return "msi.NO_VECTORS";
+    case WASMOS_ERR_MSI_BAD_VECTOR: return "msi.BAD_VECTOR";
+    case WASMOS_ERR_MSI_NOT_OWNER: return "msi.NOT_OWNER";
+    case WASMOS_ERR_MSI_BAD_DEVICE: return "msi.BAD_DEVICE";
+    case WASMOS_ERR_MSI_NO_CAPABILITY: return "msi.NO_CAPABILITY";
+    case WASMOS_ERR_MSI_BAD_ENTRY: return "msi.BAD_ENTRY";
+    case WASMOS_ERR_MSI_MAP_FAILED: return "msi.MAP_FAILED";
+    case WASMOS_ERR_MSI_NOT_DEVICE_OWNER: return "msi.NOT_DEVICE_OWNER";
     case WASMOS_ERR_FONT_INVALID: return "font.INVALID";
     case WASMOS_ERR_FONT_PERMISSION: return "font.PERMISSION";
     case WASMOS_ERR_FONT_UNSUPPORTED: return "font.UNSUPPORTED";
@@ -569,6 +593,17 @@ static inline const char *wasmos_strerror(wasmos_error_code_t c) {
     case WASMOS_ERR_IRQ_BAD_ENDPOINT: return "target endpoint is invalid or not owned by the caller";
     case WASMOS_ERR_IRQ_LINE_FULL: return "the line already has the maximum number of registered sharers";
     case WASMOS_ERR_IRQ_NOT_A_SHARER: return "caller has no registered handler on this line";
+    case WASMOS_ERR_MSI_NOT_AUTHORIZED: return "caller lacks the irq.route capability";
+    case WASMOS_ERR_MSI_UNSUPPORTED: return "this build's interrupt controller cannot deliver message-signalled interrupts (no LAPIC)";
+    case WASMOS_ERR_MSI_BAD_ENDPOINT: return "target endpoint is invalid or not owned by the caller";
+    case WASMOS_ERR_MSI_NO_VECTORS: return "the MSI vector space is exhausted";
+    case WASMOS_ERR_MSI_BAD_VECTOR: return "vector is outside the MSI range or not allocated";
+    case WASMOS_ERR_MSI_NOT_OWNER: return "caller does not own the vector it is trying to release";
+    case WASMOS_ERR_MSI_BAD_DEVICE: return "bus/device/function does not name a present PCI function";
+    case WASMOS_ERR_MSI_NO_CAPABILITY: return "device exposes neither an MSI-X (0x11) nor an MSI (0x05) capability";
+    case WASMOS_ERR_MSI_BAD_ENTRY: return "table entry index is beyond the device's supported vector count";
+    case WASMOS_ERR_MSI_MAP_FAILED: return "the MSI-X table BAR could not be mapped";
+    case WASMOS_ERR_MSI_NOT_DEVICE_OWNER: return "another endpoint already programmed interrupts for this device";
     case WASMOS_ERR_FONT_INVALID: return "invalid request arguments (font id, size, glyph, or buffer)";
     case WASMOS_ERR_FONT_PERMISSION: return "caller is not permitted to use the requested font resource";
     case WASMOS_ERR_FONT_UNSUPPORTED: return "unknown or unsupported request type";

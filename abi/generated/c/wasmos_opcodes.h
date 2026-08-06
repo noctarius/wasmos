@@ -443,6 +443,35 @@ enum {
     GFX_IPC_ERROR = 0x2FF,
 };
 
+/* pci (0xD00..0xDFF) */
+enum {
+    /* Ask what message-signalled interrupt support a PCI function has.
+     * arg0=bdf ((bus<<8)|(device<<3)|function) arg1..arg3=reserved(0).
+     * On success: PCI_IPC_RESP, arg0=WASMOS_PCI_MSI_KIND_* (MSIX preferred
+     * over MSI when both are present), arg1=number of vectors the device
+     * supports. On failure: PCI_IPC_ERROR, arg1=packed msi domain code.
+     */
+    PCI_IPC_MSI_QUERY = 0xD00,
+    /* Program one MSI/MSI-X table entry of a PCI function with an
+     * address/data pair the caller obtained from wasmos_msi_alloc, enable the
+     * capability, and set INTX_DISABLE so the device stops driving its shared
+     * INTx line.
+     * arg0=((bdf<<8)|entry) arg1=address_lo arg2=address_hi arg3=data.
+     * On success: PCI_IPC_RESP, arg0=entry. On failure: PCI_IPC_ERROR,
+     * arg1=packed msi domain code.
+     */
+    PCI_IPC_MSI_BIND = 0xD01,
+    /* Mask one MSI/MSI-X table entry again. Disables the whole capability
+     * when the last bound entry of the function is released.
+     * arg0=((bdf<<8)|entry) arg1..arg3=reserved(0).
+     * On success: PCI_IPC_RESP, arg0=entry. On failure: PCI_IPC_ERROR,
+     * arg1=packed msi domain code.
+     */
+    PCI_IPC_MSI_UNBIND = 0xD02,
+    PCI_IPC_RESP = 0xD80,
+    PCI_IPC_ERROR = 0xDFF,
+};
+
 /* Subsystem ids for wasmos_opcode_name(). */
 enum {
     WASMOS_OPCODE_SUBSYS_CHARDEV = 0,
@@ -466,6 +495,7 @@ enum {
     WASMOS_OPCODE_SUBSYS_PROC_DMA = 18,
     WASMOS_OPCODE_SUBSYS_FONT = 19,
     WASMOS_OPCODE_SUBSYS_GFX = 20,
+    WASMOS_OPCODE_SUBSYS_PCI = 21,
 };
 
 /* Opcode -> symbol name within a subsystem (diagnostics/logging). Pass the
@@ -748,6 +778,15 @@ static inline const char* wasmos_opcode_name(uint32_t subsystem_id, uint32_t typ
         case 0x20F: return "GFX_IPC_GET_WINDOW_TITLE";
         case 0x280: return "GFX_IPC_RESP";
         case 0x2FF: return "GFX_IPC_ERROR";
+        default: return "UNKNOWN";
+        }
+    case WASMOS_OPCODE_SUBSYS_PCI:
+        switch (type) {
+        case 0xD00: return "PCI_IPC_MSI_QUERY";
+        case 0xD01: return "PCI_IPC_MSI_BIND";
+        case 0xD02: return "PCI_IPC_MSI_UNBIND";
+        case 0xD80: return "PCI_IPC_RESP";
+        case 0xDFF: return "PCI_IPC_ERROR";
         default: return "UNKNOWN";
         }
     default: return "UNKNOWN";

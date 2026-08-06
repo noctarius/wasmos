@@ -366,3 +366,27 @@ export const GFX_IPC_SET_WINDOW_TITLE: i32 = 0x20E;
 export const GFX_IPC_GET_WINDOW_TITLE: i32 = 0x20F;
 export const GFX_IPC_RESP: i32 = 0x280;
 export const GFX_IPC_ERROR: i32 = 0x2FF;
+
+// pci (0xD00..0xDFF)
+// Ask what message-signalled interrupt support a PCI function has.
+// arg0=bdf ((bus<<8)|(device<<3)|function) arg1..arg3=reserved(0).
+// On success: PCI_IPC_RESP, arg0=WASMOS_PCI_MSI_KIND_* (MSIX preferred
+// over MSI when both are present), arg1=number of vectors the device
+// supports. On failure: PCI_IPC_ERROR, arg1=packed msi domain code.
+export const PCI_IPC_MSI_QUERY: i32 = 0xD00;
+// Program one MSI/MSI-X table entry of a PCI function with an
+// address/data pair the caller obtained from wasmos_msi_alloc, enable the
+// capability, and set INTX_DISABLE so the device stops driving its shared
+// INTx line.
+// arg0=((bdf<<8)|entry) arg1=address_lo arg2=address_hi arg3=data.
+// On success: PCI_IPC_RESP, arg0=entry. On failure: PCI_IPC_ERROR,
+// arg1=packed msi domain code.
+export const PCI_IPC_MSI_BIND: i32 = 0xD01;
+// Mask one MSI/MSI-X table entry again. Disables the whole capability
+// when the last bound entry of the function is released.
+// arg0=((bdf<<8)|entry) arg1..arg3=reserved(0).
+// On success: PCI_IPC_RESP, arg0=entry. On failure: PCI_IPC_ERROR,
+// arg1=packed msi domain code.
+export const PCI_IPC_MSI_UNBIND: i32 = 0xD02;
+export const PCI_IPC_RESP: i32 = 0xD80;
+export const PCI_IPC_ERROR: i32 = 0xDFF;

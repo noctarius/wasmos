@@ -2025,6 +2025,15 @@ add_custom_target(run-kernel-unit-tests
           ${KERNEL_DIR}/irq_sharing.c
           -o ${BUILD_DIR}/test_irq_sharing
   COMMAND ${BUILD_DIR}/test_irq_sharing
+  # MSI vector bookkeeping: same reason it runs on the host — pure logic, with
+  # the hardware encoding kept out in arch/x86_64/msi_x86_64.c.
+  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
+          -I${KERNEL_DIR}/include
+          -I${CMAKE_SOURCE_DIR}/abi/generated/c
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_msi_vectors.c
+          ${KERNEL_DIR}/msi_vectors.c
+          -o ${BUILD_DIR}/test_msi_vectors
+  COMMAND ${BUILD_DIR}/test_msi_vectors
   COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
           -I${KERNEL_DIR}/include
           -I${DRIVER_WASM_DIR}/include

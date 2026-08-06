@@ -31,6 +31,17 @@ typedef struct {
     uint64_t free_bytes;
 } wasmos_physmem_stats_t;
 
+/* One allocated message-signalled interrupt vector, filled by wasmos_msi_alloc.
+ * address/data are the opaque interrupt-controller pair a device must write to
+ * raise `vector`; a driver forwards them verbatim to the bus driver that owns
+ * config space (pci-bus) and never interprets them. */
+typedef struct {
+    uint32_t address_lo;
+    uint32_t address_hi;
+    uint32_t data;
+    uint32_t vector;
+} wasmos_msi_desc_t;
+
 /* Per-process statistics returned by wasmos_proc_info_stats.
  * cpu_ticks: scheduler ticks attributed to this process.
  * rss_est_bytes: estimated resident set size (committed heap + kstack). */

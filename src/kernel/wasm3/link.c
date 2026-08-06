@@ -16,6 +16,7 @@
 #include "wasmos_status.h"
 #include "framebuffer.h"
 #include "irq.h"
+#include "msi.h"
 #include "policy.h"
 #include "capability.h"
 #include "system_control.h"
@@ -2702,6 +2703,44 @@ m3ApiRawFunction(wasmos_irq_unroute) {
         m3ApiReturn(WASMOS_ERR_IRQ_NOT_AUTHORIZED);
     }
     m3ApiReturn(irq_unregister(context_id, (uint32_t)irq_line));
+}
+
+/* Allocate an MSI vector bound to one of the caller's endpoints. The kernel owns
+ * the vector namespace; the caller passes the returned address/data pair to the
+ * bus driver that programs the device (pci-bus, PCI_IPC_MSI_BIND). */
+m3ApiRawFunction(wasmos_msi_alloc) {
+    typedef struct {
+        uint32_t address_lo;
+        uint32_t address_hi;
+        uint32_t data;
+        uint32_t vector;
+    } msi_desc_t;
+    m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, endpoint)
+        m3ApiGetArgMem(msi_desc_t*, out) m3ApiCheckMem(out, sizeof(msi_desc_t));
+    uint32_t context_id = 0;
+    if (endpoint < 0) {
+        m3ApiReturn(WASMOS_ERR_MSI_BAD_ENDPOINT);
+    }
+    if (current_process_context(&context_id) != 0 ||
+        require_irq_route_capability(context_id) != 0) {
+        m3ApiReturn(WASMOS_ERR_MSI_NOT_AUTHORIZED);
+    }
+    m3ApiReturn(msi_alloc(context_id, (uint32_t)endpoint, &out->address_lo, &out->address_hi,
+                          &out->data, &out->vector));
+}
+
+m3ApiRawFunction(wasmos_msi_free) {
+    m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, vector)
+
+        uint32_t context_id = 0;
+    if (vector < 0) {
+        m3ApiReturn(WASMOS_ERR_MSI_BAD_VECTOR);
+    }
+    if (current_process_context(&context_id) != 0 ||
+        require_irq_route_capability(context_id) != 0) {
+        m3ApiReturn(WASMOS_ERR_MSI_NOT_AUTHORIZED);
+    }
+    m3ApiReturn(msi_free(context_id, (uint32_t)vector));
 }
 
 m3ApiRawFunction(wasmos_system_halt) {

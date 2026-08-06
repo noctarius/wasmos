@@ -432,9 +432,37 @@ returns; `FS_ERR_*`/`PROC_*` ride IPC opcodes), so the migration depends on them
   `abi/errors.yaml`.
 
 ## Filesystems and Storage
+- [ ] Fix `test_exec_fs_write_smoke`, the last failing test in the QEMU
+  integration suite (run 31081191205, job 92550164406 — everything else in that
+  suite is green, as are all four boot configs and the kernel unit tests). The app
+  never prints `fs-write-smoke: ok`; the session tail shows a kernel fault:
 
-Source: `architecture/18-filesystem-stack.md` and
-`architecture/12-dma-transfers.md`.
+      =000000000000000d          vector 0x0d = #GP
+      [cpu] err=0000000000000000
+      [cpu] rip=ff1a2233ff1a2233
+      [cpu] cs=0000000000000008   kernel CS
+
+  The faulting address identifies the corruption source. `0xff1a2233ff1a2233` is
+  **non-canonical** (bits 63:48 = 0xff1a, neither all-zero nor all-one), which is
+  exactly why the CPU raised #GP with `err=0`: a control transfer to a corrupted
+  64-bit address. The value is the 32-bit pattern `0xFF1A2233` duplicated — and
+  that is the **menu-bar background colour** (`src/libui/include/wasmos/libui.h:1276`
+  `mbroot->bg_color`, also `examples/c/menu_bar/menu_bar.c:359,387`). A 32-bit ARGB
+  fill writing consecutive words produces precisely this doubled pattern.
+
+  So this is not a filesystem bug: a menu-bar background fill is writing over kernel
+  memory that holds a code pointer or return address, and control later transfers to
+  it. `fs_write_smoke` is the victim, not the cause. It is not a stack canary
+  (those are 0xC0DEC0DEF00DFACE / 0xCAFEBABEDEADC0DE / 0xC0FFEE0DD15EA5E).
+
+  Reproduces only in CI. The suite builds `warp_smp_defconfig` under TCG, which is
+  MTTCG (one host thread per vCPU) on the Linux runner, whereas an x86_64 guest on
+  an Apple Silicon host forces `thread=single` and serialises vCPUs — the same
+  asymmetry that hid the wake/block race fixed in c5dcab1eb3. Passes 2/2 locally on
+  the identical config. Prime suspect is therefore a concurrency window in the
+  gfx/window buffer mapping under WARP, which runs guests in ring 0 and so has no
+  hardware backstop against a guest write landing in kernel memory (see
+  `architecture/11` ring-3 work, and the shmem/linmem aliasing bug class).
 
 - [ ] Implement FAT32 cluster read/write in the FAT-table layer: FAT32 is
   detected at mount (`fat_geom.c:92`) but `fat_fatent_read`/`fat_fatent_write`

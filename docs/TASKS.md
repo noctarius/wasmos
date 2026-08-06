@@ -559,6 +559,18 @@ Remaining:
   the `msi` error domain, a resident pci-bus owning the capability walk and
   device programming (`PCI_IPC_MSI_*`), and `mmio_write32` for the MSI-X table
   BAR. virtio-net takes RX/TX/config vectors; virtio-rng takes one.
+- [ ] Fix the unit-test IDE target so the lint gate is green again:
+  `wasmos_ide_unit` fails on `tests/unit/test_device_manager_rules.c`
+  (undeclared `abort`), so it never reaches `tests/unit/test_libui_key_decode.c`,
+  which then has no compile-DB entry and clang-tidy cannot find
+  `wasmos/libui.h`. Adding `src/libui/include` to the target is NOT sufficient on
+  its own — it pulls the project `string.h` into a hosted TU and breaks the
+  target differently. See `skills/wasmos-ide-targets`.
+- [ ] Give `ata` real device DMA. There is no bus-master IDE (BMIDE/PRD)
+  programming today, so every transfer is PIO regardless of the `dma_*`
+  scaffolding. On QEMU's PIIX this means bus-master IDE; an AHCI controller
+  (`ich9-ahci`) would be the better target and would also bring MSI, which
+  legacy IDE cannot offer at all.
 - [ ] Move the resident pci-bus request loop onto the coroutine/event-loop
   runtime. It blocks (never spins), which is sufficient while every request is
   answered from config space, but hot-plug will need it to originate requests

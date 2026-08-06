@@ -180,6 +180,16 @@ linked feature documents for rationale and rollout plans.
   `virtio-rng` uses one. Both set `INTX_DISABLE`, so QEMU's shared IRQ 11 now
   has no user — the sharer/ack/deadline machinery in the kernel remains for ISA
   and any future INTx device, but nothing in the default boot exercises it.
+- `ata` completion is interrupt-driven (IRQ 14 + `nIEN` cleared in Device
+  Control, which nothing had ever written, so device interrupts had been masked
+  at the drive all along). The sector waits no longer spin on the status
+  register. Transfers are still PIO — there is no bus-master IDE programming in
+  the driver — and the disabled `dma_map_borrow` fast path is now reported once
+  at startup instead of as a per-request "dma fallback", which read like an
+  intermittent failure but is a hardwired `TODO(xfer-buffer owner-push)`.
+  Interrupt use is an optimisation, never a dependency: a routed-but-silent line
+  is abandoned after a bounded number of empty sleeps and the driver reverts to
+  polling.
 - Validated on `wasmos_defconfig` (WARP+SMP, 9/11 runs), `wasm3_smp_defconfig`,
   and `wasm3_single_defconfig` (3/3). The two failures were a
   `scheduler: no runnable thread` panic during early kernel self-tests, before

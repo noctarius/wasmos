@@ -40,10 +40,32 @@
 #define ATA_SR_DRQ 0x08
 #define ATA_SR_ERR 0x01
 
+/* Device Control (0x3F6). nIEN set = the drive never asserts INTRQ. Nothing had
+ * ever written this register, so device interrupts were masked at the drive the
+ * whole time and polling was the only thing that could have worked. */
+#define ATA_CTRL_NIEN (1u << 1)
+
+/* Primary channel legacy line. The PIIX IDE function reports no PCI interrupt
+ * pin (config 0x3D = 0, irq_hint 0xFF), so the line is not discoverable from the
+ * device record — it is the fixed ISA assignment for the primary channel, and
+ * the spawn profile grants exactly 14|15 for this driver. */
+#define ATA_IRQ_LINE 14u
+
 #define ATA_SECTOR_SIZE 512u
 #define ATA_MAX_READ_SECTORS 8u
 #define ATA_UNIT_COUNT 2u
 #define ATA_CLIENT_MAP_CAP 8u
+
+/* Wait budgets. The polled bound is the historical spin count; the interrupt
+ * bound is much smaller because each attempt sleeps rather than spinning
+ * (200 x 10 ms = a ~2 s ceiling before a transfer is declared failed). */
+#define ATA_POLL_ATTEMPTS 100000u
+#define ATA_IRQ_ATTEMPTS 200u
+#define ATA_IRQ_WAIT_MS 10
+/* Consecutive sleeps that produce no interrupt before the driver stops trusting
+ * one. Without this, a line that is routed but silently undelivered would cost
+ * the full timeout on every sector for the rest of the boot. */
+#define ATA_IRQ_PROBE_LIMIT 8u
 
 static int32_t g_block_endpoint = -1;
 static int32_t g_devmgr_endpoint = -1;
@@ -54,29 +76,99 @@ static uint8_t g_unit_present[ATA_UNIT_COUNT];
 static uint8_t g_sector_buf[ATA_SECTOR_SIZE];
 static uint8_t g_dma_read_ok_logged = 0;
 static uint8_t g_dma_write_ok_logged = 0;
-static uint8_t g_dma_read_fallback_logged = 0;
-static uint8_t g_dma_write_fallback_logged = 0;
 static int32_t g_client_owner[ATA_CLIENT_MAP_CAP];
 static uint8_t g_client_unit[ATA_CLIENT_MAP_CAP];
+
+/* Interrupt state. Events land on their own endpoint so draining them cannot
+ * discard a queued block request (the failure mode that cost virtio-rng a
+ * debugging session). g_irq_active means both halves are live: the line is
+ * routed AND nIEN is clear at the drive. */
+static int32_t g_irq_endpoint = -1;
+static int32_t g_irq_select = -1;
+static uint8_t g_irq_active;
+static uint8_t g_irq_seen;       /* at least one interrupt has actually arrived */
+static uint32_t g_irq_dry_waits; /* consecutive sleeps that produced nothing */
 
 static uint8_t ata_read_status(void) {
     return (uint8_t)wasmos_io_in8(ATA_PRIMARY_BASE + ATA_REG_STATUS);
 }
 
+/* Consume any pending interrupt events. Two things are owed and both matter:
+ * reading the status register is what de-asserts the drive's INTRQ, and irq_ack
+ * is what reopens the line the kernel masked on dispatch. An event that arrives
+ * and is never acked leaves the line masked permanently — i.e. the disk dead.
+ * Returns non-zero if an event was consumed. */
+static int ata_service_irq(void) {
+    int drained = 0;
+    if (g_irq_endpoint < 0) {
+        return 0;
+    }
+    while (wasmos_ipc_drain(g_irq_endpoint) > 0) {
+        drained = 1;
+    }
+    if (drained) {
+        (void)ata_read_status();
+        (void)wasmos_irq_ack((int32_t)ATA_IRQ_LINE);
+        if (!g_irq_seen) {
+            g_irq_seen = 1;
+            (void)printf("[ata] interrupt-driven transfers active\n");
+        }
+        g_irq_dry_waits = 0;
+    }
+    return drained;
+}
+
+/* Stop using the interrupt and go back to polling, leaving a clean state: quiet
+ * the drive first, settle anything owed, then drop the route so the line is
+ * masked rather than left asserted with nobody listening. */
+static void ata_disable_interrupts(const char* why) {
+    if (!g_irq_active) {
+        return;
+    }
+    g_irq_active = 0;
+    wasmos_io_out8(ATA_PRIMARY_CTRL, ATA_CTRL_NIEN);
+    (void)ata_service_irq();
+    (void)wasmos_irq_unroute((int32_t)ATA_IRQ_LINE);
+    (void)printf("[ata] %s; falling back to polled transfers\n", why);
+}
+
+/* One wait step between status reads. With the interrupt live this blocks, so
+ * waiting for a sector costs no CPU; otherwise it is the historical short I/O
+ * delay. A routed-but-undelivered interrupt is detected here and abandoned once,
+ * rather than being paid for on every sector. */
+static void ata_wait_step(void) {
+    if (!g_irq_active) {
+        wasmos_io_wait();
+        return;
+    }
+    (void)wasmos_ipc_select_wait_timeout(g_irq_select, ATA_IRQ_WAIT_MS);
+    if (ata_service_irq() || g_irq_seen) {
+        return;
+    }
+    if (++g_irq_dry_waits >= ATA_IRQ_PROBE_LIMIT) {
+        ata_disable_interrupts("no interrupt from the drive");
+    }
+}
+
+static uint32_t ata_wait_attempts(void) {
+    return g_irq_active ? ATA_IRQ_ATTEMPTS : ATA_POLL_ATTEMPTS;
+}
+
+/* Status is read BEFORE waiting in both loops below: the condition is often
+ * already true (a pre-command idle check never has an interrupt coming), and
+ * sleeping first would trade a spin for a guaranteed timeout. */
 static int ata_wait_not_busy(void) {
-    for (uint32_t i = 0; i < 100000; ++i) {
+    for (uint32_t i = 0; i < ata_wait_attempts(); ++i) {
         if ((ata_read_status() & ATA_SR_BSY) == 0) {
             return 0;
         }
-        wasmos_io_wait();
+        ata_wait_step();
     }
     return -1;
 }
 
 static int ata_wait_drq(void) {
-    /* Polling is acceptable here because the driver is intentionally tiny and
-     * only used in the single-disk bootstrap path. */
-    for (uint32_t i = 0; i < 100000; ++i) {
+    for (uint32_t i = 0; i < ata_wait_attempts(); ++i) {
         uint8_t status = ata_read_status();
         if (status & ATA_SR_ERR) {
             return -1;
@@ -84,7 +176,7 @@ static int ata_wait_drq(void) {
         if ((status & ATA_SR_BSY) == 0 && (status & ATA_SR_DRQ)) {
             return 0;
         }
-        wasmos_io_wait();
+        ata_wait_step();
     }
     return -1;
 }
@@ -231,28 +323,27 @@ static void ata_log_dma_active(uint8_t is_write) {
     }
 }
 
-static void ata_log_dma_fallback(uint8_t is_write, int32_t rc) {
-    if (is_write) {
-        if (!g_dma_write_fallback_logged) {
-            g_dma_write_fallback_logged = 1;
-            (void)printf("[ata] dma write fallback rc=%d\n", (int)rc);
-        }
-    } else {
-        if (!g_dma_read_fallback_logged) {
-            g_dma_read_fallback_logged = 1;
-            (void)printf("[ata] dma read fallback rc=%d\n", (int)rc);
-        }
-    }
+/* Reported once at startup rather than per request. It used to be logged as a
+ * per-direction "dma fallback rc=-N", which reads like an intermittent runtime
+ * failure; it is neither intermittent nor a failure — see ata_dma_prepare. */
+static void ata_log_transfer_mode(void) {
+    (void)printf("[ata] transfers are PIO; zero-copy borrow mapping disabled "
+                 "(block protocol carries no grant)\n");
 }
 
-/* TODO(xfer-buffer owner-push): the xfer-buffer DMA fast-path is temporarily
- * disabled during the migration to the owner-push capability ABI. The old path
- * used borrower-pull borrow + the pre-migration dma_map_borrow(kind, endpoint,
- * ...) signature. Under the new model the block client must own the buffer and
- * grant ata a borrow (borrow_id), which the block IPC protocol must carry; then
- * ata would dma_map_borrow(borrow_id, ...)/dma_sync_borrow/dma_unmap_borrow.
- * Until the block protocol carries the grant, force the PIO fallback (which uses
- * the dedicated block_buffer and is unaffected by this migration). */
+/* TODO(xfer-buffer owner-push): the zero-copy borrow fast-path is disabled since
+ * the migration to the owner-push capability ABI. The old path used
+ * borrower-pull borrow + the pre-migration dma_map_borrow(kind, endpoint, ...)
+ * signature. Under the new model the block client must own the buffer and grant
+ * ata a borrow (borrow_id), which the block IPC protocol must carry; then ata
+ * would dma_map_borrow(borrow_id, ...)/dma_sync_borrow/dma_unmap_borrow. Until
+ * then this denies unconditionally and the transfer goes through the dedicated
+ * block_buffer, which is unaffected by the migration.
+ *
+ * Note this was never IDE bus-master DMA either way: there is no BMIDE/PRD
+ * programming in this driver, and the sector loop is PIO in both branches. Real
+ * device DMA is a separate piece of work (and on QEMU's PIIX means bus-master
+ * IDE; an AHCI controller would be the better target). */
 static int ata_dma_prepare(int32_t source_endpoint, uint32_t offset, uint32_t length,
                            uint32_t direction_flags, int32_t* out_device_addr) {
     (void)source_endpoint;
@@ -366,9 +457,7 @@ static int ata_handle_ipc(int32_t type, int32_t source, int32_t req_id, int32_t 
         }
         byte_count = (uint32_t)arg2 * ATA_SECTOR_SIZE;
         dma_rc = ata_dma_prepare(source, 0u, byte_count, WASMOS_DMA_DIR_FROM_DEVICE, &dma_addr);
-        if (dma_rc != WASMOS_ERR_NONE) {
-            ata_log_dma_fallback(0, dma_rc);
-        } else {
+        if (dma_rc == WASMOS_ERR_NONE) {
             (void)dma_addr;
             ata_log_dma_active(0);
         }
@@ -398,9 +487,7 @@ static int ata_handle_ipc(int32_t type, int32_t source, int32_t req_id, int32_t 
         }
         byte_count = (uint32_t)arg2 * ATA_SECTOR_SIZE;
         dma_rc = ata_dma_prepare(source, 0u, byte_count, WASMOS_DMA_DIR_TO_DEVICE, &dma_addr);
-        if (dma_rc != WASMOS_ERR_NONE) {
-            ata_log_dma_fallback(1, dma_rc);
-        } else {
+        if (dma_rc == WASMOS_ERR_NONE) {
             (void)dma_addr;
             ata_log_dma_active(1);
         }
@@ -480,6 +567,28 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t ignored_arg
         ata_publish_block_device(unit, unit_sectors, unit_present);
     }
 
+    ata_log_transfer_mode();
+
+    /* Identify ran polled above; from here transfers can be interrupt-driven.
+     * Both halves are needed and in this order: route the line first so an
+     * assertion has somewhere to go, then clear nIEN to let the drive assert at
+     * all. If either fails the driver keeps working exactly as before — polled —
+     * so this is an optimisation, never a dependency of the boot path. */
+    if (g_present) {
+        g_irq_endpoint = wasmos_ipc_create_endpoint();
+        g_irq_select = (g_irq_endpoint >= 0) ? wasmos_ipc_select_create() : -1;
+        if (g_irq_endpoint >= 0 && g_irq_select >= 0 &&
+            wasmos_ipc_select_add(g_irq_select, g_irq_endpoint) == 0 &&
+            wasmos_irq_route_ipc((int32_t)ATA_IRQ_LINE, g_irq_endpoint) == 0) {
+            wasmos_io_out8(ATA_PRIMARY_CTRL, 0); /* clear nIEN */
+            g_irq_active = 1;
+            (void)printf("[ata] irq routed line=%u\n", (unsigned)ATA_IRQ_LINE);
+        } else {
+            (void)printf("[ata] irq route failed line=%u; using polled transfers\n",
+                         (unsigned)ATA_IRQ_LINE);
+        }
+    }
+
     /* Drivers are long-running processes: initialize once, then block in the
      * IPC loop forever. */
     wasmos_sys_notify_ready(proc_endpoint, g_block_endpoint);
@@ -488,13 +597,21 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t ignored_arg
         if (recv_rc < 0) {
             continue;
         }
-
+        /* Capture the request BEFORE touching the interrupt endpoint: draining a
+         * message overwrites the shared last-message fields, so servicing the
+         * IRQ first would hand ata_handle_ipc the IRQ event's type and source
+         * instead of the block request's. */
         int32_t req_type = wasmos_ipc_last_field(WASMOS_IPC_FIELD_TYPE);
         int32_t req_id = wasmos_ipc_last_field(WASMOS_IPC_FIELD_REQUEST_ID);
         int32_t arg0 = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG0);
         int32_t arg1 = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG1);
         int32_t arg2 = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG2);
         int32_t source = wasmos_ipc_last_field(WASMOS_IPC_FIELD_SOURCE);
+
+        /* Settle anything the previous command left behind. A completion that
+         * lands just after a transfer returned would otherwise sit unacked, and
+         * the line stays masked until someone acks it. */
+        (void)ata_service_irq();
 
         ata_handle_ipc(req_type, source, req_id, arg0, arg1, arg2);
     }

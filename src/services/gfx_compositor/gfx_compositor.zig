@@ -1638,6 +1638,7 @@ fn buffer_alloc(owner_endpoint: u32, width: u32, height: u32) ?usize {
         api().ipc_endpoint_owner.?(owner_endpoint, &owner_context_id) != 0)
     {
         logMsg("[gfx] alloc endpoint_owner failed\n");
+        _ = api().shmem_unmap.?(shmem_id);
         return null;
     }
     if (owner_context_id != 0) {
@@ -1645,6 +1646,7 @@ fn buffer_alloc(owner_endpoint: u32, width: u32, height: u32) ?usize {
             api().shmem_grant.?(shmem_id, owner_context_id) != 0)
         {
             logMsg("[gfx] alloc shmem_grant failed\n");
+            _ = api().shmem_unmap.?(shmem_id);
             return null;
         }
     }

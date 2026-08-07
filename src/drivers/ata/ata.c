@@ -112,6 +112,7 @@ static uint8_t g_sector_buf[ATA_SECTOR_SIZE];
 static uint8_t g_dma_read_ok_logged = 0;
 static uint8_t g_dma_write_ok_logged = 0;
 static uint8_t g_zc_logged = 0;
+static uint8_t g_zc_dma_logged = 0;
 static int32_t g_client_owner[ATA_CLIENT_MAP_CAP];
 static uint8_t g_client_unit[ATA_CLIENT_MAP_CAP];
 
@@ -422,6 +423,46 @@ static int ata_read_lba28_dma(uint8_t unit, uint32_t lba, uint8_t count, uint64_
     return 0;
 }
 
+/* The whole point of the zero-copy path: map the client's own pages for the
+ * controller and let it write them directly, so the sectors are never touched by
+ * the CPU at all. Without this the "zero-copy" read still costs two copies (port
+ * reads into a staging sector, then a copy into the transfer buffer) and only
+ * saves the hop through the block buffer.
+ *
+ * The borrow is what makes this admissible: it is the client's grant, so mapping
+ * it cannot reach memory the client did not offer, and the kernel bounds the
+ * range. Returns 0, or -1 to fall back to the copying path -- an old client that
+ * sends no borrow, a controller without bus-master, and a mapping refusal all
+ * land here, which is why the copy path has to stay. */
+static int ata_read_zc_dma(uint8_t unit, uint32_t lba, uint8_t count, int32_t borrow_id,
+                           uint32_t dst_offset) {
+    uint32_t bytes = (uint32_t)count * ATA_SECTOR_SIZE;
+    int32_t dest_phys = 0;
+    int rc = 0;
+
+    if (!g_dma_ready || borrow_id <= 0 || count == 0) {
+        return -1;
+    }
+    dest_phys = wasmos_dma_map_borrow(borrow_id, (int32_t)dst_offset, (int32_t)bytes,
+                                      WASMOS_DMA_DIR_FROM_DEVICE);
+    if (dest_phys <= 0) {
+        return -1; /* negative is a WASMOS_DMA_STATUS_* code; either way, copy instead */
+    }
+
+    rc = ata_read_lba28_dma(unit, lba, count, (uint64_t)(uint32_t)dest_phys);
+    /* Sync before unmap and on the failure path too: the controller may have
+     * written part of the range before erroring out. The offset is relative to
+     * the MAPPING, not to the buffer -- the mapping already starts at
+     * dst_offset, so passing it again would run off the end. */
+    (void)wasmos_dma_sync_borrow(borrow_id, 0, (int32_t)bytes, WASMOS_DMA_SYNC_FROM_DEVICE);
+    (void)wasmos_dma_unmap_borrow(borrow_id);
+    if (rc == 0 && !g_zc_dma_logged) {
+        g_zc_dma_logged = 1;
+        (void)printf("[ata] zero-copy reads: direct DMA into client buffer\n");
+    }
+    return rc;
+}
+
 static int ata_read_lba28(uint8_t unit, uint32_t lba, uint8_t count, const ata_sink_t* sink) {
     if (count == 0 || count > ATA_MAX_READ_SECTORS || !sink || sink->id <= 0) {
         return -1;
@@ -551,25 +592,18 @@ static void ata_dma_setup(void) {
  * failure; it is neither intermittent nor a failure — see ata_dma_prepare. */
 static void ata_log_transfer_mode(void) {
     (void)printf("[ata] transfers: %s\n",
-                 g_dma_ready ? "bus-master DMA where the destination is physical, else PIO"
+                 g_dma_ready ? "bus-master DMA into physical or borrowed destinations, else PIO"
                              : "PIO only");
 }
 
-/* TODO(xfer-buffer owner-push): the zero-copy borrow fast-path is disabled since
- * the migration to the owner-push capability ABI. The old path used
- * borrower-pull borrow + the pre-migration dma_map_borrow(kind, endpoint, ...)
- * signature. Under the new model the block client must own the buffer and grant
- * ata a borrow (borrow_id), which the block IPC protocol must carry; then ata
- * would dma_map_borrow(borrow_id, ...)/dma_sync_borrow/dma_unmap_borrow. Until
- * then this denies unconditionally and the transfer goes through the dedicated
- * block_buffer, which is unaffected by the migration. Note BLOCK_IPC_READ_ZC_REQ
- * now carries a reborrowed client buffer for whole-sector reads, so the read
- * path no longer needs this; what is left is the write direction.
- *
- * Note this was never IDE bus-master DMA either way: there is no BMIDE/PRD
- * programming in this driver, and the sector loop is PIO in both branches. Real
- * device DMA is a separate piece of work (and on QEMU's PIIX means bus-master
- * IDE; an AHCI controller would be the better target). */
+/* TODO(zero-copy writes): the read direction now maps the client's borrow and
+ * lets the controller write those pages directly (ata_read_zc_dma); the write
+ * direction still has no equivalent, because there is no zero-copy write opcode
+ * for a client to hand its borrow down with. BLOCK_IPC_WRITE_REQ names the
+ * driver's own block buffer, so these hooks have nothing to map and deny
+ * unconditionally, which sends the transfer through that buffer. Giving writes
+ * the same treatment means a WRITE_ZC opcode carrying (buffer_id, borrow_id)
+ * and a WASMOS_DMA_DIR_TO_DEVICE mapping. */
 static int ata_dma_prepare(int32_t source_endpoint, uint32_t offset, uint32_t length,
                            uint32_t direction_flags, int32_t* out_device_addr) {
     (void)source_endpoint;
@@ -712,24 +746,32 @@ static int ata_handle_ipc(int32_t type, int32_t source, int32_t req_id, int32_t 
     }
 
     /* Zero-copy read: land whole sectors straight in the client's transfer
-     * buffer. The requester reborrowed it to us, so the kernel admits the write
-     * on that grant; we never learn whose buffer it is or map it ourselves.
-     * arg0 = buffer_id, arg1 = lba, arg2 = sector count, arg3 = dst byte offset. */
+     * buffer. The requester reborrowed it to us, so the kernel admits both ways
+     * we can reach it -- the object write and the borrow mapping -- and we never
+     * learn whose buffer it is. arg0 = buffer_id, arg1 = lba,
+     * arg2 = (borrow_id << 12) | sector count, arg3 = dst byte offset. */
     if (type == BLOCK_IPC_READ_ZC_REQ) {
-        if (arg2 <= 0 || arg2 > (int32_t)ATA_MAX_READ_SECTORS || arg0 <= 0 || arg3 < 0) {
+        int32_t count = arg2 & (int32_t)WASMOS_BLOCK_ZC_COUNT_MASK;
+        int32_t borrow = (int32_t)((uint32_t)arg2 >> WASMOS_BLOCK_ZC_BORROW_SHIFT);
+        if (count <= 0 || count > (int32_t)ATA_MAX_READ_SECTORS || arg0 <= 0 || arg3 < 0) {
             ata_send_resp(source, req_id, BLOCK_IPC_ERROR, 2, 0);
             return 0;
         }
-        ata_sink_t sink = {1u, arg0, (uint32_t)arg3};
-        if (!g_zc_logged) {
-            g_zc_logged = 1;
-            (void)printf("[ata] zero-copy reads active\n");
+        if (ata_read_zc_dma(unit, (uint32_t)arg1, (uint8_t)count, borrow, (uint32_t)arg3) != 0) {
+            /* Reached the client's buffer, but by copying into it. Worth saying
+             * which of the two it is: both are "zero-copy" as far as the block
+             * buffer is concerned, yet only the DMA one is actually copy-free. */
+            ata_sink_t sink = {1u, arg0, (uint32_t)arg3};
+            if (!g_zc_logged) {
+                g_zc_logged = 1;
+                (void)printf("[ata] zero-copy reads: staged copy into client buffer\n");
+            }
+            if (ata_read_lba28(unit, (uint32_t)arg1, (uint8_t)count, &sink) != 0) {
+                ata_send_resp(source, req_id, BLOCK_IPC_ERROR, 3, 0);
+                return 0;
+            }
         }
-        if (ata_read_lba28(unit, (uint32_t)arg1, (uint8_t)arg2, &sink) != 0) {
-            ata_send_resp(source, req_id, BLOCK_IPC_ERROR, 3, 0);
-            return 0;
-        }
-        wasmos_ipc_send(source, g_block_endpoint, BLOCK_IPC_READ_RESP, req_id, 0, arg2, 0, 0);
+        wasmos_ipc_send(source, g_block_endpoint, BLOCK_IPC_READ_RESP, req_id, 0, count, 0, 0);
         return 0;
     }
 

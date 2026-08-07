@@ -70,9 +70,11 @@ fat_r_t fat_block_write(fat_block_t* blk, uint32_t lba);
 /* Submit a zero-copy read of `count` whole sectors from `lba` straight into the
  * client's transfer buffer at `dst_offset`. Nothing is staged here, so the
  * sector cache is untouched and stays valid. The caller must already have
- * reborrowed the buffer to the block server. FAT_R_WAIT or FAT_R_ERR. */
+ * reborrowed the buffer to the block server, and passes that `borrow_id` so a
+ * bus-master server can map the destination instead of copying into it.
+ * FAT_R_WAIT or FAT_R_ERR. */
 fat_r_t fat_block_read_direct(fat_block_t* blk, uint32_t lba, uint32_t count, int32_t buffer_id,
-                              uint32_t dst_offset);
+                              int32_t borrow_id, uint32_t dst_offset);
 
 /* Sectors the server actually transferred for the direct read that just
  * completed. It may be fewer than asked for, so the caller advances by this

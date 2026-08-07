@@ -89,7 +89,7 @@ int32_t fat_block_server_endpoint(const fat_block_t* blk) {
 }
 
 fat_r_t fat_block_read_direct(fat_block_t* blk, uint32_t lba, uint32_t count, int32_t buffer_id,
-                              uint32_t dst_offset) {
+                              int32_t borrow_id, uint32_t dst_offset) {
     /* The coroutine macros re-invoke this on resume (the case label sits before
      * the call), so completion must be reported on the second entry — the same
      * yield-once contract fat_block_write uses. fat_need_sector gets away
@@ -98,7 +98,8 @@ fat_r_t fat_block_read_direct(fat_block_t* blk, uint32_t lba, uint32_t count, in
         blk->direct_pending = 0;
         return FAT_R_DONE;
     }
-    if (blk->block_endpoint < 0 || blk->reply_endpoint < 0 || buffer_id < 0 || count == 0) {
+    if (blk->block_endpoint < 0 || blk->reply_endpoint < 0 || buffer_id < 0 || count == 0 ||
+        count > WASMOS_BLOCK_ZC_COUNT_MASK) {
         return FAT_R_ERR;
     }
     blk->cur_req_id = blk->next_req_id++;
@@ -112,8 +113,12 @@ fat_r_t fat_block_read_direct(fat_block_t* blk, uint32_t lba, uint32_t count, in
     blk->copy_into_sector = 0u;
     blk->direct_read = 1u;
 
+    /* The borrow rides above the count so the server can map the destination for
+     * device DMA; a server that only copies just masks it off. */
     if (wasmos_ipc_send(blk->block_endpoint, blk->reply_endpoint, BLOCK_IPC_READ_ZC_REQ,
-                        blk->cur_req_id, buffer_id, (int32_t)lba, (int32_t)count,
+                        blk->cur_req_id, buffer_id, (int32_t)lba,
+                        (int32_t)((uint32_t)borrow_id << WASMOS_BLOCK_ZC_BORROW_SHIFT) |
+                            (int32_t)count,
                         (int32_t)dst_offset) != 0) {
         blk->cur_req_id = 0;
         blk->direct_read = 0u;

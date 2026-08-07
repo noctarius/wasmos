@@ -540,7 +540,7 @@ fat_r_t fat_op_read(fat_op_ctx_t* op, fat_block_t* blk, const fat_mount_t* mnt,
                 op->io_run_sectors = 1u;
             }
             FAT_CO_READ_DIRECT(op, blk, file->file_lba + file->current_sector, op->io_run_sectors,
-                               op->arg2, op->done);
+                               op->arg2, op->zc_borrow, op->done);
             /* The server may have transferred fewer than asked; advance by what
              * it reported and let the loop issue the remainder. */
             op->io_run_sectors = fat_block_direct_sectors(blk);

@@ -455,6 +455,15 @@ typedef struct __attribute__((packed)) {
  * server with a smaller limit stays correct without the client knowing. */
 #define WASMOS_BLOCK_ZC_MAX_SECTORS 8u
 
+/* BLOCK_IPC_READ_ZC_REQ.arg2 packs the borrow handle above the sector count, the
+ * same (handle << 12 | small scalar) shape the spawn and mount paths already use.
+ * A fifth field is needed because the server must be able to address the buffer
+ * two ways -- by OBJECT to copy into it, by BORROW to map it for device DMA --
+ * and dst_offset is the one field that can legitimately grow, so it keeps a slot
+ * of its own rather than sharing one. The count needs 4 bits; 12 leaves room. */
+#define WASMOS_BLOCK_ZC_BORROW_SHIFT 12u
+#define WASMOS_BLOCK_ZC_COUNT_MASK 0xFFFu
+
 /* Message-signalled interrupt style a PCI function supports, reported by
  * PCI_IPC_MSI_QUERY. MSI-X wins when a device offers both: it addresses each
  * vector independently, where plain MSI needs one naturally-aligned block of

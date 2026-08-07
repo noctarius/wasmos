@@ -117,6 +117,20 @@ extern uint8_t __kernel_end;
 static uint8_t g_sched_trampoline_stacks[WASMOS_MAX_CPUS][SCHED_TRAMPOLINE_STACK_BYTES]
     __attribute__((aligned(16)));
 
+/* Owned by no subsystem, so a stale slot read as a code pointer is traceable. */
+#define STACK_POISON_VALUE 0xDEAD57ACDEAD57ACULL
+
+static void process_stack_poison(uintptr_t stack_base, uintptr_t stack_top) {
+    if (!stack_base || stack_top <= stack_base) {
+        return;
+    }
+    uint64_t* p = ptr_cast(uint64_t, stack_base);
+    uint64_t* end = ptr_cast(uint64_t, stack_top);
+    while (p < end) {
+        *p++ = STACK_POISON_VALUE;
+    }
+}
+
 static int process_alloc_stack(process_t* slot, uint32_t stack_pages) {
     if (!slot || stack_pages == 0) {
         return -1;
@@ -164,6 +178,8 @@ static int process_alloc_stack(process_t* slot, uint32_t stack_pages) {
     slot->stack_pages = stack_pages;
     slot->stack_top = (uintptr_t)guard_high_virt;
     slot->stack_alloc_base_phys = (uintptr_t)base;
+
+    process_stack_poison(slot->stack_base, slot->stack_top);
 
     if (slot->stack_base && slot->stack_top > slot->stack_base + sizeof(uint64_t)) {
         /* Canaries catch in-range stack corruption that does not reach the guard
@@ -215,6 +231,8 @@ static int process_alloc_thread_stack(thread_t* thread, uint32_t stack_pages) {
     thread->kstack_top = (uintptr_t)guard_high_virt;
     thread->kstack_alloc_base_phys = (uintptr_t)base;
     thread->kstack_pages = stack_pages;
+
+    process_stack_poison(thread->kstack_base, thread->kstack_top);
     return 0;
 }
 

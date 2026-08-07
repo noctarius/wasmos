@@ -1809,15 +1809,41 @@ static int process_schedule_once_impl(void) {
     ksync_spinlock_lock(&cs->lock);
     thread_t* thread = cpu_sched_pick_next(cs);
     ksync_spinlock_unlock(&cs->lock);
-    if (thread == cs->idle) {
+    /* No idle thread at all is the one genuinely impossible state, and the only
+     * one worth panicking over. Everything below can legitimately lose its
+     * thread to a concurrent reap and must stay recoverable. */
+    if (!thread) {
+        return SCHED_R_PICK;
+    }
+    uint8_t picked_idle = (thread == cs->idle) ? 1u : 0u;
+    if (picked_idle) {
         thread_t* stolen = cpu_sched_try_steal(cpu_local()->cpu_id);
         if (stolen) {
-            thread = stolen;
+            /* Do not give up a dispatchable idle for a thread that may already
+             * be gone. cpu_sched_steal_pick pulls the thread off the remote
+             * queue and drops that queue's lock before we get here, while
+             * thread_reap_owner walks the global thread table by owner_pid --
+             * so a reap running on any CPU can reset a thread that a stealer is
+             * already holding. Validating before the swap keeps the idle we
+             * already have; swapping first turns that race into "not even idle
+             * was dispatchable", which is a claim about a different bug. */
+            process_t* sproc = process_owner_for_thread(stolen);
+            if (sproc && sproc->entry) {
+                thread = stolen;
+                picked_idle = 0u;
+            } else {
+                /* Reaped mid-steal. It is already off every queue and its slot
+                 * is being torn down, so it is dropped rather than re-queued --
+                 * the same disposition cpu_sched_pick_next gives stale nodes. */
+                return SCHED_R_STALE;
+            }
         }
     }
-    process_t* proc = thread ? process_owner_for_thread(thread) : 0;
-    if (!thread || !proc || !proc->entry) {
-        return SCHED_R_PICK;
+    process_t* proc = process_owner_for_thread(thread);
+    if (!proc || !proc->entry) {
+        /* Idle losing its owner really is the panic case; any other thread
+         * losing one is the reap race above, seen a few instructions later. */
+        return picked_idle ? SCHED_R_PICK : SCHED_R_STALE;
     }
     /* Thread state alone determines runnability.
      * Note: the idle thread (RUNNING on another CPU) no longer reaches here —

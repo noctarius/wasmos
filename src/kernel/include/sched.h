@@ -8,12 +8,13 @@
 enum {
     SCHED_OK = 0,         /* dispatched; thread YIELDED (still ready)        */
     SCHED_R_MAXCOUNT = 1, /* PROCESS_MAX_COUNT == 0 (never in practice)      */
-    SCHED_R_PICK = 2,     /* pick returned null / no proc / no entry         */
+    SCHED_R_PICK = 2,     /* not even idle was dispatchable (a real bug)     */
     SCHED_R_NOTREADY = 3, /* picked thread not in READY state                */
     SCHED_R_CTX = 4,      /* run context missing                            */
     SCHED_R_ROOT = 5,     /* target root page table missing                 */
     SCHED_R_ZOMBIE = 6,   /* owning process is zombie/exiting                */
     SCHED_R_RANDONE = 7,  /* dispatched; thread BLOCKED/EXITED (normal loop) */
+    SCHED_R_STALE = 8,    /* non-idle thread reaped mid-flight (normal race)  */
 };
 
 #include <stdint.h>

@@ -47,6 +47,7 @@
 #define PCI_REG_BAR0 0x10u
 
 #define PCI_CMD_IO_SPACE (1u << 0)
+#define PCI_CMD_MEM_SPACE (1u << 1)
 #define PCI_CMD_BUS_MASTER (1u << 2)
 #define PCI_CMD_INTX_DISABLE (1u << 10)
 #define PCI_STATUS_CAP_LIST (1u << 4) /* status is the high half of reg 0x04 */
@@ -396,29 +397,31 @@ static int32_t msi_unbind(uint16_t bdf, uint32_t entry, int32_t requester) {
  * slot for its high half, so the caller is told to skip it -- six registers is
  * not always six regions.
  *
- * I/O BAR sizes are probed; memory BAR sizes are not, and the difference is not
- * arbitrary. Sizing means writing all-ones and reading back the mask, which
- * requires the function to stop decoding that address space first -- and decode
- * is enabled per space: command bit 0 covers I/O, bit 1 covers memory. Clearing
- * bit 0 for the width of an I/O probe cannot disturb a memory window.
+ * Sizing means writing all-ones and reading back the mask, which requires the
+ * function to stop decoding that space first. Decode is enabled per space --
+ * command bit 0 covers I/O, bit 1 covers memory -- so each probe quiesces only
+ * the space it is measuring and cannot disturb the other.
  *
- * Memory is another matter. The kernel takes the UEFI GOP framebuffer long
- * before this scan runs, and that framebuffer IS a memory BAR of the VGA
- * function -- the boot log shows [framebuffer] init 0x80000000 and bar0 m32
- * 80000000 on 00:02.0, the same address. Clearing memory decode to size it would
- * stop the console mid-probe. So memory sizes stay 0 (unknown) until sizing can
- * skip whatever backs the active framebuffer. */
+ * The one window that must not be quiesced is whatever backs the live console.
+ * The kernel takes the UEFI GOP framebuffer long before this scan runs, and that
+ * framebuffer IS a memory BAR of the VGA function (the boot log shows
+ * [framebuffer] init 0x80000000 and bar0 m32 80000000 on 00:02.0 -- one address,
+ * two views). Turning its decode off would not make the display flicker, since
+ * scanout reads the device's memory internally rather than through the address
+ * decoder; it would silently DROP any CPU write landing in the probe window,
+ * leaving stale pixels until something redrew. Cheap to avoid, so avoid it. */
 /* Size an I/O BAR: quiesce I/O decode, write all-ones, read back the mask, then
  * restore both the BAR and the command register. The mask's lowest set bit is
  * the region length. Memory decode is left alone throughout (see pci_decode_bar).
  * Returns 0 when the device does not implement the BAR. */
-static uint64_t pci_probe_io_bar_size(uint16_t bdf, uint8_t reg, uint32_t original) {
+static uint64_t pci_probe_bar_size(uint16_t bdf, uint8_t reg, uint32_t original,
+                                   uint32_t decode_bit, uint32_t addr_mask) {
     uint32_t cmd = cfg_read(bdf, PCI_REG_COMMAND) & 0xFFFFu;
     uint32_t mask = 0;
 
-    cfg_write(bdf, PCI_REG_COMMAND, cmd & ~(uint32_t)PCI_CMD_IO_SPACE);
+    cfg_write(bdf, PCI_REG_COMMAND, cmd & ~decode_bit);
     cfg_write(bdf, reg, 0xFFFFFFFFu);
-    mask = cfg_read(bdf, reg) & 0xFFFFFFFCu;
+    mask = cfg_read(bdf, reg) & addr_mask;
     cfg_write(bdf, reg, original);
     cfg_write(bdf, PCI_REG_COMMAND, cmd);
 
@@ -428,6 +431,33 @@ static uint64_t pci_probe_io_bar_size(uint16_t bdf, uint8_t reg, uint32_t origin
     /* Length is the value of the lowest set bit: the mask's clear low bits are
      * the offset bits the device decodes. */
     return (uint64_t)(((~mask) + 1u) & 0xFFFFFFFFu);
+}
+
+/* Physical base/size of the framebuffer the kernel is scanning out of, or 0.
+ * Queried once; a service cannot see boot_info directly. */
+static uint64_t g_console_fb_base;
+static uint64_t g_console_fb_size;
+
+static void pci_load_console_framebuffer(void) {
+    wasmos_framebuffer_info_t info;
+    if (wasmos_framebuffer_info(&info, (int32_t)sizeof(info)) != 0) {
+        return;
+    }
+    g_console_fb_base = info.framebuffer_base;
+    g_console_fb_size = info.framebuffer_size;
+}
+
+/* True when this memory BAR plausibly backs the live console, whose decode must
+ * stay on. The test has to be a heuristic because the BAR's length is exactly
+ * what the probe would tell us -- so it asks whether the framebuffer starts at or
+ * after this base, within a window larger than any framebuffer BAR. It errs
+ * toward skipping: a false positive costs one unknown size (what we had before),
+ * a false negative would drop console writes. */
+static int pci_bar_is_console(uint64_t base) {
+    if (g_console_fb_base == 0u || base == 0u) {
+        return 0;
+    }
+    return (g_console_fb_base >= base && g_console_fb_base < base + 0x10000000ull) ? 1 : 0;
 }
 
 static uint32_t pci_decode_bar(uint16_t bdf, uint32_t index, wasmos_pci_bar_t* out) {
@@ -447,7 +477,7 @@ static uint32_t pci_decode_bar(uint16_t bdf, uint32_t index, wasmos_pci_bar_t* o
     if ((value & 1u) != 0u) {
         out->kind = WASMOS_PCI_BAR_IO;
         out->base = (uint64_t)(value & 0xFFFFFFFCu);
-        out->size = pci_probe_io_bar_size(bdf, reg, value);
+        out->size = pci_probe_bar_size(bdf, reg, value, PCI_CMD_IO_SPACE, 0xFFFFFFFCu);
         return consumed;
     }
     out->prefetchable = ((value & 0x8u) != 0u) ? 1u : 0u;
@@ -460,6 +490,9 @@ static uint32_t pci_decode_bar(uint16_t bdf, uint32_t index, wasmos_pci_bar_t* o
         }
     } else {
         out->kind = WASMOS_PCI_BAR_MEM32;
+    }
+    if (!pci_bar_is_console(out->base)) {
+        out->size = pci_probe_bar_size(bdf, reg, value, PCI_CMD_MEM_SPACE, 0xFFFFFFF0u);
     }
     return consumed;
 }
@@ -658,6 +691,7 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t ignored_arg
         return -1;
     }
 
+    pci_load_console_framebuffer();
     int32_t request_id = pci_scan_and_publish(devmgr_endpoint, source_endpoint, desc_bid, 1);
     (void)wasmos_ipc_send(devmgr_endpoint, source_endpoint, DEVMGR_PCI_SCAN_DONE, request_id, 0, 0,
                           0, 0);

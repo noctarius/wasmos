@@ -432,6 +432,17 @@ subsystems:
         doc: |
           ISA/ACPI devices: bus=0xFF in PUBLISH_DEVICE marks a non-PCI device;
           device_id field carries the I/O base address for serial (class 0x07).
+      - symbol: DEVMGR_PUBLISH_DEVICE_DESC
+        value: 0x906
+        kind: req
+        doc: |
+          Publish one enumerated PCI function as a wasmos_pci_device_desc_t held
+          in a transfer buffer the publisher has borrowed to this endpoint.
+          arg0=buffer_id arg1=byte_offset arg2=descriptor_size arg3=reserved(0).
+          Each device occupies its own offset, so the publisher never overwrites
+          a descriptor the receiver has not read yet and no acknowledgement is
+          needed. Supersedes DEVMGR_PUBLISH_DEVICE, whose four argument words
+          cannot describe six BARs and the capability offsets.
       - { symbol: DEVMGR_MOUNT_INFO, value: 0x980, kind: resp }
       - { symbol: DEVMGR_BLOCK_MOUNT_INFO, value: 0x982, kind: resp }
       - { symbol: DEVMGR_QUERY_DONE, value: 0x981, kind: resp }

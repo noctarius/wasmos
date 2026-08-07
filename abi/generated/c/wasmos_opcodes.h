@@ -332,6 +332,15 @@ enum {
      * device_id field carries the I/O base address for serial (class 0x07).
      */
     DEVMGR_ACPI_SCAN_DONE = 0x905,
+    /* Publish one enumerated PCI function as a wasmos_pci_device_desc_t held
+     * in a transfer buffer the publisher has borrowed to this endpoint.
+     * arg0=buffer_id arg1=byte_offset arg2=descriptor_size arg3=reserved(0).
+     * Each device occupies its own offset, so the publisher never overwrites
+     * a descriptor the receiver has not read yet and no acknowledgement is
+     * needed. Supersedes DEVMGR_PUBLISH_DEVICE, whose four argument words
+     * cannot describe six BARs and the capability offsets.
+     */
+    DEVMGR_PUBLISH_DEVICE_DESC = 0x906,
     DEVMGR_MOUNT_INFO = 0x980,
     DEVMGR_BLOCK_MOUNT_INFO = 0x982,
     DEVMGR_QUERY_DONE = 0x981,
@@ -702,6 +711,7 @@ static inline const char* wasmos_opcode_name(uint32_t subsystem_id, uint32_t typ
         case 0x903: return "DEVMGR_PUBLISH_BLOCK_DEVICE";
         case 0x904: return "DEVMGR_QUERY_BLOCK_MOUNT_REQ";
         case 0x905: return "DEVMGR_ACPI_SCAN_DONE";
+        case 0x906: return "DEVMGR_PUBLISH_DEVICE_DESC";
         case 0x980: return "DEVMGR_MOUNT_INFO";
         case 0x982: return "DEVMGR_BLOCK_MOUNT_INFO";
         case 0x981: return "DEVMGR_QUERY_DONE";

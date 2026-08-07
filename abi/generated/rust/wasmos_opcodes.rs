@@ -275,6 +275,14 @@ pub const DEVMGR_QUERY_BLOCK_MOUNT_REQ: i32 = 0x904;
 /// ISA/ACPI devices: bus=0xFF in PUBLISH_DEVICE marks a non-PCI device;
 /// device_id field carries the I/O base address for serial (class 0x07).
 pub const DEVMGR_ACPI_SCAN_DONE: i32 = 0x905;
+/// Publish one enumerated PCI function as a wasmos_pci_device_desc_t held
+/// in a transfer buffer the publisher has borrowed to this endpoint.
+/// arg0=buffer_id arg1=byte_offset arg2=descriptor_size arg3=reserved(0).
+/// Each device occupies its own offset, so the publisher never overwrites
+/// a descriptor the receiver has not read yet and no acknowledgement is
+/// needed. Supersedes DEVMGR_PUBLISH_DEVICE, whose four argument words
+/// cannot describe six BARs and the capability offsets.
+pub const DEVMGR_PUBLISH_DEVICE_DESC: i32 = 0x906;
 pub const DEVMGR_MOUNT_INFO: i32 = 0x980;
 pub const DEVMGR_BLOCK_MOUNT_INFO: i32 = 0x982;
 pub const DEVMGR_QUERY_DONE: i32 = 0x981;

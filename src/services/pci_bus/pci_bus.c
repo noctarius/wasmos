@@ -1,7 +1,7 @@
 /* pci_bus.c - WASM service: owns PCI configuration space.
  *
  * Two jobs. It enumerates config space and publishes every function to
- * device-manager (DEVMGR_PUBLISH_DEVICE), and it then STAYS RESIDENT serving
+ * device-manager (DEVMGR_PUBLISH_DEVICE_DESC), and it then STAYS RESIDENT serving
  * PCI_IPC_MSI_* requests, because programming a device's MSI/MSI-X capability is
  * a config-space write and no driver can make one: device-manager grants a
  * driver an I/O-port window covering its own BAR only, which excludes the
@@ -35,6 +35,11 @@
 /* Capability IDs in the PCI capability list (PCI 3.0 §6.7). */
 #define PCI_CAP_ID_MSI 0x05u
 #define PCI_CAP_ID_MSIX 0x11u
+
+/* Descriptor slots in the publish buffer. Matches device-manager's registry cap;
+ * a slot per device is what lets publishes be fire-and-forget without the
+ * publisher overwriting a descriptor the receiver has not read yet. */
+#define PCI_MAX_PUBLISHED_DEVICES 64u
 
 /* Config-space registers we touch beyond enumeration. */
 #define PCI_REG_COMMAND 0x04u
@@ -76,17 +81,30 @@ typedef struct {
 
 static msi_binding_t g_msi_bindings[MSI_BINDING_MAX];
 
-/* Log one record to serial for debug visibility. */
-static void log_record(const pci_device_record_t* rec) {
-    if (!rec) {
+/* Log one function, including where its registers live and which interrupt
+ * capabilities it has -- the facts a driver author needs and could previously
+ * only get by reading config space, which no driver is allowed to do. */
+static void log_desc(const wasmos_pci_device_desc_t* d) {
+    if (!d) {
         return;
     }
-    (void)printf(
-        "[pci-bus] dev %02X:%02X.%02X class %02X:%02X:%02X vid:did %04X:%04X mmio %02X irq %02X\n",
-        (unsigned)rec->bus, (unsigned)rec->device, (unsigned)rec->function,
-        (unsigned)rec->class_code, (unsigned)rec->subclass, (unsigned)rec->prog_if,
-        (unsigned)rec->vendor_id, (unsigned)rec->device_id, (unsigned)rec->mmio_hint,
-        (unsigned)rec->irq_hint);
+    (void)printf("[pci-bus] %02X:%02X.%X class %02X:%02X:%02X %04X:%04X irq %02X pin %u%s%s\n",
+                 (unsigned)d->bus, (unsigned)d->device, (unsigned)d->function,
+                 (unsigned)d->class_code, (unsigned)d->subclass, (unsigned)d->prog_if,
+                 (unsigned)d->vendor_id, (unsigned)d->device_id, (unsigned)d->irq_line,
+                 (unsigned)d->irq_pin, d->msix_cap_offset ? " msix" : "",
+                 (!d->msix_cap_offset && d->msi_cap_offset) ? " msi" : "");
+    for (uint32_t i = 0; i < WASMOS_PCI_BAR_COUNT; ++i) {
+        if (d->bars[i].kind == WASMOS_PCI_BAR_NONE) {
+            continue;
+        }
+        (void)printf("[pci-bus]   bar%u %s %08X%s\n", (unsigned)i,
+                     (d->bars[i].kind == WASMOS_PCI_BAR_IO)
+                         ? "io "
+                         : ((d->bars[i].kind == WASMOS_PCI_BAR_MEM64) ? "m64" : "m32"),
+                     (unsigned)(d->bars[i].base & 0xFFFFFFFFu),
+                     d->bars[i].prefetchable ? " pf" : "");
+    }
 }
 
 /* Read a 32-bit register from PCI config space using mechanism 1.
@@ -372,73 +390,130 @@ static int32_t msi_unbind(uint16_t bdf, uint32_t entry, int32_t requester) {
 
 /* ------------------------------------------------------------------- scanning */
 
-/* Encode one PCI record into DEVMGR_PUBLISH_DEVICE IPC arguments and send.
- * Encoding:
- *   arg0 = (bus<<24) | (device<<16) | (function<<8) | class_code
- *   arg1 = (subclass<<24) | (prog_if<<16) | vendor_id
- *   arg2 = (io_port_base<<16) | device_id
- *   arg3 = (io_port_base<<16) | (irq_hint<<8) | mmio_hint */
-static void publish_record(int32_t devmgr_endpoint, int32_t source_endpoint,
-                           const pci_device_record_t* rec, int32_t request_id) {
-    if (!rec) {
+/* Decode one BAR into the descriptor. A 64-bit memory BAR consumes the NEXT
+ * slot for its high half, so the caller is told to skip it -- six registers is
+ * not always six regions.
+ *
+ * `size` is deliberately left 0. Discovering it means writing all-ones and
+ * reading back the mask, which requires disabling the function's address decode
+ * first; doing that to the VGA device would blank a framebuffer the kernel is
+ * already scanning out of. Consumers that need a length use the architectural
+ * one for the register block (bus-master IDE is 16 bytes) until size probing
+ * gets a safe home. */
+static uint32_t pci_decode_bar(uint16_t bdf, uint32_t index, wasmos_pci_bar_t* out) {
+    uint8_t reg = (uint8_t)(PCI_REG_BAR0 + 4u * index);
+    uint32_t value = cfg_read(bdf, reg);
+    uint32_t consumed = 1u;
+
+    out->kind = WASMOS_PCI_BAR_NONE;
+    out->prefetchable = 0;
+    out->reserved0 = 0;
+    out->reserved1 = 0;
+    out->base = 0;
+    out->size = 0;
+    if (value == 0u) {
+        return consumed;
+    }
+    if ((value & 1u) != 0u) {
+        out->kind = WASMOS_PCI_BAR_IO;
+        out->base = (uint64_t)(value & 0xFFFFFFFCu);
+        return consumed;
+    }
+    out->prefetchable = ((value & 0x8u) != 0u) ? 1u : 0u;
+    out->base = (uint64_t)(value & 0xFFFFFFF0u);
+    if (((value >> 1) & 0x3u) == 0x2u) {
+        out->kind = WASMOS_PCI_BAR_MEM64;
+        if (index + 1u < WASMOS_PCI_BAR_COUNT) {
+            out->base |= (uint64_t)cfg_read(bdf, (uint8_t)(reg + 4u)) << 32;
+            consumed = 2u;
+        }
+    } else {
+        out->kind = WASMOS_PCI_BAR_MEM32;
+    }
+    return consumed;
+}
+
+/* Fill the descriptor for one function: identity, class triplet, interrupt
+ * routing, every BAR, and where the interrupt capabilities live. Only pci-bus
+ * can walk the capability list, so it reports the offsets rather than making
+ * each consumer ask for them. */
+static void pci_fill_desc(uint16_t bdf, wasmos_pci_device_desc_t* desc) {
+    uint32_t id_reg = cfg_read(bdf, 0x00u);
+    uint32_t class_reg = cfg_read(bdf, 0x08u);
+    uint32_t irq_reg = cfg_read(bdf, 0x3Cu);
+
+    __builtin_memset(desc, 0, sizeof(*desc));
+    desc->version = WASMOS_PCI_DEVICE_DESC_VERSION;
+    desc->bus = bdf_bus(bdf);
+    desc->device = bdf_device(bdf);
+    desc->function = bdf_function(bdf);
+    desc->vendor_id = (uint16_t)(id_reg & 0xFFFFu);
+    desc->device_id = (uint16_t)((id_reg >> 16) & 0xFFFFu);
+    desc->class_code = (uint8_t)((class_reg >> 24) & 0xFFu);
+    desc->subclass = (uint8_t)((class_reg >> 16) & 0xFFu);
+    desc->prog_if = (uint8_t)((class_reg >> 8) & 0xFFu);
+    desc->irq_line = (uint8_t)(irq_reg & 0xFFu);
+    desc->irq_pin = (uint8_t)((irq_reg >> 8) & 0xFFu);
+    desc->msi_cap_offset = pci_cap_find(bdf, PCI_CAP_ID_MSI);
+    desc->msix_cap_offset = pci_cap_find(bdf, PCI_CAP_ID_MSIX);
+
+    for (uint32_t i = 0; i < WASMOS_PCI_BAR_COUNT;) {
+        i += pci_decode_bar(bdf, i, &desc->bars[i]);
+    }
+}
+
+/* Publish one function. Each device gets its own slot in the shared buffer, so
+ * the publisher never overwrites a descriptor the receiver has not read yet and
+ * no per-device acknowledgement is needed. */
+static void publish_desc(int32_t devmgr_endpoint, int32_t source_endpoint, int32_t buffer_id,
+                         uint32_t slot, const wasmos_pci_device_desc_t* desc, int32_t request_id) {
+    uint32_t offset = slot * (uint32_t)sizeof(*desc);
+    if (wasmos_xfer_buffer_write(buffer_id, addr_cast(int32_t, desc), (int32_t)sizeof(*desc),
+                                 (int32_t)offset) != 0) {
+        (void)printf("[pci-bus] descriptor write failed slot=%u\n", (unsigned)slot);
         return;
     }
-    uint32_t arg0 = ((uint32_t)rec->bus << 24) | ((uint32_t)rec->device << 16) |
-                    ((uint32_t)rec->function << 8) | (uint32_t)rec->class_code;
-    uint32_t arg1 =
-        ((uint32_t)rec->subclass << 24) | ((uint32_t)rec->prog_if << 16) | (uint32_t)rec->vendor_id;
-    uint32_t arg2 = ((uint32_t)rec->io_port_base << 16) | (uint32_t)rec->device_id;
-    uint32_t arg3 = ((uint32_t)rec->io_port_base << 16) | ((uint32_t)rec->irq_hint << 8) |
-                    (uint32_t)rec->mmio_hint;
-    (void)wasmos_ipc_send(devmgr_endpoint, source_endpoint, DEVMGR_PUBLISH_DEVICE, request_id,
-                          (int32_t)arg0, (int32_t)arg1, (int32_t)arg2, (int32_t)arg3);
+    (void)wasmos_ipc_send(devmgr_endpoint, source_endpoint, DEVMGR_PUBLISH_DEVICE_DESC, request_id,
+                          buffer_id, (int32_t)offset, (int32_t)sizeof(*desc), 0);
 }
 
 /* Brute-force scan (buses 0-255, devices 0-31, functions 0-7), publishing each
  * present function. Stops scanning functions for single-function devices
  * (header type bit 7 = 0). Returns the next free request id. */
 static int32_t pci_scan_and_publish(int32_t devmgr_endpoint, int32_t source_endpoint,
-                                    int32_t request_id) {
+                                    int32_t buffer_id, int32_t request_id) {
+    uint32_t slot = 0;
     for (uint16_t bus = 0; bus < 256; ++bus) {
         for (uint8_t device = 0; device < 32; ++device) {
             for (uint8_t function = 0; function < 8; ++function) {
-                uint32_t id_reg = pci_config_read32((uint8_t)bus, device, function, 0x00);
-                uint16_t vendor_id = (uint16_t)(id_reg & 0xFFFFu);
-                if (vendor_id == 0xFFFFu) {
+                uint16_t bdf =
+                    (uint16_t)(((uint32_t)bus << 8) | ((uint32_t)device << 3) | (uint32_t)function);
+                wasmos_pci_device_desc_t desc;
+                if (!bdf_present(bdf)) {
                     if (function == 0) {
                         break;
                     }
                     continue;
                 }
-                pci_device_record_t rec;
-                rec.bus = (uint8_t)bus;
-                rec.device = device;
-                rec.function = function;
-                rec.vendor_id = vendor_id;
-                rec.device_id = (uint16_t)((id_reg >> 16) & 0xFFFFu);
-                uint32_t class_reg = pci_config_read32((uint8_t)bus, device, function, 0x08);
-                rec.class_code = (uint8_t)((class_reg >> 24) & 0xFFu);
-                rec.subclass = (uint8_t)((class_reg >> 16) & 0xFFu);
-                rec.prog_if = (uint8_t)((class_reg >> 8) & 0xFFu);
-                uint32_t bar0 = pci_config_read32((uint8_t)bus, device, function, 0x10);
-                rec.mmio_hint = ((bar0 & 0x1u) == 0u && (bar0 & 0xFFFFFFF0u) != 0u) ? 1u : 0u;
-                rec.io_port_base = ((bar0 & 0x1u) != 0u) ? (uint16_t)(bar0 & 0xFFFCu) : 0u;
-                uint32_t irq_reg = pci_config_read32((uint8_t)bus, device, function, 0x3C);
-                rec.irq_hint = (uint8_t)(irq_reg & 0xFFu);
+                if (slot >= PCI_MAX_PUBLISHED_DEVICES) {
+                    (void)printf("[pci-bus] device table full; %u published\n", (unsigned)slot);
+                    return request_id;
+                }
+                pci_fill_desc(bdf, &desc);
                 /* PCI INTx is level-triggered, active-low (PCI spec). If this
                  * device drives an interrupt pin (0x3D != 0), mark its line in
                  * the IOAPIC accordingly — the boot default is active-high,
                  * which makes PCI INTx re-deliver only once. A device whose
                  * driver later moves to MSI stops using the line entirely. */
-                uint8_t irq_pin = (uint8_t)((irq_reg >> 8) & 0xFFu);
-                if (irq_pin != 0u && rec.irq_hint != 0u && rec.irq_hint < 16u) {
-                    (void)wasmos_irq_configure((int32_t)rec.irq_hint,
+                if (desc.irq_pin != 0u && desc.irq_line != 0u && desc.irq_line < 16u) {
+                    (void)wasmos_irq_configure((int32_t)desc.irq_line,
                                                WASMOS_IRQ_TRIGGER_LEVEL | WASMOS_IRQ_POLARITY_LOW);
                 }
-                log_record(&rec);
-                publish_record(devmgr_endpoint, source_endpoint, &rec, request_id++);
-                uint32_t header_reg = pci_config_read32((uint8_t)bus, device, 0, 0x0C);
-                if (function == 0 && (((header_reg >> 16) & 0x80u) == 0)) {
+                log_desc(&desc);
+                publish_desc(devmgr_endpoint, source_endpoint, buffer_id, slot, &desc,
+                             request_id++);
+                slot++;
+                if (function == 0 && ((cfg_read(bdf, 0x0Cu) >> 16) & 0x80u) == 0u) {
                     break;
                 }
             }
@@ -541,7 +616,18 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t ignored_arg
         (void)printf("[pci-bus] service registration failed\n");
     }
 
-    int32_t request_id = pci_scan_and_publish(devmgr_endpoint, source_endpoint, 1);
+    /* One buffer, one slot per device, borrowed to device-manager for the life
+     * of the scan. Read-only: device-manager consumes descriptors, it never
+     * writes them back. */
+    int32_t desc_bid = wasmos_xfer_buffer_acquire(
+        (int32_t)(PCI_MAX_PUBLISHED_DEVICES * sizeof(wasmos_pci_device_desc_t)));
+    if (desc_bid < 0 ||
+        wasmos_xfer_buffer_borrow(devmgr_endpoint, desc_bid, WASMOS_BUFFER_GRANT_READ) < 0) {
+        (void)printf("[pci-bus] descriptor buffer unavailable\n");
+        return -1;
+    }
+
+    int32_t request_id = pci_scan_and_publish(devmgr_endpoint, source_endpoint, desc_bid, 1);
     (void)wasmos_ipc_send(devmgr_endpoint, source_endpoint, DEVMGR_PCI_SCAN_DONE, request_id, 0, 0,
                           0, 0);
     wasmos_sys_notify_ready(proc_endpoint, source_endpoint);

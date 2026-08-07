@@ -352,6 +352,58 @@ enum {
  * edge-triggered active-high (ISA). PCI INTx lines are level + active-low. */
 enum { WASMOS_IRQ_TRIGGER_LEVEL = 1 << 0, WASMOS_IRQ_POLARITY_LOW = 1 << 1 };
 
+/* --- PCI device descriptor -------------------------------------------------
+ *
+ * What pci-bus publishes about one enumerated function. A descriptor in a
+ * transfer buffer rather than packed IPC arguments, because the interesting
+ * facts about a PCI function do not fit in four words and keep growing: six
+ * BARs, capability offsets, class triplet, interrupt routing. The packed form
+ * had already been reduced to smuggling a second I/O base through the unused
+ * half of an argument.
+ *
+ * Extensible the same way svc_register_desc_t is: bump the version, append
+ * fields, and let the reader check the byte length it was given. */
+#define WASMOS_PCI_DEVICE_DESC_VERSION 1u
+#define WASMOS_PCI_BAR_COUNT 6u
+
+enum {
+    WASMOS_PCI_BAR_NONE = 0,  /* unimplemented: reads as zero */
+    WASMOS_PCI_BAR_IO = 1,    /* I/O port window */
+    WASMOS_PCI_BAR_MEM32 = 2, /* 32-bit memory window */
+    WASMOS_PCI_BAR_MEM64 = 3  /* 64-bit memory window; consumes the next slot too */
+};
+
+/* One decoded BAR. `size` is 0 when unknown -- see the note in pci_bus.c on why
+ * the size probe is not run during enumeration. */
+typedef struct __attribute__((packed)) {
+    uint8_t kind; /* WASMOS_PCI_BAR_* */
+    uint8_t prefetchable;
+    uint16_t reserved0;
+    uint32_t reserved1;
+    uint64_t base;
+    uint64_t size;
+} wasmos_pci_bar_t;
+
+typedef struct __attribute__((packed)) {
+    uint32_t version; /* = WASMOS_PCI_DEVICE_DESC_VERSION */
+    uint8_t bus;
+    uint8_t device;
+    uint8_t function;
+    uint8_t class_code;
+    uint8_t subclass;
+    uint8_t prog_if;
+    uint8_t irq_line; /* config 0x3C; 0xFF = not routed */
+    uint8_t irq_pin;  /* config 0x3D; 0 = does not assert INTx */
+    uint16_t vendor_id;
+    uint16_t device_id;
+    /* Config-space offsets of the interrupt capabilities, 0 when absent. Only
+     * pci-bus can walk the capability list, so it reports what it found rather
+     * than making every consumer ask. */
+    uint16_t msi_cap_offset;
+    uint16_t msix_cap_offset;
+    wasmos_pci_bar_t bars[WASMOS_PCI_BAR_COUNT];
+} wasmos_pci_device_desc_t;
+
 /* Whole sectors one BLOCK_IPC_READ_ZC_REQ may carry. A bound is needed because
  * the request names a single contiguous run; the server is free to transfer
  * fewer and reports the count it managed in BLOCK_IPC_READ_RESP.arg1, so a

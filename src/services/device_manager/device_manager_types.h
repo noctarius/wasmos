@@ -4,6 +4,7 @@
 #define WASMOS_DEVICE_MANAGER_TYPES_H
 
 #include <stdint.h>
+#include "wasmos_driver_abi.h" /* wasmos_pci_bar_t, WASMOS_PCI_BAR_COUNT */
 
 #define DEVICE_REGISTRY_CAP 64
 #define BLOCK_REGISTRY_CAP 16
@@ -79,6 +80,14 @@ typedef struct {
     uint16_t io_port_base;
     uint8_t mmio_hint;
     uint8_t irq_hint;
+    uint8_t irq_pin;
+    /* Every region the function decodes, as pci-bus resolved them. Kept whole
+     * rather than flattened to a single "io_port_base", because which BAR holds
+     * what is device-specific: legacy IDE leaves BAR0 empty and puts its
+     * bus-master registers in BAR4. */
+    wasmos_pci_bar_t bars[WASMOS_PCI_BAR_COUNT];
+    uint16_t msi_cap_offset;
+    uint16_t msix_cap_offset;
 } pci_device_record_t;
 
 /* One entry in the block-device registry; present after FAT driver reports. */

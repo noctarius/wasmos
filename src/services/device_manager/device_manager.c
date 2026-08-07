@@ -909,6 +909,51 @@ static int query_module_meta_by_path(const char* path, uint32_t source, int32_t*
  *   arg2 [31:16]=io_port_base  [15:0]=device_id
  *   arg3 [15:8]=irq_hint  [7:0]=mmio_hint
  */
+/* Consume a wasmos_pci_device_desc_t published into a borrowed buffer. The
+ * legacy io_port_base/mmio_hint fields are derived from BAR0 so the existing
+ * match and spawn paths keep working unchanged while callers migrate to the
+ * full BAR table. */
+static void registry_add_from_desc(int32_t buffer_id, int32_t offset, int32_t size) {
+    wasmos_pci_device_desc_t desc;
+    pci_device_record_t* rec;
+    if (g_dm.registry_count >= DEVICE_REGISTRY_CAP) {
+        return;
+    }
+    if (size < (int32_t)sizeof(desc) ||
+        wasmos_xfer_buffer_read(buffer_id, addr_cast(int32_t, &desc), (int32_t)sizeof(desc),
+                                offset) != 0) {
+        console_write("[device-manager] device descriptor read failed\n");
+        return;
+    }
+    if (desc.version != WASMOS_PCI_DEVICE_DESC_VERSION) {
+        console_write("[device-manager] device descriptor version mismatch\n");
+        return;
+    }
+    rec = &g_dm.registry[g_dm.registry_count++];
+    memset(rec, 0, sizeof(*rec));
+    rec->bus = desc.bus;
+    rec->device = desc.device;
+    rec->function = desc.function;
+    rec->class_code = desc.class_code;
+    rec->subclass = desc.subclass;
+    rec->prog_if = desc.prog_if;
+    rec->vendor_id = desc.vendor_id;
+    rec->device_id = desc.device_id;
+    rec->irq_hint = desc.irq_line;
+    rec->irq_pin = desc.irq_pin;
+    rec->msi_cap_offset = desc.msi_cap_offset;
+    rec->msix_cap_offset = desc.msix_cap_offset;
+    for (uint32_t i = 0; i < WASMOS_PCI_BAR_COUNT; ++i) {
+        rec->bars[i] = desc.bars[i];
+    }
+    if (desc.bars[0].kind == WASMOS_PCI_BAR_IO) {
+        rec->io_port_base = (uint16_t)(desc.bars[0].base & 0xFFFFu);
+    } else if (desc.bars[0].kind != WASMOS_PCI_BAR_NONE) {
+        rec->mmio_hint = 1u;
+    }
+    queue_block_fs_rule_spawns();
+}
+
 static void registry_add_from_ipc(int32_t arg0, int32_t arg1, int32_t arg2, int32_t arg3) {
     if (g_dm.registry_count >= DEVICE_REGISTRY_CAP) {
         return;
@@ -1257,8 +1302,12 @@ static void dm_handle_inventory_message(void* user, const wasmos_ipc_message_t* 
         registry_add_block_from_ipc(msg->arg0, msg->arg1, msg->arg2, msg->arg3);
         return;
     }
+    /* The packed form still carries ACPI/ISA devices (bus 0xFF), which have no
+     * BARs and fit in four words; PCI functions come as descriptors. */
     if (msg->type == DEVMGR_PUBLISH_DEVICE) {
         registry_add_from_ipc(msg->arg0, msg->arg1, msg->arg2, msg->arg3);
+    } else if (msg->type == DEVMGR_PUBLISH_DEVICE_DESC) {
+        registry_add_from_desc(msg->arg0, msg->arg1, msg->arg2);
         return;
     }
     if (msg->type == DEVMGR_PCI_SCAN_DONE) {
@@ -1277,6 +1326,10 @@ static void dm_handle_inventory_message(void* user, const wasmos_ipc_message_t* 
 
 static int dm_register_inventory_handlers(void) {
     if (wasmos_sys_event_register(&g_dm_inventory_loop, DEVMGR_PUBLISH_BLOCK_DEVICE,
+                                  dm_handle_inventory_message, 0) != 0) {
+        return -1;
+    }
+    if (wasmos_sys_event_register(&g_dm_inventory_loop, DEVMGR_PUBLISH_DEVICE_DESC,
                                   dm_handle_inventory_message, 0) != 0) {
         return -1;
     }

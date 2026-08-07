@@ -37,6 +37,35 @@
 #define ATA_REG_COMMAND 0x07
 #define ATA_REG_STATUS 0x07
 
+/* Bus-master IDE. Region 1 is the window the manifest declares as BAR 4, which
+ * device-manager resolves and grants; the driver never learns the address.
+ * Registers are per-channel, primary first (PIIX datasheet 5.2). */
+#define ATA_BM_REGION 1u
+#define ATA_BM_COMMAND 0x00u
+#define ATA_BM_STATUS 0x02u
+#define ATA_BM_PRDT 0x04u
+
+#define ATA_BM_CMD_START (1u << 0)
+/* Direction is named from the DEVICE's point of view: set for a disk read,
+ * where the controller writes into memory. */
+#define ATA_BM_CMD_TO_MEMORY (1u << 3)
+#define ATA_BM_STATUS_ACTIVE (1u << 0)
+#define ATA_BM_STATUS_ERROR (1u << 1)
+#define ATA_BM_STATUS_IRQ (1u << 2)
+
+/* A PRD entry is a physical run; 0 in the count field means 64 KiB. An entry may
+ * not cross a 64 KiB boundary, so one buffer can need two. */
+#define ATA_PRD_EOT 0x8000u
+#define ATA_PRD_MAX 2u
+#define ATA_PRD_BOUNDARY 0x10000u
+
+typedef struct __attribute__((packed)) {
+    uint32_t base;
+    uint16_t bytes;
+    uint16_t flags;
+} ata_prd_t;
+
+#define ATA_CMD_READ_DMA 0xC8
 #define ATA_CMD_IDENTIFY 0xEC
 #define ATA_CMD_READ_SECTORS 0x20
 #define ATA_CMD_WRITE_SECTORS 0x30
@@ -90,6 +119,18 @@ static uint8_t g_client_unit[ATA_CLIENT_MAP_CAP];
  * discard a queued block request (the failure mode that cost virtio-rng a
  * debugging session). g_irq_active means both halves are live: the line is
  * routed AND nIEN is clear at the drive. */
+/* PRD table. It lives in this process's own block buffer, which is already
+ * everything the controller needs -- contiguous, pinned, page-aligned and below
+ * 4 GiB -- and which this driver otherwise never uses, since it writes into the
+ * CALLER's buffer. region_alloc would be the obvious choice but needs megabytes
+ * of linear-memory headroom to map a window into, and a bootstrap driver has no
+ * business carrying that for 16 bytes of descriptor.
+ * g_dma_ready gates the whole path: without a bus-master window or a PRD table
+ * the driver simply stays on PIO. */
+static int32_t g_prd_phys = -1;
+static uint8_t g_dma_ready;
+static uint8_t g_dma_logged;
+
 static int32_t g_irq_endpoint = -1;
 static int32_t g_irq_select = -1;
 static uint8_t g_irq_active;
@@ -265,6 +306,118 @@ static int ata_sink_write(const ata_sink_t* sink, const uint8_t* src, uint32_t l
                                      (int32_t)offset);
 }
 
+/* Bus-master register helpers. Region-addressed like everything else, so a
+ * failure here means the window was never granted, not that the address is
+ * wrong. */
+static uint8_t ata_bm_read8(uint32_t offset) {
+    uint32_t value = 0;
+    if (wasmos_io_region_in8(ATA_BM_REGION, offset, &value) != 0) {
+        return 0xFFu;
+    }
+    return (uint8_t)(value & 0xFFu);
+}
+
+static int ata_bm_write8(uint32_t offset, uint8_t value) {
+    return wasmos_io_region_out8(ATA_BM_REGION, offset, value);
+}
+
+/* Describe `bytes` at `phys` as PRD entries, splitting at the 64 KiB boundary a
+ * single entry may not cross. Returns the entry count, or 0 if it would not fit
+ * (which sends the caller back to PIO rather than programming a bad table). */
+static uint32_t ata_build_prd(uint64_t phys, uint32_t bytes) {
+    ata_prd_t prd[ATA_PRD_MAX];
+    uint32_t used = 0;
+    while (bytes > 0u && used < ATA_PRD_MAX) {
+        uint64_t next_boundary = (phys + ATA_PRD_BOUNDARY) & ~((uint64_t)ATA_PRD_BOUNDARY - 1u);
+        uint32_t run = (uint32_t)(next_boundary - phys);
+        if (run > bytes) {
+            run = bytes;
+        }
+        prd[used].base = (uint32_t)phys;
+        prd[used].bytes = (uint16_t)(run & 0xFFFFu); /* 0 encodes a full 64 KiB */
+        prd[used].flags = 0;
+        phys += run;
+        bytes -= run;
+        used++;
+    }
+    if (bytes > 0u) {
+        return 0;
+    }
+    prd[used - 1u].flags = ATA_PRD_EOT;
+    if (wasmos_block_buffer_write(g_prd_phys, addr_cast(int32_t, prd),
+                                  (int32_t)(used * sizeof(ata_prd_t)), 0) != 0) {
+        return 0;
+    }
+    return used;
+}
+
+/* Read whole sectors straight into physical memory, no CPU copy at all. The
+ * controller writes the destination itself; the driver only issues the command
+ * and waits for the interrupt it already routes. Returns 0, or -1 to fall back
+ * to PIO -- every failure here is recoverable that way. */
+static int ata_read_lba28_dma(uint8_t unit, uint32_t lba, uint8_t count, uint64_t dest_phys) {
+    uint8_t bm_status = 0;
+
+    if (!g_dma_ready || count == 0 || dest_phys == 0 || (dest_phys >> 32) != 0) {
+        return -1;
+    }
+    if (ata_build_prd(dest_phys, (uint32_t)count * ATA_SECTOR_SIZE) == 0) {
+        return -1;
+    }
+    if (ata_wait_not_busy() != 0) {
+        return -1;
+    }
+
+    /* Stop any previous transfer, point the controller at the table, and set the
+     * direction before arming anything. */
+    (void)ata_bm_write8(ATA_BM_COMMAND, 0);
+    if (wasmos_io_region_out32(ATA_BM_REGION, ATA_BM_PRDT, g_prd_phys) != 0) {
+        return -1;
+    }
+    (void)ata_bm_write8(ATA_BM_COMMAND, ATA_BM_CMD_TO_MEMORY);
+    /* Error and interrupt are write-1-to-clear; clear stale ones so the status
+     * read after completion describes this transfer. */
+    (void)ata_bm_write8(ATA_BM_STATUS, ATA_BM_STATUS_ERROR | ATA_BM_STATUS_IRQ);
+
+    wasmos_io_region_out8(ATA_IO_REGION, ATA_REG_HDDEVSEL,
+                          (uint8_t)(0xE0u | ((unit & 1u) << 4) | ((lba >> 24) & 0x0Fu)));
+    wasmos_io_wait();
+    wasmos_io_region_out8(ATA_IO_REGION, ATA_REG_SECCOUNT0, count);
+    wasmos_io_region_out8(ATA_IO_REGION, ATA_REG_LBA0, (uint8_t)(lba & 0xFF));
+    wasmos_io_region_out8(ATA_IO_REGION, ATA_REG_LBA1, (uint8_t)((lba >> 8) & 0xFF));
+    wasmos_io_region_out8(ATA_IO_REGION, ATA_REG_LBA2, (uint8_t)((lba >> 16) & 0xFF));
+    wasmos_io_region_out8(ATA_IO_REGION, ATA_REG_COMMAND, ATA_CMD_READ_DMA);
+
+    /* Arm the controller only after the drive has the command. */
+    (void)ata_bm_write8(ATA_BM_COMMAND, ATA_BM_CMD_TO_MEMORY | ATA_BM_CMD_START);
+
+    for (uint32_t i = 0; i < ata_wait_attempts(); ++i) {
+        bm_status = ata_bm_read8(ATA_BM_STATUS);
+        if ((bm_status & ATA_BM_STATUS_IRQ) != 0 || (bm_status & ATA_BM_STATUS_ERROR) != 0) {
+            break;
+        }
+        if ((bm_status & ATA_BM_STATUS_ACTIVE) == 0) {
+            break; /* controller went idle: either done or never started */
+        }
+        ata_wait_step();
+    }
+
+    (void)ata_bm_write8(ATA_BM_COMMAND, 0);
+    (void)ata_bm_write8(ATA_BM_STATUS, ATA_BM_STATUS_ERROR | ATA_BM_STATUS_IRQ);
+
+    if ((bm_status & ATA_BM_STATUS_ERROR) != 0 || (bm_status & ATA_BM_STATUS_IRQ) == 0) {
+        return -1;
+    }
+    if ((ata_read_status() & ATA_SR_ERR) != 0) {
+        return -1;
+    }
+    if (!g_dma_logged) {
+        g_dma_logged = 1;
+        (void)printf("[ata] bus-master DMA active\n");
+    }
+    return 0;
+}
+
 static int ata_read_lba28(uint8_t unit, uint32_t lba, uint8_t count, const ata_sink_t* sink) {
     if (count == 0 || count > ATA_MAX_READ_SECTORS || !sink || sink->id <= 0) {
         return -1;
@@ -367,11 +520,35 @@ static void ata_log_dma_active(uint8_t is_write) {
     }
 }
 
+/* Bring up bus-master DMA: a pinned page for the PRD table, and a probe of the
+ * bus-master status register to confirm the window was actually granted. Both
+ * are optional -- without them the driver stays on PIO, which is why every
+ * failure here just leaves g_dma_ready clear. */
+static void ata_dma_setup(void) {
+    uint32_t probe = 0;
+
+    if (!g_present) {
+        return;
+    }
+    if (wasmos_io_region_in8(ATA_BM_REGION, ATA_BM_STATUS, &probe) != 0) {
+        (void)printf("[ata] no bus-master window; PIO only\n");
+        return;
+    }
+    g_prd_phys = wasmos_block_buffer_phys();
+    if (g_prd_phys <= 0) {
+        (void)printf("[ata] no prd table backing; PIO only\n");
+        return;
+    }
+    g_dma_ready = 1u;
+}
+
 /* Reported once at startup rather than per request. It used to be logged as a
  * per-direction "dma fallback rc=-N", which reads like an intermittent runtime
  * failure; it is neither intermittent nor a failure — see ata_dma_prepare. */
 static void ata_log_transfer_mode(void) {
-    (void)printf("[ata] transfers are PIO (no bus-master DMA)\n");
+    (void)printf("[ata] transfers: %s\n",
+                 g_dma_ready ? "bus-master DMA where the destination is physical, else PIO"
+                             : "PIO only");
 }
 
 /* TODO(xfer-buffer owner-push): the zero-copy borrow fast-path is disabled since
@@ -505,6 +682,13 @@ static int ata_handle_ipc(int32_t type, int32_t source, int32_t req_id, int32_t 
         if (dma_rc == WASMOS_ERR_NONE) {
             (void)dma_addr;
             ata_log_dma_active(0);
+        }
+        /* The block buffer is named by physical address, so the controller can
+         * write it directly -- no CPU copy on either side. PIO remains the
+         * fallback for every case DMA declines. */
+        if (ata_read_lba28_dma(unit, (uint32_t)arg1, (uint8_t)arg2, (uint32_t)arg0) == 0) {
+            wasmos_ipc_send(source, g_block_endpoint, BLOCK_IPC_READ_RESP, req_id, 0, arg2, 0, 0);
+            return 0;
         }
         ata_sink_t sink = {0u, arg0, 0u};
         if (ata_read_lba28(unit, (uint32_t)arg1, (uint8_t)arg2, &sink) != 0) {
@@ -640,6 +824,7 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t ignored_arg
     (void)printf("[ata] io region %u = task file (+%02X status, +%03X control), irq line %u\n",
                  (unsigned)ATA_IO_REGION, (unsigned)ATA_REG_STATUS, (unsigned)ATA_REG_CTRL,
                  (unsigned)ATA_IRQ_LINE);
+    ata_dma_setup();
     ata_log_transfer_mode();
 
     /* Identify ran polled above; from here transfers can be interrupt-driven.

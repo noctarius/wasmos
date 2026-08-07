@@ -117,6 +117,42 @@ void cpu_sched_enqueue(cpu_sched_t* cs, thread_t* t) {
             return;
         }
     }
+    /* Invariant: only a READY thread belongs in a ready queue.  Every caller is
+     * required to have promoted it first -- sched_wake_thread via
+     * thread_wake_if_blocked, the PROCESS_RUN_BLOCKED completion path via its
+     * state re-read.  Checked here as well as at dispatch because the dispatch
+     * report says only where the corpse was found; this one names who carried
+     * it in.  Log-only on purpose: refusing the enqueue could strand a thread on
+     * no run queue, which is worse than the violation being reported.
+     * Rate-limited and unlocked for the same reasons as the dispatch-side
+     * report.  Direct callers (sched_wake_thread) are identified by return
+     * address; anything routed through sched_enqueue_thread_from is reported
+     * there instead, with its true call site.
+     *
+     * The insert is SKIPPED rather than forced through.  Enqueueing on an
+     * unsettled state is what produces the pathology this check exists to catch:
+     * a non-READY thread parked in a ready queue is re-picked and re-rejected on
+     * every scheduling attempt.  Declining leaves the thread where it already
+     * is, and the ordinary wake path (thread_wake_if_blocked: BLOCKED -> READY ->
+     * enqueue) re-enqueues it once the picture is stable.  The one case that
+     * would strand a thread is a caller that has already consumed its wake token
+     * and treats this call as its last chance -- the Dekker completion path in
+     * process_schedule_once_impl -- but that path enqueues only after reading
+     * READY itself, so reaching here means the state moved on and a later wake
+     * owns it. */
+    if (t->state != THREAD_STATE_READY) {
+        static uint32_t bad_enqueue_seen;
+        uint32_t n = __atomic_fetch_add(&bad_enqueue_seen, 1u, __ATOMIC_RELAXED);
+        if ((n & (n - 1u)) == 0u) {
+            serial_printf_unlocked("[sched] enqueue non-ready tid=%u owner=%u state=%u block=%u "
+                                   "caller=%016llx (n=%u, skipped)\n",
+                                   (unsigned)t->tid, (unsigned)t->owner_pid, (unsigned)t->state,
+                                   (unsigned)t->block_reason,
+                                   (unsigned long long)(uintptr_t)__builtin_return_address(0),
+                                   (unsigned)(n + 1u));
+        }
+        return;
+    }
     ksync_spinlock_lock(&cs->lock);
     /* SMP wake/block races can reach enqueue from multiple CPUs for the same
      * READY thread.  sched_node self-links when detached from any list, so
@@ -144,6 +180,22 @@ void sched_enqueue_thread_from(thread_t* t, uintptr_t caller) {
                 t->block_reason = THREAD_BLOCK_NONE;
             }
             return;
+        }
+    }
+    /* DIAGNOSTIC: same check as cpu_sched_enqueue, done here because this path
+     * knows the ORIGINAL call site.  cpu_sched_enqueue can only report its
+     * immediate caller, which for everything routed through here is just this
+     * function -- useless for telling one sched_enqueue_thread() site from
+     * another. */
+    if (t->state != THREAD_STATE_READY) {
+        static uint32_t bad_from_seen;
+        uint32_t n = __atomic_fetch_add(&bad_from_seen, 1u, __ATOMIC_RELAXED);
+        if ((n & (n - 1u)) == 0u) {
+            serial_printf_unlocked("[sched] enqueue_from non-ready tid=%u owner=%u state=%u "
+                                   "block=%u caller=%016llx (n=%u)\n",
+                                   (unsigned)t->tid, (unsigned)t->owner_pid, (unsigned)t->state,
+                                   (unsigned)t->block_reason, (unsigned long long)caller,
+                                   (unsigned)(n + 1u));
         }
     }
     cpu_sched_enqueue(cpu_sched(), t);

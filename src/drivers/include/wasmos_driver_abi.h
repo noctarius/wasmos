@@ -352,6 +352,51 @@ enum {
  * edge-triggered active-high (ISA). PCI INTx lines are level + active-low. */
 enum { WASMOS_IRQ_TRIGGER_LEVEL = 1 << 0, WASMOS_IRQ_POLARITY_LOW = 1 << 1 };
 
+/* --- Module metadata descriptor --------------------------------------------
+ *
+ * What process-manager reports about one packaged driver: how it matches, what
+ * capabilities it asked for, and which register windows it declared. A
+ * descriptor because the region list is variable-length by nature and the four
+ * argument words of the packed form are already full -- there are spare bits in
+ * them, but a region declaration is not a bit field and pretending otherwise is
+ * how the device-publish encoding ended up smuggling an I/O base through an
+ * unused argument half.
+ *
+ * The consumer supplies the buffer and lends it WRITE; PM fills it and replies
+ * with the byte count. Versioned and length-checked, so it grows by appending. */
+#define WASMOS_MODULE_META_DESC_VERSION 1u
+
+/* Region kinds. Mirrors the app-format enum in src/kernel/include/wasmos_app.h;
+ * a service cannot include kernel headers, so the two must move together. */
+enum { WASMOS_APP_REGION_IO = 0, WASMOS_APP_REGION_BAR = 1 };
+
+/* One declared register window: a fixed I/O range, or a BAR of the matched
+ * device resolved by whoever holds the device record. */
+typedef struct __attribute__((packed)) {
+    uint8_t kind;
+    uint8_t bar_index;
+    uint16_t first;
+    uint16_t last;
+} wasmos_region_desc_t;
+
+#define WASMOS_MODULE_META_MAX_REGIONS 4u
+
+typedef struct __attribute__((packed)) {
+    uint32_t version; /* = WASMOS_MODULE_META_DESC_VERSION */
+    uint8_t class_code;
+    uint8_t subclass;
+    uint8_t prog_if;
+    uint8_t storage_bootstrap;
+    uint16_t vendor_id;
+    uint16_t device_id;
+    uint16_t io_port_min; /* the match rule's window; regions supersede it */
+    uint16_t io_port_max;
+    uint32_t cap_flags;
+    uint32_t match_count;
+    uint32_t region_count;
+    wasmos_region_desc_t regions[WASMOS_MODULE_META_MAX_REGIONS];
+} wasmos_module_meta_desc_t;
+
 /* --- PCI device descriptor -------------------------------------------------
  *
  * What pci-bus publishes about one enumerated function. A descriptor in a

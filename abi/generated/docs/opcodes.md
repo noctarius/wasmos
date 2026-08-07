@@ -25,6 +25,7 @@ endpoint-scoped and may repeat across subsystems.
 | `PROC_IPC_SPAWN_NAME` | 0x204 | req |  |
 | `PROC_IPC_SPAWN_CAPS` | 0x205 | req |  |
 | `PROC_IPC_MODULE_META` | 0x206 | req |  |
+| `PROC_IPC_MODULE_META_DESC` | 0x212 | req | Module metadata as a wasmos_module_meta_desc_t, written into a transfer buffer the caller owns and has lent WRITE to process-manager. arg0=module_index arg1=match_index arg2=buffer_id arg3=byte_offset. On success: PROC_IPC_RESP, arg0=bytes written. Supersedes PROC_IPC_MODULE_META, whose four response words are full and cannot carry a variable-length region declaration.  |
 | `PROC_IPC_MODULE_META_PATH` | 0x207 | req |  |
 | `PROC_IPC_SPAWN_CAPS_V2` | 0x208 | req | Spawn with extended capability descriptor payload: arg0=module_index arg1=user_ptr(wasmos_spawn_caps_v2_t + windows[]) arg2=payload_size_bytes arg3=reserved(0).  |
 | `PROC_IPC_SPAWN_PATH` | 0x209 | req | Spawn from explicit app path: caller must place path bytes at xfer buffer offset 0. optional raw command argument text is placed at offset (path_len + 1). arg0=reserved(0) arg1=path_len arg2=args_len arg3=reserved. On success (app kind): PROC_IPC_RESP, arg0=child_pid, arg1=app_flags. For service/driver kinds the PM delays the PROC_IPC_RESP until the child calls PROC_IPC_NOTIFY_READY (behaves like SPAWN_PATH_SYNC internally).  |

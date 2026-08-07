@@ -18,6 +18,13 @@ pub const PROC_IPC_STATUS: i32 = 0x203;
 pub const PROC_IPC_SPAWN_NAME: i32 = 0x204;
 pub const PROC_IPC_SPAWN_CAPS: i32 = 0x205;
 pub const PROC_IPC_MODULE_META: i32 = 0x206;
+/// Module metadata as a wasmos_module_meta_desc_t, written into a transfer
+/// buffer the caller owns and has lent WRITE to process-manager.
+/// arg0=module_index arg1=match_index arg2=buffer_id arg3=byte_offset.
+/// On success: PROC_IPC_RESP, arg0=bytes written.
+/// Supersedes PROC_IPC_MODULE_META, whose four response words are full and
+/// cannot carry a variable-length region declaration.
+pub const PROC_IPC_MODULE_META_DESC: i32 = 0x212;
 pub const PROC_IPC_MODULE_META_PATH: i32 = 0x207;
 /// Spawn with extended capability descriptor payload:
 /// arg0=module_index arg1=user_ptr(wasmos_spawn_caps_v2_t + windows[])

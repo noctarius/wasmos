@@ -2005,6 +2005,10 @@ add_custom_target(run-kernel-unit-tests
           # system <angle> includes untouched. The symbol is resolved by the
           # host libc at link.
           -iquote ${LIBC_DIR}/include
+          # device_manager_types.h now carries the resolved PCI BAR table, whose
+          # types live in the shared driver ABI header.
+          -I${DRIVER_WASM_DIR}/include
+          -I${CMAKE_SOURCE_DIR}/abi/generated/c
           ${CMAKE_SOURCE_DIR}/tests/unit/test_device_manager_rules.c
           ${SERVICES_DIR}/device_manager/device_manager_rules.c
           ${LIBC_DIR}/src/string.c

@@ -248,6 +248,24 @@ static pm_app_state_t* pm_find_app_slot(void) {
     return (pm_app_state_t*)list_alloc(&g_pm.apps);
 }
 
+/* The packed-arg spawn opcodes each describe exactly one I/O window; the
+ * descriptor path (pm_handle_spawn_caps_v2) may carry several. Centralised so
+ * the "no io.port capability means no windows at all" rule cannot drift between
+ * the five call sites. Returns 0, or BAD_CAPS for an inverted window. */
+static int pm_caps_set_io_window(pm_spawn_caps_t* caps, uint16_t first, uint16_t last) {
+    caps->io_range_count = 0;
+    if ((caps->cap_flags & DEVMGR_CAP_IO_PORT) == 0) {
+        return 0;
+    }
+    if (first > last) {
+        return WASMOS_ERR_PROC_PM_BAD_CAPS;
+    }
+    caps->io_ranges[0].first = first;
+    caps->io_ranges[0].last = last;
+    caps->io_range_count = 1;
+    return 0;
+}
+
 /* The legacy per-app entry-arg binding mechanism (proc.endpoint / module.count /
  * cli.tty.alloc / block.endpoint / ...) has been retired in favour of the
  * spawn-info contract (see wasmos_spawn_info.h + pm_app_entry). Every startup
@@ -493,57 +511,6 @@ static int pm_apply_spawn_caps(uint32_t pid, const pm_spawn_caps_t* caps) {
         return PM_SPAWN_INTERNAL_ERR_CAPS_APPLY;
     }
     return 0;
-}
-
-/* The packed-arg spawn opcodes each describe exactly one I/O window; the
- * descriptor path (pm_handle_spawn_caps_v2) may carry several. Centralised so
- * the "no io.port capability means no windows at all" rule cannot drift between
- * the five call sites. Returns 0, or BAD_CAPS for an inverted window. */
-static int pm_caps_set_io_window(pm_spawn_caps_t* caps, uint16_t first, uint16_t last) {
-    caps->io_range_count = 0;
-    if ((caps->cap_flags & DEVMGR_CAP_IO_PORT) == 0) {
-        return 0;
-    }
-    if (first > last) {
-        return WASMOS_ERR_PROC_PM_BAD_CAPS;
-    }
-    caps->io_ranges[0].first = first;
-    caps->io_ranges[0].last = last;
-    caps->io_range_count = 1;
-    return 0;
-}
-
-static int pm_resolve_user_ptr(uint32_t context_id, uint32_t ptr32, uint32_t len,
-                               uint64_t* out_user_va) {
-    uint64_t direct = (uint64_t)ptr32;
-    mm_context_t* ctx = 0;
-    mem_region_t linear = {0};
-    uint64_t via_linear = 0;
-
-    if (!out_user_va || len == 0) {
-        return PM_SPAWN_INTERNAL_ERR_BAD_ARGS;
-    }
-    ctx = mm_context_get(context_id);
-    if (!ctx || mm_context_region_for_type(ctx, MEM_REGION_WASM_LINEAR, &linear) != 0 ||
-        linear.base == 0 || linear.size == 0) {
-        goto fallback_direct;
-    }
-    if ((uint64_t)ptr32 > linear.size || (uint64_t)len > (linear.size - (uint64_t)ptr32)) {
-        goto fallback_direct;
-    }
-    via_linear = linear.base + (uint64_t)ptr32;
-    if (mm_user_range_permitted(context_id, via_linear, (uint64_t)len, MEM_REGION_FLAG_READ) != 0) {
-        goto fallback_direct;
-    }
-    *out_user_va = via_linear;
-    return 0;
-
-fallback_direct:
-    if (mm_user_range_permitted(context_id, direct, (uint64_t)len, MEM_REGION_FLAG_READ) == 0) {
-        *out_user_va = direct;
-        return 0;
-    }
-    return PM_SPAWN_INTERNAL_ERR_BAD_USER_PTR;
 }
 
 static int pm_spawn_from_buffer(uint32_t parent_pid, const uint8_t* blob, uint32_t blob_size,
@@ -1632,7 +1599,8 @@ int pm_handle_spawn_caps_v2(uint32_t pm_context_id, const ipc_message_t* msg) {
         DEVMGR_CAP_IO_PORT | DEVMGR_CAP_MMIO_MAP | DEVMGR_CAP_IRQ | DEVMGR_CAP_DMA;
     uint32_t payload_size = 0;
     uint32_t expected_size = 0;
-    uint64_t caps_user_va = 0;
+    const uint8_t* caps_payload = 0;
+    uint32_t caps_buffer_size = 0;
     uint64_t win_end = 0;
 
     if (ipc_endpoint_owner(msg->source, &owner_context) != IPC_OK) {
@@ -1643,17 +1611,22 @@ int pm_handle_spawn_caps_v2(uint32_t pm_context_id, const ipc_message_t* msg) {
         return WASMOS_ERR_PROC_PM_NO_CALLER;
     }
     parent_pid = caller->pid;
+    /* arg1 names a transfer buffer, not a raw pointer. pm_resolve_user_ptr
+     * cannot see WARP's linear memory -- it looks for a MEM_REGION_WASM_LINEAR
+     * region, which reserved-VA linmem slots are not, and silently falls back to
+     * treating the offset as an absolute user VA. That read unrelated memory
+     * (stack poison, once stacks were poisoned), which is why this path never
+     * worked: it had no users to expose it. The xfer-buffer object resolves via
+     * the backing pages and is what every working descriptor path uses. */
     payload_size = (uint32_t)msg->arg2;
     if (msg->arg1 == 0 || payload_size < (uint32_t)sizeof(in_caps)) {
         return WASMOS_ERR_PROC_PM_BAD_CAPS;
     }
-    if (pm_resolve_user_ptr(owner_context, (uint32_t)msg->arg1, (uint32_t)sizeof(in_caps),
-                            &caps_user_va) != 0) {
-        return WASMOS_ERR_PROC_PM_BAD_USER_PTR;
+    caps_payload = pm_foreign_xfer_ptr((uint32_t)msg->arg1, owner_context, &caps_buffer_size);
+    if (!caps_payload || payload_size > caps_buffer_size) {
+        return WASMOS_ERR_PROC_PM_CALLER_FSBUF;
     }
-    if (mm_copy_from_user(owner_context, &in_caps, caps_user_va, sizeof(in_caps)) != 0) {
-        return WASMOS_ERR_PROC_PM_USER_COPY;
-    }
+    __builtin_memcpy(&in_caps, caps_payload, sizeof(in_caps));
 
     if ((in_caps.cap_flags & ~known_cap_mask) != 0) {
         return WASMOS_ERR_PROC_PM_BAD_CAPS;
@@ -1680,10 +1653,8 @@ int pm_handle_spawn_caps_v2(uint32_t pm_context_id, const ipc_message_t* msg) {
         if (payload_size < expected_size) {
             return WASMOS_ERR_PROC_PM_BAD_CAPS;
         }
-        if (mm_copy_from_user(owner_context, caps.io_ranges, caps_user_va + sizeof(in_caps),
-                              (uint64_t)in_caps.io_range_count * sizeof(wasmos_io_range_t)) != 0) {
-            return WASMOS_ERR_PROC_PM_USER_COPY;
-        }
+        __builtin_memcpy(caps.io_ranges, caps_payload + sizeof(in_caps),
+                         (size_t)in_caps.io_range_count * sizeof(wasmos_io_range_t));
         caps.io_range_count =
             ((caps.cap_flags & DEVMGR_CAP_IO_PORT) != 0) ? (uint32_t)in_caps.io_range_count : 0u;
         for (uint32_t i = 0; i < caps.io_range_count; ++i) {
@@ -1704,13 +1675,10 @@ int pm_handle_spawn_caps_v2(uint32_t pm_context_id, const ipc_message_t* msg) {
         if (payload_size != expected_size) {
             return WASMOS_ERR_PROC_PM_BAD_CAPS;
         }
-        if (mm_copy_from_user(owner_context, caps.dma_windows,
-                              caps_user_va + sizeof(in_caps) +
-                                  (uint64_t)in_caps.io_range_count * sizeof(wasmos_io_range_t),
-                              (uint64_t)in_caps.dma.window_count * sizeof(wasmos_dma_window_t)) !=
-            0) {
-            return WASMOS_ERR_PROC_PM_USER_COPY;
-        }
+        __builtin_memcpy(caps.dma_windows,
+                         caps_payload + sizeof(in_caps) +
+                             (size_t)in_caps.io_range_count * sizeof(wasmos_io_range_t),
+                         (size_t)in_caps.dma.window_count * sizeof(wasmos_dma_window_t));
         for (uint32_t i = 0; i < in_caps.dma.window_count; ++i) {
             if (caps.dma_windows[i].length == 0) {
                 return WASMOS_ERR_PROC_PM_BAD_CAPS;
@@ -1979,6 +1947,79 @@ int pm_handle_spawn_path_caps(uint32_t pm_context_id, const ipc_message_t* msg) 
     resp.destination = msg->source;
     resp.request_id = msg->request_id;
     resp.arg0 = pid;
+    resp.arg1 = 0;
+    resp.arg2 = 0;
+    resp.arg3 = 0;
+    return ipc_send_from(pm_context_id, msg->source, &resp) == IPC_OK
+               ? 0
+               : WASMOS_ERR_PROC_PM_REPLY_SEND;
+}
+
+/* Module metadata as a descriptor. Same lookup as pm_handle_module_meta, but the
+ * answer lands in a buffer the caller owns and has lent WRITE, because the
+ * declared region list is variable-length and the packed form's four response
+ * words are full. */
+int pm_handle_module_meta_desc(uint32_t pm_context_id, const ipc_message_t* msg) {
+    uint32_t owner_context = 0;
+    process_t* caller = 0;
+    wasmos_app_desc_t desc;
+    wasmos_module_meta_desc_t out;
+    const wasmos_app_driver_match_t* match = 0;
+    uint32_t match_index = (uint32_t)msg->arg1;
+    uint32_t buffer_size = 0;
+    uint32_t offset = (uint32_t)msg->arg3;
+    const uint8_t* buf = 0;
+    ipc_message_t resp;
+
+    if (ipc_endpoint_owner(msg->source, &owner_context) != IPC_OK) {
+        return WASMOS_ERR_PROC_PM_BAD_ENDPOINT;
+    }
+    caller = process_find_by_context(owner_context);
+    if (!caller) {
+        return WASMOS_ERR_PROC_PM_NO_CALLER;
+    }
+    if (wasmos_app_module_desc(g_pm.boot_info, (uint32_t)msg->arg0, &desc) != 0) {
+        return WASMOS_ERR_PROC_PM_META_LOOKUP;
+    }
+    if ((desc.flags & WASMOS_APP_FLAG_DRIVER) == 0) {
+        return WASMOS_ERR_PROC_PM_META_NOT_DRIVER;
+    }
+    if (desc.driver_match_count == 0 || match_index >= desc.driver_match_count) {
+        return WASMOS_ERR_PROC_PM_META_BAD_INDEX;
+    }
+    match = &desc.driver_matches[match_index];
+
+    buf = pm_foreign_xfer_ptr((uint32_t)msg->arg2, owner_context, &buffer_size);
+    if (!buf || (uint64_t)offset + sizeof(out) > (uint64_t)buffer_size) {
+        return WASMOS_ERR_PROC_PM_CALLER_FSBUF;
+    }
+
+    __builtin_memset(&out, 0, sizeof(out));
+    out.version = WASMOS_MODULE_META_DESC_VERSION;
+    out.class_code = match->class_code;
+    out.subclass = match->subclass;
+    out.prog_if = match->prog_if;
+    out.storage_bootstrap = ((desc.flags & WASMOS_APP_FLAG_STORAGE_BOOTSTRAP) != 0) ? 1u : 0u;
+    out.vendor_id = match->vendor_id;
+    out.device_id = match->device_id;
+    out.io_port_min = match->io_port_min;
+    out.io_port_max = match->io_port_max;
+    out.cap_flags = wasmos_app_driver_cap_flags(&desc);
+    out.match_count = desc.driver_match_count;
+    out.region_count = desc.region_count;
+    for (uint32_t i = 0; i < desc.region_count && i < WASMOS_MODULE_META_MAX_REGIONS; ++i) {
+        out.regions[i].kind = desc.regions[i].kind;
+        out.regions[i].bar_index = desc.regions[i].bar_index;
+        out.regions[i].first = desc.regions[i].first;
+        out.regions[i].last = desc.regions[i].last;
+    }
+    __builtin_memcpy((uint8_t*)(uintptr_t)buf + offset, &out, sizeof(out));
+
+    resp.type = PROC_IPC_RESP;
+    resp.source = g_pm.proc_endpoint;
+    resp.destination = msg->source;
+    resp.request_id = msg->request_id;
+    resp.arg0 = (int32_t)sizeof(out);
     resp.arg1 = 0;
     resp.arg2 = 0;
     resp.arg3 = 0;

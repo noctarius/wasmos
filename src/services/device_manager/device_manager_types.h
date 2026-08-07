@@ -65,6 +65,12 @@ typedef struct {
     uint16_t io_port_min;
     uint16_t io_port_max;
     uint16_t irq_mask; /* bitmask of IRQ lines the driver may use */
+    /* Windows resolved from the driver's declared regions, in declaration order
+     * (which is the region index it addresses at runtime). Non-zero count
+     * supersedes io_port_min/max and routes the spawn through the descriptor
+     * form, the only one that can describe more than a single window. */
+    uint32_t io_range_count;
+    wasmos_io_range_t io_ranges[WASMOS_IO_RANGE_LIMIT];
 } spawn_caps_t;
 
 /* One entry in the PCI device registry; populated from pci_bus scan messages. */

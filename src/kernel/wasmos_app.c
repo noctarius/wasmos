@@ -693,6 +693,7 @@ int wasmos_app_parse(const uint8_t* blob, uint32_t blob_size, wasmos_app_desc_t*
         off += sizeof(wasmos_app_driver_match_t);
     }
 
+    out_desc->region_count = 0;
     for (uint32_t i = 0; i < region_count; ++i) {
         if (check_bounds(off, sizeof(wasmos_app_region_t), blob_size) != 0) {
             return -1;

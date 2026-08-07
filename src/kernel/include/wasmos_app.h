@@ -87,7 +87,9 @@ typedef struct {
  * statically (legacy/ISA-compat), BAR is wherever firmware put a BAR of the
  * matched device. Declaration order is the region index used at runtime, so the
  * manifest is where a reader learns what "region 1" means. */
-enum { WASMOS_APP_REGION_IO = 0, WASMOS_APP_REGION_BAR = 1 };
+/* WASMOS_APP_REGION_IO / _BAR come from wasmos_driver_abi.h, which the kernel
+ * also includes: the same two values name the same concept on both sides of the
+ * boundary, so there is one definition rather than two that can drift. */
 
 #define WASMOS_APP_MAX_REGIONS 4u
 

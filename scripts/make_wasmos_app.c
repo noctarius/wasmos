@@ -5,7 +5,7 @@
 #include <ctype.h>
 
 #define MAGIC "WASMOSAP"
-#define VERSION 5u
+#define VERSION 6u
 #define FLAG_DRIVER (1u << 0)
 #define FLAG_SERVICE (1u << 1)
 #define FLAG_APP (1u << 2)
@@ -14,6 +14,12 @@
 
 #define MEM_HINT_STACK 1u
 #define MEM_HINT_HEAP 2u
+/* Mirrors src/kernel/include/wasmos_app.h; the packer cannot include kernel
+ * headers, so these two must be changed together. */
+#define WASMOS_APP_REGION_IO 0u
+#define WASMOS_APP_REGION_BAR 1u
+#define WASMOS_APP_MAX_REGIONS 4u
+
 #define MATCH_ANY_U8 0xFFu
 #define MATCH_ANY_U16 0xFFFFu
 
@@ -40,7 +46,15 @@ typedef struct __attribute__((packed)) {
     uint32_t driver_match_count;
     uint32_t compiled_size; /* v4: size of WARP AOT binary appended after WASM; 0 if absent */
     char subsystem_tag[SUBSYSTEM_TAG_LEN];
+    uint32_t region_count; /* v6: declared register windows, written after the matches */
 } wasmos_app_header_t;
+
+typedef struct __attribute__((packed)) {
+    uint8_t kind;
+    uint8_t bar_index;
+    uint16_t first;
+    uint16_t last;
+} wasmos_region_entry_t;
 
 typedef struct __attribute__((packed)) {
     uint32_t name_len;
@@ -178,6 +192,17 @@ typedef struct {
     uint32_t priority;
 } manifest_match_t;
 
+/* One register window the driver declares it needs. A driver names windows, not
+ * ports: `io` is a fixed range it knows statically (legacy/ISA-compat), `bar` is
+ * wherever firmware put a BAR of the matched device. Declaration order is the
+ * region index the driver addresses at runtime. */
+typedef struct {
+    uint8_t kind; /* WASMOS_APP_REGION_* */
+    uint8_t bar_index;
+    uint16_t first;
+    uint16_t last;
+} manifest_region_t;
+
 typedef struct {
     char name[64];
     char entry[64];
@@ -196,6 +221,8 @@ typedef struct {
     uint32_t cap_count;
     manifest_match_t matches[8];
     uint32_t match_count;
+    manifest_region_t regions[WASMOS_APP_MAX_REGIONS];
+    uint32_t region_count;
 } linker_manifest_t;
 
 static int parse_u32_auto(const char* s, uint32_t* out) {
@@ -237,7 +264,16 @@ static int parse_linker_manifest(const char* path, linker_manifest_t* out) {
     if (!f) {
         return -1;
     }
-    enum { SEC_NONE, SEC_PACKAGE, SEC_RESOURCES, SEC_IPC, SEC_CAP, SEC_MATCH } sec = SEC_NONE;
+    enum {
+        SEC_NONE,
+        SEC_PACKAGE,
+        SEC_RESOURCES,
+        SEC_IPC,
+        SEC_CAP,
+        SEC_MATCH,
+        SEC_REGION
+    } sec = SEC_NONE;
+    int region_idx = -1;
     int cap_idx = -1;
     int match_idx = -1;
     char line[512];
@@ -274,6 +310,19 @@ static int parse_linker_manifest(const char* path, linker_manifest_t* out) {
             }
             cap_idx = (int)out->cap_count++;
             memset(&out->caps[cap_idx], 0, sizeof(out->caps[cap_idx]));
+            continue;
+        }
+        if (strcmp(s, "[[regions]]") == 0) {
+            sec = SEC_REGION;
+            if (out->region_count >= WASMOS_APP_MAX_REGIONS) {
+                fclose(f);
+                return -1;
+            }
+            region_idx = (int)out->region_count++;
+            out->regions[region_idx].kind = WASMOS_APP_REGION_IO;
+            out->regions[region_idx].bar_index = 0;
+            out->regions[region_idx].first = 0;
+            out->regions[region_idx].last = 0;
             continue;
         }
         if (strcmp(s, "[[matches]]") == 0) {
@@ -324,6 +373,41 @@ static int parse_linker_manifest(const char* path, linker_manifest_t* out) {
                     fclose(f);
                     return -1;
                 }
+            }
+        } else if (sec == SEC_REGION) {
+            if (region_idx < 0) {
+                continue;
+            }
+            if (strcmp(key, "kind") == 0) {
+                if (strcmp(val, "io") == 0) {
+                    out->regions[region_idx].kind = WASMOS_APP_REGION_IO;
+                } else if (strcmp(val, "bar") == 0) {
+                    out->regions[region_idx].kind = WASMOS_APP_REGION_BAR;
+                } else {
+                    fclose(f);
+                    return -1;
+                }
+            } else if (strcmp(key, "index") == 0) {
+                uint32_t v = 0;
+                if (parse_u32_auto(val, &v) != 0 || v >= 6u) {
+                    fclose(f);
+                    return -1;
+                }
+                out->regions[region_idx].bar_index = (uint8_t)v;
+            } else if (strcmp(key, "first") == 0) {
+                uint32_t v = 0;
+                if (parse_u32_auto(val, &v) != 0 || v > 0xFFFFu) {
+                    fclose(f);
+                    return -1;
+                }
+                out->regions[region_idx].first = (uint16_t)v;
+            } else if (strcmp(key, "last") == 0) {
+                uint32_t v = 0;
+                if (parse_u32_auto(val, &v) != 0 || v > 0xFFFFu) {
+                    fclose(f);
+                    return -1;
+                }
+                out->regions[region_idx].last = (uint16_t)v;
             }
         } else if (sec == SEC_RESOURCES) {
             if (strcmp(key, "stack_pages") == 0) {
@@ -639,6 +723,7 @@ int main(int argc, char** argv) {
         hdr.driver_match_count = driver_match_count;
         hdr.compiled_size = (uint32_t)compiled_data_size;
         subsystem_tag_copy(hdr.subsystem_tag, lm.subsystem);
+        hdr.region_count = lm.region_count;
 
         wasmos_mem_hint_t stack_hint = {MEM_HINT_STACK, lm.stack_pages, 0};
         wasmos_mem_hint_t heap_hint = {MEM_HINT_HEAP, lm.heap_pages, 0};
@@ -666,6 +751,14 @@ int main(int argc, char** argv) {
         }
         for (uint32_t i = 0; i < driver_match_count; ++i) {
             ok &= fwrite(&driver_matches[i], sizeof(driver_matches[i]), 1, outf) == 1;
+        }
+        for (uint32_t i = 0; i < lm.region_count; ++i) {
+            wasmos_region_entry_t region_entry;
+            region_entry.kind = lm.regions[i].kind;
+            region_entry.bar_index = lm.regions[i].bar_index;
+            region_entry.first = lm.regions[i].first;
+            region_entry.last = lm.regions[i].last;
+            ok &= fwrite(&region_entry, sizeof(region_entry), 1, outf) == 1;
         }
         ok &= fwrite(&stack_hint, sizeof(stack_hint), 1, outf) == 1;
         ok &= fwrite(&heap_hint, sizeof(heap_hint), 1, outf) == 1;

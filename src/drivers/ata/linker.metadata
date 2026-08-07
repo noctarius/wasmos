@@ -30,6 +30,19 @@ flags = 0
 name = "dma.buffer"
 flags = 1
 
+# Register windows this driver needs, in the order it addresses them at runtime.
+# Region 0 is the task file at the fixed ISA ports (a legacy IDE controller
+# leaves BAR0 empty and decodes these instead); region 1 is wherever firmware put
+# the bus-master registers, which is BAR4 and cannot be known statically.
+[[regions]]
+kind = "io"
+first = 0x01F0
+last = 0x03F7
+
+[[regions]]
+kind = "bar"
+index = 4
+
 [[matches]]
 bus = "pci"
 class = 0x01

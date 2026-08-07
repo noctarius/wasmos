@@ -479,7 +479,6 @@ static int pm_spawn_module(uint32_t parent_pid, uint32_t module_index, uint32_t*
 
 static int pm_apply_spawn_caps(uint32_t pid, const pm_spawn_caps_t* caps) {
     process_t* proc = 0;
-    uint32_t packed_io = 0;
     if (!caps || !caps->valid) {
         return 0;
     }
@@ -487,13 +486,30 @@ static int pm_apply_spawn_caps(uint32_t pid, const pm_spawn_caps_t* caps) {
     if (!proc || proc->context_id == 0) {
         return PM_SPAWN_INTERNAL_ERR_BAD_PROCESS;
     }
-    packed_io = ((uint32_t)caps->io_port_min) | ((uint32_t)caps->io_port_max << 16);
-    if (capability_set_spawn_profile(
-            proc->context_id, caps->cap_flags, (uint16_t)(packed_io & 0xFFFFu),
-            (uint16_t)((packed_io >> 16) & 0xFFFFu), caps->irq_mask, caps->dma_direction_flags,
-            caps->dma_max_bytes, caps->dma_window_count, caps->dma_windows) != 0) {
+    if (capability_set_spawn_profile(proc->context_id, caps->cap_flags, caps->io_range_count,
+                                     caps->io_ranges, caps->irq_mask, caps->dma_direction_flags,
+                                     caps->dma_max_bytes, caps->dma_window_count,
+                                     caps->dma_windows) != 0) {
         return PM_SPAWN_INTERNAL_ERR_CAPS_APPLY;
     }
+    return 0;
+}
+
+/* The packed-arg spawn opcodes each describe exactly one I/O window; the
+ * descriptor path (pm_handle_spawn_caps_v2) may carry several. Centralised so
+ * the "no io.port capability means no windows at all" rule cannot drift between
+ * the five call sites. Returns 0, or BAD_CAPS for an inverted window. */
+static int pm_caps_set_io_window(pm_spawn_caps_t* caps, uint16_t first, uint16_t last) {
+    caps->io_range_count = 0;
+    if ((caps->cap_flags & DEVMGR_CAP_IO_PORT) == 0) {
+        return 0;
+    }
+    if (first > last) {
+        return WASMOS_ERR_PROC_PM_BAD_CAPS;
+    }
+    caps->io_ranges[0].first = first;
+    caps->io_ranges[0].last = last;
+    caps->io_range_count = 1;
     return 0;
 }
 
@@ -1080,13 +1096,11 @@ int pm_handle_spawn_caps_sync(uint32_t pm_context_id, const ipc_message_t* msg) 
 
     caps.valid = 1;
     caps.cap_flags = (uint32_t)msg->arg1;
-    caps.io_port_min = (uint16_t)((uint32_t)msg->arg2 & 0xFFFFu);
-    caps.io_port_max = (uint16_t)(((uint32_t)msg->arg2 >> 16) & 0xFFFFu);
     caps.irq_mask = (uint16_t)((uint32_t)msg->arg3 & 0xFFFFu);
     uint32_t timeout_ms = (uint32_t)msg->arg3 >> 16;
-    if ((caps.cap_flags & DEVMGR_CAP_IO_PORT) == 0) {
-        caps.io_port_min = 0;
-        caps.io_port_max = 0;
+    if (pm_caps_set_io_window(&caps, (uint16_t)((uint32_t)msg->arg2 & 0xFFFFu),
+                              (uint16_t)(((uint32_t)msg->arg2 >> 16) & 0xFFFFu)) != 0) {
+        return WASMOS_ERR_PROC_PM_BAD_CAPS;
     }
     if ((caps.cap_flags & DEVMGR_CAP_DMA) != 0) {
         caps.dma_direction_flags = WASMOS_DMA_DIR_BIDIR;
@@ -1219,8 +1233,6 @@ int pm_handle_spawn_path_caps_sync(uint32_t pm_context_id, const ipc_message_t* 
     caps.valid = 1;
     caps.cap_flags = caps_arg0 & 0xFFFFu;
     caps.irq_mask = (uint16_t)(caps_arg0 >> 16);
-    caps.io_port_min = (uint16_t)(caps_arg2 & 0xFFFFu);
-    caps.io_port_max = (uint16_t)(caps_arg2 >> 16);
     caps.dma_direction_flags = 0;
     caps.dma_max_bytes = 0;
     caps.dma_window_count = 0;
@@ -1236,10 +1248,8 @@ int pm_handle_spawn_path_caps_sync(uint32_t pm_context_id, const ipc_message_t* 
         return WASMOS_ERR_PROC_PM_NO_CALLER;
     }
     parent_pid = caller->pid;
-    if ((caps.cap_flags & DEVMGR_CAP_IO_PORT) == 0) {
-        caps.io_port_min = 0;
-        caps.io_port_max = 0;
-    } else if (caps.io_port_min > caps.io_port_max) {
+    if (pm_caps_set_io_window(&caps, (uint16_t)(caps_arg2 & 0xFFFFu),
+                              (uint16_t)(caps_arg2 >> 16)) != 0) {
         return WASMOS_ERR_PROC_PM_BAD_CAPS;
     }
     if ((caps.cap_flags & DEVMGR_CAP_DMA) != 0) {
@@ -1570,16 +1580,12 @@ int pm_handle_spawn_caps(uint32_t pm_context_id, const ipc_message_t* msg) {
     parent_pid = caller->pid;
     caps.valid = 1;
     caps.cap_flags = msg->arg1;
-    caps.io_port_min = (uint16_t)((uint32_t)msg->arg2 & 0xFFFFu);
-    caps.io_port_max = (uint16_t)(((uint32_t)msg->arg2 >> 16) & 0xFFFFu);
     caps.irq_mask = (uint16_t)((uint32_t)msg->arg3 & 0xFFFFu);
     caps.dma_direction_flags = 0;
     caps.dma_max_bytes = 0;
     caps.dma_window_count = 0;
-    if ((caps.cap_flags & DEVMGR_CAP_IO_PORT) == 0) {
-        caps.io_port_min = 0;
-        caps.io_port_max = 0;
-    } else if (caps.io_port_min > caps.io_port_max) {
+    if (pm_caps_set_io_window(&caps, (uint16_t)((uint32_t)msg->arg2 & 0xFFFFu),
+                              (uint16_t)(((uint32_t)msg->arg2 >> 16) & 0xFFFFu)) != 0) {
         return WASMOS_ERR_PROC_PM_BAD_CAPS;
     }
     if ((caps.cap_flags & DEVMGR_CAP_DMA) != 0) {
@@ -1652,23 +1658,41 @@ int pm_handle_spawn_caps_v2(uint32_t pm_context_id, const ipc_message_t* msg) {
     if ((in_caps.cap_flags & ~known_cap_mask) != 0) {
         return WASMOS_ERR_PROC_PM_BAD_CAPS;
     }
-    if ((in_caps.cap_flags & DEVMGR_CAP_IO_PORT) != 0 &&
+    if ((in_caps.cap_flags & DEVMGR_CAP_IO_PORT) != 0 && in_caps.io_range_count == 0 &&
         in_caps.io_port_min > in_caps.io_port_max) {
+        return WASMOS_ERR_PROC_PM_BAD_CAPS;
+    }
+    if (in_caps.io_range_count > WASMOS_IO_RANGE_LIMIT) {
         return WASMOS_ERR_PROC_PM_BAD_CAPS;
     }
 
     caps.valid = 1;
     caps.cap_flags = in_caps.cap_flags;
-    caps.io_port_min = in_caps.io_port_min;
-    caps.io_port_max = in_caps.io_port_max;
     caps.irq_mask = in_caps.irq_mask;
     caps.dma_direction_flags = 0;
     caps.dma_max_bytes = 0;
     caps.dma_window_count = 0;
 
-    if ((caps.cap_flags & DEVMGR_CAP_IO_PORT) == 0) {
-        caps.io_port_min = 0;
-        caps.io_port_max = 0;
+    /* A non-zero io_range_count supersedes the single io_port_min/max window;
+     * the ranges follow the fixed header, ahead of the DMA windows. */
+    if (in_caps.io_range_count > 0) {
+        expected_size = WASMOS_SPAWN_CAPS_V2_SIZE(in_caps.io_range_count, 0);
+        if (payload_size < expected_size) {
+            return WASMOS_ERR_PROC_PM_BAD_CAPS;
+        }
+        if (mm_copy_from_user(owner_context, caps.io_ranges, caps_user_va + sizeof(in_caps),
+                              (uint64_t)in_caps.io_range_count * sizeof(wasmos_io_range_t)) != 0) {
+            return WASMOS_ERR_PROC_PM_USER_COPY;
+        }
+        caps.io_range_count =
+            ((caps.cap_flags & DEVMGR_CAP_IO_PORT) != 0) ? (uint32_t)in_caps.io_range_count : 0u;
+        for (uint32_t i = 0; i < caps.io_range_count; ++i) {
+            if (caps.io_ranges[i].first > caps.io_ranges[i].last) {
+                return WASMOS_ERR_PROC_PM_BAD_CAPS;
+            }
+        }
+    } else if (pm_caps_set_io_window(&caps, in_caps.io_port_min, in_caps.io_port_max) != 0) {
+        return WASMOS_ERR_PROC_PM_BAD_CAPS;
     }
     if ((caps.cap_flags & DEVMGR_CAP_DMA) != 0) {
         if ((in_caps.dma.direction_flags & ~WASMOS_DMA_DIR_BIDIR) != 0 ||
@@ -1676,11 +1700,13 @@ int pm_handle_spawn_caps_v2(uint32_t pm_context_id, const ipc_message_t* msg) {
             in_caps.dma.window_count == 0 || in_caps.dma.window_count > PM_DMA_WINDOW_LIMIT) {
             return WASMOS_ERR_PROC_PM_BAD_CAPS;
         }
-        expected_size = WASMOS_SPAWN_CAPS_V2_SIZE(in_caps.dma.window_count);
+        expected_size = WASMOS_SPAWN_CAPS_V2_SIZE(in_caps.io_range_count, in_caps.dma.window_count);
         if (payload_size != expected_size) {
             return WASMOS_ERR_PROC_PM_BAD_CAPS;
         }
-        if (mm_copy_from_user(owner_context, caps.dma_windows, caps_user_va + sizeof(in_caps),
+        if (mm_copy_from_user(owner_context, caps.dma_windows,
+                              caps_user_va + sizeof(in_caps) +
+                                  (uint64_t)in_caps.io_range_count * sizeof(wasmos_io_range_t),
                               (uint64_t)in_caps.dma.window_count * sizeof(wasmos_dma_window_t)) !=
             0) {
             return WASMOS_ERR_PROC_PM_USER_COPY;
@@ -1875,8 +1901,6 @@ int pm_handle_spawn_path_caps(uint32_t pm_context_id, const ipc_message_t* msg) 
     caps.valid = 1;
     caps.cap_flags = caps_arg0 & 0xFFFFu;
     caps.irq_mask = (uint16_t)(caps_arg0 >> 16);
-    caps.io_port_min = (uint16_t)(caps_arg2 & 0xFFFFu);
-    caps.io_port_max = (uint16_t)(caps_arg2 >> 16);
     caps.dma_direction_flags = 0;
     caps.dma_max_bytes = 0;
     caps.dma_window_count = 0;
@@ -1889,10 +1913,8 @@ int pm_handle_spawn_path_caps(uint32_t pm_context_id, const ipc_message_t* msg) 
         return WASMOS_ERR_PROC_PM_NO_CALLER;
     }
     parent_pid = caller->pid;
-    if ((caps.cap_flags & DEVMGR_CAP_IO_PORT) == 0) {
-        caps.io_port_min = 0;
-        caps.io_port_max = 0;
-    } else if (caps.io_port_min > caps.io_port_max) {
+    if (pm_caps_set_io_window(&caps, (uint16_t)(caps_arg2 & 0xFFFFu),
+                              (uint16_t)(caps_arg2 >> 16)) != 0) {
         return WASMOS_ERR_PROC_PM_BAD_CAPS;
     }
     if ((caps.cap_flags & DEVMGR_CAP_DMA) != 0) {

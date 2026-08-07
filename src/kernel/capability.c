@@ -15,8 +15,8 @@ typedef struct {
     uint8_t configured;
     uint8_t spawn_profile_configured;
     uint8_t io_port_range_valid;
-    uint16_t io_port_min;
-    uint16_t io_port_max;
+    uint32_t io_range_count;
+    wasmos_io_range_t io_ranges[CAPABILITY_IO_RANGE_LIMIT];
     uint16_t irq_mask;
     uint32_t dma_direction_flags;
     uint32_t dma_max_bytes;
@@ -145,8 +145,8 @@ int capability_context_configured(uint32_t context_id) {
     return ctx ? (ctx->configured != 0) : 0;
 }
 
-int capability_set_spawn_profile(uint32_t context_id, uint32_t cap_flags, uint16_t io_port_min,
-                                 uint16_t io_port_max, uint16_t irq_mask,
+int capability_set_spawn_profile(uint32_t context_id, uint32_t cap_flags, uint32_t io_range_count,
+                                 const wasmos_io_range_t* io_ranges, uint16_t irq_mask,
                                  uint32_t dma_direction_flags, uint32_t dma_max_bytes,
                                  uint32_t dma_window_count,
                                  const wasmos_dma_window_t* dma_windows) {
@@ -156,8 +156,15 @@ int capability_set_spawn_profile(uint32_t context_id, uint32_t cap_flags, uint16
     }
     ctx->spawn_profile_configured = 1;
     ctx->io_port_range_valid = (cap_flags & (1u << 0)) ? 1u : 0u;
-    ctx->io_port_min = io_port_min;
-    ctx->io_port_max = io_port_max;
+    ctx->io_range_count = 0;
+    if (ctx->io_port_range_valid && io_ranges) {
+        for (uint32_t i = 0; i < io_range_count && i < CAPABILITY_IO_RANGE_LIMIT; ++i) {
+            if (io_ranges[i].first > io_ranges[i].last) {
+                return -1; /* an inverted window would silently allow nothing */
+            }
+            ctx->io_ranges[ctx->io_range_count++] = io_ranges[i];
+        }
+    }
     ctx->irq_mask = (cap_flags & (1u << 2)) ? irq_mask : 0;
     if ((cap_flags & (1u << 3)) != 0) {
         if (dma_window_count == 0 || dma_window_count > CAPABILITY_DMA_WINDOW_LIMIT ||
@@ -194,7 +201,12 @@ int capability_io_port_allowed(uint32_t context_id, uint16_t port) {
     if (!ctx->spawn_profile_configured || !ctx->io_port_range_valid) {
         return 0;
     }
-    return (port >= ctx->io_port_min && port <= ctx->io_port_max) ? 1 : 0;
+    for (uint32_t i = 0; i < ctx->io_range_count; ++i) {
+        if (port >= ctx->io_ranges[i].first && port <= ctx->io_ranges[i].last) {
+            return 1;
+        }
+    }
+    return 0;
 }
 
 int capability_irq_line_allowed(uint32_t context_id, uint32_t irq_line) {

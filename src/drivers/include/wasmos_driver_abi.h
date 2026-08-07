@@ -375,6 +375,22 @@ typedef struct __attribute__((packed)) {
     uint64_t length;
 } wasmos_dma_window_t;
 
+/* One inclusive I/O-port window [first, last]. A driver needs more than one
+ * whenever its device's registers are not contiguous: legacy IDE is the case
+ * that forced this — the task-file sits at the fixed ISA ports (0x1F0/0x3F6)
+ * while its bus-master registers live in a firmware-assigned BAR (0xC040 on
+ * QEMU's PIIX). Covering both with a single range would span every port in
+ * between, which is where other devices live. */
+typedef struct __attribute__((packed)) {
+    uint16_t first;
+    uint16_t last;
+} wasmos_io_range_t;
+
+/* Windows one spawn profile may carry. Small on purpose: a driver that needs
+ * more than a handful of disjoint port windows is describing a device this
+ * model does not fit. */
+#define WASMOS_IO_RANGE_LIMIT 4u
+
 typedef struct __attribute__((packed)) {
     uint32_t direction_flags;
     uint32_t max_bytes;
@@ -382,18 +398,28 @@ typedef struct __attribute__((packed)) {
     uint32_t reserved0;
 } wasmos_spawn_dma_caps_t;
 
+/* Descriptor-based spawn capabilities. Unlike the packed-arg spawn opcodes,
+ * which are out of IPC argument slots, this carries variable-length arrays after
+ * the fixed header. Layout is header, then io_range_count I/O windows, then
+ * dma.window_count DMA windows — order matters, both sides walk it positionally.
+ *
+ * io_port_min/max remain for a single contiguous window; io_range_count > 0
+ * supersedes them, which is how a device with disjoint register windows (legacy
+ * IDE: task file at 0x1F0/0x3F6, bus-master registers in a BAR) is described. */
 typedef struct __attribute__((packed)) {
     uint32_t cap_flags;
     uint16_t io_port_min;
     uint16_t io_port_max;
     uint16_t irq_mask;
-    uint16_t reserved0;
+    uint16_t io_range_count;
     wasmos_spawn_dma_caps_t dma;
-    wasmos_dma_window_t windows[];
+    /* wasmos_io_range_t io_ranges[io_range_count];
+     * wasmos_dma_window_t windows[dma.window_count]; */
 } wasmos_spawn_caps_v2_t;
 
-#define WASMOS_SPAWN_CAPS_V2_SIZE(window_count)                                                    \
+#define WASMOS_SPAWN_CAPS_V2_SIZE(io_range_count, window_count)                                    \
     (sizeof(wasmos_spawn_caps_v2_t) +                                                              \
+     ((uint32_t)(io_range_count) * (uint32_t)sizeof(wasmos_io_range_t)) +                          \
      ((uint32_t)(window_count) * (uint32_t)sizeof(wasmos_dma_window_t)))
 
 enum {

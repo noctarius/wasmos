@@ -11,7 +11,8 @@
 #include <stdint.h>
 #include "wasmos_driver_abi.h"
 
-#define CAPABILITY_DMA_WINDOW_LIMIT 16u /* max DMA windows per driver context */
+#define CAPABILITY_DMA_WINDOW_LIMIT 16u                 /* max DMA windows per driver context */
+#define CAPABILITY_IO_RANGE_LIMIT WASMOS_IO_RANGE_LIMIT /* max disjoint I/O windows */
 
 /* Hardware access kinds, each gated by a separate flag in the spawn profile. */
 typedef enum {
@@ -39,10 +40,11 @@ int capability_context_configured(uint32_t context_id);
 
 /* Set the full hardware access profile for a newly spawned driver process.
  * cap_flags is a bitmask of (1 << capability_kind_t) values.
- * io_port_min/max bound the allowed I/O port range; irq_mask selects IRQ lines.
+ * io_ranges lists the allowed I/O port windows (a device's registers are not
+ * always contiguous); irq_mask selects IRQ lines.
  * dma_windows defines physical address ranges the driver may use for DMA. */
-int capability_set_spawn_profile(uint32_t context_id, uint32_t cap_flags, uint16_t io_port_min,
-                                 uint16_t io_port_max, uint16_t irq_mask,
+int capability_set_spawn_profile(uint32_t context_id, uint32_t cap_flags, uint32_t io_range_count,
+                                 const wasmos_io_range_t* io_ranges, uint16_t irq_mask,
                                  uint32_t dma_direction_flags, uint32_t dma_max_bytes,
                                  uint32_t dma_window_count, const wasmos_dma_window_t* dma_windows);
 

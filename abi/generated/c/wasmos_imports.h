@@ -632,5 +632,62 @@ extern int32_t wasmos_msi_free(int32_t vector) WASMOS_WASM_IMPORT("wasmos", "msi
  * WASMOS_ERR_MSI_* code. Requires the mmio.map capability.
  */
 extern int32_t wasmos_mmio_write32(int32_t phys_lo, int32_t phys_hi, int32_t value) WASMOS_WASM_IMPORT("wasmos", "mmio_write32");
+/* Read a byte at `offset` within the caller's granted I/O region `region` -- an
+ * index into the windows its spawn profile granted, in the order they were
+ * declared -- and store it at `out`. The kernel adds the base and
+ * bounds-checks the offset, so a driver never names an absolute port and
+ * cannot reach outside the window it holds.
+ *
+ * The value is returned through `out` rather than as the result because a
+ * port read is not a signed quantity: a 32-bit register can legitimately read
+ * 0xFFFFFFFF, which would be indistinguishable from a failure code. Returns 0
+ * on success, otherwise a negative WASMOS_ERR_IO_* code naming which check
+ * refused it. Requires the io.port capability.
+ */
+extern int32_t wasmos_io_region_in8(int32_t region, int32_t offset, uint32_t* out) WASMOS_WASM_IMPORT("wasmos", "io_region_in8");
+/* Read a 16-bit word at `offset` within the caller's granted I/O region `region` -- an
+ * index into the windows its spawn profile granted, in the order they were
+ * declared -- and store it at `out`. The kernel adds the base and
+ * bounds-checks the offset, so a driver never names an absolute port and
+ * cannot reach outside the window it holds.
+ *
+ * The value is returned through `out` rather than as the result because a
+ * port read is not a signed quantity: a 32-bit register can legitimately read
+ * 0xFFFFFFFF, which would be indistinguishable from a failure code. Returns 0
+ * on success, otherwise a negative WASMOS_ERR_IO_* code naming which check
+ * refused it. Requires the io.port capability.
+ */
+extern int32_t wasmos_io_region_in16(int32_t region, int32_t offset, uint32_t* out) WASMOS_WASM_IMPORT("wasmos", "io_region_in16");
+/* Read a 32-bit word at `offset` within the caller's granted I/O region `region` -- an
+ * index into the windows its spawn profile granted, in the order they were
+ * declared -- and store it at `out`. The kernel adds the base and
+ * bounds-checks the offset, so a driver never names an absolute port and
+ * cannot reach outside the window it holds.
+ *
+ * The value is returned through `out` rather than as the result because a
+ * port read is not a signed quantity: a 32-bit register can legitimately read
+ * 0xFFFFFFFF, which would be indistinguishable from a failure code. Returns 0
+ * on success, otherwise a negative WASMOS_ERR_IO_* code naming which check
+ * refused it. Requires the io.port capability.
+ */
+extern int32_t wasmos_io_region_in32(int32_t region, int32_t offset, uint32_t* out) WASMOS_WASM_IMPORT("wasmos", "io_region_in32");
+/* Write a byte to `offset` within the caller's granted I/O region
+ * `region` (see io_region_in8 for how a region is named). Returns 0, or a
+ * negative WASMOS_ERR_IO_* code naming which check refused it. Requires the
+ * io.port capability.
+ */
+extern int32_t wasmos_io_region_out8(int32_t region, int32_t offset, int32_t value) WASMOS_WASM_IMPORT("wasmos", "io_region_out8");
+/* Write a 16-bit word to `offset` within the caller's granted I/O region
+ * `region` (see io_region_in8 for how a region is named). Returns 0, or a
+ * negative WASMOS_ERR_IO_* code naming which check refused it. Requires the
+ * io.port capability.
+ */
+extern int32_t wasmos_io_region_out16(int32_t region, int32_t offset, int32_t value) WASMOS_WASM_IMPORT("wasmos", "io_region_out16");
+/* Write a 32-bit word to `offset` within the caller's granted I/O region
+ * `region` (see io_region_in8 for how a region is named). Returns 0, or a
+ * negative WASMOS_ERR_IO_* code naming which check refused it. Requires the
+ * io.port capability.
+ */
+extern int32_t wasmos_io_region_out32(int32_t region, int32_t offset, int32_t value) WASMOS_WASM_IMPORT("wasmos", "io_region_out32");
 
 #endif /* WASMOS_GENERATED_CLIENT_IMPORTS_H */

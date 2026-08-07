@@ -223,6 +223,14 @@ and **domains** (namespaced operation errors: the negative of `(domain << 16) | 
 | `WASMOS_ERR_MSI_MAP_FAILED` | -0x0011000A | the MSI-X table BAR could not be mapped |
 | `WASMOS_ERR_MSI_NOT_DEVICE_OWNER` | -0x0011000B | another endpoint already programmed interrupts for this device |
 
+### `io` (domain 18) — region-addressed I/O port access failures
+
+| Code | Value | Description |
+|---|---|---|
+| `WASMOS_ERR_IO_NOT_AUTHORIZED` | -0x00120001 | caller has no io.port spawn profile, so it holds no I/O windows |
+| `WASMOS_ERR_IO_BAD_REGION` | -0x00120002 | region index names no window this context was granted |
+| `WASMOS_ERR_IO_OUT_OF_WINDOW` | -0x00120003 | offset falls outside the granted window's bounds |
+
 ### `font` (domain 12) — font-rasterizer service failures (was FONT_STATUS_*)
 
 | Code | Value | Description |

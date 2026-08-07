@@ -1245,6 +1245,100 @@ hostcalls:
       - { name: phys_hi, kind: scalar }
       - { name: value, kind: scalar }
 
+  - name: io_region_in8
+    id: 120
+    returns: status
+    doc: |
+      Read a byte at `offset` within the caller's granted I/O region `region` -- an
+      index into the windows its spawn profile granted, in the order they were
+      declared -- and store it at `out`. The kernel adds the base and
+      bounds-checks the offset, so a driver never names an absolute port and
+      cannot reach outside the window it holds.
+
+      The value is returned through `out` rather than as the result because a
+      port read is not a signed quantity: a 32-bit register can legitimately read
+      0xFFFFFFFF, which would be indistinguishable from a failure code. Returns 0
+      on success, otherwise a negative WASMOS_ERR_IO_* code naming which check
+      refused it. Requires the io.port capability.
+    params:
+      - { name: region, kind: scalar }
+      - { name: offset, kind: scalar }
+      - { name: out, kind: out, c_type: "uint32_t*" }
+  - name: io_region_in16
+    id: 121
+    returns: status
+    doc: |
+      Read a 16-bit word at `offset` within the caller's granted I/O region `region` -- an
+      index into the windows its spawn profile granted, in the order they were
+      declared -- and store it at `out`. The kernel adds the base and
+      bounds-checks the offset, so a driver never names an absolute port and
+      cannot reach outside the window it holds.
+
+      The value is returned through `out` rather than as the result because a
+      port read is not a signed quantity: a 32-bit register can legitimately read
+      0xFFFFFFFF, which would be indistinguishable from a failure code. Returns 0
+      on success, otherwise a negative WASMOS_ERR_IO_* code naming which check
+      refused it. Requires the io.port capability.
+    params:
+      - { name: region, kind: scalar }
+      - { name: offset, kind: scalar }
+      - { name: out, kind: out, c_type: "uint32_t*" }
+  - name: io_region_in32
+    id: 122
+    returns: status
+    doc: |
+      Read a 32-bit word at `offset` within the caller's granted I/O region `region` -- an
+      index into the windows its spawn profile granted, in the order they were
+      declared -- and store it at `out`. The kernel adds the base and
+      bounds-checks the offset, so a driver never names an absolute port and
+      cannot reach outside the window it holds.
+
+      The value is returned through `out` rather than as the result because a
+      port read is not a signed quantity: a 32-bit register can legitimately read
+      0xFFFFFFFF, which would be indistinguishable from a failure code. Returns 0
+      on success, otherwise a negative WASMOS_ERR_IO_* code naming which check
+      refused it. Requires the io.port capability.
+    params:
+      - { name: region, kind: scalar }
+      - { name: offset, kind: scalar }
+      - { name: out, kind: out, c_type: "uint32_t*" }
+  - name: io_region_out8
+    id: 123
+    returns: status
+    doc: |
+      Write a byte to `offset` within the caller's granted I/O region
+      `region` (see io_region_in8 for how a region is named). Returns 0, or a
+      negative WASMOS_ERR_IO_* code naming which check refused it. Requires the
+      io.port capability.
+    params:
+      - { name: region, kind: scalar }
+      - { name: offset, kind: scalar }
+      - { name: value, kind: scalar }
+  - name: io_region_out16
+    id: 124
+    returns: status
+    doc: |
+      Write a 16-bit word to `offset` within the caller's granted I/O region
+      `region` (see io_region_in8 for how a region is named). Returns 0, or a
+      negative WASMOS_ERR_IO_* code naming which check refused it. Requires the
+      io.port capability.
+    params:
+      - { name: region, kind: scalar }
+      - { name: offset, kind: scalar }
+      - { name: value, kind: scalar }
+  - name: io_region_out32
+    id: 125
+    returns: status
+    doc: |
+      Write a 32-bit word to `offset` within the caller's granted I/O region
+      `region` (see io_region_in8 for how a region is named). Returns 0, or a
+      negative WASMOS_ERR_IO_* code naming which check refused it. Requires the
+      io.port capability.
+    params:
+      - { name: region, kind: scalar }
+      - { name: offset, kind: scalar }
+      - { name: value, kind: scalar }
+
 # Extra links outside the ring-3/AOT id space (no `id`).
 extra:
   - { name: strlen, module: env, runtimes: [wasm3], returns: value, params: [{name: s, kind: ptr}] }

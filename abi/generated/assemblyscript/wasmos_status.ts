@@ -32,6 +32,7 @@ export const WASMOS_ERR_DOMAIN_HRNG: u16 = 14;
 export const WASMOS_ERR_DOMAIN_DMA: u16 = 15;
 export const WASMOS_ERR_DOMAIN_IRQ: u16 = 16;
 export const WASMOS_ERR_DOMAIN_MSI: u16 = 17;
+export const WASMOS_ERR_DOMAIN_IO: u16 = 18;
 export const WASMOS_ERR_DOMAIN_FONT: u16 = 12;
 export const WASMOS_ERR_DOMAIN_RTC: u16 = 13;
 export const WASMOS_ERR_DOMAIN_XFER_BUFFER: u16 = 11;
@@ -172,6 +173,9 @@ export const WASMOS_ERR_MSI_NO_CAPABILITY: i32 = -0x00110008; // device exposes 
 export const WASMOS_ERR_MSI_BAD_ENTRY: i32 = -0x00110009; // table entry index is beyond the device's supported vector count
 export const WASMOS_ERR_MSI_MAP_FAILED: i32 = -0x0011000A; // the MSI-X table BAR could not be mapped
 export const WASMOS_ERR_MSI_NOT_DEVICE_OWNER: i32 = -0x0011000B; // another endpoint already programmed interrupts for this device
+export const WASMOS_ERR_IO_NOT_AUTHORIZED: i32 = -0x00120001; // caller has no io.port spawn profile, so it holds no I/O windows
+export const WASMOS_ERR_IO_BAD_REGION: i32 = -0x00120002; // region index names no window this context was granted
+export const WASMOS_ERR_IO_OUT_OF_WINDOW: i32 = -0x00120003; // offset falls outside the granted window's bounds
 export const WASMOS_ERR_FONT_INVALID: i32 = -0x000C0001; // invalid request arguments (font id, size, glyph, or buffer)
 export const WASMOS_ERR_FONT_PERMISSION: i32 = -0x000C0002; // caller is not permitted to use the requested font resource
 export const WASMOS_ERR_FONT_UNSUPPORTED: i32 = -0x000C0003; // unknown or unsupported request type
@@ -247,6 +251,7 @@ export function errorDomainName(d: u16): string {
     case WASMOS_ERR_DOMAIN_DMA: return "dma";
     case WASMOS_ERR_DOMAIN_IRQ: return "irq";
     case WASMOS_ERR_DOMAIN_MSI: return "msi";
+    case WASMOS_ERR_DOMAIN_IO: return "io";
     case WASMOS_ERR_DOMAIN_FONT: return "font";
     case WASMOS_ERR_DOMAIN_RTC: return "rtc";
     case WASMOS_ERR_DOMAIN_XFER_BUFFER: return "xfer_buffer";
@@ -391,6 +396,9 @@ export function strerror(c: i32): string {
     case WASMOS_ERR_MSI_BAD_ENTRY: return "table entry index is beyond the device's supported vector count";
     case WASMOS_ERR_MSI_MAP_FAILED: return "the MSI-X table BAR could not be mapped";
     case WASMOS_ERR_MSI_NOT_DEVICE_OWNER: return "another endpoint already programmed interrupts for this device";
+    case WASMOS_ERR_IO_NOT_AUTHORIZED: return "caller has no io.port spawn profile, so it holds no I/O windows";
+    case WASMOS_ERR_IO_BAD_REGION: return "region index names no window this context was granted";
+    case WASMOS_ERR_IO_OUT_OF_WINDOW: return "offset falls outside the granted window's bounds";
     case WASMOS_ERR_FONT_INVALID: return "invalid request arguments (font id, size, glyph, or buffer)";
     case WASMOS_ERR_FONT_PERMISSION: return "caller is not permitted to use the requested font resource";
     case WASMOS_ERR_FONT_UNSUPPORTED: return "unknown or unsupported request type";

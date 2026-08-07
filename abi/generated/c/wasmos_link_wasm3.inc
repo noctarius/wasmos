@@ -124,4 +124,10 @@
     X("wasmos", "klog_register_ring", "i(i)", wasmos_klog_register_ring) \
     X("wasmos", "msi_alloc", "i(i*)", wasmos_msi_alloc) \
     X("wasmos", "msi_free", "i(i)", wasmos_msi_free) \
-    X("wasmos", "mmio_write32", "i(iii)", wasmos_mmio_write32)
+    X("wasmos", "mmio_write32", "i(iii)", wasmos_mmio_write32) \
+    X("wasmos", "io_region_in8", "i(ii*)", wasmos_io_region_in8) \
+    X("wasmos", "io_region_in16", "i(ii*)", wasmos_io_region_in16) \
+    X("wasmos", "io_region_in32", "i(ii*)", wasmos_io_region_in32) \
+    X("wasmos", "io_region_out8", "i(iii)", wasmos_io_region_out8) \
+    X("wasmos", "io_region_out16", "i(iii)", wasmos_io_region_out16) \
+    X("wasmos", "io_region_out32", "i(iii)", wasmos_io_region_out32)

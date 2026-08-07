@@ -242,6 +242,14 @@ domains:
       - { name: MAP_FAILED,       description: "the MSI-X table BAR could not be mapped" }
       - { name: NOT_DEVICE_OWNER, description: "another endpoint already programmed interrupts for this device" }
 
+  io:
+    id: 18
+    description: "region-addressed I/O port access failures"
+    codes:
+      - { name: NOT_AUTHORIZED, description: "caller has no io.port spawn profile, so it holds no I/O windows" }
+      - { name: BAD_REGION,     description: "region index names no window this context was granted" }
+      - { name: OUT_OF_WINDOW,  description: "offset falls outside the granted window's bounds" }
+
   font:
     id: 12
     description: "font-rasterizer service failures (was FONT_STATUS_*)"

@@ -679,6 +679,16 @@ static int hw_spawn_driver_index(int32_t index) {
     return dm_spawn_sync_call(PROC_IPC_SPAWN_SYNC, index, DM_SPAWN_TIMEOUT_MS, 0, 0);
 }
 
+/* What a driver is actually granted is otherwise invisible: the driver addresses
+ * its device by region index and never learns the ports, and a capability
+ * refusal surfaces far from here. One line at the point of decision makes a
+ * mis-granted window obvious in a boot log instead of a mystery later. */
+static void log_spawn_grant(int32_t index, const spawn_caps_t* caps) {
+    (void)printf("[device-manager] grant module=%d io[0]=%04X-%04X irq_mask=%04X caps=%X\n",
+                 (int)index, (unsigned)caps->io_port_min, (unsigned)caps->io_port_max,
+                 (unsigned)caps->irq_mask, (unsigned)caps->cap_flags);
+}
+
 static int hw_spawn_driver_index_caps(int32_t index, const spawn_caps_t* caps) {
     uint32_t io_packed = 0;
     uint32_t arg3 = 0;
@@ -688,6 +698,7 @@ static int hw_spawn_driver_index_caps(int32_t index, const spawn_caps_t* caps) {
     if (index < 0) {
         return -1;
     }
+    log_spawn_grant(index, caps);
     io_packed = ((uint32_t)caps->io_port_min) | ((uint32_t)caps->io_port_max << 16);
     arg3 = (caps->irq_mask & 0xFFFFu) | ((DM_SPAWN_TIMEOUT_MS & 0xFFFFu) << 16);
     return dm_spawn_sync_call(PROC_IPC_SPAWN_CAPS_SYNC, index, (int32_t)caps->cap_flags,

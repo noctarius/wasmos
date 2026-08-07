@@ -37,6 +37,7 @@ const (
 	WASMOS_ERR_DOMAIN_DMA uint16 = 15
 	WASMOS_ERR_DOMAIN_IRQ uint16 = 16
 	WASMOS_ERR_DOMAIN_MSI uint16 = 17
+	WASMOS_ERR_DOMAIN_IO uint16 = 18
 	WASMOS_ERR_DOMAIN_FONT uint16 = 12
 	WASMOS_ERR_DOMAIN_RTC uint16 = 13
 	WASMOS_ERR_DOMAIN_XFER_BUFFER uint16 = 11
@@ -180,6 +181,9 @@ const (
 	WASMOS_ERR_MSI_BAD_ENTRY int32 = -0x00110009 // table entry index is beyond the device's supported vector count
 	WASMOS_ERR_MSI_MAP_FAILED int32 = -0x0011000A // the MSI-X table BAR could not be mapped
 	WASMOS_ERR_MSI_NOT_DEVICE_OWNER int32 = -0x0011000B // another endpoint already programmed interrupts for this device
+	WASMOS_ERR_IO_NOT_AUTHORIZED int32 = -0x00120001 // caller has no io.port spawn profile, so it holds no I/O windows
+	WASMOS_ERR_IO_BAD_REGION int32 = -0x00120002 // region index names no window this context was granted
+	WASMOS_ERR_IO_OUT_OF_WINDOW int32 = -0x00120003 // offset falls outside the granted window's bounds
 	WASMOS_ERR_FONT_INVALID int32 = -0x000C0001 // invalid request arguments (font id, size, glyph, or buffer)
 	WASMOS_ERR_FONT_PERMISSION int32 = -0x000C0002 // caller is not permitted to use the requested font resource
 	WASMOS_ERR_FONT_UNSUPPORTED int32 = -0x000C0003 // unknown or unsupported request type
@@ -288,6 +292,8 @@ func WasmosErrorDomainName(d uint16) string {
 		return "irq"
 	case WASMOS_ERR_DOMAIN_MSI:
 		return "msi"
+	case WASMOS_ERR_DOMAIN_IO:
+		return "io"
 	case WASMOS_ERR_DOMAIN_FONT:
 		return "font"
 	case WASMOS_ERR_DOMAIN_RTC:
@@ -571,6 +577,12 @@ func WasmosStrerror(c int32) string {
 		return "the MSI-X table BAR could not be mapped"
 	case WASMOS_ERR_MSI_NOT_DEVICE_OWNER:
 		return "another endpoint already programmed interrupts for this device"
+	case WASMOS_ERR_IO_NOT_AUTHORIZED:
+		return "caller has no io.port spawn profile, so it holds no I/O windows"
+	case WASMOS_ERR_IO_BAD_REGION:
+		return "region index names no window this context was granted"
+	case WASMOS_ERR_IO_OUT_OF_WINDOW:
+		return "offset falls outside the granted window's bounds"
 	case WASMOS_ERR_FONT_INVALID:
 		return "invalid request arguments (font id, size, glyph, or buffer)"
 	case WASMOS_ERR_FONT_PERMISSION:

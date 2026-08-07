@@ -209,6 +209,27 @@ int capability_io_port_allowed(uint32_t context_id, uint16_t port) {
     return 0;
 }
 
+int capability_io_region_port(uint32_t context_id, uint32_t region, uint32_t offset,
+                              uint16_t* out_port) {
+    const capability_context_state_t* ctx = capability_state_for_context(context_id, 0);
+    uint32_t span = 0;
+    if (!out_port) {
+        return WASMOS_ERR_IO_NOT_AUTHORIZED;
+    }
+    if (!ctx || !ctx->spawn_profile_configured || !ctx->io_port_range_valid) {
+        return WASMOS_ERR_IO_NOT_AUTHORIZED;
+    }
+    if (region >= ctx->io_range_count) {
+        return WASMOS_ERR_IO_BAD_REGION;
+    }
+    span = (uint32_t)ctx->io_ranges[region].last - (uint32_t)ctx->io_ranges[region].first;
+    if (offset > span) {
+        return WASMOS_ERR_IO_OUT_OF_WINDOW;
+    }
+    *out_port = (uint16_t)(ctx->io_ranges[region].first + offset);
+    return 0;
+}
+
 int capability_irq_line_allowed(uint32_t context_id, uint32_t irq_line) {
     if (irq_line >= 16) {
         return 0;

@@ -256,6 +256,18 @@ static inline uint32_t warp_ring3_dispatch_table(uint32_t hc_id, uint64_t a0,
         return warp_msi_free((uint32_t)a0, reinterpret_cast<void*>(a1));
     case HC_MMIO_WRITE32:
         return warp_mmio_write32((uint32_t)a0, (uint32_t)a1, (uint32_t)a2, reinterpret_cast<void*>(a3));
+    case HC_IO_REGION_IN8:
+        return warp_io_region_in8((uint32_t)a0, (uint32_t)a1, (uint32_t)a2, reinterpret_cast<void*>(a3));
+    case HC_IO_REGION_IN16:
+        return warp_io_region_in16((uint32_t)a0, (uint32_t)a1, (uint32_t)a2, reinterpret_cast<void*>(a3));
+    case HC_IO_REGION_IN32:
+        return warp_io_region_in32((uint32_t)a0, (uint32_t)a1, (uint32_t)a2, reinterpret_cast<void*>(a3));
+    case HC_IO_REGION_OUT8:
+        return warp_io_region_out8((uint32_t)a0, (uint32_t)a1, (uint32_t)a2, reinterpret_cast<void*>(a3));
+    case HC_IO_REGION_OUT16:
+        return warp_io_region_out16((uint32_t)a0, (uint32_t)a1, (uint32_t)a2, reinterpret_cast<void*>(a3));
+    case HC_IO_REGION_OUT32:
+        return warp_io_region_out32((uint32_t)a0, (uint32_t)a1, (uint32_t)a2, reinterpret_cast<void*>(a3));
     default:
         return (uint32_t)-1;
     }

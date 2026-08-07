@@ -1962,6 +1962,77 @@ m3ApiRawFunction(wasmos_env_unset) {
     m3ApiReturn(0);
 }
 
+/* Region-addressed I/O. The driver supplies (region, offset), never an absolute
+ * port, so it cannot express an access outside the window its spawn profile
+ * granted -- the kernel owns the base. `region` indexes those windows in
+ * declaration order. Failures propagate the specific WASMOS_ERR_IO_* reason
+ * rather than collapsing to one value: "no such region" and "offset past the
+ * end" are different bugs. */
+static int io_region_port(uint32_t region, uint32_t offset, uint16_t* out_port) {
+    uint32_t context_id = 0;
+    if (current_process_context(&context_id) != 0) {
+        return WASMOS_ERR_IO_NOT_AUTHORIZED;
+    }
+    return capability_io_region_port(context_id, region, offset, out_port);
+}
+
+/* Reads return the datum through linear memory, not as the result: a 32-bit port
+ * read can legitimately be 0xFFFFFFFF and must stay distinguishable from a
+ * failure code. */
+#define WASMOS_IO_REGION_READ(width_expr)                                                          \
+    m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, region) m3ApiGetArg(int32_t, offset)             \
+        m3ApiGetArgMem(uint32_t*, out) m3ApiCheckMem(out, sizeof(uint32_t));                       \
+    uint16_t port = 0;                                                                             \
+    int rc = 0;                                                                                    \
+    if (region < 0 || offset < 0) {                                                                \
+        m3ApiReturn(WASMOS_ERR_IO_BAD_REGION);                                                     \
+    }                                                                                              \
+    rc = io_region_port((uint32_t)region, (uint32_t)offset, &port);                                \
+    if (rc != 0) {                                                                                 \
+        m3ApiReturn(rc);                                                                           \
+    }                                                                                              \
+    *out = (width_expr);                                                                           \
+    m3ApiReturn(0)
+
+m3ApiRawFunction(wasmos_io_region_in8) {
+    WASMOS_IO_REGION_READ((uint32_t)inb(port));
+}
+
+m3ApiRawFunction(wasmos_io_region_in16) {
+    WASMOS_IO_REGION_READ((uint32_t)inw(port));
+}
+
+m3ApiRawFunction(wasmos_io_region_in32) {
+    WASMOS_IO_REGION_READ((uint32_t)inl(port));
+}
+
+#define WASMOS_IO_REGION_WRITE(write_stmt)                                                         \
+    m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, region) m3ApiGetArg(int32_t, offset)             \
+        m3ApiGetArg(int32_t, value);                                                               \
+    uint16_t port = 0;                                                                             \
+    int rc = 0;                                                                                    \
+    if (region < 0 || offset < 0) {                                                                \
+        m3ApiReturn(WASMOS_ERR_IO_BAD_REGION);                                                     \
+    }                                                                                              \
+    rc = io_region_port((uint32_t)region, (uint32_t)offset, &port);                                \
+    if (rc != 0) {                                                                                 \
+        m3ApiReturn(rc);                                                                           \
+    }                                                                                              \
+    write_stmt;                                                                                    \
+    m3ApiReturn(0)
+
+m3ApiRawFunction(wasmos_io_region_out8) {
+    WASMOS_IO_REGION_WRITE(outb(port, (uint8_t)((uint32_t)value & 0xFFu)));
+}
+
+m3ApiRawFunction(wasmos_io_region_out16) {
+    WASMOS_IO_REGION_WRITE(outw(port, (uint16_t)((uint32_t)value & 0xFFFFu)));
+}
+
+m3ApiRawFunction(wasmos_io_region_out32) {
+    WASMOS_IO_REGION_WRITE(outl(port, (uint32_t)value));
+}
+
 m3ApiRawFunction(wasmos_io_in8) {
     m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, port) uint32_t context_id = 0;
     if (port < 0 || port > 0xFFFF) {

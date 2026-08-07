@@ -127,7 +127,13 @@ typedef enum {
     HC_MSI_ALLOC = 117,
     HC_MSI_FREE = 118,
     HC_MMIO_WRITE32 = 119,
-    HC_COUNT = 120,
+    HC_IO_REGION_IN8 = 120,
+    HC_IO_REGION_IN16 = 121,
+    HC_IO_REGION_IN32 = 122,
+    HC_IO_REGION_OUT8 = 123,
+    HC_IO_REGION_OUT16 = 124,
+    HC_IO_REGION_OUT32 = 125,
+    HC_COUNT = 126,
 } warp_hostcall_id_t;
 
 #endif /* WASMOS_HOSTCALL_IDS_H */

@@ -17,8 +17,14 @@
  * driver to mount the ESP and service the current overwrite-only write path.
  */
 
-#define ATA_PRIMARY_BASE 0x1F0
-#define ATA_PRIMARY_CTRL 0x3F6
+/* The driver names no absolute port. Its spawn profile grants I/O windows in the
+ * order its manifest declares them; region 0 is the task-file window, which on a
+ * legacy IDE controller spans the fixed ISA ports [0x1F0, 0x3F7] and therefore
+ * covers the device-control register at 0x3F6 as well. Offsets below are
+ * relative to that window's base, so where firmware actually put it -- or
+ * whether it moves -- is the kernel's problem, not this file's. */
+#define ATA_IO_REGION 0u
+#define ATA_REG_CTRL 0x206u /* 0x3F6 - 0x1F0: device control / alternate status */
 
 #define ATA_REG_DATA 0x00
 #define ATA_REG_ERROR 0x01
@@ -90,8 +96,23 @@ static uint8_t g_irq_active;
 static uint8_t g_irq_seen;       /* at least one interrupt has actually arrived */
 static uint32_t g_irq_dry_waits; /* consecutive sleeps that produced nothing */
 
+/* A refused read cannot be reported through the value (0xFF is a real status),
+ * so a failure reads as 0 -- which has neither BSY nor DRQ set and so cannot be
+ * mistaken for a ready drive by any caller below. */
 static uint8_t ata_read_status(void) {
-    return (uint8_t)wasmos_io_in8(ATA_PRIMARY_BASE + ATA_REG_STATUS);
+    uint32_t value = 0;
+    if (wasmos_io_region_in8(ATA_IO_REGION, ATA_REG_STATUS, &value) != 0) {
+        return 0u;
+    }
+    return (uint8_t)(value & 0xFFu);
+}
+
+static uint16_t ata_read_data16(void) {
+    uint32_t value = 0;
+    if (wasmos_io_region_in16(ATA_IO_REGION, ATA_REG_DATA, &value) != 0) {
+        return 0u;
+    }
+    return (uint16_t)(value & 0xFFFFu);
 }
 
 /* Consume any pending interrupt events. Two things are owed and both matter:
@@ -127,7 +148,7 @@ static void ata_disable_interrupts(const char* why) {
         return;
     }
     g_irq_active = 0;
-    wasmos_io_out8(ATA_PRIMARY_CTRL, ATA_CTRL_NIEN);
+    wasmos_io_region_out8(ATA_IO_REGION, ATA_REG_CTRL, ATA_CTRL_NIEN);
     (void)ata_service_irq();
     (void)wasmos_irq_unroute((int32_t)ATA_IRQ_LINE);
     (void)printf("[ata] %s; falling back to polled transfers\n", why);
@@ -186,13 +207,13 @@ static int ata_identify_unit(uint8_t unit, uint16_t* out_words) {
     if (!out_words) {
         return -1;
     }
-    wasmos_io_out8(ATA_PRIMARY_BASE + ATA_REG_HDDEVSEL, (uint8_t)(0xA0u | ((unit & 1u) << 4)));
+    wasmos_io_region_out8(ATA_IO_REGION, ATA_REG_HDDEVSEL, (uint8_t)(0xA0u | ((unit & 1u) << 4)));
     wasmos_io_wait();
-    wasmos_io_out8(ATA_PRIMARY_BASE + ATA_REG_SECCOUNT0, 0);
-    wasmos_io_out8(ATA_PRIMARY_BASE + ATA_REG_LBA0, 0);
-    wasmos_io_out8(ATA_PRIMARY_BASE + ATA_REG_LBA1, 0);
-    wasmos_io_out8(ATA_PRIMARY_BASE + ATA_REG_LBA2, 0);
-    wasmos_io_out8(ATA_PRIMARY_BASE + ATA_REG_COMMAND, ATA_CMD_IDENTIFY);
+    wasmos_io_region_out8(ATA_IO_REGION, ATA_REG_SECCOUNT0, 0);
+    wasmos_io_region_out8(ATA_IO_REGION, ATA_REG_LBA0, 0);
+    wasmos_io_region_out8(ATA_IO_REGION, ATA_REG_LBA1, 0);
+    wasmos_io_region_out8(ATA_IO_REGION, ATA_REG_LBA2, 0);
+    wasmos_io_region_out8(ATA_IO_REGION, ATA_REG_COMMAND, ATA_CMD_IDENTIFY);
 
     if (ata_read_status() == 0) {
         return -1;
@@ -202,7 +223,7 @@ static int ata_identify_unit(uint8_t unit, uint16_t* out_words) {
     }
 
     for (uint32_t i = 0; i < 256; ++i) {
-        out_words[i] = (uint16_t)wasmos_io_in16(ATA_PRIMARY_BASE + ATA_REG_DATA);
+        out_words[i] = ata_read_data16();
     }
     return 0;
 }
@@ -253,14 +274,14 @@ static int ata_read_lba28(uint8_t unit, uint32_t lba, uint8_t count, const ata_s
         return -1;
     }
 
-    wasmos_io_out8(ATA_PRIMARY_BASE + ATA_REG_HDDEVSEL,
-                   (uint8_t)(0xE0u | ((unit & 1u) << 4) | ((lba >> 24) & 0x0Fu)));
+    wasmos_io_region_out8(ATA_IO_REGION, ATA_REG_HDDEVSEL,
+                          (uint8_t)(0xE0u | ((unit & 1u) << 4) | ((lba >> 24) & 0x0Fu)));
     wasmos_io_wait();
-    wasmos_io_out8(ATA_PRIMARY_BASE + ATA_REG_SECCOUNT0, count);
-    wasmos_io_out8(ATA_PRIMARY_BASE + ATA_REG_LBA0, (uint8_t)(lba & 0xFF));
-    wasmos_io_out8(ATA_PRIMARY_BASE + ATA_REG_LBA1, (uint8_t)((lba >> 8) & 0xFF));
-    wasmos_io_out8(ATA_PRIMARY_BASE + ATA_REG_LBA2, (uint8_t)((lba >> 16) & 0xFF));
-    wasmos_io_out8(ATA_PRIMARY_BASE + ATA_REG_COMMAND, ATA_CMD_READ_SECTORS);
+    wasmos_io_region_out8(ATA_IO_REGION, ATA_REG_SECCOUNT0, count);
+    wasmos_io_region_out8(ATA_IO_REGION, ATA_REG_LBA0, (uint8_t)(lba & 0xFF));
+    wasmos_io_region_out8(ATA_IO_REGION, ATA_REG_LBA1, (uint8_t)((lba >> 8) & 0xFF));
+    wasmos_io_region_out8(ATA_IO_REGION, ATA_REG_LBA2, (uint8_t)((lba >> 16) & 0xFF));
+    wasmos_io_region_out8(ATA_IO_REGION, ATA_REG_COMMAND, ATA_CMD_READ_SECTORS);
 
     /* Reads are staged through a local 512-byte sector buffer and then handed to
      * the sink, which is either the caller's block buffer or the original
@@ -271,7 +292,7 @@ static int ata_read_lba28(uint8_t unit, uint32_t lba, uint8_t count, const ata_s
         }
         uint16_t* out = (uint16_t*)g_sector_buf;
         for (uint32_t i = 0; i < 256; ++i) {
-            out[i] = (uint16_t)wasmos_io_in16(ATA_PRIMARY_BASE + ATA_REG_DATA);
+            out[i] = ata_read_data16();
         }
         if (ata_sink_write(sink, g_sector_buf, ATA_SECTOR_SIZE, sector * ATA_SECTOR_SIZE) != 0) {
             return -1;
@@ -290,14 +311,14 @@ static int ata_write_lba28(uint8_t unit, uint32_t lba, uint8_t count, uint32_t b
         return -1;
     }
 
-    wasmos_io_out8(ATA_PRIMARY_BASE + ATA_REG_HDDEVSEL,
-                   (uint8_t)(0xE0u | ((unit & 1u) << 4) | ((lba >> 24) & 0x0Fu)));
+    wasmos_io_region_out8(ATA_IO_REGION, ATA_REG_HDDEVSEL,
+                          (uint8_t)(0xE0u | ((unit & 1u) << 4) | ((lba >> 24) & 0x0Fu)));
     wasmos_io_wait();
-    wasmos_io_out8(ATA_PRIMARY_BASE + ATA_REG_SECCOUNT0, count);
-    wasmos_io_out8(ATA_PRIMARY_BASE + ATA_REG_LBA0, (uint8_t)(lba & 0xFF));
-    wasmos_io_out8(ATA_PRIMARY_BASE + ATA_REG_LBA1, (uint8_t)((lba >> 8) & 0xFF));
-    wasmos_io_out8(ATA_PRIMARY_BASE + ATA_REG_LBA2, (uint8_t)((lba >> 16) & 0xFF));
-    wasmos_io_out8(ATA_PRIMARY_BASE + ATA_REG_COMMAND, ATA_CMD_WRITE_SECTORS);
+    wasmos_io_region_out8(ATA_IO_REGION, ATA_REG_SECCOUNT0, count);
+    wasmos_io_region_out8(ATA_IO_REGION, ATA_REG_LBA0, (uint8_t)(lba & 0xFF));
+    wasmos_io_region_out8(ATA_IO_REGION, ATA_REG_LBA1, (uint8_t)((lba >> 8) & 0xFF));
+    wasmos_io_region_out8(ATA_IO_REGION, ATA_REG_LBA2, (uint8_t)((lba >> 16) & 0xFF));
+    wasmos_io_region_out8(ATA_IO_REGION, ATA_REG_COMMAND, ATA_CMD_WRITE_SECTORS);
 
     for (uint8_t sector = 0; sector < count; ++sector) {
         if (ata_wait_drq() != 0) {
@@ -309,14 +330,14 @@ static int ata_write_lba28(uint8_t unit, uint32_t lba, uint8_t count, uint32_t b
         }
         uint16_t* in = (uint16_t*)g_sector_buf;
         for (uint32_t i = 0; i < 256; ++i) {
-            wasmos_io_out16(ATA_PRIMARY_BASE + ATA_REG_DATA, in[i]);
+            wasmos_io_region_out16(ATA_IO_REGION, ATA_REG_DATA, in[i]);
         }
     }
 
     if (ata_wait_not_busy() != 0) {
         return -1;
     }
-    wasmos_io_out8(ATA_PRIMARY_BASE + ATA_REG_COMMAND, ATA_CMD_CACHE_FLUSH);
+    wasmos_io_region_out8(ATA_IO_REGION, ATA_REG_COMMAND, ATA_CMD_CACHE_FLUSH);
     return ata_wait_not_busy();
 }
 
@@ -614,6 +635,11 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t ignored_arg
         ata_publish_block_device(unit, unit_sectors, unit_present);
     }
 
+    /* The driver addresses its device by region index and never sees a port, so
+     * name what each region is for; device-manager logs the window it granted. */
+    (void)printf("[ata] io region %u = task file (+%02X status, +%03X control), irq line %u\n",
+                 (unsigned)ATA_IO_REGION, (unsigned)ATA_REG_STATUS, (unsigned)ATA_REG_CTRL,
+                 (unsigned)ATA_IRQ_LINE);
     ata_log_transfer_mode();
 
     /* Identify ran polled above; from here transfers can be interrupt-driven.
@@ -627,7 +653,7 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t ignored_arg
         if (g_irq_endpoint >= 0 && g_irq_select >= 0 &&
             wasmos_ipc_select_add(g_irq_select, g_irq_endpoint) == 0 &&
             wasmos_irq_route_ipc((int32_t)ATA_IRQ_LINE, g_irq_endpoint) == 0) {
-            wasmos_io_out8(ATA_PRIMARY_CTRL, 0); /* clear nIEN */
+            wasmos_io_region_out8(ATA_IO_REGION, ATA_REG_CTRL, 0); /* clear nIEN */
             g_irq_active = 1;
             (void)printf("[ata] irq routed line=%u\n", (unsigned)ATA_IRQ_LINE);
         } else {

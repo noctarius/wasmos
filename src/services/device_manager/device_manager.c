@@ -1281,9 +1281,24 @@ static int query_driver_module_meta(int32_t module_index, uint32_t match_index,
     return 0;
 }
 
+/* Messages are routed by registered type, so an opcode nobody registered simply
+ * vanishes -- no handler, no error, no trace. That silence cost real debugging
+ * time when DEVMGR_PUBLISH_DEVICE_DESC was added and went nowhere, so say so.
+ *
+ * It logs but does NOT reply. Error-replying to an unsolicited or unknown
+ * message is what put process-manager and rtc into a mutual error ping-pong that
+ * pegged a CPU; a service must be able to receive something it does not
+ * understand without generating traffic. The name lookup is subsystem-scoped
+ * because opcode values are endpoint-scoped and a global lookup would mislabel
+ * them. */
 static void dm_handle_ipc_default(void* user, const wasmos_ipc_message_t* msg) {
     (void)user;
-    (void)msg;
+    if (!msg) {
+        return;
+    }
+    (void)printf("[device-manager] unhandled opcode 0x%03X (%s) from ep=%d\n", (unsigned)msg->type,
+                 wasmos_opcode_name(WASMOS_OPCODE_SUBSYS_DEVICE_MANAGER, (uint32_t)msg->type),
+                 (int)msg->source);
 }
 
 static int dm_register_ipc_handlers(void) {

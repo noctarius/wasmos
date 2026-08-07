@@ -46,6 +46,7 @@
 #define PCI_REG_CAP_PTR 0x34u
 #define PCI_REG_BAR0 0x10u
 
+#define PCI_CMD_IO_SPACE (1u << 0)
 #define PCI_CMD_BUS_MASTER (1u << 2)
 #define PCI_CMD_INTX_DISABLE (1u << 10)
 #define PCI_STATUS_CAP_LIST (1u << 4) /* status is the high half of reg 0x04 */
@@ -98,11 +99,12 @@ static void log_desc(const wasmos_pci_device_desc_t* d) {
         if (d->bars[i].kind == WASMOS_PCI_BAR_NONE) {
             continue;
         }
-        (void)printf("[pci-bus]   bar%u %s %08X%s\n", (unsigned)i,
+        (void)printf("[pci-bus]   bar%u %s %08X size %u%s\n", (unsigned)i,
                      (d->bars[i].kind == WASMOS_PCI_BAR_IO)
                          ? "io "
                          : ((d->bars[i].kind == WASMOS_PCI_BAR_MEM64) ? "m64" : "m32"),
                      (unsigned)(d->bars[i].base & 0xFFFFFFFFu),
+                     (unsigned)(d->bars[i].size & 0xFFFFFFFFu),
                      d->bars[i].prefetchable ? " pf" : "");
     }
 }
@@ -394,12 +396,40 @@ static int32_t msi_unbind(uint16_t bdf, uint32_t entry, int32_t requester) {
  * slot for its high half, so the caller is told to skip it -- six registers is
  * not always six regions.
  *
- * `size` is deliberately left 0. Discovering it means writing all-ones and
- * reading back the mask, which requires disabling the function's address decode
- * first; doing that to the VGA device would blank a framebuffer the kernel is
- * already scanning out of. Consumers that need a length use the architectural
- * one for the register block (bus-master IDE is 16 bytes) until size probing
- * gets a safe home. */
+ * I/O BAR sizes are probed; memory BAR sizes are not, and the difference is not
+ * arbitrary. Sizing means writing all-ones and reading back the mask, which
+ * requires the function to stop decoding that address space first -- and decode
+ * is enabled per space: command bit 0 covers I/O, bit 1 covers memory. Clearing
+ * bit 0 for the width of an I/O probe cannot disturb a memory window.
+ *
+ * Memory is another matter. The kernel takes the UEFI GOP framebuffer long
+ * before this scan runs, and that framebuffer IS a memory BAR of the VGA
+ * function -- the boot log shows [framebuffer] init 0x80000000 and bar0 m32
+ * 80000000 on 00:02.0, the same address. Clearing memory decode to size it would
+ * stop the console mid-probe. So memory sizes stay 0 (unknown) until sizing can
+ * skip whatever backs the active framebuffer. */
+/* Size an I/O BAR: quiesce I/O decode, write all-ones, read back the mask, then
+ * restore both the BAR and the command register. The mask's lowest set bit is
+ * the region length. Memory decode is left alone throughout (see pci_decode_bar).
+ * Returns 0 when the device does not implement the BAR. */
+static uint64_t pci_probe_io_bar_size(uint16_t bdf, uint8_t reg, uint32_t original) {
+    uint32_t cmd = cfg_read(bdf, PCI_REG_COMMAND) & 0xFFFFu;
+    uint32_t mask = 0;
+
+    cfg_write(bdf, PCI_REG_COMMAND, cmd & ~(uint32_t)PCI_CMD_IO_SPACE);
+    cfg_write(bdf, reg, 0xFFFFFFFFu);
+    mask = cfg_read(bdf, reg) & 0xFFFFFFFCu;
+    cfg_write(bdf, reg, original);
+    cfg_write(bdf, PCI_REG_COMMAND, cmd);
+
+    if (mask == 0u) {
+        return 0;
+    }
+    /* Length is the value of the lowest set bit: the mask's clear low bits are
+     * the offset bits the device decodes. */
+    return (uint64_t)(((~mask) + 1u) & 0xFFFFFFFFu);
+}
+
 static uint32_t pci_decode_bar(uint16_t bdf, uint32_t index, wasmos_pci_bar_t* out) {
     uint8_t reg = (uint8_t)(PCI_REG_BAR0 + 4u * index);
     uint32_t value = cfg_read(bdf, reg);
@@ -417,6 +447,7 @@ static uint32_t pci_decode_bar(uint16_t bdf, uint32_t index, wasmos_pci_bar_t* o
     if ((value & 1u) != 0u) {
         out->kind = WASMOS_PCI_BAR_IO;
         out->base = (uint64_t)(value & 0xFFFFFFFCu);
+        out->size = pci_probe_io_bar_size(bdf, reg, value);
         return consumed;
     }
     out->prefetchable = ((value & 0x8u) != 0u) ? 1u : 0u;

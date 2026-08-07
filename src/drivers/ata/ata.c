@@ -340,7 +340,11 @@ static uint32_t ata_build_prd(uint64_t phys, uint32_t bytes) {
         bytes -= run;
         used++;
     }
-    if (bytes > 0u) {
+    /* `used == 0` means a zero-byte request: the loop never ran, so there is no
+     * last entry to mark and `used - 1` would index off the front of the array.
+     * Both callers reject a zero sector count today, which is exactly why this
+     * has to be checked here rather than assumed. */
+    if (bytes > 0u || used == 0u) {
         return 0;
     }
     prd[used - 1u].flags = ATA_PRD_EOT;

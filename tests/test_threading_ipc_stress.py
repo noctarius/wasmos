@@ -21,8 +21,9 @@ class ThreadingIpcStressTests(unittest.TestCase):
         # Wait for the CLI prompt so the full boot output is buffered;
         # the threading IPC stress marker is emitted during early boot.
         if not cls.session.expect(b"wamos> "):
+            tail = cls.session.tail()
             cls.session.close()
-            raise RuntimeError("CLI prompt not detected")
+            raise RuntimeError(f"CLI prompt not detected\n--- tail ---\n{tail}\n")
 
     @classmethod
     def tearDownClass(cls):

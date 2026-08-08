@@ -19,8 +19,9 @@ class DeviceManagerIntegrationTests(unittest.TestCase):
         cls.session = QemuSession(cfg, timeout_s=120, echo=True)
         cls.session.start()
         if not cls.session.expect(b"wamos> "):
+            tail = cls.session.tail()
             cls.session.close()
-            raise RuntimeError("CLI prompt not detected")
+            raise RuntimeError(f"CLI prompt not detected\n--- tail ---\n{tail}\n")
 
     @classmethod
     def tearDownClass(cls):

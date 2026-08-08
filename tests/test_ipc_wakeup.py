@@ -21,8 +21,9 @@ class IpcWakeupTests(unittest.TestCase):
         # Wait for CLI so the full boot output (including the early-boot
         # IPC wakeup marker) is in the accumulated buffer.
         if not cls.session.expect(b"wamos> "):
+            tail = cls.session.tail()
             cls.session.close()
-            raise RuntimeError("CLI prompt not detected")
+            raise RuntimeError(f"CLI prompt not detected\n--- tail ---\n{tail}\n")
 
     @classmethod
     def tearDownClass(cls):

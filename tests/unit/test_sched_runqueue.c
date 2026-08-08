@@ -1895,6 +1895,109 @@ static void test_cpu_count_beyond_the_table_is_clamped(void) {
     g_cpu_count = 4;
 }
 
+/* -------------------------------------------------------------- affinity */
+
+/* cpu_sched_affinity_allows is static, so these drive it through the public
+ * entry points that consult it: the enqueue redirect, steal, and placement. */
+
+/* C1: a mask naming one ONLINE and one offline CPU must restrict to the online
+ * subset.  The existing mask test uses a fully unsatisfiable mask, which exits
+ * through the "no constraint" fallback -- so the restrictive path had never
+ * actually run for a mask containing an offline bit. */
+static void test_partially_online_mask_restricts(void) {
+    harness_reset();
+    for (uint32_t forbidden = 0; forbidden < 4; ++forbidden) {
+        if (forbidden == 1u) {
+            continue;
+        }
+        harness_reset();
+        thread_t* t = mk_thread(0, SCHED_PRIO_WASM, THREAD_STATE_READY);
+        t->cpu_affinity = (1u << 1) | (1u << 9); /* CPU 1 online, CPU 9 not */
+        act_as(forbidden);
+        cpu_sched_enqueue(&g_cpus[forbidden].sched, t);
+        CHECK(t->rq == &g_cpus[1].sched, "redirected to the only online allowed CPU");
+    }
+    harness_reset();
+    thread_t* t = mk_thread(0, SCHED_PRIO_WASM, THREAD_STATE_READY);
+    t->cpu_affinity = (1u << 1) | (1u << 9);
+    act_as(1);
+    cpu_sched_enqueue(&g_cpus[1].sched, t);
+    CHECK(t->rq == &g_cpus[1].sched, "and left alone on the allowed CPU");
+}
+
+/* C2: an empty mask means unconstrained, not "runnable nowhere". */
+static void test_empty_mask_is_unconstrained(void) {
+    harness_reset();
+    thread_t* t = mk_thread(0, SCHED_PRIO_WASM, THREAD_STATE_READY);
+    t->cpu_affinity = 0u;
+    act_as(2);
+    cpu_sched_enqueue(&g_cpus[2].sched, t);
+    CHECK(t->on_rq == 1, "an empty mask does not strand the thread");
+    CHECK(t->rq == &g_cpus[2].sched, "and does not force a redirect");
+}
+
+/* C3: an id outside the table reads as allowed.  That is what keeps an unknown
+ * cpu_sched_t (a caller-owned queue) from being redirected away. */
+static void test_out_of_table_cpu_id_is_allowed(void) {
+    harness_reset();
+    cpu_sched_t private_q;
+    cpu_sched_init(&private_q);
+    thread_t* t = mk_thread(0, SCHED_PRIO_WASM, THREAD_STATE_READY);
+    t->cpu_affinity = 1u << 2; /* would forbid CPU 0, the old fallback index */
+    act_as(0);
+    cpu_sched_enqueue(&private_q, t);
+    CHECK(t->rq == &private_q, "an unknown queue is never second-guessed by affinity");
+}
+
+/* C4: the BSP is unconditionally online, even with started clear. */
+static void test_bsp_is_always_online(void) {
+    harness_reset();
+    g_cpus[0].started = 0;
+    thread_t* t = mk_thread(0, SCHED_PRIO_WASM, THREAD_STATE_READY);
+    t->cpu_affinity = 1u << 0;
+    act_as(0);
+    cpu_sched_enqueue(&g_cpus[0].sched, t);
+    CHECK(t->rq == &g_cpus[0].sched, "a BSP-pinned thread is allowed on the BSP");
+}
+
+/* C5: a CPU going offline AFTER placement.  The mask then names no online CPU,
+ * so the thread becomes stealable by anyone -- which is currently the only thing
+ * that stops it being stranded on a dead queue. */
+static void test_cpu_going_offline_frees_a_pinned_thread(void) {
+    harness_reset();
+    thread_t* t = mk_thread(0, SCHED_PRIO_WASM, THREAD_STATE_READY);
+    t->cpu_affinity = 1u << 3;
+    act_as(3);
+    cpu_sched_enqueue(&g_cpus[3].sched, t);
+    CHECK(t->rq == &g_cpus[3].sched, "placed on its only allowed CPU");
+
+    g_cpus[3].started = 0; /* CPU 3 goes away */
+    act_as(0);
+    CHECK(cpu_sched_try_steal(0) == t, "the thread becomes stealable rather than stranded");
+    check_invariants("offline recovery");
+}
+
+/* C6: affinity is not consumed by a wake -- it survives repeated block/wake
+ * round trips from different CPUs. */
+static void test_affinity_survives_wake_block_round_trips(void) {
+    harness_reset();
+    thread_t* t = mk_thread(0, SCHED_PRIO_WASM, THREAD_STATE_BLOCKED);
+    t->cpu_affinity = 1u << 2;
+
+    act_as(0);
+    sched_wake_thread(t);
+    CHECK(t->rq == &g_cpus[2].sched, "woken from CPU 0, lands on CPU 2");
+
+    CHECK(pick_on(2) == t, "dispatched by its own CPU");
+    t->state = THREAD_STATE_BLOCKED;
+
+    act_as(1);
+    sched_wake_thread(t);
+    CHECK(t->rq == &g_cpus[2].sched, "woken from CPU 1, still lands on CPU 2");
+    CHECK(t->cpu_affinity == (1u << 2), "and the mask itself is unchanged");
+    check_invariants("affinity across round trips");
+}
+
 /* -------------------------------------------------------------------- main */
 
 int main(void) {
@@ -2010,6 +2113,12 @@ int main(void) {
         {"T17 spawn with affinity, no redirect", test_spawn_with_affinity_needs_no_redirect},
         {"T7 zero CPU count survivable", test_zero_cpu_count_is_survivable},
         {"T8 CPU count beyond the table", test_cpu_count_beyond_the_table_is_clamped},
+        {"C1 partially-online mask restricts", test_partially_online_mask_restricts},
+        {"C2 empty mask is unconstrained", test_empty_mask_is_unconstrained},
+        {"C3 out-of-table cpu id is allowed", test_out_of_table_cpu_id_is_allowed},
+        {"C4 BSP is always online", test_bsp_is_always_online},
+        {"C5 offline CPU frees a pinned thread", test_cpu_going_offline_frees_a_pinned_thread},
+        {"C6 affinity survives round trips", test_affinity_survives_wake_block_round_trips},
     };
 
     for (unsigned i = 0; i < sizeof(tests) / sizeof(tests[0]); ++i) {

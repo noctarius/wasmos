@@ -360,20 +360,15 @@ for e in json.load(open(src_db)):
         res.append(toks[i])
         i += 1
     if kind == "host":
-        # Host-built unit tests. Two things would break them here: the indexing
-        # command puts the project include dirs on -I, so src/kernel/include's
-        # freestanding stdlib.h / stdio.h / string.h shadow the host's (hiding
-        # e.g. strtol), and injecting a freestanding target hides <pthread.h> and
-        # <sched.h> entirely. Demote the project dirs to -iquote so only "..."
-        # includes see them while <...> resolves to the host libc, and inject no
-        # target so the host arch and sysroot stand.
-        quoted = []
-        for t in res:
-            if t.startswith("-I") and len(t) > 2:
-                quoted += ["-iquote", t[2:]]
-            else:
-                quoted.append(t)
-        res = quoted
+        # Host-built unit tests. Exactly one libc may be visible in a TU: our
+        # headers redeclare strcpy/memcpy/..., which does not parse once the
+        # host's <string.h> has defined those names as _FORTIFY_SOURCE macros
+        # (macOS SDK). Which libc wins is a per-test property and the index
+        # targets already encode it — -I for the tests that compile against our
+        # libc, -iquote for the ones that take the host's — so the command is
+        # used as-is. Only the sysroot is added, and no target is injected: a
+        # freestanding one hides <pthread.h> and <sched.h>, so the host arch and
+        # sysroot stand.
         if host_sysroot:
             res[1:1] = ["-isysroot", host_sysroot]
     elif kind == "wasm":

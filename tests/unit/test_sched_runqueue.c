@@ -1098,6 +1098,206 @@ static void test_remove_from_head_middle_tail_preserves_fifo(void) {
     }
 }
 
+/* ------------------------------------------------ anti-starvation policy */
+
+/* Observed donation cycle, expressed against the constant rather than hardcoded.
+ *
+ * It is STREAK+2, not STREAK+1, and the extra dispatch is deliberate to pin: the
+ * dispatch that RETURNS to the high band after a donation takes the
+ * last_dispatched_prio > prio arm, which RESETS the streak to 0 instead of
+ * counting itself as the first of the new run.  So the high band receives
+ * STREAK+1 consecutive slots per donated slot, while the constant reads as
+ * though it should receive STREAK.  See the note in the commit: this is a policy
+ * off-by-one, not a correctness bug, and changing it changes fairness. */
+#define DONATION_CYCLE (SCHED_ANTISTARVATION_STREAK + 2)
+
+/* Dispatch `n` times on CPU 0 with both bands kept occupied (each picked thread
+ * is re-enqueued), recording the band each dispatch came from. */
+static void run_dispatches(int n, int hi, int lo, int* out_band) {
+    for (int i = 0; i < n; ++i) {
+        thread_t* t = pick_on(0);
+        out_band[i] = (t == g_cpus[0].idle_thread) ? -1 : (int)t->sched_prio;
+        if (t != g_cpus[0].idle_thread) {
+            cpu_sched_enqueue(&g_cpus[0].sched, t); /* refill */
+        }
+    }
+    (void)hi;
+    (void)lo;
+}
+
+static void seed_band(int prio, int count, int base_idx) {
+    for (int i = 0; i < count; ++i) {
+        cpu_sched_enqueue(&g_cpus[0].sched,
+                          mk_thread(base_idx + i, (sched_prio_t)prio, THREAD_STATE_READY));
+    }
+}
+
+/* A1: the streak boundary, derived from the constant.  Every dispatch before the
+ * boundary comes from the high band; the first low-band slot lands exactly on it. */
+static void test_streak_boundary_is_exact(void) {
+    harness_reset();
+    seed_band(SCHED_PRIO_DRIVER, 2, 0);
+    seed_band(SCHED_PRIO_BACKGROUND, 2, 10);
+    int band[16];
+    run_dispatches(DONATION_CYCLE, SCHED_PRIO_DRIVER, SCHED_PRIO_BACKGROUND, band);
+
+    int first_low = -1;
+    for (int i = 0; i < DONATION_CYCLE; ++i) {
+        if (band[i] == SCHED_PRIO_BACKGROUND && first_low < 0) {
+            first_low = i;
+        }
+    }
+    CHECK(first_low == DONATION_CYCLE - 1, "the first donated slot lands on the boundary");
+    for (int i = 0; i < DONATION_CYCLE - 1; ++i) {
+        CHECK(band[i] == SCHED_PRIO_DRIVER, "every dispatch before the boundary is high band");
+    }
+}
+
+/* A2: the donation goes to the NEXT occupied lower band, not the lowest. */
+static void test_demotion_picks_the_next_lower_band(void) {
+    harness_reset();
+    seed_band(SCHED_PRIO_DRIVER, 2, 0);
+    seed_band(SCHED_PRIO_WASM, 2, 10);
+    seed_band(SCHED_PRIO_BACKGROUND, 2, 20);
+    int band[16];
+    run_dispatches(DONATION_CYCLE, 0, 0, band);
+    CHECK(band[DONATION_CYCLE - 1] == SCHED_PRIO_WASM,
+          "the yielded slot goes to the next occupied band, not the lowest");
+}
+
+/* A3: one slot, then straight back to the top, and the cycle repeats. */
+static void test_donation_is_one_slot_then_back_to_the_top(void) {
+    harness_reset();
+    seed_band(SCHED_PRIO_DRIVER, 2, 0);
+    seed_band(SCHED_PRIO_BACKGROUND, 2, 10);
+    int band[3 * (SCHED_ANTISTARVATION_STREAK + 2)];
+    int n = 3 * DONATION_CYCLE;
+    run_dispatches(n, 0, 0, band);
+
+    int lows = 0;
+    int last_low = -1;
+    int spacing_ok = 1;
+    for (int i = 0; i < n; ++i) {
+        if (band[i] != SCHED_PRIO_BACKGROUND) {
+            continue;
+        }
+        lows++;
+        if (last_low >= 0 && (i - last_low) != DONATION_CYCLE) {
+            spacing_ok = 0;
+        }
+        last_low = i;
+        if (i + 1 < n) {
+            CHECK(band[i + 1] == SCHED_PRIO_DRIVER, "the very next dispatch returns to the top");
+        }
+    }
+    CHECK(lows == 3, "exactly one donation per cycle");
+    CHECK(spacing_ok, "donations are evenly spaced by the cycle length");
+}
+
+/* A4: with no lower band to donate to, the streak keeps climbing and nothing is
+ * demoted -- the counter must not reset just because the search failed. */
+static void test_no_lower_band_means_no_demotion_and_no_reset(void) {
+    harness_reset();
+    seed_band(SCHED_PRIO_DRIVER, 2, 0);
+    int band[SCHED_ANTISTARVATION_STREAK + 5];
+    int n = SCHED_ANTISTARVATION_STREAK + 5;
+    run_dispatches(n, 0, 0, band);
+    int all_high = 1;
+    for (int i = 0; i < n; ++i) {
+        if (band[i] != SCHED_PRIO_DRIVER) {
+            all_high = 0;
+        }
+    }
+    CHECK(all_high, "every dispatch stays in the only occupied band");
+    CHECK(g_cpus[0].sched.high_prio_streak > SCHED_ANTISTARVATION_STREAK,
+          "and the streak keeps climbing rather than resetting");
+}
+
+/* A5: a higher band arriving resets the streak, so the newcomer is not
+ * immediately demoted past. */
+static void test_higher_band_arrival_resets_the_streak(void) {
+    harness_reset();
+    seed_band(SCHED_PRIO_WASM, 2, 0);
+    int band[16];
+    run_dispatches(SCHED_ANTISTARVATION_STREAK, 0, 0, band);
+
+    cpu_sched_enqueue(&g_cpus[0].sched, mk_thread(10, SCHED_PRIO_DRIVER, THREAD_STATE_READY));
+    thread_t* got = pick_on(0);
+    CHECK(got->sched_prio == SCHED_PRIO_DRIVER, "the higher band is dispatched");
+    CHECK(g_cpus[0].sched.high_prio_streak == 0, "and the streak resets");
+}
+
+/* A6: going idle clears both pieces of state. */
+static void test_going_idle_resets_the_policy_state(void) {
+    harness_reset();
+    seed_band(SCHED_PRIO_DRIVER, 2, 0);
+    (void)pick_on(0);
+    (void)pick_on(0);
+    CHECK(pick_on(0) == g_cpus[0].idle_thread, "queue drained");
+    CHECK(g_cpus[0].sched.high_prio_streak == 0, "streak cleared on idle");
+    CHECK(g_cpus[0].sched.last_dispatched_prio == SCHED_PRIO_IDLE, "last band reset to idle");
+}
+
+/* A7: high_prio_streak is a uint8_t and wraps.  A wrap must only DELAY fairness,
+ * never disable it -- after the counter rolls through zero, a newly occupied
+ * lower band must still receive a slot within one cycle. */
+static void test_streak_wrap_only_delays_fairness(void) {
+    harness_reset();
+    seed_band(SCHED_PRIO_DRIVER, 2, 0);
+    int band[300];
+    run_dispatches(300, 0, 0, band); /* drives the uint8_t past 255 */
+
+    seed_band(SCHED_PRIO_BACKGROUND, 2, 10);
+    int follow[32];
+    int n = DONATION_CYCLE + 2;
+    run_dispatches(n, 0, 0, follow);
+    int saw_low = 0;
+    for (int i = 0; i < n; ++i) {
+        if (follow[i] == SCHED_PRIO_BACKGROUND) {
+            saw_low = 1;
+        }
+    }
+    CHECK(saw_low, "fairness resumes within a cycle after the counter wraps");
+}
+
+/* A8: the policy as a property rather than its mechanics -- under sustained load
+ * on both bands, the lower one receives roughly its share. */
+static void test_sustained_fairness_ratio(void) {
+    harness_reset();
+    seed_band(SCHED_PRIO_DRIVER, 2, 0);
+    seed_band(SCHED_PRIO_WASM, 2, 10);
+    int band[200];
+    run_dispatches(200, 0, 0, band);
+    int lows = 0;
+    for (int i = 0; i < 200; ++i) {
+        if (band[i] == SCHED_PRIO_WASM) {
+            lows++;
+        }
+    }
+    int expect = 200 / DONATION_CYCLE;
+    CHECK(lows >= expect - 1 && lows <= expect + 1, "the lower band gets its share of slots");
+}
+
+/* A9: a donation must not land in a band that only holds stale nodes and leave
+ * the CPU idle -- the sweep drops them and the picker converges back up. */
+static void test_demotion_into_a_stale_band_converges(void) {
+    harness_reset();
+    seed_band(SCHED_PRIO_DRIVER, 2, 0);
+    thread_t* dead1 = mk_thread(10, SCHED_PRIO_BACKGROUND, THREAD_STATE_READY);
+    thread_t* dead2 = mk_thread(11, SCHED_PRIO_BACKGROUND, THREAD_STATE_READY);
+    cpu_sched_enqueue(&g_cpus[0].sched, dead1);
+    cpu_sched_enqueue(&g_cpus[0].sched, dead2);
+    dead1->state = THREAD_STATE_ZOMBIE;
+    dead2->state = THREAD_STATE_ZOMBIE;
+
+    int band[16];
+    run_dispatches(DONATION_CYCLE, 0, 0, band);
+    for (int i = 0; i < DONATION_CYCLE; ++i) {
+        CHECK(band[i] != -1, "no dispatch falls through to idle");
+    }
+    check_invariants("demotion into a stale band");
+}
+
 /* -------------------------------------------------------------------- main */
 
 int main(void) {
@@ -1162,6 +1362,16 @@ int main(void) {
         {"R6 dequeue against the wrong queue", test_dequeue_against_the_wrong_queue},
         {"R7 remove releases rq and claim", test_remove_releases_queue_pointer_and_claim},
         {"R8 remove preserves FIFO", test_remove_from_head_middle_tail_preserves_fifo},
+        {"A1 streak boundary is exact", test_streak_boundary_is_exact},
+        {"A2 demotion picks next lower band", test_demotion_picks_the_next_lower_band},
+        {"A3 one slot then back to the top", test_donation_is_one_slot_then_back_to_the_top},
+        {"A4 no lower band: no demote, no reset",
+         test_no_lower_band_means_no_demotion_and_no_reset},
+        {"A5 higher band arrival resets streak", test_higher_band_arrival_resets_the_streak},
+        {"A6 idle resets policy state", test_going_idle_resets_the_policy_state},
+        {"A7 streak wrap only delays fairness", test_streak_wrap_only_delays_fairness},
+        {"A8 sustained fairness ratio", test_sustained_fairness_ratio},
+        {"A9 demotion into a stale band", test_demotion_into_a_stale_band_converges},
     };
 
     for (unsigned i = 0; i < sizeof(tests) / sizeof(tests[0]); ++i) {

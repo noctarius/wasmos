@@ -884,6 +884,67 @@ static void test_out_of_range_priority_is_refused(void) {
     check_invariants("out-of-range prio");
 }
 
+/* ------------------------------------------- sched_enqueue_thread_from */
+
+/* This wrapper exists to carry the ORIGINAL call site, which cpu_sched_enqueue
+ * cannot report (its immediate caller is always this function).  So every case
+ * here asserts on the caller address as well as the behaviour -- 0xCAFE appears
+ * only in messages this path emitted, which is what distinguishes them from the
+ * inner cpu_sched_enqueue reports of the same conditions. */
+
+#define FROM_CALLER 0xCAFEu
+
+static void test_enqueue_from_routes_to_the_calling_cpu(void) {
+    harness_reset();
+    thread_t* t = mk_thread(0, SCHED_PRIO_WASM, THREAD_STATE_READY);
+    act_as(2);
+    sched_enqueue_thread_from(t, FROM_CALLER);
+    CHECK(t->rq == &g_cpus[2].sched, "lands on the calling CPU's queue");
+    CHECK(t->on_rq == 1, "and is claimed");
+    check_invariants("enqueue_from routing");
+}
+
+static void test_enqueue_from_non_ready_reports_the_real_caller(void) {
+    harness_reset();
+    thread_t* t = mk_thread(0, SCHED_PRIO_WASM, THREAD_STATE_BLOCKED);
+    log_reset();
+    sched_enqueue_thread_from(t, FROM_CALLER);
+
+    /* Rate limiting: this counter is untouched by every other test, so the first
+     * occurrence is guaranteed to print.  See the note on the non-READY
+     * rejection test -- messages are generally not a contract. */
+    CHECK(saw("enqueue_from non-ready"), "the wrapper reports the refusal");
+    CHECK(saw("cafe"), "and names the ORIGINAL call site, not its own return address");
+    CHECK(list_head_empty(&t->sched_node), "the inner enqueue still refuses to link it");
+    CHECK(t->on_rq == 0, "and does not claim it");
+    check_invariants("enqueue_from non-ready");
+}
+
+static void test_enqueue_from_null_is_silent(void) {
+    harness_reset();
+    log_reset();
+    sched_enqueue_thread_from(NULL, FROM_CALLER);
+    CHECK(g_log_count == 0, "NULL is a silent no-op, not a reported anomaly");
+    check_invariants("enqueue_from NULL");
+}
+
+static void test_enqueue_from_running_elsewhere(void) {
+    harness_reset();
+    thread_t* t = mk_thread(0, SCHED_PRIO_WASM, THREAD_STATE_RUNNING);
+    t->block_reason = THREAD_BLOCK_IPC;
+    g_cpus[3].current_thread = t;
+    log_reset();
+    act_as(0);
+    sched_enqueue_thread_from(t, FROM_CALLER);
+
+    CHECK(saw("enqueue current"), "the running-elsewhere case is reported");
+    CHECK(saw("cafe"), "with the original call site");
+    CHECK(t->state == THREAD_STATE_READY, "the thread is promoted");
+    CHECK(t->block_reason == THREAD_BLOCK_NONE, "block reason cleared");
+    CHECK(list_head_empty(&t->sched_node), "but not linked while running elsewhere");
+    check_invariants("enqueue_from running elsewhere");
+}
+
 /* -------------------------------------------------------------------- main */
 
 int main(void) {
@@ -933,6 +994,11 @@ int main(void) {
         {"E10 private queue not redirected", test_private_queue_is_not_redirected},
         {"E11 idle thread never enqueued", test_idle_thread_is_never_enqueued},
         {"E12 out-of-range priority refused", test_out_of_range_priority_is_refused},
+        {"F1 enqueue_from routes to calling CPU", test_enqueue_from_routes_to_the_calling_cpu},
+        {"F2 enqueue_from non-READY names caller",
+         test_enqueue_from_non_ready_reports_the_real_caller},
+        {"F3 enqueue_from NULL is silent", test_enqueue_from_null_is_silent},
+        {"F4 enqueue_from running elsewhere", test_enqueue_from_running_elsewhere},
     };
 
     for (unsigned i = 0; i < sizeof(tests) / sizeof(tests[0]); ++i) {

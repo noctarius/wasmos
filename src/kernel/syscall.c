@@ -69,10 +69,19 @@ typedef struct {
 static syscall_ipc_call_slot_t g_syscall_ipc_call_slots[PROCESS_MAX_COUNT];
 
 static inline uintptr_t syscall_alias_ptr(uintptr_t p) {
+#if defined(WASMOS_HOST_TEST_SMP)
+    /* Host harness: there is no higher-half alias of the kernel image, so the
+     * translation below would turn a valid host address into a non-canonical
+     * one. Same reasoning as cpu_local()'s host spelling in sched_thread.c --
+     * the arch mechanism has no hosted equivalent, and the identity here is
+     * what the kernel mapping provides at run time anyway. */
+    return p;
+#else
     if ((uint64_t)p < KERNEL_HIGHER_HALF_BASE) {
         p = (uintptr_t)((uint64_t)p + KERNEL_HIGHER_HALF_BASE);
     }
     return p;
+#endif
 }
 
 static inline syscall_ipc_call_slot_t* syscall_ipc_call_slots_ptr(void) {
@@ -618,16 +627,23 @@ uint64_t x86_syscall_handler(syscall_frame_t* frame) {
         if (!proc) {
             return (uint64_t)-1;
         }
+        /* RDX is both an input (arg0) and the secondary return, so latch the
+         * input before clearing it.
+         *
+         * IPC_CALL returns a secondary value in RDX only on success, and it is
+         * cleared up-front so callers never observe stale register contents on
+         * an error path.  That has to happen BEFORE the argument-width check
+         * below, not after: that check is the one rejection where RDX still
+         * holds caller-supplied input, which a caller reading RDX after a
+         * failed call would take for a reply payload. */
+        uint64_t raw_arg0 = frame->rdx;
+        frame->rdx = 0;
         if (syscall_arg_u32(frame->rdi, &destination) != 0 ||
-            syscall_arg_u32(frame->rsi, &msg_type) != 0 ||
-            syscall_arg_u32(frame->rdx, &arg0) != 0 || syscall_arg_u32(frame->rcx, &arg1) != 0 ||
-            syscall_arg_u32(frame->r8, &arg2) != 0 || syscall_arg_u32(frame->r9, &arg3) != 0) {
+            syscall_arg_u32(frame->rsi, &msg_type) != 0 || syscall_arg_u32(raw_arg0, &arg0) != 0 ||
+            syscall_arg_u32(frame->rcx, &arg1) != 0 || syscall_arg_u32(frame->r8, &arg2) != 0 ||
+            syscall_arg_u32(frame->r9, &arg3) != 0) {
             return (uint64_t)(int64_t)IPC_ERR_INVALID;
         }
-        /* IPC_CALL returns a secondary value in RDX only on success.
-         * Clear it up-front so callers never observe stale register contents on
-         * error paths. */
-        frame->rdx = 0;
         if (request_id == 0) {
             request_id = g_syscall_ipc_call_next_request_id++;
         }

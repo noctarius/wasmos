@@ -2235,6 +2235,40 @@ add_custom_target(run-kernel-unit-tests
           ${CMAKE_SOURCE_DIR}/tests/unit/stubs_spinlock.c
           -o ${BUILD_DIR}/test_ipc
   COMMAND ${BUILD_DIR}/test_ipc
+  # The IPC syscalls, driving x86_syscall_handler with a real syscall_frame_t
+  # against the real ipc.c. Reply authenticity and the 32-bit-clean argument
+  # rule are enforced only here, and were previously covered only by klog string
+  # probes fired from the ring3-smoke image.
+  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
+          -DWASMOS_HOST_TEST_SMP=1
+          -include ${LIBC_DIR}/include/wasmos_cast.h
+          -iquote ${KERNEL_DIR}/include
+          -iquote ${CMAKE_SOURCE_DIR}/libs/wasm3/source
+          -iquote ${CMAKE_SOURCE_DIR}/abi/generated/c
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_syscall_ipc.c
+          ${KERNEL_DIR}/syscall.c
+          ${KERNEL_DIR}/ipc.c
+          ${KERNEL_DIR}/poll.c
+          ${KERNEL_DIR}/sched_event.c
+          ${KERNEL_DIR}/list.c
+          ${KERNEL_DIR}/list_linked.c
+          ${KERNEL_DIR}/list_array_chunk.c
+          ${KERNEL_DIR}/kmem.c
+          ${CMAKE_SOURCE_DIR}/tests/unit/stubs_slab.c
+          ${CMAKE_SOURCE_DIR}/tests/unit/stubs_spinlock.c
+          -o ${BUILD_DIR}/test_syscall_ipc
+  COMMAND ${BUILD_DIR}/test_syscall_ipc
+  # The libsys service event loop. Header-only static inline over the WASM
+  # hostcall imports, and off wasm the import attribute is a no-op, so the test
+  # supplies its own imports and the dispatch logic runs unmodified.
+  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
+          -iquote ${LIBSYS_WASM_DIR}/include
+          -iquote ${LIBC_DIR}/include
+          -iquote ${DRIVER_WASM_DIR}/include
+          -iquote ${CMAKE_SOURCE_DIR}/abi/generated/c
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_libsys_event_loop.c
+          -o ${BUILD_DIR}/test_libsys_event_loop
+  COMMAND ${BUILD_DIR}/test_libsys_event_loop
   # The poll hub on its own. Its only outward call is ipc_select_signal, so the
   # test stubs that and asserts exactly which sets a notify reaches.
   COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
@@ -2750,6 +2784,7 @@ set(WASMOS_UNIT_LIBC_TESTS
     ${CMAKE_SOURCE_DIR}/tests/unit/test_libc_stdio.c
     ${CMAKE_SOURCE_DIR}/tests/unit/test_libc_stdlib.c
     ${CMAKE_SOURCE_DIR}/tests/unit/test_libui_key_decode.c
+    ${CMAKE_SOURCE_DIR}/tests/unit/test_libsys_event_loop.c
     ${CMAKE_SOURCE_DIR}/tests/unit/test_native_ipc_future.c
     ${CMAKE_SOURCE_DIR}/tests/unit/test_wasm_coroutine.c)
 
@@ -2772,7 +2807,8 @@ set(WASMOS_UNIT_SCHED_TESTS
     ${CMAKE_SOURCE_DIR}/tests/unit/test_ipc.c
     ${CMAKE_SOURCE_DIR}/tests/unit/test_ipc_concurrency.c
     ${CMAKE_SOURCE_DIR}/tests/unit/test_poll.c
-    ${CMAKE_SOURCE_DIR}/tests/unit/test_futex.c)
+    ${CMAKE_SOURCE_DIR}/tests/unit/test_futex.c
+    ${CMAKE_SOURCE_DIR}/tests/unit/test_syscall_ipc.c)
 
 wasmos_ide_index(wasmos_ide_unit_sched
   SOURCES ${WASMOS_UNIT_SCHED_TESTS}

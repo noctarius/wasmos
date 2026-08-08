@@ -117,8 +117,7 @@ void process_yield(process_run_result_t result) {
             }
             ksync_spinlock_unlock(&ev->lock);
         }
-        __atomic_store_n((uint32_t*)&self->state, (uint32_t)THREAD_STATE_RUNNING,
-                         __ATOMIC_RELEASE);
+        __atomic_store_n((uint32_t*)&self->state, (uint32_t)THREAD_STATE_RUNNING, __ATOMIC_RELEASE);
     }
     sched_yield();
 }
@@ -737,12 +736,10 @@ int main(void) {
         {"C2 no double delivery across receivers",
          test_no_message_is_delivered_twice_across_receivers},
         {"C3 concurrent creation gives unique ids", test_concurrent_creation_hands_out_unique_ids},
-        {"C4 teardown racing senders is memory safe",
-         test_teardown_racing_senders_is_memory_safe},
+        {"C4 teardown racing senders is memory safe", test_teardown_racing_senders_is_memory_safe},
         {"C5 select delivers under concurrent signals",
          test_select_delivers_under_concurrent_signals},
-        {"C6 select slots are conserved under churn",
-         test_select_slots_are_conserved_under_churn},
+        {"C6 select slots are conserved under churn", test_select_slots_are_conserved_under_churn},
     };
 
     pool_init();

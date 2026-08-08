@@ -33,6 +33,9 @@ typedef struct {
     uint32_t wait_lba;        /* lba of the outstanding request */
     int32_t wait_resp_type;   /* expected BLOCK_IPC_*_RESP */
     uint8_t copy_into_sector; /* pull phys->sector on completion (reads) */
+    uint8_t direct_read;      /* outstanding request landed in the client buffer */
+    uint8_t direct_pending;   /* a FAT_CO_READ_DIRECT is mid-flight (yield-once flag) */
+    uint32_t direct_sectors;  /* sectors the server reported for the last direct read */
     uint8_t write_pending;    /* a FAT_CO_WRITE is mid-flight (yield-once flag) */
     uint32_t loaded_lba;      /* lba currently staged, or FAT_BLOCK_NO_LBA */
 
@@ -47,7 +50,9 @@ void fat_block_configure(fat_block_t* blk, int32_t block_endpoint, int32_t reply
 int fat_block_setup(fat_block_t* blk);
 
 uint8_t* fat_block_sector(fat_block_t* blk); /* the metadata/bounce buffer */
-int fat_block_idle(const fat_block_t* blk);  /* 1 if no request is outstanding */
+/* Endpoint of the block server, needed to reborrow a client buffer to it. */
+int32_t fat_block_server_endpoint(const fat_block_t* blk);
+int fat_block_idle(const fat_block_t* blk); /* 1 if no request is outstanding */
 
 /* The reactor sets the op that owns the buffer for the current step (whom a
  * completion resumes) and records a failure code onto it (used by FAT_CO_FAIL). */
@@ -61,6 +66,20 @@ void fat_block_set_err(fat_block_t* blk, int32_t err);
  *  fat_block_write: push fat_block_sector() to `lba`; FAT_R_WAIT or FAT_R_ERR. */
 fat_r_t fat_need_sector(fat_block_t* blk, uint32_t lba);
 fat_r_t fat_block_write(fat_block_t* blk, uint32_t lba);
+
+/* Submit a zero-copy read of `count` whole sectors from `lba` straight into the
+ * client's transfer buffer at `dst_offset`. Nothing is staged here, so the
+ * sector cache is untouched and stays valid. The caller must already have
+ * reborrowed the buffer to the block server, and passes that `borrow_id` so a
+ * bus-master server can map the destination instead of copying into it.
+ * FAT_R_WAIT or FAT_R_ERR. */
+fat_r_t fat_block_read_direct(fat_block_t* blk, uint32_t lba, uint32_t count, int32_t buffer_id,
+                              int32_t borrow_id, uint32_t dst_offset);
+
+/* Sectors the server actually transferred for the direct read that just
+ * completed. It may be fewer than asked for, so the caller advances by this
+ * rather than by what it requested. */
+uint32_t fat_block_direct_sectors(const fat_block_t* blk);
 
 /* Invalidate the sector cache (call when the buffer is repurposed). */
 void fat_block_invalidate(fat_block_t* blk);

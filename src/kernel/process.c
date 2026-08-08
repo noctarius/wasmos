@@ -9,6 +9,7 @@
 #include "wasm3/shim.h"
 #include "ipc.h"
 #include "irq.h"
+#include "msi.h"
 #include "timer.h"
 #include "thread.h"
 #include "process_manager.h"
@@ -116,6 +117,20 @@ extern uint8_t __kernel_end;
 static uint8_t g_sched_trampoline_stacks[WASMOS_MAX_CPUS][SCHED_TRAMPOLINE_STACK_BYTES]
     __attribute__((aligned(16)));
 
+/* Owned by no subsystem, so a stale slot read as a code pointer is traceable. */
+#define STACK_POISON_VALUE 0xDEAD57ACDEAD57ACULL
+
+static void process_stack_poison(uintptr_t stack_base, uintptr_t stack_top) {
+    if (!stack_base || stack_top <= stack_base) {
+        return;
+    }
+    uint64_t* p = ptr_cast(uint64_t, stack_base);
+    uint64_t* end = ptr_cast(uint64_t, stack_top);
+    while (p < end) {
+        *p++ = STACK_POISON_VALUE;
+    }
+}
+
 static int process_alloc_stack(process_t* slot, uint32_t stack_pages) {
     if (!slot || stack_pages == 0) {
         return -1;
@@ -163,6 +178,8 @@ static int process_alloc_stack(process_t* slot, uint32_t stack_pages) {
     slot->stack_pages = stack_pages;
     slot->stack_top = (uintptr_t)guard_high_virt;
     slot->stack_alloc_base_phys = (uintptr_t)base;
+
+    process_stack_poison(slot->stack_base, slot->stack_top);
 
     if (slot->stack_base && slot->stack_top > slot->stack_base + sizeof(uint64_t)) {
         /* Canaries catch in-range stack corruption that does not reach the guard
@@ -214,6 +231,8 @@ static int process_alloc_thread_stack(thread_t* thread, uint32_t stack_pages) {
     thread->kstack_top = (uintptr_t)guard_high_virt;
     thread->kstack_alloc_base_phys = (uintptr_t)base;
     thread->kstack_pages = stack_pages;
+
+    process_stack_poison(thread->kstack_base, thread->kstack_top);
     return 0;
 }
 
@@ -949,6 +968,7 @@ static void process_reap(process_t* proc) {
     if (proc->context_id != 0) {
         wasmos_subsystem_registry_drop_owner(proc->context_id);
         irq_release_context(proc->context_id);
+        msi_release_context(proc->context_id);
         ipc_endpoints_release_owner(proc->context_id);
         xfer_buffer_drop_context(proc->context_id);
         (void)mm_context_destroy(proc->context_id);
@@ -1219,14 +1239,14 @@ int process_unpark_pid(uint32_t pid) {
     if (process_transit(proc, PROCESS_STATE_BLOCKED, PROCESS_STATE_READY)) {
         proc->block_reason = PROCESS_BLOCK_NONE;
     }
-    if (list_head_empty(&t->sched_node)) {
-        /* Enqueue the unparked child on the local (caller) CPU.  Cross-CPU
-         * "push" placement at unpark time races with the IPC wake path and
-         * destabilises WARP-backed app startup; instead rely on per-CPU
-         * work-stealing (cpu_sched_try_steal) to pull this thread onto an idle
-         * AP once it is runnable. */
-        sched_enqueue_thread(t);
-    }
+    /* Enqueue the unparked child on the local (caller) CPU.  Cross-CPU "push"
+     * placement at unpark time races with the IPC wake path and destabilises
+     * WARP-backed app startup; instead rely on per-CPU work-stealing
+     * (cpu_sched_try_steal) to pull this thread onto an idle AP once it is
+     * runnable.  Enqueue unconditionally: the on_rq claim inside
+     * cpu_sched_enqueue is the only sound "already queued?" test, since this CPU
+     * holds no lock over whichever queue would hold the thread. */
+    sched_enqueue_thread(t);
     return 0;
 }
 
@@ -1408,7 +1428,16 @@ int process_thread_spawn_worker_internal(uint32_t owner_pid, const char* name,
         owner->state == PROCESS_STATE_REAPING || owner->exiting) {
         return -1;
     }
-    if (thread_spawn_in_owner(owner_pid, name ? name : "", THREAD_STATE_READY, THREAD_BLOCK_NONE,
+    /* Spawn PARKED, not READY.  READY publishes the thread to every CPU as a
+     * legal wake/enqueue target, and the scheduler fields it needs -- sched_node
+     * above all -- are not set up until sched_thread_init() below, with a stack
+     * allocation in between.  A wake landing in that window enqueues the thread,
+     * and sched_thread_init's list_head_init then self-links the node while the
+     * queue's head still points at it: the band is spliced through a node with
+     * two owners, its ready bit can never clear, and the picker returns that one
+     * node on every dispatch forever.  The user-thread path below already spawns
+     * BLOCKED and promotes after init; this is the same contract. */
+    if (thread_spawn_in_owner(owner_pid, name ? name : "", THREAD_STATE_BLOCKED, THREAD_BLOCK_NONE,
                               &tid) != 0) {
         return -1;
     }
@@ -1430,6 +1459,19 @@ int process_thread_spawn_worker_internal(uint32_t owner_pid, const char* name,
     sched_thread_init(thread, SCHED_PRIO_SYSTEM);
     owner->thread_count++;
     owner->live_thread_count++;
+    /* Scheduler state is now complete: publish the thread as runnable, then
+     * enqueue it.  sched_spawn_thread -> cpu_sched_enqueue only accepts a READY
+     * thread, so the promotion must precede it. */
+    if (!thread_transit(thread, THREAD_STATE_BLOCKED, THREAD_STATE_READY)) {
+        if (owner->thread_count > 0) {
+            owner->thread_count--;
+        }
+        if (owner->live_thread_count > 0) {
+            owner->live_thread_count--;
+        }
+        thread_reap(tid);
+        return -1;
+    }
     sched_spawn_thread(thread);
     *out_tid = tid;
     return 0;
@@ -1789,23 +1831,62 @@ static int process_schedule_once_impl(void) {
     ksync_spinlock_lock(&cs->lock);
     thread_t* thread = cpu_sched_pick_next(cs);
     ksync_spinlock_unlock(&cs->lock);
-    if (thread == cs->idle) {
-        thread_t* stolen = cpu_sched_try_steal(cpu_local()->cpu_id);
-        if (stolen) {
-            thread = stolen;
-        }
-    }
-    process_t* proc = thread ? process_owner_for_thread(thread) : 0;
-    if (!thread || !proc || !proc->entry) {
+    /* No idle thread at all is the one genuinely impossible state, and the only
+     * one worth panicking over. Everything below can legitimately lose its
+     * thread to a concurrent reap and must stay recoverable. */
+    if (!thread) {
         return SCHED_R_PICK;
     }
-    /* Thread state alone determines runnability.
-     * Note: the idle thread (RUNNING on another CPU) no longer reaches here —
-     * cpu_sched_pick_next returns NULL for idle when state==RUNNING. */
+    uint8_t picked_idle = (thread == cs->idle) ? 1u : 0u;
+    if (picked_idle) {
+        thread_t* stolen = cpu_sched_try_steal(cpu_local()->cpu_id);
+        if (stolen) {
+            /* Do not give up a dispatchable idle for a thread that may already
+             * be gone. cpu_sched_steal_pick pulls the thread off the remote
+             * queue and drops that queue's lock before we get here, while
+             * thread_reap_owner walks the global thread table by owner_pid --
+             * so a reap running on any CPU can reset a thread that a stealer is
+             * already holding. Validating before the swap keeps the idle we
+             * already have; swapping first turns that race into "not even idle
+             * was dispatchable", which is a claim about a different bug. */
+            process_t* sproc = process_owner_for_thread(stolen);
+            if (sproc && sproc->entry) {
+                thread = stolen;
+                picked_idle = 0u;
+            } else {
+                /* Reaped mid-steal. It is already off every queue and its slot
+                 * is being torn down, so it is dropped rather than re-queued --
+                 * the same disposition cpu_sched_pick_next gives stale nodes. */
+                return SCHED_R_STALE;
+            }
+        }
+    }
+    process_t* proc = process_owner_for_thread(thread);
+    if (!proc || !proc->entry) {
+        /* Idle losing its owner really is the panic case; any other thread
+         * losing one is the reap race above, seen a few instructions later. */
+        return picked_idle ? SCHED_R_PICK : SCHED_R_STALE;
+    }
+    /* Thread state alone determines runnability. */
     if (thread->state != THREAD_STATE_READY) {
-        serial_printf_unlocked("[sched] dequeued non-ready tid=%u pid=%u state=%u block=%u\n",
-                               (unsigned)thread->tid, (unsigned)(proc ? proc->pid : 0u),
-                               (unsigned)thread->state, (unsigned)thread->block_reason);
+        /* Rate-limited to powers of two. A non-READY thread parked in a ready
+         * queue is re-picked on every scheduling attempt, so logging each one
+         * floods the serial line at scheduler speed: it shreds the surrounding
+         * output (concurrent unlocked writes interleave mid-line) and slows the
+         * loop enough to perturb the race that put it there. Powers of two keep
+         * the first report, which is the one that names the original thread,
+         * and the running count shows the magnitude. Deliberately still the
+         * UNLOCKED writer: serial_write takes a spinlock that does
+         * spinlock_irq_save + preempt_disable, and this runs inside the
+         * scheduler's own cli window with a dispatch decision in progress. */
+        static uint32_t notready_seen;
+        uint32_t n = __atomic_fetch_add(&notready_seen, 1u, __ATOMIC_RELAXED);
+        if ((n & (n - 1u)) == 0u) {
+            serial_printf_unlocked(
+                "[sched] dequeued non-ready tid=%u pid=%u state=%u block=%u (n=%u)\n",
+                (unsigned)thread->tid, (unsigned)(proc ? proc->pid : 0u), (unsigned)thread->state,
+                (unsigned)thread->block_reason, (unsigned)(n + 1u));
+        }
         return SCHED_R_NOTREADY;
     }
 
@@ -1958,11 +2039,8 @@ static int process_schedule_once_impl(void) {
                 thread_t* next = process_first_owner_ready_thread(proc);
                 if (next && next->state != THREAD_STATE_ZOMBIE) {
                     process_set_ready(proc, next);
-                    /* Only enqueue if not already in the ready list
-                     * (sched_node self-links when not in any list). */
-                    if (next->sched_node.next == &next->sched_node) {
-                        sched_enqueue_thread(next);
-                    }
+                    /* Duplicate enqueues are dropped by the on_rq claim. */
+                    sched_enqueue_thread(next);
                 }
             }
         } else {
@@ -1991,9 +2069,7 @@ static int process_schedule_once_impl(void) {
             next = process_first_owner_ready_thread(proc);
             if (next) {
                 process_set_ready(proc, next);
-                if (next->sched_node.next == &next->sched_node) {
-                    sched_enqueue_thread(next);
-                }
+                sched_enqueue_thread(next);
             } else {
                 /* No runnable sibling left: park the process.  Best-effort —
                  * a 0 return means it raced to a terminal state, in which case
@@ -2033,9 +2109,7 @@ static int process_schedule_once_impl(void) {
              * it on its home CPU. */
             thread_set_state(thread->tid, THREAD_STATE_READY, THREAD_BLOCK_NONE);
             thread->sched_sticky = 1;
-            if (thread->sched_node.next == &thread->sched_node) {
-                sched_enqueue_thread(thread);
-            }
+            sched_enqueue_thread(thread);
         }
     } else {
         /* If the thread registered itself in an event wait_list via the
@@ -2068,7 +2142,7 @@ static int process_schedule_once_impl(void) {
         }
         /* Idle threads live only in the per-CPU fallback path; never enqueue
          * them into the global ready queue so they cannot migrate to a wrong CPU. */
-        if (!proc->is_idle && thread->sched_node.next == &thread->sched_node) {
+        if (!proc->is_idle) {
             sched_enqueue_thread(thread);
         }
     }

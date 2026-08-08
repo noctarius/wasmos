@@ -10,9 +10,6 @@
 #include "wasmos/vring.h"
 #include "wasmos_driver_abi.h"
 
-#define PCI_CFG_ADDR_PORT 0xCF8
-#define PCI_CFG_DATA_PORT 0xCFC
-
 #define VIRTIO_PCI_VENDOR_ID 0x1AF4u
 #define VIRTIO_NET_DEV_LEGACY 0x1000u
 #define VIRTIO_NET_DEV_TRANSITIONAL 0x1041u
@@ -26,8 +23,25 @@
 #define VIRTIO_PCI_QUEUE_NOTIFY 0x10u /* u16: doorbell — write the queue index */
 #define VIRTIO_PCI_DEVICE_STATUS 0x12u
 #define VIRTIO_PCI_ISR_STATUS 0x13u
-#define VIRTIO_NET_CFG_MAC 0x14u
-#define VIRTIO_NET_CFG_STATUS 0x1Au
+/* Enabling MSI-X inserts two 16-bit vector registers at 0x14/0x16 and pushes the
+ * device-specific config region from 0x14 to 0x18 (virtio 0.9.5 §2.3, "MSI-X
+ * vector configuration"). Everything below 0x14 is unaffected, so only the
+ * device-config base moves — see cfg_base(). */
+#define VIRTIO_PCI_MSIX_CONFIG_VECTOR 0x14u /* u16: vector for config changes */
+#define VIRTIO_PCI_MSIX_QUEUE_VECTOR 0x16u  /* u16: vector for the selected queue */
+#define VIRTIO_NET_CFG_BASE_INTX 0x14u
+#define VIRTIO_NET_CFG_BASE_MSIX 0x18u
+#define VIRTIO_NET_CFG_MAC_OFF 0x00u
+#define VIRTIO_NET_CFG_STATUS_OFF 0x06u
+#define VIRTIO_MSIX_NO_VECTOR 0xFFFFu
+
+/* MSI-X table entries this driver uses, one per interrupt source. Reporting
+ * which source fired is the thing INTx could not do: with a shared wire the
+ * driver had to inspect the device to find out what happened. */
+#define VIRTIO_NET_MSIX_ENTRY_RX 0u
+#define VIRTIO_NET_MSIX_ENTRY_TX 1u
+#define VIRTIO_NET_MSIX_ENTRY_CONFIG 2u
+#define VIRTIO_NET_MSIX_ENTRIES 3u
 
 #define VIRTIO_PCI_VRING_ALIGN 4096u
 #define VIRTIO_NET_RX_QUEUE 0u
@@ -46,7 +60,10 @@
 
 /* Kernel delivers a routed hardware IRQ as an IPC message of this type, with
  * arg0/request_id = irq line and source = IPC_ENDPOINT_NONE (see
- * src/kernel/arch/x86_64/irq_x86_64.c). The line stays masked until irq_ack. */
+ * src/kernel/arch/x86_64/irq_x86_64.c). The line stays masked until irq_ack.
+ * An MSI arrives as WASMOS_IPC_MSI_EVENT_TYPE instead (arg0 = table entry, no
+ * ack owed); the two never both apply, because binding an MSI vector sets the
+ * device's INTX_DISABLE. */
 #define IPC_IRQ_EVENT_TYPE 0xFF00
 
 #define VIRTIO_STATUS_ACK 1u
@@ -75,9 +92,12 @@ typedef struct {
     uint32_t driver_features;
     uint16_t status_word;
     uint8_t mac[6];
+    uint8_t msix_enabled; /* MSI-X bound: config registers shift, INTx is off */
+    uint32_t msix_vectors[VIRTIO_NET_MSIX_ENTRIES]; /* kernel vectors, for release */
 } virtio_net_device_t;
 
 static int32_t g_endpoint = -1;
+static int32_t g_pci_endpoint = -1; /* pci-bus: owns config space, programs MSI-X */
 static virtio_net_device_t g_dev;
 static netdrv_stats_t g_stats;
 
@@ -124,13 +144,6 @@ static uint32_t g_rx_q_tail;
 static uint32_t g_rx_q_count;
 static int32_t g_rx_sub_endpoint = -1; /* subscriber for RX_FRAME_NOTIFY, -1 = none */
 static int32_t g_link_sub_endpoint = -1;
-
-static uint32_t pci_config_read32(uint8_t bus, uint8_t slot, uint8_t function, uint8_t reg) {
-    uint32_t address = 0x80000000u | ((uint32_t)bus << 16) | ((uint32_t)slot << 11) |
-                       ((uint32_t)function << 8) | ((uint32_t)reg & 0xFCu);
-    (void)wasmos_io_out32(PCI_CFG_ADDR_PORT, (int32_t)address);
-    return (uint32_t)wasmos_io_in32(PCI_CFG_DATA_PORT);
-}
 
 static uint16_t io_read16(uint16_t port) {
     return (uint16_t)((uint32_t)wasmos_io_in16((int32_t)port) & 0xFFFFu);
@@ -211,10 +224,8 @@ static const char* find_token_value(const char* args, const char* key) {
     }
 }
 
-/* PCI rule spawns pass the matched BAR/IRQ identity through startup args
- * because the driver's io.port grant is scoped to the device BAR, not the PCI
- * config ports needed for a fresh scan. When no startup identity is present,
- * keep the direct config-space probe as a fallback for manual launches. */
+/* Startup args carry the device identity: pci=BB:SS.FF vendor= device= io= irq=
+ * The driver is bound to that device and to no other. */
 static int probe_virtio_net_from_startup_args(void) {
     char args[128];
     const char* pci = 0;
@@ -256,53 +267,22 @@ static int probe_virtio_net_from_startup_args(void) {
     return 0;
 }
 
-static int probe_virtio_net(void) {
-    for (uint16_t bus = 0; bus < 256; ++bus) {
-        for (uint8_t slot = 0; slot < 32; ++slot) {
-            for (uint8_t function = 0; function < 8; ++function) {
-                uint32_t id = pci_config_read32((uint8_t)bus, slot, function, 0x00);
-                uint16_t vendor_id = (uint16_t)(id & 0xFFFFu);
-                uint16_t device_id = (uint16_t)((id >> 16) & 0xFFFFu);
-                uint32_t class_reg;
-                uint32_t bar0;
-                if (vendor_id == 0xFFFFu) {
-                    if (function == 0u) {
-                        break;
-                    }
-                    continue;
-                }
-                if (!is_virtio_net_device(vendor_id, device_id)) {
-                    continue;
-                }
-                class_reg = pci_config_read32((uint8_t)bus, slot, function, 0x08);
-                if (((class_reg >> 24) & 0xFFu) != 0x02u || ((class_reg >> 16) & 0xFFu) != 0x00u) {
-                    continue;
-                }
-                bar0 = pci_config_read32((uint8_t)bus, slot, function, 0x10);
-                if ((bar0 & 0x1u) == 0u) {
-                    continue;
-                }
-                g_dev.present = 1u;
-                g_dev.bus = (uint8_t)bus;
-                g_dev.slot = slot;
-                g_dev.function = function;
-                g_dev.io_base = (uint16_t)(bar0 & 0xFFFCu);
-                g_dev.irq =
-                    (uint8_t)(pci_config_read32((uint8_t)bus, slot, function, 0x3C) & 0xFFu);
-                g_dev.vendor_id = vendor_id;
-                g_dev.device_id = device_id;
-                return 0;
-            }
-        }
-    }
-    return -1;
+/* Base of the device-specific config region. Enabling MSI-X shifts it by 4 to
+ * make room for the config/queue vector registers, so every access to MAC or
+ * link status has to go through here rather than a fixed offset. */
+static uint16_t cfg_base(void) {
+    return g_dev.msix_enabled ? VIRTIO_NET_CFG_BASE_MSIX : VIRTIO_NET_CFG_BASE_INTX;
 }
 
 static void read_mac(void) {
+    uint16_t mac_port = (uint16_t)(g_dev.io_base + cfg_base() + VIRTIO_NET_CFG_MAC_OFF);
     for (uint32_t i = 0; i < 6u; ++i) {
-        g_dev.mac[i] =
-            (uint8_t)(wasmos_io_in8((int32_t)(g_dev.io_base + VIRTIO_NET_CFG_MAC + i)) & 0xFF);
+        g_dev.mac[i] = (uint8_t)(wasmos_io_in8((int32_t)(mac_port + i)) & 0xFF);
     }
+}
+
+static uint16_t read_status_word(void) {
+    return io_read16((uint16_t)(g_dev.io_base + cfg_base() + VIRTIO_NET_CFG_STATUS_OFF));
 }
 
 /* vring doorbell: tell the device which queue has new available buffers. */
@@ -341,6 +321,20 @@ static int setup_queue(virtio_net_queue_t* q, uint16_t idx) {
 
     /* Legacy transport: hand the device the ring's physical PFN. */
     io_write32(g_dev.io_base + VIRTIO_PCI_QUEUE_PFN, (uint32_t)(ring_phys >> 12));
+
+    /* Bind this queue to its own MSI-X entry, so a completion on it raises a
+     * vector that names the queue. The register only exists while MSI-X is
+     * enabled, and QUEUE_SELECT above still points at this queue. Virtio signals
+     * refusal through the readback, not a status bit. */
+    if (g_dev.msix_enabled) {
+        uint16_t entry = (idx == (uint16_t)VIRTIO_NET_RX_QUEUE) ? VIRTIO_NET_MSIX_ENTRY_RX
+                                                                : VIRTIO_NET_MSIX_ENTRY_TX;
+        io_write16(g_dev.io_base + VIRTIO_PCI_MSIX_QUEUE_VECTOR, entry);
+        if (io_read16(g_dev.io_base + VIRTIO_PCI_MSIX_QUEUE_VECTOR) == VIRTIO_MSIX_NO_VECTOR) {
+            (void)printf("[virtio-net] msix queue vector refused q=%u\n", (unsigned)idx);
+            return -1;
+        }
+    }
     q->ready = 1u;
     return (int)qsize;
 }
@@ -628,15 +622,105 @@ static void net_service_rx(void) {
  * injected once, never again). Continuous RX therefore relies on the
  * timer-driven poll in the main loop; this handler covers the first frame and
  * any that happen to coincide with the mask->unmask window.
- * TODO(msi-x): switch virtio-net to MSI-X (message-signalled, per-vq vectors),
- * which bypasses the I/O APIC pin / Remote-IRR / level re-sample entirely and
- * makes this whole INTx re-delivery workaround unnecessary. */
+ *
+ * This path is now the FALLBACK, taken only when the device has no usable MSI-X
+ * (see net_setup_msix): message-signalled vectors bypass the I/O APIC pin,
+ * Remote-IRR and level re-sample entirely, so they re-deliver per notification. */
 static void net_handle_irq(void) {
     /* Ack the device: reading ISR clears its interrupt-asserted bit. */
     (void)wasmos_io_in8((int32_t)(g_dev.io_base + VIRTIO_PCI_ISR_STATUS));
     net_service_rx();
     /* Unmask the line now the device register has been read. */
     (void)wasmos_irq_ack((int32_t)g_dev.irq);
+}
+
+static void net_publish_link_change(void);
+
+/* MSI event: arg0 names the source directly, so there is no ISR register to read
+ * and nothing to ack — the vector is edge-triggered and ours alone. */
+static void net_handle_msi(int32_t entry) {
+    if ((uint32_t)entry == VIRTIO_NET_MSIX_ENTRY_CONFIG) {
+        net_publish_link_change();
+        return;
+    }
+    /* RX and TX completions both come down to draining the used rings; the
+     * distinct vectors keep the door open for handling them separately. */
+    net_service_rx();
+}
+
+/* Ask pci-bus what interrupt style this function supports and, if it is MSI-X,
+ * take one kernel vector per source and have pci-bus write them into the
+ * device's table.
+ *
+ * The three-way split is deliberate. The kernel owns the vector namespace and
+ * will only bind a vector to an endpoint the caller owns, so it must be this
+ * driver that calls wasmos_msi_alloc. Writing the table is a config-space and
+ * BAR access this driver has no capability for, so pci-bus does that half. And
+ * telling the device which vector serves which queue is a virtio register write
+ * in our own I/O window, so that half is back here.
+ *
+ * Must run after feature negotiation and BEFORE any device-config or queue
+ * access: enabling MSI-X moves the config region (cfg_base) and adds the queue
+ * vector register the queue setup writes. Returns 0 when MSI-X is live. */
+static int net_setup_msix(void) {
+    if (g_pci_endpoint < 0) {
+        return -1;
+    }
+    uint32_t bdf =
+        ((uint32_t)g_dev.bus << 8) | ((uint32_t)g_dev.slot << 3) | (uint32_t)g_dev.function;
+    wasmos_ipc_message_t reply;
+
+    if (wasmos_ipc_call(g_pci_endpoint, g_endpoint, PCI_IPC_MSI_QUERY, 1, (int32_t)bdf, 0, 0, 0,
+                        &reply) != 0 ||
+        reply.type != PCI_IPC_RESP) {
+        return -1;
+    }
+    if (reply.arg0 != WASMOS_PCI_MSI_KIND_MSIX || (uint32_t)reply.arg1 < VIRTIO_NET_MSIX_ENTRIES) {
+        /* Plain MSI would work for a single source, but virtio needs a distinct
+         * vector per queue to be worth the switch — fall back to INTx. */
+        return -1;
+    }
+
+    uint32_t bound = 0;
+    for (uint32_t entry = 0; entry < VIRTIO_NET_MSIX_ENTRIES; ++entry) {
+        wasmos_msi_desc_t desc;
+        g_dev.msix_vectors[entry] = 0;
+        if (wasmos_msi_alloc(g_endpoint, &desc) != 0) {
+            break;
+        }
+        g_dev.msix_vectors[entry] = desc.vector;
+        int32_t arg0 = (int32_t)((bdf << 8) | entry);
+        if (wasmos_ipc_call(g_pci_endpoint, g_endpoint, PCI_IPC_MSI_BIND, (int32_t)(2u + entry),
+                            arg0, (int32_t)desc.address_lo, (int32_t)desc.address_hi,
+                            (int32_t)desc.data, &reply) != 0 ||
+            reply.type != PCI_IPC_RESP) {
+            (void)wasmos_msi_free((int32_t)desc.vector);
+            g_dev.msix_vectors[entry] = 0;
+            break;
+        }
+        bound++;
+    }
+    if (bound < VIRTIO_NET_MSIX_ENTRIES) {
+        /* All or nothing: a partially programmed table would leave some sources
+         * silently undelivered, which is worse than plain INTx. */
+        for (uint32_t entry = 0; entry < bound; ++entry) {
+            int32_t arg0 = (int32_t)((bdf << 8) | entry);
+            (void)wasmos_ipc_call(g_pci_endpoint, g_endpoint, PCI_IPC_MSI_UNBIND, 100, arg0, 0, 0,
+                                  0, &reply);
+            (void)wasmos_msi_free((int32_t)g_dev.msix_vectors[entry]);
+            g_dev.msix_vectors[entry] = 0;
+        }
+        return -1;
+    }
+
+    g_dev.msix_enabled = 1u;
+    /* Tell the device which entry serves config changes. Virtio requires the
+     * readback: the device reports refusal by returning NO_VECTOR. */
+    io_write16(g_dev.io_base + VIRTIO_PCI_MSIX_CONFIG_VECTOR, VIRTIO_NET_MSIX_ENTRY_CONFIG);
+    if (io_read16(g_dev.io_base + VIRTIO_PCI_MSIX_CONFIG_VECTOR) == VIRTIO_MSIX_NO_VECTOR) {
+        (void)printf("[virtio-net] msix config vector refused\n");
+    }
+    return 0;
 }
 
 static int initialize_device(void) {
@@ -661,9 +745,21 @@ static int initialize_device(void) {
         return -1;
     }
 
+    /* Before the first config or queue register access: enabling MSI-X changes
+     * where both of those live. */
+    if (net_setup_msix() == 0) {
+        (void)printf("[virtio-net] msix enabled vectors rx=%u tx=%u cfg=%u\n",
+                     (unsigned)g_dev.msix_vectors[VIRTIO_NET_MSIX_ENTRY_RX],
+                     (unsigned)g_dev.msix_vectors[VIRTIO_NET_MSIX_ENTRY_TX],
+                     (unsigned)g_dev.msix_vectors[VIRTIO_NET_MSIX_ENTRY_CONFIG]);
+    } else {
+        (void)printf("[virtio-net] msix unavailable; falling back to intx line=%u\n",
+                     (unsigned)g_dev.irq);
+    }
+
     read_mac();
     if ((g_dev.driver_features & VIRTIO_NET_F_STATUS) != 0u) {
-        g_dev.status_word = io_read16(g_dev.io_base + VIRTIO_NET_CFG_STATUS);
+        g_dev.status_word = read_status_word();
     } else {
         g_dev.status_word = 0u;
     }
@@ -732,7 +828,7 @@ static void net_publish_link_change(void) {
     if (!g_dev.present || !g_dev.ready || (g_dev.driver_features & VIRTIO_NET_F_STATUS) == 0u) {
         return;
     }
-    status_word = io_read16(g_dev.io_base + VIRTIO_NET_CFG_STATUS);
+    status_word = read_status_word();
     if (status_word == g_dev.status_word) {
         return;
     }
@@ -809,73 +905,76 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t ignored_arg
     (void)ignored_arg2;
     (void)ignored_arg3;
     if (proc_endpoint < 0) {
-        return -1;
+        return WASMOS_ERR_DRIVER_NO_PROC_ENDPOINT;
     }
 
     g_endpoint = wasmos_ipc_create_endpoint();
     if (g_endpoint < 0) {
-        return -1;
+        return WASMOS_ERR_DRIVER_ENDPOINT_CREATE;
     }
 
     g_dev.present = 0u;
     g_dev.ready = 0u;
     g_dev.status_word = 0u;
     if (probe_virtio_net_from_startup_args() != 0) {
-        (void)probe_virtio_net();
+        (void)printf("[virtio-net] no device identity in startup args\n");
+        return WASMOS_ERR_DRIVER_NO_DEVICE_IDENTITY;
     }
-    if (g_dev.present) {
-        if (initialize_device() != 0) {
-            (void)printf("[virtio-net] init failed io=0x%04X dev=0x%04X\n", (unsigned)g_dev.io_base,
-                         (unsigned)g_dev.device_id);
-        } else {
-            (void)printf("[virtio-net] probe ok bus=%u slot=%u dev=0x%04X irq=%u\n",
-                         (unsigned)g_dev.bus, (unsigned)g_dev.slot, (unsigned)g_dev.device_id,
-                         (unsigned)g_dev.irq);
-            (void)printf("[virtio-net] mac %02X:%02X:%02X:%02X:%02X:%02X io=0x%04X\n",
-                         (unsigned)g_dev.mac[0], (unsigned)g_dev.mac[1], (unsigned)g_dev.mac[2],
-                         (unsigned)g_dev.mac[3], (unsigned)g_dev.mac[4], (unsigned)g_dev.mac[5],
-                         (unsigned)g_dev.io_base);
-            (void)printf("[virtio-net] features dev=0x%08X drv=0x%08X\n",
-                         (unsigned)g_dev.device_features, (unsigned)g_dev.driver_features);
-            (void)printf("[virtio-net] driver ok link=%s mtu=%u\n",
-                         ((g_dev.status_word & VIRTIO_NET_S_LINK_UP) != 0u) ? "up" : "down",
-                         (unsigned)VIRTIO_NET_MTU_BASELINE);
-        }
-    } else {
-        (void)printf("[virtio-net] no device found\n");
+    /* pci-bus owns config space and is the only party that can program our
+     * MSI-X table. Its absence is not fatal — initialize_device falls back to
+     * the shared INTx line. Looked up before device init because enabling MSI-X
+     * changes the register layout the rest of init uses. */
+    g_pci_endpoint = wasmos_sys_svc_lookup_retry(proc_endpoint, g_endpoint, "pci", 1, 1024);
+    if (g_pci_endpoint < 0) {
+        (void)printf("[virtio-net] pci service unavailable; msi-x disabled\n");
     }
+    if (initialize_device() != 0) {
+        (void)printf("[virtio-net] init failed io=0x%04X dev=0x%04X\n", (unsigned)g_dev.io_base,
+                     (unsigned)g_dev.device_id);
+        return WASMOS_ERR_DRIVER_DEVICE_INIT;
+    }
+    (void)printf("[virtio-net] probe ok bus=%u slot=%u dev=0x%04X irq=%u\n", (unsigned)g_dev.bus,
+                 (unsigned)g_dev.slot, (unsigned)g_dev.device_id, (unsigned)g_dev.irq);
+    (void)printf("[virtio-net] mac %02X:%02X:%02X:%02X:%02X:%02X io=0x%04X\n",
+                 (unsigned)g_dev.mac[0], (unsigned)g_dev.mac[1], (unsigned)g_dev.mac[2],
+                 (unsigned)g_dev.mac[3], (unsigned)g_dev.mac[4], (unsigned)g_dev.mac[5],
+                 (unsigned)g_dev.io_base);
+    (void)printf("[virtio-net] features dev=0x%08X drv=0x%08X\n", (unsigned)g_dev.device_features,
+                 (unsigned)g_dev.driver_features);
+    (void)printf("[virtio-net] driver ok link=%s mtu=%u\n",
+                 ((g_dev.status_word & VIRTIO_NET_S_LINK_UP) != 0u) ? "up" : "down",
+                 (unsigned)VIRTIO_NET_MTU_BASELINE);
 
-    /* Route the device IRQ to our endpoint so RX/TX completions wake us, then
-     * fire the ARP probe; its reply arrives via net_handle_irq. */
-    if (g_dev.present && g_dev.ready) {
+    /* With MSI-X the vectors were bound during device init and the device's
+     * INTx is disabled, so routing the shared line would only subscribe us to
+     * other devices' interrupts. Route it only on the fallback path. */
+    if (!g_dev.msix_enabled) {
         if (wasmos_irq_route_ipc((int32_t)g_dev.irq, g_endpoint) == 0) {
             (void)printf("[virtio-net] irq routed line=%u\n", (unsigned)g_dev.irq);
         } else {
             (void)printf("[virtio-net] irq route failed line=%u\n", (unsigned)g_dev.irq);
         }
-        net_probe_send();
     }
+    net_probe_send();
 
     /* Finish all local setup before publishing the endpoint. Clients may send
      * LINK_GET as soon as registration completes, so no startup operation may
      * run between publication and the handler loop that drains it. */
     if (wasmos_svc_register_class(proc_endpoint, g_endpoint, "virtio.net", "net.ifc", 0u, 1) < 0) {
         (void)printf("[virtio-net] register failed\n");
-        return -1;
+        return WASMOS_ERR_DRIVER_REGISTER;
     }
     wasmos_sys_notify_ready(proc_endpoint, g_endpoint);
 
-    /* Timer-driven RX poll. The virtio INTx re-fires reliably only for the
-     * first assertion on QEMU's legacy PCI-INTx path (see net_handle_irq), so
-     * continuous RX can't depend on the interrupt. Instead of busy-yielding, we
-     * block on our endpoint with a bounded timeout and drain the RX ring each
-     * time the wait times out — a timer, not a spin.
-     * TODO(msi-x): once virtio-net uses MSI-X the interrupt re-delivers per
-     * notification and this timed poll can drop back to a plain blocking wait. */
+    /* Wait strategy follows the interrupt style. Under MSI-X the vector
+     * re-delivers per notification, so the loop is a plain blocking wait. Under
+     * INTx it cannot be: QEMU's legacy path re-fires reliably only for the first
+     * assertion (see net_handle_irq), so continuous RX falls back to draining
+     * the ring on a bounded timeout — a timer, not a spin. */
     int32_t sel = wasmos_ipc_select_create();
     if (sel < 0 || wasmos_ipc_select_add(sel, g_endpoint) != 0) {
         (void)printf("[virtio-net] select setup failed\n");
-        return -1;
+        return WASMOS_ERR_DRIVER_SELECT_SETUP;
     }
 
     for (;;) {
@@ -894,6 +993,10 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t ignored_arg
              * so handle it before the source check that guards request traffic. */
             if (msg.type == IPC_IRQ_EVENT_TYPE) {
                 net_handle_irq();
+                continue;
+            }
+            if (msg.type == WASMOS_IPC_MSI_EVENT_TYPE) {
+                net_handle_msi(msg.arg0);
                 continue;
             }
             if (msg.source < 0) {
@@ -915,10 +1018,15 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t ignored_arg
             }
         }
         net_publish_link_change();
-        /* Idle: poll the RX ring + reap TX (INTx re-delivery workaround), then
-         * block until the next message or the poll deadline (never busy-spin). */
-        net_service_rx();
-        (void)wasmos_ipc_select_wait_timeout(sel, NET_RX_POLL_INTERVAL_MS);
+        if (g_dev.msix_enabled) {
+            /* The vector wakes us for every completion, so block outright. */
+            (void)wasmos_ipc_select_wait(sel);
+        } else {
+            /* Idle: poll the RX ring + reap TX (INTx re-delivery workaround),
+             * then block until the next message or the poll deadline. */
+            net_service_rx();
+            (void)wasmos_ipc_select_wait_timeout(sel, NET_RX_POLL_INTERVAL_MS);
+        }
     }
     return 0;
 }

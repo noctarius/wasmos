@@ -125,20 +125,21 @@ static inline void ui_dropdown_handle_key(ui_context_t* ctx, ui_component_t* c, 
     ui_dropdown_data_t* d = (ui_dropdown_data_t*)c->component_data;
     if (!d)
         return;
-    if (key == 27u) {
+    const uint32_t ch = ui_key_char(key);
+    if (ch == 27u) {
         if (d->dropdown_open) {
             d->dropdown_open = 0;
             ui_mark_dirty(ctx);
         }
-    } else if (key == '\r' || key == '\n' || key == ' ') {
+    } else if (ch == '\r' || ch == '\n' || ch == ' ') {
         d->dropdown_open = d->dropdown_open ? 0 : 1;
         ui_mark_dirty(ctx);
-    } else if (key == 'j' || key == 'J') {
+    } else if (ch == 'j' || ch == 'J') {
         if (d->list.count > 0 && d->list.selected < (d->list.count - 1)) {
             d->list.selected += 1;
             ui_mark_dirty(ctx);
         }
-    } else if (key == 'k' || key == 'K') {
+    } else if (ch == 'k' || ch == 'K') {
         if (d->list.count > 0 && d->list.selected > 0) {
             d->list.selected -= 1;
             ui_mark_dirty(ctx);

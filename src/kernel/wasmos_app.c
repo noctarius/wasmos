@@ -115,6 +115,35 @@ typedef struct __attribute__((packed)) {
     char subsystem_tag[WASMOS_APP_SUBSYSTEM_TAG_LEN];
 } wasmos_app_header_v5_t;
 
+/* Version 6: v5 plus the declared register windows, written after the driver
+ * matches. A driver names the windows it needs instead of the ports, so this is
+ * where "region 1" acquires a meaning. */
+typedef struct __attribute__((packed)) {
+    char magic[8];
+    uint16_t version;
+    uint16_t header_size;
+    uint32_t flags;
+    uint32_t name_len;
+    uint32_t entry_len;
+    uint32_t wasm_size;
+    uint32_t req_ep_count;
+    uint32_t cap_count;
+    uint32_t entry_arg_binding_count;
+    uint32_t mem_hint_count;
+    uint8_t driver_match_class;
+    uint8_t driver_match_subclass;
+    uint8_t driver_match_prog_if;
+    uint8_t driver_match_reserved0;
+    uint16_t driver_match_vendor_id;
+    uint16_t driver_match_device_id;
+    uint16_t driver_io_port_min;
+    uint16_t driver_io_port_max;
+    uint32_t driver_match_count;
+    uint32_t compiled_size;
+    char subsystem_tag[WASMOS_APP_SUBSYSTEM_TAG_LEN];
+    uint32_t region_count;
+} wasmos_app_header_v6_t;
+
 typedef struct __attribute__((packed)) {
     char magic[8];
     uint16_t version;
@@ -420,6 +449,7 @@ int wasmos_app_parse(const uint8_t* blob, uint32_t blob_size, wasmos_app_desc_t*
         driver_matches[i].priority = 0;
     }
     uint32_t driver_match_count = 0;
+    uint32_t region_count = 0;
     if (version == 1u) {
         if (blob_size < sizeof(wasmos_app_header_v1_t)) {
             return -1;
@@ -504,7 +534,7 @@ int wasmos_app_parse(const uint8_t* blob, uint32_t blob_size, wasmos_app_desc_t*
         compiled_size = hdr_v4->compiled_size;
         reserved = 0; /* v4 has no reserved field */
         subsystem_tag_default_for_flags(flags, subsystem_tag);
-    } else if (version == WASMOS_APP_VERSION) {
+    } else if (version == 5u) {
         if (blob_size < sizeof(wasmos_app_header_v5_t)) {
             return -1;
         }
@@ -528,6 +558,34 @@ int wasmos_app_parse(const uint8_t* blob, uint32_t blob_size, wasmos_app_desc_t*
             subsystem_tag[i] = hdr_v5->subsystem_tag[i];
         }
         subsystem_tag[WASMOS_APP_SUBSYSTEM_TAG_LEN] = '\0';
+    } else if (version == WASMOS_APP_VERSION) {
+        if (blob_size < sizeof(wasmos_app_header_v6_t)) {
+            return -1;
+        }
+        const wasmos_app_header_v6_t* hdr_v6 = (const wasmos_app_header_v6_t*)blob;
+        header_size = hdr_v6->header_size;
+        flags = hdr_v6->flags;
+        name_len = hdr_v6->name_len;
+        entry_len = hdr_v6->entry_len;
+        wasm_size = hdr_v6->wasm_size;
+        req_ep_count = hdr_v6->req_ep_count;
+        cap_count = hdr_v6->cap_count;
+        entry_arg_binding_count = hdr_v6->entry_arg_binding_count;
+        mem_hint_count = hdr_v6->mem_hint_count;
+        driver_match_count = hdr_v6->driver_match_count;
+        if (driver_match_count > WASMOS_APP_MAX_DRIVER_MATCHES) {
+            return -1;
+        }
+        region_count = hdr_v6->region_count;
+        if (region_count > WASMOS_APP_MAX_REGIONS) {
+            return -1;
+        }
+        compiled_size = hdr_v6->compiled_size;
+        reserved = 0;
+        for (uint32_t i = 0; i < WASMOS_APP_SUBSYSTEM_TAG_LEN; ++i) {
+            subsystem_tag[i] = hdr_v6->subsystem_tag[i];
+        }
+        subsystem_tag[WASMOS_APP_SUBSYSTEM_TAG_LEN] = '\0';
     } else {
         return -1;
     }
@@ -535,7 +593,8 @@ int wasmos_app_parse(const uint8_t* blob, uint32_t blob_size, wasmos_app_desc_t*
         (version == 2u && header_size != sizeof(wasmos_app_header_v2_t)) ||
         (version == 3u && header_size != sizeof(wasmos_app_header_v3_t)) ||
         (version == 4u && header_size != sizeof(wasmos_app_header_v4_t)) ||
-        (version == WASMOS_APP_VERSION && header_size != sizeof(wasmos_app_header_v5_t)) ||
+        (version == 5u && header_size != sizeof(wasmos_app_header_v5_t)) ||
+        (version == WASMOS_APP_VERSION && header_size != sizeof(wasmos_app_header_v6_t)) ||
         reserved != 0) {
         return -1;
     }
@@ -632,6 +691,23 @@ int wasmos_app_parse(const uint8_t* blob, uint32_t blob_size, wasmos_app_desc_t*
         const wasmos_app_driver_match_t* m = (const wasmos_app_driver_match_t*)&blob[off];
         driver_matches[i] = *m;
         off += sizeof(wasmos_app_driver_match_t);
+    }
+
+    out_desc->region_count = 0;
+    for (uint32_t i = 0; i < region_count; ++i) {
+        if (check_bounds(off, sizeof(wasmos_app_region_t), blob_size) != 0) {
+            return -1;
+        }
+        const wasmos_app_region_t* r = (const wasmos_app_region_t*)&blob[off];
+        if (r->kind == WASMOS_APP_REGION_IO && r->first > r->last) {
+            return -1; /* an inverted window would grant nothing and hide the typo */
+        }
+        if (r->kind == WASMOS_APP_REGION_BAR && r->bar_index >= 6u) {
+            return -1;
+        }
+        out_desc->regions[i] = *r;
+        out_desc->region_count++;
+        off += sizeof(wasmos_app_region_t);
     }
 
     uint32_t stack_pages_hint = 0;

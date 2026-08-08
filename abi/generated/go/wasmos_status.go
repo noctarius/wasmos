@@ -36,6 +36,8 @@ const (
 	WASMOS_ERR_DOMAIN_HRNG uint16 = 14
 	WASMOS_ERR_DOMAIN_DMA uint16 = 15
 	WASMOS_ERR_DOMAIN_IRQ uint16 = 16
+	WASMOS_ERR_DOMAIN_MSI uint16 = 17
+	WASMOS_ERR_DOMAIN_IO uint16 = 18
 	WASMOS_ERR_DOMAIN_FONT uint16 = 12
 	WASMOS_ERR_DOMAIN_RTC uint16 = 13
 	WASMOS_ERR_DOMAIN_XFER_BUFFER uint16 = 11
@@ -138,6 +140,12 @@ const (
 	WASMOS_ERR_GFX_UNSUPPORTED int32 = -0x00060008 // unknown or unsupported compositor request
 	WASMOS_ERR_GFX_BUSY int32 = -0x00060009 // compositor has no free window/buffer slot (retryable)
 	WASMOS_ERR_GFX_IO int32 = -0x0006000A // framebuffer or shared-buffer operation failed
+	WASMOS_ERR_DRIVER_NO_PROC_ENDPOINT int32 = -0x00070001 // spawn info carried no process-manager endpoint
+	WASMOS_ERR_DRIVER_ENDPOINT_CREATE int32 = -0x00070002 // the driver could not create its own IPC endpoint
+	WASMOS_ERR_DRIVER_NO_DEVICE_IDENTITY int32 = -0x00070003 // startup args carry no valid device identity for this driver
+	WASMOS_ERR_DRIVER_DEVICE_INIT int32 = -0x00070004 // bringing the identified device up failed
+	WASMOS_ERR_DRIVER_REGISTER int32 = -0x00070005 // publishing the driver endpoint to the service registry failed
+	WASMOS_ERR_DRIVER_SELECT_SETUP int32 = -0x00070006 // the driver could not build its IPC select set
 	WASMOS_ERR_VT_BAD_TTY_ID int32 = -0x00080001 // requested tty id is out of range
 	WASMOS_ERR_VT_NO_TTY_FOR_SOURCE int32 = -0x00080002 // no tty is associated with the requesting endpoint
 	WASMOS_ERR_VT_READER_BUSY int32 = -0x00080003 // another endpoint is already the reader for this tty
@@ -162,6 +170,20 @@ const (
 	WASMOS_ERR_IRQ_BAD_ENDPOINT int32 = -0x00100003 // target endpoint is invalid or not owned by the caller
 	WASMOS_ERR_IRQ_LINE_FULL int32 = -0x00100004 // the line already has the maximum number of registered sharers
 	WASMOS_ERR_IRQ_NOT_A_SHARER int32 = -0x00100005 // caller has no registered handler on this line
+	WASMOS_ERR_MSI_NOT_AUTHORIZED int32 = -0x00110001 // caller lacks the irq.route capability
+	WASMOS_ERR_MSI_UNSUPPORTED int32 = -0x00110002 // this build's interrupt controller cannot deliver message-signalled interrupts (no LAPIC)
+	WASMOS_ERR_MSI_BAD_ENDPOINT int32 = -0x00110003 // target endpoint is invalid or not owned by the caller
+	WASMOS_ERR_MSI_NO_VECTORS int32 = -0x00110004 // the MSI vector space is exhausted
+	WASMOS_ERR_MSI_BAD_VECTOR int32 = -0x00110005 // vector is outside the MSI range or not allocated
+	WASMOS_ERR_MSI_NOT_OWNER int32 = -0x00110006 // caller does not own the vector it is trying to release
+	WASMOS_ERR_MSI_BAD_DEVICE int32 = -0x00110007 // bus/device/function does not name a present PCI function
+	WASMOS_ERR_MSI_NO_CAPABILITY int32 = -0x00110008 // device exposes neither an MSI-X (0x11) nor an MSI (0x05) capability
+	WASMOS_ERR_MSI_BAD_ENTRY int32 = -0x00110009 // table entry index is beyond the device's supported vector count
+	WASMOS_ERR_MSI_MAP_FAILED int32 = -0x0011000A // the MSI-X table BAR could not be mapped
+	WASMOS_ERR_MSI_NOT_DEVICE_OWNER int32 = -0x0011000B // another endpoint already programmed interrupts for this device
+	WASMOS_ERR_IO_NOT_AUTHORIZED int32 = -0x00120001 // caller has no io.port spawn profile, so it holds no I/O windows
+	WASMOS_ERR_IO_BAD_REGION int32 = -0x00120002 // region index names no window this context was granted
+	WASMOS_ERR_IO_OUT_OF_WINDOW int32 = -0x00120003 // offset falls outside the granted window's bounds
 	WASMOS_ERR_FONT_INVALID int32 = -0x000C0001 // invalid request arguments (font id, size, glyph, or buffer)
 	WASMOS_ERR_FONT_PERMISSION int32 = -0x000C0002 // caller is not permitted to use the requested font resource
 	WASMOS_ERR_FONT_UNSUPPORTED int32 = -0x000C0003 // unknown or unsupported request type
@@ -268,6 +290,10 @@ func WasmosErrorDomainName(d uint16) string {
 		return "dma"
 	case WASMOS_ERR_DOMAIN_IRQ:
 		return "irq"
+	case WASMOS_ERR_DOMAIN_MSI:
+		return "msi"
+	case WASMOS_ERR_DOMAIN_IO:
+		return "io"
 	case WASMOS_ERR_DOMAIN_FONT:
 		return "font"
 	case WASMOS_ERR_DOMAIN_RTC:
@@ -469,6 +495,18 @@ func WasmosStrerror(c int32) string {
 		return "compositor has no free window/buffer slot (retryable)"
 	case WASMOS_ERR_GFX_IO:
 		return "framebuffer or shared-buffer operation failed"
+	case WASMOS_ERR_DRIVER_NO_PROC_ENDPOINT:
+		return "spawn info carried no process-manager endpoint"
+	case WASMOS_ERR_DRIVER_ENDPOINT_CREATE:
+		return "the driver could not create its own IPC endpoint"
+	case WASMOS_ERR_DRIVER_NO_DEVICE_IDENTITY:
+		return "startup args carry no valid device identity for this driver"
+	case WASMOS_ERR_DRIVER_DEVICE_INIT:
+		return "bringing the identified device up failed"
+	case WASMOS_ERR_DRIVER_REGISTER:
+		return "publishing the driver endpoint to the service registry failed"
+	case WASMOS_ERR_DRIVER_SELECT_SETUP:
+		return "the driver could not build its IPC select set"
 	case WASMOS_ERR_VT_BAD_TTY_ID:
 		return "requested tty id is out of range"
 	case WASMOS_ERR_VT_NO_TTY_FOR_SOURCE:
@@ -517,6 +555,34 @@ func WasmosStrerror(c int32) string {
 		return "the line already has the maximum number of registered sharers"
 	case WASMOS_ERR_IRQ_NOT_A_SHARER:
 		return "caller has no registered handler on this line"
+	case WASMOS_ERR_MSI_NOT_AUTHORIZED:
+		return "caller lacks the irq.route capability"
+	case WASMOS_ERR_MSI_UNSUPPORTED:
+		return "this build's interrupt controller cannot deliver message-signalled interrupts (no LAPIC)"
+	case WASMOS_ERR_MSI_BAD_ENDPOINT:
+		return "target endpoint is invalid or not owned by the caller"
+	case WASMOS_ERR_MSI_NO_VECTORS:
+		return "the MSI vector space is exhausted"
+	case WASMOS_ERR_MSI_BAD_VECTOR:
+		return "vector is outside the MSI range or not allocated"
+	case WASMOS_ERR_MSI_NOT_OWNER:
+		return "caller does not own the vector it is trying to release"
+	case WASMOS_ERR_MSI_BAD_DEVICE:
+		return "bus/device/function does not name a present PCI function"
+	case WASMOS_ERR_MSI_NO_CAPABILITY:
+		return "device exposes neither an MSI-X (0x11) nor an MSI (0x05) capability"
+	case WASMOS_ERR_MSI_BAD_ENTRY:
+		return "table entry index is beyond the device's supported vector count"
+	case WASMOS_ERR_MSI_MAP_FAILED:
+		return "the MSI-X table BAR could not be mapped"
+	case WASMOS_ERR_MSI_NOT_DEVICE_OWNER:
+		return "another endpoint already programmed interrupts for this device"
+	case WASMOS_ERR_IO_NOT_AUTHORIZED:
+		return "caller has no io.port spawn profile, so it holds no I/O windows"
+	case WASMOS_ERR_IO_BAD_REGION:
+		return "region index names no window this context was granted"
+	case WASMOS_ERR_IO_OUT_OF_WINDOW:
+		return "offset falls outside the granted window's bounds"
 	case WASMOS_ERR_FONT_INVALID:
 		return "invalid request arguments (font id, size, glyph, or buffer)"
 	case WASMOS_ERR_FONT_PERMISSION:

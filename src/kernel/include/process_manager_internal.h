@@ -62,8 +62,10 @@ typedef struct {
 typedef struct {
     uint8_t valid;
     uint32_t cap_flags;
-    uint16_t io_port_min;
-    uint16_t io_port_max;
+    /* Disjoint I/O windows; the packed-arg spawn opcodes fill exactly one, the
+     * descriptor-based path may carry several (see wasmos_io_range_t). */
+    uint32_t io_range_count;
+    wasmos_io_range_t io_ranges[WASMOS_IO_RANGE_LIMIT];
     uint16_t irq_mask;
     uint32_t dma_direction_flags;
     uint32_t dma_max_bytes;
@@ -154,6 +156,7 @@ void pm_reap_apps(process_t* owner);
 pm_wait_state_t* pm_wait_slot_acquire(void);
 
 int pm_handle_module_meta(uint32_t pm_context_id, const ipc_message_t* msg);
+int pm_handle_module_meta_desc(uint32_t pm_context_id, const ipc_message_t* msg);
 int pm_handle_module_meta_path(uint32_t pm_context_id, const ipc_message_t* msg);
 
 #endif

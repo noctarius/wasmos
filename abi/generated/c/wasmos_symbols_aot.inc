@@ -125,4 +125,13 @@
     LINK("wasmos", "block_buffer_map", stub_i0) , \
     LINK("wasmos", "xfer_buffer_map", stub_i1) , \
     LINK("wasmos", "xfer_buffer_unmap", stub_i1) , \
-    LINK("wasmos", "klog_register_ring", stub_i1)
+    LINK("wasmos", "klog_register_ring", stub_i1) , \
+    LINK("wasmos", "msi_alloc", stub_i2) , \
+    LINK("wasmos", "msi_free", stub_i1) , \
+    LINK("wasmos", "mmio_write32", stub_i3) , \
+    LINK("wasmos", "io_region_in8", stub_i3) , \
+    LINK("wasmos", "io_region_in16", stub_i3) , \
+    LINK("wasmos", "io_region_in32", stub_i3) , \
+    LINK("wasmos", "io_region_out8", stub_i3) , \
+    LINK("wasmos", "io_region_out16", stub_i3) , \
+    LINK("wasmos", "io_region_out32", stub_i3)

@@ -375,6 +375,21 @@ isr_irq_\num:
     iretq
 .endm
 
+/*
+ * MSI vectors (48-63). Identical prologue to DECL_IRQ, but they land in
+ * x86_msi_handler: a message-signalled interrupt is edge-triggered and owned by
+ * exactly one endpoint, so there is no line to mask and no ack to wait for.
+ */
+.macro DECL_MSI num vec
+.global isr_msi_\num
+isr_msi_\num:
+    PUSH_REGS
+    mov $\vec, %rdi
+    CALL_C_ALIGNED x86_msi_handler
+    POP_REGS
+    iretq
+.endm
+
 DECL_IRQ 1 33
 DECL_IRQ 2 34
 DECL_IRQ 3 35
@@ -390,6 +405,23 @@ DECL_IRQ 12 44
 DECL_IRQ 13 45
 DECL_IRQ 14 46
 DECL_IRQ 15 47
+
+DECL_MSI 0 48
+DECL_MSI 1 49
+DECL_MSI 2 50
+DECL_MSI 3 51
+DECL_MSI 4 52
+DECL_MSI 5 53
+DECL_MSI 6 54
+DECL_MSI 7 55
+DECL_MSI 8 56
+DECL_MSI 9 57
+DECL_MSI 10 58
+DECL_MSI 11 59
+DECL_MSI 12 60
+DECL_MSI 13 61
+DECL_MSI 14 62
+DECL_MSI 15 63
 
 /*
  * LAPIC spurious interrupt handler (vector 255).
@@ -464,3 +496,22 @@ x86_irq_stub_table:
     .quad isr_irq_13
     .quad isr_irq_14
     .quad isr_irq_15
+
+.global x86_msi_stub_table
+x86_msi_stub_table:
+    .quad isr_msi_0
+    .quad isr_msi_1
+    .quad isr_msi_2
+    .quad isr_msi_3
+    .quad isr_msi_4
+    .quad isr_msi_5
+    .quad isr_msi_6
+    .quad isr_msi_7
+    .quad isr_msi_8
+    .quad isr_msi_9
+    .quad isr_msi_10
+    .quad isr_msi_11
+    .quad isr_msi_12
+    .quad isr_msi_13
+    .quad isr_msi_14
+    .quad isr_msi_15

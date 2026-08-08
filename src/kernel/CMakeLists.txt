@@ -159,6 +159,9 @@ set(KERNEL_OBJS
   ${BUILD_DIR}/irq.o
   ${BUILD_DIR}/irq_sharing.o
   ${BUILD_DIR}/irq_x86_64.o
+  ${BUILD_DIR}/msi_vectors.o
+  ${BUILD_DIR}/mmio.o
+  ${BUILD_DIR}/msi_x86_64.o
   ${BUILD_DIR}/lapic.o
   ${BUILD_DIR}/ioapic.o
   ${BUILD_DIR}/smp.o
@@ -294,7 +297,10 @@ set(KERNEL_SOURCES
   ${KERNEL_DIR}/memory_service.c
   ${KERNEL_DIR}/irq.c
   ${KERNEL_DIR}/irq_sharing.c
+  ${KERNEL_DIR}/msi_vectors.c
+  ${KERNEL_DIR}/mmio.c
   ${KERNEL_DIR}/arch/x86_64/irq_x86_64.c
+  ${KERNEL_DIR}/arch/x86_64/msi_x86_64.c
   ${KERNEL_DIR}/arch/x86_64/lapic.c
   ${KERNEL_DIR}/arch/x86_64/ioapic.c
   ${KERNEL_DIR}/arch/x86_64/smp.c
@@ -619,7 +625,10 @@ add_custom_command(
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/memory_service.c -o ${BUILD_DIR}/memory_service.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/irq.c -o ${BUILD_DIR}/irq.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/irq_sharing.c -o ${BUILD_DIR}/irq_sharing.o
+  COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/msi_vectors.c -o ${BUILD_DIR}/msi_vectors.o
+  COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/mmio.c -o ${BUILD_DIR}/mmio.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/arch/x86_64/irq_x86_64.c -o ${BUILD_DIR}/irq_x86_64.o
+  COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/arch/x86_64/msi_x86_64.c -o ${BUILD_DIR}/msi_x86_64.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/arch/x86_64/lapic.c -o ${BUILD_DIR}/lapic.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/arch/x86_64/ioapic.c -o ${BUILD_DIR}/ioapic.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/arch/x86_64/smp.c -o ${BUILD_DIR}/smp.o

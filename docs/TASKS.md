@@ -552,16 +552,44 @@ Remaining:
   on a full RX ring (app-side flow control).
 - [ ] Enable guest-to-guest loopback (`LWIP_NETIF_LOOPBACK` + net-stack loopback
   polling) so an in-guest server is reachable.
-- [ ] Migrate virtio-net to per-vq MSI-X so RX interrupts re-deliver per
-  notification and the timed-poll workaround drops to a plain blocking wait
-  (`src/drivers/virtio_net/virtio_net.c:631,871` `TODO(msi-x)`). Needs the MSI
-  platform first: PCI capability walk (cap `0x05`/`0x11`), a vector allocator
-  beyond the 16 ISA stubs in `x86_irq_stub_table`, kernel-side MSI/MSI-X
-  programming, and hostcalls to bind a vector to an endpoint. The LAPIC side
-  (`lapic_init`/`lapic_eoi`/`lapic_read_id`) already exists. Note that enabling
-  MSI-X shifts the legacy virtio register layout: device config moves from
-  `0x14` to `0x18`. PCI INTx polarity/trigger config is already done
-  (`pci_bus.c` sets level/active-low per device with an interrupt pin).
+- [x] Migrate virtio-net to per-vq MSI-X so RX interrupts re-deliver per
+  notification and the timed-poll workaround drops to a plain blocking wait.
+  Done with the whole MSI platform: vectors 48–63 + ISR stubs, arch-neutral
+  allocator (`msi_vectors.c`, host unit test), `msi_alloc`/`msi_free` host calls,
+  the `msi` error domain, a resident pci-bus owning the capability walk and
+  device programming (`PCI_IPC_MSI_*`), and `mmio_write32` for the MSI-X table
+  BAR. virtio-net takes RX/TX/config vectors; virtio-rng takes one.
+- [ ] Fix the unit-test IDE target so the lint gate is green again:
+  `wasmos_ide_unit` fails on `tests/unit/test_device_manager_rules.c`
+  (undeclared `abort`), so it never reaches `tests/unit/test_libui_key_decode.c`,
+  which then has no compile-DB entry and clang-tidy cannot find
+  `wasmos/libui.h`. Adding `src/libui/include` to the target is NOT sufficient on
+  its own — it pulls the project `string.h` into a hosted TU and breaks the
+  target differently. See `skills/wasmos-ide-targets`.
+- [ ] Give `ata` real device DMA. There is no bus-master IDE (BMIDE/PRD)
+  programming today, so every transfer is PIO regardless of the `dma_*`
+  scaffolding. On QEMU's PIIX this means bus-master IDE; an AHCI controller
+  (`ich9-ahci`) would be the better target and would also bring MSI, which
+  legacy IDE cannot offer at all.
+- [ ] Move the resident pci-bus request loop onto the coroutine/event-loop
+  runtime. It blocks (never spins), which is sufficient while every request is
+  answered from config space, but hot-plug will need it to originate requests
+  while serving.
+- [ ] PCI hot-plug: add a rescan opcode over `pci_scan_and_publish()` — small on
+  its own, but knowing *when* to rescan needs an ACPI GPE/SCI path that does not
+  exist yet. Depends on the coroutine-loop item above.
+- [ ] Support multi-message plain MSI (cap `0x05`): needs a contiguous,
+  naturally-aligned vector block from the kernel (an `msi_alloc_block`), so
+  pci-bus currently reports MSI as exactly one vector
+  (`src/services/pci_bus/pci_bus.c`, `msi_query`). Only the MSI-X path is
+  exercised in-tree — no QEMU device in the default boot offers MSI without
+  MSI-X.
+- [ ] Steer MSI vectors at CPUs other than the BSP. Both `msi_x86_64.c`
+  (`MSI_DEST_APIC_ID`) and `ioapic_program_rtes()` hardcode LAPIC 0; changing
+  one without the other splits interrupt affinity across two models.
+- [ ] Move the kernel notify-type space (`IPC_IRQ_EVENT_TYPE` 0xFF00,
+  `IPC_MSI_EVENT_TYPE` 0xFF01) into `abi/opcodes.yaml`. Both are currently
+  hand-mirrored into each driver source instead of generated.
 - [ ] Define the net owner-push wire protocol so TX/RX carry an explicit
   client `buffer_id`/grant instead of overloading `msg.arg0`/`arg1`
   (`src/drivers/virtio_net/virtio_net.c:479,718,752,775,900` `FIXME(owner-push)`).

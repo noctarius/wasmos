@@ -270,7 +270,7 @@ set(WASMOS_TRACE_DEFINE -DWASMOS_TRACE=${WASMOS_TRACE_VALUE})
 function(wasmos_add_ide_c_target target_name)
   set(options)
   set(oneValueArgs)
-  set(multiValueArgs SOURCES INCLUDES)
+  set(multiValueArgs SOURCES INCLUDES IQUOTE)
   cmake_parse_arguments(WASMOS_IDE "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
   if (NOT WASMOS_IDE_SOURCES)
     message(FATAL_ERROR "wasmos_add_ide_c_target(${target_name}) requires SOURCES")
@@ -280,6 +280,13 @@ function(wasmos_add_ide_c_target target_name)
   if (WASMOS_IDE_INCLUDES)
     target_include_directories(${target_name} PRIVATE ${WASMOS_IDE_INCLUDES})
   endif ()
+  # IQUOTE dirs serve "quoted" includes only, leaving <angle> ones to the host
+  # headers. target_include_directories cannot emit -iquote, hence the raw flag.
+  # SHELL: keeps each flag/value pair together; without it CMake de-duplicates
+  # the repeated -iquote token and the paths collapse onto the first one.
+  foreach(_q ${WASMOS_IDE_IQUOTE})
+    target_compile_options(${target_name} PRIVATE "SHELL:-iquote ${_q}")
+  endforeach()
   # Force-include the cast macros so compile_commands.json entries (used by
   # clang-tidy) resolve ptr_cast/addr_cast/fn_cast, matching the real build.
   target_compile_options(${target_name} PRIVATE -include ${LIBC_DIR}/include/wasmos_cast.h)
@@ -2005,6 +2012,10 @@ add_custom_target(run-kernel-unit-tests
           # system <angle> includes untouched. The symbol is resolved by the
           # host libc at link.
           -iquote ${LIBC_DIR}/include
+          # device_manager_types.h now carries the resolved PCI BAR table, whose
+          # types live in the shared driver ABI header.
+          -I${DRIVER_WASM_DIR}/include
+          -I${CMAKE_SOURCE_DIR}/abi/generated/c
           ${CMAKE_SOURCE_DIR}/tests/unit/test_device_manager_rules.c
           ${SERVICES_DIR}/device_manager/device_manager_rules.c
           ${LIBC_DIR}/src/string.c
@@ -2025,6 +2036,15 @@ add_custom_target(run-kernel-unit-tests
           ${KERNEL_DIR}/irq_sharing.c
           -o ${BUILD_DIR}/test_irq_sharing
   COMMAND ${BUILD_DIR}/test_irq_sharing
+  # MSI vector bookkeeping: same reason it runs on the host — pure logic, with
+  # the hardware encoding kept out in arch/x86_64/msi_x86_64.c.
+  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
+          -I${KERNEL_DIR}/include
+          -I${CMAKE_SOURCE_DIR}/abi/generated/c
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_msi_vectors.c
+          ${KERNEL_DIR}/msi_vectors.c
+          -o ${BUILD_DIR}/test_msi_vectors
+  COMMAND ${BUILD_DIR}/test_msi_vectors
   COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
           -I${KERNEL_DIR}/include
           -I${DRIVER_WASM_DIR}/include
@@ -2095,6 +2115,17 @@ add_custom_target(run-kernel-unit-tests
           ${CMAKE_SOURCE_DIR}/tests/unit/test_ringbuf.c
           -o ${BUILD_DIR}/test_ringbuf
   COMMAND ${BUILD_DIR}/test_ringbuf
+  # libui GFX_EVENT_KEY decoding: the compositor packs scancode:character into
+  # one code, so the handlers must mask before treating it as a character.
+  # Header-only widgets, so the test compiles them straight into the host binary.
+  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
+          -I${CMAKE_SOURCE_DIR}/src/libui/include
+          -I${LIBC_DIR}/include
+          -I${CMAKE_SOURCE_DIR}/src/drivers/include
+          -I${CMAKE_SOURCE_DIR}/abi/generated/c
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_libui_key_decode.c
+          -o ${BUILD_DIR}/test_libui_key_decode
+  COMMAND ${BUILD_DIR}/test_libui_key_decode
   # Native slab allocator (heap_native.c): compiled with malloc/free/calloc/realloc
   # renamed to hn_* so it links beside host libc; vm_map/vm_unmap mocked in the test.
   COMMAND ${CLANG} -std=c11 -Wno-error=c23-extensions
@@ -2404,16 +2435,23 @@ endif ()
 # EXCLUDE_FROM_ALL OBJECT library. These are never linked, so they cannot affect
 # the real build or the boot; they exist only for clangd/CLion indexing and
 # clang-tidy. See wasmos_add_ide_c_target above for the shared compile options.
+# SOURCES names files explicitly instead of globing a tree, for an area whose
+# files need a different include set than their neighbours. EXCLUDE drops those
+# same files from a sibling glob so each file lands in exactly one index target.
 function(wasmos_ide_index name)
-  cmake_parse_arguments(II "" "" "DIRS;INCLUDES" ${ARGN})
-  set(_srcs)
+  cmake_parse_arguments(II "" "" "DIRS;INCLUDES;IQUOTE;SOURCES;EXCLUDE" ${ARGN})
+  set(_srcs ${II_SOURCES})
   foreach(_d ${II_DIRS})
     file(GLOB_RECURSE _g CONFIGURE_DEPENDS
       "${_d}/*.c" "${_d}/*.cc" "${_d}/*.cpp" "${_d}/*.cxx")
     list(APPEND _srcs ${_g})
   endforeach()
+  if (II_EXCLUDE)
+    list(REMOVE_ITEM _srcs ${II_EXCLUDE})
+  endif ()
   if (_srcs)
-    wasmos_add_ide_c_target(${name} SOURCES ${_srcs} INCLUDES ${II_INCLUDES})
+    wasmos_add_ide_c_target(${name} SOURCES ${_srcs}
+                            INCLUDES ${II_INCLUDES} IQUOTE ${II_IQUOTE})
   endif ()
 endfunction()
 
@@ -2431,20 +2469,53 @@ wasmos_ide_index(wasmos_ide_libui
   INCLUDES ${CMAKE_SOURCE_DIR}/src/libui/include ${LIBC_DIR}/include
            ${DRIVER_WASM_DIR}/include)
 
-# LIBC_DIR/include precedes KERNEL_DIR/include: both define stdlib.h/stdio.h/
-# string.h, and tests that include "stdlib.h" want the fuller libc one (the
-# kernel's declares no strtol). WASM3_DIR is needed because kernel headers reach
+# The unit tests split into two index targets by how their real compile line
+# takes the project libc, because the two forms are mutually exclusive and a
+# translation unit that reaches both libcs does not parse (on macOS the SDK
+# defines strcpy/memcpy as _FORTIFY_SOURCE macros, which mangle our own
+# declarations of those names).
+#
+# WASMOS_UNIT_LIBC_TESTS are the tests whose compile line puts the libc on -I,
+# so <string.h>/<stdio.h>/<stdlib.h> are ours and the host's are never reached.
+# They are listed by name because a glob cannot express the distinction; a new
+# test lands in the globbed target below and, if it needs the libc on -I, fails
+# loudly rather than silently linting against the wrong headers.
+set(WASMOS_UNIT_LIBC_TESTS
+    ${CMAKE_SOURCE_DIR}/tests/unit/stubs_native_libsys.c
+    ${CMAKE_SOURCE_DIR}/tests/unit/stubs_wasm_stdlib.c
+    ${CMAKE_SOURCE_DIR}/tests/unit/test_libc_stdio.c
+    ${CMAKE_SOURCE_DIR}/tests/unit/test_libc_stdlib.c
+    ${CMAKE_SOURCE_DIR}/tests/unit/test_libui_key_decode.c
+    ${CMAKE_SOURCE_DIR}/tests/unit/test_native_ipc_future.c
+    ${CMAKE_SOURCE_DIR}/tests/unit/test_wasm_coroutine.c)
+
+wasmos_ide_index(wasmos_ide_unit_libc
+  SOURCES ${WASMOS_UNIT_LIBC_TESTS}
+  INCLUDES ${LIBC_DIR}/include ${LIBC_DIR}/src
+           ${CMAKE_SOURCE_DIR}/src/libui/include
+           ${DRIVER_WASM_DIR}/include
+           ${LIBSYS_WASM_DIR}/include ${LIBSYS_NATIVE_DIR}/include
+           ${CMAKE_SOURCE_DIR}/abi/generated/c)
+
+# Every other unit test takes the host libc for <angle> includes, matching those
+# tests' own `-iquote ${LIBC_DIR}/include`, so all project dirs go on -iquote:
+# our stdlib.h/stdio.h/string.h — and src/kernel/include's freestanding ones —
+# must not shadow the host headers these tests compile against (the kernel's
+# stdlib.h declares no strtol, and none of ours declare stderr/fprintf/abort).
+# LIBC_DIR/include still precedes KERNEL_DIR/include so a quoted "stdlib.h"
+# finds the fuller libc one. WASM3_DIR is needed because kernel headers reach
 # wasm3.h on the interpreter backend. The service dirs carry the headers the
 # service-level unit tests include directly.
 wasmos_ide_index(wasmos_ide_unit
   DIRS ${CMAKE_SOURCE_DIR}/tests/unit
-  INCLUDES ${CMAKE_SOURCE_DIR}/tests/unit/include ${LIBC_DIR}/include
-           ${KERNEL_DIR}/include ${DRIVER_WASM_DIR}/include
-           ${LIBSYS_WASM_DIR}/include ${LIBSYS_NATIVE_DIR}/include
-           ${CMAKE_SOURCE_DIR}/abi/generated/c
-           ${SERVICES_DIR}/fs_manager ${SERVICES_DIR}/device_manager
-           ${SERVICES_DIR}/net_stack
-           ${WASM3_DIR} ${WASM3_DIR}/source)
+  EXCLUDE ${WASMOS_UNIT_LIBC_TESTS}
+  IQUOTE ${CMAKE_SOURCE_DIR}/tests/unit/include ${LIBC_DIR}/include
+         ${KERNEL_DIR}/include ${DRIVER_WASM_DIR}/include
+         ${LIBSYS_WASM_DIR}/include ${LIBSYS_NATIVE_DIR}/include
+         ${CMAKE_SOURCE_DIR}/abi/generated/c
+         ${SERVICES_DIR}/fs_manager ${SERVICES_DIR}/device_manager
+         ${SERVICES_DIR}/net_stack
+         ${WASM3_DIR} ${WASM3_DIR}/source)
 
 wasmos_ide_index(wasmos_ide_tools
   DIRS ${CMAKE_SOURCE_DIR}/src/tools

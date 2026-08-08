@@ -11,7 +11,8 @@
 #include <stdint.h>
 #include "wasmos_driver_abi.h"
 
-#define CAPABILITY_DMA_WINDOW_LIMIT 16u /* max DMA windows per driver context */
+#define CAPABILITY_DMA_WINDOW_LIMIT 16u                 /* max DMA windows per driver context */
+#define CAPABILITY_IO_RANGE_LIMIT WASMOS_IO_RANGE_LIMIT /* max disjoint I/O windows */
 
 /* Hardware access kinds, each gated by a separate flag in the spawn profile. */
 typedef enum {
@@ -39,10 +40,11 @@ int capability_context_configured(uint32_t context_id);
 
 /* Set the full hardware access profile for a newly spawned driver process.
  * cap_flags is a bitmask of (1 << capability_kind_t) values.
- * io_port_min/max bound the allowed I/O port range; irq_mask selects IRQ lines.
+ * io_ranges lists the allowed I/O port windows (a device's registers are not
+ * always contiguous); irq_mask selects IRQ lines.
  * dma_windows defines physical address ranges the driver may use for DMA. */
-int capability_set_spawn_profile(uint32_t context_id, uint32_t cap_flags, uint16_t io_port_min,
-                                 uint16_t io_port_max, uint16_t irq_mask,
+int capability_set_spawn_profile(uint32_t context_id, uint32_t cap_flags, uint32_t io_range_count,
+                                 const wasmos_io_range_t* io_ranges, uint16_t irq_mask,
                                  uint32_t dma_direction_flags, uint32_t dma_max_bytes,
                                  uint32_t dma_window_count, const wasmos_dma_window_t* dma_windows);
 
@@ -51,6 +53,19 @@ int capability_spawn_profile_configured(uint32_t context_id);
 
 /* Predicate checks called by hardware hostcalls before granting access. */
 int capability_io_port_allowed(uint32_t context_id, uint16_t port);
+
+/* Resolve (region, offset) to an absolute port for a context, where `region` is
+ * an index into the I/O windows the spawn profile granted, in the order they
+ * were declared. Returns 0 and writes *out_port when the region exists and the
+ * offset lies inside it, else a negative WASMOS_ERR_IO_* code naming which check
+ * refused it -- "no such region" and "offset past the end" are different bugs
+ * and a caller should be able to tell them apart.
+ *
+ * This is what lets a driver address its device without ever naming an absolute
+ * port: it cannot express an access outside the window it was granted, because
+ * it does not supply the base. */
+int capability_io_region_port(uint32_t context_id, uint32_t region, uint32_t offset,
+                              uint16_t* out_port);
 int capability_irq_line_allowed(uint32_t context_id, uint32_t irq_line);
 int capability_mmio_allowed(uint32_t context_id);
 int capability_dma_direction_allowed(uint32_t context_id, uint32_t direction_flags);

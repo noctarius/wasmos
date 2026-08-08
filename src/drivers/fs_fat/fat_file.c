@@ -448,6 +448,50 @@ fat_r_t fat_op_open(fat_op_ctx_t* op, fat_block_t* blk, const fat_mount_t* mnt,
     FAT_CO_END(op);
 }
 
+/* Lazily reborrow the client's transfer buffer to the block server so it may
+ * write there itself. Taken on first use rather than at op start, so a read made
+ * entirely of partial sectors never creates a grant at all; dropped in
+ * fat_op_free. Returns 1 when the direct path is usable.
+ *
+ * Failure is never an error — it just means this read stages as before. op->arg3
+ * is the borrow fs-manager reborrowed to us; a client that talks to this backend
+ * directly has none to re-lend, which is the common case during boot. */
+static int fat_read_direct_arm(fat_op_ctx_t* op, fat_block_t* blk) {
+    int32_t borrow;
+    if (op->zc_borrow > 0) {
+        return 1;
+    }
+    if (op->zc_borrow < 0 || op->arg3 <= 0) {
+        return 0; /* already tried and failed, or nothing to re-lend */
+    }
+    borrow = wasmos_xfer_buffer_reborrow(fat_block_server_endpoint(blk), op->arg3,
+                                         WASMOS_BUFFER_GRANT_WRITE);
+    if (borrow <= 0) {
+        op->zc_borrow = -1; /* remember, so every sector does not retry */
+        return 0;
+    }
+    op->zc_borrow = borrow;
+    return 1;
+}
+
+/* Whole sectors one direct request may cover. Three bounds: what is left of the
+ * request, the tail of the current cluster (the next cluster can be anywhere on
+ * disk, so a run may not cross the boundary), and what one block request carries.
+ * Batching is what makes the direct path worth its per-op grant — the IPC round
+ * trip dominates a single 512-byte transfer. */
+static uint32_t fat_read_direct_run(const fat_op_ctx_t* op, const fat_open_file_t* file,
+                                    const fat_mount_t* mnt) {
+    uint32_t run = (op->requested - op->done) / mnt->bytes_per_sector;
+    uint32_t to_cluster_end = mnt->sectors_per_cluster - file->current_sector;
+    if (run > to_cluster_end) {
+        run = to_cluster_end;
+    }
+    if (run > WASMOS_BLOCK_ZC_MAX_SECTORS) {
+        run = WASMOS_BLOCK_ZC_MAX_SECTORS;
+    }
+    return run;
+}
+
 fat_r_t fat_op_read(fat_op_ctx_t* op, fat_block_t* blk, const fat_mount_t* mnt,
                     fat_open_pool_t* pool) {
     /* `file` points at a stable pool slot, but the C local is re-derived every
@@ -483,11 +527,34 @@ fat_r_t fat_op_read(fat_op_ctx_t* op, fat_block_t* blk, const fat_mount_t* mnt,
         if (file->current_cluster < 2 || file->file_lba == 0) {
             FAT_CO_FAIL(op, blk, WASMOS_ERR_FS_CORRUPT);
         }
-        FAT_CO_READ(op, blk, file->file_lba + file->current_sector);
-        if (wasmos_xfer_buffer_write(
-                op->arg2, addr_cast(int32_t, (fat_block_sector(blk) + op->io_sector_offset)),
-                (int32_t)op->io_chunk, (int32_t)op->done) != 0) {
-            FAT_CO_FAIL(op, blk, WASMOS_ERR_FS_BUFFER);
+        /* A whole sector can be landed straight in the client's buffer. A
+         * partial one cannot: the block server transfers 512 bytes at a time, so
+         * writing it at the client's offset would clobber the bytes on either
+         * side of the range actually asked for. Those edges keep bouncing
+         * through the staged sector. */
+        op->io_run_sectors = 1u;
+        if (op->io_sector_offset == 0u && op->io_chunk == mnt->bytes_per_sector &&
+            fat_read_direct_arm(op, blk)) {
+            op->io_run_sectors = fat_read_direct_run(op, file, mnt);
+            if (op->io_run_sectors == 0u) {
+                op->io_run_sectors = 1u;
+            }
+            FAT_CO_READ_DIRECT(op, blk, file->file_lba + file->current_sector, op->io_run_sectors,
+                               op->arg2, op->zc_borrow, op->done);
+            /* The server may have transferred fewer than asked; advance by what
+             * it reported and let the loop issue the remainder. */
+            op->io_run_sectors = fat_block_direct_sectors(blk);
+            if (op->io_run_sectors == 0u) {
+                FAT_CO_FAIL(op, blk, WASMOS_ERR_FS_IO);
+            }
+            op->io_chunk = op->io_run_sectors * mnt->bytes_per_sector;
+        } else {
+            FAT_CO_READ(op, blk, file->file_lba + file->current_sector);
+            if (wasmos_xfer_buffer_write(
+                    op->arg2, addr_cast(int32_t, (fat_block_sector(blk) + op->io_sector_offset)),
+                    (int32_t)op->io_chunk, (int32_t)op->done) != 0) {
+                FAT_CO_FAIL(op, blk, WASMOS_ERR_FS_BUFFER);
+            }
         }
         file->offset += op->io_chunk;
         op->done += op->io_chunk;
@@ -496,7 +563,7 @@ fat_r_t fat_op_read(fat_op_ctx_t* op, fat_block_t* blk, const fat_mount_t* mnt,
             op->io_sector_offset + op->io_chunk < mnt->bytes_per_sector) {
             continue;
         }
-        file->current_sector++;
+        file->current_sector += op->io_run_sectors;
         if (file->current_sector < mnt->sectors_per_cluster) {
             continue;
         }

@@ -16,6 +16,8 @@
 #include "wasmos_status.h"
 #include "framebuffer.h"
 #include "irq.h"
+#include "msi.h"
+#include "mmio.h"
 #include "policy.h"
 #include "capability.h"
 #include "system_control.h"
@@ -1960,6 +1962,77 @@ m3ApiRawFunction(wasmos_env_unset) {
     m3ApiReturn(0);
 }
 
+/* Region-addressed I/O. The driver supplies (region, offset), never an absolute
+ * port, so it cannot express an access outside the window its spawn profile
+ * granted -- the kernel owns the base. `region` indexes those windows in
+ * declaration order. Failures propagate the specific WASMOS_ERR_IO_* reason
+ * rather than collapsing to one value: "no such region" and "offset past the
+ * end" are different bugs. */
+static int io_region_port(uint32_t region, uint32_t offset, uint16_t* out_port) {
+    uint32_t context_id = 0;
+    if (current_process_context(&context_id) != 0) {
+        return WASMOS_ERR_IO_NOT_AUTHORIZED;
+    }
+    return capability_io_region_port(context_id, region, offset, out_port);
+}
+
+/* Reads return the datum through linear memory, not as the result: a 32-bit port
+ * read can legitimately be 0xFFFFFFFF and must stay distinguishable from a
+ * failure code. */
+#define WASMOS_IO_REGION_READ(width_expr)                                                          \
+    m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, region) m3ApiGetArg(int32_t, offset)             \
+        m3ApiGetArgMem(uint32_t*, out) m3ApiCheckMem(out, sizeof(uint32_t));                       \
+    uint16_t port = 0;                                                                             \
+    int rc = 0;                                                                                    \
+    if (region < 0 || offset < 0) {                                                                \
+        m3ApiReturn(WASMOS_ERR_IO_BAD_REGION);                                                     \
+    }                                                                                              \
+    rc = io_region_port((uint32_t)region, (uint32_t)offset, &port);                                \
+    if (rc != 0) {                                                                                 \
+        m3ApiReturn(rc);                                                                           \
+    }                                                                                              \
+    *out = (width_expr);                                                                           \
+    m3ApiReturn(0)
+
+m3ApiRawFunction(wasmos_io_region_in8) {
+    WASMOS_IO_REGION_READ((uint32_t)inb(port));
+}
+
+m3ApiRawFunction(wasmos_io_region_in16) {
+    WASMOS_IO_REGION_READ((uint32_t)inw(port));
+}
+
+m3ApiRawFunction(wasmos_io_region_in32) {
+    WASMOS_IO_REGION_READ((uint32_t)inl(port));
+}
+
+#define WASMOS_IO_REGION_WRITE(write_stmt)                                                         \
+    m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, region) m3ApiGetArg(int32_t, offset)             \
+        m3ApiGetArg(int32_t, value);                                                               \
+    uint16_t port = 0;                                                                             \
+    int rc = 0;                                                                                    \
+    if (region < 0 || offset < 0) {                                                                \
+        m3ApiReturn(WASMOS_ERR_IO_BAD_REGION);                                                     \
+    }                                                                                              \
+    rc = io_region_port((uint32_t)region, (uint32_t)offset, &port);                                \
+    if (rc != 0) {                                                                                 \
+        m3ApiReturn(rc);                                                                           \
+    }                                                                                              \
+    write_stmt;                                                                                    \
+    m3ApiReturn(0)
+
+m3ApiRawFunction(wasmos_io_region_out8) {
+    WASMOS_IO_REGION_WRITE(outb(port, (uint8_t)((uint32_t)value & 0xFFu)));
+}
+
+m3ApiRawFunction(wasmos_io_region_out16) {
+    WASMOS_IO_REGION_WRITE(outw(port, (uint16_t)((uint32_t)value & 0xFFFFu)));
+}
+
+m3ApiRawFunction(wasmos_io_region_out32) {
+    WASMOS_IO_REGION_WRITE(outl(port, (uint32_t)value));
+}
+
 m3ApiRawFunction(wasmos_io_in8) {
     m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, port) uint32_t context_id = 0;
     if (port < 0 || port > 0xFFFF) {
@@ -2702,6 +2775,59 @@ m3ApiRawFunction(wasmos_irq_unroute) {
         m3ApiReturn(WASMOS_ERR_IRQ_NOT_AUTHORIZED);
     }
     m3ApiReturn(irq_unregister(context_id, (uint32_t)irq_line));
+}
+
+/* Allocate an MSI vector bound to one of the caller's endpoints. The kernel owns
+ * the vector namespace; the caller passes the returned address/data pair to the
+ * bus driver that programs the device (pci-bus, PCI_IPC_MSI_BIND). */
+m3ApiRawFunction(wasmos_msi_alloc) {
+    typedef struct {
+        uint32_t address_lo;
+        uint32_t address_hi;
+        uint32_t data;
+        uint32_t vector;
+    } msi_desc_t;
+    m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, endpoint) m3ApiGetArgMem(msi_desc_t*, out)
+        m3ApiCheckMem(out, sizeof(msi_desc_t));
+    uint32_t context_id = 0;
+    if (endpoint < 0) {
+        m3ApiReturn(WASMOS_ERR_MSI_BAD_ENDPOINT);
+    }
+    if (current_process_context(&context_id) != 0 ||
+        require_irq_route_capability(context_id) != 0) {
+        m3ApiReturn(WASMOS_ERR_MSI_NOT_AUTHORIZED);
+    }
+    m3ApiReturn(msi_alloc(context_id, (uint32_t)endpoint, &out->address_lo, &out->address_hi,
+                          &out->data, &out->vector));
+}
+
+m3ApiRawFunction(wasmos_msi_free) {
+    m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, vector)
+
+        uint32_t context_id = 0;
+    if (vector < 0) {
+        m3ApiReturn(WASMOS_ERR_MSI_BAD_VECTOR);
+    }
+    if (current_process_context(&context_id) != 0 ||
+        require_irq_route_capability(context_id) != 0) {
+        m3ApiReturn(WASMOS_ERR_MSI_NOT_AUTHORIZED);
+    }
+    m3ApiReturn(msi_free(context_id, (uint32_t)vector));
+}
+
+/* Poke a memory-mapped device register (pci-bus placing an MSI-X table entry).
+ * mmio_write32_phys refuses anything overlapping system RAM, so the mmio.map
+ * capability buys MMIO access, not arbitrary physical memory access. */
+m3ApiRawFunction(wasmos_mmio_write32) {
+    m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, phys_lo) m3ApiGetArg(int32_t, phys_hi)
+        m3ApiGetArg(int32_t, value)
+
+            uint32_t context_id = 0;
+    if (current_process_context(&context_id) != 0 || require_mmio_capability(context_id) != 0) {
+        m3ApiReturn(WASMOS_ERR_MSI_NOT_AUTHORIZED);
+    }
+    uint64_t phys = ((uint64_t)(uint32_t)phys_hi << 32) | (uint64_t)(uint32_t)phys_lo;
+    m3ApiReturn(mmio_write32_phys(phys, (uint32_t)value));
 }
 
 m3ApiRawFunction(wasmos_system_halt) {

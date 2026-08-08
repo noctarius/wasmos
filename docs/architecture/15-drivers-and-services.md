@@ -46,6 +46,35 @@ device-manager via `DEVMGR_PUBLISH_BLOCK_DEVICE` once a device is confirmed
 present. The `storage_bootstrap=true` flag pins this driver to the initfs rule
 set; it cannot be overridden by runtime boot-FAT rules.
 
+**Transfers are PIO but completion is interrupt-driven.** IDENTIFY runs polled
+during probe; the driver then routes IRQ 14 (the primary channel's fixed ISA
+line — the PIIX IDE function exposes no PCI interrupt pin, so it is not
+discoverable from the device record) and clears `nIEN` in Device Control
+(`0x3F6`) so the drive may assert INTRQ at all. Sector waits then block on a
+dedicated interrupt endpoint instead of spinning on the status register.
+
+Two properties keep this from becoming a boot-path dependency:
+
+- Every wait reads status **before** sleeping, so a condition that is already
+  true (a pre-command idle check, which has no interrupt coming) never waits.
+- If the line is routed but no interrupt ever arrives, the driver abandons the
+  interrupt after a bounded number of empty sleeps, quiets the drive, drops the
+  route, and reverts to polling for the rest of the boot. Failure to route or to
+  clear `nIEN` is likewise non-fatal — the driver behaves exactly as it did
+  before.
+
+Servicing an interrupt owes two things and both matter: reading the status
+register de-asserts INTRQ at the drive, and `irq_ack` reopens the line the
+kernel masked on dispatch. An event that arrives and is never acked leaves the
+line masked permanently.
+
+Real DMA is **not** implemented: there is no bus-master IDE (BMIDE/PRD)
+programming, and the sector loop is PIO on every path. The `dma_map_borrow`
+zero-copy borrow fast path is separately disabled pending a block protocol that
+carries the buffer grant (`TODO(xfer-buffer owner-push)` in `ata.c`); the driver
+reports its transfer mode once at startup rather than logging a per-request
+"fallback", which used to read like an intermittent failure.
+
 Block IPC opcodes:
 
 | Opcode                    | Value   | Meaning           |

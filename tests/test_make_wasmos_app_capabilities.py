@@ -4,6 +4,30 @@ import tempfile
 import unittest
 from pathlib import Path
 
+# Packed .wap header prefix, in the field order of wasmos_app_header_t in
+# scripts/make_wasmos_app.c, up to but excluding subsystem_tag: magic, version,
+# header_size, flags, name_len, entry_len, wasm_size, req_ep_count, cap_count,
+# entry_arg_binding_count, mem_hint_count, the four driver_match u8s, the four
+# driver match/io u16s, driver_match_count, compiled_size.
+#
+# The tag must be located by OFFSET, never from the end of the header. The
+# format is versioned and extended by APPENDING fields, which is what keeps
+# every older offset stable -- v6 added region_count after the tag, so "the last
+# 8 bytes" silently became region_count plus padding and read back as zeros.
+_HEADER_PREFIX = "<8sHHIIIIIIIIBBBBHHHHII"
+_SUBSYSTEM_TAG_OFFSET = struct.calcsize(_HEADER_PREFIX)
+_SUBSYSTEM_TAG_LEN = 8
+
+
+def _subsystem_tag(header: bytes) -> bytes:
+    """Read the subsystem tag out of a packed .wap header."""
+    end = _SUBSYSTEM_TAG_OFFSET + _SUBSYSTEM_TAG_LEN
+    header_size = struct.unpack_from("<H", header, 10)[0]
+    assert (
+        header_size >= end
+    ), f"header_size {header_size} cannot hold the subsystem tag"
+    return header[_SUBSYSTEM_TAG_OFFSET:end].rstrip(b"\0")
+
 
 class MakeWasmosAppCapabilitiesTest(unittest.TestCase):
     def test_rejects_unknown_and_flagged_capability(self):
@@ -109,20 +133,8 @@ class MakeWasmosAppCapabilitiesTest(unittest.TestCase):
 
             default_hdr = default_out.read_bytes()
             explicit_hdr = explicit_out.read_bytes()
-            default_header_size = struct.unpack_from("<H", default_hdr, 10)[0]
-            explicit_header_size = struct.unpack_from("<H", explicit_hdr, 10)[0]
-            self.assertEqual(
-                default_hdr[default_header_size - 8 : default_header_size].rstrip(
-                    b"\0"
-                ),
-                b"WASM",
-            )
-            self.assertEqual(
-                explicit_hdr[explicit_header_size - 8 : explicit_header_size].rstrip(
-                    b"\0"
-                ),
-                b"WARP",
-            )
+            self.assertEqual(_subsystem_tag(default_hdr), b"WASM")
+            self.assertEqual(_subsystem_tag(explicit_hdr), b"WARP")
 
 
 if __name__ == "__main__":

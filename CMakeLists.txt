@@ -2087,6 +2087,20 @@ add_custom_target(run-kernel-unit-tests
           ${CMAKE_SOURCE_DIR}/tests/unit/stubs_spinlock.c
           -o ${BUILD_DIR}/test_sched_runqueue_bias_off
   COMMAND ${BUILD_DIR}/test_sched_runqueue_bias_off
+  # sched_event.c against the REAL file. The in-kernel selftest hand-inlines the
+  # wait-list manipulation instead of calling in, so it would pass unchanged if
+  # this file were deleted; this links it and stubs only the timer, the thread
+  # table and the two scheduler entry points.
+  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
+          -DWASMOS_HOST_TEST_SMP=1
+          -iquote ${KERNEL_DIR}/include
+          -iquote ${CMAKE_SOURCE_DIR}/libs/wasm3/source
+          -iquote ${CMAKE_SOURCE_DIR}/abi/generated/c
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_sched_event.c
+          ${KERNEL_DIR}/sched_event.c
+          ${CMAKE_SOURCE_DIR}/tests/unit/stubs_spinlock.c
+          -o ${BUILD_DIR}/test_sched_event
+  COMMAND ${BUILD_DIR}/test_sched_event
   COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
           -I${KERNEL_DIR}/include
           ${CMAKE_SOURCE_DIR}/tests/unit/test_warp_driver_ring3_call_policy.c

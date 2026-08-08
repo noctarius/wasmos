@@ -1588,6 +1588,108 @@ static void test_caller_cpu_bias_arm(void) {
 #endif
 }
 
+/* ------------------------------------------------------- sched_thread_init */
+
+/* I1: the full field contract.  sched_thread_init is the sole place a thread's
+ * scheduler state is established, and nothing asserted any of it. */
+static void test_init_establishes_every_field(void) {
+    harness_reset();
+    thread_t* t = &g_pool[0];
+    memset(t, 0, sizeof(*t));
+    t->tid = 1;
+    list_head_init(&t->sched_node);
+    sched_thread_init(t, SCHED_PRIO_SERVICE);
+
+    CHECK(t->ctx_canary_pre == PROCESS_CTX_CANARY_VALUE, "leading canary set");
+    CHECK(t->ctx_canary_post == PROCESS_CTX_CANARY_VALUE, "trailing canary set");
+    CHECK(t->sched_prio == SCHED_PRIO_SERVICE, "priority adopted");
+    CHECK(t->cpu_affinity == ~0u, "affinity unrestricted by default");
+    CHECK(t->last_cpu == 0, "last_cpu reset");
+    CHECK(t->on_rq == 0, "no run-queue claim");
+    CHECK(t->rq == 0, "no owning queue");
+    CHECK(list_head_empty(&t->sched_node), "sched_node canonically detached");
+    CHECK(list_head_empty(&t->event_node), "event_node canonically detached");
+    CHECK(t->wait_event == 0, "not waiting on an event");
+    CHECK(t->pend_state == SCHED_PEND_NONE, "no pending wake state");
+    CHECK(t->pend_data == 0, "no pending wake payload");
+    CHECK(t->join_event.type == SCHED_EVENT_TYPE_JOIN, "join event typed");
+    CHECK(list_head_empty(&t->join_event.wait_list), "join event has no waiters");
+}
+
+/* I2: a leaked claim over a detached node.  The guard fires,
+ * cpu_sched_remove_thread gives up (there is no rq to follow), and init then
+ * clears the claim unconditionally -- so the thread must come out ENQUEUEABLE
+ * rather than stranded holding a claim no queue backs. */
+static void test_init_recovers_a_leaked_claim(void) {
+    harness_reset();
+    thread_t* t = mk_thread(0, SCHED_PRIO_WASM, THREAD_STATE_READY);
+    __atomic_store_n(&t->on_rq, 1, __ATOMIC_RELEASE);
+    t->rq = 0; /* claim with nothing behind it */
+
+    sched_thread_init(t, SCHED_PRIO_WASM);
+    CHECK(t->on_rq == 0, "the leaked claim is cleared");
+    t->state = THREAD_STATE_READY;
+    cpu_sched_enqueue(&g_cpus[0].sched, t);
+    CHECK(t->on_rq == 1 && t->rq == &g_cpus[0].sched, "and the thread is enqueueable again");
+    check_invariants("init after leaked claim");
+}
+
+/* I3: init RESETS cpu_affinity to unrestricted.  Re-initialising a thread that
+ * was pinned therefore discards the pinning silently.  Pinned as current
+ * behaviour: init means "establish from scratch", and every caller today is a
+ * fresh or recycled slot where ~0u is correct -- but a caller that pins first
+ * and initialises second loses the mask with no diagnostic. */
+static void test_init_discards_an_existing_pinning(void) {
+    harness_reset();
+    thread_t* t = mk_thread(0, SCHED_PRIO_WASM, THREAD_STATE_READY);
+    t->cpu_affinity = 1u << 2;
+    sched_thread_init(t, SCHED_PRIO_WASM);
+    CHECK(t->cpu_affinity == ~0u, "a pinning does not survive re-initialisation");
+}
+
+/* I4: re-init across every (old, new) band pair, including the diagonal --
+ * same-band re-init is a distinct path from the cross-band case the original
+ * regression covered. */
+static void test_reinit_across_every_band_pair(void) {
+    int bad = 0;
+    for (int old_p = 0; old_p < SCHED_PRIO_MAX; ++old_p) {
+        for (int new_p = 0; new_p < SCHED_PRIO_MAX; ++new_p) {
+            harness_reset();
+            thread_t* t = mk_thread(0, (sched_prio_t)old_p, THREAD_STATE_READY);
+            cpu_sched_enqueue(&g_cpus[0].sched, t);
+            sched_thread_init(t, (sched_prio_t)new_p);
+
+            cpu_sched_t* cs = &g_cpus[0].sched;
+            if (cs->thread_count[old_p] != 0u || (cs->ready_bitmap & (1u << old_p)) != 0) {
+                bad++;
+            }
+            if (old_p != new_p &&
+                (cs->thread_count[new_p] != 0u || (cs->ready_bitmap & (1u << new_p)) != 0)) {
+                bad++;
+            }
+        }
+    }
+    CHECK(bad == 0, "every band pair drains the old band and leaves the new one untouched");
+}
+
+/* I5: a thread queued on a REMOTE CPU.  The unlink must follow t->rq rather than
+ * assume the initialising CPU's queue. */
+static void test_reinit_of_a_remotely_queued_thread(void) {
+    harness_reset();
+    thread_t* t = mk_thread(0, SCHED_PRIO_DRIVER, THREAD_STATE_READY);
+    act_as(3);
+    cpu_sched_enqueue(&g_cpus[3].sched, t);
+
+    act_as(0); /* initialise from a different CPU */
+    sched_thread_init(t, SCHED_PRIO_WASM);
+    CHECK(g_cpus[3].sched.thread_count[SCHED_PRIO_DRIVER] == 0, "the owning queue is drained");
+    CHECK((g_cpus[3].sched.ready_bitmap & (1u << SCHED_PRIO_DRIVER)) == 0,
+          "and its band bit cleared");
+    CHECK(g_cpus[0].sched.ready_bitmap == 0u, "the initialising CPU's queue is untouched");
+    CHECK(t->on_rq == 0 && t->rq == 0, "and the thread is left unclaimed");
+    check_invariants("remote re-init");
+}
+
 /* -------------------------------------------------------------------- main */
 
 int main(void) {
@@ -1680,6 +1782,11 @@ int main(void) {
         {"W8 Dekker: exactly one owner", test_dekker_exactly_one_side_owns_the_enqueue},
         {"W9 stale token no spurious wake", test_stale_token_cannot_force_a_spurious_wake},
         {"W10 caller-CPU-bias arm", test_caller_cpu_bias_arm},
+        {"I1 init establishes every field", test_init_establishes_every_field},
+        {"I2 init recovers a leaked claim", test_init_recovers_a_leaked_claim},
+        {"I3 init discards an existing pinning", test_init_discards_an_existing_pinning},
+        {"I4 re-init across every band pair", test_reinit_across_every_band_pair},
+        {"I5 re-init of a remotely queued thread", test_reinit_of_a_remotely_queued_thread},
     };
 
     for (unsigned i = 0; i < sizeof(tests) / sizeof(tests[0]); ++i) {

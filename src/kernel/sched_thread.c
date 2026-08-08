@@ -143,6 +143,12 @@ static void cpu_sched_unlink_locked(cpu_sched_t* cs, thread_t* t, uint8_t prio) 
 }
 
 void cpu_sched_enqueue(cpu_sched_t* cs, thread_t* t) {
+    /* A NULL thread must not reach the current_thread scan below: a CPU that
+     * has not dispatched yet holds current_thread == NULL, so NULL == NULL
+     * matches and the "still running elsewhere" path dereferences it. */
+    if (!t) {
+        return;
+    }
     for (uint32_t i = 0; i < WASMOS_MAX_CPUS; ++i) {
         if (g_cpus[i].current_thread == t) {
             serial_printf_unlocked(
@@ -288,6 +294,12 @@ void cpu_sched_remove_thread(thread_t* t) {
 }
 
 void sched_enqueue_thread_from(thread_t* t, uintptr_t caller) {
+    /* A NULL thread must not reach the current_thread scan below: a CPU that
+     * has not dispatched yet holds current_thread == NULL, so NULL == NULL
+     * matches and the "still running elsewhere" path dereferences it. */
+    if (!t) {
+        return;
+    }
     for (uint32_t i = 0; i < WASMOS_MAX_CPUS; ++i) {
         if (g_cpus[i].current_thread == t) {
             serial_printf_unlocked("[sched] enqueue current tid=%u owner=%u caller_cpu=%u "

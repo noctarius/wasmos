@@ -2060,6 +2060,20 @@ add_custom_target(run-kernel-unit-tests
           ${CMAKE_SOURCE_DIR}/tests/unit/stubs_slab.c
           -o ${BUILD_DIR}/test_xfer_buffer_object
   COMMAND ${BUILD_DIR}/test_xfer_buffer_object
+  # Run-queue invariants against the REAL sched_thread.c, with the host standing
+  # in for the CPUs (WASMOS_HOST_TEST_SMP swaps cpu_local() for a _Thread_local).
+  # Project dirs go on -iquote, not -I, so <string.h> reaches the host libc
+  # instead of the kernel's, which has no strstr.
+  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
+          -DWASMOS_HOST_TEST_SMP=1
+          -iquote ${KERNEL_DIR}/include
+          -iquote ${CMAKE_SOURCE_DIR}/libs/wasm3/source
+          -iquote ${CMAKE_SOURCE_DIR}/abi/generated/c
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_sched_runqueue.c
+          ${KERNEL_DIR}/sched_thread.c
+          ${CMAKE_SOURCE_DIR}/tests/unit/stubs_spinlock.c
+          -o ${BUILD_DIR}/test_sched_runqueue
+  COMMAND ${BUILD_DIR}/test_sched_runqueue
   COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
           -I${KERNEL_DIR}/include
           ${CMAKE_SOURCE_DIR}/tests/unit/test_warp_driver_ring3_call_policy.c

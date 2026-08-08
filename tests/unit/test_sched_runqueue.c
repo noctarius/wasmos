@@ -710,6 +710,180 @@ static void test_draining_every_band_leaves_no_residue(void) {
     check_invariants("fully drained");
 }
 
+/* --------------------------------------- enqueue: running-elsewhere scan */
+
+/* cpu_sched_enqueue first scans for the thread being some CPU's current_thread.
+ * Such a thread must NOT be linked -- it is still executing -- but must be left
+ * READY so the owning CPU re-enqueues it when its yield completes. */
+
+static void test_enqueue_running_elsewhere_marks_ready_only(void) {
+    harness_reset();
+    thread_t* t = mk_thread(0, SCHED_PRIO_WASM, THREAD_STATE_RUNNING);
+    t->block_reason = THREAD_BLOCK_IPC;
+    g_cpus[2].current_thread = t;
+    act_as(0);
+    cpu_sched_enqueue(&g_cpus[0].sched, t);
+
+    CHECK(t->state == THREAD_STATE_READY, "promoted to READY");
+    CHECK(t->block_reason == THREAD_BLOCK_NONE, "block reason cleared");
+    CHECK(list_head_empty(&t->sched_node), "not linked while running elsewhere");
+    CHECK(t->on_rq == 0, "not claimed");
+    CHECK(saw("enqueue current"), "reported");
+    check_invariants("running elsewhere");
+}
+
+static void test_enqueue_running_on_the_calling_cpu(void) {
+    harness_reset();
+    thread_t* t = mk_thread(0, SCHED_PRIO_WASM, THREAD_STATE_RUNNING);
+    g_cpus[0].current_thread = t; /* the caller's OWN current thread */
+    act_as(0);
+    cpu_sched_enqueue(&g_cpus[0].sched, t);
+    CHECK(t->state == THREAD_STATE_READY, "same disposition on the local CPU");
+    CHECK(list_head_empty(&t->sched_node), "still not linked");
+    check_invariants("running locally");
+}
+
+static void test_enqueue_running_elsewhere_already_ready(void) {
+    harness_reset();
+    thread_t* t = mk_thread(0, SCHED_PRIO_WASM, THREAD_STATE_READY);
+    t->block_reason = THREAD_BLOCK_EVENT;
+    g_cpus[2].current_thread = t;
+    cpu_sched_enqueue(&g_cpus[0].sched, t);
+    CHECK(t->state == THREAD_STATE_READY, "stays READY");
+    CHECK(t->block_reason == THREAD_BLOCK_NONE, "block reason still cleared");
+    CHECK(list_head_empty(&t->sched_node), "not linked");
+}
+
+/* The reap gate: sched_mark_ready_if_live must never resurrect a dead or
+ * still-initialising slot, however it is reached. */
+static void test_enqueue_never_resurrects_dead_states(void) {
+    const thread_state_t dead[] = {THREAD_STATE_ZOMBIE, THREAD_STATE_UNUSED, THREAD_STATE_NEW};
+    for (unsigned i = 0; i < sizeof(dead) / sizeof(dead[0]); ++i) {
+        harness_reset();
+        thread_t* t = mk_thread(0, SCHED_PRIO_WASM, dead[i]);
+        t->block_reason = THREAD_BLOCK_IPC;
+        g_cpus[2].current_thread = t;
+        cpu_sched_enqueue(&g_cpus[0].sched, t);
+        CHECK(t->state == dead[i], "dead/new state is never promoted");
+        CHECK(t->block_reason == THREAD_BLOCK_IPC, "and its block reason is untouched");
+        CHECK(list_head_empty(&t->sched_node), "and it is not linked");
+    }
+}
+
+/* The non-obvious half of the same rule: BLOCKED *is* a live state, so a
+ * running-elsewhere BLOCKED thread is promoted. */
+static void test_enqueue_promotes_blocked_running_elsewhere(void) {
+    harness_reset();
+    thread_t* t = mk_thread(0, SCHED_PRIO_WASM, THREAD_STATE_BLOCKED);
+    t->block_reason = THREAD_BLOCK_EVENT;
+    g_cpus[2].current_thread = t;
+    cpu_sched_enqueue(&g_cpus[0].sched, t);
+    CHECK(t->state == THREAD_STATE_READY, "BLOCKED is live and is promoted");
+    CHECK(t->block_reason == THREAD_BLOCK_NONE, "block reason cleared");
+    CHECK(list_head_empty(&t->sched_node), "still not linked");
+}
+
+static void test_enqueue_refuses_out_of_enum_state(void) {
+    harness_reset();
+    thread_t* t = mk_thread(0, SCHED_PRIO_WASM, THREAD_STATE_READY);
+    t->state = (thread_state_t)99; /* corrupt / out of enum */
+    cpu_sched_enqueue(&g_cpus[0].sched, t);
+    CHECK(list_head_empty(&t->sched_node), "an unknown state is not linked");
+    CHECK(t->on_rq == 0, "and not claimed");
+    CHECK(saw("enqueue non-ready"), "and is reported");
+    check_invariants("out-of-enum state");
+}
+
+/* Claim and linkage disagreeing is the shape that lets one node be linked twice.
+ * Releasing the claim on the way out is the half that matters: an early return
+ * still holding it strands the thread on no queue forever. */
+static void test_claimed_but_linked_releases_the_claim(void) {
+    harness_reset();
+    thread_t* t = mk_thread(0, SCHED_PRIO_WASM, THREAD_STATE_READY);
+    cpu_sched_enqueue(&g_cpus[0].sched, t);
+    uint32_t before = g_cpus[0].sched.thread_count[SCHED_PRIO_WASM];
+    log_reset();
+
+    __atomic_store_n(&t->on_rq, 0, __ATOMIC_RELEASE); /* claim lost, node still linked */
+    cpu_sched_enqueue(&g_cpus[0].sched, t);
+
+    CHECK(saw("claimed node still linked"), "the disagreement is reported");
+    CHECK(t->on_rq == 0, "the claim is RELEASED, not leaked");
+    CHECK(g_cpus[0].sched.thread_count[SCHED_PRIO_WASM] == before, "not linked a second time");
+}
+
+/* ------------------------------------------- affinity: redirect targeting */
+
+/* Affinity is a constraint, not a load hint: an allowed CPU is used even when a
+ * disallowed one is emptier. */
+static void test_allowed_but_loaded_cpu_is_not_redirected(void) {
+    harness_reset();
+    for (int i = 0; i < 10; ++i) {
+        cpu_sched_enqueue(&g_cpus[0].sched, mk_thread(i, SCHED_PRIO_WASM, THREAD_STATE_READY));
+    }
+    thread_t* t = mk_thread(20, SCHED_PRIO_WASM, THREAD_STATE_READY);
+    t->cpu_affinity = ~0u; /* CPU 0 allowed, though CPU 3 is empty */
+    act_as(0);
+    cpu_sched_enqueue(&g_cpus[0].sched, t);
+    CHECK(t->rq == &g_cpus[0].sched, "an allowed CPU is kept despite the load");
+    check_invariants("loaded but allowed");
+}
+
+static void test_redirect_prefers_last_cpu(void) {
+    harness_reset();
+    thread_t* t = mk_thread(0, SCHED_PRIO_WASM, THREAD_STATE_READY);
+    t->cpu_affinity = (1u << 1) | (1u << 3);
+    t->last_cpu = 3;
+    /* Make CPU 3 the busier of the two allowed CPUs, so only last_cpu explains
+     * the choice. */
+    cpu_sched_enqueue(&g_cpus[3].sched, mk_thread(1, SCHED_PRIO_WASM, THREAD_STATE_READY));
+
+    act_as(0); /* forbidden, so a redirect must happen */
+    cpu_sched_enqueue(&g_cpus[0].sched, t);
+    CHECK(t->rq == &g_cpus[3].sched, "redirect honours last_cpu among allowed CPUs");
+    check_invariants("redirect to last_cpu");
+}
+
+/* A queue that is not one of g_cpus[] belongs to the caller -- the in-kernel
+ * selftests build cpu_sched_t on the stack.  Affinity must not second-guess such
+ * a target, because there is no CPU id to reason about. */
+static void test_private_queue_is_not_redirected(void) {
+    harness_reset();
+    cpu_sched_t private_q;
+    cpu_sched_init(&private_q);
+    thread_t* t = mk_thread(0, SCHED_PRIO_WASM, THREAD_STATE_READY);
+    t->cpu_affinity = 1u << 2; /* would forbid CPU 0, whose index is the fallback */
+    act_as(0);
+    cpu_sched_enqueue(&private_q, t);
+    CHECK(t->rq == &private_q, "a caller-owned queue receives the thread");
+    CHECK(private_q.thread_count[SCHED_PRIO_WASM] == 1, "and accounts it");
+}
+
+/* ------------------------------------------------------ bounds and idle */
+
+static void test_idle_thread_is_never_enqueued(void) {
+    harness_reset();
+    thread_t* idle0 = g_cpus[0].idle_thread;
+    cpu_sched_enqueue(&g_cpus[0].sched, idle0);
+    CHECK(list_head_empty(&idle0->sched_node), "an idle thread is not linked");
+    CHECK(g_cpus[0].sched.ready_bitmap == 0u, "and no band is marked occupied");
+    check_invariants("idle not enqueued");
+}
+
+/* sched_prio indexes ready_list[] and thread_count[], and shifts into the
+ * bitmap.  A value >= SCHED_PRIO_MAX is an out-of-bounds write on two arrays and
+ * sets the bit cpu_sched_highest_prio masks away. */
+static void test_out_of_range_priority_is_refused(void) {
+    harness_reset();
+    thread_t* t = mk_thread(0, SCHED_PRIO_WASM, THREAD_STATE_READY);
+    t->sched_prio = SCHED_PRIO_MAX; /* one past the last band */
+    cpu_sched_enqueue(&g_cpus[0].sched, t);
+    CHECK(t->on_rq == 0, "an out-of-range priority is not claimed");
+    CHECK(list_head_empty(&t->sched_node), "and not linked");
+    CHECK(g_cpus[0].sched.ready_bitmap == 0u, "and sets no bit");
+    check_invariants("out-of-range prio");
+}
+
 /* -------------------------------------------------------------------- main */
 
 int main(void) {
@@ -747,6 +921,18 @@ int main(void) {
         {"B3 bit 7 never indexes the table", test_bit7_never_indexes_the_table},
         {"B4 phantom bit does not wedge", test_phantom_bit_does_not_wedge_the_picker},
         {"B5 draining leaves no residue", test_draining_every_band_leaves_no_residue},
+        {"E1 running elsewhere: ready only", test_enqueue_running_elsewhere_marks_ready_only},
+        {"E2 running on the calling CPU", test_enqueue_running_on_the_calling_cpu},
+        {"E3 running elsewhere, already READY", test_enqueue_running_elsewhere_already_ready},
+        {"E4 never resurrects dead states", test_enqueue_never_resurrects_dead_states},
+        {"E5 BLOCKED elsewhere is promoted", test_enqueue_promotes_blocked_running_elsewhere},
+        {"E6 out-of-enum state refused", test_enqueue_refuses_out_of_enum_state},
+        {"E7 claimed-but-linked releases claim", test_claimed_but_linked_releases_the_claim},
+        {"E8 allowed-but-loaded not redirected", test_allowed_but_loaded_cpu_is_not_redirected},
+        {"E9 redirect prefers last_cpu", test_redirect_prefers_last_cpu},
+        {"E10 private queue not redirected", test_private_queue_is_not_redirected},
+        {"E11 idle thread never enqueued", test_idle_thread_is_never_enqueued},
+        {"E12 out-of-range priority refused", test_out_of_range_priority_is_refused},
     };
 
     for (unsigned i = 0; i < sizeof(tests) / sizeof(tests[0]); ++i) {

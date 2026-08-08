@@ -54,15 +54,20 @@ static inline uint32_t cpu_sched_online_mask(void) {
     return mask;
 }
 
-/* Index of the CPU owning `cs`.  Needed because enqueue is handed a queue, not
- * a CPU id, but affinity is expressed as a CPU mask. */
+/* Index of the CPU owning `cs`, or WASMOS_MAX_CPUS if the queue is not one of
+ * g_cpus[].  Needed because enqueue is handed a queue, not a CPU id, while
+ * affinity is expressed as a CPU mask.  The "not found" answer must be distinct
+ * from CPU 0: a caller-owned queue (the in-kernel scheduler selftests build
+ * cpu_sched_t on the stack) has no CPU to reason about, and folding it onto 0
+ * would let an affinity mask that excludes CPU 0 redirect the thread away from
+ * the queue the caller explicitly named. */
 static uint32_t cpu_sched_cpu_index(const cpu_sched_t* cs) {
     for (uint32_t i = 0; i < WASMOS_MAX_CPUS; ++i) {
         if (&g_cpus[i].sched == cs) {
             return i;
         }
     }
-    return 0;
+    return WASMOS_MAX_CPUS;
 }
 
 /* Is `t` allowed to run on `cpu_id`?  An empty intersection is treated as "no
@@ -173,7 +178,26 @@ void cpu_sched_enqueue(cpu_sched_t* cs, thread_t* t) {
     if (!t) {
         return;
     }
+    /* One pass over the per-CPU table answers both questions that disqualify a
+     * thread from being linked: it is some CPU's idle thread, or it is still
+     * running somewhere.  Kept as a single loop because this is the hot wake
+     * path -- a second scan would double its cost for no benefit. */
     for (uint32_t i = 0; i < WASMOS_MAX_CPUS; ++i) {
+        /* Idle threads are dispatched exclusively through the
+         * cpu_sched_pick_next fallback and are never queued; linking one would
+         * let a CPU dispatch it from the ready list while it is simultaneously
+         * that CPU's fallback. */
+        if (g_cpus[i].idle_thread == t) {
+            static uint32_t idle_enqueue_seen;
+            uint32_t n = __atomic_fetch_add(&idle_enqueue_seen, 1u, __ATOMIC_RELAXED);
+            if ((n & (n - 1u)) == 0u) {
+                serial_printf_unlocked(
+                    "[sched] enqueue idle tid=%u caller=%016llx (n=%u, skipped)\n",
+                    (unsigned)t->tid, (unsigned long long)(uintptr_t)__builtin_return_address(0),
+                    (unsigned)(n + 1u));
+            }
+            return;
+        }
         if (g_cpus[i].current_thread == t) {
             serial_printf_unlocked(
                 "[sched] enqueue current tid=%u owner=%u caller_cpu=%u holder_cpu=%u state=%u\n",
@@ -212,6 +236,22 @@ void cpu_sched_enqueue(cpu_sched_t* cs, thread_t* t) {
      * process_schedule_once_impl -- but that path enqueues only after reading
      * READY itself, so reaching here means the state moved on and a later wake
      * owns it. */
+    /* sched_prio indexes ready_list[] and thread_count[] and shifts into
+     * ready_bitmap, so a value past the last band is two out-of-bounds writes
+     * plus a bit that cpu_sched_highest_prio masks away and can never clear.
+     * Unreachable while every caller goes through the sched_prio_t enum, which
+     * is exactly why nothing catches it if one ever does not. */
+    if (t->sched_prio >= SCHED_PRIO_MAX) {
+        static uint32_t bad_prio_seen;
+        uint32_t n = __atomic_fetch_add(&bad_prio_seen, 1u, __ATOMIC_RELAXED);
+        if ((n & (n - 1u)) == 0u) {
+            serial_printf_unlocked(
+                "[sched] enqueue bad prio tid=%u prio=%u caller=%016llx (n=%u, skipped)\n",
+                (unsigned)t->tid, (unsigned)t->sched_prio,
+                (unsigned long long)(uintptr_t)__builtin_return_address(0), (unsigned)(n + 1u));
+        }
+        return;
+    }
     if (t->state != THREAD_STATE_READY) {
         static uint32_t bad_enqueue_seen;
         uint32_t n = __atomic_fetch_add(&bad_enqueue_seen, 1u, __ATOMIC_RELAXED);
@@ -250,7 +290,8 @@ void cpu_sched_enqueue(cpu_sched_t* cs, thread_t* t) {
      * forbids, silently overriding the placement that
      * cpu_sched_pick_target_cpu_for_thread computed at spawn.  Redirect rather
      * than refuse: dropping the enqueue would strand a runnable thread. */
-    if (!cpu_sched_affinity_allows(t, cpu_sched_cpu_index(cs))) {
+    uint32_t target_cpu = cpu_sched_cpu_index(cs);
+    if (target_cpu < WASMOS_MAX_CPUS && !cpu_sched_affinity_allows(t, target_cpu)) {
         cs = &g_cpus[cpu_sched_pick_target_cpu_for_thread(t, 1)].sched;
     }
     ksync_spinlock_lock(&cs->lock);

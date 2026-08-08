@@ -50,7 +50,11 @@ void serial_printf_unlocked(const char* fmt, ...) {
     va_end(ap);
 }
 
-void process_set_need_resched(void) {}
+/* Counting, so the priority-preemption arm of sched_wake_thread is observable. */
+static int g_resched_requests;
+void process_set_need_resched(void) {
+    g_resched_requests++;
+}
 
 /* sched_thread_init initialises the thread's join_event.  Mirrored rather than
  * linked: the real sched_event.c drags in the timer and thread table, and no
@@ -74,11 +78,26 @@ int thread_transit(thread_t* t, thread_state_t from, thread_state_t to) {
                                        __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE);
 }
 
+/* Mirrors thread.c exactly, including the tid==0 guard, the BLOCKED-only
+ * precondition and the block_reason clear.  An approximation here is worse than
+ * no test: the first version only transitioned state, so W1's "block reason
+ * cleared" assertion failed against a stub that was wrong rather than a kernel
+ * that was. */
 int thread_wake_if_blocked(uint32_t tid) {
+    if (tid == 0) {
+        return 0;
+    }
     for (int i = 0; i < POOL_MAX; ++i) {
-        if (g_pool[i].tid == tid) {
-            return thread_transit(&g_pool[i], THREAD_STATE_BLOCKED, THREAD_STATE_READY);
+        if (g_pool[i].tid != tid) {
+            continue;
         }
+        thread_t* t = &g_pool[i];
+        if (t->state != THREAD_STATE_BLOCKED) {
+            return 0;
+        }
+        t->state = THREAD_STATE_READY;
+        t->block_reason = THREAD_BLOCK_NONE;
+        return 1;
     }
     return 0;
 }
@@ -151,6 +170,7 @@ static void harness_reset(void) {
         g_cpus[i].sched.idle = &idle[i];
     }
     log_reset();
+    g_resched_requests = 0;
     act_as(0);
 }
 
@@ -1408,6 +1428,166 @@ static void test_all_bands_stale_converges_to_idle(void) {
     check_invariants("all bands stale");
 }
 
+/* -------------------------------------- sched_wake_thread + Dekker handshake */
+
+/* The wake/block handshake (sched_wake_claim_enqueue / sched_block_complete_claim
+ * in thread.h) had no test anywhere, and the host gate never called
+ * sched_wake_thread at all.  wake_pending is a claim TOKEN: whoever exchanges it
+ * to 0 owns the enqueue, so "exactly one side owns it" is the property to pin --
+ * losing it strands a thread READY on no queue, which is how every CPU ends up
+ * idling with runnable work outstanding. */
+
+static void test_wake_ordinary(void) {
+    harness_reset();
+    thread_t* t = mk_thread(0, SCHED_PRIO_WASM, THREAD_STATE_BLOCKED);
+    t->block_reason = THREAD_BLOCK_EVENT;
+    act_as(2);
+    sched_wake_thread(t);
+    CHECK(t->state == THREAD_STATE_READY, "woken to READY");
+    CHECK(t->block_reason == THREAD_BLOCK_NONE, "block reason cleared");
+    CHECK(t->rq == &g_cpus[2].sched, "enqueued on the waking CPU");
+    check_invariants("ordinary wake");
+}
+
+/* The deferral half: the completion path owns the enqueue, so the waker must
+ * leave the token behind.  The in-kernel test covers state and linkage but not
+ * the token, which is the part that strands threads. */
+static void test_wake_during_blocking_transition_defers_with_token(void) {
+    harness_reset();
+    thread_t* t = mk_thread(0, SCHED_PRIO_WASM, THREAD_STATE_BLOCKED);
+    __atomic_store_n(&t->blocking_transition, 1, __ATOMIC_SEQ_CST);
+
+    sched_wake_thread(t);
+    CHECK(list_head_empty(&t->sched_node), "not enqueued by the waker");
+    CHECK(t->on_rq == 0, "and not claimed");
+    CHECK(t->wake_pending == 1, "the token is LEFT for the completion path");
+    CHECK(t->state == THREAD_STATE_READY, "but the thread is promoted");
+}
+
+static void test_wake_of_a_resumed_thread_is_ignored(void) {
+    harness_reset();
+    thread_t* t = mk_thread(0, SCHED_PRIO_WASM, THREAD_STATE_RUNNING);
+    sched_wake_thread(t);
+    CHECK(list_head_empty(&t->sched_node), "a stale wake does not enqueue a running thread");
+    CHECK(t->on_rq == 0, "and does not claim it");
+}
+
+static void test_wake_of_dead_states_is_ignored(void) {
+    const thread_state_t dead[] = {THREAD_STATE_ZOMBIE, THREAD_STATE_UNUSED};
+    for (unsigned i = 0; i < sizeof(dead) / sizeof(dead[0]); ++i) {
+        harness_reset();
+        thread_t* t = mk_thread(0, SCHED_PRIO_WASM, dead[i]);
+        sched_wake_thread(t);
+        CHECK(t->state == dead[i], "a dead thread is not resurrected by a wake");
+        CHECK(list_head_empty(&t->sched_node), "and is not enqueued");
+    }
+}
+
+static void test_double_wake_links_once(void) {
+    harness_reset();
+    thread_t* t = mk_thread(0, SCHED_PRIO_WASM, THREAD_STATE_BLOCKED);
+    sched_wake_thread(t);
+    sched_wake_thread(t); /* the second loses thread_wake_if_blocked */
+    CHECK(g_cpus[0].sched.thread_count[SCHED_PRIO_WASM] == 1, "linked exactly once");
+    check_invariants("double wake");
+}
+
+static void test_wake_honours_affinity_end_to_end(void) {
+    harness_reset();
+    thread_t* t = mk_thread(0, SCHED_PRIO_WASM, THREAD_STATE_BLOCKED);
+    t->cpu_affinity = 1u << 3;
+    act_as(0);
+    sched_wake_thread(t);
+    CHECK(t->rq == &g_cpus[3].sched, "a wake from a forbidden CPU still lands on an allowed one");
+    check_invariants("wake honours affinity");
+}
+
+/* Priority preemption: requested only when the woken thread outranks what this
+ * CPU is running.  Lower sched_prio == higher band. */
+static void test_resched_requested_only_on_a_priority_win(void) {
+    harness_reset();
+    thread_t* running = mk_thread(0, SCHED_PRIO_WASM, THREAD_STATE_RUNNING);
+
+    g_cpus[0].current_thread = NULL;
+    g_resched_requests = 0;
+    sched_wake_thread(mk_thread(1, SCHED_PRIO_BACKGROUND, THREAD_STATE_BLOCKED));
+    CHECK(g_resched_requests == 1, "nothing running: a wake always requests resched");
+
+    g_cpus[0].current_thread = running;
+    g_resched_requests = 0;
+    sched_wake_thread(mk_thread(2, SCHED_PRIO_DRIVER, THREAD_STATE_BLOCKED));
+    CHECK(g_resched_requests == 1, "a higher band preempts");
+
+    g_resched_requests = 0;
+    sched_wake_thread(mk_thread(3, SCHED_PRIO_WASM, THREAD_STATE_BLOCKED));
+    CHECK(g_resched_requests == 0, "an EQUAL band does not preempt");
+
+    g_resched_requests = 0;
+    sched_wake_thread(mk_thread(4, SCHED_PRIO_BACKGROUND, THREAD_STATE_BLOCKED));
+    CHECK(g_resched_requests == 0, "a lower band does not preempt");
+}
+
+/* The handshake itself, driven directly through the two inlines.  Exactly one
+ * side must come away owning the enqueue in every ordering. */
+static void test_dekker_exactly_one_side_owns_the_enqueue(void) {
+    harness_reset();
+    thread_t* t = mk_thread(0, SCHED_PRIO_WASM, THREAD_STATE_BLOCKED);
+
+    /* (a) wake entirely before the block begins: the waker owns it. */
+    __atomic_store_n(&t->blocking_transition, 0, __ATOMIC_SEQ_CST);
+    __atomic_store_n(&t->wake_pending, 0, __ATOMIC_SEQ_CST);
+    CHECK(sched_wake_claim_enqueue(t) == 1, "waker claims when no block is in flight");
+    CHECK(t->wake_pending == 0, "and consumes the token");
+
+    /* (b) wake after blocking_transition is published: the completion owns it. */
+    __atomic_store_n(&t->blocking_transition, 1, __ATOMIC_SEQ_CST);
+    __atomic_store_n(&t->wake_pending, 0, __ATOMIC_SEQ_CST);
+    CHECK(sched_wake_claim_enqueue(t) == 0, "waker defers to the in-flight block");
+    CHECK(t->wake_pending == 1, "leaving the token behind");
+    CHECK(sched_block_complete_claim(t) == 1, "the completion path claims it");
+    CHECK(t->wake_pending == 0, "and consumes it");
+    CHECK(t->blocking_transition == 0, "and clears the transition flag");
+
+    /* (c) several wakes, one completion: still claimed exactly once. */
+    __atomic_store_n(&t->blocking_transition, 1, __ATOMIC_SEQ_CST);
+    __atomic_store_n(&t->wake_pending, 0, __ATOMIC_SEQ_CST);
+    CHECK(sched_wake_claim_enqueue(t) == 0, "wake 1 defers");
+    CHECK(sched_wake_claim_enqueue(t) == 0, "wake 2 defers");
+    CHECK(sched_wake_claim_enqueue(t) == 0, "wake 3 defers");
+    CHECK(sched_block_complete_claim(t) == 1, "the completion claims once");
+    CHECK(sched_block_complete_claim(t) == 0, "and a second completion claims nothing");
+}
+
+/* A token left over from an earlier cycle must be consumed once and not
+ * resurface as a spurious wake on the next block. */
+static void test_stale_token_cannot_force_a_spurious_wake(void) {
+    harness_reset();
+    thread_t* t = mk_thread(0, SCHED_PRIO_WASM, THREAD_STATE_BLOCKED);
+    __atomic_store_n(&t->wake_pending, 1, __ATOMIC_SEQ_CST); /* stale, no block in progress */
+
+    __atomic_store_n(&t->blocking_transition, 1, __ATOMIC_SEQ_CST);
+    CHECK(sched_block_complete_claim(t) == 1, "the stale token is consumed once");
+
+    __atomic_store_n(&t->blocking_transition, 1, __ATOMIC_SEQ_CST);
+    CHECK(sched_block_complete_claim(t) == 0, "and the next cycle sees no token");
+}
+
+/* The caller-CPU-bias switch decides whether a wake retargets last_cpu.  The
+ * harness is compiled with the same arm as the kernel, so this observes what
+ * actually ships rather than the other branch. */
+static void test_caller_cpu_bias_arm(void) {
+    harness_reset();
+    thread_t* t = mk_thread(0, SCHED_PRIO_WASM, THREAD_STATE_BLOCKED);
+    t->last_cpu = 1;
+    act_as(2);
+    sched_wake_thread(t);
+#if WASMOS_SCHED_CALLER_CPU_BIAS
+    CHECK(t->last_cpu == 2, "bias ON: the waker's CPU becomes last_cpu");
+#else
+    CHECK(t->last_cpu == 1, "bias OFF: last_cpu is left alone");
+#endif
+}
+
 /* -------------------------------------------------------------------- main */
 
 int main(void) {
@@ -1489,6 +1669,17 @@ int main(void) {
         {"P5 cs->idle vs cpu_local idle", test_cs_idle_and_cpu_local_idle_must_agree},
         {"P6 remote queue returns local idle", test_pick_on_a_remote_queue_returns_local_idle},
         {"P7 all bands stale converges", test_all_bands_stale_converges_to_idle},
+        {"W1 ordinary wake", test_wake_ordinary},
+        {"W2 wake during blocking transition",
+         test_wake_during_blocking_transition_defers_with_token},
+        {"W3 stale wake of a resumed thread", test_wake_of_a_resumed_thread_is_ignored},
+        {"W4 wake of dead states", test_wake_of_dead_states_is_ignored},
+        {"W5 double wake links once", test_double_wake_links_once},
+        {"W6 wake honours affinity", test_wake_honours_affinity_end_to_end},
+        {"W7 resched only on a priority win", test_resched_requested_only_on_a_priority_win},
+        {"W8 Dekker: exactly one owner", test_dekker_exactly_one_side_owns_the_enqueue},
+        {"W9 stale token no spurious wake", test_stale_token_cannot_force_a_spurious_wake},
+        {"W10 caller-CPU-bias arm", test_caller_cpu_bias_arm},
     };
 
     for (unsigned i = 0; i < sizeof(tests) / sizeof(tests[0]); ++i) {

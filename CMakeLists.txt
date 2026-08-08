@@ -2065,15 +2065,28 @@ add_custom_target(run-kernel-unit-tests
   # Project dirs go on -iquote, not -I, so <string.h> reaches the host libc
   # instead of the kernel's, which has no strstr.
   COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
-          -DWASMOS_HOST_TEST_SMP=1
+          -DWASMOS_HOST_TEST_SMP=1 -DWASMOS_SCHED_CALLER_CPU_BIAS=1
           -iquote ${KERNEL_DIR}/include
           -iquote ${CMAKE_SOURCE_DIR}/libs/wasm3/source
           -iquote ${CMAKE_SOURCE_DIR}/abi/generated/c
           ${CMAKE_SOURCE_DIR}/tests/unit/test_sched_runqueue.c
           ${KERNEL_DIR}/sched_thread.c
           ${CMAKE_SOURCE_DIR}/tests/unit/stubs_spinlock.c
-          -o ${BUILD_DIR}/test_sched_runqueue
-  COMMAND ${BUILD_DIR}/test_sched_runqueue
+          -o ${BUILD_DIR}/test_sched_runqueue_bias_on
+  COMMAND ${BUILD_DIR}/test_sched_runqueue_bias_on
+  # Both arms of the caller-CPU-bias switch. It is a compile-time choice, so one
+  # build can only ever exercise one branch of sched_wake_thread's last_cpu
+  # handling; running the matrix keeps the unselected arm from rotting.
+  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
+          -DWASMOS_HOST_TEST_SMP=1 -DWASMOS_SCHED_CALLER_CPU_BIAS=0
+          -iquote ${KERNEL_DIR}/include
+          -iquote ${CMAKE_SOURCE_DIR}/libs/wasm3/source
+          -iquote ${CMAKE_SOURCE_DIR}/abi/generated/c
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_sched_runqueue.c
+          ${KERNEL_DIR}/sched_thread.c
+          ${CMAKE_SOURCE_DIR}/tests/unit/stubs_spinlock.c
+          -o ${BUILD_DIR}/test_sched_runqueue_bias_off
+  COMMAND ${BUILD_DIR}/test_sched_runqueue_bias_off
   COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
           -I${KERNEL_DIR}/include
           ${CMAKE_SOURCE_DIR}/tests/unit/test_warp_driver_ring3_call_policy.c

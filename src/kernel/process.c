@@ -2635,9 +2635,28 @@ int process_set_main_prio(uint32_t pid, uint8_t prio) {
     if (!t) {
         return -1;
     }
-    /* Safe only before the child is first scheduled: the PM sets this on a
-     * freshly parked (blocked, not-yet-enqueued) process, so the main thread is
-     * not in any ready_list and re-banding it cannot corrupt a runqueue. */
+    /* Enforced, not merely documented: this is only meaningful before the child
+     * is first scheduled.  The PM sets it on a freshly parked (blocked,
+     * not-yet-enqueued) process, so the main thread is in no ready_list.
+     *
+     * Re-banding a QUEUED thread no longer corrupts the run queue -- unlink
+     * accounts against thread_t::rq_prio, the band the node actually joined, so
+     * the old band's counter is drained correctly.  But the thread would keep
+     * being DISPATCHED at its old priority until something happened to
+     * re-enqueue it, which is a silent policy failure: the caller asked for a
+     * priority change and got none, with nothing to say so.  Refuse and count it
+     * instead of pretending it worked. */
+    if (__atomic_load_n(&t->on_rq, __ATOMIC_ACQUIRE)) {
+        uint32_t n = sched_debug_note(SCHED_DEBUG_SET_PRIO_QUEUED);
+        if ((n & (n - 1u)) == 0u) {
+            serial_printf_unlocked(
+                "[sched] set_main_prio on a queued thread tid=%u pid=%u prio=%u->%u (n=%u,"
+                " refused)\n",
+                (unsigned)t->tid, (unsigned)pid, (unsigned)t->sched_prio, (unsigned)prio,
+                (unsigned)(n + 1u));
+        }
+        return -1;
+    }
     t->sched_prio = prio;
     return 0;
 }

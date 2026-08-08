@@ -54,6 +54,13 @@ void sched_debug_reset(void) {
     g_affine_rr = 0;
 }
 
+uint32_t sched_debug_note(sched_debug_event_t ev) {
+    if ((unsigned)ev >= SCHED_DEBUG_EVENT_COUNT) {
+        return 0;
+    }
+    return sched_debug_bump(ev);
+}
+
 uint32_t sched_debug_count(sched_debug_event_t ev) {
     if ((unsigned)ev >= SCHED_DEBUG_EVENT_COUNT) {
         return 0;

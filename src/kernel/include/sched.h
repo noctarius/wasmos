@@ -117,9 +117,15 @@ typedef enum {
     SCHED_DEBUG_ENQUEUE_FROM_NON_READY,
     SCHED_DEBUG_INIT_ON_QUEUED,
     SCHED_DEBUG_REMOVE_GAVE_UP,
+    SCHED_DEBUG_SET_PRIO_QUEUED,
     SCHED_DEBUG_EVENT_COUNT
 } sched_debug_event_t;
 
+/* Record that `ev` fired; returns the count BEFORE this hit so callers can apply
+ * the same power-of-two rate limit the in-file tripwires use.  Public so paths
+ * outside sched_thread.c can report scheduler-contract violations through the
+ * same counters. */
+uint32_t sched_debug_note(sched_debug_event_t ev);
 /* Times `ev` has fired since boot (or since the last reset). */
 uint32_t sched_debug_count(sched_debug_event_t ev);
 /* Zero every counter.  Also re-seeds the placement round-robin cursors, which

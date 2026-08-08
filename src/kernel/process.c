@@ -1428,7 +1428,16 @@ int process_thread_spawn_worker_internal(uint32_t owner_pid, const char* name,
         owner->state == PROCESS_STATE_REAPING || owner->exiting) {
         return -1;
     }
-    if (thread_spawn_in_owner(owner_pid, name ? name : "", THREAD_STATE_READY, THREAD_BLOCK_NONE,
+    /* Spawn PARKED, not READY.  READY publishes the thread to every CPU as a
+     * legal wake/enqueue target, and the scheduler fields it needs -- sched_node
+     * above all -- are not set up until sched_thread_init() below, with a stack
+     * allocation in between.  A wake landing in that window enqueues the thread,
+     * and sched_thread_init's list_head_init then self-links the node while the
+     * queue's head still points at it: the band is spliced through a node with
+     * two owners, its ready bit can never clear, and the picker returns that one
+     * node on every dispatch forever.  The user-thread path below already spawns
+     * BLOCKED and promotes after init; this is the same contract. */
+    if (thread_spawn_in_owner(owner_pid, name ? name : "", THREAD_STATE_BLOCKED, THREAD_BLOCK_NONE,
                               &tid) != 0) {
         return -1;
     }
@@ -1450,6 +1459,19 @@ int process_thread_spawn_worker_internal(uint32_t owner_pid, const char* name,
     sched_thread_init(thread, SCHED_PRIO_SYSTEM);
     owner->thread_count++;
     owner->live_thread_count++;
+    /* Scheduler state is now complete: publish the thread as runnable, then
+     * enqueue it.  sched_spawn_thread -> cpu_sched_enqueue only accepts a READY
+     * thread, so the promotion must precede it. */
+    if (!thread_transit(thread, THREAD_STATE_BLOCKED, THREAD_STATE_READY)) {
+        if (owner->thread_count > 0) {
+            owner->thread_count--;
+        }
+        if (owner->live_thread_count > 0) {
+            owner->live_thread_count--;
+        }
+        thread_reap(tid);
+        return -1;
+    }
     sched_spawn_thread(thread);
     *out_tid = tid;
     return 0;

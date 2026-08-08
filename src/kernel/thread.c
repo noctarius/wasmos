@@ -57,6 +57,13 @@ static void thread_reset_slot(thread_t* thread) {
      * returns that one node on every dispatch forever ("[sched] dequeued
      * non-ready" at scheduler speed, livelocking the CPU). */
     cpu_sched_remove_thread(thread);
+    /* Leave the node in the canonical detached form.  A zero-filled node (BSS at
+     * boot, before any sched_thread_init) has next == NULL, which list_head_empty
+     * reports as LINKED -- so "is this thread queued?" answers wrongly for every
+     * slot's first use unless the detached state is established here. */
+    list_head_init(&thread->sched_node);
+    thread->on_rq = 0;
+    thread->rq = 0;
     thread->tid = 0;
     thread->owner_pid = 0;
     thread->state = THREAD_STATE_UNUSED;

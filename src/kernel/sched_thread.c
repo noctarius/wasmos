@@ -110,6 +110,26 @@ static int sched_mark_ready_if_live(thread_t* t) {
  * whose bit could never clear again -- cannot stop the band from going idle. */
 static void cpu_sched_unlink_locked(cpu_sched_t* cs, thread_t* t, uint8_t prio) {
     list_head_del(&t->sched_node);
+    /* DIAGNOSTIC: after list_head_del the band must no longer reach this node.
+     * If the head still points at it, this queue's chain was spliced through a
+     * node whose neighbours belong to a different list -- the ghost that gets
+     * re-picked on every dispatch.  Repair the head so the CPU is not wedged,
+     * and report it: this fires at the moment of corruption, not minutes later
+     * at the dispatch site. */
+    if (cs->ready_list[prio].next == &t->sched_node) {
+        static uint32_t ghost_seen;
+        uint32_t gn = __atomic_fetch_add(&ghost_seen, 1u, __ATOMIC_RELAXED);
+        if ((gn & (gn - 1u)) == 0u) {
+            serial_printf_unlocked("[sched] ghost head tid=%u owner=%u state=%u prio=%u cs=%p "
+                                   "count=%u (n=%u)\n",
+                                   (unsigned)t->tid, (unsigned)t->owner_pid, (unsigned)t->state,
+                                   (unsigned)prio, (void*)cs, (unsigned)cs->thread_count[prio],
+                                   (unsigned)(gn + 1u));
+        }
+        /* Report only.  Re-initialising the head here drops every other thread
+         * in the band on the floor, which faults in list_head_add_tail shortly
+         * after; the livelock is the lesser evil while diagnosing. */
+    }
     if (cs->thread_count[prio] > 0) {
         cs->thread_count[prio]--;
     }
@@ -176,18 +196,52 @@ void cpu_sched_enqueue(cpu_sched_t* cs, thread_t* t) {
         return;
     }
     /* SMP wake/block races can reach enqueue from multiple CPUs for the same
-     * READY thread.  Claim the thread BEFORE taking any queue lock: each CPU's
-     * ready_list is protected by that CPU's own lock, so testing the node's
-     * linkage under cs->lock would be reading state owned by a different lock
-     * (the queue the thread is actually in, or a remote pick_next/steal
-     * unlinking it right now).  The exchange is the serialisation point: it
-     * only succeeds once the previous owner's unlink has retired and released
-     * the claim, so no two CPUs ever touch this node's pointers at once. */
+     * READY thread.  The on_rq exchange -- not the node's linkage -- is the
+     * serialisation point: each CPU's ready_list is protected by that CPU's own
+     * lock, so testing linkage under cs->lock would be reading state owned by a
+     * different lock (the queue the thread is actually in, or a remote
+     * pick_next/steal unlinking it right now).  The claim only succeeds once the
+     * previous owner's unlink has retired and released it, so no two CPUs ever
+     * touch this node's pointers at once.
+     *
+     * The claim is taken INSIDE cs->lock, immediately before t->rq is published.
+     * Taking it before the lock leaves a window in which on_rq is 1 but rq is
+     * still 0, and cpu_sched_remove_thread -- which follows rq -- reads that as
+     * "not queued" and clears the claim out from under this enqueue.  The node
+     * then lands in the queue unclaimed, and the next enqueue on any CPU links
+     * the same node a second time.  Inside the lock the window is a few
+     * instructions with interrupts disabled, so no reap can observe or preempt
+     * it on this CPU, and a remote one only ever spins briefly (see
+     * cpu_sched_remove_thread). */
+    ksync_spinlock_lock(&cs->lock);
     if (__atomic_exchange_n(&t->on_rq, 1, __ATOMIC_ACQ_REL)) {
+        ksync_spinlock_unlock(&cs->lock);
         return; /* already queued somewhere */
     }
-    ksync_spinlock_lock(&cs->lock);
     uint8_t prio = t->sched_prio;
+    /* DIAGNOSTIC: holding the claim, this node MUST be detached -- every unlink
+     * releases the claim only after list_head_del has retired.  A linked node
+     * here means someone unlinked without releasing, or the node is still in
+     * another queue, i.e. we are one instruction from splicing two lists through
+     * it.  Refuse the link rather than corrupt the queue, and name the caller. */
+    if (!list_head_empty(&t->sched_node)) {
+        static uint32_t double_link_seen;
+        uint32_t dn = __atomic_fetch_add(&double_link_seen, 1u, __ATOMIC_RELAXED);
+        if ((dn & (dn - 1u)) == 0u) {
+            serial_printf_unlocked(
+                "[sched] claimed node still linked tid=%u owner=%u state=%u prio=%u rq=%p "
+                "cs=%p caller=%016llx (n=%u)\n",
+                (unsigned)t->tid, (unsigned)t->owner_pid, (unsigned)t->state, (unsigned)prio,
+                (void*)t->rq, (void*)cs, (unsigned long long)(uintptr_t)__builtin_return_address(0),
+                (unsigned)(dn + 1u));
+        }
+        /* Release the claim we just took before bailing.  Returning while still
+         * holding it would strand the thread: no queue holds it, and every later
+         * enqueue would lose the exchange and drop the insert forever. */
+        __atomic_store_n(&t->on_rq, 0, __ATOMIC_RELEASE);
+        ksync_spinlock_unlock(&cs->lock);
+        return;
+    }
     t->rq = cs;
     list_head_add_tail(&cs->ready_list[prio], &t->sched_node);
     cs->thread_count[prio]++;
@@ -201,18 +255,25 @@ void cpu_sched_remove_thread(thread_t* t) {
     }
     /* The reap path cannot know which CPU last enqueued the thread, so follow
      * t->rq and re-validate under that queue's lock.  A concurrent pick_next or
-     * steal may unlink it first (rq -> 0) or, in principle, move it; re-read and
-     * retry rather than unlinking against a stale queue.  Bounded because a
-     * thread being reaped is already terminal and nothing legitimately
-     * re-enqueues it -- one iteration is the norm. */
-    for (int attempt = 0; attempt < 8; ++attempt) {
+     * steal may unlink it first; re-read and retry rather than unlinking against
+     * a stale queue.  One iteration is the norm: a thread being reaped is
+     * already terminal and nothing legitimately re-enqueues it.
+     *
+     * on_rq is the authority for "queued at all", and it is NEVER written here.
+     * Writing it would clobber a claim an enqueue on another CPU is holding
+     * across its rq publication, leaving that node linked but unclaimed and
+     * therefore linkable a second time.  A (on_rq=1, rq=0) reading is an enqueue
+     * in flight, not a leaked claim -- the enqueuer publishes rq a few
+     * instructions later under its queue lock -- so spin briefly rather than
+     * "correcting" it. */
+    for (int attempt = 0; attempt < 64; ++attempt) {
+        if (!__atomic_load_n(&t->on_rq, __ATOMIC_ACQUIRE)) {
+            return; /* genuinely on no queue */
+        }
         cpu_sched_t* cs = (cpu_sched_t*)__atomic_load_n(&t->rq, __ATOMIC_ACQUIRE);
         if (!cs) {
-            /* Not on any queue.  Drop a claim left behind by a caller that
-             * unlinked without releasing it; otherwise a recycled slot could
-             * never be enqueued again. */
-            __atomic_store_n(&t->on_rq, 0, __ATOMIC_RELEASE);
-            return;
+            __asm__ volatile("pause" ::: "memory"); /* enqueue in flight; let it publish rq */
+            continue;
         }
         ksync_spinlock_lock(&cs->lock);
         if (t->rq == cs) {
@@ -385,6 +446,26 @@ void sched_thread_init(thread_t* t, sched_prio_t prio) {
      * mutate.  thread_reset_slot -> cpu_sched_remove_thread guarantees the
      * unlink happened; clearing the claim keeps the fresh incarnation
      * enqueueable. */
+    /* DIAGNOSTIC: re-initialising sched_node here while the thread is still
+     * linked into a ready queue self-links the node under the queue's nose --
+     * the head keeps pointing at it, and the band is then spliced through a node
+     * with two owners (the "ghost head" report).  Name the call site so we know
+     * WHICH spawn path handed back a still-queued thread. */
+    if (!list_head_empty(&t->sched_node) || __atomic_load_n(&t->on_rq, __ATOMIC_ACQUIRE)) {
+        static uint32_t init_linked_seen;
+        uint32_t in = __atomic_fetch_add(&init_linked_seen, 1u, __ATOMIC_RELAXED);
+        if ((in & (in - 1u)) == 0u) {
+            serial_printf_unlocked(
+                "[sched] init on queued tid=%u owner=%u state=%u on_rq=%u oldprio=%u newprio=%u "
+                "rq=%p linked=%u caller=%016llx (n=%u)\n",
+                (unsigned)t->tid, (unsigned)t->owner_pid, (unsigned)t->state, (unsigned)t->on_rq,
+                (unsigned)t->sched_prio, (unsigned)prio, (void*)t->rq,
+                (unsigned)(!list_head_empty(&t->sched_node)),
+                (unsigned long long)(uintptr_t)__builtin_return_address(0), (unsigned)(in + 1u));
+        }
+        /* Unlink properly instead of orphaning the node under the queue. */
+        cpu_sched_remove_thread(t);
+    }
     t->on_rq = 0;
     t->rq = 0;
     list_head_init(&t->sched_node);

@@ -84,7 +84,26 @@ static int cpu_sched_affinity_allows(const thread_t* t, uint32_t cpu_id) {
     return (t->cpu_affinity & (1u << cpu_id)) != 0u;
 }
 
+/* CPUs placement may consider: g_cpu_count clamped to the table it indexes, and
+ * never zero.  g_cpu_count comes from the MADT scan and is not validated
+ * elsewhere, while both placement entry points derive a loop bound AND a modulus
+ * from it -- so a count of 0 divides by zero and a count above WASMOS_MAX_CPUS
+ * walks off g_cpus[].  The BSP always exists, so flooring at 1 is safe. */
+static uint32_t cpu_sched_usable_cpus(void) {
+    uint32_t n = g_cpu_count;
+    if (n > WASMOS_MAX_CPUS) {
+        n = WASMOS_MAX_CPUS;
+    }
+    if (n == 0u) {
+        n = 1u;
+    }
+    return n;
+}
+
 static uint32_t cpu_sched_load_on(uint32_t cpu_id) {
+    if (cpu_id >= WASMOS_MAX_CPUS) {
+        return UINT32_MAX; /* out of the table: never the lightest */
+    }
     cpu_sched_t* cs = &g_cpus[cpu_id].sched;
     uint32_t load = 0;
     for (int p = 0; p < SCHED_PRIO_MAX; p++) {
@@ -625,12 +644,13 @@ uint32_t cpu_sched_pick_target_cpu(void) {
      * starting search index so spawns spread evenly instead of always
      * accumulating on CPU 0. */
     static uint32_t g_spawn_rr = 0;
-    uint32_t start = g_spawn_rr % g_cpu_count;
+    uint32_t cpus = cpu_sched_usable_cpus();
+    uint32_t start = g_spawn_rr % cpus;
     uint32_t best = start;
     uint32_t best_load = UINT32_MAX;
 
-    for (uint32_t n = 0; n < g_cpu_count; n++) {
-        uint32_t i = (start + n) % g_cpu_count;
+    for (uint32_t n = 0; n < cpus; n++) {
+        uint32_t i = (start + n) % cpus;
         uint32_t load = cpu_sched_load_on(i);
         if (load < best_load) {
             best_load = load;
@@ -651,17 +671,20 @@ uint32_t cpu_sched_pick_target_cpu_for_thread(const thread_t* t, uint8_t prefer_
         if (allowed_mask == 0u) {
             allowed_mask = online_mask;
         }
-        if (prefer_last_cpu && t->last_cpu < g_cpu_count &&
+        /* Bounded by the clamped count, not g_cpu_count: the shift below is
+         * undefined once last_cpu reaches the width of the mask. */
+        if (prefer_last_cpu && t->last_cpu < cpu_sched_usable_cpus() &&
             (allowed_mask & (1u << t->last_cpu)) != 0u) {
             return t->last_cpu;
         }
     }
 
-    uint32_t start = (g_cpu_count > 0u) ? (g_affine_rr % g_cpu_count) : 0u;
+    uint32_t cpus = cpu_sched_usable_cpus();
+    uint32_t start = g_affine_rr % cpus;
     uint32_t best = 0u;
     uint32_t best_load = UINT32_MAX;
-    for (uint32_t n = 0; n < g_cpu_count; ++n) {
-        uint32_t cpu_id = (start + n) % g_cpu_count;
+    for (uint32_t n = 0; n < cpus; ++n) {
+        uint32_t cpu_id = (start + n) % cpus;
         if ((allowed_mask & (1u << cpu_id)) == 0u) {
             continue;
         }

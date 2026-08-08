@@ -1690,6 +1690,211 @@ static void test_reinit_of_a_remotely_queued_thread(void) {
     check_invariants("remote re-init");
 }
 
+/* ------------------------------------------------------------- placement */
+
+/* Load N threads onto `cpu` so placement decisions can be set up by weight. */
+static void load_cpu(uint32_t cpu, int n, int base_idx) {
+    for (int i = 0; i < n; ++i) {
+        thread_t* t = mk_thread(base_idx + i, SCHED_PRIO_WASM, THREAD_STATE_READY);
+        t->cpu_affinity = ~0u;
+        act_as(cpu);
+        cpu_sched_enqueue(&g_cpus[cpu].sched, t);
+    }
+    act_as(0);
+}
+
+static void test_load_sums_every_band(void) {
+    harness_reset();
+    for (int i = 0; i < 2; ++i) {
+        act_as(1);
+        cpu_sched_enqueue(&g_cpus[1].sched, mk_thread(i, SCHED_PRIO_DRIVER, THREAD_STATE_READY));
+    }
+    for (int i = 0; i < 3; ++i) {
+        act_as(1);
+        cpu_sched_enqueue(&g_cpus[1].sched, mk_thread(10 + i, SCHED_PRIO_WASM, THREAD_STATE_READY));
+    }
+    act_as(0);
+    CHECK(cpu_sched_pick_target_cpu() != 1, "a CPU loaded across two bands is not the lightest");
+}
+
+static void test_running_non_idle_thread_counts_as_load(void) {
+    harness_reset();
+    thread_t* busy = mk_thread(0, SCHED_PRIO_WASM, THREAD_STATE_RUNNING);
+    g_cpus[1].current_thread = busy;
+    load_cpu(0, 1, 10);
+    load_cpu(3, 1, 20);
+    CHECK(cpu_sched_pick_target_cpu() == 2,
+          "the CPU running real work is skipped for the idle one");
+}
+
+static void test_running_idle_thread_does_not_count(void) {
+    harness_reset();
+    g_cpus[1].current_thread = g_cpus[1].idle_thread;
+    load_cpu(0, 1, 10);
+    load_cpu(2, 1, 20);
+    load_cpu(3, 1, 30);
+    CHECK(cpu_sched_pick_target_cpu() == 1, "a CPU running only idle reads as unloaded");
+}
+
+/* The AP-bringup window: sched.idle unset while a thread runs.  The idle test is
+ * "current_thread != cs->idle", so a NULL cs->idle makes even the idle thread
+ * count, and placement over-counts that CPU. */
+static void test_null_cs_idle_makes_idle_count_as_load(void) {
+    harness_reset();
+    g_cpus[1].current_thread = g_cpus[1].idle_thread;
+    g_cpus[1].sched.idle = NULL; /* bringup window */
+    load_cpu(0, 1, 10);
+    load_cpu(2, 1, 20);
+    load_cpu(3, 1, 30);
+    CHECK(cpu_sched_pick_target_cpu() != 1,
+          "with cs->idle unset the idle thread counts and the CPU looks loaded");
+}
+
+static void test_pick_target_selects_the_minimum(void) {
+    harness_reset();
+    load_cpu(0, 3, 0);
+    load_cpu(1, 1, 10);
+    load_cpu(2, 4, 15);
+    load_cpu(3, 2, 22);
+    CHECK(cpu_sched_pick_target_cpu() == 1, "the lightest CPU wins");
+}
+
+/* Ties rotate via a function-static round robin that persists across tests, so
+ * assert the DISTRIBUTION over a full cycle rather than absolute identity. */
+static void test_ties_rotate_evenly(void) {
+    harness_reset();
+    int hits[WASMOS_MAX_CPUS];
+    memset(hits, 0, sizeof(hits));
+    for (int i = 0; i < 8; ++i) {
+        hits[cpu_sched_pick_target_cpu()]++;
+    }
+    int even = 1;
+    for (uint32_t c = 0; c < 4; ++c) {
+        if (hits[c] != 2) {
+            even = 0;
+        }
+    }
+    CHECK(even, "8 tied placements spread exactly twice over 4 CPUs");
+}
+
+/* pick_target_cpu is deliberately NOT affinity-aware -- that is what
+ * _for_thread is for.  Pinned so the two contracts stay distinguishable. */
+static void test_pick_target_ignores_affinity_by_design(void) {
+    harness_reset();
+    thread_t* pinned = mk_thread(0, SCHED_PRIO_WASM, THREAD_STATE_READY);
+    pinned->cpu_affinity = 1u << 3;
+    load_cpu(3, 4, 10);
+    CHECK(cpu_sched_pick_target_cpu() != 3, "the non-thread-aware picker answers by load alone");
+    CHECK(cpu_sched_pick_target_cpu_for_thread(pinned, 0) == 3,
+          "while the thread-aware one honours the mask");
+}
+
+static void test_for_thread_null_is_safe(void) {
+    harness_reset();
+    load_cpu(0, 2, 0);
+    load_cpu(1, 2, 5);
+    load_cpu(3, 2, 10);
+    CHECK(cpu_sched_pick_target_cpu_for_thread(NULL, 1) == 2,
+          "NULL yields the lightest online CPU");
+}
+
+static void test_prefer_last_cpu_forbidden_by_affinity(void) {
+    harness_reset();
+    thread_t* t = mk_thread(0, SCHED_PRIO_WASM, THREAD_STATE_READY);
+    t->cpu_affinity = (1u << 2) | (1u << 3);
+    t->last_cpu = 0; /* not in the mask */
+    load_cpu(3, 3, 10);
+    CHECK(cpu_sched_pick_target_cpu_for_thread(t, 1) == 2,
+          "a forbidden last_cpu falls through to the lightest allowed CPU");
+}
+
+static void test_prefer_last_cpu_out_of_range(void) {
+    harness_reset();
+    thread_t* t = mk_thread(0, SCHED_PRIO_WASM, THREAD_STATE_READY);
+    t->last_cpu = 7; /* >= g_cpu_count */
+    load_cpu(0, 2, 10);
+    load_cpu(1, 2, 15);
+    load_cpu(3, 2, 20);
+    CHECK(cpu_sched_pick_target_cpu_for_thread(t, 1) == 2, "an out-of-range last_cpu is ignored");
+}
+
+static void test_prefer_last_cpu_zero_selects_by_load(void) {
+    harness_reset();
+    thread_t* t = mk_thread(0, SCHED_PRIO_WASM, THREAD_STATE_READY);
+    t->last_cpu = 0;
+    load_cpu(0, 4, 10);
+    load_cpu(1, 2, 16);
+    load_cpu(3, 2, 20);
+    CHECK(cpu_sched_pick_target_cpu_for_thread(t, 0) == 2,
+          "prefer_last_cpu=0 ignores a perfectly valid last_cpu");
+}
+
+static void test_affinity_and_load_interact(void) {
+    harness_reset();
+    thread_t* t = mk_thread(0, SCHED_PRIO_WASM, THREAD_STATE_READY);
+    t->cpu_affinity = (1u << 1) | (1u << 3);
+    load_cpu(1, 5, 10);
+    load_cpu(3, 2, 20);
+    CHECK(cpu_sched_pick_target_cpu_for_thread(t, 0) == 3,
+          "the lightest ALLOWED CPU wins, not the globally lightest");
+}
+
+static void test_spawn_sets_last_cpu_and_enqueues_there(void) {
+    harness_reset();
+    thread_t* t = mk_thread(0, SCHED_PRIO_WASM, THREAD_STATE_READY);
+    t->last_cpu = 0;
+    load_cpu(0, 3, 10);
+    load_cpu(1, 3, 15);
+    load_cpu(3, 3, 20);
+    sched_spawn_thread(t);
+    CHECK(t->last_cpu == 2, "last_cpu is rewritten to the chosen target");
+    CHECK(t->rq == &g_cpus[2].sched, "and the thread is enqueued there");
+    check_invariants("spawn placement");
+}
+
+/* Partial effect: the target is chosen and last_cpu rewritten BEFORE the enqueue
+ * can refuse, so a non-READY thread ends up on no queue with a mutated
+ * last_cpu.  Pinned rather than fixed -- callers spawn READY threads. */
+static void test_spawn_of_a_non_ready_thread_still_rewrites_last_cpu(void) {
+    harness_reset();
+    thread_t* t = mk_thread(0, SCHED_PRIO_WASM, THREAD_STATE_BLOCKED);
+    t->last_cpu = 3;
+    sched_spawn_thread(t);
+    CHECK(list_head_empty(&t->sched_node), "the enqueue is refused");
+    CHECK(t->on_rq == 0, "and no claim is taken");
+    CHECK(t->last_cpu != 3, "but last_cpu was already rewritten -- a partial effect");
+}
+
+static void test_spawn_with_affinity_needs_no_redirect(void) {
+    harness_reset();
+    thread_t* t = mk_thread(0, SCHED_PRIO_WASM, THREAD_STATE_READY);
+    t->cpu_affinity = 1u << 3;
+    sched_spawn_thread(t);
+    CHECK(t->rq == &g_cpus[3].sched, "placement already chose an allowed CPU");
+    CHECK(t->last_cpu == 3, "and last_cpu agrees with the queue it landed on");
+    check_invariants("spawn with affinity");
+}
+
+/* T7/T8: degenerate CPU counts.  Both placement entry points derive loop bounds
+ * and a modulus from g_cpu_count without validating it. */
+static void test_zero_cpu_count_is_survivable(void) {
+    harness_reset();
+    g_cpu_count = 0;
+    CHECK(cpu_sched_pick_target_cpu() < WASMOS_MAX_CPUS, "no division by zero on an empty CPU set");
+    CHECK(cpu_sched_pick_target_cpu_for_thread(NULL, 0) < WASMOS_MAX_CPUS,
+          "and the same for _for_thread");
+    g_cpu_count = 4;
+}
+
+static void test_cpu_count_beyond_the_table_is_clamped(void) {
+    harness_reset();
+    g_cpu_count = WASMOS_MAX_CPUS + 8u; /* more CPUs claimed than g_cpus[] holds */
+    CHECK(cpu_sched_pick_target_cpu() < WASMOS_MAX_CPUS, "placement stays inside the table");
+    CHECK(cpu_sched_pick_target_cpu_for_thread(NULL, 0) < WASMOS_MAX_CPUS,
+          "and so does the thread-aware picker");
+    g_cpu_count = 4;
+}
+
 /* -------------------------------------------------------------------- main */
 
 int main(void) {
@@ -1787,6 +1992,24 @@ int main(void) {
         {"I3 init discards an existing pinning", test_init_discards_an_existing_pinning},
         {"I4 re-init across every band pair", test_reinit_across_every_band_pair},
         {"I5 re-init of a remotely queued thread", test_reinit_of_a_remotely_queued_thread},
+        {"T1 load sums every band", test_load_sums_every_band},
+        {"T2 running non-idle counts as load", test_running_non_idle_thread_counts_as_load},
+        {"T3 running idle does not count", test_running_idle_thread_does_not_count},
+        {"T4 NULL cs->idle makes idle count", test_null_cs_idle_makes_idle_count_as_load},
+        {"T5 pick_target selects the minimum", test_pick_target_selects_the_minimum},
+        {"T6 ties rotate evenly", test_ties_rotate_evenly},
+        {"T9 pick_target ignores affinity", test_pick_target_ignores_affinity_by_design},
+        {"T10 _for_thread(NULL) is safe", test_for_thread_null_is_safe},
+        {"T11 last_cpu forbidden by affinity", test_prefer_last_cpu_forbidden_by_affinity},
+        {"T12 last_cpu out of range", test_prefer_last_cpu_out_of_range},
+        {"T13 prefer_last_cpu=0 by load", test_prefer_last_cpu_zero_selects_by_load},
+        {"T14 affinity and load interact", test_affinity_and_load_interact},
+        {"T15 spawn sets last_cpu", test_spawn_sets_last_cpu_and_enqueues_there},
+        {"T16 spawn non-READY partial effect",
+         test_spawn_of_a_non_ready_thread_still_rewrites_last_cpu},
+        {"T17 spawn with affinity, no redirect", test_spawn_with_affinity_needs_no_redirect},
+        {"T7 zero CPU count survivable", test_zero_cpu_count_is_survivable},
+        {"T8 CPU count beyond the table", test_cpu_count_beyond_the_table_is_clamped},
     };
 
     for (unsigned i = 0; i < sizeof(tests) / sizeof(tests[0]); ++i) {

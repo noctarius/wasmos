@@ -19,4 +19,9 @@ int futex_wait(uint32_t uaddr, uint32_t expected, uint32_t timeout_ms, uint32_t 
  */
 int futex_wake(uint32_t uaddr, uint32_t count, uint32_t context_id);
 
+#ifdef WASMOS_FUTEX_TEST_SEAMS
+/* Host-test seam: drop every futex entry and empty the table. See futex.c. */
+void futex_test_reset(void);
+#endif
+
 #endif /* WASMOS_FUTEX_H */

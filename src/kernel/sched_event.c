@@ -75,7 +75,7 @@ static void sched_timeout_fire(thread_t* t) {
     ksync_spinlock_lock(&ev->lock);
     if (t->wait_event == ev && !list_head_empty(&t->event_node)) {
         list_head_del(&t->event_node);
-        t->wait_event = 0;
+        __atomic_store_n(&t->wait_event, (sched_event_t*)0, __ATOMIC_RELEASE);
         t->pend_state = SCHED_PEND_TIMEOUT;
         ksync_spinlock_unlock(&ev->lock);
         sched_wake_thread(t);
@@ -152,7 +152,8 @@ void sched_event_wait(sched_event_t* ev, uint32_t timeout_ms) {
         __atomic_store_n(&t->blocking_transition, 0, __ATOMIC_RELEASE);
     }
 
-    t->wait_event = ev;
+    /* Published atomically to pair with sched_timeout_fire's unlocked load. */
+    __atomic_store_n(&t->wait_event, ev, __ATOMIC_RELEASE);
     t->pend_state = SCHED_PEND_NONE;
     t->pend_data = 0;
 
@@ -178,7 +179,10 @@ void sched_event_wait(sched_event_t* ev, uint32_t timeout_ms) {
  * ev->lock.  Shared by wake_one (first waiter) and wake_all (every waiter). */
 static void sched_event_detach_wake(thread_t* t, uint64_t data, sched_pend_state_t pend) {
     list_head_del(&t->event_node);
-    t->wait_event = 0;
+    /* Released atomically: sched_timeout_fire loads wait_event WITHOUT the
+     * event lock (it has to, to know which lock to take), so a plain store
+     * here is a mixed-atomicity access to the same field. */
+    __atomic_store_n(&t->wait_event, (sched_event_t*)0, __ATOMIC_RELEASE);
     t->sched_timeout_tick = 0; /* woken normally; cancel any armed timeout */
     t->pend_state = (uint32_t)pend;
     t->pend_data = data;

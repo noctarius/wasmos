@@ -9,6 +9,13 @@
 typedef struct list_array_chunk {
     struct list_array_chunk* next;
     uint32_t capacity;
+    /* Pads slots[] up to LIST_ARRAY_SLOT_ALIGN. Without it the flexible array
+     * starts at offset 12, so every element handed out is 4-byte aligned even
+     * though the stride below is carefully rounded to 8 — misaligned for any
+     * element type holding a pointer or a 64-bit field (ipc_endpoint_t,
+     * mm_context_t, ...). x86_64 tolerates that for plain loads and stores, so
+     * it stayed invisible until UBSan ran over the IPC endpoint table. */
+    uint32_t reserved;
     uint8_t slots[];
 } list_array_chunk_t;
 

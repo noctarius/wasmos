@@ -107,9 +107,48 @@ static uint32_t ipc_endpoint_owner_context(uint32_t endpoint_id) {
     return 0;
 }
 
+/*
+ * Hand out the next endpoint id.  Caller holds g_endpoint_table_lock.
+ *
+ * The counter wraps back to 1 at IPC_ENDPOINT_NONE, so past the first wrap a
+ * fresh id can collide with an endpoint that is still live -- and
+ * ipc_endpoint_get returns the FIRST match, so the newer endpoint would
+ * silently steal the older one's traffic.  After a wrap has happened, skip ids
+ * that are still in use.  The scan is gated on g_endpoint_id_wrapped so the
+ * ordinary case stays a post-increment.
+ */
+static uint32_t g_endpoint_id_wrapped;
+
+static uint32_t ipc_alloc_endpoint_id(void) {
+    for (;;) {
+        uint32_t id = g_next_endpoint_id++;
+        if (g_next_endpoint_id == IPC_ENDPOINT_NONE) {
+            g_next_endpoint_id = 1;
+            g_endpoint_id_wrapped = 1;
+        }
+        if (!g_endpoint_id_wrapped) {
+            return id;
+        }
+        list_iter_t it;
+        int taken = 0;
+        ipc_endpoint_t* ep = (ipc_endpoint_t*)list_first(&g_endpoint_table, &it);
+        while (ep) {
+            if (ep->in_use && ep->id == id) {
+                taken = 1;
+                break;
+            }
+            ep = (ipc_endpoint_t*)list_next(&it);
+        }
+        if (!taken) {
+            return id;
+        }
+    }
+}
+
 void ipc_init(void) {
     ksync_spinlock_init(&g_endpoint_table_lock);
     g_next_endpoint_id = 1;
+    g_endpoint_id_wrapped = 0;
     if (list_init(&g_endpoint_table, (uint32_t)sizeof(ipc_endpoint_t), LIST_IMPL_ARRAY_CHUNK,
                   IPC_ENDPOINT_TABLE_CHUNK) != 0) {
         for (;;) {
@@ -122,7 +161,51 @@ void ipc_init(void) {
     }
 }
 
-int ipc_endpoint_create(uint32_t owner_context_id, uint32_t* out_endpoint) {
+/*
+ * Look up `endpoint` and check it is of `type`.  Returns it with ep->lock HELD,
+ * or 0 with *out_rc set and no lock held.  Every operation that names an
+ * endpoint opens with exactly this, so it lives here once.
+ */
+static ipc_endpoint_t* ipc_endpoint_acquire(uint32_t endpoint, ipc_endpoint_type_t type,
+                                            int* out_rc) {
+    ipc_endpoint_t* ep = ipc_endpoint_get(endpoint);
+    if (!ep) {
+        *out_rc = IPC_ERR_INVALID;
+        return 0;
+    }
+    if (ep->type != type) {
+        ksync_spinlock_unlock(&ep->lock);
+        *out_rc = IPC_ERR_INVALID;
+        return 0;
+    }
+    *out_rc = IPC_OK;
+    return ep;
+}
+
+/*
+ * As above, plus the ownership check every operation other than send performs:
+ * only the owning context -- or the kernel -- may receive from, wait on, or
+ * signal an endpoint.  Send is the exception (any context may send to any
+ * message endpoint), which is why it stays on the plain acquire.
+ */
+static ipc_endpoint_t* ipc_endpoint_acquire_owned(uint32_t endpoint, ipc_endpoint_type_t type,
+                                                  uint32_t context_id, int* out_rc) {
+    ipc_endpoint_t* ep = ipc_endpoint_acquire(endpoint, type, out_rc);
+    if (!ep) {
+        return 0;
+    }
+    if (context_id != IPC_CONTEXT_KERNEL && ep->owner_context_id != context_id) {
+        ksync_spinlock_unlock(&ep->lock);
+        *out_rc = IPC_ERR_PERM;
+        return 0;
+    }
+    return ep;
+}
+
+/* The two endpoint kinds differ only in ep->type; everything else -- id
+ * allocation, the zeroed queue state, the embedded event -- is identical. */
+static int ipc_endpoint_create_typed(uint32_t owner_context_id, ipc_endpoint_type_t type,
+                                     uint32_t* out_endpoint) {
     if (!out_endpoint) {
         return IPC_ERR_INVALID;
     }
@@ -132,12 +215,9 @@ int ipc_endpoint_create(uint32_t owner_context_id, uint32_t* out_endpoint) {
         ksync_spinlock_unlock(&g_endpoint_table_lock);
         return IPC_ERR_FULL;
     }
-    ep->id = g_next_endpoint_id++;
-    if (g_next_endpoint_id == IPC_ENDPOINT_NONE) {
-        g_next_endpoint_id = 1;
-    }
+    ep->id = ipc_alloc_endpoint_id();
     ep->in_use = 1;
-    ep->type = IPC_ENDPOINT_TYPE_MESSAGE;
+    ep->type = type;
     ep->owner_context_id = owner_context_id;
     ep->head = 0;
     ep->tail = 0;
@@ -152,34 +232,13 @@ int ipc_endpoint_create(uint32_t owner_context_id, uint32_t* out_endpoint) {
     return IPC_OK;
 }
 
+int ipc_endpoint_create(uint32_t owner_context_id, uint32_t* out_endpoint) {
+    return ipc_endpoint_create_typed(owner_context_id, IPC_ENDPOINT_TYPE_MESSAGE, out_endpoint);
+}
+
 int ipc_notification_create(uint32_t owner_context_id, uint32_t* out_endpoint) {
-    if (!out_endpoint) {
-        return IPC_ERR_INVALID;
-    }
-    ksync_spinlock_lock(&g_endpoint_table_lock);
-    ipc_endpoint_t* ep = (ipc_endpoint_t*)list_alloc(&g_endpoint_table);
-    if (!ep) {
-        ksync_spinlock_unlock(&g_endpoint_table_lock);
-        return IPC_ERR_FULL;
-    }
-    ep->id = g_next_endpoint_id++;
-    if (g_next_endpoint_id == IPC_ENDPOINT_NONE) {
-        g_next_endpoint_id = 1;
-    }
-    ep->in_use = 1;
-    ep->type = IPC_ENDPOINT_TYPE_NOTIFICATION;
-    ep->owner_context_id = owner_context_id;
-    ep->head = 0;
-    ep->tail = 0;
-    ep->count = 0;
-    ep->notify_count = 0;
-    ksync_spinlock_init(&ep->lock);
-    sched_event_init(&ep->event, SCHED_EVENT_TYPE_IPC);
-    ep->poll_struct = 0;
-    uint32_t id = ep->id;
-    ksync_spinlock_unlock(&g_endpoint_table_lock);
-    *out_endpoint = id;
-    return IPC_OK;
+    return ipc_endpoint_create_typed(owner_context_id, IPC_ENDPOINT_TYPE_NOTIFICATION,
+                                     out_endpoint);
 }
 
 int ipc_endpoint_owner(uint32_t endpoint, uint32_t* out_owner_context_id) {
@@ -230,13 +289,10 @@ int ipc_send_from(uint32_t sender_context_id, uint32_t endpoint, const ipc_messa
         }
     }
 
-    ipc_endpoint_t* ep = ipc_endpoint_get(endpoint);
+    int rc = IPC_OK;
+    ipc_endpoint_t* ep = ipc_endpoint_acquire(endpoint, IPC_ENDPOINT_TYPE_MESSAGE, &rc);
     if (!ep) {
-        return IPC_ERR_INVALID;
-    }
-    if (ep->type != IPC_ENDPOINT_TYPE_MESSAGE) {
-        ksync_spinlock_unlock(&ep->lock);
-        return IPC_ERR_INVALID;
+        return rc;
     }
 
     if (ep->count >= IPC_QUEUE_DEPTH) {
@@ -252,31 +308,28 @@ int ipc_send_from(uint32_t sender_context_id, uint32_t endpoint, const ipc_messa
     ksync_spinlock_lock(&ep->event.lock);
     sched_event_wake_one(&ep->event, 0, SCHED_PEND_OK);
     ksync_spinlock_unlock(&ep->event.lock);
-    poll_struct_t* ps = ep->poll_struct;
-    uint32_t ep_id = ep->id;
-    ksync_spinlock_unlock(&ep->lock);
-    if (ps) {
-        poll_notify(ps, POLL_EV_IN, ep_id);
+    /* poll_notify runs under ep->lock.  Reading ep->poll_struct here and
+     * notifying after the unlock would race ipc_endpoints_release_owner, which
+     * takes ep->lock and frees the poll_struct -- the notify would then walk
+     * freed watcher nodes.  Lock order is g_select_table_lock -> ep->lock ->
+     * sel->event.lock, and poll_notify only ever takes the last of those, so
+     * holding ep->lock across it is consistent with every other path. */
+    if (ep->poll_struct) {
+        poll_notify(ep->poll_struct, POLL_EV_IN, ep->id);
     }
+    ksync_spinlock_unlock(&ep->lock);
     return IPC_OK;
 }
 
 int ipc_recv_for(uint32_t receiver_context_id, uint32_t endpoint, ipc_message_t* out_message) {
-    ipc_endpoint_t* ep = ipc_endpoint_get(endpoint);
-    if (!ep || !out_message) {
-        if (ep) {
-            ksync_spinlock_unlock(&ep->lock);
-        }
+    int rc = IPC_OK;
+    if (!out_message) {
         return IPC_ERR_INVALID;
     }
-    if (ep->type != IPC_ENDPOINT_TYPE_MESSAGE) {
-        ksync_spinlock_unlock(&ep->lock);
-        return IPC_ERR_INVALID;
-    }
-
-    if (receiver_context_id != IPC_CONTEXT_KERNEL && ep->owner_context_id != receiver_context_id) {
-        ksync_spinlock_unlock(&ep->lock);
-        return IPC_ERR_PERM;
+    ipc_endpoint_t* ep =
+        ipc_endpoint_acquire_owned(endpoint, IPC_ENDPOINT_TYPE_MESSAGE, receiver_context_id, &rc);
+    if (!ep) {
+        return rc;
     }
 
     if (ep->count == 0) {
@@ -296,19 +349,14 @@ int ipc_recv_for(uint32_t receiver_context_id, uint32_t endpoint, ipc_message_t*
 
 int ipc_recv_blocking_for(uint32_t receiver_context_id, uint32_t endpoint,
                           ipc_message_t* out_message) {
-    ipc_endpoint_t* ep = ipc_endpoint_get(endpoint);
-    if (!ep || !out_message) {
-        if (ep)
-            ksync_spinlock_unlock(&ep->lock);
+    int rc = IPC_OK;
+    if (!out_message) {
         return IPC_ERR_INVALID;
     }
-    if (ep->type != IPC_ENDPOINT_TYPE_MESSAGE) {
-        ksync_spinlock_unlock(&ep->lock);
-        return IPC_ERR_INVALID;
-    }
-    if (receiver_context_id != IPC_CONTEXT_KERNEL && ep->owner_context_id != receiver_context_id) {
-        ksync_spinlock_unlock(&ep->lock);
-        return IPC_ERR_PERM;
+    ipc_endpoint_t* ep =
+        ipc_endpoint_acquire_owned(endpoint, IPC_ENDPOINT_TYPE_MESSAGE, receiver_context_id, &rc);
+    if (!ep) {
+        return rc;
     }
     if (ep->count == 0) {
         /* Block until a sender enqueues a message and wakes us. */
@@ -336,17 +384,11 @@ int ipc_recv_blocking_for(uint32_t receiver_context_id, uint32_t endpoint,
  * loop. Returns IPC_OK once woken (message may already have been drained by a
  * racing waiter, so the caller must re-poll and tolerate an empty read). */
 int ipc_endpoint_wait_for(uint32_t receiver_context_id, uint32_t endpoint, uint32_t timeout_ms) {
-    ipc_endpoint_t* ep = ipc_endpoint_get(endpoint);
+    int rc = IPC_OK;
+    ipc_endpoint_t* ep =
+        ipc_endpoint_acquire_owned(endpoint, IPC_ENDPOINT_TYPE_MESSAGE, receiver_context_id, &rc);
     if (!ep) {
-        return IPC_ERR_INVALID;
-    }
-    if (ep->type != IPC_ENDPOINT_TYPE_MESSAGE) {
-        ksync_spinlock_unlock(&ep->lock);
-        return IPC_ERR_INVALID;
-    }
-    if (receiver_context_id != IPC_CONTEXT_KERNEL && ep->owner_context_id != receiver_context_id) {
-        ksync_spinlock_unlock(&ep->lock);
-        return IPC_ERR_PERM;
+        return rc;
     }
     if (ep->count != 0) {
         ksync_spinlock_unlock(&ep->lock);
@@ -361,17 +403,13 @@ int ipc_endpoint_wait_for(uint32_t receiver_context_id, uint32_t endpoint, uint3
 }
 
 int ipc_notify_from(uint32_t sender_context_id, uint32_t endpoint) {
-    ipc_endpoint_t* ep = ipc_endpoint_get(endpoint);
+    int rc = IPC_OK;
+    /* Only the owner (or the kernel) may raise a notification -- unlike a
+     * message send, which any context may perform against any endpoint. */
+    ipc_endpoint_t* ep = ipc_endpoint_acquire_owned(endpoint, IPC_ENDPOINT_TYPE_NOTIFICATION,
+                                                    sender_context_id, &rc);
     if (!ep) {
-        return IPC_ERR_INVALID;
-    }
-    if (ep->type != IPC_ENDPOINT_TYPE_NOTIFICATION) {
-        ksync_spinlock_unlock(&ep->lock);
-        return IPC_ERR_INVALID;
-    }
-    if (sender_context_id != IPC_CONTEXT_KERNEL && sender_context_id != ep->owner_context_id) {
-        ksync_spinlock_unlock(&ep->lock);
-        return IPC_ERR_PERM;
+        return rc;
     }
 
     if (ep->notify_count != UINT32_MAX) {
@@ -385,17 +423,11 @@ int ipc_notify_from(uint32_t sender_context_id, uint32_t endpoint) {
 }
 
 int ipc_wait_for(uint32_t receiver_context_id, uint32_t endpoint) {
-    ipc_endpoint_t* ep = ipc_endpoint_get(endpoint);
+    int rc = IPC_OK;
+    ipc_endpoint_t* ep = ipc_endpoint_acquire_owned(endpoint, IPC_ENDPOINT_TYPE_NOTIFICATION,
+                                                    receiver_context_id, &rc);
     if (!ep) {
-        return IPC_ERR_INVALID;
-    }
-    if (ep->type != IPC_ENDPOINT_TYPE_NOTIFICATION) {
-        ksync_spinlock_unlock(&ep->lock);
-        return IPC_ERR_INVALID;
-    }
-    if (receiver_context_id != IPC_CONTEXT_KERNEL && ep->owner_context_id != receiver_context_id) {
-        ksync_spinlock_unlock(&ep->lock);
-        return IPC_ERR_PERM;
+        return rc;
     }
 
     if (ep->notify_count == 0) {
@@ -506,22 +538,49 @@ int ipc_select_add(uint32_t select_id, uint32_t endpoint_id, uint32_t owner_cont
         ksync_spinlock_unlock(&g_select_table_lock);
         return IPC_ERR_FULL;
     }
-    sel->ep_ids[sel->ep_count++] = endpoint_id;
-
-    /* Register push watcher on the endpoint. */
+    /*
+     * Register the push watcher on the endpoint.  A failure here has to be
+     * reported: without a watcher the endpoint can never signal this set, so
+     * reporting IPC_OK would hand the caller a set that blocks forever on an
+     * endpoint it believes it is watching.
+     *
+     * FIXME: an endpoint_id that does not resolve is still accepted into
+     * ep_ids -- it simply never signals.  Callers add endpoints they have just
+     * created, so this has not bitten, but it is the same silent-never-ready
+     * failure as above and should become IPC_ERR_INVALID once every caller is
+     * known to add only live endpoints.
+     *
+     * FIXME: adding the same endpoint twice registers two watchers, so one
+     * send signals the set twice and two of the eight slots are consumed.
+     */
     ipc_endpoint_t* ep = ipc_endpoint_get(endpoint_id);
     if (ep) {
         if (!ep->poll_struct) {
             ep->poll_struct = poll_struct_alloc();
         }
-        if (ep->poll_struct) {
-            poll_struct_add(ep->poll_struct, POLL_EV_IN, sel, 0);
+        if (!ep->poll_struct || poll_struct_add(ep->poll_struct, POLL_EV_IN, sel, 0) != 0) {
+            ksync_spinlock_unlock(&ep->lock);
+            ksync_spinlock_unlock(&g_select_table_lock);
+            return IPC_ERR_FULL;
         }
         ksync_spinlock_unlock(&ep->lock);
     }
 
+    sel->ep_ids[sel->ep_count++] = endpoint_id;
     ksync_spinlock_unlock(&g_select_table_lock);
     return IPC_OK;
+}
+
+/* Consume the readiness latch.  Caller holds sel->event.lock, which the struct
+ * comment names as the single authority for ready_ep.  Returns 1 if an
+ * endpoint was taken. */
+static int ipc_select_take_ready(ipc_select_t* sel, uint32_t* out_ready_ep) {
+    if (sel->ready_ep == IPC_ENDPOINT_NONE) {
+        return 0;
+    }
+    *out_ready_ep = sel->ready_ep;
+    sel->ready_ep = IPC_ENDPOINT_NONE;
+    return 1;
 }
 
 int ipc_select_wait(uint32_t select_id, uint32_t owner_context_id, uint32_t* out_ready_ep,
@@ -537,29 +596,24 @@ int ipc_select_wait(uint32_t select_id, uint32_t owner_context_id, uint32_t* out
         return IPC_ERR_INVALID;
     }
 
-    if (sel->ready_ep != IPC_ENDPOINT_NONE) {
-        *out_ready_ep = sel->ready_ep;
-        sel->ready_ep = IPC_ENDPOINT_NONE;
-        ksync_spinlock_unlock(&g_select_table_lock);
-        return IPC_OK;
-    }
-
-    /* Acquire event.lock BEFORE releasing g_select_table_lock.
-     * ipc_select_signal() also holds event.lock when it writes ready_ep and
-     * calls sched_event_wake_one(), so acquiring it here closes the SMP
-     * lost-wakeup window: any signal that fires after this point is forced to
-     * wait until we are already in the wait_list (inside sched_event_wait).
-     * Without this ordering, signal() could set ready_ep and find an empty
-     * wait_list in the gap between the ready_ep check above and the
-     * sched_event_wait() call below. */
+    /* Acquire event.lock BEFORE releasing g_select_table_lock.  It does two
+     * jobs at once, and both are required.
+     *
+     * It closes the SMP lost-wakeup window around the block: ipc_select_signal
+     * holds event.lock while it writes ready_ep and calls
+     * sched_event_wake_one, so any signal firing after this point must wait
+     * until we are already in the wait_list inside sched_event_wait.
+     *
+     * It also puts the take-and-clear below on the same lock the signal writes
+     * under.  A fast path that read ready_ep under g_select_table_lock instead
+     * -- as this did -- races a concurrent signal and can overwrite the
+     * endpoint it just published with IPC_ENDPOINT_NONE, dropping that
+     * readiness entirely: the set then blocks until some *later* message
+     * arrives, and the queued one is never looked at. */
     ksync_spinlock_lock(&sel->event.lock);
     ksync_spinlock_unlock(&g_select_table_lock);
 
-    /* Re-check under event.lock: if signal() fired between the ready_ep check
-     * above and our acquisition of event.lock, ready_ep is already set. */
-    if (sel->ready_ep != IPC_ENDPOINT_NONE) {
-        *out_ready_ep = sel->ready_ep;
-        sel->ready_ep = IPC_ENDPOINT_NONE;
+    if (ipc_select_take_ready(sel, out_ready_ep)) {
         ksync_spinlock_unlock(&sel->event.lock);
         return IPC_OK;
     }
@@ -570,14 +624,9 @@ int ipc_select_wait(uint32_t select_id, uint32_t owner_context_id, uint32_t* out
 
     /* After wake: re-check under event.lock (same lock as ipc_select_signal). */
     ksync_spinlock_lock(&sel->event.lock);
-    if (sel->ready_ep == IPC_ENDPOINT_NONE) {
-        ksync_spinlock_unlock(&sel->event.lock);
-        return IPC_EMPTY; /* spurious wake; caller must retry */
-    }
-    *out_ready_ep = sel->ready_ep;
-    sel->ready_ep = IPC_ENDPOINT_NONE;
+    int got = ipc_select_take_ready(sel, out_ready_ep);
     ksync_spinlock_unlock(&sel->event.lock);
-    return IPC_OK;
+    return got ? IPC_OK : IPC_EMPTY; /* EMPTY = spurious/timeout; caller retries */
 }
 
 /* Convenience: create a select set watching `endpoints[0..count)`. Avoids each
@@ -652,6 +701,25 @@ void ipc_select_destroy(uint32_t select_id, uint32_t owner_context_id) {
     sel->ep_count = 0;
     ksync_spinlock_unlock(&g_select_table_lock);
 }
+
+#ifdef WASMOS_IPC_TEST_SEAMS
+void ipc_test_set_next_endpoint_id(uint32_t next_id, int wrapped) {
+    ksync_spinlock_lock(&g_endpoint_table_lock);
+    g_next_endpoint_id = next_id;
+    g_endpoint_id_wrapped = wrapped ? 1u : 0u;
+    ksync_spinlock_unlock(&g_endpoint_table_lock);
+}
+
+int ipc_test_set_notify_count(uint32_t endpoint, uint32_t value) {
+    ipc_endpoint_t* ep = ipc_endpoint_get(endpoint);
+    if (!ep) {
+        return IPC_ERR_INVALID;
+    }
+    ep->notify_count = value;
+    ksync_spinlock_unlock(&ep->lock);
+    return IPC_OK;
+}
+#endif
 
 void ipc_select_signal(struct ipc_select* sel, uint32_t ep_id) {
     if (!sel) {

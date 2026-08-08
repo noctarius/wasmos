@@ -2212,6 +2212,117 @@ add_custom_target(run-kernel-unit-tests
           ${CMAKE_SOURCE_DIR}/tests/unit/stubs_spinlock.c
           -o ${BUILD_DIR}/test_sched_concurrency_asan
   COMMAND ${BUILD_DIR}/test_sched_concurrency_asan
+  # The IPC transport against the REAL ipc.c, linked with the real poll.c and
+  # the real sched_event.c so the block/wake handoff is the kernel's own; only
+  # the timer, the thread table and the two scheduler entry points are stubbed.
+  # WASMOS_IPC_TEST_SEAMS compiles in two setters the kernel does not carry:
+  # without them the endpoint-id wrap and the saturating notification counter
+  # need ~2^32 operations to reach.
+  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
+          -DWASMOS_HOST_TEST_SMP=1 -DWASMOS_IPC_TEST_SEAMS=1
+          -iquote ${KERNEL_DIR}/include
+          -iquote ${CMAKE_SOURCE_DIR}/libs/wasm3/source
+          -iquote ${CMAKE_SOURCE_DIR}/abi/generated/c
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_ipc.c
+          ${KERNEL_DIR}/ipc.c
+          ${KERNEL_DIR}/poll.c
+          ${KERNEL_DIR}/sched_event.c
+          ${KERNEL_DIR}/list.c
+          ${KERNEL_DIR}/list_linked.c
+          ${KERNEL_DIR}/list_array_chunk.c
+          ${KERNEL_DIR}/kmem.c
+          ${CMAKE_SOURCE_DIR}/tests/unit/stubs_slab.c
+          ${CMAKE_SOURCE_DIR}/tests/unit/stubs_spinlock.c
+          -o ${BUILD_DIR}/test_ipc
+  COMMAND ${BUILD_DIR}/test_ipc
+  # The poll hub on its own. Its only outward call is ipc_select_signal, so the
+  # test stubs that and asserts exactly which sets a notify reaches.
+  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
+          -iquote ${KERNEL_DIR}/include
+          -iquote ${CMAKE_SOURCE_DIR}/abi/generated/c
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_poll.c
+          ${KERNEL_DIR}/poll.c
+          -o ${BUILD_DIR}/test_poll
+  COMMAND ${BUILD_DIR}/test_poll
+  # The futex, against the real file. The mm stub places its fake physical base
+  # so paddr + KERNEL_HIGHER_HALF_BASE lands on a host buffer, which is exactly
+  # the translation futex_wait performs. WASMOS_FUTEX_TEST_SEAMS adds the table
+  # teardown the kernel deliberately lacks (entries live for the system's life).
+  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
+          -DWASMOS_HOST_TEST_SMP=1 -DWASMOS_FUTEX_TEST_SEAMS=1
+          -include ${LIBC_DIR}/include/wasmos_cast.h
+          -iquote ${KERNEL_DIR}/include
+          -iquote ${CMAKE_SOURCE_DIR}/libs/wasm3/source
+          -iquote ${CMAKE_SOURCE_DIR}/abi/generated/c
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_futex.c
+          ${KERNEL_DIR}/futex.c
+          ${KERNEL_DIR}/sched_event.c
+          ${CMAKE_SOURCE_DIR}/tests/unit/stubs_spinlock.c
+          -o ${BUILD_DIR}/test_futex
+  COMMAND ${BUILD_DIR}/test_futex
+  # IPC concurrency: pthreads stand in for CPUs against the real ipc.c. Two
+  # widths, because the contention shape changes with the sender/receiver split
+  # and more threads than host cores explores interleavings a 1:1 mapping never
+  # reaches.
+  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions -pthread
+          -DWASMOS_HOST_TEST_SMP=1 -DWASMOS_TEST_NTHREADS=4
+          -iquote ${KERNEL_DIR}/include
+          -iquote ${CMAKE_SOURCE_DIR}/libs/wasm3/source
+          -iquote ${CMAKE_SOURCE_DIR}/abi/generated/c
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_ipc_concurrency.c
+          ${KERNEL_DIR}/ipc.c ${KERNEL_DIR}/poll.c ${KERNEL_DIR}/sched_event.c
+          ${KERNEL_DIR}/list.c ${KERNEL_DIR}/list_linked.c ${KERNEL_DIR}/list_array_chunk.c
+          ${KERNEL_DIR}/kmem.c
+          ${CMAKE_SOURCE_DIR}/tests/unit/stubs_slab.c
+          ${CMAKE_SOURCE_DIR}/tests/unit/stubs_spinlock.c
+          -o ${BUILD_DIR}/test_ipc_concurrency_t4
+  COMMAND ${BUILD_DIR}/test_ipc_concurrency_t4
+  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions -pthread
+          -DWASMOS_HOST_TEST_SMP=1 -DWASMOS_TEST_NTHREADS=8
+          -iquote ${KERNEL_DIR}/include
+          -iquote ${CMAKE_SOURCE_DIR}/libs/wasm3/source
+          -iquote ${CMAKE_SOURCE_DIR}/abi/generated/c
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_ipc_concurrency.c
+          ${KERNEL_DIR}/ipc.c ${KERNEL_DIR}/poll.c ${KERNEL_DIR}/sched_event.c
+          ${KERNEL_DIR}/list.c ${KERNEL_DIR}/list_linked.c ${KERNEL_DIR}/list_array_chunk.c
+          ${KERNEL_DIR}/kmem.c
+          ${CMAKE_SOURCE_DIR}/tests/unit/stubs_slab.c
+          ${CMAKE_SOURCE_DIR}/tests/unit/stubs_spinlock.c
+          -o ${BUILD_DIR}/test_ipc_concurrency_t8
+  COMMAND ${BUILD_DIR}/test_ipc_concurrency_t8
+  # Sanitizer arms. TSan is the only thing that can see ready_ep being read
+  # under the wrong lock -- it found exactly that the first time it ran. ASan
+  # covers the poll_struct use-after-free class around endpoint teardown, which
+  # a plain build reports as nothing at all.
+  COMMAND ${WASMOS_HOST_SANITIZER_CC} -std=c11 -Wall -pthread -fsanitize=thread -g -O1
+          ${WASMOS_HOST_SANITIZER_SYSROOT}
+          -DWASMOS_HOST_TEST_SMP=1 -DWASMOS_TEST_NTHREADS=4
+          -iquote ${KERNEL_DIR}/include
+          -iquote ${CMAKE_SOURCE_DIR}/libs/wasm3/source
+          -iquote ${CMAKE_SOURCE_DIR}/abi/generated/c
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_ipc_concurrency.c
+          ${KERNEL_DIR}/ipc.c ${KERNEL_DIR}/poll.c ${KERNEL_DIR}/sched_event.c
+          ${KERNEL_DIR}/list.c ${KERNEL_DIR}/list_linked.c ${KERNEL_DIR}/list_array_chunk.c
+          ${KERNEL_DIR}/kmem.c
+          ${CMAKE_SOURCE_DIR}/tests/unit/stubs_slab.c
+          ${CMAKE_SOURCE_DIR}/tests/unit/stubs_spinlock.c
+          -o ${BUILD_DIR}/test_ipc_concurrency_tsan
+  COMMAND ${BUILD_DIR}/test_ipc_concurrency_tsan
+  COMMAND ${WASMOS_HOST_SANITIZER_CC} -std=c11 -Wall -pthread
+          -fsanitize=address,undefined -fno-sanitize-recover=all -g -O1
+          ${WASMOS_HOST_SANITIZER_SYSROOT}
+          -DWASMOS_HOST_TEST_SMP=1 -DWASMOS_TEST_NTHREADS=8
+          -iquote ${KERNEL_DIR}/include
+          -iquote ${CMAKE_SOURCE_DIR}/libs/wasm3/source
+          -iquote ${CMAKE_SOURCE_DIR}/abi/generated/c
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_ipc_concurrency.c
+          ${KERNEL_DIR}/ipc.c ${KERNEL_DIR}/poll.c ${KERNEL_DIR}/sched_event.c
+          ${KERNEL_DIR}/list.c ${KERNEL_DIR}/list_linked.c ${KERNEL_DIR}/list_array_chunk.c
+          ${KERNEL_DIR}/kmem.c
+          ${CMAKE_SOURCE_DIR}/tests/unit/stubs_slab.c
+          ${CMAKE_SOURCE_DIR}/tests/unit/stubs_spinlock.c
+          -o ${BUILD_DIR}/test_ipc_concurrency_asan
+  COMMAND ${BUILD_DIR}/test_ipc_concurrency_asan
   COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
           -I${KERNEL_DIR}/include
           ${CMAKE_SOURCE_DIR}/tests/unit/test_warp_driver_ring3_call_policy.c
@@ -2650,16 +2761,25 @@ set(WASMOS_UNIT_LIBC_TESTS
 # redefinition errors. Their real compile lines already omit it; this keeps the
 # lint index matching them. WASMOS_HOST_TEST_SMP is required too: without it
 # cpu_local() is the GS-relative inline asm, which is not parseable off x86.
+#
+# The IPC, poll and futex host tests drive the real kernel sources under the
+# same rule, so they share this index: real kernel headers, no tests/unit/include
+# shim, and WASMOS_HOST_TEST_SMP so cpu_local() is not the GS-relative asm.
 set(WASMOS_UNIT_SCHED_TESTS
     ${CMAKE_SOURCE_DIR}/tests/unit/test_sched_runqueue.c
     ${CMAKE_SOURCE_DIR}/tests/unit/test_sched_event.c
-    ${CMAKE_SOURCE_DIR}/tests/unit/test_sched_concurrency.c)
+    ${CMAKE_SOURCE_DIR}/tests/unit/test_sched_concurrency.c
+    ${CMAKE_SOURCE_DIR}/tests/unit/test_ipc.c
+    ${CMAKE_SOURCE_DIR}/tests/unit/test_ipc_concurrency.c
+    ${CMAKE_SOURCE_DIR}/tests/unit/test_poll.c
+    ${CMAKE_SOURCE_DIR}/tests/unit/test_futex.c)
 
 wasmos_ide_index(wasmos_ide_unit_sched
   SOURCES ${WASMOS_UNIT_SCHED_TESTS}
   IQUOTE ${KERNEL_DIR}/include ${WASM3_DIR}/source
          ${CMAKE_SOURCE_DIR}/abi/generated/c
-  DEFINES WASMOS_HOST_TEST_SMP=1 WASMOS_SCHED_CALLER_CPU_BIAS=1)
+  DEFINES WASMOS_HOST_TEST_SMP=1 WASMOS_SCHED_CALLER_CPU_BIAS=1
+          WASMOS_IPC_TEST_SEAMS=1 WASMOS_FUTEX_TEST_SEAMS=1)
 
 wasmos_ide_index(wasmos_ide_unit_libc
   SOURCES ${WASMOS_UNIT_LIBC_TESTS}

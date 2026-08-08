@@ -90,4 +90,15 @@ struct ipc_select;
 /* Called by poll_notify to signal a select set from the sender side. */
 void ipc_select_signal(struct ipc_select* sel, uint32_t ep_id);
 
+#ifdef WASMOS_IPC_TEST_SEAMS
+/*
+ * Host-test seams.  Not compiled into the kernel.  They exist because two
+ * states are unreachable in a test otherwise: the endpoint-id counter wrapping
+ * at IPC_ENDPOINT_NONE, and the notification counter saturating at UINT32_MAX,
+ * both of which need ~2^32 operations to reach honestly.
+ */
+void ipc_test_set_next_endpoint_id(uint32_t next_id, int wrapped);
+int ipc_test_set_notify_count(uint32_t endpoint, uint32_t value);
+#endif
+
 #endif

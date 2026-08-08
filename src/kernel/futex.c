@@ -60,6 +60,28 @@ static uintptr_t futex_uaddr_to_paddr(uint32_t uaddr, uint32_t context_id) {
     return (uintptr_t)(wasm_region.phys_base + (uint64_t)uaddr);
 }
 
+#ifdef WASMOS_FUTEX_TEST_SEAMS
+/*
+ * Host-test seam.  Not compiled into the kernel, which has no teardown for
+ * futex entries by design: an entry costs one allocation and is reused for the
+ * life of the system.  A test that reuses thread slots across cases needs one,
+ * or a stale wait_list keeps pointing at threads the next case has recycled.
+ */
+void futex_test_reset(void) {
+    for (uint32_t i = 0; i < FUTEX_TABLE_SIZE; i++) {
+        ksync_spinlock_lock(&g_futex_table[i].lock);
+        futex_t* ft = g_futex_table[i].head;
+        while (ft) {
+            futex_t* next = (futex_t*)ft->next;
+            free(ft);
+            ft = next;
+        }
+        g_futex_table[i].head = 0;
+        ksync_spinlock_unlock(&g_futex_table[i].lock);
+    }
+}
+#endif
+
 static futex_t* futex_find(uintptr_t paddr, uint32_t bucket) {
     futex_t* ft = g_futex_table[bucket].head;
     while (ft) {

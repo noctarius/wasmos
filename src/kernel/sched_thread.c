@@ -272,7 +272,7 @@ void cpu_sched_remove_thread(thread_t* t) {
         }
         cpu_sched_t* cs = (cpu_sched_t*)__atomic_load_n(&t->rq, __ATOMIC_ACQUIRE);
         if (!cs) {
-            __asm__ volatile("pause" ::: "memory"); /* enqueue in flight; let it publish rq */
+            cpu_relax(); /* enqueue in flight; let it publish rq */
             continue;
         }
         ksync_spinlock_lock(&cs->lock);

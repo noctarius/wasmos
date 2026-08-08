@@ -194,7 +194,9 @@
       "Bash(grep -i 'WARP_LINK\\\\|REGISTER\\\\|WARP_FN\\\\|{ \"\\\\|\",')",
       "Bash(awk '/^  shmem:/{p=1} p{print} p&&/^  [a-z_]+:/&&!/shmem/{exit}' abi/errors.yaml)",
       "Bash(awk '/### Result representation/{p=1} p{print} p&&/^### [A-Z]/&&!/Result representation/{c++} c==1{exit}' docs/architecture/34-abi-idl-and-error-model.md)",
-      "Bash(< 0)"
+      "Bash(< 0)",
+      "Bash(nm build/kernel.elf)",
+      "Bash(awk '$1<=\"ffffffff8021ebf5\"')"
     ]
   }
 }

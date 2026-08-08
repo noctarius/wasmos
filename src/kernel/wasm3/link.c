@@ -1968,18 +1968,18 @@ m3ApiRawFunction(wasmos_env_unset) {
  * declaration order. Failures propagate the specific WASMOS_ERR_IO_* reason
  * rather than collapsing to one value: "no such region" and "offset past the
  * end" are different bugs. */
-static int io_region_port(uint32_t region, uint32_t offset, uint16_t* out_port) {
+static int io_region_port(uint32_t region, uint32_t offset, uint32_t width, uint16_t* out_port) {
     uint32_t context_id = 0;
     if (current_process_context(&context_id) != 0) {
         return WASMOS_ERR_IO_NOT_AUTHORIZED;
     }
-    return capability_io_region_port(context_id, region, offset, out_port);
+    return capability_io_region_port(context_id, region, offset, width, out_port);
 }
 
 /* Reads return the datum through linear memory, not as the result: a 32-bit port
  * read can legitimately be 0xFFFFFFFF and must stay distinguishable from a
  * failure code. */
-#define WASMOS_IO_REGION_READ(width_expr)                                                          \
+#define WASMOS_IO_REGION_READ(width, width_expr)                                                   \
     m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, region) m3ApiGetArg(int32_t, offset)             \
         m3ApiGetArgMem(uint32_t*, out) m3ApiCheckMem(out, sizeof(uint32_t));                       \
     uint16_t port = 0;                                                                             \
@@ -1987,7 +1987,7 @@ static int io_region_port(uint32_t region, uint32_t offset, uint16_t* out_port) 
     if (region < 0 || offset < 0) {                                                                \
         m3ApiReturn(WASMOS_ERR_IO_BAD_REGION);                                                     \
     }                                                                                              \
-    rc = io_region_port((uint32_t)region, (uint32_t)offset, &port);                                \
+    rc = io_region_port((uint32_t)region, (uint32_t)offset, (width), &port);                       \
     if (rc != 0) {                                                                                 \
         m3ApiReturn(rc);                                                                           \
     }                                                                                              \
@@ -1995,18 +1995,18 @@ static int io_region_port(uint32_t region, uint32_t offset, uint16_t* out_port) 
     m3ApiReturn(0)
 
 m3ApiRawFunction(wasmos_io_region_in8) {
-    WASMOS_IO_REGION_READ((uint32_t)inb(port));
+    WASMOS_IO_REGION_READ(1u, (uint32_t)inb(port));
 }
 
 m3ApiRawFunction(wasmos_io_region_in16) {
-    WASMOS_IO_REGION_READ((uint32_t)inw(port));
+    WASMOS_IO_REGION_READ(2u, (uint32_t)inw(port));
 }
 
 m3ApiRawFunction(wasmos_io_region_in32) {
-    WASMOS_IO_REGION_READ((uint32_t)inl(port));
+    WASMOS_IO_REGION_READ(4u, (uint32_t)inl(port));
 }
 
-#define WASMOS_IO_REGION_WRITE(write_stmt)                                                         \
+#define WASMOS_IO_REGION_WRITE(width, write_stmt)                                                  \
     m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, region) m3ApiGetArg(int32_t, offset)             \
         m3ApiGetArg(int32_t, value);                                                               \
     uint16_t port = 0;                                                                             \
@@ -2014,7 +2014,7 @@ m3ApiRawFunction(wasmos_io_region_in32) {
     if (region < 0 || offset < 0) {                                                                \
         m3ApiReturn(WASMOS_ERR_IO_BAD_REGION);                                                     \
     }                                                                                              \
-    rc = io_region_port((uint32_t)region, (uint32_t)offset, &port);                                \
+    rc = io_region_port((uint32_t)region, (uint32_t)offset, (width), &port);                       \
     if (rc != 0) {                                                                                 \
         m3ApiReturn(rc);                                                                           \
     }                                                                                              \
@@ -2022,15 +2022,15 @@ m3ApiRawFunction(wasmos_io_region_in32) {
     m3ApiReturn(0)
 
 m3ApiRawFunction(wasmos_io_region_out8) {
-    WASMOS_IO_REGION_WRITE(outb(port, (uint8_t)((uint32_t)value & 0xFFu)));
+    WASMOS_IO_REGION_WRITE(1u, outb(port, (uint8_t)((uint32_t)value & 0xFFu)));
 }
 
 m3ApiRawFunction(wasmos_io_region_out16) {
-    WASMOS_IO_REGION_WRITE(outw(port, (uint16_t)((uint32_t)value & 0xFFFFu)));
+    WASMOS_IO_REGION_WRITE(2u, outw(port, (uint16_t)((uint32_t)value & 0xFFFFu)));
 }
 
 m3ApiRawFunction(wasmos_io_region_out32) {
-    WASMOS_IO_REGION_WRITE(outl(port, (uint32_t)value));
+    WASMOS_IO_REGION_WRITE(4u, outl(port, (uint32_t)value));
 }
 
 m3ApiRawFunction(wasmos_io_in8) {

@@ -158,7 +158,16 @@ int capability_set_spawn_profile(uint32_t context_id, uint32_t cap_flags, uint32
     ctx->io_port_range_valid = (cap_flags & (1u << 0)) ? 1u : 0u;
     ctx->io_range_count = 0;
     if (ctx->io_port_range_valid && io_ranges) {
-        for (uint32_t i = 0; i < io_range_count && i < CAPABILITY_IO_RANGE_LIMIT; ++i) {
+        /* Refuse rather than truncate, the same way dma_window_count is validated
+         * below.  Silently dropping the tail would leave the driver's region
+         * INDICES disagreeing with what the kernel recorded: every region past the
+         * limit resolves to WASMOS_ERR_IO_BAD_REGION at run time, far from the
+         * spawn that actually over-declared, and the driver has no way to learn
+         * that its window list was shortened. */
+        if (io_range_count > CAPABILITY_IO_RANGE_LIMIT) {
+            return -1;
+        }
+        for (uint32_t i = 0; i < io_range_count; ++i) {
             if (io_ranges[i].first > io_ranges[i].last) {
                 return -1; /* an inverted window would silently allow nothing */
             }
@@ -210,7 +219,7 @@ int capability_io_port_allowed(uint32_t context_id, uint16_t port) {
 }
 
 int capability_io_region_port(uint32_t context_id, uint32_t region, uint32_t offset,
-                              uint16_t* out_port) {
+                              uint32_t access_width, uint16_t* out_port) {
     const capability_context_state_t* ctx = capability_state_for_context(context_id, 0);
     uint32_t span = 0;
     if (!out_port) {
@@ -222,8 +231,16 @@ int capability_io_region_port(uint32_t context_id, uint32_t region, uint32_t off
     if (region >= ctx->io_range_count) {
         return WASMOS_ERR_IO_BAD_REGION;
     }
+    if (access_width == 0u || access_width > 4u) {
+        return WASMOS_ERR_IO_OUT_OF_WINDOW;
+    }
     span = (uint32_t)ctx->io_ranges[region].last - (uint32_t)ctx->io_ranges[region].first;
-    if (offset > span) {
+    /* The WHOLE access must land inside the window, not just its first byte.  A
+     * 16- or 32-bit access resolved from the last granted offset would otherwise
+     * have inw/inl touch 1 or 3 ports past `last` -- outside the capability, and
+     * quite possibly another device's registers.  Checked as a subtraction on the
+     * span so a large offset cannot overflow the addition. */
+    if (offset > span || (span - offset) < (access_width - 1u)) {
         return WASMOS_ERR_IO_OUT_OF_WINDOW;
     }
     *out_port = (uint16_t)(ctx->io_ranges[region].first + offset);

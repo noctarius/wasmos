@@ -55,6 +55,8 @@ static uint64_t g_initial_total_pages;
  * asking "is this physical address system memory?" need the original map, not
  * what happens to be free right now. */
 static pfa_range_t g_ram_ranges[128];
+/* Set if any usable-RAM extent could not be recorded; see add_ram_range. */
+static uint8_t g_ram_ranges_truncated;
 static uint32_t g_ram_range_count;
 
 extern uint8_t __kernel_start;
@@ -94,7 +96,15 @@ static void add_range(uint64_t base, uint64_t pages) {
  * carved out): this list answers "was this ever system memory?", so it must stay
  * a superset of everything the allocator might hand out. */
 static void add_ram_range(uint64_t base, uint64_t pages) {
-    if (pages == 0 || g_ram_range_count >= (sizeof(g_ram_ranges) / sizeof(g_ram_ranges[0]))) {
+    if (pages == 0) {
+        return;
+    }
+    if (g_ram_range_count >= (sizeof(g_ram_ranges) / sizeof(g_ram_ranges[0]))) {
+        /* Dropping an extent makes this list an INCOMPLETE answer to "was this
+         * ever system memory?", and the gate below is only safe while it is a
+         * superset.  Record the truncation so pfa_range_overlaps_ram can refuse
+         * instead of reporting "not RAM" for memory it simply failed to note. */
+        g_ram_ranges_truncated = 1;
         return;
     }
     if (g_ram_range_count > 0) {
@@ -505,8 +515,11 @@ int pfa_range_overlaps_ram(uint64_t base, uint64_t length) {
     if (end < base) {
         return 1; /* wrapped — treat as overlapping so the caller refuses */
     }
-    /* If the map was never parsed we know nothing, so refuse rather than allow. */
-    if (g_ram_range_count == 0) {
+    /* If the map was never parsed we know nothing, so refuse rather than allow.
+     * A truncated list is the same situation with the same answer: what we hold
+     * is no longer a superset of system RAM, so "no overlap found" would be a
+     * guess, and this gate exists to stop mmio_write32_phys writing into RAM. */
+    if (g_ram_range_count == 0 || g_ram_ranges_truncated) {
         return 1;
     }
     for (uint32_t i = 0; i < g_ram_range_count; ++i) {

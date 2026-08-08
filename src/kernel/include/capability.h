@@ -64,8 +64,10 @@ int capability_io_port_allowed(uint32_t context_id, uint16_t port);
  * This is what lets a driver address its device without ever naming an absolute
  * port: it cannot express an access outside the window it was granted, because
  * it does not supply the base. */
+/* Resolve (region, offset) to a port, requiring that all `access_width` bytes of
+ * the access lie inside the granted window (1, 2 or 4). */
 int capability_io_region_port(uint32_t context_id, uint32_t region, uint32_t offset,
-                              uint16_t* out_port);
+                              uint32_t access_width, uint16_t* out_port);
 int capability_irq_line_allowed(uint32_t context_id, uint32_t irq_line);
 int capability_mmio_allowed(uint32_t context_id);
 int capability_dma_direction_allowed(uint32_t context_id, uint32_t direction_flags);

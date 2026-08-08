@@ -543,7 +543,13 @@ typedef struct fat_op_ctx {
      * reborrow is what gives that server the right to write there; it is taken
      * lazily (only if a whole sector actually comes up) and dropped in
      * fat_op_free, so no request can leak a grant. */
-    int32_t zc_borrow;               /* reborrow handed to the block server, -1 = none */
+    /* Tri-state, and the values are not interchangeable: 0 = no borrow (the
+     * initial value and what fat_op_free restores), > 0 = a live reborrow that
+     * MUST be unborrowed, -1 = a reborrow was attempted and refused, so do not
+     * retry for the remaining sectors of this request.  Teardown keys on > 0;
+     * treating -1 as "none" would be harmless, but treating it as live would
+     * unborrow a handle that was never taken. */
+    int32_t zc_borrow;
     uint32_t io_run_sectors;         /* whole sectors in the current direct run */
     fat_dir_entry_info_t open_entry; /* resolved entry for OPEN */
 

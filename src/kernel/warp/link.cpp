@@ -951,11 +951,12 @@ static uint32_t warp_block_buffer_write(uint32_t phys, uint32_t ptr_off, uint32_
  * declaration order. Failures propagate the specific WASMOS_ERR_IO_* reason
  * rather than collapsing to one value: "no such region" and "offset past the
  * end" are different bugs. */
-static int warp_io_region_port(uint32_t region, uint32_t offset, uint16_t* out_port) {
+static int warp_io_region_port(uint32_t region, uint32_t offset, uint32_t width,
+                               uint16_t* out_port) {
     uint32_t context_id = 0;
     if (warp_current_context_id(&context_id) != 0)
         return WASMOS_ERR_IO_NOT_AUTHORIZED;
-    return capability_io_region_port(context_id, region, offset, out_port);
+    return capability_io_region_port(context_id, region, offset, width, out_port);
 }
 
 /* Reads return the datum through linear memory, not as the result: a 32-bit
@@ -970,7 +971,7 @@ static uint32_t warp_io_region_read(uint32_t region, uint32_t offset, uint32_t o
     int rc = 0;
     if (!raw)
         return (uint32_t)WASMOS_ERR_IO_OUT_OF_WINDOW;
-    rc = warp_io_region_port(region, offset, &port);
+    rc = warp_io_region_port(region, offset, width, &port);
     if (rc != 0)
         return (uint32_t)rc;
     value = (width == 1u) ? (uint32_t)inb(port) : (width == 2u) ? (uint32_t)inw(port) : inl(port);
@@ -992,7 +993,7 @@ static uint32_t warp_io_region_in32(uint32_t region, uint32_t offset, uint32_t o
 static uint32_t warp_io_region_out8(uint32_t region, uint32_t offset, uint32_t value, void* ctx_) {
     (void)ctx_;
     uint16_t port = 0;
-    int rc = warp_io_region_port(region, offset, &port);
+    int rc = warp_io_region_port(region, offset, 1u, &port);
     if (rc != 0)
         return (uint32_t)rc;
     outb(port, (uint8_t)(value & 0xFFu));
@@ -1001,7 +1002,7 @@ static uint32_t warp_io_region_out8(uint32_t region, uint32_t offset, uint32_t v
 static uint32_t warp_io_region_out16(uint32_t region, uint32_t offset, uint32_t value, void* ctx_) {
     (void)ctx_;
     uint16_t port = 0;
-    int rc = warp_io_region_port(region, offset, &port);
+    int rc = warp_io_region_port(region, offset, 2u, &port);
     if (rc != 0)
         return (uint32_t)rc;
     outw(port, (uint16_t)(value & 0xFFFFu));
@@ -1010,7 +1011,7 @@ static uint32_t warp_io_region_out16(uint32_t region, uint32_t offset, uint32_t 
 static uint32_t warp_io_region_out32(uint32_t region, uint32_t offset, uint32_t value, void* ctx_) {
     (void)ctx_;
     uint16_t port = 0;
-    int rc = warp_io_region_port(region, offset, &port);
+    int rc = warp_io_region_port(region, offset, 4u, &port);
     if (rc != 0)
         return (uint32_t)rc;
     outl(port, value);

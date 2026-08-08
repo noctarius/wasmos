@@ -240,18 +240,11 @@ static int test_event_wake_all(void) {
     return 0;
 }
 
-/* -------------------------------------------------------------------------
- * Test 5: sched_default_prio mapping
- * ------------------------------------------------------------------------- */
-static int test_default_prio(void) {
-    CHECK(sched_default_prio(1, 0, 0, 0) == SCHED_PRIO_IDLE, "prio-idle");
-    CHECK(sched_default_prio(0, 1, 0, 0) == SCHED_PRIO_SYSTEM, "prio-system");
-    CHECK(sched_default_prio(0, 0, 1, 0) == SCHED_PRIO_DRIVER, "prio-driver");
-    CHECK(sched_default_prio(0, 0, 0, 1) == SCHED_PRIO_SERVICE, "prio-service");
-    CHECK(sched_default_prio(0, 0, 0, 0) == SCHED_PRIO_WASM, "prio-wasm");
-    TEST_PASS("default-prio");
-    return 0;
-}
+/* Test 5 (sched_default_prio mapping) now lives in the host gate,
+ * tests/unit/test_sched_runqueue.c: it is a pure function of four flags, so it
+ * needs no running kernel, and the host version also covers the first-match-wins
+ * precedence that one-hot inputs cannot observe.  Numbering below is left as-is
+ * so the remaining tests keep the identities they are known by. */
 
 /* -------------------------------------------------------------------------
  * Test 6: sched_list — empty sentinel, add_tail, del, for_each_safe
@@ -471,7 +464,6 @@ int kernel_sched_selftest_run(void) {
     failures += (test_dequeue() != 0) ? 1 : 0;
     failures += (test_event_wake_one() != 0) ? 1 : 0;
     failures += (test_event_wake_all() != 0) ? 1 : 0;
-    failures += (test_default_prio() != 0) ? 1 : 0;
     failures += (test_sched_list() != 0) ? 1 : 0;
     failures += (test_wake_during_block_transition() != 0) ? 1 : 0;
     failures += (test_target_cpu_selection() != 0) ? 1 : 0;

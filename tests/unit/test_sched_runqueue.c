@@ -2198,6 +2198,31 @@ static void test_steal_then_enqueue_round_trip(void) {
     check_invariants("steal then enqueue");
 }
 
+/* ------------------------------------------------------- sched_default_prio */
+
+/* Moved off the boot path: a pure mapping function needs no QEMU, and it was
+ * already linked into this gate. */
+static void test_default_prio_mapping(void) {
+    CHECK(sched_default_prio(1, 0, 0, 0) == SCHED_PRIO_IDLE, "idle");
+    CHECK(sched_default_prio(0, 1, 0, 0) == SCHED_PRIO_SYSTEM, "kernel worker");
+    CHECK(sched_default_prio(0, 0, 1, 0) == SCHED_PRIO_DRIVER, "driver");
+    CHECK(sched_default_prio(0, 0, 0, 1) == SCHED_PRIO_SERVICE, "native service");
+    CHECK(sched_default_prio(0, 0, 0, 0) == SCHED_PRIO_WASM, "none set: plain WASM");
+}
+
+/* The function is a chain of early returns, so overlapping flags resolve
+ * first-match-wins.  One-hot inputs cannot observe that ordering at all -- any
+ * permutation of the branches passes them -- so reordering the chain would have
+ * been silent. */
+static void test_default_prio_precedence_when_flags_overlap(void) {
+    CHECK(sched_default_prio(1, 0, 1, 0) == SCHED_PRIO_IDLE, "idle outranks driver");
+    CHECK(sched_default_prio(0, 1, 1, 0) == SCHED_PRIO_SYSTEM, "kernel worker outranks driver");
+    CHECK(sched_default_prio(0, 0, 1, 1) == SCHED_PRIO_DRIVER, "driver outranks native service");
+    CHECK(sched_default_prio(1, 1, 1, 1) == SCHED_PRIO_IDLE, "idle wins over everything");
+    CHECK(sched_default_prio(0, 1, 0, 1) == SCHED_PRIO_SYSTEM,
+          "kernel worker outranks native service");
+}
+
 /* -------------------------------------------------------------------- main */
 
 int main(void) {
@@ -2332,6 +2357,8 @@ int main(void) {
         {"S11 stolen thread is on no queue", test_stolen_thread_is_on_no_queue},
         {"S12 steals BLOCKED and RUNNING", test_steal_returns_blocked_and_running},
         {"S13 steal then enqueue round trip", test_steal_then_enqueue_round_trip},
+        {"D1 default prio mapping", test_default_prio_mapping},
+        {"D2 default prio precedence", test_default_prio_precedence_when_flags_overlap},
     };
 
     for (unsigned i = 0; i < sizeof(tests) / sizeof(tests[0]); ++i) {

@@ -1837,7 +1837,15 @@ static int process_schedule_once_impl(void) {
     if (!thread) {
         return SCHED_R_PICK;
     }
-    uint8_t picked_idle = (thread == cs->idle) ? 1u : 0u;
+    /* Compare against the field cpu_sched_pick_next actually answered from --
+     * cpu_local()->idle_thread -- not cs->idle.  They are two fields of the same
+     * CPU and are set together at bringup, but only one of them decides what
+     * pick_next returns.  Testing the other means a window where they disagree
+     * (an AP after process_ap_init, before g_cpus[id].sched.idle is set) leaves
+     * this trigger permanently false: the CPU idles while runnable work piles up
+     * elsewhere, with nothing to indicate why.  Pinned by the P5 case in
+     * tests/unit/test_sched_runqueue.c. */
+    uint8_t picked_idle = (thread == cpu_local()->idle_thread) ? 1u : 0u;
     if (picked_idle) {
         thread_t* stolen = cpu_sched_try_steal(cpu_local()->cpu_id);
         if (stolen) {

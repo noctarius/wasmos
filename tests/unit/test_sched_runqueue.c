@@ -1298,6 +1298,116 @@ static void test_demotion_into_a_stale_band_converges(void) {
     check_invariants("demotion into a stale band");
 }
 
+/* ------------------------------------- pick_next: sweep, idle, staleness */
+
+/* P1: the sweep is LAZY, not a band scrub.  It stops at the first live node, so
+ * stale nodes behind that one stay queued.  Pinning this matters because the
+ * opposite reading -- "pick_next cleans the band" -- would make several of the
+ * wedge fixes look redundant. */
+static void test_sweep_stops_at_the_first_live_node(void) {
+    harness_reset();
+    thread_t* lead_stale = mk_thread(0, SCHED_PRIO_WASM, THREAD_STATE_READY);
+    thread_t* live = mk_thread(1, SCHED_PRIO_WASM, THREAD_STATE_READY);
+    thread_t* trail_stale = mk_thread(2, SCHED_PRIO_WASM, THREAD_STATE_READY);
+    cpu_sched_enqueue(&g_cpus[0].sched, lead_stale);
+    cpu_sched_enqueue(&g_cpus[0].sched, live);
+    cpu_sched_enqueue(&g_cpus[0].sched, trail_stale);
+    lead_stale->state = THREAD_STATE_ZOMBIE;
+    trail_stale->state = THREAD_STATE_ZOMBIE;
+
+    CHECK(pick_on(0) == live, "the first live node is returned");
+    CHECK(g_cpus[0].sched.thread_count[SCHED_PRIO_WASM] == 1,
+          "the trailing stale node is still queued -- the sweep is lazy");
+    CHECK(list_head_empty(&lead_stale->sched_node), "the leading stale node was dropped");
+}
+
+/* P2: tid == 0 is treated as stale even when the state says READY -- a reset slot
+ * whose state has not caught up yet. */
+static void test_tid_zero_is_stale_even_when_ready(void) {
+    harness_reset();
+    thread_t* zero = mk_thread(0, SCHED_PRIO_WASM, THREAD_STATE_READY);
+    thread_t* live = mk_thread(1, SCHED_PRIO_WASM, THREAD_STATE_READY);
+    cpu_sched_enqueue(&g_cpus[0].sched, zero);
+    cpu_sched_enqueue(&g_cpus[0].sched, live);
+    zero->tid = 0;
+
+    CHECK(pick_on(0) == live, "a tid==0 node is dropped, not dispatched");
+    CHECK(list_head_empty(&zero->sched_node), "and is unlinked");
+}
+
+/* P3: the sweep drops only UNUSED and ZOMBIE.  BLOCKED, RUNNING and NEW nodes
+ * are handed BACK, which is precisely what produces SCHED_R_NOTREADY upstream --
+ * so this pins why that return code has to exist at all. */
+static void test_sweep_returns_blocked_running_and_new(void) {
+    const thread_state_t passed[] = {THREAD_STATE_BLOCKED, THREAD_STATE_RUNNING, THREAD_STATE_NEW};
+    for (unsigned i = 0; i < sizeof(passed) / sizeof(passed[0]); ++i) {
+        harness_reset();
+        thread_t* t = mk_thread(0, SCHED_PRIO_WASM, THREAD_STATE_READY);
+        cpu_sched_enqueue(&g_cpus[0].sched, t);
+        t->state = passed[i]; /* transitioned while queued */
+        CHECK(pick_on(0) == t, "a non-READY but non-dead node is returned to the dispatcher");
+    }
+}
+
+/* P4: with no idle thread installed, an empty queue yields NULL.  That is the
+ * SCHED_R_PICK case the scheduler loop panics on -- "not even idle was
+ * dispatchable" -- and it is a real invariant violation, not a fallback. */
+static void test_missing_idle_thread_yields_null(void) {
+    harness_reset();
+    g_cpus[0].idle_thread = NULL;
+    g_cpus[0].sched.idle = NULL;
+    CHECK(pick_on(0) == NULL, "no idle installed means no thread at all");
+}
+
+/* P5: pick_next returns cpu_local()->idle_thread, while
+ * process_schedule_once_impl decides whether to work-steal by testing
+ * thread == cs->idle.  If those disagree -- an AP after process_ap_init but
+ * before g_cpus[id].sched.idle is set -- the steal trigger never fires and
+ * runnable work piles up elsewhere.  Regression-pin for the bringup bug
+ * process.c documents. */
+static void test_cs_idle_and_cpu_local_idle_must_agree(void) {
+    harness_reset();
+    g_cpus[0].sched.idle = NULL; /* the AP-bringup window */
+    thread_t* got = pick_on(0);
+    CHECK(got == g_cpus[0].idle_thread, "pick_next answers from cpu_local(), not cs->idle");
+    CHECK(got != g_cpus[0].sched.idle,
+          "so a NULL cs->idle silently disables the work-steal trigger");
+}
+
+/* P6: the idle fallback is the CALLER's, not the queue's.  Picking on a remote
+ * queue therefore returns the local idle thread -- non-obvious, and the
+ * in-kernel selftest depends on it. */
+static void test_pick_on_a_remote_queue_returns_local_idle(void) {
+    harness_reset();
+    act_as(0);
+    cpu_sched_t* remote = &g_cpus[3].sched;
+    ksync_spinlock_lock(&remote->lock);
+    thread_t* got = cpu_sched_pick_next(remote);
+    ksync_spinlock_unlock(&remote->lock);
+    CHECK(got == g_cpus[0].idle_thread, "the caller's idle is returned, not the queue owner's");
+}
+
+/* P7: every band stale at once.  The convergence loop must drain them all, clear
+ * every bit and counter, and terminate. */
+static void test_all_bands_stale_converges_to_idle(void) {
+    harness_reset();
+    for (int p = 0; p < SCHED_PRIO_MAX; ++p) {
+        thread_t* t = mk_thread(p, (sched_prio_t)p, THREAD_STATE_READY);
+        cpu_sched_enqueue(&g_cpus[0].sched, t);
+        t->state = THREAD_STATE_ZOMBIE;
+    }
+    CHECK(pick_on(0) == g_cpus[0].idle_thread, "converges to idle rather than wedging");
+    CHECK(g_cpus[0].sched.ready_bitmap == 0u, "every band bit cleared");
+    int counters_clear = 1;
+    for (int p = 0; p < SCHED_PRIO_MAX; ++p) {
+        if (g_cpus[0].sched.thread_count[p] != 0u) {
+            counters_clear = 0;
+        }
+    }
+    CHECK(counters_clear, "every counter drained");
+    check_invariants("all bands stale");
+}
+
 /* -------------------------------------------------------------------- main */
 
 int main(void) {
@@ -1372,6 +1482,13 @@ int main(void) {
         {"A7 streak wrap only delays fairness", test_streak_wrap_only_delays_fairness},
         {"A8 sustained fairness ratio", test_sustained_fairness_ratio},
         {"A9 demotion into a stale band", test_demotion_into_a_stale_band_converges},
+        {"P1 sweep stops at first live node", test_sweep_stops_at_the_first_live_node},
+        {"P2 tid==0 is stale even when READY", test_tid_zero_is_stale_even_when_ready},
+        {"P3 BLOCKED/RUNNING/NEW are returned", test_sweep_returns_blocked_running_and_new},
+        {"P4 missing idle yields NULL", test_missing_idle_thread_yields_null},
+        {"P5 cs->idle vs cpu_local idle", test_cs_idle_and_cpu_local_idle_must_agree},
+        {"P6 remote queue returns local idle", test_pick_on_a_remote_queue_returns_local_idle},
+        {"P7 all bands stale converges", test_all_bands_stale_converges_to_idle},
     };
 
     for (unsigned i = 0; i < sizeof(tests) / sizeof(tests[0]); ++i) {

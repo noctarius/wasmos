@@ -83,7 +83,9 @@ int thread_wake_if_blocked(uint32_t tid) {
     return 0;
 }
 
-static void act_as(uint32_t cpu) { g_host_cpu_local = &g_cpus[cpu]; }
+static void act_as(uint32_t cpu) {
+    g_host_cpu_local = &g_cpus[cpu];
+}
 
 static int saw(const char* needle) {
     for (int i = 0; i < g_log_count; ++i) {
@@ -94,7 +96,9 @@ static int saw(const char* needle) {
     return 0;
 }
 
-static void log_reset(void) { g_log_count = 0; }
+static void log_reset(void) {
+    g_log_count = 0;
+}
 
 #define CHECK(cond, msg)                                                                           \
     do {                                                                                           \
@@ -127,6 +131,11 @@ static void harness_reset(void) {
     for (uint32_t i = 0; i < WASMOS_MAX_CPUS; ++i) {
         cpu_sched_init(&g_cpus[i].sched);
         g_cpus[i].cpu_id = i;
+        /* Mark every CPU online.  cpu_sched_online_mask() counts only CPUs with
+         * started != 0, and affinity treats "mask names no online CPU" as no
+         * constraint -- so leaving this clear makes every affinity test pass
+         * vacuously through the fallback rather than exercising the rule. */
+        g_cpus[i].started = 1;
     }
     g_cpu_count = 4;
     /* Per-CPU idle threads, as the real bringup installs them.  They live
@@ -467,6 +476,136 @@ static void test_steal_skips_sticky_and_idle(void) {
     check_invariants("sticky preserved");
 }
 
+/* --------------------------------------------------------- cpu_affinity */
+
+/* Affinity has three enforcement points and they must agree.  Placement was the
+ * only one that honoured it: enqueue parked threads on the CALLING CPU and steal
+ * moved them anywhere, so a mask set at spawn was silently overridden the first
+ * time the thread blocked or the first time an idle CPU went looking for work. */
+
+static void test_affinity_governs_placement(void) {
+    harness_reset();
+    thread_t* t = mk_thread(0, SCHED_PRIO_WASM, THREAD_STATE_READY);
+    t->cpu_affinity = 1u << 2;
+    CHECK(cpu_sched_pick_target_cpu_for_thread(t, 0) == 2, "placement picks an allowed CPU");
+}
+
+static void test_affinity_redirects_a_forbidden_enqueue(void) {
+    harness_reset();
+    thread_t* t = mk_thread(0, SCHED_PRIO_WASM, THREAD_STATE_READY);
+    t->cpu_affinity = 1u << 3;
+
+    act_as(0);
+    cpu_sched_enqueue(&g_cpus[0].sched, t); /* the waker's CPU, which is forbidden */
+    check_invariants("redirected enqueue");
+    CHECK(t->rq == &g_cpus[3].sched, "enqueue redirected to an allowed CPU");
+    CHECK(g_cpus[0].sched.thread_count[SCHED_PRIO_WASM] == 0, "forbidden queue untouched");
+    CHECK(t->on_rq == 1, "and the thread is still queued, not dropped");
+}
+
+static void test_affinity_blocks_a_steal(void) {
+    harness_reset();
+    thread_t* pinned = mk_thread(0, SCHED_PRIO_WASM, THREAD_STATE_READY);
+    pinned->cpu_affinity = 1u << 1;
+    act_as(1);
+    cpu_sched_enqueue(&g_cpus[1].sched, pinned);
+
+    act_as(0);
+    CHECK(cpu_sched_try_steal(0) == NULL, "CPU0 cannot steal a thread pinned to CPU1");
+    CHECK(pinned->on_rq == 1, "the pinned thread stays queued where it belongs");
+    check_invariants("steal blocked by affinity");
+    /* CPU1 itself may still take it. */
+    CHECK(pick_on(1) == pinned, "its own CPU still dispatches it");
+}
+
+static void test_affinity_naming_no_online_cpu_is_not_a_constraint(void) {
+    harness_reset();
+    thread_t* t = mk_thread(0, SCHED_PRIO_WASM, THREAD_STATE_READY);
+    t->cpu_affinity = 1u << 15; /* nothing online matches */
+    act_as(0);
+    cpu_sched_enqueue(&g_cpus[0].sched, t);
+    CHECK(t->on_rq == 1, "an unsatisfiable mask must not strand the thread");
+    check_invariants("unsatisfiable affinity");
+}
+
+/* ------------------------------------------------------------- priority */
+
+static void test_antistarvation_demotes_after_streak(void) {
+    harness_reset();
+    /* A high band with more work than the streak allows, plus a waiting low band. */
+    for (int i = 0; i < SCHED_ANTISTARVATION_STREAK + 2; ++i) {
+        cpu_sched_enqueue(&g_cpus[0].sched, mk_thread(i, SCHED_PRIO_DRIVER, THREAD_STATE_READY));
+    }
+    thread_t* low = mk_thread(20, SCHED_PRIO_BACKGROUND, THREAD_STATE_READY);
+    cpu_sched_enqueue(&g_cpus[0].sched, low);
+
+    int saw_low = 0;
+    for (int i = 0; i < SCHED_ANTISTARVATION_STREAK + 2 && !saw_low; ++i) {
+        if (pick_on(0) == low) {
+            saw_low = 1;
+        }
+    }
+    CHECK(saw_low, "a lower band gets a slot instead of starving");
+    check_invariants("anti-starvation");
+}
+
+/* The streak describes what THIS CPU dispatched.  Held globally it advanced N
+ * times too fast on an N-CPU machine and let one CPU decide another's band --
+ * besides being a plain byte written from every CPU under different locks. */
+static void test_antistarvation_state_is_per_cpu(void) {
+    harness_reset();
+    for (int i = 0; i < SCHED_ANTISTARVATION_STREAK + 2; ++i) {
+        cpu_sched_enqueue(&g_cpus[0].sched, mk_thread(i, SCHED_PRIO_DRIVER, THREAD_STATE_READY));
+        pick_on(0);
+    }
+    thread_t* hi = mk_thread(20, SCHED_PRIO_DRIVER, THREAD_STATE_READY);
+    thread_t* lo = mk_thread(21, SCHED_PRIO_BACKGROUND, THREAD_STATE_READY);
+    act_as(1);
+    cpu_sched_enqueue(&g_cpus[1].sched, hi);
+    cpu_sched_enqueue(&g_cpus[1].sched, lo);
+    CHECK(pick_on(1) == hi, "CPU1's first dispatch is unaffected by CPU0's streak");
+    CHECK(g_cpus[0].sched.high_prio_streak != g_cpus[1].sched.high_prio_streak ||
+              g_cpus[1].sched.high_prio_streak == 0,
+          "streaks are tracked separately");
+}
+
+/* --------------------------------------------- more run-queue regressions */
+
+/* sched_thread_init assigned the new priority BEFORE unlinking, so the unlink
+ * was accounted against the new band while the node sat in the old one.  The old
+ * band kept its ready bit over an empty list, which cpu_sched_highest_prio then
+ * selected forever -- the CPU returned idle on every dispatch with runnable work
+ * outstanding.  Same wedge shape as the storm. */
+static void test_reinit_at_a_new_priority_drains_the_old_band(void) {
+    harness_reset();
+    thread_t* t = mk_thread(0, SCHED_PRIO_DRIVER, THREAD_STATE_READY);
+    cpu_sched_enqueue(&g_cpus[0].sched, t);
+    sched_thread_init(t, SCHED_PRIO_BACKGROUND); /* recycled slot, different band */
+
+    cpu_sched_t* cs = &g_cpus[0].sched;
+    CHECK((cs->ready_bitmap & (1u << SCHED_PRIO_DRIVER)) == 0, "old band's ready bit cleared");
+    CHECK(cs->thread_count[SCHED_PRIO_DRIVER] == 0, "old band's counter drained");
+    check_invariants("reinit at new prio");
+
+    thread_t* other = mk_thread(1, SCHED_PRIO_WASM, THREAD_STATE_READY);
+    cpu_sched_enqueue(&g_cpus[0].sched, other);
+    CHECK(pick_on(0) == other, "picker is not wedged on a phantom band");
+}
+
+/* A band holding only stale nodes must not send the CPU to idle while a lower
+ * band has runnable work. */
+static void test_stale_band_does_not_mask_lower_bands(void) {
+    harness_reset();
+    thread_t* dead = mk_thread(0, SCHED_PRIO_DRIVER, THREAD_STATE_READY);
+    thread_t* live = mk_thread(1, SCHED_PRIO_WASM, THREAD_STATE_READY);
+    cpu_sched_enqueue(&g_cpus[0].sched, dead);
+    cpu_sched_enqueue(&g_cpus[0].sched, live);
+    dead->state = THREAD_STATE_ZOMBIE; /* reaped while queued */
+
+    CHECK(pick_on(0) == live, "lower band is dispatched, not idle");
+    check_invariants("stale band swept");
+}
+
 /* -------------------------------------------------------------------- main */
 
 int main(void) {
@@ -490,6 +629,15 @@ int main(void) {
         {"reject: NULL inputs", test_null_inputs_are_safe},
         {"steal takes work", test_steal_takes_work_and_respects_exclusions},
         {"steal skips sticky", test_steal_skips_sticky_and_idle},
+        {"affinity governs placement", test_affinity_governs_placement},
+        {"affinity redirects a forbidden enqueue", test_affinity_redirects_a_forbidden_enqueue},
+        {"affinity blocks a steal", test_affinity_blocks_a_steal},
+        {"unsatisfiable affinity is not a constraint",
+         test_affinity_naming_no_online_cpu_is_not_a_constraint},
+        {"anti-starvation demotes after streak", test_antistarvation_demotes_after_streak},
+        {"anti-starvation state is per-CPU", test_antistarvation_state_is_per_cpu},
+        {"regression: reinit at a new priority", test_reinit_at_a_new_priority_drains_the_old_band},
+        {"regression: stale band masks lower", test_stale_band_does_not_mask_lower_bands},
     };
 
     for (unsigned i = 0; i < sizeof(tests) / sizeof(tests[0]); ++i) {

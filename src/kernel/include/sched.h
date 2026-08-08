@@ -21,6 +21,13 @@ enum {
 #include "sync/spinlock.h"
 #include "sched_list.h"
 
+/* Anti-starvation: after this many consecutive dispatches from a given priority
+ * band (or higher), the scheduler yields one slot to the next occupied lower
+ * band, so high-priority workers cannot permanently starve the services they
+ * cooperate with.  Declared here rather than in sched_thread.c so tests assert
+ * against the same constant the policy uses. */
+#define SCHED_ANTISTARVATION_STREAK 4
+
 #define SCHED_PRIO_MAX 7  /* number of priority levels */
 #define SCHED_PRIO_BITS 7 /* bitmask width; one bit per level */
 
@@ -44,6 +51,14 @@ typedef struct cpu_sched_s {
     struct thread* running; /* currently executing thread */
     struct thread* idle;    /* this CPU's idle thread */
     uint32_t nr_threads;    /* total threads tracked */
+    /* Anti-starvation bookkeeping.  PER-CPU: it describes what THIS CPU has been
+     * dispatching, and the policy only makes sense that way.  Held globally it
+     * both raced (plain bytes written by every CPU under different locks) and
+     * advanced N times too fast on an N-CPU machine, so the demotion fired far
+     * more often than SCHED_ANTISTARVATION_STREAK implies -- and one CPU's
+     * dispatches decided another's band. */
+    uint8_t last_dispatched_prio;
+    uint8_t high_prio_streak;
 } cpu_sched_t;
 
 /* Initialise the per-CPU scheduler state (called once per CPU at boot). */

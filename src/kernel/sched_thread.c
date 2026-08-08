@@ -21,9 +21,6 @@
  * occupied lower-priority band.  This prevents high-priority workers from
  * completely starving lower-priority WASM services they interact with.
  */
-#define SCHED_ANTISTARVATION_STREAK 4
-static uint8_t g_last_dispatched_prio = SCHED_PRIO_IDLE;
-static uint8_t g_high_prio_streak = 0;
 
 /* ffs_table[bitmap] = index of lowest set bit (highest priority), or 0xFF.
  * Covers all 128 valid 7-bit bitmap values. */
@@ -57,6 +54,31 @@ static inline uint32_t cpu_sched_online_mask(void) {
     return mask;
 }
 
+/* Index of the CPU owning `cs`.  Needed because enqueue is handed a queue, not
+ * a CPU id, but affinity is expressed as a CPU mask. */
+static uint32_t cpu_sched_cpu_index(const cpu_sched_t* cs) {
+    for (uint32_t i = 0; i < WASMOS_MAX_CPUS; ++i) {
+        if (&g_cpus[i].sched == cs) {
+            return i;
+        }
+    }
+    return 0;
+}
+
+/* Is `t` allowed to run on `cpu_id`?  An empty intersection is treated as "no
+ * constraint" rather than "never runnable", matching
+ * cpu_sched_pick_target_cpu_for_thread: a mask naming only offline CPUs must not
+ * strand the thread forever. */
+static int cpu_sched_affinity_allows(const thread_t* t, uint32_t cpu_id) {
+    if (!t || cpu_id >= WASMOS_MAX_CPUS) {
+        return 1;
+    }
+    if ((t->cpu_affinity & cpu_sched_online_mask()) == 0u) {
+        return 1;
+    }
+    return (t->cpu_affinity & (1u << cpu_id)) != 0u;
+}
+
 static uint32_t cpu_sched_load_on(uint32_t cpu_id) {
     cpu_sched_t* cs = &g_cpus[cpu_id].sched;
     uint32_t load = 0;
@@ -81,6 +103,8 @@ void cpu_sched_init(cpu_sched_t* cs) {
     cs->running = 0;
     cs->idle = 0;
     cs->nr_threads = 0;
+    cs->last_dispatched_prio = SCHED_PRIO_IDLE;
+    cs->high_prio_streak = 0;
 }
 
 /* Mark a thread READY from a LIVE state (RUNNING/BLOCKED) via the thread state
@@ -219,6 +243,16 @@ void cpu_sched_enqueue(cpu_sched_t* cs, thread_t* t) {
      * instructions with interrupts disabled, so no reap can observe or preempt
      * it on this CPU, and a remote one only ever spins briefly (see
      * cpu_sched_remove_thread). */
+    /* Affinity is enforced HERE because this is the single funnel every enqueue
+     * passes through.  Both sched_wake_thread and the PROCESS_RUN_BLOCKED
+     * completion path call cpu_sched_enqueue(cpu_sched(), t) -- i.e. the CALLING
+     * CPU's queue -- which would otherwise park a thread on a CPU its mask
+     * forbids, silently overriding the placement that
+     * cpu_sched_pick_target_cpu_for_thread computed at spawn.  Redirect rather
+     * than refuse: dropping the enqueue would strand a runnable thread. */
+    if (!cpu_sched_affinity_allows(t, cpu_sched_cpu_index(cs))) {
+        cs = &g_cpus[cpu_sched_pick_target_cpu_for_thread(t, 1)].sched;
+    }
     ksync_spinlock_lock(&cs->lock);
     if (__atomic_exchange_n(&t->on_rq, 1, __ATOMIC_ACQ_REL)) {
         ksync_spinlock_unlock(&cs->lock);
@@ -341,8 +375,8 @@ thread_t* cpu_sched_pick_next(cpu_sched_t* cs) {
     /* Caller holds cs->lock. */
     int prio = cpu_sched_highest_prio(cs);
     if (prio == 0xFF) {
-        g_high_prio_streak = 0;
-        g_last_dispatched_prio = SCHED_PRIO_IDLE;
+        cs->high_prio_streak = 0;
+        cs->last_dispatched_prio = SCHED_PRIO_IDLE;
         /* Return the per-CPU idle thread.  Each CPU has its own, so no two
          * CPUs ever dispatch the same idle thread simultaneously. */
         return cpu_local()->idle_thread;
@@ -352,7 +386,8 @@ thread_t* cpu_sched_pick_next(cpu_sched_t* cs) {
      * threads at priority <= prio and a lower-priority band also has work,
      * yield one slot to that band.  This keeps higher-priority workers from
      * permanently starving the WASM services they cooperate with. */
-    if ((int)g_last_dispatched_prio <= prio && g_high_prio_streak >= SCHED_ANTISTARVATION_STREAK) {
+    if ((int)cs->last_dispatched_prio <= prio &&
+        cs->high_prio_streak >= SCHED_ANTISTARVATION_STREAK) {
         /* Find the next lower occupied priority. */
         int lower_prio = -1;
         for (int p = prio + 1; p < SCHED_PRIO_MAX; p++) {
@@ -363,16 +398,16 @@ thread_t* cpu_sched_pick_next(cpu_sched_t* cs) {
         }
         if (lower_prio >= 0) {
             prio = lower_prio;
-            g_high_prio_streak = 0;
+            cs->high_prio_streak = 0;
         } else {
-            g_high_prio_streak++;
+            cs->high_prio_streak++;
         }
-    } else if ((int)g_last_dispatched_prio <= prio) {
-        g_high_prio_streak++;
+    } else if ((int)cs->last_dispatched_prio <= prio) {
+        cs->high_prio_streak++;
     } else {
-        g_high_prio_streak = 0;
+        cs->high_prio_streak = 0;
     }
-    g_last_dispatched_prio = (uint8_t)prio;
+    cs->last_dispatched_prio = (uint8_t)prio;
 
     /* Lazy per-CPU sweep: walk this band and DROP any node whose thread is no
      * longer READY (reaped -> UNUSED, or tombstoned -> ZOMBIE).  A thread is
@@ -382,15 +417,26 @@ thread_t* cpu_sched_pick_next(cpu_sched_t* cs) {
      * dispatcher — no cross-CPU removal, no reaper touching our queue.  Returns
      * the first genuinely-READY thread, or idle if the band held only stale
      * nodes. */
-    list_head_t *pos, *tmp;
-    list_for_each_safe(pos, tmp, &cs->ready_list[prio]) {
-        thread_t* t = list_entry(pos, thread_t, sched_node);
-        cpu_sched_unlink_locked(cs, t, (uint8_t)prio);
-        uint32_t st = __atomic_load_n((uint32_t*)&t->state, __ATOMIC_ACQUIRE);
-        if (t->tid == 0 || st == THREAD_STATE_UNUSED || st == THREAD_STATE_ZOMBIE) {
-            continue;
+    /* Sweep in priority order from `prio` down.  A band that turns out to hold
+     * only stale nodes must NOT send us to idle while a lower band has runnable
+     * work: the sweep drops those nodes and clears the band's bit, so recomputing
+     * the highest occupied band converges and terminates. */
+    for (;;) {
+        list_head_t *pos, *tmp;
+        list_for_each_safe(pos, tmp, &cs->ready_list[prio]) {
+            thread_t* t = list_entry(pos, thread_t, sched_node);
+            cpu_sched_unlink_locked(cs, t, (uint8_t)prio);
+            uint32_t st = __atomic_load_n((uint32_t*)&t->state, __ATOMIC_ACQUIRE);
+            if (t->tid == 0 || st == THREAD_STATE_UNUSED || st == THREAD_STATE_ZOMBIE) {
+                continue;
+            }
+            return t;
         }
-        return t;
+        int next = cpu_sched_highest_prio(cs);
+        if (next == 0xFF || next == prio) {
+            break; /* nothing left anywhere, or the band failed to drain */
+        }
+        prio = next;
     }
     return cpu_local()->idle_thread;
 }
@@ -449,9 +495,15 @@ void sched_wake_thread(thread_t* t) {
 void sched_thread_init(thread_t* t, sched_prio_t prio) {
     t->ctx_canary_pre = PROCESS_CTX_CANARY_VALUE;
     t->ctx_canary_post = PROCESS_CTX_CANARY_VALUE;
-    t->sched_prio = (uint8_t)prio;
-    t->cpu_affinity = ~0u;
-    t->last_cpu = 0;
+    /* The new priority is adopted AFTER the unlink below, not before.
+     * cpu_sched_remove_thread accounts the unlink against t->sched_prio, so
+     * overwriting it first drains the wrong band: the node leaves the old list
+     * (list_head_del works regardless) while the new band's counter and ready
+     * bit are adjusted instead.  The old band is then left with its bit set over
+     * an empty list, which cpu_sched_highest_prio keeps selecting forever while
+     * the sweep finds nothing -- the CPU returns idle on every dispatch with
+     * runnable work outstanding in lower bands.  Same shape as the storm,
+     * reached through the path that exists to prevent corruption. */
     /* A slot handed back by the allocator must not still be linked into a ready
      * queue: re-initialising the node here would self-link it while that queue
      * still points at it, splicing the list through a node two owners now
@@ -475,9 +527,13 @@ void sched_thread_init(thread_t* t, sched_prio_t prio) {
                 (unsigned)(!list_head_empty(&t->sched_node)),
                 (unsigned long long)(uintptr_t)__builtin_return_address(0), (unsigned)(in + 1u));
         }
-        /* Unlink properly instead of orphaning the node under the queue. */
+        /* Unlink properly instead of orphaning the node under the queue.  Still
+         * carrying the OLD priority, so the correct band is drained. */
         cpu_sched_remove_thread(t);
     }
+    t->sched_prio = (uint8_t)prio;
+    t->cpu_affinity = ~0u;
+    t->last_cpu = 0;
     t->on_rq = 0;
     t->rq = 0;
     list_head_init(&t->sched_node);
@@ -571,7 +627,7 @@ void sched_spawn_thread(struct thread* t) {
  * run was a voluntary yield — likely a poll/yield loop that should stay on its
  * home CPU rather than be re-run by every idle CPU).  Caller holds cs->lock.
  * Unlike cpu_sched_pick_next this does not touch the anti-starvation globals. */
-static thread_t* cpu_sched_steal_pick(cpu_sched_t* cs) {
+static thread_t* cpu_sched_steal_pick(cpu_sched_t* cs, uint32_t to_cpu) {
     for (int prio = 0; prio < SCHED_PRIO_MAX; prio++) {
         if (!(cs->ready_bitmap & (1u << prio))) {
             continue;
@@ -586,6 +642,12 @@ static thread_t* cpu_sched_steal_pick(cpu_sched_t* cs) {
                 continue;
             }
             if (t == cs->idle || t->sched_sticky) {
+                continue;
+            }
+            /* Stealing moves the thread to another CPU, so it must be one the
+             * thread is allowed to run on.  Without this, work stealing quietly
+             * overrides every affinity decision the placement path made. */
+            if (!cpu_sched_affinity_allows(t, to_cpu)) {
                 continue;
             }
             cpu_sched_unlink_locked(cs, t, (uint8_t)prio);
@@ -612,7 +674,7 @@ struct thread* cpu_sched_try_steal(uint32_t my_cpu_id) {
         }
         struct thread* t = NULL;
         if (remote->ready_bitmap) {
-            t = cpu_sched_steal_pick(remote);
+            t = cpu_sched_steal_pick(remote, my_cpu_id);
         }
         /* ksync_spinlock_try_lock does not call preempt_disable/spinlock_irq_save,
          * so we must release with the matching no-IRQ variant. */

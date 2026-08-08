@@ -606,6 +606,110 @@ static void test_stale_band_does_not_mask_lower_bands(void) {
     check_invariants("stale band swept");
 }
 
+/* ------------------------------------------------- band / bitmap coverage */
+
+/* B1: exhaustive band selection.  ffs_table is a static lookup, so the only way
+ * to cover it end-to-end is to drive every reachable bitmap value: all 127
+ * non-empty subsets of the seven bands, each asserting the lowest-indexed
+ * (highest-priority) occupied band wins.  One pick per subset, so the
+ * anti-starvation streak never engages and cannot skew the expectation. */
+static void test_exhaustive_band_selection(void) {
+    int wrong = 0;
+    unsigned first_bad = 0;
+    for (unsigned mask = 1; mask < 128u; ++mask) {
+        harness_reset();
+        thread_t* lowest = NULL;
+        for (int p = 0; p < SCHED_PRIO_MAX; ++p) {
+            if (!(mask & (1u << p))) {
+                continue;
+            }
+            thread_t* t = mk_thread(p, (sched_prio_t)p, THREAD_STATE_READY);
+            cpu_sched_enqueue(&g_cpus[0].sched, t);
+            if (!lowest) {
+                lowest = t; /* p ascends, so the first inserted is the lowest band */
+            }
+        }
+        if (g_cpus[0].sched.ready_bitmap != (uint8_t)mask) {
+            wrong++;
+            if (!first_bad) {
+                first_bad = mask;
+            }
+            continue;
+        }
+        if (pick_on(0) != lowest) {
+            wrong++;
+            if (!first_bad) {
+                first_bad = mask;
+            }
+        }
+    }
+    if (wrong) {
+        printf("  (first failing subset: 0x%02x, %d of 127 wrong)\n", first_bad, wrong);
+    }
+    CHECK(wrong == 0, "every one of the 127 band subsets selects its highest priority");
+}
+
+/* B2: the bitmap is exactly the occupied set, by value -- not merely non-zero. */
+static void test_bitmap_equals_the_occupied_set(void) {
+    harness_reset();
+    thread_t* b2 = mk_thread(0, (sched_prio_t)2, THREAD_STATE_READY);
+    thread_t* b4 = mk_thread(1, (sched_prio_t)4, THREAD_STATE_READY);
+    thread_t* b6 = mk_thread(2, (sched_prio_t)6, THREAD_STATE_READY);
+    cpu_sched_enqueue(&g_cpus[0].sched, b2);
+    cpu_sched_enqueue(&g_cpus[0].sched, b4);
+    cpu_sched_enqueue(&g_cpus[0].sched, b6);
+    CHECK(g_cpus[0].sched.ready_bitmap == 0x54u, "bands {2,4,6} give 0b1010100");
+
+    cpu_sched_remove_thread(b4); /* drain the middle band only */
+    CHECK(g_cpus[0].sched.ready_bitmap == 0x44u, "draining band 4 gives 0b1000100");
+    check_invariants("bitmap value");
+}
+
+/* B3: bit 7 is not a band.  cpu_sched_highest_prio masks with 0x7F, so a set
+ * bit 7 must be ignored rather than indexing ffs_table[128] -- a one-past-the-end
+ * read.  This pins the mask so a refactor cannot quietly drop it. */
+static void test_bit7_never_indexes_the_table(void) {
+    harness_reset();
+    g_cpus[0].sched.ready_bitmap = 0x80u; /* all lists empty */
+    CHECK(pick_on(0) == g_cpus[0].idle_thread, "bit 7 is ignored, not dispatched");
+}
+
+/* B4: a PHANTOM bit -- a band marked occupied whose list is already empty -- is a
+ * different entry into the wedge than a stale node: there is nothing to sweep, so
+ * a picker that only advances by draining loops back to the same band forever. */
+static void test_phantom_bit_does_not_wedge_the_picker(void) {
+    harness_reset();
+    thread_t* live = mk_thread(0, SCHED_PRIO_WASM, THREAD_STATE_READY);
+    cpu_sched_enqueue(&g_cpus[0].sched, live);
+    g_cpus[0].sched.ready_bitmap |= (uint8_t)(1u << SCHED_PRIO_DRIVER); /* empty band */
+
+    CHECK(pick_on(0) == live, "runnable work below a phantom bit is dispatched");
+    CHECK((g_cpus[0].sched.ready_bitmap & (1u << SCHED_PRIO_DRIVER)) == 0,
+          "the phantom bit is cleared, not left to re-wedge");
+    check_invariants("phantom bit cleared");
+}
+
+/* B5: draining everything leaves no residue in either the bitmap or the counters. */
+static void test_draining_every_band_leaves_no_residue(void) {
+    harness_reset();
+    for (int p = 0; p < SCHED_PRIO_MAX; ++p) {
+        cpu_sched_enqueue(&g_cpus[0].sched, mk_thread(p, (sched_prio_t)p, THREAD_STATE_READY));
+    }
+    for (int i = 0; i < SCHED_PRIO_MAX; ++i) {
+        CHECK(pick_on(0) != g_cpus[0].idle_thread, "each of the 7 picks dispatches real work");
+    }
+    CHECK(g_cpus[0].sched.ready_bitmap == 0u, "bitmap fully cleared");
+    int counters_clear = 1;
+    for (int p = 0; p < SCHED_PRIO_MAX; ++p) {
+        if (g_cpus[0].sched.thread_count[p] != 0u) {
+            counters_clear = 0;
+        }
+    }
+    CHECK(counters_clear, "every band counter back to zero");
+    CHECK(pick_on(0) == g_cpus[0].idle_thread, "and the CPU then idles");
+    check_invariants("fully drained");
+}
+
 /* -------------------------------------------------------------------- main */
 
 int main(void) {
@@ -638,6 +742,11 @@ int main(void) {
         {"anti-starvation state is per-CPU", test_antistarvation_state_is_per_cpu},
         {"regression: reinit at a new priority", test_reinit_at_a_new_priority_drains_the_old_band},
         {"regression: stale band masks lower", test_stale_band_does_not_mask_lower_bands},
+        {"B1 exhaustive band selection", test_exhaustive_band_selection},
+        {"B2 bitmap equals occupied set", test_bitmap_equals_the_occupied_set},
+        {"B3 bit 7 never indexes the table", test_bit7_never_indexes_the_table},
+        {"B4 phantom bit does not wedge", test_phantom_bit_does_not_wedge_the_picker},
+        {"B5 draining leaves no residue", test_draining_every_band_leaves_no_residue},
     };
 
     for (unsigned i = 0; i < sizeof(tests) / sizeof(tests[0]); ++i) {

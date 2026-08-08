@@ -422,6 +422,15 @@ thread_t* cpu_sched_pick_next(cpu_sched_t* cs) {
      * work: the sweep drops those nodes and clears the band's bit, so recomputing
      * the highest occupied band converges and terminates. */
     for (;;) {
+        /* A PHANTOM bit -- band marked occupied over an already-empty list -- has
+         * nothing for the sweep to drain, so a picker that only advances by
+         * draining would select it again on the next pass and forever after,
+         * returning idle while lower bands hold runnable work.  Clear it here so
+         * the bit cannot outlive its list however it got out of step. */
+        if (list_head_empty(&cs->ready_list[prio])) {
+            cs->ready_bitmap &= (uint8_t)(~(1u << prio));
+            cs->thread_count[prio] = 0;
+        }
         list_head_t *pos, *tmp;
         list_for_each_safe(pos, tmp, &cs->ready_list[prio]) {
             thread_t* t = list_entry(pos, thread_t, sched_node);

@@ -1998,6 +1998,206 @@ static void test_affinity_survives_wake_block_round_trips(void) {
     check_invariants("affinity across round trips");
 }
 
+/* --------------------------------------------------------- work stealing */
+
+/* Link a thread into a band WITHOUT going through cpu_sched_enqueue, for cases
+ * that need a state the enqueue guards now refuse to produce. */
+static void force_link(uint32_t cpu, thread_t* t, int prio) {
+    cpu_sched_t* cs = &g_cpus[cpu].sched;
+    t->rq = cs;
+    t->rq_prio = (uint8_t)prio;
+    __atomic_store_n(&t->on_rq, 1, __ATOMIC_RELEASE);
+    list_head_add_tail(&cs->ready_list[prio], &t->sched_node);
+    cs->thread_count[prio]++;
+    cs->ready_bitmap |= (uint8_t)(1u << prio);
+}
+
+static void test_steal_takes_the_highest_priority_stealable(void) {
+    harness_reset();
+    thread_t* low = mk_thread(0, SCHED_PRIO_WASM, THREAD_STATE_READY);
+    thread_t* high = mk_thread(1, SCHED_PRIO_DRIVER, THREAD_STATE_READY);
+    act_as(1);
+    cpu_sched_enqueue(&g_cpus[1].sched, low);
+    cpu_sched_enqueue(&g_cpus[1].sched, high);
+    act_as(0);
+    CHECK(cpu_sched_try_steal(0) == high, "the highest band is taken, not the first enqueued");
+}
+
+/* A sticky thread at the HEAD must not shadow the rest of its band.  The
+ * existing test has only one sticky thread, so it cannot tell "skips sticky"
+ * from "gives up on the band". */
+static void test_sticky_at_the_head_does_not_block_the_band(void) {
+    harness_reset();
+    thread_t* sticky = mk_thread(0, SCHED_PRIO_WASM, THREAD_STATE_READY);
+    thread_t* normal = mk_thread(1, SCHED_PRIO_WASM, THREAD_STATE_READY);
+    act_as(1);
+    cpu_sched_enqueue(&g_cpus[1].sched, sticky);
+    cpu_sched_enqueue(&g_cpus[1].sched, normal);
+    sticky->sched_sticky = 1;
+
+    act_as(0);
+    CHECK(cpu_sched_try_steal(0) == normal, "the steal scan looks past a sticky head");
+    CHECK(sticky->on_rq == 1, "and the sticky thread stays where it is");
+}
+
+/* The steal scan sweeps stale nodes even on a scan that steals nothing. */
+static void test_steal_scan_sweeps_stale_nodes(void) {
+    harness_reset();
+    thread_t* dead = mk_thread(0, SCHED_PRIO_WASM, THREAD_STATE_READY);
+    thread_t* sticky = mk_thread(1, SCHED_PRIO_WASM, THREAD_STATE_READY);
+    act_as(1);
+    cpu_sched_enqueue(&g_cpus[1].sched, dead);
+    cpu_sched_enqueue(&g_cpus[1].sched, sticky);
+    dead->state = THREAD_STATE_ZOMBIE;
+    sticky->sched_sticky = 1;
+
+    act_as(0);
+    CHECK(cpu_sched_try_steal(0) == NULL, "nothing stealable");
+    CHECK(list_head_empty(&dead->sched_node), "but the stale node was still unlinked");
+    CHECK(g_cpus[1].sched.thread_count[SCHED_PRIO_WASM] == 1, "and the counter follows");
+    /* The band keeps its bit: the sticky thread is still queued there. */
+    CHECK((g_cpus[1].sched.ready_bitmap & (1u << SCHED_PRIO_WASM)) != 0,
+          "the bit stays while a thread remains");
+    check_invariants("steal scan sweep");
+}
+
+/* Even force-linked past the enqueue guard, an idle thread is never stolen. */
+static void test_idle_is_never_stolen(void) {
+    harness_reset();
+    thread_t* idle1 = g_cpus[1].idle_thread;
+    force_link(1, idle1, SCHED_PRIO_IDLE);
+    act_as(0);
+    CHECK(cpu_sched_try_steal(0) == NULL, "a linked idle thread is not stealable");
+    CHECK(idle1->on_rq == 1, "and is left alone");
+}
+
+/* Victim scan starts at my_cpu_id + 1, so CPUs do not all raid CPU 0. */
+static void test_victim_scan_order(void) {
+    harness_reset();
+    thread_t* on1 = mk_thread(0, SCHED_PRIO_WASM, THREAD_STATE_READY);
+    thread_t* on2 = mk_thread(1, SCHED_PRIO_WASM, THREAD_STATE_READY);
+    act_as(1);
+    cpu_sched_enqueue(&g_cpus[1].sched, on1);
+    act_as(2);
+    cpu_sched_enqueue(&g_cpus[2].sched, on2);
+    act_as(0);
+    CHECK(cpu_sched_try_steal(0) == on1, "the next CPU up is raided first");
+}
+
+/* A contended victim is SKIPPED, not waited on -- try_lock, not lock. */
+static void test_contended_victim_is_skipped(void) {
+    harness_reset();
+    thread_t* on1 = mk_thread(0, SCHED_PRIO_WASM, THREAD_STATE_READY);
+    thread_t* on2 = mk_thread(1, SCHED_PRIO_WASM, THREAD_STATE_READY);
+    act_as(1);
+    cpu_sched_enqueue(&g_cpus[1].sched, on1);
+    act_as(2);
+    cpu_sched_enqueue(&g_cpus[2].sched, on2);
+
+    act_as(0);
+    ksync_spinlock_lock(&g_cpus[1].sched.lock); /* CPU 1 busy */
+    thread_t* got = cpu_sched_try_steal(0);
+    ksync_spinlock_unlock(&g_cpus[1].sched.lock);
+    CHECK(got == on2, "the locked victim is skipped and the next one raided");
+    CHECK(on1->on_rq == 1, "the contended queue is untouched");
+}
+
+static void test_all_victims_locked_returns_null(void) {
+    harness_reset();
+    for (uint32_t c = 1; c < 4; ++c) {
+        act_as(c);
+        cpu_sched_enqueue(&g_cpus[c].sched, mk_thread((int)c, SCHED_PRIO_WASM, THREAD_STATE_READY));
+    }
+    act_as(0);
+    for (uint32_t c = 1; c < 4; ++c) {
+        ksync_spinlock_lock(&g_cpus[c].sched.lock);
+    }
+    thread_t* got = cpu_sched_try_steal(0);
+    for (uint32_t c = 1; c < 4; ++c) {
+        ksync_spinlock_unlock(&g_cpus[c].sched.lock);
+    }
+    CHECK(got == NULL, "all victims contended yields NULL rather than blocking");
+}
+
+static void test_single_cpu_never_steals(void) {
+    harness_reset();
+    thread_t* t = mk_thread(0, SCHED_PRIO_WASM, THREAD_STATE_READY);
+    cpu_sched_enqueue(&g_cpus[0].sched, t);
+    g_cpu_count = 1;
+    act_as(0);
+    CHECK(cpu_sched_try_steal(0) == NULL, "a single-CPU system has no victims");
+    CHECK(t->on_rq == 1, "and nothing is disturbed");
+    g_cpu_count = 4;
+}
+
+static void test_never_steals_from_itself(void) {
+    harness_reset();
+    thread_t* mine = mk_thread(0, SCHED_PRIO_WASM, THREAD_STATE_READY);
+    act_as(0);
+    cpu_sched_enqueue(&g_cpus[0].sched, mine);
+    CHECK(cpu_sched_try_steal(0) == NULL, "a CPU does not raid its own queue");
+    CHECK(mine->on_rq == 1, "and its own thread stays queued");
+}
+
+/* Post-steal bookkeeping, including steal_count which nothing asserted. */
+static void test_stolen_thread_bookkeeping(void) {
+    harness_reset();
+    thread_t* t = mk_thread(0, SCHED_PRIO_WASM, THREAD_STATE_READY);
+    act_as(1);
+    cpu_sched_enqueue(&g_cpus[1].sched, t);
+    act_as(0);
+    uint32_t before = g_cpus[0].steal_count;
+
+    CHECK(cpu_sched_try_steal(0) == t, "stolen");
+    CHECK(t->last_cpu == 0, "last_cpu retargeted to the stealer");
+    CHECK(g_cpus[0].steal_count == before + 1, "the stealer's steal_count is bumped");
+    CHECK(g_cpus[1].sched.thread_count[SCHED_PRIO_WASM] == 0, "the victim's counter drops");
+    CHECK((g_cpus[1].sched.ready_bitmap & (1u << SCHED_PRIO_WASM)) == 0, "and its bit clears");
+}
+
+/* The hand-off is CALLER-OWNED: a stolen thread is on no queue and unclaimed, so
+ * a caller that drops it (the SCHED_R_STALE arm) strands it. */
+static void test_stolen_thread_is_on_no_queue(void) {
+    harness_reset();
+    thread_t* t = mk_thread(0, SCHED_PRIO_WASM, THREAD_STATE_READY);
+    act_as(1);
+    cpu_sched_enqueue(&g_cpus[1].sched, t);
+    act_as(0);
+    (void)cpu_sched_try_steal(0);
+    CHECK(t->on_rq == 0, "unclaimed after the steal");
+    CHECK(t->rq == 0, "and pointing at no queue");
+    CHECK(list_head_empty(&t->sched_node), "and detached -- the caller now owns it");
+    check_invariants("post-steal ownership");
+}
+
+/* Mirrors P3: only UNUSED/ZOMBIE are swept, so BLOCKED and RUNNING are stolen. */
+static void test_steal_returns_blocked_and_running(void) {
+    const thread_state_t passed[] = {THREAD_STATE_BLOCKED, THREAD_STATE_RUNNING};
+    for (unsigned i = 0; i < sizeof(passed) / sizeof(passed[0]); ++i) {
+        harness_reset();
+        thread_t* t = mk_thread(0, SCHED_PRIO_WASM, THREAD_STATE_READY);
+        act_as(1);
+        cpu_sched_enqueue(&g_cpus[1].sched, t);
+        t->state = passed[i];
+        act_as(0);
+        CHECK(cpu_sched_try_steal(0) == t, "a non-READY but non-dead node is stealable");
+    }
+}
+
+static void test_steal_then_enqueue_round_trip(void) {
+    harness_reset();
+    thread_t* t = mk_thread(0, SCHED_PRIO_WASM, THREAD_STATE_READY);
+    act_as(1);
+    cpu_sched_enqueue(&g_cpus[1].sched, t);
+    act_as(0);
+    thread_t* stolen = cpu_sched_try_steal(0);
+    CHECK(stolen == t, "stolen");
+    cpu_sched_enqueue(&g_cpus[0].sched, t);
+    CHECK(t->rq == &g_cpus[0].sched, "re-homed on the stealer");
+    CHECK(g_cpus[1].sched.thread_count[SCHED_PRIO_WASM] == 0, "and gone from the victim");
+    check_invariants("steal then enqueue");
+}
+
 /* -------------------------------------------------------------------- main */
 
 int main(void) {
@@ -2119,6 +2319,19 @@ int main(void) {
         {"C4 BSP is always online", test_bsp_is_always_online},
         {"C5 offline CPU frees a pinned thread", test_cpu_going_offline_frees_a_pinned_thread},
         {"C6 affinity survives round trips", test_affinity_survives_wake_block_round_trips},
+        {"S1 steals the highest band", test_steal_takes_the_highest_priority_stealable},
+        {"S2 sticky head does not block band", test_sticky_at_the_head_does_not_block_the_band},
+        {"S3 steal scan sweeps stale nodes", test_steal_scan_sweeps_stale_nodes},
+        {"S4 idle is never stolen", test_idle_is_never_stolen},
+        {"S5 victim scan order", test_victim_scan_order},
+        {"S6 contended victim is skipped", test_contended_victim_is_skipped},
+        {"S7 all victims locked", test_all_victims_locked_returns_null},
+        {"S8 single CPU never steals", test_single_cpu_never_steals},
+        {"S9 never steals from itself", test_never_steals_from_itself},
+        {"S10 stolen thread bookkeeping", test_stolen_thread_bookkeeping},
+        {"S11 stolen thread is on no queue", test_stolen_thread_is_on_no_queue},
+        {"S12 steals BLOCKED and RUNNING", test_steal_returns_blocked_and_running},
+        {"S13 steal then enqueue round trip", test_steal_then_enqueue_round_trip},
     };
 
     for (unsigned i = 0; i < sizeof(tests) / sizeof(tests[0]); ++i) {

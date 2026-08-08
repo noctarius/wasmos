@@ -1953,6 +1953,26 @@ foreach(_qt IN LISTS _wasmos_qemu_targets)
   endif ()
 endforeach()
 
+# Explicit sysroot for the host sanitizer builds (see the note in the target).
+# Sanitizer arms build with the HOST toolchain, not ${CLANG}. On macOS the
+# Homebrew LLVM this project uses for the UEFI targets links a TSan runtime that
+# segfaults on entry; Apple's clang ships one that works. The kernel sources are
+# plain C11 here, so either compiler is fine for the code itself.
+set(WASMOS_HOST_SANITIZER_CC ${CLANG})
+set(WASMOS_HOST_SANITIZER_SYSROOT "")
+if(APPLE)
+  find_program(WASMOS_XCRUN xcrun)
+  if(WASMOS_XCRUN)
+    set(WASMOS_HOST_SANITIZER_CC ${WASMOS_XCRUN} clang)
+  endif()
+  execute_process(COMMAND xcrun --sdk macosx --show-sdk-path
+                  OUTPUT_VARIABLE WASMOS_HOST_SDK_PATH OUTPUT_STRIP_TRAILING_WHITESPACE
+                  ERROR_QUIET)
+  if(WASMOS_HOST_SDK_PATH)
+    set(WASMOS_HOST_SANITIZER_SYSROOT -isysroot ${WASMOS_HOST_SDK_PATH})
+  endif()
+endif()
+
 add_custom_target(run-kernel-unit-tests
   COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
           -I${KERNEL_DIR}/include
@@ -2101,6 +2121,91 @@ add_custom_target(run-kernel-unit-tests
           ${CMAKE_SOURCE_DIR}/tests/unit/stubs_spinlock.c
           -o ${BUILD_DIR}/test_sched_event
   COMMAND ${BUILD_DIR}/test_sched_event
+  # The sanitizer runtimes need an explicit sysroot on macOS: the root
+  # CMakeLists deliberately blanks CMAKE_OSX_SYSROOT, and without it the TSan
+  # binary links but segfaults on entry before running a single test.
+  # Concurrency arm: pthreads stand in for CPUs against the real sched_thread.c.
+  # Run at several widths -- the steal scan order, the placement tie rotation and
+  # the modulus in both pickers all change shape with the CPU count, and more
+  # threads than host cores explores interleavings a 1:1 mapping never reaches.
+  # smp=1 covers the degenerate paths (no steal victims, one placement candidate).
+  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions -pthread
+          -DWASMOS_HOST_TEST_SMP=1 -DWASMOS_SCHED_CALLER_CPU_BIAS=1 -DWASMOS_TEST_NCPU=1
+          -iquote ${KERNEL_DIR}/include
+          -iquote ${CMAKE_SOURCE_DIR}/libs/wasm3/source
+          -iquote ${CMAKE_SOURCE_DIR}/abi/generated/c
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_sched_concurrency.c
+          ${KERNEL_DIR}/sched_thread.c
+          ${CMAKE_SOURCE_DIR}/tests/unit/stubs_spinlock.c
+          -o ${BUILD_DIR}/test_sched_concurrency_smp1
+  COMMAND ${BUILD_DIR}/test_sched_concurrency_smp1
+  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions -pthread
+          -DWASMOS_HOST_TEST_SMP=1 -DWASMOS_SCHED_CALLER_CPU_BIAS=1 -DWASMOS_TEST_NCPU=4
+          -iquote ${KERNEL_DIR}/include
+          -iquote ${CMAKE_SOURCE_DIR}/libs/wasm3/source
+          -iquote ${CMAKE_SOURCE_DIR}/abi/generated/c
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_sched_concurrency.c
+          ${KERNEL_DIR}/sched_thread.c
+          ${CMAKE_SOURCE_DIR}/tests/unit/stubs_spinlock.c
+          -o ${BUILD_DIR}/test_sched_concurrency_smp4
+  COMMAND ${BUILD_DIR}/test_sched_concurrency_smp4
+  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions -pthread
+          -DWASMOS_HOST_TEST_SMP=1 -DWASMOS_SCHED_CALLER_CPU_BIAS=1 -DWASMOS_TEST_NCPU=6
+          -iquote ${KERNEL_DIR}/include
+          -iquote ${CMAKE_SOURCE_DIR}/libs/wasm3/source
+          -iquote ${CMAKE_SOURCE_DIR}/abi/generated/c
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_sched_concurrency.c
+          ${KERNEL_DIR}/sched_thread.c
+          ${CMAKE_SOURCE_DIR}/tests/unit/stubs_spinlock.c
+          -o ${BUILD_DIR}/test_sched_concurrency_smp6
+  COMMAND ${BUILD_DIR}/test_sched_concurrency_smp6
+  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions -pthread
+          -DWASMOS_HOST_TEST_SMP=1 -DWASMOS_SCHED_CALLER_CPU_BIAS=1 -DWASMOS_TEST_NCPU=8
+          -iquote ${KERNEL_DIR}/include
+          -iquote ${CMAKE_SOURCE_DIR}/libs/wasm3/source
+          -iquote ${CMAKE_SOURCE_DIR}/abi/generated/c
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_sched_concurrency.c
+          ${KERNEL_DIR}/sched_thread.c
+          ${CMAKE_SOURCE_DIR}/tests/unit/stubs_spinlock.c
+          -o ${BUILD_DIR}/test_sched_concurrency_smp8
+  COMMAND ${BUILD_DIR}/test_sched_concurrency_smp8
+  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions -pthread
+          -DWASMOS_HOST_TEST_SMP=1 -DWASMOS_SCHED_CALLER_CPU_BIAS=1 -DWASMOS_TEST_NCPU=16
+          -iquote ${KERNEL_DIR}/include
+          -iquote ${CMAKE_SOURCE_DIR}/libs/wasm3/source
+          -iquote ${CMAKE_SOURCE_DIR}/abi/generated/c
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_sched_concurrency.c
+          ${KERNEL_DIR}/sched_thread.c
+          ${CMAKE_SOURCE_DIR}/tests/unit/stubs_spinlock.c
+          -o ${BUILD_DIR}/test_sched_concurrency_smp16
+  COMMAND ${BUILD_DIR}/test_sched_concurrency_smp16
+  # Sanitizer arms. TSan is the only thing that can see a mixed-atomicity access
+  # to the cross-CPU fields; it found four in sched_thread.c the first time it
+  # ran. ASan/UBSan cover the out-of-bounds and UB classes the plain build and
+  # the arm64 host both miss.
+  COMMAND ${WASMOS_HOST_SANITIZER_CC} -std=c11 -Wall -pthread -fsanitize=thread -g -O1
+          ${WASMOS_HOST_SANITIZER_SYSROOT}
+          -DWASMOS_HOST_TEST_SMP=1 -DWASMOS_SCHED_CALLER_CPU_BIAS=1 -DWASMOS_TEST_NCPU=4
+          -iquote ${KERNEL_DIR}/include
+          -iquote ${CMAKE_SOURCE_DIR}/libs/wasm3/source
+          -iquote ${CMAKE_SOURCE_DIR}/abi/generated/c
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_sched_concurrency.c
+          ${KERNEL_DIR}/sched_thread.c
+          ${CMAKE_SOURCE_DIR}/tests/unit/stubs_spinlock.c
+          -o ${BUILD_DIR}/test_sched_concurrency_tsan
+  COMMAND ${BUILD_DIR}/test_sched_concurrency_tsan
+  COMMAND ${WASMOS_HOST_SANITIZER_CC} -std=c11 -Wall -pthread -fsanitize=address,undefined
+          -fno-sanitize-recover=all -g -O1
+          ${WASMOS_HOST_SANITIZER_SYSROOT}
+          -DWASMOS_HOST_TEST_SMP=1 -DWASMOS_SCHED_CALLER_CPU_BIAS=1 -DWASMOS_TEST_NCPU=8
+          -iquote ${KERNEL_DIR}/include
+          -iquote ${CMAKE_SOURCE_DIR}/libs/wasm3/source
+          -iquote ${CMAKE_SOURCE_DIR}/abi/generated/c
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_sched_concurrency.c
+          ${KERNEL_DIR}/sched_thread.c
+          ${CMAKE_SOURCE_DIR}/tests/unit/stubs_spinlock.c
+          -o ${BUILD_DIR}/test_sched_concurrency_asan
+  COMMAND ${BUILD_DIR}/test_sched_concurrency_asan
   COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
           -I${KERNEL_DIR}/include
           ${CMAKE_SOURCE_DIR}/tests/unit/test_warp_driver_ring3_call_policy.c

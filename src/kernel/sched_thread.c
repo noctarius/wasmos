@@ -189,9 +189,15 @@ static void cpu_sched_unlink_locked(cpu_sched_t* cs, thread_t* t) {
         cs->thread_count[prio]--;
     }
     if (list_head_empty(&cs->ready_list[prio])) {
-        cs->ready_bitmap &= (uint8_t)(~(1u << prio));
+        __atomic_store_n(&cs->ready_bitmap, (uint8_t)(cs->ready_bitmap & ~(1u << prio)),
+                         __ATOMIC_RELAXED);
     }
-    t->rq = 0;
+    /* Released atomically: cpu_sched_remove_thread follows t->rq WITHOUT holding
+     * any queue lock (it cannot know which lock to take until it has read it),
+     * so a plain store here races that read.  Benign in practice -- the value is
+     * re-validated under the lock -- but undefined by the memory model and a
+     * genuine ThreadSanitizer report. */
+    __atomic_store_n(&t->rq, (struct cpu_sched_s*)0, __ATOMIC_RELEASE);
     /* Release the claim last: an enqueuer spinning on the exchange must not be
      * able to start linking this node until the unlink above has retired. */
     __atomic_store_n(&t->on_rq, 0, __ATOMIC_RELEASE);
@@ -234,7 +240,7 @@ void cpu_sched_enqueue(cpu_sched_t* cs, thread_t* t) {
              * completes (see PROCESS_RUN_BLOCKED handler).  Never halt here
              * under production SMP IPC load. */
             if (sched_mark_ready_if_live(t)) {
-                t->block_reason = THREAD_BLOCK_NONE;
+                __atomic_store_n((uint32_t*)&t->block_reason, THREAD_BLOCK_NONE, __ATOMIC_RELAXED);
             }
             return;
         }
@@ -278,16 +284,24 @@ void cpu_sched_enqueue(cpu_sched_t* cs, thread_t* t) {
         }
         return;
     }
-    if (t->state != THREAD_STATE_READY) {
+    /* Atomic load: state is published by thread_transit's CAS from other CPUs,
+     * and the pick_next/steal sweeps already read it atomically.  This guard was
+     * the one plain reader left. */
+    uint32_t state = __atomic_load_n((uint32_t*)&t->state, __ATOMIC_ACQUIRE);
+    if (state != THREAD_STATE_READY) {
         static uint32_t bad_enqueue_seen;
         uint32_t n = __atomic_fetch_add(&bad_enqueue_seen, 1u, __ATOMIC_RELAXED);
         if ((n & (n - 1u)) == 0u) {
-            serial_printf_unlocked("[sched] enqueue non-ready tid=%u owner=%u state=%u block=%u "
-                                   "caller=%016llx (n=%u, skipped)\n",
-                                   (unsigned)t->tid, (unsigned)t->owner_pid, (unsigned)t->state,
-                                   (unsigned)t->block_reason,
-                                   (unsigned long long)(uintptr_t)__builtin_return_address(0),
-                                   (unsigned)(n + 1u));
+            /* Report the values already loaded rather than re-reading the fields:
+             * a diagnostic is still a reader, and re-reading state here would
+             * both race the writer and be able to print a value that never
+             * failed the test above. */
+            uint32_t reason = __atomic_load_n((uint32_t*)&t->block_reason, __ATOMIC_RELAXED);
+            serial_printf_unlocked(
+                "[sched] enqueue non-ready tid=%u owner=%u state=%u block=%u "
+                "caller=%016llx (n=%u, skipped)\n",
+                (unsigned)t->tid, (unsigned)t->owner_pid, (unsigned)state, (unsigned)reason,
+                (unsigned long long)(uintptr_t)__builtin_return_address(0), (unsigned)(n + 1u));
         }
         return;
     }
@@ -349,11 +363,12 @@ void cpu_sched_enqueue(cpu_sched_t* cs, thread_t* t) {
         ksync_spinlock_unlock(&cs->lock);
         return;
     }
-    t->rq = cs;
     t->rq_prio = prio;
+    __atomic_store_n(&t->rq, cs, __ATOMIC_RELEASE); /* see cpu_sched_unlink_locked */
     list_head_add_tail(&cs->ready_list[prio], &t->sched_node);
     cs->thread_count[prio]++;
-    cs->ready_bitmap |= (uint8_t)(1u << prio);
+    __atomic_store_n(&cs->ready_bitmap, (uint8_t)(cs->ready_bitmap | (1u << prio)),
+                     __ATOMIC_RELAXED);
     ksync_spinlock_unlock(&cs->lock);
 }
 
@@ -384,7 +399,7 @@ void cpu_sched_remove_thread(thread_t* t) {
             continue;
         }
         ksync_spinlock_lock(&cs->lock);
-        if (t->rq == cs) {
+        if (__atomic_load_n(&t->rq, __ATOMIC_ACQUIRE) == cs) {
             cpu_sched_unlink_locked(cs, t);
             ksync_spinlock_unlock(&cs->lock);
             return;
@@ -392,7 +407,8 @@ void cpu_sched_remove_thread(thread_t* t) {
         ksync_spinlock_unlock(&cs->lock);
     }
     serial_printf_unlocked("[sched] remove_thread gave up tid=%u owner=%u state=%u\n",
-                           (unsigned)t->tid, (unsigned)t->owner_pid, (unsigned)t->state);
+                           (unsigned)t->tid, (unsigned)t->owner_pid,
+                           (unsigned)__atomic_load_n((uint32_t*)&t->state, __ATOMIC_RELAXED));
 }
 
 void sched_enqueue_thread_from(thread_t* t, uintptr_t caller) {
@@ -410,7 +426,7 @@ void sched_enqueue_thread_from(thread_t* t, uintptr_t caller) {
                                    (unsigned)cpu_local()->cpu_id, (unsigned)i, (unsigned)t->state,
                                    (unsigned long long)caller);
             if (sched_mark_ready_if_live(t)) {
-                t->block_reason = THREAD_BLOCK_NONE;
+                __atomic_store_n((uint32_t*)&t->block_reason, THREAD_BLOCK_NONE, __ATOMIC_RELAXED);
             }
             return;
         }
@@ -534,7 +550,7 @@ void sched_wake_thread(thread_t* t) {
     if (!sched_wake_claim_enqueue(t)) {
         /* Completion path owns the enqueue; leave it something to enqueue. */
         if (sched_mark_ready_if_live(t)) {
-            t->block_reason = THREAD_BLOCK_NONE;
+            __atomic_store_n((uint32_t*)&t->block_reason, THREAD_BLOCK_NONE, __ATOMIC_RELAXED);
         }
         return;
     }
@@ -748,7 +764,12 @@ struct thread* cpu_sched_try_steal(uint32_t my_cpu_id) {
             continue;
         }
         cpu_sched_t* remote = &g_cpus[i].sched;
-        if (!remote->ready_bitmap) {
+        /* Deliberately unlocked: a cheap "is there anything here at all" probe
+         * before paying for the trylock.  Relaxed rather than plain because the
+         * owning CPU writes it under ITS lock, which this reader does not hold --
+         * a stale answer is fine (the value is re-read under the lock below), a
+         * torn or compiler-reordered one is not. */
+        if (!__atomic_load_n(&remote->ready_bitmap, __ATOMIC_RELAXED)) {
             continue;
         }
         if (!ksync_spinlock_try_lock(&remote->lock)) {
@@ -762,7 +783,10 @@ struct thread* cpu_sched_try_steal(uint32_t my_cpu_id) {
          * so we must release with the matching no-IRQ variant. */
         ksync_spinlock_unlock_noirq(&remote->lock);
         if (t) {
-            t->last_cpu = my_cpu_id;
+            /* Advisory placement hint, written after the remote lock is dropped
+             * and read unlocked by the placement path -- relaxed keeps it a
+             * defined race-free access without pretending it is synchronised. */
+            __atomic_store_n(&t->last_cpu, my_cpu_id, __ATOMIC_RELAXED);
             cpu_local()->steal_count++;
             return t;
         }

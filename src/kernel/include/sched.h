@@ -21,11 +21,22 @@ enum {
 #include "sync/spinlock.h"
 #include "sched_list.h"
 
-/* Anti-starvation: after this many consecutive dispatches from a given priority
- * band (or higher), the scheduler yields one slot to the next occupied lower
- * band, so high-priority workers cannot permanently starve the services they
- * cooperate with.  Declared here rather than in sched_thread.c so tests assert
- * against the same constant the policy uses. */
+/* Anti-starvation: once a priority band (or higher) has been dispatched this
+ * many times consecutively, the scheduler yields one slot to the next occupied
+ * lower band, so high-priority workers cannot permanently starve the services
+ * they cooperate with.  Declared here rather than in sched_thread.c so tests
+ * assert against the same constant the policy uses.
+ *
+ * The realised donation cycle is STREAK+2 dispatches, not STREAK+1: the dispatch
+ * that returns to the high band after a donation takes the
+ * last_dispatched_prio > prio arm in cpu_sched_pick_next, which resets the
+ * streak rather than counting itself as the first of the new run.  So the high
+ * band receives STREAK+1 consecutive slots per donated slot.  This is measured
+ * and pinned by the A1/A3 cases in tests/unit/test_sched_runqueue.c, which
+ * derive their expectations from this constant.  Deliberate: that same arm
+ * cannot distinguish "returning from a donation" from "a genuinely higher band
+ * just arrived", where resetting is correct, and tightening the cycle changes
+ * fairness under sustained load. */
 #define SCHED_ANTISTARVATION_STREAK 4
 
 #define SCHED_PRIO_MAX 7  /* number of priority levels */

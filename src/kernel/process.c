@@ -2432,7 +2432,19 @@ uint32_t process_count_active(void) {
 }
 
 uint32_t process_ready_count(void) {
-    return cpu_sched()->nr_threads;
+    /* Sum the per-band counters, which the enqueue/unlink paths actually
+     * maintain.  This used to return cpu_sched()->nr_threads, a field nothing
+     * ever incremented -- so the sched_ready_count host call reported 0 forever
+     * rather than being merely imprecise.  The field is gone; this is the only
+     * reader it had. */
+    cpu_sched_t* cs = cpu_sched();
+    uint32_t total = 0;
+    ksync_spinlock_lock(&cs->lock);
+    for (int p = 0; p < SCHED_PRIO_MAX; ++p) {
+        total += cs->thread_count[p];
+    }
+    ksync_spinlock_unlock(&cs->lock);
+    return total;
 }
 
 int process_info_at(uint32_t index, uint32_t* out_pid, const char** out_name) {

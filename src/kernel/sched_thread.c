@@ -32,6 +32,35 @@ static const uint8_t ffs_table[128] = {
     3,    0, 1, 0, 2, 0, 1, 0, 4, 0, 1, 0, 2, 0, 1, 0, 3, 0, 1, 0, 2, 0, 1, 0,
 };
 
+static uint32_t g_sched_debug[SCHED_DEBUG_EVENT_COUNT];
+
+/* Placement round-robin cursors.  File scope rather than function statics so
+ * sched_debug_reset can re-seed them: as locals they made every tie-breaking
+ * test depend on how many placements every earlier test had performed. */
+static uint32_t g_spawn_rr = 0;
+static uint32_t g_affine_rr = 0;
+
+/* Returns the count BEFORE this hit, so callers keep the (n & (n-1)) == 0
+ * power-of-two rate limit they already used with a local static. */
+static uint32_t sched_debug_bump(sched_debug_event_t ev) {
+    return __atomic_fetch_add(&g_sched_debug[ev], 1u, __ATOMIC_RELAXED);
+}
+
+void sched_debug_reset(void) {
+    for (unsigned i = 0; i < SCHED_DEBUG_EVENT_COUNT; ++i) {
+        __atomic_store_n(&g_sched_debug[i], 0u, __ATOMIC_RELAXED);
+    }
+    g_spawn_rr = 0;
+    g_affine_rr = 0;
+}
+
+uint32_t sched_debug_count(sched_debug_event_t ev) {
+    if ((unsigned)ev >= SCHED_DEBUG_EVENT_COUNT) {
+        return 0;
+    }
+    return __atomic_load_n(&g_sched_debug[ev], __ATOMIC_RELAXED);
+}
+
 static inline int cpu_sched_highest_prio(const cpu_sched_t* cs) {
     uint8_t bm = cs->ready_bitmap & 0x7Fu;
     if (bm == 0) {
@@ -126,7 +155,6 @@ void cpu_sched_init(cpu_sched_t* cs) {
     }
     cs->running = 0;
     cs->idle = 0;
-    cs->nr_threads = 0;
     cs->last_dispatched_prio = SCHED_PRIO_IDLE;
     cs->high_prio_streak = 0;
 }
@@ -172,8 +200,7 @@ static void cpu_sched_unlink_locked(cpu_sched_t* cs, thread_t* t) {
      * and report it: this fires at the moment of corruption, not minutes later
      * at the dispatch site. */
     if (cs->ready_list[prio].next == &t->sched_node) {
-        static uint32_t ghost_seen;
-        uint32_t gn = __atomic_fetch_add(&ghost_seen, 1u, __ATOMIC_RELAXED);
+        uint32_t gn = sched_debug_bump(SCHED_DEBUG_GHOST_HEAD);
         if ((gn & (gn - 1u)) == 0u) {
             serial_printf_unlocked("[sched] ghost head tid=%u owner=%u state=%u prio=%u cs=%p "
                                    "count=%u (n=%u)\n",
@@ -220,8 +247,7 @@ void cpu_sched_enqueue(cpu_sched_t* cs, thread_t* t) {
          * let a CPU dispatch it from the ready list while it is simultaneously
          * that CPU's fallback. */
         if (g_cpus[i].idle_thread == t) {
-            static uint32_t idle_enqueue_seen;
-            uint32_t n = __atomic_fetch_add(&idle_enqueue_seen, 1u, __ATOMIC_RELAXED);
+            uint32_t n = sched_debug_bump(SCHED_DEBUG_ENQUEUE_IDLE);
             if ((n & (n - 1u)) == 0u) {
                 serial_printf_unlocked(
                     "[sched] enqueue idle tid=%u caller=%016llx (n=%u, skipped)\n",
@@ -274,8 +300,7 @@ void cpu_sched_enqueue(cpu_sched_t* cs, thread_t* t) {
      * Unreachable while every caller goes through the sched_prio_t enum, which
      * is exactly why nothing catches it if one ever does not. */
     if (t->sched_prio >= SCHED_PRIO_MAX) {
-        static uint32_t bad_prio_seen;
-        uint32_t n = __atomic_fetch_add(&bad_prio_seen, 1u, __ATOMIC_RELAXED);
+        uint32_t n = sched_debug_bump(SCHED_DEBUG_BAD_PRIO);
         if ((n & (n - 1u)) == 0u) {
             serial_printf_unlocked(
                 "[sched] enqueue bad prio tid=%u prio=%u caller=%016llx (n=%u, skipped)\n",
@@ -289,8 +314,7 @@ void cpu_sched_enqueue(cpu_sched_t* cs, thread_t* t) {
      * the one plain reader left. */
     uint32_t state = __atomic_load_n((uint32_t*)&t->state, __ATOMIC_ACQUIRE);
     if (state != THREAD_STATE_READY) {
-        static uint32_t bad_enqueue_seen;
-        uint32_t n = __atomic_fetch_add(&bad_enqueue_seen, 1u, __ATOMIC_RELAXED);
+        uint32_t n = sched_debug_bump(SCHED_DEBUG_ENQUEUE_NON_READY);
         if ((n & (n - 1u)) == 0u) {
             /* Report the values already loaded rather than re-reading the fields:
              * a diagnostic is still a reader, and re-reading state here would
@@ -346,8 +370,7 @@ void cpu_sched_enqueue(cpu_sched_t* cs, thread_t* t) {
      * another queue, i.e. we are one instruction from splicing two lists through
      * it.  Refuse the link rather than corrupt the queue, and name the caller. */
     if (!list_head_empty(&t->sched_node)) {
-        static uint32_t double_link_seen;
-        uint32_t dn = __atomic_fetch_add(&double_link_seen, 1u, __ATOMIC_RELAXED);
+        uint32_t dn = sched_debug_bump(SCHED_DEBUG_DOUBLE_LINK);
         if ((dn & (dn - 1u)) == 0u) {
             serial_printf_unlocked(
                 "[sched] claimed node still linked tid=%u owner=%u state=%u prio=%u rq=%p "
@@ -406,6 +429,7 @@ void cpu_sched_remove_thread(thread_t* t) {
         }
         ksync_spinlock_unlock(&cs->lock);
     }
+    (void)sched_debug_bump(SCHED_DEBUG_REMOVE_GAVE_UP);
     serial_printf_unlocked("[sched] remove_thread gave up tid=%u owner=%u state=%u\n",
                            (unsigned)t->tid, (unsigned)t->owner_pid,
                            (unsigned)__atomic_load_n((uint32_t*)&t->state, __ATOMIC_RELAXED));
@@ -437,8 +461,7 @@ void sched_enqueue_thread_from(thread_t* t, uintptr_t caller) {
      * function -- useless for telling one sched_enqueue_thread() site from
      * another. */
     if (t->state != THREAD_STATE_READY) {
-        static uint32_t bad_from_seen;
-        uint32_t n = __atomic_fetch_add(&bad_from_seen, 1u, __ATOMIC_RELAXED);
+        uint32_t n = sched_debug_bump(SCHED_DEBUG_ENQUEUE_FROM_NON_READY);
         if ((n & (n - 1u)) == 0u) {
             serial_printf_unlocked("[sched] enqueue_from non-ready tid=%u owner=%u state=%u "
                                    "block=%u caller=%016llx (n=%u)\n",
@@ -609,8 +632,7 @@ void sched_thread_init(thread_t* t, sched_prio_t prio) {
      * with two owners (the "ghost head" report).  Name the call site so we know
      * WHICH spawn path handed back a still-queued thread. */
     if (!list_head_empty(&t->sched_node) || __atomic_load_n(&t->on_rq, __ATOMIC_ACQUIRE)) {
-        static uint32_t init_linked_seen;
-        uint32_t in = __atomic_fetch_add(&init_linked_seen, 1u, __ATOMIC_RELAXED);
+        uint32_t in = sched_debug_bump(SCHED_DEBUG_INIT_ON_QUEUED);
         if ((in & (in - 1u)) == 0u) {
             serial_printf_unlocked(
                 "[sched] init on queued tid=%u owner=%u state=%u on_rq=%u oldprio=%u newprio=%u "
@@ -659,7 +681,6 @@ uint32_t cpu_sched_pick_target_cpu(void) {
     /* Round-robin counter: on ties (all CPUs equally loaded) we rotate the
      * starting search index so spawns spread evenly instead of always
      * accumulating on CPU 0. */
-    static uint32_t g_spawn_rr = 0;
     uint32_t cpus = cpu_sched_usable_cpus();
     uint32_t start = g_spawn_rr % cpus;
     uint32_t best = start;
@@ -680,7 +701,6 @@ uint32_t cpu_sched_pick_target_cpu(void) {
 uint32_t cpu_sched_pick_target_cpu_for_thread(const thread_t* t, uint8_t prefer_last_cpu) {
     uint32_t online_mask = cpu_sched_online_mask();
     uint32_t allowed_mask = online_mask;
-    static uint32_t g_affine_rr = 0;
 
     if (t) {
         allowed_mask &= t->cpu_affinity;

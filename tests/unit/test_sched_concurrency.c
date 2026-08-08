@@ -101,7 +101,9 @@ int thread_wake_if_blocked(uint32_t tid) {
     return 0;
 }
 
-static void be_cpu(uint32_t id) { g_host_cpu_local = &g_cpus[id]; }
+static void be_cpu(uint32_t id) {
+    g_host_cpu_local = &g_cpus[id];
+}
 
 static void harness_init(void) {
     memset(g_cpus, 0, sizeof(g_cpus));
@@ -236,33 +238,33 @@ static void* soak_worker(void* arg) {
         uint32_t r = rnd(&seed);
         thread_t* t = &g_pool[r % POOL_MAX];
         switch ((r >> 8) % 5u) {
-            case 0:
-                cpu_sched_enqueue(&g_cpus[id].sched, t);
-                break;
-            case 1: {
-                cpu_sched_t* cs = &g_cpus[id].sched;
-                ksync_spinlock_lock(&cs->lock);
-                thread_t* got = cpu_sched_pick_next(cs);
-                ksync_spinlock_unlock(&cs->lock);
-                /* Put it straight back so the pool cannot drain to nothing. */
-                if (got && got != g_cpus[id].idle_thread) {
-                    cpu_sched_enqueue(cs, got);
-                }
-                break;
+        case 0:
+            cpu_sched_enqueue(&g_cpus[id].sched, t);
+            break;
+        case 1: {
+            cpu_sched_t* cs = &g_cpus[id].sched;
+            ksync_spinlock_lock(&cs->lock);
+            thread_t* got = cpu_sched_pick_next(cs);
+            ksync_spinlock_unlock(&cs->lock);
+            /* Put it straight back so the pool cannot drain to nothing. */
+            if (got && got != g_cpus[id].idle_thread) {
+                cpu_sched_enqueue(cs, got);
             }
-            case 2:
-                cpu_sched_remove_thread(t);
-                break;
-            case 3: {
-                thread_t* stolen = cpu_sched_try_steal(id);
-                if (stolen) {
-                    cpu_sched_enqueue(&g_cpus[id].sched, stolen);
-                }
-                break;
+            break;
+        }
+        case 2:
+            cpu_sched_remove_thread(t);
+            break;
+        case 3: {
+            thread_t* stolen = cpu_sched_try_steal(id);
+            if (stolen) {
+                cpu_sched_enqueue(&g_cpus[id].sched, stolen);
             }
-            default:
-                sched_wake_thread(t);
-                break;
+            break;
+        }
+        default:
+            sched_wake_thread(t);
+            break;
         }
     }
     return NULL;
@@ -399,7 +401,7 @@ static void test_two_stealers_one_thread(void) {
         pthread_create(&b, NULL, steal_worker, (void*)(uintptr_t)1);
         pthread_join(a, NULL);
         pthread_join(b, NULL);
-            if (g_steal_wins != 1) {
+        if (g_steal_wins != 1) {
             total_wins++;
         }
     }

@@ -170,6 +170,7 @@ static void harness_reset(void) {
         g_cpus[i].sched.idle = &idle[i];
     }
     log_reset();
+    sched_debug_reset(); /* tripwire counters AND the placement round-robin cursors */
     g_resched_requests = 0;
     act_as(0);
 }
@@ -236,6 +237,36 @@ static void check_invariants(const char* where) {
         }
     }
 
+    /* Bit 7 is not a band: cpu_sched_highest_prio masks it away, so a set bit
+     * there is unreachable state that would index one past ffs_table if the mask
+     * were ever dropped. */
+    for (uint32_t c = 0; c < g_cpu_count; ++c) {
+        if ((g_cpus[c].sched.ready_bitmap & 0x80u) != 0u) {
+            g_failures++;
+            printf("  [FAIL] %s: cpu%u has bit 7 set in ready_bitmap\n", where, c);
+        }
+        if (g_cpus[c].sched.last_dispatched_prio > SCHED_PRIO_IDLE) {
+            g_failures++;
+            printf("  [FAIL] %s: cpu%u last_dispatched_prio=%u out of range\n", where, c,
+                   (unsigned)g_cpus[c].sched.last_dispatched_prio);
+        }
+    }
+
+    /* An idle thread must never be reachable from a ready list -- it is
+     * dispatched only through the pick_next fallback, so a linked one could be
+     * running as both the fallback and a queued thread. */
+    for (uint32_t c = 0; c < g_cpu_count; ++c) {
+        for (int p = 0; p < SCHED_PRIO_MAX; ++p) {
+            list_head_t* head = &g_cpus[c].sched.ready_list[p];
+            for (list_head_t* n = head->next; n != head; n = n->next) {
+                if (list_entry(n, thread_t, sched_node)->tid >= 9000u) {
+                    g_failures++;
+                    printf("  [FAIL] %s: idle thread linked on cpu%u band%d\n", where, c, p);
+                }
+            }
+        }
+    }
+
     /* I1: a thread is in at most one queue, exactly once. */
     for (int i = 1; i <= POOL_MAX; ++i) {
         if (seen_count[i] > 1) {
@@ -251,12 +282,26 @@ static void check_invariants(const char* where) {
     g_checks++;
 }
 
+/* Dispatch one thread on `cpu` and put it straight back, which is what a
+ * fairness or ordering test wants: the band composition stays fixed so only the
+ * dispatch ORDER is under test. Returns what was dispatched. */
+static thread_t* pick_and_requeue(uint32_t cpu);
+
 static thread_t* pick_on(uint32_t cpu) {
     act_as(cpu);
     cpu_sched_t* cs = &g_cpus[cpu].sched;
     ksync_spinlock_lock(&cs->lock);
     thread_t* t = cpu_sched_pick_next(cs);
     ksync_spinlock_unlock(&cs->lock);
+    return t;
+}
+
+static thread_t* pick_and_requeue(uint32_t cpu) {
+    thread_t* t = pick_on(cpu);
+    if (t && t != g_cpus[cpu].idle_thread) {
+        t->state = THREAD_STATE_READY;
+        cpu_sched_enqueue(&g_cpus[cpu].sched, t);
+    }
     return t;
 }
 
@@ -340,7 +385,8 @@ static void test_init_on_queued_is_reported(void) {
     log_reset();
 
     sched_thread_init(t, SCHED_PRIO_WASM); /* the corrupting write */
-    CHECK(saw("init on queued"), "re-init of a queued node is reported");
+    CHECK(sched_debug_count(SCHED_DEBUG_INIT_ON_QUEUED) == 1,
+          "re-init of a queued node is counted");
 }
 
 /* Round 1 (10f5f3eaa1).  thread_reset_slot freed a slot whose sched_node was
@@ -355,7 +401,8 @@ static void test_recycled_slot_is_unlinked_first(void) {
     cpu_sched_remove_thread(t); /* what thread_reset_slot must do first */
     log_reset();
     thread_t* reborn = mk_thread(0, SCHED_PRIO_SERVICE, THREAD_STATE_READY);
-    CHECK(!saw("init on queued"), "a properly unlinked slot re-inits silently");
+    CHECK(sched_debug_count(SCHED_DEBUG_INIT_ON_QUEUED) == 0,
+          "a properly unlinked slot re-inits silently");
     cpu_sched_enqueue(&g_cpus[0].sched, reborn);
     check_invariants("recycled slot requeued");
     CHECK(g_cpus[0].sched.thread_count[SCHED_PRIO_WASM] == 0, "old band left empty");
@@ -424,9 +471,8 @@ static void test_enqueue_refuses_non_ready(void) {
          * DESIGN -- the storm this guards against would otherwise flood serial
          * at scheduler speed.  Behaviour above is checked every iteration; the
          * message is not a contract. */
-        if (i == 0) {
-            CHECK(saw("enqueue non-ready"), "the first refusal is reported");
-        }
+        CHECK(sched_debug_count(SCHED_DEBUG_ENQUEUE_NON_READY) == 1,
+              "the refusal is counted -- every time, not just when the rate limiter allows a line");
         check_invariants("after refused enqueue");
     }
 }
@@ -810,7 +856,7 @@ static void test_enqueue_refuses_out_of_enum_state(void) {
     cpu_sched_enqueue(&g_cpus[0].sched, t);
     CHECK(list_head_empty(&t->sched_node), "an unknown state is not linked");
     CHECK(t->on_rq == 0, "and not claimed");
-    CHECK(saw("enqueue non-ready"), "and is reported");
+    CHECK(sched_debug_count(SCHED_DEBUG_ENQUEUE_NON_READY) == 1, "and is counted");
     check_invariants("out-of-enum state");
 }
 
@@ -827,7 +873,7 @@ static void test_claimed_but_linked_releases_the_claim(void) {
     __atomic_store_n(&t->on_rq, 0, __ATOMIC_RELEASE); /* claim lost, node still linked */
     cpu_sched_enqueue(&g_cpus[0].sched, t);
 
-    CHECK(saw("claimed node still linked"), "the disagreement is reported");
+    CHECK(sched_debug_count(SCHED_DEBUG_DOUBLE_LINK) == 1, "the disagreement is counted");
     CHECK(t->on_rq == 0, "the claim is RELEASED, not leaked");
     CHECK(g_cpus[0].sched.thread_count[SCHED_PRIO_WASM] == before, "not linked a second time");
 }
@@ -933,7 +979,8 @@ static void test_enqueue_from_non_ready_reports_the_real_caller(void) {
     /* Rate limiting: this counter is untouched by every other test, so the first
      * occurrence is guaranteed to print.  See the note on the non-READY
      * rejection test -- messages are generally not a contract. */
-    CHECK(saw("enqueue_from non-ready"), "the wrapper reports the refusal");
+    CHECK(sched_debug_count(SCHED_DEBUG_ENQUEUE_FROM_NON_READY) == 1,
+          "the wrapper counts the refusal");
     CHECK(saw("cafe"), "and names the ORIGINAL call site, not its own return address");
     CHECK(list_head_empty(&t->sched_node), "the inner enqueue still refuses to link it");
     CHECK(t->on_rq == 0, "and does not claim it");
@@ -990,7 +1037,7 @@ static void test_remove_gives_up_on_a_permanent_in_flight_claim(void) {
     log_reset();
 
     cpu_sched_remove_thread(t); /* must return, not hang */
-    CHECK(saw("remove_thread gave up"), "the give-up path is reported");
+    CHECK(sched_debug_count(SCHED_DEBUG_REMOVE_GAVE_UP) == 1, "the give-up path is counted");
     CHECK(t->on_rq == 1, "the claim is NOT cleared out from under the enqueuer");
 }
 
@@ -1044,7 +1091,8 @@ static void test_ghost_head_is_reported(void) {
     log_reset();
 
     cpu_sched_remove_thread(t);
-    CHECK(saw("ghost head"), "a head still reaching the node is reported");
+    CHECK(sched_debug_count(SCHED_DEBUG_GHOST_HEAD) == 1,
+          "a head still reaching the node is counted");
 }
 
 /* R5: the counter floor.  A drifted counter must clamp at zero rather than wrap
@@ -1135,11 +1183,8 @@ static void test_remove_from_head_middle_tail_preserves_fifo(void) {
  * is re-enqueued), recording the band each dispatch came from. */
 static void run_dispatches(int n, int hi, int lo, int* out_band) {
     for (int i = 0; i < n; ++i) {
-        thread_t* t = pick_on(0);
+        thread_t* t = pick_and_requeue(0);
         out_band[i] = (t == g_cpus[0].idle_thread) ? -1 : (int)t->sched_prio;
-        if (t != g_cpus[0].idle_thread) {
-            cpu_sched_enqueue(&g_cpus[0].sched, t); /* refill */
-        }
     }
     (void)hi;
     (void)lo;
@@ -1759,22 +1804,19 @@ static void test_pick_target_selects_the_minimum(void) {
     CHECK(cpu_sched_pick_target_cpu() == 1, "the lightest CPU wins");
 }
 
-/* Ties rotate via a function-static round robin that persists across tests, so
- * assert the DISTRIBUTION over a full cycle rather than absolute identity. */
+/* Ties rotate through the placement cursor.  harness_reset() re-seeds it via
+ * sched_debug_reset, so this asserts the exact SEQUENCE rather than settling for
+ * a distribution -- previously the cursor was a function static carrying over
+ * from whatever ran before, and only the shape of the spread was checkable. */
 static void test_ties_rotate_evenly(void) {
     harness_reset();
-    int hits[WASMOS_MAX_CPUS];
-    memset(hits, 0, sizeof(hits));
-    for (int i = 0; i < 8; ++i) {
-        hits[cpu_sched_pick_target_cpu()]++;
-    }
-    int even = 1;
-    for (uint32_t c = 0; c < 4; ++c) {
-        if (hits[c] != 2) {
-            even = 0;
+    int wrong = 0;
+    for (uint32_t i = 0; i < 8u; ++i) {
+        if (cpu_sched_pick_target_cpu() != (i % 4u)) {
+            wrong++;
         }
     }
-    CHECK(even, "8 tied placements spread exactly twice over 4 CPUs");
+    CHECK(wrong == 0, "tied placements walk the CPUs in order from a known cursor");
 }
 
 /* pick_target_cpu is deliberately NOT affinity-aware -- that is what

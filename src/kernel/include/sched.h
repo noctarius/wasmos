@@ -61,7 +61,6 @@ typedef struct cpu_sched_s {
     uint32_t thread_count[SCHED_PRIO_MAX];
     struct thread* running; /* currently executing thread */
     struct thread* idle;    /* this CPU's idle thread */
-    uint32_t nr_threads;    /* total threads tracked */
     /* Anti-starvation bookkeeping.  PER-CPU: it describes what THIS CPU has been
      * dispatching, and the policy only makes sense that way.  Held globally it
      * both raced (plain bytes written by every CPU under different locks) and
@@ -100,6 +99,33 @@ void sched_set_need_resched(void);
 /* Wake a blocked thread: wait for its blocking_transition to clear,
  * set state READY, and enqueue it. */
 void sched_wake_thread(struct thread* t);
+
+/* Scheduler tripwires, as counters rather than only log lines.
+ *
+ * Every tripwire is rate-limited to powers of two, so past the first few hits a
+ * test cannot tell "fired" from "fired but suppressed" by reading the log.  The
+ * counters are also process-wide, so a test asserting on output is
+ * order-dependent on every test that ran before it.  Exposing the counts, and a
+ * reset for tests, removes both problems -- and asserting on an enum beats
+ * substring-matching formatted text that a reword would silently break. */
+typedef enum {
+    SCHED_DEBUG_GHOST_HEAD = 0,
+    SCHED_DEBUG_ENQUEUE_IDLE,
+    SCHED_DEBUG_BAD_PRIO,
+    SCHED_DEBUG_ENQUEUE_NON_READY,
+    SCHED_DEBUG_DOUBLE_LINK,
+    SCHED_DEBUG_ENQUEUE_FROM_NON_READY,
+    SCHED_DEBUG_INIT_ON_QUEUED,
+    SCHED_DEBUG_REMOVE_GAVE_UP,
+    SCHED_DEBUG_EVENT_COUNT
+} sched_debug_event_t;
+
+/* Times `ev` has fired since boot (or since the last reset). */
+uint32_t sched_debug_count(sched_debug_event_t ev);
+/* Zero every counter.  Also re-seeds the placement round-robin cursors, which
+ * are otherwise unresettable statics that force placement tests to assert on
+ * distribution rather than on the CPU actually chosen. */
+void sched_debug_reset(void);
 
 /* Assign a default scheduler priority based on process flags. */
 sched_prio_t sched_default_prio(int is_idle, int is_kernel_worker, int is_driver,

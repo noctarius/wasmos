@@ -44,6 +44,14 @@ static void make_thread(thread_t* t, uint32_t tid, sched_prio_t prio) {
     list_head_init(&t->event_node);
 }
 
+/* These tests build cpu_sched_t values on the STACK and enqueue into them, so
+ * they depend on cpu_sched_enqueue leaving a queue that is not one of g_cpus[]
+ * alone rather than redirecting away from it by affinity.  That behaviour is
+ * pinned by the "private queue not redirected" case in
+ * tests/unit/test_sched_runqueue.c; without it, cpu_sched_cpu_index would fold
+ * an unknown queue onto CPU 0 and any thread forbidden there would be silently
+ * enqueued somewhere else, quietly invalidating every test below. */
+
 /* -------------------------------------------------------------------------
  * Test 1: bitmap — ffs_table returns correct highest-priority index
  * ------------------------------------------------------------------------- */

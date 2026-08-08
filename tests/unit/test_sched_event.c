@@ -49,8 +49,12 @@ static int g_yield_calls;
 static uint32_t g_arm_at_index;
 static void (*g_arm_hook)(void);
 
-uint64_t timer_ticks(void) { return g_now; }
-uint64_t timer_ms_to_ticks(uint32_t ms) { return (uint64_t)ms; } /* 1 tick per ms */
+uint64_t timer_ticks(void) {
+    return g_now;
+}
+uint64_t timer_ms_to_ticks(uint32_t ms) {
+    return (uint64_t)ms;
+} /* 1 tick per ms */
 
 thread_t* thread_table_at(uint32_t index) {
     g_table_at_calls++;
@@ -74,7 +78,9 @@ thread_t* thread_get(uint32_t tid) {
     return NULL;
 }
 
-uint32_t thread_current_tid(void) { return g_current_tid; }
+uint32_t thread_current_tid(void) {
+    return g_current_tid;
+}
 
 void thread_set_state(uint32_t tid, thread_state_t state, thread_block_reason_t reason) {
     thread_t* t = thread_get(tid);
@@ -150,7 +156,8 @@ static void block_on(sched_event_t* ev, thread_t* t, uint32_t timeout_ms) {
 
 static int wait_list_len(sched_event_t* ev) {
     int n = 0;
-    for (list_head_t* p = ev->wait_list.next; p != &ev->wait_list && n < POOL_MAX + 2; p = p->next) {
+    for (list_head_t* p = ev->wait_list.next; p != &ev->wait_list && n < POOL_MAX + 2;
+         p = p->next) {
         n++;
     }
     return n;
@@ -354,7 +361,7 @@ static void test_armed_but_not_blocked_is_disarmed_not_fired(void) {
     sched_event_t ev;
     sched_event_init(&ev, SCHED_EVENT_TYPE_IPC);
     thread_t* t = mk();
-    block_on(&ev, t, 10);         /* deadline 110 */
+    block_on(&ev, t, 10);          /* deadline 110 */
     t->state = THREAD_STATE_READY; /* woken some other way */
 
     g_now = 200;
@@ -569,7 +576,8 @@ int main(void) {
         {"V15 no current thread releases the lock",
          test_wait_without_a_current_thread_releases_the_lock},
         {"V16 wake cancels an armed timeout", test_wake_cancels_an_armed_timeout},
-        {"V17 list survives interleaved traffic", test_wait_list_survives_interleaved_waits_and_wakes},
+        {"V17 list survives interleaved traffic",
+         test_wait_list_survives_interleaved_waits_and_wakes},
     };
 
     for (unsigned i = 0; i < sizeof(tests) / sizeof(tests[0]); ++i) {

@@ -945,6 +945,159 @@ static void test_enqueue_from_running_elsewhere(void) {
     check_invariants("enqueue_from running elsewhere");
 }
 
+/* -------------------------------------------------- removal / unlink paths */
+
+/* Walk a band and report the tids in order, so FIFO can be asserted directly
+ * rather than inferred from which thread pick_next hands back. */
+static int band_order(uint32_t cpu, int prio, uint32_t* out, int max) {
+    cpu_sched_t* cs = &g_cpus[cpu].sched;
+    list_head_t* head = &cs->ready_list[prio];
+    int n = 0;
+    for (list_head_t* p = head->next; p != head && n < max; p = p->next) {
+        out[n++] = list_entry(p, thread_t, sched_node)->tid;
+    }
+    return n;
+}
+
+/* R1: the give-up path.  A claim with no queue behind it (an enqueue that never
+ * publishes rq) must terminate rather than spin forever, and must NOT clear the
+ * claim -- clearing it is what strands a node linked-but-unclaimed. */
+static void test_remove_gives_up_on_a_permanent_in_flight_claim(void) {
+    harness_reset();
+    thread_t* t = mk_thread(0, SCHED_PRIO_WASM, THREAD_STATE_READY);
+    __atomic_store_n(&t->on_rq, 1, __ATOMIC_RELEASE);
+    t->rq = 0; /* enqueue "in flight" forever */
+    log_reset();
+
+    cpu_sched_remove_thread(t); /* must return, not hang */
+    CHECK(saw("remove_thread gave up"), "the give-up path is reported");
+    CHECK(t->on_rq == 1, "the claim is NOT cleared out from under the enqueuer");
+}
+
+/* R2: a leaked claim over a detached node.  Nothing to unlink, so nothing may be
+ * miscounted; the claim must still be released. */
+static void test_remove_of_a_detached_but_claimed_thread(void) {
+    harness_reset();
+    thread_t* keep = mk_thread(0, SCHED_PRIO_WASM, THREAD_STATE_READY);
+    thread_t* t = mk_thread(1, SCHED_PRIO_WASM, THREAD_STATE_READY);
+    cpu_sched_enqueue(&g_cpus[0].sched, keep);
+    cpu_sched_enqueue(&g_cpus[0].sched, t);
+    list_head_del(&t->sched_node); /* detach behind the queue's back */
+
+    cpu_sched_remove_thread(t);
+    CHECK(t->on_rq == 0, "the claim is released");
+    CHECK(g_cpus[0].sched.thread_count[SCHED_PRIO_WASM] == 1,
+          "the still-queued sibling is not miscounted away");
+    CHECK((g_cpus[0].sched.ready_bitmap & (1u << SCHED_PRIO_WASM)) != 0,
+          "the band stays occupied while a thread remains");
+}
+
+/* R3: priority mutated while queued.  cpu_sched_remove_thread accounts against
+ * t->sched_prio, so a thread whose priority changed after being linked drains
+ * the WRONG band -- the old band's counter leaks and the underflow floor hides
+ * the damage on the new one.  Same class as the sched_thread_init ordering bug,
+ * but reachable with no tripwire at all. */
+static void test_remove_after_priority_mutation_drains_the_right_band(void) {
+    harness_reset();
+    thread_t* t = mk_thread(0, SCHED_PRIO_DRIVER, THREAD_STATE_READY);
+    cpu_sched_enqueue(&g_cpus[0].sched, t);
+    t->sched_prio = SCHED_PRIO_BACKGROUND; /* mutated while linked */
+
+    cpu_sched_remove_thread(t);
+    cpu_sched_t* cs = &g_cpus[0].sched;
+    CHECK(cs->thread_count[SCHED_PRIO_DRIVER] == 0, "the band it was IN is drained");
+    CHECK(cs->thread_count[SCHED_PRIO_BACKGROUND] == 0, "the band it was not in is untouched");
+    CHECK((cs->ready_bitmap & (1u << SCHED_PRIO_DRIVER)) == 0, "old band's bit cleared");
+    check_invariants("remove after prio mutation");
+}
+
+/* R4: the ghost-head tripwire itself.  A band spliced through a node with two
+ * owners is the most expensive bug in this file's history, and the detector for
+ * it had no test. */
+static void test_ghost_head_is_reported(void) {
+    harness_reset();
+    thread_t* t = mk_thread(0, SCHED_PRIO_WASM, THREAD_STATE_READY);
+    cpu_sched_enqueue(&g_cpus[0].sched, t);
+    /* Link the same node a second time, bypassing the claim, so one unlink
+     * cannot detach it from the head. */
+    list_head_add_tail(&g_cpus[0].sched.ready_list[SCHED_PRIO_WASM], &t->sched_node);
+    log_reset();
+
+    cpu_sched_remove_thread(t);
+    CHECK(saw("ghost head"), "a head still reaching the node is reported");
+}
+
+/* R5: the counter floor.  A drifted counter must clamp at zero rather than wrap
+ * to UINT32_MAX, which is what historically kept a band's bit set forever. */
+static void test_counter_floors_at_zero(void) {
+    harness_reset();
+    thread_t* t = mk_thread(0, SCHED_PRIO_WASM, THREAD_STATE_READY);
+    cpu_sched_enqueue(&g_cpus[0].sched, t);
+    cpu_sched_t* cs = &g_cpus[0].sched;
+    cs->thread_count[SCHED_PRIO_WASM] = 0; /* forced drift */
+
+    ksync_spinlock_lock(&cs->lock);
+    cpu_sched_dequeue(cs, t);
+    ksync_spinlock_unlock(&cs->lock);
+    CHECK(cs->thread_count[SCHED_PRIO_WASM] == 0, "counter clamps, never wraps");
+    CHECK((cs->ready_bitmap & (1u << SCHED_PRIO_WASM)) == 0, "and the band still goes idle");
+}
+
+/* R6: cpu_sched_dequeue against a queue that does not hold the thread is a
+ * caller-contract violation.  Pinned so a future assert has a baseline. */
+static void test_dequeue_against_the_wrong_queue(void) {
+    harness_reset();
+    thread_t* t = mk_thread(0, SCHED_PRIO_WASM, THREAD_STATE_READY);
+    act_as(1);
+    cpu_sched_enqueue(&g_cpus[1].sched, t);
+    uint32_t owner_before = g_cpus[1].sched.thread_count[SCHED_PRIO_WASM];
+
+    cpu_sched_t* wrong = &g_cpus[0].sched;
+    ksync_spinlock_lock(&wrong->lock);
+    cpu_sched_dequeue(wrong, t);
+    ksync_spinlock_unlock(&wrong->lock);
+
+    /* The node does leave CPU 1's list -- list_head_del does not consult the
+     * head -- so the owning counter is what goes stale. */
+    CHECK(g_cpus[1].sched.thread_count[SCHED_PRIO_WASM] == owner_before,
+          "the owning queue's counter is NOT adjusted by the wrong caller");
+    CHECK(g_cpus[0].sched.thread_count[SCHED_PRIO_WASM] == 0,
+          "and the wrong queue's counter floors rather than wrapping");
+}
+
+/* R7: the release order, asserted together rather than a field per test. */
+static void test_remove_releases_queue_pointer_and_claim(void) {
+    harness_reset();
+    thread_t* t = mk_thread(0, SCHED_PRIO_WASM, THREAD_STATE_READY);
+    cpu_sched_enqueue(&g_cpus[0].sched, t);
+    cpu_sched_remove_thread(t);
+    CHECK(t->rq == 0, "queue pointer cleared");
+    CHECK(t->on_rq == 0, "claim released");
+    CHECK(list_head_empty(&t->sched_node), "node canonically detached");
+}
+
+/* R8: removing from any position leaves the rest intact and in FIFO order. */
+static void test_remove_from_head_middle_tail_preserves_fifo(void) {
+    const int victim_idx[3] = {0, 1, 2};
+    const uint32_t expect[3][2] = {{2u, 3u}, {1u, 3u}, {1u, 2u}};
+    for (int c = 0; c < 3; ++c) {
+        harness_reset();
+        thread_t* th[3];
+        for (int i = 0; i < 3; ++i) {
+            th[i] = mk_thread(i, SCHED_PRIO_WASM, THREAD_STATE_READY);
+            cpu_sched_enqueue(&g_cpus[0].sched, th[i]);
+        }
+        cpu_sched_remove_thread(th[victim_idx[c]]);
+
+        uint32_t order[4];
+        int n = band_order(0, SCHED_PRIO_WASM, order, 4);
+        CHECK(n == 2, "two threads remain");
+        CHECK(n == 2 && order[0] == expect[c][0] && order[1] == expect[c][1],
+              "the remaining two keep FIFO order");
+        check_invariants("remove from a 3-deep band");
+    }
+}
+
 /* -------------------------------------------------------------------- main */
 
 int main(void) {
@@ -999,6 +1152,16 @@ int main(void) {
          test_enqueue_from_non_ready_reports_the_real_caller},
         {"F3 enqueue_from NULL is silent", test_enqueue_from_null_is_silent},
         {"F4 enqueue_from running elsewhere", test_enqueue_from_running_elsewhere},
+        {"R1 remove gives up on in-flight claim",
+         test_remove_gives_up_on_a_permanent_in_flight_claim},
+        {"R2 remove of detached but claimed", test_remove_of_a_detached_but_claimed_thread},
+        {"R3 remove after priority mutation",
+         test_remove_after_priority_mutation_drains_the_right_band},
+        {"R4 ghost head is reported", test_ghost_head_is_reported},
+        {"R5 counter floors at zero", test_counter_floors_at_zero},
+        {"R6 dequeue against the wrong queue", test_dequeue_against_the_wrong_queue},
+        {"R7 remove releases rq and claim", test_remove_releases_queue_pointer_and_claim},
+        {"R8 remove preserves FIFO", test_remove_from_head_middle_tail_preserves_fifo},
     };
 
     for (unsigned i = 0; i < sizeof(tests) / sizeof(tests[0]); ++i) {

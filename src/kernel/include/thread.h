@@ -84,6 +84,13 @@ typedef struct thread {
      * which CPU last enqueued the thread.  Valid only while on_rq is 1. */
     uint8_t on_rq;
     struct cpu_sched_s* rq;
+    /* The band this thread was actually LINKED into, recorded at enqueue under
+     * the queue lock.  Unlink accounting must use this rather than sched_prio:
+     * a priority change while queued would otherwise drain a band the node was
+     * never in, leaking the real band's counter and leaving its ready bit set
+     * over an empty list -- a bit cpu_sched_highest_prio then selects forever.
+     * Valid only while on_rq is 1. */
+    uint8_t rq_prio;
     /* Intrusive linkage for scheduler lists. */
     list_head_t sched_node; /* linkage in cpu_sched_t.ready_list */
     list_head_t event_node; /* linkage in sched_event_t.wait_list */

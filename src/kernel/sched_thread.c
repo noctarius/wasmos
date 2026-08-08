@@ -137,7 +137,14 @@ static int sched_mark_ready_if_live(thread_t* t) {
  * the list is the truth.  Deriving the bit means a counter that has drifted --
  * historically by underflowing past zero, which wedged the picker on a band
  * whose bit could never clear again -- cannot stop the band from going idle. */
-static void cpu_sched_unlink_locked(cpu_sched_t* cs, thread_t* t, uint8_t prio) {
+static void cpu_sched_unlink_locked(cpu_sched_t* cs, thread_t* t) {
+    /* The band comes from the thread's recorded linkage, never from its current
+     * sched_prio, so mutating the priority while queued cannot misdirect the
+     * accounting.  Taking it as a parameter invited exactly that mistake. */
+    uint8_t prio = t->rq_prio;
+    if (prio >= SCHED_PRIO_MAX) {
+        prio = 0;
+    }
     list_head_del(&t->sched_node);
     /* DIAGNOSTIC: after list_head_del the band must no longer reach this node.
      * If the head still points at it, this queue's chain was spliced through a
@@ -324,6 +331,7 @@ void cpu_sched_enqueue(cpu_sched_t* cs, thread_t* t) {
         return;
     }
     t->rq = cs;
+    t->rq_prio = prio;
     list_head_add_tail(&cs->ready_list[prio], &t->sched_node);
     cs->thread_count[prio]++;
     cs->ready_bitmap |= (uint8_t)(1u << prio);
@@ -358,7 +366,7 @@ void cpu_sched_remove_thread(thread_t* t) {
         }
         ksync_spinlock_lock(&cs->lock);
         if (t->rq == cs) {
-            cpu_sched_unlink_locked(cs, t, t->sched_prio);
+            cpu_sched_unlink_locked(cs, t);
             ksync_spinlock_unlock(&cs->lock);
             return;
         }
@@ -409,7 +417,7 @@ void sched_enqueue_thread_from(thread_t* t, uintptr_t caller) {
 
 void cpu_sched_dequeue(cpu_sched_t* cs, thread_t* t) {
     /* Caller holds cs->lock. */
-    cpu_sched_unlink_locked(cs, t, t->sched_prio);
+    cpu_sched_unlink_locked(cs, t);
 }
 
 thread_t* cpu_sched_pick_next(cpu_sched_t* cs) {
@@ -475,7 +483,7 @@ thread_t* cpu_sched_pick_next(cpu_sched_t* cs) {
         list_head_t *pos, *tmp;
         list_for_each_safe(pos, tmp, &cs->ready_list[prio]) {
             thread_t* t = list_entry(pos, thread_t, sched_node);
-            cpu_sched_unlink_locked(cs, t, (uint8_t)prio);
+            cpu_sched_unlink_locked(cs, t);
             uint32_t st = __atomic_load_n((uint32_t*)&t->state, __ATOMIC_ACQUIRE);
             if (t->tid == 0 || st == THREAD_STATE_UNUSED || st == THREAD_STATE_ZOMBIE) {
                 continue;
@@ -586,6 +594,7 @@ void sched_thread_init(thread_t* t, sched_prio_t prio) {
     t->last_cpu = 0;
     t->on_rq = 0;
     t->rq = 0;
+    t->rq_prio = 0;
     list_head_init(&t->sched_node);
     list_head_init(&t->event_node);
     sched_event_init(&t->join_event, SCHED_EVENT_TYPE_JOIN);
@@ -688,7 +697,7 @@ static thread_t* cpu_sched_steal_pick(cpu_sched_t* cs, uint32_t to_cpu) {
             /* Lazy sweep: drop reaped/tombstoned stale nodes (see pick_next). */
             uint32_t st = __atomic_load_n((uint32_t*)&t->state, __ATOMIC_ACQUIRE);
             if (t->tid == 0 || st == THREAD_STATE_UNUSED || st == THREAD_STATE_ZOMBIE) {
-                cpu_sched_unlink_locked(cs, t, (uint8_t)prio);
+                cpu_sched_unlink_locked(cs, t);
                 continue;
             }
             if (t == cs->idle || t->sched_sticky) {
@@ -700,7 +709,7 @@ static thread_t* cpu_sched_steal_pick(cpu_sched_t* cs, uint32_t to_cpu) {
             if (!cpu_sched_affinity_allows(t, to_cpu)) {
                 continue;
             }
-            cpu_sched_unlink_locked(cs, t, (uint8_t)prio);
+            cpu_sched_unlink_locked(cs, t);
             return t;
         }
     }

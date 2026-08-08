@@ -74,6 +74,16 @@ typedef struct thread {
     uint32_t cpu_affinity;       /* allowed CPU bitmask; ~0u = any */
     uint32_t last_cpu;           /* CPU where thread last ran */
     uint64_t sched_timeout_tick; /* deadline tick for a timed wait; 0 = none */
+    /* Run-queue membership.  on_rq is the single atomic fact "this thread's
+     * sched_node is linked into some ready_list", claimed by an exchange BEFORE
+     * any queue lock is taken and released only AFTER the unlink completes under
+     * the owning queue's lock.  Because per-CPU queues have per-CPU locks, the
+     * old "is sched_node self-linked?" test read the node under a *different*
+     * lock than the one protecting it; the claim removes that cross-lock read.
+     * rq names the owning queue so the reap path can unlink without knowing
+     * which CPU last enqueued the thread.  Valid only while on_rq is 1. */
+    uint8_t on_rq;
+    struct cpu_sched_s* rq;
     /* Intrusive linkage for scheduler lists. */
     list_head_t sched_node; /* linkage in cpu_sched_t.ready_list */
     list_head_t event_node; /* linkage in sched_event_t.wait_list */

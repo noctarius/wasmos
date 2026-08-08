@@ -3,6 +3,7 @@
  * its owner process's address space.  THREAD_MAX_COUNT limits total live threads. */
 #include "thread.h"
 #include "arch/x86_64/smp.h"
+#include "sched.h"
 #include "sync/spinlock.h"
 
 static thread_t g_threads[THREAD_MAX_COUNT];
@@ -47,6 +48,15 @@ static void thread_reset_slot(thread_t* thread) {
     if (!thread) {
         return;
     }
+    /* Unlink from whatever run queue still holds this thread BEFORE the slot is
+     * released to the allocator.  A slot freed while its sched_node is linked is
+     * handed to the next spawn, whose sched_thread_init re-initialises the node
+     * (self-linking it) while the old queue still points at it: the queue is
+     * spliced through a node that now has two owners, its band counter
+     * underflows, and its ready bit can never clear again -- the picker then
+     * returns that one node on every dispatch forever ("[sched] dequeued
+     * non-ready" at scheduler speed, livelocking the CPU). */
+    cpu_sched_remove_thread(thread);
     thread->tid = 0;
     thread->owner_pid = 0;
     thread->state = THREAD_STATE_UNUSED;

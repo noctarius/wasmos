@@ -100,6 +100,28 @@ static int sched_mark_ready_if_live(thread_t* t) {
     return thread_transit(t, (thread_state_t)cur, THREAD_STATE_READY);
 }
 
+/* Unlink a thread from the queue that owns it and release its run-queue claim.
+ * Caller holds cs->lock and must have established that t is linked in cs.
+ *
+ * The band's ready bit is derived from list emptiness rather than from the
+ * counter reaching zero.  The counter is a statistic (used for load balancing);
+ * the list is the truth.  Deriving the bit means a counter that has drifted --
+ * historically by underflowing past zero, which wedged the picker on a band
+ * whose bit could never clear again -- cannot stop the band from going idle. */
+static void cpu_sched_unlink_locked(cpu_sched_t* cs, thread_t* t, uint8_t prio) {
+    list_head_del(&t->sched_node);
+    if (cs->thread_count[prio] > 0) {
+        cs->thread_count[prio]--;
+    }
+    if (list_head_empty(&cs->ready_list[prio])) {
+        cs->ready_bitmap &= (uint8_t)(~(1u << prio));
+    }
+    t->rq = 0;
+    /* Release the claim last: an enqueuer spinning on the exchange must not be
+     * able to start linking this node until the unlink above has retired. */
+    __atomic_store_n(&t->on_rq, 0, __ATOMIC_RELEASE);
+}
+
 void cpu_sched_enqueue(cpu_sched_t* cs, thread_t* t) {
     for (uint32_t i = 0; i < WASMOS_MAX_CPUS; ++i) {
         if (g_cpus[i].current_thread == t) {
@@ -153,19 +175,55 @@ void cpu_sched_enqueue(cpu_sched_t* cs, thread_t* t) {
         }
         return;
     }
-    ksync_spinlock_lock(&cs->lock);
     /* SMP wake/block races can reach enqueue from multiple CPUs for the same
-     * READY thread.  sched_node self-links when detached from any list, so
-     * use that as the single source of truth and drop duplicate inserts. */
-    if (!list_head_empty(&t->sched_node)) {
-        ksync_spinlock_unlock(&cs->lock);
-        return;
+     * READY thread.  Claim the thread BEFORE taking any queue lock: each CPU's
+     * ready_list is protected by that CPU's own lock, so testing the node's
+     * linkage under cs->lock would be reading state owned by a different lock
+     * (the queue the thread is actually in, or a remote pick_next/steal
+     * unlinking it right now).  The exchange is the serialisation point: it
+     * only succeeds once the previous owner's unlink has retired and released
+     * the claim, so no two CPUs ever touch this node's pointers at once. */
+    if (__atomic_exchange_n(&t->on_rq, 1, __ATOMIC_ACQ_REL)) {
+        return; /* already queued somewhere */
     }
+    ksync_spinlock_lock(&cs->lock);
     uint8_t prio = t->sched_prio;
+    t->rq = cs;
     list_head_add_tail(&cs->ready_list[prio], &t->sched_node);
     cs->thread_count[prio]++;
     cs->ready_bitmap |= (uint8_t)(1u << prio);
     ksync_spinlock_unlock(&cs->lock);
+}
+
+void cpu_sched_remove_thread(thread_t* t) {
+    if (!t) {
+        return;
+    }
+    /* The reap path cannot know which CPU last enqueued the thread, so follow
+     * t->rq and re-validate under that queue's lock.  A concurrent pick_next or
+     * steal may unlink it first (rq -> 0) or, in principle, move it; re-read and
+     * retry rather than unlinking against a stale queue.  Bounded because a
+     * thread being reaped is already terminal and nothing legitimately
+     * re-enqueues it -- one iteration is the norm. */
+    for (int attempt = 0; attempt < 8; ++attempt) {
+        cpu_sched_t* cs = (cpu_sched_t*)__atomic_load_n(&t->rq, __ATOMIC_ACQUIRE);
+        if (!cs) {
+            /* Not on any queue.  Drop a claim left behind by a caller that
+             * unlinked without releasing it; otherwise a recycled slot could
+             * never be enqueued again. */
+            __atomic_store_n(&t->on_rq, 0, __ATOMIC_RELEASE);
+            return;
+        }
+        ksync_spinlock_lock(&cs->lock);
+        if (t->rq == cs) {
+            cpu_sched_unlink_locked(cs, t, t->sched_prio);
+            ksync_spinlock_unlock(&cs->lock);
+            return;
+        }
+        ksync_spinlock_unlock(&cs->lock);
+    }
+    serial_printf_unlocked("[sched] remove_thread gave up tid=%u owner=%u state=%u\n",
+                           (unsigned)t->tid, (unsigned)t->owner_pid, (unsigned)t->state);
 }
 
 void sched_enqueue_thread_from(thread_t* t, uintptr_t caller) {
@@ -203,11 +261,7 @@ void sched_enqueue_thread_from(thread_t* t, uintptr_t caller) {
 
 void cpu_sched_dequeue(cpu_sched_t* cs, thread_t* t) {
     /* Caller holds cs->lock. */
-    uint8_t prio = t->sched_prio;
-    list_head_del(&t->sched_node);
-    if (--cs->thread_count[prio] == 0) {
-        cs->ready_bitmap &= (uint8_t)(~(1u << prio));
-    }
+    cpu_sched_unlink_locked(cs, t, t->sched_prio);
 }
 
 thread_t* cpu_sched_pick_next(cpu_sched_t* cs) {
@@ -258,10 +312,7 @@ thread_t* cpu_sched_pick_next(cpu_sched_t* cs) {
     list_head_t *pos, *tmp;
     list_for_each_safe(pos, tmp, &cs->ready_list[prio]) {
         thread_t* t = list_entry(pos, thread_t, sched_node);
-        list_head_del(&t->sched_node);
-        if (--cs->thread_count[prio] == 0) {
-            cs->ready_bitmap &= (uint8_t)(~(1u << prio));
-        }
+        cpu_sched_unlink_locked(cs, t, (uint8_t)prio);
         uint32_t st = __atomic_load_n((uint32_t*)&t->state, __ATOMIC_ACQUIRE);
         if (t->tid == 0 || st == THREAD_STATE_UNUSED || st == THREAD_STATE_ZOMBIE) {
             continue;
@@ -298,16 +349,16 @@ void sched_wake_thread(thread_t* t) {
     if (!thread_wake_if_blocked(t->tid)) {
         return;
     }
-    if (list_head_empty(&t->sched_node)) {
 #if WASMOS_SCHED_CALLER_CPU_BIAS
-        /* Pull the receiver onto the waker's CPU queue. */
-        t->last_cpu = cpu_local()->cpu_id;
+    /* Pull the receiver onto the waker's CPU queue. */
+    t->last_cpu = cpu_local()->cpu_id;
 #endif
-        /* Always enqueue locally — no remote spinlock in the hot IPC path.
-         * With bias OFF, last_cpu is left as-is so threads stay on whatever
-         * CPU they last ran on; work-stealing handles redistribution. */
-        cpu_sched_enqueue(cpu_sched(), t);
-    }
+    /* Always enqueue locally — no remote spinlock in the hot IPC path.  With
+     * bias OFF, last_cpu is left as-is so threads stay on whatever CPU they last
+     * ran on; work-stealing handles redistribution.  No "already queued?" test
+     * here: cpu_sched_enqueue's on_rq claim is the only safe one, because this
+     * CPU does not hold the lock of whichever queue would hold the thread. */
+    cpu_sched_enqueue(cpu_sched(), t);
 
     /* Priority preemption: if we just made a thread runnable that outranks what
      * this CPU is currently running, request a reschedule so it preempts at the
@@ -328,6 +379,14 @@ void sched_thread_init(thread_t* t, sched_prio_t prio) {
     t->sched_prio = (uint8_t)prio;
     t->cpu_affinity = ~0u;
     t->last_cpu = 0;
+    /* A slot handed back by the allocator must not still be linked into a ready
+     * queue: re-initialising the node here would self-link it while that queue
+     * still points at it, splicing the list through a node two owners now
+     * mutate.  thread_reset_slot -> cpu_sched_remove_thread guarantees the
+     * unlink happened; clearing the claim keeps the fresh incarnation
+     * enqueueable. */
+    t->on_rq = 0;
+    t->rq = 0;
     list_head_init(&t->sched_node);
     list_head_init(&t->event_node);
     sched_event_init(&t->join_event, SCHED_EVENT_TYPE_JOIN);
@@ -430,19 +489,13 @@ static thread_t* cpu_sched_steal_pick(cpu_sched_t* cs) {
             /* Lazy sweep: drop reaped/tombstoned stale nodes (see pick_next). */
             uint32_t st = __atomic_load_n((uint32_t*)&t->state, __ATOMIC_ACQUIRE);
             if (t->tid == 0 || st == THREAD_STATE_UNUSED || st == THREAD_STATE_ZOMBIE) {
-                list_head_del(&t->sched_node);
-                if (--cs->thread_count[prio] == 0) {
-                    cs->ready_bitmap &= (uint8_t)(~(1u << prio));
-                }
+                cpu_sched_unlink_locked(cs, t, (uint8_t)prio);
                 continue;
             }
             if (t == cs->idle || t->sched_sticky) {
                 continue;
             }
-            list_head_del(&t->sched_node);
-            if (--cs->thread_count[prio] == 0) {
-                cs->ready_bitmap &= (uint8_t)(~(1u << prio));
-            }
+            cpu_sched_unlink_locked(cs, t, (uint8_t)prio);
             return t;
         }
     }

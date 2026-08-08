@@ -36,7 +36,7 @@ typedef enum {
 
 struct thread;
 
-typedef struct {
+typedef struct cpu_sched_s {
     ksync_spinlock_t lock;
     uint8_t ready_bitmap;                   /* bit i set ↔ ready_list[i] non-empty */
     list_head_t ready_list[SCHED_PRIO_MAX]; /* one FIFO per priority */

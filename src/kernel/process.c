@@ -1239,14 +1239,14 @@ int process_unpark_pid(uint32_t pid) {
     if (process_transit(proc, PROCESS_STATE_BLOCKED, PROCESS_STATE_READY)) {
         proc->block_reason = PROCESS_BLOCK_NONE;
     }
-    if (list_head_empty(&t->sched_node)) {
-        /* Enqueue the unparked child on the local (caller) CPU.  Cross-CPU
-         * "push" placement at unpark time races with the IPC wake path and
-         * destabilises WARP-backed app startup; instead rely on per-CPU
-         * work-stealing (cpu_sched_try_steal) to pull this thread onto an idle
-         * AP once it is runnable. */
-        sched_enqueue_thread(t);
-    }
+    /* Enqueue the unparked child on the local (caller) CPU.  Cross-CPU "push"
+     * placement at unpark time races with the IPC wake path and destabilises
+     * WARP-backed app startup; instead rely on per-CPU work-stealing
+     * (cpu_sched_try_steal) to pull this thread onto an idle AP once it is
+     * runnable.  Enqueue unconditionally: the on_rq claim inside
+     * cpu_sched_enqueue is the only sound "already queued?" test, since this CPU
+     * holds no lock over whichever queue would hold the thread. */
+    sched_enqueue_thread(t);
     return 0;
 }
 
@@ -2017,11 +2017,8 @@ static int process_schedule_once_impl(void) {
                 thread_t* next = process_first_owner_ready_thread(proc);
                 if (next && next->state != THREAD_STATE_ZOMBIE) {
                     process_set_ready(proc, next);
-                    /* Only enqueue if not already in the ready list
-                     * (sched_node self-links when not in any list). */
-                    if (next->sched_node.next == &next->sched_node) {
-                        sched_enqueue_thread(next);
-                    }
+                    /* Duplicate enqueues are dropped by the on_rq claim. */
+                    sched_enqueue_thread(next);
                 }
             }
         } else {
@@ -2050,9 +2047,7 @@ static int process_schedule_once_impl(void) {
             next = process_first_owner_ready_thread(proc);
             if (next) {
                 process_set_ready(proc, next);
-                if (next->sched_node.next == &next->sched_node) {
-                    sched_enqueue_thread(next);
-                }
+                sched_enqueue_thread(next);
             } else {
                 /* No runnable sibling left: park the process.  Best-effort —
                  * a 0 return means it raced to a terminal state, in which case
@@ -2092,9 +2087,7 @@ static int process_schedule_once_impl(void) {
              * it on its home CPU. */
             thread_set_state(thread->tid, THREAD_STATE_READY, THREAD_BLOCK_NONE);
             thread->sched_sticky = 1;
-            if (thread->sched_node.next == &thread->sched_node) {
-                sched_enqueue_thread(thread);
-            }
+            sched_enqueue_thread(thread);
         }
     } else {
         /* If the thread registered itself in an event wait_list via the
@@ -2127,7 +2120,7 @@ static int process_schedule_once_impl(void) {
         }
         /* Idle threads live only in the per-CPU fallback path; never enqueue
          * them into the global ready queue so they cannot migrate to a wrong CPU. */
-        if (!proc->is_idle && thread->sched_node.next == &thread->sched_node) {
+        if (!proc->is_idle) {
             sched_enqueue_thread(thread);
         }
     }

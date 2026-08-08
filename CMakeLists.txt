@@ -270,7 +270,7 @@ set(WASMOS_TRACE_DEFINE -DWASMOS_TRACE=${WASMOS_TRACE_VALUE})
 function(wasmos_add_ide_c_target target_name)
   set(options)
   set(oneValueArgs)
-  set(multiValueArgs SOURCES INCLUDES IQUOTE)
+  set(multiValueArgs SOURCES INCLUDES IQUOTE DEFINES)
   cmake_parse_arguments(WASMOS_IDE "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
   if (NOT WASMOS_IDE_SOURCES)
     message(FATAL_ERROR "wasmos_add_ide_c_target(${target_name}) requires SOURCES")
@@ -287,6 +287,12 @@ function(wasmos_add_ide_c_target target_name)
   foreach(_q ${WASMOS_IDE_IQUOTE})
     target_compile_options(${target_name} PRIVATE "SHELL:-iquote ${_q}")
   endforeach()
+  # Some sources only parse under the same -D the real compile line passes (a
+  # header may select between an inline asm body and a portable one), so the
+  # index has to carry them or clang-tidy analyses a variant nothing builds.
+  if (WASMOS_IDE_DEFINES)
+    target_compile_definitions(${target_name} PRIVATE ${WASMOS_IDE_DEFINES})
+  endif ()
   # Force-include the cast macros so compile_commands.json entries (used by
   # clang-tidy) resolve ptr_cast/addr_cast/fn_cast, matching the real build.
   target_compile_options(${target_name} PRIVATE -include ${LIBC_DIR}/include/wasmos_cast.h)
@@ -2585,7 +2591,7 @@ endif ()
 # files need a different include set than their neighbours. EXCLUDE drops those
 # same files from a sibling glob so each file lands in exactly one index target.
 function(wasmos_ide_index name)
-  cmake_parse_arguments(II "" "" "DIRS;INCLUDES;IQUOTE;SOURCES;EXCLUDE" ${ARGN})
+  cmake_parse_arguments(II "" "" "DIRS;INCLUDES;IQUOTE;SOURCES;EXCLUDE;DEFINES" ${ARGN})
   set(_srcs ${II_SOURCES})
   foreach(_d ${II_DIRS})
     file(GLOB_RECURSE _g CONFIGURE_DEPENDS
@@ -2597,7 +2603,8 @@ function(wasmos_ide_index name)
   endif ()
   if (_srcs)
     wasmos_add_ide_c_target(${name} SOURCES ${_srcs}
-                            INCLUDES ${II_INCLUDES} IQUOTE ${II_IQUOTE})
+                            INCLUDES ${II_INCLUDES} IQUOTE ${II_IQUOTE}
+                            DEFINES ${II_DEFINES})
   endif ()
 endfunction()
 
@@ -2635,6 +2642,25 @@ set(WASMOS_UNIT_LIBC_TESTS
     ${CMAKE_SOURCE_DIR}/tests/unit/test_native_ipc_future.c
     ${CMAKE_SOURCE_DIR}/tests/unit/test_wasm_coroutine.c)
 
+# The scheduler host tests drive the REAL kernel sources, so they must see the
+# real kernel headers and nothing else. tests/unit/include holds deliberately
+# minimal shims for other tests -- thread.h is `struct thread { uint32_t tid; }`
+# and sched_event.h redefines the whole sched_event_type_t enum -- so having that
+# directory on the include path makes these files fail to parse with dozens of
+# redefinition errors. Their real compile lines already omit it; this keeps the
+# lint index matching them. WASMOS_HOST_TEST_SMP is required too: without it
+# cpu_local() is the GS-relative inline asm, which is not parseable off x86.
+set(WASMOS_UNIT_SCHED_TESTS
+    ${CMAKE_SOURCE_DIR}/tests/unit/test_sched_runqueue.c
+    ${CMAKE_SOURCE_DIR}/tests/unit/test_sched_event.c
+    ${CMAKE_SOURCE_DIR}/tests/unit/test_sched_concurrency.c)
+
+wasmos_ide_index(wasmos_ide_unit_sched
+  SOURCES ${WASMOS_UNIT_SCHED_TESTS}
+  IQUOTE ${KERNEL_DIR}/include ${WASM3_DIR}/source
+         ${CMAKE_SOURCE_DIR}/abi/generated/c
+  DEFINES WASMOS_HOST_TEST_SMP=1 WASMOS_SCHED_CALLER_CPU_BIAS=1)
+
 wasmos_ide_index(wasmos_ide_unit_libc
   SOURCES ${WASMOS_UNIT_LIBC_TESTS}
   INCLUDES ${LIBC_DIR}/include ${LIBC_DIR}/src
@@ -2654,7 +2680,7 @@ wasmos_ide_index(wasmos_ide_unit_libc
 # service-level unit tests include directly.
 wasmos_ide_index(wasmos_ide_unit
   DIRS ${CMAKE_SOURCE_DIR}/tests/unit
-  EXCLUDE ${WASMOS_UNIT_LIBC_TESTS}
+  EXCLUDE ${WASMOS_UNIT_LIBC_TESTS} ${WASMOS_UNIT_SCHED_TESTS}
   IQUOTE ${CMAKE_SOURCE_DIR}/tests/unit/include ${LIBC_DIR}/include
          ${KERNEL_DIR}/include ${DRIVER_WASM_DIR}/include
          ${LIBSYS_WASM_DIR}/include ${LIBSYS_NATIVE_DIR}/include

@@ -3,10 +3,14 @@
  * irq_register() ties a hardware IRQ line to an IPC endpoint so the ISR
  * delivers a notification message to the registered driver context. */
 #include "irq.h"
+#include "msi.h"
 #include "arch/x86_64/irq_x86_64.h"
 
 void irq_init(void) {
     x86_irq_init();
+    /* The MSI vector table shares this init point; its IDT gates were installed
+     * alongside the IRQ ones in x86_cpu_init. */
+    msi_init();
 }
 void irq_late_init(const boot_info_t* boot_info) {
     x86_irq_late_init(boot_info);

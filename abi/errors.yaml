@@ -165,8 +165,14 @@ domains:
 
   driver:
     id: 7
-    description: "generic device-driver failures (reserved)"
-    codes: []
+    description: "generic device-driver startup/lifecycle failures"
+    codes:
+      - { name: NO_PROC_ENDPOINT,   description: "spawn info carried no process-manager endpoint" }
+      - { name: ENDPOINT_CREATE,    description: "the driver could not create its own IPC endpoint" }
+      - { name: NO_DEVICE_IDENTITY, description: "startup args carry no valid device identity for this driver" }
+      - { name: DEVICE_INIT,        description: "bringing the identified device up failed" }
+      - { name: REGISTER,           description: "publishing the driver endpoint to the service registry failed" }
+      - { name: SELECT_SETUP,       description: "the driver could not build its IPC select set" }
 
   vt:
     id: 8
@@ -217,6 +223,32 @@ domains:
       - { name: BAD_ENDPOINT,   description: "target endpoint is invalid or not owned by the caller" }
       - { name: LINE_FULL,      description: "the line already has the maximum number of registered sharers" }
       - { name: NOT_A_SHARER,   description: "caller has no registered handler on this line" }
+
+  msi:
+    id: 17
+    description: "message-signalled interrupt failures (kernel vector allocation + pci-bus device programming)"
+    codes:
+      # Kernel side: the MSI vector namespace.
+      - { name: NOT_AUTHORIZED,   description: "caller lacks the irq.route capability" }
+      - { name: UNSUPPORTED,      description: "this build's interrupt controller cannot deliver message-signalled interrupts (no LAPIC)" }
+      - { name: BAD_ENDPOINT,     description: "target endpoint is invalid or not owned by the caller" }
+      - { name: NO_VECTORS,       description: "the MSI vector space is exhausted" }
+      - { name: BAD_VECTOR,       description: "vector is outside the MSI range or not allocated" }
+      - { name: NOT_OWNER,        description: "caller does not own the vector it is trying to release" }
+      # pci-bus side: programming the device's MSI/MSI-X capability.
+      - { name: BAD_DEVICE,       description: "bus/device/function does not name a present PCI function" }
+      - { name: NO_CAPABILITY,    description: "device exposes neither an MSI-X (0x11) nor an MSI (0x05) capability" }
+      - { name: BAD_ENTRY,        description: "table entry index is beyond the device's supported vector count" }
+      - { name: MAP_FAILED,       description: "the MSI-X table BAR could not be mapped" }
+      - { name: NOT_DEVICE_OWNER, description: "another endpoint already programmed interrupts for this device" }
+
+  io:
+    id: 18
+    description: "region-addressed I/O port access failures"
+    codes:
+      - { name: NOT_AUTHORIZED, description: "caller has no io.port spawn profile, so it holds no I/O windows" }
+      - { name: BAD_REGION,     description: "region index names no window this context was granted" }
+      - { name: OUT_OF_WINDOW,  description: "offset falls outside the granted window's bounds" }
 
   font:
     id: 12

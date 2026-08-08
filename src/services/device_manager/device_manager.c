@@ -679,6 +679,114 @@ static int hw_spawn_driver_index(int32_t index) {
     return dm_spawn_sync_call(PROC_IPC_SPAWN_SYNC, index, DM_SPAWN_TIMEOUT_MS, 0, 0);
 }
 
+/* What a driver is actually granted is otherwise invisible: the driver addresses
+ * its device by region index and never learns the ports, and a capability
+ * refusal surfaces far from here. One line at the point of decision makes a
+ * mis-granted window obvious in a boot log instead of a mystery later. */
+static void log_spawn_grant(int32_t index, const spawn_caps_t* caps) {
+    (void)printf("[device-manager] grant module=%d irq_mask=%04X caps=%X windows=%u\n", (int)index,
+                 (unsigned)caps->irq_mask, (unsigned)caps->cap_flags,
+                 (unsigned)(caps->io_range_count ? caps->io_range_count : 1u));
+    if (caps->io_range_count == 0u) {
+        (void)printf("[device-manager]   io[0] %04X-%04X\n", (unsigned)caps->io_port_min,
+                     (unsigned)caps->io_port_max);
+        return;
+    }
+    for (uint32_t i = 0; i < caps->io_range_count; ++i) {
+        (void)printf("[device-manager]   io[%u] %04X-%04X\n", (unsigned)i,
+                     (unsigned)caps->io_ranges[i].first, (unsigned)caps->io_ranges[i].last);
+    }
+}
+
+/* Large enough for either payload that crosses to process-manager: a module
+ * metadata descriptor, or a spawn-caps descriptor with its trailing arrays. */
+#define DM_PM_BUFFER_BYTES 256u
+
+/* One transfer buffer shared with process-manager for the life of the service,
+ * granted R|W: PM writes module metadata into it and reads spawn-caps
+ * descriptors out of it. Everything crossing to PM goes through the buffer
+ * object rather than a raw pointer, because PM cannot resolve a WARP linear
+ * memory offset -- see the note in pm_handle_spawn_caps_v2. */
+static int32_t g_dm_meta_bid = -1;
+static int32_t g_dm_meta_borrow = -1;
+
+static int32_t dm_pm_buffer(void) {
+    if (g_dm_meta_bid >= 0) {
+        return g_dm_meta_bid;
+    }
+    g_dm_meta_bid = wasmos_xfer_buffer_acquire((int32_t)DM_PM_BUFFER_BYTES);
+    if (g_dm_meta_bid < 0) {
+        return -1;
+    }
+    g_dm_meta_borrow = wasmos_xfer_buffer_borrow(
+        g_dm.proc_endpoint, g_dm_meta_bid, WASMOS_BUFFER_GRANT_READ | WASMOS_BUFFER_GRANT_WRITE);
+    if (g_dm_meta_borrow < 0) {
+        (void)wasmos_xfer_buffer_release(g_dm_meta_bid);
+        g_dm_meta_bid = -1;
+        return -1;
+    }
+    return g_dm_meta_bid;
+}
+
+/* Descriptor payload for a spawn carrying more than one window. A byte buffer
+ * rather than a struct, because the trailing arrays are sized by their USED
+ * counts: process-manager locates the DMA windows at
+ * header + io_range_count * sizeof(range), so a fixed-size member array would
+ * put them at the wrong offset. Static because PM reads it out of this process's
+ * linear memory by pointer, after this function returns. */
+static uint8_t g_dm_caps_payload[sizeof(wasmos_spawn_caps_v2_t) +
+                                 (WASMOS_IO_RANGE_LIMIT * sizeof(wasmos_io_range_t)) +
+                                 sizeof(wasmos_dma_window_t)];
+
+/* Spawn with the windows the driver declared. The packed-arg opcodes are out of
+ * argument slots, so a driver needing more than one goes through the descriptor
+ * form, with arg3 asking for the same sync ready-wait. */
+static int hw_spawn_driver_index_caps_v2(int32_t index, const spawn_caps_t* caps) {
+    wasmos_spawn_caps_v2_t header;
+    wasmos_dma_window_t window;
+    uint32_t window_count = 0;
+    uint32_t offset = 0;
+    uint32_t payload_size = 0;
+
+    memset(&header, 0, sizeof(header));
+    header.cap_flags = caps->cap_flags;
+    header.irq_mask = caps->irq_mask;
+    header.io_range_count = (uint16_t)caps->io_range_count;
+
+    /* The packed opcodes let PM synthesise a default DMA grant when only the DMA
+     * bit is set; a descriptor is explicit by design, so state the same defaults
+     * here rather than have PM guess for one caller and not the other. */
+    memset(&window, 0, sizeof(window));
+    if ((caps->cap_flags & DEVMGR_CAP_DMA) != 0) {
+        header.dma.direction_flags = WASMOS_DMA_DIR_BIDIR;
+        header.dma.max_bytes = 4096u;
+        header.dma.window_count = 1u;
+        window.base = 0;
+        window.length = 0x80000000ull;
+        window_count = 1u;
+    }
+
+    payload_size = WASMOS_SPAWN_CAPS_V2_SIZE(caps->io_range_count, window_count);
+    if (payload_size > sizeof(g_dm_caps_payload)) {
+        return -1;
+    }
+    memcpy(g_dm_caps_payload, &header, sizeof(header));
+    offset = (uint32_t)sizeof(header);
+    memcpy(g_dm_caps_payload + offset, caps->io_ranges,
+           caps->io_range_count * sizeof(wasmos_io_range_t));
+    offset += caps->io_range_count * (uint32_t)sizeof(wasmos_io_range_t);
+    if (window_count > 0) {
+        memcpy(g_dm_caps_payload + offset, &window, sizeof(window));
+    }
+    if (dm_pm_buffer() < 0 ||
+        wasmos_xfer_buffer_write(g_dm_meta_bid, addr_cast(int32_t, g_dm_caps_payload),
+                                 (int32_t)payload_size, 0) != 0) {
+        return -1;
+    }
+    return dm_spawn_sync_call(PROC_IPC_SPAWN_CAPS_V2, index, g_dm_meta_bid, (int32_t)payload_size,
+                              (int32_t)DM_SPAWN_TIMEOUT_MS);
+}
+
 static int hw_spawn_driver_index_caps(int32_t index, const spawn_caps_t* caps) {
     uint32_t io_packed = 0;
     uint32_t arg3 = 0;
@@ -687,6 +795,10 @@ static int hw_spawn_driver_index_caps(int32_t index, const spawn_caps_t* caps) {
     }
     if (index < 0) {
         return -1;
+    }
+    log_spawn_grant(index, caps);
+    if (caps->io_range_count > 0u) {
+        return hw_spawn_driver_index_caps_v2(index, caps);
     }
     io_packed = ((uint32_t)caps->io_port_min) | ((uint32_t)caps->io_port_max << 16);
     arg3 = (caps->irq_mask & 0xFFFFu) | ((DM_SPAWN_TIMEOUT_MS & 0xFFFFu) << 16);
@@ -898,6 +1010,51 @@ static int query_module_meta_by_path(const char* path, uint32_t source, int32_t*
  *   arg2 [31:16]=io_port_base  [15:0]=device_id
  *   arg3 [15:8]=irq_hint  [7:0]=mmio_hint
  */
+/* Consume a wasmos_pci_device_desc_t published into a borrowed buffer. The
+ * legacy io_port_base/mmio_hint fields are derived from BAR0 so the existing
+ * match and spawn paths keep working unchanged while callers migrate to the
+ * full BAR table. */
+static void registry_add_from_desc(int32_t buffer_id, int32_t offset, int32_t size) {
+    wasmos_pci_device_desc_t desc;
+    pci_device_record_t* rec;
+    if (g_dm.registry_count >= DEVICE_REGISTRY_CAP) {
+        return;
+    }
+    if (size < (int32_t)sizeof(desc) ||
+        wasmos_xfer_buffer_read(buffer_id, addr_cast(int32_t, &desc), (int32_t)sizeof(desc),
+                                offset) != 0) {
+        console_write("[device-manager] device descriptor read failed\n");
+        return;
+    }
+    if (desc.version != WASMOS_PCI_DEVICE_DESC_VERSION) {
+        console_write("[device-manager] device descriptor version mismatch\n");
+        return;
+    }
+    rec = &g_dm.registry[g_dm.registry_count++];
+    memset(rec, 0, sizeof(*rec));
+    rec->bus = desc.bus;
+    rec->device = desc.device;
+    rec->function = desc.function;
+    rec->class_code = desc.class_code;
+    rec->subclass = desc.subclass;
+    rec->prog_if = desc.prog_if;
+    rec->vendor_id = desc.vendor_id;
+    rec->device_id = desc.device_id;
+    rec->irq_hint = desc.irq_line;
+    rec->irq_pin = desc.irq_pin;
+    rec->msi_cap_offset = desc.msi_cap_offset;
+    rec->msix_cap_offset = desc.msix_cap_offset;
+    for (uint32_t i = 0; i < WASMOS_PCI_BAR_COUNT; ++i) {
+        rec->bars[i] = desc.bars[i];
+    }
+    if (desc.bars[0].kind == WASMOS_PCI_BAR_IO) {
+        rec->io_port_base = (uint16_t)(desc.bars[0].base & 0xFFFFu);
+    } else if (desc.bars[0].kind != WASMOS_PCI_BAR_NONE) {
+        rec->mmio_hint = 1u;
+    }
+    queue_block_fs_rule_spawns();
+}
+
 static void registry_add_from_ipc(int32_t arg0, int32_t arg1, int32_t arg2, int32_t arg3) {
     if (g_dm.registry_count >= DEVICE_REGISTRY_CAP) {
         return;
@@ -1186,48 +1343,114 @@ static void reset_selected_storage(void) {
     g_dm.selected_storage_caps.irq_mask = 0;
 }
 
-/* Query PROC_IPC_MODULE_META for the given module_index/match_index and
- * decode the packed IPC response fields into individual output parameters.
- * arg0 encodes io_port_min/max; arg1 encodes class/subclass/prog_if/flags;
- * arg2 encodes vendor_id/device_id. Returns 0 on success, -1 otherwise. */
+/* Turn a driver's declared windows into the grant it actually gets. A static
+ * range is taken verbatim; a BAR region is resolved against the device this
+ * driver matched, using the base and length pci-bus measured -- which is the
+ * whole point of the exercise, since a firmware-assigned window cannot be
+ * written down in a manifest.
+ *
+ * Declaration order is preserved because it IS the region index the driver
+ * addresses at runtime. A BAR the device does not implement is skipped rather
+ * than granted as an empty window, so a driver asking for something absent gets
+ * a refusal at first use instead of silently reading a neighbouring device. */
+static void resolve_declared_regions(const wasmos_module_meta_desc_t* meta,
+                                     const pci_device_record_t* rec, spawn_caps_t* caps) {
+    if (!meta || !rec || !caps || meta->region_count == 0) {
+        return;
+    }
+    caps->io_range_count = 0;
+    for (uint32_t i = 0; i < meta->region_count && caps->io_range_count < WASMOS_IO_RANGE_LIMIT;
+         ++i) {
+        uint16_t first = 0;
+        uint16_t last = 0;
+        if (meta->regions[i].kind == WASMOS_APP_REGION_IO) {
+            first = meta->regions[i].first;
+            last = meta->regions[i].last;
+        } else {
+            uint8_t bi = meta->regions[i].bar_index;
+            if (bi >= WASMOS_PCI_BAR_COUNT || rec->bars[bi].kind != WASMOS_PCI_BAR_IO ||
+                rec->bars[bi].base == 0u || rec->bars[bi].size == 0u) {
+                continue;
+            }
+            first = (uint16_t)(rec->bars[bi].base & 0xFFFFu);
+            last = (uint16_t)((rec->bars[bi].base + rec->bars[bi].size - 1u) & 0xFFFFu);
+        }
+        if (first > last) {
+            continue;
+        }
+        caps->io_ranges[caps->io_range_count].first = first;
+        caps->io_ranges[caps->io_range_count].last = last;
+        caps->io_range_count++;
+    }
+}
+
+/* Query PROC_IPC_MODULE_META_DESC for the given module_index/match_index. The
+ * answer lands in a buffer we own and lend WRITE, because the declared region
+ * list is variable-length and cannot be packed into IPC arguments.
+ * Returns 0 on success, -1 otherwise. */
 static int query_driver_module_meta(int32_t module_index, uint32_t match_index,
                                     uint8_t* out_class_code, uint8_t* out_subclass,
                                     uint8_t* out_prog_if, uint16_t* out_vendor_id,
                                     uint16_t* out_device_id, uint8_t* out_storage_bootstrap,
-                                    uint8_t* out_match_count, spawn_caps_t* out_caps) {
+                                    uint8_t* out_match_count, spawn_caps_t* out_caps,
+                                    wasmos_module_meta_desc_t* out_desc) {
     wasmos_ipc_message_t resp;
+    wasmos_module_meta_desc_t desc;
+    int rc = -1;
+
     if (!out_class_code || !out_subclass || !out_prog_if || !out_vendor_id || !out_device_id ||
         !out_storage_bootstrap || !out_match_count || !out_caps) {
         return -1;
     }
-    if (dm_ipc_call(g_dm.proc_endpoint, g_dm.reply_endpoint, PROC_IPC_MODULE_META,
-                    g_dm.request_id++, module_index, (int32_t)match_index, 0, 0, &resp, 128) != 0) {
+    /* One buffer for the life of the service rather than one per query:
+     * selection asks about every module in turn. */
+    if (dm_pm_buffer() < 0) {
         return -1;
     }
-    if (resp.type != PROC_IPC_RESP) {
-        return -1;
+    if (dm_ipc_call(g_dm.proc_endpoint, g_dm.reply_endpoint, PROC_IPC_MODULE_META_DESC,
+                    g_dm.request_id++, module_index, (int32_t)match_index, g_dm_meta_bid, 0, &resp,
+                    128) == 0 &&
+        resp.type == PROC_IPC_RESP && resp.arg0 >= (int32_t)sizeof(desc) &&
+        wasmos_xfer_buffer_read(g_dm_meta_bid, addr_cast(int32_t, &desc), (int32_t)sizeof(desc),
+                                0) == 0 &&
+        desc.version == WASMOS_MODULE_META_DESC_VERSION) {
+        *out_class_code = desc.class_code;
+        *out_subclass = desc.subclass;
+        *out_prog_if = desc.prog_if;
+        *out_storage_bootstrap = desc.storage_bootstrap;
+        *out_match_count = (uint8_t)(desc.match_count & 0x7Fu);
+        *out_vendor_id = desc.vendor_id;
+        *out_device_id = desc.device_id;
+        out_caps->cap_flags = desc.cap_flags & 0xFFFFu;
+        out_caps->io_port_min = desc.io_port_min;
+        out_caps->io_port_max = desc.io_port_max;
+        out_caps->irq_mask = (uint16_t)((1u << 14) | (1u << 15));
+        if (out_desc) {
+            *out_desc = desc;
+        }
+        rc = 0;
     }
-    uint32_t arg0 = (uint32_t)resp.arg0;
-    uint32_t arg1 = (uint32_t)resp.arg1;
-    uint32_t arg2 = (uint32_t)resp.arg2;
-    uint32_t arg3 = (uint32_t)resp.arg3;
-    *out_class_code = (uint8_t)((arg1 >> 24) & 0xFFu);
-    *out_subclass = (uint8_t)((arg1 >> 16) & 0xFFu);
-    *out_prog_if = (uint8_t)((arg1 >> 8) & 0xFFu);
-    *out_storage_bootstrap = (uint8_t)(arg1 & 0x1u);
-    *out_match_count = (uint8_t)((arg1 >> 1) & 0x7Fu);
-    *out_vendor_id = (uint16_t)((arg2 >> 16) & 0xFFFFu);
-    *out_device_id = (uint16_t)(arg2 & 0xFFFFu);
-    out_caps->cap_flags = arg3 & 0xFFFFu;
-    out_caps->io_port_min = (uint16_t)(arg0 & 0xFFFFu);
-    out_caps->io_port_max = (uint16_t)((arg0 >> 16) & 0xFFFFu);
-    out_caps->irq_mask = (uint16_t)((1u << 14) | (1u << 15));
-    return 0;
+    return rc;
 }
 
+/* Messages are routed by registered type, so an opcode nobody registered simply
+ * vanishes -- no handler, no error, no trace. That silence cost real debugging
+ * time when DEVMGR_PUBLISH_DEVICE_DESC was added and went nowhere, so say so.
+ *
+ * It logs but does NOT reply. Error-replying to an unsolicited or unknown
+ * message is what put process-manager and rtc into a mutual error ping-pong that
+ * pegged a CPU; a service must be able to receive something it does not
+ * understand without generating traffic. The name lookup is subsystem-scoped
+ * because opcode values are endpoint-scoped and a global lookup would mislabel
+ * them. */
 static void dm_handle_ipc_default(void* user, const wasmos_ipc_message_t* msg) {
     (void)user;
-    (void)msg;
+    if (!msg) {
+        return;
+    }
+    (void)printf("[device-manager] unhandled opcode 0x%03X (%s) from ep=%d\n", (unsigned)msg->type,
+                 wasmos_opcode_name(WASMOS_OPCODE_SUBSYS_DEVICE_MANAGER, (uint32_t)msg->type),
+                 (int)msg->source);
 }
 
 static int dm_register_ipc_handlers(void) {
@@ -1246,8 +1469,12 @@ static void dm_handle_inventory_message(void* user, const wasmos_ipc_message_t* 
         registry_add_block_from_ipc(msg->arg0, msg->arg1, msg->arg2, msg->arg3);
         return;
     }
+    /* The packed form still carries ACPI/ISA devices (bus 0xFF), which have no
+     * BARs and fit in four words; PCI functions come as descriptors. */
     if (msg->type == DEVMGR_PUBLISH_DEVICE) {
         registry_add_from_ipc(msg->arg0, msg->arg1, msg->arg2, msg->arg3);
+    } else if (msg->type == DEVMGR_PUBLISH_DEVICE_DESC) {
+        registry_add_from_desc(msg->arg0, msg->arg1, msg->arg2);
         return;
     }
     if (msg->type == DEVMGR_PCI_SCAN_DONE) {
@@ -1266,6 +1493,10 @@ static void dm_handle_inventory_message(void* user, const wasmos_ipc_message_t* 
 
 static int dm_register_inventory_handlers(void) {
     if (wasmos_sys_event_register(&g_dm_inventory_loop, DEVMGR_PUBLISH_BLOCK_DEVICE,
+                                  dm_handle_inventory_message, 0) != 0) {
+        return -1;
+    }
+    if (wasmos_sys_event_register(&g_dm_inventory_loop, DEVMGR_PUBLISH_DEVICE_DESC,
                                   dm_handle_inventory_message, 0) != 0) {
         return -1;
     }
@@ -1326,12 +1557,12 @@ static int match_any_or_u16(uint16_t actual, uint16_t expected) {
 static int select_pci_matched_driver(int32_t module_index, spawn_caps_t* out_caps) {
     uint8_t class_code = 0, subclass = 0, prog_if = 0, storage_bootstrap = 0, match_count = 0;
     uint16_t vendor_id = 0, device_id = 0;
-    spawn_caps_t caps;
+    spawn_caps_t caps = {0};
     if (module_index < 0 || !out_caps) {
         return -1;
     }
     if (query_driver_module_meta(module_index, 0, &class_code, &subclass, &prog_if, &vendor_id,
-                                 &device_id, &storage_bootstrap, &match_count, &caps) != 0 ||
+                                 &device_id, &storage_bootstrap, &match_count, &caps, 0) != 0 ||
         match_count == 0) {
         return -1;
     }
@@ -1339,7 +1570,7 @@ static int select_pci_matched_driver(int32_t module_index, spawn_caps_t* out_cap
         if (m != 0) {
             if (query_driver_module_meta(module_index, m, &class_code, &subclass, &prog_if,
                                          &vendor_id, &device_id, &storage_bootstrap, &match_count,
-                                         &caps) != 0) {
+                                         &caps, 0) != 0) {
                 continue;
             }
         }
@@ -1367,9 +1598,11 @@ static void apply_pci_matches(void) {
     for (int32_t module_index = 0; module_index < g_dm.module_count; ++module_index) {
         uint8_t class_code = 0, subclass = 0, prog_if = 0, storage_bootstrap = 0, match_count = 0;
         uint16_t vendor_id = 0, device_id = 0;
-        spawn_caps_t caps;
+        spawn_caps_t caps = {0};
+        wasmos_module_meta_desc_t meta;
         if (query_driver_module_meta(module_index, 0, &class_code, &subclass, &prog_if, &vendor_id,
-                                     &device_id, &storage_bootstrap, &match_count, &caps) != 0 ||
+                                     &device_id, &storage_bootstrap, &match_count, &caps,
+                                     &meta) != 0 ||
             !storage_bootstrap || match_count == 0) {
             continue;
         }
@@ -1377,7 +1610,7 @@ static void apply_pci_matches(void) {
             if (m != 0) {
                 if (query_driver_module_meta(module_index, m, &class_code, &subclass, &prog_if,
                                              &vendor_id, &device_id, &storage_bootstrap,
-                                             &match_count, &caps) != 0) {
+                                             &match_count, &caps, &meta) != 0) {
                     continue;
                 }
             }
@@ -1398,6 +1631,7 @@ static void apply_pci_matches(void) {
                     rec->irq_hint < 16u) {
                     g_dm.selected_storage_caps.irq_mask = (uint16_t)(1u << rec->irq_hint);
                 }
+                resolve_declared_regions(&meta, rec, &g_dm.selected_storage_caps);
                 return;
             }
         }
@@ -1756,8 +1990,12 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t module_coun
             g_dm.idle_logged = 0;
 
             if (target == HW_SPAWN_PCI_BUS) {
-                spawn_caps_t pci_caps;
-                pci_caps.cap_flags = DEVMGR_CAP_IO_PORT;
+                spawn_caps_t pci_caps = {0};
+                /* MMIO on top of the config ports: an MSI-X table lives in a
+                 * device BAR, so programming one is a memory write, not a
+                 * config-space write. wasmos_mmio_write32 refuses any address
+                 * overlapping system RAM, so this grants device access only. */
+                pci_caps.cap_flags = DEVMGR_CAP_IO_PORT | DEVMGR_CAP_MMIO_MAP;
                 pci_caps.io_port_min = 0x0CF8;
                 pci_caps.io_port_max = 0x0CFF;
                 pci_caps.irq_mask = 0;
@@ -1780,7 +2018,7 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t module_coun
             }
 
             if (target == HW_SPAWN_ACPI_BUS) {
-                spawn_caps_t acpi_caps;
+                spawn_caps_t acpi_caps = {0};
                 acpi_caps.cap_flags = DEVMGR_CAP_MMIO_MAP;
                 acpi_caps.io_port_min = 0;
                 acpi_caps.io_port_max = 0;

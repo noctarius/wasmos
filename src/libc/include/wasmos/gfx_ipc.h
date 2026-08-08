@@ -85,8 +85,11 @@ enum {
     GFX_EVENT_NONE = 0,
     GFX_EVENT_FOCUS_GAINED = 1,
     GFX_EVENT_FOCUS_LOST = 2,
-    /* arg2=translated key code (ASCII for printable/control keys), arg3=flags:
-     * bit0=keyup(1)/keydown(0), bit1=extended scancode. */
+    /* arg2=packed key code: low byte = the character the vt decoded with the
+     * active keymap (0 when the key has none, e.g. arrows/function keys),
+     * high byte = raw set-1 scancode.  Consumers must mask; the packed value
+     * is not a codepoint.  arg3=flags: bit0=down, bit1=extended, bit2=shift,
+     * bit3=ctrl, bit4=altgr. */
     GFX_EVENT_KEY = 3,
     /* arg2=window_id, arg3=gfx_pointer_event_pack(x, y, buttons)
      * where x/y are content-local coordinates and buttons is the low 8-bit

@@ -304,6 +304,88 @@ the line masked permanently.
 
 ---
 
+### Message-Signalled Interrupts
+
+**Source**: `msi_vectors.c`, `arch/x86_64/msi_x86_64.c`, `mmio.c`,
+`src/services/pci_bus/pci_bus.c`
+
+An MSI is a device-initiated memory write carrying a vector number, not a wire.
+Every constraint the INTx model above is built around disappears:
+
+| | INTx line | MSI vector |
+|---|---|---|
+| Owners | up to `IRQ_SHARERS_MAX`, wire-OR'd | exactly one |
+| Trigger | level; masked on dispatch | edge |
+| Driver epilogue | read device register, `irq_ack` to unmask | none |
+| Failure mode of a wedged driver | line stays masked for co-sharers | none — nothing is masked |
+| Identifying the source | read a device status register | the vector itself |
+
+```c
+#define MSI_VECTOR_BASE  48    /* directly above the 16 IRQ lines */
+#define MSI_VECTOR_COUNT 16
+#define IPC_MSI_EVENT_TYPE 0xFF01u
+```
+
+Vectors 48–63 have ISR stubs (`x86_msi_stub_table`, `DECL_MSI` in `cpu_isr.S`)
+and IDT gates installed alongside the IRQ ones, but only when a LAPIC exists to
+receive the message write. In `WASMOS_IRQ_PIC` mode `msi_alloc` returns
+`WASMOS_ERR_MSI_UNSUPPORTED` rather than handing out an undeliverable vector.
+
+#### Ownership Split
+
+Three parties, each holding exactly the authority its half needs:
+
+- **Kernel** owns the vector namespace. `msi_alloc(context_id, endpoint, …)`
+  binds the lowest free vector to an endpoint **the caller owns**, and returns
+  the interrupt-controller address/data pair that raises it. It has no PCI
+  knowledge and never touches a device.
+- **pci-bus** owns configuration space. It walks the capability list (`0x11`
+  MSI-X, `0x05` MSI), writes the address/data pair into the device, sets
+  `INTX_DISABLE` and bus-mastering. It is the only holder of the 0xCF8/0xCFC
+  window, because device-manager grants a driver an I/O-port range covering its
+  own BAR only.
+- **Driver** orchestrates: allocates its vectors, asks pci-bus to program them
+  (`PCI_IPC_MSI_BIND`), then tells the device which vector serves which queue —
+  a register write inside its own I/O window.
+
+The split exists so the endpoint-ownership check survives. A "route on behalf
+of" host call, letting pci-bus bind a vector to someone else's endpoint, would
+have removed it.
+
+#### Message Encoding
+
+```
+address = 0xFEE00000 | (destination_id << 12) | (RH << 3) | (DM << 2)
+data    = (trigger_mode << 15) | (level << 14) | (delivery_mode << 8) | vector
+```
+
+Physical destination mode, no redirection hint (RH = DM = 0), fixed delivery,
+edge trigger — so `data` reduces to the bare vector. Destination is LAPIC 0
+(the BSP), matching `ioapic_program_rtes()`; steering interrupts at other CPUs
+is a scheduling decision the system does not make yet.
+
+#### Dispatch
+
+`x86_msi_handler(vector)` looks the vector up, sends `IPC_MSI_EVENT_TYPE` with
+`arg0` = the table entry index, and calls `lapic_eoi()`. That is the whole
+handler: no mask, no ack, no deadline, no dispatch budget. A vector that fires
+while unallocated is dropped rather than delivered to a recycled endpoint id;
+`msi_release_context()` runs at process teardown next to `irq_release_context()`.
+
+#### MMIO Access for Bus Drivers
+
+An MSI-X table lives in a device BAR, so binding an entry is a memory write.
+`wasmos_phys_map` **copies** physical bytes into linear memory — correct for
+reading ACPI tables, useless for programming hardware — so `mmio_write32`
+(`mmio.c`) exists for that one job. It is gated by the `mmio.map` capability
+**and** refuses any address overlapping usable RAM
+(`pfa_range_overlaps_ram()`, backed by a copy of the firmware memory map kept
+separately from the allocator's free list). The page is mapped uncached at a
+reserved scratch VA for the duration of the write. The result is an MMIO poke,
+not an arbitrary physical-memory write.
+
+---
+
 ### Exception Handling
 
 **Source**: `cpu_x86_64.c`

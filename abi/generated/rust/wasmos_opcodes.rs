@@ -18,6 +18,13 @@ pub const PROC_IPC_STATUS: i32 = 0x203;
 pub const PROC_IPC_SPAWN_NAME: i32 = 0x204;
 pub const PROC_IPC_SPAWN_CAPS: i32 = 0x205;
 pub const PROC_IPC_MODULE_META: i32 = 0x206;
+/// Module metadata as a wasmos_module_meta_desc_t, written into a transfer
+/// buffer the caller owns and has lent WRITE to process-manager.
+/// arg0=module_index arg1=match_index arg2=buffer_id arg3=byte_offset.
+/// On success: PROC_IPC_RESP, arg0=bytes written.
+/// Supersedes PROC_IPC_MODULE_META, whose four response words are full and
+/// cannot carry a variable-length region declaration.
+pub const PROC_IPC_MODULE_META_DESC: i32 = 0x212;
 pub const PROC_IPC_MODULE_META_PATH: i32 = 0x207;
 /// Spawn with extended capability descriptor payload:
 /// arg0=module_index arg1=user_ptr(wasmos_spawn_caps_v2_t + windows[])
@@ -124,6 +131,27 @@ pub const SVC_IPC_ERROR: i32 = 0x2AF;
 pub const BLOCK_IPC_READ_REQ: i32 = 0x300;
 pub const BLOCK_IPC_WRITE_REQ: i32 = 0x301;
 pub const BLOCK_IPC_IDENTIFY_REQ: i32 = 0x302;
+/// Zero-copy read: land whole sectors straight into a transfer buffer the
+/// caller has reborrowed to this server, instead of staging them through
+/// the server's own block buffer.
+/// arg0=buffer_id arg1=lba arg3=dst_byte_offset, and
+/// arg2 = (borrow_id << 12) | sector_count.
+/// The buffer is named twice because the two ways a server can reach it
+/// are addressed differently. arg0 names the OBJECT, which is what
+/// xfer_buffer read/write take (the kernel admits the owner or any
+/// grantee). The packed borrow_id names the GRANT, which is what
+/// dma_map_borrow takes, and it is what lets a server point a bus-master
+/// device straight at the client's pages instead of copying through its
+/// own staging buffer. A server that cannot do DMA ignores it.
+/// The caller reborrows its own borrow to this server's endpoint to create
+/// that grant, and unborrows when the operation completes.
+/// The destination range is [dst_offset, dst_offset + count*512) and must
+/// lie inside the buffer; only WHOLE sectors may be requested, because a
+/// partial sector would overwrite bytes around it that the client did not
+/// ask for (callers stage head/tail remainders through BLOCK_IPC_READ_REQ).
+/// On success: BLOCK_IPC_READ_RESP, arg1 = sectors transferred.
+/// On failure: BLOCK_IPC_ERROR, arg0 = reason.
+pub const BLOCK_IPC_READ_ZC_REQ: i32 = 0x303;
 pub const BLOCK_IPC_READ_RESP: i32 = 0x380;
 pub const BLOCK_IPC_WRITE_RESP: i32 = 0x381;
 pub const BLOCK_IPC_IDENTIFY_RESP: i32 = 0x382;
@@ -260,6 +288,14 @@ pub const DEVMGR_QUERY_BLOCK_MOUNT_REQ: i32 = 0x904;
 /// ISA/ACPI devices: bus=0xFF in PUBLISH_DEVICE marks a non-PCI device;
 /// device_id field carries the I/O base address for serial (class 0x07).
 pub const DEVMGR_ACPI_SCAN_DONE: i32 = 0x905;
+/// Publish one enumerated PCI function as a wasmos_pci_device_desc_t held
+/// in a transfer buffer the publisher has borrowed to this endpoint.
+/// arg0=buffer_id arg1=byte_offset arg2=descriptor_size arg3=reserved(0).
+/// Each device occupies its own offset, so the publisher never overwrites
+/// a descriptor the receiver has not read yet and no acknowledgement is
+/// needed. Supersedes DEVMGR_PUBLISH_DEVICE, whose four argument words
+/// cannot describe six BARs and the capability offsets.
+pub const DEVMGR_PUBLISH_DEVICE_DESC: i32 = 0x906;
 pub const DEVMGR_MOUNT_INFO: i32 = 0x980;
 pub const DEVMGR_BLOCK_MOUNT_INFO: i32 = 0x982;
 pub const DEVMGR_QUERY_DONE: i32 = 0x981;
@@ -367,3 +403,27 @@ pub const GFX_IPC_SET_WINDOW_TITLE: i32 = 0x20E;
 pub const GFX_IPC_GET_WINDOW_TITLE: i32 = 0x20F;
 pub const GFX_IPC_RESP: i32 = 0x280;
 pub const GFX_IPC_ERROR: i32 = 0x2FF;
+
+// pci (0xD00..0xDFF)
+/// Ask what message-signalled interrupt support a PCI function has.
+/// arg0=bdf ((bus<<8)|(device<<3)|function) arg1..arg3=reserved(0).
+/// On success: PCI_IPC_RESP, arg0=WASMOS_PCI_MSI_KIND_* (MSIX preferred
+/// over MSI when both are present), arg1=number of vectors the device
+/// supports. On failure: PCI_IPC_ERROR, arg1=packed msi domain code.
+pub const PCI_IPC_MSI_QUERY: i32 = 0xD00;
+/// Program one MSI/MSI-X table entry of a PCI function with an
+/// address/data pair the caller obtained from wasmos_msi_alloc, enable the
+/// capability, and set INTX_DISABLE so the device stops driving its shared
+/// INTx line.
+/// arg0=((bdf<<8)|entry) arg1=address_lo arg2=address_hi arg3=data.
+/// On success: PCI_IPC_RESP, arg0=entry. On failure: PCI_IPC_ERROR,
+/// arg1=packed msi domain code.
+pub const PCI_IPC_MSI_BIND: i32 = 0xD01;
+/// Mask one MSI/MSI-X table entry again. Disables the whole capability
+/// when the last bound entry of the function is released.
+/// arg0=((bdf<<8)|entry) arg1..arg3=reserved(0).
+/// On success: PCI_IPC_RESP, arg0=entry. On failure: PCI_IPC_ERROR,
+/// arg1=packed msi domain code.
+pub const PCI_IPC_MSI_UNBIND: i32 = 0xD02;
+pub const PCI_IPC_RESP: i32 = 0xD80;
+pub const PCI_IPC_ERROR: i32 = 0xDFF;

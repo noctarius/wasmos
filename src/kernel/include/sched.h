@@ -8,17 +8,36 @@
 enum {
     SCHED_OK = 0,         /* dispatched; thread YIELDED (still ready)        */
     SCHED_R_MAXCOUNT = 1, /* PROCESS_MAX_COUNT == 0 (never in practice)      */
-    SCHED_R_PICK = 2,     /* pick returned null / no proc / no entry         */
+    SCHED_R_PICK = 2,     /* not even idle was dispatchable (a real bug)     */
     SCHED_R_NOTREADY = 3, /* picked thread not in READY state                */
     SCHED_R_CTX = 4,      /* run context missing                            */
     SCHED_R_ROOT = 5,     /* target root page table missing                 */
     SCHED_R_ZOMBIE = 6,   /* owning process is zombie/exiting                */
     SCHED_R_RANDONE = 7,  /* dispatched; thread BLOCKED/EXITED (normal loop) */
+    SCHED_R_STALE = 8,    /* non-idle thread reaped mid-flight (normal race)  */
 };
 
 #include <stdint.h>
 #include "sync/spinlock.h"
 #include "sched_list.h"
+
+/* Anti-starvation: once a priority band (or higher) has been dispatched this
+ * many times consecutively, the scheduler yields one slot to the next occupied
+ * lower band, so high-priority workers cannot permanently starve the services
+ * they cooperate with.  Declared here rather than in sched_thread.c so tests
+ * assert against the same constant the policy uses.
+ *
+ * The realised donation cycle is STREAK+2 dispatches, not STREAK+1: the dispatch
+ * that returns to the high band after a donation takes the
+ * last_dispatched_prio > prio arm in cpu_sched_pick_next, which resets the
+ * streak rather than counting itself as the first of the new run.  So the high
+ * band receives STREAK+1 consecutive slots per donated slot.  This is measured
+ * and pinned by the A1/A3 cases in tests/unit/test_sched_runqueue.c, which
+ * derive their expectations from this constant.  Deliberate: that same arm
+ * cannot distinguish "returning from a donation" from "a genuinely higher band
+ * just arrived", where resetting is correct, and tightening the cycle changes
+ * fairness under sustained load. */
+#define SCHED_ANTISTARVATION_STREAK 4
 
 #define SCHED_PRIO_MAX 7  /* number of priority levels */
 #define SCHED_PRIO_BITS 7 /* bitmask width; one bit per level */
@@ -35,14 +54,21 @@ typedef enum {
 
 struct thread;
 
-typedef struct {
+typedef struct cpu_sched_s {
     ksync_spinlock_t lock;
     uint8_t ready_bitmap;                   /* bit i set ↔ ready_list[i] non-empty */
     list_head_t ready_list[SCHED_PRIO_MAX]; /* one FIFO per priority */
     uint32_t thread_count[SCHED_PRIO_MAX];
     struct thread* running; /* currently executing thread */
     struct thread* idle;    /* this CPU's idle thread */
-    uint32_t nr_threads;    /* total threads tracked */
+    /* Anti-starvation bookkeeping.  PER-CPU: it describes what THIS CPU has been
+     * dispatching, and the policy only makes sense that way.  Held globally it
+     * both raced (plain bytes written by every CPU under different locks) and
+     * advanced N times too fast on an N-CPU machine, so the demotion fired far
+     * more often than SCHED_ANTISTARVATION_STREAK implies -- and one CPU's
+     * dispatches decided another's band. */
+    uint8_t last_dispatched_prio;
+    uint8_t high_prio_streak;
 } cpu_sched_t;
 
 /* Initialise the per-CPU scheduler state (called once per CPU at boot). */
@@ -73,6 +99,39 @@ void sched_set_need_resched(void);
 /* Wake a blocked thread: wait for its blocking_transition to clear,
  * set state READY, and enqueue it. */
 void sched_wake_thread(struct thread* t);
+
+/* Scheduler tripwires, as counters rather than only log lines.
+ *
+ * Every tripwire is rate-limited to powers of two, so past the first few hits a
+ * test cannot tell "fired" from "fired but suppressed" by reading the log.  The
+ * counters are also process-wide, so a test asserting on output is
+ * order-dependent on every test that ran before it.  Exposing the counts, and a
+ * reset for tests, removes both problems -- and asserting on an enum beats
+ * substring-matching formatted text that a reword would silently break. */
+typedef enum {
+    SCHED_DEBUG_GHOST_HEAD = 0,
+    SCHED_DEBUG_ENQUEUE_IDLE,
+    SCHED_DEBUG_BAD_PRIO,
+    SCHED_DEBUG_ENQUEUE_NON_READY,
+    SCHED_DEBUG_DOUBLE_LINK,
+    SCHED_DEBUG_ENQUEUE_FROM_NON_READY,
+    SCHED_DEBUG_INIT_ON_QUEUED,
+    SCHED_DEBUG_REMOVE_GAVE_UP,
+    SCHED_DEBUG_SET_PRIO_QUEUED,
+    SCHED_DEBUG_EVENT_COUNT
+} sched_debug_event_t;
+
+/* Record that `ev` fired; returns the count BEFORE this hit so callers can apply
+ * the same power-of-two rate limit the in-file tripwires use.  Public so paths
+ * outside sched_thread.c can report scheduler-contract violations through the
+ * same counters. */
+uint32_t sched_debug_note(sched_debug_event_t ev);
+/* Times `ev` has fired since boot (or since the last reset). */
+uint32_t sched_debug_count(sched_debug_event_t ev);
+/* Zero every counter.  Also re-seeds the placement round-robin cursors, which
+ * are otherwise unresettable statics that force placement tests to assert on
+ * distribution rather than on the CPU actually chosen. */
+void sched_debug_reset(void);
 
 /* Assign a default scheduler priority based on process flags. */
 sched_prio_t sched_default_prio(int is_idle, int is_kernel_worker, int is_driver,

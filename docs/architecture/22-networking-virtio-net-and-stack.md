@@ -53,10 +53,9 @@ Out of scope for initial rollout:
 - The DMA capability and borrow-buffer DMA lifecycle are implemented. The
   driver-owned pinned `region_alloc` primitive supplies virtqueue ring and
   packet-pool memory; `virtio-net` uses the transport-neutral `vring` core.
-- `virtio-net` initializes RX/TX queues, routes the device IRQ, performs an ARP
+- `virtio-net` initializes RX/TX queues, binds MSI-X vectors, performs an ARP
   smoke exchange through QEMU SLIRP, and offers pull plus notification-hinted
-  RX delivery. PCI INTx polarity/trigger configuration remains incomplete, so
-  consumers must poll defensively.
+  RX delivery.
 - `net-stack` is a native lwIP baseline. It enumerates and subscribes to the
   `net.ifc` class (retaining `virtio.net` lookup as a compatibility fallback), reads its
   MAC/link state, and installs `eth0` with static SLIRP addressing
@@ -111,8 +110,9 @@ The rule matches by PCI class 0x02 (Network controller), subclass 0x00
 
 Capability profile supplied at spawn (using `PROC_IPC_SPAWN_PATH_CAPS` /
 `PROC_IPC_SPAWN_PATH_CAPS_SYNC` / `PROC_IPC_SPAWN_CAPS_V2`):
-- `DEVMGR_CAP_IO_PORT`: I/O port range covering PCI config access (0xCF8–0xCFF)
-  and BAR0 I/O register window (io_port_min=BAR0_base, io_port_max=BAR0_base+0x1F)
+- `DEVMGR_CAP_IO_PORT`: the BAR0 I/O register window only
+  (io_port_min=BAR0_base, io_port_max=BAR0_base+0x3F). PCI config access
+  (0xCF8–0xCFF) belongs to `pci-bus` and is not granted to the driver.
 - `DEVMGR_CAP_IRQ`: IRQ line from PCI config 0x3C (typically 11 under QEMU)
 - `DEVMGR_CAP_DMA`: BIDIR, covers low memory window for virtqueue and packet
   buffers (initial: 0x100000–0x4000000, i.e., 1 MB–64 MB)
@@ -124,18 +124,22 @@ I/O/IRQ/DMA profile in the spawn capability descriptor.
 
 ---
 
-### PCI Probe and BAR0 Layout
+### Device Identity and BAR0 Layout
 
-`virtio-net` uses the same I/O port-based PCI config-space scan pattern as
-`virtio-serial`. BAR0 is type I/O (bit 0 of BAR0 value is 1):
+The device manager resolves the device from its match rule and passes the
+identity to the driver in its startup args:
 
-```c
-uint32_t bar0 = pci_config_read32(bus, slot, fn, 0x10);
-if ((bar0 & 0x1u) == 0u) { /* MMIO BAR, skip for legacy I/O path */ }
-uint16_t io_base = (uint16_t)(bar0 & 0xFFFCu);
+```
+pci=BB:SS.FF vendor=1AF4 device=1000 io=C020 irq=0B
 ```
 
-The I/O port space at `io_base` maps the following virtio legacy registers:
+That is the driver's sole source of device identity. It performs no PCI
+config-space scan, and a spawn without a valid identity fails with
+`WASMOS_ERR_DRIVER_NO_DEVICE_IDENTITY` instead of binding to a device it
+discovered itself.
+
+`io=` is the BAR0 I/O base. The I/O port space at that base maps the following
+virtio legacy registers:
 
 | Offset | Width | Access | Register             |
 |--------|-------|--------|----------------------|
@@ -1071,10 +1075,29 @@ initialize():
       default              → send NETDRV_IPC_ERROR
 ```
 
-The driver reads the ISR register on every recv iteration (not only on IRQ
-delivery), because WASM IRQ delivery is mediated by the kernel waking the
-process—the driver simply polls the ISR after each wake to check for hardware
-events.
+#### Interrupt Delivery
+
+The driver takes three MSI-X vectors — RX queue, TX queue, and config change —
+and falls back to the shared INTx line only when the device or pci-bus cannot
+provide them. The two paths differ in more than latency:
+
+| | MSI-X (default) | INTx (fallback) |
+|---|---|---|
+| Event | `WASMOS_IPC_MSI_EVENT_TYPE`, `arg0` = table entry | `IPC_IRQ_EVENT_TYPE`, `arg0` = line |
+| Source identification | the vector itself | read the ISR register |
+| Epilogue | none | read ISR to de-assert, `irq_ack` to unmask |
+| Idle wait | blocking | bounded timeout + ring drain |
+
+The timed drain exists only on the fallback path. QEMU's legacy PCI-INTx path
+re-delivers a reasserted level line unreliably on a steadily-unmasked RTE
+(confirmed with `-d int`: the vector is injected once and never again), so
+continuous RX could not depend on the interrupt. A message-signalled vector
+re-delivers per notification, so under MSI-X the loop is a plain blocking wait.
+
+Enabling MSI-X shifts the legacy virtio register layout: two 16-bit vector
+registers appear at `0x14`/`0x16` and the device-specific config region moves
+from `0x14` to `0x18`. MSI-X setup therefore runs after feature negotiation and
+before any config or queue register access.
 
 ---
 

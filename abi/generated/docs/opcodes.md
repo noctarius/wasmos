@@ -25,6 +25,7 @@ endpoint-scoped and may repeat across subsystems.
 | `PROC_IPC_SPAWN_NAME` | 0x204 | req |  |
 | `PROC_IPC_SPAWN_CAPS` | 0x205 | req |  |
 | `PROC_IPC_MODULE_META` | 0x206 | req |  |
+| `PROC_IPC_MODULE_META_DESC` | 0x212 | req | Module metadata as a wasmos_module_meta_desc_t, written into a transfer buffer the caller owns and has lent WRITE to process-manager. arg0=module_index arg1=match_index arg2=buffer_id arg3=byte_offset. On success: PROC_IPC_RESP, arg0=bytes written. Supersedes PROC_IPC_MODULE_META, whose four response words are full and cannot carry a variable-length region declaration.  |
 | `PROC_IPC_MODULE_META_PATH` | 0x207 | req |  |
 | `PROC_IPC_SPAWN_CAPS_V2` | 0x208 | req | Spawn with extended capability descriptor payload: arg0=module_index arg1=user_ptr(wasmos_spawn_caps_v2_t + windows[]) arg2=payload_size_bytes arg3=reserved(0).  |
 | `PROC_IPC_SPAWN_PATH` | 0x209 | req | Spawn from explicit app path: caller must place path bytes at xfer buffer offset 0. optional raw command argument text is placed at offset (path_len + 1). arg0=reserved(0) arg1=path_len arg2=args_len arg3=reserved. On success (app kind): PROC_IPC_RESP, arg0=child_pid, arg1=app_flags. For service/driver kinds the PM delays the PROC_IPC_RESP until the child calls PROC_IPC_NOTIFY_READY (behaves like SPAWN_PATH_SYNC internally).  |
@@ -70,6 +71,7 @@ endpoint-scoped and may repeat across subsystems.
 | `BLOCK_IPC_READ_REQ` | 0x300 | req |  |
 | `BLOCK_IPC_WRITE_REQ` | 0x301 | req |  |
 | `BLOCK_IPC_IDENTIFY_REQ` | 0x302 | req |  |
+| `BLOCK_IPC_READ_ZC_REQ` | 0x303 | req | Zero-copy read: land whole sectors straight into a transfer buffer the caller has reborrowed to this server, instead of staging them through the server's own block buffer. arg0=buffer_id arg1=lba arg3=dst_byte_offset, and arg2 = (borrow_id << 12) \| sector_count. The buffer is named twice because the two ways a server can reach it are addressed differently. arg0 names the OBJECT, which is what xfer_buffer read/write take (the kernel admits the owner or any grantee). The packed borrow_id names the GRANT, which is what dma_map_borrow takes, and it is what lets a server point a bus-master device straight at the client's pages instead of copying through its own staging buffer. A server that cannot do DMA ignores it. The caller reborrows its own borrow to this server's endpoint to create that grant, and unborrows when the operation completes. The destination range is [dst_offset, dst_offset + count*512) and must lie inside the buffer; only WHOLE sectors may be requested, because a partial sector would overwrite bytes around it that the client did not ask for (callers stage head/tail remainders through BLOCK_IPC_READ_REQ). On success: BLOCK_IPC_READ_RESP, arg1 = sectors transferred. On failure: BLOCK_IPC_ERROR, arg0 = reason.  |
 | `BLOCK_IPC_READ_RESP` | 0x380 | resp |  |
 | `BLOCK_IPC_WRITE_RESP` | 0x381 | resp |  |
 | `BLOCK_IPC_IDENTIFY_RESP` | 0x382 | resp |  |
@@ -202,6 +204,7 @@ endpoint-scoped and may repeat across subsystems.
 | `DEVMGR_PUBLISH_BLOCK_DEVICE` | 0x903 | req |  |
 | `DEVMGR_QUERY_BLOCK_MOUNT_REQ` | 0x904 | req |  |
 | `DEVMGR_ACPI_SCAN_DONE` | 0x905 | resp | ISA/ACPI devices: bus=0xFF in PUBLISH_DEVICE marks a non-PCI device; device_id field carries the I/O base address for serial (class 0x07).  |
+| `DEVMGR_PUBLISH_DEVICE_DESC` | 0x906 | req | Publish one enumerated PCI function as a wasmos_pci_device_desc_t held in a transfer buffer the publisher has borrowed to this endpoint. arg0=buffer_id arg1=byte_offset arg2=descriptor_size arg3=reserved(0). Each device occupies its own offset, so the publisher never overwrites a descriptor the receiver has not read yet and no acknowledgement is needed. Supersedes DEVMGR_PUBLISH_DEVICE, whose four argument words cannot describe six BARs and the capability offsets.  |
 | `DEVMGR_MOUNT_INFO` | 0x980 | resp |  |
 | `DEVMGR_BLOCK_MOUNT_INFO` | 0x982 | resp |  |
 | `DEVMGR_QUERY_DONE` | 0x981 | resp |  |
@@ -301,3 +304,13 @@ endpoint-scoped and may repeat across subsystems.
 | `GFX_IPC_GET_WINDOW_TITLE` | 0x20F | req |  |
 | `GFX_IPC_RESP` | 0x280 | resp |  |
 | `GFX_IPC_ERROR` | 0x2FF | error |  |
+
+## pci (0xD00–0xDFF)
+
+| Opcode | Value | Kind | Description |
+|---|---|---|---|
+| `PCI_IPC_MSI_QUERY` | 0xD00 | req | Ask what message-signalled interrupt support a PCI function has. arg0=bdf ((bus<<8)\|(device<<3)\|function) arg1..arg3=reserved(0). On success: PCI_IPC_RESP, arg0=WASMOS_PCI_MSI_KIND_* (MSIX preferred over MSI when both are present), arg1=number of vectors the device supports. On failure: PCI_IPC_ERROR, arg1=packed msi domain code.  |
+| `PCI_IPC_MSI_BIND` | 0xD01 | req | Program one MSI/MSI-X table entry of a PCI function with an address/data pair the caller obtained from wasmos_msi_alloc, enable the capability, and set INTX_DISABLE so the device stops driving its shared INTx line. arg0=((bdf<<8)\|entry) arg1=address_lo arg2=address_hi arg3=data. On success: PCI_IPC_RESP, arg0=entry. On failure: PCI_IPC_ERROR, arg1=packed msi domain code.  |
+| `PCI_IPC_MSI_UNBIND` | 0xD02 | req | Mask one MSI/MSI-X table entry again. Disables the whole capability when the last bound entry of the function is released. arg0=((bdf<<8)\|entry) arg1..arg3=reserved(0). On success: PCI_IPC_RESP, arg0=entry. On failure: PCI_IPC_ERROR, arg1=packed msi domain code.  |
+| `PCI_IPC_RESP` | 0xD80 | resp |  |
+| `PCI_IPC_ERROR` | 0xDFF | error |  |

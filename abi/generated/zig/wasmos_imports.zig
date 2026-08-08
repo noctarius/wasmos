@@ -495,3 +495,77 @@ pub extern "wasmos" fn xfer_buffer_unmap(a0: i32) callconv(.c) i32;
 /// klog ring, so serial_write publishes klog text into it for the VT to drain
 /// into vt-1.  Returns 0 on success, -1 on a bad/foreign buffer id.
 pub extern "wasmos" fn klog_register_ring(a0: i32) callconv(.c) i32;
+/// Allocate one message-signalled interrupt vector and bind it to `endpoint`,
+/// which must be owned by the caller. Fills the wasmos_msi_desc_t at `out` with
+/// the interrupt-controller address/data pair that makes a device raise that
+/// vector, plus the vector number itself. The caller hands the pair to the bus
+/// driver that owns PCI config space (pci-bus, PCI_IPC_MSI_BIND) — the kernel
+/// owns the vector namespace but never touches the device. Unlike an IRQ line an
+/// MSI vector is edge-triggered and exclusively owned, so its events need no
+/// irq_ack and the vector is never masked. Delivered as IPC_MSI_EVENT_TYPE.
+/// Returns 0, or a negative WASMOS_ERR_MSI_* code. Requires irq.route.
+pub extern "wasmos" fn msi_alloc(a0: i32, a1: i32) callconv(.c) i32;
+/// Release MSI vector `vector`, which must have been allocated by the caller.
+/// The vector stops being delivered and returns to the free pool. Mask the
+/// device's table entry (PCI_IPC_MSI_UNBIND) before calling this, or the device
+/// can raise a vector that is no longer bound. Returns 0, or a negative
+/// WASMOS_ERR_MSI_* code.
+pub extern "wasmos" fn msi_free(a0: i32) callconv(.c) i32;
+/// Write `value` to the 32-bit memory-mapped device register at physical
+/// address phys_lo/phys_hi, which must be 4-byte aligned and outside system
+/// RAM. Exists because wasmos_phys_map COPIES physical bytes into linear memory
+/// (right for reading ACPI tables, useless for programming hardware), and a bus
+/// driver has to place MSI-X table entries. Returns 0, or a negative
+/// WASMOS_ERR_MSI_* code. Requires the mmio.map capability.
+pub extern "wasmos" fn mmio_write32(a0: i32, a1: i32, a2: i32) callconv(.c) i32;
+/// Read a byte at `offset` within the caller's granted I/O region `region` -- an
+/// index into the windows its spawn profile granted, in the order they were
+/// declared -- and store it at `out`. The kernel adds the base and
+/// bounds-checks the offset, so a driver never names an absolute port and
+/// cannot reach outside the window it holds.
+///
+/// The value is returned through `out` rather than as the result because a
+/// port read is not a signed quantity: a 32-bit register can legitimately read
+/// 0xFFFFFFFF, which would be indistinguishable from a failure code. Returns 0
+/// on success, otherwise a negative WASMOS_ERR_IO_* code naming which check
+/// refused it. Requires the io.port capability.
+pub extern "wasmos" fn io_region_in8(a0: i32, a1: i32, a2: i32) callconv(.c) i32;
+/// Read a 16-bit word at `offset` within the caller's granted I/O region `region` -- an
+/// index into the windows its spawn profile granted, in the order they were
+/// declared -- and store it at `out`. The kernel adds the base and
+/// bounds-checks the offset, so a driver never names an absolute port and
+/// cannot reach outside the window it holds.
+///
+/// The value is returned through `out` rather than as the result because a
+/// port read is not a signed quantity: a 32-bit register can legitimately read
+/// 0xFFFFFFFF, which would be indistinguishable from a failure code. Returns 0
+/// on success, otherwise a negative WASMOS_ERR_IO_* code naming which check
+/// refused it. Requires the io.port capability.
+pub extern "wasmos" fn io_region_in16(a0: i32, a1: i32, a2: i32) callconv(.c) i32;
+/// Read a 32-bit word at `offset` within the caller's granted I/O region `region` -- an
+/// index into the windows its spawn profile granted, in the order they were
+/// declared -- and store it at `out`. The kernel adds the base and
+/// bounds-checks the offset, so a driver never names an absolute port and
+/// cannot reach outside the window it holds.
+///
+/// The value is returned through `out` rather than as the result because a
+/// port read is not a signed quantity: a 32-bit register can legitimately read
+/// 0xFFFFFFFF, which would be indistinguishable from a failure code. Returns 0
+/// on success, otherwise a negative WASMOS_ERR_IO_* code naming which check
+/// refused it. Requires the io.port capability.
+pub extern "wasmos" fn io_region_in32(a0: i32, a1: i32, a2: i32) callconv(.c) i32;
+/// Write a byte to `offset` within the caller's granted I/O region
+/// `region` (see io_region_in8 for how a region is named). Returns 0, or a
+/// negative WASMOS_ERR_IO_* code naming which check refused it. Requires the
+/// io.port capability.
+pub extern "wasmos" fn io_region_out8(a0: i32, a1: i32, a2: i32) callconv(.c) i32;
+/// Write a 16-bit word to `offset` within the caller's granted I/O region
+/// `region` (see io_region_in8 for how a region is named). Returns 0, or a
+/// negative WASMOS_ERR_IO_* code naming which check refused it. Requires the
+/// io.port capability.
+pub extern "wasmos" fn io_region_out16(a0: i32, a1: i32, a2: i32) callconv(.c) i32;
+/// Write a 32-bit word to `offset` within the caller's granted I/O region
+/// `region` (see io_region_in8 for how a region is named). Returns 0, or a
+/// negative WASMOS_ERR_IO_* code naming which check refused it. Requires the
+/// io.port capability.
+pub extern "wasmos" fn io_region_out32(a0: i32, a1: i32, a2: i32) callconv(.c) i32;

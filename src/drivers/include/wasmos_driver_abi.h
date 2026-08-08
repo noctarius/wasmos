@@ -352,10 +352,150 @@ enum {
  * edge-triggered active-high (ISA). PCI INTx lines are level + active-low. */
 enum { WASMOS_IRQ_TRIGGER_LEVEL = 1 << 0, WASMOS_IRQ_POLARITY_LOW = 1 << 1 };
 
+/* --- Module metadata descriptor --------------------------------------------
+ *
+ * What process-manager reports about one packaged driver: how it matches, what
+ * capabilities it asked for, and which register windows it declared. A
+ * descriptor because the region list is variable-length by nature and the four
+ * argument words of the packed form are already full -- there are spare bits in
+ * them, but a region declaration is not a bit field and pretending otherwise is
+ * how the device-publish encoding ended up smuggling an I/O base through an
+ * unused argument half.
+ *
+ * The consumer supplies the buffer and lends it WRITE; PM fills it and replies
+ * with the byte count. Versioned and length-checked, so it grows by appending. */
+#define WASMOS_MODULE_META_DESC_VERSION 1u
+
+/* Region kinds. Mirrors the app-format enum in src/kernel/include/wasmos_app.h;
+ * a service cannot include kernel headers, so the two must move together. */
+enum { WASMOS_APP_REGION_IO = 0, WASMOS_APP_REGION_BAR = 1 };
+
+/* One declared register window: a fixed I/O range, or a BAR of the matched
+ * device resolved by whoever holds the device record. */
+typedef struct __attribute__((packed)) {
+    uint8_t kind;
+    uint8_t bar_index;
+    uint16_t first;
+    uint16_t last;
+} wasmos_region_desc_t;
+
+#define WASMOS_MODULE_META_MAX_REGIONS 4u
+
+typedef struct __attribute__((packed)) {
+    uint32_t version; /* = WASMOS_MODULE_META_DESC_VERSION */
+    uint8_t class_code;
+    uint8_t subclass;
+    uint8_t prog_if;
+    uint8_t storage_bootstrap;
+    uint16_t vendor_id;
+    uint16_t device_id;
+    uint16_t io_port_min; /* the match rule's window; regions supersede it */
+    uint16_t io_port_max;
+    uint32_t cap_flags;
+    uint32_t match_count;
+    uint32_t region_count;
+    wasmos_region_desc_t regions[WASMOS_MODULE_META_MAX_REGIONS];
+} wasmos_module_meta_desc_t;
+
+/* --- PCI device descriptor -------------------------------------------------
+ *
+ * What pci-bus publishes about one enumerated function. A descriptor in a
+ * transfer buffer rather than packed IPC arguments, because the interesting
+ * facts about a PCI function do not fit in four words and keep growing: six
+ * BARs, capability offsets, class triplet, interrupt routing. The packed form
+ * had already been reduced to smuggling a second I/O base through the unused
+ * half of an argument.
+ *
+ * Extensible the same way svc_register_desc_t is: bump the version, append
+ * fields, and let the reader check the byte length it was given. */
+#define WASMOS_PCI_DEVICE_DESC_VERSION 1u
+#define WASMOS_PCI_BAR_COUNT 6u
+
+enum {
+    WASMOS_PCI_BAR_NONE = 0,  /* unimplemented: reads as zero */
+    WASMOS_PCI_BAR_IO = 1,    /* I/O port window */
+    WASMOS_PCI_BAR_MEM32 = 2, /* 32-bit memory window */
+    WASMOS_PCI_BAR_MEM64 = 3  /* 64-bit memory window; consumes the next slot too */
+};
+
+/* One decoded BAR. `size` is 0 when unknown -- see the note in pci_bus.c on why
+ * the size probe is not run during enumeration. */
+typedef struct __attribute__((packed)) {
+    uint8_t kind; /* WASMOS_PCI_BAR_* */
+    uint8_t prefetchable;
+    uint16_t reserved0;
+    uint32_t reserved1;
+    uint64_t base;
+    uint64_t size;
+} wasmos_pci_bar_t;
+
+typedef struct __attribute__((packed)) {
+    uint32_t version; /* = WASMOS_PCI_DEVICE_DESC_VERSION */
+    uint8_t bus;
+    uint8_t device;
+    uint8_t function;
+    uint8_t class_code;
+    uint8_t subclass;
+    uint8_t prog_if;
+    uint8_t irq_line; /* config 0x3C; 0xFF = not routed */
+    uint8_t irq_pin;  /* config 0x3D; 0 = does not assert INTx */
+    uint16_t vendor_id;
+    uint16_t device_id;
+    /* Config-space offsets of the interrupt capabilities, 0 when absent. Only
+     * pci-bus can walk the capability list, so it reports what it found rather
+     * than making every consumer ask. */
+    uint16_t msi_cap_offset;
+    uint16_t msix_cap_offset;
+    wasmos_pci_bar_t bars[WASMOS_PCI_BAR_COUNT];
+} wasmos_pci_device_desc_t;
+
+/* Whole sectors one BLOCK_IPC_READ_ZC_REQ may carry. A bound is needed because
+ * the request names a single contiguous run; the server is free to transfer
+ * fewer and reports the count it managed in BLOCK_IPC_READ_RESP.arg1, so a
+ * server with a smaller limit stays correct without the client knowing. */
+#define WASMOS_BLOCK_ZC_MAX_SECTORS 8u
+
+/* BLOCK_IPC_READ_ZC_REQ.arg2 packs the borrow handle above the sector count, the
+ * same (handle << 12 | small scalar) shape the spawn and mount paths already use.
+ * A fifth field is needed because the server must be able to address the buffer
+ * two ways -- by OBJECT to copy into it, by BORROW to map it for device DMA --
+ * and dst_offset is the one field that can legitimately grow, so it keeps a slot
+ * of its own rather than sharing one. The count needs 4 bits; 12 leaves room. */
+#define WASMOS_BLOCK_ZC_BORROW_SHIFT 12u
+#define WASMOS_BLOCK_ZC_COUNT_MASK 0xFFFu
+
+/* Message-signalled interrupt style a PCI function supports, reported by
+ * PCI_IPC_MSI_QUERY. MSI-X wins when a device offers both: it addresses each
+ * vector independently, where plain MSI needs one naturally-aligned block of
+ * consecutive vectors and so is limited to a single message here. */
+enum { WASMOS_PCI_MSI_KIND_NONE = 0, WASMOS_PCI_MSI_KIND_MSI = 1, WASMOS_PCI_MSI_KIND_MSIX = 2 };
+
+/* IPC message type the kernel sends for an MSI event (see src/kernel/include/msi.h).
+ * arg0 is the table entry index the driver programmed, i.e. which of its own
+ * interrupt sources fired. Unlike IPC_IRQ_EVENT_TYPE no ack is owed: the vector
+ * is edge-triggered and exclusively owned, so nothing is masked waiting for one. */
+#define WASMOS_IPC_MSI_EVENT_TYPE 0xFF01
+
 typedef struct __attribute__((packed)) {
     uint64_t base;
     uint64_t length;
 } wasmos_dma_window_t;
+
+/* One inclusive I/O-port window [first, last]. A driver needs more than one
+ * whenever its device's registers are not contiguous: legacy IDE is the case
+ * that forced this — the task-file sits at the fixed ISA ports (0x1F0/0x3F6)
+ * while its bus-master registers live in a firmware-assigned BAR (0xC040 on
+ * QEMU's PIIX). Covering both with a single range would span every port in
+ * between, which is where other devices live. */
+typedef struct __attribute__((packed)) {
+    uint16_t first;
+    uint16_t last;
+} wasmos_io_range_t;
+
+/* Windows one spawn profile may carry. Small on purpose: a driver that needs
+ * more than a handful of disjoint port windows is describing a device this
+ * model does not fit. */
+#define WASMOS_IO_RANGE_LIMIT 4u
 
 typedef struct __attribute__((packed)) {
     uint32_t direction_flags;
@@ -364,18 +504,28 @@ typedef struct __attribute__((packed)) {
     uint32_t reserved0;
 } wasmos_spawn_dma_caps_t;
 
+/* Descriptor-based spawn capabilities. Unlike the packed-arg spawn opcodes,
+ * which are out of IPC argument slots, this carries variable-length arrays after
+ * the fixed header. Layout is header, then io_range_count I/O windows, then
+ * dma.window_count DMA windows — order matters, both sides walk it positionally.
+ *
+ * io_port_min/max remain for a single contiguous window; io_range_count > 0
+ * supersedes them, which is how a device with disjoint register windows (legacy
+ * IDE: task file at 0x1F0/0x3F6, bus-master registers in a BAR) is described. */
 typedef struct __attribute__((packed)) {
     uint32_t cap_flags;
     uint16_t io_port_min;
     uint16_t io_port_max;
     uint16_t irq_mask;
-    uint16_t reserved0;
+    uint16_t io_range_count;
     wasmos_spawn_dma_caps_t dma;
-    wasmos_dma_window_t windows[];
+    /* wasmos_io_range_t io_ranges[io_range_count];
+     * wasmos_dma_window_t windows[dma.window_count]; */
 } wasmos_spawn_caps_v2_t;
 
-#define WASMOS_SPAWN_CAPS_V2_SIZE(window_count)                                                    \
+#define WASMOS_SPAWN_CAPS_V2_SIZE(io_range_count, window_count)                                    \
     (sizeof(wasmos_spawn_caps_v2_t) +                                                              \
+     ((uint32_t)(io_range_count) * (uint32_t)sizeof(wasmos_io_range_t)) +                          \
      ((uint32_t)(window_count) * (uint32_t)sizeof(wasmos_dma_window_t)))
 
 enum {

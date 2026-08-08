@@ -30,15 +30,20 @@ static inline void ui_text_input_handle_key(ui_context_t* ctx, ui_component_t* c
     if (!td)
         return;
 
-    if (key == 8u || key == 127u) {
+    /* The event code packs scancode:character; only the character edits text.
+     * Keys without a character (arrows, function keys) decode to 0 and are
+     * ignored here rather than inserted as a bogus codepoint. */
+    const uint32_t ch = ui_key_char(key);
+
+    if (ch == 8u || ch == 127u) {
         if (td->text_len > 0) {
             td->text_len = ui_utf8_prev_boundary(td->text, td->text_len);
             td->text[td->text_len] = '\0';
             ui_mark_dirty(ctx);
         }
-    } else if (key >= 32u && key <= 0x10FFFFu) {
+    } else if (ch >= 32u) {
         uint8_t enc[4];
-        const int32_t enc_len = ui_utf8_encode(key, enc);
+        const int32_t enc_len = ui_utf8_encode(ch, enc);
         if (enc_len <= 0)
             return;
         const int32_t need = td->text_len + enc_len + 1;

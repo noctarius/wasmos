@@ -158,8 +158,11 @@ void kernel_boot_run_scheduler_loop(void) {
     for (;;) {
         __asm__ volatile("cli");
         int rc = process_schedule_once();
-        /* normal (SCHED_OK) or a thread that just blocked/exited/zombied/raced:
-         * re-loop immediately — the idle thread does the actual (sti;hlt) idling. */
+        /* normal (SCHED_OK) or a thread that just blocked/exited/zombied/raced
+         * (including SCHED_R_STALE, a thread reaped out from under the picker):
+         * re-loop immediately — the idle thread does the actual (sti;hlt) idling.
+         * SCHED_R_PICK now means only "not even idle was dispatchable", which is
+         * what the panic below claims and is a real invariant violation. */
         if (rc == SCHED_R_PICK || rc == SCHED_R_CTX || rc == SCHED_R_ROOT || rc == SCHED_R_MAXCOUNT)
             kpanic("scheduler: no runnable thread (idle not dispatchable)", (uint64_t)rc, 0);
         if (process_should_resched())

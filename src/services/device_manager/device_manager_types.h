@@ -4,6 +4,7 @@
 #define WASMOS_DEVICE_MANAGER_TYPES_H
 
 #include <stdint.h>
+#include "wasmos_driver_abi.h" /* wasmos_pci_bar_t, WASMOS_PCI_BAR_COUNT */
 
 #define DEVICE_REGISTRY_CAP 64
 #define BLOCK_REGISTRY_CAP 16
@@ -64,6 +65,12 @@ typedef struct {
     uint16_t io_port_min;
     uint16_t io_port_max;
     uint16_t irq_mask; /* bitmask of IRQ lines the driver may use */
+    /* Windows resolved from the driver's declared regions, in declaration order
+     * (which is the region index it addresses at runtime). Non-zero count
+     * supersedes io_port_min/max and routes the spawn through the descriptor
+     * form, the only one that can describe more than a single window. */
+    uint32_t io_range_count;
+    wasmos_io_range_t io_ranges[WASMOS_IO_RANGE_LIMIT];
 } spawn_caps_t;
 
 /* One entry in the PCI device registry; populated from pci_bus scan messages. */
@@ -79,6 +86,14 @@ typedef struct {
     uint16_t io_port_base;
     uint8_t mmio_hint;
     uint8_t irq_hint;
+    uint8_t irq_pin;
+    /* Every region the function decodes, as pci-bus resolved them. Kept whole
+     * rather than flattened to a single "io_port_base", because which BAR holds
+     * what is device-specific: legacy IDE leaves BAR0 empty and puts its
+     * bus-master registers in BAR4. */
+    wasmos_pci_bar_t bars[WASMOS_PCI_BAR_COUNT];
+    uint16_t msi_cap_offset;
+    uint16_t msix_cap_offset;
 } pci_device_record_t;
 
 /* One entry in the block-device registry; present after FAT driver reports. */

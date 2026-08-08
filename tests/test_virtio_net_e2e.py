@@ -1,4 +1,5 @@
 import os
+import re
 import shutil
 import unittest
 
@@ -9,8 +10,8 @@ class VirtioNetE2ETest(unittest.TestCase):
     """End-to-end virtio-net data-path test.
 
     The virtio-net driver, once its RX/TX virtqueues are set up over
-    region_alloc'd rings, routes its device IRQ to its endpoint and broadcasts
-    an ARP request for the SLIRP gateway (10.0.2.2). QEMU's user-mode network
+    region_alloc'd rings, binds its device interrupt to its endpoint and
+    broadcasts an ARP request for the SLIRP gateway (10.0.2.2). QEMU's user-mode network
     (default `-netdev user`) answers, and the reply is delivered via the device
     interrupt — exercising the full path: region_alloc'd rings, vring
     publish/kick, the device doorbell, TX DMA read, RX DMA write, used-ring
@@ -42,10 +43,15 @@ class VirtioNetE2ETest(unittest.TestCase):
 
     def test_arp_roundtrip(self) -> None:
         assert self.session is not None
-        # The driver routed its device IRQ to its endpoint.
+        # The driver bound its device interrupt to its endpoint. Either path
+        # counts: MSI-X is the default (and then INTx is deliberately NOT routed,
+        # because binding a vector disables the device's INTx), with the shared
+        # line as the fallback when the device or pci-bus cannot provide vectors.
         self.assertTrue(
-            self.session.expect(b"[virtio-net] irq routed", timeout_s=90),
-            "virtio-net did not route its device IRQ",
+            self.session.expect(
+                re.compile(rb"\[virtio-net\] (msix enabled|irq routed)"), timeout_s=90
+            ),
+            "virtio-net did not bind its device interrupt",
         )
         # TX: the driver queued the ARP request into its region_alloc'd TX ring.
         self.assertTrue(

@@ -532,12 +532,25 @@ typedef struct fat_op_ctx {
 
     /* Open / read / write cursors. */
     int32_t fd;
-    uint32_t done;                   /* bytes copied so far (read/write) */
-    uint32_t requested;              /* bytes requested (read/write) */
-    uint32_t target_end;             /* offset+requested (write capacity growth) */
-    uint32_t old_size;               /* file size snapshot for zero-fill decisions */
-    uint32_t io_sector_offset;       /* within-sector byte offset (read/write loop) */
-    uint32_t io_chunk;               /* bytes copied this loop iteration (read/write) */
+    uint32_t done;             /* bytes copied so far (read/write) */
+    uint32_t requested;        /* bytes requested (read/write) */
+    uint32_t target_end;       /* offset+requested (write capacity growth) */
+    uint32_t old_size;         /* file size snapshot for zero-fill decisions */
+    uint32_t io_sector_offset; /* within-sector byte offset (read/write loop) */
+    uint32_t io_chunk;         /* bytes copied this loop iteration (read/write) */
+    /* Zero-copy read passthrough: whole sectors are landed by the block server
+     * straight into the client's transfer buffer instead of being staged. The
+     * reborrow is what gives that server the right to write there; it is taken
+     * lazily (only if a whole sector actually comes up) and dropped in
+     * fat_op_free, so no request can leak a grant. */
+    /* Tri-state, and the values are not interchangeable: 0 = no borrow (the
+     * initial value and what fat_op_free restores), > 0 = a live reborrow that
+     * MUST be unborrowed, -1 = a reborrow was attempted and refused, so do not
+     * retry for the remaining sectors of this request.  Teardown keys on > 0;
+     * treating -1 as "none" would be harmless, but treating it as live would
+     * unborrow a handle that was never taken. */
+    int32_t zc_borrow;
+    uint32_t io_run_sectors;         /* whole sectors in the current direct run */
     fat_dir_entry_info_t open_entry; /* resolved entry for OPEN */
 
     /* Open-file I/O sub-machines (fat_file.c). */

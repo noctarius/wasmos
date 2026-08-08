@@ -31,6 +31,8 @@ export const WASMOS_ERR_DOMAIN_CHARDEV: u16 = 9;
 export const WASMOS_ERR_DOMAIN_HRNG: u16 = 14;
 export const WASMOS_ERR_DOMAIN_DMA: u16 = 15;
 export const WASMOS_ERR_DOMAIN_IRQ: u16 = 16;
+export const WASMOS_ERR_DOMAIN_MSI: u16 = 17;
+export const WASMOS_ERR_DOMAIN_IO: u16 = 18;
 export const WASMOS_ERR_DOMAIN_FONT: u16 = 12;
 export const WASMOS_ERR_DOMAIN_RTC: u16 = 13;
 export const WASMOS_ERR_DOMAIN_XFER_BUFFER: u16 = 11;
@@ -130,6 +132,12 @@ export const WASMOS_ERR_GFX_PERMISSION: i32 = -0x00060007; // caller is not perm
 export const WASMOS_ERR_GFX_UNSUPPORTED: i32 = -0x00060008; // unknown or unsupported compositor request
 export const WASMOS_ERR_GFX_BUSY: i32 = -0x00060009; // compositor has no free window/buffer slot (retryable)
 export const WASMOS_ERR_GFX_IO: i32 = -0x0006000A; // framebuffer or shared-buffer operation failed
+export const WASMOS_ERR_DRIVER_NO_PROC_ENDPOINT: i32 = -0x00070001; // spawn info carried no process-manager endpoint
+export const WASMOS_ERR_DRIVER_ENDPOINT_CREATE: i32 = -0x00070002; // the driver could not create its own IPC endpoint
+export const WASMOS_ERR_DRIVER_NO_DEVICE_IDENTITY: i32 = -0x00070003; // startup args carry no valid device identity for this driver
+export const WASMOS_ERR_DRIVER_DEVICE_INIT: i32 = -0x00070004; // bringing the identified device up failed
+export const WASMOS_ERR_DRIVER_REGISTER: i32 = -0x00070005; // publishing the driver endpoint to the service registry failed
+export const WASMOS_ERR_DRIVER_SELECT_SETUP: i32 = -0x00070006; // the driver could not build its IPC select set
 export const WASMOS_ERR_VT_BAD_TTY_ID: i32 = -0x00080001; // requested tty id is out of range
 export const WASMOS_ERR_VT_NO_TTY_FOR_SOURCE: i32 = -0x00080002; // no tty is associated with the requesting endpoint
 export const WASMOS_ERR_VT_READER_BUSY: i32 = -0x00080003; // another endpoint is already the reader for this tty
@@ -154,6 +162,20 @@ export const WASMOS_ERR_IRQ_NOT_AUTHORIZED: i32 = -0x00100002; // caller lacks i
 export const WASMOS_ERR_IRQ_BAD_ENDPOINT: i32 = -0x00100003; // target endpoint is invalid or not owned by the caller
 export const WASMOS_ERR_IRQ_LINE_FULL: i32 = -0x00100004; // the line already has the maximum number of registered sharers
 export const WASMOS_ERR_IRQ_NOT_A_SHARER: i32 = -0x00100005; // caller has no registered handler on this line
+export const WASMOS_ERR_MSI_NOT_AUTHORIZED: i32 = -0x00110001; // caller lacks the irq.route capability
+export const WASMOS_ERR_MSI_UNSUPPORTED: i32 = -0x00110002; // this build's interrupt controller cannot deliver message-signalled interrupts (no LAPIC)
+export const WASMOS_ERR_MSI_BAD_ENDPOINT: i32 = -0x00110003; // target endpoint is invalid or not owned by the caller
+export const WASMOS_ERR_MSI_NO_VECTORS: i32 = -0x00110004; // the MSI vector space is exhausted
+export const WASMOS_ERR_MSI_BAD_VECTOR: i32 = -0x00110005; // vector is outside the MSI range or not allocated
+export const WASMOS_ERR_MSI_NOT_OWNER: i32 = -0x00110006; // caller does not own the vector it is trying to release
+export const WASMOS_ERR_MSI_BAD_DEVICE: i32 = -0x00110007; // bus/device/function does not name a present PCI function
+export const WASMOS_ERR_MSI_NO_CAPABILITY: i32 = -0x00110008; // device exposes neither an MSI-X (0x11) nor an MSI (0x05) capability
+export const WASMOS_ERR_MSI_BAD_ENTRY: i32 = -0x00110009; // table entry index is beyond the device's supported vector count
+export const WASMOS_ERR_MSI_MAP_FAILED: i32 = -0x0011000A; // the MSI-X table BAR could not be mapped
+export const WASMOS_ERR_MSI_NOT_DEVICE_OWNER: i32 = -0x0011000B; // another endpoint already programmed interrupts for this device
+export const WASMOS_ERR_IO_NOT_AUTHORIZED: i32 = -0x00120001; // caller has no io.port spawn profile, so it holds no I/O windows
+export const WASMOS_ERR_IO_BAD_REGION: i32 = -0x00120002; // region index names no window this context was granted
+export const WASMOS_ERR_IO_OUT_OF_WINDOW: i32 = -0x00120003; // offset falls outside the granted window's bounds
 export const WASMOS_ERR_FONT_INVALID: i32 = -0x000C0001; // invalid request arguments (font id, size, glyph, or buffer)
 export const WASMOS_ERR_FONT_PERMISSION: i32 = -0x000C0002; // caller is not permitted to use the requested font resource
 export const WASMOS_ERR_FONT_UNSUPPORTED: i32 = -0x000C0003; // unknown or unsupported request type
@@ -228,6 +250,8 @@ export function errorDomainName(d: u16): string {
     case WASMOS_ERR_DOMAIN_HRNG: return "hrng";
     case WASMOS_ERR_DOMAIN_DMA: return "dma";
     case WASMOS_ERR_DOMAIN_IRQ: return "irq";
+    case WASMOS_ERR_DOMAIN_MSI: return "msi";
+    case WASMOS_ERR_DOMAIN_IO: return "io";
     case WASMOS_ERR_DOMAIN_FONT: return "font";
     case WASMOS_ERR_DOMAIN_RTC: return "rtc";
     case WASMOS_ERR_DOMAIN_XFER_BUFFER: return "xfer_buffer";
@@ -331,6 +355,12 @@ export function strerror(c: i32): string {
     case WASMOS_ERR_GFX_UNSUPPORTED: return "unknown or unsupported compositor request";
     case WASMOS_ERR_GFX_BUSY: return "compositor has no free window/buffer slot (retryable)";
     case WASMOS_ERR_GFX_IO: return "framebuffer or shared-buffer operation failed";
+    case WASMOS_ERR_DRIVER_NO_PROC_ENDPOINT: return "spawn info carried no process-manager endpoint";
+    case WASMOS_ERR_DRIVER_ENDPOINT_CREATE: return "the driver could not create its own IPC endpoint";
+    case WASMOS_ERR_DRIVER_NO_DEVICE_IDENTITY: return "startup args carry no valid device identity for this driver";
+    case WASMOS_ERR_DRIVER_DEVICE_INIT: return "bringing the identified device up failed";
+    case WASMOS_ERR_DRIVER_REGISTER: return "publishing the driver endpoint to the service registry failed";
+    case WASMOS_ERR_DRIVER_SELECT_SETUP: return "the driver could not build its IPC select set";
     case WASMOS_ERR_VT_BAD_TTY_ID: return "requested tty id is out of range";
     case WASMOS_ERR_VT_NO_TTY_FOR_SOURCE: return "no tty is associated with the requesting endpoint";
     case WASMOS_ERR_VT_READER_BUSY: return "another endpoint is already the reader for this tty";
@@ -355,6 +385,20 @@ export function strerror(c: i32): string {
     case WASMOS_ERR_IRQ_BAD_ENDPOINT: return "target endpoint is invalid or not owned by the caller";
     case WASMOS_ERR_IRQ_LINE_FULL: return "the line already has the maximum number of registered sharers";
     case WASMOS_ERR_IRQ_NOT_A_SHARER: return "caller has no registered handler on this line";
+    case WASMOS_ERR_MSI_NOT_AUTHORIZED: return "caller lacks the irq.route capability";
+    case WASMOS_ERR_MSI_UNSUPPORTED: return "this build's interrupt controller cannot deliver message-signalled interrupts (no LAPIC)";
+    case WASMOS_ERR_MSI_BAD_ENDPOINT: return "target endpoint is invalid or not owned by the caller";
+    case WASMOS_ERR_MSI_NO_VECTORS: return "the MSI vector space is exhausted";
+    case WASMOS_ERR_MSI_BAD_VECTOR: return "vector is outside the MSI range or not allocated";
+    case WASMOS_ERR_MSI_NOT_OWNER: return "caller does not own the vector it is trying to release";
+    case WASMOS_ERR_MSI_BAD_DEVICE: return "bus/device/function does not name a present PCI function";
+    case WASMOS_ERR_MSI_NO_CAPABILITY: return "device exposes neither an MSI-X (0x11) nor an MSI (0x05) capability";
+    case WASMOS_ERR_MSI_BAD_ENTRY: return "table entry index is beyond the device's supported vector count";
+    case WASMOS_ERR_MSI_MAP_FAILED: return "the MSI-X table BAR could not be mapped";
+    case WASMOS_ERR_MSI_NOT_DEVICE_OWNER: return "another endpoint already programmed interrupts for this device";
+    case WASMOS_ERR_IO_NOT_AUTHORIZED: return "caller has no io.port spawn profile, so it holds no I/O windows";
+    case WASMOS_ERR_IO_BAD_REGION: return "region index names no window this context was granted";
+    case WASMOS_ERR_IO_OUT_OF_WINDOW: return "offset falls outside the granted window's bounds";
     case WASMOS_ERR_FONT_INVALID: return "invalid request arguments (font id, size, glyph, or buffer)";
     case WASMOS_ERR_FONT_PERMISSION: return "caller is not permitted to use the requested font resource";
     case WASMOS_ERR_FONT_UNSUPPORTED: return "unknown or unsupported request type";

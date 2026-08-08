@@ -388,6 +388,9 @@ class ProcessManager {
         case PROC_IPC_NOTIFY_READY:
             rc = pm_handle_notify_ready(process->context_id, &msg);
             break;
+        case PROC_IPC_MODULE_META_DESC:
+            rc = pm_handle_module_meta_desc(process->context_id, &msg);
+            break;
         case PROC_IPC_MODULE_META:
             rc = pm_handle_module_meta(process->context_id, &msg);
             break;

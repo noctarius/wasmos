@@ -50,6 +50,15 @@ static uint32_t g_range_count;
 static ksync_spinlock_t g_pfa_lock;
 static uint64_t g_initial_total_pages;
 
+/* The usable-RAM extents as the firmware reported them, kept separately from
+ * g_ranges (which is the FREE list and shrinks as pages are handed out). Callers
+ * asking "is this physical address system memory?" need the original map, not
+ * what happens to be free right now. */
+static pfa_range_t g_ram_ranges[128];
+/* Set if any usable-RAM extent could not be recorded; see add_ram_range. */
+static uint8_t g_ram_ranges_truncated;
+static uint32_t g_ram_range_count;
+
 extern uint8_t __kernel_start;
 extern uint8_t __kernel_end;
 
@@ -81,6 +90,33 @@ static void add_range(uint64_t base, uint64_t pages) {
     g_ranges[g_range_count].base = base;
     g_ranges[g_range_count].pages = pages;
     g_range_count++;
+}
+
+/* Record a usable-RAM extent verbatim (no page-0 trimming, no reservations
+ * carved out): this list answers "was this ever system memory?", so it must stay
+ * a superset of everything the allocator might hand out. */
+static void add_ram_range(uint64_t base, uint64_t pages) {
+    if (pages == 0) {
+        return;
+    }
+    if (g_ram_range_count >= (sizeof(g_ram_ranges) / sizeof(g_ram_ranges[0]))) {
+        /* Dropping an extent makes this list an INCOMPLETE answer to "was this
+         * ever system memory?", and the gate below is only safe while it is a
+         * superset.  Record the truncation so pfa_range_overlaps_ram can refuse
+         * instead of reporting "not RAM" for memory it simply failed to note. */
+        g_ram_ranges_truncated = 1;
+        return;
+    }
+    if (g_ram_range_count > 0) {
+        pfa_range_t* prev = &g_ram_ranges[g_ram_range_count - 1];
+        if (prev->base + prev->pages * PAGE_SIZE == base) {
+            prev->pages += pages;
+            return;
+        }
+    }
+    g_ram_ranges[g_ram_range_count].base = base;
+    g_ram_ranges[g_ram_range_count].pages = pages;
+    g_ram_range_count++;
 }
 
 static void reserve_range(uint64_t base, uint64_t size) {
@@ -259,6 +295,7 @@ void pfa_init(const boot_info_t* boot_info) {
         efi_memory_descriptor_t* desc = (efi_memory_descriptor_t*)cursor;
         if (is_usable(desc->Type)) {
             add_range(desc->PhysicalStart, desc->NumberOfPages);
+            add_ram_range(desc->PhysicalStart, desc->NumberOfPages);
         }
         cursor += desc_size;
     }
@@ -468,6 +505,31 @@ void pfa_pin_pages(uint64_t base, uint64_t pages) {
 
 uint64_t pfa_total_bytes(void) {
     return g_initial_total_pages * PAGE_SIZE;
+}
+
+int pfa_range_overlaps_ram(uint64_t base, uint64_t length) {
+    if (length == 0) {
+        return 0;
+    }
+    uint64_t end = base + length;
+    if (end < base) {
+        return 1; /* wrapped — treat as overlapping so the caller refuses */
+    }
+    /* If the map was never parsed we know nothing, so refuse rather than allow.
+     * A truncated list is the same situation with the same answer: what we hold
+     * is no longer a superset of system RAM, so "no overlap found" would be a
+     * guess, and this gate exists to stop mmio_write32_phys writing into RAM. */
+    if (g_ram_range_count == 0 || g_ram_ranges_truncated) {
+        return 1;
+    }
+    for (uint32_t i = 0; i < g_ram_range_count; ++i) {
+        uint64_t r_base = g_ram_ranges[i].base;
+        uint64_t r_end = r_base + g_ram_ranges[i].pages * PAGE_SIZE;
+        if (base < r_end && r_base < end) {
+            return 1;
+        }
+    }
+    return 0;
 }
 
 uint64_t pfa_free_bytes(void) {

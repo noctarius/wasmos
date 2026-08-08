@@ -44,6 +44,14 @@ static void make_thread(thread_t* t, uint32_t tid, sched_prio_t prio) {
     list_head_init(&t->event_node);
 }
 
+/* These tests build cpu_sched_t values on the STACK and enqueue into them, so
+ * they depend on cpu_sched_enqueue leaving a queue that is not one of g_cpus[]
+ * alone rather than redirecting away from it by affinity.  That behaviour is
+ * pinned by the "private queue not redirected" case in
+ * tests/unit/test_sched_runqueue.c; without it, cpu_sched_cpu_index would fold
+ * an unknown queue onto CPU 0 and any thread forbidden there would be silently
+ * enqueued somewhere else, quietly invalidating every test below. */
+
 /* -------------------------------------------------------------------------
  * Test 1: bitmap — ffs_table returns correct highest-priority index
  * ------------------------------------------------------------------------- */
@@ -240,18 +248,11 @@ static int test_event_wake_all(void) {
     return 0;
 }
 
-/* -------------------------------------------------------------------------
- * Test 5: sched_default_prio mapping
- * ------------------------------------------------------------------------- */
-static int test_default_prio(void) {
-    CHECK(sched_default_prio(1, 0, 0, 0) == SCHED_PRIO_IDLE, "prio-idle");
-    CHECK(sched_default_prio(0, 1, 0, 0) == SCHED_PRIO_SYSTEM, "prio-system");
-    CHECK(sched_default_prio(0, 0, 1, 0) == SCHED_PRIO_DRIVER, "prio-driver");
-    CHECK(sched_default_prio(0, 0, 0, 1) == SCHED_PRIO_SERVICE, "prio-service");
-    CHECK(sched_default_prio(0, 0, 0, 0) == SCHED_PRIO_WASM, "prio-wasm");
-    TEST_PASS("default-prio");
-    return 0;
-}
+/* Test 5 (sched_default_prio mapping) now lives in the host gate,
+ * tests/unit/test_sched_runqueue.c: it is a pure function of four flags, so it
+ * needs no running kernel, and the host version also covers the first-match-wins
+ * precedence that one-hot inputs cannot observe.  Numbering below is left as-is
+ * so the remaining tests keep the identities they are known by. */
 
 /* -------------------------------------------------------------------------
  * Test 6: sched_list — empty sentinel, add_tail, del, for_each_safe
@@ -363,6 +364,105 @@ static int test_target_cpu_selection(void) {
 }
 
 /* -------------------------------------------------------------------------
+ * Test 9: run-queue membership is a single atomic claim.
+ *
+ * A thread reaped while still linked in a ready queue used to keep its node in
+ * that queue after thread_reset_slot released the slot; the next spawn to get
+ * the slot re-initialised the node (self-linking it) while the queue still
+ * pointed at it, and the queue was then spliced through a node with two owners.
+ * cpu_sched_remove_thread is what the reap path calls to close that hole, and
+ * on_rq is what makes "is this thread queued?" answerable without holding the
+ * lock of whichever CPU's queue holds it.
+ * ------------------------------------------------------------------------- */
+static int test_remove_thread_and_claim(void) {
+    cpu_sched_t csa, csb;
+    cpu_sched_init(&csa);
+    cpu_sched_init(&csb);
+
+    thread_t t;
+    make_thread(&t, 70, SCHED_PRIO_SERVICE);
+
+    cpu_sched_enqueue(&csa, &t);
+    CHECK(t.on_rq == 1, "claim-set-on-enqueue");
+    CHECK(t.rq == &csa, "claim-owner-recorded");
+    CHECK(csa.thread_count[SCHED_PRIO_SERVICE] == 1, "claim-count");
+
+    /* A second enqueue -- from another CPU's queue, which is exactly the case
+     * the old self-link test could not see -- must be dropped, not linked. */
+    cpu_sched_enqueue(&csb, &t);
+    CHECK(csb.thread_count[SCHED_PRIO_SERVICE] == 0, "claim-dup-no-count");
+    CHECK(csb.ready_bitmap == 0, "claim-dup-no-bitmap");
+    CHECK(t.rq == &csa, "claim-dup-owner-unchanged");
+
+    /* The reap path: unlink from whichever queue holds it, releasing the claim
+     * so the recycled slot is enqueueable again. */
+    cpu_sched_remove_thread(&t);
+    CHECK(t.on_rq == 0, "remove-claim-cleared");
+    CHECK(t.rq == 0, "remove-owner-cleared");
+    CHECK(list_head_empty(&t.sched_node), "remove-unlinked");
+    CHECK(list_head_empty(&csa.ready_list[SCHED_PRIO_SERVICE]), "remove-queue-empty");
+    CHECK(csa.thread_count[SCHED_PRIO_SERVICE] == 0, "remove-count-zero");
+    CHECK((csa.ready_bitmap & (1u << SCHED_PRIO_SERVICE)) == 0, "remove-bitmap-cleared");
+
+    /* Idempotent: reaping a thread that is on no queue must not corrupt state. */
+    cpu_sched_remove_thread(&t);
+    CHECK(t.on_rq == 0, "remove-idempotent");
+
+    /* The freed slot's next incarnation can be enqueued normally. */
+    cpu_sched_enqueue(&csb, &t);
+    CHECK(t.rq == &csb, "remove-reenqueue-owner");
+    CHECK(csb.thread_count[SCHED_PRIO_SERVICE] == 1, "remove-reenqueue-count");
+
+    TEST_PASS("remove-thread-and-claim");
+    return 0;
+}
+
+/* -------------------------------------------------------------------------
+ * Test 10: a band's ready bit follows list emptiness, not the counter.
+ *
+ * The livelock signature was a band whose counter had underflowed past zero, so
+ * "--count == 0" never held and the bit stayed set over an empty/ghost list --
+ * the picker then re-returned the same node on every dispatch.  Deriving the
+ * bit from the list makes a drifted counter unable to wedge the picker.
+ * ------------------------------------------------------------------------- */
+static int test_ready_bit_follows_list(void) {
+    cpu_sched_t cs;
+    cpu_sched_init(&cs);
+
+    thread_t t;
+    make_thread(&t, 71, SCHED_PRIO_WASM);
+    cpu_sched_enqueue(&cs, &t);
+
+    /* Simulate a drifted counter (historically an underflow to UINT32_MAX). */
+    cs.thread_count[SCHED_PRIO_WASM] = 5;
+
+    ksync_spinlock_lock(&cs.lock);
+    thread_t* picked = cpu_sched_pick_next(&cs);
+    ksync_spinlock_unlock(&cs.lock);
+    CHECK(picked == &t, "ready-bit-pick");
+    CHECK((cs.ready_bitmap & (1u << SCHED_PRIO_WASM)) == 0, "ready-bit-cleared-on-empty");
+
+    /* With the bit clear, the drained band falls through to idle instead of
+     * handing back the same node forever. */
+    ksync_spinlock_lock(&cs.lock);
+    thread_t* again = cpu_sched_pick_next(&cs);
+    ksync_spinlock_unlock(&cs.lock);
+    CHECK(again == cpu_local()->idle_thread, "ready-bit-drained-to-idle");
+
+    /* A counter that has drifted below zero must not wrap. */
+    cpu_sched_enqueue(&cs, &t);
+    cs.thread_count[SCHED_PRIO_WASM] = 0;
+    ksync_spinlock_lock(&cs.lock);
+    cpu_sched_dequeue(&cs, &t);
+    ksync_spinlock_unlock(&cs.lock);
+    CHECK(cs.thread_count[SCHED_PRIO_WASM] == 0, "ready-bit-count-no-underflow");
+    CHECK((cs.ready_bitmap & (1u << SCHED_PRIO_WASM)) == 0, "ready-bit-cleared-after-dequeue");
+
+    TEST_PASS("ready-bit-follows-list");
+    return 0;
+}
+
+/* -------------------------------------------------------------------------
  * Entry point
  * ------------------------------------------------------------------------- */
 int kernel_sched_selftest_run(void) {
@@ -372,10 +472,11 @@ int kernel_sched_selftest_run(void) {
     failures += (test_dequeue() != 0) ? 1 : 0;
     failures += (test_event_wake_one() != 0) ? 1 : 0;
     failures += (test_event_wake_all() != 0) ? 1 : 0;
-    failures += (test_default_prio() != 0) ? 1 : 0;
     failures += (test_sched_list() != 0) ? 1 : 0;
     failures += (test_wake_during_block_transition() != 0) ? 1 : 0;
     failures += (test_target_cpu_selection() != 0) ? 1 : 0;
+    failures += (test_remove_thread_and_claim() != 0) ? 1 : 0;
+    failures += (test_ready_bit_follows_list() != 0) ? 1 : 0;
 
     if (failures == 0) {
         klog_write("[test] sched selftest all ok\n");

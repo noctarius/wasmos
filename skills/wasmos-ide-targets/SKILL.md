@@ -61,11 +61,38 @@ Pick the mechanism that owns the file's area:
 - **New shared/bespoke area** (a new top-level source dir): add it to an existing
   `wasmos_ide_index(...)` `DIRS`, or add a new `wasmos_ide_index(<name> DIRS <dir>
   INCLUDES <the dir's -I set>)` call at the end of the root `CMakeLists.txt`.
+- **A file in a globbed area needing a different include set than its
+  neighbours:** name it in a sibling `wasmos_ide_index(<name> SOURCES <files>
+  INCLUDES ...)` and list the same files in the glob's `EXCLUDE`, so it lands in
+  exactly one index target. `tests/unit` is split this way.
 - **Complex bespoke build** (lwIP/mbedTLS-style, like `net_stack`): extend that
   target's `wasmos_add_ide_c_target(... SOURCES ... INCLUDES ...)`.
 
 Get the `INCLUDES` right (the same `-I` set the real build uses) or the file
-indexes with unresolved `#include`s.
+indexes with unresolved `#include`s. A dir the real build passes as
+`-iquote` goes in `IQUOTE`, not `INCLUDES`: it then serves `"quoted"` includes
+only and leaves `<angle>` ones to the host headers.
+
+## Host unit tests: one libc per translation unit
+
+`tests/unit` is host-compiled, so both our libc headers and the host's are
+within reach — but a TU that sees both does not parse: our headers redeclare
+`strcpy`/`memcpy`/…, and the macOS SDK defines those names as `_FORTIFY_SOURCE`
+macros. Each test picks one, and its index target must match its real compile
+line:
+
+- Compiles against **our** libc (`-I ${LIBC_DIR}/include`): list it in
+  `WASMOS_UNIT_LIBC_TESTS` → `wasmos_ide_unit_libc`, which puts the project dirs
+  on `INCLUDES`. Our `<string.h>`/`<stdio.h>`/`<stdlib.h>` win; the host's are
+  never reached.
+- Compiles against the **host** libc (no libc `-I`, or `-iquote
+  ${LIBC_DIR}/include`): leave it to the `wasmos_ide_unit` glob, which puts every
+  project dir on `IQUOTE`. The host serves `<angle>` includes — including
+  `stderr`/`fprintf`/`abort`, which our libc does not declare — and ours serve
+  `"quoted"` ones.
+
+Put a test in the wrong bucket and `scripts/quality.sh lint` fails on it with a
+header conflict or an undeclared libc function, not with anything about the test.
 
 ## Step 3: Reconfigure and verify
 

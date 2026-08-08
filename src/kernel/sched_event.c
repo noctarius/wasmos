@@ -30,12 +30,16 @@ void sched_event_init(sched_event_t* ev, sched_event_type_t type) {
  * lower-bound hint so the common (nothing-due) case is a single compare.
  * ------------------------------------------------------------------------- */
 static volatile uint64_t g_sched_timeout_next = (uint64_t)-1;
+/* Bumped by every arm.  sched_timeout_check uses it to detect that ANY deadline
+ * was installed while it was scanning -- see the publish step there. */
+static volatile uint32_t g_sched_timeout_arm_seq = 0;
 
 static void sched_timeout_arm(thread_t* t, uint64_t deadline_tick) {
     if (deadline_tick == 0) {
         deadline_tick = 1; /* 0 is reserved for "no timeout" */
     }
     t->sched_timeout_tick = deadline_tick;
+    __atomic_fetch_add(&g_sched_timeout_arm_seq, 1u, __ATOMIC_ACQ_REL);
     /* Atomically lower the hint so it never sits above this deadline, even when
      * sched_timeout_check() publishes a recomputed bound concurrently. */
     uint64_t cur = __atomic_load_n(&g_sched_timeout_next, __ATOMIC_ACQUIRE);
@@ -87,6 +91,7 @@ void sched_timeout_check(void) {
     if (now < observed) {
         return; /* fast path: nothing armed is due */
     }
+    uint32_t arm_seq = __atomic_load_n(&g_sched_timeout_arm_seq, __ATOMIC_ACQUIRE);
     uint64_t next = (uint64_t)-1;
     for (uint32_t i = 0; i < THREAD_MAX_COUNT; ++i) {
         thread_t* t = thread_table_at(i);
@@ -105,13 +110,23 @@ void sched_timeout_check(void) {
             next = d;
         }
     }
-    /* Publish the recomputed lower-bound, but only if no sched_timeout_arm()
-     * lowered the hint while we scanned.  A blind store could raise the hint
-     * above a deadline armed mid-scan (whose tick we may not have observed),
-     * which would make the fast path skip a due timeout forever.  If the CAS
-     * fails, an arm already installed a value <= its own deadline; leave it. */
-    (void)__atomic_compare_exchange_n(&g_sched_timeout_next, &observed, next, 0, __ATOMIC_ACQ_REL,
-                                      __ATOMIC_ACQUIRE);
+    /* Publish the recomputed lower bound, but only if NO arm happened while we
+     * scanned.  An arm can install a deadline in a slot this scan already passed,
+     * so `next` would not include it and publishing would raise the hint above a
+     * live deadline -- the fast path then skips it forever and that thread's
+     * timed wait never expires.
+     *
+     * The value CAS alone cannot detect this.  sched_timeout_arm only LOWERS the
+     * hint, so an arm whose deadline sits ABOVE the current hint leaves the value
+     * untouched, the CAS succeeds, and the new deadline is orphaned.  The
+     * generation counter catches every arm regardless of its deadline.  Losing
+     * the race just leaves the old bound in place, which costs one extra scan and
+     * is self-correcting. */
+    uint32_t arm_seq_now = __atomic_load_n(&g_sched_timeout_arm_seq, __ATOMIC_ACQUIRE);
+    if (arm_seq_now == arm_seq) {
+        (void)__atomic_compare_exchange_n(&g_sched_timeout_next, &observed, next, 0,
+                                          __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE);
+    }
 }
 
 void sched_event_wait(sched_event_t* ev, uint32_t timeout_ms) {

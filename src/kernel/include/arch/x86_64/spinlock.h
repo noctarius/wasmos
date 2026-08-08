@@ -6,6 +6,32 @@
 
 #include <stdint.h>
 
+/* Spin-loop relax hint: tell the core we are busy-waiting, so it can back off
+ * instead of burning the pipeline at full rate.
+ *
+ * x86_64 uses PAUSE, the architectural spin-wait hint.
+ *
+ * aarch64 has no PAUSE equivalent, and YIELD is NOT one despite the widespread
+ * claim: the ARM ARM defines it as a hint that this task may be swapped out, for
+ * hardware multithreading, and it is permitted to (and does) execute as a NOP on
+ * cores without SMT.  ISB SY is what actually produces a comparable delay -- it
+ * stalls the pipeline.  It is an *instruction* synchronization barrier, not a
+ * data barrier like DMB/DSB, so it adds no memory ordering and cannot mask a
+ * missing acquire/release in code being tested on an aarch64 host.
+ *
+ * aarch64 is reachable only through the host test harness; the kernel itself is
+ * x86_64-only.  A real aarch64 port should revisit this against the LDXR/WFE
+ * exclusive-monitor pattern, which is the architectural low-power wait. */
+static inline void cpu_relax(void) {
+#if defined(__x86_64__)
+    __asm__ volatile("pause" ::: "memory");
+#elif defined(__aarch64__)
+    __asm__ volatile("isb sy" ::: "memory");
+#else
+    __asm__ volatile("" ::: "memory");
+#endif
+}
+
 /* state == 0 means unlocked; state == 1 means locked. */
 typedef struct {
     volatile uint32_t state;

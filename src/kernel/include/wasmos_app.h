@@ -19,7 +19,7 @@
 #include "wasm_driver.h"
 
 #define WASMOS_APP_MAGIC "WASMOSAP"
-#define WASMOS_APP_VERSION 5u
+#define WASMOS_APP_VERSION 6u
 #define WASMOS_APP_SUBSYSTEM_TAG_LEN 8u
 
 #define WASMOS_SUBSYSTEM_TAG_WASM "WASM"
@@ -82,6 +82,24 @@ typedef struct {
     uint32_t priority;
 } wasmos_app_driver_match_t;
 
+/* Register windows a driver declares it needs, in the order it addresses them.
+ * A driver names windows rather than ports: IO is a fixed range it knows
+ * statically (legacy/ISA-compat), BAR is wherever firmware put a BAR of the
+ * matched device. Declaration order is the region index used at runtime, so the
+ * manifest is where a reader learns what "region 1" means. */
+/* WASMOS_APP_REGION_IO / _BAR come from wasmos_driver_abi.h, which the kernel
+ * also includes: the same two values name the same concept on both sides of the
+ * boundary, so there is one definition rather than two that can drift. */
+
+#define WASMOS_APP_MAX_REGIONS 4u
+
+typedef struct {
+    uint8_t kind; /* WASMOS_APP_REGION_* */
+    uint8_t bar_index;
+    uint16_t first;
+    uint16_t last;
+} wasmos_app_region_t;
+
 typedef struct {
     const uint8_t* blob;
     uint32_t blob_size;
@@ -99,6 +117,8 @@ typedef struct {
     uint32_t heap_pages_hint;
     uint32_t driver_match_count;
     wasmos_app_driver_match_t driver_matches[WASMOS_APP_MAX_DRIVER_MATCHES];
+    uint32_t region_count;
+    wasmos_app_region_t regions[WASMOS_APP_MAX_REGIONS];
     uint32_t req_ep_count;
     wasmos_app_req_endpoint_t req_eps[WASMOS_APP_MAX_REQUIRED_ENDPOINTS];
     uint32_t cap_count;

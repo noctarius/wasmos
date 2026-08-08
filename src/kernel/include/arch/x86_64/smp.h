@@ -116,7 +116,19 @@ extern uint32_t g_cpu_count; /* CPUs discovered in MADT; always >= 1 */
  * SMP build: reads GS:0 (the self-pointer written at per-CPU init time).
  * Non-SMP build: always &g_cpus[0], no GS dependency.
  */
-#if WASMOS_SMP
+#if defined(WASMOS_HOST_TEST_SMP)
+/* Host harness: pthreads stand in for vCPUs, so cpu_local() must be per-thread.
+ * The arch-typical per-CPU register is not available to a hosted program --
+ * GS/FS base on x86_64 and TPIDR_EL0 on arm64 already hold libc's thread
+ * pointer, and macOS uses GS itself -- so reading it raw yields libc's TSD and
+ * writing it breaks pthreads.  _Thread_local is the supported spelling of the
+ * same thing: the compiler lowers it to an access off exactly that register.
+ * Listed first so it wins regardless of how WASMOS_SMP is set for the build. */
+extern _Thread_local cpu_local_t* g_host_cpu_local;
+static inline cpu_local_t* cpu_local(void) {
+    return g_host_cpu_local;
+}
+#elif WASMOS_SMP
 static inline cpu_local_t* cpu_local(void) {
     cpu_local_t* p;
     __asm__ volatile("mov %%gs:0, %0" : "=r"(p));

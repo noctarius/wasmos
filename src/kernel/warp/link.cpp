@@ -40,6 +40,8 @@ extern "C" {
 #include "klog.h"
 #include "io.h"
 #include "irq.h"
+#include "msi.h"
+#include "mmio.h"
 #include "serial.h"
 #include "capability.h"
 #include "timer.h"
@@ -942,6 +944,79 @@ static uint32_t warp_block_buffer_write(uint32_t phys, uint32_t ptr_off, uint32_
 // ---------------------------------------------------------------------------
 // I/O port access
 // ---------------------------------------------------------------------------
+
+/* Region-addressed I/O. The driver supplies (region, offset), never an absolute
+ * port, so it cannot express an access outside the window its spawn profile
+ * granted -- the kernel owns the base. `region` indexes those windows in
+ * declaration order. Failures propagate the specific WASMOS_ERR_IO_* reason
+ * rather than collapsing to one value: "no such region" and "offset past the
+ * end" are different bugs. */
+static int warp_io_region_port(uint32_t region, uint32_t offset, uint32_t width,
+                               uint16_t* out_port) {
+    uint32_t context_id = 0;
+    if (warp_current_context_id(&context_id) != 0)
+        return WASMOS_ERR_IO_NOT_AUTHORIZED;
+    return capability_io_region_port(context_id, region, offset, width, out_port);
+}
+
+/* Reads return the datum through linear memory, not as the result: a 32-bit
+ * port read can legitimately be 0xFFFFFFFF and must stay distinguishable from a
+ * failure code. */
+static uint32_t warp_io_region_read(uint32_t region, uint32_t offset, uint32_t out_off, void* ctx_,
+                                    uint32_t width) {
+    auto* ctx = warp_call_ctx(ctx_);
+    uint8_t* raw = warp_mem(ctx, out_off, sizeof(uint32_t));
+    uint16_t port = 0;
+    uint32_t value = 0;
+    int rc = 0;
+    if (!raw)
+        return (uint32_t)WASMOS_ERR_IO_OUT_OF_WINDOW;
+    rc = warp_io_region_port(region, offset, width, &port);
+    if (rc != 0)
+        return (uint32_t)rc;
+    value = (width == 1u) ? (uint32_t)inb(port) : (width == 2u) ? (uint32_t)inw(port) : inl(port);
+    __builtin_memcpy(raw, &value, sizeof(value));
+    return 0;
+}
+
+static uint32_t warp_io_region_in8(uint32_t region, uint32_t offset, uint32_t out_off, void* ctx_) {
+    return warp_io_region_read(region, offset, out_off, ctx_, 1u);
+}
+static uint32_t warp_io_region_in16(uint32_t region, uint32_t offset, uint32_t out_off,
+                                    void* ctx_) {
+    return warp_io_region_read(region, offset, out_off, ctx_, 2u);
+}
+static uint32_t warp_io_region_in32(uint32_t region, uint32_t offset, uint32_t out_off,
+                                    void* ctx_) {
+    return warp_io_region_read(region, offset, out_off, ctx_, 4u);
+}
+static uint32_t warp_io_region_out8(uint32_t region, uint32_t offset, uint32_t value, void* ctx_) {
+    (void)ctx_;
+    uint16_t port = 0;
+    int rc = warp_io_region_port(region, offset, 1u, &port);
+    if (rc != 0)
+        return (uint32_t)rc;
+    outb(port, (uint8_t)(value & 0xFFu));
+    return 0;
+}
+static uint32_t warp_io_region_out16(uint32_t region, uint32_t offset, uint32_t value, void* ctx_) {
+    (void)ctx_;
+    uint16_t port = 0;
+    int rc = warp_io_region_port(region, offset, 2u, &port);
+    if (rc != 0)
+        return (uint32_t)rc;
+    outw(port, (uint16_t)(value & 0xFFFFu));
+    return 0;
+}
+static uint32_t warp_io_region_out32(uint32_t region, uint32_t offset, uint32_t value, void* ctx_) {
+    (void)ctx_;
+    uint16_t port = 0;
+    int rc = warp_io_region_port(region, offset, 4u, &port);
+    if (rc != 0)
+        return (uint32_t)rc;
+    outl(port, value);
+    return 0;
+}
 
 static uint32_t warp_io_in8(uint32_t port, void* ctx_) {
     (void)ctx_;
@@ -2429,6 +2504,52 @@ static uint32_t warp_irq_unroute(uint32_t irq_line, void* ctx_) {
     if (warp_current_context_id(&context_id) != 0 || warp_require_irq_capability(context_id) != 0)
         return (uint32_t)WASMOS_ERR_IRQ_NOT_AUTHORIZED;
     return (uint32_t)irq_unregister(context_id, irq_line);
+}
+
+/* Allocate an MSI vector bound to one of the caller's endpoints. The kernel owns
+ * the vector namespace; the caller passes the returned address/data pair to the
+ * bus driver that programs the device (pci-bus, PCI_IPC_MSI_BIND). */
+static uint32_t warp_msi_alloc(uint32_t endpoint, uint32_t out_off, void* ctx_) {
+    auto* ctx = warp_call_ctx(ctx_);
+    typedef struct {
+        uint32_t address_lo;
+        uint32_t address_hi;
+        uint32_t data;
+        uint32_t vector;
+    } msi_desc_t;
+    uint8_t* raw = warp_mem(ctx, out_off, sizeof(msi_desc_t));
+    if (!raw)
+        return (uint32_t)WASMOS_ERR_MSI_BAD_ENDPOINT;
+    uint32_t context_id = 0;
+    if (warp_current_context_id(&context_id) != 0 || warp_require_irq_capability(context_id) != 0)
+        return (uint32_t)WASMOS_ERR_MSI_NOT_AUTHORIZED;
+    msi_desc_t tmp;
+    int rc =
+        msi_alloc(context_id, endpoint, &tmp.address_lo, &tmp.address_hi, &tmp.data, &tmp.vector);
+    if (rc != 0)
+        return (uint32_t)rc;
+    __builtin_memcpy(raw, &tmp, sizeof(tmp));
+    return 0;
+}
+
+static uint32_t warp_msi_free(uint32_t vector, void* ctx_) {
+    (void)ctx_;
+    uint32_t context_id = 0;
+    if (warp_current_context_id(&context_id) != 0 || warp_require_irq_capability(context_id) != 0)
+        return (uint32_t)WASMOS_ERR_MSI_NOT_AUTHORIZED;
+    return (uint32_t)msi_free(context_id, vector);
+}
+
+/* Poke a memory-mapped device register (pci-bus placing an MSI-X table entry).
+ * mmio_write32_phys refuses anything overlapping system RAM, so the mmio.map
+ * capability buys MMIO access, not arbitrary physical memory access. */
+static uint32_t warp_mmio_write32(uint32_t phys_lo, uint32_t phys_hi, uint32_t value, void* ctx_) {
+    (void)ctx_;
+    uint32_t context_id = 0;
+    if (warp_current_context_id(&context_id) != 0 || warp_require_mmio_capability(context_id) != 0)
+        return (uint32_t)WASMOS_ERR_MSI_NOT_AUTHORIZED;
+    uint64_t phys = ((uint64_t)phys_hi << 32) | (uint64_t)phys_lo;
+    return (uint32_t)mmio_write32_phys(phys, value);
 }
 
 // ---------------------------------------------------------------------------

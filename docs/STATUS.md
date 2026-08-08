@@ -20,6 +20,11 @@ linked feature documents for rationale and rollout plans.
   polling continue to advance. The native-driver ABI exposes the corresponding
   select hooks; the kernel build explicitly depends on that ABI header so a
   header change cannot leave `native_driver.o` stale.
+- `virtio-net` takes its device identity solely from the startup args written
+  by the device manager (`pci= vendor= device= io= irq=`). The driver carries
+  no PCI config-space scan; a spawn without a valid identity fails immediately
+  with `WASMOS_ERR_DRIVER_NO_DEVICE_IDENTITY` rather than binding to a device
+  it found itself.
 - `virtio-net` now publishes `net.ifc` and reports link changes with
   `NETDRV_IPC_LINK_NOTIFY`. `net-stack` consumes class enumeration/events,
   retaining name lookup only as compatibility fallback.
@@ -150,6 +155,45 @@ linked feature documents for rationale and rollout plans.
   (re)starts the lwIP DHCP client; `off` stops it and leaves the current address
   in place. lwIP is IPv4-only with a single address per netif, so static
   addressing and DHCP are mutually exclusive on an interface (no address aliases).
+
+### Interrupts
+
+- Message-signalled interrupts are implemented end to end and are the default
+  for both virtio devices. Vectors 48–63 (`MSI_VECTOR_BASE`, 16 slots) have ISR
+  stubs and IDT gates, installed only where a LAPIC can receive the message
+  write; `msi_alloc` refuses in pure-8259 mode.
+- Authority is split three ways: the kernel owns the vector namespace and binds
+  a vector only to an endpoint the caller owns; pci-bus owns configuration space
+  and programs the device; the driver maps its own queues onto the entries. No
+  "route on behalf of" path exists, so the endpoint-ownership check is intact.
+- `pci-bus` is now a resident service (name `"pci"`, opcodes `0xd00`–`0xdff`)
+  rather than a one-shot scanner, because it is the only holder of the
+  0xCF8/0xCFC window. Its request loop blocks on `wasmos_ipc_select_one`; moving
+  it to the coroutine runtime is a follow-up needed once it must originate
+  requests while serving (hot-plug).
+- `mmio_write32` is the one primitive that lets a bus driver write a device
+  register (`wasmos_phys_map` copies rather than maps). It requires `mmio.map`
+  and refuses any address overlapping usable RAM, so it cannot reach system
+  memory.
+- `virtio-net` uses three vectors (RX, TX, config) and its idle wait is a plain
+  blocking wait; the timed RX drain survives only on the INTx fallback path.
+  `virtio-rng` uses one. Both set `INTX_DISABLE`, so QEMU's shared IRQ 11 now
+  has no user — the sharer/ack/deadline machinery in the kernel remains for ISA
+  and any future INTx device, but nothing in the default boot exercises it.
+- `ata` completion is interrupt-driven (IRQ 14 + `nIEN` cleared in Device
+  Control, which nothing had ever written, so device interrupts had been masked
+  at the drive all along). The sector waits no longer spin on the status
+  register. Transfers are still PIO — there is no bus-master IDE programming in
+  the driver — and the disabled `dma_map_borrow` fast path is now reported once
+  at startup instead of as a per-request "dma fallback", which read like an
+  intermittent failure but is a hardwired `TODO(xfer-buffer owner-push)`.
+  Interrupt use is an optimisation, never a dependency: a routed-but-silent line
+  is abandoned after a bounded number of empty sleeps and the driver reverts to
+  polling.
+- Validated on `wasmos_defconfig` (WARP+SMP, 9/11 runs), `wasm3_smp_defconfig`,
+  and `wasm3_single_defconfig` (3/3). The two failures were a
+  `scheduler: no runnable thread` panic during early kernel self-tests, before
+  pci-bus or either driver starts — see the scheduler race, not this path.
 
 ### Build, Configuration, and Validation
 
@@ -488,6 +532,9 @@ linked feature documents for rationale and rollout plans.
 - `libui` has one canonical tree at `src/libui/`. Its component base owns common
   tree state; component vtables own type-specific layout, render, event, popup,
   and destruction behavior. Existing consumers are `gfx_smoke` and `menu_bar`.
+  `GFX_EVENT_KEY` carries `ascii | (scancode << 8)`, so key handlers decode it
+  with `ui_key_char()` / `ui_key_scancode()` rather than using the packed code
+  as a character; `tests/unit/test_libui_key_decode.c` pins that contract.
 - `gfx_smoke` exercises multiple windows, close-event teardown, and libui;
   `menu_bar` exercises popup/window interactions. Both are spawned after the
   compositor is ready when present in `sysinit`.

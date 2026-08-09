@@ -496,11 +496,40 @@ static void test_a_null_loop_poll_is_safe(void) {
 
 /* -------------------------------------------------------------------- main */
 
+/* Every caller of wasmos_ipc_select_wait_timeout discards its return, which
+ * conflates the three outcomes it now distinguishes. Timeout and ready are both
+ * fine to ignore -- the caller loops and re-polls either way. An ERROR is not:
+ * a failed wait returns IMMEDIATELY, so a loop that cannot tell it from a
+ * timeout stops parking and spins at full speed. cli_idle_wait's own comment
+ * says "No yield-spin, no poll", which is only true while the wait works.
+ *
+ * wasmos_sys_wait_classify is what the callers ask instead. */
+static void test_a_timed_wait_is_classified(void) {
+    CHECK(wasmos_sys_wait_classify(0) == WASMOS_SYS_WAIT_READY,
+          "endpoint 0 is a ready endpoint, not an error");
+    CHECK(wasmos_sys_wait_classify(7) == WASMOS_SYS_WAIT_READY, "as is any endpoint id");
+    CHECK(wasmos_sys_wait_classify(WASMOS_TIMEOUT) == WASMOS_SYS_WAIT_TIMEOUT,
+          "the window elapsing is a timeout");
+    CHECK(wasmos_sys_wait_classify(WASMOS_DENIED) == WASMOS_SYS_WAIT_FAILED,
+          "any other negative status is a failure");
+    CHECK(wasmos_sys_wait_classify(-1) == WASMOS_SYS_WAIT_FAILED, "including the unspecific one");
+}
+
+/* The distinction only earns its keep if a caller can act on it: a failed wait
+ * must be reported as not-parked so the loop can stop rather than spin. */
+static void test_a_failed_wait_is_not_a_park(void) {
+    CHECK(wasmos_sys_wait_parked(WASMOS_TIMEOUT) != 0, "a timeout did park for the interval");
+    CHECK(wasmos_sys_wait_parked(3) != 0, "a ready endpoint did park until it was ready");
+    CHECK(wasmos_sys_wait_parked(WASMOS_DENIED) == 0, "a failure did not park at all");
+}
+
 int main(void) {
     struct {
         const char* name;
         void (*fn)(void);
     } tests[] = {
+        {"L20 a timed wait is classified", test_a_timed_wait_is_classified},
+        {"L21 a failed wait is not a park", test_a_failed_wait_is_not_a_park},
         {"L1 init builds a select set", test_init_builds_a_select_set},
         {"L2 an intent wins over a type handler", test_an_intent_wins_over_a_type_handler},
         {"L3 unmatched replies fall through",

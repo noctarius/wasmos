@@ -2195,7 +2195,12 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t module_coun
                 if (settled) {
                     (void)wasmos_ipc_select_wait(g_dm_idle_select_id);
                 } else {
-                    (void)wasmos_ipc_select_wait_timeout(g_dm_idle_select_id, DM_IDLE_HOUSEKEEP_MS);
+                    if (!wasmos_sys_wait_parked(wasmos_ipc_select_wait_timeout(
+                            g_dm_idle_select_id, DM_IDLE_HOUSEKEEP_MS))) {
+                        /* A failed wait does not block, so this housekeeping
+                         * loop would spin instead of idling. */
+                        g_dm_idle_select_id = -1;
+                    }
                 }
             } else {
                 wasmos_sched_yield();

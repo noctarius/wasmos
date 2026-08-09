@@ -1025,7 +1025,17 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t ignored_arg
             /* Idle: poll the RX ring + reap TX (INTx re-delivery workaround),
              * then block until the next message or the poll deadline. */
             net_service_rx();
-            (void)wasmos_ipc_select_wait_timeout(sel, NET_RX_POLL_INTERVAL_MS);
+            if (!wasmos_sys_wait_parked(
+                    wasmos_ipc_select_wait_timeout(sel, NET_RX_POLL_INTERVAL_MS))) {
+                /* A failed wait returns immediately, so this poll loop stops
+                 * being a poll. Yield explicitly rather than tightening into a
+                 * hot loop -- and do NOT exit: losing the interface outright is
+                 * worse than polling badly.
+                 * FIXME: with a dead select set there is nothing left to park
+                 * on, so this is still a yield loop. The real fix is not to
+                 * lose the set; nothing currently reports that it happened. */
+                (void)wasmos_sched_yield();
+            }
         }
     }
     return 0;

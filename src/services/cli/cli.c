@@ -1976,11 +1976,14 @@ static void cli_phase_init_step(int32_t proc_endpoint, int32_t home_tty_arg) {
 /* Block until input (a VT_IPC_INPUT_NOTIFY push) or a reply arrives on one of the
  * CLI's endpoints, or the backstop interval elapses.  No yield-spin, no poll. */
 static void cli_idle_wait(void) {
-    if (g_idle_select >= 0) {
-        (void)wasmos_ipc_select_wait_timeout(g_idle_select, CLI_IDLE_WAIT_MS);
-    } else {
-        (void)wasmos_sched_yield();
+    if (g_idle_select >= 0 &&
+        wasmos_sys_wait_parked(wasmos_ipc_select_wait_timeout(g_idle_select, CLI_IDLE_WAIT_MS))) {
+        return;
     }
+    /* Either there is no select set, or the wait FAILED -- which returns
+     * immediately, so continuing to call it would make this loop the yield-spin
+     * the comment above promises it is not. Fall back to one explicit yield. */
+    (void)wasmos_sched_yield();
 }
 
 static void cli_phase_prompt_step(void) {

@@ -440,11 +440,18 @@ static int rng_fill(uint32_t want) {
         /* Block until the device's completion interrupt arrives (or the safety-net
          * interval elapses).  Only IRQ events land on this endpoint, so draining
          * it cannot swallow an HRNG request. */
+        /* A wait that FAILS returns immediately, so looping on it would spin
+         * rather than block; give up on the completion and let the caller's
+         * timeout path run. */
         if (g_irq_routed || g_dev.msix_enabled) {
-            (void)wasmos_ipc_select_wait_timeout(g_irq_select, RNG_IRQ_WAIT_MS);
+            if (!wasmos_sys_wait_parked(
+                    wasmos_ipc_select_wait_timeout(g_irq_select, RNG_IRQ_WAIT_MS))) {
+                break;
+            }
             rng_service_irq();
-        } else {
-            (void)wasmos_ipc_select_wait_timeout(g_select, RNG_IRQ_WAIT_MS);
+        } else if (!wasmos_sys_wait_parked(
+                       wasmos_ipc_select_wait_timeout(g_select, RNG_IRQ_WAIT_MS))) {
+            break;
         }
     }
     vring_free_desc(&g_rq, (uint16_t)d);
@@ -580,7 +587,15 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t ignored_arg
                 send_error(msg.source, msg.request_id, WASMOS_ERR_HRNG_INVALID);
             }
         }
-        (void)wasmos_ipc_select_wait_timeout(g_select, 1000);
+        if (!wasmos_sys_wait_parked(wasmos_ipc_select_wait_timeout(g_select, 1000))) {
+            /* A failed wait returns immediately, so this loop stops blocking.
+             * Yield explicitly rather than tightening into a hot loop -- and do
+             * NOT exit: an entropy service that quits is worse than one that
+             * polls.
+             * FIXME: with a dead select set there is nothing left to park on.
+             * The real fix is not to lose the set. */
+            (void)wasmos_sched_yield();
+        }
     }
     return 0;
 }

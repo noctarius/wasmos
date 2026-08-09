@@ -205,7 +205,13 @@ static void ata_wait_step(void) {
         wasmos_io_wait();
         return;
     }
-    (void)wasmos_ipc_select_wait_timeout(g_irq_select, ATA_IRQ_WAIT_MS);
+    if (!wasmos_sys_wait_parked(wasmos_ipc_select_wait_timeout(g_irq_select, ATA_IRQ_WAIT_MS))) {
+        /* The wait itself failed, so it returned without blocking. Continuing to
+         * call it turns this into a spin; drop to the timed I/O delay instead. */
+        ata_disable_interrupts("interrupt wait failed");
+        wasmos_io_wait();
+        return;
+    }
     if (ata_service_irq() || g_irq_seen) {
         return;
     }

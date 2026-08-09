@@ -99,6 +99,33 @@ struct wasmos_sys_random_request {
     void* user;
 };
 
+/*
+ * The three outcomes of a timed select wait, which its int32_t return conflates.
+ *
+ * Ready and timeout are both ordinary: the caller loops and re-polls either way.
+ * A FAILURE is not, and is the reason this exists -- a failed wait returns
+ * IMMEDIATELY, so a loop that cannot tell it from a timeout stops parking and
+ * spins at full speed. Every caller used to discard the return entirely.
+ */
+typedef enum {
+    WASMOS_SYS_WAIT_READY = 0,   /* an endpoint became ready; its id was returned */
+    WASMOS_SYS_WAIT_TIMEOUT = 1, /* the window elapsed with nothing ready */
+    WASMOS_SYS_WAIT_FAILED = 2,  /* the wait could not be performed at all */
+} wasmos_sys_wait_result_t;
+
+static inline wasmos_sys_wait_result_t wasmos_sys_wait_classify(int32_t rc) {
+    if (rc >= 0) {
+        return WASMOS_SYS_WAIT_READY; /* endpoint 0 is an endpoint, not an error */
+    }
+    return rc == WASMOS_TIMEOUT ? WASMOS_SYS_WAIT_TIMEOUT : WASMOS_SYS_WAIT_FAILED;
+}
+
+/* True while the wait actually blocked. The question a polling loop needs to
+ * ask, because the answer decides whether continuing is a park or a spin. */
+static inline int wasmos_sys_wait_parked(int32_t rc) {
+    return wasmos_sys_wait_classify(rc) != WASMOS_SYS_WAIT_FAILED;
+}
+
 static inline int32_t wasmos_sys_ipc_recv_matching(int32_t reply_endpoint, int32_t request_id,
                                                    wasmos_ipc_message_t* out_reply) {
     for (;;) {

@@ -2404,6 +2404,26 @@ add_custom_target(run-kernel-unit-tests
           --outFile ${BUILD_DIR}/test_as_eventloop.wasm
   COMMAND ${WASMOS_UNIT_NODE} ${CMAKE_SOURCE_DIR}/tests/unit/as/run_as_test.mjs
           ${BUILD_DIR}/test_as_eventloop.wasm test_as_eventloop
+  # The @coroutine lowering in tools/as_coroutine_transform.mjs. asc has no
+  # async/await, so this transform generates the pc state machine a stackless
+  # coroutine needs; the test holds the generated machine to the behaviour of
+  # the same logic hand-written as a Task.
+  COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/as_transform_test_src
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different
+          ${LIBC_DIR}/assemblyscript/coroutine.ts
+          ${BUILD_DIR}/as_transform_test_src/coroutine.ts
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different
+          ${CMAKE_SOURCE_DIR}/tests/unit/as/shuffle.ts
+          ${BUILD_DIR}/as_transform_test_src/shuffle.ts
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_as_coroutine_transform.ts
+          ${BUILD_DIR}/as_transform_test_src/test_as_coroutine_transform.ts
+  COMMAND ${WASMOS_UNIT_ASC} ${BUILD_DIR}/as_transform_test_src/test_as_coroutine_transform.ts
+          --target release -O --runtime stub
+          --transform ${CMAKE_SOURCE_DIR}/tools/as_coroutine_transform.mjs
+          --outFile ${BUILD_DIR}/test_as_coroutine_transform.wasm
+  COMMAND ${WASMOS_UNIT_NODE} ${CMAKE_SOURCE_DIR}/tests/unit/as/run_as_test.mjs
+          ${BUILD_DIR}/test_as_coroutine_transform.wasm test_as_coroutine_transform
   # The poll hub on its own. Its only outward call is ipc_select_signal, so the
   # test stubs that and asserts exactly which sets a notify reaches.
   COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions

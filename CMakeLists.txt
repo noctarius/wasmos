@@ -2248,7 +2248,7 @@ add_custom_target(run-kernel-unit-tests
   # rule are enforced only here, and were previously covered only by klog string
   # probes fired from the ring3-smoke image.
   COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
-          -DWASMOS_HOST_TEST_SMP=1
+          -DWASMOS_HOST_TEST_SMP=1 -DWASMOS_SYSCALL_TEST_SEAMS=1
           -include ${LIBC_DIR}/include/wasmos_cast.h
           -iquote ${KERNEL_DIR}/include
           -iquote ${CMAKE_SOURCE_DIR}/libs/wasm3/source
@@ -2977,7 +2977,8 @@ wasmos_ide_index(wasmos_ide_unit_sched
   IQUOTE ${KERNEL_DIR}/include ${WASM3_DIR}/source
          ${CMAKE_SOURCE_DIR}/abi/generated/c
   DEFINES WASMOS_HOST_TEST_SMP=1 WASMOS_SCHED_CALLER_CPU_BIAS=1
-          WASMOS_IPC_TEST_SEAMS=1 WASMOS_FUTEX_TEST_SEAMS=1)
+          WASMOS_IPC_TEST_SEAMS=1 WASMOS_FUTEX_TEST_SEAMS=1
+          WASMOS_SYSCALL_TEST_SEAMS=1)
 
 wasmos_ide_index(wasmos_ide_unit_libc
   SOURCES ${WASMOS_UNIT_LIBC_TESTS}

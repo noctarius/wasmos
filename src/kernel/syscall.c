@@ -168,8 +168,33 @@ static syscall_ipc_call_slot_t* syscall_ipc_call_slot_for_pid(uint32_t pid) {
     return empty;
 }
 
+/*
+ * True while `request_id` is one this kernel has already handed out.
+ *
+ * Request ids come from a single monotonic counter, so a reply carrying an id
+ * at or beyond the next one to be issued cannot be answering any call that
+ * exists -- it was minted for a call that has not happened yet.  Compared as a
+ * signed difference so the answer stays right across the counter's wrap.
+ */
+static int syscall_ipc_request_id_issued(uint32_t request_id) {
+    return (int32_t)(request_id - g_syscall_ipc_call_next_request_id) < 0;
+}
+
 static int syscall_ipc_pending_enqueue(syscall_ipc_call_slot_t* slot, const ipc_message_t* msg) {
     if (!slot || !msg) {
+        return -1;
+    }
+    /*
+     * Refuse a reply for an id that has not been issued.  Retaining one lets a
+     * peer answer a call the caller has not made: the reply sits in the ring
+     * until the id comes round, and then resolves that future call with this
+     * payload, without the peer having answered it at all.  The authenticity
+     * check downstream asks WHO replied, never WHEN, so the two are otherwise
+     * indistinguishable.  Only the legitimate destination can do it, which makes
+     * it a confused-deputy hazard rather than an escalation -- but a reply to a
+     * call that does not exist is never legitimate.
+     */
+    if (!syscall_ipc_request_id_issued(msg->request_id)) {
         return -1;
     }
     /* Explicit drop policy: bounded queue, drop oldest on overflow. */
@@ -204,6 +229,32 @@ static int syscall_ipc_pending_take_request(syscall_ipc_call_slot_t* slot, uint3
     }
     return -1;
 }
+
+#ifdef WASMOS_SYSCALL_TEST_SEAMS
+/*
+ * The pending ring, exposed for tests.
+ *
+ * Its retention is otherwise unobservable from a single-threaded caller: an id
+ * already issued is never drawn again, and one not yet issued is refused by
+ * syscall_ipc_request_id_issued.  The ring earns its keep when several threads
+ * share a reply endpoint -- one blocked on id 5 parks another's reply for id 6
+ * -- which no host fixture drives.  These let a test exercise the ring itself
+ * rather than infer it.
+ */
+int syscall_test_pending_enqueue(uint32_t pid, const ipc_message_t* msg) {
+    syscall_ipc_call_slot_t* slot = syscall_ipc_call_slot_for_pid(pid);
+    return slot ? syscall_ipc_pending_enqueue(slot, msg) : -1;
+}
+
+int syscall_test_pending_take(uint32_t pid, uint32_t request_id, ipc_message_t* out) {
+    syscall_ipc_call_slot_t* slot = syscall_ipc_call_slot_for_pid(pid);
+    return slot ? syscall_ipc_pending_take_request(slot, request_id, out) : -1;
+}
+
+uint32_t syscall_test_next_request_id(void) {
+    return g_syscall_ipc_call_next_request_id;
+}
+#endif
 
 static int syscall_ipc_reply_authentic(const ipc_message_t* resp, uint32_t expected_source_endpoint,
                                        uint32_t expected_owner_context) {

@@ -405,14 +405,9 @@ static void test_a_reply_with_the_wrong_id_does_not_resolve_the_call(void) {
     uint64_t rc = call_with(REPLY_WRONG_REQUEST_ID, &f, 1u, 0x44u);
     CHECK(rc != (uint64_t)IPC_OK, "a reply carrying someone else's request_id does not resolve it");
     CHECK(f.rdx == 0, "RDX stays clear");
-
-    /* The peer planted a reply for request_id+1, which the NEXT call this
-     * process makes will draw. Absorb it here so the effect stays inside this
-     * case -- the behaviour itself is pinned by K15, deliberately. */
-    g_reply_mode = REPLY_NOTHING;
-    g_yield_hook = service_reply;
-    syscall_frame_t absorb = make_call(g_dest_ep, 1u, 0u, 0, 0, 0);
-    (void)x86_syscall_handler(&absorb);
+    /* No cleanup needed: the reply the peer planted for request_id+1 is refused
+     * at the ring rather than retained, so it cannot leak into the next case.
+     * K15 pins that. */
 }
 
 /* An unrelated reply arriving first must be kept, not dropped: it belongs to a
@@ -430,31 +425,80 @@ static void test_an_out_of_order_reply_is_retained(void) {
     CHECK(f.rdx != 0xBADBAD00u, "the stale reply was never handed to the caller");
 }
 
-/* A peer that answers with request_id+1 leaves that reply in the caller's
- * pending ring, where it matches the NEXT call the process makes -- which then
- * resolves with the previous call's payload, without the peer having answered
- * it at all. syscall_ipc_reply_authentic checks WHO replied, never WHEN, so a
- * reply minted for an id not yet issued is indistinguishable from a real one.
+/* A peer that answers with request_id+1 is answering a call that does not
+ * exist. Before the fix that reply was retained, and the NEXT call the process
+ * made drew it -- resolving with the previous call's payload without the peer
+ * having answered it at all, because the authenticity check asks WHO replied and
+ * never WHEN.
  *
- * Pinned as current behaviour rather than fixed: the ring exists to retain
- * out-of-order replies for other in-flight calls, and only the legitimate
- * destination can trigger this, so it is a confused-deputy hazard rather than
- * an escalation.
- * FIXME: reject a reply whose request_id has not been issued yet -- the
- * counter is monotonic, so "id > last issued" is enough to tell them apart. */
-static void test_a_reply_for_a_future_id_answers_the_next_call(void) {
+ * Request ids come from one monotonic counter, so "at or beyond the next id to
+ * be issued" is enough to tell a reply-to-nothing from a real one, and such a
+ * reply is now refused at the ring rather than retained. */
+static void test_a_reply_for_a_future_id_is_refused(void) {
     reset();
     syscall_frame_t f;
     uint64_t rc = call_with(REPLY_WRONG_REQUEST_ID, &f, 1u, 0x99u);
     CHECK(rc != (uint64_t)IPC_OK, "the call answered with a future id is not resolved");
 
-    /* The very next call draws exactly that id. */
+    /* The very next call draws exactly the id that reply carried. Nobody
+     * answers it, so it must report EMPTY rather than inherit the payload. */
     g_reply_mode = REPLY_NOTHING;
-    g_yield_hook = service_reply;
+    g_yield_hook = 0;
     syscall_frame_t g = make_call(g_dest_ep, 1u, 0xAAu, 0, 0, 0);
+    g.rdx = 0xD00Du;
     rc = x86_syscall_handler(&g);
-    CHECK(rc == (uint64_t)IPC_OK, "and it resolves the next call, which nobody answered");
-    CHECK(g.rdx == (uint64_t)(0x99u ^ 0xF0F0u), "handing that call the PREVIOUS call\'s payload");
+    CHECK(rc != (uint64_t)IPC_OK, "the next call is not resolved by the planted reply");
+    CHECK(g.rdx != (uint64_t)(0x99u ^ 0xF0F0u), "and never sees the previous call's payload");
+}
+
+/* The ring's whole purpose: hold a reply whose call is not the one currently
+ * blocked, so its owner finds it later. Driven through the ring directly,
+ * because it is unreachable from a single-threaded caller -- an id already
+ * issued is never drawn again, and one not yet issued is refused by the guard
+ * above. The case it exists for is several threads sharing a reply endpoint,
+ * one blocked on id 5 parking another's reply for id 6, which no host fixture
+ * drives.
+ *
+ * Without this the guard could reject EVERY reply and the suite stayed green. */
+static void test_the_pending_ring_retains_an_issued_id(void) {
+    reset();
+    /* Give the slot an owner by making one ordinary call first. */
+    syscall_frame_t warm;
+    (void)call_with(REPLY_GOOD, &warm, 1u, 0x01u);
+
+    const uint32_t issued = syscall_test_next_request_id() - 1u;
+    ipc_message_t held;
+    memset(&held, 0, sizeof(held));
+    held.request_id = issued;
+    held.source = g_dest_ep;
+    held.arg0 = 0xFEEDu;
+
+    CHECK(syscall_test_pending_enqueue(CALLER_PID, &held) == 0, "an issued id is retained");
+    ipc_message_t taken;
+    memset(&taken, 0, sizeof(taken));
+    CHECK(syscall_test_pending_take(CALLER_PID, issued, &taken) == 0,
+          "and its owner finds it later");
+    CHECK(taken.arg0 == 0xFEEDu, "with its payload intact");
+    CHECK(syscall_test_pending_take(CALLER_PID, issued, &taken) != 0, "only once");
+}
+
+/* The same guard, at the ring rather than through a call: an id that has not
+ * been issued is refused outright, so it can never be there to be found. */
+static void test_the_pending_ring_refuses_an_unissued_id(void) {
+    reset();
+    syscall_frame_t warm;
+    (void)call_with(REPLY_GOOD, &warm, 1u, 0x01u);
+
+    ipc_message_t future;
+    memset(&future, 0, sizeof(future));
+    future.request_id = syscall_test_next_request_id() + 4u;
+    future.source = g_dest_ep;
+    future.arg0 = 0xBADu;
+
+    CHECK(syscall_test_pending_enqueue(CALLER_PID, &future) != 0, "an unissued id is refused");
+    ipc_message_t taken;
+    CHECK(syscall_test_pending_take(CALLER_PID, future.request_id, &taken) != 0,
+          "so it is never there to answer the call that draws that id");
 }
 
 static void test_arguments_must_be_32_bit_clean(void) {
@@ -620,8 +664,10 @@ int main(void) {
          test_a_reply_with_the_wrong_id_does_not_resolve_the_call},
         {"K8 an out-of-order reply is retained", test_an_out_of_order_reply_is_retained},
         {"K9 arguments must be 32-bit clean", test_arguments_must_be_32_bit_clean},
-        {"K15 a reply for a future id answers the next call",
-         test_a_reply_for_a_future_id_answers_the_next_call},
+        {"K15 a reply for a future id is refused", test_a_reply_for_a_future_id_is_refused},
+        {"K16 the pending ring retains an issued id", test_the_pending_ring_retains_an_issued_id},
+        {"K17 the pending ring refuses an unissued id",
+         test_the_pending_ring_refuses_an_unissued_id},
         {"K10 an unknown destination is refused", test_an_unknown_destination_is_refused},
         {"K11 kernel-owned destinations are refused", test_kernel_owned_destinations_are_refused},
         {"K12 a denied control endpoint is refused", test_a_denied_control_endpoint_is_refused},

@@ -101,4 +101,14 @@ uint32_t syscall_ipc_call_echo_endpoint(void);
 void syscall_set_ipc_call_control_deny_endpoint(uint32_t endpoint);
 void syscall_set_ipc_notify_control_deny_endpoint(uint32_t endpoint);
 
+#ifdef WASMOS_SYSCALL_TEST_SEAMS
+/* The per-process pending reply ring, so a test can exercise its retention
+ * directly; see the definitions in syscall.c for why that is not reachable
+ * through x86_syscall_handler alone. */
+#include "ipc.h"
+int syscall_test_pending_enqueue(uint32_t pid, const ipc_message_t* msg);
+int syscall_test_pending_take(uint32_t pid, uint32_t request_id, ipc_message_t* out);
+uint32_t syscall_test_next_request_id(void);
+#endif
+
 #endif

@@ -170,12 +170,12 @@ static ipc_endpoint_t* ipc_endpoint_acquire(uint32_t endpoint, ipc_endpoint_type
                                             int* out_rc) {
     ipc_endpoint_t* ep = ipc_endpoint_get(endpoint);
     if (!ep) {
-        *out_rc = IPC_ERR_INVALID;
+        *out_rc = IPC_ERR_NOENT;
         return 0;
     }
     if (ep->type != type) {
         ksync_spinlock_unlock(&ep->lock);
-        *out_rc = IPC_ERR_INVALID;
+        *out_rc = IPC_ERR_UNSUPPORTED;
         return 0;
     }
     *out_rc = IPC_OK;
@@ -244,7 +244,7 @@ int ipc_notification_create(uint32_t owner_context_id, uint32_t* out_endpoint) {
 int ipc_endpoint_owner(uint32_t endpoint, uint32_t* out_owner_context_id) {
     ipc_endpoint_t* ep = ipc_endpoint_get(endpoint);
     if (!ep) {
-        return IPC_ERR_INVALID;
+        return IPC_ERR_NOENT;
     }
     if (!out_owner_context_id) {
         ksync_spinlock_unlock(&ep->lock);
@@ -258,7 +258,7 @@ int ipc_endpoint_owner(uint32_t endpoint, uint32_t* out_owner_context_id) {
 int ipc_endpoint_count(uint32_t endpoint, uint32_t* out_count) {
     ipc_endpoint_t* ep = ipc_endpoint_get(endpoint);
     if (!ep) {
-        return IPC_ERR_INVALID;
+        return IPC_ERR_NOENT;
     }
     if (!out_count) {
         ksync_spinlock_unlock(&ep->lock);
@@ -364,8 +364,11 @@ int ipc_recv_blocking_for(uint32_t receiver_context_id, uint32_t endpoint,
         ksync_spinlock_unlock(&ep->lock);
         sched_event_wait(&ep->event, 0);
         ep = ipc_endpoint_get(endpoint);
-        if (!ep)
-            return IPC_ERR_INVALID;
+        if (!ep) {
+            /* Released while we were parked -- distinct from "you named a bad
+             * endpoint": the handle WAS valid when the caller blocked. */
+            return IPC_ERR_PEER_GONE;
+        }
         if (ep->count == 0) {
             ksync_spinlock_unlock(&ep->lock);
             return IPC_EMPTY; /* spurious wake; caller should retry */
@@ -490,18 +493,28 @@ void ipc_endpoints_release_owner(uint32_t owner_context_id) {
  * Select-set API
  * ------------------------------------------------------------------------- */
 
-static ipc_select_t* ipc_select_find(uint32_t select_id, uint32_t owner_context_id) {
-    /* Caller holds g_select_table_lock. */
+/*
+ * Caller holds g_select_table_lock.  *out_rc separates the two reasons a lookup
+ * fails: there is no such set (IPC_ERR_NOENT) versus there is one and it
+ * belongs to somebody else (IPC_ERR_PERM).  Collapsing both into one code told
+ * a caller nothing about whether re-resolving would help, and quietly reported
+ * a permission failure as if the handle were bad.
+ */
+static ipc_select_t* ipc_select_find(uint32_t select_id, uint32_t owner_context_id, int* out_rc) {
     if (select_id == 0 || select_id > IPC_SELECT_TABLE_SIZE) {
+        *out_rc = IPC_ERR_NOENT;
         return 0;
     }
     ipc_select_t* sel = &g_select_table[select_id - 1u];
     if (!sel->in_use) {
+        *out_rc = IPC_ERR_NOENT;
         return 0;
     }
     if (owner_context_id != IPC_CONTEXT_KERNEL && sel->owner_context_id != owner_context_id) {
+        *out_rc = IPC_ERR_PERM;
         return 0;
     }
+    *out_rc = IPC_OK;
     return sel;
 }
 
@@ -528,11 +541,12 @@ int ipc_select_create(uint32_t owner_context_id, uint32_t* out_select_id) {
 }
 
 int ipc_select_add(uint32_t select_id, uint32_t endpoint_id, uint32_t owner_context_id) {
+    int rc = IPC_OK;
     ksync_spinlock_lock(&g_select_table_lock);
-    ipc_select_t* sel = ipc_select_find(select_id, owner_context_id);
+    ipc_select_t* sel = ipc_select_find(select_id, owner_context_id, &rc);
     if (!sel) {
         ksync_spinlock_unlock(&g_select_table_lock);
-        return IPC_ERR_INVALID;
+        return rc;
     }
     /*
      * Adding an endpoint the set already watches is a no-op, not a second
@@ -605,11 +619,12 @@ int ipc_select_wait(uint32_t select_id, uint32_t owner_context_id, uint32_t* out
         return IPC_ERR_INVALID;
     }
 
+    int find_rc = IPC_OK;
     ksync_spinlock_lock(&g_select_table_lock);
-    ipc_select_t* sel = ipc_select_find(select_id, owner_context_id);
+    ipc_select_t* sel = ipc_select_find(select_id, owner_context_id, &find_rc);
     if (!sel) {
         ksync_spinlock_unlock(&g_select_table_lock);
-        return IPC_ERR_INVALID;
+        return find_rc;
     }
 
     /* Acquire event.lock BEFORE releasing g_select_table_lock.  It does two
@@ -693,8 +708,9 @@ int ipc_select_recv(uint32_t select_id, uint32_t owner_context_id, uint32_t* out
 }
 
 void ipc_select_destroy(uint32_t select_id, uint32_t owner_context_id) {
+    int rc = IPC_OK;
     ksync_spinlock_lock(&g_select_table_lock);
-    ipc_select_t* sel = ipc_select_find(select_id, owner_context_id);
+    ipc_select_t* sel = ipc_select_find(select_id, owner_context_id, &rc);
     if (!sel) {
         ksync_spinlock_unlock(&g_select_table_lock);
         return;
@@ -729,7 +745,7 @@ void ipc_test_set_next_endpoint_id(uint32_t next_id, int wrapped) {
 int ipc_test_set_notify_count(uint32_t endpoint, uint32_t value) {
     ipc_endpoint_t* ep = ipc_endpoint_get(endpoint);
     if (!ep) {
-        return IPC_ERR_INVALID;
+        return IPC_ERR_NOENT;
     }
     ep->notify_count = value;
     ksync_spinlock_unlock(&ep->lock);

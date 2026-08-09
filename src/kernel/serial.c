@@ -250,7 +250,11 @@ static int serial_remote_send_message(uint32_t type, uint32_t request_id, uint32
 
     int rc = ipc_send_from(IPC_CONTEXT_KERNEL, g_serial_remote_endpoint, &req);
     if (rc != IPC_OK) {
-        if (rc == IPC_ERR_INVALID || rc == IPC_ERR_PERM) {
+        /* Drop the link only when the endpoint itself is unusable. A full
+         * queue is transient and must NOT reset -- that is why these are
+         * distinct codes rather than one INVALID. */
+        if (rc == IPC_ERR_NOENT || rc == IPC_ERR_PEER_GONE || rc == IPC_ERR_UNSUPPORTED ||
+            rc == IPC_ERR_PERM) {
             serial_remote_reset();
         }
     }

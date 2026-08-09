@@ -500,7 +500,8 @@ static void test_an_unknown_destination_is_refused(void) {
     syscall_frame_t f = make_call(0x7FFFFFFFu, 1u, 1u, 0, 0, 0);
     f.rdx = 0xDEADBEEFu; /* stale register content the caller must not observe */
     uint64_t rc = x86_syscall_handler(&f);
-    CHECK(rc == (uint64_t)(int64_t)IPC_ERR_INVALID, "an unknown destination is INVALID");
+    CHECK(rc == (uint64_t)(int64_t)IPC_ERR_NOENT,
+          "an unknown destination reports NOENT, distinct from a malformed argument");
     CHECK(f.rdx == 0, "and the stale secondary return is cleared");
     CHECK(g_yield_calls == 0, "the rejection does not block");
 }
@@ -577,8 +578,8 @@ static void test_notify_passes_the_transport_result_through(void) {
     CHECK(ipc_wait_for(CALLER_CTX, note) == IPC_OK, "and the signal really landed");
 
     f.rdi = 0x7FFFFFFFu;
-    CHECK(x86_syscall_handler(&f) == (uint64_t)(int64_t)IPC_ERR_INVALID,
-          "an unknown endpoint is INVALID");
+    CHECK(x86_syscall_handler(&f) == (uint64_t)(int64_t)IPC_ERR_NOENT,
+          "an unknown endpoint reports NOENT");
 
     uint32_t foreign = 0;
     (void)ipc_notification_create(SERVICE_CTX, &foreign);

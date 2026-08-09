@@ -488,8 +488,12 @@ static void* teardown_sender_thread(void* p) {
         m.source = IPC_ENDPOINT_NONE;
         m.arg0 = a->index;
         int rc = ipc_send(__atomic_load_n(&sh->endpoint, __ATOMIC_ACQUIRE), &m);
-        if (rc != IPC_OK && rc != IPC_ERR_FULL && rc != IPC_ERR_INVALID) {
-            a->result = rc; /* the only legal outcomes while a teardown races */
+        /* OK, a transiently full queue, or the endpoint having been torn down
+         * under us -- and nothing else. NOENT rather than a generic invalid
+         * code is the point: the sender can tell "that endpoint is gone" from
+         * "I passed something malformed". */
+        if (rc != IPC_OK && rc != IPC_ERR_FULL && rc != IPC_ERR_NOENT) {
+            a->result = rc;
             return 0;
         }
     }
@@ -564,7 +568,7 @@ static void test_teardown_racing_senders_is_memory_safe(void) {
             bad = args[i].result;
         }
     }
-    CHECK(bad == 0, "a send racing endpoint teardown returns OK, FULL or INVALID and nothing else");
+    CHECK(bad == 0, "a send racing endpoint teardown returns OK, FULL or NOENT and nothing else");
     ipc_endpoints_release_owner(ctx);
 }
 

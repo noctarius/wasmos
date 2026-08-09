@@ -274,15 +274,15 @@ static void test_reserved_and_unknown_ids_are_invalid(void) {
     ipc_message_t m;
     memset(&m, 0, sizeof(m));
 
-    CHECK(ipc_endpoint_owner(0, &out) == IPC_ERR_INVALID, "endpoint id 0 is not a handle");
-    CHECK(ipc_endpoint_owner(IPC_ENDPOINT_NONE, &out) == IPC_ERR_INVALID,
+    CHECK(ipc_endpoint_owner(0, &out) == IPC_ERR_NOENT, "endpoint id 0 is not a handle");
+    CHECK(ipc_endpoint_owner(IPC_ENDPOINT_NONE, &out) == IPC_ERR_NOENT,
           "the NONE sentinel is not a handle");
-    CHECK(ipc_endpoint_owner(0x7FFFFFFFu, &out) == IPC_ERR_INVALID, "an unknown id is INVALID");
-    CHECK(ipc_endpoint_count(0x7FFFFFFFu, &out) == IPC_ERR_INVALID, "count of an unknown id");
-    CHECK(ipc_send(0x7FFFFFFFu, &m) == IPC_ERR_INVALID, "send to an unknown id");
-    CHECK(ipc_recv(0x7FFFFFFFu, &m) == IPC_ERR_INVALID, "recv from an unknown id");
-    CHECK(ipc_notify(0x7FFFFFFFu) == IPC_ERR_INVALID, "notify to an unknown id");
-    CHECK(ipc_wait(0x7FFFFFFFu) == IPC_ERR_INVALID, "wait on an unknown id");
+    CHECK(ipc_endpoint_owner(0x7FFFFFFFu, &out) == IPC_ERR_NOENT, "an unknown id is INVALID");
+    CHECK(ipc_endpoint_count(0x7FFFFFFFu, &out) == IPC_ERR_NOENT, "count of an unknown id");
+    CHECK(ipc_send(0x7FFFFFFFu, &m) == IPC_ERR_NOENT, "send to an unknown id");
+    CHECK(ipc_recv(0x7FFFFFFFu, &m) == IPC_ERR_NOENT, "recv from an unknown id");
+    CHECK(ipc_notify(0x7FFFFFFFu) == IPC_ERR_NOENT, "notify to an unknown id");
+    CHECK(ipc_wait(0x7FFFFFFFu) == IPC_ERR_NOENT, "wait on an unknown id");
 }
 
 static void test_query_rejects_null_out_params(void) {
@@ -489,16 +489,17 @@ static void test_message_and_notification_endpoints_do_not_mix(void) {
     ipc_message_t m = msg_of(IPC_ENDPOINT_NONE, 1u, 1u);
     ipc_message_t got;
 
-    CHECK(ipc_send(note_ep, &m) == IPC_ERR_INVALID, "send to a notification endpoint is INVALID");
-    CHECK(ipc_recv(note_ep, &got) == IPC_ERR_INVALID,
+    CHECK(ipc_send(note_ep, &m) == IPC_ERR_UNSUPPORTED,
+          "send to a notification endpoint is INVALID");
+    CHECK(ipc_recv(note_ep, &got) == IPC_ERR_UNSUPPORTED,
           "recv from a notification endpoint is INVALID");
-    CHECK(ipc_recv_blocking_for(ctx, note_ep, &got) == IPC_ERR_INVALID,
+    CHECK(ipc_recv_blocking_for(ctx, note_ep, &got) == IPC_ERR_UNSUPPORTED,
           "blocking recv on a notification endpoint is INVALID");
-    CHECK(ipc_endpoint_wait_for(ctx, note_ep, 0) == IPC_ERR_INVALID,
+    CHECK(ipc_endpoint_wait_for(ctx, note_ep, 0) == IPC_ERR_UNSUPPORTED,
           "endpoint_wait on a notification endpoint is INVALID");
 
-    CHECK(ipc_notify(msg_ep) == IPC_ERR_INVALID, "notify on a message endpoint is INVALID");
-    CHECK(ipc_wait(msg_ep) == IPC_ERR_INVALID, "wait on a message endpoint is INVALID");
+    CHECK(ipc_notify(msg_ep) == IPC_ERR_UNSUPPORTED, "notify on a message endpoint is INVALID");
+    CHECK(ipc_wait(msg_ep) == IPC_ERR_UNSUPPORTED, "wait on a message endpoint is INVALID");
 
     /* Neither endpoint was disturbed by the rejected cross-type calls. */
     CHECK(count_of(msg_ep) == 0, "the message endpoint is untouched");
@@ -641,7 +642,7 @@ static void test_blocking_recv_enforces_ownership_and_arguments(void) {
     ipc_message_t got;
 
     CHECK(ipc_recv_blocking_for(ctx, ep, 0) == IPC_ERR_INVALID, "a NULL out message is INVALID");
-    CHECK(ipc_recv_blocking_for(ctx, 0x7FFFFFFFu, &got) == IPC_ERR_INVALID,
+    CHECK(ipc_recv_blocking_for(ctx, 0x7FFFFFFFu, &got) == IPC_ERR_NOENT,
           "an unknown endpoint is INVALID");
     CHECK(ipc_recv_blocking_for(CTX_B, ep, &got) == IPC_ERR_PERM, "a non-owner may not block here");
     CHECK(g_yield_calls == 0, "none of the rejections blocked");
@@ -683,7 +684,7 @@ static void test_endpoint_wait_enforces_ownership(void) {
     (void)ipc_endpoint_create(ctx, &ep);
     reset_threads();
     CHECK(ipc_endpoint_wait_for(CTX_B, ep, 0) == IPC_ERR_PERM, "a non-owner may not wait");
-    CHECK(ipc_endpoint_wait_for(ctx, 0x7FFFFFFFu, 0) == IPC_ERR_INVALID,
+    CHECK(ipc_endpoint_wait_for(ctx, 0x7FFFFFFFu, 0) == IPC_ERR_NOENT,
           "an unknown endpoint is INVALID");
     CHECK(g_yield_calls == 0, "neither rejection blocked");
     ipc_endpoints_release_owner(ctx);
@@ -706,9 +707,9 @@ static void test_release_owner_frees_only_that_owners_endpoints(void) {
     ipc_endpoints_release_owner(drop);
 
     uint32_t out = 0;
-    CHECK(ipc_endpoint_owner(d1, &out) == IPC_ERR_INVALID, "a released endpoint is gone");
-    CHECK(ipc_endpoint_owner(d2, &out) == IPC_ERR_INVALID, "every one of them is gone");
-    CHECK(ipc_endpoint_owner(d3, &out) == IPC_ERR_INVALID, "notifications included");
+    CHECK(ipc_endpoint_owner(d1, &out) == IPC_ERR_NOENT, "a released endpoint is gone");
+    CHECK(ipc_endpoint_owner(d2, &out) == IPC_ERR_NOENT, "every one of them is gone");
+    CHECK(ipc_endpoint_owner(d3, &out) == IPC_ERR_NOENT, "notifications included");
     CHECK(ipc_endpoint_owner(k1, &out) == IPC_OK && out == keep, "another owner is untouched");
     CHECK(count_of(k1) == 1, "and keeps its queued traffic");
     CHECK(ipc_wait_for(keep, k2) == IPC_EMPTY, "its notification endpoint still answers");
@@ -745,7 +746,8 @@ static void test_release_owner_aborts_a_blocked_receiver(void) {
     ipc_message_t got;
     memset(&got, 0, sizeof(got));
     int rc = ipc_recv_blocking_for(ctx, ep, &got);
-    CHECK(rc == IPC_ERR_INVALID, "a receiver blocked on a destroyed endpoint returns INVALID");
+    CHECK(rc == IPC_ERR_PEER_GONE,
+          "a receiver blocked on a destroyed endpoint learns the endpoint went away");
     CHECK(g_wake_calls == 1, "the teardown woke it");
     CHECK(self->pend_state == SCHED_PEND_ABORT, "with an ABORT pend state");
     CHECK(list_head_empty(&self->event_node), "and unlinked it from the wait list");
@@ -770,7 +772,7 @@ static void test_select_create_add_and_destroy(void) {
           "an unknown endpoint is recorded but silently never signals");
 
     ipc_select_destroy(sel, ctx);
-    CHECK(ipc_select_add(sel, ep, ctx) == IPC_ERR_INVALID, "a destroyed set rejects add");
+    CHECK(ipc_select_add(sel, ep, ctx) == IPC_ERR_NOENT, "a destroyed set rejects add");
     ipc_endpoints_release_owner(ctx);
 }
 
@@ -781,14 +783,13 @@ static void test_select_rejects_bad_ids_and_foreign_owners(void) {
     (void)ipc_endpoint_create(ctx, &ep);
     (void)ipc_select_create(ctx, &sel);
 
-    CHECK(ipc_select_add(0, ep, ctx) == IPC_ERR_INVALID, "select id 0 is not a handle");
-    CHECK(ipc_select_add(0xFFFFu, ep, ctx) == IPC_ERR_INVALID, "an out-of-range select id");
-    CHECK(ipc_select_add(sel, ep, CTX_B) == IPC_ERR_INVALID, "a foreign owner may not add");
-    CHECK(ipc_select_wait(sel, CTX_B, &ready, 0) == IPC_ERR_INVALID,
-          "a foreign owner may not wait");
+    CHECK(ipc_select_add(0, ep, ctx) == IPC_ERR_NOENT, "select id 0 is not a handle");
+    CHECK(ipc_select_add(0xFFFFu, ep, ctx) == IPC_ERR_NOENT, "an out-of-range select id");
+    CHECK(ipc_select_add(sel, ep, CTX_B) == IPC_ERR_PERM, "a foreign owner may not add");
+    CHECK(ipc_select_wait(sel, CTX_B, &ready, 0) == IPC_ERR_PERM, "a foreign owner may not wait");
     CHECK(ipc_select_wait(sel, ctx, 0, 0) == IPC_ERR_INVALID, "wait(NULL) is INVALID");
     CHECK(ipc_select_recv(sel, ctx, &ready, 0, 0) == IPC_ERR_INVALID, "recv(NULL) is INVALID");
-    CHECK(ipc_select_recv(0xFFFFu, ctx, &ready, &msg, 0) == IPC_ERR_INVALID,
+    CHECK(ipc_select_recv(0xFFFFu, ctx, &ready, &msg, 0) == IPC_ERR_NOENT,
           "recv on an out-of-range select id");
 
     /* A foreign destroy must not tear down someone else's set. */
@@ -1445,9 +1446,9 @@ static void test_release_invalidates_a_signalled_notification(void) {
     (void)ipc_notification_create(ctx, &ep);
     CHECK(ipc_notify_from(ctx, ep) == IPC_OK, "a pending signal exists");
     ipc_endpoints_release_owner(ctx);
-    CHECK(ipc_wait_for(ctx, ep) == IPC_ERR_INVALID,
+    CHECK(ipc_wait_for(ctx, ep) == IPC_ERR_NOENT,
           "the released endpoint is gone, pending signal and all");
-    CHECK(ipc_notify_from(ctx, ep) == IPC_ERR_INVALID, "and cannot be signalled again");
+    CHECK(ipc_notify_from(ctx, ep) == IPC_ERR_NOENT, "and cannot be signalled again");
 }
 
 /* --------------------------------------------------- more select coverage */
@@ -2298,18 +2299,18 @@ static void test_error_code_contract(void) {
         {"endpoint_create(allocation fails)", IPC_ERR_FULL, c_create_alloc_fail},
         {"notification_create(allocation fails)", IPC_ERR_FULL, c_note_create_alloc_fail},
 
-        {"endpoint_owner(unknown)", IPC_ERR_INVALID, c_owner_unknown},
-        {"endpoint_owner(id 0)", IPC_ERR_INVALID, c_owner_reserved_zero},
-        {"endpoint_owner(NONE)", IPC_ERR_INVALID, c_owner_reserved_none},
+        {"endpoint_owner(unknown)", IPC_ERR_NOENT, c_owner_unknown},
+        {"endpoint_owner(id 0)", IPC_ERR_NOENT, c_owner_reserved_zero},
+        {"endpoint_owner(NONE)", IPC_ERR_NOENT, c_owner_reserved_none},
         {"endpoint_owner(NULL out)", IPC_ERR_INVALID, c_owner_null_out},
         {"endpoint_owner(valid)", IPC_OK, c_owner_ok},
-        {"endpoint_count(unknown)", IPC_ERR_INVALID, c_count_unknown},
+        {"endpoint_count(unknown)", IPC_ERR_NOENT, c_count_unknown},
         {"endpoint_count(NULL out)", IPC_ERR_INVALID, c_count_null_out},
         {"endpoint_count(valid)", IPC_OK, c_count_ok},
 
         {"send_from(NULL message)", IPC_ERR_INVALID, c_send_null_message},
-        {"send_from(unknown destination)", IPC_ERR_INVALID, c_send_unknown_dest},
-        {"send_from(notification destination)", IPC_ERR_INVALID, c_send_notification_dest},
+        {"send_from(unknown destination)", IPC_ERR_NOENT, c_send_unknown_dest},
+        {"send_from(notification destination)", IPC_ERR_UNSUPPORTED, c_send_notification_dest},
         {"send_from(no source)", IPC_ERR_PERM, c_send_no_source},
         {"send_from(foreign source)", IPC_ERR_PERM, c_send_foreign_source},
         {"send_from(unknown source)", IPC_ERR_PERM, c_send_unknown_source},
@@ -2317,32 +2318,32 @@ static void test_error_code_contract(void) {
         {"send_from(valid)", IPC_OK, c_send_ok},
 
         {"recv_for(NULL out)", IPC_ERR_INVALID, c_recv_null_out},
-        {"recv_for(unknown)", IPC_ERR_INVALID, c_recv_unknown},
-        {"recv_for(notification endpoint)", IPC_ERR_INVALID, c_recv_notification},
+        {"recv_for(unknown)", IPC_ERR_NOENT, c_recv_unknown},
+        {"recv_for(notification endpoint)", IPC_ERR_UNSUPPORTED, c_recv_notification},
         {"recv_for(non-owner)", IPC_ERR_PERM, c_recv_non_owner},
         {"recv_for(empty)", IPC_EMPTY, c_recv_empty},
         {"recv_for(valid)", IPC_OK, c_recv_ok},
 
         {"recv_blocking_for(NULL out)", IPC_ERR_INVALID, c_brecv_null_out},
-        {"recv_blocking_for(unknown)", IPC_ERR_INVALID, c_brecv_unknown},
-        {"recv_blocking_for(notification endpoint)", IPC_ERR_INVALID, c_brecv_notification},
+        {"recv_blocking_for(unknown)", IPC_ERR_NOENT, c_brecv_unknown},
+        {"recv_blocking_for(notification endpoint)", IPC_ERR_UNSUPPORTED, c_brecv_notification},
         {"recv_blocking_for(non-owner)", IPC_ERR_PERM, c_brecv_non_owner},
         {"recv_blocking_for(spurious wake)", IPC_EMPTY, c_brecv_spurious},
-        {"recv_blocking_for(endpoint destroyed while parked)", IPC_ERR_INVALID,
+        {"recv_blocking_for(endpoint destroyed while parked)", IPC_ERR_PEER_GONE,
          c_brecv_endpoint_destroyed},
         {"recv_blocking_for(valid)", IPC_OK, c_brecv_ok},
 
-        {"endpoint_wait_for(unknown)", IPC_ERR_INVALID, c_epwait_unknown},
-        {"endpoint_wait_for(notification endpoint)", IPC_ERR_INVALID, c_epwait_notification},
+        {"endpoint_wait_for(unknown)", IPC_ERR_NOENT, c_epwait_unknown},
+        {"endpoint_wait_for(notification endpoint)", IPC_ERR_UNSUPPORTED, c_epwait_notification},
         {"endpoint_wait_for(non-owner)", IPC_ERR_PERM, c_epwait_non_owner},
         {"endpoint_wait_for(readable)", IPC_OK, c_epwait_ok},
 
-        {"notify_from(unknown)", IPC_ERR_INVALID, c_notify_unknown},
-        {"notify_from(message endpoint)", IPC_ERR_INVALID, c_notify_message_ep},
+        {"notify_from(unknown)", IPC_ERR_NOENT, c_notify_unknown},
+        {"notify_from(message endpoint)", IPC_ERR_UNSUPPORTED, c_notify_message_ep},
         {"notify_from(foreign endpoint)", IPC_ERR_PERM, c_notify_foreign},
         {"notify_from(valid)", IPC_OK, c_notify_ok},
-        {"wait_for(unknown)", IPC_ERR_INVALID, c_wait_unknown},
-        {"wait_for(message endpoint)", IPC_ERR_INVALID, c_wait_message_ep},
+        {"wait_for(unknown)", IPC_ERR_NOENT, c_wait_unknown},
+        {"wait_for(message endpoint)", IPC_ERR_UNSUPPORTED, c_wait_message_ep},
         {"wait_for(foreign endpoint)", IPC_ERR_PERM, c_wait_foreign},
         {"wait_for(unsignalled)", IPC_EMPTY, c_wait_empty},
         {"wait_for(signalled)", IPC_OK, c_wait_ok},
@@ -2350,17 +2351,17 @@ static void test_error_code_contract(void) {
         {"select_create(NULL out)", IPC_ERR_INVALID, c_sel_create_null_out},
         {"select_create(valid)", IPC_OK, c_sel_create_ok},
         {"select_create(table exhausted)", IPC_ERR_FULL, c_sel_create_exhausted},
-        {"select_add(id 0)", IPC_ERR_INVALID, c_sel_add_zero_id},
-        {"select_add(out of range id)", IPC_ERR_INVALID, c_sel_add_out_of_range},
-        {"select_add(foreign owner)", IPC_ERR_INVALID, c_sel_add_foreign_owner},
+        {"select_add(id 0)", IPC_ERR_NOENT, c_sel_add_zero_id},
+        {"select_add(out of range id)", IPC_ERR_NOENT, c_sel_add_out_of_range},
+        {"select_add(foreign owner)", IPC_ERR_PERM, c_sel_add_foreign_owner},
         {"select_add(already watched)", IPC_OK, c_sel_add_duplicate},
         {"select_add(watch slots full)", IPC_ERR_FULL, c_sel_add_capacity},
         {"select_add(watcher allocation fails)", IPC_ERR_FULL, c_sel_add_watcher_alloc_fail},
         {"select_add(valid)", IPC_OK, c_sel_add_ok},
 
         {"select_wait(NULL out)", IPC_ERR_INVALID, c_sel_wait_null_out},
-        {"select_wait(bad id)", IPC_ERR_INVALID, c_sel_wait_bad_id},
-        {"select_wait(foreign owner)", IPC_ERR_INVALID, c_sel_wait_foreign_owner},
+        {"select_wait(bad id)", IPC_ERR_NOENT, c_sel_wait_bad_id},
+        {"select_wait(foreign owner)", IPC_ERR_PERM, c_sel_wait_foreign_owner},
         {"select_wait(nothing signalled)", IPC_EMPTY, c_sel_wait_unsignalled},
         {"select_wait(signalled)", IPC_OK, c_sel_wait_ok},
 
@@ -2371,7 +2372,7 @@ static void test_error_code_contract(void) {
         {"select_listen(valid)", IPC_OK, c_listen_ok},
 
         {"select_recv(NULL message)", IPC_ERR_INVALID, c_sel_recv_null_message},
-        {"select_recv(bad id)", IPC_ERR_INVALID, c_sel_recv_bad_id},
+        {"select_recv(bad id)", IPC_ERR_NOENT, c_sel_recv_bad_id},
         {"select_recv(nothing signalled)", IPC_EMPTY, c_sel_recv_unsignalled},
         {"select_recv(endpoint not owned)", IPC_ERR_PERM, c_sel_recv_endpoint_not_owned},
         {"select_recv(valid)", IPC_OK, c_sel_recv_ok},

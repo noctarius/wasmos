@@ -175,17 +175,29 @@ readiness notification to any registered select sets.
 
 #### IPC Result Codes
 
-| Code              | Value | Meaning                                                |
-|-------------------|-------|--------------------------------------------------------|
-| `IPC_OK`          | 0     | Success                                                |
-| `IPC_EMPTY`       | 1     | Queue empty / notification count zero                  |
-| `IPC_ERR_INVALID` | -1    | Null pointer, invalid endpoint, type mismatch          |
-| `IPC_ERR_PERM`    | -2    | Caller does not own the source or destination endpoint |
-| `IPC_ERR_FULL`    | -3    | Queue at capacity (`IPC_QUEUE_DEPTH = 32`)             |
+Each code names one failure, and the values are the generated transport axis
+(`abi/errors.yaml`); `ipc.h` static-asserts the correspondence.
 
-`IPC_ERR_FULL` also covers resource exhaustion outside the message queue: an
-endpoint or select-set table that cannot grow, the per-set watch slots
-(`IPC_SELECT_EPS_MAX`), and a poll watcher that cannot be allocated.
+| Code                  | Value | Axis                 | Meaning                                                  |
+|-----------------------|-------|----------------------|----------------------------------------------------------|
+| `IPC_OK`              | 0     | `WASMOS_OK`          | Success                                                  |
+| `IPC_EMPTY`           | 1     | —                    | Nothing queued / no signal pending; not an error         |
+| `IPC_ERR_INVALID`     | -1    | `WASMOS_INVAL`       | Malformed argument: NULL pointer, zero count             |
+| `IPC_ERR_PERM`        | -2    | `WASMOS_DENIED`      | Caller does not own the endpoint or select set it named  |
+| `IPC_ERR_FULL`        | -3    | `WASMOS_FULL`        | Resource exhausted: queue, table, or watch slots         |
+| `IPC_ERR_NOENT`       | -4    | `WASMOS_NOENT`       | No such endpoint or select set                           |
+| `IPC_ERR_UNSUPPORTED` | -7    | `WASMOS_UNSUPPORTED` | Wrong endpoint type for the operation                    |
+| `IPC_ERR_PEER_GONE`   | -8    | `WASMOS_PEER_GONE`   | Endpoint destroyed while the caller waited on it         |
+
+`IPC_EMPTY` has no axis counterpart: the axis is negative-on-error and has no
+"nothing was waiting" value.
+
+The distinction between `INVALID`, `NOENT` and `UNSUPPORTED` is what tells a
+caller whether to fix its own code, re-resolve the endpoint, or stop using that
+operation on that endpoint kind. `PEER_GONE` is separate again: the handle was
+valid when the caller blocked. `serial.c` relies on exactly this, dropping its
+remote link on `NOENT`/`PEER_GONE`/`UNSUPPORTED`/`PERM` while treating `FULL`
+as transient.
 
 Which code each entry point returns for each precondition is enforced as a
 table in `tests/unit/test_ipc.c` (`test_error_code_contract`), covering every

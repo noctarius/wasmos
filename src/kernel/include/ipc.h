@@ -11,12 +11,23 @@
 #define IPC_ENDPOINT_NONE ((uint32_t)~0u)
 #define IPC_SELECT_EPS_MAX 8u
 
+/*
+ * Each code names ONE failure. IPC_ERR_INVALID used to cover three unrelated
+ * ones at once -- a caller passing NULL, an endpoint that does not exist, and
+ * an operation applied to the wrong endpoint type -- so a caller could not tell
+ * "I have a bug" from "that endpoint died" from "wrong kind of endpoint", and
+ * had no basis for deciding whether to retry, re-resolve, or give up. Values
+ * are the generated transport axis (see the assertions below).
+ */
 typedef enum {
     IPC_OK = 0,
-    IPC_EMPTY = 1,
-    IPC_ERR_INVALID = -1,
-    IPC_ERR_PERM = -2,
-    IPC_ERR_FULL = -3
+    IPC_EMPTY = 1,            /* nothing queued / no signal pending; not an error */
+    IPC_ERR_INVALID = -1,     /* malformed argument: NULL pointer, zero count */
+    IPC_ERR_PERM = -2,        /* the caller does not own what it named */
+    IPC_ERR_FULL = -3,        /* resource exhausted: queue, table, or watch slots */
+    IPC_ERR_NOENT = -4,       /* no such endpoint or select set */
+    IPC_ERR_UNSUPPORTED = -7, /* wrong endpoint type for this operation */
+    IPC_ERR_PEER_GONE = -8    /* the endpoint was destroyed while we waited on it */
 } ipc_result_t;
 
 /*
@@ -40,6 +51,11 @@ _Static_assert((int)IPC_ERR_INVALID == (int)WASMOS_INVAL,
                "IPC_ERR_INVALID must match WASMOS_INVAL");
 _Static_assert((int)IPC_ERR_PERM == (int)WASMOS_DENIED, "IPC_ERR_PERM must match WASMOS_DENIED");
 _Static_assert((int)IPC_ERR_FULL == (int)WASMOS_FULL, "IPC_ERR_FULL must match WASMOS_FULL");
+_Static_assert((int)IPC_ERR_NOENT == (int)WASMOS_NOENT, "IPC_ERR_NOENT must match WASMOS_NOENT");
+_Static_assert((int)IPC_ERR_UNSUPPORTED == (int)WASMOS_UNSUPPORTED,
+               "IPC_ERR_UNSUPPORTED must match WASMOS_UNSUPPORTED");
+_Static_assert((int)IPC_ERR_PEER_GONE == (int)WASMOS_PEER_GONE,
+               "IPC_ERR_PEER_GONE must match WASMOS_PEER_GONE");
 
 typedef enum {
     IPC_ENDPOINT_TYPE_MESSAGE = 0,

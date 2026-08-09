@@ -587,7 +587,7 @@ uint64_t x86_syscall_handler(syscall_frame_t* frame) {
         }
         rc = ipc_notify_from(proc->context_id, endpoint);
         if (name_eq(proc->name, "ring3-smoke")) {
-            if (!g_ring3_ipc_deny_logged && endpoint == 0xFFFFFFFFu && rc == IPC_ERR_INVALID) {
+            if (!g_ring3_ipc_deny_logged && endpoint == 0xFFFFFFFFu && rc == IPC_ERR_NOENT) {
                 g_ring3_ipc_deny_logged = 1;
                 klog_write("[test] ring3 ipc syscall deny ok\n");
             }
@@ -656,7 +656,7 @@ uint64_t x86_syscall_handler(syscall_frame_t* frame) {
             return (uint64_t)(int64_t)rc;
         }
         if (ipc_endpoint_owner(destination, &owner_context) != IPC_OK) {
-            rc = IPC_ERR_INVALID;
+            rc = IPC_ERR_NOENT; /* no such destination endpoint */
             if (name_eq(proc->name, "ring3-smoke") && !g_ring3_ipc_call_deny_logged &&
                 destination == 0xFFFFFFFFu) {
                 g_ring3_ipc_call_deny_logged = 1;

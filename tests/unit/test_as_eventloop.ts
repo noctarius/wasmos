@@ -16,7 +16,7 @@
  */
 
 import { EventLoop, IpcFuture, IpcMessage, OnMessage, ReplyStatus } from "./eventloop";
-import { FutureState } from "./coroutine";
+import { Box, Coroutine, FutureState, Runtime, Task, TASK_COMPLETE, TASK_YIELDED } from "./coroutine";
 import {runShuffled, TestCase} from "./shuffle";
 
 @external("harness", "plant")
@@ -615,6 +615,108 @@ function testReceiveCannotPark(): i32 {
   return 0;
 }
 
+
+// ---------------------------------------------------------------- case 16
+
+/** armMessage() is receive() for a coroutine: a future settled by the next
+ * message nothing else claims. */
+function testMessageFuture(): i32 {
+  const loop = freshLoop();
+  const typed = new Recorder();
+  loop.register(TYPE_NOTIFY, typed);
+
+  const first = loop.nextMessage();
+  if (first.state != FutureState.Pending) return 1601;
+  /* Arming twice hands back the same pending future rather than dropping the
+   * first, which would strand whoever awaits it. */
+  if (loop.nextMessage() !== first) return 1602;
+
+  /* A handled type runs its handler and does NOT settle the future. */
+  plant(SELF, TYPE_NOTIFY, 0, PEER, 11, 0, 0, 0);
+  if (loop.poll(2) != 1) return 1603;
+  if (typed.calls != 1) return 1604;
+  if (first.state != FutureState.Pending) return 1605;
+
+  /* An unclaimed one settles it, carrying the message. */
+  plant(SELF, TYPE_OTHER, 0, PEER, 12, 0, 0, 0);
+  if (loop.poll(2) != 1) return 1606;
+  if (first.state != FutureState.Ready) return 1607;
+  if (loop.messageRecord.arg0 != 12) return 1608;
+
+  /* A settled future takes nothing further; the next message defers instead. */
+  plant(SELF, TYPE_OTHER, 0, PEER, 13, 0, 0, 0);
+  if (loop.poll(2) != 1) return 1609;
+  if (loop.messageRecord.arg0 != 12) return 1610;
+
+  /* Re-arming picks up what was deferred meanwhile, so switching between the
+   * two styles loses nothing. */
+  loop.rearmMessage();
+  const second = loop.nextMessage();
+  if (second.state != FutureState.Ready) return 1611;
+  if (loop.messageRecord.arg0 != 13) return 1612;
+
+  /* An intent still wins: a reply settles its own future, not this one. */
+  loop.rearmMessage();
+  const third = loop.nextMessage();
+  if (third.state != FutureState.Pending) return 1613;
+  const operation = new IpcFuture(null);
+  const reply = operation.send(loop, PEER, SELF, TYPE_REQ, 0, 0, 0, 0);
+  if (reply === null) return 1614;
+  plant(SELF, TYPE_RESP, operation.requestId, PEER, 14, 0, 0, 0);
+  if (loop.poll(2) != 1) return 1615;
+  if (reply.state != FutureState.Ready) return 1616;
+  if (third.state != FutureState.Pending) return 1617;
+  return 0;
+}
+
+
+// ---------------------------------------------------------------- case 17
+
+/** A coroutine parked on the message future must survive a second armMessage.
+ * Re-initialising an armed future clears its wait list, stranding the waiter --
+ * invisible unless something is actually parked on it. */
+class AwaitingTask extends Task {
+  resumes: i32 = 0;
+  arg0: i32 = -1;
+
+  constructor(private loop: EventLoop) {
+    super();
+  }
+
+  resume(out: Box): i32 {
+    this.resumes++;
+    const status = this.loop.nextMessage().await(out);
+    if (status == 1 /* AWAIT_PENDING */) return TASK_YIELDED;
+    this.arg0 = this.loop.messageRecord.arg0;
+    this.loop.rearmMessage();
+    out.value = 0;
+    return TASK_COMPLETE;
+  }
+}
+
+function testArmingTwiceKeepsTheWaiter(): i32 {
+  const loop = freshLoop();
+  const runtime = new Runtime();
+  const coroutine = new Coroutine();
+  const task = new AwaitingTask(loop);
+  if (runtime.asyncStart(coroutine, task) === null) return 1701;
+
+  /* Parks on the message future. */
+  if (runtime.run() != 1) return 1702;
+  if (task.resumes != 1) return 1703;
+
+  /* A second arm must be a no-op while one is outstanding. */
+  loop.nextMessage();
+
+  plant(SELF, TYPE_OTHER, 0, PEER, 21, 0, 0, 0);
+  if (loop.poll(2) != 1) return 1704;
+  /* The waiter is still on the list, so the runtime resumes it. */
+  if (runtime.run() != 1) return 1705;
+  if (task.resumes != 2) return 1706;
+  if (task.arg0 != 21) return 1707;
+  return 0;
+}
+
 /** 0 if every case passed, else the failing case's marker. */
 export function runTests(): i32 {
     /* Randomized order: a case that leaks state must not be able to make
@@ -635,6 +737,8 @@ export function runTests(): i32 {
     testReceive,
     testDeferralBackpressure,
     testReceiveCannotPark,
+    testMessageFuture,
+    testArmingTwiceKeepsTheWaiter,
     ];
     return runShuffled(cases);
 }

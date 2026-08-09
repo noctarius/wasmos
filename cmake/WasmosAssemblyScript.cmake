@@ -11,6 +11,11 @@
 # asc at that. The flat "./name" import convention is a consequence of this, not
 # a style choice.
 #
+# Every AS module is compiled through tools/as_coroutine_transform.mjs, which
+# lowers @coroutine functions into their state machines. It is inert for a
+# module that uses no coroutines, so it applies unconditionally rather than
+# being a per-module opt-in that has to be remembered.
+#
 # The whole AS libc is staged for every module. asc compiles only what the entry
 # transitively imports, so an unreferenced file costs nothing, and the
 # alternative -- each module listing the libc files it happens to use -- means
@@ -76,6 +81,7 @@ function(wasmos_assemblyscript_compile)
     ${_stage_cmds}
     COMMAND ${ASC_EXECUTABLE}
             ${_stage_dir}/${ARG_ENTRY_NAME}
+            --transform ${CMAKE_SOURCE_DIR}/tools/as_coroutine_transform.mjs
             --target release
             -Osize
             --runtime stub
@@ -83,6 +89,7 @@ function(wasmos_assemblyscript_compile)
             ${_initial_memory_args}
             --outFile ${ARG_OUTPUT_WASM}
     DEPENDS ${ARG_ENTRY} ${WASMOS_AS_LIBC_SOURCES} ${ARG_EXTRA_SOURCES}
+            ${CMAKE_SOURCE_DIR}/tools/as_coroutine_transform.mjs
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     COMMENT "Building AssemblyScript ${ARG_NAME} module"
     VERBATIM

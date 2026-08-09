@@ -131,6 +131,12 @@ export class EventLoop {
     polling: bool = false;
     intents: StaticArray<Intent> = new StaticArray<Intent>(INTENT_MAX);
     handlers: StaticArray<Handler> = new StaticArray<Handler>(HANDLER_MAX);
+    /* Settled by the next message nothing else claims, so a coroutine can await
+     * one instead of calling receive(). Armed on demand. */
+    messageFuture: Future = new Future();
+    messagePromise: Promise = new Promise();
+    messageRecord: IpcMessage = new IpcMessage();
+    messageArmed: bool = false;
     /* Ring of messages nothing claimed, waiting for receive(). */
     deferred: StaticArray<IpcMessage> = new StaticArray<IpcMessage>(DEFERRED_MAX);
     deferredHead: i32 = 0;
@@ -157,6 +163,7 @@ export class EventLoop {
         this.polling = false;
         this.deferredHead = 0;
         this.deferredCount = 0;
+        this.messageArmed = false;
         this.selectId = -1;
         if (receiverEndpoint >= 0) {
             const sel = ipc_select_create();
@@ -314,6 +321,14 @@ export class EventLoop {
             fallback.call(msg);
             return;
         }
+        /* A coroutine awaiting a message takes it ahead of the ring, since it is
+         * already waiting for exactly this. */
+        if (this.messageArmed) {
+            this.messageRecord.copyFrom(msg);
+            this.messageArmed = false;
+            this.messagePromise.resolve(changetype<usize>(this.messageRecord));
+            return;
+        }
         /* Nothing claimed it. Held for receive() rather than dropped -- silently
          * discarding an unrecognised message is the exact failure this loop
          * exists to remove. */
@@ -424,6 +439,41 @@ export class EventLoop {
             deferred = this.takeDeferred();
         }
         return deferred;
+    }
+
+    /**
+     * The future settled by the next message nothing else claims -- the
+     * coroutine-facing form of receive(). Arms it if it is not already armed,
+     * and settles it at once from anything already deferred, so switching
+     * between the two styles loses nothing.
+     *
+     * A SETTLED future is returned untouched. That separation is the whole
+     * point: a coroutine resumes by re-running its suspension, so this is
+     * called again with the value still sitting in the future, and re-arming
+     * here would discard the message it was woken for. Taking the value is the
+     * caller's business, and re-arming for the next one is rearmMessage().
+     */
+    nextMessage(): Future {
+        if (!this.messageArmed && this.messageFuture.state == FutureState.Pending) {
+            this.armMessage();
+        }
+        return this.messageFuture;
+    }
+
+    /** Arm for the message after the one just taken. */
+    rearmMessage(): void {
+        this.armMessage();
+    }
+
+    private armMessage(): void {
+        this.messageFuture.init(this.messagePromise);
+        this.messageArmed = true;
+        const deferred = this.takeDeferred();
+        if (deferred !== null) {
+            this.messageRecord.copyFrom(deferred);
+            this.messageArmed = false;
+            this.messagePromise.resolve(changetype<usize>(this.messageRecord));
+        }
     }
 
     /** True while poll can park the process instead of returning immediately. */

@@ -109,6 +109,31 @@ const PC = "__co_pc";
 const BOX = "__co_box";
 const STATUS = "__co_status";
 
+/* The lowering injects its own aliased imports rather than relying on what the
+ * file happens to import, so a @coroutine needs no particular import list and a
+ * missing one cannot surface as a confusing error inside generated code. The
+ * aliases cannot collide with a user's names. */
+const RUNTIME_IMPORT =
+    "import { Task as __co_Task, Box as __co_BoxType, AWAIT_PENDING as __co_AWAIT_PENDING, " +
+    "TASK_COMPLETE as __co_TASK_COMPLETE, TASK_YIELDED as __co_TASK_YIELDED } from \"./coroutine\";\n";
+
+/* A suspension's value comes back through a Box, which carries a usize. Getting
+ * it into the declared type is a numeric cast for a primitive and a
+ * reinterpretation for a reference, and asc accepts only the right one for each.
+ * The type is known here only as source text, so the choice is made by name --
+ * a closed list, since AS's primitives are a closed set. */
+const PRIMITIVE_TYPES = new Set([
+    "i8", "i16", "i32", "i64", "isize",
+    "u8", "u16", "u32", "u64", "usize",
+    "f32", "f64", "bool",
+]);
+
+function fromBox(type, expression) {
+    return PRIMITIVE_TYPES.has(type.trim())
+        ? `<${type}>${expression}`
+        : `changetype<${type}>(${expression})`;
+}
+
 class CoroutineError extends Error {}
 
 function fail(source, node, message) {
@@ -248,10 +273,10 @@ class Lowering {
         this.jump(here);
         this.current = here;
         this.emit(`this.${STATUS} = ${name}(${args.join(", ")});`);
-        this.emit(`if (this.${STATUS} == AWAIT_PENDING) { this.${PC} = ${here}; return TASK_YIELDED; }`);
+        this.emit(`if (this.${STATUS} == __co_AWAIT_PENDING) { this.${PC} = ${here}; return __co_TASK_YIELDED; }`);
         this.emit(`if (this.${STATUS} != 0) { return this.${STATUS}; }`);
         if (assignTo !== null) {
-            this.emit(`${assignTo} = <${declaredType}>this.${BOX}.value;`);
+            this.emit(`${assignTo} = ${fromBox(declaredType, `this.${BOX}.value`)};`);
         }
     }
 
@@ -407,7 +432,7 @@ class Lowering {
             } else {
                 this.emit("out.value = 0;");
             }
-            this.emit("return TASK_COMPLETE;");
+            this.emit("return __co_TASK_COMPLETE;");
             return;
 
         case NodeKind.Empty:
@@ -424,7 +449,7 @@ class Lowering {
         this.lowerStatements(this.declaration.body.statements);
         /* Falling off the end completes with no value. */
         this.emit("out.value = 0;");
-        this.emit("return TASK_COMPLETE;");
+        this.emit("return __co_TASK_COMPLETE;");
 
         const parameters = this.declaration.signature.parameters.map((p) => ({
             name: p.name.text,
@@ -437,7 +462,12 @@ class Lowering {
         }
         for (const [name, type] of this.hoisted) {
             if (parameters.some((p) => p.name === name)) continue;
-            fields.push(`    ${name}: ${type} = <${type}>0;`);
+            /* A reference field starts as a null of its own type rather than
+             * `T | null`, so uses of it after the suspension need no non-null
+             * assertion; nothing reads it before the suspension assigns it. */
+            fields.push(PRIMITIVE_TYPES.has(type.trim())
+                ? `    ${name}: ${type} = <${type}>0;`
+                : `    ${name}: ${type} = changetype<${type}>(0);`);
         }
 
         const cases = this.blocks
@@ -452,21 +482,21 @@ class Lowering {
 }
 `;
 
-        return `class ${className} extends Task {
+        return `class ${className} extends __co_Task {
     ${PC}: i32 = 0;
     ${STATUS}: i32 = 0;
-    ${BOX}: Box = new Box();
+    ${BOX}: __co_BoxType = new __co_BoxType();
 ${fields.join("\n")}
     constructor(${parameters.map((p) => `${p.name}: ${p.type}`).join(", ")}) {
         super();
 ${parameters.map((p) => `        this.${p.name} = ${p.name};`).join("\n")}
     }
 
-    resume(out: Box): i32 {
+    resume(out: __co_BoxType): i32 {
         while (true) {
             switch (this.${PC}) {
 ${cases}
-                default: { out.value = 0; return TASK_COMPLETE; }
+                default: { out.value = 0; return __co_TASK_COMPLETE; }
             }
         }
     }
@@ -507,12 +537,14 @@ export default class CoroutineTransform extends Transform {
             }
             if (!rewrites.length) continue;
 
-            let text = source.text;
+            let text = RUNTIME_IMPORT + source.text;
             /* WASMOS_COROUTINE_DUMP=1 prints the generated machine, which is the
              * only practical way to see what a @coroutine actually became. */
             const dump = process.env.WASMOS_COROUTINE_DUMP;
+            const shift = RUNTIME_IMPORT.length;
             for (const rewrite of rewrites.sort((a, b) => b.start - a.start)) {
-                text = text.slice(0, rewrite.start) + rewrite.text + text.slice(rewrite.end);
+                text = text.slice(0, rewrite.start + shift) + rewrite.text +
+                       text.slice(rewrite.end + shift);
             }
             if (dump) {
                 console.error(`--- lowered ${source.normalizedPath} ---\n${text}\n--- end ---`);

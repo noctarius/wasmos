@@ -533,7 +533,12 @@ export function main(_args: Array<string>): i32 {
 EOF
         fi
 
-        "$asc" "$entry_file" --target release -Osize --runtime stub --noAssert --outFile "$out_file"
+        # Same transform the real build applies (see cmake/WasmosAssemblyScript.cmake):
+        # without it a @coroutine function is compiled raw and the gate fails on
+        # generated-code that was never meant to exist.
+        "$asc" "$entry_file" \
+            --transform "$repo_root/tools/as_coroutine_transform.mjs" \
+            --target release -Osize --runtime stub --noAssert --outFile "$out_file"
         rm -rf "$stage_dir"
     done
 }

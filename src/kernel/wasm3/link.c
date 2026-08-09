@@ -24,6 +24,7 @@
 #include "thread.h"
 #include "wasm_driver.h"
 #include "wasm3/shim.h"
+#include "wasm3/link_ipc.h"
 #include "sync/spinlock.h"
 
 #include "futex.h"
@@ -39,24 +40,12 @@ extern M3Result ResizeMemory(IM3Runtime io_runtime, uint32_t i_numPages);
 
 typedef struct {
     uint32_t pid;
-    uint8_t valid;
-    ipc_message_t message;
-} wasm_ipc_last_slot_t;
-
-typedef struct {
-    uint32_t pid;
     uint64_t buffer_phys;
     uint32_t map_offset; /* linmem offset of the zero-copy overlay, 0 if unmapped */
 } wasm_block_slot_t;
 
 #define WASM_BLOCK_BUFFER_PAGES 2u
 #define WASM_BLOCK_BUFFER_SIZE_BYTES (WASM_BLOCK_BUFFER_PAGES * 4096u)
-
-typedef struct {
-    uint32_t pid;
-    uint8_t valid;
-    uint32_t peer_context_id;
-} wasm_fs_peer_slot_t;
 
 typedef struct {
     uint32_t pid;
@@ -409,7 +398,7 @@ void wasm3_release_pid(uint32_t pid) {
     }
 }
 
-static wasm_ipc_last_slot_t* wasm_ipc_slot_for_pid(uint32_t pid) {
+wasm_ipc_last_slot_t* wasm_ipc_slot_for_pid(uint32_t pid) {
     wasm_ipc_last_slot_t* empty = 0;
     wasm_ipc_last_slot_t* slot = 0;
 
@@ -488,7 +477,7 @@ static int wasm_block_slot_phys_is_live(uint64_t phys) {
     return found;
 }
 
-static int current_process_context(uint32_t* out_context_id) {
+int current_process_context(uint32_t* out_context_id) {
     uint32_t pid = process_current_pid();
     process_t* proc = process_get(pid);
 
@@ -628,7 +617,7 @@ static void wasm_console_write_vt_mirror(const char* ptr, int32_t len) {
     }
 }
 
-static wasm_fs_peer_slot_t* wasm_fs_peer_slot_for_pid(uint32_t pid) {
+wasm_fs_peer_slot_t* wasm_fs_peer_slot_for_pid(uint32_t pid) {
     wasm_fs_peer_slot_t* empty = 0;
     wasm_fs_peer_slot_t* slot = 0;
 
@@ -655,65 +644,6 @@ static wasm_fs_peer_slot_t* wasm_fs_peer_slot_for_pid(uint32_t pid) {
     }
     ksync_spinlock_unlock(&g_wasm_side_table_lock);
     return slot;
-}
-
-m3ApiRawFunction(wasmos_ipc_create_endpoint) {
-    m3ApiReturnType(int32_t) uint32_t context_id = 0;
-    uint32_t endpoint = IPC_ENDPOINT_NONE;
-
-    preempt_safepoint();
-    if (current_process_context(&context_id) != 0) {
-        m3ApiReturn(-1);
-    }
-    if (ipc_endpoint_create(context_id, &endpoint) != IPC_OK) {
-        m3ApiReturn(-1);
-    }
-    preempt_safepoint();
-    m3ApiReturn((int32_t)endpoint);
-}
-
-m3ApiRawFunction(wasmos_ipc_endpoint_owner) {
-    m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, endpoint) uint32_t owner_context_id = 0;
-
-    preempt_safepoint();
-    if (endpoint < 0) {
-        m3ApiReturn(-1);
-    }
-    if (ipc_endpoint_owner((uint32_t)endpoint, &owner_context_id) != IPC_OK ||
-        owner_context_id == 0) {
-        m3ApiReturn(-1);
-    }
-    preempt_safepoint();
-    m3ApiReturn((int32_t)owner_context_id);
-}
-
-m3ApiRawFunction(wasmos_ipc_send) {
-    m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, destination_endpoint)
-        m3ApiGetArg(int32_t, source_endpoint) m3ApiGetArg(int32_t, type)
-            m3ApiGetArg(int32_t, request_id) m3ApiGetArg(int32_t, arg0) m3ApiGetArg(int32_t, arg1)
-                m3ApiGetArg(int32_t, arg2) m3ApiGetArg(int32_t, arg3) uint32_t context_id = 0;
-    ipc_message_t req;
-
-    preempt_safepoint();
-    if (destination_endpoint < 0 || source_endpoint < 0) {
-        m3ApiReturn(-1);
-    }
-    if (current_process_context(&context_id) != 0) {
-        m3ApiReturn(-1);
-    }
-
-    req.type = (uint32_t)type;
-    req.source = (uint32_t)source_endpoint;
-    req.destination = (uint32_t)destination_endpoint;
-    req.request_id = (uint32_t)request_id;
-    req.arg0 = (uint32_t)arg0;
-    req.arg1 = (uint32_t)arg1;
-    req.arg2 = (uint32_t)arg2;
-    req.arg3 = (uint32_t)arg3;
-
-    int rc = ipc_send_from(context_id, (uint32_t)destination_endpoint, &req);
-    preempt_safepoint();
-    m3ApiReturn(rc);
 }
 
 /* Whether the calling context may own/lend transfer buffers. Owning a transfer
@@ -1043,216 +973,6 @@ m3ApiRawFunction(wasmos_buffer_release) {
 m3ApiRawFunction(wasmos_buffer_unborrow) {
     m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, borrow_id)
         m3ApiReturn(wasm_buffer_unborrow_impl(borrow_id));
-}
-
-m3ApiRawFunction(wasmos_ipc_select_one) {
-    m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, endpoint) uint32_t context_id = 0;
-    uint32_t pid = process_current_pid();
-    wasm_ipc_last_slot_t* slot;
-    int rc;
-    process_t* process;
-
-    if (endpoint < 0 || current_process_context(&context_id) != 0) {
-        m3ApiReturn(-1);
-    }
-
-    slot = wasm_ipc_slot_for_pid(pid);
-    if (!slot) {
-        m3ApiReturn(-1);
-    }
-
-    process = process_get(pid);
-    if (!process) {
-        m3ApiReturn(-1);
-    }
-    process->in_hostcall = 1;
-
-    preempt_safepoint();
-    for (;;) {
-        process->block_reason = PROCESS_BLOCK_IPC;
-        /* Preserve the legacy sync-spawn contract for WASM children: the
-         * first blocking IPC wait marks the process ready unless it requires
-         * an explicit PROC_IPC_NOTIFY_READY handshake. */
-        if (!process->ready && !process->require_explicit_ready) {
-            process->ready = 1;
-        }
-        /* Use the blocking variant: sleeps in sched_event_wait until a message
-         * arrives, then dequeues and returns IPC_OK.  Returns IPC_EMPTY only
-         * on a spurious wake, in which case we retry immediately. */
-        rc = ipc_recv_blocking_for(context_id, (uint32_t)endpoint, &slot->message);
-        if (rc == IPC_EMPTY) {
-            /* Spurious wake — re-block immediately, but honour a pending
-             * reschedule first so the timer tick doesn't go unserviced. */
-            preempt_safepoint();
-            continue;
-        }
-        if (rc != IPC_OK) {
-            process->block_reason = PROCESS_BLOCK_NONE;
-            process->in_hostcall = 0;
-            m3ApiReturn(-1);
-        }
-        process->block_reason = PROCESS_BLOCK_NONE;
-        process->in_hostcall = 0;
-        slot->valid = 1;
-        wasm_fs_peer_slot_t* peer = wasm_fs_peer_slot_for_pid(pid);
-        if (peer && slot->message.type >= FS_IPC_OPEN_REQ &&
-            slot->message.type <= FS_IPC_READ_APP_REQ) {
-            uint32_t owner_context = 0;
-            int owner_rc = ipc_endpoint_owner(slot->message.source, &owner_context);
-            if (owner_rc == IPC_OK && owner_context != 0) {
-                peer->valid = 1;
-                peer->peer_context_id = owner_context;
-            } else {
-                peer->valid = 0;
-                peer->peer_context_id = 0;
-            }
-        }
-        preempt_safepoint();
-        m3ApiReturn(1);
-    }
-}
-
-m3ApiRawFunction(wasmos_ipc_drain) {
-    m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, endpoint) uint32_t context_id = 0;
-    uint32_t pid = process_current_pid();
-    wasm_ipc_last_slot_t* slot;
-    int rc;
-
-    if (endpoint < 0 || current_process_context(&context_id) != 0) {
-        m3ApiReturn(-1);
-    }
-
-    slot = wasm_ipc_slot_for_pid(pid);
-    if (!slot) {
-        m3ApiReturn(-1);
-    }
-
-    preempt_safepoint();
-    rc = ipc_recv_for(context_id, (uint32_t)endpoint, &slot->message);
-    if (rc == IPC_EMPTY) {
-        m3ApiReturn(0); /* no message — return without blocking */
-    }
-    if (rc != IPC_OK) {
-        m3ApiReturn(-1);
-    }
-    slot->valid = 1;
-    preempt_safepoint();
-    m3ApiReturn(1);
-}
-
-m3ApiRawFunction(wasmos_sys_select_create) {
-    m3ApiReturnType(int32_t) uint32_t context_id = 0;
-    if (current_process_context(&context_id) != 0) {
-        m3ApiReturn(-1);
-    }
-    uint32_t select_id = 0;
-    int rc = ipc_select_create(context_id, &select_id);
-    if (rc != IPC_OK) {
-        m3ApiReturn(-1);
-    }
-    m3ApiReturn((int32_t)select_id);
-}
-
-m3ApiRawFunction(wasmos_sys_select_add) {
-    m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, select_id) m3ApiGetArg(int32_t, endpoint_id)
-        uint32_t context_id = 0;
-    if (select_id <= 0 || endpoint_id < 0 || current_process_context(&context_id) != 0) {
-        m3ApiReturn(-1);
-    }
-    int rc = ipc_select_add((uint32_t)select_id, (uint32_t)endpoint_id, context_id);
-    m3ApiReturn(rc == IPC_OK ? 0 : -1);
-}
-
-m3ApiRawFunction(wasmos_sys_select_wait) {
-    m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, select_id) uint32_t context_id = 0;
-    if (select_id <= 0 || current_process_context(&context_id) != 0) {
-        m3ApiReturn(-1);
-    }
-    uint32_t ready_ep = IPC_ENDPOINT_NONE;
-    for (;;) {
-        int rc = ipc_select_wait((uint32_t)select_id, context_id, &ready_ep, 0);
-        if (rc == IPC_OK) {
-            m3ApiReturn((int32_t)ready_ep);
-        }
-        if (rc == IPC_EMPTY) {
-            /* Spurious wake — re-block, but honour pending reschedule first. */
-            preempt_safepoint();
-            continue;
-        }
-        m3ApiReturn(-1);
-    }
-}
-
-/* Timed select wait: block until a watched endpoint is ready OR timeout_ms
- * elapses. Returns the ready endpoint id (>= 0), -1 on timeout/spurious wake
- * (caller polls and retries), or -2 on error. Does NOT loop on IPC_EMPTY. */
-m3ApiRawFunction(wasmos_sys_select_wait_timeout) {
-    m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, select_id) m3ApiGetArg(int32_t, timeout_ms)
-        uint32_t context_id = 0;
-    if (select_id <= 0 || current_process_context(&context_id) != 0) {
-        m3ApiReturn(-2);
-    }
-    uint32_t ready_ep = IPC_ENDPOINT_NONE;
-    int rc = ipc_select_wait((uint32_t)select_id, context_id, &ready_ep,
-                             (uint32_t)(timeout_ms < 0 ? 0 : timeout_ms));
-    if (rc == IPC_OK) {
-        m3ApiReturn((int32_t)ready_ep);
-    }
-    if (rc == IPC_EMPTY) {
-        m3ApiReturn(-1); /* timeout or spurious wake */
-    }
-    m3ApiReturn(-2);
-}
-
-m3ApiRawFunction(wasmos_sys_select_destroy) {
-    m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, select_id) uint32_t context_id = 0;
-    if (select_id <= 0 || current_process_context(&context_id) != 0) {
-        m3ApiReturn(-1);
-    }
-    ipc_select_destroy((uint32_t)select_id, context_id);
-    m3ApiReturn(0);
-}
-
-m3ApiRawFunction(wasmos_ipc_notify) {
-    m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, endpoint) uint32_t context_id = 0;
-
-    preempt_safepoint();
-    if (endpoint < 0 || current_process_context(&context_id) != 0) {
-        m3ApiReturn(-1);
-    }
-    int rc = ipc_notify_from(context_id, (uint32_t)endpoint) == IPC_OK ? 0 : -1;
-    preempt_safepoint();
-    m3ApiReturn(rc);
-}
-
-m3ApiRawFunction(wasmos_ipc_last_field) {
-    m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, field) uint32_t pid = process_current_pid();
-    wasm_ipc_last_slot_t* slot = wasm_ipc_slot_for_pid(pid);
-
-    if (!slot || !slot->valid) {
-        m3ApiReturn(-1);
-    }
-
-    switch ((uint32_t)field) {
-    case WASMOS_IPC_FIELD_TYPE:
-        m3ApiReturn((int32_t)slot->message.type);
-    case WASMOS_IPC_FIELD_REQUEST_ID:
-        m3ApiReturn((int32_t)slot->message.request_id);
-    case WASMOS_IPC_FIELD_ARG0:
-        m3ApiReturn((int32_t)slot->message.arg0);
-    case WASMOS_IPC_FIELD_ARG1:
-        m3ApiReturn((int32_t)slot->message.arg1);
-    case WASMOS_IPC_FIELD_SOURCE:
-        m3ApiReturn((int32_t)slot->message.source);
-    case WASMOS_IPC_FIELD_DESTINATION:
-        m3ApiReturn((int32_t)slot->message.destination);
-    case WASMOS_IPC_FIELD_ARG2:
-        m3ApiReturn((int32_t)slot->message.arg2);
-    case WASMOS_IPC_FIELD_ARG3:
-        m3ApiReturn((int32_t)slot->message.arg3);
-    default:
-        m3ApiReturn(-1);
-    }
 }
 
 static int wasm_block_buffer_validate_args(int32_t phys, int32_t len, int32_t offset) {

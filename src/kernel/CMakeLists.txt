@@ -182,6 +182,7 @@ if (WASMOS_WASM_RUNTIME_WARP)
     ${BUILD_DIR}/warp_driver.o
     ${BUILD_DIR}/warp_shim.o
     ${BUILD_DIR}/warp_link.o
+    ${BUILD_DIR}/warp_link_ipc.o
     ${BUILD_DIR}/warp_cxx_abi.o
     ${BUILD_DIR}/warp_posix.o
     ${BUILD_DIR}/warp_mem_utils.o
@@ -226,6 +227,7 @@ else ()
   list(APPEND KERNEL_OBJS
     ${BUILD_DIR}/wasm_driver.o
     ${BUILD_DIR}/wasm3_link.o
+    ${BUILD_DIR}/wasm3_link_ipc.o
     ${BUILD_DIR}/wasm3_shim.o
     ${BUILD_DIR}/wasm3_code.o
     ${BUILD_DIR}/wasm3_bind.o
@@ -321,6 +323,7 @@ if (WASMOS_WASM_RUNTIME_WARP)
     ${KERNEL_DIR}/warp_driver.cpp
     ${KERNEL_DIR}/warp/shim.cpp
     ${KERNEL_DIR}/warp/link.cpp
+    ${KERNEL_DIR}/warp/link_ipc.cpp
     ${KERNEL_DIR}/warp/cxx_abi.cpp
     ${KERNEL_DIR}/warp/posix_kernel.c
     ${KERNEL_DIR}/warp/mem_utils_kernel.cpp
@@ -358,6 +361,7 @@ else ()
   list(APPEND KERNEL_SOURCES
     ${KERNEL_DIR}/wasm_driver.c
     ${KERNEL_DIR}/wasm3/link.c
+    ${KERNEL_DIR}/wasm3/link_ipc.c
     ${KERNEL_DIR}/wasm3/shim.c
     ${WASM3_DIR}/source/m3_code.c
     ${WASM3_DIR}/source/m3_bind.c
@@ -410,6 +414,7 @@ target_sources(kernel_sources INTERFACE
   ${KERNEL_DIR}/include/wasmos_app.h
   ${KERNEL_DIR}/include/wasmos_app_meta.h
   ${KERNEL_DIR}/wasm3/link.h
+  ${KERNEL_DIR}/wasm3/link_ipc.h
   ${KERNEL_DIR}/wasm3/shim.h
   ${KERNEL_DIR}/include/io.h
   ${DRIVER_WASM_DIR}/include/wasmos_driver_abi.h
@@ -469,6 +474,7 @@ target_compile_definitions(kernel_ide PRIVATE
 # excluded from linting anyway, so only our own glue is indexed here.
 add_library(wasm3_glue_ide OBJECT EXCLUDE_FROM_ALL
   ${KERNEL_DIR}/wasm3/link.c
+  ${KERNEL_DIR}/wasm3/link_ipc.c
   ${KERNEL_DIR}/wasm3/shim.c
   ${KERNEL_DIR}/wasm_driver.c)
 target_include_directories(wasm3_glue_ide PRIVATE
@@ -519,7 +525,8 @@ if (WASMOS_WASM_RUNTIME_WARP)
   set(WASM_RUNTIME_COMPILE_CMDS
     COMMAND ${CMAKE_CXX_COMPILER} ${CFLAGS_WARP_CXX} -c ${KERNEL_DIR}/warp_driver.cpp              -o ${BUILD_DIR}/warp_driver.o
     COMMAND ${CMAKE_CXX_COMPILER} ${CFLAGS_WARP_CXX} -c ${KERNEL_DIR}/warp/shim.cpp                -o ${BUILD_DIR}/warp_shim.o
-    COMMAND ${CMAKE_CXX_COMPILER} ${CFLAGS_WARP_CXX} -c ${KERNEL_DIR}/warp/link.cpp                -o ${BUILD_DIR}/warp_link.o
+    COMMAND ${CMAKE_CXX_COMPILER} ${CFLAGS_WARP_CXX} -c ${KERNEL_DIR}/warp/link.cpp                 -o ${BUILD_DIR}/warp_link.o
+    COMMAND ${CMAKE_CXX_COMPILER} ${CFLAGS_WARP_CXX} -c ${KERNEL_DIR}/warp/link_ipc.cpp             -o ${BUILD_DIR}/warp_link_ipc.o
     COMMAND ${CMAKE_CXX_COMPILER} ${CFLAGS_WARP_CXX} -c ${KERNEL_DIR}/warp/cxx_abi.cpp             -o ${BUILD_DIR}/warp_cxx_abi.o
     COMMAND ${CLANG}              ${CFLAGS_WARP_C}    -c ${KERNEL_DIR}/warp/posix_kernel.c          -o ${BUILD_DIR}/warp_posix.o
     COMMAND ${CMAKE_CXX_COMPILER} ${CFLAGS_WARP_CXX} -c ${KERNEL_DIR}/warp/mem_utils_kernel.cpp    -o ${BUILD_DIR}/warp_mem_utils.o
@@ -557,6 +564,7 @@ else ()
   set(WASM_RUNTIME_COMPILE_CMDS
     COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/wasm_driver.c    -o ${BUILD_DIR}/wasm_driver.o
     COMMAND ${CLANG} ${CFLAGS_WASM3}  -c ${KERNEL_DIR}/wasm3/link.c     -o ${BUILD_DIR}/wasm3_link.o
+    COMMAND ${CLANG} ${CFLAGS_WASM3}  -c ${KERNEL_DIR}/wasm3/link_ipc.c -o ${BUILD_DIR}/wasm3_link_ipc.o
     COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/wasm3/shim.c     -o ${BUILD_DIR}/wasm3_shim.o
     COMMAND ${CLANG} ${CFLAGS_WASM3}  -c ${WASM3_DIR}/source/m3_code.c    -o ${BUILD_DIR}/wasm3_code.o
     COMMAND ${CLANG} ${CFLAGS_WASM3}  -c ${WASM3_DIR}/source/m3_bind.c    -o ${BUILD_DIR}/wasm3_bind.o

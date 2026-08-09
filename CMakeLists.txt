@@ -2606,7 +2606,15 @@ if(DEFINED NATIVE_COROUTINE_HOST_ASM)
       COMMAND ${RUST_COROUTINE_TEST_RUSTC} --test ${CMAKE_SOURCE_DIR}/tests/unit/test_wasm_coroutine.rs
               -C link-arg=${BUILD_DIR}/test_wasm_coroutine_rust_core.o
               -o ${BUILD_DIR}/test_wasm_coroutine_rust
-      COMMAND ${BUILD_DIR}/test_wasm_coroutine_rust
+      # --test-threads=1 is REQUIRED, not tidiness. coroutine_wasm.c keeps the
+      # active runtime in a file-global (g_current_runtime), which is sound for
+      # its target -- a WASM guest is single-threaded and has one cooperative
+      # runtime per module -- but Rust's harness runs #[test] cases on parallel
+      # threads by default, so two cases racing on that global made a waiter
+      # park against the other case's runtime and never wake. Intermittent at
+      # roughly 1 run in 10; every other language's suite is single-threaded and
+      # never saw it.
+      COMMAND ${BUILD_DIR}/test_wasm_coroutine_rust --test-threads=1
       COMMENT "Running Rust WASM coroutine wrapper unit tests"
       VERBATIM)
   endif ()

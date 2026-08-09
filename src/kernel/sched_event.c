@@ -141,8 +141,21 @@ void sched_event_wait(sched_event_t* ev, uint32_t timeout_ms) {
     }
 
     /* Ensure the thread's event_node is only in ONE wait_list at a time.
-     * If a prior non-blocking ipc_recv_for registered it in a different
-     * event's list, remove it first to prevent list corruption. */
+     *
+     * The original reason for this -- a prior non-blocking ipc_recv_for having
+     * registered the thread on another event -- no longer applies: that path
+     * was removed, and ipc_recv_for now explicitly must not register a waiter.
+     * The guard stays because it is what makes a wake that does NOT unlink
+     * survivable. thread_wake_if_blocked() is exactly such a primitive: it
+     * flips BLOCKED -> READY while leaving event_node linked and wait_event
+     * set. Its only out-of-band caller today is process_unpark_pid(), which
+     * targets a freshly spawned child that has never run and therefore has an
+     * empty event_node -- so the state is not currently reachable. Add one
+     * caller that unparks a thread already blocked on an endpoint and it is,
+     * and without this unlink the re-add would splice the list around the node
+     * and silently drop every waiter queued behind it. Covered by
+     * tests/unit/test_ipc.c M4 (moving between endpoints) and M5 (re-blocking
+     * on the same one). */
     if (!list_head_empty(&t->event_node)) {
         list_head_del(&t->event_node);
     }

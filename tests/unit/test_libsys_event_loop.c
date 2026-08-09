@@ -501,7 +501,8 @@ int main(void) {
     } tests[] = {
         {"L1 init builds a select set", test_init_builds_a_select_set},
         {"L2 an intent wins over a type handler", test_an_intent_wins_over_a_type_handler},
-        {"L3 unmatched replies fall through", test_unmatched_replies_fall_through_to_handler_then_default},
+        {"L3 unmatched replies fall through",
+         test_unmatched_replies_fall_through_to_handler_then_default},
         {"L4 the budget bounds the work", test_the_budget_bounds_the_work_per_poll},
         {"L5 an empty endpoint blocks", test_an_empty_endpoint_blocks_instead_of_spinning},
         {"L6 intent capacity and release", test_intent_capacity_and_release},

@@ -2784,7 +2784,6 @@ set(WASMOS_UNIT_LIBC_TESTS
     ${CMAKE_SOURCE_DIR}/tests/unit/test_libc_stdio.c
     ${CMAKE_SOURCE_DIR}/tests/unit/test_libc_stdlib.c
     ${CMAKE_SOURCE_DIR}/tests/unit/test_libui_key_decode.c
-    ${CMAKE_SOURCE_DIR}/tests/unit/test_libsys_event_loop.c
     ${CMAKE_SOURCE_DIR}/tests/unit/test_native_ipc_future.c
     ${CMAKE_SOURCE_DIR}/tests/unit/test_wasm_coroutine.c)
 

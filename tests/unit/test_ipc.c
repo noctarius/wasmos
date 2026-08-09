@@ -1483,8 +1483,9 @@ static void test_adding_the_same_endpoint_twice_double_registers(void) {
     (void)ipc_select_create(ctx, &sel);
     CHECK(ipc_select_add(sel, ep, ctx) == IPC_OK, "first add");
     CHECK(ipc_select_add(sel, ep, ctx) == IPC_OK, "duplicate add is accepted");
+    reset_threads();
 
-    /* Six more fit, not seven: the duplicate really did take a slot. */
+    /* The cost is a watch slot: six more fit, not seven. */
     uint32_t filler = 0;
     int fit = 0;
     for (uint32_t i = 0; i < IPC_SELECT_EPS_MAX; ++i) {
@@ -1496,7 +1497,98 @@ static void test_adding_the_same_endpoint_twice_double_registers(void) {
     }
     CHECK(fit == (int)IPC_SELECT_EPS_MAX - 2, "a duplicate consumes a watch slot");
 
+    /* The double registration is real -- one send runs ipc_select_signal twice
+     * (test_poll.c P10 observes both watcher entries firing) -- but it must not
+     * be observable through the select API: ready_ep is a latch, so the second
+     * signal overwrites the first with the same endpoint id and the caller
+     * still sees exactly ONE readiness report for one message. If a duplicate
+     * ever produced two reports, a service would poll an endpoint it had
+     * already drained and take the empty read for a protocol error. */
+    CHECK(ksend(ep, 1u) == IPC_OK, "one message arrives on the doubly-watched endpoint");
+    uint32_t ready = 0;
+    CHECK(ipc_select_wait(sel, ctx, &ready, 0) == IPC_OK && ready == ep,
+          "the set reports it ready");
+    CHECK(ipc_select_wait(sel, ctx, &ready, 0) == IPC_EMPTY,
+          "and reports it exactly once, not once per registration");
+    CHECK(count_of(ep) == 1, "with a single message actually queued");
+    ipc_message_t got;
+    CHECK(ipc_recv_for(ctx, ep, &got) == IPC_OK && got.arg0 == 1u, "which the caller drains");
+
+    /* Destroy must clear BOTH entries. A surviving one would point at a table
+     * slot the next service gets handed. */
     ipc_select_destroy(sel, ctx);
+    uint32_t next = 0;
+    CHECK(ipc_select_create(ctx, &next) == IPC_OK && next == sel, "the slot is recycled");
+    reset_threads();
+    CHECK(ksend(ep, 2u) == IPC_OK, "a message arrives on the old endpoint");
+    ready = 0xAAu;
+    CHECK(ipc_select_wait(next, ctx, &ready, 0) == IPC_EMPTY,
+          "no leftover watcher signals the set that inherited the slot");
+
+    ipc_select_destroy(next, ctx);
+    ipc_endpoints_release_owner(ctx);
+}
+
+/* listen() is the convenience wrapper most services use, so a caller that
+ * passes the same endpoint twice -- easy to do when the reply and event
+ * endpoints turn out to be the same handle -- must behave like two explicit
+ * adds rather than failing or double-reporting. */
+static void test_listen_tolerates_a_repeated_endpoint(void) {
+    uint32_t ctx = fresh_ctx();
+    uint32_t a = 0, b = 0, sel = 0;
+    (void)ipc_endpoint_create(ctx, &a);
+    (void)ipc_endpoint_create(ctx, &b);
+    reset_threads();
+
+    CHECK(ipc_select_listen(ctx, (uint32_t[]){a, b, a}, 3, &sel) == IPC_OK,
+          "listen accepts a repeated endpoint");
+
+    CHECK(ksend(a, 5u) == IPC_OK, "a message arrives on the repeated endpoint");
+    uint32_t ready = 0;
+    CHECK(ipc_select_wait(sel, ctx, &ready, 0) == IPC_OK && ready == a, "the set reports it ready");
+    CHECK(ipc_select_wait(sel, ctx, &ready, 0) == IPC_EMPTY, "exactly once");
+
+    /* The endpoint that was NOT repeated still works — the duplicate did not
+     * displace it. */
+    CHECK(ksend(b, 6u) == IPC_OK, "a message arrives on the other endpoint");
+    CHECK(ipc_select_wait(sel, ctx, &ready, 0) == IPC_OK && ready == b,
+          "which is still watched too");
+
+    ipc_select_destroy(sel, ctx);
+    ipc_endpoints_release_owner(ctx);
+}
+
+/* sched_event_wait unlinks a thread from its current wait list before adding
+ * it again. Re-blocking on the endpoint you are ALREADY parked on is that
+ * unlink and add against the SAME list -- get it wrong and the list head is
+ * rewired around the node, silently dropping every waiter queued behind it. */
+static void test_re_blocking_on_the_same_endpoint_keeps_the_wait_list_intact(void) {
+    uint32_t ctx = fresh_ctx();
+    uint32_t ep = 0;
+    (void)ipc_endpoint_create(ctx, &ep);
+    reset_threads();
+    thread_t* a = thread_get(1);
+    thread_t* b = thread_get(2);
+    thread_t* both[2] = {a, b};
+
+    park_recv(ctx, ep, a);
+    park_recv(ctx, ep, b);
+    CHECK(waiters_on(ep, both, 2) == 2, "two receivers are parked");
+
+    park_recv(ctx, ep, a); /* a re-blocks on the list it is already in */
+    CHECK(waiters_on(ep, both, 2) == 2, "both are still parked after the re-block");
+
+    g_wake_calls = 0;
+    CHECK(ksend(ep, 1u) == IPC_OK, "a message arrives");
+    CHECK(g_wake_calls == 1, "exactly one waiter is woken");
+    CHECK(ksend(ep, 2u) == IPC_OK, "and another");
+    CHECK(g_wake_calls == 2, "waking the second — neither was lost from the list");
+    CHECK(waiters_on(ep, both, 2) == 0, "the list drains completely");
+
+    /* A third send must find the list genuinely empty, not a stale node. */
+    CHECK(ksend(ep, 3u) == IPC_OK, "a third message arrives");
+    CHECK(g_wake_calls == 2, "and wakes nobody — no duplicate entry survived");
+
     ipc_endpoints_release_owner(ctx);
 }
 
@@ -1802,6 +1894,9 @@ int main(void) {
          test_select_add_reports_a_failed_watcher_registration},
         {"S15 a duplicate add double-registers",
          test_adding_the_same_endpoint_twice_double_registers},
+        {"S24 listen tolerates a repeated endpoint", test_listen_tolerates_a_repeated_endpoint},
+        {"M5 re-blocking on the same endpoint keeps the list intact",
+         test_re_blocking_on_the_same_endpoint_keeps_the_wait_list_intact},
         {"S16 two sets on one endpoint both signal",
          test_two_sets_watching_one_endpoint_are_both_signalled},
         {"S17 a full set reports each endpoint", test_a_full_set_reports_each_of_its_endpoints},

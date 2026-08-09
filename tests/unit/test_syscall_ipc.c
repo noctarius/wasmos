@@ -452,8 +452,7 @@ static void test_a_reply_for_a_future_id_answers_the_next_call(void) {
     syscall_frame_t g = make_call(g_dest_ep, 1u, 0xAAu, 0, 0, 0);
     rc = x86_syscall_handler(&g);
     CHECK(rc == (uint64_t)IPC_OK, "and it resolves the next call, which nobody answered");
-    CHECK(g.rdx == (uint64_t)(0x99u ^ 0xF0F0u),
-          "handing that call the PREVIOUS call\'s payload");
+    CHECK(g.rdx == (uint64_t)(0x99u ^ 0xF0F0u), "handing that call the PREVIOUS call\'s payload");
 }
 
 static void test_arguments_must_be_32_bit_clean(void) {
@@ -606,8 +605,7 @@ int main(void) {
         void (*fn)(void);
     } tests[] = {
         {"K1 a matching reply resolves the call", test_a_matching_reply_resolves_the_call},
-        {"K2 the request carries a nonzero id",
-         test_the_request_carries_a_nonzero_correlation_id},
+        {"K2 the request carries a nonzero id", test_the_request_carries_a_nonzero_correlation_id},
         {"K3 the caller gets a reply endpoint it owns",
          test_the_caller_gets_a_reply_endpoint_it_owns},
         {"K4 a stale reply endpoint is replaced", test_a_stale_reply_endpoint_is_replaced},
@@ -624,8 +622,7 @@ int main(void) {
         {"K10 an unknown destination is refused", test_an_unknown_destination_is_refused},
         {"K11 kernel-owned destinations are refused", test_kernel_owned_destinations_are_refused},
         {"K12 a denied control endpoint is refused", test_a_denied_control_endpoint_is_refused},
-        {"K13 an unanswered call reports EMPTY",
-         test_an_unanswered_call_reports_empty_not_success},
+        {"K13 an unanswered call reports EMPTY", test_an_unanswered_call_reports_empty_not_success},
         {"K14 notify passes the transport result through",
          test_notify_passes_the_transport_result_through},
     };

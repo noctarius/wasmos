@@ -1,4 +1,38 @@
+/* PS/2 mouse driver.
+ *
+ * The driver is one coroutine, and it IS the entry point: registration, device
+ * bring-up, the ready notification and the event loop read top to bottom, and
+ * every point where it waits for IPC is a call that suspends. Because
+ * initialize() is exported, tools/as_coroutine_transform.mjs keeps its signature
+ * and hands the lowered task to libc's pump, which owns the coroutine runtime.
+ *
+ * What this replaced, and why. Registration was a blocking ipc_recv on the
+ * SERVICE endpoint -- send, then receive until the reply turned up, discarding
+ * anything else -- so a client's subscribe request landing in that window was
+ * dropped and its sender waited forever. The polled fallback yielded three times
+ * per iteration and the no-endpoint path yielded forever, both of which peg a
+ * core; the loop parks instead, and the polled path is a bounded wait driven by
+ * the pump's idle hook.
+ *
+ * The bounded sched_yield loops in the controller handshake below are NOT that
+ * kind of spin: they wait on a hardware status register during bring-up, have a
+ * hard iteration limit, and there is nothing to park on.
+ */
+
 import {std, startup} from "./wasmos";
+import {defaultLoop, EventLoop, IpcFuture, IpcMessage, OnIdle, ReplyStatus} from "./eventloop";
+import {AWAIT_PENDING, Box} from "./coroutine";
+import {WASMOS_ERR_DRIVER_ENDPOINT_CREATE, WASMOS_ERR_DRIVER_REGISTER} from "./wasmos_status";
+import {
+    io_in8,
+    io_out8,
+    io_wait,
+    ipc_create_endpoint,
+    ipc_send,
+    irq_ack,
+    irq_route_ipc,
+    sched_yield,
+} from "./wasmos_imports";
 
 /* TODO(mouse-startup): wire mouse driver into device-manager startup policy
  * once compositor pointer-event routing is implemented end-to-end. */
@@ -19,111 +53,83 @@ const MOUSE_IPC_SUBSCRIBE_REQ: i32 = 0x810;
 const MOUSE_IPC_SUBSCRIBE_RESP: i32 = 0x890;
 const MOUSE_IPC_MOVE_NOTIFY: i32 = 0x811;
 
-
-@external("wasmos", "io_in8") declare function io_in8(port: i32): i32;
-
-
-@external("wasmos", "io_out8") declare function io_out8(port: i32, value: i32): i32;
-
-
-@external("wasmos", "io_wait") declare function io_wait(): i32;
-
-
-@external("wasmos", "sched_yield") declare function sched_yield(): i32;
-
-
-@external("wasmos", "ipc_try_recv") declare function ipc_try_recv(endpoint: i32): i32;
-
-
-@external("wasmos", "ipc_recv") declare function ipc_recv(endpoint: i32): i32;
-
-
-@external("wasmos", "ipc_create_endpoint") declare function ipc_create_endpoint(): i32;
-
-
-@external("wasmos", "irq_route_ipc") declare function irq_route_ipc(irq: i32, endpoint: i32): i32;
-
-
-@external("wasmos", "irq_ack") declare function irq_ack(irq: i32): i32;
-
-
-@external("wasmos", "irq_unroute") declare function irq_unroute(irq: i32): i32;
-
-
-@external("wasmos", "ipc_last_field") declare function ipc_last_field(field: i32): i32;
-
-
-@external("wasmos", "ipc_send")
-declare function ipc_send(
-    dest: i32,
-    src: i32,
-    type: i32,
-    req_id: i32,
-    arg0: i32,
-    arg1: i32,
-    arg2: i32,
-    arg3: i32,
-): i32;
-
 const MOUSE_IRQ: i32 = 12;
 const MOUSE_IPC_IRQ_EVENT: i32 = 0xff00;
+/* "mous" + "e": the registry takes a packed name across two argument words. */
+const MOUSE_NAME_PACKED: i32 = 0x73756f6d;
+const MOUSE_NAME_TAIL: i32 = 0x65;
 
+const MAX_SUBSCRIBERS: i32 = 4;
+/* Idle wait when the device is polled rather than IRQ-driven. */
+const POLL_INTERVAL_MS: i32 = 10;
+
+const g_loop: EventLoop = defaultLoop;
 let g_mouse_ep: i32 = -1;
 let g_packet_state: i32 = 0;
 let g_packet0: i32 = 0;
 let g_packet1: i32 = 0;
+const g_subscribers: StaticArray<i32> = new StaticArray<i32>(MAX_SUBSCRIBERS);
 
-/* Up to 4 subscriber endpoints; -1 = empty slot. */
-let g_subs0: i32 = -1;
-let g_subs1: i32 = -1;
-let g_subs2: i32 = -1;
-let g_subs3: i32 = -1;
+// --------------------------------------------------------------- suspensions
+
+/**
+ * Wait for the next message no handler claimed. The re-arm belongs here: a
+ * coroutine resumes by re-running this call, so the future must still be
+ * settled at that moment and pending again before the next wait.
+ */
+@suspend
+function awaitMessage(loop: EventLoop, out: Box): i32 {
+    const status = loop.nextMessage().await(out);
+    if (status != AWAIT_PENDING) {
+        loop.rearmMessage();
+    }
+    return status;
+}
+
+/** Wait for a request's reply. */
+@suspend
+function awaitReply(request: IpcFuture, out: Box): i32 {
+    return request.future.await(out);
+}
+
+// ------------------------------------------------------------------ clients
 
 function addSubscriber(ep: i32): i32 {
-    if (g_subs0 == ep || g_subs1 == ep || g_subs2 == ep || g_subs3 == ep) {
-        return 0;
+    for (let i = 0; i < MAX_SUBSCRIBERS; ++i) {
+        /* Ignore duplicate registrations. */
+        if (unchecked(g_subscribers[i]) == ep) {
+            return 0;
+        }
     }
-    if (g_subs0 < 0) {
-        g_subs0 = ep;
-        return 0;
+    for (let i = 0; i < MAX_SUBSCRIBERS; ++i) {
+        if (unchecked(g_subscribers[i]) < 0) {
+            unchecked((g_subscribers[i] = ep));
+            return 0;
+        }
     }
-    if (g_subs1 < 0) {
-        g_subs1 = ep;
-        return 0;
-    }
-    if (g_subs2 < 0) {
-        g_subs2 = ep;
-        return 0;
-    }
-    if (g_subs3 < 0) {
-        g_subs3 = ep;
-        return 0;
-    }
-    return -1;
+    return -1; /* full */
 }
 
+/* One-way notifications: no reply is expected, so they carry no request id and
+ * need no intent. */
 function notifySubscribers(dx: i32, dy: i32, buttons: i32): void {
-    if (g_subs0 >= 0) {
-        ipc_send(g_subs0, g_mouse_ep, MOUSE_IPC_MOVE_NOTIFY, 0, dx, dy, buttons, 0);
-    }
-    if (g_subs1 >= 0) {
-        ipc_send(g_subs1, g_mouse_ep, MOUSE_IPC_MOVE_NOTIFY, 0, dx, dy, buttons, 0);
-    }
-    if (g_subs2 >= 0) {
-        ipc_send(g_subs2, g_mouse_ep, MOUSE_IPC_MOVE_NOTIFY, 0, dx, dy, buttons, 0);
-    }
-    if (g_subs3 >= 0) {
-        ipc_send(g_subs3, g_mouse_ep, MOUSE_IPC_MOVE_NOTIFY, 0, dx, dy, buttons, 0);
+    for (let i = 0; i < MAX_SUBSCRIBERS; ++i) {
+        const ep = unchecked(g_subscribers[i]);
+        if (ep >= 0) {
+            ipc_send(ep, g_mouse_ep, MOUSE_IPC_MOVE_NOTIFY, 0, dx, dy, buttons, 0);
+        }
     }
 }
+
+// ------------------------------------------------------------------- device
 
 function flushOutputBuffer(): void {
     for (let i = 0; i < 64; ++i) {
-        let st = io_in8(CTRL_STATUS_PORT);
+        const st = io_in8(CTRL_STATUS_PORT);
         if ((st & STATUS_OBF) == 0) {
             return;
         }
-        let _ = io_in8(CTRL_DATA_PORT);
+        io_in8(CTRL_DATA_PORT);
         io_wait();
     }
 }
@@ -163,12 +169,12 @@ function sendMouseCommand(cmd: i32): bool {
 }
 
 function readAuxByte(): i32 {
-    let st = io_in8(CTRL_STATUS_PORT);
+    const st = io_in8(CTRL_STATUS_PORT);
     if ((st & STATUS_OBF) == 0) {
         return -1;
     }
     if ((st & STATUS_AUX) == 0) {
-        /* Not our byte: leave it for keyboard driver. */
+        /* Not our byte: leave it for the keyboard driver. */
         return -2;
     }
     return io_in8(CTRL_DATA_PORT) & 0xff;
@@ -176,7 +182,7 @@ function readAuxByte(): i32 {
 
 function readAuxAck(limit: i32 = 50000): i32 {
     for (let i = 0; i < limit; ++i) {
-        let v = readAuxByte();
+        const v = readAuxByte();
         if (v >= 0) {
             return v;
         }
@@ -188,8 +194,8 @@ function readAuxAck(limit: i32 = 50000): i32 {
     return -1;
 }
 
-/* Read any byte from port 0x60 regardless of AUX flag.
- * Used for controller command responses (CCB read etc.) that are not AUX data. */
+/* Read any byte from port 0x60 regardless of the AUX flag. Used for controller
+ * command responses (CCB read etc.) that are not AUX data. */
 function readDataByte(limit: i32 = 50000): i32 {
     for (let i = 0; i < limit; ++i) {
         if ((io_in8(CTRL_STATUS_PORT) & STATUS_OBF) != 0) {
@@ -203,10 +209,10 @@ function readDataByte(limit: i32 = 50000): i32 {
     return -1;
 }
 
-function initMouseDevice(): bool {
+function initMouseDevice(): void {
     flushOutputBuffer();
 
-    /* Enable AUX port (clears clock-disable bit in CCB). */
+    /* Enable the AUX port (clears the clock-disable bit in the CCB). */
     sendControllerCommand(0xa8);
 
     /* Read the Controller Command Byte and set bit 1 (AUX interrupt enable).
@@ -214,53 +220,32 @@ function initMouseDevice(): bool {
     if (waitInputReady()) {
         io_out8(CTRL_CMD_PORT, 0x20);
         io_wait();
-        let ccb: i32 = readDataByte(4096);
+        const ccb: i32 = readDataByte(4096);
         if (ccb >= 0) {
-            let new_ccb: i32 = ccb | 0x02; /* bit 1 = AUX interrupt enable */
+            const newCcb: i32 = ccb | 0x02;
             if (waitInputReady()) {
                 io_out8(CTRL_CMD_PORT, 0x60);
                 io_wait();
                 if (waitInputReady()) {
-                    io_out8(CTRL_DATA_PORT, new_ccb);
+                    io_out8(CTRL_DATA_PORT, newCcb);
                     io_wait();
                 }
             }
         }
     }
 
-    /* Request streaming in fail-open mode.
-     * Some virtual/slow controllers may delay ACKs; mouse support should never
-     * block system bootstrap. */
+    /* Request streaming, fail-open: some virtual or slow controllers delay their
+     * ACKs, and mouse support must never block system bootstrap. */
     sendMouseCommand(0xf6);
     readAuxAck(4096);
     sendMouseCommand(0xf4);
     readAuxAck(4096);
-    return true;
 }
 
-function drainIpc(): void {
-    for (;;) {
-        let rc = ipc_try_recv(g_mouse_ep);
-        if (rc != 1) {
-            break;
-        }
-
-        let type = ipc_last_field(0);
-        let req_id = ipc_last_field(1);
-        let source = ipc_last_field(4);
-
-        if (type == MOUSE_IPC_SUBSCRIBE_REQ) {
-            let ok: i32 = source >= 0 ? addSubscriber(source) : -1;
-            if (source >= 0) {
-                ipc_send(source, g_mouse_ep, MOUSE_IPC_SUBSCRIBE_RESP, req_id, ok, 0, 0, 0);
-            }
-        }
-    }
-}
-
+/** Accumulates the three-byte PS/2 packet and publishes a completed one. */
 function handleAuxByte(byte: i32): void {
     if (g_packet_state == 0) {
-        /* Packet sync: bit 3 must be set on first byte. */
+        /* Packet sync: bit 3 must be set on the first byte. */
         if ((byte & 0x08) == 0) {
             return;
         }
@@ -275,118 +260,131 @@ function handleAuxByte(byte: i32): void {
     }
 
     g_packet_state = 0;
-    let p0 = g_packet0;
-    let p1 = g_packet1;
-    let p2 = byte;
+    const p0 = g_packet0;
+    const p1 = g_packet1;
+    const p2 = byte;
 
     if ((p0 & 0xc0) != 0) {
-        /* Overflow bits set, drop packet. */
+        /* Overflow bits set: drop the packet. */
         return;
     }
 
-    let dx: i32 = (p1 << 24) >> 24;
-    let dy: i32 = -((p2 << 24) >> 24);
-    let buttons: i32 = p0 & 0x07;
+    const dx: i32 = (p1 << 24) >> 24;
+    const dy: i32 = -((p2 << 24) >> 24);
+    const buttons: i32 = p0 & 0x07;
     notifySubscribers(dx, dy, buttons);
 }
 
-export function initialize(proc_endpoint: i32, _arg1: i32, _arg2: i32, _arg3: i32): i32 {
-    // proc.endpoint now comes from the spawn-info contract, not an entry arg.
-    proc_endpoint = startup.procEndpoint();
-    g_mouse_ep = ipc_create_endpoint();
-    if (g_mouse_ep >= 0) {
-        let mouse_name = 0x73756f6d; /* "mous" */
-        let req_id = 1;
-        if (
-            ipc_send(
-                proc_endpoint,
-                g_mouse_ep,
-                SVC_IPC_REGISTER_REQ,
-                req_id,
-                mouse_name,
-                0x65,
-                0,
-                0,
-            ) == 0
-        ) {
-            if (ipc_recv(g_mouse_ep) == 1) {
-                if (
-                    ipc_last_field(0) != SVC_IPC_REGISTER_RESP ||
-                    ipc_last_field(1) != req_id ||
-                    ipc_last_field(2) != 0
-                ) {
-                    g_mouse_ep = -1;
-                }
-            } else {
-                g_mouse_ep = -1;
-            }
-        } else {
-            g_mouse_ep = -1;
-        }
+/** The registry's reply is only useful if it reports success. */
+class RegisterReply extends ReplyStatus {
+    call(reply: IpcMessage): i32 {
+        return reply.type == SVC_IPC_REGISTER_RESP && reply.arg0 == 0
+            ? 0
+            : WASMOS_ERR_DRIVER_REGISTER;
     }
+}
 
-    if (g_mouse_ep < 0) {
-        std.printf("[mouse] no IPC endpoint, log-only mode\n");
+/** Drains the controller between polls when the device is not IRQ-driven. */
+class AuxDrain extends OnIdle {
+    call(): void {
         for (;;) {
+            const byte = readAuxByte();
+            if (byte < 0) {
+                return;
+            }
+            handleAuxByte(byte);
             io_wait();
-            sched_yield();
         }
-        return 0;
+    }
+}
+
+// ------------------------------------------------------------- the whole job
+
+/**
+ * The driver, in order. Each await is a point where it stops and the process
+ * parks; between them this is ordinary code.
+ */
+@coroutine
+export function initialize(_proc_endpoint: i32, _arg1: i32, _arg2: i32, _arg3: i32): i32 {
+    // proc.endpoint comes from the spawn-info contract, not an entry arg.
+    let procEndpoint: i32 = startup.procEndpoint();
+    let slot: i32 = 0;
+    for (slot = 0; slot < MAX_SUBSCRIBERS; ++slot) {
+        unchecked((g_subscribers[slot] = -1));
     }
 
-    if (!initMouseDevice()) {
-        std.printf("[mouse] init failed\n");
+    g_mouse_ep = ipc_create_endpoint();
+    if (g_mouse_ep < 0) {
+        std.printf("[mouse] no IPC endpoint\n");
+        return WASMOS_ERR_DRIVER_ENDPOINT_CREATE;
     }
+    g_loop.init(g_mouse_ep, 1);
 
-    let irq_ok: i32 = irq_route_ipc(MOUSE_IRQ, g_mouse_ep);
-    if (irq_ok != 0) {
-        std.printf("[mouse] IRQ route failed, falling back to polling\n");
-    } else {
+    let registration: IpcFuture = new IpcFuture(new RegisterReply());
+    if (
+        registration.send(
+            g_loop,
+            procEndpoint,
+            g_mouse_ep,
+            SVC_IPC_REGISTER_REQ,
+            MOUSE_NAME_PACKED,
+            MOUSE_NAME_TAIL,
+            0,
+            0,
+        ) === null
+    ) {
+        return WASMOS_ERR_DRIVER_REGISTER;
+    }
+    /* Client traffic racing the handshake is dispatched while this waits, rather
+     * than dropped. Reaching the next line IS the success case: a rejected await
+     * fails the coroutine rather than returning. */
+    let registered: i32 = awaitReply(registration);
+
+    initMouseDevice();
+
+    let irqRouted: i32 = irq_route_ipc(MOUSE_IRQ, g_mouse_ep);
+    if (irqRouted == 0) {
         std.printf("[mouse] driver starting (IRQ-driven)\n");
+    } else {
+        /* AUX bytes do not arrive as IPC, so the pump reads them between bounded
+         * waits instead of parking indefinitely. */
+        std.printf("[mouse] IRQ route failed, falling back to polling\n");
+        g_loop.idle = new AuxDrain();
+        g_loop.idleIntervalMs = POLL_INTERVAL_MS;
     }
-    ipc_send(proc_endpoint, g_mouse_ep, PROC_IPC_NOTIFY_READY, 0, 0, 0, 0, 0);
 
-    if (irq_ok != 0) {
-        std.printf("[mouse] driver starting (polling)\n");
-        for (;;) {
-            drainIpc();
-            let b = readAuxByte();
-            if (b >= 0) {
-                handleAuxByte(b);
-                io_wait();
-            } else {
-                sched_yield();
-                sched_yield();
-            }
-            sched_yield();
-        }
-        return 0;
+    /* The process manager acks this; awaiting the ack consumes it rather than
+     * leaving it to arrive later as an unrecognised message. */
+    let ready: IpcFuture = new IpcFuture(null);
+    if (ready.send(g_loop, procEndpoint, g_mouse_ep, PROC_IPC_NOTIFY_READY, 0, 0, 0, 0) !== null) {
+        let acked: i32 = awaitReply(ready);
     }
 
     for (;;) {
-        /* Block until either a client message or an IRQ event arrives. */
-        if (ipc_recv(g_mouse_ep) != 1) {
-            continue;
-        }
-        let type: i32 = ipc_last_field(0);
-        if (type == MOUSE_IPC_SUBSCRIBE_REQ) {
-            let req_id: i32 = ipc_last_field(1);
-            let source: i32 = ipc_last_field(4);
-            let ok: i32 = source >= 0 ? addSubscriber(source) : -1;
-            if (source >= 0) {
-                ipc_send(source, g_mouse_ep, MOUSE_IPC_SUBSCRIBE_RESP, req_id, ok, 0, 0, 0);
+        let msg: IpcMessage = awaitMessage(g_loop);
+        if (msg.type == MOUSE_IPC_SUBSCRIBE_REQ) {
+            if (msg.source >= 0) {
+                let ok: i32 = addSubscriber(msg.source);
+                ipc_send(
+                    msg.source,
+                    g_mouse_ep,
+                    MOUSE_IPC_SUBSCRIBE_RESP,
+                    msg.requestId,
+                    ok,
+                    0,
+                    0,
+                    0,
+                );
             }
-        } else if (type == MOUSE_IPC_IRQ_EVENT) {
-            let b = readAuxByte();
-            /* Re-enable IRQ after reading OBF.  OBF must be clear before unmasking so
-             * the PIC level-trigger doesn't immediately re-fire. */
+        } else if (msg.type == MOUSE_IPC_IRQ_EVENT) {
+            let byte: i32 = readAuxByte();
+            /* Re-arm after reading OBF: it must be clear before unmasking so the
+             * PIC level-trigger does not immediately re-fire. */
             irq_ack(MOUSE_IRQ);
-            if (b >= 0) {
-                handleAuxByte(b);
+            if (byte >= 0) {
+                handleAuxByte(byte);
             }
         }
-        /* Ignore unknown message types. */
+        /* Anything else is not ours; ignoring it is a decision, not a drop. */
     }
-
-    return 0;
 }

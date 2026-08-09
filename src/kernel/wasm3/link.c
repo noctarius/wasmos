@@ -3465,7 +3465,9 @@ m3ApiRawFunction(wasmos_futex_wait) {
     m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, addr) m3ApiGetArg(int32_t, expected)
         m3ApiGetArg(int32_t, timeout_ms) uint32_t context_id = 0;
     if (current_process_context(&context_id) != 0) {
-        m3ApiReturn(-1);
+        /* Named, not a bare -1: futex_wait's own returns are packed codes, and
+         * a guest cannot act on a value it cannot tell apart from a timeout. */
+        m3ApiReturn(IPC_ERR_INVALID);
     }
     int result = futex_wait((uint32_t)addr, (uint32_t)expected, (uint32_t)timeout_ms, context_id);
     m3ApiReturn((int32_t)result);

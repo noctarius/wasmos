@@ -141,7 +141,10 @@ int futex_wait(uint32_t uaddr, uint32_t expected, uint32_t timeout_ms, uint32_t 
 
     thread_t* t = thread_get(thread_current_tid());
     if (t && t->pend_state == SCHED_PEND_TIMEOUT) {
-        return -1;
+        /* Not a bare -1: this return crosses into WASM through the futex_wait
+         * hostcall, and -1 is IPC_ERR_INVALID's value, so a guest could not
+         * tell an expired deadline from a bad address. */
+        return IPC_ERR_TIMEOUT;
     }
     return 0;
 }

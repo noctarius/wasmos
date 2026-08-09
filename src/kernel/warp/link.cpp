@@ -341,7 +341,9 @@ static uint32_t warp_futex_wait(uint32_t addr_off, uint32_t val, uint32_t timeou
     auto* ctx = warp_call_ctx(ctx_);
     uint32_t context_id = 0;
     if (warp_current_context_id(&context_id) != 0)
-        return (uint32_t)-1;
+        /* Named, not a bare -1: futex_wait's own returns are packed codes, and
+         * a guest cannot act on a value it cannot tell apart from a timeout. */
+        return (uint32_t)IPC_ERR_INVALID;
     (void)ctx;
     return (uint32_t)futex_wait(addr_off, val, timeout_ms, context_id);
 }

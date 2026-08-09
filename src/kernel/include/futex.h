@@ -9,7 +9,10 @@ void futex_init(void);
  * futex_wait — block calling thread if *uaddr == expected.
  * uaddr is a WASM linear-memory offset within context_id's address space.
  * timeout_ms == 0 means no timeout.
- * Returns 0 on wakeup, -1 on timeout, negative IPC error code on fault.
+ * Returns 0 on wakeup, or a negative IPC error code: IPC_ERR_TIMEOUT when the
+ * deadline expired, IPC_ERR_INVALID for an unresolvable address, IPC_ERR_FULL
+ * when the table is exhausted. The value reaches WASM through the futex_wait
+ * hostcall, so every one of them is a generated code rather than a bare -1.
  */
 int futex_wait(uint32_t uaddr, uint32_t expected, uint32_t timeout_ms, uint32_t context_id);
 

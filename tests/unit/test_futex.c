@@ -400,12 +400,14 @@ static void test_a_timed_wait_reports_the_timeout(void) {
     g_current_tid = t->tid;
     g_yield_hook = hook_expire_deadline;
 
-    /* A bare -1, not a packed error code, is what a timed-out wait returns.
-     * FIXME: this crosses a subsystem boundary -- it reaches WASM through the
-     * futex_wait hostcall -- so per the project error model it should be a
-     * generated code from abi/errors.yaml. Pinned here so a change is
-     * deliberate rather than accidental. */
-    CHECK(futex_wait(0u, 1u, 50u, CTX_A) == -1, "a wait whose deadline expires returns -1");
+    /* A timeout is IPC_ERR_TIMEOUT, and the value is the point: this return
+     * crosses into WASM through the futex_wait hostcall, and the bare -1 it
+     * used to give is IPC_ERR_INVALID's value -- so a guest could not tell "my
+     * deadline expired" from "you handed me a bad address", which is the whole
+     * reason the error model forbids it. */
+    CHECK(futex_wait(0u, 1u, 50u, CTX_A) == IPC_ERR_TIMEOUT,
+          "a wait whose deadline expires reports TIMEOUT");
+    CHECK(IPC_ERR_TIMEOUT != IPC_ERR_INVALID, "which is distinguishable from a bad address");
     CHECK(t->pend_state == SCHED_PEND_TIMEOUT, "the scheduler marked it as a timeout");
     CHECK(!is_parked(t), "and unlinked it from the futex wait list");
     CHECK(t->sched_timeout_tick == 0, "the deadline is disarmed on the way out");

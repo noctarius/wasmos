@@ -1676,15 +1676,15 @@ static uint32_t warp_thread_detach(uint32_t tid, void* ctx_) {
 static uint32_t warp_shmem_create(uint32_t pages, uint32_t flags, void* ctx_) {
     (void)ctx_;
     if ((int32_t)pages <= 0)
-        return (uint32_t)-1;
+        return (uint32_t)WASMOS_ERR_SHMEM_BAD_ARGS;
     uint32_t context_id = 0;
     if (warp_current_context_id(&context_id) != 0 || warp_require_dma_capability(context_id) != 0)
-        return (uint32_t)-1;
+        return (uint32_t)WASMOS_ERR_SHMEM_NO_CAP;
     uint32_t id = 0;
     uint64_t phys = 0;
     uint32_t cflags = flags ? flags : (MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE);
     if (mm_shared_create(context_id, (uint64_t)pages, cflags, &id, &phys) != 0)
-        return (uint32_t)-1;
+        return (uint32_t)WASMOS_ERR_SHMEM_MAP;
     (void)phys;
     return id;
 }
@@ -1704,67 +1704,67 @@ static uint32_t warp_klog_register_ring(uint32_t id, void* ctx_) {
 static uint32_t warp_shmem_grant(uint32_t id, uint32_t target_pid, void* ctx_) {
     (void)ctx_;
     if ((int32_t)id <= 0 || (int32_t)target_pid <= 0)
-        return (uint32_t)-1;
+        return (uint32_t)WASMOS_ERR_SHMEM_BAD_ID;
     uint32_t context_id = 0;
     if (warp_current_context_id(&context_id) != 0 || warp_require_dma_capability(context_id) != 0)
-        return (uint32_t)-1;
+        return (uint32_t)WASMOS_ERR_SHMEM_NO_CAP;
     process_t* tgt = process_get(target_pid);
     if (!tgt || tgt->context_id == 0)
-        return (uint32_t)-1;
+        return (uint32_t)WASMOS_ERR_SHMEM_NO_CAP;
     return (uint32_t)mm_shared_grant(context_id, id, tgt->context_id);
 }
 
 static uint32_t warp_shmem_revoke(uint32_t id, uint32_t target_pid, void* ctx_) {
     (void)ctx_;
     if ((int32_t)id <= 0 || (int32_t)target_pid <= 0)
-        return (uint32_t)-1;
+        return (uint32_t)WASMOS_ERR_SHMEM_BAD_ID;
     uint32_t context_id = 0;
     if (warp_current_context_id(&context_id) != 0 || warp_require_dma_capability(context_id) != 0)
-        return (uint32_t)-1;
+        return (uint32_t)WASMOS_ERR_SHMEM_NO_CAP;
     process_t* tgt = process_get(target_pid);
     if (!tgt || tgt->context_id == 0)
-        return (uint32_t)-1;
+        return (uint32_t)WASMOS_ERR_SHMEM_NO_CAP;
     return (uint32_t)mm_shared_revoke(context_id, id, tgt->context_id);
 }
 
 static uint32_t warp_shmem_map(uint32_t id, uint32_t wasm_off, uint32_t size, void* ctx_) {
     auto* ctx = warp_call_ctx(ctx_);
     if ((int32_t)id <= 0 || (int32_t)size <= 0 || (size & 0xFFF))
-        return (uint32_t)-1;
+        return (uint32_t)WASMOS_ERR_SHMEM_UNALIGNED;
     uint32_t context_id = 0;
     if (warp_current_context_id(&context_id) != 0 || warp_require_dma_capability(context_id) != 0)
-        return (uint32_t)-1;
+        return (uint32_t)WASMOS_ERR_SHMEM_NO_CAP;
     uint64_t phys_base = 0;
     uint64_t shared_pages = 0;
     if (mm_shared_get_phys(context_id, id, &phys_base, &shared_pages) != 0 || shared_pages == 0)
-        return (uint32_t)-1;
+        return (uint32_t)WASMOS_ERR_SHMEM_BAD_ID;
     if ((uint64_t)size < shared_pages * 0x1000ULL)
-        return (uint32_t)-1;
+        return (uint32_t)WASMOS_ERR_SHMEM_BAD_SIZE;
     /* Commit the range via probe() BEFORE paging_map_4k (see warp_shmem_map_auto
      * for the rationale — ensureLinearSize would zero the shmem pages otherwise). */
     ctx->module->getLinearMemoryRegion(wasm_off + size - 1, 1);
     uint8_t* linmem_base = ctx->module->getLinearMemoryRegion(0, 0);
     if (!linmem_base)
-        return (uint32_t)-1;
+        return (uint32_t)WASMOS_ERR_SHMEM_NO_WINDOW;
 #ifdef WASMOS_WASM_RUNTIME_WARP
     if (warp_ring3_sync_linmem_user_window(linmem_base) != 0) {
-        return (uint32_t)-1;
+        return (uint32_t)WASMOS_ERR_SHMEM_NO_WINDOW;
     }
 #endif
     uint8_t* lmem = linmem_base + wasm_off;
     if (addr_cast(uint64_t, lmem) & 0xFFF)
-        return (uint32_t)-1;
+        return (uint32_t)WASMOS_ERR_SHMEM_NO_WINDOW;
     uint64_t virt = addr_cast(uint64_t, lmem);
     for (uint64_t i = 0; i < shared_pages; ++i) {
         paging_map_4k(virt + i * 0x1000ULL, phys_base + i * 0x1000ULL, 3ULL);
     }
 #ifdef WASMOS_WASM_RUNTIME_WARP
     if (warp_ring3_map_user_window(linmem_base, wasm_off, phys_base, shared_pages) != 0) {
-        return (uint32_t)-1;
+        return (uint32_t)WASMOS_ERR_SHMEM_NO_WINDOW;
     }
 #endif
     if (mm_shared_retain(context_id, id) != 0)
-        return (uint32_t)-1;
+        return (uint32_t)WASMOS_ERR_SHMEM_MAP;
     warp_shmem_map_track(ctx->pid, id, wasm_off, size);
     return 0;
 }
@@ -1883,8 +1883,13 @@ static int64_t warp_linmem_place_phys(WarpCallContext* ctx, uint64_t phys_base, 
 
 static uint32_t warp_shmem_map_auto(uint32_t id, uint32_t size, void* ctx_) {
     auto* ctx = warp_call_ctx(ctx_);
-    if ((int32_t)id <= 0 || (int32_t)size <= 0 || (size & 0xFFF)) {
+    if ((int32_t)id <= 0 || (int32_t)size <= 0) {
         return (uint32_t)WASMOS_ERR_SHMEM_BAD_ARGS;
+    }
+    /* Split from the argument check so a guest gets the same code here as from
+     * wasm3: a misaligned size is UNALIGNED, not "bad arguments". */
+    if ((size & 0xFFF) != 0) {
+        return (uint32_t)WASMOS_ERR_SHMEM_UNALIGNED;
     }
     uint32_t context_id = 0;
     if (warp_current_context_id(&context_id) != 0 || warp_require_dma_capability(context_id) != 0) {
@@ -1912,7 +1917,7 @@ static uint32_t warp_shmem_map_auto(uint32_t id, uint32_t size, void* ctx_) {
     }
     uint32_t found_off = (uint32_t)placed;
     if (mm_shared_retain(context_id, id) != 0) {
-        return (uint32_t)-1;
+        return (uint32_t)WASMOS_ERR_SHMEM_MAP;
     }
     warp_shmem_map_track(ctx->pid, id, found_off, size);
     return found_off;
@@ -2122,19 +2127,19 @@ static uint32_t warp_xfer_buffer_unmap(uint32_t buffer_id, void* ctx_) {
 static uint32_t warp_shmem_unmap(uint32_t id, void* ctx_) {
     auto* ctx = warp_call_ctx(ctx_);
     if ((int32_t)id <= 0)
-        return (uint32_t)-1;
+        return (uint32_t)WASMOS_ERR_SHMEM_BAD_ARGS;
     uint32_t context_id = 0;
     if (warp_current_context_id(&context_id) != 0)
-        return (uint32_t)-1;
+        return (uint32_t)WASMOS_ERR_SHMEM_NO_CAP;
     WarpShmemLinearMap* slot = warp_shmem_map_find(process_current_pid(), id);
     if (slot && warp_restore_linear_window(ctx, slot->offset, slot->size) != 0) {
-        return (uint32_t)-1;
+        return (uint32_t)WASMOS_ERR_SHMEM_BAD_ARGS;
     }
 #ifdef WASMOS_WASM_RUNTIME_WARP
     if (slot) {
         uint8_t* linmem_base = ctx->module->getLinearMemoryRegion(0, 0);
         if (!linmem_base || warp_ring3_sync_linmem_user_window(linmem_base) != 0) {
-            return (uint32_t)-1;
+            return (uint32_t)WASMOS_ERR_SHMEM_NO_WINDOW;
         }
     }
 #endif
@@ -2145,20 +2150,20 @@ static uint32_t warp_shmem_unmap(uint32_t id, void* ctx_) {
 static uint32_t warp_shmem_flush(uint32_t id, uint32_t wasm_off, uint32_t size, void* ctx_) {
     auto* ctx = warp_call_ctx(ctx_);
     if ((int32_t)id <= 0 || (int32_t)size <= 0)
-        return (uint32_t)-1;
+        return (uint32_t)WASMOS_ERR_SHMEM_BAD_ARGS;
     uint32_t context_id = 0;
     if (warp_current_context_id(&context_id) != 0 || warp_require_dma_capability(context_id) != 0)
-        return (uint32_t)-1;
+        return (uint32_t)WASMOS_ERR_SHMEM_NO_CAP;
     uint64_t phys_base = 0;
     uint64_t shared_pages = 0;
     if (mm_shared_get_phys(context_id, id, &phys_base, &shared_pages) != 0 || shared_pages == 0 ||
         phys_base == 0)
-        return (uint32_t)-1;
+        return (uint32_t)WASMOS_ERR_SHMEM_BAD_ID;
     if ((uint64_t)size > shared_pages * 0x1000ULL)
-        return (uint32_t)-1;
+        return (uint32_t)WASMOS_ERR_SHMEM_BAD_SIZE;
     const uint8_t* src = warp_linear_mem_window(ctx, wasm_off, size);
     if (!src)
-        return (uint32_t)-1;
+        return (uint32_t)WASMOS_ERR_SHMEM_NO_WINDOW;
     __builtin_memcpy(ptr_cast(void, (phys_base | KERNEL_HIGHER_HALF_BASE)), src, size);
     return 0;
 }
@@ -2166,17 +2171,17 @@ static uint32_t warp_shmem_flush(uint32_t id, uint32_t wasm_off, uint32_t size, 
 static uint32_t warp_shmem_refresh(uint32_t id, uint32_t wasm_off, uint32_t size, void* ctx_) {
     auto* ctx = warp_call_ctx(ctx_);
     if ((int32_t)id <= 0 || (int32_t)size <= 0)
-        return (uint32_t)-1;
+        return (uint32_t)WASMOS_ERR_SHMEM_BAD_ARGS;
     uint32_t context_id = 0;
     if (warp_current_context_id(&context_id) != 0 || warp_require_dma_capability(context_id) != 0)
-        return (uint32_t)-1;
+        return (uint32_t)WASMOS_ERR_SHMEM_NO_CAP;
     uint64_t phys_base = 0;
     uint64_t shared_pages = 0;
     if (mm_shared_get_phys(context_id, id, &phys_base, &shared_pages) != 0 || shared_pages == 0 ||
         phys_base == 0)
-        return (uint32_t)-1;
+        return (uint32_t)WASMOS_ERR_SHMEM_BAD_ID;
     if ((uint64_t)size > shared_pages * 0x1000ULL)
-        return (uint32_t)-1;
+        return (uint32_t)WASMOS_ERR_SHMEM_BAD_SIZE;
     /* shmem_refresh writes into a region already committed by shmem_map_auto.
      * Use warp_linear_mem_window (size=0 probe, no ensureLinearSize) instead of
      * getLinearMemoryRegion with a non-zero size, which would trigger
@@ -2184,7 +2189,7 @@ static uint32_t warp_shmem_refresh(uint32_t id, uint32_t wasm_off, uint32_t size
      * limit causing a page fault at the new boundary. */
     uint8_t* dst = warp_linear_mem_window(ctx, wasm_off, size);
     if (!dst)
-        return (uint32_t)-1;
+        return (uint32_t)WASMOS_ERR_SHMEM_NO_WINDOW;
     __builtin_memcpy(dst, ptr_cast(const void, (phys_base | KERNEL_HIGHER_HALF_BASE)), size);
     return 0;
 }

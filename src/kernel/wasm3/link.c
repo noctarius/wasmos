@@ -2110,12 +2110,12 @@ m3ApiRawFunction(wasmos_shmem_create) {
     m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, pages) m3ApiGetArg(int32_t, flags)
 
         if (pages <= 0) {
-        m3ApiReturn(-1);
+        m3ApiReturn(WASMOS_ERR_SHMEM_BAD_ARGS);
     }
 
     process_t* proc = process_get(process_current_pid());
     if (!proc || proc->context_id == 0 || require_dma_capability(proc->context_id) != 0) {
-        m3ApiReturn(-1);
+        m3ApiReturn(WASMOS_ERR_SHMEM_NO_CAP);
     }
 
     uint32_t id = 0;
@@ -2124,7 +2124,7 @@ m3ApiRawFunction(wasmos_shmem_create) {
         (flags > 0) ? (uint32_t)flags : (MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE);
     if (mm_shared_create(proc->context_id, (uint64_t)(uint32_t)pages, create_flags, &id, &phys) !=
         0) {
-        m3ApiReturn(-1);
+        m3ApiReturn(WASMOS_ERR_SHMEM_MAP);
     }
     (void)phys;
     m3ApiReturn((int32_t)id);
@@ -2150,53 +2150,53 @@ m3ApiRawFunction(wasmos_shmem_map) {
         m3ApiGetArg(int32_t, size)
 
             if (id <= 0 || ptr < 0 || size <= 0 || (size & 0xFFF) != 0) {
-        m3ApiReturn(-1);
+        m3ApiReturn(WASMOS_ERR_SHMEM_UNALIGNED);
     }
 
     process_t* proc = process_get(process_current_pid());
     if (!proc || proc->context_id == 0 || require_dma_capability(proc->context_id) != 0) {
-        m3ApiReturn(-1);
+        m3ApiReturn(WASMOS_ERR_SHMEM_NO_CAP);
     }
     mm_context_t* ctx = mm_context_get(proc->context_id);
     if (!ctx || ctx->root_table == 0) {
-        m3ApiReturn(-1);
+        m3ApiReturn(WASMOS_ERR_SHMEM_NO_CAP);
     }
 
     uint64_t phys_base = 0;
     uint64_t shared_pages = 0;
     if (mm_shared_get_phys(proc->context_id, (uint32_t)id, &phys_base, &shared_pages) != 0 ||
         shared_pages == 0) {
-        m3ApiReturn(-1);
+        m3ApiReturn(WASMOS_ERR_SHMEM_BAD_ID);
     }
     uint64_t map_size = (uint64_t)(uint32_t)size;
     uint64_t needed_size = shared_pages * 0x1000ULL;
     if (map_size < needed_size) {
-        m3ApiReturn(-1);
+        m3ApiReturn(WASMOS_ERR_SHMEM_BAD_SIZE);
     }
 
     uint32_t off32 = (uint32_t)ptr;
     uint32_t map_size32 = (uint32_t)size;
     if ((uint64_t)off32 + (uint64_t)map_size32 > (uint64_t)m3_GetMemorySize(runtime)) {
-        m3ApiReturn(-1);
+        m3ApiReturn(WASMOS_ERR_SHMEM_NO_WINDOW);
     }
     uint64_t virt = 0;
     if (wasm_user_va_from_offset(proc->context_id, off32, map_size32, &virt) != 0 ||
         mm_user_range_permitted(proc->context_id, virt, (uint64_t)map_size32,
                                 MEM_REGION_FLAG_WRITE) != 0) {
-        m3ApiReturn(-1);
+        m3ApiReturn(WASMOS_ERR_SHMEM_NO_WINDOW);
     }
     if ((virt & 0xFFFULL) != 0) {
-        m3ApiReturn(-1);
+        m3ApiReturn(WASMOS_ERR_SHMEM_UNALIGNED);
     }
 
     if (mm_context_map_physical(proc->context_id, virt, phys_base, needed_size,
                                 MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE |
                                     MEM_REGION_FLAG_USER) != 0) {
-        m3ApiReturn(-1);
+        m3ApiReturn(WASMOS_ERR_SHMEM_BAD_SIZE);
     }
 
     if (mm_shared_retain(proc->context_id, (uint32_t)id) != 0) {
-        m3ApiReturn(-1);
+        m3ApiReturn(WASMOS_ERR_SHMEM_MAP);
     }
     wasm_shmem_map_track(proc->pid, (uint32_t)id, off32, map_size32);
     m3ApiReturn(0);
@@ -2311,14 +2311,14 @@ m3ApiRawFunction(wasmos_shmem_grant) {
         process_t* proc = process_get(process_current_pid());
     process_t* target = 0;
     if (id <= 0 || target_pid <= 0) {
-        m3ApiReturn(-1);
+        m3ApiReturn(WASMOS_ERR_SHMEM_BAD_ID);
     }
     if (!proc || proc->context_id == 0 || require_dma_capability(proc->context_id) != 0) {
-        m3ApiReturn(-1);
+        m3ApiReturn(WASMOS_ERR_SHMEM_NO_CAP);
     }
     target = process_get((uint32_t)target_pid);
     if (!target || target->context_id == 0) {
-        m3ApiReturn(-1);
+        m3ApiReturn(WASMOS_ERR_SHMEM_NO_CAP);
     }
     m3ApiReturn(mm_shared_grant(proc->context_id, (uint32_t)id, target->context_id));
 }
@@ -2329,14 +2329,14 @@ m3ApiRawFunction(wasmos_shmem_revoke) {
         process_t* proc = process_get(process_current_pid());
     process_t* target = 0;
     if (id <= 0 || target_pid <= 0) {
-        m3ApiReturn(-1);
+        m3ApiReturn(WASMOS_ERR_SHMEM_BAD_ID);
     }
     if (!proc || proc->context_id == 0 || require_dma_capability(proc->context_id) != 0) {
-        m3ApiReturn(-1);
+        m3ApiReturn(WASMOS_ERR_SHMEM_NO_CAP);
     }
     target = process_get((uint32_t)target_pid);
     if (!target || target->context_id == 0) {
-        m3ApiReturn(-1);
+        m3ApiReturn(WASMOS_ERR_SHMEM_NO_CAP);
     }
     m3ApiReturn(mm_shared_revoke(proc->context_id, (uint32_t)id, target->context_id));
 }
@@ -2345,13 +2345,13 @@ m3ApiRawFunction(wasmos_shmem_unmap) {
     m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, id)
 
         if (id <= 0) {
-        m3ApiReturn(-1);
+        m3ApiReturn(WASMOS_ERR_SHMEM_BAD_ARGS);
     }
     /* FIXME: This currently only releases shared-region ownership/refcount.
      * It does not restore the previous linear-memory page mappings. */
     process_t* proc = process_get(process_current_pid());
     if (!proc || proc->context_id == 0) {
-        m3ApiReturn(-1);
+        m3ApiReturn(WASMOS_ERR_SHMEM_NO_CAP);
     }
     wasm_shmem_map_untrack(proc->pid, (uint32_t)id);
     m3ApiReturn(mm_shared_release(proc->context_id, (uint32_t)id));
@@ -2362,36 +2362,36 @@ m3ApiRawFunction(wasmos_shmem_flush) {
         m3ApiGetArg(int32_t, size)
 
             if (id <= 0 || ptr < 0 || size <= 0) {
-        m3ApiReturn(-1);
+        m3ApiReturn(WASMOS_ERR_SHMEM_BAD_ARGS);
     }
 
     process_t* proc = process_get(process_current_pid());
     if (!proc || proc->context_id == 0 || require_dma_capability(proc->context_id) != 0) {
-        m3ApiReturn(-1);
+        m3ApiReturn(WASMOS_ERR_SHMEM_NO_CAP);
     }
 
     uint64_t phys_base = 0;
     uint64_t shared_pages = 0;
     if (mm_shared_get_phys(proc->context_id, (uint32_t)id, &phys_base, &shared_pages) != 0 ||
         shared_pages == 0 || phys_base == 0) {
-        m3ApiReturn(-1);
+        m3ApiReturn(WASMOS_ERR_SHMEM_BAD_ID);
     }
 
     uint32_t mem_size = 0;
     uint8_t* mem_base = m3_GetMemory(runtime, &mem_size, 0);
     if (!mem_base || mem_size == 0) {
-        m3ApiReturn(-1);
+        m3ApiReturn(WASMOS_ERR_SHMEM_NO_WINDOW);
     }
 
     uint32_t off32 = (uint32_t)ptr;
     uint32_t len32 = (uint32_t)size;
     if ((uint64_t)off32 + (uint64_t)len32 > (uint64_t)mem_size) {
-        m3ApiReturn(-1);
+        m3ApiReturn(WASMOS_ERR_SHMEM_NO_WINDOW);
     }
 
     uint64_t max_len = shared_pages * 0x1000ULL;
     if ((uint64_t)len32 > max_len) {
-        m3ApiReturn(-1);
+        m3ApiReturn(WASMOS_ERR_SHMEM_BAD_SIZE);
     }
 
     memcpy(ptr_cast(void, (phys_base | KERNEL_HIGHER_HALF_BASE)), mem_base + off32, (size_t)len32);
@@ -2403,36 +2403,36 @@ m3ApiRawFunction(wasmos_shmem_refresh) {
         m3ApiGetArg(int32_t, size)
 
             if (id <= 0 || ptr < 0 || size <= 0) {
-        m3ApiReturn(-1);
+        m3ApiReturn(WASMOS_ERR_SHMEM_BAD_ARGS);
     }
 
     process_t* proc = process_get(process_current_pid());
     if (!proc || proc->context_id == 0 || require_dma_capability(proc->context_id) != 0) {
-        m3ApiReturn(-1);
+        m3ApiReturn(WASMOS_ERR_SHMEM_NO_CAP);
     }
 
     uint64_t phys_base = 0;
     uint64_t shared_pages = 0;
     if (mm_shared_get_phys(proc->context_id, (uint32_t)id, &phys_base, &shared_pages) != 0 ||
         shared_pages == 0 || phys_base == 0) {
-        m3ApiReturn(-1);
+        m3ApiReturn(WASMOS_ERR_SHMEM_BAD_ID);
     }
 
     uint32_t mem_size = 0;
     uint8_t* mem_base = m3_GetMemory(runtime, &mem_size, 0);
     if (!mem_base || mem_size == 0) {
-        m3ApiReturn(-1);
+        m3ApiReturn(WASMOS_ERR_SHMEM_NO_WINDOW);
     }
 
     uint32_t off32 = (uint32_t)ptr;
     uint32_t len32 = (uint32_t)size;
     if ((uint64_t)off32 + (uint64_t)len32 > (uint64_t)mem_size) {
-        m3ApiReturn(-1);
+        m3ApiReturn(WASMOS_ERR_SHMEM_NO_WINDOW);
     }
 
     uint64_t max_len = shared_pages * 0x1000ULL;
     if ((uint64_t)len32 > max_len) {
-        m3ApiReturn(-1);
+        m3ApiReturn(WASMOS_ERR_SHMEM_BAD_SIZE);
     }
 
     memcpy(mem_base + off32, ptr_cast(void, (phys_base | KERNEL_HIGHER_HALF_BASE)), (size_t)len32);

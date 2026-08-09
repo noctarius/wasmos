@@ -31,7 +31,7 @@ import {
     ipc_select_wait_timeout,
     ipc_send,
 } from "./wasmos_imports";
-import {Future, FutureState, Promise} from "./coroutine";
+import {Box, Coroutine, Future, FutureState, Promise, Runtime, Task} from "./coroutine";
 
 const IPC_FIELD_TYPE: i32 = 0;
 const IPC_FIELD_REQUEST_ID: i32 = 1;
@@ -98,6 +98,11 @@ export abstract class OnMessage {
  * that status. Protocol-specific validation lives here so application state
  * machines never observe a reply of the wrong type.
  */
+/** Work to do each time the loop goes idle; see EventLoop.idle. */
+export abstract class OnIdle {
+    abstract call(): void;
+}
+
 export abstract class ReplyStatus {
     abstract call(reply: IpcMessage): i32;
 }
@@ -137,6 +142,14 @@ export class EventLoop {
     messagePromise: Promise = new Promise();
     messageRecord: IpcMessage = new IpcMessage();
     messageArmed: bool = false;
+    /**
+     * Run by the main pump whenever the loop goes idle, with the idle wait
+     * bounded by idleIntervalMs. This is what a driver whose device events do
+     * NOT arrive as IPC uses to service the hardware: a park per interval
+     * rather than a spin. Left unset, the pump parks indefinitely.
+     */
+    idle: OnIdle|null = null;
+    idleIntervalMs: i32 = 0;
     /* Ring of messages nothing claimed, waiting for receive(). */
     deferred: StaticArray<IpcMessage> = new StaticArray<IpcMessage>(DEFERRED_MAX);
     deferredHead: i32 = 0;
@@ -164,6 +177,8 @@ export class EventLoop {
         this.deferredHead = 0;
         this.deferredCount = 0;
         this.messageArmed = false;
+        this.idle = null;
+        this.idleIntervalMs = 0;
         this.selectId = -1;
         if (receiverEndpoint >= 0) {
             const sel = ipc_select_create();
@@ -587,3 +602,60 @@ export class IpcFuture extends OnMessage {
         }
     }
 }
+
+/**
+ * The process's event loop. A WASM guest is single-threaded and has exactly one,
+ * so it lives here rather than being threaded through every call: the main pump
+ * below has to poll the same loop the coroutine is waiting on, and passing it in
+ * would mean the generated entry point knowing which loop a driver chose.
+ */
+export const defaultLoop: EventLoop = new EventLoop();
+
+/**
+ * Runs `task` as the process's coroutine, pumping until it finishes, and
+ * returns its status -- or the error code it returned, or a failure if the
+ * loop ran out of anything to wait on.
+ *
+ * This is the entry point the @coroutine transform generates a call to for an
+ * exported coroutine, so a driver written as one coroutine needs no pump of its
+ * own. Advance the coroutine as far as it will go, then park in the loop until
+ * something it is waiting for arrives; never spin.
+ */
+export function coroutineMain(task: Task): i32 {
+    const runtime = new Runtime();
+    const coroutine = new Coroutine();
+    const completion = runtime.asyncStart(coroutine, task);
+    if (completion === null) {
+        return -1;
+    }
+
+    while (!completion.poll(null, null)) {
+        runtime.run();
+        if (completion.poll(null, null)) {
+            break;
+        }
+        const idle = defaultLoop.idle;
+        if (idle !== null) {
+            defaultLoop.pollTimeout(POLL_BUDGET, defaultLoop.idleIntervalMs);
+            idle.call();
+        } else if (defaultLoop.poll(POLL_BUDGET) == 0 && !defaultLoop.canBlock()) {
+            /* Nothing arrived and nothing to park on: spinning here would burn
+             * a core for a coroutine that can never be woken. */
+            break;
+        }
+    }
+
+    const status = new Box();
+    const value = new Box();
+    completion.poll(status, value);
+    /* A rejection arrives as the status; a coroutine that returned an error
+     * code arrives as the value. */
+    let result = <i32>status.value;
+    if (result == 0) {
+        result = <i32>value.value;
+    }
+    return result;
+}
+
+/** Messages dispatched per pump iteration before the coroutine is advanced. */
+const POLL_BUDGET: i32 = 8;

@@ -117,6 +117,71 @@ function collectEven(channel: Channel, rounds: i32): i32 {
   return total;
 }
 
+/**
+ * A local whose name also names a PROPERTY somewhere in the body. Hoisting
+ * rewrites references to the local as fields, and it must not touch the
+ * property: `holder.value` is not a reference to a local called `value`.
+ */
+class Holder {
+  value: i32 = 0;
+
+  constructor(value: i32) {
+    this.value = value;
+  }
+}
+
+@coroutine
+function shadowsAProperty(channel: Channel, holder: Holder): i32 {
+  let value: i32 = receive(channel);
+  return value + holder.value;
+}
+
+/**
+ * A suspension whose result is a REFERENCE, not a number. The value comes back
+ * through a Box, which carries a usize, so the lowering has to reinterpret it
+ * rather than numerically cast it -- the two are not interchangeable in asc.
+ * This is what a driver awaiting a message record does.
+ */
+class Payload {
+  n: i32 = 0;
+
+  constructor(n: i32) {
+    this.n = n;
+  }
+}
+
+class PayloadChannel {
+  future: Future = new Future();
+  promise: Promise = new Promise();
+
+  constructor() {
+    this.future.init(this.promise);
+  }
+
+  send(payload: Payload): void {
+    this.promise.resolve(changetype<usize>(payload));
+  }
+}
+
+@suspend
+function receivePayload(channel: PayloadChannel, out: Box): i32 {
+  const status = channel.future.await(out);
+  if (status != AWAIT_PENDING) {
+    channel.future.init(channel.promise);
+  }
+  return status;
+}
+
+@coroutine
+function sumPayloads(channel: PayloadChannel, rounds: i32): i32 {
+  let total: i32 = 0;
+  for (let i: i32 = 0; i < rounds; ++i) {
+    let payload: Payload = receivePayload(channel);
+    total += payload.n;
+  }
+  return total;
+}
+
 /** No suspension at all still has to work. */
 @coroutine
 function noSuspension(a: i32): i32 {
@@ -353,6 +418,45 @@ function testForLoopBreakAndContinue(): i32 {
   return 0;
 }
 
+/** A hoisted local must not be substituted into a property of the same name. */
+function testLocalShadowingAProperty(): i32 {
+  const runtime = new Runtime();
+  const channel = new Channel();
+  const coroutine = new Coroutine();
+  const completion = runtime.asyncStart(coroutine, shadowsAProperty(channel, new Holder(30)));
+  if (completion === null) return 901;
+
+  if (runtime.run() != 1) return 902;
+  channel.send(12);
+  if (runtime.run() != 1) return 903;
+  const value = new Box();
+  if (!completion.poll(null, value)) return 904;
+  if (<i32>value.value != 42) return 905;
+  return 0;
+}
+
+/** A reference-typed result survives the box and the frame. */
+function testReferenceResult(): i32 {
+  const runtime = new Runtime();
+  const channel = new PayloadChannel();
+  const coroutine = new Coroutine();
+  const completion = runtime.asyncStart(coroutine, sumPayloads(channel, 2));
+  if (completion === null) return 1001;
+
+  if (runtime.run() != 1) return 1002;
+  channel.send(new Payload(30));
+  if (runtime.run() != 1) return 1003;
+  /* Parked again inside the loop, holding the running total on its frame. */
+  if (completion.poll(null, null)) return 1004;
+  channel.send(new Payload(12));
+  if (runtime.run() != 1) return 1005;
+
+  const value = new Box();
+  if (!completion.poll(null, value)) return 1006;
+  if (<i32>value.value != 42) return 1007;
+  return 0;
+}
+
 export function runTests(): i32 {
   const cases: StaticArray<TestCase> = [
     testSequentialSuspensions,
@@ -361,6 +465,8 @@ export function runTests(): i32 {
     testControlFlowAroundASuspension,
     testBreakPath,
     testForLoopBreakAndContinue,
+    testLocalShadowingAProperty,
+    testReferenceResult,
     testNoSuspension,
     testRejectionPropagates,
   ];

@@ -113,6 +113,10 @@ const STATUS = "__co_status";
  * file happens to import, so a @coroutine needs no particular import list and a
  * missing one cannot surface as a confusing error inside generated code. The
  * aliases cannot collide with a user's names. */
+/* Only injected when an exported @coroutine needs the main pump, so a module
+ * that merely uses coroutines internally never pulls in the event loop. */
+const MAIN_IMPORT = "import { coroutineMain as __co_main } from \"./eventloop\";\n";
+
 const RUNTIME_IMPORT =
     "import { Task as __co_Task, Box as __co_BoxType, AWAIT_PENDING as __co_AWAIT_PENDING, " +
     "TASK_COMPLETE as __co_TASK_COMPLETE, TASK_YIELDED as __co_TASK_YIELDED } from \"./coroutine\";\n";
@@ -172,10 +176,23 @@ function walk(node, visit) {
  * names and string literals.
  */
 function renderExpression(source, node, hoisted) {
+    /* An identifier that names a PROPERTY is not a reference to anything in
+     * scope: `startup.procEndpoint()` must not become
+     * `startup.this.procEndpoint()` just because a local happens to be called
+     * procEndpoint. Collected structurally rather than by node kind, so it needs
+     * no calibration and covers every node with a `property`. */
+    const properties = new Set();
+    walk(node, (child) => {
+        const property = child.property;
+        if (property && typeof property === "object" && property.range) {
+            properties.add(property.range.start);
+        }
+    });
     const sites = [];
     walk(node, (child) => {
         if (child.kind !== NodeKind.Identifier) return;
         if (!hoisted.has(child.text)) return;
+        if (properties.has(child.range.start)) return;
         sites.push(child.range.start);
     });
     const start = node.range.start;
@@ -204,9 +221,13 @@ function yieldCallIn(node, yieldFunctions) {
 }
 
 class Lowering {
-    constructor(source, declaration, yieldFunctions) {
+    constructor(source, declaration, yieldFunctions, exported) {
         this.source = source;
         this.declaration = declaration;
+        /* Read off the source text rather than a flags bitfield, for the same
+         * reason the node kinds are calibrated: the numbering is not stable
+         * across asc versions. */
+        this.exported = exported;
         this.yieldFunctions = yieldFunctions;
         this.blocks = [[]];
         this.current = 0;
@@ -445,6 +466,12 @@ class Lowering {
         }
     }
 
+    /**
+     * An EXPORTED @coroutine is the module's entry point, so the original
+     * symbol has to keep its signature and actually run: it becomes a wrapper
+     * that hands the task to the process pump. A non-exported one becomes a
+     * factory instead, for a caller that drives it itself.
+     */
     render(className) {
         this.lowerStatements(this.declaration.body.statements);
         /* Falling off the end completes with no value. */
@@ -477,8 +504,18 @@ class Lowering {
         /* The original name survives as a factory returning the Task, so callers
          * write `runtime.asyncStart(co, fetchTwice(a, b))` and never name the
          * generated class. */
-        const factory = `function ${this.declaration.name.text}(${parameters.map((p) => `${p.name}: ${p.type}`).join(", ")}): ${className} {
-    return new ${className}(${parameters.map((p) => p.name).join(", ")});
+        const name = this.declaration.name.text;
+        const signature = parameters.map((p) => `${p.name}: ${p.type}`).join(", ");
+        const arguments_ = parameters.map((p) => p.name).join(", ");
+        const returnType = textOf(this.source, this.declaration.signature.returnType);
+
+        const factory = this.exported
+            ? `export function ${name}(${signature}): ${returnType} {
+    return __co_main(new ${className}(${arguments_}));
+}
+`
+            : `function ${name}(${signature}): ${className} {
+    return new ${className}(${arguments_});
 }
 `;
 
@@ -528,20 +565,28 @@ export default class CoroutineTransform extends Transform {
                     fail(source, declaration, "a @coroutine needs a body");
                 }
                 const className = `__Coroutine_${declaration.name.text}`;
-                const lowering = new Lowering(source, declaration, yieldFunctions);
+                /* The decorator precedes the modifier in the statement's text,
+                 * so the test is on the header up to the parameter list rather
+                 * than on the first token. */
+                const header = textOf(source, statement);
+                const exported = /\bexport\s+function\b/.test(
+                    header.slice(0, header.indexOf("(") + 1));
+                const lowering = new Lowering(source, declaration, yieldFunctions, exported);
                 rewrites.push({
                     start: statement.range.start,
                     end: statement.range.end,
                     text: lowering.render(className),
+                    exported,
                 });
             }
             if (!rewrites.length) continue;
 
-            let text = RUNTIME_IMPORT + source.text;
+            const needsMain = rewrites.some((r) => r.exported);
+            let text = RUNTIME_IMPORT + (needsMain ? MAIN_IMPORT : "") + source.text;
             /* WASMOS_COROUTINE_DUMP=1 prints the generated machine, which is the
              * only practical way to see what a @coroutine actually became. */
             const dump = process.env.WASMOS_COROUTINE_DUMP;
-            const shift = RUNTIME_IMPORT.length;
+            const shift = RUNTIME_IMPORT.length + (needsMain ? MAIN_IMPORT.length : 0);
             for (const rewrite of rewrites.sort((a, b) => b.start - a.start)) {
                 text = text.slice(0, rewrite.start + shift) + rewrite.text +
                        text.slice(rewrite.end + shift);

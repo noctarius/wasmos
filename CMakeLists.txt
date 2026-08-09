@@ -2346,31 +2346,6 @@ add_custom_target(run-kernel-unit-tests
           -x none
           -o ${BUILD_DIR}/test_hostcall_ipc
   COMMAND ${BUILD_DIR}/test_hostcall_ipc
-  # The Go binding, on wasm32. Unlike the Rust and Zig suites -- which run on
-  # the host against coroutine_wasm.c, valid because their layouts are computed
-  # per target -- Go models every record as an opaque blob sized for wasm32, so
-  # a host test would exercise a different ABI. TinyGo builds it against the
-  # same target JSON the Go examples use (which already compiles
-  # coroutine_wasm.c in), and node runs it. Skipped when TinyGo is absent, the
-  # same condition that disables the Go examples.
-  COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/go_coroutine_test_src
-  COMMAND ${CMAKE_COMMAND} -E copy_if_different ${LIBC_DIR}/go/coroutine.go
-          ${BUILD_DIR}/go_coroutine_test_src/coroutine.go
-  COMMAND ${CMAKE_COMMAND} -E copy_if_different ${LIBC_DIR}/go/wasmos.go
-          ${BUILD_DIR}/go_coroutine_test_src/wasmos.go
-  COMMAND ${CMAKE_COMMAND} -E copy_if_different
-          ${CMAKE_SOURCE_DIR}/tests/unit/test_wasm_coroutine.go
-          ${BUILD_DIR}/go_coroutine_test_src/test_wasm_coroutine.go
-  # tinygo refuses an absolute package path, and this target's working directory
-  # is the source root, so run it from the build directory.
-  COMMAND ${CMAKE_COMMAND} -E chdir ${BUILD_DIR}
-          ${CMAKE_COMMAND} -E env GO111MODULE=off ${WASMOS_UNIT_TINYGO}
-          build -target=${BUILD_DIR}/wasmos-tinygo.json
-          -opt=z -no-debug -panic=trap -scheduler=none -gc=leaking
-          -o ${BUILD_DIR}/test_wasm_coroutine_go.wasm
-          ./go_coroutine_test_src
-  COMMAND ${WASMOS_UNIT_NODE} ${CMAKE_SOURCE_DIR}/tests/unit/go/run_go_test.mjs
-          ${BUILD_DIR}/test_wasm_coroutine_go.wasm test_wasm_coroutine_go
   # The wasm32 struct sizes src/libc/go/coroutine.go hardcodes as opaque
   # [N]uint32 blobs. Go cannot express the C layout, so nothing checks these at
   # the language level and an undersized blob is heap corruption rather than a
@@ -2447,6 +2422,43 @@ add_custom_target(run-kernel-unit-tests
           --outFile ${BUILD_DIR}/test_as_coroutine_transform.wasm
   COMMAND ${WASMOS_UNIT_NODE} ${CMAKE_SOURCE_DIR}/tests/unit/as/run_as_test.mjs
           ${BUILD_DIR}/test_as_coroutine_transform.wasm test_as_coroutine_transform
+  VERBATIM)
+
+# Its own command, and guarded: the comment below always claimed the Go test is
+# skipped when TinyGo is absent, but nothing enforced that, so a machine without
+# TinyGo failed the whole suite with a bare "no such file or directory" -- which
+# is exactly how CI broke. CI installs TinyGo, so it still runs there.
+if (WASMOS_UNIT_TINYGO)
+  add_custom_command(TARGET run-kernel-unit-tests POST_BUILD
+  # The Go binding, on wasm32. Unlike the Rust and Zig suites -- which run on
+  # the host against coroutine_wasm.c, valid because their layouts are computed
+  # per target -- Go models every record as an opaque blob sized for wasm32, so
+  # a host test would exercise a different ABI. TinyGo builds it against the
+  # same target JSON the Go examples use (which already compiles
+  # coroutine_wasm.c in), and node runs it. Skipped when TinyGo is absent, the
+  # same condition that disables the Go examples.
+  COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/go_coroutine_test_src
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different ${LIBC_DIR}/go/coroutine.go
+          ${BUILD_DIR}/go_coroutine_test_src/coroutine.go
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different ${LIBC_DIR}/go/wasmos.go
+          ${BUILD_DIR}/go_coroutine_test_src/wasmos.go
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_wasm_coroutine.go
+          ${BUILD_DIR}/go_coroutine_test_src/test_wasm_coroutine.go
+  # tinygo refuses an absolute package path, and this target's working directory
+  # is the source root, so run it from the build directory.
+  COMMAND ${CMAKE_COMMAND} -E chdir ${BUILD_DIR}
+          ${CMAKE_COMMAND} -E env GO111MODULE=off ${WASMOS_UNIT_TINYGO}
+          build -target=${BUILD_DIR}/wasmos-tinygo.json
+          -opt=z -no-debug -panic=trap -scheduler=none -gc=leaking
+          -o ${BUILD_DIR}/test_wasm_coroutine_go.wasm
+          ./go_coroutine_test_src
+  COMMAND ${WASMOS_UNIT_NODE} ${CMAKE_SOURCE_DIR}/tests/unit/go/run_go_test.mjs
+          ${BUILD_DIR}/test_wasm_coroutine_go.wasm test_wasm_coroutine_go
+  VERBATIM)
+endif ()
+
+add_custom_command(TARGET run-kernel-unit-tests POST_BUILD
   # The poll hub on its own. Its only outward call is ipc_select_signal, so the
   # test stubs that and asserts exactly which sets a notify reaches.
   COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions

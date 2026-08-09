@@ -38,9 +38,18 @@ jobs:
             | tar -xJ
           echo "$PWD/zig-x86_64-linux-${ZIG_VERSION}" >> "$GITHUB_PATH"
 
+      # The Go coroutine test runs on wasm32 through TinyGo, because Go models
+      # every record as an opaque blob sized for that target -- a host build
+      # would exercise a different ABI. Without TinyGo the unit suite silently
+      # loses the one test that catches Go binding drift.
+      - name: Install TinyGo
+        run: |
+          curl -fsSLO "https://github.com/tinygo-org/tinygo/releases/download/v${TINYGO_VERSION}/tinygo_${TINYGO_VERSION}_amd64.deb"
+          sudo dpkg -i "tinygo_${TINYGO_VERSION}_amd64.deb"
+
       - name: Install AssemblyScript
         # asc is required at configure time (AssemblyScript serial driver);
-        # rustc is preinstalled on the runner; TinyGo skips gracefully.
+        # rustc is preinstalled on the runner.
         run: |
           npm install
           echo "$PWD/node_modules/.bin" >> "$GITHUB_PATH"

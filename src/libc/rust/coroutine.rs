@@ -265,6 +265,12 @@ impl Runtime {
 }
 
 impl Future {
+    /// True while at least one continuation is still registered on this
+    /// future. Used to check that a settled group released its losers.
+    pub fn has_continuations(&self) -> bool {
+        !self.continuations.is_null()
+    }
+
     pub const fn new() -> Self {
         unsafe { core::mem::zeroed() }
     }
@@ -358,6 +364,24 @@ impl Continuation {
 }
 
 impl FutureGroup {
+    /// Number of source callbacks that have run. A settled race or fail-fast
+    /// all leaves this at 1: the rest were discarded, not merely outvoted.
+    /// Zig and AssemblyScript expose the field directly; Rust keeps the struct
+    /// private, so the same observation is available through here.
+    pub fn completed(&self) -> usize {
+        self.completed
+    }
+
+    /// True until the group settles and releases its remaining sources.
+    pub fn active(&self) -> bool {
+        self.active
+    }
+
+    /// True once the group future has been resolved or rejected.
+    pub fn settled(&self) -> bool {
+        self.settled
+    }
+
     pub const fn new() -> Self {
         unsafe { core::mem::zeroed() }
     }

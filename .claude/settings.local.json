@@ -196,7 +196,32 @@
       "Bash(awk '/### Result representation/{p=1} p{print} p&&/^### [A-Z]/&&!/Result representation/{c++} c==1{exit}' docs/architecture/34-abi-idl-and-error-model.md)",
       "Bash(< 0)",
       "Bash(nm build/kernel.elf)",
-      "Bash(awk '$1<=\"ffffffff8021ebf5\"')"
+      "Bash(awk '$1<=\"ffffffff8021ebf5\"')",
+      "Bash(/opt/homebrew/opt/llvm/bin/clang -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions -DWASMOS_HOST_TEST_SMP=1 -iquote src/kernel/include -iquote libs/wasm3/source -iquote abi/generated/c -c src/kernel/ipc.c -o /private/tmp/claude-501/-Volumes-git-wasmos/352db52b-c664-4ce8-8523-4e59e562750d/scratchpad/ipc.o)",
+      "Bash(/opt/homebrew/opt/llvm/bin/clang -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions -DWASMOS_HOST_TEST_SMP=1 -iquote src/kernel/include -iquote libs/wasm3/source -iquote abi/generated/c tests/unit/test_ipc.c src/kernel/ipc.c src/kernel/poll.c src/kernel/sched_event.c src/kernel/list.c src/kernel/list_linked.c src/kernel/list_array_chunk.c src/kernel/kmem.c tests/unit/stubs_slab.c tests/unit/stubs_spinlock.c -o /private/tmp/claude-501/-Volumes-git-wasmos/352db52b-c664-4ce8-8523-4e59e562750d/scratchpad/test_ipc)",
+      "Bash(/private/tmp/claude-501/-Volumes-git-wasmos/352db52b-c664-4ce8-8523-4e59e562750d/scratchpad/test_ipc)",
+      "Bash(/opt/homebrew/opt/llvm/bin/clang -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions -DWASMOS_HOST_TEST_SMP=1 -DWASMOS_IPC_TEST_SEAMS=1 -iquote src/kernel/include -iquote libs/wasm3/source -iquote abi/generated/c tests/unit/test_ipc.c src/kernel/ipc.c src/kernel/poll.c src/kernel/sched_event.c src/kernel/list.c src/kernel/list_linked.c src/kernel/list_array_chunk.c src/kernel/kmem.c tests/unit/stubs_slab.c tests/unit/stubs_spinlock.c -o /private/tmp/claude-501/-Volumes-git-wasmos/352db52b-c664-4ce8-8523-4e59e562750d/scratchpad/test_ipc)",
+      "Bash(/opt/homebrew/opt/llvm/bin/clang -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions -iquote src/kernel/include -iquote abi/generated/c tests/unit/test_poll.c src/kernel/poll.c -o /private/tmp/claude-501/-Volumes-git-wasmos/352db52b-c664-4ce8-8523-4e59e562750d/scratchpad/test_poll)",
+      "Bash(/opt/homebrew/opt/llvm/bin/clang -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions -DWASMOS_HOST_TEST_SMP=1 -include src/libc/include/wasmos_cast.h -iquote src/kernel/include -iquote libs/wasm3/source -iquote abi/generated/c tests/unit/test_futex.c src/kernel/futex.c src/kernel/sched_event.c tests/unit/stubs_spinlock.c -o /private/tmp/claude-501/-Volumes-git-wasmos/352db52b-c664-4ce8-8523-4e59e562750d/scratchpad/test_futex)",
+      "Bash(/private/tmp/claude-501/-Volumes-git-wasmos/352db52b-c664-4ce8-8523-4e59e562750d/scratchpad/test_futex)",
+      "Bash(/opt/homebrew/opt/llvm/bin/clang -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions -DWASMOS_HOST_TEST_SMP=1 -DWASMOS_FUTEX_TEST_SEAMS=1 -include src/libc/include/wasmos_cast.h -iquote src/kernel/include -iquote libs/wasm3/source -iquote abi/generated/c tests/unit/test_futex.c src/kernel/futex.c src/kernel/sched_event.c tests/unit/stubs_spinlock.c -o /private/tmp/claude-501/-Volumes-git-wasmos/352db52b-c664-4ce8-8523-4e59e562750d/scratchpad/test_futex)",
+      "Bash(./scripts/quality.sh format *)",
+      "Bash(echo \"FMT_EXIT=$?\")",
+      "Bash(./scripts/quality.sh lint *)",
+      "Bash(echo \"LINT_EXIT=$?\")",
+      "Bash(echo \"QEMU_EXIT=$?\")",
+      "Bash(/opt/homebrew/opt/llvm/bin/clang -std=c11 -w -DWASMOS_HOST_TEST_SMP=1 -include src/libc/include/wasmos_cast.h -iquote src/kernel/include -iquote libs/wasm3/source -iquote abi/generated/c -c src/kernel/syscall.c -o /private/tmp/claude-501/-Volumes-git-wasmos/352db52b-c664-4ce8-8523-4e59e562750d/scratchpad/syscall.o)",
+      "Bash(grep -v '^_\\\\?\\\\\\(memcpy\\\\|memset\\\\|strlen\\\\\\)$')",
+      "Bash(/opt/homebrew/opt/llvm/bin/clang -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions -DWASMOS_HOST_TEST_SMP=1 -include src/libc/include/wasmos_cast.h -iquote src/kernel/include -iquote libs/wasm3/source -iquote abi/generated/c tests/unit/test_syscall_ipc.c src/kernel/syscall.c src/kernel/ipc.c src/kernel/poll.c src/kernel/sched_event.c src/kernel/list.c src/kernel/list_linked.c src/kernel/list_array_chunk.c src/kernel/kmem.c tests/unit/stubs_slab.c tests/unit/stubs_spinlock.c -o /private/tmp/claude-501/-Volumes-git-wasmos/352db52b-c664-4ce8-8523-4e59e562750d/scratchpad/test_syscall_ipc)",
+      "Bash(/private/tmp/claude-501/-Volumes-git-wasmos/352db52b-c664-4ce8-8523-4e59e562750d/scratchpad/test_syscall_ipc)",
+      "Bash(/opt/homebrew/opt/llvm/bin/clang -std=c11 -w -DWASMOS_HOST_TEST_SMP=1 -include src/libc/include/wasmos_cast.h -iquote src/kernel/include -iquote libs/wasm3/source -iquote abi/generated/c tests/unit/test_syscall_ipc.c src/kernel/syscall.c src/kernel/ipc.c src/kernel/poll.c src/kernel/sched_event.c src/kernel/list.c src/kernel/list_linked.c src/kernel/list_array_chunk.c src/kernel/kmem.c tests/unit/stubs_slab.c tests/unit/stubs_spinlock.c -o /private/tmp/claude-501/-Volumes-git-wasmos/352db52b-c664-4ce8-8523-4e59e562750d/scratchpad/tsi_dbg)",
+      "Bash(/private/tmp/claude-501/-Volumes-git-wasmos/352db52b-c664-4ce8-8523-4e59e562750d/scratchpad/tsi_dbg)",
+      "Bash(DBG=1 /private/tmp/claude-501/-Volumes-git-wasmos/352db52b-c664-4ce8-8523-4e59e562750d/scratchpad/tsi_dbg)",
+      "Bash(/opt/homebrew/opt/llvm/bin/clang -std=c11 -w -I src/libsys/wasm/include -I src/libc/include -I src/drivers/include -I abi/generated/c -c /private/tmp/claude-501/-Volumes-git-wasmos/352db52b-c664-4ce8-8523-4e59e562750d/scratchpad/probe.c -o /private/tmp/claude-501/-Volumes-git-wasmos/352db52b-c664-4ce8-8523-4e59e562750d/scratchpad/probe.o)",
+      "Bash(/opt/homebrew/opt/llvm/bin/clang -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions -I src/libsys/wasm/include -I src/libc/include -I src/drivers/include -I abi/generated/c tests/unit/test_libsys_event_loop.c -o /private/tmp/claude-501/-Volumes-git-wasmos/352db52b-c664-4ce8-8523-4e59e562750d/scratchpad/test_libsys_event_loop)",
+      "Bash(/opt/homebrew/opt/llvm/bin/clang -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions -iquote src/libsys/wasm/include -iquote src/libc/include -iquote src/drivers/include -iquote abi/generated/c tests/unit/test_libsys_event_loop.c -o /private/tmp/claude-501/-Volumes-git-wasmos/352db52b-c664-4ce8-8523-4e59e562750d/scratchpad/test_libsys_event_loop)",
+      "Bash(echo \"FMT=$?\")",
+      "Bash(echo \"LINT=$?\")"
     ]
   }
 }

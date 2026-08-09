@@ -38,7 +38,7 @@ static void sched_timeout_arm(thread_t* t, uint64_t deadline_tick) {
     if (deadline_tick == 0) {
         deadline_tick = 1; /* 0 is reserved for "no timeout" */
     }
-    t->sched_timeout_tick = deadline_tick;
+    __atomic_store_n(&t->sched_timeout_tick, deadline_tick, __ATOMIC_RELEASE);
     __atomic_fetch_add(&g_sched_timeout_arm_seq, 1u, __ATOMIC_ACQ_REL);
     /* Atomically lower the hint so it never sits above this deadline, even when
      * sched_timeout_check() publishes a recomputed bound concurrently. */
@@ -95,16 +95,17 @@ void sched_timeout_check(void) {
     uint64_t next = (uint64_t)-1;
     for (uint32_t i = 0; i < THREAD_MAX_COUNT; ++i) {
         thread_t* t = thread_table_at(i);
-        uint64_t d = t ? t->sched_timeout_tick : 0;
+        uint64_t d = t ? __atomic_load_n(&t->sched_timeout_tick, __ATOMIC_ACQUIRE) : 0;
         if (d == 0) {
             continue;
         }
         if (t->state != THREAD_STATE_BLOCKED) {
-            t->sched_timeout_tick = 0; /* stale: already woken some other way */
+            /* stale: already woken some other way */
+            __atomic_store_n(&t->sched_timeout_tick, 0u, __ATOMIC_RELEASE);
             continue;
         }
         if (d <= now) {
-            t->sched_timeout_tick = 0;
+            __atomic_store_n(&t->sched_timeout_tick, 0u, __ATOMIC_RELEASE);
             sched_timeout_fire(t);
         } else if (d < next) {
             next = d;
@@ -184,8 +185,14 @@ void sched_event_wait(sched_event_t* ev, uint32_t timeout_ms) {
     process_yield(PROCESS_RUN_BLOCKED);
 
     /* Resumed (woken by a waker, a timeout, or an abort): disarm any pending
-     * timeout so a stale deadline can't fire on a future blocking transition. */
-    t->sched_timeout_tick = 0;
+     * timeout so a stale deadline can't fire on a future blocking transition.
+     *
+     * Atomic like every other access to this field. It has three writers that
+     * share no lock -- the waker here holds ev->lock, this resume path holds
+     * nothing, and sched_timeout_check scans it from another CPU -- so the
+     * plain stores were a data race even though every one of them writes 0.
+     * Found by the TSan arm of tests/unit/test_ipc_concurrency.c. */
+    __atomic_store_n(&t->sched_timeout_tick, 0u, __ATOMIC_RELEASE);
 }
 
 /* Detach one waiter from its event and make it runnable.  Caller holds
@@ -196,7 +203,8 @@ static void sched_event_detach_wake(thread_t* t, uint64_t data, sched_pend_state
      * event lock (it has to, to know which lock to take), so a plain store
      * here is a mixed-atomicity access to the same field. */
     __atomic_store_n(&t->wait_event, (sched_event_t*)0, __ATOMIC_RELEASE);
-    t->sched_timeout_tick = 0; /* woken normally; cancel any armed timeout */
+    /* woken normally; cancel any armed timeout */
+    __atomic_store_n(&t->sched_timeout_tick, 0u, __ATOMIC_RELEASE);
     t->pend_state = (uint32_t)pend;
     t->pend_data = data;
     sched_wake_thread(t);

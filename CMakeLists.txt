@@ -2243,6 +2243,25 @@ add_custom_target(run-kernel-unit-tests
           ${CMAKE_SOURCE_DIR}/tests/unit/stubs_spinlock.c
           -o ${BUILD_DIR}/test_ipc
   COMMAND ${BUILD_DIR}/test_ipc
+  # The id-addressed object table, the pattern ipc.c had written out longhand
+  # twice. Its id allocation, per-owner quota and release-by-owner are each
+  # something a bug has already come from, so they are tested on the component
+  # rather than only through its users.
+  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
+          -DWASMOS_HOST_TEST_SMP=1 -DWASMOS_IDTABLE_TEST_SEAMS=1
+          -include ${LIBC_DIR}/include/wasmos_cast.h
+          -iquote ${KERNEL_DIR}/include
+          -iquote ${CMAKE_SOURCE_DIR}/abi/generated/c
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_idtable.c
+          ${KERNEL_DIR}/idtable.c
+          ${KERNEL_DIR}/list.c
+          ${KERNEL_DIR}/list_linked.c
+          ${KERNEL_DIR}/list_array_chunk.c
+          ${KERNEL_DIR}/kmem.c
+          ${CMAKE_SOURCE_DIR}/tests/unit/stubs_slab.c
+          ${CMAKE_SOURCE_DIR}/tests/unit/stubs_spinlock.c
+          -o ${BUILD_DIR}/test_idtable
+  COMMAND ${BUILD_DIR}/test_idtable
   # The IPC syscalls, driving x86_syscall_handler with a real syscall_frame_t
   # against the real ipc.c. Reply authenticity and the 32-bit-clean argument
   # rule are enforced only here, and were previously covered only by klog string

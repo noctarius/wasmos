@@ -157,6 +157,14 @@ typedef struct {
 whose `wait_list` can hold multiple blocked receiver threads.  `poll_struct`
 is allocated lazily when the first select set targets this endpoint.
 
+The endpoint and select tables are both id-addressed, owner-scoped object
+tables: they grow out of kmem, skip live ids when the id counter wraps, are
+bounded per owning context (`IPC_ENDPOINT_PER_CONTEXT_MAX`,
+`IPC_SELECT_PER_CONTEXT_MAX`) so one context cannot starve every other, and are
+released wholesale when a context dies.  Both are currently hand-written; the
+shared component and the obligations it encodes are in
+[Kernel Object Tables](35-kernel-object-tables.md).
+
 #### IPC Receive Variants
 
 **`ipc_recv_for(ctx, ep, out)`** — non-blocking.  Returns `IPC_OK` if a message

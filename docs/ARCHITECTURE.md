@@ -94,6 +94,9 @@ in-kernel scheduler rather than an optional mode.
 - [Coroutines, Futures, and Promises](architecture/32-coroutines-futures-promises.md) - proposed user-space coroutine/future/promise runtime (verified against the implementation); future/promise model replaces synchronous IPC; one shared future contract over separate native (stackful) and WASM (fiber/stackless) coroutine cores; §52 spike revisits the WASM-stackless conclusion with a green-thread (M:1) mechanism that suspends WASM guests at the host-call boundary with the engines untouched, unifying all languages (incl. AssemblyScript) and giving the AS gap a first-class fix
 - [Completion Ports](architecture/33-completion-ports.md) - proposed kernel-owned, bounded completion queues with notification doorbells; a batched completion source for the future/promise runtime and high-rate networking operations
 
+### Kernel Building Blocks
+- [Kernel Object Tables](architecture/35-kernel-object-tables.md) - the id-addressed, owner-scoped object table (`idtable_t`): the five obligations any table of id-referenced kernel objects owes its callers (grow on demand, never reuse a live id, never hand out a reserved one, bound each owner, release by owner), each of which has already cost a bug when written out by hand; and what the component deliberately leaves to its caller (locking, above all)
+
 ### Tooling and ABI
 - [ABI IDL, Code Generation, and Error Model](architecture/34-abi-idl-and-error-model.md) - proposed single-source-of-truth IDL that generates the WASM host-call, IPC opcode, and error-code surfaces across wasm3/WARP(JIT+AOT) and all language variants; Zircon/Mach-style layered error model with a generated domain registry
 

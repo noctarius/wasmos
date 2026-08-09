@@ -201,7 +201,7 @@ set(WASM_HELLO_ZIG_APP ${BUILD_DIR}/hello_zig.wap)
 set(WASM_CALCULATOR_SRC ${EXAMPLES_ZIG_DIR}/calculator/calculator.zig)
 set(WASM_CALCULATOR_WASM ${BUILD_DIR}/calculator.wasm)
 set(WASM_CALCULATOR_APP ${BUILD_DIR}/calculator.wap)
-set(AS_HELLO_SRC ${EXAMPLES_AS_DIR}/hello/hello.ts)
+set(AS_HELLO_SRC ${EXAMPLES_AS_DIR}/hello/app.ts)
 set(AS_HELLO_WASM ${BUILD_DIR}/hello_as.wasm)
 set(AS_HELLO_APP ${BUILD_DIR}/hello_as.wap)
 set(AS_MINESWEEPER_SRC ${EXAMPLES_AS_DIR}/minesweeper/app.ts)
@@ -2372,6 +2372,26 @@ add_custom_target(run-kernel-unit-tests
           --outFile ${BUILD_DIR}/test_as_coroutine.wasm
   COMMAND ${WASMOS_UNIT_NODE} ${CMAKE_SOURCE_DIR}/tests/unit/as/run_as_test.mjs
           ${BUILD_DIR}/test_as_coroutine.wasm test_as_coroutine
+  # The AssemblyScript event loop and its IPC-future bridge, against the fake
+  # IPC fabric in the harness. asc resolves imports relative to the entry and
+  # has no include path, so the test is staged flat beside the modules it
+  # imports -- the same staging the real AS build does.
+  COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/as_eventloop_test_src
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different
+          ${LIBC_DIR}/assemblyscript/coroutine.ts ${BUILD_DIR}/as_eventloop_test_src/coroutine.ts
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different
+          ${LIBC_DIR}/assemblyscript/eventloop.ts ${BUILD_DIR}/as_eventloop_test_src/eventloop.ts
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different
+          ${CMAKE_SOURCE_DIR}/abi/generated/assemblyscript/wasmos_imports.ts
+          ${BUILD_DIR}/as_eventloop_test_src/wasmos_imports.ts
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_as_eventloop.ts
+          ${BUILD_DIR}/as_eventloop_test_src/test_as_eventloop.ts
+  COMMAND ${WASMOS_UNIT_ASC} ${BUILD_DIR}/as_eventloop_test_src/test_as_eventloop.ts
+          --target release -O --runtime stub
+          --outFile ${BUILD_DIR}/test_as_eventloop.wasm
+  COMMAND ${WASMOS_UNIT_NODE} ${CMAKE_SOURCE_DIR}/tests/unit/as/run_as_test.mjs
+          ${BUILD_DIR}/test_as_eventloop.wasm test_as_eventloop
   # The poll hub on its own. Its only outward call is ipc_select_signal, so the
   # test stubs that and asserts exactly which sets a notify reaches.
   COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions

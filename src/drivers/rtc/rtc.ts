@@ -1,10 +1,30 @@
+/* CMOS real-time clock driver.
+ *
+ * The driver is one coroutine, and it IS the entry point: registration, the
+ * ready notification and the request loop read top to bottom, and every point
+ * where it waits is a call that suspends. Because initialize() is exported,
+ * tools/as_coroutine_transform.mjs keeps its signature and hands the lowered
+ * task to libc's pump, which owns the coroutine runtime.
+ *
+ * What this replaced, and why. Registration was a blocking ipc_recv on the
+ * SERVICE endpoint -- send, then receive until the reply turned up, discarding
+ * anything else -- so a client's read request landing in that window was dropped
+ * and its sender waited forever. The loop dispatches it now. The failure paths
+ * returned a bare -1 across the entry-point boundary; they return packed
+ * driver-domain codes.
+ */
+
 import {std, startup} from "./wasmos";
+import {defaultLoop, EventLoop, IpcFuture, IpcMessage, ReplyStatus} from "./eventloop";
+import {AWAIT_PENDING, Box} from "./coroutine";
 import {
+    WASMOS_ERR_DRIVER_ENDPOINT_CREATE,
+    WASMOS_ERR_DRIVER_REGISTER,
     WASMOS_ERR_NONE,
     WASMOS_ERR_RTC_INVALID,
-    WASMOS_ERR_RTC_IO,
     WASMOS_ERR_RTC_TIMEOUT,
 } from "./wasmos_status";
+import {io_in8, io_out8, io_wait, ipc_create_endpoint, ipc_send} from "./wasmos_imports";
 
 const CMOS_INDEX_PORT: i32 = 0x70;
 const CMOS_DATA_PORT: i32 = 0x71;
@@ -19,61 +39,38 @@ const RTC_IPC_READ_RESP: i32 = 0x8a0;
 const RTC_IPC_SET_RESP: i32 = 0x8a1;
 const RTC_IPC_ERROR: i32 = 0x8ff;
 
+const RTC_NAME_PACKED: i32 = 0x00637472; /* "rtc\0" */
 
-@external("wasmos", "io_in8") declare function io_in8(port: i32): i32;
-
-
-@external("wasmos", "io_out8") declare function io_out8(port: i32, value: i32): i32;
-
-
-@external("wasmos", "io_wait") declare function io_wait(): i32;
-
-
-@external("wasmos", "ipc_recv") declare function ipc_recv(endpoint: i32): i32;
-
-
-@external("wasmos", "ipc_create_endpoint") declare function ipc_create_endpoint(): i32;
-
-
-@external("wasmos", "ipc_last_field") declare function ipc_last_field(field: i32): i32;
-
-
-@external("wasmos", "ipc_send")
-declare function ipc_send(
-    dest: i32,
-    src: i32,
-    type: i32,
-    req_id: i32,
-    arg0: i32,
-    arg1: i32,
-    arg2: i32,
-    arg3: i32,
-): i32;
-
-
-@external("wasmos", "sched_yield") declare function sched_yield(): i32;
-
+const g_loop: EventLoop = defaultLoop;
 let g_rtc_ep: i32 = -1;
+/* One scratch record, reused. `--runtime stub` is a bump allocator with no
+ * collector, so a StaticArray allocated per request would leak for the life of
+ * a driver that runs forever. */
+const g_values: StaticArray<i32> = new StaticArray<i32>(6);
 
-function ipcSendRetry(
-    dest: i32,
-    src: i32,
-    type: i32,
-    reqId: i32,
-    arg0: i32,
-    arg1: i32,
-    arg2: i32,
-    arg3: i32,
-): i32 {
-    for (let i = 0; i < 512; ++i) {
-        let rc = ipc_send(dest, src, type, reqId, arg0, arg1, arg2, arg3);
-        if (rc == 0) {
-            return 0;
-        }
-        sched_yield();
+// --------------------------------------------------------------- suspensions
+
+/**
+ * Wait for the next message no handler claimed. The re-arm belongs here: a
+ * coroutine resumes by re-running this call, so the future must still be
+ * settled at that moment and pending again before the next wait.
+ */
+@suspend
+function awaitMessage(loop: EventLoop, out: Box): i32 {
+    const status = loop.nextMessage().await(out);
+    if (status != AWAIT_PENDING) {
+        loop.rearmMessage();
     }
-    return -1;
+    return status;
 }
+
+/** Wait for a request's reply. */
+@suspend
+function awaitReply(request: IpcFuture, out: Box): i32 {
+    return request.future.await(out);
+}
+
+// ---------------------------------------------------------------------- CMOS
 
 function rtcReadReg(reg: i32): i32 {
     io_out8(CMOS_INDEX_PORT, reg & 0x7f);
@@ -96,9 +93,11 @@ function binToBcd(v: i32): i32 {
     return (((v / 10) & 0x0f) << 4) | (v % 10);
 }
 
+/* Bounded hardware wait on the update-in-progress flag: there is nothing to
+ * park on, and the bound is the timeout. */
 function waitNotUpdating(): bool {
     for (let i = 0; i < 10000; ++i) {
-        let a = rtcReadReg(0x0a);
+        const a = rtcReadReg(0x0a);
         if ((a & 0x80) == 0) {
             return true;
         }
@@ -130,12 +129,12 @@ function packDate(outVals: StaticArray<i32>): i32 {
 }
 
 function validateTime(vals: StaticArray<i32>): bool {
-    let sec = unchecked(vals[0]);
-    let min = unchecked(vals[1]);
-    let hour = unchecked(vals[2]);
-    let day = unchecked(vals[3]);
-    let mon = unchecked(vals[4]);
-    let year = unchecked(vals[5]);
+    const sec = unchecked(vals[0]);
+    const min = unchecked(vals[1]);
+    const hour = unchecked(vals[2]);
+    const day = unchecked(vals[3]);
+    const mon = unchecked(vals[4]);
+    const year = unchecked(vals[5]);
     return (
         sec >= 0 &&
         sec <= 59 &&
@@ -163,15 +162,15 @@ function readTime(outVals: StaticArray<i32>): i32 {
     let day = rtcReadReg(0x07);
     let mon = rtcReadReg(0x08);
     let year = rtcReadReg(0x09);
-    let regB = rtcReadReg(0x0b);
+    const regB = rtcReadReg(0x0b);
 
-    let isBinary = (regB & 0x04) != 0;
-    let is24Hour = (regB & 0x02) != 0;
+    const isBinary = (regB & 0x04) != 0;
+    const is24Hour = (regB & 0x02) != 0;
 
     if (!isBinary) {
         sec = bcdToBin(sec);
         min = bcdToBin(min);
-        let hourRaw = hour;
+        const hourRaw = hour;
         hour = bcdToBin(hourRaw & 0x7f);
         if (!is24Hour && (hourRaw & 0x80) != 0) {
             hour = (hour + 12) % 24;
@@ -207,19 +206,19 @@ function setTime(vals: StaticArray<i32>): i32 {
 
     let sec = unchecked(vals[0]);
     let min = unchecked(vals[1]);
-    let hour = unchecked(vals[2]);
     let day = unchecked(vals[3]);
     let mon = unchecked(vals[4]);
-    let fullYear = unchecked(vals[5]);
+    const hour = unchecked(vals[2]);
+    const fullYear = unchecked(vals[5]);
     let year = fullYear % 100;
 
-    let regB = rtcReadReg(0x0b);
-    let isBinary = (regB & 0x04) != 0;
-    let is24Hour = (regB & 0x02) != 0;
+    const regB = rtcReadReg(0x0b);
+    const isBinary = (regB & 0x04) != 0;
+    const is24Hour = (regB & 0x02) != 0;
 
     let hourReg = hour;
     if (!is24Hour) {
-        let isPm = hour >= 12;
+        const isPm = hour >= 12;
         let h12 = hour % 12;
         if (h12 == 0) {
             h12 = 12;
@@ -239,7 +238,7 @@ function setTime(vals: StaticArray<i32>): i32 {
         if (is24Hour) {
             hourReg = binToBcd(hourReg);
         } else {
-            let pmBit = hourReg & 0x80;
+            const pmBit = hourReg & 0x80;
             hourReg = binToBcd(hourReg & 0x7f) | pmBit;
         }
     }
@@ -255,80 +254,108 @@ function setTime(vals: StaticArray<i32>): i32 {
     return WASMOS_ERR_NONE;
 }
 
-function handleMessage(): void {
-    if (ipc_recv(g_rtc_ep) != 1) {
+// ------------------------------------------------------------------ protocol
+
+function serveRequest(msg: IpcMessage): void {
+    if (msg.source < 0) {
         return;
     }
 
-    let type = ipc_last_field(0);
-    let reqId = ipc_last_field(1);
-    let source = ipc_last_field(4);
-
-    if (source < 0) {
-        return;
-    }
-
-    if (type == RTC_IPC_READ_REQ) {
-        let vals = new StaticArray<i32>(6);
-        let rc = readTime(vals);
+    if (msg.type == RTC_IPC_READ_REQ) {
+        const rc = readTime(g_values);
         if (rc != WASMOS_ERR_NONE) {
-            ipc_send(source, g_rtc_ep, RTC_IPC_ERROR, reqId, rc, 0, 0, 0);
+            ipc_send(msg.source, g_rtc_ep, RTC_IPC_ERROR, msg.requestId, rc, 0, 0, 0);
             return;
         }
-        ipc_send(source, g_rtc_ep, RTC_IPC_READ_RESP, reqId, packTime(vals), packDate(vals), 0, 0);
+        ipc_send(
+            msg.source,
+            g_rtc_ep,
+            RTC_IPC_READ_RESP,
+            msg.requestId,
+            packTime(g_values),
+            packDate(g_values),
+            0,
+            0,
+        );
         return;
     }
 
-    if (type == RTC_IPC_SET_REQ) {
-        let vals = new StaticArray<i32>(6);
-        unpackTime(ipc_last_field(2), ipc_last_field(3), vals);
-        let rc = setTime(vals);
+    if (msg.type == RTC_IPC_SET_REQ) {
+        unpackTime(msg.arg0, msg.arg1, g_values);
+        const rc = setTime(g_values);
         if (rc != WASMOS_ERR_NONE) {
-            ipc_send(source, g_rtc_ep, RTC_IPC_ERROR, reqId, rc, 0, 0, 0);
+            ipc_send(msg.source, g_rtc_ep, RTC_IPC_ERROR, msg.requestId, rc, 0, 0, 0);
             return;
         }
-        ipc_send(source, g_rtc_ep, RTC_IPC_SET_RESP, reqId, WASMOS_ERR_NONE, 0, 0, 0);
+        ipc_send(msg.source, g_rtc_ep, RTC_IPC_SET_RESP, msg.requestId, WASMOS_ERR_NONE, 0, 0, 0);
         return;
     }
 
-    // Unrecognised type: ignore it, exactly like the keyboard/mouse/serial
-    // drivers do.  Anything landing here is an unsolicited message (e.g. PM's
-    // PROC_IPC_RESP ack for our NOTIFY_READY, or a stray PROC_IPC_ERROR) rather
-    // than a real RTC request.  Bouncing RTC_IPC_ERROR back at `source` would
-    // ping-pong forever with PM's own error path and peg a CPU.
+    /* Unrecognised type: ignore it, exactly like the keyboard and mouse drivers
+     * do. Anything landing here is unsolicited rather than a real RTC request,
+     * and bouncing RTC_IPC_ERROR back at the sender would ping-pong forever
+     * with the process manager's own error path and peg a CPU. */
 }
 
-export function initialize(procEndpoint: i32, _arg1: i32, _arg2: i32, _arg3: i32): i32 {
-    // proc.endpoint now comes from the spawn-info contract, not an entry arg.
-    procEndpoint = startup.procEndpoint();
+/** The registry's reply is only useful if it reports success. */
+class RegisterReply extends ReplyStatus {
+    call(reply: IpcMessage): i32 {
+        return reply.type == SVC_IPC_REGISTER_RESP && reply.arg0 == 0
+            ? 0
+            : WASMOS_ERR_DRIVER_REGISTER;
+    }
+}
+
+// ------------------------------------------------------------- the whole job
+
+/**
+ * The driver, in order. Each await is a point where it stops and the process
+ * parks; between them this is ordinary code.
+ */
+@coroutine
+export function initialize(_proc_endpoint: i32, _arg1: i32, _arg2: i32, _arg3: i32): i32 {
+    // proc.endpoint comes from the spawn-info contract, not an entry arg.
+    let procEndpoint: i32 = startup.procEndpoint();
+
     g_rtc_ep = ipc_create_endpoint();
     if (g_rtc_ep < 0) {
         std.printf("[rtc] endpoint failure\n");
-        return -1;
+        return WASMOS_ERR_DRIVER_ENDPOINT_CREATE;
     }
+    g_loop.init(g_rtc_ep, 1);
 
-    let reqId = 1;
-    let rtcName = 0x00637472; /* "rtc\\0" */
-    if (ipcSendRetry(procEndpoint, g_rtc_ep, SVC_IPC_REGISTER_REQ, reqId, rtcName, 0, 0, 0) != 0) {
-        std.printf("[rtc] register send failure\n");
-        return -1;
-    }
+    let registration: IpcFuture = new IpcFuture(new RegisterReply());
     if (
-        ipc_recv(g_rtc_ep) != 1 ||
-        ipc_last_field(0) != SVC_IPC_REGISTER_RESP ||
-        ipc_last_field(1) != reqId ||
-        ipc_last_field(2) != 0
+        registration.send(
+            g_loop,
+            procEndpoint,
+            g_rtc_ep,
+            SVC_IPC_REGISTER_REQ,
+            RTC_NAME_PACKED,
+            0,
+            0,
+            0,
+        ) === null
     ) {
-        std.printf("[rtc] register failure\n");
-        return -1;
+        std.printf("[rtc] register send failure\n");
+        return WASMOS_ERR_DRIVER_REGISTER;
     }
+    /* Client traffic racing the handshake is dispatched while this waits, rather
+     * than dropped. Reaching the next line IS the success case: a rejected await
+     * fails the coroutine rather than returning. */
+    let registered: i32 = awaitReply(registration);
 
     std.printf("[rtc] driver ready\n");
-    ipc_send(procEndpoint, g_rtc_ep, PROC_IPC_NOTIFY_READY, 0, 0, 0, 0, 0);
 
-    for (;;) {
-        handleMessage();
+    /* The process manager acks this; awaiting the ack consumes it rather than
+     * leaving it to arrive later as an unrecognised message. */
+    let ready: IpcFuture = new IpcFuture(null);
+    if (ready.send(g_loop, procEndpoint, g_rtc_ep, PROC_IPC_NOTIFY_READY, 0, 0, 0, 0) !== null) {
+        let acked: i32 = awaitReply(ready);
     }
 
-    return 0;
+    for (;;) {
+        let msg: IpcMessage = awaitMessage(g_loop);
+        serveRequest(msg);
+    }
 }

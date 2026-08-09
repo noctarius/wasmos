@@ -1,4 +1,5 @@
 import os
+import re
 import sys
 import unittest
 
@@ -45,6 +46,14 @@ class CliIntegrationTests(unittest.TestCase):
 
     def test_help_lists_commands(self):
         self._cmd_expect("help", b"commands:")
+
+    def test_date_reads_the_rtc(self):
+        """End-to-end over the RTC driver: `date` looks the service up, sends
+        RTC_IPC_READ_REQ and formats the reply. This is the only client of that
+        driver, so it is what proves its request path, not just that it starts.
+        Asserted on the shape (a 4-digit year and a HH:MM:SS), since the value
+        is whatever the host clock says."""
+        self._cmd_expect("date", re.compile(rb"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}"))
 
     def test_ps_lists_processes(self):
         self._cmd_expect(

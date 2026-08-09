@@ -1,4 +1,23 @@
 #!/usr/bin/env python3
+"""Boot QEMU and assert the ring3 smoke markers appear before halt.
+
+The markers exist only in a kernel built with the `WASMOS_RING3_SMOKE=ON` CMake
+option, which compiles in the probe processes. This script does not set it:
+`run-qemu-ring3-test` configures a separate shadow tree with
+`--define WASMOS_RING3_SMOKE=ON` (`_ring3_shadow_cmd` in CMakeLists.txt) and
+points the script at that tree's ESP. Run that target.
+
+Reading a failure:
+
+- Every marker missing — the ESP came from a tree without the option, so the
+  probes were never compiled.
+- One or two missing — the probes ran; the failure is real.
+- A vector-match marker missing while its `exit status` sibling fires — the
+  probe ran and faulted, and the expected exception vector is what is wrong.
+  Some vectors are emulator-dependent under TCG; see the ring3-fault-db note in
+  arch/x86_64/cpu_x86_64.c.
+"""
+
 import argparse
 import os
 

@@ -378,11 +378,268 @@ function testContracts(): i32 {
   return 0;
 }
 
+// ------------------------------------------- cases 5-8: native-suite parity
+//
+// tests/unit/test_native_coroutine.c covers these and the WASM suites did not.
+// None of them depend on the stackful model, so they apply here unchanged.
+
+const WAITER_COUNT: i32 = 4;
+
+class ManyWaiterTask extends Task {
+  pc: i32 = 0;
+  status: i32 = 0;
+  value: usize = 0;
+  private box: Box = new Box();
+
+  constructor(private future: Future) {
+    super();
+  }
+
+  resume(out: Box): i32 {
+    if (this.pc == 0) {
+      this.pc = 1;
+      this.status = this.future.await(this.box);
+      if (this.status == AWAIT_PENDING) return TASK_YIELDED;
+    } else {
+      this.status = this.future.await(this.box);
+      if (this.status == AWAIT_PENDING) return TASK_YIELDED;
+    }
+    this.value = this.box.value;
+    out.value = this.value;
+    return this.status;
+  }
+}
+
+/* Several coroutines parked on ONE future. The runtime keeps them on a
+ * singly-linked wait list spliced at settle time; with a single waiter that
+ * loop body runs once and `next` is always null, so nothing exercised it. */
+function testMultipleWaiters(): i32 {
+  for (let failing = 0; failing < 2; ++failing) {
+    const runtime = new Runtime();
+    const future = new Future();
+    const promise = new Promise();
+    future.init(promise);
+    const tasks = new StaticArray<ManyWaiterTask>(WAITER_COUNT);
+    const coroutines = new StaticArray<Coroutine>(WAITER_COUNT);
+    for (let i = 0; i < WAITER_COUNT; ++i) {
+      tasks[i] = new ManyWaiterTask(future);
+      coroutines[i] = new Coroutine();
+      if (runtime.asyncStart(coroutines[i], tasks[i]) === null) return 510 + failing;
+    }
+    /* Every waiter parks on the first drain. */
+    if (runtime.run() != WAITER_COUNT) return 520 + failing;
+    if (failing == 0) {
+      if (!promise.resolve(77)) return 530;
+    } else {
+      if (!promise.reject(-31)) return 531;
+    }
+    /* Settling wakes ALL of them, so the second drain resumes each once. */
+    if (runtime.run() != WAITER_COUNT) return 540 + failing;
+    for (let i = 0; i < WAITER_COUNT; ++i) {
+      if (coroutines[i].state != CoroutineState.Dead) return 550 + failing;
+      if (failing == 0) {
+        if (tasks[i].status != 0) return 560;
+        if (tasks[i].value != 77) return 561;
+      } else {
+        if (tasks[i].status != -31) return 570;
+        if (tasks[i].value != 0) return 571;
+      }
+    }
+  }
+  return 0;
+}
+
+class TargetTask extends Task {
+  pc: i32 = 0;
+  resume(out: Box): i32 {
+    if (this.pc == 0) {
+      this.pc = 1;
+      return TASK_YIELDED;
+    }
+    out.value = 23;
+    return TASK_COMPLETE;
+  }
+}
+
+class JoinerTask extends Task {
+  status: i32 = 0;
+  result: usize = 0;
+  pc: i32 = 0;
+  private box: Box = new Box();
+
+  constructor(private target: Coroutine) {
+    super();
+  }
+
+  resume(out: Box): i32 {
+    this.status = this.target.join(this.box);
+    if (this.status == AWAIT_PENDING) {
+      this.pc = 1;
+      return TASK_YIELDED;
+    }
+    this.result = this.box.value;
+    return 0;
+  }
+}
+
+/* The same wait list, reached through a coroutine's completion future. */
+function testMultipleJoiners(): i32 {
+  const runtime = new Runtime();
+  const target = new Coroutine();
+  if (runtime.asyncStart(target, new TargetTask()) === null) return 610;
+  const joiners = new StaticArray<Coroutine>(WAITER_COUNT);
+  const tasks = new StaticArray<JoinerTask>(WAITER_COUNT);
+  for (let i = 0; i < WAITER_COUNT; ++i) {
+    joiners[i] = new Coroutine();
+    tasks[i] = new JoinerTask(target);
+    if (runtime.asyncStart(joiners[i], tasks[i]) === null) return 611;
+  }
+  if (runtime.run() < 0) return 612;
+  for (let i = 0; i < WAITER_COUNT; ++i) {
+    if (joiners[i].state != CoroutineState.Dead) return 620;
+    if (tasks[i].status != 0) return 621;
+    /* Every joiner sees the target's return value, not just the first. */
+    if (tasks[i].result != 23) return 622;
+  }
+  if (target.state != CoroutineState.Dead) return 623;
+  return 0;
+}
+
+const STRESS_COUNT: i32 = 8;
+const STRESS_YIELDS: i32 = 4;
+
+class StressTask extends Task {
+  private remaining: i32 = STRESS_YIELDS;
+  constructor(private counter: Box) {
+    super();
+  }
+  resume(out: Box): i32 {
+    if (this.remaining > 0) {
+      this.remaining--;
+      return TASK_YIELDED;
+    }
+    this.counter.value++;
+    out.value = 0;
+    return TASK_COMPLETE;
+  }
+}
+
+/* Round-robin fairness at scale: the exact resume count is the schedule, so a
+ * queue that starved or double-scheduled anyone changes it. */
+function testSchedulerStress(): i32 {
+  const runtime = new Runtime();
+  const completed = new Box();
+  const coroutines = new StaticArray<Coroutine>(STRESS_COUNT);
+  for (let i = 0; i < STRESS_COUNT; ++i) {
+    coroutines[i] = new Coroutine();
+    if (runtime.asyncStart(coroutines[i], new StressTask(completed)) === null) return 710;
+  }
+  if (runtime.run() != STRESS_COUNT * (STRESS_YIELDS + 1)) return 711;
+  if (<i32>completed.value != STRESS_COUNT) return 712;
+  const status = new Box();
+  const value = new Box();
+  for (let i = 0; i < STRESS_COUNT; ++i) {
+    if (!coroutines[i].completion.poll(status, value)) return 720;
+    if (<i32>status.value != 0) return 721;
+    if (value.value != 0) return 722;
+  }
+  return 0;
+}
+
+/* A callback that re-enters run() and registers a further continuation. */
+class ReentrantCallback extends OnSuccess {
+  runResult: i32 = 0;
+  nestedChild: Future | null = null;
+
+  constructor(
+    private runtime: Runtime,
+    private settled: Future,
+    private nested: Continuation
+  ) {
+    super();
+  }
+
+  call(value: usize, out: Box): i32 {
+    this.runResult = this.runtime.run();
+    this.nestedChild = this.runtime.then(
+      this.settled,
+      this.nested,
+      new Increment(),
+      null
+    );
+    out.value = value;
+    return this.nestedChild !== null ? 0 : -1;
+  }
+}
+
+class RespawnTask extends Task {
+  constructor(private runs: Box) {
+    super();
+  }
+  resume(out: Box): i32 {
+    this.runs.value++;
+    out.value = 0;
+    return TASK_COMPLETE;
+  }
+}
+
+function testReentrancyRespawnAndPendingPoll(): i32 {
+  const runtime = new Runtime();
+  const source = new Future();
+  const sourcePromise = new Promise();
+  const settled = new Future();
+  const settledPromise = new Promise();
+  const continuation = new Continuation();
+  const nested = new Continuation();
+  source.init(sourcePromise);
+  settled.init(settledPromise);
+
+  /* poll() on a PENDING future reports nothing, leaving the boxes alone. */
+  const status = new Box();
+  const value = new Box();
+  status.value = 123;
+  value.value = 456;
+  if (source.poll(status, value)) return 810;
+  if (status.value != 123) return 811;
+  if (value.value != 456) return 812;
+
+  if (!settledPromise.resolve(9)) return 820;
+  const callback = new ReentrantCallback(runtime, settled, nested);
+  if (runtime.then(source, continuation, callback, null) === null) return 821;
+  if (!sourcePromise.resolve(7)) return 822;
+  if (runtime.run() != 0) return 823;
+  /* run() from inside a dispatched callback is refused, not recursed. */
+  if (callback.runResult != -1) return 824;
+  const nestedChild = callback.nestedChild;
+  if (nestedChild === null) return 825;
+  /* A continuation registered from inside a callback still settles. */
+  if (!nestedChild.poll(status, value)) return 826;
+  if (value.value != 10) return 827;
+
+  /* A DEAD coroutine record may be reused; asyncStart accepts New or Dead. */
+  const respawnRuntime = new Runtime();
+  const coroutine = new Coroutine();
+  const runs = new Box();
+  if (respawnRuntime.asyncStart(coroutine, new RespawnTask(runs)) === null) return 830;
+  if (respawnRuntime.asyncStart(coroutine, new RespawnTask(runs)) !== null) return 831;
+  if (respawnRuntime.run() != 1) return 832;
+  if (runs.value != 1) return 833;
+  if (coroutine.state != CoroutineState.Dead) return 834;
+  if (respawnRuntime.asyncStart(coroutine, new RespawnTask(runs)) === null) return 835;
+  if (respawnRuntime.run() != 1) return 836;
+  if (runs.value != 2) return 837;
+  return 0;
+}
+
 /** 0 if every case passed, else the failing case's marker. */
 export function runTests(): i32 {
   let rc = testYieldAwaitAndJoin();
   if (rc == 0) rc = testFutureChainsAndDeferredCallbacks();
   if (rc == 0) rc = testRaceAndAll();
   if (rc == 0) rc = testContracts();
+  if (rc == 0) rc = testMultipleWaiters();
+  if (rc == 0) rc = testMultipleJoiners();
+  if (rc == 0) rc = testSchedulerStress();
+  if (rc == 0) rc = testReentrancyRespawnAndPendingPoll();
   return rc;
 }

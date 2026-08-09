@@ -3,6 +3,8 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "test_shuffle.h"
+
 #include "device_manager_rules.h"
 
 static void test_always_spawn_rule(void) {
@@ -65,10 +67,15 @@ static void test_legacy_rule_is_rejected(void) {
 }
 
 int main(void) {
-    test_always_spawn_rule();
-    test_block_fs_rule();
-    test_pci_match_rule();
-    test_legacy_rule_is_rejected();
+    /* Randomized order: a case that leaks state must not be able to make its
+     * neighbour pass. Replay a failure with WASMOS_TEST_SEED. */
+    static const wasmos_test_void_case_t cases[] = {
+        WASMOS_TEST_CASE(test_always_spawn_rule),
+        WASMOS_TEST_CASE(test_block_fs_rule),
+        WASMOS_TEST_CASE(test_pci_match_rule),
+        WASMOS_TEST_CASE(test_legacy_rule_is_rejected),
+    };
+    (void)wasmos_test_run_all_void(cases, (int)(sizeof(cases) / sizeof(cases[0])));
     printf("test_device_manager_rules: ok\n");
     return 0;
 }

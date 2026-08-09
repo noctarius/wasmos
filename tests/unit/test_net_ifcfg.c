@@ -3,6 +3,8 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "test_shuffle.h"
+
 #include "net_stack_ifcfg.h"
 
 static void test_dhcp_stanza(void) {
@@ -138,19 +140,24 @@ static void test_dns_caps_at_max(void) {
 }
 
 int main(void) {
-    test_dhcp_stanza();
-    test_static_dotted();
-    test_static_prefix_form();
-    test_prefix_30();
-    test_first_stanza_wins();
-    test_static_missing_address_is_invalid();
-    test_empty_and_comments_only();
-    test_rejects_bad_octet();
-    test_no_trailing_newline();
-    test_no_dns_defaults_empty();
-    test_static_with_dns();
-    test_dhcp_with_dns_override();
-    test_dns_caps_at_max();
+    /* Randomized order: a case that leaks state must not be able to make its
+     * neighbour pass. Replay a failure with WASMOS_TEST_SEED. */
+    static const wasmos_test_void_case_t cases[] = {
+        WASMOS_TEST_CASE(test_dhcp_stanza),
+        WASMOS_TEST_CASE(test_static_dotted),
+        WASMOS_TEST_CASE(test_static_prefix_form),
+        WASMOS_TEST_CASE(test_prefix_30),
+        WASMOS_TEST_CASE(test_first_stanza_wins),
+        WASMOS_TEST_CASE(test_static_missing_address_is_invalid),
+        WASMOS_TEST_CASE(test_empty_and_comments_only),
+        WASMOS_TEST_CASE(test_rejects_bad_octet),
+        WASMOS_TEST_CASE(test_no_trailing_newline),
+        WASMOS_TEST_CASE(test_no_dns_defaults_empty),
+        WASMOS_TEST_CASE(test_static_with_dns),
+        WASMOS_TEST_CASE(test_dhcp_with_dns_override),
+        WASMOS_TEST_CASE(test_dns_caps_at_max),
+    };
+    (void)wasmos_test_run_all_void(cases, (int)(sizeof(cases) / sizeof(cases[0])));
     printf("test_net_ifcfg: ok\n");
     return 0;
 }

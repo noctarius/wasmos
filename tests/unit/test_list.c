@@ -1,6 +1,8 @@
 #include "list.h"
 #include <stdint.h>
 
+#include "test_shuffle.h"
+
 typedef struct {
     uint32_t in_use;
     uint32_t value;
@@ -174,21 +176,17 @@ static int test_array_chunk_grow_remove_reuse(void) {
 }
 
 int main(void) {
-    int rc = 0;
-    rc = test_init_validation();
-    if (rc != 0)
-        return rc;
-    rc = test_linked_alloc_iterate();
-    if (rc != 0)
-        return rc;
-    rc = test_array_chunk_alloc_iterate();
-    if (rc != 0)
-        return rc;
-    rc = test_linked_remove();
-    if (rc != 0)
-        return rc;
-    rc = test_array_chunk_grow_remove_reuse();
-    if (rc != 0)
-        return rc;
+    /* Randomized order: a case that leaks state must not be able to make its
+     * neighbour pass. Replay a failure with WASMOS_TEST_SEED. */
+    static const wasmos_test_case_t cases[] = {
+        WASMOS_TEST_CASE(test_init_validation),
+        WASMOS_TEST_CASE(test_linked_alloc_iterate),
+        WASMOS_TEST_CASE(test_array_chunk_alloc_iterate),
+        WASMOS_TEST_CASE(test_linked_remove),
+        WASMOS_TEST_CASE(test_array_chunk_grow_remove_reuse),
+    };
+    if (wasmos_test_run_all(cases, (int)(sizeof(cases) / sizeof(cases[0]))) != 0) {
+        return 1;
+    }
     return 0;
 }

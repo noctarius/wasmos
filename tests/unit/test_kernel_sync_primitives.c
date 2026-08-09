@@ -4,6 +4,8 @@
 #include <stdint.h>
 #include <stdio.h>
 
+#include "test_shuffle.h"
+
 /* <sched.h> on the -I path resolves to the kernel's own sched.h (which has no
  * libc prototype), and sched_yield() is not reliably declared by the other
  * system headers across platforms (it happens to be on macOS but not under
@@ -280,13 +282,18 @@ static void test_semaphore_release_rejects_overflow(void) {
 }
 
 int main(void) {
-    test_mutex_try_lock_and_unlock();
-    test_mutex_try_lock_fails_under_contention();
-    test_mutex_lock_waits_until_released_by_other_thread();
-    test_mutex_unlock_rejects_non_owner();
-    test_semaphore_try_acquire_and_release();
-    test_semaphore_acquire_blocks_until_release();
-    test_semaphore_release_rejects_overflow();
+    /* Randomized order: a case that leaks state must not be able to make its
+     * neighbour pass. Replay a failure with WASMOS_TEST_SEED. */
+    static const wasmos_test_void_case_t cases[] = {
+        WASMOS_TEST_CASE(test_mutex_try_lock_and_unlock),
+        WASMOS_TEST_CASE(test_mutex_try_lock_fails_under_contention),
+        WASMOS_TEST_CASE(test_mutex_lock_waits_until_released_by_other_thread),
+        WASMOS_TEST_CASE(test_mutex_unlock_rejects_non_owner),
+        WASMOS_TEST_CASE(test_semaphore_try_acquire_and_release),
+        WASMOS_TEST_CASE(test_semaphore_acquire_blocks_until_release),
+        WASMOS_TEST_CASE(test_semaphore_release_rejects_overflow),
+    };
+    (void)wasmos_test_run_all_void(cases, (int)(sizeof(cases) / sizeof(cases[0])));
     printf("test_kernel_sync_primitives: ok\n");
     return 0;
 }

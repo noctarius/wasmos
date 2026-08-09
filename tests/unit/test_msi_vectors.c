@@ -9,6 +9,8 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "test_shuffle.h"
+
 #include "msi_vectors.h"
 
 #define TEST_VECTORS MSI_VECTOR_COUNT
@@ -192,17 +194,24 @@ static void test_null_table_is_tolerated(void) {
 }
 
 int main(void) {
-    test_alloc_hands_out_distinct_vectors();
-    test_alloc_exhaustion_is_reported();
-    test_dispatch_reaches_the_owner_with_its_index();
-    test_dispatch_of_a_free_vector_is_inert();
-    test_dispatch_out_of_range_is_inert();
-    test_failed_delivery_is_reported();
-    test_free_stops_delivery_and_recycles();
-    test_free_rejects_non_owner_and_bad_vector();
-    test_release_context_drops_only_its_own();
-    test_null_table_is_tolerated();
-
+    /* Randomized order: a case that leaks state must not be able to make its
+     * neighbour pass. Replay a failure with WASMOS_TEST_SEED. */
+    static const wasmos_test_void_case_t cases[] = {
+        WASMOS_TEST_CASE(test_alloc_hands_out_distinct_vectors),
+        WASMOS_TEST_CASE(test_alloc_exhaustion_is_reported),
+        WASMOS_TEST_CASE(test_dispatch_reaches_the_owner_with_its_index),
+        WASMOS_TEST_CASE(test_dispatch_of_a_free_vector_is_inert),
+        WASMOS_TEST_CASE(test_dispatch_out_of_range_is_inert),
+        WASMOS_TEST_CASE(test_failed_delivery_is_reported),
+        WASMOS_TEST_CASE(test_free_stops_delivery_and_recycles),
+        WASMOS_TEST_CASE(test_free_rejects_non_owner_and_bad_vector),
+        WASMOS_TEST_CASE(test_release_context_drops_only_its_own),
+        WASMOS_TEST_CASE(test_null_table_is_tolerated),
+    };
+    const uint64_t seed = wasmos_test_run_all_void(cases, (int)(sizeof(cases) / sizeof(cases[0])));
     printf("test_msi_vectors: %d passed, %d failed\n", g_checks - g_failures, g_failures);
+    if (g_failures != 0) {
+        wasmos_test_report_seed(seed);
+    }
     return g_failures == 0 ? 0 : 1;
 }

@@ -19,6 +19,8 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "test_shuffle.h"
+
 #include "sched.h"
 #include "thread.h"
 #include "arch/x86_64/smp.h"
@@ -550,15 +552,24 @@ int main(void) {
 #endif
         {"X1 soak", test_soak},
     };
-    for (unsigned i = 0; i < sizeof(tests) / sizeof(tests[0]); ++i) {
+    /* Randomized order: a case that leaks state must not be able to make its
+     * neighbour pass. Replay a failure with WASMOS_TEST_SEED. */
+    const int test_count = (int)(sizeof(tests) / sizeof(tests[0]));
+    int order[WASMOS_TEST_MAX_CASES];
+    const uint64_t seed = wasmos_test_shuffle(order, test_count);
+
+    for (int i = 0; i < test_count; ++i) {
         int before = g_failures;
-        printf("  ... %s\n", tests[i].name);
+        printf("  ... %s\n", tests[order[i]].name);
         fflush(stdout);
-        tests[i].fn();
+        tests[order[i]].fn();
         if (g_failures != before) {
-            printf("[fail] %s\n", tests[i].name);
+            printf("[fail] %s\n", tests[order[i]].name);
         }
     }
     printf("test_sched_concurrency(smp=%d): %d checks, %d failures\n", NCPU, g_checks, g_failures);
+    if (g_failures != 0) {
+        wasmos_test_report_seed(seed);
+    }
     return g_failures == 0 ? 0 : 1;
 }

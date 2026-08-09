@@ -22,6 +22,8 @@
 #include <cstring>
 #include <initializer_list>
 
+#include "test_shuffle.h"
+
 extern "C" {
 #include "ipc.h"
 #include "process.h"
@@ -539,7 +541,15 @@ int main(void) {
     reset();
 
     int divergences = 0;
-    for (const Scenario& sc : k_scenarios) {
+    /* Randomized order: these scenarios share the fake IPC fabric through
+     * reset(), so one leaving state behind must not be able to make the next
+     * pass. Replay a failure with WASMOS_TEST_SEED. */
+    const int scenario_count = (int)(sizeof(k_scenarios) / sizeof(k_scenarios[0]));
+    int order[WASMOS_TEST_MAX_CASES];
+    const uint64_t seed = wasmos_test_shuffle(order, scenario_count);
+
+    for (int i = 0; i < scenario_count; ++i) {
+        const Scenario& sc = k_scenarios[order[i]];
         reset();
         int32_t w3 = sc.run(k_wasm3);
         reset();
@@ -574,5 +584,8 @@ int main(void) {
            sizeof(k_scenarios) / sizeof(k_scenarios[0]));
 
     printf("test_hostcall_ipc: %d checks, %d failures\n", g_checks, g_failures);
+    if (g_failures != 0) {
+        wasmos_test_report_seed(seed);
+    }
     return g_failures == 0 ? 0 : 1;
 }

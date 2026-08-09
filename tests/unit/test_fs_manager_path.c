@@ -3,6 +3,8 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "test_shuffle.h"
+
 #include "fs_manager_path.h"
 
 static int32_t route_and_select_backend(const char* path, int32_t path_len,
@@ -300,27 +302,32 @@ static void test_backend_selection_unknown_mount_fails(void) {
 }
 
 int main(void) {
-    test_absolute_root_path_matches_boot();
-    test_absolute_boot_path_is_routed_and_trimmed();
-    test_absolute_init_path_is_routed_and_trimmed();
-    test_absolute_mount_path_without_tail_routes_to_root();
-    test_relative_boot_path_is_routed_and_trimmed();
-    test_relative_mount_path_without_tail_routes_to_root();
-    test_unknown_mount_is_not_routed();
-    test_case_insensitive_mount_match();
-    test_prefix_collision_does_not_match_mount();
-    test_double_slash_tail_is_preserved();
-    test_relative_is_rejected_when_disallowed();
-    test_relative_non_mount_falls_through();
-    test_mount_only_variants_map_to_root();
-    test_out_buffer_size_boundaries();
-    test_invalid_inputs_are_rejected();
-    test_null_mount_entries_are_skipped();
-    test_duplicate_mount_names_use_first_match();
-    test_backend_selection_absolute_boot();
-    test_backend_selection_absolute_init();
-    test_backend_selection_relative_boot();
-    test_backend_selection_unknown_mount_fails();
+    /* Randomized order: a case that leaks state must not be able to make its
+     * neighbour pass. Replay a failure with WASMOS_TEST_SEED. */
+    static const wasmos_test_void_case_t cases[] = {
+        WASMOS_TEST_CASE(test_absolute_root_path_matches_boot),
+        WASMOS_TEST_CASE(test_absolute_boot_path_is_routed_and_trimmed),
+        WASMOS_TEST_CASE(test_absolute_init_path_is_routed_and_trimmed),
+        WASMOS_TEST_CASE(test_absolute_mount_path_without_tail_routes_to_root),
+        WASMOS_TEST_CASE(test_relative_boot_path_is_routed_and_trimmed),
+        WASMOS_TEST_CASE(test_relative_mount_path_without_tail_routes_to_root),
+        WASMOS_TEST_CASE(test_unknown_mount_is_not_routed),
+        WASMOS_TEST_CASE(test_case_insensitive_mount_match),
+        WASMOS_TEST_CASE(test_prefix_collision_does_not_match_mount),
+        WASMOS_TEST_CASE(test_double_slash_tail_is_preserved),
+        WASMOS_TEST_CASE(test_relative_is_rejected_when_disallowed),
+        WASMOS_TEST_CASE(test_relative_non_mount_falls_through),
+        WASMOS_TEST_CASE(test_mount_only_variants_map_to_root),
+        WASMOS_TEST_CASE(test_out_buffer_size_boundaries),
+        WASMOS_TEST_CASE(test_invalid_inputs_are_rejected),
+        WASMOS_TEST_CASE(test_null_mount_entries_are_skipped),
+        WASMOS_TEST_CASE(test_duplicate_mount_names_use_first_match),
+        WASMOS_TEST_CASE(test_backend_selection_absolute_boot),
+        WASMOS_TEST_CASE(test_backend_selection_absolute_init),
+        WASMOS_TEST_CASE(test_backend_selection_relative_boot),
+        WASMOS_TEST_CASE(test_backend_selection_unknown_mount_fails),
+    };
+    (void)wasmos_test_run_all_void(cases, (int)(sizeof(cases) / sizeof(cases[0])));
     printf("test_fs_manager_path: ok\n");
     return 0;
 }

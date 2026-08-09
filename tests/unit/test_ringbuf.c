@@ -15,6 +15,8 @@
 #include <pthread.h>
 #include <sched.h>
 
+#include "test_shuffle.h"
+
 /* Counted assertion for the high-volume tests (sweep / exhaustive / fuzz):
  * bumps a global tally so the suite can report how many checks it ran, and
  * bails to the caller's __LINE__ on failure like the rest of the file. */
@@ -1110,43 +1112,40 @@ static int test_fuzz_records(void) {
     return 0;
 }
 
-#define RUN(fn)                                                                                    \
-    do {                                                                                           \
-        groups++;                                                                                  \
-        if ((rc = fn()) != 0) {                                                                    \
-            fprintf(stderr, "test_ringbuf: FAIL %s at line %d\n", #fn, rc);                        \
-            return rc;                                                                             \
-        }                                                                                          \
-    } while (0)
-
 int main(void) {
-    int rc;
-    int groups = 0;
-    RUN(test_bytes_for_and_layout);
-    RUN(test_reject_bad_params);
-    RUN(test_attach_matches_init);
-    RUN(test_write_read_and_flow_control);
-    RUN(test_wraparound_payload);
-    RUN(test_index_counter_wrap);
-    RUN(test_datagram_framing);
-    RUN(test_datagram_undersized_dst_and_toobig);
-    RUN(test_doorbell_edge);
-    RUN(test_flags);
-    RUN(test_zero_length_ops);
-    RUN(test_skip_and_short_read);
-    RUN(test_record_size_boundary);
-    RUN(test_empty_datagram);
-    RUN(test_record_wraparound);
-    RUN(test_corrupt_record_prefix);
-    RUN(test_partial_prefix_peek);
-    RUN(test_full_state_backpressure);
-    RUN(test_attach_negatives);
-    RUN(test_wrap_size_matrix);
-    RUN(test_record_size_matrix);
-    RUN(test_fuzz_byte_stream);
-    RUN(test_fuzz_records);
-    RUN(test_concurrent_byte_stream);
-    RUN(test_concurrent_records);
+    /* Randomized order: a case that leaks state must not be able to make its
+     * neighbour pass. Replay a failure with WASMOS_TEST_SEED. */
+    static const wasmos_test_case_t cases[] = {
+        WASMOS_TEST_CASE(test_bytes_for_and_layout),
+        WASMOS_TEST_CASE(test_reject_bad_params),
+        WASMOS_TEST_CASE(test_attach_matches_init),
+        WASMOS_TEST_CASE(test_write_read_and_flow_control),
+        WASMOS_TEST_CASE(test_wraparound_payload),
+        WASMOS_TEST_CASE(test_index_counter_wrap),
+        WASMOS_TEST_CASE(test_datagram_framing),
+        WASMOS_TEST_CASE(test_datagram_undersized_dst_and_toobig),
+        WASMOS_TEST_CASE(test_doorbell_edge),
+        WASMOS_TEST_CASE(test_flags),
+        WASMOS_TEST_CASE(test_zero_length_ops),
+        WASMOS_TEST_CASE(test_skip_and_short_read),
+        WASMOS_TEST_CASE(test_record_size_boundary),
+        WASMOS_TEST_CASE(test_empty_datagram),
+        WASMOS_TEST_CASE(test_record_wraparound),
+        WASMOS_TEST_CASE(test_corrupt_record_prefix),
+        WASMOS_TEST_CASE(test_partial_prefix_peek),
+        WASMOS_TEST_CASE(test_full_state_backpressure),
+        WASMOS_TEST_CASE(test_attach_negatives),
+        WASMOS_TEST_CASE(test_wrap_size_matrix),
+        WASMOS_TEST_CASE(test_record_size_matrix),
+        WASMOS_TEST_CASE(test_fuzz_byte_stream),
+        WASMOS_TEST_CASE(test_fuzz_records),
+        WASMOS_TEST_CASE(test_concurrent_byte_stream),
+        WASMOS_TEST_CASE(test_concurrent_records),
+    };
+    const int groups = (int)(sizeof(cases) / sizeof(cases[0]));
+    if (wasmos_test_run_all(cases, groups) != 0) {
+        return 1;
+    }
     printf("test_ringbuf: %d groups, %ld size cases, %ld checks passed\n", groups, g_cases,
            g_checks);
     return 0;

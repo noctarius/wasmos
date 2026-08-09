@@ -2,6 +2,8 @@
 #include <stdint.h>
 #include <stddef.h>
 
+#include "test_shuffle.h"
+
 #include "stdlib.h"
 
 static int test_basic(void) {
@@ -96,33 +98,21 @@ static int test_malloc_overflow(void) {
 }
 
 int main(void) {
-    int rc;
-    rc = test_basic();
-    if (rc)
-        return rc;
-    rc = test_bases();
-    if (rc)
-        return rc;
-    rc = test_endptr();
-    if (rc)
-        return rc;
-    rc = test_whitespace_sign();
-    if (rc)
-        return rc;
-    rc = test_overflow_positive();
-    if (rc)
-        return rc;
-    rc = test_overflow_negative();
-    if (rc)
-        return rc;
-    rc = test_overflow_just_above_max();
-    if (rc)
-        return rc;
-    rc = test_max_exact();
-    if (rc)
-        return rc;
-    rc = test_malloc_overflow();
-    if (rc)
-        return rc;
+    /* Randomized order: a case that leaks state must not be able to make its
+     * neighbour pass. Replay a failure with WASMOS_TEST_SEED. */
+    static const wasmos_test_case_t cases[] = {
+        WASMOS_TEST_CASE(test_basic),
+        WASMOS_TEST_CASE(test_bases),
+        WASMOS_TEST_CASE(test_endptr),
+        WASMOS_TEST_CASE(test_whitespace_sign),
+        WASMOS_TEST_CASE(test_overflow_positive),
+        WASMOS_TEST_CASE(test_overflow_negative),
+        WASMOS_TEST_CASE(test_overflow_just_above_max),
+        WASMOS_TEST_CASE(test_max_exact),
+        WASMOS_TEST_CASE(test_malloc_overflow),
+    };
+    if (wasmos_test_run_all(cases, (int)(sizeof(cases) / sizeof(cases[0]))) != 0) {
+        return 1;
+    }
     return 0;
 }

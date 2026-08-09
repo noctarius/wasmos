@@ -50,22 +50,21 @@
 
 /* Some of these suites compile with src/libc/include on the include path, where
  * wasmos's own freestanding headers shadow the host's and declare far less.
- * They still LINK against the host libc, so what is missing is declared here --
- * keyed off those headers' own guards, because the suites that get the host's
- * headers must not see a conflicting declaration. */
-#ifdef WASMOS_LIBC_STDLIB_H
+ * They still LINK against the host libc, so the three functions used here are
+ * declared directly, with signatures identical to both the host's and wasmos's.
+ * Declaring them unconditionally rather than behind a shadow-detecting guard is
+ * deliberate: a guard would depend on whether this header is included before or
+ * after the ones it is detecting, and that is not a property a header should
+ * have. The extern "C" is load-bearing for the C++ suites: without it these
+ * would be declared with C++ linkage and fail to resolve against libc. */
+#ifdef __cplusplus
+extern "C" {
+#endif
 extern char* getenv(const char* name);
 extern unsigned long long strtoull(const char* text, char** end, int base);
-#endif
-#ifdef WASMOS_LIBC_STDIO_H
-/* Declared without a stream type and only ever called as WASMOS_TEST_FLUSH(),
- * i.e. fflush(NULL), which flushes every output stream: the FILE in that
- * shadowing header is wasmos's own struct, not the host's, so no FILE* may be
- * passed across. */
-extern int fflush(void* stream);
-#define WASMOS_TEST_FLUSH() fflush(0)
-#else
-#define WASMOS_TEST_FLUSH() fflush(stdout)
+extern long write(int fd, const void* buf, unsigned long count);
+#ifdef __cplusplus
+}
 #endif
 
 #define WASMOS_TEST_MAX_CASES 128
@@ -77,6 +76,15 @@ typedef struct {
     wasmos_test_fn_t fn;
 } wasmos_test_case_t;
 
+/* The other case shape in this tree: a void case that reports through the
+ * suite's own failure counter rather than by returning a marker. */
+typedef void (*wasmos_test_void_fn_t)(void);
+
+typedef struct {
+    const char* name;
+    wasmos_test_void_fn_t fn;
+} wasmos_test_void_case_t;
+
 #define WASMOS_TEST_CASE(function) {#function, function}
 
 static inline uint64_t wasmos_test_next_random(uint64_t* state) {
@@ -84,6 +92,22 @@ static inline uint64_t wasmos_test_next_random(uint64_t* state) {
     z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ull;
     z = (z ^ (z >> 27)) * 0x94D049BB133111EBull;
     return z ^ (z >> 31);
+}
+
+/* Unbuffered, and free of any stream object: wasmos's <stdio.h> has its own
+ * FILE type that is not the host's, so no FILE* may be passed across. */
+static inline void wasmos_test_write_seed(const char* prefix, uint64_t seed) {
+    char line[96];
+    unsigned pos = 0;
+    while (prefix[pos] && pos + 20u < sizeof(line)) {
+        line[pos] = prefix[pos];
+        ++pos;
+    }
+    for (int shift = 60; shift >= 0; shift -= 4) {
+        line[pos++] = "0123456789abcdef"[(seed >> shift) & 0xFu];
+    }
+    line[pos++] = '\n';
+    (void)write(1, line, pos);
 }
 
 static inline uint64_t wasmos_test_seed(void) {
@@ -118,17 +142,36 @@ static inline uint64_t wasmos_test_shuffle(int* order, int count) {
         order[i] = order[j];
         order[j] = swap;
     }
-    /* Flushed, because the run this seed matters most for is the one that dies
-     * before it can print anything else. */
-    printf("test_shuffle: WASMOS_TEST_SEED=0x%llx\n", (unsigned long long)seed);
-    WASMOS_TEST_FLUSH();
+    /* Written straight to fd 1 rather than printf'd, so there is no buffer to
+     * lose: the run this seed matters most for is the one that dies before it
+     * can print anything else. */
+    wasmos_test_write_seed("test_shuffle: WASMOS_TEST_SEED=0x", seed);
     return seed;
 }
 
 /** Repeat the seed next to a failure, so it is not only at the top of the log. */
 static inline void wasmos_test_report_seed(uint64_t seed) {
-    printf("  replay this order with WASMOS_TEST_SEED=0x%llx\n", (unsigned long long)seed);
-    WASMOS_TEST_FLUSH();
+    wasmos_test_write_seed("  replay this order with WASMOS_TEST_SEED=0x", seed);
+}
+
+/**
+ * Run every void case in a seed-determined order. These report failures through
+ * the suite's own counter, so there is nothing to stop on; the seed is returned
+ * for the caller to repeat next to its summary when that counter is non-zero.
+ */
+static inline uint64_t wasmos_test_run_all_void(const wasmos_test_void_case_t* cases, int count) {
+    int order[WASMOS_TEST_MAX_CASES];
+    uint64_t seed;
+
+    if (!cases || count <= 0 || count > WASMOS_TEST_MAX_CASES) {
+        printf("test_shuffle: bad case list (%d cases)\n", count);
+        return 0;
+    }
+    seed = wasmos_test_shuffle(order, count);
+    for (int i = 0; i < count; ++i) {
+        cases[order[i]].fn();
+    }
+    return seed;
 }
 
 /**

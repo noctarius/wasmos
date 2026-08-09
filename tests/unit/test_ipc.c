@@ -486,7 +486,7 @@ static void test_message_and_notification_endpoints_do_not_mix(void) {
     uint32_t ctx = fresh_ctx();
     uint32_t msg_ep = 0, note_ep = 0;
     (void)ipc_endpoint_create(ctx, &msg_ep);
-    (void)ipc_notification_create(ctx, &note_ep);
+    CHECK(ipc_notification_create(ctx, &note_ep) == IPC_OK, "the notification endpoint is created");
 
     ipc_message_t m = msg_of(IPC_ENDPOINT_NONE, 1u, 1u);
     ipc_message_t got;
@@ -515,7 +515,7 @@ static void test_message_and_notification_endpoints_do_not_mix(void) {
 static void test_notifications_count_up_and_down(void) {
     uint32_t ctx = fresh_ctx();
     uint32_t ep = 0;
-    (void)ipc_notification_create(ctx, &ep);
+    CHECK(ipc_notification_create(ctx, &ep) == IPC_OK, "the notification endpoint is created");
 
     CHECK(ipc_wait_for(ctx, ep) == IPC_EMPTY, "an unsignalled notification waits empty");
     CHECK(ipc_notify_from(ctx, ep) == IPC_OK, "the owner may notify");
@@ -541,7 +541,7 @@ static void test_non_blocking_polls_do_not_arm_a_waiter(void) {
     uint32_t ctx = fresh_ctx();
     uint32_t msg_ep = 0, note_ep = 0;
     (void)ipc_endpoint_create(ctx, &msg_ep);
-    (void)ipc_notification_create(ctx, &note_ep);
+    CHECK(ipc_notification_create(ctx, &note_ep) == IPC_OK, "the notification endpoint is created");
     reset_threads();
     thread_t* self = self_thread();
 
@@ -699,10 +699,10 @@ static void test_release_owner_frees_only_that_owners_endpoints(void) {
     uint32_t drop = fresh_ctx();
     uint32_t k1 = 0, k2 = 0, d1 = 0, d2 = 0, d3 = 0;
     (void)ipc_endpoint_create(keep, &k1);
-    (void)ipc_notification_create(keep, &k2);
+    CHECK(ipc_notification_create(keep, &k2) == IPC_OK, "the notification endpoint is created");
     (void)ipc_endpoint_create(drop, &d1);
     (void)ipc_endpoint_create(drop, &d2);
-    (void)ipc_notification_create(drop, &d3);
+    CHECK(ipc_notification_create(drop, &d3) == IPC_OK, "the notification endpoint is created");
     CHECK(ksend(d1, 1u) == IPC_OK, "the doomed endpoint has traffic queued");
     CHECK(ksend(k1, 1u) == IPC_OK, "so does the surviving one");
 
@@ -1351,7 +1351,14 @@ static void test_a_wrapped_id_never_collides_with_a_live_endpoint(void) {
     CHECK(count_of(wrapped) == 1, "it lands on the intended endpoint");
 
     ipc_endpoints_release_owner(ctx);
-    ipc_test_set_next_endpoint_id(1u, 0);
+    /* Rewind the counter for whatever runs next, but leave the wrapped flag SET.
+     * ipc_alloc_endpoint_id only scans for a live collision once that flag is on,
+     * so clearing it here hands the next test low ids with no collision check --
+     * and any endpoint still alive at such an id from an earlier case then gets
+     * a second, ambiguous owner. In production the flag is never cleared, so
+     * clearing it in teardown told the allocator something untrue. Found by the
+     * randomized case order: this case ran immediately before N3. */
+    ipc_test_set_next_endpoint_id(1u, 1);
 }
 
 static void test_endpoint_creation_reports_allocation_failure(void) {
@@ -1392,7 +1399,7 @@ static void test_endpoint_creation_reports_allocation_failure(void) {
 static void test_the_notification_counter_saturates(void) {
     uint32_t ctx = fresh_ctx();
     uint32_t ep = 0;
-    (void)ipc_notification_create(ctx, &ep);
+    CHECK(ipc_notification_create(ctx, &ep) == IPC_OK, "the notification endpoint is created");
 
     CHECK(ipc_test_set_notify_count(ep, UINT32_MAX) == IPC_OK, "seed the counter at the ceiling");
     CHECK(ipc_notify_from(ctx, ep) == IPC_OK, "a notify at the ceiling still succeeds");
@@ -1408,7 +1415,7 @@ static void test_the_notification_counter_saturates(void) {
 static void test_interleaved_notify_and_wait_keep_an_exact_count(void) {
     uint32_t ctx = fresh_ctx();
     uint32_t ep = 0;
-    (void)ipc_notification_create(ctx, &ep);
+    CHECK(ipc_notification_create(ctx, &ep) == IPC_OK, "the notification endpoint is created");
     uint32_t expected = 0;
     int ok = 1;
     /* A deterministic but irregular interleaving. */
@@ -1445,7 +1452,7 @@ static void test_interleaved_notify_and_wait_keep_an_exact_count(void) {
 static void test_release_invalidates_a_signalled_notification(void) {
     uint32_t ctx = fresh_ctx();
     uint32_t ep = 0;
-    (void)ipc_notification_create(ctx, &ep);
+    CHECK(ipc_notification_create(ctx, &ep) == IPC_OK, "the notification endpoint is created");
     CHECK(ipc_notify_from(ctx, ep) == IPC_OK, "a pending signal exists");
     ipc_endpoints_release_owner(ctx);
     CHECK(ipc_wait_for(ctx, ep) == IPC_ERR_NOENT,
@@ -1773,7 +1780,7 @@ static void test_listen_cleans_up_when_an_add_fails_midway(void) {
 static void test_a_notification_endpoint_never_signals_a_set(void) {
     uint32_t ctx = fresh_ctx();
     uint32_t note = 0, sel = 0;
-    (void)ipc_notification_create(ctx, &note);
+    CHECK(ipc_notification_create(ctx, &note) == IPC_OK, "the notification endpoint is created");
     (void)ipc_select_listen(ctx, &note, 1, &sel);
     reset_threads();
 
@@ -2273,11 +2280,13 @@ static void contract_env_build(void) {
     g_env.ctx = fresh_ctx();
     g_env.other = fresh_ctx();
     (void)ipc_endpoint_create(g_env.ctx, &g_env.msg_ep);
-    (void)ipc_notification_create(g_env.ctx, &g_env.note_ep);
+    CHECK(ipc_notification_create(g_env.ctx, &g_env.note_ep) == IPC_OK,
+          "the notification endpoint is created");
     (void)ipc_endpoint_create(g_env.ctx, &g_env.ready_ep);
     (void)ipc_endpoint_create(g_env.ctx, &g_env.full_ep);
     (void)ipc_endpoint_create(g_env.other, &g_env.foreign_ep);
-    (void)ipc_notification_create(g_env.other, &g_env.foreign_note);
+    CHECK(ipc_notification_create(g_env.other, &g_env.foreign_note) == IPC_OK,
+          "the notification endpoint is created");
     (void)ksend(g_env.ready_ep, 1u);
     for (uint32_t i = 0; i < IPC_QUEUE_DEPTH; ++i) {
         (void)ksend(g_env.full_ep, i);
@@ -2405,7 +2414,7 @@ static void test_the_kernel_wrappers_match_their_from_variants(void) {
     uint32_t ctx = fresh_ctx();
     uint32_t msg_ep = 0, note_ep = 0;
     (void)ipc_endpoint_create(ctx, &msg_ep);
-    (void)ipc_notification_create(ctx, &note_ep);
+    CHECK(ipc_notification_create(ctx, &note_ep) == IPC_OK, "the notification endpoint is created");
     ipc_message_t m = msg_of(IPC_ENDPOINT_NONE, 1u, 1u);
     ipc_message_t got;
 

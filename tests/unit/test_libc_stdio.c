@@ -4,6 +4,8 @@
 #include <stddef.h>
 #include <string.h>
 
+#include "test_shuffle.h"
+
 /* Stub wasmos_console_write — not called by vsnprintf/snprintf. */
 int32_t wasmos_console_write(int32_t ptr, int32_t len) {
     (void)ptr;
@@ -126,40 +128,22 @@ static int test_width_padding(void) {
 }
 
 int main(void) {
-    int rc;
-
-    rc = test_plain_string();
-    if (rc)
-        return rc;
-    rc = test_plain_int();
-    if (rc)
-        return rc;
-    rc = test_plain_unsigned_hex();
-    if (rc)
-        return rc;
-    rc = test_long();
-    if (rc)
-        return rc;
-    rc = test_width_padding();
-    if (rc)
-        return rc;
-
-    /* M-10 tests — these fail before the fix */
-    rc = test_lld();
-    if (rc)
-        return rc;
-    rc = test_llu();
-    if (rc)
-        return rc;
-    rc = test_llx();
-    if (rc)
-        return rc;
-    rc = test_zu();
-    if (rc)
-        return rc;
-    rc = test_zd();
-    if (rc)
-        return rc;
-
+    /* Randomized order: a case that leaks state must not be able to make its
+     * neighbour pass. Replay a failure with WASMOS_TEST_SEED. */
+    static const wasmos_test_case_t cases[] = {
+        WASMOS_TEST_CASE(test_plain_string),
+        WASMOS_TEST_CASE(test_plain_int),
+        WASMOS_TEST_CASE(test_plain_unsigned_hex),
+        WASMOS_TEST_CASE(test_long),
+        WASMOS_TEST_CASE(test_width_padding),
+        WASMOS_TEST_CASE(test_lld),
+        WASMOS_TEST_CASE(test_llu),
+        WASMOS_TEST_CASE(test_llx),
+        WASMOS_TEST_CASE(test_zu),
+        WASMOS_TEST_CASE(test_zd),
+    };
+    if (wasmos_test_run_all(cases, (int)(sizeof(cases) / sizeof(cases[0]))) != 0) {
+        return 1;
+    }
     return 0;
 }

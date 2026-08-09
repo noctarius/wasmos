@@ -10,6 +10,8 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "test_shuffle.h"
+
 #include "irq_sharing.h"
 
 #define TEST_LINES 16u
@@ -323,21 +325,28 @@ static void test_dispatch_without_sharers_is_inert(void) {
 }
 
 int main(void) {
-    test_register_adds_not_replaces();
-    test_reregister_same_context_updates();
-    test_register_full_line_rejected();
-    test_line_reopens_only_after_last_ack();
-    test_ack_from_non_sharer_and_duplicate();
-    test_failed_delivery_not_counted();
-    test_no_reachable_sharer_reopens_line();
-    test_ack_deadline_force_completes();
-    test_dispatch_budget_throttles_and_recovers();
-    test_unregister_forgives_owed_ack();
-    test_last_sharer_leaving_masks_line();
-    test_release_context_clears_all_lines();
-    test_timer_line_never_masked();
-    test_dispatch_without_sharers_is_inert();
-
+    /* Randomized order: a case that leaks state must not be able to make its
+     * neighbour pass. Replay a failure with WASMOS_TEST_SEED. */
+    static const wasmos_test_void_case_t cases[] = {
+        WASMOS_TEST_CASE(test_register_adds_not_replaces),
+        WASMOS_TEST_CASE(test_reregister_same_context_updates),
+        WASMOS_TEST_CASE(test_register_full_line_rejected),
+        WASMOS_TEST_CASE(test_line_reopens_only_after_last_ack),
+        WASMOS_TEST_CASE(test_ack_from_non_sharer_and_duplicate),
+        WASMOS_TEST_CASE(test_failed_delivery_not_counted),
+        WASMOS_TEST_CASE(test_no_reachable_sharer_reopens_line),
+        WASMOS_TEST_CASE(test_ack_deadline_force_completes),
+        WASMOS_TEST_CASE(test_dispatch_budget_throttles_and_recovers),
+        WASMOS_TEST_CASE(test_unregister_forgives_owed_ack),
+        WASMOS_TEST_CASE(test_last_sharer_leaving_masks_line),
+        WASMOS_TEST_CASE(test_release_context_clears_all_lines),
+        WASMOS_TEST_CASE(test_timer_line_never_masked),
+        WASMOS_TEST_CASE(test_dispatch_without_sharers_is_inert),
+    };
+    const uint64_t seed = wasmos_test_run_all_void(cases, (int)(sizeof(cases) / sizeof(cases[0])));
     printf("test_irq_sharing: %d passed, %d failed\n", g_checks - g_failures, g_failures);
+    if (g_failures != 0) {
+        wasmos_test_report_seed(seed);
+    }
     return g_failures == 0 ? 0 : 1;
 }

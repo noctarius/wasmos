@@ -15,6 +15,8 @@
 #include <string.h>
 #include <stdlib.h>
 
+#include "test_shuffle.h"
+
 #include "wasmos/libui.h"
 
 static int g_failures;
@@ -233,15 +235,22 @@ static void test_dropdown_keys(void) {
 }
 
 int main(void) {
-    test_accessors();
-    test_text_input_types_the_character();
-    test_text_input_shifted_and_symbols();
-    test_text_input_backspace();
-    test_text_input_ignores_non_characters();
-    test_text_input_high_byte_character();
-    test_text_input_growth();
-    test_dropdown_keys();
-
+    /* Randomized order: a case that leaks state must not be able to make its
+     * neighbour pass. Replay a failure with WASMOS_TEST_SEED. */
+    static const wasmos_test_void_case_t cases[] = {
+        WASMOS_TEST_CASE(test_accessors),
+        WASMOS_TEST_CASE(test_text_input_types_the_character),
+        WASMOS_TEST_CASE(test_text_input_shifted_and_symbols),
+        WASMOS_TEST_CASE(test_text_input_backspace),
+        WASMOS_TEST_CASE(test_text_input_ignores_non_characters),
+        WASMOS_TEST_CASE(test_text_input_high_byte_character),
+        WASMOS_TEST_CASE(test_text_input_growth),
+        WASMOS_TEST_CASE(test_dropdown_keys),
+    };
+    const uint64_t seed = wasmos_test_run_all_void(cases, (int)(sizeof(cases) / sizeof(cases[0])));
     printf("test_libui_key_decode: %d checks, %d failures\n", g_checks, g_failures);
+    if (g_failures != 0) {
+        wasmos_test_report_seed(seed);
+    }
     return g_failures == 0 ? 0 : 1;
 }

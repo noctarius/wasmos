@@ -3,6 +3,8 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "test_shuffle.h"
+
 static const int g_ops_a = 1;
 static const int g_ops_b = 2;
 
@@ -455,33 +457,19 @@ static int test_per_owner_caps(void) {
 }
 
 int main(void) {
-    int rc = test_collision_bucket_lookup();
-    if (rc != 0) {
-        return rc;
-    }
-    rc = test_broker_registration_lookup();
-    if (rc != 0) {
-        return rc;
-    }
-    rc = test_exec_handler_registration_lookup();
-    if (rc != 0) {
-        return rc;
-    }
-    rc = test_exec_handler_not_and_priority();
-    if (rc != 0) {
-        return rc;
-    }
-    rc = test_exec_handler_validation();
-    if (rc != 0) {
-        return rc;
-    }
-    rc = test_owner_drop();
-    if (rc != 0) {
-        return rc;
-    }
-    rc = test_per_owner_caps();
-    if (rc != 0) {
-        return rc;
+    /* Randomized order: a case that leaks state must not be able to make its
+     * neighbour pass. Replay a failure with WASMOS_TEST_SEED. */
+    static const wasmos_test_case_t cases[] = {
+        WASMOS_TEST_CASE(test_collision_bucket_lookup),
+        WASMOS_TEST_CASE(test_broker_registration_lookup),
+        WASMOS_TEST_CASE(test_exec_handler_registration_lookup),
+        WASMOS_TEST_CASE(test_exec_handler_not_and_priority),
+        WASMOS_TEST_CASE(test_exec_handler_validation),
+        WASMOS_TEST_CASE(test_owner_drop),
+        WASMOS_TEST_CASE(test_per_owner_caps),
+    };
+    if (wasmos_test_run_all(cases, (int)(sizeof(cases) / sizeof(cases[0]))) != 0) {
+        return 1;
     }
     printf("test_subsystem_registry: ok\n");
     return 0;

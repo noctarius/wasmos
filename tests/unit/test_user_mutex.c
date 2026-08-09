@@ -1,6 +1,8 @@
 #include <assert.h>
 #include <stdint.h>
 
+#include "test_shuffle.h"
+
 #include "user_mutex.h"
 
 static void test_basic_lock_unlock(void) {
@@ -43,8 +45,13 @@ static void test_contention_and_non_owner_unlock(void) {
 }
 
 int main(void) {
-    test_basic_lock_unlock();
-    test_recursive_locking();
-    test_contention_and_non_owner_unlock();
+    /* Randomized order: a case that leaks state must not be able to make its
+     * neighbour pass. Replay a failure with WASMOS_TEST_SEED. */
+    static const wasmos_test_void_case_t cases[] = {
+        WASMOS_TEST_CASE(test_basic_lock_unlock),
+        WASMOS_TEST_CASE(test_recursive_locking),
+        WASMOS_TEST_CASE(test_contention_and_non_owner_unlock),
+    };
+    (void)wasmos_test_run_all_void(cases, (int)(sizeof(cases) / sizeof(cases[0])));
     return 0;
 }

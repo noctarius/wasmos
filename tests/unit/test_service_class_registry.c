@@ -9,6 +9,8 @@
 #include <string.h>
 #include <stdio.h>
 
+#include "test_shuffle.h"
+
 /* --- captured existence events --- */
 typedef struct {
     uint32_t notify;
@@ -372,34 +374,31 @@ static int test_reset_clears(void) {
     return 0;
 }
 
-#define RUN(fn)                                                                                    \
-    do {                                                                                           \
-        int rc = fn();                                                                             \
-        if (rc != 0) {                                                                             \
-            printf("test_service_class_registry: FAIL %s at line %d\n", #fn, rc);                  \
-            return rc;                                                                             \
-        }                                                                                          \
-        groups++;                                                                                  \
-    } while (0)
-
 int main(void) {
-    int groups = 0;
-    RUN(test_add_and_lookup);
-    RUN(test_lookup_unknown_and_empty);
-    RUN(test_lookup_truncates_but_reports_total);
-    RUN(test_reregister_updates_no_event);
-    RUN(test_antispoof);
-    RUN(test_classes_independent);
-    RUN(test_bad_class_names);
-    RUN(test_subscribe_event_fields);
-    RUN(test_subscribe_idempotent_and_multi);
-    RUN(test_subscribe_class_isolation);
-    RUN(test_subscribe_is_not_retroactive);
-    RUN(test_reap_provider_fires_remove);
-    RUN(test_reap_dead_subscriber_gets_no_remove);
-    RUN(test_no_event_sink);
-    RUN(test_dynamic_growth);
-    RUN(test_reset_clears);
+    /* Randomized order: a case that leaks state must not be able to make its
+     * neighbour pass. Replay a failure with WASMOS_TEST_SEED. */
+    static const wasmos_test_case_t cases[] = {
+        WASMOS_TEST_CASE(test_add_and_lookup),
+        WASMOS_TEST_CASE(test_lookup_unknown_and_empty),
+        WASMOS_TEST_CASE(test_lookup_truncates_but_reports_total),
+        WASMOS_TEST_CASE(test_reregister_updates_no_event),
+        WASMOS_TEST_CASE(test_antispoof),
+        WASMOS_TEST_CASE(test_classes_independent),
+        WASMOS_TEST_CASE(test_bad_class_names),
+        WASMOS_TEST_CASE(test_subscribe_event_fields),
+        WASMOS_TEST_CASE(test_subscribe_idempotent_and_multi),
+        WASMOS_TEST_CASE(test_subscribe_class_isolation),
+        WASMOS_TEST_CASE(test_subscribe_is_not_retroactive),
+        WASMOS_TEST_CASE(test_reap_provider_fires_remove),
+        WASMOS_TEST_CASE(test_reap_dead_subscriber_gets_no_remove),
+        WASMOS_TEST_CASE(test_no_event_sink),
+        WASMOS_TEST_CASE(test_dynamic_growth),
+        WASMOS_TEST_CASE(test_reset_clears),
+    };
+    const int groups = (int)(sizeof(cases) / sizeof(cases[0]));
+    if (wasmos_test_run_all(cases, groups) != 0) {
+        return 1;
+    }
     printf("test_service_class_registry: %d groups passed\n", groups);
     return 0;
 }

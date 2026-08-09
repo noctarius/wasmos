@@ -1,6 +1,8 @@
 #include "hashmap.h"
 #include <stdint.h>
 
+#include "test_shuffle.h"
+
 typedef struct {
     uint32_t tag;
     uint32_t value;
@@ -165,21 +167,15 @@ static int test_iteration(void) {
 }
 
 int main(void) {
-    int rc = 0;
-    rc = test_init_validation();
-    if (rc != 0)
-        return rc;
-    rc = test_put_get_remove();
-    if (rc != 0)
-        return rc;
-    rc = test_growth_and_lookup();
-    if (rc != 0)
-        return rc;
-    rc = test_pointer_stability();
-    if (rc != 0)
-        return rc;
-    rc = test_iteration();
-    if (rc != 0)
-        return rc;
+    /* Randomized order: a case that leaks state must not be able to make its
+     * neighbour pass. Replay a failure with WASMOS_TEST_SEED. */
+    static const wasmos_test_case_t cases[] = {
+        WASMOS_TEST_CASE(test_init_validation),   WASMOS_TEST_CASE(test_put_get_remove),
+        WASMOS_TEST_CASE(test_growth_and_lookup), WASMOS_TEST_CASE(test_pointer_stability),
+        WASMOS_TEST_CASE(test_iteration),
+    };
+    if (wasmos_test_run_all(cases, (int)(sizeof(cases) / sizeof(cases[0]))) != 0) {
+        return 1;
+    }
     return 0;
 }

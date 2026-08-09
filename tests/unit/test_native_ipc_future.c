@@ -1,6 +1,8 @@
 /* Runtime-behaviour tests for the native IPC-to-future adapter. */
 #include <stdint.h>
 
+#include "test_shuffle.h"
+
 #include "wasmos/libsys_native.h"
 
 static nd_ipc_message_t sent_message;
@@ -171,14 +173,14 @@ static int test_service_root_runtime(void) {
 }
 
 int main(void) {
-    int rc = test_resolve_and_copy_reply();
-    if (rc == 0) {
-        rc = test_reject_send_failure_and_cancel();
-    }
-    if (rc == 0) {
-        rc = test_service_root_runtime();
-    }
-    if (rc != 0) {
+    /* Randomized order: a case that leaks state must not be able to make its
+     * neighbour pass. Replay a failure with WASMOS_TEST_SEED. */
+    static const wasmos_test_case_t cases[] = {
+        WASMOS_TEST_CASE(test_resolve_and_copy_reply),
+        WASMOS_TEST_CASE(test_reject_send_failure_and_cancel),
+        WASMOS_TEST_CASE(test_service_root_runtime),
+    };
+    if (wasmos_test_run_all(cases, (int)(sizeof(cases) / sizeof(cases[0]))) != 0) {
         return 1;
     }
     return 0;

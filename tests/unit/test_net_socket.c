@@ -3,6 +3,8 @@
 #include <stdint.h>
 #include <string.h>
 
+#include "test_shuffle.h"
+
 #define CAPACITY 64u
 
 static uint8_t tx_region[WASMOS_RINGBUF_HDR_BYTES + CAPACITY] __attribute__((aligned(64)));
@@ -104,11 +106,15 @@ static int test_connect_state_depends_on_type(void) {
 }
 
 int main(void) {
-    int rc = test_open_lifecycle_and_owner_check();
-    if (rc != 0)
-        return rc;
-    rc = test_rejects_bad_descriptor_or_ring();
-    if (rc != 0)
-        return rc;
-    return test_connect_state_depends_on_type();
+    /* Randomized order: a case that leaks state must not be able to make its
+     * neighbour pass. Replay a failure with WASMOS_TEST_SEED. */
+    static const wasmos_test_case_t cases[] = {
+        WASMOS_TEST_CASE(test_open_lifecycle_and_owner_check),
+        WASMOS_TEST_CASE(test_rejects_bad_descriptor_or_ring),
+        WASMOS_TEST_CASE(test_connect_state_depends_on_type),
+    };
+    if (wasmos_test_run_all(cases, (int)(sizeof(cases) / sizeof(cases[0]))) != 0) {
+        return 1;
+    }
+    return 0;
 }

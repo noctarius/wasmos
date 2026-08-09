@@ -12,6 +12,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "test_shuffle.h"
+
 #include "wasmos_native_driver.h"
 
 extern void wasmos_native_heap_init(wasmos_driver_api_t* api);
@@ -69,88 +71,82 @@ static uint32_t xr(void) {
 static void* g_ptrs[STRESS_N];
 static uint32_t g_sizes[STRESS_N];
 
-int main(void) {
-    wasmos_driver_api_t api;
-    memset(&api, 0, sizeof(api));
-    api.vm_map = mock_vm_map;
-    api.vm_unmap = mock_vm_unmap;
-    wasmos_native_heap_init(&api);
+/* Each case was a braced block inside main(); they are named functions now so
+ * the order they run in can be randomized. Heap state is process-global and
+ * deliberately NOT reset between them -- the allocator is meant to survive any
+ * interleaving, which is exactly what shuffling checks. */
+static void test_small_alloc_holds_its_data(void) {
+    uint8_t* p = hn_malloc(100);
+    expect(p != NULL, "malloc(100) non-NULL");
+    memset(p, 0xAB, 100);
+    expect(filled_with(p, 100, 0xAB), "small block holds its data");
+    hn_free(p);
+}
 
-    /* Basic small alloc/free with data integrity. */
-    { // NOLINT(wasmos-standalone-block): scopes a per-case `p` reused below
-        uint8_t* p = hn_malloc(100);
-        expect(p != NULL, "malloc(100) non-NULL");
-        memset(p, 0xAB, 100);
-        expect(filled_with(p, 100, 0xAB), "small block holds its data");
-        hn_free(p);
-    }
+static void test_calloc_zeroes(void) {
+    uint8_t* p = hn_calloc(64, 4);
+    expect(p != NULL, "calloc non-NULL");
+    expect(filled_with(p, 256, 0), "calloc zeroes the block");
+    hn_free(p);
+}
 
-    /* calloc zeroes. */
-    { // NOLINT(wasmos-standalone-block): scopes a per-case `p` reused below
-        uint8_t* p = hn_calloc(64, 4);
-        expect(p != NULL, "calloc non-NULL");
-        expect(filled_with(p, 256, 0), "calloc zeroes the block");
-        hn_free(p);
-    }
+/* Regression guard for the header-offset bug where free() miscomputed the
+ * header for large (> 4096) allocations. */
+static void test_large_alloc_and_free(void) {
+    uint8_t* p = hn_malloc(20000);
+    expect(p != NULL, "malloc(20000) large non-NULL");
+    memset(p, 0x5A, 20000);
+    expect(filled_with(p, 20000, 0x5A), "large block holds its data");
+    g_corrupt = 0;
+    hn_free(p);
+    expect(g_corrupt == 0, "freeing a large block is not flagged as corruption");
+}
 
-    /* Large (> 4096) alloc/free — regression guard for the header-offset bug
-     * where free() miscomputed the header for large allocations. */
-    { // NOLINT(wasmos-standalone-block): scopes a per-case `p` reused below
-        uint8_t* p = hn_malloc(20000);
-        expect(p != NULL, "malloc(20000) large non-NULL");
-        memset(p, 0x5A, 20000);
-        expect(filled_with(p, 20000, 0x5A), "large block holds its data");
-        g_corrupt = 0;
-        hn_free(p);
-        expect(g_corrupt == 0, "freeing a large block is not flagged as corruption");
-    }
+static void test_realloc_grow_preserves_prefix(void) {
+    uint8_t* p = hn_malloc(50);
+    memset(p, 0x11, 50);
+    uint8_t* q = hn_realloc(p, 5000); /* small -> large */
+    expect(q != NULL, "realloc grow non-NULL");
+    expect(filled_with(q, 50, 0x11), "realloc grow preserves prefix");
+    hn_free(q);
+}
 
-    /* realloc: grow (copy path) preserves the prefix. */
-    { // NOLINT(wasmos-standalone-block): scopes a per-case `p` reused below
-        uint8_t* p = hn_malloc(50);
-        memset(p, 0x11, 50);
-        uint8_t* q = hn_realloc(p, 5000); /* small -> large */
-        expect(q != NULL, "realloc grow non-NULL");
-        expect(filled_with(q, 50, 0x11), "realloc grow preserves prefix");
-        hn_free(q);
-    }
+/* Shrinking within one size class keeps the block in place. */
+static void test_realloc_shrink_preserves_prefix(void) {
+    uint8_t* p = hn_malloc(2000);
+    memset(p, 0x22, 2000);
+    uint8_t* q = hn_realloc(p, 100);
+    expect(q != NULL, "realloc shrink non-NULL");
+    expect(filled_with(q, 100, 0x22), "realloc shrink preserves prefix");
+    hn_free(q);
+}
 
-    /* realloc: shrink within the same size class preserves data (in place). */
-    { // NOLINT(wasmos-standalone-block): scopes a per-case `p` reused below
-        uint8_t* p = hn_malloc(2000);
-        memset(p, 0x22, 2000);
-        uint8_t* q = hn_realloc(p, 100);
-        expect(q != NULL, "realloc shrink non-NULL");
-        expect(filled_with(q, 100, 0x22), "realloc shrink preserves prefix");
-        hn_free(q);
-    }
+static void test_realloc_null_allocates_and_zero_frees(void) {
+    uint8_t* p = hn_realloc(NULL, 128);
+    expect(p != NULL, "realloc(NULL, n) allocates");
+    uint8_t* q = hn_realloc(p, 0);
+    expect(q == NULL, "realloc(p, 0) returns NULL");
+}
 
-    /* realloc(NULL, n) == malloc; realloc(p, 0) frees and returns NULL. */
-    { // NOLINT(wasmos-standalone-block): scopes a per-case `p` reused below
-        uint8_t* p = hn_realloc(NULL, 128);
-        expect(p != NULL, "realloc(NULL, n) allocates");
-        uint8_t* q = hn_realloc(p, 0);
-        expect(q == NULL, "realloc(p, 0) returns NULL");
-    }
-
-    /* free(NULL) is a no-op. */
+static void test_free_null_is_safe(void) {
     g_corrupt = 0;
     hn_free(NULL);
     expect(g_corrupt == 0, "free(NULL) is safe");
+}
 
-    /* Double free is detected. */
-    { // NOLINT(wasmos-standalone-block): scopes a per-case `p` reused below
-        uint8_t* p = hn_malloc(64);
-        hn_free(p);
-        g_corrupt = 0;
-        hn_free(p); /* second free of a small block */
-        expect(g_corrupt == 1, "double free is detected");
-        g_corrupt = 0;
-    }
+static void test_double_free_is_detected(void) {
+    uint8_t* p = hn_malloc(64);
+    hn_free(p);
+    g_corrupt = 0;
+    hn_free(p); /* second free of a small block */
+    expect(g_corrupt == 1, "double free is detected");
+    g_corrupt = 0;
+}
 
-    /* Mixed stress: mimic a large cert-bundle parse — thousands of mostly-small
-     * allocations plus some large ones, accumulated then freed, several rounds,
-     * verifying integrity throughout (catches overlapping/aliased blocks). */
+/* Mimics a large cert-bundle parse: thousands of mostly-small allocations plus
+ * some large ones, accumulated then freed over several rounds, verifying
+ * integrity throughout (catches overlapping/aliased blocks). */
+static void test_mixed_stress(void) {
     for (int round = 0; round < 6; ++round) {
         for (int i = 0; i < STRESS_N; ++i) {
             uint32_t r = xr();
@@ -200,9 +196,33 @@ int main(void) {
         }
     }
     expect(g_corrupt == 0, "no corruption across stress rounds");
+}
+
+int main(void) {
+    wasmos_driver_api_t api;
+    memset(&api, 0, sizeof(api));
+    api.vm_map = mock_vm_map;
+    api.vm_unmap = mock_vm_unmap;
+    wasmos_native_heap_init(&api);
+
+    /* Randomized order: a case that leaks state must not be able to make its
+     * neighbour pass. Replay a failure with WASMOS_TEST_SEED. */
+    static const wasmos_test_void_case_t cases[] = {
+        WASMOS_TEST_CASE(test_small_alloc_holds_its_data),
+        WASMOS_TEST_CASE(test_calloc_zeroes),
+        WASMOS_TEST_CASE(test_large_alloc_and_free),
+        WASMOS_TEST_CASE(test_realloc_grow_preserves_prefix),
+        WASMOS_TEST_CASE(test_realloc_shrink_preserves_prefix),
+        WASMOS_TEST_CASE(test_realloc_null_allocates_and_zero_frees),
+        WASMOS_TEST_CASE(test_free_null_is_safe),
+        WASMOS_TEST_CASE(test_double_free_is_detected),
+        WASMOS_TEST_CASE(test_mixed_stress),
+    };
+    const uint64_t seed = wasmos_test_run_all_void(cases, (int)(sizeof(cases) / sizeof(cases[0])));
 
     if (g_failures != 0) {
         printf("test_heap_native: %d FAILED\n", g_failures);
+        wasmos_test_report_seed(seed);
         return 1;
     }
     printf("test_heap_native: ok\n");

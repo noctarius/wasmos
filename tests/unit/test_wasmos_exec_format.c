@@ -4,6 +4,8 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "test_shuffle.h"
+
 typedef struct __attribute__((packed)) {
     char magic[8];
     uint16_t version;
@@ -233,25 +235,23 @@ static int test_validate_broker_plan(void) {
 }
 
 int main(void) {
-    int rc = 0;
-
+    /* Randomized order: a case that leaks state must not be able to make its
+     * neighbour pass. Replay a failure with WASMOS_TEST_SEED. */
     wasmos_subsystem_registry_reset();
-    if (register_test_handlers() != 0)
+    if (register_test_handlers() != 0) {
         return __LINE__;
+    }
 
-    rc = test_classify_real_wap_fixtures();
-    if (rc != 0)
-        return rc;
-    rc = test_classify_broker_formats();
-    if (rc != 0)
-        return rc;
-    rc = test_probe_budget();
-    if (rc != 0)
-        return rc;
-    rc = test_validate_broker_plan();
-    if (rc != 0)
-        return rc;
-
+    static const wasmos_test_case_t cases[] = {
+        WASMOS_TEST_CASE(test_classify_real_wap_fixtures),
+        WASMOS_TEST_CASE(test_classify_broker_formats),
+        WASMOS_TEST_CASE(test_probe_budget),
+        WASMOS_TEST_CASE(test_validate_broker_plan),
+    };
+    if (wasmos_test_run_all(cases, (int)(sizeof(cases) / sizeof(cases[0]))) != 0) {
+        wasmos_subsystem_registry_reset();
+        return 1;
+    }
     wasmos_subsystem_registry_reset();
     printf("test_wasmos_exec_format: ok\n");
     return 0;

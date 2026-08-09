@@ -2322,6 +2322,17 @@ add_custom_target(run-kernel-unit-tests
           -x none
           -o ${BUILD_DIR}/test_hostcall_ipc
   COMMAND ${BUILD_DIR}/test_hostcall_ipc
+  # The wasm32 struct sizes src/libc/go/coroutine.go hardcodes as opaque
+  # [N]uint32 blobs. Go cannot express the C layout, so nothing checks these at
+  # the language level and an undersized blob is heap corruption rather than a
+  # compile error -- Coroutine was wrong by one word. Compiled for wasm32 and
+  # never linked; the static assertions are the test.
+  COMMAND ${CLANG} --target=wasm32 -nostdlib -fsyntax-only
+          -I${LIBSYS_WASM_DIR}/include
+          -I${LIBC_DIR}/include
+          -I${DRIVER_WASM_DIR}/include
+          -I${CMAKE_SOURCE_DIR}/abi/generated/c
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_go_abi_sizes.c
   # The AssemblyScript coroutine runtime. AS is the one guest language that
   # cannot link src/libsys/wasm/coroutine_wasm.c (asc has no external linking),
   # so it has a port instead, and this holds the port to the C runtime's

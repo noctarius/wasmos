@@ -5,12 +5,19 @@ import "unsafe"
 // These types are caller-owned wasm32 ABI records for the shared C coroutine
 // implementation. Keep their storage in uint32 words: C accesses them through
 // pointers and therefore requires four-byte alignment.
+//
+// The word counts are the sizeof() of the C structs on wasm32 and MUST match
+// exactly: C writes through these pointers, so a count that is too small is
+// heap corruption, not a compile error. Unlike the Rust and Zig bindings, which
+// declare real fields and let the compiler compute the layout, these are opaque
+// blobs that nothing checks at the language level -- so they are pinned by
+// tests/unit/test_go_abi_sizes.c, which fails the build if a C struct moves.
 type Runtime struct{ storage [6]uint32 }
 type Future struct{ storage [6]uint32 }
 type Promise struct{ storage [1]uint32 }
-type Coroutine struct{ storage [13]uint32 }
+type Coroutine struct{ storage [14]uint32 }
 type Continuation struct{ storage [15]uint32 }
-type FutureGroup struct{ storage [15]uint32 }
+type FutureGroup struct{ storage [14]uint32 }
 type EventLoop struct{ storage [133]uint32 }
 type IPCFuture struct{ storage [20]uint32 }
 type FSRequest struct{ storage [20]uint32 }

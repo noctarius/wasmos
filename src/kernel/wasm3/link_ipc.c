@@ -25,10 +25,11 @@ m3ApiRawFunction(wasmos_ipc_create_endpoint) {
 
     preempt_safepoint();
     if (current_process_context(&context_id) != 0) {
-        m3ApiReturn(-1);
+        m3ApiReturn(IPC_ERR_NOENT);
     }
-    if (ipc_endpoint_create(context_id, &endpoint) != IPC_OK) {
-        m3ApiReturn(-1);
+    int create_rc = ipc_endpoint_create(context_id, &endpoint);
+    if (create_rc != IPC_OK) {
+        m3ApiReturn(create_rc);
     }
     preempt_safepoint();
     m3ApiReturn((int32_t)endpoint);
@@ -39,11 +40,14 @@ m3ApiRawFunction(wasmos_ipc_endpoint_owner) {
 
     preempt_safepoint();
     if (endpoint < 0) {
-        m3ApiReturn(-1);
+        m3ApiReturn(IPC_ERR_INVALID);
     }
-    if (ipc_endpoint_owner((uint32_t)endpoint, &owner_context_id) != IPC_OK ||
-        owner_context_id == 0) {
-        m3ApiReturn(-1);
+    int owner_rc = ipc_endpoint_owner((uint32_t)endpoint, &owner_context_id);
+    if (owner_rc != IPC_OK) {
+        m3ApiReturn(owner_rc);
+    }
+    if (owner_context_id == 0) {
+        m3ApiReturn(IPC_ERR_NOENT); /* kernel-owned reads as "not yours to see" */
     }
     preempt_safepoint();
     m3ApiReturn((int32_t)owner_context_id);
@@ -58,10 +62,10 @@ m3ApiRawFunction(wasmos_ipc_send) {
 
     preempt_safepoint();
     if (destination_endpoint < 0 || source_endpoint < 0) {
-        m3ApiReturn(-1);
+        m3ApiReturn(IPC_ERR_INVALID);
     }
     if (current_process_context(&context_id) != 0) {
-        m3ApiReturn(-1);
+        m3ApiReturn(IPC_ERR_NOENT);
     }
 
     req.type = (uint32_t)type;
@@ -85,18 +89,21 @@ m3ApiRawFunction(wasmos_ipc_select_one) {
     int rc;
     process_t* process;
 
-    if (endpoint < 0 || current_process_context(&context_id) != 0) {
-        m3ApiReturn(-1);
+    if (endpoint < 0) {
+        m3ApiReturn(IPC_ERR_INVALID);
+    }
+    if (current_process_context(&context_id) != 0) {
+        m3ApiReturn(IPC_ERR_NOENT);
     }
 
     slot = wasm_ipc_slot_for_pid(pid);
     if (!slot) {
-        m3ApiReturn(-1);
+        m3ApiReturn(IPC_ERR_NOENT);
     }
 
     process = process_get(pid);
     if (!process) {
-        m3ApiReturn(-1);
+        m3ApiReturn(IPC_ERR_NOENT);
     }
     process->in_hostcall = 1;
 
@@ -122,7 +129,7 @@ m3ApiRawFunction(wasmos_ipc_select_one) {
         if (rc != IPC_OK) {
             process->block_reason = PROCESS_BLOCK_NONE;
             process->in_hostcall = 0;
-            m3ApiReturn(-1);
+            m3ApiReturn(rc);
         }
         process->block_reason = PROCESS_BLOCK_NONE;
         process->in_hostcall = 0;
@@ -151,13 +158,16 @@ m3ApiRawFunction(wasmos_ipc_drain) {
     wasm_ipc_last_slot_t* slot;
     int rc;
 
-    if (endpoint < 0 || current_process_context(&context_id) != 0) {
-        m3ApiReturn(-1);
+    if (endpoint < 0) {
+        m3ApiReturn(IPC_ERR_INVALID);
+    }
+    if (current_process_context(&context_id) != 0) {
+        m3ApiReturn(IPC_ERR_NOENT);
     }
 
     slot = wasm_ipc_slot_for_pid(pid);
     if (!slot) {
-        m3ApiReturn(-1);
+        m3ApiReturn(IPC_ERR_NOENT);
     }
 
     preempt_safepoint();
@@ -166,7 +176,7 @@ m3ApiRawFunction(wasmos_ipc_drain) {
         m3ApiReturn(0); /* no message — return without blocking */
     }
     if (rc != IPC_OK) {
-        m3ApiReturn(-1);
+        m3ApiReturn(rc);
     }
     slot->valid = 1;
     preempt_safepoint();
@@ -176,12 +186,12 @@ m3ApiRawFunction(wasmos_ipc_drain) {
 m3ApiRawFunction(wasmos_sys_select_create) {
     m3ApiReturnType(int32_t) uint32_t context_id = 0;
     if (current_process_context(&context_id) != 0) {
-        m3ApiReturn(-1);
+        m3ApiReturn(IPC_ERR_NOENT);
     }
     uint32_t select_id = 0;
     int rc = ipc_select_create(context_id, &select_id);
     if (rc != IPC_OK) {
-        m3ApiReturn(-1);
+        m3ApiReturn(rc);
     }
     m3ApiReturn((int32_t)select_id);
 }
@@ -189,17 +199,23 @@ m3ApiRawFunction(wasmos_sys_select_create) {
 m3ApiRawFunction(wasmos_sys_select_add) {
     m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, select_id) m3ApiGetArg(int32_t, endpoint_id)
         uint32_t context_id = 0;
-    if (select_id <= 0 || endpoint_id < 0 || current_process_context(&context_id) != 0) {
-        m3ApiReturn(-1);
+    if (select_id <= 0 || endpoint_id < 0) {
+        m3ApiReturn(IPC_ERR_INVALID);
+    }
+    if (current_process_context(&context_id) != 0) {
+        m3ApiReturn(IPC_ERR_NOENT);
     }
     int rc = ipc_select_add((uint32_t)select_id, (uint32_t)endpoint_id, context_id);
-    m3ApiReturn(rc == IPC_OK ? 0 : -1);
+    m3ApiReturn(rc == IPC_OK ? 0 : rc);
 }
 
 m3ApiRawFunction(wasmos_sys_select_wait) {
     m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, select_id) uint32_t context_id = 0;
-    if (select_id <= 0 || current_process_context(&context_id) != 0) {
-        m3ApiReturn(-1);
+    if (select_id <= 0) {
+        m3ApiReturn(IPC_ERR_INVALID);
+    }
+    if (current_process_context(&context_id) != 0) {
+        m3ApiReturn(IPC_ERR_NOENT);
     }
     uint32_t ready_ep = IPC_ENDPOINT_NONE;
     for (;;) {
@@ -212,7 +228,7 @@ m3ApiRawFunction(wasmos_sys_select_wait) {
             preempt_safepoint();
             continue;
         }
-        m3ApiReturn(-1);
+        m3ApiReturn(rc);
     }
 }
 
@@ -239,8 +255,11 @@ m3ApiRawFunction(wasmos_sys_select_wait_timeout) {
 
 m3ApiRawFunction(wasmos_sys_select_destroy) {
     m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, select_id) uint32_t context_id = 0;
-    if (select_id <= 0 || current_process_context(&context_id) != 0) {
-        m3ApiReturn(-1);
+    if (select_id <= 0) {
+        m3ApiReturn(IPC_ERR_INVALID);
+    }
+    if (current_process_context(&context_id) != 0) {
+        m3ApiReturn(IPC_ERR_NOENT);
     }
     ipc_select_destroy((uint32_t)select_id, context_id);
     m3ApiReturn(0);
@@ -250,10 +269,14 @@ m3ApiRawFunction(wasmos_ipc_notify) {
     m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, endpoint) uint32_t context_id = 0;
 
     preempt_safepoint();
-    if (endpoint < 0 || current_process_context(&context_id) != 0) {
-        m3ApiReturn(-1);
+    if (endpoint < 0) {
+        m3ApiReturn(IPC_ERR_INVALID);
     }
-    int rc = ipc_notify_from(context_id, (uint32_t)endpoint) == IPC_OK ? 0 : -1;
+    if (current_process_context(&context_id) != 0) {
+        m3ApiReturn(IPC_ERR_NOENT);
+    }
+    int rc = ipc_notify_from(context_id, (uint32_t)endpoint);
+    rc = (rc == IPC_OK) ? 0 : rc;
     preempt_safepoint();
     m3ApiReturn(rc);
 }
@@ -263,7 +286,10 @@ m3ApiRawFunction(wasmos_ipc_last_field) {
     wasm_ipc_last_slot_t* slot = wasm_ipc_slot_for_pid(pid);
 
     if (!slot || !slot->valid) {
-        m3ApiReturn(-1);
+        /* No message has been received on this process yet. A field value can
+         * itself be -1, so this stays a distinct code rather than folding into
+         * the value space. */
+        m3ApiReturn(IPC_ERR_NOENT);
     }
 
     switch ((uint32_t)field) {
@@ -284,6 +310,6 @@ m3ApiRawFunction(wasmos_ipc_last_field) {
     case WASMOS_IPC_FIELD_ARG3:
         m3ApiReturn((int32_t)slot->message.arg3);
     default:
-        m3ApiReturn(-1);
+        m3ApiReturn(IPC_ERR_INVALID); /* not a field id */
     }
 }

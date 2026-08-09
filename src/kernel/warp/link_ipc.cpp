@@ -23,26 +23,38 @@ uint32_t warp_ipc_create_endpoint(void* ctx_) {
     uint32_t context_id = 0, endpoint = IPC_ENDPOINT_NONE;
     (void)ctx_;
     if (warp_current_context_id(&context_id) != 0)
-        return (uint32_t)-1;
-    if (ipc_endpoint_create(context_id, &endpoint) != IPC_OK)
-        return (uint32_t)-1;
+        return (uint32_t)IPC_ERR_NOENT;
+    int create_rc = ipc_endpoint_create(context_id, &endpoint);
+    if (create_rc != IPC_OK)
+        return (uint32_t)create_rc;
     return endpoint;
 }
 
 uint32_t warp_ipc_endpoint_owner(uint32_t endpoint, void* ctx_) {
     (void)ctx_;
     uint32_t owner = 0;
-    if (ipc_endpoint_owner(endpoint, &owner) != IPC_OK || !owner)
-        return (uint32_t)-1;
+    if ((int32_t)endpoint < 0)
+        return (uint32_t)IPC_ERR_INVALID;
+    int owner_rc = ipc_endpoint_owner(endpoint, &owner);
+    if (owner_rc != IPC_OK)
+        return (uint32_t)owner_rc;
+    if (!owner)
+        return (uint32_t)IPC_ERR_NOENT; /* kernel-owned reads as "not yours to see" */
     return owner;
 }
 
-uint32_t warp_ipc_send(uint32_t dest, uint32_t src, uint32_t type, uint32_t req_id,
-                              uint32_t a0, uint32_t a1, uint32_t a2, uint32_t a3, void* ctx_) {
+/* Negative handles are rejected before the cast, matching wasm3. Casting first
+ * turned a malformed argument into IPC_ENDPOINT_NONE and reported whatever the
+ * transport then said about it -- a different code for the same guest mistake
+ * depending on which runtime the app happened to run under. */
+uint32_t warp_ipc_send(uint32_t dest, uint32_t src, uint32_t type, uint32_t req_id, uint32_t a0,
+                       uint32_t a1, uint32_t a2, uint32_t a3, void* ctx_) {
     (void)ctx_;
     uint32_t context_id = 0;
+    if ((int32_t)dest < 0 || (int32_t)src < 0)
+        return (uint32_t)IPC_ERR_INVALID;
     if (warp_current_context_id(&context_id) != 0)
-        return (uint32_t)-1;
+        return (uint32_t)IPC_ERR_NOENT;
     ipc_message_t msg;
     msg.type = type;
     msg.source = src;
@@ -61,16 +73,19 @@ uint32_t warp_ipc_select_one(uint32_t endpoint, void* ctx_) {
     uint32_t pid = process_current_pid();
     process_t* process = nullptr;
 
-    if ((int32_t)endpoint < 0 || warp_current_context_id(&context_id) != 0) {
-        return (uint32_t)-1;
+    if ((int32_t)endpoint < 0) {
+        return (uint32_t)IPC_ERR_INVALID;
+    }
+    if (warp_current_context_id(&context_id) != 0) {
+        return (uint32_t)IPC_ERR_NOENT;
     }
     WarpIpcLastSlot* slot = warp_ipc_slot_for_pid(pid);
     if (!slot) {
-        return (uint32_t)-1;
+        return (uint32_t)IPC_ERR_NOENT;
     }
     process = process_get(pid);
     if (!process) {
-        return (uint32_t)-1;
+        return (uint32_t)IPC_ERR_NOENT;
     }
     process->in_hostcall = 1;
 
@@ -92,7 +107,7 @@ uint32_t warp_ipc_select_one(uint32_t endpoint, void* ctx_) {
         if (rc != IPC_OK) {
             process->block_reason = PROCESS_BLOCK_NONE;
             process->in_hostcall = 0;
-            return (uint32_t)-1;
+            return (uint32_t)rc;
         }
 
         process->block_reason = PROCESS_BLOCK_NONE;
@@ -142,17 +157,20 @@ uint32_t warp_ipc_drain(uint32_t endpoint, void* ctx_) {
     (void)ctx_;
     uint32_t context_id = 0;
     uint32_t pid = process_current_pid();
-    if ((int32_t)endpoint < 0 || warp_current_context_id(&context_id) != 0) {
-        return (uint32_t)-1;
+    if ((int32_t)endpoint < 0) {
+        return (uint32_t)IPC_ERR_INVALID;
+    }
+    if (warp_current_context_id(&context_id) != 0) {
+        return (uint32_t)IPC_ERR_NOENT;
     }
     WarpIpcLastSlot* slot = warp_ipc_slot_for_pid(pid);
     if (!slot)
-        return (uint32_t)-1;
+        return (uint32_t)IPC_ERR_NOENT;
     int rc = ipc_recv_for(context_id, endpoint, &slot->message);
     if (rc == IPC_EMPTY)
         return 0;
     if (rc != IPC_OK)
-        return (uint32_t)-1;
+        return (uint32_t)rc;
     slot->valid = 1;
     WarpFsPeerSlot* peer = warp_fs_peer_slot_for_pid(pid);
     if (peer && slot->message.type >= FS_IPC_OPEN_REQ &&
@@ -173,8 +191,10 @@ uint32_t warp_ipc_drain(uint32_t endpoint, void* ctx_) {
 uint32_t warp_ipc_notify(uint32_t endpoint, void* ctx_) {
     (void)ctx_;
     uint32_t context_id = 0;
+    if ((int32_t)endpoint < 0)
+        return (uint32_t)IPC_ERR_INVALID;
     if (warp_current_context_id(&context_id) != 0)
-        return (uint32_t)-1;
+        return (uint32_t)IPC_ERR_NOENT;
     return (uint32_t)ipc_notify_from(context_id, endpoint);
 }
 
@@ -185,7 +205,9 @@ uint32_t warp_ipc_last_field(uint32_t field, void* ctx_) {
     process_t* proc = process_get(pid);
     uint32_t value = 0;
     if (!slot || !slot->valid)
-        return (uint32_t)-1;
+        /* No message received yet. A field value can itself be -1, so this is a
+         * distinct code rather than a magic value in the field's own space. */
+        return (uint32_t)IPC_ERR_NOENT;
     switch (field) {
     case 0:
         value = slot->message.type;
@@ -212,7 +234,7 @@ uint32_t warp_ipc_last_field(uint32_t field, void* ctx_) {
         value = slot->message.arg3;
         break;
     default:
-        return (uint32_t)-1;
+        return (uint32_t)IPC_ERR_INVALID; /* not a field id */
     }
     if (warp_dbg_ipc_trace_process(proc)) {
         klog_write("[dbg-r3-ipc] last pid=");
@@ -230,32 +252,38 @@ uint32_t warp_ipc_select_create(void* ctx_) {
     (void)ctx_;
     uint32_t context_id = 0, sel_id = 0;
     if (warp_current_context_id(&context_id) != 0)
-        return (uint32_t)-1;
-    if (ipc_select_create(context_id, &sel_id) != IPC_OK)
-        return (uint32_t)-1;
+        return (uint32_t)IPC_ERR_NOENT;
+    int create_rc = ipc_select_create(context_id, &sel_id);
+    if (create_rc != IPC_OK)
+        return (uint32_t)create_rc;
     return sel_id;
 }
 
 uint32_t warp_ipc_select_add(uint32_t sel_id, uint32_t ep_id, void* ctx_) {
     (void)ctx_;
     uint32_t context_id = 0;
+    if ((int32_t)sel_id <= 0 || (int32_t)ep_id < 0)
+        return (uint32_t)IPC_ERR_INVALID;
     if (warp_current_context_id(&context_id) != 0)
-        return (uint32_t)-1;
-    return (uint32_t)(ipc_select_add(sel_id, ep_id, context_id) == IPC_OK ? 0 : -1);
+        return (uint32_t)IPC_ERR_NOENT;
+    int rc = ipc_select_add(sel_id, ep_id, context_id);
+    return (uint32_t)(rc == IPC_OK ? 0 : rc);
 }
 
 uint32_t warp_ipc_select_wait(uint32_t sel_id, void* ctx_) {
     (void)ctx_;
     uint32_t context_id = 0;
+    if ((int32_t)sel_id <= 0)
+        return (uint32_t)IPC_ERR_INVALID;
     if (warp_current_context_id(&context_id) != 0)
-        return (uint32_t)-1;
+        return (uint32_t)IPC_ERR_NOENT;
     uint32_t ready = IPC_ENDPOINT_NONE;
     for (;;) {
         int rc = ipc_select_wait(sel_id, context_id, &ready, 0);
         if (rc == IPC_OK)
             return ready;
         if (rc != IPC_EMPTY)
-            return (uint32_t)-1;
+            return (uint32_t)rc;
     }
 }
 
@@ -280,8 +308,10 @@ uint32_t warp_ipc_select_wait_timeout(uint32_t sel_id, uint32_t timeout_ms, void
 uint32_t warp_ipc_select_destroy(uint32_t sel_id, void* ctx_) {
     (void)ctx_;
     uint32_t context_id = 0;
+    if ((int32_t)sel_id <= 0)
+        return (uint32_t)IPC_ERR_INVALID;
     if (warp_current_context_id(&context_id) != 0)
-        return (uint32_t)-1;
+        return (uint32_t)IPC_ERR_NOENT;
     ipc_select_destroy(sel_id, context_id);
     return 0;
 }

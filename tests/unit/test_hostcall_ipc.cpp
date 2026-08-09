@@ -472,21 +472,21 @@ static int32_t s_select_destroy_bad_set(const Shims& s) {
 
 static const Scenario k_scenarios[] = {
     {"create_endpoint(valid) returns a handle", 1, 1, false, s_create_ok, nullptr},
-    {"create_endpoint(no current process)", -1, -1, false, s_create_no_process, nullptr},
+    {"create_endpoint(no current process)", -4, -4, false, s_create_no_process, nullptr},
     {"endpoint_owner(owned)", (int32_t)CALLER_CTX, (int32_t)CALLER_CTX, false, s_owner_ok, nullptr},
     {"endpoint_owner(negative handle)", -1, -1, false, s_owner_negative, nullptr},
-    {"endpoint_owner(unknown)", -1, -1, false, s_owner_unknown, nullptr},
+    {"endpoint_owner(unknown)", -4, -4, false, s_owner_unknown, nullptr},
 
     {"send(valid)", 0, 0, false, s_send_ok, nullptr},
-    {"send(negative destination)", -1, -4, true, s_send_negative_dst,
-     "wasm3 rejects a negative handle up front; WARP casts it to IPC_ENDPOINT_NONE "
-     "and lets the transport answer NOENT"},
-    {"send(negative source)", -1, -2, true, s_send_negative_src,
+    {"send(negative destination)", -1, -1, false, s_send_negative_dst,
+     "a malformed handle is INVALID in both. WARP used to cast it to "
+     "IPC_ENDPOINT_NONE first and report whatever the transport then said"},
+    {"send(negative source)", -1, -1, false, s_send_negative_src,
      "same cause: WARP's cast turns the guest's -1 into a source it does not own, "
      "so the answer is DENIED rather than a rejected argument"},
     {"send(unknown destination)", -4, -4, false, s_send_unknown_dst,
-     "send propagates the transport code in BOTH runtimes -- the split codes already "
-     "reach guests here"},
+     "the transport code reaches the guest: NOENT is distinguishable from a "
+     "malformed argument"},
     {"send(source owned by another context)", -2, -2, false, s_send_foreign_src, nullptr},
     {"send(destination is a notification endpoint)", -7, -7, false, s_send_to_notification,
      nullptr},
@@ -494,25 +494,25 @@ static const Scenario k_scenarios[] = {
     {"drain(empty) is 0, not an error", 0, 0, false, s_drain_empty, nullptr},
     {"drain(has message)", 1, 1, false, s_drain_has_message, nullptr},
     {"drain(negative handle)", -1, -1, false, s_drain_negative, nullptr},
-    {"drain(unknown endpoint)", -1, -1, false, s_drain_unknown, nullptr},
-    {"drain(notification endpoint)", -1, -1, false, s_drain_notification, nullptr},
+    {"drain(unknown endpoint)", -4, -4, false, s_drain_unknown, nullptr},
+    {"drain(notification endpoint)", -7, -7, false, s_drain_notification, nullptr},
 
-    {"last_field before any receive", -1, -1, false, s_last_field_before_receive, nullptr},
+    {"last_field before any receive", -4, -4, false, s_last_field_before_receive, nullptr},
     {"last_field(arg0) after receive", 0xAB, 0xAB, false, s_last_field_after_receive, nullptr},
     {"last_field(out of range)", -1, -1, false, s_last_field_out_of_range, nullptr},
 
     {"notify(valid)", 0, 0, false, s_notify_ok, nullptr},
-    {"notify(negative handle)", -1, -4, true, s_notify_negative,
-     "wasm3 flattens every notify failure to -1; WARP returns the transport code"},
-    {"notify(message endpoint)", -1, -7, true, s_notify_message_ep,
-     "the same flattening: a guest on wasm3 cannot tell a type mismatch from a bad "
-     "handle, a guest on WARP can"},
-    {"notify(another context's endpoint)", -1, -2, true, s_notify_foreign,
-     "and cannot tell a permission failure either"},
+    {"notify(negative handle)", -1, -1, false, s_notify_negative,
+     "a malformed handle, not a transport failure"},
+    {"notify(message endpoint)", -7, -7, false, s_notify_message_ep,
+     "UNSUPPORTED: both runtimes now say WHY, so a guest can tell a type mismatch "
+     "from a bad handle"},
+    {"notify(another context's endpoint)", -2, -2, false, s_notify_foreign,
+     "DENIED, distinct from both of the above"},
 
     {"select_create(valid) returns a handle", 1, 1, false, s_select_create_ok, nullptr},
     {"select_add(valid)", 0, 0, false, s_select_add_ok, nullptr},
-    {"select_add(unknown set)", -1, -1, false, s_select_add_bad_set, nullptr},
+    {"select_add(unknown set)", -4, -4, false, s_select_add_bad_set, nullptr},
     {"select_add(negative set)", -1, -1, false, s_select_add_negative_set, nullptr},
     {"select_add(negative endpoint)", -1, -1, false, s_select_add_negative_ep,
      "was the one divergence that was a bug rather than a reporting difference: "
@@ -569,7 +569,7 @@ int main(void) {
             printf("  [FAIL] parity %s: wasm3=%d WARP=%d\n", sc.what, w3, wp);
         }
     }
-    printf("  ... %d of %zu scenarios still differ between the runtimes\n", divergences,
+    printf("  ... %d of %zu scenarios differ between the runtimes\n", divergences,
            sizeof(k_scenarios) / sizeof(k_scenarios[0]));
 
     printf("test_hostcall_ipc: %d checks, %d failures\n", g_checks, g_failures);

@@ -14,6 +14,12 @@
 
 #include <stdint.h>
 
+/* Whole body inside the linkage guard: these are C declarations over C headers,
+ * and including them outside it from a C++ TU would give them C++ linkage. */
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include "ipc.h"
 #include "wasm3.h" /* IM3Runtime / IM3ImportContext / m3ApiRawFunction */
 
@@ -60,5 +66,9 @@ m3ApiRawFunction(wasmos_sys_select_add);
 m3ApiRawFunction(wasmos_sys_select_wait);
 m3ApiRawFunction(wasmos_sys_select_wait_timeout);
 m3ApiRawFunction(wasmos_sys_select_destroy);
+
+#ifdef __cplusplus
+} /* extern "C" */
+#endif
 
 #endif /* WASMOS_WASM3_LINK_IPC_H */

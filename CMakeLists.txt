@@ -2269,6 +2269,52 @@ add_custom_target(run-kernel-unit-tests
           ${CMAKE_SOURCE_DIR}/tests/unit/test_libsys_event_loop.c
           -o ${BUILD_DIR}/test_libsys_event_loop
   COMMAND ${BUILD_DIR}/test_libsys_event_loop
+  # The IPC host-call shims, BOTH runtimes in one binary so every scenario runs
+  # through each and the results are compared. wasm3's raw-call ABI is stack
+  # marshalling and WARP's takes an unused context pointer, so neither needs a
+  # live engine; the kernel side is the real ipc.c. Both shim TUs are built here
+  # regardless of which runtime this tree is configured for -- comparing them is
+  # the entire point, and since the extraction they are standalone.
+  COMMAND ${CMAKE_CXX_COMPILER} -std=c++17 -Wall -Wno-unused-parameter
+          -DWASMOS_HOST_TEST_SMP=1
+          -include ${LIBC_DIR}/include/wasmos_cast.h
+          -iquote ${KERNEL_DIR} -iquote ${KERNEL_DIR}/include
+          -iquote ${CMAKE_SOURCE_DIR}/libs/wasm3/source
+          -iquote ${CMAKE_SOURCE_DIR}/abi/generated/c
+          -iquote ${DRIVER_WASM_DIR}/include
+          -c ${KERNEL_DIR}/warp/link_ipc.cpp -o ${BUILD_DIR}/test_warp_link_ipc.o
+  # -Wno-unused-parameter: m3ApiRawFunction's signature carries runtime/_ctx/_mem
+  # for every host call whether or not one uses them; that is wasm3's ABI, not
+  # our style, and the kernel build does not apply -Wextra here either.
+  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
+          -Wno-unused-parameter
+          -DWASMOS_HOST_TEST_SMP=1
+          -include ${LIBC_DIR}/include/wasmos_cast.h
+          -iquote ${KERNEL_DIR} -iquote ${KERNEL_DIR}/include
+          -iquote ${CMAKE_SOURCE_DIR}/libs/wasm3/source
+          -iquote ${CMAKE_SOURCE_DIR}/abi/generated/c
+          -iquote ${DRIVER_WASM_DIR}/include
+          -c ${KERNEL_DIR}/wasm3/link_ipc.c -o ${BUILD_DIR}/test_wasm3_link_ipc.o
+  # No explicit -std on this step: it mixes C++ and C sources in one invocation
+  # and -std=c++17 is rejected for the C ones. The compiler defaults (gnu++17 /
+  # gnu17) cover both.
+  COMMAND ${CMAKE_CXX_COMPILER} -Wall -Wno-unused-parameter
+          -DWASMOS_HOST_TEST_SMP=1
+          -include ${LIBC_DIR}/include/wasmos_cast.h
+          -iquote ${KERNEL_DIR} -iquote ${KERNEL_DIR}/include
+          -iquote ${CMAKE_SOURCE_DIR}/libs/wasm3/source
+          -iquote ${CMAKE_SOURCE_DIR}/abi/generated/c
+          -iquote ${DRIVER_WASM_DIR}/include
+          -x c++ ${CMAKE_SOURCE_DIR}/tests/unit/test_hostcall_ipc.cpp
+          -x none ${BUILD_DIR}/test_warp_link_ipc.o ${BUILD_DIR}/test_wasm3_link_ipc.o
+          -x c ${KERNEL_DIR}/ipc.c ${KERNEL_DIR}/poll.c ${KERNEL_DIR}/sched_event.c
+          ${KERNEL_DIR}/list.c ${KERNEL_DIR}/list_linked.c ${KERNEL_DIR}/list_array_chunk.c
+          ${KERNEL_DIR}/kmem.c
+          ${CMAKE_SOURCE_DIR}/tests/unit/stubs_slab.c
+          ${CMAKE_SOURCE_DIR}/tests/unit/stubs_spinlock.c
+          -x none
+          -o ${BUILD_DIR}/test_hostcall_ipc
+  COMMAND ${BUILD_DIR}/test_hostcall_ipc
   # The poll hub on its own. Its only outward call is ipc_select_signal, so the
   # test stubs that and asserts exactly which sets a notify reaches.
   COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions

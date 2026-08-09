@@ -11,12 +11,16 @@
 
 #include <stdint.h>
 
+/* The kernel headers below are C, and so is everything declared here, so the
+ * whole body sits inside the linkage guard: pulling process.h in outside it
+ * from a C++ TU would give its declarations C++ linkage and clash with the
+ * same header included as C elsewhere. */
+#ifdef __cplusplus
 extern "C" {
+#endif
+
 #include "ipc.h"
 #include "process.h"
-}
-
-extern "C" {
 
 struct WarpIpcLastSlot {
     uint32_t pid;
@@ -57,6 +61,8 @@ uint32_t warp_ipc_select_wait(uint32_t sel_id, void* ctx_);
 uint32_t warp_ipc_select_wait_timeout(uint32_t sel_id, uint32_t timeout_ms, void* ctx_);
 uint32_t warp_ipc_select_destroy(uint32_t sel_id, void* ctx_);
 
+#ifdef __cplusplus
 } /* extern "C" */
+#endif
 
 #endif /* WASMOS_WARP_LINK_IPC_H */

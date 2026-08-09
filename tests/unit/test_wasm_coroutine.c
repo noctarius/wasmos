@@ -430,6 +430,446 @@ static int test_fs_request_future(void) {
     return 0;
 }
 
+/* ------------------------------------------------------------------------
+ * Scenarios the native suite (tests/unit/test_native_coroutine.c) covered and
+ * this one did not. None depend on the stackful model, so they apply to the
+ * stackless runtime unchanged. Mirrored in tests/unit/test_as_coroutine.ts.
+ * ---------------------------------------------------------------------- */
+
+#define TEST_WAITER_COUNT 4u
+#define TEST_STRESS_COUNT 8u
+#define TEST_STRESS_YIELDS 4u
+
+typedef struct {
+    int pc;
+    wasmos_future_t* future;
+    int32_t status;
+    uintptr_t value;
+} many_waiter_state_t;
+
+static int32_t many_waiter_task(void* user, uintptr_t* out_value) {
+    many_waiter_state_t* state = user;
+    state->status = wasmos_future_await(state->future, &state->value);
+    if (state->status == WASMOS_WASM_AWAIT_PENDING) {
+        state->pc = 1;
+        return WASMOS_WASM_TASK_YIELDED;
+    }
+    *out_value = state->value;
+    return state->status;
+}
+
+/* Several coroutines parked on ONE future. The runtime keeps them on a
+ * singly-linked wait list and splices the whole list at settle time; with a
+ * single waiter that loop body runs once with next == NULL, so it was in
+ * effect untested. */
+static int test_multiple_waiters(void) {
+    for (int failing = 0; failing < 2; ++failing) {
+        wasmos_wasm_runtime_t runtime = {0};
+        wasmos_wasm_coroutine_t coroutines[TEST_WAITER_COUNT] = {0};
+        many_waiter_state_t states[TEST_WAITER_COUNT] = {0};
+        wasmos_future_t future;
+        wasmos_promise_t promise;
+
+        wasmos_wasm_runtime_init(&runtime);
+        wasmos_future_init(&future, &promise);
+        for (size_t i = 0; i < TEST_WAITER_COUNT; ++i) {
+            states[i].future = &future;
+            if (!wasmos_async_start(&runtime, &coroutines[i], many_waiter_task, &states[i]))
+                return __LINE__;
+        }
+        if (wasmos_wasm_coroutine_run(&runtime) != (int)TEST_WAITER_COUNT)
+            return __LINE__;
+        if (failing == 0) {
+            if (!wasmos_promise_resolve(&promise, 77u))
+                return __LINE__;
+        } else if (!wasmos_promise_reject(&promise, -31)) {
+            return __LINE__;
+        }
+        /* Settling wakes ALL of them, so the second drain resumes each once. */
+        if (wasmos_wasm_coroutine_run(&runtime) != (int)TEST_WAITER_COUNT)
+            return __LINE__;
+        for (size_t i = 0; i < TEST_WAITER_COUNT; ++i) {
+            if (coroutines[i].state != WASMOS_WASM_COROUTINE_DEAD)
+                return __LINE__;
+            if (failing == 0 && (states[i].status != 0 || states[i].value != 77u))
+                return __LINE__;
+            if (failing != 0 && (states[i].status != -31 || states[i].value != 0u))
+                return __LINE__;
+        }
+    }
+    return 0;
+}
+
+typedef struct {
+    int pc;
+} target_state_t;
+
+static int32_t target_task(void* user, uintptr_t* out_value) {
+    target_state_t* state = user;
+    if (state->pc == 0) {
+        state->pc = 1;
+        return WASMOS_WASM_TASK_YIELDED;
+    }
+    *out_value = 23u;
+    return WASMOS_WASM_TASK_COMPLETE;
+}
+
+typedef struct {
+    wasmos_wasm_coroutine_t* target;
+    int32_t status;
+    int32_t result;
+} joiner_state_t;
+
+static int32_t joiner_task(void* user, uintptr_t* out_value) {
+    joiner_state_t* state = user;
+    (void)out_value;
+    state->status = wasmos_wasm_coroutine_join(state->target, &state->result);
+    if (state->status == WASMOS_WASM_AWAIT_PENDING)
+        return WASMOS_WASM_TASK_YIELDED;
+    return 0;
+}
+
+/* The same wait list, reached through a coroutine's completion future. */
+static int test_multiple_joiners(void) {
+    wasmos_wasm_runtime_t runtime = {0};
+    wasmos_wasm_coroutine_t target = {0};
+    wasmos_wasm_coroutine_t joiners[TEST_WAITER_COUNT] = {0};
+    joiner_state_t states[TEST_WAITER_COUNT] = {0};
+    target_state_t target_state = {0};
+
+    wasmos_wasm_runtime_init(&runtime);
+    if (!wasmos_async_start(&runtime, &target, target_task, &target_state))
+        return __LINE__;
+    for (size_t i = 0; i < TEST_WAITER_COUNT; ++i) {
+        states[i].target = &target;
+        if (!wasmos_async_start(&runtime, &joiners[i], joiner_task, &states[i]))
+            return __LINE__;
+    }
+    if (wasmos_wasm_coroutine_run(&runtime) < 0)
+        return __LINE__;
+    for (size_t i = 0; i < TEST_WAITER_COUNT; ++i) {
+        /* Every joiner sees the target's return value, not just the first. */
+        if (joiners[i].state != WASMOS_WASM_COROUTINE_DEAD || states[i].status != 0 ||
+            states[i].result != 23) {
+            return __LINE__;
+        }
+    }
+    if (target.state != WASMOS_WASM_COROUTINE_DEAD)
+        return __LINE__;
+    return 0;
+}
+
+typedef struct {
+    unsigned remaining;
+    unsigned* completed;
+} stress_state_t;
+
+static int32_t stress_task(void* user, uintptr_t* out_value) {
+    stress_state_t* state = user;
+    if (state->remaining > 0u) {
+        state->remaining--;
+        return WASMOS_WASM_TASK_YIELDED;
+    }
+    (*state->completed)++;
+    *out_value = 0u;
+    return WASMOS_WASM_TASK_COMPLETE;
+}
+
+/* Round-robin fairness at scale: the exact resume count is the schedule, so a
+ * queue that starved or double-scheduled anyone changes it. */
+static int test_scheduler_stress(void) {
+    wasmos_wasm_runtime_t runtime = {0};
+    wasmos_wasm_coroutine_t coroutines[TEST_STRESS_COUNT] = {0};
+    stress_state_t states[TEST_STRESS_COUNT] = {0};
+    unsigned completed = 0u;
+
+    wasmos_wasm_runtime_init(&runtime);
+    for (size_t i = 0; i < TEST_STRESS_COUNT; ++i) {
+        states[i].remaining = TEST_STRESS_YIELDS;
+        states[i].completed = &completed;
+        if (!wasmos_async_start(&runtime, &coroutines[i], stress_task, &states[i]))
+            return __LINE__;
+    }
+    if (wasmos_wasm_coroutine_run(&runtime) !=
+            (int)(TEST_STRESS_COUNT * (TEST_STRESS_YIELDS + 1u)) ||
+        completed != TEST_STRESS_COUNT) {
+        return __LINE__;
+    }
+    for (size_t i = 0; i < TEST_STRESS_COUNT; ++i) {
+        int32_t status = -1;
+        uintptr_t value = 1u;
+        if (!wasmos_future_poll(&coroutines[i].completion, &status, &value) || status != 0 ||
+            value != 0u) {
+            return __LINE__;
+        }
+    }
+    return 0;
+}
+
+typedef struct {
+    wasmos_wasm_runtime_t* runtime;
+    wasmos_future_t* settled;
+    wasmos_future_continuation_t nested;
+    wasmos_future_t* nested_child;
+    int reentrant_run_result;
+    callback_state_t nested_state;
+} reentrant_state_t;
+
+static int32_t reentrant_callback(void* user, uintptr_t value, uintptr_t* out_value) {
+    reentrant_state_t* state = user;
+    state->reentrant_run_result = wasmos_wasm_coroutine_run(state->runtime);
+    state->nested_child = wasmos_future_then(state->runtime, state->settled, &state->nested,
+                                             increment, NULL, &state->nested_state);
+    *out_value = value;
+    return state->nested_child ? 0 : -1;
+}
+
+typedef struct {
+    unsigned* runs;
+} respawn_state_t;
+
+static int32_t respawn_task(void* user, uintptr_t* out_value) {
+    respawn_state_t* state = user;
+    (*state->runs)++;
+    *out_value = 0u;
+    return WASMOS_WASM_TASK_COMPLETE;
+}
+
+static int test_reentrancy_respawn_and_pending_poll(void) {
+    wasmos_wasm_runtime_t runtime = {0};
+    wasmos_future_t source, settled;
+    wasmos_promise_t source_promise, settled_promise;
+    wasmos_future_continuation_t continuation = {0};
+    reentrant_state_t state = {0};
+    int32_t status = 123;
+    uintptr_t value = 456u;
+
+    wasmos_wasm_runtime_init(&runtime);
+    wasmos_future_init(&source, &source_promise);
+    wasmos_future_init(&settled, &settled_promise);
+    state.runtime = &runtime;
+    state.settled = &settled;
+
+    /* poll() on a PENDING future reports nothing and leaves the outputs be. */
+    if (wasmos_future_poll(&source, &status, &value) || status != 123 || value != 456u)
+        return __LINE__;
+
+    if (!wasmos_promise_resolve(&settled_promise, 9u) ||
+        !wasmos_future_then(&runtime, &source, &continuation, reentrant_callback, NULL, &state) ||
+        !wasmos_promise_resolve(&source_promise, 7u) || wasmos_wasm_coroutine_run(&runtime) != 0) {
+        return __LINE__;
+    }
+    /* run() from inside a dispatched callback is refused, not recursed. */
+    if (state.reentrant_run_result != -1 || !state.nested_child)
+        return __LINE__;
+    /* A continuation registered from inside a callback still settles. */
+    if (!wasmos_future_poll(state.nested_child, NULL, &value) || value != 10u)
+        return __LINE__;
+
+    /* A DEAD coroutine record may be reused; async_start accepts NEW or DEAD. */
+    wasmos_wasm_runtime_t respawn_runtime = {0};
+    wasmos_wasm_coroutine_t coroutine = {0};
+    unsigned runs = 0u;
+    respawn_state_t respawn = {.runs = &runs};
+    wasmos_wasm_runtime_init(&respawn_runtime);
+    if (!wasmos_async_start(&respawn_runtime, &coroutine, respawn_task, &respawn) ||
+        wasmos_async_start(&respawn_runtime, &coroutine, respawn_task, &respawn) ||
+        wasmos_wasm_coroutine_run(&respawn_runtime) != 1 || runs != 1u ||
+        coroutine.state != WASMOS_WASM_COROUTINE_DEAD ||
+        !wasmos_async_start(&respawn_runtime, &coroutine, respawn_task, &respawn) ||
+        wasmos_wasm_coroutine_run(&respawn_runtime) != 1 || runs != 2u) {
+        return __LINE__;
+    }
+    return 0;
+}
+
+/* Race with N candidates that ALL settle, run once per winning position.
+ *
+ * Every suite tested exactly one ordering (the second of three winning), so
+ * nothing pinned that the result is independent of WHICH position wins. The
+ * implementation is position-agnostic today; these cases keep it that way.
+ *
+ * A caveat, established by trying to break it: this does NOT distinguish the
+ * head/middle/tail branches of the dispatch-queue removal. A mutant that only
+ * removes the head still passes, because continuation_cancel nulls the node's
+ * next regardless -- truncating the list anyway -- and nulls its future, so a
+ * surviving stale entry dispatches as a no-op.
+ *
+ * What IS pinned: the first to settle wins from any position, and every loser
+ * ends up inactive, off its source future, and off the dispatch queue. */
+#define RACE_MAX 4u
+static int race_winner_case(size_t winner, size_t count) {
+    wasmos_wasm_runtime_t runtime = {0};
+    wasmos_future_t futures[RACE_MAX];
+    wasmos_promise_t promises[RACE_MAX];
+    wasmos_future_continuation_t continuations[RACE_MAX] = {0};
+    wasmos_future_t* inputs[RACE_MAX];
+    wasmos_future_group_t group = {0};
+    wasmos_future_t* result;
+    int32_t status = 0;
+    uintptr_t value = 0;
+    const uintptr_t expected = (uintptr_t)(100u + winner);
+
+    wasmos_wasm_runtime_init(&runtime);
+    for (size_t i = 0; i < count; ++i) {
+        wasmos_future_init(&futures[i], &promises[i]);
+        inputs[i] = &futures[i];
+    }
+    result = wasmos_future_race(&runtime, &group, inputs, count, continuations);
+    if (!result)
+        return __LINE__;
+
+    /* Winner settles first, so it dispatches first and wins; the rest settle
+     * before the drain and queue behind it, making them losers that were
+     * already enqueued rather than merely pending. Losers settle in descending
+     * index order so the abandon order (ascending) differs from queue order. */
+    if (!wasmos_promise_resolve(&promises[winner], expected))
+        return __LINE__;
+    for (size_t i = count; i-- > 0;) {
+        if (i == winner)
+            continue;
+        if (!wasmos_promise_resolve(&promises[i], (uintptr_t)(900u + i)))
+            return __LINE__;
+    }
+    if (!runtime.continuation_head || wasmos_wasm_coroutine_run(&runtime) != 0)
+        return __LINE__;
+    if (!wasmos_future_poll(result, &status, &value) || status != 0 || value != expected ||
+        !group.settled || group.active) {
+        return __LINE__;
+    }
+    /* The losers were DISCARDED, not merely outvoted: exactly one group
+     * callback ran. Without this a runtime that leaves them queued and lets
+     * them run -- their resolve refused because the group already settled --
+     * is indistinguishable from one that cancels them. */
+    if (group.completed != 1u)
+        return __LINE__;
+    for (size_t i = 0; i < count; ++i) {
+        if (continuations[i].active || futures[i].continuations != NULL)
+            return __LINE__;
+    }
+    /* The losers were removed from the dispatch queue, not merely ignored. */
+    if (runtime.continuation_head || runtime.continuation_tail)
+        return __LINE__;
+    if (wasmos_wasm_coroutine_run(&runtime) != 0 || !wasmos_future_poll(result, &status, &value) ||
+        value != expected) {
+        return __LINE__;
+    }
+    return 0;
+}
+
+static int race_reject_case(size_t loser, size_t count) {
+    wasmos_wasm_runtime_t runtime = {0};
+    wasmos_future_t futures[RACE_MAX];
+    wasmos_promise_t promises[RACE_MAX];
+    wasmos_future_continuation_t continuations[RACE_MAX] = {0};
+    wasmos_future_t* inputs[RACE_MAX];
+    wasmos_future_group_t group = {0};
+    wasmos_future_t* result;
+    int32_t status = 0;
+    uintptr_t value = 0;
+    const int32_t expected = -40 - (int32_t)loser;
+
+    wasmos_wasm_runtime_init(&runtime);
+    for (size_t i = 0; i < count; ++i) {
+        wasmos_future_init(&futures[i], &promises[i]);
+        inputs[i] = &futures[i];
+    }
+    result = wasmos_future_race(&runtime, &group, inputs, count, continuations);
+    if (!result || !wasmos_promise_reject(&promises[loser], expected))
+        return __LINE__;
+    for (size_t i = count; i-- > 0;) {
+        if (i == loser)
+            continue;
+        if (!wasmos_promise_resolve(&promises[i], (uintptr_t)(900u + i)))
+            return __LINE__;
+    }
+    if (wasmos_wasm_coroutine_run(&runtime) != 0)
+        return __LINE__;
+    if (!wasmos_future_poll(result, &status, &value) || status != expected || !group.settled ||
+        group.active) {
+        return __LINE__;
+    }
+    if (group.completed != 1u)
+        return __LINE__;
+    for (size_t i = 0; i < count; ++i) {
+        if (continuations[i].active || futures[i].continuations != NULL)
+            return __LINE__;
+    }
+    if (runtime.continuation_head || runtime.continuation_tail)
+        return __LINE__;
+    return 0;
+}
+
+/* all() fails fast, so the rejecting source's position is the same question. */
+static int all_reject_case(size_t rejecter, size_t count) {
+    wasmos_wasm_runtime_t runtime = {0};
+    wasmos_future_t futures[RACE_MAX];
+    wasmos_promise_t promises[RACE_MAX];
+    wasmos_future_continuation_t continuations[RACE_MAX] = {0};
+    wasmos_future_t* inputs[RACE_MAX];
+    uintptr_t values[RACE_MAX] = {0};
+    wasmos_future_group_t group = {0};
+    wasmos_future_t* result;
+    int32_t status = 0;
+    uintptr_t value = 0;
+    const int32_t expected = -60 - (int32_t)rejecter;
+
+    wasmos_wasm_runtime_init(&runtime);
+    for (size_t i = 0; i < count; ++i) {
+        wasmos_future_init(&futures[i], &promises[i]);
+        inputs[i] = &futures[i];
+    }
+    result = wasmos_future_all(&runtime, &group, inputs, count, values, continuations);
+    if (!result || !wasmos_promise_reject(&promises[rejecter], expected))
+        return __LINE__;
+    if (wasmos_wasm_coroutine_run(&runtime) != 0)
+        return __LINE__;
+    if (!wasmos_future_poll(result, &status, &value) || status != expected || !group.settled ||
+        group.active) {
+        return __LINE__;
+    }
+    if (group.completed != 1u)
+        return __LINE__;
+    for (size_t i = 0; i < count; ++i) {
+        if (continuations[i].active)
+            return __LINE__;
+        if (i != rejecter && futures[i].continuations != NULL)
+            return __LINE__;
+    }
+    /* Survivors settling afterwards are inert. */
+    for (size_t i = 0; i < count; ++i) {
+        if (i == rejecter)
+            continue;
+        if (!wasmos_promise_resolve(&promises[i], 999u))
+            return __LINE__;
+    }
+    if (wasmos_wasm_coroutine_run(&runtime) != 0 || !wasmos_future_poll(result, &status, &value) ||
+        status != expected) {
+        return __LINE__;
+    }
+    return 0;
+}
+
+static int test_race_and_all_every_position(void) {
+    int rc;
+    for (size_t winner = 0; winner < 3u; ++winner) {
+        if ((rc = race_winner_case(winner, 3u)) != 0)
+            return rc;
+    }
+    /* A fourth candidate, so more than two losers are abandoned at once. */
+    if ((rc = race_winner_case(1u, 4u)) != 0)
+        return rc;
+    for (size_t loser = 0; loser < 3u; ++loser) {
+        if ((rc = race_reject_case(loser, 3u)) != 0)
+            return rc;
+    }
+    for (size_t rejecter = 0; rejecter < 3u; ++rejecter) {
+        if ((rc = all_reject_case(rejecter, 3u)) != 0)
+            return rc;
+    }
+    return 0;
+}
+
 int main(void) {
     int rc = test_yield_await_and_join();
     if (rc == 0)
@@ -442,6 +882,16 @@ int main(void) {
         rc = test_ipc_future();
     if (rc == 0)
         rc = test_fs_request_future();
+    if (rc == 0)
+        rc = test_multiple_waiters();
+    if (rc == 0)
+        rc = test_multiple_joiners();
+    if (rc == 0)
+        rc = test_scheduler_stress();
+    if (rc == 0)
+        rc = test_reentrancy_respawn_and_pending_poll();
+    if (rc == 0)
+        rc = test_race_and_all_every_position();
     if (rc != 0) {
         return 1;
     }

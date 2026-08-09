@@ -631,6 +631,188 @@ function testReentrancyRespawnAndPendingPoll(): i32 {
   return 0;
 }
 
+/* Race with N candidates that ALL settle, run once per winning position.
+ *
+ * Every suite tested exactly one ordering (the second of three winning), so
+ * nothing pinned that the result is independent of WHICH position wins. The
+ * implementation is position-agnostic today; these cases are what keeps it
+ * that way when someone adds an index-sensitive shortcut.
+ *
+ * A caveat, established by trying to break it rather than assumed: this does
+ * NOT distinguish the head/middle/tail branches of the queue removal. A mutant
+ * that only ever removes the head still passes, because continuationCancel
+ * nulls the node's `next` regardless -- truncating the list anyway -- and nulls
+ * its `future`, so a stale entry that survives is dispatched as a no-op. The
+ * removal branches are not observable through the public API.
+ *
+ * What IS pinned: the first to settle wins from any position, and every loser
+ * ends up inactive, off its source future, and off the dispatch queue. */
+function raceWinnerCase(winner: i32, count: i32, base: i32): i32 {
+  const runtime = new Runtime();
+  const futures = new StaticArray<Future>(count);
+  const promises = new StaticArray<Promise>(count);
+  const continuations = new StaticArray<Continuation>(count);
+  for (let i = 0; i < count; ++i) {
+    futures[i] = new Future();
+    promises[i] = new Promise();
+    continuations[i] = new Continuation();
+    futures[i].init(promises[i]);
+  }
+  const group = new FutureGroup();
+  const result = runtime.raceInto(group, futures, continuations);
+  if (result === null) return base + 0;
+
+  const expected: usize = <usize>(100 + winner);
+  /* Winner settles first, so it is dispatched first and wins; the rest settle
+   * before the drain and queue behind it, which is what makes them losers that
+   * were already enqueued rather than merely pending. Losers settle in
+   * descending index order so the abandon order (ascending) differs from the
+   * queue order. */
+  if (!promises[winner].resolve(expected)) return base + 1;
+  for (let i = count - 1; i >= 0; --i) {
+    if (i == winner) continue;
+    if (!promises[i].resolve(<usize>(900 + i))) return base + 2;
+  }
+  if (runtime.continuationHead === null) return base + 3;
+  if (runtime.run() != 0) return base + 4;
+
+  const status = new Box();
+  const value = new Box();
+  if (!result.poll(status, value)) return base + 5;
+  if (<i32>status.value != 0) return base + 6;
+  /* First to settle wins, whichever position it holds. */
+  if (value.value != expected) return base + 7;
+  if (!group.settled) return base + 8;
+  if (group.active) return base + 9;
+  /* The losers were DISCARDED, not merely outvoted: exactly one group callback
+   * ran. Without this, a runtime that leaves them queued and lets them run --
+   * their resolve refused because the group already settled -- looks identical
+   * to one that cancels them. */
+  if (group.completed != 1) return base + 55;
+
+  for (let i = 0; i < count; ++i) {
+    if (continuations[i].active) return base + 10 + i;
+    if (futures[i].continuations !== null) return base + 20 + i;
+  }
+  /* The losers were removed from the dispatch queue, not merely ignored. */
+  if (runtime.continuationHead !== null) return base + 30;
+  if (runtime.continuationTail !== null) return base + 31;
+  /* Nothing further is pending, and the result is unchanged. */
+  if (runtime.run() != 0) return base + 32;
+  if (!result.poll(status, value)) return base + 33;
+  if (value.value != expected) return base + 34;
+  return 0;
+}
+
+function testRaceEveryWinner(): i32 {
+  let rc = raceWinnerCase(0, 3, 900);
+  if (rc == 0) rc = raceWinnerCase(1, 3, 1000);
+  if (rc == 0) rc = raceWinnerCase(2, 3, 1100);
+  /* A fourth candidate, so more than two losers are abandoned at once. */
+  if (rc == 0) rc = raceWinnerCase(1, 4, 1800);
+  return rc;
+}
+
+/* The same three positions on the failure path: whichever source rejects
+ * first settles the group and the other two must be discarded. */
+function raceRejectCase(loser: i32, base: i32): i32 {
+  const runtime = new Runtime();
+  const futures = new StaticArray<Future>(3);
+  const promises = new StaticArray<Promise>(3);
+  const continuations = new StaticArray<Continuation>(3);
+  for (let i = 0; i < 3; ++i) {
+    futures[i] = new Future();
+    promises[i] = new Promise();
+    continuations[i] = new Continuation();
+    futures[i].init(promises[i]);
+  }
+  const group = new FutureGroup();
+  const result = runtime.raceInto(group, futures, continuations);
+  if (result === null) return base + 0;
+
+  const status = new Box();
+  const value = new Box();
+  if (!promises[loser].reject(-40 - loser)) return base + 1;
+  if (runtime.run() != 0) return base + 2;
+  if (!result.poll(status, value)) return base + 3;
+  if (<i32>status.value != -40 - loser) return base + 4;
+  if (!group.settled) return base + 5;
+  if (group.active) return base + 6;
+  if (group.completed != 1) return base + 55;
+  for (let i = 0; i < 3; ++i) {
+    if (continuations[i].active) return base + 10 + i;
+    if (i != loser && futures[i].continuations !== null) return base + 20 + i;
+  }
+  if (runtime.continuationHead !== null) return base + 30;
+  for (let i = 0; i < 3; ++i) {
+    if (i == loser) continue;
+    if (!promises[i].resolve(999)) return base + 40 + i;
+  }
+  if (runtime.run() != 0) return base + 50;
+  if (!result.poll(status, value)) return base + 51;
+  if (<i32>status.value != -40 - loser) return base + 52;
+  return 0;
+}
+
+function testRaceEveryRejecter(): i32 {
+  let rc = raceRejectCase(0, 1200);
+  if (rc == 0) rc = raceRejectCase(1, 1300);
+  if (rc == 0) rc = raceRejectCase(2, 1400);
+  return rc;
+}
+
+/* all() fails fast, so the rejecting source's position decides the same three
+ * removal branches for the survivors. */
+function allRejectCase(rejecter: i32, base: i32): i32 {
+  const runtime = new Runtime();
+  const futures = new StaticArray<Future>(3);
+  const promises = new StaticArray<Promise>(3);
+  const continuations = new StaticArray<Continuation>(3);
+  for (let i = 0; i < 3; ++i) {
+    futures[i] = new Future();
+    promises[i] = new Promise();
+    continuations[i] = new Continuation();
+    futures[i].init(promises[i]);
+  }
+  const group = new FutureGroup();
+  const result = runtime.allInto(
+    group,
+    futures,
+    continuations,
+    new StaticArray<usize>(3)
+  );
+  if (result === null) return base + 0;
+
+  const status = new Box();
+  const value = new Box();
+  if (!promises[rejecter].reject(-60 - rejecter)) return base + 1;
+  if (runtime.run() != 0) return base + 2;
+  if (!result.poll(status, value)) return base + 3;
+  if (<i32>status.value != -60 - rejecter) return base + 4;
+  if (!group.settled) return base + 5;
+  if (group.active) return base + 6;
+  if (group.completed != 1) return base + 55;
+  for (let i = 0; i < 3; ++i) {
+    if (continuations[i].active) return base + 10 + i;
+    if (i != rejecter && futures[i].continuations !== null) return base + 20 + i;
+  }
+  if (runtime.continuationHead !== null) return base + 30;
+  for (let i = 0; i < 3; ++i) {
+    if (i == rejecter) continue;
+    if (!promises[i].resolve(999)) return base + 40 + i;
+  }
+  if (runtime.run() != 0) return base + 50;
+  if (<i32>status.value != -60 - rejecter) return base + 51;
+  return 0;
+}
+
+function testAllEveryRejecter(): i32 {
+  let rc = allRejectCase(0, 1500);
+  if (rc == 0) rc = allRejectCase(1, 1600);
+  if (rc == 0) rc = allRejectCase(2, 1700);
+  return rc;
+}
+
 /** 0 if every case passed, else the failing case's marker. */
 export function runTests(): i32 {
   let rc = testYieldAwaitAndJoin();
@@ -641,5 +823,8 @@ export function runTests(): i32 {
   if (rc == 0) rc = testMultipleJoiners();
   if (rc == 0) rc = testSchedulerStress();
   if (rc == 0) rc = testReentrancyRespawnAndPendingPoll();
+  if (rc == 0) rc = testRaceEveryWinner();
+  if (rc == 0) rc = testRaceEveryRejecter();
+  if (rc == 0) rc = testAllEveryRejecter();
   return rc;
 }

@@ -626,6 +626,216 @@ static int test_respawn_guard(void) {
     return 0;
 }
 
+/* ------------------------------------------------------------------------
+ * Parity with tests/unit/test_wasm_coroutine.c and test_as_coroutine.ts.
+ * The future/promise semantics are shared by design (doc 32), so the group
+ * scenarios below apply to all three runtimes and are kept identical.
+ * ---------------------------------------------------------------------- */
+
+#define RACE_MAX 4u
+
+/* Race with N candidates that ALL settle, run once per winning position.
+ *
+ * The suites tested exactly one ordering (the second of three winning), so
+ * nothing pinned that the result is independent of WHICH position wins.
+ *
+ * A caveat, established by trying to break it: this does NOT distinguish the
+ * head/middle/tail branches of the dispatch-queue removal. A mutant that only
+ * removes the head still passes, because continuation_cancel nulls the node's
+ * next regardless -- truncating the list anyway -- and nulls its future, so a
+ * surviving stale entry dispatches as a no-op. */
+static int native_race_winner_case(size_t winner, size_t count) {
+    wasmos_native_coroutine_runtime_t runtime;
+    wasmos_future_t futures[RACE_MAX];
+    wasmos_promise_t promises[RACE_MAX];
+    wasmos_future_continuation_t continuations[RACE_MAX] = {0};
+    wasmos_future_t* inputs[RACE_MAX];
+    wasmos_future_group_t group = {0};
+    wasmos_future_t* result;
+    int32_t status = 0;
+    uintptr_t value = 0;
+    const uintptr_t expected = (uintptr_t)(100u + winner);
+
+    wasmos_native_coroutine_runtime_init(&runtime);
+    for (size_t i = 0; i < count; ++i) {
+        wasmos_future_init(&futures[i], &promises[i]);
+        inputs[i] = &futures[i];
+    }
+    result = wasmos_future_race(&runtime, &group, inputs, count, continuations);
+    if (!result)
+        return __LINE__;
+
+    /* Winner settles first, so it dispatches first and wins; the rest settle
+     * before the drain and queue behind it, making them losers that were
+     * already enqueued rather than merely pending. */
+    if (!wasmos_promise_resolve(&promises[winner], expected))
+        return __LINE__;
+    for (size_t i = count; i-- > 0;) {
+        if (i == winner)
+            continue;
+        if (!wasmos_promise_resolve(&promises[i], (uintptr_t)(900u + i)))
+            return __LINE__;
+    }
+    if (!runtime.continuation_head || wasmos_native_coroutine_run(&runtime) != 0)
+        return __LINE__;
+    if (!wasmos_future_poll(result, &status, &value) || status != 0 || value != expected ||
+        !group.settled || group.active) {
+        return __LINE__;
+    }
+    /* The losers were DISCARDED, not merely outvoted: exactly one group
+     * callback ran. Without this a runtime that leaves them queued and lets
+     * them run -- their resolve refused because the group already settled --
+     * is indistinguishable from one that cancels them. */
+    if (group.completed != 1u)
+        return __LINE__;
+    for (size_t i = 0; i < count; ++i) {
+        if (continuations[i].active || futures[i].continuations != NULL)
+            return __LINE__;
+    }
+    if (runtime.continuation_head || runtime.continuation_tail)
+        return __LINE__;
+    if (wasmos_native_coroutine_run(&runtime) != 0 ||
+        !wasmos_future_poll(result, &status, &value) || value != expected) {
+        return __LINE__;
+    }
+    return 0;
+}
+
+static int native_race_reject_case(size_t loser, size_t count) {
+    wasmos_native_coroutine_runtime_t runtime;
+    wasmos_future_t futures[RACE_MAX];
+    wasmos_promise_t promises[RACE_MAX];
+    wasmos_future_continuation_t continuations[RACE_MAX] = {0};
+    wasmos_future_t* inputs[RACE_MAX];
+    wasmos_future_group_t group = {0};
+    wasmos_future_t* result;
+    int32_t status = 0;
+    uintptr_t value = 0;
+    const int32_t expected = -40 - (int32_t)loser;
+
+    wasmos_native_coroutine_runtime_init(&runtime);
+    for (size_t i = 0; i < count; ++i) {
+        wasmos_future_init(&futures[i], &promises[i]);
+        inputs[i] = &futures[i];
+    }
+    result = wasmos_future_race(&runtime, &group, inputs, count, continuations);
+    if (!result || !wasmos_promise_reject(&promises[loser], expected))
+        return __LINE__;
+    for (size_t i = count; i-- > 0;) {
+        if (i == loser)
+            continue;
+        if (!wasmos_promise_resolve(&promises[i], (uintptr_t)(900u + i)))
+            return __LINE__;
+    }
+    if (wasmos_native_coroutine_run(&runtime) != 0)
+        return __LINE__;
+    if (!wasmos_future_poll(result, &status, &value) || status != expected || !group.settled ||
+        group.active || group.completed != 1u) {
+        return __LINE__;
+    }
+    for (size_t i = 0; i < count; ++i) {
+        if (continuations[i].active || futures[i].continuations != NULL)
+            return __LINE__;
+    }
+    if (runtime.continuation_head || runtime.continuation_tail)
+        return __LINE__;
+    return 0;
+}
+
+static int native_all_reject_case(size_t rejecter, size_t count) {
+    wasmos_native_coroutine_runtime_t runtime;
+    wasmos_future_t futures[RACE_MAX];
+    wasmos_promise_t promises[RACE_MAX];
+    wasmos_future_continuation_t continuations[RACE_MAX] = {0};
+    wasmos_future_t* inputs[RACE_MAX];
+    uintptr_t values[RACE_MAX] = {0};
+    wasmos_future_group_t group = {0};
+    wasmos_future_t* result;
+    int32_t status = 0;
+    uintptr_t value = 0;
+    const int32_t expected = -60 - (int32_t)rejecter;
+
+    wasmos_native_coroutine_runtime_init(&runtime);
+    for (size_t i = 0; i < count; ++i) {
+        wasmos_future_init(&futures[i], &promises[i]);
+        inputs[i] = &futures[i];
+    }
+    result = wasmos_future_all(&runtime, &group, inputs, count, values, continuations);
+    if (!result || !wasmos_promise_reject(&promises[rejecter], expected))
+        return __LINE__;
+    if (wasmos_native_coroutine_run(&runtime) != 0)
+        return __LINE__;
+    if (!wasmos_future_poll(result, &status, &value) || status != expected || !group.settled ||
+        group.active || group.completed != 1u) {
+        return __LINE__;
+    }
+    for (size_t i = 0; i < count; ++i) {
+        if (continuations[i].active)
+            return __LINE__;
+        if (i != rejecter && futures[i].continuations != NULL)
+            return __LINE__;
+    }
+    for (size_t i = 0; i < count; ++i) {
+        if (i == rejecter)
+            continue;
+        if (!wasmos_promise_resolve(&promises[i], 999u))
+            return __LINE__;
+    }
+    if (wasmos_native_coroutine_run(&runtime) != 0 ||
+        !wasmos_future_poll(result, &status, &value) || status != expected) {
+        return __LINE__;
+    }
+    return 0;
+}
+
+static int test_race_and_all_every_position(void) {
+    int rc;
+    for (size_t winner = 0; winner < 3u; ++winner) {
+        if ((rc = native_race_winner_case(winner, 3u)) != 0)
+            return rc;
+    }
+    /* A fourth candidate, so more than two losers are abandoned at once. */
+    if ((rc = native_race_winner_case(1u, 4u)) != 0)
+        return rc;
+    for (size_t loser = 0; loser < 3u; ++loser) {
+        if ((rc = native_race_reject_case(loser, 3u)) != 0)
+            return rc;
+    }
+    for (size_t rejecter = 0; rejecter < 3u; ++rejecter) {
+        if ((rc = native_all_reject_case(rejecter, 3u)) != 0)
+            return rc;
+    }
+    return 0;
+}
+
+/* Registering on an ALREADY-SETTLED future must still defer to the runtime
+ * rather than dispatch inline. Every other case registers BEFORE settling, so
+ * that branch went untested in all three suites; a mutant dispatching inline
+ * from wasmos_future_then passed each of them. */
+static int test_then_on_settled_future_defers(void) {
+    wasmos_native_coroutine_runtime_t runtime;
+    wasmos_future_t settled;
+    wasmos_promise_t settled_promise;
+    wasmos_future_continuation_t continuation = {0};
+    wasmos_future_t* child;
+    test_state_t state = {0};
+    int32_t status = 0;
+    uintptr_t value = 0;
+
+    wasmos_native_coroutine_runtime_init(&runtime);
+    wasmos_future_init(&settled, &settled_promise);
+    if (!wasmos_promise_resolve(&settled_promise, 70u))
+        return __LINE__;
+    child = wasmos_future_then(&runtime, &settled, &continuation, success_callback, NULL, &state);
+    if (!child || state.event_count != 0u)
+        return __LINE__;
+    if (wasmos_native_coroutine_run(&runtime) != 0 || state.event_count != 1u)
+        return __LINE__;
+    if (!wasmos_future_poll(child, &status, &value) || status != 0)
+        return __LINE__;
+    return 0;
+}
+
 int main(void) {
     int rc = test_yield_await_and_join();
     if (rc == 0) {
@@ -651,6 +861,12 @@ int main(void) {
     }
     if (rc == 0) {
         rc = test_respawn_guard();
+    }
+    if (rc == 0) {
+        rc = test_race_and_all_every_position();
+    }
+    if (rc == 0) {
+        rc = test_then_on_settled_future_defers();
     }
     if (rc != 0) {
         fprintf(stderr, "native coroutine test failed at line %d\n", rc);

@@ -379,6 +379,11 @@ static uint32_t warp_fs_endpoint(void* ctx_) {
 static uint32_t warp_xfer_buffer_read(uint32_t buffer_id, uint32_t ptr_off, uint32_t len,
                                       uint32_t offset, void* ctx_) {
     auto* ctx = warp_call_ctx(ctx_);
+    /* FIXME: divergence. A zero-length transfer is a silent success here and
+     * WASMOS_ERR_XFER_BUFFER_INVALID_SIZE under wasm3, so the same guest call
+     * gets different answers from the two runtimes. Naming the codes surfaced
+     * it; picking which behaviour is correct is a contract decision, not a
+     * rename, so it is left as-is rather than changed under a refactor. */
     if (!len)
         return 0;
     uint32_t context_id = 0;
@@ -415,6 +420,11 @@ static uint32_t warp_xfer_buffer_read(uint32_t buffer_id, uint32_t ptr_off, uint
 static uint32_t warp_xfer_buffer_write(uint32_t buffer_id, uint32_t ptr_off, uint32_t len,
                                        uint32_t offset, void* ctx_) {
     auto* ctx = warp_call_ctx(ctx_);
+    /* FIXME: divergence. A zero-length transfer is a silent success here and
+     * WASMOS_ERR_XFER_BUFFER_INVALID_SIZE under wasm3, so the same guest call
+     * gets different answers from the two runtimes. Naming the codes surfaced
+     * it; picking which behaviour is correct is a contract decision, not a
+     * rename, so it is left as-is rather than changed under a refactor. */
     if (!len)
         return 0;
     uint32_t context_id = 0;
@@ -744,36 +754,56 @@ static uint32_t warp_io_region_out32(uint32_t region, uint32_t offset, uint32_t 
 static uint32_t warp_io_in8(uint32_t port, void* ctx_) {
     (void)ctx_;
     uint32_t context_id = 0;
-    if (port > 0xFFFF || warp_current_context_id(&context_id) != 0 ||
+    /* Split from the capability check so a guest gets the same code here
+     * as from wasm3: an out-of-range port is BAD_PORT, not "not authorized". */
+    if (port > 0xFFFF) {
+        return (uint32_t)WASMOS_ERR_IO_BAD_PORT;
+    }
+    if (warp_current_context_id(&context_id) != 0 ||
         warp_require_io_capability(context_id, (uint16_t)port) != 0) {
-        return (uint32_t)-1;
+        return (uint32_t)WASMOS_ERR_IO_NOT_AUTHORIZED;
     }
     return (uint32_t)inb((uint16_t)port);
 }
 static uint32_t warp_io_in16(uint32_t port, void* ctx_) {
     (void)ctx_;
     uint32_t context_id = 0;
-    if (port > 0xFFFF || warp_current_context_id(&context_id) != 0 ||
+    /* Split from the capability check so a guest gets the same code here
+     * as from wasm3: an out-of-range port is BAD_PORT, not "not authorized". */
+    if (port > 0xFFFF) {
+        return (uint32_t)WASMOS_ERR_IO_BAD_PORT;
+    }
+    if (warp_current_context_id(&context_id) != 0 ||
         warp_require_io_capability(context_id, (uint16_t)port) != 0) {
-        return (uint32_t)-1;
+        return (uint32_t)WASMOS_ERR_IO_NOT_AUTHORIZED;
     }
     return (uint32_t)inw((uint16_t)port);
 }
 static uint32_t warp_io_in32(uint32_t port, void* ctx_) {
     (void)ctx_;
     uint32_t context_id = 0;
-    if (port > 0xFFFF || warp_current_context_id(&context_id) != 0 ||
+    /* Split from the capability check so a guest gets the same code here
+     * as from wasm3: an out-of-range port is BAD_PORT, not "not authorized". */
+    if (port > 0xFFFF) {
+        return (uint32_t)WASMOS_ERR_IO_BAD_PORT;
+    }
+    if (warp_current_context_id(&context_id) != 0 ||
         warp_require_io_capability(context_id, (uint16_t)port) != 0) {
-        return (uint32_t)-1;
+        return (uint32_t)WASMOS_ERR_IO_NOT_AUTHORIZED;
     }
     return (uint32_t)inl((uint16_t)port);
 }
 static uint32_t warp_io_out8(uint32_t port, uint32_t val, void* ctx_) {
     (void)ctx_;
     uint32_t context_id = 0;
-    if (port > 0xFFFF || warp_current_context_id(&context_id) != 0 ||
+    /* Split from the capability check so a guest gets the same code here
+     * as from wasm3: an out-of-range port is BAD_PORT, not "not authorized". */
+    if (port > 0xFFFF) {
+        return (uint32_t)WASMOS_ERR_IO_BAD_PORT;
+    }
+    if (warp_current_context_id(&context_id) != 0 ||
         warp_require_io_capability(context_id, (uint16_t)port) != 0) {
-        return (uint32_t)-1;
+        return (uint32_t)WASMOS_ERR_IO_NOT_AUTHORIZED;
     }
     outb((uint16_t)port, (uint8_t)val);
     return 0;
@@ -781,9 +811,14 @@ static uint32_t warp_io_out8(uint32_t port, uint32_t val, void* ctx_) {
 static uint32_t warp_io_out16(uint32_t port, uint32_t val, void* ctx_) {
     (void)ctx_;
     uint32_t context_id = 0;
-    if (port > 0xFFFF || warp_current_context_id(&context_id) != 0 ||
+    /* Split from the capability check so a guest gets the same code here
+     * as from wasm3: an out-of-range port is BAD_PORT, not "not authorized". */
+    if (port > 0xFFFF) {
+        return (uint32_t)WASMOS_ERR_IO_BAD_PORT;
+    }
+    if (warp_current_context_id(&context_id) != 0 ||
         warp_require_io_capability(context_id, (uint16_t)port) != 0) {
-        return (uint32_t)-1;
+        return (uint32_t)WASMOS_ERR_IO_NOT_AUTHORIZED;
     }
     outw((uint16_t)port, (uint16_t)val);
     return 0;
@@ -791,9 +826,14 @@ static uint32_t warp_io_out16(uint32_t port, uint32_t val, void* ctx_) {
 static uint32_t warp_io_out32(uint32_t port, uint32_t val, void* ctx_) {
     (void)ctx_;
     uint32_t context_id = 0;
-    if (port > 0xFFFF || warp_current_context_id(&context_id) != 0 ||
+    /* Split from the capability check so a guest gets the same code here
+     * as from wasm3: an out-of-range port is BAD_PORT, not "not authorized". */
+    if (port > 0xFFFF) {
+        return (uint32_t)WASMOS_ERR_IO_BAD_PORT;
+    }
+    if (warp_current_context_id(&context_id) != 0 ||
         warp_require_io_capability(context_id, (uint16_t)port) != 0) {
-        return (uint32_t)-1;
+        return (uint32_t)WASMOS_ERR_IO_NOT_AUTHORIZED;
     }
     outl((uint16_t)port, (uint32_t)val);
     return 0;
@@ -803,7 +843,7 @@ static uint32_t warp_io_wait(void* ctx_) {
     uint32_t context_id = 0;
     if (warp_current_context_id(&context_id) != 0 ||
         warp_require_io_capability(context_id, 0x80u) != 0) {
-        return (uint32_t)-1;
+        return (uint32_t)WASMOS_ERR_IO_NOT_AUTHORIZED;
     }
     io_wait();
     return 0;
@@ -2048,19 +2088,20 @@ static uint32_t warp_block_buffer_map(void* ctx_) {
 static uint32_t warp_xfer_buffer_map(uint32_t buffer_id, void* ctx_) {
     auto* ctx = warp_call_ctx(ctx_);
     if (!ctx || (int32_t)buffer_id <= 0)
-        return (uint32_t)-1;
+        return (uint32_t)WASMOS_ERR_XFER_BUFFER_INVALID_CONTEXT;
     uint32_t context_id = 0;
     if (warp_current_context_id(&context_id) != 0)
-        return (uint32_t)-1;
+        return (uint32_t)WASMOS_ERR_XFER_BUFFER_INVALID_CONTEXT;
     xfer_buffer_t buf;
     if (xfer_buffer_describe(buffer_id, BUFFER_KIND_TRANSFER, context_id, &buf) != WASMOS_ERR_NONE)
-        return (uint32_t)-1;
+        return (uint32_t)WASMOS_ERR_XFER_BUFFER_INVALID_KIND;
     xfer_buffer_owner_t owner;
     if (xfer_buffer_get_owned(&buf, context_id, &owner) != WASMOS_ERR_NONE)
-        return (uint32_t)-1; /* the overlay is the owner's private in-place view */
+        /* the overlay is the owner's private in-place view */
+        return (uint32_t)WASMOS_ERR_XFER_BUFFER_NO_ACCESS;
     uint64_t phys_base = xfer_buffer_object_phys(&buf);
     if (phys_base == 0 || (phys_base & 0xFFFULL) != 0 || buf.size_bytes == 0)
-        return (uint32_t)-1;
+        return (uint32_t)WASMOS_ERR_XFER_BUFFER_NO_BACKING;
     uint32_t track_id = WARP_XFER_TRACK_ID(buffer_id);
     WarpShmemLinearMap* existing = warp_shmem_map_find(ctx->pid, track_id);
     if (existing)
@@ -2088,7 +2129,7 @@ static uint32_t warp_xfer_buffer_map(uint32_t buffer_id, void* ctx_) {
 static uint32_t warp_xfer_buffer_unmap(uint32_t buffer_id, void* ctx_) {
     auto* ctx = warp_call_ctx(ctx_);
     if (!ctx || (int32_t)buffer_id <= 0)
-        return (uint32_t)-1;
+        return (uint32_t)WASMOS_ERR_XFER_BUFFER_INVALID_CONTEXT;
     uint32_t track_id = WARP_XFER_TRACK_ID(buffer_id);
     WarpShmemLinearMap* slot = warp_shmem_map_find(ctx->pid, track_id);
     if (!slot)

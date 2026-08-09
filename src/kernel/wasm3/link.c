@@ -1198,16 +1198,17 @@ m3ApiRawFunction(wasmos_xfer_buffer_map) {
     xfer_buffer_owner_t owner = {0};
     uint64_t phys = 0;
     if (buffer_id <= 0 || !proc || proc->context_id == 0) {
-        m3ApiReturn(-1);
+        m3ApiReturn(WASMOS_ERR_XFER_BUFFER_INVALID_CONTEXT);
     }
     if (xfer_buffer_describe((uint32_t)buffer_id, BUFFER_KIND_TRANSFER, proc->context_id, &desc) !=
             WASMOS_ERR_NONE ||
         xfer_buffer_get_owned(&desc, proc->context_id, &owner) != WASMOS_ERR_NONE) {
-        m3ApiReturn(-1); /* owner-only: the overlay is the owner's private view */
+        m3ApiReturn(WASMOS_ERR_XFER_BUFFER_INVALID_KIND); /* owner-only: the overlay is the owner's
+                                                             private view */
     }
     phys = xfer_buffer_object_phys(&desc);
     if (phys == 0 || (phys & 0xFFFULL) != 0 || desc.size_bytes == 0) {
-        m3ApiReturn(-1);
+        m3ApiReturn(WASMOS_ERR_XFER_BUFFER_NO_BACKING);
     }
     uint32_t track_id = WASM_XFER_TRACK_ID((uint32_t)buffer_id);
     for (uint32_t i = 0; i < WASM_SHMEM_MAP_SLOTS; ++i) {
@@ -1220,7 +1221,7 @@ m3ApiRawFunction(wasmos_xfer_buffer_map) {
     uint32_t mem_size = 0;
     uint8_t* mem_base = m3_GetMemory(runtime, &mem_size, 0);
     if (!mem_base || mem_size == 0) {
-        m3ApiReturn(-1);
+        m3ApiReturn(WASMOS_ERR_XFER_BUFFER_NO_BACKING);
     }
     const uint64_t region_bytes = ((uint64_t)desc.size_bytes + 0xFFFULL) & ~0xFFFULL;
     uint64_t mem_size64 = (uint64_t)mem_size;
@@ -1251,11 +1252,11 @@ m3ApiRawFunction(wasmos_xfer_buffer_map) {
         if (required > mem_size64) {
             uint32_t target_pages = (uint32_t)((required + 0xFFFFULL) >> 16);
             if (ResizeMemory(runtime, target_pages) != m3Err_none) {
-                m3ApiReturn(-1);
+                m3ApiReturn(WASMOS_ERR_XFER_BUFFER_CAPACITY_EXCEEDED);
             }
             mem_size64 = (uint64_t)m3_GetMemorySize(runtime);
             if (required > mem_size64) {
-                m3ApiReturn(-1);
+                m3ApiReturn(WASMOS_ERR_XFER_BUFFER_CAPACITY_EXCEEDED);
             }
         }
     }
@@ -1265,12 +1266,12 @@ m3ApiRawFunction(wasmos_xfer_buffer_map) {
     if (wasm_user_va_from_offset(proc->context_id, off32, (uint32_t)region_bytes, &virt) != 0 ||
         mm_user_range_permitted(proc->context_id, virt, region_bytes, MEM_REGION_FLAG_WRITE) != 0 ||
         (virt & 0xFFFULL) != 0) {
-        m3ApiReturn(-1);
+        m3ApiReturn(WASMOS_ERR_XFER_BUFFER_INTERNAL);
     }
     if (mm_context_map_physical(proc->context_id, virt, phys, region_bytes,
                                 MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE |
                                     MEM_REGION_FLAG_USER) != 0) {
-        m3ApiReturn(-1);
+        m3ApiReturn(WASMOS_ERR_XFER_BUFFER_INTERNAL);
     }
     wasm_shmem_map_track(proc->pid, track_id, off32, (uint32_t)region_bytes);
     m3ApiReturn((int32_t)off32);
@@ -1285,7 +1286,7 @@ m3ApiRawFunction(wasmos_xfer_buffer_unmap) {
 
         process_t* proc = process_get(process_current_pid());
     if (buffer_id <= 0 || !proc || proc->context_id == 0) {
-        m3ApiReturn(-1);
+        m3ApiReturn(WASMOS_ERR_XFER_BUFFER_INVALID_CONTEXT);
     }
     /* FIXME(xfer-unmap): mirror wasmos_shmem_unmap — restore the prior PTEs. */
     wasm_shmem_map_untrack(proc->pid, WASM_XFER_TRACK_ID((uint32_t)buffer_id));
@@ -1756,11 +1757,11 @@ m3ApiRawFunction(wasmos_io_region_out32) {
 m3ApiRawFunction(wasmos_io_in8) {
     m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, port) uint32_t context_id = 0;
     if (port < 0 || port > 0xFFFF) {
-        m3ApiReturn(-1);
+        m3ApiReturn(WASMOS_ERR_IO_BAD_PORT);
     }
     if (current_process_context(&context_id) != 0 ||
         require_io_capability(context_id, (uint16_t)port) != 0) {
-        m3ApiReturn(-1);
+        m3ApiReturn(WASMOS_ERR_IO_NOT_AUTHORIZED);
     }
     m3ApiReturn((int32_t)inb((uint16_t)port));
 }
@@ -1768,23 +1769,27 @@ m3ApiRawFunction(wasmos_io_in8) {
 m3ApiRawFunction(wasmos_io_in16) {
     m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, port) uint32_t context_id = 0;
     if (port < 0 || port > 0xFFFF) {
-        m3ApiReturn(-1);
+        m3ApiReturn(WASMOS_ERR_IO_BAD_PORT);
     }
     if (current_process_context(&context_id) != 0 ||
         require_io_capability(context_id, (uint16_t)port) != 0) {
-        m3ApiReturn(-1);
+        m3ApiReturn(WASMOS_ERR_IO_NOT_AUTHORIZED);
     }
     m3ApiReturn((int32_t)inw((uint16_t)port));
 }
 
+/* FIXME: a 32-bit port read cannot report failure in its return value. A device
+ * legitimately reading back 0xFFFFFFFF is indistinguishable from an error code,
+ * and naming the codes does not fix that -- only an out-parameter would. in8 and
+ * in16 are unaffected, since their results cannot reach the negative range. */
 m3ApiRawFunction(wasmos_io_in32) {
     m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, port) uint32_t context_id = 0;
     if (port < 0 || port > 0xFFFF) {
-        m3ApiReturn(-1);
+        m3ApiReturn(WASMOS_ERR_IO_BAD_PORT);
     }
     if (current_process_context(&context_id) != 0 ||
         require_io_capability(context_id, (uint16_t)port) != 0) {
-        m3ApiReturn(-1);
+        m3ApiReturn(WASMOS_ERR_IO_NOT_AUTHORIZED);
     }
     m3ApiReturn((int32_t)inl((uint16_t)port));
 }
@@ -1793,11 +1798,11 @@ m3ApiRawFunction(wasmos_io_out8) {
     m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, port) m3ApiGetArg(int32_t, value)
         uint32_t context_id = 0;
     if (port < 0 || port > 0xFFFF || value < 0 || value > 0xFF) {
-        m3ApiReturn(-1);
+        m3ApiReturn(WASMOS_ERR_IO_BAD_PORT);
     }
     if (current_process_context(&context_id) != 0 ||
         require_io_capability(context_id, (uint16_t)port) != 0) {
-        m3ApiReturn(-1);
+        m3ApiReturn(WASMOS_ERR_IO_NOT_AUTHORIZED);
     }
     outb((uint16_t)port, (uint8_t)value);
     m3ApiReturn(0);
@@ -1807,11 +1812,11 @@ m3ApiRawFunction(wasmos_io_out16) {
     m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, port) m3ApiGetArg(int32_t, value)
         uint32_t context_id = 0;
     if (port < 0 || port > 0xFFFF || value < 0 || value > 0xFFFF) {
-        m3ApiReturn(-1);
+        m3ApiReturn(WASMOS_ERR_IO_BAD_PORT);
     }
     if (current_process_context(&context_id) != 0 ||
         require_io_capability(context_id, (uint16_t)port) != 0) {
-        m3ApiReturn(-1);
+        m3ApiReturn(WASMOS_ERR_IO_NOT_AUTHORIZED);
     }
     outw((uint16_t)port, (uint16_t)value);
     m3ApiReturn(0);
@@ -1821,11 +1826,11 @@ m3ApiRawFunction(wasmos_io_out32) {
     m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, port) m3ApiGetArg(int32_t, value)
         uint32_t context_id = 0;
     if (port < 0 || port > 0xFFFF) {
-        m3ApiReturn(-1);
+        m3ApiReturn(WASMOS_ERR_IO_BAD_PORT);
     }
     if (current_process_context(&context_id) != 0 ||
         require_io_capability(context_id, (uint16_t)port) != 0) {
-        m3ApiReturn(-1);
+        m3ApiReturn(WASMOS_ERR_IO_NOT_AUTHORIZED);
     }
     outl((uint16_t)port, (uint32_t)value);
     m3ApiReturn(0);
@@ -1834,7 +1839,7 @@ m3ApiRawFunction(wasmos_io_out32) {
 m3ApiRawFunction(wasmos_io_wait) {
     m3ApiReturnType(int32_t) uint32_t context_id = 0;
     if (current_process_context(&context_id) != 0 || require_io_capability(context_id, 0x80) != 0) {
-        m3ApiReturn(-1);
+        m3ApiReturn(WASMOS_ERR_IO_NOT_AUTHORIZED);
     }
     io_wait();
     m3ApiReturn(0);

@@ -230,6 +230,7 @@ and **domains** (namespaced operation errors: the negative of `(domain << 16) | 
 | `WASMOS_ERR_IO_NOT_AUTHORIZED` | -0x00120001 | caller has no io.port spawn profile, so it holds no I/O windows |
 | `WASMOS_ERR_IO_BAD_REGION` | -0x00120002 | region index names no window this context was granted |
 | `WASMOS_ERR_IO_OUT_OF_WINDOW` | -0x00120003 | offset falls outside the granted window's bounds |
+| `WASMOS_ERR_IO_BAD_PORT` | -0x00120004 | port number outside 0..0xFFFF |
 
 ### `font` (domain 12) — font-rasterizer service failures (was FONT_STATUS_*)
 

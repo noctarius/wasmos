@@ -176,6 +176,7 @@ pub const WASMOS_ERR_MSI_NOT_DEVICE_OWNER: i32 = -0x0011000B; // another endpoin
 pub const WASMOS_ERR_IO_NOT_AUTHORIZED: i32 = -0x00120001; // caller has no io.port spawn profile, so it holds no I/O windows
 pub const WASMOS_ERR_IO_BAD_REGION: i32 = -0x00120002; // region index names no window this context was granted
 pub const WASMOS_ERR_IO_OUT_OF_WINDOW: i32 = -0x00120003; // offset falls outside the granted window's bounds
+pub const WASMOS_ERR_IO_BAD_PORT: i32 = -0x00120004; // port number outside 0..0xFFFF
 pub const WASMOS_ERR_FONT_INVALID: i32 = -0x000C0001; // invalid request arguments (font id, size, glyph, or buffer)
 pub const WASMOS_ERR_FONT_PERMISSION: i32 = -0x000C0002; // caller is not permitted to use the requested font resource
 pub const WASMOS_ERR_FONT_UNSUPPORTED: i32 = -0x000C0003; // unknown or unsupported request type
@@ -406,6 +407,7 @@ pub fn wasmos_strerror(c: i32) -> &'static str {
         WASMOS_ERR_IO_NOT_AUTHORIZED => "caller has no io.port spawn profile, so it holds no I/O windows",
         WASMOS_ERR_IO_BAD_REGION => "region index names no window this context was granted",
         WASMOS_ERR_IO_OUT_OF_WINDOW => "offset falls outside the granted window's bounds",
+        WASMOS_ERR_IO_BAD_PORT => "port number outside 0..0xFFFF",
         WASMOS_ERR_FONT_INVALID => "invalid request arguments (font id, size, glyph, or buffer)",
         WASMOS_ERR_FONT_PERMISSION => "caller is not permitted to use the requested font resource",
         WASMOS_ERR_FONT_UNSUPPORTED => "unknown or unsupported request type",

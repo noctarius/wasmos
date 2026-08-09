@@ -249,6 +249,7 @@ domains:
       - { name: NOT_AUTHORIZED, description: "caller has no io.port spawn profile, so it holds no I/O windows" }
       - { name: BAD_REGION,     description: "region index names no window this context was granted" }
       - { name: OUT_OF_WINDOW,  description: "offset falls outside the granted window's bounds" }
+      - { name: BAD_PORT,       description: "port number outside 0..0xFFFF" }
 
   font:
     id: 12

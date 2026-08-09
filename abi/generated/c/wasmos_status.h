@@ -196,6 +196,7 @@ enum {
     WASMOS_ERR_IO_NOT_AUTHORIZED = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_IO, 1), /* caller has no io.port spawn profile, so it holds no I/O windows */
     WASMOS_ERR_IO_BAD_REGION = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_IO, 2), /* region index names no window this context was granted */
     WASMOS_ERR_IO_OUT_OF_WINDOW = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_IO, 3), /* offset falls outside the granted window's bounds */
+    WASMOS_ERR_IO_BAD_PORT = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_IO, 4), /* port number outside 0..0xFFFF */
     WASMOS_ERR_FONT_INVALID = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_FONT, 1), /* invalid request arguments (font id, size, glyph, or buffer) */
     WASMOS_ERR_FONT_PERMISSION = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_FONT, 2), /* caller is not permitted to use the requested font resource */
     WASMOS_ERR_FONT_UNSUPPORTED = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_FONT, 3), /* unknown or unsupported request type */
@@ -435,6 +436,7 @@ static inline const char *wasmos_error_code_name(wasmos_error_code_t c) {
     case WASMOS_ERR_IO_NOT_AUTHORIZED: return "io.NOT_AUTHORIZED";
     case WASMOS_ERR_IO_BAD_REGION: return "io.BAD_REGION";
     case WASMOS_ERR_IO_OUT_OF_WINDOW: return "io.OUT_OF_WINDOW";
+    case WASMOS_ERR_IO_BAD_PORT: return "io.BAD_PORT";
     case WASMOS_ERR_FONT_INVALID: return "font.INVALID";
     case WASMOS_ERR_FONT_PERMISSION: return "font.PERMISSION";
     case WASMOS_ERR_FONT_UNSUPPORTED: return "font.UNSUPPORTED";
@@ -615,6 +617,7 @@ static inline const char *wasmos_strerror(wasmos_error_code_t c) {
     case WASMOS_ERR_IO_NOT_AUTHORIZED: return "caller has no io.port spawn profile, so it holds no I/O windows";
     case WASMOS_ERR_IO_BAD_REGION: return "region index names no window this context was granted";
     case WASMOS_ERR_IO_OUT_OF_WINDOW: return "offset falls outside the granted window's bounds";
+    case WASMOS_ERR_IO_BAD_PORT: return "port number outside 0..0xFFFF";
     case WASMOS_ERR_FONT_INVALID: return "invalid request arguments (font id, size, glyph, or buffer)";
     case WASMOS_ERR_FONT_PERMISSION: return "caller is not permitted to use the requested font resource";
     case WASMOS_ERR_FONT_UNSUPPORTED: return "unknown or unsupported request type";

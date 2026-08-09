@@ -3,6 +3,8 @@
 
 #include <stdint.h>
 
+#include "wasmos_status.h" /* generated transport axis; see the asserts below */
+
 #define IPC_QUEUE_DEPTH 32
 #define IPC_ENDPOINT_TABLE_CHUNK 16u
 #define IPC_CONTEXT_KERNEL 0u
@@ -16,6 +18,28 @@ typedef enum {
     IPC_ERR_PERM = -2,
     IPC_ERR_FULL = -3
 } ipc_result_t;
+
+/*
+ * ipc_result_t predates the generated transport axis and is one of the two
+ * taxonomies still to be folded into it (see
+ * docs/architecture/34-abi-idl-and-error-model.md: the axis exists to
+ * consolidate "today's scattered IPC_ERR_* / PROC_PM_ERR_* fragments", and
+ * abi/errors.yaml already annotates FULL as "legacy IPC_ERR_FULL").
+ *
+ * Until that migration lands, the values coincide by intent rather than by
+ * accident, and these assertions say so: anything that reads an ipc_result_t
+ * through the generated vocabulary — wasmos_status_str(), a peer decoding a
+ * reply — stays correct, and a drift in either definition breaks the build
+ * rather than a decoder somewhere downstream.
+ *
+ * IPC_EMPTY has no counterpart: the transport axis is negative-on-error with
+ * no "nothing was waiting" value, so it is deliberately absent below.
+ */
+_Static_assert((int)IPC_OK == (int)WASMOS_OK, "IPC_OK must match the transport axis");
+_Static_assert((int)IPC_ERR_INVALID == (int)WASMOS_INVAL,
+               "IPC_ERR_INVALID must match WASMOS_INVAL");
+_Static_assert((int)IPC_ERR_PERM == (int)WASMOS_DENIED, "IPC_ERR_PERM must match WASMOS_DENIED");
+_Static_assert((int)IPC_ERR_FULL == (int)WASMOS_FULL, "IPC_ERR_FULL must match WASMOS_FULL");
 
 typedef enum {
     IPC_ENDPOINT_TYPE_MESSAGE = 0,

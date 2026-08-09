@@ -1872,21 +1872,17 @@ static struct {
 
 static ipc_message_t g_scratch;
 
+/* Names come from the generated vocabulary (abi/errors.yaml ->
+ * wasmos_status_str), not a second hand-written table: ipc.h static-asserts
+ * that ipc_result_t's values are the transport axis, so a local mapping here
+ * would be a copy that could drift from the IDL. IPC_EMPTY is the one code
+ * with no counterpart -- the axis is negative-on-error and has no "nothing was
+ * waiting" value -- so it is the only special case. */
 static const char* code_name(int rc) {
-    switch (rc) {
-    case IPC_OK:
-        return "IPC_OK";
-    case IPC_EMPTY:
+    if (rc == IPC_EMPTY) {
         return "IPC_EMPTY";
-    case IPC_ERR_INVALID:
-        return "IPC_ERR_INVALID";
-    case IPC_ERR_PERM:
-        return "IPC_ERR_PERM";
-    case IPC_ERR_FULL:
-        return "IPC_ERR_FULL";
-    default:
-        return "<unknown>";
     }
+    return wasmos_status_str((wasmos_status_t)rc);
 }
 
 /* --- creation ---------------------------------------------------------- */

@@ -379,11 +379,8 @@ static uint32_t warp_fs_endpoint(void* ctx_) {
 static uint32_t warp_xfer_buffer_read(uint32_t buffer_id, uint32_t ptr_off, uint32_t len,
                                       uint32_t offset, void* ctx_) {
     auto* ctx = warp_call_ctx(ctx_);
-    /* FIXME: divergence. A zero-length transfer is a silent success here and
-     * WASMOS_ERR_XFER_BUFFER_INVALID_SIZE under wasm3, so the same guest call
-     * gets different answers from the two runtimes. Naming the codes surfaced
-     * it; picking which behaviour is correct is a contract decision, not a
-     * rename, so it is left as-is rather than changed under a refactor. */
+    /* A zero-length transfer is a no-op success. wasm3 refused it until this
+     * was settled; there is nothing to move, so there is nothing to fail. */
     if (!len)
         return 0;
     uint32_t context_id = 0;
@@ -420,11 +417,8 @@ static uint32_t warp_xfer_buffer_read(uint32_t buffer_id, uint32_t ptr_off, uint
 static uint32_t warp_xfer_buffer_write(uint32_t buffer_id, uint32_t ptr_off, uint32_t len,
                                        uint32_t offset, void* ctx_) {
     auto* ctx = warp_call_ctx(ctx_);
-    /* FIXME: divergence. A zero-length transfer is a silent success here and
-     * WASMOS_ERR_XFER_BUFFER_INVALID_SIZE under wasm3, so the same guest call
-     * gets different answers from the two runtimes. Naming the codes surfaced
-     * it; picking which behaviour is correct is a contract decision, not a
-     * rename, so it is left as-is rather than changed under a refactor. */
+    /* A zero-length transfer is a no-op success. wasm3 refused it until this
+     * was settled; there is nothing to move, so there is nothing to fail. */
     if (!len)
         return 0;
     uint32_t context_id = 0;
@@ -791,8 +785,10 @@ static uint32_t warp_io_in32(uint32_t port, void* ctx_) {
         warp_require_io_capability(context_id, (uint16_t)port) != 0) {
         return (uint32_t)WASMOS_ERR_IO_NOT_AUTHORIZED;
     }
+    /* See the wasm3 shim's FIXME: 0xFFFFFFFF is a legitimate read here. */
     return (uint32_t)inl((uint16_t)port);
 }
+
 static uint32_t warp_io_out8(uint32_t port, uint32_t val, void* ctx_) {
     (void)ctx_;
     uint32_t context_id = 0;

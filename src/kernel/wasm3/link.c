@@ -1315,7 +1315,12 @@ m3ApiRawFunction(wasmos_xfer_buffer_read) {
     if (buffer_id <= 0) {
         m3ApiReturn(WASMOS_ERR_XFER_BUFFER_NOT_FOUND);
     }
-    if (len <= 0) {
+    /* A zero-length transfer is a no-op success, matching WARP. A NEGATIVE
+     * length is still refused: it cannot be a no-op, it is a bad argument. */
+    if (len == 0) {
+        m3ApiReturn(WASMOS_ERR_NONE);
+    }
+    if (len < 0) {
         m3ApiReturn(WASMOS_ERR_XFER_BUFFER_INVALID_SIZE);
     }
     if (offset < 0) {
@@ -1371,7 +1376,12 @@ m3ApiRawFunction(wasmos_xfer_buffer_write) {
     if (buffer_id <= 0) {
         m3ApiReturn(WASMOS_ERR_XFER_BUFFER_NOT_FOUND);
     }
-    if (len <= 0) {
+    /* A zero-length transfer is a no-op success, matching WARP. A NEGATIVE
+     * length is still refused: it cannot be a no-op, it is a bad argument. */
+    if (len == 0) {
+        m3ApiReturn(WASMOS_ERR_NONE);
+    }
+    if (len < 0) {
         m3ApiReturn(WASMOS_ERR_XFER_BUFFER_INVALID_SIZE);
     }
     if (offset < 0) {
@@ -1791,6 +1801,13 @@ m3ApiRawFunction(wasmos_io_in32) {
         require_io_capability(context_id, (uint16_t)port) != 0) {
         m3ApiReturn(WASMOS_ERR_IO_NOT_AUTHORIZED);
     }
+    /* FIXME: a 32-bit port read cannot report failure in its return value. A
+     * device legitimately reading back 0xFFFFFFFF is indistinguishable from an
+     * error code. Fixing it means an out-parameter, which changes the hostcall
+     * signature and every caller; io_region_in32 already has that shape. Tried
+     * and reverted: the converted module fails WARP AOT compilation with
+     * "Imported symbol could not be found" for virtio_net alone, unexplained.
+     * in8/in16 are unaffected -- their results cannot reach the negative range. */
     m3ApiReturn((int32_t)inl((uint16_t)port));
 }
 

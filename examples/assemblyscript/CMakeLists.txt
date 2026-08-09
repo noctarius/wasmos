@@ -1,9 +1,9 @@
-if (AS_ENABLE)
-  find_program(ASC_EXECUTABLE asc HINTS ${CLANG_BIN_DIR})
-  if (NOT ASC_EXECUTABLE)
-    message(FATAL_ERROR "AssemblyScript compiler 'asc' not found. Install with: npm i -g assemblyscript")
-  endif ()
+include(${CMAKE_SOURCE_DIR}/cmake/WasmosAssemblyScript.cmake)
 
+if (AS_ENABLE)
+  # Apps enter through libc's runtime.ts, which imports the app's own module as
+  # "./app" -- so the entry staged into the build is runtime.ts and the app
+  # source is staged beside it under that name.
   function(wasmos_add_assemblyscript_app)
     cmake_parse_arguments(ARG "" "NAME;SRC;OUTPUT_WASM;OUTPUT_APP;MANIFEST;INITIAL_MEMORY_PAGES"
                           "EXTRA_STAGE_FILES" ${ARGN})
@@ -12,43 +12,12 @@ if (AS_ENABLE)
       message(FATAL_ERROR "wasmos_add_assemblyscript_app: missing required argument")
     endif ()
 
-    set(_stage_dir ${BUILD_DIR}/assemblyscript_${ARG_NAME}_src)
-    set(_entry_src ${_stage_dir}/entry.ts)
-    set(_stage_cmds "")
-    foreach(_src ${ARG_EXTRA_STAGE_FILES})
-      get_filename_component(_bname "${_src}" NAME)
-      list(APPEND _stage_cmds
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different "${_src}" "${_stage_dir}/${_bname}")
-    endforeach()
-
-    set(_initial_memory_args "")
-    if (ARG_INITIAL_MEMORY_PAGES)
-      set(_initial_memory_args --initialMemory ${ARG_INITIAL_MEMORY_PAGES})
-    endif ()
-
-    add_custom_command(
-      OUTPUT ${ARG_OUTPUT_WASM}
-      COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}
-      COMMAND ${CMAKE_COMMAND} -E make_directory ${_stage_dir}
-      COMMAND ${CMAKE_COMMAND} -E copy_if_different ${ARG_SRC} ${_stage_dir}/app.ts
-      COMMAND ${CMAKE_COMMAND} -E copy_if_different ${LIBC_DIR}/assemblyscript/wasmos.ts ${_stage_dir}/wasmos.ts
-      COMMAND ${CMAKE_COMMAND} -E copy_if_different ${CMAKE_SOURCE_DIR}/abi/generated/assemblyscript/wasmos_status.ts ${_stage_dir}/wasmos_status.ts
-      COMMAND ${CMAKE_COMMAND} -E copy_if_different ${LIBC_DIR}/assemblyscript/runtime.ts ${_entry_src}
-      ${_stage_cmds}
-      COMMAND ${ASC_EXECUTABLE}
-              ${_entry_src}
-              --target release
-              -Osize
-              --runtime stub
-              --noAssert
-              ${_initial_memory_args}
-              --outFile ${ARG_OUTPUT_WASM}
-      DEPENDS ${ARG_SRC} ${LIBC_DIR}/assemblyscript/wasmos.ts
-              ${LIBC_DIR}/assemblyscript/runtime.ts ${ARG_EXTRA_STAGE_FILES}
-              ${CMAKE_SOURCE_DIR}/abi/generated/assemblyscript/wasmos_status.ts
-      WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-      COMMENT "Building AssemblyScript ${ARG_NAME} module"
-      VERBATIM
+    wasmos_assemblyscript_compile(
+      NAME ${ARG_NAME}
+      ENTRY ${LIBC_DIR}/assemblyscript/runtime.ts
+      OUTPUT_WASM ${ARG_OUTPUT_WASM}
+      INITIAL_MEMORY_PAGES "${ARG_INITIAL_MEMORY_PAGES}"
+      EXTRA_SOURCES ${ARG_SRC} ${ARG_EXTRA_STAGE_FILES}
     )
 
     add_custom_command(
@@ -69,7 +38,7 @@ if (AS_ENABLE)
     SRC ${AS_HELLO_SRC}
     OUTPUT_WASM ${AS_HELLO_WASM}
     OUTPUT_APP ${AS_HELLO_APP}
-    MANIFEST ${CMAKE_CURRENT_SOURCE_DIR}/linker.metadata
+    MANIFEST ${CMAKE_CURRENT_SOURCE_DIR}/hello/linker.metadata
   )
 
   wasmos_add_assemblyscript_app(

@@ -503,21 +503,23 @@ run_assemblyscript_lint() {
 
         cp "$file" "$entry_file"
 
-        if grep -q '"\./wasmos"' "$file" || [[ "$file" == "src/libui/assemblyscript/libui.ts" || "$file" == "src/libc/assemblyscript/runtime.ts" ]]; then
-            copy_if_needed "src/libc/assemblyscript/wasmos.ts" "$stage_dir/wasmos.ts"
-        fi
+        # Stage the whole AS libc, exactly as cmake/WasmosAssemblyScript.cmake
+        # does for the real builds. asc compiles only what the entry
+        # transitively imports, so an unreferenced file costs nothing -- and
+        # the alternative, a condition per module, means every new libc module
+        # has to be remembered here as well as in the build.
+        local libc_module
+        for libc_module in \
+            src/libc/assemblyscript/wasmos.ts \
+            src/libc/assemblyscript/coroutine.ts \
+            src/libc/assemblyscript/eventloop.ts \
+            abi/generated/assemblyscript/wasmos_imports.ts \
+            abi/generated/assemblyscript/wasmos_status.ts; do
+            copy_if_needed "$libc_module" "$stage_dir/$(basename "$libc_module")"
+        done
 
         if grep -q '"\./libui"' "$file"; then
             copy_if_needed "src/libui/assemblyscript/libui.ts" "$stage_dir/libui.ts"
-            copy_if_needed "src/libc/assemblyscript/wasmos.ts" "$stage_dir/wasmos.ts"
-        fi
-
-        # The generated status ABI is imported by AS drivers/libui the same way
-        # the real builds stage it next to wasmos.ts.
-        if grep -q '"\./wasmos_status"' "$file" \
-            || grep -q '"\./wasmos_status"' "$stage_dir/libui.ts" 2>/dev/null; then
-            copy_if_needed "abi/generated/assemblyscript/wasmos_status.ts" \
-                "$stage_dir/wasmos_status.ts"
         fi
 
         if [[ "$file" == "src/libc/assemblyscript/runtime.ts" ]]; then

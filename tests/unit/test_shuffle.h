@@ -14,8 +14,11 @@
  * testing, so this shuffles.
  *
  * Reproducibility is the whole trick. A randomized order that cannot be
- * replayed turns a real bug into a ghost, so the seed is ALWAYS printed, and
- * setting WASMOS_TEST_SEED replays that exact order.
+ * replayed turns a real bug into a ghost, so the seed is printed BEFORE the
+ * first case runs and flushed immediately -- not on failure. A suite that
+ * aborts, segfaults or hangs never reaches its failure path, and those are
+ * precisely the runs whose order you need back. Setting WASMOS_TEST_SEED
+ * replays it.
  *
  * The generator is a fixed splitmix64 rather than the host's. srand()/rand() are
  * seed-deterministic too, but only per libc implementation: the sequence for a
@@ -43,13 +46,27 @@
 
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 
-/* These suites compile with src/libc/include on the include path, where wasmos's
- * own freestanding <stdlib.h> shadows the host's -- so the two host functions
- * used here are declared directly rather than included. The host libc is still
- * what they link against. */
+/* Some of these suites compile with src/libc/include on the include path, where
+ * wasmos's own freestanding headers shadow the host's and declare far less.
+ * They still LINK against the host libc, so what is missing is declared here --
+ * keyed off those headers' own guards, because the suites that get the host's
+ * headers must not see a conflicting declaration. */
+#ifdef WASMOS_LIBC_STDLIB_H
 extern char* getenv(const char* name);
 extern unsigned long long strtoull(const char* text, char** end, int base);
+#endif
+#ifdef WASMOS_LIBC_STDIO_H
+/* Declared without a stream type and only ever called as WASMOS_TEST_FLUSH(),
+ * i.e. fflush(NULL), which flushes every output stream: the FILE in that
+ * shadowing header is wasmos's own struct, not the host's, so no FILE* may be
+ * passed across. */
+extern int fflush(void* stream);
+#define WASMOS_TEST_FLUSH() fflush(0)
+#else
+#define WASMOS_TEST_FLUSH() fflush(stdout)
+#endif
 
 #define WASMOS_TEST_MAX_CASES 128
 
@@ -60,8 +77,7 @@ typedef struct {
     wasmos_test_fn_t fn;
 } wasmos_test_case_t;
 
-#define WASMOS_TEST_CASE(function)                                                                 \
-    { #function, function }
+#define WASMOS_TEST_CASE(function) {#function, function}
 
 static inline uint64_t wasmos_test_next_random(uint64_t* state) {
     uint64_t z = (*state += 0x9E3779B97F4A7C15ull);
@@ -102,12 +118,17 @@ static inline uint64_t wasmos_test_shuffle(int* order, int count) {
         order[i] = order[j];
         order[j] = swap;
     }
+    /* Flushed, because the run this seed matters most for is the one that dies
+     * before it can print anything else. */
+    printf("test_shuffle: WASMOS_TEST_SEED=0x%llx\n", (unsigned long long)seed);
+    WASMOS_TEST_FLUSH();
     return seed;
 }
 
-/** Print how to replay the order that just failed. */
+/** Repeat the seed next to a failure, so it is not only at the top of the log. */
 static inline void wasmos_test_report_seed(uint64_t seed) {
     printf("  replay this order with WASMOS_TEST_SEED=0x%llx\n", (unsigned long long)seed);
+    WASMOS_TEST_FLUSH();
 }
 
 /**

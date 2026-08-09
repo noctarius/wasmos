@@ -147,9 +147,13 @@ const harness = {
     const name = FIELD_ORDER[field];
     return name === undefined ? 0 : q[index][name];
   },
-  /* Seed for the randomized case order. WASMOS_TEST_SEED replays a failure;
-     the same seed produces the same order as the C helper's. */
-  seed: () => testSeed,
+  /* Seed for the randomized case order, printed as the guest takes it rather
+     than on failure: a suite that traps or hangs never reaches its failure
+     path, and that is the run whose order you need back. */
+  seed: () => {
+    console.log(`${label}: WASMOS_TEST_SEED=0x${BigInt.asUintN(64, testSeed).toString(16)}`);
+    return testSeed;
+  },
   reportSeed: (seed) => {
     console.log(`${label}: replay this order with WASMOS_TEST_SEED=0x${BigInt.asUintN(64, seed).toString(16)}`);
   },

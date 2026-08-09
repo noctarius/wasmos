@@ -106,10 +106,17 @@ func wasmPromiseReject(*Promise, int32) bool
 //go:extern wasmos_future_then
 func wasmFutureThen(*Runtime, *Future, *Continuation, Callback, Callback, unsafe.Pointer) *Future
 
+// Both of these need //go:linkname as well as //go:extern: on a bodyless func
+// //go:extern alone binds a VARIABLE, leaving the symbol undefined at link
+// time. Race and All therefore never linked, so no Go guest could call them --
+// unnoticed because the only Go example does not use groups.
+//
 //go:extern wasmos_future_race
+//go:linkname wasmFutureRace wasmos_future_race
 func wasmFutureRace(*Runtime, *FutureGroup, unsafe.Pointer, uintptr, *Continuation) *Future
 
 //go:extern wasmos_future_all
+//go:linkname wasmFutureAll wasmos_future_all
 func wasmFutureAll(*Runtime, *FutureGroup, unsafe.Pointer, uintptr, *uintptr, *Continuation) *Future
 
 //go:extern wasmos_sys_wasm_event_loop_init
@@ -311,9 +318,7 @@ func (f *Future) ThenGo(runtime *Runtime, continuation *Continuation, success Fu
 		return nil
 	}
 	for i := 0; i < goFutureCallbackMax; i++ {
-		if goFutureSuccess[i] == nil && goFutureError[i] == nil {
-			// TODO: reclaim this slot once its continuation settles; hello-sized
-			// chains are bounded, but long-running services need reusable slots.
+		if goFutureSuccess[i] == nil && goFutureError[i] == nil && goFutureChain[i] == nil {
 			goFutureSuccess[i], goFutureError[i] = success, failure
 			return wasmGoFutureThen(runtime, f, continuation, uint32(i+1))
 		}
@@ -326,7 +331,7 @@ func (f *Future) ThenFlatGo(runtime *Runtime, continuation, adopt *Continuation,
 		return nil
 	}
 	for i := 0; i < goFutureCallbackMax; i++ {
-		if goFutureChain[i] == nil {
+		if goFutureSuccess[i] == nil && goFutureError[i] == nil && goFutureChain[i] == nil {
 			goFutureChain[i] = next
 			return wasmGoFutureThenFlat(runtime, f, continuation, adopt, uint32(i+1))
 		}
@@ -334,12 +339,36 @@ func (f *Future) ThenFlatGo(runtime *Runtime, continuation, adopt *Continuation,
 	return nil
 }
 
+// releaseGoCallback frees a registration once its callback has run.
+//
+// The C runtime dispatches a continuation at most once -- continuation_dispatch
+// clears active and future before invoking -- so the slot is dead as soon as any
+// of the three entry points below fires. Both the plain and the flat variant are
+// covered: wasmos_go_future_then_flat passes ONE id as both the chain and the
+// error callback, so a rejected flat chain releases through the error path.
+//
+// Without this the table filled permanently: ThenGo returned nil after 32
+// registrations for the lifetime of the process, so a long-running service
+// silently stopped chaining. Pinned by the registry-exhaustion case in
+// tests/unit/test_wasm_coroutine.go.
+func releaseGoCallback(callbackID uint32) {
+	if callbackID == 0 || callbackID > goFutureCallbackMax {
+		return
+	}
+	i := callbackID - 1
+	goFutureSuccess[i] = nil
+	goFutureError[i] = nil
+	goFutureChain[i] = nil
+}
+
 //go:export wasmos_go_future_chain
 func wasmosGoFutureChain(callbackID uint32, value uintptr) uintptr {
 	if callbackID == 0 || callbackID > goFutureCallbackMax || goFutureChain[callbackID-1] == nil {
 		return 0
 	}
-	return uintptr(unsafe.Pointer(goFutureChain[callbackID-1](value)))
+	next := goFutureChain[callbackID-1](value)
+	releaseGoCallback(callbackID)
+	return uintptr(unsafe.Pointer(next))
 }
 
 //go:export wasmos_go_future_success
@@ -348,16 +377,24 @@ func wasmosGoFutureSuccess(callbackID uint32, value uintptr, out *uintptr) int32
 		return -1
 	}
 	value, status := goFutureSuccess[callbackID-1](value)
+	releaseGoCallback(callbackID)
 	*out = value
 	return status
 }
 
 //go:export wasmos_go_future_error
 func wasmosGoFutureError(callbackID uint32, status int32, out *uintptr) int32 {
-	if callbackID == 0 || callbackID > goFutureCallbackMax || goFutureError[callbackID-1] == nil {
+	if callbackID == 0 || callbackID > goFutureCallbackMax {
+		return status
+	}
+	if goFutureError[callbackID-1] == nil {
+		// A flat chain that rejected: the id is registered as a chain callback
+		// only, and its error path is this pass-through. Still release it.
+		releaseGoCallback(callbackID)
 		return status
 	}
 	value, nextStatus := goFutureError[callbackID-1](status)
+	releaseGoCallback(callbackID)
 	*out = value
 	return nextStatus
 }

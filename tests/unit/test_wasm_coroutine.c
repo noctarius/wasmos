@@ -851,20 +851,24 @@ static int all_reject_case(size_t rejecter, size_t count) {
 }
 
 static int test_race_and_all_every_position(void) {
-    int rc;
+    int rc = 0;
     for (size_t winner = 0; winner < 3u; ++winner) {
-        if ((rc = race_winner_case(winner, 3u)) != 0)
+        rc = race_winner_case(winner, 3u);
+        if (rc != 0)
             return rc;
     }
     /* A fourth candidate, so more than two losers are abandoned at once. */
-    if ((rc = race_winner_case(1u, 4u)) != 0)
+    rc = race_winner_case(1u, 4u);
+    if (rc != 0)
         return rc;
     for (size_t loser = 0; loser < 3u; ++loser) {
-        if ((rc = race_reject_case(loser, 3u)) != 0)
+        rc = race_reject_case(loser, 3u);
+        if (rc != 0)
             return rc;
     }
     for (size_t rejecter = 0; rejecter < 3u; ++rejecter) {
-        if ((rc = all_reject_case(rejecter, 3u)) != 0)
+        rc = all_reject_case(rejecter, 3u);
+        if (rc != 0)
             return rc;
     }
     return 0;

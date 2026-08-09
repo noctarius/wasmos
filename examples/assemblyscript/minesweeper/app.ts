@@ -12,19 +12,19 @@ const PADDING: i32 = 16;
 const CELL: i32 = 24;
 const RESET_SIZE: i32 = 20;
 
-const COLOR_BG: u32 = 0xFF92A1B4;
-const COLOR_PANEL: u32 = 0xFFC3CEDA;
-const COLOR_HIDDEN: u32 = 0xFFBCC7D3;
-const COLOR_REVEALED: u32 = 0xFFE7EDF4;
-const COLOR_GRID_DARK: u32 = 0xFF718295;
-const COLOR_GRID_LIGHT: u32 = 0xFFF7FBFF;
-const COLOR_MINE: u32 = 0xFF232A34;
-const COLOR_MINE_HIT: u32 = 0xFFCC5448;
-const COLOR_FLAG: u32 = 0xFFD64C4C;
-const COLOR_RESET: u32 = 0xFFF2C14E;
-const COLOR_RESET_BORDER: u32 = 0xFF9C6B00;
+const COLOR_BG: u32 = 0xff92a1b4;
+const COLOR_PANEL: u32 = 0xffc3ceda;
+const COLOR_HIDDEN: u32 = 0xffbcc7d3;
+const COLOR_REVEALED: u32 = 0xffe7edf4;
+const COLOR_GRID_DARK: u32 = 0xff718295;
+const COLOR_GRID_LIGHT: u32 = 0xfff7fbff;
+const COLOR_MINE: u32 = 0xff232a34;
+const COLOR_MINE_HIT: u32 = 0xffcc5448;
+const COLOR_FLAG: u32 = 0xffd64c4c;
+const COLOR_RESET: u32 = 0xfff2c14e;
+const COLOR_RESET_BORDER: u32 = 0xff9c6b00;
 
-let g_rng: u32 = 0x00C0FFEE;
+let g_rng: u32 = 0x00c0ffee;
 let g_firstMove: bool = true;
 let g_lost: bool = false;
 let g_won: bool = false;
@@ -58,7 +58,7 @@ function resetState(): void {
     g_lost = false;
     g_won = false;
     g_revealedCount = 0;
-    g_rng = 0x00C0FFEE;
+    g_rng = 0x00c0ffee;
     for (let i = 0; i < BOARD_CELLS; i++) {
         g_mines[i] = 0;
         g_revealed[i] = 0;
@@ -80,17 +80,13 @@ function placeMines(safeIndex: i32): void {
     for (let y = 0; y < BOARD_H; y++) {
         for (let x = 0; x < BOARD_W; x++) {
             const idx = cellIndex(x, y);
-            if (g_mines[idx] != 0)
-                continue;
+            if (g_mines[idx] != 0) continue;
             let count: u8 = 0;
             for (let yy = y - 1; yy <= y + 1; yy++) {
                 for (let xx = x - 1; xx <= x + 1; xx++) {
-                    if (xx < 0 || yy < 0 || xx >= BOARD_W || yy >= BOARD_H)
-                        continue;
-                    if (xx == x && yy == y)
-                        continue;
-                    if (g_mines[cellIndex(xx, yy)] != 0)
-                        count++;
+                    if (xx < 0 || yy < 0 || xx >= BOARD_W || yy >= BOARD_H) continue;
+                    if (xx == x && yy == y) continue;
+                    if (g_mines[cellIndex(xx, yy)] != 0) count++;
                 }
             }
             g_adjacent[idx] = count;
@@ -99,10 +95,8 @@ function placeMines(safeIndex: i32): void {
 }
 
 function revealFrom(index: i32): void {
-    if (index < 0 || index >= BOARD_CELLS)
-        return;
-    if (g_revealed[index] != 0 || g_flagged[index] != 0)
-        return;
+    if (index < 0 || index >= BOARD_CELLS) return;
+    if (g_revealed[index] != 0 || g_flagged[index] != 0) return;
 
     if (g_firstMove) {
         placeMines(index);
@@ -112,8 +106,7 @@ function revealFrom(index: i32): void {
     if (g_mines[index] != 0) {
         g_lost = true;
         for (let i = 0; i < BOARD_CELLS; i++) {
-            if (g_mines[i] != 0)
-                g_revealed[i] = 1;
+            if (g_mines[i] != 0) g_revealed[i] = 1;
         }
         return;
     }
@@ -124,18 +117,15 @@ function revealFrom(index: i32): void {
     queue[tail++] = index;
     while (head < tail) {
         const current = queue[head++];
-        if (g_revealed[current] != 0 || g_flagged[current] != 0)
-            continue;
+        if (g_revealed[current] != 0 || g_flagged[current] != 0) continue;
         g_revealed[current] = 1;
         g_revealedCount++;
-        if (g_adjacent[current] != 0)
-            continue;
+        if (g_adjacent[current] != 0) continue;
         const x = current % BOARD_W;
         const y = current / BOARD_W;
         for (let yy = y - 1; yy <= y + 1; yy++) {
             for (let xx = x - 1; xx <= x + 1; xx++) {
-                if (xx < 0 || yy < 0 || xx >= BOARD_W || yy >= BOARD_H)
-                    continue;
+                if (xx < 0 || yy < 0 || xx >= BOARD_W || yy >= BOARD_H) continue;
                 const next = cellIndex(xx, yy);
                 if (g_revealed[next] == 0 && g_mines[next] == 0) {
                     queue[tail++] = next;
@@ -150,36 +140,26 @@ function revealFrom(index: i32): void {
 }
 
 function toggleFlag(index: i32): void {
-    if (index < 0 || index >= BOARD_CELLS)
-        return;
-    if (g_revealed[index] != 0 || g_won || g_lost)
-        return;
+    if (index < 0 || index >= BOARD_CELLS) return;
+    if (g_revealed[index] != 0 || g_won || g_lost) return;
     g_flagged[index] = g_flagged[index] == 0 ? 1 : 0;
 }
 
 function flaggedCount(): i32 {
     let total = 0;
-    for (let i = 0; i < BOARD_CELLS; i++)
-        total += g_flagged[i];
+    for (let i = 0; i < BOARD_CELLS; i++) total += g_flagged[i];
     return total;
 }
 
 function digitColor(digit: i32): u32 {
-    if (digit == 1)
-        return 0xFF315BDE;
-    if (digit == 2)
-        return 0xFF1F8B4C;
-    if (digit == 3)
-        return 0xFFC5423B;
-    if (digit == 4)
-        return 0xFF5A2BAF;
-    if (digit == 5)
-        return 0xFF8C2D22;
-    if (digit == 6)
-        return 0xFF1F7A7A;
-    if (digit == 7)
-        return 0xFF2B3342;
-    return 0xFF5C6470;
+    if (digit == 1) return 0xff315bde;
+    if (digit == 2) return 0xff1f8b4c;
+    if (digit == 3) return 0xffc5423b;
+    if (digit == 4) return 0xff5a2baf;
+    if (digit == 5) return 0xff8c2d22;
+    if (digit == 6) return 0xff1f7a7a;
+    if (digit == 7) return 0xff2b3342;
+    return 0xff5c6470;
 }
 
 function updateTitle(ctx: Context): void {
@@ -247,8 +227,13 @@ function drawBoard(surface: Surface): void {
             if (g_mines[idx] != 0) {
                 drawMine(surface, px, py, g_lost);
             } else if (g_adjacent[idx] != 0) {
-                surface.drawDigit3x5(px + 7, py + 5, g_adjacent[idx], 3,
-                                     digitColor(g_adjacent[idx]));
+                surface.drawDigit3x5(
+                    px + 7,
+                    py + 5,
+                    g_adjacent[idx],
+                    3,
+                    digitColor(g_adjacent[idx]),
+                );
             }
         }
     }

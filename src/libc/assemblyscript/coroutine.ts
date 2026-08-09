@@ -75,15 +75,15 @@ export enum FutureGroupKind {
 /* The active runtime while a resume is executing, so a future acquires it on
  * first await. Module-level, matching the C file's g_current_runtime; a WASM
  * guest has one cooperative runtime per module. */
-let g_currentRuntime: Runtime|null = null;
+let g_currentRuntime: Runtime | null = null;
 
 export class Future {
     state: FutureState = FutureState.Pending;
     status: i32 = 0;
     value: usize = 0;
-    runtime: Runtime|null = null;
-    waiters: Coroutine|null = null;
-    continuations: Continuation|null = null;
+    runtime: Runtime | null = null;
+    waiters: Coroutine | null = null;
+    continuations: Continuation | null = null;
 
     /** Reset to pending and bind `promise` as the only settling handle. */
     init(promise: Promise): void {
@@ -97,13 +97,10 @@ export class Future {
     }
 
     /** True once settled, writing status/value into the boxes provided. */
-    poll(outStatus: Box|null, outValue: Box|null): bool {
-        if (this.state == FutureState.Pending)
-            return false;
-        if (outStatus !== null)
-            outStatus.value = <usize>this.status;
-        if (outValue !== null)
-            outValue.value = this.value;
+    poll(outStatus: Box | null, outValue: Box | null): bool {
+        if (this.state == FutureState.Pending) return false;
+        if (outStatus !== null) outStatus.value = <usize>this.status;
+        if (outValue !== null) outValue.value = this.value;
         return true;
     }
 
@@ -112,18 +109,19 @@ export class Future {
      * running coroutine and returns AWAIT_PENDING, on which the caller MUST
      * return TASK_YIELDED without touching the value.
      */
-    await(outValue: Box|null): i32 {
+    await(outValue: Box | null): i32 {
         if (this.state != FutureState.Pending) {
-            if (outValue !== null)
-                outValue.value = this.value;
+            if (outValue !== null) outValue.value = this.value;
             return this.status;
         }
         const runtime = this.runtime !== null ? this.runtime : g_currentRuntime;
-        if (runtime === null)
-            return -1;
+        if (runtime === null) return -1;
         const coroutine = runtime.current;
-        if (coroutine === null || coroutine.state != CoroutineState.Running ||
-            (this.runtime !== null && this.runtime !== runtime)) {
+        if (
+            coroutine === null ||
+            coroutine.state != CoroutineState.Running ||
+            (this.runtime !== null && this.runtime !== runtime)
+        ) {
             return -1;
         }
         this.runtime = runtime;
@@ -136,7 +134,7 @@ export class Future {
 
 /** The settling half of a future. Only the holder may resolve or reject. */
 export class Promise {
-    future: Future|null = null;
+    future: Future | null = null;
 
     resolve(value: usize): bool {
         return promiseComplete(this, 0, value);
@@ -149,48 +147,47 @@ export class Promise {
 }
 
 export class Coroutine {
-    runtime: Runtime|null = null;
-    next: Coroutine|null = null;
-    waitNext: Coroutine|null = null;
-    task: Task|null = null;
+    runtime: Runtime | null = null;
+    next: Coroutine | null = null;
+    waitNext: Coroutine | null = null;
+    task: Task | null = null;
     state: CoroutineState = CoroutineState.New;
     result: i32 = 0;
     completion: Future = new Future();
     completionPromise: Promise = new Promise();
 
     /** Await this coroutine's completion; see Future.await for the contract. */
-    join(outResult: Box|null): i32 {
+    join(outResult: Box | null): i32 {
         const box = new Box();
         const status = this.completion.await(box);
-        if (status == 0 && outResult !== null)
-            outResult.value = box.value;
+        if (status == 0 && outResult !== null) outResult.value = box.value;
         return status;
     }
 }
 
 export class Continuation {
-    next: Continuation|null = null;
-    future: Future|null = null;
-    onSuccess: OnSuccess|null = null;
-    onError: OnError|null = null;
-    group: FutureGroup|null = null;
+    next: Continuation | null = null;
+    future: Future | null = null;
+    onSuccess: OnSuccess | null = null;
+    onError: OnError | null = null;
+    group: FutureGroup | null = null;
     groupIndex: i32 = 0;
     /* The C original reuses its `group` field to carry the adopt continuation for
      * then_flat, distinguished only by the fact that group callbacks never return
      * CHAIN_NEXT. Kept as a separate field here, which is the same behaviour and
      * makes the confusion structurally impossible rather than conventional. */
-    adopt: Continuation|null = null;
+    adopt: Continuation | null = null;
     child: Future = new Future();
     childPromise: Promise = new Promise();
     active: bool = false;
 }
 
 export class FutureGroup {
-    runtime: Runtime|null = null;
+    runtime: Runtime | null = null;
     future: Future = new Future();
     promise: Promise = new Promise();
-    continuations: StaticArray<Continuation>|null = null;
-    values: StaticArray<usize>|null = null;
+    continuations: StaticArray<Continuation> | null = null;
+    values: StaticArray<usize> | null = null;
     count: i32 = 0;
     completed: i32 = 0;
     kind: FutureGroupKind = FutureGroupKind.Race;
@@ -199,15 +196,15 @@ export class FutureGroup {
 }
 
 export class Runtime {
-    current: Coroutine|null = null;
-    readyHead: Coroutine|null = null;
-    readyTail: Coroutine|null = null;
-    continuationHead: Continuation|null = null;
-    continuationTail: Continuation|null = null;
+    current: Coroutine | null = null;
+    readyHead: Coroutine | null = null;
+    readyTail: Coroutine | null = null;
+    continuationHead: Continuation | null = null;
+    continuationTail: Continuation | null = null;
     running: bool = false;
 
     /** Schedule `task` on `coroutine`; returns its completion future. */
-    asyncStart(coroutine: Coroutine, task: Task): Future|null {
+    asyncStart(coroutine: Coroutine, task: Task): Future | null {
         if (coroutine.state != CoroutineState.New && coroutine.state != CoroutineState.Dead) {
             return null;
         }
@@ -228,8 +225,7 @@ export class Runtime {
      * number resumed, or -1 if already running (re-entry is refused).
      */
     runBudget(budget: i32): i32 {
-        if (this.running)
-            return -1;
+        if (this.running) return -1;
         this.running = true;
         let resumed = 0;
         for (;;) {
@@ -256,17 +252,14 @@ export class Runtime {
                     } else {
                         coroutine.result = status;
                         coroutine.state = CoroutineState.Dead;
-                        if (status == 0)
-                            coroutine.completionPromise.resolve(box.value);
-                        else
-                            coroutine.completionPromise.reject(status);
+                        if (status == 0) coroutine.completionPromise.resolve(box.value);
+                        else coroutine.completionPromise.reject(status);
                     }
                     continue;
                 }
             }
             const continuation = this.dequeueContinuation();
-            if (continuation === null)
-                break;
+            if (continuation === null) break;
             continuationDispatch(continuation);
         }
         this.running = false;
@@ -283,8 +276,12 @@ export class Runtime {
      * settles with the callback's result. Null if the continuation is already in
      * use or the future belongs to another runtime.
      */
-    then(future: Future, continuation: Continuation, onSuccess: OnSuccess|null,
-         onError: OnError|null): Future|null {
+    then(
+        future: Future,
+        continuation: Continuation,
+        onSuccess: OnSuccess | null,
+        onError: OnError | null,
+    ): Future | null {
         if (continuation.active || (future.runtime !== null && future.runtime !== this)) {
             return null;
         }
@@ -313,39 +310,63 @@ export class Runtime {
      * future boxed in `out` makes the child adopt that future's eventual result.
      * `adoptContinuation` is caller-owned storage for the adoption.
      */
-    thenFlat(future: Future, continuation: Continuation, adoptContinuation: Continuation,
-             onSuccess: OnSuccess|null, onError: OnError|null): Future|null {
+    thenFlat(
+        future: Future,
+        continuation: Continuation,
+        adoptContinuation: Continuation,
+        onSuccess: OnSuccess | null,
+        onError: OnError | null,
+    ): Future | null {
         const child = this.then(future, continuation, onSuccess, onError);
-        if (child === null)
-            return null;
+        if (child === null) return null;
         continuation.adopt = adoptContinuation;
         return child;
     }
 
     /** Settles with the first input to settle, success or failure. */
-    race(inputs: StaticArray<Future>, continuations: StaticArray<Continuation>): Future|null {
-        return this.groupStart(inputs, continuations, null, FutureGroupKind.Race,
-                               new FutureGroup());
+    race(inputs: StaticArray<Future>, continuations: StaticArray<Continuation>): Future | null {
+        return this.groupStart(
+            inputs,
+            continuations,
+            null,
+            FutureGroupKind.Race,
+            new FutureGroup(),
+        );
     }
 
     /**
      * Settles once every input succeeds, with `values` filled in input order,
      * or rejects on the first failure.
      */
-    all(inputs: StaticArray<Future>, continuations: StaticArray<Continuation>,
-        values: StaticArray<usize>): Future|null {
-        return this.groupStart(inputs, continuations, values, FutureGroupKind.All,
-                               new FutureGroup());
+    all(
+        inputs: StaticArray<Future>,
+        continuations: StaticArray<Continuation>,
+        values: StaticArray<usize>,
+    ): Future | null {
+        return this.groupStart(
+            inputs,
+            continuations,
+            values,
+            FutureGroupKind.All,
+            new FutureGroup(),
+        );
     }
 
     /** race/all onto caller-owned group storage, for allocation-free reuse. */
-    raceInto(group: FutureGroup, inputs: StaticArray<Future>,
-             continuations: StaticArray<Continuation>): Future|null {
+    raceInto(
+        group: FutureGroup,
+        inputs: StaticArray<Future>,
+        continuations: StaticArray<Continuation>,
+    ): Future | null {
         return this.groupStart(inputs, continuations, null, FutureGroupKind.Race, group);
     }
 
-    allInto(group: FutureGroup, inputs: StaticArray<Future>,
-            continuations: StaticArray<Continuation>, values: StaticArray<usize>): Future|null {
+    allInto(
+        group: FutureGroup,
+        inputs: StaticArray<Future>,
+        continuations: StaticArray<Continuation>,
+        values: StaticArray<usize>,
+    ): Future | null {
         return this.groupStart(inputs, continuations, values, FutureGroupKind.All, group);
     }
 
@@ -354,20 +375,16 @@ export class Runtime {
     enqueue(coroutine: Coroutine): void {
         coroutine.next = null;
         const tail = this.readyTail;
-        if (tail !== null)
-            tail.next = coroutine;
-        else
-            this.readyHead = coroutine;
+        if (tail !== null) tail.next = coroutine;
+        else this.readyHead = coroutine;
         this.readyTail = coroutine;
     }
 
-    dequeue(): Coroutine|null {
+    dequeue(): Coroutine | null {
         const coroutine = this.readyHead;
-        if (coroutine === null)
-            return null;
+        if (coroutine === null) return null;
         this.readyHead = coroutine.next;
-        if (this.readyHead === null)
-            this.readyTail = null;
+        if (this.readyHead === null) this.readyTail = null;
         coroutine.next = null;
         return coroutine;
     }
@@ -375,30 +392,29 @@ export class Runtime {
     enqueueContinuation(continuation: Continuation): void {
         continuation.next = null;
         const tail = this.continuationTail;
-        if (tail !== null)
-            tail.next = continuation;
-        else
-            this.continuationHead = continuation;
+        if (tail !== null) tail.next = continuation;
+        else this.continuationHead = continuation;
         this.continuationTail = continuation;
     }
 
-    dequeueContinuation(): Continuation|null {
+    dequeueContinuation(): Continuation | null {
         const continuation = this.continuationHead;
-        if (continuation === null)
-            return null;
+        if (continuation === null) return null;
         this.continuationHead = continuation.next;
-        if (this.continuationHead === null)
-            this.continuationTail = null;
+        if (this.continuationHead === null) this.continuationTail = null;
         continuation.next = null;
         return continuation;
     }
 
-    private groupStart(inputs: StaticArray<Future>, continuations: StaticArray<Continuation>,
-                       values: StaticArray<usize>|null, kind: FutureGroupKind,
-                       group: FutureGroup): Future|null {
+    private groupStart(
+        inputs: StaticArray<Future>,
+        continuations: StaticArray<Continuation>,
+        values: StaticArray<usize> | null,
+        kind: FutureGroupKind,
+        group: FutureGroup,
+    ): Future | null {
         const count = inputs.length;
-        if (count == 0 || continuations.length < count)
-            return null;
+        if (count == 0 || continuations.length < count) return null;
         if (kind == FutureGroupKind.All && (values === null || values.length < count)) {
             return null;
         }
@@ -436,8 +452,7 @@ export class Runtime {
 
 function promiseComplete(promise: Promise, status: i32, value: usize): bool {
     const future = promise.future;
-    if (future === null || future.state != FutureState.Pending)
-        return false;
+    if (future === null || future.state != FutureState.Pending) return false;
     future.state = status == 0 ? FutureState.Ready : FutureState.Failed;
     future.status = status;
     future.value = value;
@@ -450,8 +465,7 @@ function promiseComplete(promise: Promise, status: i32, value: usize): bool {
         if (waiter.state == CoroutineState.Waiting) {
             waiter.state = CoroutineState.Ready;
             const runtime = waiter.runtime;
-            if (runtime !== null)
-                runtime.enqueue(waiter);
+            if (runtime !== null) runtime.enqueue(waiter);
         }
         waiter = next;
     }
@@ -475,8 +489,7 @@ class FlatForward extends OnSuccess {
         super();
     }
     call(value: usize, out: Box): i32 {
-        if (!this.target.resolve(value))
-            return -1;
+        if (!this.target.resolve(value)) return -1;
         out.value = value;
         return 0;
     }
@@ -487,8 +500,7 @@ class FlatForwardError extends OnError {
         super();
     }
     call(status: i32, out: Box): i32 {
-        if (!this.target.reject(status))
-            return -1;
+        if (!this.target.reject(status)) return -1;
         out.value = 0;
         return status;
     }
@@ -499,8 +511,7 @@ function continuationDispatch(continuation: Continuation): void {
     const box = new Box();
     continuation.active = false;
     continuation.future = null;
-    if (future === null || future.state == FutureState.Pending)
-        return;
+    if (future === null || future.state == FutureState.Pending) return;
 
     let status: i32;
     if (future.status == 0) {
@@ -521,9 +532,16 @@ function continuationDispatch(continuation: Continuation): void {
         continuation.adopt = null;
         const runtime = continuation.child.runtime;
         const next = box.value != 0 ? changetype<Future>(box.value) : null;
-        if (next === null || runtime === null ||
-            runtime.then(next, adopt, new FlatForward(continuation.childPromise),
-                         new FlatForwardError(continuation.childPromise)) === null) {
+        if (
+            next === null ||
+            runtime === null ||
+            runtime.then(
+                next,
+                adopt,
+                new FlatForward(continuation.childPromise),
+                new FlatForwardError(continuation.childPromise),
+            ) === null
+        ) {
             continuation.childPromise.reject(-1);
         }
     } else if (status == 0) {
@@ -534,14 +552,12 @@ function continuationDispatch(continuation: Continuation): void {
 }
 
 function continuationListRemoveFromFuture(future: Future, target: Continuation): void {
-    let prev: Continuation|null = null;
+    let prev: Continuation | null = null;
     let cur = future.continuations;
     while (cur !== null) {
         if (cur === target) {
-            if (prev !== null)
-                prev.next = cur.next;
-            else
-                future.continuations = cur.next;
+            if (prev !== null) prev.next = cur.next;
+            else future.continuations = cur.next;
             return;
         }
         prev = cur;
@@ -550,16 +566,13 @@ function continuationListRemoveFromFuture(future: Future, target: Continuation):
 }
 
 function continuationListRemoveFromRuntime(runtime: Runtime, target: Continuation): void {
-    let prev: Continuation|null = null;
+    let prev: Continuation | null = null;
     let cur = runtime.continuationHead;
     while (cur !== null) {
         if (cur === target) {
-            if (prev !== null)
-                prev.next = cur.next;
-            else
-                runtime.continuationHead = cur.next;
-            if (runtime.continuationTail === target)
-                runtime.continuationTail = prev;
+            if (prev !== null) prev.next = cur.next;
+            else runtime.continuationHead = cur.next;
+            if (runtime.continuationTail === target) runtime.continuationTail = prev;
             return;
         }
         prev = cur;
@@ -570,9 +583,8 @@ function continuationListRemoveFromRuntime(runtime: Runtime, target: Continuatio
 /* Detach a still-registered continuation from its pending source future, or
  * from the dispatch queue if the source already settled. One that has already
  * been dispatched (active == false) is left alone. */
-function continuationCancel(runtime: Runtime|null, continuation: Continuation): void {
-    if (!continuation.active)
-        return;
+function continuationCancel(runtime: Runtime | null, continuation: Continuation): void {
+    if (!continuation.active) return;
     const future = continuation.future;
     if (future !== null && future.state == FutureState.Pending) {
         continuationListRemoveFromFuture(future, continuation);
@@ -588,8 +600,7 @@ function continuationCancel(runtime: Runtime|null, continuation: Continuation): 
  * caller's group storage need not outlive slow sources. */
 function futureGroupAbandon(group: FutureGroup): void {
     const continuations = group.continuations;
-    if (continuations === null)
-        return;
+    if (continuations === null) return;
     for (let i = 0; i < group.count; ++i) {
         continuationCancel(group.runtime, continuations[i]);
     }
@@ -598,14 +609,16 @@ function futureGroupAbandon(group: FutureGroup): void {
 
 /** One source's callbacks for a race/all group. */
 class GroupCallback extends OnSuccess {
-    constructor(private group: FutureGroup, private index: i32) {
+    constructor(
+        private group: FutureGroup,
+        private index: i32,
+    ) {
         super();
     }
 
     call(value: usize, out: Box): i32 {
         const group = this.group;
-        if (!group.active)
-            return -1;
+        if (!group.active) return -1;
         if (group.kind == FutureGroupKind.Race) {
             if (!group.settled) {
                 group.settled = true;
@@ -614,8 +627,7 @@ class GroupCallback extends OnSuccess {
             }
         } else {
             const values = group.values;
-            if (values !== null)
-                values[this.index] = value;
+            if (values !== null) values[this.index] = value;
             if (!group.settled && group.completed + 1 == group.count) {
                 group.settled = true;
                 group.promise.resolve(values !== null ? changetype<usize>(values) : 0);
@@ -623,8 +635,7 @@ class GroupCallback extends OnSuccess {
             }
         }
         group.completed++;
-        if (group.completed == group.count)
-            group.active = false;
+        if (group.completed == group.count) group.active = false;
         out.value = value;
         return 0;
     }
@@ -639,16 +650,14 @@ class GroupErrorCallback extends OnError {
 
     call(status: i32, out: Box): i32 {
         const group = this.group;
-        if (!group.active || status >= 0)
-            return -1;
+        if (!group.active || status >= 0) return -1;
         if (!group.settled) {
             group.settled = true;
             group.promise.reject(status);
             futureGroupAbandon(group);
         }
         group.completed++;
-        if (group.completed == group.count)
-            group.active = false;
+        if (group.completed == group.count) group.active = false;
         out.value = 0;
         return status;
     }

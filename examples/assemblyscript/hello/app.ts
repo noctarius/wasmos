@@ -19,8 +19,10 @@ export function main(args: Array<string>): i32 {
                 const verify = fs.openRead(path);
                 if (verify != null) {
                     const readBack = verify.read(content.byteLength);
-                    writeOk = verify.close() && readBack != null &&
-                              readBack.length == contentBytes.length;
+                    writeOk =
+                        verify.close() &&
+                        readBack != null &&
+                        readBack.length == contentBytes.length;
                     if (writeOk && readBack != null) {
                         for (let i = 0; i < readBack.length; ++i) {
                             if (readBack[i] != contentBytes[i]) {

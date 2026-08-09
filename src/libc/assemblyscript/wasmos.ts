@@ -31,35 +31,78 @@ export const O_APPEND: i32 = 0x0008;
 export const O_CREAT: i32 = 0x0040;
 export const O_TRUNC: i32 = 0x0200;
 
+
 @external("wasmos", "console_write") declare function console_write(ptr: i32, len: i32): i32;
+
+
 @external("wasmos", "console_read") declare function console_read(ptr: i32, len: i32): i32;
+
+
 @external("wasmos", "proc_exit") declare function proc_exit(status: i32): i32;
+
+
 @external("wasmos", "ipc_create_endpoint") declare function ipc_create_endpoint(): i32;
+
+
 @external("wasmos", "ipc_send")
-declare function ipc_send(destination_endpoint: i32, source_endpoint: i32, type: i32,
-                          request_id: i32, arg0: i32, arg1: i32, arg2: i32, arg3: i32): i32;
+declare function ipc_send(
+    destination_endpoint: i32,
+    source_endpoint: i32,
+    type: i32,
+    request_id: i32,
+    arg0: i32,
+    arg1: i32,
+    arg2: i32,
+    arg3: i32,
+): i32;
+
+
 @external("wasmos", "ipc_recv") declare function ipc_recv(endpoint: i32): i32;
+
+
 @external("wasmos", "ipc_last_field") declare function ipc_last_field(field: i32): i32;
+
+
 @external("wasmos", "fs_endpoint") declare function fs_endpoint(): i32;
+
+
 @external("wasmos", "xfer_buffer_size") declare function xfer_buffer_size(): i32;
 // Object/owner/borrow xfer ABI (owner-push): read/write name the object by
 // buffer_id (arg 1). acquire creates an owned buffer; borrow grants a named
 // endpoint's context rights over it; release destroys it. See src/libc/src/unistd.c.
 @external("wasmos", "xfer_buffer_write")
 declare function xfer_buffer_write(bufferId: i32, ptr: i32, len: i32, offset: i32): i32;
+
+
 @external("wasmos", "xfer_buffer_read")
 declare function xfer_buffer_read(bufferId: i32, ptr: i32, len: i32, offset: i32): i32;
+
+
 @external("wasmos", "xfer_buffer_acquire")
 declare function xfer_buffer_acquire(minimumSize: i32): i32;
+
+
 @external("wasmos", "xfer_buffer_borrow")
 declare function xfer_buffer_borrow(granteeEndpoint: i32, bufferId: i32, flags: i32): i32;
+
+
 @external("wasmos", "xfer_buffer_release") declare function xfer_buffer_release(bufferId: i32): i32;
 // GRANT flags mirror WASMOS_BUFFER_GRANT_READ|WRITE.
 const XFER_GRANT_RW: i32 = 0x3;
+
+
 @external("wasmos", "spawn_info_buffer") declare function spawn_info_buffer(): i32;
+
+
 @external("wasmos", "thread_gettid") declare function thread_gettid(): i32;
+
+
 @external("wasmos", "thread_yield") declare function thread_yield(): i32;
+
+
 @external("wasmos", "mutex_try_lock") declare function mutex_try_lock(ptr: i32): i32;
+
+
 @external("wasmos", "mutex_unlock") declare function mutex_unlock(ptr: i32): i32;
 
 let g_fsReplyEndpoint: i32 = -1;
@@ -82,18 +125,14 @@ let g_spawnArgsLen: u32 = 0;
 // Lazy + idempotent: works for both wasmos_main apps and initialize-entry
 // services/drivers (which never call runMain).
 function loadSpawnInfo(): void {
-    if (g_spawnLoaded)
-        return;
+    if (g_spawnLoaded) return;
     g_spawnLoaded = true;
     g_spawnValid = false;
     const bid = spawn_info_buffer();
-    if (bid <= 0)
-        return;
+    if (bid <= 0) return;
     const hdr = new Uint8Array(36);
-    if (xfer_buffer_read(bid, hdr.dataStart as i32, 36, 0) != 0)
-        return;
-    if (load<u32>(hdr.dataStart) != SPAWN_INFO_MAGIC)
-        return;
+    if (xfer_buffer_read(bid, hdr.dataStart as i32, 36, 0) != 0) return;
+    if (load<u32>(hdr.dataStart) != SPAWN_INFO_MAGIC) return;
     g_spawnProcEndpoint = load<i32>(hdr.dataStart, 12);
     g_spawnTty = load<i32>(hdr.dataStart, 16);
     g_spawnModuleCount = load<u32>(hdr.dataStart, 20);
@@ -104,30 +143,31 @@ function loadSpawnInfo(): void {
 }
 
 export namespace startup {
-// Legacy accessor: index 0 == proc.endpoint (from spawn-info); 1..3 == 0.
-export function arg(index: i32): i32 {
-    if (index < 0 || index >= 4) {
-        return 0;
+    // Legacy accessor: index 0 == proc.endpoint (from spawn-info); 1..3 == 0.
+    export function arg(index: i32): i32 {
+        if (index < 0 || index >= 4) {
+            return 0;
+        }
+        return unchecked(g_startupArgs[index]);
     }
-    return unchecked(g_startupArgs[index]);
+    export function procEndpoint(): i32 {
+        loadSpawnInfo();
+        return g_spawnProcEndpoint;
+    }
+    export function tty(): i32 {
+        loadSpawnInfo();
+        return g_spawnTty;
+    }
+    export function moduleCount(): u32 {
+        loadSpawnInfo();
+        return g_spawnModuleCount;
+    }
+    export function moduleIndex(): u32 {
+        loadSpawnInfo();
+        return g_spawnModuleIndex;
+    }
 }
-export function procEndpoint(): i32 {
-    loadSpawnInfo();
-    return g_spawnProcEndpoint;
-}
-export function tty(): i32 {
-    loadSpawnInfo();
-    return g_spawnTty;
-}
-export function moduleCount(): u32 {
-    loadSpawnInfo();
-    return g_spawnModuleCount;
-}
-export function moduleIndex(): u32 {
-    loadSpawnInfo();
-    return g_spawnModuleIndex;
-}
-}
+
 
 @unmanaged
 export class Mutex {
@@ -173,8 +213,7 @@ function readSpawnArgs(): Array<string> {
         return new Array<string>();
     }
     let n: i32 = <i32>g_spawnArgsLen;
-    if (n > 127)
-        n = 127;
+    if (n > 127) n = 127;
     const buf = new Uint8Array(n + 1);
     if (xfer_buffer_read(bid, buf.dataStart as i32, n, <i32>g_spawnArgsOff) != 0) {
         return new Array<string>();
@@ -194,15 +233,20 @@ function readSpawnArgs(): Array<string> {
     return result;
 }
 
-export function runMain(entry: (args: Array<string>) => i32, arg0: i32, arg1: i32, arg2: i32,
-                        arg3: i32): i32 {
+export function runMain(
+    entry: (args: Array<string>) => i32,
+    arg0: i32,
+    arg1: i32,
+    arg2: i32,
+    arg3: i32,
+): i32 {
     // The entry-arg registers (arg0..arg3) are retired; startup values now come
     // from the spawn-info buffer.
     loadSpawnInfo();
-    unchecked(g_startupArgs[0] = g_spawnProcEndpoint);
-    unchecked(g_startupArgs[1] = 0);
-    unchecked(g_startupArgs[2] = 0);
-    unchecked(g_startupArgs[3] = 0);
+    unchecked((g_startupArgs[0] = g_spawnProcEndpoint));
+    unchecked((g_startupArgs[1] = 0));
+    unchecked((g_startupArgs[2] = 0));
+    unchecked((g_startupArgs[3] = 0));
     const rc = entry(readSpawnArgs());
     proc_exit(rc);
     return rc;
@@ -255,14 +299,20 @@ function nextFsRequestId(): i32 {
 }
 
 class FsResponse {
-    constructor(public arg0: i32 = 0, public arg1: i32 = 0) {}
+    constructor(
+        public arg0: i32 = 0,
+        public arg1: i32 = 0,
+    ) {}
 }
 
 export class FileStat {
-    constructor(public size: i32 = 0, public mode: i32 = 0) {}
+    constructor(
+        public size: i32 = 0,
+        public mode: i32 = 0,
+    ) {}
 }
 
-function fsRequest(type: i32, arg0: i32, arg1: i32, arg2: i32, arg3: i32): FsResponse|null {
+function fsRequest(type: i32, arg0: i32, arg1: i32, arg2: i32, arg3: i32): FsResponse | null {
     const endpoint = fs_endpoint();
     const replyEndpoint = ensureFsReplyEndpoint();
     if (endpoint < 0 || replyEndpoint < 0) {
@@ -276,15 +326,23 @@ function fsRequest(type: i32, arg0: i32, arg1: i32, arg2: i32, arg3: i32): FsRes
     if (ipc_recv(replyEndpoint) < 0) {
         return null;
     }
-    if (ipc_last_field(IPC_FIELD_REQUEST_ID) != requestId ||
-        ipc_last_field(IPC_FIELD_TYPE) != FS_IPC_RESP) {
+    if (
+        ipc_last_field(IPC_FIELD_REQUEST_ID) != requestId ||
+        ipc_last_field(IPC_FIELD_TYPE) != FS_IPC_RESP
+    ) {
         return null;
     }
     return new FsResponse(ipc_last_field(IPC_FIELD_ARG0), ipc_last_field(IPC_FIELD_ARG1));
 }
 
-function fsRequestStream(type: i32, arg0: i32, arg1: i32, arg2: i32, arg3: i32,
-                         out: Uint8Array): i32 {
+function fsRequestStream(
+    type: i32,
+    arg0: i32,
+    arg1: i32,
+    arg2: i32,
+    arg3: i32,
+    out: Uint8Array,
+): i32 {
     const endpoint = fs_endpoint();
     const replyEndpoint = ensureFsReplyEndpoint();
     if (endpoint < 0 || replyEndpoint < 0 || out.length == 0) {
@@ -311,9 +369,9 @@ function fsRequestStream(type: i32, arg0: i32, arg1: i32, arg2: i32, arg3: i32,
             const a1 = ipc_last_field(IPC_FIELD_ARG1);
             const a2 = ipc_last_field(IPC_FIELD_ARG2);
             const a3 = ipc_last_field(IPC_FIELD_ARG3);
-            const bytes = [ a0, a1, a2, a3 ];
+            const bytes = [a0, a1, a2, a3];
             for (let i = 0; i < 4; ++i) {
-                const c = <u8>(bytes[i] & 0xFF);
+                const c = <u8>(bytes[i] & 0xff);
                 if (c == 0) {
                     continue;
                 }
@@ -336,52 +394,52 @@ function fsRequestStream(type: i32, arg0: i32, arg1: i32, arg2: i32, arg3: i32,
 }
 
 export namespace std {
-export function write(text: string): bool {
-    return writeStringRaw(text);
-}
-
-export function puts(text: string): bool {
-    return writeStringRaw(text);
-}
-
-export function printf(text: string): bool {
-    return writeStringRaw(text);
-}
-
-export function println(text: string): bool {
-    return writeStringRaw(text + "\n");
-}
-
-export function readline(maxLen: i32 = 128): string|null {
-    if (maxLen <= 1) {
-        return null;
+    export function write(text: string): bool {
+        return writeStringRaw(text);
     }
-    const limit = maxLen > 1024 ? 1024 : maxLen;
-    const out = new Uint8Array(limit);
-    let pos: i32 = 0;
-    while (pos + 1 < limit) {
-        const got = console_read((out.dataStart as i32) + pos, 1);
-        if (got < 0) {
+
+    export function puts(text: string): bool {
+        return writeStringRaw(text);
+    }
+
+    export function printf(text: string): bool {
+        return writeStringRaw(text);
+    }
+
+    export function println(text: string): bool {
+        return writeStringRaw(text + "\n");
+    }
+
+    export function readline(maxLen: i32 = 128): string | null {
+        if (maxLen <= 1) {
             return null;
         }
-        if (got == 0) {
-            break;
-        }
-        if (out[pos] == 10) {
+        const limit = maxLen > 1024 ? 1024 : maxLen;
+        const out = new Uint8Array(limit);
+        let pos: i32 = 0;
+        while (pos + 1 < limit) {
+            const got = console_read((out.dataStart as i32) + pos, 1);
+            if (got < 0) {
+                return null;
+            }
+            if (got == 0) {
+                break;
+            }
+            if (out[pos] == 10) {
+                pos += 1;
+                break;
+            }
             pos += 1;
-            break;
         }
-        pos += 1;
+        out[pos] = 0;
+        return String.UTF8.decode(out.buffer, false);
     }
-    out[pos] = 0;
-    return String.UTF8.decode(out.buffer, false);
-}
 }
 
 export class File {
     constructor(private fd: i32) {}
 
-    read(maxLen: i32 = 0): Uint8Array|null {
+    read(maxLen: i32 = 0): Uint8Array | null {
         const bufferLimit = xfer_buffer_size();
         if (bufferLimit <= 0) {
             return null;
@@ -456,7 +514,7 @@ export class File {
             if (chunkLen > bufferLimit) {
                 chunkLen = bufferLimit;
             }
-            if (xfer_buffer_write(bid, buffer.dataStart as i32 + done, chunkLen, 0) != 0) {
+            if (xfer_buffer_write(bid, (buffer.dataStart as i32) + done, chunkLen, 0) != 0) {
                 failed = true;
                 break;
             }
@@ -487,222 +545,259 @@ export class File {
 }
 
 export namespace ipc {
-export class Reply {
-    constructor(public type: i32 = 0, public requestId: i32 = 0, public source: i32 = 0,
-                public destination: i32 = 0, public arg0: i32 = 0, public arg1: i32 = 0,
-                public arg2: i32 = 0, public arg3: i32 = 0) {}
-}
-
-// Create a new message endpoint (for servers setting up their receive endpoint).
-export function createEndpoint(): i32 {
-    return ipc_create_endpoint();
-}
-
-// Send a request to server and block until a reply arrives.
-// The reply endpoint is per-context and managed internally — callers never
-// share it, so only this context's reply ever lands there.
-export function call(server: i32, type: i32, arg0: i32, arg1: i32, arg2: i32, arg3: i32): Reply
-    |null {
-    const replyEndpoint = ensureIpcReplyEndpoint();
-    if (server < 0 || replyEndpoint < 0) {
-        return null;
+    export class Reply {
+        constructor(
+            public type: i32 = 0,
+            public requestId: i32 = 0,
+            public source: i32 = 0,
+            public destination: i32 = 0,
+            public arg0: i32 = 0,
+            public arg1: i32 = 0,
+            public arg2: i32 = 0,
+            public arg3: i32 = 0,
+        ) {}
     }
-    const requestId = nextIpcRequestId();
-    if (ipc_send(server, replyEndpoint, type, requestId, arg0, arg1, arg2, arg3) != 0) {
-        return null;
+
+    // Create a new message endpoint (for servers setting up their receive endpoint).
+    export function createEndpoint(): i32 {
+        return ipc_create_endpoint();
     }
-    while (true) {
-        if (ipc_recv(replyEndpoint) < 0) {
+
+    // Send a request to server and block until a reply arrives.
+    // The reply endpoint is per-context and managed internally — callers never
+    // share it, so only this context's reply ever lands there.
+    export function call(
+        server: i32,
+        type: i32,
+        arg0: i32,
+        arg1: i32,
+        arg2: i32,
+        arg3: i32,
+    ): Reply | null {
+        const replyEndpoint = ensureIpcReplyEndpoint();
+        if (server < 0 || replyEndpoint < 0) {
             return null;
         }
-        if (ipc_last_field(IPC_FIELD_REQUEST_ID) != requestId) {
-            continue;
+        const requestId = nextIpcRequestId();
+        if (ipc_send(server, replyEndpoint, type, requestId, arg0, arg1, arg2, arg3) != 0) {
+            return null;
         }
-        return new Reply(ipc_last_field(IPC_FIELD_TYPE), ipc_last_field(IPC_FIELD_REQUEST_ID),
-                         ipc_last_field(IPC_FIELD_SOURCE), ipc_last_field(IPC_FIELD_DESTINATION),
-                         ipc_last_field(IPC_FIELD_ARG0), ipc_last_field(IPC_FIELD_ARG1),
-                         ipc_last_field(IPC_FIELD_ARG2), ipc_last_field(IPC_FIELD_ARG3));
+        while (true) {
+            if (ipc_recv(replyEndpoint) < 0) {
+                return null;
+            }
+            if (ipc_last_field(IPC_FIELD_REQUEST_ID) != requestId) {
+                continue;
+            }
+            return new Reply(
+                ipc_last_field(IPC_FIELD_TYPE),
+                ipc_last_field(IPC_FIELD_REQUEST_ID),
+                ipc_last_field(IPC_FIELD_SOURCE),
+                ipc_last_field(IPC_FIELD_DESTINATION),
+                ipc_last_field(IPC_FIELD_ARG0),
+                ipc_last_field(IPC_FIELD_ARG1),
+                ipc_last_field(IPC_FIELD_ARG2),
+                ipc_last_field(IPC_FIELD_ARG3),
+            );
+        }
     }
-}
 
-// Block until a message arrives on endpoint (for servers).
-export function recv(endpoint: i32): Reply|null {
-    if (endpoint < 0) {
-        return null;
+    // Block until a message arrives on endpoint (for servers).
+    export function recv(endpoint: i32): Reply | null {
+        if (endpoint < 0) {
+            return null;
+        }
+        if (ipc_recv(endpoint) < 0) {
+            return null;
+        }
+        return new Reply(
+            ipc_last_field(IPC_FIELD_TYPE),
+            ipc_last_field(IPC_FIELD_REQUEST_ID),
+            ipc_last_field(IPC_FIELD_SOURCE),
+            ipc_last_field(IPC_FIELD_DESTINATION),
+            ipc_last_field(IPC_FIELD_ARG0),
+            ipc_last_field(IPC_FIELD_ARG1),
+            ipc_last_field(IPC_FIELD_ARG2),
+            ipc_last_field(IPC_FIELD_ARG3),
+        );
     }
-    if (ipc_recv(endpoint) < 0) {
-        return null;
-    }
-    return new Reply(ipc_last_field(IPC_FIELD_TYPE), ipc_last_field(IPC_FIELD_REQUEST_ID),
-                     ipc_last_field(IPC_FIELD_SOURCE), ipc_last_field(IPC_FIELD_DESTINATION),
-                     ipc_last_field(IPC_FIELD_ARG0), ipc_last_field(IPC_FIELD_ARG1),
-                     ipc_last_field(IPC_FIELD_ARG2), ipc_last_field(IPC_FIELD_ARG3));
-}
 
-// Send a reply from a server back to the caller's private reply endpoint.
-// source should be the server's own service endpoint.
-// destination should be req.source from the incoming request.
-export function reply(destination: i32, source: i32, type: i32, requestId: i32, arg0: i32,
-                      arg1: i32, arg2: i32, arg3: i32): bool {
-    return ipc_send(destination, source, type, requestId, arg0, arg1, arg2, arg3) == 0;
-}
+    // Send a reply from a server back to the caller's private reply endpoint.
+    // source should be the server's own service endpoint.
+    // destination should be req.source from the incoming request.
+    export function reply(
+        destination: i32,
+        source: i32,
+        type: i32,
+        requestId: i32,
+        arg0: i32,
+        arg1: i32,
+        arg2: i32,
+        arg3: i32,
+    ): bool {
+        return ipc_send(destination, source, type, requestId, arg0, arg1, arg2, arg3) == 0;
+    }
 }
 
 export namespace fs {
-// Owner-push staging: own a buffer holding the NUL-terminated path, grant the
-// FS manager R|W over it, and return the handles + path length (excluding NUL).
-// The caller passes pathLen (arg0), bid (arg2) and b1 (arg3) to fsRequest, and
-// releases bid afterward; fs-manager unborrows b1 before replying.
-class StagedPath {
-    constructor(public bid: i32, public b1: i32, public pathLen: i32) {}
-}
-
-function stagePath(path: string): StagedPath|null {
-    const pathBytes = Uint8Array.wrap(String.UTF8.encode(path, true));
-    const bufferLimit = xfer_buffer_size();
-    if (bufferLimit <= 0 || pathBytes.length > bufferLimit) {
-        return null;
-    }
-    const bid = xfer_buffer_acquire(pathBytes.length);
-    if (bid < 0) {
-        return null;
-    }
-    if (xfer_buffer_write(bid, pathBytes.dataStart as i32, pathBytes.length, 0) != 0) {
-        xfer_buffer_release(bid);
-        return null;
-    }
-    const b1 = xfer_buffer_borrow(fs_endpoint(), bid, XFER_GRANT_RW);
-    if (b1 < 0) {
-        xfer_buffer_release(bid);
-        return null;
-    }
-    return new StagedPath(bid, b1, pathBytes.length - 1);
-}
-
-function openWithFlags(path: string, flags: i32): File|null {
-    const s = stagePath(path);
-    if (s == null) {
-        return null;
-    }
-    const response = fsRequest(FS_IPC_OPEN_REQ, s.pathLen, flags, s.bid, s.b1);
-    xfer_buffer_release(s.bid);
-    if (response == null || response.arg0 < 0) {
-        return null;
-    }
-    return new File(response.arg0);
-}
-
-export function openRead(path: string): File|null {
-    return openWithFlags(path, O_RDONLY);
-}
-
-export function openWrite(path: string): File|null {
-    return openWithFlags(path, O_WRONLY);
-}
-
-export function create(path: string): File|null {
-    return openWithFlags(path, O_WRONLY | O_CREAT | O_TRUNC);
-}
-
-export function openAppend(path: string): File|null {
-    return openWithFlags(path, O_WRONLY | O_CREAT | O_APPEND);
-}
-
-export function stat(path: string): FileStat|null {
-    const s = stagePath(path);
-    if (s == null) {
-        return null;
-    }
-    const response = fsRequest(FS_IPC_STAT_REQ, s.pathLen, 0, s.bid, s.b1);
-    xfer_buffer_release(s.bid);
-    if (response == null || response.arg0 < 0) {
-        return null;
-    }
-    return new FileStat(response.arg0, response.arg1 & (S_IFREG | S_IFDIR));
-}
-
-export function unlink(path: string): bool {
-    const s = stagePath(path);
-    if (s == null) {
-        return false;
-    }
-    const response = fsRequest(FS_IPC_UNLINK_REQ, s.pathLen, 0, s.bid, s.b1);
-    xfer_buffer_release(s.bid);
-    return response != null && response.arg0 == 0;
-}
-
-export function mkdir(path: string): bool {
-    const s = stagePath(path);
-    if (s == null) {
-        return false;
-    }
-    const response = fsRequest(FS_IPC_MKDIR_REQ, s.pathLen, 0, s.bid, s.b1);
-    xfer_buffer_release(s.bid);
-    return response != null && response.arg0 == 0;
-}
-
-export function rmdir(path: string): bool {
-    const s = stagePath(path);
-    if (s == null) {
-        return false;
-    }
-    const response = fsRequest(FS_IPC_RMDIR_REQ, s.pathLen, 0, s.bid, s.b1);
-    xfer_buffer_release(s.bid);
-    return response != null && response.arg0 == 0;
-}
-
-export function readDir(maxLen: i32 = 512): string|null {
-    if (maxLen <= 1) {
-        return null;
-    }
-    const out = new Uint8Array(maxLen);
-    const got = fsRequestStream(FS_IPC_READDIR_REQ, 0, 0, 0, 0, out);
-    if (got < 0) {
-        return null;
-    }
-    return String.UTF8.decodeUnsafe(out.dataStart, got, false);
-}
-
-export function readFile(path: string): Uint8Array|null {
-    const file = openRead(path);
-    if (file == null) {
-        return null;
+    // Owner-push staging: own a buffer holding the NUL-terminated path, grant the
+    // FS manager R|W over it, and return the handles + path length (excluding NUL).
+    // The caller passes pathLen (arg0), bid (arg2) and b1 (arg3) to fsRequest, and
+    // releases bid afterward; fs-manager unborrows b1 before replying.
+    class StagedPath {
+        constructor(
+            public bid: i32,
+            public b1: i32,
+            public pathLen: i32,
+        ) {}
     }
 
-    const chunks = new Array<Uint8Array>();
-    let total = 0;
-    while (true) {
-        const chunk = file.read();
-        if (chunk == null) {
-            file.close();
+    function stagePath(path: string): StagedPath | null {
+        const pathBytes = Uint8Array.wrap(String.UTF8.encode(path, true));
+        const bufferLimit = xfer_buffer_size();
+        if (bufferLimit <= 0 || pathBytes.length > bufferLimit) {
             return null;
         }
-        if (chunk.length == 0) {
-            break;
+        const bid = xfer_buffer_acquire(pathBytes.length);
+        if (bid < 0) {
+            return null;
         }
-        chunks.push(chunk);
-        total += chunk.length;
-        if (chunk.length < xfer_buffer_size()) {
-            break;
+        if (xfer_buffer_write(bid, pathBytes.dataStart as i32, pathBytes.length, 0) != 0) {
+            xfer_buffer_release(bid);
+            return null;
         }
+        const b1 = xfer_buffer_borrow(fs_endpoint(), bid, XFER_GRANT_RW);
+        if (b1 < 0) {
+            xfer_buffer_release(bid);
+            return null;
+        }
+        return new StagedPath(bid, b1, pathBytes.length - 1);
     }
-    file.close();
 
-    const output = new Uint8Array(total);
-    let offset = 0;
-    for (let i = 0; i < chunks.length; ++i) {
-        const chunk = chunks[i];
-        memory.copy(output.dataStart + offset, chunk.dataStart, chunk.length);
-        offset += chunk.length;
+    function openWithFlags(path: string, flags: i32): File | null {
+        const s = stagePath(path);
+        if (s == null) {
+            return null;
+        }
+        const response = fsRequest(FS_IPC_OPEN_REQ, s.pathLen, flags, s.bid, s.b1);
+        xfer_buffer_release(s.bid);
+        if (response == null || response.arg0 < 0) {
+            return null;
+        }
+        return new File(response.arg0);
     }
-    return output;
-}
 
-export function readTextFile(path: string): string|null {
-    const bytes = readFile(path);
-    if (bytes == null) {
-        return null;
+    export function openRead(path: string): File | null {
+        return openWithFlags(path, O_RDONLY);
     }
-    return String.UTF8.decodeUnsafe(bytes.dataStart, bytes.length, false);
-}
+
+    export function openWrite(path: string): File | null {
+        return openWithFlags(path, O_WRONLY);
+    }
+
+    export function create(path: string): File | null {
+        return openWithFlags(path, O_WRONLY | O_CREAT | O_TRUNC);
+    }
+
+    export function openAppend(path: string): File | null {
+        return openWithFlags(path, O_WRONLY | O_CREAT | O_APPEND);
+    }
+
+    export function stat(path: string): FileStat | null {
+        const s = stagePath(path);
+        if (s == null) {
+            return null;
+        }
+        const response = fsRequest(FS_IPC_STAT_REQ, s.pathLen, 0, s.bid, s.b1);
+        xfer_buffer_release(s.bid);
+        if (response == null || response.arg0 < 0) {
+            return null;
+        }
+        return new FileStat(response.arg0, response.arg1 & (S_IFREG | S_IFDIR));
+    }
+
+    export function unlink(path: string): bool {
+        const s = stagePath(path);
+        if (s == null) {
+            return false;
+        }
+        const response = fsRequest(FS_IPC_UNLINK_REQ, s.pathLen, 0, s.bid, s.b1);
+        xfer_buffer_release(s.bid);
+        return response != null && response.arg0 == 0;
+    }
+
+    export function mkdir(path: string): bool {
+        const s = stagePath(path);
+        if (s == null) {
+            return false;
+        }
+        const response = fsRequest(FS_IPC_MKDIR_REQ, s.pathLen, 0, s.bid, s.b1);
+        xfer_buffer_release(s.bid);
+        return response != null && response.arg0 == 0;
+    }
+
+    export function rmdir(path: string): bool {
+        const s = stagePath(path);
+        if (s == null) {
+            return false;
+        }
+        const response = fsRequest(FS_IPC_RMDIR_REQ, s.pathLen, 0, s.bid, s.b1);
+        xfer_buffer_release(s.bid);
+        return response != null && response.arg0 == 0;
+    }
+
+    export function readDir(maxLen: i32 = 512): string | null {
+        if (maxLen <= 1) {
+            return null;
+        }
+        const out = new Uint8Array(maxLen);
+        const got = fsRequestStream(FS_IPC_READDIR_REQ, 0, 0, 0, 0, out);
+        if (got < 0) {
+            return null;
+        }
+        return String.UTF8.decodeUnsafe(out.dataStart, got, false);
+    }
+
+    export function readFile(path: string): Uint8Array | null {
+        const file = openRead(path);
+        if (file == null) {
+            return null;
+        }
+
+        const chunks = new Array<Uint8Array>();
+        let total = 0;
+        while (true) {
+            const chunk = file.read();
+            if (chunk == null) {
+                file.close();
+                return null;
+            }
+            if (chunk.length == 0) {
+                break;
+            }
+            chunks.push(chunk);
+            total += chunk.length;
+            if (chunk.length < xfer_buffer_size()) {
+                break;
+            }
+        }
+        file.close();
+
+        const output = new Uint8Array(total);
+        let offset = 0;
+        for (let i = 0; i < chunks.length; ++i) {
+            const chunk = chunks[i];
+            memory.copy(output.dataStart + offset, chunk.dataStart, chunk.length);
+            offset += chunk.length;
+        }
+        return output;
+    }
+
+    export function readTextFile(path: string): string | null {
+        const bytes = readFile(path);
+        if (bytes == null) {
+            return null;
+        }
+        return String.UTF8.decodeUnsafe(bytes.dataStart, bytes.length, false);
+    }
 }

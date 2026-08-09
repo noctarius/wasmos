@@ -4,5 +4,9 @@
   "license": "MIT",
   "dependencies": {
     "assemblyscript": "0.28.20"
+  },
+  "devDependencies": {
+    "assemblyscript-prettier": "^3.0.4",
+    "prettier": "^3.9.6"
   }
 }

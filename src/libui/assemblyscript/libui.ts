@@ -2,7 +2,7 @@ import {ipc, startup} from "./wasmos";
 import {WASMOS_ERR_NONE} from "./wasmos_status";
 
 const SVC_IPC_LOOKUP_REQ: i32 = 0x221;
-const SVC_IPC_LOOKUP_RESP: i32 = 0x2A1;
+const SVC_IPC_LOOKUP_RESP: i32 = 0x2a1;
 
 const GFX_IPC_ABI_MAGIC: i32 = 0x47465850;
 const GFX_IPC_ABI_VERSION: i32 = 1;
@@ -12,7 +12,7 @@ const GFX_IPC_PRESENT_WINDOW: i32 = 0x0205;
 const GFX_IPC_PUSH_EVENT: i32 = 0x0206;
 const GFX_IPC_RELEASE_SHARED_BUFFER: i32 = 0x0207;
 const GFX_IPC_DESTROY_WINDOW: i32 = 0x0201;
-const GFX_IPC_SET_WINDOW_TITLE: i32 = 0x020E;
+const GFX_IPC_SET_WINDOW_TITLE: i32 = 0x020e;
 
 const GFX_EVENT_NONE: i32 = 0;
 const GFX_EVENT_POINTER: i32 = 4;
@@ -22,12 +22,25 @@ const GFX_EVENT_RESIZE: i32 = 6;
 const PAGE_SIZE: i32 = 4096;
 const TITLE_BYTES_MAX: i32 = 127;
 
+
 @external("wasmos", "ipc_endpoint_owner") declare function ipc_endpoint_owner(endpoint: i32): i32;
+
+
 @external("wasmos", "shmem_create") declare function shmem_create(pages: i32, flags: i32): i32;
+
+
 @external("wasmos", "shmem_grant") declare function shmem_grant(id: i32, targetPid: i32): i32;
+
+
 @external("wasmos", "shmem_map_auto") declare function shmem_map_auto(id: i32, size: i32): i32;
+
+
 @external("wasmos", "shmem_flush") declare function shmem_flush(id: i32, ptr: i32, size: i32): i32;
+
+
 @external("wasmos", "shmem_unmap") declare function shmem_unmap(id: i32): i32;
+
+
 @external("wasmos", "sched_yield") declare function sched_yield(): i32;
 
 export const POINTER_LEFT: u32 = 1;
@@ -35,7 +48,12 @@ export const POINTER_RIGHT: u32 = 2;
 export const POINTER_MIDDLE: u32 = 4;
 
 export class Rect {
-    constructor(public x: i32 = 0, public y: i32 = 0, public w: i32 = 0, public h: i32 = 0) {}
+    constructor(
+        public x: i32 = 0,
+        public y: i32 = 0,
+        public w: i32 = 0,
+        public h: i32 = 0,
+    ) {}
 }
 
 export class Button {
@@ -58,7 +76,7 @@ function alignUp(value: i32, alignment: i32): i32 {
 }
 
 function packVersionOpcode(version: i32, opcode: i32): i32 {
-    return (version << 16) | (opcode & 0xFFFF);
+    return (version << 16) | (opcode & 0xffff);
 }
 
 function packName16(name: string): StaticArray<i32> {
@@ -67,7 +85,7 @@ function packName16(name: string): StaticArray<i32> {
     for (let i = 0; i < 16 && i < bytes.length - 1; i++) {
         const slot = i >> 2;
         const shift = (i & 3) << 3;
-        unchecked(args[slot] = unchecked(args[slot]) | ((bytes[i] as i32) << shift));
+        unchecked((args[slot] = unchecked(args[slot]) | ((bytes[i] as i32) << shift)));
     }
     return args;
 }
@@ -132,7 +150,7 @@ export class Context {
 
     // TODO: Once the AssemblyScript build grows a real Wasm link step, replace
     // the transport-backed implementation here with the shared C libui shim ABI.
-    static open(width: i32, height: i32, title: string): Context|null {
+    static open(width: i32, height: i32, title: string): Context | null {
         const procEndpoint = startup.arg(0);
         if (procEndpoint <= 0 || width <= 0 || height <= 0) {
             return null;
@@ -155,9 +173,18 @@ export class Context {
 
         // Create the window sourced from the event endpoint so it becomes the
         // window owner and receives pushed events; block for the reply there.
-        if (!ipc.reply(ctx.gfxEndpoint, ctx.eventEndpoint, GFX_IPC_CREATE_WINDOW, 1, width, height,
-                       GFX_IPC_ABI_MAGIC,
-                       packVersionOpcode(GFX_IPC_ABI_VERSION, GFX_IPC_CREATE_WINDOW))) {
+        if (
+            !ipc.reply(
+                ctx.gfxEndpoint,
+                ctx.eventEndpoint,
+                GFX_IPC_CREATE_WINDOW,
+                1,
+                width,
+                height,
+                GFX_IPC_ABI_MAGIC,
+                packVersionOpcode(GFX_IPC_ABI_VERSION, GFX_IPC_CREATE_WINDOW),
+            )
+        ) {
             return null;
         }
         const create = ipc.recv(ctx.eventEndpoint);
@@ -168,8 +195,11 @@ export class Context {
         ctx.windowId = create.arg1;
         ctx.width = width;
         ctx.height = height;
-        if (!ctx.ensureTitleBuffer() || !ctx.setTitle(title) ||
-            !ctx.allocateBuffer(width, height)) {
+        if (
+            !ctx.ensureTitleBuffer() ||
+            !ctx.setTitle(title) ||
+            !ctx.allocateBuffer(width, height)
+        ) {
             ctx.destroy();
             return null;
         }
@@ -188,8 +218,14 @@ export class Context {
         if (this.bufferId != 0 && this.gfxEndpoint > 0) {
             // Release after destroying the window so the compositor no longer
             // considers the buffer busy and can reclaim the slot.
-            let _ =
-                ipc.call(this.gfxEndpoint, GFX_IPC_RELEASE_SHARED_BUFFER, this.bufferId, 0, 0, 0);
+            let _ = ipc.call(
+                this.gfxEndpoint,
+                GFX_IPC_RELEASE_SHARED_BUFFER,
+                this.bufferId,
+                0,
+                0,
+                0,
+            );
         }
         if (this.shmemId > 0 && this.mappedPtr != 0) {
             let _ = shmem_unmap(this.shmemId);
@@ -226,16 +262,27 @@ export class Context {
     }
 
     endFrame(): bool {
-        if (this.shmemId <= 0 || this.mappedPtr == 0 || this.gfxEndpoint <= 0 ||
-            this.windowId <= 0 || this.bufferId == 0) {
+        if (
+            this.shmemId <= 0 ||
+            this.mappedPtr == 0 ||
+            this.gfxEndpoint <= 0 ||
+            this.windowId <= 0 ||
+            this.bufferId == 0
+        ) {
             return false;
         }
         const byteLen = this.strideBytes * this.height;
         if (shmem_flush(this.shmemId, this.mappedPtr, byteLen) != 0) {
             return false;
         }
-        const reply =
-            ipc.call(this.gfxEndpoint, GFX_IPC_PRESENT_WINDOW, this.windowId, this.bufferId, 0, 0);
+        const reply = ipc.call(
+            this.gfxEndpoint,
+            GFX_IPC_PRESENT_WINDOW,
+            this.windowId,
+            this.bufferId,
+            0,
+            0,
+        );
         return reply != null && reply.type == 0x0280 && reply.arg0 == WASMOS_ERR_NONE;
     }
 
@@ -256,15 +303,15 @@ export class Context {
             handled++;
             if (eventType == GFX_EVENT_POINTER) {
                 if (reply.arg2 == this.windowId) {
-                    this.pointerXValue = reply.arg3 & 0xFFF;
-                    this.pointerYValue = (reply.arg3 >>> 12) & 0xFFF;
-                    this.pointerButtonsValue = ((reply.arg3 >>> 24) & 0xFF) as u32;
+                    this.pointerXValue = reply.arg3 & 0xfff;
+                    this.pointerYValue = (reply.arg3 >>> 12) & 0xfff;
+                    this.pointerButtonsValue = ((reply.arg3 >>> 24) & 0xff) as u32;
                 }
             } else if (eventType == GFX_EVENT_CLOSE_REQUEST && reply.arg2 == this.windowId) {
                 this.closeRequestedFlag = true;
             } else if (eventType == GFX_EVENT_RESIZE && reply.arg2 == this.windowId) {
-                const newWidth = reply.arg3 & 0xFFFF;
-                const newHeight = (reply.arg3 >>> 16) & 0xFFFF;
+                const newWidth = reply.arg3 & 0xffff;
+                const newHeight = (reply.arg3 >>> 16) & 0xffff;
                 if (newWidth > 0 && newHeight > 0) {
                     this.resizeTo(newWidth, newHeight);
                 }
@@ -292,14 +339,24 @@ export class Context {
         if (shmem_flush(this.titleShmemId, this.titlePtr, len + 1) != 0) {
             return false;
         }
-        const reply = ipc.call(this.gfxEndpoint, GFX_IPC_SET_WINDOW_TITLE, this.windowId,
-                               this.titleShmemId, len, 0);
+        const reply = ipc.call(
+            this.gfxEndpoint,
+            GFX_IPC_SET_WINDOW_TITLE,
+            this.windowId,
+            this.titleShmemId,
+            len,
+            0,
+        );
         return reply != null && reply.type == 0x0280 && reply.arg0 == WASMOS_ERR_NONE;
     }
 
     hitTest(rect: Rect): bool {
-        return this.pointerXValue >= rect.x && this.pointerYValue >= rect.y &&
-               this.pointerXValue < rect.x + rect.w && this.pointerYValue < rect.y + rect.h;
+        return (
+            this.pointerXValue >= rect.x &&
+            this.pointerYValue >= rect.y &&
+            this.pointerXValue < rect.x + rect.w &&
+            this.pointerYValue < rect.y + rect.h
+        );
     }
 
     activate(button: Button, mask: u32 = POINTER_LEFT): bool {
@@ -322,10 +379,8 @@ export class Context {
         let y0 = y < 0 ? 0 : y;
         let x1 = x + w;
         let y1 = y + h;
-        if (x1 > this.width)
-            x1 = this.width;
-        if (y1 > this.height)
-            y1 = this.height;
+        if (x1 > this.width) x1 = this.width;
+        if (y1 > this.height) y1 = this.height;
         if (x0 >= x1 || y0 >= y1) {
             return;
         }
@@ -354,14 +409,11 @@ export class Context {
         const r2 = radius * radius;
         for (let dy = -radius; dy <= radius; dy++) {
             const yy = cy + dy;
-            if (yy < 0 || yy >= this.height)
-                continue;
+            if (yy < 0 || yy >= this.height) continue;
             for (let dx = -radius; dx <= radius; dx++) {
-                if (dx * dx + dy * dy > r2)
-                    continue;
+                if (dx * dx + dy * dy > r2) continue;
                 const xx = cx + dx;
-                if (xx < 0 || xx >= this.width)
-                    continue;
+                if (xx < 0 || xx >= this.width) continue;
                 store<u32>(this.mappedPtr + yy * this.strideBytes + (xx << 2), color);
             }
         }
@@ -374,7 +426,7 @@ export class Context {
         const glyphs = StaticArray.fromArray<i32>([
             0b111101101101111, 0b010110010010111, 0b111001111100111, 0b111001111001111,
             0b101101111001001, 0b111100111001111, 0b111100111101111, 0b111001001001001,
-            0b111101111101111
+            0b111101111101111,
         ]);
         const bits = unchecked(glyphs[digit]);
         for (let row = 0; row < 5; row++) {
@@ -390,9 +442,14 @@ export class Context {
     private lookupService(name: string): i32 {
         const packed = packName16(name);
         for (let attempt = 0; attempt < 4096; attempt++) {
-            const reply =
-                ipc.call(this.procEndpoint, SVC_IPC_LOOKUP_REQ, unchecked(packed[0]),
-                         unchecked(packed[1]), unchecked(packed[2]), unchecked(packed[3]));
+            const reply = ipc.call(
+                this.procEndpoint,
+                SVC_IPC_LOOKUP_REQ,
+                unchecked(packed[0]),
+                unchecked(packed[1]),
+                unchecked(packed[2]),
+                unchecked(packed[3]),
+            );
             if (reply != null && reply.type == SVC_IPC_LOOKUP_RESP && reply.arg0 != -1) {
                 return reply.arg0;
             }
@@ -436,8 +493,14 @@ export class Context {
                 let _ = shmem_unmap(this.shmemId);
             }
             if (this.bufferId != 0) {
-                let _ = ipc.call(this.gfxEndpoint, GFX_IPC_RELEASE_SHARED_BUFFER, this.bufferId, 0,
-                                 0, 0);
+                let _ = ipc.call(
+                    this.gfxEndpoint,
+                    GFX_IPC_RELEASE_SHARED_BUFFER,
+                    this.bufferId,
+                    0,
+                    0,
+                    0,
+                );
             }
             this.bufferId = 0;
             this.shmemId = -1;
@@ -445,8 +508,14 @@ export class Context {
             this.mappedLen = 0;
         }
 
-        const reply = ipc.call(this.gfxEndpoint, GFX_IPC_ALLOC_SHARED_BUFFER, this.windowId, width,
-                               height, 0);
+        const reply = ipc.call(
+            this.gfxEndpoint,
+            GFX_IPC_ALLOC_SHARED_BUFFER,
+            this.windowId,
+            width,
+            height,
+            0,
+        );
         if (reply == null || reply.type != 0x0280 || reply.arg0 != WASMOS_ERR_NONE) {
             return false;
         }

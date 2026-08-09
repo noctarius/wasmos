@@ -12,30 +12,61 @@ const STATUS_IBF: i32 = 0x02;
 const STATUS_AUX: i32 = 0x20;
 
 const SVC_IPC_REGISTER_REQ: i32 = 0x220;
-const SVC_IPC_REGISTER_RESP: i32 = 0x2A0;
-const PROC_IPC_NOTIFY_READY: i32 = 0x20C;
+const SVC_IPC_REGISTER_RESP: i32 = 0x2a0;
+const PROC_IPC_NOTIFY_READY: i32 = 0x20c;
 
 const MOUSE_IPC_SUBSCRIBE_REQ: i32 = 0x810;
 const MOUSE_IPC_SUBSCRIBE_RESP: i32 = 0x890;
 const MOUSE_IPC_MOVE_NOTIFY: i32 = 0x811;
 
+
 @external("wasmos", "io_in8") declare function io_in8(port: i32): i32;
+
+
 @external("wasmos", "io_out8") declare function io_out8(port: i32, value: i32): i32;
+
+
 @external("wasmos", "io_wait") declare function io_wait(): i32;
+
+
 @external("wasmos", "sched_yield") declare function sched_yield(): i32;
+
+
 @external("wasmos", "ipc_try_recv") declare function ipc_try_recv(endpoint: i32): i32;
+
+
 @external("wasmos", "ipc_recv") declare function ipc_recv(endpoint: i32): i32;
+
+
 @external("wasmos", "ipc_create_endpoint") declare function ipc_create_endpoint(): i32;
+
+
 @external("wasmos", "irq_route_ipc") declare function irq_route_ipc(irq: i32, endpoint: i32): i32;
+
+
 @external("wasmos", "irq_ack") declare function irq_ack(irq: i32): i32;
+
+
 @external("wasmos", "irq_unroute") declare function irq_unroute(irq: i32): i32;
+
+
 @external("wasmos", "ipc_last_field") declare function ipc_last_field(field: i32): i32;
+
+
 @external("wasmos", "ipc_send")
-declare function ipc_send(dest: i32, src: i32, type: i32, req_id: i32, arg0: i32, arg1: i32,
-                          arg2: i32, arg3: i32): i32;
+declare function ipc_send(
+    dest: i32,
+    src: i32,
+    type: i32,
+    req_id: i32,
+    arg0: i32,
+    arg1: i32,
+    arg2: i32,
+    arg3: i32,
+): i32;
 
 const MOUSE_IRQ: i32 = 12;
-const MOUSE_IPC_IRQ_EVENT: i32 = 0xFF00;
+const MOUSE_IPC_IRQ_EVENT: i32 = 0xff00;
 
 let g_mouse_ep: i32 = -1;
 let g_packet_state: i32 = 0;
@@ -102,7 +133,7 @@ function waitInputReady(limit: i32 = 100000): bool {
         if ((io_in8(CTRL_STATUS_PORT) & STATUS_IBF) == 0) {
             return true;
         }
-        if ((i & 0xFF) == 0) {
+        if ((i & 0xff) == 0) {
             sched_yield();
         }
         io_wait();
@@ -120,7 +151,7 @@ function sendControllerCommand(cmd: i32): bool {
 }
 
 function sendMouseCommand(cmd: i32): bool {
-    if (!sendControllerCommand(0xD4)) {
+    if (!sendControllerCommand(0xd4)) {
         return false;
     }
     if (!waitInputReady()) {
@@ -140,7 +171,7 @@ function readAuxByte(): i32 {
         /* Not our byte: leave it for keyboard driver. */
         return -2;
     }
-    return io_in8(CTRL_DATA_PORT) & 0xFF;
+    return io_in8(CTRL_DATA_PORT) & 0xff;
 }
 
 function readAuxAck(limit: i32 = 50000): i32 {
@@ -149,7 +180,7 @@ function readAuxAck(limit: i32 = 50000): i32 {
         if (v >= 0) {
             return v;
         }
-        if ((i & 0xFF) == 0) {
+        if ((i & 0xff) == 0) {
             sched_yield();
         }
         io_wait();
@@ -162,9 +193,9 @@ function readAuxAck(limit: i32 = 50000): i32 {
 function readDataByte(limit: i32 = 50000): i32 {
     for (let i = 0; i < limit; ++i) {
         if ((io_in8(CTRL_STATUS_PORT) & STATUS_OBF) != 0) {
-            return io_in8(CTRL_DATA_PORT) & 0xFF;
+            return io_in8(CTRL_DATA_PORT) & 0xff;
         }
-        if ((i & 0xFF) == 0) {
+        if ((i & 0xff) == 0) {
             sched_yield();
         }
         io_wait();
@@ -176,7 +207,7 @@ function initMouseDevice(): bool {
     flushOutputBuffer();
 
     /* Enable AUX port (clears clock-disable bit in CCB). */
-    sendControllerCommand(0xA8);
+    sendControllerCommand(0xa8);
 
     /* Read the Controller Command Byte and set bit 1 (AUX interrupt enable).
      * Without this, IRQ 12 never fires even though the AUX port is active. */
@@ -200,9 +231,9 @@ function initMouseDevice(): bool {
     /* Request streaming in fail-open mode.
      * Some virtual/slow controllers may delay ACKs; mouse support should never
      * block system bootstrap. */
-    sendMouseCommand(0xF6);
+    sendMouseCommand(0xf6);
     readAuxAck(4096);
-    sendMouseCommand(0xF4);
+    sendMouseCommand(0xf4);
     readAuxAck(4096);
     return true;
 }
@@ -219,7 +250,7 @@ function drainIpc(): void {
         let source = ipc_last_field(4);
 
         if (type == MOUSE_IPC_SUBSCRIBE_REQ) {
-            let ok: i32 = (source >= 0) ? addSubscriber(source) : -1;
+            let ok: i32 = source >= 0 ? addSubscriber(source) : -1;
             if (source >= 0) {
                 ipc_send(source, g_mouse_ep, MOUSE_IPC_SUBSCRIBE_RESP, req_id, ok, 0, 0, 0);
             }
@@ -248,7 +279,7 @@ function handleAuxByte(byte: i32): void {
     let p1 = g_packet1;
     let p2 = byte;
 
-    if ((p0 & 0xC0) != 0) {
+    if ((p0 & 0xc0) != 0) {
         /* Overflow bits set, drop packet. */
         return;
     }
@@ -264,13 +295,26 @@ export function initialize(proc_endpoint: i32, _arg1: i32, _arg2: i32, _arg3: i3
     proc_endpoint = startup.procEndpoint();
     g_mouse_ep = ipc_create_endpoint();
     if (g_mouse_ep >= 0) {
-        let mouse_name = 0x73756F6D; /* "mous" */
+        let mouse_name = 0x73756f6d; /* "mous" */
         let req_id = 1;
-        if (ipc_send(proc_endpoint, g_mouse_ep, SVC_IPC_REGISTER_REQ, req_id, mouse_name, 0x65, 0,
-                     0) == 0) {
+        if (
+            ipc_send(
+                proc_endpoint,
+                g_mouse_ep,
+                SVC_IPC_REGISTER_REQ,
+                req_id,
+                mouse_name,
+                0x65,
+                0,
+                0,
+            ) == 0
+        ) {
             if (ipc_recv(g_mouse_ep) == 1) {
-                if (ipc_last_field(0) != SVC_IPC_REGISTER_RESP || ipc_last_field(1) != req_id ||
-                    ipc_last_field(2) != 0) {
+                if (
+                    ipc_last_field(0) != SVC_IPC_REGISTER_RESP ||
+                    ipc_last_field(1) != req_id ||
+                    ipc_last_field(2) != 0
+                ) {
                     g_mouse_ep = -1;
                 }
             } else {
@@ -328,7 +372,7 @@ export function initialize(proc_endpoint: i32, _arg1: i32, _arg2: i32, _arg3: i3
         if (type == MOUSE_IPC_SUBSCRIBE_REQ) {
             let req_id: i32 = ipc_last_field(1);
             let source: i32 = ipc_last_field(4);
-            let ok: i32 = (source >= 0) ? addSubscriber(source) : -1;
+            let ok: i32 = source >= 0 ? addSubscriber(source) : -1;
             if (source >= 0) {
                 ipc_send(source, g_mouse_ep, MOUSE_IPC_SUBSCRIBE_RESP, req_id, ok, 0, 0, 0);
             }

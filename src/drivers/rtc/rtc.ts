@@ -3,37 +3,68 @@ import {
     WASMOS_ERR_NONE,
     WASMOS_ERR_RTC_INVALID,
     WASMOS_ERR_RTC_IO,
-    WASMOS_ERR_RTC_TIMEOUT
+    WASMOS_ERR_RTC_TIMEOUT,
 } from "./wasmos_status";
 
 const CMOS_INDEX_PORT: i32 = 0x70;
 const CMOS_DATA_PORT: i32 = 0x71;
 
 const SVC_IPC_REGISTER_REQ: i32 = 0x220;
-const SVC_IPC_REGISTER_RESP: i32 = 0x2A0;
-const PROC_IPC_NOTIFY_READY: i32 = 0x20C;
+const SVC_IPC_REGISTER_RESP: i32 = 0x2a0;
+const PROC_IPC_NOTIFY_READY: i32 = 0x20c;
 
 const RTC_IPC_READ_REQ: i32 = 0x820;
 const RTC_IPC_SET_REQ: i32 = 0x821;
-const RTC_IPC_READ_RESP: i32 = 0x8A0;
-const RTC_IPC_SET_RESP: i32 = 0x8A1;
-const RTC_IPC_ERROR: i32 = 0x8FF;
+const RTC_IPC_READ_RESP: i32 = 0x8a0;
+const RTC_IPC_SET_RESP: i32 = 0x8a1;
+const RTC_IPC_ERROR: i32 = 0x8ff;
+
 
 @external("wasmos", "io_in8") declare function io_in8(port: i32): i32;
+
+
 @external("wasmos", "io_out8") declare function io_out8(port: i32, value: i32): i32;
+
+
 @external("wasmos", "io_wait") declare function io_wait(): i32;
+
+
 @external("wasmos", "ipc_recv") declare function ipc_recv(endpoint: i32): i32;
+
+
 @external("wasmos", "ipc_create_endpoint") declare function ipc_create_endpoint(): i32;
+
+
 @external("wasmos", "ipc_last_field") declare function ipc_last_field(field: i32): i32;
+
+
 @external("wasmos", "ipc_send")
-declare function ipc_send(dest: i32, src: i32, type: i32, req_id: i32, arg0: i32, arg1: i32,
-                          arg2: i32, arg3: i32): i32;
+declare function ipc_send(
+    dest: i32,
+    src: i32,
+    type: i32,
+    req_id: i32,
+    arg0: i32,
+    arg1: i32,
+    arg2: i32,
+    arg3: i32,
+): i32;
+
+
 @external("wasmos", "sched_yield") declare function sched_yield(): i32;
 
 let g_rtc_ep: i32 = -1;
 
-function ipcSendRetry(dest: i32, src: i32, type: i32, reqId: i32, arg0: i32, arg1: i32, arg2: i32,
-                      arg3: i32): i32 {
+function ipcSendRetry(
+    dest: i32,
+    src: i32,
+    type: i32,
+    reqId: i32,
+    arg0: i32,
+    arg1: i32,
+    arg2: i32,
+    arg3: i32,
+): i32 {
     for (let i = 0; i < 512; ++i) {
         let rc = ipc_send(dest, src, type, reqId, arg0, arg1, arg2, arg3);
         if (rc == 0) {
@@ -45,29 +76,29 @@ function ipcSendRetry(dest: i32, src: i32, type: i32, reqId: i32, arg0: i32, arg
 }
 
 function rtcReadReg(reg: i32): i32 {
-    io_out8(CMOS_INDEX_PORT, reg & 0x7F);
+    io_out8(CMOS_INDEX_PORT, reg & 0x7f);
     io_wait();
-    return io_in8(CMOS_DATA_PORT) & 0xFF;
+    return io_in8(CMOS_DATA_PORT) & 0xff;
 }
 
 function rtcWriteReg(reg: i32, value: i32): void {
-    io_out8(CMOS_INDEX_PORT, reg & 0x7F);
+    io_out8(CMOS_INDEX_PORT, reg & 0x7f);
     io_wait();
-    io_out8(CMOS_DATA_PORT, value & 0xFF);
+    io_out8(CMOS_DATA_PORT, value & 0xff);
     io_wait();
 }
 
 function bcdToBin(v: i32): i32 {
-    return ((v >> 4) * 10) + (v & 0x0F);
+    return (v >> 4) * 10 + (v & 0x0f);
 }
 
 function binToBcd(v: i32): i32 {
-    return (((v / 10) & 0x0F) << 4) | (v % 10);
+    return (((v / 10) & 0x0f) << 4) | (v % 10);
 }
 
 function waitNotUpdating(): bool {
     for (let i = 0; i < 10000; ++i) {
-        let a = rtcReadReg(0x0A);
+        let a = rtcReadReg(0x0a);
         if ((a & 0x80) == 0) {
             return true;
         }
@@ -77,21 +108,25 @@ function waitNotUpdating(): bool {
 }
 
 function unpackTime(arg0: i32, arg1: i32, outVals: StaticArray<i32>): void {
-    unchecked(outVals[0] = arg0 & 0xFF);
-    unchecked(outVals[1] = (arg0 >> 8) & 0xFF);
-    unchecked(outVals[2] = (arg0 >> 16) & 0xFF);
-    unchecked(outVals[3] = (arg0 >> 24) & 0xFF);
-    unchecked(outVals[4] = arg1 & 0xFF);
-    unchecked(outVals[5] = (arg1 >> 8) & 0xFFFF);
+    unchecked((outVals[0] = arg0 & 0xff));
+    unchecked((outVals[1] = (arg0 >> 8) & 0xff));
+    unchecked((outVals[2] = (arg0 >> 16) & 0xff));
+    unchecked((outVals[3] = (arg0 >> 24) & 0xff));
+    unchecked((outVals[4] = arg1 & 0xff));
+    unchecked((outVals[5] = (arg1 >> 8) & 0xffff));
 }
 
 function packTime(outVals: StaticArray<i32>): i32 {
-    return (unchecked(outVals[0]) & 0xFF) | ((unchecked(outVals[1]) & 0xFF) << 8) |
-           ((unchecked(outVals[2]) & 0xFF) << 16) | ((unchecked(outVals[3]) & 0xFF) << 24);
+    return (
+        (unchecked(outVals[0]) & 0xff) |
+        ((unchecked(outVals[1]) & 0xff) << 8) |
+        ((unchecked(outVals[2]) & 0xff) << 16) |
+        ((unchecked(outVals[3]) & 0xff) << 24)
+    );
 }
 
 function packDate(outVals: StaticArray<i32>): i32 {
-    return (unchecked(outVals[4]) & 0xFF) | ((unchecked(outVals[5]) & 0xFFFF) << 8);
+    return (unchecked(outVals[4]) & 0xff) | ((unchecked(outVals[5]) & 0xffff) << 8);
 }
 
 function validateTime(vals: StaticArray<i32>): bool {
@@ -101,8 +136,20 @@ function validateTime(vals: StaticArray<i32>): bool {
     let day = unchecked(vals[3]);
     let mon = unchecked(vals[4]);
     let year = unchecked(vals[5]);
-    return sec >= 0 && sec <= 59 && min >= 0 && min <= 59 && hour >= 0 && hour <= 23 && day >= 1 &&
-           day <= 31 && mon >= 1 && mon <= 12 && year >= 1970 && year <= 2099;
+    return (
+        sec >= 0 &&
+        sec <= 59 &&
+        min >= 0 &&
+        min <= 59 &&
+        hour >= 0 &&
+        hour <= 23 &&
+        day >= 1 &&
+        day <= 31 &&
+        mon >= 1 &&
+        mon <= 12 &&
+        year >= 1970 &&
+        year <= 2099
+    );
 }
 
 function readTime(outVals: StaticArray<i32>): i32 {
@@ -116,7 +163,7 @@ function readTime(outVals: StaticArray<i32>): i32 {
     let day = rtcReadReg(0x07);
     let mon = rtcReadReg(0x08);
     let year = rtcReadReg(0x09);
-    let regB = rtcReadReg(0x0B);
+    let regB = rtcReadReg(0x0b);
 
     let isBinary = (regB & 0x04) != 0;
     let is24Hour = (regB & 0x02) != 0;
@@ -125,7 +172,7 @@ function readTime(outVals: StaticArray<i32>): i32 {
         sec = bcdToBin(sec);
         min = bcdToBin(min);
         let hourRaw = hour;
-        hour = bcdToBin(hourRaw & 0x7F);
+        hour = bcdToBin(hourRaw & 0x7f);
         if (!is24Hour && (hourRaw & 0x80) != 0) {
             hour = (hour + 12) % 24;
         }
@@ -133,7 +180,7 @@ function readTime(outVals: StaticArray<i32>): i32 {
         mon = bcdToBin(mon);
         year = bcdToBin(year);
     } else if (!is24Hour && (hour & 0x80) != 0) {
-        hour = ((hour & 0x7F) + 12) % 24;
+        hour = ((hour & 0x7f) + 12) % 24;
     }
 
     let fullYear = 2000 + year;
@@ -141,12 +188,12 @@ function readTime(outVals: StaticArray<i32>): i32 {
         fullYear = 1900 + year;
     }
 
-    unchecked(outVals[0] = sec);
-    unchecked(outVals[1] = min);
-    unchecked(outVals[2] = hour);
-    unchecked(outVals[3] = day);
-    unchecked(outVals[4] = mon);
-    unchecked(outVals[5] = fullYear);
+    unchecked((outVals[0] = sec));
+    unchecked((outVals[1] = min));
+    unchecked((outVals[2] = hour));
+    unchecked((outVals[3] = day));
+    unchecked((outVals[4] = mon));
+    unchecked((outVals[5] = fullYear));
     return WASMOS_ERR_NONE;
 }
 
@@ -166,7 +213,7 @@ function setTime(vals: StaticArray<i32>): i32 {
     let fullYear = unchecked(vals[5]);
     let year = fullYear % 100;
 
-    let regB = rtcReadReg(0x0B);
+    let regB = rtcReadReg(0x0b);
     let isBinary = (regB & 0x04) != 0;
     let is24Hour = (regB & 0x02) != 0;
 
@@ -193,18 +240,18 @@ function setTime(vals: StaticArray<i32>): i32 {
             hourReg = binToBcd(hourReg);
         } else {
             let pmBit = hourReg & 0x80;
-            hourReg = binToBcd(hourReg & 0x7F) | pmBit;
+            hourReg = binToBcd(hourReg & 0x7f) | pmBit;
         }
     }
 
-    rtcWriteReg(0x0B, regB | 0x80);
+    rtcWriteReg(0x0b, regB | 0x80);
     rtcWriteReg(0x00, sec);
     rtcWriteReg(0x02, min);
     rtcWriteReg(0x04, hourReg);
     rtcWriteReg(0x07, day);
     rtcWriteReg(0x08, mon);
     rtcWriteReg(0x09, year);
-    rtcWriteReg(0x0B, regB & 0x7F);
+    rtcWriteReg(0x0b, regB & 0x7f);
     return WASMOS_ERR_NONE;
 }
 
@@ -266,8 +313,12 @@ export function initialize(procEndpoint: i32, _arg1: i32, _arg2: i32, _arg3: i32
         std.printf("[rtc] register send failure\n");
         return -1;
     }
-    if (ipc_recv(g_rtc_ep) != 1 || ipc_last_field(0) != SVC_IPC_REGISTER_RESP ||
-        ipc_last_field(1) != reqId || ipc_last_field(2) != 0) {
+    if (
+        ipc_recv(g_rtc_ep) != 1 ||
+        ipc_last_field(0) != SVC_IPC_REGISTER_RESP ||
+        ipc_last_field(1) != reqId ||
+        ipc_last_field(2) != 0
+    ) {
         std.printf("[rtc] register failure\n");
         return -1;
     }

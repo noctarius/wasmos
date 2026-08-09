@@ -64,6 +64,7 @@ declare -a zig_files=()
 declare -a rust_format_files=()
 declare -a rust_lint_files=()
 declare -a as_files=()
+declare -a as_lint_files=()
 declare -a py_files=()
 
 # Announce the start of a per-language step (only emitted when it has work).
@@ -154,8 +155,23 @@ collect_files() {
                         ;;
                 esac
                 ;;
-            examples/assemblyscript/*.ts|examples/assemblyscript/**/*.ts|src/drivers/*.ts|src/drivers/**/*.ts|src/utils/*.ts|src/utils/**/*.ts|src/libc/assemblyscript/*.ts|src/libui/assemblyscript/*.ts)
-                as_files+=("$file")
+            *.ts)
+                # Every .ts in this tree is AssemblyScript, generated bindings
+                # aside -- those are rewritten by scripts/gen_abi_*.py.
+                case "$file" in
+                    abi/generated/*) ;;
+                    tests/*)
+                        # Formatted, but not linted standalone: the AS lint
+                        # stage compiles each file alone in a temp directory,
+                        # and these are staged and compiled for real by
+                        # run-kernel-unit-tests, which is the stronger check.
+                        as_files+=("$file")
+                        ;;
+                    *)
+                        as_files+=("$file")
+                        as_lint_files+=("$file")
+                        ;;
+                esac
                 ;;
         esac
     done < <(git ls-files -z)
@@ -164,7 +180,7 @@ collect_files() {
 collect_files
 
 run_clang_format() {
-    local -a format_targets=("${c_format_files[@]}" "${as_files[@]}")
+    local -a format_targets=("${c_format_files[@]}")
     if [[ ${#format_targets[@]} -eq 0 ]]; then
         return 0
     fi
@@ -174,11 +190,42 @@ run_clang_format() {
         clang-format /opt/homebrew/opt/llvm/bin/clang-format /usr/local/opt/llvm/bin/clang-format)"
 
     if [[ "$check_mode" -eq 1 ]]; then
-        step "Checking C/C++ and AssemblyScript formatting (clang-format)..."
+        step "Checking C/C++ formatting (clang-format)..."
         "$clang_format" --style=file --dry-run --Werror "${format_targets[@]}"
     else
-        step "Formatting C/C++ and AssemblyScript sources (clang-format)..."
+        step "Formatting C/C++ sources (clang-format)..."
         "$clang_format" --style=file -i "${format_targets[@]}"
+    fi
+}
+
+# AssemblyScript is formatted by prettier with the assemblyscript-prettier
+# plugin, which parses with asc's own parser. clang-format used to do it, but it
+# classifies .ts as C++ whatever the config says and mangles a decorated
+# function's return type onto its own line; and stock prettier cannot parse this
+# tree at all, because AssemblyScript puts decorators on plain functions
+# (@external, @coroutine, @suspend) where the TypeScript spec allows them only
+# on classes and their members.
+run_prettier_assemblyscript() {
+    if [[ ${#as_files[@]} -eq 0 ]]; then
+        return 0
+    fi
+    local prettier="$repo_root/node_modules/.bin/prettier"
+    if [[ ! -x "$prettier" ]]; then
+        echo "prettier is required for AssemblyScript formatting. Run: npm install" >&2
+        return 1
+    fi
+    if [[ "$check_mode" -eq 1 ]]; then
+        step "Checking AssemblyScript formatting (prettier)..."
+        "$prettier" --check "${as_files[@]}"
+    else
+        step "Formatting AssemblyScript sources (prettier)..."
+        # Twice, deliberately. The plugin is not idempotent on input it has not
+        # seen before: the first pass restructures, the second settles blank
+        # lines between decorated declarations. It converges after two and is
+        # stable from then on, so a single pass would leave a file that the
+        # very next --check rejects.
+        "$prettier" --write --log-level warn "${as_files[@]}"
+        "$prettier" --write --log-level warn "${as_files[@]}"
     fi
 }
 
@@ -495,7 +542,7 @@ run_assemblyscript_lint() {
 
     step "Linting AssemblyScript sources (asc)..."
     local file
-    for file in "${as_files[@]}"; do
+    for file in "${as_lint_files[@]}"; do
         local stage_dir entry_file out_file
         stage_dir="$(mktemp -d "${TMPDIR:-/tmp}/wasmos-asc-lint.XXXXXX")"
         entry_file="$stage_dir/$(basename "$file")"
@@ -601,6 +648,7 @@ run_abi_gen_check() {
 case "$mode" in
     format)
         run_clang_format
+        run_prettier_assemblyscript
         run_gofmt
         run_zig_fmt
         run_rustfmt

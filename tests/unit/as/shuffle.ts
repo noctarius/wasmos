@@ -12,16 +12,20 @@
  */
 
 @external("harness", "seed") declare function harnessSeed(): i64;
+
+
 @external("harness", "reportSeed") declare function harnessReportSeed(seed: i64): void;
+
+
 @external("harness", "reportOrder") declare function harnessReportOrder(index: i32): void;
 
 /** A case returns 0 to pass, or a marker identifying its failed assertion. */
 export type TestCase = () => i32;
 
 function nextRandom(state: u64): u64 {
-    let z: u64 = state + 0x9E3779B97F4A7C15;
-    z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9;
-    z = (z ^ (z >> 27)) * 0x94D049BB133111EB;
+    let z: u64 = state + 0x9e3779b97f4a7c15;
+    z = (z ^ (z >> 30)) * 0xbf58476d1ce4e5b9;
+    z = (z ^ (z >> 27)) * 0x94d049bb133111eb;
     return z ^ (z >> 31);
 }
 
@@ -33,8 +37,7 @@ function nextRandom(state: u64): u64 {
 export function runShuffled(cases: StaticArray<TestCase>): i32 {
     const count = cases.length;
     const order = new StaticArray<i32>(count);
-    for (let i = 0; i < count; ++i)
-        unchecked(order[i] = i);
+    for (let i = 0; i < count; ++i) unchecked((order[i] = i));
 
     const seed = <u64>harnessSeed();
     let state = seed;
@@ -43,8 +46,8 @@ export function runShuffled(cases: StaticArray<TestCase>): i32 {
         state = nextRandom(state);
         const j = <i32>(state % <u64>(i + 1));
         const swap = unchecked(order[i]);
-        unchecked(order[i] = unchecked(order[j]));
-        unchecked(order[j] = swap);
+        unchecked((order[i] = unchecked(order[j])));
+        unchecked((order[j] = swap));
     }
 
     for (let i = 0; i < count; ++i) {
@@ -52,8 +55,7 @@ export function runShuffled(cases: StaticArray<TestCase>): i32 {
         const rc = unchecked(cases[index])();
         if (rc != 0) {
             harnessReportSeed(<i64>seed);
-            for (let j = 0; j <= i; ++j)
-                harnessReportOrder(unchecked(order[j]));
+            for (let j = 0; j <= i; ++j) harnessReportOrder(unchecked(order[j]));
             return rc;
         }
     }

@@ -1,17 +1,23 @@
 import {ipc, startup, std} from "./wasmos";
 
 const SVC_IPC_LOOKUP_REQ: i32 = 0x221;
-const SVC_IPC_LOOKUP_RESP: i32 = 0x2A1;
+const SVC_IPC_LOOKUP_RESP: i32 = 0x2a1;
 
 const RTC_IPC_READ_REQ: i32 = 0x820;
 const RTC_IPC_SET_REQ: i32 = 0x821;
-const RTC_IPC_READ_RESP: i32 = 0x8A0;
-const RTC_IPC_SET_RESP: i32 = 0x8A1;
-const RTC_IPC_ERROR: i32 = 0x8FF;
+const RTC_IPC_READ_RESP: i32 = 0x8a0;
+const RTC_IPC_SET_RESP: i32 = 0x8a1;
+const RTC_IPC_ERROR: i32 = 0x8ff;
 
 class RtcTime {
-    constructor(public year: i32 = 1970, public month: i32 = 1, public day: i32 = 1,
-                public hour: i32 = 0, public minute: i32 = 0, public second: i32 = 0) {}
+    constructor(
+        public year: i32 = 1970,
+        public month: i32 = 1,
+        public day: i32 = 1,
+        public hour: i32 = 0,
+        public minute: i32 = 0,
+        public second: i32 = 0,
+    ) {}
 }
 
 function packName16(name: string): StaticArray<i32> {
@@ -20,22 +26,28 @@ function packName16(name: string): StaticArray<i32> {
         const slot = i >> 2;
         const shift = (i & 3) << 3;
         const v = unchecked(out[slot]);
-        unchecked(out[slot] = v | ((name.charCodeAt(i) & 0xFF) << shift));
+        unchecked((out[slot] = v | ((name.charCodeAt(i) & 0xff) << shift)));
     }
     return out;
 }
 
 function svcLookup(procEndpoint: i32, name: string): i32 {
     const packed = packName16(name);
-    const reply = ipc.call(procEndpoint, SVC_IPC_LOOKUP_REQ, unchecked(packed[0]),
-                           unchecked(packed[1]), unchecked(packed[2]), unchecked(packed[3]));
+    const reply = ipc.call(
+        procEndpoint,
+        SVC_IPC_LOOKUP_REQ,
+        unchecked(packed[0]),
+        unchecked(packed[1]),
+        unchecked(packed[2]),
+        unchecked(packed[3]),
+    );
     if (reply == null || reply.type != SVC_IPC_LOOKUP_RESP) {
         return -1;
     }
     return reply.arg0;
 }
 
-function rtcRead(rtcEndpoint: i32): RtcTime|null {
+function rtcRead(rtcEndpoint: i32): RtcTime | null {
     const reply = ipc.call(rtcEndpoint, RTC_IPC_READ_REQ, 0, 0, 0, 0);
     if (reply == null || reply.type == RTC_IPC_ERROR || reply.type != RTC_IPC_READ_RESP) {
         return null;
@@ -43,19 +55,22 @@ function rtcRead(rtcEndpoint: i32): RtcTime|null {
     const arg0 = reply.arg0;
     const arg1 = reply.arg1;
     const t = new RtcTime();
-    t.second = arg0 & 0xFF;
-    t.minute = (arg0 >> 8) & 0xFF;
-    t.hour = (arg0 >> 16) & 0xFF;
-    t.day = (arg0 >> 24) & 0xFF;
-    t.month = arg1 & 0xFF;
-    t.year = (arg1 >> 8) & 0xFFFF;
+    t.second = arg0 & 0xff;
+    t.minute = (arg0 >> 8) & 0xff;
+    t.hour = (arg0 >> 16) & 0xff;
+    t.day = (arg0 >> 24) & 0xff;
+    t.month = arg1 & 0xff;
+    t.year = (arg1 >> 8) & 0xffff;
     return t;
 }
 
 function rtcSet(rtcEndpoint: i32, t: RtcTime): bool {
-    const arg0 = (t.second & 0xFF) | ((t.minute & 0xFF) << 8) | ((t.hour & 0xFF) << 16) |
-                 ((t.day & 0xFF) << 24);
-    const arg1 = (t.month & 0xFF) | ((t.year & 0xFFFF) << 8);
+    const arg0 =
+        (t.second & 0xff) |
+        ((t.minute & 0xff) << 8) |
+        ((t.hour & 0xff) << 16) |
+        ((t.day & 0xff) << 24);
+    const arg1 = (t.month & 0xff) | ((t.year & 0xffff) << 8);
     const reply = ipc.call(rtcEndpoint, RTC_IPC_SET_REQ, arg0, arg1, 0, 0);
     return reply != null && reply.type == RTC_IPC_SET_RESP && reply.arg0 == 0;
 }
@@ -68,8 +83,19 @@ function pad2(v: i32): string {
 }
 
 function formatTime(t: RtcTime): string {
-    return t.year.toString() + "-" + pad2(t.month) + "-" + pad2(t.day) + " " + pad2(t.hour) + ":" +
-           pad2(t.minute) + ":" + pad2(t.second);
+    return (
+        t.year.toString() +
+        "-" +
+        pad2(t.month) +
+        "-" +
+        pad2(t.day) +
+        " " +
+        pad2(t.hour) +
+        ":" +
+        pad2(t.minute) +
+        ":" +
+        pad2(t.second)
+    );
 }
 
 function parse2(s: string, pos: i32): i32 {
@@ -99,13 +125,19 @@ function parse4(s: string, pos: i32): i32 {
     return v;
 }
 
-function parseSetArg(args: Array<string>): RtcTime|null {
+function parseSetArg(args: Array<string>): RtcTime | null {
     if (args.length < 3 || args[0] != "set") {
         return null;
     }
     const s = args[1] + " " + args[2];
-    if (s.length < 19 || s.charCodeAt(4) != 45 || s.charCodeAt(7) != 45 || s.charCodeAt(10) != 32 ||
-        s.charCodeAt(13) != 58 || s.charCodeAt(16) != 58) {
+    if (
+        s.length < 19 ||
+        s.charCodeAt(4) != 45 ||
+        s.charCodeAt(7) != 45 ||
+        s.charCodeAt(10) != 32 ||
+        s.charCodeAt(13) != 58 ||
+        s.charCodeAt(16) != 58
+    ) {
         return null;
     }
     const t = new RtcTime();
@@ -115,9 +147,20 @@ function parseSetArg(args: Array<string>): RtcTime|null {
     t.hour = parse2(s, 11);
     t.minute = parse2(s, 14);
     t.second = parse2(s, 17);
-    if (t.year < 1970 || t.year > 2099 || t.month < 1 || t.month > 12 || t.day < 1 || t.day > 31 ||
-        t.hour < 0 || t.hour > 23 || t.minute < 0 || t.minute > 59 || t.second < 0 ||
-        t.second > 59) {
+    if (
+        t.year < 1970 ||
+        t.year > 2099 ||
+        t.month < 1 ||
+        t.month > 12 ||
+        t.day < 1 ||
+        t.day > 31 ||
+        t.hour < 0 ||
+        t.hour > 23 ||
+        t.minute < 0 ||
+        t.minute > 59 ||
+        t.second < 0 ||
+        t.second > 59
+    ) {
         return null;
     }
     return t;

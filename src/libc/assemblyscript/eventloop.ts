@@ -110,13 +110,13 @@ export abstract class ReplyStatus {
 class Intent {
     inUse: bool = false;
     requestId: i32 = 0;
-    onResolve: OnMessage|null = null;
+    onResolve: OnMessage | null = null;
 }
 
 class Handler {
     inUse: bool = false;
     msgType: i32 = 0;
-    onMessage: OnMessage|null = null;
+    onMessage: OnMessage | null = null;
 }
 
 /* Rejections carry the transport status when there is one; a refusal with no
@@ -130,7 +130,7 @@ export class EventLoop {
     /** Select set watching receiverEndpoint, so poll can block; -1 if unavailable. */
     selectId: i32 = -1;
     nextRequestId: i32 = 1;
-    defaultHandler: OnMessage|null = null;
+    defaultHandler: OnMessage | null = null;
     /* Reused across poll iterations rather than allocated per message. */
     message: IpcMessage = new IpcMessage();
     polling: bool = false;
@@ -148,7 +148,7 @@ export class EventLoop {
      * NOT arrive as IPC uses to service the hardware: a park per interval
      * rather than a spin. Left unset, the pump parks indefinitely.
      */
-    idle: OnIdle|null = null;
+    idle: OnIdle | null = null;
     idleIntervalMs: i32 = 0;
     /* Ring of messages nothing claimed, waiting for receive(). */
     deferred: StaticArray<IpcMessage> = new StaticArray<IpcMessage>(DEFERRED_MAX);
@@ -156,12 +156,9 @@ export class EventLoop {
     deferredCount: i32 = 0;
 
     constructor() {
-        for (let i = 0; i < INTENT_MAX; ++i)
-            unchecked(this.intents[i] = new Intent());
-        for (let i = 0; i < HANDLER_MAX; ++i)
-            unchecked(this.handlers[i] = new Handler());
-        for (let i = 0; i < DEFERRED_MAX; ++i)
-            unchecked(this.deferred[i] = new IpcMessage());
+        for (let i = 0; i < INTENT_MAX; ++i) unchecked((this.intents[i] = new Intent()));
+        for (let i = 0; i < HANDLER_MAX; ++i) unchecked((this.handlers[i] = new Handler()));
+        for (let i = 0; i < DEFERRED_MAX; ++i) unchecked((this.deferred[i] = new IpcMessage()));
     }
 
     /**
@@ -255,14 +252,31 @@ export class EventLoop {
      * Send a request and route its reply to `onResolve`. Returns the allocated
      * request id, or -1 when the intent table is full or the send fails.
      */
-    intentSend(destinationEndpoint: i32, sourceEndpoint: i32, type: i32, arg0: i32, arg1: i32,
-               arg2: i32, arg3: i32, onResolve: OnMessage): i32 {
+    intentSend(
+        destinationEndpoint: i32,
+        sourceEndpoint: i32,
+        type: i32,
+        arg0: i32,
+        arg1: i32,
+        arg2: i32,
+        arg3: i32,
+        onResolve: OnMessage,
+    ): i32 {
         const requestId = this.nextRequestId++;
         const index = this.claimIntent(requestId, onResolve);
-        if (index < 0)
-            return -1;
-        if (ipc_send(destinationEndpoint, sourceEndpoint, type, requestId, arg0, arg1, arg2,
-                     arg3) != 0) {
+        if (index < 0) return -1;
+        if (
+            ipc_send(
+                destinationEndpoint,
+                sourceEndpoint,
+                type,
+                requestId,
+                arg0,
+                arg1,
+                arg2,
+                arg3,
+            ) != 0
+        ) {
             this.releaseIntent(index);
             return -1;
         }
@@ -274,21 +288,36 @@ export class EventLoop {
      * intent already holding that id is refused rather than shadowed, since two
      * intents on one id would make the reply route ambiguous.
      */
-    intentSendWithRequestId(destinationEndpoint: i32, sourceEndpoint: i32, requestId: i32,
-                            type: i32, arg0: i32, arg1: i32, arg2: i32, arg3: i32,
-                            onResolve: OnMessage): i32 {
-        if (requestId <= 0)
-            return -1;
+    intentSendWithRequestId(
+        destinationEndpoint: i32,
+        sourceEndpoint: i32,
+        requestId: i32,
+        type: i32,
+        arg0: i32,
+        arg1: i32,
+        arg2: i32,
+        arg3: i32,
+        onResolve: OnMessage,
+    ): i32 {
+        if (requestId <= 0) return -1;
         for (let i = 0; i < INTENT_MAX; ++i) {
             const intent = unchecked(this.intents[i]);
-            if (intent.inUse && intent.requestId == requestId)
-                return -1;
+            if (intent.inUse && intent.requestId == requestId) return -1;
         }
         const index = this.claimIntent(requestId, onResolve);
-        if (index < 0)
-            return -1;
-        if (ipc_send(destinationEndpoint, sourceEndpoint, type, requestId, arg0, arg1, arg2,
-                     arg3) != 0) {
+        if (index < 0) return -1;
+        if (
+            ipc_send(
+                destinationEndpoint,
+                sourceEndpoint,
+                type,
+                requestId,
+                arg0,
+                arg1,
+                arg2,
+                arg3,
+            ) != 0
+        ) {
             this.releaseIntent(index);
             return -1;
         }
@@ -300,8 +329,7 @@ export class EventLoop {
      * reply, and that late reply is then dispatched as an ordinary message.
      */
     intentCancel(requestId: i32): void {
-        if (requestId <= 0)
-            return;
+        if (requestId <= 0) return;
         for (let i = 0; i < INTENT_MAX; ++i) {
             const intent = unchecked(this.intents[i]);
             if (intent.inUse && intent.requestId == requestId) {
@@ -319,8 +347,7 @@ export class EventLoop {
                 /* Released BEFORE the callback runs, so the callback may start
                  * the next request on this slot. */
                 this.releaseIntent(i);
-                if (callback !== null)
-                    callback.call(msg);
+                if (callback !== null) callback.call(msg);
                 return;
             }
         }
@@ -347,16 +374,16 @@ export class EventLoop {
         /* Nothing claimed it. Held for receive() rather than dropped -- silently
          * discarding an unrecognised message is the exact failure this loop
          * exists to remove. */
-        const slot =
-            unchecked(this.deferred[(this.deferredHead + this.deferredCount) % DEFERRED_MAX]);
+        const slot = unchecked(
+            this.deferred[(this.deferredHead + this.deferredCount) % DEFERRED_MAX],
+        );
         slot.copyFrom(msg);
         this.deferredCount++;
     }
 
     /** Oldest deferred message, or null. */
-    private takeDeferred(): IpcMessage|null {
-        if (this.deferredCount == 0)
-            return null;
+    private takeDeferred(): IpcMessage | null {
+        if (this.deferredCount == 0) return null;
         const msg = unchecked(this.deferred[this.deferredHead]);
         this.deferredHead = (this.deferredHead + 1) % DEFERRED_MAX;
         this.deferredCount--;
@@ -385,10 +412,8 @@ export class EventLoop {
      * spin: it blocks for the poll interval instead of burning the CPU.
      */
     pollTimeout(budget: i32, timeoutMs: i32): i32 {
-        if (this.polling)
-            return 0;
-        if (budget == 0)
-            budget = 1;
+        if (this.polling) return 0;
+        if (budget == 0) budget = 1;
         this.polling = true;
         const msg = this.message;
         let handled = 0;
@@ -396,18 +421,15 @@ export class EventLoop {
             /* Only pull what there is room to hold. A message with nowhere to
              * go stays in the kernel endpoint queue, which is backpressure; the
              * alternative is dropping it. */
-            if (this.deferredCount >= DEFERRED_MAX)
-                break;
+            if (this.deferredCount >= DEFERRED_MAX) break;
             if (ipc_drain(this.receiverEndpoint) <= 0) {
-                if (i != 0 || this.selectId <= 0)
-                    break;
+                if (i != 0 || this.selectId <= 0) break;
                 if (timeoutMs > 0) {
                     ipc_select_wait_timeout(this.selectId, timeoutMs);
                 } else {
                     ipc_select_wait(this.selectId);
                 }
-                if (ipc_drain(this.receiverEndpoint) <= 0)
-                    break;
+                if (ipc_drain(this.receiverEndpoint) <= 0) break;
             }
             msg.readLast();
             handled++;
@@ -444,7 +466,7 @@ export class EventLoop {
      * return. Registered per-type handlers compose with it -- they run, and
      * receive() returns what they did not claim.
      */
-    receive(timeoutMs: i32): IpcMessage|null {
+    receive(timeoutMs: i32): IpcMessage | null {
         let deferred = this.takeDeferred();
         while (deferred === null) {
             if (this.pollTimeout(1, timeoutMs) == 0) {
@@ -508,8 +530,7 @@ export class EventLoop {
      */
     awaitFuture(future: Future, budget: i32): bool {
         while (future.state == FutureState.Pending) {
-            if (this.poll(budget) == 0 && !this.canBlock())
-                return false;
+            if (this.poll(budget) == 0 && !this.canBlock()) return false;
         }
         return true;
     }
@@ -527,21 +548,21 @@ export class IpcFuture extends OnMessage {
     future: Future = new Future();
     promise: Promise = new Promise();
     reply: IpcMessage = new IpcMessage();
-    loop: EventLoop|null = null;
-    replyStatus: ReplyStatus|null = null;
+    loop: EventLoop | null = null;
+    replyStatus: ReplyStatus | null = null;
     requestId: i32 = 0;
     active: bool = false;
 
     /* Its own reply callback: a separate resolver object would be one
      * allocation per send, and under a bump allocator with no collector that
      * leaks for the process's life. */
-    constructor(replyStatus: ReplyStatus|null = null) {
+    constructor(replyStatus: ReplyStatus | null = null) {
         super();
         this.init(replyStatus);
     }
 
     /** Re-arm for another round trip. `replyStatus` null accepts any reply. */
-    init(replyStatus: ReplyStatus|null): void {
+    init(replyStatus: ReplyStatus | null): void {
         this.future.init(this.promise);
         this.loop = null;
         this.replyStatus = replyStatus;
@@ -555,12 +576,27 @@ export class IpcFuture extends OnMessage {
      * still returns the future, rejected, so a caller that chained onto it sees
      * the failure through the same path as a rejecting reply.
      */
-    send(loop: EventLoop, destinationEndpoint: i32, sourceEndpoint: i32, type: i32, arg0: i32,
-         arg1: i32, arg2: i32, arg3: i32): Future|null {
-        if (this.active || this.future.state != FutureState.Pending)
-            return null;
-        const requestId = loop.intentSend(destinationEndpoint, sourceEndpoint, type, arg0, arg1,
-                                          arg2, arg3, this);
+    send(
+        loop: EventLoop,
+        destinationEndpoint: i32,
+        sourceEndpoint: i32,
+        type: i32,
+        arg0: i32,
+        arg1: i32,
+        arg2: i32,
+        arg3: i32,
+    ): Future | null {
+        if (this.active || this.future.state != FutureState.Pending) return null;
+        const requestId = loop.intentSend(
+            destinationEndpoint,
+            sourceEndpoint,
+            type,
+            arg0,
+            arg1,
+            arg2,
+            arg3,
+            this,
+        );
         if (requestId < 0) {
             this.promise.reject(bridgeStatus(-1));
             return this.future;
@@ -576,11 +612,9 @@ export class IpcFuture extends OnMessage {
      * peer's reply, if it still comes, is dispatched as an ordinary message.
      */
     cancel(status: i32): void {
-        if (!this.active)
-            return;
+        if (!this.active) return;
         const loop = this.loop;
-        if (loop !== null)
-            loop.intentCancel(this.requestId);
+        if (loop !== null) loop.intentCancel(this.requestId);
         this.active = false;
         this.requestId = 0;
         this.promise.reject(bridgeStatus(status));
@@ -596,7 +630,7 @@ export class IpcFuture extends OnMessage {
         if (status == 0) {
             /* Resolved with a non-zero marker, not the reply itself: a usize
              * value would be a raw pointer. Continuations read `reply`. */
-            this.promise.resolve(< usize > 1);
+            this.promise.resolve(<usize>1);
         } else {
             this.promise.reject(bridgeStatus(status));
         }

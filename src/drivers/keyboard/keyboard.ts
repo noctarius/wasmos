@@ -35,12 +35,12 @@ const KBD_IPC_SUBSCRIBE_REQ: i32 = 0x800;
 const KBD_IPC_SUBSCRIBE_RESP: i32 = 0x880;
 const KBD_IPC_KEY_NOTIFY: i32 = 0x801;
 const SVC_IPC_REGISTER_REQ: i32 = 0x220;
-const SVC_IPC_REGISTER_RESP: i32 = 0x2A0;
-const PROC_IPC_NOTIFY_READY: i32 = 0x20C;
+const SVC_IPC_REGISTER_RESP: i32 = 0x2a0;
+const PROC_IPC_NOTIFY_READY: i32 = 0x20c;
 
-const KBD_IPC_IRQ_EVENT: i32 = 0xFF00;
+const KBD_IPC_IRQ_EVENT: i32 = 0xff00;
 const KBD_IRQ: i32 = 1;
-const KBD_NAME_PACKED: i32 = 0x0064626B; /* "kbd\0" */
+const KBD_NAME_PACKED: i32 = 0x0064626b; /* "kbd\0" */
 
 const MAX_SUBSCRIBERS: i32 = 4;
 /* Idle wait when the device is polled rather than IRQ-driven. Long enough not
@@ -61,10 +61,6 @@ const g_subscribers: StaticArray<i32> = new StaticArray<i32>(MAX_SUBSCRIBERS);
  * a coroutine resumes by re-running this call, so the future must still be
  * settled at that moment, and pending again before the next wait.
  */
-/* The repo formats .ts with the C++ style -- clang-format classifies .ts as C++
- * whatever the config says -- and it mangles a decorated function's return type
- * onto its own line. These two are written by hand. */
-// clang-format off
 @suspend
 function awaitMessage(loop: EventLoop, out: Box): i32 {
     const status = loop.nextMessage().await(out);
@@ -79,75 +75,71 @@ function awaitMessage(loop: EventLoop, out: Box): i32 {
 function awaitReply(request: IpcFuture, out: Box): i32 {
     return request.future.await(out);
 }
-// clang-format on
 
 // -------------------------------------------------------------------- device
 
-function readScancode():
-    i32 {
-        const status = io_in8(KEYBOARD_STATUS_PORT);
-        if ((status & KEYBOARD_OBF_FLAG) == 0) {
-            return -1;
-        }
-        if ((status & KEYBOARD_AUX_FLAG) != 0) {
-            /* AUX (mouse) byte: leave for mouse driver. */
-            return -1;
-        }
-        return io_in8(KEYBOARD_DATA_PORT) & 0xFF;
+function readScancode(): i32 {
+    const status = io_in8(KEYBOARD_STATUS_PORT);
+    if ((status & KEYBOARD_OBF_FLAG) == 0) {
+        return -1;
     }
+    if ((status & KEYBOARD_AUX_FLAG) != 0) {
+        /* AUX (mouse) byte: leave for mouse driver. */
+        return -1;
+    }
+    return io_in8(KEYBOARD_DATA_PORT) & 0xff;
+}
 
-function addSubscriber(ep: i32):
-    i32 {
-        for (let i = 0; i < MAX_SUBSCRIBERS; ++i) {
-            /* Ignore duplicate registrations. */
-            if (unchecked(g_subscribers[i]) == ep) {
-                return 0;
-            }
+function addSubscriber(ep: i32): i32 {
+    for (let i = 0; i < MAX_SUBSCRIBERS; ++i) {
+        /* Ignore duplicate registrations. */
+        if (unchecked(g_subscribers[i]) == ep) {
+            return 0;
         }
-        for (let i = 0; i < MAX_SUBSCRIBERS; ++i) {
-            if (unchecked(g_subscribers[i]) < 0) {
-                unchecked(g_subscribers[i] = ep);
-                return 0;
-            }
-        }
-        return -1; /* full */
     }
+    for (let i = 0; i < MAX_SUBSCRIBERS; ++i) {
+        if (unchecked(g_subscribers[i]) < 0) {
+            unchecked((g_subscribers[i] = ep));
+            return 0;
+        }
+    }
+    return -1; /* full */
+}
 
 /* One-way notifications: no reply is expected, so they carry no request id and
  * need no intent. */
-function notifySubscribers(scancode: i32, keyup: i32, extended: i32):
-    void {
-        for (let i = 0; i < MAX_SUBSCRIBERS; ++i) {
-            const ep = unchecked(g_subscribers[i]);
-            if (ep >= 0) {
-                ipc_send(ep, g_kbd_ep, KBD_IPC_KEY_NOTIFY, 0, scancode, keyup, extended, 0);
-            }
+function notifySubscribers(scancode: i32, keyup: i32, extended: i32): void {
+    for (let i = 0; i < MAX_SUBSCRIBERS; ++i) {
+        const ep = unchecked(g_subscribers[i]);
+        if (ep >= 0) {
+            ipc_send(ep, g_kbd_ep, KBD_IPC_KEY_NOTIFY, 0, scancode, keyup, extended, 0);
         }
     }
+}
 
 /* A scancode byte, wherever it came from: 0xE0 is a prefix that qualifies the
  * next byte rather than a key of its own. */
-function publishScancode(code: i32):
-    void {
-        if (code < 0) {
-            return;
-        }
-        if (code == 0xE0) {
-            g_extended_pending = 1;
-            return;
-        }
-        /* PS/2 Set 1: key-up codes have bit 7 set. */
-        const keyup: i32 = (code & 0x80) != 0 ? 1 : 0;
-        const extended = g_extended_pending;
-        g_extended_pending = 0;
-        notifySubscribers(code & 0x7F, keyup, extended);
+function publishScancode(code: i32): void {
+    if (code < 0) {
+        return;
     }
+    if (code == 0xe0) {
+        g_extended_pending = 1;
+        return;
+    }
+    /* PS/2 Set 1: key-up codes have bit 7 set. */
+    const keyup: i32 = (code & 0x80) != 0 ? 1 : 0;
+    const extended = g_extended_pending;
+    g_extended_pending = 0;
+    notifySubscribers(code & 0x7f, keyup, extended);
+}
 
 /** The registry's reply is only useful if it reports success. */
 class RegisterReply extends ReplyStatus {
     call(reply: IpcMessage): i32 {
-        return reply.type == SVC_IPC_REGISTER_RESP && reply.arg0 == 0 ? 0
-                                                                      : WASMOS_ERR_DRIVER_REGISTER;
+        return reply.type == SVC_IPC_REGISTER_RESP && reply.arg0 == 0
+            ? 0
+            : WASMOS_ERR_DRIVER_REGISTER;
     }
 }
 
@@ -176,7 +168,7 @@ export function initialize(_proc_endpoint: i32, _arg1: i32, _arg2: i32, _arg3: i
     let procEndpoint: i32 = startup.procEndpoint();
     let slot: i32 = 0;
     for (slot = 0; slot < MAX_SUBSCRIBERS; ++slot) {
-        unchecked(g_subscribers[slot] = -1);
+        unchecked((g_subscribers[slot] = -1));
     }
 
     g_kbd_ep = ipc_create_endpoint();
@@ -187,8 +179,18 @@ export function initialize(_proc_endpoint: i32, _arg1: i32, _arg2: i32, _arg3: i
     g_loop.init(g_kbd_ep, 1);
 
     let registration: IpcFuture = new IpcFuture(new RegisterReply());
-    if (registration.send(g_loop, procEndpoint, g_kbd_ep, SVC_IPC_REGISTER_REQ, KBD_NAME_PACKED, 0,
-                          0, 0) === null) {
+    if (
+        registration.send(
+            g_loop,
+            procEndpoint,
+            g_kbd_ep,
+            SVC_IPC_REGISTER_REQ,
+            KBD_NAME_PACKED,
+            0,
+            0,
+            0,
+        ) === null
+    ) {
         return WASMOS_ERR_DRIVER_REGISTER;
     }
     /* Client traffic racing the handshake is dispatched while this waits, rather

@@ -12,12 +12,26 @@
  * which pushes directly to every registered ipc_select_t — O(watchers), not O(N).
  */
 
+#ifdef WASMOS_POLL_TEST_SEAMS
+/* How many hubs are outstanding. The hub is reachable only from the endpoint
+ * that owns it, and that endpoint drops the pointer as it goes, so its release
+ * cannot be observed from outside without this. */
+static uint32_t g_poll_live_structs;
+
+uint32_t poll_test_live_structs(void) {
+    return g_poll_live_structs;
+}
+#endif
+
 poll_struct_t* poll_struct_alloc(void) {
     poll_struct_t* ps = (poll_struct_t*)malloc(sizeof(poll_struct_t));
     if (!ps) {
         return 0;
     }
     memset(ps, 0, sizeof(*ps));
+#ifdef WASMOS_POLL_TEST_SEAMS
+    g_poll_live_structs++;
+#endif
     return ps;
 }
 
@@ -77,5 +91,8 @@ void poll_struct_free(poll_struct_t* ps) {
             w = next;
         }
     }
+#ifdef WASMOS_POLL_TEST_SEAMS
+    g_poll_live_structs--;
+#endif
     free(ps);
 }

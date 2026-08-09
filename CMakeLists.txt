@@ -2227,12 +2227,13 @@ add_custom_target(run-kernel-unit-tests
   # without them the endpoint-id wrap and the saturating notification counter
   # need ~2^32 operations to reach.
   COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
-          -DWASMOS_HOST_TEST_SMP=1 -DWASMOS_IPC_TEST_SEAMS=1
+          -DWASMOS_HOST_TEST_SMP=1 -DWASMOS_IPC_TEST_SEAMS=1 -DWASMOS_IDTABLE_TEST_SEAMS=1 -DWASMOS_POLL_TEST_SEAMS=1
           -iquote ${KERNEL_DIR}/include
           -iquote ${CMAKE_SOURCE_DIR}/libs/wasm3/source
           -iquote ${CMAKE_SOURCE_DIR}/abi/generated/c
           ${CMAKE_SOURCE_DIR}/tests/unit/test_ipc.c
           ${KERNEL_DIR}/ipc.c
+          ${KERNEL_DIR}/idtable.c
           ${KERNEL_DIR}/poll.c
           ${KERNEL_DIR}/sched_event.c
           ${KERNEL_DIR}/list.c
@@ -2275,6 +2276,7 @@ add_custom_target(run-kernel-unit-tests
           ${CMAKE_SOURCE_DIR}/tests/unit/test_syscall_ipc.c
           ${KERNEL_DIR}/syscall.c
           ${KERNEL_DIR}/ipc.c
+          ${KERNEL_DIR}/idtable.c
           ${KERNEL_DIR}/poll.c
           ${KERNEL_DIR}/sched_event.c
           ${KERNEL_DIR}/list.c
@@ -2334,7 +2336,7 @@ add_custom_target(run-kernel-unit-tests
           -iquote ${DRIVER_WASM_DIR}/include
           -x c++ ${CMAKE_SOURCE_DIR}/tests/unit/test_hostcall_ipc.cpp
           -x none ${BUILD_DIR}/test_warp_link_ipc.o ${BUILD_DIR}/test_wasm3_link_ipc.o
-          -x c ${KERNEL_DIR}/ipc.c ${KERNEL_DIR}/poll.c ${KERNEL_DIR}/sched_event.c
+          -x c ${KERNEL_DIR}/ipc.c ${KERNEL_DIR}/idtable.c ${KERNEL_DIR}/poll.c ${KERNEL_DIR}/sched_event.c
           ${KERNEL_DIR}/list.c ${KERNEL_DIR}/list_linked.c ${KERNEL_DIR}/list_array_chunk.c
           ${KERNEL_DIR}/kmem.c
           ${CMAKE_SOURCE_DIR}/tests/unit/stubs_slab.c
@@ -2478,7 +2480,7 @@ add_custom_target(run-kernel-unit-tests
           -iquote ${CMAKE_SOURCE_DIR}/libs/wasm3/source
           -iquote ${CMAKE_SOURCE_DIR}/abi/generated/c
           ${CMAKE_SOURCE_DIR}/tests/unit/test_ipc_concurrency.c
-          ${KERNEL_DIR}/ipc.c ${KERNEL_DIR}/poll.c ${KERNEL_DIR}/sched_event.c
+          ${KERNEL_DIR}/ipc.c ${KERNEL_DIR}/idtable.c ${KERNEL_DIR}/poll.c ${KERNEL_DIR}/sched_event.c
           ${KERNEL_DIR}/list.c ${KERNEL_DIR}/list_linked.c ${KERNEL_DIR}/list_array_chunk.c
           ${KERNEL_DIR}/kmem.c
           ${CMAKE_SOURCE_DIR}/tests/unit/stubs_slab.c
@@ -2491,7 +2493,7 @@ add_custom_target(run-kernel-unit-tests
           -iquote ${CMAKE_SOURCE_DIR}/libs/wasm3/source
           -iquote ${CMAKE_SOURCE_DIR}/abi/generated/c
           ${CMAKE_SOURCE_DIR}/tests/unit/test_ipc_concurrency.c
-          ${KERNEL_DIR}/ipc.c ${KERNEL_DIR}/poll.c ${KERNEL_DIR}/sched_event.c
+          ${KERNEL_DIR}/ipc.c ${KERNEL_DIR}/idtable.c ${KERNEL_DIR}/poll.c ${KERNEL_DIR}/sched_event.c
           ${KERNEL_DIR}/list.c ${KERNEL_DIR}/list_linked.c ${KERNEL_DIR}/list_array_chunk.c
           ${KERNEL_DIR}/kmem.c
           ${CMAKE_SOURCE_DIR}/tests/unit/stubs_slab.c
@@ -2509,7 +2511,7 @@ add_custom_target(run-kernel-unit-tests
           -iquote ${CMAKE_SOURCE_DIR}/libs/wasm3/source
           -iquote ${CMAKE_SOURCE_DIR}/abi/generated/c
           ${CMAKE_SOURCE_DIR}/tests/unit/test_ipc_concurrency.c
-          ${KERNEL_DIR}/ipc.c ${KERNEL_DIR}/poll.c ${KERNEL_DIR}/sched_event.c
+          ${KERNEL_DIR}/ipc.c ${KERNEL_DIR}/idtable.c ${KERNEL_DIR}/poll.c ${KERNEL_DIR}/sched_event.c
           ${KERNEL_DIR}/list.c ${KERNEL_DIR}/list_linked.c ${KERNEL_DIR}/list_array_chunk.c
           ${KERNEL_DIR}/kmem.c
           ${CMAKE_SOURCE_DIR}/tests/unit/stubs_slab.c
@@ -2524,7 +2526,7 @@ add_custom_target(run-kernel-unit-tests
           -iquote ${CMAKE_SOURCE_DIR}/libs/wasm3/source
           -iquote ${CMAKE_SOURCE_DIR}/abi/generated/c
           ${CMAKE_SOURCE_DIR}/tests/unit/test_ipc_concurrency.c
-          ${KERNEL_DIR}/ipc.c ${KERNEL_DIR}/poll.c ${KERNEL_DIR}/sched_event.c
+          ${KERNEL_DIR}/ipc.c ${KERNEL_DIR}/idtable.c ${KERNEL_DIR}/poll.c ${KERNEL_DIR}/sched_event.c
           ${KERNEL_DIR}/list.c ${KERNEL_DIR}/list_linked.c ${KERNEL_DIR}/list_array_chunk.c
           ${KERNEL_DIR}/kmem.c
           ${CMAKE_SOURCE_DIR}/tests/unit/stubs_slab.c
@@ -2989,14 +2991,16 @@ set(WASMOS_UNIT_SCHED_TESTS
     ${CMAKE_SOURCE_DIR}/tests/unit/test_ipc_concurrency.c
     ${CMAKE_SOURCE_DIR}/tests/unit/test_poll.c
     ${CMAKE_SOURCE_DIR}/tests/unit/test_futex.c
-    ${CMAKE_SOURCE_DIR}/tests/unit/test_syscall_ipc.c)
+    ${CMAKE_SOURCE_DIR}/tests/unit/test_syscall_ipc.c
+    ${CMAKE_SOURCE_DIR}/tests/unit/test_idtable.c)
 
 wasmos_ide_index(wasmos_ide_unit_sched
   SOURCES ${WASMOS_UNIT_SCHED_TESTS}
   IQUOTE ${KERNEL_DIR}/include ${WASM3_DIR}/source
          ${CMAKE_SOURCE_DIR}/abi/generated/c
   DEFINES WASMOS_HOST_TEST_SMP=1 WASMOS_SCHED_CALLER_CPU_BIAS=1
-          WASMOS_IPC_TEST_SEAMS=1 WASMOS_FUTEX_TEST_SEAMS=1
+          WASMOS_IPC_TEST_SEAMS=1 WASMOS_FUTEX_TEST_SEAMS=1 WASMOS_IDTABLE_TEST_SEAMS=1
+          WASMOS_POLL_TEST_SEAMS=1
           WASMOS_SYSCALL_TEST_SEAMS=1)
 
 wasmos_ide_index(wasmos_ide_unit_libc

@@ -1,3 +1,4 @@
+#include "idtable.h"
 #include "ipc.h"
 #include "list.h"
 #include "process.h"
@@ -17,10 +18,9 @@
  */
 
 typedef struct {
-    uint32_t id;
-    uint32_t in_use;
+    /* First, as idtable requires: id, owner_context_id and in_use live here. */
+    idtable_header_t header;
     ipc_endpoint_type_t type;
-    uint32_t owner_context_id;
     ksync_spinlock_t lock;
     ipc_message_t queue[IPC_QUEUE_DEPTH];
     uint32_t head;
@@ -52,9 +52,8 @@ typedef struct ipc_select {
 static ipc_select_t g_select_table[IPC_SELECT_TABLE_SIZE];
 static ksync_spinlock_t g_select_table_lock;
 
-static list_t g_endpoint_table;
+static idtable_t g_endpoint_table;
 static ksync_spinlock_t g_endpoint_table_lock;
-static uint32_t g_next_endpoint_id;
 
 /*
  * Returns the endpoint with ep->lock held.  The caller must call
@@ -64,22 +63,20 @@ static uint32_t g_next_endpoint_id;
  * and the caller's first use.
  */
 static ipc_endpoint_t* ipc_endpoint_get(uint32_t endpoint_id) {
-    list_iter_t it;
     if (endpoint_id == 0 || endpoint_id == IPC_ENDPOINT_NONE) {
         return 0;
     }
     ksync_spinlock_lock(&g_endpoint_table_lock);
-    ipc_endpoint_t* ep = (ipc_endpoint_t*)list_first(&g_endpoint_table, &it);
-    while (ep) {
-        if (ep->id == endpoint_id && ep->in_use) {
-            ksync_spinlock_lock(&ep->lock);
-            ksync_spinlock_unlock(&g_endpoint_table_lock);
-            return ep; /* returned with ep->lock held */
-        }
-        ep = (ipc_endpoint_t*)list_next(&it);
+    ipc_endpoint_t* ep = (ipc_endpoint_t*)idtable_get(&g_endpoint_table, endpoint_id);
+    if (ep) {
+        /* ep->lock is taken while the table lock is still held, which is the
+         * ordering that stops a release from removing the endpoint between the
+         * lookup and the caller's first use. idtable does not do this for us on
+         * purpose: the order is this file's to decide. */
+        ksync_spinlock_lock(&ep->lock);
     }
     ksync_spinlock_unlock(&g_endpoint_table_lock);
-    return 0;
+    return ep; /* returned with ep->lock held, or NULL */
 }
 
 /*
@@ -88,68 +85,25 @@ static ipc_endpoint_t* ipc_endpoint_get(uint32_t endpoint_id) {
  * ep->lock simultaneously (which would require a second nested endpoint lock).
  */
 static uint32_t ipc_endpoint_owner_context(uint32_t endpoint_id) {
-    list_iter_t it;
     if (endpoint_id == 0 || endpoint_id == IPC_ENDPOINT_NONE) {
         return 0;
     }
     ksync_spinlock_lock(&g_endpoint_table_lock);
-    ipc_endpoint_t* ep = (ipc_endpoint_t*)list_first(&g_endpoint_table, &it);
-    while (ep) {
-        if (ep->id == endpoint_id && ep->in_use) {
-            uint32_t ctx = ep->owner_context_id;
-            ksync_spinlock_unlock(&g_endpoint_table_lock);
-            return ctx;
-        }
-        ep = (ipc_endpoint_t*)list_next(&it);
-    }
+    ipc_endpoint_t* ep = (ipc_endpoint_t*)idtable_get(&g_endpoint_table, endpoint_id);
+    const uint32_t ctx = ep ? ep->header.owner_context_id : 0u;
     ksync_spinlock_unlock(&g_endpoint_table_lock);
-    return 0;
-}
-
-/*
- * Hand out the next endpoint id.  Caller holds g_endpoint_table_lock.
- *
- * The counter wraps back to 1 at IPC_ENDPOINT_NONE, so past the first wrap a
- * fresh id can collide with an endpoint that is still live -- and
- * ipc_endpoint_get returns the FIRST match, so the newer endpoint would
- * silently steal the older one's traffic.  After a wrap has happened, skip ids
- * that are still in use.  The scan is gated on g_endpoint_id_wrapped so the
- * ordinary case stays a post-increment.
- */
-static uint32_t g_endpoint_id_wrapped;
-
-static uint32_t ipc_alloc_endpoint_id(void) {
-    for (;;) {
-        uint32_t id = g_next_endpoint_id++;
-        if (g_next_endpoint_id == IPC_ENDPOINT_NONE) {
-            g_next_endpoint_id = 1;
-            g_endpoint_id_wrapped = 1;
-        }
-        if (!g_endpoint_id_wrapped) {
-            return id;
-        }
-        list_iter_t it;
-        int taken = 0;
-        ipc_endpoint_t* ep = (ipc_endpoint_t*)list_first(&g_endpoint_table, &it);
-        while (ep) {
-            if (ep->in_use && ep->id == id) {
-                taken = 1;
-                break;
-            }
-            ep = (ipc_endpoint_t*)list_next(&it);
-        }
-        if (!taken) {
-            return id;
-        }
-    }
+    return ctx;
 }
 
 void ipc_init(void) {
     ksync_spinlock_init(&g_endpoint_table_lock);
-    g_next_endpoint_id = 1;
-    g_endpoint_id_wrapped = 0;
-    if (list_init(&g_endpoint_table, (uint32_t)sizeof(ipc_endpoint_t), LIST_IMPL_ARRAY_CHUNK,
-                  IPC_ENDPOINT_TABLE_CHUNK) != 0) {
+    /* idtable owns id allocation (including skipping live ids after a wrap),
+     * the per-context quota and release-by-owner; see
+     * docs/architecture/35-kernel-object-tables.md. The table lock stays here,
+     * because the ordering below it -- table lock, then ep->lock -- is this
+     * file's to decide. */
+    if (idtable_init(&g_endpoint_table, (uint32_t)sizeof(ipc_endpoint_t), IPC_ENDPOINT_TABLE_CHUNK,
+                     IPC_ENDPOINT_PER_CONTEXT_MAX) != WASMOS_OK) {
         for (;;) {
         }
     }
@@ -193,7 +147,7 @@ static ipc_endpoint_t* ipc_endpoint_acquire_owned(uint32_t endpoint, ipc_endpoin
     if (!ep) {
         return 0;
     }
-    if (context_id != IPC_CONTEXT_KERNEL && ep->owner_context_id != context_id) {
+    if (context_id != IPC_CONTEXT_KERNEL && ep->header.owner_context_id != context_id) {
         ksync_spinlock_unlock(&ep->lock);
         *out_rc = IPC_ERR_PERM;
         return 0;
@@ -203,43 +157,23 @@ static ipc_endpoint_t* ipc_endpoint_acquire_owned(uint32_t endpoint, ipc_endpoin
 
 /* The two endpoint kinds differ only in ep->type; everything else -- id
  * allocation, the zeroed queue state, the embedded event -- is identical. */
-/* Caller holds g_endpoint_table_lock.  Walked rather than counted in a field
- * because creation is rare and a counter is one more thing to keep true across
- * every release path. */
-static uint32_t ipc_endpoint_count_for_owner(uint32_t owner_context_id) {
-    list_iter_t it;
-    uint32_t used = 0;
-    ipc_endpoint_t* ep = (ipc_endpoint_t*)list_first(&g_endpoint_table, &it);
-    while (ep) {
-        if (ep->in_use && ep->owner_context_id == owner_context_id) {
-            used++;
-        }
-        ep = (ipc_endpoint_t*)list_next(&it);
-    }
-    return used;
-}
-
 static int ipc_endpoint_create_typed(uint32_t owner_context_id, ipc_endpoint_type_t type,
                                      uint32_t* out_endpoint) {
     if (!out_endpoint) {
         return IPC_ERR_INVALID;
     }
     ksync_spinlock_lock(&g_endpoint_table_lock);
-    /* Both endpoint kinds come from this table, so the quota covers both and a
-     * context cannot get a second allowance by asking for notifications. */
-    if (ipc_endpoint_count_for_owner(owner_context_id) >= IPC_ENDPOINT_PER_CONTEXT_MAX) {
-        ksync_spinlock_unlock(&g_endpoint_table_lock);
-        return IPC_ERR_FULL;
-    }
-    ipc_endpoint_t* ep = (ipc_endpoint_t*)list_alloc(&g_endpoint_table);
+    /* Both endpoint kinds come from this table, so the per-context quota covers
+     * both and a context cannot get a second allowance by asking for
+     * notifications. */
+    int status = WASMOS_OK;
+    ipc_endpoint_t* ep =
+        (ipc_endpoint_t*)idtable_alloc(&g_endpoint_table, owner_context_id, &status);
     if (!ep) {
         ksync_spinlock_unlock(&g_endpoint_table_lock);
-        return IPC_ERR_FULL;
+        return status == WASMOS_INVAL ? IPC_ERR_INVALID : IPC_ERR_FULL;
     }
-    ep->id = ipc_alloc_endpoint_id();
-    ep->in_use = 1;
     ep->type = type;
-    ep->owner_context_id = owner_context_id;
     ep->head = 0;
     ep->tail = 0;
     ep->count = 0;
@@ -247,7 +181,7 @@ static int ipc_endpoint_create_typed(uint32_t owner_context_id, ipc_endpoint_typ
     ksync_spinlock_init(&ep->lock);
     sched_event_init(&ep->event, SCHED_EVENT_TYPE_IPC);
     ep->poll_struct = 0;
-    uint32_t id = ep->id;
+    uint32_t id = ep->header.id;
     ksync_spinlock_unlock(&g_endpoint_table_lock);
     *out_endpoint = id;
     return IPC_OK;
@@ -271,7 +205,7 @@ int ipc_endpoint_owner(uint32_t endpoint, uint32_t* out_owner_context_id) {
         ksync_spinlock_unlock(&ep->lock);
         return IPC_ERR_INVALID;
     }
-    *out_owner_context_id = ep->owner_context_id;
+    *out_owner_context_id = ep->header.owner_context_id;
     ksync_spinlock_unlock(&ep->lock);
     return IPC_OK;
 }
@@ -336,7 +270,7 @@ int ipc_send_from(uint32_t sender_context_id, uint32_t endpoint, const ipc_messa
      * sel->event.lock, and poll_notify only ever takes the last of those, so
      * holding ep->lock across it is consistent with every other path. */
     if (ep->poll_struct) {
-        poll_notify(ep->poll_struct, POLL_EV_IN, ep->id);
+        poll_notify(ep->poll_struct, POLL_EV_IN, ep->header.id);
     }
     ksync_spinlock_unlock(&ep->lock);
     return IPC_OK;
@@ -481,32 +415,32 @@ int ipc_wait(uint32_t endpoint) {
     return ipc_wait_for(IPC_CONTEXT_KERNEL, endpoint);
 }
 
+/*
+ * What an endpoint owns, undone. Runs from idtable_release_owner with the table
+ * lock held and the element still intact: waiters must be woken (they are
+ * blocked on an endpoint that is about to stop existing) and the lazily
+ * allocated poll hub returned.
+ */
+static void ipc_endpoint_teardown(void* elem, void* user) {
+    ipc_endpoint_t* ep = (ipc_endpoint_t*)elem;
+    (void)user;
+    ksync_spinlock_lock(&ep->lock);
+    ksync_spinlock_lock(&ep->event.lock);
+    sched_event_abort_all(&ep->event);
+    ksync_spinlock_unlock(&ep->event.lock);
+    if (ep->poll_struct) {
+        poll_struct_free(ep->poll_struct);
+        ep->poll_struct = 0;
+    }
+    ksync_spinlock_unlock(&ep->lock);
+}
+
 void ipc_endpoints_release_owner(uint32_t owner_context_id) {
     if (owner_context_id == 0) {
         return;
     }
     ksync_spinlock_lock(&g_endpoint_table_lock);
-    list_iter_t it;
-    ipc_endpoint_t* ep = (ipc_endpoint_t*)list_first(&g_endpoint_table, &it);
-    while (ep) {
-        ipc_endpoint_t* next = (ipc_endpoint_t*)list_next(&it);
-        if (ep->in_use && ep->owner_context_id == owner_context_id) {
-            ksync_spinlock_lock(&ep->lock);
-            if (ep->in_use && ep->owner_context_id == owner_context_id) {
-                ep->in_use = 0;
-                ksync_spinlock_lock(&ep->event.lock);
-                sched_event_abort_all(&ep->event);
-                ksync_spinlock_unlock(&ep->event.lock);
-                if (ep->poll_struct) {
-                    poll_struct_free(ep->poll_struct);
-                    ep->poll_struct = 0;
-                }
-            }
-            ksync_spinlock_unlock(&ep->lock);
-            list_remove(&g_endpoint_table, ep);
-        }
-        ep = next;
-    }
+    (void)idtable_release_owner(&g_endpoint_table, owner_context_id, ipc_endpoint_teardown, 0);
     ksync_spinlock_unlock(&g_endpoint_table_lock);
 }
 
@@ -780,8 +714,7 @@ void ipc_select_destroy(uint32_t select_id, uint32_t owner_context_id) {
 #ifdef WASMOS_IPC_TEST_SEAMS
 void ipc_test_set_next_endpoint_id(uint32_t next_id, int wrapped) {
     ksync_spinlock_lock(&g_endpoint_table_lock);
-    g_next_endpoint_id = next_id;
-    g_endpoint_id_wrapped = wrapped ? 1u : 0u;
+    idtable_test_set_next_id(&g_endpoint_table, next_id, wrapped);
     ksync_spinlock_unlock(&g_endpoint_table_lock);
 }
 

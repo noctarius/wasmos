@@ -836,6 +836,30 @@ static void test_select_watch_capacity_is_enforced(void) {
  * The cap is per context, so it is the OTHER context still working that is the
  * property worth pinning; the refusal on its own would be satisfied by a
  * global limit, which is what this replaces. */
+/* An endpoint's poll hub is allocated lazily, when a select set first watches
+ * it, and released when the endpoint goes. Nothing observed that release, so
+ * deleting it from teardown left every suite green while every torn-down
+ * context leaked its hub -- a per-process leak across the machine's life.
+ *
+ * The count is a poll.c test seam because the hub is not reachable from here:
+ * ipc.c holds the only pointer and drops it. */
+static void test_teardown_releases_the_poll_hub(void) {
+    uint32_t ctx = fresh_ctx();
+    const uint32_t before = poll_test_live_structs();
+
+    uint32_t ep = 0;
+    CHECK(ipc_endpoint_create(ctx, &ep) == IPC_OK, "an endpoint is created");
+    uint32_t sel = 0;
+    CHECK(ipc_select_create(ctx, &sel) == IPC_OK, "and a select set");
+    CHECK(ipc_select_add(sel, ep, ctx) == IPC_OK, "watching it, which allocates the hub");
+    CHECK(poll_test_live_structs() == (uint32_t)(before + 1u),
+          "the hub is allocated lazily, on the add");
+
+    ipc_select_destroy(sel, ctx);
+    ipc_endpoints_release_owner(ctx);
+    CHECK(poll_test_live_structs() == before, "and released when the endpoint goes");
+}
+
 static void test_select_sets_are_capped_per_context(void) {
     uint32_t greedy = fresh_ctx();
     uint32_t ids[IPC_SELECT_PER_CONTEXT_MAX + 4u];
@@ -2552,6 +2576,7 @@ int main(void) {
         const char* name;
         void (*fn)(void);
     } tests[] = {
+        {"Q9 teardown releases the poll hub", test_teardown_releases_the_poll_hub},
         {"Q10 select sets are capped per context", test_select_sets_are_capped_per_context},
         {"Q11 endpoints are capped per context", test_endpoints_are_capped_per_context},
         {"E1 create assigns distinct ids", test_create_assigns_distinct_ids},

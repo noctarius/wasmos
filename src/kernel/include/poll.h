@@ -42,4 +42,10 @@ void poll_notify(poll_struct_t* ps, poll_ev_t ev, uint32_t ep_id);
 /* Free ps and all embedded watcher nodes. */
 void poll_struct_free(poll_struct_t* ps);
 
+#ifdef WASMOS_POLL_TEST_SEAMS
+/* Outstanding poll hubs, so a test can observe a release that is otherwise
+ * invisible: the owning endpoint holds the only pointer and drops it. */
+uint32_t poll_test_live_structs(void);
+#endif
+
 #endif /* WASMOS_POLL_H */

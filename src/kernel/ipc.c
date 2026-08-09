@@ -534,6 +534,25 @@ int ipc_select_add(uint32_t select_id, uint32_t endpoint_id, uint32_t owner_cont
         ksync_spinlock_unlock(&g_select_table_lock);
         return IPC_ERR_INVALID;
     }
+    /*
+     * Adding an endpoint the set already watches is a no-op, not a second
+     * registration.  Callers routinely build a set from several handles that
+     * can legitimately coincide -- a service whose reply and event endpoints
+     * are the same -- so refusing would fail them at startup for a harmless
+     * call.  Registering twice was worse: it burned one of only
+     * IPC_SELECT_EPS_MAX watch slots and left two poll watchers, so a single
+     * send ran ipc_select_signal twice.  That stayed invisible only because
+     * ready_ep is a latch that swallows the second signal.
+     *
+     * Checked before the capacity test on purpose: re-adding an endpoint to a
+     * full set is still correct, because it is already being watched.
+     */
+    for (uint32_t i = 0; i < sel->ep_count; ++i) {
+        if (sel->ep_ids[i] == endpoint_id) {
+            ksync_spinlock_unlock(&g_select_table_lock);
+            return IPC_OK;
+        }
+    }
     if (sel->ep_count >= IPC_SELECT_EPS_MAX) {
         ksync_spinlock_unlock(&g_select_table_lock);
         return IPC_ERR_FULL;
@@ -549,9 +568,6 @@ int ipc_select_add(uint32_t select_id, uint32_t endpoint_id, uint32_t owner_cont
      * created, so this has not bitten, but it is the same silent-never-ready
      * failure as above and should become IPC_ERR_INVALID once every caller is
      * known to add only live endpoints.
-     *
-     * FIXME: adding the same endpoint twice registers two watchers, so one
-     * send signals the set twice and two of the eight slots are consumed.
      */
     ipc_endpoint_t* ep = ipc_endpoint_get(endpoint_id);
     if (ep) {

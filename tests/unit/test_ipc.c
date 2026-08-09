@@ -1474,18 +1474,22 @@ static void test_select_add_reports_a_failed_watcher_registration(void) {
     ipc_endpoints_release_owner(ctx);
 }
 
-/* Current behaviour, pinned so a change is deliberate: a duplicate add
- * registers a second watcher and consumes a second of the eight slots. */
-static void test_adding_the_same_endpoint_twice_double_registers(void) {
+/* A duplicate add is a no-op: the endpoint is already watched, so the set must
+ * not gain a second watcher or spend a second of its eight slots. Refusing
+ * would be wrong too -- callers build a set from several handles that can
+ * legitimately coincide, and failing a harmless call would break them at
+ * startup. */
+static void test_adding_the_same_endpoint_twice_is_a_no_op(void) {
     uint32_t ctx = fresh_ctx();
     uint32_t sel = 0, ep = 0;
     (void)ipc_endpoint_create(ctx, &ep);
     (void)ipc_select_create(ctx, &sel);
     CHECK(ipc_select_add(sel, ep, ctx) == IPC_OK, "first add");
-    CHECK(ipc_select_add(sel, ep, ctx) == IPC_OK, "duplicate add is accepted");
+    CHECK(ipc_select_add(sel, ep, ctx) == IPC_OK, "a duplicate add reports success");
+    CHECK(ipc_select_add(sel, ep, ctx) == IPC_OK, "and stays idempotent however often it repeats");
     reset_threads();
 
-    /* The cost is a watch slot: six more fit, not seven. */
+    /* Seven more fit: the duplicates cost nothing. */
     uint32_t filler = 0;
     int fit = 0;
     for (uint32_t i = 0; i < IPC_SELECT_EPS_MAX; ++i) {
@@ -1495,16 +1499,18 @@ static void test_adding_the_same_endpoint_twice_double_registers(void) {
         }
         fit++;
     }
-    CHECK(fit == (int)IPC_SELECT_EPS_MAX - 2, "a duplicate consumes a watch slot");
+    CHECK(fit == (int)IPC_SELECT_EPS_MAX - 1, "a duplicate consumes no watch slot");
 
-    /* The double registration is real -- one send runs ipc_select_signal twice
-     * (test_poll.c P10 observes both watcher entries firing) -- but it must not
-     * be observable through the select API: ready_ep is a latch, so the second
-     * signal overwrites the first with the same endpoint id and the caller
-     * still sees exactly ONE readiness report for one message. If a duplicate
-     * ever produced two reports, a service would poll an endpoint it had
-     * already drained and take the empty read for a protocol error. */
-    CHECK(ksend(ep, 1u) == IPC_OK, "one message arrives on the doubly-watched endpoint");
+    /* Re-adding an endpoint the set already watches must work even when the
+     * set is full -- there is nothing to allocate. */
+    CHECK(ipc_select_add(sel, ep, ctx) == IPC_OK, "a duplicate is still accepted on a full set");
+
+    /* And the endpoint is watched exactly once, so one message yields one
+     * readiness report. A second watcher would fire ipc_select_signal twice;
+     * that is masked today by ready_ep being a latch, so the slot accounting
+     * above is what actually proves the dedupe -- this pins the behaviour the
+     * caller sees. */
+    CHECK(ksend(ep, 1u) == IPC_OK, "one message arrives on the endpoint");
     uint32_t ready = 0;
     CHECK(ipc_select_wait(sel, ctx, &ready, 0) == IPC_OK && ready == ep,
           "the set reports it ready");
@@ -1542,6 +1548,19 @@ static void test_listen_tolerates_a_repeated_endpoint(void) {
 
     CHECK(ipc_select_listen(ctx, (uint32_t[]){a, b, a}, 3, &sel) == IPC_OK,
           "listen accepts a repeated endpoint");
+
+    /* The repeat is deduplicated, so the set spent two slots and not three:
+     * IPC_SELECT_EPS_MAX - 2 more still fit. */
+    uint32_t filler = 0;
+    int fit = 0;
+    for (uint32_t i = 0; i < IPC_SELECT_EPS_MAX; ++i) {
+        (void)ipc_endpoint_create(ctx, &filler);
+        if (ipc_select_add(sel, filler, ctx) != IPC_OK) {
+            break;
+        }
+        fit++;
+    }
+    CHECK(fit == (int)IPC_SELECT_EPS_MAX - 2, "the repeated endpoint cost one slot, not two");
 
     CHECK(ksend(a, 5u) == IPC_OK, "a message arrives on the repeated endpoint");
     uint32_t ready = 0;
@@ -1892,8 +1911,7 @@ int main(void) {
          test_release_invalidates_a_signalled_notification},
         {"S14 add reports a failed watcher registration",
          test_select_add_reports_a_failed_watcher_registration},
-        {"S15 a duplicate add double-registers",
-         test_adding_the_same_endpoint_twice_double_registers},
+        {"S15 a duplicate add is a no-op", test_adding_the_same_endpoint_twice_is_a_no_op},
         {"S24 listen tolerates a repeated endpoint", test_listen_tolerates_a_repeated_endpoint},
         {"M5 re-blocking on the same endpoint keeps the list intact",
          test_re_blocking_on_the_same_endpoint_keeps_the_wait_list_intact},

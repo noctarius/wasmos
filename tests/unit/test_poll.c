@@ -245,9 +245,11 @@ static void test_remove_handles_head_middle_and_tail(void) {
 static void test_remove_clears_every_entry_for_a_set(void) {
     reset();
     poll_struct_t* ps = poll_struct_alloc();
-    /* The same set added repeatedly — what ipc_select_add's missing dedupe
-     * produces today. Removal must clear all of them, or destroy would leave a
-     * dangling watcher pointing at a recycled table slot. */
+    /* The same set added repeatedly. ipc_select_add deduplicates, so this is
+     * no longer reachable through it, but poll_struct_add is a general
+     * primitive and its removal contract has to hold regardless: one remove
+     * must clear every entry, or destroy would leave a dangling watcher
+     * pointing at a recycled table slot. */
     for (int i = 0; i < 4; ++i) {
         CHECK(poll_struct_add(ps, POLL_EV_IN, SET_A, (uint32_t)i) == 0, "repeated add");
     }

@@ -140,11 +140,9 @@ operations.
 
 ```c
 typedef struct {
-    uint32_t            id;
-    uint32_t            in_use;
+    idtable_header_t    header;       /* id, owner_context_id, in_use */
     ipc_endpoint_type_t type;
-    uint32_t            owner_context_id;
-    spinlock_t          lock;
+    ksync_spinlock_t    lock;
     ipc_message_t       queue[IPC_QUEUE_DEPTH];
     uint32_t            head, tail, count;
     uint32_t            notify_count;
@@ -153,7 +151,9 @@ typedef struct {
 } ipc_endpoint_t;
 ```
 
-`waiter_tid` is removed.  The `event` field holds an embedded `sched_event_t`
+`waiter_tid` is removed.  `id`, `in_use` and the owner live in
+`idtable_header_t`, which must be the first member.  The `event` field holds an
+embedded `sched_event_t`
 whose `wait_list` can hold multiple blocked receiver threads.  `poll_struct`
 is allocated lazily when the first select set targets this endpoint.
 
@@ -161,15 +161,17 @@ The endpoint and select tables are both id-addressed, owner-scoped object
 tables: they grow out of kmem, skip live ids when the id counter wraps, are
 bounded per owning context (`IPC_ENDPOINT_PER_CONTEXT_MAX`,
 `IPC_SELECT_PER_CONTEXT_MAX`) so one context cannot starve every other, and are
-released wholesale when a context dies.  Both are currently hand-written; the
-shared component and the obligations it encodes are in
+released wholesale when a context dies.  Both are built on the shared
+`idtable_t`; the obligations it encodes are in
 [Kernel Object Tables](35-kernel-object-tables.md).
 
 #### IPC Receive Variants
 
 **`ipc_recv_for(ctx, ep, out)`** — non-blocking.  Returns `IPC_OK` if a message
-is available, otherwise registers the calling thread in `ep->event.wait_list`
-and returns `IPC_EMPTY`.  The YIELDED handler cleans up stale registrations.
+is available, otherwise `IPC_EMPTY`.  It deliberately does NOT register a waiter:
+on SMP a sender would otherwise "wake" a thread that never blocked, turning a
+still-running thread back into READY on another CPU.  Pinned by test W1
+(`tests/unit/test_ipc.c`).
 
 **`ipc_recv_blocking_for(ctx, ep, out)`** — true blocking.  On `IPC_EMPTY`
 calls `sched_event_wait(&ep->event, 0)` to park the thread.  Returns when a
@@ -178,8 +180,16 @@ sender wakes the thread.  Used by all WASM blocking receive host functions.
 #### Send and Wake
 
 `ipc_send_from` enqueues the message, calls `sched_event_wake_one(&ep->event, ...)`,
-then calls `poll_notify(ep->poll_struct, POLL_EV_IN, ep->id)` to push a
+then calls `poll_notify(ep->poll_struct, POLL_EV_IN, ep->header.id)` to push a
 readiness notification to any registered select sets.
+
+`ipc_notify_from` pushes the same readiness notification.  A select set may
+watch a notification endpoint — `ipc_select_add` accepts any endpoint that
+resolves — so without it the set parked forever while notifications piled up
+behind it.  It raises no direct wake, because nothing can block on a
+notification endpoint: both blocking waits require a MESSAGE endpoint, and
+`ipc_wait_for` polls.  Both are held under `ep->lock`, so the notify cannot race
+`ipc_endpoints_release_owner` freeing the hub.
 
 #### IPC Result Codes
 
@@ -324,16 +334,21 @@ Select sets allow a thread to block on any of up to `IPC_SELECT_EPS_MAX = 8`
 endpoints simultaneously.
 
 ```c
-typedef struct {
-    uint32_t      id;
-    uint32_t      in_use;
-    spinlock_t    lock;
-    sched_event_t event;         /* blocked waiter */
-    uint32_t      ready_ep;      /* endpoint that signalled first */
-    uint32_t      ep_ids[IPC_SELECT_EPS_MAX];
-    uint32_t      ep_count;
+typedef struct ipc_select {
+    idtable_header_t header;     /* id, owner_context_id, in_use */
+    sched_event_t    event;      /* supports N waiters */
+    uint32_t         ready_ep;   /* endpoint that signalled first */
+    uint32_t         ep_ids[IPC_SELECT_EPS_MAX];
+    uint32_t         ep_count;
 } ipc_select_t;
 ```
+
+There is no per-set `spinlock_t`.  `ready_ep` is protected by `event.lock`, so
+that a signal cannot slip between `ipc_select_wait`'s "check `ready_ep`" and its
+"add to `wait_list`" — a second lock made that window reachable.  `id`,
+`in_use` and the owner moved into `idtable_header_t` when the table became an
+[object table](35-kernel-object-tables.md); the set's id is no longer its array
+index.
 
 **Kernel API:**
 

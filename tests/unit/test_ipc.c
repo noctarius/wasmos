@@ -766,10 +766,10 @@ static void test_select_create_add_and_destroy(void) {
     CHECK(sel != 0, "select ids are never 0");
     CHECK(ipc_select_add(sel, ep, ctx) == IPC_OK, "add succeeds");
 
-    /* Adding an endpoint that does not exist is accepted into the set — it just
-     * never becomes ready. Pinning this so a future change is a deliberate one. */
-    CHECK(ipc_select_add(sel, 0x7FFFFFFFu, ctx) == IPC_OK,
-          "an unknown endpoint is recorded but silently never signals");
+    /* An endpoint that does not resolve is refused. Recording it would hand
+     * back a set the caller believes is watching something it is not. */
+    CHECK(ipc_select_add(sel, 0x7FFFFFFFu, ctx) == IPC_ERR_NOENT,
+          "an endpoint that does not resolve is refused, not silently recorded");
 
     ipc_select_destroy(sel, ctx);
     CHECK(ipc_select_add(sel, ep, ctx) == IPC_ERR_NOENT, "a destroyed set rejects add");
@@ -2137,6 +2137,9 @@ static int c_sel_add_foreign_owner(void) {
 static int c_sel_add_duplicate(void) {
     return ipc_select_add(g_env.sel, g_env.msg_ep, g_env.ctx); /* already watched */
 }
+static int c_sel_add_unresolvable(void) {
+    return ipc_select_add(g_env.sel, BAD_EP, g_env.ctx);
+}
 static int c_sel_add_capacity(void) {
     uint32_t ctx = fresh_ctx();
     uint32_t s = 0;
@@ -2355,6 +2358,7 @@ static void test_error_code_contract(void) {
         {"select_add(out of range id)", IPC_ERR_NOENT, c_sel_add_out_of_range},
         {"select_add(foreign owner)", IPC_ERR_PERM, c_sel_add_foreign_owner},
         {"select_add(already watched)", IPC_OK, c_sel_add_duplicate},
+        {"select_add(endpoint does not resolve)", IPC_ERR_NOENT, c_sel_add_unresolvable},
         {"select_add(watch slots full)", IPC_ERR_FULL, c_sel_add_capacity},
         {"select_add(watcher allocation fails)", IPC_ERR_FULL, c_sel_add_watcher_alloc_fail},
         {"select_add(valid)", IPC_OK, c_sel_add_ok},

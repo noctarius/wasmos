@@ -312,28 +312,14 @@ static int32_t wp_select_destroy(int32_t sel) {
     return (int32_t)warp_ipc_select_destroy((uint32_t)sel, nullptr);
 }
 
-static const Shims k_wasm3 = {"wasm3",
-                              w3_create_endpoint,
-                              w3_endpoint_owner,
-                              w3_send,
-                              w3_drain,
-                              w3_notify,
-                              w3_last_field,
-                              w3_select_create,
-                              w3_select_add,
-                              w3_select_wait_timeout,
-                              w3_select_destroy};
-static const Shims k_warp = {"WARP",
-                             wp_create_endpoint,
-                             wp_endpoint_owner,
-                             wp_send,
-                             wp_drain,
-                             wp_notify,
-                             wp_last_field,
-                             wp_select_create,
-                             wp_select_add,
-                             wp_select_wait_timeout,
-                             wp_select_destroy};
+static const Shims k_wasm3 = {
+    "wasm3",          w3_create_endpoint, w3_endpoint_owner, w3_send,       w3_drain,
+    w3_notify,        w3_last_field,      w3_select_create,  w3_select_add, w3_select_wait_timeout,
+    w3_select_destroy};
+static const Shims k_warp = {
+    "WARP",           wp_create_endpoint, wp_endpoint_owner, wp_send,       wp_drain,
+    wp_notify,        wp_last_field,      wp_select_create,  wp_select_add, wp_select_wait_timeout,
+    wp_select_destroy};
 
 /* ------------------------------------------------------- scenario table */
 
@@ -502,7 +488,8 @@ static const Scenario k_scenarios[] = {
      "send propagates the transport code in BOTH runtimes -- the split codes already "
      "reach guests here"},
     {"send(source owned by another context)", -2, -2, false, s_send_foreign_src, nullptr},
-    {"send(destination is a notification endpoint)", -7, -7, false, s_send_to_notification, nullptr},
+    {"send(destination is a notification endpoint)", -7, -7, false, s_send_to_notification,
+     nullptr},
 
     {"drain(empty) is 0, not an error", 0, 0, false, s_drain_empty, nullptr},
     {"drain(has message)", 1, 1, false, s_drain_has_message, nullptr},
@@ -527,11 +514,12 @@ static const Scenario k_scenarios[] = {
     {"select_add(valid)", 0, 0, false, s_select_add_ok, nullptr},
     {"select_add(unknown set)", -1, -1, false, s_select_add_bad_set, nullptr},
     {"select_add(negative set)", -1, -1, false, s_select_add_negative_set, nullptr},
-    {"select_add(negative endpoint)", -1, 0, true, s_select_add_negative_ep,
-     "WARP ACCEPTS it: the cast makes it IPC_ENDPOINT_NONE, which ipc_select_add "
-     "records without resolving, so the set silently never signals on that slot. "
-     "wasm3 rejects the negative handle. This is the one divergence that is a bug "
-     "rather than a reporting difference"},
+    {"select_add(negative endpoint)", -1, -1, false, s_select_add_negative_ep,
+     "was the one divergence that was a bug rather than a reporting difference: "
+     "WARP's cast made it IPC_ENDPOINT_NONE and ipc_select_add recorded it without "
+     "resolving, so the set silently never signalled on that slot while the guest "
+     "was told it was watched. ipc_select_add now refuses an endpoint it cannot "
+     "resolve, which converges both runtimes on a rejection"},
 
     {"select_wait_timeout(expires)", -1, -1, false, s_select_wait_timeout_expires, nullptr},
     {"select_wait_timeout(ready) names the endpoint", 1, 1, false, s_select_wait_timeout_ready,

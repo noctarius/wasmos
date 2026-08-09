@@ -577,24 +577,29 @@ int ipc_select_add(uint32_t select_id, uint32_t endpoint_id, uint32_t owner_cont
      * reporting IPC_OK would hand the caller a set that blocks forever on an
      * endpoint it believes it is watching.
      *
-     * FIXME: an endpoint_id that does not resolve is still accepted into
-     * ep_ids -- it simply never signals.  Callers add endpoints they have just
-     * created, so this has not bitten, but it is the same silent-never-ready
-     * failure as above and should become IPC_ERR_INVALID once every caller is
-     * known to add only live endpoints.
+     * An endpoint_id that does not resolve is refused rather than recorded.
+     * Recording it produced the same silent-never-ready set as a failed watcher
+     * registration: the caller is told the endpoint is watched, and it never
+     * signals. Every in-tree caller adds endpoints it has just created, so this
+     * only tightens what was already true for them -- but it is reachable from a
+     * guest, because WARP's hostcall shim casts a negative handle to
+     * IPC_ENDPOINT_NONE and passed it straight through (tests/unit/
+     * test_hostcall_ipc.cpp caught exactly that).
      */
     ipc_endpoint_t* ep = ipc_endpoint_get(endpoint_id);
-    if (ep) {
-        if (!ep->poll_struct) {
-            ep->poll_struct = poll_struct_alloc();
-        }
-        if (!ep->poll_struct || poll_struct_add(ep->poll_struct, POLL_EV_IN, sel, 0) != 0) {
-            ksync_spinlock_unlock(&ep->lock);
-            ksync_spinlock_unlock(&g_select_table_lock);
-            return IPC_ERR_FULL;
-        }
-        ksync_spinlock_unlock(&ep->lock);
+    if (!ep) {
+        ksync_spinlock_unlock(&g_select_table_lock);
+        return IPC_ERR_NOENT;
     }
+    if (!ep->poll_struct) {
+        ep->poll_struct = poll_struct_alloc();
+    }
+    if (!ep->poll_struct || poll_struct_add(ep->poll_struct, POLL_EV_IN, sel, 0) != 0) {
+        ksync_spinlock_unlock(&ep->lock);
+        ksync_spinlock_unlock(&g_select_table_lock);
+        return IPC_ERR_FULL;
+    }
+    ksync_spinlock_unlock(&ep->lock);
 
     sel->ep_ids[sel->ep_count++] = endpoint_id;
     ksync_spinlock_unlock(&g_select_table_lock);

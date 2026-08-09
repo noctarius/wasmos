@@ -3,6 +3,7 @@
  * mm_handle_page_fault() demand-maps pages on first access.
  * mm_shared_* implements cross-process shared memory (used for DMA and framebuffer). */
 #include "memory.h"
+#include "kpanic.h"
 #include "klog.h"
 #include "paging.h"
 #include "physmem.h"
@@ -1086,9 +1087,12 @@ static int mm_copy_from_user_impl(void* opaque) {
             mm_trace_copy_fail("from", "switch_to_prev", args->context_id, args->user_addr,
                                args->size, args->prev_root, paging_get_current_root_table(),
                                user_cur, n);
-            /* Cannot return: CPU is still under the user page table. Halt. */
-            for (;;) {
-            }
+            /* Cannot return: the CPU is still under the user page table, so
+             * every kernel address is unmapped and unwinding would fault. A
+             * silent halt here left the machine wedged with no reason on the
+             * wire; kpanic prints one first. */
+            kpanic("mm: cannot restore the kernel page table", args->context_id,
+                   (uint64_t)args->user_addr);
         }
         memcpy(dst_bytes, bounce, (size_t)n);
         dst_bytes += n;
@@ -1158,9 +1162,12 @@ static int mm_copy_to_user_impl(void* opaque) {
             mm_trace_copy_fail("to", "switch_to_prev", args->context_id, args->user_addr,
                                args->size, args->prev_root, paging_get_current_root_table(),
                                user_cur, n);
-            /* Cannot return: CPU is still under the user page table. Halt. */
-            for (;;) {
-            }
+            /* Cannot return: the CPU is still under the user page table, so
+             * every kernel address is unmapped and unwinding would fault. A
+             * silent halt here left the machine wedged with no reason on the
+             * wire; kpanic prints one first. */
+            kpanic("mm: cannot restore the kernel page table", args->context_id,
+                   (uint64_t)args->user_addr);
         }
         src_bytes += n;
         user_cur += n;

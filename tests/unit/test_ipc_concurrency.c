@@ -731,31 +731,22 @@ static void test_select_slots_are_conserved_under_churn(void) {
     }
     CHECK(bad == 0, "no churn thread saw an invalid select id");
 
-    /* The table must be completely free again. Claimed across several contexts
-     * because no single one may hold all 32 any more -- the per-context quota
-     * caps it at IPC_SELECT_PER_CONTEXT_MAX -- and what this asks about is the
-     * TABLE, not one context's allowance. */
-    uint32_t ids[IPC_SELECT_TABLE_SIZE];
-    uint32_t owners[IPC_SELECT_TABLE_SIZE];
+    /* Nothing the churn allocated may still be held. The table grows on demand
+     * now, so "every slot came back" is no longer a count of slots -- it is the
+     * churning context being able to claim its whole quota again, which it
+     * cannot do if a single set leaked. */
+    uint32_t ids[IPC_SELECT_PER_CONTEXT_MAX];
     uint32_t n = 0;
-    uint32_t owner = fresh_ctx();
-    uint32_t held_by_owner = 0;
-    while (n < IPC_SELECT_TABLE_SIZE) {
+    while (n < IPC_SELECT_PER_CONTEXT_MAX) {
         uint32_t sel = 0;
-        if (held_by_owner >= IPC_SELECT_PER_CONTEXT_MAX) {
-            owner = fresh_ctx();
-            held_by_owner = 0;
-        }
-        if (ipc_select_create(owner, &sel) != IPC_OK) {
+        if (ipc_select_create(ctx, &sel) != IPC_OK) {
             break;
         }
-        owners[n] = owner;
         ids[n++] = sel;
-        held_by_owner++;
     }
-    CHECK(n == IPC_SELECT_TABLE_SIZE, "every slot the churn allocated was returned");
+    CHECK(n == IPC_SELECT_PER_CONTEXT_MAX, "every set the churn allocated was returned");
     for (uint32_t i = 0; i < n; ++i) {
-        ipc_select_destroy(ids[i], owners[i]);
+        ipc_select_destroy(ids[i], ctx);
     }
     ipc_endpoints_release_owner(ctx);
 }

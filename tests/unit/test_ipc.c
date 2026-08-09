@@ -1114,10 +1114,12 @@ static void test_destroyed_set_stops_receiving_signals(void) {
     (void)ipc_select_listen(ctx, &ep, 1, &first);
     ipc_select_destroy(first, ctx);
 
-    /* Reuse the freed slot for an unrelated set watching nothing. */
+    /* An unrelated set, watching nothing. Its STORAGE may well be the freed
+     * set's -- the table recycles memory -- but its id cannot be, so a stale
+     * watcher pointing at that storage is the hazard, not a colliding handle. */
     uint32_t second = 0;
-    CHECK(ipc_select_create(ctx, &second) == IPC_OK, "a new set takes the freed slot");
-    CHECK(second == first, "the test really is exercising slot reuse");
+    CHECK(ipc_select_create(ctx, &second) == IPC_OK, "a new set is created");
+    CHECK(second != first, "with a fresh id: destroyed ids are never reissued");
 
     reset_threads();
     CHECK(ksend(ep, 1u) == IPC_OK, "a message arrives on the formerly-watched endpoint");
@@ -1654,7 +1656,8 @@ static void test_adding_the_same_endpoint_twice_is_a_no_op(void) {
      * slot the next service gets handed. */
     ipc_select_destroy(sel, ctx);
     uint32_t next = 0;
-    CHECK(ipc_select_create(ctx, &next) == IPC_OK && next == sel, "the slot is recycled");
+    CHECK(ipc_select_create(ctx, &next) == IPC_OK, "a new set is created");
+    CHECK(next != sel, "with a fresh id, so a surviving entry cannot be reached by handle");
     reset_threads();
     CHECK(ksend(ep, 2u) == IPC_OK, "a message arrives on the old endpoint");
     ready = 0xAAu;
@@ -1865,8 +1868,8 @@ static void test_select_destroy_is_idempotent(void) {
 
     /* And the slot really is free, not double-released into some bad state. */
     uint32_t again = 0;
-    CHECK(ipc_select_create(ctx, &again) == IPC_OK, "the slot is reusable");
-    CHECK(again == sel, "and it is the same slot");
+    CHECK(ipc_select_create(ctx, &again) == IPC_OK, "the table is still usable");
+    CHECK(again != sel, "and hands out a fresh id, not the destroyed one");
     ipc_select_destroy(again, ctx);
     ipc_endpoints_release_owner(ctx);
 }
@@ -1879,19 +1882,28 @@ static void test_listen_cleans_up_when_an_add_fails_midway(void) {
     /* Slot 1 is a live endpoint whose watcher registration is made to fail. */
     (void)ipc_endpoint_create(ctx, &eps[1]);
 
-    uint32_t before = 0, sel = 0;
-    (void)ipc_select_create(ctx, &before);
-    ipc_select_destroy(before, ctx); /* note which slot is next in line */
-
+    uint32_t sel = 0;
     g_malloc_fail = 1;
     int rc = ipc_select_listen(ctx, eps, 3, &sel);
     g_malloc_fail = 0;
     CHECK(rc != IPC_OK, "the partial listen fails");
 
-    uint32_t after = 0;
-    CHECK(ipc_select_create(ctx, &after) == IPC_OK, "a set can still be created");
-    CHECK(after == before, "the half-built set was destroyed, not leaked");
-    ipc_select_destroy(after, ctx);
+    /* Ids are never reissued, so "did it leak?" is answered by the QUOTA rather
+     * than by which id comes back next: a half-built set still holding a place
+     * would leave the context one short of its allowance. */
+    uint32_t held[IPC_SELECT_PER_CONTEXT_MAX];
+    uint32_t n = 0;
+    while (n < IPC_SELECT_PER_CONTEXT_MAX) {
+        uint32_t id = 0;
+        if (ipc_select_create(ctx, &id) != IPC_OK) {
+            break;
+        }
+        held[n++] = id;
+    }
+    CHECK(n == IPC_SELECT_PER_CONTEXT_MAX, "the half-built set was destroyed, not leaked");
+    for (uint32_t i = 0; i < n; ++i) {
+        ipc_select_destroy(held[i], ctx);
+    }
     ipc_endpoints_release_owner(ctx);
 }
 

@@ -2234,6 +2234,7 @@ add_custom_target(run-kernel-unit-tests
           ${CMAKE_SOURCE_DIR}/tests/unit/test_ipc.c
           ${KERNEL_DIR}/ipc.c
           ${KERNEL_DIR}/idtable.c
+          ${CMAKE_SOURCE_DIR}/tests/unit/stubs_kpanic.c
           ${KERNEL_DIR}/poll.c
           ${KERNEL_DIR}/sched_event.c
           ${KERNEL_DIR}/list.c
@@ -2277,6 +2278,7 @@ add_custom_target(run-kernel-unit-tests
           ${KERNEL_DIR}/syscall.c
           ${KERNEL_DIR}/ipc.c
           ${KERNEL_DIR}/idtable.c
+          ${CMAKE_SOURCE_DIR}/tests/unit/stubs_kpanic.c
           ${KERNEL_DIR}/poll.c
           ${KERNEL_DIR}/sched_event.c
           ${KERNEL_DIR}/list.c
@@ -2336,7 +2338,7 @@ add_custom_target(run-kernel-unit-tests
           -iquote ${DRIVER_WASM_DIR}/include
           -x c++ ${CMAKE_SOURCE_DIR}/tests/unit/test_hostcall_ipc.cpp
           -x none ${BUILD_DIR}/test_warp_link_ipc.o ${BUILD_DIR}/test_wasm3_link_ipc.o
-          -x c ${KERNEL_DIR}/ipc.c ${KERNEL_DIR}/idtable.c ${KERNEL_DIR}/poll.c ${KERNEL_DIR}/sched_event.c
+          -x c ${KERNEL_DIR}/ipc.c ${KERNEL_DIR}/idtable.c ${CMAKE_SOURCE_DIR}/tests/unit/stubs_kpanic.c ${KERNEL_DIR}/poll.c ${KERNEL_DIR}/sched_event.c
           ${KERNEL_DIR}/list.c ${KERNEL_DIR}/list_linked.c ${KERNEL_DIR}/list_array_chunk.c
           ${KERNEL_DIR}/kmem.c
           ${CMAKE_SOURCE_DIR}/tests/unit/stubs_slab.c
@@ -2480,7 +2482,8 @@ add_custom_target(run-kernel-unit-tests
           -iquote ${CMAKE_SOURCE_DIR}/libs/wasm3/source
           -iquote ${CMAKE_SOURCE_DIR}/abi/generated/c
           ${CMAKE_SOURCE_DIR}/tests/unit/test_ipc_concurrency.c
-          ${KERNEL_DIR}/ipc.c ${KERNEL_DIR}/idtable.c ${KERNEL_DIR}/poll.c ${KERNEL_DIR}/sched_event.c
+          ${KERNEL_DIR}/ipc.c ${KERNEL_DIR}/idtable.c ${CMAKE_SOURCE_DIR}/tests/unit/stubs_kpanic.c
+          ${KERNEL_DIR}/poll.c ${KERNEL_DIR}/sched_event.c
           ${KERNEL_DIR}/list.c ${KERNEL_DIR}/list_linked.c ${KERNEL_DIR}/list_array_chunk.c
           ${KERNEL_DIR}/kmem.c
           ${CMAKE_SOURCE_DIR}/tests/unit/stubs_slab.c
@@ -2493,7 +2496,8 @@ add_custom_target(run-kernel-unit-tests
           -iquote ${CMAKE_SOURCE_DIR}/libs/wasm3/source
           -iquote ${CMAKE_SOURCE_DIR}/abi/generated/c
           ${CMAKE_SOURCE_DIR}/tests/unit/test_ipc_concurrency.c
-          ${KERNEL_DIR}/ipc.c ${KERNEL_DIR}/idtable.c ${KERNEL_DIR}/poll.c ${KERNEL_DIR}/sched_event.c
+          ${KERNEL_DIR}/ipc.c ${KERNEL_DIR}/idtable.c ${CMAKE_SOURCE_DIR}/tests/unit/stubs_kpanic.c
+          ${KERNEL_DIR}/poll.c ${KERNEL_DIR}/sched_event.c
           ${KERNEL_DIR}/list.c ${KERNEL_DIR}/list_linked.c ${KERNEL_DIR}/list_array_chunk.c
           ${KERNEL_DIR}/kmem.c
           ${CMAKE_SOURCE_DIR}/tests/unit/stubs_slab.c
@@ -2511,7 +2515,8 @@ add_custom_target(run-kernel-unit-tests
           -iquote ${CMAKE_SOURCE_DIR}/libs/wasm3/source
           -iquote ${CMAKE_SOURCE_DIR}/abi/generated/c
           ${CMAKE_SOURCE_DIR}/tests/unit/test_ipc_concurrency.c
-          ${KERNEL_DIR}/ipc.c ${KERNEL_DIR}/idtable.c ${KERNEL_DIR}/poll.c ${KERNEL_DIR}/sched_event.c
+          ${KERNEL_DIR}/ipc.c ${KERNEL_DIR}/idtable.c ${CMAKE_SOURCE_DIR}/tests/unit/stubs_kpanic.c
+          ${KERNEL_DIR}/poll.c ${KERNEL_DIR}/sched_event.c
           ${KERNEL_DIR}/list.c ${KERNEL_DIR}/list_linked.c ${KERNEL_DIR}/list_array_chunk.c
           ${KERNEL_DIR}/kmem.c
           ${CMAKE_SOURCE_DIR}/tests/unit/stubs_slab.c
@@ -2526,7 +2531,8 @@ add_custom_target(run-kernel-unit-tests
           -iquote ${CMAKE_SOURCE_DIR}/libs/wasm3/source
           -iquote ${CMAKE_SOURCE_DIR}/abi/generated/c
           ${CMAKE_SOURCE_DIR}/tests/unit/test_ipc_concurrency.c
-          ${KERNEL_DIR}/ipc.c ${KERNEL_DIR}/idtable.c ${KERNEL_DIR}/poll.c ${KERNEL_DIR}/sched_event.c
+          ${KERNEL_DIR}/ipc.c ${KERNEL_DIR}/idtable.c ${CMAKE_SOURCE_DIR}/tests/unit/stubs_kpanic.c
+          ${KERNEL_DIR}/poll.c ${KERNEL_DIR}/sched_event.c
           ${KERNEL_DIR}/list.c ${KERNEL_DIR}/list_linked.c ${KERNEL_DIR}/list_array_chunk.c
           ${KERNEL_DIR}/kmem.c
           ${CMAKE_SOURCE_DIR}/tests/unit/stubs_slab.c

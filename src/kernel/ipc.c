@@ -10,6 +10,7 @@
 
 #include "sched_event.h"
 #include "poll.h"
+#include "kpanic.h"
 
 /*
  * The kernel IPC layer keeps transport deliberately small: fixed-size endpoint
@@ -33,9 +34,8 @@ typedef struct {
 
 /* Select-set: watches up to IPC_SELECT_EPS_MAX endpoints simultaneously. */
 typedef struct ipc_select {
-    uint32_t id;
-    uint8_t in_use;
-    uint32_t owner_context_id;
+    /* First, as idtable requires: id, owner_context_id and in_use live here. */
+    idtable_header_t header;
     sched_event_t event;
     /* ready_ep is protected by event.lock, not a separate lock.  Keeping
      * event.lock as the single authority for both the wait_list and ready_ep
@@ -49,7 +49,7 @@ typedef struct ipc_select {
     uint32_t ep_count;
 } ipc_select_t;
 
-static ipc_select_t g_select_table[IPC_SELECT_TABLE_SIZE];
+static idtable_t g_select_table;
 static ksync_spinlock_t g_select_table_lock;
 
 static idtable_t g_endpoint_table;
@@ -104,13 +104,16 @@ void ipc_init(void) {
      * file's to decide. */
     if (idtable_init(&g_endpoint_table, (uint32_t)sizeof(ipc_endpoint_t), IPC_ENDPOINT_TABLE_CHUNK,
                      IPC_ENDPOINT_PER_CONTEXT_MAX) != WASMOS_OK) {
-        for (;;) {
-        }
+        kpanic("ipc: endpoint table init failed", (uint64_t)sizeof(ipc_endpoint_t),
+               IPC_ENDPOINT_TABLE_CHUNK);
     }
     ksync_spinlock_init(&g_select_table_lock);
-    memset(g_select_table, 0, sizeof(g_select_table));
-    for (uint32_t i = 0; i < IPC_SELECT_TABLE_SIZE; i++) {
-        sched_event_init(&g_select_table[i].event, SCHED_EVENT_TYPE_SELECT);
+    /* Grows on demand now, so the number of parked services is bounded by
+     * memory rather than by a constant chosen before the workload was known. */
+    if (idtable_init(&g_select_table, (uint32_t)sizeof(ipc_select_t), IPC_SELECT_TABLE_CHUNK,
+                     IPC_SELECT_PER_CONTEXT_MAX) != WASMOS_OK) {
+        kpanic("ipc: select table init failed", (uint64_t)sizeof(ipc_select_t),
+               IPC_SELECT_TABLE_CHUNK);
     }
 }
 
@@ -456,16 +459,13 @@ void ipc_endpoints_release_owner(uint32_t owner_context_id) {
  * a permission failure as if the handle were bad.
  */
 static ipc_select_t* ipc_select_find(uint32_t select_id, uint32_t owner_context_id, int* out_rc) {
-    if (select_id == 0 || select_id > IPC_SELECT_TABLE_SIZE) {
+    ipc_select_t* sel = (ipc_select_t*)idtable_get(&g_select_table, select_id);
+    if (!sel) {
         *out_rc = IPC_ERR_NOENT;
         return 0;
     }
-    ipc_select_t* sel = &g_select_table[select_id - 1u];
-    if (!sel->in_use) {
-        *out_rc = IPC_ERR_NOENT;
-        return 0;
-    }
-    if (owner_context_id != IPC_CONTEXT_KERNEL && sel->owner_context_id != owner_context_id) {
+    if (owner_context_id != IPC_CONTEXT_KERNEL &&
+        sel->header.owner_context_id != owner_context_id) {
         *out_rc = IPC_ERR_PERM;
         return 0;
     }
@@ -473,43 +473,26 @@ static ipc_select_t* ipc_select_find(uint32_t select_id, uint32_t owner_context_
     return sel;
 }
 
-/* Caller holds g_select_table_lock. */
-static uint32_t ipc_select_count_for_owner(uint32_t owner_context_id) {
-    uint32_t used = 0;
-    for (uint32_t i = 0; i < IPC_SELECT_TABLE_SIZE; i++) {
-        if (g_select_table[i].in_use && g_select_table[i].owner_context_id == owner_context_id) {
-            used++;
-        }
-    }
-    return used;
-}
-
 int ipc_select_create(uint32_t owner_context_id, uint32_t* out_select_id) {
     if (!out_select_id) {
         return IPC_ERR_INVALID;
     }
     ksync_spinlock_lock(&g_select_table_lock);
-    /* Refuse before searching: a context at its ceiling must not be able to take
-     * the last slot out from under everyone else. */
-    if (ipc_select_count_for_owner(owner_context_id) >= IPC_SELECT_PER_CONTEXT_MAX) {
+    /* The per-context quota is the component's: a context at its ceiling is
+     * refused before the store is asked to grow, so it cannot take the memory
+     * another context would have used. */
+    int status = WASMOS_OK;
+    ipc_select_t* sel = (ipc_select_t*)idtable_alloc(&g_select_table, owner_context_id, &status);
+    if (!sel) {
         ksync_spinlock_unlock(&g_select_table_lock);
-        return IPC_ERR_FULL;
+        return status == WASMOS_INVAL ? IPC_ERR_INVALID : IPC_ERR_FULL;
     }
-    for (uint32_t i = 0; i < IPC_SELECT_TABLE_SIZE; i++) {
-        ipc_select_t* sel = &g_select_table[i];
-        if (!sel->in_use) {
-            sel->in_use = 1;
-            sel->owner_context_id = owner_context_id;
-            sel->ready_ep = IPC_ENDPOINT_NONE;
-            sel->ep_count = 0;
-            sched_event_init(&sel->event, SCHED_EVENT_TYPE_SELECT);
-            *out_select_id = i + 1u;
-            ksync_spinlock_unlock(&g_select_table_lock);
-            return IPC_OK;
-        }
-    }
+    sel->ready_ep = IPC_ENDPOINT_NONE;
+    sel->ep_count = 0;
+    sched_event_init(&sel->event, SCHED_EVENT_TYPE_SELECT);
+    *out_select_id = sel->header.id;
     ksync_spinlock_unlock(&g_select_table_lock);
-    return IPC_ERR_FULL;
+    return IPC_OK;
 }
 
 int ipc_select_add(uint32_t select_id, uint32_t endpoint_id, uint32_t owner_context_id) {
@@ -630,8 +613,25 @@ int ipc_select_wait(uint32_t select_id, uint32_t owner_context_id, uint32_t* out
      * timeout_ms wakes us after the deadline (returning IPC_EMPTY). */
     sched_event_wait(&sel->event, timeout_ms);
 
-    /* After wake: re-check under event.lock (same lock as ipc_select_signal). */
+    /* `sel` cannot be trusted after the wake. A concurrent destroy wakes its
+     * waiters and then RELEASES the set's storage, so the pointer we parked on
+     * may now be freed or reused. Re-resolve by id under the table lock; gone
+     * means IPC_EMPTY, the same answer a timeout gives, because there is
+     * nothing to report either way.
+     *
+     * The fixed array hid this -- a destroyed slot stayed put with in_use = 0 --
+     * but hid a worse one in exchange: the slot could be handed to another
+     * context while this waiter slept, and take_ready would then read a set
+     * belonging to somebody else. Ids are not reused now, so re-resolving is
+     * both safe and unambiguous. */
+    ksync_spinlock_lock(&g_select_table_lock);
+    sel = ipc_select_find(select_id, owner_context_id, &find_rc);
+    if (!sel) {
+        ksync_spinlock_unlock(&g_select_table_lock);
+        return IPC_EMPTY;
+    }
     ksync_spinlock_lock(&sel->event.lock);
+    ksync_spinlock_unlock(&g_select_table_lock);
     int got = ipc_select_take_ready(sel, out_ready_ep);
     ksync_spinlock_unlock(&sel->event.lock);
     return got ? IPC_OK : IPC_EMPTY; /* EMPTY = spurious/timeout; caller retries */
@@ -706,8 +706,8 @@ void ipc_select_destroy(uint32_t select_id, uint32_t owner_context_id) {
     ksync_spinlock_lock(&sel->event.lock);
     sched_event_abort_all(&sel->event);
     ksync_spinlock_unlock(&sel->event.lock);
-    sel->in_use = 0;
     sel->ep_count = 0;
+    (void)idtable_free(&g_select_table, select_id);
     ksync_spinlock_unlock(&g_select_table_lock);
 }
 

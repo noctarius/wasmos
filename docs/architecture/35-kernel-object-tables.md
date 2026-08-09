@@ -1,6 +1,6 @@
 # Kernel Object Tables
 
-Status: implemented (`src/kernel/idtable.{h,c}`), one adopter pending.
+Status: implemented (`src/kernel/idtable.{h,c}`); both IPC tables adopted.
 
 A recurring shape in the kernel: a table of objects that user space refers to by
 an opaque id. Endpoints, select sets, futexes, shared-memory regions and
@@ -72,8 +72,8 @@ on a hot path, it should hold the object pointer rather than re-resolving the id
 
 | Table                     | State                                                                                                                               |
 |---------------------------|-------------------------------------------------------------------------------------------------------------------------------------|
-| IPC endpoints (`ipc.c`)   | Hand-written, has all five. Retrofit candidate; its lock discipline and `poll_struct` teardown make it the delicate one.            |
-| IPC select sets (`ipc.c`) | Fixed 128-slot array with a hand-written per-owner quota. The intended first adopter — it is the one that still fails obligation 1. |
+| IPC endpoints (`ipc.c`)   | Adopted. The hard case: a per-object lock, a lock ORDER that matters, and teardown work of its own — all of which stayed in `ipc.c` where they belong. |
+| IPC select sets (`ipc.c`) | Adopted, and no longer a fixed array. Ids stopped being array indices, which removed a latent bug: a destroyed slot could be reissued to another context while a waiter still held it. |
 | Futex table (`futex.c`)   | Entries live for the system's lifetime; obligations 2–5 do not apply as written.                                                    |
 
 When adding a new id-addressed object table, use this rather than writing the

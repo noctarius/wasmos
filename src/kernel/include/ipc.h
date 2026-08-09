@@ -114,15 +114,14 @@ void ipc_endpoints_release_owner(uint32_t owner_context_id);
  * ipc_recv_for / ipc_wait_for to consume the payload.
  */
 /*
- * How many select sets exist system-wide.
- *
- * One per parked service is the norm -- libsys's event loop creates one, and a
- * couple of components create two -- and a boot brings up roughly twenty
- * processes, so the previous 32 left barely ten spare. A slot is 88 bytes, so
- * the whole table is 11 KB at this size: the ceiling was tight for no reason
- * worth defending.
+ * The select table grows out of kmem like the endpoint table, so the number of
+ * parked services is bounded by memory and the per-context quota rather than by
+ * a constant. It was a fixed 32 slots -- one per parked service, against a boot
+ * that brings up roughly twenty processes -- which left barely ten spare.
  */
-#define IPC_SELECT_TABLE_SIZE 128u
+/* Select sets per kmem chunk. The table grows on demand, so this is a growth
+ * granularity, not a ceiling. */
+#define IPC_SELECT_TABLE_CHUNK 32u
 
 /*
  * Per-context ceilings on the two shared IPC tables.

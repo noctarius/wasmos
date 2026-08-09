@@ -26,6 +26,7 @@ typedef enum {
     IPC_ERR_PERM = -2,        /* the caller does not own what it named */
     IPC_ERR_FULL = -3,        /* resource exhausted: queue, table, or watch slots */
     IPC_ERR_NOENT = -4,       /* no such endpoint or select set */
+    IPC_ERR_TIMEOUT = -5,     /* a bounded wait elapsed without becoming ready */
     IPC_ERR_UNSUPPORTED = -7, /* wrong endpoint type for this operation */
     IPC_ERR_PEER_GONE = -8    /* the endpoint was destroyed while we waited on it */
 } ipc_result_t;
@@ -52,6 +53,8 @@ _Static_assert((int)IPC_ERR_INVALID == (int)WASMOS_INVAL,
 _Static_assert((int)IPC_ERR_PERM == (int)WASMOS_DENIED, "IPC_ERR_PERM must match WASMOS_DENIED");
 _Static_assert((int)IPC_ERR_FULL == (int)WASMOS_FULL, "IPC_ERR_FULL must match WASMOS_FULL");
 _Static_assert((int)IPC_ERR_NOENT == (int)WASMOS_NOENT, "IPC_ERR_NOENT must match WASMOS_NOENT");
+_Static_assert((int)IPC_ERR_TIMEOUT == (int)WASMOS_TIMEOUT,
+               "IPC_ERR_TIMEOUT must match WASMOS_TIMEOUT");
 _Static_assert((int)IPC_ERR_UNSUPPORTED == (int)WASMOS_UNSUPPORTED,
                "IPC_ERR_UNSUPPORTED must match WASMOS_UNSUPPORTED");
 _Static_assert((int)IPC_ERR_PEER_GONE == (int)WASMOS_PEER_GONE,

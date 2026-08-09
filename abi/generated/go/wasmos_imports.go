@@ -643,8 +643,9 @@ func RegionAlloc(a0 int32, a1 int32, a2 int32) int32
 func IrqConfigure(a0 int32, a1 int32) int32
 
 // Like ipc_select_wait but bounded by timeout_ms (0 = wait forever). Returns the
-// ready endpoint ID (>= 0), -1 on timeout/spurious wake (poll and retry), or -2
-// on error. Lets a driver poll (e.g. RX rings) on a timer without busy-yielding.
+// ready endpoint ID (>= 0), WASMOS_TIMEOUT (-5) when the window elapsed without
+// anything becoming ready (poll and retry), or the transport status on error.
+// Lets a driver poll (e.g. RX rings) on a timer without busy-yielding.
 //go:wasmimport wasmos ipc_select_wait_timeout
 func IpcSelectWaitTimeout(a0 int32, a1 int32) int32
 

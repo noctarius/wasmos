@@ -528,8 +528,9 @@ extern int32_t wasmos_region_alloc(int32_t pages, int32_t cache_policy, uint64_t
  */
 extern int32_t wasmos_irq_configure(int32_t irq_line, int32_t flags) WASMOS_WASM_IMPORT("wasmos", "irq_configure");
 /* Like ipc_select_wait but bounded by timeout_ms (0 = wait forever). Returns the
- * ready endpoint ID (>= 0), -1 on timeout/spurious wake (poll and retry), or -2
- * on error. Lets a driver poll (e.g. RX rings) on a timer without busy-yielding.
+ * ready endpoint ID (>= 0), WASMOS_TIMEOUT (-5) when the window elapsed without
+ * anything becoming ready (poll and retry), or the transport status on error.
+ * Lets a driver poll (e.g. RX rings) on a timer without busy-yielding.
  */
 extern int32_t wasmos_ipc_select_wait_timeout(int32_t sel, int32_t timeout_ms) WASMOS_WASM_IMPORT("wasmos", "ipc_select_wait_timeout");
 /* Object/owner/borrow xfer-buffer ABI (stateless, id-based, capability-style).

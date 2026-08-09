@@ -288,21 +288,24 @@ uint32_t warp_ipc_select_wait(uint32_t sel_id, void* ctx_) {
 }
 
 /* Timed select wait: block until a watched endpoint is ready OR timeout_ms
- * elapses. Returns the ready endpoint id (>= 0), -1 on timeout/spurious wake
- * (caller should poll and retry), or -2 on error. Unlike warp_ipc_select_wait
- * this does NOT loop on IPC_EMPTY, so a deadline reliably returns control. */
+ * elapses. Returns the ready endpoint id (>= 0), IPC_ERR_TIMEOUT when the
+ * window elapsed without anything becoming ready (poll and retry), or the
+ * transport code on error. Unlike warp_ipc_select_wait this does NOT loop on
+ * IPC_EMPTY, so a deadline reliably returns control. */
 uint32_t warp_ipc_select_wait_timeout(uint32_t sel_id, uint32_t timeout_ms, void* ctx_) {
     (void)ctx_;
     uint32_t context_id = 0;
+    if ((int32_t)sel_id <= 0)
+        return (uint32_t)IPC_ERR_INVALID;
     if (warp_current_context_id(&context_id) != 0)
-        return (uint32_t)-2;
+        return (uint32_t)IPC_ERR_NOENT;
     uint32_t ready = IPC_ENDPOINT_NONE;
     int rc = ipc_select_wait(sel_id, context_id, &ready, timeout_ms);
     if (rc == IPC_OK)
         return ready;
     if (rc == IPC_EMPTY)
-        return (uint32_t)-1; /* timeout or spurious wake */
-    return (uint32_t)-2;
+        return (uint32_t)IPC_ERR_TIMEOUT; /* window elapsed, or a spurious wake */
+    return (uint32_t)rc;
 }
 
 uint32_t warp_ipc_select_destroy(uint32_t sel_id, void* ctx_) {

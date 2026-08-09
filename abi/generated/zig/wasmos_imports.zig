@@ -429,8 +429,9 @@ pub extern "wasmos" fn region_alloc(a0: i32, a1: i32, a2: i32) callconv(.c) i32;
 /// Requires the IRQ capability.
 pub extern "wasmos" fn irq_configure(a0: i32, a1: i32) callconv(.c) i32;
 /// Like ipc_select_wait but bounded by timeout_ms (0 = wait forever). Returns the
-/// ready endpoint ID (>= 0), -1 on timeout/spurious wake (poll and retry), or -2
-/// on error. Lets a driver poll (e.g. RX rings) on a timer without busy-yielding.
+/// ready endpoint ID (>= 0), WASMOS_TIMEOUT (-5) when the window elapsed without
+/// anything becoming ready (poll and retry), or the transport status on error.
+/// Lets a driver poll (e.g. RX rings) on a timer without busy-yielding.
 pub extern "wasmos" fn ipc_select_wait_timeout(a0: i32, a1: i32) callconv(.c) i32;
 /// Object/owner/borrow xfer-buffer ABI (stateless, id-based, capability-style).
 ///

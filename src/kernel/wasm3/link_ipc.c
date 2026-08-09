@@ -233,13 +233,17 @@ m3ApiRawFunction(wasmos_sys_select_wait) {
 }
 
 /* Timed select wait: block until a watched endpoint is ready OR timeout_ms
- * elapses. Returns the ready endpoint id (>= 0), -1 on timeout/spurious wake
- * (caller polls and retries), or -2 on error. Does NOT loop on IPC_EMPTY. */
+ * elapses. Returns the ready endpoint id (>= 0), IPC_ERR_TIMEOUT when the
+ * window elapsed without anything becoming ready (poll and retry), or the
+ * transport code on error. Does NOT loop on IPC_EMPTY. */
 m3ApiRawFunction(wasmos_sys_select_wait_timeout) {
     m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, select_id) m3ApiGetArg(int32_t, timeout_ms)
         uint32_t context_id = 0;
-    if (select_id <= 0 || current_process_context(&context_id) != 0) {
-        m3ApiReturn(-2);
+    if (select_id <= 0) {
+        m3ApiReturn(IPC_ERR_INVALID);
+    }
+    if (current_process_context(&context_id) != 0) {
+        m3ApiReturn(IPC_ERR_NOENT);
     }
     uint32_t ready_ep = IPC_ENDPOINT_NONE;
     int rc = ipc_select_wait((uint32_t)select_id, context_id, &ready_ep,
@@ -248,9 +252,9 @@ m3ApiRawFunction(wasmos_sys_select_wait_timeout) {
         m3ApiReturn((int32_t)ready_ep);
     }
     if (rc == IPC_EMPTY) {
-        m3ApiReturn(-1); /* timeout or spurious wake */
+        m3ApiReturn(IPC_ERR_TIMEOUT); /* window elapsed, or a spurious wake */
     }
-    m3ApiReturn(-2);
+    m3ApiReturn(rc);
 }
 
 m3ApiRawFunction(wasmos_sys_select_destroy) {

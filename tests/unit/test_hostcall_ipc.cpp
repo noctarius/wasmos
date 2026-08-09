@@ -521,12 +521,13 @@ static const Scenario k_scenarios[] = {
      "was told it was watched. ipc_select_add now refuses an endpoint it cannot "
      "resolve, which converges both runtimes on a rejection"},
 
-    {"select_wait_timeout(expires)", -1, -1, false, s_select_wait_timeout_expires, nullptr},
+    {"select_wait_timeout(expires)", -5, -5, false, s_select_wait_timeout_expires,
+     "WASMOS_TIMEOUT from the generated axis, not a private -1: a guest can now tell "
+     "'the window elapsed' from 'you passed a bad argument'"},
     {"select_wait_timeout(ready) names the endpoint", 1, 1, false, s_select_wait_timeout_ready,
      nullptr},
-    {"select_wait_timeout(unknown set)", -2, -2, false, s_select_wait_timeout_bad_set,
-     "-2 is 'error', distinct from -1 'timed out or spurious' -- the reason the timed "
-     "variant exists"},
+    {"select_wait_timeout(unknown set)", -4, -4, false, s_select_wait_timeout_bad_set,
+     "the transport code, like every other call -- this was a private -2"},
     {"select_destroy(unknown set)", 0, 0, false, s_select_destroy_bad_set,
      "destroy returns void from the transport, so nothing can be reported"},
 };

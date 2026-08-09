@@ -1061,8 +1061,9 @@ hostcalls:
     wasm3_fn: wasmos_sys_select_wait_timeout
     doc: |
       Like ipc_select_wait but bounded by timeout_ms (0 = wait forever). Returns the
-      ready endpoint ID (>= 0), -1 on timeout/spurious wake (poll and retry), or -2
-      on error. Lets a driver poll (e.g. RX rings) on a timer without busy-yielding.
+      ready endpoint ID (>= 0), WASMOS_TIMEOUT (-5) when the window elapsed without
+      anything becoming ready (poll and retry), or the transport status on error.
+      Lets a driver poll (e.g. RX rings) on a timer without busy-yielding.
     params:
       - { name: sel, kind: handle }
       - { name: timeout_ms, kind: scalar }

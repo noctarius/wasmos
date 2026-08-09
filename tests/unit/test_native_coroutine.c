@@ -1,5 +1,7 @@
 /* Runtime-behaviour tests for the single-worker native coroutine/future core. */
 #include <stdint.h>
+
+#include "test_shuffle.h"
 #include <stdio.h>
 
 #include "wasmos/coroutine_native.h"
@@ -840,41 +842,23 @@ static int test_then_on_settled_future_defers(void) {
     return 0;
 }
 
+/* Randomized order: a case that leaks state must not be able to make its
+ * neighbour pass. The seed is printed on failure and replays via
+ * WASMOS_TEST_SEED; see test_shuffle.h. */
+static const wasmos_test_case_t k_cases[] = {
+    WASMOS_TEST_CASE(test_yield_await_and_join),
+    WASMOS_TEST_CASE(test_rejection_and_poll),
+    WASMOS_TEST_CASE(test_future_chains),
+    WASMOS_TEST_CASE(test_multiple_waiters),
+    WASMOS_TEST_CASE(test_multiple_joiners_and_return),
+    WASMOS_TEST_CASE(test_scheduler_stress),
+    WASMOS_TEST_CASE(test_reentrant_callbacks_and_contracts),
+    WASMOS_TEST_CASE(test_future_race_and_all),
+    WASMOS_TEST_CASE(test_respawn_guard),
+    WASMOS_TEST_CASE(test_race_and_all_every_position),
+    WASMOS_TEST_CASE(test_then_on_settled_future_defers),
+};
+
 int main(void) {
-    int rc = test_yield_await_and_join();
-    if (rc == 0) {
-        rc = test_rejection_and_poll();
-    }
-    if (rc == 0) {
-        rc = test_future_chains();
-    }
-    if (rc == 0) {
-        rc = test_multiple_waiters();
-    }
-    if (rc == 0) {
-        rc = test_multiple_joiners_and_return();
-    }
-    if (rc == 0) {
-        rc = test_scheduler_stress();
-    }
-    if (rc == 0) {
-        rc = test_reentrant_callbacks_and_contracts();
-    }
-    if (rc == 0) {
-        rc = test_future_race_and_all();
-    }
-    if (rc == 0) {
-        rc = test_respawn_guard();
-    }
-    if (rc == 0) {
-        rc = test_race_and_all_every_position();
-    }
-    if (rc == 0) {
-        rc = test_then_on_settled_future_defers();
-    }
-    if (rc != 0) {
-        fprintf(stderr, "native coroutine test failed at line %d\n", rc);
-        return 1;
-    }
-    return 0;
+    return wasmos_test_run_all(k_cases, (int)(sizeof(k_cases) / sizeof(k_cases[0])));
 }

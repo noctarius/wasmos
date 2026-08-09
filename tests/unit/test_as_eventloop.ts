@@ -17,6 +17,7 @@
 
 import { EventLoop, IpcFuture, IpcMessage, OnMessage, ReplyStatus } from "./eventloop";
 import { FutureState } from "./coroutine";
+import {runShuffled, TestCase} from "./shuffle";
 
 @external("harness", "plant")
 declare function plant(endpoint: i32, type: i32, requestId: i32, source: i32, a0: i32, a1: i32,
@@ -616,20 +617,24 @@ function testReceiveCannotPark(): i32 {
 
 /** 0 if every case passed, else the failing case's marker. */
 export function runTests(): i32 {
-  let rc = testNothingIsDiscarded();
-  if (rc == 0) rc = testIntentBeatsHandler();
-  if (rc == 0) rc = testIntentTable();
-  if (rc == 0) rc = testCancelAndExplicitRequestIds();
-  if (rc == 0) rc = testSlotFreedBeforeCallback();
-  if (rc == 0) rc = testIpcFuture();
-  if (rc == 0) rc = testIpcFutureFailureAndCancel();
-  if (rc == 0) rc = testPollBlocksInsteadOfSpinning();
-  if (rc == 0) rc = testReentrantPollIsRefused();
-  if (rc == 0) rc = testInitClearsState();
-  if (rc == 0) rc = testPollTimeout();
-  if (rc == 0) rc = testAwaitFuture();
-  if (rc == 0) rc = testReceive();
-  if (rc == 0) rc = testDeferralBackpressure();
-  if (rc == 0) rc = testReceiveCannotPark();
-  return rc;
+    /* Randomized order: a case that leaks state must not be able to make
+     * its neighbour pass. Replay a failure with WASMOS_TEST_SEED. */
+    const cases: StaticArray<TestCase> = [
+    testNothingIsDiscarded,
+    testIntentBeatsHandler,
+    testIntentTable,
+    testCancelAndExplicitRequestIds,
+    testSlotFreedBeforeCallback,
+    testIpcFuture,
+    testIpcFutureFailureAndCancel,
+    testPollBlocksInsteadOfSpinning,
+    testReentrantPollIsRefused,
+    testInitClearsState,
+    testPollTimeout,
+    testAwaitFuture,
+    testReceive,
+    testDeferralBackpressure,
+    testReceiveCannotPark,
+    ];
+    return runShuffled(cases);
 }

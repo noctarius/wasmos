@@ -19,6 +19,15 @@ import { readFileSync } from "node:fs";
 
 const [wasmPath, label] = process.argv.slice(2);
 
+/* Randomized case order, replayable via WASMOS_TEST_SEED. Node has no
+   splitmix64, so the shuffle itself lives in the guest (tests/unit/as/shuffle.ts)
+   and this only supplies the seed and prints what failed. */
+const configuredSeed = process.env.WASMOS_TEST_SEED;
+const testSeed = configuredSeed
+  ? BigInt.asIntN(64, BigInt(configuredSeed))
+  : BigInt.asIntN(64, BigInt(Date.now()) * 0x2545f4914f6cdd1dn);
+const failedOrder = [];
+
 /* endpoint -> queued messages, in arrival order. */
 const queues = new Map();
 /* The caller's last-received message, as ipc_last_field reads it. */
@@ -138,6 +147,15 @@ const harness = {
     const name = FIELD_ORDER[field];
     return name === undefined ? 0 : q[index][name];
   },
+  /* Seed for the randomized case order. WASMOS_TEST_SEED replays a failure;
+     the same seed produces the same order as the C helper's. */
+  seed: () => testSeed,
+  reportSeed: (seed) => {
+    console.log(`${label}: replay this order with WASMOS_TEST_SEED=0x${BigInt.asUintN(64, seed).toString(16)}`);
+  },
+  reportOrder: (index) => {
+    failedOrder.push(index);
+  },
   waitCount: () => waitCount,
   timeoutWaitCount: () => timeoutWaits.length,
   lastTimeoutMs: () => (timeoutWaits.length ? timeoutWaits[timeoutWaits.length - 1] : -1),
@@ -178,4 +196,7 @@ if (rc === 0) {
   process.exit(0);
 }
 console.log(`${label}: FAIL, assertion marker ${rc}`);
+if (failedOrder.length) {
+  console.log(`${label}: case order was ${failedOrder.join(", ")}`);
+}
 process.exit(1);

@@ -2367,7 +2367,16 @@ add_custom_target(run-kernel-unit-tests
   # asc compiles the test to wasm and node runs it -- there is no host build of
   # AS. Both are already required by the build (AS apps, and the asc found for
   # the lint gate), so this adds no new dependency.
-  COMMAND ${WASMOS_UNIT_ASC} ${CMAKE_SOURCE_DIR}/tests/unit/test_as_coroutine.ts
+  COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/as_coroutine_test_src
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different
+          ${LIBC_DIR}/assemblyscript/coroutine.ts ${BUILD_DIR}/as_coroutine_test_src/coroutine.ts
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different
+          ${CMAKE_SOURCE_DIR}/tests/unit/as/shuffle.ts
+          ${BUILD_DIR}/as_coroutine_test_src/shuffle.ts
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_as_coroutine.ts
+          ${BUILD_DIR}/as_coroutine_test_src/test_as_coroutine.ts
+  COMMAND ${WASMOS_UNIT_ASC} ${BUILD_DIR}/as_coroutine_test_src/test_as_coroutine.ts
           --target release -O --runtime stub
           --outFile ${BUILD_DIR}/test_as_coroutine.wasm
   COMMAND ${WASMOS_UNIT_NODE} ${CMAKE_SOURCE_DIR}/tests/unit/as/run_as_test.mjs
@@ -2384,6 +2393,9 @@ add_custom_target(run-kernel-unit-tests
   COMMAND ${CMAKE_COMMAND} -E copy_if_different
           ${CMAKE_SOURCE_DIR}/abi/generated/assemblyscript/wasmos_imports.ts
           ${BUILD_DIR}/as_eventloop_test_src/wasmos_imports.ts
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different
+          ${CMAKE_SOURCE_DIR}/tests/unit/as/shuffle.ts
+          ${BUILD_DIR}/as_eventloop_test_src/shuffle.ts
   COMMAND ${CMAKE_COMMAND} -E copy_if_different
           ${CMAKE_SOURCE_DIR}/tests/unit/test_as_eventloop.ts
           ${BUILD_DIR}/as_eventloop_test_src/test_as_eventloop.ts

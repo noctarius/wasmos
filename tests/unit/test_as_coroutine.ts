@@ -29,7 +29,8 @@ import {
   AWAIT_PENDING,
   TASK_COMPLETE,
   TASK_YIELDED,
-} from "../../src/libc/assemblyscript/coroutine";
+} from "./coroutine";
+import {runShuffled, TestCase} from "./shuffle";
 
 // ------------------------------------------------------------- case 1 tasks
 
@@ -815,16 +816,20 @@ function testAllEveryRejecter(): i32 {
 
 /** 0 if every case passed, else the failing case's marker. */
 export function runTests(): i32 {
-  let rc = testYieldAwaitAndJoin();
-  if (rc == 0) rc = testFutureChainsAndDeferredCallbacks();
-  if (rc == 0) rc = testRaceAndAll();
-  if (rc == 0) rc = testContracts();
-  if (rc == 0) rc = testMultipleWaiters();
-  if (rc == 0) rc = testMultipleJoiners();
-  if (rc == 0) rc = testSchedulerStress();
-  if (rc == 0) rc = testReentrancyRespawnAndPendingPoll();
-  if (rc == 0) rc = testRaceEveryWinner();
-  if (rc == 0) rc = testRaceEveryRejecter();
-  if (rc == 0) rc = testAllEveryRejecter();
-  return rc;
+    /* Randomized order: a case that leaks state must not be able to make
+     * its neighbour pass. Replay a failure with WASMOS_TEST_SEED. */
+    const cases: StaticArray<TestCase> = [
+    testYieldAwaitAndJoin,
+    testFutureChainsAndDeferredCallbacks,
+    testRaceAndAll,
+    testContracts,
+    testMultipleWaiters,
+    testMultipleJoiners,
+    testSchedulerStress,
+    testReentrancyRespawnAndPendingPoll,
+    testRaceEveryWinner,
+    testRaceEveryRejecter,
+    testAllEveryRejecter,
+    ];
+    return runShuffled(cases);
 }

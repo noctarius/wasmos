@@ -317,8 +317,8 @@ export class EventLoop {
         /* Nothing claimed it. Held for receive() rather than dropped -- silently
          * discarding an unrecognised message is the exact failure this loop
          * exists to remove. */
-        const slot = unchecked(
-            this.deferred[(this.deferredHead + this.deferredCount) % DEFERRED_MAX]);
+        const slot =
+            unchecked(this.deferred[(this.deferredHead + this.deferredCount) % DEFERRED_MAX]);
         slot.copyFrom(msg);
         this.deferredCount++;
     }
@@ -531,7 +531,7 @@ export class IpcFuture extends OnMessage {
         if (status == 0) {
             /* Resolved with a non-zero marker, not the reply itself: a usize
              * value would be a raw pointer. Continuations read `reply`. */
-            this.promise.resolve(<usize>1);
+            this.promise.resolve(< usize > 1);
         } else {
             this.promise.reject(bridgeStatus(status));
         }

@@ -21,6 +21,8 @@
 
 #include <stdio.h>
 
+#include "test_shuffle.h"
+
 static int g_failures;
 static int g_checks;
 
@@ -515,15 +517,24 @@ int main(void) {
         {"L11 a NULL loop poll is safe", test_a_null_loop_poll_is_safe},
     };
 
-    for (unsigned i = 0; i < sizeof(tests) / sizeof(tests[0]); ++i) {
+    /* Randomized order: a case that leaks state must not be able to make its
+     * neighbour pass. Replay a failure with WASMOS_TEST_SEED. */
+    const int test_count = (int)(sizeof(tests) / sizeof(tests[0]));
+    int order[WASMOS_TEST_MAX_CASES];
+    const uint64_t seed = wasmos_test_shuffle(order, test_count);
+
+    for (int i = 0; i < test_count; ++i) {
         int before = g_failures;
-        printf("  ... %s\n", tests[i].name);
+        printf("  ... %s\n", tests[order[i]].name);
         fflush(stdout);
-        tests[i].fn();
+        tests[order[i]].fn();
         if (g_failures != before) {
-            printf("[fail] %s\n", tests[i].name);
+            printf("[fail] %s\n", tests[order[i]].name);
         }
     }
     printf("test_libsys_event_loop: %d checks, %d failures\n", g_checks, g_failures);
+    if (g_failures != 0) {
+        wasmos_test_report_seed(seed);
+    }
     return g_failures == 0 ? 0 : 1;
 }

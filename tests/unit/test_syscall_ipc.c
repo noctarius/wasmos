@@ -19,6 +19,8 @@
  */
 
 #include <stdio.h>
+
+#include "test_shuffle.h"
 #include <stdlib.h>
 #include <string.h>
 
@@ -632,15 +634,24 @@ int main(void) {
     reset();
     (void)ipc_endpoint_create(SERVICE_CTX, &g_dest_ep);
 
-    for (unsigned i = 0; i < sizeof(tests) / sizeof(tests[0]); ++i) {
+    /* Randomized order: a case that leaks state must not be able to make its
+     * neighbour pass. Replay a failure with WASMOS_TEST_SEED. */
+    const int test_count = (int)(sizeof(tests) / sizeof(tests[0]));
+    int order[WASMOS_TEST_MAX_CASES];
+    const uint64_t seed = wasmos_test_shuffle(order, test_count);
+
+    for (int i = 0; i < test_count; ++i) {
         int before = g_failures;
-        printf("  ... %s\n", tests[i].name);
+        printf("  ... %s\n", tests[order[i]].name);
         fflush(stdout);
-        tests[i].fn();
+        tests[order[i]].fn();
         if (g_failures != before) {
-            printf("[fail] %s\n", tests[i].name);
+            printf("[fail] %s\n", tests[order[i]].name);
         }
     }
     printf("test_syscall_ipc: %d checks, %d failures\n", g_checks, g_failures);
+    if (g_failures != 0) {
+        wasmos_test_report_seed(seed);
+    }
     return g_failures == 0 ? 0 : 1;
 }

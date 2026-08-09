@@ -113,6 +113,30 @@ void ipc_endpoints_release_owner(uint32_t owner_context_id);
  * ready, then returns the ready endpoint ID.  The caller then calls
  * ipc_recv_for / ipc_wait_for to consume the payload.
  */
+/*
+ * How many select sets exist system-wide.
+ *
+ * One per parked service is the norm -- libsys's event loop creates one, and a
+ * couple of components create two -- and a boot brings up roughly twenty
+ * processes, so the previous 32 left barely ten spare. A slot is 88 bytes, so
+ * the whole table is 11 KB at this size: the ceiling was tight for no reason
+ * worth defending.
+ */
+#define IPC_SELECT_TABLE_SIZE 128u
+
+/*
+ * Per-context ceilings on the two shared IPC tables.
+ *
+ * Both are global: the select table is a fixed IPC_SELECT_TABLE_SIZE slots, and
+ * the endpoint table grows out of kernel memory. Without a per-context cap one
+ * context can take all of either, and every other context is starved -- a service that cannot
+ * create a select set cannot park, and one that cannot create an endpoint cannot be reached at all.
+ * The caps are well above what any component uses (the busiest has four endpoint-create sites and
+ * two select-create sites) and exist to bound a runaway, not to ration normal use.
+ */
+#define IPC_SELECT_PER_CONTEXT_MAX 8u
+#define IPC_ENDPOINT_PER_CONTEXT_MAX 64u
+
 int ipc_select_create(uint32_t owner_context_id, uint32_t* out_select_id);
 int ipc_select_add(uint32_t select_id, uint32_t endpoint_id, uint32_t owner_context_id);
 /* Block until a watched endpoint is ready, or timeout_ms elapses (0 = forever).

@@ -49,7 +49,6 @@ typedef struct ipc_select {
     uint32_t ep_count;
 } ipc_select_t;
 
-#define IPC_SELECT_TABLE_SIZE 32u
 static ipc_select_t g_select_table[IPC_SELECT_TABLE_SIZE];
 static ksync_spinlock_t g_select_table_lock;
 
@@ -204,12 +203,34 @@ static ipc_endpoint_t* ipc_endpoint_acquire_owned(uint32_t endpoint, ipc_endpoin
 
 /* The two endpoint kinds differ only in ep->type; everything else -- id
  * allocation, the zeroed queue state, the embedded event -- is identical. */
+/* Caller holds g_endpoint_table_lock.  Walked rather than counted in a field
+ * because creation is rare and a counter is one more thing to keep true across
+ * every release path. */
+static uint32_t ipc_endpoint_count_for_owner(uint32_t owner_context_id) {
+    list_iter_t it;
+    uint32_t used = 0;
+    ipc_endpoint_t* ep = (ipc_endpoint_t*)list_first(&g_endpoint_table, &it);
+    while (ep) {
+        if (ep->in_use && ep->owner_context_id == owner_context_id) {
+            used++;
+        }
+        ep = (ipc_endpoint_t*)list_next(&it);
+    }
+    return used;
+}
+
 static int ipc_endpoint_create_typed(uint32_t owner_context_id, ipc_endpoint_type_t type,
                                      uint32_t* out_endpoint) {
     if (!out_endpoint) {
         return IPC_ERR_INVALID;
     }
     ksync_spinlock_lock(&g_endpoint_table_lock);
+    /* Both endpoint kinds come from this table, so the quota covers both and a
+     * context cannot get a second allowance by asking for notifications. */
+    if (ipc_endpoint_count_for_owner(owner_context_id) >= IPC_ENDPOINT_PER_CONTEXT_MAX) {
+        ksync_spinlock_unlock(&g_endpoint_table_lock);
+        return IPC_ERR_FULL;
+    }
     ipc_endpoint_t* ep = (ipc_endpoint_t*)list_alloc(&g_endpoint_table);
     if (!ep) {
         ksync_spinlock_unlock(&g_endpoint_table_lock);
@@ -518,11 +539,28 @@ static ipc_select_t* ipc_select_find(uint32_t select_id, uint32_t owner_context_
     return sel;
 }
 
+/* Caller holds g_select_table_lock. */
+static uint32_t ipc_select_count_for_owner(uint32_t owner_context_id) {
+    uint32_t used = 0;
+    for (uint32_t i = 0; i < IPC_SELECT_TABLE_SIZE; i++) {
+        if (g_select_table[i].in_use && g_select_table[i].owner_context_id == owner_context_id) {
+            used++;
+        }
+    }
+    return used;
+}
+
 int ipc_select_create(uint32_t owner_context_id, uint32_t* out_select_id) {
     if (!out_select_id) {
         return IPC_ERR_INVALID;
     }
     ksync_spinlock_lock(&g_select_table_lock);
+    /* Refuse before searching: a context at its ceiling must not be able to take
+     * the last slot out from under everyone else. */
+    if (ipc_select_count_for_owner(owner_context_id) >= IPC_SELECT_PER_CONTEXT_MAX) {
+        ksync_spinlock_unlock(&g_select_table_lock);
+        return IPC_ERR_FULL;
+    }
     for (uint32_t i = 0; i < IPC_SELECT_TABLE_SIZE; i++) {
         ipc_select_t* sel = &g_select_table[i];
         if (!sel->in_use) {

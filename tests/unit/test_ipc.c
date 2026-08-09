@@ -826,6 +826,84 @@ static void test_select_watch_capacity_is_enforced(void) {
     ipc_endpoints_release_owner(ctx);
 }
 
+/* The select table is 32 slots shared by every context, and the endpoint table
+ * grows out of kernel memory. Without a per-context cap, one context can take
+ * all of either and every other context is starved -- a service that cannot
+ * create its select set cannot park, and one that cannot create an endpoint
+ * cannot be reached at all. A greedy or looping context should hit its own
+ * ceiling, not the machine's.
+ *
+ * The cap is per context, so it is the OTHER context still working that is the
+ * property worth pinning; the refusal on its own would be satisfied by a
+ * global limit, which is what this replaces. */
+static void test_select_sets_are_capped_per_context(void) {
+    uint32_t greedy = fresh_ctx();
+    uint32_t ids[IPC_SELECT_PER_CONTEXT_MAX + 4u];
+    uint32_t n = 0;
+    while (n < IPC_SELECT_PER_CONTEXT_MAX + 4u) {
+        uint32_t sel = 0;
+        if (ipc_select_create(greedy, &sel) != IPC_OK) {
+            break;
+        }
+        ids[n++] = sel;
+    }
+    CHECK(n == IPC_SELECT_PER_CONTEXT_MAX, "a context gets exactly its quota of select sets");
+
+    uint32_t refused = 0;
+    CHECK(ipc_select_create(greedy, &refused) == IPC_ERR_FULL,
+          "and the next one is refused with FULL");
+
+    /* The point of the quota: someone else can still work. */
+    uint32_t neighbour = fresh_ctx();
+    uint32_t theirs = 0;
+    CHECK(ipc_select_create(neighbour, &theirs) == IPC_OK,
+          "another context is not starved by the greedy one");
+    ipc_select_destroy(theirs, neighbour);
+
+    /* Releasing one frees the quota, not just the slot. */
+    ipc_select_destroy(ids[0], greedy);
+    uint32_t again = 0;
+    CHECK(ipc_select_create(greedy, &again) == IPC_OK, "destroying one frees the quota again");
+    ids[0] = again;
+    for (uint32_t i = 0; i < n; ++i) {
+        ipc_select_destroy(ids[i], greedy);
+    }
+}
+
+static void test_endpoints_are_capped_per_context(void) {
+    uint32_t greedy = fresh_ctx();
+    uint32_t n = 0;
+    while (n < IPC_ENDPOINT_PER_CONTEXT_MAX + 4u) {
+        uint32_t ep = 0;
+        if (ipc_endpoint_create(greedy, &ep) != IPC_OK) {
+            break;
+        }
+        n++;
+    }
+    CHECK(n == IPC_ENDPOINT_PER_CONTEXT_MAX, "a context gets exactly its quota of endpoints");
+
+    uint32_t refused = 0;
+    CHECK(ipc_endpoint_create(greedy, &refused) == IPC_ERR_FULL,
+          "and the next one is refused with FULL");
+
+    uint32_t neighbour = fresh_ctx();
+    uint32_t theirs = 0;
+    CHECK(ipc_endpoint_create(neighbour, &theirs) == IPC_OK,
+          "another context is not starved by the greedy one");
+
+    /* Notification endpoints come from the same table, so they share the cap
+     * rather than opening a second door to the same exhaustion. */
+    uint32_t note = 0;
+    CHECK(ipc_notification_create(greedy, &note) == IPC_ERR_FULL,
+          "notifications are covered by the same quota");
+
+    ipc_endpoints_release_owner(greedy);
+    uint32_t after = 0;
+    CHECK(ipc_endpoint_create(greedy, &after) == IPC_OK, "releasing the context frees its quota");
+    ipc_endpoints_release_owner(greedy);
+    ipc_endpoints_release_owner(neighbour);
+}
+
 /* The select table is a fixed array. Exhausting it must report FULL, and every
  * slot must come back after the sets are destroyed — a leaked slot would
  * silently cap how many services can ever run. */
@@ -1362,18 +1440,30 @@ static void test_a_wrapped_id_never_collides_with_a_live_endpoint(void) {
 }
 
 static void test_endpoint_creation_reports_allocation_failure(void) {
-    uint32_t ctx = fresh_ctx();
     /* With allocation failing, creation succeeds only while recycled slots are
      * left in the chunks already allocated; the first create that needs a new
-     * chunk must report FULL rather than hand back a bad handle. The bound is
-     * generous because how many free slots exist depends on what ran earlier;
-     * everything created here is owned by ctx and released below. */
+     * chunk must report FULL rather than hand back a bad handle.
+     *
+     * Spread across contexts, because IPC_ERR_FULL now has two causes and one
+     * context alone can only reach the other one: it hits its own quota at
+     * IPC_ENDPOINT_PER_CONTEXT_MAX long before the allocator runs dry. Moving to
+     * a new contextevery time the quota is reached keeps the allocator as the thing
+     * under test. Everything created here is released below. */
+    uint32_t ctxs[64];
+    uint32_t ctx_count = 0;
+    uint32_t per_ctx = 0;
     int saw_full = 0;
     uint32_t created = 0;
+
+    ctxs[ctx_count++] = fresh_ctx();
     g_malloc_fail = 1;
     for (uint32_t i = 0; i < 4096u; ++i) {
         uint32_t id = 0xFFFFFFFFu;
-        int rc = ipc_endpoint_create(ctx, &id);
+        if (per_ctx >= IPC_ENDPOINT_PER_CONTEXT_MAX && ctx_count < 64u) {
+            ctxs[ctx_count++] = fresh_ctx();
+            per_ctx = 0;
+        }
+        int rc = ipc_endpoint_create(ctxs[ctx_count - 1u], &id);
         if (rc == IPC_ERR_FULL) {
             saw_full = 1;
             CHECK(id == 0xFFFFFFFFu, "a failed create does not write the out-param");
@@ -1383,15 +1473,21 @@ static void test_endpoint_creation_reports_allocation_failure(void) {
             break;
         }
         created++;
+        per_ctx++;
     }
     g_malloc_fail = 0;
     CHECK(saw_full, "an allocation failure surfaces as IPC_ERR_FULL, not a crash or a bad handle");
     CHECK(created < 4096u, "the loop terminated on the failure, not on its bound");
 
-    /* And the table is still usable once allocation recovers. */
+    /* And the table is still usable once allocation recovers. A fresh context,
+     * so this asks about the allocator rather than about a quota. */
+    for (uint32_t i = 0; i < ctx_count; ++i) {
+        ipc_endpoints_release_owner(ctxs[i]);
+    }
+    uint32_t recovered_ctx = fresh_ctx();
     uint32_t after = 0;
-    CHECK(ipc_endpoint_create(ctx, &after) == IPC_OK, "the table recovers");
-    ipc_endpoints_release_owner(ctx);
+    CHECK(ipc_endpoint_create(recovered_ctx, &after) == IPC_OK, "the table recovers");
+    ipc_endpoints_release_owner(recovered_ctx);
 }
 
 /* ------------------------------------------------- notification counters */
@@ -2456,6 +2552,8 @@ int main(void) {
         const char* name;
         void (*fn)(void);
     } tests[] = {
+        {"Q10 select sets are capped per context", test_select_sets_are_capped_per_context},
+        {"Q11 endpoints are capped per context", test_endpoints_are_capped_per_context},
         {"E1 create assigns distinct ids", test_create_assigns_distinct_ids},
         {"E2 create rejects a NULL out param", test_create_rejects_a_null_out_param},
         {"E3 reserved and unknown ids are invalid", test_reserved_and_unknown_ids_are_invalid},

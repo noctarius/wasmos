@@ -404,6 +404,7 @@ static void test_no_message_is_delivered_twice_across_receivers(void) {
 /* --------------------------------------------------- concurrent creation */
 
 #define CREATE_PER_THREAD 200
+#define CTX_PER_THREAD (CREATE_PER_THREAD / IPC_ENDPOINT_PER_CONTEXT_MAX + 1u)
 
 static void* creator_thread(void* p) {
     worker_arg_t* a = (worker_arg_t*)p;
@@ -412,7 +413,13 @@ static void* creator_thread(void* p) {
     BARRIER_WAIT();
     for (int i = 0; i < CREATE_PER_THREAD; ++i) {
         uint32_t id = 0;
-        int rc = (i & 1) ? ipc_notification_create(a->ctx, &id) : ipc_endpoint_create(a->ctx, &id);
+        /* Walk a reserved block of contexts, one per quota's worth: 200 creates
+         * is far past any single context's endpoint allowance, and what this
+         * asks about is id allocation under contention rather than the quota.
+         * The block is reserved by the caller because fresh_ctx() is a plain
+         * counter and is not safe to call from these threads. */
+        uint32_t ctx = a->ctx + (uint32_t)i / IPC_ENDPOINT_PER_CONTEXT_MAX;
+        int rc = (i & 1) ? ipc_notification_create(ctx, &id) : ipc_endpoint_create(ctx, &id);
         if (rc != IPC_OK) {
             a->result = rc;
             return 0;
@@ -429,12 +436,17 @@ static int cmp_u32(const void* a, const void* b) {
 }
 
 static void test_concurrent_creation_hands_out_unique_ids(void) {
-    uint32_t ctx = fresh_ctx();
     worker_arg_t args[POOL_MAX];
     uint32_t* ids = (uint32_t*)calloc((size_t)NTHREADS * CREATE_PER_THREAD, sizeof(uint32_t));
     memset(args, 0, sizeof(args));
     for (int i = 0; i < NTHREADS; ++i) {
-        args[i].ctx = ctx;
+        /* Reserve a contiguous block of contexts for this thread, enough that
+         * CREATE_PER_THREAD creates fit inside the per-context quota. fresh_ctx
+         * hands out consecutive ids, so the thread can walk the block itself. */
+        args[i].ctx = fresh_ctx();
+        for (uint32_t k = 1; k < CTX_PER_THREAD; ++k) {
+            (void)fresh_ctx();
+        }
         args[i].aux = ids;
     }
     run_workers(creator_thread, args, NTHREADS);
@@ -462,7 +474,12 @@ static void test_concurrent_creation_hands_out_unique_ids(void) {
     CHECK(!reserved, "no reserved id is ever handed out");
 
     free(ids);
-    ipc_endpoints_release_owner(ctx);
+    /* Release every context each thread walked, not just the first. */
+    for (int i = 0; i < NTHREADS; ++i) {
+        for (uint32_t k = 0; k < CTX_PER_THREAD; ++k) {
+            ipc_endpoints_release_owner(args[i].ctx + k);
+        }
+    }
 }
 
 /* ------------------------------------- teardown racing senders and select */
@@ -714,19 +731,31 @@ static void test_select_slots_are_conserved_under_churn(void) {
     }
     CHECK(bad == 0, "no churn thread saw an invalid select id");
 
-    /* The table must be completely free again. */
-    uint32_t ids[64];
+    /* The table must be completely free again. Claimed across several contexts
+     * because no single one may hold all 32 any more -- the per-context quota
+     * caps it at IPC_SELECT_PER_CONTEXT_MAX -- and what this asks about is the
+     * TABLE, not one context's allowance. */
+    uint32_t ids[IPC_SELECT_TABLE_SIZE];
+    uint32_t owners[IPC_SELECT_TABLE_SIZE];
     uint32_t n = 0;
-    while (n < 64) {
+    uint32_t owner = fresh_ctx();
+    uint32_t held_by_owner = 0;
+    while (n < IPC_SELECT_TABLE_SIZE) {
         uint32_t sel = 0;
-        if (ipc_select_create(ctx, &sel) != IPC_OK) {
+        if (held_by_owner >= IPC_SELECT_PER_CONTEXT_MAX) {
+            owner = fresh_ctx();
+            held_by_owner = 0;
+        }
+        if (ipc_select_create(owner, &sel) != IPC_OK) {
             break;
         }
+        owners[n] = owner;
         ids[n++] = sel;
+        held_by_owner++;
     }
-    CHECK(n == 32u, "every slot the churn allocated was returned");
+    CHECK(n == IPC_SELECT_TABLE_SIZE, "every slot the churn allocated was returned");
     for (uint32_t i = 0; i < n; ++i) {
-        ipc_select_destroy(ids[i], ctx);
+        ipc_select_destroy(ids[i], owners[i]);
     }
     ipc_endpoints_release_owner(ctx);
 }

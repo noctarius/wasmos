@@ -1683,7 +1683,11 @@ static void test_the_readiness_latch_is_last_writer_wins(void) {
     ipc_endpoints_release_owner(ctx);
 }
 
-static void test_select_recv_propagates_a_permission_failure(void) {
+/* The set owner, not the endpoint owner, is what select_recv runs as. A
+ * kernel-owned set may therefore drain another context's endpoint. The
+ * converse -- a set whose owner does NOT own the endpoint -- is the
+ * "select_recv(endpoint not owned)" row of the error contract. */
+static void test_a_kernel_owned_set_may_drain_another_contexts_endpoint(void) {
     uint32_t owner = fresh_ctx();
     uint32_t ep = 0, sel = 0;
     (void)ipc_endpoint_create(owner, &ep);
@@ -1838,6 +1842,601 @@ static void test_a_timed_select_wait_expires_as_empty(void) {
     ipc_endpoints_release_owner(ctx);
 }
 
+/* ------------------------------------------------------- the error contract
+ *
+ * Every value each entry point can return, enumerated in one table against the
+ * precondition that produces it. The tests above assert codes incidentally,
+ * while checking behaviour; this asserts the code IS the contract, so a
+ * refactor that starts returning INVALID where it used to return PERM -- or
+ * quietly turns a distinguishable failure into a generic one -- fails here
+ * with the case named, rather than passing because no test happened to look.
+ *
+ * The kernel wrappers (ipc_send/recv/notify/wait) are covered by their own
+ * equivalence case rather than repeating every row twice.
+ */
+
+#define BAD_EP 0x7FFFFFFFu
+#define BAD_SEL 0xFFFFu
+
+static struct {
+    uint32_t ctx;          /* the acting context */
+    uint32_t other;        /* a foreign context */
+    uint32_t msg_ep;       /* MESSAGE, owned by ctx, empty */
+    uint32_t note_ep;      /* NOTIFICATION, owned by ctx, unsignalled */
+    uint32_t ready_ep;     /* MESSAGE, owned by ctx, one message queued */
+    uint32_t full_ep;      /* MESSAGE, owned by ctx, queue at capacity */
+    uint32_t foreign_ep;   /* MESSAGE, owned by other */
+    uint32_t foreign_note; /* NOTIFICATION, owned by other */
+    uint32_t sel;          /* select set owned by ctx, watching msg_ep */
+} g_env;
+
+static ipc_message_t g_scratch;
+
+static const char* code_name(int rc) {
+    switch (rc) {
+    case IPC_OK:
+        return "IPC_OK";
+    case IPC_EMPTY:
+        return "IPC_EMPTY";
+    case IPC_ERR_INVALID:
+        return "IPC_ERR_INVALID";
+    case IPC_ERR_PERM:
+        return "IPC_ERR_PERM";
+    case IPC_ERR_FULL:
+        return "IPC_ERR_FULL";
+    default:
+        return "<unknown>";
+    }
+}
+
+/* --- creation ---------------------------------------------------------- */
+static int c_create_null_out(void) {
+    return ipc_endpoint_create(g_env.ctx, 0);
+}
+static int c_note_create_null_out(void) {
+    return ipc_notification_create(g_env.ctx, 0);
+}
+static int c_create_ok(void) {
+    uint32_t id = 0;
+    return ipc_endpoint_create(g_env.ctx, &id);
+}
+static int c_note_create_ok(void) {
+    uint32_t id = 0;
+    return ipc_notification_create(g_env.ctx, &id);
+}
+/* Exhaust the backing allocator rather than the table: list_alloc only fails
+ * when it must grow, so keep creating until it does. */
+static int c_create_alloc_fail(void) {
+    uint32_t junk = fresh_ctx();
+    int rc = IPC_OK;
+    g_malloc_fail = 1;
+    for (uint32_t i = 0; i < 4096u && rc == IPC_OK; ++i) {
+        uint32_t id = 0;
+        rc = ipc_endpoint_create(junk, &id);
+    }
+    g_malloc_fail = 0;
+    ipc_endpoints_release_owner(junk);
+    return rc;
+}
+static int c_note_create_alloc_fail(void) {
+    uint32_t junk = fresh_ctx();
+    int rc = IPC_OK;
+    g_malloc_fail = 1;
+    for (uint32_t i = 0; i < 4096u && rc == IPC_OK; ++i) {
+        uint32_t id = 0;
+        rc = ipc_notification_create(junk, &id);
+    }
+    g_malloc_fail = 0;
+    ipc_endpoints_release_owner(junk);
+    return rc;
+}
+
+/* --- queries ----------------------------------------------------------- */
+static int c_owner_unknown(void) {
+    uint32_t o = 0;
+    return ipc_endpoint_owner(BAD_EP, &o);
+}
+static int c_owner_reserved_zero(void) {
+    uint32_t o = 0;
+    return ipc_endpoint_owner(0, &o);
+}
+static int c_owner_reserved_none(void) {
+    uint32_t o = 0;
+    return ipc_endpoint_owner(IPC_ENDPOINT_NONE, &o);
+}
+static int c_owner_null_out(void) {
+    return ipc_endpoint_owner(g_env.msg_ep, 0);
+}
+static int c_owner_ok(void) {
+    uint32_t o = 0;
+    return ipc_endpoint_owner(g_env.msg_ep, &o);
+}
+static int c_count_unknown(void) {
+    uint32_t n = 0;
+    return ipc_endpoint_count(BAD_EP, &n);
+}
+static int c_count_null_out(void) {
+    return ipc_endpoint_count(g_env.msg_ep, 0);
+}
+static int c_count_ok(void) {
+    uint32_t n = 0;
+    return ipc_endpoint_count(g_env.msg_ep, &n);
+}
+
+/* --- send -------------------------------------------------------------- */
+static ipc_message_t owned_msg(void) {
+    ipc_message_t m = msg_of(g_env.msg_ep, 1u, 1u); /* source owned by ctx */
+    return m;
+}
+static int c_send_null_message(void) {
+    return ipc_send_from(g_env.ctx, g_env.msg_ep, 0);
+}
+static int c_send_unknown_dest(void) {
+    ipc_message_t m = owned_msg();
+    return ipc_send_from(g_env.ctx, BAD_EP, &m);
+}
+static int c_send_notification_dest(void) {
+    ipc_message_t m = owned_msg();
+    return ipc_send_from(g_env.ctx, g_env.note_ep, &m);
+}
+static int c_send_no_source(void) {
+    ipc_message_t m = msg_of(IPC_ENDPOINT_NONE, 1u, 1u);
+    return ipc_send_from(g_env.ctx, g_env.msg_ep, &m);
+}
+static int c_send_foreign_source(void) {
+    ipc_message_t m = msg_of(g_env.foreign_ep, 1u, 1u);
+    return ipc_send_from(g_env.ctx, g_env.msg_ep, &m);
+}
+static int c_send_unknown_source(void) {
+    ipc_message_t m = msg_of(BAD_EP, 1u, 1u);
+    return ipc_send_from(g_env.ctx, g_env.msg_ep, &m);
+}
+static int c_send_full(void) {
+    ipc_message_t m = owned_msg();
+    return ipc_send_from(g_env.ctx, g_env.full_ep, &m);
+}
+static int c_send_ok(void) {
+    ipc_message_t m = owned_msg();
+    return ipc_send_from(g_env.ctx, g_env.msg_ep, &m);
+}
+
+/* --- non-blocking receive ---------------------------------------------- */
+static int c_recv_null_out(void) {
+    return ipc_recv_for(g_env.ctx, g_env.ready_ep, 0);
+}
+static int c_recv_unknown(void) {
+    return ipc_recv_for(g_env.ctx, BAD_EP, &g_scratch);
+}
+static int c_recv_notification(void) {
+    return ipc_recv_for(g_env.ctx, g_env.note_ep, &g_scratch);
+}
+static int c_recv_non_owner(void) {
+    return ipc_recv_for(g_env.other, g_env.ready_ep, &g_scratch);
+}
+static int c_recv_empty(void) {
+    return ipc_recv_for(g_env.ctx, g_env.msg_ep, &g_scratch);
+}
+static int c_recv_ok(void) {
+    return ipc_recv_for(g_env.ctx, g_env.ready_ep, &g_scratch);
+}
+
+/* --- blocking receive --------------------------------------------------- */
+static int c_brecv_null_out(void) {
+    return ipc_recv_blocking_for(g_env.ctx, g_env.ready_ep, 0);
+}
+static int c_brecv_unknown(void) {
+    return ipc_recv_blocking_for(g_env.ctx, BAD_EP, &g_scratch);
+}
+static int c_brecv_notification(void) {
+    return ipc_recv_blocking_for(g_env.ctx, g_env.note_ep, &g_scratch);
+}
+static int c_brecv_non_owner(void) {
+    return ipc_recv_blocking_for(g_env.other, g_env.ready_ep, &g_scratch);
+}
+static int c_brecv_spurious(void) {
+    return ipc_recv_blocking_for(g_env.ctx, g_env.msg_ep, &g_scratch);
+}
+static int c_brecv_ok(void) {
+    return ipc_recv_blocking_for(g_env.ctx, g_env.ready_ep, &g_scratch);
+}
+/* The endpoint vanishing while its receiver is parked: the post-wake re-lookup
+ * fails, and that must be INVALID rather than EMPTY, or the caller retries
+ * forever on a handle that no longer exists. */
+static uint32_t g_doomed_ctx;
+static void hook_release_doomed(void) {
+    ipc_endpoints_release_owner(g_doomed_ctx);
+}
+static int c_brecv_endpoint_destroyed(void) {
+    uint32_t ep = 0;
+    g_doomed_ctx = fresh_ctx();
+    (void)ipc_endpoint_create(g_doomed_ctx, &ep);
+    g_yield_hook = hook_release_doomed;
+    return ipc_recv_blocking_for(g_doomed_ctx, ep, &g_scratch);
+}
+
+/* --- readable wait ------------------------------------------------------ */
+static int c_epwait_unknown(void) {
+    return ipc_endpoint_wait_for(g_env.ctx, BAD_EP, 0);
+}
+static int c_epwait_notification(void) {
+    return ipc_endpoint_wait_for(g_env.ctx, g_env.note_ep, 0);
+}
+static int c_epwait_non_owner(void) {
+    return ipc_endpoint_wait_for(g_env.other, g_env.ready_ep, 0);
+}
+static int c_epwait_ok(void) {
+    return ipc_endpoint_wait_for(g_env.ctx, g_env.ready_ep, 0);
+}
+
+/* --- notify / wait ------------------------------------------------------ */
+static int c_notify_unknown(void) {
+    return ipc_notify_from(g_env.ctx, BAD_EP);
+}
+static int c_notify_message_ep(void) {
+    return ipc_notify_from(g_env.ctx, g_env.msg_ep);
+}
+static int c_notify_foreign(void) {
+    return ipc_notify_from(g_env.ctx, g_env.foreign_note);
+}
+static int c_notify_ok(void) {
+    return ipc_notify_from(g_env.ctx, g_env.note_ep);
+}
+static int c_wait_unknown(void) {
+    return ipc_wait_for(g_env.ctx, BAD_EP);
+}
+static int c_wait_message_ep(void) {
+    return ipc_wait_for(g_env.ctx, g_env.msg_ep);
+}
+static int c_wait_foreign(void) {
+    return ipc_wait_for(g_env.ctx, g_env.foreign_note);
+}
+static int c_wait_empty(void) {
+    return ipc_wait_for(g_env.ctx, g_env.note_ep);
+}
+static int c_wait_ok(void) {
+    (void)ipc_notify_from(g_env.ctx, g_env.note_ep);
+    return ipc_wait_for(g_env.ctx, g_env.note_ep);
+}
+
+/* --- select ------------------------------------------------------------- */
+static int c_sel_create_null_out(void) {
+    return ipc_select_create(g_env.ctx, 0);
+}
+static int c_sel_create_ok(void) {
+    uint32_t s = 0;
+    int rc = ipc_select_create(g_env.ctx, &s);
+    if (rc == IPC_OK) {
+        ipc_select_destroy(s, g_env.ctx);
+    }
+    return rc;
+}
+static int c_sel_create_exhausted(void) {
+    uint32_t ids[64];
+    uint32_t n = 0;
+    int rc;
+    while (n < 64) {
+        uint32_t s = 0;
+        if (ipc_select_create(g_env.ctx, &s) != IPC_OK) {
+            break;
+        }
+        ids[n++] = s;
+    }
+    uint32_t overflow = 0;
+    rc = ipc_select_create(g_env.ctx, &overflow);
+    for (uint32_t i = 0; i < n; ++i) {
+        ipc_select_destroy(ids[i], g_env.ctx);
+    }
+    return rc;
+}
+static int c_sel_add_zero_id(void) {
+    return ipc_select_add(0, g_env.msg_ep, g_env.ctx);
+}
+static int c_sel_add_out_of_range(void) {
+    return ipc_select_add(BAD_SEL, g_env.msg_ep, g_env.ctx);
+}
+static int c_sel_add_foreign_owner(void) {
+    return ipc_select_add(g_env.sel, g_env.msg_ep, g_env.other);
+}
+static int c_sel_add_duplicate(void) {
+    return ipc_select_add(g_env.sel, g_env.msg_ep, g_env.ctx); /* already watched */
+}
+static int c_sel_add_capacity(void) {
+    uint32_t ctx = fresh_ctx();
+    uint32_t s = 0;
+    int rc = IPC_OK;
+    (void)ipc_select_create(ctx, &s);
+    for (uint32_t i = 0; i < IPC_SELECT_EPS_MAX + 1u && rc == IPC_OK; ++i) {
+        uint32_t ep = 0;
+        (void)ipc_endpoint_create(ctx, &ep);
+        rc = ipc_select_add(s, ep, ctx);
+    }
+    ipc_select_destroy(s, ctx);
+    ipc_endpoints_release_owner(ctx);
+    return rc;
+}
+static int c_sel_add_watcher_alloc_fail(void) {
+    uint32_t ctx = fresh_ctx();
+    uint32_t s = 0, ep = 0;
+    (void)ipc_endpoint_create(ctx, &ep);
+    (void)ipc_select_create(ctx, &s);
+    g_malloc_fail = 1;
+    int rc = ipc_select_add(s, ep, ctx);
+    g_malloc_fail = 0;
+    ipc_select_destroy(s, ctx);
+    ipc_endpoints_release_owner(ctx);
+    return rc;
+}
+static int c_sel_add_ok(void) {
+    uint32_t ep = 0;
+    (void)ipc_endpoint_create(g_env.ctx, &ep);
+    return ipc_select_add(g_env.sel, ep, g_env.ctx);
+}
+static int c_sel_wait_null_out(void) {
+    return ipc_select_wait(g_env.sel, g_env.ctx, 0, 0);
+}
+static int c_sel_wait_bad_id(void) {
+    uint32_t r = 0;
+    return ipc_select_wait(BAD_SEL, g_env.ctx, &r, 0);
+}
+static int c_sel_wait_foreign_owner(void) {
+    uint32_t r = 0;
+    return ipc_select_wait(g_env.sel, g_env.other, &r, 0);
+}
+static int c_sel_wait_unsignalled(void) {
+    uint32_t r = 0;
+    return ipc_select_wait(g_env.sel, g_env.ctx, &r, 0);
+}
+static int c_sel_wait_ok(void) {
+    uint32_t r = 0;
+    ipc_message_t m = owned_msg();
+    (void)ipc_send_from(g_env.ctx, g_env.msg_ep, &m);
+    int rc = ipc_select_wait(g_env.sel, g_env.ctx, &r, 0);
+    (void)ipc_recv_for(g_env.ctx, g_env.msg_ep, &g_scratch);
+    return rc;
+}
+static int c_listen_null_endpoints(void) {
+    uint32_t s = 0;
+    return ipc_select_listen(g_env.ctx, 0, 1, &s);
+}
+static int c_listen_null_out(void) {
+    uint32_t eps[1] = {g_env.msg_ep};
+    return ipc_select_listen(g_env.ctx, eps, 1, 0);
+}
+static int c_listen_zero_count(void) {
+    uint32_t s = 0;
+    uint32_t eps[1] = {g_env.msg_ep};
+    return ipc_select_listen(g_env.ctx, eps, 0, &s);
+}
+/* listen propagates whatever the failing add returned, rather than flattening
+ * it to one generic code. */
+static int c_listen_propagates_full(void) {
+    uint32_t ctx = fresh_ctx();
+    uint32_t eps[IPC_SELECT_EPS_MAX + 1u];
+    uint32_t s = 0;
+    for (uint32_t i = 0; i < IPC_SELECT_EPS_MAX + 1u; ++i) {
+        eps[i] = 0;
+        (void)ipc_endpoint_create(ctx, &eps[i]);
+    }
+    int rc = ipc_select_listen(ctx, eps, IPC_SELECT_EPS_MAX + 1u, &s);
+    ipc_endpoints_release_owner(ctx);
+    return rc;
+}
+static int c_listen_ok(void) {
+    uint32_t ctx = fresh_ctx();
+    uint32_t ep = 0, s = 0;
+    (void)ipc_endpoint_create(ctx, &ep);
+    int rc = ipc_select_listen(ctx, &ep, 1, &s);
+    if (rc == IPC_OK) {
+        ipc_select_destroy(s, ctx);
+    }
+    ipc_endpoints_release_owner(ctx);
+    return rc;
+}
+static int c_sel_recv_null_message(void) {
+    uint32_t r = 0;
+    return ipc_select_recv(g_env.sel, g_env.ctx, &r, 0, 0);
+}
+static int c_sel_recv_bad_id(void) {
+    uint32_t r = 0;
+    return ipc_select_recv(BAD_SEL, g_env.ctx, &r, &g_scratch, 0);
+}
+static int c_sel_recv_unsignalled(void) {
+    uint32_t r = 0;
+    return ipc_select_recv(g_env.sel, g_env.ctx, &r, &g_scratch, 0);
+}
+/* A set may watch an endpoint its owner does not own -- add checks the SET's
+ * owner, not the endpoint's. The dequeue that follows then fails the receive
+ * ownership check, and select_recv must propagate that PERM rather than
+ * reporting EMPTY, which would send the caller into a retry loop. */
+static int c_sel_recv_endpoint_not_owned(void) {
+    uint32_t ctx = fresh_ctx();
+    uint32_t s = 0, r = 0;
+    (void)ipc_select_create(ctx, &s);
+    (void)ipc_select_add(s, g_env.foreign_ep, ctx);
+    (void)ksend(g_env.foreign_ep, 1u);
+    int rc = ipc_select_recv(s, ctx, &r, &g_scratch, 0);
+    ipc_select_destroy(s, ctx);
+    (void)ipc_recv_for(IPC_CONTEXT_KERNEL, g_env.foreign_ep, &g_scratch);
+    return rc;
+}
+static int c_sel_recv_ok(void) {
+    uint32_t r = 0;
+    ipc_message_t m = owned_msg();
+    (void)ipc_send_from(g_env.ctx, g_env.msg_ep, &m);
+    return ipc_select_recv(g_env.sel, g_env.ctx, &r, &g_scratch, 0);
+}
+
+static void contract_env_build(void) {
+    memset(&g_env, 0, sizeof(g_env));
+    g_env.ctx = fresh_ctx();
+    g_env.other = fresh_ctx();
+    (void)ipc_endpoint_create(g_env.ctx, &g_env.msg_ep);
+    (void)ipc_notification_create(g_env.ctx, &g_env.note_ep);
+    (void)ipc_endpoint_create(g_env.ctx, &g_env.ready_ep);
+    (void)ipc_endpoint_create(g_env.ctx, &g_env.full_ep);
+    (void)ipc_endpoint_create(g_env.other, &g_env.foreign_ep);
+    (void)ipc_notification_create(g_env.other, &g_env.foreign_note);
+    (void)ksend(g_env.ready_ep, 1u);
+    for (uint32_t i = 0; i < IPC_QUEUE_DEPTH; ++i) {
+        (void)ksend(g_env.full_ep, i);
+    }
+    (void)ipc_select_listen(g_env.ctx, &g_env.msg_ep, 1, &g_env.sel);
+}
+
+static void contract_env_teardown(void) {
+    ipc_select_destroy(g_env.sel, g_env.ctx);
+    ipc_endpoints_release_owner(g_env.ctx);
+    ipc_endpoints_release_owner(g_env.other);
+}
+
+static void test_error_code_contract(void) {
+    struct {
+        const char* what;
+        int expect;
+        int (*run)(void);
+    } cases[] = {
+        {"endpoint_create(NULL out)", IPC_ERR_INVALID, c_create_null_out},
+        {"notification_create(NULL out)", IPC_ERR_INVALID, c_note_create_null_out},
+        {"endpoint_create(valid)", IPC_OK, c_create_ok},
+        {"notification_create(valid)", IPC_OK, c_note_create_ok},
+        {"endpoint_create(allocation fails)", IPC_ERR_FULL, c_create_alloc_fail},
+        {"notification_create(allocation fails)", IPC_ERR_FULL, c_note_create_alloc_fail},
+
+        {"endpoint_owner(unknown)", IPC_ERR_INVALID, c_owner_unknown},
+        {"endpoint_owner(id 0)", IPC_ERR_INVALID, c_owner_reserved_zero},
+        {"endpoint_owner(NONE)", IPC_ERR_INVALID, c_owner_reserved_none},
+        {"endpoint_owner(NULL out)", IPC_ERR_INVALID, c_owner_null_out},
+        {"endpoint_owner(valid)", IPC_OK, c_owner_ok},
+        {"endpoint_count(unknown)", IPC_ERR_INVALID, c_count_unknown},
+        {"endpoint_count(NULL out)", IPC_ERR_INVALID, c_count_null_out},
+        {"endpoint_count(valid)", IPC_OK, c_count_ok},
+
+        {"send_from(NULL message)", IPC_ERR_INVALID, c_send_null_message},
+        {"send_from(unknown destination)", IPC_ERR_INVALID, c_send_unknown_dest},
+        {"send_from(notification destination)", IPC_ERR_INVALID, c_send_notification_dest},
+        {"send_from(no source)", IPC_ERR_PERM, c_send_no_source},
+        {"send_from(foreign source)", IPC_ERR_PERM, c_send_foreign_source},
+        {"send_from(unknown source)", IPC_ERR_PERM, c_send_unknown_source},
+        {"send_from(queue full)", IPC_ERR_FULL, c_send_full},
+        {"send_from(valid)", IPC_OK, c_send_ok},
+
+        {"recv_for(NULL out)", IPC_ERR_INVALID, c_recv_null_out},
+        {"recv_for(unknown)", IPC_ERR_INVALID, c_recv_unknown},
+        {"recv_for(notification endpoint)", IPC_ERR_INVALID, c_recv_notification},
+        {"recv_for(non-owner)", IPC_ERR_PERM, c_recv_non_owner},
+        {"recv_for(empty)", IPC_EMPTY, c_recv_empty},
+        {"recv_for(valid)", IPC_OK, c_recv_ok},
+
+        {"recv_blocking_for(NULL out)", IPC_ERR_INVALID, c_brecv_null_out},
+        {"recv_blocking_for(unknown)", IPC_ERR_INVALID, c_brecv_unknown},
+        {"recv_blocking_for(notification endpoint)", IPC_ERR_INVALID, c_brecv_notification},
+        {"recv_blocking_for(non-owner)", IPC_ERR_PERM, c_brecv_non_owner},
+        {"recv_blocking_for(spurious wake)", IPC_EMPTY, c_brecv_spurious},
+        {"recv_blocking_for(endpoint destroyed while parked)", IPC_ERR_INVALID,
+         c_brecv_endpoint_destroyed},
+        {"recv_blocking_for(valid)", IPC_OK, c_brecv_ok},
+
+        {"endpoint_wait_for(unknown)", IPC_ERR_INVALID, c_epwait_unknown},
+        {"endpoint_wait_for(notification endpoint)", IPC_ERR_INVALID, c_epwait_notification},
+        {"endpoint_wait_for(non-owner)", IPC_ERR_PERM, c_epwait_non_owner},
+        {"endpoint_wait_for(readable)", IPC_OK, c_epwait_ok},
+
+        {"notify_from(unknown)", IPC_ERR_INVALID, c_notify_unknown},
+        {"notify_from(message endpoint)", IPC_ERR_INVALID, c_notify_message_ep},
+        {"notify_from(foreign endpoint)", IPC_ERR_PERM, c_notify_foreign},
+        {"notify_from(valid)", IPC_OK, c_notify_ok},
+        {"wait_for(unknown)", IPC_ERR_INVALID, c_wait_unknown},
+        {"wait_for(message endpoint)", IPC_ERR_INVALID, c_wait_message_ep},
+        {"wait_for(foreign endpoint)", IPC_ERR_PERM, c_wait_foreign},
+        {"wait_for(unsignalled)", IPC_EMPTY, c_wait_empty},
+        {"wait_for(signalled)", IPC_OK, c_wait_ok},
+
+        {"select_create(NULL out)", IPC_ERR_INVALID, c_sel_create_null_out},
+        {"select_create(valid)", IPC_OK, c_sel_create_ok},
+        {"select_create(table exhausted)", IPC_ERR_FULL, c_sel_create_exhausted},
+        {"select_add(id 0)", IPC_ERR_INVALID, c_sel_add_zero_id},
+        {"select_add(out of range id)", IPC_ERR_INVALID, c_sel_add_out_of_range},
+        {"select_add(foreign owner)", IPC_ERR_INVALID, c_sel_add_foreign_owner},
+        {"select_add(already watched)", IPC_OK, c_sel_add_duplicate},
+        {"select_add(watch slots full)", IPC_ERR_FULL, c_sel_add_capacity},
+        {"select_add(watcher allocation fails)", IPC_ERR_FULL, c_sel_add_watcher_alloc_fail},
+        {"select_add(valid)", IPC_OK, c_sel_add_ok},
+
+        {"select_wait(NULL out)", IPC_ERR_INVALID, c_sel_wait_null_out},
+        {"select_wait(bad id)", IPC_ERR_INVALID, c_sel_wait_bad_id},
+        {"select_wait(foreign owner)", IPC_ERR_INVALID, c_sel_wait_foreign_owner},
+        {"select_wait(nothing signalled)", IPC_EMPTY, c_sel_wait_unsignalled},
+        {"select_wait(signalled)", IPC_OK, c_sel_wait_ok},
+
+        {"select_listen(NULL endpoints)", IPC_ERR_INVALID, c_listen_null_endpoints},
+        {"select_listen(NULL out)", IPC_ERR_INVALID, c_listen_null_out},
+        {"select_listen(zero count)", IPC_ERR_INVALID, c_listen_zero_count},
+        {"select_listen(propagates FULL)", IPC_ERR_FULL, c_listen_propagates_full},
+        {"select_listen(valid)", IPC_OK, c_listen_ok},
+
+        {"select_recv(NULL message)", IPC_ERR_INVALID, c_sel_recv_null_message},
+        {"select_recv(bad id)", IPC_ERR_INVALID, c_sel_recv_bad_id},
+        {"select_recv(nothing signalled)", IPC_EMPTY, c_sel_recv_unsignalled},
+        {"select_recv(endpoint not owned)", IPC_ERR_PERM, c_sel_recv_endpoint_not_owned},
+        {"select_recv(valid)", IPC_OK, c_sel_recv_ok},
+    };
+
+    for (unsigned i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+        reset_threads();
+        contract_env_build();
+        int rc = cases[i].run();
+        g_checks++;
+        if (rc != cases[i].expect) {
+            g_failures++;
+            printf("  [FAIL] %s: expected %s, got %s (%s:%d)\n", cases[i].what,
+                   code_name(cases[i].expect), code_name(rc), __FILE__, __LINE__);
+        }
+        contract_env_teardown();
+    }
+}
+
+/* The kernel wrappers are documented as their _from counterparts with
+ * IPC_CONTEXT_KERNEL. If one ever grew a check of its own, callers would see
+ * two different contracts for the same operation. */
+static void test_the_kernel_wrappers_match_their_from_variants(void) {
+    uint32_t ctx = fresh_ctx();
+    uint32_t msg_ep = 0, note_ep = 0;
+    (void)ipc_endpoint_create(ctx, &msg_ep);
+    (void)ipc_notification_create(ctx, &note_ep);
+    ipc_message_t m = msg_of(IPC_ENDPOINT_NONE, 1u, 1u);
+    ipc_message_t got;
+
+    CHECK(ipc_send(BAD_EP, &m) == ipc_send_from(IPC_CONTEXT_KERNEL, BAD_EP, &m),
+          "send matches send_from on an unknown endpoint");
+    CHECK(ipc_send(note_ep, &m) == ipc_send_from(IPC_CONTEXT_KERNEL, note_ep, &m),
+          "send matches send_from on a type mismatch");
+    CHECK(ipc_send(msg_ep, &m) == ipc_send_from(IPC_CONTEXT_KERNEL, msg_ep, &m),
+          "send matches send_from on the happy path");
+
+    CHECK(ipc_recv(BAD_EP, &got) == ipc_recv_for(IPC_CONTEXT_KERNEL, BAD_EP, &got),
+          "recv matches recv_for on an unknown endpoint");
+    CHECK(ipc_recv(msg_ep, &got) == ipc_recv_for(IPC_CONTEXT_KERNEL, msg_ep, &got),
+          "recv matches recv_for while messages remain");
+    CHECK(ipc_recv(msg_ep, &got) == ipc_recv_for(IPC_CONTEXT_KERNEL, msg_ep, &got),
+          "recv matches recv_for once drained");
+
+    CHECK(ipc_notify(BAD_EP) == ipc_notify_from(IPC_CONTEXT_KERNEL, BAD_EP),
+          "notify matches notify_from on an unknown endpoint");
+    CHECK(ipc_notify(msg_ep) == ipc_notify_from(IPC_CONTEXT_KERNEL, msg_ep),
+          "notify matches notify_from on a type mismatch");
+    CHECK(ipc_notify(note_ep) == ipc_notify_from(IPC_CONTEXT_KERNEL, note_ep),
+          "notify matches notify_from on the happy path");
+
+    CHECK(ipc_wait(BAD_EP) == ipc_wait_for(IPC_CONTEXT_KERNEL, BAD_EP),
+          "wait matches wait_for on an unknown endpoint");
+    CHECK(ipc_wait(note_ep) == ipc_wait_for(IPC_CONTEXT_KERNEL, note_ep),
+          "wait matches wait_for while signals remain");
+    CHECK(ipc_wait(note_ep) == ipc_wait_for(IPC_CONTEXT_KERNEL, note_ep),
+          "wait matches wait_for once drained");
+
+    ipc_endpoints_release_owner(ctx);
+}
+
 /* -------------------------------------------------------------------- main */
 
 int main(void) {
@@ -1920,8 +2519,8 @@ int main(void) {
         {"S17 a full set reports each endpoint", test_a_full_set_reports_each_of_its_endpoints},
         {"S18 the readiness latch is last-writer-wins",
          test_the_readiness_latch_is_last_writer_wins},
-        {"S19 select_recv propagates a permission failure",
-         test_select_recv_propagates_a_permission_failure},
+        {"S19 a kernel-owned set may drain a foreign endpoint",
+         test_a_kernel_owned_set_may_drain_another_contexts_endpoint},
         {"S20 a set survives losing every endpoint",
          test_a_set_survives_its_owner_losing_every_endpoint},
         {"S21 destroy is idempotent", test_select_destroy_is_idempotent},
@@ -1931,6 +2530,9 @@ int main(void) {
         {"B7 endpoint_wait hands the timeout through",
          test_endpoint_wait_hands_the_timeout_through_unchanged},
         {"B8 a timed select wait expires as EMPTY", test_a_timed_select_wait_expires_as_empty},
+        {"X1 every documented error code, by precondition", test_error_code_contract},
+        {"X2 the kernel wrappers match their _from variants",
+         test_the_kernel_wrappers_match_their_from_variants},
     };
 
     ipc_init();

@@ -183,6 +183,16 @@ readiness notification to any registered select sets.
 | `IPC_ERR_PERM`    | -2    | Caller does not own the source or destination endpoint |
 | `IPC_ERR_FULL`    | -3    | Queue at capacity (`IPC_QUEUE_DEPTH = 32`)             |
 
+`IPC_ERR_FULL` also covers resource exhaustion outside the message queue: an
+endpoint or select-set table that cannot grow, the per-set watch slots
+(`IPC_SELECT_EPS_MAX`), and a poll watcher that cannot be allocated.
+
+Which code each entry point returns for each precondition is enforced as a
+table in `tests/unit/test_ipc.c` (`test_error_code_contract`), covering every
+reachable return of every public function. A change that returns a different
+code fails there by name, so the mapping is a contract rather than a
+convention.
+
 #### `ipc_message_t`
 
 ```c

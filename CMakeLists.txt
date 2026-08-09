@@ -1979,6 +1979,13 @@ if(APPLE)
   endif()
 endif()
 
+# asc and node for the AssemblyScript unit test. ASC_EXECUTABLE is found inside
+# examples/assemblyscript, whose scope does not reach here, so resolve them once
+# at this level. Both are already build requirements (AS apps; the lint gate's
+# QUALITY_ASC), so this introduces no new dependency.
+find_program(WASMOS_UNIT_ASC asc HINTS ${CMAKE_SOURCE_DIR}/node_modules/.bin ${CLANG_BIN_DIR})
+find_program(WASMOS_UNIT_NODE node)
+
 add_custom_target(run-kernel-unit-tests
   COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
           -I${KERNEL_DIR}/include
@@ -2315,6 +2322,19 @@ add_custom_target(run-kernel-unit-tests
           -x none
           -o ${BUILD_DIR}/test_hostcall_ipc
   COMMAND ${BUILD_DIR}/test_hostcall_ipc
+  # The AssemblyScript coroutine runtime. AS is the one guest language that
+  # cannot link src/libsys/wasm/coroutine_wasm.c (asc has no external linking),
+  # so it has a port instead, and this holds the port to the C runtime's
+  # behaviour: the cases mirror tests/unit/test_wasm_coroutine.c.
+  #
+  # asc compiles the test to wasm and node runs it -- there is no host build of
+  # AS. Both are already required by the build (AS apps, and the asc found for
+  # the lint gate), so this adds no new dependency.
+  COMMAND ${WASMOS_UNIT_ASC} ${CMAKE_SOURCE_DIR}/tests/unit/test_as_coroutine.ts
+          --target release -O --runtime stub
+          --outFile ${BUILD_DIR}/test_as_coroutine.wasm
+  COMMAND ${WASMOS_UNIT_NODE} ${CMAKE_SOURCE_DIR}/tests/unit/as/run_as_test.mjs
+          ${BUILD_DIR}/test_as_coroutine.wasm test_as_coroutine
   # The poll hub on its own. Its only outward call is ipc_select_signal, so the
   # test stubs that and asserts exactly which sets a notify reaches.
   COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions

@@ -218,7 +218,9 @@ static int test_future_chains_and_deferred_callbacks(void) {
     wasmos_future_t source, rejected;
     wasmos_promise_t source_promise, rejected_promise;
     wasmos_future_continuation_t plus_one = {0}, recover_continuation = {0},
-                                 reject_continuation = {0};
+                                 reject_continuation = {0}, late_continuation = {0};
+    wasmos_future_t settled;
+    wasmos_promise_t settled_promise;
     wasmos_future_t* child;
     callback_state_t state = {0};
     int32_t status = 0;
@@ -245,6 +247,22 @@ static int test_future_chains_and_deferred_callbacks(void) {
     if (!child || !wasmos_promise_resolve(&source_promise, 1u) ||
         wasmos_wasm_coroutine_run(&runtime) != 0 || !wasmos_future_poll(child, &status, &value) ||
         status != -41 || value != 0u) {
+        return __LINE__;
+    }
+    /* Registering on an ALREADY-SETTLED future must still defer to the runtime
+     * rather than dispatch inline from wasmos_future_then. Every case above
+     * registers BEFORE settling, so nothing here covered the settled branch: a
+     * mutant that called continuation_dispatch directly from that branch passed
+     * this whole suite. Found while porting the runtime to AssemblyScript,
+     * whose suite mirrors this one. */
+    wasmos_future_init(&settled, &settled_promise);
+    state.calls = 0u;
+    if (!wasmos_promise_resolve(&settled_promise, 70u))
+        return __LINE__;
+    child = wasmos_future_then(&runtime, &settled, &late_continuation, increment, NULL, &state);
+    if (!child || state.calls != 0u || wasmos_wasm_coroutine_run(&runtime) != 0 ||
+        state.calls != 1u || !wasmos_future_poll(child, &status, &value) || status != 0 ||
+        value != 71u) {
         return __LINE__;
     }
     return 0;

@@ -843,6 +843,41 @@ static void test_select_watch_capacity_is_enforced(void) {
  *
  * The count is a poll.c test seam because the hub is not reachable from here:
  * ipc.c holds the only pointer and drops it. */
+/* A select set may watch a NOTIFICATION endpoint -- ipc_select_add takes any
+ * endpoint that resolves, and there is no type check to say otherwise. But
+ * ipc_notify_from only woke waiters parked directly on the endpoint's own
+ * event, and nothing can park there: both blocking waits demand a MESSAGE
+ * endpoint, and ipc_wait_for polls and returns EMPTY. So the direct wake was
+ * dead, and its deadness hid the live gap -- the poll hub was never signalled,
+ * so a service selecting on a notification endpoint parked forever while
+ * notifications piled up behind it.
+ *
+ * This replaces a case that pinned the limitation as though it were the
+ * contract ("select does not observe notification endpoints"). It described the
+ * implementation rather than justifying it: a set exists so a service can park
+ * on several sources, and an endpoint it is allowed to watch but that can never
+ * make it ready is a trap, not a design. Either signalling had to work or
+ * ipc_select_add had to refuse the endpoint; signalling is the useful half. */
+static void test_a_notification_wakes_a_watching_select(void) {
+    uint32_t ctx = fresh_ctx();
+    uint32_t note = 0, sel = 0;
+    CHECK(ipc_notification_create(ctx, &note) == IPC_OK, "a notification endpoint is created");
+    CHECK(ipc_select_create(ctx, &sel) == IPC_OK, "and a select set");
+    CHECK(ipc_select_add(sel, note, ctx) == IPC_OK, "which is allowed to watch it");
+
+    reset_threads();
+    CHECK(ipc_notify_from(ctx, note) == IPC_OK, "raising a notification succeeds");
+
+    uint32_t ready = 0xAAu;
+    CHECK(ipc_select_wait(sel, ctx, &ready, 0) == IPC_OK,
+          "the watching set is ready, not parked forever");
+    CHECK(ready == note, "and names the endpoint that was notified");
+    CHECK(ipc_wait_for(ctx, note) == IPC_OK, "the notification itself is still there to consume");
+
+    ipc_select_destroy(sel, ctx);
+    ipc_endpoints_release_owner(ctx);
+}
+
 static void test_teardown_releases_the_poll_hub(void) {
     uint32_t ctx = fresh_ctx();
     const uint32_t before = poll_test_live_structs();
@@ -1907,25 +1942,6 @@ static void test_listen_cleans_up_when_an_add_fails_midway(void) {
     ipc_endpoints_release_owner(ctx);
 }
 
-/* poll_notify is only wired into ipc_send_from, so a notification endpoint in a
- * select set never becomes ready however often it is signalled. */
-static void test_a_notification_endpoint_never_signals_a_set(void) {
-    uint32_t ctx = fresh_ctx();
-    uint32_t note = 0, sel = 0;
-    CHECK(ipc_notification_create(ctx, &note) == IPC_OK, "the notification endpoint is created");
-    (void)ipc_select_listen(ctx, &note, 1, &sel);
-    reset_threads();
-
-    CHECK(ipc_notify_from(ctx, note) == IPC_OK, "the notification is raised");
-    uint32_t ready = 0xAAu;
-    CHECK(ipc_select_wait(sel, ctx, &ready, 0) == IPC_EMPTY,
-          "select does not observe notification endpoints");
-    CHECK(ipc_wait_for(ctx, note) == IPC_OK, "the signal is still there for a direct wait");
-
-    ipc_select_destroy(sel, ctx);
-    ipc_endpoints_release_owner(ctx);
-}
-
 /* ------------------------------------------------------------- timeouts */
 
 static uint64_t g_observed_deadline;
@@ -2588,6 +2604,7 @@ int main(void) {
         const char* name;
         void (*fn)(void);
     } tests[] = {
+        {"N6 a notification wakes a watching select", test_a_notification_wakes_a_watching_select},
         {"Q9 teardown releases the poll hub", test_teardown_releases_the_poll_hub},
         {"Q10 select sets are capped per context", test_select_sets_are_capped_per_context},
         {"Q11 endpoints are capped per context", test_endpoints_are_capped_per_context},
@@ -2672,8 +2689,6 @@ int main(void) {
          test_a_set_survives_its_owner_losing_every_endpoint},
         {"S21 destroy is idempotent", test_select_destroy_is_idempotent},
         {"S22 listen cleans up a midway failure", test_listen_cleans_up_when_an_add_fails_midway},
-        {"S23 a notification endpoint never signals a set",
-         test_a_notification_endpoint_never_signals_a_set},
         {"B7 endpoint_wait hands the timeout through",
          test_endpoint_wait_hands_the_timeout_through_unchanged},
         {"B8 a timed select wait expires as EMPTY", test_a_timed_select_wait_expires_as_empty},

@@ -376,9 +376,25 @@ int ipc_notify_from(uint32_t sender_context_id, uint32_t endpoint) {
     if (ep->notify_count != UINT32_MAX) {
         ep->notify_count++;
     }
-    ksync_spinlock_lock(&ep->event.lock);
-    sched_event_wake_one(&ep->event, 0, SCHED_PEND_OK);
-    ksync_spinlock_unlock(&ep->event.lock);
+    /*
+     * Signal the poll hub, exactly as a message send does.
+     *
+     * ipc_select_add takes any endpoint that resolves, so a set may watch a
+     * notification endpoint -- and until this existed, raising a notification
+     * never reached it: the set parked forever while notifications piled up
+     * behind it. What was here instead was a sched_event_wake_one on the
+     * endpoint's own event, which can never wake anything, because nothing can
+     * park there. Both blocking waits demand a MESSAGE endpoint, and
+     * ipc_wait_for polls and returns IPC_EMPTY rather than blocking. The dead
+     * wake is gone; if a blocking notification wait is ever added, it belongs
+     * next to this, not instead of it.
+     *
+     * Held under ep->lock for the same reason ipc_send_from does: notifying
+     * after the unlock would race ipc_endpoints_release_owner freeing the hub.
+     */
+    if (ep->poll_struct) {
+        poll_notify(ep->poll_struct, POLL_EV_IN, ep->header.id);
+    }
     ksync_spinlock_unlock(&ep->lock);
     return IPC_OK;
 }

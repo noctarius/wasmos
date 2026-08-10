@@ -1372,14 +1372,24 @@ set(WASMOS_QEMU_NETDEV_ARGS
   # Entropy source for the virtio-rng driver (transitional 1AF4:1005).
   -device virtio-rng-pci
 )
+# Restores this build directory's config from the defconfig it was created with,
+# falling back to the shared base. It used to hardcode configs/wasmos_defconfig,
+# which meant running it in a tree seeded from, say, configs/warp_smp_defconfig
+# silently replaced that tree's config with one selecting NO runtime -- a
+# "reset to defaults" that quietly changed which runtime the tree built.
+if (WASMOS_DOTCONFIG AND EXISTS ${WASMOS_DOTCONFIG})
+  set(_wasmos_reseed ${WASMOS_DOTCONFIG})
+else ()
+  set(_wasmos_reseed ${CMAKE_SOURCE_DIR}/configs/wasmos_defconfig)
+endif ()
 add_custom_target(kconfig-defconfig
   COMMAND ${CMAKE_COMMAND} -E copy_if_different
-          ${CMAKE_SOURCE_DIR}/configs/wasmos_defconfig
+          ${_wasmos_reseed}
           ${WASMOS_BUILD_DOTCONFIG}
   COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/scripts/kconfig_to_cmake.py
           --input ${WASMOS_BUILD_DOTCONFIG}
           --output ${WASMOS_KCONFIG_IMPORT}
-  COMMENT "Seeding ${WASMOS_BUILD_DOTCONFIG} from configs/wasmos_defconfig"
+  COMMENT "Seeding ${WASMOS_BUILD_DOTCONFIG} from ${_wasmos_reseed}"
   VERBATIM
 )
 # Prefer kconfiglib's "menuconfig" (installed via pip install kconfiglib) for the

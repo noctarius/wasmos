@@ -76,14 +76,23 @@ macOS note:
 - install with: `brew install llvm lld qemu`
 
 ### Configure
+
+Pick the configuration the build directory should use. Each defconfig in
+`configs/` selects a WASM runtime and a CPU topology, and the choice is fixed
+for the lifetime of that directory:
+
+```sh
+cmake -S . -B build -DWASMOS_DOTCONFIG=configs/warp_smp_defconfig
+```
+
+Without `-DWASMOS_DOTCONFIG` the shared base `configs/wasmos_defconfig` applies,
+which selects no runtime and so leaves the default:
+
 ```sh
 cmake -S . -B build
 ```
 
 #### Choosing a WASM runtime
-
-The WASM runtime (wasm3 interpreter or WARP JIT/AOT) and the CPU topology are
-fixed when a build directory is configured, by a defconfig in `configs/`:
 
 | defconfig                | runtime | CPUs   |
 |--------------------------|---------|--------|
@@ -92,8 +101,12 @@ fixed when a build directory is configured, by a defconfig in `configs/`:
 | `warp_single_defconfig`  | WARP    | single |
 | `warp_smp_defconfig`     | WARP    | SMP    |
 
+Give each configuration its own directory, so switching does not mean
+reconfiguring:
+
 ```sh
-cmake -S . -B build-warp-smp -DWASMOS_DOTCONFIG=configs/warp_smp_defconfig
+cmake -S . -B build-warp-smp  -DWASMOS_DOTCONFIG=configs/warp_smp_defconfig
+cmake -S . -B build-wasm3-smp -DWASMOS_DOTCONFIG=configs/wasm3_smp_defconfig
 cmake --build build-warp-smp --target run-qemu-test
 ```
 
@@ -105,9 +118,9 @@ scripts/run_config.sh wasm3_smp               # boot wasm3 + SMP
 scripts/run_config.sh wasm3_single kernel     # just build the kernel
 ```
 
-Give each configuration its own build directory. The chosen config is copied to
-`<build-dir>/.config` on first configure and that copy is authoritative
-afterwards, so directories cannot influence one another; delete it to re-seed.
+The chosen config is copied to `<build-dir>/.config` on first configure and that
+copy is authoritative afterwards, so directories cannot influence one another;
+delete it to re-seed, or run the `kconfig-defconfig` target to restore it.
 `-DWASMOS_WASM_RUNTIME_*` flags are not a reliable way to select the runtime,
 because the imported config is applied after them — use a defconfig.
 
@@ -119,7 +132,8 @@ cmake -S . -B build
 ```
 
 Notes:
-- `kconfig-defconfig` seeds `build/.config` from `configs/wasmos_defconfig`.
+- `kconfig-defconfig` restores `<build-dir>/.config` from the defconfig that
+  directory was configured with (`configs/wasmos_defconfig` if none was given).
 - `menuconfig` auto-detects a frontend binary (`menuconfig`, `nconfig`,
   `kconfig-mconf`, or `mconf`); if none are found, it falls back to the repo's
   Python `kconfiglib` interactive editor.

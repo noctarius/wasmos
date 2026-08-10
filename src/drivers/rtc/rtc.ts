@@ -14,7 +14,7 @@
  * driver-domain codes.
  */
 
-import {std, startup} from "./wasmos";
+import {io, std, startup} from "./wasmos";
 import {defaultLoop, EventLoop, IpcFuture, IpcMessage, ReplyStatus} from "./eventloop";
 import {AWAIT_PENDING, Box} from "./coroutine";
 import {
@@ -24,7 +24,7 @@ import {
     WASMOS_ERR_RTC_INVALID,
     WASMOS_ERR_RTC_TIMEOUT,
 } from "./wasmos_status";
-import {io_in8, io_out8, io_wait, ipc_create_endpoint, ipc_send} from "./wasmos_imports";
+import {io_out8, io_wait, ipc_create_endpoint, ipc_send} from "./wasmos_imports";
 
 const CMOS_INDEX_PORT: i32 = 0x70;
 const CMOS_DATA_PORT: i32 = 0x71;
@@ -72,10 +72,12 @@ function awaitReply(request: IpcFuture, out: Box): i32 {
 
 // ---------------------------------------------------------------------- CMOS
 
+/* Returns the register byte, or a negative WASMOS_ERR_IO_* code. A refused
+ * read used to arrive as 0xFF, which decodes into a plausible-looking date. */
 function rtcReadReg(reg: i32): i32 {
     io_out8(CMOS_INDEX_PORT, reg & 0x7f);
     io_wait();
-    return io_in8(CMOS_DATA_PORT) & 0xff;
+    return io.in8(CMOS_DATA_PORT);
 }
 
 function rtcWriteReg(reg: i32, value: i32): void {
@@ -95,15 +97,20 @@ function binToBcd(v: i32): i32 {
 
 /* Bounded hardware wait on the update-in-progress flag: there is nothing to
  * park on, and the bound is the timeout. */
-function waitNotUpdating(): bool {
+function waitNotUpdating(): i32 {
     for (let i = 0; i < 10000; ++i) {
         const a = rtcReadReg(0x0a);
+        /* A refused read will be refused every time: report it, do not spin
+         * out the bound and then call it a timeout. */
+        if (a < 0) {
+            return a;
+        }
         if ((a & 0x80) == 0) {
-            return true;
+            return WASMOS_ERR_NONE;
         }
         io_wait();
     }
-    return false;
+    return WASMOS_ERR_RTC_TIMEOUT;
 }
 
 function unpackTime(arg0: i32, arg1: i32, outVals: StaticArray<i32>): void {
@@ -152,8 +159,9 @@ function validateTime(vals: StaticArray<i32>): bool {
 }
 
 function readTime(outVals: StaticArray<i32>): i32 {
-    if (!waitNotUpdating()) {
-        return WASMOS_ERR_RTC_TIMEOUT;
+    const waitStatus = waitNotUpdating();
+    if (waitStatus != WASMOS_ERR_NONE) {
+        return waitStatus;
     }
 
     let sec = rtcReadReg(0x00);
@@ -163,6 +171,30 @@ function readTime(outVals: StaticArray<i32>): i32 {
     let mon = rtcReadReg(0x08);
     let year = rtcReadReg(0x09);
     const regB = rtcReadReg(0x0b);
+
+    /* One refused read poisons the whole reading, so none of them is decoded
+     * until all seven are known good. */
+    if (sec < 0) {
+        return sec;
+    }
+    if (min < 0) {
+        return min;
+    }
+    if (hour < 0) {
+        return hour;
+    }
+    if (day < 0) {
+        return day;
+    }
+    if (mon < 0) {
+        return mon;
+    }
+    if (year < 0) {
+        return year;
+    }
+    if (regB < 0) {
+        return regB;
+    }
 
     const isBinary = (regB & 0x04) != 0;
     const is24Hour = (regB & 0x02) != 0;
@@ -200,8 +232,9 @@ function setTime(vals: StaticArray<i32>): i32 {
     if (!validateTime(vals)) {
         return WASMOS_ERR_RTC_INVALID;
     }
-    if (!waitNotUpdating()) {
-        return WASMOS_ERR_RTC_TIMEOUT;
+    const waitStatus = waitNotUpdating();
+    if (waitStatus != WASMOS_ERR_NONE) {
+        return waitStatus;
     }
 
     let sec = unchecked(vals[0]);
@@ -213,6 +246,9 @@ function setTime(vals: StaticArray<i32>): i32 {
     let year = fullYear % 100;
 
     const regB = rtcReadReg(0x0b);
+    if (regB < 0) {
+        return regB;
+    }
     const isBinary = (regB & 0x04) != 0;
     const is24Hour = (regB & 0x02) != 0;
 

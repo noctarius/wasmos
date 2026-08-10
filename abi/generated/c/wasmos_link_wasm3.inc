@@ -43,8 +43,8 @@
     X("wasmos", "block_buffer_phys", "i()", wasmos_block_buffer_phys) \
     X("wasmos", "block_buffer_copy", "i(i*ii)", wasmos_block_buffer_copy) \
     X("wasmos", "block_buffer_write", "i(i*ii)", wasmos_block_buffer_write) \
-    X("wasmos", "io_in8", "i(i)", wasmos_io_in8) \
-    X("wasmos", "io_in16", "i(i)", wasmos_io_in16) \
+    X("wasmos", "io_in8", "i(i*)", wasmos_io_in8) \
+    X("wasmos", "io_in16", "i(i*)", wasmos_io_in16) \
     X("wasmos", "io_in32", "i(i*)", wasmos_io_in32) \
     X("wasmos", "io_out8", "i(ii)", wasmos_io_out8) \
     X("wasmos", "io_out16", "i(ii)", wasmos_io_out16) \

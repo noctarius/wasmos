@@ -24,7 +24,7 @@
  * boundary; they return packed driver-domain codes.
  */
 
-import {std, startup} from "./wasmos";
+import {io, std, startup} from "./wasmos";
 import {defaultLoop, EventLoop, IpcFuture, IpcMessage, OnIdle, ReplyStatus} from "./eventloop";
 import {AWAIT_PENDING, Box} from "./coroutine";
 import {
@@ -33,7 +33,6 @@ import {
     WASMOS_ERR_DRIVER_REGISTER,
 } from "./wasmos_status";
 import {
-    io_in8,
     io_out8,
     io_wait,
     ipc_create_endpoint,
@@ -143,12 +142,16 @@ function serialInitHw(): void {
     io_out8(COM1_IER, 0x01); /* enable "received data available" interrupt */
 }
 
+/* A refused status read reports neither ready: the line-status register cannot
+ * answer, so claiming either bit would be inventing hardware state. */
 function txReady(): bool {
-    return (io_in8(COM1_STATUS) & 0x20) != 0;
+    const status = io.in8(COM1_STATUS);
+    return status >= 0 && (status & 0x20) != 0;
 }
 
 function rxReady(): bool {
-    return (io_in8(COM1_STATUS) & 0x01) != 0;
+    const status = io.in8(COM1_STATUS);
+    return status >= 0 && (status & 0x01) != 0;
 }
 
 /* Bounded hardware wait: there is nothing to park on, and the bound stops a
@@ -163,11 +166,14 @@ function writePort(value: i32): void {
     }
 }
 
+/* Returns the byte, or -1 for "nothing to read" -- which now also covers a
+ * refused read, since a driver that cannot reach its own UART has no byte. */
 function readPort(): i32 {
     if (!rxReady()) {
         return -1;
     }
-    return io_in8(COM1_PORT) & 0xff;
+    const byte = io.in8(COM1_PORT);
+    return byte < 0 ? -1 : byte;
 }
 
 /** Empty the UART RX FIFO into the software ring, before it can overrun. */

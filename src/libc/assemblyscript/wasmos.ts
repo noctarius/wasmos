@@ -436,6 +436,39 @@ export namespace std {
     }
 }
 
+
+@external("wasmos", "io_in8") declare function io_in8_raw(port: i32, out: i32): i32;
+
+
+@external("wasmos", "io_in16") declare function io_in16_raw(port: i32, out: i32): i32;
+
+/* The port-read host calls report the value through an out-parameter and the
+ * outcome through the return, so a refused read is no longer the all-ones an
+ * absent device reads back. One scratch cell and one status check live here
+ * rather than in every driver.
+ *
+ * The wrappers fold both back into an i32, which is safe where the host call
+ * was not: a byte and a word cannot reach the negative range, so a negative
+ * result here is unambiguously the WASMOS_ERR_IO_* code. Callers must test
+ * `< 0` -- masking the result throws the distinction away again. */
+const g_ioScratch = new Uint8Array(2);
+
+export namespace io {
+    /** Reads a byte: 0..255, or a negative WASMOS_ERR_IO_* code. */
+    export function in8(port: i32): i32 {
+        const ptr = g_ioScratch.dataStart;
+        const rc = io_in8_raw(port, ptr as i32);
+        return rc != 0 ? rc : <i32>load<u8>(ptr);
+    }
+
+    /** Reads a word: 0..65535, or a negative WASMOS_ERR_IO_* code. */
+    export function in16(port: i32): i32 {
+        const ptr = g_ioScratch.dataStart;
+        const rc = io_in16_raw(port, ptr as i32);
+        return rc != 0 ? rc : <i32>load<u16>(ptr);
+    }
+}
+
 export class File {
     constructor(private fd: i32) {}
 

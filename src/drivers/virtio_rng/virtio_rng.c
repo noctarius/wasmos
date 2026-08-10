@@ -95,7 +95,9 @@ static uint32_t pci_config_read32(uint8_t bus, uint8_t slot, uint8_t function, u
 }
 
 static uint16_t io_read16(uint16_t port) {
-    return (uint16_t)((uint32_t)wasmos_io_in16((int32_t)port) & 0xFFFFu);
+    uint16_t value = 0xFFFFu; /* an absent device reads back all-ones */
+    (void)wasmos_io_in16((int32_t)port, &value);
+    return value;
 }
 
 static uint32_t io_read32(uint16_t port) {
@@ -410,7 +412,9 @@ static void rng_service_irq(void) {
          * and exclusively ours, so none of the shared-line ceremony applies. */
         return;
     }
-    (void)wasmos_io_in8((int32_t)(g_dev.io_base + VIRTIO_PCI_ISR_STATUS));
+    /* Reading ISR is itself the ack; the value is not wanted. */
+    uint8_t isr = 0u;
+    (void)wasmos_io_in8((int32_t)(g_dev.io_base + VIRTIO_PCI_ISR_STATUS), &isr);
     (void)wasmos_irq_ack((int32_t)g_dev.irq);
 }
 

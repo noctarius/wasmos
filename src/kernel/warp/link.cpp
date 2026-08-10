@@ -763,8 +763,10 @@ static uint32_t warp_io_region_out32(uint32_t region, uint32_t offset, uint32_t 
     return 0;
 }
 
-static uint32_t warp_io_in8(uint32_t port, void* ctx_) {
-    (void)ctx_;
+/* See the wasm3 shims: the whole port-read family reports its value through
+ * `out` and its outcome through the return. */
+static uint32_t warp_io_in8(uint32_t port, uint32_t out_off, void* ctx_) {
+    auto* ctx = warp_call_ctx(ctx_);
     uint32_t context_id = 0;
     /* Split from the capability check so a guest gets the same code here
      * as from wasm3: an out-of-range port is BAD_PORT, not "not authorized". */
@@ -775,10 +777,15 @@ static uint32_t warp_io_in8(uint32_t port, void* ctx_) {
         warp_require_io_capability(context_id, (uint16_t)port) != 0) {
         return (uint32_t)WASMOS_ERR_IO_NOT_AUTHORIZED;
     }
-    return (uint32_t)inb((uint16_t)port);
+    uint8_t* out = reinterpret_cast<uint8_t*>(warp_mem(ctx, out_off, sizeof(uint8_t)));
+    if (!out) {
+        return (uint32_t)WASMOS_ERR_KERNEL_BAD_POINTER;
+    }
+    *out = inb((uint16_t)port);
+    return 0;
 }
-static uint32_t warp_io_in16(uint32_t port, void* ctx_) {
-    (void)ctx_;
+static uint32_t warp_io_in16(uint32_t port, uint32_t out_off, void* ctx_) {
+    auto* ctx = warp_call_ctx(ctx_);
     uint32_t context_id = 0;
     /* Split from the capability check so a guest gets the same code here
      * as from wasm3: an out-of-range port is BAD_PORT, not "not authorized". */
@@ -789,10 +796,13 @@ static uint32_t warp_io_in16(uint32_t port, void* ctx_) {
         warp_require_io_capability(context_id, (uint16_t)port) != 0) {
         return (uint32_t)WASMOS_ERR_IO_NOT_AUTHORIZED;
     }
-    return (uint32_t)inw((uint16_t)port);
+    uint16_t* out = reinterpret_cast<uint16_t*>(warp_mem(ctx, out_off, sizeof(uint16_t)));
+    if (!out) {
+        return (uint32_t)WASMOS_ERR_KERNEL_BAD_POINTER;
+    }
+    *out = inw((uint16_t)port);
+    return 0;
 }
-/* See the wasm3 shim: the value comes back through `out` because a 32-bit port
- * read uses the whole range and 0xFFFFFFFF is a legitimate result. */
 static uint32_t warp_io_in32(uint32_t port, uint32_t out_off, void* ctx_) {
     auto* ctx = warp_call_ctx(ctx_);
     uint32_t context_id = 0;

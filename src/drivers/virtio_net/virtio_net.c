@@ -146,7 +146,9 @@ static int32_t g_rx_sub_endpoint = -1; /* subscriber for RX_FRAME_NOTIFY, -1 = n
 static int32_t g_link_sub_endpoint = -1;
 
 static uint16_t io_read16(uint16_t port) {
-    return (uint16_t)((uint32_t)wasmos_io_in16((int32_t)port) & 0xFFFFu);
+    uint16_t value = 0xFFFFu; /* an absent device reads back all-ones */
+    (void)wasmos_io_in16((int32_t)port, &value);
+    return value;
 }
 
 static uint32_t io_read32(uint16_t port) {
@@ -276,11 +278,20 @@ static uint16_t cfg_base(void) {
     return g_dev.msix_enabled ? VIRTIO_NET_CFG_BASE_MSIX : VIRTIO_NET_CFG_BASE_INTX;
 }
 
-static void read_mac(void) {
+/* The one port read whose failure would otherwise become data: a refused read
+ * used to store 0xFF, giving the interface a plausible-looking all-ones MAC.
+ * Now the code says which check refused it and bring-up stops. */
+static int read_mac(void) {
     uint16_t mac_port = (uint16_t)(g_dev.io_base + cfg_base() + VIRTIO_NET_CFG_MAC_OFF);
     for (uint32_t i = 0; i < 6u; ++i) {
-        g_dev.mac[i] = (uint8_t)(wasmos_io_in8((int32_t)(mac_port + i)) & 0xFF);
+        uint8_t byte = 0u;
+        int32_t rc = wasmos_io_in8((int32_t)(mac_port + i), &byte);
+        if (rc != 0) {
+            return rc;
+        }
+        g_dev.mac[i] = byte;
     }
+    return 0;
 }
 
 static uint16_t read_status_word(void) {
@@ -629,8 +640,10 @@ static void net_service_rx(void) {
  * (see net_setup_msix): message-signalled vectors bypass the I/O APIC pin,
  * Remote-IRR and level re-sample entirely, so they re-deliver per notification. */
 static void net_handle_irq(void) {
-    /* Ack the device: reading ISR clears its interrupt-asserted bit. */
-    (void)wasmos_io_in8((int32_t)(g_dev.io_base + VIRTIO_PCI_ISR_STATUS));
+    /* Ack the device: reading ISR clears its interrupt-asserted bit. The value
+     * itself is not wanted -- performing the read is the ack. */
+    uint8_t isr = 0u;
+    (void)wasmos_io_in8((int32_t)(g_dev.io_base + VIRTIO_PCI_ISR_STATUS), &isr);
     net_service_rx();
     /* Unmask the line now the device register has been read. */
     (void)wasmos_irq_ack((int32_t)g_dev.irq);
@@ -759,7 +772,13 @@ static int initialize_device(void) {
                      (unsigned)g_dev.irq);
     }
 
-    read_mac();
+    int mac_rc = read_mac();
+    if (mac_rc != 0) {
+        (void)printf("[virtio-net] mac read refused rc=%d\n", mac_rc);
+        io_write8(g_dev.io_base + VIRTIO_PCI_DEVICE_STATUS,
+                  (uint8_t)(status | VIRTIO_STATUS_FAILED));
+        return mac_rc;
+    }
     if ((g_dev.driver_features & VIRTIO_NET_F_STATUS) != 0u) {
         g_dev.status_word = read_status_word();
     } else {

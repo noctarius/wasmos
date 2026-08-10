@@ -175,16 +175,33 @@ extern int32_t wasmos_block_buffer_copy(int32_t phys, int32_t dst, int32_t len, 
  * exceeds the 8 KiB buffer, or `ptr_off`/`len` is out of linear-memory bounds.
  */
 extern int32_t wasmos_block_buffer_write(int32_t phys, int32_t src, int32_t len, int32_t offset) WASMOS_WASM_IMPORT("wasmos", "block_buffer_write");
-/* Read a byte from x86 I/O port `port` (0..0xFFFF). Returns the byte value, or
- * (uint32_t)-1 if the port is out of range or the caller lacks access. Requires
- * the io.port capability for that port.
+/* Read a byte from x86 I/O port `port` (0..0xFFFF) and store it at `out`.
+ *
+ * The value comes back through `out` for the same reason io_in32's does. A
+ * byte cannot itself reach the negative range, but the sign only tells a
+ * caller anything if the caller reads it, and none did: every one masked the
+ * result with `& 0xFF`, which discards it. io.NOT_AUTHORIZED masked to 8
+ * bits is 0xFF -- exactly what an absent device reads back -- so a denied
+ * io.port capability was indistinguishable from missing hardware.
+ *
+ * Returns 0 on success, otherwise a negative WASMOS_ERR_IO_* code naming
+ * which check refused it. Requires the io.port capability for that port.
  */
-extern int32_t wasmos_io_in8(int32_t port) WASMOS_WASM_IMPORT("wasmos", "io_in8");
-/* Read a 16-bit word from x86 I/O port `port` (0..0xFFFF). Returns the word
- * value, or (uint32_t)-1 if the port is out of range or the caller lacks access.
- * Requires the io.port capability for that port.
+extern int32_t wasmos_io_in8(int32_t port, uint8_t* out) WASMOS_WASM_IMPORT("wasmos", "io_in8");
+/* Read a 16-bit word from x86 I/O port `port` (0..0xFFFF) and store it at
+ * `out`.
+ *
+ * The value comes back through `out` for the same reason io_in32's does. A
+ * word cannot itself reach the negative range, but the sign only tells a
+ * caller anything if the caller reads it, and none did: every one masked the
+ * result with `& 0xFFFF`, which discards it. io.NOT_AUTHORIZED masked to 16
+ * bits is 0xFFFF -- exactly what an absent device reads back -- so a denied
+ * io.port capability was indistinguishable from missing hardware.
+ *
+ * Returns 0 on success, otherwise a negative WASMOS_ERR_IO_* code naming
+ * which check refused it. Requires the io.port capability for that port.
  */
-extern int32_t wasmos_io_in16(int32_t port) WASMOS_WASM_IMPORT("wasmos", "io_in16");
+extern int32_t wasmos_io_in16(int32_t port, uint16_t* out) WASMOS_WASM_IMPORT("wasmos", "io_in16");
 /* Read a 32-bit dword from x86 I/O port `port` (0..0xFFFF) and store it at
  * `out`.
  *
@@ -192,14 +209,9 @@ extern int32_t wasmos_io_in16(int32_t port) WASMOS_WASM_IMPORT("wasmos", "io_in1
  * 32-bit port read uses the whole range: a register legitimately reading
  * 0xFFFFFFFF -- which is what an absent device returns, so it is the common
  * case, not a corner one -- would be indistinguishable from a failure code on
- * a shared signed i32. io_region_in32 already has this shape.
- *
- * in8/in16 still return their value directly, which is a known gap rather
- * than a decision: their range cannot collide with an error code, but every
- * caller masks the result (`& 0xFFFF`, `& 0xFF`) and so discards the sign
- * that would distinguish one. io.NOT_AUTHORIZED masked to 16 bits is 0xFFFF
- * -- exactly what an absent device reads back -- so a denied capability is
- * indistinguishable from a missing device. They want the same out-parameter.
+ * a shared signed i32. io_region_in32 already has this shape, and io_in8 and
+ * io_in16 now share it too: the whole port-read family reports its value
+ * through `out` and its outcome through the return.
  *
  * Returns 0 on success, otherwise a negative WASMOS_ERR_IO_* code naming
  * which check refused it. Requires the io.port capability for that port.

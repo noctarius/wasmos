@@ -1723,8 +1723,15 @@ m3ApiRawFunction(wasmos_io_region_out32) {
     WASMOS_IO_REGION_WRITE(4u, outl(port, (uint32_t)value));
 }
 
+/* The whole port-read family reports its value through `out` and its outcome
+ * through the return. For in32 the two cannot share one signed i32 at all, since
+ * a read uses the full range. For in8 and in16 the value could not collide with
+ * a code, but no caller ever read the sign -- each masked it off -- so a denied
+ * capability arrived as 0xFF / 0xFFFF, which is what an absent device reads. */
 m3ApiRawFunction(wasmos_io_in8) {
-    m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, port) uint32_t context_id = 0;
+    m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, port) m3ApiGetArgMem(uint8_t*, out)
+        m3ApiCheckMem(out, sizeof(uint8_t));
+    uint32_t context_id = 0;
     if (port < 0 || port > 0xFFFF) {
         m3ApiReturn(WASMOS_ERR_IO_BAD_PORT);
     }
@@ -1732,11 +1739,14 @@ m3ApiRawFunction(wasmos_io_in8) {
         require_io_capability(context_id, (uint16_t)port) != 0) {
         m3ApiReturn(WASMOS_ERR_IO_NOT_AUTHORIZED);
     }
-    m3ApiReturn((int32_t)inb((uint16_t)port));
+    *out = inb((uint16_t)port);
+    m3ApiReturn(0);
 }
 
 m3ApiRawFunction(wasmos_io_in16) {
-    m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, port) uint32_t context_id = 0;
+    m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, port) m3ApiGetArgMem(uint16_t*, out)
+        m3ApiCheckMem(out, sizeof(uint16_t));
+    uint32_t context_id = 0;
     if (port < 0 || port > 0xFFFF) {
         m3ApiReturn(WASMOS_ERR_IO_BAD_PORT);
     }
@@ -1744,13 +1754,10 @@ m3ApiRawFunction(wasmos_io_in16) {
         require_io_capability(context_id, (uint16_t)port) != 0) {
         m3ApiReturn(WASMOS_ERR_IO_NOT_AUTHORIZED);
     }
-    m3ApiReturn((int32_t)inw((uint16_t)port));
+    *out = inw((uint16_t)port);
+    m3ApiReturn(0);
 }
 
-/* The value comes back through `out`: a 32-bit port read uses the whole range,
- * and 0xFFFFFFFF -- what an absent device reads back -- would otherwise be
- * indistinguishable from an error code. in8/in16 keep returning their value,
- * since 0..255 and 0..65535 cannot collide with a negative code. */
 m3ApiRawFunction(wasmos_io_in32) {
     m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, port) m3ApiGetArgMem(uint32_t*, out)
         m3ApiCheckMem(out, sizeof(uint32_t));

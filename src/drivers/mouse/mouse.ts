@@ -19,12 +19,11 @@
  * hard iteration limit, and there is nothing to park on.
  */
 
-import {std, startup} from "./wasmos";
+import {io, std, startup} from "./wasmos";
 import {defaultLoop, EventLoop, IpcFuture, IpcMessage, OnIdle, ReplyStatus} from "./eventloop";
 import {AWAIT_PENDING, Box} from "./coroutine";
 import {WASMOS_ERR_DRIVER_ENDPOINT_CREATE, WASMOS_ERR_DRIVER_REGISTER} from "./wasmos_status";
 import {
-    io_in8,
     io_out8,
     io_wait,
     ipc_create_endpoint,
@@ -123,20 +122,27 @@ function notifySubscribers(dx: i32, dy: i32, buttons: i32): void {
 
 // ------------------------------------------------------------------- device
 
+/* A refused status read ends the flush: retrying cannot make the capability
+ * appear, and there is no way to tell whether the buffer still holds a byte. */
 function flushOutputBuffer(): void {
     for (let i = 0; i < 64; ++i) {
-        const st = io_in8(CTRL_STATUS_PORT);
-        if ((st & STATUS_OBF) == 0) {
+        const st = io.in8(CTRL_STATUS_PORT);
+        if (st < 0 || (st & STATUS_OBF) == 0) {
             return;
         }
-        io_in8(CTRL_DATA_PORT);
+        io.in8(CTRL_DATA_PORT);
         io_wait();
     }
 }
 
 function waitInputReady(limit: i32 = 100000): bool {
     for (let i = 0; i < limit; ++i) {
-        if ((io_in8(CTRL_STATUS_PORT) & STATUS_IBF) == 0) {
+        const st = io.in8(CTRL_STATUS_PORT);
+        /* A refused read will be refused every time: fail now, do not spin. */
+        if (st < 0) {
+            return false;
+        }
+        if ((st & STATUS_IBF) == 0) {
             return true;
         }
         if ((i & 0xff) == 0) {
@@ -168,16 +174,19 @@ function sendMouseCommand(cmd: i32): bool {
     return true;
 }
 
+/* Returns the byte, -1 for "nothing pending" -- which a refused status read
+ * joins, since without it nothing is known -- or -2 for "not ours". */
 function readAuxByte(): i32 {
-    const st = io_in8(CTRL_STATUS_PORT);
-    if ((st & STATUS_OBF) == 0) {
+    const st = io.in8(CTRL_STATUS_PORT);
+    if (st < 0 || (st & STATUS_OBF) == 0) {
         return -1;
     }
     if ((st & STATUS_AUX) == 0) {
         /* Not our byte: leave it for the keyboard driver. */
         return -2;
     }
-    return io_in8(CTRL_DATA_PORT) & 0xff;
+    const byte = io.in8(CTRL_DATA_PORT);
+    return byte < 0 ? -1 : byte;
 }
 
 function readAuxAck(limit: i32 = 50000): i32 {
@@ -198,8 +207,14 @@ function readAuxAck(limit: i32 = 50000): i32 {
  * command responses (CCB read etc.) that are not AUX data. */
 function readDataByte(limit: i32 = 50000): i32 {
     for (let i = 0; i < limit; ++i) {
-        if ((io_in8(CTRL_STATUS_PORT) & STATUS_OBF) != 0) {
-            return io_in8(CTRL_DATA_PORT) & 0xff;
+        const st = io.in8(CTRL_STATUS_PORT);
+        /* A refused read will be refused every time: fail now, do not spin. */
+        if (st < 0) {
+            return -1;
+        }
+        if ((st & STATUS_OBF) != 0) {
+            const byte = io.in8(CTRL_DATA_PORT);
+            return byte < 0 ? -1 : byte;
         }
         if ((i & 0xff) == 0) {
             sched_yield();

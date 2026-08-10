@@ -20,11 +20,11 @@
  * which pegged a core; it is now a bounded wait driven by the pump's idle hook.
  */
 
-import {std, startup} from "./wasmos";
+import {io, std, startup} from "./wasmos";
 import {defaultLoop, EventLoop, IpcFuture, IpcMessage, OnIdle, ReplyStatus} from "./eventloop";
 import {AWAIT_PENDING, Box} from "./coroutine";
 import {WASMOS_ERR_DRIVER_ENDPOINT_CREATE, WASMOS_ERR_DRIVER_REGISTER} from "./wasmos_status";
-import {io_in8, ipc_create_endpoint, ipc_send, irq_ack, irq_route_ipc} from "./wasmos_imports";
+import {ipc_create_endpoint, ipc_send, irq_ack, irq_route_ipc} from "./wasmos_imports";
 
 const KEYBOARD_STATUS_PORT: i32 = 0x64;
 const KEYBOARD_DATA_PORT: i32 = 0x60;
@@ -78,8 +78,14 @@ function awaitReply(request: IpcFuture, out: Box): i32 {
 
 // -------------------------------------------------------------------- device
 
+/* Returns the scancode, or -1 for "nothing of ours to read". A refused port
+ * read joins that case: without the status register there is no way to tell
+ * whether a byte is even pending, let alone whether it is ours. */
 function readScancode(): i32 {
-    const status = io_in8(KEYBOARD_STATUS_PORT);
+    const status = io.in8(KEYBOARD_STATUS_PORT);
+    if (status < 0) {
+        return -1;
+    }
     if ((status & KEYBOARD_OBF_FLAG) == 0) {
         return -1;
     }
@@ -87,7 +93,8 @@ function readScancode(): i32 {
         /* AUX (mouse) byte: leave for mouse driver. */
         return -1;
     }
-    return io_in8(KEYBOARD_DATA_PORT) & 0xff;
+    const code = io.in8(KEYBOARD_DATA_PORT);
+    return code < 0 ? -1 : code;
 }
 
 function addSubscriber(ep: i32): i32 {
@@ -228,8 +235,8 @@ export function initialize(_proc_endpoint: i32, _arg1: i32, _arg2: i32, _arg3: i
         } else if (msg.type == KBD_IPC_IRQ_EVENT) {
             let code: i32 = readScancode();
             /* Re-arm after reading the hardware register so the next keypress can
-             * fire the interrupt again. Must come after io_in8 so OBF is clear
-             * before unmasking (prevents immediate re-fire on a level-triggered
+             * fire the interrupt again. Must come after the data-port read so OBF is
+             * clear before unmasking (prevents immediate re-fire on a level-triggered
              * IRQ). */
             irq_ack(KBD_IRQ);
             publishScancode(code);

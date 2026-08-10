@@ -22,9 +22,13 @@
  * per call site.
  *
  * Where a value genuinely uses the full 32-bit range neither function helps and
- * the call needs an out-parameter instead, as io_region_in32 and (since the
- * conversion) io_in32 both have. thread_join is the one left in that state: it
- * returns a guest-chosen exit status, and carries a FIXME saying so.
+ * the call needs an out-parameter instead, as the io_region_in* and io_in*
+ * families now all have. The port-read family went further: in8 and in16 could
+ * not have collided with a code, but no caller read the sign -- each masked it
+ * off -- so the width of the value is not the whole test. Ask whether the
+ * caller can act on the distinction, not only whether the bits allow one.
+ * thread_join is the one left in that state: it returns a guest-chosen exit
+ * status, and carries a FIXME saying so.
  */
 
 /*

@@ -281,6 +281,39 @@ and **domains** (namespaced operation errors: the negative of `(domain << 16) | 
 | `WASMOS_ERR_XFER_BUFFER_INACTIVE_MAPPING` | -0x000B0018 | the DMA mapping is inactive |
 | `WASMOS_ERR_XFER_BUFFER_NO_ACCESS` | -0x000B0019 | the object exists but the context is neither its owner nor a borrower |
 
+### `hostcall` (domain 19) — Conditions every host call checks at the guest boundary, before it reaches the subsystem it fronts. These were seven near-identical sets of codes in the draft (block, initfs, env, proc, framebuffer, boot, thread all check the same five things), so they are one domain rather than seven copies. A call fails with a domain-specific code only where it has something domain-specific to say.
+
+| Code | Value | Description |
+|---|---|---|
+| `WASMOS_ERR_HOSTCALL_BAD_ARGS` | -0x00130001 | an argument is negative, zero, or out of range where it may not be |
+| `WASMOS_ERR_HOSTCALL_NO_CALLER` | -0x00130002 | the calling process or its memory context could not be resolved |
+| `WASMOS_ERR_HOSTCALL_BAD_POINTER` | -0x00130003 | the guest range is unmapped, or not permitted for this access |
+| `WASMOS_ERR_HOSTCALL_COPY_FAILED` | -0x00130004 | the copy to or from guest memory failed |
+| `WASMOS_ERR_HOSTCALL_NOT_FOUND` | -0x00130005 | the addressed item does not exist (index, name, or key) |
+| `WASMOS_ERR_HOSTCALL_UNAVAILABLE` | -0x00130006 | the resource this call reads is not present at all (no initfs image, no boot config, no framebuffer) |
+| `WASMOS_ERR_HOSTCALL_TOO_LARGE` | -0x00130007 | the value does not fit the signed 32-bit result the ABI returns |
+| `WASMOS_ERR_HOSTCALL_EXHAUSTED` | -0x00130008 | no free slot remains (e.g. the environment table) |
+| `WASMOS_ERR_HOSTCALL_NOT_AUTHORIZED` | -0x00130009 | the caller lacks the capability this call requires |
+
+### `guestmap` (domain 20) — Mapping a physical region into a guest's linear memory -- the block buffer and the framebuffer both do exactly what shmem does, so they share this vocabulary instead of restating it. shmem predates it and keeps its own domain; it could migrate here.
+
+| Code | Value | Description |
+|---|---|---|
+| `WASMOS_ERR_GUESTMAP_TOO_SMALL` | -0x00140001 | the caller's requested size is smaller than the region being mapped |
+| `WASMOS_ERR_GUESTMAP_UNALIGNED` | -0x00140002 | the address or size is not page-aligned |
+| `WASMOS_ERR_GUESTMAP_NO_WINDOW` | -0x00140003 | guest linear memory cannot host the mapping, and could not be grown to fit |
+| `WASMOS_ERR_GUESTMAP_NO_BACKING` | -0x00140004 | no physical backing could be obtained for the region |
+| `WASMOS_ERR_GUESTMAP_ABOVE_4G` | -0x00140005 | the physical address is above 4 GiB and a 32-bit guest cannot address it |
+| `WASMOS_ERR_GUESTMAP_MAP_FAILED` | -0x00140006 | the paging or linear-memory mapping step failed |
+
+### `thread` (domain 21) — guest thread creation and lifetime host calls
+
+| Code | Value | Description |
+|---|---|---|
+| `WASMOS_ERR_THREAD_BAD_ENTRY` | -0x00150001 | the entry token is not a NUL-terminated name inside the guest's linear memory |
+| `WASMOS_ERR_THREAD_SPAWN_FAILED` | -0x00150002 | the VM thread could not be created |
+| `WASMOS_ERR_THREAD_JOIN_FAILED` | -0x00150003 | the join could not be performed (unknown or unjoinable thread) |
+
 ### `devmgr` (domain 10) — device-manager query failures
 
 | Code | Value | Description |

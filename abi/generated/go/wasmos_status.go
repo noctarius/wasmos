@@ -41,6 +41,9 @@ const (
 	WASMOS_ERR_DOMAIN_FONT uint16 = 12
 	WASMOS_ERR_DOMAIN_RTC uint16 = 13
 	WASMOS_ERR_DOMAIN_XFER_BUFFER uint16 = 11
+	WASMOS_ERR_DOMAIN_HOSTCALL uint16 = 19
+	WASMOS_ERR_DOMAIN_GUESTMAP uint16 = 20
+	WASMOS_ERR_DOMAIN_THREAD uint16 = 21
 	WASMOS_ERR_DOMAIN_DEVMGR uint16 = 10
 )
 
@@ -219,6 +222,24 @@ const (
 	WASMOS_ERR_XFER_BUFFER_DMA_ACTIVE int32 = -0x000B0017 // a DMA mapping is already active on this object or borrow
 	WASMOS_ERR_XFER_BUFFER_INACTIVE_MAPPING int32 = -0x000B0018 // the DMA mapping is inactive
 	WASMOS_ERR_XFER_BUFFER_NO_ACCESS int32 = -0x000B0019 // the object exists but the context is neither its owner nor a borrower
+	WASMOS_ERR_HOSTCALL_BAD_ARGS int32 = -0x00130001 // an argument is negative, zero, or out of range where it may not be
+	WASMOS_ERR_HOSTCALL_NO_CALLER int32 = -0x00130002 // the calling process or its memory context could not be resolved
+	WASMOS_ERR_HOSTCALL_BAD_POINTER int32 = -0x00130003 // the guest range is unmapped, or not permitted for this access
+	WASMOS_ERR_HOSTCALL_COPY_FAILED int32 = -0x00130004 // the copy to or from guest memory failed
+	WASMOS_ERR_HOSTCALL_NOT_FOUND int32 = -0x00130005 // the addressed item does not exist (index, name, or key)
+	WASMOS_ERR_HOSTCALL_UNAVAILABLE int32 = -0x00130006 // the resource this call reads is not present at all (no initfs image, no boot config, no framebuffer)
+	WASMOS_ERR_HOSTCALL_TOO_LARGE int32 = -0x00130007 // the value does not fit the signed 32-bit result the ABI returns
+	WASMOS_ERR_HOSTCALL_EXHAUSTED int32 = -0x00130008 // no free slot remains (e.g. the environment table)
+	WASMOS_ERR_HOSTCALL_NOT_AUTHORIZED int32 = -0x00130009 // the caller lacks the capability this call requires
+	WASMOS_ERR_GUESTMAP_TOO_SMALL int32 = -0x00140001 // the caller's requested size is smaller than the region being mapped
+	WASMOS_ERR_GUESTMAP_UNALIGNED int32 = -0x00140002 // the address or size is not page-aligned
+	WASMOS_ERR_GUESTMAP_NO_WINDOW int32 = -0x00140003 // guest linear memory cannot host the mapping, and could not be grown to fit
+	WASMOS_ERR_GUESTMAP_NO_BACKING int32 = -0x00140004 // no physical backing could be obtained for the region
+	WASMOS_ERR_GUESTMAP_ABOVE_4G int32 = -0x00140005 // the physical address is above 4 GiB and a 32-bit guest cannot address it
+	WASMOS_ERR_GUESTMAP_MAP_FAILED int32 = -0x00140006 // the paging or linear-memory mapping step failed
+	WASMOS_ERR_THREAD_BAD_ENTRY int32 = -0x00150001 // the entry token is not a NUL-terminated name inside the guest's linear memory
+	WASMOS_ERR_THREAD_SPAWN_FAILED int32 = -0x00150002 // the VM thread could not be created
+	WASMOS_ERR_THREAD_JOIN_FAILED int32 = -0x00150003 // the join could not be performed (unknown or unjoinable thread)
 	WASMOS_ERR_DEVMGR_NO_MOUNT_RULE int32 = -0x000A0001 // no block/filesystem mount rule matches the requested unit
 	WASMOS_ERR_DEVMGR_UNSUPPORTED_QUERY int32 = -0x000A0002 // unknown or unsupported device-manager query type
 )
@@ -301,6 +322,12 @@ func WasmosErrorDomainName(d uint16) string {
 		return "rtc"
 	case WASMOS_ERR_DOMAIN_XFER_BUFFER:
 		return "xfer_buffer"
+	case WASMOS_ERR_DOMAIN_HOSTCALL:
+		return "hostcall"
+	case WASMOS_ERR_DOMAIN_GUESTMAP:
+		return "guestmap"
+	case WASMOS_ERR_DOMAIN_THREAD:
+		return "thread"
 	case WASMOS_ERR_DOMAIN_DEVMGR:
 		return "devmgr"
 	default:
@@ -654,6 +681,42 @@ func WasmosStrerror(c int32) string {
 		return "the DMA mapping is inactive"
 	case WASMOS_ERR_XFER_BUFFER_NO_ACCESS:
 		return "the object exists but the context is neither its owner nor a borrower"
+	case WASMOS_ERR_HOSTCALL_BAD_ARGS:
+		return "an argument is negative, zero, or out of range where it may not be"
+	case WASMOS_ERR_HOSTCALL_NO_CALLER:
+		return "the calling process or its memory context could not be resolved"
+	case WASMOS_ERR_HOSTCALL_BAD_POINTER:
+		return "the guest range is unmapped, or not permitted for this access"
+	case WASMOS_ERR_HOSTCALL_COPY_FAILED:
+		return "the copy to or from guest memory failed"
+	case WASMOS_ERR_HOSTCALL_NOT_FOUND:
+		return "the addressed item does not exist (index, name, or key)"
+	case WASMOS_ERR_HOSTCALL_UNAVAILABLE:
+		return "the resource this call reads is not present at all (no initfs image, no boot config, no framebuffer)"
+	case WASMOS_ERR_HOSTCALL_TOO_LARGE:
+		return "the value does not fit the signed 32-bit result the ABI returns"
+	case WASMOS_ERR_HOSTCALL_EXHAUSTED:
+		return "no free slot remains (e.g. the environment table)"
+	case WASMOS_ERR_HOSTCALL_NOT_AUTHORIZED:
+		return "the caller lacks the capability this call requires"
+	case WASMOS_ERR_GUESTMAP_TOO_SMALL:
+		return "the caller's requested size is smaller than the region being mapped"
+	case WASMOS_ERR_GUESTMAP_UNALIGNED:
+		return "the address or size is not page-aligned"
+	case WASMOS_ERR_GUESTMAP_NO_WINDOW:
+		return "guest linear memory cannot host the mapping, and could not be grown to fit"
+	case WASMOS_ERR_GUESTMAP_NO_BACKING:
+		return "no physical backing could be obtained for the region"
+	case WASMOS_ERR_GUESTMAP_ABOVE_4G:
+		return "the physical address is above 4 GiB and a 32-bit guest cannot address it"
+	case WASMOS_ERR_GUESTMAP_MAP_FAILED:
+		return "the paging or linear-memory mapping step failed"
+	case WASMOS_ERR_THREAD_BAD_ENTRY:
+		return "the entry token is not a NUL-terminated name inside the guest's linear memory"
+	case WASMOS_ERR_THREAD_SPAWN_FAILED:
+		return "the VM thread could not be created"
+	case WASMOS_ERR_THREAD_JOIN_FAILED:
+		return "the join could not be performed (unknown or unjoinable thread)"
 	case WASMOS_ERR_DEVMGR_NO_MOUNT_RULE:
 		return "no block/filesystem mount rule matches the requested unit"
 	case WASMOS_ERR_DEVMGR_UNSUPPORTED_QUERY:

@@ -80,6 +80,37 @@ macOS note:
 cmake -S . -B build
 ```
 
+#### Choosing a WASM runtime
+
+The WASM runtime (wasm3 interpreter or WARP JIT/AOT) and the CPU topology are
+fixed when a build directory is configured, by a defconfig in `configs/`:
+
+| defconfig                | runtime | CPUs   |
+|--------------------------|---------|--------|
+| `wasm3_single_defconfig` | wasm3   | single |
+| `wasm3_smp_defconfig`    | wasm3   | SMP    |
+| `warp_single_defconfig`  | WARP    | single |
+| `warp_smp_defconfig`     | WARP    | SMP    |
+
+```sh
+cmake -S . -B build-warp-smp -DWASMOS_DOTCONFIG=configs/warp_smp_defconfig
+cmake --build build-warp-smp --target run-qemu-test
+```
+
+or via the helper, which derives the build directory from the config name:
+
+```sh
+scripts/run_config.sh warp_smp                # boot WARP + SMP to the CLI
+scripts/run_config.sh wasm3_smp               # boot wasm3 + SMP
+scripts/run_config.sh wasm3_single kernel     # just build the kernel
+```
+
+Give each configuration its own build directory. The chosen config is copied to
+`<build-dir>/.config` on first configure and that copy is authoritative
+afterwards, so directories cannot influence one another; delete it to re-seed.
+`-DWASMOS_WASM_RUNTIME_*` flags are not a reliable way to select the runtime,
+because the imported config is applied after them — use a defconfig.
+
 Optional Kconfig-style flow:
 ```sh
 cmake --build build --target kconfig-defconfig

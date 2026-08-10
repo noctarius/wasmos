@@ -688,19 +688,66 @@ function(wasmos_add_native_c_app_target target_name)
   )
 endfunction()
 
-set(WASMOS_DOTCONFIG ${CMAKE_SOURCE_DIR}/.config CACHE FILEPATH "Path to Kconfig .config")
+# The working .config lives in the BUILD directory, not the source tree.
+#
+# It used to live at ${CMAKE_SOURCE_DIR}/.config and was re-imported on every
+# configure of every build dir, so one gitignored file in the repo root decided
+# the runtime for all of them -- and beat -DWASMOS_WASM_RUNTIME_* on the command
+# line, since kconfig import runs after and FORCEs the cache. Two build dirs
+# configured with opposite flags could both come out WARP, and nothing said so.
+#
+# Now each build dir owns its config: it is seeded ONCE, then never re-read from
+# the source tree, so trees cannot drift into each other. Kconfig writes
+# .config.old next to it, which lands in the build dir too rather than
+# littering the repo root.
+#
+# WASMOS_DOTCONFIG names the SEED, and may be a tracked defconfig
+# (-DWASMOS_DOTCONFIG=configs/wasm3_smp_defconfig). It is never written to; the
+# editing targets below always write the build-dir copy.
+set(WASMOS_DOTCONFIG "" CACHE FILEPATH "Kconfig config to seed this build dir from (optional)")
+set(WASMOS_BUILD_DOTCONFIG ${CMAKE_BINARY_DIR}/.config)
 set(WASMOS_KCONFIG_IMPORT ${CMAKE_BINARY_DIR}/wasmos_kconfig.cmake)
 
-if (EXISTS ${WASMOS_DOTCONFIG})
+if (NOT EXISTS ${WASMOS_BUILD_DOTCONFIG})
+  # Seed order: an explicit seed, else the repo-root .config if the developer
+  # still has one (so an existing default runtime is preserved rather than
+  # silently flipped), else the tracked base defconfig.
+  set(_wasmos_seed "")
+  if (WASMOS_DOTCONFIG AND EXISTS ${WASMOS_DOTCONFIG})
+    set(_wasmos_seed ${WASMOS_DOTCONFIG})
+  elseif (EXISTS ${CMAKE_SOURCE_DIR}/.config)
+    set(_wasmos_seed ${CMAKE_SOURCE_DIR}/.config)
+  elseif (EXISTS ${CMAKE_SOURCE_DIR}/configs/wasmos_defconfig)
+    set(_wasmos_seed ${CMAKE_SOURCE_DIR}/configs/wasmos_defconfig)
+    # The base defconfig carries toolchains and IRQ mode but deliberately no
+    # runtime or topology selection -- unlike configs/{wasm3,warp}_{single,smp}_
+    # defconfig, which all set both. Seeding from it therefore leaves the
+    # runtime on the code default rather than choosing one, so say so.
+    message(STATUS "wasmos: configs/wasmos_defconfig selects no WASM runtime; "
+                   "the code default applies. Pass "
+                   "-DWASMOS_DOTCONFIG=configs/{wasm3,warp}_{single,smp}_defconfig to pin one.")
+  endif ()
+  if (_wasmos_seed)
+    message(STATUS "wasmos: seeding ${WASMOS_BUILD_DOTCONFIG} from ${_wasmos_seed}")
+    configure_file(${_wasmos_seed} ${WASMOS_BUILD_DOTCONFIG} COPYONLY)
+  endif ()
+elseif (WASMOS_DOTCONFIG AND EXISTS ${WASMOS_DOTCONFIG})
+  # Re-seeding an already-configured dir would silently discard local kconfig
+  # edits, so say what is being used instead of guessing.
+  message(STATUS "wasmos: keeping existing ${WASMOS_BUILD_DOTCONFIG} "
+                 "(delete it to re-seed from ${WASMOS_DOTCONFIG})")
+endif ()
+
+if (EXISTS ${WASMOS_BUILD_DOTCONFIG})
   execute_process(
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/scripts/kconfig_to_cmake.py
-            --input ${WASMOS_DOTCONFIG}
+            --input ${WASMOS_BUILD_DOTCONFIG}
             --output ${WASMOS_KCONFIG_IMPORT}
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     RESULT_VARIABLE WASMOS_KCONFIG_IMPORT_RESULT
   )
   if (NOT WASMOS_KCONFIG_IMPORT_RESULT EQUAL 0)
-    message(FATAL_ERROR "Failed to import ${WASMOS_DOTCONFIG} into CMake cache.")
+    message(FATAL_ERROR "Failed to import ${WASMOS_BUILD_DOTCONFIG} into CMake cache.")
   endif ()
   include(${WASMOS_KCONFIG_IMPORT})
 endif ()
@@ -1328,11 +1375,11 @@ set(WASMOS_QEMU_NETDEV_ARGS
 add_custom_target(kconfig-defconfig
   COMMAND ${CMAKE_COMMAND} -E copy_if_different
           ${CMAKE_SOURCE_DIR}/configs/wasmos_defconfig
-          ${WASMOS_DOTCONFIG}
+          ${WASMOS_BUILD_DOTCONFIG}
   COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/scripts/kconfig_to_cmake.py
-          --input ${WASMOS_DOTCONFIG}
+          --input ${WASMOS_BUILD_DOTCONFIG}
           --output ${WASMOS_KCONFIG_IMPORT}
-  COMMENT "Seeding ${WASMOS_DOTCONFIG} from configs/wasmos_defconfig"
+  COMMENT "Seeding ${WASMOS_BUILD_DOTCONFIG} from configs/wasmos_defconfig"
   VERBATIM
 )
 # Prefer kconfiglib's "menuconfig" (installed via pip install kconfiglib) for the
@@ -1346,10 +1393,10 @@ find_program(WASMOS_MENUCONFIG_BIN
 )
 if (WASMOS_MENUCONFIG_BIN)
   add_custom_target(menuconfig
-    COMMAND ${CMAKE_COMMAND} -E env KCONFIG_CONFIG=${WASMOS_DOTCONFIG}
+    COMMAND ${CMAKE_COMMAND} -E env KCONFIG_CONFIG=${WASMOS_BUILD_DOTCONFIG}
             ${WASMOS_MENUCONFIG_BIN} ${CMAKE_SOURCE_DIR}/Kconfig
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/scripts/kconfig_to_cmake.py
-            --input ${WASMOS_DOTCONFIG}
+            --input ${WASMOS_BUILD_DOTCONFIG}
             --output ${WASMOS_KCONFIG_IMPORT}
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     COMMENT "Run menuconfig and import .config into CMake cache"
@@ -1360,10 +1407,10 @@ else ()
   add_custom_target(menuconfig
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/scripts/kconfiglib_menuconfig.py
             --kconfig ${CMAKE_SOURCE_DIR}/Kconfig
-            --config ${WASMOS_DOTCONFIG}
+            --config ${WASMOS_BUILD_DOTCONFIG}
             --defconfig ${CMAKE_SOURCE_DIR}/configs/wasmos_defconfig
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/scripts/kconfig_to_cmake.py
-            --input ${WASMOS_DOTCONFIG}
+            --input ${WASMOS_BUILD_DOTCONFIG}
             --output ${WASMOS_KCONFIG_IMPORT}
     COMMENT "Run menuconfig and import .config into CMake cache"
     USES_TERMINAL
@@ -1373,10 +1420,10 @@ endif ()
 add_custom_target(kconfiglib-menuconfig
   COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/scripts/kconfiglib_menuconfig.py
           --kconfig ${CMAKE_SOURCE_DIR}/Kconfig
-          --config ${WASMOS_DOTCONFIG}
+          --config ${WASMOS_BUILD_DOTCONFIG}
           --defconfig ${CMAKE_SOURCE_DIR}/configs/wasmos_defconfig
   COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/scripts/kconfig_to_cmake.py
-          --input ${WASMOS_DOTCONFIG}
+          --input ${WASMOS_BUILD_DOTCONFIG}
           --output ${WASMOS_KCONFIG_IMPORT}
   COMMENT "Run kconfiglib interactive config editor"
   USES_TERMINAL

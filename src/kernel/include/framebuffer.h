@@ -8,6 +8,8 @@
 #define WASMOS_FRAMEBUFFER_H
 
 #include <stdint.h>
+
+#include "wasmos_status.h"
 #include "boot.h"
 
 /* Describes the active framebuffer geometry and pixel format. */
@@ -26,8 +28,8 @@ void framebuffer_init(const boot_info_t* info);
 /* Map the physical framebuffer into kernel virtual space; call after paging init. */
 int framebuffer_map_high(void);
 
-int framebuffer_get_info(framebuffer_info_t* out);
-int framebuffer_put_pixel(uint32_t x, uint32_t y, uint32_t color);
+wasmos_error_code_t framebuffer_get_info(framebuffer_info_t* out);
+wasmos_error_code_t framebuffer_put_pixel(uint32_t x, uint32_t y, uint32_t color);
 int framebuffer_fill(uint32_t color);
 
 /* Switch the framebuffer to a panic-safe rendering mode (no IPC or scheduler). */

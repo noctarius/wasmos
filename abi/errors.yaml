@@ -340,7 +340,10 @@ domains:
     codes:
       - { name: BAD_ENTRY,    description: "the entry token is not a NUL-terminated name inside the guest's linear memory" }
       - { name: SPAWN_FAILED, description: "the VM thread could not be created" }
-      - { name: JOIN_FAILED,  description: "the join could not be performed (unknown or unjoinable thread)" }
+      - { name: JOIN_FAILED,  description: "the thread cannot be joined because it was detached" }
+      - { name: NOT_FOUND,    description: "no thread with that id" }
+      - { name: NOT_OWNER,    description: "the thread belongs to another process" }
+      - { name: BUSY,         description: "another thread is already joining it" }
 
   env:
     id: 22

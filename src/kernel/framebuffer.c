@@ -87,14 +87,17 @@ void framebuffer_init(const boot_info_t* info) {
                 (unsigned long long)info->framebuffer_pixels_per_scanline);
 }
 
-int framebuffer_get_info(framebuffer_info_t* out) {
+wasmos_error_code_t framebuffer_get_info(framebuffer_info_t* out) {
     framebuffer_info_t* fb = framebuffer_info_slot();
-    if (!out || fb->framebuffer_base == 0 || fb->framebuffer_size == 0 ||
-        fb->framebuffer_width == 0 || fb->framebuffer_height == 0 || fb->framebuffer_stride == 0) {
-        return -1;
+    if (!out) {
+        return WASMOS_INVAL;
+    }
+    if (fb->framebuffer_base == 0 || fb->framebuffer_size == 0 || fb->framebuffer_width == 0 ||
+        fb->framebuffer_height == 0 || fb->framebuffer_stride == 0) {
+        return WASMOS_ERR_FRAMEBUFFER_NOT_PRESENT;
     }
     memcpy(out, fb, sizeof(framebuffer_info_t));
-    return 0;
+    return WASMOS_OK;
 }
 
 int framebuffer_map_high(void) {
@@ -118,28 +121,30 @@ int framebuffer_map_high(void) {
     return 0;
 }
 
-int framebuffer_put_pixel(uint32_t x, uint32_t y, uint32_t color) {
+wasmos_error_code_t framebuffer_put_pixel(uint32_t x, uint32_t y, uint32_t color) {
     framebuffer_info_t* fb = framebuffer_info_slot();
     uint64_t fb_va = _fb_mmio_va();
     if (fb_va == 0 || fb->framebuffer_base == 0 || fb->framebuffer_size == 0 ||
         fb->framebuffer_width == 0 || fb->framebuffer_height == 0) {
-        return -1;
+        return WASMOS_ERR_FRAMEBUFFER_NOT_PRESENT;
     }
+    /* Off-screen coordinates are the caller's mistake and it can correct them,
+     * which is a different thing from there being no framebuffer at all. */
     if (x >= fb->framebuffer_width || y >= fb->framebuffer_height) {
-        return -1;
+        return WASMOS_INVAL;
     }
     uint64_t stride = fb->framebuffer_stride;
     if (stride == 0) {
-        return -1;
+        return WASMOS_ERR_FRAMEBUFFER_NOT_PRESENT;
     }
     uint64_t index = (uint64_t)y * stride + x;
     uint64_t offset = index * 4;
     if (offset + 4 > fb->framebuffer_size) {
-        return -1;
+        return WASMOS_INVAL;
     }
     uint32_t* pixel = ptr_cast(uint32_t, (fb_va + offset));
     *pixel = color;
-    return 0;
+    return WASMOS_OK;
 }
 
 int framebuffer_fill(uint32_t color) {

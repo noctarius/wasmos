@@ -1670,27 +1670,33 @@ int process_wait(process_t* process, uint32_t target_pid, int32_t* out_exit_stat
     return 1;
 }
 
+/* Tri-state: > 0 means the caller has been parked and should yield, 0 means the
+ * target was reaped and its status returned, < 0 is a packed error code. The
+ * error side is negative by construction, so the protocol is unchanged. */
 int process_thread_join(process_t* process, uint32_t target_tid, int32_t* out_exit_status) {
     thread_t* target = 0;
     thread_t* caller = 0;
     uint32_t caller_tid = 0;
     if (!process || target_tid == 0) {
-        return -1;
+        return WASMOS_INVAL;
     }
     caller_tid = thread_current_tid();
-    if (caller_tid == 0 || caller_tid == target_tid) {
-        return -1;
+    if (caller_tid == 0) {
+        return WASMOS_ERR_KERNEL_NO_CALLER;
+    }
+    if (caller_tid == target_tid) {
+        return WASMOS_INVAL; /* a thread cannot join itself */
     }
     target = thread_get(target_tid);
     caller = thread_get(caller_tid);
     if (!target || !caller) {
-        return -1;
+        return WASMOS_ERR_THREAD_NOT_FOUND;
     }
     if (target->owner_pid != process->pid || caller->owner_pid != process->pid) {
-        return -1;
+        return WASMOS_ERR_THREAD_NOT_OWNER;
     }
     if (target->detached) {
-        return -1;
+        return WASMOS_ERR_THREAD_JOIN_FAILED;
     }
     if (target->state == THREAD_STATE_ZOMBIE) {
         if (out_exit_status) {
@@ -1703,7 +1709,7 @@ int process_thread_join(process_t* process, uint32_t target_tid, int32_t* out_ex
         return 0;
     }
     if (target->join_waiter_tid != 0 && target->join_waiter_tid != caller_tid) {
-        return -1;
+        return WASMOS_ERR_THREAD_BUSY;
     }
     target->join_waiter_tid = caller_tid;
     process_set_blocked(process, caller, PROCESS_BLOCK_WAIT, THREAD_BLOCK_WAIT_THREAD);
@@ -1715,21 +1721,21 @@ int process_thread_detach(process_t* process, uint32_t target_tid) {
     thread_t* target = 0;
     uint32_t caller_tid = 0;
     if (!process || target_tid == 0) {
-        return -1;
+        return WASMOS_INVAL;
     }
     caller_tid = thread_current_tid();
     if (caller_tid == 0) {
-        return -1;
+        return WASMOS_ERR_KERNEL_NO_CALLER;
     }
     target = thread_get(target_tid);
     if (!target) {
-        return -1;
+        return WASMOS_ERR_THREAD_NOT_FOUND;
     }
     if (target->owner_pid != process->pid) {
-        return -1;
+        return WASMOS_ERR_THREAD_NOT_OWNER;
     }
     if (target->join_waiter_tid != 0 && target->join_waiter_tid != caller_tid) {
-        return -1;
+        return WASMOS_ERR_THREAD_BUSY;
     }
     target->detached = 1;
     if (target->state == THREAD_STATE_ZOMBIE) {

@@ -58,7 +58,8 @@ static void test_truncation_reports_the_true_length(void) {
     uint32_t true_len = 0;
     uint32_t copy_len = 0;
 
-    CHECK(hostcall_name_clamp("abcdef", NAME_MAX_FIELD, 4, &true_len, &copy_len) == WASMOS_OK, "ok");
+    CHECK(hostcall_name_clamp("abcdef", NAME_MAX_FIELD, 4, &true_len, &copy_len) == WASMOS_OK,
+          "ok");
     CHECK(copy_len == 3, "only three bytes fit");
     CHECK(true_len == 6, "but the caller is told the name is six long");
     CHECK(true_len != copy_len, "which is how truncation is detectable at all");

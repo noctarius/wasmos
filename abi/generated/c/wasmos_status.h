@@ -251,7 +251,10 @@ enum {
     WASMOS_ERR_BLOCK_MAP_FAILED = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_BLOCK, 6), /* the paging step that overlays the buffer failed */
     WASMOS_ERR_THREAD_BAD_ENTRY = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_THREAD, 1), /* the entry token is not a NUL-terminated name inside the guest's linear memory */
     WASMOS_ERR_THREAD_SPAWN_FAILED = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_THREAD, 2), /* the VM thread could not be created */
-    WASMOS_ERR_THREAD_JOIN_FAILED = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_THREAD, 3), /* the join could not be performed (unknown or unjoinable thread) */
+    WASMOS_ERR_THREAD_JOIN_FAILED = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_THREAD, 3), /* the thread cannot be joined because it was detached */
+    WASMOS_ERR_THREAD_NOT_FOUND = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_THREAD, 4), /* no thread with that id */
+    WASMOS_ERR_THREAD_NOT_OWNER = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_THREAD, 5), /* the thread belongs to another process */
+    WASMOS_ERR_THREAD_BUSY = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_THREAD, 6), /* another thread is already joining it */
     WASMOS_ERR_ENV_NOT_FOUND = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_ENV, 1), /* no entry with that key */
     WASMOS_ERR_ENV_TOO_LONG = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_ENV, 2), /* the key or value exceeds the store's fixed capacity */
     WASMOS_ERR_ENV_TABLE_FULL = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_ENV, 3), /* no free entry remains */
@@ -520,6 +523,9 @@ static inline const char *wasmos_error_code_name(wasmos_error_code_t c) {
     case WASMOS_ERR_THREAD_BAD_ENTRY: return "thread.BAD_ENTRY";
     case WASMOS_ERR_THREAD_SPAWN_FAILED: return "thread.SPAWN_FAILED";
     case WASMOS_ERR_THREAD_JOIN_FAILED: return "thread.JOIN_FAILED";
+    case WASMOS_ERR_THREAD_NOT_FOUND: return "thread.NOT_FOUND";
+    case WASMOS_ERR_THREAD_NOT_OWNER: return "thread.NOT_OWNER";
+    case WASMOS_ERR_THREAD_BUSY: return "thread.BUSY";
     case WASMOS_ERR_ENV_NOT_FOUND: return "env.NOT_FOUND";
     case WASMOS_ERR_ENV_TOO_LONG: return "env.TOO_LONG";
     case WASMOS_ERR_ENV_TABLE_FULL: return "env.TABLE_FULL";
@@ -723,7 +729,10 @@ static inline const char *wasmos_strerror(wasmos_error_code_t c) {
     case WASMOS_ERR_BLOCK_MAP_FAILED: return "the paging step that overlays the buffer failed";
     case WASMOS_ERR_THREAD_BAD_ENTRY: return "the entry token is not a NUL-terminated name inside the guest's linear memory";
     case WASMOS_ERR_THREAD_SPAWN_FAILED: return "the VM thread could not be created";
-    case WASMOS_ERR_THREAD_JOIN_FAILED: return "the join could not be performed (unknown or unjoinable thread)";
+    case WASMOS_ERR_THREAD_JOIN_FAILED: return "the thread cannot be joined because it was detached";
+    case WASMOS_ERR_THREAD_NOT_FOUND: return "no thread with that id";
+    case WASMOS_ERR_THREAD_NOT_OWNER: return "the thread belongs to another process";
+    case WASMOS_ERR_THREAD_BUSY: return "another thread is already joining it";
     case WASMOS_ERR_ENV_NOT_FOUND: return "no entry with that key";
     case WASMOS_ERR_ENV_TOO_LONG: return "the key or value exceeds the store's fixed capacity";
     case WASMOS_ERR_ENV_TABLE_FULL: return "no free entry remains";

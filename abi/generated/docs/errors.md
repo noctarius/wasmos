@@ -310,7 +310,10 @@ Argument validation that a guest CAN act on stays on the transport axis (WASMOS_
 |---|---|---|
 | `WASMOS_ERR_THREAD_BAD_ENTRY` | -0x00150001 | the entry token is not a NUL-terminated name inside the guest's linear memory |
 | `WASMOS_ERR_THREAD_SPAWN_FAILED` | -0x00150002 | the VM thread could not be created |
-| `WASMOS_ERR_THREAD_JOIN_FAILED` | -0x00150003 | the join could not be performed (unknown or unjoinable thread) |
+| `WASMOS_ERR_THREAD_JOIN_FAILED` | -0x00150003 | the thread cannot be joined because it was detached |
+| `WASMOS_ERR_THREAD_NOT_FOUND` | -0x00150004 | no thread with that id |
+| `WASMOS_ERR_THREAD_NOT_OWNER` | -0x00150005 | the thread belongs to another process |
+| `WASMOS_ERR_THREAD_BUSY` | -0x00150006 | another thread is already joining it |
 
 ### `env` (domain 22) — kernel environment key/value store host calls
 

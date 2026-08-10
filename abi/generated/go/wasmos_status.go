@@ -238,7 +238,10 @@ const (
 	WASMOS_ERR_BLOCK_MAP_FAILED int32 = -0x00140006 // the paging step that overlays the buffer failed
 	WASMOS_ERR_THREAD_BAD_ENTRY int32 = -0x00150001 // the entry token is not a NUL-terminated name inside the guest's linear memory
 	WASMOS_ERR_THREAD_SPAWN_FAILED int32 = -0x00150002 // the VM thread could not be created
-	WASMOS_ERR_THREAD_JOIN_FAILED int32 = -0x00150003 // the join could not be performed (unknown or unjoinable thread)
+	WASMOS_ERR_THREAD_JOIN_FAILED int32 = -0x00150003 // the thread cannot be joined because it was detached
+	WASMOS_ERR_THREAD_NOT_FOUND int32 = -0x00150004 // no thread with that id
+	WASMOS_ERR_THREAD_NOT_OWNER int32 = -0x00150005 // the thread belongs to another process
+	WASMOS_ERR_THREAD_BUSY int32 = -0x00150006 // another thread is already joining it
 	WASMOS_ERR_ENV_NOT_FOUND int32 = -0x00160001 // no entry with that key
 	WASMOS_ERR_ENV_TOO_LONG int32 = -0x00160002 // the key or value exceeds the store's fixed capacity
 	WASMOS_ERR_ENV_TABLE_FULL int32 = -0x00160003 // no free entry remains
@@ -721,7 +724,13 @@ func WasmosStrerror(c int32) string {
 	case WASMOS_ERR_THREAD_SPAWN_FAILED:
 		return "the VM thread could not be created"
 	case WASMOS_ERR_THREAD_JOIN_FAILED:
-		return "the join could not be performed (unknown or unjoinable thread)"
+		return "the thread cannot be joined because it was detached"
+	case WASMOS_ERR_THREAD_NOT_FOUND:
+		return "no thread with that id"
+	case WASMOS_ERR_THREAD_NOT_OWNER:
+		return "the thread belongs to another process"
+	case WASMOS_ERR_THREAD_BUSY:
+		return "another thread is already joining it"
 	case WASMOS_ERR_ENV_NOT_FOUND:
 		return "no entry with that key"
 	case WASMOS_ERR_ENV_TOO_LONG:

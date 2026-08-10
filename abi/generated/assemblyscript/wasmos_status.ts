@@ -230,7 +230,10 @@ export const WASMOS_ERR_BLOCK_NO_WINDOW: i32 = -0x00140005; // guest linear memo
 export const WASMOS_ERR_BLOCK_MAP_FAILED: i32 = -0x00140006; // the paging step that overlays the buffer failed
 export const WASMOS_ERR_THREAD_BAD_ENTRY: i32 = -0x00150001; // the entry token is not a NUL-terminated name inside the guest's linear memory
 export const WASMOS_ERR_THREAD_SPAWN_FAILED: i32 = -0x00150002; // the VM thread could not be created
-export const WASMOS_ERR_THREAD_JOIN_FAILED: i32 = -0x00150003; // the join could not be performed (unknown or unjoinable thread)
+export const WASMOS_ERR_THREAD_JOIN_FAILED: i32 = -0x00150003; // the thread cannot be joined because it was detached
+export const WASMOS_ERR_THREAD_NOT_FOUND: i32 = -0x00150004; // no thread with that id
+export const WASMOS_ERR_THREAD_NOT_OWNER: i32 = -0x00150005; // the thread belongs to another process
+export const WASMOS_ERR_THREAD_BUSY: i32 = -0x00150006; // another thread is already joining it
 export const WASMOS_ERR_ENV_NOT_FOUND: i32 = -0x00160001; // no entry with that key
 export const WASMOS_ERR_ENV_TOO_LONG: i32 = -0x00160002; // the key or value exceeds the store's fixed capacity
 export const WASMOS_ERR_ENV_TABLE_FULL: i32 = -0x00160003; // no free entry remains
@@ -482,7 +485,10 @@ export function strerror(c: i32): string {
     case WASMOS_ERR_BLOCK_MAP_FAILED: return "the paging step that overlays the buffer failed";
     case WASMOS_ERR_THREAD_BAD_ENTRY: return "the entry token is not a NUL-terminated name inside the guest's linear memory";
     case WASMOS_ERR_THREAD_SPAWN_FAILED: return "the VM thread could not be created";
-    case WASMOS_ERR_THREAD_JOIN_FAILED: return "the join could not be performed (unknown or unjoinable thread)";
+    case WASMOS_ERR_THREAD_JOIN_FAILED: return "the thread cannot be joined because it was detached";
+    case WASMOS_ERR_THREAD_NOT_FOUND: return "no thread with that id";
+    case WASMOS_ERR_THREAD_NOT_OWNER: return "the thread belongs to another process";
+    case WASMOS_ERR_THREAD_BUSY: return "another thread is already joining it";
     case WASMOS_ERR_ENV_NOT_FOUND: return "no entry with that key";
     case WASMOS_ERR_ENV_TOO_LONG: return "the key or value exceeds the store's fixed capacity";
     case WASMOS_ERR_ENV_TABLE_FULL: return "no free entry remains";

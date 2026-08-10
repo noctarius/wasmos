@@ -1822,30 +1822,32 @@ m3ApiRawFunction(wasmos_io_wait) {
 }
 
 m3ApiRawFunction(wasmos_framebuffer_pixel) {
-    m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, x) m3ApiGetArg(int32_t, y) m3ApiGetArg(
-        int32_t, color) if (framebuffer_put_pixel((uint32_t)x, (uint32_t)y, (uint32_t)color) != 0) {
-        m3ApiReturn(-1);
-    }
-    m3ApiReturn(0);
+    m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, x) m3ApiGetArg(int32_t, y)
+        m3ApiGetArg(int32_t, color)
+            m3ApiReturn(framebuffer_put_pixel((uint32_t)x, (uint32_t)y, (uint32_t)color));
 }
 
 m3ApiRawFunction(wasmos_framebuffer_info) {
     m3ApiReturnType(int32_t) m3ApiGetArgMem(uint8_t*, out_ptr) m3ApiGetArg(int32_t, len)
 
-        if (len < (int32_t)sizeof(framebuffer_info_t) || len <= 0) {
-        m3ApiReturn(-1);
+        if (len <= 0) {
+        m3ApiReturn(WASMOS_INVAL);
+    }
+    if (len < (int32_t)sizeof(framebuffer_info_t)) {
+        m3ApiReturn(WASMOS_ERR_FRAMEBUFFER_TOO_SMALL);
     }
     if (!out_ptr) {
-        m3ApiReturn(-1);
+        m3ApiReturn(WASMOS_INVAL);
     }
     framebuffer_info_t info = {0};
-    if (framebuffer_get_info(&info) != 0) {
-        m3ApiReturn(-1);
+    wasmos_error_code_t info_rc = framebuffer_get_info(&info);
+    if (info_rc != WASMOS_OK) {
+        m3ApiReturn(info_rc);
     }
     m3ApiCheckMem(out_ptr, (uint32_t)len);
     process_t* proc = process_get(process_current_pid());
     if (!proc || proc->context_id == 0) {
-        m3ApiReturn(-1);
+        m3ApiReturn(WASMOS_ERR_KERNEL_NO_CALLER);
     }
     uint64_t out_user = 0;
     if (wasm_user_va_from_host_ptr(proc->context_id, (const uint8_t*)_mem,
@@ -1853,10 +1855,10 @@ m3ApiRawFunction(wasmos_framebuffer_info) {
                                    &out_user) != 0 ||
         mm_user_range_permitted(proc->context_id, out_user, (uint64_t)(uint32_t)len,
                                 MEM_REGION_FLAG_WRITE) != 0) {
-        m3ApiReturn(-1);
+        m3ApiReturn(WASMOS_ERR_KERNEL_BAD_POINTER);
     }
     if (mm_copy_to_user(proc->context_id, out_user, &info, sizeof(info)) != 0) {
-        m3ApiReturn(-1);
+        m3ApiReturn(WASMOS_ERR_KERNEL_COPY_FAILED);
     }
     m3ApiReturn(0);
 }
@@ -1865,28 +1867,34 @@ m3ApiRawFunction(wasmos_framebuffer_map) {
     m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, ptr) m3ApiGetArg(int32_t, size)
 
         if (ptr < 0 || size <= 0) {
-        m3ApiReturn(-1);
+        m3ApiReturn(WASMOS_INVAL);
     }
     if ((size & 0xFFF) != 0) {
-        m3ApiReturn(-1);
+        m3ApiReturn(WASMOS_ERR_FRAMEBUFFER_UNALIGNED);
     }
 
     framebuffer_info_t info = {0};
-    if (framebuffer_get_info(&info) != 0) {
-        m3ApiReturn(-1);
+    wasmos_error_code_t info_rc = framebuffer_get_info(&info);
+    if (info_rc != WASMOS_OK) {
+        m3ApiReturn(info_rc);
     }
     if ((uint32_t)size < info.framebuffer_size) {
-        m3ApiReturn(-1);
+        m3ApiReturn(WASMOS_ERR_FRAMEBUFFER_TOO_SMALL);
     }
 
+    /* Split, so "no caller" and "not permitted to map MMIO" stay distinct --
+     * the same conflation the io family had. */
     process_t* proc = process_get(process_current_pid());
-    if (!proc || proc->context_id == 0 || require_mmio_capability(proc->context_id) != 0) {
-        m3ApiReturn(-1);
+    if (!proc || proc->context_id == 0) {
+        m3ApiReturn(WASMOS_ERR_KERNEL_NO_CALLER);
+    }
+    if (require_mmio_capability(proc->context_id) != 0) {
+        m3ApiReturn(WASMOS_ERR_KERNEL_NOT_AUTHORIZED);
     }
 
     mm_context_t* ctx = mm_context_get(proc->context_id);
     if (!ctx || ctx->root_table == 0) {
-        m3ApiReturn(-1);
+        m3ApiReturn(WASMOS_ERR_KERNEL_NO_CALLER);
     }
 
     /* Map the physical framebuffer over caller-provided linear-memory pages.
@@ -1894,7 +1902,7 @@ m3ApiRawFunction(wasmos_framebuffer_map) {
     uint32_t off32 = (uint32_t)ptr;
     uint32_t map_size32 = (uint32_t)size;
     if ((uint64_t)off32 + (uint64_t)map_size32 > (uint64_t)m3_GetMemorySize(runtime)) {
-        m3ApiReturn(-1);
+        m3ApiReturn(WASMOS_ERR_FRAMEBUFFER_NO_WINDOW);
     }
     uint64_t virt = 0;
     int va_rc = wasm_user_va_from_offset(proc->context_id, off32, map_size32, &virt);
@@ -1904,16 +1912,16 @@ m3ApiRawFunction(wasmos_framebuffer_map) {
                                           MEM_REGION_FLAG_WRITE);
     }
     if (va_rc != 0 || perm_rc != 0) {
-        m3ApiReturn(-1);
+        m3ApiReturn(WASMOS_ERR_KERNEL_BAD_POINTER);
     }
     if ((virt & 0xFFFULL) != 0) {
-        m3ApiReturn(-1);
+        m3ApiReturn(WASMOS_ERR_FRAMEBUFFER_UNALIGNED);
     }
 
     uint64_t pages = (uint64_t)map_size32 / 0x1000ULL;
     if (pages == 0) {
         klog_write("[framebuffer-map] zero pages\n");
-        m3ApiReturn(-1);
+        m3ApiReturn(WASMOS_INVAL);
     }
     uint64_t cur_virt = virt;
     uint64_t cur_phys = info.framebuffer_base;
@@ -1922,7 +1930,7 @@ m3ApiRawFunction(wasmos_framebuffer_map) {
         if (paging_map_4k_in_root(ctx->root_table, cur_virt, cur_phys,
                                   MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE |
                                       MEM_REGION_FLAG_USER) < 0) {
-            m3ApiReturn(-1);
+            m3ApiReturn(WASMOS_ERR_FRAMEBUFFER_MAP_FAILED);
         }
         cur_virt += 0x1000ULL;
         cur_phys += 0x1000ULL;
@@ -2998,7 +3006,7 @@ m3ApiRawFunction(wasmos_proc_exit) {
     m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, status) process_t* proc =
         process_get(process_current_pid());
     if (!proc) {
-        m3ApiReturn(-1);
+        m3ApiReturn(WASMOS_ERR_KERNEL_NO_CALLER);
     }
     process_set_exit_status(proc, status);
     process_yield(PROCESS_RUN_EXITED);
@@ -3094,11 +3102,14 @@ m3ApiRawFunction(wasmos_thread_create) {
     uint32_t argv[2];
     uint32_t tid = 0;
     uint32_t argc = 2u;
-    if (!proc || proc->pid == 0 || entry_token <= 0) {
-        m3ApiReturn(-1);
+    if (!proc || proc->pid == 0) {
+        m3ApiReturn(WASMOS_ERR_KERNEL_NO_CALLER);
+    }
+    if (entry_token <= 0) {
+        m3ApiReturn(WASMOS_ERR_THREAD_BAD_ENTRY);
     }
     if ((uint64_t)(uint32_t)entry_token >= mem_size) {
-        m3ApiReturn(-1);
+        m3ApiReturn(WASMOS_ERR_THREAD_BAD_ENTRY);
     }
     entry_name = (const char*)((const uint8_t*)_mem + (uint32_t)entry_token);
     /* Require NUL-terminated export names in-bounds to avoid host pointer
@@ -3114,7 +3125,7 @@ m3ApiRawFunction(wasmos_thread_create) {
         }
     }
     if (!terminated) {
-        m3ApiReturn(-1);
+        m3ApiReturn(WASMOS_ERR_THREAD_BAD_ENTRY);
     }
 
     if ((flags & 0x1) == 0) {
@@ -3123,7 +3134,7 @@ m3ApiRawFunction(wasmos_thread_create) {
     argv[0] = (uint32_t)arg0;
     argv[1] = (uint32_t)arg1;
     if (wasm_driver_spawn_vm_thread(proc->pid, entry_name, argc, argv, &tid) != 0) {
-        m3ApiReturn(-1);
+        m3ApiReturn(WASMOS_ERR_THREAD_SPAWN_FAILED);
     }
     m3ApiReturn((int32_t)tid);
 }
@@ -3137,7 +3148,7 @@ m3ApiRawFunction(wasmos_thread_exit) {
     m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, status) process_t* proc =
         process_get(process_current_pid());
     if (!proc) {
-        m3ApiReturn(-1);
+        m3ApiReturn(WASMOS_ERR_KERNEL_NO_CALLER);
     }
     process_set_exit_status(proc, status);
     process_yield(PROCESS_RUN_THREAD_EXITED);
@@ -3150,8 +3161,11 @@ m3ApiRawFunction(wasmos_thread_join) {
     uint32_t target_tid = 0;
     int32_t exit_status = 0;
     int rc = 0;
-    if (!proc || wasm_arg_u32_nonneg(tid, &target_tid) != 0) {
-        m3ApiReturn(-1);
+    if (!proc) {
+        m3ApiReturn(WASMOS_ERR_KERNEL_NO_CALLER);
+    }
+    if (wasm_arg_u32_nonneg(tid, &target_tid) != 0) {
+        m3ApiReturn(WASMOS_INVAL);
     }
     rc = process_thread_join(proc, target_tid, &exit_status);
     if (rc > 0) {
@@ -3159,8 +3173,12 @@ m3ApiRawFunction(wasmos_thread_join) {
         m3ApiReturn(0);
     }
     if (rc < 0) {
-        m3ApiReturn(-1);
+        m3ApiReturn(rc); /* already a packed code */
     }
+    /* FIXME: the joined thread's exit status is returned on the same i32 that
+     * carries the error codes, so a thread exiting with a negative status is
+     * indistinguishable from a failed join. Same shape as io_in32; fixing it
+     * means an out-parameter and a change to every caller. */
     m3ApiReturn(exit_status);
 }
 
@@ -3168,8 +3186,11 @@ m3ApiRawFunction(wasmos_thread_detach) {
     m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, tid) process_t* proc =
         process_get(process_current_pid());
     uint32_t target_tid = 0;
-    if (!proc || wasm_arg_u32_nonneg(tid, &target_tid) != 0) {
-        m3ApiReturn(-1);
+    if (!proc) {
+        m3ApiReturn(WASMOS_ERR_KERNEL_NO_CALLER);
+    }
+    if (wasm_arg_u32_nonneg(tid, &target_tid) != 0) {
+        m3ApiReturn(WASMOS_INVAL);
     }
     m3ApiReturn(process_thread_detach(proc, target_tid));
 }

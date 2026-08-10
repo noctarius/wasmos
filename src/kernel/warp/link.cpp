@@ -1630,20 +1630,20 @@ static uint32_t warp_thread_create(uint32_t entry_off, uint32_t arg0, uint32_t a
                                    void* ctx_) {
     auto* ctx = warp_call_ctx(ctx_);
     if ((int32_t)entry_off <= 0)
-        return (uint32_t)-1;
+        return (uint32_t)WASMOS_ERR_THREAD_BAD_ENTRY;
     const uint8_t* name_raw = warp_mem(ctx, entry_off, 1);
     if (!name_raw)
-        return (uint32_t)-1;
+        return (uint32_t)WASMOS_ERR_KERNEL_BAD_POINTER;
     /* Scan for NUL within 64 bytes */
     uint32_t mem_size = ctx->module->getLinearMemorySizeInPages() << 16;
     if (entry_off >= mem_size)
-        return (uint32_t)-1;
+        return (uint32_t)WASMOS_ERR_THREAD_BAD_ENTRY;
     uint32_t avail = mem_size - entry_off;
     if (avail > 64u)
         avail = 64u;
     uint8_t* nm = warp_mem(ctx, entry_off, avail);
     if (!nm)
-        return (uint32_t)-1;
+        return (uint32_t)WASMOS_ERR_KERNEL_BAD_POINTER;
     uint8_t ok = 0;
     for (uint32_t i = 0; i < avail; ++i)
         if (nm[i] == '\0') {
@@ -1651,13 +1651,13 @@ static uint32_t warp_thread_create(uint32_t entry_off, uint32_t arg0, uint32_t a
             break;
         }
     if (!ok)
-        return (uint32_t)-1;
+        return (uint32_t)WASMOS_ERR_THREAD_BAD_ENTRY;
     const char* entry_name = reinterpret_cast<const char*>(nm);
     uint32_t argc = (flags & 0x1u) ? 2u : 0u;
     uint32_t argv[2] = {arg0, arg1};
     uint32_t tid = 0;
     if (wasm_driver_spawn_vm_thread(ctx->pid, entry_name, argc, argv, &tid) != 0)
-        return (uint32_t)-1;
+        return (uint32_t)WASMOS_ERR_THREAD_SPAWN_FAILED;
     return tid;
 }
 
@@ -1671,7 +1671,7 @@ static uint32_t warp_thread_exit(uint32_t status, void* ctx_) {
     (void)ctx_;
     process_t* proc = process_get(process_current_pid());
     if (!proc)
-        return (uint32_t)-1;
+        return (uint32_t)WASMOS_ERR_KERNEL_NO_CALLER;
     process_set_exit_status(proc, (int32_t)status);
     process_yield(PROCESS_RUN_THREAD_EXITED);
     return 0;
@@ -1681,7 +1681,7 @@ static uint32_t warp_thread_join(uint32_t tid, void* ctx_) {
     (void)ctx_;
     process_t* proc = process_get(process_current_pid());
     if (!proc)
-        return (uint32_t)-1;
+        return (uint32_t)WASMOS_ERR_KERNEL_NO_CALLER;
     int32_t exit_status = 0;
     int rc = process_thread_join(proc, tid, &exit_status);
     if (rc > 0) {
@@ -1689,7 +1689,9 @@ static uint32_t warp_thread_join(uint32_t tid, void* ctx_) {
         return 0;
     }
     if (rc < 0)
-        return (uint32_t)-1;
+        return (uint32_t)rc; /* already a packed code */
+    /* FIXME: see the wasm3 side -- a thread exiting with a negative status is
+     * indistinguishable from a failed join on this shared i32. */
     return (uint32_t)exit_status;
 }
 
@@ -1697,7 +1699,7 @@ static uint32_t warp_thread_detach(uint32_t tid, void* ctx_) {
     (void)ctx_;
     process_t* proc = process_get(process_current_pid());
     if (!proc)
-        return (uint32_t)-1;
+        return (uint32_t)WASMOS_ERR_KERNEL_NO_CALLER;
     return (uint32_t)process_thread_detach(proc, tid);
 }
 
@@ -2345,42 +2347,53 @@ static uint32_t warp_framebuffer_pixel(uint32_t x, uint32_t y, uint32_t color, v
 
 static uint32_t warp_framebuffer_info(uint32_t out_off, uint32_t len, void* ctx_) {
     auto* ctx = warp_call_ctx(ctx_);
+    if ((int32_t)len <= 0)
+        return (uint32_t)WASMOS_INVAL;
     if ((int32_t)len < (int32_t)sizeof(framebuffer_info_t))
-        return (uint32_t)-1;
+        return (uint32_t)WASMOS_ERR_FRAMEBUFFER_TOO_SMALL;
     framebuffer_info_t info;
     __builtin_memset(&info, 0, sizeof(info));
-    if (framebuffer_get_info(&info) != 0)
-        return (uint32_t)-1;
+    wasmos_error_code_t info_rc = framebuffer_get_info(&info);
+    if (info_rc != WASMOS_OK)
+        return (uint32_t)info_rc;
     uint8_t* out = warp_mem(ctx, out_off, sizeof(framebuffer_info_t));
     if (!out)
-        return (uint32_t)-1;
+        return (uint32_t)WASMOS_ERR_KERNEL_BAD_POINTER;
     __builtin_memcpy(out, &info, sizeof(info));
     return 0;
 }
 
 static uint32_t warp_framebuffer_map(uint32_t wasm_off, uint32_t size, void* ctx_) {
     auto* ctx = warp_call_ctx(ctx_);
-    if ((int32_t)size <= 0 || (size & 0xFFF))
-        return (uint32_t)-1;
+    if ((int32_t)size <= 0)
+        return (uint32_t)WASMOS_INVAL;
+    if (size & 0xFFF)
+        return (uint32_t)WASMOS_ERR_FRAMEBUFFER_UNALIGNED;
     framebuffer_info_t info;
     __builtin_memset(&info, 0, sizeof(info));
-    if (framebuffer_get_info(&info) != 0)
-        return (uint32_t)-1;
+    wasmos_error_code_t info_rc = framebuffer_get_info(&info);
+    if (info_rc != WASMOS_OK)
+        return (uint32_t)info_rc;
     if (size < info.framebuffer_size)
-        return (uint32_t)-1;
+        return (uint32_t)WASMOS_ERR_FRAMEBUFFER_TOO_SMALL;
+    /* Split, so "no caller" and "not permitted to map MMIO" stay distinct. */
     uint32_t context_id = 0;
-    if (warp_current_context_id(&context_id) != 0 || warp_require_mmio_capability(context_id) != 0)
-        return (uint32_t)-1;
+    if (warp_current_context_id(&context_id) != 0)
+        return (uint32_t)WASMOS_ERR_KERNEL_NO_CALLER;
+    if (warp_require_mmio_capability(context_id) != 0)
+        return (uint32_t)WASMOS_ERR_KERNEL_NOT_AUTHORIZED;
     uint8_t* lmem = warp_linear_mem_window(ctx, wasm_off, size);
-    if (!lmem || (addr_cast(uint64_t, lmem) & 0xFFF))
-        return (uint32_t)-1;
+    if (!lmem)
+        return (uint32_t)WASMOS_ERR_FRAMEBUFFER_NO_WINDOW;
+    if (addr_cast(uint64_t, lmem) & 0xFFF)
+        return (uint32_t)WASMOS_ERR_FRAMEBUFFER_UNALIGNED;
     uint64_t virt = addr_cast(uint64_t, lmem);
     uint64_t phys = info.framebuffer_base;
     uint64_t pages = (uint64_t)size / 0x1000ULL;
     for (uint64_t i = 0; i < pages; ++i) {
         paging_unmap_4k(virt + i * 0x1000ULL);
         if (paging_map_4k(virt + i * 0x1000ULL, phys + i * 0x1000ULL, 3ULL) < 0)
-            return (uint32_t)-1;
+            return (uint32_t)WASMOS_ERR_FRAMEBUFFER_MAP_FAILED;
     }
     return 0;
 }

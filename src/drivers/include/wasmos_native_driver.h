@@ -46,11 +46,16 @@ typedef struct wasmos_driver_api {
     int (*framebuffer_info)(nd_framebuffer_info_t* out);
     int (*framebuffer_pixel)(uint32_t x, uint32_t y, uint32_t color);
 
-    /* I/O ports */
-    uint8_t (*io_in8)(uint16_t port);
-    uint16_t (*io_in16)(uint16_t port);
-    void (*io_out8)(uint16_t port, uint8_t val);
-    void (*io_out16)(uint16_t port, uint16_t val);
+    /* I/O ports. The reads report the value through `out` and the outcome
+     * through the return, because 0xFF and 0xFFFF are what an absent device
+     * reads back: returning them for a refused read would make a denied
+     * io.port capability indistinguishable from missing hardware. The writes
+     * report their outcome for the same reason -- a refused write used to be
+     * a silent no-op, which no caller could tell from a completed one. */
+    int (*io_in8)(uint16_t port, uint8_t* out);
+    int (*io_in16)(uint16_t port, uint16_t* out);
+    int (*io_out8)(uint16_t port, uint8_t val);
+    int (*io_out16)(uint16_t port, uint16_t val);
 
     /* IPC */
     uint32_t (*ipc_create_endpoint)(void);
@@ -168,7 +173,7 @@ typedef struct wasmos_driver_api {
 #define ND_BUFFER_BORROW_WRITE 0x2u
 
 #define WASMOS_NATIVE_ABI_MAGIC 0x574E4150u /* 'WNAP' */
-#define WASMOS_NATIVE_ABI_VERSION 12u
+#define WASMOS_NATIVE_ABI_VERSION 13u
 
 /* Entry point that every native driver must provide via ELF e_entry. */
 typedef int (*native_driver_entry_fn_t)(wasmos_driver_api_t* api, int module_count, int arg2,

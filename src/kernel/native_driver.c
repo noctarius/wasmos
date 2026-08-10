@@ -471,32 +471,64 @@ static int nd_framebuffer_pixel(uint32_t x, uint32_t y, uint32_t color) {
     return framebuffer_put_pixel(x, y, color);
 }
 
-static int nd_io_allowed(uint16_t port) {
+/* WASMOS_ERR_NONE when the caller may touch the port, otherwise the code naming
+ * which check refused it. The two failures are distinct -- there being no
+ * current process is not a policy decision -- and the wasm shims separate them,
+ * so this side does too. */
+static wasmos_error_code_t nd_io_check(uint16_t port) {
     process_t* proc = process_get(process_current_pid());
     if (!proc) {
-        return 0;
+        return WASMOS_ERR_KERNEL_NO_CALLER;
     }
-    return policy_authorize(proc->context_id, POLICY_ACTION_IO_PORT, port) == 0;
-}
-
-static uint8_t nd_io_in8(uint16_t port) {
-    return nd_io_allowed(port) ? inb(port) : 0xFF;
-}
-
-static uint16_t nd_io_in16(uint16_t port) {
-    return nd_io_allowed(port) ? inw(port) : 0xFFFF;
-}
-
-static void nd_io_out8(uint16_t port, uint8_t val) {
-    if (nd_io_allowed(port)) {
-        outb(port, val);
+    if (policy_authorize(proc->context_id, POLICY_ACTION_IO_PORT, port) != 0) {
+        return WASMOS_ERR_IO_NOT_AUTHORIZED;
     }
+    return WASMOS_ERR_NONE;
 }
 
-static void nd_io_out16(uint16_t port, uint16_t val) {
-    if (nd_io_allowed(port)) {
-        outw(port, val);
+/* The value goes to `out` and the outcome to the return: 0xFF and 0xFFFF are
+ * what an absent device reads back, so a refused read that returned them would
+ * be indistinguishable from missing hardware. */
+static int nd_io_in8(uint16_t port, uint8_t* out) {
+    if (!out) {
+        return WASMOS_ERR_KERNEL_BAD_POINTER;
     }
+    wasmos_error_code_t rc = nd_io_check(port);
+    if (rc != WASMOS_ERR_NONE) {
+        return rc;
+    }
+    *out = inb(port);
+    return 0;
+}
+
+static int nd_io_in16(uint16_t port, uint16_t* out) {
+    if (!out) {
+        return WASMOS_ERR_KERNEL_BAD_POINTER;
+    }
+    wasmos_error_code_t rc = nd_io_check(port);
+    if (rc != WASMOS_ERR_NONE) {
+        return rc;
+    }
+    *out = inw(port);
+    return 0;
+}
+
+static int nd_io_out8(uint16_t port, uint8_t val) {
+    wasmos_error_code_t rc = nd_io_check(port);
+    if (rc != WASMOS_ERR_NONE) {
+        return rc;
+    }
+    outb(port, val);
+    return 0;
+}
+
+static int nd_io_out16(uint16_t port, uint16_t val) {
+    wasmos_error_code_t rc = nd_io_check(port);
+    if (rc != WASMOS_ERR_NONE) {
+        return rc;
+    }
+    outw(port, val);
+    return 0;
 }
 
 static uint32_t nd_ipc_create_endpoint(void) {

@@ -270,6 +270,27 @@ result appears:
   migration onto this: their `WASMOS_ERR_SHMEM_*` returns replace the legacy
   `SHMEM_ERR_*` -30 range (Phase-4 subsystem 1).
 
+  **The success value shares the channel with the error codes**, which bounds
+  what a value-or-error host call may return: a datum with bit 31 set is read as
+  a negative number, i.e. as an error. Any such call must therefore guarantee its
+  success value stays below 2 GiB. `hostcall_value_check` states that rule for a
+  value that should be small (an address from a bounded pool, an id, a size) and
+  `hostcall_value_counter` for a monotonic counter, which has no small bound and
+  is instead kept positive and wrapping at 2^31 so that differences across the
+  wrap remain correct. A call whose datum genuinely uses the whole 32-bit range —
+  a port read, a guest-chosen exit status — cannot be expressed on this channel at
+  all and needs an out-parameter, the shape `io_region_in32` already has.
+
+  **A domain holds only what is its own.** Where two subsystems would need the
+  same condition, it belongs in the shared `kernel` domain rather than being
+  spelled twice: that domain carries the facts the kernel establishes at the
+  boundary (the caller cannot be resolved, the guest range is unmapped, the copy
+  faulted, a capability check refused, a value does not fit) and the mapping
+  failures every mapping call shares (unaligned, no window, paging failed). The
+  counter-example already in the tree is "denied", which exists as `shmem.NO_CAP`,
+  `dma.DENY`, `subsystem.NOT_AUTHORIZED` and `io.NOT_AUTHORIZED` — four spellings
+  of one condition, and the reason new authorization checks go to `kernel`.
+
   `wasmos_frame_t` stores the pair in unsigned 16-bit fields (`domain`, `code`) —
   that is the wire encoding of a frame, and `WASMOS_ERR_MAKE` / `_DOMAIN_OF` /
   `_CODE_OF` are the only places the sign is applied or removed. Every accessor

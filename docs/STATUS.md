@@ -392,6 +392,35 @@ linked feature documents for rationale and rollout plans.
   gone), plus every bare `-1` that left a service in an IPC reply code arg. Bare
   `-1` survives in internal helper returns, where the `quality` lint flags it
   advisorily.
+- The host-call surface itself is now fully migrated: both runtimes' link layers
+  (`src/kernel/wasm3/link.c`, `src/kernel/warp/link.cpp`) return zero bare `-1`.
+  Five domains carry it -- `kernel` (the shared boundary and authorization facts:
+  NO_CALLER, BAD_POINTER, COPY_FAILED, NOT_AUTHORIZED, TOO_LARGE, UNALIGNED,
+  NO_WINDOW, MAP_FAILED), `block`, `thread`, `env` and `framebuffer` -- while
+  initfs reuses `fs` (plus a new `fs.NO_IMAGE`), boot needs nothing beyond
+  `WASMOS_NOENT`, and generic argument shape stays on the transport axis. A
+  subsystem domain holds only what is genuinely its own; anything a second
+  subsystem would also need lives in `kernel`.
+- Two host-call returns changed meaning during that migration, because `-1` had
+  been used for something that is not a failure: `input_read` reports
+  `WASMOS_AGAIN` when no key is queued, and `console_write` treats a zero-length
+  write as a no-op success.
+- The value-return rule (`src/kernel/hostcall_value.c`): a host call carries its
+  result and its errors on one signed `i32`, so a success value with bit 31 set
+  is read as an error. `hostcall_value_check` refuses a value that should have
+  been small; `hostcall_value_counter` keeps a monotonic counter positive and
+  wrapping at 2^31 so deltas survive. Applied to `block_buffer_phys`,
+  `dma_map_borrow` and `sched_ticks` (which went negative at ~99.4 days of
+  uptime at 250 Hz). Two calls cannot be fixed by any encoding and carry FIXMEs
+  instead: `io_in32`, whose 32-bit port read uses the whole range, and
+  `thread_join`, which returns an arbitrary guest exit status. Both need an
+  out-parameter, as `io_region_in32` already has.
+- Three kernel components were extracted during the migration because the two
+  runtimes had each written the logic out by hand and the copies had drifted:
+  `block_buffer.c` (bounds arithmetic for the block bounce buffer),
+  `hostcall_buffer.c` (filling a caller-supplied name buffer) and `kenv.c` (the
+  environment store, previously duplicated per runtime). Each replaced a real
+  defect, not just duplication -- see the git history for the three.
 - The per-subsystem negative-int status vocabularies are gone: `XFER_BUFFER_ERR_*`,
   `NET_STATUS_*`, `GFX_STATUS_*`, `FONT_STATUS_*`, `RTC_STATUS_*`,
   `HRNG_STATUS_*` and `VT_SWITCH_ERR_*` are now the `xfer_buffer`, `net`, `gfx`,

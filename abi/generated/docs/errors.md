@@ -292,6 +292,9 @@ Argument validation that a guest CAN act on stays on the transport axis (WASMOS_
 | `WASMOS_ERR_KERNEL_COPY_FAILED` | -0x00130003 | the copy to or from guest memory failed |
 | `WASMOS_ERR_KERNEL_NOT_AUTHORIZED` | -0x00130004 | a capability or policy check refused the call |
 | `WASMOS_ERR_KERNEL_TOO_LARGE` | -0x00130005 | the value does not fit the signed 32-bit result the ABI returns |
+| `WASMOS_ERR_KERNEL_UNALIGNED` | -0x00130006 | an address or size is not page-aligned |
+| `WASMOS_ERR_KERNEL_NO_WINDOW` | -0x00130007 | guest linear memory has no window the mapping can occupy |
+| `WASMOS_ERR_KERNEL_MAP_FAILED` | -0x00130008 | the paging step failed |
 
 ### `block` (domain 20) — Block-style device access -- the per-process bounce buffer today, and the block backends that share its shape. Distinct from dma: a DMA mapping describes a device's view of memory, while these describe a block transfer's staging buffer and the slice being moved through it.
 
@@ -301,8 +304,6 @@ Argument validation that a guest CAN act on stays on the transport axis (WASMOS_
 | `WASMOS_ERR_BLOCK_NO_BACKING` | -0x00140002 | no physical backing could be obtained for the buffer |
 | `WASMOS_ERR_BLOCK_ABOVE_4G` | -0x00140003 | the buffer's physical address is above 4 GiB, which a 32-bit guest cannot address |
 | `WASMOS_ERR_BLOCK_RANGE` | -0x00140004 | the requested offset/length lies outside the buffer |
-| `WASMOS_ERR_BLOCK_NO_WINDOW` | -0x00140005 | guest linear memory has no free window to overlay the buffer into |
-| `WASMOS_ERR_BLOCK_MAP_FAILED` | -0x00140006 | the paging step that overlays the buffer failed |
 
 ### `thread` (domain 21) — guest thread creation and lifetime host calls
 
@@ -329,9 +330,6 @@ Argument validation that a guest CAN act on stays on the transport axis (WASMOS_
 |---|---|---|
 | `WASMOS_ERR_FRAMEBUFFER_NOT_PRESENT` | -0x00170001 | no framebuffer is available on this system |
 | `WASMOS_ERR_FRAMEBUFFER_TOO_SMALL` | -0x00170002 | the caller's requested mapping is smaller than the framebuffer |
-| `WASMOS_ERR_FRAMEBUFFER_UNALIGNED` | -0x00170003 | the address or size is not page-aligned |
-| `WASMOS_ERR_FRAMEBUFFER_NO_WINDOW` | -0x00170004 | guest linear memory cannot host the mapping |
-| `WASMOS_ERR_FRAMEBUFFER_MAP_FAILED` | -0x00170005 | the paging step failed |
 
 ### `devmgr` (domain 10) — device-manager query failures
 

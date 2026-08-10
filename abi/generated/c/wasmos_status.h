@@ -243,12 +243,13 @@ enum {
     WASMOS_ERR_KERNEL_COPY_FAILED = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_KERNEL, 3), /* the copy to or from guest memory failed */
     WASMOS_ERR_KERNEL_NOT_AUTHORIZED = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_KERNEL, 4), /* a capability or policy check refused the call */
     WASMOS_ERR_KERNEL_TOO_LARGE = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_KERNEL, 5), /* the value does not fit the signed 32-bit result the ABI returns */
+    WASMOS_ERR_KERNEL_UNALIGNED = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_KERNEL, 6), /* an address or size is not page-aligned */
+    WASMOS_ERR_KERNEL_NO_WINDOW = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_KERNEL, 7), /* guest linear memory has no window the mapping can occupy */
+    WASMOS_ERR_KERNEL_MAP_FAILED = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_KERNEL, 8), /* the paging step failed */
     WASMOS_ERR_BLOCK_NO_SLOT = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_BLOCK, 1), /* no per-process block slot is available */
     WASMOS_ERR_BLOCK_NO_BACKING = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_BLOCK, 2), /* no physical backing could be obtained for the buffer */
     WASMOS_ERR_BLOCK_ABOVE_4G = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_BLOCK, 3), /* the buffer's physical address is above 4 GiB, which a 32-bit guest cannot address */
     WASMOS_ERR_BLOCK_RANGE = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_BLOCK, 4), /* the requested offset/length lies outside the buffer */
-    WASMOS_ERR_BLOCK_NO_WINDOW = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_BLOCK, 5), /* guest linear memory has no free window to overlay the buffer into */
-    WASMOS_ERR_BLOCK_MAP_FAILED = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_BLOCK, 6), /* the paging step that overlays the buffer failed */
     WASMOS_ERR_THREAD_BAD_ENTRY = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_THREAD, 1), /* the entry token is not a NUL-terminated name inside the guest's linear memory */
     WASMOS_ERR_THREAD_SPAWN_FAILED = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_THREAD, 2), /* the VM thread could not be created */
     WASMOS_ERR_THREAD_JOIN_FAILED = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_THREAD, 3), /* the thread cannot be joined because it was detached */
@@ -260,9 +261,6 @@ enum {
     WASMOS_ERR_ENV_TABLE_FULL = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_ENV, 3), /* no free entry remains */
     WASMOS_ERR_FRAMEBUFFER_NOT_PRESENT = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_FRAMEBUFFER, 1), /* no framebuffer is available on this system */
     WASMOS_ERR_FRAMEBUFFER_TOO_SMALL = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_FRAMEBUFFER, 2), /* the caller's requested mapping is smaller than the framebuffer */
-    WASMOS_ERR_FRAMEBUFFER_UNALIGNED = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_FRAMEBUFFER, 3), /* the address or size is not page-aligned */
-    WASMOS_ERR_FRAMEBUFFER_NO_WINDOW = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_FRAMEBUFFER, 4), /* guest linear memory cannot host the mapping */
-    WASMOS_ERR_FRAMEBUFFER_MAP_FAILED = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_FRAMEBUFFER, 5), /* the paging step failed */
     WASMOS_ERR_DEVMGR_NO_MOUNT_RULE = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_DEVMGR, 1), /* no block/filesystem mount rule matches the requested unit */
     WASMOS_ERR_DEVMGR_UNSUPPORTED_QUERY = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_DEVMGR, 2), /* unknown or unsupported device-manager query type */
 };
@@ -514,12 +512,13 @@ static inline const char *wasmos_error_code_name(wasmos_error_code_t c) {
     case WASMOS_ERR_KERNEL_COPY_FAILED: return "kernel.COPY_FAILED";
     case WASMOS_ERR_KERNEL_NOT_AUTHORIZED: return "kernel.NOT_AUTHORIZED";
     case WASMOS_ERR_KERNEL_TOO_LARGE: return "kernel.TOO_LARGE";
+    case WASMOS_ERR_KERNEL_UNALIGNED: return "kernel.UNALIGNED";
+    case WASMOS_ERR_KERNEL_NO_WINDOW: return "kernel.NO_WINDOW";
+    case WASMOS_ERR_KERNEL_MAP_FAILED: return "kernel.MAP_FAILED";
     case WASMOS_ERR_BLOCK_NO_SLOT: return "block.NO_SLOT";
     case WASMOS_ERR_BLOCK_NO_BACKING: return "block.NO_BACKING";
     case WASMOS_ERR_BLOCK_ABOVE_4G: return "block.ABOVE_4G";
     case WASMOS_ERR_BLOCK_RANGE: return "block.RANGE";
-    case WASMOS_ERR_BLOCK_NO_WINDOW: return "block.NO_WINDOW";
-    case WASMOS_ERR_BLOCK_MAP_FAILED: return "block.MAP_FAILED";
     case WASMOS_ERR_THREAD_BAD_ENTRY: return "thread.BAD_ENTRY";
     case WASMOS_ERR_THREAD_SPAWN_FAILED: return "thread.SPAWN_FAILED";
     case WASMOS_ERR_THREAD_JOIN_FAILED: return "thread.JOIN_FAILED";
@@ -531,9 +530,6 @@ static inline const char *wasmos_error_code_name(wasmos_error_code_t c) {
     case WASMOS_ERR_ENV_TABLE_FULL: return "env.TABLE_FULL";
     case WASMOS_ERR_FRAMEBUFFER_NOT_PRESENT: return "framebuffer.NOT_PRESENT";
     case WASMOS_ERR_FRAMEBUFFER_TOO_SMALL: return "framebuffer.TOO_SMALL";
-    case WASMOS_ERR_FRAMEBUFFER_UNALIGNED: return "framebuffer.UNALIGNED";
-    case WASMOS_ERR_FRAMEBUFFER_NO_WINDOW: return "framebuffer.NO_WINDOW";
-    case WASMOS_ERR_FRAMEBUFFER_MAP_FAILED: return "framebuffer.MAP_FAILED";
     case WASMOS_ERR_DEVMGR_NO_MOUNT_RULE: return "devmgr.NO_MOUNT_RULE";
     case WASMOS_ERR_DEVMGR_UNSUPPORTED_QUERY: return "devmgr.UNSUPPORTED_QUERY";
     default: return "unknown";
@@ -721,12 +717,13 @@ static inline const char *wasmos_strerror(wasmos_error_code_t c) {
     case WASMOS_ERR_KERNEL_COPY_FAILED: return "the copy to or from guest memory failed";
     case WASMOS_ERR_KERNEL_NOT_AUTHORIZED: return "a capability or policy check refused the call";
     case WASMOS_ERR_KERNEL_TOO_LARGE: return "the value does not fit the signed 32-bit result the ABI returns";
+    case WASMOS_ERR_KERNEL_UNALIGNED: return "an address or size is not page-aligned";
+    case WASMOS_ERR_KERNEL_NO_WINDOW: return "guest linear memory has no window the mapping can occupy";
+    case WASMOS_ERR_KERNEL_MAP_FAILED: return "the paging step failed";
     case WASMOS_ERR_BLOCK_NO_SLOT: return "no per-process block slot is available";
     case WASMOS_ERR_BLOCK_NO_BACKING: return "no physical backing could be obtained for the buffer";
     case WASMOS_ERR_BLOCK_ABOVE_4G: return "the buffer's physical address is above 4 GiB, which a 32-bit guest cannot address";
     case WASMOS_ERR_BLOCK_RANGE: return "the requested offset/length lies outside the buffer";
-    case WASMOS_ERR_BLOCK_NO_WINDOW: return "guest linear memory has no free window to overlay the buffer into";
-    case WASMOS_ERR_BLOCK_MAP_FAILED: return "the paging step that overlays the buffer failed";
     case WASMOS_ERR_THREAD_BAD_ENTRY: return "the entry token is not a NUL-terminated name inside the guest's linear memory";
     case WASMOS_ERR_THREAD_SPAWN_FAILED: return "the VM thread could not be created";
     case WASMOS_ERR_THREAD_JOIN_FAILED: return "the thread cannot be joined because it was detached";
@@ -738,9 +735,6 @@ static inline const char *wasmos_strerror(wasmos_error_code_t c) {
     case WASMOS_ERR_ENV_TABLE_FULL: return "no free entry remains";
     case WASMOS_ERR_FRAMEBUFFER_NOT_PRESENT: return "no framebuffer is available on this system";
     case WASMOS_ERR_FRAMEBUFFER_TOO_SMALL: return "the caller's requested mapping is smaller than the framebuffer";
-    case WASMOS_ERR_FRAMEBUFFER_UNALIGNED: return "the address or size is not page-aligned";
-    case WASMOS_ERR_FRAMEBUFFER_NO_WINDOW: return "guest linear memory cannot host the mapping";
-    case WASMOS_ERR_FRAMEBUFFER_MAP_FAILED: return "the paging step failed";
     case WASMOS_ERR_DEVMGR_NO_MOUNT_RULE: return "no block/filesystem mount rule matches the requested unit";
     case WASMOS_ERR_DEVMGR_UNSUPPORTED_QUERY: return "unknown or unsupported device-manager query type";
     default: return "unknown error";

@@ -318,6 +318,9 @@ domains:
       - { name: COPY_FAILED,    description: "the copy to or from guest memory failed" }
       - { name: NOT_AUTHORIZED, description: "a capability or policy check refused the call" }
       - { name: TOO_LARGE,      description: "the value does not fit the signed 32-bit result the ABI returns" }
+      - { name: UNALIGNED,      description: "an address or size is not page-aligned" }
+      - { name: NO_WINDOW,      description: "guest linear memory has no window the mapping can occupy" }
+      - { name: MAP_FAILED,     description: "the paging step failed" }
 
   block:
     id: 20
@@ -331,8 +334,6 @@ domains:
       - { name: NO_BACKING, description: "no physical backing could be obtained for the buffer" }
       - { name: ABOVE_4G,   description: "the buffer's physical address is above 4 GiB, which a 32-bit guest cannot address" }
       - { name: RANGE,      description: "the requested offset/length lies outside the buffer" }
-      - { name: NO_WINDOW,  description: "guest linear memory has no free window to overlay the buffer into" }
-      - { name: MAP_FAILED, description: "the paging step that overlays the buffer failed" }
 
   thread:
     id: 21
@@ -362,9 +363,6 @@ domains:
     codes:
       - { name: NOT_PRESENT, description: "no framebuffer is available on this system" }
       - { name: TOO_SMALL,   description: "the caller's requested mapping is smaller than the framebuffer" }
-      - { name: UNALIGNED,   description: "the address or size is not page-aligned" }
-      - { name: NO_WINDOW,   description: "guest linear memory cannot host the mapping" }
-      - { name: MAP_FAILED,  description: "the paging step failed" }
 
   devmgr:
     id: 10

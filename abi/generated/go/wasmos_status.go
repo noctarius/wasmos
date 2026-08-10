@@ -230,12 +230,13 @@ const (
 	WASMOS_ERR_KERNEL_COPY_FAILED int32 = -0x00130003 // the copy to or from guest memory failed
 	WASMOS_ERR_KERNEL_NOT_AUTHORIZED int32 = -0x00130004 // a capability or policy check refused the call
 	WASMOS_ERR_KERNEL_TOO_LARGE int32 = -0x00130005 // the value does not fit the signed 32-bit result the ABI returns
+	WASMOS_ERR_KERNEL_UNALIGNED int32 = -0x00130006 // an address or size is not page-aligned
+	WASMOS_ERR_KERNEL_NO_WINDOW int32 = -0x00130007 // guest linear memory has no window the mapping can occupy
+	WASMOS_ERR_KERNEL_MAP_FAILED int32 = -0x00130008 // the paging step failed
 	WASMOS_ERR_BLOCK_NO_SLOT int32 = -0x00140001 // no per-process block slot is available
 	WASMOS_ERR_BLOCK_NO_BACKING int32 = -0x00140002 // no physical backing could be obtained for the buffer
 	WASMOS_ERR_BLOCK_ABOVE_4G int32 = -0x00140003 // the buffer's physical address is above 4 GiB, which a 32-bit guest cannot address
 	WASMOS_ERR_BLOCK_RANGE int32 = -0x00140004 // the requested offset/length lies outside the buffer
-	WASMOS_ERR_BLOCK_NO_WINDOW int32 = -0x00140005 // guest linear memory has no free window to overlay the buffer into
-	WASMOS_ERR_BLOCK_MAP_FAILED int32 = -0x00140006 // the paging step that overlays the buffer failed
 	WASMOS_ERR_THREAD_BAD_ENTRY int32 = -0x00150001 // the entry token is not a NUL-terminated name inside the guest's linear memory
 	WASMOS_ERR_THREAD_SPAWN_FAILED int32 = -0x00150002 // the VM thread could not be created
 	WASMOS_ERR_THREAD_JOIN_FAILED int32 = -0x00150003 // the thread cannot be joined because it was detached
@@ -247,9 +248,6 @@ const (
 	WASMOS_ERR_ENV_TABLE_FULL int32 = -0x00160003 // no free entry remains
 	WASMOS_ERR_FRAMEBUFFER_NOT_PRESENT int32 = -0x00170001 // no framebuffer is available on this system
 	WASMOS_ERR_FRAMEBUFFER_TOO_SMALL int32 = -0x00170002 // the caller's requested mapping is smaller than the framebuffer
-	WASMOS_ERR_FRAMEBUFFER_UNALIGNED int32 = -0x00170003 // the address or size is not page-aligned
-	WASMOS_ERR_FRAMEBUFFER_NO_WINDOW int32 = -0x00170004 // guest linear memory cannot host the mapping
-	WASMOS_ERR_FRAMEBUFFER_MAP_FAILED int32 = -0x00170005 // the paging step failed
 	WASMOS_ERR_DEVMGR_NO_MOUNT_RULE int32 = -0x000A0001 // no block/filesystem mount rule matches the requested unit
 	WASMOS_ERR_DEVMGR_UNSUPPORTED_QUERY int32 = -0x000A0002 // unknown or unsupported device-manager query type
 )
@@ -707,6 +705,12 @@ func WasmosStrerror(c int32) string {
 		return "a capability or policy check refused the call"
 	case WASMOS_ERR_KERNEL_TOO_LARGE:
 		return "the value does not fit the signed 32-bit result the ABI returns"
+	case WASMOS_ERR_KERNEL_UNALIGNED:
+		return "an address or size is not page-aligned"
+	case WASMOS_ERR_KERNEL_NO_WINDOW:
+		return "guest linear memory has no window the mapping can occupy"
+	case WASMOS_ERR_KERNEL_MAP_FAILED:
+		return "the paging step failed"
 	case WASMOS_ERR_BLOCK_NO_SLOT:
 		return "no per-process block slot is available"
 	case WASMOS_ERR_BLOCK_NO_BACKING:
@@ -715,10 +719,6 @@ func WasmosStrerror(c int32) string {
 		return "the buffer's physical address is above 4 GiB, which a 32-bit guest cannot address"
 	case WASMOS_ERR_BLOCK_RANGE:
 		return "the requested offset/length lies outside the buffer"
-	case WASMOS_ERR_BLOCK_NO_WINDOW:
-		return "guest linear memory has no free window to overlay the buffer into"
-	case WASMOS_ERR_BLOCK_MAP_FAILED:
-		return "the paging step that overlays the buffer failed"
 	case WASMOS_ERR_THREAD_BAD_ENTRY:
 		return "the entry token is not a NUL-terminated name inside the guest's linear memory"
 	case WASMOS_ERR_THREAD_SPAWN_FAILED:
@@ -741,12 +741,6 @@ func WasmosStrerror(c int32) string {
 		return "no framebuffer is available on this system"
 	case WASMOS_ERR_FRAMEBUFFER_TOO_SMALL:
 		return "the caller's requested mapping is smaller than the framebuffer"
-	case WASMOS_ERR_FRAMEBUFFER_UNALIGNED:
-		return "the address or size is not page-aligned"
-	case WASMOS_ERR_FRAMEBUFFER_NO_WINDOW:
-		return "guest linear memory cannot host the mapping"
-	case WASMOS_ERR_FRAMEBUFFER_MAP_FAILED:
-		return "the paging step failed"
 	case WASMOS_ERR_DEVMGR_NO_MOUNT_RULE:
 		return "no block/filesystem mount rule matches the requested unit"
 	case WASMOS_ERR_DEVMGR_UNSUPPORTED_QUERY:

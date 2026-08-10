@@ -241,10 +241,10 @@ uint8_t warp_dbg_ipc_trace_process(process_t* proc) {
 static uint32_t warp_console_read(uint32_t buf_offset, uint32_t len, void* ctx_) {
     auto* ctx = warp_call_ctx(ctx_);
     if ((int32_t)len <= 0)
-        return (uint32_t)-1;
+        return (uint32_t)WASMOS_INVAL;
     uint8_t* buf = warp_mem(ctx, buf_offset, 1);
     if (!buf)
-        return (uint32_t)-1;
+        return (uint32_t)WASMOS_ERR_KERNEL_BAD_POINTER;
     uint8_t ch = 0;
     int rc = serial_read_char(&ch);
     if (rc <= 0)
@@ -255,11 +255,13 @@ static uint32_t warp_console_read(uint32_t buf_offset, uint32_t len, void* ctx_)
 
 static uint32_t warp_console_write(uint32_t buf_offset, uint32_t len, void* ctx_) {
     auto* ctx = warp_call_ctx(ctx_);
-    if ((int32_t)len <= 0)
-        return (uint32_t)-1;
+    if ((int32_t)len < 0)
+        return (uint32_t)WASMOS_INVAL;
+    if (len == 0)
+        return 0; /* nothing to write is not a failure */
     uint8_t* buf = warp_mem(ctx, buf_offset, len);
     if (!buf)
-        return (uint32_t)-1;
+        return (uint32_t)WASMOS_ERR_KERNEL_BAD_POINTER;
     /* write in 127-byte chunks so klog_write always gets a null-terminated
      * string (we temporarily null-terminate at chunk boundaries). */
     preempt_disable();
@@ -303,7 +305,7 @@ static uint32_t warp_wasi_random_get(uint32_t buf_offset, uint32_t len, void* ct
     }
     uint8_t* buf = warp_mem(ctx, buf_offset, len);
     if (!buf) {
-        return (uint32_t)-1;
+        return (uint32_t)WASMOS_ERR_KERNEL_BAD_POINTER;
     }
     /* Minimal WASI compatibility for guest runtimes that probe randomness
      * during startup. Deterministic zero-fill is sufficient for current WASMOS
@@ -356,7 +358,7 @@ static uint32_t warp_futex_wake(uint32_t addr_off, uint32_t count, void* ctx_) {
     auto* ctx = warp_call_ctx(ctx_);
     uint32_t context_id = 0;
     if (warp_current_context_id(&context_id) != 0)
-        return (uint32_t)-1;
+        return (uint32_t)WASMOS_ERR_KERNEL_NO_CALLER;
     (void)ctx;
     return (uint32_t)futex_wake(addr_off, count, context_id);
 }
@@ -377,7 +379,8 @@ static uint32_t warp_xfer_buffer_size(void* ctx_) {
 static uint32_t warp_fs_endpoint(void* ctx_) {
     (void)ctx_;
     uint32_t ep = process_manager_fs_endpoint();
-    return (ep == IPC_ENDPOINT_NONE) ? (uint32_t)-1 : ep;
+    /* no FS service has registered yet */
+    return (ep == IPC_ENDPOINT_NONE) ? (uint32_t)WASMOS_NOENT : ep;
 }
 
 static uint32_t warp_xfer_buffer_read(uint32_t buffer_id, uint32_t ptr_off, uint32_t len,
@@ -869,17 +872,19 @@ static const boot_info_t* g_warp_boot_info = nullptr;
 static uint32_t warp_acpi_rsdp_info(uint32_t out_off, uint32_t out_len_off, uint32_t max_len,
                                     void* ctx_) {
     auto* ctx = warp_call_ctx(ctx_);
+    if ((int32_t)max_len <= 0)
+        return (uint32_t)WASMOS_INVAL;
     if (!g_warp_boot_info || !g_warp_boot_info->rsdp || !g_warp_boot_info->rsdp_length)
-        return (uint32_t)-1;
+        return (uint32_t)WASMOS_NOENT; /* no ACPI RSDP was handed over at boot */
     uint32_t len = g_warp_boot_info->rsdp_length;
     if (len > max_len)
-        return (uint32_t)-1;
+        return (uint32_t)WASMOS_ERR_KERNEL_TOO_LARGE;
     /* warp_mem uses getLinearMemoryRegion(offset, size) which triggers probe()
      * → ensureLinearSize() BEFORE we write — so zeroing happens first. */
     uint8_t* out = warp_mem(ctx, out_off, len);
     uint32_t* out_len = reinterpret_cast<uint32_t*>(warp_mem(ctx, out_len_off, sizeof(uint32_t)));
     if (!out || !out_len)
-        return (uint32_t)-1;
+        return (uint32_t)WASMOS_ERR_KERNEL_BAD_POINTER;
     __builtin_memcpy(out, g_warp_boot_info->rsdp, len);
     *out_len = len;
     return 0;
@@ -888,20 +893,26 @@ static uint32_t warp_acpi_rsdp_info(uint32_t out_off, uint32_t out_len_off, uint
 static uint32_t warp_boot_module_name(uint32_t index, uint32_t out_off, uint32_t out_len,
                                       void* ctx_) {
     auto* ctx = warp_call_ctx(ctx_);
+    if ((int32_t)index < 0 || (int32_t)out_len <= 0)
+        return (uint32_t)WASMOS_INVAL;
     if (!g_warp_boot_info)
-        return (uint32_t)-1;
+        return (uint32_t)WASMOS_NOENT;
     if (index >= g_warp_boot_info->module_count)
-        return (uint32_t)-1;
+        return (uint32_t)WASMOS_NOENT; /* no module at that index */
     const boot_module_t* mod = static_cast<const boot_module_t*>(g_warp_boot_info->modules) + index;
-    uint32_t name_len = (uint32_t)__builtin_strlen(mod->name);
-    if (name_len >= out_len)
-        name_len = out_len - 1;
+    uint32_t true_len = 0;
+    uint32_t copy_len = 0;
+    wasmos_error_code_t clamp_rc = hostcall_name_clamp(
+        mod->name, (uint32_t)__builtin_strlen(mod->name) + 1u, out_len, &true_len, &copy_len);
+    if (clamp_rc != WASMOS_OK)
+        return (uint32_t)clamp_rc;
     uint8_t* out = warp_mem(ctx, out_off, out_len);
     if (!out)
-        return (uint32_t)-1;
-    __builtin_memcpy(out, mod->name, name_len);
-    out[name_len] = '\0';
-    return (uint32_t)name_len;
+        return (uint32_t)WASMOS_ERR_KERNEL_BAD_POINTER;
+    __builtin_memcpy(out, mod->name, copy_len);
+    out[copy_len] = '\0';
+    /* The TRUE length, matching wasm3, so truncation stays detectable. */
+    return true_len;
 }
 
 static uint32_t warp_sync_user_read(uint32_t ptr_off, uint32_t len, void* ctx_) {
@@ -910,7 +921,7 @@ static uint32_t warp_sync_user_read(uint32_t ptr_off, uint32_t len, void* ctx_) 
         return 0;
     uint8_t* p = warp_mem(ctx, ptr_off, len);
     if (!p)
-        return (uint32_t)-1;
+        return (uint32_t)WASMOS_ERR_KERNEL_BAD_POINTER;
     /* In kernel context WASM linear memory IS kernel memory; a volatile read
      * ensures the compiler does not elide the access. */
     volatile uint8_t dummy = 0;
@@ -927,18 +938,22 @@ static uint32_t warp_sync_user_read(uint32_t ptr_off, uint32_t len, void* ctx_) 
 static uint32_t warp_system_halt(void* ctx_) {
     (void)ctx_;
     uint32_t context_id = 0;
-    if (warp_current_context_id(&context_id) != 0 ||
-        warp_require_system_control_capability(context_id) != 0) {
-        return (uint32_t)-1;
+    if (warp_current_context_id(&context_id) != 0) {
+        return (uint32_t)WASMOS_ERR_KERNEL_NO_CALLER;
+    }
+    if (warp_require_system_control_capability(context_id) != 0) {
+        return (uint32_t)WASMOS_ERR_KERNEL_NOT_AUTHORIZED;
     }
     kernel_system_poweroff();
 }
 static uint32_t warp_system_reboot(void* ctx_) {
     (void)ctx_;
     uint32_t context_id = 0;
-    if (warp_current_context_id(&context_id) != 0 ||
-        warp_require_system_control_capability(context_id) != 0) {
-        return (uint32_t)-1;
+    if (warp_current_context_id(&context_id) != 0) {
+        return (uint32_t)WASMOS_ERR_KERNEL_NO_CALLER;
+    }
+    if (warp_require_system_control_capability(context_id) != 0) {
+        return (uint32_t)WASMOS_ERR_KERNEL_NOT_AUTHORIZED;
     }
     kernel_system_reboot();
 }
@@ -1135,18 +1150,20 @@ static uint32_t warp_dma_unmap_borrow(uint32_t borrow_id, void* ctx_) {
 static uint32_t warp_phys_map(uint32_t phys_lo, uint32_t phys_hi, uint32_t size,
                               uint32_t wasm_offset, void* ctx_) {
     auto* ctx = warp_call_ctx(ctx_);
-    if (!size || (size & 0xFFF) || (wasm_offset & 0xFFF))
-        return (uint32_t)-1;
+    if (!size)
+        return (uint32_t)WASMOS_INVAL;
+    if ((size & 0xFFF) || (wasm_offset & 0xFFF))
+        return (uint32_t)WASMOS_ERR_KERNEL_UNALIGNED;
     uint64_t phys = ((uint64_t)phys_hi << 32) | (uint64_t)phys_lo;
     if (!phys)
-        return (uint32_t)-1;
+        return (uint32_t)WASMOS_INVAL;
     /* Map physical pages into WASM linear memory.
      * With the page-aligned allocator fix in shim.cpp, the linear memory base
      * is 4 KB-aligned, so base + wasm_offset is page-aligned when wasm_offset
      * is a multiple of 4096. */
     uint8_t* lmem = warp_linear_mem_window(ctx, wasm_offset, size);
     if (!lmem)
-        return (uint32_t)-1;
+        return (uint32_t)WASMOS_ERR_KERNEL_BAD_POINTER;
     /* WARP's linear memory base has a fixed sub-page offset equal to
      * basedataLength (WARP internal metadata), so base + wasm_offset is never
      * page-aligned even if wasm_offset is 4 KB-aligned.  Page-remapping via
@@ -1175,7 +1192,7 @@ static uint32_t warp_phys_map(uint32_t phys_lo, uint32_t phys_hi, uint32_t size,
      * ensureLinearSize may have called syncBasedataStart, changing the base). */
     lmem = ctx->module->getLinearMemoryRegion(0, 0);
     if (!lmem)
-        return (uint32_t)-1;
+        return (uint32_t)WASMOS_ERR_KERNEL_BAD_POINTER;
     lmem += wasm_offset;
 
     uint64_t scratch_va = addr_cast(uint64_t, g_phys_scratch);
@@ -1503,10 +1520,10 @@ static uint32_t warp_sched_cpu_stats(uint32_t cpu_id, uint32_t out_off, void* ct
         uint32_t last_pid;
     } cpu_stats_t;
     if (cpu_id >= g_cpu_count)
-        return (uint32_t)-1;
+        return (uint32_t)WASMOS_INVAL;
     uint8_t* raw = warp_mem(ctx, out_off, sizeof(cpu_stats_t));
     if (!raw)
-        return (uint32_t)-1;
+        return (uint32_t)WASMOS_ERR_KERNEL_BAD_POINTER;
     cpu_sched_t* cs = &g_cpus[cpu_id].sched;
     uint32_t ready = 0;
     for (int p = 0; p < SCHED_PRIO_MAX; p++)
@@ -1528,14 +1545,14 @@ static uint32_t warp_sched_cpu_stats(uint32_t cpu_id, uint32_t out_off, void* ct
 static uint32_t warp_proc_info(uint32_t index, uint32_t buf_off, uint32_t buf_len, void* ctx_) {
     auto* ctx = warp_call_ctx(ctx_);
     if ((int32_t)buf_len <= 0)
-        return (uint32_t)-1;
+        return (uint32_t)WASMOS_INVAL;
     uint8_t* buf = warp_mem(ctx, buf_off, buf_len);
     if (!buf)
-        return (uint32_t)-1;
+        return (uint32_t)WASMOS_ERR_KERNEL_BAD_POINTER;
     uint32_t pid = 0;
     const char* name = nullptr;
     if (process_info_at(index, &pid, &name) != 0)
-        return (uint32_t)-1;
+        return (uint32_t)WASMOS_NOENT; /* no process at that index */
     uint32_t nlen = 0;
     if (name)
         while (name[nlen] && nlen + 1u < buf_len)
@@ -1549,15 +1566,15 @@ static uint32_t warp_proc_info_ex(uint32_t index, uint32_t buf_off, uint32_t buf
                                   uint32_t parent_off, void* ctx_) {
     auto* ctx = warp_call_ctx(ctx_);
     if ((int32_t)buf_len <= 0)
-        return (uint32_t)-1;
+        return (uint32_t)WASMOS_INVAL;
     uint8_t* buf = warp_mem(ctx, buf_off, buf_len);
     uint8_t* par = warp_mem(ctx, parent_off, sizeof(uint32_t));
     if (!buf || !par)
-        return (uint32_t)-1;
+        return (uint32_t)WASMOS_ERR_KERNEL_BAD_POINTER;
     uint32_t pid = 0, parent_pid = 0;
     const char* name = nullptr;
     if (process_info_at_ex(index, &pid, &parent_pid, &name) != 0)
-        return (uint32_t)-1;
+        return (uint32_t)WASMOS_NOENT; /* no process at that index */
     __builtin_memcpy(par, &parent_pid, sizeof(parent_pid));
     uint32_t nlen = 0;
     if (name)
@@ -1587,17 +1604,17 @@ static uint32_t warp_proc_info_stats(uint32_t index, uint32_t buf_off, uint32_t 
     } wasm_proc_stats_t;
     auto* ctx = warp_call_ctx(ctx_);
     if ((int32_t)buf_len <= 0)
-        return (uint32_t)-1;
+        return (uint32_t)WASMOS_INVAL;
     uint8_t* buf = warp_mem(ctx, buf_off, buf_len);
     uint8_t* par = warp_mem(ctx, parent_off, sizeof(uint32_t));
     uint8_t* stp = warp_mem(ctx, stats_off, sizeof(wasm_proc_stats_t));
     if (!buf || !par || !stp)
-        return (uint32_t)-1;
+        return (uint32_t)WASMOS_ERR_KERNEL_BAD_POINTER;
     uint32_t pid = 0, parent_pid = 0;
     const char* name = nullptr;
     process_stats_t stats;
     if (process_info_at_stats(index, &pid, &parent_pid, &name, &stats) != 0)
-        return (uint32_t)-1;
+        return (uint32_t)WASMOS_NOENT; /* no process at that index */
     __builtin_memcpy(par, &parent_pid, sizeof(parent_pid));
     auto* out = reinterpret_cast<wasm_proc_stats_t*>(stp);
     out->state = stats.state;
@@ -1726,10 +1743,10 @@ static uint32_t warp_shmem_create(uint32_t pages, uint32_t flags, void* ctx_) {
 static uint32_t warp_klog_register_ring(uint32_t id, void* ctx_) {
     (void)ctx_;
     if ((int32_t)id <= 0)
-        return (uint32_t)-1;
+        return (uint32_t)WASMOS_INVAL;
     uint32_t context_id = 0;
     if (warp_current_context_id(&context_id) != 0)
-        return (uint32_t)-1;
+        return (uint32_t)WASMOS_ERR_KERNEL_NO_CALLER;
     /* Ownership of the shared region is enforced inside klog_register_ring
      * (mm_shared_get_phys), matching the wasm3 path. */
     return (uint32_t)klog_register_ring(context_id, id);
@@ -2053,7 +2070,7 @@ static uint32_t warp_block_buffer_map(void* ctx_) {
     const uint32_t window = (uint32_t)(WARP_BLOCK_BUF_PAGES * 0x1000ULL);
     int64_t placed = warp_linmem_place_phys(ctx, slot->phys, WARP_BLOCK_BUF_PAGES, window);
     if (placed < 0)
-        return (uint32_t)WASMOS_ERR_BLOCK_NO_WINDOW;
+        return (uint32_t)WASMOS_ERR_KERNEL_NO_WINDOW;
     uint32_t off = (uint32_t)placed;
     warp_shmem_map_track(ctx->pid, WARP_REGION_TRACK_ID(off), off, window);
     slot->map_off = off;
@@ -2256,8 +2273,10 @@ static uint32_t warp_irq_ack(uint32_t irq_line, void* ctx_) {
 static uint32_t warp_irq_configure(uint32_t irq_line, uint32_t flags, void* ctx_) {
     (void)ctx_;
     uint32_t context_id = 0;
-    if (warp_current_context_id(&context_id) != 0 || warp_require_irq_capability(context_id) != 0)
-        return (uint32_t)-1;
+    if (warp_current_context_id(&context_id) != 0)
+        return (uint32_t)WASMOS_ERR_KERNEL_NO_CALLER;
+    if (warp_require_irq_capability(context_id) != 0)
+        return (uint32_t)WASMOS_ERR_KERNEL_NOT_AUTHORIZED;
     return (uint32_t)irq_configure(irq_line, flags);
 }
 
@@ -2333,7 +2352,8 @@ static uint32_t warp_input_push(uint32_t ch, void* ctx_) {
 static uint32_t warp_input_read(void* ctx_) {
     (void)ctx_;
     uint8_t ch = 0;
-    return serial_input_read(&ch) ? (uint32_t)ch : (uint32_t)-1;
+    /* nothing queued is not a failure */
+    return serial_input_read(&ch) ? (uint32_t)ch : (uint32_t)WASMOS_AGAIN;
 }
 
 // ---------------------------------------------------------------------------
@@ -2368,7 +2388,7 @@ static uint32_t warp_framebuffer_map(uint32_t wasm_off, uint32_t size, void* ctx
     if ((int32_t)size <= 0)
         return (uint32_t)WASMOS_INVAL;
     if (size & 0xFFF)
-        return (uint32_t)WASMOS_ERR_FRAMEBUFFER_UNALIGNED;
+        return (uint32_t)WASMOS_ERR_KERNEL_UNALIGNED;
     framebuffer_info_t info;
     __builtin_memset(&info, 0, sizeof(info));
     wasmos_error_code_t info_rc = framebuffer_get_info(&info);
@@ -2384,16 +2404,16 @@ static uint32_t warp_framebuffer_map(uint32_t wasm_off, uint32_t size, void* ctx
         return (uint32_t)WASMOS_ERR_KERNEL_NOT_AUTHORIZED;
     uint8_t* lmem = warp_linear_mem_window(ctx, wasm_off, size);
     if (!lmem)
-        return (uint32_t)WASMOS_ERR_FRAMEBUFFER_NO_WINDOW;
+        return (uint32_t)WASMOS_ERR_KERNEL_NO_WINDOW;
     if (addr_cast(uint64_t, lmem) & 0xFFF)
-        return (uint32_t)WASMOS_ERR_FRAMEBUFFER_UNALIGNED;
+        return (uint32_t)WASMOS_ERR_KERNEL_UNALIGNED;
     uint64_t virt = addr_cast(uint64_t, lmem);
     uint64_t phys = info.framebuffer_base;
     uint64_t pages = (uint64_t)size / 0x1000ULL;
     for (uint64_t i = 0; i < pages; ++i) {
         paging_unmap_4k(virt + i * 0x1000ULL);
         if (paging_map_4k(virt + i * 0x1000ULL, phys + i * 0x1000ULL, 3ULL) < 0)
-            return (uint32_t)WASMOS_ERR_FRAMEBUFFER_MAP_FAILED;
+            return (uint32_t)WASMOS_ERR_KERNEL_MAP_FAILED;
     }
     return 0;
 }
@@ -2406,22 +2426,22 @@ static uint32_t warp_boot_config_size(void* ctx_) {
     (void)ctx_;
     if (!g_warp_boot_info || !g_warp_boot_info->boot_config ||
         g_warp_boot_info->boot_config_size == 0)
-        return (uint32_t)-1;
+        return (uint32_t)WASMOS_NOENT;
     return (uint32_t)g_warp_boot_info->boot_config_size;
 }
 
 static uint32_t warp_boot_config_copy(uint32_t buf_off, uint32_t len, uint32_t offset, void* ctx_) {
     auto* ctx = warp_call_ctx(ctx_);
     if (!g_warp_boot_info || !g_warp_boot_info->boot_config)
-        return (uint32_t)-1;
+        return (uint32_t)WASMOS_NOENT;
     uint32_t total = (uint32_t)g_warp_boot_info->boot_config_size;
     if (offset > total || len > total - offset)
-        return (uint32_t)-1;
+        return (uint32_t)WASMOS_INVAL;
     if (len == 0)
         return 0;
     uint8_t* dst = warp_mem(ctx, buf_off, len);
     if (!dst)
-        return (uint32_t)-1;
+        return (uint32_t)WASMOS_ERR_KERNEL_BAD_POINTER;
     const uint8_t* src = static_cast<const uint8_t*>(g_warp_boot_info->boot_config);
     __builtin_memcpy(dst, src + offset, len);
     return 0;
@@ -2502,12 +2522,12 @@ static uint32_t warp_early_log_copy(uint32_t buf_off, uint32_t len, uint32_t off
     auto* ctx = warp_call_ctx(ctx_);
     uint32_t total = (uint32_t)serial_early_log_size();
     if (offset > total || len > total - offset)
-        return (uint32_t)-1;
+        return (uint32_t)WASMOS_INVAL;
     if (len == 0)
         return 0;
     uint8_t* dst = warp_mem(ctx, buf_off, len);
     if (!dst)
-        return (uint32_t)-1;
+        return (uint32_t)WASMOS_ERR_KERNEL_BAD_POINTER;
     serial_early_log_copy(dst, offset, len);
     return 0;
 }
@@ -2545,7 +2565,7 @@ static uint32_t warp_physmem_stats(uint32_t out_off, void* ctx_) {
     } physmem_stats_t;
     uint8_t* raw = warp_mem(ctx, out_off, sizeof(physmem_stats_t));
     if (!raw)
-        return (uint32_t)-1;
+        return (uint32_t)WASMOS_ERR_KERNEL_BAD_POINTER;
     physmem_stats_t tmp;
     tmp.total_bytes = pfa_total_bytes();
     tmp.free_bytes = pfa_free_bytes();

@@ -115,6 +115,7 @@ domains:
       - { name: NOT_EMPTY,     description: "rmdir target directory is not empty" }
       - { name: NO_FD,         description: "open-file table is full" }
       - { name: BUSY,          description: "backend has no free op-context slot (retryable)" }
+      - { name: NO_IMAGE,      description: "the backing image is not present at all (e.g. no initfs was loaded), as distinct from a path missing inside one" }
       - { name: IO,            description: "block-device I/O error" }
       - { name: NOT_READY,     description: "mount/backend not ready" }
       - { name: NO_SPACE,      description: "no free cluster or directory slot (disk full)" }
@@ -300,40 +301,36 @@ domains:
       - { name: INACTIVE_MAPPING,       description: "the DMA mapping is inactive" }
       - { name: NO_ACCESS,              description: "the object exists but the context is neither its owner nor a borrower" }
 
-  hostcall:
+  kernel:
     id: 19
     description: >-
-      Conditions every host call checks at the guest boundary, before it reaches
-      the subsystem it fronts. These were seven near-identical sets of codes in
-      the draft (block, initfs, env, proc, framebuffer, boot, thread all check
-      the same five things), so they are one domain rather than seven copies.
-      A call fails with a domain-specific code only where it has something
-      domain-specific to say.
+      Facts the kernel establishes at the host-call boundary, before the call
+      reaches the subsystem it fronts. Shared by every family on purpose: a
+      guest cannot act on any of them, they mean the same thing whichever call
+      reports them, and new capability checks belong here rather than growing a
+      fifth spelling of "denied".
+
+      Argument validation that a guest CAN act on stays on the transport axis
+      (WASMOS_INVAL); a missing object stays WASMOS_NOENT.
     codes:
-      - { name: BAD_ARGS,       description: "an argument is negative, zero, or out of range where it may not be" }
       - { name: NO_CALLER,      description: "the calling process or its memory context could not be resolved" }
       - { name: BAD_POINTER,    description: "the guest range is unmapped, or not permitted for this access" }
       - { name: COPY_FAILED,    description: "the copy to or from guest memory failed" }
-      - { name: NOT_FOUND,      description: "the addressed item does not exist (index, name, or key)" }
-      - { name: UNAVAILABLE,    description: "the resource this call reads is not present at all (no initfs image, no boot config, no framebuffer)" }
+      - { name: NOT_AUTHORIZED, description: "a capability or policy check refused the call" }
       - { name: TOO_LARGE,      description: "the value does not fit the signed 32-bit result the ABI returns" }
-      - { name: EXHAUSTED,      description: "no free slot remains (e.g. the environment table)" }
-      - { name: NOT_AUTHORIZED, description: "the caller lacks the capability this call requires" }
 
-  guestmap:
+  block:
     id: 20
     description: >-
-      Mapping a physical region into a guest's linear memory -- the block buffer
-      and the framebuffer both do exactly what shmem does, so they share this
-      vocabulary instead of restating it. shmem predates it and keeps its own
-      domain; it could migrate here.
+      Block-style device access -- the per-process bounce buffer today, and the
+      block backends that share its shape. Distinct from dma: a DMA mapping
+      describes a device's view of memory, while these describe a block
+      transfer's staging buffer and the slice being moved through it.
     codes:
-      - { name: TOO_SMALL,   description: "the caller's requested size is smaller than the region being mapped" }
-      - { name: UNALIGNED,   description: "the address or size is not page-aligned" }
-      - { name: NO_WINDOW,   description: "guest linear memory cannot host the mapping, and could not be grown to fit" }
-      - { name: NO_BACKING,  description: "no physical backing could be obtained for the region" }
-      - { name: ABOVE_4G,    description: "the physical address is above 4 GiB and a 32-bit guest cannot address it" }
-      - { name: MAP_FAILED,  description: "the paging or linear-memory mapping step failed" }
+      - { name: NO_SLOT,    description: "no per-process block slot is available" }
+      - { name: NO_BACKING, description: "no physical backing could be obtained for the buffer" }
+      - { name: ABOVE_4G,   description: "the buffer's physical address is above 4 GiB, which a 32-bit guest cannot address" }
+      - { name: RANGE,      description: "the requested offset/length lies outside the buffer" }
 
   thread:
     id: 21
@@ -342,6 +339,27 @@ domains:
       - { name: BAD_ENTRY,    description: "the entry token is not a NUL-terminated name inside the guest's linear memory" }
       - { name: SPAWN_FAILED, description: "the VM thread could not be created" }
       - { name: JOIN_FAILED,  description: "the join could not be performed (unknown or unjoinable thread)" }
+
+  env:
+    id: 22
+    description: "kernel environment key/value store host calls"
+    codes:
+      - { name: NOT_FOUND,  description: "no entry with that key" }
+      - { name: TOO_LONG,   description: "the key or value exceeds the store's fixed capacity" }
+      - { name: TABLE_FULL, description: "no free entry remains" }
+
+  framebuffer:
+    id: 23
+    description: >-
+      Framebuffer access and mapping, shared by every backend that presents one
+      -- the in-kernel framebuffer, the PCI one, and whatever follows -- so a
+      guest sees the same code whichever is behind it.
+    codes:
+      - { name: NOT_PRESENT, description: "no framebuffer is available on this system" }
+      - { name: TOO_SMALL,   description: "the caller's requested mapping is smaller than the framebuffer" }
+      - { name: UNALIGNED,   description: "the address or size is not page-aligned" }
+      - { name: NO_WINDOW,   description: "guest linear memory cannot host the mapping" }
+      - { name: MAP_FAILED,  description: "the paging step failed" }
 
   devmgr:
     id: 10

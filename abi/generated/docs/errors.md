@@ -100,23 +100,24 @@ and **domains** (namespaced operation errors: the negative of `(domain << 16) | 
 | `WASMOS_ERR_FS_NOT_EMPTY` | -0x00040009 | rmdir target directory is not empty |
 | `WASMOS_ERR_FS_NO_FD` | -0x0004000A | open-file table is full |
 | `WASMOS_ERR_FS_BUSY` | -0x0004000B | backend has no free op-context slot (retryable) |
-| `WASMOS_ERR_FS_IO` | -0x0004000C | block-device I/O error |
-| `WASMOS_ERR_FS_NOT_READY` | -0x0004000D | mount/backend not ready |
-| `WASMOS_ERR_FS_NO_SPACE` | -0x0004000E | no free cluster or directory slot (disk full) |
-| `WASMOS_ERR_FS_NAME` | -0x0004000F | invalid name (LFN/short-name encode failed) |
-| `WASMOS_ERR_FS_ACCESS` | -0x00040010 | access-mode violation (e.g. read on write-only fd) |
-| `WASMOS_ERR_FS_RANGE` | -0x00040011 | seek/offset out of range |
-| `WASMOS_ERR_FS_UNSUPPORTED` | -0x00040012 | unknown/unsupported request type |
-| `WASMOS_ERR_FS_OPEN` | -0x00040013 | operation forbidden on a currently-open file |
-| `WASMOS_ERR_FS_CORRUPT` | -0x00040014 | on-disk structure inconsistency detected |
-| `WASMOS_ERR_FS_NOT_AUTHORIZED` | -0x00040015 | caller is not permitted to issue this request (e.g. clone-cwd is process-manager only) |
-| `WASMOS_ERR_FS_NO_CLIENT_SLOT` | -0x00040016 | per-client state could not be tracked (slot table full / allocation failed) |
-| `WASMOS_ERR_FS_NOT_ABSOLUTE` | -0x00040017 | path must be absolute (does not start with '/') |
-| `WASMOS_ERR_FS_NO_BACKEND` | -0x00040018 | no registered backend serves the requested mount |
-| `WASMOS_ERR_FS_REBORROW` | -0x00040019 | reborrowing the client's xfer-buffer grant to the backend failed |
-| `WASMOS_ERR_FS_BACKEND_IPC` | -0x0004001A | request could not be delivered to the backend, or no reply arrived |
-| `WASMOS_ERR_FS_BAD_FD` | -0x0004001B | fd is not present in this client's fd table |
-| `WASMOS_ERR_FS_REPLY_SEND` | -0x0004001C | the reply could not be delivered to the client |
+| `WASMOS_ERR_FS_NO_IMAGE` | -0x0004000C | the backing image is not present at all (e.g. no initfs was loaded), as distinct from a path missing inside one |
+| `WASMOS_ERR_FS_IO` | -0x0004000D | block-device I/O error |
+| `WASMOS_ERR_FS_NOT_READY` | -0x0004000E | mount/backend not ready |
+| `WASMOS_ERR_FS_NO_SPACE` | -0x0004000F | no free cluster or directory slot (disk full) |
+| `WASMOS_ERR_FS_NAME` | -0x00040010 | invalid name (LFN/short-name encode failed) |
+| `WASMOS_ERR_FS_ACCESS` | -0x00040011 | access-mode violation (e.g. read on write-only fd) |
+| `WASMOS_ERR_FS_RANGE` | -0x00040012 | seek/offset out of range |
+| `WASMOS_ERR_FS_UNSUPPORTED` | -0x00040013 | unknown/unsupported request type |
+| `WASMOS_ERR_FS_OPEN` | -0x00040014 | operation forbidden on a currently-open file |
+| `WASMOS_ERR_FS_CORRUPT` | -0x00040015 | on-disk structure inconsistency detected |
+| `WASMOS_ERR_FS_NOT_AUTHORIZED` | -0x00040016 | caller is not permitted to issue this request (e.g. clone-cwd is process-manager only) |
+| `WASMOS_ERR_FS_NO_CLIENT_SLOT` | -0x00040017 | per-client state could not be tracked (slot table full / allocation failed) |
+| `WASMOS_ERR_FS_NOT_ABSOLUTE` | -0x00040018 | path must be absolute (does not start with '/') |
+| `WASMOS_ERR_FS_NO_BACKEND` | -0x00040019 | no registered backend serves the requested mount |
+| `WASMOS_ERR_FS_REBORROW` | -0x0004001A | reborrowing the client's xfer-buffer grant to the backend failed |
+| `WASMOS_ERR_FS_BACKEND_IPC` | -0x0004001B | request could not be delivered to the backend, or no reply arrived |
+| `WASMOS_ERR_FS_BAD_FD` | -0x0004001C | fd is not present in this client's fd table |
+| `WASMOS_ERR_FS_REPLY_SEND` | -0x0004001D | the reply could not be delivered to the client |
 
 ### `net` (domain 5) — networking stack / socket failures (was NET_STATUS_*)
 
@@ -281,30 +282,25 @@ and **domains** (namespaced operation errors: the negative of `(domain << 16) | 
 | `WASMOS_ERR_XFER_BUFFER_INACTIVE_MAPPING` | -0x000B0018 | the DMA mapping is inactive |
 | `WASMOS_ERR_XFER_BUFFER_NO_ACCESS` | -0x000B0019 | the object exists but the context is neither its owner nor a borrower |
 
-### `hostcall` (domain 19) — Conditions every host call checks at the guest boundary, before it reaches the subsystem it fronts. These were seven near-identical sets of codes in the draft (block, initfs, env, proc, framebuffer, boot, thread all check the same five things), so they are one domain rather than seven copies. A call fails with a domain-specific code only where it has something domain-specific to say.
+### `kernel` (domain 19) — Facts the kernel establishes at the host-call boundary, before the call reaches the subsystem it fronts. Shared by every family on purpose: a guest cannot act on any of them, they mean the same thing whichever call reports them, and new capability checks belong here rather than growing a fifth spelling of "denied".
+Argument validation that a guest CAN act on stays on the transport axis (WASMOS_INVAL); a missing object stays WASMOS_NOENT.
 
 | Code | Value | Description |
 |---|---|---|
-| `WASMOS_ERR_HOSTCALL_BAD_ARGS` | -0x00130001 | an argument is negative, zero, or out of range where it may not be |
-| `WASMOS_ERR_HOSTCALL_NO_CALLER` | -0x00130002 | the calling process or its memory context could not be resolved |
-| `WASMOS_ERR_HOSTCALL_BAD_POINTER` | -0x00130003 | the guest range is unmapped, or not permitted for this access |
-| `WASMOS_ERR_HOSTCALL_COPY_FAILED` | -0x00130004 | the copy to or from guest memory failed |
-| `WASMOS_ERR_HOSTCALL_NOT_FOUND` | -0x00130005 | the addressed item does not exist (index, name, or key) |
-| `WASMOS_ERR_HOSTCALL_UNAVAILABLE` | -0x00130006 | the resource this call reads is not present at all (no initfs image, no boot config, no framebuffer) |
-| `WASMOS_ERR_HOSTCALL_TOO_LARGE` | -0x00130007 | the value does not fit the signed 32-bit result the ABI returns |
-| `WASMOS_ERR_HOSTCALL_EXHAUSTED` | -0x00130008 | no free slot remains (e.g. the environment table) |
-| `WASMOS_ERR_HOSTCALL_NOT_AUTHORIZED` | -0x00130009 | the caller lacks the capability this call requires |
+| `WASMOS_ERR_KERNEL_NO_CALLER` | -0x00130001 | the calling process or its memory context could not be resolved |
+| `WASMOS_ERR_KERNEL_BAD_POINTER` | -0x00130002 | the guest range is unmapped, or not permitted for this access |
+| `WASMOS_ERR_KERNEL_COPY_FAILED` | -0x00130003 | the copy to or from guest memory failed |
+| `WASMOS_ERR_KERNEL_NOT_AUTHORIZED` | -0x00130004 | a capability or policy check refused the call |
+| `WASMOS_ERR_KERNEL_TOO_LARGE` | -0x00130005 | the value does not fit the signed 32-bit result the ABI returns |
 
-### `guestmap` (domain 20) — Mapping a physical region into a guest's linear memory -- the block buffer and the framebuffer both do exactly what shmem does, so they share this vocabulary instead of restating it. shmem predates it and keeps its own domain; it could migrate here.
+### `block` (domain 20) — Block-style device access -- the per-process bounce buffer today, and the block backends that share its shape. Distinct from dma: a DMA mapping describes a device's view of memory, while these describe a block transfer's staging buffer and the slice being moved through it.
 
 | Code | Value | Description |
 |---|---|---|
-| `WASMOS_ERR_GUESTMAP_TOO_SMALL` | -0x00140001 | the caller's requested size is smaller than the region being mapped |
-| `WASMOS_ERR_GUESTMAP_UNALIGNED` | -0x00140002 | the address or size is not page-aligned |
-| `WASMOS_ERR_GUESTMAP_NO_WINDOW` | -0x00140003 | guest linear memory cannot host the mapping, and could not be grown to fit |
-| `WASMOS_ERR_GUESTMAP_NO_BACKING` | -0x00140004 | no physical backing could be obtained for the region |
-| `WASMOS_ERR_GUESTMAP_ABOVE_4G` | -0x00140005 | the physical address is above 4 GiB and a 32-bit guest cannot address it |
-| `WASMOS_ERR_GUESTMAP_MAP_FAILED` | -0x00140006 | the paging or linear-memory mapping step failed |
+| `WASMOS_ERR_BLOCK_NO_SLOT` | -0x00140001 | no per-process block slot is available |
+| `WASMOS_ERR_BLOCK_NO_BACKING` | -0x00140002 | no physical backing could be obtained for the buffer |
+| `WASMOS_ERR_BLOCK_ABOVE_4G` | -0x00140003 | the buffer's physical address is above 4 GiB, which a 32-bit guest cannot address |
+| `WASMOS_ERR_BLOCK_RANGE` | -0x00140004 | the requested offset/length lies outside the buffer |
 
 ### `thread` (domain 21) — guest thread creation and lifetime host calls
 
@@ -313,6 +309,24 @@ and **domains** (namespaced operation errors: the negative of `(domain << 16) | 
 | `WASMOS_ERR_THREAD_BAD_ENTRY` | -0x00150001 | the entry token is not a NUL-terminated name inside the guest's linear memory |
 | `WASMOS_ERR_THREAD_SPAWN_FAILED` | -0x00150002 | the VM thread could not be created |
 | `WASMOS_ERR_THREAD_JOIN_FAILED` | -0x00150003 | the join could not be performed (unknown or unjoinable thread) |
+
+### `env` (domain 22) — kernel environment key/value store host calls
+
+| Code | Value | Description |
+|---|---|---|
+| `WASMOS_ERR_ENV_NOT_FOUND` | -0x00160001 | no entry with that key |
+| `WASMOS_ERR_ENV_TOO_LONG` | -0x00160002 | the key or value exceeds the store's fixed capacity |
+| `WASMOS_ERR_ENV_TABLE_FULL` | -0x00160003 | no free entry remains |
+
+### `framebuffer` (domain 23) — Framebuffer access and mapping, shared by every backend that presents one -- the in-kernel framebuffer, the PCI one, and whatever follows -- so a guest sees the same code whichever is behind it.
+
+| Code | Value | Description |
+|---|---|---|
+| `WASMOS_ERR_FRAMEBUFFER_NOT_PRESENT` | -0x00170001 | no framebuffer is available on this system |
+| `WASMOS_ERR_FRAMEBUFFER_TOO_SMALL` | -0x00170002 | the caller's requested mapping is smaller than the framebuffer |
+| `WASMOS_ERR_FRAMEBUFFER_UNALIGNED` | -0x00170003 | the address or size is not page-aligned |
+| `WASMOS_ERR_FRAMEBUFFER_NO_WINDOW` | -0x00170004 | guest linear memory cannot host the mapping |
+| `WASMOS_ERR_FRAMEBUFFER_MAP_FAILED` | -0x00170005 | the paging step failed |
 
 ### `devmgr` (domain 10) — device-manager query failures
 

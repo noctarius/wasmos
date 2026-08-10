@@ -47,9 +47,12 @@ enum {
     WASMOS_ERR_DOMAIN_FONT = 12, /* font-rasterizer service failures (was FONT_STATUS_*) */
     WASMOS_ERR_DOMAIN_RTC = 13, /* real-time-clock service failures (was RTC_STATUS_*) */
     WASMOS_ERR_DOMAIN_XFER_BUFFER = 11, /* transfer-buffer object registry / borrow / DMA failures (was XFER_BUFFER_ERR_*) */
-    WASMOS_ERR_DOMAIN_HOSTCALL = 19, /* Conditions every host call checks at the guest boundary, before it reaches the subsystem it fronts. These were seven near-identical sets of codes in the draft (block, initfs, env, proc, framebuffer, boot, thread all check the same five things), so they are one domain rather than seven copies. A call fails with a domain-specific code only where it has something domain-specific to say. */
-    WASMOS_ERR_DOMAIN_GUESTMAP = 20, /* Mapping a physical region into a guest's linear memory -- the block buffer and the framebuffer both do exactly what shmem does, so they share this vocabulary instead of restating it. shmem predates it and keeps its own domain; it could migrate here. */
+    WASMOS_ERR_DOMAIN_KERNEL = 19, /* Facts the kernel establishes at the host-call boundary, before the call reaches the subsystem it fronts. Shared by every family on purpose: a guest cannot act on any of them, they mean the same thing whichever call reports them, and new capability checks belong here rather than growing a fifth spelling of \"denied\".
+Argument validation that a guest CAN act on stays on the transport axis (WASMOS_INVAL); a missing object stays WASMOS_NOENT. */
+    WASMOS_ERR_DOMAIN_BLOCK = 20, /* Block-style device access -- the per-process bounce buffer today, and the block backends that share its shape. Distinct from dma: a DMA mapping describes a device's view of memory, while these describe a block transfer's staging buffer and the slice being moved through it. */
     WASMOS_ERR_DOMAIN_THREAD = 21, /* guest thread creation and lifetime host calls */
+    WASMOS_ERR_DOMAIN_ENV = 22, /* kernel environment key/value store host calls */
+    WASMOS_ERR_DOMAIN_FRAMEBUFFER = 23, /* Framebuffer access and mapping, shared by every backend that presents one -- the in-kernel framebuffer, the PCI one, and whatever follows -- so a guest sees the same code whichever is behind it. */
     WASMOS_ERR_DOMAIN_DEVMGR = 10, /* device-manager query failures */
 };
 
@@ -119,23 +122,24 @@ enum {
     WASMOS_ERR_FS_NOT_EMPTY = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_FS, 9), /* rmdir target directory is not empty */
     WASMOS_ERR_FS_NO_FD = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_FS, 10), /* open-file table is full */
     WASMOS_ERR_FS_BUSY = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_FS, 11), /* backend has no free op-context slot (retryable) */
-    WASMOS_ERR_FS_IO = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_FS, 12), /* block-device I/O error */
-    WASMOS_ERR_FS_NOT_READY = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_FS, 13), /* mount/backend not ready */
-    WASMOS_ERR_FS_NO_SPACE = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_FS, 14), /* no free cluster or directory slot (disk full) */
-    WASMOS_ERR_FS_NAME = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_FS, 15), /* invalid name (LFN/short-name encode failed) */
-    WASMOS_ERR_FS_ACCESS = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_FS, 16), /* access-mode violation (e.g. read on write-only fd) */
-    WASMOS_ERR_FS_RANGE = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_FS, 17), /* seek/offset out of range */
-    WASMOS_ERR_FS_UNSUPPORTED = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_FS, 18), /* unknown/unsupported request type */
-    WASMOS_ERR_FS_OPEN = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_FS, 19), /* operation forbidden on a currently-open file */
-    WASMOS_ERR_FS_CORRUPT = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_FS, 20), /* on-disk structure inconsistency detected */
-    WASMOS_ERR_FS_NOT_AUTHORIZED = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_FS, 21), /* caller is not permitted to issue this request (e.g. clone-cwd is process-manager only) */
-    WASMOS_ERR_FS_NO_CLIENT_SLOT = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_FS, 22), /* per-client state could not be tracked (slot table full / allocation failed) */
-    WASMOS_ERR_FS_NOT_ABSOLUTE = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_FS, 23), /* path must be absolute (does not start with '/') */
-    WASMOS_ERR_FS_NO_BACKEND = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_FS, 24), /* no registered backend serves the requested mount */
-    WASMOS_ERR_FS_REBORROW = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_FS, 25), /* reborrowing the client's xfer-buffer grant to the backend failed */
-    WASMOS_ERR_FS_BACKEND_IPC = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_FS, 26), /* request could not be delivered to the backend, or no reply arrived */
-    WASMOS_ERR_FS_BAD_FD = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_FS, 27), /* fd is not present in this client's fd table */
-    WASMOS_ERR_FS_REPLY_SEND = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_FS, 28), /* the reply could not be delivered to the client */
+    WASMOS_ERR_FS_NO_IMAGE = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_FS, 12), /* the backing image is not present at all (e.g. no initfs was loaded), as distinct from a path missing inside one */
+    WASMOS_ERR_FS_IO = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_FS, 13), /* block-device I/O error */
+    WASMOS_ERR_FS_NOT_READY = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_FS, 14), /* mount/backend not ready */
+    WASMOS_ERR_FS_NO_SPACE = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_FS, 15), /* no free cluster or directory slot (disk full) */
+    WASMOS_ERR_FS_NAME = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_FS, 16), /* invalid name (LFN/short-name encode failed) */
+    WASMOS_ERR_FS_ACCESS = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_FS, 17), /* access-mode violation (e.g. read on write-only fd) */
+    WASMOS_ERR_FS_RANGE = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_FS, 18), /* seek/offset out of range */
+    WASMOS_ERR_FS_UNSUPPORTED = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_FS, 19), /* unknown/unsupported request type */
+    WASMOS_ERR_FS_OPEN = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_FS, 20), /* operation forbidden on a currently-open file */
+    WASMOS_ERR_FS_CORRUPT = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_FS, 21), /* on-disk structure inconsistency detected */
+    WASMOS_ERR_FS_NOT_AUTHORIZED = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_FS, 22), /* caller is not permitted to issue this request (e.g. clone-cwd is process-manager only) */
+    WASMOS_ERR_FS_NO_CLIENT_SLOT = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_FS, 23), /* per-client state could not be tracked (slot table full / allocation failed) */
+    WASMOS_ERR_FS_NOT_ABSOLUTE = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_FS, 24), /* path must be absolute (does not start with '/') */
+    WASMOS_ERR_FS_NO_BACKEND = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_FS, 25), /* no registered backend serves the requested mount */
+    WASMOS_ERR_FS_REBORROW = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_FS, 26), /* reborrowing the client's xfer-buffer grant to the backend failed */
+    WASMOS_ERR_FS_BACKEND_IPC = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_FS, 27), /* request could not be delivered to the backend, or no reply arrived */
+    WASMOS_ERR_FS_BAD_FD = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_FS, 28), /* fd is not present in this client's fd table */
+    WASMOS_ERR_FS_REPLY_SEND = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_FS, 29), /* the reply could not be delivered to the client */
     WASMOS_ERR_NET_WOULD_BLOCK = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_NET, 1), /* operation is deferred; completion arrives as a later event (retryable) */
     WASMOS_ERR_NET_INVALID = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_NET, 2), /* invalid request arguments (socket, address, or length) */
     WASMOS_ERR_NET_NOT_READY = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_NET, 3), /* interface or socket is not in a state that permits the operation */
@@ -234,24 +238,26 @@ enum {
     WASMOS_ERR_XFER_BUFFER_DMA_ACTIVE = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_XFER_BUFFER, 23), /* a DMA mapping is already active on this object or borrow */
     WASMOS_ERR_XFER_BUFFER_INACTIVE_MAPPING = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_XFER_BUFFER, 24), /* the DMA mapping is inactive */
     WASMOS_ERR_XFER_BUFFER_NO_ACCESS = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_XFER_BUFFER, 25), /* the object exists but the context is neither its owner nor a borrower */
-    WASMOS_ERR_HOSTCALL_BAD_ARGS = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_HOSTCALL, 1), /* an argument is negative, zero, or out of range where it may not be */
-    WASMOS_ERR_HOSTCALL_NO_CALLER = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_HOSTCALL, 2), /* the calling process or its memory context could not be resolved */
-    WASMOS_ERR_HOSTCALL_BAD_POINTER = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_HOSTCALL, 3), /* the guest range is unmapped, or not permitted for this access */
-    WASMOS_ERR_HOSTCALL_COPY_FAILED = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_HOSTCALL, 4), /* the copy to or from guest memory failed */
-    WASMOS_ERR_HOSTCALL_NOT_FOUND = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_HOSTCALL, 5), /* the addressed item does not exist (index, name, or key) */
-    WASMOS_ERR_HOSTCALL_UNAVAILABLE = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_HOSTCALL, 6), /* the resource this call reads is not present at all (no initfs image, no boot config, no framebuffer) */
-    WASMOS_ERR_HOSTCALL_TOO_LARGE = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_HOSTCALL, 7), /* the value does not fit the signed 32-bit result the ABI returns */
-    WASMOS_ERR_HOSTCALL_EXHAUSTED = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_HOSTCALL, 8), /* no free slot remains (e.g. the environment table) */
-    WASMOS_ERR_HOSTCALL_NOT_AUTHORIZED = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_HOSTCALL, 9), /* the caller lacks the capability this call requires */
-    WASMOS_ERR_GUESTMAP_TOO_SMALL = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_GUESTMAP, 1), /* the caller's requested size is smaller than the region being mapped */
-    WASMOS_ERR_GUESTMAP_UNALIGNED = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_GUESTMAP, 2), /* the address or size is not page-aligned */
-    WASMOS_ERR_GUESTMAP_NO_WINDOW = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_GUESTMAP, 3), /* guest linear memory cannot host the mapping, and could not be grown to fit */
-    WASMOS_ERR_GUESTMAP_NO_BACKING = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_GUESTMAP, 4), /* no physical backing could be obtained for the region */
-    WASMOS_ERR_GUESTMAP_ABOVE_4G = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_GUESTMAP, 5), /* the physical address is above 4 GiB and a 32-bit guest cannot address it */
-    WASMOS_ERR_GUESTMAP_MAP_FAILED = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_GUESTMAP, 6), /* the paging or linear-memory mapping step failed */
+    WASMOS_ERR_KERNEL_NO_CALLER = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_KERNEL, 1), /* the calling process or its memory context could not be resolved */
+    WASMOS_ERR_KERNEL_BAD_POINTER = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_KERNEL, 2), /* the guest range is unmapped, or not permitted for this access */
+    WASMOS_ERR_KERNEL_COPY_FAILED = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_KERNEL, 3), /* the copy to or from guest memory failed */
+    WASMOS_ERR_KERNEL_NOT_AUTHORIZED = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_KERNEL, 4), /* a capability or policy check refused the call */
+    WASMOS_ERR_KERNEL_TOO_LARGE = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_KERNEL, 5), /* the value does not fit the signed 32-bit result the ABI returns */
+    WASMOS_ERR_BLOCK_NO_SLOT = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_BLOCK, 1), /* no per-process block slot is available */
+    WASMOS_ERR_BLOCK_NO_BACKING = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_BLOCK, 2), /* no physical backing could be obtained for the buffer */
+    WASMOS_ERR_BLOCK_ABOVE_4G = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_BLOCK, 3), /* the buffer's physical address is above 4 GiB, which a 32-bit guest cannot address */
+    WASMOS_ERR_BLOCK_RANGE = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_BLOCK, 4), /* the requested offset/length lies outside the buffer */
     WASMOS_ERR_THREAD_BAD_ENTRY = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_THREAD, 1), /* the entry token is not a NUL-terminated name inside the guest's linear memory */
     WASMOS_ERR_THREAD_SPAWN_FAILED = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_THREAD, 2), /* the VM thread could not be created */
     WASMOS_ERR_THREAD_JOIN_FAILED = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_THREAD, 3), /* the join could not be performed (unknown or unjoinable thread) */
+    WASMOS_ERR_ENV_NOT_FOUND = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_ENV, 1), /* no entry with that key */
+    WASMOS_ERR_ENV_TOO_LONG = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_ENV, 2), /* the key or value exceeds the store's fixed capacity */
+    WASMOS_ERR_ENV_TABLE_FULL = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_ENV, 3), /* no free entry remains */
+    WASMOS_ERR_FRAMEBUFFER_NOT_PRESENT = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_FRAMEBUFFER, 1), /* no framebuffer is available on this system */
+    WASMOS_ERR_FRAMEBUFFER_TOO_SMALL = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_FRAMEBUFFER, 2), /* the caller's requested mapping is smaller than the framebuffer */
+    WASMOS_ERR_FRAMEBUFFER_UNALIGNED = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_FRAMEBUFFER, 3), /* the address or size is not page-aligned */
+    WASMOS_ERR_FRAMEBUFFER_NO_WINDOW = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_FRAMEBUFFER, 4), /* guest linear memory cannot host the mapping */
+    WASMOS_ERR_FRAMEBUFFER_MAP_FAILED = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_FRAMEBUFFER, 5), /* the paging step failed */
     WASMOS_ERR_DEVMGR_NO_MOUNT_RULE = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_DEVMGR, 1), /* no block/filesystem mount rule matches the requested unit */
     WASMOS_ERR_DEVMGR_UNSUPPORTED_QUERY = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_DEVMGR, 2), /* unknown or unsupported device-manager query type */
 };
@@ -312,9 +318,11 @@ static inline const char *wasmos_error_domain_name(wasmos_error_domain_t d) {
     case WASMOS_ERR_DOMAIN_FONT: return "font";
     case WASMOS_ERR_DOMAIN_RTC: return "rtc";
     case WASMOS_ERR_DOMAIN_XFER_BUFFER: return "xfer_buffer";
-    case WASMOS_ERR_DOMAIN_HOSTCALL: return "hostcall";
-    case WASMOS_ERR_DOMAIN_GUESTMAP: return "guestmap";
+    case WASMOS_ERR_DOMAIN_KERNEL: return "kernel";
+    case WASMOS_ERR_DOMAIN_BLOCK: return "block";
     case WASMOS_ERR_DOMAIN_THREAD: return "thread";
+    case WASMOS_ERR_DOMAIN_ENV: return "env";
+    case WASMOS_ERR_DOMAIN_FRAMEBUFFER: return "framebuffer";
     case WASMOS_ERR_DOMAIN_DEVMGR: return "devmgr";
     default: return "unknown";
     }
@@ -380,6 +388,7 @@ static inline const char *wasmos_error_code_name(wasmos_error_code_t c) {
     case WASMOS_ERR_FS_NOT_EMPTY: return "fs.NOT_EMPTY";
     case WASMOS_ERR_FS_NO_FD: return "fs.NO_FD";
     case WASMOS_ERR_FS_BUSY: return "fs.BUSY";
+    case WASMOS_ERR_FS_NO_IMAGE: return "fs.NO_IMAGE";
     case WASMOS_ERR_FS_IO: return "fs.IO";
     case WASMOS_ERR_FS_NOT_READY: return "fs.NOT_READY";
     case WASMOS_ERR_FS_NO_SPACE: return "fs.NO_SPACE";
@@ -495,24 +504,26 @@ static inline const char *wasmos_error_code_name(wasmos_error_code_t c) {
     case WASMOS_ERR_XFER_BUFFER_DMA_ACTIVE: return "xfer_buffer.DMA_ACTIVE";
     case WASMOS_ERR_XFER_BUFFER_INACTIVE_MAPPING: return "xfer_buffer.INACTIVE_MAPPING";
     case WASMOS_ERR_XFER_BUFFER_NO_ACCESS: return "xfer_buffer.NO_ACCESS";
-    case WASMOS_ERR_HOSTCALL_BAD_ARGS: return "hostcall.BAD_ARGS";
-    case WASMOS_ERR_HOSTCALL_NO_CALLER: return "hostcall.NO_CALLER";
-    case WASMOS_ERR_HOSTCALL_BAD_POINTER: return "hostcall.BAD_POINTER";
-    case WASMOS_ERR_HOSTCALL_COPY_FAILED: return "hostcall.COPY_FAILED";
-    case WASMOS_ERR_HOSTCALL_NOT_FOUND: return "hostcall.NOT_FOUND";
-    case WASMOS_ERR_HOSTCALL_UNAVAILABLE: return "hostcall.UNAVAILABLE";
-    case WASMOS_ERR_HOSTCALL_TOO_LARGE: return "hostcall.TOO_LARGE";
-    case WASMOS_ERR_HOSTCALL_EXHAUSTED: return "hostcall.EXHAUSTED";
-    case WASMOS_ERR_HOSTCALL_NOT_AUTHORIZED: return "hostcall.NOT_AUTHORIZED";
-    case WASMOS_ERR_GUESTMAP_TOO_SMALL: return "guestmap.TOO_SMALL";
-    case WASMOS_ERR_GUESTMAP_UNALIGNED: return "guestmap.UNALIGNED";
-    case WASMOS_ERR_GUESTMAP_NO_WINDOW: return "guestmap.NO_WINDOW";
-    case WASMOS_ERR_GUESTMAP_NO_BACKING: return "guestmap.NO_BACKING";
-    case WASMOS_ERR_GUESTMAP_ABOVE_4G: return "guestmap.ABOVE_4G";
-    case WASMOS_ERR_GUESTMAP_MAP_FAILED: return "guestmap.MAP_FAILED";
+    case WASMOS_ERR_KERNEL_NO_CALLER: return "kernel.NO_CALLER";
+    case WASMOS_ERR_KERNEL_BAD_POINTER: return "kernel.BAD_POINTER";
+    case WASMOS_ERR_KERNEL_COPY_FAILED: return "kernel.COPY_FAILED";
+    case WASMOS_ERR_KERNEL_NOT_AUTHORIZED: return "kernel.NOT_AUTHORIZED";
+    case WASMOS_ERR_KERNEL_TOO_LARGE: return "kernel.TOO_LARGE";
+    case WASMOS_ERR_BLOCK_NO_SLOT: return "block.NO_SLOT";
+    case WASMOS_ERR_BLOCK_NO_BACKING: return "block.NO_BACKING";
+    case WASMOS_ERR_BLOCK_ABOVE_4G: return "block.ABOVE_4G";
+    case WASMOS_ERR_BLOCK_RANGE: return "block.RANGE";
     case WASMOS_ERR_THREAD_BAD_ENTRY: return "thread.BAD_ENTRY";
     case WASMOS_ERR_THREAD_SPAWN_FAILED: return "thread.SPAWN_FAILED";
     case WASMOS_ERR_THREAD_JOIN_FAILED: return "thread.JOIN_FAILED";
+    case WASMOS_ERR_ENV_NOT_FOUND: return "env.NOT_FOUND";
+    case WASMOS_ERR_ENV_TOO_LONG: return "env.TOO_LONG";
+    case WASMOS_ERR_ENV_TABLE_FULL: return "env.TABLE_FULL";
+    case WASMOS_ERR_FRAMEBUFFER_NOT_PRESENT: return "framebuffer.NOT_PRESENT";
+    case WASMOS_ERR_FRAMEBUFFER_TOO_SMALL: return "framebuffer.TOO_SMALL";
+    case WASMOS_ERR_FRAMEBUFFER_UNALIGNED: return "framebuffer.UNALIGNED";
+    case WASMOS_ERR_FRAMEBUFFER_NO_WINDOW: return "framebuffer.NO_WINDOW";
+    case WASMOS_ERR_FRAMEBUFFER_MAP_FAILED: return "framebuffer.MAP_FAILED";
     case WASMOS_ERR_DEVMGR_NO_MOUNT_RULE: return "devmgr.NO_MOUNT_RULE";
     case WASMOS_ERR_DEVMGR_UNSUPPORTED_QUERY: return "devmgr.UNSUPPORTED_QUERY";
     default: return "unknown";
@@ -579,6 +590,7 @@ static inline const char *wasmos_strerror(wasmos_error_code_t c) {
     case WASMOS_ERR_FS_NOT_EMPTY: return "rmdir target directory is not empty";
     case WASMOS_ERR_FS_NO_FD: return "open-file table is full";
     case WASMOS_ERR_FS_BUSY: return "backend has no free op-context slot (retryable)";
+    case WASMOS_ERR_FS_NO_IMAGE: return "the backing image is not present at all (e.g. no initfs was loaded), as distinct from a path missing inside one";
     case WASMOS_ERR_FS_IO: return "block-device I/O error";
     case WASMOS_ERR_FS_NOT_READY: return "mount/backend not ready";
     case WASMOS_ERR_FS_NO_SPACE: return "no free cluster or directory slot (disk full)";
@@ -694,24 +706,26 @@ static inline const char *wasmos_strerror(wasmos_error_code_t c) {
     case WASMOS_ERR_XFER_BUFFER_DMA_ACTIVE: return "a DMA mapping is already active on this object or borrow";
     case WASMOS_ERR_XFER_BUFFER_INACTIVE_MAPPING: return "the DMA mapping is inactive";
     case WASMOS_ERR_XFER_BUFFER_NO_ACCESS: return "the object exists but the context is neither its owner nor a borrower";
-    case WASMOS_ERR_HOSTCALL_BAD_ARGS: return "an argument is negative, zero, or out of range where it may not be";
-    case WASMOS_ERR_HOSTCALL_NO_CALLER: return "the calling process or its memory context could not be resolved";
-    case WASMOS_ERR_HOSTCALL_BAD_POINTER: return "the guest range is unmapped, or not permitted for this access";
-    case WASMOS_ERR_HOSTCALL_COPY_FAILED: return "the copy to or from guest memory failed";
-    case WASMOS_ERR_HOSTCALL_NOT_FOUND: return "the addressed item does not exist (index, name, or key)";
-    case WASMOS_ERR_HOSTCALL_UNAVAILABLE: return "the resource this call reads is not present at all (no initfs image, no boot config, no framebuffer)";
-    case WASMOS_ERR_HOSTCALL_TOO_LARGE: return "the value does not fit the signed 32-bit result the ABI returns";
-    case WASMOS_ERR_HOSTCALL_EXHAUSTED: return "no free slot remains (e.g. the environment table)";
-    case WASMOS_ERR_HOSTCALL_NOT_AUTHORIZED: return "the caller lacks the capability this call requires";
-    case WASMOS_ERR_GUESTMAP_TOO_SMALL: return "the caller's requested size is smaller than the region being mapped";
-    case WASMOS_ERR_GUESTMAP_UNALIGNED: return "the address or size is not page-aligned";
-    case WASMOS_ERR_GUESTMAP_NO_WINDOW: return "guest linear memory cannot host the mapping, and could not be grown to fit";
-    case WASMOS_ERR_GUESTMAP_NO_BACKING: return "no physical backing could be obtained for the region";
-    case WASMOS_ERR_GUESTMAP_ABOVE_4G: return "the physical address is above 4 GiB and a 32-bit guest cannot address it";
-    case WASMOS_ERR_GUESTMAP_MAP_FAILED: return "the paging or linear-memory mapping step failed";
+    case WASMOS_ERR_KERNEL_NO_CALLER: return "the calling process or its memory context could not be resolved";
+    case WASMOS_ERR_KERNEL_BAD_POINTER: return "the guest range is unmapped, or not permitted for this access";
+    case WASMOS_ERR_KERNEL_COPY_FAILED: return "the copy to or from guest memory failed";
+    case WASMOS_ERR_KERNEL_NOT_AUTHORIZED: return "a capability or policy check refused the call";
+    case WASMOS_ERR_KERNEL_TOO_LARGE: return "the value does not fit the signed 32-bit result the ABI returns";
+    case WASMOS_ERR_BLOCK_NO_SLOT: return "no per-process block slot is available";
+    case WASMOS_ERR_BLOCK_NO_BACKING: return "no physical backing could be obtained for the buffer";
+    case WASMOS_ERR_BLOCK_ABOVE_4G: return "the buffer's physical address is above 4 GiB, which a 32-bit guest cannot address";
+    case WASMOS_ERR_BLOCK_RANGE: return "the requested offset/length lies outside the buffer";
     case WASMOS_ERR_THREAD_BAD_ENTRY: return "the entry token is not a NUL-terminated name inside the guest's linear memory";
     case WASMOS_ERR_THREAD_SPAWN_FAILED: return "the VM thread could not be created";
     case WASMOS_ERR_THREAD_JOIN_FAILED: return "the join could not be performed (unknown or unjoinable thread)";
+    case WASMOS_ERR_ENV_NOT_FOUND: return "no entry with that key";
+    case WASMOS_ERR_ENV_TOO_LONG: return "the key or value exceeds the store's fixed capacity";
+    case WASMOS_ERR_ENV_TABLE_FULL: return "no free entry remains";
+    case WASMOS_ERR_FRAMEBUFFER_NOT_PRESENT: return "no framebuffer is available on this system";
+    case WASMOS_ERR_FRAMEBUFFER_TOO_SMALL: return "the caller's requested mapping is smaller than the framebuffer";
+    case WASMOS_ERR_FRAMEBUFFER_UNALIGNED: return "the address or size is not page-aligned";
+    case WASMOS_ERR_FRAMEBUFFER_NO_WINDOW: return "guest linear memory cannot host the mapping";
+    case WASMOS_ERR_FRAMEBUFFER_MAP_FAILED: return "the paging step failed";
     case WASMOS_ERR_DEVMGR_NO_MOUNT_RULE: return "no block/filesystem mount rule matches the requested unit";
     case WASMOS_ERR_DEVMGR_UNSUPPORTED_QUERY: return "unknown or unsupported device-manager query type";
     default: return "unknown error";

@@ -2,6 +2,7 @@
 #include "arch/x86_64/smp.h"
 #include "klog.h"
 #include "block_buffer.h"
+#include "hostcall_value.h"
 #include "ipc.h"
 #include "io.h"
 #include "physmem.h"
@@ -866,7 +867,7 @@ m3ApiRawFunction(wasmos_dma_map_borrow) {
         (void)xfer_buffer_dma_unmap(&mapping);
         m3ApiReturn(WASMOS_ERR_DMA_RANGE);
     }
-    if (mapping.device_addr > 0x7FFFFFFFULL) {
+    if (hostcall_value_check(mapping.device_addr) != WASMOS_OK) {
         (void)xfer_buffer_dma_unmap(&mapping);
         m3ApiReturn(WASMOS_ERR_DMA_UNAVAILABLE);
     }
@@ -3052,7 +3053,10 @@ m3ApiRawFunction(wasmos_proc_notify_ready) {
 }
 
 m3ApiRawFunction(wasmos_sched_ticks) {
-    m3ApiReturnType(int32_t) m3ApiReturn((int32_t)timer_ticks());
+    /* Monotonic: kept positive and wrapping at 2^31 so deltas stay correct.
+     * A plain cast went negative at ~99 days of uptime at 250 Hz, and a
+     * negative return is how this ABI spells "error". */
+    m3ApiReturnType(int32_t) m3ApiReturn(hostcall_value_counter(timer_ticks()));
 }
 
 m3ApiRawFunction(wasmos_sched_ready_count) {

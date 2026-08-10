@@ -2469,6 +2469,15 @@ add_custom_command(TARGET run-kernel-unit-tests POST_BUILD
           ${KERNEL_DIR}/block_buffer.c
           -o ${BUILD_DIR}/test_block_buffer
   COMMAND ${BUILD_DIR}/test_block_buffer
+  # The value-return rule: a success value with bit 31 set reads as an error,
+  # because the ABI carries both on one signed i32.
+  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
+          -iquote ${KERNEL_DIR}/include
+          -iquote ${CMAKE_SOURCE_DIR}/abi/generated/c
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_hostcall_value.c
+          ${KERNEL_DIR}/hostcall_value.c
+          -o ${BUILD_DIR}/test_hostcall_value
+  COMMAND ${BUILD_DIR}/test_hostcall_value
   # The poll hub on its own. Its only outward call is ipc_select_signal, so the
   # test stubs that and asserts exactly which sets a notify reaches.
   COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
@@ -3020,7 +3029,9 @@ set(WASMOS_UNIT_SCHED_TESTS
     ${CMAKE_SOURCE_DIR}/tests/unit/test_poll.c
     ${CMAKE_SOURCE_DIR}/tests/unit/test_futex.c
     ${CMAKE_SOURCE_DIR}/tests/unit/test_syscall_ipc.c
-    ${CMAKE_SOURCE_DIR}/tests/unit/test_idtable.c)
+    ${CMAKE_SOURCE_DIR}/tests/unit/test_idtable.c
+    ${CMAKE_SOURCE_DIR}/tests/unit/test_block_buffer.c
+    ${CMAKE_SOURCE_DIR}/tests/unit/test_hostcall_value.c)
 
 wasmos_ide_index(wasmos_ide_unit_sched
   SOURCES ${WASMOS_UNIT_SCHED_TESTS}

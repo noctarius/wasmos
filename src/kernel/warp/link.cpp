@@ -30,6 +30,7 @@ extern "C" {
 #include "boot.h"
 #include "warp/shim.h"
 #include "block_buffer.h"
+#include "hostcall_value.h"
 #include "ipc.h"
 #include "process.h"
 #include "process_manager.h"
@@ -946,7 +947,9 @@ static uint32_t warp_system_reboot(void* ctx_) {
 
 static uint32_t warp_sched_ticks(void* ctx_) {
     (void)ctx_;
-    return (uint32_t)timer_ticks();
+    /* See the wasm3 side: positive and wrapping at 2^31, because a negative
+     * return is how this ABI spells "error". */
+    return (uint32_t)hostcall_value_counter(timer_ticks());
 }
 static uint32_t warp_proc_count(void* ctx_) {
     (void)ctx_;
@@ -1068,7 +1071,7 @@ static uint32_t warp_dma_map_borrow(uint32_t borrow_id, uint32_t offset, uint32_
     xfer_buffer_dma_mapping_t mapping;
     if (xfer_buffer_dma_map_borrow(&borrow, offset, length, flags, &mapping) != WASMOS_ERR_NONE)
         return (uint32_t)WASMOS_ERR_DMA_DENY;
-    if (mapping.device_addr > 0x7FFFFFFFULL) {
+    if (hostcall_value_check(mapping.device_addr) != WASMOS_OK) {
         (void)xfer_buffer_dma_unmap(&mapping);
         return (uint32_t)WASMOS_ERR_DMA_UNAVAILABLE;
     }

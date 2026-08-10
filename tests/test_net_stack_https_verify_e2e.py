@@ -7,7 +7,7 @@ import tempfile
 import threading
 import unittest
 
-from scripts.qemu_test_framework import QemuSession, default_config
+from scripts.qemu_test_framework import QemuSession, default_config, default_kernel_path
 
 # Positive server: cert signed by the bundled test CA, SAN IP:10.0.2.2.
 # Negative server: a DIFFERENT self-signed cert NOT signed by the bundled CA.
@@ -214,7 +214,7 @@ class NetStackHttpsVerifyE2ETest(unittest.TestCase):
             pki["rogue_cert"], pki["rogue_key"], _PORT_BAD
         )
 
-        kernel_src = os.path.join("build", "kernel.elf")
+        kernel_src = default_kernel_path()
         kernel_dst = os.path.join(cfg.esp_dir, "kernel.elf")
         if os.path.exists(kernel_src):
             shutil.copyfile(kernel_src, kernel_dst)

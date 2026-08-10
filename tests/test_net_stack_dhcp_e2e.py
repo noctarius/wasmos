@@ -3,7 +3,7 @@ import shutil
 import tempfile
 import unittest
 
-from scripts.qemu_test_framework import QemuSession, default_config
+from scripts.qemu_test_framework import QemuSession, default_config, default_kernel_path
 
 
 class NetStackDhcpE2ETest(unittest.TestCase):
@@ -27,7 +27,7 @@ class NetStackDhcpE2ETest(unittest.TestCase):
         cls._esp_tmp = tempfile.mkdtemp(prefix="wasmos-dhcp-esp-")
         esp_dir = os.path.join(cls._esp_tmp, "esp")
         shutil.copytree(cfg.esp_dir, esp_dir)
-        kernel_src = os.path.join("build", "kernel.elf")
+        kernel_src = default_kernel_path()
         if os.path.exists(kernel_src):
             shutil.copyfile(kernel_src, os.path.join(esp_dir, "kernel.elf"))
         net_dir = os.path.join(esp_dir, "system", "net")

@@ -3,7 +3,7 @@ import re
 import shutil
 import unittest
 
-from scripts.qemu_test_framework import QemuSession, default_config
+from scripts.qemu_test_framework import QemuSession, default_config, default_kernel_path
 
 
 class VirtioNetE2ETest(unittest.TestCase):
@@ -24,7 +24,7 @@ class VirtioNetE2ETest(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cfg = default_config()
-        kernel_src = os.path.join("build", "kernel.elf")
+        kernel_src = default_kernel_path()
         kernel_dst = os.path.join(cfg.esp_dir, "kernel.elf")
         if os.path.exists(kernel_src) and os.path.isdir(cfg.esp_dir):
             try:

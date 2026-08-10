@@ -4,7 +4,7 @@ import socket
 import threading
 import unittest
 
-from scripts.qemu_test_framework import QemuSession, default_config
+from scripts.qemu_test_framework import QemuSession, default_config, default_kernel_path
 
 
 class NetStackUdpEchoE2ETest(unittest.TestCase):
@@ -32,7 +32,7 @@ class NetStackUdpEchoE2ETest(unittest.TestCase):
         cls.echo_thread = threading.Thread(target=echo, daemon=True)
         cls.echo_thread.start()
         cfg = default_config()
-        kernel_src = os.path.join("build", "kernel.elf")
+        kernel_src = default_kernel_path()
         kernel_dst = os.path.join(cfg.esp_dir, "kernel.elf")
         if os.path.exists(kernel_src) and os.path.isdir(cfg.esp_dir):
             shutil.copyfile(kernel_src, kernel_dst)

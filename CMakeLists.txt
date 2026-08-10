@@ -972,6 +972,16 @@ set_target_properties(make_wasmos_app PROPERTIES
 # ---------------------------------------------------------------------------
 if (WASMOS_WASM_RUNTIME_WARP)
   set(WARP_AOT_TOOL_DIR ${CMAKE_SOURCE_DIR}/src/tools/warp_aot)
+  # Generated ABI tables that the WARP host tool compiles against. Listed so a
+  # host-call signature change actually invalidates its objects; see the note on
+  # the per-object rule below.
+  set(WASMOS_ABI_GENERATED_HEADERS
+    ${CMAKE_SOURCE_DIR}/abi/generated/c/wasmos_symbols_aot.inc
+    ${CMAKE_SOURCE_DIR}/abi/generated/c/wasmos_symbols_warp.inc
+    ${CMAKE_SOURCE_DIR}/abi/generated/c/wasmos_ring3_dispatch.inc
+    ${CMAKE_SOURCE_DIR}/abi/generated/c/wasmos_imports.h
+    ${CMAKE_SOURCE_DIR}/abi/generated/c/wasmos_status.h)
+
   set(WARP_AOT_SRCS
     ${WARP_DIR}/src/WasmModule/WasmModule.cpp
     ${WARP_DIR}/src/core/runtime/Runtime.cpp
@@ -1046,11 +1056,19 @@ if (WASMOS_WASM_RUNTIME_WARP)
     string(REPLACE "/" "_" _obj_name "${_rel}")
     string(REPLACE ".cpp" ".o" _obj_name "${_obj_name}")
     set(_obj "${WARP_AOT_OBJ_DIR}/${_obj_name}")
+    # The generated ABI tables are a DEPENDENCY, not just an include path.
+    # warp_aot.cpp #includes wasmos_symbols_aot.inc, which names a stub per
+    # host call BY ARITY (stub_i1, stub_i2, ...). Change a host call's
+    # signature and that file changes -- but with only ${_src} in DEPENDS the
+    # object is not rebuilt, so the tool keeps advertising the OLD arity while
+    # guest modules import the new one, and AOT compilation fails with
+    # "Imported symbol could not be found" for whichever module uses that call.
+    # That cost one abandoned io_in32 conversion before the cause was found.
     add_custom_command(
       OUTPUT "${_obj}"
       COMMAND ${CMAKE_COMMAND} -E make_directory "${WARP_AOT_OBJ_DIR}"
       COMMAND ${CLANGXX_PATH} ${WARP_AOT_FLAGS} -c "${_src}" -o "${_obj}"
-      DEPENDS "${_src}"
+      DEPENDS "${_src}" ${WASMOS_ABI_GENERATED_HEADERS}
       COMMENT "Compiling warp_aot: ${_rel}"
       VERBATIM
     )
@@ -1700,6 +1718,7 @@ if (OVMF_VARS)
             WASMOS_OVMF_CODE=${OVMF_CODE}
             WASMOS_OVMF_VARS=${OVMF_VARS}
             WASMOS_ESP=${BUILD_DIR}/esp
+            WASMOS_KERNEL=${BUILD_DIR}/kernel.elf
             WASMOS_USERFS=${USERFS_DIR}
             WASMOS_QEMU_ISOLATE_ESP=1
             WASMOS_QEMU_SMP_COUNT=${WASMOS_QEMU_SMP_COUNT}
@@ -1789,6 +1808,7 @@ else ()
       COMMAND ${CMAKE_COMMAND} -E env
               WASMOS_OVMF_CODE=${OVMF_CODE}
               WASMOS_ESP=${BUILD_DIR}/esp
+            WASMOS_KERNEL=${BUILD_DIR}/kernel.elf
               WASMOS_USERFS=${USERFS_DIR}
               WASMOS_QEMU_ISOLATE_ESP=1
               WASMOS_QEMU_SMP_COUNT=${WASMOS_QEMU_SMP_COUNT}

@@ -67,6 +67,18 @@ def _read_cmake_cache(cache_path: str) -> dict:
     return data
 
 
+def default_kernel_path(build_dir: str = "build") -> str:
+    """Path to the kernel image the tests should boot.
+
+    Honours WASMOS_KERNEL, which the CMake test targets set to their own
+    ${BUILD_DIR}/kernel.elf. Without it every test resolved the literal "build"
+    directory, so a suite launched from any other configuration's tree (a wasm3
+    defconfig tree, say) copied the DEFAULT tree's kernel over its ESP and
+    silently tested the wrong runtime -- while reporting a pass.
+    """
+    return os.environ.get("WASMOS_KERNEL", os.path.join(build_dir, "kernel.elf"))
+
+
 def default_config(build_dir: str = "build") -> QemuConfig:
     cache = _read_cmake_cache(os.path.join(build_dir, "CMakeCache.txt"))
     ovmf_code = os.environ.get("WASMOS_OVMF_CODE", cache.get("OVMF_CODE", ""))

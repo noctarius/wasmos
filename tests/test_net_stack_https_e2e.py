@@ -7,7 +7,7 @@ import tempfile
 import threading
 import unittest
 
-from scripts.qemu_test_framework import QemuSession, default_config
+from scripts.qemu_test_framework import QemuSession, default_config, default_kernel_path
 
 _PORT = 5581
 _BODY = b"wasmos-https-body-7"
@@ -172,7 +172,7 @@ class NetStackHttpsE2ETest(unittest.TestCase):
         os.makedirs(ca_dst_dir, exist_ok=True)
         shutil.copyfile(ca, os.path.join(ca_dst_dir, "ca-certs.pem"))
 
-        kernel_src = os.path.join("build", "kernel.elf")
+        kernel_src = default_kernel_path()
         kernel_dst = os.path.join(cfg.esp_dir, "kernel.elf")
         if os.path.exists(kernel_src) and os.path.isdir(cfg.esp_dir):
             shutil.copyfile(kernel_src, kernel_dst)

@@ -3,7 +3,7 @@ import shutil
 import socket
 import unittest
 
-from scripts.qemu_test_framework import QemuSession, default_config
+from scripts.qemu_test_framework import QemuSession, default_config, default_kernel_path
 
 # Host port forwarded by QEMU SLIRP into the guest listener (10.0.2.15:5571).
 HOST_PORT = 5570
@@ -25,7 +25,7 @@ class NetStackTcpServerE2ETest(unittest.TestCase):
         cfg.netdev = (
             f"user,id=net0,hostfwd=tcp:127.0.0.1:{HOST_PORT}-10.0.2.15:{GUEST_PORT}"
         )
-        kernel_src = os.path.join("build", "kernel.elf")
+        kernel_src = default_kernel_path()
         kernel_dst = os.path.join(cfg.esp_dir, "kernel.elf")
         if os.path.exists(kernel_src) and os.path.isdir(cfg.esp_dir):
             shutil.copyfile(kernel_src, kernel_dst)

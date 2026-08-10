@@ -79,6 +79,28 @@ def default_kernel_path(build_dir: str = "build") -> str:
     return os.environ.get("WASMOS_KERNEL", os.path.join(build_dir, "kernel.elf"))
 
 
+def default_build_dir(build_dir: str = "build") -> str:
+    """The build tree a test belongs to.
+
+    Derived from WASMOS_KERNEL rather than exported separately, because every
+    CMake test target already sets that to its own ${BUILD_DIR}/kernel.elf.
+    """
+    kernel = os.environ.get("WASMOS_KERNEL")
+    if kernel:
+        return os.path.dirname(kernel) or build_dir
+    return build_dir
+
+
+def default_host_tool_path(name: str, build_dir: str = "build") -> str:
+    """Path to a host tool built by the tree under test.
+
+    Same defect as default_kernel_path fixed, one tool later: a hardcoded
+    "build/<tool>" makes a suite launched from a defconfig tree look for a
+    binary that tree never built, and fail on a path rather than on behaviour.
+    """
+    return os.path.join(default_build_dir(build_dir), name)
+
+
 def default_config(build_dir: str = "build") -> QemuConfig:
     cache = _read_cmake_cache(os.path.join(build_dir, "CMakeCache.txt"))
     ovmf_code = os.environ.get("WASMOS_OVMF_CODE", cache.get("OVMF_CODE", ""))

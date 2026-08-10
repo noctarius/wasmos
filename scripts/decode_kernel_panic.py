@@ -115,7 +115,10 @@ def read_input(path: str) -> str:
 
 
 def default_kernel_path() -> str:
-    return os.path.join("build", "kernel.elf")
+    """Honours WASMOS_KERNEL like the test framework's namesake does, so a
+    panic from a defconfig tree is decoded against that tree's symbols rather
+    than whatever the literal "build" directory last held."""
+    return os.environ.get("WASMOS_KERNEL", os.path.join("build", "kernel.elf"))
 
 
 def read_cmake_cache(cache_path: Path) -> dict[str, str]:

@@ -4,6 +4,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from scripts.qemu_test_framework import default_host_tool_path
+
 # Packed .wap header prefix, in the field order of wasmos_app_header_t in
 # scripts/make_wasmos_app.c, up to but excluding subsystem_tag: magic, version,
 # header_size, flags, name_len, entry_len, wasm_size, req_ep_count, cap_count,
@@ -31,8 +33,8 @@ def _subsystem_tag(header: bytes) -> bytes:
 
 class MakeWasmosAppCapabilitiesTest(unittest.TestCase):
     def test_rejects_unknown_and_flagged_capability(self):
-        packer = Path("build/make_wasmos_app")
-        self.assertTrue(packer.exists(), "build/make_wasmos_app must exist")
+        packer = Path(default_host_tool_path("make_wasmos_app"))
+        self.assertTrue(packer.exists(), f"{packer} must exist")
 
         with tempfile.TemporaryDirectory() as td:
             td_path = Path(td)
@@ -72,8 +74,8 @@ class MakeWasmosAppCapabilitiesTest(unittest.TestCase):
             self.assertIn("unsupported capability flags", bad_flags.stderr)
 
     def test_writes_default_and_explicit_subsystem_tags(self):
-        packer = Path("build/make_wasmos_app")
-        self.assertTrue(packer.exists(), "build/make_wasmos_app must exist")
+        packer = Path(default_host_tool_path("make_wasmos_app"))
+        self.assertTrue(packer.exists(), f"{packer} must exist")
 
         with tempfile.TemporaryDirectory() as td:
             td_path = Path(td)

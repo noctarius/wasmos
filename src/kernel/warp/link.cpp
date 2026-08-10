@@ -32,6 +32,7 @@ extern "C" {
 #include "block_buffer.h"
 #include "hostcall_value.h"
 #include "kenv.h"
+#include "hostcall_buffer.h"
 #include "ipc.h"
 #include "process.h"
 #include "process_manager.h"
@@ -999,43 +1000,57 @@ static uint32_t warp_initfs_entry_count(void* ctx_) {
     const wasmos_initfs_header_t* hdr = nullptr;
     const uint8_t* base = nullptr;
     if (warp_initfs_header_get(&hdr, &base) != 0)
-        return (uint32_t)-1;
+        return (uint32_t)WASMOS_ERR_FS_NO_IMAGE;
+    wasmos_error_code_t rc = hostcall_value_check(hdr->entry_count);
+    if (rc != WASMOS_OK)
+        return (uint32_t)rc;
     return (uint32_t)hdr->entry_count;
 }
 
 static uint32_t warp_initfs_entry_name(uint32_t index, uint32_t out_off, uint32_t out_len,
                                        void* ctx_) {
     auto* ctx = warp_call_ctx(ctx_);
+    if ((int32_t)index < 0 || (int32_t)out_len <= 0)
+        return (uint32_t)WASMOS_INVAL;
     wasmos_initfs_entry_t e;
     if (warp_initfs_entry_at(index, &e) != 0)
-        return (uint32_t)-1;
-    uint32_t nlen = 0;
-    while (nlen < (uint32_t)sizeof(e.path) && e.path[nlen])
-        ++nlen;
-    if (nlen >= out_len)
-        nlen = out_len - 1;
+        return (uint32_t)WASMOS_ERR_FS_NOT_FOUND;
+    uint32_t true_len = 0;
+    uint32_t copy_len = 0;
+    wasmos_error_code_t rc =
+        hostcall_name_clamp(e.path, (uint32_t)sizeof(e.path), out_len, &true_len, &copy_len);
+    if (rc != WASMOS_OK)
+        return (uint32_t)rc;
     uint8_t* out = warp_mem(ctx, out_off, out_len);
     if (!out)
-        return (uint32_t)-1;
-    __builtin_memcpy(out, e.path, nlen);
-    out[nlen] = '\0';
-    return nlen;
+        return (uint32_t)WASMOS_ERR_KERNEL_BAD_POINTER;
+    __builtin_memcpy(out, e.path, copy_len);
+    out[copy_len] = '\0';
+    /* The TRUE length, matching wasm3: fs_init skips an entry whose reported
+     * length does not fit its buffer, and that test cannot fire if the number
+     * reported is the one that was made to fit. */
+    return true_len;
 }
 
 static uint32_t warp_initfs_entry_size(uint32_t index, void* ctx_) {
     (void)ctx_;
     wasmos_initfs_entry_t e;
-    return (warp_initfs_entry_at(index, &e) == 0) ? (uint32_t)e.size : (uint32_t)-1;
+    if ((int32_t)index < 0 || warp_initfs_entry_at(index, &e) != 0)
+        return (uint32_t)WASMOS_ERR_FS_NOT_FOUND;
+    wasmos_error_code_t rc = hostcall_value_check(e.size);
+    if (rc != WASMOS_OK)
+        return (uint32_t)rc;
+    return (uint32_t)e.size;
 }
 
 static uint32_t warp_initfs_entry_copy(uint32_t index, uint32_t out_off, uint32_t len,
                                        uint32_t offset, void* ctx_) {
     auto* ctx = warp_call_ctx(ctx_);
     if ((int32_t)index < 0 || (int32_t)len <= 0 || (int32_t)offset < 0)
-        return (uint32_t)-1;
+        return (uint32_t)WASMOS_INVAL;
     wasmos_initfs_entry_t e;
     if (warp_initfs_entry_at(index, &e) != 0)
-        return (uint32_t)-1;
+        return (uint32_t)WASMOS_ERR_FS_NOT_FOUND;
     /* Match wasm3: at/after EOF returns 0, and a trailing chunk longer than the
      * remainder is clamped and the short count returned (not rejected). */
     if (offset >= e.size)
@@ -1046,7 +1061,7 @@ static uint32_t warp_initfs_entry_copy(uint32_t index, uint32_t out_off, uint32_
         copy_len = available;
     uint8_t* out = warp_mem(ctx, out_off, copy_len);
     if (!out)
-        return (uint32_t)-1;
+        return (uint32_t)WASMOS_ERR_KERNEL_BAD_POINTER;
     const uint8_t* src = static_cast<const uint8_t*>(g_warp_boot_info->initfs) + e.offset + offset;
     __builtin_memcpy(out, src, copy_len);
     return copy_len; /* bytes copied, matches wasm3 which returns (int32_t)copy_len */
@@ -2421,11 +2436,13 @@ static bool warp_path_ieq(const char* a, const char* b) {
 
 static uint32_t warp_initfs_find_path(uint32_t path_off, uint32_t path_len, void* ctx_) {
     auto* ctx = warp_call_ctx(ctx_);
-    if ((int32_t)path_len <= 0 || path_len >= 112u)
-        return (uint32_t)-1;
+    if ((int32_t)path_len <= 0)
+        return (uint32_t)WASMOS_INVAL;
+    if (path_len >= 112u)
+        return (uint32_t)WASMOS_ERR_FS_PATH_TOO_LONG;
     const uint8_t* raw = warp_mem(ctx, path_off, path_len);
     if (!raw)
-        return (uint32_t)-1;
+        return (uint32_t)WASMOS_ERR_KERNEL_BAD_POINTER;
     char local_path[112];
     __builtin_memcpy(local_path, raw, path_len);
     local_path[path_len] = '\0';
@@ -2438,11 +2455,11 @@ static uint32_t warp_initfs_find_path(uint32_t path_off, uint32_t path_len, void
         (local_path[ri + 3] == 't' || local_path[ri + 3] == 'T') && local_path[ri + 4] == '/')
         ri += 5;
     if (local_path[ri] == '\0')
-        return (uint32_t)-1;
+        return (uint32_t)WASMOS_INVAL;
     const wasmos_initfs_header_t* hdr = nullptr;
     const uint8_t* base = nullptr;
     if (warp_initfs_header_get(&hdr, &base) != 0)
-        return (uint32_t)-1;
+        return (uint32_t)WASMOS_ERR_FS_NO_IMAGE;
     for (uint32_t i = 0; i < hdr->entry_count; ++i) {
         wasmos_initfs_entry_t e;
         if (warp_initfs_entry_at(i, &e) != 0)
@@ -2456,7 +2473,7 @@ static uint32_t warp_initfs_find_path(uint32_t path_off, uint32_t path_len, void
         if (warp_path_ieq(bn, &local_path[ri]))
             return i;
     }
-    return (uint32_t)-1;
+    return (uint32_t)WASMOS_ERR_FS_NOT_FOUND;
 }
 
 // ---------------------------------------------------------------------------

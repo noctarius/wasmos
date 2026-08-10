@@ -4,6 +4,7 @@
 #include "block_buffer.h"
 #include "hostcall_value.h"
 #include "kenv.h"
+#include "hostcall_buffer.h"
 #include "ipc.h"
 #include "io.h"
 #include "physmem.h"
@@ -2599,7 +2600,7 @@ m3ApiRawFunction(wasmos_boot_module_name) {
         m3ApiGetArg(int32_t, out_len)
 
             if (index < 0 || out_len <= 0) {
-        m3ApiReturn(-1);
+        m3ApiReturn(WASMOS_INVAL);
     }
     m3ApiCheckMem(out_ptr, (uint32_t)out_len);
     process_t* proc = process_get(process_current_pid());
@@ -2638,10 +2639,11 @@ m3ApiRawFunction(wasmos_initfs_entry_count) {
     m3ApiReturnType(int32_t) const wasmos_initfs_header_t* hdr = 0;
     const uint8_t* base = 0;
     if (initfs_header_get(&hdr, &base) != 0) {
-        m3ApiReturn(-1);
+        m3ApiReturn(WASMOS_ERR_FS_NO_IMAGE);
     }
-    if (hdr->entry_count > 0x7FFFFFFFu) {
-        m3ApiReturn(-1);
+    wasmos_error_code_t count_rc = hostcall_value_check(hdr->entry_count);
+    if (count_rc != WASMOS_OK) {
+        m3ApiReturn(count_rc);
     }
     m3ApiReturn((int32_t)hdr->entry_count);
 }
@@ -2651,12 +2653,12 @@ m3ApiRawFunction(wasmos_initfs_entry_name) {
         m3ApiGetArg(int32_t, out_len)
 
             if (index < 0 || out_len <= 0) {
-        m3ApiReturn(-1);
+        m3ApiReturn(WASMOS_INVAL);
     }
     m3ApiCheckMem(out_ptr, (uint32_t)out_len);
     process_t* proc = process_get(process_current_pid());
     if (!proc || proc->context_id == 0) {
-        m3ApiReturn(-1);
+        m3ApiReturn(WASMOS_ERR_KERNEL_NO_CALLER);
     }
     uint64_t out_user = 0;
     if (wasm_user_va_from_host_ptr(proc->context_id, (const uint8_t*)_mem,
@@ -2664,41 +2666,42 @@ m3ApiRawFunction(wasmos_initfs_entry_name) {
                                    &out_user) != 0 ||
         mm_user_range_permitted(proc->context_id, out_user, (uint64_t)(uint32_t)out_len,
                                 MEM_REGION_FLAG_WRITE) != 0) {
-        m3ApiReturn(-1);
+        m3ApiReturn(WASMOS_ERR_KERNEL_BAD_POINTER);
     }
 
     wasmos_initfs_entry_t entry;
     if (initfs_entry_at((uint32_t)index, &entry) != 0) {
-        m3ApiReturn(-1);
+        m3ApiReturn(WASMOS_ERR_FS_NOT_FOUND);
     }
     uint32_t name_len = 0;
-    while (name_len < sizeof(entry.path) && entry.path[name_len] != '\0') {
-        name_len++;
-    }
-    uint32_t copy_len = name_len;
-    if (copy_len >= (uint32_t)out_len) {
-        copy_len = (uint32_t)out_len - 1U;
+    uint32_t copy_len = 0;
+    wasmos_error_code_t clamp_rc = hostcall_name_clamp(entry.path, (uint32_t)sizeof(entry.path),
+                                                       (uint32_t)out_len, &name_len, &copy_len);
+    if (clamp_rc != WASMOS_OK) {
+        m3ApiReturn(clamp_rc);
     }
     if (copy_len > 0 &&
         wasm_copy_to_user_bytes(proc->context_id, out_user, entry.path, copy_len) != 0) {
-        m3ApiReturn(-1);
+        m3ApiReturn(WASMOS_ERR_KERNEL_COPY_FAILED);
     }
 
     char nul = '\0';
     if (wasm_copy_to_user_bytes(proc->context_id, out_user + (uint64_t)copy_len, &nul, 1) != 0) {
-        m3ApiReturn(-1);
+        m3ApiReturn(WASMOS_ERR_KERNEL_COPY_FAILED);
     }
 
+    /* The TRUE length, so a caller can tell its buffer was too small. */
     m3ApiReturn((int32_t)name_len);
 }
 
 m3ApiRawFunction(wasmos_initfs_entry_size) {
     m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, index) wasmos_initfs_entry_t entry;
     if (index < 0 || initfs_entry_at((uint32_t)index, &entry) != 0) {
-        m3ApiReturn(-1);
+        m3ApiReturn(WASMOS_ERR_FS_NOT_FOUND);
     }
-    if (entry.size > 0x7FFFFFFFu) {
-        m3ApiReturn(-1);
+    wasmos_error_code_t size_rc = hostcall_value_check(entry.size);
+    if (size_rc != WASMOS_OK) {
+        m3ApiReturn(size_rc);
     }
     m3ApiReturn((int32_t)entry.size);
 }
@@ -2708,12 +2711,12 @@ m3ApiRawFunction(wasmos_initfs_entry_copy) {
         m3ApiGetArg(int32_t, len) m3ApiGetArg(int32_t, offset)
 
             if (index < 0 || len <= 0 || offset < 0) {
-        m3ApiReturn(-1);
+        m3ApiReturn(WASMOS_INVAL);
     }
     m3ApiCheckMem(out_ptr, (uint32_t)len);
     process_t* proc = process_get(process_current_pid());
     if (!proc || proc->context_id == 0) {
-        m3ApiReturn(-1);
+        m3ApiReturn(WASMOS_ERR_KERNEL_NO_CALLER);
     }
     uint64_t out_user = 0;
     if (wasm_user_va_from_host_ptr(proc->context_id, (const uint8_t*)_mem,
@@ -2721,12 +2724,12 @@ m3ApiRawFunction(wasmos_initfs_entry_copy) {
                                    &out_user) != 0 ||
         mm_user_range_permitted(proc->context_id, out_user, (uint64_t)(uint32_t)len,
                                 MEM_REGION_FLAG_WRITE) != 0) {
-        m3ApiReturn(-1);
+        m3ApiReturn(WASMOS_ERR_KERNEL_BAD_POINTER);
     }
 
     wasmos_initfs_entry_t entry;
     if (initfs_entry_at((uint32_t)index, &entry) != 0) {
-        m3ApiReturn(-1);
+        m3ApiReturn(WASMOS_ERR_FS_NOT_FOUND);
     }
     if ((uint32_t)offset >= entry.size) {
         m3ApiReturn(0);
@@ -2738,7 +2741,7 @@ m3ApiRawFunction(wasmos_initfs_entry_copy) {
     }
     const uint8_t* src = (const uint8_t*)g_wasm_boot_info->initfs + entry.offset + (uint32_t)offset;
     if (wasm_copy_to_user_bytes(proc->context_id, out_user, src, copy_len) != 0) {
-        m3ApiReturn(-1);
+        m3ApiReturn(WASMOS_ERR_KERNEL_COPY_FAILED);
     }
     m3ApiReturn((int32_t)copy_len);
 }
@@ -2746,13 +2749,16 @@ m3ApiRawFunction(wasmos_initfs_entry_copy) {
 m3ApiRawFunction(wasmos_initfs_find_path) {
     m3ApiReturnType(int32_t) m3ApiGetArgMem(const char*, path_ptr) m3ApiGetArg(int32_t, path_len)
 
-        if (path_len <= 0 || path_len >= 112) {
-        m3ApiReturn(-1);
+        if (path_len <= 0) {
+        m3ApiReturn(WASMOS_INVAL);
+    }
+    if (path_len >= 112) {
+        m3ApiReturn(WASMOS_ERR_FS_PATH_TOO_LONG);
     }
     m3ApiCheckMem(path_ptr, (uint32_t)path_len);
     process_t* proc = process_get(process_current_pid());
     if (!proc || proc->context_id == 0) {
-        m3ApiReturn(-1);
+        m3ApiReturn(WASMOS_ERR_KERNEL_NO_CALLER);
     }
     uint64_t path_user = 0;
     if (wasm_user_va_from_host_ptr(proc->context_id, (const uint8_t*)_mem,
@@ -2760,13 +2766,13 @@ m3ApiRawFunction(wasmos_initfs_find_path) {
                                    (uint32_t)path_len, &path_user) != 0 ||
         mm_user_range_permitted(proc->context_id, path_user, (uint64_t)(uint32_t)path_len,
                                 MEM_REGION_FLAG_READ) != 0) {
-        m3ApiReturn(-1);
+        m3ApiReturn(WASMOS_ERR_KERNEL_BAD_POINTER);
     }
 
     char local_path[112];
     if (mm_copy_from_user(proc->context_id, local_path, path_user, (uint64_t)(uint32_t)path_len) !=
         0) {
-        m3ApiReturn(-1);
+        m3ApiReturn(WASMOS_ERR_KERNEL_COPY_FAILED);
     }
     local_path[path_len] = '\0';
 
@@ -2781,12 +2787,12 @@ m3ApiRawFunction(wasmos_initfs_find_path) {
         ri += 5;
     }
     if (local_path[ri] == '\0') {
-        m3ApiReturn(-1);
+        m3ApiReturn(WASMOS_INVAL);
     }
     const wasmos_initfs_header_t* hdr = 0;
     const uint8_t* base = 0;
     if (initfs_header_get(&hdr, &base) != 0) {
-        m3ApiReturn(-1);
+        m3ApiReturn(WASMOS_ERR_FS_NO_IMAGE);
     }
     for (uint32_t i = 0; i < hdr->entry_count; ++i) {
         wasmos_initfs_entry_t entry;
@@ -2806,7 +2812,7 @@ m3ApiRawFunction(wasmos_initfs_find_path) {
             m3ApiReturn((int32_t)i);
         }
     }
-    m3ApiReturn(-1);
+    m3ApiReturn(WASMOS_ERR_FS_NOT_FOUND);
 }
 
 m3ApiRawFunction(wasmos_console_write) {

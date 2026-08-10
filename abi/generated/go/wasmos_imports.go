@@ -238,9 +238,12 @@ func IoIn16(a0 int32) int32
 // case, not a corner one -- would be indistinguishable from a failure code on
 // a shared signed i32. io_region_in32 already has this shape.
 //
-// in8/in16 keep returning their value directly: 0..255 and 0..65535 cannot
-// reach the negative range, so there is nothing for an error code to collide
-// with.
+// in8/in16 still return their value directly, which is a known gap rather
+// than a decision: their range cannot collide with an error code, but every
+// caller masks the result (`& 0xFFFF`, `& 0xFF`) and so discards the sign
+// that would distinguish one. io.NOT_AUTHORIZED masked to 16 bits is 0xFFFF
+// -- exactly what an absent device reads back -- so a denied capability is
+// indistinguishable from a missing device. They want the same out-parameter.
 //
 // Returns 0 on success, otherwise a negative WASMOS_ERR_IO_* code naming
 // which check refused it. Requires the io.port capability for that port.

@@ -331,6 +331,8 @@ domains:
       - { name: NO_BACKING, description: "no physical backing could be obtained for the buffer" }
       - { name: ABOVE_4G,   description: "the buffer's physical address is above 4 GiB, which a 32-bit guest cannot address" }
       - { name: RANGE,      description: "the requested offset/length lies outside the buffer" }
+      - { name: NO_WINDOW,  description: "guest linear memory has no free window to overlay the buffer into" }
+      - { name: MAP_FAILED, description: "the paging step that overlays the buffer failed" }
 
   thread:
     id: 21

@@ -247,6 +247,8 @@ enum {
     WASMOS_ERR_BLOCK_NO_BACKING = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_BLOCK, 2), /* no physical backing could be obtained for the buffer */
     WASMOS_ERR_BLOCK_ABOVE_4G = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_BLOCK, 3), /* the buffer's physical address is above 4 GiB, which a 32-bit guest cannot address */
     WASMOS_ERR_BLOCK_RANGE = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_BLOCK, 4), /* the requested offset/length lies outside the buffer */
+    WASMOS_ERR_BLOCK_NO_WINDOW = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_BLOCK, 5), /* guest linear memory has no free window to overlay the buffer into */
+    WASMOS_ERR_BLOCK_MAP_FAILED = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_BLOCK, 6), /* the paging step that overlays the buffer failed */
     WASMOS_ERR_THREAD_BAD_ENTRY = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_THREAD, 1), /* the entry token is not a NUL-terminated name inside the guest's linear memory */
     WASMOS_ERR_THREAD_SPAWN_FAILED = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_THREAD, 2), /* the VM thread could not be created */
     WASMOS_ERR_THREAD_JOIN_FAILED = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_THREAD, 3), /* the join could not be performed (unknown or unjoinable thread) */
@@ -513,6 +515,8 @@ static inline const char *wasmos_error_code_name(wasmos_error_code_t c) {
     case WASMOS_ERR_BLOCK_NO_BACKING: return "block.NO_BACKING";
     case WASMOS_ERR_BLOCK_ABOVE_4G: return "block.ABOVE_4G";
     case WASMOS_ERR_BLOCK_RANGE: return "block.RANGE";
+    case WASMOS_ERR_BLOCK_NO_WINDOW: return "block.NO_WINDOW";
+    case WASMOS_ERR_BLOCK_MAP_FAILED: return "block.MAP_FAILED";
     case WASMOS_ERR_THREAD_BAD_ENTRY: return "thread.BAD_ENTRY";
     case WASMOS_ERR_THREAD_SPAWN_FAILED: return "thread.SPAWN_FAILED";
     case WASMOS_ERR_THREAD_JOIN_FAILED: return "thread.JOIN_FAILED";
@@ -715,6 +719,8 @@ static inline const char *wasmos_strerror(wasmos_error_code_t c) {
     case WASMOS_ERR_BLOCK_NO_BACKING: return "no physical backing could be obtained for the buffer";
     case WASMOS_ERR_BLOCK_ABOVE_4G: return "the buffer's physical address is above 4 GiB, which a 32-bit guest cannot address";
     case WASMOS_ERR_BLOCK_RANGE: return "the requested offset/length lies outside the buffer";
+    case WASMOS_ERR_BLOCK_NO_WINDOW: return "guest linear memory has no free window to overlay the buffer into";
+    case WASMOS_ERR_BLOCK_MAP_FAILED: return "the paging step that overlays the buffer failed";
     case WASMOS_ERR_THREAD_BAD_ENTRY: return "the entry token is not a NUL-terminated name inside the guest's linear memory";
     case WASMOS_ERR_THREAD_SPAWN_FAILED: return "the VM thread could not be created";
     case WASMOS_ERR_THREAD_JOIN_FAILED: return "the join could not be performed (unknown or unjoinable thread)";

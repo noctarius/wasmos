@@ -2459,6 +2459,16 @@ if (WASMOS_UNIT_TINYGO)
 endif ()
 
 add_custom_command(TARGET run-kernel-unit-tests POST_BUILD
+  # Block-buffer bounds arithmetic. Pure arithmetic against the real file, no
+  # stubs: the guest supplies (offset, len) and the result decides whether a
+  # memcpy stays inside the process's 8 KiB buffer.
+  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
+          -iquote ${KERNEL_DIR}/include
+          -iquote ${CMAKE_SOURCE_DIR}/abi/generated/c
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_block_buffer.c
+          ${KERNEL_DIR}/block_buffer.c
+          -o ${BUILD_DIR}/test_block_buffer
+  COMMAND ${BUILD_DIR}/test_block_buffer
   # The poll hub on its own. Its only outward call is ipc_select_signal, so the
   # test stubs that and asserts exactly which sets a notify reaches.
   COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions

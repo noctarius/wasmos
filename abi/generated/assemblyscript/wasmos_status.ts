@@ -226,6 +226,8 @@ export const WASMOS_ERR_BLOCK_NO_SLOT: i32 = -0x00140001; // no per-process bloc
 export const WASMOS_ERR_BLOCK_NO_BACKING: i32 = -0x00140002; // no physical backing could be obtained for the buffer
 export const WASMOS_ERR_BLOCK_ABOVE_4G: i32 = -0x00140003; // the buffer's physical address is above 4 GiB, which a 32-bit guest cannot address
 export const WASMOS_ERR_BLOCK_RANGE: i32 = -0x00140004; // the requested offset/length lies outside the buffer
+export const WASMOS_ERR_BLOCK_NO_WINDOW: i32 = -0x00140005; // guest linear memory has no free window to overlay the buffer into
+export const WASMOS_ERR_BLOCK_MAP_FAILED: i32 = -0x00140006; // the paging step that overlays the buffer failed
 export const WASMOS_ERR_THREAD_BAD_ENTRY: i32 = -0x00150001; // the entry token is not a NUL-terminated name inside the guest's linear memory
 export const WASMOS_ERR_THREAD_SPAWN_FAILED: i32 = -0x00150002; // the VM thread could not be created
 export const WASMOS_ERR_THREAD_JOIN_FAILED: i32 = -0x00150003; // the join could not be performed (unknown or unjoinable thread)
@@ -476,6 +478,8 @@ export function strerror(c: i32): string {
     case WASMOS_ERR_BLOCK_NO_BACKING: return "no physical backing could be obtained for the buffer";
     case WASMOS_ERR_BLOCK_ABOVE_4G: return "the buffer's physical address is above 4 GiB, which a 32-bit guest cannot address";
     case WASMOS_ERR_BLOCK_RANGE: return "the requested offset/length lies outside the buffer";
+    case WASMOS_ERR_BLOCK_NO_WINDOW: return "guest linear memory has no free window to overlay the buffer into";
+    case WASMOS_ERR_BLOCK_MAP_FAILED: return "the paging step that overlays the buffer failed";
     case WASMOS_ERR_THREAD_BAD_ENTRY: return "the entry token is not a NUL-terminated name inside the guest's linear memory";
     case WASMOS_ERR_THREAD_SPAWN_FAILED: return "the VM thread could not be created";
     case WASMOS_ERR_THREAD_JOIN_FAILED: return "the join could not be performed (unknown or unjoinable thread)";

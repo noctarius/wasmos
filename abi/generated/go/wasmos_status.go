@@ -234,6 +234,8 @@ const (
 	WASMOS_ERR_BLOCK_NO_BACKING int32 = -0x00140002 // no physical backing could be obtained for the buffer
 	WASMOS_ERR_BLOCK_ABOVE_4G int32 = -0x00140003 // the buffer's physical address is above 4 GiB, which a 32-bit guest cannot address
 	WASMOS_ERR_BLOCK_RANGE int32 = -0x00140004 // the requested offset/length lies outside the buffer
+	WASMOS_ERR_BLOCK_NO_WINDOW int32 = -0x00140005 // guest linear memory has no free window to overlay the buffer into
+	WASMOS_ERR_BLOCK_MAP_FAILED int32 = -0x00140006 // the paging step that overlays the buffer failed
 	WASMOS_ERR_THREAD_BAD_ENTRY int32 = -0x00150001 // the entry token is not a NUL-terminated name inside the guest's linear memory
 	WASMOS_ERR_THREAD_SPAWN_FAILED int32 = -0x00150002 // the VM thread could not be created
 	WASMOS_ERR_THREAD_JOIN_FAILED int32 = -0x00150003 // the join could not be performed (unknown or unjoinable thread)
@@ -710,6 +712,10 @@ func WasmosStrerror(c int32) string {
 		return "the buffer's physical address is above 4 GiB, which a 32-bit guest cannot address"
 	case WASMOS_ERR_BLOCK_RANGE:
 		return "the requested offset/length lies outside the buffer"
+	case WASMOS_ERR_BLOCK_NO_WINDOW:
+		return "guest linear memory has no free window to overlay the buffer into"
+	case WASMOS_ERR_BLOCK_MAP_FAILED:
+		return "the paging step that overlays the buffer failed"
 	case WASMOS_ERR_THREAD_BAD_ENTRY:
 		return "the entry token is not a NUL-terminated name inside the guest's linear memory"
 	case WASMOS_ERR_THREAD_SPAWN_FAILED:

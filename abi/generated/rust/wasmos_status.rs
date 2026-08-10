@@ -226,6 +226,8 @@ pub const WASMOS_ERR_BLOCK_NO_SLOT: i32 = -0x00140001; // no per-process block s
 pub const WASMOS_ERR_BLOCK_NO_BACKING: i32 = -0x00140002; // no physical backing could be obtained for the buffer
 pub const WASMOS_ERR_BLOCK_ABOVE_4G: i32 = -0x00140003; // the buffer's physical address is above 4 GiB, which a 32-bit guest cannot address
 pub const WASMOS_ERR_BLOCK_RANGE: i32 = -0x00140004; // the requested offset/length lies outside the buffer
+pub const WASMOS_ERR_BLOCK_NO_WINDOW: i32 = -0x00140005; // guest linear memory has no free window to overlay the buffer into
+pub const WASMOS_ERR_BLOCK_MAP_FAILED: i32 = -0x00140006; // the paging step that overlays the buffer failed
 pub const WASMOS_ERR_THREAD_BAD_ENTRY: i32 = -0x00150001; // the entry token is not a NUL-terminated name inside the guest's linear memory
 pub const WASMOS_ERR_THREAD_SPAWN_FAILED: i32 = -0x00150002; // the VM thread could not be created
 pub const WASMOS_ERR_THREAD_JOIN_FAILED: i32 = -0x00150003; // the join could not be performed (unknown or unjoinable thread)
@@ -483,6 +485,8 @@ pub fn wasmos_strerror(c: i32) -> &'static str {
         WASMOS_ERR_BLOCK_NO_BACKING => "no physical backing could be obtained for the buffer",
         WASMOS_ERR_BLOCK_ABOVE_4G => "the buffer's physical address is above 4 GiB, which a 32-bit guest cannot address",
         WASMOS_ERR_BLOCK_RANGE => "the requested offset/length lies outside the buffer",
+        WASMOS_ERR_BLOCK_NO_WINDOW => "guest linear memory has no free window to overlay the buffer into",
+        WASMOS_ERR_BLOCK_MAP_FAILED => "the paging step that overlays the buffer failed",
         WASMOS_ERR_THREAD_BAD_ENTRY => "the entry token is not a NUL-terminated name inside the guest's linear memory",
         WASMOS_ERR_THREAD_SPAWN_FAILED => "the VM thread could not be created",
         WASMOS_ERR_THREAD_JOIN_FAILED => "the join could not be performed (unknown or unjoinable thread)",

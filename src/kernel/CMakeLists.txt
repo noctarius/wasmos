@@ -146,6 +146,7 @@ set(KERNEL_OBJS
   ${BUILD_DIR}/runtime_context.o
   ${BUILD_DIR}/ipc.o
   ${BUILD_DIR}/idtable.o
+  ${BUILD_DIR}/block_buffer.o
   ${BUILD_DIR}/process.o
   ${BUILD_DIR}/thread.o
   ${BUILD_DIR}/sched_thread.o
@@ -288,6 +289,7 @@ set(KERNEL_SOURCES
   ${KERNEL_DIR}/runtime_context.c
   ${KERNEL_DIR}/ipc.c
   ${KERNEL_DIR}/idtable.c
+  ${KERNEL_DIR}/block_buffer.c
   ${KERNEL_DIR}/process.c
   ${KERNEL_DIR}/thread.c
   ${KERNEL_DIR}/sched_thread.c
@@ -623,6 +625,7 @@ add_custom_command(
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/runtime_context.c -o ${BUILD_DIR}/runtime_context.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/ipc.c -o ${BUILD_DIR}/ipc.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/idtable.c -o ${BUILD_DIR}/idtable.o
+  COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/block_buffer.c -o ${BUILD_DIR}/block_buffer.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/process.c -o ${BUILD_DIR}/process.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/thread.c -o ${BUILD_DIR}/thread.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/sched_thread.c -o ${BUILD_DIR}/sched_thread.o

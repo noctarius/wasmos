@@ -1,6 +1,7 @@
 #include "boot.h"
 #include "arch/x86_64/smp.h"
 #include "klog.h"
+#include "block_buffer.h"
 #include "ipc.h"
 #include "io.h"
 #include "physmem.h"
@@ -975,23 +976,18 @@ m3ApiRawFunction(wasmos_buffer_unborrow) {
         m3ApiReturn(wasm_buffer_unborrow_impl(borrow_id));
 }
 
-static int wasm_block_buffer_validate_args(int32_t phys, int32_t len, int32_t offset) {
-    uint64_t end = 0;
-
-    if (phys <= 0 || len <= 0 || offset < 0) {
-        return -1;
-    }
+static wasmos_error_code_t wasm_block_buffer_validate_args(int32_t phys, int32_t len,
+                                                           int32_t offset) {
     /* phys must name a live block buffer, and the access must stay within that
      * buffer's fixed 8 KiB window.  Without this a guest could pass an arbitrary
      * phys and read/write any physical address below 4 GiB. */
     if (!wasm_block_slot_phys_is_live((uint64_t)(uint32_t)phys)) {
-        return -1;
+        return WASMOS_ERR_BLOCK_NO_SLOT;
     }
-    end = (uint64_t)(uint32_t)offset + (uint64_t)(uint32_t)len;
-    if (end < (uint64_t)(uint32_t)offset || end > (uint64_t)WASM_BLOCK_BUFFER_SIZE_BYTES) {
-        return -1;
-    }
-    return 0;
+    /* The guest's int32 arguments are zero-extended, so a negative length
+     * arrives as a large positive one and the range test refuses it. */
+    return block_buffer_check_range((uint64_t)(uint32_t)offset, (uint64_t)(uint32_t)len,
+                                    (uint64_t)WASM_BLOCK_BUFFER_SIZE_BYTES);
 }
 
 m3ApiRawFunction(wasmos_block_buffer_phys) {
@@ -999,18 +995,21 @@ m3ApiRawFunction(wasmos_block_buffer_phys) {
     wasm_block_slot_t* slot = wasm_block_slot_for_pid(pid);
 
     if (!slot) {
-        m3ApiReturn(-1);
+        m3ApiReturn(WASMOS_ERR_BLOCK_NO_SLOT);
     }
     if (slot->buffer_phys == 0) {
-        uint64_t phys = pfa_alloc_pages_below(WASM_BLOCK_BUFFER_PAGES, 0x100000000ULL);
+        /* Below 2 GiB, not 4: the address is returned on the same i32 that
+         * carries the error codes, so bit 31 must stay clear. */
+        uint64_t phys = pfa_alloc_pages_below(WASM_BLOCK_BUFFER_PAGES, BLOCK_BUFFER_PHYS_LIMIT);
         if (!phys) {
-            m3ApiReturn(-1);
+            m3ApiReturn(WASMOS_ERR_BLOCK_NO_BACKING);
         }
         slot->buffer_phys = phys;
     }
 
-    if (slot->buffer_phys > 0xFFFFFFFFULL) {
-        m3ApiReturn(-1);
+    wasmos_error_code_t phys_rc = block_buffer_check_phys(slot->buffer_phys);
+    if (phys_rc != WASMOS_OK) {
+        m3ApiReturn(phys_rc);
     }
     m3ApiReturn((int32_t)slot->buffer_phys);
 }
@@ -1019,13 +1018,14 @@ m3ApiRawFunction(wasmos_block_buffer_copy) {
     m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, phys) m3ApiGetArgMem(uint8_t*, ptr)
         m3ApiGetArg(int32_t, len) m3ApiGetArg(int32_t, offset)
 
-            if (wasm_block_buffer_validate_args(phys, len, offset) != 0) {
-        m3ApiReturn(-1);
+            wasmos_error_code_t rc = wasm_block_buffer_validate_args(phys, len, offset);
+    if (rc != WASMOS_OK) {
+        m3ApiReturn(rc);
     }
     m3ApiCheckMem(ptr, (uint32_t)len);
     process_t* proc = process_get(process_current_pid());
     if (!proc || proc->context_id == 0) {
-        m3ApiReturn(-1);
+        m3ApiReturn(WASMOS_ERR_KERNEL_NO_CALLER);
     }
     uint64_t ptr_user = 0;
     if (wasm_user_va_from_host_ptr(proc->context_id, (const uint8_t*)_mem,
@@ -1033,12 +1033,12 @@ m3ApiRawFunction(wasmos_block_buffer_copy) {
                                    &ptr_user) != 0 ||
         mm_user_range_permitted(proc->context_id, ptr_user, (uint64_t)(uint32_t)len,
                                 MEM_REGION_FLAG_WRITE) != 0) {
-        m3ApiReturn(-1);
+        m3ApiReturn(WASMOS_ERR_KERNEL_BAD_POINTER);
     }
 
     const uint8_t* src = ptr_cast(uint8_t, ((uint32_t)phys + (uint32_t)offset));
     if (wasm_copy_to_user_bytes(proc->context_id, ptr_user, src, (uint32_t)len) != 0) {
-        m3ApiReturn(-1);
+        m3ApiReturn(WASMOS_ERR_KERNEL_COPY_FAILED);
     }
     m3ApiReturn(0);
 }
@@ -1047,13 +1047,14 @@ m3ApiRawFunction(wasmos_block_buffer_write) {
     m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, phys) m3ApiGetArgMem(const uint8_t*, ptr)
         m3ApiGetArg(int32_t, len) m3ApiGetArg(int32_t, offset)
 
-            if (wasm_block_buffer_validate_args(phys, len, offset) != 0) {
-        m3ApiReturn(-1);
+            wasmos_error_code_t rc = wasm_block_buffer_validate_args(phys, len, offset);
+    if (rc != WASMOS_OK) {
+        m3ApiReturn(rc);
     }
     m3ApiCheckMem(ptr, (uint32_t)len);
     process_t* proc = process_get(process_current_pid());
     if (!proc || proc->context_id == 0) {
-        m3ApiReturn(-1);
+        m3ApiReturn(WASMOS_ERR_KERNEL_NO_CALLER);
     }
     uint64_t ptr_user = 0;
     if (wasm_user_va_from_host_ptr(proc->context_id, (const uint8_t*)_mem,
@@ -1061,7 +1062,7 @@ m3ApiRawFunction(wasmos_block_buffer_write) {
                                    &ptr_user) != 0 ||
         mm_user_range_permitted(proc->context_id, ptr_user, (uint64_t)(uint32_t)len,
                                 MEM_REGION_FLAG_READ) != 0) {
-        m3ApiReturn(-1);
+        m3ApiReturn(WASMOS_ERR_KERNEL_BAD_POINTER);
     }
 
     uint8_t* dst = ptr_cast(uint8_t, ((uint32_t)phys + (uint32_t)offset));
@@ -1074,7 +1075,7 @@ m3ApiRawFunction(wasmos_block_buffer_write) {
         }
         if (wasm_copy_from_user_bytes(proc->context_id, ptr_user + (uint64_t)copied, bounce,
                                       chunk) != 0) {
-            m3ApiReturn(-1);
+            m3ApiReturn(WASMOS_ERR_KERNEL_COPY_FAILED);
         }
         for (uint32_t i = 0; i < chunk; ++i) {
             dst[copied + i] = bounce[i];
@@ -1095,19 +1096,20 @@ m3ApiRawFunction(wasmos_block_buffer_map) {
 
         process_t* proc = process_get(process_current_pid());
     if (!proc || proc->context_id == 0) {
-        m3ApiReturn(-1);
+        m3ApiReturn(WASMOS_ERR_KERNEL_NO_CALLER);
     }
     wasm_block_slot_t* slot = wasm_block_slot_for_pid(proc->pid);
     if (!slot) {
-        m3ApiReturn(-1);
+        m3ApiReturn(WASMOS_ERR_BLOCK_NO_SLOT);
     }
     if (slot->buffer_phys == 0) {
-        uint64_t phys = pfa_alloc_pages_below(WASM_BLOCK_BUFFER_PAGES, 0x100000000ULL);
-        if (!phys || phys > 0xFFFFFFFFULL) {
-            if (phys) {
-                pfa_free_pages(phys, WASM_BLOCK_BUFFER_PAGES);
-            }
-            m3ApiReturn(-1);
+        uint64_t phys = pfa_alloc_pages_below(WASM_BLOCK_BUFFER_PAGES, BLOCK_BUFFER_PHYS_LIMIT);
+        if (!phys) {
+            m3ApiReturn(WASMOS_ERR_BLOCK_NO_BACKING);
+        }
+        if (block_buffer_check_phys(phys) != WASMOS_OK) {
+            pfa_free_pages(phys, WASM_BLOCK_BUFFER_PAGES);
+            m3ApiReturn(WASMOS_ERR_BLOCK_ABOVE_4G);
         }
         slot->buffer_phys = phys;
     }
@@ -1118,7 +1120,7 @@ m3ApiRawFunction(wasmos_block_buffer_map) {
     uint32_t mem_size = 0;
     uint8_t* mem_base = m3_GetMemory(runtime, &mem_size, 0);
     if (!mem_base || mem_size == 0) {
-        m3ApiReturn(-1);
+        m3ApiReturn(WASMOS_ERR_BLOCK_NO_WINDOW);
     }
 
     const uint64_t region_bytes = (uint64_t)WASM_BLOCK_BUFFER_SIZE_BYTES;
@@ -1152,11 +1154,11 @@ m3ApiRawFunction(wasmos_block_buffer_map) {
         if (required > mem_size64) {
             uint32_t target_pages = (uint32_t)((required + 0xFFFFULL) >> 16);
             if (ResizeMemory(runtime, target_pages) != m3Err_none) {
-                m3ApiReturn(-1);
+                m3ApiReturn(WASMOS_ERR_BLOCK_NO_WINDOW);
             }
             mem_size64 = (uint64_t)m3_GetMemorySize(runtime);
             if (required > mem_size64) {
-                m3ApiReturn(-1);
+                m3ApiReturn(WASMOS_ERR_BLOCK_NO_WINDOW);
             }
         }
     }
@@ -1166,12 +1168,12 @@ m3ApiRawFunction(wasmos_block_buffer_map) {
     if (wasm_user_va_from_offset(proc->context_id, off32, (uint32_t)region_bytes, &virt) != 0 ||
         mm_user_range_permitted(proc->context_id, virt, region_bytes, MEM_REGION_FLAG_WRITE) != 0 ||
         (virt & 0xFFFULL) != 0) {
-        m3ApiReturn(-1);
+        m3ApiReturn(WASMOS_ERR_BLOCK_NO_WINDOW);
     }
     if (mm_context_map_physical(proc->context_id, virt, slot->buffer_phys, region_bytes,
                                 MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE |
                                     MEM_REGION_FLAG_USER) != 0) {
-        m3ApiReturn(-1);
+        m3ApiReturn(WASMOS_ERR_BLOCK_MAP_FAILED);
     }
 
     wasm_dma_region_map_track(proc->pid, off32, (uint32_t)region_bytes, 0, 0);

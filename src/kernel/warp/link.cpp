@@ -29,6 +29,7 @@
 extern "C" {
 #include "boot.h"
 #include "warp/shim.h"
+#include "block_buffer.h"
 #include "ipc.h"
 #include "process.h"
 #include "process_manager.h"
@@ -623,14 +624,19 @@ static uint32_t warp_block_buffer_phys(void* ctx_) {
     uint32_t pid = process_current_pid();
     auto* slot = warp_block_slot(pid);
     if (!slot)
-        return (uint32_t)-1;
+        return (uint32_t)WASMOS_ERR_BLOCK_NO_SLOT;
     if (!slot->phys) {
         /* Must be < 512MB: that's the kernel's higher-half identity mapping
-         * window AND within ATA's 32-bit DMA address range. */
+         * window AND within ATA's 32-bit DMA address range. That is already
+         * well under the 2 GiB the ABI can express, which block_buffer_check_phys
+         * asserts so a later pool change cannot turn an address into an error. */
         slot->phys = pfa_alloc_pages_below(WARP_BLOCK_BUF_PAGES, 512ULL * 1024 * 1024);
         if (!slot->phys)
-            return (uint32_t)-1;
+            return (uint32_t)WASMOS_ERR_BLOCK_NO_BACKING;
     }
+    wasmos_error_code_t phys_rc = block_buffer_check_phys(slot->phys);
+    if (phys_rc != WASMOS_OK)
+        return (uint32_t)phys_rc;
     return (uint32_t)slot->phys;
 }
 
@@ -639,13 +645,16 @@ static uint32_t warp_block_buffer_copy(uint32_t phys, uint32_t ptr_off, uint32_t
     auto* ctx = warp_call_ctx(ctx_);
     auto* slot = warp_block_slot_by_phys((uint64_t)phys);
     if (!slot)
-        return (uint32_t)-1;
-    uint32_t buf_bytes = WARP_BLOCK_BUF_PAGES * 4096;
-    if (offset + len > buf_bytes)
-        return (uint32_t)-1;
+        return (uint32_t)WASMOS_ERR_BLOCK_NO_SLOT;
+    /* 64-bit, via the shared check: `offset + len` in 32 bits wraps, and a
+     * wrapped sum passed the old bound while naming a byte outside the buffer. */
+    wasmos_error_code_t range_rc =
+        block_buffer_check_range(offset, len, (uint64_t)WARP_BLOCK_BUF_PAGES * 4096ULL);
+    if (range_rc != WASMOS_OK)
+        return (uint32_t)range_rc;
     uint8_t* wasm_ptr = warp_mem(ctx, ptr_off, len);
     if (!wasm_ptr)
-        return (uint32_t)-1;
+        return (uint32_t)WASMOS_ERR_KERNEL_BAD_POINTER;
     uint8_t* buf = reinterpret_cast<uint8_t*>(slot->phys | 0xFFFFFFFF80000000ULL);
     __builtin_memcpy(wasm_ptr, buf + offset, len);
     return 0;
@@ -656,13 +665,16 @@ static uint32_t warp_block_buffer_write(uint32_t phys, uint32_t ptr_off, uint32_
     auto* ctx = warp_call_ctx(ctx_);
     auto* slot = warp_block_slot_by_phys((uint64_t)phys);
     if (!slot)
-        return (uint32_t)-1;
-    uint32_t buf_bytes = WARP_BLOCK_BUF_PAGES * 4096;
-    if (offset + len > buf_bytes)
-        return (uint32_t)-1;
+        return (uint32_t)WASMOS_ERR_BLOCK_NO_SLOT;
+    /* 64-bit, via the shared check: `offset + len` in 32 bits wraps, and a
+     * wrapped sum passed the old bound while naming a byte outside the buffer. */
+    wasmos_error_code_t range_rc =
+        block_buffer_check_range(offset, len, (uint64_t)WARP_BLOCK_BUF_PAGES * 4096ULL);
+    if (range_rc != WASMOS_OK)
+        return (uint32_t)range_rc;
     uint8_t* wasm_ptr = warp_mem(ctx, ptr_off, len);
     if (!wasm_ptr)
-        return (uint32_t)-1;
+        return (uint32_t)WASMOS_ERR_KERNEL_BAD_POINTER;
     uint8_t* buf = reinterpret_cast<uint8_t*>(slot->phys | 0xFFFFFFFF80000000ULL);
     __builtin_memcpy(buf + offset, wasm_ptr, len);
     return 0;
@@ -2040,14 +2052,14 @@ static uint32_t warp_region_alloc(uint32_t pages, uint32_t cache_policy, uint32_
 static uint32_t warp_block_buffer_map(void* ctx_) {
     auto* ctx = warp_call_ctx(ctx_);
     if (!ctx)
-        return (uint32_t)-1;
+        return (uint32_t)WASMOS_ERR_KERNEL_NO_CALLER;
     auto* slot = warp_block_slot(ctx->pid);
     if (!slot)
-        return (uint32_t)-1;
+        return (uint32_t)WASMOS_ERR_BLOCK_NO_SLOT;
     if (!slot->phys) {
         slot->phys = pfa_alloc_pages_below(WARP_BLOCK_BUF_PAGES, 512ULL * 1024 * 1024);
         if (!slot->phys)
-            return (uint32_t)-1;
+            return (uint32_t)WASMOS_ERR_BLOCK_NO_BACKING;
     }
     if (slot->map_off)
         return slot->map_off;
@@ -2055,7 +2067,7 @@ static uint32_t warp_block_buffer_map(void* ctx_) {
     const uint32_t window = (uint32_t)(WARP_BLOCK_BUF_PAGES * 0x1000ULL);
     int64_t placed = warp_linmem_place_phys(ctx, slot->phys, WARP_BLOCK_BUF_PAGES, window);
     if (placed < 0)
-        return (uint32_t)-1;
+        return (uint32_t)WASMOS_ERR_BLOCK_NO_WINDOW;
     uint32_t off = (uint32_t)placed;
     warp_shmem_map_track(ctx->pid, WARP_REGION_TRACK_ID(off), off, window);
     slot->map_off = off;

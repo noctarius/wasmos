@@ -301,6 +301,8 @@ Argument validation that a guest CAN act on stays on the transport axis (WASMOS_
 | `WASMOS_ERR_BLOCK_NO_BACKING` | -0x00140002 | no physical backing could be obtained for the buffer |
 | `WASMOS_ERR_BLOCK_ABOVE_4G` | -0x00140003 | the buffer's physical address is above 4 GiB, which a 32-bit guest cannot address |
 | `WASMOS_ERR_BLOCK_RANGE` | -0x00140004 | the requested offset/length lies outside the buffer |
+| `WASMOS_ERR_BLOCK_NO_WINDOW` | -0x00140005 | guest linear memory has no free window to overlay the buffer into |
+| `WASMOS_ERR_BLOCK_MAP_FAILED` | -0x00140006 | the paging step that overlays the buffer failed |
 
 ### `thread` (domain 21) — guest thread creation and lifetime host calls
 

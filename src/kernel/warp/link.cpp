@@ -2266,9 +2266,21 @@ static uint32_t warp_shmem_refresh(uint32_t id, uint32_t wasm_off, uint32_t size
 // IRQ routing
 // ---------------------------------------------------------------------------
 
+/* The ABI passes the line as i32, so a negative one arrives here above
+ * INT32_MAX. Rejecting it first, as wasm3 does, is what keeps a guest from
+ * getting "not authorized" for what is really a malformed line -- and stops
+ * 0xFFFFFFFF reaching irq_register/irq_ack as a line number. */
+static bool warp_irq_line_valid(uint32_t irq_line) {
+    return irq_line <= 0x7FFFFFFFu;
+}
+
 static uint32_t warp_irq_route_ipc(uint32_t irq_line, uint32_t endpoint, void* ctx_) {
     (void)ctx_;
     uint32_t context_id = 0;
+    if (!warp_irq_line_valid(irq_line))
+        return (uint32_t)WASMOS_ERR_IRQ_BAD_LINE;
+    if (endpoint > 0x7FFFFFFFu)
+        return (uint32_t)WASMOS_ERR_IRQ_BAD_ENDPOINT;
     if (warp_current_context_id(&context_id) != 0 || warp_require_irq_capability(context_id) != 0)
         return (uint32_t)WASMOS_ERR_IRQ_NOT_AUTHORIZED;
     return (uint32_t)irq_register(context_id, irq_line, endpoint);
@@ -2277,6 +2289,8 @@ static uint32_t warp_irq_route_ipc(uint32_t irq_line, uint32_t endpoint, void* c
 static uint32_t warp_irq_ack(uint32_t irq_line, void* ctx_) {
     (void)ctx_;
     uint32_t context_id = 0;
+    if (!warp_irq_line_valid(irq_line))
+        return (uint32_t)WASMOS_ERR_IRQ_BAD_LINE;
     if (warp_current_context_id(&context_id) != 0)
         return (uint32_t)WASMOS_ERR_IRQ_NOT_AUTHORIZED;
     return (uint32_t)irq_ack(context_id, irq_line);
@@ -2299,6 +2313,8 @@ static uint32_t warp_irq_configure(uint32_t irq_line, uint32_t flags, void* ctx_
 static uint32_t warp_irq_unroute(uint32_t irq_line, void* ctx_) {
     (void)ctx_;
     uint32_t context_id = 0;
+    if (!warp_irq_line_valid(irq_line))
+        return (uint32_t)WASMOS_ERR_IRQ_BAD_LINE;
     if (warp_current_context_id(&context_id) != 0 || warp_require_irq_capability(context_id) != 0)
         return (uint32_t)WASMOS_ERR_IRQ_NOT_AUTHORIZED;
     return (uint32_t)irq_unregister(context_id, irq_line);

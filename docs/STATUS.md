@@ -411,10 +411,20 @@ linked feature documents for rationale and rollout plans.
   been small; `hostcall_value_counter` keeps a monotonic counter positive and
   wrapping at 2^31 so deltas survive. Applied to `block_buffer_phys`,
   `dma_map_borrow` and `sched_ticks` (which went negative at ~99.4 days of
-  uptime at 250 Hz). Two calls cannot be fixed by any encoding and carry FIXMEs
-  instead: `io_in32`, whose 32-bit port read uses the whole range, and
-  `thread_join`, which returns an arbitrary guest exit status. Both need an
-  out-parameter, as `io_region_in32` already has.
+  uptime at 250 Hz). Where no encoding can help, the call takes an out-parameter
+  instead, as `io_region_in32` always had. The whole `io_in8`/`io_in16`/`io_in32`
+  family now has that shape: `in32` because a 32-bit port read uses the full
+  range, `in8` and `in16` because although a byte or a word cannot collide with a
+  negative code, no caller read the sign -- each masked it off, so
+  `io.NOT_AUTHORIZED` arrived as the `0xFF`/`0xFFFF` an absent device reads back
+  and a denied capability was indistinguishable from missing hardware. The width
+  of a value is therefore not the whole test; whether the caller can act on the
+  distinction is. `thread_join` is the one call still in that state, returning an
+  arbitrary guest exit status, and carries a FIXME in both runtimes.
+- The native driver API (`wasmos_native_driver.h`, ABI 13) had the same defect on
+  its own surface and was converted with it: `io_in8`/`io_in16` report the value
+  through `out`, and `io_out8`/`io_out16` report an outcome rather than dropping
+  a refused write silently.
 - Three kernel components were extracted during the migration because the two
   runtimes had each written the logic out by hand and the copies had drifted:
   `block_buffer.c` (bounds arithmetic for the block bounce buffer),

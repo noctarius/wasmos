@@ -263,26 +263,29 @@ func IoIn16(a0 int32, a1 int32) int32
 func IoIn32(a0 int32, a1 int32) int32
 
 // Write byte `val` to x86 I/O port `port` (0..0xFFFF). Returns 0 on success,
-// (uint32_t)-1 if the port is out of range or the caller lacks access. Requires
+// WASMOS_ERR_IO_BAD_PORT if `port` is out of range or `val` does not fit in a
+// byte, or WASMOS_ERR_IO_NOT_AUTHORIZED if the caller has no context or lacks
 // the io.port capability for that port.
 //go:wasmimport wasmos io_out8
 func IoOut8(a0 int32, a1 int32) int32
 
 // Write 16-bit word `val` to x86 I/O port `port` (0..0xFFFF). Returns 0 on
-// success, (uint32_t)-1 if the port is out of range or the caller lacks access.
-// Requires the io.port capability for that port.
+// success, WASMOS_ERR_IO_BAD_PORT if `port` is out of range or `val` does not
+// fit in a word, or WASMOS_ERR_IO_NOT_AUTHORIZED if the caller has no context
+// or lacks the io.port capability for that port.
 //go:wasmimport wasmos io_out16
 func IoOut16(a0 int32, a1 int32) int32
 
 // Write 32-bit dword `val` to x86 I/O port `port` (0..0xFFFF). Returns 0 on
-// success, (uint32_t)-1 if the port is out of range or the caller lacks access.
-// Requires the io.port capability for that port.
+// success, WASMOS_ERR_IO_BAD_PORT if `port` is out of range, or
+// WASMOS_ERR_IO_NOT_AUTHORIZED if the caller has no context or lacks the
+// io.port capability for that port.
 //go:wasmimport wasmos io_out32
 func IoOut32(a0 int32, a1 int32) int32
 
 // Issue a short I/O-port delay (a dummy write to port 0x80). Returns 0 on
-// success, (uint32_t)-1 if the caller lacks access. Requires the io.port
-// capability (checked against port 0x80).
+// success, or WASMOS_ERR_IO_NOT_AUTHORIZED if the caller has no context or
+// lacks the io.port capability for port 0x80.
 //go:wasmimport wasmos io_wait
 func IoWait() int32
 
@@ -552,20 +555,25 @@ func ShmemUnmap(a0 int32) int32
 
 // Route hardware IRQ line `irq_line` so its interrupts are delivered as IPC to
 // `endpoint` for the calling context. Returns the registration result (0 on
-// success), or (uint32_t)-1 if the caller lacks the IRQ capability or has no
-// context. Requires the irq.route capability.
+// success), WASMOS_ERR_IRQ_BAD_LINE if `irq_line` is negative,
+// WASMOS_ERR_IRQ_BAD_ENDPOINT if `endpoint` is negative, or
+// WASMOS_ERR_IRQ_NOT_AUTHORIZED if the caller has no context or lacks the
+// irq.route capability.
 //go:wasmimport wasmos irq_route_ipc
 func IrqRouteIpc(a0 int32, a1 int32) int32
 
 // Acknowledge/re-arm IRQ line `irq_line` for the calling context after handling
-// a delivered interrupt. Returns the ack result, or (uint32_t)-1 if the caller
-// has no context. No capability is enforced.
+// a delivered interrupt. Returns the ack result, WASMOS_ERR_IRQ_BAD_LINE if
+// `irq_line` is negative, or WASMOS_ERR_IRQ_NOT_AUTHORIZED if the caller has no
+// context. No capability is enforced: acking is only meaningful for a line the
+// caller was already routed.
 //go:wasmimport wasmos irq_ack
 func IrqAck(a0 int32) int32
 
 // Remove the calling context's routing of IRQ line `irq_line`. Returns the
-// unregister result, or (uint32_t)-1 if the caller lacks the IRQ capability or
-// has no context. Requires the irq.route capability.
+// unregister result, WASMOS_ERR_IRQ_BAD_LINE if `irq_line` is negative, or
+// WASMOS_ERR_IRQ_NOT_AUTHORIZED if the caller has no context or lacks the
+// irq.route capability.
 //go:wasmimport wasmos irq_unroute
 func IrqUnroute(a0 int32) int32
 

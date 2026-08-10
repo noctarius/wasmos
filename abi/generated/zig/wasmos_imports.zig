@@ -177,20 +177,23 @@ pub extern "wasmos" fn io_in16(a0: i32, a1: i32) callconv(.c) i32;
 /// which check refused it. Requires the io.port capability for that port.
 pub extern "wasmos" fn io_in32(a0: i32, a1: i32) callconv(.c) i32;
 /// Write byte `val` to x86 I/O port `port` (0..0xFFFF). Returns 0 on success,
-/// (uint32_t)-1 if the port is out of range or the caller lacks access. Requires
+/// WASMOS_ERR_IO_BAD_PORT if `port` is out of range or `val` does not fit in a
+/// byte, or WASMOS_ERR_IO_NOT_AUTHORIZED if the caller has no context or lacks
 /// the io.port capability for that port.
 pub extern "wasmos" fn io_out8(a0: i32, a1: i32) callconv(.c) i32;
 /// Write 16-bit word `val` to x86 I/O port `port` (0..0xFFFF). Returns 0 on
-/// success, (uint32_t)-1 if the port is out of range or the caller lacks access.
-/// Requires the io.port capability for that port.
+/// success, WASMOS_ERR_IO_BAD_PORT if `port` is out of range or `val` does not
+/// fit in a word, or WASMOS_ERR_IO_NOT_AUTHORIZED if the caller has no context
+/// or lacks the io.port capability for that port.
 pub extern "wasmos" fn io_out16(a0: i32, a1: i32) callconv(.c) i32;
 /// Write 32-bit dword `val` to x86 I/O port `port` (0..0xFFFF). Returns 0 on
-/// success, (uint32_t)-1 if the port is out of range or the caller lacks access.
-/// Requires the io.port capability for that port.
+/// success, WASMOS_ERR_IO_BAD_PORT if `port` is out of range, or
+/// WASMOS_ERR_IO_NOT_AUTHORIZED if the caller has no context or lacks the
+/// io.port capability for that port.
 pub extern "wasmos" fn io_out32(a0: i32, a1: i32) callconv(.c) i32;
 /// Issue a short I/O-port delay (a dummy write to port 0x80). Returns 0 on
-/// success, (uint32_t)-1 if the caller lacks access. Requires the io.port
-/// capability (checked against port 0x80).
+/// success, or WASMOS_ERR_IO_NOT_AUTHORIZED if the caller has no context or
+/// lacks the io.port capability for port 0x80.
 pub extern "wasmos" fn io_wait() callconv(.c) i32;
 /// Copy the ACPI RSDP blob into guest memory at out_off (bounded by max_len) and
 /// store its byte length at out_len_off. Returns 0 on success, (uint32_t)-1 if no
@@ -376,16 +379,21 @@ pub extern "wasmos" fn shmem_refresh(a0: i32, a1: i32, a2: i32) callconv(.c) i32
 pub extern "wasmos" fn shmem_unmap(a0: i32) callconv(.c) i32;
 /// Route hardware IRQ line `irq_line` so its interrupts are delivered as IPC to
 /// `endpoint` for the calling context. Returns the registration result (0 on
-/// success), or (uint32_t)-1 if the caller lacks the IRQ capability or has no
-/// context. Requires the irq.route capability.
+/// success), WASMOS_ERR_IRQ_BAD_LINE if `irq_line` is negative,
+/// WASMOS_ERR_IRQ_BAD_ENDPOINT if `endpoint` is negative, or
+/// WASMOS_ERR_IRQ_NOT_AUTHORIZED if the caller has no context or lacks the
+/// irq.route capability.
 pub extern "wasmos" fn irq_route_ipc(a0: i32, a1: i32) callconv(.c) i32;
 /// Acknowledge/re-arm IRQ line `irq_line` for the calling context after handling
-/// a delivered interrupt. Returns the ack result, or (uint32_t)-1 if the caller
-/// has no context. No capability is enforced.
+/// a delivered interrupt. Returns the ack result, WASMOS_ERR_IRQ_BAD_LINE if
+/// `irq_line` is negative, or WASMOS_ERR_IRQ_NOT_AUTHORIZED if the caller has no
+/// context. No capability is enforced: acking is only meaningful for a line the
+/// caller was already routed.
 pub extern "wasmos" fn irq_ack(a0: i32) callconv(.c) i32;
 /// Remove the calling context's routing of IRQ line `irq_line`. Returns the
-/// unregister result, or (uint32_t)-1 if the caller lacks the IRQ capability or
-/// has no context. Requires the irq.route capability.
+/// unregister result, WASMOS_ERR_IRQ_BAD_LINE if `irq_line` is negative, or
+/// WASMOS_ERR_IRQ_NOT_AUTHORIZED if the caller has no context or lacks the
+/// irq.route capability.
 pub extern "wasmos" fn irq_unroute(a0: i32) callconv(.c) i32;
 /// Register the context that owns `endpoint` as the remote serial backend driver
 /// (resetting remote serial state); returns 0 on success, -1 if `endpoint` is

@@ -218,23 +218,26 @@ extern int32_t wasmos_io_in16(int32_t port, uint16_t* out) WASMOS_WASM_IMPORT("w
  */
 extern int32_t wasmos_io_in32(int32_t port, uint32_t* out) WASMOS_WASM_IMPORT("wasmos", "io_in32");
 /* Write byte `val` to x86 I/O port `port` (0..0xFFFF). Returns 0 on success,
- * (uint32_t)-1 if the port is out of range or the caller lacks access. Requires
+ * WASMOS_ERR_IO_BAD_PORT if `port` is out of range or `val` does not fit in a
+ * byte, or WASMOS_ERR_IO_NOT_AUTHORIZED if the caller has no context or lacks
  * the io.port capability for that port.
  */
 extern int32_t wasmos_io_out8(int32_t port, int32_t val) WASMOS_WASM_IMPORT("wasmos", "io_out8");
 /* Write 16-bit word `val` to x86 I/O port `port` (0..0xFFFF). Returns 0 on
- * success, (uint32_t)-1 if the port is out of range or the caller lacks access.
- * Requires the io.port capability for that port.
+ * success, WASMOS_ERR_IO_BAD_PORT if `port` is out of range or `val` does not
+ * fit in a word, or WASMOS_ERR_IO_NOT_AUTHORIZED if the caller has no context
+ * or lacks the io.port capability for that port.
  */
 extern int32_t wasmos_io_out16(int32_t port, int32_t val) WASMOS_WASM_IMPORT("wasmos", "io_out16");
 /* Write 32-bit dword `val` to x86 I/O port `port` (0..0xFFFF). Returns 0 on
- * success, (uint32_t)-1 if the port is out of range or the caller lacks access.
- * Requires the io.port capability for that port.
+ * success, WASMOS_ERR_IO_BAD_PORT if `port` is out of range, or
+ * WASMOS_ERR_IO_NOT_AUTHORIZED if the caller has no context or lacks the
+ * io.port capability for that port.
  */
 extern int32_t wasmos_io_out32(int32_t port, int32_t val) WASMOS_WASM_IMPORT("wasmos", "io_out32");
 /* Issue a short I/O-port delay (a dummy write to port 0x80). Returns 0 on
- * success, (uint32_t)-1 if the caller lacks access. Requires the io.port
- * capability (checked against port 0x80).
+ * success, or WASMOS_ERR_IO_NOT_AUTHORIZED if the caller has no context or
+ * lacks the io.port capability for port 0x80.
  */
 extern int32_t wasmos_io_wait(void) WASMOS_WASM_IMPORT("wasmos", "io_wait");
 /* Copy the ACPI RSDP blob into guest memory at out_off (bounded by max_len) and
@@ -458,18 +461,23 @@ extern int32_t wasmos_shmem_refresh(int32_t id, int32_t wasm_off, int32_t size) 
 extern int32_t wasmos_shmem_unmap(int32_t id) WASMOS_WASM_IMPORT("wasmos", "shmem_unmap");
 /* Route hardware IRQ line `irq_line` so its interrupts are delivered as IPC to
  * `endpoint` for the calling context. Returns the registration result (0 on
- * success), or (uint32_t)-1 if the caller lacks the IRQ capability or has no
- * context. Requires the irq.route capability.
+ * success), WASMOS_ERR_IRQ_BAD_LINE if `irq_line` is negative,
+ * WASMOS_ERR_IRQ_BAD_ENDPOINT if `endpoint` is negative, or
+ * WASMOS_ERR_IRQ_NOT_AUTHORIZED if the caller has no context or lacks the
+ * irq.route capability.
  */
 extern int32_t wasmos_irq_route_ipc(int32_t irq_line, int32_t endpoint) WASMOS_WASM_IMPORT("wasmos", "irq_route_ipc");
 /* Acknowledge/re-arm IRQ line `irq_line` for the calling context after handling
- * a delivered interrupt. Returns the ack result, or (uint32_t)-1 if the caller
- * has no context. No capability is enforced.
+ * a delivered interrupt. Returns the ack result, WASMOS_ERR_IRQ_BAD_LINE if
+ * `irq_line` is negative, or WASMOS_ERR_IRQ_NOT_AUTHORIZED if the caller has no
+ * context. No capability is enforced: acking is only meaningful for a line the
+ * caller was already routed.
  */
 extern int32_t wasmos_irq_ack(int32_t irq_line) WASMOS_WASM_IMPORT("wasmos", "irq_ack");
 /* Remove the calling context's routing of IRQ line `irq_line`. Returns the
- * unregister result, or (uint32_t)-1 if the caller lacks the IRQ capability or
- * has no context. Requires the irq.route capability.
+ * unregister result, WASMOS_ERR_IRQ_BAD_LINE if `irq_line` is negative, or
+ * WASMOS_ERR_IRQ_NOT_AUTHORIZED if the caller has no context or lacks the
+ * irq.route capability.
  */
 extern int32_t wasmos_irq_unroute(int32_t irq_line) WASMOS_WASM_IMPORT("wasmos", "irq_unroute");
 /* Register the context that owns `endpoint` as the remote serial backend driver

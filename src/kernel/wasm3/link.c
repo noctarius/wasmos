@@ -3,6 +3,7 @@
 #include "klog.h"
 #include "block_buffer.h"
 #include "hostcall_value.h"
+#include "kenv.h"
 #include "ipc.h"
 #include "io.h"
 #include "physmem.h"
@@ -78,27 +79,6 @@ static wasm_shmem_linear_map_t g_wasm_shmem_maps[WASM_SHMEM_MAP_SLOTS];
 #define WASM_DMA_REGION_MAP_SLOTS (PROCESS_MAX_COUNT * 16)
 static wasm_dma_region_map_t g_wasm_dma_region_maps[WASM_DMA_REGION_MAP_SLOTS];
 static const boot_info_t* g_wasm_boot_info;
-
-#define KENV_MAX_ENTRIES 64
-#define KENV_KEY_MAX 33
-#define KENV_VAL_MAX 129
-
-typedef struct {
-    uint8_t in_use;
-    char key[KENV_KEY_MAX];
-    char value[KENV_VAL_MAX];
-} kenv_entry_t;
-
-static kenv_entry_t g_kenv[KENV_MAX_ENTRIES];
-
-static int kenv_find(const char* key) {
-    for (int i = 0; i < KENV_MAX_ENTRIES; i++) {
-        if (g_kenv[i].in_use && strcmp(g_kenv[i].key, key) == 0) {
-            return i;
-        }
-    }
-    return -1;
-}
 
 static int wasm_arg_u32_nonneg(int32_t raw, uint32_t* out) {
     if (!out || raw < 0) {
@@ -1544,13 +1524,13 @@ m3ApiRawFunction(wasmos_env_get) {
         m3ApiGetArgMem(char*, buf_ptr) m3ApiGetArg(int32_t, buf_len)
 
             if (name_len <= 0 || buf_len <= 0) {
-        m3ApiReturn(-1);
+        m3ApiReturn(WASMOS_INVAL);
     }
     m3ApiCheckMem(name_ptr, (uint32_t)name_len);
     m3ApiCheckMem(buf_ptr, (uint32_t)buf_len);
     process_t* proc = process_get(process_current_pid());
     if (!proc || proc->context_id == 0) {
-        m3ApiReturn(-1);
+        m3ApiReturn(WASMOS_ERR_KERNEL_NO_CALLER);
     }
     uint64_t name_user = 0;
     uint64_t buf_user = 0;
@@ -1564,35 +1544,29 @@ m3ApiRawFunction(wasmos_env_get) {
                                    &buf_user) != 0 ||
         mm_user_range_permitted(proc->context_id, buf_user, (uint64_t)(uint32_t)buf_len,
                                 MEM_REGION_FLAG_WRITE) != 0) {
-        m3ApiReturn(-1);
+        m3ApiReturn(WASMOS_ERR_KERNEL_BAD_POINTER);
+    }
+    /* Refused rather than truncated: see kenv_get. */
+    if ((uint32_t)name_len >= KENV_KEY_MAX) {
+        m3ApiReturn(WASMOS_ERR_ENV_TOO_LONG);
     }
     char local_name[KENV_KEY_MAX];
-    uint32_t copy_len = (uint32_t)name_len;
-    if (copy_len >= KENV_KEY_MAX) {
-        copy_len = KENV_KEY_MAX - 1u;
+    if (mm_copy_from_user(proc->context_id, local_name, name_user, (uint64_t)(uint32_t)name_len) !=
+        0) {
+        m3ApiReturn(WASMOS_ERR_KERNEL_COPY_FAILED);
     }
-    if (mm_copy_from_user(proc->context_id, local_name, name_user, (uint64_t)copy_len) != 0) {
-        m3ApiReturn(-1);
+    local_name[(uint32_t)name_len] = '\0';
+
+    char local_val[KENV_VAL_MAX];
+    uint32_t out_size = (uint32_t)buf_len < KENV_VAL_MAX ? (uint32_t)buf_len : KENV_VAL_MAX;
+    uint32_t write_len = 0;
+    wasmos_error_code_t rc = kenv_get(local_name, local_val, out_size, &write_len);
+    if (rc != WASMOS_OK) {
+        m3ApiReturn(rc);
     }
-    local_name[copy_len] = '\0';
-    int idx = kenv_find(local_name);
-    if (idx < 0) {
-        m3ApiReturn(-1);
-    }
-    uint32_t val_len = 0;
-    while (g_kenv[idx].value[val_len]) {
-        val_len++;
-    }
-    uint32_t write_len = val_len;
-    if (write_len >= (uint32_t)buf_len) {
-        write_len = (uint32_t)buf_len - 1u;
-    }
-    if (wasm_copy_to_user_bytes(proc->context_id, buf_user, g_kenv[idx].value, write_len) != 0) {
-        m3ApiReturn(-1);
-    }
-    char nul = '\0';
-    if (wasm_copy_to_user_bytes(proc->context_id, buf_user + (uint64_t)write_len, &nul, 1) != 0) {
-        m3ApiReturn(-1);
+    /* write_len + 1 for the NUL, which kenv_get has already placed. */
+    if (wasm_copy_to_user_bytes(proc->context_id, buf_user, local_val, write_len + 1u) != 0) {
+        m3ApiReturn(WASMOS_ERR_KERNEL_COPY_FAILED);
     }
     m3ApiReturn((int32_t)write_len);
 }
@@ -1602,10 +1576,10 @@ m3ApiRawFunction(wasmos_env_set) {
         m3ApiGetArgMem(const char*, val_ptr) m3ApiGetArg(int32_t, val_len)
 
             if (name_len <= 0 || val_len < 0) {
-        m3ApiReturn(-1);
+        m3ApiReturn(WASMOS_INVAL);
     }
-    if (name_len >= KENV_KEY_MAX || val_len >= KENV_VAL_MAX) {
-        m3ApiReturn(-1);
+    if ((uint32_t)name_len >= KENV_KEY_MAX || (uint32_t)val_len >= KENV_VAL_MAX) {
+        m3ApiReturn(WASMOS_ERR_ENV_TOO_LONG);
     }
     m3ApiCheckMem(name_ptr, (uint32_t)name_len);
     if (val_len > 0) {
@@ -1613,7 +1587,7 @@ m3ApiRawFunction(wasmos_env_set) {
     }
     process_t* proc = process_get(process_current_pid());
     if (!proc || proc->context_id == 0) {
-        m3ApiReturn(-1);
+        m3ApiReturn(WASMOS_ERR_KERNEL_NO_CALLER);
     }
     uint64_t name_user = 0;
     if (wasm_user_va_from_host_ptr(proc->context_id, (const uint8_t*)_mem,
@@ -1621,12 +1595,12 @@ m3ApiRawFunction(wasmos_env_set) {
                                    (uint32_t)name_len, &name_user) != 0 ||
         mm_user_range_permitted(proc->context_id, name_user, (uint64_t)(uint32_t)name_len,
                                 MEM_REGION_FLAG_READ) != 0) {
-        m3ApiReturn(-1);
+        m3ApiReturn(WASMOS_ERR_KERNEL_BAD_POINTER);
     }
     char local_name[KENV_KEY_MAX];
     if (mm_copy_from_user(proc->context_id, local_name, name_user, (uint64_t)(uint32_t)name_len) !=
         0) {
-        m3ApiReturn(-1);
+        m3ApiReturn(WASMOS_ERR_KERNEL_COPY_FAILED);
     }
     local_name[name_len] = '\0';
     char local_val[KENV_VAL_MAX];
@@ -1638,30 +1612,15 @@ m3ApiRawFunction(wasmos_env_set) {
                                        (uint32_t)val_len, &val_user) != 0 ||
             mm_user_range_permitted(proc->context_id, val_user, (uint64_t)(uint32_t)val_len,
                                     MEM_REGION_FLAG_READ) != 0) {
-            m3ApiReturn(-1);
+            m3ApiReturn(WASMOS_ERR_KERNEL_BAD_POINTER);
         }
         if (mm_copy_from_user(proc->context_id, local_val, val_user, (uint64_t)(uint32_t)val_len) !=
             0) {
-            m3ApiReturn(-1);
+            m3ApiReturn(WASMOS_ERR_KERNEL_COPY_FAILED);
         }
         local_val[val_len] = '\0';
     }
-    int idx = kenv_find(local_name);
-    if (idx < 0) {
-        for (int i = 0; i < KENV_MAX_ENTRIES; i++) {
-            if (!g_kenv[i].in_use) {
-                idx = i;
-                break;
-            }
-        }
-        if (idx < 0) {
-            m3ApiReturn(-1);
-        }
-        g_kenv[idx].in_use = 1;
-        memcpy(g_kenv[idx].key, local_name, (uint32_t)name_len + 1u);
-    }
-    memcpy(g_kenv[idx].value, local_val, (uint32_t)val_len + 1u);
-    m3ApiReturn(0);
+    m3ApiReturn(kenv_set(local_name, local_val));
 }
 
 m3ApiRawFunction(wasmos_env_unset) {
@@ -1689,11 +1648,7 @@ m3ApiRawFunction(wasmos_env_unset) {
         m3ApiReturn(0);
     }
     local_name[name_len] = '\0';
-    int idx = kenv_find(local_name);
-    if (idx >= 0) {
-        g_kenv[idx].in_use = 0;
-    }
-    m3ApiReturn(0);
+    m3ApiReturn(kenv_unset(local_name));
 }
 
 /* Region-addressed I/O. The driver supplies (region, offset), never an absolute

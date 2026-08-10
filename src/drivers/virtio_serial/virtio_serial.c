@@ -37,7 +37,9 @@ static uint32_t pci_config_read32(uint8_t bus, uint8_t slot, uint8_t function, u
     uint32_t address = 0x80000000u | ((uint32_t)bus << 16) | ((uint32_t)slot << 11) |
                        ((uint32_t)function << 8) | ((uint32_t)reg & 0xFCu);
     (void)wasmos_io_out32(PCI_CFG_ADDR_PORT, (int32_t)address);
-    return (uint32_t)wasmos_io_in32(PCI_CFG_DATA_PORT);
+    uint32_t value = 0xFFFFFFFFu; /* an absent device reads back all-ones */
+    (void)wasmos_io_in32(PCI_CFG_DATA_PORT, &value);
+    return value;
 }
 
 static int is_virtio_serial_device(uint16_t vendor_id, uint16_t device_id) {
@@ -119,8 +121,8 @@ static void handle_read_reg32(int32_t source, int32_t request_id, int32_t offset
         send_error(source, request_id, -22);
         return;
     }
-    uint32_t value =
-        (uint32_t)wasmos_io_in32((int32_t)((uint32_t)g_dev.io_base + (uint32_t)offset));
+    uint32_t value = 0;
+    (void)wasmos_io_in32((int32_t)((uint32_t)g_dev.io_base + (uint32_t)offset), &value);
     (void)wasmos_ipc_send(source, g_endpoint, VIRTIO_SERIAL_IPC_RESP, request_id, 0, (int32_t)value,
                           offset, 0);
 }

@@ -1751,8 +1751,14 @@ m3ApiRawFunction(wasmos_io_in16) {
  * legitimately reading back 0xFFFFFFFF is indistinguishable from an error code,
  * and naming the codes does not fix that -- only an out-parameter would. in8 and
  * in16 are unaffected, since their results cannot reach the negative range. */
+/* The value comes back through `out`: a 32-bit port read uses the whole range,
+ * and 0xFFFFFFFF -- what an absent device reads back -- would otherwise be
+ * indistinguishable from an error code. in8/in16 keep returning their value,
+ * since 0..255 and 0..65535 cannot collide with a negative code. */
 m3ApiRawFunction(wasmos_io_in32) {
-    m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, port) uint32_t context_id = 0;
+    m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, port) m3ApiGetArgMem(uint32_t*, out)
+        m3ApiCheckMem(out, sizeof(uint32_t));
+    uint32_t context_id = 0;
     if (port < 0 || port > 0xFFFF) {
         m3ApiReturn(WASMOS_ERR_IO_BAD_PORT);
     }
@@ -1760,14 +1766,8 @@ m3ApiRawFunction(wasmos_io_in32) {
         require_io_capability(context_id, (uint16_t)port) != 0) {
         m3ApiReturn(WASMOS_ERR_IO_NOT_AUTHORIZED);
     }
-    /* FIXME: a 32-bit port read cannot report failure in its return value. A
-     * device legitimately reading back 0xFFFFFFFF is indistinguishable from an
-     * error code. Fixing it means an out-parameter, which changes the hostcall
-     * signature and every caller; io_region_in32 already has that shape. Tried
-     * and reverted: the converted module fails WARP AOT compilation with
-     * "Imported symbol could not be found" for virtio_net alone, unexplained.
-     * in8/in16 are unaffected -- their results cannot reach the negative range. */
-    m3ApiReturn((int32_t)inl((uint16_t)port));
+    *out = (uint32_t)inl((uint16_t)port);
+    m3ApiReturn(0);
 }
 
 m3ApiRawFunction(wasmos_io_out8) {

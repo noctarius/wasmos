@@ -89,7 +89,7 @@ static inline uint32_t warp_ring3_dispatch_table(uint32_t hc_id, uint64_t a0,
     case HC_IO_IN16:
         return warp_io_in16((uint32_t)a0, reinterpret_cast<void*>(a1));
     case HC_IO_IN32:
-        return warp_io_in32((uint32_t)a0, reinterpret_cast<void*>(a1));
+        return warp_io_in32((uint32_t)a0, (uint32_t)a1, reinterpret_cast<void*>(a2));
     case HC_IO_OUT8:
         return warp_io_out8((uint32_t)a0, (uint32_t)a1, reinterpret_cast<void*>(a2));
     case HC_IO_OUT16:

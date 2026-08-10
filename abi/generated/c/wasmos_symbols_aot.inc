@@ -46,7 +46,7 @@
     LINK("wasmos", "block_buffer_write", stub_i4) , \
     LINK("wasmos", "io_in8", stub_i1) , \
     LINK("wasmos", "io_in16", stub_i1) , \
-    LINK("wasmos", "io_in32", stub_i1) , \
+    LINK("wasmos", "io_in32", stub_i2) , \
     LINK("wasmos", "io_out8", stub_i2) , \
     LINK("wasmos", "io_out16", stub_i2) , \
     LINK("wasmos", "io_out32", stub_i2) , \

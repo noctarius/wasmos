@@ -149,10 +149,22 @@ unsafe extern "C" {
     /// value, or (uint32_t)-1 if the port is out of range or the caller lacks access.
     /// Requires the io.port capability for that port.
     pub fn io_in16(a0: i32) -> i32;
-    /// Read a 32-bit dword from x86 I/O port `port` (0..0xFFFF). Returns the dword
-    /// value, or (uint32_t)-1 if the port is out of range or the caller lacks access.
-    /// Requires the io.port capability for that port.
-    pub fn io_in32(a0: i32) -> i32;
+    /// Read a 32-bit dword from x86 I/O port `port` (0..0xFFFF) and store it at
+    /// `out`.
+    ///
+    /// The value comes back through `out` rather than as the result because a
+    /// 32-bit port read uses the whole range: a register legitimately reading
+    /// 0xFFFFFFFF -- which is what an absent device returns, so it is the common
+    /// case, not a corner one -- would be indistinguishable from a failure code on
+    /// a shared signed i32. io_region_in32 already has this shape.
+    ///
+    /// in8/in16 keep returning their value directly: 0..255 and 0..65535 cannot
+    /// reach the negative range, so there is nothing for an error code to collide
+    /// with.
+    ///
+    /// Returns 0 on success, otherwise a negative WASMOS_ERR_IO_* code naming
+    /// which check refused it. Requires the io.port capability for that port.
+    pub fn io_in32(a0: i32, a1: i32) -> i32;
     /// Write byte `val` to x86 I/O port `port` (0..0xFFFF). Returns 0 on success,
     /// (uint32_t)-1 if the port is out of range or the caller lacks access. Requires
     /// the io.port capability for that port.

@@ -150,7 +150,9 @@ static uint16_t io_read16(uint16_t port) {
 }
 
 static uint32_t io_read32(uint16_t port) {
-    return (uint32_t)wasmos_io_in32((int32_t)port);
+    uint32_t value = 0xFFFFFFFFu;
+    (void)wasmos_io_in32((int32_t)port, &value);
+    return value;
 }
 
 static void io_write8(uint16_t port, uint8_t value) {

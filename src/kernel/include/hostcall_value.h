@@ -21,10 +21,10 @@
  * introduced to stop. One named rule, then, rather than a comparison rewritten
  * per call site.
  *
- * io_in32 is the case neither function fixes: a 32-bit port read uses the full
- * range by definition, so no encoding of it on a signed i32 can be unambiguous.
- * That one needs an out-parameter, as io_region_in32 already has; see the FIXME
- * at its definition.
+ * Where a value genuinely uses the full 32-bit range neither function helps and
+ * the call needs an out-parameter instead, as io_region_in32 and (since the
+ * conversion) io_in32 both have. thread_join is the one left in that state: it
+ * returns a guest-chosen exit status, and carries a FIXME saying so.
  */
 
 /*

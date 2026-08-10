@@ -791,8 +791,10 @@ static uint32_t warp_io_in16(uint32_t port, void* ctx_) {
     }
     return (uint32_t)inw((uint16_t)port);
 }
-static uint32_t warp_io_in32(uint32_t port, void* ctx_) {
-    (void)ctx_;
+/* See the wasm3 shim: the value comes back through `out` because a 32-bit port
+ * read uses the whole range and 0xFFFFFFFF is a legitimate result. */
+static uint32_t warp_io_in32(uint32_t port, uint32_t out_off, void* ctx_) {
+    auto* ctx = warp_call_ctx(ctx_);
     uint32_t context_id = 0;
     /* Split from the capability check so a guest gets the same code here
      * as from wasm3: an out-of-range port is BAD_PORT, not "not authorized". */
@@ -803,8 +805,12 @@ static uint32_t warp_io_in32(uint32_t port, void* ctx_) {
         warp_require_io_capability(context_id, (uint16_t)port) != 0) {
         return (uint32_t)WASMOS_ERR_IO_NOT_AUTHORIZED;
     }
-    /* See the wasm3 shim's FIXME: 0xFFFFFFFF is a legitimate read here. */
-    return (uint32_t)inl((uint16_t)port);
+    uint32_t* out = reinterpret_cast<uint32_t*>(warp_mem(ctx, out_off, sizeof(uint32_t)));
+    if (!out) {
+        return (uint32_t)WASMOS_ERR_KERNEL_BAD_POINTER;
+    }
+    *out = (uint32_t)inl((uint16_t)port);
+    return 0;
 }
 
 static uint32_t warp_io_out8(uint32_t port, uint32_t val, void* ctx_) {

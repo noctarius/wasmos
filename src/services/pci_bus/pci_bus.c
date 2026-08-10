@@ -116,7 +116,9 @@ static uint32_t pci_config_read32(uint8_t bus, uint8_t device, uint8_t function,
     uint32_t address = 0x80000000u | ((uint32_t)bus << 16) | ((uint32_t)device << 11) |
                        ((uint32_t)function << 8) | ((uint32_t)reg & 0xFCu);
     (void)wasmos_io_out32(PCI_CFG_ADDR_PORT, (int32_t)address);
-    return (uint32_t)wasmos_io_in32(PCI_CFG_DATA_PORT);
+    uint32_t value = 0xFFFFFFFFu; /* an absent device reads back all-ones */
+    (void)wasmos_io_in32(PCI_CFG_DATA_PORT, &value);
+    return value;
 }
 
 static void pci_config_write32(uint8_t bus, uint8_t device, uint8_t function, uint8_t reg,

@@ -56,6 +56,26 @@ At boot the log also tells you: `[warp-driver] ... using AOT binary` ⇒ WARP; n
 AOT/`warp-driver` lines ⇒ wasm3. If a dir is not the runtime you expect, look for
 a stray `<repo>/.config` (it is local + gitignored) — that is usually the cause.
 
+The load-bearing marker is `[subsystem] register request=WASM runtime=WASM3|WARP`.
+Prefer it over the driver prefixes: it names the runtime the kernel actually
+registered, so it distinguishes a mis-configured tree from a correctly
+configured one that booted somebody else's kernel image.
+
+Do not trust the CMakeCache alone when the question is "what did I just boot?" —
+the cache describes what was CONFIGURED, and the ESP is what was BOOTED. Compare
+them directly when it matters:
+
+```sh
+nm <dir>/kernel.elf     | grep -c warp_   # the tree's own kernel
+nm <dir>/esp/kernel.elf | grep -c warp_   # what actually boots
+```
+Those two disagreeing means something staged the wrong image. It used to happen
+by default: the QEMU tests resolved the kernel as the literal `build/kernel.elf`
+and copied it over the ESP, so a suite run from any non-default tree silently
+booted `build/`'s kernel and passed. The targets now export `WASMOS_KERNEL`
+alongside `WASMOS_ESP` and the tests honour it, so a defconfig tree tests itself
+— but the two-`nm` check is still how you prove it.
+
 ## Run / test targets
 
 Host, no QEMU:

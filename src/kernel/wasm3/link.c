@@ -1747,10 +1747,6 @@ m3ApiRawFunction(wasmos_io_in16) {
     m3ApiReturn((int32_t)inw((uint16_t)port));
 }
 
-/* FIXME: a 32-bit port read cannot report failure in its return value. A device
- * legitimately reading back 0xFFFFFFFF is indistinguishable from an error code,
- * and naming the codes does not fix that -- only an out-parameter would. in8 and
- * in16 are unaffected, since their results cannot reach the negative range. */
 /* The value comes back through `out`: a 32-bit port read uses the whole range,
  * and 0xFFFFFFFF -- what an absent device reads back -- would otherwise be
  * indistinguishable from an error code. in8/in16 keep returning their value,

@@ -36,13 +36,23 @@ pub extern "wasmos" fn ipc_notify(a0: i32) callconv(.c) i32;
 /// range.
 pub extern "wasmos" fn ipc_last_field(a0: i32) callconv(.c) i32;
 /// Read a single byte from the serial console into guest memory at buf_offset
-/// (len is the buffer capacity, must be > 0). Returns 1 when a byte was stored, 0
-/// or a negative rc when no byte is available, and (uint32_t)-1 on invalid length
-/// or bad buffer offset.
+/// (len is the buffer capacity, must be > 0). Returns 1 when a byte was stored,
+/// 0 or a negative rc from the serial layer when no byte is available,
+/// WASMOS_INVAL if `len` is not positive, or WASMOS_ERR_KERNEL_BAD_POINTER if
+/// buf_offset is not a writable byte of the caller's linear memory.
+///
+/// A zero `len` is WASMOS_INVAL, not 0: a buffer with no room cannot receive a
+/// byte, and reporting "none available" for it would state a different fact and
+/// hide the caller's bug.
+///
+/// Under wasm3, WASMOS_ERR_KERNEL_NO_CALLER and WASMOS_ERR_KERNEL_COPY_FAILED
+/// are also possible; see the note at the top of this file.
 pub extern "wasmos" fn console_read(a0: i32, a1: i32) callconv(.c) i32;
 /// Write len bytes from guest memory at buf_offset to the kernel log, emitted in
-/// NUL-terminated 127-byte chunks. Returns 0 on success, (uint32_t)-1 on
-/// non-positive len or bad buffer offset.
+/// NUL-terminated 127-byte chunks. Returns 0 on success -- including for len==0,
+/// which is a no-op rather than a failure -- WASMOS_INVAL if `len` is negative,
+/// or WASMOS_ERR_KERNEL_BAD_POINTER if [buf_offset, buf_offset+len) is not a
+/// readable range of the caller's linear memory.
 pub extern "wasmos" fn console_write(a0: i32, a1: i32) callconv(.c) i32;
 /// Terminate the calling process with exit code `code`; records the exit status
 /// and yields as EXITED so the process is reaped. Does not return to the caller.
@@ -96,8 +106,8 @@ pub extern "wasmos" fn sys_select_destroy(a0: i32) callconv(.c) i32;  // alias o
 /// xfer_buffer_read/write and the size backing an acquired transfer buffer.
 pub extern "wasmos" fn xfer_buffer_size() callconv(.c) i32;
 /// Returns the IPC endpoint of the registered filesystem service as known to the
-/// process manager. Returns the endpoint id on success, or (uint32_t)-1 when no
-/// FS endpoint is registered (IPC_ENDPOINT_NONE).
+/// process manager. Returns the endpoint id on success, or WASMOS_NOENT when no
+/// FS service has registered yet (IPC_ENDPOINT_NONE).
 pub extern "wasmos" fn fs_endpoint() callconv(.c) i32;
 /// Copies `len` bytes from transfer buffer `buffer_id` starting at `offset` into
 /// the caller's WASM linear memory at `ptr_off`; requires the caller (owner or
@@ -125,17 +135,46 @@ pub extern "wasmos" fn buffer_release(a0: i32, a1: i32) callconv(.c) i32;
 /// Returns the physical address of the calling process's per-process 8 KiB
 /// (2-page) block buffer, allocating it below 512 MiB on first use (kernel
 /// higher-half identity window and 32-bit ATA DMA range). Returns the u32
-/// physical address on success, or (uint32_t)-1 on failure.
+/// physical address on success, WASMOS_ERR_BLOCK_NO_SLOT if the calling process
+/// has no block slot, WASMOS_ERR_BLOCK_NO_BACKING if the backing pages could not
+/// be allocated, or WASMOS_ERR_BLOCK_ABOVE_4G if the allocated address is zero
+/// or at/above the limit the return value can express.
+///
+/// The address shares one signed i32 with the error codes, so it must keep bit
+/// 31 clear; block_buffer_check_phys asserts that rather than trusting the
+/// allocator's current pool to stay below the limit.
 pub extern "wasmos" fn block_buffer_phys() callconv(.c) i32;
 /// Copies `len` bytes out of the block buffer identified by physical address
 /// `phys` starting at `offset` into the caller's WASM linear memory at `ptr_off`.
-/// Returns 0 on success, or (uint32_t)-1 if the slot is unknown, the range
-/// exceeds the 8 KiB buffer, or `ptr_off`/`len` is out of linear-memory bounds.
+/// Returns 0 on success, WASMOS_ERR_BLOCK_NO_SLOT if `phys` names no live block
+/// buffer, WASMOS_ERR_BLOCK_RANGE if [`offset`, `offset`+`len`) leaves the 8 KiB
+/// buffer, or WASMOS_ERR_KERNEL_BAD_POINTER if [`ptr_off`, `ptr_off`+`len`) is
+/// not a writable range of the caller's linear memory.
+///
+/// A negative `len` or `offset` arrives zero-extended as a large positive
+/// value, which the range check refuses; the check is 64-bit for that reason,
+/// since the sum wraps in 32.
+///
+/// Under wasm3 two further codes are possible, which WARP folds into
+/// BAD_POINTER: WASMOS_ERR_KERNEL_NO_CALLER when the calling process or its
+/// context cannot be resolved, and WASMOS_ERR_KERNEL_COPY_FAILED when the copy
+/// into user memory fails after the range was accepted.
 pub extern "wasmos" fn block_buffer_copy(a0: i32, a1: i32, a2: i32, a3: i32) callconv(.c) i32;
 /// Copies `len` bytes from the caller's WASM linear memory at `ptr_off` into the
 /// block buffer identified by physical address `phys` starting at `offset`.
-/// Returns 0 on success, or (uint32_t)-1 if the slot is unknown, the range
-/// exceeds the 8 KiB buffer, or `ptr_off`/`len` is out of linear-memory bounds.
+/// Returns 0 on success, WASMOS_ERR_BLOCK_NO_SLOT if `phys` names no live block
+/// buffer, WASMOS_ERR_BLOCK_RANGE if [`offset`, `offset`+`len`) leaves the 8 KiB
+/// buffer, or WASMOS_ERR_KERNEL_BAD_POINTER if [`ptr_off`, `ptr_off`+`len`) is
+/// not a readable range of the caller's linear memory.
+///
+/// A negative `len` or `offset` arrives zero-extended as a large positive
+/// value, which the range check refuses; the check is 64-bit for that reason,
+/// since the sum wraps in 32.
+///
+/// Under wasm3 two further codes are possible, which WARP folds into
+/// BAD_POINTER: WASMOS_ERR_KERNEL_NO_CALLER when the calling process or its
+/// context cannot be resolved, and WASMOS_ERR_KERNEL_COPY_FAILED when the copy
+/// out of user memory fails after the range was accepted.
 pub extern "wasmos" fn block_buffer_write(a0: i32, a1: i32, a2: i32, a3: i32) callconv(.c) i32;
 /// Read a byte from x86 I/O port `port` (0..0xFFFF) and store it at `out`.
 ///
@@ -196,13 +235,29 @@ pub extern "wasmos" fn io_out32(a0: i32, a1: i32) callconv(.c) i32;
 /// lacks the io.port capability for port 0x80.
 pub extern "wasmos" fn io_wait() callconv(.c) i32;
 /// Copy the ACPI RSDP blob into guest memory at out_off (bounded by max_len) and
-/// store its byte length at out_len_off. Returns 0 on success, (uint32_t)-1 if no
-/// RSDP is present, the blob exceeds max_len, or the buffer offsets are invalid.
+/// store its byte length at out_len_off. Returns 0 on success, WASMOS_INVAL if
+/// `max_len` is not positive, WASMOS_NOENT if no RSDP was handed over at boot,
+/// WASMOS_ERR_KERNEL_TOO_LARGE if the blob does not fit in `max_len`, or
+/// WASMOS_ERR_KERNEL_BAD_POINTER if either output range lies outside the
+/// caller's linear memory.
+///
+/// Under wasm3 two further codes are possible, which WARP folds into
+/// BAD_POINTER: WASMOS_ERR_KERNEL_NO_CALLER when the calling process or its
+/// context cannot be resolved, and WASMOS_ERR_KERNEL_COPY_FAILED when a copy
+/// into user memory fails after the range was accepted.
 pub extern "wasmos" fn acpi_rsdp_info(a0: i32, a1: i32, a2: i32) callconv(.c) i32;
 /// Copy the NUL-terminated name of boot module `index` into guest memory at
-/// out_off, truncated to out_len-1 bytes. Returns the written name length, or
-/// (uint32_t)-1 if there is no boot info, index is out of range, or the buffer
-/// offset is invalid.
+/// out_off, truncated to out_len-1 bytes. Returns the module's TRUE name length
+/// -- not the truncated one, so a caller can tell that its buffer was too small
+/// -- WASMOS_INVAL if `index` is negative or `out_len` is not positive,
+/// WASMOS_NOENT if there is no boot info or no module at `index`, or
+/// WASMOS_ERR_KERNEL_BAD_POINTER if the output range lies outside the caller's
+/// linear memory.
+///
+/// Under wasm3 two further codes are possible, which WARP folds into
+/// BAD_POINTER: WASMOS_ERR_KERNEL_NO_CALLER when the calling process or its
+/// context cannot be resolved, and WASMOS_ERR_KERNEL_COPY_FAILED when a copy
+/// into user memory fails after the range was accepted.
 pub extern "wasmos" fn boot_module_name(a0: i32, a1: i32, a2: i32) callconv(.c) i32;
 /// Touch `len` bytes of guest linear memory starting at `ptr_off` with volatile
 /// reads to fault them in / synchronize the mapping. Returns 0 (0 immediately if
@@ -244,20 +299,40 @@ pub extern "wasmos" fn kmap_dump() callconv(.c) i32;
 /// kernel log, verifying no low-half slots for ring-3 contexts. Returns 0 if all
 /// contexts pass, -1 if any fail. (WARP backend is a no-op stub returning 0.)
 pub extern "wasmos" fn kmap_dump_all() callconv(.c) i32;
-/// Return the number of entries in the boot initramfs (initfs). Returns the entry
-/// count, or (uint32_t)-1 if the initfs is absent or its header is invalid.
+/// Return the number of entries in the boot initramfs (initfs). Returns the
+/// entry count, WASMOS_ERR_FS_NO_IMAGE if the initfs is absent or its header is
+/// invalid, or WASMOS_ERR_KERNEL_TOO_LARGE if the count cannot be expressed on
+/// the signed i32 the value shares with the error codes.
 pub extern "wasmos" fn initfs_entry_count() callconv(.c) i32;
 /// Copy the NUL-terminated path of initfs entry `index` into guest memory at
-/// out_off, truncated to out_len-1 bytes. Returns the written name length, or
-/// (uint32_t)-1 if the entry does not exist or the buffer offset is invalid.
+/// out_off, truncated to out_len-1 bytes. Returns the entry's TRUE path length
+/// -- not the truncated one, so a caller can tell its buffer was too small --
+/// WASMOS_INVAL if `index` is negative or `out_len` is not positive,
+/// WASMOS_ERR_FS_NOT_FOUND if there is no entry at `index`, or
+/// WASMOS_ERR_KERNEL_BAD_POINTER if the output range lies outside the caller's
+/// linear memory.
+///
+/// Under wasm3, WASMOS_ERR_KERNEL_NO_CALLER and WASMOS_ERR_KERNEL_COPY_FAILED
+/// are also possible; see the note at the top of this file.
 pub extern "wasmos" fn initfs_entry_name(a0: i32, a1: i32, a2: i32) callconv(.c) i32;
-/// Return the byte size of initfs entry `index`. Returns the size, or
-/// (uint32_t)-1 if the entry does not exist.
+/// Return the byte size of initfs entry `index`. Returns the size,
+/// WASMOS_ERR_FS_NOT_FOUND if `index` is negative or names no entry, or
+/// WASMOS_ERR_KERNEL_TOO_LARGE if the size cannot be expressed on the signed i32
+/// the value shares with the error codes.
 pub extern "wasmos" fn initfs_entry_size(a0: i32) callconv(.c) i32;
 /// Copy up to len bytes of initfs entry `index` starting at byte `offset` into
 /// guest memory at out_off, clamping a trailing chunk to the remaining bytes.
-/// Returns the number of bytes copied (0 when offset is at or past end), or
-/// (uint32_t)-1 on invalid index/len/offset, missing entry, or bad buffer offset.
+/// Returns the number of bytes copied (0 when offset is at or past end),
+/// WASMOS_INVAL if `index` or `offset` is negative or `len` is not positive,
+/// WASMOS_ERR_FS_NOT_FOUND if there is no entry at `index`, or
+/// WASMOS_ERR_KERNEL_BAD_POINTER if the output range lies outside the caller's
+/// linear memory.
+///
+/// A short return is a clamp, not an error: a trailing chunk longer than the
+/// remaining bytes copies what is left and reports that count.
+///
+/// Under wasm3, WASMOS_ERR_KERNEL_NO_CALLER and WASMOS_ERR_KERNEL_COPY_FAILED
+/// are also possible; see the note at the top of this file.
 pub extern "wasmos" fn initfs_entry_copy(a0: i32, a1: i32, a2: i32, a3: i32) callconv(.c) i32;
 /// Maps a `length`-byte, `offset`-based range of the caller's borrowed buffer
 /// `borrow_id` for device DMA in direction `flags` (which must be non-zero and a
@@ -337,13 +412,15 @@ pub extern "wasmos" fn thread_detach(a0: i32) callconv(.c) i32;
 pub extern "wasmos" fn shmem_create(a0: i32, a1: i32) callconv(.c) i32;
 /// Grants the caller's shared-memory region `id` to the process `target_pid`
 /// (resolved to its context); gated by the caller's DMA capability. Returns the
-/// mm_shared_grant result (0 on success) or (uint32_t)-1 on bad arguments,
-/// missing capability/context, or an unknown target.
+/// mm_shared_grant result (0 on success), WASMOS_ERR_SHMEM_BAD_ID if `id` or
+/// `target_pid` is not positive, or WASMOS_ERR_SHMEM_NO_CAP if the caller has no
+/// context, lacks the DMA capability, or `target_pid` names no live process.
 pub extern "wasmos" fn shmem_grant(a0: i32, a1: i32) callconv(.c) i32;
 /// Revokes a prior grant of the caller's shared-memory region `id` from process
 /// `target_pid`; gated by the caller's DMA capability. Returns the
-/// mm_shared_revoke result (0 on success) or (uint32_t)-1 on bad arguments,
-/// missing capability/context, or an unknown target.
+/// mm_shared_revoke result (0 on success), WASMOS_ERR_SHMEM_BAD_ID if `id` or
+/// `target_pid` is not positive, or WASMOS_ERR_SHMEM_NO_CAP if the caller has no
+/// context, lacks the DMA capability, or `target_pid` names no live process.
 pub extern "wasmos" fn shmem_revoke(a0: i32, a1: i32) callconv(.c) i32;
 /// On success wasmos_shmem_map/_auto return the mapped guest offset (>= 0).  On
 /// failure they return a negative SHMEM_ERR_* reason code (see
@@ -360,22 +437,36 @@ pub extern "wasmos" fn shmem_map_auto(a0: i32, a1: i32) callconv(.c) i32;
 /// Pushes `size` bytes from the caller's WASM linear memory at `wasm_off` into
 /// the backing physical pages of shared-memory region `id` (local-to-shared
 /// copy); gated by the caller's DMA capability and bounded by the region size.
-/// Returns 0 on success, or (uint32_t)-1 on bad arguments, missing
-/// capability/context, unknown/unbacked id, oversize, or an out-of-bounds linear
-/// window.
+/// Returns 0 on success, WASMOS_ERR_SHMEM_BAD_ARGS if `id`, `size` or
+/// `wasm_off` is negative or non-positive, WASMOS_ERR_SHMEM_NO_CAP if the caller
+/// has no context or lacks the DMA capability, WASMOS_ERR_SHMEM_BAD_ID if `id`
+/// names no region of the caller's or the region has no backing pages,
+/// WASMOS_ERR_SHMEM_BAD_SIZE if `size` exceeds the region, or
+/// WASMOS_ERR_SHMEM_NO_WINDOW if [`wasm_off`, `wasm_off`+`size`) does not lie
+/// inside the caller's linear memory.
 pub extern "wasmos" fn shmem_flush(a0: i32, a1: i32, a2: i32) callconv(.c) i32;
 /// Pulls `size` bytes from the backing physical pages of shared-memory region
 /// `id` into the caller's WASM linear memory at `wasm_off` (shared-to-local copy
 /// into an already-mapped window); gated by the caller's DMA capability and
-/// bounded by the region size. Returns 0 on success, or (uint32_t)-1 on bad
-/// arguments, missing capability/context, unknown/unbacked id, oversize, or an
-/// out-of-bounds linear window.
+/// bounded by the region size. Returns 0 on success, WASMOS_ERR_SHMEM_BAD_ARGS
+/// if `id`, `size` or `wasm_off` is negative or non-positive,
+/// WASMOS_ERR_SHMEM_NO_CAP if the caller has no context or lacks the DMA
+/// capability, WASMOS_ERR_SHMEM_BAD_ID if `id` names no region of the caller's
+/// or the region has no backing pages, WASMOS_ERR_SHMEM_BAD_SIZE if `size`
+/// exceeds the region, or WASMOS_ERR_SHMEM_NO_WINDOW if [`wasm_off`,
+/// `wasm_off`+`size`) does not lie inside the caller's linear memory.
 pub extern "wasmos" fn shmem_refresh(a0: i32, a1: i32, a2: i32) callconv(.c) i32;
 /// Removes the caller's overlay of shared-memory region `id` from linear memory,
 /// restoring the original linear window, untracking the mapping, and releasing
 /// the caller's retain on the region. Returns the mm_shared_release result (0 on
-/// success) or (uint32_t)-1 on a bad id, missing context, or a failed window
-/// restore.
+/// success), WASMOS_ERR_SHMEM_BAD_ARGS if `id` is not positive or the linear
+/// window could not be restored, WASMOS_ERR_SHMEM_NO_CAP if the caller has no
+/// context, or WASMOS_ERR_SHMEM_NO_WINDOW if the ring-3 user window could not be
+/// resynchronised.
+///
+/// Only WARP restores the window: wasm3 releases the region's ownership and
+/// refcount but leaves the overlay in place, and carries a FIXME saying so, so
+/// the two restore-related codes cannot arise there.
 pub extern "wasmos" fn shmem_unmap(a0: i32) callconv(.c) i32;
 /// Route hardware IRQ line `irq_line` so its interrupts are delivered as IPC to
 /// `endpoint` for the calling context. Returns the registration result (0 on
@@ -402,50 +493,117 @@ pub extern "wasmos" fn serial_register(a0: i32) callconv(.c) i32;
 /// vt keyboard input integration
 pub extern "wasmos" fn input_push(a0: i32) callconv(.c) i32;
 /// Read one byte from the serial input ring (input pushed by the keyboard/serial
-/// front end). Returns the byte value (0..255), or (uint32_t)-1 if the ring is
-/// empty.
+/// front end). Returns the byte value (0..255), or WASMOS_AGAIN if the ring is
+/// empty -- which is a "nothing yet", not a failure, and is why this call does
+/// not report an error code at all.
 pub extern "wasmos" fn input_read() callconv(.c) i32;
 /// Copy the GOP framebuffer descriptor (framebuffer_info_t: base, size, width,
 /// height, stride, format) into guest memory at out_off (len must be at least
-/// sizeof the struct). Returns 0 on success, (uint32_t)-1 if no framebuffer is
-/// available or the buffer is too small/invalid.
+/// sizeof the struct). Returns 0 on success, WASMOS_INVAL if `len` is not
+/// positive, WASMOS_ERR_FRAMEBUFFER_TOO_SMALL if `len` is under the struct size,
+/// WASMOS_ERR_FRAMEBUFFER_NOT_PRESENT if no framebuffer was handed over at boot,
+/// or WASMOS_ERR_KERNEL_BAD_POINTER if the output range lies outside the
+/// caller's linear memory.
+///
+/// Under wasm3, WASMOS_ERR_KERNEL_NO_CALLER and WASMOS_ERR_KERNEL_COPY_FAILED
+/// are also possible; see the note at the top of this file.
 pub extern "wasmos" fn framebuffer_info(a0: i32, a1: i32) callconv(.c) i32;
 /// Map the GOP framebuffer's physical pages into guest linear memory at wasm_off;
 /// size must be page-aligned, non-zero, and at least the framebuffer size, and
-/// both wasm_off and the resolved host address must be page-aligned. Returns 0 on
-/// success, (uint32_t)-1 on bad size/alignment, missing framebuffer, or mapping
-/// failure. Requires the MMIO capability.
+/// both wasm_off and the resolved host address must be page-aligned. Returns 0
+/// on success, WASMOS_INVAL if `size` is not positive, WASMOS_ERR_KERNEL_UNALIGNED
+/// if `size` or the resolved address is not page-aligned,
+/// WASMOS_ERR_FRAMEBUFFER_NOT_PRESENT if no framebuffer was handed over at boot,
+/// WASMOS_ERR_FRAMEBUFFER_TOO_SMALL if `size` is under the framebuffer size,
+/// WASMOS_ERR_KERNEL_NO_CALLER if the calling process or its context cannot be
+/// resolved, WASMOS_ERR_KERNEL_NOT_AUTHORIZED if it lacks the MMIO capability,
+/// WASMOS_ERR_KERNEL_NO_WINDOW if [`wasm_off`, `wasm_off`+`size`) does not lie
+/// inside linear memory, or WASMOS_ERR_KERNEL_MAP_FAILED if a page could not be
+/// mapped.
+///
+/// NO_CALLER and NOT_AUTHORIZED are deliberately separate: having no context is
+/// not a permission decision, and folding them was the same conflation the io
+/// family carried.
 pub extern "wasmos" fn framebuffer_map(a0: i32, a1: i32) callconv(.c) i32;
-/// Write 32-bit `color` to the framebuffer pixel at (x, y). Returns 0 on success,
-/// (uint32_t)-1 if the framebuffer is uninitialized or (x, y) is out of bounds.
+/// Write 32-bit `color` to the framebuffer pixel at (x, y). Returns 0 on
+/// success, WASMOS_ERR_FRAMEBUFFER_NOT_PRESENT if no framebuffer was handed over
+/// at boot (or it has no stride), or WASMOS_INVAL if (x, y) falls outside it.
+///
+/// The two are distinct on purpose: off-screen coordinates are the caller's
+/// mistake and it can correct them, which is not the same fact as there being
+/// no framebuffer at all.
 pub extern "wasmos" fn framebuffer_pixel(a0: i32, a1: i32, a2: i32) callconv(.c) i32;
 /// Return the byte size of the kernel boot-config blob. Returns the size, or
-/// (uint32_t)-1 if no boot config is present.
+/// WASMOS_NOENT if no boot config is present or it is empty.
 pub extern "wasmos" fn boot_config_size() callconv(.c) i32;
 /// Copy len bytes of the boot-config blob starting at byte `offset` into guest
-/// memory at buf_off. Returns 0 on success (0 also for len==0), (uint32_t)-1 if
-/// the range exceeds the blob or the buffer offset is invalid.
+/// memory at buf_off. Returns 0 on success (0 also for len==0), WASMOS_NOENT if
+/// no boot config is present or it is empty, WASMOS_INVAL if [`offset`,
+/// `offset`+`len`) leaves the blob, or WASMOS_ERR_KERNEL_BAD_POINTER if
+/// [`buf_off`, `buf_off`+`len`) is not a writable range of the caller's linear
+/// memory.
+///
+/// A negative `len` or `offset` arrives zero-extended as a large positive
+/// value and is refused by the range test as WASMOS_INVAL.
+///
+/// Under wasm3 two further codes are possible, which WARP folds into
+/// BAD_POINTER: WASMOS_ERR_KERNEL_NO_CALLER when the calling process or its
+/// context cannot be resolved, and WASMOS_ERR_KERNEL_COPY_FAILED when the copy
+/// into user memory fails after the range was accepted.
 pub extern "wasmos" fn boot_config_copy(a0: i32, a1: i32, a2: i32) callconv(.c) i32;
 /// Look up an initfs entry by path at path_off (path_len bytes, < 112), stripping
 /// leading '/' and an optional 'init/' prefix and matching either the full stored
-/// path or its basename case-insensitively. Returns the entry index, or
-/// (uint32_t)-1 on invalid/empty path or no match.
+/// path or its basename case-insensitively. Returns the entry index,
+/// WASMOS_INVAL if `path_len` is not positive or the path is empty once the
+/// prefixes are stripped, WASMOS_ERR_FS_PATH_TOO_LONG if `path_len` is 112 or
+/// more, WASMOS_ERR_FS_NO_IMAGE if the initfs is absent or its header is
+/// invalid, WASMOS_ERR_FS_NOT_FOUND if no entry matches, or
+/// WASMOS_ERR_KERNEL_BAD_POINTER if the path range lies outside the caller's
+/// linear memory.
+///
+/// Under wasm3, WASMOS_ERR_KERNEL_NO_CALLER and WASMOS_ERR_KERNEL_COPY_FAILED
+/// are also possible; see the note at the top of this file.
 pub extern "wasmos" fn initfs_find_path(a0: i32, a1: i32) callconv(.c) i32;
 /// Return the number of bytes currently held in the kernel early-log buffer.
 pub extern "wasmos" fn early_log_size() callconv(.c) i32;
 /// Copy len bytes of the early-log buffer starting at byte `offset` into guest
-/// memory at buf_off. Returns 0 on success (0 also for len==0), (uint32_t)-1 if
-/// the range exceeds the log or the buffer offset is invalid.
+/// memory at buf_off. Returns 0 on success (0 also for len==0), WASMOS_INVAL if
+/// [`offset`, `offset`+`len`) leaves the log, or WASMOS_ERR_KERNEL_BAD_POINTER
+/// if [`buf_off`, `buf_off`+`len`) is not a writable range of the caller's
+/// linear memory.
+///
+/// A negative `len` or `offset` arrives zero-extended as a large positive value
+/// and is refused by the range test as WASMOS_INVAL.
+///
+/// Under wasm3, WASMOS_ERR_KERNEL_NO_CALLER and WASMOS_ERR_KERNEL_COPY_FAILED
+/// are also possible; see the note at the top of this file.
 pub extern "wasmos" fn early_log_copy(a0: i32, a1: i32, a2: i32) callconv(.c) i32;
 /// Look up the process-environment variable named by name_off/name_len (name_len
 /// < key max) and copy its value into guest memory at buf_off, truncated to
-/// buf_len-1 bytes and NUL-terminated. Returns the written value length, or
-/// (uint32_t)-1 on invalid args, oversized name, or a missing variable.
+/// buf_len-1 bytes and NUL-terminated. Returns the written value length,
+/// WASMOS_INVAL if `name_len` or `buf_len` is not positive,
+/// WASMOS_ERR_ENV_TOO_LONG if `name_len` is at or over the key maximum,
+/// WASMOS_ERR_ENV_NOT_FOUND if no variable of that name is set, or
+/// WASMOS_ERR_KERNEL_BAD_POINTER if either range lies outside the caller's
+/// linear memory.
+///
+/// An over-long name is REFUSED, never truncated: truncating it would look up
+/// a different variable's value -- one the caller could not have created,
+/// since env_set refuses that length too.
+///
+/// Under wasm3, WASMOS_ERR_KERNEL_NO_CALLER and WASMOS_ERR_KERNEL_COPY_FAILED
+/// are also possible; see the note at the top of this file.
 pub extern "wasmos" fn env_get(a0: i32, a1: i32, a2: i32, a3: i32) callconv(.c) i32;
 /// Set the process-environment variable named by name_off/name_len to the value
 /// at val_off/val_len (val_len may be 0), creating a new slot or overwriting an
-/// existing one. Returns 0 on success, (uint32_t)-1 on invalid/oversized name or
-/// value, bad buffer offset, or when the table is full.
+/// existing one. Returns 0 on success, WASMOS_INVAL if `name_len` is not
+/// positive or `val_len` is negative, WASMOS_ERR_ENV_TOO_LONG if `name_len` or
+/// `val_len` is at or over its maximum, WASMOS_ERR_ENV_TABLE_FULL if there is no
+/// free slot for a new variable, or WASMOS_ERR_KERNEL_BAD_POINTER if either
+/// range lies outside the caller's linear memory.
+///
+/// Under wasm3, WASMOS_ERR_KERNEL_NO_CALLER and WASMOS_ERR_KERNEL_COPY_FAILED
+/// are also possible; see the note at the top of this file.
 pub extern "wasmos" fn env_set(a0: i32, a1: i32, a2: i32, a3: i32) callconv(.c) i32;
 /// Remove the process-environment variable named by name_off/name_len, freeing
 /// its slot if present. Always returns 0, including for invalid names or a

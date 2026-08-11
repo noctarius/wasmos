@@ -221,7 +221,21 @@
       "Bash(/opt/homebrew/opt/llvm/bin/clang -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions -I src/libsys/wasm/include -I src/libc/include -I src/drivers/include -I abi/generated/c tests/unit/test_libsys_event_loop.c -o /private/tmp/claude-501/-Volumes-git-wasmos/352db52b-c664-4ce8-8523-4e59e562750d/scratchpad/test_libsys_event_loop)",
       "Bash(/opt/homebrew/opt/llvm/bin/clang -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions -iquote src/libsys/wasm/include -iquote src/libc/include -iquote src/drivers/include -iquote abi/generated/c tests/unit/test_libsys_event_loop.c -o /private/tmp/claude-501/-Volumes-git-wasmos/352db52b-c664-4ce8-8523-4e59e562750d/scratchpad/test_libsys_event_loop)",
       "Bash(echo \"FMT=$?\")",
-      "Bash(echo \"LINT=$?\")"
+      "Bash(echo \"LINT=$?\")",
+      "Bash(nm build-wasm3-smp/esp/kernel.elf)",
+      "Bash(echo \"gen exit=$?\")",
+      "Bash(npx prettier *)",
+      "Bash(echo \"format exit=$?\")",
+      "Bash(echo \"lint exit=$?\")",
+      "Bash(echo \"unit exit=$?\")",
+      "Bash(echo \"quality exit=$?\")",
+      "Bash(awk '{s+=$2; f+=$4} END {print \"suites:\", NR, \"checks:\", s, \"failures:\", f}')",
+      "Bash(echo \"wasm3 exit=$?\")",
+      "Bash(echo \"warp exit=$?\")",
+      "Bash(sed -n '/static uint32_t warp_irq_ack/,/^}/p' src/kernel/warp/link.cpp)",
+      "Bash(sed -n '/static uint32_t warp_irq_route_ipc/,/^}/p' src/kernel/warp/link.cpp)",
+      "Bash(sed -n '/static int require_irq_route_capability/,/^}/p' src/kernel/wasm3/link.c)",
+      "Bash(sed -n '/warp_require_irq_capability/,/^}/p' src/kernel/warp/link.cpp)"
     ]
   }
 }

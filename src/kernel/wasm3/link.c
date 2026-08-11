@@ -2945,11 +2945,12 @@ m3ApiRawFunction(wasmos_kmap_dump_all) {
 m3ApiRawFunction(wasmos_console_read) {
     m3ApiReturnType(int32_t) m3ApiGetArgMem(char*, ptr) m3ApiGetArg(int32_t, len)
 
-        if (len < 0) {
+        /* A zero-capacity buffer cannot receive a byte. Reporting 0 here would
+         * say "no byte was available", which is a different fact and hides the
+         * caller's bug; WARP already refused it. (The comment this replaced was
+         * copied from console_write, where a zero length IS a no-op success.) */
+        if (len <= 0) {
         m3ApiReturn(WASMOS_INVAL);
-    }
-    if (len == 0) {
-        m3ApiReturn(0); /* nothing to write is not a failure */
     }
     m3ApiCheckMem(ptr, 1);
     process_t* proc = process_get(process_current_pid());

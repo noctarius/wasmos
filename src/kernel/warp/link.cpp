@@ -2217,7 +2217,10 @@ static uint32_t warp_shmem_unmap(uint32_t id, void* ctx_) {
 
 static uint32_t warp_shmem_flush(uint32_t id, uint32_t wasm_off, uint32_t size, void* ctx_) {
     auto* ctx = warp_call_ctx(ctx_);
-    if ((int32_t)id <= 0 || (int32_t)size <= 0)
+    /* wasm_off arrives as u32, so a negative offset becomes a huge one. Reject
+     * it as a bad argument here, as wasm3 does, rather than letting it fall
+     * through to the window check and report NO_WINDOW. */
+    if ((int32_t)id <= 0 || (int32_t)size <= 0 || (int32_t)wasm_off < 0)
         return (uint32_t)WASMOS_ERR_SHMEM_BAD_ARGS;
     uint32_t context_id = 0;
     if (warp_current_context_id(&context_id) != 0 || warp_require_dma_capability(context_id) != 0)
@@ -2238,7 +2241,10 @@ static uint32_t warp_shmem_flush(uint32_t id, uint32_t wasm_off, uint32_t size, 
 
 static uint32_t warp_shmem_refresh(uint32_t id, uint32_t wasm_off, uint32_t size, void* ctx_) {
     auto* ctx = warp_call_ctx(ctx_);
-    if ((int32_t)id <= 0 || (int32_t)size <= 0)
+    /* wasm_off arrives as u32, so a negative offset becomes a huge one. Reject
+     * it as a bad argument here, as wasm3 does, rather than letting it fall
+     * through to the window check and report NO_WINDOW. */
+    if ((int32_t)id <= 0 || (int32_t)size <= 0 || (int32_t)wasm_off < 0)
         return (uint32_t)WASMOS_ERR_SHMEM_BAD_ARGS;
     uint32_t context_id = 0;
     if (warp_current_context_id(&context_id) != 0 || warp_require_dma_capability(context_id) != 0)
@@ -2464,7 +2470,10 @@ static uint32_t warp_boot_config_size(void* ctx_) {
 
 static uint32_t warp_boot_config_copy(uint32_t buf_off, uint32_t len, uint32_t offset, void* ctx_) {
     auto* ctx = warp_call_ctx(ctx_);
-    if (!g_warp_boot_info || !g_warp_boot_info->boot_config)
+    /* The size check belongs here, as in wasm3: without it a zero-length boot
+     * config reports success-and-nothing for offset 0 / len 0 instead of
+     * "there is no boot config". */
+    if (!g_warp_boot_info || !g_warp_boot_info->boot_config || !g_warp_boot_info->boot_config_size)
         return (uint32_t)WASMOS_NOENT;
     uint32_t total = (uint32_t)g_warp_boot_info->boot_config_size;
     if (offset > total || len > total - offset)

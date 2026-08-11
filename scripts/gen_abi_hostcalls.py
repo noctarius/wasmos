@@ -25,8 +25,9 @@ lose those types under codegen — instead --verify-source guards it against dri
 
 See docs/architecture/34-abi-idl-and-error-model.md.
 
-ID guarantees enforced by the Model: ids unique, dense 0..N-1, ordered
-(retired slots must be explicit `reserved: true`), HC symbols unique.
+ID guarantees enforced by the Model: ids unique, dense 0..N-1, ordered, HC
+symbols unique. Adding is append-only; removing renumbers (see the ID RULES in
+abi/hostcalls.yaml).
 
 Usage:
     gen_abi_hostcalls.py [--check] [--verify-source]
@@ -109,8 +110,6 @@ def hc_symbol(entry):
     module = entry.get("module", "wasmos")
     if module not in SYM_PREFIX:
         die(f"unknown module '{module}' for host call '{entry.get('name')}'")
-    if entry.get("reserved"):
-        return f"HC_RESERVED_{entry['id']}"
     return "HC_" + SYM_PREFIX[module] + entry["name"].upper()
 
 
@@ -133,7 +132,7 @@ class Model:
         if missing:
             die(
                 f"id space has gaps (not dense 0..{n - 1}): missing {missing}. "
-                f"Retired slots must be explicit `reserved: true` entries."
+                f"Removing a host call means renumbering the entries after it."
             )
         self.ordered = [by_id[i] for i in range(n)]
         self.count = n
@@ -217,19 +216,13 @@ class Model:
     def alias_comment(self, e):
         if "alias_of" in e:
             return f" /* alias: {e['name']} → warp_{e['alias_of']} */"
-        if e.get("reserved"):
-            return " /* reserved (retired host call; slot kept for id stability) */"
         return ""
 
     def client_hostcalls(self):
         """The guest-importable "wasmos"-module host calls (incl. aliases), in id
-        order. wasi/env-module calls are toolchain-provided, not ours to declare;
-        reserved slots are skipped."""
-        return [
-            e
-            for e in self.ordered
-            if self.module(e) == "wasmos" and not e.get("reserved")
-        ]
+        order. wasi/env-module calls are toolchain-provided, not ours to
+        declare."""
+        return [e for e in self.ordered if self.module(e) == "wasmos"]
 
     def client_note(self, e):
         """A trailing per-symbol note for a client binding: alias target and/or a
@@ -558,11 +551,6 @@ def emit_docs(m):
         o.append("| id | name | params | returns | description |")
         o.append("|---|---|---|---|---|")
         for e in entries:
-            if e.get("reserved"):
-                o.append(
-                    f"| {e['id']} | *(reserved)* | | | retired; slot kept for id stability |"
-                )
-                continue
             t = m._target(e)
             params = (
                 ", ".join(f"{p['name']}:{p['kind']}" for p in (t.get("params") or []))

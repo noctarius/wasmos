@@ -10,14 +10,20 @@
 # ID RULES (load-bearing — do not break):
 #   - `id` is the ring-3 syscall number (RAX = 0x100 + id) AND the AOT rebind
 #     index: position == id in BOTH the WARP WASMOS_SYMBOLS table and the AOT
-#     symbol table (both are position-coupled). Reordering breaks ring-3 dispatch
-#     and AOT rebinding — the id space is append-only.
-#   - The id space is APPEND-ONLY: a new host call takes the next free id; never
-#     renumber or reorder existing ids (that shifts every ring-3 number and
-#     invalidates already-compiled/cached AOT payloads).
+#     symbol table (both are position-coupled). Within one build that coupling
+#     is absolute: never reorder entries without renumbering to match.
 #   - The generator enforces: ids unique, dense 0..N-1, emitted in id order.
-#     A retired host call must stay as a `reserved: true` slot (keeps density);
-#     it must never leave a gap.
+#     A gap is an error — removing a host call means RENUMBERING the entries
+#     after it, not leaving a hole and not parking a dead slot.
+#   - ADDING is append-only: a new host call takes the next free id. Never
+#     insert one in the middle — that renumbers everything after it for no
+#     reason, and nothing about a new call requires an id below the high-water
+#     mark.
+#   - REMOVING renumbers, and is a whole-world operation. Every later ring-3
+#     syscall number and AOT rebind position moves, so every guest module and
+#     every cached AOT payload built against the old numbering is invalid. There
+#     are no out-of-tree guests: rebuild everything and clear `.cache/warp_aot`
+#     in the same change.
 #   - Entries without an `id` (e.g. the wasm3-only `env.strlen`) are extra links
 #     outside the ring-3/AOT id space and are excluded from the density check.
 #

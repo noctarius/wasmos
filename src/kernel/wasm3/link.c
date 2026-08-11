@@ -1073,6 +1073,75 @@ m3ApiRawFunction(wasmos_block_buffer_write) {
  * The physical pages are owned by the block slot and freed by wasm3_release_pid;
  * the overlay itself is torn down with the address space, so it is tracked with
  * a zero phys_base/pages to reserve the linmem window without a second free. */
+/* Choose a linear-memory offset for an overlay window: one page past everything
+ * the module already has, growing linear memory to cover it.
+ *
+ * Neither available check can see app data. wasm_linear_window_overlaps knows
+ * only previously mapped windows, and mm_user_range_permitted(WRITE) PASSES
+ * over the app's own .bss because that memory is legitimately writable. So any
+ * offset inside the current linear memory may land on live data; one past the
+ * end cannot.
+ *
+ * These scans used to start at a fixed 0x200000 -- a "module data lives below
+ * here" guess from before per-process linear memory became generous. An app
+ * whose statics cross 2 MiB got its overlay mapped on top of its own buffer:
+ * tetris's back buffer (0x100678..0x36e578) collided with a window placed at
+ * 0x200000, so its blit overwrote its own source and the frame rendered
+ * repeated and sheared. WARP has placed above its active size since; this is
+ * wasm3 adopting the same rule instead of a constant.
+ *
+ * Growing cannot move offsets already handed out: linear memory lives in a
+ * reserved-VA slot that commits pages on demand and never relocates
+ * (linmem_slots.h), so the base is pinned for the module's lifetime.
+ *
+ * Returns WASMOS_OK and stores a page-aligned offset, else
+ * WASMOS_ERR_KERNEL_NO_WINDOW; callers map that onto their own family's code
+ * and undo any allocation they made first. */
+static wasmos_error_code_t wasm_linmem_place_overlay(IM3Runtime runtime, process_t* proc,
+                                                     uint64_t region_bytes, uint32_t* out_off) {
+    if (!runtime || !proc || region_bytes == 0 || !out_off) {
+        return WASMOS_INVAL;
+    }
+    uint64_t mem_size = (uint64_t)m3_GetMemorySize(runtime);
+    for (uint32_t attempt = 0; attempt < 16u; ++attempt) {
+        uint64_t candidate = ((mem_size + 0xFFFULL) & ~0xFFFULL) + (uint64_t)attempt * 0x1000ULL;
+        uint64_t required = candidate + region_bytes;
+        if (required > 0xFFFFFFFFULL) {
+            return WASMOS_ERR_KERNEL_NO_WINDOW;
+        }
+        if (required > mem_size) {
+            uint32_t target_pages = (uint32_t)((required + 0xFFFFULL) >> 16);
+            if (ResizeMemory(runtime, target_pages) != m3Err_none) {
+                return WASMOS_ERR_KERNEL_NO_WINDOW;
+            }
+            mem_size = (uint64_t)m3_GetMemorySize(runtime);
+            if (required > mem_size) {
+                return WASMOS_ERR_KERNEL_NO_WINDOW;
+            }
+        }
+        if (wasm_linear_window_overlaps(proc->pid, (uint32_t)candidate, (uint32_t)region_bytes)) {
+            continue;
+        }
+        uint64_t probe_virt = 0;
+        if (wasm_user_va_from_offset(proc->context_id, (uint32_t)candidate, (uint32_t)region_bytes,
+                                     &probe_virt) != 0) {
+            continue;
+        }
+        /* Retry on the next page: paging remaps whole pages, so an unaligned
+         * host VA cannot back this window. */
+        if ((probe_virt & 0xFFFULL) != 0) {
+            continue;
+        }
+        if (mm_user_range_permitted(proc->context_id, probe_virt, region_bytes,
+                                    MEM_REGION_FLAG_WRITE) != 0) {
+            continue;
+        }
+        *out_off = (uint32_t)candidate;
+        return WASMOS_OK;
+    }
+    return WASMOS_ERR_KERNEL_NO_WINDOW;
+}
+
 m3ApiRawFunction(wasmos_block_buffer_map) {
     m3ApiReturnType(int32_t)
 
@@ -1106,44 +1175,12 @@ m3ApiRawFunction(wasmos_block_buffer_map) {
     }
 
     const uint64_t region_bytes = (uint64_t)WASM_BLOCK_BUFFER_SIZE_BYTES;
-    uint64_t mem_size64 = (uint64_t)mem_size;
     uint64_t off64 = 0;
-    uint8_t found = 0;
-
-    for (off64 = 0x200000ULL; off64 + region_bytes <= mem_size64; off64 += 0x1000ULL) {
-        uint64_t probe_virt = 0;
-        if (wasm_linear_window_overlaps(proc->pid, (uint32_t)off64, (uint32_t)region_bytes)) {
-            continue;
-        }
-        if (wasm_user_va_from_offset(proc->context_id, (uint32_t)off64, (uint32_t)region_bytes,
-                                     &probe_virt) != 0) {
-            continue;
-        }
-        if (mm_user_range_permitted(proc->context_id, probe_virt, region_bytes,
-                                    MEM_REGION_FLAG_WRITE) != 0) {
-            continue;
-        }
-        if ((probe_virt & 0xFFFULL) != 0) {
-            continue;
-        }
-        found = 1;
-        break;
+    uint32_t placed_off = 0;
+    if (wasm_linmem_place_overlay(runtime, proc, region_bytes, &placed_off) != WASMOS_OK) {
+        m3ApiReturn(WASMOS_ERR_KERNEL_NO_WINDOW);
     }
-
-    if (!found) {
-        off64 = (mem_size64 + 0xFFFULL) & ~0xFFFULL;
-        uint64_t required = off64 + region_bytes;
-        if (required > mem_size64) {
-            uint32_t target_pages = (uint32_t)((required + 0xFFFFULL) >> 16);
-            if (ResizeMemory(runtime, target_pages) != m3Err_none) {
-                m3ApiReturn(WASMOS_ERR_KERNEL_NO_WINDOW);
-            }
-            mem_size64 = (uint64_t)m3_GetMemorySize(runtime);
-            if (required > mem_size64) {
-                m3ApiReturn(WASMOS_ERR_KERNEL_NO_WINDOW);
-            }
-        }
-    }
+    off64 = (uint64_t)placed_off;
 
     uint32_t off32 = (uint32_t)off64;
     uint64_t virt = 0;
@@ -1208,42 +1245,12 @@ m3ApiRawFunction(wasmos_xfer_buffer_map) {
         m3ApiReturn(WASMOS_ERR_XFER_BUFFER_NO_BACKING);
     }
     const uint64_t region_bytes = ((uint64_t)desc.size_bytes + 0xFFFULL) & ~0xFFFULL;
-    uint64_t mem_size64 = (uint64_t)mem_size;
     uint64_t off64 = 0;
-    uint8_t found = 0;
-    for (off64 = 0x200000ULL; off64 + region_bytes <= mem_size64; off64 += 0x1000ULL) {
-        uint64_t probe_virt = 0;
-        if (wasm_linear_window_overlaps(proc->pid, (uint32_t)off64, (uint32_t)region_bytes)) {
-            continue;
-        }
-        if (wasm_user_va_from_offset(proc->context_id, (uint32_t)off64, (uint32_t)region_bytes,
-                                     &probe_virt) != 0) {
-            continue;
-        }
-        if (mm_user_range_permitted(proc->context_id, probe_virt, region_bytes,
-                                    MEM_REGION_FLAG_WRITE) != 0) {
-            continue;
-        }
-        if ((probe_virt & 0xFFFULL) != 0) {
-            continue;
-        }
-        found = 1;
-        break;
+    uint32_t placed_off = 0;
+    if (wasm_linmem_place_overlay(runtime, proc, region_bytes, &placed_off) != WASMOS_OK) {
+        m3ApiReturn(WASMOS_ERR_XFER_BUFFER_CAPACITY_EXCEEDED);
     }
-    if (!found) {
-        off64 = (mem_size64 + 0xFFFULL) & ~0xFFFULL;
-        uint64_t required = off64 + region_bytes;
-        if (required > mem_size64) {
-            uint32_t target_pages = (uint32_t)((required + 0xFFFFULL) >> 16);
-            if (ResizeMemory(runtime, target_pages) != m3Err_none) {
-                m3ApiReturn(WASMOS_ERR_XFER_BUFFER_CAPACITY_EXCEEDED);
-            }
-            mem_size64 = (uint64_t)m3_GetMemorySize(runtime);
-            if (required > mem_size64) {
-                m3ApiReturn(WASMOS_ERR_XFER_BUFFER_CAPACITY_EXCEEDED);
-            }
-        }
-    }
+    off64 = (uint64_t)placed_off;
 
     uint32_t off32 = (uint32_t)off64;
     uint64_t virt = 0;
@@ -1986,52 +1993,25 @@ m3ApiRawFunction(wasmos_region_alloc) {
         m3ApiReturn(WASMOS_ERR_DMA_RANGE);
     }
 
-    uint64_t mem_size64 = (uint64_t)mem_size;
-    const uint64_t map_auto_min_off = 0x200000ULL;
-    uint64_t scan_off = (map_auto_min_off + 0xFFFULL) & ~0xFFFULL;
     uint64_t off64 = 0;
+    uint32_t placed_off = 0;
     uint8_t found = 0;
-
-    for (off64 = scan_off; off64 + region_bytes <= mem_size64; off64 += 0x1000ULL) {
-        uint64_t probe_virt = 0;
-        if (wasm_linear_window_overlaps(proc->pid, (uint32_t)off64, (uint32_t)region_bytes)) {
-            continue;
-        }
-        if (wasm_user_va_from_offset(proc->context_id, (uint32_t)off64, (uint32_t)region_bytes,
-                                     &probe_virt) != 0) {
-            continue;
-        }
-        if (mm_user_range_permitted(proc->context_id, probe_virt, region_bytes,
-                                    MEM_REGION_FLAG_WRITE) != 0) {
-            continue;
-        }
-        if ((probe_virt & 0xFFFULL) != 0) {
-            continue;
-        }
+    if (wasm_linmem_place_overlay(runtime, proc, region_bytes, &placed_off) == WASMOS_OK) {
+        off64 = (uint64_t)placed_off;
         found = 1;
-        break;
     }
 
     if (!found) {
-        off64 = (mem_size64 + 0xFFFULL) & ~0xFFFULL;
-        uint64_t required = off64 + region_bytes;
-        if (required > mem_size64) {
-            uint32_t target_pages = (uint32_t)((required + 0xFFFFULL) >> 16);
-            if (ResizeMemory(runtime, target_pages) != m3Err_none) {
-                pfa_free_pages(phys_base, (uint64_t)(uint32_t)pages);
-                m3ApiReturn(WASMOS_ERR_DMA_UNAVAILABLE);
-            }
-            mem_base = m3_GetMemory(runtime, &mem_size, 0);
-            if (!mem_base || mem_size == 0) {
-                pfa_free_pages(phys_base, (uint64_t)(uint32_t)pages);
-                m3ApiReturn(WASMOS_ERR_DMA_UNAVAILABLE);
-            }
-            mem_size64 = (uint64_t)m3_GetMemorySize(runtime);
-            if (required > mem_size64) {
-                pfa_free_pages(phys_base, (uint64_t)(uint32_t)pages);
-                m3ApiReturn(WASMOS_ERR_DMA_UNAVAILABLE);
-            }
-        }
+        pfa_free_pages(phys_base, (uint64_t)(uint32_t)pages);
+        m3ApiReturn(WASMOS_ERR_DMA_UNAVAILABLE);
+    }
+    /* Placement may have grown linear memory, so re-read the base and size
+     * rather than trusting what was captured before it. out_phys_off was
+     * bounds-checked against the old size, and growth only raises it. */
+    mem_base = m3_GetMemory(runtime, &mem_size, 0);
+    if (!mem_base || mem_size == 0) {
+        pfa_free_pages(phys_base, (uint64_t)(uint32_t)pages);
+        m3ApiReturn(WASMOS_ERR_DMA_UNAVAILABLE);
     }
 
     uint32_t off32 = (uint32_t)off64;
@@ -2235,51 +2215,11 @@ m3ApiRawFunction(wasmos_shmem_map_auto) {
         m3ApiReturn(WASMOS_ERR_SHMEM_BAD_SIZE);
     }
 
-    uint64_t mem_size = (uint64_t)m3_GetMemorySize(runtime);
-    uint64_t off64 = 0;
-    uint8_t found = 0;
-    /* Keep auto-mapped shared pages away from low linear-memory where
-     * module data/rodata/heap metadata commonly live. */
-    const uint64_t map_auto_min_off = 0x200000ULL;
-    uint64_t scan_off = map_auto_min_off;
-    if (scan_off < 0x4000ULL) {
-        scan_off = 0x4000ULL;
+    uint32_t placed_off = 0;
+    if (wasm_linmem_place_overlay(runtime, proc, map_size, &placed_off) != WASMOS_OK) {
+        m3ApiReturn(WASMOS_ERR_SHMEM_NO_WINDOW);
     }
-    scan_off = (scan_off + 0xFFFULL) & ~0xFFFULL;
-
-    for (off64 = scan_off; off64 + map_size <= mem_size; off64 += 0x1000ULL) {
-        if (wasm_linear_window_overlaps(proc->pid, (uint32_t)off64, (uint32_t)map_size)) {
-            continue;
-        }
-        uint64_t probe_virt = 0;
-        if (wasm_user_va_from_offset(proc->context_id, (uint32_t)off64, (uint32_t)map_size,
-                                     &probe_virt) != 0) {
-            continue;
-        }
-        if (mm_user_range_permitted(proc->context_id, probe_virt, (uint64_t)(uint32_t)map_size,
-                                    MEM_REGION_FLAG_WRITE) != 0) {
-            continue;
-        }
-        if ((probe_virt & 0xFFFULL) != 0) {
-            continue;
-        }
-        found = 1;
-        break;
-    }
-    if (!found) {
-        off64 = (mem_size + 0xFFFULL) & ~0xFFFULL;
-        uint64_t required = off64 + map_size;
-        if (required > mem_size) {
-            uint32_t pages = (uint32_t)((required + 0xFFFFULL) >> 16);
-            if (ResizeMemory(runtime, pages) != m3Err_none) {
-                m3ApiReturn(WASMOS_ERR_SHMEM_NO_WINDOW);
-            }
-            mem_size = (uint64_t)m3_GetMemorySize(runtime);
-            if (required > mem_size) {
-                m3ApiReturn(WASMOS_ERR_SHMEM_NO_WINDOW);
-            }
-        }
-    }
+    uint64_t off64 = (uint64_t)placed_off;
 
     uint32_t off32 = (uint32_t)off64;
     uint32_t map_size32 = (uint32_t)map_size;

@@ -84,6 +84,37 @@ Ring3 code runs at CPL=3 with an address space that has pml4[0]=0, pml4[1]=user
 mappings, and pml4[511]=kernel (accessible only from CPL=0 since kernel page
 tables do not carry `PT_FLAG_USER`).
 
+#### Which Workloads Reach Ring 3
+
+Ring 3 is not a global mode; it is entered per workload, by one of three paths.
+Everything else executes at CPL=0.
+
+| workload | ring | entry path |
+|---|---|---|
+| WARP guest code | 3 | `r3_do_iretq` → `WARP_R3_ENTRY_TRAMPOLINE` (`src/kernel/warp_driver.cpp:348`, `:476`); host calls re-enter the kernel via `int 0x80` |
+| native ring-3 probes | 3 | `process_set_user_entry` (`src/kernel/process.c:1563`), called only from `kernel_ring3_smoke_runtime.c:299` and `kernel_ring3_probe_runtime.c:110`/`:186`/`:256` |
+| native ring-3 threads | 3 | `process_thread_spawn_user_internal` (`src/kernel/process.c:1518`), called only from `syscall.c:493` |
+| **the wasm3 interpreter AND the guest it interprets** | **0** | `process_trampoline` → `entry_fn(...)` (`src/kernel/process.c:549`, `:570`) — no ring transition occurs |
+| native `.wap` services (gfx-compositor, font-service, net-stack) | 0 | see *Native Service Isolation (planned)* |
+
+`src/kernel/wasm3/` contains no ring-3 code: the string `ring` does not appear
+in `shim.c` outside the word "string". A wasm3 guest is ordinary kernel code
+executing an interpreter loop on the process's kernel thread.
+
+Two consequences follow from the wasm3 row, and both are load-bearing:
+
+- **A wasm3 guest is never timer-preempted.** `process_preempt_from_irq`
+  returns 0 for a kernel-mode frame (`if (from_kernel) return 0;`,
+  `src/kernel/process.c:2299`) — before it consults `preempt_is_enabled()`. A
+  guest loop that makes no host call therefore holds its CPU until it returns.
+  The `preempt_disable()` in `wasm3_runtime_enter` (`src/kernel/wasm3/shim.c`)
+  is not what makes it non-preemptible; the privilege level is.
+- **A WARP guest is preempted normally**, because it is interrupted at CPL=3.
+
+The wasm3 subsystem additionally holds a per-process `runtime_lock` across the
+whole timeslice (`src/kernel/process.c:562`; `needs_runtime_lock = 1` in
+`src/kernel/wasmos_app.c:267`), serialising re-entry into one runtime.
+
 #### Low-Slot Policy
 
 `IDENTITY_PD_COUNT = 0` in `src/kernel/paging.c`. New user roots are created

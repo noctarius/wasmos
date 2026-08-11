@@ -197,9 +197,20 @@ linked feature documents for rationale and rollout plans.
 
 ### Build, Configuration, and Validation
 
-- Default configuration: wasm3 runtime, ring-3 isolation, single CPU. WARP is
-  selected with `-DWASMOS_WASM_RUNTIME_WARP=ON`; SMP is separately gated by
-  `WASMOS_SMP` and requires IOAPIC.
+- Default configuration: wasm3 runtime, single CPU. Pin a runtime with
+  `-DWASMOS_DOTCONFIG=configs/{wasm3,warp}_{single,smp}_defconfig`; a bare
+  `cmake -S . -B build` seeds from `configs/wasmos_defconfig`, which selects no
+  runtime and so falls to the code default. `-DWASMOS_WASM_RUNTIME_WARP=ON`
+  alone is unreliable (kconfig imports afterwards and FORCEs the cache) — see
+  `skills/wasmos-build-and-run`. SMP is separately gated by `WASMOS_SMP` and
+  requires IOAPIC.
+- **There is no "ring-3 isolation" configuration.** The only ring-3 Kconfig
+  options are `WASMOS_RING3_SMOKE` and `WASMOS_RING3_THREAD_LIFECYCLE_SMOKE`,
+  both test probes and both `=n` in the shipped defconfigs. Ring 3 is entered
+  per workload, not per build: WARP guests run at CPL=3, while the wasm3
+  interpreter and the guest it interprets both run at CPL=0. See
+  `architecture/11` *Which Workloads Reach Ring 3* for the entry paths and what
+  follows from them (notably that a wasm3 guest is never timer-preempted).
 - WARP QEMU CPU model: the run/test QEMU commands pass `-cpu max`
   (`WASMOS_QEMU_CPU_ARGS` in CMake; also in `scripts/qemu_test_framework.py`).
   WARP's single-pass JIT emits modern x86-64 instructions unconditionally (e.g.

@@ -161,7 +161,7 @@ static inline uint32_t warp_ring3_dispatch_table(uint32_t hc_id, uint64_t a0,
     case HC_THREAD_EXIT:
         return warp_thread_exit((uint32_t)a0, reinterpret_cast<void*>(a1));
     case HC_THREAD_JOIN:
-        return warp_thread_join((uint32_t)a0, reinterpret_cast<void*>(a1));
+        return warp_thread_join((uint32_t)a0, (uint32_t)a1, reinterpret_cast<void*>(a2));
     case HC_THREAD_DETACH:
         return warp_thread_detach((uint32_t)a0, reinterpret_cast<void*>(a1));
     case HC_SHMEM_CREATE:

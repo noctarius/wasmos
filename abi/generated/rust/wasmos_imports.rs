@@ -401,10 +401,31 @@ unsafe extern "C" {
     /// yields as THREAD_EXITED. Returns -1 if the process lookup fails, otherwise
     /// does not return normally.
     pub fn thread_exit(a0: i32) -> i32;
-    /// Wait for thread `tid` in the calling process to finish and return its exit
-    /// status. If the thread is still running the caller blocks (returns 0 and is
-    /// resumed later); returns -1 on error (no such process/thread).
-    pub fn thread_join(a0: i32) -> i32;
+    /// Wait for thread `tid` in the calling process to finish and store its exit
+    /// status at `out_status`. If the thread is still running the caller blocks and
+    /// the call resumes waiting when woken; it returns only once the thread has
+    /// been joined or the join has failed.
+    ///
+    /// The status comes back through `out_status` because it is chosen by the
+    /// guest and uses the whole 32-bit range: a thread exiting -1 would otherwise
+    /// be indistinguishable from a failed join on the shared signed i32. That was
+    /// the last call in the ABI with that defect.
+    ///
+    /// Blocking used to return 0 immediately, which was worse than ambiguous: the
+    /// exit status is only available from a LATER call to process_thread_join, so
+    /// a guest that blocked was handed 0 and never learned the real status. The
+    /// call now loops over the block, as the ring-3 thread-join syscall always
+    /// did.
+    ///
+    /// Returns 0 on success, WASMOS_ERR_KERNEL_NO_CALLER if the calling process
+    /// cannot be resolved, WASMOS_INVAL if `tid` is negative, zero, or the caller's
+    /// own thread (a thread cannot join itself), WASMOS_ERR_THREAD_NOT_FOUND if no
+    /// such thread exists, WASMOS_ERR_THREAD_NOT_OWNER if the thread belongs to
+    /// another process, WASMOS_ERR_THREAD_JOIN_FAILED if it was detached,
+    /// WASMOS_ERR_THREAD_BUSY if another thread is already joining it, or
+    /// WASMOS_ERR_KERNEL_BAD_POINTER if `out_status` is not a writable i32 of the
+    /// caller's linear memory.
+    pub fn thread_join(a0: i32, a1: i32) -> i32;
     /// Detach thread `tid` in the calling process so it is reaped automatically and
     /// cannot be joined. Returns the underlying detach result (0 on success, non-zero
     /// on failure), or -1 if the process lookup fails.

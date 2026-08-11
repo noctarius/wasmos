@@ -1710,22 +1710,37 @@ static uint32_t warp_thread_exit(uint32_t status, void* ctx_) {
     return 0;
 }
 
-static uint32_t warp_thread_join(uint32_t tid, void* ctx_) {
-    (void)ctx_;
+/* See the wasm3 shim: the guest-chosen exit status uses the whole 32-bit range
+ * and so comes back through `out_status`, and the pointer is resolved only
+ * after the join, because the caller can be parked while another thread grows
+ * linear memory out from under a pointer taken earlier. */
+static uint32_t warp_thread_join(uint32_t tid, uint32_t out_status_off, void* ctx_) {
+    auto* ctx = warp_call_ctx(ctx_);
     process_t* proc = process_get(process_current_pid());
     if (!proc)
         return (uint32_t)WASMOS_ERR_KERNEL_NO_CALLER;
+    /* Probed before the join so a bad pointer is refused while the thread is
+     * still joinable, rather than after its status has been consumed. */
+    if (!warp_mem(ctx, out_status_off, sizeof(int32_t)))
+        return (uint32_t)WASMOS_ERR_KERNEL_BAD_POINTER;
     int32_t exit_status = 0;
-    int rc = process_thread_join(proc, tid, &exit_status);
-    if (rc > 0) {
+    /* rc > 0 registers this thread as the joiner and blocks it; the status is
+     * only readable from a LATER call, so the wait loops rather than returning
+     * 0 and losing it. */
+    for (;;) {
+        int rc = process_thread_join(proc, tid, &exit_status);
+        if (rc == 0)
+            break;
+        if (rc < 0)
+            return (uint32_t)rc; /* already a packed code */
         process_yield(PROCESS_RUN_BLOCKED);
-        return 0;
     }
-    if (rc < 0)
-        return (uint32_t)rc; /* already a packed code */
-    /* FIXME: see the wasm3 side -- a thread exiting with a negative status is
-     * indistinguishable from a failed join on this shared i32. */
-    return (uint32_t)exit_status;
+    int32_t* out_status =
+        reinterpret_cast<int32_t*>(warp_mem(ctx, out_status_off, sizeof(int32_t)));
+    if (!out_status)
+        return (uint32_t)WASMOS_ERR_KERNEL_BAD_POINTER;
+    *out_status = exit_status;
+    return 0;
 }
 
 static uint32_t warp_thread_detach(uint32_t tid, void* ctx_) {

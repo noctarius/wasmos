@@ -3181,11 +3181,20 @@ m3ApiRawFunction(wasmos_thread_exit) {
     m3ApiReturn(0);
 }
 
+/* The exit status is guest-chosen and uses the whole 32-bit range, so it comes
+ * back through `out_status` rather than sharing the i32 with the error codes.
+ *
+ * The offset is validated up front but resolved to a pointer only after the
+ * join completes: the caller can be parked for an arbitrary time, and another
+ * thread growing linear memory in that window moves the base, so a pointer
+ * taken before the block can be stale by the time it is written. */
 m3ApiRawFunction(wasmos_thread_join) {
-    m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, tid) process_t* proc =
-        process_get(process_current_pid());
+    m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, tid) m3ApiGetArg(int32_t, out_status_off)
+        process_t* proc = process_get(process_current_pid());
     uint32_t target_tid = 0;
     int32_t exit_status = 0;
+    uint32_t mem_size = 0;
+    uint8_t* mem_base = 0;
     int rc = 0;
     if (!proc) {
         m3ApiReturn(WASMOS_ERR_KERNEL_NO_CALLER);
@@ -3193,19 +3202,32 @@ m3ApiRawFunction(wasmos_thread_join) {
     if (wasm_arg_u32_nonneg(tid, &target_tid) != 0) {
         m3ApiReturn(WASMOS_INVAL);
     }
-    rc = process_thread_join(proc, target_tid, &exit_status);
-    if (rc > 0) {
+    if (out_status_off < 0) {
+        m3ApiReturn(WASMOS_ERR_KERNEL_BAD_POINTER);
+    }
+    mem_base = m3_GetMemory(runtime, &mem_size, 0);
+    if (!mem_base || (uint64_t)(uint32_t)out_status_off + sizeof(int32_t) > (uint64_t)mem_size) {
+        m3ApiReturn(WASMOS_ERR_KERNEL_BAD_POINTER);
+    }
+    /* rc > 0 registers this thread as the joiner and blocks it; the status is
+     * only readable from a LATER call. Returning at that point handed the guest
+     * 0 and lost the status, so the wait loops here as the ring-3 syscall does. */
+    for (;;) {
+        rc = process_thread_join(proc, target_tid, &exit_status);
+        if (rc == 0) {
+            break;
+        }
+        if (rc < 0) {
+            m3ApiReturn(rc); /* already a packed code */
+        }
         process_yield(PROCESS_RUN_BLOCKED);
-        m3ApiReturn(0);
     }
-    if (rc < 0) {
-        m3ApiReturn(rc); /* already a packed code */
+    mem_base = m3_GetMemory(runtime, &mem_size, 0);
+    if (!mem_base || (uint64_t)(uint32_t)out_status_off + sizeof(int32_t) > (uint64_t)mem_size) {
+        m3ApiReturn(WASMOS_ERR_KERNEL_BAD_POINTER);
     }
-    /* FIXME: the joined thread's exit status is returned on the same i32 that
-     * carries the error codes, so a thread exiting with a negative status is
-     * indistinguishable from a failed join. Same shape as io_in32; fixing it
-     * means an out-parameter and a change to every caller. */
-    m3ApiReturn(exit_status);
+    __builtin_memcpy(mem_base + (uint32_t)out_status_off, &exit_status, sizeof(exit_status));
+    m3ApiReturn(0);
 }
 
 m3ApiRawFunction(wasmos_thread_detach) {

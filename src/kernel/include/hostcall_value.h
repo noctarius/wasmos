@@ -27,8 +27,8 @@
  * not have collided with a code, but no caller read the sign -- each masked it
  * off -- so the width of the value is not the whole test. Ask whether the
  * caller can act on the distinction, not only whether the bits allow one.
- * thread_join is the one left in that state: it returns a guest-chosen exit
- * status, and carries a FIXME saying so.
+ * thread_join was the last one left and now has an out-parameter too, so no
+ * host call still carries a guest-chosen full-range value on the shared i32.
  */
 
 /*

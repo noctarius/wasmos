@@ -81,7 +81,7 @@
     X("wasmos", "thread_create", "i(iiii)", wasmos_thread_create) \
     X("wasmos", "thread_yield", "i()", wasmos_thread_yield) \
     X("wasmos", "thread_exit", "i(i)", wasmos_thread_exit) \
-    X("wasmos", "thread_join", "i(i)", wasmos_thread_join) \
+    X("wasmos", "thread_join", "i(i*)", wasmos_thread_join) \
     X("wasmos", "thread_detach", "i(i)", wasmos_thread_detach) \
     X("wasmos", "shmem_create", "i(ii)", wasmos_shmem_create) \
     X("wasmos", "shmem_grant", "i(ii)", wasmos_shmem_grant) \

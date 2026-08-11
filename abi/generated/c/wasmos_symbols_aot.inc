@@ -82,7 +82,7 @@
     LINK("wasmos", "thread_create", stub_i4) , \
     LINK("wasmos", "thread_yield", stub_i0) , \
     LINK("wasmos", "thread_exit", stub_i1) , \
-    LINK("wasmos", "thread_join", stub_i1) , \
+    LINK("wasmos", "thread_join", stub_i2) , \
     LINK("wasmos", "thread_detach", stub_i1) , \
     LINK("wasmos", "shmem_create", stub_i2) , \
     LINK("wasmos", "shmem_grant", stub_i2) , \

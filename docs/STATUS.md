@@ -419,8 +419,13 @@ linked feature documents for rationale and rollout plans.
   `io.NOT_AUTHORIZED` arrived as the `0xFF`/`0xFFFF` an absent device reads back
   and a denied capability was indistinguishable from missing hardware. The width
   of a value is therefore not the whole test; whether the caller can act on the
-  distinction is. `thread_join` is the one call still in that state, returning an
-  arbitrary guest exit status, and carries a FIXME in both runtimes.
+  distinction is. `thread_join` was the last call in that state and now takes an
+  out-parameter too, so no host call carries a guest-chosen full-range value on
+  the shared i32. Converting it also fixed a second defect: blocking used to
+  return 0 immediately, but the exit status is only readable from a later
+  `process_thread_join`, so a guest that blocked was handed 0 and never learned
+  the real status. Both shims now loop over the block, as the ring-3 thread-join
+  syscall always did.
 - The native driver API (`wasmos_native_driver.h`, ABI 13) had the same defect on
   its own surface and was converted with it: `io_in8`/`io_in16` report the value
   through `out`, and `io_out8`/`io_out16` report an outcome rather than dropping

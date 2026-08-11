@@ -73,15 +73,21 @@ static inline int32_t wasmos_thread_spawn_cont(void* stack_base, size_t stack_si
     return (int32_t)rc;
 }
 
-/* Continuation-style join: callback receives joined thread exit status or
- * negative error code. */
+/* Continuation-style join: the callback receives the OUTCOME (0 or a negative
+ * packed code), and the joined thread's exit status is stored at `out_status`
+ * when the join succeeded. The two used to share one value, which is exactly
+ * what made a thread exiting negative look like a failed join. `out_status` may
+ * be null if the caller only cares whether the join worked. */
 static inline int32_t wasmos_thread_join_cont(uint32_t tid, wasmos_thread_continue_fn_t cont,
-                                              void* cont_ctx) {
-    int32_t rc = (int32_t)wasmos_sys_thread_join(tid);
-    if (cont) {
-        cont(cont_ctx, rc);
+                                              void* cont_ctx, int32_t* out_status) {
+    wasmos_thread_join_result_t res = wasmos_sys_thread_join(tid);
+    if (out_status && res.status == 0) {
+        *out_status = res.exit_status;
     }
-    return rc;
+    if (cont) {
+        cont(cont_ctx, (int32_t)res.status);
+    }
+    return (int32_t)res.status;
 }
 
 /* Continuation-style detach: callback receives detach status. */

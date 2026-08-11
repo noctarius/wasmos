@@ -37,6 +37,11 @@ typedef struct {
     uint32_t reply_arg0;
 } wasmos_ipc_call_result_t;
 
+typedef struct {
+    int64_t status;      /* 0, or a negative packed WASMOS_ERR_* code */
+    int32_t exit_status; /* the joined thread's status; valid only when status == 0 */
+} wasmos_thread_join_result_t;
+
 static inline int64_t wasmos_syscall0(uint64_t id) {
     uint64_t rax = id;
     __asm__ volatile("int $0x80" : "+a"(rax) : : "memory");
@@ -89,8 +94,17 @@ static inline int64_t wasmos_sys_thread_create(uint64_t entry_rip, uint64_t user
     return wasmos_syscall6_ret2(WASMOS_SYSCALL_THREAD_CREATE, entry_rip, user_stack_top, 0, 0, 0, 0)
         .rax;
 }
-static inline int64_t wasmos_sys_thread_join(uint32_t tid) {
-    return wasmos_syscall1(WASMOS_SYSCALL_THREAD_JOIN, tid);
+/* Join returns two things, so it uses the two-register form the IPC call
+ * already established: RAX carries the outcome and RDX the joined thread's exit
+ * status. The status is chosen by the guest and may be any 32-bit value,
+ * negative ones included, so it cannot share a register with the error codes --
+ * a thread exiting -1 would be indistinguishable from a failed join. */
+static inline wasmos_thread_join_result_t wasmos_sys_thread_join(uint32_t tid) {
+    wasmos_sysret2_t raw = wasmos_syscall6_ret2(WASMOS_SYSCALL_THREAD_JOIN, tid, 0, 0, 0, 0, 0);
+    wasmos_thread_join_result_t out;
+    out.status = raw.rax;
+    out.exit_status = (int32_t)raw.rdx;
+    return out;
 }
 static inline int64_t wasmos_sys_thread_detach(uint32_t tid) {
     return wasmos_syscall1(WASMOS_SYSCALL_THREAD_DETACH, tid);

@@ -503,7 +503,7 @@ uint64_t x86_syscall_handler(syscall_frame_t* frame) {
         int32_t exit_status = 0;
         uint32_t self_tid = thread_current_tid();
         if (!proc) {
-            return (uint64_t)-1;
+            return (uint64_t)(int64_t)WASMOS_ERR_KERNEL_NO_CALLER;
         }
         if (!g_ring3_thread_join_logged && (frame->cs & 0x3u) == 0x3u &&
             name_eq(proc->name, "ring3-native")) {
@@ -511,8 +511,13 @@ uint64_t x86_syscall_handler(syscall_frame_t* frame) {
             klog_write("[test] ring3 thread join syscall ok\n");
         }
         if (syscall_arg_u32(frame->rdi, &target_tid) != 0) {
-            return (uint64_t)-1;
+            return (uint64_t)(int64_t)WASMOS_INVAL;
         }
+        /* RDX carries the joined thread's exit status, RAX the outcome. The
+         * status is guest-chosen and uses the whole 32-bit range, so returning
+         * it in RAX made a thread exiting -1 indistinguishable from a failed
+         * join -- the same defect the thread_join host call carried. */
+        frame->rdx = 0;
         for (;;) {
             join_rc = process_thread_join(proc, target_tid, &exit_status);
             if (join_rc == 0) {
@@ -521,7 +526,8 @@ uint64_t x86_syscall_handler(syscall_frame_t* frame) {
                     g_ring3_thread_join_helper_ok_logged = 1;
                     klog_write("[test] ring3 thread join helper ok\n");
                 }
-                return (uint64_t)(int64_t)exit_status;
+                frame->rdx = (uint64_t)(uint32_t)exit_status;
+                return 0;
             }
             if (join_rc < 0) {
                 if (!g_ring3_thread_join_self_deny_logged && (frame->cs & 0x3u) == 0x3u &&
@@ -534,7 +540,7 @@ uint64_t x86_syscall_handler(syscall_frame_t* frame) {
                     g_ring3_thread_detach_join_deny_logged = 1;
                     klog_write("[test] ring3 thread detach join deny ok\n");
                 }
-                return (uint64_t)-1;
+                return (uint64_t)(int64_t)join_rc; /* already a packed code */
             }
             process_yield(PROCESS_RUN_BLOCKED);
         }

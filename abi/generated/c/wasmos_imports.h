@@ -456,50 +456,8 @@ extern int32_t wasmos_xfer_buffer_release(int32_t buffer_id) WASMOS_WASM_IMPORT(
  * is invalid.
  */
 extern int32_t wasmos_sched_cpu_stats(int32_t cpu_id, int32_t out) WASMOS_WASM_IMPORT("wasmos", "sched_cpu_stats");
-/* Spawn a new VM thread in the calling process running the exported function
- * whose NUL-terminated name is at `entry_off` (scanned within 64 bytes); when
- * `flags & 1`, `arg0` and `arg1` are passed as the two thread arguments. Returns
- * the new TID, or -1 on invalid name/offset or spawn failure.
- */
-extern int32_t wasmos_thread_create(int32_t entry, int32_t arg0, int32_t arg1, int32_t flags) WASMOS_WASM_IMPORT("wasmos", "thread_create");
 /* Yield the calling thread's CPU (YIELDED state) to the scheduler. Returns 0. */
 extern int32_t wasmos_thread_yield(void) WASMOS_WASM_IMPORT("wasmos", "thread_yield");
-/* Terminate the calling thread with exit code `status`; records the status and
- * yields as THREAD_EXITED. Returns -1 if the process lookup fails, otherwise
- * does not return normally.
- */
-extern int32_t wasmos_thread_exit(int32_t status) WASMOS_WASM_IMPORT("wasmos", "thread_exit");
-/* Wait for thread `tid` in the calling process to finish and store its exit
- * status at `out_status`. If the thread is still running the caller blocks and
- * the call resumes waiting when woken; it returns only once the thread has
- * been joined or the join has failed.
- *
- * The status comes back through `out_status` because it is chosen by the
- * guest and uses the whole 32-bit range: a thread exiting -1 would otherwise
- * be indistinguishable from a failed join on the shared signed i32. That was
- * the last call in the ABI with that defect.
- *
- * Blocking used to return 0 immediately, which was worse than ambiguous: the
- * exit status is only available from a LATER call to process_thread_join, so
- * a guest that blocked was handed 0 and never learned the real status. The
- * call now loops over the block, as the ring-3 thread-join syscall always
- * did.
- *
- * Returns 0 on success, WASMOS_ERR_KERNEL_NO_CALLER if the calling process
- * cannot be resolved, WASMOS_INVAL if `tid` is negative, zero, or the caller's
- * own thread (a thread cannot join itself), WASMOS_ERR_THREAD_NOT_FOUND if no
- * such thread exists, WASMOS_ERR_THREAD_NOT_OWNER if the thread belongs to
- * another process, WASMOS_ERR_THREAD_JOIN_FAILED if it was detached,
- * WASMOS_ERR_THREAD_BUSY if another thread is already joining it, or
- * WASMOS_ERR_KERNEL_BAD_POINTER if `out_status` is not a writable i32 of the
- * caller's linear memory.
- */
-extern int32_t wasmos_thread_join(int32_t tid, int32_t* out_status) WASMOS_WASM_IMPORT("wasmos", "thread_join");
-/* Detach thread `tid` in the calling process so it is reaped automatically and
- * cannot be joined. Returns the underlying detach result (0 on success, non-zero
- * on failure), or -1 if the process lookup fails.
- */
-extern int32_t wasmos_thread_detach(int32_t tid) WASMOS_WASM_IMPORT("wasmos", "thread_detach");
 /* Shared memory API: shmem_create allocates pages of shared memory and
  * returns an id; shmem_grant/revoke control which PIDs may map it;
  * shmem_map/map_auto map the region into WASM linear memory;

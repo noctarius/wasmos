@@ -154,16 +154,8 @@ static inline uint32_t warp_ring3_dispatch_table(uint32_t hc_id, uint64_t a0,
         return warp_xfer_buffer_release((uint32_t)a0, reinterpret_cast<void*>(a1));
     case HC_SCHED_CPU_STATS:
         return warp_sched_cpu_stats((uint32_t)a0, (uint32_t)a1, reinterpret_cast<void*>(a2));
-    case HC_THREAD_CREATE:
-        return warp_thread_create((uint32_t)a0, (uint32_t)a1, (uint32_t)a2, (uint32_t)a3, reinterpret_cast<void*>(a4));
     case HC_THREAD_YIELD:
         return warp_thread_yield(reinterpret_cast<void*>(a0));
-    case HC_THREAD_EXIT:
-        return warp_thread_exit((uint32_t)a0, reinterpret_cast<void*>(a1));
-    case HC_THREAD_JOIN:
-        return warp_thread_join((uint32_t)a0, (uint32_t)a1, reinterpret_cast<void*>(a2));
-    case HC_THREAD_DETACH:
-        return warp_thread_detach((uint32_t)a0, reinterpret_cast<void*>(a1));
     case HC_SHMEM_CREATE:
         return warp_shmem_create((uint32_t)a0, (uint32_t)a1, reinterpret_cast<void*>(a2));
     case HC_SHMEM_GRANT:

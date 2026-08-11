@@ -834,77 +834,15 @@ hostcalls:
       - { name: out, kind: out }
 
   # --- threads --------------------------------------------------------------
-  - name: thread_create
-    id: 70
-    returns: value
-    doc: |
-      Spawn a new VM thread in the calling process running the exported function
-      whose NUL-terminated name is at `entry_off` (scanned within 64 bytes); when
-      `flags & 1`, `arg0` and `arg1` are passed as the two thread arguments. Returns
-      the new TID, or -1 on invalid name/offset or spawn failure.
-    params:
-      - { name: entry, kind: buf, wasm3: i32 }
-      - { name: arg0, kind: scalar }
-      - { name: arg1, kind: scalar }
-      - { name: flags, kind: scalar }
   - name: thread_yield
-    id: 71
+    id: 70
     returns: status
     doc: |
       Yield the calling thread's CPU (YIELDED state) to the scheduler. Returns 0.
-  - name: thread_exit
-    id: 72
-    returns: status
-    doc: |
-      Terminate the calling thread with exit code `status`; records the status and
-      yields as THREAD_EXITED. Returns -1 if the process lookup fails, otherwise
-      does not return normally.
-    params:
-      - { name: status, kind: scalar }
-  - name: thread_join
-    id: 73
-    returns: status
-    doc: |
-      Wait for thread `tid` in the calling process to finish and store its exit
-      status at `out_status`. If the thread is still running the caller blocks and
-      the call resumes waiting when woken; it returns only once the thread has
-      been joined or the join has failed.
-
-      The status comes back through `out_status` because it is chosen by the
-      guest and uses the whole 32-bit range: a thread exiting -1 would otherwise
-      be indistinguishable from a failed join on the shared signed i32. That was
-      the last call in the ABI with that defect.
-
-      Blocking used to return 0 immediately, which was worse than ambiguous: the
-      exit status is only available from a LATER call to process_thread_join, so
-      a guest that blocked was handed 0 and never learned the real status. The
-      call now loops over the block, as the ring-3 thread-join syscall always
-      did.
-
-      Returns 0 on success, WASMOS_ERR_KERNEL_NO_CALLER if the calling process
-      cannot be resolved, WASMOS_INVAL if `tid` is negative, zero, or the caller's
-      own thread (a thread cannot join itself), WASMOS_ERR_THREAD_NOT_FOUND if no
-      such thread exists, WASMOS_ERR_THREAD_NOT_OWNER if the thread belongs to
-      another process, WASMOS_ERR_THREAD_JOIN_FAILED if it was detached,
-      WASMOS_ERR_THREAD_BUSY if another thread is already joining it, or
-      WASMOS_ERR_KERNEL_BAD_POINTER if `out_status` is not a writable i32 of the
-      caller's linear memory.
-    params:
-      - { name: tid, kind: handle }
-      - { name: out_status, kind: out, c_type: "int32_t*" }
-  - name: thread_detach
-    id: 74
-    returns: status
-    doc: |
-      Detach thread `tid` in the calling process so it is reaped automatically and
-      cannot be joined. Returns the underlying detach result (0 on success, non-zero
-      on failure), or -1 if the process lookup fails.
-    params:
-      - { name: tid, kind: handle }
 
   # --- shmem ----------------------------------------------------------------
   - name: shmem_create
-    id: 75
+    id: 71
     returns: value
     doc: |
       Shared memory API: shmem_create allocates pages of shared memory and
@@ -915,7 +853,7 @@ hostcalls:
       - { name: pages, kind: scalar }
       - { name: flags, kind: scalar }
   - name: shmem_grant
-    id: 76
+    id: 72
     returns: status
     doc: |
       Grants the caller's shared-memory region `id` to the process `target_pid`
@@ -927,7 +865,7 @@ hostcalls:
       - { name: id, kind: handle }
       - { name: target_pid, kind: handle }
   - name: shmem_revoke
-    id: 77
+    id: 73
     returns: status
     doc: |
       Revokes a prior grant of the caller's shared-memory region `id` from process
@@ -939,7 +877,7 @@ hostcalls:
       - { name: id, kind: handle }
       - { name: target_pid, kind: handle }
   - name: shmem_map
-    id: 78
+    id: 74
     returns: status
     doc: |
       On success wasmos_shmem_map/_auto return the mapped guest offset (>= 0).  On
@@ -951,7 +889,7 @@ hostcalls:
       - { name: wasm_off, kind: ptr, wasm3: i32 }
       - { name: size, kind: scalar }
   - name: shmem_map_auto
-    id: 79
+    id: 75
     returns: value
     doc: |
       Overlays shared-memory region `id` into the caller's WASM linear memory at an
@@ -964,7 +902,7 @@ hostcalls:
       - { name: id, kind: handle }
       - { name: size, kind: scalar }
   - name: shmem_flush
-    id: 80
+    id: 76
     returns: status
     doc: |
       Pushes `size` bytes from the caller's WASM linear memory at `wasm_off` into
@@ -982,7 +920,7 @@ hostcalls:
       - { name: wasm_off, kind: buf, len: size, wasm3: i32 }
       - { name: size, kind: scalar }
   - name: shmem_refresh
-    id: 81
+    id: 77
     returns: status
     doc: |
       Pulls `size` bytes from the backing physical pages of shared-memory region
@@ -1000,7 +938,7 @@ hostcalls:
       - { name: wasm_off, kind: out, len: size, wasm3: i32 }
       - { name: size, kind: scalar }
   - name: shmem_unmap
-    id: 82
+    id: 78
     returns: status
     doc: |
       Removes the caller's overlay of shared-memory region `id` from linear memory,
@@ -1019,7 +957,7 @@ hostcalls:
 
   # --- irq ------------------------------------------------------------------
   - name: irq_route_ipc
-    id: 83
+    id: 79
     returns: status
     doc: |
       Route hardware IRQ line `irq_line` so its interrupts are delivered as IPC to
@@ -1032,7 +970,7 @@ hostcalls:
       - { name: irq_line, kind: scalar }
       - { name: endpoint, kind: handle }
   - name: irq_ack
-    id: 84
+    id: 80
     returns: status
     doc: |
       Acknowledge/re-arm IRQ line `irq_line` for the calling context after handling
@@ -1043,7 +981,7 @@ hostcalls:
     params:
       - { name: irq_line, kind: scalar }
   - name: irq_unroute
-    id: 85
+    id: 81
     returns: status
     doc: |
       Remove the calling context's routing of IRQ line `irq_line`. Returns the
@@ -1055,7 +993,7 @@ hostcalls:
 
   # --- serial / input / framebuffer ----------------------------------------
   - name: serial_register
-    id: 86
+    id: 82
     returns: status
     doc: |
       Register the context that owns `endpoint` as the remote serial backend driver
@@ -1064,14 +1002,14 @@ hostcalls:
     params:
       - { name: endpoint, kind: handle }
   - name: input_push
-    id: 87
+    id: 83
     returns: status
     doc: |
       vt keyboard input integration
     params:
       - { name: ch, kind: scalar }
   - name: input_read
-    id: 88
+    id: 84
     returns: value
     doc: |
       Read one byte from the serial input ring (input pushed by the keyboard/serial
@@ -1079,7 +1017,7 @@ hostcalls:
       empty -- which is a "nothing yet", not a failure, and is why this call does
       not report an error code at all.
   - name: framebuffer_info
-    id: 89
+    id: 85
     returns: status
     doc: |
       Copy the GOP framebuffer descriptor (framebuffer_info_t: base, size, width,
@@ -1096,7 +1034,7 @@ hostcalls:
       - { name: out, kind: out, len: len, wasm3: i32, c_type: "wasmos_framebuffer_info_t*" }
       - { name: len, kind: scalar }
   - name: framebuffer_map
-    id: 90
+    id: 86
     returns: status
     doc: |
       Map the GOP framebuffer's physical pages into guest linear memory at wasm_off;
@@ -1119,7 +1057,7 @@ hostcalls:
       - { name: wasm_off, kind: ptr, wasm3: i32 }
       - { name: size, kind: scalar }
   - name: framebuffer_pixel
-    id: 91
+    id: 87
     returns: status
     doc: |
       Write 32-bit `color` to the framebuffer pixel at (x, y). Returns 0 on
@@ -1136,13 +1074,13 @@ hostcalls:
 
   # --- boot config / early log / env ---------------------------------------
   - name: boot_config_size
-    id: 92
+    id: 88
     returns: value
     doc: |
       Return the byte size of the kernel boot-config blob. Returns the size, or
       WASMOS_NOENT if no boot config is present or it is empty.
   - name: boot_config_copy
-    id: 93
+    id: 89
     returns: status
     doc: |
       Copy len bytes of the boot-config blob starting at byte `offset` into guest
@@ -1164,7 +1102,7 @@ hostcalls:
       - { name: len, kind: scalar }
       - { name: offset, kind: scalar }
   - name: initfs_find_path
-    id: 94
+    id: 90
     returns: value
     doc: |
       Look up an initfs entry by path at path_off (path_len bytes, < 112), stripping
@@ -1183,12 +1121,12 @@ hostcalls:
       - { name: path, kind: buf, len: path_len }
       - { name: path_len, kind: scalar }
   - name: early_log_size
-    id: 95
+    id: 91
     returns: value
     doc: |
       Return the number of bytes currently held in the kernel early-log buffer.
   - name: early_log_copy
-    id: 96
+    id: 92
     returns: status
     doc: |
       Copy len bytes of the early-log buffer starting at byte `offset` into guest
@@ -1207,7 +1145,7 @@ hostcalls:
       - { name: len, kind: scalar }
       - { name: offset, kind: scalar }
   - name: env_get
-    id: 97
+    id: 93
     returns: value
     doc: |
       Look up the process-environment variable named by name_off/name_len (name_len
@@ -1231,7 +1169,7 @@ hostcalls:
       - { name: buf, kind: out, len: buf_len, c_type: "char*" }
       - { name: buf_len, kind: scalar }
   - name: env_set
-    id: 98
+    id: 94
     returns: status
     doc: |
       Set the process-environment variable named by name_off/name_len to the value
@@ -1250,7 +1188,7 @@ hostcalls:
       - { name: val, kind: buf, len: val_len, c_type: "const char*" }
       - { name: val_len, kind: scalar }
   - name: env_unset
-    id: 99
+    id: 95
     returns: status
     doc: |
       Remove the process-environment variable named by name_off/name_len, freeing
@@ -1260,10 +1198,10 @@ hostcalls:
       - { name: name, kind: buf, len: name_len, c_type: "const char*" }
       - { name: name_len, kind: scalar }
 
-  - { name: abort, id: 100, module: env, returns: void, params: [{name: msg, kind: scalar}, {name: file, kind: scalar}, {name: line, kind: scalar}, {name: column, kind: scalar}] }
+  - { name: abort, id: 96, module: env, returns: void, params: [{name: msg, kind: scalar}, {name: file, kind: scalar}, {name: line, kind: scalar}, {name: column, kind: scalar}] }
 
   - name: region_alloc
-    id: 101
+    id: 97
     returns: value
     doc: |
       Allocate a driver-owned, pinned, contiguous DMA region below 2 GiB and map it
@@ -1278,7 +1216,7 @@ hostcalls:
       - { name: cache_policy, kind: scalar }
       - { name: out_phys, kind: out, wasm3: i32, c_type: "uint64_t*" }
   - name: irq_configure
-    id: 102
+    id: 98
     returns: status
     doc: |
       Configure an IRQ line's trigger/polarity (flags: WASMOS_IRQ_TRIGGER_LEVEL /
@@ -1288,7 +1226,7 @@ hostcalls:
       - { name: irq_line, kind: scalar }
       - { name: flags, kind: scalar }
   - name: ipc_select_wait_timeout
-    id: 103
+    id: 99
     returns: value
     wasm3_fn: wasmos_sys_select_wait_timeout
     doc: |
@@ -1302,7 +1240,7 @@ hostcalls:
 
   # --- buffer acquire / (un)borrow / reborrow ------------------------------
   - name: xfer_buffer_acquire
-    id: 104
+    id: 100
     returns: value
     doc: |
       Object/owner/borrow xfer-buffer ABI (stateless, id-based, capability-style).
@@ -1321,7 +1259,7 @@ hostcalls:
     params:
       - { name: minimum_size, kind: scalar }
   - name: xfer_buffer_unborrow
-    id: 105
+    id: 101
     returns: status
     doc: |
       Grantor-side drop of a transfer-buffer (re)borrow named by `borrow_id`; the
@@ -1331,7 +1269,7 @@ hostcalls:
     params:
       - { name: borrow_id, kind: handle }
   - name: buffer_acquire
-    id: 106
+    id: 102
     returns: value
     doc: |
       OWNER acquires a new buffer of `kind` (only BUFFER_KIND_TRANSFER is supported)
@@ -1342,7 +1280,7 @@ hostcalls:
       - { name: kind, kind: scalar }
       - { name: minimum_size, kind: scalar }
   - name: buffer_unborrow
-    id: 107
+    id: 103
     returns: status
     doc: |
       Grantor-side drop of a (re)borrow named by `borrow_id`: the lender revokes a
@@ -1352,7 +1290,7 @@ hostcalls:
     params:
       - { name: borrow_id, kind: handle }
   - name: xfer_buffer_reborrow
-    id: 108
+    id: 104
     returns: value
     doc: |
       A grantee sub-grants its own `borrow_id` (rights ⊆ its own) to the context
@@ -1362,7 +1300,7 @@ hostcalls:
       - { name: borrow_id, kind: handle }
       - { name: flags, kind: scalar }
   - name: buffer_reborrow
-    id: 109
+    id: 105
     returns: value
     doc: |
       A current BORROWER sub-grants its own borrow `borrow_id` of `kind` to the
@@ -1376,7 +1314,7 @@ hostcalls:
       - { name: borrow_id, kind: handle }
       - { name: flags, kind: scalar }
   - name: spawn_info_buffer
-    id: 110
+    id: 106
     returns: value
     doc: |
       Returns this process's spawn-info buffer_id (holding its wasmos_spawn_info_t
@@ -1384,7 +1322,7 @@ hostcalls:
 
   # --- WASI (WARP-only) -----------------------------------------------------
   - name: proc_exit
-    id: 111
+    id: 107
     module: wasi_snapshot_preview1
     runtimes: [warp]
     returns: void
@@ -1393,11 +1331,11 @@ hostcalls:
       and yields as EXITED so the process is reaped. Does not return to the caller.
     params:
       - { name: code, kind: scalar }
-  - { name: random_get, id: 112, module: wasi_snapshot_preview1, runtimes: [warp], returns: status, params: [{name: buf, kind: out, len: len}, {name: len, kind: scalar}] }
+  - { name: random_get, id: 108, module: wasi_snapshot_preview1, runtimes: [warp], returns: status, params: [{name: buf, kind: out, len: len}, {name: len, kind: scalar}] }
 
   # --- late additions -------------------------------------------------------
   - name: block_buffer_map
-    id: 113
+    id: 109
     returns: value
     doc: |
       Zero-copy: overlay the caller's own 8 KiB block buffer into linear memory and
@@ -1405,7 +1343,7 @@ hostcalls:
       physical pages named by wasmos_block_buffer_phys(), so a peer block server
       filling the buffer by phys is visible here without a block_buffer_copy.
   - name: xfer_buffer_map
-    id: 114
+    id: 110
     returns: value
     doc: |
       Overlay an OWNED xfer-buffer's backing into this process's WASM linear memory
@@ -1417,7 +1355,7 @@ hostcalls:
     params:
       - { name: buffer_id, kind: handle }
   - name: xfer_buffer_unmap
-    id: 115
+    id: 111
     returns: status
     doc: |
       Tears down the owner's zero-copy overlay of transfer buffer `buffer_id` from
@@ -1427,7 +1365,7 @@ hostcalls:
     params:
       - { name: buffer_id, kind: handle }
   - name: klog_register_ring
-    id: 116
+    id: 112
     returns: status
     doc: |
       klog ring (VT I/O multiplexer, phase 4): register a BUFFER_KIND_TRANSFER
@@ -1437,7 +1375,7 @@ hostcalls:
     params:
       - { name: id, kind: handle }
   - name: msi_alloc
-    id: 117
+    id: 113
     returns: status
     doc: |
       Allocate one message-signalled interrupt vector and bind it to `endpoint`,
@@ -1453,7 +1391,7 @@ hostcalls:
       - { name: endpoint, kind: handle }
       - { name: out, kind: out, c_type: "wasmos_msi_desc_t*" }
   - name: msi_free
-    id: 118
+    id: 114
     returns: status
     doc: |
       Release MSI vector `vector`, which must have been allocated by the caller.
@@ -1464,7 +1402,7 @@ hostcalls:
     params:
       - { name: vector, kind: scalar }
   - name: mmio_write32
-    id: 119
+    id: 115
     returns: status
     doc: |
       Write `value` to the 32-bit memory-mapped device register at physical
@@ -1479,7 +1417,7 @@ hostcalls:
       - { name: value, kind: scalar }
 
   - name: io_region_in8
-    id: 120
+    id: 116
     returns: status
     doc: |
       Read a byte at `offset` within the caller's granted I/O region `region` -- an
@@ -1498,7 +1436,7 @@ hostcalls:
       - { name: offset, kind: scalar }
       - { name: out, kind: out, c_type: "uint32_t*" }
   - name: io_region_in16
-    id: 121
+    id: 117
     returns: status
     doc: |
       Read a 16-bit word at `offset` within the caller's granted I/O region `region` -- an
@@ -1517,7 +1455,7 @@ hostcalls:
       - { name: offset, kind: scalar }
       - { name: out, kind: out, c_type: "uint32_t*" }
   - name: io_region_in32
-    id: 122
+    id: 118
     returns: status
     doc: |
       Read a 32-bit word at `offset` within the caller's granted I/O region `region` -- an
@@ -1536,7 +1474,7 @@ hostcalls:
       - { name: offset, kind: scalar }
       - { name: out, kind: out, c_type: "uint32_t*" }
   - name: io_region_out8
-    id: 123
+    id: 119
     returns: status
     doc: |
       Write a byte to `offset` within the caller's granted I/O region
@@ -1548,7 +1486,7 @@ hostcalls:
       - { name: offset, kind: scalar }
       - { name: value, kind: scalar }
   - name: io_region_out16
-    id: 124
+    id: 120
     returns: status
     doc: |
       Write a 16-bit word to `offset` within the caller's granted I/O region
@@ -1560,7 +1498,7 @@ hostcalls:
       - { name: offset, kind: scalar }
       - { name: value, kind: scalar }
   - name: io_region_out32
-    id: 125
+    id: 121
     returns: status
     doc: |
       Write a 32-bit word to `offset` within the caller's granted I/O region

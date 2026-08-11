@@ -27,8 +27,9 @@
  * not have collided with a code, but no caller read the sign -- each masked it
  * off -- so the width of the value is not the whole test. Ask whether the
  * caller can act on the distinction, not only whether the bits allow one.
- * thread_join was the last one left and now has an out-parameter too, so no
- * host call still carries a guest-chosen full-range value on the shared i32.
+ * No host call still carries a guest-chosen full-range value on the shared i32.
+ * thread_join was the last one; it has since been retired along with the rest
+ * of the WASM threading family, which guests were never going to use.
  */
 
 /*

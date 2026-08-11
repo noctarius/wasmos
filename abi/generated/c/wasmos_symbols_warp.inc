@@ -75,11 +75,7 @@
     LINK("wasmos", "xfer_buffer_borrow", warp_xfer_buffer_borrow) , \
     LINK("wasmos", "xfer_buffer_release", warp_xfer_buffer_release) , \
     LINK("wasmos", "sched_cpu_stats", warp_sched_cpu_stats) , \
-    LINK("wasmos", "thread_create", warp_thread_create) , \
     LINK("wasmos", "thread_yield", warp_thread_yield) , \
-    LINK("wasmos", "thread_exit", warp_thread_exit) , \
-    LINK("wasmos", "thread_join", warp_thread_join) , \
-    LINK("wasmos", "thread_detach", warp_thread_detach) , \
     LINK("wasmos", "shmem_create", warp_shmem_create) , \
     LINK("wasmos", "shmem_grant", warp_shmem_grant) , \
     LINK("wasmos", "shmem_revoke", warp_shmem_revoke) , \

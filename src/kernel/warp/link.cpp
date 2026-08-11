@@ -1659,96 +1659,10 @@ static uint32_t warp_proc_info_stats(uint32_t index, uint32_t buf_off, uint32_t 
 // Thread operations
 // ---------------------------------------------------------------------------
 
-static uint32_t warp_thread_create(uint32_t entry_off, uint32_t arg0, uint32_t arg1, uint32_t flags,
-                                   void* ctx_) {
-    auto* ctx = warp_call_ctx(ctx_);
-    if ((int32_t)entry_off <= 0)
-        return (uint32_t)WASMOS_ERR_THREAD_BAD_ENTRY;
-    const uint8_t* name_raw = warp_mem(ctx, entry_off, 1);
-    if (!name_raw)
-        return (uint32_t)WASMOS_ERR_KERNEL_BAD_POINTER;
-    /* Scan for NUL within 64 bytes */
-    uint32_t mem_size = ctx->module->getLinearMemorySizeInPages() << 16;
-    if (entry_off >= mem_size)
-        return (uint32_t)WASMOS_ERR_THREAD_BAD_ENTRY;
-    uint32_t avail = mem_size - entry_off;
-    if (avail > 64u)
-        avail = 64u;
-    uint8_t* nm = warp_mem(ctx, entry_off, avail);
-    if (!nm)
-        return (uint32_t)WASMOS_ERR_KERNEL_BAD_POINTER;
-    uint8_t ok = 0;
-    for (uint32_t i = 0; i < avail; ++i)
-        if (nm[i] == '\0') {
-            ok = 1;
-            break;
-        }
-    if (!ok)
-        return (uint32_t)WASMOS_ERR_THREAD_BAD_ENTRY;
-    const char* entry_name = reinterpret_cast<const char*>(nm);
-    uint32_t argc = (flags & 0x1u) ? 2u : 0u;
-    uint32_t argv[2] = {arg0, arg1};
-    uint32_t tid = 0;
-    if (wasm_driver_spawn_vm_thread(ctx->pid, entry_name, argc, argv, &tid) != 0)
-        return (uint32_t)WASMOS_ERR_THREAD_SPAWN_FAILED;
-    return tid;
-}
-
 static uint32_t warp_thread_yield(void* ctx_) {
     (void)ctx_;
     process_yield(PROCESS_RUN_YIELDED);
     return 0;
-}
-
-static uint32_t warp_thread_exit(uint32_t status, void* ctx_) {
-    (void)ctx_;
-    process_t* proc = process_get(process_current_pid());
-    if (!proc)
-        return (uint32_t)WASMOS_ERR_KERNEL_NO_CALLER;
-    process_set_exit_status(proc, (int32_t)status);
-    process_yield(PROCESS_RUN_THREAD_EXITED);
-    return 0;
-}
-
-/* See the wasm3 shim: the guest-chosen exit status uses the whole 32-bit range
- * and so comes back through `out_status`, and the pointer is resolved only
- * after the join, because the caller can be parked while another thread grows
- * linear memory out from under a pointer taken earlier. */
-static uint32_t warp_thread_join(uint32_t tid, uint32_t out_status_off, void* ctx_) {
-    auto* ctx = warp_call_ctx(ctx_);
-    process_t* proc = process_get(process_current_pid());
-    if (!proc)
-        return (uint32_t)WASMOS_ERR_KERNEL_NO_CALLER;
-    /* Probed before the join so a bad pointer is refused while the thread is
-     * still joinable, rather than after its status has been consumed. */
-    if (!warp_mem(ctx, out_status_off, sizeof(int32_t)))
-        return (uint32_t)WASMOS_ERR_KERNEL_BAD_POINTER;
-    int32_t exit_status = 0;
-    /* rc > 0 registers this thread as the joiner and blocks it; the status is
-     * only readable from a LATER call, so the wait loops rather than returning
-     * 0 and losing it. */
-    for (;;) {
-        int rc = process_thread_join(proc, tid, &exit_status);
-        if (rc == 0)
-            break;
-        if (rc < 0)
-            return (uint32_t)rc; /* already a packed code */
-        process_yield(PROCESS_RUN_BLOCKED);
-    }
-    int32_t* out_status =
-        reinterpret_cast<int32_t*>(warp_mem(ctx, out_status_off, sizeof(int32_t)));
-    if (!out_status)
-        return (uint32_t)WASMOS_ERR_KERNEL_BAD_POINTER;
-    *out_status = exit_status;
-    return 0;
-}
-
-static uint32_t warp_thread_detach(uint32_t tid, void* ctx_) {
-    (void)ctx_;
-    process_t* proc = process_get(process_current_pid());
-    if (!proc)
-        return (uint32_t)WASMOS_ERR_KERNEL_NO_CALLER;
-    return (uint32_t)process_thread_detach(proc, tid);
 }
 
 // ---------------------------------------------------------------------------

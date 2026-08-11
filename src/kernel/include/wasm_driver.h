@@ -93,9 +93,4 @@ int wasm_driver_call(wasm_driver_t* driver, const char* export_name, uint32_t ar
 int wasm_driver_call_unlocked(wasm_driver_t* driver, const char* export_name, uint32_t argc,
                               uint32_t* argv);
 
-/* Spawn a kernel thread to run export_name in owner_pid's wasm3 runtime.
- * Used for threaded WASM workloads via the thread_create syscall. */
-int wasm_driver_spawn_vm_thread(uint32_t owner_pid, const char* export_name, uint32_t argc,
-                                const uint32_t* argv, uint32_t* out_tid);
-
 #endif

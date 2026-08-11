@@ -79,11 +79,7 @@
     LINK("wasmos", "xfer_buffer_borrow", stub_i3) , \
     LINK("wasmos", "xfer_buffer_release", stub_i1) , \
     LINK("wasmos", "sched_cpu_stats", stub_i2) , \
-    LINK("wasmos", "thread_create", stub_i4) , \
     LINK("wasmos", "thread_yield", stub_i0) , \
-    LINK("wasmos", "thread_exit", stub_i1) , \
-    LINK("wasmos", "thread_join", stub_i2) , \
-    LINK("wasmos", "thread_detach", stub_i1) , \
     LINK("wasmos", "shmem_create", stub_i2) , \
     LINK("wasmos", "shmem_grant", stub_i2) , \
     LINK("wasmos", "shmem_revoke", stub_i2) , \

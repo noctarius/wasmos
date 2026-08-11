@@ -419,13 +419,25 @@ linked feature documents for rationale and rollout plans.
   `io.NOT_AUTHORIZED` arrived as the `0xFF`/`0xFFFF` an absent device reads back
   and a denied capability was indistinguishable from missing hardware. The width
   of a value is therefore not the whole test; whether the caller can act on the
-  distinction is. `thread_join` was the last call in that state and now takes an
-  out-parameter too, so no host call carries a guest-chosen full-range value on
-  the shared i32. Converting it also fixed a second defect: blocking used to
-  return 0 immediately, but the exit status is only readable from a later
-  `process_thread_join`, so a guest that blocked was handed 0 and never learned
-  the real status. Both shims now loop over the block, as the ring-3 thread-join
-  syscall always did.
+  distinction is. No host call carries a guest-chosen full-range value on the
+  shared i32 any more: `thread_join` was the last, and the WASM threading family
+  it belonged to has since been removed outright (below).
+- The WASM threading host calls `thread_create`, `thread_exit`, `thread_join` and
+  `thread_detach` are **removed**. They were wired in both runtimes but had no
+  caller in any of the five guest languages, and the runtime designs are why:
+  a WASM instance serializes under `runtime_lock`, so guests get concurrency, not
+  parallelism, and the concurrency story is coroutines + futures
+  (docs/architecture/32 §52). `thread_yield` and `thread_gettid` STAY — the guest
+  reentrant mutex spins on them. The kernel-side VM-thread machinery they were
+  the only users of (`wasm_driver_spawn_vm_thread` and the per-runtime thread-slot
+  tables and entry trampolines) is deleted with them.
+
+  Their ids were deleted rather than reserved, and the whole host-call id space
+  renumbered densely. That shifts every later ring-3 syscall number and AOT
+  rebind position, which is safe here only because there are no out-of-tree
+  guests: everything is rebuilt from source and `.cache/warp_aot` is cleared in
+  the same change. The IDL header now states that rule instead of the previous
+  append-only one.
 - The native driver API (`wasmos_native_driver.h`, ABI 13) had the same defect on
   its own surface and was converted with it: `io_in8`/`io_in16` report the value
   through `out`, and `io_out8`/`io_out16` report an outcome rather than dropping

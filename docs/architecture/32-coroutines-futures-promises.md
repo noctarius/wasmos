@@ -2735,8 +2735,13 @@ the shared-memory WASM threading model, which the toolchains barely support.
 
 Vocabulary discipline: the guest-facing API speaks `coroutine`/`future`. "Green
 thread" is an implementation detail and never a public name. In particular the
-wired-but-unused `thread_*` host calls are **not** the coroutine API — they may
-become the hidden green-thread substrate, but the public verb stays `coroutine`.
+remaining `thread_*` host calls (`thread_yield`, `thread_gettid`, both used by
+the guest mutex) are **not** the coroutine API, and the public verb stays
+`coroutine`. The threading half of that family — `thread_create`, `thread_join`,
+`thread_detach`, `thread_exit` — has been **removed**: it was wired but never
+called, and the runtime designs above are why it was never going to be. A green
+-thread substrate, if one is built, suspends at the host-call boundary (§52.3)
+and does not need guest-visible thread verbs.
 
 ### 52.3 Suspension mechanism, per backend (engines untouched)
 

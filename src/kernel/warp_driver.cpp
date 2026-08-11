@@ -134,44 +134,6 @@ static KernelLogger g_logger;
 // Thread-slot table (mirrors wasm_driver.c)
 // ---------------------------------------------------------------------------
 
-#define WASM_DRIVER_THREAD_SLOTS 64u
-
-typedef struct {
-    uint8_t in_use;
-    uint32_t owner_pid;
-    const uint8_t* module_bytes;
-    uint32_t module_size;
-    uint32_t stack_size;
-    uint32_t heap_size;
-    char export_name[64];
-    uint32_t argc;
-    uint32_t argv[4];
-} warp_driver_thread_slot_t;
-
-static warp_driver_thread_slot_t g_thread_slots[WASM_DRIVER_THREAD_SLOTS];
-static ksync_spinlock_t g_thread_slots_lock;
-
-static warp_driver_thread_slot_t* thread_slot_alloc(void) {
-    ksync_spinlock_lock(&g_thread_slots_lock);
-    for (uint32_t i = 0; i < WASM_DRIVER_THREAD_SLOTS; ++i) {
-        if (!g_thread_slots[i].in_use) {
-            g_thread_slots[i].in_use = 1;
-            ksync_spinlock_unlock(&g_thread_slots_lock);
-            return &g_thread_slots[i];
-        }
-    }
-    ksync_spinlock_unlock(&g_thread_slots_lock);
-    return nullptr;
-}
-
-static void thread_slot_free(warp_driver_thread_slot_t* slot) {
-    if (!slot)
-        return;
-    ksync_spinlock_lock(&g_thread_slots_lock);
-    slot->in_use = 0;
-    ksync_spinlock_unlock(&g_thread_slots_lock);
-}
-
 static int warp_driver_start_module(vb::WasmModule* mod, uint64_t user_root) {
     WarpExceptionCheckpoint* ckpt = warp_exception_get_checkpoint();
     ckpt->active = 1;
@@ -578,9 +540,10 @@ static void warp_linmem_reserve_hint_for(uint32_t pid, uint64_t initial_linmem) 
 
 extern "C" {
 
-void wasm_driver_init(void) {
-    ksync_spinlock_init(&g_thread_slots_lock);
-}
+/* Nothing to initialize under WARP: the only state this owned was the VM
+ * thread-slot table, retired with the thread_* host calls. The symbol stays
+ * because kernel.c calls it for whichever runtime is built. */
+void wasm_driver_init(void) {}
 
 int wasm_driver_start(wasm_driver_t* driver, const wasm_driver_manifest_t* manifest,
                       uint32_t owner_context_id) {
@@ -889,85 +852,6 @@ int wasm_driver_call_unlocked(wasm_driver_t* driver, const char* name, uint32_t 
     int rc = call_export_mod(module_of(driver), name, argc, argv, r3_root, r3_stack);
     warp_runtime_leave(prev);
     return rc;
-}
-
-static process_run_result_t warp_vm_thread_entry(process_t* process, uint32_t tid, void* arg) {
-    warp_driver_thread_slot_t* slot = static_cast<warp_driver_thread_slot_t*>(arg);
-    (void)tid;
-    if (!process || !slot || !slot->in_use)
-        return PROCESS_RUN_EXITED;
-
-    warp_heap_configure(slot->owner_pid, slot->heap_size, 2ULL * 1024ULL * 1024ULL * 1024ULL);
-    uint32_t prev = warp_runtime_enter(slot->owner_pid);
-
-    vb::WasmModule* mod = nullptr;
-    int rc = -1;
-    void* warp_ctx = warp_context_for_pid(slot->owner_pid);
-    if (!warp_ctx) {
-        warp_runtime_leave(prev);
-        process_set_exit_status(process, -1);
-        thread_slot_free(slot);
-        process_yield(PROCESS_RUN_THREAD_EXITED);
-        __builtin_unreachable();
-    }
-
-    WarpExceptionCheckpoint* ckpt = warp_exception_get_checkpoint();
-    ckpt->active = 1;
-    if (__builtin_setjmp(ckpt->jbuf) == 0) {
-        mod = new vb::WasmModule(UINT64_MAX, g_logger, false, warp_ctx, 10U);
-        /* App/process WARP path: arm linmem-block identification here too (the
-         * driver paths are separate).  Only the linmem block grows via
-         * warp_krealloc, so arming before compile is safe. */
-        warp_linmem_reserve_hint_for(slot->owner_pid, slot->heap_size);
-        vb::Span<uint8_t const> bc(slot->module_bytes, slot->module_size);
-        mod->initFromBytecode(bc, warp_wasmos_symbols(), true);
-        warp_bind_module(mod, slot->owner_pid);
-        ckpt->active = 0;
-        if (warp_driver_start_module(mod, 0) != 0) {
-            rc = -1;
-        } else {
-            /* Thread slots have no per-slot ring-3 setup; pass 0 to run kernel-mode. */
-            rc = call_export_mod(mod, slot->export_name, slot->argc, slot->argv, 0, 0);
-        }
-    } else {
-        klog_write("[warp-driver] vm thread: module init failed\n");
-    }
-    ckpt->active = 0;
-
-    delete mod;
-    warp_runtime_leave(prev);
-    process_set_exit_status(process, rc);
-    thread_slot_free(slot);
-    process_yield(PROCESS_RUN_THREAD_EXITED);
-    __builtin_unreachable();
-}
-
-int wasm_driver_spawn_vm_thread(uint32_t owner_pid, const char* export_name, uint32_t argc,
-                                const uint32_t* argv, uint32_t* out_tid) {
-    warp_driver_thread_slot_t* slot = thread_slot_alloc();
-    if (!slot)
-        return -1;
-
-    slot->owner_pid = owner_pid;
-    slot->module_bytes = nullptr; /* TODO: locate bytes from owner_pid */
-    slot->module_size = 0;
-    slot->stack_size = 64u * 1024u;
-    slot->heap_size = 2u * 1024u * 1024u;
-    slot->argc = argc <= 4 ? argc : 4;
-    for (uint32_t i = 0; i < slot->argc; ++i)
-        slot->argv[i] = argv[i];
-    __builtin_strncpy(slot->export_name, export_name, sizeof(slot->export_name) - 1);
-    slot->export_name[sizeof(slot->export_name) - 1] = '\0';
-
-    uint32_t tid = 0;
-    if (process_thread_spawn_worker_internal(owner_pid, "warp-vm-thread", warp_vm_thread_entry,
-                                             slot, &tid) != 0) {
-        thread_slot_free(slot);
-        return -1;
-    }
-    if (out_tid)
-        *out_tid = tid;
-    return 0;
 }
 
 } // extern "C"

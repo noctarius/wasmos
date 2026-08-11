@@ -404,7 +404,12 @@ impl Window {
         let _ = self.wait_reply(self.reply_ep, rid);
     }
 
-    /// Blit the back buffer into the shared buffer, flush, and present.
+    /// Blit the back buffer into the shared buffer and present.
+    ///
+    /// No shmem_flush: `base` is the mapped window, i.e. the shared region's
+    /// own physical pages, so writing through it IS the shared buffer. The
+    /// flush that used to sit here copied those pages onto themselves once a
+    /// frame -- 2.4 MB of pointless copying at frame rate.
     fn present(&mut self) {
         unsafe {
             let src = core::ptr::addr_of!(BACK) as *const u32;
@@ -415,7 +420,6 @@ impl Window {
                     *row.add(x as usize) = *srow.add(x as usize);
                 }
             }
-            let _ = shmem_flush(self.shmem_id, self.base as i32, self.stride * H);
         }
         let rid = self.next_rid();
         unsafe {

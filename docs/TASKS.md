@@ -27,6 +27,40 @@ Source: `architecture/06-memory-management.md`,
   TLB-shootdown IPIs before any live page-table reclaim under concurrent APs
   (`src/kernel/arch/x86_64/cpu_x86_64.c:554` `TODO(smp-tlb)`,
   `src/kernel/warp/ring3_trampolines.c:166`).
+- [ ] Retire the `shmem` subsystem in favour of a single `xfer_buffer` sharing
+  mechanism. The two are implementations of one concept -- an id, a
+  grant/borrow step, a copy path and a zero-copy map path -- differing mainly
+  in that `shmem_grant` addresses a **pid** while `xfer_buffer_borrow`
+  addresses the context owning an **endpoint** (the shape the rest of the
+  system uses), and that shmem is gated by the DMA capability rather than by
+  explicit per-borrow READ/WRITE rights. Nothing needs shmem's extra
+  expressiveness: xfer buffers already back **DMA** -- the ATA driver DMAs into
+  a borrowed buffer via `wasmos_dma_map_borrow` (`src/drivers/ata/ata.c:452`,
+  `abi/hostcalls.yaml` `dma_map_borrow`) -- and already back the compositor's
+  own framebuffer and backbuffer (`ND_BUFFER_KIND_FRAMEBUFFER` /
+  `ND_BUFFER_KIND_XFER`, `src/services/gfx_compositor/gfx_compositor.zig:726`
+  and `:755`).
+
+  The duplication has already cost a real bug: the linear-memory window
+  placement rule was hand-written once per mapper, so `shmem_map_auto` and
+  `xfer_buffer_map` carried the same defect and both mapped overlays on top of
+  live app data (fixed in `3d8811828e` by sharing
+  `wasm_linmem_place_overlay()`). Two mechanisms means every such rule is
+  written twice.
+
+  Main consumer to migrate is graphics: the compositor allocates each window's
+  app-facing buffer with `shmem_create`
+  (`src/services/gfx_compositor/gfx_compositor.zig:1632`) and replies
+  `(buffer_id, shmem_id, stride_bytes)`; apps map it with `shmem_map_auto`
+  (e.g. `examples/rust/tetris/tetris.rs:359`, `src/libui/assemblyscript`).
+  Note those apps also call `shmem_flush` per frame on a window they have
+  already mapped, which appears to be a self-copy into the pages it is mapped
+  onto -- confirm before carrying that pattern across.
+
+  Done when: no `shmem_*` host call remains in `abi/hostcalls.yaml` (ids
+  renumbered per the ID RULES, whole-world rebuild + `.cache/warp_aot`
+  cleared), both runtimes' shims are gone, and gfx/libui/tetris run on xfer
+  buffers under wasm3 AND WARP.
 - [ ] Move native `.wap` services from ring 0 to the ring-3 native execution
   path (syscall-backed `libsys_native` primitives + capability enforcement).
   Unblocks isolating `gfx-compositor`, `font-service`, and `net-stack`

@@ -197,7 +197,13 @@ linked feature documents for rationale and rollout plans.
 
 ### Build, Configuration, and Validation
 
-- Default configuration: wasm3 runtime, single CPU. Pin a runtime with
+- Default configuration: **WARP** runtime, single CPU. WARP is the default
+  because a WARP guest runs at CPL=3 and is preempted like any other thread,
+  while the wasm3 interpreter and its guest both run at CPL=0 where a guest loop
+  with no host call in it holds its CPU until it returns (architecture/11,
+  *Which Workloads Reach Ring 3*) -- one heavy app stalls the desktop. wasm3
+  remains fully supported and is the reference implementation the two runtimes
+  are read against. Pin a runtime with
   `-DWASMOS_DOTCONFIG=configs/{wasm3,warp}_{single,smp}_defconfig`; a bare
   `cmake -S . -B build` seeds from `configs/wasmos_defconfig`, which selects no
   runtime and so falls to the code default. `-DWASMOS_WASM_RUNTIME_WARP=ON`

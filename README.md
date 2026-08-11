@@ -20,10 +20,12 @@ and a WASM-first user-space stack, plus optional native drivers for hardware
 paths that benefit from native execution.
 
 Two WASM runtime backends are available (select at build time):
-- **wasm3** (default) — tree-walking interpreter, pure C, minimal footprint.
-- **WARP** — single-pass JIT compiler (BMW AG, Apache-2.0), near-native
-  execution speed on x86_64, selected with
-  `-DWASMOS_WASM_RUNTIME_WARP=ON`.
+- **WARP** (default) — single-pass JIT compiler (BMW AG, Apache-2.0),
+  near-native execution speed on x86_64. Its guests execute in ring 3 and are
+  preempted like any other thread.
+- **wasm3** — tree-walking interpreter, pure C, minimal footprint. Runs in the
+  kernel, so a guest loop that makes no host call is not preempted; useful as a
+  compact reference backend rather than for interactive workloads.
   WARP-loaded services, drivers, and utilities execute through the ring-3
   isolation path, with kernel-managed hostcall and linear-memory trampolines.
 
@@ -290,12 +292,12 @@ Key policy/runtime notes:
 
 Two backends are available, selected at CMake configure time:
 
-| Backend         | Flag                            | Character                                           |
-|-----------------|---------------------------------|-----------------------------------------------------|
-| wasm3 (default) | *(none)*                        | Tree-walking interpreter, pure C, minimal footprint |
-| WARP            | `-DWASMOS_WASM_RUNTIME_WARP=ON` | Single-pass x86_64 JIT, near-native speed           |
+| Backend        | Pin with                                          | Character                                          |
+|----------------|---------------------------------------------------|----------------------------------------------------|
+| WARP (default) | `-DWASMOS_DOTCONFIG=configs/warp_smp_defconfig`   | Single-pass x86_64 JIT, ring-3 guests, preemptible |
+| wasm3          | `-DWASMOS_DOTCONFIG=configs/wasm3_smp_defconfig`  | Tree-walking interpreter, in-kernel, not preempted |
 
-The default is wasm3.
+The default is WARP.
 
 To build and run with WARP:
 ```sh

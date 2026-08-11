@@ -362,13 +362,22 @@ endif ()
 set(WASMOS_PM_LIST_DEFINE -DWASMOS_PM_LIST_IMPL=${WASMOS_PM_LIST_IMPL_VALUE})
 set(WASMOS_PM_LIST_CAP_DEFINE -DWASMOS_PM_LIST_ARRAY_CHUNK_CAP=${WASMOS_PM_LIST_ARRAY_CHUNK_CAP})
 
-if (NOT DEFINED WASMOS_WASM_RUNTIME_WASM3_INITIALIZED)
-  set(WASMOS_WASM_RUNTIME_WASM3 ON  CACHE BOOL "Use wasm3 interpreter as WASM runtime" FORCE)
-  set(WASMOS_WASM_RUNTIME_WARP  OFF CACHE BOOL "Use WARP JIT compiler as WASM runtime" FORCE)
-  set(WASMOS_WASM_RUNTIME_WASM3_INITIALIZED ON CACHE BOOL "Set when WASMOS_WASM_RUNTIME default is initialized" FORCE)
+# Default runtime: WARP. A guest under WARP runs at CPL=3 and is preempted like
+# any other thread; the wasm3 interpreter and the guest it interprets both run
+# at CPL=0, where process_preempt_from_irq refuses to preempt at all, so a guest
+# loop with no host call in it holds its CPU until it returns (see
+# architecture/11, "Which Workloads Reach Ring 3"). That makes wasm3 a poor
+# default for an interactive system -- one heavy app stalls the desktop -- while
+# remaining valuable as the reference implementation the two runtimes are read
+# against. Pin either explicitly with
+# -DWASMOS_DOTCONFIG=configs/{wasm3,warp}_{single,smp}_defconfig.
+if (NOT DEFINED WASMOS_WASM_RUNTIME_DEFAULT_INITIALIZED)
+  set(WASMOS_WASM_RUNTIME_WARP  ON  CACHE BOOL "Use WARP JIT compiler as WASM runtime" FORCE)
+  set(WASMOS_WASM_RUNTIME_WASM3 OFF CACHE BOOL "Use wasm3 interpreter as WASM runtime" FORCE)
+  set(WASMOS_WASM_RUNTIME_DEFAULT_INITIALIZED ON CACHE BOOL "Set when WASMOS_WASM_RUNTIME default is initialized" FORCE)
 endif ()
-option(WASMOS_WASM_RUNTIME_WASM3 "Use wasm3 interpreter as WASM runtime" ON)
-option(WASMOS_WASM_RUNTIME_WARP  "Use WARP JIT compiler as WASM runtime" OFF)
+option(WASMOS_WASM_RUNTIME_WASM3 "Use wasm3 interpreter as WASM runtime" OFF)
+option(WASMOS_WASM_RUNTIME_WARP  "Use WARP JIT compiler as WASM runtime" ON)
 
 # WASM_RUNTIME_INCLUDE_DIR and WASM_RUNTIME_DEFINE are computed after the
 # Kconfig import (below) so that on a fresh cmake cache the kconfig-selected

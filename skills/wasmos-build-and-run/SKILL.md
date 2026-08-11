@@ -11,9 +11,11 @@ The WASM runtime (wasm3 interpreter vs WARP JIT/AOT) is chosen **at configure
 time** and baked into a build directory. Three things override each other, which
 causes "why did my build boot WARP when I asked for wasm3?" confusion:
 
-1. **Code default** (fresh cache, no `.config`): wasm3. A one-time guard
-   (`WASMOS_WASM_RUNTIME_WASM3_INITIALIZED`) sets `WASM3=ON`/`WARP=OFF` on the
-   first configure of a new build dir.
+1. **Code default** (fresh cache, no `.config`): **WARP**. A one-time guard
+   (`WASMOS_WASM_RUNTIME_DEFAULT_INITIALIZED`) sets `WARP=ON`/`WASM3=OFF` on the
+   first configure of a new build dir. WARP is the default because its guests
+   run at CPL=3 and are preemptible; a wasm3 guest runs at CPL=0 and is never
+   timer-preempted (see `docs/architecture/11`).
 2. **`WASMOS_DOTCONFIG`** (default `<repo>/.config`, which is **gitignored /
    local**): if that file exists it is imported every configure and **FORCE**s
    the runtime — so a leftover local `.config` silently overrides a

@@ -65,6 +65,64 @@ Source: `architecture/06-memory-management.md`,
   path (syscall-backed `libsys_native` primitives + capability enforcement).
   Unblocks isolating `gfx-compositor`, `font-service`, and `net-stack`
   (`architecture/11`:380-414).
+- [ ] Run the **wasm3 interpreter at CPL=3** via a ring-3 trampoline, reusing the
+  WARP scaffolding. Depends on the native ring-3 execution path above.
+
+  Two payoffs, the second bigger than the first. (a) A wasm3 guest is currently
+  never timer-preempted -- `process_preempt_from_irq` refuses a kernel-mode
+  frame outright (`src/kernel/process.c`, `if (from_kernel) return 0;`), so a
+  guest loop with no host call holds its CPU until it returns and one heavy app
+  stalls the desktop (`architecture/11`, *Which Workloads Reach Ring 3*).
+  (b) `src/kernel/wasm3/link.c` is ~3,400 lines of 103 hand-written host-call
+  shims that exist only because the interpreter runs in-kernel and can call
+  kernel functions directly. In ring 3 they become syscalls into the SAME
+  dispatch WARP already uses (`abi/generated/c/wasmos_ring3_dispatch.inc`), so
+  there is one implementation per host call instead of two. Most wasm3/WARP
+  divergences fixed to date were two copies of one rule drifting apart.
+
+  Reuse rather than invent -- all of this is built and proven for WARP:
+  the `WARP_R3_*` VA layout (`src/kernel/include/warp_ring3.h`: linmem RW, HC
+  stub page R-X with 8 bytes per call, entry/ret trampolines, 256 KiB user
+  stack), the `READ|EXEC|USER` mapping in
+  `src/kernel/warp/ring3_trampolines.c:103`, `r3_do_iretq`
+  (`src/kernel/warp_driver.cpp:348`), and the embedded-blob-into-a-process
+  loader pattern in `src/kernel/kernel_ring3_probe_runtime.c`.
+
+  A second compile of `libs/wasm3` is unavoidable and is the right shape:
+  today its objects use `CFLAGS_WASM3 = CFLAGS_KERNEL + ...`
+  (`src/kernel/CMakeLists.txt:16`), which carries `-mcmodel=kernel` (top-2 GiB
+  addressing, wrong for a user VA) and links against kernel symbols. A separate
+  link unit makes "no kernel symbols" a **link error** instead of a runtime #GP.
+
+  Phases, each independently verifiable:
+  1. **Spike.** Build `libs/wasm3` plus a minimal ring-3 platform layer as a user
+     blob; map it R-X per process with a private RW data copy and a user stack;
+     `iretq` to it; run a trivial module whose only host call is `console_write`
+     through the HC stub page. Answers the three unknowns at once: does it link
+     with no kernel symbols, does entry/exit work, is writable state per-process.
+  2. **Generated ring-3 host-call client.** A new emitter in
+     `scripts/gen_abi_hostcalls.py` producing syscall stubs (`RAX = 0x100 + id`);
+     the `m3ApiRawFunction` bodies become those stubs. Deletes the 103 kernel
+     shims.
+  3. **Linear memory** at `WARP_R3_LINMEM_BASE`, grown by syscall. Expect
+     surgical edits in `libs/wasm3/source/m3_env.c` -- it has been patched
+     exactly here twice already (`d7f644f02c`, `fbb5b0dc81`), which is the
+     accepted last resort for this file, kept minimal.
+  4. **Heap and libc** from a user RW region. This RETIRES most of
+     `src/kernel/wasm3/shim.c`: the per-pid heap table, the CPU-local heap
+     binding, its 42 spinlock calls and its `preempt_disable` all exist solely
+     because one in-kernel interpreter multiplexes every wasm process. One
+     interpreter per address space removes the multiplexing, not just the lock.
+  5. Flip wasm3 apps onto the ring-3 path and delete the in-kernel execution
+     path.
+
+  Done when: a wasm3 guest is preempted (a full-frame blitting app stays
+  responsive AND leaves the desktop responsive), `wasm3/link.c`'s shims are
+  gone, and both runtimes pass `run-qemu-test` plus the CLI suite.
+
+  Risks: the user code model versus `-mcmodel=kernel`; wasm3 internals that
+  assume a kernel-ish environment (`setjmp`/`longjmp`, allocator assumptions);
+  and step 3, which is where the historical linmem aliasing bugs lived.
 - [ ] Finish ring-3 hardening TODOs: drop `PML4[0]` from the kernel root once
   bootstrap no longer needs the low slot (`src/kernel/paging.c:338`
   `TODO(ring3-phase3)`); add process-local exception handling beyond the

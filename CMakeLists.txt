@@ -1120,6 +1120,14 @@ if (WASMOS_WASM_RUNTIME_WARP)
     # guest modules import the new one, and AOT compilation fails with
     # "Imported symbol could not be found" for whichever module uses that call.
     # That cost one abandoned io_in32 conversion before the cause was found.
+    #
+    # FIXME: DEPENDS lists no libs/warp headers, and hand-rolled custom commands
+    # get no implicit header scanning. A subtree pull that touches only WARP
+    # headers (Compiler.hpp, BumpAllocator.hpp, *_relpatchobj.hpp -- all of which
+    # the 4.1.1 -> 4.2.0 bump changed) rebuilds only the TUs whose .cpp changed,
+    # so warp_aot links objects compiled against two different header versions.
+    # Until this tracks the WARP headers, delete <build>/warp_aot_objs by hand
+    # after every subtree pull.
     add_custom_command(
       OUTPUT "${_obj}"
       COMMAND ${CMAKE_COMMAND} -E make_directory "${WARP_AOT_OBJ_DIR}"

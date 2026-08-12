@@ -1156,14 +1156,27 @@ if (WASMOS_WASM_RUNTIME_WARP)
     set(WARP_HOST_TEST_FIXTURE ${BUILD_DIR}/test_wasm_coroutine_fixture.wasm)
     add_custom_command(
       OUTPUT ${WARP_HOST_TEST_FIXTURE}
-      COMMAND ${CLANG} --target=wasm32 -Oz -nostdlib -ffreestanding
+      # -nostdlib is not a promise that the compiler emits no libc calls: it may
+      # still lower an aggregate initialiser to memset (clang 18 does for this
+      # fixture's `= {0}` structs, clang 20+ inlines it). Every other wasm target
+      # here links ${WASMOS_LIBC_C_SOURCES} and so already satisfies that; this
+      # one linked nothing, and only ever built on an x86_64 host with WARP
+      # enabled -- a combination that did not occur until WARP became the default
+      # runtime. Link the real libc string/ctype implementations rather than
+      # hand-rolling a memset, and pass -mno-bulk-memory to match the app builds.
+      COMMAND ${CLANG} --target=wasm32 -mno-bulk-memory -Oz -nostdlib -ffreestanding
               -Wl,--no-entry -Wl,--strip-all -Wl,--export=wasmos_coroutine_wasm_test
               -I${LIBSYS_WASM_DIR}/include
+              -I${LIBC_DIR}/include
               ${CMAKE_SOURCE_DIR}/tests/unit/wasm_coroutine_warp_fixture.c
               ${LIBSYS_WASM_DIR}/coroutine_wasm.c
+              ${LIBC_DIR}/src/string.c
+              ${LIBC_DIR}/src/ctype.c
               -o ${WARP_HOST_TEST_FIXTURE}
       DEPENDS ${CMAKE_SOURCE_DIR}/tests/unit/wasm_coroutine_warp_fixture.c
               ${LIBSYS_WASM_DIR}/coroutine_wasm.c
+              ${LIBC_DIR}/src/string.c
+              ${LIBC_DIR}/src/ctype.c
               ${LIBSYS_WASM_DIR}/include/wasmos/coroutine_wasm.h
       COMMENT "Building wasm32 coroutine fixture for host WARP"
       VERBATIM)

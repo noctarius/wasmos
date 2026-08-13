@@ -235,7 +235,9 @@
       "Bash(sed -n '/static uint32_t warp_irq_ack/,/^}/p' src/kernel/warp/link.cpp)",
       "Bash(sed -n '/static uint32_t warp_irq_route_ipc/,/^}/p' src/kernel/warp/link.cpp)",
       "Bash(sed -n '/static int require_irq_route_capability/,/^}/p' src/kernel/wasm3/link.c)",
-      "Bash(sed -n '/warp_require_irq_capability/,/^}/p' src/kernel/warp/link.cpp)"
+      "Bash(sed -n '/warp_require_irq_capability/,/^}/p' src/kernel/warp/link.cpp)",
+      "Bash(gh api *)",
+      "Bash(ln -s /Volumes/git/wasmos/node_modules /private/tmp/claude-501/-Volumes-git-wasmos/e55ce487-9074-4bff-bc12-95c7353c09f5/scratchpad/baseline/node_modules)"
     ]
   }
 }

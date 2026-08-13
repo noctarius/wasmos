@@ -19,6 +19,8 @@
 #define LINMEM_SLOT_COUNT (WARP_LINMEM_PDPT_COUNT / 2u)
 
 static uint64_t g_linmem_slot_bitmap = 0;
+/* Owning pid per slot, for fault reporting only; 0 = untagged. */
+static uint32_t g_linmem_slot_owner[LINMEM_SLOT_COUNT];
 /* Guards the slot bitmap.  WARP runs one CPU at a time inside the runtime, but
  * wasm3 executes concurrently across CPUs, so the pool must be SMP-safe. */
 static ksync_spinlock_t g_linmem_slot_lock;
@@ -46,7 +48,50 @@ void linmem_slot_release(uint32_t slot) {
     }
     ksync_spinlock_lock(&g_linmem_slot_lock);
     g_linmem_slot_bitmap &= ~(1ULL << slot);
+    g_linmem_slot_owner[slot] = 0;
     ksync_spinlock_unlock(&g_linmem_slot_lock);
+}
+
+int linmem_slot_contains(uint64_t va) {
+    uint64_t window = (uint64_t)LINMEM_SLOT_COUNT * WARP_LINMEM_VA_STRIDE;
+    return (va >= WARP_LINMEM_VA_BASE && va < WARP_LINMEM_VA_BASE + window) ? 1 : 0;
+}
+
+void linmem_slot_set_owner(uint32_t slot, uint32_t pid) {
+    if (slot >= LINMEM_SLOT_COUNT) {
+        return;
+    }
+    ksync_spinlock_lock(&g_linmem_slot_lock);
+    g_linmem_slot_owner[slot] = pid;
+    ksync_spinlock_unlock(&g_linmem_slot_lock);
+}
+
+int linmem_slot_fault_info(uint64_t va, uint32_t* out_slot, uint32_t* out_owner_pid,
+                           uint64_t* out_slot_offset, int* out_reserved, int* out_present) {
+    uint64_t window_bytes = (uint64_t)LINMEM_SLOT_COUNT * WARP_LINMEM_VA_STRIDE;
+    if (va < WARP_LINMEM_VA_BASE || va >= WARP_LINMEM_VA_BASE + window_bytes) {
+        return -1;
+    }
+    uint64_t rel = va - WARP_LINMEM_VA_BASE;
+    uint32_t slot = (uint32_t)(rel / WARP_LINMEM_VA_STRIDE);
+    if (out_slot) {
+        *out_slot = slot;
+    }
+    if (out_slot_offset) {
+        *out_slot_offset = rel % WARP_LINMEM_VA_STRIDE;
+    }
+    /* Read without the lock: this runs from the exception path, where the
+     * holder may be the CPU we interrupted. */
+    if (out_owner_pid) {
+        *out_owner_pid = g_linmem_slot_owner[slot];
+    }
+    if (out_reserved) {
+        *out_reserved = (g_linmem_slot_bitmap & (1ULL << slot)) ? 1 : 0;
+    }
+    if (out_present) {
+        *out_present = paging_virt_to_phys(va & ~0xFFFULL) ? 1 : 0;
+    }
+    return 0;
 }
 
 uint64_t linmem_slot_va(uint32_t slot) {

@@ -267,6 +267,18 @@ else ()
 endif ()
 set(WASMOS_TRACE_DEFINE -DWASMOS_TRACE=${WASMOS_TRACE_VALUE})
 
+# Runtime loading of bundled AOT binaries.  OFF forces every WARP app down the
+# JIT path (initFromBytecode) without changing any packed artifact, so an AOT
+# build and a JIT build differ only in the kernel.
+option(WASMOS_WARP_RUNTIME_LOAD_AOT "Load bundled AOT binaries at runtime" ON)
+if (WASMOS_WARP_RUNTIME_LOAD_AOT)
+  set(WASMOS_WARP_RUNTIME_LOAD_AOT_VALUE 1)
+else ()
+  set(WASMOS_WARP_RUNTIME_LOAD_AOT_VALUE 0)
+endif ()
+set(WASMOS_WARP_RUNTIME_LOAD_AOT_DEFINE
+    -DWASMOS_WARP_RUNTIME_LOAD_AOT=${WASMOS_WARP_RUNTIME_LOAD_AOT_VALUE})
+
 function(wasmos_add_ide_c_target target_name)
   set(options)
   set(oneValueArgs)

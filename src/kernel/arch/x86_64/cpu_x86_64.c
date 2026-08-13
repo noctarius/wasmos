@@ -13,6 +13,7 @@
 #include "irq.h"
 #include "msi.h"
 #include "framebuffer.h"
+#include "linmem_slots.h"
 #include "paging.h"
 #include "stdio.h"
 #include "string.h"
@@ -433,6 +434,16 @@ static __attribute__((noreturn)) void x86_exception_panic_common(uint64_t vector
                            (unsigned long long)rflags);
     if (has_cr2) {
         serial_printf_unlocked("[cpu] cr2=%016llx\n", (unsigned long long)cr2);
+        uint32_t lm_slot = 0, lm_owner = 0;
+        uint64_t lm_off = 0;
+        int lm_reserved = 0, lm_present = 0;
+        if (linmem_slot_fault_info(cr2, &lm_slot, &lm_owner, &lm_off, &lm_reserved, &lm_present) ==
+            0) {
+            serial_printf_unlocked(
+                "[cpu] linmem-fault slot=%u owner_pid=%u off=%016llx reserved=%u present=%u\n",
+                lm_slot, lm_owner, (unsigned long long)lm_off, (unsigned)lm_reserved,
+                (unsigned)lm_present);
+        }
     }
     serial_printf_unlocked("[cpu] frame=%016llx\n"
                            "[cpu] pid=%u\n"

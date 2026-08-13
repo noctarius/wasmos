@@ -46,6 +46,21 @@ int linmem_slot_commit(uint64_t va_base, uint64_t from_page, uint64_t to_page);
 /* Walk-unmap and free `pages` committed pages starting at va_base. */
 void linmem_slot_decommit(uint64_t va_base, uint64_t pages);
 
+/* True when va lies inside the slot VA window (any slot, allocated or not). */
+int linmem_slot_contains(uint64_t va);
+
+/* Tag a slot with the pid whose linear memory it backs, for fault reporting.
+ * Pass 0 to clear. */
+void linmem_slot_set_owner(uint32_t slot, uint32_t pid);
+
+/* Classify a faulting address against the slot window, for the #PF reporter.
+ * Returns 0 and fills the outputs when `va` lies inside the window, else -1.
+ * reserved=0 means the slot was released while this VA was still in use;
+ * reserved=1 with present=0 means the page was never committed or was
+ * decommitted; present=1 means the mapping exists (stale TLB). */
+int linmem_slot_fault_info(uint64_t va, uint32_t* out_slot, uint32_t* out_owner_pid,
+                           uint64_t* out_slot_offset, int* out_reserved, int* out_present);
+
 #ifdef __cplusplus
 }
 #endif

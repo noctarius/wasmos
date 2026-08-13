@@ -51,6 +51,7 @@ extern "C" {
 #include "capability.h"
 #include "timer.h"
 #include "policy.h"
+#include "linmem_slots.h"
 #include "paging.h"
 #include "framebuffer.h"
 #include "system_control.h"
@@ -1398,13 +1399,33 @@ static int warp_restore_linear_window(WarpCallContext* ctx, uint32_t offset, uin
         return -1;
     }
     uint64_t virt = addr_cast(uint64_t, base);
+    /* A linmem VA-slot window is NOT in the direct map: its pages are scattered,
+     * so virt - KERNEL_HIGHER_HALF_BASE is not the backing frame.  The slot
+     * mapping is also the original one (the window remap replaced it), so there
+     * is nothing to restore -- re-deriving a phys here would remap foreign
+     * frames.  Route phys through warp_mem_alias_phys for the direct-mapped
+     * case, which is identical to the old arithmetic there. */
+    uint64_t pages_n = ((uint64_t)size + 0xFFFULL) / 0x1000ULL;
+    if (linmem_slot_contains(virt)) {
+        /* A slot-backed window's original frames are scattered and were released
+         * when the window was mapped (see warp_linmem_place_phys), so they cannot
+         * be re-derived from the VA.  Re-commit fresh zeroed frames over the
+         * range instead: the window lives in guarded, app-unused linmem, and a
+         * fresh commit is exactly what the slot hands out initially.
+         * TODO(linmem-window): preserving the original contents would need the
+         * displaced frames recorded per map; WARP_SHMEM_MAP_SLOTS is
+         * PROCESS_MAX_COUNT*32, so a per-slot frame array is too costly. */
+        return linmem_slot_commit(virt, 0, pages_n);
+    }
     if (virt < KERNEL_HIGHER_HALF_BASE || (virt & 0xFFFULL) != 0) {
         return -1;
     }
-    uint64_t pages = ((uint64_t)size + 0xFFFULL) / 0x1000ULL;
-    for (uint64_t i = 0; i < pages; ++i) {
+    for (uint64_t i = 0; i < pages_n; ++i) {
         uint64_t page_virt = virt + i * 0x1000ULL;
-        uint64_t page_phys = page_virt - KERNEL_HIGHER_HALF_BASE;
+        uint64_t page_phys = warp_mem_alias_phys(page_virt);
+        if (!page_phys) {
+            return -1;
+        }
         if (paging_map_4k(page_virt, page_phys,
                           MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE | MEM_REGION_FLAG_EXEC) !=
             0) {
@@ -1867,7 +1888,19 @@ static int64_t warp_linmem_place_phys(WarpCallContext* ctx, uint64_t phys_base, 
 
     uint64_t virt = addr_cast(uint64_t, lmem);
     for (uint64_t i = 0; i < map_pages; ++i) {
-        paging_map_4k(virt + i * 0x1000ULL, phys_base + i * 0x1000ULL, 3ULL);
+        uint64_t page_virt = virt + i * 0x1000ULL;
+        /* Slot-backed linmem: the frame this VA currently maps belongs to the
+         * slot and is about to be replaced by the shared frame.  Release it here
+         * or every map/unmap cycle leaks a page; the unmap path re-commits a
+         * fresh one.  Direct-mapped linmem keeps its frame (the VA *is* the
+         * frame), so nothing to release there. */
+        if (linmem_slot_contains(page_virt)) {
+            uint64_t old_phys = paging_virt_to_phys(page_virt);
+            if (old_phys) {
+                pfa_free_pages(old_phys & ~0xFFFULL, 1);
+            }
+        }
+        paging_map_4k(page_virt, phys_base + i * 0x1000ULL, 3ULL);
     }
 #ifdef WASMOS_WASM_RUNTIME_WARP
     if (warp_ring3_map_user_window(linmem_base, found_off, phys_base, map_pages) != 0) {

@@ -610,12 +610,9 @@ int wasm_driver_start(wasm_driver_t* driver, const wasm_driver_manifest_t* manif
             warp_linmem_reserve_hint_for(driver->owner_pid, manifest->heap_size);
             vb::Span<uint8_t const> compiled(manifest->compiled_bytes, manifest->compiled_size);
             vb::Span<uint8_t const> empty_debug(nullptr, 0);
-            /* initFromCompiledBinary requires DYNAMIC_LINK symbols. */
-#ifdef WASMOS_WASM_RUNTIME_WARP
+            /* initFromCompiledBinary requires DYNAMIC_LINK symbols, which the
+             * ring-3 table is (see the JIT path below for the full rationale). */
             mod->initFromCompiledBinary(compiled, warp_wasmos_symbols_ring3(), empty_debug);
-#else
-            mod->initFromCompiledBinary(compiled, warp_wasmos_symbols_for_aot_load(), empty_debug);
-#endif
             ckpt->active = 0;
             use_jit = 0;
         }
@@ -647,19 +644,15 @@ int wasm_driver_start(wasm_driver_t* driver, const wasm_driver_manifest_t* manif
          * grow past the slab threshold, which then occupies a linmem VA slot
          * stamped with this pid while the real linear memory never gets one.
          * CompileResult owns the spans handed to setupRuntime, so it must stay
-         * in scope across initFromCompiledBinary. */
-#ifdef WASMOS_WASM_RUNTIME_WARP
+         * in scope across initFromCompiledBinary.
+         *
+         * Ring-3 is the only WARP execution model, so the symbol table is not a
+         * build-time choice: initFromCompiledBinary rejects STATIC linkage, and
+         * the ring-3 table is the DYNAMIC one.  warp_wasmos_symbols_ring3() is
+         * itself declared under WASMOS_WASM_RUNTIME_WARP (warp/link.h), so a
+         * build that somehow compiled this file without the runtime fails here
+         * on an undeclared identifier rather than silently taking a wrong path. */
         vb::Span<vb::NativeSymbol const> syms = warp_wasmos_symbols_ring3();
-#else
-        /* FIXME(warp-jit-symbols): warp_wasmos_symbols() is STATIC_LINK, and
-         * initFromCompiledBinary throws Wrong_type on any STATIC symbol — this
-         * branch would fail every JIT module init.  Unreachable today (this file
-         * is only compiled with WASMOS_WASM_RUNTIME_WARP defined, see
-         * src/kernel/CMakeLists.txt), so it is left as-is rather than guessed
-         * at; a revived non-ring-3 build must use a DYNAMIC_LINK table here
-         * (warp_wasmos_symbols_for_aot_load()). */
-        vb::Span<vb::NativeSymbol const> syms = warp_wasmos_symbols();
-#endif
         vb::WasmModule::CompileResult res = mod->compile(bc, syms);
         warp_linmem_reserve_hint_for(driver->owner_pid, manifest->heap_size);
         mod->initFromCompiledBinary(res.getModule().span(), syms, res.getDebugSymbol().span());

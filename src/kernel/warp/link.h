@@ -4,7 +4,7 @@
  *              wasm3_link_init() (only one will compile depending on
  *              WASMOS_WASM_RUNTIME).
  *
- * C++ interface: warp_wasmos_symbols() / warp_bind_module() — called from
+ * C++ interface: warp_wasmos_symbols_ring3() / warp_bind_module() — called from
  *                warp_driver.cpp when compiling and instantiating modules. */
 #ifndef WASMOS_WARP_LINK_H
 #define WASMOS_WARP_LINK_H
@@ -16,18 +16,13 @@
 #include "src/core/common/NativeSymbol.hpp"
 #include "src/core/common/Span.hpp"
 
-/* STATIC_LINK symbol table — pass to initFromBytecode (JIT path).
- * Bakes function pointers into call stubs at compile time; no basedata overhead. */
-vb::Span<vb::NativeSymbol const> warp_wasmos_symbols(void);
-
-/* DYNAMIC_LINK symbol table — pass to initFromCompiledBinary (AOT load path).
- * initFromCompiledBinary() throws Wrong_type for any STATIC symbol. */
-vb::Span<vb::NativeSymbol const> warp_wasmos_symbols_for_aot_load(void);
-
 #ifdef WASMOS_WASM_RUNTIME_WARP
-/* DYNAMIC_LINK symbol table for ring-3 execution; ptr fields are user-space
- * HC trampoline VAs (WARP_R3_HC_TRAMPOLINE + hc_id × 8) instead of kernel
- * function pointers.  Pass to initFromBytecode on the ring-3 compile path. */
+/* The only symbol table: DYNAMIC_LINK, for ring-3 execution.  ptr fields are
+ * user-space HC trampoline VAs (WARP_R3_HC_TRAMPOLINE + hc_id × 8) instead of
+ * kernel function pointers.  Both module init paths take it — the AOT load and
+ * the JIT compile, which finishes through initFromCompiledBinary and so also
+ * rejects STATIC linkage.  Ring 3 is not a build-time choice, so there is no
+ * kernel-function-pointer variant to pick instead. */
 vb::Span<vb::NativeSymbol const> warp_wasmos_symbols_ring3(void);
 #endif
 

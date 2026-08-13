@@ -184,6 +184,19 @@ StackInfo getStackInfo() {
  * vb::ExecutableMemory implementation
  * ----------------------------------------------------------------------- */
 
+/* Both entry points below must leave data_ EXECUTABLE.  allocPagedMemory hands
+ * back PROT_READ|PROT_WRITE, so the copied code has to be mprotect'ed before
+ * anything jumps into it — otherwise the first call into a JIT-compiled module
+ * dies with SIGSEGV on any host that enforces NX.  warp_aot itself only compiles
+ * and serialises, so it never executes and never exercised this; the host WARP
+ * coroutine test (tests/unit/test_warp_wasm_coroutine.cpp) does.
+ *
+ * This mirrors the non-Linux branch of WARP's own ExecutableMemory::init
+ * (libs/warp/src/utils/ExecutableMemory.cpp).  Its __linux__ branch instead maps
+ * a second RX view through the memfd returned by allocPagedMemory, which this
+ * shim cannot reproduce: our allocPagedMemory is plain MAP_ANONYMOUS and reports
+ * fd = -1, so mapRXMemory would return a fresh, empty mapping rather than an
+ * alias of the code just written. */
 ExecutableMemory::ExecutableMemory(uint8_t const* data, size_t size)
     : ExecutableMemory(nullptr, size, -1) {
     if (size == 0)
@@ -194,6 +207,8 @@ ExecutableMemory::ExecutableMemory(uint8_t const* data, size_t size)
     data_ = m.ptr;
     size_ = size;
     MemUtils::memcpyAndClearInstrCache(data_, data, size);
+    if (MemUtils::setPermissionRX(data_, size_) != 0)
+        throw std::bad_alloc();
 }
 
 ExecutableMemory::ExecutableMemory(ExecutableMemory&& o) VB_NOEXCEPT : data_(o.data_),
@@ -223,6 +238,8 @@ void ExecutableMemory::init(uint8_t const* data) {
     fd_ = m.fd;
     data_ = m.ptr;
     MemUtils::memcpyAndClearInstrCache(data_, data, size_);
+    if (MemUtils::setPermissionRX(data_, size_) != 0)
+        throw std::bad_alloc();
 }
 
 void ExecutableMemory::freeExecutableMemory() const VB_NOEXCEPT {

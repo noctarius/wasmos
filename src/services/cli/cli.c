@@ -33,7 +33,7 @@ static int32_t g_last_seen_active_tty = 1;
 static uint32_t g_vt_switch_generation = 1;
 static int32_t g_request_id = 1;
 /* Select set over the CLI's own endpoints, used to park when idle instead of
- * yield-spinning.  Input now arrives as a VT_IPC_INPUT_NOTIFY push on our VT
+ * yield-spinning.  Input arrives as a VT_IPC_INPUT_NOTIFY push on the CLI's VT
  * client endpoint (in this set), so the wait wakes immediately on input; the
  * timeout is only a liveness/foreground-refresh backstop. */
 static int32_t g_idle_select = -1;
@@ -672,8 +672,8 @@ static int cli_vt_call(int32_t msg_type, int32_t arg0, int32_t arg1, int32_t arg
         }
         (void)wasmos_sys_event_loop_poll(&g_loop, 4);
     }
-    /* Give up, but retract the intent so a late reply cannot be mistaken for a
-     * later request's (the old code left it registered and then dropped it). */
+    /* Give up, but retract the intent: leaving it registered lets a late reply
+     * be mistaken for a later request's. */
     wasmos_sys_wasm_ipc_future_cancel(&op, -1);
     return -1;
 }
@@ -762,10 +762,10 @@ static int cli_is_foreground(void) {
     }
     g_fg_query_backoff = (g_last_seen_active_tty == g_home_tty) ? 31 : 3;
     /* When the compositor owns tty0 for graphics presentation, the active tty
-     * is 0, not our home tty. Report background so we stop consuming keyboard
-     * input (which the keyboard driver broadcasts to every subscriber); the
-     * compositor's focused window then gets keys exclusively. We do not
-     * forcibly reclaim tty1 here. Serial-driven input is unaffected: once the
+     * is 0, not the CLI's home tty. Reporting background stops the CLI
+     * consuming keyboard input (which the keyboard driver broadcasts to every
+     * subscriber), so the compositor's focused window gets keys exclusively.
+     * tty1 is not forcibly reclaimed here. Serial-driven input is unaffected: once the
      * CLI falls back to serial (g_vt_endpoint < 0) it is always foreground
      * per the early return above. */
     return g_last_seen_active_tty == g_home_tty;
@@ -1929,8 +1929,8 @@ static void cli_phase_init_step(int32_t proc_endpoint, int32_t home_tty_arg) {
     (void)wasmos_sys_event_set_default(&g_loop, cli_on_unclaimed, 0);
     g_proc_endpoint = proc_endpoint;
     /* Idle park over both endpoints.  The park keeps its timeout as a
-     * liveness/foreground-refresh backstop; the pump must not be used to park
-     * because it blocks with no timeout once its queue is empty. */
+     * liveness/foreground-refresh backstop; the pump must not be the parking
+     * mechanism, because it blocks with no timeout once its queue is empty. */
     g_idle_select = wasmos_ipc_select_create();
     if (g_idle_select >= 0) {
         (void)wasmos_ipc_select_add(g_idle_select, g_reply_endpoint);
@@ -1961,9 +1961,9 @@ static void cli_phase_init_step(int32_t proc_endpoint, int32_t home_tty_arg) {
     }
     g_last_seen_active_tty = 0;
     /* The CLI does NOT force the visible slot: the compositor owns framebuffer
-     * visibility (vt-0), and we read/write our own slot (vt-1) regardless of
-     * which slot is on screen.  Forcing a switch here also fought the compositor
-     * and could wedge the VT's switch path while the gfx overlay was locked. */
+     * visibility (vt-0), and the CLI reads/writes its own slot (vt-1) regardless
+     * of which slot is on screen.  Forcing a switch here fights the compositor
+     * and can wedge the VT's switch path while the gfx overlay is locked. */
     if (g_home_tty == 1) {
         console_write("WAMOS CLI\ncommands: help, kmaps [all], ls, cd <path>, mount, script "
                       "<file>, source <file>, spawn <cmd>, export VAR=<value>, set VAR=<value>, "
@@ -1987,10 +1987,10 @@ static void cli_idle_wait(void) {
 }
 
 static void cli_phase_prompt_step(void) {
-    /* Always emit the prompt: console_write() routes it to the VT when we own the
-     * visible TTY and to serial otherwise, so serial stays usable even while the
-     * compositor owns tty0.  We do NOT gate on foreground here — that only
-     * governs whether we pull keyboard input from the VT (see read step). */
+    /* Always emit the prompt: console_write() routes it to the VT when the CLI
+     * owns the visible TTY and to serial otherwise, so serial stays usable even
+     * while the compositor owns tty0.  Foreground does NOT gate this — it only
+     * governs whether keyboard input is pulled from the VT (see read step). */
     console_prompt();
     g_line_len = 0;
     g_esc_state = 0;
@@ -2008,22 +2008,22 @@ static void cli_phase_read_step(void) {
     int32_t have_ch = 0;
     int32_t from_vt = 0;
     char ch = '\0';
-    /* Refresh our view of the active TTY so console_write() routes output to the
-     * VT framebuffer when vt-1 is visible and to serial otherwise (the query is
-     * self-throttled).  We read the VT queue unconditionally regardless: serial
+    /* Refresh the cached active TTY so console_write() routes output to the VT
+     * framebuffer when vt-1 is visible and to serial otherwise (the query is
+     * self-throttled).  The VT queue is read unconditionally regardless: serial
      * RX for the serial-bound slot (vt-1) is injected by the VT no matter which
-     * slot is visible, and keyboard input only reaches our slot when it is the
+     * slot is visible, and keyboard input only reaches that slot when it is the
      * active one — so an unconditional read yields serial always and keyboard
      * only when focused, without the CLI gating on focus itself. */
     (void)cli_is_foreground();
     if (g_vt_endpoint >= 0) {
-        /* Push model: read whenever we are woken (by VT_IPC_INPUT_NOTIFY or the
+        /* Push model: read on every wake (by VT_IPC_INPUT_NOTIFY or the
          * backstop), draining the queue one char per loop iteration until empty.
-         * No poll backoff — a stale backoff would make us skip the read that a
-         * notify just woke us for, stalling input until the 1s backstop.  The
-         * notify is now routed to cli_on_input_notify by the pump rather than
-         * being swallowed by a drain loop; consume the flag here so a push that
-         * lands mid-read is not mistaken for a fresh one. */
+         * No poll backoff — a stale backoff skips the read the notify just woke
+         * the CLI for, stalling input until the 1s backstop.  The pump routes the
+         * notify to cli_on_input_notify rather than swallowing it in a drain
+         * loop; the flag is consumed here so a push landing mid-read is not
+         * mistaken for a fresh one. */
         g_input_notified = 0;
         have_ch = cli_vt_read_char(&ch);
         if (have_ch < 0) {

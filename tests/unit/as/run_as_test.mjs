@@ -41,7 +41,7 @@ let waitCount = 0;
 let sendCount = 0;
 let selectBroken = false;
 /* One scripted delivery performed the next time the guest blocks in
- * ipc_select_wait, which is how a peer "replies while we are blocked". */
+ * ipc_select_wait, modelling a peer that replies while the guest is blocked. */
 let onWait = null;
 /* Timeouts the guest asked for, so a test can assert it blocked rather than
    spun, and for how long. */

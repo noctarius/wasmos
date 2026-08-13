@@ -8,8 +8,9 @@
  * The connect handshake is driven as a coroutine over the IPC-future bridge:
  * each NET_IPC step is sent through wasmos_sys_wasm_ipc_future_send and awaited
  * with wasmos_future_await, so the process yields to its event loop instead of
- * blocking in-hostcall. (Slice 1: connect is non-blocking; send/recv still use
- * the ring helpers on the ready socket and are converted next.) */
+ * blocking in-hostcall. Only connect is non-blocking so far; send/recv still use
+ * the ring helpers on the ready socket.
+ * TODO: drive send/recv over the same future bridge. */
 #include <stdint.h>
 
 #include "stdio.h"

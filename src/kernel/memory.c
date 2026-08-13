@@ -869,12 +869,12 @@ int mm_context_bind_wasm_linear_scattered(uint32_t context_id, uint64_t slot_va_
      * hostcalls mapped over lower pages.  The slot OWNS these frames and frees
      * them via its own decommit at reap; this region must never free them.
      *
-     * We deliberately do NOT free the region's original placeholder here, and do
-     * NOT mark the region PHYS_EXTERNAL.  The placeholder (phys_base /
+     * The region's original placeholder is deliberately NOT freed here, and the
+     * region is NOT marked PHYS_EXTERNAL.  The placeholder (phys_base /
      * backing_pages) stays owned by the region and is freed exactly once by
-     * mm_context_release_regions at teardown.  Freeing it here mid-life returned
-     * its pages to the allocator, where a later linmem slot commit reused them,
-     * and the slot's decommit then double-freed them (a wasm3+SMP reap panic). */
+     * mm_context_release_regions at teardown.  Freeing it here mid-life returns
+     * its pages to the allocator, where a later linmem slot commit reuses them,
+     * and the slot's decommit then double-frees them. */
     for (uint64_t p = from_page; p < to_page; ++p) {
         uint64_t off = p * PAGE_SIZE;
         uint64_t phys = paging_virt_to_phys(slot_va_base + off) & ~(PAGE_SIZE - 1ULL);

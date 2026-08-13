@@ -59,8 +59,8 @@
  *     chain parse fails with X509_ALLOC_FAILED after ~20 certs). Defining both
  *     *_MACRO forms compiles out that override (its guard
  *     ALTCP_MBEDTLS_PLATFORM_ALLOC evaluates to 0) AND makes
- *     mbedtls_platform_set_calloc_free unavailable, so our growable heap stands
- *     and TLS runtime buffers no longer share the cramped lwIP heap either.
+ *     mbedtls_platform_set_calloc_free unavailable, so the growable native heap
+ *     stands and TLS runtime buffers stay out of the cramped lwIP heap.
  *   - snprintf is only reached from X.509/debug string helpers; route it to a
  *     net-stack stub so nothing pulls in libc. */
 #define MBEDTLS_HAVE_INT32

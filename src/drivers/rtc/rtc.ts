@@ -6,12 +6,11 @@
  * tools/as_coroutine_transform.mjs keeps its signature and hands the lowered
  * task to libc's pump, which owns the coroutine runtime.
  *
- * What this replaced, and why. Registration was a blocking ipc_recv on the
- * SERVICE endpoint -- send, then receive until the reply turned up, discarding
- * anything else -- so a client's read request landing in that window was dropped
- * and its sender waited forever. The loop dispatches it now. The failure paths
- * returned a bare -1 across the entry-point boundary; they return packed
- * driver-domain codes.
+ * Registration goes through the event loop, not a blocking ipc_recv on the
+ * SERVICE endpoint: send-then-receive-until-the-reply-arrives discards every
+ * unrelated message, so a client read request landing in that window is lost
+ * and its sender waits forever. Failure paths return packed driver-domain codes
+ * across the entry-point boundary, never a bare -1.
  */
 
 import {io, std, startup} from "./wasmos";
@@ -72,8 +71,9 @@ function awaitReply(request: IpcFuture, out: Box): i32 {
 
 // ---------------------------------------------------------------------- CMOS
 
-/* Returns the register byte, or a negative WASMOS_ERR_IO_* code. A refused
- * read used to arrive as 0xFF, which decodes into a plausible-looking date. */
+/* Returns the register byte, or a negative WASMOS_ERR_IO_* code. Reporting the
+ * refusal matters: a refused read surfacing as 0xFF decodes into a
+ * plausible-looking date. */
 function rtcReadReg(reg: i32): i32 {
     io_out8(CMOS_INDEX_PORT, reg & 0x7f);
     io_wait();

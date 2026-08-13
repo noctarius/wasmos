@@ -14,7 +14,7 @@
 #include "wasmos/api.h"
 #include "wasmos_driver_abi.h"
 
-/* --- Pure path helpers (verbatim ports; no I/O). --- */
+/* --- Pure path helpers (no I/O). --- */
 
 int vfs_translate_path(const char* in, char* out, uint32_t out_len, uint8_t* out_is_init) {
     uint32_t i;
@@ -23,8 +23,8 @@ int vfs_translate_path(const char* in, char* out, uint32_t out_len, uint8_t* out
         return -1;
     }
     *out_is_init = 0;
-    /* The original had an if(in[0]=='/') branch identical to the fall-through
-     * copy loop; collapsed here since both paths do the same passthrough. */
+    /* Absolute and relative paths take the same passthrough copy; there is no
+     * separate leading-'/' case. */
     i = 0;
     while (in[i] && i + 1 < out_len) {
         out[i] = in[i];
@@ -332,15 +332,13 @@ fat_r_t fat_resolve_parent_dir(fat_resolve_parent_ctx_t* p, fat_block_t* blk,
 
 /* --- Directory mutation (create / delete / unlink / rmdir). --- */
 
-/* Pure open-file-table check.  In the blocking original this walked the file-
- * scope g_open_files[] table.  In the reactor that table lives in fat_file,
- * which is not ported yet, so the check is passed the table explicitly.
+/* Pure open-file-table check.  The reactor's open-file table lives in fat_file
+ * and is not reachable from here, so the table is passed in explicitly.
  *
  * TODO(open-file-table): once fat_file exposes the reactor's open-file table,
  * wire fat_unlink/rmdir to pass &table[0], FAT_MAX_OPEN_FILES here.  Until then
  * the sole caller (fat_remove_path) passes (NULL, 0) and this returns 0, i.e.
- * "not open" — deleting a currently-open file is NOT yet guarded.  Flagged for
- * review: this weakens the original's not-open safety check. */
+ * "not open" — deleting a currently-open file is NOT yet guarded. */
 int fat_entry_is_open(const fat_dir_entry_info_t* entry, const fat_open_file_t* files,
                       uint32_t count) {
     uint32_t i;
@@ -708,8 +706,7 @@ fat_r_t fat_create_empty_file(fat_create_ctx_t* c, fat_block_t* blk, const fat_m
     return fat_create_path_entry(c, blk, mnt);
 }
 
-/* Derive a directory's starting cluster from its first LBA (port of the
- * original static fat_dir_cluster_from_lba; pure geometry). */
+/* Derive a directory's starting cluster from its first LBA; pure geometry. */
 static int fat_dir_cluster_from_lba(const fat_mount_t* mnt, uint32_t dir_lba, uint16_t* out) {
     uint32_t first_data = fat_first_data_lba(mnt);
     uint32_t rel;
@@ -827,8 +824,8 @@ fat_r_t fat_create_directory(fat_mkdir_ctx_t* m, fat_block_t* blk, const fat_mou
     FAT_CO_END(m);
 }
 
-/* Directory-empty check (port of the original fat_dir_is_empty): 1 = empty,
- * 0 = has a real child.  On I/O fault the sub-read propagates FAT_R_ERR. */
+/* Directory-empty check: 1 = empty, 0 = has a real child.  On I/O fault the sub-read propagates
+ * FAT_R_ERR. */
 static fat_r_t fat_dir_is_empty_step(fat_dirempty_ctx_t* e, fat_block_t* blk,
                                      const fat_mount_t* mnt) {
     uint8_t* ent;
@@ -957,11 +954,11 @@ fat_r_t fat_remove_path(fat_remove_ctx_t* r, fat_block_t* blk, const fat_mount_t
 /* --- Directory navigation (READDIR / CHDIR). --- */
 
 /* Stream a NUL-terminated string to the READDIR client, byte-packed 4 per
- * FS_IPC_STREAM message with the original console_write() special-case: retry an
- * IPC_ERR_FULL send up to FAT_STREAM_SEND_RETRIES (yielding between tries), and
- * on any other failure / exhaustion fall back to a single wasmos_console_write
- * of the whole string.  Not a coroutine: the send-retry loop spins in place
- * (matching the blocking original) rather than yielding through the reactor. */
+ * FS_IPC_STREAM message.  An IPC_ERR_FULL send is retried up to
+ * FAT_STREAM_SEND_RETRIES (yielding between tries); any other failure, or
+ * exhausting the retries, falls back to a single wasmos_console_write of the
+ * whole string.  Not a coroutine: the send-retry loop spins in place rather than
+ * yielding through the reactor. */
 static void fat_readdir_stream(const fat_op_ctx_t* op, int32_t fs_endpoint, const char* s) {
     int32_t len;
     uint32_t pos;
@@ -1016,7 +1013,7 @@ fat_r_t fat_op_readdir(fat_op_ctx_t* op, fat_block_t* blk, const fat_mount_t* mn
 
     FAT_CO_BEGIN(s);
 
-    /* Root region must exist; a non-root cwd must be valid (matches original). */
+    /* Root region must exist; a non-root cwd must be valid. */
     if (mnt->root_entry_count == 0 || mnt->root_dir_sectors == 0) {
         fat_log("root listing unsupported\n");
         FAT_CO_FAIL(s, blk, WASMOS_ERR_FS_NOT_FOUND);
@@ -1132,8 +1129,7 @@ fat_r_t fat_op_readdir(fat_op_ctx_t* op, fat_block_t* blk, const fat_mount_t* mn
 /* Advance the CHDIR walk to the next real component in c->path (skipping '/'
  * runs and '.'; '..' resets the running target to the root region).  Returns 1
  * with c->name set, 0 at end of path, -1 on a too-long component.  Pure string
- * work (a verbatim port of the original fat_chdir_next_component, made iterative
- * so it needs no recursion / stack). */
+ * work, iterative so it needs no recursion / stack. */
 static int fat_chdir_next_component(fat_chdir_ctx_t* c) {
     for (;;) {
         uint32_t len;
@@ -1168,8 +1164,7 @@ static int fat_chdir_next_component(fat_chdir_ctx_t* c) {
 
 /* Begin scanning the directory selected by (root, cluster): set the scan cursors
  * and read the first sector.  Returns 0, or -1 if the cluster maps to no LBA.
- * Pure setup (port of the original fat_chdir_begin_dir minus the block send —
- * the read itself is issued by the caller via FAT_CO_READ). */
+ * Pure setup: the read itself is issued by the caller via FAT_CO_READ. */
 static int fat_chdir_begin_dir(fat_chdir_ctx_t* c, const fat_mount_t* mnt, uint8_t root,
                                uint16_t cluster) {
     if (root) {
@@ -1253,8 +1248,8 @@ fat_r_t fat_op_chdir(fat_op_ctx_t* op, fat_block_t* blk, fat_mount_t* mnt) {
         FAT_CO_FAIL(c, blk, WASMOS_ERR_FS_NOT_FOUND);
     }
 
-    /* Walk directories: for each we scan sectors looking for c->name; on a match
-     * that is a directory we advance to the next component (or finish). */
+    /* Walk directories: each level scans its sectors looking for c->name; a match
+     * that is a directory advances to the next component (or finishes). */
     for (;;) {
         for (; c->cur_sector < c->dir_sectors && c->entries_left > 0; ++c->cur_sector) {
             entries_per_sector = mnt->bytes_per_sector / 32u;

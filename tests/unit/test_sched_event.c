@@ -141,7 +141,7 @@ static thread_t* mk(void) {
  * return until the thread is resumed, so sched_event_wait's tail -- which
  * disarms the deadline -- runs only AFTER the wake. A host stub cannot suspend,
  * so the stub returns immediately and that tail executes at once, clearing the
- * deadline the arm just installed. The state we want to test (blocked, deadline
+ * deadline the arm just installed. The state under test (blocked, deadline
  * still armed) is exactly the state that exists between those two points, so it
  * is reconstructed here rather than fabricated: the arm really happened inside
  * sched_event_wait and really lowered the global hint; only the per-thread tick

@@ -12,9 +12,9 @@
 #include "wasmos_driver_abi.h"
 
 /*
- * Minimal PIO ATA driver used for the early storage bootstrap path. It now
- * supports identify plus small read/write requests, which is enough for the FAT
- * driver to mount the ESP and service the current overwrite-only write path.
+ * Minimal PIO ATA driver used for the early storage bootstrap path. It supports
+ * identify plus small read/write requests, which is enough for the FAT driver to
+ * mount the ESP and service the current overwrite-only write path.
  */
 
 /* The driver names no absolute port. Its spawn profile grants I/O windows in the
@@ -293,8 +293,8 @@ static void ata_publish_block_device(uint8_t unit, uint32_t sectors, uint8_t pre
 
 /* Where a read deposits each sector. The block buffer is the caller's own
  * staging area addressed by physical address; the transfer buffer belongs to the
- * original client and reaches us as a reborrow, so the kernel admits the write
- * on the strength of that grant. Only the destination differs — the sector loop
+ * original client and reaches this driver as a reborrow, so the kernel admits
+ * the write on the strength of that grant. Only the destination differs — the sector loop
  * is identical. */
 typedef struct {
     uint8_t to_xfer;     /* 0 = block buffer (phys), 1 = client transfer buffer */
@@ -593,17 +593,17 @@ static void ata_dma_setup(void) {
     g_dma_ready = 1u;
 }
 
-/* Reported once at startup rather than per request. It used to be logged as a
- * per-direction "dma fallback rc=-N", which reads like an intermittent runtime
- * failure; it is neither intermittent nor a failure — see ata_dma_prepare. */
+/* Reported once at startup rather than per request. A per-request "dma fallback"
+ * line would read like an intermittent runtime failure; the fallback is neither
+ * intermittent nor a failure — see ata_dma_prepare. */
 static void ata_log_transfer_mode(void) {
     (void)printf("[ata] transfers: %s\n",
                  g_dma_ready ? "bus-master DMA into physical or borrowed destinations, else PIO"
                              : "PIO only");
 }
 
-/* TODO(zero-copy writes): the read direction now maps the client's borrow and
- * lets the controller write those pages directly (ata_read_zc_dma); the write
+/* TODO(zero-copy writes): the read direction maps the client's borrow and lets
+ * the controller write those pages directly (ata_read_zc_dma); the write
  * direction still has no equivalent, because there is no zero-copy write opcode
  * for a client to hand its borrow down with. BLOCK_IPC_WRITE_REQ names the
  * driver's own block buffer, so these hooks have nothing to map and deny
@@ -752,9 +752,9 @@ static int ata_handle_ipc(int32_t type, int32_t source, int32_t req_id, int32_t 
     }
 
     /* Zero-copy read: land whole sectors straight in the client's transfer
-     * buffer. The requester reborrowed it to us, so the kernel admits both ways
-     * we can reach it -- the object write and the borrow mapping -- and we never
-     * learn whose buffer it is. arg0 = buffer_id, arg1 = lba,
+     * buffer. The requester reborrowed it to this driver, so the kernel admits
+     * both routes to it -- the object write and the borrow mapping -- without
+     * the driver ever learning whose buffer it is. arg0 = buffer_id, arg1 = lba,
      * arg2 = (borrow_id << 12) | sector count, arg3 = dst byte offset. */
     if (type == BLOCK_IPC_READ_ZC_REQ) {
         int32_t count = arg2 & (int32_t)WASMOS_BLOCK_ZC_COUNT_MASK;
@@ -817,7 +817,7 @@ static int ata_handle_ipc(int32_t type, int32_t source, int32_t req_id, int32_t 
 
 WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t ignored_arg1,
                                       int32_t ignored_arg2, int32_t ignored_arg3) {
-    /* proc.endpoint now comes from the spawn-info contract, not an entry arg. */
+    /* proc.endpoint comes from the spawn-info contract, not an entry arg. */
     proc_endpoint = wasmos_startup_proc_endpoint();
     (void)ignored_arg1;
     (void)ignored_arg2;

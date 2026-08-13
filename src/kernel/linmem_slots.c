@@ -80,8 +80,8 @@ int linmem_slot_fault_info(uint64_t va, uint32_t* out_slot, uint32_t* out_owner_
     if (out_slot_offset) {
         *out_slot_offset = rel % WARP_LINMEM_VA_STRIDE;
     }
-    /* Read without the lock: this runs from the exception path, where the
-     * holder may be the CPU we interrupted. */
+    /* Read without the lock: this runs from the exception path, where the lock
+     * holder may be the interrupted CPU itself. */
     if (out_owner_pid) {
         *out_owner_pid = g_linmem_slot_owner[slot];
     }

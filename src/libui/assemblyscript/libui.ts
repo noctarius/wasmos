@@ -216,8 +216,8 @@ export class Context {
             let _ = ipc.call(this.gfxEndpoint, GFX_IPC_DESTROY_WINDOW, this.windowId, 0, 0, 0);
         }
         if (this.bufferId != 0 && this.gfxEndpoint > 0) {
-            // Release after destroying the window so the compositor no longer
-            // considers the buffer busy and can reclaim the slot.
+            // Release after destroying the window: only then does the compositor
+            // stop considering the buffer busy and reclaim the slot.
             let _ = ipc.call(
                 this.gfxEndpoint,
                 GFX_IPC_RELEASE_SHARED_BUFFER,

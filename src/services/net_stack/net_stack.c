@@ -158,11 +158,11 @@ static uint8_t g_netifc_subscribe_pending = 0u;
 static uint8_t g_netifc_subscribed = 0u;
 /* One-shot guards: once the class subscription is live, the device-manager
  * pushes SVC_IPC_CLASS_EVENT(ADD) whenever a net.ifc provider registers, and
- * net_stack_dispatch() binds it.  We therefore fire each discovery lookup only
- * ONCE (to catch a provider that registered before we subscribed) and then wait
- * for the event instead of re-polling PM every loop iteration, which otherwise
- * pegged the process-manager with SVC_IPC_LOOKUP(_CLASS)_REQ traffic while no
- * interface existed. */
+ * net_stack_dispatch() binds it.  Each discovery lookup therefore fires exactly
+ * ONCE -- to catch a provider that registered before the subscription -- and
+ * then waits for the event.  Re-polling PM every loop iteration instead pegs the
+ * process-manager with SVC_IPC_LOOKUP(_CLASS)_REQ traffic while no interface
+ * exists. */
 static uint8_t g_netifc_lookup_kicked = 0u;
 static uint8_t g_netdrv_lookup_kicked = 0u;
 static uint8_t g_registered = 0u;
@@ -187,9 +187,9 @@ static uint8_t g_hrng_seeded = 0u;
 static uint32_t g_hrng_lookup_buffer_id = 0u;
 static uint8_t* g_hrng_lookup_buffer = NULL;
 /* Backoff between hrng-class lookups.  virtio-rng normally registers early and
- * the first lookup seeds us, but on a host with no entropy device the class
- * never appears; without a delay this would re-poll PM every loop iteration and
- * peg it.  ~100 ms between attempts still finds a late provider. */
+ * the first lookup seeds the pool, but on a host with no entropy device the
+ * class never appears; without a delay this re-polls PM every loop iteration and
+ * pegs it.  ~100 ms between attempts still finds a late provider. */
 #define NET_STACK_HRNG_RETRY_TICKS 25u /* ~100 ms at 250 Hz */
 static uint32_t g_hrng_next_tick = 0u;
 static wasmos_sys_native_random_request_t g_hrng_request;
@@ -309,10 +309,10 @@ static int ns_strlen(const char* s) {
     return n;
 }
 
-/* lwIP LWIP_PLATFORM_DIAG hook (see arch/cc.h). For this compile milestone we
- * only emit the raw format string over the native console hook; varargs are not
- * expanded (no minimal printf is pulled in yet). This is sufficient because the
- * milestone exercises no code paths that emit formatted lwIP diagnostics.
+/* lwIP LWIP_PLATFORM_DIAG hook (see arch/cc.h). Emits the raw format string over
+ * the native console hook; varargs are NOT expanded, because no minimal printf
+ * is linked in. No currently reachable code path emits formatted lwIP
+ * diagnostics.
  * TODO(net_stack): route through a real minimal vprintf once the netif step
  * needs formatted diagnostics. */
 void net_stack_lwip_diag(const char* fmt, ...) {
@@ -592,8 +592,8 @@ static err_t net_stack_tcp_sent(void* arg, struct altcp_pcb* pcb, u16_t len) {
     return ERR_OK;
 }
 
-/* Fatal error: lwIP has already freed the pcb. Drop our reference, mark the
- * rings reset, answer any deferred connect, and wake the client. */
+/* Fatal error: lwIP has already freed the pcb. Drops the socket's reference,
+ * marks the rings reset, answers any deferred connect, and wakes the client. */
 static void net_stack_tcp_err(void* arg, err_t err) {
     net_socket_t* socket = (net_socket_t*)arg;
     (void)err;
@@ -792,7 +792,7 @@ static void net_stack_finish_bind(net_interface_slot_t* interface, uint8_t link_
         ip4_addr_t zero;
         IP4_ADDR(&zero, 0, 0, 0, 0);
         /* Address is assigned later from /boot/system/net/interfaces (static)
-         * or via DHCP; bring the netif up unconfigured for now so DHCP has an
+         * or via DHCP; the netif is brought up unconfigured so DHCP has an
          * up, link-up interface to exchange DISCOVER/OFFER on. */
         if (netif_add(&interface->netif, &zero, &zero, &zero, NULL, net_stack_netif_init,
                       ethernet_input) == NULL) {
@@ -1245,7 +1245,7 @@ static void net_stack_try_discover_interfaces(void) {
     }
     /* One-shot: only look up pre-existing providers once the subscription is
      * live.  After that, arrivals come via SVC_IPC_CLASS_EVENT(ADD); a removed
-     * interface is re-added by the same event, so we never need to re-poll. */
+     * interface is re-added by the same event, so re-polling is never needed. */
     if (!g_netifc_subscribed || g_netifc_lookup_kicked || g_netdrv_endpoint != 0u ||
         g_netifc_lookup_pending || g_netifc_lookup_buffer_id != 0u)
         return;
@@ -1549,7 +1549,7 @@ static int net_stack_u32_dec(char* dst, uint32_t v) {
 /* Build a NUL-terminated PEM bundle holding only the certificates in `pem` (a
  * NUL-terminated PEM bundle) that THIS mbedTLS build can parse, so
  * altcp_tls_create_config_client (which rejects the whole bundle on any parse
- * failure) sees a clean input. Roots we cannot parse could never anchor a chain
+ * failure) sees a clean input. An unparseable root could not anchor a chain
  * anyway. Returns a malloc'd buffer (caller frees), *out_len including the NUL. */
 static uint8_t* net_stack_filter_ca_pem(const uint8_t* pem, uint32_t* out_len) {
     static const char kBegin[] = "-----BEGIN CERTIFICATE-----";
@@ -1644,9 +1644,9 @@ static struct altcp_tls_config* net_stack_ensure_tls_config(void) {
     /* altcp_tls_create_config_client rejects the WHOLE bundle if mbedtls_x509_crt_parse
      * reports any failed cert (its check is `ret != 0`). A general trust store
      * (Mozilla) contains roots using curves/algorithms this trimmed mbedTLS build
-     * omits, so a few always fail to parse. Filter to the certs we can parse — we
-     * could not verify a chain to an unparseable root anyway — so the create sees
-     * a clean bundle. */
+     * omits, so a few always fail to parse. Filtering to the parseable certs
+     * loses nothing — a chain to an unparseable root is unverifiable either way —
+     * and gives the create a clean bundle. */
     uint32_t filtered_len = 0u;
     uint8_t* filtered = net_stack_filter_ca_pem(g_ca_bytes, &filtered_len);
     const uint8_t* ca;
@@ -2582,9 +2582,9 @@ int32_t wasmos_async_main(wasmos_driver_api_t* driver_api,
         return -1;
     }
     g_proc_endpoint = spawn_info.proc_endpoint;
-    /* Device-manager starts bootstrap services synchronously. Release that
-     * spawn before asking the process manager to service our registration; the
-     * PM cannot reply while it is still waiting for this service's ready ack. */
+    /* Device-manager starts bootstrap services synchronously. Release that spawn
+     * before asking the process manager to service this registration: the PM
+     * cannot reply while it is still waiting for this service's ready ack. */
     if (driver_api->proc_notify_ready != NULL) {
         driver_api->proc_notify_ready();
     }
@@ -2666,9 +2666,9 @@ int32_t wasmos_async_main(wasmos_driver_api_t* driver_api,
             }
         }
         (void)drained;
-        /* Record whether the runtime is idle (no runnable child coroutine)
-         * while we can still observe it accurately - the root is RUNNING here,
-         * so has_ready() reflects only other coroutines. The service idle hook,
+        /* Record whether the runtime is idle (no runnable child coroutine) while
+         * that is still observable accurately - the root is RUNNING here, so
+         * has_ready() reflects only other coroutines. The service idle hook,
          * which runs on the kernel-thread stack after this yield, uses the flag
          * to decide whether to block on the endpoints or keep cooperating.
          * The blocking wait must NOT happen here: it would run on the coroutine

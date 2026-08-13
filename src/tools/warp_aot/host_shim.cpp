@@ -69,7 +69,8 @@ void operator delete[](void* p, std::nothrow_t const&) noexcept {
  *
  * With ACTIVE_STACK_OVERFLOW_CHECK=1 and LINEAR_MEMORY_BOUNDS_CHECKS=1,
  * signal-based bounds/stack checking is not used.  All signal handler methods
- * are no-ops; we just need the static data members and the out-of-line methods.
+ * are no-ops; only the static data members and the out-of-line methods are
+ * needed to link.
  * ----------------------------------------------------------------------- */
 
 namespace vb {

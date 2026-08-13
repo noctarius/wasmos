@@ -564,7 +564,7 @@ static int wasm_console_should_mirror_to_vt(void) {
         return 0;
     }
 
-    /* Restrict mirrored VT output to shell-launched app workloads for now.
+    /* Mirrored VT output is restricted to shell-launched app workloads.
      * FIXME: Replace this parent-name heuristic with explicit per-process
      * console routing policy once PM exposes tty ownership metadata. */
     return strcmp(parent->name, "cli") == 0;
@@ -632,7 +632,7 @@ wasm_fs_peer_slot_t* wasm_fs_peer_slot_for_pid(uint32_t pid) {
 /* Whether the calling context may own/lend transfer buffers. Owning a transfer
  * buffer is like opening a file descriptor: any real process may acquire, borrow
  * and release one so it can move IPC payloads. The DMA capability is enforced
- * separately at dma_map_borrow (require_dma_capability), so this no longer gates
+ * separately at dma_map_borrow (require_dma_capability), so this does not gate
  * on CAP_DMA_BUFFER or the fs-manager name. */
 static int wasm_buffer_role_allowed(uint32_t context_id, const process_t* proc) {
     (void)context_id;
@@ -1082,13 +1082,12 @@ m3ApiRawFunction(wasmos_block_buffer_write) {
  * offset inside the current linear memory may land on live data; one past the
  * end cannot.
  *
- * These scans used to start at a fixed 0x200000 -- a "module data lives below
- * here" guess from before per-process linear memory became generous. An app
- * whose statics cross 2 MiB got its overlay mapped on top of its own buffer:
- * tetris's back buffer (0x100678..0x36e578) collided with a window placed at
- * 0x200000, so its blit overwrote its own source and the frame rendered
- * repeated and sheared. WARP has placed above its active size since; this is
- * wasm3 adopting the same rule instead of a constant.
+ * The scan must start above the module's active size, never at a fixed address.
+ * A constant floor such as 0x200000 assumes module data lives below it, which
+ * fails for any app whose statics cross that line: the overlay lands on top of
+ * the app's own buffer, and a blit then overwrites its own source (a frame that
+ * renders repeated and sheared). WARP places above its active size for the same
+ * reason.
  *
  * Growing cannot move offsets already handed out: linear memory lives in a
  * reserved-VA slot that commits pages on demand and never relocates

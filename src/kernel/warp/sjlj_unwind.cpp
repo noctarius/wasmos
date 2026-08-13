@@ -6,12 +6,12 @@
  *   - A try block exit that calls _Unwind_SjLj_Unregister(&ctx).
  *   - A throw that calls __cxa_throw → _Unwind_SjLj_RaiseException(exc).
  *
- * Our runtime walks the context stack and __builtin_longjmps to the first
- * frame whose personality function accepts the exception.  catch(...) always
- * accepts, so it always catches.
+ * This implementation walks the context stack and __builtin_longjmps to the
+ * first frame whose personality function accepts the exception.  catch(...)
+ * always accepts, so it always catches.
  *
- * No setjmp.h is needed: the compiler emits the setjmp inline; we only call
- * __builtin_longjmp (a clang intrinsic, no header required).
+ * No setjmp.h is needed: the compiler emits the setjmp inline, and the only
+ * call made here is __builtin_longjmp (a clang intrinsic, no header required).
  *
  * Context stack is per-CPU-slot because WARP execution is serialized by
  * warp_runtime_enter (only one CPU inside WARP at any time). */

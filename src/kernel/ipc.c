@@ -323,8 +323,8 @@ int ipc_recv_blocking_for(uint32_t receiver_context_id, uint32_t endpoint,
         sched_event_wait(&ep->event, 0);
         ep = ipc_endpoint_get(endpoint);
         if (!ep) {
-            /* Released while we were parked -- distinct from "you named a bad
-             * endpoint": the handle WAS valid when the caller blocked. */
+            /* Released while the caller was parked -- distinct from a bad
+             * endpoint name: the handle WAS valid when the caller blocked. */
             return IPC_ERR_PEER_GONE;
         }
         if (ep->count == 0) {
@@ -609,14 +609,13 @@ int ipc_select_wait(uint32_t select_id, uint32_t owner_context_id, uint32_t* out
      * It closes the SMP lost-wakeup window around the block: ipc_select_signal
      * holds event.lock while it writes ready_ep and calls
      * sched_event_wake_one, so any signal firing after this point must wait
-     * until we are already in the wait_list inside sched_event_wait.
+     * until this thread is already in the wait_list inside sched_event_wait.
      *
      * It also puts the take-and-clear below on the same lock the signal writes
-     * under.  A fast path that read ready_ep under g_select_table_lock instead
-     * -- as this did -- races a concurrent signal and can overwrite the
-     * endpoint it just published with IPC_ENDPOINT_NONE, dropping that
-     * readiness entirely: the set then blocks until some *later* message
-     * arrives, and the queued one is never looked at. */
+     * under.  Reading ready_ep under g_select_table_lock instead races a
+     * concurrent signal and can overwrite the endpoint that signal just
+     * published with IPC_ENDPOINT_NONE, dropping that readiness entirely: the set then blocks until
+     * some *later* message arrives, and the queued one is never looked at. */
     ksync_spinlock_lock(&sel->event.lock);
     ksync_spinlock_unlock(&g_select_table_lock);
 
@@ -626,20 +625,18 @@ int ipc_select_wait(uint32_t select_id, uint32_t owner_context_id, uint32_t* out
     }
 
     /* sched_event_wait releases sel->event.lock before yielding. A non-zero
-     * timeout_ms wakes us after the deadline (returning IPC_EMPTY). */
+     * timeout_ms wakes the caller after the deadline (returning IPC_EMPTY). */
     sched_event_wait(&sel->event, timeout_ms);
 
     /* `sel` cannot be trusted after the wake. A concurrent destroy wakes its
-     * waiters and then RELEASES the set's storage, so the pointer we parked on
-     * may now be freed or reused. Re-resolve by id under the table lock; gone
-     * means IPC_EMPTY, the same answer a timeout gives, because there is
-     * nothing to report either way.
+     * waiters and then RELEASES the set's storage, so the parked-on pointer may
+     * be freed or reused. Re-resolve by id under the table lock; gone means
+     * IPC_EMPTY, the same answer a timeout gives, because there is nothing to
+     * report either way.
      *
-     * The fixed array hid this -- a destroyed slot stayed put with in_use = 0 --
-     * but hid a worse one in exchange: the slot could be handed to another
-     * context while this waiter slept, and take_ready would then read a set
-     * belonging to somebody else. Ids are not reused now, so re-resolving is
-     * both safe and unambiguous. */
+     * Re-resolving by id is what makes this unambiguous: ids are never reused,
+     * so a live lookup cannot return a set that was handed to another context
+     * while this waiter slept. */
     ksync_spinlock_lock(&g_select_table_lock);
     sel = ipc_select_find(select_id, owner_context_id, &find_rc);
     if (!sel) {

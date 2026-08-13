@@ -131,7 +131,7 @@ static int32_t fetch_title(int32_t window_id, char* out, int32_t cap) {
 
 /* wasmos_ipc_endpoint_owner() returns a context_id, NOT a PID.
  * wasmos_proc_info_stats() returns a stats struct that contains context_id,
- * so we can match correctly. */
+ * which is what makes the match correct. */
 static int32_t context_to_name(int32_t context_id, char* out, int32_t cap) {
     const int32_t total = wasmos_proc_count();
     for (int32_t i = 0; i < total; ++i) {

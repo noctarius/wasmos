@@ -116,10 +116,9 @@ process_run_result_t memory_service_entry(process_t* process, void* arg) {
         return PROCESS_RUN_IDLE;
     }
 
-    /* memory_service_serve_one() blocks on the select set between requests (it
-     * no longer busy-polls and returns PROCESS_RUN_BLOCKED via the no-op
-     * process_block_on_ipc), so the service sleeps on its endpoint event and is
-     * only re-dispatched when a request actually arrives. */
+    /* memory_service_serve_one() blocks on the select set between requests
+     * rather than busy-polling, so the service sleeps on its endpoint event and
+     * is only re-dispatched when a request actually arrives. */
     (void)memory_service_serve_one();
     return PROCESS_RUN_YIELDED;
 }

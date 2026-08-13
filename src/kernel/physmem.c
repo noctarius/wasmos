@@ -515,9 +515,9 @@ int pfa_range_overlaps_ram(uint64_t base, uint64_t length) {
     if (end < base) {
         return 1; /* wrapped — treat as overlapping so the caller refuses */
     }
-    /* If the map was never parsed we know nothing, so refuse rather than allow.
-     * A truncated list is the same situation with the same answer: what we hold
-     * is no longer a superset of system RAM, so "no overlap found" would be a
+    /* An unparsed map carries no information, so refuse rather than allow.
+     * A truncated list is the same situation with the same answer: the retained
+     * ranges are not a superset of system RAM, so "no overlap found" would be a
      * guess, and this gate exists to stop mmio_write32_phys writing into RAM. */
     if (g_ram_range_count == 0 || g_ram_ranges_truncated) {
         return 1;

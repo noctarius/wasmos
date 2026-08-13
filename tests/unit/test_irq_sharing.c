@@ -287,8 +287,8 @@ static void test_last_sharer_leaving_masks_line(void) {
            "second unregister returns NOT_A_SHARER");
 }
 
-/* A reaped driver used to leave a slot pointing at a dead endpoint, and any ack
- * it owed masked the line forever. */
+/* A reaped driver must not leave a slot pointing at a dead endpoint: any ack it
+ * still owed would mask the line forever. */
 static void test_release_context_clears_all_lines(void) {
     reset();
     (void)irq_sharing_register(g_lines, 4, 10, 0x100, &OPS);

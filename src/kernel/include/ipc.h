@@ -12,12 +12,12 @@
 #define IPC_SELECT_EPS_MAX 8u
 
 /*
- * Each code names ONE failure. IPC_ERR_INVALID used to cover three unrelated
- * ones at once -- a caller passing NULL, an endpoint that does not exist, and
- * an operation applied to the wrong endpoint type -- so a caller could not tell
- * "I have a bug" from "that endpoint died" from "wrong kind of endpoint", and
- * had no basis for deciding whether to retry, re-resolve, or give up. Values
- * are the generated transport axis (see the assertions below).
+ * Each code names ONE failure. A single code covering a NULL argument, a
+ * non-existent endpoint and an operation applied to the wrong endpoint type
+ * leaves the caller unable to tell a bug in its own code from a dead peer from
+ * a type mismatch, and so with no basis for deciding whether to retry,
+ * re-resolve, or give up. Values are the generated transport axis (see the
+ * assertions below).
  */
 typedef enum {
     IPC_OK = 0,

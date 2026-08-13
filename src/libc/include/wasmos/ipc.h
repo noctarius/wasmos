@@ -20,9 +20,9 @@ extern "C" {
 #ifndef WASMOS_IPC_SEND_RETRY_LIMIT
 #define WASMOS_IPC_SEND_RETRY_LIMIT 4096
 #endif
-/* Decoded IPC message.  Note that the kernel's IPC_FIELD ordering is:
+/* Decoded IPC message.  The kernel's IPC_FIELD ordering is:
  * field 0=type, 1=request_id, 2=arg0, 3=arg1, 4=source, 5=destination,
- * 6=arg2, 7=arg3 — arg2/arg3 are not fields 4/5. */
+ * 6=arg2, 7=arg3 — arg2/arg3 are NOT fields 4/5. */
 typedef struct {
     int32_t type;
     int32_t request_id;

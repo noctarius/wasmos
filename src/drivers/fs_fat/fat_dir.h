@@ -85,7 +85,7 @@ fat_r_t fat_create_path_entry(fat_create_ctx_t* c, fat_block_t* blk, const fat_m
 /* Create an empty file at c->path (thin wrapper: drives fat_create_path_entry
  * with attr=0, cluster=0, size=0, fail_if_exists=0).  Set c->path/c->source;
  * c->found is the result.  fail_if_exists is forced to 0 here regardless of the
- * incoming field (matches the original fat_create_empty_file). */
+ * incoming field. */
 fat_r_t fat_create_empty_file(fat_create_ctx_t* c, fat_block_t* blk, const fat_mount_t* mnt);
 
 /* Create a directory at m->path: allocate a cluster, write EOC, init '.'/'..',
@@ -102,7 +102,7 @@ fat_r_t fat_remove_path(fat_remove_ctx_t* r, fat_block_t* blk, const fat_mount_t
 /* Stream the entries of the CURRENT directory (root region when mnt->cwd_root,
  * else the cwd subdir at mnt->dir_lba/dir_sectors) to op->source over
  * fs_endpoint as FS_IPC_STREAM messages (4 bytes per message, with the
- * original's IPC_ERR_FULL retry + wasmos_console_write fallback), one line per
+ * IPC_ERR_FULL retry + wasmos_console_write fallback), one line per
  * entry ("name" + "/" for a directory + "\n").  Uses op->readdir.  Sends no
  * response itself (resp_override stays 0); the reactor emits the final
  * FS_IPC_RESP on FAT_R_DONE.  FAT_R_ERR only on a block-I/O fault. */

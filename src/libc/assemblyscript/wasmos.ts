@@ -443,9 +443,9 @@ export namespace std {
 @external("wasmos", "io_in16") declare function io_in16_raw(port: i32, out: i32): i32;
 
 /* The port-read host calls report the value through an out-parameter and the
- * outcome through the return, so a refused read is no longer the all-ones an
- * absent device reads back. One scratch cell and one status check live here
- * rather than in every driver.
+ * outcome through the return, so a refused read is distinguishable from the
+ * all-ones an absent device reads back. One scratch cell and one status check
+ * live here rather than in every driver.
  *
  * The wrappers fold both back into an i32, which is safe where the host call
  * was not: a byte and a word cannot reach the negative range, so a negative

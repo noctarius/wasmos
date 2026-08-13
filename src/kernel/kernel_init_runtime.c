@@ -11,10 +11,10 @@
 
 static const uint8_t g_skip_wasm_boot = 0;
 
-/* Terminal idle wait for init (see the phase-5 park in kernel_init_entry).  init
- * has no work left after boot handoff; a bounded park lets the CPU reach idle/hlt
- * while keeping a low-rate heartbeat, instead of the no-op process_block_on_ipc()
- * stub that spun the scheduler. */
+/* Terminal idle wait for init (see the final park in kernel_init_entry).  init
+ * has no work left after boot handoff; a bounded park lets the CPU reach
+ * idle/hlt while keeping a low-rate heartbeat.  Returning through the no-op
+ * process_block_on_ipc() instead would spin the scheduler. */
 #define KERNEL_INIT_IDLE_WAIT_MS 100u
 
 void kernel_init_state_reset(init_state_t* state, const boot_info_t* boot_info) {
@@ -146,9 +146,9 @@ static int init_send_spawn_path(process_t* process, init_state_t* state, const c
         return -1;
     }
     /* PM reads the path synchronously while handling this message, so the buffer
-     * is safe to drop once the spawn reply is observed. TODO(xfer-stage2): track
-     * `buf` in init_state and release it on the reply; for now init owns it and
-     * it is reclaimed by xfer_buffer_drop_context on init exit. */
+     * is safe to drop once the spawn reply is observed. init owns the buffer and
+     * it is reclaimed by xfer_buffer_drop_context on init exit.
+     * TODO(xfer-stage2): track `buf` in init_state and release it on the reply. */
     state->pending_kind = 5;
     state->phase = 4;
     return 0;
@@ -419,14 +419,15 @@ process_run_result_t kernel_init_entry(process_t* process, void* arg) {
         state->phase = 5;
     }
 
-    /* Phase 5: boot handoff complete; init has no further work.  Park (bounded)
-     * on the reply endpoint so the thread yields the CPU to idle/hlt.  The old
-     * process_block_on_ipc() is a no-op stub, so returning PROCESS_RUN_BLOCKED
-     * left the thread RUNNING and on no wait_list; the scheduler then treats
-     * PROCESS_RUN_BLOCKED from a still-RUNNING thread as a voluntary yield and
-     * re-dispatches init every scheduling round (see process.c) — a spin that
-     * kept the run queue non-empty so the idle thread's sti;hlt never ran and the
-     * host vCPU spun at full load.  The timeout keeps a low-rate heartbeat. */
+    /* Boot handoff complete; init has no further work.  Park (bounded) on the
+     * reply endpoint so the thread yields the CPU to idle/hlt.  Returning
+     * PROCESS_RUN_BLOCKED instead does NOT park: process_block_on_ipc() is a
+     * no-op stub, so the thread stays RUNNING and on no wait_list, and the
+     * scheduler treats PROCESS_RUN_BLOCKED from a still-RUNNING thread as a
+     * voluntary yield and re-dispatches init every scheduling round (see
+     * process.c) — a spin that keeps the run queue non-empty, so the idle
+     * thread's sti;hlt never runs and the host vCPU sits at full load.  The
+     * timeout keeps a low-rate heartbeat. */
     (void)ipc_endpoint_wait_for(process->context_id, state->reply_endpoint,
                                 KERNEL_INIT_IDLE_WAIT_MS);
     return PROCESS_RUN_YIELDED;

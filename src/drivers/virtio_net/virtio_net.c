@@ -278,9 +278,9 @@ static uint16_t cfg_base(void) {
     return g_dev.msix_enabled ? VIRTIO_NET_CFG_BASE_MSIX : VIRTIO_NET_CFG_BASE_INTX;
 }
 
-/* The one port read whose failure would otherwise become data: a refused read
- * used to store 0xFF, giving the interface a plausible-looking all-ones MAC.
- * Now the code says which check refused it and bring-up stops. */
+/* The one port read whose failure would otherwise become data: storing the
+ * 0xFF of a refused read gives the interface a plausible-looking all-ones MAC.
+ * The refusal is reported and bring-up stops instead. */
 static int read_mac(void) {
     uint16_t mac_port = (uint16_t)(g_dev.io_base + cfg_base() + VIRTIO_NET_CFG_MAC_OFF);
     for (uint32_t i = 0; i < 6u; ++i) {
@@ -537,7 +537,7 @@ static int rx_poll_local(uint8_t* out, uint32_t max) {
 }
 
 /* Connectivity probe: broadcast an ARP request for the SLIRP gateway (10.0.2.2)
- * from our MAC. The reply is delivered asynchronously via the device IRQ (see
+ * from the device MAC. The reply is delivered asynchronously via the device IRQ (see
  * net_handle_irq). Exercises the whole path — region_alloc'd rings, vring
  * publish/kick, the device doorbell, and TX DMA read. */
 static void net_probe_send(void) {
@@ -547,7 +547,7 @@ static void net_probe_send(void) {
     uint32_t p = 0;
     int i;
 
-    /* Ethernet header: dst broadcast, src our MAC, ethertype ARP. */
+    /* Ethernet header: dst broadcast, src the device MAC, ethertype ARP. */
     for (i = 0; i < 6; ++i)
         frame[p++] = 0xFFu;
     for (i = 0; i < 6; ++i)
@@ -603,9 +603,9 @@ static int net_drain_rx(void) {
     return enqueued;
 }
 
-/* Device interrupt handler (IPC_IRQ_EVENT_TYPE for our line). Reading the ISR
- * status register de-asserts the (level-triggered) device interrupt; we then
- * reap completed transmits and drain the RX ring. Frames are enqueued for a
+/* Device interrupt handler (IPC_IRQ_EVENT_TYPE for this device's line). Reading
+ * the ISR status register de-asserts the (level-triggered) device interrupt;
+ * completed transmits are then reaped and the RX ring drained. Frames are enqueued for a
  * subscribed consumer (posting one RX_FRAME_NOTIFY per batch), or — before any
  * subscriber exists — logged once and dropped. Finally irq_ack unmasks. */
 static void net_notify_subscriber(void) {
@@ -625,9 +625,9 @@ static void net_service_rx(void) {
     }
 }
 
-/* Device interrupt handler (IPC_IRQ_EVENT_TYPE for our line). Reading the ISR
- * status register de-asserts the (level-triggered) device interrupt; we then
- * service the queues and irq_ack (unmask).
+/* Device interrupt handler (IPC_IRQ_EVENT_TYPE for this device's line). Reading
+ * the ISR status register de-asserts the (level-triggered) device interrupt;
+ * the queues are then serviced and irq_ack unmasks.
  *
  * NOTE: on QEMU's legacy PCI-INTx path this IRQ reliably fires only for the
  * FIRST assertion — QEMU's emulated I/O APIC does not re-deliver a reasserted
@@ -636,7 +636,7 @@ static void net_service_rx(void) {
  * timer-driven poll in the main loop; this handler covers the first frame and
  * any that happen to coincide with the mask->unmask window.
  *
- * This path is now the FALLBACK, taken only when the device has no usable MSI-X
+ * This path is the FALLBACK, taken only when the device has no usable MSI-X
  * (see net_setup_msix): message-signalled vectors bypass the I/O APIC pin,
  * Remote-IRR and level re-sample entirely, so they re-deliver per notification. */
 static void net_handle_irq(void) {
@@ -652,7 +652,8 @@ static void net_handle_irq(void) {
 static void net_publish_link_change(void);
 
 /* MSI event: arg0 names the source directly, so there is no ISR register to read
- * and nothing to ack — the vector is edge-triggered and ours alone. */
+ * and nothing to ack — the vector is edge-triggered and owned by this driver
+ * alone. */
 static void net_handle_msi(int32_t entry) {
     if ((uint32_t)entry == VIRTIO_NET_MSIX_ENTRY_CONFIG) {
         net_publish_link_change();
@@ -672,7 +673,7 @@ static void net_handle_msi(int32_t entry) {
  * driver that calls wasmos_msi_alloc. Writing the table is a config-space and
  * BAR access this driver has no capability for, so pci-bus does that half. And
  * telling the device which vector serves which queue is a virtio register write
- * in our own I/O window, so that half is back here.
+ * in this driver's own I/O window, so that half is back here.
  *
  * Must run after feature negotiation and BEFORE any device-config or queue
  * access: enabling MSI-X moves the config region (cfg_base) and adds the queue
@@ -920,7 +921,7 @@ static void handle_tx_frame(int32_t source, int32_t request_id, int32_t frame_le
 
 WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t ignored_arg1,
                                       int32_t ignored_arg2, int32_t ignored_arg3) {
-    /* proc.endpoint now comes from the spawn-info contract, not an entry arg. */
+    /* proc.endpoint comes from the spawn-info contract, not an entry arg. */
     proc_endpoint = wasmos_startup_proc_endpoint();
     (void)ignored_arg1;
     (void)ignored_arg2;
@@ -941,8 +942,8 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t ignored_arg
         (void)printf("[virtio-net] no device identity in startup args\n");
         return WASMOS_ERR_DRIVER_NO_DEVICE_IDENTITY;
     }
-    /* pci-bus owns config space and is the only party that can program our
-     * MSI-X table. Its absence is not fatal — initialize_device falls back to
+    /* pci-bus owns config space and is the only party that can program this
+     * device's MSI-X table. Its absence is not fatal — initialize_device falls back to
      * the shared INTx line. Looked up before device init because enabling MSI-X
      * changes the register layout the rest of init uses. */
     g_pci_endpoint = wasmos_sys_svc_lookup_retry(proc_endpoint, g_endpoint, "pci", 1, 1024);
@@ -967,8 +968,8 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t ignored_arg
                  (unsigned)VIRTIO_NET_MTU_BASELINE);
 
     /* With MSI-X the vectors were bound during device init and the device's
-     * INTx is disabled, so routing the shared line would only subscribe us to
-     * other devices' interrupts. Route it only on the fallback path. */
+     * INTx is disabled, so routing the shared line would only subscribe this
+     * driver to other devices' interrupts. Route it only on the fallback path. */
     if (!g_dev.msix_enabled) {
         if (wasmos_irq_route_ipc((int32_t)g_dev.irq, g_endpoint) == 0) {
             (void)printf("[virtio-net] irq routed line=%u\n", (unsigned)g_dev.irq);
@@ -1003,11 +1004,11 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t ignored_arg
         /* Handler loop: drain and dispatch EVERY pending message each iteration,
          * unconditionally. wasmos_ipc_select_wait_timeout only reports
          * edge-signalled readiness (a single latched ready_ep), so a request
-         * that arrived without an edge — or while we were servicing RX — must be
+         * that arrived without an edge — or while RX was being serviced — must be
          * picked up here rather than stranded until some future signal. Draining
-         * only on the "ready" branch was a real deadlock: a client's blocking
-         * LINK_GET/TX reply never came because its message sat undrained on the
-         * timeout branch. */
+         * only on the "ready" branch deadlocks: a client blocked on a LINK_GET/TX
+         * reply never gets it, because its request sits undrained on the timeout
+         * branch. */
         while (wasmos_ipc_drain(g_endpoint) > 0) {
             wasmos_ipc_message_read_last(&msg);
             /* Hardware IRQ arrives as IPC_IRQ_EVENT_TYPE with source=NONE (< 0),
@@ -1040,7 +1041,7 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t ignored_arg
         }
         net_publish_link_change();
         if (g_dev.msix_enabled) {
-            /* The vector wakes us for every completion, so block outright. */
+            /* The vector fires for every completion, so block outright. */
             (void)wasmos_ipc_select_wait(sel);
         } else {
             /* Idle: poll the RX ring + reap TX (INTx re-delivery workaround),

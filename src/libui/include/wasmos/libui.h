@@ -70,7 +70,7 @@ typedef void (*ui_list_view_item_cb_t)(struct ui_context* ctx, int32_t component
                                        int32_t item_index, void* user);
 
 /* Pure base component. All type-specific state lives in component_data.
- * This keeps the core struct small and stable as we add more widget kinds. */
+ * This keeps the core struct small and stable across added widget kinds. */
 typedef struct {
     int32_t in_use;
     int32_t id;
@@ -1483,8 +1483,9 @@ static inline void ui_render_component_clip(ui_context_t* ctx, int32_t id, ui_re
         ops->render(ctx, c, draw_bounds, clip, offset_y);
     }
 
-    /* Some components (containers with popups/children) return early from their render
-     * after painting children themselves. For others we draw a border and recurse. */
+    /* Some components (containers with popups/children) return early from their
+     * render after painting children themselves. Everything else gets a border
+     * and a recursive descent here. */
     if (c->type == UI_COMPONENT_LIST_VIEW || c->type == UI_COMPONENT_TREE_VIEW ||
         c->type == UI_COMPONENT_DROPDOWN || c->type == UI_COMPONENT_SCROLL_VIEW ||
         c->type == UI_COMPONENT_MENU_BAR || c->type == UI_COMPONENT_MENU_ITEM) {

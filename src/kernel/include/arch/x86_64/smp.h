@@ -47,7 +47,7 @@ typedef struct cpu_local {
     uint64_t gdt[GDT_ENTRY_COUNT];
     tss_t tss;
 
-    /* Scheduler state (previously file-static globals in process.c). */
+    /* Scheduler state, per CPU. */
     process_t* current_process;
     thread_t* current_thread;
     uint32_t preempt_disable_count;
@@ -75,10 +75,10 @@ typedef struct cpu_local {
     uint32_t last_dispatched_pid;
 
     /* Scheduler context — saved here on every context switch so concurrent CPUs
-     * cannot clobber each other's return frame (was a shared global g_sched_ctx). */
+     * cannot clobber each other's return frame; a shared global cannot do this. */
     process_context_t sched_ctx;
 
-    /* Per-CPU reschedule flag and watchdog state (formerly file-static globals). */
+    /* Per-CPU reschedule flag and watchdog state. */
     volatile uint8_t need_resched;
     uint32_t current_pid;
     uint64_t resched_pending_since_tick;

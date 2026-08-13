@@ -2,11 +2,11 @@
 /* compat/atomic — freestanding stub of <atomic>
  *
  * WARP uses std::atomic_thread_fence to ensure memory ordering around JIT
- * code emission.  We map this to the GCC/clang built-in __sync_synchronize()
+ * code emission.  It maps to the GCC/clang built-in __sync_synchronize(),
  * which emits a full memory barrier (MFENCE on x86_64).
  *
- * A minimal std::atomic<T> is also provided for any load/store uses;
- * it uses __atomic_* built-ins which are always available in clang. */
+ * A minimal std::atomic<T> is also provided for load/store uses, built on the
+ * __atomic_* built-ins that are always available in clang. */
 
 namespace std {
 

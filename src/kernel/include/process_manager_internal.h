@@ -1,5 +1,6 @@
 /* process_manager_internal.h - PM internal state: g_pm struct, service table, and
- * buffer descriptors shared across process_manager_spawn/services/buffers.c. */
+ * buffer descriptors shared across process_manager.cpp,
+ * process_manager_spawn.c and process_manager_services.c. */
 #ifndef WASMOS_PROCESS_MANAGER_INTERNAL_H
 #define WASMOS_PROCESS_MANAGER_INTERNAL_H
 

@@ -61,7 +61,7 @@ static uint8_t g_serial_high_alias_enabled = 0;
 static uint32_t g_console_ring_shmem_id = 0;
 static console_ring_t* g_console_ring = 0;
 
-/* klog ring (phase 4): physical base + byte size of the VT-owned SPSC ring.
+/* klog ring: physical base + byte size of the VT-owned SPSC ring.
  * phys == 0 means no VT ring is registered yet, so klog_ring_write is a no-op
  * and early boot keeps flowing only to console_ring + COM1 TX. */
 static uint64_t g_klog_ring_phys = 0;

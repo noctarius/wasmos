@@ -1,6 +1,6 @@
 /* fat_name.c - pure FAT name-handling implementation (see fat_name.h).
- * Ported verbatim in behavior from the monolithic fs_fat.c; the LFN globals
- * (g_lfn_*) are replaced by an explicit fat_lfn_t passed by the caller. */
+ * LFN reassembly state is an explicit fat_lfn_t passed by the caller, never a
+ * file-scope global, so concurrent ops cannot corrupt each other's names. */
 #include "fat_name.h"
 
 #include <stdint.h>
@@ -48,9 +48,9 @@ static void fat_lfn_store_char(fat_lfn_t* lfn, uint32_t pos, uint16_t ch) {
 }
 
 /* NUL-terminate the reassembled LFN name after all ordinal entries have been
- * collected.  Each LFN entry holds 13 UTF-16LE characters; lfn->total tells
- * us how many entries were present.  If fat_lfn_store_char already wrote a
- * NUL (end-of-name sentinel), the loop exits early. */
+ * collected.  Each LFN entry holds 13 UTF-16LE characters; lfn->total gives
+ * the number of entries present.  If fat_lfn_store_char already wrote a NUL
+ * (end-of-name sentinel), the loop exits early. */
 void fat_lfn_finalize(fat_lfn_t* lfn) {
     if (!lfn->valid || lfn->total == 0) {
         return;
@@ -81,8 +81,8 @@ void fat_lfn_finalize(fat_lfn_t* lfn) {
  *   [28..31] characters 12-13(name3, 2 chars)
  *
  * Entries appear on disk in reverse ordinal order (highest first), so the
- * first entry seen has bit 0x40 set and declares lfn->total.  We write
- * each entry's characters at base = (ordinal-1)*13 so they land in forward
+ * first entry seen has bit 0x40 set and declares lfn->total.  Each entry's
+ * characters are written at base = (ordinal-1)*13 so they land in forward
  * order in lfn->buf regardless of disk order. */
 void fat_lfn_collect(fat_lfn_t* lfn, const uint8_t* ent) {
     uint8_t ord = ent[0];

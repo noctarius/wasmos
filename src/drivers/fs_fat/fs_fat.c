@@ -293,7 +293,7 @@ static void fat_activate_next(void) {
  * Reuses the reactor's own mount step + block-completion — not a separate
  * synchronous read path.  Blocking on the reply here is fine: it is one-time
  * bring-up with no client ops in flight (like the IDENTIFY / backend-info
- * handshakes).  A mount failure is fatal, as in the original driver. */
+ * handshakes).  A mount failure is fatal. */
 static void fat_mount_bringup(void) {
     static fat_op_ctx_t boot;
     memset(&boot, 0, sizeof(boot));

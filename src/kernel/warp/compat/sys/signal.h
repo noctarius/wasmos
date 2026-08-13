@@ -39,8 +39,8 @@ struct sigaction {
 extern "C" {
 #endif
 
-/* No-op implementation — declared here, defined in warp/compat/csignal.cpp
- * (or in a kernel stub object linked alongside WARP). */
+/* No-op implementation — declared here, defined in
+ * src/kernel/warp/posix_kernel.c. */
 int sigaction(int signum, const struct sigaction* act, struct sigaction* oldact);
 
 #ifdef __cplusplus

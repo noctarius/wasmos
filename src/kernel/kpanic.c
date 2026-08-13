@@ -91,7 +91,7 @@ void kpanic_capture_origin(uint64_t rip, uint64_t rsp, uint64_t rbp, uint64_t rf
 
 void x86_nmi_handler(uint64_t* regs) {
     if (!__atomic_load_n(&g_panicking, __ATOMIC_ACQUIRE)) {
-        /* Not a panic stop — an NMI we did not initiate. Log and resume. */
+        /* Not a panic stop — an NMI the kernel did not initiate. Log and resume. */
         serial_printf_unlocked("[nmi] unexpected NMI cpu=%u rip=%016llx\n",
                                (unsigned)cpu_local()->cpu_id,
                                (unsigned long long)regs[NMI_REG_RIP]);
@@ -118,7 +118,7 @@ void x86_nmi_handler(uint64_t* regs) {
 __attribute__((noreturn)) void kpanic(const char* reason, uint64_t a, uint64_t b) {
     __asm__ volatile("cli");
 
-    /* First CPU to panic wins; any later panicker (including a CPU we NMI'd that
+    /* First CPU to panic wins; any later panicker (including an NMI'd CPU that
      * then also called kpanic) just halts so the dump isn't interleaved. */
     if (__atomic_exchange_n(&g_panicking, 1u, __ATOMIC_ACQ_REL) != 0u) {
         for (;;) {
@@ -128,7 +128,7 @@ __attribute__((noreturn)) void kpanic(const char* reason, uint64_t a, uint64_t b
 
     uint32_t self = cpu_local()->cpu_id;
 
-    /* Capture our own context directly. */
+    /* Capture this CPU's own context directly. */
     if (self < WASMOS_MAX_CPUS) {
         panic_cpu_ctx_t* c = &g_panic_ctx[self];
         if (!__atomic_load_n(&c->captured, __ATOMIC_ACQUIRE)) {

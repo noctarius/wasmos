@@ -6,8 +6,8 @@
 
 #include <stdint.h>
 
-/* Spin-loop relax hint: tell the core we are busy-waiting, so it can back off
- * instead of burning the pipeline at full rate.
+/* Spin-loop relax hint: signals to the core that this is a busy-wait, so it can
+ * back off instead of burning the pipeline at full rate.
  *
  * x86_64 uses PAUSE, the architectural spin-wait hint.
  *

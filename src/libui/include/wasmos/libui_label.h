@@ -3,7 +3,7 @@
 
 /* libui_label.h - Label component specific rendering and behavior.
  * Included by libui.h after core generic facilities are defined.
- * Component-specific code lives here so the core stays small as we add widgets.
+ * Component-specific code lives here so the core stays small.
  */
 
 static inline void ui_render_label(ui_context_t* ctx, const ui_component_t* c,

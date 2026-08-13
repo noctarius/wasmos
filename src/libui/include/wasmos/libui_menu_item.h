@@ -112,9 +112,9 @@ static inline bool ui_menu_item_popup_contains(const ui_context_t* ctx, const ui
     ui_menu_item_data_t* d = (ui_menu_item_data_t*)c->component_data;
     if (!d || !d->dropdown_open || d->popup_win_id == 0)
         return false;
-    /* The popup is a separate window; we don't hit-test its screen rect in the
+    /* The popup is a separate window, so its screen rect is NOT hit-tested in the
      * bar window.  Events arrive from the popup's own window via the IPC loop.
-     * Return false so core doesn't try to map bar-window coords into popup rows. */
+     * Returning false stops core mapping bar-window coords into popup rows. */
     (void)ctx;
     (void)x;
     (void)y;

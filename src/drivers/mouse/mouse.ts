@@ -6,13 +6,12 @@
  * initialize() is exported, tools/as_coroutine_transform.mjs keeps its signature
  * and hands the lowered task to libc's pump, which owns the coroutine runtime.
  *
- * What this replaced, and why. Registration was a blocking ipc_recv on the
- * SERVICE endpoint -- send, then receive until the reply turned up, discarding
- * anything else -- so a client's subscribe request landing in that window was
- * dropped and its sender waited forever. The polled fallback yielded three times
- * per iteration and the no-endpoint path yielded forever, both of which peg a
- * core; the loop parks instead, and the polled path is a bounded wait driven by
- * the pump's idle hook.
+ * Registration goes through the event loop, not a blocking ipc_recv on the
+ * SERVICE endpoint: send-then-receive-until-the-reply-arrives discards every
+ * unrelated message, so a client subscribe landing in that window is lost and
+ * its sender waits forever. The polled fallback is a bounded wait driven by the
+ * pump's idle hook, and the no-endpoint path parks; yielding in either place
+ * pegs a core.
  *
  * The bounded sched_yield loops in the controller handshake below are NOT that
  * kind of spin: they wait on a hardware status register during bring-up, have a
@@ -175,14 +174,15 @@ function sendMouseCommand(cmd: i32): bool {
 }
 
 /* Returns the byte, -1 for "nothing pending" -- which a refused status read
- * joins, since without it nothing is known -- or -2 for "not ours". */
+ * joins, since without it nothing is known -- or -2 when the pending byte came
+ * from the keyboard port rather than the AUX port. */
 function readAuxByte(): i32 {
     const st = io.in8(CTRL_STATUS_PORT);
     if (st < 0 || (st & STATUS_OBF) == 0) {
         return -1;
     }
     if ((st & STATUS_AUX) == 0) {
-        /* Not our byte: leave it for the keyboard driver. */
+        /* A keyboard byte: leave it for the keyboard driver. */
         return -2;
     }
     const byte = io.in8(CTRL_DATA_PORT);
@@ -400,6 +400,7 @@ export function initialize(_proc_endpoint: i32, _arg1: i32, _arg2: i32, _arg3: i
                 handleAuxByte(byte);
             }
         }
-        /* Anything else is not ours; ignoring it is a decision, not a drop. */
+        /* Any other message type is not part of this protocol; dropping it is
+         * deliberate. */
     }
 }

@@ -1,4 +1,4 @@
-/* wasm3_shim.c - Platform shim for the wasm3 interpreter library.
+/* shim.c - Platform shim for the wasm3 interpreter library.
  * Provides malloc/free, printf, and other libc-like symbols that wasm3
  * expects from its host environment, bridging between wasm3's requirements
  * and the kernel's minimal libc and slab allocator. */
@@ -318,7 +318,7 @@ static void* wasm3_alloc(size_t size, int zero) {
     }
     size_t total = align_up(sizeof(wasm3_heap_block_t) + size, WASM3_HEAP_ALIGN);
     /* Keep small allocations tightly packed but ensure larger buffers (notably
-     * wasm3 linear memory) are page-aligned so we can remap them to devices. */
+     * wasm3 linear memory) are page-aligned so they can be remapped to devices. */
     size_t align = WASM3_HEAP_ALIGN;
     if (size >= 4096u) {
         align = 4096u;

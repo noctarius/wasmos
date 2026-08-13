@@ -102,8 +102,8 @@ tramp_pm32:
     movl    %eax, %cr0
 
     /* Far jump to 64-bit long mode.
-     * AP_GDTR_BASE + (tramp_lm64 - smp_trampoline_start) would also work,
-     * but since the trampoline is at TRAMP_BASE we can use the same formula. */
+     * AP_GDTR_BASE + (tramp_lm64 - smp_trampoline_start) would also work; the
+     * trampoline sits at TRAMP_BASE, so the same formula applies. */
     .byte 0xea
     .long (tramp_lm64 - smp_trampoline_start + TRAMP_BASE)
     .word SEL_KCODE64

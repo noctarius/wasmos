@@ -1,17 +1,16 @@
 /* fat_file.h - POSIX fd-operation layer for the FAT reactor.
  *
- * Ports the blocking driver's fat_handle_open/read/write/stat/unlink/mkdir/
- * rmdir/seek/close and the open-file table onto the fat_co.h coroutine pattern.
- * Each fd op is a resumable step the reactor dispatches on an fat_op_ctx_t; the
- * open-file table (was the g_open_files[] global) is now an fat_open_pool_t the
- * reactor owns and passes in by pointer.
+ * Implements open/read/write/stat/unlink/mkdir/rmdir/seek/close on the fat_co.h
+ * coroutine pattern. Each fd op is a resumable step the reactor dispatches on an
+ * fat_op_ctx_t; the open-file table is an fat_open_pool_t the reactor owns and
+ * passes in by pointer.
  *
  * Reads/writes copy through the CLIENT transfer buffer by id (op->arg2) via the
  * xfer-buffer read/write calls; a zero-copy borrow passthrough is a later
  * milestone and is NOT implemented here.
  *
- * Error reporting: input validation and error paths that returned a blanket -1
- * in the original now FAIL with a granular WASMOS_ERR_FS_* via FAT_CO_FAIL. */
+ * Error reporting: input validation and error paths FAIL with a granular
+ * WASMOS_ERR_FS_* via FAT_CO_FAIL, never a blanket -1. */
 #ifndef FS_FAT_FAT_FILE_H
 #define FS_FAT_FAT_FILE_H
 

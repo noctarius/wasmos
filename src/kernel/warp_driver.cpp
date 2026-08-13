@@ -4,8 +4,8 @@
  * The public API is identical so callers (kernel.c, process_manager.cpp) are
  * unchanged.
  *
- * Exception strategy: instead of try/catch (which requires a working C++
- * unwinder), we use the per-CPU warp_exception_checkpoint from cxx_abi.cpp.
+ * Exception strategy: try/catch requires a working C++ unwinder, so the
+ * per-CPU warp_exception_checkpoint from cxx_abi.cpp is used instead.
  * The WARP_CALL macro sets a __builtin_setjmp checkpoint before each WARP API
  * call; __cxa_throw longjmps directly back to that checkpoint so the exception
  * never propagates through kernel call frames. */
@@ -49,7 +49,7 @@ int warp_mem_ring3_map_jit(uint64_t user_root, uint8_t const* jit_ptr, size_t ji
 int warp_mem_ring3_map_linmem(uint64_t user_root, uint8_t const* linmem_ptr);
 uint64_t warp_mem_linmem_basedata_length(uint8_t const* linmem_ptr);
 }
-/* basedataoffsets.hpp gives us BD::FromEnd::jobMemoryDataPtrPtr at compile time
+/* basedataoffsets.hpp supplies BD::FromEnd::jobMemoryDataPtrPtr at compile time
  * without modifying any WARP source. */
 #include "src/core/common/basedataoffsets.hpp"
 namespace BD = Basedata;
@@ -273,7 +273,7 @@ static constexpr uint64_t kHalfBase = 0xFFFFFFFF80000000ULL;
  * any hostcall (LINEAR_MEMORY_BOUNDS_CHECKS=1 caches/restores linMem base
  * around every import call via a double-indirect pointer).
  *
- * We place a "proxy" pointer in the ring-3 stack at WARP_R3_STACK_BASE+0:
+ * A "proxy" pointer is placed in the ring-3 stack at WARP_R3_STACK_BASE+0:
  *   proxy = WARP_R3_LINMEM_BASE - basedataLength  (user VA of alloc start)
  * Then patch basedata[jobMemoryDataPtrPtr] = WARP_R3_STACK_BASE (user VA).
  *
@@ -598,9 +598,9 @@ int wasm_driver_start(wasm_driver_t* driver, const wasm_driver_manifest_t* manif
     WarpExceptionCheckpoint* ckpt = warp_exception_get_checkpoint();
 
     /* AOT path: try loading a pre-compiled binary if one was embedded in the
-     * .wap.  If it fails — a WARP exception, or a stale blob whose imports no
-     * longer match the current hostcall table — we fall back to JIT below, and
-     * the module object is deleted and rebuilt fresh.  Building with
+     * .wap.  On failure — a WARP exception, or a stale blob whose imports do not
+     * match the current hostcall table — control falls through to the JIT path
+     * below and the module object is deleted and rebuilt fresh.  Building with
      * WASMOS_WARP_RUNTIME_LOAD_AOT=OFF skips this path entirely, forcing every
      * app through the JIT while leaving the packed artifacts byte-identical, so
      * an AOT and a JIT boot differ only in the kernel and stay A/B comparable. */

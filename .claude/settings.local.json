@@ -236,7 +236,8 @@
       "Bash(sed -n '/static uint32_t warp_irq_route_ipc/,/^}/p' src/kernel/warp/link.cpp)",
       "Bash(sed -n '/static int require_irq_route_capability/,/^}/p' src/kernel/wasm3/link.c)",
       "Bash(sed -n '/warp_require_irq_capability/,/^}/p' src/kernel/warp/link.cpp)",
-      "Bash(gh api *)"
+      "Bash(gh api *)",
+      "Bash(grep -E '\\\\.\\(c|h|cc|cpp|hpp|zig|go|rs|ts|S|s|asm\\)$')"
     ]
   }
 }

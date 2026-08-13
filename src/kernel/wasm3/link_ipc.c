@@ -118,7 +118,7 @@ m3ApiRawFunction(wasmos_ipc_select_one) {
         }
         /* Use the blocking variant: sleeps in sched_event_wait until a message
          * arrives, then dequeues and returns IPC_OK.  Returns IPC_EMPTY only
-         * on a spurious wake, in which case we retry immediately. */
+         * on a spurious wake, which is retried immediately. */
         rc = ipc_recv_blocking_for(context_id, (uint32_t)endpoint, &slot->message);
         if (rc == IPC_EMPTY) {
             /* Spurious wake — re-block immediately, but honour a pending

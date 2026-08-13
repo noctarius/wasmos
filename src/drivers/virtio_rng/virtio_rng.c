@@ -409,7 +409,8 @@ static void rng_service_irq(void) {
     }
     if (g_dev.msix_enabled) {
         /* Nothing to de-assert and nothing to ack: the vector is edge-triggered
-         * and exclusively ours, so none of the shared-line ceremony applies. */
+         * and exclusive to this device, so none of the shared-line ceremony
+         * applies. */
         return;
     }
     /* Reading ISR is itself the ack; the value is not wanted. */
@@ -531,8 +532,8 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t ignored_arg
         g_irq_select = -1;
     }
 
-    /* pci-bus owns config space and is the only party that can program our MSI-X
-     * table; its absence just means the INTx fallback below. */
+    /* pci-bus owns config space and is the only party that can program this
+     * device's MSI-X table; its absence just means the INTx fallback below. */
     g_pci_endpoint = wasmos_sys_svc_lookup_retry(proc_endpoint, g_endpoint, "pci", 1, 1024);
     if (g_pci_endpoint < 0) {
         (void)printf("[virtio-rng] pci service unavailable; msi-x disabled\n");
@@ -554,8 +555,8 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t ignored_arg
     }
 
     /* INTx fallback only. With MSI-X bound the device's INTx is disabled, so
-     * routing the shared line would just subscribe us to other devices'
-     * interrupts — and the point of moving to MSI-X was to stop sharing.
+     * routing the shared line would just subscribe this driver to other devices'
+     * interrupts, which is exactly what MSI-X exists to avoid.
      * Without it, routing is what keeps the line from re-firing forever: the
      * device asserts on every completed fill and nothing else clears it.
      * Failure is not fatal: the fill falls back to the timed safety net. */
@@ -580,7 +581,7 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t ignored_arg
     for (;;) {
         /* Ack the line whenever an event has arrived, not only while a fill is
          * waiting.  IRQ 11 is shared with virtio-net and the kernel keeps a
-         * dispatched line masked until EVERY sharer acks, so deferring our ack
+         * dispatched line masked until EVERY sharer acks, so deferring this ack
          * stalls the other driver's interrupts as well. */
         rng_service_irq();
         while (wasmos_ipc_drain(g_endpoint) > 0) {

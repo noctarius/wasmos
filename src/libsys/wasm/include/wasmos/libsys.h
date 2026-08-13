@@ -105,7 +105,7 @@ struct wasmos_sys_random_request {
  * Ready and timeout are both ordinary: the caller loops and re-polls either way.
  * A FAILURE is not, and is the reason this exists -- a failed wait returns
  * IMMEDIATELY, so a loop that cannot tell it from a timeout stops parking and
- * spins at full speed. Every caller used to discard the return entirely.
+ * spins at full speed. Callers must not discard the return.
  */
 typedef enum {
     WASMOS_SYS_WAIT_READY = 0,   /* an endpoint became ready; its id was returned */

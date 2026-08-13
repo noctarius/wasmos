@@ -374,8 +374,8 @@ void cpu_sched_enqueue(cpu_sched_t* cs, thread_t* t) {
     /* DIAGNOSTIC: holding the claim, this node MUST be detached -- every unlink
      * releases the claim only after list_head_del has retired.  A linked node
      * here means someone unlinked without releasing, or the node is still in
-     * another queue, i.e. we are one instruction from splicing two lists through
-     * it.  Refuse the link rather than corrupt the queue, and name the caller. */
+     * another queue -- one instruction away from splicing two lists through it.
+     * Refuse the link rather than corrupt the queue, and name the caller. */
     if (!list_head_empty(&t->sched_node)) {
         uint32_t dn = sched_debug_bump(SCHED_DEBUG_DOUBLE_LINK);
         if ((dn & (dn - 1u)) == 0u) {
@@ -386,7 +386,7 @@ void cpu_sched_enqueue(cpu_sched_t* cs, thread_t* t) {
                 (void*)t->rq, (void*)cs, (unsigned long long)(uintptr_t)__builtin_return_address(0),
                 (unsigned)(dn + 1u));
         }
-        /* Release the claim we just took before bailing.  Returning while still
+        /* Release the claim taken above before bailing.  Returning while still
          * holding it would strand the thread: no queue holds it, and every later
          * enqueue would lose the exchange and drop the insert forever. */
         __atomic_store_n(&t->on_rq, 0, __ATOMIC_RELEASE);
@@ -496,8 +496,8 @@ thread_t* cpu_sched_pick_next(cpu_sched_t* cs) {
         return cpu_local()->idle_thread;
     }
 
-    /* Anti-starvation: if we have dispatched SCHED_ANTISTARVATION_STREAK
-     * threads at priority <= prio and a lower-priority band also has work,
+    /* Anti-starvation: once SCHED_ANTISTARVATION_STREAK threads at priority
+     * <= prio have been dispatched and a lower-priority band also has work,
      * yield one slot to that band.  This keeps higher-priority workers from
      * permanently starving the WASM services they cooperate with. */
     if ((int)cs->last_dispatched_prio <= prio &&
@@ -526,9 +526,9 @@ thread_t* cpu_sched_pick_next(cpu_sched_t* cs) {
     /* Lazy per-CPU sweep: walk this band and DROP any node whose thread is no
      * longer READY (reaped -> UNUSED, or tombstoned -> ZOMBIE).  A thread is
      * only ever marked non-READY while it is off this queue, but a reap can
-     * reset/zombie a still-enqueued sibling; dropping it here (under our own
-     * cs->lock) is the sole mechanism needed to keep such nodes off the
-     * dispatcher — no cross-CPU removal, no reaper touching our queue.  Returns
+     * reset/zombie a still-enqueued sibling; dropping it here (under this CPU's
+     * own cs->lock) is the sole mechanism needed to keep such nodes off the
+     * dispatcher — no cross-CPU removal, no reaper touching the queue.  Returns
      * the first genuinely-READY thread, or idle if the band held only stale
      * nodes. */
     /* Sweep in priority order from `prio` down.  A band that turns out to hold
@@ -576,7 +576,7 @@ void sched_wake_thread(thread_t* t) {
     }
 
     /* Promote first, then claim: sched_wake_claim_enqueue (thread.h) publishes
-     * our half of the handshake before reading the completion path's. */
+     * the wake half of the handshake before reading the completion path's. */
     if (!sched_wake_claim_enqueue(t)) {
         /* Completion path owns the enqueue; leave it something to enqueue. */
         if (sched_mark_ready_if_live(t)) {
@@ -602,8 +602,8 @@ void sched_wake_thread(thread_t* t) {
      * CPU does not hold the lock of whichever queue would hold the thread. */
     cpu_sched_enqueue(cpu_sched(), t);
 
-    /* Priority preemption: if we just made a thread runnable that outranks what
-     * this CPU is currently running, request a reschedule so it preempts at the
+    /* Priority preemption: when the thread just made runnable outranks what this
+     * CPU is currently running, request a reschedule so it preempts at the
      * next preemption point (typically IRQ return) instead of waiting for the
      * running thread's time slice to expire.  Lower sched_prio == higher band.
      * This is what lets a driver woken by its device IRQ (e.g. the serial
@@ -636,7 +636,7 @@ void sched_thread_init(thread_t* t, sched_prio_t prio) {
     /* DIAGNOSTIC: re-initialising sched_node here while the thread is still
      * linked into a ready queue self-links the node under the queue's nose --
      * the head keeps pointing at it, and the band is then spliced through a node
-     * with two owners (the "ghost head" report).  Name the call site so we know
+     * with two owners (the "ghost head" report).  Name the call site to identify
      * WHICH spawn path handed back a still-queued thread. */
     if (!list_head_empty(&t->sched_node) || __atomic_load_n(&t->on_rq, __ATOMIC_ACQUIRE)) {
         uint32_t in = sched_debug_bump(SCHED_DEBUG_INIT_ON_QUEUED);
@@ -685,8 +685,8 @@ sched_prio_t sched_default_prio(int is_idle, int is_kernel_worker, int is_driver
 }
 
 uint32_t cpu_sched_pick_target_cpu(void) {
-    /* Round-robin counter: on ties (all CPUs equally loaded) we rotate the
-     * starting search index so spawns spread evenly instead of always
+    /* Round-robin counter: on ties (all CPUs equally loaded) the starting search
+     * index rotates so spawns spread evenly instead of always
      * accumulating on CPU 0. */
     uint32_t cpus = cpu_sched_usable_cpus();
     uint32_t start = g_spawn_rr % cpus;
@@ -807,7 +807,7 @@ struct thread* cpu_sched_try_steal(uint32_t my_cpu_id) {
             t = cpu_sched_steal_pick(remote, my_cpu_id);
         }
         /* ksync_spinlock_try_lock does not call preempt_disable/spinlock_irq_save,
-         * so we must release with the matching no-IRQ variant. */
+         * so the release must use the matching no-IRQ variant. */
         ksync_spinlock_unlock_noirq(&remote->lock);
         if (t) {
             /* Advisory placement hint, written after the remote lock is dropped

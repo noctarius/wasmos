@@ -2,10 +2,9 @@
  *
  * The properties under test are the ones a driver's correctness rests on: a
  * vector has exactly one owner, a freed vector stops being delivered, and a
- * reaped context cannot leave a vector pointing at an endpoint that no longer
- * exists (which is how the INTx path used to strand a line — see
- * test_irq_sharing.c). See docs/architecture/05-x86-cpu-architecture.md
- * §Message-Signalled Interrupts. */
+ * reaped context cannot leave a vector pointing at a released endpoint (the
+ * failure mode that strands an INTx line — see test_irq_sharing.c). See
+ * docs/architecture/05-x86-cpu-architecture.md §Message-Signalled Interrupts. */
 #include <stdio.h>
 #include <string.h>
 

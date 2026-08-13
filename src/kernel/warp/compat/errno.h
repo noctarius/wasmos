@@ -1,10 +1,9 @@
 #pragma once
 /* compat/errno.h — freestanding errno stub for bare-metal kernel.
  *
- * The kernel has no per-thread errno cell.  We define errno as a constant
- * zero (no error) so that code that checks errno after syscall stubs gets a
- * safe default.  WARP only checks errno after mmap/mprotect; those stubs set
- * it to ENOMEM on failure via the macro below if needed.
+ * The kernel has no per-thread errno cell.  errno is a constant zero (no
+ * error), so code checking it after a syscall stub gets a safe default.  WARP only checks errno
+ * after mmap/mprotect; those stubs set it to ENOMEM on failure via the macro below if needed.
  *
  * NOTE: if WARP code *writes* to errno (e.g. errno = ENOMEM), the macro
  * expands to a write to a discarded rvalue — the compiler will warn. A

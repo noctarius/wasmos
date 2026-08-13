@@ -37,7 +37,7 @@ static uint32_t g_heap_cursor = 0;
 static uint32_t g_heap_limit = 0;
 static int32_t g_alloc_failure = 0;
 
-/* klog ring (phase 4): the VT owns an SPSC byte ring in shared memory; the
+/* klog ring: the VT owns an SPSC byte ring in shared memory; the
  * kernel publishes klog text into it (serial_write) and the VT drains it into
  * vt-1 (the system console).  The ring carries no IPC wake, so the main loop
  * polls it on a bounded timed wait — klog latency into an off-screen slot is
@@ -47,11 +47,11 @@ static int32_t g_alloc_failure = 0;
 static wasmos_ringbuf_t g_klog_ring;
 static int32_t g_klog_ring_ready = 0;
 
-/* Bulk grid blit (phase 5): a shared xfer-buffer holding the visible slot's cell
- * grid, granted READ to the framebuffer driver.  A tty switch repaints the whole
- * screen with a single FBTEXT_IPC_BLIT_GRID_REQ instead of one cell-write IPC per
- * cell — the per-cell loop stormed the driver's queue and wedged switching under
- * SMP.  Sized for the maximum grid so it survives any geometry. */
+/* Bulk grid blit: a shared xfer-buffer holding the visible slot's cell grid,
+ * granted READ to the framebuffer driver.  A tty switch repaints the whole
+ * screen with a single FBTEXT_IPC_BLIT_GRID_REQ; one cell-write IPC per cell
+ * storms the driver's queue and wedges switching under SMP.  Sized for the
+ * maximum grid so it survives any geometry. */
 #define VT_BLIT_MAX_CELLS ((uint32_t)VT_MAX_COLS * (uint32_t)VT_MAX_ROWS)
 static fbtext_blit_cell_t* g_blit_grid = 0; /* VT-side mapped write pointer */
 static int32_t g_blit_ready = 0;
@@ -964,8 +964,8 @@ static int32_t vt_switch_tty(uint32_t tty_index) {
      * IPC queue and spins vt_fb_send_switch's per-cell retry (up to
      * VT_FB_SWITCH_CELL_RETRIES) — an ~80 s wedge that looks like a hang. */
     if (prev_active == 0 && tty_index != 0) {
-        /* Tell the compositor to stop drawing BEFORE we repaint the text slot,
-         * so it does not paint one more frame over our fresh grid. */
+        /* Tell the compositor to stop drawing BEFORE the text slot is
+         * repainted, so it cannot paint one more frame over the fresh grid. */
         vt_notify_gfx_visibility(0);
         (void)vt_fb_send_switch(FBTEXT_IPC_GFX_OVERLAY_REQ, 0, 0, 0, 0);
     }
@@ -1019,7 +1019,7 @@ static int32_t vt_switch_tty(uint32_t tty_index) {
         vt_notify_gfx_visibility(1);
     }
     /* (The vt-0 -> text "hidden" notify + overlay unlock happen before the
-     * replay above, so the compositor stops before we repaint the text slot.) */
+     * replay above, so the compositor stops before the text slot is repainted.) */
     return 0;
 }
 
@@ -1140,8 +1140,8 @@ static int vt_parse_keymap(const char* data, uint32_t len) {
 }
 
 /* Read a file by path through the fs (owner-push: acquire a buffer, stage the
- * path, grant fs RW, fs writes the contents back).  Runs during init before we
- * subscribe to keyboard/serial, so no stray messages contend for g_vt_ep. */
+ * path, grant fs RW, fs writes the contents back).  Runs during init, before
+ * the keyboard/serial subscriptions, so no stray messages contend for g_vt_ep. */
 static int vt_read_keymap_file(const char* path, char* out, uint32_t out_cap, uint32_t* out_len) {
     if (g_fs_ep < 0) {
         return -1;
@@ -1400,7 +1400,8 @@ static void vt_set_input_mode(vt_tty_t* tty, uint8_t mode) {
 
 /* Forward a decoded key event to the compositor (the vt-0 key sink), which maps
  * it to a GFX_EVENT_KEY for the focused window.  The vt is the single decoder,
- * so we ship the decoded character plus the raw scancode and modifier state.
+ * so the message carries the decoded character plus the raw scancode and
+ * modifier state.
  * arg0=ascii(keysym, 0 if none), arg1=scancode, arg2=flags
  * (bit0=down, bit1=extended, bit2=shift, bit3=ctrl, bit4=altgr). */
 static void vt_forward_key_to_compositor(int32_t scancode, int32_t keyup, int32_t extended) {
@@ -1431,7 +1432,7 @@ static void vt_handle_key_notify(int32_t scancode, int32_t keyup, int32_t extend
 
     /* vt-0 is the compositor's slot: forward every event (press and release) to
      * it after the vt-owned switch hotkeys.  This is the sole keyboard path for
-     * gfx apps; the compositor no longer subscribes to the keyboard driver. */
+     * gfx apps; the compositor does not subscribe to the keyboard driver. */
     if (g_active_tty == 0) {
         if (keyup == 0) {
             if (scancode >= 0x3C && scancode <= 0x3E) { /* F2..F4 => tty1..tty3 */
@@ -1559,10 +1560,10 @@ static void vt_handle_key_notify(int32_t scancode, int32_t keyup, int32_t extend
  * subscribes to keyboard events and enters the main IPC receive loop.
  * g_switch_generation is a monotonic counter incremented on TTY switches;
  * write messages with a stale generation are silently dropped. */
-/* Create the VT-owned klog ring, map it into our linear memory, initialize the
- * SPSC header, and hand its xfer-buffer id to the kernel.  Best-effort: on any
- * failure g_klog_ring_ready stays 0 and the VT runs exactly as before (klog then
- * only reaches the legacy console_ring / COM1 TX). */
+/* Create the VT-owned klog ring, map it into the VT's linear memory, initialize
+ * the SPSC header, and hand its xfer-buffer id to the kernel.  Best-effort: on
+ * any failure g_klog_ring_ready stays 0 and klog reaches only the legacy
+ * console_ring / COM1 TX. */
 static void vt_klog_ring_init(void) {
     /* Overlay the SPSC ring on a BUFFER_KIND_TRANSFER xfer-buffer — the same
      * zero-copy transport the socket rings use (net.h), which handles WARP's
@@ -1612,8 +1613,8 @@ static void vt_drain_klog_ring(void) {
     }
 }
 
-/* Set up the shared cell-grid blit buffer (phase 5): acquire an xfer-buffer, map
- * it into our linear memory (write side), grant the framebuffer driver READ
+/* Set up the shared cell-grid blit buffer: acquire an xfer-buffer, map it into
+ * the VT's linear memory (write side), grant the framebuffer driver READ
  * access, and hand it the buffer/borrow ids so it can map and render from it.
  * Best-effort: on failure g_blit_ready stays 0 and vt_replay_tty falls back to
  * per-cell writes. */
@@ -1713,7 +1714,7 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t arg1, int32
      * blocks on g_vt_ep with wasmos_ipc_select_one (a timed select set strands
      * serial input under WARP), so klog reaches vt-1 whenever any IPC arrives.
      * An idle VT does not drain until the next event, which is fine: vt-1 is not
-     * the visible slot yet (phase 5), and COM1 TX always carries the full log. */
+     * the visible slot, and COM1 TX always carries the full log. */
     vt_klog_ring_init();
 
     wasmos_sys_notify_ready(proc_endpoint, g_vt_ep);
@@ -1752,12 +1753,10 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t arg1, int32
                               (uint16_t)(((uint32_t)msg.request_id) & 0x0FFFu));
                 break;
             }
-            /* FIXME: Deferred follow-up. We have seen an intermittent
-             * framebuffer-only artifact where rapid Ctrl+Shift+Fn switching
-             * can still show duplicated/misaligned prompts. This has not
-             * reproduced again in recent runs, but keep the VT trace markers
-             * (switch/write-drop/register events) enabled for future captures
-             * and revisit once a reliable repro sequence exists. */
+            /* FIXME: rapid Ctrl+Shift+Fn switching can intermittently render
+             * duplicated/misaligned prompts (framebuffer-only; the cell grid is
+             * correct). No reliable repro sequence exists yet, which is why the
+             * VT trace markers (switch/write-drop/register events) stay enabled. */
             vt_tty_t* tty = &g_ttys[(uint32_t)tty_index];
             int32_t args[4] = {msg.arg0, msg.arg1, msg.arg2, msg.arg3};
             int count = (args[0] >> 24) & 0xF;
@@ -1786,7 +1785,7 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t arg1, int32
         }
 
         case SERIAL_IPC_SUBSCRIBE_RESP:
-            /* Ack of our serial subscription; nothing to do. */
+            /* Ack of the VT's serial subscription; nothing to do. */
             break;
 
         case VT_IPC_SET_ATTR_REQ: {

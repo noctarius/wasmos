@@ -1,6 +1,6 @@
 #pragma once
 /* Minimal <string> stub — WARP's MemUtils includes it only on Linux (memfd path)
- * and in OSAPIChecker which we replace.  Provide just enough to compile. */
+ * and in OSAPIChecker, which is replaced here.  Just enough to compile. */
 #include "cstring"
 namespace std {
 struct string {

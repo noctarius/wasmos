@@ -78,7 +78,7 @@ int main(int argc, char** argv) {
     /* Detach from the CLI so the prompt returns and shmownr can be launched. */
     wasmos_proc_notify_ready();
 
-    /* Stage 0: shmownr has created the shmem region and signalled us. */
+    /* Stage 0: shmownr has created the shmem region and signalled this process. */
     if (wait_for_stage(my_ep, &sync) != 0 || sync.stage != 0 || sync.shmem_id <= 0) {
         puts("[test] shmem e2e target no-stage0");
         return 1;

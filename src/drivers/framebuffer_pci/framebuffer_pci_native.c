@@ -3,9 +3,9 @@
 #include "fbtext_internal.h"
 
 /*
- * Native framebuffer driver — Phase 1 virtual terminal.
+ * Native framebuffer driver — virtual terminal text plane.
  *
- * Extends the original gradient demo into a text-rendering server:
+ * A text-rendering server:
  *   1. Probe and map the physical framebuffer.
  *   2. Initialise the cell grid and font.
  *   3. Replay the kernel early-log ring buffer so the full boot log appears.
@@ -43,17 +43,17 @@ static uint8_t g_text_plane_enabled = 1;
 static uint8_t g_gfx_overlay_lock = 0;
 static uint32_t g_fb_bytes_limit = 0;
 
-/* Bulk grid blit (phase 5): the VT grants us READ access to a cell-grid
- * xfer-buffer; on FBTEXT_IPC_BLIT_GRID_REQ we repaint the whole grid from it in
- * one shot, replacing the per-cell CELL_WRITE storm that wedged tty switches. */
+/* Bulk grid blit: the VT grants READ access to a cell-grid xfer-buffer, and
+ * FBTEXT_IPC_BLIT_GRID_REQ repaints the whole grid from it in one shot. The
+ * per-cell CELL_WRITE alternative is an IPC storm that wedges tty switches. */
 static const fbtext_blit_cell_t* g_blit_grid = 0;
 
 /* Idle-block bounds so the main loop reaches idle/hlt instead of yield-spinning.
  * Control IPC (tty switch, overlay lock/unlock) wakes the endpoint immediately;
- * these only cap how long we sleep with nothing to do.  The console ring is fed
- * over shared memory with no IPC doorbell, so while the text plane is active we
- * re-poll it at FB_CONSOLE_POLL_MS; when the gfx overlay owns the framebuffer
- * there is nothing to drain, so we block longer. */
+ * these only cap how long the loop sleeps with nothing to do.  The console ring
+ * is fed over shared memory with no IPC doorbell, so while the text plane is
+ * active it is re-polled at FB_CONSOLE_POLL_MS; when the gfx overlay owns the
+ * framebuffer there is nothing to drain, so the block is longer. */
 #define FB_CONSOLE_POLL_MS 15u
 #define FB_IDLE_WAIT_MS 200u
 
@@ -312,7 +312,7 @@ int initialize(wasmos_driver_api_t* api, int module_count, int arg2, int arg3) {
         write_str(api, "[framebuffer] ipc endpoint failed\n");
         return -1;
     }
-    /* Derive our context id from current pid (context_id == pid for native). */
+    /* Derive the context id from the current pid (context_id == pid for native). */
     uint32_t ctx = api->sched_current_pid();
     if (api->console_register_fb(ctx, ep) != 0) {
         write_str(api, "[framebuffer] register endpoint failed\n");
@@ -336,8 +336,8 @@ int initialize(wasmos_driver_api_t* api, int module_count, int arg2, int arg3) {
             if (g_console_ring_enabled && !g_gfx_overlay_lock) {
                 /* Text plane active: flush backlog in bounded chunks.  If a chunk
                  * was drained more may be pending, so loop immediately; only once
-                 * the ring is empty do we block (bounded) to re-poll it for new
-                 * text, since ring writes carry no IPC wake. */
+                 * the ring is empty does the loop block (bounded) to re-poll it
+                 * for new text, since ring writes carry no IPC wake. */
                 if (drain_console_ring(ring, 256u)) {
                     continue;
                 }
@@ -446,7 +446,7 @@ int initialize(wasmos_driver_api_t* api, int module_count, int arg2, int arg3) {
             if (!g_text_plane_enabled || g_gfx_overlay_lock || !g_blit_grid) {
                 break;
             }
-            /* Clamp the grid stride/extent to our own geometry so a bad request
+            /* Clamp the grid stride/extent to the driver's geometry so a bad request
              * can never read past the granted buffer (bounded by cols*rows). */
             uint32_t stride = (uint32_t)msg.arg0;
             if (stride > g_state.cols) {

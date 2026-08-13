@@ -829,7 +829,7 @@ static void process_wake_waiters(uint32_t target_pid) {
             } else {
                 process_set_ready(proc, waiter);
             }
-            /* Enqueue only if we win the wake/block handshake; otherwise the
+            /* Enqueue only on winning the wake/block handshake; otherwise the
              * owning CPU's PROCESS_RUN_BLOCKED handler does it. */
             if (sched_wake_claim_enqueue(waiter)) {
                 sched_enqueue_thread(waiter);
@@ -1398,9 +1398,9 @@ int process_spawn_idle_ap(uint32_t cpu_id) {
     /* Mirror the BSP idle bootstrap: record this thread as the per-CPU
      * scheduler idle thread.  Without it sched.idle stays NULL on APs, so the
      * work-steal trigger (`thread == cs->idle`) in process_schedule_once_impl
-     * never fires and all runnable work piles up on CPU 0.  Stealing is now
-     * poll-aware (cpu_sched_steal_pick skips sched_sticky threads), so enabling
-     * it no longer causes idle CPUs to thrash on poll/yield loops. */
+     * never fires and all runnable work piles up on CPU 0.  Stealing is
+     * poll-aware (cpu_sched_steal_pick skips sched_sticky threads), which is
+     * what keeps idle CPUs from thrashing on poll/yield loops. */
     g_cpus[cpu_id].sched.idle = thread;
     return 0;
 }
@@ -1624,9 +1624,9 @@ void process_set_require_explicit_ready(process_t* process) {
     process->require_explicit_ready = 1;
 }
 
-/* process_block_on_ipc: legacy call-site compatibility stub.  Thread blocking
- * state is managed by sched_event_wait; callers that return
- * PROCESS_RUN_BLOCKED no longer need to touch process state here.
+/* process_block_on_ipc: no-op compatibility stub.  Thread blocking state is
+ * managed by sched_event_wait, so a caller returning PROCESS_RUN_BLOCKED has no
+ * process state to touch here.
  * TODO: remove once all callers are updated. */
 void process_block_on_ipc(process_t* process) {
     (void)process;
@@ -1857,12 +1857,12 @@ static int process_schedule_once_impl(void) {
         if (stolen) {
             /* Do not give up a dispatchable idle for a thread that may already
              * be gone. cpu_sched_steal_pick pulls the thread off the remote
-             * queue and drops that queue's lock before we get here, while
+             * queue and drops that queue's lock before this point, while
              * thread_reap_owner walks the global thread table by owner_pid --
              * so a reap running on any CPU can reset a thread that a stealer is
-             * already holding. Validating before the swap keeps the idle we
-             * already have; swapping first turns that race into "not even idle
-             * was dispatchable", which is a claim about a different bug. */
+             * already holding. Validating before the swap retains the
+             * dispatchable idle; swapping first turns that race into "not even
+             * idle was dispatchable", which is a claim about a different bug. */
             process_t* sproc = process_owner_for_thread(stolen);
             if (sproc && sproc->entry) {
                 thread = stolen;
@@ -2102,13 +2102,12 @@ static int process_schedule_once_impl(void) {
          * (set by sched_event_wait → thread_set_state before yield).
          * The blocking_transition flag is cleared here once context is saved. */
         if (sched_block_complete_claim(thread) && thread->state == THREAD_STATE_BLOCKED) {
-            /* We claimed the token: a waker deferred the enqueue to us and has
-             * not (or not yet) promoted the thread, so do it here. */
+            /* Token claimed here: a waker deferred the enqueue to this path and
+             * has not (or not yet) promoted the thread, so do it now. */
             thread_set_state(thread->tid, THREAD_STATE_READY, THREAD_BLOCK_NONE);
         }
-        /* If the thread was woken by a concurrent sched_wake_thread before we
-         * got here, it is already READY — re-enqueue it rather than leaving it
-         * stranded. */
+        /* A concurrent sched_wake_thread reaching the thread first leaves it
+         * already READY — re-enqueue it rather than leaving it stranded. */
         if (thread->state == THREAD_STATE_READY) {
             sched_enqueue_thread(thread);
         } else if (thread->state == THREAD_STATE_RUNNING) {
@@ -2361,9 +2360,9 @@ int process_preempt_from_irq(irq_frame_t* frame) {
      * scheduler context. Doing it here races against the "current_thread"
      * ownership checks and can strand or duplicate the running thread. */
     /* IRQ0 entered from ring 3 with a 5-slot IRET frame (RIP, CS, RFLAGS,
-     * RSP, SS). When we redirect return into a ring-0 scheduler trampoline we
-     * must rewrite the full privilege-return frame, not just RIP/CS, otherwise
-     * iretq still tries to restore the stale user SS:RSP pair and faults. */
+     * RSP, SS). Redirecting the return into a ring-0 scheduler trampoline must
+     * rewrite the full privilege-return frame, not just RIP/CS, otherwise iretq
+     * still tries to restore the stale user SS:RSP pair and faults. */
     frame->cs = KERNEL_CS_SELECTOR;
     frame->rip = (uint64_t)process_kernel_alias_addr((uintptr_t)process_preempt_trampoline);
     frame->user_ss = KERNEL_DS_SELECTOR;
@@ -2439,10 +2438,9 @@ uint32_t process_count_active(void) {
 
 uint32_t process_ready_count(void) {
     /* Sum the per-band counters, which the enqueue/unlink paths actually
-     * maintain.  This used to return cpu_sched()->nr_threads, a field nothing
-     * ever incremented -- so the sched_ready_count host call reported 0 forever
-     * rather than being merely imprecise.  The field is gone; this is the only
-     * reader it had. */
+     * maintain.  There is no aggregate thread count to read instead: any field
+     * the enqueue paths do not increment reports 0 forever, which the
+     * sched_ready_count host call would surface as a real answer. */
     cpu_sched_t* cs = cpu_sched();
     uint32_t total = 0;
     ksync_spinlock_lock(&cs->lock);
@@ -2645,7 +2643,7 @@ int process_set_main_prio(uint32_t pid, uint8_t prio) {
      * is first scheduled.  The PM sets it on a freshly parked (blocked,
      * not-yet-enqueued) process, so the main thread is in no ready_list.
      *
-     * Re-banding a QUEUED thread no longer corrupts the run queue -- unlink
+     * Re-banding a QUEUED thread does not corrupt the run queue -- unlink
      * accounts against thread_t::rq_prio, the band the node actually joined, so
      * the old band's counter is drained correctly.  But the thread would keep
      * being DISPATCHED at its old priority until something happened to

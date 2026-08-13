@@ -18,8 +18,8 @@ Client-side guest import stubs (into abi/generated/<lang>/wasmos_imports.<ext>):
   - assemblyscript/wasmos_imports.ts  @external("wasmos", …) declare function
 Every "wasmos"-module host call (incl. aliases) as its raw wasm ABI signature
 (all params i32, i32 return). These are authoritative bindings a guest app opts
-into per symbol; the wasi/env-module calls are toolchain-provided, not ours to
-declare. C is deliberately NOT regenerated: src/libc/include/wasmos/api.h is a
+into per symbol; the wasi/env-module calls are toolchain-provided and are not
+declared here. C is deliberately NOT regenerated: src/libc/include/wasmos/api.h is a
 hand-ergonomic surface (typed pointers, struct params, doc comments) that would
 lose those types under codegen — instead --verify-source guards it against drift.
 
@@ -220,8 +220,7 @@ class Model:
 
     def client_hostcalls(self):
         """The guest-importable "wasmos"-module host calls (incl. aliases), in id
-        order. wasi/env-module calls are toolchain-provided, not ours to
-        declare."""
+        order. wasi/env-module calls are toolchain-provided and excluded."""
         return [e for e in self.ordered if self.module(e) == "wasmos"]
 
     def client_note(self, e):

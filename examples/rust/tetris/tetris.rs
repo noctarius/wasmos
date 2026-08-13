@@ -268,7 +268,7 @@ impl Window {
         // Position the window so it fits fully on screen. New windows are
         // cascaded by the compositor and can land partly off the bottom edge;
         // it then clamps their height to the framebuffer, which would leave the
-        // window content size out of sync with our fixed buffer. Query the
+        // window content size out of sync with this app's fixed buffer. Query the
         // display, center the window, and move it there before allocating.
         let rid = w.next_rid();
         unsafe {
@@ -338,11 +338,11 @@ impl Window {
         }
         // Force-commit the whole back buffer before mapping the shared buffer.
         // The WARP shmem mapper places the mapped window just above the process's
-        // currently *committed* linear memory; our large `BACK` static is not
+        // currently *committed* linear memory; the large `BACK` static is not
         // committed until first written, so without this the shared-buffer window
-        // would be placed overlapping `BACK` and the present() blit would corrupt
-        // itself (content tore/duplicated). Touching one byte per page commits it
-        // so the window lands safely above.
+        // is placed overlapping `BACK` and the present() blit corrupts itself
+        // (content tears/duplicates). Touching one byte per page commits it so the
+        // window lands safely above.
         unsafe {
             let p = core::ptr::addr_of_mut!(BACK) as *mut u8;
             let total = (W * H * 4) as usize;
@@ -407,9 +407,9 @@ impl Window {
     /// Blit the back buffer into the shared buffer and present.
     ///
     /// No shmem_flush: `base` is the mapped window, i.e. the shared region's
-    /// own physical pages, so writing through it IS the shared buffer. The
-    /// flush that used to sit here copied those pages onto themselves once a
-    /// frame -- 2.4 MB of pointless copying at frame rate.
+    /// own physical pages, so writing through it IS the shared buffer. A flush
+    /// here would copy those pages onto themselves once a frame -- 2.4 MB of
+    /// pointless copying at frame rate.
     fn present(&mut self) {
         unsafe {
             let src = core::ptr::addr_of!(BACK) as *const u32;
@@ -1284,7 +1284,7 @@ fn run(proc_ep: i32) -> i32 {
             // an IPC doorbell on the reply endpoint; the loop blocks on the select
             // set {event_ep, reply_ep} and steps the state machine on each wake.
             // The "waiting" screen was drawn on entry; win.pump() (loop top) keeps
-            // the window closeable while we wait.
+            // the window closeable throughout.
             Phase::Connecting(m) => match unsafe { tnet_net_advance() } {
                 1 => {
                     mode = m;

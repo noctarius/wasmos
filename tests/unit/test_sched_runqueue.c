@@ -9,8 +9,8 @@
  *
  * The centrepiece is check_invariants(): the run-queue corruption that cost
  * ~180 QEMU boots to localise is a structural violation that a walk of the
- * queues catches immediately.  Each regression test below reproduces a bug we
- * actually shipped; each rejection test pins an input the API must refuse.
+ * queues catches immediately.  Each regression test below reproduces a bug that
+ * reached main; each rejection test pins an input the API must refuse.
  */
 
 #include <stdarg.h>
@@ -374,7 +374,7 @@ static void test_remove_thread_not_queued_is_noop(void) {
     CHECK(t->on_rq == 0, "still unclaimed");
 }
 
-/* ------------------------------------- Kind 1: bugs we actually shipped */
+/* ---------------------------------- Kind 1: bugs that reached main */
 
 /* Round 2 (aa3db5c160).  process_thread_spawn_worker_internal published a
  * thread READY before its sched_node existed; a wake in that window enqueued
@@ -1695,8 +1695,7 @@ static void test_init_discards_an_existing_pinning(void) {
 }
 
 /* I4: re-init across every (old, new) band pair, including the diagonal --
- * same-band re-init is a distinct path from the cross-band case the original
- * regression covered. */
+ * same-band re-init is a distinct path from the cross-band case. */
 static void test_reinit_across_every_band_pair(void) {
     int bad = 0;
     for (int old_p = 0; old_p < SCHED_PRIO_MAX; ++old_p) {
@@ -1808,8 +1807,8 @@ static void test_pick_target_selects_the_minimum(void) {
 
 /* Ties rotate through the placement cursor.  harness_reset() re-seeds it via
  * sched_debug_reset, so this asserts the exact SEQUENCE rather than settling for
- * a distribution -- previously the cursor was a function static carrying over
- * from whatever ran before, and only the shape of the spread was checkable. */
+ * a distribution.  A cursor held in a function static would carry over from
+ * whatever ran before, leaving only the shape of the spread checkable. */
 static void test_ties_rotate_evenly(void) {
     harness_reset();
     int wrong = 0;

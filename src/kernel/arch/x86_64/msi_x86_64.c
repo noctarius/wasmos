@@ -16,8 +16,8 @@
  *   address = 0xFEE00000 | (destination_id << 12) | (RH << 3) | (DM << 2)
  *   data    = (trigger_mode << 15) | (level << 14) | (delivery_mode << 8) | vector
  *
- * We use physical destination mode with no redirection hint (RH = DM = 0), fixed
- * delivery, and edge trigger — so `data` reduces to the bare vector number.
+ * Physical destination mode is used with no redirection hint (RH = DM = 0),
+ * fixed delivery and edge trigger — so `data` reduces to the bare vector number.
  *
  * Destination is LAPIC 0 (the BSP), matching the IOAPIC redirection entries in
  * ioapic.c. Steering interrupts at other CPUs is a scheduling decision the system

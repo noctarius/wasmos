@@ -1385,8 +1385,8 @@ static void resolve_declared_regions(const wasmos_module_meta_desc_t* meta,
 }
 
 /* Query PROC_IPC_MODULE_META_DESC for the given module_index/match_index. The
- * answer lands in a buffer we own and lend WRITE, because the declared region
- * list is variable-length and cannot be packed into IPC arguments.
+ * answer lands in a device-manager-owned buffer lent WRITE, because the declared
+ * region list is variable-length and cannot be packed into IPC arguments.
  * Returns 0 on success, -1 otherwise. */
 static int query_driver_module_meta(int32_t module_index, uint32_t match_index,
                                     uint8_t* out_class_code, uint8_t* out_subclass,

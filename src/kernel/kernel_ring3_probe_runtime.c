@@ -110,8 +110,8 @@ int kernel_ring3_spawn_native_probe(uint32_t parent_pid, uint32_t* out_pid) {
     if (process_set_user_entry(*out_pid, user_rip, user_rsp) != 0) {
         return -1;
     }
-    /* Unpark only after full ring-3 setup is complete so the process cannot
-     * run ring3_probe_bootstrap_entry and exit before we configure it. */
+    /* Unpark only after full ring-3 setup is complete so the process cannot run
+     * ring3_probe_bootstrap_entry and exit before that setup lands. */
     process_unpark_pid(*out_pid);
     klog_printf("[kernel] ring3 native pid=%016llx\n", (unsigned long long)*out_pid);
     return 0;

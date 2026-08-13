@@ -10,7 +10,7 @@
  * entry. The mm stub here places the fake "physical" base so that
  * paddr + KERNEL_HIGHER_HALF_BASE lands on a real host buffer, which is exactly
  * the translation futex_wait performs — the arithmetic under test is genuine,
- * only the memory behind it is ours.
+ * only the memory behind it is host-allocated.
  *
  * MODELLING NOTE (blocking) is the same as test_ipc.c's: process_yield cannot
  * suspend a host thread, so a wait that parks returns at once. Tests that need
@@ -148,7 +148,7 @@ static struct mm_context g_ctx_shared = {CTX_SHARED};
 static struct mm_context g_ctx_no_region = {CTX_NO_REGION};
 
 /* futex.c reads the word at paddr + KERNEL_HIGHER_HALF_BASE, so hand back a
- * phys_base that makes that land on our buffer. */
+ * phys_base that makes that land on the host buffer. */
 static uint64_t fake_phys_of(const void* p) {
     return (uint64_t)((uintptr_t)p - (uintptr_t)KERNEL_HIGHER_HALF_BASE);
 }
@@ -291,9 +291,9 @@ static void test_distinct_words_are_independent(void) {
 static void test_words_colliding_in_one_bucket_stay_separate(void) {
     reset();
     /* futex_bucket is (paddr >> 12) & 15, so two addresses one page apart land
-     * in adjacent buckets and 16 pages apart land in the SAME bucket. Our
-     * region is smaller than that, so collide via the low bits instead: any
-     * two offsets inside one page share a bucket. */
+     * in adjacent buckets and 16 pages apart land in the SAME bucket. The test
+     * region is smaller than that, so collide via the low bits instead: any two
+     * offsets inside one page share a bucket. */
     g_mem_a[0] = 1u;
     g_mem_a[2] = 1u;
     thread_t* a = thread_get(1);
@@ -401,10 +401,9 @@ static void test_a_timed_wait_reports_the_timeout(void) {
     g_yield_hook = hook_expire_deadline;
 
     /* A timeout is IPC_ERR_TIMEOUT, and the value is the point: this return
-     * crosses into WASM through the futex_wait hostcall, and the bare -1 it
-     * used to give is IPC_ERR_INVALID's value -- so a guest could not tell "my
-     * deadline expired" from "you handed me a bad address", which is the whole
-     * reason the error model forbids it. */
+     * crosses into WASM through the futex_wait hostcall, and a bare -1 collides
+     * with IPC_ERR_INVALID -- leaving a guest unable to tell an expired deadline
+     * from a bad address, which is the whole reason the error model forbids it. */
     CHECK(futex_wait(0u, 1u, 50u, CTX_A) == IPC_ERR_TIMEOUT,
           "a wait whose deadline expires reports TIMEOUT");
     CHECK(IPC_ERR_TIMEOUT != IPC_ERR_INVALID, "which is distinguishable from a bad address");

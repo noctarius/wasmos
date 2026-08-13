@@ -10,18 +10,18 @@
  * 16-byte UART FIFO before it overruns, so the IRQ handler always drains it into
  * the software ring immediately. Forwarding to the vt has no deadline, so it
  * happens from the ring in the pump's idle hook. When the vt's queue is full the
- * bytes stay in the ring and are retried rather than dropped -- dropping was the
- * pre-ring behaviour and corrupted long command lines under load.
+ * bytes stay in the ring and are retried rather than dropped; dropping them
+ * corrupts long command lines under load.
  *
  * That retry is why this driver cannot simply park: it has to wake up again
  * even with no message to service. The idle hook's interval is the mechanism --
  * zero (park indefinitely) once the ring is drained, a bounded wait while
- * backpressured. The old code spun on sched_yield instead.
+ * backpressured. A sched_yield spin is not an option here; it pegs a core.
  *
- * What this replaced, and why. Registration was a blocking ipc_recv on the
- * SERVICE endpoint, so a client request landing during the handshake was
- * dropped. The failure paths returned a bare -1 across the entry-point
- * boundary; they return packed driver-domain codes.
+ * Registration goes through the event loop, not a blocking ipc_recv on the
+ * SERVICE endpoint, so a client request landing during the handshake is not
+ * discarded. Failure paths return packed driver-domain codes across the
+ * entry-point boundary, never a bare -1.
  */
 
 import {io, std, startup} from "./wasmos";
@@ -166,8 +166,8 @@ function writePort(value: i32): void {
     }
 }
 
-/* Returns the byte, or -1 for "nothing to read" -- which now also covers a
- * refused read, since a driver that cannot reach its own UART has no byte. */
+/* Returns the byte, or -1 for "nothing to read" -- which also covers a refused
+ * read, since a driver that cannot reach its own UART has no byte. */
 function readPort(): i32 {
     if (!rxReady()) {
         return -1;
@@ -222,7 +222,7 @@ function flushRx(): bool {
  * The interval IS the backpressure strategy. Drained and IRQ-driven means there
  * is nothing to do until the next message, so it goes to zero and the pump
  * parks indefinitely. A vt that is full, or a UART nobody is interrupting for,
- * means we must come back without being asked, so it takes a bounded wait.
+ * requires an unprompted retry, so it takes a bounded wait.
  */
 function flushAndSchedule(): void {
     const flushed = flushRx();
@@ -266,10 +266,9 @@ function serveRequest(msg: IpcMessage): void {
             ipc_send(msg.source, g_endpoint, SERIAL_IPC_SUBSCRIBE_RESP, msg.requestId, 0, 0, 0, 0);
         }
     } else if (msg.type == SERIAL_DRIVER_READ_REQ) {
-        /* Dead pull path. All serial RX is owned by the vt now, so the legacy
-         * console_read route must never consume input -- doing so would steal
-         * bytes from the vt's stream. Always report empty until that path is
-         * removed entirely. */
+        /* Dead pull path. The vt owns all serial RX, so the legacy console_read
+         * route must never consume input -- doing so would steal bytes from the
+         * vt's stream. TODO: report empty until this path is removed entirely. */
         sendResponse(msg.source, msg.requestId, 0, SERIAL_READ_STATUS_EMPTY);
     } else {
         sendResponse(msg.source, msg.requestId, 0, SERIAL_READ_STATUS_ERROR);
@@ -308,7 +307,7 @@ export function initialize(_proc_endpoint: i32, _module_count: i32, _arg2: i32, 
     }
     g_loop.init(g_endpoint, 1);
 
-    /* Discoverable name, so the vt can look us up and subscribe. */
+    /* Discoverable name, so the vt can look this driver up and subscribe. */
     let registration: IpcFuture = new IpcFuture(new RegisterReply());
     if (
         registration.send(

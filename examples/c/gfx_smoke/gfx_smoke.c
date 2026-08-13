@@ -656,8 +656,8 @@ int main(int argc, char** argv) {
     int closed2 = 0;
     int closed3 = 0;
     // Block on the three windows' event endpoints (plus the libui demo window)
-    // instead of polling; events are now pushed by the compositor. The timeout
-    // only bounds how long we sleep with nothing happening.
+    // rather than polling; the compositor pushes events. The timeout only bounds
+    // the idle sleep.
     int32_t evsel = wasmos_ipc_select_create();
     if (evsel >= 0) {
         (void)wasmos_ipc_select_add(evsel, g_ctx1.event_endpoint);

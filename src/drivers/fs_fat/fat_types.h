@@ -3,8 +3,8 @@
  * The driver is a single-threaded event reactor: every filesystem request
  * becomes a fat_op_ctx_t whose op-specific state machine advances one
  * block-I/O boundary at a time (see fat_block.h).  This header holds the
- * on-disk FAT structures (preserved verbatim from the original driver), the
- * per-op context, and the reactor's small vocabulary of enums.  No block I/O
+ * on-disk FAT structures, the per-op context, and the reactor's small
+ * vocabulary of enums.  No block I/O
  * or global mutable state lives here. */
 #ifndef FS_FAT_FAT_TYPES_H
 #define FS_FAT_FAT_TYPES_H
@@ -22,8 +22,8 @@
 #define FAT_OPEN_CREAT 0x0040
 #define FAT_OPEN_TRUNC 0x0200
 
-/* Reactor sizing.  Linear memory is no longer capped at 64 KB, so the op table
- * can be generous; the single shared block buffer still serializes physical
+/* Reactor sizing.  Linear memory is not capped at 64 KB, so the op table can
+ * be generous; the single shared block buffer still serializes physical
  * I/O, so in-flight ops beyond a handful only add latency-hiding, not
  * throughput.  FAT_IO_QUEUE_CAP bounds ops parked waiting for the block
  * buffer. */
@@ -31,7 +31,7 @@
 #define FAT_IO_QUEUE_CAP FAT_MAX_INFLIGHT
 
 /* IPC send retry budget for streamed READDIR output when the client endpoint is
- * transiently full (carried over from the original driver). */
+ * transiently full. */
 #define IPC_ERR_FULL (-3)
 #define FAT_STREAM_SEND_RETRIES 8192
 
@@ -237,7 +237,8 @@ typedef struct {
 /* --- Coroutine sub-machine contexts (fat_dir.c, mutation side). --- */
 
 /* Free every cluster of a chain (walk it, writing 0 into each FAT entry).  The
- * successor is resolved BEFORE the entry is cleared, mirroring the original. */
+ * successor is resolved BEFORE the entry is cleared; clearing first would lose
+ * the rest of the chain. */
 typedef struct {
     int cont;
     uint16_t cluster;      /* current cluster being freed */
@@ -482,8 +483,8 @@ typedef struct {
 } fat_ensurecap_ctx_t;
 
 /* ---------------------------------------------------------------------------
- * Per-operation context.  Holds everything the original driver kept in file-
- * scope globals, one instance per in-flight request, so ops interleave.  Field
+ * Per-operation context.  Holds all per-request state, one instance per
+ * in-flight request, so ops interleave.  No file-scope globals.  Field
  * groups are annotated with the op(s)/sub-machine that use them.  A step
  * function reads/writes only its own ctx (plus the shared block buffer, and
  * only during a completion step — never across a fair yield).

@@ -292,8 +292,8 @@ static int thread_transition_legal(thread_state_t from, thread_state_t to) {
         return 1; /* idempotent no-op is always allowed */
     }
     /* The state machine enforces exactly two invariants; everything else among
-     * the live states (READY/RUNNING/BLOCKED interconversions) is permitted so
-     * we never reject a legitimate scheduler move:
+     * the live states (READY/RUNNING/BLOCKED interconversions) is permitted, so
+     * no legitimate scheduler move is ever rejected:
      *   1. ZOMBIE is MONOTONIC — it may only advance to UNUSED (the reaper).
      *      Nothing may resurrect a zombie; this makes "all threads zombie"
      *      a stable predicate for the reap gate.

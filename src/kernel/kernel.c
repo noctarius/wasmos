@@ -242,9 +242,7 @@ void kmain(boot_info_t* boot_info) {
 
     /* Shmem grant/isolation self-tests need a second (foreign) process context
      * distinct from the memory service. Use init: it is spawned but not yet
-     * running here, and the tests clean up the region they create/grant.
-     * (This previously used the kernel-spawned chardev process; chardev is now
-     * a normal initfs driver started by device-manager.) */
+     * running here, and the tests clean up the region they create/grant. */
     process_t* init_proc = process_get(init_pid);
     if (init_proc) {
         kernel_shmem_owner_isolation_test(mem_service_proc->context_id, init_proc->context_id);

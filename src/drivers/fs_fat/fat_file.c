@@ -453,9 +453,10 @@ fat_r_t fat_op_open(fat_op_ctx_t* op, fat_block_t* blk, const fat_mount_t* mnt,
  * entirely of partial sectors never creates a grant at all; dropped in
  * fat_op_free. Returns 1 when the direct path is usable.
  *
- * Failure is never an error — it just means this read stages as before. op->arg3
- * is the borrow fs-manager reborrowed to us; a client that talks to this backend
- * directly has none to re-lend, which is the common case during boot. */
+ * Failure is never an error — it just means this read stages through the block
+ * buffer. op->arg3 is the borrow fs-manager reborrowed to this backend; a client
+ * that talks to the backend directly has none to re-lend, which is the common
+ * case during boot. */
 static int fat_read_direct_arm(fat_op_ctx_t* op, fat_block_t* blk) {
     int32_t borrow;
     if (op->zc_borrow > 0) {

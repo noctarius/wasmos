@@ -20,19 +20,17 @@
 #include "string.h"
 #include "serial.h"
 
-/* Scheduler band for a spawned app based on its exec-format flags, wiring up the
- * previously-dead priority scheme (every non-idle process used to run at
- * SCHED_PRIO_WASM).  Drivers get SCHED_PRIO_DRIVER so latency-critical device
- * work -- e.g. the serial driver draining the UART RX FIFO on its IRQ before it
- * overruns -- outranks ordinary apps under load.
+/* Scheduler band for a spawned app based on its exec-format flags.  Drivers get
+ * SCHED_PRIO_DRIVER so latency-critical device work -- e.g. the serial driver
+ * draining the UART RX FIFO on its IRQ before it overruns -- outranks ordinary
+ * apps under load.
  *
  * Services get SCHED_PRIO_SERVICE so they respond to app requests promptly
  * instead of competing in the WASM band; the VT input multiplexer in particular
  * must run to process serial input the driver hands it, or input stalls during a
- * spawn storm.  (This became safe once the perpetual device-manager idle-spin
- * and the font/gfx synchronous-call spins were converted to blocking waits;
- * before that, boosted services hogged CPU and slowed apps.)  Plain apps keep
- * the WASM band. */
+ * spawn storm.  Boosting a band above the apps is only safe while every service
+ * in it blocks at idle -- a service that spins in its main loop starves the apps
+ * outright from SCHED_PRIO_SERVICE.  Plain apps keep the WASM band. */
 static uint8_t pm_sched_prio_for_flags(uint32_t flags) {
     if (flags & WASMOS_APP_FLAG_DRIVER) {
         return (uint8_t)SCHED_PRIO_DRIVER;
@@ -877,9 +875,9 @@ static int pm_resolve_spawn_path(uint32_t pm_context_id, const xfer_buffer_owner
     out_resolved->path[broker_plan.host_path_len] = '\0';
     out_resolved->path_len = broker_plan.host_path_len;
     memset(out_resolved->args, 0, sizeof(out_resolved->args));
-    /* Broker plans describe the final host invocation; once delegation
-     * happens, broker-supplied host args replace the original guest argv
-     * string rather than being concatenated implicitly in PM. */
+    /* Broker plans describe the final host invocation: after delegation, the
+     * broker-supplied host args REPLACE the guest argv string; PM never
+     * concatenates the two. */
     if (broker_plan.host_args_len > 0u) {
         memcpy(out_resolved->args, broker_plan.host_args, broker_plan.host_args_len);
         out_resolved->args[broker_plan.host_args_len] = '\0';

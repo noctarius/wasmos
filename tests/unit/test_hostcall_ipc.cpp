@@ -333,7 +333,7 @@ static const Shims k_warp = {
  *
  * A divergent row is checked BOTH ways: the values must still differ. Fixing
  * one therefore fails this test and forces the row to be updated, so the list
- * cannot silently rot into a description of a problem that no longer exists. */
+ * cannot silently rot into a description of an already-fixed problem. */
 struct Scenario {
     const char* what;
     int32_t expect_wasm3;

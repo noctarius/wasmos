@@ -146,7 +146,7 @@ static uint32_t lapic_calibrate_ticks_per_ms(void) {
     outb(PIT_CH2_PORT, 0x9Cu);                    /* low byte:  11932 & 0xFF */
     outb(PIT_CH2_PORT, 0x2Eu);                    /* high byte: 11932 >> 8  */
 
-    /* Start LAPIC counter at maximum so we can measure elapsed ticks. */
+    /* Start the LAPIC counter at maximum so elapsed ticks are measurable. */
     lapic_write(LAPIC_REG_TIMER_DCR, LAPIC_TIMER_DIVIDE_16);
     lapic_write(LAPIC_REG_TIMER_ICR, 0xFFFFFFFFu);
 

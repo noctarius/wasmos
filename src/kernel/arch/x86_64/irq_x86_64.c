@@ -185,7 +185,7 @@ void x86_irq_init(void) {
     uint8_t* mask2_slot = pic_mask2_slot();
 
     /* Preserve the pre-existing mask state across the PIC remap so only the
-     * lines we explicitly unmask later become active. */
+     * lines explicitly unmasked later become active. */
     uint8_t mask1 = inb(PIC1_DATA);
     uint8_t mask2 = inb(PIC2_DATA);
 

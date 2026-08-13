@@ -69,7 +69,7 @@
 # NMI handler (vector 2), used by kpanic() to stop this CPU and snapshot its
 # context. Saves all GPRs so x86_nmi_handler can read rbp (for a backtrace) and
 # the iret frame (rip/cs/rflags/rsp). In the panic case x86_nmi_handler never
-# returns (it halts this CPU); for an unexpected NMI it returns and we iretq.
+# returns (it halts this CPU); for an unexpected NMI it returns and this iretqs.
 .extern x86_nmi_handler
 .global isr_nmi
 isr_nmi:

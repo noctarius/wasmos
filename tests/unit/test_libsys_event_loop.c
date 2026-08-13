@@ -13,10 +13,10 @@
  * leaves the dispatch logic itself genuinely under test.
  */
 
-/* The libsys headers must come first: our string.h declares strcpy, and the
- * host's <string.h> turns it into a fortify macro, so pulling the host header
- * in first makes that declaration fail to parse. memset/strcmp are declared by
- * our string.h and resolved by the host libc at link. */
+/* The libsys headers must come first: the in-tree string.h declares strcpy, and
+ * the host's <string.h> turns it into a fortify macro, so pulling the host
+ * header in first makes that declaration fail to parse. memset/strcmp are
+ * declared by the in-tree string.h and resolved by the host libc at link. */
 #include "wasmos/libsys.h"
 
 #include <stdio.h>

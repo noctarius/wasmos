@@ -8,19 +8,17 @@
 /*
  * kenv.h — the kernel environment store.
  *
- * One store, shared by both runtimes. It was previously written out once per
- * runtime, with WARP's copy carrying the comment "mirrors the static table in
- * wasm3/link.c", and the two mirrors drifted: env_set refused an over-long key
- * in both, while wasm3's env_get truncated it and looked up the prefix, so a
- * guest could read a variable it had not named and could not have created.
+ * One store, shared by both runtimes. Per-runtime copies of it must not be
+ * reintroduced: they drift, and the drift is silent. A key-length check that
+ * refuses on set but truncates on get, for instance, lets a guest read a
+ * variable it never named and could not have created.
  *
  * What stays in each runtime is the guest-memory plumbing -- translating a wasm
  * pointer, checking the range is permitted, copying in and out. None of that
  * belongs to the store, and it is the only part that genuinely differs.
  *
  * The store holds no lock. Host calls run with the calling process descheduled
- * and the kernel does not touch the environment from interrupt context, which
- * matches how both hand-written copies behaved.
+ * and the kernel does not touch the environment from interrupt context.
  */
 
 #define KENV_MAX_ENTRIES 64

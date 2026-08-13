@@ -1,7 +1,7 @@
 #pragma once
 /* Minimal <ostream> stub — satisfies WARP's #include <ostream> and the
- * &std::endl references in MemUtils.cpp.  Never actually used at runtime
- * since we stub the calls that would print. */
+ * &std::endl references in MemUtils.cpp.  Never used at runtime: the calls that
+ * would print are stubbed. */
 namespace std {
 struct ostream {
     template<class T> ostream &operator<<(T const &) noexcept { return *this; }

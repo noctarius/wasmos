@@ -1,11 +1,11 @@
-/* xfer_buffer/object.c - real object/owner/borrow xfer-buffer implementation.
+/* xfer_buffer.c - object/owner/borrow xfer-buffer implementation.
  *
  * A xfer buffer is a first-class object with one current owner. The owner can
  * lend the object to any number of borrowers simultaneously, each borrow is an
  * independent handle with its own rights and reborrow tree, and DMA attaches to
- * a single owned object or a single borrow handle. This replaces the old
- * one-active-borrow-per-(kind, context) slot model, which could not represent a
- * borrower holding multiple grants to distinct owners at once.
+ * a single owned object or a single borrow handle. A one-active-borrow-per-(kind,
+ * context) slot model cannot represent this: a borrower may hold multiple grants
+ * to distinct owners at once.
  */
 #include "xfer_buffer.h"
 

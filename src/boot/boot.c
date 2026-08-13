@@ -820,8 +820,8 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE* system) {
     }
 
     /*
-     * Capture the framebuffer snapshot before we start the ExitBootServices()
-     * dance. GOP discovery and controller connects can mutate the UEFI memory
+     * Capture the framebuffer snapshot before the ExitBootServices() sequence
+     * begins. GOP discovery and controller connects can mutate the UEFI memory
      * map, so doing this early keeps the final map_key stable.
      */
     framebuffer_snapshot_t framebuffer_snapshot;
@@ -974,8 +974,8 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE* system) {
     /* The kernel _start reads boot_info from RCX (MS x64 ABI arg0). Force the
      * MS ABI on this call explicitly: clang's x86_64-unknown-uefi default
      * calling convention has varied across versions (clang 20 passed arg0 in
-     * RDI, so _start saw an empty RCX and kmain got a NULL boot_info), and we
-     * must not depend on that default matching the kernel's expectation. */
+     * RDI, leaving _start with an empty RCX and kmain with a NULL boot_info).
+     * The default must not be relied on to match the kernel's expectation. */
     void(__attribute__((ms_abi)) * kernel_entry)(boot_info_t*) =
         (void(__attribute__((ms_abi))*)(boot_info_t*))(UINTN)ehdr->e_entry;
     kernel_entry(boot_info);

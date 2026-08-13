@@ -19,7 +19,7 @@ extern "C" {
 
 /* Idle poll interval: when no request is queued the entry blocks on its select
  * set for at most this long, bounding the latency of the exit-driven periodic
- * work (pm_check_waits / pm_reap_apps) that no IPC wakes us for. */
+ * work (pm_check_waits / pm_reap_apps), which no IPC wakes the entry for. */
 #ifndef WASMOS_PM_POLL_INTERVAL_MS
 #define WASMOS_PM_POLL_INTERVAL_MS 50u
 #endif
@@ -345,11 +345,11 @@ class ProcessManager {
         if (recv_rc != IPC_OK) {
             /* No request queued.  Block on the select set (proc / fs_ctrl /
              * fs_reply) until any endpoint has traffic, or the poll interval
-             * elapses so the exit-driven periodic work above still runs.  This
-             * replaces the old busy-poll that returned YIELDED immediately and
-             * spun the scheduler.  A pending request is drained one-per-dispatch
-             * (productive work, not a spin); we only sleep once the queue is
-             * empty. */
+             * elapses so the exit-driven periodic work above still runs.
+             * Returning YIELDED immediately instead would busy-poll and spin the
+             * scheduler.  A pending request is drained one-per-dispatch
+             * (productive work, not a spin); the sleep happens only once the
+             * queue is empty. */
             uint32_t ready_ep = IPC_ENDPOINT_NONE;
             (void)ipc_select_wait(pm_atomic_load_u32(&g_pm.select_id), process->context_id,
                                   &ready_ep, WASMOS_PM_POLL_INTERVAL_MS);
@@ -556,10 +556,10 @@ void process_manager_on_child_ready(uint32_t pid) {
      * nd_proc_notify_ready() on the native driver's CPU (different from PM's
      * CPU), so any access to g_pm.spawn would be an unsynchronised cross-CPU
      * read/write.  Specifically, PM sets in_use=1 and sync_child_pid in
-     * sequence after pm_spawn_from_buffer(); if the driver runs between those
-     * two stores we could see in_use=1 with sync_child_pid still 0, send to
+     * sequence after pm_spawn_from_buffer(); a driver running between those two
+     * stores would observe in_use=1 with sync_child_pid still 0, send to
      * endpoint 0 (silent failure), clear in_use=0, and leave PM's
-     * pm_poll_sync_spawn with nothing to poll — causing a permanent hang.
+     * pm_poll_sync_spawn with nothing to poll — a permanent hang.
      * pm_poll_sync_spawn already checks child->ready on every PM iteration
      * and sends the PROC_IPC_RESP safely from PM's own context. */
 }

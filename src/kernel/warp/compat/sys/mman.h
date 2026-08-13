@@ -30,7 +30,7 @@ extern "C" {
 #endif
 
 /* Declarations — implementations must be provided by the kernel.
- * See kernel/warp/mmap_shim.c (or equivalent) for the backing code. */
+ * Backed by src/kernel/warp/posix_kernel.c. */
 void* mmap(void* addr, size_t length, int prot, int flags, int fd, long offset);
 int mprotect(void* addr, size_t length, int prot);
 int munmap(void* addr, size_t length);

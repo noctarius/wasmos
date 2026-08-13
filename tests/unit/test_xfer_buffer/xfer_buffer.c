@@ -578,14 +578,14 @@ static void test_acquire_variable_size(test_stats_t* stats) {
     /* TRANSFER buffers are right-sized to the requested minimum_size, rounded up
      * to a whole number of pages. Verify the rounding, that distinct requests
      * yield distinct sizes (not a fixed slab), and that a large request (e.g. a
-     * 4 MiB compositor backbuffer, formerly rejected by the fixed 2 MiB cap) now
+     * 4 MiB compositor backbuffer, which a fixed 2 MiB cap would reject)
      * succeeds. */
     uint32_t requests[] = {
         1u,                 /* -> 1 page  */
         4096u,              /* -> 1 page  (exact) */
         4097u,              /* -> 2 pages */
         100u * 1024u,       /* -> 25 pages */
-        4u * 1024u * 1024u, /* 4 MiB backbuffer, formerly rejected by the 2 MiB cap */
+        4u * 1024u * 1024u, /* 4 MiB backbuffer: over any fixed 2 MiB cap */
     };
     uint32_t ctx = 300u;
     for (uint32_t i = 0; i < sizeof(requests) / sizeof(requests[0]); ++i) {

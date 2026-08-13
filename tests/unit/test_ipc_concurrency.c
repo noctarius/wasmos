@@ -107,8 +107,8 @@ void process_yield(process_run_result_t result) {
     thread_t* self = thread_get(g_current_tid);
     /* Model an immediate resume. A real resume always follows an unlink, so
      * unlink here too — revalidating under the event lock exactly the way
-     * sched_timeout_fire does, since a genuine waker may be detaching us
-     * concurrently. */
+     * sched_timeout_fire does, since a genuine waker may be detaching this
+     * thread concurrently. */
     if (self) {
         sched_event_t* ev = (sched_event_t*)__atomic_load_n(&self->wait_event, __ATOMIC_ACQUIRE);
         if (ev) {
@@ -138,7 +138,7 @@ static void pool_init(void) {
 
 /* A start barrier so the workers actually overlap instead of finishing in
  * launch order. Spin rather than pthread_barrier_t: macOS does not ship one,
- * and spinning keeps the threads hot, which is what we want for interleaving. */
+ * and spinning keeps the threads hot, which is what produces interleaving. */
 typedef struct {
     int count;
     int target;
@@ -484,9 +484,9 @@ static void test_concurrent_creation_hands_out_unique_ids(void) {
 
 /* ------------------------------------- teardown racing senders and select */
 
-/* This is the shape that used to corrupt memory: ipc_send_from read
- * ep->poll_struct under ep->lock and then notified after releasing it, while
- * ipc_endpoints_release_owner took the same lock and freed that poll_struct.
+/* The memory-corrupting shape: ipc_send_from reading ep->poll_struct under
+ * ep->lock and notifying after releasing it, while ipc_endpoints_release_owner
+ * takes the same lock and frees that poll_struct.
  * The window is only reachable when the endpoint actually has a watcher, so
  * the test keeps a select set registered throughout. Runs clean only under
  * ASan; on a plain build a use-after-free here is usually silent. */
@@ -508,9 +508,9 @@ static void* teardown_sender_thread(void* p) {
         m.arg0 = a->index;
         int rc = ipc_send(__atomic_load_n(&sh->endpoint, __ATOMIC_ACQUIRE), &m);
         /* OK, a transiently full queue, or the endpoint having been torn down
-         * under us -- and nothing else. NOENT rather than a generic invalid
-         * code is the point: the sender can tell "that endpoint is gone" from
-         * "I passed something malformed". */
+         * concurrently -- and nothing else. NOENT rather than a generic invalid
+         * code is the point: the sender can tell a gone endpoint from a
+         * malformed argument. */
         if (rc != IPC_OK && rc != IPC_ERR_FULL && rc != IPC_ERR_NOENT) {
             a->result = rc;
             return 0;
@@ -731,10 +731,10 @@ static void test_select_slots_are_conserved_under_churn(void) {
     }
     CHECK(bad == 0, "no churn thread saw an invalid select id");
 
-    /* Nothing the churn allocated may still be held. The table grows on demand
-     * now, so "every slot came back" is no longer a count of slots -- it is the
-     * churning context being able to claim its whole quota again, which it
-     * cannot do if a single set leaked. */
+    /* Nothing the churn allocated may still be held. The table grows on demand,
+     * so "every slot came back" is not a count of slots -- it is the churning
+     * context being able to claim its whole quota again, which it cannot do if a
+     * single set leaked. */
     uint32_t ids[IPC_SELECT_PER_CONTEXT_MAX];
     uint32_t n = 0;
     while (n < IPC_SELECT_PER_CONTEXT_MAX) {

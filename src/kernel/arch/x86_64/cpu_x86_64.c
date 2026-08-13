@@ -494,9 +494,9 @@ int x86_user_exception_handler(uint64_t vector, const uint64_t* frame) {
     if (!proc || !from_user) {
         return -1;
     }
-    /* TODO(ring3-phase5): Expand strict-mode process-local handling to the
-     * remaining user vectors we still do not probe/classify explicitly
-     * (for example #BR/#NP/#MF/#XM) once stable repro payloads are available. */
+    /* TODO(ring3-phase5): Expand strict-mode process-local handling to the user
+     * vectors that are not probed/classified explicitly (for example
+     * #BR/#NP/#MF/#XM) once stable repro payloads are available. */
     if (vector != 0 && vector != 1 && vector != 4 && vector != 6 && vector != 7 && vector != 12 &&
         vector != 13 && vector != 17) {
         return -1;
@@ -629,7 +629,7 @@ void x86_cpu_init(void) {
     x86_cpu_enable_kernel_simd();
     serial_write("[cpu] init\n");
 
-    /* Initialise BSP's per-CPU slot.  We pass &g_cpus[0] explicitly because
+    /* Initialise BSP's per-CPU slot.  &g_cpus[0] is named explicitly because
      * the GS base MSR has not been loaded yet — cpu_local() must not be called
      * until after the wrgsbase below. */
     cpu_local_t* bsp = &g_cpus[0];

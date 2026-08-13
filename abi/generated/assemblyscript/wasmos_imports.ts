@@ -776,7 +776,7 @@ export declare function xfer_buffer_map(a0: i32): i32;
 // buffer_id or context.
 @external("wasmos", "xfer_buffer_unmap")
 export declare function xfer_buffer_unmap(a0: i32): i32;
-// klog ring (VT I/O multiplexer, phase 4): register a BUFFER_KIND_TRANSFER
+// klog ring (VT I/O multiplexer): register a BUFFER_KIND_TRANSFER
 // xfer-buffer the caller acquired + mapped + wasmos_ringbuf_init'd as the kernel
 // klog ring, so serial_write publishes klog text into it for the VT to drain
 // into vt-1.  Returns 0 on success, -1 on a bad/foreign buffer id.

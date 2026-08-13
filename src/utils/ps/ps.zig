@@ -158,8 +158,9 @@ pub fn main() u8 {
     // Show the table for anything that isn't the explicit "tree" subcommand.
     // This keeps ps robust to stale/garbage CLI args (the per-context xfer
     // buffer is not zeroed on alloc, so a no-arg spawn can parse recycled
-    // bytes as args). Fixing this kernel-side by zeroing the buffer triggers
-    // the unresolved WARP ring3-entry fault, so we tolerate it in the consumer.
+    // bytes as args). The consumer tolerates it because zeroing the buffer
+    // kernel-side triggers the unresolved WARP ring3-entry fault.
+    // TODO: zero the per-context xfer buffer on alloc once that fault is fixed.
     const show_table = args.len == 0 or !std.mem.eql(u8, args[0], "tree");
     var out = OutBuf{ .buf = g_out_buf[0..] };
 

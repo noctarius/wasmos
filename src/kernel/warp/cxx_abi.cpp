@@ -1,9 +1,9 @@
 /* warp/cxx_abi.cpp - Bare-metal C++ exception ABI for the WARP JIT runtime.
  *
  * Exception dispatch strategy:
- *   WARP throws C++ exceptions internally.  We bypass the standard Dwarf/SJLJ
- *   unwinding infrastructure entirely and use a per-CPU "throw checkpoint"
- *   instead.  Before each WARP call, warp_driver.cpp saves a __builtin_setjmp
+ *   WARP throws C++ exceptions internally.  The standard Dwarf/SJLJ unwinding
+ *   infrastructure is bypassed entirely in favour of a per-CPU "throw
+ *   checkpoint".  Before each WARP call, warp_driver.cpp saves a __builtin_setjmp
  *   buffer via warp_exception_checkpoint_set().  If __cxa_throw is reached it
  *   calls __builtin_longjmp to that checkpoint — effectively implementing a
  *   zero-infrastructure catch-all at the driver boundary.
@@ -71,7 +71,7 @@ extern "C" __attribute__((noreturn)) void __cxa_throw(void* obj, void* type_info
 }
 
 // ---------------------------------------------------------------------------
-// Catch machinery — stubs (we bypass the C++ catch mechanism)
+// Catch machinery — stubs; the C++ catch mechanism is bypassed
 // ---------------------------------------------------------------------------
 
 extern "C" void* __cxa_begin_catch(void* e) noexcept {
@@ -89,7 +89,7 @@ extern "C" void* __cxa_current_exception_type(void) noexcept {
 }
 
 // ---------------------------------------------------------------------------
-// Dwarf / SJLJ unwind stubs — needed at link time even though we bypass them
+// Dwarf / SJLJ unwind stubs — required at link time even though unused
 // ---------------------------------------------------------------------------
 
 typedef int _Unwind_Reason_Code;

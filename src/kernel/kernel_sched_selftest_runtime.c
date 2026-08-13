@@ -154,13 +154,13 @@ static int test_dequeue(void) {
 /* -------------------------------------------------------------------------
  * Test 4: sched_event_init / wake_one / wake_all with no real blocking
  *
- * We cannot actually call sched_event_wait (it yields to the scheduler).
- * Instead we test the wake path directly: populate the wait_list by hand,
- * call sched_event_wake_one / sched_event_wake_all, and verify the list
- * state and thread pend_state fields.
+ * sched_event_wait cannot be called here: it yields to the scheduler.  The
+ * wake path is exercised directly instead -- populate the wait_list by hand,
+ * call sched_event_wake_one / sched_event_wake_all, and verify the list state
+ * and thread pend_state fields.
  *
- * sched_wake_thread is NOT called here (it would enqueue into the live
- * scheduler); we stub it by checking list membership before and after.
+ * sched_wake_thread is NOT called here either (it would enqueue into the live
+ * scheduler); list membership before and after stands in for it.
  * ------------------------------------------------------------------------- */
 
 /* Minimal stand-in: add a thread to an event's wait_list without actually
@@ -187,13 +187,14 @@ static int test_event_wake_one(void) {
 
     CHECK(!list_head_empty(&ev.wait_list), "event-wake-one-list-nonempty");
 
-    /* Wake one — but intercept sched_wake_thread by checking state manually.
-     * We call wake_one under the lock to match the production call convention,
-     * but sched_wake_thread will call thread_set_state which needs a valid tid
-     * — skip that by comparing pend_state directly after list removal. */
+    /* Wake one, checking state manually instead of going through
+     * sched_wake_thread.  wake_one is called under the lock to match the
+     * production call convention, but sched_wake_thread calls thread_set_state,
+     * which needs a valid tid — pend_state is compared directly after list
+     * removal instead. */
     ksync_spinlock_lock(&ev.lock);
-    /* Manually dequeue first waiter the same way wake_one does, without the
-     * sched_wake_thread call, so we can test pure list/pend logic. */
+    /* Manually dequeue the first waiter the same way wake_one does, without the
+     * sched_wake_thread call, leaving pure list/pend logic under test. */
     CHECK(!list_head_empty(&ev.wait_list), "event-wake-one-before");
     thread_t* first = list_first_entry(&ev.wait_list, thread_t, event_node);
     list_head_del(&first->event_node);
@@ -366,10 +367,10 @@ static int test_target_cpu_selection(void) {
 /* -------------------------------------------------------------------------
  * Test 9: run-queue membership is a single atomic claim.
  *
- * A thread reaped while still linked in a ready queue used to keep its node in
- * that queue after thread_reset_slot released the slot; the next spawn to get
- * the slot re-initialised the node (self-linking it) while the queue still
- * pointed at it, and the queue was then spliced through a node with two owners.
+ * A thread reaped while still linked in a ready queue must not leave its node in
+ * that queue once thread_reset_slot releases the slot: the next spawn to get the
+ * slot re-initialises the node (self-linking it) while the queue still points at
+ * it, and the queue is then spliced through a node with two owners.
  * cpu_sched_remove_thread is what the reap path calls to close that hole, and
  * on_rq is what makes "is this thread queued?" answerable without holding the
  * lock of whichever CPU's queue holds it.

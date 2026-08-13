@@ -5,12 +5,11 @@
  * the raw set-1 scancode.  See docs/architecture/20-graphics-framebuffer-and-
  * compositor.md §Events.
  *
- * Regression: libui used to hand the *packed* code straight to
- * ui_utf8_encode(), so typing 'a' (scancode 0x1E) appended U+1E61 instead of
- * 'a' — an unmapped codepoint that the font service renders as .notdef (a tofu
- * box).  Backspace (0x0E08) and Enter (0x1C0A) stopped matching their control
- * codes for the same reason.  These tests pin the decode contract at the two
- * handlers that consume characters. */
+ * The packed code must NOT reach ui_utf8_encode() directly: typing 'a'
+ * (scancode 0x1E) would append U+1E61 instead of 'a' — an unmapped codepoint the
+ * font service renders as .notdef (a tofu box) — and Backspace (0x0E08) and
+ * Enter (0x1C0A) would stop matching their control codes.  These tests pin the decode contract at
+ * the two handlers that consume characters. */
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>

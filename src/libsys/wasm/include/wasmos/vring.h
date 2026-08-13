@@ -186,7 +186,7 @@ static inline void vring_kick(vring_t* vq) {
         vq->notify(vq->notify_user);
 }
 
-/* Nonzero if the device has completed buffers we have not consumed yet. */
+/* Nonzero if the device has completed buffers that are not yet consumed. */
 static inline int32_t vring_has_used(vring_t* vq) {
     vring_mb(); /* observe the device's latest used_idx */
     return (int32_t)(*vq->used_idx != vq->last_used_idx);

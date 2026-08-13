@@ -66,7 +66,7 @@ int main(int argc, char** argv) {
 
     wasmos_ipc_message_t m;
 
-    /* Fetch the NIC MAC (driver writes 6 bytes into our xfer buffer). SLIRP
+    /* Fetch the NIC MAC (the driver writes 6 bytes into the xfer buffer). SLIRP
      * unicasts its ARP reply to the sender MAC, so it must be the real NIC MAC
      * or the device would filter the reply out. */
     uint8_t mac[6];

@@ -134,9 +134,9 @@ void process_yield(process_run_result_t result) {
     if (g_park) {
         return; /* stay in the wait list; see g_park */
     }
-    /* If nothing woke us, model the spurious wake: every real resume path
-     * (waker, timeout, abort) unlinks the thread before it runs again, so
-     * leaving the node linked here would corrupt the next block. */
+    /* With no waker, model the spurious wake: every real resume path (waker,
+     * timeout, abort) unlinks the thread before it runs again, so leaving the
+     * node linked here would corrupt the next block. */
     if (self) {
         sched_event_t* ev = self->wait_event;
         if (ev) {
@@ -2005,9 +2005,9 @@ static void test_a_timed_select_wait_expires_as_empty(void) {
  * Every value each entry point can return, enumerated in one table against the
  * precondition that produces it. The tests above assert codes incidentally,
  * while checking behaviour; this asserts the code IS the contract, so a
- * refactor that starts returning INVALID where it used to return PERM -- or
- * quietly turns a distinguishable failure into a generic one -- fails here
- * with the case named, rather than passing because no test happened to look.
+ * refactor that swaps PERM for INVALID -- or quietly turns a distinguishable
+ * failure into a generic one -- fails here with the case named, rather than
+ * passing because no test happened to look.
  *
  * The kernel wrappers (ipc_send/recv/notify/wait) are covered by their own
  * equivalence case rather than repeating every row twice.

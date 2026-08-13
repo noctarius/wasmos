@@ -43,7 +43,7 @@ int serial_register_remote_driver(uint32_t endpoint);
 uint32_t serial_console_ring_id(void);
 void* serial_console_ring_ptr(void);
 
-/* klog ring (VT I/O multiplexer, phase 4): the VT owns an SPSC byte ring
+/* klog ring (VT I/O multiplexer): the VT owns an SPSC byte ring
  * (wasmos/ringbuf.h) overlaid on a BUFFER_KIND_TRANSFER xfer-buffer (the same
  * zero-copy transport the socket rings use) and registers that buffer id here.
  * serial_write then additionally publishes klog text into the ring for the VT

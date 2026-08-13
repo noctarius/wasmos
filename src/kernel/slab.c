@@ -5,8 +5,8 @@
 #include <stdint.h>
 
 /*
- * Minimal fixed-size slab allocator for small kernel objects. This is optional
- * infrastructure for now; existing static-table paths remain the default.
+ * Minimal fixed-size slab allocator for small kernel objects. Optional
+ * infrastructure: static-table paths remain the default.
  *
  * Each size class starts on a fixed static buffer and, once that is exhausted,
  * grows on demand: a fresh 4 KiB frame is allocated from the physical page

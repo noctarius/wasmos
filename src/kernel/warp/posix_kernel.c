@@ -9,8 +9,8 @@
  * acceptable for a kernel prototype; a hardened kernel would flip W^X.
  *
  * All other POSIX stubs (sigaction, sysconf, posix_memalign, close) are
- * trivial; the signal-based protection paths in WARP are dead because we
- * compile with ACTIVE_STACK_OVERFLOW_CHECK=1 and LINEAR_MEMORY_BOUNDS_CHECKS=1. */
+ * trivial; the signal-based protection paths in WARP are dead because the build
+ * sets ACTIVE_STACK_OVERFLOW_CHECK=1 and LINEAR_MEMORY_BOUNDS_CHECKS=1. */
 
 #include <stddef.h>
 #include <stdint.h>
@@ -119,13 +119,13 @@ int munmap(void* addr, size_t length) {
 
 /* Return the kernel page size. */
 long sysconf(int name) {
-    (void)name; /* _SC_PAGE_SIZE = 30 on Linux, but we always return 4096. */
+    (void)name; /* _SC_PAGE_SIZE = 30 on Linux; 4096 is returned unconditionally. */
     return (long)WARP_PAGE_SIZE;
 }
 
-/* Aligned allocation — ignore alignment and use the slab allocator for now.
- * WARP calls posix_memalign only for aligned code buffers in MemUtils;
- * since we redirect ExecutableMemory to use mmap, this path is rarely taken. */
+/* Aligned allocation — alignment is ignored and the slab allocator used.
+ * WARP calls posix_memalign only for aligned code buffers in MemUtils, and
+ * ExecutableMemory is redirected to mmap, so this path is rarely taken. */
 int posix_memalign(void** memptr, size_t alignment, size_t size) {
     (void)alignment;
     if (!memptr)
@@ -156,8 +156,8 @@ void free(void* ptr) {
 }
 
 void* realloc(void* ptr, size_t size) {
-    /* Minimal realloc for MemUtils::alignedReduce — copy is conservative
-     * (may over-copy) since we don't track the old block size here.
+    /* Minimal realloc for MemUtils::alignedReduce — the copy is conservative
+     * (may over-copy) because the old block size is not tracked here.
      * WARP only calls realloc to shrink aligned code buffers. */
     if (!ptr)
         return kalloc_small(size);

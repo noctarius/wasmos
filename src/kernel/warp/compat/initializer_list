@@ -2,8 +2,8 @@
 /* compat/initializer_list — freestanding shadow of <initializer_list>
  *
  * std::initializer_list is a compiler-magic type: clang generates the
- * underlying array and passes a pointer+length pair to the constructor.
- * We must declare the class in namespace std with the exact layout the
+ * underlying array and passes a pointer+length pair to the constructor.  The
+ * class must therefore be declared in namespace std with the exact layout the
  * compiler expects (pointer + size_t).  No extra includes needed. */
 
 #include <stddef.h>

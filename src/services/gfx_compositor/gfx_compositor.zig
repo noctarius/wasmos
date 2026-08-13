@@ -807,9 +807,9 @@ fn same_owner(owner_endpoint: u32, source_endpoint: u32) bool {
 }
 
 // Push all queued events to their owner endpoints as GFX_IPC_PUSH_EVENT
-// (arg1=event_type, arg2=window_id, arg3=payload — the layout clients decoded
-// from the old POLL reply). Best-effort: if a client's mailbox is full we stop
-// and retain the rest for the next flush rather than dropping.
+// (arg1=event_type, arg2=window_id, arg3=payload). Best-effort: a full client
+// mailbox stops the flush and the rest are retained for the next one rather than
+// dropped.
 fn flush_events() void {
     while (g_event_head != g_event_tail) {
         const ev = g_events[g_event_head];
@@ -1478,8 +1478,8 @@ fn sync_console_mode_for_windows() void {
     // One-time: take the framebuffer for the GUI when the first window appears.
     // After this the compositor never auto-grabs vt-0 again — if the user
     // switches to a text slot it stays there until an explicit switch back
-    // (the vt drives g_overlay_locked via VT_IPC_VIS_NOTIFY).  Previously this
-    // re-grabbed vt-0 whenever windows were present, fighting a user switch-away.
+    // (the vt drives g_overlay_locked via VT_IPC_VIS_NOTIFY).  Re-grabbing vt-0
+    // whenever windows are present would fight a user switch-away.
     if (g_did_startup_switch) return;
     if (active_presented_window_count() == 0) return;
     if (GFX_TRACE) {
@@ -2972,10 +2972,10 @@ fn handle_ipc_dispatch(msg: *const c.nd_ipc_message_t) void {
             }
         },
         c.VT_IPC_VIS_NOTIFY => {
-            // The visible slot changed.  We own the framebuffer only while vt-0
-            // is visible: relinquish (stop drawing) when hidden, and repaint the
-            // whole screen when we become visible again (the vt's text render
-            // left the framebuffer with console content).
+            // The visible slot changed.  The compositor owns the framebuffer only
+            // while vt-0 is visible: it relinquishes (stops drawing) when hidden,
+            // and repaints the whole screen on becoming visible again, because the
+            // vt's text render left console content in the framebuffer.
             const visible = (msg.arg0 != 0);
             if (visible != g_overlay_locked) {
                 g_overlay_locked = visible;
@@ -3066,8 +3066,8 @@ pub export fn initialize(driver_api: *c.wasmos_driver_api_t, module_count: c_int
         logMsg("[gfx] fb endpoint unavailable\n");
     } else {
         _ = lookup_vt_endpoint();
-        // Keyboard is routed through the vt (we are the vt-0 key sink, registered
-        // when we take vt-0); no direct keyboard-driver subscription.
+        // Keyboard is routed through the vt (the compositor is the vt-0 key sink,
+        // registered when it takes vt-0); no direct keyboard-driver subscription.
         if (lookup_mouse_endpoint() == 0) {
             _ = subscribe_mouse();
         }
@@ -3093,8 +3093,8 @@ pub export fn initialize(driver_api: *c.wasmos_driver_api_t, module_count: c_int
     _ = api().proc_notify_ready.?();
 
     // Idle sleep bound: input notifies and client requests wake the wait
-    // immediately; this only caps how long we sleep with nothing to do, so
-    // periodic housekeeping (font-title init retry, orphan cleanup) still runs.
+    // immediately; this only caps the sleep with nothing to do, so periodic
+    // housekeeping (font-title init retry, orphan cleanup) still runs.
     const GFX_IDLE_WAIT_MS: u32 = 100;
     while (true) {
         const handled = sys.eventLoopPoll(&g_ipc_loop, 32);

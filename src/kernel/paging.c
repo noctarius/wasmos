@@ -336,8 +336,8 @@ int paging_init(void) {
 paging_init_after_bootstrap:
     if (bootstrap_low_slot) {
         /* TODO(ring3-phase3): Remove this kernel-root bootstrap low slot once
-         * early paging bring-up no longer depends on direct low mappings after
-         * the first CR3 handoff. User roots already honor IDENTITY_PD_COUNT=0. */
+         * early paging bring-up stops depending on direct low mappings after the
+         * first CR3 handoff. User roots already honor IDENTITY_PD_COUNT=0. */
     }
 
     klog_printf("[paging] cr3=%016llx\n[paging] higher-half=%016llx\n",

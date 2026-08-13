@@ -61,7 +61,7 @@ void* realloc(void* old, size_t size) {
     void* n = malloc(size);
     if (!n || !old)
         return n;
-    /* Copy old content (conservatively – we don't track block sizes). */
+    /* Copy old content conservatively; block sizes are not tracked. */
     uint8_t* dst = (uint8_t*)n;
     const uint8_t* src = (const uint8_t*)old;
     /* Safe upper bound: new size. Caller must not have written past it. */
@@ -301,8 +301,9 @@ int32_t libui_zig_drain(void* ctx) {
     return ui_loop_drain((ui_context_t*)ctx);
 }
 
-/* Block for one pushed GFX event, then layout+render if dirty. The blocking
- * wait lets an idle UI sleep instead of polling the compositor in a tight loop. */
+/* Block for one pushed GFX event, then layout+render if dirty. The blocking wait
+ * is what lets an idle UI sleep instead of polling the compositor in a tight
+ * loop. */
 void libui_zig_poll_and_drain(void* ctx) {
     ui_context_t* c = (ui_context_t*)ctx;
     if (!c->close_requested) {

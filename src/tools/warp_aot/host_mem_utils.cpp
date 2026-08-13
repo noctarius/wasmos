@@ -132,15 +132,11 @@ uint8_t* reallocAlignedMemory(uint8_t* old, size_t oldSz, size_t newSz, size_t a
 }
 
 void freeAlignedMemory(void* ptr) VB_NOEXCEPT {
-    /* We don't know the size; use a 1-byte hint — munmap requires actual size.
-     * Track it via the rounded page size stored at allocation time is not done
-     * here; use a table-free approach: re-derive from page alignment.
-     * Since allocAlignedMemory always rounds up to page size, we mmap/munmap
-     * full pages.  At free time the true size is unknown, so we use a
-     * conservative approach: store the size in a small header prepended to
-     * the allocation, separated so the caller never sees it.
-     * For the AOT tool this path is only hit during WARP's internal cleanup;
-     * a simple malloc/free pair with a hidden size header suffices. */
+    /* The allocation size is not recoverable from the pointer alone, and munmap
+     * needs it, so allocAlignedMemory prepends a hidden size header that the
+     * caller never sees and this reads back.  For the AOT tool this path is only
+     * reached during WARP's internal cleanup, where a malloc/free pair with that
+     * header suffices. */
     if (!ptr)
         return;
     /* Recover the size from the hidden header at ptr - sizeof(size_t). */
@@ -194,9 +190,9 @@ StackInfo getStackInfo() {
  * This mirrors the non-Linux branch of WARP's own ExecutableMemory::init
  * (libs/warp/src/utils/ExecutableMemory.cpp).  Its __linux__ branch instead maps
  * a second RX view through the memfd returned by allocPagedMemory, which this
- * shim cannot reproduce: our allocPagedMemory is plain MAP_ANONYMOUS and reports
- * fd = -1, so mapRXMemory would return a fresh, empty mapping rather than an
- * alias of the code just written. */
+ * shim cannot reproduce: this allocPagedMemory is plain MAP_ANONYMOUS and
+ * reports fd = -1, so mapRXMemory would return a fresh, empty mapping rather
+ * than an alias of the code just written. */
 ExecutableMemory::ExecutableMemory(uint8_t const* data, size_t size)
     : ExecutableMemory(nullptr, size, -1) {
     if (size == 0)

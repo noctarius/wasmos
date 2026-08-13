@@ -8,8 +8,8 @@
  *      mirroring the wasm3/shim.c interface so wasm_driver.c can switch
  *      backends via WASMOS_WASM_RUNTIME without changing call sites.
  *
- * Realloc note: kalloc_small has no size query, so we prepend an alloc header
- * to every block so warp_krealloc can copy the right number of bytes.
+ * kalloc_small has no size query, so every block carries a prepended alloc
+ * header and warp_krealloc reads the length from it.
  */
 
 #include <cstddef>

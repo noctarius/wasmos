@@ -162,9 +162,9 @@ static Ring3LinmemMapState* find_ring3_linmem_map(uint64_t user_root) {
 /* Physical address backing a warp allocation's kernel-alias pointer.  All
  * phys-from-virt derivations for linmem/JIT blocks route through here so the
  * dedicated-VA linmem block (scattered physical pages) resolves without a
- * per-page list.  For a VA in the dedicated linmem window we walk the page
- * tables; a miss there means a tracking gap / uncommitted linmem VA, so we
- * return 0 (loud failure at the caller) rather than silently corrupting with a
+ * per-page list.  A VA in the dedicated linmem window is resolved by walking
+ * the page tables; a miss there means a tracking gap / uncommitted linmem VA and
+ * returns 0 (loud failure at the caller) rather than silently corrupting with a
  * virt-kHalfBase phys.  Direct-mapped pointers (JIT, ad-hoc) fall back to
  * `virt - kHalfBase` (identical to a tracked contiguous entry). */
 extern "C" uint64_t warp_mem_alias_phys(uint64_t virt) {
@@ -496,7 +496,7 @@ void commitVirtualMemory(void* ptr, size_t size) {
 }
 
 void uncommitVirtualMemory(void* ptr, size_t size) {
-    /* No-op: we don't decommit pages. */
+    /* No-op: pages are never decommitted. */
     (void)ptr;
     (void)size;
 }

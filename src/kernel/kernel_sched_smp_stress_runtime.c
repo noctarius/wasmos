@@ -74,12 +74,12 @@ static process_run_result_t smp_stress_worker_entry(process_t* process, uint32_t
         if (rc != IPC_OK) {
             break;
         }
-        /* Record which CPU we woke up on so the coordinator can confirm the
-         * ring really spread across processors. */
+        /* Record the CPU this worker woke up on so the coordinator can confirm
+         * the ring really spread across processors. */
         __atomic_or_fetch(&w->cpu_mask, 1u << cpu_local()->cpu_id, __ATOMIC_RELAXED);
 
         /* Forward the token to the next worker. */
-        msg.source = w->recv_ep; /* an endpoint owned by our context */
+        msg.source = w->recv_ep; /* an endpoint owned by this worker's context */
         msg.destination = IPC_ENDPOINT_NONE;
         int sc;
         while ((sc = ipc_send_from(w->context_id, w->send_ep, &msg)) == IPC_ERR_FULL) {

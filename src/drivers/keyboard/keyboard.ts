@@ -8,16 +8,15 @@
  * here to get wrong, and nothing in this file knows the machine exists.
  *
  * Every input -- an IRQ delivered as IPC, a client's subscribe request, the
- * service registry's reply to our own registration -- arrives on one endpoint
- * and is demultiplexed by EventLoop. The loop parks the process when there is
- * nothing to do, so an idle keyboard costs no CPU.
+ * service registry's reply to this driver's own registration -- arrives on one
+ * endpoint and is demultiplexed by EventLoop. The loop parks the process when
+ * there is nothing to do, so an idle keyboard costs no CPU.
  *
- * What this replaced, and why. Registration used to be a blocking ipc_recv on
- * the SERVICE endpoint: send the register request, then receive until the reply
- * turned up, discarding anything else. A client whose subscribe request landed
- * in that window was silently dropped and waited forever for a response. The
- * loop handles it instead. The polling fallback used to be a sched_yield spin,
- * which pegged a core; it is now a bounded wait driven by the pump's idle hook.
+ * Registration goes through that loop, not a blocking ipc_recv on the SERVICE
+ * endpoint: a receive-until-the-reply-arrives loop discards every unrelated
+ * message, so a client subscribe landing in the handshake window is lost and
+ * that client waits forever. The polling fallback is a bounded wait driven by
+ * the pump's idle hook for a related reason -- a sched_yield spin pegs a core.
  */
 
 import {io, std, startup} from "./wasmos";
@@ -78,9 +77,10 @@ function awaitReply(request: IpcFuture, out: Box): i32 {
 
 // -------------------------------------------------------------------- device
 
-/* Returns the scancode, or -1 for "nothing of ours to read". A refused port
+/* Returns the scancode, or -1 when no scancode is available. A refused port
  * read joins that case: without the status register there is no way to tell
- * whether a byte is even pending, let alone whether it is ours. */
+ * whether a byte is pending at all, let alone whether the keyboard produced
+ * it. */
 function readScancode(): i32 {
     const status = io.in8(KEYBOARD_STATUS_PORT);
     if (status < 0) {
@@ -241,6 +241,7 @@ export function initialize(_proc_endpoint: i32, _arg1: i32, _arg2: i32, _arg3: i
             irq_ack(KBD_IRQ);
             publishScancode(code);
         }
-        /* Anything else is not ours; ignoring it is a decision, not a drop. */
+        /* Any other message type is not part of this protocol; dropping it is
+         * deliberate. */
     }
 }

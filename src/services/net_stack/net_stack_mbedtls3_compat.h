@@ -14,7 +14,7 @@
  *  2. mbedtls_pk_parse_key() gained two trailing RNG arguments (f_rng, p_rng)
  *     in 3.0. The glue calls it with the 5-argument 2.x signature (only in the
  *     server-config path the net-stack never reaches, but it must still
- *     compile). We pre-include mbedtls/pk.h HERE so its real 7-argument
+ *     compile). mbedtls/pk.h is pre-included HERE so its real 7-argument
  *     prototype is processed once, guard-protected, before the macro below
  *     exists; the later `#include "mbedtls/pk.h"` from the glue is a no-op. The
  *     function-like macro then rewrites only the 5-argument call sites, adding

@@ -58,15 +58,15 @@ static void sched_timeout_arm(thread_t* t, uint64_t deadline_tick) {
  * unlocked here, but it can only be CLEARED (->0) or, after a wake, RE-SET to a
  * different event once the thread resumes and blocks again.  Clearing happens
  * under ev->lock (sched_event_wake_one); re-setting happens under the *new*
- * event's lock.  So we lock the event we observed and then RE-VALIDATE that the
- * thread is still waiting on exactly that event (t->wait_event == ev) before
- * touching t->event_node.  Because clearing wait_event from `ev` requires
- * ev->lock — which we now hold — no normal wake can transition the thread out
- * of `ev` while we hold the lock; and if one already did (wait_event != ev,
- * possibly already re-blocked on another event), we must NOT touch
- * t->event_node, since it may now live on a different event's wait_list that we
- * do not hold the lock for.  Skipping in that case is safe: the normal wake
- * already made the thread runnable. */
+ * event's lock.  The observed event is therefore locked first and then
+ * RE-VALIDATED: the thread must still be waiting on exactly that event
+ * (t->wait_event == ev) before t->event_node is touched.  Because clearing
+ * wait_event from `ev` requires ev->lock, no normal wake can transition the
+ * thread out of `ev` while that lock is held; and if one already did
+ * (wait_event != ev, possibly already re-blocked on another event),
+ * t->event_node must NOT be touched, since it may live on a different event's
+ * wait_list whose lock is not held here.  Skipping in that case is safe: the
+ * normal wake already made the thread runnable. */
 static void sched_timeout_fire(thread_t* t) {
     sched_event_t* ev = (sched_event_t*)__atomic_load_n(&t->wait_event, __ATOMIC_ACQUIRE);
     if (!ev) {
@@ -111,8 +111,8 @@ void sched_timeout_check(void) {
             next = d;
         }
     }
-    /* Publish the recomputed lower bound, but only if NO arm happened while we
-     * scanned.  An arm can install a deadline in a slot this scan already passed,
+    /* Publish the recomputed lower bound, but only if NO arm happened during the
+     * scan.  An arm can install a deadline in a slot this scan already passed,
      * so `next` would not include it and publishing would raise the hint above a
      * live deadline -- the fast path then skips it forever and that thread's
      * timed wait never expires.
@@ -143,26 +143,22 @@ void sched_event_wait(sched_event_t* ev, uint32_t timeout_ms) {
 
     /* Ensure the thread's event_node is only in ONE wait_list at a time.
      *
-     * The original reason for this -- a prior non-blocking ipc_recv_for having
-     * registered the thread on another event -- no longer applies: that path
-     * was removed, and ipc_recv_for now explicitly must not register a waiter.
-     * The guard stays because it is what makes a wake that does NOT unlink
-     * survivable. thread_wake_if_blocked() is exactly such a primitive: it
-     * flips BLOCKED -> READY while leaving event_node linked and wait_event
-     * set. Its only out-of-band caller today is process_unpark_pid(), which
-     * targets a freshly spawned child that has never run and therefore has an
-     * empty event_node -- so the state is not currently reachable. Add one
-     * caller that unparks a thread already blocked on an endpoint and it is,
-     * and without this unlink the re-add would splice the list around the node
-     * and silently drop every waiter queued behind it. Covered by
-     * tests/unit/test_ipc.c M4 (moving between endpoints) and M5 (re-blocking
-     * on the same one). */
+     * No current path registers a thread on a second event -- ipc_recv_for must
+     * not register a waiter at all. The guard exists because it is what makes a
+     * wake that does NOT unlink survivable. thread_wake_if_blocked() is exactly such a primitive:
+     * it flips BLOCKED -> READY while leaving event_node linked and wait_event set. Its only
+     * out-of-band caller today is process_unpark_pid(), which targets a freshly spawned child that
+     * has never run and therefore has an empty event_node -- so the state is not currently
+     * reachable. Add one caller that unparks a thread already blocked on an endpoint and it is, and
+     * without this unlink the re-add would splice the list around the node and silently drop every
+     * waiter queued behind it. Covered by tests/unit/test_ipc.c M4 (moving between endpoints) and
+     * M5 (re-blocking on the same one). */
     if (!list_head_empty(&t->event_node)) {
         list_head_del(&t->event_node);
     }
     if (t->wait_event && t->wait_event != ev) {
         /* blocking_transition may have been set by the prior registration;
-         * reset it since we're re-registering on a different event. */
+         * reset it because this is a re-registration on a different event. */
         __atomic_store_n(&t->blocking_transition, 0, __ATOMIC_RELEASE);
     }
 

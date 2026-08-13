@@ -773,7 +773,7 @@ extern int32_t wasmos_xfer_buffer_map(int32_t buffer_id) WASMOS_WASM_IMPORT("was
  * buffer_id or context.
  */
 extern int32_t wasmos_xfer_buffer_unmap(int32_t buffer_id) WASMOS_WASM_IMPORT("wasmos", "xfer_buffer_unmap");
-/* klog ring (VT I/O multiplexer, phase 4): register a BUFFER_KIND_TRANSFER
+/* klog ring (VT I/O multiplexer): register a BUFFER_KIND_TRANSFER
  * xfer-buffer the caller acquired + mapped + wasmos_ringbuf_init'd as the kernel
  * klog ring, so serial_write publishes klog text into it for the VT to drain
  * into vt-1.  Returns 0 on success, -1 on a bad/foreign buffer id.

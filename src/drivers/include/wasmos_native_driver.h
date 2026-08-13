@@ -50,8 +50,8 @@ typedef struct wasmos_driver_api {
      * through the return, because 0xFF and 0xFFFF are what an absent device
      * reads back: returning them for a refused read would make a denied
      * io.port capability indistinguishable from missing hardware. The writes
-     * report their outcome for the same reason -- a refused write used to be
-     * a silent no-op, which no caller could tell from a completed one. */
+     * report their outcome for the same reason -- a refused write reported as a
+     * silent no-op is indistinguishable from a completed one. */
     int (*io_in8)(uint16_t port, uint8_t* out);
     int (*io_in16)(uint16_t port, uint16_t* out);
     int (*io_out8)(uint16_t port, uint8_t val);
@@ -148,9 +148,9 @@ typedef struct wasmos_driver_api {
      * endpoints[0..count) (<= 8) owned by owner_context_id and returns its id.
      * ipc_select_wait blocks until any watched endpoint has a message/notify or
      * timeout_ms elapses (0 = forever), reporting the ready endpoint; drain it
-     * afterward with ipc_recv. ipc_select_destroy releases the set. Lets a
-     * native service that listens on several endpoints sleep at idle instead of
-     * yield-spinning. */
+     * afterward with ipc_recv. ipc_select_destroy releases the set. This is what
+     * lets a native service listening on several endpoints sleep at idle instead
+     * of yield-spinning. */
     int (*ipc_select_listen)(uint32_t owner_context_id, const uint32_t* endpoints, uint32_t count,
                              uint32_t* out_select_id);
     int (*ipc_select_wait)(uint32_t select_id, uint32_t owner_context_id, uint32_t* out_ready_ep,

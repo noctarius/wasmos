@@ -537,12 +537,12 @@ static inline int32_t wasmos_net_tcp_advance(wasmos_net_tcp_t* s) {
         int32_t rid = wasmos_ipc_last_field(1);
         int32_t arg0 = wasmos_ipc_last_field(2);
         if (rid != s->hs_pending_rid) {
-            /* Not our step's reply. During a handshake the only other traffic is
+            /* Not this step's reply. During a handshake the only other traffic is
              * a data-arrival doorbell (RX_NOTIFY, request_id 0) that a fast peer
              * queued right behind the accept/connect completion; its payload is
-             * already sitting in the RX ring, so acknowledging it here loses
-             * nothing and the gameplay loop still reads the ring. Keep draining
-             * toward our reply. */
+             * already sitting in the RX ring, so consuming it here loses nothing
+             * and the caller's loop still reads the ring. Keep draining toward
+             * the awaited reply. */
             continue;
         }
         /* A deferred step (CONNECT/ACCEPT) can fail with NET_IPC_ERROR; an
@@ -637,8 +637,8 @@ static inline int32_t wasmos_net_tcp_advance(wasmos_net_tcp_t* s) {
             return wasmos_net__hs_fail(s, WASMOS_NET_HS_ERR_SETUP);
         }
         /* Stepped one state; loop to consume the next reply if it is already
-         * queued, otherwise the drain returns 0 and we wait for the next
-         * doorbell. */
+         * queued, otherwise the drain returns 0 and the caller waits for the
+         * next doorbell. */
     }
     return 0;
 }
@@ -657,7 +657,7 @@ static inline int32_t wasmos_net_tcp_send(wasmos_net_tcp_t* s, const void* data,
             done += (int32_t)n;
         }
         /* Doorbell net-stack to drain the TX ring; when the ring was full the
-         * notify plus a yield lets it make room before we retry. */
+         * notify plus a yield lets it make room before the retry. */
         (void)wasmos_ipc_send(s->stack_ep, s->reply_ep, NET_IPC_TX_NOTIFY, s->request_id++,
                               (uint32_t)s->socket_id, 0, 0, 0);
         if (n == 0u) {

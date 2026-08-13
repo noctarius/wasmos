@@ -69,7 +69,7 @@ int main(int argc, char** argv) {
     /*
      * shmtgt wrote {stage=-1, target_pid, target_ep} to the sync file
      * before calling notify_ready.  The CLI shows the prompt only after
-     * notify_ready, so by the time we are here the file is ready.
+     * notify_ready, so the file is already complete when this runs.
      * A small retry covers any scheduler-ordering edge case.
      */
     int32_t target_ep = -1;

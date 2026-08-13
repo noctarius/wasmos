@@ -109,19 +109,19 @@ static WarpCallContext* ctx_find(uint32_t pid) {
 
 /* Page-aligned scratch page used by warp_phys_map for ACPI/physical memory
  * reads.  ACPI physical pages are not necessarily in the kernel direct map
- * (they are EfiACPIReclaimMemory regions), so we cannot use phys|HIGHER_HALF
- * directly.  Instead we remap this kernel BSS page (which IS in the page
- * tables) to the target physical page, copy the data, then restore. */
+ * (they are EfiACPIReclaimMemory regions), so phys|HIGHER_HALF is not usable
+ * directly.  This kernel BSS page (which IS in the page tables) is remapped to
+ * the target physical page, the data copied, then the mapping restored. */
 static uint8_t g_phys_scratch[4096] __attribute__((aligned(4096)));
 
 static inline uint8_t* warp_mem(WarpCallContext* ctx, uint32_t offset, uint32_t size) {
     /* Use the full getLinearMemoryRegion(offset, size) path with non-zero size.
      * With LINEAR_MEMORY_BOUNDS_CHECKS=1, this triggers probe() →
      * ensureLinearSize() which zero-initialises newly-committed WASM pages.
-     * When warp_mem is used to obtain a WRITE destination, the zeroing
-     * happens BEFORE our write — so our data overwrites the zeros safely.
+     * When warp_mem is used to obtain a WRITE destination, the zeroing happens
+     * BEFORE the write — so the written data overwrites the zeros safely.
      * Future probe() calls for those offsets then short-circuit (already
-     * committed) without zeroing our data. */
+     * committed) without zeroing it again. */
     if (!ctx || !ctx->module)
         return nullptr;
     return ctx->module->getLinearMemoryRegion(offset, size);
@@ -264,7 +264,7 @@ static uint32_t warp_console_write(uint32_t buf_offset, uint32_t len, void* ctx_
     if (!buf)
         return (uint32_t)WASMOS_ERR_KERNEL_BAD_POINTER;
     /* write in 127-byte chunks so klog_write always gets a null-terminated
-     * string (we temporarily null-terminate at chunk boundaries). */
+     * string (chunk boundaries are null-terminated in place, then restored). */
     preempt_disable();
     uint32_t written = 0;
     char tmp[128];
@@ -896,8 +896,8 @@ static uint32_t warp_acpi_rsdp_info(uint32_t out_off, uint32_t out_len_off, uint
     uint32_t len = g_warp_boot_info->rsdp_length;
     if (len > max_len)
         return (uint32_t)WASMOS_ERR_KERNEL_TOO_LARGE;
-    /* warp_mem uses getLinearMemoryRegion(offset, size) which triggers probe()
-     * → ensureLinearSize() BEFORE we write — so zeroing happens first. */
+    /* warp_mem uses getLinearMemoryRegion(offset, size), which triggers probe()
+     * → ensureLinearSize() BEFORE the write — so zeroing happens first. */
     uint8_t* out = warp_mem(ctx, out_off, len);
     uint32_t* out_len = reinterpret_cast<uint32_t*>(warp_mem(ctx, out_len_off, sizeof(uint32_t)));
     if (!out || !out_len)
@@ -1195,15 +1195,15 @@ static uint32_t warp_phys_map(uint32_t phys_lo, uint32_t phys_hi, uint32_t size,
      * in the kernel scheduler context) so no locking is needed. */
     /* ActiveMemoryManager::ensureLinearSize() is called by probe() when the JIT
      * first accesses an uncommitted WASM linear memory region. It zero-initialises
-     * the newly committed range before marking it usable.  If we write ACPI data
-     * to lmem BEFORE the range is committed, the JIT's first probe() for any byte
-     * in [lmem, lmem+size) will zero-initialize that range, wiping our write.
+     * the newly committed range before marking it usable.  ACPI data written to
+     * lmem BEFORE the range is committed is destroyed by the JIT's first probe()
+     * for any byte in [lmem, lmem+size), which zero-initializes that range.
      *
-     * Fix: trigger probe() NOW (before our write) by calling getLinearMemoryRegion
-     * with non-zero size.  This causes ensureLinearSize to zero the region first
-     * and mark it as usable.  Future probe() calls then short-circuit immediately
-     * (offset < usableLinMemBytes_) without any zeroing.  We then write ACPI data
-     * on top of the zeros, safe from future zeroing. */
+     * The probe is therefore triggered first, by calling getLinearMemoryRegion
+     * with non-zero size: ensureLinearSize zeroes the region and marks it usable,
+     * and later probe() calls short-circuit immediately (offset <
+     * usableLinMemBytes_) without zeroing.  The ACPI data then goes on top of the
+     * zeros, out of reach of any further zeroing. */
     ctx->module->getLinearMemoryRegion(wasm_offset + size - 1, 1);
     /* Re-fetch lmem after the probe (ensureCapacityForLinearSize inside
      * ensureLinearSize may have called syncBasedataStart, changing the base). */
@@ -1401,10 +1401,9 @@ static int warp_restore_linear_window(WarpCallContext* ctx, uint32_t offset, uin
     uint64_t virt = addr_cast(uint64_t, base);
     /* A linmem VA-slot window is NOT in the direct map: its pages are scattered,
      * so virt - KERNEL_HIGHER_HALF_BASE is not the backing frame.  The slot
-     * mapping is also the original one (the window remap replaced it), so there
-     * is nothing to restore -- re-deriving a phys here would remap foreign
-     * frames.  Route phys through warp_mem_alias_phys for the direct-mapped
-     * case, which is identical to the old arithmetic there. */
+     * window remap replaced the slot's own mapping, so there is nothing to
+     * restore -- re-deriving a phys here would remap foreign frames.  phys is
+     * routed through warp_mem_alias_phys for the direct-mapped case. */
     uint64_t pages_n = ((uint64_t)size + 0xFFFULL) / 0x1000ULL;
     if (linmem_slot_contains(virt)) {
         /* A slot-backed window's original frames are scattered and were released

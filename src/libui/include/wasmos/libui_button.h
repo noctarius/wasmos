@@ -11,7 +11,7 @@ static inline void ui_render_button(ui_context_t* ctx, const ui_component_t* c,
     ui_text_data_t* td = (ui_text_data_t*)c->component_data;
     /* Use bg_color as the button fill; darken 25 % when pressed.
      * The outer ui_fill_rect_clip (in ui_render_component_clip) already filled
-     * with bg_color, so we only need a separate fill when pressed. */
+     * with bg_color, so a separate fill is only needed when pressed. */
     if (c->pressed) {
         uint32_t col = c->bg_color;
         const uint32_t r = ((col >> 16) & 0xFFu) * 3u / 4u;

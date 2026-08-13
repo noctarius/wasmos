@@ -487,8 +487,8 @@ static int forward_request(int32_t backend_endpoint, int32_t type, int32_t req_i
  * backend reply. */
 static void send_fs_error(int32_t source, int32_t request_id, wasmos_error_code_t reason) {
     /* Retry with yield for the same reason as forward_request's STREAM relay:
-     * if the client's endpoint is temporarily full we must not drop the error
-     * notification, otherwise the client hangs forever in select_one. */
+     * dropping the error notification because the client's endpoint is
+     * transiently full hangs that client forever in select_one. */
     (void)wasmos_sys_ipc_send_retry(source, g_fs_endpoint, FS_IPC_ERROR, request_id, reason, 0, 0,
                                     0, 4096);
 }

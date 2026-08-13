@@ -149,7 +149,7 @@ static int test_free_list_exhaustion(void) {
         return __LINE__;
     if (vring_alloc_desc(&vq, 0xdead, 16, 0) != -1)
         return __LINE__; /* full */
-    /* Free one and confirm we can allocate again. */
+    /* Free one and confirm the slot becomes allocatable again. */
     vring_free_desc(&vq, 3);
     if (vring_alloc_desc(&vq, 0xbeef, 16, 0) < 0)
         return __LINE__;

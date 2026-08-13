@@ -427,7 +427,7 @@ static int32_t* client_cwd_for_source(int32_t source) {
 
 WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t ignored_arg1,
                                       int32_t ignored_arg2, int32_t ignored_arg3) {
-    /* proc.endpoint now comes from the spawn-info contract, not an entry arg. */
+    /* proc.endpoint comes from the spawn-info contract, not an entry arg. */
     proc_endpoint = wasmos_startup_proc_endpoint();
     (void)ignored_arg1;
     (void)ignored_arg2;
@@ -459,9 +459,9 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t ignored_arg
         wasmos_sys_ipc_recv_loop();
     }
     console_write("[fs-init] fs.backend registered\n");
-    /* Signal ready only after fs-manager pulls our info (first
-     * FSMGR_IPC_BACKEND_INFO_REQ), so a consumer never sees us ready before the
-     * mount is registered. */
+    /* Signal ready only after fs-manager pulls the backend info (first
+     * FSMGR_IPC_BACKEND_INFO_REQ), so no consumer observes this driver ready
+     * before the mount is registered. */
     for (;;) {
         if (wasmos_ipc_select_one(g_fs_endpoint) < 0) {
             continue;

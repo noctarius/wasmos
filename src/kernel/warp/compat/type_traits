@@ -324,7 +324,7 @@ template <typename T, typename... Args>
 struct is_constructible : integral_constant<bool, __is_constructible(T, Args...)> {};
 
 // is_convertible<From,To>: true if To can be constructed from From (covers
-// lambdas → std::function<R(Args...)> since our std::function takes any F).
+// lambdas → std::function<R(Args...)>, since this std::function takes any F).
 template <typename From, typename To>
 struct is_convertible : integral_constant<bool, __is_constructible(To, From)> {};
 

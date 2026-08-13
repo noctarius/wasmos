@@ -41,7 +41,7 @@
  * publisher overwriting a descriptor the receiver has not read yet. */
 #define PCI_MAX_PUBLISHED_DEVICES 64u
 
-/* Config-space registers we touch beyond enumeration. */
+/* Config-space registers accessed beyond enumeration. */
 #define PCI_REG_COMMAND 0x04u
 #define PCI_REG_CAP_PTR 0x34u
 #define PCI_REG_BAR0 0x10u
@@ -84,8 +84,8 @@ typedef struct {
 static msi_binding_t g_msi_bindings[MSI_BINDING_MAX];
 
 /* Log one function, including where its registers live and which interrupt
- * capabilities it has -- the facts a driver author needs and could previously
- * only get by reading config space, which no driver is allowed to do. */
+ * capabilities it has -- the facts a driver author needs and cannot obtain
+ * otherwise, since no driver is allowed to read config space. */
 static void log_desc(const wasmos_pci_device_desc_t* d) {
     if (!d) {
         return;
@@ -451,10 +451,10 @@ static void pci_load_console_framebuffer(void) {
 
 /* True when this memory BAR plausibly backs the live console, whose decode must
  * stay on. The test has to be a heuristic because the BAR's length is exactly
- * what the probe would tell us -- so it asks whether the framebuffer starts at or
+ * what the probe would report -- so it asks whether the framebuffer starts at or
  * after this base, within a window larger than any framebuffer BAR. It errs
- * toward skipping: a false positive costs one unknown size (what we had before),
- * a false negative would drop console writes. */
+ * toward skipping: a false positive costs one unknown BAR size, a false negative
+ * drops console writes. */
 static int pci_bar_is_console(uint64_t base) {
     if (g_console_fb_base == 0u || base == 0u) {
         return 0;

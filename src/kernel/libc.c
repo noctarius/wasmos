@@ -429,7 +429,7 @@ int vsnprintf(char* buf, size_t size, const char* fmt, va_list ap) {
             continue;
         }
 
-        /* Flags: only '0' for now. */
+        /* Flags: '0' (zero-pad) is the only one recognised. */
         char pad = ' ';
         if (*p == '0') {
             pad = '0';

@@ -12,8 +12,8 @@
 
 /*
  * The chardev server is intentionally tiny. It models a single-byte device-like
- * service over IPC and is mostly used to exercise request/reply semantics,
- * blocking receive behavior, and scheduler fairness under active IPC traffic.
+ * service over IPC and exists to exercise request/reply semantics, blocking
+ * receive behavior, and scheduler fairness under active IPC traffic.
  */
 
 static uint8_t g_last_byte;

@@ -651,6 +651,13 @@ int wasm_driver_start(wasm_driver_t* driver, const wasm_driver_manifest_t* manif
 #ifdef WASMOS_WASM_RUNTIME_WARP
         vb::Span<vb::NativeSymbol const> syms = warp_wasmos_symbols_ring3();
 #else
+        /* FIXME(warp-jit-symbols): warp_wasmos_symbols() is STATIC_LINK, and
+         * initFromCompiledBinary throws Wrong_type on any STATIC symbol — this
+         * branch would fail every JIT module init.  Unreachable today (this file
+         * is only compiled with WASMOS_WASM_RUNTIME_WARP defined, see
+         * src/kernel/CMakeLists.txt), so it is left as-is rather than guessed
+         * at; a revived non-ring-3 build must use a DYNAMIC_LINK table here
+         * (warp_wasmos_symbols_for_aot_load()). */
         vb::Span<vb::NativeSymbol const> syms = warp_wasmos_symbols();
 #endif
         vb::WasmModule::CompileResult res = mod->compile(bc, syms);

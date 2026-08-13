@@ -327,8 +327,7 @@ static void* warp_krealloc(void* const ptr, size_t const size) {
 #if WASMOS_TRACE
         klog_printf("[trace-linmem] hint claim pid=%u size=%llx reserve=%llx oldpages=%llx\n",
                     (unsigned)pid, (unsigned long long)size,
-                    (unsigned long long)g_linmem_reserve_bytes,
-                    (unsigned long long)old_hdr->pages);
+                    (unsigned long long)g_linmem_reserve_bytes, (unsigned long long)old_hdr->pages);
 #endif
         g_linmem_reserve_bytes = 0;
         void* moved = warp_linmem_move(pid, ptr, old_bytes, size);

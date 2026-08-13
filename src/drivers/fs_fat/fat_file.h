@@ -9,8 +9,10 @@
  * xfer-buffer read/write calls; a zero-copy borrow passthrough is a later
  * milestone and is NOT implemented here.
  *
- * Error reporting: input validation and error paths FAIL with a granular
- * WASMOS_ERR_FS_* via FAT_CO_FAIL, never a blanket -1. */
+ * Error reporting: every path whose result reaches a client FAILs with a
+ * granular WASMOS_ERR_FS_* via FAT_CO_FAIL, never a blanket -1. The open-file
+ * table helpers below (alloc/access_mode/set_offset) return -1 on bad
+ * arguments; those values stay inside the driver and never become a reply. */
 #ifndef FS_FAT_FAT_FILE_H
 #define FS_FAT_FAT_FILE_H
 

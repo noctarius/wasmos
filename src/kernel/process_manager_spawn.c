@@ -29,8 +29,10 @@
  * instead of competing in the WASM band; the VT input multiplexer in particular
  * must run to process serial input the driver hands it, or input stalls during a
  * spawn storm.  Boosting a band above the apps is only safe while every service
- * in it blocks at idle -- a service that spins in its main loop starves the apps
- * outright from SCHED_PRIO_SERVICE.  Plain apps keep the WASM band. */
+ * in it blocks at idle: the anti-starvation streak in cpu_sched_pick_next keeps
+ * a spinning service from locking apps out entirely, but it concedes only one
+ * slot in SCHED_ANTISTARVATION_STREAK, so the apps still crawl.  Plain apps keep
+ * the WASM band. */
 static uint8_t pm_sched_prio_for_flags(uint32_t flags) {
     if (flags & WASMOS_APP_FLAG_DRIVER) {
         return (uint8_t)SCHED_PRIO_DRIVER;

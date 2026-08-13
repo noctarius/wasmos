@@ -70,6 +70,40 @@ This repository uses Codex CLI to assist with development. Follow these conventi
 - Avoid unnecessary abstractions and macros.
 - Prefer clarity over cleverness.
 
+## Comments
+- Write comments as reference documentation: state what the code is, what it
+  guarantees, and which invariants or constraints a reader must respect. Present
+  tense, declarative, no narrator.
+- A comment describes the code as it stands now. It is not a diary, a changelog,
+  or a record of how the code got here — git history holds that.
+- Never write conversational or meta-conversational comments. Forbidden classes:
+  - Change narration: `// now uses X instead of Y`, `// fixed the off-by-one`,
+    `// this used to call foo()`, `// added in the ring3 migration`.
+  - Address to a reader or to the agent's own reasoning: `// note that we ...`,
+    `// as discussed`, `// let's ...`, `// I chose ...`, `// for clarity we ...`.
+  - Review/self-assessment chatter: `// this is a bit hacky but works`,
+    `// probably fine`, `// leaving this simple for now`.
+  - Restating the statement below it: `// increment the counter` over `count++`.
+- Explain the non-obvious: hardware/spec constraints, ordering requirements,
+  ownership and lifetime rules, units, locking, error semantics. Cite the
+  authority when one exists (spec section, ABI IDL in `abi/`, doc under `docs/`).
+- Deferred work is a `TODO:` or `FIXME:` at the exact source location, phrased as
+  the missing behavior and its consequence, not as commentary about the change
+  being made.
+- Rewrite comments that no longer match the code instead of leaving them beside
+  it; a stale comment is a defect.
+
+Do:
+```c
+/* Guest linear memory is reserved at a fixed VA and never relocated; only the
+ * committed tail grows. Callers may cache pointers across a grow. */
+```
+Do not:
+```c
+/* We now reserve the VA up front instead of realloc'ing, which fixes the
+ * dangling-pointer bug we hit earlier. Note that this is a bit subtle! */
+```
+
 ## Boot Flow Reminder
 - `BOOTX64.EFI` loads `kernel.elf` from the ESP, collects memory map, exits boot services, jumps to `_start`.
 - `_start` prepares stack/BSS and calls `kmain(boot_info_t *)`.

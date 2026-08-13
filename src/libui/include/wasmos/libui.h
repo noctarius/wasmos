@@ -118,7 +118,8 @@ typedef struct {
     void (*destroy_data)(ui_component_t* c);
 } ui_component_ops_t;
 
-/* Populated after all component headers are included. */
+/* Indexed by ui_component_type_t; filled by ui_init_component_ops(), which is
+ * defined once the component headers below have been included. */
 static ui_component_ops_t ui_component_ops[UI_COMPONENT_MENU_ITEM + 1];
 
 /* Prototype so it can be called from ui_init / ui_menu_bar_init (defined after the component
@@ -183,9 +184,9 @@ typedef struct {
 
 typedef struct {
     ui_text_data_t text;
-    /* Children are tracked via the component tree (first_child_id / next_sibling_id).
-     * The flat ui_list_data_t list has been removed; leaves carry on_click callbacks
-     * and non-leaves open their own sub-popup on hover / give it focus on click. */
+    /* Menu entries are children in the component tree (first_child_id /
+     * next_sibling_id), not a flat list: a leaf carries an on_click callback,
+     * a non-leaf opens its own sub-popup on hover and takes focus on click. */
     int32_t hovered_child_id; /* component id of the child currently highlighted, or 0 */
     int32_t dropdown_open;
     /* popup window — managed by ui_menu_item_sync_popup (libui_menu_item.h) */
@@ -669,8 +670,12 @@ static inline int32_t ui_component_set_text_owned(ui_component_t* c, const char*
     if (need <= 0)
         return -1;
 
-    /* component_data is always pre-allocated by ui_component_alloc; text is the first
-     * field for all text-bearing types so the cast is always valid at offset 0. */
+    /* Valid only for the text-bearing types, which all place ui_text_data_t at
+     * offset 0 of their pre-allocated component_data: LABEL, BUTTON, TEXT_INPUT,
+     * CHECKBOX, DROPDOWN, MENU_ITEM.
+     * FIXME: no type check happens here, so setting text on a LIST_VIEW,
+     * TREE_VIEW, SCROLL_VIEW or MENU_BAR reinterprets that component's data as
+     * a string record and corrupts it. */
     ui_text_data_t* td = (ui_text_data_t*)c->component_data;
     if (!td)
         return -1;
@@ -920,9 +925,9 @@ static inline int32_t ui_component_list_append(ui_context_t* ctx, int32_t id, co
     if (!c || !item || !c->component_data)
         return -1;
 
-    /* For MENU_ITEM: create a child MENU_ITEM component and append it to the tree.
-     * Returns the child's component id (cast to int32_t) instead of a flat list index.
-     * Callers that need a callback can set child->on_click after this call. */
+    /* MENU_ITEM has no flat list: the entry becomes a child component, and the
+     * return value is that child's component id rather than a list index.
+     * Callers that need a callback set the child's on_click after this call. */
     if (c->type == UI_COMPONENT_MENU_ITEM) {
         const int32_t child_id = ui_component_alloc(ctx, UI_COMPONENT_MENU_ITEM);
         if (child_id < 0)
@@ -1336,8 +1341,6 @@ static inline int32_t ui_point_in_bounds(int32_t x, int32_t y, ui_rect_t r) {
     return x >= r.x && y >= r.y && x < (r.x + r.w) && y < (r.y + r.h);
 }
 
-/* Popup bounds moved to component headers (dropdown + menu_item). */
-
 /* Layout prototype so component headers (inserted below) can call back for child recursion in
  * containers. */
 static inline void ui_layout_vertical(ui_context_t* ctx, int32_t parent_id);
@@ -1348,8 +1351,8 @@ static inline void ui_render_component_clip(ui_context_t* ctx, int32_t id, ui_re
                                             int32_t offset_y);
 static inline void ui_render_component(ui_context_t* ctx, int32_t id);
 
-/* Component headers (render + now layout too) are included here so their per-type functions
- * are visible to the layout and render dispatchers below. */
+/* Component headers are included here, after the core helpers they call and
+ * before the layout/render dispatchers that call them. */
 #include "wasmos/libui_label.h"
 #include "wasmos/libui_row.h"
 #include "wasmos/libui_button.h"
@@ -1362,32 +1365,26 @@ static inline void ui_render_component(ui_context_t* ctx, int32_t id);
 #include "wasmos/libui_menu_bar.h"
 #include "wasmos/libui_menu_item.h"
 
-/* Register vtable implementations owned by the component headers.
- * This replaces the previous giant type switches with vtable dispatch. */
+/* Register the vtable implementations owned by the component headers. Called
+ * from ui_init / ui_menu_bar_init before any component is created; an unset
+ * entry means the core's generic behaviour applies for that component kind. */
 static inline void ui_init_component_ops(void) {
-    /* zero the table */
     memset(ui_component_ops, 0, sizeof(ui_component_ops));
 
-    /* label */
     ui_component_ops[UI_COMPONENT_LABEL].render = ui_render_label;
 
-    /* generic horizontal row */
     ui_component_ops[UI_COMPONENT_ROW].layout = ui_layout_row;
 
-    /* button */
     ui_component_ops[UI_COMPONENT_BUTTON].render = ui_render_button;
     ui_component_ops[UI_COMPONENT_BUTTON].handle_pointer_release = ui_button_handle_pointer_release;
 
-    /* checkbox */
     ui_component_ops[UI_COMPONENT_CHECKBOX].render = ui_render_checkbox;
     ui_component_ops[UI_COMPONENT_CHECKBOX].handle_pointer_release =
         ui_checkbox_handle_pointer_release;
 
-    /* text input */
     ui_component_ops[UI_COMPONENT_TEXT_INPUT].render = ui_render_text_input;
     ui_component_ops[UI_COMPONENT_TEXT_INPUT].handle_key = ui_text_input_handle_key;
 
-    /* list view */
     ui_component_ops[UI_COMPONENT_LIST_VIEW].render = ui_render_list_view;
     ui_component_ops[UI_COMPONENT_LIST_VIEW].layout = ui_layout_list_view;
     ui_component_ops[UI_COMPONENT_LIST_VIEW].handle_pointer_press =
@@ -1401,7 +1398,6 @@ static inline void ui_init_component_ops(void) {
     ui_component_ops[UI_COMPONENT_TREE_VIEW].handle_scroll_drag = ui_tree_view_handle_scroll_drag;
     ui_component_ops[UI_COMPONENT_TREE_VIEW].destroy_data = ui_tree_view_destroy_data;
 
-    /* dropdown */
     ui_component_ops[UI_COMPONENT_DROPDOWN].render = ui_render_dropdown;
     ui_component_ops[UI_COMPONENT_DROPDOWN].layout = ui_layout_dropdown;
     ui_component_ops[UI_COMPONENT_DROPDOWN].handle_pointer_press = ui_dropdown_handle_pointer_press;
@@ -1410,17 +1406,14 @@ static inline void ui_init_component_ops(void) {
     ui_component_ops[UI_COMPONENT_DROPDOWN].destroy_data =
         NULL; /* data freed via generic or explicit close */
 
-    /* scroll view */
     ui_component_ops[UI_COMPONENT_SCROLL_VIEW].render = ui_render_scroll_view;
     ui_component_ops[UI_COMPONENT_SCROLL_VIEW].layout = ui_layout_scroll_view;
     ui_component_ops[UI_COMPONENT_SCROLL_VIEW].handle_scroll_drag =
         ui_scroll_view_handle_scroll_drag;
 
-    /* menu bar */
     ui_component_ops[UI_COMPONENT_MENU_BAR].render = ui_render_menu_bar;
     ui_component_ops[UI_COMPONENT_MENU_BAR].layout = ui_layout_menu_bar;
 
-    /* menu item */
     ui_component_ops[UI_COMPONENT_MENU_ITEM].render = ui_render_menu_item;
     ui_component_ops[UI_COMPONENT_MENU_ITEM].handle_pointer_release =
         NULL; /* handled via the global ui_menu_item_handle_pointer_release */
@@ -1483,13 +1476,16 @@ static inline void ui_render_component_clip(ui_context_t* ctx, int32_t id, ui_re
         ops->render(ctx, c, draw_bounds, clip, offset_y);
     }
 
-    /* Some components (containers with popups/children) return early from their
-     * render after painting children themselves. Everything else gets a border
-     * and a recursive descent here. */
+    /* These kinds are self-contained painters: they stroke their own border
+     * where they want one, and they own what is inside them — rows and a
+     * scrollbar (list/tree), a scrolled child pass (scroll view), bar items
+     * (menu bar), or a popup drawn into a separate window (dropdown, menu
+     * item). Adding the generic border and child descent below would
+     * double-stroke them, and for a menu item would paint its popup rows into
+     * this window. Everything else gets both here. */
     if (c->type == UI_COMPONENT_LIST_VIEW || c->type == UI_COMPONENT_TREE_VIEW ||
         c->type == UI_COMPONENT_DROPDOWN || c->type == UI_COMPONENT_SCROLL_VIEW ||
         c->type == UI_COMPONENT_MENU_BAR || c->type == UI_COMPONENT_MENU_ITEM) {
-        /* they handled their own children / no generic border */
         return;
     }
 
@@ -1597,8 +1593,9 @@ static inline int32_t ui_find_clickable_at(ui_context_t* ctx, int32_t id, int32_
     const ui_component_ops_t* ops = &ui_component_ops[c->type];
     if (ops->popup_contains && ops->popup_contains(ctx, c, x, y))
         return c->id;
-    /* also allow clicking the bar item itself for dropdown/menu even without explicit clickable
-     * flag in some cases */
+    /* A DROPDOWN or MENU_ITEM answers to a press on its own bounds whether or
+     * not the application marked it clickable: opening the popup is intrinsic
+     * behaviour, not an application-installed action. */
     if ((c->type == UI_COMPONENT_DROPDOWN || c->type == UI_COMPONENT_MENU_ITEM) &&
         ui_point_in_bounds(x, y, c->bounds))
         return c->id;
@@ -1609,8 +1606,9 @@ static inline int32_t ui_find_clickable_at(ui_context_t* ctx, int32_t id, int32_
 static inline int32_t ui_loop_handle_ipc(ui_context_t* ctx, const wasmos_ipc_message_t* msg) {
     if (!ctx || !msg)
         return UI_MSG_ERROR;
-    /* Events now arrive as server-pushed GFX_IPC_PUSH_EVENT (arg1=event_type,
-     * arg2=window_id, arg3=payload) rather than as POLL replies. */
+    /* Events arrive as compositor-pushed GFX_IPC_PUSH_EVENT: arg1=event_type,
+     * arg2=window_id, arg3=packed payload (decoded by the ui_ptr_evt_* /
+     * ui_u16_* helpers per event type). */
     if (msg->type != GFX_IPC_PUSH_EVENT)
         return UI_MSG_IGNORED;
     if (msg->arg1 == GFX_EVENT_NONE)
@@ -1903,9 +1901,10 @@ static inline int32_t ui_loop_handle_ipc(ui_context_t* ctx, const wasmos_ipc_mes
 }
 
 /* Block until the compositor pushes an event on the event endpoint, then
- * dispatch it. This replaces the old poll: the thread sleeps in the kernel
- * until a real event arrives, so an idle UI does not spin the scheduler.
- * Returns the ui_loop_handle_ipc result, or UI_MSG_IGNORED on a spurious wake. */
+ * dispatch it. The thread sleeps in the kernel until a real event arrives, so
+ * an idle UI does not spin the scheduler. Returns the ui_loop_handle_ipc
+ * result, or UI_MSG_IGNORED when the wait itself failed (invalid endpoint or
+ * receive error; the hostcall already retries spurious wakes internally). */
 static inline int32_t ui_wait_and_handle(ui_context_t* ctx) {
     wasmos_ipc_message_t msg;
     if (!ctx)
@@ -1916,6 +1915,11 @@ static inline int32_t ui_wait_and_handle(ui_context_t* ctx) {
     return ui_loop_handle_ipc(ctx, &msg);
 }
 
+/* Repaint if the tree is dirty: sync menu popup windows, lay out, render into
+ * the shared buffer, flush it, and present. A no-op returning 0 while nothing
+ * is dirty. Returns -1 when a step fails; a present refused with GFX_INVALID or
+ * GFX_BUSY is not a failure — the window resized underneath this frame and the
+ * pending RESIZE event will drive the next one. */
 static inline int32_t ui_loop_drain(ui_context_t* ctx) {
     int32_t status = 0;
     if (!ctx)

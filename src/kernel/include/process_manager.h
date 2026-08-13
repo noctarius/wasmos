@@ -1,8 +1,8 @@
 /* process_manager.h - The WASMOS process manager (PM) public API.
  *
- * The PM is a kernel process (PID 1-equivalent) that owns WASMOS-APP
- * lifecycle: spawn, kill, wait, and service registration. Transfer-buffer
- * APIs are provided separately via xfer_buffer.h. */
+ * The PM is a kernel process spawned by init during bring-up; it owns
+ * WASMOS-APP lifecycle -- spawn, kill, wait -- and the service registry.
+ * Transfer-buffer APIs are provided separately via xfer_buffer.h. */
 #ifndef WASMOS_PROCESS_MANAGER_H
 #define WASMOS_PROCESS_MANAGER_H
 

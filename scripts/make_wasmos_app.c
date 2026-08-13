@@ -14,8 +14,10 @@
 
 #define MEM_HINT_STACK 1u
 #define MEM_HINT_HEAP 2u
-/* Mirrors src/kernel/include/wasmos_app.h; the packer cannot include kernel
- * headers, so these two must be changed together. */
+/* Region kinds mirror src/drivers/include/wasmos_driver_abi.h and the bound
+ * mirrors src/kernel/include/wasmos_app.h. The packer builds for the host and
+ * cannot include either, so a change on those sides has to be repeated here or
+ * the kernel parser rejects the package. */
 #define WASMOS_APP_REGION_IO 0u
 #define WASMOS_APP_REGION_BAR 1u
 #define WASMOS_APP_MAX_REGIONS 4u
@@ -23,6 +25,21 @@
 #define MATCH_ANY_U8 0xFFu
 #define MATCH_ANY_U16 0xFFFFu
 
+/* Fixed head of a .wap package. It must stay byte-identical to
+ * wasmos_app_header_v6_t in src/kernel/wasmos_app.c, which rejects the package
+ * unless header_size equals its own sizeof.
+ *
+ * A package is this header followed by variable-length sections in exactly the
+ * order wasmos_app_parse() walks them:
+ *   header, name, entry, req_ep_count x (wasmos_req_endpoint_t + name bytes),
+ *   cap_count x (wasmos_cap_request_t + name bytes),
+ *   entry_arg_binding_count x (wasmos_entry_arg_binding_t + name bytes),
+ *   driver_match_count x wasmos_driver_match_t,
+ *   region_count x wasmos_region_entry_t,
+ *   mem_hint_count x wasmos_mem_hint_t (stack then heap),
+ *   wasm_size raw payload bytes, then compiled_size WARP AOT bytes if non-zero.
+ * Nothing is padded or aligned between sections; the parser advances by the
+ * counts in this header alone. */
 typedef struct __attribute__((packed)) {
     char magic[8];
     uint16_t version;
@@ -44,9 +61,9 @@ typedef struct __attribute__((packed)) {
     uint16_t driver_io_port_min;
     uint16_t driver_io_port_max;
     uint32_t driver_match_count;
-    uint32_t compiled_size; /* v4: size of WARP AOT binary appended after WASM; 0 if absent */
+    uint32_t compiled_size; /* size of the WARP AOT binary appended after WASM; 0 if absent */
     char subsystem_tag[SUBSYSTEM_TAG_LEN];
-    uint32_t region_count; /* v6: declared register windows, written after the matches */
+    uint32_t region_count; /* declared register windows, written after the matches */
 } wasmos_app_header_t;
 
 typedef struct __attribute__((packed)) {
@@ -1002,8 +1019,13 @@ int main(int argc, char** argv) {
     hdr.driver_io_port_min = driver_io_port_min;
     hdr.driver_io_port_max = driver_io_port_max;
     hdr.driver_match_count = driver_match_count;
-    hdr.compiled_size = 0; /* legacy path: no AOT binary; use --manifest --compiled for AOT */
+    hdr.compiled_size = 0; /* positional path emits no AOT binary; use --manifest --compiled */
     subsystem_tag_copy(hdr.subsystem_tag, (flags & (1u << 4)) != 0 ? "NATIVE" : "WASM");
+    /* FIXME: hdr.region_count is left uninitialised on this path, so a stack
+     * garbage value is written into the package. wasmos_app_parse() rejects the
+     * package when it exceeds WASMOS_APP_MAX_REGIONS and otherwise consumes that
+     * many bytes as region entries, desynchronising every following section.
+     * Only the --manifest path above assigns it. */
 
     wasmos_mem_hint_t stack_hint = {MEM_HINT_STACK, stack_pages, 0};
     wasmos_mem_hint_t heap_hint = {MEM_HINT_HEAP, heap_pages, 0};

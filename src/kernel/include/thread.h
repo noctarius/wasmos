@@ -77,9 +77,10 @@ typedef struct thread {
     /* Run-queue membership.  on_rq is the single atomic fact "this thread's
      * sched_node is linked into some ready_list", claimed by an exchange BEFORE
      * any queue lock is taken and released only AFTER the unlink completes under
-     * the owning queue's lock.  Because per-CPU queues have per-CPU locks, the
-     * old "is sched_node self-linked?" test read the node under a *different*
-     * lock than the one protecting it; the claim removes that cross-lock read.
+     * the owning queue's lock.  Because per-CPU queues have per-CPU locks,
+     * inferring membership from "is sched_node self-linked?" would read the
+     * node under a *different* lock than the one protecting it; the claim
+     * removes that cross-lock read.
      * rq names the owning queue so the reap path can unlink without knowing
      * which CPU last enqueued the thread.  Valid only while on_rq is 1. */
     uint8_t on_rq;
@@ -98,7 +99,8 @@ typedef struct thread {
     sched_event_t* wait_event; /* event this thread is blocked on */
     uint32_t pend_state;       /* SCHED_PEND_* set by waker */
     uint64_t pend_data;        /* value from waker (futex retcode, etc.) */
-    /* Thread-join event (replaces join_waiter_tid for new scheduler). */
+    /* Waiters block here until this thread exits. join_waiter_tid above still
+     * records WHO is joining, so that a second joiner can be refused. */
     sched_event_t join_event;
 } thread_t;
 
@@ -140,12 +142,23 @@ thread_t* thread_find_main_for_pid(uint32_t owner_pid);
 int thread_owner_tid_at(uint32_t owner_pid, uint32_t index, uint32_t* out_tid);
 void thread_mark_owner_exited(uint32_t owner_pid, int32_t exit_status);
 void thread_reap_owner(uint32_t owner_pid);
+/* Set state and block_reason under the thread-table lock. Illegal edges per the
+ * thread state machine -- notably any attempt to leave ZOMBIE, which would
+ * resurrect a thread the reaper is tearing down -- are silently dropped, as is
+ * an unknown tid, so the caller learns nothing about what happened. Use
+ * thread_transit instead wherever the outcome decides a run-queue side effect. */
 void thread_set_state(uint32_t tid, thread_state_t state, thread_block_reason_t reason);
-/* The SOLE sanctioned writer of thread->state: attempt an atomic (CAS) transition
- * `from`->`to`.  Returns 1 iff the state was exactly `from` and is now `to`; 0 if
- * another CPU changed it first or the edge is illegal per the thread state machine.
- * Callers set block_reason and perform run-queue side-effects only on success. */
+
+/* Attempt an atomic (CAS) transition `from`->`to`, taking no lock. Returns 1 iff
+ * the state was exactly `from` and is now `to`; 0 if another CPU changed it
+ * first or the edge is illegal per the thread state machine. Writes only
+ * ->state: callers set block_reason and perform run-queue side effects
+ * themselves, and only on success. */
 int thread_transit(thread_t* t, thread_state_t from, thread_state_t to);
+
+/* Atomically move a thread BLOCKED->READY under the table lock. Returns 1 when
+ * the state changed, 0 if the thread was not BLOCKED or not found. Does NOT
+ * enqueue: the caller must do that when this returns 1. */
 int thread_wake_if_blocked(uint32_t tid);
 void thread_set_exit_status(uint32_t tid, int32_t exit_status);
 void thread_reap(uint32_t tid);

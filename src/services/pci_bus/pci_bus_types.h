@@ -1,4 +1,7 @@
-/* pci_bus_types.h - PCI enumeration record and I/O port constants */
+/* pci_bus_types.h - PCI configuration-mechanism-1 I/O ports for the pci-bus
+ * service.  Enumerated functions are published as wasmos_pci_device_desc_t
+ * (wasmos_driver_abi.h); pci_device_record_t below is not referenced by any
+ * translation unit. */
 #ifndef WASMOS_PCI_BUS_TYPES_H
 #define WASMOS_PCI_BUS_TYPES_H
 

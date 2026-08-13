@@ -8,8 +8,10 @@
 
 void irq_init(void) {
     x86_irq_init();
-    /* The MSI vector table shares this init point; its IDT gates were installed
-     * alongside the IRQ ones in x86_cpu_init. */
+    /* The MSI vector table shares this init point. Its IDT gates are installed
+     * alongside the IRQ ones in x86_cpu_init, and only in the LAPIC modes —
+     * without a LAPIC there is nothing to receive a device's message write, so
+     * msi_alloc refuses. */
     msi_init();
 }
 void irq_late_init(const boot_info_t* boot_info) {

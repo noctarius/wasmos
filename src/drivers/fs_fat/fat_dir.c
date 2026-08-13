@@ -1,11 +1,10 @@
-/* fat_dir.c - directory scan + path resolution (read side).  See fat_dir.h.
+/* fat_dir.c - directory scan, path resolution, mutation and navigation.  See
+ * fat_dir.h.
  *
- * Ported from the blocking driver's fat_find_in_dir / fat_resolve_path /
- * fat_resolve_parent_dir and their pure path helpers, made resumable on the
- * fat_co.h coroutine pattern (loop cursors live in the context; C locals carry
- * no initializers because the resume switch jumps past their declarations).
- * fat_sync_block_read(lba) becomes FAT_CO_READ; file-scope globals become
- * fields of the immutable fat_mount_t. */
+ * Every I/O-bearing function is a fat_co.h coroutine: loop cursors live in the
+ * context, and C locals carry no initializers because the resume switch jumps
+ * past their declarations.  Volume geometry is read from the immutable
+ * fat_mount_t; nothing here holds file-scope mutable state. */
 #include "fat_dir.h"
 #include "fat_co.h"
 #include "fat_alloc.h"
@@ -23,8 +22,8 @@ int vfs_translate_path(const char* in, char* out, uint32_t out_len, uint8_t* out
         return -1;
     }
     *out_is_init = 0;
-    /* Absolute and relative paths take the same passthrough copy; there is no
-     * separate leading-'/' case. */
+    /* Straight copy, leading '/' included: whether a path is absolute is decided
+     * downstream by the resolvers, not by this translation. */
     i = 0;
     while (in[i] && i + 1 < out_len) {
         out[i] = in[i];
@@ -197,6 +196,9 @@ fat_r_t fat_resolve_path(fat_resolve_ctx_t* r, fat_block_t* blk, const fat_mount
             continue;
         }
         if (r->component[0] == '.' && r->component[1] == '.' && r->component[2] == '\0') {
+            /* TODO: '..' jumps to the root region instead of the true parent —
+             * the on-disk '..' entry is never consulted, so "a/b/../c" resolves
+             * against the root rather than against "a". */
             r->cur_root = 1;
             r->cur_cluster = 0;
             r->cur_lba = mnt->root_dir_lba;
@@ -332,13 +334,9 @@ fat_r_t fat_resolve_parent_dir(fat_resolve_parent_ctx_t* p, fat_block_t* blk,
 
 /* --- Directory mutation (create / delete / unlink / rmdir). --- */
 
-/* Pure open-file-table check.  The reactor's open-file table lives in fat_file
- * and is not reachable from here, so the table is passed in explicitly.
- *
- * TODO(open-file-table): once fat_file exposes the reactor's open-file table,
- * wire fat_unlink/rmdir to pass &table[0], FAT_MAX_OPEN_FILES here.  Until then
- * the sole caller (fat_remove_path) passes (NULL, 0) and this returns 0, i.e.
- * "not open" — deleting a currently-open file is NOT yet guarded. */
+/* Pure open-file-table check.  The reactor owns the open-file table (fat_file.h),
+ * so it is passed in explicitly rather than reached from here; the unlink path
+ * forwards the reactor's pool and a NULL table disables the guard. */
 int fat_entry_is_open(const fat_dir_entry_info_t* entry, const fat_open_file_t* files,
                       uint32_t count) {
     uint32_t i;
@@ -1023,7 +1021,8 @@ fat_r_t fat_op_readdir(fat_op_ctx_t* op, fat_block_t* blk, const fat_mount_t* mn
         FAT_CO_FAIL(s, blk, WASMOS_ERR_FS_NOT_FOUND);
     }
 
-    /* Latch the region kind so a concurrent CHDIR cannot shift it mid-scan. */
+    /* Latch the region being listed: the scan reads these, not mnt, so a CHDIR
+     * that lands between this op and the next cannot shift the listing. */
     s->cur_root = mnt->cwd_root ? 1u : 0u;
     if (s->cur_root) {
         s->base_lba = mnt->root_dir_lba;
@@ -1127,9 +1126,10 @@ fat_r_t fat_op_readdir(fat_op_ctx_t* op, fat_block_t* blk, const fat_mount_t* mn
 }
 
 /* Advance the CHDIR walk to the next real component in c->path (skipping '/'
- * runs and '.'; '..' resets the running target to the root region).  Returns 1
- * with c->name set, 0 at end of path, -1 on a too-long component.  Pure string
- * work, iterative so it needs no recursion / stack. */
+ * runs and '.'; '..' resets the running target to the root region rather than
+ * hopping to the true parent, matching fat_resolve_path).  Returns 1 with
+ * c->name set, 0 at end of path, -1 on a too-long component.  Pure string work,
+ * iterative so it needs no recursion / stack. */
 static int fat_chdir_next_component(fat_chdir_ctx_t* c) {
     for (;;) {
         uint32_t len;

@@ -32,6 +32,8 @@ typedef enum {
 enum {
     WASMOS_WASM_TASK_COMPLETE = 0,
     WASMOS_WASM_TASK_YIELDED = 1,
+    /* Deliberately shares TASK_YIELDED's value: a resume function may return
+     * wasmos_future_await()'s result straight to the runtime. */
     WASMOS_WASM_AWAIT_PENDING = 1,
     WASMOS_FUTURE_CHAIN_NEXT = 2,
 };
@@ -78,6 +80,9 @@ struct wasmos_future_continuation {
     wasmos_future_success_fn_t on_success;
     wasmos_future_error_fn_t on_error;
     void* user;
+    /* Owning group for a race/all member. wasmos_future_then_flat() reuses this
+     * slot to carry the adoption continuation instead, so it is only a
+     * wasmos_future_group_t* when the continuation was registered by a group. */
     wasmos_future_group_t* group;
     size_t group_index;
     wasmos_future_t child;
@@ -122,8 +127,11 @@ int wasmos_wasm_coroutine_join(wasmos_wasm_coroutine_t* coroutine, int32_t* out_
 
 void wasmos_future_init(wasmos_future_t* future, wasmos_promise_t* promise);
 bool wasmos_future_poll(const wasmos_future_t* future, int32_t* out_status, uintptr_t* out_value);
-/* Returns 0/negative for a settled future, or WASMOS_WASM_AWAIT_PENDING after
- * parking the current stackless task. The caller must return TASK_YIELDED. */
+/* Returns the settled future's status (0 or negative), or
+ * WASMOS_WASM_AWAIT_PENDING after parking the current stackless task, in which
+ * case the caller must return TASK_YIELDED immediately without touching
+ * out_value. Returns -1 without parking when there is no future, no running
+ * coroutine, or the future belongs to another runtime. */
 int wasmos_future_await(wasmos_future_t* future, uintptr_t* out_value);
 bool wasmos_promise_resolve(wasmos_promise_t* promise, uintptr_t value);
 bool wasmos_promise_reject(wasmos_promise_t* promise, int32_t status);

@@ -23,7 +23,6 @@
 #include "arch/x86_64/lapic.h"
 #endif
 
-/* GDT_ENTRY_COUNT and CPU_IST_STACK_SIZE are defined in cpu_x86_64.h. */
 #define IDT_ENTRY_COUNT 256
 #define EXCEPTION_COUNT 32
 
@@ -38,8 +37,10 @@
 
 #define IDT_TYPE_INTERRUPT_GATE 0x8E
 #define IDT_TYPE_INTERRUPT_GATE_USER 0xEE
-/* Keep fault classification constants local to CPU fault handling.
- * Matches user-slot policy in memory.c. */
+/* The user VA window is exactly PML4 slot 1 (512 GiB .. 1 TiB): every mapping the
+ * memory service hands to a process (memory.c MM_USER_* bases) and the ring-3
+ * linmem window live inside it.  A CPL3 fault outside this range is therefore an
+ * attempt to touch kernel space, classified as PF_REASON_USER_TO_KERNEL. */
 #define USER_VA_MIN 0x0000008000000000ULL
 #define USER_VA_MAX 0x0000010000000000ULL
 
@@ -80,22 +81,26 @@ extern volatile uint64_t g_ctx_restore_rflags;
 /* IDT is shared across all CPUs (all CPUs load the same IDTR). */
 static idt_entry_t g_idt[IDT_ENTRY_COUNT];
 
-/* BSP GDT initial values — copied into g_cpus[0].gdt during x86_cpu_init().
- * TSS slots [5..6] are filled in by gdt_set_tss_base(). */
+/* GDT initial values, copied into every CPU's private gdt[] (BSP in
+ * x86_cpu_init(), APs in x86_cpu_prepare_ap()).  Entries are null, kernel
+ * code/data (DPL 0), user code/data (DPL 3); slots [5..6] hold the 16-byte
+ * 64-bit TSS descriptor and are filled in by gdt_set_tss_base(). */
 static const uint64_t k_gdt_template[GDT_ENTRY_COUNT] = {
     0x0000000000000000ULL, 0x00AF9A000000FFFFULL, 0x00AF92000000FFFFULL, 0x00AFFA000000FFFFULL,
     0x00AFF2000000FFFFULL, 0x0000000000000000ULL, 0x0000000000000000ULL,
 };
 
-/* BSP interrupt stacks.  Kept as standalone arrays so that cpu_isr.S can
- * reference g_irq0_ist_stack by name for the canary check without indirection.
- * AP stacks are allocated dynamically at SMP bring-up. */
+/* BSP interrupt stacks.  g_irq0_ist_stack is a standalone global so cpu_isr.S can
+ * reference it by name for the canary check without indirection.  The AP stacks
+ * are the static g_ap_ist_stacks/g_ap_rsp0_stacks arrays in smp.c. */
 uint8_t g_irq0_ist_stack[CPU_IST_STACK_SIZE] __attribute__((aligned(16)));
 static uint8_t g_bsp_rsp0_stack[CPU_IST_STACK_SIZE] __attribute__((aligned(16)));
 
-/* IST-stack canary: written at the bottom of the BSP's IST stack and compared
- * by cpu_isr.S on every timer interrupt to detect stack overflow.  Must remain
- * a visible global symbol (accessed by name from assembly). */
+/* IST-stack canary: written to the lowest 8 bytes of g_irq0_ist_stack (the
+ * stack grows down towards it) and compared by cpu_isr.S on entry to every timer
+ * interrupt to detect IST overflow.  Because the check reads this one array on
+ * whichever CPU takes the interrupt, it covers the BSP's IST stack only.  Must
+ * remain a visible global symbol (accessed by name from assembly). */
 uint64_t g_irq0_ist_canary = 0xCAFEBABEDEADC0DEULL;
 
 #define IA32_EFER_MSR 0xC0000080u
@@ -264,6 +269,11 @@ static void gdt_install(cpu_local_t* cpu) {
     gdtr.limit = (uint16_t)(sizeof(cpu->gdt) - 1);
     gdtr.base = addr_cast(uint64_t, &cpu->gdt[0]);
 
+    /* CS cannot be loaded with a mov, so the new kernel code selector is applied
+     * by pushing selector:offset and taking a far return to the next
+     * instruction.  The data selectors follow; %fs/%gs are deliberately not
+     * reloaded, because loading a selector into GS in 64-bit mode overwrites the
+     * GS base MSR that carries the per-CPU pointer. */
     __asm__ volatile("lgdt %0\n"
                      "pushq $0x08\n"
                      "leaq 1f(%%rip), %%rax\n"
@@ -510,17 +520,13 @@ int x86_user_exception_handler(uint64_t vector, const uint64_t* frame) {
     if (proc->name && strcmp(proc->name, "ring3-fault-de") == 0 && vector == 0) {
         serial_write("[test] ring3 fault de reason ok\n");
     }
-    /* Which vector the #DB probe surfaces is environment-dependent. 8cd04185df
-     * pinned it to #UD (vector 6) because the TCG build it was written against
-     * did not raise a true #DB from ring3 without TF/debug-register setup the
-     * probe does not perform. Other QEMU builds deliver the architecturally
-     * correct vector 1 instead -- observed here, and the sole reason
-     * run-qemu-ring3-test was failing.
-     *
-     * Accept either. The marker asserts that the probe faulted and was
-     * classified as a user exception, not which of the two encodings the host
-     * happened to produce; pinning one encoding makes the test a property of
-     * the emulator rather than of the kernel. */
+    /* The #DB probe does not set TF or a debug register, so which vector it
+     * surfaces is environment-dependent: some QEMU/TCG builds raise the
+     * architecturally correct #DB (vector 1), others reject the instruction as
+     * #UD (vector 6). Both are accepted — the marker asserts that the probe
+     * faulted and was classified as a user exception, not which encoding the
+     * host produced; pinning one makes the test a property of the emulator
+     * rather than of the kernel. */
     if (proc->name && strcmp(proc->name, "ring3-fault-db") == 0 && (vector == 1 || vector == 6)) {
         serial_write("[test] ring3 fault db reason ok\n");
     }
@@ -605,8 +611,8 @@ int x86_page_fault_handler(uint64_t error_code, const uint64_t* frame) {
              * check in x86_user_exception_handler. Emit the classification
              * marker here, gated on the exact process name so unrelated
              * user->kernel PFs (e.g. the generic ring3-fault isolate probe
-             * above) cannot mis-emit it. Same observed-vector spirit and TCG
-             * approximation as the nm/ac/of tunings (commit 8cd04185df). */
+             * above) cannot mis-emit it. The nm/ac/of probes are matched on
+             * their observed vectors for the same reason. */
             if (proc->name && strcmp(proc->name, "ring3-fault-ss") == 0 &&
                 reason == PF_REASON_USER_TO_KERNEL) {
                 serial_write("[test] ring3 fault ss reason ok\n");
@@ -629,12 +635,12 @@ void x86_cpu_init(void) {
     x86_cpu_enable_kernel_simd();
     serial_write("[cpu] init\n");
 
-    /* Initialise BSP's per-CPU slot.  &g_cpus[0] is named explicitly because
+    /* Initialise the BSP's per-CPU slot.  &g_cpus[0] is named explicitly because
      * the GS base MSR has not been loaded yet — cpu_local() must not be called
-     * until after the wrgsbase below. */
+     * until after the IA32_GS_BASE write at the end of this function. */
     cpu_local_t* bsp = &g_cpus[0];
     bsp->cpu_id = 0;
-    bsp->apic_id = 0; /* updated after lapic_init() reads LAPIC_REG_ID */
+    bsp->apic_id = 0; /* replaced by the hardware LAPIC ID in smp_init() */
     bsp->started = 1;
     for (uint32_t i = 0; i < GDT_ENTRY_COUNT; ++i) {
         bsp->gdt[i] = k_gdt_template[i];
@@ -668,8 +674,11 @@ void x86_cpu_init(void) {
     idt_set_gate(255u, x86_kernel_handler_addr((uintptr_t)isr_lapic_spurious),
                  IDT_TYPE_INTERRUPT_GATE);
 #endif
-    /* Keep this literal wiring form present for source-level spec assertions;
-     * runtime installation is corrected to higher-half alias immediately below. */
+    /* The syscall gate is the only user-reachable gate (DPL 3), so ring 3 can
+     * issue int 0x80; every other vector stays DPL 0.
+     * TODO: the first installation writes the raw stub address and is
+     * immediately overwritten by the higher-half alias on the next call. Nothing
+     * reads the literal form any more, so it can be dropped. */
     idt_set_gate((uint8_t)X86_VECTOR_SYSCALL, (uintptr_t)isr_syscall_128,
                  IDT_TYPE_INTERRUPT_GATE_USER);
     idt_set_gate((uint8_t)X86_VECTOR_SYSCALL, x86_kernel_handler_addr((uintptr_t)isr_syscall_128),
@@ -693,6 +702,12 @@ void x86_cpu_set_kernel_stack(uint64_t rsp0) {
     cpu_local()->tss.rsp0 = rsp0;
 }
 
+/* Re-point GDTR/IDTR, the TSS descriptor, the TSS stack tops and the GS base at
+ * the higher-half aliases of the same objects, so no descriptor table or
+ * interrupt stack is reached through a lower-half address once the kernel runs
+ * from its linked addresses.  BSP only, and only meaningful while the addresses
+ * still are lower-half: x86_kernel_data_addr() leaves higher-half input
+ * unchanged, so a second call is a no-op. */
 void x86_cpu_relocate_tables_high(void) {
     cpu_local_t* cpu = cpu_local();
     descriptor_ptr_t gdtr;

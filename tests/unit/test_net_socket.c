@@ -79,10 +79,14 @@ static int test_rejects_bad_descriptor_or_ring(void) {
 }
 
 /* A stream connect enters CONNECTING (the TCP handshake is still in flight),
- * while a datagram connect is immediately CONNECTED. Both record the peer. */
+ * while a datagram connect is immediately CONNECTED. */
 static int test_connect_state_depends_on_type(void) {
     net_socket_pool_t pool;
     net_socket_pool_init(&pool);
+    /* The two regions are file statics shared with the other cases, which run in
+     * a shuffled order and leave behind PEER_CLOSED flags or a zeroed header.
+     * Only the stamped header matters here, so the handles are discarded --
+     * net_socket_open attaches its own. */
     CHECK(wasmos_ringbuf_init(&(wasmos_ringbuf_t){0}, tx_region, sizeof(tx_region), CAPACITY) == 0);
     CHECK(wasmos_ringbuf_init(&(wasmos_ringbuf_t){0}, rx_region, sizeof(rx_region), CAPACITY) == 0);
 

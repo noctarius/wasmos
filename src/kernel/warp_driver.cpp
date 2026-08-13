@@ -1,8 +1,8 @@
 /* warp_driver.cpp - WARP JIT-backed WASM module loader and driver runner.
  *
- * Mirrors wasm_driver.c but uses vb::WasmModule (single-pass JIT compiler).
- * The public API is identical so callers (kernel.c, process_manager.cpp) are
- * unchanged.
+ * Exposes the same wasm_driver_* API as wasm_driver.c (only one of the two is
+ * compiled, selected by WASMOS_WASM_RUNTIME) but backs it with vb::WasmModule,
+ * the single-pass JIT compiler, and runs the compiled code in ring 3.
  *
  * Exception strategy: try/catch requires a working C++ unwinder, so the
  * per-CPU warp_exception_checkpoint from cxx_abi.cpp is used instead.
@@ -134,7 +134,7 @@ static KernelLogger g_logger;
 } // namespace
 
 // ---------------------------------------------------------------------------
-// Thread-slot table (mirrors wasm_driver.c)
+// Module start
 // ---------------------------------------------------------------------------
 
 static int warp_driver_start_module(vb::WasmModule* mod, uint64_t user_root) {
@@ -524,10 +524,9 @@ extern "C" uint64_t warp_r3_memory_helper(uint64_t min_linmem_len, uint32_t base
  * WHERE this is armed is load-bearing, so do not hoist it.  The hint is claimed
  * by the next page-backed warp_krealloc growth on the CPU bound to that pid, and
  * the compiler's own buffers are page-backed and grow constantly — so arming it
- * before compile() hands a 2 GiB VA slot to a compiler scratch buffer while the
- * real linear memory never gets one.  That is not hypothetical: it was the state
- * of the JIT path until 682df49cf9, where 23 of 26 claims per boot were 4094-byte
- * compiler blocks against a 512 MiB armed reserve.  Arm it only immediately
+ * before compile() hands the VA slot to a compiler scratch buffer while the real
+ * linear memory never gets one — the compiler makes an order of magnitude more
+ * page-backed claims than the single linmem block does.  Arm it only immediately
  * before the runtime-setup phase that allocates linear memory.
  *
  * The pid identity is enforced at the claim site (warp/shim.cpp) by a CAS against

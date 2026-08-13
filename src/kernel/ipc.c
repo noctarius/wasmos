@@ -108,8 +108,8 @@ void ipc_init(void) {
                IPC_ENDPOINT_TABLE_CHUNK);
     }
     ksync_spinlock_init(&g_select_table_lock);
-    /* Grows on demand now, so the number of parked services is bounded by
-     * memory rather than by a constant chosen before the workload was known. */
+    /* Grows on demand, so the number of parked services is bounded by memory and
+     * the per-context quota rather than by a fixed table size. */
     if (idtable_init(&g_select_table, (uint32_t)sizeof(ipc_select_t), IPC_SELECT_TABLE_CHUNK,
                      IPC_SELECT_PER_CONTEXT_MAX) != WASMOS_OK) {
         kpanic("ipc: select table init failed", (uint64_t)sizeof(ipc_select_t),
@@ -269,9 +269,10 @@ int ipc_send_from(uint32_t sender_context_id, uint32_t endpoint, const ipc_messa
     /* poll_notify runs under ep->lock.  Reading ep->poll_struct here and
      * notifying after the unlock would race ipc_endpoints_release_owner, which
      * takes ep->lock and frees the poll_struct -- the notify would then walk
-     * freed watcher nodes.  Lock order is g_select_table_lock -> ep->lock ->
-     * sel->event.lock, and poll_notify only ever takes the last of those, so
-     * holding ep->lock across it is consistent with every other path. */
+     * freed watcher nodes.  The file-wide lock order is
+     * g_select_table_lock -> g_endpoint_table_lock -> ep->lock -> an event lock
+     * (ep->event.lock or, via poll_notify -> ipc_select_signal, sel->event.lock),
+     * so holding ep->lock across the notify is consistent with every path. */
     if (ep->poll_struct) {
         poll_notify(ep->poll_struct, POLL_EV_IN, ep->header.id);
     }
@@ -317,7 +318,9 @@ int ipc_recv_blocking_for(uint32_t receiver_context_id, uint32_t endpoint,
         return rc;
     }
     if (ep->count == 0) {
-        /* Block until a sender enqueues a message and wakes us. */
+        /* Hand off from ep->lock to ep->event.lock without a gap, then block:
+         * a sender must not be able to enqueue and wake between the emptiness
+         * test and this thread joining the wait list. */
         ksync_spinlock_lock(&ep->event.lock);
         ksync_spinlock_unlock(&ep->lock);
         sched_event_wait(&ep->event, 0);
@@ -377,17 +380,14 @@ int ipc_notify_from(uint32_t sender_context_id, uint32_t endpoint) {
         ep->notify_count++;
     }
     /*
-     * Signal the poll hub, exactly as a message send does.
+     * Signal the poll hub, exactly as a message send does.  ipc_select_add takes
+     * any endpoint that resolves, so a set may watch a notification endpoint,
+     * and this is the only path by which such a set is ever woken.
      *
-     * ipc_select_add takes any endpoint that resolves, so a set may watch a
-     * notification endpoint -- and until this existed, raising a notification
-     * never reached it: the set parked forever while notifications piled up
-     * behind it. What was here instead was a sched_event_wake_one on the
-     * endpoint's own event, which can never wake anything, because nothing can
-     * park there. Both blocking waits demand a MESSAGE endpoint, and
-     * ipc_wait_for polls and returns IPC_EMPTY rather than blocking. The dead
-     * wake is gone; if a blocking notification wait is ever added, it belongs
-     * next to this, not instead of it.
+     * Nothing can be parked on a notification endpoint's own sched_event: both
+     * blocking receives demand a MESSAGE endpoint, and ipc_wait_for polls and
+     * returns IPC_EMPTY rather than blocking.  A blocking notification wait, if
+     * one is ever added, belongs alongside this notify -- not instead of it.
      *
      * Held under ep->lock for the same reason ipc_send_from does: notifying
      * after the unlock would race ipc_endpoints_release_owner freeing the hub.
@@ -470,9 +470,8 @@ void ipc_endpoints_release_owner(uint32_t owner_context_id) {
 /*
  * Caller holds g_select_table_lock.  *out_rc separates the two reasons a lookup
  * fails: there is no such set (IPC_ERR_NOENT) versus there is one and it
- * belongs to somebody else (IPC_ERR_PERM).  Collapsing both into one code told
- * a caller nothing about whether re-resolving would help, and quietly reported
- * a permission failure as if the handle were bad.
+ * belongs to somebody else (IPC_ERR_PERM).  The distinction is what tells a
+ * caller whether re-resolving the handle could ever help.
  */
 static ipc_select_t* ipc_select_find(uint32_t select_id, uint32_t owner_context_id, int* out_rc) {
     ipc_select_t* sel = (ipc_select_t*)idtable_get(&g_select_table, select_id);
@@ -524,10 +523,10 @@ int ipc_select_add(uint32_t select_id, uint32_t endpoint_id, uint32_t owner_cont
      * registration.  Callers routinely build a set from several handles that
      * can legitimately coincide -- a service whose reply and event endpoints
      * are the same -- so refusing would fail them at startup for a harmless
-     * call.  Registering twice was worse: it burned one of only
-     * IPC_SELECT_EPS_MAX watch slots and left two poll watchers, so a single
-     * send ran ipc_select_signal twice.  That stayed invisible only because
-     * ready_ep is a latch that swallows the second signal.
+     * call.  Registering twice is worse than refusing: it burns one of only
+     * IPC_SELECT_EPS_MAX watch slots and leaves two poll watchers, so a single
+     * send runs ipc_select_signal twice (invisibly, since ready_ep is a latch
+     * that swallows the second signal).
      *
      * Checked before the capacity test on purpose: re-adding an endpoint to a
      * full set is still correct, because it is already being watched.
@@ -548,14 +547,11 @@ int ipc_select_add(uint32_t select_id, uint32_t endpoint_id, uint32_t owner_cont
      * reporting IPC_OK would hand the caller a set that blocks forever on an
      * endpoint it believes it is watching.
      *
-     * An endpoint_id that does not resolve is refused rather than recorded.
-     * Recording it produced the same silent-never-ready set as a failed watcher
-     * registration: the caller is told the endpoint is watched, and it never
-     * signals. Every in-tree caller adds endpoints it has just created, so this
-     * only tightens what was already true for them -- but it is reachable from a
-     * guest, because WARP's hostcall shim casts a negative handle to
-     * IPC_ENDPOINT_NONE and passed it straight through (tests/unit/
-     * test_hostcall_ipc.cpp caught exactly that).
+     * An endpoint_id that does not resolve is refused rather than recorded, for
+     * the same reason: recording it yields the same silent-never-ready set,
+     * with the caller told the endpoint is watched.  Reachable from a guest --
+     * WARP's hostcall shim casts a negative handle to IPC_ENDPOINT_NONE and
+     * passes it through (tests/unit/test_hostcall_ipc.cpp covers it).
      */
     ipc_endpoint_t* ep = ipc_endpoint_get(endpoint_id);
     if (!ep) {
@@ -634,9 +630,10 @@ int ipc_select_wait(uint32_t select_id, uint32_t owner_context_id, uint32_t* out
      * IPC_EMPTY, the same answer a timeout gives, because there is nothing to
      * report either way.
      *
-     * Re-resolving by id is what makes this unambiguous: ids are never reused,
-     * so a live lookup cannot return a set that was handed to another context
-     * while this waiter slept. */
+     * Re-resolving by id goes through ipc_select_find, which re-checks the owner
+     * context.  idtable only recycles a freed id after the id space has wrapped,
+     * and even then the owner check is what guarantees this waiter cannot be
+     * handed a set that now belongs to somebody else. */
     ksync_spinlock_lock(&g_select_table_lock);
     sel = ipc_select_find(select_id, owner_context_id, &find_rc);
     if (!sel) {
@@ -747,8 +744,8 @@ void ipc_select_signal(struct ipc_select* sel, uint32_t ep_id) {
         return;
     }
     /* event.lock protects both ready_ep and the wait_list, matching
-     * ipc_select_wait()'s critical section.  The old sel->lock is removed:
-     * it was a separate spinlock that created the SMP lost-wakeup race. */
+     * ipc_select_wait()'s critical section.  A separate lock for ready_ep would
+     * reopen the SMP lost-wakeup window described on the struct. */
     ksync_spinlock_lock(&sel->event.lock);
     sel->ready_ep = ep_id;
     sched_event_wake_one(&sel->event, ep_id, SCHED_PEND_OK);

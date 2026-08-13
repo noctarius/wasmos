@@ -5,8 +5,8 @@
  * root source.  Provides:
  *   1. Arena malloc/free (static 12 KB buffer — sufficient for a full libui
  *      context + component arrays for typical GUI apps).
- *   2. memset / memcpy / memmove / strlen / strcmp / strncmp / strchr
- *      (used internally by libui's static-inline functions).
+ *   2. The freestanding string/memory primitives libui's static-inline code
+ *      and its headers reference (mem*, str*, strtol).
  *   3. libui_zig_* wrappers that expose libui as plain C functions with
  *      opaque context pointers so libui.zig needs no @cImport.
  *
@@ -61,15 +61,17 @@ void* realloc(void* old, size_t size) {
     void* n = malloc(size);
     if (!n || !old)
         return n;
-    /* Copy old content conservatively; block sizes are not tracked. */
     uint8_t* dst = (uint8_t*)n;
     const uint8_t* src = (const uint8_t*)old;
-    /* Safe upper bound: new size. Caller must not have written past it. */
+    /* Block sizes are not tracked, so `size` bytes are copied unconditionally.
+     * FIXME: a grow reads past the end of the old block; the bytes past it are
+     * arena memory (or, for a block at the arena's tail, past g_arena). */
     for (size_t i = 0; i < size; i++)
         dst[i] = src[i];
     return n;
 }
 
+/* Decimal only: `base` is ignored and `end` is never written. */
 long int strtol(const char* s, char** end, int base) {
     (void)end;
     (void)base;

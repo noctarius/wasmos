@@ -20,6 +20,8 @@ static int fake_ipc_send(uint32_t sender_context_id, uint32_t endpoint,
     return send_status;
 }
 
+/* driver_api ipc_recv convention: 0 delivered a message, 1 means the endpoint is
+ * empty, and any other value is an error the poll loop reports as -1. */
 static int fake_ipc_recv(uint32_t receiver_context_id, uint32_t endpoint,
                          nd_ipc_message_t* out_message) {
     (void)receiver_context_id;
@@ -162,6 +164,9 @@ static int test_service_root_runtime(void) {
     service_steps = 0u;
     service_yields = 0u;
     api.sched_yield = fake_sched_yield;
+    /* One coroutine yield costs exactly one api->sched_yield: the run loop
+     * resumes the root, finds it still alive, and only then yields the host
+     * thread. The root's return value is what service_run reports. */
     wasmos_sys_native_service_init(&service, root_stack, sizeof(root_stack));
     if (wasmos_sys_native_service_run(&service, &api, service_main, (void*)(uintptr_t)0x1234u) !=
             37 ||

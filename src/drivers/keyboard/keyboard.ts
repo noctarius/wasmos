@@ -10,7 +10,8 @@
  * Every input -- an IRQ delivered as IPC, a client's subscribe request, the
  * service registry's reply to this driver's own registration -- arrives on one
  * endpoint and is demultiplexed by EventLoop. The loop parks the process when
- * there is nothing to do, so an idle keyboard costs no CPU.
+ * there is nothing to do, so an idle IRQ-driven keyboard costs no CPU; the
+ * polling fallback wakes once per POLL_INTERVAL_MS instead.
  *
  * Registration goes through that loop, not a blocking ipc_recv on the SERVICE
  * endpoint: a receive-until-the-reply-arrives loop discards every unrelated
@@ -234,10 +235,10 @@ export function initialize(_proc_endpoint: i32, _arg1: i32, _arg2: i32, _arg3: i
             }
         } else if (msg.type == KBD_IPC_IRQ_EVENT) {
             let code: i32 = readScancode();
-            /* Re-arm after reading the hardware register so the next keypress can
-             * fire the interrupt again. Must come after the data-port read so OBF is
-             * clear before unmasking (prevents immediate re-fire on a level-triggered
-             * IRQ). */
+            /* Ack only after the data-port read: that read clears OBF, which is
+             * what lets the i8042 drop the line. The kernel programs ISA IRQs
+             * level-triggered in IOAPIC mode (src/kernel/arch/x86_64/ioapic.c),
+             * so unmasking with OBF still set re-delivers at once. */
             irq_ack(KBD_IRQ);
             publishScancode(code);
         }

@@ -1,6 +1,15 @@
-/* kernel_ring3_suite_runtime.c - Aggregated ring-3 test suite runner.
- * Sequences the smoke, probe, and fault-injection sub-runtimes and reports a
- * single pass/fail result so the boot-time test harness has one entry point. */
+/* kernel_ring3_suite_runtime.c - Aggregated ring-3 test suite launcher.
+ *
+ * One entry point for the boot path: spawns the smoke process, the native probe
+ * (plus the thread-lifecycle probe when enabled), the twelve fault probes, runs
+ * the shmem isolation test between the smoke and native contexts, and finally
+ * starts the fault-policy process that judges them. The return value covers
+ * spawning only -- nonzero means a probe could not be started, and the probes'
+ * own verdicts arrive later as "[test] ring3 ..." log lines from
+ * kernel_ring3_fault_runtime.c and syscall.c.
+ *
+ * Ordering matters: the fault-policy process is spawned last because it reads
+ * the pids of every fault probe out of ring3_fault_policy_probes_t. */
 #include "kernel_ring3_suite_runtime.h"
 
 #include "kernel_ring3_fault_runtime.h"
@@ -10,6 +19,8 @@
 #include "klog.h"
 #include "process.h"
 
+/* Alternates #UD and #GP across churn rounds so the repeated spawn/fault/reap
+ * cycle covers two different fault paths rather than one. */
 static int spawn_ring3_fault_churn_probe_process(uint32_t parent_pid, uint8_t churn_round,
                                                  uint32_t* out_pid) {
     if ((churn_round & 1u) == 0u) {

@@ -75,6 +75,8 @@ function awaitReply(request: IpcFuture, out: Box): i32 {
  * refusal matters: a refused read surfacing as 0xFF decodes into a
  * plausible-looking date. */
 function rtcReadReg(reg: i32): i32 {
+    /* Bit 7 of the index port is the NMI-disable bit; masking it off selects the
+     * register without disabling NMI as a side effect. */
     io_out8(CMOS_INDEX_PORT, reg & 0x7f);
     io_wait();
     return io.in8(CMOS_DATA_PORT);
@@ -213,6 +215,11 @@ function readTime(outVals: StaticArray<i32>): i32 {
     } else if (!is24Hour && (hour & 0x80) != 0) {
         hour = ((hour & 0x7f) + 12) % 24;
     }
+    /* FIXME: 12-hour mode maps the two noon/midnight hours wrongly in both
+     * branches above -- 12 PM decodes as 0 and 12 AM as 12 -- because a stored
+     * 12 means 0 in 24-hour terms. Unreached on the RTCs this runs on (register
+     * B reports 24-hour mode), so a report would be off by 12 hours only on a
+     * machine configured for 12-hour time. */
 
     let fullYear = 2000 + year;
     if (year >= 70) {
@@ -279,6 +286,8 @@ function setTime(vals: StaticArray<i32>): i32 {
         }
     }
 
+    /* Register B bit 7 (SET) halts the update cycle, so the seven writes below
+     * land as one consistent time; clearing it again resumes counting. */
     rtcWriteReg(0x0b, regB | 0x80);
     rtcWriteReg(0x00, sec);
     rtcWriteReg(0x02, min);

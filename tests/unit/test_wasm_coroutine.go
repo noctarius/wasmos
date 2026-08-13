@@ -1,24 +1,23 @@
 // test_wasm_coroutine.go - the Go binding for the shared C coroutine runtime.
 //
-// This is the one binding that could not be tested the way the others are. The
-// Rust and Zig suites run on the HOST, linking coroutine_wasm.c directly, which
-// works because their #[repr(C)] / extern struct layouts are computed per
-// target. Go cannot express the C layout at all: it models every record as an
-// opaque [N]uint32 blob sized for wasm32, so a host test would exercise 64-bit
-// pointers and a different ABI entirely. It has to be built for wasm32 and run
-// there, which is what tests/unit/go/run_go_test.mjs does.
+// This suite runs on wasm32, unlike the Rust and Zig ones, which run on the
+// HOST against coroutine_wasm.c because their #[repr(C)] / extern struct
+// layouts are computed per target. Go cannot express the C layout: it models
+// every record as an opaque [N]uint32 blob sized for wasm32, so a host run
+// would exercise 64-bit pointers and a different ABI entirely. Building for
+// wasm32 and running it there is what tests/unit/go/run_go_test.mjs does.
 //
 // Go also carries an FFI layer the others do not, and it is the part most
 // likely to break:
 //
-//   - Callback is a raw uintptr, because "Go has no portable representation for
-//     a C function pointer", so coroutines route through the C trampoline in
-//     go_coroutine_trampoline.c with a caller-assigned task id.
+//   - Callback is a raw uintptr, because Go has no portable representation for
+//     a C function pointer, so coroutines route through the C trampoline in
+//     src/libsys/wasm/go_coroutine_trampoline.c with a caller-assigned task id.
 //   - Go closures reach the runtime through a fixed 32-slot registry keyed by
-//     callback id.
+//     callback id (goFutureCallbackMax in src/libc/go/coroutine.go).
 //
-// Neither had any coverage. The scenarios below mirror
-// tests/unit/test_wasm_coroutine.c and add the two FFI-specific ones.
+// The scenarios below mirror tests/unit/test_wasm_coroutine.c; testFFISmoke and
+// testCallbackRegistryReclaim additionally cover that FFI layer.
 //
 // Each case returns 0 or a marker; runTests returns the first non-zero.
 
@@ -26,8 +25,8 @@ package main
 
 import "unsafe"
 
-// wasmos.go owns main() and dispatches to Main(); the test entry point is the
-// exported runTests below.
+// src/libc/go/wasmos.go calls Main() from its exported wasmos_main entry point,
+// so the module needs one to link; this suite is driven from runTests below.
 func Main(args []string) int32 { return 0 }
 
 // ---------------------------------------------------------------- FFI smoke
@@ -435,10 +434,10 @@ func testAll() int32 {
 	return 0
 }
 
-// The 32-slot Go callback registry. Every ThenGo takes a slot; before slots
-// were reclaimed on dispatch the table filled permanently and ThenGo returned
-// nil forever after, so a long-running service stopped chaining after its 32nd
-// callback with no diagnostic.
+// The 32-slot Go callback registry. Every ThenGo takes a slot, released when
+// its callback runs; without that release the table fills permanently and
+// ThenGo returns nil forever after, so a long-running service stops chaining
+// after its 32nd callback with no diagnostic.
 func testCallbackRegistryReclaim() int32 {
 	var rt Runtime
 	rt.Init()

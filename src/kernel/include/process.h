@@ -8,11 +8,13 @@
 #include "sched_event.h"
 #include "wasmos_app.h"
 
-#define PROCESS_MAX_COUNT 48
+#define PROCESS_MAX_COUNT 48 /* fixed g_processes[] slot count; spawn fails past it */
 #define PROCESS_NAME_MAX 64
-// Round-robin scheduler time slice (fixed ticks per run).
+/* Timer ticks a thread runs before preemption. Bands are FIFO within a
+ * priority level, so this is the round-robin quantum inside one band -- it does
+ * not affect which band the scheduler picks. */
 #define PROCESS_DEFAULT_SLICE_TICKS 5u
-#define PROCESS_STACK_SIZE 524288u
+#define PROCESS_STACK_SIZE 524288u /* bytes of kernel stack per process */
 #define PROCESS_CTX_CANARY_VALUE 0xC0FFEE0DD15EA5EULL
 
 /* Release all per-pid state owned by the active WASM runtimes for an exiting
@@ -164,7 +166,8 @@ typedef struct process {
      * (is_kernel_worker) never acquire this. */
     ksync_spinlock_t runtime_lock;
     uint32_t runtime_lock_owner; /* TID of current runtime-lock occupant; 0 = free */
-    /* Process-level wait event (replaces wait_target_pid polling). */
+    /* A parent blocks here until a child it is waiting on exits; wait_target_pid
+     * above names which child, so a wake can be matched to the right waiter. */
     sched_event_t wait_event;
     /* Transfer-buffer id (child-owned) holding this process's wasmos_spawn_info_t
      * header + args blob, or 0 if none. Returned by the wasmos_spawn_info_buffer()
@@ -222,7 +225,10 @@ process_t* process_get(uint32_t pid);
 process_t* process_find_by_context(uint32_t context_id);
 uint32_t process_current_pid(void);
 void process_set_exit_status(process_t* process, int32_t exit_status);
-void process_block_on_ipc(process_t* process); /* TODO: remove once all callers updated */
+/* No-op. Blocking is a per-thread concern now and lives in sched_event_wait;
+ * this does nothing and a caller relying on it to block will spin instead.
+ * TODO: delete once the remaining call sites stop calling it. */
+void process_block_on_ipc(process_t* process);
 void process_notify_ready(process_t* process);
 void process_set_require_explicit_ready(process_t* process);
 int process_wait(process_t* process, uint32_t target_pid, int32_t* out_exit_status);

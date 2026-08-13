@@ -16,7 +16,12 @@ void memory_service_register(uint32_t context_id, uint32_t endpoint, uint32_t re
  * error. */
 int memory_service_serve_one(void);
 
-/* Handle an IPC_MEM_FAULT from a page fault for fault_context_id at fault_addr. */
+/* Resolve a page fault for fault_context_id at fault_addr. Despite the name no
+ * IPC is involved: it calls mm_handle_page_fault() inline. Round-tripping
+ * through the service endpoint would race the mem-service worker thread, which
+ * drains the same endpoint on another CPU and would swallow the request,
+ * turning a recoverable demand fault into a panic. Returns 0 when the fault was
+ * resolved, non-zero otherwise. */
 int memory_service_handle_fault_ipc(uint32_t fault_context_id, uint64_t fault_addr,
                                     uint64_t error_code);
 

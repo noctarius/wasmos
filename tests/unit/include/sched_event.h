@@ -1,3 +1,15 @@
+/* Host shadow of src/kernel/include/sched_event.h.
+ *
+ * The enums and the function signatures match the real header, so kernel
+ * sources that block on a sched_event_t (sync_mutex.c, sync_semaphore.c) build
+ * unmodified. The struct differs: the real one parks threads on a `wait_list`
+ * of thread_t.event_node, which a host process cannot do, so the waiting state
+ * here is a pthread mutex/condvar plus a waiter and signal count.
+ *
+ * The functions are declared, not defined: the including test supplies bodies
+ * that map wait/wake onto those host primitives, keeping the real header's
+ * locking contract (sched_event_wait is entered with ev->lock held and returns
+ * with it released). See tests/unit/test_kernel_sync_primitives.c. */
 #ifndef WASMOS_TEST_SCHED_EVENT_H
 #define WASMOS_TEST_SCHED_EVENT_H
 

@@ -5,15 +5,17 @@
 #include <stdint.h>
 
 /*
- * Minimal fixed-size slab allocator for small kernel objects. Optional
- * infrastructure: static-table paths remain the default.
+ * Minimal fixed-size slab allocator for small kernel objects.
  *
  * Each size class starts on a fixed static buffer and, once that is exhausted,
  * grows on demand: a fresh 4 KiB frame is allocated from the physical page
  * allocator (constrained to the kernel higher-half direct-map window so it is
  * reachable at phys | KERNEL_HIGHER_HALF_BASE) and carved into chunks that are
- * pushed onto the class free list. Growth is therefore bounded only by physical
- * memory, never by a compile-time count.
+ * pushed onto the class free list. No compile-time count caps the growth; the
+ * limit is free physical memory inside that window.
+ *
+ * Grown frames are never returned to the page allocator: a freed chunk goes back
+ * on its class free list and the frame stays owned by the class for good.
  */
 
 /* Must not exceed paging.c's higher-half direct-map window: frames above it are

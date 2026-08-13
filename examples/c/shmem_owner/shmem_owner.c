@@ -8,14 +8,15 @@
 /*
  * shmem_owner (shmownr) — second half of the shmem end-to-end test.
  *
- * Minos2-aligned design: no busy-polling.
- *   shmtgt wrote its IPC endpoint to the sync file before calling
- *   notify_ready.  By the time the CLI shows the prompt and the test
- *   script runs shmownr, the file is guaranteed to contain target_ep.
+ * The two halves rendezvous without busy-polling. shmtgt writes its IPC
+ * endpoint to the sync file before calling notify_ready, and the CLI only
+ * returns its prompt after that, so the file already carries target_ep by the
+ * time the test script launches shmownr.
  *
- *   For each stage: write the updated sync file, send an IPC message to
- *   target_ep to wake shmtgt, then block on owner_ep waiting for shmtgt's
- *   acknowledgement.
+ * Each stage then: writes the updated sync file, sends an IPC message to
+ * target_ep to wake shmtgt, and blocks on owner_ep for shmtgt's
+ * acknowledgement. The file carries the state; the IPC message is only the
+ * doorbell.
  */
 
 #define SHMEM_SYNC_PATH "/boot/shmem_e2e.bin"
@@ -67,10 +68,10 @@ int main(int argc, char** argv) {
     memset(&sync, 0, sizeof(sync));
 
     /*
-     * shmtgt wrote {stage=-1, target_pid, target_ep} to the sync file
-     * before calling notify_ready.  The CLI shows the prompt only after
-     * notify_ready, so the file is already complete when this runs.
-     * A small retry covers any scheduler-ordering edge case.
+     * shmtgt publishes {stage=-1, target_pid, target_ep} before notify_ready,
+     * so the record is normally complete by the time this runs. The retry
+     * covers the window where shmtgt has been scheduled but has not yet
+     * reached its write.
      */
     int32_t target_ep = -1;
     for (int i = 0; i < 10; ++i) {

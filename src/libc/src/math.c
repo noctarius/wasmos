@@ -49,7 +49,8 @@ float sqrtf(float x) {
     return g;
 }
 
-/* Evaluate the degree-6 Taylor polynomial for cos on [-pi/4, pi/4]. */
+/* Degree-6 Taylor polynomial for cos. cosf folds its argument into [0, pi/2]
+ * before calling; the truncation error grows toward ~1e-3 at the pi/2 end. */
 static float cos_poly(float x) {
     const float x2 = x * x;
     const float x4 = x2 * x2;
@@ -103,9 +104,11 @@ float acosf(float x) {
     return neg ? 3.14159265f - r : r;
 }
 
-/* Natural log for x > 0.  Extracts IEEE 754 exponent, reduces mantissa to
-   [1, 2), applies a minimax polynomial for ln on that interval, then adds
-   e * ln(2).  Max error < 1 ulp across the positive float range. */
+/* Natural log for x > 0.  Extracts the IEEE 754 exponent, reduces the mantissa
+   to [1, 2), evaluates the first six terms of the ln(1 + t) series with
+   t = m - 1, then adds e * ln(2).  The series converges slowly near t = 1, so
+   the absolute error grows to roughly 0.08 as the mantissa approaches 2 —
+   powf's fractional-exponent path inherits that error. */
 static float log_pos(float x) {
     unsigned int bits;
     __builtin_memcpy(&bits, &x, 4);
@@ -114,7 +117,7 @@ static float log_pos(float x) {
     float m;
     __builtin_memcpy(&m, &bits, 4); /* m in [1, 2) */
 
-    /* Minimax polynomial for ln(m) on [1, 2): Horner form. */
+    /* Truncated ln(1 + t) series in Horner form. */
     float t = m - 1.0f;
     float p =
         t *

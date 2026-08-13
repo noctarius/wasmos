@@ -122,10 +122,13 @@ int main(int argc, char* argv[]) {
     }
     fclose(fin);
 
-    /* Initialise WARP allocator (malloc/realloc/free from host_shim.cpp path). */
+    /* WARP allocates through the hooks installed here; on the host these are the
+     * C library's, not the kernel slab the in-kernel runtime installs. */
     vb::WasmModule::initEnvironment(malloc, realloc, free);
 
     NullLogger logger;
+    /* maxRam unbounded, no debug build, no host ctx, 10 stack records -- the
+     * same values vb::WasmModule's logger-only convenience constructor uses. */
     vb::WasmModule mod(UINT64_MAX, logger, false, nullptr, 10U);
 
     vb::Span<uint8_t const> bc(wasm.data(), wasm.size());

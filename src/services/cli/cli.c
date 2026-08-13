@@ -15,8 +15,9 @@
 
 /*
  * The CLI is a small user-space shell used both for manual interaction and as a
- * regression target. It is intentionally synchronous from the user's point of
- * view but yields while idle so background processes continue to run.
+ * regression target.  One command is in flight at a time (see cli_send_fs), and
+ * an idle CLI parks blocked on a select set over its own endpoints rather than
+ * spinning, so background processes keep the CPU.
  */
 
 static cli_phase_t g_phase = CLI_PHASE_INIT;
@@ -39,13 +40,12 @@ static int32_t g_request_id = 1;
 static int32_t g_idle_select = -1;
 #define CLI_IDLE_WAIT_MS 1000
 
-/* One owned receive pump over the CLI's endpoint.  The loop matches replies to
- * pending requests by request id, pushes to handlers by message type, and sends
- * anything unclaimed to the default handler.  This replaces the per-call drain
- * loops, each of which consumed a message and then discarded it when it was not
- * the reply it wanted -- silently losing VT_IPC_INPUT_NOTIFY pushes, each
- * other's replies, and (when a read timed out with its request still in flight)
- * a reply carrying a typed character. */
+/* The single receive pump over g_vt_client_endpoint.  It matches replies to
+ * pending requests by request id, dispatches pushes to handlers by message type,
+ * and routes anything unclaimed to the default handler.  Nothing else may drain
+ * that endpoint: a private drain loop discards whatever is not the reply it
+ * wanted, which loses VT_IPC_INPUT_NOTIFY pushes and replies carrying typed
+ * characters. */
 static wasmos_sys_event_loop_t g_loop;
 /* Set by the INPUT_NOTIFY handler; the read path consumes it. */
 static int32_t g_input_notified = 0;
@@ -607,8 +607,6 @@ static void console_write(const char* s) {
     putsn(s, len);
 }
 
-/* Ask the VT service for the current active TTY index and its switch generation.
- * Updates g_vt_switch_generation from the response; returns TTY index or -1. */
 static void cli_on_input_notify(void* user, const wasmos_ipc_message_t* msg) {
     (void)user;
     (void)msg;
@@ -616,8 +614,8 @@ static void cli_on_input_notify(void* user, const wasmos_ipc_message_t* msg) {
 }
 
 /* Anything the pump cannot match to a pending request or a registered push is
- * reported rather than dropped: a silent drop here is what made input loss
- * invisible before.  Kept to one line and rate-limited to the first few. */
+ * reported rather than dropped, so lost input is visible instead of silent.
+ * One line per message, and only the first 8 are printed. */
 static void cli_on_unclaimed(void* user, const wasmos_ipc_message_t* msg) {
     static int32_t reported = 0;
     (void)user;
@@ -678,6 +676,10 @@ static int cli_vt_call(int32_t msg_type, int32_t arg0, int32_t arg1, int32_t arg
     return -1;
 }
 
+/* Ask the VT for the currently visible TTY index and its switch generation.  A
+ * non-zero generation in the reply refreshes g_vt_switch_generation and, when
+ * out_generation is non-NULL, *out_generation.  Returns the visible TTY index;
+ * -1 if the VT did not answer, or g_home_tty when there is no VT at all. */
 static int32_t cli_query_active_tty(uint32_t* out_generation) {
     if (g_vt_endpoint < 0 || g_vt_client_endpoint < 0) {
         if (out_generation) {
@@ -748,6 +750,11 @@ static int cli_switch_tty(int32_t tty, int wait_resp, int32_t* out_error) {
     return -1;
 }
 
+/* Refresh g_last_seen_active_tty (self-throttled by g_fg_query_backoff: 31 idle
+ * reads while foreground, 3 while not) and report whether the CLI's home slot is
+ * the visible one.  console_write consumes g_last_seen_active_tty to decide
+ * between VT output and serial; the read path ignores the return value, because
+ * the VT delivers this slot's input regardless of which slot is on screen. */
 static int cli_is_foreground(void) {
     if (g_vt_endpoint < 0 || g_home_tty <= 0) {
         return 1;
@@ -761,13 +768,11 @@ static int cli_is_foreground(void) {
         g_last_seen_active_tty = active_tty;
     }
     g_fg_query_backoff = (g_last_seen_active_tty == g_home_tty) ? 31 : 3;
-    /* When the compositor owns tty0 for graphics presentation, the active tty
-     * is 0, not the CLI's home tty. Reporting background stops the CLI
-     * consuming keyboard input (which the keyboard driver broadcasts to every
-     * subscriber), so the compositor's focused window gets keys exclusively.
-     * tty1 is not forcibly reclaimed here. Serial-driven input is unaffected: once the
-     * CLI falls back to serial (g_vt_endpoint < 0) it is always foreground
-     * per the early return above. */
+    /* While the compositor holds vt-0 the visible tty is 0, not the CLI's home
+     * tty, so console output routes to serial until the user switches back.  The
+     * CLI never reclaims its slot on its own.  With no VT at all
+     * (g_vt_endpoint < 0) the early return above reports foreground
+     * unconditionally, so the serial-only path always writes to serial. */
     return g_last_seen_active_tty == g_home_tty;
 }
 
@@ -846,12 +851,12 @@ static int32_t cli_vt_read_char(char* out_ch) {
         return -1;
     }
 
-    /* The read must never abandon an in-flight request: the VT answers every
-     * READ_REQ, and its reply can carry a character.  The old loop gave up after
-     * 32 tries with the request still registered, so the next read discarded
-     * that reply on a request-id mismatch and the character was lost for good --
-     * the `halt` typed at the prompt arriving as `alt`.  cli_vt_call keeps the
-     * intent until the reply settles and cancels it if it truly gives up. */
+    /* A read must never abandon an in-flight request while leaving it
+     * registered: the VT answers every READ_REQ, and the reply can carry a typed
+     * character, which the next read would then discard on a request-id
+     * mismatch.  cli_vt_call holds the intent until the reply settles and
+     * cancels it when it gives up, so a dropped read costs at most that
+     * character, never a later one. */
     wasmos_ipc_message_t reply;
     if (cli_vt_call(VT_IPC_READ_REQ, g_home_tty, 0, 0, 0, &reply, CLI_VT_RESP_RETRIES) != 0) {
         return -1;
@@ -1359,7 +1364,11 @@ static int cli_spawn_exec_path(const char* input, int32_t* out_pid) {
          ((int32_t)write_off >= fs_buf_size || (int32_t)(write_off + args_len) > fs_buf_size))) {
         return -1;
     }
-    /* Owner-push spawn: PM reads the caller's buffer via ownership (no grant). */
+    /* Owner-push spawn: PM reads the caller's buffer via ownership (no grant).
+     * PROC_IPC_SPAWN_PATH arg1 packs both the buffer and the path length as
+     * (buffer_id << 12) | (path_len & 0xFFF) -- see pm_handle_spawn_path -- which
+     * is why path_len is bounded to 0xFFF above.  The path sits at offset 0 and
+     * the raw argument text at offset path_len + 1. */
     bid = wasmos_xfer_buffer_acquire((int32_t)(write_off + args_len + 1u));
     if (bid < 0) {
         return -1;
@@ -1919,11 +1928,11 @@ static void cli_phase_init_step(int32_t proc_endpoint, int32_t home_tty_arg) {
     if (g_vt_client_endpoint < 0) {
         cli_fail_and_stall("[cli] failed to create vt endpoint\n");
     }
-    /* The pump owns the VT endpoint only.  Collapsing it onto g_reply_endpoint
-     * has to wait until the PM/FS paths stop doing their own
-     * select_one(g_reply_endpoint): those are blocking single-endpoint receives
-     * that discard what they did not ask for, so sharing one endpoint today
-     * would just move the input loss into them. */
+    /* The pump owns g_vt_client_endpoint only.  The PM/FS paths do their own
+     * blocking select_one(g_reply_endpoint) and discard what they did not ask
+     * for, so the two endpoints must stay separate.
+     * TODO: collapse both onto one endpoint once the PM/FS paths go through the
+     * pump; sharing before then would move the input loss into them. */
     wasmos_sys_event_loop_init(&g_loop, g_vt_client_endpoint, 0xC000);
     (void)wasmos_sys_event_register(&g_loop, VT_IPC_INPUT_NOTIFY, cli_on_input_notify, 0);
     (void)wasmos_sys_event_set_default(&g_loop, cli_on_unclaimed, 0);
@@ -1973,16 +1982,17 @@ static void cli_phase_init_step(int32_t proc_endpoint, int32_t home_tty_arg) {
     g_phase = CLI_PHASE_PROMPT;
 }
 
-/* Block until input (a VT_IPC_INPUT_NOTIFY push) or a reply arrives on one of the
- * CLI's endpoints, or the backstop interval elapses.  No yield-spin, no poll. */
+/* Block until input (a VT_IPC_INPUT_NOTIFY push) or a reply arrives on one of
+ * the CLI's endpoints, or CLI_IDLE_WAIT_MS elapses.  The caller must not treat
+ * this as a poll: on the normal path it parks the thread. */
 static void cli_idle_wait(void) {
     if (g_idle_select >= 0 &&
         wasmos_sys_wait_parked(wasmos_ipc_select_wait_timeout(g_idle_select, CLI_IDLE_WAIT_MS))) {
         return;
     }
-    /* Either there is no select set, or the wait FAILED -- which returns
-     * immediately, so continuing to call it would make this loop the yield-spin
-     * the comment above promises it is not. Fall back to one explicit yield. */
+    /* Either there is no select set, or the wait failed -- a failed wait returns
+     * immediately, so retrying it would turn the caller's loop into a spin.
+     * Fall back to one explicit yield instead. */
     (void)wasmos_sched_yield();
 }
 
@@ -2027,8 +2037,9 @@ static void cli_phase_read_step(void) {
         g_input_notified = 0;
         have_ch = cli_vt_read_char(&ch);
         if (have_ch < 0) {
-            /* Transient VT read error; treat as empty and retry on next wake.
-             * All input arrives through the VT now — no serial fallback. */
+            /* Transient VT read error; treat as empty and retry on the next
+             * wake.  All input arrives through the VT (the VT injects serial RX
+             * into its serial-bound slot), so there is no separate fallback. */
             have_ch = 0;
         } else if (have_ch > 0) {
             from_vt = 1;
@@ -2232,15 +2243,16 @@ static void cli_phase_wait_ipc_step(void) {
     g_phase = CLI_PHASE_PROMPT;
 }
 
-/* Service entry point.  home_tty_arg (arg1) is the TTY index assigned by PM
- * (1-based).  Runs the phase state machine forever; only exits to the idle
- * recv loop on CLI_PHASE_FAILED. */
+/* Service entry point.  All four entry args are ignored: the proc endpoint and
+ * the controlling TTY come from the spawn-info contract and overwrite the
+ * corresponding parameters below.  Runs the phase state machine forever and
+ * never returns; a fatal error parks in wasmos_sys_ipc_recv_loop instead. */
 WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t home_tty_arg,
                                       int32_t ignored_arg2, int32_t ignored_arg3) {
     (void)ignored_arg2;
     (void)ignored_arg3;
-    /* proc.endpoint and the controlling TTY now come from the spawn-info
-     * contract, not entry args. */
+    /* The spawn-info contract supplies both values; the entry args carry
+     * nothing. */
     proc_endpoint = wasmos_startup_proc_endpoint();
     home_tty_arg = wasmos_startup_tty();
     g_phase = CLI_PHASE_INIT;

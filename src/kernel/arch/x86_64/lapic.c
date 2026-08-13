@@ -8,13 +8,15 @@
 
 /*
  * Local APIC (xAPIC mode) driver.  Reads the LAPIC physical base from the
- * IA32_APIC_BASE MSR, maps one 4 KB MMIO page into kernel virtual space, then
- * enables the LAPIC, disables the 8259 PIC, and programmes the LAPIC periodic
- * timer as the scheduler tick source at 250 Hz.
+ * IA32_APIC_BASE MSR, maps one 4 KB MMIO page into kernel virtual space, enables
+ * the LAPIC, and programmes its periodic timer as the scheduler tick source at
+ * the rate timer_init() passes down (250 Hz).  In IOAPIC mode (WASMOS_IRQ_MODE
+ * == 2) it also masks the 8259 PIC off; in mode 1 the PIC stays live behind
+ * LINT0.
  *
- * The existing isr_irq_0 stub fires at vector IRQ_VECTOR_BASE (32) — the
- * LAPIC timer is aimed at the same vector so the rest of the scheduler path
- * (x86_timer_irq_handler → process_preempt_from_irq) requires no changes.
+ * The timer LVT is aimed at IRQ_VECTOR_BASE (32) — the vector the isr_irq_0 stub
+ * serves — so a LAPIC tick reaches the scheduler through the same
+ * x86_timer_irq_handler → process_preempt_from_irq path as a PIT IRQ 0.
  */
 
 /* IA32_APIC_BASE MSR (0x1B): bits [51:12] hold the physical base, bit 11 is
@@ -195,8 +197,10 @@ void lapic_init(uint32_t hz) {
      * (lines 1–15) to the CPU via the LAPIC LINT0 pin.  Configure LINT0 as
      * ExtINT (delivery mode 7, bits [10:8] = 111) so the LAPIC passes the
      * 8259's interrupt vector directly to the CPU without setting any LAPIC ISR
-     * bit (Intel SDM Vol 3A §10.8.4).  IRQ 0 (timer) is driven by the LAPIC
-     * LVT_TIMER entry and therefore does NOT go through LINT0.
+     * bit (Intel SDM Vol 3A, Local APIC chapter, "Signaling Interrupt Servicing
+     * Completion" — an ExtINT-delivered interrupt takes no LAPIC EOI).  IRQ 0
+     * (timer) is driven by the LAPIC LVT_TIMER entry and therefore does NOT go
+     * through LINT0.
      */
     lapic_write(LAPIC_REG_LVT_LINT0, 0x700u); /* ExtINT, unmasked */
 #elif WASMOS_IRQ_MODE == 2
@@ -225,8 +229,9 @@ void lapic_eoi(void) {
 #define LAPIC_ICR_DELIVERY_INIT (0x5u << 8)
 #define LAPIC_ICR_DELIVERY_SIPI (0x6u << 8)
 
-/* Approximate I/O-port delay (port 0x80 is the standard POST code port;
- * one outb takes ~1 µs on x86 hardware and QEMU). */
+/* Busy delay built from writes to the POST-code port 0x80, the traditional
+ * ~1 µs-per-outb stall.  The count is an approximation, which is acceptable
+ * because the INIT-SIPI-SIPI delays it serves are minimum waits. */
 static void io_delay_us(uint32_t us) {
     for (uint32_t i = 0; i < us; i++) {
         __asm__ volatile("outb %%al, $0x80" : : "a"((uint8_t)0) : "memory");

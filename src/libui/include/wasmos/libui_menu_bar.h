@@ -33,6 +33,7 @@ static inline void ui_menu_bar_set_clock(ui_context_t* ctx, int32_t id, const ch
         return;
     ui_menu_bar_data_t* d = (ui_menu_bar_data_t*)c->component_data;
     int32_t i = 0;
+    /* Truncates at sizeof(clock_text) - 1 = 23 characters. */
     while (i < 23 && text && text[i]) {
         d->clock_text[i] = text[i];
         i++;

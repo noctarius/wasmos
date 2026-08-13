@@ -2,15 +2,15 @@
  * backend is selected.
  *
  * Provides:
- *   - Minimal C++ exception unwinding stubs (__gxx_personality_v0,
- *     _Unwind_Resume) — WARP's EH tables reference these even with
- *     panic-based exception handling.
- *   - Minimal RTTI typeinfo vtables for __cxxabiv1 — required for exception
- *     type matching even with -fno-rtti.
+ *   - Minimal RTTI typeinfo vtables for __cxxabiv1 — the catch clauses in
+ *     WARP's own sources need these emitted somewhere at link time.
  *   - malloc / memchr — standard library functions WARP or its dependencies
  *     call directly.
  *   - wasm3_* stubs — kernel_init_runtime.c and process.c reference wasm3
- *     symbols; in WARP mode they are never called but must link. */
+ *     symbols; in WARP mode they are never called but must link.
+ *
+ * The exception ABI itself (__cxa_*, __gxx_personality_v0, _Unwind_Resume)
+ * lives in warp/cxx_abi.cpp. */
 
 extern "C" {
 #include "klog.h"
@@ -51,9 +51,8 @@ unsigned long long wasm3_heap_committed_bytes(unsigned int) {
 } // extern "C"
 
 // ---------------------------------------------------------------------------
-// Minimal __cxxabiv1 RTTI typeinfo stubs — needed for exception type matching
-// even with -fno-rtti because catch(...) and catch(std::exception&) require
-// the typeinfo vtables to be present at link time.
+// Minimal __cxxabiv1 RTTI typeinfo stubs — catch(...) and catch(std::exception&)
+// require these typeinfo vtables to be present at link time.
 // ---------------------------------------------------------------------------
 
 namespace __cxxabiv1 {

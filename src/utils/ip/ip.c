@@ -1,15 +1,22 @@
 /* ip - minimal interface-address CLI for the native net-stack.
  *
- * Usage:
+ * Usage (the whole command line arrives as one string via wasmos_startup_args;
+ * a bare `ip` or `ip addr` is treated as `ip addr show`):
  *   ip addr show                         list interfaces and their addresses
  *   ip addr add <a.b.c.d>/<prefix> dev <name>   set an interface address
  *   ip addr del dev <name>               clear an interface address
  *   ip dev <name> up|down                administrative interface state
  *   ip dhcp <name> on|off                start/stop the DHCP client
+ *   ip dns show                          list the configured resolvers
+ *   ip dns set <ip> [<ip2>]              replace the resolver list
+ *   ip dns del <ip>                      drop one resolver from the list
  *
- * `<name>` is ethN/enN; its trailing digit is the interface index. Talks to the
+ * `<name>` is ethN/enN; its trailing digits are the interface index. Talks to the
  * `net.stack` service via NET_IPC_IFADDR_ADD/DEL/LIST, NET_IPC_IF_SET_STATE,
- * and NET_IPC_DHCP_SET.
+ * NET_IPC_DHCP_SET, and NET_IPC_DNS_SET/LIST.
+ *
+ * Every subcommand prints one `[ip] ...` line and returns 0 on success, 1 on
+ * any failure (bad arguments, no net.stack, or a non-RESP reply).
  */
 #include <stdint.h>
 
@@ -156,6 +163,9 @@ static uint32_t name_to_index(const char* name) {
     return idx;
 }
 
+/* Block on `ep` until the reply carrying `request_id` arrives, discarding up to
+ * 16 messages that carry a different id. Returns 0 with *message filled, or -1
+ * if the endpoint errors or 16 mismatched messages arrive first. */
 static int recv_reply(int32_t ep, int32_t request_id, wasmos_ipc_message_t* message) {
     for (int rounds = 0; rounds < 16; ++rounds) {
         int got = 0;

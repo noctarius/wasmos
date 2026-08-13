@@ -7,8 +7,12 @@
  *
  * The bucket array grows automatically (rehash) as the entry count rises, so
  * there is no fixed capacity: the map holds an arbitrary number of live keys,
- * bounded only by available memory.  Backed by the shared list allocator
- * (malloc with an early-boot arena fallback), same as list.c. */
+ * bounded only by available memory.  Backed by kmem (the global kernel slab
+ * with an early-boot arena fallback), same as list.c, so entries survive the
+ * reaping of whichever process happened to be running when they were made.
+ *
+ * The map carries no lock; a caller sharing one across CPUs must supply its
+ * own. */
 #ifndef WASMOS_HASHMAP_H
 #define WASMOS_HASHMAP_H
 

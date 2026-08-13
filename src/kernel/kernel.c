@@ -279,11 +279,10 @@ void kmain(boot_info_t* boot_info) {
     cpu_enable_interrupts();
     smp_cpus_up();
 
-    /* Note: each AP installs its own per-CPU idle thread in smp_ap_c_entry
-     * BEFORE it joins the scheduler loop, so there is no BSP-side idle-AP spawn
-     * pass here anymore — doing it on the BSP after smp_cpus_up() left a window
-     * in which an already-running AP could schedule with a NULL idle and panic
-     * ("no runnable thread (idle not dispatchable)"). */
+    /* Each AP installs its own per-CPU idle thread in smp_ap_c_entry BEFORE it
+     * joins the scheduler loop; the BSP must not take that on after
+     * smp_cpus_up(), because an already-running AP would then schedule with a
+     * NULL idle and panic ("no runnable thread (idle not dispatchable)"). */
 
 #ifdef WASMOS_SCHED_SMP_STRESS
     /* Standalone SMP scheduler stress test, compiled in only for the dedicated

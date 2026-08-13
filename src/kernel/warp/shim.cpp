@@ -455,7 +455,7 @@ static WarpPidConfig* pid_config_get(uint32_t pid) {
 
 } // namespace
 
-/* ---- Dedicated-VA linmem slots (Step 2b) --------------------------------- *
+/* ---- Dedicated-VA linmem slots ------------------------------------------- *
  * Each app's WARP linmem block lives in a VA slot from the shared linmem_slots
  * pool (paging.h WARP_LINMEM_* window): the VA is reserved once, scattered
  * physical pages are committed on demand as the block grows, so the base is

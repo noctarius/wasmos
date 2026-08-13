@@ -1,7 +1,8 @@
 /* runtime_context.c - WASM runtime memory-region helpers.
- * Resolves the LINEAR_MEMORY, STACK, and HEAP regions from an mm_context_t
- * so that host-call handlers can safely validate WASM linear-memory
- * pointers before dereferencing them. */
+ * Resolves the LINEAR_MEMORY, STACK and HEAP regions of an mm_context_t into a
+ * single runtime_context_t, the shape a host-call handler would need to bounds-
+ * check a guest linear-memory pointer.  Nothing calls it yet; see the TODO in
+ * runtime_context.h. */
 #include "runtime_context.h"
 
 static int find_region(const mm_context_t* ctx, mem_region_type_t type, mem_region_t* out) {

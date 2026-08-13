@@ -2,9 +2,10 @@
  *
  * Owns the driver's singleton state (block layer, mount geometry, open-file
  * pool) and a fixed pool + FIFO of in-flight operation contexts.  Accepts many
- * client requests but drives ONE active op at a time (the single block buffer
- * serializes physical I/O); each op is a resumable coroutine advanced across
- * block-I/O completions.  No blocking anywhere except the top-level select_wait.
+ * client requests but drives ONE active op at a time to completion (the single
+ * block buffer serializes physical I/O); each op is a resumable coroutine
+ * advanced across block-I/O completions.  The reactor loop blocks only in its
+ * top-level select_wait; the one-time init handshakes above it are synchronous.
  *
  * The intricate FAT logic lives in fat_geom/fat_name/fat_alloc/fat_dir/fat_file;
  * this file is only the transport + scheduling glue. */
@@ -47,6 +48,10 @@ static uint32_t g_fifo_tail = 0;
 static uint32_t g_fifo_len = 0;
 static fat_op_ctx_t* g_active = 0;
 
+/* Park the driver permanently after a fatal init failure.  Never returns: it
+ * waits on a private endpoint nobody sends to, keeping the process alive instead
+ * of exiting.  Only when the endpoint itself cannot be created does the loop
+ * degenerate into a spin. */
 static void fat_stall(void) {
     int32_t ep = wasmos_ipc_create_endpoint();
     for (;;) {
@@ -242,6 +247,10 @@ static void fat_send_response(fat_op_ctx_t* op, fat_r_t r) {
         int32_t a1 = op->resp_override ? op->resp_arg1 : 0;
         (void)wasmos_ipc_send(op->source, g_fs_endpoint, FS_IPC_RESP, op->request_id, a0, a1, 0, 0);
     } else {
+        /* FIXME: a step that returns FAT_R_ERR without recording a code (the
+         * fat_block_read_direct submit paths) reports a bare -1, which no peer
+         * can decode; every failure leaving this backend owes a packed
+         * WASMOS_ERR_FS_* from abi/errors.yaml. */
         int32_t err = op->err ? op->err : -1;
         (void)wasmos_ipc_send(op->source, g_fs_endpoint, FS_IPC_ERROR, op->request_id, err, 0, 0,
                               0);
@@ -289,11 +298,10 @@ static void fat_activate_next(void) {
     }
 }
 
-/* Drive the mount coroutine to completion at init (before signalling ready).
- * Reuses the reactor's own mount step + block-completion — not a separate
- * synchronous read path.  Blocking on the reply here is fine: it is one-time
- * bring-up with no client ops in flight (like the IDENTIFY / backend-info
- * handshakes).  A mount failure is fatal. */
+/* Drive the mount coroutine to completion at init, using the reactor's own mount
+ * step and block-completion path.  Blocking on the reply is admissible here and
+ * only here: it is one-time bring-up with no client ops in flight, like the
+ * IDENTIFY / backend-info handshakes.  A mount failure is fatal (fat_stall). */
 static void fat_mount_bringup(void) {
     static fat_op_ctx_t boot;
     memset(&boot, 0, sizeof(boot));
@@ -362,8 +370,8 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t block_endpo
     }
     fat_mount_init(&g_mnt);
     fat_open_pool_init(&g_pool);
-    /* Mount eagerly, before signalling ready, so the driver advertises a
-     * validated, parsed volume (matching the pre-rewrite fat_ensure_ready). */
+    /* Mount before signalling ready, so the driver only ever advertises a
+     * validated, parsed volume. */
     fat_mount_bringup();
 
     /* Resolve mount identity and register under the fs.backend class. */

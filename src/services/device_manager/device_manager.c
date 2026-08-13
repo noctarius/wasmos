@@ -1,6 +1,10 @@
-/* device_manager.c - user-space service coordinating hardware driver startup:
- * consumes PCI/ACPI inventory IPC messages, applies rule files, and spawns
- * drivers in dependency order (pci_bus -> fat -> rule-matched drivers). */
+/* device_manager.c - user-space service coordinating early hardware startup.
+ *
+ * It does no bus enumeration itself: the separate pci-bus and acpi-bus services
+ * scan and publish device records over IPC, and device-manager consumes those,
+ * matches them against the rule files, and spawns drivers in dependency order
+ * (pci-bus/acpi-bus -> storage bootstrap (ata/fs-fat) -> rule-matched drivers).
+ * Exactly one spawn is in flight at a time. */
 #include <stdint.h>
 #include "stdio.h"
 #include "string.h"
@@ -11,13 +15,6 @@
 #include "wasmos_driver_abi.h"
 #include "device_manager_types.h"
 #include "device_manager_rules.h"
-
-/*
- * device-manager coordinates early hardware startup in user space.
- * In this slice, a separate pci-bus service performs enumeration and publishes
- * records over IPC; device-manager consumes those records and selects storage
- * bootstrap (ata/fs-fat) before post-FAT drivers.
- */
 
 static device_manager_state_t g_dm = {
     .phase = HW_PHASE_INIT,
@@ -124,8 +121,8 @@ static void log_rule_roots_once(void) {
     g_dm.rules_roots_logged = 1;
     console_write("[device-manager] rule roots: " DEVMGR_RULES_INIT_ROOT
                   " (bootstrap), " DEVMGR_RULES_BOOT_ROOT " (override)\n");
-    /* TODO: rule actions are still informational; wire parsed rules into
-     * runtime bind/unbind/mount policy decisions in the next slice. */
+    /* TODO: a rule's action field is parsed but never consulted — only its match
+     * and spawn_path drive behaviour, so bind/unbind/mount actions are ignored. */
 }
 
 static int proc_running(const char* name);
@@ -155,10 +152,15 @@ static int dm_register_inventory_handlers(void);
 static int dm_register_query_handlers(void);
 static int dm_register_rules_handlers(void);
 
-/* Synchronous IPC call: send a request via the dm_ipc_loop intent table and
- * spin-poll until the matching reply arrives or max_empty_polls is reached.
- * Also drains the query endpoint while waiting so external callers don't stall.
- * Returns 0 on success, -1 on timeout or send failure. */
+/* Synchronous IPC call: send the request, then block on g_dm_call_select_id
+ * until the reply with the matching request_id arrives.  The wait is a real
+ * block, not a spin; the query endpoint is in the same select set and is served
+ * from here so external callers do not stall behind this call.  Replies for
+ * other request ids are consumed and discarded, and reset the empty-poll count.
+ * max_empty_polls > 0 bounds how many times the source endpoint may wake with
+ * nothing to dequeue before giving up; <= 0 means wait indefinitely.
+ * Returns 0 and fills *out_msg on success, -1 on send failure, a select error,
+ * or budget exhaustion. */
 static int dm_ipc_call(int32_t destination_endpoint, int32_t source_endpoint, int32_t msg_type,
                        int32_t request_id, int32_t arg0, int32_t arg1, int32_t arg2, int32_t arg3,
                        wasmos_ipc_message_t* out_msg, int32_t max_empty_polls) {
@@ -1002,18 +1004,10 @@ static int query_module_meta_by_path(const char* path, uint32_t source, int32_t*
     return (*out_index >= 0) ? 0 : -1;
 }
 
-/* Unpack a PCI device announcement from four IPC args into a registry record.
- *
- * Bit layout (agreed with pci_bus service sender):
- *   arg0 [31:24]=bus  [23:16]=device  [15:8]=function  [7:0]=class_code
- *   arg1 [31:24]=subclass  [23:16]=prog_if  [15:0]=vendor_id
- *   arg2 [31:16]=io_port_base  [15:0]=device_id
- *   arg3 [15:8]=irq_hint  [7:0]=mmio_hint
- */
-/* Consume a wasmos_pci_device_desc_t published into a borrowed buffer. The
- * legacy io_port_base/mmio_hint fields are derived from BAR0 so the existing
- * match and spawn paths keep working unchanged while callers migrate to the
- * full BAR table. */
+/* Consume a wasmos_pci_device_desc_t published into a borrowed buffer
+ * (DEVMGR_PUBLISH_DEVICE_DESC). The record's io_port_base/mmio_hint fields are
+ * derived from BAR0 so the arg-packed match and spawn paths keep working
+ * alongside the full BAR table. */
 static void registry_add_from_desc(int32_t buffer_id, int32_t offset, int32_t size) {
     wasmos_pci_device_desc_t desc;
     pci_device_record_t* rec;
@@ -1055,6 +1049,14 @@ static void registry_add_from_desc(int32_t buffer_id, int32_t offset, int32_t si
     queue_block_fs_rule_spawns();
 }
 
+/* Unpack an arg-packed device announcement (DEVMGR_PUBLISH_DEVICE) into a
+ * registry record.  Bit layout, shared with the pci-bus/acpi-bus senders:
+ *   arg0 [31:24]=bus  [23:16]=device  [15:8]=function  [7:0]=class_code
+ *   arg1 [31:24]=subclass  [23:16]=prog_if  [15:0]=vendor_id
+ *   arg2 [31:16]=io_port_base  [15:0]=device_id
+ *   arg3 [15:8]=irq_hint  [7:0]=mmio_hint
+ * bus == 0xFF marks a non-PCI (ACPI/ISA) device; the bars[] table stays empty
+ * for those, which is why they keep using this form. */
 static void registry_add_from_ipc(int32_t arg0, int32_t arg1, int32_t arg2, int32_t arg3) {
     if (g_dm.registry_count >= DEVICE_REGISTRY_CAP) {
         return;
@@ -1433,16 +1435,15 @@ static int query_driver_module_meta(int32_t module_index, uint32_t match_index,
     return rc;
 }
 
-/* Messages are routed by registered type, so an opcode nobody registered simply
- * vanishes -- no handler, no error, no trace. That silence cost real debugging
- * time when DEVMGR_PUBLISH_DEVICE_DESC was added and went nowhere, so say so.
+/* Default handler for the event loops: messages are routed by registered type,
+ * so an opcode nobody registered would otherwise vanish with no handler, no
+ * error and no trace.  This one logs it.
  *
- * It logs but does NOT reply. Error-replying to an unsolicited or unknown
- * message is what put process-manager and rtc into a mutual error ping-pong that
- * pegged a CPU; a service must be able to receive something it does not
- * understand without generating traffic. The name lookup is subsystem-scoped
- * because opcode values are endpoint-scoped and a global lookup would mislabel
- * them. */
+ * It logs but MUST NOT reply. Error-replying to an unsolicited or unknown
+ * message puts two services into a mutual error ping-pong that pegs a CPU; a
+ * service must be able to receive something it does not understand without
+ * generating traffic. The name lookup is subsystem-scoped because opcode values
+ * are endpoint-scoped and a global lookup would mislabel them. */
 static void dm_handle_ipc_default(void* user, const wasmos_ipc_message_t* msg) {
     (void)user;
     if (!msg) {
@@ -1815,9 +1816,10 @@ static void handle_query_endpoint_nonblocking(void) {
             return;
         }
         wasmos_ipc_message_read_last(&msg);
-        /* This drain must stay nonblocking: the threadable libsys event-loop
-         * poll now blocks on empty select-sets, but device-manager still needs
-         * to make forward progress on pending spawn targets between queries. */
+        /* This drain must stay nonblocking (wasmos_ipc_drain, not the libsys
+         * event-loop poll, which blocks on an empty select set): device-manager
+         * still has to make forward progress on pending spawn targets between
+         * queries. */
         handle_query_message_fields(&msg);
     }
 }
@@ -1853,11 +1855,13 @@ static void drain_reply_endpoint_nonblocking(int32_t budget) {
     }
 }
 
-/* Service entry point.  module_count (arg1) is the number of initfs modules
- * known to PM; used to decide whether pci_bus/fat modules are available.
+/* Service entry point.  All four entry args are ignored: the proc endpoint and
+ * the initfs module count come from the spawn-info contract and overwrite the
+ * corresponding parameters.  The module count decides whether the pci_bus/fat
+ * modules are available at all.
  * Creates four event-loop endpoints (ipc, inventory, query, rule_reply),
  * registers services "devmgr.inv" and "devmgr.query", loads init rules,
- * then runs the hw_phase state machine.
+ * then runs the hw_phase state machine and never returns.
  * NOTE: boot rules (DEVMGR_RULES_BOOT_ROOT) must be fully loaded before new
  * rule-driven spawns begin — poll_boot_rules_async must not be called while
  * a rule spawn is active or it will corrupt active_rule_spawn_* state. */
@@ -1865,7 +1869,6 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t module_coun
                                       int32_t ignored_arg2, int32_t ignored_arg3) {
     (void)ignored_arg2;
     (void)ignored_arg3;
-    /* proc.endpoint and module.count now come from the spawn-info contract. */
     proc_endpoint = wasmos_startup_proc_endpoint();
     module_count = (int32_t)wasmos_startup_module_count();
 

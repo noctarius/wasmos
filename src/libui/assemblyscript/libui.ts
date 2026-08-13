@@ -286,11 +286,13 @@ export class Context {
         return reply != null && reply.type == 0x0280 && reply.arg0 == WASMOS_ERR_NONE;
     }
 
+    // Block for one pushed event, process it, and return 1 if it was handled
+    // (0 for a non-event message or GFX_EVENT_NONE). The caller loops, so the
+    // thread sleeps in the kernel between events instead of polling. `limit` is
+    // ignored: exactly one event is consumed per call.
     pump(limit: i32 = 8): i32 {
         this.previousButtons = this.pointerButtonsValue;
         let handled = 0;
-        // Block for one pushed event, then process it. The caller loops, so the
-        // thread sleeps in the kernel between events instead of polling.
         {
             const reply = ipc.recv(this.eventEndpoint);
             if (reply == null || reply.type != GFX_IPC_PUSH_EVENT) {
@@ -419,6 +421,8 @@ export class Context {
         }
     }
 
+    // Draws digits 0-8 from a 3x5 bitmap font, scaled by `scale`.
+    // FIXME: the glyph table has no '9', so drawDigit3x5(9) draws nothing.
     drawDigit3x5Internal(x: i32, y: i32, digit: i32, scale: i32, color: u32): void {
         if (digit < 0 || digit > 8 || scale <= 0) {
             return;

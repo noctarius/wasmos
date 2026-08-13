@@ -1,4 +1,6 @@
-/* stdio.h - Minimal kernel stdio declarations: kprintf/snprintf over serial console. */
+/* stdio.h - Minimal kernel stdio declarations. printf/fprintf both route to the
+ * kernel log regardless of stream; FILE and stderr exist only so third-party
+ * sources compile. */
 #ifndef WASMOS_STDIO_H
 #define WASMOS_STDIO_H
 

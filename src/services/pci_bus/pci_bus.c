@@ -545,7 +545,9 @@ static void publish_desc(int32_t devmgr_endpoint, int32_t source_endpoint, int32
 
 /* Brute-force scan (buses 0-255, devices 0-31, functions 0-7), publishing each
  * present function. Stops scanning functions for single-function devices
- * (header type bit 7 = 0). Returns the next free request id. */
+ * (header type bit 7 = 0), and abandons the scan once PCI_MAX_PUBLISHED_DEVICES
+ * slots are filled — later functions are then never published. Returns the next
+ * free request id. */
 static int32_t pci_scan_and_publish(int32_t devmgr_endpoint, int32_t source_endpoint,
                                     int32_t buffer_id, int32_t request_id) {
     uint32_t slot = 0;
@@ -651,7 +653,8 @@ static void handle_request(int32_t service_endpoint, const wasmos_ipc_message_t*
  * and then serves MSI programming requests for the rest of the boot. */
 WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t ignored_arg1,
                                       int32_t ignored_arg2, int32_t ignored_arg3) {
-    /* proc.endpoint now comes from the spawn-info contract, not an entry arg. */
+    /* The proc endpoint comes from the spawn-info contract; the entry args carry
+     * nothing and the parameter is overwritten. */
     proc_endpoint = wasmos_startup_proc_endpoint();
     (void)ignored_arg1;
     (void)ignored_arg2;

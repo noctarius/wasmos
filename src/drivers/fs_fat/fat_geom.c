@@ -88,6 +88,12 @@ static int fat_parse_boot(fat_mount_t* mnt, const uint8_t* sector) {
     mnt->root_dir_sectors = root_dir_sectors;
     mnt->root_dir_lba = mnt->boot_lba + bpb->reserved_sectors + (bpb->fat_count * fat_size);
 
+    /* Cluster-count thresholds per the FAT specification: < 4085 is FAT12,
+     * < 65525 is FAT16, everything else FAT32 (which also has no fixed-size root
+     * directory, hence root_entry_count == 0).
+     * TODO: FAT32 is only detected, never served — the mount succeeds but every
+     * FAT-table access then fails with WASMOS_ERR_FS_CORRUPT (fat_alloc.c),
+     * because 32-bit entries and a cluster-chained root are unimplemented. */
     if (bpb->root_entry_count == 0) {
         mnt->fat_type = FAT_TYPE_32;
         fat_log("FAT32 detected\n");

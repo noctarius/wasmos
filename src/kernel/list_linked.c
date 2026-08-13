@@ -1,7 +1,15 @@
-/* list_linked.c - Singly-linked list backend.
- * Nodes are allocated with the early-boot arena or slab allocator and carry an
- * inline variable-length payload.  O(n) traversal; O(1) prepend/remove at
- * current iterator position. */
+/* list_linked.c - Singly-linked list backend for list.h.
+ *
+ * One kmem_alloc per element: a node header plus elem_size bytes of inline
+ * payload, and the payload address is what the list API hands out. Nodes are
+ * pushed at the head, so list_alloc is O(1) and iteration yields elements in
+ * reverse allocation order. list_remove scans for the matching payload
+ * address, so it is O(n); list_destroy frees every node and the state block.
+ *
+ * The iterator holds the node it last returned. Removing that element frees the
+ * node, so list_next on the same iterator afterwards reads freed memory; list.h
+ * states the rule for both backends, which is to restart the walk after any
+ * mutation. config_value is unused here, so the list is bounded only by kmem. */
 #include "list_internal.h"
 #include "kmem.h"
 #include "string.h"

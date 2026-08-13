@@ -1,6 +1,11 @@
 /* mutex.h - WASM recursive mutex for libsys (WASM target).
- * Wraps the wasmos_mutex_lock/unlock host-calls to provide a recursive mutex
- * that WASM drivers and services can use for shared-state protection. */
+ * The kernel owns the locking logic behind the mutex_try_lock / mutex_unlock
+ * imports (declared in wasmos/api.h); this header only holds the shared state
+ * struct and the yield-retry loop that turns try_lock into a blocking lock.
+ * try_lock/lock return 0 when acquired, <0 on error (unlock also reports <0 for
+ * a non-owner); lock never returns 1, the contended status it retries on.
+ * Keep in sync with the identical definitions in src/libc/include/wasmos/mutex.h,
+ * which add the native x86_64 syscall path. */
 #ifndef WASMOS_LIBSYS_WASMOS_MUTEX_H
 #define WASMOS_LIBSYS_WASMOS_MUTEX_H
 

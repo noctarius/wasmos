@@ -1,7 +1,11 @@
-/* policy.c - IPC message policy engine.
- * Evaluates allow/deny rules against (source, destination, message-type) tuples.
- * Rules are stored in a compact table and checked on every IPC send to enforce
- * inter-process communication boundaries. */
+/* policy.c - Authorization gate for privileged hardware actions.
+ *
+ * Maps a policy_action_t (port I/O, MMIO map, DMA buffer, IRQ control/route,
+ * system control) onto the capabilities and spawn profile recorded for a
+ * context in capability.c, and decides whether the action is allowed.
+ * policy_authorize returns the verdict (0 allowed, -1 denied); policy_require
+ * additionally kills the offending process on denial.  Default-deny: an unknown
+ * action, an unconfigured context, or an out-of-window resource is refused. */
 #include "policy.h"
 #include "capability.h"
 #include "ipc.h"
@@ -15,8 +19,10 @@ typedef struct {
     uint16_t irq_mask;
 } irq_route_policy_t;
 
-/* Keep policy explicit and default-deny for userspace: capability ownership is
- * necessary but not sufficient for IRQ line routing. */
+/* Fallback IRQ allowlist, consulted by name only for a context that has no
+ * spawn profile; a context with one is decided by its profile's irq_mask.
+ * Explicit and default-deny: holding CAP_IRQ_ROUTE is necessary but not
+ * sufficient to route a specific line. */
 static const irq_route_policy_t g_irq_route_policy[] = {
     {"ata", (uint16_t)((1u << 14) | (1u << 15))},
     {"irq-route-allow", (uint16_t)(1u << 1)},

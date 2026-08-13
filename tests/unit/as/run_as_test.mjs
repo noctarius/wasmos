@@ -19,9 +19,10 @@ import { readFileSync } from "node:fs";
 
 const [wasmPath, label] = process.argv.slice(2);
 
-/* Randomized case order, replayable via WASMOS_TEST_SEED. Node has no
-   splitmix64, so the shuffle itself lives in the guest (tests/unit/as/shuffle.ts)
-   and this only supplies the seed and prints what failed. */
+/* Randomized case order, replayable via WASMOS_TEST_SEED. The guest exports
+   only runTests(), so the case list and the shuffle live there
+   (tests/unit/as/shuffle.ts); this side supplies the seed and prints what
+   failed. */
 const configuredSeed = process.env.WASMOS_TEST_SEED;
 const testSeed = configuredSeed
   ? BigInt.asIntN(64, BigInt(configuredSeed))
@@ -36,12 +37,14 @@ let nextSelectId = 1;
 const selects = new Map();
 
 /* Test-controlled fabric behaviour. */
-let sendFailFrom = -1; /* endpoint whose sends fail; -1 = none */
+/* Destination whose sends fail; -1 disables it. Sends to any negative
+   destination fail regardless, since an endpoint handle is never negative. */
+let sendFailFrom = -1;
 let waitCount = 0;
 let sendCount = 0;
 let selectBroken = false;
-/* One scripted delivery performed the next time the guest blocks in
- * ipc_select_wait, modelling a peer that replies while the guest is blocked. */
+/* One scripted delivery performed the next time the guest blocks (either wait
+ * variant), modelling a peer that replies while the guest is blocked. */
 let onWait = null;
 /* Timeouts the guest asked for, so a test can assert it blocked rather than
    spun, and for how long. */
@@ -100,8 +103,10 @@ const wasmos = {
   },
   ipc_select_wait: (selectId) => {
     waitCount++;
-    /* A real wait returns when a peer sends. Single-threaded here, so the
-     * test scripts that peer's send as the thing the wait unblocks on. */
+    /* A real wait returns when a peer sends. Single-threaded here, so the test
+     * scripts that peer's send as the thing the wait unblocks on. The first
+     * endpoint in the set is reported ready either way; the guest re-drains
+     * afterwards, so a wait that delivered nothing reads as a spurious wake. */
     if (onWait) {
       const deliver = onWait;
       onWait = null;

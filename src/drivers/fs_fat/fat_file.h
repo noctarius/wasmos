@@ -5,14 +5,18 @@
  * fat_op_ctx_t; the open-file table is an fat_open_pool_t the reactor owns and
  * passes in by pointer.
  *
- * Reads/writes copy through the CLIENT transfer buffer by id (op->arg2) via the
- * xfer-buffer read/write calls; a zero-copy borrow passthrough is a later
- * milestone and is NOT implemented here.
+ * Reads and writes address the CLIENT transfer buffer by id (op->arg2) through
+ * the xfer-buffer read/write calls.  A read additionally takes the zero-copy
+ * path for whole sectors: it reborrows that buffer to the block server, which
+ * lands the sectors there directly (see fat_block_read_direct).  Partial sectors
+ * and all writes stage through the block buffer.
  *
- * Error reporting: every path whose result reaches a client FAILs with a
- * granular WASMOS_ERR_FS_* via FAT_CO_FAIL, never a blanket -1. The open-file
- * table helpers below (alloc/access_mode/set_offset) return -1 on bad
- * arguments; those values stay inside the driver and never become a reply. */
+ * Error reporting: the op steps here fail with a granular WASMOS_ERR_FS_* via
+ * FAT_CO_FAIL rather than a blanket -1. The one gap is a zero-copy submit
+ * failure, which fat_block_read_direct reports without setting op->err (see the
+ * FIXME there). The open-file table helpers below (alloc/access_mode/set_offset)
+ * return -1 on bad arguments; those values stay inside the driver and never
+ * become a reply. */
 #ifndef FS_FAT_FAT_FILE_H
 #define FS_FAT_FAT_FILE_H
 
@@ -21,8 +25,8 @@
 #include "fat_geom.h"
 #include "fat_types.h"
 
-/* The reactor-owned open-file table (replaces the g_open_files[] global).  The
- * reactor holds one instance and passes it to every fd op.  fd = index + 3. */
+/* The open-file table.  The reactor holds the single instance and passes it to
+ * every fd op; a slot belongs to the endpoint that opened it.  fd = index + 3. */
 typedef struct {
     fat_open_file_t files[FAT_MAX_OPEN_FILES];
 } fat_open_pool_t;

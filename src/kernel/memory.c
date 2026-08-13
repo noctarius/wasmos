@@ -31,6 +31,8 @@ static ksync_spinlock_t g_contexts_lock;
 static mm_context_t g_root_ctx;
 static uint8_t g_mm_copy_stacks[WASMOS_MAX_CPUS][MM_COPY_STACK_BYTES] __attribute__((aligned(16)));
 
+/* Kernel higher-half alias of a low (identity-mapped) address; already-high
+ * addresses pass through unchanged. */
 static inline uintptr_t mm_kernel_alias_addr(uintptr_t addr) {
     if ((uint64_t)addr < KERNEL_HIGHER_HALF_BASE) {
         return (uintptr_t)((uint64_t)addr + KERNEL_HIGHER_HALF_BASE);
@@ -38,7 +40,10 @@ static inline uintptr_t mm_kernel_alias_addr(uintptr_t addr) {
     return addr;
 }
 
+/* Array-chunk capacity of g_shared_list, not a hard cap: the list grows by
+ * whole chunks. It also bounds the id-probe loop in mm_shared_create. */
 #define MM_MAX_SHARED 16
+/* Grant slots per shared region; grants beyond this are refused. */
 #define MM_MAX_SHARED_GRANTS 8
 typedef struct {
     uint32_t id;
@@ -72,6 +77,11 @@ static void mm_context_release_regions(mm_context_t* ctx);
 static mm_context_t* mm_context_get_locked(uint32_t id);
 static mm_shared_region_t* mm_shared_find_locked(uint32_t id);
 
+/* Run fn(arg) on this CPU's higher-half copy stack.  The user-copy helpers flip
+ * CR3 to a process root, which carries no low identity mapping, so a stack that
+ * currently lives at a low VA would disappear mid-copy.  A stack already in the
+ * higher half is safe under any root and is used as-is.  Returns fn's value, or
+ * -1 for a NULL fn (internal-only; never crosses a subsystem boundary). */
 static int mm_run_on_copy_stack(mm_copy_work_fn fn, void* arg) {
     if (!fn) {
         return -1;
@@ -478,9 +488,9 @@ int mm_handle_page_fault(uint32_t context_id, uint64_t addr, uint64_t error_code
     }
 
     uint64_t page_base = addr & ~(PAGE_SIZE - 1ULL);
-    /* Region metadata now tracks a process-visible virtual base and a separate
-     * physical backing base. Fault resolution wires the missing virtual page
-     * into the owning context's private root table on demand. */
+    /* A region carries a process-visible virtual base and a separate physical
+     * backing base, so the faulting page resolves to phys_base + (VA offset into
+     * the region) and is wired into the owning context's private root table. */
     uint64_t phys_page = region->phys_base + (page_base - region->base);
     int rc = paging_map_4k_in_root(ctx->root_table, page_base, phys_page, region->flags);
     if (rc < 0) {
@@ -501,15 +511,18 @@ int mm_shared_create(uint32_t owner_context_id, uint64_t pages, uint32_t flags, 
     ksync_spinlock_lock(&g_shared_lock);
     mm_shared_init_once_locked();
 #if WASMOS_WASM_RUNTIME == 1 /* WARP JIT backend */
-    /* Allocate shmem from the dedicated shmem zone (below WASMOS_SHMEM_PHYS_LIMIT)
-     * so canonical kernel VAs (phys | kHalfBase) never fall inside a WARP
-     * linear-memory range.  WARP linear memory is allocated above the limit,
-     * keeping the two zones non-overlapping and preventing WARP's
-     * ensureLinearSize zero-fill from aliasing active shmem pages. */
+    /* Shmem takes frames from the zone below WASMOS_SHMEM_PHYS_LIMIT.  WARP's
+     * own allocators (warp_kmalloc, MemUtils::allocPagedMemory, the ring-3 JIT
+     * pages) take frames at or above that limit, so a bulk zero-fill reaching
+     * through their direct-map alias (phys | KERNEL_HIGHER_HALF_BASE) cannot
+     * land on an active shmem page.
+     * FIXME: linmem_slot_commit() allocates linear-memory frames with plain
+     * pfa_alloc_pages(), i.e. without the above-limit floor, so this separation
+     * no longer covers slot-backed linear memory. */
     uint64_t base = pfa_alloc_pages_below(pages, WASMOS_SHMEM_PHYS_LIMIT);
 #else
-    /* wasm3: no WARP linear-memory aliasing risk — shmem can use any
-     * physical page without competing with a separate WARP zone. */
+    /* wasm3 has no above-limit allocator zone to stay clear of, so shmem may
+     * take any free frame. */
     uint64_t base = pfa_alloc_pages(pages);
 #endif
     if (!base) {
@@ -828,12 +841,12 @@ int mm_context_rebind_wasm_linear(uint32_t context_id, uint64_t phys_base, uint6
 
 /* Bind the WASM_LINEAR user-region VA to a SCATTERED kernel backing (a
  * reserved-VA linmem slot, whose pages are not physically contiguous).  Maps
- * each region page to the physical frame backing kernel_base + off, so the
- * user-region alias tracks the interpreter's slot-VA view page for page.  Used
- * by wasm3 once linear memory lives in a linmem slot (the single-phys_base
- * mm_context_rebind_wasm_linear can't describe scattered backing).  The slot
- * owns the physical pages, so the region is marked PHYS_EXTERNAL (phys_base=0)
- * and mm_context_destroy will not free them. */
+ * region page P of the range [from_page, to_page) to the frame backing
+ * slot_va_base + P*PAGE_SIZE, so the user-region alias tracks the slot-VA view
+ * page for page.  The single-phys_base mm_context_rebind_wasm_linear cannot
+ * describe scattered backing, which is why both exist.
+ * Returns 0 on success, -1 on a bad argument, a missing WASM_LINEAR region, an
+ * unmapped slot page, or a failed mapping (internal status, not a packed code). */
 int mm_context_bind_wasm_linear_scattered(uint32_t context_id, uint64_t slot_va_base,
                                           uint64_t from_page, uint64_t to_page) {
     mm_context_t* ctx = 0;
@@ -949,12 +962,12 @@ mm_context_t* mm_context_create(uint32_t id) {
         ksync_spinlock_unlock(&g_contexts_lock);
         return 0;
     }
-    /* wasm3 instantiates modules with a 1-page (64 KiB) initial linear memory.
-     * The user-VA mirror region must cover that whole range, otherwise host
-     * calls that reconcile the user view (wasm_copy_*_user_sync_views) reject
-     * pointers whose offset lands above the region — e.g. a service whose stack
-     * sits high in linear memory failing svc_register.  16 pages == 64 KiB
-     * matches the wasm3 initial memory (and the root context). */
+    /* wasm3 instantiates modules with one wasm page (64 KiB) of initial linear
+     * memory.  The user-VA mirror region must cover that whole range, otherwise
+     * host calls that reconcile the user view (wasm_copy_*_user_sync_views)
+     * reject pointers whose offset lands above the region — e.g. a service whose
+     * stack sits high in linear memory failing svc_register.  16 * 4 KiB frames
+     * == 64 KiB, matching the wasm3 initial memory (and the root context). */
     if (mm_context_alloc_region(ctx, 16,
                                 MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE | MEM_REGION_FLAG_USER,
                                 MEM_REGION_WASM_LINEAR) != 0) {
@@ -1050,7 +1063,7 @@ typedef struct {
     const uint8_t* kernel_ptr;
 } mm_copy_to_user_args_t;
 
-/* Called on the dedicated copy-stack to safely read from a user address space.
+/* Read from a user address space; runs under mm_run_on_copy_stack.
  *
  * The copy must be chunked through a stack-allocated bounce buffer because
  * `dst` is a kernel pointer that is NOT mapped in the user page table.
@@ -1088,9 +1101,9 @@ static int mm_copy_from_user_impl(void* opaque) {
                                args->size, args->prev_root, paging_get_current_root_table(),
                                user_cur, n);
             /* Cannot return: the CPU is still under the user page table, so
-             * every kernel address is unmapped and unwinding would fault. A
-             * silent halt here left the machine wedged with no reason on the
-             * wire; kpanic prints one first. */
+             * every kernel address is unmapped and unwinding would fault.
+             * kpanic emits the reason before halting; a bare halt would wedge
+             * the machine with nothing on the wire. */
             kpanic("mm: cannot restore the kernel page table", args->context_id,
                    (uint64_t)args->user_addr);
         }
@@ -1163,9 +1176,9 @@ static int mm_copy_to_user_impl(void* opaque) {
                                args->size, args->prev_root, paging_get_current_root_table(),
                                user_cur, n);
             /* Cannot return: the CPU is still under the user page table, so
-             * every kernel address is unmapped and unwinding would fault. A
-             * silent halt here left the machine wedged with no reason on the
-             * wire; kpanic prints one first. */
+             * every kernel address is unmapped and unwinding would fault.
+             * kpanic emits the reason before halting; a bare halt would wedge
+             * the machine with nothing on the wire. */
             kpanic("mm: cannot restore the kernel page table", args->context_id,
                    (uint64_t)args->user_addr);
         }

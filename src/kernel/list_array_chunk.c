@@ -1,7 +1,16 @@
-/* list_array_chunk.c - Chunk-array list backend.
- * Items are packed into fixed-size chunks (each holding up to
- * LIST_ARRAY_CHUNK_SLOTS elements) to reduce allocator pressure and improve
- * cache locality over the linked-list backend for large collections. */
+/* list_array_chunk.c - Chunk-array list backend for list.h.
+ *
+ * Elements are packed into chunks of list_init's config_value slots (rejected
+ * if zero), one kmem_alloc per chunk instead of one per element. A slot is a
+ * LIST_ARRAY_SLOT_ALIGN-byte header whose first byte is the in-use flag,
+ * followed by the payload; the stride is rounded up so every payload stays
+ * 8-byte aligned.
+ *
+ * list_alloc reuses the first free slot and only allocates a new chunk when
+ * every existing one is full, so it is O(total slots); chunks are linked at
+ * the head and are released only by list_destroy, never when they drain.
+ * Iteration therefore visits the newest chunk first, and an element added
+ * during a walk may land in a slot the iterator has already passed. */
 #include "list_internal.h"
 #include "kmem.h"
 #include "string.h"
@@ -9,12 +18,12 @@
 typedef struct list_array_chunk {
     struct list_array_chunk* next;
     uint32_t capacity;
-    /* Pads slots[] up to LIST_ARRAY_SLOT_ALIGN. Without it the flexible array
-     * starts at offset 12, so every element handed out is 4-byte aligned even
-     * though the stride below is carefully rounded to 8 — misaligned for any
-     * element type holding a pointer or a 64-bit field (ipc_endpoint_t,
-     * mm_context_t, ...). x86_64 tolerates that for plain loads and stores, so
-     * it stayed invisible until UBSan ran over the IPC endpoint table. */
+    /* Pads slots[] to a LIST_ARRAY_SLOT_ALIGN boundary. Without it the flexible
+     * array starts at offset 12 and every payload handed out is only 4-byte
+     * aligned despite the rounded stride, which is misaligned for element types
+     * holding a pointer or a 64-bit field (ipc_endpoint_t, mm_context_t, ...).
+     * x86_64 tolerates the misalignment on plain loads and stores, so nothing
+     * but UBSan reports it. */
     uint32_t reserved;
     uint8_t slots[];
 } list_array_chunk_t;

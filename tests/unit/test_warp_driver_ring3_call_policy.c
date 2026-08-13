@@ -1,3 +1,15 @@
+/* The lock/resched decision a WARP driver export call makes
+ * (src/kernel/warp_driver_ring3_call_policy.c), which is split out of
+ * warp_driver.cpp so it can be exercised without a driver, a runtime or a page
+ * table.
+ *
+ * The input is the driver's ring-3 root page table. Nonzero means the call
+ * IRETs to ring 3, where it must stay preemptible and may block, so the caller
+ * releases the driver lock and the runtime binding before the call and clears
+ * the need_resched that accumulated during ring-0 startup. Zero means there is
+ * no ring-3 address space for this call: the export runs in ring 0 and the lock
+ * is held across it. */
+
 #include <assert.h>
 #include <stdio.h>
 

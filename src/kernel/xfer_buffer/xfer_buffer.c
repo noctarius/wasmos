@@ -15,14 +15,12 @@
 #include "sync/spinlock.h"
 #include "wasmos_driver_abi.h"
 
-/* Intrinsic capacity of the generic transfer buffer kind. Mirrors the kernel's
- * PM_XFER_BUFFER_SIZE; reconciled to a single source of truth when the object
- * model is wired into the process manager. */
 /* Standard TRANSFER buffer size reported by xfer_buffer_size()/the
  * wasmos_xfer_buffer_size() hostcall. Callers use it as the chunk size for FS
  * transfers, so it is kept stable. Individual buffers are right-sized to the
  * requested minimum_size (page-rounded) at acquire time; this is just the
- * conventional/default size. */
+ * conventional/default size. Kept equal to the process manager's
+ * PM_XFER_BUFFER_SIZE (process_manager_internal.h). */
 #define XFER_TRANSFER_CAPACITY (2u * 1024u * 1024u)
 /* Hard upper bound a single TRANSFER buffer may request. Sized to admit a
  * full-resolution compositor backbuffer (e.g. 1280x800x4 = 4 MiB) with headroom. */
@@ -65,8 +63,8 @@ static uint32_t g_next_borrow_id = 1u;
 
 /* SMP guard for the whole object/borrow registry (g_objects, g_borrows, the id
  * counters, and the init-once flag). The kernel runs multi-core and every
- * spawn/reap now touches the registry (each process owns a spawn-info buffer),
- * so acquire/release/borrow/drop_context run concurrently across CPUs. Every
+ * spawn/reap touches the registry (each process owns a spawn-info buffer), so
+ * acquire/release/borrow/drop_context run concurrently across CPUs. Every
  * public xfer_buffer_* entry takes this lock via its wrapper; the internal
  * *_locked cores and helpers assume it is already held. Zero-initialized state
  * (== unlocked) is a valid starting value, so no explicit init is required. */
@@ -385,6 +383,10 @@ static int xfer_buffer_get_borrowed_locked(uint32_t borrow_id, uint32_t context_
     return WASMOS_ERR_NONE;
 }
 
+/* Physical backing for a new object, or 0 if none is available.  A TRANSFER
+ * object OWNS freshly allocated frames, which object_free_backing returns.  A
+ * FRAMEBUFFER object merely points at the firmware framebuffer, which the object
+ * never owns and must never free. */
 static uint64_t object_alloc_backing(uint32_t kind, uint32_t size_bytes) {
     if (kind == BUFFER_KIND_TRANSFER) {
         uint64_t pages = ((uint64_t)size_bytes + XFER_PAGE_SIZE - 1u) / XFER_PAGE_SIZE;

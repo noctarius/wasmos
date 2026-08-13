@@ -106,10 +106,13 @@ func wasmPromiseReject(*Promise, int32) bool
 //go:extern wasmos_future_then
 func wasmFutureThen(*Runtime, *Future, *Continuation, Callback, Callback, unsafe.Pointer) *Future
 
-// Both of these need //go:linkname as well as //go:extern: on a bodyless func
-// //go:extern alone binds a VARIABLE, leaving the symbol undefined at link
-// time. Race and All therefore never linked, so no Go guest could call them --
-// unnoticed because the only Go example does not use groups.
+// A bodyless func needs //go:linkname as well as //go:extern: //go:extern alone
+// binds a VARIABLE of that name, which leaves the call site's symbol undefined
+// at link time.
+//
+// FIXME(go-extern-linkname): wasmFutureThen and the wasmIPCFuture* declarations
+// below carry //go:extern only, so Future.Then and the IPCFuture methods hit
+// that same undefined-symbol failure the moment a Go guest links them.
 //
 //go:extern wasmos_future_race
 //go:linkname wasmFutureRace wasmos_future_race
@@ -339,18 +342,15 @@ func (f *Future) ThenFlatGo(runtime *Runtime, continuation, adopt *Continuation,
 	return nil
 }
 
-// releaseGoCallback frees a registration once its callback has run.
+// releaseGoCallback frees a registration once its callback has run, so the
+// fixed goFutureCallbackMax table cannot fill up permanently and start refusing
+// every further ThenGo/ThenFlatGo in a long-running service.
 //
 // The C runtime dispatches a continuation at most once -- continuation_dispatch
 // clears active and future before invoking -- so the slot is dead as soon as any
 // of the three entry points below fires. Both the plain and the flat variant are
 // covered: wasmos_go_future_then_flat passes ONE id as both the chain and the
 // error callback, so a rejected flat chain releases through the error path.
-//
-// Without this the table filled permanently: ThenGo returned nil after 32
-// registrations for the lifetime of the process, so a long-running service
-// silently stopped chaining. Pinned by the registry-exhaustion case in
-// tests/unit/test_wasm_coroutine.go.
 func releaseGoCallback(callbackID uint32) {
 	if callbackID == 0 || callbackID > goFutureCallbackMax {
 		return
@@ -658,8 +658,11 @@ func (fsAPI) StatAsync(path string) *AsyncFSOperation {
 	return op
 }
 
-// Race settles with the first input result. inputs and continuations must have
-// identical non-zero lengths and remain live until every input settles.
+// Race settles with the first input result, success or failure. inputs and
+// continuations must have identical non-zero lengths; the group storage,
+// including this slice pair, must stay live until the returned future settles,
+// at which point the runtime releases the continuations still registered on the
+// losing inputs (see wasmos_future_group in coroutine_wasm.h).
 func (g *FutureGroup) Race(runtime *Runtime, inputs []*Future, continuations []Continuation) *Future {
 	if runtime == nil || len(inputs) == 0 || len(inputs) != len(continuations) {
 		return nil
@@ -667,9 +670,11 @@ func (g *FutureGroup) Race(runtime *Runtime, inputs []*Future, continuations []C
 	return wasmFutureRace(runtime, g, unsafe.Pointer(&inputs[0]), uintptr(len(inputs)), &continuations[0])
 }
 
-// All settles successfully after all inputs; values receives each result in
-// input order. All three slices must have identical non-zero lengths and stay
-// live until every input settles.
+// All settles successfully once every input succeeds, with values receiving each
+// result in input order, or rejects on the first failure. All three slices must
+// have identical non-zero lengths and stay live until the returned future
+// settles; a rejection releases the continuations still registered on the
+// inputs that had not settled yet.
 func (g *FutureGroup) All(runtime *Runtime, inputs []*Future, values []uintptr, continuations []Continuation) *Future {
 	if runtime == nil || len(inputs) == 0 || len(inputs) != len(values) || len(inputs) != len(continuations) {
 		return nil

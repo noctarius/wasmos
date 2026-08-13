@@ -1,14 +1,10 @@
 /* fat_file.c - POSIX fd-operation layer for the FAT reactor.  See fat_file.h.
  *
- * Ported from the blocking driver's open-file table + fat_handle_* handlers,
- * made resumable on the fat_co.h coroutine pattern: fat_sync_block_read/write
- * become FAT_CO_READ/FAT_CO_WRITE, the per-op globals (g_fs_req/g_fs_resp_*)
- * become fat_op_ctx_t fields, and the g_open_files[] table becomes a caller-
- * owned fat_open_pool_t.  Loop cursors live in the context; C locals carry no
- * initializers because the resume switch jumps past their declarations.
- *
- * The blocking helpers that walked the cluster chain (fat_next_cluster) become
- * coroutines here; the offset/geometry math that needs no I/O stays pure. */
+ * Every op is a fat_co.h coroutine on the caller's fat_op_ctx_t: loop cursors
+ * live in the context, and C locals carry no initializers because the resume
+ * switch jumps past their declarations.  Anything that walks the cluster chain
+ * is a coroutine because it yields per FAT sector; the offset/geometry math that
+ * needs no I/O stays a pure helper. */
 #include "fat_file.h"
 #include "fat_co.h"
 #include "fat_alloc.h"
@@ -396,7 +392,8 @@ fat_r_t fat_op_open(fat_op_ctx_t* op, fat_block_t* blk, const fat_mount_t* mnt,
     file->dir_sector = op->open_entry.dir_sector;
     file->dir_index = op->open_entry.dir_index;
 
-    /* Capacity = chain length * cluster bytes (was fat_cluster_chain_capacity). */
+    /* Capacity = allocated chain length * cluster bytes, which is what the write
+     * path grows; it is independent of the entry's size field. */
     if (op->open_entry.cluster >= 2 && mnt->sectors_per_cluster != 0 &&
         mnt->bytes_per_sector != 0) {
         op->capwalk.cont = 0;

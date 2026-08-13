@@ -1,3 +1,8 @@
+/* Host unit test for the xfer-buffer object registry (kernel xfer_buffer.c),
+ * linked against host stand-ins for the frame allocator, the framebuffer and
+ * the kernel spinlock. The registry is a process-wide singleton that no case
+ * resets, so each case releases the objects and borrows it created; context ids
+ * are arbitrary and only ever compared for equality. */
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -297,9 +302,11 @@ static void test_release_owned_cascade_revokes_borrows(test_stats_t* stats) {
           "reborrow handle is stale after release cascade");
 }
 
-/* Owner-push authority: only the grantor (lender) of a (re)borrow may unborrow
- * it, resolved via xfer_buffer_get_lent. The grantee (borrower) cannot; a
- * reborrow's grantor is the upstream borrower, not the object owner. */
+/* Owner-push authority: xfer_buffer_get_lent resolves a borrow id to a binding
+ * only for that borrow's grantor (lender) -- the object owner for a top-level
+ * borrow, the upstream borrower for a reborrow. Neither the grantee nor an
+ * unrelated context can resolve it, which is what keeps a caller-supplied
+ * context from reaching xfer_buffer_unborrow with someone else's borrow. */
 static void test_unborrow_lender_authority(test_stats_t* stats) {
     xfer_buffer_owner_t owner = {0};
     xfer_buffer_borrow_t borrow = {0};
@@ -310,7 +317,7 @@ static void test_unborrow_lender_authority(test_stats_t* stats) {
           "setup owner object for lender authority");
     check(stats, xfer_buffer_borrow(&owner, 81u, BUFFER_BORROW_READ, &borrow) == 0,
           "owner (80) grants borrow to context 81");
-    /* The grantee (81) is NOT the lender of its own borrow — it may not unborrow it. */
+    /* The grantee (81) is NOT the lender of its own borrow. */
     check(stats,
           xfer_buffer_get_lent(borrow.borrow_id, 81u, &resolved) ==
               WASMOS_ERR_XFER_BUFFER_NO_ACCESS,

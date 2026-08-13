@@ -1,6 +1,9 @@
 /* unistd.c - POSIX file I/O over FS IPC: open/read/write/close/stat/fopen etc.
- * All operations funnel through libc_fs_request or libc_fs_request_stream,
- * which communicate with the FS manager service via the kernel xfer buffer. */
+ * File-descriptor operations funnel through libc_fs_request or
+ * libc_fs_request_stream, which talk to the FS manager service through an owned
+ * transfer buffer. The three standard descriptors are the exception: read on
+ * STDIN_FILENO and write on STDOUT_FILENO/STDERR_FILENO go straight to the
+ * console host calls and never reach the FS manager. */
 #include "fcntl.h"
 #include "stdio.h"
 #include "string.h"

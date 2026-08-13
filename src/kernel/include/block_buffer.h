@@ -10,21 +10,22 @@
  *
  * Both runtimes expose block_buffer_copy/write, both take (offset, len) straight
  * from the guest, and both must confine the resulting access to the process's
- * own buffer. They had written that check out separately and only one of them
- * had it right: WARP evaluated `offset + len > buf_bytes` in 32-bit unsigned
- * arithmetic, where offset=0xFFFFFFFF, len=1 wraps to 0 and passes, leaving a
- * guest-chosen out-of-bounds kernel read (copy) or write (write) up to 4 GiB
- * from the buffer base. wasm3 did the same test in 64 bits with an explicit
- * overflow guard and was unaffected.
+ * own buffer. The arithmetic lives here so there is one copy to get right; what
+ * stays in each runtime is only what genuinely differs, namely how a slot is
+ * found (a fixed array in wasm3, a hashmap in WARP).
  *
- * The arithmetic lives here so there is one copy to get right. What stays in
- * each runtime is only what genuinely differs: how a slot is found (a fixed
- * array in wasm3, a hashmap in WARP).
+ * The whole test runs in 64 bits with an explicit overflow guard on offset+len.
+ * Doing it in 32-bit unsigned arithmetic would let offset=0xFFFFFFFF, len=1 wrap
+ * to 0 and pass, which is a guest-chosen out-of-bounds kernel read or write of
+ * up to 4 GiB from the buffer base.
  *
  * Callers pass the guest's 32-bit values zero-extended. A negative int32 length
  * therefore arrives as a large positive one and is refused by the same bound,
- * which is why no separate sign test is needed. A zero length is a no-op
- * success, matching the rest of the transfer surface.
+ * which is why no separate sign test is needed.
+ *
+ * Returns WASMOS_OK when [offset, offset+len) lies within buf_bytes, else
+ * WASMOS_ERR_BLOCK_RANGE. A zero length passes as long as offset itself is
+ * within the buffer, matching the rest of the transfer surface.
  */
 wasmos_error_code_t block_buffer_check_range(uint64_t offset, uint64_t len, uint64_t buf_bytes);
 
@@ -41,6 +42,10 @@ wasmos_error_code_t block_buffer_check_range(uint64_t offset, uint64_t len, uint
  * Allocating below the tighter bound in the first place is what actually keeps
  * this from firing; the check is here so that a pool change cannot silently
  * turn an address into an error code.
+ *
+ * Returns WASMOS_OK for a nonzero address below BLOCK_BUFFER_PHYS_LIMIT, else
+ * WASMOS_ERR_BLOCK_ABOVE_4G -- including for phys == 0, where the code names the
+ * bound rather than the failure.
  */
 wasmos_error_code_t block_buffer_check_phys(uint64_t phys);
 

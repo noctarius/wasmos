@@ -1,6 +1,6 @@
-/* libsys_string.h - String parsing helpers for libsys (WASM target).
- * Provides integer parsing, token splitting, and whitespace handling used by
- * the script engine and device-manager rule parser. */
+/* libsys_string.h - NULL-tolerant string helpers for libsys (WASM target).
+ * Comparison, bounded append, character classification, and whitespace
+ * trimming, used by the device-manager rule parser, fs-manager, and the CLI. */
 #ifndef WASMOS_LIBSYS_STRING_H
 #define WASMOS_LIBSYS_STRING_H
 

@@ -1,10 +1,10 @@
 /* test_ipc.c — host tests for the REAL kernel IPC layer (src/kernel/ipc.c).
  *
- * ipc.c had no host coverage: everything it does was only ever exercised
- * end-to-end through QEMU, where a transport bug shows up as a boot hang three
- * subsystems away. This links the real ipc.c together with the real poll.c and
- * the real sched_event.c, and stubs only what those reach outside themselves:
- * the timer, the thread table, and the two scheduler entry points.
+ * ipc.c is linked against the real poll.c, sched_event.c, idtable.c and list
+ * implementations, so the block/wake handoff under test is the kernel's own.
+ * This file stubs only what those reach outside themselves: the timer, the
+ * thread table, the two scheduler entry points, and malloc. The spinlock, slab
+ * and kpanic stubs live in their own tests/unit/stubs_*.c.
  *
  * MODELLING NOTE (blocking). In the kernel, process_yield(PROCESS_RUN_BLOCKED)
  * does not return until a waker resumes the thread, so everything after it in
@@ -533,10 +533,10 @@ static void test_notifications_count_up_and_down(void) {
 
 /* ------------------------------------------ non-blocking polls stay quiet */
 
-/* Regression tripwire. A non-blocking poll that registers a waiter lets a later
- * sender "wake" a thread that never blocked, pushing a RUNNING thread back to
- * READY on another CPU. Both poll paths carry a comment saying they must not do
- * this; nothing checked it. */
+/* Regression tripwire for the invariant both non-blocking poll paths in ipc.c
+ * state: they must not register a waiter. One that did would let a later sender
+ * "wake" a thread that never blocked, pushing a RUNNING thread back to READY on
+ * another CPU. */
 static void test_non_blocking_polls_do_not_arm_a_waiter(void) {
     uint32_t ctx = fresh_ctx();
     uint32_t msg_ep = 0, note_ep = 0;
@@ -826,38 +826,12 @@ static void test_select_watch_capacity_is_enforced(void) {
     ipc_endpoints_release_owner(ctx);
 }
 
-/* The select table is 32 slots shared by every context, and the endpoint table
- * grows out of kernel memory. Without a per-context cap, one context can take
- * all of either and every other context is starved -- a service that cannot
- * create its select set cannot park, and one that cannot create an endpoint
- * cannot be reached at all. A greedy or looping context should hit its own
- * ceiling, not the machine's.
- *
- * The cap is per context, so it is the OTHER context still working that is the
- * property worth pinning; the refusal on its own would be satisfied by a
- * global limit, which is what this replaces. */
-/* An endpoint's poll hub is allocated lazily, when a select set first watches
- * it, and released when the endpoint goes. Nothing observed that release, so
- * deleting it from teardown left every suite green while every torn-down
- * context leaked its hub -- a per-process leak across the machine's life.
- *
- * The count is a poll.c test seam because the hub is not reachable from here:
- * ipc.c holds the only pointer and drops it. */
-/* A select set may watch a NOTIFICATION endpoint -- ipc_select_add takes any
- * endpoint that resolves, and there is no type check to say otherwise. But
- * ipc_notify_from only woke waiters parked directly on the endpoint's own
- * event, and nothing can park there: both blocking waits demand a MESSAGE
- * endpoint, and ipc_wait_for polls and returns EMPTY. So the direct wake was
- * dead, and its deadness hid the live gap -- the poll hub was never signalled,
- * so a service selecting on a notification endpoint parked forever while
- * notifications piled up behind it.
- *
- * This replaces a case that pinned the limitation as though it were the
- * contract ("select does not observe notification endpoints"). It described the
- * implementation rather than justifying it: a set exists so a service can park
- * on several sources, and an endpoint it is allowed to watch but that can never
- * make it ready is a trap, not a design. Either signalling had to work or
- * ipc_select_add had to refuse the endpoint; signalling is the useful half. */
+/* ipc_select_add takes any endpoint that resolves, with no type check, so a set
+ * may watch a NOTIFICATION endpoint. Nothing can park on such an endpoint's own
+ * sched_event -- both blocking waits demand a MESSAGE endpoint and ipc_wait_for
+ * polls -- so the poll hub is the only route by which raising a notification can
+ * make a watching set ready. Without it a service selecting on a notification
+ * endpoint parks forever while notifications pile up behind it. */
 static void test_a_notification_wakes_a_watching_select(void) {
     uint32_t ctx = fresh_ctx();
     uint32_t note = 0, sel = 0;
@@ -878,6 +852,12 @@ static void test_a_notification_wakes_a_watching_select(void) {
     ipc_endpoints_release_owner(ctx);
 }
 
+/* An endpoint's poll hub is allocated lazily, when a select set first watches
+ * it, and released when the endpoint goes; skipping the release leaks one hub
+ * per torn-down context for the life of the machine.
+ *
+ * The live count comes from a poll.c test seam because the hub is not reachable
+ * from here: ipc.c holds the only pointer and drops it on teardown. */
 static void test_teardown_releases_the_poll_hub(void) {
     uint32_t ctx = fresh_ctx();
     const uint32_t before = poll_test_live_structs();
@@ -895,6 +875,14 @@ static void test_teardown_releases_the_poll_hub(void) {
     CHECK(poll_test_live_structs() == before, "and released when the endpoint goes");
 }
 
+/* Both the select table and the endpoint table grow out of kernel memory, so
+ * without a per-context cap one context can consume all of either and starve
+ * every other -- a service that cannot create its select set cannot park, and
+ * one that cannot create an endpoint cannot be reached at all.
+ *
+ * The cap is per context (IPC_SELECT_PER_CONTEXT_MAX / IPC_ENDPOINT_PER_CONTEXT_MAX),
+ * so the property worth pinning is the OTHER context still working; the refusal
+ * on its own would be satisfied by a global limit too. */
 static void test_select_sets_are_capped_per_context(void) {
     uint32_t greedy = fresh_ctx();
     uint32_t ids[IPC_SELECT_PER_CONTEXT_MAX + 4u];
@@ -963,9 +951,12 @@ static void test_endpoints_are_capped_per_context(void) {
     ipc_endpoints_release_owner(neighbour);
 }
 
-/* The select table is a fixed array. Exhausting it must report FULL, and every
- * slot must come back after the sets are destroyed — a leaked slot would
- * silently cap how many services can ever run. */
+/* The select table grows on demand in IPC_SELECT_TABLE_CHUNK-sized chunks, so
+ * the ceiling a single context can reach is its own IPC_SELECT_PER_CONTEXT_MAX
+ * allowance: the create loop below stops there, not at table exhaustion. What is
+ * pinned is that hitting the ceiling reports FULL and that every slot comes back
+ * once the sets are destroyed — a leaked slot would silently cap how many
+ * services can ever run. */
 static void test_select_table_exhausts_and_recovers(void) {
     uint32_t ctx = fresh_ctx();
     uint32_t ids[64];
@@ -1194,9 +1185,8 @@ static void test_select_signal_tolerates_a_null_set(void) {
 
 /* --------------------------------------------------- multiple waiters */
 
-/* The endpoint's sched_event_t supports N waiters (the service model uses one,
- * but the transport must not corrupt itself when more show up). Nothing
- * exercised more than a single blocked receiver before. */
+/* The endpoint's sched_event_t supports N waiters. The service model uses one,
+ * but the transport must not corrupt itself when more show up. */
 static void test_one_send_wakes_exactly_one_waiter_in_fifo_order(void) {
     uint32_t ctx = fresh_ctx();
     uint32_t ep = 0;
@@ -1491,12 +1481,11 @@ static void test_a_wrapped_id_never_collides_with_a_live_endpoint(void) {
 
     ipc_endpoints_release_owner(ctx);
     /* Rewind the counter for whatever runs next, but leave the wrapped flag SET.
-     * ipc_alloc_endpoint_id only scans for a live collision once that flag is on,
-     * so clearing it here hands the next test low ids with no collision check --
-     * and any endpoint still alive at such an id from an earlier case then gets
-     * a second, ambiguous owner. In production the flag is never cleared, so
-     * clearing it in teardown told the allocator something untrue. Found by the
-     * randomized case order: this case ran immediately before N3. */
+     * idtable_alloc_id (src/kernel/idtable.c) scans for a live collision only
+     * once that flag is on, so clearing it here would hand the next case low ids
+     * with no collision check, and an endpoint still alive at such an id would
+     * gain a second, ambiguous owner. The flag is never cleared in production
+     * either; the randomized case order makes the difference observable. */
     ipc_test_set_next_endpoint_id(1u, 1);
 }
 
@@ -1505,11 +1494,11 @@ static void test_endpoint_creation_reports_allocation_failure(void) {
      * left in the chunks already allocated; the first create that needs a new
      * chunk must report FULL rather than hand back a bad handle.
      *
-     * Spread across contexts, because IPC_ERR_FULL now has two causes and one
+     * Spread across contexts, because IPC_ERR_FULL has two causes and one
      * context alone can only reach the other one: it hits its own quota at
      * IPC_ENDPOINT_PER_CONTEXT_MAX long before the allocator runs dry. Moving to
-     * a new contextevery time the quota is reached keeps the allocator as the thing
-     * under test. Everything created here is released below. */
+     * a new context every time the quota is reached keeps the allocator as the
+     * thing under test. Everything created here is released below. */
     uint32_t ctxs[64];
     uint32_t ctx_count = 0;
     uint32_t per_ctx = 0;
@@ -1986,7 +1975,11 @@ static void test_a_timed_select_wait_expires_as_empty(void) {
     int rc = ipc_select_wait(sel, ctx, &ready, 100u);
     g_park = 0;
     t->state = THREAD_STATE_BLOCKED;
-    t->sched_timeout_tick = g_now + 100u; /* see the MODELLING NOTE at the top */
+    /* sched_event_wait disarms the deadline on resume, and the host stub's
+     * immediate return from process_yield counts as one (see the MODELLING NOTE
+     * at the top). Re-arm it so sched_timeout_check below sees a live deadline,
+     * which is the state a genuinely parked thread would be in. */
+    t->sched_timeout_tick = g_now + 100u;
     CHECK(rc == IPC_EMPTY, "the wait that has not been signalled reports EMPTY");
     CHECK(ready == 0xAAu, "and leaves the caller's out-param alone");
 
@@ -2194,8 +2187,9 @@ static int c_brecv_ok(void) {
     return ipc_recv_blocking_for(g_env.ctx, g_env.ready_ep, &g_scratch);
 }
 /* The endpoint vanishing while its receiver is parked: the post-wake re-lookup
- * fails, and that must be INVALID rather than EMPTY, or the caller retries
- * forever on a handle that no longer exists. */
+ * fails, and that must be IPC_ERR_PEER_GONE rather than IPC_EMPTY, or the caller
+ * retries forever on a handle that no longer exists. PEER_GONE is also distinct
+ * from IPC_ERR_NOENT: the handle WAS valid when the caller blocked. */
 static uint32_t g_doomed_ctx;
 static void hook_release_doomed(void) {
     ipc_endpoints_release_owner(g_doomed_ctx);

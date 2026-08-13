@@ -1,3 +1,14 @@
+/* kernel_selftest_runtime.c - Baseline kernel self-tests spawned at boot.
+ *
+ * Independent kernel processes, each logging a "[test] ... ok" line the boot
+ * harness greps for: page-fault recovery, IPC block/wake across a waiter and a
+ * sender process, spawn delegation through the wamos-script broker, and -- when
+ * enabled -- a preemption pair. They are spawned and left to run, so the status
+ * returned by kernel_selftest_spawn_baseline covers spawning only.
+ *
+ * Every one is marked auto-reap, so a finished self-test does not sit in
+ * g_processes[] as a zombie holding a slot the rest of the boot needs.
+ */
 #include "kernel_selftest_runtime.h"
 
 #include "ipc.h"
@@ -290,6 +301,9 @@ static process_run_result_t ipc_send_test_entry(process_t* process, void* arg) {
     return PROCESS_RUN_EXITED;
 }
 
+/* The busy process never returns to the scheduler: it spins until the observer
+ * sets stop_busy. The observer reaching three runs is the assertion — on a
+ * single CPU that is only possible if the timer preempts the spinner. */
 static process_run_result_t preempt_busy_entry(process_t* process, void* arg) {
     preempt_test_state_t* state = (preempt_test_state_t*)arg;
     if (!process || !state) {
@@ -486,8 +500,7 @@ int kernel_selftest_spawn_baseline(uint32_t init_pid, uint8_t preempt_test_enabl
     }
 
     /* Broker spawn self-test: spawn the wamos-script broker and drive a `#!`
-     * guest script through it (delegated spawn plan -> standalone executor).
-     * Re-enabled now that the sysinit/fontsvc/gfx post-start path is green. */
+     * guest script through it (delegated spawn plan -> standalone executor). */
     g_broker_spawn_request_state.reply_endpoint = IPC_ENDPOINT_NONE;
     g_broker_spawn_request_state.request_id = 1u;
     g_broker_spawn_request_state.attempts = 0u;

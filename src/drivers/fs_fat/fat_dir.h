@@ -6,9 +6,11 @@
  * the immutable mount geometry, and yield per directory sector via FAT_CO_READ.
  * The pure path helpers carry no I/O and no global mutable state.
  *
- * Match semantics: a scan that runs off the end of a directory without a match
- * is NOT an error (found.valid stays 0, the step returns FAT_R_DONE); only a
- * real block-I/O fault propagates as FAT_R_ERR. */
+ * Match semantics of the scan/resolve side (fat_find_in_dir, fat_resolve_path,
+ * fat_resolve_parent_dir): a scan that runs off the end of a directory without a
+ * match is NOT an error — found.valid stays 0 and the step returns FAT_R_DONE,
+ * so those three fail only on a block-I/O fault.  The mutation and navigation
+ * coroutines below do FAIL with their own WASMOS_ERR_FS_* codes. */
 #ifndef FS_FAT_FAT_DIR_H
 #define FS_FAT_FAT_DIR_H
 
@@ -19,9 +21,9 @@
 
 /* --- Pure path helpers (no I/O, no coroutine). --- */
 
-/* Translate a client path into the FAT-namespace path (out[out_len]); sets
- * *out_is_init when the path routes to the init overlay.  0 on success, -1 on
- * bad args / path too long. */
+/* Translate a client path into the FAT-namespace path (out[out_len]).  0 on
+ * success, -1 on bad args / path too long.  *out_is_init is always cleared: this
+ * backend serves no overlay namespace, and callers reject a set flag. */
 int vfs_translate_path(const char* in, char* out, uint32_t out_len, uint8_t* out_is_init);
 
 /* Copy the next '/'-delimited component of `path` from *pos into
@@ -50,9 +52,8 @@ fat_r_t fat_resolve_parent_dir(fat_resolve_parent_ctx_t* p, fat_block_t* blk,
 /* --- Directory mutation (coroutines; contexts in fat_types.h). --- */
 
 /* Pure open-file-table check: 1 if `entry`'s (dir_lba,dir_sector,dir_index)
- * matches an in-use open file in `files[count]`, else 0.  See the fat_dir.c
- * TODO: the reactor's open-file table lives in fat_file (not yet ported), so
- * callers currently pass NULL/0 and this returns 0 (never blocks). */
+ * matches an in-use open file in `files[count]`, else 0.  A NULL `files`
+ * disables the check (returns 0, "not open"). */
 int fat_entry_is_open(const fat_dir_entry_info_t* entry, const fat_open_file_t* files,
                       uint32_t count);
 
@@ -105,7 +106,9 @@ fat_r_t fat_remove_path(fat_remove_ctx_t* r, fat_block_t* blk, const fat_mount_t
  * IPC_ERR_FULL retry + wasmos_console_write fallback), one line per
  * entry ("name" + "/" for a directory + "\n").  Uses op->readdir.  Sends no
  * response itself (resp_override stays 0); the reactor emits the final
- * FS_IPC_RESP on FAT_R_DONE.  FAT_R_ERR only on a block-I/O fault. */
+ * FS_IPC_RESP on FAT_R_DONE.  FAT_R_ERR on a block-I/O fault, or
+ * WASMOS_ERR_FS_NOT_FOUND when the volume has no root region or the cwd is
+ * stale. */
 fat_r_t fat_op_readdir(fat_op_ctx_t* op, fat_block_t* blk, const fat_mount_t* mnt,
                        int32_t fs_endpoint);
 

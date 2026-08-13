@@ -58,9 +58,8 @@ static inline int32_t wasmos_thread_spawn_cont(void* stack_base, size_t stack_si
     start->entry = entry;
     start->arg = arg;
 
-    /* Raw double-cast (not addr_cast): this header is also included by the
-     * freestanding ring3 probe blobs, whose standalone compile does not get the
-     * wasmos_cast.h force-include, so the macros are not defined there. */
+    /* The new thread starts in wasmos_thread_bootstrap with RSP at `top`, where
+     * the wasmos_thread_start_t it reads back was just written. */
     rc = wasmos_sys_thread_create(addr_cast(uint64_t, wasmos_thread_bootstrap), (uint64_t)top);
     if (rc > 0 && out_tid) {
         *out_tid = (uint32_t)rc;

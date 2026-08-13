@@ -32,7 +32,8 @@ pub const PROC_IPC_SPAWN_CAPS_V2: i32 = 0x208;
 /// Spawn from explicit app path:
 /// caller must place path bytes at xfer buffer offset 0.
 /// optional raw command argument text is placed at offset (path_len + 1).
-/// arg0=reserved(0) arg1=path_len arg2=args_len arg3=reserved.
+/// arg0=reserved(0) arg1=((buffer_id<<12)|(path_len&0xFFF)) arg2=args_len
+/// arg3=reserved.
 /// On success (app kind): PROC_IPC_RESP, arg0=child_pid, arg1=app_flags.
 /// For service/driver kinds the PM delays the PROC_IPC_RESP until the child
 /// calls PROC_IPC_NOTIFY_READY (behaves like SPAWN_PATH_SYNC internally).
@@ -355,14 +356,16 @@ pub const NET_IPC_LISTEN: i32 = 0xB12;
 pub const NET_IPC_ACCEPT: i32 = 0xB13;
 /// Resolve a hostname to an IPv4 address. The name is carried in a borrowed
 /// xfer buffer: arg0 = buffer_id, arg1 = borrow_id, arg2 = name length. The
-/// reply is deferred until the lwIP DNS callback fires; RESP arg0 is the
-/// resolved IPv4 (network-order word), or NET_IPC_ERROR on failure.
+/// reply is deferred until the lwIP DNS callback fires. On RESP, arg0 is the
+/// status and arg1 is the resolved IPv4 (network-order word); failure comes
+/// back as NET_IPC_ERROR.
 pub const NET_IPC_RESOLVE: i32 = 0xB14;
 /// Replace the resolver list: arg0 = count (0..2), arg1/arg2 = server IPv4
 /// (network-order words). count=0 clears all servers. Reply is immediate.
 pub const NET_IPC_DNS_SET: i32 = 0xB15;
-/// List configured resolvers. RESP arg0 = count, arg1/arg2 = server IPv4
-/// (network-order words). Reply is immediate.
+/// List configured resolvers. On RESP, arg0 is the status, arg1 = count and
+/// arg2/arg3 = the first two server IPv4 addresses (network-order words).
+/// Reply is immediate.
 pub const NET_IPC_DNS_LIST: i32 = 0xB16;
 pub const NET_IPC_RESP: i32 = 0xB80;
 pub const NET_IPC_ERROR: i32 = 0xBFF;

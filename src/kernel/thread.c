@@ -40,10 +40,14 @@ static void thread_clear_ctx(process_context_t* ctx) {
 
 /* thread.c-internal terminal scrub and the SOLE sanctioned sink to UNUSED(DEAD):
  * the reaper's ZOMBIE->UNUSED, boot-init (garbage->UNUSED), and spawn-abort
- * (NEW->UNUSED).  Because it lives inside thread.* (the state owner) and always
- * runs under g_thread_table_lock, it is not an "external" writer — it does not
- * need thread_transit (which gates the live edges + external callers), and
- * cannot go through it anyway (boot-init has no valid `from`). */
+ * (NEW->UNUSED).  Because it lives inside thread.* (the state owner), it is not
+ * an "external" writer: it does not need thread_transit (which gates the live
+ * edges + external callers), and cannot go through it anyway — boot-init has no
+ * valid `from`, and NEW->UNUSED is not a legal transit edge.
+ *
+ * Every caller except thread_init() holds g_thread_table_lock; thread_init runs
+ * once on the BSP before any other thread exists, so there is nothing to
+ * exclude. */
 static void thread_reset_slot(thread_t* thread) {
     if (!thread) {
         return;
@@ -140,10 +144,11 @@ int thread_spawn_in_owner(uint32_t owner_pid, const char* name, thread_state_t i
     }
     slot->tid = g_next_tid++;
     slot->owner_pid = owner_pid;
-    /* Claim the free (UNUSED/DEAD) slot into NEW first: it is never schedulable
-     * and never a legal source of ->READY until fully initialised below.  All
-     * under the table lock, so the claim + publish is atomic w.r.t. other
-     * spawns; the CAS form keeps the edge honest per the state machine. */
+    /* Claim the free (UNUSED/DEAD) slot into NEW first: NEW is never
+     * schedulable, and thread_find_slot only ever hands back an UNUSED slot, so
+     * nothing outside this table lock can see or move it.  A plain store
+     * suffices here for that reason; the publish at the end of this function
+     * goes through thread_transit's CAS, which is the edge other CPUs race. */
     slot->state = THREAD_STATE_NEW;
     slot->block_reason = initial_reason;
     slot->is_kernel_worker = 0;
@@ -278,15 +283,19 @@ void thread_reap_owner(uint32_t owner_pid) {
     ksync_spinlock_unlock(&g_thread_table_lock);
 }
 
-/* Legal thread state-machine edges (see design/smp-reap-fsm-reland):
+/* Legal thread state-machine edges, as enforced below:
  *   UNUSED(DEAD) -> NEW                       (allocator claims a free slot)
  *   NEW          -> READY | BLOCKED           (spawn, after init)
- *   READY        -> RUNNING | ZOMBIE
+ *   READY        -> RUNNING | BLOCKED | ZOMBIE
  *   RUNNING      -> READY | BLOCKED | ZOMBIE
- *   BLOCKED      -> READY | ZOMBIE
- *   ZOMBIE       -> UNUSED(DEAD)              (reaper / CPU0 only)
- * ZOMBIE is monotonic (only the reaper leaves it), which is what makes an
- * "all threads zombie" observation stable. */
+ *   BLOCKED      -> READY | RUNNING | ZOMBIE
+ *   ZOMBIE       -> UNUSED(DEAD)              (the reap path, on whichever CPU
+ *                                              won the process reap claim)
+ * ZOMBIE is monotonic (only the reap path leaves it), which is what makes an
+ * "all threads zombie" observation stable.
+ *
+ * thread_reset_slot bypasses this table by design and is the one writer that
+ * may reach UNUSED from NEW (spawn abort) as well as from ZOMBIE. */
 static int thread_transition_legal(thread_state_t from, thread_state_t to) {
     if (from == to) {
         return 1; /* idempotent no-op is always allowed */

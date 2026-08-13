@@ -1,12 +1,13 @@
 /* mbedtls_config.h - freestanding mbedTLS 3.6 config for the net-stack service.
  *
- * Milestone C scope: a TLS 1.2 *client* that performs an encrypted handshake and
- * GET, verifying the server certificate chain against a FS-loaded CA trust store
- * and checking the hostname (authmode is MBEDTLS_SSL_VERIFY_REQUIRED via
- * ALTCP_MBEDTLS_AUTHMODE in lwipopts.h; net_stack.c calls mbedtls_ssl_set_hostname
- * per connection). Certificate date validity is NOT checked: MBEDTLS_HAVE_TIME /
- * MBEDTLS_HAVE_TIME_DATE stay off (no RTC wired to mbedTLS yet), so notBefore/
- * notAfter are skipped. X.509 chain + name verification below is fully enabled.
+ * Scope: a TLS 1.2 *client* that verifies the server certificate chain against a
+ * FS-loaded CA trust store and checks the hostname (authmode is
+ * MBEDTLS_SSL_VERIFY_REQUIRED via ALTCP_MBEDTLS_AUTHMODE in lwipopts.h;
+ * net_stack.c calls mbedtls_ssl_set_hostname per connection). X.509 chain + name
+ * verification below is fully enabled.
+ * TODO: certificate date validity is NOT checked — MBEDTLS_HAVE_TIME /
+ * MBEDTLS_HAVE_TIME_DATE stay off because no RTC is wired to mbedTLS, so
+ * notBefore/notAfter are skipped and an expired certificate is accepted.
  *
  * This runs inside the native (ring-0, NO_SYS) net-stack reactor which has:
  *   - no filesystem, no sockets, no host time, no threads,
@@ -110,9 +111,9 @@ int net_stack_mbedtls_snprintf(char* buf, size_t size, const char* fmt, ...);
 #define MBEDTLS_X509_USE_C
 #define MBEDTLS_X509_CRT_PARSE_C
 /* The CA trust store is a PEM bundle (concatenated base64 certificates) loaded
- * from the filesystem, so PEM decoding must be enabled (milestone B was no-verify
- * and never parsed a CA file, so it only needed the DER-over-the-wire path).
- * MBEDTLS_PEM_PARSE_C pulls in base64 decoding. */
+ * from the filesystem, so PEM decoding must be enabled; the certificates that
+ * arrive over the wire are DER and would not need it.  MBEDTLS_PEM_PARSE_C pulls
+ * in base64 decoding. */
 #define MBEDTLS_PEM_PARSE_C
 #define MBEDTLS_BASE64_C
 

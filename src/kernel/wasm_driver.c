@@ -1,7 +1,11 @@
 /* wasm_driver.c - wasm3 WASM module loader and driver/service instance runner.
  * Instantiates a wasm3 environment and runtime per driver, registers all
- * hardware and IPC hostcall imports, and runs the module's entry export.
- * The per-driver execution lock serializes concurrent wasm3 entry/call paths. */
+ * hardware and IPC hostcall imports, and runs the module's entry export.  The
+ * interpreter and its guest both execute in ring 0.
+ *
+ * driver->lock serializes wasm_driver_call_entry() and wasm_driver_call() for
+ * one driver.  wasm_driver_call_unlocked() bypasses it by contract, and
+ * wasm_driver_start()/_stop() do not take it at all. */
 #include "wasm_driver.h"
 #include "klog.h"
 #include "process.h"
@@ -167,7 +171,7 @@ int wasm_driver_start(wasm_driver_t* driver, const wasm_driver_manifest_t* manif
         return -1;
     }
 
-    /* Linear memory now executes from the owner's user-VA window (PML4[1]):
+    /* Linear memory lives in the owner's user-VA window (PML4[1]):
      * m3_LoadModule -> InitMemory reserves it and writes the M3MemoryHeader and
      * data segments through that VA, so the owner address space must be ACTIVE
      * for the load.  Kernel-hosted drivers (e.g. chardev) run wasm_driver_start

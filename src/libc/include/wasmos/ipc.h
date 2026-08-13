@@ -114,10 +114,11 @@ static inline int32_t wasmos_ipc_call_retry(int32_t destination_endpoint, int32_
         if (rc < 0) {
             return rc;
         }
-        /* Match replies directly from the last-field hostcalls first.  This
-         * mirrors the Zig/Rust/AssemblyScript bindings and avoids depending on
-         * a temporary struct layout while deciding whether to consume or retry
-         * a message on the dedicated reply endpoint. */
+        /* Match on the last-field hostcalls before building a message struct:
+         * only a reply carrying this request_id AND coming from the endpoint
+         * the request went to is accepted; anything else that lands on the
+         * reply endpoint is consumed and discarded, so this call belongs on a
+         * private reply endpoint and never on a live service endpoint. */
         response_request_id = wasmos_ipc_last_field(1);
         if (response_request_id != request_id) {
             continue;
@@ -178,9 +179,8 @@ static inline int32_t wasmos_xfer_stage(const void* src, int32_t len) {
  * service_endpoint.  This keeps the SVC_IPC_REGISTER_RESP off the (live) service
  * endpoint, where peer traffic would otherwise race with — and be discarded by —
  * wasmos_ipc_call's reply matcher.  The reply endpoint is created once per
- * translation unit and reused across registrations (no per-call leak); it is
- * created here rather than via the startup.c managed endpoint so the helper
- * works in drivers that do not link the full libc startup unit. */
+ * translation unit and reused across registrations (no per-call leak), and is
+ * private to this helper rather than the managed endpoint of ipc_managed.c. */
 static inline int32_t wasmos_svc_register_class(int32_t proc_endpoint, int32_t service_endpoint,
                                                 const char* service_name, const char* class_name,
                                                 uint32_t instance, int32_t request_id) {
@@ -330,6 +330,11 @@ static inline int32_t wasmos_svc_subscribe_class(int32_t proc_endpoint, int32_t 
     return 0;
 }
 
+/* Register a subsystem broker with PM. The descriptor travels in an owned xfer
+ * buffer, released before returning. Returns 0 on a PROC_IPC_RESP, the reply's
+ * arg1 status when PM answers with anything else, and -1 when the request could
+ * not be staged or sent. `request_id` is ignored: the managed call assigns its
+ * own id on the per-context reply endpoint. */
 static inline int32_t wasmos_subsystem_register_broker(
     int32_t proc_endpoint, int32_t broker_endpoint, const char* request_tag,
     const char* runtime_tag, const char* broker_name, int32_t uses_wasm_payload,
@@ -376,6 +381,11 @@ static inline int32_t wasmos_subsystem_register_broker(
     return (resp.type == PROC_IPC_RESP) ? 0 : resp.arg1;
 }
 
+/* Register an exec handler with PM: the descriptor followed by `node_count`
+ * match nodes in one owned xfer buffer, released before returning. Returns 0 on
+ * a PROC_IPC_RESP, the reply's arg1 status when PM answers with anything else,
+ * and -1 on bad arguments or a staging/send failure. `request_id` is ignored:
+ * the managed call assigns its own id on the per-context reply endpoint. */
 static inline int32_t wasmos_exec_handler_register(int32_t proc_endpoint, const char* request_tag,
                                                    const char* handler_name, int32_t priority,
                                                    int32_t max_probe_bytes,
@@ -432,9 +442,10 @@ static inline int32_t wasmos_exec_handler_register(int32_t proc_endpoint, const 
 }
 
 /*
- * Managed reply endpoint — state is a per-context static in startup.c so it
- * is never shared across WASM contexts even when multiple contexts belong to
- * the same OS process (each context has independent linear memory).
+ * Managed reply endpoint — state is a per-context static in ipc_managed.c (part
+ * of the always-linked libc core) so it is never shared across WASM contexts
+ * even when multiple contexts belong to the same OS process (each context has
+ * independent linear memory).
  */
 int32_t wasmos_ipc_ensure_reply_endpoint(void);
 int32_t wasmos_ipc_next_request_id(void);

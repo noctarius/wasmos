@@ -58,10 +58,11 @@ int msi_vectors_free(msi_vector_t* vectors, uint32_t count, uint32_t index, uint
 /* Release every slot held by a dying context. */
 void msi_vectors_release_context(msi_vector_t* vectors, uint32_t count, uint32_t context_id);
 
-/* Deliver slot `index` to its owner. A vector that fires while unallocated is a
- * device still emitting messages after its driver released it; it is dropped, and
- * this returns 0 so the caller can still count it. Returns 1 when an event was
- * queued, 0 when there was nothing to deliver to or delivery failed. */
+/* Deliver slot `index` to its owner. Returns 1 when an event was queued, 0
+ * otherwise -- bad arguments, an out-of-range index, delivery failure, or a
+ * vector that fired while unallocated. That last case is a device still
+ * emitting messages after its driver released it; the event is dropped rather
+ * than delivered to whoever holds the slot next. */
 int msi_vectors_dispatch(msi_vector_t* vectors, uint32_t count, uint32_t index,
                          const msi_vector_ops_t* ops);
 

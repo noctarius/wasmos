@@ -622,8 +622,12 @@ int wasmos_app_parse(const uint8_t* blob, uint32_t blob_size, wasmos_app_desc_t*
     out_desc->entry_arg_binding_count = 0;
 
     /* The parser walks the blob linearly in the same order the packer writes it:
-     * fixed header, name, entry, endpoint table, capability table, mem hints,
-     * then raw WASM bytes. */
+     * fixed header, name, entry, endpoint table, capability table, entry-arg
+     * binding table, driver-match table, region table, mem hints, then raw WASM
+     * bytes.  Each of the five tables is a fixed-size record optionally followed
+     * by that record's variable-length name, so every count in the header has to
+     * be walked -- even one this build ignores -- or `off` desynchronises and
+     * every later section is misread. */
     uint32_t off = header_size;
     if (check_bounds(off, name_len, blob_size) != 0) {
         return -1;

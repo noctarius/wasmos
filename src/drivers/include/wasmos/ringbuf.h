@@ -235,7 +235,7 @@ static inline void wasmos_ringbuf__load(const wasmos_ringbuf_t* rb, uint32_t rpo
 
 /* Write up to `len` bytes; copies min(len, free) and returns that count (a
  * short write means the ring was near full — that IS the flow control). Does
- * not ring the doorbell; pair with wasmos_ringbuf_write or use _write_signal. */
+ * not ring the doorbell; use wasmos_ringbuf_write_signal for that. */
 static inline uint32_t wasmos_ringbuf_write(wasmos_ringbuf_t* rb, const void* src, uint32_t len) {
     uint32_t w = __atomic_load_n(&rb->hdr->write, __ATOMIC_RELAXED); /* sole writer */
     uint32_t r = __atomic_load_n(&rb->hdr->read, __ATOMIC_ACQUIRE);

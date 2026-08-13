@@ -1,5 +1,9 @@
 /* warp/sjlj_unwind.cpp - Minimal SJLJ exception unwind runtime for bare-metal.
  *
+ * Dormant in the current build: the WARP translation units compile with
+ * -fexceptions (Dwarf), so nothing calls the entry points below.  It is linked
+ * so that switching the WARP flags to -fsjlj-exceptions needs no new code.
+ *
  * With -fsjlj-exceptions the compiler generates:
  *   - A try block entry that calls _Unwind_SjLj_Register(&ctx) and then does
  *     an inline __builtin_setjmp(ctx.jbuf).
@@ -13,8 +17,10 @@
  * No setjmp.h is needed: the compiler emits the setjmp inline, and the only
  * call made here is __builtin_longjmp (a clang intrinsic, no header required).
  *
- * Context stack is per-CPU-slot because WARP execution is serialized by
- * warp_runtime_enter (only one CPU inside WARP at any time). */
+ * The context stack is per-CPU-slot, which is sound only under the WARP
+ * single-CPU invariant (one CPU inside WARP at a time).  That invariant is an
+ * assumption, not something warp_runtime_enter enforces — see the
+ * FIXME(smp-warp) in warp/shim.cpp. */
 
 #include <stdint.h>
 #include <stddef.h>
@@ -62,7 +68,7 @@ struct _Unwind_FunctionContext {
 };
 
 // ---------------------------------------------------------------------------
-// Per-CPU-slot context stack (WARP is serialized by warp_runtime_enter)
+// Per-CPU-slot context stack (sound only under the WARP single-CPU invariant)
 // ---------------------------------------------------------------------------
 
 static _Unwind_FunctionContext* g_sjlj_top[64];
@@ -122,8 +128,9 @@ _Unwind_Reason_Code _Unwind_SjLj_Resume_or_Rethrow(_Unwind_Exception* exc) {
 }
 
 /* SJLJ C++ personality function — called by _Unwind_SjLj_RaiseException for
- * each frame.  Returns HANDLER_FOUND for every frame so that catch(...) in
- * warp_driver.cpp always catches WARP exceptions at the first opportunity. */
+ * each frame.  Returns HANDLER_FOUND unconditionally, so an exception is
+ * delivered to the innermost frame that registered a landing pad, whatever its
+ * declared catch type. */
 _Unwind_Reason_Code __gxx_personality_sj0(int /*version*/, _Unwind_Action actions,
                                           _Unwind_Exception_Class /*exclass*/,
                                           _Unwind_Exception* /*exc*/, void* /*context*/) {

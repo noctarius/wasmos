@@ -508,9 +508,8 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t ignored_arg
 
         if (type == FS_IPC_OPEN_REQ) {
             char path[INITFS_PATH_MAX];
-            /* OPEN always carries the path in the client buffer (arg2 = buffer_id,
-             * arg0 = path_len); the old name-packed variant is gone with
-             * spawn-by-name. */
+            /* OPEN always carries the path in the client's buffer:
+             * arg2 = buffer_id, arg0 = path_len. */
             wasmos_error_code_t path_err =
                 copy_path_from_xfer_buffer(arg2, arg0, path, sizeof(path));
             if (path_err != WASMOS_ERR_NONE) {

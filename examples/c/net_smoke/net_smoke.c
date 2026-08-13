@@ -14,8 +14,10 @@
 #include "wasmos/libsys.h"
 #include "wasmos_driver_abi.h"
 
-/* Block until a message arrives on `ep` (bounded so a stuck driver can't hang
- * the test). Returns 0 and fills `m`, or -1 on timeout. */
+/* Block on `ep` until a message arrives, then fill `m` and return 0. Returns -1
+ * after the retry budget is spent, which only happens when select_one keeps
+ * returning an error; a driver that simply never answers leaves this parked
+ * inside the first select_one, since that call has no timeout. */
 static int recv_on(int32_t ep, wasmos_ipc_message_t* m) {
     for (int spin = 0; spin < 200000; ++spin) {
         if (wasmos_ipc_select_one(ep) == 1) {
@@ -123,7 +125,8 @@ int main(int argc, char** argv) {
 
     /* Block for the driver's RX_FRAME_NOTIFY push, then pull the frame with
      * RX_POLL. This is a pure push path — no polling — and depends on the device
-     * interrupt re-firing (PCI INTx level/active-low + directed IOAPIC EOI).
+     * interrupt re-firing: an MSI-X vector when virtio-net bound one, otherwise
+     * the shared PCI INTx line (level/active-low + directed IOAPIC EOI).
      * The driver's own boot ARP is interrupt #1; this reply is interrupt #2, so
      * receiving the notify proves re-delivery works. */
     for (int rounds = 0; rounds < 8; ++rounds) {

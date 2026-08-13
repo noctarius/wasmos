@@ -1,6 +1,8 @@
-/* fs_manager.c - VFS multiplexer service: routes file operations to registered
- * backend drivers (fs-fat, fs-init) by mount-name prefix, with per-context
- * client state tracked in a custom bump+chunk heap. */
+/* fs_manager.c - VFS multiplexer service ("fs.vfs"): routes file operations to
+ * the FS backend drivers (fs-fat, fs-init) by mount-name prefix, with
+ * per-context client state tracked in a custom bump+chunk heap.  Backends are
+ * found by subscribing to the FSMGR_BACKEND_CLASS service class and pulling each
+ * provider's FSMGR_IPC_BACKEND_INFO, so the set is rebuilt on (re)start. */
 #include <stdint.h>
 #include "stdio.h"
 #include "string.h"
@@ -247,8 +249,12 @@ static fs_backend_t* backend_first_of_kind(uint8_t kind) {
     return 0;
 }
 
-/* Register or update a backend at endpoint; assigns a slot-based mount name
- * ("boot"/"user" for BOOT kind; "init"/"init1" for INIT; "fs"/"fs1" for others). */
+/* Register or update a backend at endpoint; assigns a slot-based default mount
+ * name ("boot"/"user" for BOOT kind; "init"/"init1" for INIT; "fs"/"fs1" for
+ * others).  fsmgr_apply_backend_info overwrites that default with the mount
+ * name the backend reports, when it reports one.  Idempotent for an endpoint
+ * that is already registered.  Returns NULL when all FS_BACKEND_CAP slots are
+ * taken. */
 static fs_backend_t* backend_register(uint8_t kind, int32_t endpoint) {
     fs_backend_t* slot = 0;
     uint8_t kind_slot = 0;
@@ -296,7 +302,11 @@ static fs_backend_t* backend_register(uint8_t kind, int32_t endpoint) {
 
 /* Query devmgr.query for DEVMGR_MOUNT_INFO and populate PCI metadata fields
  * (bus, device_fn, class, vendor, etc.) on the given BOOT backend slot.
- * The IPC response arg3 bit 31 must be set for the info to be valid. */
+ * The IPC response arg3 bit 31 must be set for the info to be valid.
+ * Currently unreferenced: the only place that wanted it is the class-discovery
+ * path, which cannot make this synchronous round trip without deadlocking (see
+ * fsmgr_apply_backend_info). The metadata it fills is diagnostic only, so `mount`
+ * prints no PCI identity until the TODO there is resolved. */
 static void backend_refresh_boot_meta(fs_backend_t* slot, int32_t req_seed) {
     int32_t devmgr = -1;
     int32_t req_id = req_seed;
@@ -611,9 +621,8 @@ static void fsmgr_apply_backend_info(int32_t backend_endpoint, int32_t kind, int
      * handling a class-discovery event, and that helper does a SYNCHRONOUS
      * DEVMGR_QUERY_MOUNT_REQ round-trip to device-manager — which at this point
      * is itself blocked waiting for fs-manager to answer its /boot rules read,
-     * producing a mutual-wait deadlock. (The old push path ran this during the
-     * backend's own init, before that window opened.) The boot meta is
-     * diagnostic PCI identity, not required to mount.
+     * producing a mutual-wait deadlock. The boot meta is diagnostic PCI
+     * identity, not required to mount.
      * TODO(fs-class-discovery): refetch boot meta out of band (device-manager
      * push, or a fs-manager idle step) rather than a nested synchronous call. */
 }
@@ -866,7 +875,8 @@ static int handle_chdir_mount(fs_client_state_t* state, int32_t source, int32_t 
 
 WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t arg1, int32_t arg2,
                                       int32_t arg3) {
-    /* proc.endpoint now comes from the spawn-info contract, not an entry arg. */
+    /* The proc endpoint comes from the spawn-info contract; the entry args carry
+     * nothing and the parameter is overwritten. */
     proc_endpoint = wasmos_startup_proc_endpoint();
     (void)arg1;
     (void)arg2;

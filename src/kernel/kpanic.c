@@ -39,8 +39,11 @@ static void panic_print_symbol(uint64_t addr) {
     }
 }
 
-/* Conservative "could this be a readable high-half kernel pointer?" check so the
- * frame-pointer walk cannot fault (a nested fault mid-panic would be fatal). */
+/* Conservative "could this plausibly be a kernel stack pointer?" screen for the
+ * frame-pointer walk: a nested fault mid-panic would be fatal, so obviously bad
+ * frame pointers are rejected before dereferencing.  Only alignment and the
+ * higher-half range are checked, so a mapped-looking but bogus address still
+ * gets through. */
 static int panic_ptr_ok(uint64_t p) {
     uint64_t hh = paging_get_higher_half_base();
     if (p == 0 || (p & 0x7u) != 0u) {

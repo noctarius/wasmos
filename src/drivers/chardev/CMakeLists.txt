@@ -1,7 +1,6 @@
 # chardev-server: a normal WASM driver packed as a WASMOS-APP and loaded from
 # initfs via device-manager (see initfs.toml + devmgr rules), like every other
-# driver. (It was historically compiled into the kernel as a blob — the first
-# app, before real app loading existed.)
+# driver.
 wasmos_add_wasm_c_app_target(chardev_server_app
   SOURCE ${WASM_CHARDEV_DRIVER_SRC}
   OUTPUT_WASM ${WASM_CHARDEV_DRIVER_WASM}

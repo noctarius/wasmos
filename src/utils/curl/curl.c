@@ -1,10 +1,16 @@
 /* curl - minimal HTTP/1.0 GET over the net-stack TCP ring helper.
  *
- * Usage: curl <host>[:port][/path] [-o <file>]
+ * Usage: curl [http://|https://]<host>[:port][/path][?query] [-o <file>]
  *
- * Resolves the host through net.stack DNS, opens a TCP stream socket (zero-copy
- * rings via wasmos_net_tcp_*), sends an HTTP/1.0 GET, strips the response
- * headers, and writes the body to stdout or, with -o, to a file.
+ * The whole command line arrives as one string via wasmos_startup_args; the
+ * first non-flag token is the URL and everything after a later `-o` names an
+ * output file. A bare IPv4 literal host skips DNS; otherwise the host is
+ * resolved through net.stack. https opens the same socket wrapped in TLS, with
+ * the host passed as the SNI/verification name, and defaults to port 443.
+ * The response headers are stripped and the body is written to stdout, or to the
+ * -o file. Returns 0 on success, 1 on any failure (each prints one `[curl] ...`
+ * line). An HTTP error status is NOT detected — its body is written like any
+ * other.
  */
 #include <stdint.h>
 
@@ -73,8 +79,9 @@ static void slice(char* dst, int cap, const char* s, int a, int b) {
 
 /* Decompose a URL into its parts. A missing scheme defaults to "http", a missing
  * path to "/", and the port defaults to 443 for https else 80. query and
- * fragment are captured without their '?'/'#'. Returns 0, or -1 if the host is
- * empty. */
+ * fragment are captured without their '?'/'#'; userinfo is captured but never
+ * sent (no Authorization header is generated). Every field is truncated to its
+ * fixed capacity rather than rejected. Returns 0, or -1 if the host is empty. */
 static int parse_url(const char* url, url_t* u) {
     int n = 0;
     while (url[n] != '\0') {
@@ -241,8 +248,8 @@ int main(void) {
         return 1;
     }
     /* http is plaintext; https wraps the same request path in TLS with server
-     * certificate + hostname verification (milestone C) — u.host is passed as the
-     * SNI/verify name below. The url parser already defaulted the port to 443. */
+     * certificate + hostname verification — u.host is passed as the SNI/verify
+     * name below. The url parser already defaulted the port to 443. */
     int use_tls = strcmp(u.scheme, "https") == 0;
     if (!use_tls && strcmp(u.scheme, "http") != 0) {
         puts("[curl] unsupported url scheme");

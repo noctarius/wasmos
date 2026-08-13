@@ -10,7 +10,10 @@
 
 #define FONT_W 8
 #define FONT_H 16
-#define FONT_SCALE 1 /* pixel scale: each font pixel → NxN screen pixels */
+/* Cell-to-glyph size ratio. Must stay 1: render.c positions cells by CELL_W/
+ * CELL_H but blits exactly FONT_W x FONT_H pixels, so a larger scale would draw
+ * unscaled glyphs into oversized cells. */
+#define FONT_SCALE 1
 #define CELL_W (FONT_W * FONT_SCALE)
 #define CELL_H (FONT_H * FONT_SCALE)
 
@@ -23,7 +26,9 @@
 #define FBTEXT_DEFAULT_BG 0  /* black        */
 
 typedef struct {
-    uint32_t ch;  /* Unicode codepoint; Phase 1: ASCII only; 0 = empty */
+    /* Unicode codepoint, 0 = empty. The built-in font covers 0x20-0x7E only;
+     * render.c draws anything outside that range as a space. */
+    uint32_t ch;
     uint8_t fg;   /* 4-bit foreground palette index */
     uint8_t bg;   /* 4-bit background palette index */
     uint8_t attr; /* reserved for bold/underline/blink */

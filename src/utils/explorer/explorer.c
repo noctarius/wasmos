@@ -1,3 +1,14 @@
+/* explorer - graphical file browser built on libui, for the gfx compositor.
+ *
+ * Takes no arguments (argc/argv are ignored; the proc endpoint comes from
+ * wasmos_startup_arg(0)) and produces no stdout output: everything is reported
+ * in the window's status line. It opens a window, browses the VFS through
+ * fs.vfs, and activating a `.wap` entry spawns it (wasmos_sys_spawn_path_sync,
+ * 2 s ready timeout) and reports the pid; explorer never waits for it to exit.
+ * Directory navigation is done by chdir on the FS session, so this process's cwd
+ * IS the displayed directory. Returns 0 once the window is closed, 1 if the
+ * endpoints or the UI could not be created.
+ */
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>

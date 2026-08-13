@@ -1,9 +1,8 @@
 /* link_ipc.cpp - WARP host calls for the kernel IPC layer.
  *
- * Split out of link.cpp so the shims are reachable from a host test; see
- * link_ipc.h. Behaviour is unchanged by the move, apart from dropping a dead
- * warp_call_ctx() lookup in warp_ipc_create_endpoint whose result was
- * immediately discarded.
+ * A separate translation unit from link.cpp so these shims are reachable from a
+ * host test; see link_ipc.h for the seam and for the per-pid slot accessors
+ * link.cpp owns.
  */
 #include <cstdint>
 

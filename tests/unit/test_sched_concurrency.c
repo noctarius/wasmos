@@ -1,10 +1,10 @@
 /* test_sched_concurrency.c — the real multi-threaded arm of the host harness.
  *
- * Every race sched_thread.c's comments describe is argued for in prose and, up
- * to now, tested by nothing. WASMOS_HOST_TEST_SMP already routes cpu_local()
- * through a _Thread_local, so a pthread genuinely IS a CPU here: it has its own
- * cpu_local, its own run queue, and it contends for the same locks and atomics
- * the kernel does.
+ * WASMOS_HOST_TEST_SMP routes cpu_local() through a _Thread_local, so a pthread
+ * genuinely IS a CPU here: it has its own cpu_local, its own run queue, and it
+ * contends for the same locks and atomics the kernel does. That is what lets the
+ * cross-CPU races sched_thread.c's comments describe be driven for real rather
+ * than argued for in prose.
  *
  * What a passing run means, precisely: no invariant violation was OBSERVED. A
  * race test cannot prove absence, so the value is in the invariants being
@@ -60,9 +60,9 @@ static int g_checks;
         }                                                                                          \
     } while (0)
 
-/* Silent: a storm of tripwire output from four threads would dominate the run
- * and slow the interleaving. Counted instead, so a test can still assert one
- * fired. */
+/* Silent: a storm of tripwire output from several threads would dominate the run
+ * and slow the interleaving down. Counted instead, so a report remains
+ * observable without printing anything. */
 static int g_reports;
 void serial_printf_unlocked(const char* fmt, ...) {
     (void)fmt;
@@ -96,7 +96,8 @@ int thread_wake_if_blocked(uint32_t tid) {
             return 0;
         }
         /* The kernel writes this under g_thread_table_lock; the stub has no such
-         * lock, so make it atomic rather than let the harness generate reports. */
+         * lock, so the store is atomic -- a plain one races the diagnostics in
+         * sched_thread.c and puts the HARNESS in the TSan report. */
         __atomic_store_n(&t->block_reason, THREAD_BLOCK_NONE, __ATOMIC_RELAXED);
         return 1;
     }
@@ -197,7 +198,8 @@ static void check_invariants(const char* where) {
     }
 }
 
-/* Deterministic per-thread PRNG so a failing run is reproducible from its seed. */
+/* Per-thread PRNG seeded from the worker id: the sequence of operations each
+ * worker issues is fixed, so only the interleaving varies between runs. */
 static uint32_t rnd(uint32_t* s) {
     *s ^= *s << 13;
     *s ^= *s >> 17;
@@ -420,19 +422,14 @@ static void test_two_stealers_one_thread(void) {
  * reset, and from the fact that a terminal thread is refused by
  * cpu_sched_enqueue's state guard and swept by the steal scan.
  *
- * An earlier version of this test recycled the SAME slots a stealer was
- * enqueueing and reported list corruption. That was the test violating the
- * contract, not the scheduler breaking it: no amount of locking inside
- * sched_thread_init would make "re-initialise a node another CPU is linking"
- * well-defined.
- *
- * So the reaper here recycles slots that are on NO queue -- which is the state
+ * So the reaper here recycles slots that are on NO queue -- the state
  * thread_reset_slot operates on -- while the other CPU drives queue traffic on
  * different slots. The property under test is that concurrent slot recycling
  * does not corrupt the shared queue state, and that a recycled slot is left
- * detached and unclaimed. The same-slot pairing is deliberately NOT tested: it
- * is unsupported, and a test asserting it would be asserting a guarantee the
- * kernel does not make. */
+ * detached and unclaimed. Recycling a slot another CPU is concurrently linking
+ * is deliberately NOT tested: it is outside the contract above, no locking
+ * inside sched_thread_init could make it well-defined, and a test asserting it
+ * would be asserting a guarantee the kernel does not make. */
 #define REAP_SLOTS 8
 
 static void* reap_worker(void* arg) {
@@ -440,9 +437,9 @@ static void* reap_worker(void* arg) {
     be_cpu(2);
     barrier_wait(&g_barrier);
     for (int i = 0; i < 5000; ++i) {
-        /* Never enqueued: a queued thread is stealable by ANY CPU, which is how
-         * an earlier version of this test lost its "disjoint ranges" property
-         * and recreated the unsupported same-slot pairing. Recycling a slot that
+        /* These slots are never enqueued here: a queued thread is stealable by
+         * ANY CPU, so enqueueing one would put it back in the stealer's range
+         * and recreate the unsupported same-slot pairing. Recycling a slot that
          * is on no queue is what thread_reset_slot actually does. */
         thread_t* t = &g_pool[i % REAP_SLOTS];
         cpu_sched_remove_thread(t); /* the unlink-before-reset the reap path owes */

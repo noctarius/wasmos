@@ -11,11 +11,12 @@
 
 #define LINMEM_PAGE_SIZE 4096ULL
 
-/* One 2 GiB slot per bit.  WARP_LINMEM_PDPT_COUNT/2 slots fit the VA window.
- * TODO(linmem-pool): the bitmap width (64) is the hard ceiling on concurrent
- * slots (bounds concurrent WASM apps, not total spawned).  If a boot ever needs
- * more than LINMEM_SLOT_COUNT concurrent WASM processes, widen the VA window
- * (WARP_LINMEM_PDPT_COUNT) and make the bitmap an array. */
+/* One slot per bit of g_linmem_slot_bitmap.  A slot spans WARP_LINMEM_VA_STRIDE
+ * (2 GiB) of reserved VA, i.e. two 1 GiB PDPT entries, so the window holds
+ * WARP_LINMEM_PDPT_COUNT/2 slots.
+ * TODO: LINMEM_SLOT_COUNT caps CONCURRENT slot holders (concurrent WASM apps,
+ * not total spawned); allocation fails once they are all taken.  Raising it past
+ * 64 needs the bitmap widened to an array as well as a wider VA window. */
 #define LINMEM_SLOT_COUNT (WARP_LINMEM_PDPT_COUNT / 2u)
 
 static uint64_t g_linmem_slot_bitmap = 0;
@@ -106,9 +107,12 @@ int linmem_slot_commit(uint64_t va_base, uint64_t from_page, uint64_t to_page) {
             return -1;
         }
         /* SUPERVISOR only (no MEM_REGION_FLAG_USER): this kernel alias must be
-         * unreachable from ring 3.  paging_map_4k invlpg's the mapping CPU; the
-         * single-CPU-at-a-time invariant means no cross-CPU shootdown is needed
-         * for a just-committed page. */
+         * unreachable from ring 3, and paging_map_4k_in_root rejects the USER
+         * bit on higher-half VAs anyway.
+         * TODO: paging_map_4k invalidates the new mapping only on the CPU that
+         * installs it, and there is no cross-CPU TLB shootdown here or in
+         * linmem_slot_decommit, so a CPU that touched a released slot VA can
+         * retain a stale translation once the slot is reused. */
         if (paging_map_4k(va, phys, MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE) != 0) {
             pfa_free_pages(phys, 1);
             return -1;

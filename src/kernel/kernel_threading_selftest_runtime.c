@@ -1,7 +1,19 @@
-/* kernel_threading_selftest_runtime.c - Kernel threading self-test.
- * Spawns multiple kernel threads, exercises IPC notification between them, and
- * verifies that join/detach semantics and thread lifecycle transitions work
- * correctly under the cooperative + preemptive scheduler. */
+/* kernel_threading_selftest_runtime.c - Kernel threading self-tests.
+ *
+ * Three self-test processes, each spawning worker threads inside itself and
+ * logging a "[test] threading ... ok" line the boot harness greps for:
+ *
+ *   - internal smoke: two workers ordered by a shared flag, and (only when the
+ *     ring-3 lifecycle smoke is enabled) a process_wait that must be woken by a
+ *     process_kill delivering exit status 42;
+ *   - join wake order: a waiter that blocks in process_thread_join before its
+ *     target exits, and must be woken with the target's status 11;
+ *   - IPC stress: a sender and a receiver thread moving 32 messages through one
+ *     endpoint.
+ *
+ * Detach is not exercised here; ring3_thread_lifecycle_probe.c covers it from
+ * user space. Each process is auto-reaped so a finished self-test does not hold
+ * a g_processes[] slot. */
 #include "kernel_threading_selftest_runtime.h"
 
 #include "ipc.h"
@@ -305,6 +317,12 @@ static process_run_result_t threading_internal_smoke_entry(process_t* process, v
          (state->wait_done && state->wait_exit_status == 42 && state->wait_kill_sent))) {
         klog_write("[test] threading internal worker ok\n");
         if (g_ring3_thread_lifecycle_smoke_enabled) {
+            /* FIXME: these three markers are emitted from the wait/kill result
+             * above, not from checks of what they name. The wait-join pair
+             * (wait_join_blocked / wait_join_target_tid) runs but its outcome is
+             * never part of the condition, so a broken join-after-kill still
+             * prints "ok". Either fold the wait-join state into the condition or
+             * drop the markers. */
             klog_write("[test] threading join after kill order ok\n");
             klog_write("[test] threading join kill wake ok\n");
             klog_write("[test] threading wait kill wake ok\n");
@@ -385,9 +403,13 @@ static process_run_result_t threading_ipc_stress_entry(process_t* process, void*
             return PROCESS_RUN_EXITED;
         }
         state->spawned = 1;
-        /* Under the blocking scheduler ipc_recv_for never returns IPC_EMPTY in
-         * normal operation, so the sender's recv_empty_count == 0 guard is
-         * never cleared.  Pre-set it so the sender can start right away. */
+        /* Opens the sender's `recv_empty_count == 0` gate immediately instead of
+         * waiting for the receiver's first poll.
+         * FIXME: this also makes the `recv_empty_count > 0` term of the
+         * completion check below vacuous, so that term can no longer observe
+         * whether the receiver ever polled an empty queue. ipc_recv_for is the
+         * non-blocking poll and does return IPC_EMPTY on an empty endpoint
+         * (ipc.c), so the gate would clear on the receiver's first run anyway. */
         state->recv_empty_count = 1;
         return PROCESS_RUN_YIELDED;
     }

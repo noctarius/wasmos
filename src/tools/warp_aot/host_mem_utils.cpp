@@ -76,10 +76,11 @@ void freePagedMemory(uint8_t* ptr, size_t size) VB_NOEXCEPT {
 int32_t setPermissionRWX(uint8_t* start, size_t len) VB_NOEXCEPT {
     if (!start || !len)
         return 0;
+    /* Both branches are the same plain RWX mprotect. The Apple arm being split
+     * out marks where a hardened-runtime host would need MAP_JIT pages plus
+     * pthread_jit_write_protect_np instead; warp_aot only compiles and
+     * serialises, so it never executes what it writes here. */
 #ifdef __APPLE__
-    /* On Apple Silicon MAP_JIT pages require pthread_jit_write_protect_np.
-     * For x86-64 macOS (warp_aot targets x86-64 code generation) a plain
-     * mprotect with RWX is sufficient. */
     return mprotect(start, round_up_page(len), PROT_READ | PROT_WRITE | PROT_EXEC) == 0 ? 0 : -1;
 #else
     return mprotect(start, round_up_page(len), PROT_READ | PROT_WRITE | PROT_EXEC) == 0 ? 0 : -1;
@@ -131,18 +132,17 @@ uint8_t* reallocAlignedMemory(uint8_t* old, size_t oldSz, size_t newSz, size_t a
     return n;
 }
 
+/* FIXME: this reads a size header that allocAlignedMemory never writes.
+ * allocAlignedMemory returns a bare mmap base, so ptr - sizeof(size_t) lands in
+ * the preceding (usually unmapped) page: the load faults, or munmap is handed a
+ * garbage length. Either allocAlignedMemory has to prepend the header this
+ * assumes, or the sizes have to be tracked in a side table. warp_aot survives
+ * only because WARP does not reach this path before the process exits. */
 void freeAlignedMemory(void* ptr) VB_NOEXCEPT {
-    /* The allocation size is not recoverable from the pointer alone, and munmap
-     * needs it, so allocAlignedMemory prepends a hidden size header that the
-     * caller never sees and this reads back.  For the AOT tool this path is only
-     * reached during WARP's internal cleanup, where a malloc/free pair with that
-     * header suffices. */
     if (!ptr)
         return;
-    /* Recover the size from the hidden header at ptr - sizeof(size_t). */
     size_t* hdr = static_cast<size_t*>(ptr) - 1;
     size_t sz = *hdr;
-    /* The allocation base is hdr cast to uint8_t*. */
     munmap(hdr, sz);
 }
 
@@ -161,7 +161,10 @@ uint8_t* mapRXMemory(size_t size, int32_t /*fd*/) {
     if (!size)
         return nullptr;
     size = round_up_page(size);
-    /* Allocate as RW first; WARP writes code then calls setPermissionRX. */
+    /* The fd is ignored: allocPagedMemory here is plain MAP_ANONYMOUS and hands
+     * back fd = -1, so there is no shared object to map a second view of. The
+     * mapping is RWX from the start because callers write code into it and only
+     * afterwards narrow it with setPermissionRX. */
     void* p =
         mmap(nullptr, size, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if (p == MAP_FAILED)

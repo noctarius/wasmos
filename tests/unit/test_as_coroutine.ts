@@ -1,17 +1,18 @@
 /* test_as_coroutine.ts — parity tests for the AssemblyScript coroutine runtime.
  *
- * Replicates tests/unit/test_wasm_coroutine.c case for case, with the same
- * scenarios, the same values and the same assertions, so the AS port is held to
- * the behaviour of the C runtime every other guest language links rather than
- * to a fresh reading of the spec.
+ * Replicates tests/unit/test_wasm_coroutine.c with the same scenarios, the same
+ * values and the same assertions, so the AS port is held to the behaviour of the
+ * C runtime every other guest language links rather than to a fresh reading of
+ * the spec.
  *
- * Cases 1-4 of the C suite are here. Its cases 5 and 6 (test_ipc_future,
- * test_fs_request_future) exercise ipc_future_wasm.c and the FS request bridge,
- * which are separate modules AS does not have yet; they are not coroutine
- * runtime tests and are deliberately not faked here.
+ * Scope: the C suite's IPC cases (test_ipc_future, test_fs_request_future) are
+ * not coroutine-runtime tests and are not mirrored here. The AS port of the IPC
+ * future bridge lives in src/libc/assemblyscript/eventloop.ts and is covered by
+ * tests/unit/test_as_eventloop.ts; the FS request bridge has no AS port.
  *
- * Each case returns 0 or its failing line, exactly like the C original, and
- * runTests() returns the first non-zero. The host harness reads that.
+ * Each case returns 0 or a distinct marker (the C original returns its failing
+ * line instead), and runTests() returns the first non-zero one, which the host
+ * harness prints.
  */
 
 import {
@@ -218,9 +219,9 @@ function testFutureChainsAndDeferredCallbacks(): i32 {
     if (value.value != 0) return 235;
 
     /* Registering on an ALREADY-SETTLED future must still defer: the callback
-     * runs from the runtime, never inline from then(). The C suite only ever
-     * registers before settling, so this path was untested there too -- a
-     * mutation that dispatched inline survived its whole suite. */
+     * runs from the runtime, never inline from then(). Every case above
+     * registers before settling, so this is the only one covering that branch;
+     * the C suite mirrors it. */
     const settled = new Future();
     const settledPromise = new Promise();
     const lateContinuation = new Continuation();
@@ -375,10 +376,10 @@ function testContracts(): i32 {
     return 0;
 }
 
-// ------------------------------------------- cases 5-8: native-suite parity
+// ------------------------------------------ cases 5-11: native-suite parity
 //
-// tests/unit/test_native_coroutine.c covers these and the WASM suites did not.
-// None of them depend on the stackful model, so they apply here unchanged.
+// Mirrors tests/unit/test_native_coroutine.c and test_wasm_coroutine.c. None of
+// these scenarios depend on the stackful model, so they apply here unchanged.
 
 const WAITER_COUNT: i32 = 4;
 
@@ -623,16 +624,13 @@ function testReentrancyRespawnAndPendingPoll(): i32 {
     return 0;
 }
 
-/* Race with N candidates that ALL settle, run once per winning position.
+/* Race with N candidates that ALL settle, run once per winning position, which
+ * keeps the implementation position-agnostic against an index-sensitive
+ * shortcut: testRaceAndAll above exercises only one ordering (the second of
+ * three winning).
  *
- * Every suite tested exactly one ordering (the second of three winning), so
- * nothing pinned that the result is independent of WHICH position wins. The
- * implementation is position-agnostic today; these cases are what keeps it
- * that way when someone adds an index-sensitive shortcut.
- *
- * A caveat, established by trying to break it rather than assumed: this does
- * NOT distinguish the head/middle/tail branches of the queue removal. A mutant
- * that only ever removes the head still passes, because continuationCancel
+ * Scope: this does NOT distinguish the head/middle/tail branches of the queue
+ * removal. Removing only the head passes as well, because continuationCancel
  * nulls the node's `next` regardless -- truncating the list anyway -- and nulls
  * its `future`, so a stale entry that survives is dispatched as a no-op. The
  * removal branches are not observable through the public API.

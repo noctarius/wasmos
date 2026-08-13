@@ -3,8 +3,8 @@
  * The ABI gives every host call ONE signed i32 on which it must carry both its
  * result and its errors. The error codes are negative, so any success value
  * with bit 31 set is read by the guest as an error. That is not a theoretical
- * hazard: block_buffer_phys returned a physical address that way and an address
- * of 0xFFFFFFFF would have been indistinguishable from a bare -1.
+ * hazard: block_buffer_phys hands back a physical address on that i32, and an
+ * address of 0xFFFFFFFF is indistinguishable from a bare -1.
  *
  * Two shapes, because the right answer differs:
  *

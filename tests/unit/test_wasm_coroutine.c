@@ -86,6 +86,10 @@ int32_t wasmos_ipc_last_field(int32_t field) {
     }
 }
 
+/* Select-set creation always fails, so an event loop built on these stubs keeps
+ * select_id < 0 and never blocks in wasmos_ipc_select_wait: the cases below
+ * drive the queued-message path only, with replies scripted through
+ * queued_message/queued_reply. */
 int32_t wasmos_ipc_select_create(void) {
     return -1;
 }
@@ -253,10 +257,9 @@ static int test_future_chains_and_deferred_callbacks(void) {
     }
     /* Registering on an ALREADY-SETTLED future must still defer to the runtime
      * rather than dispatch inline from wasmos_future_then. Every case above
-     * registers BEFORE settling, so nothing here covered the settled branch: a
-     * mutant that called continuation_dispatch directly from that branch passed
-     * this whole suite. Found while porting the runtime to AssemblyScript,
-     * whose suite mirrors this one. */
+     * registers BEFORE settling, so this is the only one covering the settled
+     * branch; without it, calling continuation_dispatch directly from there
+     * passes the whole suite. */
     wasmos_future_init(&settled, &settled_promise);
     state.calls = 0u;
     if (!wasmos_promise_resolve(&settled_promise, 70u))
@@ -433,8 +436,8 @@ static int test_fs_request_future(void) {
 }
 
 /* ------------------------------------------------------------------------
- * Scenarios the native suite (tests/unit/test_native_coroutine.c) covered and
- * this one did not. None depend on the stackful model, so they apply to the
+ * Parity with the native suite (tests/unit/test_native_coroutine.c). None of
+ * the scenarios below depend on the stackful model, so they apply to the
  * stackless runtime unchanged. Mirrored in tests/unit/test_as_coroutine.ts.
  * ---------------------------------------------------------------------- */
 
@@ -685,17 +688,15 @@ static int test_reentrancy_respawn_and_pending_poll(void) {
     return 0;
 }
 
-/* Race with N candidates that ALL settle, run once per winning position.
+/* Race with N candidates that ALL settle, run once per winning position, which
+ * keeps the implementation position-agnostic: test_race_and_all above exercises
+ * only one ordering (the second of three winning).
  *
- * Every suite tested exactly one ordering (the second of three winning), so
- * nothing pinned that the result is independent of WHICH position wins. The
- * implementation is position-agnostic today; these cases keep it that way.
- *
- * A caveat, established by trying to break it: this does NOT distinguish the
- * head/middle/tail branches of the dispatch-queue removal. A mutant that only
- * removes the head still passes, because continuation_cancel nulls the node's
- * next regardless -- truncating the list anyway -- and nulls its future, so a
- * surviving stale entry dispatches as a no-op.
+ * Scope: this does NOT distinguish the head/middle/tail branches of the
+ * dispatch-queue removal. Removing only the head passes as well, because
+ * continuation_cancel nulls the node's next regardless -- truncating the list
+ * anyway -- and nulls its future, so a surviving stale entry dispatches as a
+ * no-op.
  *
  * What IS pinned: the first to settle wins from any position, and every loser
  * ends up inactive, off its source future, and off the dispatch queue. */
@@ -877,8 +878,8 @@ static int test_race_and_all_every_position(void) {
 }
 
 /* Randomized order: a case that leaks state must not be able to make its
- * neighbour pass. The seed is printed on failure and replays via
- * WASMOS_TEST_SEED; see test_shuffle.h. */
+ * neighbour pass. The seed is printed before the first case runs and repeated
+ * on failure; WASMOS_TEST_SEED replays that order. See test_shuffle.h. */
 static const wasmos_test_case_t k_cases[] = {
     WASMOS_TEST_CASE(test_yield_await_and_join),
     WASMOS_TEST_CASE(test_future_chains_and_deferred_callbacks),

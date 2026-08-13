@@ -2,10 +2,9 @@
  * net-stack service.
  *
  * Freestanding x86_64 build. Integer types come from the compiler's <stdint.h>
- * (available in freestanding mode). Unlike the earlier kernel-image variant,
- * this is a native service (.wap) and MUST NOT depend on kernel headers such as
- * <klog.h>. Diagnostics are routed to a small port helper implemented in
- * net_stack.c (which has the wasmos_driver_api_t console hook).
+ * (available in freestanding mode). This is a native service (.wap), so it MUST
+ * NOT depend on kernel headers such as <klog.h>; diagnostics route to a small
+ * port helper in net_stack.c, which owns the wasmos_driver_api_t console hook.
  */
 #ifndef WASMOS_NET_STACK_ARCH_CC_H
 #define WASMOS_NET_STACK_ARCH_CC_H
@@ -21,8 +20,9 @@
 /* --- No host <inttypes.h> ------------------------------------------------ */
 /* This is a freestanding build; pulling in the host <inttypes.h> drags in
  * glibc's <bits/wordsize.h> which does not exist for the kernel target. Tell
- * lwIP not to include it and provide the (sn)printf format macros ourselves.
- * Values assume 32-bit int / ILP: X8_F etc. per lwip/arch.h contract. */
+ * lwIP not to include it; the (sn)printf format macros are supplied here
+ * instead. Values assume 32-bit int and LP64 size_t, per the lwip/arch.h
+ * contract for X8_F and friends. */
 #define LWIP_NO_INTTYPES_H 1
 #define X8_F "02x"
 #define U16_F "u"
@@ -42,7 +42,7 @@
 
 /* --- Diagnostics --------------------------------------------------------- */
 /* net_stack.c provides a printf-style logger over the native console hook.
- * Kept minimal for this compile milestone. */
+ * It emits the format string only — varargs are not expanded. */
 void net_stack_lwip_diag(const char* fmt, ...);
 
 #define LWIP_PLATFORM_DIAG(x)                                                                      \

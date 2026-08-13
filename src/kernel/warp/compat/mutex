@@ -1,10 +1,11 @@
 #pragma once
 /* compat/mutex — freestanding no-op stub of <mutex>
  *
- * WARP uses std::mutex around its JIT compilation critical sections.  In the
- * kernel, WARP module compilation is already serialised by the
- * warp_runtime_enter/leave spinlock in shim.cpp, so these mutexes can be
- * safely no-ops. */
+ * WARP guards its JIT compilation critical sections with std::mutex.  The
+ * kernel relies instead on the WARP single-CPU invariant (only one CPU inside
+ * WARP at a time), so these are no-ops.  warp_runtime_enter/leave does NOT
+ * enforce that invariant with a lock — see the FIXME(smp-warp) in warp/shim.cpp;
+ * making WARP genuinely multi-CPU requires real locks here or there. */
 
 namespace std {
 

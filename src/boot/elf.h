@@ -8,7 +8,9 @@
 #define EI_NIDENT 16
 #define PT_LOAD 1 /* loadable segment type */
 
-/* ELF64 executable header. e_entry holds the virtual entry point (_start). */
+/* ELF64 executable header. e_entry addresses _start, which the kernel's linker
+ * script places in the identity-mapped bootstrap at KERNEL_LOAD_BASE, so the
+ * bootloader can call it directly before paging is installed. */
 typedef struct {
     unsigned char e_ident[EI_NIDENT];
     uint16_t e_type;
@@ -28,11 +30,11 @@ typedef struct {
 
 /* ELF64 program header. p_memsz >= p_filesz; the gap must be zero-filled (BSS). */
 typedef struct {
-    uint32_t p_type; /* PT_LOAD = 1 for a loadable segment */
+    uint32_t p_type;
     uint32_t p_flags;
     uint64_t p_offset; /* byte offset in the ELF file */
-    uint64_t p_vaddr;  /* target virtual address */
-    uint64_t p_paddr;
+    uint64_t p_vaddr;  /* virtual address the kernel links against */
+    uint64_t p_paddr;  /* load address; the bootloader copies here, not to p_vaddr */
     uint64_t p_filesz; /* bytes present in the file (may be 0 for BSS-only) */
     uint64_t p_memsz;  /* bytes to occupy in memory */
     uint64_t p_align;

@@ -6,6 +6,13 @@
 
 #include "test_shuffle.h"
 
+/* On-disk .wap headers, current (v5) and oldest still accepted (v1).
+ *
+ * wasmos_exec_format.c accepts a blob only when its header_size field equals
+ * the size its version table lists (72 for v5, 44 for v1), and the fixtures
+ * below fill that field with sizeof(). These layouts must therefore stay
+ * byte-identical to the packer's; a field added to one and not the other turns
+ * every fixture here into a non-WAP blob. */
 typedef struct __attribute__((packed)) {
     char magic[8];
     uint16_t version;
@@ -172,6 +179,10 @@ static int test_classify_broker_formats(void) {
     return 0;
 }
 
+/* The probe budget is the larger of the registered handlers' max_probe_bytes
+ * (2 and 4 here) and the 12-byte WAP header prefix -- magic[8] + version +
+ * header_size -- which is the minimum a caller must read for the WAP check to
+ * be able to answer at all. */
 static int test_probe_budget(void) {
     if (wasmos_exec_format_probe_bytes_needed() != 12u)
         return __LINE__;

@@ -7,10 +7,11 @@
  * with no threads, which is what a unit gate wants -- every ordering here is
  * one the kernel can actually produce, just chosen rather than raced for.
  *
- * The centrepiece is check_invariants(): the run-queue corruption that cost
- * ~180 QEMU boots to localise is a structural violation that a walk of the
- * queues catches immediately.  Each regression test below reproduces a bug that
- * reached main; each rejection test pins an input the API must refuse.
+ * The centrepiece is check_invariants(): run-queue corruption is a structural
+ * violation that a walk of the queues catches at the moment it happens, whereas
+ * on hardware it only surfaces later as a wedged picker.  Each regression test
+ * below reproduces a bug that reached main; each rejection test pins an input
+ * the API must refuse.
  */
 
 #include <stdarg.h>
@@ -68,9 +69,12 @@ void sched_event_init(sched_event_t* ev, sched_event_type_t type) {
     ev->type = type;
 }
 
-/* Real CAS semantics: the scheduler relies on losing this race, not on being
- * the only writer, so a stub that always succeeds would hide exactly the bugs
- * these tests exist for. */
+/* The CAS half of thread.c's thread_transit, with the same acquire/release
+ * semantics: the scheduler relies on LOSING this race, not on being the only
+ * writer, so a stub that always succeeds would hide exactly the bugs these tests
+ * exist for.  thread.c also gates the edge through thread_transition_legal();
+ * every edge the scheduler attempts here (RUNNING/BLOCKED -> READY) is legal
+ * there, so the bare CAS is faithful for this harness. */
 int thread_transit(thread_t* t, thread_state_t from, thread_state_t to) {
     uint32_t expected = (uint32_t)from;
     if (!t) {
@@ -80,11 +84,10 @@ int thread_transit(thread_t* t, thread_state_t from, thread_state_t to) {
                                        __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE);
 }
 
-/* Mirrors thread.c exactly, including the tid==0 guard, the BLOCKED-only
- * precondition and the block_reason clear.  An approximation here is worse than
- * no test: the first version only transitioned state, so W1's "block reason
- * cleared" assertion failed against a stub that was wrong rather than a kernel
- * that was. */
+/* Mirrors thread.c: the tid==0 guard, the BLOCKED-only precondition and the
+ * block_reason clear.  An approximation here is worse than no test -- a stub
+ * that only transitioned state fails W1's "block reason cleared" assertion
+ * against a correct kernel. */
 int thread_wake_if_blocked(uint32_t tid) {
     if (tid == 0) {
         return 0;
@@ -134,7 +137,7 @@ static void log_reset(void) {
 
 /* Mimics thread_reset_slot: the node is left CANONICALLY DETACHED.  A zero-fill
  * is not enough -- list_head_empty() tests next == head, so a NULL next reads as
- * LINKED.  That misreading produced 6-7 false tripwire reports per boot. */
+ * LINKED, and the linkage tripwires then report a fresh slot as still queued. */
 static thread_t* mk_thread(int idx, sched_prio_t prio, thread_state_t state) {
     thread_t* t = &g_pool[idx];
     memset(t, 0, sizeof(*t));
@@ -180,8 +183,10 @@ static void harness_reset(void) {
 /* -------------------------------------------------------- invariant checker */
 
 /* Walks every band of every CPU and asserts the structural facts the run queue
- * must always satisfy.  Bounded so a cycle -- the exact shape of the storm --
- * terminates and reports instead of hanging the test. */
+ * must always satisfy.  The walk is bounded so a cycle -- what a band spliced
+ * through a two-owner node produces -- reports and terminates instead of hanging
+ * the test.  The I<n> labels below name invariants, not the I<n> test cases in
+ * the registration table. */
 static void check_invariants(const char* where) {
     int seen_count[POOL_MAX + 1];
     memset(seen_count, 0, sizeof(seen_count));
@@ -240,8 +245,8 @@ static void check_invariants(const char* where) {
     }
 
     /* Bit 7 is not a band: cpu_sched_highest_prio masks it away, so a set bit
-     * there is unreachable state that would index one past ffs_table if the mask
-     * were ever dropped. */
+     * there is unreachable state that would index past the end of ffs_table's
+     * 128 entries if the mask were ever dropped. */
     for (uint32_t c = 0; c < g_cpu_count; ++c) {
         if ((g_cpus[c].sched.ready_bitmap & 0x80u) != 0u) {
             g_failures++;
@@ -376,7 +381,7 @@ static void test_remove_thread_not_queued_is_noop(void) {
 
 /* ---------------------------------- Kind 1: bugs that reached main */
 
-/* Round 2 (aa3db5c160).  process_thread_spawn_worker_internal published a
+/* Regression (aa3db5c160).  process_thread_spawn_worker_internal published a
  * thread READY before its sched_node existed; a wake in that window enqueued
  * it, and sched_thread_init's list_head_init then self-linked the node while
  * the band still pointed at it -- the ghost that gets re-picked forever. */
@@ -391,7 +396,7 @@ static void test_init_on_queued_is_reported(void) {
           "re-init of a queued node is counted");
 }
 
-/* Round 1 (10f5f3eaa1).  thread_reset_slot freed a slot whose sched_node was
+/* Regression (10f5f3eaa1).  thread_reset_slot freed a slot whose sched_node was
  * still linked; the allocator handed it to the next spawn and the band was
  * spliced through a node with two owners.  cpu_sched_remove_thread exists to
  * make the unlink precede the reset -- this asserts recycling is then clean. */
@@ -410,10 +415,12 @@ static void test_recycled_slot_is_unlinked_first(void) {
     CHECK(g_cpus[0].sched.thread_count[SCHED_PRIO_WASM] == 0, "old band left empty");
 }
 
-/* The round-1 REGRESSION.  The claim was taken before t->rq was published, and
- * remove_thread read rq == 0 as "not queued" and cleared the claim under the
- * in-flight enqueue -- leaving the node linked but unclaimed, hence linkable
- * twice.  on_rq must never be observable as 0 while the node is linked. */
+/* on_rq and linkage must agree: a linked node is claimed, and a remove of some
+ * OTHER thread may not clear this one's claim.  The pair matters because a node
+ * that is linked while unclaimed is linkable a second time -- the shape produced
+ * when the claim was taken before t->rq was published and remove_thread read
+ * rq == 0 as "not queued".  The in-flight (on_rq=1, rq=0) window itself is
+ * pinned by R1, not here. */
 static void test_claim_and_linkage_never_disagree(void) {
     harness_reset();
     thread_t* t = mk_thread(0, SCHED_PRIO_WASM, THREAD_STATE_READY);
@@ -445,8 +452,8 @@ static void test_drifted_counter_cannot_wedge_a_band(void) {
 }
 
 /* list_head_empty() tests next == head, so a zero-filled node (next == NULL)
- * reads as LINKED.  thread_reset_slot must leave it canonically detached; this
- * documents the trap that produced 6-7 false reports per boot. */
+ * reads as LINKED.  Every "is this thread queued?" answer depends on
+ * thread_reset_slot leaving the node canonically detached instead. */
 static void test_zero_filled_node_reads_as_linked(void) {
     harness_reset();
     thread_t raw;
@@ -467,12 +474,12 @@ static void test_enqueue_refuses_non_ready(void) {
         cpu_sched_enqueue(&g_cpus[0].sched, t);
         CHECK(list_head_empty(&t->sched_node), "non-READY thread is not linked");
         CHECK(t->on_rq == 0, "non-READY thread is not claimed");
-        /* Only the first is asserted to be reported.  The tripwire is
-         * rate-limited to powers of two and its counter is a function-static
-         * that persists across tests, so refusals 4, 6, 7 ... are silent BY
-         * DESIGN -- the storm this guards against would otherwise flood serial
-         * at scheduler speed.  Behaviour above is checked every iteration; the
-         * message is not a contract. */
+        /* The log LINE is not a contract: the tripwire is rate-limited to
+         * powers of two, so within one uninterrupted run of refusals only the
+         * 1st, 2nd, 4th, 8th ... print -- otherwise the storm this guards
+         * against would flood serial at scheduler speed.  The COUNTER is the
+         * contract, and harness_reset() zeroes it through sched_debug_reset(),
+         * so every refusal must show up as exactly one count. */
         CHECK(sched_debug_count(SCHED_DEBUG_ENQUEUE_NON_READY) == 1,
               "the refusal is counted -- every time, not just when the rate limiter allows a line");
         check_invariants("after refused enqueue");
@@ -546,10 +553,11 @@ static void test_steal_skips_sticky_and_idle(void) {
 
 /* --------------------------------------------------------- cpu_affinity */
 
-/* Affinity has three enforcement points and they must agree.  Placement was the
- * only one that honoured it: enqueue parked threads on the CALLING CPU and steal
- * moved them anywhere, so a mask set at spawn was silently overridden the first
- * time the thread blocked or the first time an idle CPU went looking for work. */
+/* Affinity has three enforcement points -- placement, the enqueue redirect and
+ * the steal scan -- and they must agree.  With only placement honouring the
+ * mask, enqueue parks a woken thread on the CALLING CPU and steal moves it
+ * anywhere, so the mask set at spawn is silently overridden the first time the
+ * thread blocks or an idle CPU goes looking for work. */
 
 static void test_affinity_governs_placement(void) {
     harness_reset();
@@ -955,8 +963,8 @@ static void test_out_of_range_priority_is_refused(void) {
 /* ------------------------------------------- sched_enqueue_thread_from */
 
 /* This wrapper exists to carry the ORIGINAL call site, which cpu_sched_enqueue
- * cannot report (its immediate caller is always this function).  So every case
- * here asserts on the caller address as well as the behaviour -- 0xCAFE appears
+ * cannot report (its immediate caller is always this function).  The cases that
+ * expect a report therefore assert on the caller address too: 0xCAFE appears
  * only in messages this path emitted, which is what distinguishes them from the
  * inner cpu_sched_enqueue reports of the same conditions. */
 
@@ -978,9 +986,10 @@ static void test_enqueue_from_non_ready_reports_the_real_caller(void) {
     log_reset();
     sched_enqueue_thread_from(t, FROM_CALLER);
 
-    /* Rate limiting: this counter is untouched by every other test, so the first
-     * occurrence is guaranteed to print.  See the note on the non-READY
-     * rejection test -- messages are generally not a contract. */
+    /* The saw() assertion below is safe despite the power-of-two rate limit:
+     * harness_reset() zeroed this counter, so this refusal is the first and
+     * always prints.  Past the first few hits a message is not a contract --
+     * see the note on the non-READY rejection test. */
     CHECK(sched_debug_count(SCHED_DEBUG_ENQUEUE_FROM_NON_READY) == 1,
           "the wrapper counts the refusal");
     CHECK(saw("cafe"), "and names the ORIGINAL call site, not its own return address");
@@ -1061,11 +1070,12 @@ static void test_remove_of_a_detached_but_claimed_thread(void) {
           "the band stays occupied while a thread remains");
 }
 
-/* R3: priority mutated while queued.  cpu_sched_remove_thread accounts against
- * t->sched_prio, so a thread whose priority changed after being linked drains
- * the WRONG band -- the old band's counter leaks and the underflow floor hides
- * the damage on the new one.  Same class as the sched_thread_init ordering bug,
- * but reachable with no tripwire at all. */
+/* R3: priority mutated while queued.  cpu_sched_unlink_locked accounts the
+ * unlink against t->rq_prio -- the band recorded when the node was linked -- and
+ * never against the thread's current sched_prio, so a priority changed after the
+ * link still drains the band the node is actually in.  Accounting against
+ * sched_prio instead leaks the old band's counter and hides the damage on the
+ * new one behind the underflow floor, with no tripwire firing at all. */
 static void test_remove_after_priority_mutation_drains_the_right_band(void) {
     harness_reset();
     thread_t* t = mk_thread(0, SCHED_PRIO_DRIVER, THREAD_STATE_READY);
@@ -1177,8 +1187,10 @@ static void test_remove_from_head_middle_tail_preserves_fifo(void) {
  * last_dispatched_prio > prio arm, which RESETS the streak to 0 instead of
  * counting itself as the first of the new run.  So the high band receives
  * STREAK+1 consecutive slots per donated slot, while the constant reads as
- * though it should receive STREAK.  See the note in the commit: this is a policy
- * off-by-one, not a correctness bug, and changing it changes fairness. */
+ * though it should receive STREAK.  That arm cannot distinguish "returning from
+ * a donation" from "a higher band just arrived", where resetting is correct, so
+ * tightening the cycle changes fairness -- see SCHED_ANTISTARVATION_STREAK in
+ * sched.h. */
 #define DONATION_CYCLE (SCHED_ANTISTARVATION_STREAK + 2)
 
 /* Dispatch `n` times on CPU 0 with both bands kept occupied (each picked thread
@@ -1426,12 +1438,18 @@ static void test_missing_idle_thread_yields_null(void) {
     CHECK(pick_on(0) == NULL, "no idle installed means no thread at all");
 }
 
-/* P5: pick_next returns cpu_local()->idle_thread, while
- * process_schedule_once_impl decides whether to work-steal by testing
- * thread == cs->idle.  If those disagree -- an AP after process_ap_init but
- * before g_cpus[id].sched.idle is set -- the steal trigger never fires and
- * runnable work piles up elsewhere.  Regression-pin for the bringup bug
- * process.c documents. */
+/* P5: pick_next answers the idle fallback from cpu_local()->idle_thread, and
+ * process_schedule_once_impl's work-steal trigger compares against that SAME
+ * field.  Testing cs->idle instead leaves the trigger permanently false in the
+ * window where the two disagree -- an AP after process_ap_init but before
+ * g_cpus[id].sched.idle is set -- so the CPU idles while runnable work piles up
+ * elsewhere.  This pins that pick_next reads cpu_local(), which is the half the
+ * trigger depends on; cs->idle stays load-bearing for cpu_sched_load_on and the
+ * steal scan (T4).
+ *
+ * FIXME: the second assertion's message still describes the superseded trigger
+ * (`thread == cs->idle`); the assertion itself only observes that the two fields
+ * can disagree, and a NULL cs->idle no longer disables work stealing. */
 static void test_cs_idle_and_cpu_local_idle_must_agree(void) {
     harness_reset();
     g_cpus[0].sched.idle = NULL; /* the AP-bringup window */
@@ -1478,11 +1496,10 @@ static void test_all_bands_stale_converges_to_idle(void) {
 /* -------------------------------------- sched_wake_thread + Dekker handshake */
 
 /* The wake/block handshake (sched_wake_claim_enqueue / sched_block_complete_claim
- * in thread.h) had no test anywhere, and the host gate never called
- * sched_wake_thread at all.  wake_pending is a claim TOKEN: whoever exchanges it
- * to 0 owns the enqueue, so "exactly one side owns it" is the property to pin --
- * losing it strands a thread READY on no queue, which is how every CPU ends up
- * idling with runnable work outstanding. */
+ * in thread.h).  wake_pending is a claim TOKEN: whoever exchanges it to 0 owns
+ * the enqueue, so "exactly one side owns it" is the property to pin -- losing it
+ * strands a thread READY on no queue, which is how every CPU ends up idling with
+ * runnable work outstanding. */
 
 static void test_wake_ordinary(void) {
     harness_reset();
@@ -1496,9 +1513,9 @@ static void test_wake_ordinary(void) {
     check_invariants("ordinary wake");
 }
 
-/* The deferral half: the completion path owns the enqueue, so the waker must
- * leave the token behind.  The in-kernel test covers state and linkage but not
- * the token, which is the part that strands threads. */
+/* The deferral half: with a block in flight the completion path owns the
+ * enqueue, so the waker must promote the thread and leave the token behind
+ * rather than link it itself. */
 static void test_wake_during_blocking_transition_defers_with_token(void) {
     harness_reset();
     thread_t* t = mk_thread(0, SCHED_PRIO_WASM, THREAD_STATE_BLOCKED);
@@ -1549,8 +1566,8 @@ static void test_wake_honours_affinity_end_to_end(void) {
     check_invariants("wake honours affinity");
 }
 
-/* Priority preemption: requested only when the woken thread outranks what this
- * CPU is running.  Lower sched_prio == higher band. */
+/* Priority preemption: requested when this CPU is running nothing, or when the
+ * woken thread outranks what it is running.  Lower sched_prio == higher band. */
 static void test_resched_requested_only_on_a_priority_win(void) {
     harness_reset();
     thread_t* running = mk_thread(0, SCHED_PRIO_WASM, THREAD_STATE_RUNNING);
@@ -1637,8 +1654,8 @@ static void test_caller_cpu_bias_arm(void) {
 
 /* ------------------------------------------------------- sched_thread_init */
 
-/* I1: the full field contract.  sched_thread_init is the sole place a thread's
- * scheduler state is established, and nothing asserted any of it. */
+/* I1: the field contract.  sched_thread_init is the sole place a thread's
+ * scheduler state is established from scratch. */
 static void test_init_establishes_every_field(void) {
     harness_reset();
     thread_t* t = &g_pool[0];
@@ -1918,8 +1935,11 @@ static void test_spawn_with_affinity_needs_no_redirect(void) {
     check_invariants("spawn with affinity");
 }
 
-/* T7/T8: degenerate CPU counts.  Both placement entry points derive loop bounds
- * and a modulus from g_cpu_count without validating it. */
+/* T7/T8: degenerate CPU counts.  g_cpu_count comes from the MADT scan and is not
+ * validated at its source, so both placement entry points take their loop bound
+ * and modulus from cpu_sched_usable_cpus(), which clamps it to WASMOS_MAX_CPUS
+ * and floors it at 1 (the BSP always exists).  Without the floor a count of 0
+ * divides by zero; without the clamp a larger count walks off g_cpus[]. */
 static void test_zero_cpu_count_is_survivable(void) {
     harness_reset();
     g_cpu_count = 0;
@@ -1944,9 +1964,8 @@ static void test_cpu_count_beyond_the_table_is_clamped(void) {
  * entry points that consult it: the enqueue redirect, steal, and placement. */
 
 /* C1: a mask naming one ONLINE and one offline CPU must restrict to the online
- * subset.  The existing mask test uses a fully unsatisfiable mask, which exits
- * through the "no constraint" fallback -- so the restrictive path had never
- * actually run for a mask containing an offline bit. */
+ * subset.  Distinct from the unsatisfiable-mask case, which leaves through the
+ * "no constraint" fallback without ever running the restrictive path. */
 static void test_partially_online_mask_restricts(void) {
     harness_reset();
     for (uint32_t forbidden = 0; forbidden < 4; ++forbidden) {
@@ -1979,14 +1998,15 @@ static void test_empty_mask_is_unconstrained(void) {
     CHECK(t->rq == &g_cpus[2].sched, "and does not force a redirect");
 }
 
-/* C3: an id outside the table reads as allowed.  That is what keeps an unknown
- * cpu_sched_t (a caller-owned queue) from being redirected away. */
+/* C3: a CPU id outside the table reads as allowed, and cpu_sched_cpu_index
+ * answers WASMOS_MAX_CPUS for a queue that is not one of g_cpus[] -- which is
+ * what keeps an unknown cpu_sched_t (a caller-owned queue) out of the redirect. */
 static void test_out_of_table_cpu_id_is_allowed(void) {
     harness_reset();
     cpu_sched_t private_q;
     cpu_sched_init(&private_q);
     thread_t* t = mk_thread(0, SCHED_PRIO_WASM, THREAD_STATE_READY);
-    t->cpu_affinity = 1u << 2; /* would forbid CPU 0, the old fallback index */
+    t->cpu_affinity = 1u << 2; /* would forbid CPU 0 if the queue folded onto index 0 */
     act_as(0);
     cpu_sched_enqueue(&private_q, t);
     CHECK(t->rq == &private_q, "an unknown queue is never second-guessed by affinity");
@@ -2066,9 +2086,9 @@ static void test_steal_takes_the_highest_priority_stealable(void) {
     CHECK(cpu_sched_try_steal(0) == high, "the highest band is taken, not the first enqueued");
 }
 
-/* A sticky thread at the HEAD must not shadow the rest of its band.  The
- * existing test has only one sticky thread, so it cannot tell "skips sticky"
- * from "gives up on the band". */
+/* A sticky thread at the HEAD must not shadow the rest of its band.  A band
+ * holding only sticky threads cannot distinguish "skips sticky" from "gives up
+ * on the band", so a normal thread sits behind the sticky head here. */
 static void test_sticky_at_the_head_does_not_block_the_band(void) {
     harness_reset();
     thread_t* sticky = mk_thread(0, SCHED_PRIO_WASM, THREAD_STATE_READY);
@@ -2182,7 +2202,8 @@ static void test_never_steals_from_itself(void) {
     CHECK(mine->on_rq == 1, "and its own thread stays queued");
 }
 
-/* Post-steal bookkeeping, including steal_count which nothing asserted. */
+/* Post-steal bookkeeping: last_cpu retargeting and the STEALER's steal_count
+ * (cpu_local()'s, not the victim's). */
 static void test_stolen_thread_bookkeeping(void) {
     harness_reset();
     thread_t* t = mk_thread(0, SCHED_PRIO_WASM, THREAD_STATE_READY);
@@ -2243,8 +2264,6 @@ static void test_steal_then_enqueue_round_trip(void) {
 
 /* ------------------------------------------------------- sched_default_prio */
 
-/* Moved off the boot path: a pure mapping function needs no QEMU, and it was
- * already linked into this gate. */
 static void test_default_prio_mapping(void) {
     CHECK(sched_default_prio(1, 0, 0, 0) == SCHED_PRIO_IDLE, "idle");
     CHECK(sched_default_prio(0, 1, 0, 0) == SCHED_PRIO_SYSTEM, "kernel worker");

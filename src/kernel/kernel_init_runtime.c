@@ -216,19 +216,15 @@ process_run_result_t kernel_init_entry(process_t* process, void* arg) {
     }
 
     if (g_skip_wasm_boot) {
-        /* Synchronous wasm3 probe removed; see the note in the phase==0 path
-         * below (the probed app's proc_exit would terminate init). */
         process_block_on_ipc(process);
         return PROCESS_RUN_BLOCKED;
     }
 
     if (state->phase == 0) {
-        /* The old synchronous in-kernel wasm3 probe was removed: WASM apps now
-         * exit via the proc_exit hostcall instead of returning, so running an
-         * app entry synchronously in init's context terminated init itself and
-         * stopped system bringup. native-call-min is still run (and thus wasm3
-         * still validated) by spawning it as a normal process
-         * below, where proc_exit correctly terminates only that process. */
+        /* Every boot app is started as its own process, never run inline here:
+         * a WASM app leaves through the proc_exit hostcall rather than by
+         * returning, so an app entry called in init's context would terminate
+         * init and stop system bring-up. */
         uint32_t proc_ep = process_manager_endpoint();
         if (proc_ep == IPC_ENDPOINT_NONE) {
             return PROCESS_RUN_YIELDED;
@@ -321,7 +317,10 @@ process_run_result_t kernel_init_entry(process_t* process, void* arg) {
             uint32_t err = msg.arg1;
             if (op == PROC_IPC_SPAWN && (err == (uint32_t)-1 || err == (uint32_t)-2)) {
                 /* PM spawn can transiently fail while slots/services churn
-                 * during strict ring3 threading smoke; retry same phase. */
+                 * during strict ring3 threading smoke; retry same phase.
+                 * FIXME: -1/-2 are bare codes on an IPC boundary, so this
+                 * retry is matched by magic number instead of by a packed
+                 * WASMOS_ERR_PROC_* from abi/errors.yaml. */
                 state->request_id++;
                 state->pending_kind = 0;
                 state->phase = 0;
@@ -336,6 +335,9 @@ process_run_result_t kernel_init_entry(process_t* process, void* arg) {
             } else if (state->pending_kind == 4) {
                 klog_write("[init] fs-manager spawn failed\n");
             } else if (state->pending_kind == 5) {
+                /* FIXME: pending_kind 5 reaching phase 1 is the fs-init spawn
+                 * (init_send_spawn_path reuses 5 for sysinit, but that reply is
+                 * handled in phase 4), so this line names the wrong app. */
                 klog_write("[init] sysinit spawn failed\n");
             } else {
                 klog_write("[init] device-manager spawn failed\n");

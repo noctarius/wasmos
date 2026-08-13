@@ -19,14 +19,17 @@ typedef struct wasmos_script_env_node {
     struct wasmos_script_env_node* next;
 } wasmos_script_env_node_t;
 
-/* Interpreter state: local and exported variable chains, last exit code,
- * recursion depth, and an if/else nesting tracker. */
+/* Interpreter state: local and exported variable chains, last exit code, and the
+ * if/else nesting tracker. A line runs only while exec_depth == total_depth. */
 typedef struct {
     wasmos_script_env_node_t* locals;
     wasmos_script_env_node_t* exports;
     int32_t last_exit_code;
-    int32_t exec_depth;  /* depth of nested exec calls */
-    int32_t total_depth; /* total call depth for guard */
+    int32_t exec_depth;  /* open if-blocks whose branch is being executed */
+    int32_t total_depth; /* open if-blocks, executed or skipped */
+    /* Per-open-block flag: an `else` was already taken at that depth. Only the
+     * first WASMOS_SCRIPT_IF_DEPTH levels are tracked; deeper nesting still
+     * parses but its else-once rule is not enforced. */
     uint8_t seen_else[WASMOS_SCRIPT_IF_DEPTH];
 } wasmos_script_state_t;
 
@@ -48,13 +51,16 @@ typedef struct {
     void* user;
 } wasmos_script_ops_t;
 
-/* Callback to resolve ${VAR} substitutions during echo expansion;
- * returns 0 and writes to out[] on success, -1 if var is unknown. */
+/* Callback to resolve ${VAR} substitutions during echo expansion. Returns 0 with
+ * a NUL-terminated value in out[] (an unknown name resolves to the empty
+ * string); any non-zero return makes the reference expand to nothing. */
 typedef int (*wasmos_script_echo_resolve_var_fn)(void* user, const char* name, int32_t name_len,
                                                  char* out, int32_t out_len);
 
-/* Expand ${VAR} references and -n/-e flags in expr; sets *out_newline.
- * Returns 0 on success, -1 if out buffer is too small. */
+/* Expand ${VAR} references, quotes and backslash escapes in expr, consuming
+ * leading -n/-e/-E flags (-n clears *out_newline, -e enables escape decoding).
+ * Returns 0 on success, -1 on a bad argument, an unterminated quote, or an out[]
+ * too small for the result. */
 int wasmos_script_echo_expand(const char* expr, wasmos_script_echo_resolve_var_fn resolve_var,
                               void* resolve_user, char* out, int32_t out_len, int* out_newline);
 

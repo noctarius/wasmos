@@ -3,7 +3,8 @@
 #include "fbtext_internal.h"
 
 /*
- * Native framebuffer driver — virtual terminal text plane.
+ * Native framebuffer driver — virtual terminal text plane, Bochs/QEMU VBE (BGA)
+ * backing.
  *
  * A text-rendering server:
  *   1. Probe and map the physical framebuffer.
@@ -11,15 +12,15 @@
  *   3. Replay the kernel early-log ring buffer so the full boot log appears.
  *   4. Drain the shared serial console ring and serve FBTEXT control IPC.
  *
- * The internal rendering code lives in render.c; this file owns the driver
- * lifecycle, early-log replay, and the IPC server loop.
+ * What distinguishes it from the plain framebuffer driver is runtime mode
+ * setting through the BGA index/data ports, so it answers QUERY_CAPS with
+ * SET_RESOLUTION | QUERY_MODES. Only modes whose framebuffer fits the mapping
+ * the bootloader established are offered: the kernel maps the physical range
+ * captured at boot and nothing here can enlarge it.
  *
- * IPC message encoding:
- *   FBTEXT_IPC_CELL_WRITE_REQ  arg0=col  arg1=row  arg2=codepoint  arg3=(fg<<8)|bg
- *   FBTEXT_IPC_CURSOR_SET_REQ  arg0=col  arg1=row
- *   FBTEXT_IPC_SCROLL_REQ      arg0=n_rows
- *   FBTEXT_IPC_CLEAR_REQ       (no args)
- *   FBTEXT_IPC_GEOMETRY_REQ    resp: arg0=cols arg1=rows
+ * The internal rendering code lives in render.c; this file owns the driver
+ * lifecycle, early-log replay, and the IPC server loop. Message arguments are
+ * documented per opcode in abi/opcodes.yaml (subsystem `fbtext`).
  */
 
 /* IPC_EMPTY and IPC_OK values — must stay in sync with kernel ipc.h. */
@@ -27,6 +28,9 @@
 #define ND_IPC_EMPTY 1
 
 #define EARLY_LOG_BUF 4096
+/* Bochs/QEMU VBE extensions (VBE_DISPI): write a register index to the index
+ * port, then its value to the data port. ENABLE must be cleared before the
+ * geometry registers are changed and set again afterwards. */
 #define BGA_INDEX_PORT 0x01CEu
 #define BGA_DATA_PORT 0x01CFu
 #define BGA_REG_XRES 0x0001u
@@ -230,6 +234,10 @@ static void replay_early_log(wasmos_driver_api_t* api) {
     }
 }
 
+/* FIXME: a producer that laps the consumer is not detected here, so the read
+ * position keeps naming bytes that have already been overwritten and the console
+ * shows stale text until it catches up. The plain framebuffer driver snaps
+ * read_pos to write_pos - capacity in that case; this one needs the same. */
 static int drain_console_ring(console_ring_t* ring, uint32_t budget) {
     if (!ring || ring->capacity == 0) {
         return 0;

@@ -210,6 +210,12 @@ static void connect_graphics_controllers(EFI_SYSTEM_TABLE* system) {
 
     static const EFI_GUID text_output_guid = {
         0x387477c2, 0x69c7, 0x11d2, {0x8e, 0x39, 0x00, 0xa0, 0xc9, 0x69, 0x72, 0x3b}};
+    /* FIXME: neither GUID below matches the UEFI 2.10 spec value
+     * (EFI_PCI_IO_PROTOCOL_GUID is 4CF5B200-68B8-4CA5-9EEC-B23E3F50029A,
+     * EFI_PCI_ROOT_BRIDGE_IO_PROTOCOL_GUID is 2F707EBB-4A1A-11D4-9A38-
+     * 0090273FC14D), so both LocateHandleBuffer calls find nothing and those
+     * two connect passes are no-ops. The failure is silent: this whole helper
+     * is best-effort and GOP discovery still succeeds via its own fallbacks. */
     static const EFI_GUID pci_io_guid = {
         0x2f707eb9, 0x3a1a, 0x11d4, {0x9a, 0x46, 0x00, 0x90, 0x27, 0x3f, 0xcc, 0x69}};
     static const EFI_GUID root_bridge_guid = EFI_PCI_ROOT_BRIDGE_IO_PROTOCOL_GUID;
@@ -365,6 +371,9 @@ static int capture_framebuffer_from_pci_config(EFI_SYSTEM_TABLE* system,
         return -1;
     }
 
+    /* PCI config space carries the BAR but not the active mode, so the geometry
+     * is assumed to be the 1024x768 32bpp mode QEMU's std/VGA adapters come up
+     * in. A device left in another mode renders skewed through this fallback. */
     snapshot->base = best_base;
     snapshot->size = best_size;
     snapshot->width = 1024;
@@ -727,10 +736,9 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE* system) {
         return status;
     }
 
-    /* The bootloader now loads one initfs image instead of a hardcoded list of
-     * individual bootstrap modules. It still exposes the contained WASMOS-APP
-     * entries as boot modules so the kernel and early services can keep the
-     * same module-index bootstrap contract. */
+    /* One initfs image carries every bootstrap payload. Its WASMOS-APP entries
+     * are re-exported below as a boot_module_t table so the kernel and early
+     * services address them by module index. */
     static CHAR16 initfs_path[] = L"\\initfs.img";
     void* initfs_buf = 0;
     UINTN initfs_size = 0;
@@ -776,7 +784,12 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE* system) {
         if (dest == 0) {
             alloc_type = EFI_ALLOCATE_ANY_PAGES;
         }
-        // Keep PT_LOAD allocation quiet unless it fails.
+        /* Two PT_LOAD segments can land in the same page once their addresses
+         * are rounded down, and AllocatePages(EFI_ALLOCATE_ADDRESS) fails on
+         * pages an earlier segment already took. Skip the allocation when this
+         * segment's base is inside a range already claimed and just copy into
+         * it. Only the base is tested, so a segment that starts inside a prior
+         * range but extends past its end leaves that tail unallocated. */
         int already_allocated = 0;
         for (UINTN j = 0; j < alloc_count; ++j) {
             UINT64 base = alloc_bases[j];
@@ -862,6 +875,12 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE* system) {
     UINT64 boot_buf = 0;
 
     uefi_log(system, "[boot] ExitBootServices\n");
+    /* The UEFI spec has ExitBootServices() return EFI_INVALID_PARAMETER when
+     * map_key no longer matches the current memory map, which any intervening
+     * allocation invalidates. The loop re-reads the map, rebuilds boot_info in
+     * place and retries; only a different status is fatal. Nothing inside the
+     * loop may call a boot service after GetMemoryMap other than the
+     * allocations whose invalidation the retry already covers. */
     int exited = 0;
     void* map_dst = 0;
     UINTN map_bytes = 0;
@@ -877,6 +896,10 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE* system) {
         mmap_size = mmap_capacity;
         status = bs->GetMemoryMap(&mmap_size, mmap, &map_key, &desc_size, &desc_version);
         if (status == EFI_BUFFER_TOO_SMALL) {
+            /* FIXME: dropping the pointer without FreePool leaks the undersized
+             * pool buffer, as does growing boot_buf below without FreePages.
+             * Both stay allocated as EFI_LOADER_DATA and the kernel therefore
+             * never reclaims them. */
             mmap_capacity = mmap_size + desc_size * 2;
             mmap = 0;
             continue;

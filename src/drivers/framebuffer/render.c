@@ -159,8 +159,9 @@ void fbtext_clear(fbtext_state_t* s) {
 
 /* Scroll up by n rows: shift cell buffer, clear bottom n rows.
  *
- * Uses a pixel-level memmove on the framebuffer so only the vacated bottom
- * rows need to be re-rendered, rather than repainting the entire grid. */
+ * The framebuffer pixels are shifted with a forward copy — safe because the
+ * destination precedes the source — so only the vacated bottom rows have to be
+ * re-rendered, rather than repainting the entire grid. */
 void fbtext_scroll_up(fbtext_state_t* s, uint16_t n) {
     if (n == 0) {
         return;

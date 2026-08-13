@@ -1,6 +1,7 @@
 /* paging.c - 4-level x86_64 page table management.
  * Provides map/unmap/walk operations for PML4/PDPT/PD/PT page tables.
- * All mapped pages use the kernel higher-half alias; physical frames come from physmem.c. */
+ * Page tables themselves are read and written through the kernel higher-half
+ * alias (table_ptr), and their frames come from physmem.c. */
 #include "paging.h"
 #include "klog.h"
 #include "physmem.h"
@@ -17,8 +18,11 @@
 #define PT_FLAG_LARGE_PAGE (1ULL << 7)
 #define PT_FLAG_NX (1ULL << 63)
 
-/* Strict ring3 baseline keeps low-slot identity-map breadth fixed. */
+/* Number of low identity-mapped PDs (1 GiB each) an address space gets.  0 means
+ * user roots carry no low identity mapping at all; paging_init still builds one
+ * for the kernel root so the first CR3 load can reach the higher-half alias. */
 #define IDENTITY_PD_COUNT 0u
+/* Upper bound used to size paging_init's scratch array of PD frames. */
 #define IDENTITY_PD_COUNT_MAX 4u
 /* Keep only the minimum higher-half span shared into child CR3 roots. */
 #define HIGHER_HALF_PD_COUNT 1
@@ -172,6 +176,11 @@ static uint64_t entry_phys(uint64_t entry) {
     return entry & ~0xFFFULL;
 }
 
+/* Address a page table by its physical frame.  Before the first CR3 load the
+ * firmware identity map is still active, so the physical address is used
+ * directly; afterwards every table is reached through the higher-half alias,
+ * which is present in every root.  Valid only for frames inside the shared
+ * higher-half window (see alloc_table). */
 static volatile uint64_t* table_ptr(uint64_t phys_addr) {
     if (g_current_pml4_phys == 0) {
         return ptr_cast(uint64_t, phys_addr);
@@ -335,9 +344,11 @@ int paging_init(void) {
 
 paging_init_after_bootstrap:
     if (bootstrap_low_slot) {
-        /* TODO(ring3-phase3): Remove this kernel-root bootstrap low slot once
-         * early paging bring-up stops depending on direct low mappings after the
-         * first CR3 handoff. User roots already honor IDENTITY_PD_COUNT=0. */
+        /* TODO: The kernel root keeps this low identity slot for good, because
+         * early bring-up (boot_shadow_alloc_low and friends) still writes
+         * through low physical addresses after the CR3 handoff.  Until those
+         * callers use the higher-half alias, the kernel root is weaker than the
+         * user roots, which already honour IDENTITY_PD_COUNT = 0. */
     }
 
     klog_printf("[paging] cr3=%016llx\n[paging] higher-half=%016llx\n",
@@ -359,6 +370,11 @@ uint64_t paging_get_current_root_table(void) {
     return cr3;
 }
 
+/* Load root_table into CR3 and mirror it in g_current_pml4_phys.  Returns 0, or
+ * -1 for a zero root_table.  Naked so the compiler cannot wrap the CR3 write in
+ * a frame or spill around it.  The mirror is a single global, last-writer-wins,
+ * so under SMP it is not necessarily this CPU's root — read CR3 directly
+ * (paging_get_current_root_table) wherever that distinction matters. */
 __attribute__((naked)) int paging_switch_root(uint64_t root_table) {
     __asm__ volatile("test %rdi, %rdi\n"
                      "jz 1f\n"
@@ -396,9 +412,11 @@ int paging_create_address_space(uint64_t* out_root_table) {
         }
     }
 
-    /* A child address space starts with only the shared kernel mappings:
-     * low identity/direct-physical access in slot 0 and the higher-half alias
-     * in slot 511. Slot 1 stays private for process-owned mappings. */
+    /* A child address space starts with only the shared kernel mappings: the
+     * higher-half alias in slot 511, and a private copy of the low
+     * identity/direct-physical PDPT in slot 0 only when IDENTITY_PD_COUNT > 0.
+     * At the current baseline of 0, slot 0 is empty.  Slot 1 stays private for
+     * process-owned mappings. */
     dst[0] = (IDENTITY_PD_COUNT > 0) ? (child_pdpt_low | PT_FLAG_PRESENT | PT_FLAG_WRITE) : 0;
     dst[511] = src[511];
     if (paging_verify_user_root_impl(root, 1) != 0) {

@@ -1,6 +1,7 @@
 #pragma once
-/* Minimal <memory> stub — provides std::unique_ptr needed by MemWriter.cpp.
- * No allocator customization; uses operator new/delete from cxx_abi.cpp. */
+/* Minimal <memory> stub — satisfies WARP's #include <memory> (MemWriter.cpp)
+ * with std::unique_ptr.  No allocator customization; delete routes through the
+ * global operator delete defined in warp/shim.cpp. */
 #include "type_traits"
 #include "utility"
 

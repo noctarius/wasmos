@@ -1,8 +1,8 @@
 /* memory.h - Virtual memory management: per-process address spaces and shared regions.
  *
  * Each process owns an mm_context_t that groups a PML4 root table with a list of
- * typed virtual memory regions.  Physical frames are allocated from the physmem
- * bitmap allocator and mapped by paging.c.
+ * typed virtual memory regions.  Physical frames come from the physmem free-list
+ * allocator (physmem.h) and are mapped by paging.c.
  *
  * Shared regions allow two processes to see the same physical pages at different
  * virtual addresses — used for DMA buffers and the framebuffer. */
@@ -13,7 +13,10 @@
 #include "boot.h"
 #include "list.h"
 
-#define MM_MAX_CONTEXTS 128 /* hard cap on simultaneous process memory contexts */
+/* TODO: legacy guard constant, enforced nowhere -- the context list grows on
+ * demand and has no cap (docs/architecture/06-memory-management.md). Either
+ * enforce it in mm_context_create or delete it. */
+#define MM_MAX_CONTEXTS 128
 
 /* Physical address boundary between the shmem zone and the WARP linear-memory zone.
  * Shmem pages are allocated below this limit (pfa_alloc_pages_below).
@@ -24,7 +27,7 @@
 
 /* Semantic purpose of a mapped virtual region; controls page-table flags at fault time. */
 typedef enum {
-    MEM_REGION_WASM_LINEAR = 0, /* wasm3 linear memory heap */
+    MEM_REGION_WASM_LINEAR = 0, /* WASM linear memory (both runtime backends) */
     MEM_REGION_IPC,             /* IPC message buffers */
     MEM_REGION_DEVICE,          /* MMIO device memory (not cached) */
     MEM_REGION_STACK,           /* ring-3 or kernel thread stack */
@@ -39,8 +42,8 @@ typedef enum {
 /* Region is intended to be user-accessible once ring3 mappings are active. */
 #define MEM_REGION_FLAG_USER (1u << 3)
 /* Physical backing is owned by another subsystem and must not be freed by
- * mm_context_destroy(). Used by wasm3 linear memory after rebinding the
- * placeholder region to the runtime heap allocation. */
+ * mm_context_destroy(). Set by mm_context_rebind_wasm_linear once the
+ * placeholder region has been rebound to a runtime-owned allocation. */
 #define MEM_REGION_FLAG_PHYS_EXTERNAL (1u << 31)
 
 /* IPC message types for the kernel memory-fault service. */
@@ -133,6 +136,11 @@ int mm_shared_release(uint32_t owner_context_id, uint32_t id);
 /* Map an arbitrary physical range into a context's virtual space (MMIO use). */
 int mm_context_map_physical(uint32_t context_id, uint64_t virt, uint64_t phys, uint64_t size,
                             uint32_t flags);
+/* Point the context's WASM_LINEAR region at a contiguous runtime-owned backing.
+ * Unmaps the old range, frees the previous backing unless it was already
+ * external, and marks the region MEM_REGION_FLAG_PHYS_EXTERNAL so teardown
+ * leaves the new backing to its owner. Returns 0, or -1 if the context or the
+ * region does not exist. */
 int mm_context_rebind_wasm_linear(uint32_t context_id, uint64_t phys_base, uint64_t size);
 /* Bind the WASM_LINEAR user-region page range [from_page, to_page) to the
  * physical frames backing the linmem slot at slot_va_base (region page P maps
@@ -152,7 +160,11 @@ uint64_t mm_user_wasm_linear_base(void);
 int mm_copy_from_user(uint32_t context_id, void* dst, uint64_t user_src, uint64_t size);
 int mm_copy_to_user(uint32_t context_id, uint64_t user_dst, const void* src, uint64_t size);
 
-/* Return non-zero if [user_addr, user_addr+size) is mapped with at least needed_flags. */
+/* Returns 0 when [user_addr, user_addr+size) is mapped with at least
+ * needed_flags, and -1 otherwise.  Note the polarity: 0 means PERMITTED, so the
+ * guard is `if (mm_user_range_permitted(...) != 0) { reject; }`.  Writing the
+ * natural-reading `if (mm_user_range_permitted(...))` inverts the check and
+ * admits exactly the accesses it was meant to refuse. */
 int mm_user_range_permitted(uint32_t context_id, uint64_t user_addr, uint64_t size,
                             uint32_t needed_flags);
 

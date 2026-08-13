@@ -3,6 +3,20 @@
 
 #include "thread.h"
 
+/*
+ * Non-recursive kernel mutex layered on sched_event_t: mutex->event.lock is both
+ * the state lock and the wait-list lock, so a blocking lock() hands off to
+ * sched_event_wait() with that lock already held and cannot lose a wake.
+ *
+ * All three entry points return KSYNC_MUTEX_OK on success and -1 for a NULL
+ * mutex or a rejected state.  The rejected states are deliberately distinct
+ * from KSYNC_MUTEX_BUSY: re-locking a mutex this thread already owns is a
+ * deadlock, so it is refused with -1 rather than blocking forever, and
+ * unlocking one this thread does not own is refused the same way.
+ */
+/* owner_tid 0 means "unlocked", so a caller with no current thread (early boot,
+ * before the thread table is live) is given the reserved pseudo-tid 0xFFFFFFFF
+ * instead.  Every such caller shares that identity. */
 static uint32_t ksync_mutex_current_owner_tid(void) {
     uint32_t tid = thread_current_tid();
     return tid != 0 ? tid : 0xFFFFFFFFu;

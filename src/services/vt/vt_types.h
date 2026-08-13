@@ -21,7 +21,8 @@ typedef struct {
 } vt_cell_t;
 
 /* Full state for one virtual TTY.
- * input_q is a circular byte queue for raw keyboard events.
+ * input_q is a circular byte queue of decoded input bytes (keyboard characters
+ * and serial RX), drained by the slot's registered reader.
  * input_line/input_history hold canonical-mode line editing state.
  * csi_params[] holds up to 8 numeric CSI parameters. */
 typedef struct {
@@ -72,7 +73,8 @@ typedef struct {
 #define VT_IPC_REPLY_RETRIES 1024u
 #define VT_GEOMETRY_QUERY_RETRIES 2048
 
-/* Codes passed to wasmos_debug_mark for allocation failure tracing. */
+/* Reason recorded in g_alloc_failure when a cell-grid allocation fails; logged
+ * by vt_log_alloc_failure. */
 enum {
     VT_ALLOC_FAIL_NONE = 0,
     VT_ALLOC_FAIL_ALIGN = 1,

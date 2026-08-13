@@ -8,10 +8,10 @@ const IPC_EMPTY: i32 = 1;
 const IPC_ENDPOINT_NONE: u32 = 0xFFFF_FFFF;
 const REQ_BASE: u32 = 0xA000;
 const PM_XFER_BUFFER_SIZE: usize = 256 * 1024;
-// Reply-wait budget for a synchronous ipc_call: block on the reply endpoint up
-// to IPC_CALL_WAIT_MS per empty wait and give up after IPC_CALL_MAX_EMPTY_WAITS
-// (~10s) so a lost reply cannot hang the call forever.  Replaces a spin that
-// yielded up to 32768 times waiting for the reply.
+// Reply-wait budget for a synchronous ipc_call: block on the reply endpoint for
+// up to IPC_CALL_WAIT_MS per empty wait and give up after
+// IPC_CALL_MAX_EMPTY_WAITS of them (200 x 50 ms = ~10 s), so a lost reply cannot
+// hang the call forever.
 const IPC_CALL_WAIT_MS: u32 = 50;
 const IPC_CALL_MAX_EMPTY_WAITS: u32 = 200;
 const MAX_FONTS: usize = 3;
@@ -148,7 +148,7 @@ fn ipc_call(destination: u32, request_id: u32, msg_type: u32, arg0: u32, arg1: u
 
 const FS_GRANT_RW: u32 = c.ND_BUFFER_BORROW_READ | c.ND_BUFFER_BORROW_WRITE;
 
-// Owner-push FS path op (native ABI v8): own a transfer buffer sized `cap`,
+// Owner-push FS path op: own a transfer buffer sized `cap`,
 // write the NUL-terminated `path` at offset 0, grant fs-manager `flags` over it,
 // and send `msg_type` with arg0=path_len, arg2=buffer_id, arg3=grant. fs-manager
 // reads the path via its grant, reborrows to the backend; for reads the backend

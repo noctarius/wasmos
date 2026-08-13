@@ -169,8 +169,8 @@ test "callbacks are deferred, even on an already-settled future" {
     }
 
     // Registering on an ALREADY-SETTLED future must still defer. Every other
-    // case registers before settling, so this branch was untested everywhere
-    // until the AssemblyScript port exposed it.
+    // case registers before settling, so this is the only one covering that
+    // branch.
     var settled: coroutine.Future = .{};
     var settled_promise: coroutine.Promise = .{};
     settled.init(&settled_promise);
@@ -228,8 +228,9 @@ test "one settle wakes every waiter" {
             coroutines[i] = .{};
             try std.testing.expect(coroutines[i].start(&runtime, manyWaiterResume, &states[i]) != null);
         }
-        // The wait list is spliced whole at settle time; with one waiter that
-        // loop runs once with next == null, so it was effectively untested.
+        // The wait list is spliced whole at settle time; with a single waiter
+        // that loop runs once with next == null, so several waiters on one
+        // future are what exercises it.
         try std.testing.expectEqual(@as(i32, waiters), runtime.run());
         if (failing == 0) {
             try std.testing.expect(promise.resolve(77));

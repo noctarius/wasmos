@@ -406,10 +406,15 @@ impl Window {
 
     /// Blit the back buffer into the shared buffer and present.
     ///
-    /// No shmem_flush: `base` is the mapped window, i.e. the shared region's
-    /// own physical pages, so writing through it IS the shared buffer. A flush
-    /// here would copy those pages onto themselves once a frame -- 2.4 MB of
-    /// pointless copying at frame rate.
+    /// No shmem_flush under WARP: shmem_map_auto remaps both the kernel alias
+    /// and the ring-3 window of `base` onto the shared region's own frames, so
+    /// writing through it IS the shared buffer and a flush would copy those
+    /// pages onto themselves -- 2.4 MB per frame.
+    ///
+    /// TODO: wasm3 does not share that property. There shmem_map_auto only
+    /// rewrites the process page tables, while the interpreter reads and writes
+    /// linear memory through its own kernel-side buffer, so the blit never
+    /// reaches the shared frames without an explicit shmem_flush.
     fn present(&mut self) {
         unsafe {
             let src = core::ptr::addr_of!(BACK) as *const u32;
@@ -442,8 +447,9 @@ impl Window {
         self.ptr_prev = self.ptr_buttons;
         self.key = 0;
         loop {
-            // Non-blocking drain: ipc_select_one BLOCKS on WARP, ipc_drain does
-            // not. Pull each queued pushed event and stop when the mailbox empties.
+            // Non-blocking drain: ipc_select_one blocks in-kernel until a
+            // message arrives, ipc_drain returns 0 on an empty endpoint. Pull
+            // each queued pushed event and stop when the mailbox empties.
             if unsafe { ipc_drain(self.event_ep) } != 1 {
                 break;
             }
@@ -619,7 +625,7 @@ fn draw_text(x: i32, y: i32, text: &[u8], scale: i32, color: u32) {
     }
 }
 
-/// Render an unsigned number right-aligned at (x_right, y). Returns nothing.
+/// Render an unsigned number so that its last digit ends at `x_right`.
 fn draw_number(x_right: i32, y: i32, mut value: u32, scale: i32, color: u32) {
     let mut digits = [0u8; 10];
     let mut n = 0;
@@ -948,7 +954,9 @@ fn encode_packet(b: &Board, seq: u8, out: &mut [u8; PKT_LEN]) {
     }
 }
 
-/// Parse one 212-byte frame into the peer state; returns garbage delta to apply.
+/// Overwrite the peer state from one PKT_LEN frame. The garbage the peer has
+/// sent is carried in `peer.garbage_out`; the caller diffs it against
+/// `peer.last_garbage_seen` to derive the rows to apply.
 fn decode_packet(buf: &[u8], peer: &mut PeerState) {
     peer.over = buf[2] & 1 != 0;
     peer.lines = buf[4] as u32 | ((buf[5] as u32) << 8);

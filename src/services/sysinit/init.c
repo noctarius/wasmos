@@ -86,9 +86,11 @@ static void sysinit_log_spawn_failure(const char* op, const char* path, int32_t 
     log_line("\n");
 }
 
-/* Fire-and-forget spawn: writes path into the xfer buffer and sends
- * PROC_IPC_SPAWN_PATH.  Retries up to SYSINIT_MAX_SPAWN_ATTEMPTS on
- * PROC_IPC_ERROR with arg1==WASMOS_ERR_PROC_PM_BUSY. */
+/* Spawn `path` without waiting for the child to finish: PROC_SPAWN_PATH_FLAG_
+ * AUTOREAP makes the PM reap it, so sysinit never issues a PROC_IPC_WAIT.  The
+ * PM's spawn reply is still awaited; a PROC_IPC_ERROR carrying
+ * WASMOS_ERR_PROC_PM_BUSY is retried up to SYSINIT_MAX_SPAWN_ATTEMPTS times.
+ * Returns 0 once the PM accepted the spawn, -1 otherwise. */
 static int spawn_path(const char* path) {
     wasmos_ipc_message_t reply;
     uint32_t path_len = 0;
@@ -281,8 +283,12 @@ static int sysinit_on_exec(void* user, const char* path, const char* args, int32
     return 0;
 }
 
-/* Script 'wait-svc' callback: spins on wasmos_svc_lookup until the named
- * service registers; yields between attempts to avoid stalling the scheduler. */
+/* Script 'wait-svc' callback: polls wasmos_svc_lookup until the named service
+ * registers, yielding between attempts.  Never gives up, so a `wait-svc` for a
+ * service that never appears stalls the rest of sysinit.rc forever.
+ * TODO: replace the poll with a class subscription (SVC_IPC_SUBSCRIBE_CLASS_REQ)
+ * plus a bounded wait; the poll loads the process manager with lookup traffic
+ * for as long as the service is missing. */
 static int sysinit_on_wait_svc(void* user, const char* name) {
     (void)user;
     int32_t req_id = g_state.spawn_request_id;
@@ -319,7 +325,8 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t ignored_arg
     (void)ignored_arg1;
     (void)ignored_arg2;
     (void)ignored_arg3;
-    /* proc.endpoint now comes from the spawn-info contract, not an entry arg. */
+    /* The proc endpoint comes from the spawn-info contract; the entry args carry
+     * nothing and the parameter is overwritten. */
     proc_endpoint = wasmos_startup_proc_endpoint();
 
     g_console_write = wasmos_console_write;

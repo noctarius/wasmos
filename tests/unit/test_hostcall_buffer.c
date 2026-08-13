@@ -1,9 +1,9 @@
 /* test_hostcall_buffer.c — filling a caller-supplied name buffer.
  *
  * The kernel holds a bounded, possibly unterminated string; the guest supplies
- * a buffer. Getting this wrong is not a cosmetic matter: WARP computed
- * `nlen = out_len - 1` with no check on out_len, so a zero-sized buffer
- * underflowed to 0xFFFFFFFF and produced a 4 GiB memcpy.
+ * a buffer. Getting this wrong is not a cosmetic matter: `nlen = out_len - 1`
+ * computed without first checking out_len underflows a zero-sized buffer to
+ * 0xFFFFFFFF and turns the copy into a 4 GiB memcpy.
  *
  * The other half of the contract is which length gets REPORTED. Returning the
  * clamped length loses the only signal a caller has that its buffer was too

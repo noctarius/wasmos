@@ -5,13 +5,13 @@
  * src/libsys/wasm/ipc_future_wasm.c. Same reason as coroutine.ts: `asc` has no
  * external linking, so AS cannot compile those in and needs a port.
  *
- * What it replaces. Before this, an AS guest's only request/reply primitive was
- * ipc.call in wasmos.ts, which sends and then loops on ipc_recv until the
- * matching request id turns up -- SILENTLY DISCARDING every other message that
- * arrives meanwhile. For a driver that is data loss: a client's request that
- * lands during a registration handshake is dropped, and the client waits for a
- * reply that will never come. A loop demultiplexes instead: replies settle the
- * future that asked for them, everything else reaches a handler.
+ * Why a loop rather than ipc.call in wasmos.ts: that primitive sends and then
+ * loops on ipc_recv until the matching request id turns up, SILENTLY DISCARDING
+ * every other message that arrives meanwhile. For a driver that is data loss --
+ * a client request landing during a registration handshake is dropped, and the
+ * client waits for a reply that never comes. A loop demultiplexes instead:
+ * replies settle the future that asked for them, everything else reaches a
+ * handler, and anything unclaimed is held for receive().
  *
  * Blocking. poll() blocks in ipc_select_wait when there is nothing to do, which
  * is a scheduler block, not a spin. It never calls sched_yield in a loop.
@@ -93,16 +93,16 @@ export abstract class OnMessage {
     abstract call(msg: IpcMessage): void;
 }
 
-/**
- * Decides how a reply settles its future: 0 resolves, negative rejects with
- * that status. Protocol-specific validation lives here so application state
- * machines never observe a reply of the wrong type.
- */
 /** Work to do each time the loop goes idle; see EventLoop.idle. */
 export abstract class OnIdle {
     abstract call(): void;
 }
 
+/**
+ * Decides how a reply settles its future: 0 resolves, negative rejects with
+ * that status. Protocol-specific validation lives here so application state
+ * machines never observe a reply of the wrong type.
+ */
 export abstract class ReplyStatus {
     abstract call(reply: IpcMessage): i32;
 }
@@ -521,8 +521,8 @@ export class EventLoop {
     /**
      * Drive the loop until `future` settles, handling everything else that
      * arrives meanwhile. This is how a driver performs a sequential startup
-     * step -- register, look up a peer -- without the old pattern of blocking
-     * on the service endpoint and DISCARDING the client requests that raced in.
+     * step -- register, look up a peer -- without blocking on its service
+     * endpoint and DISCARDING the client requests that race in.
      *
      * Returns false, rather than spinning, when the loop has no select set and
      * therefore cannot park: a caller that cannot block must report the failure

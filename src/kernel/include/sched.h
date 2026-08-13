@@ -61,12 +61,12 @@ typedef struct cpu_sched_s {
     uint32_t thread_count[SCHED_PRIO_MAX];
     struct thread* running; /* currently executing thread */
     struct thread* idle;    /* this CPU's idle thread */
-    /* Anti-starvation bookkeeping.  PER-CPU: it describes what THIS CPU has been
-     * dispatching, and the policy only makes sense that way.  Held globally it
-     * both raced (plain bytes written by every CPU under different locks) and
-     * advanced N times too fast on an N-CPU machine, so the demotion fired far
-     * more often than SCHED_ANTISTARVATION_STREAK implies -- and one CPU's
-     * dispatches decided another's band. */
+    /* Anti-starvation bookkeeping.  PER-CPU, and only correct that way: it
+     * describes what THIS CPU has been dispatching.  A global counter would
+     * race (plain bytes written by every CPU under different locks), advance N
+     * times too fast on an N-CPU machine so the demotion fires far more often
+     * than SCHED_ANTISTARVATION_STREAK implies, and let one CPU's dispatches
+     * decide another's band. */
     uint8_t last_dispatched_prio;
     uint8_t high_prio_streak;
 } cpu_sched_t;
@@ -100,14 +100,11 @@ void sched_set_need_resched(void);
  * set state READY, and enqueue it. */
 void sched_wake_thread(struct thread* t);
 
-/* Scheduler tripwires, as counters rather than only log lines.
- *
- * Every tripwire is rate-limited to powers of two, so past the first few hits a
- * test cannot tell "fired" from "fired but suppressed" by reading the log.  The
- * counters are also process-wide, so a test asserting on output is
- * order-dependent on every test that ran before it.  Exposing the counts, and a
- * reset for tests, removes both problems -- and asserting on an enum beats
- * substring-matching formatted text that a reword would silently break. */
+/* Scheduler tripwires, as counters rather than only log lines.  Each tripwire
+ * rate-limits its own logging to powers of two, so past the first few hits the
+ * log cannot distinguish "fired" from "fired but suppressed"; the counters
+ * always can.  They are global and monotonic, hence sched_debug_reset() for
+ * tests that need a clean baseline. */
 typedef enum {
     SCHED_DEBUG_GHOST_HEAD = 0,
     SCHED_DEBUG_ENQUEUE_IDLE,

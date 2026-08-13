@@ -1,3 +1,16 @@
+/* stubs_xfer_buffer_platform.c - host stand-ins for the two platform services
+ * the xfer-buffer object registry needs: the physical frame allocator and the
+ * framebuffer geometry.
+ *
+ * pfa_alloc_pages is a bump allocator that never reuses a range and never
+ * fails, and pfa_free_pages returns nothing to it. Every object therefore gets
+ * a distinct, page-aligned backing address for as long as the process runs,
+ * which is what the identity/distinctness checks in the suite rely on; the
+ * allocator-exhaustion and address-reuse paths are out of reach here.
+ *
+ * The reported framebuffer is a fixed 1024x768x4 (3 MiB) at a page-aligned
+ * base, so it is also the intrinsic capacity a BUFFER_KIND_FRAMEBUFFER
+ * acquire is bounded by. */
 #include <stdint.h>
 
 #include "framebuffer.h"

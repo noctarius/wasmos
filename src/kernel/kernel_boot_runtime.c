@@ -1,7 +1,13 @@
-/* kernel_boot_runtime.c - Early-boot integration test runtime.
- * Runs a minimal boot-time self-check (memory map, paging, allocator) before
- * the process manager starts.  Failures halt the machine via kpanic so that
- * regressions are caught at the earliest possible point in bring-up. */
+/* kernel_boot_runtime.c - Boot-time helpers that outlive early bring-up.
+ *
+ * Three unrelated pieces the kernel entry path needs:
+ *   - kernel_boot_build_bootinfo_shadow: re-homes the firmware's boot_info and
+ *     its blobs into kernel-owned memory addressed through the higher-half
+ *     alias, so nothing kernel-side depends on the low identity map.
+ *   - kernel_boot_run_low_slot_sweep_diagnostic: strips and verifies the low
+ *     slot of every live process root, logging (not panicking) on failure.
+ *   - kernel_boot_run_scheduler_loop: the BSP's terminal scheduler loop, which
+ *     panics only when not even the idle thread is dispatchable. */
 #include "kernel_boot_runtime.h"
 
 #include "paging.h"
@@ -14,6 +20,11 @@
 #include "timer.h"
 #include "sched.h"
 
+/* Allocate zeroed frames below 64 MiB and return the LOW (identity) pointer,
+ * with the physical base in *out_phys.  The caller fills the buffer through
+ * this low pointer, so this only works while the active root still has the low
+ * slot — the kernel root keeps it (paging_init's bootstrap slot), process roots
+ * do not.  Callers publish the higher-half alias, never this pointer. */
 static void* boot_shadow_alloc_low(uint64_t size_bytes, uint64_t* out_phys) {
     const uint64_t page_size = 0x1000ULL;
     const uint64_t max_low = 64ULL * 1024ULL * 1024ULL;
@@ -67,11 +78,13 @@ int kernel_boot_build_bootinfo_shadow(const boot_info_t* src, boot_info_t* dst) 
         return -1;
     }
     /* Remap initfs to its higher-half virtual alias.  UEFI allocates the initfs
-     * at a physical address; the kernel's higher-half map covers all physical
-     * RAM up to HIGHER_HALF_PDE_COUNT*2MB, so a pointer fixup is sufficient —
-     * no data copy is required.  Without this fixup every kernel caller that
-     * dereferences boot_info->initfs would need the low-identity mapping,
-     * which is stripped from process page tables by the boot-time sweep. */
+     * at a physical address, and the shared higher-half window already covers
+     * the first HIGHER_HALF_PDE_COUNT * 2 MiB (512 MiB) of physical RAM, so a
+     * pointer fixup is enough — no data copy.  Without it every kernel caller
+     * dereferencing boot_info->initfs would need the low identity mapping,
+     * which the boot-time sweep strips from process page tables.
+     * TODO: an initfs the firmware placed above that window is not covered by
+     * the alias and this fixup silently produces an unmapped pointer. */
     if ((src->flags & BOOT_INFO_FLAG_INITFS_PRESENT) && src->initfs && src->initfs_size > 0) {
         uint64_t phys = addr_cast(uint64_t, dst->initfs);
         if (phys < KERNEL_HIGHER_HALF_BASE) {
@@ -158,11 +171,11 @@ void kernel_boot_run_scheduler_loop(void) {
     for (;;) {
         __asm__ volatile("cli");
         int rc = process_schedule_once();
-        /* normal (SCHED_OK) or a thread that just blocked/exited/zombied/raced
-         * (including SCHED_R_STALE, a thread reaped out from under the picker):
-         * re-loop immediately — the idle thread does the actual (sti;hlt) idling.
-         * SCHED_R_PICK now means only "not even idle was dispatchable", which is
-         * what the panic below claims and is a real invariant violation. */
+        /* SCHED_OK, or a thread that just blocked/exited/zombied/raced
+         * (including SCHED_R_STALE, a thread reaped out from under the picker),
+         * re-loops immediately — the idle thread does the actual (sti;hlt)
+         * idling.  SCHED_R_PICK means "not even idle was dispatchable", a real
+         * invariant violation, which is what the panic below reports. */
         if (rc == SCHED_R_PICK || rc == SCHED_R_CTX || rc == SCHED_R_ROOT || rc == SCHED_R_MAXCOUNT)
             kpanic("scheduler: no runnable thread (idle not dispatchable)", (uint64_t)rc, 0);
         if (process_should_resched())

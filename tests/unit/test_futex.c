@@ -1,9 +1,9 @@
 /* test_futex.c — host tests for the REAL kernel futex (src/kernel/futex.c).
  *
  * The futex is the parking lot every userspace mutex, semaphore and condvar is
- * built on, and it had no test of any kind. A wrong bucket, a missed
- * revalidation of the futex word, or a wake that counts wrong shows up as a
- * userspace hang with no kernel-side evidence at all.
+ * built on. A wrong bucket, a missed revalidation of the futex word, or a wake
+ * that counts wrong shows up as a userspace hang with no kernel-side evidence
+ * at all.
  *
  * The interesting part is the address key: the kernel keys on the PHYSICAL
  * address of the word, so two contexts sharing a page must converge on one
@@ -127,9 +127,10 @@ void process_yield(process_run_result_t result) {
 
 /* ------------------------------------------------------- memory-map stub */
 
-/* Two contexts. CTX_SHARED_A and CTX_SHARED_B are deliberately backed by the
- * SAME fake physical page at different virtual bases — the shmem_grant shape
- * the physical-address key exists to handle. */
+/* Four contexts. CTX_B and CTX_SHARED are deliberately backed by the SAME fake
+ * physical page (g_mem_shared) at different virtual bases — the shmem_grant
+ * shape the physical-address key exists to handle. CTX_A gets a page of its own
+ * and CTX_NO_REGION has no linear-memory region at all. */
 #define CTX_A 1u
 #define CTX_B 2u
 #define CTX_SHARED 3u
@@ -286,14 +287,16 @@ static void test_distinct_words_are_independent(void) {
     CHECK(futex_wake(4u, 10u, CTX_A) == 1, "and the other word still works");
 }
 
-/* Two words 16 buckets apart collide in the 16-bucket table. They must stay
- * separate entries on the bucket chain, not merge. */
+/* Two distinct words that hash to one bucket must stay separate entries on that
+ * bucket's chain, not merge.
+ *
+ * futex_bucket is (paddr >> 12) & (FUTEX_TABLE_SIZE - 1), i.e. bits 12..15, so
+ * addresses one page apart land in adjacent buckets and 16 pages apart land in
+ * the SAME bucket. The test region is smaller than 16 pages, so the collision is
+ * produced via the low bits instead: any two offsets inside one page share a
+ * bucket while keeping distinct physical addresses. */
 static void test_words_colliding_in_one_bucket_stay_separate(void) {
     reset();
-    /* futex_bucket is (paddr >> 12) & 15, so two addresses one page apart land
-     * in adjacent buckets and 16 pages apart land in the SAME bucket. The test
-     * region is smaller than that, so collide via the low bits instead: any two
-     * offsets inside one page share a bucket. */
     g_mem_a[0] = 1u;
     g_mem_a[2] = 1u;
     thread_t* a = thread_get(1);
@@ -416,7 +419,10 @@ static void test_a_timed_wait_reports_the_timeout(void) {
     g_mem_a[0] = 1u;
     thread_t* w = thread_get(1);
     park(CTX_A, 0u, 1u, w, 50u);
-    w->sched_timeout_tick = g_now + 50u; /* see the MODELLING NOTE at the top */
+    /* sched_event_wait disarms the deadline on resume, and the host stub's
+     * immediate return from process_yield counts as one (see the MODELLING NOTE
+     * at the top). Re-arm it so the wake below has something to cancel. */
+    w->sched_timeout_tick = g_now + 50u;
     CHECK(futex_wake(0u, 1u, CTX_A) == 1, "an explicit wake releases it");
     CHECK(w->pend_state == SCHED_PEND_OK, "as a delivery, not a timeout");
     CHECK(w->sched_timeout_tick == 0, "and cancels its armed deadline");

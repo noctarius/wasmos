@@ -39,8 +39,8 @@ typedef struct __attribute__((packed)) {
 #define PHYS_MAP_WINDOW_PAGES 16
 #define PHYS_MAP_WINDOW_SIZE (PHYS_MAP_WINDOW_PAGES * 4096)
 
-/* Page-aligned mapping window — must sit on a page boundary in WASM memory.
- * Declared with aligned attribute; the linker will place it on a page boundary. */
+/* Destination of every wasmos_phys_map call below. The 4096 alignment is
+ * mandatory: phys_map requires a page-aligned wasm_offset (abi/hostcalls.yaml). */
 static uint8_t g_map_window[PHYS_MAP_WINDOW_SIZE] __attribute__((aligned(4096)));
 
 /* Map one 4 KB-aligned physical region into g_map_window.
@@ -99,7 +99,8 @@ static const isa_id_entry_t* isa_lookup(uint8_t b2, uint8_t b3) {
 
 /* ---- AML helper functions ------------------------------------------------ */
 
-/* Boyer-Moore-style byte-pattern search; returns first match offset or -1. */
+/* Naive byte-pattern search over buf; returns the first match offset, or -1 when
+ * the pattern is empty, longer than buf, or absent. */
 static int32_t find_bytes(const uint8_t* buf, uint32_t len, const uint8_t* pat, uint32_t pat_len) {
     if (pat_len == 0 || len < pat_len) {
         return -1;
@@ -302,11 +303,8 @@ static void scan_isa_devices(const uint8_t* aml, uint32_t aml_len, int32_t devmg
         (void)printf("[acpi-bus] PNP%02X%02X io=0x%04X irq=%u class=0x%02X\n", (unsigned)b2,
                      (unsigned)b3, (unsigned)io_base, (unsigned)irq, (unsigned)entry->class_code);
 
-        /* Publish as non-PCI (bus=0xFF) ISA device.
-         * arg0: (bus<<24) | class_code
-         * arg1: (subclass<<24) | (prog_if<<16) | vendor_id
-         * arg2: device_id = io_base (ISA I/O base address)
-         * arg3: irq_hint in byte 1 */
+        /* vendor_id/device_id have no meaning for a PNP device, so arg1's low
+         * half stays 0 and arg2 reuses the device_id field for the I/O base. */
         uint32_t a0 = (0xFFu << 24) | (uint32_t)entry->class_code;
         uint32_t a1 = ((uint32_t)entry->subclass << 24) | ((uint32_t)entry->prog_if << 16);
         uint32_t a2 = (uint32_t)io_base;
@@ -326,7 +324,8 @@ static void scan_isa_devices(const uint8_t* aml, uint32_t aml_len, int32_t devmg
  * wasmos_sys_notify_ready to signal full service readiness to PM. */
 WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t ignored_arg1,
                                       int32_t ignored_arg2, int32_t ignored_arg3) {
-    /* proc.endpoint now comes from the spawn-info contract, not an entry arg. */
+    /* The proc endpoint comes from the spawn-info contract; the entry args carry
+     * nothing and the parameter is overwritten. */
     proc_endpoint = wasmos_startup_proc_endpoint();
     (void)ignored_arg1;
     (void)ignored_arg2;

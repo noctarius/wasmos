@@ -1,7 +1,10 @@
 /* virtio_serial.c - VirtIO serial port WASM driver.
- * Detects the VirtIO serial PCI device via PCI config-space scan and maps
- * the virtqueue rings to provide a high-throughput serial console channel
- * for QEMU/VirtIO-backed guests.  Exposes a chardev-compatible IPC service. */
+ * Finds the VirtIO serial PCI function by config-space scan and registers the
+ * "virtio.serial" service, which answers device-identity queries and reads or
+ * writes 32-bit registers within the device's I/O window
+ * (VIRTIO_SERIAL_IPC_QUERY_REQ / _READ_REG32_REQ / _WRITE_REG32_REQ).
+ * Discovery and register access only: there is no queue setup and no data
+ * plane yet — see the TODO in initialize(). */
 #include <stdint.h>
 #include <stdio.h>
 #include "wasmos/api.h"
@@ -99,6 +102,9 @@ static int probe_virtio_serial(void) {
     return -1;
 }
 
+/* FIXME: the `code` values passed in below are bare errno-like numbers, not
+ * packed WASMOS_ERR_* codes, so a peer cannot decode them with wasmos_strerror.
+ * A virtio-serial domain in abi/errors.yaml is what this needs. */
 static void send_error(int32_t dest, int32_t request_id, int32_t code) {
     (void)wasmos_ipc_send(dest, g_endpoint, VIRTIO_SERIAL_IPC_ERROR, request_id, code, 0, 0, 0);
 }
@@ -112,6 +118,8 @@ static void handle_query(int32_t source, int32_t request_id) {
                           packed1, (int32_t)g_dev.io_base);
 }
 
+/* Register access is confined to the first 64 bytes of the device's I/O window
+ * (the legacy virtio register block) and must be dword-aligned. */
 static void handle_read_reg32(int32_t source, int32_t request_id, int32_t offset) {
     if (!g_dev.present) {
         send_error(source, request_id, -2);

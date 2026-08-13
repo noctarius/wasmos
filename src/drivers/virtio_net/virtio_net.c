@@ -24,8 +24,8 @@
 #define VIRTIO_PCI_DEVICE_STATUS 0x12u
 #define VIRTIO_PCI_ISR_STATUS 0x13u
 /* Enabling MSI-X inserts two 16-bit vector registers at 0x14/0x16 and pushes the
- * device-specific config region from 0x14 to 0x18 (virtio 0.9.5 §2.3, "MSI-X
- * vector configuration"). Everything below 0x14 is unaffected, so only the
+ * device-specific config region from 0x14 to 0x18 (virtio 0.9.5, "MSI-X vector
+ * configuration"). Everything below 0x14 is unaffected, so only the
  * device-config base moves — see cfg_base(). */
 #define VIRTIO_PCI_MSIX_CONFIG_VECTOR 0x14u /* u16: vector for config changes */
 #define VIRTIO_PCI_MSIX_QUEUE_VECTOR 0x16u  /* u16: vector for the selected queue */
@@ -35,9 +35,9 @@
 #define VIRTIO_NET_CFG_STATUS_OFF 0x06u
 #define VIRTIO_MSIX_NO_VECTOR 0xFFFFu
 
-/* MSI-X table entries this driver uses, one per interrupt source. Reporting
- * which source fired is the thing INTx could not do: with a shared wire the
- * driver had to inspect the device to find out what happened. */
+/* MSI-X table entries this driver uses, one per interrupt source. The entry
+ * index names the source, which INTx cannot do: on a shared wire the driver has
+ * to inspect the device to find out what happened. */
 #define VIRTIO_NET_MSIX_ENTRY_RX 0u
 #define VIRTIO_NET_MSIX_ENTRY_TX 1u
 #define VIRTIO_NET_MSIX_ENTRY_CONFIG 2u
@@ -483,8 +483,6 @@ static int tx_send(int32_t buffer_id, int32_t frame_len) {
     for (uint32_t i = 0; i < VIRTIO_NET_HDR_LEN; ++i) {
         buf[i] = 0;
     }
-    /* FIXME(owner-push): net protocol must carry the client buffer_id/grant; using msg.arg1 as
-     * placeholder */
     if (wasmos_sys_buffer_read(buffer_id, buf + VIRTIO_NET_HDR_LEN, frame_len, 0) != 0) {
         g_tx_buf_free[g_tx_buf_top++] = (uint16_t)b; /* return the buffer */
         return WASMOS_ERR_NET_IO_ERROR;
@@ -603,11 +601,8 @@ static int net_drain_rx(void) {
     return enqueued;
 }
 
-/* Device interrupt handler (IPC_IRQ_EVENT_TYPE for this device's line). Reading
- * the ISR status register de-asserts the (level-triggered) device interrupt;
- * completed transmits are then reaped and the RX ring drained. Frames are enqueued for a
- * subscribed consumer (posting one RX_FRAME_NOTIFY per batch), or — before any
- * subscriber exists — logged once and dropped. Finally irq_ack unmasks. */
+/* Tell the RX subscriber, if there is one, how many frames are queued for it.
+ * Fire-and-forget: one notify per drained batch, not per frame. */
 static void net_notify_subscriber(void) {
     if (g_rx_sub_endpoint >= 0) {
         (void)wasmos_ipc_send(g_rx_sub_endpoint, g_endpoint, NETDRV_IPC_RX_FRAME_NOTIFY, 0,
@@ -787,8 +782,8 @@ static int initialize_device(void) {
     }
     /* Set up the RX and TX virtqueues over driver-owned pinned DMA regions
      * before signalling DRIVER_OK, so the device sees valid rings once live.
-     * RX/TX descriptor population is the next step; this establishes the rings
-     * and programs their physical addresses into the device. */
+     * This only lays out the rings and programs their physical addresses; the
+     * buffers are posted by rx_arm/tx_arm below. */
     int rx_size = setup_queue(&g_rxq, (uint16_t)VIRTIO_NET_RX_QUEUE);
     int tx_size = setup_queue(&g_txq, (uint16_t)VIRTIO_NET_TX_QUEUE);
     if (rx_size < 0 || tx_size < 0) {
@@ -833,8 +828,6 @@ static void handle_link_get(int32_t source, int32_t request_id, int32_t buffer_i
         send_error(source, request_id, WASMOS_ERR_NET_NOT_READY);
         return;
     }
-    /* FIXME(owner-push): net protocol must carry the client buffer_id/grant; using msg.arg0 as
-     * placeholder */
     if (wasmos_sys_buffer_write(buffer_id, g_dev.mac, 6, 0) != 0) {
         send_error(source, request_id, WASMOS_ERR_NET_IO_ERROR);
         return;
@@ -867,8 +860,6 @@ static void handle_stats_get(int32_t source, int32_t request_id, int32_t buffer_
         send_error(source, request_id, WASMOS_ERR_NET_NOT_READY);
         return;
     }
-    /* FIXME(owner-push): net protocol must carry the client buffer_id/grant; using msg.arg0 as
-     * placeholder */
     if (wasmos_sys_buffer_write(buffer_id, &g_stats, (int32_t)sizeof(g_stats), 0) != 0) {
         send_error(source, request_id, WASMOS_ERR_NET_IO_ERROR);
         return;
@@ -891,8 +882,6 @@ static void handle_rx_poll(int32_t source, int32_t request_id, int32_t buffer_id
     uint8_t frame[VIRTIO_NET_MAX_FRAME];
     uint16_t len = rx_queue_pop(frame, sizeof frame);
     if (len > 0u) {
-        /* FIXME(owner-push): net protocol must carry the client buffer_id/grant; using msg.arg0 as
-         * placeholder */
         if (wasmos_sys_buffer_write(buffer_id, frame, (int32_t)len, 0) != 0) {
             send_error(source, request_id, WASMOS_ERR_NET_IO_ERROR);
             return;

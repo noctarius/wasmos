@@ -2,10 +2,9 @@
  *
  * Mirrors the interface exposed by wasm3/shim.h so callers can be switched
  * between runtimes via WASMOS_WASM_RUNTIME without changing call sites.
- *
- * TODO: implement the freestanding C++ ABI layer (operator new/delete,
- *       __cxa_pure_virtual, __cxa_atexit, .init_array runner) and the
- *       memory-region bindings that back these calls. */
+ * The bodies live in warp/shim.cpp; the C++ ABI they depend on (operator
+ * new/delete in warp/shim.cpp, the __cxa_* stubs in warp/cxx_abi.cpp) is part
+ * of the same runtime block. */
 #ifndef WASMOS_WARP_SHIM_H
 #define WASMOS_WARP_SHIM_H
 

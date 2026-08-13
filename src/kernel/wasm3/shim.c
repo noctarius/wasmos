@@ -35,7 +35,7 @@ typedef struct {
     size_t max_size;
     size_t committed_size;
     uint32_t chunk_count;
-    /* Dedicated-VA linear-memory slot (Step 3a).  WASM linear memory lives in a
+    /* Dedicated-VA linear-memory slot.  WASM linear memory lives in a
      * reserved-VA slot (linmem_slots), not the direct-map chunk arena, so its
      * base is pinned for the process lifetime and it grows by committing tail
      * pages (never relocates).  linmem_slot == LINMEM_SLOT_NONE until reserved. */
@@ -431,9 +431,9 @@ void free(void* ptr) {
         return;
     }
     wasm3_heap_block_t* block = (wasm3_heap_block_t*)((uint8_t*)ptr - sizeof(wasm3_heap_block_t));
-    /* Free remains stack-like: only the most recent allocation in the tail
-     * chunk shrinks the live frontier. This matches the old allocator's
-     * behavior while still allowing chunked growth. */
+    /* Free is stack-like: only the most recent allocation in the tail chunk
+     * shrinks the live frontier.  Freeing anything else leaves an interior hole
+     * that is never reclaimed. */
     if (chunk_index + 1 == slot->chunk_count && block->start + block->total == chunk->offset) {
         chunk->offset = block->start;
         wasm3_heap_release_empty_tail_chunks(slot);
@@ -526,7 +526,7 @@ int wasm3_heap_query_phys(uint32_t pid, const void* ptr, uint64_t size, uint64_t
     return 0;
 }
 
-/* ---- Dedicated-VA linear-memory slot (Step 3a) --------------------------- *
+/* ---- Dedicated-VA linear-memory slot -------------------------------------- *
  * WASM linear memory is backed by a reserved-VA slot (linmem_slots) instead of
  * the direct-map chunk arena: the base is pinned for the process lifetime and
  * growth commits scattered tail pages in place (never relocates).  The block is
@@ -650,8 +650,8 @@ void* wasm3_linmem_grow(void* blockp, size_t new_total_bytes) {
         ksync_spinlock_unlock(&g_wasm3_heap_lock);
         return 0;
     }
-    /* block_off (header tail of page 0) is measured against the USER window base
-     * now that linmem_block is the user VA. */
+    /* linmem_block is a user VA, so its offset (the header tail of page 0) is
+     * measured against the user window base, not the slot alias. */
     uint64_t block_off = slot->linmem_block - mm_user_wasm_linear_base();
     uint64_t need_pages = (block_off + (uint64_t)new_total_bytes + 4095u) / 4096u;
     if (need_pages > slot->linmem_max_pages) {

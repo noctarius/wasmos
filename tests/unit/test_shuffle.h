@@ -27,14 +27,20 @@
  * -- which is the one job the seed has. (arc4random cannot be seeded at all.)
  * Five lines buys a seed that means the same thing everywhere.
  *
- * Two entry points, because the suites here come in two shapes.
+ * Three entry points, because the suites here come in three shapes.
  *
- * A suite whose cases return a marker:
+ * A suite whose cases return a marker, and which stops at the first failure:
  *     static const wasmos_test_case_t k_cases[] = {
  *         WASMOS_TEST_CASE(test_a),
  *         WASMOS_TEST_CASE(test_b),
  *     };
  *     int main(void) { return wasmos_test_run_all(k_cases, 2); }
+ *
+ * A suite whose cases return nothing and report through their own failure
+ * counter, so every case runs:
+ *     static const wasmos_test_void_case_t k_cases[] = { ... };
+ *     uint64_t seed = wasmos_test_run_all_void(k_cases, 2);
+ *     if (failures) wasmos_test_report_seed(seed);
  *
  * A suite that already has its own named table and failure counter keeps its
  * runner and shuffles the order it walks:

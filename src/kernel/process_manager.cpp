@@ -56,6 +56,8 @@ class ProcessManager {
         return waiter;
     }
 
+    /* Round-robin the controlling tty handed to WANTS_TTY children over 1..3;
+     * tty 0 is not handed out.  An out-of-range cursor folds back to 1. */
     uint32_t alloc_cli_tty(void) {
         uint32_t tty = g_pm.next_cli_tty;
         if (tty < 1 || tty > 3) {
@@ -316,8 +318,11 @@ class ProcessManager {
             }
             pm_atomic_store_u32(&g_pm.broker_reply_endpoint, broker_reply_endpoint);
 
-            /* Watch all three endpoints with one select set so the entry can
-             * block (instead of busy-polling) until any of them has traffic. */
+            /* One select set over the three endpoints the run loop drains, so
+             * the entry can block instead of busy-polling until any of them has
+             * traffic.  broker_reply_endpoint is deliberately NOT in the set:
+             * it is drained synchronously inside pm_request_broker_spawn_plan
+             * via ipc_recv_blocking_for, never from this loop. */
             uint32_t pm_eps[3] = {proc_endpoint, fs_ctrl_endpoint, fs_reply_endpoint};
             uint32_t pm_select = 0;
             if (ipc_select_listen(process->context_id, pm_eps, 3, &pm_select) != IPC_OK) {

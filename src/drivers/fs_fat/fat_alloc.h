@@ -14,7 +14,10 @@
 #include "fat_geom.h"
 #include "fat_types.h"
 
-/* Pure geometry helpers. */
+/* Pure geometry helpers.  The end-of-chain marker is 0x0FFF on FAT12 and 0xFFFF
+ * on FAT16; it is 0 for any other volume type, which callers treat as
+ * unsupported rather than as a valid marker.  fat_total_clusters returns 0 when
+ * the geometry is inconsistent. */
 uint16_t fat_end_of_chain_marker(const fat_mount_t* mnt);
 uint32_t fat_total_clusters(const fat_mount_t* mnt);
 

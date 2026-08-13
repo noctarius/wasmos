@@ -25,6 +25,8 @@ static int32_t route_and_select_backend(const char* path, int32_t path_len,
     return 1;
 }
 
+/* "/" carries no mount segment after the leading slash, so it routes to no
+ * backend at all: the root is not itself a mount. */
 static void test_absolute_root_path_matches_boot(void) {
     const char* mounts[] = {"boot", "init"};
     char out[64];

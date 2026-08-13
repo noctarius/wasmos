@@ -1,8 +1,15 @@
 /*
- * kernel_sched_selftest_runtime.c — unit tests for the kernel scheduler.
+ * kernel_sched_selftest_runtime.c — in-kernel tests for the scheduler.
  *
- * Each test function returns 0 on pass, non-zero on fail.
- * Tests are pure in-kernel C: no process spawn, no QEMU boot required.
+ * Run from kmain before the first user process exists; a nonzero result
+ * panics the boot. Each test function returns 0 on pass, nonzero on fail, and
+ * logs "[test] sched <name> ok" or "... FAILED".
+ *
+ * No process or thread is spawned: the tests build cpu_sched_t and thread_t
+ * values themselves and call the queue primitives directly. They are not host
+ * tests, though — cpu_local(), g_cpus[] and g_cpu_count are real, so anything
+ * that can be decided without a booted kernel belongs in
+ * tests/unit/test_sched_runqueue.c instead.
  */
 
 #include "kernel_sched_selftest_runtime.h"
@@ -110,7 +117,8 @@ static int test_priority_ordering(void) {
     CHECK(p1 == &hi1, "prio-order-first");
     CHECK(p2 == &hi2, "prio-order-second");
     CHECK(p3 == &lo1, "prio-order-third");
-    /* Fallback now returns cpu_local()->idle_thread (per-CPU), not cs.idle. */
+    /* The empty-queue fallback is this CPU's idle thread, not one owned by the
+     * queue being drained. */
     CHECK(p4 == cpu_local()->idle_thread, "prio-order-idle");
     CHECK(cs.ready_bitmap == 0, "prio-order-bitmap-empty");
 
@@ -152,19 +160,24 @@ static int test_dequeue(void) {
 }
 
 /* -------------------------------------------------------------------------
- * Test 4: sched_event_init / wake_one / wake_all with no real blocking
+ * Test 4: sched_event wait-list bookkeeping, with the real wait and wake calls
+ * replaced by stand-ins.
  *
- * sched_event_wait cannot be called here: it yields to the scheduler.  The
- * wake path is exercised directly instead -- populate the wait_list by hand,
- * call sched_event_wake_one / sched_event_wake_all, and verify the list state
- * and thread pend_state fields.
+ * Neither side of the real API is reachable from here. sched_event_wait yields
+ * to the scheduler, and sched_event_wake_one / sched_event_wake_all end in
+ * sched_wake_thread, which resolves the thread through the thread table by tid
+ * — these are stack-allocated threads with no slot in it — and would enqueue
+ * them into the live scheduler. Both are therefore open-coded below.
  *
- * sched_wake_thread is NOT called here either (it would enqueue into the live
- * scheduler); list membership before and after stands in for it.
+ * What that leaves under test is the ordering and field discipline the real
+ * functions rely on: sched_event_init produces an empty list, waiters come off
+ * it FIFO, wake_one leaves the remaining waiters linked, and a drained list is
+ * empty with every pend_state set. It does NOT cover the sched_event.c code
+ * itself — a change to wake_one's body cannot fail this test.
  * ------------------------------------------------------------------------- */
 
-/* Minimal stand-in: add a thread to an event's wait_list without actually
- * blocking (skips the blocking_transition / yield path). */
+/* Stand-in for sched_event_wait: link a thread onto the wait_list without the
+ * blocking_transition / yield path a real wait would take. */
 static void fake_wait(sched_event_t* ev, thread_t* t) {
     ksync_spinlock_lock(&ev->lock);
     t->wait_event = ev;
@@ -187,14 +200,9 @@ static int test_event_wake_one(void) {
 
     CHECK(!list_head_empty(&ev.wait_list), "event-wake-one-list-nonempty");
 
-    /* Wake one, checking state manually instead of going through
-     * sched_wake_thread.  wake_one is called under the lock to match the
-     * production call convention, but sched_wake_thread calls thread_set_state,
-     * which needs a valid tid — pend_state is compared directly after list
-     * removal instead. */
+    /* Open-coded sched_event_wake_one: same lock discipline and same field
+     * updates, minus the sched_wake_thread call at the end. */
     ksync_spinlock_lock(&ev.lock);
-    /* Manually dequeue the first waiter the same way wake_one does, without the
-     * sched_wake_thread call, leaving pure list/pend logic under test. */
     CHECK(!list_head_empty(&ev.wait_list), "event-wake-one-before");
     thread_t* first = list_first_entry(&ev.wait_list, thread_t, event_node);
     list_head_del(&first->event_node);
@@ -225,7 +233,8 @@ static int test_event_wake_all(void) {
     fake_wait(&ev, &tb);
     fake_wait(&ev, &tc);
 
-    /* Manually drain all waiters, mirroring sched_event_wake_all logic. */
+    /* Open-coded sched_event_wake_all: drain every waiter with the aborted
+     * pend_state a real wake_all sets, minus the sched_wake_thread calls. */
     ksync_spinlock_lock(&ev.lock);
     int woken = 0;
     list_head_t *pos, *tmp;
@@ -249,11 +258,11 @@ static int test_event_wake_all(void) {
     return 0;
 }
 
-/* Test 5 (sched_default_prio mapping) now lives in the host gate,
- * tests/unit/test_sched_runqueue.c: it is a pure function of four flags, so it
- * needs no running kernel, and the host version also covers the first-match-wins
- * precedence that one-hot inputs cannot observe.  Numbering below is left as-is
- * so the remaining tests keep the identities they are known by. */
+/* Test 5 (sched_default_prio mapping) lives in the host gate,
+ * tests/unit/test_sched_runqueue.c: it is a pure function of four flags, needs
+ * no running kernel, and the host version also covers the first-match-wins
+ * precedence that one-hot inputs cannot observe. The numbering here skips 5 so
+ * the remaining tests keep the identities they are known by. */
 
 /* -------------------------------------------------------------------------
  * Test 6: sched_list — empty sentinel, add_tail, del, for_each_safe
@@ -371,9 +380,9 @@ static int test_target_cpu_selection(void) {
  * that queue once thread_reset_slot releases the slot: the next spawn to get the
  * slot re-initialises the node (self-linking it) while the queue still points at
  * it, and the queue is then spliced through a node with two owners.
- * cpu_sched_remove_thread is what the reap path calls to close that hole, and
- * on_rq is what makes "is this thread queued?" answerable without holding the
- * lock of whichever CPU's queue holds it.
+ * thread_reset_slot calls cpu_sched_remove_thread to close that hole, and on_rq
+ * is what makes "is this thread queued?" answerable without holding the lock of
+ * whichever CPU's queue holds it.
  * ------------------------------------------------------------------------- */
 static int test_remove_thread_and_claim(void) {
     cpu_sched_t csa, csb;
@@ -388,8 +397,8 @@ static int test_remove_thread_and_claim(void) {
     CHECK(t.rq == &csa, "claim-owner-recorded");
     CHECK(csa.thread_count[SCHED_PRIO_SERVICE] == 1, "claim-count");
 
-    /* A second enqueue -- from another CPU's queue, which is exactly the case
-     * the old self-link test could not see -- must be dropped, not linked. */
+    /* A second enqueue, into a different CPU's queue, must be dropped rather
+     * than linked: the claim already belongs to csa. */
     cpu_sched_enqueue(&csb, &t);
     CHECK(csb.thread_count[SCHED_PRIO_SERVICE] == 0, "claim-dup-no-count");
     CHECK(csb.ready_bitmap == 0, "claim-dup-no-bitmap");
@@ -421,10 +430,12 @@ static int test_remove_thread_and_claim(void) {
 /* -------------------------------------------------------------------------
  * Test 10: a band's ready bit follows list emptiness, not the counter.
  *
- * The livelock signature was a band whose counter had underflowed past zero, so
- * "--count == 0" never held and the bit stayed set over an empty/ghost list --
- * the picker then re-returned the same node on every dispatch.  Deriving the
- * bit from the list makes a drifted counter unable to wedge the picker.
+ * A counter that has drifted (an underflow past zero being the way it happens)
+ * would leave "--count == 0" permanently false, so a bit derived from the
+ * counter would stay set over an empty band and the picker would hand back the
+ * same node on every dispatch — a livelock. Deriving the bit from the list
+ * makes a drifted counter unable to wedge the picker, and the counter itself
+ * saturates at zero rather than wrapping.
  * ------------------------------------------------------------------------- */
 static int test_ready_bit_follows_list(void) {
     cpu_sched_t cs;
@@ -434,7 +445,7 @@ static int test_ready_bit_follows_list(void) {
     make_thread(&t, 71, SCHED_PRIO_WASM);
     cpu_sched_enqueue(&cs, &t);
 
-    /* Simulate a drifted counter (historically an underflow to UINT32_MAX). */
+    /* A counter that disagrees with the one queued thread. */
     cs.thread_count[SCHED_PRIO_WASM] = 5;
 
     ksync_spinlock_lock(&cs.lock);

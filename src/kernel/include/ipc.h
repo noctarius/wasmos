@@ -28,7 +28,7 @@ typedef enum {
     IPC_ERR_NOENT = -4,       /* no such endpoint or select set */
     IPC_ERR_TIMEOUT = -5,     /* a bounded wait elapsed without becoming ready */
     IPC_ERR_UNSUPPORTED = -7, /* wrong endpoint type for this operation */
-    IPC_ERR_PEER_GONE = -8    /* the endpoint was destroyed while we waited on it */
+    IPC_ERR_PEER_GONE = -8    /* the endpoint was destroyed while the caller waited on it */
 } ipc_result_t;
 
 /*
@@ -60,6 +60,11 @@ _Static_assert((int)IPC_ERR_UNSUPPORTED == (int)WASMOS_UNSUPPORTED,
 _Static_assert((int)IPC_ERR_PEER_GONE == (int)WASMOS_PEER_GONE,
                "IPC_ERR_PEER_GONE must match WASMOS_PEER_GONE");
 
+/* An endpoint's type is fixed at creation and selects which half of the API
+ * applies to it. MESSAGE endpoints carry ipc_message_t payloads through
+ * send/recv and may be sent to by any context. NOTIFICATION endpoints carry
+ * only a counter through notify/wait, and only their owner (or the kernel) may
+ * raise one. Applying the wrong half returns IPC_ERR_UNSUPPORTED. */
 typedef enum {
     IPC_ENDPOINT_TYPE_MESSAGE = 0,
     IPC_ENDPOINT_TYPE_NOTIFICATION = 1
@@ -82,6 +87,8 @@ int ipc_notification_create(uint32_t owner_context_id, uint32_t* out_endpoint);
 int ipc_endpoint_owner(uint32_t endpoint, uint32_t* out_owner_context_id);
 int ipc_endpoint_count(uint32_t endpoint, uint32_t* out_count);
 int ipc_send_from(uint32_t sender_context_id, uint32_t endpoint, const ipc_message_t* message);
+/* Non-blocking dequeue: IPC_OK with *out_message filled, or IPC_EMPTY when the
+ * queue is empty. Only the endpoint's owner may receive from it. */
 int ipc_recv_for(uint32_t receiver_context_id, uint32_t endpoint, ipc_message_t* out_message);
 /*
  * ipc_recv_blocking_for — like ipc_recv_for but blocks via sched_event_wait.
@@ -99,6 +106,9 @@ int ipc_wait_for(uint32_t receiver_context_id, uint32_t endpoint);
  * sleep at idle rather than yield-spinning; caller re-polls with ipc_recv_for.
  */
 int ipc_endpoint_wait_for(uint32_t receiver_context_id, uint32_t endpoint, uint32_t timeout_ms);
+/* Kernel-side shorthands: the *_for/_from variants with sender/receiver fixed to
+ * IPC_CONTEXT_KERNEL, which bypasses the owner checks. Not for anything acting
+ * on a guest's behalf -- pass that guest's context id explicitly instead. */
 int ipc_send(uint32_t endpoint, const ipc_message_t* message);
 int ipc_recv(uint32_t endpoint, ipc_message_t* out_message);
 int ipc_notify(uint32_t endpoint);
@@ -113,25 +123,21 @@ void ipc_endpoints_release_owner(uint32_t owner_context_id);
  * ready, then returns the ready endpoint ID.  The caller then calls
  * ipc_recv_for / ipc_wait_for to consume the payload.
  */
-/*
- * The select table grows out of kmem like the endpoint table, so the number of
- * parked services is bounded by memory and the per-context quota rather than by
- * a constant. It was a fixed 32 slots -- one per parked service, against a boot
- * that brings up roughly twenty processes -- which left barely ten spare.
- */
-/* Select sets per kmem chunk. The table grows on demand, so this is a growth
- * granularity, not a ceiling. */
+/* Select sets per kmem chunk. The select table, like the endpoint table, grows
+ * on demand out of kmem, so this is a growth granularity and not a ceiling: the
+ * number of parked services is bounded by memory and by the per-context quota
+ * below. */
 #define IPC_SELECT_TABLE_CHUNK 32u
 
 /*
  * Per-context ceilings on the two shared IPC tables.
  *
- * Both are global: the select table is a fixed IPC_SELECT_TABLE_SIZE slots, and
- * the endpoint table grows out of kernel memory. Without a per-context cap one
- * context can take all of either, and every other context is starved -- a service that cannot
- * create a select set cannot park, and one that cannot create an endpoint cannot be reached at all.
- * The caps are well above what any component uses (the busiest has four endpoint-create sites and
- * two select-create sites) and exist to bound a runaway, not to ration normal use.
+ * Both tables are global and both grow out of kernel memory, so without a
+ * per-context cap one context can consume all of either and starve every other
+ * one: a service that cannot create a select set cannot park, and one that
+ * cannot create an endpoint cannot be reached at all. The caps sit well above
+ * what any component uses (the busiest has four endpoint-create sites and two
+ * select-create sites); they bound a runaway rather than ration normal use.
  */
 #define IPC_SELECT_PER_CONTEXT_MAX 8u
 #define IPC_ENDPOINT_PER_CONTEXT_MAX 64u

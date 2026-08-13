@@ -630,22 +630,21 @@ static int test_respawn_guard(void) {
 
 /* ------------------------------------------------------------------------
  * Parity with tests/unit/test_wasm_coroutine.c and test_as_coroutine.ts.
- * The future/promise semantics are shared by design (doc 32), so the group
- * scenarios below apply to all three runtimes and are kept identical.
+ * Future/promise semantics are shared across the runtimes by design (see
+ * docs/architecture/32-coroutines-futures-promises.md), so the group scenarios
+ * below apply to all three and are kept identical.
  * ---------------------------------------------------------------------- */
 
 #define RACE_MAX 4u
 
-/* Race with N candidates that ALL settle, run once per winning position.
+/* Race with N candidates that ALL settle, run once per winning position, which
+ * pins the outcome as independent of WHICH position wins.
  *
- * The suites tested exactly one ordering (the second of three winning), so
- * nothing pinned that the result is independent of WHICH position wins.
- *
- * A caveat, established by trying to break it: this does NOT distinguish the
- * head/middle/tail branches of the dispatch-queue removal. A mutant that only
- * removes the head still passes, because continuation_cancel nulls the node's
- * next regardless -- truncating the list anyway -- and nulls its future, so a
- * surviving stale entry dispatches as a no-op. */
+ * Scope: this does NOT distinguish the head/middle/tail branches of the
+ * dispatch-queue removal. Removing only the head passes as well, because
+ * continuation_cancel nulls the node's next regardless -- truncating the list
+ * anyway -- and nulls its future, so a surviving stale entry dispatches as a
+ * no-op. */
 static int native_race_winner_case(size_t winner, size_t count) {
     wasmos_native_coroutine_runtime_t runtime;
     wasmos_future_t futures[RACE_MAX];
@@ -815,9 +814,8 @@ static int test_race_and_all_every_position(void) {
 }
 
 /* Registering on an ALREADY-SETTLED future must still defer to the runtime
- * rather than dispatch inline. Every other case registers BEFORE settling, so
- * that branch went untested in all three suites; a mutant dispatching inline
- * from wasmos_future_then passed each of them. */
+ * rather than dispatch inline from wasmos_future_then. Every other case here
+ * registers BEFORE settling, so this is the only one covering that branch. */
 static int test_then_on_settled_future_defers(void) {
     wasmos_native_coroutine_runtime_t runtime;
     wasmos_future_t settled;
@@ -843,8 +841,8 @@ static int test_then_on_settled_future_defers(void) {
 }
 
 /* Randomized order: a case that leaks state must not be able to make its
- * neighbour pass. The seed is printed on failure and replays via
- * WASMOS_TEST_SEED; see test_shuffle.h. */
+ * neighbour pass. The seed is printed before the first case runs and repeated
+ * on failure; WASMOS_TEST_SEED replays that order. See test_shuffle.h. */
 static const wasmos_test_case_t k_cases[] = {
     WASMOS_TEST_CASE(test_yield_await_and_join),
     WASMOS_TEST_CASE(test_rejection_and_poll),

@@ -17,7 +17,8 @@ set(CFLAGS_WASM3 ${CFLAGS_KERNEL} -I${WASM3_DIR}/source -Wno-unused-parameter -W
 
 # WARP C flags (for posix_kernel.c and other WARP C glue — no C++ dialect, just compat includes).
 set(CFLAGS_WARP_C ${CFLAGS_KERNEL} -I${KERNEL_DIR}/warp/compat)
-# WARP C++14 flags: exceptions ON (WARP uses them internally), no RTTI, compat headers first.
+# WARP C++14 flags: exceptions and RTTI both ON (WARP uses them internally),
+# compat headers first.
 execute_process(
   COMMAND ${CMAKE_CXX_COMPILER} -print-resource-dir
   OUTPUT_VARIABLE _WARP_CLANG_RSRC

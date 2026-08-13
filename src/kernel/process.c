@@ -28,10 +28,15 @@ extern int warp_sync_linmem_for_pid(uint32_t pid, uint64_t user_root);
 #endif
 
 /*
- * process.c contains the single-core scheduler, process table, run queue, and
- * context-switch glue. The implementation is intentionally simple: fixed-size
- * arrays, a FIFO ready queue, and explicit state transitions that are easy to
- * audit while the kernel is still ring-0-only.
+ * process.c owns the process table, the dispatch loop, and the context-switch
+ * glue.  The run queues themselves live in sched_thread.c, one per CPU; this
+ * file drives them (process_schedule_once_impl) and holds the process-slot state
+ * machine that gates what may be dispatched.
+ *
+ * Deliberately plain: a fixed-size g_processes[] array and explicit state
+ * transitions, all funnelled through process_transit so the lifecycle is
+ * auditable in one place.  Processes run in ring 0 or ring 3 depending on the
+ * context installed by process_set_user_entry / the user-thread spawn path.
  */
 
 static process_t g_processes[PROCESS_MAX_COUNT];
@@ -41,9 +46,8 @@ static uint32_t g_next_pid;
 static ksync_spinlock_t g_process_table_lock;
 /* Scheduler state lives in cpu_local_t (per-CPU) — see smp.h. */
 static process_t* g_idle_process;
-/* g_in_context_switch removed: each CPU now tracks in_context_switch in
- * cpu_local_t (at offset 17 from GS:0) to avoid false preemption suppression
- * across CPUs when multiple context switches run simultaneously. */
+/* in_context_switch is per-CPU (cpu_local_t), not global: a global flag would
+ * let one CPU's context switch suppress preemption on every other CPU. */
 static uint64_t g_ctx_watch_logged;
 
 static void process_clear_runtime_tag(process_t* proc);
@@ -111,8 +115,9 @@ extern uint8_t __kernel_end;
 #define SCHED_TRAMPOLINE_STACK_BYTES 8192u
 #define SCHED_PROGRESS_MARKER_SWITCHES 256ull
 #define SCHED_RESCHED_STALL_TICKS 512ull
-/* Phase-2 stack hardening currently relies on the shared higher-half kernel
- * window (512 MiB by default: 256 * 2 MiB PDEs). Keep in sync with paging.c. */
+/* Kernel stacks must land inside the shared higher-half window so they stay
+ * mapped under every process root table.  Must match paging.c's
+ * HIGHER_HALF_PDE_COUNT (256 * 2 MiB PDEs = 512 MiB). */
 #define KERNEL_SHARED_HIGHER_HALF_WINDOW_BYTES (512u * 1024u * 1024u)
 static uint8_t g_sched_trampoline_stacks[WASMOS_MAX_CPUS][SCHED_TRAMPOLINE_STACK_BYTES]
     __attribute__((aligned(16)));
@@ -754,8 +759,11 @@ static int process_copy_runtime_tag(process_t* proc, const char* tag) {
     return tag[WASMOS_APP_SUBSYSTEM_TAG_LEN] == '\0' ? 0 : -1;
 }
 
+/* Claiming a slot is a test-then-write race, so this MUST run under
+ * g_process_table_lock and the caller must transition the returned slot out of
+ * UNUSED/DEAD before releasing it.  (process_spawn_idle is the one exception:
+ * it runs single-threaded at boot, before any AP is up.) */
 static process_t* process_find_slot(void) {
-    /* Must be called with g_process_table_lock held. */
     process_t* table = process_table();
     for (uint32_t i = 0; i < PROCESS_MAX_COUNT; ++i) {
         /* Both free states are claimable: UNUSED (pristine) and DEAD (reaped). */
@@ -766,8 +774,14 @@ static process_t* process_find_slot(void) {
     return 0;
 }
 
+/* Lock-free by design and called that way by most of its users, including the
+ * dispatch hot path (process_get).  A slot is never handed back to the allocator
+ * while it is live -- the reaper publishes DEAD only after process_reap has torn
+ * everything down -- and g_next_pid only ever counts up, so a match is the
+ * process the caller named.  The returned pointer stays valid only as long as
+ * the caller has a reason to believe that process is alive: once it is reaped,
+ * the slot can be reclaimed by an unrelated spawn. */
 static process_t* process_find_by_pid(uint32_t pid) {
-    /* Must be called with g_process_table_lock held. */
     if (pid == 0) {
         return 0;
     }
@@ -780,8 +794,8 @@ static process_t* process_find_by_pid(uint32_t pid) {
     return 0;
 }
 
+/* Lock-free, on the same terms as process_find_by_pid. */
 static process_t* process_find_by_context_internal(uint32_t context_id) {
-    /* Must be called with g_process_table_lock held. */
     if (context_id == 0) {
         return 0;
     }
@@ -1387,20 +1401,22 @@ int process_spawn_idle_ap(uint32_t cpu_id) {
     thread->ticks_total = 0;
     sched_thread_init(thread, SCHED_PRIO_IDLE);
     thread->cpu_affinity = 1u << cpu_id;
-    /* Atomic: APs now self-install their idle threads concurrently during
-     * bringup, so these shared idle-process counters can be bumped from several
-     * CPUs at once. */
+    /* Atomic: APs self-install their idle threads concurrently during bringup,
+     * so these shared idle-process counters can be bumped from several CPUs at
+     * once. */
     __atomic_fetch_add(&g_idle_process->thread_count, 1u, __ATOMIC_RELAXED);
     __atomic_fetch_add(&g_idle_process->live_thread_count, 1u, __ATOMIC_RELAXED);
     /* AP idle threads are never enqueued; dispatched only via the per-CPU
      * fallback path in cpu_sched_pick_next. */
     g_cpus[cpu_id].idle_thread = thread;
     /* Mirror the BSP idle bootstrap: record this thread as the per-CPU
-     * scheduler idle thread.  Without it sched.idle stays NULL on APs, so the
-     * work-steal trigger (`thread == cs->idle`) in process_schedule_once_impl
-     * never fires and all runnable work piles up on CPU 0.  Stealing is
-     * poll-aware (cpu_sched_steal_pick skips sched_sticky threads), which is
-     * what keeps idle CPUs from thrashing on poll/yield loops. */
+     * scheduler idle thread.  cs->idle is what the two cross-CPU readers in
+     * sched_thread.c compare against -- cpu_sched_load() excludes a running
+     * idle thread from this CPU's load, and cpu_sched_steal_pick() refuses to
+     * steal it.  Leaving it NULL on an AP therefore makes that CPU look busy to
+     * the placement path and makes its idle thread a steal candidate.
+     * (The work-steal trigger in process_schedule_once_impl is a different
+     * field, cpu_local()->idle_thread; see the note there.) */
     g_cpus[cpu_id].sched.idle = thread;
     return 0;
 }
@@ -1575,8 +1591,6 @@ int process_set_user_entry(uint32_t pid, uint64_t rip, uint64_t user_rsp) {
 }
 
 process_t* process_get(uint32_t pid) {
-    /* Hot path called on every scheduler dispatch.  The entry cannot disappear
-     * while a live thread references it — no lock needed for read-only lookup. */
     return process_find_by_pid(pid);
 }
 
@@ -1670,9 +1684,10 @@ int process_wait(process_t* process, uint32_t target_pid, int32_t* out_exit_stat
     return 1;
 }
 
-/* Tri-state: > 0 means the caller has been parked and should yield, 0 means the
- * target was reaped and its status returned, < 0 is a packed error code. The
- * error side is negative by construction, so the protocol is unchanged. */
+/* Tri-state return: > 0 means the caller has been parked and should yield and
+ * retry, 0 means the target was reaped and *out_exit_status is set, < 0 is a
+ * packed WASMOS_ERR_* / WASMOS_INVAL code (packed codes are negative, so the
+ * three cases never collide). */
 int process_thread_join(process_t* process, uint32_t target_tid, int32_t* out_exit_status) {
     thread_t* target = 0;
     thread_t* caller = 0;
@@ -1837,9 +1852,10 @@ static int process_schedule_once_impl(void) {
     ksync_spinlock_lock(&cs->lock);
     thread_t* thread = cpu_sched_pick_next(cs);
     ksync_spinlock_unlock(&cs->lock);
-    /* No idle thread at all is the one genuinely impossible state, and the only
-     * one worth panicking over. Everything below can legitimately lose its
-     * thread to a concurrent reap and must stay recoverable. */
+    /* No idle thread at all is the one genuinely impossible state.  SCHED_R_PICK
+     * is the only code the boot loop (kernel_boot_runtime.c) panics on, alongside
+     * the CTX/ROOT/MAXCOUNT failures below; everything else here can legitimately
+     * lose its thread to a concurrent reap and must stay recoverable. */
     if (!thread) {
         return SCHED_R_PICK;
     }
@@ -1956,7 +1972,10 @@ static int process_schedule_once_impl(void) {
     if (!thread->is_kernel_worker) {
         process_validate_thread_context(proc, thread, run_ctx, "dispatch");
     }
-    /* Defensive: physical page table addresses must fit in 32 bits on this HW. */
+    /* Every root table this kernel allocates comes from below 4 GiB, so a value
+     * at or above that is corruption, not a legitimate high root.  Loading it
+     * into CR3 would fault immediately, so fall back to the kernel root and
+     * report instead. */
     if (run_ctx->root_table >= 0x100000000ULL) {
         serial_printf_unlocked(
             "[sched] CORRUPT root_table pid=%u name=%s root=%016llx rip=%016llx\n",

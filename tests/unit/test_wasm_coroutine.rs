@@ -237,8 +237,8 @@ fn callbacks_are_deferred_even_on_a_settled_future() {
     assert_eq!(unsafe { (*child).poll() }, Some(Ok(55)));
 
     // Registering on an ALREADY-SETTLED future must still defer. Every other
-    // case registers before settling, so this branch went untested in every
-    // suite until the AssemblyScript port exposed it.
+    // case registers before settling, so this is the only one covering that
+    // branch.
     let mut settled = Future::new();
     let mut settled_promise = Promise::new();
     settled.init(&mut settled_promise);
@@ -284,8 +284,9 @@ unsafe extern "C" fn many_waiter(user: *mut c_void, out: *mut usize) -> i32 {
     }
 }
 
-/// The runtime splices a whole wait list at settle time; with one waiter that
-/// loop body runs once with next == NULL, so it was effectively untested.
+/// The runtime splices a whole wait list at settle time; with a single waiter
+/// that loop body runs once with next == NULL, so several waiters on one future
+/// are what exercises it.
 #[test]
 fn one_settle_wakes_every_waiter() {
     for failing in 0..2 {

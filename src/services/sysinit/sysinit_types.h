@@ -6,7 +6,8 @@
 
 /* Max retries for a single PROC_IPC_SPAWN_PATH before giving up. */
 #define SYSINIT_MAX_SPAWN_ATTEMPTS 128u
-/* Timeout in ms passed to wasmos_sys_spawn_path_sync for 'start' commands. */
+/* Timeout in ms sent as PROC_IPC_SPAWN_PATH_SYNC arg3 for 'start' commands: how
+ * long the PM waits for the child's PROC_IPC_NOTIFY_READY before erroring. */
 #define SYSINIT_START_TIMEOUT_MS 30000
 /* Script file read at boot to drive the service startup sequence. */
 #define SYSINIT_SCRIPT_PATH "/boot/system/sysinit.rc"

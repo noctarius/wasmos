@@ -122,6 +122,10 @@ static int flush_shared_buffer_ptr(int32_t shmem_id, uint8_t* base, int32_t stri
     return 0;
 }
 
+/* GFX_IPC_ALLOC_SHARED_BUFFER always reports a packed stride of width * 4 bytes,
+ * so the painters below recompute it and ignore the reported stride_bytes. A
+ * compositor that ever returns a padded stride breaks that assumption and these
+ * helpers would have to index by stride_bytes instead. */
 static int fill_pattern(uint8_t* base, int32_t width, int32_t height, int32_t stride_bytes,
                         uint32_t phase) {
     (void)stride_bytes;
@@ -207,9 +211,10 @@ static int send_gfx(int32_t gfx_ep, int32_t reply_ep, int32_t req_id, int32_t op
     return 0;
 }
 
-/* Drain one server-pushed GFX_IPC_PUSH_EVENT from a window's event endpoint
- * into `out` (arg1=event_type, arg2=window_id, arg3=payload — the layout the
- * old POLL reply used). Returns 0 if an event was drained, -1 if none pending. */
+/* Drain one compositor-pushed GFX_IPC_PUSH_EVENT from a window's event endpoint
+ * into `out`, where arg1 is the GFX_EVENT_* type, arg2 the window id and arg3
+ * the per-event payload. Never blocks: returns 0 once an event has been drained,
+ * -1 when the endpoint is empty or the message is not a pushed event. */
 static int recv_gfx_event(int32_t event_ep, gfx_reply_t* out) {
     if (wasmos_ipc_drain(event_ep) <= 0) {
         return -1;
@@ -265,7 +270,8 @@ static int poll_gfx_events_once(int32_t event_ep, int32_t* out_close_window_id) 
         puts("[test] gfx smoke event focus-lost");
 #endif
     } else if (ev.arg1 == GFX_EVENT_POINTER) {
-        /* keep pointer events silent to reduce log noise during compositor debug */
+        /* Pointer events arrive per motion sample; logging them would bury the
+         * events the test actually asserts on. */
     } else if (ev.arg1 == GFX_EVENT_CLOSE_REQUEST) {
         puts("[test] gfx smoke event close-request");
         if (out_close_window_id) {
@@ -704,9 +710,10 @@ int main(int argc, char** argv) {
                     }
                 } else if (ev.arg1 == GFX_EVENT_KEY) {
                     /* Echo key events to serial so keyboard-delivery tests have
-                     * an observable channel in the steady-state wait loop (the
-                     * animation-phase poll_gfx_events_once path is long gone by
-                     * the time a test can inject keys). */
+                     * an observable channel. This loop is the only place that
+                     * can carry it: the animation phase, and with it
+                     * poll_gfx_events_once, has already finished by the time a
+                     * test is able to inject keys. */
                     char kmsg[96];
                     int kn =
                         snprintf(kmsg, sizeof(kmsg), "[test] gfx smoke event key sc=%d flags=%d\n",

@@ -598,7 +598,7 @@ function testReceive(): i32 {
     if (woken === null || woken.arg0 != 95) return 1308;
 
     /* A default handler consumes what receive() would have returned; the two
-     * are the same slot, and an indefinite receive then cannot make progress. */
+     * are the same slot, so receive() then has nothing left to hand back. */
     const fallback = new Recorder();
     loop.setDefault(fallback);
     plant(SELF, TYPE_OTHER, 0, PEER, 96, 0, 0, 0);
@@ -655,7 +655,7 @@ function testReceiveCannotPark(): i32 {
 
 // ---------------------------------------------------------------- case 16
 
-/** armMessage() is receive() for a coroutine: a future settled by the next
+/** nextMessage() is receive() for a coroutine: a future settled by the next
  * message nothing else claims. */
 function testMessageFuture(): i32 {
     const loop = freshLoop();
@@ -708,9 +708,10 @@ function testMessageFuture(): i32 {
 
 // ---------------------------------------------------------------- case 17
 
-/** A coroutine parked on the message future must survive a second armMessage.
- * Re-initialising an armed future clears its wait list, stranding the waiter --
- * invisible unless something is actually parked on it. */
+/** A coroutine parked on the message future must survive a second
+ * nextMessage(). Re-arming an already-armed future would re-initialise it and
+ * clear its wait list, stranding the waiter -- invisible unless something is
+ * actually parked on it. */
 class AwaitingTask extends Task {
     resumes: i32 = 0;
     arg0: i32 = -1;

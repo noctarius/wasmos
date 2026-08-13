@@ -92,9 +92,15 @@ typedef struct {
  * try_lock returns 0=acquired, 1=contended (caller must retry), <0=error.
  * unlock returns 0=released, <0=error (e.g. not the owner).
  *
- * NB: these are NOT WASM host calls — they resolve to driver_api vtable entries
- * (native_driver.c) on the native build via the WASMOS_WASM_IMPORT no-op shim,
- * so they are hand-declared here rather than in the IDL.
+ * Declared here rather than in abi/hostcalls.yaml, and exempted from the
+ * --verify-source client guard by C_CLIENT_ALLOWLIST in
+ * scripts/gen_abi_hostcalls.py. Only wasmos/mutex.h calls them, and only under
+ * __wasm__; the x86_64 native path uses the int-0x80 syscalls
+ * (wasmos_sys_mutex_try_lock/unlock) and native drivers use the
+ * mutex_try_lock/mutex_unlock entries of the wasmos_driver_api_t vtable.
+ * FIXME(user-mutex-import): no kernel link table exports "wasmos"."mutex_try_lock"
+ * or "mutex_unlock", so a WASM guest that actually calls these fails to
+ * instantiate on an unresolved import.
  * TODO(user-mutex-futex): migrate the contended path onto futex_wait/futex_wake
  * so user mutexes stop yield-spinning (see wasmos/mutex.h). */
 extern int32_t wasmos_mutex_try_lock_host(int32_t mutex_ptr)

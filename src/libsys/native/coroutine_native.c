@@ -112,8 +112,6 @@ static void coroutine_trampoline(void) {
      * stack, so no per-stack bootstrap object is needed. */
     __asm__ volatile("" : : : "memory");
     runtime = coroutine_current_runtime();
-    /* The current coroutine is recoverable through the scheduler's active
-     * runtime and entry record. */
     coroutine = runtime ? runtime->current : NULL;
     if (!coroutine || !coroutine->entry) {
         __builtin_trap();

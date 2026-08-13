@@ -28,8 +28,10 @@ typedef struct {
  * `len` bytes; NUL-termination not required). Returns 1 and fills *out on
  * success, 0 otherwise. For a static stanza, `address`/`netmask`/`gateway`
  * lines up to the next `iface` or EOF fill out->addr/mask/gw; an `address
- * a.b.c.d/prefix` form also derives the mask when no `netmask` line is given
- * (default mask /24, default gateway 0.0.0.0). */
+ * a.b.c.d/prefix` form also derives the mask when no `netmask` line precedes it
+ * (default mask /24, default gateway 0.0.0.0). A `dns-nameservers`/
+ * `dns-nameserver` line inside either stanza kind fills out->dns/dns_count,
+ * keeping at most NET_IFCFG_MAX_DNS parseable addresses. */
 int net_ifcfg_parse(const char* text, uint32_t len, net_ifcfg_t* out);
 
 #endif /* NET_STACK_IFCFG_H */

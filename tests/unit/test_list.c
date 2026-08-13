@@ -16,6 +16,8 @@ static int test_init_validation(void) {
         return __LINE__;
     if (list_init(&list, sizeof(test_entry_t), (list_impl_t)99, 0) == 0)
         return __LINE__;
+    /* The chunk capacity is what LIST_IMPL_ARRAY_CHUNK sizes its chunks by, so
+     * zero is refused for that backend while LIST_IMPL_LINKED ignores it. */
     if (list_init(&list, sizeof(test_entry_t), LIST_IMPL_ARRAY_CHUNK, 0) == 0)
         return __LINE__;
     return 0;

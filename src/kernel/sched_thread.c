@@ -9,21 +9,17 @@
 /*
  * sched_thread.c — per-CPU O(1) priority scheduler.
  *
- * One cpu_sched_t lives here (single-CPU; SMP would use an array).
- * Ready threads are held in SCHED_PRIO_MAX FIFO lists, one per priority.
- * The ready_bitmap has bit i set iff ready_list[i] is non-empty, enabling
- * O(1) highest-ready lookup via a small lookup table (ffs_table).
- */
-
-/*
- * Anti-starvation: after this many consecutive dispatches from a given
- * priority band (or higher), the scheduler yields one slot to the next
- * occupied lower-priority band.  This prevents high-priority workers from
- * completely starving lower-priority WASM services they interact with.
+ * One cpu_sched_t per CPU, embedded in g_cpus[] (smp.h) and reached through
+ * cpu_sched(); each is guarded by its own cs->lock.  Within a queue, ready
+ * threads are held in SCHED_PRIO_MAX FIFO lists, one per priority, and
+ * ready_bitmap tracks which lists are non-empty so the highest-ready lookup is
+ * a single ffs_table index.  The bit is authoritative only in the direction
+ * "clear implies empty": a bit can transiently outlive its list, which
+ * cpu_sched_pick_next detects and clears.
  */
 
 /* ffs_table[bitmap] = index of lowest set bit (highest priority), or 0xFF.
- * Covers all 128 valid 7-bit bitmap values. */
+ * Covers all 128 values of the SCHED_PRIO_MAX (7) bit bitmap. */
 static const uint8_t ffs_table[128] = {
     0xFF, 0, 1, 0, 2, 0, 1, 0, 3, 0, 1, 0, 2, 0, 1, 0, 4, 0, 1, 0, 2, 0, 1, 0, 3, 0,
     1,    0, 2, 0, 1, 0, 5, 0, 1, 0, 2, 0, 1, 0, 3, 0, 1, 0, 2, 0, 1, 0, 4, 0, 1, 0,
@@ -34,14 +30,14 @@ static const uint8_t ffs_table[128] = {
 
 static uint32_t g_sched_debug[SCHED_DEBUG_EVENT_COUNT];
 
-/* Placement round-robin cursors.  File scope rather than function statics so
- * sched_debug_reset can re-seed them: as locals they made every tie-breaking
- * test depend on how many placements every earlier test had performed. */
+/* Placement round-robin cursors, rotating the tie-break when several CPUs carry
+ * the same load.  File scope rather than function statics so sched_debug_reset
+ * can re-seed them and a placement test is not skewed by earlier placements. */
 static uint32_t g_spawn_rr = 0;
 static uint32_t g_affine_rr = 0;
 
-/* Returns the count BEFORE this hit, so callers keep the (n & (n-1)) == 0
- * power-of-two rate limit they already used with a local static. */
+/* Returns the count BEFORE this hit, so a caller can rate-limit with the
+ * (n & (n-1)) == 0 power-of-two test and still report the first occurrence. */
 static uint32_t sched_debug_bump(sched_debug_event_t ev) {
     return __atomic_fetch_add(&g_sched_debug[ev], 1u, __ATOMIC_RELAXED);
 }
@@ -203,9 +199,8 @@ static void cpu_sched_unlink_locked(cpu_sched_t* cs, thread_t* t) {
     /* DIAGNOSTIC: after list_head_del the band must no longer reach this node.
      * If the head still points at it, this queue's chain was spliced through a
      * node whose neighbours belong to a different list -- the ghost that gets
-     * re-picked on every dispatch.  Repair the head so the CPU is not wedged,
-     * and report it: this fires at the moment of corruption, not minutes later
-     * at the dispatch site. */
+     * re-picked on every dispatch.  Reported at the moment of corruption rather
+     * than minutes later at the dispatch site. */
     if (cs->ready_list[prio].next == &t->sched_node) {
         uint32_t gn = sched_debug_bump(SCHED_DEBUG_GHOST_HEAD);
         if ((gn & (gn - 1u)) == 0u) {
@@ -215,9 +210,9 @@ static void cpu_sched_unlink_locked(cpu_sched_t* cs, thread_t* t) {
                                    (unsigned)prio, (void*)cs, (unsigned)cs->thread_count[prio],
                                    (unsigned)(gn + 1u));
         }
-        /* Report only.  Re-initialising the head here drops every other thread
-         * in the band on the floor, which faults in list_head_add_tail shortly
-         * after; the livelock is the lesser evil while diagnosing. */
+        /* Report only, deliberately: re-initialising the head here would drop
+         * every other thread in the band on the floor and fault in
+         * list_head_add_tail shortly after.  The livelock is the lesser evil. */
     }
     if (cs->thread_count[prio] > 0) {
         cs->thread_count[prio]--;
@@ -523,14 +518,16 @@ thread_t* cpu_sched_pick_next(cpu_sched_t* cs) {
     }
     cs->last_dispatched_prio = (uint8_t)prio;
 
-    /* Lazy per-CPU sweep: walk this band and DROP any node whose thread is no
-     * longer READY (reaped -> UNUSED, or tombstoned -> ZOMBIE).  A thread is
-     * only ever marked non-READY while it is off this queue, but a reap can
-     * reset/zombie a still-enqueued sibling; dropping it here (under this CPU's
-     * own cs->lock) is the sole mechanism needed to keep such nodes off the
-     * dispatcher — no cross-CPU removal, no reaper touching the queue.  Returns
-     * the first genuinely-READY thread, or idle if the band held only stale
-     * nodes. */
+    /* Lazy per-CPU sweep: unlink each node in turn and DROP the terminal ones --
+     * tid == 0, reaped (UNUSED) or tombstoned (ZOMBIE).  Those are the states a
+     * reap can impose on a still-enqueued sibling; dropping them here (under
+     * this CPU's own cs->lock) is the sole mechanism needed to keep such nodes
+     * off the dispatcher — no cross-CPU removal, no reaper touching the queue.
+     * The first non-terminal thread is returned, already unlinked.  A READY
+     * check is deliberately NOT made here: process_schedule_once_impl performs
+     * it (and reports the violation with the caller's context) so a thread that
+     * merely raced a wake is not silently dropped.  Falls back to idle if the
+     * band held only terminal nodes. */
     /* Sweep in priority order from `prio` down.  A band that turns out to hold
      * only stale nodes must NOT send us to idle while a lower band has runnable
      * work: the sweep drops those nodes and clears the band's bit, so recomputing
@@ -575,8 +572,9 @@ void sched_wake_thread(thread_t* t) {
         return;
     }
 
-    /* Promote first, then claim: sched_wake_claim_enqueue (thread.h) publishes
-     * the wake half of the handshake before reading the completion path's. */
+    /* Claim before promoting.  sched_wake_claim_enqueue (thread.h) publishes the
+     * wake half of the Dekker handshake before reading the completion path's, so
+     * exactly one of the two sides ends up owning the enqueue. */
     if (!sched_wake_claim_enqueue(t)) {
         /* Completion path owns the enqueue; leave it something to enqueue. */
         if (sched_mark_ready_if_live(t)) {
@@ -618,26 +616,19 @@ void sched_wake_thread(thread_t* t) {
 void sched_thread_init(thread_t* t, sched_prio_t prio) {
     t->ctx_canary_pre = PROCESS_CTX_CANARY_VALUE;
     t->ctx_canary_post = PROCESS_CTX_CANARY_VALUE;
-    /* The new priority is adopted AFTER the unlink below, not before.
-     * cpu_sched_remove_thread accounts the unlink against t->sched_prio, so
-     * overwriting it first drains the wrong band: the node leaves the old list
-     * (list_head_del works regardless) while the new band's counter and ready
-     * bit are adjusted instead.  The old band is then left with its bit set over
-     * an empty list, which cpu_sched_highest_prio keeps selecting forever while
-     * the sweep finds nothing -- the CPU returns idle on every dispatch with
-     * runnable work outstanding in lower bands.  Same shape as the storm,
-     * reached through the path that exists to prevent corruption. */
-    /* A slot handed back by the allocator must not still be linked into a ready
-     * queue: re-initialising the node here would self-link it while that queue
-     * still points at it, splicing the list through a node two owners now
-     * mutate.  thread_reset_slot -> cpu_sched_remove_thread guarantees the
-     * unlink happened; clearing the claim keeps the fresh incarnation
-     * enqueueable. */
-    /* DIAGNOSTIC: re-initialising sched_node here while the thread is still
-     * linked into a ready queue self-links the node under the queue's nose --
-     * the head keeps pointing at it, and the band is then spliced through a node
-     * with two owners (the "ghost head" report).  Name the call site to identify
-     * WHICH spawn path handed back a still-queued thread. */
+    /* DIAGNOSTIC: a slot handed back by the allocator must not still be linked
+     * into a ready queue.  Re-initialising sched_node while it is linked
+     * self-links the node under the queue's nose -- the head keeps pointing at
+     * it, and the band is then spliced through a node with two owners (the
+     * "ghost head" report).  thread_reset_slot -> cpu_sched_remove_thread is
+     * supposed to guarantee the unlink; the return address names WHICH spawn
+     * path handed back a still-queued thread when it did not.
+     *
+     * The recovery unlink and the t->sched_prio store below are ordered:
+     * cpu_sched_remove_thread drains the band recorded in t->rq_prio, so the
+     * counters stay correct either way, but leaving sched_prio alone until the
+     * node is off every queue keeps the two fields consistent for anything that
+     * reads them concurrently. */
     if (!list_head_empty(&t->sched_node) || __atomic_load_n(&t->on_rq, __ATOMIC_ACQUIRE)) {
         uint32_t in = sched_debug_bump(SCHED_DEBUG_INIT_ON_QUEUED);
         if ((in & (in - 1u)) == 0u) {
@@ -649,8 +640,7 @@ void sched_thread_init(thread_t* t, sched_prio_t prio) {
                 (unsigned)(!list_head_empty(&t->sched_node)),
                 (unsigned long long)(uintptr_t)__builtin_return_address(0), (unsigned)(in + 1u));
         }
-        /* Unlink properly instead of orphaning the node under the queue.  Still
-         * carrying the OLD priority, so the correct band is drained. */
+        /* Unlink properly instead of orphaning the node under the queue. */
         cpu_sched_remove_thread(t);
     }
     t->sched_prio = (uint8_t)prio;
@@ -784,7 +774,12 @@ static thread_t* cpu_sched_steal_pick(cpu_sched_t* cs, uint32_t to_cpu) {
 
 struct thread* cpu_sched_try_steal(uint32_t my_cpu_id) {
     /* Start scan from the next CPU so each AP preferentially targets a
-     * different victim, preventing all APs from racing over CPU 0's queue. */
+     * different victim, preventing all APs from racing over CPU 0's queue.
+     *
+     * FIXME: this loop bound and modulus use g_cpu_count raw, unlike the
+     * placement paths which go through cpu_sched_usable_cpus().  A MADT-reported
+     * count of 0 divides by zero here, and one above WASMOS_MAX_CPUS indexes
+     * past g_cpus[]. */
     for (uint32_t n = 1; n < g_cpu_count; n++) {
         uint32_t i = (my_cpu_id + n) % g_cpu_count;
         if (i == my_cpu_id) {

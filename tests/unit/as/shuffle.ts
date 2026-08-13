@@ -7,8 +7,9 @@
  *
  * The seed comes from the host harness (there is no clock here) and is reported
  * back on failure, so a failing order replays with WASMOS_TEST_SEED. The
- * generator is the same splitmix64 the C helper uses, so a seed means the same
- * order in both.
+ * generator is splitmix64, as in the C helper, but chains its state through the
+ * mixed output rather than through the raw counter: a seed reproduces an order
+ * within this suite, not the C suite's order for the same seed.
  */
 
 @external("harness", "seed") declare function harnessSeed(): i64;

@@ -1,6 +1,7 @@
 /* sha256.h - Minimal SHA-256 implementation for WASM drivers and services.
- * Used for integrity checking of loaded modules and signing metadata in
- * .wap package headers.  Freestanding; no external dependencies. */
+ * Freestanding; no external dependencies.  The only in-tree consumer is
+ * device-manager, which derives a stable short id from a device's canonical
+ * name via wasmos_sha256_hex16_prefix(). */
 #ifndef WASMOS_LIBSYS_SHA256_H
 #define WASMOS_LIBSYS_SHA256_H
 
@@ -134,7 +135,7 @@ static inline void wasmos_sha256_final(wasmos_sha256_ctx_t* ctx, uint8_t hash[32
 }
 
 /* Compute SHA-256(in) and write the first 16 hex characters into out[0..15],
- * NUL-terminated at out[16].  Used as a stable compact identifier for modules. */
+ * NUL-terminated at out[16].  Yields a stable compact identifier for a name. */
 static inline void wasmos_sha256_hex16_prefix(const char* in, char out[17]) {
     static const char* hex = "0123456789abcdef";
     wasmos_sha256_ctx_t ctx;

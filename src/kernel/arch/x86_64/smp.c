@@ -145,7 +145,8 @@ void smp_init(void) {
  * smp_cpus_up() — bring up all APs discovered in g_cpus[1..g_cpu_count-1].
  *
  * For each AP:
- *   1. Allocate static interrupt stacks and populate the AP's cpu_local slot.
+ *   1. Hand it its slice of the static interrupt stacks and populate its
+ *      cpu_local slot.
  *   2. Write the data slots and copy the trampoline to physical 0x1000.
  *   3. Send INIT IPI → SIPI → SIPI (Intel SDM INIT-SIPI-SIPI protocol).
  *   4. Busy-wait for ap->started to be set (with a timeout).
@@ -164,7 +165,7 @@ void smp_cpus_up(void) {
     for (uint32_t i = 1u; i < g_cpu_count; i++) {
         cpu_local_t* ap = &g_cpus[i];
 
-        /* Allocate static stacks (in higher-half kernel BSS). */
+        /* This AP's slice of the static stacks (higher-half kernel BSS). */
         uint64_t ist1_top = addr_cast(uint64_t, g_ap_ist_stacks[i - 1u] + CPU_IST_STACK_SIZE);
         uint64_t rsp0_top = addr_cast(uint64_t, g_ap_rsp0_stacks[i - 1u] + CPU_IST_STACK_SIZE);
 
@@ -183,7 +184,9 @@ void smp_cpus_up(void) {
         lapic_send_sipi(ap->apic_id, TRAMP_SIPI_VECTOR);
         lapic_send_sipi(ap->apic_id, TRAMP_SIPI_VECTOR);
 
-        /* Wait for the AP to signal that it is fully initialised. */
+        /* Wait for the AP to signal that it is fully initialised. The bound is a
+         * spin count, not a duration: an AP that never arrives is reported and
+         * left behind rather than wedging the boot. */
         uint32_t timeout = 50000000u;
         while (!__atomic_load_n(&ap->started, __ATOMIC_ACQUIRE) && timeout-- > 0u) {
             __asm__ volatile("pause");

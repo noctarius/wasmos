@@ -3,7 +3,9 @@
 #include "ctype.h"
 #include <stdint.h>
 
-/* Copy 8 bytes at once using uint64_t to hint at wider loads/stores. */
+/* Copy 8 bytes at once through a uint64_t to hint at wider loads/stores. The
+ * forward/backward pair is identical; the direction is the caller's, which
+ * advances or retreats the pointers between calls. */
 static inline void copy8_forward(unsigned char* out, const unsigned char* in) {
     uint64_t v;
     __builtin_memcpy(&v, in, sizeof(v));

@@ -101,9 +101,11 @@ tramp_pm32:
     orl     $(1 << 31), %eax
     movl    %eax, %cr0
 
-    /* Far jump to 64-bit long mode.
-     * AP_GDTR_BASE + (tramp_lm64 - smp_trampoline_start) would also work; the
-     * trampoline sits at TRAMP_BASE, so the same formula applies. */
+    /* Far jump into the 64-bit code segment, which is what actually activates
+     * long mode (EFER.LMA is set by the CR0.PG write above, but CS.L only takes
+     * effect on the next far transfer).  Same address form as the 16->32 jump:
+     * the label offset is relative to smp_trampoline_start, which the BSP copied
+     * to TRAMP_BASE. */
     .byte 0xea
     .long (tramp_lm64 - smp_trampoline_start + TRAMP_BASE)
     .word SEL_KCODE64

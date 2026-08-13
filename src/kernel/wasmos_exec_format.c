@@ -10,6 +10,16 @@ typedef struct __attribute__((packed)) {
     uint16_t header_size;
 } wasmos_exec_wap_header_prefix_t;
 
+/* Whether `blob` starts with a WASMOS-APP container header: right magic, a known
+ * version, and the exact header size that version defines.
+ *
+ * FIXME(wap-v6): WASMOS_EXEC_APP_VERSION and g_header_sizes stop at v5, but
+ * WASMOS_APP_VERSION (src/kernel/include/wasmos_app.h) and the packer
+ * (scripts/make_wasmos_app.c) are at v6 (header_size 76), so every .wap produced
+ * today is rejected here.  That silently downgrades the second classify() in
+ * pm_resolve_spawn_target (process_manager_spawn.c) from WAP to NONE, which
+ * fails broker-delegated spawns with WASMOS_ERR_PROC_SPAWN_BROKER_PLAN. The
+ * table must track WASMOS_APP_VERSION. */
 static int wasmos_exec_is_wap_blob(const uint8_t* blob, uint32_t blob_size) {
     static const uint16_t g_header_sizes[] = {
         0u,  44u, /* v1 */

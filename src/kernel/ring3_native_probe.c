@@ -1,7 +1,15 @@
 /* ring3_native_probe.c - Minimal ring-3 native binary for smoke-testing.
- * Linked as a flat binary (ring3_native_probe.bin) and loaded directly into
- * a ring-3 process by kernel_ring3_probe_runtime.c.  Exercises mutex acquire/
- * release via the int 0x80 syscall gate and exits cleanly. */
+ * Linked as a flat binary (ring3_native_probe.bin, ring3_native.ld) and loaded
+ * directly into a ring-3 process by kernel_ring3_probe_runtime.c.
+ *
+ * Drives one call of every non-destructive int 0x80 syscall the gate exposes --
+ * user mutex, ipc_notify, yield, gettid, thread create/yield/join/detach --
+ * and ignores every result. What is under test is the gate: each number must
+ * return to ring 3, and arguments no real caller would pass (an invalid
+ * endpoint, a null thread entry, tid 0, joining the calling thread) must be
+ * refused rather than taking the kernel down. The getpid loop keeps the process
+ * crossing the gate long enough to be timer-preempted inside it. The probe
+ * itself asserts nothing; reaching thread_exit without a fault is the result. */
 #include <stdint.h>
 #include "wasmos/mutex.h"
 #include "wasmos/syscall_x86_64.h"

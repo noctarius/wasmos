@@ -1,4 +1,5 @@
-/* script.c - .rc script interpreter: start/spawn/exec/wait-svc/echo/export/if */
+/* script.c - .rc script interpreter: if/else/endif plus the start, spawn, exec,
+ * wait-svc, export, set, script, source/., and echo commands. */
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -954,7 +955,8 @@ int wasmos_script_run(wasmos_script_state_t* state, const wasmos_script_ops_t* o
         }
     }
     if (state->total_depth > 0) {
-        /* Unclosed if block — warn but don't error */
+        /* TODO: an `if` left unclosed at end of file is neither reported nor
+         * reset, so a `source`d script leaks its open depth into the parent. */
     }
     fclose(f);
     return 0;

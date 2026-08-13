@@ -2,8 +2,8 @@
 ///
 /// Demonstrates the Zig-idiomatic libui wrapper.  Layout uses libui panels
 /// for vertical stacking and libui "row" (MENU_BAR) components for the
-/// horizontal button grid.  Button colours are driven by bg_color so the
-/// updated button renderer respects per-button theming.
+/// horizontal button grid.  Per-button theming goes through bg_color, which is
+/// the only colour the button renderer reads per component.
 const wasmos = @import("wasmos.zig");
 const libui = @import("libui.zig");
 // ---------------------------------------------------------------------------
@@ -281,7 +281,8 @@ const Calc = struct {
     }
 };
 
-// Float ↔ string: delegate to wasmos.fmt (no std.fmt — avoids memory.fill).
+// Float <-> string goes through wasmos.fmt rather than std.fmt, which drags in
+// far more of the standard library than a freestanding WASMOS-APP wants.
 
 // ---------------------------------------------------------------------------
 // UI constants — dark theme inspired by Windows Calculator
@@ -343,7 +344,8 @@ const layout: [5][4]ButtonDef = .{
 };
 
 // ---------------------------------------------------------------------------
-// Global state (kept minimal — must fit in the 24 KB data budget)
+// Global state. The button callback is a plain C function pointer and cannot
+// capture, so everything it touches has to live at module scope.
 // ---------------------------------------------------------------------------
 
 var g_calc: Calc = undefined;
@@ -415,8 +417,9 @@ pub fn main() u8 {
     // 5 button rows using MENU_BAR horizontal layout.
     // In MENU_BAR layout, children's preferred_h is reinterpreted as their WIDTH.
     // Row preferred_h (in the parent panel) is the button HEIGHT.
-    // Use index-based iteration to avoid Zig copying the [4]ButtonDef row slice
-    // by value (which generates a memory.copy WASM instruction that WARP rejects).
+    // Index-based iteration keeps `layout` addressed through a pointer; a
+    // `for (layout) |row|` capture copies the [4]ButtonDef row by value into a
+    // stack temporary on every iteration, for no benefit here.
     const BTN_W = 64; // button width (as preferred_h in the row)
     const BTN_H = 52; // button height (as preferred_h in the parent panel)
 

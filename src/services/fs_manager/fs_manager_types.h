@@ -18,11 +18,13 @@ typedef struct {
 } fsmgr_client_fd_t;
 
 /* One registered FS backend (e.g. a FAT driver instance).
- * has_meta: non-zero if PCI metadata has been queried for this backend.
- * mount_name: auto-assigned on registration (e.g. "boot", "user"). */
+ * has_meta: non-zero once PCI metadata has been filled in; the PCI fields below
+ * are meaningless while it is 0.
+ * mount_name: defaulted on registration from kind+slot (e.g. "boot", "user"),
+ * then overwritten by the name the backend reports in FSMGR_IPC_BACKEND_INFO. */
 typedef struct {
     uint8_t in_use;
-    uint8_t kind;     /* reserved for future backend type tags */
+    uint8_t kind;     /* FSMGR_BACKEND_BOOT / FSMGR_BACKEND_INIT / other */
     int32_t endpoint; /* IPC endpoint for this backend driver */
     uint8_t slot;     /* slot index in the backend table */
     uint8_t has_meta;
@@ -42,7 +44,10 @@ typedef struct {
  * segments stripped so far during forwarded operations. */
 typedef struct {
     uint8_t in_use;
-    int32_t context_id; /* IPC source endpoint (caller identity) */
+    /* Owning context of the requesting endpoint, so every endpoint a process
+     * uses shares one cwd; falls back to the raw source endpoint id when the
+     * owner cannot be resolved. */
+    int32_t context_id;
     fs_mount_t mount;
     int32_t backend_endpoint; /* -1 when request is at the VFS root */
     uint16_t mount_depth;

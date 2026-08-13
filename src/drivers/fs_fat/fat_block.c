@@ -1,7 +1,9 @@
 /* fat_block.c - single-buffer block-I/O layer.  See fat_block.h.  State is
- * caller-owned (fat_block_t); no globals.  fs_fat always stages through
- * blk->sector; it does no PIO or DMA (that is ata's job).  All transfers are one
- * 512-byte block sector; the buffer is a 1-sector cache tagged by loaded_lba. */
+ * caller-owned (fat_block_t); no globals.  The driver issues no PIO or DMA
+ * itself (that is the block server's job).  Staged transfers are one 512-byte
+ * sector each and blk->sector is a 1-sector cache tagged by loaded_lba; only
+ * fat_block_read_direct moves more than a sector, and it lands in the client's
+ * buffer without touching the cache. */
 #include "fat_block.h"
 #include "wasmos/api.h"
 #include "wasmos_driver_abi.h"
@@ -50,7 +52,12 @@ void fat_block_invalidate(fat_block_t* blk) {
     blk->loaded_lba = FAT_BLOCK_NO_LBA;
 }
 
-/* Submit one 512-byte block transfer.  Returns 0 or -1 (send failure). */
+/* Submit one 512-byte block transfer (count = 1).  Returns 0, or -1 when the
+ * layer is unconfigured, when staging the write into the block buffer failed, or
+ * when the request could not be sent.
+ * TODO: the transfer size is fixed at FAT_SECTOR_SIZE while fat_geom accepts a
+ * BPB of 1024/2048/4096 bytes per sector, so such a volume would stage only the
+ * first 512 bytes of every sector the FAT/directory code then parses in full. */
 static int fat_block_start(fat_block_t* blk, uint32_t lba, int rw) {
     int32_t req_type;
 
@@ -98,6 +105,9 @@ fat_r_t fat_block_read_direct(fat_block_t* blk, uint32_t lba, uint32_t count, in
         blk->direct_pending = 0;
         return FAT_R_DONE;
     }
+    /* FIXME: both FAT_R_ERR paths below leave owner->err at 0, so the reactor
+     * reports the failure as a bare -1 instead of a packed WASMOS_ERR_FS_* code
+     * (fat_send_response in fs_fat.c substitutes -1 when err is unset). */
     if (blk->block_endpoint < 0 || blk->reply_endpoint < 0 || buffer_id < 0 || count == 0 ||
         count > WASMOS_BLOCK_ZC_COUNT_MASK) {
         return FAT_R_ERR;

@@ -1,7 +1,8 @@
-/* memory_service.c - Userspace memory allocation service client stub.
- * Wraps IPC calls to the in-kernel memory service endpoint so that WASM
- * host-call handlers can request heap pages without touching the physical
- * allocator directly.  Retries up to MEM_SVC_SEND_RETRY_LIMIT times. */
+/* memory_service.c - In-kernel page-fault service thread.
+ * Owns an IPC endpoint that accepts IPC_MEM_FAULT requests, resolves each
+ * through mm_handle_page_fault(), and answers with IPC_MEM_FAULT_REPLY carrying
+ * the status and the mapped base.  The reply send is retried up to
+ * MEM_SVC_SEND_RETRY_LIMIT times while the peer queue is full. */
 #include "memory_service.h"
 #include "memory.h"
 
@@ -96,16 +97,12 @@ int memory_service_serve_one(void) {
 
 int memory_service_handle_fault_ipc(uint32_t fault_context_id, uint64_t fault_addr,
                                     uint64_t error_code) {
-    /* Resolve the fault directly rather than round-tripping through the
-     * mem-service IPC endpoint.  memory_service_handle_request() only ever
-     * calls mm_handle_page_fault() for IPC_MEM_FAULT, and that endpoint is also
-     * drained by the mem-service worker thread.  Under SMP the worker (on
-     * another CPU) can consume the just-sent IPC_MEM_FAULT before this inline
-     * recv does, so the inline path sees IPC_EMPTY and reports the fault as
-     * unhandled — turning a recoverable demand-fault into a kernel panic
-     * (observed in the pagefault selftest on wasm3+SMP).  Calling
-     * mm_handle_page_fault() directly removes both the indirection and the
-     * dual-consumer race; it is an in-kernel routine, so no IPC is needed. */
+    /* Resolves the fault in-line instead of round-tripping through the
+     * mem-service endpoint, which the worker thread also drains: under SMP the
+     * worker can consume the just-sent IPC_MEM_FAULT first, leaving an inline
+     * receive with IPC_EMPTY and a recoverable demand fault reported as
+     * unhandled.  mm_handle_page_fault() is an in-kernel routine and is all the
+     * request handler would have called anyway, so no IPC is involved. */
     uint64_t mapped_base = 0;
     return mm_handle_page_fault(fault_context_id, fault_addr, error_code, &mapped_base);
 }

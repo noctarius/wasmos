@@ -1,7 +1,7 @@
 /* wamos_script_broker - a real subsystem broker for shebang (`#!`) scripts.
  *
- * Unlike the earlier hardcoded smoke fixture, this broker derives its spawn
- * plan from the guest file's contents: it reads the `#!<interpreter>` line from
+ * The broker derives its spawn plan from the guest file's contents rather than
+ * from any fixed mapping: it reads the `#!<interpreter>` line from
  * the guest blob PM lent it, maps the interpreter name to a known host `.wap`
  * executor, and returns a WAP_PATH plan that launches that executor with the
  * guest script path as its argv.  PM then reloads the executor and runs it.
@@ -153,8 +153,8 @@ static int32_t script_register(int32_t proc_endpoint, int32_t broker_endpoint) {
 
 int32_t initialize(int32_t proc_endpoint, int32_t ignored_arg1, int32_t ignored_arg2,
                    int32_t ignored_arg3) {
-    /* Keep the fixed 4-slot WASM service entry ABI; startup values now come
-     * from the spawn-info contract instead of entry args. */
+    /* The 4-slot WASM service entry ABI is fixed, but the entry args carry
+     * nothing: startup values come from the spawn-info contract. */
     (void)ignored_arg1;
     (void)ignored_arg2;
     (void)ignored_arg3;

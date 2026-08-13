@@ -21,7 +21,9 @@ uint32_t wasmos_startup_module_count(void);
 uint32_t wasmos_startup_module_index(void);
 
 /* Copy the NUL-terminated argv blob into dst (cap includes the NUL). Returns the
- * number of bytes written excluding the NUL. */
+ * number of bytes written excluding the NUL. The blob is captured once at first
+ * access and truncated to 255 bytes there (WASMOS_STARTUP_ARGS_MAX in
+ * spawn_info.c), so a longer command line is cut short for every caller. */
 uint32_t wasmos_startup_args(char* dst, uint32_t cap);
 
 #ifdef __cplusplus

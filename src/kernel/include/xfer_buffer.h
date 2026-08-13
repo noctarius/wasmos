@@ -30,7 +30,9 @@ extern "C" {
  * <li>Ownership may also be transferred. After transfer, the recipient becomes
  *     the new owner and the previous owner is no longer the owner.</li>
  * <li>Only the current owner may destroy or release the buffer object itself.
- *     Borrowers release borrow handles; they never destroy the object.</li>
+ *     Borrowers release borrow handles; they never destroy the object.
+ *     Destroying the object cascade-revokes every borrow of it, so borrows
+ *     never outlive their object.</li>
  * </ul>
  *
  * <p>Kind rules:
@@ -66,14 +68,19 @@ extern "C" {
 #define BUFFER_BORROW_READ 0x1u
 #define BUFFER_BORROW_WRITE 0x2u
 
-/* Result codes are the packed xfer_buffer domain in abi/errors.yaml:
- * WASMOS_ERR_NONE (0) on success, else a negative
- * WASMOS_ERR_XFER_BUFFER_* naming the specific failure. */
+/* Every entry point below that returns a status uses the packed xfer_buffer
+ * domain in abi/errors.yaml: WASMOS_ERR_NONE (0) on success, else a negative
+ * WASMOS_ERR_XFER_BUFFER_* naming the specific failure. The two predicates
+ * (xfer_buffer_can_access, xfer_buffer_same_object) return 1/0 instead, and
+ * xfer_buffer_size/xfer_buffer_object_phys return a value with 0 meaning
+ * "unknown". */
 
 /**
  * Stable descriptor of a buffer object, independent of its current owner or
- * borrow graph. {@code size_bytes} is the intrinsic capacity of the object and
- * the upper bound for borrow access, transfers, and DMA subranges.
+ * borrow graph. {@code size_bytes} is this object's own capacity, fixed at
+ * acquire time, and the upper bound for borrow access, transfers, and DMA
+ * subranges. It is not the kind's capacity: a TRANSFER object is right-sized to
+ * the requested minimum, rounded up to a whole number of pages.
  */
 typedef struct {
     uint32_t kind;
@@ -120,12 +127,20 @@ typedef struct {
 } xfer_buffer_dma_mapping_t;
 
 /**
- * Intrinsic capacity of a buffer kind in bytes, or 0 for unknown kinds.
+ * Conventional size of a buffer kind in bytes, or 0 for unknown kinds. For
+ * {@code BUFFER_KIND_FRAMEBUFFER} this is the hardware framebuffer's size and
+ * therefore also its hard bound. For {@code BUFFER_KIND_TRANSFER} it is the
+ * default chunk size callers use for bulk transfers, not the acquire bound: a
+ * single TRANSFER object may be acquired larger than this, up to the
+ * subsystem's own maximum.
  */
 uint32_t xfer_buffer_size(uint32_t kind);
 
 /**
- * Acquire or create a buffer object owned by a context.
+ * Acquire or create a buffer object owned by a context. The resulting object's
+ * {@code size_bytes} is at least {@code minimum_size}: a TRANSFER object is
+ * rounded up to a page multiple, a FRAMEBUFFER object always spans the whole
+ * hardware framebuffer.
  *
  * @return {@code WASMOS_ERR_NONE} on success. On failure, one of:
  *
@@ -137,7 +152,9 @@ uint32_t xfer_buffer_size(uint32_t kind);
  *     zero.</li>
  * <li>{@code WASMOS_ERR_XFER_BUFFER_INVALID_SIZE} - {@code minimum_size} is zero.</li>
  * <li>{@code WASMOS_ERR_XFER_BUFFER_CAPACITY_EXCEEDED} - {@code minimum_size} exceeds
- *     the kind's intrinsic capacity.</li>
+ *     the kind's maximum: the hardware framebuffer's size for FRAMEBUFFER, the
+ *     subsystem's per-object TRANSFER bound otherwise. That bound is larger than
+ *     the size {@code xfer_buffer_size()} reports.</li>
  * <li>{@code WASMOS_ERR_XFER_BUFFER_NO_BACKING} - the kind has no capacity available
  *     or no physical backing could be obtained for the object.</li>
  * <li>{@code WASMOS_ERR_XFER_BUFFER_INTERNAL} - the object registry could not be
@@ -167,7 +184,12 @@ int xfer_buffer_get_owned(const xfer_buffer_t* buffer, uint32_t context_id,
                           xfer_buffer_owner_t* out_owner);
 
 /**
- * Destroy an owned buffer object. Only the current owner may destroy it.
+ * Destroy an owned buffer object and free its backing. Only the current owner
+ * may destroy it. Active borrows do not block the destroy: the owner holds the
+ * lifecycle, so release cascade-revokes the object's whole borrow tree and
+ * clears the DMA state attached to each revoked borrow. Borrowers are left
+ * holding stale handles that subsequently fail with
+ * {@code WASMOS_ERR_XFER_BUFFER_INACTIVE_BORROW}.
  *
  * @return {@code WASMOS_ERR_NONE} on success. On failure, one of:
  *
@@ -177,10 +199,8 @@ int xfer_buffer_get_owned(const xfer_buffer_t* buffer, uint32_t context_id,
  *     already-destroyed binding).</li>
  * <li>{@code WASMOS_ERR_XFER_BUFFER_NOT_OWNER} - the binding does not match the
  *     object's current owner (for example a stale pre-transfer owner).</li>
- * <li>{@code WASMOS_ERR_XFER_BUFFER_ACTIVE_BORROWS} - the object still has one or more
- *     active borrows; release those first.</li>
  * <li>{@code WASMOS_ERR_XFER_BUFFER_DMA_MAPPED} - owner-side DMA is still mapped on the
- *     object; unmap it first.</li>
+ *     object; unmap it first. Only owner-side DMA blocks release.</li>
  * </ul>
  */
 int xfer_buffer_release_owned(const xfer_buffer_owner_t* owner);

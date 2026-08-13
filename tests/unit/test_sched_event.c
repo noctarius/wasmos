@@ -1,10 +1,10 @@
 /* test_sched_event.c — host tests for the REAL sched_event.c.
  *
- * Until now sched_event.c had no host coverage at all, and the in-kernel test
- * hand-inlines the wait-list manipulation rather than calling into the file --
- * so those tests would pass unchanged if sched_event.c were deleted. This links
- * the real thing and stubs only what it reaches outside itself: the timer, the
- * thread table, and the two scheduler entry points.
+ * The in-kernel selftest (src/kernel/kernel_sched_selftest_runtime.c) cannot
+ * call sched_event_wait -- it yields to the scheduler -- so it hand-inlines the
+ * registration side and only drives the wake side of this file. This links the
+ * real sched_event.c and stubs only what it reaches outside itself: the timer,
+ * the thread table, and the two scheduler entry points.
  *
  * Locking contract mirrored from the header: sched_event_wait is entered with
  * ev->lock HELD and unlocks it; wake_one/wake_all/abort_all are called with it
@@ -306,7 +306,13 @@ static void test_arm_zero_is_coerced_to_one(void) {
     block_on(&ev, t, 0 + 0); /* timeout_ms == 0 means "no timeout" */
     CHECK(t->sched_timeout_tick == 0, "a zero timeout arms nothing at all");
 
-    /* A deadline that computes to 0 must become 1, since 0 encodes "unarmed". */
+    /* sched_timeout_arm coerces a computed deadline of 0 to 1, because 0 encodes
+     * "unarmed". That coercion is not reachable through sched_event_wait: a zero
+     * timeout_ms skips the arm entirely, and any non-zero one yields a deadline
+     * above 0. FIXME: the coercion therefore has no coverage here.
+     *
+     * What this second block does assert is that the skip is unconditional, not
+     * dependent on the value timer_ticks happens to return. */
     thread_t* u = mk();
     g_now = 0;
     block_on(&ev, u, 0);

@@ -1,6 +1,14 @@
-/* physmem.c - Bitmap-based physical page frame allocator.
- * Derives the free-page bitmap from the UEFI EfiConventionalMemory regions in
- * boot_info.  pfa_pin_pages() marks ACPI tables and kernel image as reserved. */
+/* physmem.c - Physical page frame allocator.
+ *
+ * Two structures, not one bitmap: g_ranges is a sorted list of FREE extents
+ * (allocation carves from it, freeing merges back into it), and g_refcount is a
+ * per-frame byte reference count used to catch double frees and to let several
+ * owners pin the same frame.  Both are derived from the UEFI memory map, taking
+ * EfiConventionalMemory plus the boot-services code/data regions the firmware
+ * no longer needs after ExitBootServices (is_usable).  The kernel image and the
+ * AP trampoline page are carved out of the free list by pfa_init; everything the
+ * firmware did not report as usable (ACPI tables, MMIO, runtime services) is
+ * simply never added. */
 #include "physmem.h"
 #include "paging.h"
 #include "klog.h"
@@ -246,6 +254,8 @@ static int pfa_upgrade_refcount(uint64_t* out_pages, uint64_t* out_alloc_pages) 
         return 0;
     }
 
+    /* One byte of refcount per tracked frame, so the array is needed_pages BYTES
+     * long and occupies that many bytes rounded up to whole frames. */
     uint64_t rc_alloc_pages = (needed_pages + PAGE_SIZE - 1) / PAGE_SIZE;
     if (out_alloc_pages)
         *out_alloc_pages = rc_alloc_pages;
@@ -450,6 +460,11 @@ uint64_t pfa_alloc_pages_above(uint64_t pages, uint64_t min_addr) {
     return 0;
 }
 
+/* Drop one reference to each frame in [base, base+pages).  A frame returns to
+ * the free list only when its count reaches 0, so this doubles as the unpin
+ * operation paired with pfa_pin_pages.  Freeing a frame whose count is already 0
+ * is a bug and panics.  Frames outside the tracked window carry no count and go
+ * straight back to the free list. */
 void pfa_free_pages(uint64_t base, uint64_t pages) {
     if (base == 0 || pages == 0) {
         return;
@@ -485,6 +500,10 @@ void pfa_free_pages(uint64_t base, uint64_t pages) {
     ksync_spinlock_unlock(&g_pfa_lock);
 }
 
+/* Take one additional reference on each frame in [base, base+pages), so the
+ * frame survives until every holder calls pfa_free_pages.  The frames must
+ * already be allocated: pinning a free frame, or overflowing the 8-bit count,
+ * panics.  Frames outside the tracked window are ignored. */
 void pfa_pin_pages(uint64_t base, uint64_t pages) {
     if (base == 0 || pages == 0) {
         return;

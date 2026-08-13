@@ -1,8 +1,14 @@
-/* list.c - Generic intrusive list facade.
- * Dispatches to list_linked.c (singly-linked, unbounded) or
- * list_array_chunk.c (chunk-array, cache-friendly for fixed-size items)
- * depending on the list_t type field.  Both variants share the same
- * list_iter_t cursor so callers are implementation-agnostic. */
+/* list.c - Backend-dispatch facade for list.h.
+ *
+ * Every entry point routes through list->ops, installed by list_init:
+ * LIST_IMPL_LINKED -> list_linked.c, LIST_IMPL_ARRAY_CHUNK ->
+ * list_array_chunk.c. Both backends drive the same list_iter_t cursor, so
+ * callers never see which one is in use.
+ *
+ * A list whose init failed (or that was destroyed) has ops == 0, and every
+ * call below degrades to NULL / -1 rather than faulting. list_first zeroes the
+ * iterator and binds it to the list, so an iterator is only ever valid for the
+ * list it was started on. */
 #include "list.h"
 #include "list_internal.h"
 #include "string.h"

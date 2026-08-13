@@ -1,11 +1,10 @@
 #pragma once
 /* compat/exception — freestanding stub of <exception>
  *
- * Provides std::exception as a minimal base class.  With -fno-exceptions the
- * throw/catch machinery is disabled; this header exists only so WARP code
- * that derives from std::exception compiles.
- *
- * std::terminate() is mapped to an infinite halt loop. */
+ * Provides std::exception as a minimal base class so WARP code that derives
+ * from it compiles.  Throwing works (the WARP translation units build with
+ * -fexceptions); __cxa_throw in warp/cxx_abi.cpp longjmps to the WARP_CALL
+ * checkpoint instead of unwinding. */
 
 extern "C" {
 #include "kpanic.h"
@@ -22,8 +21,8 @@ public:
     virtual const char *what() const noexcept { return "exception"; }
 };
 
-/* std::terminate — called by the ABI when exception handling fails.
- * In the kernel this must never return. */
+/* std::terminate — called by the ABI when exception handling fails.  Panics
+ * (stops every CPU and halts); never returns. */
 [[noreturn]] inline void terminate() noexcept {
     kpanic("cpp_exception_terminate", 0, 0ULL);
 }

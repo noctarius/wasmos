@@ -46,10 +46,13 @@ typedef struct {
 } wasmos_sys_event_loop_t;
 
 /* Caller-owned bridge between one non-blocking IPC intent and a local future.
- * The reply is copied before settlement. reply_status returns zero to resolve
- * or a negative protocol status to reject. Cancellation only stops local
- * reply tracking; transport work may still complete and its late reply is
- * dispatched normally. */
+ * The reply is copied into the record before settlement, so the pointer the
+ * future resolves with stays valid for the record's lifetime. reply_status
+ * returns zero to resolve; any other value rejects, and a non-negative one is
+ * normalised to -1 because a future rejects only with a negative status.
+ * Cancellation only stops local reply tracking; transport work may still
+ * complete, and a late reply then falls through to the loop's type handler or
+ * default handler like any unsolicited message. */
 typedef int32_t (*wasmos_sys_wasm_ipc_future_reply_status_fn)(void* user,
                                                               const wasmos_ipc_message_t* reply);
 
@@ -153,9 +156,12 @@ static inline void wasmos_sys_event_loop_init(wasmos_sys_event_loop_t* loop,
     loop->next_request_id = request_id_base;
     loop->default_on_message = 0;
     loop->default_user = 0;
-    /* Create a select-set watching this loop's endpoint so that when the
-     * poll budget is exhausted the loop can block instead of busy-spinning.
-     * Minos2 design: tasks always block on events, never busy-poll. */
+    /* Create a select-set watching this loop's endpoint so a poll that finds
+     * nothing queued can park on it instead of returning immediately into a
+     * caller's spin loop (Minos2 design: tasks block on events, never
+     * busy-poll; see docs/architecture/07-scheduling-and-preemption.md).
+     * select_id stays -1 when the set cannot be created, and poll() then
+     * degrades to a non-blocking drain. */
     loop->select_id = -1;
     if (receiver_endpoint >= 0) {
         int32_t sel = wasmos_ipc_select_create();
@@ -352,7 +358,10 @@ wasmos_future_t* wasmos_sys_wasm_fs_stat_async(wasmos_sys_event_loop_t* loop,
                                                int32_t fs_endpoint, int32_t reply_endpoint,
                                                const char* path, int32_t* out_request_id);
 /* Copies a completed read payload, releases an owned buffer, and returns the
- * response status/arg0.  finish() is idempotent for buffer release. */
+ * reply's arg0 (the FS status/byte count), or -1 for a null operation or a
+ * failed copy out of the transfer buffer.  Buffer release is idempotent.
+ * Call only after the future has settled: the record's reply starts zeroed, so
+ * an early call reports 0 instead of a real status. */
 int32_t wasmos_sys_wasm_fs_operation_finish(wasmos_sys_wasm_fs_operation_t* operation,
                                             void* read_dst, int32_t read_capacity,
                                             wasmos_ipc_message_t* out_reply);
@@ -368,9 +377,9 @@ static inline int32_t wasmos_sys_event_loop_poll(wasmos_sys_event_loop_t* loop, 
     for (int32_t i = 0; i < budget; ++i) {
         wasmos_ipc_message_t msg;
         if (wasmos_ipc_drain(loop->receiver_endpoint) <= 0) {
-            /* No message available.  If this is the first iteration and the
-             * loop has a select-set, block until a message arrives instead of
-             * returning immediately (Minos2: never busy-poll). */
+            /* Nothing queued.  On the first iteration, and only when the loop
+             * owns a select-set, park on it rather than returning 0 into a
+             * caller that would immediately poll again. */
             if (i == 0 && loop->select_id > 0) {
                 (void)wasmos_ipc_select_wait(loop->select_id);
                 if (wasmos_ipc_drain(loop->receiver_endpoint) <= 0) {
@@ -440,6 +449,10 @@ static inline void wasmos_sys_ipc_unpack_name16(uint32_t arg0, uint32_t arg1, ui
     out[pos] = '\0';
 }
 
+/* Park a process that has reached a terminal state: block forever on a fresh
+ * endpoint nobody knows about, discarding whatever arrives. Never returns.
+ * FIXME: when endpoint creation fails this degrades into a bare spin loop that
+ * burns the CPU instead of parking. */
 static inline void wasmos_sys_ipc_recv_loop(void) {
     int32_t endpoint = wasmos_ipc_create_endpoint();
     for (;;) {
@@ -450,22 +463,23 @@ static inline void wasmos_sys_ipc_recv_loop(void) {
 }
 
 /* Send PROC_IPC_NOTIFY_READY to the process manager and block until PM acks.
- * The blocking wait keeps the source_endpoint alive long enough for PM to
- * identify the sender, which lets PM reliably unblock any sync-spawn parent
- * and prevents the race where a short-lived process (e.g. pci-bus) destroys
- * its endpoint before PM processes the IPC. */
+ *
+ * The ack is awaited on a process-private endpoint, created on the first call
+ * and cached in a function-static; the `source_endpoint` argument is unused.
+ * The PM identifies the notifier by the owner context of the message source and
+ * marks readiness per process, so any endpoint owned by this process is
+ * equivalent for readiness while a private one isolates the ack from real
+ * request traffic.
+ *
+ * Two constraints make this shape mandatory:
+ *  - The wait is load-bearing. A one-shot service (pci-bus, acpi-bus) exits
+ *    right after this and must stay alive until PM has marked it ready and
+ *    completed the parent's sync spawn, so it cannot fire-and-forget.
+ *  - The wait must not run on the *service* endpoint. A request-id-matching
+ *    receive there drains and DROPS any request that races in right after
+ *    registration (e.g. a driver client's first request), silently breaking
+ *    that client's request/response contract. */
 static inline void wasmos_sys_notify_ready(int32_t proc_endpoint, int32_t source_endpoint) {
-    /* Wait for the PM's ack on a DEDICATED endpoint, never on the service
-     * endpoint. The wait is load-bearing: a one-shot service (pci-bus, acpi-bus)
-     * exits right after this and must stay alive until the PM has marked it
-     * ready and completed the parent's sync spawn, so it cannot fire-and-forget.
-     * But blocking a request-id-matching receive on the *service* endpoint
-     * drains and DROPS any request that races in right after registration
-     * (e.g. a driver client's first request), silently breaking its
-     * request/response contract. The PM identifies the notifier by the owner
-     * context of the message source and marks readiness by process, so any
-     * endpoint owned by this process is equivalent for readiness while a private
-     * one isolates the ack from real request traffic. */
     static int32_t s_ready_reply_ep = -1;
     wasmos_ipc_message_t reply;
     (void)source_endpoint;
@@ -479,10 +493,11 @@ static inline void wasmos_sys_notify_ready(int32_t proc_endpoint, int32_t source
                           &reply);
 }
 
-/* Spawn a module by index and block until the child first blocks on IPC
- * (implicit ready signal) or until timeout_ms milliseconds have elapsed
- * (0 = wait forever).  Returns the child PID on success or a negative error
- * code on failure or timeout. */
+/* Spawn a module by index and block until the child signals ready or until
+ * timeout_ms milliseconds have elapsed (0 = wait forever).  Returns the child
+ * PID, or -1 if the call fails or PM answers anything other than
+ * PROC_IPC_RESP (it answers PROC_IPC_ERROR on timeout and on a child that
+ * died before becoming ready). */
 static inline int32_t wasmos_sys_spawn_sync(int32_t proc_endpoint, int32_t reply_endpoint,
                                             int32_t module_index, int32_t timeout_ms,
                                             int32_t request_id) {
@@ -494,11 +509,10 @@ static inline int32_t wasmos_sys_spawn_sync(int32_t proc_endpoint, int32_t reply
     return reply.type == PROC_IPC_RESP ? (int32_t)reply.arg0 : -1;
 }
 
-/* Spawn by path and block until the child first blocks on IPC (implicit ready
- * signal) or until timeout_ms milliseconds have elapsed (0 = wait forever).
- * The caller must write the path bytes to the xfer buffer before calling.
- * Returns the child PID on success or a negative error code on failure or
- * timeout. */
+/* Spawn by path and block until the child signals ready or until timeout_ms
+ * milliseconds have elapsed (0 = wait forever).  The caller must write the path
+ * bytes to the xfer buffer before calling.  Returns the child PID, or -1 if the
+ * call fails or PM answers anything other than PROC_IPC_RESP. */
 static inline int32_t wasmos_sys_spawn_path_sync(int32_t proc_endpoint, int32_t reply_endpoint,
                                                  int32_t path_len, int32_t timeout_ms,
                                                  int32_t request_id) {
@@ -531,7 +545,9 @@ static inline int32_t wasmos_sys_ipc_send_retry(int32_t destination_endpoint,
                                                 int32_t source_endpoint, int32_t type,
                                                 int32_t request_id, int32_t arg0, int32_t arg1,
                                                 int32_t arg2, int32_t arg3, int32_t retries) {
-    /* Keep in sync with kernel ipc.h */
+    /* Mirrors IPC_ERR_FULL / WASMOS_FULL (kernel include/ipc.h, abi/errors.yaml):
+     * the only send failure worth retrying, because it means the destination
+     * queue is momentarily full rather than misnamed or forbidden. */
     const int32_t ipc_err_full = -3;
     int32_t tries = 0;
     if (retries <= 0) {

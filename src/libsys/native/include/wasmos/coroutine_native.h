@@ -112,7 +112,8 @@ typedef void (*wasmos_native_coroutine_entry_t)(void* arg);
  * future at a time and must outlive the callback or cancellation of the
  * runtime. The record owns the child future returned by future_then(); do not
  * reuse it while that child or a future chained from it is still referenced.
- * Callbacks run from runtime_run(), never inline from resolve/reject. */
+ * Callbacks run from wasmos_native_coroutine_run[_budget](), never inline from
+ * resolve/reject. */
 struct wasmos_future_continuation {
     wasmos_future_continuation_t* next;
     wasmos_future_t* future;
@@ -178,9 +179,18 @@ int wasmos_native_coroutine_join(wasmos_native_coroutine_t* coroutine, int32_t* 
 
 void wasmos_future_init(wasmos_future_t* future, wasmos_promise_t* promise);
 bool wasmos_future_poll(const wasmos_future_t* future, int32_t* out_status, uintptr_t* out_value);
+/* Suspends the calling coroutine until the future settles, then returns its
+ * status (0 or negative). Stackful, so unlike the WASM variant it returns only
+ * once the result is available and the caller keeps its locals. Returns -1
+ * without suspending when there is no future, no running coroutine, or the
+ * future belongs to another runtime. */
 int wasmos_future_await(wasmos_future_t* future, uintptr_t* out_value);
 /* Registers a scheduled transformation and returns its child future, or NULL
- * on invalid input. A missing success/error callback forwards that outcome. */
+ * on invalid input. A missing success/error callback forwards that outcome.
+ * A callback's non-zero return rejects the child, with a non-negative status
+ * normalised to -1. There is no native then_flat: the WASM-only
+ * WASMOS_FUTURE_CHAIN_NEXT protocol has no counterpart here, and a stackful
+ * coroutine chains by awaiting the next future directly. */
 wasmos_future_t* wasmos_future_then(wasmos_native_coroutine_runtime_t* runtime,
                                     wasmos_future_t* future,
                                     wasmos_future_continuation_t* continuation,

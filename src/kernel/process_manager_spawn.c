@@ -266,12 +266,11 @@ static int pm_caps_set_io_window(pm_spawn_caps_t* caps, uint16_t first, uint16_t
     return 0;
 }
 
-/* The legacy per-app entry-arg binding mechanism (proc.endpoint / module.count /
- * cli.tty.alloc / block.endpoint / ...) has been retired in favour of the
- * spawn-info contract (see wasmos_spawn_info.h + pm_app_entry). Every startup
- * value the child needs now travels in its spawn-info buffer, and service
- * endpoints are resolved via svc_lookup. The 4-slot wasm entry signature is
- * kept but always receives zeros. */
+/* Startup values reach the child through the spawn-info contract (see
+ * wasmos_spawn_info.h and the buffer pm_app_entry builds), and service endpoints
+ * through svc_lookup -- not through entry arguments.  The 4-slot wasm entry
+ * signature is part of the module ABI, so it is still declared and still passed
+ * argc == 4, but every slot is zero. */
 static int pm_apply_entry_bindings(pm_app_state_t* slot, const wasmos_app_desc_t* desc) {
     if (!slot || !desc) {
         return PM_SPAWN_INTERNAL_ERR_BAD_ARGS;
@@ -357,9 +356,8 @@ static process_run_result_t pm_app_entry(process_t* process, void* arg) {
         args_dst[args_len] = '\0';
         process->spawn_info_buffer_id = si_xfer.buffer.buffer_id;
 
-        /* The 4-slot entry-arg calling convention is retired: the child pulls
-         * everything from its spawn-info buffer. Pass zeros to satisfy the
-         * (unchanged) wasm entry signature. */
+        /* Zeros: the child pulls everything from its spawn-info buffer.  See
+         * pm_apply_entry_bindings. */
         uint32_t init_args[4] = {0u, 0u, 0u, 0u};
 
 #if defined(WASMOS_ENABLE_PREEMPT_GUARD)
@@ -1298,6 +1296,10 @@ int pm_handle_spawn_path_caps_sync(uint32_t pm_context_id, const ipc_message_t* 
     return 0;
 }
 
+/* FIXME: the two PROC_IPC_ERROR replies below carry bare -1 (deadline expired)
+ * and -2 (child died before READY) in arg1 rather than packed codes from
+ * abi/errors.yaml, so a caller cannot decode either against the shared error
+ * taxonomy. */
 static void pm_poll_sync_spawn(uint32_t pm_context_id) {
     ipc_message_t resp;
 
@@ -1358,12 +1360,13 @@ static void pm_poll_sync_spawn(uint32_t pm_context_id) {
     ipc_send_from(pm_context_id, g_pm.spawn.reply_endpoint, &resp);
 }
 
-/* Poll for completion of an in-flight spawn request (called from PM's IPC
- * dispatch loop each tick). Idle (in_use == 0): nothing pending. Otherwise the
- * only in-flight spawns are synchronous (FS read + inline spawn), driven by
- * pm_poll_sync_spawn. The former name-based async path (FS_IPC_READ_APP round
- * trip) was removed with spawn-by-name; spawns now read blobs inline in the
- * path handlers using a PM-owned per-operation buffer. */
+/* Poll for completion of an in-flight spawn request; called once per PM dispatch
+ * from the run loop.  in_use == 0 means nothing is pending.  Only one spawn can
+ * be in flight at a time (g_pm.spawn is a single slot; handlers refuse with
+ * WASMOS_ERR_PROC_PM_BUSY while it is taken), and every in-flight spawn is a
+ * synchronous one awaiting the child's READY, so pm_poll_sync_spawn is the only
+ * driver.  The blob read itself is not in flight here: the path handlers read it
+ * inline into a PM-owned per-operation buffer before the child is spawned. */
 void pm_poll_spawn(uint32_t pm_context_id) {
     if (!g_pm.spawn.in_use) {
         return;
@@ -1611,13 +1614,12 @@ int pm_handle_spawn_caps_v2(uint32_t pm_context_id, const ipc_message_t* msg) {
         return WASMOS_ERR_PROC_PM_NO_CALLER;
     }
     parent_pid = caller->pid;
-    /* arg1 names a transfer buffer, not a raw pointer. pm_resolve_user_ptr
-     * cannot see WARP's linear memory -- it looks for a MEM_REGION_WASM_LINEAR
-     * region, which reserved-VA linmem slots are not, and silently falls back to
-     * treating the offset as an absolute user VA. That read unrelated memory
-     * (stack poison, once stacks were poisoned), which is why this path never
-     * worked: it had no users to expose it. The xfer-buffer object resolves via
-     * the backing pages and is what every working descriptor path uses. */
+    /* arg1 names a transfer buffer, not a raw user pointer, and must be resolved
+     * as one.  A user-VA resolve cannot see WARP's linear memory: it looks for a
+     * MEM_REGION_WASM_LINEAR region, which reserved-VA linmem slots are not, and
+     * falls back to treating the offset as an absolute user VA -- reading
+     * unrelated memory instead of failing.  The xfer-buffer object resolves
+     * through its backing pages, which is what every descriptor path here uses. */
     payload_size = (uint32_t)msg->arg2;
     if (msg->arg1 == 0 || payload_size < (uint32_t)sizeof(in_caps)) {
         return WASMOS_ERR_PROC_PM_BAD_CAPS;
@@ -1955,10 +1957,10 @@ int pm_handle_spawn_path_caps(uint32_t pm_context_id, const ipc_message_t* msg) 
                : WASMOS_ERR_PROC_PM_REPLY_SEND;
 }
 
-/* Module metadata as a descriptor. Same lookup as pm_handle_module_meta, but the
- * answer lands in a buffer the caller owns and has lent WRITE, because the
- * declared region list is variable-length and the packed form's four response
- * words are full. */
+/* Module metadata as a descriptor.  Same lookup as pm_handle_module_meta, but
+ * the answer is written into a transfer buffer the caller owns (arg2 = its
+ * buffer_id, arg3 = the offset to write at), because the declared region list is
+ * variable-length and the packed form's four response words are full. */
 int pm_handle_module_meta_desc(uint32_t pm_context_id, const ipc_message_t* msg) {
     uint32_t owner_context = 0;
     process_t* caller = 0;

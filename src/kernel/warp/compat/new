@@ -18,10 +18,10 @@ inline void  operator delete[](void *, void *) noexcept {}
 
 namespace std {
 
-/* Minimal bad_alloc — no RTTI, no exception unwinding; what() returns a
- * static string and the class is only present so WARP code that catches
- * std::bad_alloc will compile.  In practice the kernel halt loop in
- * operator new makes it unreachable. */
+/* Minimal bad_alloc — what() returns a static string.  It is thrown for real:
+ * operator new returns nullptr on allocation failure rather than throwing, and
+ * warp/mem_utils_kernel.cpp raises this on a failed page allocation.  The throw
+ * lands on the WARP_CALL checkpoint in warp_driver.cpp (see warp/cxx_abi.cpp). */
 class bad_alloc {
 public:
     bad_alloc() noexcept {}

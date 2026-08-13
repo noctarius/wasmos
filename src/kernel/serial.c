@@ -1,7 +1,12 @@
 /* serial.c - COM1 UART serial driver and kernel console output.
  * Drives COM1 (0x3F8) at 115200 baud for early and runtime debug output.
- * Also maintains the console_ring_t shared memory ring for user-space readers
- * and a small early-log capture buffer for driver handoff. */
+ * Every write also fans out to the console_ring_t shared-memory ring for
+ * user-space readers, to the VT-owned klog ring when one is registered, and to a
+ * small early-log capture buffer for driver handoff.
+ * The state on the logging path (lock, console ring, klog ring, early log) is
+ * reached through *_slot() accessors that add the kernel higher-half offset once
+ * serial_enable_high_alias(1) is set, so logging works under a root with no low
+ * identity mapping. The input ring below has no such accessor. */
 #include <stdarg.h>
 #include "console_ring.h"
 #include "ipc.h"
@@ -26,6 +31,10 @@
 extern uint8_t __kernel_start;
 extern uint8_t __kernel_end;
 
+/* True when p is a low-VA pointer into the kernel image (a string literal
+ * reached through the identity map) that must be rebased to the higher-half
+ * alias.  __kernel_start/__kernel_end are linked high, so subtracting the base
+ * gives the image's low window. */
 static inline int serial_ptr_needs_kernel_alias(uintptr_t p) {
     if (!serial_high_alias_enabled() || p == 0) {
         return 0;
@@ -187,8 +196,10 @@ static uint32_t g_serial_remote_reply_endpoint = IPC_ENDPOINT_NONE;
 static uint32_t g_serial_remote_next_request_id = 1;
 static uint32_t g_serial_remote_pending_read_request = 0;
 
-/* Keyboard input ring — fed by vt via serial_input_push; polled via
- * the wasmos_input_read kernel import before falling back to COM1. */
+/* Keyboard input ring — filled by vt through serial_input_push and drained by
+ * serial_input_read, which backs the wasmos_input_read host call.  Independent
+ * of serial_read_char: a guest polling this ring sees only pushed keystrokes and
+ * gets WASMOS_AGAIN when it is empty, with no COM1 fallback. */
 #define INPUT_RING_SIZE 64
 static uint8_t g_input_ring[INPUT_RING_SIZE];
 static uint32_t g_input_head = 0;

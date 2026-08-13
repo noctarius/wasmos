@@ -1,14 +1,12 @@
-/* test_idtable.c — the id-addressed, owner-scoped object table.
+/* test_idtable.c — the id-addressed, owner-scoped object table (idtable.h,
+ * docs/architecture/35-kernel-object-tables.md).
  *
- * The pattern this generalises already existed twice in ipc.c, written out
- * longhand each time: a table of kernel objects that grows out of kmem, hands
- * out ids that must never collide with a live object, is looked up by id, is
- * bounded per owning context, and is released wholesale when a context dies.
- * Getting any of those wrong has already cost real bugs -- a wrapped id
- * colliding with a live endpoint, and a context able to starve every other.
- *
- * These cases are what the component owes its callers, written before it
- * existed.
+ * The cases below are the contract its callers -- the ipc.c endpoint and select
+ * tables -- depend on: a store that grows out of kmem, ids that never collide
+ * with a live object even across a counter wrap, lookup from nothing but an id,
+ * a per-owner bound so one context cannot take every slot, and wholesale
+ * release when a context dies. A wrapped id landing on a live endpoint and an
+ * unbounded table starving its other owners have each been a real bug.
  */
 
 #include <stdint.h>
@@ -86,9 +84,9 @@ static void test_free_releases_the_slot(void) {
     idtable_destroy(&table);
 }
 
-/* The id counter is monotonic, so a wrap must skip ids that are still live.
- * This is the bug that already bit the endpoint table: a wrapped id colliding
- * with a live object gives it a second, ambiguous owner. */
+/* Ids come from an incrementing counter, so once it wraps it must skip the ids
+ * still held by live objects: a wrapped id colliding with a live object would
+ * give that object a second, ambiguous owner. */
 static void test_a_wrapped_id_skips_live_objects(void) {
     idtable_t table;
     table_init(&table, 0);

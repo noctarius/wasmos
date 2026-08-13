@@ -71,21 +71,31 @@ typedef struct {
 /* Initialize the WASM driver subsystem; called once during kernel startup. */
 void wasm_driver_init(void);
 
-/* Instantiate the wasm3 runtime and load the WASM module from manifest.
- * Registers all hostcall imports before returning. */
+/* Instantiate the configured runtime backend and load the WASM module described
+ * by manifest, registering all host-call imports before returning. The manifest
+ * is copied into *driver, but the pointers it holds (name, module_bytes,
+ * entry_export, entry_argv) are borrowed and must outlive the driver. Returns 0
+ * on success, -1 on failure. */
 int wasm_driver_start(wasm_driver_t* driver, const wasm_driver_manifest_t* manifest,
                       uint32_t owner_context_id);
 
 void wasm_driver_stop(wasm_driver_t* driver);
 
-/* Return the IPC endpoint number for driver in *out_endpoint. */
+/* Return the IPC endpoint number for driver in *out_endpoint.
+ * Returns 0 on success, -1 if the driver is not started. */
 int wasm_driver_endpoint(const wasm_driver_t* driver, uint32_t* out_endpoint);
 
-/* Call the entry export specified in driver->manifest (serializes per-driver execution). */
+/* Call the entry export named in driver->manifest, serializing per-driver
+ * execution. Returns 0 when the call completed, -1 if the driver is inactive,
+ * the export is missing, manifest.entry_argc exceeds 4, or the module trapped. */
 int wasm_driver_call_entry(wasm_driver_t* driver);
 
-/* Call an arbitrary export by name with argc/argv i32 arguments (serializes per-driver execution).
- */
+/* Call an arbitrary export by name with argc i32 arguments from argv,
+ * serializing per-driver execution. Returns 0 when the call completed, -1 if
+ * the driver is inactive, the export is missing, or the module trapped.
+ * FIXME: the wasm3 backend marshals through a fixed 4-slot argument array and
+ * does not bounds-check argc (wasm_driver_call_entry does), so an argc above 4
+ * reads past that array. Keep argc <= 4 and make argv 4 elements wide. */
 int wasm_driver_call(wasm_driver_t* driver, const char* export_name, uint32_t argc, uint32_t* argv);
 
 /* Same as wasm_driver_call but bypasses the per-driver execution lock.

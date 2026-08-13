@@ -1,7 +1,11 @@
 /* syscall.c - Ring-3 int 0x80 syscall dispatch.
- * x86_syscall_handler() is called from isr_syscall_128 in cpu_isr.S.
- * Every entry validates user pointer arguments and checks capability/ownership
- * before performing any kernel operation. */
+ * x86_syscall_handler() is called from isr_syscall_128 in cpu_isr.S with RAX
+ * selecting the call.  Arguments arrive in the 64-bit registers but the ABI is
+ * 32-bit (see syscall.h): syscall_arg_u32/_i32 reject a value that does not fit,
+ * so a caller cannot smuggle bits through the upper half.  Entries that name a
+ * kernel object (endpoint, pid, tid) resolve it against the calling process's
+ * context and refuse anything it does not own; the WARP hostcall range is
+ * forwarded to warp_ring3_dispatch, which does its own validation. */
 #include "syscall.h"
 #include "klog.h"
 #include "ipc.h"
@@ -49,6 +53,11 @@ static uint8_t g_ring3_thread_detach_logged;
 static uint8_t g_ring3_thread_detach_invalid_deny_logged;
 static uint8_t g_ring3_thread_detach_helper_ok_logged;
 static uint8_t g_ring3_thread_detach_join_deny_logged;
+/* Monotonic request-id source for IPC_CALL, and the anchor
+ * syscall_ipc_request_id_issued compares against.
+ * FIXME: incremented non-atomically, and the per-pid slot table below is walked
+ * without a lock.  Two CPUs issuing IPC_CALL concurrently can hand out the same
+ * request id, which the reply-correlation logic assumes is unique. */
 static uint32_t g_syscall_ipc_call_next_request_id = 1;
 static uint32_t g_ipc_call_echo_endpoint = IPC_ENDPOINT_NONE;
 static uint32_t g_ipc_call_control_deny_endpoint = IPC_ENDPOINT_NONE;
@@ -513,10 +522,11 @@ uint64_t x86_syscall_handler(syscall_frame_t* frame) {
         if (syscall_arg_u32(frame->rdi, &target_tid) != 0) {
             return (uint64_t)(int64_t)WASMOS_INVAL;
         }
-        /* RDX carries the joined thread's exit status, RAX the outcome. The
-         * status is guest-chosen and uses the whole 32-bit range, so returning
-         * it in RAX made a thread exiting -1 indistinguishable from a failed
-         * join -- the same defect the thread_join host call carried. */
+        /* RDX carries the joined thread's exit status, RAX the outcome.  The
+         * status is guest-chosen and spans the whole 32-bit range, so it cannot
+         * share RAX with the outcome: a thread exiting -1 would be
+         * indistinguishable from a failed join.  Cleared up front so an error
+         * return never leaves a stale status in RDX. */
         frame->rdx = 0;
         for (;;) {
             join_rc = process_thread_join(proc, target_tid, &exit_status);

@@ -1,6 +1,7 @@
 #pragma once
-/* Minimal <string> stub — WARP's MemUtils includes it only on Linux (memfd path)
- * and in OSAPIChecker, which is replaced here.  Just enough to compile. */
+/* Minimal <string> stub.  The only WARP source that includes <string> is
+ * utils/MemUtils.cpp, which the kernel replaces with warp/mem_utils_kernel.cpp;
+ * this exists so the include resolves if any header pulls it back in. */
 #include "cstring"
 namespace std {
 struct string {

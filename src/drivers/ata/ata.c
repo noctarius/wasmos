@@ -1,6 +1,9 @@
 /* ata.c - ATA/IDE block device WASM driver.
- * Implements PIO-mode ATA read/write for the first IDE device and exposes a
- * block-device IPC interface (BLOCK_IPC_READ_REQ / BLOCK_IPC_WRITE_REQ).
+ * Serves the early storage bootstrap path: identify plus small read/write
+ * requests over the block-device IPC interface (BLOCK_IPC_READ_REQ /
+ * BLOCK_IPC_WRITE_REQ), which is what the FAT driver needs to mount the ESP and
+ * to service its overwrite-only write path.  Transfers run as bus-master DMA
+ * where the controller and the request allow it and as PIO otherwise.
  * Runs inside the WASM runtime; all I/O port accesses go through capability-
  * checked host-call imports. */
 #include <stdint.h>
@@ -10,12 +13,6 @@
 #include "wasmos/libsys.h"
 #include "wasmos/startup.h"
 #include "wasmos_driver_abi.h"
-
-/*
- * Minimal PIO ATA driver used for the early storage bootstrap path. It supports
- * identify plus small read/write requests, which is enough for the FAT driver to
- * mount the ESP and service the current overwrite-only write path.
- */
 
 /* The driver names no absolute port. Its spawn profile grants I/O windows in the
  * order its manifest declares them; region 0 is the task-file window, which on a
@@ -75,9 +72,9 @@ typedef struct __attribute__((packed)) {
 #define ATA_SR_DRQ 0x08
 #define ATA_SR_ERR 0x01
 
-/* Device Control (0x3F6). nIEN set = the drive never asserts INTRQ. Nothing had
- * ever written this register, so device interrupts were masked at the drive the
- * whole time and polling was the only thing that could have worked. */
+/* Device Control (0x3F6). nIEN set = the drive never asserts INTRQ, so the
+ * transfer paths can only poll; it is cleared once the IRQ line is routed and
+ * set again whenever the driver falls back to polling. */
 #define ATA_CTRL_NIEN (1u << 1)
 
 /* Primary channel legacy line. The PIIX IDE function reports no PCI interrupt
@@ -91,7 +88,7 @@ typedef struct __attribute__((packed)) {
 #define ATA_UNIT_COUNT 2u
 #define ATA_CLIENT_MAP_CAP 8u
 
-/* Wait budgets. The polled bound is the historical spin count; the interrupt
+/* Wait budgets. The polled bound counts I/O-delay iterations; the interrupt
  * bound is much smaller because each attempt sleeps rather than spinning
  * (200 x 10 ms = a ~2 s ceiling before a transfer is declared failed). */
 #define ATA_POLL_ATTEMPTS 100000u
@@ -116,10 +113,6 @@ static uint8_t g_zc_dma_logged = 0;
 static int32_t g_client_owner[ATA_CLIENT_MAP_CAP];
 static uint8_t g_client_unit[ATA_CLIENT_MAP_CAP];
 
-/* Interrupt state. Events land on their own endpoint so draining them cannot
- * discard a queued block request (the failure mode that cost virtio-rng a
- * debugging session). g_irq_active means both halves are live: the line is
- * routed AND nIEN is clear at the drive. */
 /* PRD table. It lives in this process's own block buffer, which is already
  * everything the controller needs -- contiguous, pinned, page-aligned and below
  * 4 GiB -- and which this driver otherwise never uses, since it writes into the
@@ -132,6 +125,9 @@ static int32_t g_prd_phys = -1;
 static uint8_t g_dma_ready;
 static uint8_t g_dma_logged;
 
+/* Interrupt state. Events land on their own endpoint so draining them cannot
+ * discard a queued block request. g_irq_active means both halves are live: the
+ * line is routed AND nIEN is clear at the drive. */
 static int32_t g_irq_endpoint = -1;
 static int32_t g_irq_select = -1;
 static uint8_t g_irq_active;
@@ -197,9 +193,9 @@ static void ata_disable_interrupts(const char* why) {
 }
 
 /* One wait step between status reads. With the interrupt live this blocks, so
- * waiting for a sector costs no CPU; otherwise it is the historical short I/O
- * delay. A routed-but-undelivered interrupt is detected here and abandoned once,
- * rather than being paid for on every sector. */
+ * waiting for a sector costs no CPU; otherwise it is a short I/O delay. A
+ * routed-but-undelivered interrupt is detected here and abandoned once, rather
+ * than being paid for on every sector. */
 static void ata_wait_step(void) {
     if (!g_irq_active) {
         wasmos_io_wait();
@@ -294,8 +290,8 @@ static void ata_publish_block_device(uint8_t unit, uint32_t sectors, uint8_t pre
 /* Where a read deposits each sector. The block buffer is the caller's own
  * staging area addressed by physical address; the transfer buffer belongs to the
  * original client and reaches this driver as a reborrow, so the kernel admits
- * the write on the strength of that grant. Only the destination differs — the sector loop
- * is identical. */
+ * the write on the strength of that grant. Only the destination differs — the
+ * sector loop is identical. */
 typedef struct {
     uint8_t to_xfer;     /* 0 = block buffer (phys), 1 = client transfer buffer */
     int32_t id;          /* buffer_phys, or the transfer buffer's object id */
@@ -349,8 +345,8 @@ static uint32_t ata_build_prd(uint64_t phys, uint32_t bytes) {
     }
     /* `used == 0` means a zero-byte request: the loop never ran, so there is no
      * last entry to mark and `used - 1` would index off the front of the array.
-     * Both callers reject a zero sector count today, which is exactly why this
-     * has to be checked here rather than assumed. */
+     * The callers reject a zero sector count, so this guard is what keeps that
+     * an invariant of this function rather than an assumption about them. */
     if (bytes > 0u || used == 0u) {
         return 0;
     }
@@ -452,7 +448,7 @@ static int ata_read_zc_dma(uint8_t unit, uint32_t lba, uint8_t count, int32_t bo
     dest_phys = wasmos_dma_map_borrow(borrow_id, (int32_t)dst_offset, (int32_t)bytes,
                                       WASMOS_DMA_DIR_FROM_DEVICE);
     if (dest_phys <= 0) {
-        return -1; /* negative is a WASMOS_DMA_STATUS_* code; either way, copy instead */
+        return -1; /* negative is a packed WASMOS_ERR_DMA_* code; either way, copy instead */
     }
 
     rc = ata_read_lba28_dma(unit, lba, count, (uint64_t)(uint32_t)dest_phys);

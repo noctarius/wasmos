@@ -1,6 +1,9 @@
 #ifndef WASMOS_SYNC_SPINLOCK_H
 #define WASMOS_SYNC_SPINLOCK_H
 
+/* Arch-neutral alias for the x86_64 spinlock. The locking contract -- who
+ * disables interrupts, which unlock pairs with which acquire -- is documented
+ * in arch/x86_64/spinlock.h and applies unchanged here. */
 #include "arch/x86_64/spinlock.h"
 
 typedef spinlock_t ksync_spinlock_t;

@@ -23,10 +23,13 @@ typedef enum {
     SCHED_PEND_ABORT = 3,
 } sched_pend_state_t;
 
+/* One wait queue plus the lock that guards both it and whatever state the
+ * waiters test. Holding ev->lock across the test-then-block sequence is what
+ * makes a wake impossible to lose. */
 typedef struct {
     ksync_spinlock_t lock;
     list_head_t wait_list; /* thread_t.event_node members */
-    uint32_t cnt;          /* semaphore count (IPC / SELECT) */
+    uint32_t cnt;          /* permit count; used only by ksync_semaphore_t */
     sched_event_type_t type;
 } sched_event_t;
 

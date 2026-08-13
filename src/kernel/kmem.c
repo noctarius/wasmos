@@ -12,7 +12,10 @@
 #include "kmem.h"
 #include "slab.h"
 
-/* Early-boot fallback arena, used when malloc is not yet available. */
+/* Bump-allocated fallback arena for every request kalloc_small cannot serve:
+ * before slab_init, when no frame can be found to grow a size class, and for any
+ * request larger than the biggest size class.  kmem_free cannot reclaim from it,
+ * so those allocations are held for the life of the kernel. */
 #define KMEM_EARLY_ARENA_BYTES (256u * 1024u)
 static uint8_t g_kmem_early_arena[KMEM_EARLY_ARENA_BYTES];
 static uint32_t g_kmem_early_arena_off;

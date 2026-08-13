@@ -1,10 +1,10 @@
 /* test_ipc_concurrency.c — the multi-threaded arm for the kernel IPC layer.
  *
- * ipc.c is full of prose about SMP: the lock order between the endpoint table
- * and the per-endpoint lock, the lost-wakeup window ipc_select_wait closes by
- * taking event.lock before releasing the table lock, the comment on why a
- * non-blocking poll must not register a waiter. None of it was executed by more
- * than one thread until now.
+ * The SMP claims ipc.c makes -- the lock order between the endpoint table and
+ * the per-endpoint lock, the lost-wakeup window ipc_select_wait closes by taking
+ * event.lock before releasing the table lock, the rule that a non-blocking poll
+ * must not register a waiter -- are only meaningful under real concurrency, and
+ * this is where they get it.
  *
  * A pthread here is a CPU: it has its own current thread (a _Thread_local tid)
  * and contends for the same spinlocks and the same tables the kernel does.
@@ -484,12 +484,14 @@ static void test_concurrent_creation_hands_out_unique_ids(void) {
 
 /* ------------------------------------- teardown racing senders and select */
 
-/* The memory-corrupting shape: ipc_send_from reading ep->poll_struct under
- * ep->lock and notifying after releasing it, while ipc_endpoints_release_owner
- * takes the same lock and frees that poll_struct.
- * The window is only reachable when the endpoint actually has a watcher, so
- * the test keeps a select set registered throughout. Runs clean only under
- * ASan; on a plain build a use-after-free here is usually silent. */
+/* The memory-corrupting shape this pins against: a send that read ep->poll_struct
+ * under ep->lock but ran poll_notify after releasing it, while
+ * ipc_endpoints_release_owner took the same lock and freed that poll_struct.
+ * ipc_send_from closes the window by holding ep->lock across poll_notify.
+ *
+ * The window is only reachable when the endpoint actually has a watcher, so the
+ * test keeps a select set registered throughout. Detection depends on the ASan
+ * arm; on a plain build a use-after-free here is usually silent. */
 typedef struct {
     uint32_t endpoint;
     uint32_t ctx;
@@ -691,7 +693,9 @@ static void* select_churn_thread(void* p) {
         int rc = ipc_select_create(a->ctx, &sel);
         if (rc == IPC_ERR_FULL) {
             sched_yield();
-            continue; /* legitimate: the table is shared and finite */
+            /* Legitimate: every churn thread creates against the SAME context,
+             * so they contend for one IPC_SELECT_PER_CONTEXT_MAX allowance. */
+            continue;
         }
         if (rc != IPC_OK) {
             a->result = rc;

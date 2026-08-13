@@ -2,9 +2,10 @@
  * Exercises header init/attach validation, byte-stream write/read with
  * wraparound and flow control, occupancy queries across the 2^32 index wrap,
  * length-prefixed datagram framing, doorbell empty->non-empty edge signalling,
- * and the flags word. No IPC/QEMU — producer and consumer are the same process
- * operating on one shared region, which is exactly the contract the core
- * assumes (two parties, one shared buffer). */
+ * and the flags word; then page-scale size matrices, model-based fuzzing, and
+ * two pthread producer/consumer runs over one region. No IPC/QEMU — both
+ * parties live in this process, which still matches the contract the core
+ * assumes (one producer, one consumer, one shared buffer). */
 
 #include "wasmos/ringbuf.h"
 
@@ -79,7 +80,9 @@ static int test_bytes_for_and_layout(void) {
     if (wasmos_ringbuf_free(&rb) != CAP)
         return __LINE__;
 
-    /* write/read words must sit far enough apart to not share a word. */
+    /* The producer's and consumer's index words must not sit adjacent: the
+     * header pads `read` well past `write` so the two owners store into
+     * different words. */
     if ((uint8_t*)&rb.hdr->read - (uint8_t*)&rb.hdr->write < 16)
         return __LINE__;
     return 0;
@@ -171,27 +174,28 @@ static int test_wraparound_payload(void) {
     if (wasmos_ringbuf_attach(&c, g_region, sizeof(g_region)) != 0)
         return __LINE__;
 
-    /* Advance both indices to just before a data-region wrap so the next write
-     * straddles the physical end of the buffer. */
+    /* Leave the queued span crossing the physical end of the data region: fill
+     * the ring, drain all but the last 8 bytes, and the remaining bytes sit at
+     * offsets CAP-8..CAP-1 while the next write starts again at offset 0. */
     uint8_t pad[CAP];
     for (uint32_t i = 0; i < CAP; ++i)
         pad[i] = (uint8_t)i;
-    /* Fill, drain most, leaving read/write near the wrap boundary. */
     if (wasmos_ringbuf_write(&p, pad, CAP) != CAP)
         return __LINE__;
     uint8_t sink[CAP];
     if (wasmos_ringbuf_read(&c, sink, CAP - 8u) != CAP - 8u)
         return __LINE__;
 
-    /* write index is at CAP, read at CAP-8: writing 40 bytes wraps across 0. */
+    /* write index is at CAP (data offset 0), read at CAP-8: the 40 bytes land
+     * at the start of the data region, behind the 8 still queued at its end. */
     uint8_t msg[40];
     for (int i = 0; i < 40; ++i)
         msg[i] = (uint8_t)(0x80 + i);
     if (wasmos_ringbuf_write(&p, msg, 40u) != 40u)
         return __LINE__;
 
-    /* Drain everything and confirm the straddling payload is intact and in
-     * order: the 8 leftover pad bytes, then the 40 msg bytes. */
+    /* Drain everything in one read, which splits at the physical end, and
+     * confirm order: the 8 leftover pad bytes, then the 40 msg bytes. */
     uint8_t out[64];
     memset(out, 0, sizeof(out));
     uint32_t total = wasmos_ringbuf_read(&c, out, sizeof(out));
@@ -258,7 +262,7 @@ static int test_datagram_framing(void) {
     for (int i = 0; i < 5; ++i)
         b[i] = (uint8_t)(0xB0 + i);
 
-    /* Two records back to back: consume 4+10 then 4+5 = 23 bytes total. */
+    /* Two records back to back occupy 4+10 then 4+5 = 23 bytes. */
     if (wasmos_ringbuf_write_record(&p, a, 10u) != 10)
         return __LINE__;
     if (wasmos_ringbuf_write_record(&p, b, 5u) != 5)
@@ -535,8 +539,9 @@ static int test_record_wraparound(void) {
     if (wasmos_ringbuf_attach(&c, g_region, sizeof(g_region)) != 0)
         return __LINE__;
 
-    /* Push indices to 60 so the next record's payload straddles the physical
-     * end of a 64-byte data region (prefix at 60..63, payload wraps to 0). */
+    /* Push the indices to 60 so the next record crosses the physical end of the
+     * 64-byte data region: its 4-byte prefix occupies 60..63 and the payload
+     * resumes at offset 0. */
     uint8_t pad[CAP];
     for (uint32_t i = 0; i < CAP; ++i)
         pad[i] = (uint8_t)i;
@@ -848,12 +853,12 @@ static int test_attach_negatives(void) {
 
 #define PAGE 4096u
 
-/* Transfer/record sizes referenced to the page. The ring will be page-backed
- * once overlaid on an xfer-buffer, so these are the sizes that matter in
- * practice: below a page, just shy of a page, exactly a page, the same three
- * around two pages, then a few larger multiples. Deliberately includes
- * non-power-of-two sizes (page-1, 2*page-1, 1.5 page) so the wrap split lands
- * off any alignment. */
+/* Transfer/record sizes referenced to the page. A deployed ring is page-backed
+ * (overlaid on an xfer-buffer), so these are the sizes that matter in practice:
+ * below a page, just shy of a page, exactly a page, the same three around two
+ * pages, then a few larger multiples. Deliberately includes non-power-of-two
+ * sizes (page-1, 2*page-1, 1.5 page) so the wrap split lands off any
+ * alignment. */
 static const uint32_t g_sizes[] = {
     PAGE / 2u,        /* below a page          (2048) */
     PAGE - 1u,        /* just shy of a page    (4095) */
@@ -960,9 +965,9 @@ static int test_wrap_size_matrix(void) {
     return 0;
 }
 
-/* Record size matrix: same page-referenced sizes for the datagram path. The
- * whole record (4-byte prefix + payload) is split at the wrap boundary, so the
- * offsets include ones where the length prefix itself straddles the ring end.
+/* Record size matrix: same page-referenced sizes for the datagram path. A
+ * record (4-byte prefix + payload) is split wherever it crosses the wrap
+ * boundary, and the offsets include ones where the prefix itself straddles it.
  * Verifies prefix + payload placement and the read-back content across the
  * wrap, both in a tight ring and wrapping inside a 16-page ring. */
 static int test_record_size_matrix(void) {

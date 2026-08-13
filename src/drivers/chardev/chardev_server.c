@@ -1,6 +1,8 @@
 /* chardev_server.c - Character device IPC server (WASM).
- * Minimal single-byte read/write service used primarily to exercise IPC
- * request/reply semantics and as a template for real character-device drivers.
+ * Models a single-byte device over IPC: one slot of state, a read opcode and a
+ * write opcode. It exists to exercise request/reply semantics, blocking receive
+ * behavior and scheduler fairness under active IPC traffic, and as a template
+ * for real character-device drivers.
  * A normal initfs driver: spawned by device-manager, registers the "chardev"
  * service with the process manager, then serves request/reply IPC. */
 #include <stdint.h>
@@ -9,12 +11,6 @@
 #include "wasmos/libsys.h"
 #include "wasmos/startup.h"
 #include "wasmos_driver_abi.h"
-
-/*
- * The chardev server is intentionally tiny. It models a single-byte device-like
- * service over IPC and exists to exercise request/reply semantics, blocking
- * receive behavior, and scheduler fairness under active IPC traffic.
- */
 
 static uint8_t g_last_byte;
 static uint8_t g_has_data;
@@ -54,8 +50,6 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t arg1, int32
         wasmos_ipc_message_t msg;
         wasmos_ipc_message_read_last(&msg);
 
-        /* The protocol is deliberately simple: one slot of state, one read
-         * opcode, one write opcode, and a generic error path. */
         switch ((uint32_t)msg.type) {
         case WASM_CHARDEV_IPC_READ_REQ:
             if (!g_has_data) {

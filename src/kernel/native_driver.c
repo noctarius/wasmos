@@ -257,7 +257,7 @@ static void nd_unmap_pages(mm_context_t* ctx, uint64_t virt, uint64_t pages) {
     }
 }
 
-/* Owner-push transfer-buffer object API for native drivers (ABI v9), mirroring
+/* Owner-push transfer-buffer object API for native drivers, mirroring
  * the WASM xfer_buffer_* hostcalls. Native drivers access buffer bytes through a
  * mapping, so acquire maps the owned object into the driver's address space and
  * returns the pointer; borrow grants a peer (returns a borrow_id for the wire)
@@ -926,10 +926,9 @@ fail:
     return -1;
 }
 
-/* Startup contract getter (native ABI v7). Resolves the calling driver's
- * child-owned spawn-info buffer, validates it, copies the header into *out and
- * the NUL-terminated args blob into args_buf. Mirrors the WASM
- * wasmos_spawn_info_buffer() hostcall path. */
+/* Startup contract getter. Resolves the calling driver's child-owned spawn-info
+ * buffer, validates it, copies the header into *out and the NUL-terminated args
+ * blob into args_buf. Mirrors the WASM wasmos_spawn_info_buffer() hostcall. */
 static int nd_spawn_info(wasmos_spawn_info_t* out, char* args_buf, uint32_t args_cap) {
     process_t* proc = process_get(process_current_pid());
     xfer_buffer_t key;
@@ -1066,9 +1065,9 @@ int native_driver_start(uint32_t context_id, const uint8_t* elf_data, uint32_t e
         klog_write("[native-driver] CR3 switch to driver failed\n");
         return -1;
     }
-    /* The entry-arg calling convention is retired: native drivers read their
-     * startup values from api->spawn_info() (the spawn-info contract). The
-     * legacy (module_count, arg2, arg3) params are always zero now. */
+    /* entry()'s three integer parameters are always passed as zero. A native
+     * driver reads its startup values from api->spawn_info() instead, so
+     * init_argv/init_argc are deliberately not forwarded. */
     (void)init_argv;
     (void)init_argc;
     int rc = entry(&api, 0, 0, 0);

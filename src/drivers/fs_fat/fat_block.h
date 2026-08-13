@@ -1,11 +1,13 @@
 /* fat_block.h - block-I/O layer for the FAT reactor.
  *
  * fs_fat is a pure block CLIENT: it stages sectors in a dedicated buffer and
- * sends BLOCK_IPC_READ/WRITE requests.  Whether ata services them via PIO or DMA
- * is ata's decision and opaque here.  The buffer is used for METADATA (FAT-table
- * sectors, directory sectors, the boot sector) and the unaligned-edge bounce of
- * client I/O; bulk client data uses the zero-copy borrow passthrough (ata writes
- * the client buffer directly), not this buffer.
+ * sends BLOCK_IPC_READ/WRITE requests.  Whether the block server services them
+ * via PIO or DMA is its decision and opaque here.  The buffer holds METADATA
+ * (FAT-table sectors, directory sectors, the boot sector) and bounces client
+ * I/O.  Only the READ path can bypass it: whole sectors of a client read go
+ * through the zero-copy borrow passthrough (fat_block_read_direct, the server
+ * writes the client buffer itself).  Client writes and partial-sector reads
+ * always stage here.
  *
  * The reactor serializes work to a single ACTIVE op, so at most one block
  * request is outstanding.  All of that singleton state — the outstanding
@@ -63,7 +65,9 @@ void fat_block_set_err(fat_block_t* blk, int32_t err);
  *  fat_need_sector: ensure `lba` is staged in fat_block_sector(); FAT_R_DONE if
  *    already cached, FAT_R_WAIT if a read was submitted (resume on completion),
  *    FAT_R_ERR on a hard send failure (owner->err set to WASMOS_ERR_FS_IO).
- *  fat_block_write: push fat_block_sector() to `lba`; FAT_R_WAIT or FAT_R_ERR. */
+ *  fat_block_write: push fat_block_sector() to `lba`; FAT_R_WAIT on submit,
+ *    FAT_R_ERR on a hard send failure (owner->err set to WASMOS_ERR_FS_IO), and
+ *    FAT_R_DONE on the resume call the coroutine macro makes after completion. */
 fat_r_t fat_need_sector(fat_block_t* blk, uint32_t lba);
 fat_r_t fat_block_write(fat_block_t* blk, uint32_t lba);
 
@@ -72,7 +76,9 @@ fat_r_t fat_block_write(fat_block_t* blk, uint32_t lba);
  * sector cache is untouched and stays valid. The caller must already have
  * reborrowed the buffer to the block server, and passes that `borrow_id` so a
  * bus-master server can map the destination instead of copying into it.
- * FAT_R_WAIT or FAT_R_ERR. */
+ * FAT_R_WAIT on submit, FAT_R_DONE on the resume call after completion, and
+ * FAT_R_ERR on bad arguments or a hard send failure — unlike fat_need_sector /
+ * fat_block_write this leaves owner->err untouched, so the caller must set it. */
 fat_r_t fat_block_read_direct(fat_block_t* blk, uint32_t lba, uint32_t count, int32_t buffer_id,
                               int32_t borrow_id, uint32_t dst_offset);
 

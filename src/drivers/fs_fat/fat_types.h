@@ -4,8 +4,7 @@
  * becomes a fat_op_ctx_t whose op-specific state machine advances one
  * block-I/O boundary at a time (see fat_block.h).  This header holds the
  * on-disk FAT structures, the per-op context, and the reactor's small
- * vocabulary of enums.  No block I/O
- * or global mutable state lives here. */
+ * vocabulary of enums.  No block I/O or global mutable state lives here. */
 #ifndef FS_FAT_FAT_TYPES_H
 #define FS_FAT_FAT_TYPES_H
 
@@ -22,11 +21,13 @@
 #define FAT_OPEN_CREAT 0x0040
 #define FAT_OPEN_TRUNC 0x0200
 
-/* Reactor sizing.  Linear memory is not capped at 64 KB, so the op table can
- * be generous; the single shared block buffer still serializes physical
- * I/O, so in-flight ops beyond a handful only add latency-hiding, not
- * throughput.  FAT_IO_QUEUE_CAP bounds ops parked waiting for the block
- * buffer. */
+/* Reactor sizing.  FAT_MAX_INFLIGHT bounds both the op-context pool and the FIFO
+ * of ops parked waiting for the block buffer: fs_fat.c sizes both arrays from it,
+ * so a queue push can never outrun the pool that gates it.  The single shared
+ * block buffer serializes physical I/O, so ops beyond a handful only hide request
+ * latency and add no throughput.
+ * TODO: FAT_IO_QUEUE_CAP has no user; fs_fat.c sizes the FIFO from
+ * FAT_MAX_INFLIGHT directly. */
 #define FAT_MAX_INFLIGHT 8u
 #define FAT_IO_QUEUE_CAP FAT_MAX_INFLIGHT
 
@@ -122,7 +123,8 @@ typedef struct {
 } fat_dir_entry_info_t;
 
 /* Long-file-name accumulation state, gathered across the LFN entries that
- * precede a short entry during a directory scan (was the g_lfn_* globals). */
+ * precede a short entry during a directory scan.  One per scan context, so
+ * scans cannot corrupt each other's names. */
 typedef struct {
     char buf[FAT_LFN_MAX + 1u];
     uint8_t total;
@@ -301,8 +303,9 @@ typedef struct {
     fat_writeent_ctx_t wr;
 } fat_delchain_ctx_t;
 
-/* Check whether a directory (given by its cluster) contains any real child
- * beyond '.'/'..'.  result: 1 = empty, 0 = non-empty, -1 = error/not-a-dir. */
+/* Check whether a directory (given by its first LBA + span) contains any real
+ * child beyond '.'/'..'.  result: 1 = empty, 0 = non-empty; an I/O fault leaves
+ * result untouched and propagates as FAT_R_ERR instead. */
 typedef struct {
     int cont;
     uint32_t dir_lba;
@@ -392,9 +395,10 @@ typedef struct {
 
 /* READDIR: stream the entries of the CURRENT directory (root region when
  * mnt->cwd_root, else the cwd subdir at mnt->dir_lba/dir_sectors) to the
- * requesting endpoint.  cur_root latches the region kind at the first step so a
- * concurrent CHDIR cannot shift the target mid-scan; the loop cursors and the
- * LFN accumulator survive the per-sector yields. */
+ * requesting endpoint.  cur_root/base_lba/dir_sectors latch the target region at
+ * the first step, so the scan keeps listing the directory it started on instead
+ * of re-reading mnt after every yield; the loop cursors and the LFN accumulator
+ * survive the per-sector yields. */
 typedef struct {
     int cont;
     uint8_t cur_root;       /* 1 = scanning the root region */
@@ -484,10 +488,13 @@ typedef struct {
 
 /* ---------------------------------------------------------------------------
  * Per-operation context.  Holds all per-request state, one instance per
- * in-flight request, so ops interleave.  No file-scope globals.  Field
- * groups are annotated with the op(s)/sub-machine that use them.  A step
- * function reads/writes only its own ctx (plus the shared block buffer, and
- * only during a completion step — never across a fair yield).
+ * accepted request; the reactor keeps a pool of them so requests can queue up
+ * behind the one it is driving.  No file-scope globals.  Field groups are
+ * annotated with the op(s)/sub-machine that use them.  A step function
+ * reads/writes only its own ctx plus the shared block buffer.  The staged sector
+ * survives that op's yields because the reactor drives one op to completion
+ * before activating the next; across ops the buffer holds whatever the previous
+ * one left, which is safe only because loaded_lba tags it (fat_block.h).
  * ------------------------------------------------------------------------- */
 typedef struct fat_op_ctx {
     uint8_t in_use;
@@ -495,13 +502,14 @@ typedef struct fat_op_ctx {
     int cont;    /* op-level coroutine resume point (fat_co.h) */
     int32_t err; /* WASMOS_ERR_FS_* to report on FAT_R_ERR */
 
-    /* Request identity (was g_fs_req). */
+    /* Request identity (the forwarded FS_IPC_* message). */
     int32_t type;
     int32_t arg0, arg1, arg2, arg3;
     int32_t source;
     int32_t request_id;
 
-    /* Response staging (was g_fs_resp_*). */
+    /* Response staging: the reactor sends resp_arg0/1 only when resp_override is
+     * set, otherwise FS_IPC_RESP carries zeros. */
     uint8_t resp_override;
     int32_t resp_arg0;
     int32_t resp_arg1;
@@ -509,27 +517,35 @@ typedef struct fat_op_ctx {
     /* (The single outstanding block request + staged sector live in fat_block_t,
      * not here — there is only one active op, so that state is per-buffer.) */
 
-    /* Path/name working buffers. */
-    char path[FAT_MAX_PATH];      /* raw client path */
-    char fat_path[FAT_MAX_PATH];  /* vfs-translated path */
-    char component[FAT_MAX_PATH]; /* current path component during traversal */
-    char name[FAT_MAX_PATH];      /* leaf name (parent-dir resolve) */
+    /* Path/name working buffers.  Traversal keeps its own component and leaf
+     * copies inside the resolve / resolve-parent contexts.
+     * TODO: component[] and name[] have no reader; they only cost op-ctx bytes. */
+    char path[FAT_MAX_PATH];     /* raw client path */
+    char fat_path[FAT_MAX_PATH]; /* vfs-translated path */
+    char component[FAT_MAX_PATH];
+    char name[FAT_MAX_PATH];
 
-    /* Directory scan / path-resolution sub-machines (fat_dir.c). */
-    fat_resolve_ctx_t resolve;       /* path -> entry (open/stat/read) */
-    fat_resolve_parent_ctx_t parent; /* path -> parent dir + leaf (create/delete) */
-    fat_dir_scan_ctx_t scan;         /* direct directory scan (READDIR) */
+    /* Directory scan / path-resolution sub-machines (fat_dir.c).  Only `resolve`
+     * is driven from the op level (OPEN and STAT).
+     * TODO: `parent` and `scan` have no reader — create/mkdir/remove and READDIR
+     * drive their own embedded contexts instead. */
+    fat_resolve_ctx_t resolve; /* path -> entry */
+    fat_resolve_parent_ctx_t parent;
+    fat_dir_scan_ctx_t scan;
 
     /* Directory mutation sub-machines (fat_dir.c, mutation side). */
     fat_create_ctx_t create; /* create file/dir entry (MKDIR reuses via mkdir) */
     fat_mkdir_ctx_t mkdir;   /* MKDIR */
     fat_remove_ctx_t remove; /* UNLINK / RMDIR */
 
-    /* Cluster-chain / allocation sub-machines (fat_alloc.c). */
-    fat_chain_ctx_t chain;         /* file-I/O chain follow */
-    fat_chainwalk_ctx_t chainwalk; /* capacity / last-cluster walk */
-    fat_findfree_ctx_t findfree;   /* free-cluster search */
-    fat_fatent_ctx_t fatent;       /* direct FAT-entry writes */
+    /* Cluster-chain / allocation sub-machines (fat_alloc.c).  Only `chain` is
+     * driven from the op level (the read/write loop's chain follow).
+     * TODO: chainwalk/findfree/fatent have no reader — append, mkdir and the
+     * free-chain walk embed their own. */
+    fat_chain_ctx_t chain;
+    fat_chainwalk_ctx_t chainwalk;
+    fat_findfree_ctx_t findfree;
+    fat_fatent_ctx_t fatent;
 
     /* Open / read / write cursors. */
     int32_t fd;
@@ -554,13 +570,15 @@ typedef struct fat_op_ctx {
     uint32_t io_run_sectors;         /* whole sectors in the current direct run */
     fat_dir_entry_info_t open_entry; /* resolved entry for OPEN */
 
-    /* Open-file I/O sub-machines (fat_file.c). */
-    fat_storesize_ctx_t storesize;       /* dir-entry size RMW */
-    fat_storecluster_ctx_t storecluster; /* dir-entry first-cluster RMW */
-    fat_reposition_ctx_t repos;          /* absolute seek / chain walk */
-    fat_append_ctx_t append;             /* append one cluster */
-    fat_ensurecap_ctx_t ensurecap;       /* grow capacity for a write */
-    fat_chainwalk_ctx_t capwalk;         /* OPEN capacity chain walk */
+    /* Open-file I/O sub-machines (fat_file.c).
+     * TODO: `storecluster` and `append` have no reader at this level — the
+     * append and ensure-capacity machines embed their own. */
+    fat_storesize_ctx_t storesize; /* dir-entry size RMW */
+    fat_storecluster_ctx_t storecluster;
+    fat_reposition_ctx_t repos; /* absolute seek / chain walk */
+    fat_append_ctx_t append;
+    fat_ensurecap_ctx_t ensurecap; /* grow capacity for a write */
+    fat_chainwalk_ctx_t capwalk;   /* OPEN capacity chain walk */
 
     /* Directory navigation dispatch (CHDIR / READDIR): unpacked leaf name. */
     char dir_name[16];
@@ -569,7 +587,8 @@ typedef struct fat_op_ctx {
     fat_readdir_ctx_t readdir; /* READDIR streaming scan */
     fat_chdir_ctx_t chdir;     /* CHDIR component walk */
 
-    /* CHDIR working state (fat_dir.c).  Was the g_chdir_ globals. */
+    /* TODO: CHDIR working state with no reader — fat_op_chdir keeps all of this
+     * in the `chdir` sub-context above. */
     char chdir_path[32];
     uint32_t chdir_pos;
     char chdir_name[16];

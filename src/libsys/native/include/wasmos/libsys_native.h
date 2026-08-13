@@ -68,7 +68,8 @@ typedef void (*wasmos_sys_native_random_complete_fn)(void* user, int32_t status)
 /* Caller-owned bridge between one non-blocking IPC request and a local future.
  * reply is copied before the future resolves, so its address remains valid for
  * the caller's operation lifetime. A reply_status callback returns zero to
- * resolve or a negative protocol status to reject. */
+ * resolve; any other value rejects, and a non-negative one is normalised to -1
+ * because a future rejects only with a negative status. */
 typedef int32_t (*wasmos_sys_native_ipc_future_reply_status_fn)(void* user,
                                                                 const nd_ipc_message_t* reply);
 
@@ -87,13 +88,14 @@ typedef int32_t (*wasmos_sys_native_service_main_fn)(wasmos_driver_api_t* api,
                                                      wasmos_native_coroutine_runtime_t* runtime,
                                                      void* user);
 
-/* Optional idle hook. The pump calls it, on the kernel-thread stack, in place
- * of a bare sched_yield whenever the root coroutine has yielded and no other
- * coroutine ran. A service that listens on endpoints can block here (e.g. via
- * ipc_wait/ipc_select_wait) instead of yield-spinning; it must fall back to
- * sched_yield when it is not safe to block so cooperative scheduling continues.
- * Blocking here is safe (unlike inside a coroutine, whose stack the scheduler
- * rejects as an invalid suspended rsp). */
+/* Optional idle hook. wasmos_sys_native_service_run() calls it once per pump
+ * iteration, on the kernel-thread stack, in place of a bare sched_yield, for as
+ * long as the root coroutine is alive. A service that listens on endpoints can
+ * block here (e.g. via ipc_wait/ipc_select_wait) instead of yield-spinning; it
+ * must fall back to sched_yield when other coroutines are runnable
+ * (wasmos_native_coroutine_runtime_has_ready()) or blocking is otherwise unsafe,
+ * so cooperative scheduling continues. Blocking here is safe, unlike inside a
+ * coroutine, whose stack the scheduler rejects as an invalid suspended rsp. */
 typedef void (*wasmos_sys_native_service_idle_fn)(void* user);
 
 /* Caller-owned native service bootstrap. The loader-facing initialize() keeps
@@ -233,6 +235,10 @@ int32_t wasmos_sys_native_intent_send_with_request_id(
     uint32_t request_id, uint32_t msg_type, uint32_t arg0, uint32_t arg1, uint32_t arg2,
     uint32_t arg3, void (*on_resolve)(void* user, const nd_ipc_message_t* msg), void* user);
 void wasmos_sys_native_intent_cancel(wasmos_sys_native_event_loop_t* loop, uint32_t request_id);
+/* Dispatch at most `budget` queued messages (0 is treated as 1) and return how
+ * many ran, or -1 when the loop has no usable driver_api. Never blocks: unlike
+ * the WASM variant it owns no select-set, so a service that must sleep at idle
+ * does so in its idle hook. */
 int32_t wasmos_sys_native_event_loop_poll(wasmos_sys_native_event_loop_t* loop, uint32_t budget);
 void wasmos_sys_native_ipc_future_init(wasmos_sys_native_ipc_future_t* operation,
                                        wasmos_sys_native_ipc_future_reply_status_fn reply_status,
@@ -244,7 +250,9 @@ wasmos_future_t* wasmos_sys_native_ipc_future_send(wasmos_sys_native_event_loop_
                                                    uint32_t arg0, uint32_t arg1, uint32_t arg2,
                                                    uint32_t arg3, uint32_t* out_request_id);
 /* Stops local reply tracking and rejects the future. This does not cancel the
- * transport request; a late reply is discarded by its request_id. */
+ * transport request; a late reply then matches no intent and falls through
+ * to the loop's type handler or default handler, exactly like the WASM variant
+ * (wasmos_sys_wasm_ipc_future_cancel). */
 void wasmos_sys_native_ipc_future_cancel(wasmos_sys_native_ipc_future_t* operation, int32_t status);
 void wasmos_sys_native_service_init(wasmos_sys_native_service_t* service, void* root_stack,
                                     size_t root_stack_size);

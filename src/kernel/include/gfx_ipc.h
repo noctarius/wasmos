@@ -1,4 +1,11 @@
-/* gfx_ipc.h - IPC message types and pixel-format constants for the GFX compositor (kernel copy). */
+/* gfx_ipc.h - IPC message types and pixel-format constants for the GFX
+ * compositor (kernel copy).
+ *
+ * A PARTIAL copy of src/libc/include/wasmos/gfx_ipc.h, carrying only what the
+ * kernel itself references.  It deliberately omits GFX_IPC_PUSH_EVENT, one
+ * GFX_WINDOW_FLAG_* and part of the LIST_WINDOWS surface, so it is not a
+ * drop-in substitute: a kernel-side user needing any of those must add it here
+ * AND keep the value identical to the libc header, which is the authority. */
 #ifndef WASMOS_KERNEL_GFX_IPC_H
 #define WASMOS_KERNEL_GFX_IPC_H
 

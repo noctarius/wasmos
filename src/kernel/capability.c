@@ -26,6 +26,9 @@ typedef struct {
     uint32_t mask;
 } capability_context_state_t;
 
+/* TODO: The capability table has no lock, while grants (spawn/app load) and
+ * checks (hardware host calls) run on any CPU. A grant that grows the list can
+ * race a concurrent lookup. */
 static list_t g_cap_ctx;
 
 static uint32_t kind_to_mask(capability_kind_t kind) {
@@ -116,8 +119,10 @@ int capability_grant_name(uint32_t context_id, const uint8_t* name, uint32_t nam
     }
     ctx->configured = 1;
     ctx->mask |= mask;
-    /* dma.buffer authorizes DMA: flags = budget in pages; the window is the
-     * platform's 32-bit-DMA clamp, not a per-driver range. */
+    /* dma.buffer authorizes DMA. The manifest grant carries only a budget, so
+     * the window is the platform-wide low-2-GiB DMA range rather than a
+     * per-driver range; a spawn profile (capability_set_spawn_profile) is what
+     * narrows it. */
     if (mask == kind_to_mask(CAP_DMA_BUFFER) && ctx->dma_window_count == 0) {
         ctx->dma_direction_flags = WASMOS_DMA_DIR_BIDIR;
         ctx->dma_max_bytes = flags * CAP_PAGE_SIZE; /* flags = budget in pages */
@@ -192,8 +197,9 @@ int capability_set_spawn_profile(uint32_t context_id, uint32_t cap_flags, uint32
             }
         }
     }
-    /* No spawner DMA window: DMA is owned by the dma.buffer manifest grant
-     * (capability_grant_name), so leave the DMA fields untouched here. */
+    /* With cap_flags bit 3 clear the spawner declares no DMA window, and the DMA
+     * fields keep whatever the dma.buffer manifest grant (capability_grant_name)
+     * put there. */
     return 0;
 }
 

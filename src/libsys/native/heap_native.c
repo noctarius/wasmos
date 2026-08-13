@@ -7,9 +7,10 @@
  * reactor); add a lock before using it concurrently. Provides the standard
  * malloc/free/calloc/realloc so mbedTLS and other code can use them directly.
  *
- * Adapted from a correctness-first design; double-free detection is best-effort
- * (a freed slab block's header is partially overwritten by the free-list link),
- * and a reaped service's slabs are reclaimed by the kernel, not here.
+ * Double-free detection is best-effort: a freed slab block's header is partially
+ * overwritten by the free-list link, so a second free may see a corrupted magic
+ * rather than HEAP_FREED_MAGIC. A reaped service's slabs are reclaimed by the
+ * kernel, not here.
  */
 #include <stddef.h>
 #include <stdint.h>

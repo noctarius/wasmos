@@ -249,8 +249,9 @@ function initMouseDevice(): void {
         }
     }
 
-    /* Request streaming, fail-open: some virtual or slow controllers delay their
-     * ACKs, and mouse support must never block system bootstrap. */
+    /* Restore defaults (0xF6), then enable data reporting (0xF4) so the device
+     * streams movement packets. Fail-open: some virtual or slow controllers
+     * delay their ACKs, and mouse support must never block system bootstrap. */
     sendMouseCommand(0xf6);
     readAuxAck(4096);
     sendMouseCommand(0xf4);
@@ -284,6 +285,8 @@ function handleAuxByte(byte: i32): void {
         return;
     }
 
+    /* Movement bytes are two's complement. PS/2 counts Y upwards, screen
+     * coordinates downwards, so the Y delta is negated. */
     const dx: i32 = (p1 << 24) >> 24;
     const dy: i32 = -((p2 << 24) >> 24);
     const buttons: i32 = p0 & 0x07;
@@ -393,8 +396,10 @@ export function initialize(_proc_endpoint: i32, _arg1: i32, _arg2: i32, _arg3: i
             }
         } else if (msg.type == MOUSE_IPC_IRQ_EVENT) {
             let byte: i32 = readAuxByte();
-            /* Re-arm after reading OBF: it must be clear before unmasking so the
-             * PIC level-trigger does not immediately re-fire. */
+            /* Ack only after the data-port read: that read clears OBF, which is
+             * what lets the i8042 drop the line. The kernel programs ISA IRQs
+             * level-triggered in IOAPIC mode (src/kernel/arch/x86_64/ioapic.c),
+             * so unmasking with OBF still set re-delivers at once. */
             irq_ack(MOUSE_IRQ);
             if (byte >= 0) {
                 handleAuxByte(byte);

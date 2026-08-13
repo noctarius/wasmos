@@ -7,8 +7,9 @@
  * across the suspension, and does all of that when the suspension sits inside
  * a loop -- which is the case a naive linear split gets wrong.
  *
- * Every case pairs the lowered coroutine against the same logic hand-written as
- * a Task, so a divergence is a transform bug rather than a change of intent.
+ * testMatchesTheHandWrittenTask pairs one lowered coroutine against the same
+ * logic hand-written as a Task (SumTwoByHand), so a divergence in result or in
+ * park points is a transform bug rather than a change of intent.
  *
  * Each case returns 0 or a distinct marker; the order is randomized (see
  * tests/unit/as/shuffle.ts).
@@ -39,8 +40,9 @@ function awaitValue(future: Future, out: Box): i32 {
  * Re-arming belongs to the AWAITING side, and that is a property of the
  * lowering rather than a convenience: resuming re-runs the suspension call, so
  * the future must still be settled at that moment. Re-arming it from outside
- * before the coroutine resumes would lose the value. Taking it and re-arming in
- * the same call is exactly what IpcFuture does per round trip.
+ * before the coroutine resumes would lose the value. Taking the value and
+ * re-arming from the awaiting side is the pattern EventLoop.nextMessage() /
+ * rearmMessage() implement in src/libc/assemblyscript/eventloop.ts.
  */
 class Channel {
     future: Future = new Future();

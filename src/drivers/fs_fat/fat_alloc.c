@@ -1,7 +1,7 @@
-/* fat_alloc.c - FAT-table + cluster-chain access (read/scan side).  See
- * fat_alloc.h.  All I/O-bearing functions are fat_co.h coroutines; loop cursors
- * live in the context, and locals are declared without initializers because the
- * resume switch jumps past their declarations. */
+/* fat_alloc.c - FAT-table entry read/write, cluster-chain walk and free-cluster
+ * search.  See fat_alloc.h.  All I/O-bearing functions are fat_co.h coroutines;
+ * loop cursors live in the context, and locals are declared without initializers
+ * because the resume switch jumps past their declarations. */
 #include "fat_alloc.h"
 #include "fat_co.h"
 #include "wasmos_driver_abi.h"

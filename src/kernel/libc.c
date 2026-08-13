@@ -1,6 +1,8 @@
 /* libc.c - Minimal freestanding C library functions for the kernel.
- * Provides memcpy, memset, memmove, strlen, strcmp, snprintf and friends.
- * These implementations are intentionally simple and not performance-optimized. */
+ * Provides the memory and string families (memcpy, memset, memmove, strlen,
+ * strcmp, ...), vsnprintf, and the ctype predicates.  Declared snprintf has no
+ * definition here.  Kept deliberately simple; only memset and the 8-byte copy
+ * loops are tuned. */
 #include <stdarg.h>
 #include "klog.h"
 #include <stdint.h>
@@ -15,6 +17,10 @@
 extern uint8_t __kernel_start;
 extern uint8_t __kernel_end;
 
+/* Rebase a low-VA pointer into the kernel image (typically a string literal
+ * reached through the identity map) onto the higher-half alias, so the string
+ * functions stay readable under a root without a low identity mapping.  Any
+ * other pointer, including caller buffers, is returned untouched. */
 static inline const char* kernel_str_ptr(const char* s) {
     uintptr_t p = (uintptr_t)s;
     uint64_t base = KERNEL_HIGHER_HALF_BASE;
@@ -46,7 +52,8 @@ void* memcpy(void* dst, const void* src, size_t n) {
     uint8_t* d = (uint8_t*)dst;
     const uint8_t* s = (const uint8_t*)src;
 
-    /* TODO: memcpy remains intentionally non-overlap-safe; use memmove when ranges can overlap. */
+    /* Copies strictly forward and is NOT overlap-safe; use memmove when the
+     * ranges can overlap. */
     while (n >= 32) {
         copy8_forward(d, s);
         copy8_forward(d + 8, s + 8);
@@ -286,9 +293,10 @@ int str_copy_bytes(char* dst, size_t dst_len, const uint8_t* src, size_t src_len
     return 0;
 }
 
-/* Truncating C-string copy shared by the service/subsystem registries and app
- * loader; mirrors the libc str_copy. Reads src directly (no kernel_str_ptr
- * translation), matching the hand-rolled copies it replaces. */
+/* Truncating C-string copy shared by the service/subsystem registries and the
+ * app loader; mirrors the userspace libc str_copy.  Always NUL-terminates and
+ * returns the number of bytes written, excluding the terminator.  Reads src
+ * directly, with no kernel_str_ptr translation. */
 size_t str_copy(char* dst, size_t dst_len, const char* src) {
     size_t i = 0;
     if (!dst || dst_len == 0) {
@@ -408,6 +416,11 @@ static size_t append_i64(char* buf, size_t size, size_t pos, int64_t value) {
     return append_u64(buf, size, pos, (uint64_t)value, 10, 0, 0, ' ');
 }
 
+/* Formats into buf, always NUL-terminating, and returns the length the result
+ * WOULD have had — which exceeds size-1 when the output was truncated.  A zero
+ * size (or a NULL buf) writes nothing and returns 0 rather than that length.
+ * Width and the '0' pad flag apply to %u/%x/%X only; %d/%i/%s/%c/%p ignore them,
+ * and there is no precision. */
 int vsnprintf(char* buf, size_t size, const char* fmt, va_list ap) {
     if (!buf || size == 0) {
         return 0;

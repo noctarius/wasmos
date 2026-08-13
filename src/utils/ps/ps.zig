@@ -1,3 +1,7 @@
+// ps - list processes. `ps` and `ps all` print the table; `ps tree` and `ps all`
+// print the parent/child tree. Any other argument prints the table.
+// At most MAX_PROCS processes are reported; output is assembled in one buffer
+// and truncated silently if it does not fit.
 const std = @import("std");
 const wasmos = @import("wasmos.zig");
 
@@ -17,8 +21,10 @@ extern "wasmos" fn sched_ready_count() callconv(.c) i32;
 extern "wasmos" fn sched_current_pid() callconv(.c) i32;
 
 // Must match wasmos_proc_stats_t layout in src/libc/include/wasmos/api.h.
-// On wasm32 the 7 leading u32 fields (28 bytes) are followed by 4 bytes of
-// implicit C ABI padding before the first u64, giving a total of 80 bytes.
+// The leading fields occupy exactly 32 bytes (six u32 plus the 8-byte
+// runtime_tag), so the first u64 lands at offset 32 with no padding; the
+// trailing u32 is padded out to a total size of 80. The comptime block below
+// fails the build if either assumption breaks.
 const ProcStats = extern struct {
     state: u32,
     block_reason: u32,

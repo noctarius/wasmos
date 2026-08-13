@@ -1,5 +1,9 @@
-/* vt_main.c - virtual terminal service: manages 4 TTYs with VT100/ANSI emulation,
- * routes keyboard events, and renders to the framebuffer compositor service */
+/* vt_main.c - virtual terminal service: owns VT_MAX_TTYS text slots with
+ * VT100/ANSI emulation, decodes every keyboard event for the system (the single
+ * keymap decoder), and renders the visible slot through the "fb" framebuffer
+ * driver.  Slot vt-0 belongs to the gfx compositor: for that slot the vt
+ * forwards decoded keys (VT_IPC_KEY_FORWARD) and visibility changes
+ * (VT_IPC_VIS_NOTIFY) instead of painting text itself. */
 #include <stdint.h>
 #include "stdio.h"
 #include "wasmos/api.h"
@@ -37,11 +41,12 @@ static uint32_t g_heap_cursor = 0;
 static uint32_t g_heap_limit = 0;
 static int32_t g_alloc_failure = 0;
 
-/* klog ring: the VT owns an SPSC byte ring in shared memory; the
+/* klog ring: the VT owns an SPSC byte ring overlaid on an xfer buffer; the
  * kernel publishes klog text into it (serial_write) and the VT drains it into
  * vt-1 (the system console).  The ring carries no IPC wake, so the main loop
- * polls it on a bounded timed wait — klog latency into an off-screen slot is
- * not critical, and interactive input still wakes the endpoint immediately. */
+ * drains it after each blocking wasmos_ipc_select_one: an idle VT does not
+ * drain until the next message arrives.  That latency is tolerable because
+ * vt-1 is off-screen by default and COM1 TX always carries the full log. */
 #define VT_KLOG_TTY 1u
 #define VT_KLOG_RING_CAPACITY 4096u /* SPSC data capacity (power of two) */
 static wasmos_ringbuf_t g_klog_ring;
@@ -828,20 +833,23 @@ static int32_t vt_tty_index_for_source(int32_t source_ep) {
     return -1;
 }
 
-/* Redraw all cells of tty_index to the framebuffer.
- * reliable=1: uses vt_render_cell_switch and yields between rows to reduce
- *   FB queue saturation; dropped cells are tolerated (best-effort).
- * reliable=0: fast path for non-switch redraws. */
 /* A cell that matches the framebuffer's cleared state (a blank space on the
  * default background) does not need replaying after an FBTEXT_IPC_CLEAR_REQ.
- * Skipping these collapses the replay of a mostly-empty slot (e.g. a CLI with a
- * prompt) from rows*cols cell writes to just the non-blank ones — the fix for
- * the ~80 s tty-switch wedge, where replaying a full 160x45 grid into the
- * framebuffer's depth-limited queue spun vt_fb_send_switch's per-cell retry. */
+ * Skipping these collapses the per-cell replay of a mostly-empty slot (e.g. a
+ * CLI with a prompt) from rows*cols cell writes to just the non-blank ones;
+ * replaying a full grid into the framebuffer's depth-limited queue otherwise
+ * spins vt_fb_send_switch's per-cell retry for tens of seconds. */
 static int vt_cell_is_blank(const vt_cell_t* cell) {
     return (cell->ch == (uint32_t)' ' || cell->ch == 0u) && cell->bg == 0u;
 }
 
+/* Repaint tty_index onto the framebuffer.  With the shared blit grid attached
+ * this is a single FBTEXT_IPC_BLIT_GRID_REQ for the whole grid; otherwise it
+ * falls back to per-cell writes that skip already-blank cells.  reliable=1 (the
+ * tty-switch path) sends through vt_fb_send_switch, which retries up to
+ * VT_FB_SWITCH_CELL_RETRIES and yields between rows; reliable=0 uses the plain
+ * best-effort send.  Cells dropped under sustained backpressure are tolerated in
+ * both paths.  Returns 0, or -1 for an invalid slot or an unallocated grid. */
 static int32_t vt_replay_tty(uint32_t tty_index, uint8_t reliable) {
     if (tty_index >= VT_MAX_TTYS) {
         return -1;
@@ -1555,11 +1563,6 @@ static void vt_handle_key_notify(int32_t scancode, int32_t keyup, int32_t extend
     vt_input_handle_char(g_active_tty, ch);
 }
 
-/* Service entry point.  Registers "vt", looks up "fb" and "kbd", allocates
- * cell grids (retries with default geometry if large-grid alloc fails), then
- * subscribes to keyboard events and enters the main IPC receive loop.
- * g_switch_generation is a monotonic counter incremented on TTY switches;
- * write messages with a stale generation are silently dropped. */
 /* Create the VT-owned klog ring, map it into the VT's linear memory, initialize
  * the SPSC header, and hand its xfer-buffer id to the kernel.  Best-effort: on
  * any failure g_klog_ring_ready stays 0 and klog reaches only the legacy
@@ -1644,9 +1647,17 @@ static void vt_blit_init(void) {
     g_blit_ready = 1;
 }
 
+/* Service entry point.  Registers "vt", looks up "fb"/"kbd"/"fs.vfs", allocates
+ * the per-slot cell grids (falling back to the default geometry if the queried
+ * one does not fit), loads the keymap, subscribes to keyboard and serial input,
+ * attaches the blit grid and klog ring, signals readiness, then serves IPC
+ * forever.  Never returns except on an init failure (-1).
+ * g_switch_generation is a monotonic counter bumped on every TTY switch; writes
+ * whose request_id carries a stale generation are dropped. */
 WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t arg1, int32_t arg2,
                                       int32_t arg3) {
-    /* proc.endpoint now comes from the spawn-info contract, not an entry arg. */
+    /* The proc endpoint comes from the spawn-info contract; the entry args are
+     * unused and the parameter is overwritten. */
     proc_endpoint = wasmos_startup_proc_endpoint();
     (void)arg1;
     (void)arg2;

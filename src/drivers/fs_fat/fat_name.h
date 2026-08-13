@@ -14,15 +14,18 @@ int fat_name_eq(const char* a, const char* b);
 /* Reset an LFN accumulator to empty before a directory scan / after a match. */
 void fat_lfn_reset(fat_lfn_t* lfn);
 
-/* NUL-terminate the reassembled LFN name once all ordinal entries are seen. */
+/* NUL-terminate the reassembled LFN name.  Call it only once every ordinal entry
+ * has been collected — it terminates at total * 13 characters and cannot tell a
+ * short name from a partially gathered one, so the caller checks seen == total. */
 void fat_lfn_finalize(fat_lfn_t* lfn);
 
 /* Accumulate one 32-byte FAT LFN directory entry into the accumulator. */
 void fat_lfn_collect(fat_lfn_t* lfn, const uint8_t* ent);
 
 /* Extract a display name from a 32-byte short entry, preferring the completed
- * LFN in `lfn` when valid (finalizing it in place); writes a NUL-terminated
- * name into out[out_len].  Takes fat_lfn_t* (non-const) because it finalizes. */
+ * LFN in `lfn` when valid (finalizing it in place, hence the non-const `lfn`);
+ * writes a NUL-terminated, possibly truncated name into out[out_len].  0 on
+ * success, -1 on bad arguments. */
 int fat_entry_name_from_dirent(fat_lfn_t* lfn, const uint8_t* ent, char* out, uint32_t out_len);
 
 /* Validate a candidate long file name (ASCII, no reserved chars, <= FAT_LFN_MAX)
@@ -36,7 +39,9 @@ int fat_encode_short_name(const char* name, uint8_t out[11]);
 /* Compute the FAT short-name checksum used to bind LFN entries to their 8.3. */
 uint8_t fat_short_name_checksum(const uint8_t short_name[11]);
 
-/* Build a "BASE~N" 8.3 alias (ordinal 1..9) for a long name into out[11]. */
+/* Build a "BASE~N" 8.3 alias for a long name into out[11]: the base is folded to
+ * upper case, stripped of characters 8.3 disallows and truncated to 6 so "~N"
+ * fits.  ordinal must be 1..9 (single digit); 0 on success, -1 otherwise. */
 int fat_build_short_alias(const char* name, uint32_t ordinal, uint8_t out[11]);
 
 /* Construct one 32-byte FAT Long File Name directory entry for writing. */

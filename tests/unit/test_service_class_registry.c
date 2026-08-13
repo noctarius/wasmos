@@ -334,8 +334,9 @@ static int test_no_event_sink(void) {
     return 0;
 }
 
-/* Dynamic growth well past any old fixed cap: register far more providers than
- * the retired SVC_CLASS_MAX_PROVIDERS (32) and confirm every one enumerates. */
+/* The provider table is a dynamic list_t with no per-class cap: 200 providers
+ * in one class all register, and lookup enumerates every one of them in
+ * instance order. */
 static int test_dynamic_growth(void) {
     fresh();
     const uint32_t count = 200;

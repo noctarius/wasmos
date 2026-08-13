@@ -2079,9 +2079,11 @@ m3ApiRawFunction(wasmos_phys_map) {
         m3ApiReturn(WASMOS_ERR_KERNEL_NOT_AUTHORIZED);
     }
 
-    /* Copy physical memory into wasm3 linear-memory host buffer via the
-     * kernel higher-half mapping.  wasm3 accesses linear memory exclusively
-     * through this host pointer; the user-VA page table is irrelevant here. */
+    /* Copy, not remap.  The source is read through the kernel higher-half alias
+     * of the physical range; the destination is the interpreter's own linear-
+     * memory pointer, which is a VA in the owner's user window (wasm3/shim.c)
+     * and so is only valid while the owner address space is active — which it is,
+     * because the guest making this call is running. */
     memcpy(mem_base + off32, ptr_cast(void, (phys | KERNEL_HIGHER_HALF_BASE)), (size_t)size32);
     m3ApiReturn(0);
 }
@@ -2791,10 +2793,11 @@ m3ApiRawFunction(wasmos_console_write) {
         m3ApiReturn(0); /* nothing to write is not a failure */
     }
     m3ApiCheckMem(ptr, (uint32_t)len);
-    /* ptr is validated by m3ApiGetArgMem/m3ApiCheckMem to be within wasm3
-     * linear memory bounds. Use the host pointer directly — the user-VA
-     * reconciliation path fails for apps whose heap/stack extends past the
-     * initial 8-page user VA region, silencing all console output. */
+    /* m3ApiGetArgMem/m3ApiCheckMem bound ptr inside linear memory, and the
+     * pointer they produce is the same one the interpreter dereferences, so it
+     * is used as-is rather than re-derived from the offset.  klog_write needs a
+     * NUL-terminated string, so the counted range is relayed in <= 127-byte
+     * chunks through a stack buffer; the guest buffer is never written. */
     preempt_disable();
     char buf[128];
     uint32_t copied = 0;
@@ -2884,10 +2887,10 @@ m3ApiRawFunction(wasmos_kmap_dump_all) {
 m3ApiRawFunction(wasmos_console_read) {
     m3ApiReturnType(int32_t) m3ApiGetArgMem(char*, ptr) m3ApiGetArg(int32_t, len)
 
-        /* A zero-capacity buffer cannot receive a byte. Reporting 0 here would
-         * say "no byte was available", which is a different fact and hides the
-         * caller's bug; WARP already refused it. (The comment this replaced was
-         * copied from console_write, where a zero length IS a no-op success.) */
+        /* A zero-capacity buffer cannot receive a byte, so it is INVAL, not the
+         * no-op success console_write gives a zero-length write. Reporting 0
+         * here would say "no byte was available", which is a different fact and
+         * hides the caller's bug. WARP refuses it the same way. */
         if (len <= 0) {
         m3ApiReturn(WASMOS_INVAL);
     }
@@ -3405,9 +3408,10 @@ int wasm3_link_wasmos(IM3Module module) {
         return -1;
     }
     int rc = 0;
-    /* Host-call links generated from abi/hostcalls.yaml
-     * (scripts/gen_abi_hostcalls.py); env/wasi links stay hand-written
-     * in wasm3_link_env below. */
+    /* Module "wasmos" links, generated from abi/hostcalls.yaml
+     * (scripts/gen_abi_hostcalls.py).  Module "env" is linked separately by
+     * wasm3_link_env below; wasm3 registers no wasi_snapshot_preview1 imports
+     * (those entries are marked warp-only in the IDL). */
 #define X(mod, name, sig, fn) rc |= wasm3_link_raw(module, mod, name, sig, fn);
     WASMOS_WASM3_LINKS(X)
 #undef X

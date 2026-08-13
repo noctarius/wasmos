@@ -3,7 +3,7 @@
 #include "fbtext_internal.h"
 
 /*
- * Native framebuffer driver — virtual terminal text plane.
+ * Native framebuffer driver — virtual terminal text plane, UEFI GOP backing.
  *
  * A text-rendering server:
  *   1. Probe and map the physical framebuffer.
@@ -11,15 +11,13 @@
  *   3. Replay the kernel early-log ring buffer so the full boot log appears.
  *   4. Drain the shared serial console ring and serve FBTEXT control IPC.
  *
- * The internal rendering code lives in render.c; this file owns the driver
- * lifecycle, early-log replay, and the IPC server loop.
+ * The mode is whatever the bootloader left behind: this driver has no way to
+ * reprogram the adapter, so it answers the mode-setting opcodes with
+ * WASMOS_ERR_GFX_NO_RUNTIME_MODES. framebuffer_pci is the variant that can.
  *
- * IPC message encoding:
- *   FBTEXT_IPC_CELL_WRITE_REQ  arg0=col  arg1=row  arg2=codepoint  arg3=(fg<<8)|bg
- *   FBTEXT_IPC_CURSOR_SET_REQ  arg0=col  arg1=row
- *   FBTEXT_IPC_SCROLL_REQ      arg0=n_rows
- *   FBTEXT_IPC_CLEAR_REQ       (no args)
- *   FBTEXT_IPC_GEOMETRY_REQ    resp: arg0=cols arg1=rows
+ * The internal rendering code lives in render.c; this file owns the driver
+ * lifecycle, early-log replay, and the IPC server loop. Message arguments are
+ * documented per opcode in abi/opcodes.yaml (subsystem `fbtext`).
  */
 
 /* IPC_EMPTY and IPC_OK values — must stay in sync with kernel ipc.h. */

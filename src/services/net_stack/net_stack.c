@@ -1,20 +1,26 @@
-/* net_stack.c - native (non-WASM) net-stack service entry.
+/* net_stack.c - native (non-WASM) net-stack service: an lwIP NO_SYS reactor.
  *
- * LIVE CONTROL-PLANE BASELINE:
- *   - Captures the wasmos_driver_api_t table for port.c (time/console).
- *   - Validates the native ABI magic/version (mirrors gfx_compositor).
- *   - Calls lwip_init() once to exercise the linked lwIP core.
- *   - Creates and registers the `net.stack` endpoint, then notifies ready.
- *   - Drains and dispatches every pending socket control message.
+ * Control plane (endpoint `net.stack`, registered with the process manager):
+ *   - Socket lifecycle (open/bind/connect/listen/accept/close), interface
+ *     addressing for the `ip` tool, DHCP on/off, resolver config, and
+ *     hostname resolution.
+ *   - Never blocks: replies that cannot be answered immediately (TCP connect,
+ *     accept, DNS) are deferred and sent from the lwIP callback that resolves
+ *     them.
  *
- * DATA-PLANE BASELINE:
- *   - Binds one lwIP Ethernet netif to the virtio.net frame service.
- *   - Uses 10.0.2.15/24 with the QEMU SLIRP gateway at 10.0.2.2.
- *   - UDP sockets drain client TX datagram rings and deliver received datagrams
- *     into client RX rings.
- *   - TCP sockets connect asynchronously (deferred reply), stream client TX ring
- *     bytes through tcp_write/tcp_output with tcp_sndbuf backpressure, and copy
- *     inbound segments into the client RX ring, acknowledging via tcp_recved.
+ * Data plane:
+ *   - Binds one lwIP Ethernet netif per `net.ifc` class provider (virtio.net)
+ *     and moves frames over borrowed xfer buffers.
+ *   - Addressing comes from /boot/system/net/interfaces (static or DHCP);
+ *     nothing is hardcoded.
+ *   - UDP sockets drain the client TX datagram ring and deliver received
+ *     datagrams into the client RX ring.
+ *   - TCP/TLS sockets stream client TX ring bytes through altcp_write with
+ *     altcp_sndbuf backpressure and copy inbound segments into the client RX
+ *     ring, acknowledging via altcp_recved.
+ *
+ * The whole service runs on one coroutine runtime; the idle hook blocks on a
+ * select set over its three endpoints rather than spinning.
  */
 #include <stdint.h>
 #include <stdarg.h>
@@ -24,7 +30,7 @@
 #include "lwip/altcp_tcp.h"
 #include "lwip/altcp_tls.h"
 /* mbedTLS SSL context handle, for per-connection SNI / hostname verification
- * (milestone C: mbedtls_ssl_set_hostname on the pcb's ssl_context). */
+ * (mbedtls_ssl_set_hostname on the pcb's ssl_context). */
 #include "mbedtls/ssl.h"
 #include "lwip/init.h"
 #include "lwip/dhcp.h"
@@ -49,21 +55,23 @@
 #include "wasmos/libsys_native.h"
 #include "wasmos_native_driver.h"
 
-/* --- TLS (milestone C: verifying TLS 1.2 client via mbedTLS + altcp_tls) -----
+/* --- TLS: verifying TLS 1.2 client via mbedTLS behind altcp_tls --------------
  *
  * mbedTLS's calloc/free are the native slab allocator (heap_native.c, backed by
  * kernel pages), so the TLS heap grows on demand. Entropy is synchronous inside
  * mbedTLS but net-stack is a non-blocking reactor, so the hrng service pre-fills
  * g_entropy_pool at startup and mbedtls_hardware_poll() drains it.
  *
- * Milestone C makes the client verify: a single shared client config carries the
- * CA trust store loaded from /boot/system/net/certificates/ca-certs.pem (async FS
- * read, mirroring the interfaces loader) and authmode is MBEDTLS_SSL_VERIFY_REQUIRED
+ * A single shared client config carries the CA trust store loaded from
+ * /boot/system/net/certificates/ca-certs.pem (async FS read, mirroring the
+ * interfaces loader); authmode is MBEDTLS_SSL_VERIFY_REQUIRED
  * (ALTCP_MBEDTLS_AUTHMODE in lwipopts.h). The config is built lazily on the first
- * TLS open once entropy AND the CA store are ready. Each TLS pcb additionally gets
- * mbedtls_ssl_set_hostname() so the server certificate's CN/SAN is checked against
- * the requested hostname (and SNI is sent). If the CA file is missing/unreadable
- * the config is never built and TLS opens fail (no silent fall back to no-verify). */
+ * TLS open, once entropy AND the CA store are ready. Each TLS pcb additionally
+ * gets mbedtls_ssl_set_hostname() so the server certificate's CN/SAN is checked
+ * against the requested hostname (and SNI is sent). If the CA file is missing or
+ * unreadable the config is never built and TLS opens fail — verification is
+ * never silently skipped. Certificate validity dates are NOT checked
+ * (MBEDTLS_HAVE_TIME is off; see net_stack_mbedtls_config.h). */
 #define NET_STACK_ENTROPY_POOL_BYTES 256u
 static struct altcp_tls_config* g_tls_config = NULL;
 static uint8_t g_tls_config_failed = 0u;
@@ -218,7 +226,7 @@ static wasmos_sys_native_event_loop_t g_netdrv_loop;
 #define NET_STACK_IFCFG_MAX_ATTEMPTS 50u   /* bounded post-up retry, then give up */
 #define NET_STACK_DHCP_TIMEOUT_TICKS 3750u /* ~15 s at 250 Hz */
 
-/* TLS CA trust store (milestone C). Loaded once, asynchronously, mirroring the
+/* TLS CA trust store. Loaded once, asynchronously, mirroring the
  * interfaces loader. The bundle is PEM (concatenated certificates); mbedTLS
  * requires PEM input to be NUL terminated and the length to include that NUL, so
  * the loader appends a NUL and passes ca_len = bytes + 1. The full Mozilla bundle
@@ -241,7 +249,7 @@ static uint8_t* g_ifcfg_buffer = NULL;
 static uint32_t g_ifcfg_attempts = 0u;
 static uint32_t g_ifcfg_next_tick = 0u;
 
-/* TLS CA trust store loader state (milestone C), symmetric to the ifcfg loader
+/* TLS CA trust store loader state, symmetric to the ifcfg loader
  * above. It shares g_fs_endpoint discovery with the ifcfg loader. On success
  * g_ca_bytes/g_ca_len hold the NUL-terminated PEM bundle for the process life. */
 static uint8_t g_ca_kicked = 0u; /* startup requested a load */
@@ -848,9 +856,6 @@ static int net_stack_mask_prefix(uint32_t mask_no) {
     return count;
 }
 
-/* lwIP netif status callback: fires whenever the netif state changes. When a
- * real address first appears (static apply or DHCP bind), emit the ready banner
- * and prime ARP for the gateway. */
 /* Install explicit DNS servers into lwIP's resolver. Called at address-assign
  * time so it runs after the DHCP client set its own (option 6), giving ifcfg /
  * `ip dns` precedence over the leased resolver. */
@@ -862,6 +867,10 @@ static void net_stack_apply_dns_servers(const uint8_t (*dns)[4], uint8_t count) 
     }
 }
 
+/* lwIP netif status callback: fires whenever the netif state changes. The body
+ * runs only once per interface, on the first transition to a non-zero address
+ * (static apply or DHCP bind): it installs the ifcfg resolvers over any the DHCP
+ * client leased, emits the ready banner, and primes ARP for the gateway. */
 static void net_stack_netif_status_cb(struct netif* netif) {
     net_interface_slot_t* interface = net_stack_interface_from_netif(netif);
     uint32_t addr_no;
@@ -1347,8 +1356,9 @@ static void net_stack_hrng_lookup_reply(void* user, const nd_ipc_message_t* repl
     __builtin_memcpy(&entry, g_hrng_lookup_buffer, sizeof(entry));
     if (entry.endpoint != 0u) {
         /* Fill the whole entropy pool (not just one word) so the TLS DRBG has a
-         * synchronous source. A single startup fill is sufficient for milestone
-         * B; mbedtls_hardware_poll() logs and falls back if it ever underflows. */
+         * synchronous source. The pool is filled once at startup and never
+         * refilled; mbedtls_hardware_poll() logs and degrades to a weak fallback
+         * if it ever underflows. */
         (void)wasmos_sys_native_random_bytes_async(&g_control_loop, entry.endpoint, g_entropy_pool,
                                                    NET_STACK_ENTROPY_POOL_BYTES, &g_hrng_request,
                                                    net_stack_hrng_seed_complete, NULL);
@@ -1489,9 +1499,11 @@ static void net_stack_try_bind_virtio(void) {
 }
 
 /* mbedTLS synchronous entropy source (MBEDTLS_ENTROPY_HARDWARE_ALT). Serves the
- * hrng-filled pool; on underflow it keeps the handshake progressing with a weak
- * xorshift fallback and logs once. Milestone B is no-verify, so a robust
- * mid-handshake entropy refill is deferred (see net_stack_hrng_seed_complete). */
+ * one-shot hrng-filled pool; on underflow it keeps the handshake progressing with
+ * a weak xorshift fallback and logs once.
+ * TODO: refill the pool from the hrng service when it drains — repeated
+ * handshakes after the first NET_STACK_ENTROPY_POOL_BYTES are seeded from the
+ * xorshift fallback, which is not cryptographically strong. */
 int mbedtls_hardware_poll(void* data, unsigned char* output, size_t len, size_t* olen) {
     size_t produced = 0u;
     (void)data;
@@ -1521,13 +1533,6 @@ int mbedtls_hardware_poll(void* data, unsigned char* output, size_t len, size_t*
     return 0;
 }
 
-/* Build the shared verifying TLS client config on first use, once the hrng pool
- * is filled (ctr_drbg seeding calls mbedtls_hardware_poll synchronously) AND the
- * CA trust store has finished loading. The mbedTLS static heap is installed
- * before any TLS allocation. The config carries the CA bundle so the handshake
- * verifies the server chain (authmode VERIFY_REQUIRED, ALTCP_MBEDTLS_AUTHMODE).
- * Returns NULL and latches failure on error so TLS opens fail cleanly rather than
- * retrying. If the CA store is unavailable, TLS is refused (no no-verify fallback). */
 /* Append the decimal form of `v` to `dst`; returns the number of chars written. */
 static int net_stack_u32_dec(char* dst, uint32_t v) {
     char tmp[12];
@@ -1622,6 +1627,14 @@ static uint8_t* net_stack_filter_ca_pem(const uint8_t* pem, uint32_t* out_len) {
     return out;
 }
 
+/* Build the shared verifying TLS client config on first use, once the hrng pool
+ * is filled (ctr_drbg seeding calls mbedtls_hardware_poll synchronously) AND the
+ * CA trust store has finished loading. The config carries the CA bundle, so the
+ * handshake verifies the server chain (authmode VERIFY_REQUIRED, from
+ * ALTCP_MBEDTLS_AUTHMODE). Returns the cached config, or NULL while it is still
+ * waiting on entropy/CA and after a failure — a failure is latched in
+ * g_tls_config_failed so it is not retried. If the CA store is unavailable TLS
+ * is refused; there is no no-verify fallback. */
 static struct altcp_tls_config* net_stack_ensure_tls_config(void) {
     if (g_tls_config != NULL) {
         return g_tls_config;
@@ -1699,9 +1712,9 @@ static int32_t net_stack_pcb_open(net_socket_t* socket, uint32_t open_flags) {
             if (cfg == NULL) {
                 return WASMOS_ERR_NET_NOT_READY;
             }
-            /* Milestone C requires a hostname for verification (VERIFY_REQUIRED
-             * checks the chain but NOT the name without it — a MITM hole). Refuse
-             * a TLS open with no SNI. */
+            /* A hostname is mandatory: VERIFY_REQUIRED checks the chain but NOT
+             * the name without one, which leaves a MITM hole. Refuse a TLS open
+             * with no SNI. */
             if (socket->sni_len == 0u) {
                 return WASMOS_ERR_NET_INVALID;
             }
@@ -2547,7 +2560,7 @@ int32_t wasmos_async_main(wasmos_driver_api_t* driver_api,
      * malloc/free/calloc/realloc (mbedTLS uses these). */
     wasmos_native_heap_init(driver_api);
 
-    /* Kick the TLS CA trust-store load (milestone C). It defers until the fs
+    /* Kick the TLS CA trust-store load. It defers until the fs
      * service endpoint is discovered by the interfaces loader on link-up, then
      * reads /boot/system/net/certificates/ca-certs.pem once. */
     g_ca_kicked = 1u;

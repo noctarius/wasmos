@@ -185,6 +185,8 @@ static void continuation_dispatch(wasmos_future_continuation_t* continuation) {
                      : future->status;
     }
     if (status == WASMOS_FUTURE_CHAIN_NEXT && continuation->group) {
+        /* then_flat() parked the caller's adoption continuation in `group`;
+         * the child future adopts the next future's outcome through it. */
         wasmos_future_t* next = (wasmos_future_t*)value;
         wasmos_future_continuation_t* adopt = (wasmos_future_continuation_t*)continuation->group;
         continuation->group = NULL;

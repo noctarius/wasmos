@@ -5,12 +5,13 @@
 /*
  * Interrupt-safe spinlock implementation for WASMOS.
  *
- * Every spinlock_lock() saves RFLAGS and clears IF (cli) on first entry;
- * spinlock_unlock() restores RFLAGS on last exit.  Holding any spinlock
- * therefore implies IF=0: no hardware interrupt can fire on the same CPU
- * while the lock is held, eliminating the classic single-CPU IRQ deadlock
- * where an IRQ handler tries to acquire a lock already held by the
- * interrupted thread.
+ * spinlock_lock() saves RFLAGS and clears IF (cli) on first entry;
+ * spinlock_unlock() restores RFLAGS on last exit.  A lock taken through that
+ * pair is therefore held with IF=0: no hardware interrupt can fire on the same
+ * CPU while it is held, eliminating the classic single-CPU IRQ deadlock where
+ * an IRQ handler tries to acquire a lock already held by the interrupted
+ * thread.  The _noirq pair and spinlock_try_lock deliberately opt out of that
+ * guarantee; see their own notes below.
  *
  * The IRQ-disable depth counter lives in cpu_local_t so each CPU tracks its
  * own interrupt state independently under SMP.
@@ -19,11 +20,11 @@
  * wraps wasm3 execution in preempt_disable(), and coupling that to IRQ-disable
  * would block interrupt delivery for the whole WASM process lifetime.
  *
- * Same-CPU recursive acquisition is not supported and will deadlock.  Because
- * every lock is held with IF=0, an IRQ handler cannot interrupt a lock holder
- * on the same CPU, making accidental same-CPU reentry structurally impossible
- * for the IRQ-driven send paths.  Any reentry that does occur is a bug and
- * the deadlock is the correct loud failure mode.
+ * Same-CPU recursive acquisition is not supported and will deadlock.  For a
+ * lock taken via spinlock_lock() the holder runs with IF=0, so an IRQ handler
+ * cannot interrupt it on the same CPU and accidental same-CPU reentry is
+ * structurally impossible for the IRQ-driven send paths.  Any reentry that does
+ * occur is a bug and the deadlock is the correct loud failure mode.
  */
 
 /*
@@ -66,6 +67,12 @@ void spinlock_init(spinlock_t* lock) {
     lock->state = 0;
 }
 
+/* Returns non-zero if the lock was acquired.  This is the bare exchange: it does
+ * NOT run spinlock_irq_save() or preempt_disable(), so a caller that acquires
+ * through it must release with spinlock_unlock_noirq().  Releasing with
+ * spinlock_unlock() would decrement a preempt depth this acquisition never
+ * raised.  (spinlock_lock and spinlock_lock_noirq call it after establishing
+ * their own IRQ/preempt state.) */
 int spinlock_try_lock(spinlock_t* lock) {
     if (!lock) {
         return 0;

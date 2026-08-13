@@ -1,15 +1,12 @@
-/* test_kenv.c — the kernel environment store.
+/* test_kenv.c — the kernel environment store (src/kernel/kenv.c).
  *
- * The store was written out twice, once per runtime, and WARP's copy says so in
- * a comment ("mirrors the static table in wasm3/link.c"). The two copies then
- * disagreed about an over-long key: env_set refuses one in BOTH runtimes, but
- * wasm3's env_get TRUNCATED it to KENV_KEY_MAX-1 and looked up the prefix. So a
- * guest asking for a 40-character name got back the value of the 32-character
- * variable that shares its prefix -- a silently different variable, and one it
- * could not have created through env_set in the first place.
- *
- * The lookup contract is therefore the interesting part of this file: a key is
- * either present exactly, or absent. Never nearly.
+ * One store serves both runtimes; what stays per runtime is only the
+ * guest-memory plumbing around it. The lookup contract is what this file pins:
+ * a key is either present exactly, or absent -- never nearly. A copy that
+ * refused an over-long key on set but TRUNCATED it to KENV_KEY_MAX-1 on get
+ * would answer a 40-character name with the value of the 32-character variable
+ * sharing its prefix: a different variable, and one the guest could not have
+ * created through env_set in the first place.
  */
 
 #include <stdio.h>

@@ -145,8 +145,10 @@ static inline void vring_set_notify(vring_t* vq, void (*notify)(void* user), voi
 }
 
 /* Allocate one descriptor for a buffer at device address buf_phys. flags is a
- * combination of VRING_DESC_F_*. Returns the descriptor index, or -1 if the
- * free list is empty. Chained (multi-descriptor) buffers are a follow-on. */
+ * combination of VRING_DESC_F_*, with VRING_DESC_F_NEXT masked off. Returns the
+ * descriptor index, or -1 if the free list is empty.
+ * TODO: chained (multi-descriptor) buffers are unsupported, so a request whose
+ * payload is not physically contiguous cannot be expressed. */
 static inline int32_t vring_alloc_desc(vring_t* vq, uint64_t buf_phys, uint32_t len,
                                        uint16_t flags) {
     if (vq->num_free == 0)
@@ -171,7 +173,9 @@ static inline void vring_free_desc(vring_t* vq, uint16_t head) {
 }
 
 /* Publish a prepared descriptor to the available ring so the device can consume
- * it. Does not ring the doorbell — batch several publishes, then vring_kick(). */
+ * it. Does not ring the doorbell — batch several publishes, then vring_kick().
+ * Driver side only: avail_idx has a single producer, so the plain read-modify-
+ * write below is safe as long as one context owns the queue. */
 static inline void vring_publish(vring_t* vq, uint16_t desc_head) {
     uint16_t avail = *vq->avail_idx;
     vq->avail_ring[avail % vq->num] = desc_head;
@@ -196,7 +200,10 @@ static inline int32_t vring_has_used(vring_t* vq) {
  * out_len, the byte count the device reported; returns -1 when nothing is
  * pending. The descriptor is NOT auto-freed — the caller reads the buffer, then
  * vring_free_desc()s the head. Consumer-side validation: a used-ring id outside
- * [0, num) is rejected (returns -1) rather than trusted. */
+ * [0, num) is skipped (returns -1, last_used_idx still advances) rather than
+ * trusted. The element must be read after the used_idx that publishes it; the
+ * fence inside vring_has_used() is what keeps the compiler from hoisting either
+ * load above it, and x86 does not reorder the two loads. */
 static inline int32_t vring_get_used(vring_t* vq, uint32_t* out_len) {
     if (!vring_has_used(vq))
         return -1;

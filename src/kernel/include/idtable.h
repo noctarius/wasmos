@@ -1,7 +1,7 @@
 /* idtable.h - id-addressed, owner-scoped table of kernel objects.
  *
- * The shape ipc.c had written out longhand twice, and that keeps recurring: a
- * table of kernel objects that
+ * One implementation of a shape that recurs across the kernel (the endpoint and
+ * select tables are both instances). It guarantees that the table
  *
  *   - grows on demand out of kmem rather than being a fixed array,
  *   - hands out ids that never collide with a live object, even after the id
@@ -10,10 +10,9 @@
  *   - is bounded per owning context, so one context cannot starve every other,
  *   - and is released wholesale when a context dies.
  *
- * Each of those has already cost a real bug: a wrapped id colliding with a live
- * endpoint gave it a second, ambiguous owner, and an unbounded table let one
- * context take every slot. Writing them out per table means getting them right
- * per table.
+ * Each guarantee corresponds to a failure mode a hand-written table has hit: a
+ * wrapped id colliding with a live endpoint gives that endpoint a second,
+ * ambiguous owner, and an unbounded table lets one context take every slot.
  *
  * See docs/architecture/35-kernel-object-tables.md for when to reach for this
  * and what it deliberately does not do.

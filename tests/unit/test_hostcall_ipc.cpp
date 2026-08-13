@@ -1,10 +1,10 @@
 /* test_hostcall_ipc.cpp — the IPC host-call shims, both runtimes, side by side.
  *
  * These are the last layer before a guest: they validate the guest's arguments,
- * translate handles, and call ipc.c. Nothing tested them, and nothing checked
- * that the two runtimes agree — which matters because an app is supposed to
- * behave identically under wasm3 and WARP, and the shims are where that
- * promise is actually kept or broken.
+ * translate handles, and call ipc.c. An app is supposed to behave identically
+ * under wasm3 and WARP, and the shims are where that promise is kept or broken,
+ * so every scenario asserts each runtime's own value AND the two against each
+ * other.
  *
  * Both are driven from ONE binary so every scenario is run through both and the
  * results compared directly. wasm3's ABI is pure stack marshalling (arguments
@@ -91,8 +91,10 @@ void sched_wake_thread(thread_t* t) {
 }
 
 /* A blocking shim would spin forever on an endpoint nobody feeds, so the stub
- * models the spurious wake the API documents: unlink and resume. Tests that
- * exercise a blocking shim queue the message first. */
+ * models the spurious wake the API documents: unlink from the wait list under
+ * the event lock, then resume. That turns a block into the IPC_EMPTY the shim
+ * must already handle, which is what lets the timed-select scenarios reach their
+ * deadline instead of hanging. */
 void process_yield(process_run_result_t result) {
     (void)result;
     g_yield_calls++;
@@ -325,15 +327,18 @@ static const Shims k_warp = {
 
 /* ------------------------------------------------------- scenario table */
 
-/* A scenario returns one guest-observable value. Run through both runtimes,
- * asserted against the expectation AND against each other. */
-/* Per-runtime expectations. Where they differ, the two runtimes genuinely
- * disagree about what a guest observes -- recorded here rather than hidden
- * behind a single loose assertion, with `divergent` marking it deliberate.
+/* A scenario returns one guest-observable value, run through both runtimes and
+ * asserted against a per-runtime expectation AND against the other runtime.
  *
- * A divergent row is checked BOTH ways: the values must still differ. Fixing
- * one therefore fails this test and forces the row to be updated, so the list
- * cannot silently rot into a description of an already-fixed problem. */
+ * `divergent` marks a row where the two runtimes are deliberately allowed to
+ * disagree about what a guest observes. Such a row is checked BOTH ways: the
+ * values must still DIFFER, so converging them fails this test and forces the
+ * row to be reclassified rather than left describing a problem already fixed.
+ * Every row in k_scenarios is currently parity (divergent == false); the flag is
+ * the escape hatch for a difference that cannot be removed.
+ *
+ * `note` records why a row's expectation is what it is. It is data only -- main
+ * never prints it. */
 struct Scenario {
     const char* what;
     int32_t expect_wasm3;
@@ -379,7 +384,8 @@ static int32_t s_send_foreign_src(const Shims& s) {
 static int32_t s_send_to_notification(const Shims& s) {
     return s.send((int32_t)g_env.note_ep, (int32_t)g_env.msg_ep, 7, 1, 42);
 }
-/* The documented drain contract: 0 on empty, never -1. */
+/* The documented drain contract: an empty endpoint is 0, not an error code. A
+ * malformed handle is still IPC_ERR_INVALID -- see drain(negative handle). */
 static int32_t s_drain_empty(const Shims& s) {
     return s.drain((int32_t)g_env.msg_ep);
 }
@@ -569,7 +575,7 @@ int main(void) {
         if (sc.divergent) {
             divergences++;
             /* Asserted to STILL differ, so unifying them fails here and forces
-               this row to be reclassified rather than left describing history. */
+               this row to be reclassified. */
             if (w3 == wp) {
                 g_failures++;
                 printf("  [FAIL] %s no longer diverges (both %d) -- update the table\n", sc.what,

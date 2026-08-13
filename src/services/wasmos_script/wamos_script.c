@@ -3,9 +3,9 @@
  * This is the "engine" half of the shebang script subsystem: PM delegates a
  * `#!`-prefixed guest script to the wamos-script broker, which returns a plan
  * that launches this host with the guest script path as its argv.  The host
- * drives the shared wasmos_script engine (src/libc/src/script.c) over IPC, so
- * the scripting language the CLI embeds can now run as a real per-invocation
- * process instead of only inside the interactive shell.
+ * drives the shared wasmos_script engine (src/libc/src/script.c) over IPC, so a
+ * `.rc` script runs as its own process rather than only inside the interactive
+ * shell that also embeds that engine.
  *
  * The guest script path arrives at FS-buffer offset 0 (PM writes the spawn
  * argv there); it must be copied out before any FS call reuses the buffer. */

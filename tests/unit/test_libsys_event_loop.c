@@ -2,15 +2,15 @@
  *
  * wasmos_sys_event_loop_* is the dispatch core every WASM service runs: it
  * correlates replies to outstanding intents, routes unsolicited traffic to
- * type handlers, and falls back to a default. The documented rule -- "this
- * gives replies priority over unsolicited traffic" -- lives only in
- * docs/architecture/09-process-and-ipc.md and in this header's control flow;
- * nothing checked it.
+ * type handlers, and falls back to a default. The priority rule it implements
+ * -- replies before unsolicited traffic -- is stated in
+ * docs/architecture/09-process-and-ipc.md and otherwise only in the control
+ * flow of wasmos_sys_event_loop_poll.
  *
- * The header is entirely static-inline over the WASM hostcall imports, and off
- * wasm the import attribute is a no-op, so the host build just links its own
- * definitions of those imports. That makes the kernel side a scripted queue and
- * leaves the dispatch logic itself genuinely under test.
+ * The dispatch core is static inline over the WASM hostcall imports, and off
+ * wasm WASMOS_WASM_IMPORT expands to nothing, so this file supplies its own
+ * definitions of those imports: the kernel side becomes a scripted queue and
+ * the dispatch logic runs unmodified.
  */
 
 /* The libsys headers must come first: the in-tree string.h declares strcpy, and
@@ -144,7 +144,9 @@ int32_t wasmos_ipc_select_wait(int32_t sel) {
     return 0;
 }
 
-/* Reached by other parts of the header; never by the dispatch paths tested. */
+/* Referenced by other inline helpers in libsys.h, never by the dispatch paths
+ * under test. wasmos_ipc_yield is no longer part of the hostcall ABI at all;
+ * TODO: drop that definition once nothing is suspected of pulling it in. */
 int32_t wasmos_ipc_create_endpoint(void) {
     return 5;
 }
@@ -397,13 +399,13 @@ static void test_a_failed_send_does_not_strand_an_intent_slot(void) {
     wasmos_sys_event_loop_t loop;
     wasmos_sys_event_loop_init(&loop, 1, 1);
 
-    g_send_result = -3; /* transport full */
+    g_send_result = -3; /* WASMOS_FULL: the destination queue is full */
     int32_t rid = 0;
     CHECK(wasmos_sys_intent_send(&loop, 9, 1, 0x40, 0, 0, 0, 0, on_intent, 0, &rid) == -1,
           "a send failure is reported");
     g_send_result = 0;
 
-    /* If the slot leaked, only 15 more would fit. */
+    /* A leaked slot would leave room for one fewer than WASMOS_SYS_INTENT_MAX. */
     int filled = 0;
     for (int i = 0; i < WASMOS_SYS_INTENT_MAX; ++i) {
         int32_t id = 0;
@@ -430,9 +432,9 @@ static void test_intent_send_validates_its_arguments(void) {
           "omitting out_request_id is allowed");
 }
 
-/* The caller-supplied-id variant is what the FS and future bridges use, so its
- * duplicate check matters: two intents on one id would make the first reply
- * resolve the wrong one. */
+/* The caller-supplied-id variant exists for correlation ids minted outside the
+ * loop, so its duplicate check carries the whole guarantee: two intents on one
+ * id would make the first reply resolve an arbitrary one of them. */
 static void test_a_caller_supplied_request_id_must_be_unique(void) {
     reset();
     wasmos_sys_event_loop_t loop;
@@ -496,14 +498,12 @@ static void test_a_null_loop_poll_is_safe(void) {
 
 /* -------------------------------------------------------------------- main */
 
-/* Every caller of wasmos_ipc_select_wait_timeout discards its return, which
- * conflates the three outcomes it now distinguishes. Timeout and ready are both
- * fine to ignore -- the caller loops and re-polls either way. An ERROR is not:
- * a failed wait returns IMMEDIATELY, so a loop that cannot tell it from a
- * timeout stops parking and spins at full speed. cli_idle_wait's own comment
- * says "No yield-spin, no poll", which is only true while the wait works.
- *
- * wasmos_sys_wait_classify is what the callers ask instead. */
+/* wasmos_ipc_select_wait_timeout reports three outcomes through one int32_t.
+ * Ready and timeout are interchangeable to a caller that loops and re-polls. A
+ * FAILURE is not: a failed wait returns IMMEDIATELY, so a caller that reads it
+ * as a timeout stops parking and spins at full speed. wasmos_sys_wait_classify
+ * separates the three; the idle waits in cli.c, ata.c, virtio_rng.c,
+ * virtio_net.c and device_manager.c gate on its wasmos_sys_wait_parked form. */
 static void test_a_timed_wait_is_classified(void) {
     CHECK(wasmos_sys_wait_classify(0) == WASMOS_SYS_WAIT_READY,
           "endpoint 0 is a ready endpoint, not an error");

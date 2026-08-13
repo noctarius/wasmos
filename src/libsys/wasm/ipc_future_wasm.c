@@ -6,7 +6,7 @@ static int32_t ipc_future_status(int32_t status) {
 }
 
 /* libsys exposes the event loop as header inlines for C.  Language bindings
- * need concrete exports, so retain a small ABI shim here. */
+ * link against symbols, so these two shims give them callable exports. */
 void wasmos_sys_wasm_event_loop_init(wasmos_sys_event_loop_t* loop, int32_t endpoint,
                                      int32_t request_id_base) {
     wasmos_sys_event_loop_init(loop, endpoint, request_id_base);
@@ -165,7 +165,7 @@ static wasmos_future_t* fs_operation_buffer_send(wasmos_sys_event_loop_t* loop,
             (void)wasmos_xfer_buffer_release(bid);
         return NULL;
     }
-    borrow = wasmos_xfer_buffer_borrow(fs_endpoint, bid, 3 /* XFER_GRANT_RW */);
+    borrow = wasmos_xfer_buffer_borrow(fs_endpoint, bid, 3 /* GRANT_READ|GRANT_WRITE */);
     if (borrow < 0) {
         (void)wasmos_xfer_buffer_release(bid);
         return NULL;

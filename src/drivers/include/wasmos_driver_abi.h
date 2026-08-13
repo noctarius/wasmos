@@ -1,21 +1,17 @@
 /* wasmos_driver_abi.h - Shared IPC message type constants used by all drivers and services.
  *
- * Each subsystem owns a range of IPC type values:
- *   0x100–0x1FF  chardev (character device read/write)
- *   0x200–0x2FF  process manager (spawn, wait, kill, service registration)
- *   0x300–0x3FF  block device (ATA/sector read/write)
- *   0x400–0x4FF  filesystem (open/read/stat/write/unlink/mkdir/readdir)
- *   0x420–0x43F  fs-manager VFS router (backend registration, mount queries)
- *   0x600–0x6FF  framebuffer text layer
- *   0x700–0x7FF  virtual terminal
- *   0x800–0x8FF  keyboard, mouse, RTC, virtio-serial
- *   0x900–0x9FF  device manager
- *   0xA00–0xAFF  generic network-adapter drivers
- *   0xB00–0xBFF  network stack services
+ * The opcodes themselves are generated from abi/opcodes.yaml (included below);
+ * that file is the authority for which subsystem owns which range and for the
+ * per-opcode argument encodings.  Ranges are scoped to a protocol, not globally
+ * unique: gfx reuses 0x200–0x2FF alongside the process manager, and font reuses
+ * 0xA00–0xAFF alongside the network-adapter drivers, so a message type is only
+ * meaningful together with the endpoint it was sent to.
  *
- * All request/response pairs follow the pattern: REQ = base, RESP = base+0x80,
- * ERROR = base+0xFF.  Fields (type, request_id, source, destination, arg0..arg3)
- * match the ipc_message_t layout in the kernel. */
+ * Within a subsystem, request/response pairs follow REQ = base, RESP = base+0x80,
+ * and a subsystem that declares an error opcode puts it at the top of its own
+ * range (0x1FF for chardev, 0x8BF for virtio-serial, ...).  Message fields
+ * (type, request_id, source, destination, arg0..arg3) match the ipc_message_t
+ * layout in the kernel. */
 #ifndef WASMOS_DRIVER_ABI_H
 #define WASMOS_DRIVER_ABI_H
 

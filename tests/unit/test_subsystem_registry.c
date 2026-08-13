@@ -24,6 +24,10 @@ static int register_test_brokers(void) {
     return 0;
 }
 
+/* The registry's bucket hash (FNV-1a over at most WASMOS_SUBSYSTEM_TAG_LEN
+ * bytes), duplicated here so a case can assert that the two tags it registers
+ * still collide. Keep in step with subsystem_tag_hash in
+ * src/kernel/subsystem_registry.c. */
 static uint32_t test_subsystem_tag_hash(const char* tag) {
     uint32_t hash = 2166136261u;
     for (uint32_t i = 0; i < WASMOS_SUBSYSTEM_TAG_LEN && tag[i] != '\0'; ++i) {
@@ -33,6 +37,9 @@ static uint32_t test_subsystem_tag_hash(const char* tag) {
     return hash;
 }
 
+/* "H67" and "WTAA" hash to the same bucket, so both entries end up on one
+ * bucket chain. Lookup must return each tag's own entry rather than whichever
+ * one heads the chain. */
 static int test_collision_bucket_lookup(void) {
     const char* tag_a = "H67";
     const char* tag_b = "WTAA";
@@ -225,6 +232,11 @@ static int test_exec_handler_registration_lookup(void) {
     return 0;
 }
 
+/* Two handlers at the same priority (10), so the selection is decided by the
+ * tie-break rather than by priority or registration order: the
+ * lexicographically smaller handler_name wins, which is why a path both match
+ * resolves to "aaa-script". The NOT node is what keeps a shebang script whose
+ * name ends in .lua away from the generic handler, leaving it unmatched. */
 static int test_exec_handler_not_and_priority(void) {
     static const wasmos_exec_match_node_t generic_script_nodes[] = {
         {
@@ -365,7 +377,7 @@ static int test_owner_drop(void) {
 
     wasmos_subsystem_registry_reset();
     /* Owner 500 registers a broker subsystem + a handler; owner 501 registers a
-     * builtin-independent broker that must survive the drop of owner 500. */
+     * second broker, which must survive the drop of owner 500. */
     if (wasmos_subsystem_registry_register_broker("SCRIPT", "NATIVE", "SCRIPT", 200u, owner, 0u, 0u,
                                                   1u) != 0) {
         return __LINE__;

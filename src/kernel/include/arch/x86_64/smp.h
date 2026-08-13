@@ -84,7 +84,10 @@ typedef struct cpu_local {
     uint64_t resched_pending_since_tick;
     uint64_t resched_stall_reports;
 
-    /* Round-robin scheduling hint and last-run classification (per-CPU). */
+    /* TODO: last_index is written on dispatch and read nowhere; the scheduler
+     * picks by priority band, not by a round-robin cursor. Drop it or start
+     * using it. last_run_result records how the last dispatch on this CPU
+     * ended. */
     uint32_t last_index;
     process_run_result_t last_run_result;
 
@@ -102,7 +105,7 @@ typedef struct cpu_local {
     thread_t* idle_thread;
 } cpu_local_t;
 
-/* context_switch.S encodes this offset as CPU_LOCAL_IN_CONTEXT_SWITCH_OFFSET.
+/* context_switch.S encodes this offset as CPU_LOCAL_IN_CTX_SW_OFFSET.
  * If the assert fires, update the .set in context_switch.S to match. */
 _Static_assert(offsetof(cpu_local_t, in_context_switch) == 17,
                "cpu_local_t in_context_switch offset changed; update context_switch.S");

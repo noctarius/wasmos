@@ -3,11 +3,14 @@
  * Provides:
  *   1. operator new/delete backed by malloc/free.
  *   2. RAIISignalHandler stub definitions.
- *      RAIISignalHandler.cpp has a compile-time bug when both
- *      ACTIVE_STACK_OVERFLOW_CHECK=1 and LINEAR_MEMORY_BOUNDS_CHECKS=1 are set
- *      (a 'struct sigaction sa' is declared inside a disabled #if block but
- *      then referenced in !ACTIVE_DIV_CHECK). This file provides the required
- *      static data and the two non-inline methods as no-ops instead. */
+ *      RAIISignalHandler.cpp does not compile with both
+ *      ACTIVE_STACK_OVERFLOW_CHECK=1 and LINEAR_MEMORY_BOUNDS_CHECKS=1 (the
+ *      combination this tool builds with): 'struct sigaction sa' is declared
+ *      inside the #if !LINEAR_MEMORY_BOUNDS_CHECKS || !ACTIVE_STACK_OVERFLOW_CHECK
+ *      block, which is then disabled, but the !ACTIVE_DIV_CHECK block below
+ *      still references it -- and ACTIVE_DIV_CHECK defaults to 0 on x86-64
+ *      POSIX. This file supplies the required static data plus no-op
+ *      definitions of the three out-of-line methods instead. */
 
 #include <cstddef>
 #include <cstdlib>

@@ -52,7 +52,7 @@ static int test_whitespace_sign(void) {
     return 0;
 }
 
-/* M-8: overflow must saturate, not wrap */
+/* Overflow must saturate at LONG_MAX/LONG_MIN, not wrap. */
 static int test_overflow_positive(void) {
     long v = strtol("99999999999999999999", NULL, 10);
     /* must return LONG_MAX (0x7FFF...F), not a wrapped garbage value */
@@ -85,7 +85,10 @@ static int test_max_exact(void) {
     return 0;
 }
 
-/* M-7: malloc(SIZE_MAX) must return NULL, not a wrapped tiny block */
+/* malloc(SIZE_MAX) must return NULL, not a wrapped tiny block.
+ * FIXME: on the host every malloc() returns NULL anyway -- stubs_wasm_stdlib.c
+ * pins the heap base and the compile line turns memory_grow into a constant
+ * failure -- so this case cannot tell overflow handling from a dead heap. */
 static int test_malloc_overflow(void) {
     void* p = malloc((size_t)(-1));
     if (p != NULL)

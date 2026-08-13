@@ -1,8 +1,8 @@
 /* net.h - minimal net-stack client helpers for WASM apps.
  *
  * System-wide, dependency-light entry points for talking to the `net.stack`
- * service. Currently just DNS resolution; socket helpers may grow here so apps
- * stop hand-rolling raw NET_IPC_* traffic.
+ * service: DNS resolution plus TCP/TLS stream sockets over the zero-copy ring
+ * data plane, so apps need not hand-roll raw NET_IPC_* traffic.
  */
 #ifndef WASMOS_NET_H
 #define WASMOS_NET_H
@@ -21,8 +21,8 @@
  * until lwIP's DNS callback fires, so a slow lookup does not stall the stack.
  * `request_id` must be unique on `reply_ep`. On success returns 0 and writes the
  * resolved address as a network-order IPv4 word (octet a in the low byte, the
- * form `wasmos_ipc`/lwIP use) to *out_addr_no; returns a negative value on any
- * failure (bad args, transport error, NXDOMAIN, or timeout). */
+ * form lwIP uses) to *out_addr_no; returns a negative value on any failure (bad
+ * args, transport error, NXDOMAIN, or timeout). */
 static inline int32_t wasmos_net_resolve(int32_t stack_ep, int32_t reply_ep, const char* hostname,
                                          int32_t request_id, uint32_t* out_addr_no) {
     wasmos_ipc_message_t reply;
@@ -72,8 +72,7 @@ static inline int32_t wasmos_net_resolve(int32_t stack_ep, int32_t reply_ep, con
  * own xfer-buffer objects, overlaid into linear memory with wasmos_xfer_buffer_map
  * and borrowed to net.stack (docs/architecture/22). Payload never travels in IPC:
  * the app writes/reads the rings in place and only exchanges lightweight
- * doorbells (NET_IPC_TX_NOTIFY / NET_IPC_RX_NOTIFY) with net-stack. This is the
- * designed data plane, replacing the copy-based xfer_buffer_read/write poking. */
+ * doorbells (NET_IPC_TX_NOTIFY / NET_IPC_RX_NOTIFY) with net-stack. */
 typedef struct {
     int32_t stack_ep;
     int32_t reply_ep;
@@ -121,8 +120,10 @@ enum {
 #define WASMOS_NET_HS_ERR_ACCEPT (-6)  /* ACCEPT reply was an error */
 #define WASMOS_NET_HS_ERR_CONNECT (-7) /* CONNECT reply was an error */
 
-/* Wait for any single message to arrive on `ep` (bounded spin+yield), leaving it
- * as the "last" message. Returns 0 on arrival, -1 if it never came. */
+/* Wait for any single message on `ep`, leaving it as the "last" message.
+ * wasmos_ipc_select_one blocks in the kernel until one arrives, so the loop
+ * only re-arms after a receive error: it yields and retries a bounded number of
+ * times. Returns 0 on arrival, -1 once the retries are exhausted. */
 static inline int32_t wasmos_net__recv_on(int32_t ep, wasmos_ipc_message_t* out) {
     for (int32_t spin = 0; spin < 300000; ++spin) {
         if (wasmos_ipc_select_one(ep) == 1) {
@@ -303,8 +304,8 @@ static inline void wasmos_net_tcp_close(wasmos_net_tcp_t* s) {
 /* Shared implementation for the plain-TCP and TLS connect helpers. `open_flags`
  * is written into the socket-open descriptor (NET_SOCKET_OPEN_FLAG_TLS selects a
  * TLS stream socket). `sni` is the server hostname for TLS certificate/hostname
- * verification (milestone C); it is written into the descriptor's sni field and
- * ignored (may be NULL) for plain TCP. everything else is identical. */
+ * verification; it is written into the descriptor's sni field and ignored (may
+ * be NULL) for plain TCP. The two paths are otherwise identical. */
 static inline int32_t wasmos_net__connect_flags(wasmos_net_tcp_t* s, int32_t stack_ep,
                                                 int32_t reply_ep, uint32_t addr_no, uint16_t port,
                                                 uint32_t ring_capacity, int32_t request_id_base,
@@ -376,14 +377,14 @@ static inline int32_t wasmos_net_tcp_connect(wasmos_net_tcp_t* s, int32_t stack_
 }
 
 /* Same as wasmos_net_tcp_connect but wraps the stream in TLS (net-stack creates
- * an altcp_tls pcb). Milestone C verifies: net-stack validates the server
- * certificate chain against its CA trust store and checks `sni` against the
- * certificate CN/SAN (also sent as the SNI extension). `sni` MUST be the server
- * hostname (or the IP literal for an IP-based connection); an empty/NULL sni is
- * rejected by net-stack for a TLS socket. The connect reply is deferred until the
- * TLS handshake completes (it fails if verification fails). The subsequent
- * wasmos_net_tcp_send/recv/close calls are unchanged — payload is plaintext to
- * the app and encrypted on the wire by net-stack. */
+ * an altcp_tls pcb). net-stack validates the server certificate chain against
+ * its CA trust store and checks `sni` against the certificate CN/SAN (also sent
+ * as the SNI extension). `sni` MUST be the server hostname (or the IP literal
+ * for an IP-based connection); an empty/NULL sni is rejected by net-stack for a
+ * TLS socket. The connect reply is deferred until the TLS handshake completes
+ * (it fails if verification fails). wasmos_net_tcp_send/recv/close work the same
+ * on the result — payload is plaintext to the app and encrypted on the wire by
+ * net-stack. */
 static inline int32_t wasmos_net_tls_connect(wasmos_net_tcp_t* s, int32_t stack_ep,
                                              int32_t reply_ep, uint32_t addr_no, uint16_t port,
                                              uint32_t ring_capacity, int32_t request_id_base,

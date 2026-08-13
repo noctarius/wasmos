@@ -66,7 +66,9 @@ static inline void ui_layout_dropdown(ui_context_t* ctx, ui_component_t* p) {
         d->list.selected = 0;
     if (d->list.selected >= d->list.count)
         d->list.selected = (d->list.count > 0) ? (d->list.count - 1) : 0;
-    d->list.capacity = d->list.capacity; /* scroll not really used for dropdown popup */
+    /* FIXME: no-op self-assignment. The dropdown popup has no scroll state to
+     * clamp, so this line has no effect and can go. */
+    d->list.capacity = d->list.capacity;
 }
 
 static inline ui_rect_t ui_dropdown_popup_bounds(const ui_context_t* ctx, const ui_component_t* c) {
@@ -87,8 +89,10 @@ static inline ui_rect_t ui_dropdown_popup_bounds(const ui_context_t* ctx, const 
     return popup;
 }
 
-/* Component-owned popup hit test helper.
- * Core find_*_at and event code can call this for dropdown-specific popup bounds checking. */
+/* True when (x, y) lies inside the open popup. The dropdown popup is drawn into
+ * the owning window's own framebuffer, so its bounds are in that window's
+ * coordinates and the core find_*_at walkers can hit-test it directly — unlike
+ * a menu-item popup, which lives in a separate compositor window. */
 static inline bool ui_dropdown_popup_contains(const ui_context_t* ctx, const ui_component_t* c,
                                               int32_t x, int32_t y) {
     ui_dropdown_data_t* d = (ui_dropdown_data_t*)c->component_data;

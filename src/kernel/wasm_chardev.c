@@ -1,7 +1,14 @@
 /* wasm_chardev.c - WASM character-device server bootstrap.
- * Loads the chardev_server.wasm blob (linked into the kernel image) into
- * a wasm_driver_t and starts it as a kernel process.  The chardev server
- * then handles read/write IPC for character devices on behalf of user apps. */
+ * Instantiates the chardev_server.wasm blob as a wasm_driver_t owned by the
+ * caller-supplied context, hands the server its own IPC endpoint as entry
+ * argument 0, and offers helpers that frame a read/write request to it.  No
+ * process is created; wasm_chardev_run() drives the entry export on the calling
+ * thread.
+ *
+ * FIXME(chardev-dead): this file is not in the kernel source list
+ * (src/kernel/CMakeLists.txt), nothing calls wasm_chardev_init(), and no build
+ * rule emits the _binary_chardev_server_wasm_* symbols it links against.  Wire
+ * it up or delete it; as it stands it cannot be built. */
 #include "wasm_chardev.h"
 #include "klog.h"
 #include "wasm_driver.h"

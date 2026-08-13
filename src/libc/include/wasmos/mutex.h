@@ -29,6 +29,9 @@ static inline void wasmos_mutex_init(wasmos_mutex_t* mutex) {
     mutex->recursion_depth = 0u;
 }
 
+/* Returns 0 when the mutex is held by this thread (recursion depth raised), 1
+ * when another thread owns it, and a negative code on error or on a build that
+ * is neither WASM nor x86_64. */
 static inline int32_t wasmos_mutex_try_lock(wasmos_mutex_t* mutex) {
     if (!mutex) {
         return -1;
@@ -42,6 +45,8 @@ static inline int32_t wasmos_mutex_try_lock(wasmos_mutex_t* mutex) {
 #endif
 }
 
+/* Acquire, yielding the thread between attempts while another owner holds it.
+ * Returns 0 once held, or the negative code that ended the retry loop. */
 static inline int32_t wasmos_mutex_lock(wasmos_mutex_t* mutex) {
     int32_t rc = -1;
     if (!mutex) {

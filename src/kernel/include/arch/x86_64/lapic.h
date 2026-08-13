@@ -3,12 +3,19 @@
 #include <stdint.h>
 
 /*
- * Local APIC interface. lapic_init() discovers the LAPIC base via the
- * IA32_APIC_BASE MSR, maps the MMIO region into kernel virtual space,
- * enables the LAPIC, disables the legacy 8259 PIC, and configures the
- * LAPIC periodic timer as the scheduler clock source.
+ * Local APIC (xAPIC) interface. lapic_init() discovers the LAPIC base via the
+ * IA32_APIC_BASE MSR, maps the MMIO region into kernel virtual space, enables
+ * the LAPIC, and programs the LAPIC periodic timer as the scheduler clock
+ * source at `hz`.
  *
- * Only compiled when WASMOS_IRQ_MODE >= 1 (LAPIC or IOAPIC build).
+ * What it does to the legacy 8259 depends on WASMOS_IRQ_MODE. In mode 1
+ * (virtual wire) the PIC stays live and delivers device IRQs through LINT0 in
+ * ExtINT mode; only in mode 2 (IOAPIC) is the PIC masked off entirely. The
+ * timer LVT is aimed at IRQ_VECTOR_BASE either way, so a LAPIC tick reaches the
+ * scheduler through the same path as a PIT IRQ 0.
+ *
+ * The translation unit is compiled in every IRQ mode; the entry points are only
+ * called when WASMOS_IRQ_MODE >= 1.
  */
 
 void lapic_init(uint32_t hz);

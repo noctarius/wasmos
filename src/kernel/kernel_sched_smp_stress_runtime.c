@@ -10,12 +10,16 @@
  * previous worker (possibly on another CPU, possibly after being stolen there)
  * sends, the ring continuously exercises cross-CPU block/wake/steal/migration.
  *
- * Oracle: the test passes only when every worker completes ITERS forwards. A
- * RUNNING-orphan, lost wakeup, or stranded-ready thread stops the token it was
- * holding, so total forward progress (hops) stalls -> the coordinator detects
- * no progress for a long window and FAILS with diagnostics, instead of the bug
- * manifesting as a rare, hard-to-reproduce boot hang. A final invariant scan
- * also flags any thread left RUNNING but not current on any CPU. */
+ * Oracle: the coordinator passes the run when all N workers have exited and no
+ * worker is left RUNNING but not current on any CPU. A RUNNING-orphan, lost
+ * wakeup, or stranded-ready thread stops the token it was holding, so total
+ * forward progress (hops) stalls -> the coordinator detects no progress for a
+ * long window and FAILS with per-worker diagnostics, instead of the bug
+ * manifesting as a rare, hard-to-reproduce boot hang.
+ *
+ * FIXME: a worker that aborts its loop on an IPC error still counts toward the
+ * exit tally, so the pass verdict does not actually require ITERS forwards from
+ * every worker -- only the summary line's per-worker iters shows that. */
 #include "kernel_sched_smp_stress_runtime.h"
 
 #ifdef WASMOS_SCHED_SMP_STRESS

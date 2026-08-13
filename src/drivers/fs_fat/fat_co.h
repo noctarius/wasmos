@@ -1,11 +1,10 @@
 /* fat_co.h - minimal stackless-coroutine macros for the FAT reactor.
  *
- * Each resumable step function operates on a "coroutine context" — any struct
- * whose FIRST-class business is one operation or sub-machine and that carries an
- * `int cont;` resume field (the op ctx fat_op_ctx_t, and the embedded
- * sub-machine contexts like fat_chain_ctx_t / fat_dir_scan_ctx_t).  The step is
- * re-invoked by the reactor after each block completion and resumes where it
- * yielded.
+ * Each resumable step function operates on a "coroutine context": any struct
+ * that carries an `int cont;` resume field and holds the state of one operation
+ * or sub-machine (fat_op_ctx_t itself, and the embedded sub-machine contexts
+ * like fat_chain_ctx_t / fat_dir_scan_ctx_t).  The step is re-invoked by the
+ * reactor after each block completion and resumes where it yielded.
  *
  * Rules (switch-based resume, à la protothreads):
  *   - A step body must be bracketed by FAT_CO_BEGIN(c) ... FAT_CO_END(c).
@@ -83,7 +82,9 @@
     }                                                                                              \
     } while (0)
 
-/* Fail the op with an WASMOS_ERR_FS_* code (recorded on the active op via blk). */
+/* Fail with a packed WASMOS_ERR_FS_* code, recorded on the op that owns the
+ * block buffer (blk->owner), which the reactor reports as FS_IPC_ERROR.  The
+ * context is reset so it can be reused for a fresh run. */
 #define FAT_CO_FAIL(c, blk, code)                                                                  \
     do {                                                                                           \
         (c)->cont = 0;                                                                             \

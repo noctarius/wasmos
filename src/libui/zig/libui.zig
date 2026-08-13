@@ -101,7 +101,9 @@ pub const Context = struct {
         _ = libui_zig_drain(self.handle);
     }
 
-    /// Poll one GFX event, dispatch it through libui, then layout+render if dirty.
+    /// Block until the compositor pushes one GFX event, dispatch it through
+    /// libui, then lay out and render if anything became dirty. An idle UI
+    /// sleeps in the kernel here rather than spinning.
     pub fn pollAndDrain(self: *Context) void {
         libui_zig_poll_and_drain(self.handle);
     }
@@ -148,8 +150,11 @@ pub const Context = struct {
         libui_zig_set_button_action(self.handle, id, @ptrCast(cb), user);
     }
 
-    /// Apply a Style to a component.  Zero-valued fields leave the component's
-    /// existing value unchanged (use explicit 0 colors only when intentional).
+    /// Apply a Style to a component. bg and fg are always written, so a Style
+    /// with defaulted colours resets them to 0xFF202833 / 0xFFFFFFFF. The
+    /// remaining fields are written only when non-zero (clickable only when
+    /// true), so a partially filled Style keeps the component's current
+    /// geometry — a border colour needs either border or border_px set.
     pub fn style(self: *Context, id: i32, s: Style) void {
         libui_zig_set_bg_color(self.handle, id, s.bg);
         libui_zig_set_fg_color(self.handle, id, s.fg);

@@ -212,8 +212,11 @@ func readIPCReply() IPCReply {
 	}
 }
 
-// Call sends a request to server and blocks until a reply arrives.
-// The reply endpoint is per-context and managed internally.
+// Call sends a request to server and blocks until the FIRST message arrives on
+// the per-context managed reply endpoint; it is returned as the reply without
+// checking its request id or source. Only one request may be outstanding on that
+// endpoint at a time, or a stale reply is returned for a later call. The C
+// helper (wasmos_ipc_call) matches instead.
 func (ipcAPI) Call(server int32, msgType int32, arg0 int32, arg1 int32, arg2 int32, arg3 int32) (IPCReply, Error) {
 	replyEp, err := ensureIPCReplyEndpoint()
 	if err != ErrOK {
@@ -366,6 +369,15 @@ func rawWriteBytes(b []byte) Error {
 	return ErrOK
 }
 
+// Arg returns one of the four wasmos_main entry-arg registers, as received.
+//
+// FIXME(spawn-info): PM retired the entry-arg bindings and always passes zeros
+// (pm_apply_entry_bindings in process_manager_spawn.c), so every index reads 0
+// here. The C, Zig and AssemblyScript ports instead read the spawn-info buffer
+// (wasmos_spawn_info.h) via the spawn_info_buffer host call, where index 0 means
+// proc.endpoint, and expose tty/module count+index and the argv blob alongside
+// it; this port has none of that, so a Go guest cannot reach its process manager
+// endpoint or its argv (Main is likewise always handed an empty slice).
 func (startupAPI) Arg(index int) int32 {
 	if index < 0 || index >= len(startupArgs) {
 		return 0

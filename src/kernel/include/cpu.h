@@ -13,10 +13,19 @@ void cpu_init(void);
 /* Relocate GDT/TSS pointers to their higher-half VA aliases after paging is active. */
 void cpu_relocate_tables_high(void);
 
-/* Handle a CPU exception from ring-3; delivers a SIGFPE-equivalent or kills the process. */
+/* Handle a CPU exception raised in ring-3. `frame` is the CPU's interrupt frame
+ * (rip at [1], cs at [2]). There is no signal delivery: a claimed fault
+ * terminates the process with exit status -11 and never returns to the faulting
+ * instruction. Returns 0 when the process was terminated, -1 when the fault is
+ * declined -- no current process, cs says the fault came from ring 0, or the
+ * vector is not one of the classified user vectors -- leaving the caller to
+ * escalate to a kernel panic. */
 int x86_user_exception_handler(uint64_t vector, const uint64_t* frame);
 
-/* Handle a page fault; may invoke demand paging or kill the faulting process. */
+/* Handle a page fault; may satisfy it by demand paging, by retrying a stale TLB
+ * entry in the shared linmem window, or by killing the faulting process.
+ * Returns 0 when the fault was resolved or absorbed, -1 when it was not and the
+ * caller must panic. */
 int x86_page_fault_handler(uint64_t error_code, const uint64_t* frame);
 
 /* Update TSS.RSP0 so the next ring-3 → ring-0 transition lands on the correct stack. */

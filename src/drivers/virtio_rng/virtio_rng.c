@@ -48,11 +48,12 @@
 
 /* One page of DMA-visible scratch the device fills with entropy per request. */
 #define RNG_POOL_SIZE 4096u
-/* Completion is interrupt-driven: the device raises its INTx line when it has
- * used a buffer, and the driver blocks on the routed IRQ event.  The interval and
- * try count below are only a safety net for a lost or unroutable interrupt, not
- * the mechanism — acknowledging a device interrupt on a timer is what left the
- * shared line asserted between ticks and livelocked a single-CPU guest. */
+/* Completion is interrupt-driven: the device raises its INTx line (or its MSI-X
+ * vector) when it has used a buffer, and the driver blocks on the routed event.
+ * The interval and try count below are only a safety net for a lost or
+ * unroutable interrupt, not the mechanism — acking a device interrupt on a timer
+ * leaves the shared line asserted between ticks, which livelocks a single-CPU
+ * guest. */
 #define RNG_IRQ_WAIT_MS 50
 #define RNG_IRQ_MAX_WAITS 20 /* ~1s ceiling before WASMOS_ERR_HRNG_TIMEOUT */
 
@@ -421,7 +422,8 @@ static void rng_service_irq(void) {
 
 /* Fill up to `want` bytes of entropy into the DMA pool and return the count the
  * device produced, or -1 on ring/timeout failure. Posts the pool device-writable,
- * kicks, then polls the used ring (sleeping between checks). */
+ * kicks, then checks the used ring between blocking waits on the completion
+ * interrupt. */
 static int rng_fill(uint32_t want) {
     if (want > RNG_POOL_SIZE) {
         want = RNG_POOL_SIZE;
@@ -446,12 +448,11 @@ static int rng_fill(uint32_t want) {
         if (waits == RNG_IRQ_MAX_WAITS) {
             break;
         }
-        /* Block until the device's completion interrupt arrives (or the safety-net
-         * interval elapses).  Only IRQ events land on this endpoint, so draining
-         * it cannot swallow an HRNG request. */
-        /* A wait that FAILS returns immediately, so looping on it would spin
-         * rather than block; give up on the completion and let the caller's
-         * timeout path run. */
+        /* Block until the device's completion interrupt arrives (or the
+         * safety-net interval elapses).  Only IRQ events land on this endpoint,
+         * so draining it cannot swallow an HRNG request.  A wait that FAILS
+         * returns immediately, so looping on it would spin rather than block;
+         * give up on the completion and let the caller's timeout path run. */
         if (g_irq_routed || g_dev.msix_enabled) {
             if (!wasmos_sys_wait_parked(
                     wasmos_ipc_select_wait_timeout(g_irq_select, RNG_IRQ_WAIT_MS))) {
@@ -464,8 +465,8 @@ static int rng_fill(uint32_t want) {
         }
     }
     vring_free_desc(&g_rq, (uint16_t)d);
-    /* Time out only after servicing the line: leaving it asserted here is what
-     * turned a lost completion into an unbounded interrupt storm. */
+    /* Time out only after servicing the line: leaving it asserted here turns a
+     * lost completion into an unbounded interrupt storm. */
     rng_service_irq();
     return -1;
 }

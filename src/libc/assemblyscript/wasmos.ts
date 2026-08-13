@@ -68,8 +68,8 @@ declare function ipc_send(
 
 @external("wasmos", "xfer_buffer_size") declare function xfer_buffer_size(): i32;
 // Object/owner/borrow xfer ABI (owner-push): read/write name the object by
-// buffer_id (arg 1). acquire creates an owned buffer; borrow grants a named
-// endpoint's context rights over it; release destroys it. See src/libc/src/unistd.c.
+// buffer_id. acquire creates an owned buffer; borrow grants a named endpoint's
+// context rights over it; release destroys it. See src/libc/src/unistd.c.
 @external("wasmos", "xfer_buffer_write")
 declare function xfer_buffer_write(bufferId: i32, ptr: i32, len: i32, offset: i32): i32;
 
@@ -240,8 +240,8 @@ export function runMain(
     arg2: i32,
     arg3: i32,
 ): i32 {
-    // The entry-arg registers (arg0..arg3) are retired; startup values now come
-    // from the spawn-info buffer.
+    // PM always passes zeros in the entry-arg registers (arg0..arg3); every
+    // startup value comes from the spawn-info buffer instead.
     loadSpawnInfo();
     unchecked((g_startupArgs[0] = g_spawnProcEndpoint));
     unchecked((g_startupArgs[1] = 0));
@@ -483,7 +483,7 @@ export class File {
             requested = bufferLimit;
         }
 
-        // Own a buffer and grant the FS manager WRITE so the backend can fill it.
+        // Own a buffer and grant the FS manager R|W so the backend can fill it.
         const bid = xfer_buffer_acquire(requested);
         if (bid < 0) {
             return null;
@@ -596,9 +596,10 @@ export namespace ipc {
         return ipc_create_endpoint();
     }
 
-    // Send a request to server and block until a reply arrives.
-    // The reply endpoint is per-context and managed internally — callers never
-    // share it, so only this context's reply ever lands there.
+    // Send a request to server and block until the reply carrying this call's
+    // request id arrives on the per-context managed reply endpoint. Anything
+    // else that lands there meanwhile is consumed and DISCARDED; a component
+    // that must not lose those messages uses the EventLoop in eventloop.ts.
     export function call(
         server: i32,
         type: i32,

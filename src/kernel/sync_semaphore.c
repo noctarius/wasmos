@@ -1,6 +1,17 @@
 #include "sync/semaphore.h"
 #include "sync/spinlock.h"
 
+/*
+ * Counting semaphore layered on sched_event_t: the count lives in event.cnt and
+ * event.lock guards both it and the wait list, so a blocking acquire hands off
+ * to sched_event_wait() with that lock held and cannot miss a release.
+ *
+ * The count saturates: release() refuses at UINT32_MAX rather than wrapping to
+ * 0, which would report a full semaphore as empty and strand every waiter.
+ * Entry points return KSYNC_SEMAPHORE_OK / KSYNC_SEMAPHORE_BUSY, or -1 for a
+ * NULL semaphore or that overflow refusal.
+ */
+
 void ksync_semaphore_init(ksync_semaphore_t* sem, uint32_t initial_count) {
     if (!sem) {
         return;

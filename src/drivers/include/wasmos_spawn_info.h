@@ -25,7 +25,8 @@
 
 #include <stdint.h>
 
-#define WASMOS_SPAWN_INFO_MAGIC 0x57535049u /* 'WSPI' (little-endian on wire) */
+/* 'W','S','P','I' packed high byte first, so the bytes read I,P,S,W in memory. */
+#define WASMOS_SPAWN_INFO_MAGIC 0x57535049u
 #define WASMOS_SPAWN_INFO_VERSION 1u
 
 typedef struct {

@@ -17,8 +17,12 @@
  * pointer, checking the range is permitted, copying in and out. None of that
  * belongs to the store, and it is the only part that genuinely differs.
  *
- * The store holds no lock. Host calls run with the calling process descheduled
- * and the kernel does not touch the environment from interrupt context.
+ * The store is a fixed table of KENV_MAX_ENTRIES slots holding no lock; the
+ * kernel never touches it from interrupt context.
+ *
+ * FIXME: nothing serializes two CPUs entering kenv_set/kenv_unset at the same
+ * time, so concurrent host calls from different guests can both claim the same
+ * free slot. Give the table a spinlock if a second guest ever writes it.
  */
 
 #define KENV_MAX_ENTRIES 64
@@ -29,18 +33,28 @@
  * Look up `key` and copy its value into `out`, always NUL-terminating.
  *
  * A value longer than `out_size` is truncated to fit and `*written` reports
- * what was copied, so a caller can tell truncation happened. A key at or over
- * KENV_KEY_MAX is REFUSED, never shortened: shortening resolves to whichever
- * variable shares the surviving prefix.
+ * what was copied, so a caller can tell truncation happened. `written` may be
+ * NULL. A key at or over KENV_KEY_MAX is REFUSED, never shortened: shortening
+ * resolves to whichever variable shares the surviving prefix.
+ *
+ * WASMOS_OK; WASMOS_INVAL for a NULL key/out or out_size == 0;
+ * WASMOS_ERR_ENV_TOO_LONG for an empty or over-length key;
+ * WASMOS_ERR_ENV_NOT_FOUND when no such variable exists.
  */
 wasmos_error_code_t kenv_get(const char* key, char* out, uint32_t out_size, uint32_t* written);
 
 /* Create or replace `key`. Replacing consumes no additional entry, so it
- * succeeds even when the table is full. */
+ * succeeds even when the table is full.
+ *
+ * WASMOS_OK; WASMOS_INVAL for a NULL argument; WASMOS_ERR_ENV_TOO_LONG for an
+ * empty or over-length key or an over-length value;
+ * WASMOS_ERR_ENV_TABLE_FULL when a new key finds no free slot. */
 wasmos_error_code_t kenv_set(const char* key, const char* value);
 
 /* Remove `key`. Removing something absent is not an error -- the caller's
- * intent is satisfied either way -- but an unusable key is still refused. */
+ * intent is satisfied either way -- but an unusable key is still refused:
+ * WASMOS_INVAL for NULL, WASMOS_ERR_ENV_TOO_LONG for an empty or over-length
+ * key, WASMOS_OK otherwise. */
 wasmos_error_code_t kenv_unset(const char* key);
 
 /* Entries in use. For tests and for kmap-style reporting. */

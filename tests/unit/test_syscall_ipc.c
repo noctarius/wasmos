@@ -6,10 +6,10 @@
  * IPC invariants live here and nowhere else -- "reply authenticity checked at
  * IPC_CALL" and "all IPC_CALL fields are validated as 32-bit-clean".
  *
- * Until now the only thing exercising any of it was a set of klog string probes
- * fired from the ring3-smoke image, which assert that a line was printed rather
- * than that a reply was rejected. This drives x86_syscall_handler directly with
- * a syscall_frame_t, against the REAL ipc.c, and asserts on the returned frame.
+ * The only other coverage is the klog string probes syscall.c fires for the
+ * ring3-smoke image, which assert that a line was printed rather than that a
+ * reply was rejected. This suite drives x86_syscall_handler directly with a
+ * syscall_frame_t, against the REAL ipc.c, and asserts on the returned frame.
  *
  * The service side is genuine: a yield hook plays the role of the peer, reading
  * the request off the destination endpoint and replying to req.source exactly
@@ -124,7 +124,9 @@ process_t* process_get(uint32_t pid) {
     return 0;
 }
 
-/* Reached only by syscalls this file does not drive. */
+/* Present to satisfy the linker: syscall.c references these, but no path this
+ * file drives reaches them. The klog calls in particular are guarded on the
+ * caller being the "ring3-smoke" process, which the fixture is not. */
 void klog_write(const char* s) {
     (void)s;
 }
@@ -278,7 +280,8 @@ static void service_reply(void) {
     if (g_reply_mode == REPLY_STALE_THEN_GOOD) {
         ipc_message_t stale = rep;
         /* An id the caller has already retired. Deliberately NOT a future id:
-         * see test_a_reply_for_a_future_id_answers_the_next_call. */
+         * the pending ring refuses those outright, which is
+         * test_a_reply_for_a_future_id_is_refused (K15). */
         stale.request_id = req.request_id - 1u;
         stale.arg0 = 0xBADBAD00u;
         (void)ipc_send_from(SERVICE_CTX, req.source, &stale);
@@ -426,14 +429,14 @@ static void test_an_out_of_order_reply_is_retained(void) {
 }
 
 /* A peer that answers with request_id+1 is answering a call that does not
- * exist. Before the fix that reply was retained, and the NEXT call the process
- * made drew it -- resolving with the previous call's payload without the peer
- * having answered it at all, because the authenticity check asks WHO replied and
- * never WHEN.
+ * exist. Retaining it would let the NEXT call the process makes draw it, and
+ * resolve that call with the previous call's payload without the peer having
+ * answered it at all, because the authenticity check asks WHO replied and never
+ * WHEN.
  *
  * Request ids come from one monotonic counter, so "at or beyond the next id to
- * be issued" is enough to tell a reply-to-nothing from a real one, and such a
- * reply is now refused at the ring rather than retained. */
+ * be issued" is enough to tell a reply-to-nothing from a real one; the ring
+ * refuses such a reply rather than retaining it. */
 static void test_a_reply_for_a_future_id_is_refused(void) {
     reset();
     syscall_frame_t f;
@@ -459,7 +462,7 @@ static void test_a_reply_for_a_future_id_is_refused(void) {
  * one blocked on id 5 parking another's reply for id 6, which no host fixture
  * drives.
  *
- * Without this the guard could reject EVERY reply and the suite stayed green. */
+ * Without it, a guard that rejected EVERY reply would leave the suite green. */
 static void test_the_pending_ring_retains_an_issued_id(void) {
     reset();
     /* Give the slot an owner by making one ordinary call first. */

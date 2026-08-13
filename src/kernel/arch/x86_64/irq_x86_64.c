@@ -15,10 +15,15 @@
 #endif
 
 /*
- * irq.c handles PIC setup, IRQ routing, and the minimal interrupt-side work
- * needed to wake the rest of the system. The policy rule is strict: do the
- * smallest safe amount of work in interrupt context, then let the scheduler and
- * regular kernel paths finish the job.
+ * x86_64 interrupt-controller backend: 8259/IOAPIC programming, EOI discipline
+ * and the interrupt-side entry points behind the arch-neutral irq.c shim. The
+ * policy rule is strict: do the smallest safe amount of work in interrupt
+ * context, then let the scheduler and regular kernel paths finish the job.
+ *
+ * WASMOS_IRQ_MODE selects the delivery path and is fixed at build time:
+ *   0 — 8259 PIC only, PIT timer, no LAPIC (msi_alloc refuses).
+ *   1 — LAPIC timer on IRQ 0, device IRQs 1-15 from the 8259 via LINT0 ExtINT.
+ *   2 — IOAPIC; the 8259 is masked off entirely. Required for SMP.
  */
 
 #define PIC1_CMD 0x20
@@ -149,7 +154,8 @@ static void irq_send_eoi(uint32_t irq_line) {
      *
      * IRQ 1–15 (devices) arrive via LINT0 in ExtINT delivery mode: the LAPIC
      * acts as a transparent pass-through and does NOT set any ISR bit (Intel
-     * SDM Vol 3A §10.8.4).  Only the 8259 PIC needs an EOI to clear its ISR.
+     * SDM Vol 3A, Local APIC chapter, "Signaling Interrupt Servicing
+     * Completion").  Only the 8259 PIC needs an EOI to clear its ISR.
      * Sending a LAPIC EOI here would erroneously clear whatever ISR bit the
      * LAPIC currently has set (e.g. a concurrently-pending timer tick).
      */
@@ -258,7 +264,11 @@ int x86_irq_unmask(uint32_t irq_line) {
 
 /* Set trigger/polarity for a line. flags: bit0 = level-triggered,
  * bit1 = active-low. Only meaningful in IOAPIC mode; the 8259 PIC has no
- * per-line polarity control, so this is a no-op there. */
+ * per-line polarity control, so this is a no-op there.
+ * FIXME: an out-of-range line returns a bare -1, yet this is reachable from a
+ * guest through the irq_configure host call, so the caller cannot tell it apart
+ * from any other failure. It must return the packed WASMOS_ERR_IRQ_BAD_LINE the
+ * neighbouring entry points use. */
 int x86_irq_configure(uint32_t irq_line, uint32_t flags) {
     if (irq_line >= IRQ_COUNT) {
         return -1;

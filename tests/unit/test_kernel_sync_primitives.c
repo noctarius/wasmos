@@ -17,6 +17,20 @@ extern int sched_yield(void);
 #include "sync/semaphore.h"
 #include "thread.h"
 
+/* Scheduler, thread and spinlock stubs. sync_mutex.c and sync_semaphore.c are
+ * compiled unmodified against these; this file supplies the spinlock family
+ * itself because its compile line does not link stubs_spinlock.c.
+ *
+ * A host process cannot deschedule a kernel thread, so sched_event_wait
+ * releases ev->lock -- as the kernel's version does before yielding -- and
+ * parks the calling pthread on a condvar; sched_event_wake_one signals one
+ * waiter and returns a fixed dummy thread, which both call sites ignore. A
+ * signal raised before the waiter reaches the condvar is not recorded, so a
+ * case that means to exercise the blocking path waits for the waiter to arrive
+ * (wait_for_host_waiters) before it releases the lock or the count. The two
+ * call counters let a case assert that the blocking path was taken rather than
+ * the uncontended one. g_current_tid is thread-local, so each pthread carries
+ * its own identity for the mutex owner checks. */
 static _Thread_local uint32_t g_current_tid = 1u;
 static uint32_t g_wait_call_count = 0u;
 static uint32_t g_wake_one_call_count = 0u;

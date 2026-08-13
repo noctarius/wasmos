@@ -1,3 +1,14 @@
+/* subsystem_registry.c - request-tag -> handler table plus the exec-format
+ * matcher table (see subsystem_registry.h).
+ *
+ * Two tables, both under g_subsystem_lock: a hashmap keyed by the FNV-1a hash
+ * of the request tag, whose value is the head of a chain of entries that
+ * collide on that hash, and a flat singly-linked list of exec-format handlers.
+ * Entries and matcher node arrays are kmem-owned and freed by
+ * wasmos_subsystem_registry_drop_owner (per registering context) or
+ * wasmos_subsystem_registry_reset (everything). Built-in entries carry
+ * owner_context_id 0, which drop_owner refuses to act on, so only registrations
+ * made from user space are torn down with their context. */
 #include "subsystem_registry.h"
 #include "hashmap.h"
 #include "klog.h"
@@ -32,6 +43,10 @@ static int subsystem_tag_has_valid_char(char c) {
            c == '-';
 }
 
+/* A tag is 1..WASMOS_SUBSYSTEM_TAG_LEN characters drawn from 'A'-'Z', '0'-'9',
+ * '+', '_' and '-'. Lower case is rejected rather than folded, so registration
+ * and lookup can compare with a plain strcmp. Returns 0 when valid, -1 when
+ * not. */
 static int subsystem_tag_validate_string(const char* tag) {
     if (!tag || tag[0] == '\0') {
         return -1;
@@ -265,6 +280,11 @@ static int exec_match_validate_node(const wasmos_exec_match_node_t* nodes, uint3
     return 0;
 }
 
+/* Reject a matcher the evaluator could not run safely: more than
+ * WASMOS_EXEC_MATCH_MAX_NODES nodes, an out-of-range child index, a cycle
+ * (visiting[] catches re-entry on the path), or a PREFIX node demanding more
+ * bytes than max_probe_bytes, which is all the spawn path will ever read from
+ * the file. Returns 0 when the tree is usable, -1 otherwise. */
 static int exec_match_validate_tree(const wasmos_exec_match_node_t* nodes, uint32_t node_count,
                                     uint32_t root_index, uint32_t max_probe_bytes) {
     uint8_t visiting[WASMOS_EXEC_MATCH_MAX_NODES];
@@ -544,6 +564,10 @@ int wasmos_subsystem_registry_register_exec_handler(const char* handler_name,
     return 0;
 }
 
+/* FIXME: the entry is returned after g_subsystem_lock is dropped, so a broker
+ * entry can be freed by wasmos_subsystem_registry_drop_owner while the caller
+ * still holds the pointer. Built-in entries are never freed, so only broker
+ * lookups are exposed; a refcount or a copy-out would close the window. */
 const wasmos_subsystem_registry_entry_t* wasmos_subsystem_registry_find(const char* request_tag) {
     if (!request_tag) {
         return 0;
@@ -560,6 +584,9 @@ const wasmos_subsystem_registry_entry_t* wasmos_subsystem_registry_find(const ch
     return 0;
 }
 
+/* Highest priority wins; ties go to the lexicographically smaller handler_name,
+ * then request_tag, so the choice does not depend on registration order. Same
+ * post-unlock lifetime caveat as wasmos_subsystem_registry_find above. */
 const wasmos_exec_handler_registry_entry_t*
 wasmos_subsystem_registry_find_exec_handler(const wasmos_exec_probe_t* probe) {
     wasmos_exec_handler_registry_entry_t* entry = 0;

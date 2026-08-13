@@ -1,6 +1,15 @@
-/* kernel_ring3_probe_runtime.c - Ring-3 smoke-probe launcher.
- * Loads ring3_native_probe.bin into a ring-3 process and verifies that basic
- * user-space execution, syscall return, and process exit work end-to-end. */
+/* kernel_ring3_probe_runtime.c - Ring-3 probe launcher.
+ *
+ * Loads the two flat probe binaries (ring3_native_probe.bin,
+ * ring3_thread_lifecycle_probe.bin) and the twelve inline fault probes below
+ * into ring-3 processes. Each spawn follows the same shape: park the process,
+ * map its linear region read-write to copy the code in, remap it read-execute,
+ * mirror that on the region flags so a later fault is judged against R+X,
+ * remap the top stack page user-writable, set the user entry, then unpark.
+ *
+ * Nothing here checks a probe's outcome: these functions return 0 once the
+ * process is running. The verdict for the fault probes is reached by
+ * kernel_ring3_fault_runtime.c from their exit statuses. */
 #include "kernel_ring3_probe_runtime.h"
 
 #include "klog.h"
@@ -93,10 +102,11 @@ int kernel_ring3_spawn_native_probe(uint32_t parent_pid, uint32_t* out_pid) {
         }
         region = (mem_region_t*)list_next(&it);
     }
-    /* Explicitly map the top stack page as user-writable.  The default
-     * mm_context_alloc_region mapping may be lost after paging_strip_low_slot;
-     * this mirrors the pattern in spawn_ring3_fault_probe_named. */
-
+    /* Map the top stack page user-writable explicitly: the mapping
+     * mm_context_alloc_region installed is not guaranteed to survive the
+     * low-slot strip process_set_user_entry performs
+     * (paging_strip_low_slot_in_root), and the probe's first push would then
+     * fault. Every spawn path in this file repeats this step. */
     uint64_t stack_top_page_virt = (stack.base + stack.size - 1u) & ~0xFFFULL;
     uint64_t stack_top_page_phys = (stack.phys_base + stack.size - 1u) & ~0xFFFULL;
     if (map_linear_pages(ctx->root_table, stack_top_page_virt, stack_top_page_phys, 0x1000u,
@@ -261,6 +271,14 @@ static int spawn_ring3_fault_probe_named(uint32_t parent_pid, const char* name, 
     return 0;
 }
 
+/* The twelve fault probes below share one shape. Each blob opens with
+ * `mov eax, WASMOS_SYSCALL_GETPID; int 0x80`, so a probe that never reaches
+ * ring 3 is distinguishable from one that reached it and faulted as intended;
+ * then comes the single instruction sequence that raises the vector named in
+ * the function (#PF read/write/exec, #UD, #GP, #DE, #DB, #BP, #OF, #NM, #SS,
+ * #AC); and each ends in `EB FE`, a self-jump that is reached only if the fault
+ * fails to arrive -- the process then spins instead of running off into
+ * whatever follows, and the policy runtime never sees an exit status. */
 int kernel_ring3_spawn_fault_probe(uint32_t parent_pid, uint32_t* out_pid) {
     static const uint8_t code[] = {0xB8, 0x01, 0x00, 0x00, 0x00, 0xCD, 0x80, 0x48, 0x8B,
                                    0x04, 0x25, 0x00, 0x00, 0x00, 0x00, 0xEB, 0xFE};

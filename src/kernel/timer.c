@@ -1,6 +1,8 @@
-/* timer.c - PIT/LAPIC timer driver.
- * Programs the i8253 PIT (or LAPIC periodic timer) at a configurable hz rate
- * and drives the scheduler tick.  timer_handle_irq() is called from the IRQ 0 handler. */
+/* timer.c - scheduler clock.  Programs the i8253 PIT channel 0
+ * (WASMOS_IRQ_MODE == 0) or the LAPIC periodic timer (WASMOS_IRQ_MODE >= 1) at a
+ * configurable hz rate.  timer_handle_irq() is called from that timer's
+ * interrupt handler: the IRQ 0 handler in PIT mode, the LAPIC timer vector
+ * otherwise. */
 #include "timer.h"
 #include "klog.h"
 #include "irq.h"
@@ -15,9 +17,8 @@
 #endif
 
 /*
- * PIT channel 0 is the current scheduler clock. The timer path only accounts
- * ticks and marks deferred log milestones; the heavy scheduling decision stays
- * outside the raw IRQ context.
+ * The interrupt path only accounts ticks and marks deferred log milestones; the
+ * heavy scheduling decision stays outside the raw IRQ context.
  */
 
 #define PIT_CMD_PORT 0x43

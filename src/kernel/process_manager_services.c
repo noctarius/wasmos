@@ -1,6 +1,8 @@
 /* process_manager_services.c - PM service registration and discovery.
- * Maintains a name → endpoint lookup table for registered services.
- * SVC_IPC_REGISTER_REQ / SVC_IPC_LOOKUP_REQ messages are handled here. */
+ * Maintains the name -> endpoint table (pm_service_set / pm_service_lookup) plus
+ * the SVC_IPC_* handlers over it, the virtual-class registry bridge (class
+ * register/lookup/subscribe and the exit-driven reap that fires REMOVE events),
+ * and the subsystem broker / exec-handler registrations. */
 #include "process_manager_internal.h"
 #include "capability.h"
 #include "klog.h"
@@ -225,11 +227,12 @@ int pm_handle_service_register(uint32_t pm_context_id, const ipc_message_t* msg)
 /* Descriptor-based service registration (SVC_IPC_REGISTER_DESC_REQ).
  *
  * Unlike pm_handle_service_register(), the request carries a svc_register_desc_t
- * in the caller's xfer buffer (arg0=offset 0, arg1=byte length) and msg->source
- * is a DEDICATED reply endpoint, separate from the service endpoint being
- * registered (desc->service_endpoint).  This keeps the reply off the live
- * service endpoint, eliminating the reply/serve-traffic race that deadlocked
- * boot once the process manager stopped busy-polling. */
+ * in the caller's xfer buffer (arg1 = byte length, arg2 = buffer_id) and
+ * msg->source is a DEDICATED reply endpoint, separate from the service endpoint
+ * being registered (desc->service_endpoint).  Keeping the reply off the live
+ * service endpoint is required, not stylistic: a registrant that blocks for its
+ * reply on the endpoint it is simultaneously serving can consume the reply as
+ * request traffic, or serve a request in place of the reply, and deadlock. */
 int pm_handle_service_register_desc(uint32_t pm_context_id, const ipc_message_t* msg) {
     char name[WASMOS_SVC_NAME_MAX];
     uint32_t reply_owner = 0;

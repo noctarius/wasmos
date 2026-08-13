@@ -8,7 +8,7 @@
 /*
  * shmem_target (shmtgt) — first half of the shmem end-to-end test.
  *
- * Minos2-aligned design: no busy-polling.
+ * Runs without busy-polling:
  *   1. Write PID + IPC endpoint to the sync file.
  *   2. Call wasmos_proc_notify_ready() so the CLI returns immediately and
  *      shmownr can be spawned concurrently.

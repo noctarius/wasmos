@@ -1,9 +1,9 @@
 #pragma once
 /* compat/stdexcept — freestanding stub of <stdexcept>
  *
- * Provides std::runtime_error (and its ancestors in the hierarchy).
- * With -fno-exceptions these classes are never thrown; they must exist so
- * WARP code that constructs or catches them compiles without error.
+ * Provides std::runtime_error (and its ancestors in the hierarchy).  WARP
+ * throws these; warp/cxx_abi.cpp turns a throw into a longjmp to the WARP_CALL
+ * checkpoint, so the message is the only state that survives.
  *
  * The message string is stored as a plain const char * (no heap copy) to
  * avoid pulling in allocator machinery. */

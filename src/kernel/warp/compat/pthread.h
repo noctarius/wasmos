@@ -1,8 +1,7 @@
 #pragma once
-/* Minimal pthread stub — only the types are needed; none of the pthread
- * functions are called because getStackInfo() is never used in the kernel.
- * WARP includes <pthread.h> only inside #ifdef __linux__ or __APPLE__
- * paths, but the declaration appears in the outer POSIX scope. */
+/* Minimal pthread stub — types only.  The functions are declared but never
+ * called: their sole WARP caller is MemUtils::getStackInfo(), and the kernel's
+ * replacement (warp/mem_utils_kernel.cpp) returns a zeroed StackInfo instead. */
 typedef unsigned long pthread_t;
 typedef struct {
     unsigned long data[8];

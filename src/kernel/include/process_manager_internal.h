@@ -13,7 +13,14 @@
 #include "wasmos_driver_abi.h"
 #include "xfer_buffer.h"
 
+/* TODO: dead constant. xfer_buffer.c documents its own TRANSFER capacity as
+ * mirroring this, but nothing in the tree reads it, so the two can drift
+ * silently. Either make xfer_buffer.c derive its capacity from here or delete
+ * this. */
 #define PM_XFER_BUFFER_SIZE (2u * 1024u * 1024u)
+/* Max DMA windows in one spawn profile. Must not exceed
+ * CAPABILITY_DMA_WINDOW_LIMIT, which sizes the capability-side array the
+ * profile is copied into. */
 #define PM_DMA_WINDOW_LIMIT 16u
 
 typedef struct {
@@ -124,8 +131,8 @@ uint32_t pm_alloc_cli_tty(void);
 
 /* Kernel VA of a transfer buffer owned by `owner_context` and named by
  * `buffer_id` (as carried over IPC), or 0 if no such object is owned by that
- * context. Fills *out_size (intrinsic capacity) when non-NULL. Used to read a
- * caller-owned buffer that PM does not own. */
+ * context. Fills *out_size with that object's own size when non-NULL. Used to
+ * read a caller-owned buffer that PM does not own. */
 const uint8_t* pm_foreign_xfer_ptr(uint32_t buffer_id, uint32_t owner_context, uint32_t* out_size);
 
 int pm_service_set(const char* name, uint32_t endpoint, uint32_t owner_context_id);

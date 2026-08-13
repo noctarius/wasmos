@@ -2,7 +2,7 @@
  *
  * poll.c is the push side of select: every ipc_send_from walks it, and a bug
  * here is either a lost wakeup (a service sleeps forever on traffic that did
- * arrive) or a walk over freed watcher nodes. It had no test of any kind.
+ * arrive) or a walk over freed watcher nodes.
  *
  * The file's only outward call is ipc_select_signal, stubbed here to record
  * (set, endpoint) pairs — so what is asserted is exactly which sets a notify
@@ -35,9 +35,10 @@ static int g_checks;
 
 /* ------------------------------------------------------------------ stubs */
 
-/* poll.c allocates watcher nodes with malloc; routing it through a switch is
- * the only way to reach the allocation-failure path. free is left to the host
- * libc, so aligned_alloc memory is released normally. */
+/* poll.c takes both the hub and every watcher node from malloc, so overriding
+ * malloc is what reaches its allocation-failure paths. The override cannot call
+ * malloc itself, hence aligned_alloc; free is left to the host libc, which
+ * releases aligned_alloc storage normally. */
 static int g_malloc_fail;
 
 void* malloc(size_t n) {
@@ -289,15 +290,15 @@ static void test_free_releases_every_watcher(void) {
         CHECK(poll_struct_add(ps, (poll_ev_t)ev, SET_B, 0) == 0, "two per event");
     }
     poll_struct_free(ps);
-    poll_struct_free(0); /* documented NULL-safe */
+    poll_struct_free(0); /* NULL-safe, though only poll_notify says so in poll.h */
     CHECK(1, "freeing a fully populated struct, and a NULL one, is clean");
 }
 
 static void test_user_data_does_not_affect_dispatch(void) {
     reset();
     poll_struct_t* ps = poll_struct_alloc();
-    /* user_data is carried but unused by the notify path; a set registered
-     * twice with different user_data is still one entry per add. */
+    /* user_data is stored on the watcher but never read by the notify path:
+     * ipc_select_signal is told the endpoint id and nothing else. */
     (void)poll_struct_add(ps, POLL_EV_IN, SET_A, 0xDEADBEEFu);
     (void)poll_struct_add(ps, POLL_EV_IN, SET_B, 0u);
     poll_notify(ps, POLL_EV_IN, 3u);

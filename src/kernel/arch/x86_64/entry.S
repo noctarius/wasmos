@@ -1,9 +1,11 @@
 /* entry.S - Kernel entry point and bootstrap page table setup.
  *
  * _start runs at the physical load address (lower half) where the UEFI
- * bootloader jumped.  It builds a minimal two-region identity map (lower 4 GB
- * via 2 MB large pages) and a 64 MB higher-half alias at virtual 0xFFFFFF8000000000
- * so the kernel can relocate to its linked address before calling kmain.
+ * bootloader jumped.  It builds a minimal two-region map: the lower 4 GB
+ * identity-mapped with 2 MB large pages, plus a 64 MB alias of physical 0 at
+ * virtual 0xFFFFFFFF80000000 (PML4 slot 511, PDPT slot 510), which is the
+ * KERNEL_HIGHER_HALF_BASE the kernel is linked against, so it can jump to its
+ * linked addresses before calling kmain.
  *
  * After loading CR3 and jumping to _start_high (the linked virtual address),
  * the lower-half identity map remains valid for the entire kernel lifetime as
@@ -19,16 +21,18 @@
 .set PT_FLAG_PRESENT, 0x1
 .set PT_FLAG_WRITE, 0x2
 .set PT_FLAG_LARGE, 0x80
-.set HIGHER_HALF_PDPT_INDEX, 510  /* PML4 slot 511 maps the higher-half PDPT */
+/* Slot 510 of the PDPT hung off PML4 slot 511: 511*512GB + 510*1GB gives
+ * virtual 0xFFFFFFFF80000000. */
+.set HIGHER_HALF_PDPT_INDEX, 510
 
 _start:
     cld
     /* Carry the boot_info pointer (UEFI MS-ABI arg0 = rcx) in a callee-saved
-     * register across paging setup AND the BSS clear in _start_high. Storing it
-     * to a .data variable is fragile: depending on linker layout that variable
-     * can fall inside the __bss_start..__bss_end range that _start_high zeroes,
-     * which nulled boot_info under ld.lld (observed in CI). r15 is untouched by
-     * the paging helpers and the BSS clear. */
+     * register across paging setup AND the BSS clear in _start_high. A memory
+     * slot cannot hold it: depending on linker layout the slot can fall inside
+     * the __bss_start..__bss_end range that _start_high zeroes, which nulls
+     * boot_info under ld.lld. r15 is untouched by the paging helpers and by the
+     * BSS clear. */
     mov %rcx, %r15
 
     lea bootstrap_pml4(%rip), %rdi
@@ -147,5 +151,6 @@ bootstrap_pd_high:
     .skip 4096
 .section .start.low.data, "aw"
 .align 8
+/* TODO: unreferenced — boot_info travels to kmain in r15, so this slot can go. */
 bootstrap_boot_info:
     .quad 0

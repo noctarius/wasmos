@@ -2,9 +2,9 @@
  *
  * The rules under test exist because PCI INTx is wire-OR'd — several devices can
  * assert one line — and because the kernel masks a line on dispatch and reopens
- * it only when every sharer has reported. Getting that accounting wrong either
- * livelocks the machine (reopening while a device still asserts) or kills a
- * device permanently (never reopening). Both were live bugs; see
+ * it only when every sharer has reported (line 0, the timer, is never masked).
+ * Getting that accounting wrong either livelocks the machine (reopening while a
+ * device still asserts) or kills a device permanently (never reopening). See
  * docs/architecture/05-x86-cpu-architecture.md §Interrupt Controller and IRQ
  * Routing. */
 #include <stdio.h>
@@ -117,8 +117,8 @@ static uint32_t unmasks_of(uint32_t line) {
 
 /* ---- tests ----------------------------------------------------------------- */
 
-/* Registering a second context must ADD a sharer. Overwriting silently stole the
- * line and stopped the first driver's interrupts. */
+/* Registering a second context must ADD a sharer: overwriting the first would
+ * silently steal the line and stop that driver's interrupts. */
 static void test_register_adds_not_replaces(void) {
     reset();
     expect(irq_sharing_register(g_lines, LINE, 10, 0x100, &OPS) == 0, "first register ok");

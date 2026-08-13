@@ -580,10 +580,10 @@ fn ipc_call(destination: u32, request_id: u32, msg_type: u32, arg0: u32, arg1: u
     return ipc_call_budgeted(destination, request_id, msg_type, arg0, arg1, arg2, arg3, out, 1024);
 }
 
-// Reply-wait tuning for synchronous ipc_call_budgeted when blocking (below).
-// Each empty wait blocks the reply endpoint up to GFX_CALL_WAIT_MS; the caller's
-// max_empty_polls (a legacy spin count) is capped to GFX_CALL_MAX_EMPTY_WAITS so
-// a lost reply gives up in ~5s rather than tens of seconds of blocking.
+// Reply-wait tuning for ipc_call_budgeted.  Each empty poll blocks the reply
+// endpoint for up to GFX_CALL_WAIT_MS; callers pass a much larger
+// max_empty_polls budget, which is clamped to GFX_CALL_MAX_EMPTY_WAITS so a lost
+// reply gives up after ~5 s (250 x 20 ms) instead of tens of seconds.
 const GFX_CALL_WAIT_MS: u32 = 20;
 const GFX_CALL_MAX_EMPTY_WAITS: u32 = 250;
 
@@ -603,8 +603,6 @@ fn ipc_call_budgeted(destination: u32, request_id: u32, msg_type: u32, arg0: u32
     var empty_polls: u32 = 0;
     var total_polls: u32 = 0;
     const poll_limit = if (max_empty_polls == 0) 1 else max_empty_polls;
-    // Cap the number of blocking reply-waits so a legacy spin budget (e.g. 1024)
-    // does not translate into tens of seconds of blocking.
     const wait_limit = if (poll_limit > GFX_CALL_MAX_EMPTY_WAITS) GFX_CALL_MAX_EMPTY_WAITS else poll_limit;
     // total_limit caps the loop even when continuous non-empty events (e.g. mouse
     // moves) keep preventing empty_polls from incrementing — without this, the
@@ -806,10 +804,13 @@ fn same_owner(owner_endpoint: u32, source_endpoint: u32) bool {
     return oc != 0 and oc == sc;
 }
 
-// Push all queued events to their owner endpoints as GFX_IPC_PUSH_EVENT
-// (arg1=event_type, arg2=window_id, arg3=payload). Best-effort: a full client
-// mailbox stops the flush and the rest are retained for the next one rather than
-// dropped.
+// Push all queued events to their owner endpoints as GFX_IPC_PUSH_EVENT:
+// arg1=event_type, arg2/arg3 = the event's first two payload words (window_id
+// plus a packed payload for window events; key_code plus flags for
+// GFX_EVENT_KEY).  gfx_event_t.arg3 is not transmitted — every event_push call
+// site passes 0 for it.
+// Best-effort: a full client mailbox stops the flush and the remaining events
+// stay queued for the next one rather than being dropped.
 fn flush_events() void {
     while (g_event_head != g_event_tail) {
         const ev = g_events[g_event_head];
@@ -1506,10 +1507,10 @@ fn reply_with_status(msg: *const c.nd_ipc_message_t, status: i32, arg1: u32, arg
     resp.arg1 = arg1;
     resp.arg2 = arg2;
     resp.arg3 = arg3;
-    // Retry until delivered: a dropped reply leaves the client blocked forever.
-    // The client is blocked in wasmos_ipc_select_one so its endpoint is empty
-    // and the send should succeed quickly; the loop is a safety net for any
-    // transient IPC_ERR_FULL burst.
+    // Retry hard: a dropped reply leaves the client blocked forever.  The client
+    // is blocked receiving on its endpoint, so the endpoint is empty and the
+    // send normally succeeds on the first try; the loop only covers a transient
+    // IPC_ERR_FULL burst, and gives up after the guard below.
     var tries: u32 = 0;
     while (api().ipc_send.?(ctxId(), msg.source, &resp) != 0) {
         tries +%= 1;
@@ -2229,6 +2230,10 @@ fn glyph_cache_get(codepoint: u32) ?*const glyph_cache_entry_t {
     return null;
 }
 
+// TODO: glyph pre-priming is not implemented — title runs are rasterised on
+// demand by refresh_title_cache, so the first paint of a new title blocks on two
+// synchronous font-service calls.  TITLE_GLYPHS and the per-codepoint glyph
+// cache exist for the priming path that would fill it in the idle loop.
 fn prime_title_glyph_step() void {
     _ = TITLE_GLYPHS;
 }
@@ -2955,17 +2960,19 @@ fn handle_ipc_dispatch(msg: *const c.nd_ipc_message_t) void {
     }
     switch (opcode) {
         c.VT_IPC_KEY_FORWARD => {
-            // The vt is the single scancode decoder now; it forwards decoded key
-            // events for vt-0.  arg0=ascii/keysym, arg1=scancode, arg2=flags
-            // (bit0=down, bit1=extended, bit2=shift, bit3=ctrl, bit4=altgr).
+            // The vt is the system's single scancode decoder; it forwards
+            // decoded key events for vt-0.  arg0=ascii/keysym, arg1=scancode,
+            // arg2=flags (bit0=down, bit1=extended, bit2=shift, bit3=ctrl,
+            // bit4=altgr).  Release events arrive too — bit0 distinguishes them.
             const ascii: u32 = msg.arg0 & 0xFF;
             const scancode: u32 = msg.arg1 & 0xFF;
             const flags: u32 = msg.arg2;
             if (g_focused_window_id != 0) {
                 if (window_find_by_id(g_focused_window_id)) |focused_idx| {
                     const focused = g_windows[focused_idx];
-                    // key_code low byte = ascii (backward compatible); high byte =
-                    // scancode so apps can read extended keys (arrows/function).
+                    // key_code low byte = ascii, high byte = scancode, so apps
+                    // can still act on extended keys (arrows, function keys)
+                    // that decode to ascii 0.
                     const key_code: u32 = ascii | (scancode << 8);
                     event_push(focused.owner_endpoint, c.GFX_EVENT_KEY, key_code, flags, 0);
                 }
@@ -3034,7 +3041,7 @@ fn register_ipc_handlers() i32 {
 }
 
 pub export fn initialize(driver_api: *c.wasmos_driver_api_t, module_count: c_int, arg2: c_int, arg3: c_int) c_int {
-    _ = module_count; // entry-arg convention retired; use the spawn-info contract
+    _ = module_count; // entry args carry nothing; state comes from spawn_info below
     _ = arg2;
     _ = arg3;
 

@@ -1,8 +1,9 @@
 .section .text
 .global context_switch
 .global context_switch_to
-# cpu_local_t.in_context_switch is at GS:17 (per-CPU; replaces the old
-# g_in_context_switch global so each CPU tracks its own context-switch state).
+# Byte offset of cpu_local_t.in_context_switch, reached through GS (the per-CPU
+# base), so each CPU tracks its own save/restore window. smp.h static-asserts the
+# value; if that assert fires this .set is what has to change.
 .set CPU_LOCAL_IN_CTX_SW_OFFSET, 17
 .extern g_in_scheduler
 .extern cpu_local_sched_ctx
@@ -32,6 +33,10 @@
 # The context switch path stores and restores the full general-purpose register
 # set plus RIP/RSP/RFLAGS. It also carries CS/SS/user-RSP metadata so ring3
 # contexts can resume via iretq while ring0 contexts keep the ret fast path.
+#
+# Every displacement below indexes process_context_t (process.h), which pins the
+# layout with _Static_asserts: r15 at 0 through rax at 112, then rsp 120,
+# rip 128, rflags 136, cs 144, ss 152, user_rsp 160, root_table 168.
 context_switch:
     # Mark the transition so debug code can distinguish genuine process state
     # corruption from an in-flight save/restore sequence.
@@ -83,6 +88,10 @@ context_switch:
     movq %cr3, %rax
     movq %rax, 168(%rdi)
 
+    # An incoming context pointer (and the RIP it restores) may still be a
+    # lower-half address from the boot-time physical alias. A negative value is
+    # already higher-half; anything else is rebased onto
+    # KERNEL_HIGHER_HALF_BASE before it is dereferenced or returned to.
     movq %rsi, %rdx
     testq %rdx, %rdx
     js 7f

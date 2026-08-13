@@ -37,7 +37,10 @@ typedef enum {
  * - args: RDI, RSI, RDX, RCX, R8, R9 (syscall-specific)
  * - return:
  *   - RAX: primary return value (0 or positive success value, negative error)
- *   - RDX: optional secondary value for select calls (ipc_call reply arg0)
+ *   - RDX: secondary value for the calls that need one, because a full-range
+ *     32-bit result cannot share RAX with a negative error code (IPC_CALL reply
+ *     arg0, THREAD_JOIN exit status). Cleared before every such call, so an
+ *     error return never leaves a stale value there.
  *
  * Current syscall argument/return contract:
  * - NOP:            RAX=0
@@ -60,8 +63,12 @@ typedef enum {
  * - THREAD_CREATE:  RDI=entry_rip, RSI=user_stack_top; RAX=tid on success.
  *                   New thread is created in the caller process with user-mode
  *                   RIP/RSP/CS/SS/root-table context initialized per-thread.
- * - THREAD_JOIN:    RDI=target_tid; RAX=target_exit_status on success, -1 on
- *                   error. Calling thread blocks until target exits.
+ * - THREAD_JOIN:    RDI=target_tid; RAX=0 and RDX=target_exit_status on success,
+ *                   RAX=a negative packed WASMOS_ERR_* / WASMOS_INVAL on error
+ *                   with RDX=0. The exit status is guest-chosen and spans the
+ *                   full 32-bit range, so it cannot share RAX with the outcome:
+ *                   a thread exiting -1 would be indistinguishable from a failed
+ *                   join. Calling thread blocks until target exits.
  * - THREAD_DETACH:  RDI=target_tid; RAX=0 on success, -1 on error. Detached
  *                   threads are not joinable and are reaped automatically.
  * - NOTIFY_READY:   no args; RAX=0. Marks the calling process as ready so that

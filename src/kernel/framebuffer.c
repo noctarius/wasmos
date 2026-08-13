@@ -24,6 +24,10 @@ static uint32_t g_panic_bg = 0x00000000;
 #define PANIC_FONT_W 8u
 #define PANIC_FONT_H 16u
 
+/* Reach a kernel global through the higher-half alias while the kernel is still
+ * executing from its low identity mapping (serial.c owns the same switch). Once
+ * serial_enable_high_alias is set, a low-VA global address is stale, so every
+ * static below is addressed through a *_slot() accessor rather than directly. */
 static inline uintptr_t framebuffer_alias_ptr(uintptr_t p) {
     if (serial_high_alias_enabled() && (uint64_t)p < KERNEL_HIGHER_HALF_BASE) {
         p = (uintptr_t)((uint64_t)p + KERNEL_HIGHER_HALF_BASE);
@@ -100,6 +104,11 @@ wasmos_error_code_t framebuffer_get_info(framebuffer_info_t* out) {
     return WASMOS_OK;
 }
 
+/* Map the GOP aperture at KERNEL_MMIO_FB_VA, page-aligned down from the GOP
+ * base and up past its end. Runs after paging is active; until it succeeds
+ * _fb_mmio_va() is 0, which is how the draw paths below detect "not mapped
+ * yet". Returns 0 on success, -1 if no framebuffer was recorded or a mapping
+ * failed. */
 int framebuffer_map_high(void) {
     framebuffer_info_t* fb = framebuffer_info_slot();
     if (fb->framebuffer_base == 0 || fb->framebuffer_size == 0) {
@@ -121,6 +130,9 @@ int framebuffer_map_high(void) {
     return 0;
 }
 
+/* All pixel paths here assume a 32-bit-per-pixel GOP mode: stride is counted in
+ * pixels and scaled by 4. framebuffer_gop_pixel_format is recorded for callers
+ * that care about channel order but is not consulted when writing. */
 wasmos_error_code_t framebuffer_put_pixel(uint32_t x, uint32_t y, uint32_t color) {
     framebuffer_info_t* fb = framebuffer_info_slot();
     uint64_t fb_va = _fb_mmio_va();

@@ -14,6 +14,10 @@
 //     a function is NOT matched (its parent is the control statement / decl),
 //     so only genuine standalone blocks are reported.
 //
+//   wasmos-reinterpret-cast  - rewrites the raw double casts "(T *)(uintptr_t)e"
+//     and "(intT)(uintptr_t)e" to ptr_cast(T, e) / addr_cast(intT, e). Fixit
+//     only, so it reports nothing useful without --fix.
+//
 //===----------------------------------------------------------------------===//
 
 #include "clang-tidy/ClangTidyCheck.h"

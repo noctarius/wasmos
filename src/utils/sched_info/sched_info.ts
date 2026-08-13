@@ -7,6 +7,11 @@ import {std} from "./wasmos";
 @external("wasmos", "sched_cpu_stats")
 declare function sched_cpu_stats(cpu_id: i32, out_ptr: i32): i32;
 
+// sched_info - print one row of scheduler counters per CPU. Takes no arguments.
+// sched_cpu_stats fills five u32 words in a fixed order (see
+// abi/hostcalls.yaml): ready_count, running_pid, steal_count, dispatch_count,
+// last_pid. A CPU whose stats call fails is skipped rather than reported.
+
 function padLeft(s: string, width: i32): string {
     while (s.length < width) s = " " + s;
     return s;

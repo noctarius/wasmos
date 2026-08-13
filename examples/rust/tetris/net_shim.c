@@ -94,8 +94,10 @@ int32_t tnet_reply_ep(void) {
     return g_reply_ep;
 }
 
-/* Queue `len` bytes to the peer (rings the TX doorbell). Blocks only on
- * ring-full backpressure, which the tiny fixed gameplay frames never hit. */
+/* Queue `len` bytes to the peer and ring the TX doorbell. Does not return until
+ * every byte is in the TX ring: a full ring is retried behind sched_yield, so a
+ * peer that stops draining stalls the caller here. The 4 KiB ring holds many
+ * gameplay frames, which keeps that path cold in practice. */
 int32_t tnet_send(const void* data, int32_t len) {
     if (!g_ready) {
         return -1;

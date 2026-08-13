@@ -7,7 +7,9 @@
 
 #include <stdint.h>
 
-/* The hardware action being requested by a driver hostcall. */
+/* The hardware action being requested by a driver hostcall. Only two actions
+ * read arg0: IO_PORT takes the port number, IRQ_ROUTE takes the IRQ line. The
+ * rest ignore it, so pass 0. */
 typedef enum {
     POLICY_ACTION_IO_PORT = 0,       /* inb/outb to a specific port */
     POLICY_ACTION_MMIO_MAP = 1,      /* map a physical MMIO range */
@@ -17,7 +19,10 @@ typedef enum {
     POLICY_ACTION_SYSTEM_CONTROL = 5 /* privileged system operations */
 } policy_action_t;
 
-/* Return 0 if context_id is authorized to perform action with arg0, or -1 to deny. */
+/* Return 0 if context_id is authorized to perform action with arg0, or -1 to
+ * deny. Holding the capability is necessary but not sufficient: once a context
+ * has a spawn profile, the per-context allowlist for that action decides, and
+ * IRQ_ROUTE additionally consults the kernel's own line policy. */
 int policy_authorize(uint32_t context_id, policy_action_t action, uint32_t arg0);
 
 /* Like policy_authorize but terminates the calling process on denial.

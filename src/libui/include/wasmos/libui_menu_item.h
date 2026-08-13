@@ -9,14 +9,11 @@
  * that lists its direct children.
  */
 
-/* ---- forward declarations ---- */
 static inline void ui_menu_item_popup_close(ui_context_t* ctx, ui_component_t* mi);
 static inline void ui_menu_item_popup_open(ui_context_t* ctx, ui_component_t* mi);
 static inline void ui_menu_item_popup_render(ui_context_t* ctx, ui_component_t* mi,
                                              int32_t hovered_row);
 static inline void ui_menu_item_popup_present(ui_context_t* ctx, ui_menu_item_data_t* d);
-
-/* ---- child-iteration helpers ---- */
 
 /* Count direct children of a MENU_ITEM component. */
 static inline int32_t ui_menu_item_child_count(const ui_context_t* ctx, const ui_component_t* mi) {
@@ -49,8 +46,6 @@ static inline ui_component_t* ui_menu_item_child_at_row(ui_context_t* ctx, const
     return NULL;
 }
 
-/* ---- render ---- */
-
 static inline void ui_render_menu_item(ui_context_t* ctx, const ui_component_t* c,
                                        ui_rect_t draw_bounds, ui_rect_t clip, int32_t offset_y) {
     (void)offset_y;
@@ -64,10 +59,8 @@ static inline void ui_render_menu_item(ui_context_t* ctx, const ui_component_t* 
                       draw_bounds.y + (draw_bounds.h - ctx->font_px) / 2,
                       (d && d->text.text) ? d->text.text : "",
                       c->fg_color ? c->fg_color : 0xFFDDE8F0u, clip);
-    /* The popup is rendered into its own window; nothing extra needed here. */
+    /* Only the bar/row label is drawn here; the popup has its own window. */
 }
-
-/* ---- popup bounds (in screen coordinates) ---- */
 
 /* Compute the screen position/size for the popup window of mi.
  * Respects the parent type: below the bar item if parent is MENU_BAR,
@@ -105,24 +98,27 @@ static inline void ui_menu_item_popup_position(const ui_context_t* ctx, const ui
         *out_h = ph;
 }
 
-/* ---- popup hit-test (used by core find_*_at) ---- */
-
+/* Always false, by design. The popup is a separate compositor window, so its
+ * events arrive with coordinates relative to that window and are routed by
+ * window id in ui_loop_handle_ipc. The core find_*_at walkers only ever pass
+ * bar-window coordinates, and answering true here would map them onto popup
+ * rows. The vtable slot stays filled so the core keeps asking the component. */
 static inline bool ui_menu_item_popup_contains(const ui_context_t* ctx, const ui_component_t* c,
                                                int32_t x, int32_t y) {
     ui_menu_item_data_t* d = (ui_menu_item_data_t*)c->component_data;
     if (!d || !d->dropdown_open || d->popup_win_id == 0)
         return false;
-    /* The popup is a separate window, so its screen rect is NOT hit-tested in the
-     * bar window.  Events arrive from the popup's own window via the IPC loop.
-     * Returning false stops core mapping bar-window coords into popup rows. */
     (void)ctx;
     (void)x;
     (void)y;
     return false;
 }
 
-/* ---- popup render (into the popup's own framebuffer) ---- */
-
+/* Repaint the popup's own framebuffer: one row per direct child, the hovered
+ * row highlighted, and a '>' marker on rows that have children of their own.
+ * Also republishes every child's bounds as its row rect in SCREEN coordinates,
+ * which is what ui_menu_item_popup_position() reads to place a sub-popup — so
+ * this must run before opening one. */
 static inline void ui_menu_item_popup_render(ui_context_t* ctx, ui_component_t* mi,
                                              int32_t hovered_row) {
     ui_menu_item_data_t* d = (ui_menu_item_data_t*)mi->component_data;
@@ -135,6 +131,9 @@ static inline void ui_menu_item_popup_render(ui_context_t* ctx, ui_component_t* 
     ui_fill_rect(d->popup_base, d->popup_w, d->popup_h, 0, 0, d->popup_w, d->popup_h, 0xFF1A2840u);
     ui_stroke_rect_clip(d->popup_base, d->popup_w, d->popup_h, full, 1, 0xFF4A6080u, full);
 
+    /* ui_draw_text_clip() always draws into ctx->mapped_base at ctx->width x
+     * ctx->height, so point the context at the popup framebuffer for the
+     * duration and restore it before returning. */
     uint8_t* saved_base = ctx->mapped_base;
     int32_t saved_w = ctx->width;
     int32_t saved_h = ctx->height;
@@ -142,7 +141,6 @@ static inline void ui_menu_item_popup_render(ui_context_t* ctx, ui_component_t* 
     ctx->width = d->popup_w;
     ctx->height = d->popup_h;
 
-    /* Compute global screen origin for sub-popup positioning (popup x/y in screen). */
     int32_t popup_screen_x = 0, popup_screen_y = 0;
 
     int32_t pw2 = 0, ph2 = 0;
@@ -158,27 +156,21 @@ static inline void ui_menu_item_popup_render(ui_context_t* ctx, ui_component_t* 
 
         const int32_t row_y = row * item_h;
 
-        /* Update child bounds to their row rect in screen coordinates.
-         * This is needed so sub-popup positioning can use child->bounds. */
         child->bounds.x = popup_screen_x;
         child->bounds.y = popup_screen_y + row_y;
         child->bounds.w = d->popup_w;
         child->bounds.h = item_h;
 
-        /* Highlight row if hovered */
         if (row == hovered_row) {
             ui_fill_rect(d->popup_base, d->popup_w, d->popup_h, 1, row_y, d->popup_w - 2, item_h,
                          0xFF2F5C88u);
         }
 
-        /* Draw label */
         const ui_menu_item_data_t* cd = (const ui_menu_item_data_t*)child->component_data;
         const char* label = (cd && cd->text.text) ? cd->text.text : "";
         ui_draw_text_clip(ctx, 8, row_y + (item_h - ctx->font_px) / 2, label, 0xFFFFFFFFu, full);
 
-        /* Draw submenu arrow if child has children */
         if (child->first_child_id > 0) {
-            /* Draw a simple '>' indicator on the right edge */
             ui_draw_text_clip(ctx, d->popup_w - 14, row_y + (item_h - ctx->font_px) / 2, ">",
                               0xFFAABBCCu, full);
         }
@@ -192,8 +184,6 @@ static inline void ui_menu_item_popup_render(ui_context_t* ctx, ui_component_t* 
     ctx->height = saved_h;
 }
 
-/* ---- popup present ---- */
-
 static inline void ui_menu_item_popup_present(ui_context_t* ctx, ui_menu_item_data_t* d) {
     if (!d || !d->popup_base || d->popup_win_id == 0 || d->popup_buf_id == 0)
         return;
@@ -203,8 +193,6 @@ static inline void ui_menu_item_popup_present(ui_context_t* ctx, ui_menu_item_da
     ui_send_gfx(ctx->gfx_endpoint, ctx->reply_endpoint, ctx->req_id++, GFX_IPC_PRESENT_WINDOW,
                 d->popup_win_id, d->popup_buf_id, 0, 0, &status, 0, 0, 0);
 }
-
-/* ---- popup close ---- */
 
 static inline void ui_menu_item_popup_close(ui_context_t* ctx, ui_component_t* mi) {
     ui_menu_item_data_t* d = (ui_menu_item_data_t*)mi->component_data;
@@ -245,8 +233,6 @@ static inline void ui_menu_item_popup_close(ui_context_t* ctx, ui_component_t* m
         cid = child->next_sibling_id;
     }
 }
-
-/* ---- popup open ---- */
 
 static inline void ui_menu_item_popup_open(ui_context_t* ctx, ui_component_t* mi) {
     ui_menu_item_data_t* d = (ui_menu_item_data_t*)mi->component_data;
@@ -341,8 +327,8 @@ fail:
                 win_id, 0, 0, 0, &status, 0, 0, 0);
 }
 
-/* ---- top-level bar click: open popup WITH focus ---- */
-
+/* Flag-only open/close for a bar item. ui_loop_drain -> ui_menu_item_sync_popup
+ * turns dropdown_open into the actual popup window. */
 static inline void ui_menu_item_open_dropdown(ui_context_t* ctx, ui_component_t* mi) {
     ui_menu_item_data_t* d = (ui_menu_item_data_t*)mi->component_data;
     if (!d)
@@ -361,8 +347,9 @@ static inline void ui_menu_item_close_dropdown(ui_context_t* ctx, ui_component_t
     }
 }
 
-/* ---- sync popup state with dropdown_open (called from ui_loop_drain) ---- */
-
+/* Reconcile the popup window with dropdown_open. Called for every MENU_ITEM
+ * from ui_loop_drain, so a flag flipped anywhere takes effect on the next
+ * repaint; a size change reopens the window. */
 static inline void ui_menu_item_sync_popup(ui_context_t* ctx, ui_component_t* mi) {
     ui_menu_item_data_t* d = (ui_menu_item_data_t*)mi->component_data;
     if (!d)
@@ -382,8 +369,10 @@ static inline void ui_menu_item_sync_popup(ui_context_t* ctx, ui_component_t* mi
     }
 }
 
-/* ---- handle pointer events from a popup window ---- */
-
+/* Handle one GFX_EVENT_POINTER from mi's popup window. msg->arg3 carries
+ * popup-window coordinates, so the row is py / item_h with no translation.
+ * Hover moves open/close sub-popups as a preview; a left release activates a
+ * leaf's on_click or hands the sub-popup focus. */
 static inline void ui_menu_item_handle_popup_event(ui_context_t* ctx, ui_component_t* mi,
                                                    const wasmos_ipc_message_t* msg) {
     ui_menu_item_data_t* d = (ui_menu_item_data_t*)mi->component_data;
@@ -452,7 +441,8 @@ static inline void ui_menu_item_handle_popup_event(ui_context_t* ctx, ui_compone
             ui_component_t* child = ui_menu_item_child_at_row(ctx, mi, hovered);
             if (child) {
                 if (child->first_child_id == 0) {
-                    /* Leaf: fire on_click callback */
+                    /* Leaf: dismiss the popup first so the callback runs with
+                     * the menu already closed, from values cached beforehand. */
                     d->dropdown_open = 0;
                     const int32_t mi_id = mi->id;
                     (void)mi_id;
@@ -482,15 +472,16 @@ static inline void ui_menu_item_handle_popup_event(ui_context_t* ctx, ui_compone
                 }
             }
         }
-        /* Release outside popup bounds: don't dismiss here.  The popup will
-         * close via FOCUS_LOST when the user clicks outside the menu hierarchy.
-         * Dismissing on out-of-bounds release caused premature close when the
-         * mouse moved a few pixels beyond the popup edge. */
+        /* A release outside the popup deliberately does nothing: the popup is
+         * dismissed by FOCUS_LOST once the click lands outside the whole menu
+         * hierarchy. Closing here would also fire when the pointer merely
+         * drifted a few pixels past the popup edge. */
     }
 }
 
-/* ---- handle pointer release on the bar (bar-level items) ---- */
-
+/* Pointer release inside the bar window: a leaf bar item fires its on_click,
+ * a non-leaf toggles its own dropdown after closing its siblings. Popup rows
+ * are handled by ui_menu_item_handle_popup_event instead. */
 static inline void ui_menu_item_handle_pointer_release(ui_context_t* ctx, int32_t x, int32_t y) {
     int32_t mi_id2 = -1;
     for (int32_t ci2 = 0; ci2 < ctx->component_count; ++ci2) {
@@ -536,10 +527,10 @@ static inline void ui_menu_item_handle_pointer_release(ui_context_t* ctx, int32_
     }
 }
 
-/* ---- dismiss all open popups (focus-lost) ---- */
-
+/* Close every menu popup in the context. The mi argument is the component that
+ * observed the focus loss and is not otherwise consulted: dismissal is
+ * all-or-nothing across the whole menu hierarchy. */
 static inline void ui_menu_item_dismiss_popup(ui_context_t* ctx, ui_component_t* mi) {
-    /* Close all bar-level menu items and their entire subtrees */
     for (int32_t i = 0; i < ctx->component_count; ++i) {
         ui_component_t* c = &ctx->components[i];
         if (!c->in_use || c->type != UI_COMPONENT_MENU_ITEM)
@@ -555,16 +546,17 @@ static inline void ui_menu_item_dismiss_popup(ui_context_t* ctx, ui_component_t*
     ui_mark_dirty(ctx);
 }
 
-/* ---- destroy_data ---- */
-
 static inline void ui_menu_item_destroy_data(ui_component_t* c) {
     ui_menu_item_data_t* d = (ui_menu_item_data_t*)c->component_data;
     if (!d)
         return;
     if (d->text.text)
         free(d->text.text);
-    /* Popup shmem is unmapped; window destruction is done via IPC before destroy_data
-     * is typically called (ui_destroy walks all components). */
+    /* Only the shmem mapping is released here; the compositor window and its
+     * shared buffer are torn down by ui_menu_item_popup_close().
+     * FIXME: a popup still open when ui_destroy() walks the components leaks
+     * its window and buffer, because destroy_data has no gfx endpoint to send
+     * DESTROY_WINDOW / RELEASE_SHARED_BUFFER on. */
     if (d->popup_shmem_id > 0)
         wasmos_shmem_unmap(d->popup_shmem_id);
     free(d);

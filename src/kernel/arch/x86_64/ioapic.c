@@ -1,7 +1,7 @@
 /* ioapic.c - I/O APIC driver.
- * MMIO-maps the I/O APIC registers (IOREGSEL/IOWIN), enumerates redirection
- * table entries, and programs GSI→vector mappings so hardware IRQs reach the
- * correct LAPIC on each AP.  Replaces the legacy 8259 PIC after SMP init. */
+ * MMIO-maps the I/O APIC registers (IOREGSEL/IOWIN) and programs the ISA
+ * GSI→vector redirection entries.  The 8259 it replaces is masked off earlier,
+ * by lapic_init(). */
 #include "arch/x86_64/ioapic.h"
 #include "irq.h"
 #include "paging.h"
@@ -16,13 +16,20 @@
 
 /*
  * I/O APIC driver (xAPIC mode).  Parses the ACPI MADT to discover the I/O APIC
- * physical base and any ISA IRQ source overrides, maps one 4 KB MMIO page into
- * kernel virtual space, then programs all 16 ISA Redirection Table Entries to
- * deliver IRQs at vectors IRQ_VECTOR_BASE+0 through IRQ_VECTOR_BASE+15 (32–47)
- * to LAPIC 0 (the BSP) in edge-triggered, active-high, initially masked mode.
+ * physical base, the ISA IRQ source overrides and (under WASMOS_SMP) the AP
+ * APIC IDs; maps one 4 KB MMIO page into kernel virtual space; then programs all
+ * 16 ISA Redirection Table Entries to deliver IRQs at vectors IRQ_VECTOR_BASE+0
+ * through IRQ_VECTOR_BASE+15 (32–47) to LAPIC 0 (the BSP) as level-triggered,
+ * active-high and initially masked.  Every line targets the BSP: nothing steers
+ * interrupts at other CPUs, and msi_x86_64.c makes the same choice.
  *
- * EOI path: ISA IRQs are edge-triggered, so only a LAPIC EOI is required after
- * each interrupt — the I/O APIC does not need a separate EOI write.
+ * Trigger mode is level rather than the ISA-default edge on purpose; see the
+ * IOAPIC_RTE_LEVEL comment below.  pci-bus reconfigures INTx lines to
+ * level/active-low through ioapic_configure_irq().
+ *
+ * EOI path: a LAPIC EOI is the only acknowledgement the kernel writes.  For a
+ * level-triggered RTE the LAPIC broadcasts an EOI message back to the I/O APIC,
+ * which clears Remote IRR, so no separate I/O APIC EOI-register write is needed.
  *
  * This driver is compiled for all IRQ modes but only called (from
  * x86_irq_late_init) when WASMOS_IRQ_MODE == 2.

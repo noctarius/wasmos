@@ -21,7 +21,11 @@ static int g_spawn_loaded;
 
 /* Read this process's spawn-info header + args blob into static storage, once.
  * Lazy + idempotent: works for main-entry apps and initialize-entry
- * services/drivers alike. Leaves g_spawn_info.magic == 0 if none is available. */
+ * services/drivers alike. Leaves g_spawn_info.magic == 0 when no buffer is
+ * available or the header does not carry WASMOS_SPAWN_INFO_MAGIC.
+ * FIXME: a header that reads back but fails the magic check leaves the other
+ * fields holding whatever was in the buffer, so the accessors below can return
+ * that garbage instead of zero. */
 static void wasmos_startup_load(void) {
     int32_t bid;
     uint32_t n = 0;

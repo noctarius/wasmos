@@ -1,3 +1,13 @@
+/* Spinlocks for the host tests: definitions for the declarations in
+ * arch/x86_64/spinlock.h, which the real kernel implements in
+ * arch/x86_64/spinlock.c.
+ *
+ * A plain compare-and-swap spin. The kernel's version also saves RFLAGS and
+ * clears IF for the duration, which a host process has neither the ability nor
+ * the need to do -- so lock/lock_noirq are the same code here and a test cannot
+ * observe the interrupt-state half of the real contract. Mutual exclusion
+ * between the pthreads that stand in for CPUs is preserved, which is the part
+ * the tests exercise. */
 #include "arch/x86_64/spinlock.h"
 
 void spinlock_init(spinlock_t* lock) {

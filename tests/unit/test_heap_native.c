@@ -2,8 +2,8 @@
  *
  * heap_native.c is compiled separately with malloc/free/calloc/realloc renamed to
  * hn_* (see the run-kernel-unit-tests wiring), so it links alongside host libc.
- * vm_map/vm_unmap are mocked with host aligned allocation, isolating the
- * allocator's logic from the kernel's physical-page behavior. Covers the small
+ * vm_map/vm_unmap are mocked with host malloc/free, isolating the allocator's
+ * logic from the kernel's physical-page behavior. Covers the small
  * (slab) and large (per-mapping) paths, realloc data preservation, calloc
  * zeroing, corruption detection, and a mixed stress loop that mimics parsing a
  * large certificate bundle (many small allocs plus some > 4096 B). */
@@ -71,10 +71,9 @@ static uint32_t xr(void) {
 static void* g_ptrs[STRESS_N];
 static uint32_t g_sizes[STRESS_N];
 
-/* Each case was a braced block inside main(); they are named functions now so
- * the order they run in can be randomized. Heap state is process-global and
- * deliberately NOT reset between them -- the allocator is meant to survive any
- * interleaving, which is exactly what shuffling checks. */
+/* Heap state is process-global and deliberately NOT reset between cases: the
+ * allocator has to survive any interleaving, which is what the shuffled order
+ * checks. */
 static void test_small_alloc_holds_its_data(void) {
     uint8_t* p = hn_malloc(100);
     expect(p != NULL, "malloc(100) non-NULL");
@@ -90,8 +89,9 @@ static void test_calloc_zeroes(void) {
     hn_free(p);
 }
 
-/* Regression guard for the header-offset bug where free() miscomputed the
- * header for large (> 4096) allocations. */
+/* An allocation above HEAP_MAX_SMALL_ALLOCATION (4096) gets its own mapping
+ * with a LargeAllocationHeader; free() must recover that header from the same
+ * offset malloc placed it at, or it reports corruption instead of unmapping. */
 static void test_large_alloc_and_free(void) {
     uint8_t* p = hn_malloc(20000);
     expect(p != NULL, "malloc(20000) large non-NULL");
@@ -111,7 +111,8 @@ static void test_realloc_grow_preserves_prefix(void) {
     hn_free(q);
 }
 
-/* Shrinking within one size class keeps the block in place. */
+/* A shrink that still fits the block's size class is served in place: only
+ * requested_size changes, so the retained prefix must be byte-identical. */
 static void test_realloc_shrink_preserves_prefix(void) {
     uint8_t* p = hn_malloc(2000);
     memset(p, 0x22, 2000);

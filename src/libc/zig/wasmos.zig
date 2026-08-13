@@ -214,7 +214,8 @@ pub const startup = struct {
 };
 
 pub export fn wasmos_main(arg0: i32, arg1: i32, arg2: i32, arg3: i32) callconv(.c) i32 {
-    // The entry-arg registers are retired; startup values come from spawn-info.
+    // PM always passes zeros in the entry-arg registers; every startup value
+    // comes from the spawn-info buffer instead.
     _ = arg0;
     _ = arg1;
     _ = arg2;
@@ -424,9 +425,12 @@ pub const ipc = struct {
         return ep;
     }
 
-    /// Send a request to server and block until a reply arrives.
-    /// The reply endpoint is per-context and managed internally — callers never
-    /// share it, so only this context's reply ever lands there.
+    /// Send a request to server and block until the FIRST message arrives on the
+    /// per-context managed reply endpoint; it is returned as the reply without
+    /// checking its request id or source. Only one request may be outstanding on
+    /// that endpoint at a time, or a stale reply is returned for a later call.
+    /// The C helper (wasmos_ipc_call) matches instead, and eventloop-driven
+    /// components demultiplex properly.
     pub fn call(server: i32, msg_type: i32, arg0: i32, arg1: i32, arg2: i32, arg3: i32) Error!Reply {
         const reply_endpoint = try ensureIpcReplyEndpoint();
         const request_id = nextIpcRequestId();

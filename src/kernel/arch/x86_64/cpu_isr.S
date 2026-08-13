@@ -1,8 +1,20 @@
 .section .text
 
-# The ISR stubs are intentionally split: exceptions either panic or hand control
-# to a dedicated fault handler, while IRQ stubs do the minimum register save
-# needed before delegating to C.
+# ISR stubs. Exception stubs either panic or hand control to a fault handler
+# that may resume the faulting context; IRQ stubs save the register set and
+# delegate to C.
+#
+# Register-frame contract shared with the C side (irq_frame_t in process.h,
+# x86_exception_panic_common in cpu_x86_64.c). PUSH_REGS leaves 15 quadwords
+# directly below the CPU-pushed frame: r15 at +0 rising to rax at +112. The CPU
+# frame therefore starts at +120 and is, in long mode, always five slots wide —
+# rip, cs, rflags, rsp, ss — preceded by an error code for the vectors that push
+# one. Stubs for vectors without an architectural error code push a zero in its
+# place when the C handler expects the error-code form.
+#
+# Consequences the offsets below depend on: irq_frame_t maps the no-error-code
+# layout (rip at +120, user_rsp at +144), the #PF stub reads its error code at
+# +120, and a syscall result is stored into the saved rax slot at +112.
 
 .extern x86_exception_panic
 .extern x86_exception_panic_frame
@@ -57,6 +69,10 @@
     popq %rax
 .endm
 
+# Call a C function with the 16-byte stack alignment the SysV ABI requires at a
+# call site; an interrupt can be taken at any alignment. The unaligned %rsp is
+# saved in the 16-byte scratch area and put back afterwards, so the frame the
+# stub built is left exactly as it was.
 .macro CALL_C_ALIGNED target
     movq %rsp, %rax
     andq $-16, %rsp
@@ -79,11 +95,18 @@ isr_nmi:
     POP_REGS
     iretq
 
+# Catch-all exception stub: no recovery, straight to the panic dump. Only the
+# vectors with a dedicated kernel-side handler (#PF and the user-fault vectors)
+# get their own stub below.
+#
+# FIXME: this stub passes the post-PUSH_REGS %rsp, which x86_exception_panic_frame
+# reads as the error-code form (+120 = err). That is correct only for the vectors
+# declared here that push an error code (8, 10, 11, 21, 29, 30); for the rest
+# the dump reports rip as "err", cs as "rip" and so on. The stub would need a
+# `pushq $0` for the no-error-code vectors, as isr_exception_3 already does.
 .macro DECL_EXC num
 .global isr_exception_\num
 isr_exception_\num:
-    # Simple exceptions currently panic immediately; richer recovery is only
-    # implemented for the faults that already have kernel-side handlers.
     PUSH_REGS
     movq %rsp, %rsi
     mov $\num, %rdi
@@ -114,6 +137,10 @@ isr_exception_0:
     add $8, %rsp
     iretq
 
+# FIXME: the panic path here omits the PUSH_REGS that every other user-fault
+# stub performs, so x86_exception_panic_frame is handed the CPU frame itself
+# instead of the register block that precedes it and dumps garbage for a #DB
+# the user handler declined.
 .global isr_exception_1
 isr_exception_1:
     pushq $0
@@ -251,8 +278,10 @@ isr_exception_13:
 
 .global isr_exception_14
 isr_exception_14:
-    # Page faults are the only recoverable exception path today. Push the full
-    # register set so the C handler can inspect and potentially resume.
+    # #PF is the only exception whose handler can return to the faulting
+    # instruction (page mapped on demand, or a stale-TLB retry), so the full
+    # register set is saved and restored around the call. arg0 = error code,
+    # arg1 = the CPU frame it heads.
     PUSH_REGS
     mov 120(%rsp), %rdi
     leaq 120(%rsp), %rsi
@@ -304,11 +333,26 @@ DECL_EXC 29
 DECL_EXC 30
 DECL_EXC 31
 
+# IRQ0 drives timer preemption, so its C handler is allowed to rewrite the IRET
+# frame in place — and a handler bug there returns the CPU to an arbitrary
+# address. The stub therefore brackets the call with two checks:
+#
+#  1. IST overflow: this vector runs on IST1, and the lowest quadword of the
+#     BSP's IST1 stack holds g_irq0_ist_canary. A mismatch means the stack grew
+#     down into its own guard word. Every CPU compares that one array, so an AP
+#     with its own IST1 stack (smp.c) is not covered.
+#  2. IRET-frame integrity: a 48-byte scratch area below the register block holds
+#     two guard words (+0, +8) followed by copies of the entering rip/cs/rflags
+#     (+16, +24, +32). After the call the copies are compared against the live
+#     frame (rip at +168, cs at +176, rflags at +184 once the scratch is
+#     subtracted). The only sanctioned divergence is the preemption rewrite:
+#     rip -> process_preempt_trampoline with cs -> KERNEL_CS_SELECTOR. RFLAGS must
+#     be unchanged; the matching ss/rsp rewrite is not checked here.
+#
+# Either check failing is fatal: the stub reports and halts rather than iretq to
+# an unverified frame.
 .global isr_irq_0
 isr_irq_0:
-    # IRQ0 is special because it drives timer preemption. Capture the IRET frame,
-    # preserve a small canary-protected scratch area, and let the C timer path
-    # decide whether the interrupted RIP should be redirected.
     PUSH_REGS
     movq g_irq0_ist_canary(%rip), %rax
     cmpq %rax, g_irq0_ist_stack(%rip)
@@ -378,7 +422,8 @@ isr_irq_\num:
 /*
  * MSI vectors (48-63). Identical prologue to DECL_IRQ, but they land in
  * x86_msi_handler: a message-signalled interrupt is edge-triggered and owned by
- * exactly one endpoint, so there is no line to mask and no ack to wait for.
+ * exactly one endpoint, so there is no line to mask and no driver ack gating
+ * re-arm — the handler's whole epilogue is the LAPIC EOI.
  */
 .macro DECL_MSI num vec
 .global isr_msi_\num

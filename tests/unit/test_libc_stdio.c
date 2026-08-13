@@ -65,7 +65,7 @@ static int test_long(void) {
     return 0;
 }
 
-/* ---- M-10: %lld and %zu ---- */
+/* ---- long long and size_t specifiers ---- */
 static int test_lld(void) {
     char buf[64];
     /* value that fits in long long but not int */

@@ -4,10 +4,13 @@
 
 #include <stdint.h>
 
-/* Match path against mount_names[] and write the tail (path after the mount
- * prefix) into out_path.  Returns 1 on match with *out_mount_index set;
- * returns 0 if no mount matches (caller should treat as not-found).
- * allow_relative: non-zero to accept paths that don't start with '/'. */
+/* Match the first path segment against mount_names[] (case-insensitive, ASCII)
+ * and write the tail after that segment into out_path, NUL-terminated; a path
+ * that is exactly the mount name yields "/".  Returns 1 on match, with
+ * *out_mount_index and *out_path_len set.  Returns 0 — leaving the outputs
+ * untouched — when no mount matches, when the path is relative and
+ * allow_relative is 0, or when the tail does not fit in out_path_cap; the caller
+ * treats all three as not-routed. */
 int32_t fsmgr_route_path_for_mounts(const char* path, int32_t path_len,
                                     const char* const* mount_names, int32_t mount_count,
                                     int32_t allow_relative, int32_t* out_mount_index,

@@ -1,6 +1,7 @@
 /* libsys_native.c - libsys_native implementation for Zig/C native drivers.
- * Thin wrappers around the wasmos_native_driver.h hostcall ABI; compiled
- * as C so both Zig and C native drivers can link against a single object. */
+ * Thin wrappers around the wasmos_driver_api_t function-pointer table declared
+ * in wasmos_native_driver.h (the native counterpart of the WASM hostcall
+ * imports); compiled as C so both Zig and C native drivers link one object. */
 #include "wasmos/libsys_native.h"
 #include <string.h> /* libc str_copy_bytes (native drivers link libc string.c) */
 
@@ -166,8 +167,11 @@ void wasmos_sys_ipc_unpack_name16_native(uint32_t arg0, uint32_t arg1, uint32_t 
     out[pos] = 0u;
 }
 
-/* Idle receive loop for native drivers that have entered a terminal state;
- * yields after each message so the scheduler can run other processes. */
+/* Terminal-state parking loop for native drivers: never returns, drains and
+ * DISCARDS anything sent to receiver_endpoint, and yields whenever the endpoint
+ * reports IPC_EMPTY (rc == 1) so other processes run.
+ * FIXME: this yield-spins instead of blocking; a driver parked here still costs
+ * a scheduling slot per pass. Use api->ipc_wait once callers can be migrated. */
 void wasmos_sys_ipc_recv_loop_native(wasmos_driver_api_t* api, uint32_t receiver_endpoint) {
     nd_ipc_message_t msg;
     if (!api || !api->ipc_recv || !api->sched_current_pid) {
@@ -576,6 +580,8 @@ int32_t wasmos_sys_ipc_recv_matching_native(wasmos_driver_api_t* api, uint32_t r
     }
 }
 
+/* Retries only IPC_ERR_FULL (-3, kernel include/ipc.h): a momentarily full
+ * destination queue. Any other status is returned to the caller unchanged. */
 int32_t wasmos_sys_ipc_send_retry_native(wasmos_driver_api_t* api, uint32_t destination_endpoint,
                                          uint32_t source_endpoint, uint32_t msg_type,
                                          uint32_t request_id, uint32_t arg0, uint32_t arg1,

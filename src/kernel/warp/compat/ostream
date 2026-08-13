@@ -1,7 +1,8 @@
 #pragma once
-/* Minimal <ostream> stub — satisfies WARP's #include <ostream> and the
- * &std::endl references in MemUtils.cpp.  Never used at runtime: the calls that
- * would print are stubbed. */
+/* Minimal <ostream> stub.  compat/iostream builds std::cout/std::cerr on it
+ * (defined in warp/iostream_stubs.cpp); every insertion is discarded, so no
+ * output is ever produced.  WARP's own std::cout users (utils/MemUtils.cpp,
+ * utils/OSAPIChecker.cpp) are replaced by kernel translation units. */
 namespace std {
 struct ostream {
     template<class T> ostream &operator<<(T const &) noexcept { return *this; }

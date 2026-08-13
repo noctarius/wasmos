@@ -1,7 +1,17 @@
-/* kernel_ring3_smoke_runtime.c - Ring-3 smoke test: WASM service spawn via PM.
- * Spawns a WASM service from the ESP through the process manager and verifies
- * that PM correctly transitions to ring-3, delivers the entry IPC message, and
- * the service exits cleanly without kernel state corruption. */
+/* kernel_ring3_smoke_runtime.c - Ring-3 IPC smoke process and shmem
+ * permission tests.
+ *
+ * kernel_ring3_spawn_smoke_process loads a hand-assembled ring-3 blob (no WASM,
+ * no ESP, no process manager) that drives the ipc_notify and ipc_call syscalls
+ * against endpoints the kernel deliberately hands it: its own, kernel-owned
+ * ones it must be refused, and an echo endpoint it may use. The kernel side of
+ * the check is in syscall.c, which recognises the process by its "ring3-smoke"
+ * name and logs a "[test] ring3 ipc ..." marker for each expected outcome.
+ *
+ * The shmem tests run in kernel context and assert the ownership rules
+ * directly: an ungranted context is denied get_phys/retain/release/map, a
+ * granted one is allowed, and a revoked one is denied again. Each logs
+ * "... ok" or "... mismatch" for the boot-time harness to grep. */
 #include "kernel_ring3_smoke_runtime.h"
 
 #include "ipc.h"
@@ -196,6 +206,14 @@ static int map_linear_pages(uint64_t root_table, uint64_t virt_base, uint64_t ph
     return 0;
 }
 
+/* The blob runs, in order: four ipc_notify calls (an endpoint id of all-ones, a
+ * 64-bit id that does not fit u32, this process's own notification endpoint, a
+ * kernel-owned one), six ipc_call calls (invalid destination, kernel-owned
+ * destination, the process-manager endpoint, then three to the echo endpoint),
+ * a yield, 16384 getpid calls to be preempted inside the gate, and exit(0).
+ * The two final echo calls carry message types 0x9ABC and 0x9ABD, which
+ * syscall.c keys on to inject stale/synthetic and out-of-order/forged replies:
+ * those constants are protocol between the blob and syscall.c, not filler. */
 int kernel_ring3_spawn_smoke_process(uint32_t parent_pid, uint32_t* out_pid) {
     static const uint8_t ring3_code[] = {
         0xBF, 0xFF, 0xFF, 0xFF, 0xFF, 0xB8, 0x05, 0x00, 0x00, 0x00, 0xCD, 0x80, 0x48, 0xBF, 0x00,
@@ -264,6 +282,10 @@ int kernel_ring3_spawn_smoke_process(uint32_t parent_pid, uint32_t* out_pid) {
     }
     memcpy(ring3_code_patched, ring3_code, sizeof(ring3_code_patched));
 
+    /* Endpoint ids are only known at spawn time, so they are patched into the
+     * blob's `mov edi, imm32` operands. Each offset is the byte position of one
+     * such immediate and pairs positionally with values[]; the two arrays and
+     * the loop bound must be updated together whenever the blob changes. */
     const uint32_t offsets[] = {30u, 42u, 76u, 98u, 120u, 142u, 164u};
     const uint32_t values[] = {ring3_notify_ep,       ring3_notify_control_ep, ring3_call_denied_ep,
                                ring3_call_control_ep, ring3_call_echo_ep,      ring3_call_echo_ep,

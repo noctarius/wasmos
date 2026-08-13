@@ -1,3 +1,12 @@
+/* stb_truetype_impl.c - the single translation unit that instantiates the
+ * vendored stb_truetype implementation, with the STBTT_* hooks bound to the
+ * freestanding libc this service links.
+ *
+ * Allocation is a bump arena, not a heap: wasmos_stbtt_free is a no-op, so every
+ * glyph rasterisation leaks into g_stbtt_alloc_buf until a caller calls
+ * wasmos_stbtt_alloc_reset. A caller must therefore reset before each
+ * self-contained stbtt operation, or the arena fills and stbtt allocations start
+ * returning NULL. */
 #include <stddef.h>
 #include <stdint.h>
 #include "string.h"

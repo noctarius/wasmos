@@ -29,9 +29,9 @@ static int idtable_id_taken(idtable_t* table, uint32_t id) {
  * The next id, skipping reserved values and -- once wrapped -- any id a live
  * element still holds.
  *
- * The skip is the whole point. A counter that wraps onto a live object gives
- * that object a second, ambiguous owner: traffic for the new one lands on the
- * old. That was a real bug in the endpoint table before it did this.
+ * The skip is the whole point. A counter that wraps onto a live object would
+ * give that object a second, ambiguous owner: traffic for the new one lands on
+ * the old.
  */
 static uint32_t idtable_alloc_id(idtable_t* table) {
     for (;;) {

@@ -1,7 +1,6 @@
 /* lwipopts.h - lwIP configuration for the wasmos native ring-0 net-stack.
  *
- * Native NO_SYS service configuration for the virtio.net-backed Ethernet
- * netif. Socket payload rings and TCP callback delivery remain deferred.
+ * Native NO_SYS service configuration for the virtio.net-backed Ethernet netif.
  *
  * Single-threaded NO_SYS build using the lwIP raw API. All timing/tick
  * hooks live in src/services/net_stack/port.c; compiler abstraction lives
@@ -41,12 +40,8 @@
 #define LWIP_IPV6 0
 #define LWIP_DHCP 1
 
-/* DNS resolver. The DHCP client requests DNS servers (option 6) and installs
- * them via dns_setserver; ifcfg `dns-nameservers` and `ip dns` can override at
- * runtime. Resolution is exposed to clients as the async NET_IPC_RESOLVE op. */
 /* Application-layer TCP abstraction: net-stack drives sockets through altcp so a
- * plain TCP connection and a TLS connection share one code path. Plaintext today
- * (altcp_tcp); altcp_tls is layered on later. */
+ * plain TCP connection and a TLS connection share one code path. */
 #define LWIP_ALTCP 1
 
 /* TLS via mbedTLS behind the altcp API. A TLS stream socket is created with
@@ -54,15 +49,18 @@
  * socket path is unchanged. */
 #define LWIP_ALTCP_TLS 1
 #define LWIP_ALTCP_TLS_MBEDTLS 1
-/* Milestone C verifies: the client requires a certificate chain that validates
- * to the CA trust store loaded from /boot/system/net/certificates/ca-certs.pem,
- * and net-stack additionally sets a per-connection hostname (mbedtls_ssl_set_hostname)
- * so the server certificate CN/SAN is checked. altcp_tls_mbedtls.c passes this to
- * mbedtls_ssl_conf_authmode(); the token resolves at its use site, after
- * mbedtls/ssl.h is included. REQUIRED aborts the handshake when the chain or
- * hostname does not verify, so an untrusted server certificate is rejected. */
+/* The client requires a certificate chain that validates to the CA trust store
+ * loaded from /boot/system/net/certificates/ca-certs.pem, and net-stack
+ * additionally sets a per-connection hostname (mbedtls_ssl_set_hostname) so the
+ * server certificate CN/SAN is checked. altcp_tls_mbedtls.c passes this token to
+ * mbedtls_ssl_conf_authmode(); it resolves at its use site, after mbedtls/ssl.h
+ * is included. REQUIRED aborts the handshake when the chain or hostname does not
+ * verify, so an untrusted server certificate is rejected. */
 #define ALTCP_MBEDTLS_AUTHMODE MBEDTLS_SSL_VERIFY_REQUIRED
 
+/* DNS resolver. The DHCP client requests DNS servers (option 6) and installs
+ * them via dns_setserver; ifcfg `dns-nameservers` and `ip dns` can override at
+ * runtime. Resolution is exposed to clients as the async NET_IPC_RESOLVE op. */
 #define LWIP_DNS 1
 /* Static local name resolution, consulted before any network query. Maps
  * "localhost" to the IPv4 loopback so name lookups have a reliable, offline

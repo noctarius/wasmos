@@ -6,10 +6,10 @@
  * compositor.md §Events.
  *
  * The packed code must NOT reach ui_utf8_encode() directly: typing 'a'
- * (scancode 0x1E) would append U+1E61 instead of 'a' — an unmapped codepoint the
- * font service renders as .notdef (a tofu box) — and Backspace (0x0E08) and
- * Enter (0x1C0A) would stop matching their control codes.  These tests pin the decode contract at
- * the two handlers that consume characters. */
+ * (scancode 0x1E) would append U+1E61 instead of 'a' — a codepoint the font
+ * service has no glyph for and renders as .notdef (a tofu box) — and Backspace
+ * (0x0E08) and Enter (0x1C0A) would stop matching their control codes.  These
+ * tests pin the decode contract at the two handlers that consume characters. */
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -81,13 +81,15 @@ static void test_text_input_types_the_character(void) {
     memset(&ctx, 0, sizeof(ctx));
     text_input_init(&c, &td);
 
-    /* "hi" — the exact bytes the vt/compositor produce for those two keys. */
+    /* "hi" — the exact bytes the vt/compositor produce for those two keys on
+     * the built-in US layout. */
     ui_text_input_handle_key(&ctx, &c, packed(0x23, 'h'));
     ui_text_input_handle_key(&ctx, &c, packed(0x17, 'i'));
     expect_text(&td, "hi", "printable keys append their character");
     expect(ctx.dirty == 1, "typing marks the context dirty");
 
-    /* The regression, stated directly: no stray multi-byte sequence. */
+    /* An ASCII key contributes exactly one byte; a packed code fed to
+     * ui_utf8_encode would contribute three. */
     expect(td.text_len == 2, "'h' appended 1 byte, not a 3-byte codepoint");
 
     free(td.text);
@@ -144,8 +146,8 @@ static void test_text_input_ignores_non_characters(void) {
     ui_text_input_handle_key(&ctx, &c, packed(0x1E, 'a'));
     ctx.dirty = 0;
 
-    /* Control characters and characterless keys must not be inserted. Before
-     * the fix each of these landed in the buffer as a bogus codepoint. */
+    /* Control characters (< 0x20) and characterless keys must not be inserted:
+     * ui_text_input_handle_key appends only for ch >= 32. */
     ui_text_input_handle_key(&ctx, &c, packed(0x1C, '\n')); /* Enter */
     ui_text_input_handle_key(&ctx, &c, packed(0x0F, '\t')); /* Tab */
     ui_text_input_handle_key(&ctx, &c, packed(0x48, 0));    /* Arrow up (extended) */
@@ -164,9 +166,11 @@ static void test_text_input_high_byte_character(void) {
     memset(&ctx, 0, sizeof(ctx));
     text_input_init(&c, &td);
 
-    /* A non-US keymap emits Latin-1 bytes: 0xFC is 'ü' on the DE layout. It is
-     * a character, so it is encoded as U+00FC (2 UTF-8 bytes) — and backspace
-     * must remove the whole codepoint, not one byte of it. */
+    /* A non-US keymap emits Latin-1 bytes — 0xFC is 'ü' on the DE layout, which
+     * puts it on scancode 0x1A; the handler reads only the character half, so
+     * the scancode byte paired with it here is immaterial. The byte encodes as
+     * U+00FC (2 UTF-8 bytes), and backspace must remove the whole codepoint
+     * rather than one byte of it. */
     ui_text_input_handle_key(&ctx, &c, packed(0x27, 0xFC));
     expect(td.text_len == 2, "Latin-1 character encodes to 2 UTF-8 bytes");
     expect(td.text && (uint8_t)td.text[0] == 0xC3 && (uint8_t)td.text[1] == 0xBC,
@@ -185,8 +189,8 @@ static void test_text_input_growth(void) {
     memset(&ctx, 0, sizeof(ctx));
     text_input_init(&c, &td);
 
-    /* Push past UI_TEXT_INITIAL_CAP so the realloc path is exercised with the
-     * decoded (1-byte) characters rather than the old 3-byte encodings. */
+    /* 128 keystrokes push past UI_TEXT_INITIAL_CAP (32), so the doubling
+     * grow-and-copy path runs with decoded 1-byte characters. */
     char want[129];
     for (int i = 0; i < 128; i++) {
         ui_text_input_handle_key(&ctx, &c, packed(0x1E, 'x'));
@@ -225,7 +229,7 @@ static void test_dropdown_keys(void) {
     ui_dropdown_handle_key(&ctx, &c, packed(0x25, 'k'));
     expect(d.list.selected == 0, "'k' moves the selection back up");
 
-    /* Selection must clamp at both ends. */
+    /* 'k' on the first item must clamp rather than wrap or underflow. */
     ui_dropdown_handle_key(&ctx, &c, packed(0x25, 'k'));
     expect(d.list.selected == 0, "'k' clamps at the first item");
 

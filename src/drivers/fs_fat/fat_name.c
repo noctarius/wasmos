@@ -1,6 +1,7 @@
 /* fat_name.c - pure FAT name-handling implementation (see fat_name.h).
- * LFN reassembly state is an explicit fat_lfn_t passed by the caller, never a
- * file-scope global, so concurrent ops cannot corrupt each other's names. */
+ * LFN reassembly state is an explicit fat_lfn_t owned by the caller, never a
+ * file-scope global, so each scan context accumulates into its own buffer and
+ * nothing leaks between scans or between ops. */
 #include "fat_name.h"
 
 #include <stdint.h>
@@ -26,9 +27,9 @@ void fat_lfn_reset(fat_lfn_t* lfn) {
 }
 
 /* Store one UTF-16LE character from an LFN entry into the ASCII accumulation buffer.
- * 0x0000 = end-of-name sentinel; 0xFFFF = unused padding slot.  Characters with
- * a non-zero high byte are outside ASCII — map them to '?' since FAT LFN names
- * in practice are ASCII-only in this implementation. */
+ * 0x0000 = end-of-name sentinel; 0xFFFF = unused padding slot.  A character with
+ * a non-zero high byte is outside ASCII and becomes '?': name handling here is
+ * ASCII-only, and fat_validate_lfn_name refuses to create such names. */
 static void fat_lfn_store_char(fat_lfn_t* lfn, uint32_t pos, uint16_t ch) {
     if (pos >= FAT_LFN_MAX) {
         return;
@@ -76,9 +77,9 @@ void fat_lfn_finalize(fat_lfn_t* lfn) {
  * FAT LFN layout: ordinal byte[0] (1-based, 0x40 flag on the last/highest
  * entry in the sequence), attr=0x0F[11], checksum[13], cluster=0[26:27],
  * then 13 UTF-16LE characters spread across three non-contiguous byte ranges:
- *   [1..9]   characters 1-5  (name1, 5 chars)
- *   [14..25] characters 6-11 (name2, 6 chars)
- *   [28..31] characters 12-13(name3, 2 chars)
+ *   [1..10]  characters 1-5   (name1, 5 chars)
+ *   [14..25] characters 6-11  (name2, 6 chars)
+ *   [28..31] characters 12-13 (name3, 2 chars)
  *
  * Entries appear on disk in reverse ordinal order (highest first), so the
  * first entry seen has bit 0x40 set and declares lfn->total.  Each entry's
@@ -112,7 +113,7 @@ void fat_lfn_collect(fat_lfn_t* lfn, const uint8_t* ent) {
     }
 
     uint32_t base = (uint32_t)(ord - 1u) * 13u;
-    /* name1: bytes 1-9, 5 UTF-16LE characters */
+    /* name1: bytes 1-10, 5 UTF-16LE characters */
     for (uint32_t i = 0; i < 5; ++i) {
         uint16_t ch = (uint16_t)ent[1 + i * 2] | ((uint16_t)ent[2 + i * 2] << 8);
         fat_lfn_store_char(lfn, base + i, ch);

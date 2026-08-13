@@ -54,7 +54,8 @@ static int test_size_and_layout(void) {
         return __LINE__;
     if (*vq.avail_idx != 0 || *vq.used_idx != 0)
         return __LINE__;
-    /* desc/avail/used must all sit inside the region. */
+    /* The layout must fit the region: the descriptor table is its lowest field
+     * and the used ring its highest, so bounding those two bounds all of it. */
     if ((uint8_t*)vq.desc < g_region)
         return __LINE__;
     if ((uint8_t*)vq.used_ring + QNUM * 8u > g_region + sizeof(g_region))

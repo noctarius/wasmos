@@ -8,10 +8,13 @@
  * raw i32 offsets.  Wrappers call ctx->module->getLinearMemoryRegion(off, n)
  * to bounds-check and get the host-side pointer.
  *
- * IPC slot state mirrors wasm3/link.c; both maintain independent copies until
- * a follow-on refactor extracts the shared state into a common module.
+ * The per-pid IPC/FS side tables are owned here and are a separate copy from the
+ * equivalent tables in wasm3/link.c; only one runtime is compiled into a kernel.
  *
- * All wasm3/link.c imports are now implemented here.
+ * The symbol table is generated from abi/hostcalls.yaml, so it carries every
+ * host call whose `runtimes` list includes warp.  `env.strlen` is wasm3-only and
+ * has no counterpart here; `wasi_snapshot_preview1.{proc_exit,random_get}` are
+ * WARP-only and have no counterpart in wasm3/link.c.
  */
 
 /* The WASMOS_SYMBOLS macro references static host functions by taking their
@@ -199,10 +202,8 @@ WarpFsPeerSlot* warp_fs_peer_slot_for_pid(uint32_t pid) {
     return slot;
 }
 
-// ---------------------------------------------------------------------------
-// Internal helper — mirrors wasm3/link.c's static warp_current_context_id()
-// ---------------------------------------------------------------------------
-
+/* Counterpart of wasm3/link.c's current_process_context(): 0 with *out set to
+ * the calling process's context id, or -1 when there is no current process. */
 int warp_current_context_id(uint32_t* out) {
     uint32_t pid = process_current_pid();
     process_t* proc = process_get(pid);
@@ -232,11 +233,7 @@ uint8_t warp_dbg_ipc_trace_process(process_t* proc) {
 }
 
 // ---------------------------------------------------------------------------
-// Host call wrappers — IPC
-// ---------------------------------------------------------------------------
-
-// ---------------------------------------------------------------------------
-// Host call wrappers — console
+// Host call wrappers — console (the IPC wrappers live in warp/link_ipc.cpp)
 // ---------------------------------------------------------------------------
 
 static uint32_t warp_console_read(uint32_t buf_offset, uint32_t len, void* ctx_) {
@@ -263,8 +260,9 @@ static uint32_t warp_console_write(uint32_t buf_offset, uint32_t len, void* ctx_
     uint8_t* buf = warp_mem(ctx, buf_offset, len);
     if (!buf)
         return (uint32_t)WASMOS_ERR_KERNEL_BAD_POINTER;
-    /* write in 127-byte chunks so klog_write always gets a null-terminated
-     * string (chunk boundaries are null-terminated in place, then restored). */
+    /* klog_write takes a NUL-terminated string but the guest buffer is a counted
+     * range, so the payload is relayed in <= 127-byte chunks through a stack
+     * buffer that is terminated in place.  The guest buffer is never written. */
     preempt_disable();
     uint32_t written = 0;
     char tmp[128];
@@ -1174,36 +1172,28 @@ static uint32_t warp_phys_map(uint32_t phys_lo, uint32_t phys_hi, uint32_t size,
     uint64_t phys = ((uint64_t)phys_hi << 32) | (uint64_t)phys_lo;
     if (!phys)
         return (uint32_t)WASMOS_INVAL;
-    /* Map physical pages into WASM linear memory.
-     * With the page-aligned allocator fix in shim.cpp, the linear memory base
-     * is 4 KB-aligned, so base + wasm_offset is page-aligned when wasm_offset
-     * is a multiple of 4096. */
     uint8_t* lmem = warp_linear_mem_window(ctx, wasm_offset, size);
     if (!lmem)
         return (uint32_t)WASMOS_ERR_KERNEL_BAD_POINTER;
-    /* WARP's linear memory base has a fixed sub-page offset equal to
-     * basedataLength (WARP internal metadata), so base + wasm_offset is never
-     * page-aligned even if wasm_offset is 4 KB-aligned.  Page-remapping via
-     * paging_map_4k requires aligned VAs; misaligned remaps produce reads from
-     * the wrong physical offset.  For the only current user (acpi_bus reading
-     * ACPI tables from regular RAM), copy directly from the kernel direct map.
-     * This is always correct and avoids corrupting WARP's basedata metadata. */
-    /* ACPI physical pages are in EfiACPIReclaimMemory regions which may not be
-     * in the kernel direct map.  Map each physical page to the page-aligned
-     * kernel scratch buffer, copy 4 KB of data, then restore the scratch page
-     * to its original physical backing.  This is single-threaded (WARP runs
-     * in the kernel scheduler context) so no locking is needed. */
-    /* ActiveMemoryManager::ensureLinearSize() is called by probe() when the JIT
-     * first accesses an uncommitted WASM linear memory region. It zero-initialises
-     * the newly committed range before marking it usable.  ACPI data written to
-     * lmem BEFORE the range is committed is destroyed by the JIT's first probe()
-     * for any byte in [lmem, lmem+size), which zero-initializes that range.
+    /* Copy, not remap.  WARP's host linear-memory base sits at a sub-page offset
+     * inside its allocation (AllocHeader + basedata precede it), so base +
+     * wasm_offset is not page-aligned even for a 4 KiB-aligned wasm_offset, and
+     * paging_map_4k needs aligned VAs — a misaligned remap would read from the
+     * wrong physical offset and clobber WARP's basedata metadata.
      *
-     * The probe is therefore triggered first, by calling getLinearMemoryRegion
-     * with non-zero size: ensureLinearSize zeroes the region and marks it usable,
-     * and later probe() calls short-circuit immediately (offset <
-     * usableLinMemBytes_) without zeroing.  The ACPI data then goes on top of the
-     * zeros, out of reach of any further zeroing. */
+     * The source is not read through the direct map either: the only caller
+     * (acpi_bus) reads EfiACPIReclaimMemory pages, which need not be inside the
+     * kernel's 512 MiB higher-half window.  Each source page is therefore mapped
+     * onto the page-aligned kernel scratch page, copied out, and the scratch page
+     * restored to its own frame.  g_phys_scratch is shared, and this sequence is
+     * unsynchronised: it is safe only under the WARP single-CPU invariant
+     * (warp/shim.cpp).
+     *
+     * The destination range is committed FIRST.  probe() calls
+     * ActiveMemoryManager::ensureLinearSize(), which zero-fills everything
+     * between the old and the new usable size; a probe that fired after the copy
+     * would erase the data.  Probing the last byte commits the whole range, and
+     * later probes inside it short-circuit (offset < usableLinMemBytes_). */
     ctx->module->getLinearMemoryRegion(wasm_offset + size - 1, 1);
     /* Re-fetch lmem after the probe (ensureCapacityForLinearSize inside
      * ensureLinearSize may have called syncBasedataStart, changing the base). */
@@ -1221,10 +1211,6 @@ static uint32_t warp_phys_map(uint32_t phys_lo, uint32_t phys_hi, uint32_t size,
     }
     return 0;
 }
-
-// ---------------------------------------------------------------------------
-// Misc stubs: debug_mark, kmap_dump, scheduler extras
-// ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
 // Environment variables. The store itself is shared with the other runtime
@@ -2534,6 +2520,9 @@ static uint32_t warp_early_log_copy(uint32_t buf_off, uint32_t len, uint32_t off
     return 0;
 }
 
+/* Diagnostics that the wasm3 backend implements and this one does not: a mark is
+ * dropped and a kmap dump prints nothing.  They report success so a guest that
+ * instruments itself runs identically under both runtimes. */
 static uint32_t warp_debug_mark(uint32_t /*tag*/, void* ctx_) {
     (void)ctx_;
     return 0;
@@ -2546,6 +2535,10 @@ static uint32_t warp_kmap_dump_all(void* ctx_) {
     (void)ctx_;
     return 0;
 }
+/* Stub, as recorded in abi/hostcalls.yaml (id 49): reports an empty ready queue
+ * rather than the live count wasm3 returns, so a guest cannot use this to size
+ * the runqueue under WARP.
+ * TODO(warp-sched-stats): return process_ready_count() as the wasm3 side does. */
 static uint32_t warp_sched_ready_count(void* ctx_) {
     (void)ctx_;
     return 0;
@@ -2575,10 +2568,6 @@ static uint32_t warp_physmem_stats(uint32_t out_off, void* ctx_) {
     return 0;
 }
 
-// ---------------------------------------------------------------------------
-// Symbol accessor.
-//
-// The NativeSymbol table is built as a function-local static so that
 /* AssemblyScript runtime abort(msg, file, line, column) → exit process.
  * Called by AS-compiled modules on assertion failure or trap.
  * WASM signature: void(i32,i32,i32,i32). */
@@ -2596,16 +2585,16 @@ static void warp_env_abort(uint32_t msg, uint32_t file, uint32_t line, uint32_t 
     }
 }
 
-/* WASMOS_SYMBOLS(LINK) expands to the full hostcall symbol list using LINK as
- * the linkage macro (STATIC_LINK or DYNAMIC_LINK).  Having a single source of
- * truth avoids the tables getting out of sync.
+/* WASMOS_SYMBOLS(LINK) is generated from abi/hostcalls.yaml
+ * (scripts/gen_abi_hostcalls.py) and expands the whole host-call list through
+ * the caller-supplied LINK macro, so no table can drift out of sync with the
+ * IDL.  Table position is the ring-3 host-call id.
  *
- * Only DYNAMIC_LINK is instantiated in the kernel, by the ring-3 table below.
- * STATIC_LINK bakes kernel function pointers into the compiled code, which
- * ring-3 guests cannot call and initFromCompiledBinary rejects outright
- * (Wrong_type) — and every module init path now ends in initFromCompiledBinary.
- * The macro stays defined because wasmos_symbols_warp.inc is generated by
- * scripts/gen_abi_hostcalls.py, which emits both linkage forms. */
+ * The kernel instantiates it exactly once, through R3_LINK below, producing
+ * Linkage::DYNAMIC entries.  A STATIC entry would bake kernel function pointers
+ * into the compiled code, which ring-3 guests cannot call and which
+ * initFromCompiledBinary — the tail of every module init path — rejects with
+ * Wrong_type. */
 #include "wasmos_symbols_warp.inc"
 
 // Context accessor — called from warp_driver.cpp after WasmModule construction

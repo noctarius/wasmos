@@ -56,16 +56,15 @@ int capability_io_port_allowed(uint32_t context_id, uint16_t port);
 
 /* Resolve (region, offset) to an absolute port for a context, where `region` is
  * an index into the I/O windows the spawn profile granted, in the order they
- * were declared. Returns 0 and writes *out_port when the region exists and the
- * offset lies inside it, else a negative WASMOS_ERR_IO_* code naming which check
- * refused it -- "no such region" and "offset past the end" are different bugs
- * and a caller should be able to tell them apart.
+ * were declared, and all `access_width` bytes (1, 2 or 4) must lie inside that
+ * window. Returns 0 and writes *out_port on success, else a negative
+ * WASMOS_ERR_IO_* code naming which check refused it -- "no such region" and
+ * "offset past the end" are different bugs and a caller should be able to tell
+ * them apart.
  *
  * This is what lets a driver address its device without ever naming an absolute
  * port: it cannot express an access outside the window it was granted, because
  * it does not supply the base. */
-/* Resolve (region, offset) to a port, requiring that all `access_width` bytes of
- * the access lie inside the granted window (1, 2 or 4). */
 int capability_io_region_port(uint32_t context_id, uint32_t region, uint32_t offset,
                               uint32_t access_width, uint16_t* out_port);
 int capability_irq_line_allowed(uint32_t context_id, uint32_t irq_line);

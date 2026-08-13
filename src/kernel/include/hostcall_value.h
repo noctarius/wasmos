@@ -9,33 +9,28 @@
  * hostcall_value.h — the rule for host calls that return a value.
  *
  * The ABI gives a host call one signed i32 on which to carry both its result
- * and its errors, and the error codes are negative. A success value with bit 31
- * set is therefore read by the guest as an error, silently. Of the 53
- * value-returning calls in abi/hostcalls.yaml most are ids, counts, pids or
- * offsets into a 2 GiB linear-memory window and cannot reach that bit; the ones
- * that can are physical and bus addresses, and monotonic counters.
+ * and its errors, and the error codes are negative (abi/errors.yaml). A success
+ * value with bit 31 set is therefore read by the guest as an error, silently.
+ * Most of the `returns: value` calls in abi/hostcalls.yaml carry ids, counts,
+ * pids, or offsets into a 2 GiB linear-memory window and cannot reach that bit.
+ * The ones that can are physical and bus addresses, and monotonic counters --
+ * they go through one of the two functions below rather than each open-coding
+ * its own `> 0x7FFFFFFF` comparison.
  *
- * The rule was already being applied by hand -- dma_map_borrow open-coded
- * `device_addr > 0x7FFFFFFF`, block_buffer_phys did not and was wrong for it --
- * which is exactly the divergence that a shared block-bounds check was just
- * introduced to stop. One named rule, then, rather than a comparison rewritten
- * per call site.
- *
- * Where a value genuinely uses the full 32-bit range neither function helps and
- * the call needs an out-parameter instead, as the io_region_in* and io_in*
- * families now all have. The port-read family went further: in8 and in16 could
- * not have collided with a code, but no caller read the sign -- each masked it
- * off -- so the width of the value is not the whole test. Ask whether the
- * caller can act on the distinction, not only whether the bits allow one.
- * No host call still carries a guest-chosen full-range value on the shared i32.
- * thread_join was the last one; it has since been retired along with the rest
- * of the WASM threading family, which guests were never going to use.
+ * A value that genuinely spans the full 32-bit range fits neither function and
+ * needs an out-parameter instead; that is why the io_region_in* and io_in*
+ * families all have one. Width alone is not the test, though: in8 and in16
+ * could never have collided with an error code, yet every caller masked the
+ * sign off regardless. Ask whether the caller can act on the distinction, not
+ * only whether the bits allow one.
  */
 
 /*
  * For a value that should always be small: an address from a bounded pool, an
- * id, a size. Exceeding the bound means something upstream is wrong, and saying
- * so beats handing back a number the guest will read as an error anyway.
+ * id, a size. Returns WASMOS_OK when value fits in 0..0x7FFFFFFF, else
+ * WASMOS_ERR_KERNEL_TOO_LARGE. Exceeding the bound means something upstream is
+ * wrong, and saying so beats handing back a number the guest reads as an error
+ * anyway.
  */
 wasmos_error_code_t hostcall_value_check(uint64_t value);
 

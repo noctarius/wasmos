@@ -1,7 +1,20 @@
-/* kernel_ring3_fault_runtime.c - Ring-3 fault injection test runtime.
- * Deliberately triggers controlled ring-3 faults (#GP, #PF) and verifies that
- * the kernel handles them correctly (delivers the right signal/kills the
- * offending process) without corrupting kernel state. */
+/* kernel_ring3_fault_runtime.c - Verdict process for the ring-3 fault probes.
+ *
+ * The probes themselves are spawned by kernel_ring3_probe_runtime.c. This file
+ * holds the kernel process that polls their exit statuses and decides the
+ * result. Every ring-3 fault must terminate its process with exit status -11,
+ * for all twelve probes (#PF read/write/exec, #UD, #GP, #DE, #DB, #BP, #OF,
+ * #NM, #SS, #AC); anything else is a mismatch and fails the suite.
+ *
+ * Once all twelve match it checks three further properties: containment (the
+ * parent process is still alive, so a ring-3 fault took nothing else with it),
+ * churn (churn_rounds further probes spawn, fault with -11, and reap cleanly,
+ * which is where a leak in the fault teardown path would show), and a clean
+ * watchdog count.
+ *
+ * A probe that has not exited yet simply leaves its flag clear and the process
+ * yields, so the entry function is re-entered until every verdict is in; it
+ * never blocks waiting for one. */
 #include "kernel_ring3_fault_runtime.h"
 
 #include "klog.h"

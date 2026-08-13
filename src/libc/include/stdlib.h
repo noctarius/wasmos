@@ -1,4 +1,5 @@
-/* stdlib.h - Minimal stdlib declarations: malloc/free/atoi/itoa for WASM libc. */
+/* stdlib.h - Minimal stdlib declarations for WASM libc: the malloc family,
+ * abs/labs, and the strtol-based string-to-integer conversions. */
 #ifndef WASMOS_LIBC_STDLIB_H
 #define WASMOS_LIBC_STDLIB_H
 

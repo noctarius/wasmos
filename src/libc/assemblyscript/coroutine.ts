@@ -1,22 +1,23 @@
 /* coroutine.ts - cooperative stackless coroutines for AssemblyScript guests.
  *
- * Every other guest language binds src/libsys/wasm/coroutine_wasm.c: Zig, Rust
- * and Go each compile that C file into their module. AssemblyScript cannot --
- * `asc` has no external linking -- which is the only reason AS had no
- * coroutines at all. This is a port of that runtime, not a new design: the
- * semantics below are the ones coroutine_wasm.c implements, and the shared
- * behaviour tests mirror its test suite.
+ * Zig, Rust and Go bind src/libsys/wasm/coroutine_wasm.c by compiling that C
+ * file into their module; `asc` has no external linking, so AssemblyScript
+ * carries this port instead. coroutine_wasm.c is the reference: the semantics
+ * here must match it, and the shared behaviour tests mirror its test suite.
  *
- * Stackless, like the C original. A task never has its call stack saved; its
+ * Stackless, as in the C original. A task never has its call stack saved; its
  * resume method records its own progress in fields it owns, returns YIELDED,
  * and is called again by the runtime. That is what makes it work on a WASM
  * guest at all -- neither engine can swap a guest stack.
  *
- * Ownership: apps are built with `--runtime stub`, which is a bump allocator
- * with no collector, so nothing here allocates per operation. Callers own and
- * REUSE their Coroutine/Future/Continuation objects, exactly as the C API takes
- * caller-provided structs. Allocating a Future per IPC round-trip in a
- * long-lived driver would leak until the process exits.
+ * Ownership: apps are built with `--runtime stub`, a bump allocator with no
+ * collector, so every allocation is permanent. Callers own and REUSE their
+ * Coroutine/Future/Continuation objects, exactly as the C API takes
+ * caller-provided structs; allocating a Future per IPC round-trip in a
+ * long-lived driver leaks until the process exits. The runtime itself still
+ * allocates small helpers -- a Box per resume and per continuation dispatch,
+ * two callback objects per group source, and a FutureGroup per race()/all()
+ * call. A long-lived loop uses raceInto/allInto with caller-owned group storage.
  */
 
 /** Terminal and pending states of a future. */

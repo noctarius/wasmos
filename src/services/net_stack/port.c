@@ -1,19 +1,18 @@
 /* port.c - lwIP NO_SYS port hooks for the wasmos native net-stack service.
  *
- * COMPILE MILESTONE: only the minimum hooks lwIP references under NO_SYS=1 are
- * provided:
+ * Only the hooks lwIP references under NO_SYS=1 live here:
  *   - sys_now(): monotonic milliseconds.
  *   - lwip_port_rand(): PRNG for LWIP_RAND().
  *   - atoi(): needed by lwIP netif.c (see note below).
  *
- * SYS_LIGHTWEIGHT_PROT=0, so no sys_arch_protect/unprotect is needed.
- * lwip_htons/lwip_htonl are provided by lwIP itself (def.c). No netif glue,
- * kernel process, or driver wiring lives here yet.
+ * SYS_LIGHTWEIGHT_PROT=0, so no sys_arch_protect/unprotect is needed, and
+ * lwip_htons/lwip_htonl come from lwIP itself (def.c). Netif and driver wiring
+ * lives in net_stack.c, not here.
  *
- * Unlike the earlier kernel-image variant, this is a native service (.wap): it
- * CANNOT call kernel symbols (timer_ticks(), etc.) directly. Time is obtained
- * through the wasmos_driver_api_t table handed to the service entry. net_stack.c
- * stashes that pointer in net_stack_api() so port.c can reach it here.
+ * This is a native service (.wap), so it CANNOT call kernel symbols
+ * (timer_ticks(), etc.) directly. Time comes through the wasmos_driver_api_t
+ * table handed to the service entry; net_stack.c stashes that pointer in
+ * net_stack_api() so port.c can reach it.
  */
 #include <stdint.h>
 #include <stddef.h>

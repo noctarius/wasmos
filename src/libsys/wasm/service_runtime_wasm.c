@@ -33,7 +33,8 @@ int32_t wasmos_sys_wasm_async_run(wasmos_sys_wasm_async_config_t* config, int32_
         if (wasmos_wasm_coroutine_run_budget(&config->runtime, 1u) < 0)
             return -1;
         if (config->root.state == WASMOS_WASM_COROUTINE_WAITING) {
-            /* poll blocks on this wrapper's endpoint when no reply is ready. */
+            /* The root task is parked on a future: poll parks on the wrapper's
+             * select-set until a reply lands, so this loop does not spin. */
             (void)wasmos_sys_event_loop_poll(&config->event_loop, 1);
         }
     }

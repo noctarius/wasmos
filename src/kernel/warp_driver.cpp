@@ -11,6 +11,9 @@
  * never propagates through kernel call frames. */
 
 #include <cstdint>
+#ifndef WASMOS_WARP_RUNTIME_LOAD_AOT
+#define WASMOS_WARP_RUNTIME_LOAD_AOT 1
+#endif
 #include <new>
 
 extern "C" {
@@ -588,7 +591,8 @@ int wasm_driver_start(wasm_driver_t* driver, const wasm_driver_manifest_t* manif
      * .wap.  If it fails (WARP exception or mismatched symbol table) we fall
      * back to JIT below — the module object is deleted and rebuilt fresh. */
     int use_jit = 1;
-    if (manifest->compiled_bytes != nullptr && manifest->compiled_size > 0) {
+    if (WASMOS_WARP_RUNTIME_LOAD_AOT && manifest->compiled_bytes != nullptr &&
+        manifest->compiled_size > 0) {
         ckpt->active = 1;
         if (__builtin_setjmp(ckpt->jbuf)) {
             /* AOT load failed — discard the half-initialised module and let
@@ -636,13 +640,22 @@ int wasm_driver_start(wasm_driver_t* driver, const wasm_driver_manifest_t* manif
             return -1;
         }
         mod = new vb::WasmModule(UINT64_MAX, g_logger, false, warp_ctx, 10U);
-        warp_linmem_reserve_hint_for(driver->owner_pid, manifest->heap_size);
         vb::Span<uint8_t const> bc(manifest->module_bytes, manifest->module_size);
+        /* Split what initFromBytecode does internally (compile -> setupRuntime)
+         * so the linmem reserve hint is armed only for the runtime phase.  Armed
+         * before compile(), the hint is claimed by the first compiler buffer to
+         * grow past the slab threshold, which then occupies a linmem VA slot
+         * stamped with this pid while the real linear memory never gets one.
+         * CompileResult owns the spans handed to setupRuntime, so it must stay
+         * in scope across initFromCompiledBinary. */
 #ifdef WASMOS_WASM_RUNTIME_WARP
-        mod->initFromBytecode(bc, warp_wasmos_symbols_ring3(), true);
+        vb::Span<vb::NativeSymbol const> syms = warp_wasmos_symbols_ring3();
 #else
-        mod->initFromBytecode(bc, warp_wasmos_symbols(), true);
+        vb::Span<vb::NativeSymbol const> syms = warp_wasmos_symbols();
 #endif
+        vb::WasmModule::CompileResult res = mod->compile(bc, syms);
+        warp_linmem_reserve_hint_for(driver->owner_pid, manifest->heap_size);
+        mod->initFromCompiledBinary(res.getModule().span(), syms, res.getDebugSymbol().span());
         ckpt->active = 0;
     }
 

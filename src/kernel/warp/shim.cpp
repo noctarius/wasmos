@@ -313,9 +313,23 @@ static void* warp_krealloc(void* const ptr, size_t const size) {
      * reservation is pending, MOVE it into a dedicated per-app VA slot: reserve
      * the VA once, commit scattered physical pages on demand, base pinned for
      * the app's lifetime (no relocation → shmem/DMA maps stay valid). */
-    if (old_hdr->is_pages == 1 && g_linmem_reserve_bytes) {
-        uint32_t pid = g_linmem_reserve_pid;
-        g_linmem_reserve_pid = 0;
+    /* Claim the hint only from the CPU actually running the armed pid, and take
+     * it with a CAS so two CPUs cannot both move a block for one arming.  A
+     * mismatch leaves the hint armed for its rightful owner instead of stamping
+     * this block with a foreign pid (whose later free would then release a slot
+     * still in use). */
+    uint32_t bound_pid = cpu_local()->wasm3_heap_bound_pid;
+    uint32_t claim = bound_pid;
+    if (old_hdr->is_pages == 1 && g_linmem_reserve_bytes && bound_pid != 0 &&
+        __atomic_compare_exchange_n(&g_linmem_reserve_pid, &claim, 0u, false, __ATOMIC_ACQ_REL,
+                                    __ATOMIC_ACQUIRE)) {
+        uint32_t pid = bound_pid;
+#if WASMOS_TRACE
+        klog_printf("[trace-linmem] hint claim pid=%u size=%llx reserve=%llx oldpages=%llx\n",
+                    (unsigned)pid, (unsigned long long)size,
+                    (unsigned long long)g_linmem_reserve_bytes,
+                    (unsigned long long)old_hdr->pages);
+#endif
         g_linmem_reserve_bytes = 0;
         void* moved = warp_linmem_move(pid, ptr, old_bytes, size);
         if (moved) {
@@ -481,6 +495,7 @@ static void* warp_linmem_move(uint32_t pid, void* old_ptr, size_t old_bytes, siz
     cfg->linmem_slot = (uint32_t)slot;
     cfg->linmem_va_base = va_base;
     cfg->linmem_committed_pages = need_pages;
+    linmem_slot_set_owner((uint32_t)slot, pid);
     /* map_auto scan ceiling = the app's DECLARED size, NOT the 2 GiB slot.  The
      * slot's capacity is 2 GiB (commit-on-demand growth), but the shmem-window
      * scan must stay within what the app declared/can commit — a 2 GiB ceiling

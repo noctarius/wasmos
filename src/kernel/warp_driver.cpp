@@ -517,12 +517,22 @@ extern "C" uint64_t warp_r3_memory_helper(uint64_t min_linmem_len, uint32_t base
 #endif /* WASMOS_WASM_RUNTIME_WARP */
 
 /* Arm the one-shot linmem over-reservation for a module about to initialize.
- * The hint is consumed by the first warp_krealloc growth of the job-memory
- * block (the only page-backed block that grows), which fires early (initial
- * commit) before any shmem/DMA window is mapped — moving the block into its
- * dedicated per-app VA slot with a pinned base.  Applies to both ring-0 and
- * ring-3 WARP.  (reserve_bytes carries the pid signal; the slot itself is the
- * fixed WARP_LINMEM_VA_STRIDE window, committed on demand.) */
+ * The hint names the pid whose linear-memory block should move into a dedicated
+ * per-app VA slot with a pinned base.  reserve_bytes carries the pid signal; the
+ * slot itself is the fixed WARP_LINMEM_VA_STRIDE window, committed on demand.
+ *
+ * WHERE this is armed is load-bearing, so do not hoist it.  The hint is claimed
+ * by the next page-backed warp_krealloc growth on the CPU bound to that pid, and
+ * the compiler's own buffers are page-backed and grow constantly — so arming it
+ * before compile() hands a 2 GiB VA slot to a compiler scratch buffer while the
+ * real linear memory never gets one.  That is not hypothetical: it was the state
+ * of the JIT path until 682df49cf9, where 23 of 26 claims per boot were 4094-byte
+ * compiler blocks against a 512 MiB armed reserve.  Arm it only immediately
+ * before the runtime-setup phase that allocates linear memory.
+ *
+ * The pid identity is enforced at the claim site (warp/shim.cpp) by a CAS against
+ * cpu_local()->wasm3_heap_bound_pid, so a concurrent spawn on another CPU cannot
+ * steal this arming and stamp its block with the wrong owner. */
 static void warp_linmem_reserve_hint_for(uint32_t pid, uint64_t initial_linmem) {
     /* Generous default: back every WARP app with a large reserved window so it
      * can grow on demand and host zero-copy overlays, rather than the tiny
@@ -588,8 +598,12 @@ int wasm_driver_start(wasm_driver_t* driver, const wasm_driver_manifest_t* manif
     WarpExceptionCheckpoint* ckpt = warp_exception_get_checkpoint();
 
     /* AOT path: try loading a pre-compiled binary if one was embedded in the
-     * .wap.  If it fails (WARP exception or mismatched symbol table) we fall
-     * back to JIT below — the module object is deleted and rebuilt fresh. */
+     * .wap.  If it fails — a WARP exception, or a stale blob whose imports no
+     * longer match the current hostcall table — we fall back to JIT below, and
+     * the module object is deleted and rebuilt fresh.  Building with
+     * WASMOS_WARP_RUNTIME_LOAD_AOT=OFF skips this path entirely, forcing every
+     * app through the JIT while leaving the packed artifacts byte-identical, so
+     * an AOT and a JIT boot differ only in the kernel and stay A/B comparable. */
     int use_jit = 1;
     if (WASMOS_WARP_RUNTIME_LOAD_AOT && manifest->compiled_bytes != nullptr &&
         manifest->compiled_size > 0) {
@@ -638,15 +652,13 @@ int wasm_driver_start(wasm_driver_t* driver, const wasm_driver_manifest_t* manif
         }
         mod = new vb::WasmModule(UINT64_MAX, g_logger, false, warp_ctx, 10U);
         vb::Span<uint8_t const> bc(manifest->module_bytes, manifest->module_size);
-        /* Split what initFromBytecode does internally (compile -> setupRuntime)
-         * so the linmem reserve hint is armed only for the runtime phase.  Armed
-         * before compile(), the hint is claimed by the first compiler buffer to
-         * grow past the slab threshold, which then occupies a linmem VA slot
-         * stamped with this pid while the real linear memory never gets one.
-         * CompileResult owns the spans handed to setupRuntime, so it must stay
+        /* This is initFromBytecode split open (compile -> setupRuntime) purely so
+         * the reserve hint can be armed between the two phases — see
+         * warp_linmem_reserve_hint_for for why arming it any earlier misfires.
+         * CompileResult owns the spans handed to setupRuntime, so `res` must stay
          * in scope across initFromCompiledBinary.
          *
-         * Ring-3 is the only WARP execution model, so the symbol table is not a
+         * Ring 3 is the only WARP execution model, so the symbol table is not a
          * build-time choice: initFromCompiledBinary rejects STATIC linkage, and
          * the ring-3 table is the DYNAMIC one.  warp_wasmos_symbols_ring3() is
          * itself declared under WASMOS_WASM_RUNTIME_WARP (warp/link.h), so a

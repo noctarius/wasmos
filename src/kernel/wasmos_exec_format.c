@@ -2,7 +2,6 @@
 #include <string.h>
 
 #define WASMOS_EXEC_APP_MAGIC "WASMOSAP"
-#define WASMOS_EXEC_APP_VERSION 5u
 
 typedef struct __attribute__((packed)) {
     char magic[8];
@@ -13,13 +12,11 @@ typedef struct __attribute__((packed)) {
 /* Whether `blob` starts with a WASMOS-APP container header: right magic, a known
  * version, and the exact header size that version defines.
  *
- * FIXME(wap-v6): WASMOS_EXEC_APP_VERSION and g_header_sizes stop at v5, but
- * WASMOS_APP_VERSION (src/kernel/include/wasmos_app.h) and the packer
- * (scripts/make_wasmos_app.c) are at v6 (header_size 76), so every .wap produced
- * today is rejected here.  That silently downgrades the second classify() in
- * pm_resolve_spawn_target (process_manager_spawn.c) from WAP to NONE, which
- * fails broker-delegated spawns with WASMOS_ERR_PROC_SPAWN_BROKER_PLAN. The
- * table must track WASMOS_APP_VERSION. */
+ * g_header_sizes is indexed by version and MUST carry an entry for every version
+ * up to WASMOS_APP_VERSION; the static assert below enforces that. A missing
+ * entry does not reject the package -- it reports "not a WAP", which downgrades
+ * the classify() in pm_resolve_spawn_target from WAP to NONE and fails
+ * broker-delegated spawns with WASMOS_ERR_PROC_SPAWN_BROKER_PLAN. */
 static int wasmos_exec_is_wap_blob(const uint8_t* blob, uint32_t blob_size) {
     static const uint16_t g_header_sizes[] = {
         0u,  44u, /* v1 */
@@ -27,7 +24,13 @@ static int wasmos_exec_is_wap_blob(const uint8_t* blob, uint32_t blob_size) {
         60u,      /* v3 */
         64u,      /* v4 */
         72u,      /* v5 */
+        76u,      /* v6: adds region_count */
     };
+    /* One entry per version, plus the unused index 0. */
+    _Static_assert(sizeof(g_header_sizes) / sizeof(g_header_sizes[0]) ==
+                       (size_t)WASMOS_EXEC_APP_VERSION + 1u,
+                   "g_header_sizes must carry an entry for every version up to "
+                   "WASMOS_EXEC_APP_VERSION");
     const wasmos_exec_wap_header_prefix_t* hdr = 0;
     uint16_t version = 0u;
     uint16_t header_size = 0u;

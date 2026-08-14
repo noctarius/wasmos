@@ -8,6 +8,7 @@
 #include "sync/spinlock.h"
 #include "subsystem_registry.h"
 #include "wasmos_app.h"
+#include "wasmos_exec_format.h"
 #include <string.h>
 
 /*
@@ -177,6 +178,13 @@ typedef struct __attribute__((packed)) {
     uint32_t min_pages;
     uint32_t max_pages;
 } wasmos_mem_hint_t;
+
+/* The exec-format probe carries its own copy of the container version because it
+ * is compiled without wasmos_app.h.  Keep them equal: a probe that does not know
+ * the current version reports every package as "not a WAP" instead of rejecting
+ * it, which fails broker-delegated spawns rather than the package. */
+_Static_assert(WASMOS_EXEC_APP_VERSION == WASMOS_APP_VERSION,
+               "wasmos_exec_format.h's WASMOS_EXEC_APP_VERSION must track WASMOS_APP_VERSION");
 
 static wasmos_app_endpoint_resolver_t g_endpoint_resolver;
 static wasmos_app_capability_granter_t g_capability_granter;

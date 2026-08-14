@@ -449,12 +449,6 @@ Source: `architecture/13-runtime-and-packaging.md`,
   capability revoke/reissue on restart.
 
 
-- [ ] [BUG][P0] Raise `WASMOS_EXEC_APP_VERSION`/`g_header_sizes` to v6. They stop at v5
-  while `WASMOS_APP_VERSION` is 6 and the packer writes a 76-byte header, so
-  `wasmos_exec_is_wap_blob()` always returns 0 and every broker-delegated spawn
-  (`.lua`/`.jar` via `wasmos_script`) fails with
-  `WASMOS_ERR_PROC_SPAWN_BROKER_PLAN` (`src/kernel/wasmos_exec_format.c:16`
-  `FIXME(wap-v6)`).
 - [ ] [BUG][P1] Bound `argc` in `wasm_driver_call` before marshalling. The wasm3 backend
   builds a fixed 4-slot argument array and passes `argc` straight to `m3_Call`;
   `wasm_driver_call_entry` checks, this path does not

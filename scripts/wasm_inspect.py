@@ -67,12 +67,21 @@ def parse_wasmos_app(data):
     wasm_size, off = read_u32_le(data, off)
     req_ep_count, off = read_u32_le(data, off)
     cap_count, off = read_u32_le(data, off)
+    # Versions 2..6 carry an entry-argument binding count and its record section;
+    # v7 dropped both, so reading the field there would consume mem_hint_count and
+    # desynchronise every following section.
     entry_arg_binding_count = 0
-    if version >= 2:
+    if 2 <= version <= 6:
         entry_arg_binding_count, off = read_u32_le(data, off)
     mem_hint_count, off = read_u32_le(data, off)
-    _reserved, off = read_u32_le(data, off)
     header_end = header_size
+    # Every version defines its variable-length sections as starting immediately
+    # after the fixed header, so seek there rather than continuing from whatever
+    # the field-by-field read reached. Versions 3+ added driver-match, region,
+    # compiled-size and subsystem-tag fields that are not parsed above, and
+    # walking on from that offset lands inside the header and misreads every
+    # section that follows.
+    off = header_size
     name_raw, off = read_bytes(data, off, name_len)
     entry_raw, off = read_bytes(data, off, entry_len)
     for _ in range(req_ep_count):

@@ -18,7 +18,6 @@ heap_pages = 512
 [ipc]
 required_endpoint_name = "-"
 required_endpoint_rights = 0
-entry_arg_bindings = ["proc.endpoint"]
 
 [[capabilities]]
 name = "io.port"

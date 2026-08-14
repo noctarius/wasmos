@@ -13,7 +13,6 @@ heap_pages = 4096
 [ipc]
 required_endpoint_name = "proc"
 required_endpoint_rights = 0
-entry_arg_bindings = ["proc.endpoint"]
 
 [[capabilities]]
 name = "ipc.basic"

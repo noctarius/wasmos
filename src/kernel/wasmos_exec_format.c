@@ -25,6 +25,7 @@ static int wasmos_exec_is_wap_blob(const uint8_t* blob, uint32_t blob_size) {
         64u,      /* v4 */
         72u,      /* v5 */
         76u,      /* v6: adds region_count */
+        72u,      /* v7: drops the entry-argument binding count */
     };
     /* One entry per version, plus the unused index 0. */
     _Static_assert(sizeof(g_header_sizes) / sizeof(g_header_sizes[0]) ==

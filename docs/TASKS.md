@@ -1096,6 +1096,37 @@ Source: `architecture/16-device-manager-and-bus-enumeration.md`,
   overrun leaves it reading overwritten bytes
   (`src/drivers/framebuffer_pci/framebuffer_pci_native.c:237` `FIXME`).
 
+- [ ] [CLEANUP][P1] Retire the `.wap`-embedded driver match table; the rules file
+  already does the job and is what actually binds.
+
+  Verified at boot rather than inferred: exactly one virtio-net spawn occurs, and
+  it follows `[device-manager] loaded boot rules: 10 active`, driven by the
+  pci_match rule walk (`device_manager.c:1095`, "for the first unspawned
+  device/rule pair"). The embedded match is NOT what binds it.
+
+  The same match is nonetheless declared twice. `virtio_net/linker.metadata` has
+  `[[matches]] bus=pci class=0x02 subclass=0x00 vendor=0x1AF4`, baked into the
+  container; `scripts/system/devmgr/rules/default.rules` has the equivalent
+  `SUBSYSTEM=="pci", ATTR{class}=="0x02", ATTR{subclass}=="0x00",
+  ATTR{vendor}=="0x1AF4", RUN+="system/drivers/virtio_net.wap"`. All four
+  manifests carrying `[[matches]]` -- ata, virtio_net, virtio_rng, virtio_serial
+  -- have rules covering them, and the initfs rules cover the bootstrap disk
+  (`ATTR{class}=="0x01"` -> ata.wap) so even early boot does not need the
+  embedded form.
+
+  What still reads the embedded table is `apply_pci_matches`
+  (`device_manager.c:1607`), which enumerates modules and considers only those
+  flagged `storage_bootstrap`. Establish whether that path can still bind
+  anything the initfs rules do not before cutting it -- that is the one question
+  left, and it is answerable by instrumenting the two call sites for a boot.
+
+  Removing it then deletes: the `[[matches]]` blocks from four manifests; the
+  packer's match records and the eight v2 single-match header fields (dead since
+  v3, read only by the v2 branch to seed `driver_matches[0]`);
+  `driver_match_count` and the record section from the format;
+  `desc.driver_matches[]`; and the `PROC_IPC_MODULE_META_DESC` match query with
+  its PM side at `process_manager_spawn.c:2125,2208` -- a header shrink and an IPC
+  round trip per module removed from discovery.
 ## Networking
 
 Source: `architecture/22-networking-virtio-net-and-stack.md`.

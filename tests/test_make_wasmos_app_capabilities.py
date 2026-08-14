@@ -9,14 +9,20 @@ from scripts.qemu_test_framework import default_host_tool_path
 # Packed .wap header prefix, in the field order of wasmos_app_header_t in
 # scripts/make_wasmos_app.c, up to but excluding subsystem_tag: magic, version,
 # header_size, flags, name_len, entry_len, wasm_size, req_ep_count, cap_count,
-# entry_arg_binding_count, mem_hint_count, the four driver_match u8s, the four
-# driver match/io u16s, driver_match_count, compiled_size.
+# mem_hint_count, the four driver_match u8s, the four driver match/io u16s,
+# driver_match_count, compiled_size.
 #
-# The tag must be located by OFFSET, never from the end of the header. The
-# format is versioned and extended by APPENDING fields, which is what keeps
-# every older offset stable -- v6 added region_count after the tag, so "the last
-# 8 bytes" silently became region_count plus padding and read back as zeros.
-_HEADER_PREFIX = "<8sHHIIIIIIIIBBBBHHHHII"
+# The tag must be located by OFFSET, never from the end of the header -- v6 added
+# region_count after the tag, so "the last 8 bytes" silently became region_count
+# plus padding and read back as zeros.
+#
+# Every version up to v6 extended the format by APPENDING, which kept older
+# offsets stable. v7 is the first that does not: it REMOVED
+# entry_arg_binding_count from the middle, shifting subsystem_tag and
+# region_count down by four bytes. Any reader that hardcodes an offset past that
+# field has to be revised per version rather than written once -- which is why
+# this prefix is spelled out field by field instead of being counted from the end.
+_HEADER_PREFIX = "<8sHHIIIIIIIBBBBHHHHII"
 _SUBSYSTEM_TAG_OFFSET = struct.calcsize(_HEADER_PREFIX)
 _SUBSYSTEM_TAG_LEN = 8
 

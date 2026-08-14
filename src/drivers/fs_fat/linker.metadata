@@ -14,7 +14,6 @@ heap_pages = 16
 [ipc]
 required_endpoint_name = "block"
 required_endpoint_rights = 1
-entry_arg_bindings = ["proc.endpoint", "block.endpoint"]
 
 [[capabilities]]
 name = "ipc.basic"

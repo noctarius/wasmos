@@ -145,6 +145,37 @@ typedef struct __attribute__((packed)) {
     uint32_t region_count;
 } wasmos_app_header_v6_t;
 
+/* Version 7: v6 without the entry-argument binding count.  The mechanism that
+ * field served is gone -- the records bound spawn arguments into four registers
+ * the process manager now always zeroes, with startup values travelling in the
+ * spawn-info buffer -- so v7 drops both the count and the record section.  A v6
+ * container may still carry records, which is why the v6 layout and its walk are
+ * retained below. */
+typedef struct __attribute__((packed)) {
+    char magic[8];
+    uint16_t version;
+    uint16_t header_size;
+    uint32_t flags;
+    uint32_t name_len;
+    uint32_t entry_len;
+    uint32_t wasm_size;
+    uint32_t req_ep_count;
+    uint32_t cap_count;
+    uint32_t mem_hint_count;
+    uint8_t driver_match_class;
+    uint8_t driver_match_subclass;
+    uint8_t driver_match_prog_if;
+    uint8_t driver_match_reserved0;
+    uint16_t driver_match_vendor_id;
+    uint16_t driver_match_device_id;
+    uint16_t driver_io_port_min;
+    uint16_t driver_io_port_max;
+    uint32_t driver_match_count;
+    uint32_t compiled_size;
+    char subsystem_tag[WASMOS_APP_SUBSYSTEM_TAG_LEN];
+    uint32_t region_count;
+} wasmos_app_header_v7_t;
+
 typedef struct __attribute__((packed)) {
     char magic[8];
     uint16_t version;
@@ -602,7 +633,7 @@ int wasmos_app_parse(const uint8_t* blob, uint32_t blob_size, wasmos_app_desc_t*
             subsystem_tag[i] = hdr_v5->subsystem_tag[i];
         }
         subsystem_tag[WASMOS_APP_SUBSYSTEM_TAG_LEN] = '\0';
-    } else if (version == WASMOS_APP_VERSION) {
+    } else if (version == 6u) {
         if (blob_size < sizeof(wasmos_app_header_v6_t)) {
             return -1;
         }
@@ -630,6 +661,35 @@ int wasmos_app_parse(const uint8_t* blob, uint32_t blob_size, wasmos_app_desc_t*
             subsystem_tag[i] = hdr_v6->subsystem_tag[i];
         }
         subsystem_tag[WASMOS_APP_SUBSYSTEM_TAG_LEN] = '\0';
+    } else if (version == WASMOS_APP_VERSION) {
+        if (blob_size < sizeof(wasmos_app_header_v7_t)) {
+            return -1;
+        }
+        const wasmos_app_header_v7_t* hdr_v7 = (const wasmos_app_header_v7_t*)blob;
+        header_size = hdr_v7->header_size;
+        flags = hdr_v7->flags;
+        name_len = hdr_v7->name_len;
+        entry_len = hdr_v7->entry_len;
+        wasm_size = hdr_v7->wasm_size;
+        req_ep_count = hdr_v7->req_ep_count;
+        cap_count = hdr_v7->cap_count;
+        /* v7 has no entry-argument section at all, so there is nothing to skip. */
+        entry_arg_binding_count = 0u;
+        mem_hint_count = hdr_v7->mem_hint_count;
+        driver_match_count = hdr_v7->driver_match_count;
+        if (driver_match_count > WASMOS_APP_MAX_DRIVER_MATCHES) {
+            return -1;
+        }
+        region_count = hdr_v7->region_count;
+        if (region_count > WASMOS_APP_MAX_REGIONS) {
+            return -1;
+        }
+        compiled_size = hdr_v7->compiled_size;
+        reserved = 0;
+        for (uint32_t i = 0; i < WASMOS_APP_SUBSYSTEM_TAG_LEN; ++i) {
+            subsystem_tag[i] = hdr_v7->subsystem_tag[i];
+        }
+        subsystem_tag[WASMOS_APP_SUBSYSTEM_TAG_LEN] = '\0';
     } else {
         return -1;
     }
@@ -638,7 +698,8 @@ int wasmos_app_parse(const uint8_t* blob, uint32_t blob_size, wasmos_app_desc_t*
         (version == 3u && header_size != sizeof(wasmos_app_header_v3_t)) ||
         (version == 4u && header_size != sizeof(wasmos_app_header_v4_t)) ||
         (version == 5u && header_size != sizeof(wasmos_app_header_v5_t)) ||
-        (version == WASMOS_APP_VERSION && header_size != sizeof(wasmos_app_header_v6_t)) ||
+        (version == 6u && header_size != sizeof(wasmos_app_header_v6_t)) ||
+        (version == WASMOS_APP_VERSION && header_size != sizeof(wasmos_app_header_v7_t)) ||
         reserved != 0) {
         return -1;
     }

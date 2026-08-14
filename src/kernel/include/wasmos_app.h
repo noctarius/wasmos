@@ -25,7 +25,7 @@
  * accepts versions 1..5 and derives the missing fields; each version is bound to an
  * exact header_size, so a blob whose header_size disagrees with its version is
  * rejected rather than reinterpreted. */
-#define WASMOS_APP_VERSION 6u
+#define WASMOS_APP_VERSION 7u
 /* On-wire width of the subsystem tag field (v5+).  Struct fields that hold a parsed tag
  * are this + 1 so the tag is always NUL-terminated in memory. */
 #define WASMOS_APP_SUBSYSTEM_TAG_LEN 8u

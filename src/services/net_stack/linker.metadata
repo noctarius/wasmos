@@ -22,7 +22,6 @@ heap_pages = 512
 # mirroring gfx_compositor. net-stack does not use it yet in this milestone.
 required_endpoint_name = "proc"
 required_endpoint_rights = 1
-entry_arg_bindings = ["proc.endpoint"]
 
 [[capabilities]]
 name = "ipc.basic"

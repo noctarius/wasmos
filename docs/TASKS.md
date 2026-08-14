@@ -225,6 +225,41 @@ Source: `architecture/06-memory-management.md`,
   pages leak as `EFI_LOADER_DATA` and the kernel never reclaims them
   (`src/boot/boot.c:617`, `:861`).
 
+
+- [ ] [BUG] Stop `wasmos_app_start` over-reading `init_argv`. It clamps
+  `init_argc` to 4 and then unconditionally copies 4 elements, so a caller
+  passing a 1-element array has 3 elements read past the end
+  (`src/kernel/wasmos_app.c`).
+- [ ] [BUG] Free the two ring-3 trampoline pages at
+  `warp_r3_teardown`. `paging_destroy_address_space` reclaims page-table
+  structures only, not mapped leaf frames, so 8 KiB leaks on every WARP guest
+  teardown (`src/kernel/warp/ring3_trampolines.c`).
+- [ ] [BUG] Free the private PD/PT frames beneath a cloned low slot.
+  `paging_destroy_address_space` frees only the slot-0 PDPT frame and never
+  walks below it, so every root that went through
+  `paging_clone_low_slot_in_root` leaks its lower tables; the clone's own error
+  paths leak earlier iterations' PDs/PTs too (`src/kernel/paging.c`).
+- [ ] [BUG] Serialize `x86_irq_mask`/`x86_irq_unmask`. They read-modify-write
+  `g_pic_mask1/2` with no lock, while only the `irq_sharing` ops path holds
+  `g_irq_lines_lock` (`src/kernel/arch/x86_64/irq_x86_64.c`).
+- [ ] [BUG] Recover the lower remnant in `pfa_alloc_pages_above`. When
+  `g_ranges` is full the middle-split fallback front-allocates and silently
+  drops `[rbase, start)` from the free list; those frames become unreachable
+  and invisible to `pfa_free_bytes` (`src/kernel/physmem.c`).
+- [ ] [ENHANCEMENT] Pack `EFI_ADDRESS_SPACE_DESCRIPTOR`. Without
+  `__attribute__((packed))` the padding disagrees with the ACPI byte stream it
+  mirrors; harmless only because nothing reads it (`src/boot/uefi.h`).
+- [ ] [ENHANCEMENT] Give the 64 KiB boot stack a real output section.
+  `linker.ld` reserves it by address arithmetic only, so no program header
+  allocates or zeroes it; it works because entry.S's 2 MiB identity map happens
+  to cover the range (`src/kernel/arch/x86_64/linker.ld`).
+- [ ] [ENHANCEMENT] Clear `bootstrap_pd_high` entries 32..511 in `_start`. Only
+  the first 32 are written, unlike the three upper-level tables, so their
+  contents depend on section placement (`src/kernel/arch/x86_64/entry.S`).
+- [ ] [DOCS] Correct `architecture/06-memory-management.md:112`: it states
+  `paging_clone_low_slot_in_root` copies PML4[511]; it deep-copies PML4[0], the
+  low identity slot. PML4[511] is copied by `paging_create_address_space`.
+
 ## Scheduler, Threads, and IPC
 
 Source: `architecture/07-scheduling-and-preemption.md`,
@@ -336,6 +371,37 @@ and `architecture/33-completion-ports.md`.
   `wasmos_subsystem_registry_drop_owner` frees broker entries and handler node
   arrays (`src/kernel/subsystem_registry.c:567` `FIXME`).
 
+
+- [ ] [BUG] Release the process slot on every `process_spawn_as_internal`
+  failure after the `->NEW` claim. `process_find_slot` reclaims only
+  UNUSED/DEAD and there is no NEW->DEAD edge, so the slot is stranded for the
+  life of the kernel, plus a leaked mm context on the later paths
+  (`src/kernel/process.c` `FIXME(spawn-slot-leak)`).
+- [ ] [BUG] Fix the `pm_service_set` name copy. `pm_service_entry_t::name` is
+  `char[17]` while registration accepts up to `WASMOS_SVC_NAME_MAX-1` (35); the
+  copy stops at `sizeof(name)` without forcing a terminator, so later `strcmp`
+  reads past the field, and names differing only after the 16th character
+  collide (`src/kernel/process_manager_services.c` `FIXME(svc-name-len)`).
+- [ ] [BUG] Sweep select sets on owner death. Endpoints are reclaimed via
+  `idtable_release_owner`; `g_select_table` has no equivalent, so a process
+  exiting without `ipc_select_destroy` leaks its select-set id and its
+  per-context quota (`src/kernel/ipc.c`).
+- [ ] [ENHANCEMENT] Initialise `g_user_mutex_lock` with `ksync_spinlock_init`.
+  It is never initialised, benign today only because all-zero storage happens
+  to be a valid unlocked `spinlock_t` (`src/kernel/user_mutex.c`).
+- [ ] [CLEANUP] Remove `process_t::wait_event` and `process_t::wait_target_pid`.
+  Nothing waits on or signals the event, and the pid field is only ever written
+  0; real waiters park on `thread_t` and `process_wake_waiters` scans the thread
+  table (`src/kernel/include/process.h`).
+- [ ] [CLEANUP] Resolve `thread_find_main_for_pid`: it returns the first slot
+  with a matching `owner_pid` rather than consulting the owner's `main_tid`, so
+  it is not the main thread for a multi-threaded process. Zero callers today
+  (`src/kernel/thread.c`).
+- [ ] [CLEANUP] Retire `poll_watcher_t::user_data` (stored by `poll_struct_add`,
+  never read) and either raise or remove `POLL_EV_OUT`/`POLL_EV_CLOSE`/
+  `POLL_EV_KERNEL`, which are declared but never signalled
+  (`src/kernel/include/poll.h`).
+
 ## Runtime, Packaging, and Service Discovery
 
 Source: `architecture/13-runtime-and-packaging.md`,
@@ -397,6 +463,33 @@ Source: `architecture/13-runtime-and-packaging.md`,
 - [ ] [BUG] Fix `freeAlignedMemory` in the AOT host shim. It reads a size header at
   `ptr - sizeof(size_t)` that `allocAlignedMemory` never writes, so it faults or
   `munmap`s a garbage length (`src/tools/warp_aot/host_mem_utils.cpp:141`).
+
+
+- [ ] [BUG] Replace the WARP C++ compat stubs that return silently wrong values
+  with either a correct implementation or a hard failure. Each compiles and
+  links, produces no diagnostic, and yields a wrong answer:
+  `numeric_limits<T>::max()` returns 0 for an unspecialised T
+  (`compat/limits`); `std::function::operator()` loops forever
+  (`compat/functional`); `sstream::str()` always returns `""`; `compat/mutex`
+  locks nothing; `is_convertible` maps to `__is_constructible`, making
+  `FunctionRef`'s signature constraint unconditional (`compat/type_traits`);
+  `mprotect` no-ops returning 0, so a W^X request appears to succeed, and
+  `posix_memalign` ignores its alignment (`warp/posix_kernel.c`).
+- [ ] [BUG] Resolve the `std::terminate` ODR violation: an inline definition in
+  `warp/compat/exception` and an out-of-line one in `warp/cxx_abi.cpp`. It
+  links, but which one runs depends on whether the translation unit saw the
+  compat header.
+- [ ] [BUG] Make `realloc(ptr, 0)` free and return NULL in the wasm3 shim. It
+  currently returns 0 without freeing -- neither the C contract nor
+  leak-free (`src/kernel/wasm3/shim.c`).
+- [ ] [ENHANCEMENT] Reconcile the wasm3/WARP behavioural divergences a guest can
+  observe, or document them as ABI: physical allocation floor for
+  `block_buffer_phys` (512 MiB under WARP vs 2 GiB under wasm3); an
+  out-of-linear-memory guest pointer traps the module under wasm3 but returns
+  `BAD_POINTER` under WARP; `sched_ready_count` returns 0 under WARP rather than
+  the live count; `wasi.random_get` fills zeros; `console_write` is mirrored to
+  the VT only under wasm3; `env.strlen` is wasm3-only; `wasm3_runtime_enter`
+  disables preemption for the whole call while `warp_runtime_enter` does not.
 
 ## ABI, Code Generation, and Error Handling
 
@@ -668,6 +761,55 @@ returns; `FS_ERR_*`/`PROC_*` ride IPC opcodes), so the migration depends on them
   the error reaches ~0.08 near `m -> 2`, which `powf`'s fractional-exponent path
   inherits (`src/libc/src/math.c`).
 
+
+- [ ] [BUG] Stop `%lld`/`%llx` truncating to 32 bits on wasm32. `vsnprintf`
+  casts `long long` through `long`, which is 32-bit on this target
+  (`src/libc/src/stdio.c`).
+- [ ] [BUG] Fix `sqrtf` for large arguments: 12 Newton iterations seeded with
+  `x` do not converge above ~1e7 (`sqrtf(1e10)` returns ~2.4e6 against 1e5)
+  (`src/libc/src/math.c`).
+- [ ] [BUG] Stop `fread`/`fwrite` silently dropping a trailing partial item.
+  Both return `bytes / size`, so bytes below one whole item are consumed and
+  never reported (`src/libc/src/unistd.c`).
+- [ ] [BUG] Align the wasm and native coroutine completion polarity. A wasm task
+  returning a non-zero, non-yield status REJECTS its completion future, so
+  `join()` yields that negative status; `wasmos_native_coroutine_exit()` always
+  RESOLVES, so `join()` yields 0 and the value lands in `out_result`. Same API
+  name, opposite failure signalling.
+- [ ] [BUG] Guard group reuse and partial registration in the wasm coroutine
+  runtime. `future_group` does not test `group->active` before overwriting the
+  record (native does), orphaning continuations that still point at it; and a
+  registration that fails part-way returns NULL with some continuations already
+  linked and `active == false`, a half-built state the caller cannot detect
+  (`src/libsys/wasm/coroutine_wasm.c`).
+- [ ] [ENHANCEMENT] Reconcile the remaining wasm/native `libsys` divergences:
+  `intent_send` returns -1 on wasm but the raw `ipc_send` status on native (a
+  caller testing `== -1` misses native failures); `event_loop_poll` never
+  returns negative on wasm but returns -1 on native, discarding the count
+  already dispatched; `HANDLER_MAX` is 16 vs 24; "no endpoint" is a negative
+  value vs `0xFFFFFFFF`.
+- [ ] [ENHANCEMENT] Add a `wasmos_sys_event_loop_destroy`. `event_loop_init`
+  creates a select set that is never released, so a transient loop leaks it
+  (`src/libsys/wasm/include/wasmos/libsys.h`).
+- [ ] [ENHANCEMENT] Give `memcmp` the NULL guards every other `string.c` entry
+  point has; it checks `lhs == rhs || count == 0` and then dereferences
+  (`src/libc/src/string.c`).
+- [ ] [DOCS] Correct `ipc_last_field` in `abi/hostcalls.yaml` (~line 132): it
+  documents -1 for both "no message stored" and "field out of range". Both
+  shims return `IPC_ERR_NOENT` (-4) for the former and `IPC_ERR_INVALID` (-1)
+  only for the latter (`src/kernel/warp/link_ipc.cpp:209,236`,
+  `src/kernel/wasm3/link_ipc.c:296,317`). The generated C header inherits the
+  wrong text.
+- [ ] [DOCS] Document the argument layouts missing from `abi/opcodes.yaml`:
+  `FONT_IPC_*` and `PCI_IPC_MSI_*` have none at all, unlike the vt/gfx
+  families; `VT_IPC_WRITE_REQ`/`VT_IPC_SERIAL_INPUT_REQ` omit that `request_id`
+  carries the sender's cached switch generation rather than a request id, and
+  that a stale value silently drops the chunk; `NET_IPC_IFADDR_LIST` overloads
+  `arg0` (the status slot) with the record count.
+- [ ] [DOCS] Correct `wasm_driver.h`'s claim that `wasm_driver_call_entry`
+  returns -1 when `entry_argc` exceeds 4: the WARP backend does not check
+  `argc` and silently drops the extras.
+
 ## Filesystems and Storage
 - [ ] [BUG] Fix `test_exec_fs_write_smoke`, the last failing test in the QEMU
   integration suite (run 31081191205, job 92550164406 — everything else in that
@@ -746,6 +888,12 @@ returns; `FS_ERR_*`/`PROC_*` ride IPC opcodes), so the migration depends on them
   `fat_resolve_parent_dir` and `fat_chdir_next_component` all reset to the root
   region, so `a/b/../c` resolves against the root
   (`src/drivers/fs_fat/fat_dir.c`).
+
+
+- [ ] [CLEANUP] Remove the unreachable `block_endpoint` parameter path in the
+  FAT backend's `initialize`. `wasmos_app_start` is invoked with
+  `init_args[4] = {0,0,0,0}`, so `block_endpoint > 0` is never true and
+  discovery always falls through to `svc_lookup` (`src/drivers/fs_fat/fs_fat.c`).
 
 ## Device Drivers and Input
 
@@ -861,6 +1009,15 @@ Remaining:
   (`net_stack.c:316`) and source net-stack's clock directly from a native
   driver-api millisecond hook (`src/services/net_stack/port.c:34`).
 
+
+- [ ] [ENHANCEMENT] Raise `MEM_ALIGNMENT` to 8 in `lwipopts.h`. It is 4 on an
+  LP64 x86_64 target against lwIP's guidance of 8 for 64-bit platforms; it
+  works only because x86 tolerates misaligned access
+  (`src/services/net_stack/lwipopts.h`).
+- [ ] [CLEANUP] Use `IP_IFADDR_RECORD_BYTES` in `ip`'s `cmd_show` instead of the
+  hardcoded `24u` it repeats twice; a record-size change would otherwise desync
+  silently (`src/utils/ip/ip.c`).
+
 ## Graphics, VT, and User Space
 
 Source: `architecture/19-virtual-terminal.md`,
@@ -927,6 +1084,39 @@ Other graphics/VT/UI:
   kernel-side buffer, so the blit never reaches the shared pages. The app builds
   for both runtimes (`examples/rust/tetris/tetris.rs:414` `TODO`).
 
+
+- [ ] [BUG] Apply the scroll offset when hit-testing scroll-view children.
+  `ui_layout_scroll_view` assigns child bounds without it and
+  `ui_render_component_clip` subtracts `offset_y` only at paint time, while
+  `ui_find_clickable_at`/`ui_find_component_at` test the raw `bounds` -- so a
+  click inside a scrolled container does not match what is on screen
+  (`src/libui/include/wasmos/libui.h`,
+  `src/libui/include/wasmos/libui_scroll_view.h`).
+- [ ] [BUG] Type-check `ui_component_text_len`, which has the same missing check
+  as `ui_component_set_text` and reinterprets LIST_VIEW/TREE_VIEW/SCROLL_VIEW/
+  MENU_BAR data as `ui_text_data_t` (`src/libui/include/wasmos/libui.h`).
+- [ ] [BUG] Make "no selection" representable. `ui_component_alloc` and
+  `ui_component_collection_clear` set `selected = -1`, but the list, tree and
+  dropdown layout passes clamp it to 0 for a non-empty collection, so the state
+  cannot survive a layout (`src/libui/include/wasmos/libui.h`).
+- [ ] [BUG] Reopen a menu popup when its entries change without changing the
+  child count: `ui_menu_item_sync_popup` compares only the height, so replacing
+  entries leaves a stale popup (`src/libui/include/wasmos/libui_menu_item.h`).
+- [ ] [BUG] Overflow-check `calloc`'s `n * size` in the libui Zig shim; a
+  wrapped product yields an undersized block instead of NULL
+  (`src/libui/zig/libui_shim.c`).
+- [ ] [ENHANCEMENT] Split `ui_component_list_append`'s return: it yields a row
+  index for LIST_VIEW/TREE_VIEW/DROPDOWN but a component id for MENU_ITEM, two
+  incompatible non-negative domains a caller cannot tell apart
+  (`src/libui/include/wasmos/libui.h`).
+- [ ] [CLEANUP] Delete the compositor's dead keymap path -- `SCANCODE_MAP_LEN`,
+  `keymap_t`, `KEYMAP_US`, `KEYMAP_DE_NODEADKEYS`, `active_keymap`,
+  `scancode_to_ascii`, `g_key_layout`. Nothing calls the decoder, and its
+  presence contradicts the "vt is the single keymap decoder" invariant. The
+  dead `FONT_INIT_MAX_ATTEMPTS`/`g_font_init_attempts` pair and
+  `cli_types.h`'s unreferenced `CLI_MAX_PROCS` go with it
+  (`src/services/gfx_compositor/gfx_compositor.zig`).
+
 ## Validation and Documentation
 
 Source: `architecture/25-diagnostics-status.md`,
@@ -971,3 +1161,20 @@ Source: `architecture/25-diagnostics-status.md`,
   markers are emitted from the wait/kill result, so a broken join-after-kill
   still prints "ok" (`src/kernel/kernel_threading_selftest_runtime.c:320`
   `FIXME`).
+
+
+- [ ] [TEST] Make `stubs_xfer_buffer_platform.c`'s `pfa_free_pages` model the
+  real allocator. It is a total no-op, so both leaks and double-frees are
+  invisible to every test built on it.
+- [ ] [TEST] Distinguish the `_noirq` spinlock forms in `stubs_spinlock.c`. On
+  the host lock/unlock and their `_noirq` variants are interchangeable, so a
+  mispaired acquire/release passes in tests and corrupts the preempt depth on
+  target.
+- [ ] [TEST] Close the gaps in `tests/unit/include/sched_event.h`: it is
+  layout-incompatible with the kernel struct (`wait_list` replaced by a pthread
+  mutex/condvar), ignores `timeout_ms` so no timed-wait path is covered, and
+  loses a wake raised before a waiter parks -- something the kernel's
+  under-lock enqueue cannot do.
+- [ ] [TEST] Make `test_hostcall_ipc.cpp`'s timed-select rows actually reach a
+  deadline. `timer_ticks()` is frozen and nothing calls `sched_timeout_check`,
+  so `WASMOS_TIMEOUT` arrives via the spurious-wake path instead.

@@ -65,6 +65,19 @@ static int boot_shadow_copy_blob(void** dst_ptr, const void* src_ptr, uint64_t s
     return 0;
 }
 
+/* Builds a kernel-owned copy of boot_info in *dst, with each referenced blob
+ * (RSDP, boot config, initfs modules) re-homed into freshly allocated frames and
+ * every pointer in *dst rewritten to that blob's higher-half alias.
+ *
+ * Both the structure and the blobs are read from src through the LOW identity
+ * map, so this must run while the kernel root still has its low slot and after
+ * the frame allocator is up.  src is borrowed and can be discarded afterwards;
+ * dst must outlive the kernel, since nothing copies it again.
+ *
+ * Returns 0 on success and -1 for a NULL argument or when any blob's frames
+ * cannot be allocated.  A partial failure leaves *dst half-rewritten and the
+ * frames already taken are not released, so a -1 is not recoverable and the
+ * caller panics. */
 int kernel_boot_build_bootinfo_shadow(const boot_info_t* src, boot_info_t* dst) {
     if (!src || !dst) {
         return -1;
@@ -129,6 +142,15 @@ int kernel_boot_build_bootinfo_shadow(const boot_info_t* src, boot_info_t* dst) 
     return 0;
 }
 
+/* Strips the low identity slot from every live, non-idle process root and
+ * verifies the result, as a one-shot boot-time check that no process is left
+ * with a mapping into low memory.
+ *
+ * It MUTATES the roots it visits — this is not a read-only diagnostic — but
+ * reports only through klog and returns nothing, so a caller cannot tell success
+ * from failure.  The sweep stops at the first failure rather than continuing, so
+ * processes after it keep their low slot.  Idle processes and context 0 are
+ * skipped by design; the kernel root keeps its low slot. */
 void kernel_boot_run_low_slot_sweep_diagnostic(void) {
     uint32_t active = process_count_active();
     uint32_t pid = 0;
@@ -167,6 +189,18 @@ void kernel_boot_run_low_slot_sweep_diagnostic(void) {
     }
 }
 
+/* The BSP's terminal loop: it never returns, and the only exit is the panic
+ * below.
+ *
+ * Each iteration masks interrupts, dispatches one thread, then services the
+ * reschedule flag and the timer.  It does NOT idle: a CPU with nothing to run
+ * dispatches the idle thread, which is what executes sti;hlt, so the loop itself
+ * spins only between dispatches.
+ *
+ * Transient scheduler results — including SCHED_R_STALE, a thread reaped from
+ * under the picker — simply re-loop.  SCHED_R_PICK, SCHED_R_CTX, SCHED_R_ROOT
+ * and SCHED_R_MAXCOUNT mean the invariant "idle is always dispatchable" has been
+ * broken, and panic. */
 void kernel_boot_run_scheduler_loop(void) {
     for (;;) {
         __asm__ volatile("cli");

@@ -1,4 +1,18 @@
 #pragma once
+/* compat/algorithm — freestanding shadow of <algorithm>
+ *
+ * Provides the two-argument std::min and std::max and nothing else.  That is
+ * the whole <algorithm> surface the WARP translation units in the kernel build
+ * touch: Span.hpp, ModuleInfo.hpp, Common.cpp, x86_64_call_dispatch.hpp and
+ * WasmModule.cpp call std::min/std::max, and no compiled WARP source calls
+ * std::copy, std::sort, std::fill or any range algorithm.
+ *
+ * Both are faithful to the standard (same reference-returning, "returns a on
+ * ties" semantics) and constexpr, which x86_64_call_dispatch.hpp relies on to
+ * use std::max in a template argument.  The comparator and
+ * initializer_list overloads are absent; reaching for them — or for any other
+ * algorithm — fails at the call site with an overload-resolution error, never
+ * silently. */
 
 namespace std {
 

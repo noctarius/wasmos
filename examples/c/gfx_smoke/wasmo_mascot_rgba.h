@@ -1,9 +1,21 @@
 #ifndef WASMO_MASCOT_RGBA_H
 #define WASMO_MASCOT_RGBA_H
 
+/* Embedded mascot image used by gfx_smoke's third window.
+ *
+ * The pixel data is baked into the app binary because a guest has no image
+ * decoder: the bytes are ready to sample as-is.
+ *
+ * Dimensions in pixels. WASMO_MASCOT_RGBA_WIDTH * WASMO_MASCOT_RGBA_HEIGHT * 4
+ * is the length of the array below; there is no padding and no stride other
+ * than width * 4. */
 #define WASMO_MASCOT_RGBA_WIDTH 500
 #define WASMO_MASCOT_RGBA_HEIGHT 500
 
+/* Row-major RGBA8888 samples, four bytes per pixel in R, G, B, A order. Note
+ * the framebuffer this is blitted into is ARGB32 words, so the consumer swizzles
+ * per pixel rather than copying rows. Alpha carries the cut-out margin; the
+ * consumer thresholds it rather than blending. */
 static const unsigned char wasmo_mascot_rgba[] = {
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,

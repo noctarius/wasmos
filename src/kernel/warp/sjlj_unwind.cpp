@@ -84,18 +84,28 @@ static inline _Unwind_FunctionContext** ctx_stack(void) {
 
 extern "C" {
 
+/* Push `ctx` onto this CPU's context stack.  `ctx` is borrowed and lives in the
+ * registering frame, so it must be unregistered before that frame returns. */
 void _Unwind_SjLj_Register(_Unwind_FunctionContext* ctx) {
     _Unwind_FunctionContext** top = ctx_stack();
     ctx->prev = *top;
     *top = ctx;
 }
 
+/* Pop `ctx` if it is the top of this CPU's stack; a non-top context is silently
+ * ignored rather than spliced out, so out-of-order unregistration leaves the stack
+ * holding a dead frame. */
 void _Unwind_SjLj_Unregister(_Unwind_FunctionContext* ctx) {
     _Unwind_FunctionContext** top = ctx_stack();
     if (*top == ctx)
         *top = ctx->prev;
 }
 
+/* Deliver `exc` to the innermost registered frame whose personality accepts it,
+ * popping that frame and longjmping to its landing pad.  Does not return on success;
+ * panics when no frame accepts.  `exc` is borrowed and is not freed here — the landing
+ * pad owns it.  Frames skipped on the way are NOT unwound, so their destructors do not
+ * run. */
 _Unwind_Reason_Code _Unwind_SjLj_RaiseException(_Unwind_Exception* exc) {
     _Unwind_FunctionContext** top = ctx_stack();
     _Unwind_FunctionContext* ctx = *top;
@@ -119,6 +129,9 @@ _Unwind_Reason_Code _Unwind_SjLj_RaiseException(_Unwind_Exception* exc) {
     kpanic("uncaught_sjlj_exception_panic", 0ULL, 0ULL);
 }
 
+/* Resume/rethrow both restart delivery from the current top of the context stack,
+ * which is the frame after the one that was popped, so an exception rethrown from a
+ * landing pad propagates outward. */
 _Unwind_Reason_Code _Unwind_SjLj_Resume(_Unwind_Exception* exc) {
     return _Unwind_SjLj_RaiseException(exc);
 }
@@ -139,6 +152,8 @@ _Unwind_Reason_Code __gxx_personality_sj0(int /*version*/, _Unwind_Action action
     return _URC_CONTINUE_UNWIND;
 }
 
+/* Run `exc`'s cleanup callback if it has one; the exception object's own storage is
+ * not freed here.  A null `exc` is a no-op. */
 void _Unwind_SjLj_DeleteException(_Unwind_Exception* exc) {
     if (exc && exc->exception_cleanup)
         exc->exception_cleanup(_URC_NO_REASON, exc);

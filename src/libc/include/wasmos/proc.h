@@ -13,7 +13,11 @@
 extern "C" {
 #endif
 
-/* Pack a service/process name (up to 16 chars) into four int32 IPC args. */
+/* Pack a service/process name (up to 16 chars) into four int32 IPC args, 4
+ * little-endian bytes per word. Longer names are truncated, shorter ones
+ * zero-padded, and no terminator is transmitted. A NULL `name` yields four zero
+ * words; a NULL `out_args` is a no-op. Same encoding as
+ * wasmos_ipc_pack_name16. */
 static inline void wasmos_proc_pack_name16(const char* name, int32_t out_args[4]) {
     uint32_t packed[4] = {0, 0, 0, 0};
     if (!out_args) {
@@ -34,7 +38,14 @@ static inline void wasmos_proc_pack_name16(const char* name, int32_t out_args[4]
 
 /* Query PM for metadata of a module by index and match_index.
  * NOTE: uses a file-static request_id counter — not safe to call concurrently
- * from multiple threads without external synchronisation. */
+ * from multiple threads without external synchronisation.
+ *
+ * Blocks on `reply_endpoint` for exactly one message and accepts it only if it
+ * is a PROC_IPC_RESP carrying this request's id; anything else fails the call
+ * (it is not skipped and retried), so `reply_endpoint` must be private to the
+ * caller. The four reply words are copied to whichever out pointers are
+ * non-NULL. Returns 0 on success, -1 on a send failure, a receive failure, or a
+ * non-matching reply. */
 static inline int32_t wasmos_proc_module_meta(int32_t proc_endpoint, int32_t reply_endpoint,
                                               int32_t module_index, int32_t match_index,
                                               int32_t* out_arg0, int32_t* out_arg1,
@@ -65,7 +76,19 @@ static inline int32_t wasmos_proc_module_meta(int32_t proc_endpoint, int32_t rep
 
 /* Query PM for module metadata by xfer path; writes path into the xfer buffer
  * before sending.  Uses a separate static counter starting at 0x40000000
- * to avoid clashing with wasmos_proc_module_meta's counter. */
+ * to avoid clashing with wasmos_proc_module_meta's counter.
+ *
+ * The path is staged in a transfer buffer owned for the duration of the call and
+ * released before returning; arg1 packs (buffer_id << 12 | path_len), which caps
+ * path_len at 4095 here, though PM itself rejects anything from 96 bytes up.
+ * `source_kind` selects the module namespace and must be
+ * PROC_MODULE_SOURCE_INITFS — PM answers any other value, PROC_MODULE_SOURCE_FS
+ * included, with an error. Blocks on
+ * `reply_endpoint` for one message and, as in wasmos_proc_module_meta, accepts
+ * only a matching PROC_IPC_RESP. On success returns 0 and writes the module
+ * index, flags and capability flags to whichever out pointers are non-NULL;
+ * returns -1 on a bad path length, staging failure, send/receive failure, or a
+ * non-matching reply. */
 static inline int32_t wasmos_proc_module_meta_path(int32_t proc_endpoint, int32_t reply_endpoint,
                                                    const char* path, int32_t source_kind,
                                                    int32_t* out_module_index, int32_t* out_flags,

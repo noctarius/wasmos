@@ -27,15 +27,31 @@ vb::Span<vb::NativeSymbol const> warp_wasmos_symbols_ring3(void);
 #endif
 
 /* Binds the compiled WasmModule to the per-PID call context so that V1 host
- * functions can resolve linear-memory offsets via getLinearMemoryRegion. */
+ * functions can resolve linear-memory offsets via getLinearMemoryRegion.
+ * `module` is borrowed: the context stores the pointer and the module stores the
+ * context back (setContext), so the module must outlive the context, and
+ * wasm_driver_stop must delete the module before warp_ctx_release_pid drops the
+ * entry.  A pid of 0, or an allocation failure in the context table, is a silent
+ * no-op — the module is then left with no context and host calls resolve nothing. */
 void warp_bind_module(vb::WasmModule* module, uint32_t pid);
+
+/* Create-or-get the per-pid WARP call context and return it as the opaque `void*`
+ * WasmModule::setContext takes.  Returns nullptr for pid 0 or when the context table
+ * cannot allocate.  The address is stable for the pid's lifetime (the hashmap relinks
+ * nodes on rehash, it does not move them) and is invalidated by warp_ctx_release_pid /
+ * warp_release_pid. */
 void* warp_context_for_pid(uint32_t pid);
+
 /* Release the per-process WARP call context for `pid` on process exit. */
 void warp_ctx_release_pid(uint32_t pid);
 
 extern "C" {
 #endif
 
+/* Publish `boot_info` to the host calls that read it (ACPI RSDP, boot modules, boot
+ * config, initfs) and initialise the per-pid IPC/FS/block side tables and the context
+ * table.  The pointer is borrowed and must outlive every WASM process.  Call once from
+ * kernel init, before any module is compiled or bound. */
 void warp_link_init(const boot_info_t* boot_info);
 
 #ifdef __cplusplus

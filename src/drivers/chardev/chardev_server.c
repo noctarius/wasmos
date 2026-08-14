@@ -24,6 +24,20 @@ static void chardev_reply(int32_t reply_endpoint, int32_t type, int32_t request_
     (void)wasmos_ipc_reply(reply_endpoint, g_service_endpoint, type, request_id, status, value);
 }
 
+/* Service entry point: register as "chardev" and serve read/write requests
+ * forever.
+ *
+ * All four parameters are ignored; proc_endpoint is overwritten from the
+ * spawn-info contract, because the entry arguments are passed as zero.
+ *
+ * The service holds exactly ONE byte of state, not a queue: a write replaces
+ * whatever was there, and a read returns the last byte written without consuming
+ * it, answering WASMOS_ERR_CHARDEV_NO_DATA only until the first write ever
+ * arrives. It is a loopback test surface, not a character stream.
+ *
+ * On success this does not return.
+ * TODO: the two bring-up failure paths return a bare -1 rather than a packed
+ * WASMOS_ERR_DRIVER_* code from abi/errors.yaml. */
 WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t arg1, int32_t arg2,
                                       int32_t arg3) {
     (void)arg1;

@@ -35,6 +35,11 @@
 static int g_failures;
 static int g_checks;
 
+/* Counts every evaluation into g_checks and, on failure, counts g_failures and prints
+ * `msg` with the file and line. A failed check does NOT end the case: the remaining
+ * assertions still run, against the state the failure left behind. main prints the
+ * totals and exits non-zero if any check failed. `msg` names the property being
+ * asserted, in the affirmative -- it is printed when that property does not hold. */
 #define CHECK(cond, msg)                                                                           \
     do {                                                                                           \
         g_checks++;                                                                                \
@@ -46,6 +51,11 @@ static int g_checks;
 
 /* ------------------------------------------------------------------ stubs */
 
+/* futex.c takes one allocation per distinct futex word, so overriding malloc is what
+ * reaches its allocation-failure path: every call returns NULL while g_malloc_fail is
+ * set. The override cannot call malloc itself, hence aligned_alloc with the size rounded
+ * up to the alignment; free is left to the host libc, which releases that storage
+ * normally. */
 static int g_malloc_fail;
 
 void* malloc(size_t n) {
@@ -63,6 +73,11 @@ static int g_yield_calls;
 static int g_park;
 static void (*g_yield_hook)(void);
 
+/* The clock every futex deadline is measured against. g_now moves only when a case moves
+ * it, so nothing expires on its own; the kernel's timer_ticks is advanced by the timer
+ * IRQ. The 1:1 millisecond-to-tick conversion replaces the kernel's
+ * ceil(ms * hz / 1000), so a timeout in ms and a deadline in ticks are the same number
+ * throughout this file. */
 uint64_t timer_ticks(void) {
     return g_now;
 }
@@ -70,10 +85,17 @@ uint64_t timer_ms_to_ticks(uint32_t ms) {
     return (uint64_t)ms;
 }
 
+/* The table sched_timeout_check sweeps for expired deadlines. Bounded by the fixture
+ * pool rather than THREAD_MAX_COUNT, so the sweep sees NULL for every index past it;
+ * like the kernel's it takes no lock and returns a slot whatever state that slot is in. */
 thread_t* thread_table_at(uint32_t index) {
     return (index < POOL_MAX) ? &g_pool[index] : 0;
 }
 
+/* Resolves a tid straight to its pool slot, so tid n is g_pool[n-1] and every tid in
+ * 1..POOL_MAX answers. The kernel searches the thread table under g_thread_table_lock
+ * and refuses a slot whose state is THREAD_STATE_UNUSED; this applies no state filter,
+ * so a slot the fixture has recycled is still reachable by tid. */
 thread_t* thread_get(uint32_t tid) {
     if (tid == 0 || tid > POOL_MAX) {
         return 0;
@@ -81,10 +103,18 @@ thread_t* thread_get(uint32_t tid) {
     return &g_pool[tid - 1u];
 }
 
+/* The identity a futex_wait parks under. Set directly by the fixture (park() swaps it
+ * around a wait); the kernel derives it from cpu_local()->current_thread and answers 0
+ * when a CPU is running nothing, which no case here produces. */
 uint32_t thread_current_tid(void) {
     return g_current_tid;
 }
 
+/* Writes state and block reason unconditionally. The kernel takes the thread-table lock
+ * and filters the edge through thread_transition_legal, so an illegal transition --
+ * notably anything leaving ZOMBIE -- is silently ignored there; this stub enforces no
+ * such rule and would resurrect a dead slot. No case here drives an illegal edge, so
+ * what goes untested is the refusal, not the transitions the futex actually performs. */
 void thread_set_state(uint32_t tid, thread_state_t state, thread_block_reason_t reason) {
     thread_t* t = thread_get(tid);
     if (t) {
@@ -93,12 +123,33 @@ void thread_set_state(uint32_t tid, thread_state_t state, thread_block_reason_t 
     }
 }
 
+/* Marks the thread READY and nothing more. The kernel runs the wake/block claim
+ * handshake, refuses a wake of a thread that is not BLOCKED, enqueues it on a run queue
+ * and may request a reschedule -- none of which exists here. A wake is therefore
+ * observed purely as the wait-list detach sched_event.c performs before calling this,
+ * which is exactly what is_parked() reads. */
 void sched_wake_thread(thread_t* t) {
     if (t) {
         t->state = THREAD_STATE_READY;
     }
 }
 
+/* MODELLING NOTE (blocking) -- see the file header. The kernel switches away here and
+ * does not return until a waker resumes the thread, so sched_event_wait's post-resume
+ * tail (which disarms sched_timeout_tick) runs only after the wake. This returns at
+ * once, so that tail executes immediately.
+ *
+ * Before returning it fires a one-shot g_yield_hook if one is armed. That call happens
+ * with the caller parked in the wait list and no futex or event lock held -- precisely
+ * where a waker or the timeout scan on another CPU would run -- so a hook drives the
+ * real handoff rather than a fabricated one, and it disarms itself so a later yield does
+ * not re-run it.
+ *
+ * Then, unless g_park is set, it simulates the resume: under the event's lock it unlinks
+ * the caller from the wait list, clears wait_event and marks the thread RUNNING. That is
+ * the detach half of a wake, without the pend_state/pend_data delivery. With g_park set
+ * it returns leaving the caller linked and still pointing at the event, which is the
+ * state a genuinely blocked thread is in between its yield and its waker. */
 void process_yield(process_run_result_t result) {
     (void)result;
     g_yield_calls++;
@@ -154,6 +205,14 @@ static uint64_t fake_phys_of(const void* p) {
     return (uint64_t)((uintptr_t)p - (uintptr_t)KERNEL_HIGHER_HALF_BASE);
 }
 
+/* Resolves the four fixture context ids, and NULL for anything else -- which is how the
+ * unknown-context rejection is driven. The kernel looks a live mm_context_t up by id in
+ * a global list under a lock.
+ *
+ * The returned pointer addresses this file's `struct mm_context`, which shares no layout
+ * with the real mm_context_t. That is safe only because its one consumer,
+ * mm_context_region_for_type, is stubbed here too: futex.c treats the handle as opaque
+ * and never dereferences it. */
 mm_context_t* mm_context_get(uint32_t id) {
     switch (id) {
     case CTX_A:
@@ -169,6 +228,14 @@ mm_context_t* mm_context_get(uint32_t id) {
     }
 }
 
+/* Describes the fixture's linear-memory region: WORDS words, with phys_base chosen so
+ * that futex.c's paddr + KERNEL_HIGHER_HALF_BASE lands on the host buffer backing that
+ * context. Returns 0 when a region is produced, -1 for a NULL context, a type other than
+ * MEM_REGION_WASM_LINEAR, or CTX_NO_REGION -- the same polarity as the kernel's, which
+ * scans the context's region list for the first entry of that type.
+ *
+ * Unlike the kernel's it does not check `out` for NULL; futex.c always passes storage.
+ * The region is described fresh on every call, so no case can mutate it. */
 int mm_context_region_for_type(mm_context_t* ctx, mem_region_type_t type, mem_region_t* out) {
     struct mm_context* c = (struct mm_context*)ctx;
     if (!c || type != MEM_REGION_WASM_LINEAR || c->id == CTX_NO_REGION) {
@@ -186,6 +253,14 @@ int mm_context_region_for_type(mm_context_t* ctx, mem_region_type_t type, mem_re
 
 /* --------------------------------------------------------------- fixtures */
 
+/* Per-case fixture reset, called first by every case. Drops every futex entry, rebuilds
+ * the thread pool (tid i+1, RUNNING, both list nodes canonically detached -- a
+ * zero-filled list_head_t reads as LINKED), zeroes both fake pages, and returns the
+ * fixture to tid 1 at tick 100 with no hook armed, no park held and allocation
+ * succeeding.
+ *
+ * g_checks and g_failures are cumulative across the run and are not touched. Neither is
+ * futex.c's bucket table sizing or futex_init(), which main calls once. */
 static void reset(void) {
     /* Drop every futex entry BEFORE recycling the thread pool: an entry left
      * holding a wait_list would otherwise point at nodes this memset is about
@@ -219,6 +294,9 @@ static void park(uint32_t ctx, uint32_t uaddr, uint32_t expected, thread_t* t, u
     g_current_tid = saved;
 }
 
+/* A thread counts as parked while it both points at an event and is linked into that
+ * event's wait list. Testing only one of the two would misread a thread whose two fields
+ * disagree -- which is exactly the corruption several cases here exist to catch. */
 static int is_parked(thread_t* t) {
     return t->wait_event != 0 && !list_head_empty(&t->event_node);
 }

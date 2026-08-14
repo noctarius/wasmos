@@ -1,7 +1,17 @@
 /* Host unit test for the class-based service discovery table
  * (service_class_registry.c). Drives registration, class enumeration,
  * subscriptions/existence events, anti-spoof, dynamic growth, and death
- * reaping through the injected event-sink and liveness callbacks. */
+ * reaping through the injected event-sink and liveness callbacks.
+ *
+ * service_class_registry.c, the three list sources and kmem.c are compiled in
+ * for real, with the libc string.c; only the slab allocator underneath kmem is
+ * replaced, by tests/unit/stubs_slab.c, which forwards to the host heap — so the
+ * negative returns service_class_registry_add gives on allocation failure are
+ * not reachable here. The registry's tables are process-global file statics, so
+ * every case starts with fresh(); the cases run in a shuffled order.
+ *
+ * Each case returns 0 to pass or __LINE__ to fail, and wasmos_test_run_all stops
+ * at the first failure (test_shuffle.h). */
 
 #include "service_class_registry.h"
 
@@ -21,9 +31,16 @@ typedef struct {
     char class_name[SVC_CLASS_NAME_MAX];
 } ev_t;
 
+/* Event log, in emission order. Capped at 128 entries; a run that would exceed
+ * it drops the excess silently, so a case must not depend on a count past that.
+ * Several cases zero g_ev_n mid-case to forget the setup's ADDs. */
 static ev_t g_ev[128];
 static int g_ev_n;
 
+/* service_class_event_fn sink, standing in for the PM's real one, which pushes
+ * an SVC_IPC_CLASS_EVENT to notify_endpoint. The signature reports nothing, so
+ * neither sink can refuse an event; this one records the arguments verbatim,
+ * copying class_name into a buffer bounded by SVC_CLASS_NAME_MAX. */
 static void cap_event(void* user, uint32_t notify, uint32_t event, const char* class_name,
                       uint32_t instance, uint32_t endpoint, uint32_t pid) {
     (void)user;
@@ -44,9 +61,14 @@ static void cap_event(void* user, uint32_t notify, uint32_t event, const char* c
 }
 
 /* --- controllable liveness predicate --- */
+/* Owner contexts a case has declared dead. Empty means everything is alive. */
 static uint32_t g_dead[32];
 static int g_dead_n;
 
+/* service_class_alive_fn predicate: returns 1 when `ctx` is alive and 0 when a
+ * case has marked it dead — non-zero is alive, as the registry expects. It
+ * consults a list rather than the process table, so liveness here is whatever
+ * the case declares and never changes underneath a reap. */
 static int alive_cb(void* user, uint32_t ctx) {
     (void)user;
     for (int i = 0; i < g_dead_n; ++i) {
@@ -57,12 +79,17 @@ static int alive_cb(void* user, uint32_t ctx) {
     return 1;
 }
 
+/* Declare one owner context dead for the rest of the case. Silently ignored past
+ * 32 marks, and there is no way to revive one. */
 static void mark_dead(uint32_t ctx) {
     if (g_dead_n < (int)(sizeof(g_dead) / sizeof(g_dead[0]))) {
         g_dead[g_dead_n++] = ctx;
     }
 }
 
+/* Fixture reset: empty registry, this file's sink installed, and both logs
+ * cleared. Every case starts here, since the registry state is process-global
+ * and the cases run in a shuffled order. */
 static void fresh(void) {
     service_class_registry_reset();
     service_class_registry_set_event_sink(cap_event, 0);

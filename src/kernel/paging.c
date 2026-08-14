@@ -168,6 +168,9 @@ static void invlpg(uint64_t virt) {
     __asm__ volatile("invlpg (%0)" : : "r"(virt) : "memory");
 }
 
+/* invlpg is a per-CPU instruction: this flushes the entry on the executing CPU
+ * only.  There is no TLB shootdown IPI, so a mapping changed on one CPU stays
+ * stale in another CPU's TLB until that CPU reloads CR3. */
 void paging_invalidate(uint64_t virt) {
     invlpg(virt);
 }
@@ -257,6 +260,26 @@ static int ensure_pt_for_pd(uint64_t* pd_entry, uint64_t table_flags) {
     return 0;
 }
 
+/* Builds the kernel root from scratch and installs it in CR3, publishing it as
+ * both g_pml4_phys and g_current_pml4_phys.  Runs once on the BSP while the
+ * firmware identity map is still the active mapping, which is what lets
+ * table_ptr address the freshly allocated frames by physical address.
+ *
+ * The higher-half alias (PML4 slot 511, PDPT slots 510..) is built from 2 MiB
+ * large pages covering the first HIGHER_HALF_PDE_COUNT * 2 MiB of physical RAM;
+ * that window is what every later table_ptr/alias access depends on, which is
+ * why alloc_table refuses frames above it.
+ *
+ * With IDENTITY_PD_COUNT == 0 a low identity PD is still built, because the
+ * instruction stream is executing from a low VA at the moment CR3 is loaded.
+ * The `mov cr3` and the `jmp` to the higher-half address of the label that
+ * follows are emitted as one asm block so no compiler-generated low-VA
+ * instruction can sit between them.  The kernel root then keeps that low slot
+ * (see the TODO at the label); user roots do not.
+ *
+ * Returns 0 on success, -1 if any table frame could not be allocated.  Frames
+ * already taken on a failure path are not returned to the allocator; a failure
+ * here is fatal to boot anyway. */
 int paging_init(void) {
     uint64_t pml4_phys = 0;
     uint64_t pdpt_low_phys = 0;
@@ -360,10 +383,14 @@ uint64_t paging_get_higher_half_base(void) {
     return KERNEL_HIGHER_HALF_BASE;
 }
 
+/* Physical frame of the kernel root, or 0 before paging_init has run. */
 uint64_t paging_get_root_table(void) {
     return g_pml4_phys;
 }
 
+/* Reads the executing CPU's live CR3.  Under SMP this is the only authoritative
+ * source of "which root am I on": g_current_pml4_phys is a single global updated
+ * by whichever CPU switched last. */
 uint64_t paging_get_current_root_table(void) {
     uint64_t cr3 = 0;
     __asm__ volatile("mov %%cr3, %0" : "=r"(cr3));
@@ -387,6 +414,19 @@ __attribute__((naked)) int paging_switch_root(uint64_t root_table) {
                      "ret\n");
 }
 
+/* Allocates a fresh root frame and seeds it with the shared kernel mappings.
+ *
+ * Slot 511 is copied by VALUE from the kernel root, so the child and the kernel
+ * share the same higher-half PDPT frame — the child does not own it and
+ * paging_destroy_address_space must not free it.  Slot 0 is either empty
+ * (IDENTITY_PD_COUNT == 0) or a privately allocated PDPT whose first
+ * IDENTITY_PD_COUNT entries are copied from the kernel's.  Slot 1 (the user
+ * slot) is left empty for paging_map_4k_in_root to populate on demand.
+ *
+ * *out_root_table receives a PHYSICAL frame address on success.  Returns 0 on
+ * success, -1 on a NULL out pointer, before paging_init, on frame exhaustion, or
+ * when the assembled root fails paging_verify_user_root_impl (in which case the
+ * frames taken here are released again). */
 int paging_create_address_space(uint64_t* out_root_table) {
     if (!out_root_table || !g_pml4_phys) {
         return -1;
@@ -428,6 +468,21 @@ int paging_create_address_space(uint64_t* out_root_table) {
     return 0;
 }
 
+/* Frees the page-table STRUCTURE owned by a user root: every PT and PD below
+ * the user slot (PML4 index 1), that slot's PDPT, a private low PDPT in slot 0
+ * when it is not the kernel's own, and finally the root frame itself.
+ *
+ * Leaf frames stay untouched — the mapped data pages belong to the memory-region
+ * and shared-memory owners, which release them separately, and 2 MiB leaf PDEs
+ * are skipped for the same reason.  Slot 511 is deliberately not walked: it is
+ * an alias of the kernel's higher-half PDPT.
+ *
+ * A zero root, and the kernel root itself, are ignored.  Each frame freed here
+ * is freed exactly once, so calling this twice for the same root trips the
+ * allocator's double-free panic.
+ *
+ * Only the slot-0 PDPT frame is reclaimed; PD and PT frames installed below it
+ * by paging_clone_low_slot_in_root are not walked. */
 void paging_destroy_address_space(uint64_t root_table) {
     if (!root_table || root_table == g_pml4_phys) {
         return;
@@ -470,6 +525,19 @@ void paging_destroy_address_space(uint64_t root_table) {
     pfa_free_pages(root_table, 1);
 }
 
+/* Gives root_table a PRIVATE deep copy of the kernel root's low slot (PML4
+ * index 0): a fresh PDPT, a fresh PD per present PDPT entry, and a fresh PT per
+ * present 4 KiB PDE.  2 MiB PDEs are copied verbatim, so the leaf frames they
+ * describe stay shared with the kernel root; only the table frames are new.
+ *
+ * The copy is a snapshot — later changes to the kernel's low slot do not
+ * propagate — which is what lets paging_strip_low_slot_in_root drop this slot
+ * from one root without disturbing the kernel's.
+ *
+ * dst[0] is overwritten, so any subtree previously installed there is dropped
+ * without being freed.  Returns 0 on success, -1 when either root is missing,
+ * when the kernel root has no low slot, or on frame exhaustion; the partial
+ * copy's PD/PT frames are not all reclaimed on the error paths. */
 int paging_clone_low_slot_in_root(uint64_t root_table) {
     if (!root_table || !g_pml4_phys) {
         return -1;
@@ -534,6 +602,29 @@ int paging_clone_low_slot_in_root(uint64_t root_table) {
     return 0;
 }
 
+/* Installs a 4 KiB mapping virt -> phys in root_table.
+ *
+ * root_table and phys are PHYSICAL frame addresses; virt is a virtual address in
+ * root_table's address space, not necessarily the running one — the walk goes
+ * through the higher-half alias, so mapping into a foreign root does not require
+ * switching CR3.  Both are truncated to 4 KiB granularity.
+ *
+ * flags are MEM_REGION_FLAG_* bits, not raw PTE bits.  The user bit and the VA
+ * must agree: PML4 slot 1 is the user slot and requires MEM_REGION_FLAG_USER,
+ * every other slot forbids it.  W^X is enforced for user mappings (WRITE and
+ * EXEC together are refused), and NX is set on every mapping without
+ * MEM_REGION_FLAG_EXEC.  MEM_REGION_FLAG_USER also propagates PT_FLAG_USER into
+ * the intermediate PML4E/PDPTE/PDE, which is required by the hardware.
+ *
+ * Missing intermediate tables are allocated; a 2 MiB PDE covering virt is
+ * exploded into a PT first, preserving its W/NX bits.  An already-present leaf
+ * PTE is replaced in place (used for shared-memory overlays over wasm linear
+ * pages), so this is a map-or-remap, and the old physical frame is not freed.
+ *
+ * The TLB entry is invalidated on the calling CPU only.
+ *
+ * Returns 0 on success, -1 on a zero root, a flags/VA user-bit mismatch, a W^X
+ * violation, or table-frame exhaustion. */
 int paging_map_4k_in_root(uint64_t root_table, uint64_t virt, uint64_t phys, uint64_t flags) {
     if (!root_table) {
         return -1;
@@ -657,10 +748,23 @@ uint64_t paging_virt_to_phys_in_root(uint64_t root_table, uint64_t virt) {
     return (pte & PHYS_MASK) | (virt & 0xFFFULL);
 }
 
+/* paging_virt_to_phys_in_root against the executing CPU's live CR3. */
 uint64_t paging_virt_to_phys(uint64_t virt) {
     return paging_virt_to_phys_in_root(0, virt);
 }
 
+/* Removes the low identity slot (PML4 index 0) from a user root and frees that
+ * slot's PDPT frame, but only when it is private — a root still pointing at the
+ * kernel's own low PDPT just has the entry cleared.  PD and PT frames below the
+ * PDPT are not walked, so a slot installed by paging_clone_low_slot_in_root
+ * leaves those frames allocated.
+ *
+ * If root_table happens to be the active root, CR3 is rewritten to flush the
+ * stale TLB entries on this CPU before returning.
+ *
+ * Returns 0 when the root is absent-low-slot AND passes the shared-kernel-layout
+ * verification, -1 otherwise, including for a zero root or the kernel root
+ * (which must keep its low slot). */
 int paging_strip_low_slot_in_root(uint64_t root_table) {
     if (!root_table || root_table == g_pml4_phys) {
         return -1;
@@ -687,6 +791,15 @@ int paging_strip_low_slot_in_root(uint64_t root_table) {
     return paging_verify_user_root_impl(root_table, 0);
 }
 
+/* Clears the leaf PTE for virt in root_table and invalidates it on the calling
+ * CPU.  The physical frame is NOT freed and the now-possibly-empty PT/PD/PDPT
+ * are not reclaimed; frame ownership lives with the caller that mapped it.
+ *
+ * A 2 MiB PDE covering virt is exploded into a PT first — which ALLOCATES a
+ * table frame — so that a single 4 KiB hole can be punched into it.
+ *
+ * Returns 0 on success, -1 for a zero root or when any level along the walk,
+ * including the leaf, is not present. */
 int paging_unmap_4k_in_root(uint64_t root_table, uint64_t virt) {
     if (!root_table) {
         return -1;
@@ -723,18 +836,33 @@ int paging_unmap_4k_in_root(uint64_t root_table, uint64_t virt) {
     return 0;
 }
 
+/* paging_map_4k_in_root against the executing CPU's live CR3, so on a user CR3
+ * this maps into that process's address space, not the kernel root's. */
 int paging_map_4k(uint64_t virt, uint64_t phys, uint64_t flags) {
     return paging_map_4k_in_root(paging_get_current_root_table(), virt, phys, flags);
 }
 
+/* paging_unmap_4k_in_root against the executing CPU's live CR3. */
 int paging_unmap_4k(uint64_t virt) {
     return paging_unmap_4k_in_root(paging_get_current_root_table(), virt);
 }
 
+/* Checks that root_table still carries exactly the shared-kernel layout every
+ * user root is required to have: PML4[511] bit-identical to the kernel root's,
+ * no populated PML4 slot other than 0, 1 and 511, the higher-half PDPT populated
+ * only in the kernel and MMIO slots (the WARP linmem window is exempt because it
+ * commits on demand), each shared higher-half PD present exactly over its first
+ * HIGHER_HALF_PDE_COUNT entries, and — when slot 0 exists — its PDPT populated
+ * exactly over the first IDENTITY_PD_COUNT entries.
+ *
+ * Returns 0 when the layout matches and -1 on the first mismatch; a non-zero
+ * log_failures emits the offending index and entry through klog. */
 int paging_verify_user_root(uint64_t root_table, int log_failures) {
     return paging_verify_user_root_impl(root_table, log_failures ? 1 : 0);
 }
 
+/* paging_verify_user_root plus the post-strip requirement that PML4[0] is
+ * absent.  Returns 0 only when both hold. */
 int paging_verify_user_root_no_low_slot(uint64_t root_table, int log_failures) {
     if (paging_verify_user_root_impl(root_table, log_failures ? 1 : 0) != 0) {
         return -1;
@@ -753,6 +881,9 @@ int paging_verify_user_root_no_low_slot(uint64_t root_table, int log_failures) {
     return 0;
 }
 
+/* Diagnostic dump of the kernel-visible part of a root: the three interesting
+ * PML4 entries and every present higher-half PDPT entry.  Writes to klog only
+ * and changes no state; a zero root is ignored. */
 void paging_dump_user_root_kernel_mappings(uint64_t root_table) {
     if (!root_table) {
         return;

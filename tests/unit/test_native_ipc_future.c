@@ -1,10 +1,34 @@
-/* Runtime-behaviour tests for the native IPC-to-future adapter. */
+/* Runtime-behaviour tests for the native IPC-to-future adapter.
+ *
+ * Native services do not make host calls; they are handed a wasmos_driver_api_t
+ * function table by the kernel loader. That table is the only thing stubbed
+ * here: the adapter, the event loop, the service bootstrap and the stackful
+ * coroutine runtime are the real sources (ipc_future_native.c,
+ * libsys_native.c, service_runtime_native.c, coroutine_native.c plus the host's
+ * context-switch assembly), compiled for the build host.
+ *
+ * A case fills in only the api slots its path touches, so an adapter that
+ * started calling a further slot would trap on a NULL rather than pass.
+ *
+ * MODELLING NOTE (blocking). Two kernel facilities that would suspend the
+ * caller are flattened. api->ipc_recv never waits -- it reports "empty"
+ * immediately, which is the same code a non-blocking receive gives, so the
+ * event loop's drain path is unchanged. api->sched_yield, really
+ * process_yield(PROCESS_RUN_IDLE), only counts calls: nothing else can run on
+ * the host, so all forward progress in the service-run loop has to come from
+ * the root coroutine itself, and the yield COUNT is what pins the loop's shape.
+ */
 #include <stdint.h>
 
 #include "test_shuffle.h"
 
 #include "wasmos/libsys_native.h"
 
+/* The scripted transport. sent_message keeps only the LAST message given to
+ * fake_ipc_send -- which is how a case learns the request id the loop minted --
+ * and queued_reply plus reply_queued are one pending reply the next receive
+ * hands over. reset_transport() clears these four; service_steps and
+ * service_yields belong to the service-runtime case and are cleared there. */
 static nd_ipc_message_t sent_message;
 static nd_ipc_message_t queued_reply;
 static int32_t send_status;
@@ -12,6 +36,12 @@ static uint8_t reply_queued;
 static uint32_t service_steps;
 static uint32_t service_yields;
 
+/* Records the outgoing message and reports send_status. The context id and
+ * endpoint are ignored, so no ownership or delivery rule is modelled and
+ * nothing is queued for anyone. The real nd_ipc_send returns 0 or a negative
+ * IPC code; send_status is returned verbatim and the failure case uses +1,
+ * which the real transport never produces but which still takes the failure
+ * path because the intent layer only tests for non-zero. */
 static int fake_ipc_send(uint32_t sender_context_id, uint32_t endpoint,
                          const nd_ipc_message_t* message) {
     (void)sender_context_id;
@@ -34,14 +64,22 @@ static int fake_ipc_recv(uint32_t receiver_context_id, uint32_t endpoint,
     return 0;
 }
 
+/* A fixed caller context. The loop reads it once per send and once per poll and
+ * passes it to the transport; both stubs ignore it, so context checks are not
+ * modelled at all here. */
 static uint32_t fake_current_pid(void) {
     return 9u;
 }
 
+/* Counts only -- see the MODELLING NOTE in the file header. */
 static void fake_sched_yield(void) {
     service_yields++;
 }
 
+/* Stands in for a service's main coroutine: checks that it is handed the api,
+ * the runtime and its own user pointer, records a step either side of one
+ * suspension, and returns 37 so the case can prove service_run reports the
+ * root's return value rather than a status of its own. */
 static int32_t service_main(wasmos_driver_api_t* api, wasmos_native_coroutine_runtime_t* runtime,
                             void* user) {
     if (api == NULL || runtime == NULL || user != (void*)(uintptr_t)0x1234u) {
@@ -53,11 +91,18 @@ static int32_t service_main(wasmos_driver_api_t* api, wasmos_native_coroutine_ru
     return 37;
 }
 
+/* A reply classifier: the adapter resolves the future when this returns 0 and
+ * rejects it otherwise, carrying a negative status through unchanged and
+ * normalising any other non-zero one to -1. Reading the status straight out of
+ * arg0 lets a case script either outcome from the reply it queues. */
 static int32_t reject_from_arg0(void* user, const nd_ipc_message_t* reply) {
     (void)user;
     return (int32_t)reply->arg0;
 }
 
+/* Clears the scripted transport between cases: no recorded send, no queued
+ * reply, and sends succeeding again. It does not touch the event loop or the
+ * futures, which each case declares on its own stack. */
 static void reset_transport(void) {
     sent_message = (nd_ipc_message_t){0};
     queued_reply = (nd_ipc_message_t){0};

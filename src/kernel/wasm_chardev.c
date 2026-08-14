@@ -25,6 +25,14 @@ static uint32_t wasm_chardev_module_size(void) {
                       (uintptr_t)_binary_chardev_server_wasm_start);
 }
 
+/* Instantiates the linked-in chardev_server.wasm blob as the single global
+ * driver instance owned by owner_context_id, and passes the driver's own
+ * endpoint to the guest as entry argument 0.  It does NOT call the entry export;
+ * wasm_chardev_run does that.
+ *
+ * Returns 0 on success and -1 when the driver cannot be started or its endpoint
+ * cannot be resolved.  Not re-entrant and not idempotent: there is one static
+ * instance, so a second call overwrites the first without stopping it. */
 int wasm_chardev_init(uint32_t owner_context_id) {
     wasm_driver_manifest_t manifest;
     __builtin_memset(&manifest, 0, sizeof(manifest));
@@ -57,10 +65,17 @@ int wasm_chardev_endpoint(uint32_t* out_endpoint) {
     return wasm_driver_endpoint(&g_chardev_driver, out_endpoint);
 }
 
+/* Calls the server's entry export on the CALLING thread, so it blocks for as
+ * long as the guest's loop runs.  There is no process behind it.  Returns
+ * wasm_driver_call_entry's status. */
 int wasm_chardev_run(void) {
     return wasm_driver_call_entry(&g_chardev_driver);
 }
 
+/* Frames and sends one read request to the chardev server.  Returns the raw
+ * ipc_send_from status (IPC_OK on success, an IPC_ERR_* otherwise), not a packed
+ * error code.  Asynchronous: the byte arrives later as a reply on
+ * client_reply_endpoint, correlated by request_id. */
 int wasm_chardev_ipc_read_request(uint32_t client_context_id, uint32_t chardev_endpoint,
                                   uint32_t client_reply_endpoint, uint32_t request_id) {
     ipc_message_t req;
@@ -75,6 +90,8 @@ int wasm_chardev_ipc_read_request(uint32_t client_context_id, uint32_t chardev_e
     return ipc_send_from(client_context_id, chardev_endpoint, &req);
 }
 
+/* As wasm_chardev_ipc_read_request, but carries one byte to write in arg0.  One
+ * byte per message, so a string costs one IPC per character. */
 int wasm_chardev_ipc_write_request(uint32_t client_context_id, uint32_t chardev_endpoint,
                                    uint32_t client_reply_endpoint, uint32_t request_id,
                                    uint8_t byte) {

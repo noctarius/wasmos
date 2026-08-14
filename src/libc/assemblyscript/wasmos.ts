@@ -20,6 +20,19 @@ const IPC_FIELD_DESTINATION: i32 = 5;
 const IPC_FIELD_ARG2: i32 = 6;
 const IPC_FIELD_ARG3: i32 = 7;
 
+/*
+ * SEEK_SET / SEEK_CUR / SEEK_END are the whence values for File.seek: the new
+ * offset is measured from the start of the file, from the current offset, or
+ * from the file size. The FS backend refuses a resulting offset outside
+ * [0, size], so seeking past the end fails instead of extending the file.
+ *
+ * S_IFREG and S_IFDIR are the file-type bits of FileStat.mode; fs.stat masks off
+ * everything else, and the FS reply carries no permission bits.
+ *
+ * O_RDONLY..O_TRUNC are POSIX-valued open flags. Bit 0 is the access mode
+ * (O_RDONLY or O_WRONLY); the rest are modifiers the FS backend accepts only
+ * alongside O_WRONLY. There is no read/write mode: any other bit is rejected.
+ */
 export const SEEK_SET: i32 = 0;
 export const SEEK_CUR: i32 = 1;
 export const SEEK_END: i32 = 2;
@@ -142,26 +155,42 @@ function loadSpawnInfo(): void {
     g_spawnValid = true;
 }
 
+/**
+ * Values the process manager handed this process at spawn time, read from the
+ * spawn-info buffer. Every accessor but `arg` loads that buffer on demand, so
+ * they work in a service or driver entered through `initialize` as well as in an
+ * app that went through runMain; all of them report 0 when the process has no
+ * spawn info.
+ */
 export namespace startup {
     // Legacy accessor: index 0 == proc.endpoint (from spawn-info); 1..3 == 0.
+    // Unlike the other accessors this one reads a cache that only runMain fills,
+    // so it stays 0 in a service or driver that never calls runMain.
     export function arg(index: i32): i32 {
         if (index < 0 || index >= 4) {
             return 0;
         }
         return unchecked(g_startupArgs[index]);
     }
+    /** IPC endpoint of the process manager, for spawn/exit protocol requests. */
     export function procEndpoint(): i32 {
         loadSpawnInfo();
         return g_spawnProcEndpoint;
     }
+    /**
+     * Id of the controlling TTY the process manager allocated, 0 when none was
+     * allocated.
+     */
     export function tty(): i32 {
         loadSpawnInfo();
         return g_spawnTty;
     }
+    /** Number of boot modules in this process's boot list. */
     export function moduleCount(): u32 {
         loadSpawnInfo();
         return g_spawnModuleCount;
     }
+    /** This module's index in that boot list, 0 when not applicable. */
     export function moduleIndex(): u32 {
         loadSpawnInfo();
         return g_spawnModuleIndex;
@@ -170,23 +199,49 @@ export namespace startup {
 
 
 @unmanaged
+/**
+ * Recursive mutex whose state lives in guest memory and whose arbitration is
+ * done by the kernel, laid out like wasmos_mutex_t: `owner_tid` is the thread id
+ * of the current owner (0 when unlocked) and `recursion_depth` the number of
+ * unmatched acquisitions it holds. Both are written by the kernel, which is why
+ * the class is unmanaged -- its object address is passed to the host call.
+ *
+ * The kernel link tables export no `wasmos.mutex_try_lock` / `mutex_unlock`
+ * (FIXME(user-mutex-import) in src/libc/include/wasmos/api.h), so a module that
+ * actually calls these fails to instantiate on an unresolved import.
+ */
 export class Mutex {
     owner_tid: u32;
     recursion_depth: u32;
 
+    /**
+     * Resets to the unlocked state. Zeroing a mutex another thread holds loses
+     * that ownership, so only init one nobody has locked.
+     */
     init(): void {
         this.owner_tid = 0;
         this.recursion_depth = 0;
     }
 
+    /** The calling thread's id, as the kernel records it in `owner_tid`. */
     static currentTid(): i32 {
         return thread_gettid();
     }
 
+    /**
+     * One acquisition attempt, never blocking: 0 when the mutex is now held by
+     * this thread (raising `recursion_depth` if it already was), 1 when another
+     * thread owns it, negative on error.
+     */
     tryLock(): i32 {
         return mutex_try_lock(changetype<i32>(this));
     }
 
+    /**
+     * Acquires the mutex, yielding the thread between attempts while another
+     * owner holds it. Returns 0 once held, or the negative code that ended the
+     * retry loop. A yield-spin, not a sleep.
+     */
     lock(): i32 {
         while (true) {
             const rc = this.tryLock();
@@ -198,6 +253,10 @@ export class Mutex {
         return -1;
     }
 
+    /**
+     * Drops one acquisition, releasing the mutex when `recursion_depth` reaches
+     * zero. Returns 0 on success, negative when the caller is not the owner.
+     */
     unlock(): i32 {
         return mutex_unlock(changetype<i32>(this));
     }
@@ -233,6 +292,17 @@ function readSpawnArgs(): Array<string> {
     return result;
 }
 
+/**
+ * Application entry shim: loads the spawn info, hands `entry` the argv parsed
+ * from the spawn-info args blob, and reports its return value to the process
+ * manager through proc_exit.
+ *
+ * The four entry-arg registers are ignored -- the process manager passes zeros
+ * in them -- and only `startup.arg(0)` is populated, with the process manager
+ * endpoint. Argv is split on spaces with no quoting, and the blob is truncated
+ * to 127 bytes. proc_exit does not return, so the trailing return is unreachable
+ * in a live process.
+ */
 export function runMain(
     entry: (args: Array<string>) => i32,
     arg0: i32,
@@ -305,6 +375,10 @@ class FsResponse {
     ) {}
 }
 
+/**
+ * Result of fs.stat: `size` is the file length in bytes, `mode` carries only the
+ * S_IFREG / S_IFDIR type bits.
+ */
 export class FileStat {
     constructor(
         public size: i32 = 0,
@@ -393,23 +467,47 @@ function fsRequestStream(
     }
 }
 
+/**
+ * Console output and line input. Everything here goes to the process's console
+ * (the kernel log / its terminal), not to a file descriptor, and every write
+ * returns true on success and false when the console host call refused it.
+ */
 export namespace std {
+    /** Writes `text` as UTF-8 with no trailing newline and no NUL. */
     export function write(text: string): bool {
         return writeStringRaw(text);
     }
 
+    /** Identical to `write`: no newline is appended, unlike C's puts. */
     export function puts(text: string): bool {
         return writeStringRaw(text);
     }
 
+    /**
+     * Writes `text` verbatim: this port does no formatting and takes no format
+     * arguments. The name is kept for parity with the other language ports;
+     * build the string with AssemblyScript's own concatenation.
+     */
     export function printf(text: string): bool {
         return writeStringRaw(text);
     }
 
+    /** Writes `text` followed by a newline. */
     export function println(text: string): bool {
         return writeStringRaw(text + "\n");
     }
 
+    /**
+     * Reads console bytes up to and including the first newline and returns them
+     * decoded as UTF-8, or null when `maxLen` is under 2 or a read failed.
+     *
+     * The newline, when one arrived, is part of the result. Reads stop as soon
+     * as the console has no byte ready, so a short line is normal and does not
+     * mean end of input; this does not park until a full line exists. `maxLen`
+     * is the scratch capacity, capped at 1024, and the whole scratch buffer is
+     * decoded -- so the result carries the NUL terminator and the unused
+     * capacity as trailing U+0000 characters.
+     */
     export function readline(maxLen: i32 = 128): string | null {
         if (maxLen <= 1) {
             return null;
@@ -469,9 +567,24 @@ export namespace io {
     }
 }
 
+/**
+ * An open file, wrapping the FS manager's client-side descriptor. Instances come
+ * from the fs.open* helpers; the constructor takes a descriptor the caller
+ * already owns.
+ */
 export class File {
     constructor(private fd: i32) {}
 
+    /**
+     * Reads at the file's current offset and returns a freshly allocated array
+     * of exactly the bytes read: an empty array at end of file, or null on any
+     * failure.
+     *
+     * One request per call, so a short array is normal. `maxLen` bounds the
+     * request; 0 or a value above the transfer-buffer size means "as much as one
+     * transfer buffer holds". The whole file is read by fs.readFile, which loops
+     * over this.
+     */
     read(maxLen: i32 = 0): Uint8Array | null {
         const bufferLimit = xfer_buffer_size();
         if (bufferLimit <= 0) {
@@ -517,11 +630,25 @@ export class File {
         return buffer;
     }
 
+    /**
+     * Releases the descriptor at the FS manager. True only when the manager
+     * reported success; the descriptor is not cleared here, so closing twice
+     * sends a second request.
+     */
     close(): bool {
         const response = fsRequest(FS_IPC_CLOSE_REQ, this.fd, 0, 0, 0);
         return response != null && response.arg0 == 0;
     }
 
+    /**
+     * Writes `buffer` at the file's current offset and returns how many bytes
+     * the FS manager accepted, or -1 when nothing at all could be written.
+     *
+     * Chunked over the transfer buffer: a chunk only partially accepted ends the
+     * loop, so a short return is a real short write. A failure after some bytes
+     * went out reports those bytes rather than the error, so a return below
+     * `buffer.length` does not distinguish a short write from a failed one.
+     */
     write(buffer: Uint8Array): i32 {
         const bufferLimit = xfer_buffer_size();
         if (bufferLimit <= 0) {
@@ -568,6 +695,12 @@ export class File {
         return done;
     }
 
+    /**
+     * Moves the file offset to `offset` bytes from the SEEK_SET / SEEK_CUR /
+     * SEEK_END origin and returns the new absolute offset, or -1. A target
+     * outside [0, size] is refused by the backend; seeking past the end does not
+     * extend the file.
+     */
     seek(offset: i32, whence: i32): i32 {
         const response = fsRequest(FS_IPC_SEEK_REQ, this.fd, offset, whence, 0);
         if (response == null || response.arg0 < 0) {
@@ -577,7 +710,17 @@ export class File {
     }
 }
 
+/**
+ * Synchronous message passing. `call` and `recv` park the process in the kernel
+ * until a message arrives; a component that must keep serving its own endpoint
+ * while a request is outstanding uses the EventLoop in eventloop.ts instead.
+ */
 export namespace ipc {
+    /**
+     * A received message. The four argument words are protocol-defined; `source`
+     * is the endpoint to address a reply to, `destination` the endpoint it
+     * arrived on.
+     */
     export class Reply {
         constructor(
             public type: i32 = 0,
@@ -637,6 +780,10 @@ export namespace ipc {
     }
 
     // Block until a message arrives on endpoint (for servers).
+    // Parks the process indefinitely: no timeout, no interruption. Every message
+    // queued on the endpoint is returned, replies and requests alike, so a
+    // server that also issues requests must demultiplex on requestId itself.
+    // Null for a negative endpoint or a receive error.
     export function recv(endpoint: i32): Reply | null {
         if (endpoint < 0) {
             return null;
@@ -659,6 +806,9 @@ export namespace ipc {
     // Send a reply from a server back to the caller's private reply endpoint.
     // source should be the server's own service endpoint.
     // destination should be req.source from the incoming request.
+    // requestId must be echoed from the request or the caller cannot match the
+    // reply. True once the message is queued -- not once the peer has read it;
+    // false means the send itself was refused.
     export function reply(
         destination: i32,
         source: i32,
@@ -673,6 +823,15 @@ export namespace ipc {
     }
 }
 
+/**
+ * Synchronous filesystem access over the FS manager's IPC protocol. Every call
+ * stages its payload through an owned transfer buffer, sends one request and
+ * parks until the reply arrives.
+ *
+ * Failures collapse to null / false: a request the backend refuses comes back as
+ * an FS error message rather than a response, so the packed WASMOS_ERR_FS_*
+ * status it carries is not surfaced.
+ */
 export namespace fs {
     // Owner-push staging: own a buffer holding the NUL-terminated path, grant the
     // FS manager R|W over it, and return the handles + path length (excluding NUL).
@@ -721,22 +880,36 @@ export namespace fs {
         return new File(response.arg0);
     }
 
+    /**
+     * Opens an existing file for reading. Null when the path is missing, does
+     * not fit the transfer buffer, or the open was refused.
+     */
     export function openRead(path: string): File | null {
         return openWithFlags(path, O_RDONLY);
     }
 
+    /**
+     * Opens an existing file for writing at offset 0 without truncating it.
+     * Does not create the file.
+     */
     export function openWrite(path: string): File | null {
         return openWithFlags(path, O_WRONLY);
     }
 
+    /** Opens for writing, creating the file if needed and truncating it. */
     export function create(path: string): File | null {
         return openWithFlags(path, O_WRONLY | O_CREAT | O_TRUNC);
     }
 
+    /** Opens for writing, creating the file if needed and appending to it. */
     export function openAppend(path: string): File | null {
         return openWithFlags(path, O_WRONLY | O_CREAT | O_APPEND);
     }
 
+    /**
+     * Returns the size and file-type bits of `path` without opening it, or null
+     * when it does not exist.
+     */
     export function stat(path: string): FileStat | null {
         const s = stagePath(path);
         if (s == null) {
@@ -750,6 +923,7 @@ export namespace fs {
         return new FileStat(response.arg0, response.arg1 & (S_IFREG | S_IFDIR));
     }
 
+    /** Removes a file. False when the backend refused it or staging failed. */
     export function unlink(path: string): bool {
         const s = stagePath(path);
         if (s == null) {
@@ -760,6 +934,7 @@ export namespace fs {
         return response != null && response.arg0 == 0;
     }
 
+    /** Creates a directory. False when staging or the backend refused it. */
     export function mkdir(path: string): bool {
         const s = stagePath(path);
         if (s == null) {
@@ -770,6 +945,7 @@ export namespace fs {
         return response != null && response.arg0 == 0;
     }
 
+    /** Removes a directory. False when staging or the backend refused it. */
     export function rmdir(path: string): bool {
         const s = stagePath(path);
         if (s == null) {
@@ -780,6 +956,14 @@ export namespace fs {
         return response != null && response.arg0 == 0;
     }
 
+    /**
+     * Lists the current directory as text, or null on failure.
+     *
+     * The listing arrives as a stream of messages carrying four bytes each, and
+     * zero bytes inside a message are skipped rather than stored. `maxLen` is
+     * the scratch capacity; a listing that does not fit is truncated and the
+     * remaining stream messages keep arriving on the reply endpoint undrained.
+     */
     export function readDir(maxLen: i32 = 512): string | null {
         if (maxLen <= 1) {
             return null;
@@ -792,6 +976,15 @@ export namespace fs {
         return String.UTF8.decodeUnsafe(out.dataStart, got, false);
     }
 
+    /**
+     * Opens `path`, reads it to the end and returns the whole contents, or null
+     * when the open or any read failed (the file is closed either way).
+     *
+     * Chunks are accumulated and then copied into one array, so the file is held
+     * twice in memory at the end of the call. The loop stops at the first chunk
+     * shorter than one transfer buffer, which is what marks the end of the file
+     * for this protocol.
+     */
     export function readFile(path: string): Uint8Array | null {
         const file = openRead(path);
         if (file == null) {
@@ -827,6 +1020,10 @@ export namespace fs {
         return output;
     }
 
+    /**
+     * `readFile` decoded as UTF-8, without treating a NUL as a terminator: a
+     * binary file comes back as a string with embedded U+0000 characters.
+     */
     export function readTextFile(path: string): string | null {
         const bytes = readFile(path);
         if (bytes == null) {

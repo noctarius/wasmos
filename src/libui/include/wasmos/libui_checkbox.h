@@ -3,6 +3,10 @@
 
 /* libui_checkbox.h - Checkbox component specific rendering. */
 
+/* Render op for UI_COMPONENT_CHECKBOX. Draws a vertically centred box at most
+ * 16 px on a side (shrinking with the component height), a green inner square
+ * when checked, and the label to its right in fg_color. The box uses fixed
+ * theme colours, not the component's bg/border colours. */
 static inline void ui_render_checkbox(ui_context_t* ctx, const ui_component_t* c,
                                       ui_rect_t draw_bounds, ui_rect_t clip, int32_t offset_y) {
     (void)offset_y;
@@ -22,7 +26,10 @@ static inline void ui_render_checkbox(ui_context_t* ctx, const ui_component_t* c
                       (d && d->text.text) ? d->text.text : "", c->fg_color, clip);
 }
 
-/* Component-owned toggle for checkbox (before its on_click). */
+/* Component-owned toggle for checkbox (before its on_click).
+ * Flips `checked` and marks the context dirty; does nothing when the component
+ * has no data. The component pointer must actually be a CHECKBOX — the type is
+ * not verified here, unlike in ui_component_set_checked(). */
 static inline void ui_checkbox_toggle(ui_context_t* ctx, ui_component_t* c) {
     ui_checkbox_data_t* d = (ui_checkbox_data_t*)c->component_data;
     if (d) {
@@ -31,6 +38,9 @@ static inline void ui_checkbox_toggle(ui_context_t* ctx, ui_component_t* c) {
     }
 }
 
+/* Release op for UI_COMPONENT_CHECKBOX: toggles the state first, then fires the
+ * application's on_click, so the callback observes the new value (through
+ * ui_component_get_checked()). */
 static inline void ui_checkbox_handle_pointer_release(ui_context_t* ctx, ui_component_t* c) {
     ui_checkbox_toggle(ctx, c);
     if (c->on_click)

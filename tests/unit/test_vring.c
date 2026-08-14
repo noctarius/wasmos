@@ -10,9 +10,22 @@
 
 #include "test_shuffle.h"
 
+/* A case returns 0 when it passes and its failing __LINE__ as an opaque marker
+ * otherwise; wasmos_test_run_all stops at the first non-zero and prints the
+ * marker with the shuffled order that produced it. */
+
+/* Queue geometry. QNUM is the descriptor count, which the split-ring layout
+ * requires to be a power of two; 8 is small enough that the free list is
+ * exhausted in a handful of allocations. QALIGN is the legacy virtio ring
+ * alignment: the used ring starts at the next QALIGN boundary after the
+ * descriptor table plus the avail ring, so the padding between them is what
+ * vring_size accounts for. */
 #define QNUM 8u
 #define QALIGN 4096u
 
+/* Doorbell stand-in for the backend's real notify (a PCI QUEUE_NOTIFY write or
+ * an IPC notification): it only counts invocations. Nothing resets the counter,
+ * so a case zeroes g_notify_calls itself after installing the callback. */
 static int g_notify_calls;
 static void count_notify(void* user) {
     (void)user;

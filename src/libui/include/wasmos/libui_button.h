@@ -5,6 +5,9 @@
  * Included by libui.h after core generic facilities are defined.
  */
 
+/* Render op for UI_COMPONENT_BUTTON. Draws the label centred both ways in
+ * fg_color; the core has already filled bg_color and strokes the border after.
+ * Centring costs one font measurement per frame. */
 static inline void ui_render_button(ui_context_t* ctx, const ui_component_t* c,
                                     ui_rect_t draw_bounds, ui_rect_t clip, int32_t offset_y) {
     (void)offset_y;
@@ -29,6 +32,9 @@ static inline void ui_render_button(ui_context_t* ctx, const ui_component_t* c,
     ui_draw_text_clip(ctx, tx, ty, text, c->fg_color, clip);
 }
 
+/* Release op for UI_COMPONENT_BUTTON: fires the application's on_click, if any.
+ * Reached only when the press and the release both landed on this component. It
+ * does not mark the context dirty — the core clears `pressed` and does that. */
 static inline void ui_button_handle_pointer_release(ui_context_t* ctx, ui_component_t* c) {
     if (c->on_click)
         c->on_click(ctx, c->id, c->on_click_user);

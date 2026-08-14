@@ -19,6 +19,12 @@
 #include "../../../abi/generated/c/wasmos_opcodes.h" /* generated opcode enums (abi/opcodes.yaml) */
 #include "../../../abi/generated/c/wasmos_status.h"  /* packed error codes (abi/errors.yaml) */
 
+/* Kernel console text ring, mapped by whoever asks the native API for
+ * console_ring_id(). Sized so the header plus data is exactly one 4 KiB page:
+ * 4096 - 4 * sizeof(uint32_t) = 4080, which is why the capacity is that odd
+ * number rather than a round one. Unlike wasmos/ringbuf.h this is a plain
+ * volatile-index ring with no acquire/release discipline and no framing;
+ * positions are free-running and indexed modulo `capacity`. */
 #ifndef WASMOS_CONSOLE_RING_SHARED_H
 #define WASMOS_CONSOLE_RING_SHARED_H
 #define CONSOLE_RING_DATA_SIZE 4080u
@@ -32,6 +38,8 @@ typedef struct {
 } console_ring_t;
 #endif
 
+/* Where a spawnable module's bytes come from: the kernel's built-in initfs
+ * image, or a path served by the filesystem stack. */
 enum { PROC_MODULE_SOURCE_INITFS = 0, PROC_MODULE_SOURCE_FS = 1 };
 
 /* arg0 flags for PROC_IPC_SPAWN_PATH (request). */
@@ -63,14 +71,35 @@ enum { PROC_MODULE_SOURCE_INITFS = 0, PROC_MODULE_SOURCE_FS = 1 };
 #define WASMOS_SPAWN_FLAG_SERVICE (1u << 1)
 #define WASMOS_SPAWN_FLAG_APP (1u << 2)
 
+/* --- Exec handlers and spawn brokers ---------------------------------------
+ *
+ * An "exec handler" is a rule that claims a workload: when something asks to run
+ * a file, the process manager probes it (its leading bytes and its filename) and
+ * offers it to the registered handlers in priority order. The handler that
+ * matches names a "broker" -- a service that turns the file into an actual spawn
+ * plan (see wasmos_broker_spawn_plan_request/response_t below). This is how
+ * `#!`-style script dispatch works without the kernel knowing any format.
+ *
+ * All the length limits here include the trailing NUL where the field is a
+ * `char` array, so the usable text is one byte shorter than the constant. */
 #define WASMOS_BROKER_SPAWN_PLAN_VERSION 1u
 
 #define WASMOS_SUBSYSTEM_TAG_LEN 8u
 #define WASMOS_EXEC_HANDLER_NAME_LEN 32u
 #define WASMOS_EXEC_MATCH_TEXT_LEN 32u
 #define WASMOS_EXEC_MATCH_MAX_BYTES 16u
+/* Nodes one match tree may hold. Small on purpose: this is a claim rule, not a
+ * query language, and the evaluator bounds its recursion by the node count. */
 #define WASMOS_EXEC_MATCH_MAX_NODES 16u
 
+/* Node kinds of a match tree. The first three are leaves that test the probed
+ * file; the last three are operators over other nodes in the same array.
+ *  - PREFIX:    value.prefix[0..value_len) equals the file's leading bytes.
+ *               Fails (rather than matching) when fewer bytes were probed.
+ *  - EXTENSION: value.text[0..value_len) is a SUFFIX of the filename.
+ *  - FILENAME:  value.text[0..value_len) equals the filename exactly.
+ *  - AND / OR:  combine left_index and right_index.
+ *  - NOT:       negates left_index only; right_index is unused. */
 typedef enum {
     WASMOS_EXEC_MATCH_PREFIX = 0,
     WASMOS_EXEC_MATCH_EXTENSION = 1,
@@ -80,6 +109,14 @@ typedef enum {
     WASMOS_EXEC_MATCH_NOT = 5,
 } wasmos_exec_match_kind_t;
 
+/* One node of a match tree. The tree is a flat ARRAY and the operator kinds
+ * refer to other nodes by index into that same array, not by pointer, so the
+ * whole tree ships as one contiguous descriptor. Indices must be < node_count;
+ * the registry validates the tree (bounds and cycles) before accepting it, so a
+ * self-referential or out-of-range index is rejected at registration rather than
+ * looping at match time. `value_len` is the used length of the active union arm
+ * -- prefix[] for a PREFIX node, text[] for EXTENSION/FILENAME -- and is unused
+ * by the operator kinds. */
 typedef struct {
     wasmos_exec_match_kind_t kind;
     uint16_t left_index;
@@ -98,6 +135,21 @@ enum {
     WASMOS_BROKER_PLAN_KIND_WAP_PATH = 1
 };
 
+/* What the process manager asks a broker: "here is a workload your handler
+ * claimed -- how do I run it?". Sent as PROC_BROKER_IPC_SPAWN_PLAN_REQ with
+ * arg0 = this struct's offset, arg1 = its byte length, arg2 = the buffer_id.
+ *
+ * Every *_offset is a byte offset into that ONE transfer buffer, which PM owns
+ * and lends the broker READ|WRITE for the round trip; none of them is a pointer,
+ * and none is valid after PM revokes the borrow. The workload's own bytes sit at
+ * blob_offset (always 0) for blob_size bytes, and the strings are laid out in a
+ * tail past the struct. String lengths EXCLUDE any NUL.
+ *
+ * The three tags identify the negotiation rather than the file: request_tag is
+ * the handler's protocol tag, runtime_tag the runtime it asks for, broker_name
+ * the broker being addressed. Each is WASMOS_SUBSYSTEM_TAG_LEN + 1 bytes, i.e.
+ * up to 8 characters plus a NUL. spawn_flags carries the WASMOS_SPAWN_FLAG_*
+ * classification of the workload. */
 typedef struct __attribute__((packed)) {
     uint32_t version;
     uint32_t spawn_flags;
@@ -114,6 +166,17 @@ typedef struct __attribute__((packed)) {
     char broker_name[9];
 } wasmos_broker_spawn_plan_request_t;
 
+/* The broker's answer, written back into the SAME buffer the request arrived in
+ * and reported by PROC_BROKER_IPC_SPAWN_PLAN_RESP (arg0 = offset, arg1 = size).
+ * Writing it requires the WRITE half of the borrow PM granted.
+ *
+ * plan_kind selects how to read the rest: WAP_PATH means host_path_* names an
+ * executable PM launches through its ordinary path-based spawn, with
+ * host_args_* prepended to the original arguments. NONE means the broker
+ * declined, and the remaining fields carry nothing. The offsets are into the
+ * shared buffer, on the same terms as the request. PM validates the whole plan
+ * (including that the tags match the handler it asked) before acting on it, so a
+ * malformed plan fails the spawn rather than being partially applied. */
 typedef struct __attribute__((packed)) {
     uint32_t version;
     uint32_t plan_kind;
@@ -128,6 +191,20 @@ typedef struct __attribute__((packed)) {
 
 #define WASMOS_SUBSYSTEM_REGISTER_BROKER_DESC_VERSION 1u
 
+/* A service registering itself as a spawn broker: "send me
+ * PROC_BROKER_IPC_SPAWN_PLAN_REQ for workloads tagged request_tag". Staged in a
+ * transfer buffer, like svc_register_desc_t.
+ *
+ * The three booleans describe how the process manager must treat a process this
+ * broker plans, and are recorded on that process rather than on the broker:
+ *  - uses_wasm_payload: the workload is a WASM module, not a native ELF.
+ *  - needs_runtime_lock: the kernel takes the global runtime lock around every
+ *    entry call into that process, because its execution engine is not
+ *    re-entrant across CPUs.
+ *  - gates_ready_for_services: a spawn of a service/driver through this broker
+ *    waits for the child's ready notification instead of returning immediately.
+ * `flags` is reserved. The registration is tied to the registering context and
+ * is dropped when that context exits. */
 typedef struct __attribute__((packed)) {
     uint32_t version;
     uint32_t broker_endpoint;
@@ -143,6 +220,18 @@ typedef struct __attribute__((packed)) {
 
 #define WASMOS_EXEC_HANDLER_REGISTER_DESC_VERSION 1u
 
+/* One claim rule a broker registers: "offer me anything matching this tree".
+ * The match tree itself is NOT in this struct -- node_count nodes follow the
+ * descriptor in the same buffer, and root_index selects which of them is the
+ * tree's root (it need not be 0).
+ *
+ * priority orders competing handlers: the highest wins, and ties are broken by
+ * the lexicographically smaller handler_name, so the outcome is deterministic
+ * rather than registration-order dependent. max_probe_bytes is how many leading
+ * bytes of a candidate file the process manager must read before evaluating the
+ * tree; a PREFIX node whose value is longer than that can never match, so the
+ * registry validates the two against each other and rejects the mismatch.
+ * request_tag names the subsystem/broker this handler dispatches to. */
 typedef struct __attribute__((packed)) {
     uint32_t version;
     uint32_t priority;
@@ -153,6 +242,10 @@ typedef struct __attribute__((packed)) {
     char handler_name[WASMOS_EXEC_HANDLER_NAME_LEN + 1];
 } wasmos_exec_handler_register_desc_t;
 
+/* Service-name and class-name capacities, both INCLUDING the terminating NUL.
+ * WASMOS_SVC_NAME_MAX also fixes the byte length of svc_register_desc_t's v1
+ * prefix, so changing it breaks the length-based v1/v2 discrimination below;
+ * WASMOS_SVC_CLASS_MAX must stay equal to the kernel's SVC_CLASS_NAME_MAX. */
 #define WASMOS_SVC_REGISTER_DESC_VERSION 2u
 #define WASMOS_SVC_NAME_MAX 36u
 #define WASMOS_SVC_CLASS_MAX 16u /* incl. NUL; keep == SVC_CLASS_NAME_MAX */
@@ -188,6 +281,10 @@ typedef struct {
     uint32_t pid;
 } svc_class_entry_t;
 
+/* Process liveness reported by the process manager. ZOMBIE means the process has
+ * exited but its slot is still held so a waiter can collect the exit status;
+ * UNKNOWN covers both "never existed" and "already reaped", which are
+ * indistinguishable once the slot is gone. */
 enum { PROC_STATUS_UNKNOWN = 0, PROC_STATUS_RUNNING = 1, PROC_STATUS_ZOMBIE = 2 };
 
 /* Virtual class FS backends register under. Class instances must be unique per
@@ -195,8 +292,17 @@ enum { PROC_STATUS_UNKNOWN = 0, PROC_STATUS_RUNNING = 1, PROC_STATUS_ZOMBIE = 2 
  * still reporting the plain kind over FSMGR_IPC_BACKEND_INFO_RESP arg0. */
 #define FSMGR_BACKEND_CLASS "fs.backend"
 
+/* Backend kinds fs-manager distinguishes: BOOT is the on-disk volume the system
+ * booted from, INIT the kernel's built-in initfs image. */
 enum { FSMGR_BACKEND_BOOT = 1, FSMGR_BACKEND_INIT = 2 };
 
+/* Pack a (kind, unit) pair into the single class-registry instance index a
+ * provider registers under, since two backends of the same kind on different
+ * units would otherwise collide. `unit` is truncated to its low 8 bits and
+ * `kind` occupies the bits above, so this is not reversible for a unit >= 256.
+ * The plain kind is still reported separately over FSMGR_IPC_BACKEND_INFO_RESP
+ * arg0 -- consumers that only care which kind a backend is read that rather than
+ * unpacking this. */
 #define FSMGR_BACKEND_INSTANCE(kind, unit) ((((uint32_t)(kind)) << 8) | ((uint32_t)(unit) & 0xFFu))
 
 /* One cell in a shared FBTEXT_IPC_BLIT grid buffer.  Layout is identical to the
@@ -210,14 +316,28 @@ typedef struct {
     uint8_t _pad;
 } fbtext_blit_cell_t;
 
+/* Optional abilities a framebuffer driver reports. A driver on a fixed UEFI GOP
+ * framebuffer has neither: the mode was chosen before the kernel ran and cannot
+ * be changed or enumerated. A client must therefore treat a mode change as
+ * something to ask for, not something to assume. */
 enum { FBTEXT_CAP_SET_RESOLUTION = 1u << 0, FBTEXT_CAP_QUERY_MODES = 1u << 1 };
 
 /* Serial driver subscription: a client (the vt service) registers to receive
  * COM1 RX bytes as VT_IPC_SERIAL_INPUT_REQ pushes.  Mirrors the keyboard
  * driver's subscribe/notify pattern. */
 
+/* Terminal input mode: a BIT MASK, not an enumeration of three modes. RAW is the
+ * value 0, i.e. the absence of both flags, so it cannot be tested with `&` --
+ * check for the flags instead. CANONICAL buffers input into lines and delivers
+ * it on a newline; ECHO writes typed characters back to the screen. The two are
+ * independent, and a client that wants classic line editing sets both. */
 enum { VT_INPUT_MODE_RAW = 0, VT_INPUT_MODE_CANONICAL = 1 << 0, VT_INPUT_MODE_ECHO = 1 << 1 };
 
+/* Hardware-access capabilities a driver's manifest requests and device-manager
+ * grants. These say which KINDS of access a driver may perform; the specific
+ * ports, windows and lines it gets come from its spawn profile
+ * (wasmos_spawn_caps_v2_t below), so holding a bit here is necessary but not
+ * sufficient to touch any particular resource. */
 enum {
     DEVMGR_CAP_IO_PORT = 1 << 0,
     DEVMGR_CAP_MMIO_MAP = 1 << 1,
@@ -271,6 +391,15 @@ enum {
 #define NET_UDP_DATAGRAM_RECORD_VERSION 1u
 #define NET_UDP_DATAGRAM_FLAG_DESTINATION 1u
 
+/* Header of one datagram record inside a UDP socket ring, immediately followed
+ * by payload_bytes of payload. The ring's own 4-byte length prefix (see
+ * wasmos_ringbuf_write_record) covers this header plus that payload, so a reader
+ * takes one record and finds the header at its front.
+ *
+ * addr_v4 and port are NETWORK byte order. On a TX record they are the
+ * destination and are only read when NET_UDP_DATAGRAM_FLAG_DESTINATION is set in
+ * `flags`; without it a connected socket sends to its connected peer. On an RX
+ * record they are the source lwIP reported and the flag is not meaningful. */
 typedef struct __attribute__((packed)) {
     uint16_t version;
     uint16_t flags;
@@ -279,6 +408,17 @@ typedef struct __attribute__((packed)) {
     uint16_t payload_bytes;
 } net_udp_datagram_record_v1_t;
 
+/* What a client hands the network stack to open a socket: the whole data plane,
+ * described once. `bytes` is the descriptor's own length, which is what lets the
+ * stack accept a shorter (older) descriptor; `family` is NET_SOCKET_AF_*, `type`
+ * is NET_SOCKET_STREAM or _DGRAM, and `flags` carries NET_SOCKET_OPEN_FLAG_*.
+ *
+ * The two ring triples are the point of the descriptor. The CLIENT owns both
+ * rings and lends them to the stack, so the ids here transfer PERSISTENT grants
+ * that outlive the open call -- unlike the borrows that accompany a single
+ * request. tx_* is the client-to-network direction, rx_* the reverse, and each
+ * *_bytes is the whole region size (header + capacity), not the capacity alone.
+ * Payload never travels by IPC afterwards: TX/RX_NOTIFY are only doorbells. */
 typedef struct __attribute__((packed)) {
     uint16_t version;
     uint16_t bytes;
@@ -314,10 +454,18 @@ typedef struct __attribute__((packed)) {
     uint32_t flags; /* bit0: link up, bit1: administratively up */
 } net_ifaddr_record_v1_t;
 
+/* net_ifaddr_record_v1_t.flags. LINK_UP is the carrier the driver observes;
+ * ADMIN_UP is the configured intent. They are independent, so an interface can
+ * be administratively up with no cable, and traffic requires both. */
 #define NET_IFADDR_FLAG_LINK_UP 1u
 #define NET_IFADDR_FLAG_ADMIN_UP 2u
 #define NET_IFADDR_FLAG_DHCP 4u /* address is (or is being) assigned by DHCP */
 
+/* Free-running per-interface counters a network driver reports. All wrap at
+ * 2^32 and are never reset, so a consumer takes differences between two reads
+ * rather than treating a value as a total. `drops` are frames the driver itself
+ * discarded (no buffer, no subscriber); `errors` are failures the device
+ * reported. */
 typedef struct {
     uint32_t rx_packets;
     uint32_t tx_packets;
@@ -327,6 +475,11 @@ typedef struct {
     uint32_t tx_errors;
 } netdrv_stats_t;
 
+/* Direction a DMA mapping permits, named from the DEVICE's point of view:
+ * TO_DEVICE means the device reads driver memory, FROM_DEVICE means it writes
+ * into it. A mapping must be requested for the direction it is actually used in,
+ * so a buffer the device fills needs FROM_DEVICE even though the driver reads
+ * it. BIDIR is both bits, not a third value. */
 enum {
     WASMOS_DMA_DIR_TO_DEVICE = 1 << 0,
     WASMOS_DMA_DIR_FROM_DEVICE = 1 << 1,
@@ -336,6 +489,12 @@ enum {
 /* DMA statuses are the packed dma domain in abi/errors.yaml:
  * WASMOS_ERR_NONE (0) on success, else a negative WASMOS_ERR_DMA_*. */
 
+/* Which way to synchronise a DMA mapping's contents. Note these are ordinal
+ * values 1/2/3, NOT the bit flags of WASMOS_DMA_DIR_* above, despite the
+ * parallel names -- BIDIR here happens to equal the OR of the other two, but the
+ * two enumerations are not interchangeable. Sync TO_DEVICE after the driver
+ * writes a buffer the device will read; sync FROM_DEVICE before the driver reads
+ * one the device has written. */
 enum { WASMOS_DMA_SYNC_TO_DEVICE = 1, WASMOS_DMA_SYNC_FROM_DEVICE = 2, WASMOS_DMA_SYNC_BIDIR = 3 };
 
 /* Cache policy for wasmos_region_alloc (driver-owned pinned DMA regions). */
@@ -375,8 +534,24 @@ typedef struct __attribute__((packed)) {
     uint16_t last;
 } wasmos_region_desc_t;
 
+/* Region declarations one module descriptor can carry. Matches
+ * WASMOS_IO_RANGE_LIMIT for the same reason: a driver needing more disjoint
+ * windows than this is describing a device the model does not fit. */
 #define WASMOS_MODULE_META_MAX_REGIONS 4u
 
+/* PM's report on ONE match rule of one packaged driver -- not the whole module.
+ * A module may declare several rules, so the request names both the module and a
+ * match index, and `match_count` reports how many rules exist in total; a
+ * consumer wanting all of them asks again for each index 0..match_count-1, and
+ * every reply repeats the module-wide fields.
+ *
+ * The PCI triplet and vendor/device carry that rule's constraints, using
+ * device-manager's wildcard convention: 0xFF for the byte fields and 0xFFFF for
+ * the ID fields mean "match anything", so 0 is a real class/vendor value and not
+ * a wildcard. `storage_bootstrap` is a module-wide flag marking a driver the
+ * early storage path depends on. `region_count` is how many of `regions` are
+ * populated; the descriptor is zero-filled before use, so entries past it read
+ * as zero rather than being meaningful. */
 typedef struct __attribute__((packed)) {
     uint32_t version; /* = WASMOS_MODULE_META_DESC_VERSION */
     uint8_t class_code;
@@ -404,6 +579,9 @@ typedef struct __attribute__((packed)) {
  *
  * Extensible the same way svc_register_desc_t is: bump the version, append
  * fields, and let the reader check the byte length it was given. */
+/* Six BARs is the PCI conventional-header limit, not a local choice. A 64-bit
+ * BAR occupies two adjacent slots, so a function may expose fewer than six
+ * usable windows. */
 #define WASMOS_PCI_DEVICE_DESC_VERSION 1u
 #define WASMOS_PCI_BAR_COUNT 6u
 
@@ -472,6 +650,10 @@ enum { WASMOS_PCI_MSI_KIND_NONE = 0, WASMOS_PCI_MSI_KIND_MSI = 1, WASMOS_PCI_MSI
  * is edge-triggered and exclusively owned, so nothing is masked waiting for one. */
 #define WASMOS_IPC_MSI_EVENT_TYPE 0xFF01
 
+/* One physical-address window a driver is permitted to program a device to DMA
+ * into or out of. `base` is a physical address and `length` a byte count; the
+ * pair is the whole authority, so a driver cannot hand its device an address
+ * outside every granted window. */
 typedef struct __attribute__((packed)) {
     uint64_t base;
     uint64_t length;
@@ -493,6 +675,11 @@ typedef struct __attribute__((packed)) {
  * model does not fit. */
 #define WASMOS_IO_RANGE_LIMIT 4u
 
+/* The DMA half of a spawn profile. `direction_flags` is a mask of
+ * WASMOS_DMA_DIR_*; `max_bytes` bounds a single mapping; `window_count` is how
+ * many wasmos_dma_window_t entries follow the variable-length tail described
+ * below. A window_count of 0 with a non-zero direction_flags grants no windows,
+ * so it authorises nothing in practice. */
 typedef struct __attribute__((packed)) {
     uint32_t direction_flags;
     uint32_t max_bytes;
@@ -519,11 +706,24 @@ typedef struct __attribute__((packed)) {
      * wasmos_dma_window_t windows[dma.window_count]; */
 } wasmos_spawn_caps_v2_t;
 
+/* Total bytes a wasmos_spawn_caps_v2_t with the given tail lengths occupies:
+ * the fixed header plus both variable arrays, in the order the struct comment
+ * gives. Use it to size the buffer before writing and to bounds-check one
+ * before reading; the counts must be the same ones stored in the header
+ * (io_range_count and dma.window_count), or the computed size will not describe
+ * the actual layout. Both arguments are evaluated more than once only through
+ * casts, so passing an expression with side effects is safe here, but the macro
+ * is otherwise unparenthesised in the usual way -- pass simple values. */
 #define WASMOS_SPAWN_CAPS_V2_SIZE(io_range_count, window_count)                                    \
     (sizeof(wasmos_spawn_caps_v2_t) +                                                              \
      ((uint32_t)(io_range_count) * (uint32_t)sizeof(wasmos_io_range_t)) +                          \
      ((uint32_t)(window_count) * (uint32_t)sizeof(wasmos_dma_window_t)))
 
+/* Stable indices naming the fields of an IPC message, for code that addresses
+ * them positionally rather than by struct member. The order is NOT the struct's
+ * declaration order -- arg2/arg3 sit at 6/7, after source and destination,
+ * because they were appended -- so this enum is the authority, not the layout of
+ * nd_ipc_message_t. */
 enum {
     WASMOS_IPC_FIELD_TYPE = 0,
     WASMOS_IPC_FIELD_REQUEST_ID = 1,

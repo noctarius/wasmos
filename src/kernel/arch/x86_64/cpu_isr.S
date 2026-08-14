@@ -33,6 +33,11 @@
 # frame to return through a ring0 scheduler trampoline.
 #define KERNEL_CS_SELECTOR 0x08
 
+# PUSH_REGS / POP_REGS - save and restore the 15 general-purpose registers in
+# the order the C side expects (rax pushed first so it lands highest, r15 last so
+# it sits at %rsp+0). They must be paired: POP_REGS assumes %rsp is exactly where
+# the matching PUSH_REGS left it, so any scratch area opened in between has to be
+# released first. Neither touches flags-visible state beyond the pushes.
 .macro PUSH_REGS
     pushq %rax
     pushq %rbx
@@ -104,6 +109,12 @@ isr_nmi:
 # declared here that push an error code (8, 10, 11, 21, 29, 30); for the rest
 # the dump reports rip as "err", cs as "rip" and so on. The stub would need a
 # `pushq $0` for the no-error-code vectors, as isr_exception_3 already does.
+#
+# DECL_EXC defines isr_exception_<num> for one vector: entered by the CPU with
+# the architectural frame on whichever stack the IDT gate selects, it saves the
+# register block and tail-calls x86_exception_panic_frame(vector, frame). It
+# never returns and never re-enables interrupts; the cli/hlt loop only catches an
+# unexpected return from the panic path.
 .macro DECL_EXC num
 .global isr_exception_\num
 isr_exception_\num:
@@ -117,6 +128,18 @@ isr_exception_\num:
     jmp 1b
 .endm
 
+# Vectors a ring-3 process can raise on itself (0 #DE, 1 #DB, 4 #OF, 6 #UD,
+# 7 #NM, 12 #SS, 13 #GP, 17 #AC) get a hand-written stub instead of DECL_EXC.
+# Each calls x86_user_exception_handler(vector, frame) first: a zero return means
+# the fault was attributed to a user process, which the handler has already
+# terminated, so the stub pops the error-code slot and iretqs into whatever the
+# scheduler chose; a non-zero return means the fault was not user-attributable
+# and the stub falls through to the same panic-and-halt path as DECL_EXC.
+#
+# The vectors that push no architectural error code (0, 1, 4, 6, 7) prepend a
+# zero so the frame the C side reads has the error-code shape; 12, 13 and 17
+# arrive with a real error code and push nothing. Either way the stub removes
+# exactly 8 bytes before iretq.
 .global isr_exception_0
 isr_exception_0:
     pushq $0
@@ -162,6 +185,8 @@ isr_exception_1:
 
 DECL_EXC 2
 
+# #BP (int3) is unconditionally fatal here: there is no debugger to hand it to,
+# so the stub pushes the missing error-code slot and panics like DECL_EXC.
 .global isr_exception_3
 isr_exception_3:
     pushq $0
@@ -409,6 +434,12 @@ isr_irq_0:
     hlt
     jmp 4b
 
+# DECL_IRQ defines isr_irq_<num> for device IRQ lines 1-15 (vectors 33-47).
+# Entry: CPU-pushed frame with no error code, on the current stack (these gates
+# use no IST). The stub saves all GPRs, calls x86_irq_handler(vector) — which
+# does the masking, IPC dispatch and EOI — restores them and iretqs to the
+# interrupted context unchanged. Unlike isr_irq_0 the handler receives no
+# pointer to the frame, so there is no preemption rewrite and nothing to verify.
 .macro DECL_IRQ num vec
 .global isr_irq_\num
 isr_irq_\num:
@@ -488,6 +519,15 @@ isr_syscall_128:
     POP_REGS
     iretq
 
+# Stub address tables consumed by cpu_x86_64.c when it builds the IDT. Each is a
+# dense array of quadword code addresses indexed from zero, so entry i belongs to
+# exception vector i, to IRQ line i (vector IRQ_VECTOR_BASE + i) and to MSI index
+# i (vector MSI_VECTOR_BASE + i) respectively. The addresses are link-time
+# lower-half values; x86_kernel_handler_addr() rebases them before they go into a
+# gate descriptor. Array lengths are implicit — the installer loops over
+# EXCEPTION_COUNT, IRQ_COUNT and MSI_VECTOR_COUNT, so adding a stub here without
+# raising the matching count leaves it uninstalled, and the reverse reads past
+# the end.
 .global x86_exception_stub_table
 x86_exception_stub_table:
     .quad isr_exception_0

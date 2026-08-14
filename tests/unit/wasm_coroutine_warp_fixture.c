@@ -1,4 +1,14 @@
-/* Compiled to wasm32 and executed by test_warp_wasm_coroutine.cpp. */
+/* Compiled to wasm32 and executed by test_warp_wasm_coroutine.cpp.
+ *
+ * This is the one place the stackless coroutine core runs as real wasm bytecode
+ * through the WARP JIT rather than as host C. It links the real
+ * src/libsys/wasm/coroutine_wasm.c and imports nothing: the host side supplies
+ * no native symbols, so a host call anywhere in the core would fail to
+ * instantiate. Coverage is deliberately thin -- one waiter, one resolver, one
+ * drain -- because what is under test is compilation and execution of that
+ * code, not the semantics, which tests/unit/test_wasm_coroutine.c covers on the
+ * host.
+ */
 #include <stdint.h>
 
 #include "wasmos/coroutine_wasm.h"
@@ -37,6 +47,11 @@ static int32_t resolver(void* user, uintptr_t* out_value) {
     return 0;
 }
 
+/* The module's single export, called by the host driver with no arguments.
+ * Starts a waiter and a resolver on one runtime, drains it once, and checks the
+ * waiter observed the resolved value and its completion future settled with it.
+ * Returns 0 when everything held and 1 for ANY failure -- a single marker, not
+ * a line number, since the host driver only reports the value. */
 int32_t wasmos_coroutine_wasm_test(void) {
     wasmos_wasm_runtime_t runtime = {0};
     wasmos_wasm_coroutine_t waiting = {0}, resolving = {0};

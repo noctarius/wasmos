@@ -22,6 +22,9 @@ static uint32_t ksync_mutex_current_owner_tid(void) {
     return tid != 0 ? tid : 0xFFFFFFFFu;
 }
 
+/* Publishes the mutex unlocked with an empty wait list.  Not safe against a live
+ * mutex: it re-initialises event.lock and drops the wait list head without
+ * waking anyone, so any thread already parked on it would never be woken. */
 void ksync_mutex_init(ksync_mutex_t* mutex) {
     if (!mutex) {
         return;
@@ -52,6 +55,14 @@ int ksync_mutex_try_lock(ksync_mutex_t* mutex) {
     return rc;
 }
 
+/* Blocks (via sched_event_wait, which releases event.lock before yielding) until
+ * the mutex is acquired.
+ *
+ * The loop re-tests `locked` after every wake because a wake is NOT a handoff:
+ * ksync_mutex_unlock clears the owner and then wakes one waiter, so a third
+ * thread calling try_lock/lock in that gap can take the mutex first.  The woken
+ * waiter simply finds it locked again and re-parks.  The re-test also absorbs
+ * the abort and spurious wakes sched_event_wait can return. */
 int ksync_mutex_lock(ksync_mutex_t* mutex) {
     uint32_t owner_tid = 0;
 
@@ -76,6 +87,11 @@ int ksync_mutex_lock(ksync_mutex_t* mutex) {
     }
 }
 
+/* Releases the mutex and wakes at most one waiter, all under event.lock so the
+ * clear and the wake cannot be split by a racing lock().  The woken thread is
+ * only made runnable, not made the owner — see the handoff note on
+ * ksync_mutex_lock.  Waking exactly one is what makes the wait list a queue
+ * rather than a thundering herd. */
 int ksync_mutex_unlock(ksync_mutex_t* mutex) {
     uint32_t owner_tid = 0;
 

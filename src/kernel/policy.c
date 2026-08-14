@@ -71,6 +71,15 @@ static const char* policy_action_name(policy_action_t action) {
     }
 }
 
+/* Enforcing form of policy_authorize: on denial it logs the action and the
+ * offending process name and terminates that process, so it normally DOES NOT
+ * RETURN on the denied path — process_yield(PROCESS_RUN_EXITED) does not come
+ * back.  The -1 return is reached only when no process backs the context, or
+ * when the yield itself fails to take effect.
+ *
+ * Returns 0 when the action is allowed.  arg0 carries the action's resource (an
+ * I/O port for POLICY_ACTION_IO_PORT, an IRQ line for POLICY_ACTION_IRQ_ROUTE)
+ * and is ignored by the others. */
 int policy_require(uint32_t context_id, policy_action_t action, uint32_t arg0) {
     if (policy_authorize(context_id, action, arg0) == 0) {
         return 0;
@@ -88,6 +97,19 @@ int policy_require(uint32_t context_id, policy_action_t action, uint32_t arg0) {
     return -1; /* only reached if process could not be killed */
 }
 
+/* Decides an action without side effects: 0 allowed, -1 denied.  An unrecognised
+ * action is denied.
+ *
+ * Every action first requires the corresponding capability bit.  For
+ * POLICY_ACTION_IO_PORT and POLICY_ACTION_MMIO_MAP a context WITHOUT a spawn
+ * profile is then allowed outright — the capability alone carries it — while a
+ * context with one is narrowed further by that profile's port window or MMIO
+ * permission.  POLICY_ACTION_IRQ_ROUTE additionally requires
+ * POLICY_ACTION_IRQ_CONTROL and then a per-line check.  DMA_BUFFER,
+ * IRQ_CONTROL and SYSTEM_CONTROL are capability-only.
+ *
+ * arg0 is the I/O port for IO_PORT and the IRQ line for IRQ_ROUTE; the other
+ * actions ignore it. */
 int policy_authorize(uint32_t context_id, policy_action_t action, uint32_t arg0) {
     switch (action) {
     case POLICY_ACTION_IO_PORT:

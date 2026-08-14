@@ -1,7 +1,12 @@
 #pragma once
 /* compat/cerrno — freestanding shadow of <cerrno>
- * Pulls in the compat errno.h and re-exports the errno macro and constants
- * into namespace std where needed. */
+ *
+ * Whole content: it includes compat/errno.h, which supplies the errno macro
+ * (a constant 0 — see that file for what that costs) and the E* constants.
+ *
+ * Included by only one WARP source, utils/ExecutableMemory.cpp, which the
+ * kernel build does not compile, so nothing in the kernel currently depends on
+ * this file beyond making the include resolve. */
 
 #include "errno.h"
 

@@ -1,4 +1,14 @@
 #pragma once
+/* compat/iostream — freestanding stub of <iostream>
+ *
+ * Declares std::cout and std::cerr over the discarding ostream in
+ * compat/ostream; the two objects are defined in warp/iostream_stubs.cpp, so
+ * they link.  std::cin, std::clog and std::wcout have no counterpart — a
+ * kernel has no stdin, and reading one is a compile error.
+ *
+ * Both streams swallow everything inserted into them.  See compat/ostream for
+ * why that is safe and for which WARP printing sources are excluded from or
+ * replaced in the kernel build. */
 #include "ostream"
 namespace std {
 extern ostream cout;

@@ -1,9 +1,38 @@
 #pragma once
-/* Use compiler type macros (__UINT8_TYPE__ etc.) to avoid duplicate
- * specializations when uint8_t == unsigned char or size_t == uint64_t. */
+/* compat/limits — freestanding shadow of <limits>
+ *
+ * Provides numeric_limits<T> with max(), min() and is_integer, specialised for
+ * the eight fixed-width integer types plus float and double.  WARP asks only
+ * for max(): Span.hpp uses numeric_limits<size_t>::max() as the "rest of the
+ * span" sentinel, Frontend.cpp compares against numeric_limits<uint8_t>::max(),
+ * and RegMask.hpp builds its all-ones mask from numeric_limits<Type>::max().
+ * All three land on a specialisation below.
+ *
+ * The specialisations are written against the compiler type macros
+ * (__UINT8_TYPE__ etc.) rather than the <cstdint> typedefs so that there is
+ * exactly one specialisation per underlying type — writing both uint8_t and
+ * unsigned char, or both size_t and uint64_t, would be a redefinition.
+ *
+ * Two deviations that matter:
+ *   - min() for the floating-point specialisations is __FLT_MIN__/__DBL_MIN__,
+ *     the smallest positive normal value.  That is what the standard's
+ *     numeric_limits<float>::min() means, so it is correct — but it is NOT the
+ *     most negative float.  There is no lowest(), which is the name for that.
+ *   - the primary template below is the dangerous one; see its comment.
+ * Everything else the real header carries (digits, epsilon, infinity,
+ * quiet_NaN, is_signed, is_specialized, radix, ...) is absent and fails to
+ * compile at the point of use. */
 
 namespace std {
 
+/* CAUTION: the unspecialised primary template is not "no answer", it is a
+ * wrong answer.  For any type without a specialisation below — an enum, a
+ * pointer, long double, a class type — max() and min() both return a
+ * value-initialised T, i.e. zero, and is_integer is false.  Nothing diagnoses
+ * this: a sentinel built from numeric_limits<T>::max() silently becomes 0, so
+ * a "rest of the range" default turns into an empty range and an all-ones mask
+ * turns into an all-zeroes mask.  Add a specialisation for any new type before
+ * using it here. */
 template<class T> struct numeric_limits {
     static constexpr T max() noexcept { return T(); }
     static constexpr T min() noexcept { return T(); }

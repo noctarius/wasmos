@@ -3,6 +3,16 @@
 
 /* libui_row.h - Generic horizontal row container layout. */
 
+/* Layout op for UI_COMPONENT_ROW. Places children left to right inside the
+ * row's padding, separated by gap_px, all sharing the full inner height
+ * (floored at 8 px).
+ *
+ * Width comes from preferred_h, which this layout reinterprets as a preferred
+ * WIDTH (floored at 8 px) — except for the last child, which absorbs whatever
+ * horizontal space is left so the row is always filled. If the fixed children
+ * plus gaps already exceed the row, the last child still gets 8 px and the row
+ * overflows to the right. Each child's own layout op runs afterwards, or the
+ * generic vertical layout when it has children but no op. */
 static inline void ui_layout_row(ui_context_t* ctx, ui_component_t* p) {
     int32_t x = p->bounds.x + p->padding_px;
     const int32_t y = p->bounds.y + p->padding_px;

@@ -1,3 +1,21 @@
+/* test_wasmos_exec_format.c — what a blob IS (wasmos_exec_format.h): a packed
+ * .wap the kernel loads itself, a file some registered broker claims, or
+ * nothing. The classification decides which spawn path runs, so a fixture that
+ * is accepted as a WAP by accident, or a broker handler that claims a WAP,
+ * misroutes a real spawn.
+ *
+ * wasmos_exec_format.c, subsystem_registry.c, hashmap.c and kmem.c are compiled
+ * in for real, with the libc string.c that supplies str_copy/str_copy_bytes; the
+ * slab allocator underneath kmem is replaced by tests/unit/stubs_slab.c (host
+ * heap), the spinlocks by tests/unit/stubs_spinlock.c, and klog by
+ * tests/unit/include/klog.h, which discards it. Classification consults the
+ * subsystem registry, so main() registers the fixture brokers and handlers once
+ * before the shuffled run and resets the process-global tables afterwards; no
+ * case registers or resets on its own.
+ *
+ * Each case returns 0 to pass or __LINE__ to fail, and wasmos_test_run_all stops
+ * at the first failure (test_shuffle.h).
+ */
 #include "subsystem_registry.h"
 #include "wasmos_exec_format.h"
 #include <stdint.h>
@@ -52,6 +70,10 @@ typedef struct __attribute__((packed)) {
     uint32_t reserved;
 } test_wap_header_v1_t;
 
+/* Register the two broker subsystems and the two exec handlers the cases match
+ * against: LUA claims ".lua OR a #! prefix" and JAVA claims ".jar AND a PK\x03\x04
+ * prefix", with probe budgets of 2 and 4 bytes. Returns 0, or -1 on the first
+ * registration that is refused. Called once from main(), not per case. */
 static int register_test_handlers(void) {
     static const wasmos_exec_match_node_t lua_nodes[] = {
         {.kind = WASMOS_EXEC_MATCH_OR, .left_index = 1u, .right_index = 2u},

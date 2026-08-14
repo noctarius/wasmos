@@ -4,7 +4,13 @@
  * vector has exactly one owner, a freed vector stops being delivered, and a
  * reaped context cannot leave a vector pointing at a released endpoint (the
  * failure mode that strands an INTx line — see test_irq_sharing.c). See
- * docs/architecture/05-x86-cpu-architecture.md §Message-Signalled Interrupts. */
+ * docs/architecture/05-x86-cpu-architecture.md §Message-Signalled Interrupts.
+ *
+ * src/kernel/msi_vectors.c is the only source linked in: it holds no state, so
+ * the vector table and the delivery op come from this file. On target the caller
+ * (src/kernel/arch/x86_64/msi_x86_64.c) runs dispatch under g_msi_lock and
+ * converts a vector number to an index by subtracting MSI_VECTOR_BASE; neither
+ * belongs to this module, so neither is exercised here. */
 #include <stdio.h>
 #include <string.h>
 
@@ -12,11 +18,15 @@
 
 #include "msi_vectors.h"
 
+/* The real table size, so exhaustion is reached at exactly the count the kernel
+ * would reach it at. */
 #define TEST_VECTORS MSI_VECTOR_COUNT
 
 static int g_failures;
 static int g_checks;
 
+/* Record one assertion: counts and CONTINUES, so a failing case runs to its end.
+ * Nothing here returns a marker; main() reports g_failures as the exit status. */
 static void expect(int cond, const char* what) {
     g_checks++;
     if (!cond) {
@@ -27,12 +37,19 @@ static void expect(int cond, const char* what) {
 
 /* ---- fake ops -------------------------------------------------------------- */
 
+/* Call log for the injected delivery op: the endpoint and the vector index of
+ * each event, keeping only the first 64 while g_deliver_count keeps counting. */
 static uint32_t g_delivered_to[64];
 static uint32_t g_delivered_index[64];
 static uint32_t g_deliver_count;
 /* Endpoint whose delivery fails, modelling a full endpoint queue. 0 = none. */
 static uint32_t g_deliver_fail_endpoint;
 
+/* Stand in for msi_ops_deliver, which posts an IPC_MSI_EVENT_TYPE message with
+ * ipc_send_from and returns -1 whenever that is not IPC_OK. Failure is modelled
+ * by endpoint id rather than by queue depth, so it is deterministic and stays in
+ * force until the case clears g_deliver_fail_endpoint. Returns 0 when queued,
+ * matching the ops contract in msi_vectors.h. */
 static int fake_deliver(uint32_t endpoint, uint32_t index) {
     if (g_deliver_fail_endpoint != 0 && endpoint == g_deliver_fail_endpoint) {
         return -1;
@@ -49,6 +66,10 @@ static const msi_vector_ops_t OPS = {fake_deliver};
 
 static msi_vector_t g_vectors[TEST_VECTORS];
 
+/* Fixture reset: an unallocated vector table plus a cleared call log, called
+ * first in every case because the cases run in a shuffled order and share both.
+ * test_null_table_is_tolerated is the one case that skips it, since it passes no
+ * table at all. */
 static void reset(void) {
     memset(g_vectors, 0, sizeof(g_vectors));
     msi_vectors_init(g_vectors, TEST_VECTORS);

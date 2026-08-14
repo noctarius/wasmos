@@ -17,6 +17,14 @@ static const uint8_t g_skip_wasm_boot = 0;
  * process_block_on_ipc() instead would spin the scheduler. */
 #define KERNEL_INIT_IDLE_WAIT_MS 100u
 
+/* Puts an init_state_t into its pre-boot state: phase 0, nothing started, no
+ * request in flight, and every boot-module index set to the 0xFFFFFFFF "not
+ * found" sentinel rather than 0, which is a valid index.
+ *
+ * boot_info is stored as a BORROWED pointer and must outlive the init process —
+ * kmain passes the kernel-owned shadow, not the firmware's original.  A NULL
+ * state is ignored.  Every field is written explicitly, so the structure need
+ * not be zeroed first. */
 void kernel_init_state_reset(init_state_t* state, const boot_info_t* boot_info) {
     if (!state) {
         return;
@@ -154,6 +162,26 @@ static int init_send_spawn_path(process_t* process, init_state_t* state, const c
     return 0;
 }
 
+/* Scheduler entry point for the init process, driving the userspace boot chain
+ * as a resumable state machine.
+ *
+ * arg is the init_state_t prepared by kernel_init_state_reset, borrowed and
+ * mutated across dispatches; `phase` is where the sequence stands.  Each call
+ * advances at most one step and yields, so the whole boot chain — spawning the
+ * process manager, resolving boot modules, spawning fs-manager, fs-init and
+ * device-manager, then sysinit by path once a filesystem exists — plays out over
+ * many dispatches.  Steps that depend on a service that is not up yet simply
+ * yield and retry on the next dispatch.
+ *
+ * Returns PROCESS_RUN_YIELDED for "call me again", PROCESS_RUN_IDLE for a NULL
+ * process, state or boot_info, and PROCESS_RUN_EXITED with a non-zero exit
+ * status when the process manager cannot be spawned or a reply arrives with a
+ * mismatched request id.
+ *
+ * Once the chain completes, init has no work left and parks on its reply
+ * endpoint with a bounded wait rather than returning PROCESS_RUN_BLOCKED, which
+ * would not actually park it.  It stays alive as the parent of the boot
+ * processes. */
 process_run_result_t kernel_init_entry(process_t* process, void* arg) {
     init_state_t* state = (init_state_t*)arg;
     uint32_t pm_pid = 0;

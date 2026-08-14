@@ -149,6 +149,16 @@ static const list_ops_t g_list_array_chunk_ops = {.destroy = list_array_chunk_de
                                                   .first = list_array_chunk_first,
                                                   .next = list_array_chunk_next};
 
+/* Backend constructor called by list_init; not part of the public list.h API.
+ *
+ * Allocates the state block, records list->config_value as the per-chunk slot
+ * capacity, and installs the array-chunk vtable.  A zero config_value is
+ * REFUSED, since a chunk with no slots could never satisfy an allocation.
+ *
+ * Returns 0 on success and -1 for a NULL list, a zero elem_size, a zero
+ * config_value, or a failed state allocation — list->ops then stays 0 and the
+ * facade degrades to NULL/-1.  No chunk is allocated here; the first one comes
+ * with the first list_alloc, and all of them are released by list_destroy. */
 int list_array_chunk_impl_init(list_t* list) {
     list_array_chunk_state_t* state = 0;
     if (!list || list->elem_size == 0 || list->config_value == 0) {

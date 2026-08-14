@@ -4,6 +4,10 @@
 
 #include <stdint.h>
 
+/* printf length/conversion fragments for the fixed-width types, defined only when the
+ * toolchain has not already supplied them.  The kernel's own vsnprintf understands the
+ * "ll" the 64-bit forms expand to, along with the conversions used here; it has no
+ * floating-point or precision support, so no PRI macro beyond these is meaningful. */
 #ifndef PRIi32
 #define PRIi32 "d"
 #endif

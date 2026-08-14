@@ -1,3 +1,18 @@
+/* irq_route_allow - positive half of the IRQ routing capability test.
+ *
+ * Demonstrates wasmos_irq_route_ipc / wasmos_irq_unroute, which bind a hardware
+ * interrupt line to an IPC endpoint so the kernel posts a message on each
+ * interrupt. Routing is capability-gated twice: the app needs the irq.route
+ * capability at all, and each line it asks for must be in its per-app
+ * allowlist.
+ *
+ * This app has the capability and is allowed line 1, so it checks both
+ * outcomes: line 2 must be refused with WASMOS_ERR_IRQ_NOT_AUTHORIZED, line 1
+ * must route and unroute cleanly. Prints one "ok" line and exits 0 on success,
+ * a specific failure line and 1 otherwise.
+ *
+ * Precondition: the irq-route policy table in src/kernel/policy.c must still
+ * grant this app line 1 and withhold line 2. */
 #include "stdio.h"
 #include "wasmos/api.h"
 

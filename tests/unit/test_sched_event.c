@@ -23,6 +23,11 @@
 static int g_failures;
 static int g_checks;
 
+/* Counts every evaluation into g_checks and, on failure, counts g_failures and prints
+ * `msg` with the file and line. A failed check does NOT end the case: the remaining
+ * assertions still run, against the state the failure left behind. main prints the
+ * totals and exits non-zero if any check failed. `msg` names the property being
+ * asserted, in the affirmative -- it is printed when that property does not hold. */
 #define CHECK(cond, msg)                                                                           \
     do {                                                                                           \
         g_checks++;                                                                                \
@@ -51,6 +56,11 @@ static int g_yield_calls;
 static uint32_t g_arm_at_index;
 static void (*g_arm_hook)(void);
 
+/* The clock the deadline machinery is measured against. g_now moves only when a case
+ * moves it, so a deadline expires exactly when the case says it does; the kernel's
+ * timer_ticks is advanced by the timer IRQ. The 1:1 conversion below replaces the
+ * kernel's ceil(ms * hz / 1000), so a timeout in ms and a deadline in ticks are the same
+ * number throughout this file. */
 uint64_t timer_ticks(void) {
     return g_now;
 }
@@ -58,6 +68,11 @@ uint64_t timer_ms_to_ticks(uint32_t ms) {
     return (uint64_t)ms;
 } /* 1 tick per ms */
 
+/* The table sched_timeout_check sweeps. Every call is counted, which is how a case
+ * observes whether the fast path skipped the scan at all, and the one-shot arm hook
+ * fires when the sweep reaches g_arm_at_index. Bounded by the fixture pool rather than
+ * THREAD_MAX_COUNT, so the sweep sees NULL for every index past it; like the kernel's it
+ * takes no lock and returns a slot whatever state that slot is in. */
 thread_t* thread_table_at(uint32_t index) {
     g_table_at_calls++;
     if (g_arm_hook && index == g_arm_at_index) {
@@ -68,6 +83,13 @@ thread_t* thread_table_at(uint32_t index) {
     return (index < POOL_MAX) ? &g_pool[index] : NULL;
 }
 
+/* Linear scan of the pool by tid, or NULL whenever g_thread_get_null is set -- which is
+ * how the no-current-thread path through sched_event_wait is driven.
+ *
+ * Two divergences from thread.c, neither reached by a case here: it takes no thread
+ * table lock, and it applies neither the tid == 0 rejection nor the "skip UNUSED slots"
+ * filter, so a lookup of tid 0 matches the first pool slot the fixture has not handed
+ * out through mk() rather than answering NULL. */
 thread_t* thread_get(uint32_t tid) {
     if (g_thread_get_null) {
         return NULL;
@@ -80,10 +102,17 @@ thread_t* thread_get(uint32_t tid) {
     return NULL;
 }
 
+/* The identity sched_event_wait registers a block under; block_on sets it immediately
+ * before each wait. The kernel derives it from cpu_local()->current_thread. */
 uint32_t thread_current_tid(void) {
     return g_current_tid;
 }
 
+/* Writes state and block reason unconditionally. The kernel takes the thread-table lock
+ * and filters the edge through thread_transition_legal, so an illegal transition --
+ * notably anything leaving ZOMBIE -- is silently ignored there. This stub enforces no
+ * such rule, so what goes untested is the refusal, not the RUNNING -> BLOCKED move
+ * sched_event_wait actually performs. */
 void thread_set_state(uint32_t tid, thread_state_t state, thread_block_reason_t reason) {
     thread_t* t = thread_get(tid);
     if (t) {
@@ -92,6 +121,12 @@ void thread_set_state(uint32_t tid, thread_state_t state, thread_block_reason_t 
     }
 }
 
+/* Records the wake -- count and last recipient, which is what the timeout cases assert
+ * against -- and marks the thread READY. The kernel additionally runs the wake/block
+ * claim handshake, refuses a wake of a thread that is not BLOCKED, enqueues it on a run
+ * queue and may request a reschedule. None of that happens here, so every case observes
+ * a wake purely as sched_event.c's own detach-and-deliver, with the run-queue side
+ * covered by test_sched_runqueue.c instead. A NULL thread is counted like any other. */
 void sched_wake_thread(thread_t* t) {
     g_wake_calls++;
     g_last_woken = t;
@@ -109,6 +144,16 @@ void process_yield(process_run_result_t result) {
 
 /* --------------------------------------------------------------- fixtures */
 
+/* Per-case fixture reset, called first by every case. Zeroes the thread pool and
+ * canonically detaches both list nodes on every slot (a zero-filled list_head_t reads as
+ * LINKED, not detached), rewinds the mk() allocator, and returns the clock to tick 100
+ * with no current thread, no arm hook and every counter clear.
+ *
+ * It resets no sched_event_t: each case declares its own on the stack and calls
+ * sched_event_init. Two other things it cannot reach -- g_checks and g_failures, which
+ * are cumulative for the run, and sched_event.c's module-static deadline hint, which is
+ * only ever lowered by an arm and recomputed by a scan and therefore carries across
+ * cases. */
 static void reset(void) {
     memset(g_pool, 0, sizeof(g_pool));
     for (uint32_t i = 0; i < POOL_MAX; ++i) {
@@ -127,6 +172,9 @@ static void reset(void) {
     g_arm_at_index = 0;
 }
 
+/* Hand out the next pool slot as a fresh RUNNING thread with tid = its index + 1. The
+ * cursor is rewound by reset(), so a case may take at most POOL_MAX threads: the slot
+ * index is not bounds-checked and a further call would run off the array. */
 static thread_t* mk(void) {
     thread_t* t = &g_pool[g_pool_used];
     t->tid = g_pool_used + 1u;
@@ -156,6 +204,9 @@ static void block_on(sched_event_t* ev, thread_t* t, uint32_t timeout_ms) {
     t->state = THREAD_STATE_BLOCKED;  /* the scheduler would leave it blocked */
 }
 
+/* Number of waiters linked on `ev`. The walk stops at POOL_MAX + 2, so that value means
+ * "too long, or cycling" rather than a real length -- a corrupted list reports instead of
+ * hanging the run. Pair it with wait_list_intact() to tell the two apart. */
 static int wait_list_len(sched_event_t* ev) {
     int n = 0;
     for (list_head_t* p = ev->wait_list.next; p != &ev->wait_list && n < POOL_MAX + 2;

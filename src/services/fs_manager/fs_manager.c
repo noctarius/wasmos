@@ -873,6 +873,30 @@ static int handle_chdir_mount(fs_client_state_t* state, int32_t source, int32_t 
     return 0;
 }
 
+/* Service entry point.  Brings up the bump heap and the two endpoints (a service
+ * endpoint published as "fs.vfs" and a private reply endpoint used for nested
+ * calls to backends), registers the service name, signals readiness, then
+ * discovers the FS backends and serves requests forever.
+ *
+ * Lifecycle ordering is load-bearing: the name must be registered before
+ * notify_ready, or a client woken by the ready signal can look up "fs.vfs" and
+ * miss.  Backend discovery runs AFTER notify_ready, because it is a class
+ * subscription plus a pull from each provider — the providers are peers that may
+ * still be starting, and blocking readiness on them would deadlock the boot
+ * sequence.  The two discovery mechanisms differ: `wasmos_svc_register` /
+ * name lookup binds one well-known name to one endpoint, whereas subscribing to
+ * FSMGR_BACKEND_CLASS yields a set that changes over time and delivers
+ * SVC_IPC_CLASS_EVENT adds and removes into the main loop.
+ *
+ * Every request is answered on the service endpoint, and the loop parks in
+ * wasmos_ipc_select_one rather than spinning.  Client identity is the owning
+ * context of the sending endpoint, not the endpoint itself, so all of a
+ * process's endpoints share one cwd.
+ *
+ * Does not return: a failure to create an endpoint or to register the name
+ * parks the process in wasmos_sys_ipc_recv_loop instead of exiting, so the
+ * declared int32_t result is never produced.  arg1..arg3 are ignored and
+ * proc_endpoint is overwritten from the spawn-info contract. */
 WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t arg1, int32_t arg2,
                                       int32_t arg3) {
     /* The proc endpoint comes from the spawn-info contract; the entry args carry

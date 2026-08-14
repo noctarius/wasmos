@@ -260,6 +260,21 @@ static void ioapic_program_rtes(void) {
 
 /* ----------------------------------------------------------------------- API */
 
+/* Discover and program the I/O APIC. boot_info is borrowed and must carry a
+ * non-NULL rsdp: find_xsdt_phys() dereferences it without checking, so a build
+ * that reaches here without ACPI faults rather than falling back.
+ *
+ * Parses the MADT for the I/O APIC base (defaulting to 0xFEC00000), the ISA IRQ
+ * source overrides and, under WASMOS_SMP, the AP APIC IDs — which is why this
+ * runs before smp_cpus_up() and why g_cpu_count is only meaningful afterwards.
+ * Then maps the MMIO page and programs all 16 ISA redirection entries to the BSP
+ * as masked, level-triggered, active-high fixed deliveries at vectors
+ * IRQ_VECTOR_BASE + line. Every line comes up masked; drivers unmask via
+ * irq_unmask() after registering.
+ *
+ * A failed MMIO mapping is logged and leaves the driver inert: g_ioapic_base
+ * stays zero and every later mask/unmask/configure call returns without effect,
+ * so no interrupt is ever delivered. */
 void ioapic_init(const boot_info_t* boot_info) {
     ksync_spinlock_init(&g_ioapic_lock);
     uint64_t ioapic_phys;
@@ -272,6 +287,14 @@ void ioapic_init(const boot_info_t* boot_info) {
     serial_write("[ioapic] init ok\n");
 }
 
+/* Set/clear the mask bit of one ISA line's redirection entry. irq_line is an ISA
+ * IRQ number (0..15), translated to a GSI through the MADT override map; a line
+ * >= 16 or an uninitialised driver is silently ignored, so neither reports
+ * failure. Both are read-modify-write pairs over the shared IOREGSEL/IOWIN
+ * selector and take the IRQ-safe IOAPIC lock, which makes them callable from
+ * interrupt context. Unmasking a level-triggered line whose input is still
+ * asserted causes an immediate re-delivery — that is what drains back-to-back
+ * PS/2 bytes. */
 void ioapic_mask_irq(uint32_t irq_line) {
     if (irq_line >= 16u || !g_ioapic_base) {
         return;
@@ -296,7 +319,12 @@ void ioapic_unmask_irq(uint32_t irq_line) {
 
 /* Reprogram an IRQ line's trigger mode and polarity, preserving its
  * vector/destination/mask.  PCI INTx lines are level-triggered active-low and
- * must be reconfigured from the ISA boot default (active-high) by pci-bus. */
+ * must be reconfigured from the ISA boot default (active-high) by pci-bus.
+ *
+ * irq_line is an ISA IRQ number resolved through the same GSI map; level and
+ * active_low are treated as booleans, and passing zero for both restores the
+ * edge-triggered active-high ISA form. Out-of-range lines and an uninitialised
+ * driver are ignored without any report. Takes the IOAPIC lock. */
 void ioapic_configure_irq(uint32_t irq_line, int level, int active_low) {
     if (irq_line >= 16u || !g_ioapic_base) {
         return;

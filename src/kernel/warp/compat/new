@@ -1,8 +1,18 @@
 #pragma once
 /* compat/new — freestanding shadow of <new>
- * Provides placement new and a stub std::bad_alloc.  The kernel overrides
- * global operator new/delete in warp/shim.cpp; placement new must still be
- * declared here so WARP's in-place constructors compile correctly. */
+ *
+ * Provides placement new/delete (scalar and array forms), std::bad_alloc and
+ * std::nothrow_t/std::nothrow.  That matches what the WARP sources including
+ * <new> need: WasmModule.cpp and ExecutableMemory.hpp construct objects in
+ * place, and VirtualMemoryAllocator.cpp throws std::bad_alloc.
+ *
+ * Allocating forms of operator new/delete are deliberately NOT declared here.
+ * The kernel defines the global ones in warp/shim.cpp, backed by the kernel
+ * slab allocator, and they are visible without any declaration because the
+ * compiler declares them implicitly.
+ *
+ * std::align_val_t, the sized/aligned overloads, std::get_new_handler and
+ * std::launder are absent; using them is a compile error. */
 
 #include <stddef.h>
 
@@ -31,7 +41,12 @@ public:
     virtual const char *what() const noexcept { return "bad_alloc"; }
 };
 
-/* nothrow_t / nothrow — used by placement-new overloads in hosted headers. */
+/* nothrow_t / nothrow — used by placement-new overloads in hosted headers.
+ * Declaration only: no translation unit in the kernel WARP build defines the
+ * `nothrow` object, so naming it links only as long as it stays unused.  A
+ * `new (std::nothrow) T` in kernel-side WARP code therefore fails at link time
+ * (undefined std::nothrow, plus no nothrow operator new is declared above),
+ * not at runtime. */
 struct nothrow_t { explicit nothrow_t() = default; };
 extern const nothrow_t nothrow;
 

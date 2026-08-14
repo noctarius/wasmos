@@ -73,12 +73,18 @@ extern long write(int fd, const void* buf, unsigned long count);
 }
 #endif
 
+/* Upper bound on a suite's case count, set by the fixed-size order[] array the
+ * two runners put on the stack. A larger count is rejected rather than
+ * truncated, so a suite that outgrows this fails loudly. Raising it costs
+ * 4 bytes of stack per case. */
 #define WASMOS_TEST_MAX_CASES 128
 
+/* A case returns 0 to pass. Any non-zero value is a failure marker naming the
+ * assertion that failed -- by convention __LINE__, which the runner prints. */
 typedef int (*wasmos_test_fn_t)(void);
 
 typedef struct {
-    const char* name;
+    const char* name; /* Borrowed; must outlive the run. WASMOS_TEST_CASE supplies a literal. */
     wasmos_test_fn_t fn;
 } wasmos_test_case_t;
 
@@ -87,12 +93,22 @@ typedef struct {
 typedef void (*wasmos_test_void_fn_t)(void);
 
 typedef struct {
-    const char* name;
+    const char* name; /* Borrowed; must outlive the run. */
     wasmos_test_void_fn_t fn;
 } wasmos_test_void_case_t;
 
+/* Table entry for a case, naming it with its own identifier so the name printed
+ * on failure cannot drift from the function actually run. Takes a function
+ * designator, not a pointer expression: the argument is stringified. */
 #define WASMOS_TEST_CASE(function) {#function, function}
 
+/* One splitmix64 draw, advancing *state in place.
+ *
+ * The state chains through the raw counter -- *state accumulates the golden
+ * constant and the mixing is applied only to the returned value. tests/unit/as/
+ * shuffle.ts chains through the mixed output instead, so the same seed yields a
+ * different sequence there: a seed reproduces an order within one of the two
+ * helpers, never across both. */
 static inline uint64_t wasmos_test_next_random(uint64_t* state) {
     uint64_t z = (*state += 0x9E3779B97F4A7C15ull);
     z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ull;
@@ -100,8 +116,15 @@ static inline uint64_t wasmos_test_next_random(uint64_t* state) {
     return z ^ (z >> 31);
 }
 
-/* Unbuffered, and free of any stream object: wasmos's <stdio.h> has its own
- * FILE type that is not the host's, so no FILE* may be passed across. */
+/* Write `prefix` followed by `seed` as 16 lowercase hex digits and a newline
+ * straight to fd 1.
+ *
+ * Unbuffered, and free of any stream object: wasmos's <stdio.h> has its own
+ * FILE type that is not the host's, so no FILE* may be passed across. The line
+ * is assembled in a 96-byte stack buffer, and the prefix is truncated to leave
+ * room for the 16 digits and the newline -- a long prefix loses its tail, the
+ * seed is never lost. A write failure is ignored; there is nowhere to report it
+ * that would be more reliable than the write itself. */
 static inline void wasmos_test_write_seed(const char* prefix, uint64_t seed) {
     char line[96];
     unsigned pos = 0;
@@ -116,6 +139,14 @@ static inline void wasmos_test_write_seed(const char* prefix, uint64_t seed) {
     (void)write(1, line, pos);
 }
 
+/* The seed for this run: WASMOS_TEST_SEED when set to a non-empty value,
+ * otherwise one derived from the stack address of a local.
+ *
+ * WASMOS_TEST_SEED is parsed with base 0, so 0x-prefixed hex -- the form
+ * wasmos_test_write_seed prints -- and plain decimal both work. An unparsable
+ * value yields 0, which is a perfectly usable seed rather than an error, so a
+ * typo silently replays the "seed 0" order instead of failing. Setting it to the
+ * empty string is the same as not setting it. */
 static inline uint64_t wasmos_test_seed(void) {
     const char* configured = getenv("WASMOS_TEST_SEED");
     if (configured && configured[0]) {
@@ -130,6 +161,12 @@ static inline uint64_t wasmos_test_seed(void) {
 /**
  * Fill `order[0..count)` with a seed-determined permutation of 0..count-1 and
  * return the seed, which the caller reports if anything fails.
+ *
+ * `order` must have room for `count` ints; the caller owns it and it is written
+ * in full. A NULL `order` or a non-positive `count` leaves it untouched and
+ * returns the seed without printing it -- the seed line marks a shuffle that
+ * actually happened. `count` is not checked against WASMOS_TEST_MAX_CASES here;
+ * the two runners do that before calling.
  */
 static inline uint64_t wasmos_test_shuffle(int* order, int count) {
     uint64_t seed = wasmos_test_seed();
@@ -164,6 +201,13 @@ static inline void wasmos_test_report_seed(uint64_t seed) {
  * Run every void case in a seed-determined order. These report failures through
  * the suite's own counter, so there is nothing to stop on; the seed is returned
  * for the caller to repeat next to its summary when that counter is non-zero.
+ *
+ * A NULL `cases`, a non-positive `count`, or a `count` past
+ * WASMOS_TEST_MAX_CASES runs nothing, complains on stdout and returns 0 -- which
+ * is indistinguishable from a legitimate seed of 0, so a caller cannot detect
+ * the rejection from the return value alone. The suite's own failure counter
+ * stays at whatever it was, so a rejected list reports as a pass unless the
+ * suite checks that its cases ran.
  */
 static inline uint64_t wasmos_test_run_all_void(const wasmos_test_void_case_t* cases, int count) {
     int order[WASMOS_TEST_MAX_CASES];
@@ -183,6 +227,13 @@ static inline uint64_t wasmos_test_run_all_void(const wasmos_test_void_case_t* c
 /**
  * Run every case in a seed-determined order, stopping at the first failure.
  * Returns 0 when all pass, 1 otherwise.
+ *
+ * Suitable as the whole body of main(). On failure it prints the case name and
+ * its marker, repeats the seed, and lists the cases run so far in the order
+ * taken -- the prefix that produced the failure. Cases after the failing one are
+ * not run, so one run reports one failure. A NULL `cases`, a non-positive
+ * `count`, or a `count` past WASMOS_TEST_MAX_CASES also returns 1, after
+ * complaining on stdout and running nothing.
  */
 static inline int wasmos_test_run_all(const wasmos_test_case_t* cases, int count) {
     int order[WASMOS_TEST_MAX_CASES];

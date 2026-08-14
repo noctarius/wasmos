@@ -13,9 +13,14 @@
 #include "wasmos/vring.h"
 #include "wasmos_driver_abi.h"
 
+/* PCI configuration mechanism #1: write a (bus, device, function, offset)
+ * address to 0xCF8, then read or write the 32-bit datum at 0xCFC. Fixed by the
+ * PCI Local Bus specification, not chosen here. */
 #define PCI_CFG_ADDR_PORT 0xCF8
 #define PCI_CFG_DATA_PORT 0xCFC
 
+/* 0x1AF4 is the Red Hat / virtio vendor id; both device ids below identify an
+ * entropy source and are accepted interchangeably. */
 #define VIRTIO_PCI_VENDOR_ID 0x1AF4u
 #define VIRTIO_RNG_DEV_LEGACY 0x1005u /* transitional/legacy entropy device */
 #define VIRTIO_RNG_DEV_MODERN 0x1044u /* 0x1040 + virtio device type 4 */
@@ -37,10 +42,19 @@
 /* One source, one entry: the request queue's completion. */
 #define VIRTIO_RNG_MSIX_ENTRY_QUEUE 0u
 
+/* Legacy vring alignment fixed by the spec's page granularity (the queue address
+ * is programmed as a page frame number). virtio-rng defines exactly one queue,
+ * index 0, the requestq; VIRTIO_RNG_MAX_QUEUE caps how large a queue this driver
+ * will accept from the device, since the descriptor bookkeeping is statically
+ * sized. */
 #define VIRTIO_PCI_VRING_ALIGN 4096u
 #define VIRTIO_RNG_REQUEST_QUEUE 0u
 #define VIRTIO_RNG_MAX_QUEUE 256u /* max supported queue size */
 
+/* Device-status bits, ORed into VIRTIO_PCI_DEVICE_STATUS in ascending order as
+ * bring-up progresses (ACK, then DRIVER, then DRIVER_OK once the queue is live).
+ * The bits accumulate; FAILED reports that the driver gave up, and a status of 0
+ * resets the device. */
 #define VIRTIO_STATUS_ACK 1u
 #define VIRTIO_STATUS_DRIVER 2u
 #define VIRTIO_STATUS_DRIVER_OK 4u
@@ -499,6 +513,17 @@ static void handle_get_bytes(int32_t source, int32_t request_id, int32_t buffer_
     (void)wasmos_ipc_send(source, g_endpoint, HRNG_IPC_RESP, request_id, n, 0, 0, 0);
 }
 
+/* Driver entry point: bring up the virtio-rng device, register under the "hrng"
+ * class, and serve HRNG_IPC_GET_BYTES_REQ forever.
+ *
+ * All four parameters are ignored; proc_endpoint is overwritten from the
+ * spawn-info contract, because the entry arguments are passed as zero.
+ *
+ * On success this does not return. The service deliberately keeps running even
+ * when its wait primitive fails -- an entropy provider that exits leaves every
+ * client blocked, so it degrades to yielding instead of quitting.
+ * TODO: the bring-up failure paths return a bare -1 rather than a packed
+ * WASMOS_ERR_DRIVER_* code from abi/errors.yaml. */
 WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t ignored_arg1,
                                       int32_t ignored_arg2, int32_t ignored_arg3) {
     proc_endpoint = wasmos_startup_proc_endpoint();

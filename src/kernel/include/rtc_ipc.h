@@ -27,6 +27,10 @@
  *   arg0=status (<0), arg1..arg3 reserved
  */
 
+/* Wall-clock time as the RTC service exchanges it.  second/minute are 0-59, hour is 0-23
+ * (24-hour clock, never 12-hour or BCD), day is 1-31, month is 1-12, and year is the full
+ * year (2026, not 26).  There is no sub-second field, no timezone and no DST flag: the
+ * value is whatever the hardware clock holds. */
 typedef struct {
     uint8_t second;
     uint8_t minute;
@@ -36,6 +40,11 @@ typedef struct {
     uint16_t year;
 } rtc_ipc_time_t;
 
+/* Pack an rtc_ipc_time_t into the two IPC arguments described above, and unpack them
+ * back.  The pack helpers return 0 for a NULL time and the unpack helper ignores a NULL
+ * output, so a NULL is indistinguishable from a genuine all-zero time.  Fields are masked
+ * to their widths rather than validated: an out-of-range month or year is truncated, not
+ * rejected.  Round-tripping is lossless for in-range values. */
 static inline int32_t rtc_ipc_pack_time_arg0(const rtc_ipc_time_t* t) {
     if (!t) {
         return 0;

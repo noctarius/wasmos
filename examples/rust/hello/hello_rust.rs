@@ -1,3 +1,26 @@
+//! WASMOS "hello world" for the Rust guest binding.
+//!
+//! Demonstrates console output (`wasmos::std::puts` / `printf`) and the async
+//! filesystem API from `wasmos::coroutine`, which is the part worth studying.
+//!
+//! Every `*_async` call returns an `AsyncFsOp`; `then` chains the next step onto
+//! it and yields a `*mut Future`, and `catch` handles a rejection. Returning
+//! that future from a step is what schedules the next one, and
+//! `coroutine::run_async_app` drives the whole chain to completion and returns
+//! the app's exit status. Returning a null future ends the chain, which is what
+//! the `fail_*` helpers do after printing their diagnostic.
+//!
+//! The chain reads one byte of `/boot/startup.nsh`, then creates a file with a
+//! long (non-8.3) name, writes to it, reads it back for comparison, unlinks it,
+//! and finally stats the removed path expecting that stat to reject — the
+//! rejection path is where the success lines are printed.
+//!
+//! `#![no_std]` and `extern "C"` callbacks cannot capture, so the fd and the
+//! read buffers threaded through the chain live in the `APP` singleton.
+//!
+//! Preconditions: `/boot/startup.nsh` must exist and be at least one byte, and
+//! the working directory must be writable — the test file is created with a
+//! relative path.
 #![no_std]
 #![no_main]
 

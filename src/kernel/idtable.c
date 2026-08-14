@@ -93,6 +93,14 @@ uint32_t idtable_count_for_owner(const idtable_t* table, uint32_t owner_context_
     return used;
 }
 
+/* The returned element has only its idtable_header_t filled in; the payload is
+ * zeroed by the store and is the caller's to populate.  The array-chunk store
+ * never relocates a slot, so the pointer stays valid until the element is freed
+ * or the table destroyed — but the id, not the pointer, is the handle to keep.
+ *
+ * *out_status is set on every path when non-NULL: WASMOS_OK, WASMOS_INVAL for a
+ * NULL table, or WASMOS_FULL both for an owner at per_owner_max and for a store
+ * that cannot grow. */
 void* idtable_alloc(idtable_t* table, uint32_t owner_context_id, int* out_status) {
     int status = WASMOS_OK;
     void* elem = 0;
@@ -197,6 +205,11 @@ uint32_t idtable_release_owner(idtable_t* table, uint32_t owner_context_id,
 }
 
 #ifdef WASMOS_IDTABLE_TEST_SEAMS
+/* Test seam, compiled only under WASMOS_IDTABLE_TEST_SEAMS.  Forces the id
+ * counter and the wrapped flag so a unit test can reach the post-wrap
+ * collision-avoidance path without allocating 2^32 ids.  No validation: setting
+ * next_id to 0 or IDTABLE_ID_NONE is allowed and simply skipped by
+ * idtable_alloc_id. */
 void idtable_test_set_next_id(idtable_t* table, uint32_t next_id, int wrapped) {
     if (!table) {
         return;

@@ -1,4 +1,22 @@
-/* Runtime-behaviour tests for the single-worker native coroutine/future core. */
+/* Runtime-behaviour tests for the single-worker native coroutine/future core.
+ *
+ * Nothing here is stubbed: the binary links src/libsys/native/coroutine_native.c
+ * together with coroutine_native_x86_64.S or coroutine_native_aarch64.S built
+ * for the build host, so the scheduler AND the register-level context switch
+ * under test are the shipping implementations, exercised through the host ABI
+ * rather than the kernel's.
+ *
+ * These coroutines are stackful, so no blocking has to be simulated: a task
+ * suspends by really switching stacks (wasmos_native_coroutine_yield, or an
+ * await that parks on a future) and resumes where it left off, exactly as on
+ * target. That is the one behavioural difference from the stackless WASM suite
+ * in tests/unit/test_wasm_coroutine.c, whose tasks suspend by returning.
+ *
+ * Every stack is a plain array inside the case's own state struct -- the runtime
+ * allocates nothing -- and coroutine_native.c keeps the active runtime in a
+ * file-global for the duration of a resume, so the cases must stay
+ * single-threaded even though the runner shuffles their order.
+ */
 #include <stdint.h>
 
 #include "test_shuffle.h"

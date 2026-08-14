@@ -8,7 +8,16 @@
  * releases the driver lock and the runtime binding before the call and clears
  * the need_resched that accumulated during ring-0 startup. Zero means there is
  * no ring-3 address space for this call: the export runs in ring 0 and the lock
- * is held across it. */
+ * is held across it.
+ *
+ * src/kernel/warp_driver_ring3_call_policy.c is the only source linked in and
+ * the function it holds is pure, so nothing is stubbed and the two cases are
+ * exhaustive over its input: zero and non-zero. What the caller then DOES with
+ * the policy lives in warp_driver.cpp and is not covered here.
+ *
+ * The cases report through assert(), so the first failure aborts the process and
+ * the trailing "ok" line prints only if both ran to completion. The suite is
+ * compiled without -DNDEBUG, which those asserts depend on. */
 
 #include <assert.h>
 #include <stdio.h>

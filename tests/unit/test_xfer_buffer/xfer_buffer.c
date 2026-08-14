@@ -10,11 +10,20 @@
 #include "wasmos_driver_abi.h"
 #include "xfer_buffer.h"
 
+/* Suite-wide tally, threaded through every case. Counts individual checks, not
+ * cases: `failed` is the number of failing assertions across the whole run. */
 typedef struct {
     uint32_t passed;
     uint32_t failed;
 } test_stats_t;
 
+/* Count-and-continue assertion: tallies the outcome and prints one
+ * [pass]/[fail] line naming the check, then returns either way. A failing check
+ * does not abort its case, so the checks after it run against whatever state
+ * the failure left behind. `condition` is a plain truth value, and the polarity
+ * differs per API under test: the registry entry points return 0 on success and
+ * nonzero on failure, while xfer_buffer_can_access/xfer_buffer_same_object are
+ * predicates returning 1 for yes. Each call site spells out which it means. */
 static void check(test_stats_t* stats, int condition, const char* name) {
     if (condition) {
         stats->passed++;
@@ -1494,6 +1503,9 @@ static void test_get_borrowed(test_stats_t* stats) {
           "get_borrowed cleanup releases the owner object");
 }
 
+/* Runs every case in a fixed order — the registry is a process-wide singleton
+ * and the cases clean up after themselves rather than resetting it, so the
+ * order is part of the fixture. Exits 1 when any check failed, 0 otherwise. */
 int main(void) {
     test_stats_t stats = {0};
 

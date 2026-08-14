@@ -5,10 +5,38 @@
 
 #include "wasmos_status.h" /* generated transport axis; see the asserts below */
 
+/*
+ * Kernel IPC transport.
+ *
+ * LOCK ORDER, file-wide and mandatory for anything reaching into ipc.c:
+ *   g_select_table_lock -> g_endpoint_table_lock -> ep->lock -> an event lock
+ *   (ep->event.lock, or sel->event.lock via poll_notify -> ipc_select_signal).
+ * No two endpoint locks are ever held at once, which is why the send path
+ * checks the sender's ownership through the table lock alone.
+ *
+ * BLOCKING. Everything here returns immediately except ipc_recv_blocking_for,
+ * ipc_endpoint_wait_for, ipc_select_wait and ipc_select_recv, which park the
+ * calling thread through sched_event_wait. A parked caller may resume
+ * spuriously and must loop.
+ */
+
+/* Messages an endpoint can hold before ipc_send_from starts refusing with
+ * IPC_ERR_FULL. There is no backpressure short of that: the sender is never
+ * blocked, so a slow receiver turns into dropped sends at its peers. */
 #define IPC_QUEUE_DEPTH 32
+/* Endpoints per kmem chunk of the endpoint table. A growth granularity, not a
+ * ceiling -- see IPC_ENDPOINT_PER_CONTEXT_MAX for the actual bound. */
 #define IPC_ENDPOINT_TABLE_CHUNK 16u
+/* The kernel's own context id. Passing it as the sender/receiver context
+ * bypasses every ownership check, so it must never be used on behalf of a
+ * guest; pass that guest's context id instead. */
 #define IPC_CONTEXT_KERNEL 0u
+/* Reserved id meaning "no endpoint". Never allocated, and rejected by every
+ * lookup, so it is safe as an uninitialised value. */
 #define IPC_ENDPOINT_NONE ((uint32_t)~0u)
+/* Endpoints one select set may watch. A fixed array in the set, so a ninth
+ * distinct endpoint is refused with IPC_ERR_FULL (re-adding one already watched
+ * is not, and stays a no-op even on a full set). */
 #define IPC_SELECT_EPS_MAX 8u
 
 /*
@@ -70,6 +98,16 @@ typedef enum {
     IPC_ENDPOINT_TYPE_NOTIFICATION = 1
 } ipc_endpoint_type_t;
 
+/* The entire message: 32 bytes, copied by value into and out of the queue, with
+ * no out-of-line payload. Anything larger travels in a transfer buffer whose id
+ * is carried in one of the args.
+ *
+ * `type` is the protocol opcode (abi/opcodes.yaml). `source` is the endpoint a
+ * reply should be sent to and is verified against the sender's context by
+ * ipc_send_from -- a non-kernel sender cannot name an endpoint it does not own.
+ * `destination` is OVERWRITTEN by the send with the endpoint actually delivered
+ * to, so a receiver can trust it. `request_id` correlates a reply with its
+ * request; the remaining four words are opcode-specific. */
 typedef struct {
     uint32_t type;
     uint32_t source;
@@ -81,11 +119,36 @@ typedef struct {
     uint32_t arg3;
 } ipc_message_t;
 
+/* Create the endpoint and select tables. Panics if either cannot be
+ * initialised, since nothing in the system works without them. Call once,
+ * early, before any endpoint is created. */
 void ipc_init(void);
+/* Create a MESSAGE / NOTIFICATION endpoint owned by owner_context_id and return
+ * its id in *out_endpoint. Both kinds come from the same table and share one
+ * per-context quota, so asking for a notification does not buy a second
+ * allowance. Returns IPC_OK, IPC_ERR_INVALID for a NULL out pointer, or
+ * IPC_ERR_FULL at the quota or when the table cannot grow. */
 int ipc_endpoint_create(uint32_t owner_context_id, uint32_t* out_endpoint);
 int ipc_notification_create(uint32_t owner_context_id, uint32_t* out_endpoint);
+/* Owning context of an endpoint, for either kind. Returns IPC_OK,
+ * IPC_ERR_NOENT if no such endpoint exists, or IPC_ERR_INVALID for a NULL out
+ * pointer. The workhorse of PM-side authorisation: "who owns the endpoint this
+ * request claims as its source?". */
 int ipc_endpoint_owner(uint32_t endpoint, uint32_t* out_owner_context_id);
+/* Queued message count. A snapshot taken under the endpoint lock and stale as
+ * soon as it is returned. Returns IPC_OK / IPC_ERR_NOENT / IPC_ERR_INVALID. */
 int ipc_endpoint_count(uint32_t endpoint, uint32_t* out_count);
+/*
+ * Enqueue a copy of *message on a MESSAGE endpoint and wake one waiter plus any
+ * select sets watching it. Never blocks and never overwrites: a full queue is
+ * refused with IPC_ERR_FULL and the caller decides what to do.
+ *
+ * Any context may send to any message endpoint -- send is the one operation
+ * without an owner check. What IS checked is message->source: a non-kernel
+ * sender must own it, else IPC_ERR_PERM. Also IPC_ERR_INVALID for a NULL
+ * message, IPC_ERR_NOENT for an unknown endpoint, IPC_ERR_UNSUPPORTED for a
+ * notification endpoint.
+ */
 int ipc_send_from(uint32_t sender_context_id, uint32_t endpoint, const ipc_message_t* message);
 /* Non-blocking dequeue: IPC_OK with *out_message filled, or IPC_EMPTY when the
  * queue is empty. Only the endpoint's owner may receive from it. */
@@ -95,10 +158,21 @@ int ipc_recv_for(uint32_t receiver_context_id, uint32_t endpoint, ipc_message_t*
  * Use for callers that want to sleep until a message arrives (e.g. WASM host
  * ipc_recv, kernel_init_runtime).
  * On spurious wake returns IPC_EMPTY; caller should retry.
+ * Waits without a timeout, so a caller that is never sent to never returns.
+ * Also returns IPC_ERR_PEER_GONE if the endpoint was destroyed while parked --
+ * distinct from IPC_ERR_NOENT, because the handle WAS valid at the block.
  */
 int ipc_recv_blocking_for(uint32_t receiver_context_id, uint32_t endpoint,
                           ipc_message_t* out_message);
+/* Raise a NOTIFICATION endpoint's counter by one and signal any select set
+ * watching it. Unlike a message send this is owner-only (IPC_ERR_PERM
+ * otherwise). The counter SATURATES at UINT32_MAX rather than wrapping, so
+ * notifications past that point are silently coalesced instead of being read as
+ * zero. Never blocks. */
 int ipc_notify_from(uint32_t sender_context_id, uint32_t endpoint);
+/* Consume one pending notification. Despite the name it does NOT block:
+ * IPC_OK when a notification was consumed, IPC_EMPTY when the counter is zero.
+ * Owner-only; IPC_ERR_UNSUPPORTED on a message endpoint. */
 int ipc_wait_for(uint32_t receiver_context_id, uint32_t endpoint);
 /*
  * ipc_endpoint_wait_for — block until a MESSAGE endpoint is non-empty or
@@ -113,6 +187,11 @@ int ipc_send(uint32_t endpoint, const ipc_message_t* message);
 int ipc_recv(uint32_t endpoint, ipc_message_t* out_message);
 int ipc_notify(uint32_t endpoint);
 int ipc_wait(uint32_t endpoint);
+/* Destroy every endpoint owned by owner_context_id, aborting its waiters
+ * (SCHED_PEND_ABORT) and freeing its poll hub first, so nothing is left parked
+ * on an endpoint that no longer exists. Called from process teardown; a
+ * context id of 0 (the kernel) is ignored, since kernel endpoints outlive any
+ * one process. */
 void ipc_endpoints_release_owner(uint32_t owner_context_id);
 
 /*
@@ -142,13 +221,33 @@ void ipc_endpoints_release_owner(uint32_t owner_context_id);
 #define IPC_SELECT_PER_CONTEXT_MAX 8u
 #define IPC_ENDPOINT_PER_CONTEXT_MAX 64u
 
+/* Create an empty select set owned by owner_context_id. Returns IPC_OK,
+ * IPC_ERR_INVALID for a NULL out pointer, or IPC_ERR_FULL at the per-context
+ * quota. */
 int ipc_select_create(uint32_t owner_context_id, uint32_t* out_select_id);
+/* Watch endpoint_id with this set (either endpoint kind). Only the set's owner
+ * may add, and the endpoint must resolve -- an unknown id is REFUSED with
+ * IPC_ERR_NOENT rather than recorded, because a recorded-but-unwatchable
+ * endpoint yields a set that blocks forever while the caller believes it is
+ * watched. Adding an endpoint already in the set is a successful no-op, even
+ * when the set is full. Otherwise IPC_ERR_PERM, or IPC_ERR_FULL at
+ * IPC_SELECT_EPS_MAX or when the watcher cannot be allocated. */
 int ipc_select_add(uint32_t select_id, uint32_t endpoint_id, uint32_t owner_context_id);
 /* Block until a watched endpoint is ready, or timeout_ms elapses (0 = forever).
- * On timeout returns IPC_EMPTY. */
+ * On timeout returns IPC_EMPTY.
+ *
+ * Readiness is a single-slot LATCH, not a queue: two endpoints becoming ready
+ * before the waiter runs report only the later one, so the caller must treat
+ * the returned endpoint as a hint and be willing to poll the others. IPC_EMPTY
+ * also covers a spurious wake and a set destroyed underneath the waiter -- all
+ * three mean "loop". Owner-only (IPC_ERR_PERM); IPC_ERR_NOENT for an unknown
+ * set, IPC_ERR_INVALID for a NULL out pointer. */
 int ipc_select_wait(uint32_t select_id, uint32_t owner_context_id, uint32_t* out_ready_ep,
                     uint32_t timeout_ms);
-/* Create a select set watching endpoints[0..count). */
+/* Create a select set watching endpoints[0..count). All-or-nothing: if any add
+ * fails the partially built set is destroyed and that error is returned, so
+ * *out_select_id is written only on IPC_OK. count 0 or a NULL pointer gives
+ * IPC_ERR_INVALID. */
 int ipc_select_listen(uint32_t owner_context_id, const uint32_t* endpoints, uint32_t count,
                       uint32_t* out_select_id);
 /* Block until a watched endpoint has a message (or timeout_ms elapses; 0 =
@@ -156,10 +255,18 @@ int ipc_select_listen(uint32_t owner_context_id, const uint32_t* endpoints, uint
  * lost race; loop) / error. */
 int ipc_select_recv(uint32_t select_id, uint32_t owner_context_id, uint32_t* out_endpoint,
                     ipc_message_t* out_message, uint32_t timeout_ms);
+/* Unregister the set's watchers from every endpoint it watches, abort its
+ * waiters (they see IPC_EMPTY), and free it. Silent no-op for an unknown set or
+ * a non-owner -- there is no return value, so a caller cannot tell the two
+ * apart from a successful destroy. */
 void ipc_select_destroy(uint32_t select_id, uint32_t owner_context_id);
 
 struct ipc_select;
-/* Called by poll_notify to signal a select set from the sender side. */
+/* Called by poll_notify to signal a select set from the sender side.
+ * Latches ep_id as the ready endpoint (overwriting any previous one) and wakes
+ * one waiter, both under the set's event lock -- the single authority that
+ * makes the check-then-block in ipc_select_wait lost-wakeup free. Runs with the
+ * signalling endpoint's lock held, which the file-wide lock order permits. */
 void ipc_select_signal(struct ipc_select* sel, uint32_t ep_id);
 
 #ifdef WASMOS_IPC_TEST_SEAMS

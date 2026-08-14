@@ -1,4 +1,19 @@
 #pragma once
+/* compat/sstream — freestanding stub of <sstream>
+ *
+ * Provides std::stringstream with a discarding operator<< and a str() that
+ * always returns the empty string "".  No istringstream, no ostringstream, no
+ * str(s) setter, no rdbuf.
+ *
+ * The single WARP source that includes <sstream>, utils/MemUtils.cpp, builds an
+ * mmap-backed file name with it and is not compiled into the kernel — the
+ * kernel uses warp/mem_utils_kernel.cpp instead.  So this file exists to keep
+ * the include resolvable, and nothing in the kernel depends on its behaviour.
+ *
+ * Do not build a string with it: str() discards the inserted values and returns
+ * "" rather than the accumulated text, and the return type is const char *
+ * instead of std::string.  That is a silent wrong value at runtime, not a
+ * compile error, for any caller that only reads str(). */
 #include "ostream"
 namespace std {
 struct stringstream : ostream {

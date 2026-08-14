@@ -1,3 +1,36 @@
+/* menu_bar - the system menu bar, and the reference for libui's menu system.
+ *
+ * A full application rather than a smoke test: it owns the top-of-screen bar
+ * with a "WasmOS" system menu (Reboot, Shutdown) and an "Apps" menu that lists
+ * the running applications, grouped by owning process, with one entry per
+ * window that focuses it.
+ *
+ * What it demonstrates:
+ *   - ui_menu_bar_init, which creates a topmost, chrome-less, task-list-less
+ *     window spanning the display and roots the tree in a MENU_BAR;
+ *   - building menus as a component tree: ui_component_create_menu_item for a
+ *     bar item, ui_menu_item_add_item for each entry, and a leaf's on_click for
+ *     the action. Popups are separate compositor windows managed by libui;
+ *   - an event loop that blocks. wasmos_ipc_select_wait_timeout parks on the
+ *     event endpoint with a ~250 ms bound, so pushed events wake it at once
+ *     while the clock and the app list still refresh at idle without polling;
+ *   - reading a service reply into a shmem buffer: GFX_IPC_GET_WINDOW_TITLE
+ *     writes into a region this app created and mapped once, and
+ *     wasmos_shmem_refresh must be called before the bytes are read back;
+ *   - wasmos_sync_user_read after wasmos_proc_info_stats, because the kernel
+ *     writes those structs into linear memory behind the guest's back.
+ *
+ * Two identity pitfalls are worth copying: wasmos_ipc_endpoint_owner returns a
+ * context id, not a pid, which is why process lookup matches on
+ * wasmos_proc_stats_t::context_id; and MENU_BAR layout reads a child's
+ * preferred_h as its WIDTH.
+ *
+ * The app-list rebuild tears down and recreates the Apps subtree, so it is
+ * skipped while that menu is open — rebuilding under an open popup would
+ * destroy the popup windows and drop focus.
+ *
+ * Preconditions: the "gfx" and "font" services must be running. The "rtc"
+ * service is optional: without it the clock is simply not drawn. */
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>

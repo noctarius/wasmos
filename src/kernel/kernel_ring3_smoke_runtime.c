@@ -32,6 +32,18 @@ static process_run_result_t ring3_probe_bootstrap_entry(process_t* process, void
     return PROCESS_RUN_EXITED;
 }
 
+/* Asserts the shared-memory ownership rules by exercising them directly in
+ * kernel context: a region created and retained by owner_context_id must refuse
+ * get_phys, retain and release from foreign_context_id, and must accept them
+ * once granted.
+ *
+ * Reports only through klog — "[test] shmem owner ... ok" or "... mismatch" —
+ * so the boot harness greps the log; there is no return value and a failure does
+ * not stop anything.  Both contexts must be non-zero and distinct, or the test
+ * silently does nothing.
+ *
+ * It creates and releases its own region, so it leaves no state behind unless
+ * cleanup itself fails, which is logged separately. */
 void kernel_shmem_owner_isolation_test(uint32_t owner_context_id, uint32_t foreign_context_id) {
     uint32_t shmem_id = 0;
     uint64_t phys = 0;
@@ -71,6 +83,10 @@ void kernel_shmem_owner_isolation_test(uint32_t owner_context_id, uint32_t forei
     }
 }
 
+/* The same deny-then-grant sequence as kernel_shmem_owner_isolation_test, run
+ * for the ring-3 configuration and logging under the "[test] ring3 shmem ..."
+ * prefix instead.  Unlike that one, an invalid context pair is reported as a
+ * setup failure rather than ignored. */
 void kernel_ring3_shmem_isolation_test(uint32_t owner_context_id, uint32_t foreign_context_id) {
     uint32_t shmem_id = 0;
     uint64_t phys = 0;
@@ -111,6 +127,20 @@ void kernel_ring3_shmem_isolation_test(uint32_t owner_context_id, uint32_t forei
     }
 }
 
+/* Walks the whole shared-memory misuse matrix in one pass and reports a single
+ * verdict: an unknown id refused for every operation, a non-owner refused grant
+ * and revoke, an ungranted map refused, a granted map and unmap accepted,
+ * revoking twice accepted (revoke is idempotent), a map after revoke refused, a
+ * release without a reference refused, and finally a double release by the owner
+ * refused.
+ *
+ * ring3_mode only selects the log prefix ("[test] ring3 shmem misuse matrix" vs
+ * "[test] shmem misuse matrix"); the checks are identical.  Every failure
+ * collapses into one "mismatch" line, so the log says the matrix failed but not
+ * which cell.
+ *
+ * Both contexts must be non-zero and distinct, or the test silently does
+ * nothing.  It cleans up the region it created. */
 void kernel_shmem_misuse_matrix_test(uint32_t owner_context_id, uint32_t foreign_context_id,
                                      uint8_t ring3_mode) {
     uint32_t shmem_id = 0;

@@ -19,6 +19,12 @@ static size_t align_up(size_t v, size_t a) {
     return (v + (a - 1u)) & ~(a - 1u);
 }
 
+/* STBTT_malloc hook.  Bump-allocates `size` bytes from the static arena, aligned
+ * to a pointer boundary.  `user` is stbtt's opaque userdata and is ignored.
+ * Returns NULL for a zero size and when the arena has no room left — stbtt
+ * handles a NULL by abandoning the operation, so exhaustion shows up as a failed
+ * rasterisation, not a crash.  The returned block stays valid until the next
+ * wasmos_stbtt_alloc_reset, which invalidates every outstanding block at once. */
 void* wasmos_stbtt_malloc(size_t size, void* user) {
     (void)user;
     if (size == 0) {
@@ -32,11 +38,18 @@ void* wasmos_stbtt_malloc(size_t size, void* user) {
     return &g_stbtt_alloc_buf[off];
 }
 
+/* STBTT_free hook.  A no-op: the arena has no per-block free.  Space is only
+ * reclaimed by wasmos_stbtt_alloc_reset. */
 void wasmos_stbtt_free(void* ptr, void* user) {
     (void)ptr;
     (void)user;
 }
 
+/* Rewind the arena to empty, invalidating every pointer wasmos_stbtt_malloc has
+ * returned since the last reset.  Call it immediately BEFORE a self-contained
+ * stbtt operation, never between allocating and using a glyph — the font service
+ * calls it once per raster request.  Cheap (a single store) and always
+ * succeeds. */
 void wasmos_stbtt_alloc_reset(void) {
     g_stbtt_alloc_off = 0;
 }

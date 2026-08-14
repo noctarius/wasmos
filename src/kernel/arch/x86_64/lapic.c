@@ -187,6 +187,17 @@ static void lapic_timer_set_hz(uint32_t hz) {
 
 /* --------------------------------------------------------------------- API */
 
+/* Bring this CPU's LAPIC up and start its periodic timer. hz is the requested
+ * tick rate; 0 is treated as 250 Hz. Maps the MMIO page (a mapping failure is
+ * logged and leaves g_lapic_base zero, after which every register access here
+ * dereferences a null base), software-enables the LAPIC, configures LINT0 or
+ * masks the 8259 depending on WASMOS_IRQ_MODE, and programs LVT_TIMER at
+ * IRQ_VECTOR_BASE. BSP only; an AP calls lapic_ap_enable() instead, because the
+ * MMIO page is already mapped and shared.
+ *
+ * Calibration busy-waits ~10 ms on PIT channel 2 with interrupts in whatever
+ * state the caller left them, so this must not be called from a latency-critical
+ * path. The resulting tick rate is only as accurate as that one-shot sample. */
 void lapic_init(uint32_t hz) {
     lapic_map();
     lapic_enable();
@@ -212,6 +223,11 @@ void lapic_init(uint32_t hz) {
     serial_write("[lapic] init ok\n");
 }
 
+/* Clear the highest-priority in-service bit on the calling CPU's LAPIC. Applies
+ * to whatever that CPU is currently servicing, so it must be issued exactly once
+ * per LAPIC-delivered interrupt and never for one delivered through LINT0 in
+ * ExtINT mode, which sets no ISR bit. For a level-triggered IOAPIC vector the
+ * write also broadcasts an EOI back to the IOAPIC, clearing its Remote IRR. */
 void lapic_eoi(void) {
     lapic_write(LAPIC_REG_EOI, 0u);
 }
@@ -238,10 +254,24 @@ static void io_delay_us(uint32_t us) {
     }
 }
 
+/* Hardware APIC ID of the calling CPU, taken from the top byte of the xAPIC ID
+ * register. This is the destination value the IPI senders below expect, and it
+ * is unrelated to the logical cpu_id used to index g_cpus[]. */
 uint32_t lapic_read_id(void) {
     return lapic_read(LAPIC_REG_ID) >> 24;
 }
 
+/* INIT-SIPI-SIPI sender half, addressed by hardware apic_id in physical
+ * destination mode.
+ *
+ * Both spin until the ICR delivery-status bit clears and then busy-wait the
+ * minimum the Intel SDM's "MP Initialization Protocol Algorithm for MP Systems"
+ * requires — 10 ms after INIT, 200 us after each SIPI — using an outb-to-0x80
+ * delay whose duration is approximate. Neither reports whether the target
+ * accepted anything; the caller detects success by polling the AP's own started
+ * flag. lapic_send_sipi's vector selects the AP's real-mode entry point at
+ * vector << 12, so it must be page-aligned below 1 MB. The ICR is per-CPU state,
+ * so these must not run concurrently on the same CPU. */
 void lapic_send_init_ipi(uint32_t apic_id) {
     lapic_write(LAPIC_REG_ICR_HI, apic_id << 24);
     lapic_write(LAPIC_REG_ICR_LO, LAPIC_ICR_LEVEL_ASSERT | LAPIC_ICR_DELIVERY_INIT);
@@ -273,6 +303,13 @@ void lapic_send_nmi_allbutself(void) {
         ;
 }
 
+/* AP-side counterpart of lapic_init(): software-enables the calling AP's own
+ * LAPIC and starts its periodic timer at hz (0 means 250 Hz). Skips the MMIO
+ * mapping and the PIC work, both of which the BSP already did and which are
+ * machine-wide rather than per-CPU. Must run on the AP itself, after
+ * x86_ap_cpu_init() has installed an IDT, since the first tick can arrive as soon
+ * as interrupts are enabled. Calibrates against PIT channel 2 exactly as the BSP
+ * path does, so it must not run concurrently with another CPU's calibration. */
 void lapic_ap_enable(uint32_t hz) {
     lapic_enable();
     /* BSP already masked the PIC; pic_disable() here would be a no-op. */

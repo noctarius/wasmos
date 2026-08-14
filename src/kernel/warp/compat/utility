@@ -1,6 +1,26 @@
 #pragma once
 /* compat/utility — freestanding shadow of <utility>
- * Provides: std::move, std::forward, std::swap, std::pair. */
+ *
+ * Provides move, forward (both overloads), swap, pair, make_pair and pair's
+ * ==/!=.  move and forward are the only two names WARP takes from <utility>
+ * (roughly thirty call sites across the compiler backends, WasmModule and
+ * Span); no compiled WARP source uses std::pair, std::swap, std::exchange or
+ * std::declval-from-here, so pair and swap are provided for kernel-side glue
+ * rather than to satisfy WARP.
+ *
+ * move, forward and swap are faithful: same static_cast lowering, same
+ * rvalue-as-lvalue static_assert in forward, so they carry no runtime cost or
+ * behaviour difference.  index_sequence and make_index_sequence, which the real
+ * <utility> also declares, live in compat/type_traits instead — a source that
+ * includes only <utility> and expects them fails to compile.
+ *
+ * pair is a simplification: it has no piecewise/allocator constructors, no
+ * converting constructor from pair<U1,U2>, no swap member, and only ==/!=
+ * (no ordering).  It also has no first_type/second_type conversions, so the
+ * templated two-argument constructor will greedily accept mismatched types and
+ * fail inside the member initialisers rather than by overload resolution.
+ * std::tuple lives in compat/tuple, which this header includes for the
+ * circular-dependency break documented there. */
 
 #include "type_traits"
 #include "tuple"

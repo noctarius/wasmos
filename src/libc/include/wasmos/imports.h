@@ -10,6 +10,11 @@
 
 #include <stdint.h>
 
+/* WASMOS_WASM_IMPORT(module, symbol) annotates a declaration as an import of
+ * `symbol` from WASM module `module`; WASMOS_WASM_EXPORT marks a definition as a
+ * WASM export the kernel may call by name (wasmos_main, initialize). Both expand
+ * to nothing outside a WASM target, where the symbols are ordinary externs and
+ * definitions resolved at link time. */
 #if defined(__wasm__)
 #define WASMOS_WASM_IMPORT(module_name, symbol_name)                                               \
     __attribute__((import_module(module_name), import_name(symbol_name)))

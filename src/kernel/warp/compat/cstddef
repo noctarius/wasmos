@@ -1,6 +1,15 @@
 #pragma once
 /* compat/cstddef — freestanding shadow of <cstddef>
- * Pulls in the freestanding C header and re-exports into namespace std. */
+ *
+ * Pulls in clang's own freestanding <stddef.h> (on the WARP include path via
+ * -isystem <clang resource dir>/include) and re-exports size_t, ptrdiff_t and
+ * nullptr_t into namespace std.  Those are faithful — the underlying types come
+ * from the compiler, not from a hand-written guess — so std::size_t here is the
+ * same type as ::size_t everywhere else in the kernel.
+ *
+ * std::size_t is all the compiled WARP sources need from <cstddef>; std::byte
+ * is C++17 and std::max_align_t is unused.  Anything missing is a compile
+ * error at the point of use. */
 
 #include <stddef.h>
 

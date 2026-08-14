@@ -90,6 +90,10 @@ void* memset(void* dst, int c, size_t n) {
     return ret;
 }
 
+/* Overlap-safe copy: it copies backward only when dst falls strictly inside
+ * [src, src+n), and forward otherwise, so both directions get the same 8-byte
+ * chunking as memcpy.  Identical pointers and a zero n return immediately.  The
+ * chunked loads and stores are unaligned by construction. */
 void* memmove(void* dst, const void* src, size_t n) {
     uint8_t* d = (uint8_t*)dst;
     const uint8_t* s = (const uint8_t*)src;
@@ -144,6 +148,9 @@ void* memmove(void* dst, const void* src, size_t n) {
     return dst;
 }
 
+/* Returns exactly -1, 0 or 1 from the first differing byte compared as unsigned,
+ * not the byte difference C permits.  Neither pointer is NULL-checked or rebased
+ * through kernel_str_ptr; a zero n compares equal without any dereference. */
 int memcmp(const void* a, const void* b, size_t n) {
     const uint8_t* pa = (const uint8_t*)a;
     const uint8_t* pb = (const uint8_t*)b;
@@ -155,6 +162,10 @@ int memcmp(const void* a, const void* b, size_t n) {
     return 0;
 }
 
+/* NULL yields 0 instead of faulting, which is the house convention across this
+ * file.  Unlike strnlen and the compare/copy family, this does NOT apply
+ * kernel_str_ptr: s is read exactly as given, so a low-VA string literal needs a
+ * root that still identity-maps low memory. */
 size_t strlen(const char* s) {
     if (!s) {
         return 0;
@@ -166,6 +177,8 @@ size_t strlen(const char* s) {
     return len;
 }
 
+/* Never reads past max_len bytes, so an unterminated buffer returns max_len.
+ * NULL yields 0.  Rebases s through kernel_str_ptr. */
 size_t strnlen(const char* s, size_t max_len) {
     if (!s) {
         return 0;
@@ -178,6 +191,10 @@ size_t strnlen(const char* s, size_t max_len) {
     return len;
 }
 
+/* Returns -1, 0 or 1 — normalised, unlike strncmp and strcasecmp below, which
+ * return the character difference.  Compares as signed char, so bytes >= 0x80
+ * order below ASCII.  NULL is accepted and sorts before any string; two NULLs
+ * compare equal.  Both sides are rebased through kernel_str_ptr. */
 int strcmp(const char* a, const char* b) {
     a = kernel_str_ptr(a);
     b = kernel_str_ptr(b);
@@ -203,6 +220,10 @@ int strcmp(const char* a, const char* b) {
     return (*a < *b) ? -1 : 1;
 }
 
+/* Compares at most n bytes as UNSIGNED char and returns their difference, not a
+ * normalised -1/0/1 as strcmp does.  A zero n, or identical pointers, compares
+ * equal without dereferencing either side; otherwise NULL is accepted and sorts
+ * first.  Both sides are rebased through kernel_str_ptr. */
 int strncmp(const char* a, const char* b, size_t n) {
     if (n == 0 || a == b) {
         return 0;
@@ -228,6 +249,9 @@ int strncmp(const char* a, const char* b, size_t n) {
     return 0;
 }
 
+/* Case-insensitive over ASCII A-Z only — tolower has no locale and leaves every
+ * other byte alone.  Returns the difference of the folded unsigned bytes, like
+ * strncmp.  Unbounded: it runs to the first NUL on either side. */
 int strcasecmp(const char* a, const char* b) {
     if (a == b) {
         return 0;
@@ -254,6 +278,9 @@ int strcasecmp(const char* a, const char* b) {
     }
 }
 
+/* Unbounded copy including the terminator; dst must already be large enough.
+ * Returns dst in every case, so the return value does not distinguish a copy
+ * from the NULL-argument no-op — prefer str_copy, which bounds the write. */
 char* strcpy(char* dst, const char* src) {
     if (!dst || !src) {
         return dst;
@@ -266,6 +293,10 @@ char* strcpy(char* dst, const char* src) {
     return dst;
 }
 
+/* Standard strncpy semantics, with the standard trap: it writes exactly n bytes,
+ * NUL-padding a short source, and does NOT terminate when src is n bytes or
+ * longer.  Returns dst unconditionally.  str_copy is the truncate-and-terminate
+ * alternative. */
 char* strncpy(char* dst, const char* src, size_t n) {
     if (!dst || !src) {
         return dst;
@@ -282,6 +313,14 @@ char* strncpy(char* dst, const char* src, size_t n) {
     return dst;
 }
 
+/* Turns a counted byte range into a NUL-terminated string, REFUSING rather than
+ * truncating when it would not fit — the counterpart to str_copy, which
+ * truncates.  src is raw bytes and need not be terminated; embedded NULs are
+ * copied through unchanged.
+ *
+ * Returns 0 on success and -1 on refusal: a NULL argument, a zero dst_len, a
+ * zero src_len, or src_len >= dst_len (the terminator needs the last byte).  On
+ * refusal dst is left untouched, so it is not made a valid string. */
 int str_copy_bytes(char* dst, size_t dst_len, const uint8_t* src, size_t src_len) {
     if (!dst || !src || dst_len == 0 || src_len == 0 || src_len >= dst_len) {
         return -1;
@@ -314,6 +353,11 @@ size_t str_copy(char* dst, size_t dst_len, const char* src) {
     return i;
 }
 
+/* Compares an unterminated byte range against a C string literal.  Note the
+ * INVERTED polarity relative to strcmp: 1 means equal, 0 means different.
+ * Equality requires the lengths to match exactly, so a prefix is not a match, and
+ * a NUL inside `bytes` before bytes_len makes it differ.  Either pointer NULL is
+ * reported as different.  lit is rebased through kernel_str_ptr. */
 int str_eq_bytes(const uint8_t* bytes, size_t bytes_len, const char* lit) {
     size_t i = 0;
     if (!bytes || !lit) {
@@ -329,6 +373,10 @@ int str_eq_bytes(const uint8_t* bytes, size_t bytes_len, const char* lit) {
     return i == bytes_len;
 }
 
+/* Returns a pointer INTO s (rebased through kernel_str_ptr, so not necessarily
+ * equal to the caller's s plus an offset) at the first occurrence of ch, or 0
+ * when absent.  ch is truncated to char, and searching for '\0' finds the
+ * terminator, as the standard requires. */
 char* strchr(const char* s, int ch) {
     if (!s) {
         return 0;
@@ -347,6 +395,8 @@ char* strchr(const char* s, int ch) {
     return 0;
 }
 
+/* As strchr but returns the LAST occurrence.  Same rebasing caveat and same
+ * '\0' behaviour. */
 char* strrchr(const char* s, int ch) {
     const char* last = 0;
     if (!s) {
@@ -417,10 +467,30 @@ static size_t append_i64(char* buf, size_t size, size_t pos, int64_t value) {
 }
 
 /* Formats into buf, always NUL-terminating, and returns the length the result
- * WOULD have had — which exceeds size-1 when the output was truncated.  A zero
- * size (or a NULL buf) writes nothing and returns 0 rather than that length.
- * Width and the '0' pad flag apply to %u/%x/%X only; %d/%i/%s/%c/%p ignore them,
- * and there is no precision. */
+ * WOULD have had — which exceeds size-1 when the output was truncated.  At most
+ * size-1 characters are written plus the terminator.  A zero size (or a NULL
+ * buf) writes nothing and returns 0 rather than that length.
+ *
+ * The supported subset, in the order the parser accepts them:
+ *
+ *   flags   '0' only, and only one of it.  '-', '+', ' ' and '#' are not
+ *           recognised and end up in the conversion position.
+ *   width   decimal digits, honoured by %u, %x and %X only.  %d, %i, %s, %c and
+ *           %p ignore it.  Padding happens inside a 32-byte digit scratch, so a
+ *           width above 32 pads to 32.  There is no precision: a '.' is not
+ *           parsed and falls through to the unknown-conversion path.
+ *   length  'l', 'll' and 'z'; 'z' is read as long long.  'h', 'hh', 'j', 't'
+ *           and 'L' are not recognised.
+ *   conv    %% %c %s %d %i %u %x %X %p.  No floating point.
+ *
+ * %s prints "(null)" for a NULL argument and rebases kernel-image literals via
+ * kernel_str_ptr.  %p always prints "0x" followed by unpadded lowercase hex.
+ * %x/%X differ only in digit case.  An unknown conversion is echoed as '%'
+ * followed by that character and consumes NO va_arg, so the remaining arguments
+ * shift — a typo silently corrupts everything after it.  A '%' at the very end
+ * of fmt ends formatting.
+ *
+ * %d/%i of INT64_MIN negates in signed 64-bit and does not print correctly. */
 int vsnprintf(char* buf, size_t size, const char* fmt, va_list ap) {
     if (!buf || size == 0) {
         return 0;
@@ -541,11 +611,19 @@ int vsnprintf(char* buf, size_t size, const char* fmt, va_list ap) {
     return (int)pos;
 }
 
+/* Does not return: it logs and hands over to kpanic, which is noreturn.  The
+ * declaration is a plain void function, so the compiler still generates the
+ * fallthrough after a call site. */
 void abort(void) {
     klog_write("[kernel] abort\n");
     kpanic("abort", 0ULL, 0ULL);
 }
 
+/* The ctype set below is ASCII-only and locale-free: bytes outside the ranges
+ * named in each test are returned or reported unchanged, including every byte
+ * >= 0x80.  All of them take an int for source compatibility but only examine
+ * the low 8 bits' worth of ASCII range; unlike the standard versions, EOF is not
+ * a distinguished input. */
 int tolower(int ch) {
     if (ch >= 'A' && ch <= 'Z') {
         return ch + ('a' - 'A');
@@ -560,6 +638,8 @@ int toupper(int ch) {
     return ch;
 }
 
+/* Space, tab, newline, carriage return, form feed and vertical tab — the full C
+ * whitespace set, not just space and tab. */
 int isspace(int ch) {
     return ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r' || ch == '\f' || ch == '\v';
 }
@@ -576,6 +656,7 @@ int isalnum(int ch) {
     return isalpha(ch) || isdigit(ch);
 }
 
+/* Both letter cases, so 'F' and 'f' are equally accepted. */
 int isxdigit(int ch) {
     return isdigit(ch) || (ch >= 'a' && ch <= 'f') || (ch >= 'A' && ch <= 'F');
 }

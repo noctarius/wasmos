@@ -1,6 +1,26 @@
 #pragma once
-/* Declare string builtins directly — <string.h> is not available when
- * cross-compiling to bare-metal x86_64-elf. */
+/* compat/cstring — freestanding shadow of <cstring>
+ *
+ * Declares the mem* and str* subset below in the global namespace and
+ * re-exports it into std.  The declarations are written out by hand, using
+ * __SIZE_TYPE__ rather than size_t, because there is no <string.h> when
+ * cross-compiling to bare-metal x86_64-elf and this header must not depend on
+ * one being reachable.
+ *
+ * Everything declared here has a real definition: memcpy, memset, memmove,
+ * memcmp, strlen, strcpy, strncpy, strcmp, strncmp, strchr and strrchr come
+ * from src/kernel/libc.c, and memchr from src/kernel/warp/linker_stubs.cpp.
+ * Compiled WARP sources use std::memcpy and std::memset heavily and the rest
+ * incidentally; kernel-side WARP glue (warp/link.cpp) includes this header too.
+ *
+ * Two things to know.  The kernel implementations are not byte-for-byte the
+ * C standard: several of them accept NULL (strlen returns 0) and some
+ * normalise their result to -1/0/1 rather than returning a byte difference —
+ * see the per-function comments in src/kernel/libc.c before relying on an
+ * exact return value.  And memcpy is strictly forward-copying and not
+ * overlap-safe, so overlapping ranges need memmove.  A str* function that is
+ * not declared here (strcat, strstr, strdup, strtok) is a compile error at the
+ * call site. */
 
 extern "C" {
 void *memcpy(void *, const void *, __SIZE_TYPE__);

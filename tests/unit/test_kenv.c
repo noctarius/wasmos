@@ -7,6 +7,11 @@
  * would answer a 40-character name with the value of the 32-character variable
  * sharing its prefix: a different variable, and one the guest could not have
  * created through env_set in the first place.
+ *
+ * src/kernel/kenv.c is the only source linked in; it needs nothing stubbed
+ * because the store is a fixed file-static table of KENV_MAX_ENTRIES slots with
+ * no allocator and no lock behind it. It also links against the host libc's
+ * strcmp/strlen rather than the kernel's, which is a substitution of equals.
  */
 
 #include <stdio.h>
@@ -20,6 +25,9 @@
 static int g_failures;
 static int g_checks;
 
+/* Record one assertion: counts and CONTINUES on failure, printing the message
+ * and its source line, so a failing case runs to its end. The cases return void;
+ * main() reports g_failures as the process exit status. */
 #define CHECK(cond, msg)                                                                           \
     do {                                                                                           \
         g_checks++;                                                                                \

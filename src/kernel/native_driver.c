@@ -111,6 +111,10 @@ static void nd_heap_set(uint32_t pid, uint64_t bytes) {
     critical_section_leave();
 }
 
+/* Bytes of process memory committed for a native driver's loaded image, as
+ * recorded when its segments were mapped.  0 for pid 0 and for a pid with no
+ * recorded entry — no distinction is made between "unknown" and "nothing
+ * committed".  Reads under a critical section. */
 uint64_t native_driver_heap_committed_bytes(uint32_t pid) {
     uint64_t bytes = 0;
     if (pid == 0) {
@@ -127,6 +131,9 @@ uint64_t native_driver_heap_committed_bytes(uint32_t pid) {
     return bytes;
 }
 
+/* Drops a pid's accounting slot so it can be reused by a later process.  It
+ * frees no memory — the pages themselves go with the address space at reap —
+ * and is safe to call for a pid that has no slot.  pid 0 is ignored. */
 void native_driver_heap_release(uint32_t pid) {
     if (pid == 0) {
         return;
@@ -973,6 +980,30 @@ static int nd_spawn_info(wasmos_spawn_info_t* out, char* args_buf, uint32_t args
  * Public entry point
  * ---------------------------------------------------------------------- */
 
+/* Loads a native driver ELF into an existing memory context, builds the
+ * wasmos_driver_api_t vtable, switches to that context's root, and CALLS the
+ * driver's entry point.
+ *
+ * It does not return until the driver's entry returns, so a driver whose
+ * initialize is an event loop never comes back here.  A driver that exits
+ * through the process path does not return either.  When entry does return, the
+ * caller's CR3 is restored first.
+ *
+ * elf_data is borrowed for the load; its segments are COPIED into freshly mapped
+ * pages in ctx's address space, at the low VAs the ELF's program headers name,
+ * so nothing keeps referencing the source buffer.  The api structure is built on
+ * this function's stack and stays valid only for the duration of the call — it
+ * is reachable from the driver because every callback sits in the shared
+ * higher-half mapping present in both roots.
+ *
+ * init_argv and init_argc are accepted and DELIBERATELY IGNORED; a native driver
+ * reads its startup values through api->spawn_info() instead, and entry receives
+ * three zero integers.
+ *
+ * Returns -1 for a failed ELF validation, a missing memory context, a failed
+ * segment load, an entry point outside an executable segment, or a failed CR3
+ * switch; otherwise it returns the driver entry's own status, where -2 is the
+ * driver reporting an ABI mismatch. */
 int native_driver_start(uint32_t context_id, const uint8_t* elf_data, uint32_t elf_size,
                         const char* name, const uint32_t* init_argv, uint32_t init_argc) {
     uint32_t pid = process_current_pid();

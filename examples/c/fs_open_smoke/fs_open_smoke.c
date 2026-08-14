@@ -1,3 +1,19 @@
+/* fs_open_smoke - read-side POSIX file API tutorial and regression check.
+ *
+ * Demonstrates that a guest app reaches the filesystem through ordinary libc
+ * calls — stat, fopen, fseek, ftell, fread, feof, fclose — with no IPC or
+ * service lookup of its own; libc turns them into FS requests.
+ *
+ * The checks are chosen to exercise the FAT layer rather than just the API: a
+ * stat for size and file type, a seek past the first cluster followed by a
+ * content compare (FAT chain walking), a seek relative to SEEK_END, and a
+ * read-to-EOF loop that must total more than one cluster and end with feof set.
+ *
+ * Prints "fs-open-smoke: ok" and exits 0, or a step-specific line and 1.
+ *
+ * Precondition: /boot/large_read.txt must exist, be exactly 6858 bytes, and
+ * still carry the two byte sequences compared here — the expectations are
+ * hard-coded against that fixture. */
 #include "string.h"
 #include "stdio.h"
 #include "sys/stat.h"

@@ -16,6 +16,15 @@
  * as a real service would (including, in the negative cases, replying badly).
  * That hook runs at the point the caller is parked inside
  * ipc_recv_blocking_for, which is where a service on another CPU would run.
+ *
+ * MODELLING NOTE (blocking). In the kernel, process_yield(PROCESS_RUN_BLOCKED)
+ * does not return until a waker resumes the thread, so the reply correlation
+ * that follows it in the IPC_CALL path runs post-wake. A host stub cannot
+ * suspend, so process_yield returns immediately and an unanswered call observes
+ * a "spurious wake" -- which IPC_CALL reports to ring 3 as IPC_EMPTY, the
+ * documented retry contract. The yield hook is the stand-in waker: it fires with
+ * the caller parked in the wait list and no IPC lock held, so the reply it sends
+ * travels the real send-and-wake path rather than a fabricated one.
  */
 
 #include <stdio.h>
@@ -34,6 +43,10 @@
 static int g_failures;
 static int g_checks;
 
+/* Record one assertion. A failed condition is counted and printed with its
+ * source line, and the case CONTINUES -- so one case can report several failures
+ * and every assertion after a failure still runs. The counters are cumulative
+ * across cases; main's exit status is the only pass/fail signal. */
 #define CHECK(cond, msg)                                                                           \
     do {                                                                                           \
         g_checks++;                                                                                \
@@ -59,6 +72,10 @@ static void (*g_yield_hook)(void);
 static process_t g_procs[2];
 static uint32_t g_current_pid = CALLER_PID;
 
+/* The tick clock is a fixture variable: it advances only where a case assigns
+ * g_now, never on its own. The kernel counts timer interrupts instead, and
+ * scales milliseconds by the configured tick rate (rounding up); here one tick
+ * is one millisecond. No case in this file arms a timeout. */
 uint64_t timer_ticks(void) {
     return g_now;
 }
@@ -66,6 +83,12 @@ uint64_t timer_ms_to_ticks(uint32_t ms) {
     return (uint64_t)ms;
 }
 
+/* The fake thread table: POOL_MAX slots with tid == index + 1, so a lookup is a
+ * direct index. The kernel's versions take the thread-table lock and skip
+ * THREAD_STATE_UNUSED slots; these are unlocked and unfiltered, which holds only
+ * because the file is single-threaded and never frees a slot. Bounding
+ * thread_table_at at POOL_MAX is what keeps sched_event.c's scan -- which runs
+ * to THREAD_MAX_COUNT -- inside the fixture. */
 thread_t* thread_table_at(uint32_t i) {
     return (i < POOL_MAX) ? &g_threads[i] : 0;
 }
@@ -75,9 +98,15 @@ thread_t* thread_get(uint32_t tid) {
     }
     return &g_threads[tid - 1u];
 }
+/* The kernel reads the executing CPU's current thread; the fixture's "current
+ * CPU" is g_current_tid, which reset() points at tid 1 and no case moves. */
 uint32_t thread_current_tid(void) {
     return g_current_tid;
 }
+/* Unconditional write. The kernel validates the edge against the thread state
+ * machine under the table lock and drops an illegal one -- notably any attempt
+ * to leave ZOMBIE -- so a transition the real kernel would refuse takes effect
+ * here. */
 void thread_set_state(uint32_t tid, thread_state_t state, thread_block_reason_t reason) {
     thread_t* t = thread_get(tid);
     if (t) {
@@ -85,12 +114,21 @@ void thread_set_state(uint32_t tid, thread_state_t state, thread_block_reason_t 
         t->block_reason = reason;
     }
 }
+/* Mark the thread READY and nothing more. The kernel's version claims the wake
+ * against the thread's completion path, drops it unless the thread is genuinely
+ * BLOCKED, enqueues it on a run queue and may request a preemption; a stale wake
+ * the real scheduler would discard therefore still lands here. Nothing in this
+ * file asserts on wakes, only on what the syscall returned. */
 void sched_wake_thread(thread_t* t) {
     if (t) {
         t->state = THREAD_STATE_READY;
     }
 }
 
+/* Returns immediately, because a host stub cannot suspend its caller; see the
+ * MODELLING NOTE at the top of the file. An installed g_yield_hook -- the peer
+ * service -- fires at most once per install, before the caller is unlinked from
+ * the wait list, so call_with re-arms it for every call. */
 void process_yield(process_run_result_t result) {
     (void)result;
     g_yield_calls++;
@@ -114,6 +152,10 @@ void process_yield(process_run_result_t result) {
     }
 }
 
+/* The process table is one entry deep: only CALLER_PID resolves, so the peer
+ * service has a context id and endpoints but no process behind it. The kernel
+ * searches its real process list, and its process_current_pid reads the
+ * executing CPU's slot rather than a global. */
 uint32_t process_current_pid(void) {
     return g_current_pid;
 }
@@ -140,6 +182,15 @@ void process_set_exit_status(process_t* p, int32_t status) {
     (void)p;
     (void)status;
 }
+/* The uniform -1 below is not a contract any of these entry points has: the real
+ * process_thread_* and process_wait return 0 for done, a packed WASMOS_ERR_*
+ * code (negative) for failure, and in the join/wait cases a positive value
+ * meaning the caller was parked and must retry. Nothing this file drives calls
+ * them, so the value is never observed; a new case that reached one would see a
+ * failure the kernel cannot produce. user_mutex_user_try_lock and
+ * user_mutex_user_unlock take four arguments in the kernel (context id, user
+ * address, tid, out-state) -- these two-argument stubs share only the symbol
+ * name, and user_mutex.h is deliberately not included here. */
 int process_thread_detach(process_t* p, uint32_t tid) {
     (void)p;
     (void)tid;
@@ -186,6 +237,13 @@ static uint32_t g_seen_reqid; /* req.request_id as the service saw it */
 static uint32_t g_seen_type;
 static int g_service_saw_request;
 
+/* Per-case fixture reset: drain both endpoints, rebuild the thread pool and the
+ * caller process, and clear the clock, the yield hook and the request fields the
+ * peer records. g_reply_ep survives, since it names the endpoint to drain on the
+ * next entry. It does NOT recreate the IPC state -- ipc_init and the peer's
+ * g_dest_ep are set up once in main, and endpoints already handed out stay
+ * live -- nor does it clear g_reply_mode or g_foreign_ep, which call_with and
+ * the cases that need them set immediately before use. */
 static void reset(void) {
     /* Drain anything a previous case left in the caller's reply endpoint. The
      * endpoint is per-PROCESS and reused across cases, so an unmatched reply
@@ -226,6 +284,13 @@ static void reset(void) {
     g_service_saw_request = 0;
 }
 
+/* Build the register frame a ring-3 WASMOS_SYSCALL_IPC_CALL arrives in: the
+ * selector in RAX, the destination and message type in RDI/RSI, and arg0..arg3
+ * in RDX/RCX/R8/R9. cs carries the ring-3 selector, which is what makes the
+ * handler mirror the frame into the caller's thread resume context on the way
+ * in, as it would for a real user trap. Arguments are taken as
+ * 64-bit deliberately, so a case can plant bits above 32 that the handler must
+ * refuse. */
 static syscall_frame_t make_call(uint32_t dst, uint32_t type, uint64_t a0, uint64_t a1, uint64_t a2,
                                  uint64_t a3) {
     syscall_frame_t f;
@@ -256,6 +321,19 @@ typedef enum {
 static reply_mode_t g_reply_mode;
 static uint32_t g_foreign_ep; /* owned by a third context */
 
+/* The peer, run as the one-shot yield hook while the caller is parked. It takes
+ * one request off g_dest_ep, records what the request looked like from the
+ * service side (source, request_id, type) and answers it according to
+ * g_reply_mode -- correctly for REPLY_GOOD, not at all for REPLY_NOTHING, and
+ * deliberately malformed otherwise. If no request is queued it returns without
+ * recording anything, and the caller then observes a spurious wake.
+ *
+ * It receives with ipc_recv (kernel context), which skips the ownership check
+ * the real service would pass on its own endpoint; the reply, in contrast, is
+ * sent from SERVICE_CTX so it faces the same source check a real peer does. The
+ * REPLY_FOREIGN_SOURCE case sends from the kernel context precisely because that
+ * check would otherwise refuse the forged source outright, leaving the syscall's
+ * own authenticity check untested. */
 static void service_reply(void) {
     ipc_message_t req;
     if (ipc_recv(g_dest_ep, &req) != IPC_OK) {
@@ -649,6 +727,11 @@ static void test_notify_passes_the_transport_result_through(void) {
 
 /* -------------------------------------------------------------------- main */
 
+/* Initialise the IPC layer and the peer's endpoint once, then run every case in
+ * a shuffled order. Returns 0 only when every CHECK passed and 1 otherwise; on
+ * failure the shuffle seed is printed so the order can be replayed through
+ * WASMOS_TEST_SEED. The endpoint table and the request-id counter carry across
+ * cases, which is what reset() exists to compensate for. */
 int main(void) {
     struct {
         const char* name;

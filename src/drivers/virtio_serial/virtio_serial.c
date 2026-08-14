@@ -13,9 +13,21 @@
 #include "wasmos/startup.h"
 #include "wasmos_driver_abi.h"
 
+/* PCI configuration mechanism #1: write a (bus, device, function, offset)
+ * address to 0xCF8, then read or write the 32-bit datum at 0xCFC. Fixed by the
+ * PCI Local Bus specification. */
 #define PCI_CFG_ADDR_PORT 0xCF8
 #define PCI_CFG_DATA_PORT 0xCFC
 
+/* PCI identity accepted as a virtio serial port. 0x1AF4 is the Red Hat / virtio
+ * vendor id; 0x1003 is the transitional console device and 0x1043 the modern
+ * one (0x1040 + virtio device type 3).
+ *
+ * VIRTIO_PCI_DEV_MIN/MAX span the WHOLE virtio device-id range, and the match
+ * accepts anything inside it in addition to the two exact ids -- so this probe
+ * will also claim a virtio device of some other type if it appears first. That
+ * is tolerable only because the driver does discovery and register access and
+ * has no data plane; it would not be once queues are set up. */
 #define VIRTIO_PCI_VENDOR_ID 0x1AF4u
 #define VIRTIO_PCI_DEV_MIN 0x1000u
 #define VIRTIO_PCI_DEV_MAX 0x107Fu
@@ -149,6 +161,17 @@ static void handle_write_reg32(int32_t source, int32_t request_id, int32_t offse
                           0);
 }
 
+/* Driver entry point: probe the virtio-serial PCI function, register, and serve
+ * the query / register-read / register-write requests forever.
+ *
+ * All four parameters are ignored; proc_endpoint is overwritten from the
+ * spawn-info contract, because the entry arguments are passed as zero. Probing
+ * is allowed to find nothing -- the driver still registers and answers queries
+ * reporting the device as absent, rather than failing to start.
+ *
+ * On success this does not return.
+ * TODO: the bring-up failure paths return a bare -1, and the unknown-request
+ * path replies with a bare -38, rather than packed abi/errors.yaml codes. */
 WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t ignored_arg1,
                                       int32_t ignored_arg2, int32_t ignored_arg3) {
     /* proc.endpoint comes from the spawn-info contract, not an entry arg. */

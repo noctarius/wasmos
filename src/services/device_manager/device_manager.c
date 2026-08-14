@@ -1056,7 +1056,10 @@ static void registry_add_from_desc(int32_t buffer_id, int32_t offset, int32_t si
  *   arg2 [31:16]=io_port_base  [15:0]=device_id
  *   arg3 [15:8]=irq_hint  [7:0]=mmio_hint
  * bus == 0xFF marks a non-PCI (ACPI/ISA) device; the bars[] table stays empty
- * for those, which is why they keep using this form. */
+ * for those, which is why they keep using this form.  An ACPI/ISA sender has no
+ * vendor/device id to report and instead puts the device's I/O port base in
+ * arg2's LOW half, so such a record carries its I/O base in device_id and leaves
+ * io_port_base zero; the acpi_match spawn path reads device_id accordingly. */
 static void registry_add_from_ipc(int32_t arg0, int32_t arg1, int32_t arg2, int32_t arg3) {
     if (g_dm.registry_count >= DEVICE_REGISTRY_CAP) {
         return;

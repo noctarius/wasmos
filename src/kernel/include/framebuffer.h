@@ -49,10 +49,16 @@ wasmos_error_code_t framebuffer_put_pixel(uint32_t x, uint32_t y, uint32_t color
  * framebuffer is mapped. */
 int framebuffer_fill(uint32_t color);
 
-/* Switch the framebuffer to a panic-safe rendering mode (no IPC or scheduler). */
+/* Switch the framebuffer to a panic-safe rendering mode (no IPC or scheduler): clear the
+ * screen to black and reset the text cursor to the top-left with white on black.  Does
+ * nothing when no framebuffer is mapped, in which case framebuffer_panic_write also
+ * produces nothing.  Safe from a panic context — no locks, no allocation. */
 void framebuffer_panic_begin(void);
 
-/* Write a text string to the framebuffer during a kernel panic. */
+/* Write a text string to the framebuffer during a kernel panic, using a built-in bitmap
+ * font.  Handles '\r' and '\n'; every other byte is drawn as a glyph and the cursor wraps
+ * at the right edge.  There is no scrolling: once the cursor passes the bottom row further
+ * text is dropped.  A NULL string or an unmapped framebuffer is ignored. */
 void framebuffer_panic_write(const char* text);
 
 #endif

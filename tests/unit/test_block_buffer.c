@@ -19,6 +19,11 @@
 static int g_failures;
 static int g_checks;
 
+/* Count-and-continue assertion: tallies every check in g_checks, and on failure
+ * bumps g_failures and prints the message with this file and line. It does not
+ * return or abort, so a failing check leaves the rest of its case running and
+ * the suite reports the total number of failing checks rather than stopping at
+ * the first. Cases return void; main's exit status comes from g_failures. */
 #define CHECK(cond, msg)                                                                           \
     do {                                                                                           \
         g_checks++;                                                                                \
@@ -28,6 +33,11 @@ static int g_checks;
         }                                                                                          \
     } while (0)
 
+/* The bound passed as buf_bytes throughout: the deployed bounce buffer is
+ * WASM_BLOCK_BUFFER_PAGES (2) pages, so 8 KiB. block_buffer_check_range takes
+ * the bound as a parameter, so this is a fixture value and not a limit compiled
+ * into the code under test; it is spelled 64-bit so the wrapping cases below
+ * are not narrowed on their way in. */
 #define BUF 8192ULL
 
 /* A slice wholly inside the buffer is allowed, including the two edges. */

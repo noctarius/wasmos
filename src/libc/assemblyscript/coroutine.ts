@@ -27,6 +27,11 @@ export enum FutureState {
     Failed = 2,
 }
 
+/**
+ * Lifecycle of a coroutine: New before asyncStart, Ready while queued, Running
+ * inside its resume, Waiting while parked on a future, Dead once its resume
+ * returned anything other than TASK_YIELDED.
+ */
 export enum CoroutineState {
     New = 0,
     Ready = 1,
@@ -68,6 +73,10 @@ export abstract class OnError {
     abstract call(status: i32, out: Box): i32;
 }
 
+/**
+ * Settlement rule of a FutureGroup: Race settles on the first input to settle
+ * either way, All on the first failure or on every input succeeding.
+ */
 export enum FutureGroupKind {
     Race = 0,
     All = 1,
@@ -78,6 +87,13 @@ export enum FutureGroupKind {
  * guest has one cooperative runtime per module. */
 let g_currentRuntime: Runtime | null = null;
 
+/**
+ * The observing half of a one-shot result, settled exactly once by the Promise
+ * bound to it. `status` is 0 once resolved and the rejecting negative status
+ * once failed; `value` is the resolution value, protocol-defined and often an
+ * object address. `runtime` is adopted from the first await or `then`, and
+ * mixing a future between runtimes is refused.
+ */
 export class Future {
     state: FutureState = FutureState.Pending;
     status: i32 = 0;
@@ -137,6 +153,11 @@ export class Future {
 export class Promise {
     future: Future | null = null;
 
+    /**
+     * Settles the bound future as ready, waking every parked waiter and queueing
+     * every registered continuation. False when there is no bound future or it
+     * has already settled.
+     */
     resolve(value: usize): bool {
         return promiseComplete(this, 0, value);
     }
@@ -147,6 +168,11 @@ export class Promise {
     }
 }
 
+/**
+ * One stackless task and its completion future. asyncStart rebinds the whole
+ * record, so an instance is reusable once its previous run is Dead; `result` is
+ * the status its resume last returned.
+ */
 export class Coroutine {
     runtime: Runtime | null = null;
     next: Coroutine | null = null;
@@ -166,6 +192,11 @@ export class Coroutine {
     }
 }
 
+/**
+ * Registration record for one `then` callback, carrying the child future that
+ * callback settles. It must stay live until the callback has been dispatched and
+ * cannot hold two live registrations: `active` is what refuses the second.
+ */
 export class Continuation {
     next: Continuation | null = null;
     future: Future | null = null;
@@ -183,6 +214,15 @@ export class Continuation {
     active: bool = false;
 }
 
+/**
+ * Storage combining several futures into one. The group, its continuation array
+ * and (for All) its value array must stay live until the group future settles;
+ * at that point the still-registered continuations on unsettled inputs are
+ * released, so they need not outlive the slowest source. `completed` counts the
+ * source callbacks that ran -- a settled race leaves it at 1 -- and `active`
+ * goes false once the group settles, after which a late source callback is
+ * ignored.
+ */
 export class FutureGroup {
     runtime: Runtime | null = null;
     future: Future = new Future();
@@ -196,6 +236,11 @@ export class FutureGroup {
     active: bool = false;
 }
 
+/**
+ * The cooperative scheduler: a queue of runnable coroutines and a queue of
+ * continuations whose source future has settled. A guest normally has one, and
+ * nothing runs until run/runBudget is called.
+ */
 export class Runtime {
     current: Coroutine | null = null;
     readyHead: Coroutine | null = null;
@@ -204,7 +249,12 @@ export class Runtime {
     continuationTail: Continuation | null = null;
     running: bool = false;
 
-    /** Schedule `task` on `coroutine`; returns its completion future. */
+    /**
+     * Schedule `task` on `coroutine`; returns its completion future.
+     * Null when the coroutine is neither New nor Dead, so a live task cannot be
+     * restarted. The completion future resolves with the task's boxed value or
+     * rejects with its failure status; nothing runs until the runtime is driven.
+     */
     asyncStart(coroutine: Coroutine, task: Task): Future | null {
         if (coroutine.state != CoroutineState.New && coroutine.state != CoroutineState.Dead) {
             return null;
@@ -267,7 +317,11 @@ export class Runtime {
         return resumed;
     }
 
-    /** Run until nothing is ready. */
+    /**
+     * Run until nothing is ready.
+     * Coroutines parked on futures nothing settles are left parked, not
+     * reported; -1 on re-entry, as for runBudget.
+     */
     run(): i32 {
         return this.runBudget(i32.MAX_VALUE);
     }
@@ -276,6 +330,11 @@ export class Runtime {
      * Register `continuation` on `future`, returning the child future that
      * settles with the callback's result. Null if the continuation is already in
      * use or the future belongs to another runtime.
+     *
+     * The callback never runs inline: it is queued on this runtime -- at once if
+     * the future has already settled -- and dispatched from run/runBudget, at
+     * most once. With no callback for the outcome that happened, the child
+     * inherits the source's value or status.
      */
     then(
         future: Future,
@@ -324,7 +383,15 @@ export class Runtime {
         return child;
     }
 
-    /** Settles with the first input to settle, success or failure. */
+    /**
+     * Settles with the first input to settle, success or failure.
+     *
+     * The losers are abandoned, not cancelled: their own work continues and
+     * their results are discarded. Null when `inputs` is empty, `continuations`
+     * is shorter than it, a continuation is already in use, or an input belongs
+     * to another runtime. Allocates the FutureGroup; a long-lived loop uses
+     * raceInto.
+     */
     race(inputs: StaticArray<Future>, continuations: StaticArray<Continuation>): Future | null {
         return this.groupStart(
             inputs,
@@ -338,6 +405,10 @@ export class Runtime {
     /**
      * Settles once every input succeeds, with `values` filled in input order,
      * or rejects on the first failure.
+     *
+     * Resolves with the address of `values`; the array is only fully populated
+     * on success, and must stay live until the group future settles. Same
+     * refusals as `race`, plus a `values` shorter than `inputs`.
      */
     all(
         inputs: StaticArray<Future>,
@@ -353,7 +424,11 @@ export class Runtime {
         );
     }
 
-    /** race/all onto caller-owned group storage, for allocation-free reuse. */
+    /**
+     * race/all onto caller-owned group storage, for allocation-free reuse.
+     * The group is reset by the call, so it may be reused once the previous
+     * group future has settled.
+     */
     raceInto(
         group: FutureGroup,
         inputs: StaticArray<Future>,
@@ -362,6 +437,7 @@ export class Runtime {
         return this.groupStart(inputs, continuations, null, FutureGroupKind.Race, group);
     }
 
+    /** `all` onto caller-owned group storage; see raceInto and all. */
     allInto(
         group: FutureGroup,
         inputs: StaticArray<Future>,
@@ -372,6 +448,9 @@ export class Runtime {
     }
 
     // ---------------------------------------------------------------- internals
+    // Queue plumbing, public only because the promise helpers below are module
+    // functions rather than methods. Application code drives the runtime through
+    // asyncStart/run/then and does not call these.
 
     enqueue(coroutine: Coroutine): void {
         coroutine.next = null;

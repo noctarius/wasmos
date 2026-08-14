@@ -12,20 +12,64 @@
  *   - Any local that must survive a yield lives in the context struct, not on
  *     the C stack (the stack is not preserved across a yield/return).
  *   - Reset the context's cont to 0 before reusing it for a fresh run.
+ *   - Resume points are generated from __LINE__, so two yielding macros must not
+ *     share a source line: a `do { FAT_CO_READ(...); FAT_CO_WRITE(...); }` on one
+ *     line produces duplicate case labels and will not compile. Keeping one per
+ *     line is what makes the labels unique, not a convention.
  *
  * All macros evaluate to a fat_r_t flow (FAT_R_WAIT / FAT_R_ERR / FAT_R_DONE)
  * on the paths that yield/return; on the fall-through path execution simply
- * continues past the macro. */
+ * continues past the macro.
+ *
+ * Every yielding macro returns out of the ENCLOSING FUNCTION -- they are not
+ * expressions and cannot appear in one. A step therefore cannot hold a lock,
+ * own a borrow, or leave any other cleanup pending across a yield unless the
+ * teardown path (fat_op_free) also knows how to release it. */
 #ifndef FS_FAT_FAT_CO_H
 #define FS_FAT_FAT_CO_H
 
 #include "fat_block.h"
 #include "fat_types.h"
 
-/* c: pointer to a coroutine context (has `int cont`). */
+/* Ownership of the shared block buffer.
+ *
+ * There is exactly ONE staging buffer for the whole driver (fat_block_t), and
+ * the reactor drives one op to completion at a time. Before stepping an op the
+ * reactor sets blk->owner to it, which is what makes the yielding macros below
+ * work: a completion knows which op to resume, and FAT_CO_FAIL knows which op to
+ * record its error code on. A step therefore may assume the staged sector is the
+ * one IT last asked for -- across a yield of its own -- but must assume nothing
+ * about it on entry, because the previous op left whatever it left there. That
+ * is why FAT_CO_READ goes through fat_need_sector, which consults the cache tag
+ * and only submits a read on a miss, rather than reading unconditionally.
+ *
+ * What each macro leaves staged differs, and the difference matters:
+ *   - FAT_CO_READ      stages `lba` and tags the buffer with it.
+ *   - FAT_CO_WRITE     pushes the buffer to `lba` and tags it with that lba, so
+ *                      the contents remain valid for the sector just written.
+ *   - FAT_CO_READ_DIRECT lands nothing here: the cache tag and contents are left
+ *                      exactly as they were, which is why it is safe to issue
+ *                      one in the middle of a sequence that is using the buffer.
+ *   - FAT_CO_AWAIT     may restage the buffer arbitrarily, because the
+ *                      sub-machine does its own I/O. A step must re-issue
+ *                      FAT_CO_READ after one before touching the sector again.
+ * A failed completion clears the tag, so an I/O error never leaves stale bytes
+ * looking cached.
+ *
+ * A pointer into fat_block_sector() is therefore valid only until the next
+ * yield. Anything that must outlive one belongs in the context struct. */
+
+/* Open a resumable body: jump to the resume point recorded in `c->cont`, or fall
+ * into the top on a fresh run (cont == 0). Everything between this and
+ * FAT_CO_END is one switch statement, which is why a `switch` of your own
+ * containing a yield cannot appear there. */
 #define FAT_CO_BEGIN(c)                                                                            \
     switch ((c)->cont) {                                                                           \
     case 0:
+/* Close the body: reset the context so it can be reused for a fresh run and
+ * report success. Falling off the end of a step is thus equivalent to
+ * FAT_CO_DONE -- reaching FAT_CO_END is the normal completion path, not an
+ * error, and nothing after it in the function body is reachable. */
 #define FAT_CO_END(c)                                                                              \
     }                                                                                              \
     (c)->cont = 0;                                                                                 \

@@ -1,3 +1,13 @@
+// sysinfo - print a one-shot system summary. Takes no arguments; any given are
+// ignored.
+//
+// Output is five labelled sections in this fixed order, one "  key: value" line
+// each: kernel (architecture and WASM runtime), memory (total/free/used, scaled
+// to B/KB/MB/GB with 1024 as the divisor and truncated, not rounded), smp (CPU
+// count and whether SMP is on), scheduler (tick count and ready count), and
+// processes (active count). Memory prints "(unavailable)" instead of the three
+// lines when the physmem_stats host call fails; every other counter is printed
+// as returned, with no failure indication. Always exits 0.
 const std = @import("std");
 const wasmos = @import("wasmos.zig");
 
@@ -42,6 +52,7 @@ fn fmtBytes(bytes: u64, buf: []u8) []const u8 {
     }
 }
 
+/// Program entry point; always returns 0.
 pub fn main() u8 {
     var line: [128]u8 = undefined;
 

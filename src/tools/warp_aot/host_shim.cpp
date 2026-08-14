@@ -26,6 +26,15 @@
  * C++ memory operators
  * ----------------------------------------------------------------------- */
 
+/* Global replacements for the whole link unit, not just WARP's allocations: once
+ * defined here they serve every translation unit in the binary. All of them
+ * forward to malloc/free, so pairing is only required across new/delete, not
+ * across the array or sized variants. The throwing forms raise std::bad_alloc on
+ * exhaustion and never return null; the std::nothrow_t forms return null
+ * instead. The sized deletes ignore the size argument, and a null pointer is a
+ * no-op in every delete. Alignment beyond malloc's guarantee is not honoured:
+ * there is no aligned (std::align_val_t) overload here, so an over-aligned type
+ * falls back to the default one the standard library supplies. */
 void* operator new(size_t size) {
     void* p = malloc(size);
     if (!p)

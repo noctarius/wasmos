@@ -1,11 +1,28 @@
 /* test_libc_stdio.c - unit tests for the wasmos libc vsnprintf format engine.
- * Compiled against the real stdio.c + string.c sources on the host. */
+ * Compiled against the real stdio.c + string.c sources on the host.
+ *
+ * Only the buffer-formatting half of stdio.c is covered: snprintf writes into
+ * the caller's buffer and never reaches the console, so the specifier set, the
+ * length modifiers and width padding are what the cases pin. The output side
+ * (printf/puts/putsn, and the 127-byte chunking they do) needs the console
+ * host call and is not exercised.
+ *
+ * Sizes differ from the target: `long` and pointers are 64-bit on the host and
+ * 32-bit under wasm32, so the %ld/%lu cases prove the modifier is honoured, not
+ * that a given value formats identically on both. */
 #include <stdint.h>
 #include <stddef.h>
 #include <string.h>
 
 #include "test_shuffle.h"
 
+/* Link-time stand-in for the console_write host call (abi/hostcalls.yaml id 10),
+ * which the real build resolves as a WASM import: it writes `len` bytes of guest
+ * memory at `ptr` to the kernel log and returns 0, or a negative packed status
+ * for a negative length or an unreadable range. This one discards the bytes and
+ * always reports success, so no failure a console write can report is
+ * reachable. It exists because stdio.c is compiled whole, not because these
+ * cases call it. */
 /* Stub wasmos_console_write — not called by vsnprintf/snprintf. */
 int32_t wasmos_console_write(int32_t ptr, int32_t len) {
     (void)ptr;

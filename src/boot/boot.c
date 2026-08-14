@@ -6,6 +6,13 @@
 #include "elf.h"
 #include "boot.h"
 
+/* EFI_GRAPHICS_OUTPUT_PROTOCOL and its mode structures, mirroring the UEFI spec.
+ * Only the fields the framebuffer snapshot reads are typed: Mode->FrameBufferBase
+ * and FrameBufferSize, and from Mode->Info the resolution, PixelsPerScanLine
+ * (the stride in PIXELS, not bytes) and PixelFormat.  QueryMode/SetMode/Blt are
+ * void* slots holding spec offsets and are called through the EFI_GOP_* typedefs
+ * below.  The PixelFormat ordinal is forwarded to the kernel in the boot_info
+ * flags word, so the enumerator values are ABI, not a local convention. */
 typedef enum {
     PixelRedGreenBlueReserved8BitPerColor = 0,
     PixelBlueGreenRedReserved8BitPerColor = 1,
@@ -58,12 +65,21 @@ typedef EFI_STATUS(EFIAPI* EFI_GOP_QUERY_MODE)(EFI_GRAPHICS_OUTPUT_PROTOCOL* Thi
  * through the versioned boot_info_t contract.
  */
 
+/* Spec constants used by the calls below: the first two are AllocatePages Type
+ * values (ANY_PAGES lets the firmware choose, ADDRESS demands the exact base in
+ * *Memory and fails if it is taken), EFI_LOADER_DATA is the EFI_MEMORY_TYPE the
+ * loader tags every allocation with so the kernel can tell its own handoff pages
+ * apart from firmware data, and the last two are the EFI_STATUS values the retry
+ * logic tests for by value rather than through EFI_ERROR(). */
 #define EFI_ALLOCATE_ANY_PAGES 0
 #define EFI_ALLOCATE_ADDRESS 2
 #define EFI_LOADER_DATA 2
 #define EFI_BUFFER_TOO_SMALL ((EFI_STATUS)0x8000000000000005ULL)
 #define EFI_INVALID_PARAMETER ((EFI_STATUS)0x8000000000000002ULL)
 
+/* ACPI Root System Description Pointer.  Only revision and length are read, to
+ * decide how many bytes of the RSDP to hand the kernel: revision < 2 means the
+ * 20-byte ACPI 1.0 form, which has no xsdt_address. */
 typedef struct __attribute__((packed)) {
     char signature[8];
     UINT8 checksum;
@@ -232,6 +248,12 @@ static void uefi_log(EFI_SYSTEM_TABLE* system, const char* msg);
 static void uefi_log_status(EFI_SYSTEM_TABLE* system, const char* msg, EFI_STATUS status);
 static void uefi_log_hex_prefixed(EFI_SYSTEM_TABLE* system, const char* prefix, uint64_t value);
 
+/* Framebuffer geometry captured while boot services are still up, held until the
+ * final boot_info_t is built inside the ExitBootServices retry loop.  base/size
+ * are the physical MMIO aperture, stride is in pixels per scan line, and flags
+ * carries BOOT_INFO_FLAG_GOP_PRESENT plus the pixel format shifted into
+ * BOOT_INFO_FLAG_GOP_PIXEL_FORMAT_SHIFT.  A base or size of 0 marks the snapshot
+ * as unusable and apply_framebuffer_snapshot() then leaves boot_info untouched. */
 typedef struct {
     uint64_t base;
     uint64_t size;
@@ -698,6 +720,36 @@ static void uefi_log_initfs_entry(EFI_SYSTEM_TABLE* system, const char* prefix,
     uefi_log(system, "\n");
 }
 
+/*
+ * UEFI application entry point, invoked by the firmware with the loader's own
+ * image handle and the system table. Returns only on failure, with the failing
+ * EFI_STATUS (or 1 for a malformed kernel.elf / initfs.img); on success it never
+ * returns, because control passes to the kernel entry point and boot services
+ * are already gone.
+ *
+ * The handoff contract, in the order the steps must happen:
+ *
+ *  1. Read \kernel.elf and \initfs.img from the ESP root into pool buffers, and
+ *     structurally validate the initfs.
+ *  2. Copy each PT_LOAD segment to its p_paddr (see elf.h: p_paddr, not
+ *     p_vaddr), zero-filling p_memsz - p_filesz, after backing the destination
+ *     with AllocatePages.
+ *  3. Locate the ACPI RSDP in the configuration table.
+ *  4. Snapshot the framebuffer geometry. This runs BEFORE any map_key is taken,
+ *     because GOP discovery connects controllers and allocates, either of which
+ *     mutates the memory map.
+ *  5. Enter the ExitBootServices retry loop: GetMemoryMap, build boot_info_t
+ *     plus the copied memory map, initfs image and boot_module_t table in one
+ *     page allocation, then ExitBootServices(map_key). EFI_INVALID_PARAMETER
+ *     means the key went stale and the whole body is redone; any other error is
+ *     fatal. Everything written into boot_info is therefore rebuilt each pass.
+ *  6. Call e_entry through an explicitly ms_abi function pointer so boot_info
+ *     arrives in RCX, which is what the kernel's _start reads. The compiler's
+ *     default convention for this target is not relied upon.
+ *
+ * boot_info_t and everything it points at live in EFI_LOADER_DATA pages that
+ * survive ExitBootServices; the kernel owns them from step 6 onwards.
+ */
 EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE* system) {
     EFI_BOOT_SERVICES* bs = system->BootServices;
     EFI_STATUS status;

@@ -26,6 +26,16 @@ import {AWAIT_PENDING, Box} from "./coroutine";
 import {WASMOS_ERR_DRIVER_ENDPOINT_CREATE, WASMOS_ERR_DRIVER_REGISTER} from "./wasmos_status";
 import {ipc_create_endpoint, ipc_send, irq_ack, irq_route_ipc} from "./wasmos_imports";
 
+/* i8042 PS/2 controller. Reading 0x64 gives the status register; 0x60 is the
+ * data port shared by the keyboard and the auxiliary (mouse) device.
+ *
+ * OBF (bit 0, 0x01) means the output buffer holds a byte for the host; every
+ * other status bit is meaningless as a "has data" test. AUX (bit 5, 0x20) tags
+ * that byte as coming from the mouse rather than the keyboard, which is what
+ * lets two drivers share one data port:
+ * this driver must LEAVE an AUX byte alone, since reading 0x60 consumes it and
+ * would steal the mouse's input. Reading the data port is also what clears OBF,
+ * so it must happen before the IRQ is acked. */
 const KEYBOARD_STATUS_PORT: i32 = 0x64;
 const KEYBOARD_DATA_PORT: i32 = 0x60;
 const KEYBOARD_OBF_FLAG: i32 = 0x01;
@@ -42,9 +52,17 @@ const KBD_IPC_IRQ_EVENT: i32 = 0xff00;
 const KBD_IRQ: i32 = 1;
 const KBD_NAME_PACKED: i32 = 0x0064626b; /* "kbd\0" */
 
+/* Subscriber slots. A subscribe beyond this is REFUSED (reported back as a
+ * non-zero status), not queued and not displacing an existing subscriber. */
 const MAX_SUBSCRIBERS: i32 = 4;
 /* Idle wait when the device is polled rather than IRQ-driven. Long enough not
- * to spin, short enough that a keystroke is not perceptibly late. */
+ * to spin, short enough that a keystroke is not perceptibly late.
+ *
+ * This is the pump's idleIntervalMs, whose value IS the waiting strategy: it is
+ * left at 0 on the IRQ-driven path, meaning the pump parks indefinitely and an
+ * idle keyboard costs no CPU because scancodes arrive as IPC. It is set to this
+ * bounded value only on the polling fallback, where nothing wakes the process
+ * and the idle hook has to go and read the controller itself. */
 const POLL_INTERVAL_MS: i32 = 10;
 
 const g_loop: EventLoop = defaultLoop;

@@ -38,6 +38,10 @@ extern "C" {
 static int g_failures;
 static int g_checks;
 
+/* Counts the assertion and continues on failure; it never aborts and never
+ * returns early. The verdict is g_failures, which main turns into the exit
+ * status. No scenario uses it: the table below is compared inside main, which
+ * bumps g_checks/g_failures directly. */
 #define CHECK(cond, msg)                                                                           \
     do {                                                                                           \
         g_checks++;                                                                                \
@@ -62,12 +66,21 @@ static int g_yield_calls;
 
 extern "C" {
 
+/* A frozen clock: 1 ms is 1 tick and now is always 0. sched_event_wait still
+ * arms a real deadline from it, but nothing calls sched_timeout_check here --
+ * that runs from the scheduler, which this binary does not link -- so an armed
+ * deadline never fires. The timed-select rows therefore observe the spurious
+ * wake modelled by process_yield below, not an elapsed window; both reach the
+ * shim as IPC_EMPTY, which is what the expectation pins. */
 uint64_t timer_ticks(void) {
     return 0;
 }
 uint64_t timer_ms_to_ticks(uint32_t ms) {
     return (uint64_t)ms;
 }
+/* A fixed pool in place of the kernel thread table, tid == index + 1 and no
+ * allocation. Only the caller (g_current_tid, reset to 1) ever runs; the others
+ * exist so a wait list has somewhere to link. */
 thread_t* thread_table_at(uint32_t i) {
     return (i < POOL_MAX) ? &g_threads[i] : nullptr;
 }
@@ -84,6 +97,10 @@ void thread_set_state(uint32_t tid, thread_state_t state, thread_block_reason_t 
         t->block_reason = reason;
     }
 }
+/* Marks the thread runnable and stops there. There is no run queue and no
+ * dispatch, so a woken thread never actually resumes: the single host thread is
+ * the one making the host call. Every scenario is therefore driven from the
+ * caller's side alone. */
 void sched_wake_thread(thread_t* t) {
     if (t) {
         t->state = THREAD_STATE_READY;
@@ -113,12 +130,17 @@ void process_yield(process_run_result_t result) {
     }
 }
 
+/* One process, owning CALLER_CTX. Clearing g_have_process makes both report
+ * "no current process", which is how the no-process rows reach the shims'
+ * caller-resolution failure without unwinding the rest of the fixture. */
 uint32_t process_current_pid(void) {
     return g_have_process ? CALLER_PID : 0u;
 }
 process_t* process_get(uint32_t pid) {
     return (g_have_process && pid == CALLER_PID) ? &g_proc : nullptr;
 }
+/* Link-time no-ops: neither preemption nor the serial log is part of what a
+ * shim's return value depends on. */
 void preempt_safepoint(void) {}
 void klog_write(const char* s) {
     (void)s;
@@ -151,11 +173,19 @@ WarpIpcLastSlot* warp_ipc_slot_for_pid(uint32_t pid) {
 WarpFsPeerSlot* warp_fs_peer_slot_for_pid(uint32_t pid) {
     return pid ? &g_warp_peer : nullptr;
 }
+/* Tracing off, so the WARP shims take their quiet path and no scenario's result
+ * depends on log output. */
 uint8_t warp_dbg_ipc_trace_process(process_t* proc) {
     (void)proc;
     return 0;
 }
 
+/* Caller-context resolution: 0 on success with *out set to the process's
+ * context id, -1 with no current process or no out pointer. The kernel has two
+ * separate implementations of this, one per runtime (wasm3/link.c and
+ * warp/link.cpp); here WARP's forwards to wasm3's, so a difference the table
+ * reports comes from the shims themselves rather than from two ways of
+ * answering "who is calling". */
 int current_process_context(uint32_t* out) {
     if (!g_have_process || !out) {
         return -1;
@@ -186,6 +216,11 @@ static int32_t w3_call(M3RawCall fn, std::initializer_list<int32_t> args) {
 
 /* --------------------------------------------------------------- fixture */
 
+/* The endpoints a scenario is handed: a message endpoint and a notification
+ * endpoint owned by CALLER_CTX, plus one message endpoint owned by OTHER_CTX
+ * for the cross-context refusals. `ctx` doubles as the "a fixture exists" flag
+ * reset() tests before releasing the previous run's endpoints. Handles change
+ * on every reset, so nothing may cache them across one. */
 struct Env {
     uint32_t msg_ep;
     uint32_t note_ep;
@@ -194,6 +229,14 @@ struct Env {
 };
 static Env g_env;
 
+/* Rebuilds the whole fixture: thread pool, process, both runtimes' per-pid
+ * slots, and a fresh set of endpoints. Called before EACH runtime's run of a
+ * scenario, so the two see identical starting state and neither inherits the
+ * other's queued messages or last-message slot.
+ *
+ * The endpoint tables are process-global and real, so the previous run's
+ * endpoints are released by owner first -- including OTHER_CTX, which
+ * s_notify_foreign adds to without recording the handle. */
 static void reset(void) {
     memset(g_threads, 0, sizeof(g_threads));
     for (uint32_t i = 0; i < POOL_MAX; ++i) {
@@ -225,6 +268,12 @@ static void reset(void) {
     (void)ipc_endpoint_create(OTHER_CTX, &g_env.foreign_ep);
 }
 
+/* Queues a message on `ep` the way a peer would, straight through the real
+ * ipc_send rather than through a shim, so a scenario can set up "there is
+ * something to receive" without depending on the runtime under test. ipc_send
+ * sends as IPC_CONTEXT_KERNEL, so no source-ownership check applies; the
+ * message names no reply endpoint and its type/request_id are fixed markers.
+ * Returns ipc_send's status: 0 on success, negative otherwise. */
 static int ksend(uint32_t ep, uint32_t arg0) {
     ipc_message_t m;
     memset(&m, 0, sizeof(m));
@@ -542,6 +591,10 @@ static const Scenario k_scenarios[] = {
 
 /* -------------------------------------------------------------------- main */
 
+/* Brings the real endpoint tables up once, then runs every scenario twice --
+ * once per runtime, each after its own reset() -- and makes three assertions per
+ * row: the wasm3 value, the WARP value, and the relationship between them.
+ * Returns 0 when g_failures is zero, 1 otherwise. */
 int main(void) {
     ipc_init();
     reset();

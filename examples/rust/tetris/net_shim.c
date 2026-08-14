@@ -90,6 +90,9 @@ int32_t tnet_net_advance(void) {
     return rc;
 }
 
+/* The endpoint net-stack replies and doorbells arrive on, for the caller to add
+ * to its selector. Returns -1 before the first tnet_join_begin/tnet_host_begin
+ * creates it. */
 int32_t tnet_reply_ep(void) {
     return g_reply_ep;
 }
@@ -126,6 +129,9 @@ int32_t tnet_poll(void* buf, int32_t cap) {
     return (int32_t)n;
 }
 
+/* Close the gameplay socket and mark it unusable, so later tnet_send/tnet_poll
+ * calls return -1. Idempotent, and a no-op when no socket was ever ready. The
+ * reply endpoint is left in place. */
 void tnet_close(void) {
     if (g_ready) {
         wasmos_net_tcp_close(&g_sock);

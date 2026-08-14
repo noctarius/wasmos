@@ -51,6 +51,11 @@ void* malloc(size_t n) {
 static int g_failures;
 static int g_checks;
 
+/* Record one assertion. A failed condition is counted and printed with its
+ * source line, and the case CONTINUES -- so one case can report several
+ * failures, and every assertion after a failure still runs. The counters are
+ * file-global and cumulative; main's exit status is the only pass/fail signal a
+ * caller sees. */
 #define CHECK(cond, msg)                                                                           \
     do {                                                                                           \
         g_checks++;                                                                                \
@@ -62,6 +67,11 @@ static int g_checks;
 
 /* ------------------------------------------------------------------ stubs */
 
+/* The fixture's stand-in for the kernel's thread table and per-CPU state.
+ * g_current_tid names the pool thread the next IPC call acts as; g_now is the
+ * tick clock timer_ticks reports; g_yield_calls and g_wake_calls count stub
+ * entries since the last reset_threads, which is how a case asserts that a path
+ * did or did not block and woke exactly one thread. */
 #define POOL_MAX 8
 static thread_t g_pool[POOL_MAX];
 static uint32_t g_current_tid;
@@ -81,6 +91,11 @@ static void (*g_yield_hook)(void);
  * several simultaneous waiters on one endpoint. */
 static int g_park;
 
+/* The tick clock is a fixture variable: it advances only where a case assigns
+ * g_now, never on its own, so a deadline expires exactly where a case says it
+ * does. The kernel counts timer interrupts instead, and scales milliseconds by
+ * the configured tick rate (rounding up); here one tick is one millisecond, so
+ * a timeout in ms and a deadline in ticks compare directly. */
 uint64_t timer_ticks(void) {
     return g_now;
 }
@@ -89,10 +104,19 @@ uint64_t timer_ms_to_ticks(uint32_t ms) {
     return (uint64_t)ms;
 }
 
+/* Index the fake table, as the kernel does, but bounded by POOL_MAX rather than
+ * THREAD_MAX_COUNT. Returning 0 past the pool is what keeps sched_timeout_check
+ * -- which scans indices up to THREAD_MAX_COUNT -- inside the fixture. Like the
+ * kernel's, this hands back the slot whatever state it is in. */
 thread_t* thread_table_at(uint32_t index) {
     return (index < POOL_MAX) ? &g_pool[index] : 0;
 }
 
+/* Resolve a tid by scanning the pool. The kernel takes the thread-table lock and
+ * skips THREAD_STATE_UNUSED slots; this stub is unlocked -- the file is
+ * single-threaded -- and matches on tid alone, so a slot the kernel would treat
+ * as free is still reachable here. reset_threads numbers the pool 1..POOL_MAX,
+ * so no entry answers to tid 0. */
 thread_t* thread_get(uint32_t tid) {
     for (uint32_t i = 0; i < POOL_MAX; ++i) {
         if (g_pool[i].tid == tid) {
@@ -102,10 +126,17 @@ thread_t* thread_get(uint32_t tid) {
     return 0;
 }
 
+/* The kernel reads the executing CPU's current thread; the fixture's "current
+ * CPU" is g_current_tid, which a case (or park_recv) sets to choose which pool
+ * thread acts. */
 uint32_t thread_current_tid(void) {
     return g_current_tid;
 }
 
+/* Unconditional write. The kernel validates the edge against the thread state
+ * machine under the table lock and silently drops an illegal one -- notably any
+ * attempt to leave ZOMBIE -- so a transition the real kernel would refuse takes
+ * effect here. Unknown tids are ignored, as in the kernel. */
 void thread_set_state(uint32_t tid, thread_state_t state, thread_block_reason_t reason) {
     thread_t* t = thread_get(tid);
     if (t) {
@@ -114,6 +145,12 @@ void thread_set_state(uint32_t tid, thread_state_t state, thread_block_reason_t 
     }
 }
 
+/* Count the wake, record its target in g_last_woken, and mark the thread READY.
+ * The kernel's version claims the wake against the thread's completion path,
+ * drops it unless the thread is genuinely BLOCKED, enqueues it on a run queue
+ * and may request a preemption. None of that is modelled, so a stale or
+ * duplicate wake the real scheduler would discard is still counted here -- the
+ * cases therefore assert on the count and the order, not on runnability. */
 void sched_wake_thread(thread_t* t) {
     g_wake_calls++;
     g_last_woken = t;
@@ -122,6 +159,10 @@ void sched_wake_thread(thread_t* t) {
     }
 }
 
+/* Returns immediately, because a host stub cannot suspend its caller; see the
+ * MODELLING NOTE at the top of the file for what that does and does not change.
+ * An installed g_yield_hook fires at most once, before the unlink, so a case
+ * arms it again for each blocking call it wants a waker for. */
 void process_yield(process_run_result_t result) {
     (void)result;
     g_yield_calls++;
@@ -167,6 +208,12 @@ static uint32_t fresh_ctx(void) {
     return g_next_ctx++;
 }
 
+/* Re-arm the whole thread fixture: a pool of RUNNING threads with tids
+ * 1..POOL_MAX and self-linked list nodes, the tick clock, both counters, the
+ * yield hook, the park switch and the allocation-failure switch. It touches no
+ * IPC state -- ipc_init runs once in main, and endpoints, select sets and their
+ * per-context quotas survive it, which is why a case works under a fresh_ctx()
+ * and releases what it created. */
 static void reset_threads(void) {
     memset(g_pool, 0, sizeof(g_pool));
     for (uint32_t i = 0; i < POOL_MAX; ++i) {
@@ -199,6 +246,9 @@ static void park_recv(uint32_t ctx, uint32_t ep, thread_t* t) {
     g_current_tid = saved;
 }
 
+/* How many of the `n` threads are still parked: holding an event and linked into
+ * its wait list. The endpoint argument is unused -- parking is observed from the
+ * thread side, which is where a botched handoff shows up. */
 static int waiters_on(uint32_t ep_unused, thread_t** ts, int n) {
     (void)ep_unused;
     int parked = 0;
@@ -214,6 +264,11 @@ static thread_t* self_thread(void) {
     return thread_get(g_current_tid);
 }
 
+/* Build a message whose every payload field is derived from `a0`, so a case can
+ * tell the right message from a misdelivered or half-copied one: arg1..arg3
+ * follow a0 and request_id is a0 folded with a constant. destination is poisoned
+ * rather than left clear, which separates "send stamped it" from "it already
+ * held the target id". */
 static ipc_message_t msg_of(uint32_t source, uint32_t type, uint32_t a0) {
     ipc_message_t m;
     memset(&m, 0, sizeof(m));
@@ -228,6 +283,9 @@ static ipc_message_t msg_of(uint32_t source, uint32_t type, uint32_t a0) {
     return m;
 }
 
+/* The endpoint's queued-message count, or 0xFFFFFFFF when the query itself
+ * fails. That is a sentinel and not a count, so a case comparing against a
+ * number never mistakes a rejected query for an answer. */
 static uint32_t count_of(uint32_t ep) {
     uint32_t n = 0xFFFFFFFFu;
     if (ipc_endpoint_count(ep, &n) != IPC_OK) {
@@ -566,6 +624,9 @@ static void test_non_blocking_polls_do_not_arm_a_waiter(void) {
 
 /* ------------------------------------------------------- blocking receive */
 
+/* Arguments for hook_send, the stand-in waker: one kernel-sourced message
+ * carrying arg0 == g_hook_arg0, delivered to g_hook_ep while the caller is
+ * parked. Set both before installing g_yield_hook. */
 static uint32_t g_hook_ep;
 static uint32_t g_hook_arg0;
 
@@ -2006,6 +2067,11 @@ static void test_a_timed_select_wait_expires_as_empty(void) {
  * equivalence case rather than repeating every row twice.
  */
 
+/* Handles nothing resolves: BAD_EP wherever a row needs an endpoint id that does
+ * not exist, BAD_SEL a select id outside the table's range. Each c_* below makes
+ * exactly one call under the precondition its name states and returns the raw
+ * result code; the code it is expected to produce lives in the
+ * test_error_code_contract table, not next to the call. */
 #define BAD_EP 0x7FFFFFFFu
 #define BAD_SEL 0xFFFFu
 
@@ -2417,6 +2483,11 @@ static int c_sel_recv_ok(void) {
     return ipc_select_recv(g_env.sel, g_env.ctx, &r, &g_scratch, 0);
 }
 
+/* Build g_env from scratch: two fresh contexts and one endpoint of every shape
+ * the table's preconditions name, with ready_ep holding a single message and
+ * full_ep filled to IPC_QUEUE_DEPTH. Run per case, so no row can observe an
+ * endpoint another row left behind. It does not touch the thread pool; the case
+ * loop calls reset_threads for that. */
 static void contract_env_build(void) {
     memset(&g_env, 0, sizeof(g_env));
     g_env.ctx = fresh_ctx();
@@ -2436,6 +2507,9 @@ static void contract_env_build(void) {
     (void)ipc_select_listen(g_env.ctx, &g_env.msg_ep, 1, &g_env.sel);
 }
 
+/* Undo contract_env_build: the select set first, then both contexts and with
+ * them every endpoint g_env named. Endpoints a row created under a context of
+ * its own are that row's to release. */
 static void contract_env_teardown(void) {
     ipc_select_destroy(g_env.sel, g_env.ctx);
     ipc_endpoints_release_owner(g_env.ctx);
@@ -2593,6 +2667,10 @@ static void test_the_kernel_wrappers_match_their_from_variants(void) {
 
 /* -------------------------------------------------------------------- main */
 
+/* Run every case once, in a shuffled order, each behind a fresh reset_threads
+ * and against a single process-wide ipc_init. Returns 0 only when every CHECK
+ * passed and 1 otherwise; on failure the shuffle seed is printed so the exact
+ * order can be replayed through WASMOS_TEST_SEED. */
 int main(void) {
     struct {
         const char* name;

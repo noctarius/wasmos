@@ -74,6 +74,13 @@ static capability_context_state_t* capability_state_for_context(uint32_t context
     return ctx;
 }
 
+/* Creates the capability table and seeds context 0 with every capability bit.
+ * Must run before any grant or check; without it every lookup finds an empty
+ * list and therefore denies, which is the safe direction but silently disables
+ * the kernel context too.
+ *
+ * Reports nothing: a failed list_init or a failed kernel record simply returns.
+ * Not idempotent — a second call re-inits the list and abandons every record. */
 void capability_init(void) {
     if (list_init(&g_cap_ctx, (uint32_t)sizeof(capability_context_state_t), LIST_IMPL_ARRAY_CHUNK,
                   16) != 0) {
@@ -88,6 +95,21 @@ void capability_init(void) {
     kernel->mask = CAP_ALL_MASK;
 }
 
+/* Grants one capability named by an unterminated byte string, creating the
+ * context's record on first grant.  The accepted names are exactly "io.port",
+ * "irq.route", "mmio.map", "dma.buffer", "system.control", "subsystem.register"
+ * and "svc.class"; the match is exact, so a prefix or a differently-cased name
+ * is refused.
+ *
+ * Grants accumulate — bits are OR-ed in and there is no revoke.
+ *
+ * flags is used ONLY by "dma.buffer", where it is a budget in 4 KiB PAGES, and
+ * only when no DMA window has been declared yet: that path also opens the
+ * platform-wide low-2-GiB window with bidirectional access, which a later
+ * capability_set_spawn_profile can narrow.  Every other name ignores flags.
+ *
+ * Returns 0 on success, -1 for a NULL or empty name, an unrecognised name, or a
+ * full record list. */
 int capability_grant_name(uint32_t context_id, const uint8_t* name, uint32_t name_len,
                           uint32_t flags) {
     if (!name || name_len == 0) {
@@ -134,6 +156,11 @@ int capability_grant_name(uint32_t context_id, const uint8_t* name, uint32_t nam
     return 0;
 }
 
+/* 1 when the context holds the capability, 0 otherwise — a predicate, not a
+ * status code.  An unknown context and an unrecognised kind both answer 0, so a
+ * caller cannot distinguish "denied" from "asked the wrong question".  Checks
+ * the capability bit ONLY: the per-resource narrowing lives in the
+ * capability_*_allowed calls. */
 int capability_has(uint32_t context_id, capability_kind_t kind) {
     capability_context_state_t* ctx = capability_state_for_context(context_id, 0);
     if (!ctx)
@@ -145,11 +172,34 @@ int capability_has(uint32_t context_id, capability_kind_t kind) {
     return (ctx->mask & mask) != 0;
 }
 
+/* 1 once the context has received at least one grant (or is the kernel context),
+ * 0 for a context that was never granted anything.  Says nothing about WHICH
+ * capabilities are held, and is independent of
+ * capability_spawn_profile_configured. */
 int capability_context_configured(uint32_t context_id) {
     capability_context_state_t* ctx = capability_state_for_context(context_id, 0);
     return ctx ? (ctx->configured != 0) : 0;
 }
 
+/* Installs the per-resource narrowing the process manager derives from a
+ * driver's manifest at spawn.  It does NOT grant capability bits — those come
+ * from capability_grant_name — but marking the profile configured is what turns
+ * the capability_*_allowed checks from "capability alone suffices" into
+ * "capability plus this window".
+ *
+ * cap_flags selects which sections of the argument list are honoured: bit 0 the
+ * I/O ranges, bit 2 the IRQ mask, bit 3 the DMA windows and budget.  A section
+ * whose bit is clear is cleared to deny-all — except DMA, which keeps whatever a
+ * dma.buffer grant already put there.  io_ranges and dma_windows are copied by
+ * value, so the caller's arrays are borrowed for the call only.
+ *
+ * Over-declared or malformed input is REFUSED rather than truncated: more than
+ * CAPABILITY_IO_RANGE_LIMIT ranges, an inverted [first, last] range, and — when
+ * DMA is declared — a zero window count, a count above
+ * CAPABILITY_DMA_WINDOW_LIMIT, or a NULL window array all return -1.  A -1 can
+ * leave the record partially updated, so the context must not be started.
+ *
+ * Also returns -1 when no record can be created.  Returns 0 on success. */
 int capability_set_spawn_profile(uint32_t context_id, uint32_t cap_flags, uint32_t io_range_count,
                                  const wasmos_io_range_t* io_ranges, uint16_t irq_mask,
                                  uint32_t dma_direction_flags, uint32_t dma_max_bytes,
@@ -203,11 +253,21 @@ int capability_set_spawn_profile(uint32_t context_id, uint32_t cap_flags, uint32
     return 0;
 }
 
+/* 1 once capability_set_spawn_profile has run for this context.  policy.c uses
+ * it to decide whether a capability bit alone authorises an action or whether
+ * the profile's windows must be consulted, so a context WITHOUT a profile is the
+ * more permissive case for port I/O and MMIO, and the less permissive one for
+ * IRQ lines and DMA. */
 int capability_spawn_profile_configured(uint32_t context_id) {
     capability_context_state_t* ctx = capability_state_for_context(context_id, 0);
     return ctx ? (ctx->spawn_profile_configured != 0) : 0;
 }
 
+/* 1 when the port falls inside one of the context's granted I/O ranges, which
+ * are inclusive of both endpoints.  0 for an unknown context, a context without
+ * a spawn profile, and a profile that did not declare the I/O section — so this
+ * answers the narrowing question only and does not check the CAP_IO_PORT bit.
+ * It covers a single byte; use capability_io_region_port for a wider access. */
 int capability_io_port_allowed(uint32_t context_id, uint16_t port) {
     const capability_context_state_t* ctx = capability_state_for_context(context_id, 0);
     if (!ctx) {
@@ -224,6 +284,17 @@ int capability_io_port_allowed(uint32_t context_id, uint16_t port) {
     return 0;
 }
 
+/* Resolves a driver's (region index, offset) pair into an absolute I/O port,
+ * checking that an access of access_width bytes fits entirely inside that
+ * region.  This is the indirection that keeps a driver from naming raw ports:
+ * region is an index into the profile's declared ranges, in declaration order.
+ *
+ * access_width is in bytes and must be 1..4.  Note the return convention differs
+ * from the rest of this file: 0 on success with the port in *out_port, and a
+ * packed error otherwise — WASMOS_ERR_IO_NOT_AUTHORIZED for a NULL out_port, an
+ * unknown context, or no I/O profile; WASMOS_ERR_IO_BAD_REGION for an index past
+ * the declared ranges; WASMOS_ERR_IO_OUT_OF_WINDOW for a bad width or an access
+ * that would run past the region's last port. */
 int capability_io_region_port(uint32_t context_id, uint32_t region, uint32_t offset,
                               uint32_t access_width, uint16_t* out_port) {
     const capability_context_state_t* ctx = capability_state_for_context(context_id, 0);
@@ -253,6 +324,10 @@ int capability_io_region_port(uint32_t context_id, uint32_t region, uint32_t off
     return 0;
 }
 
+/* 1 when the profile's 16-bit IRQ mask has the line's bit set.  Lines 16 and
+ * above are always 0, since the mask cannot express them.  A context without a
+ * spawn profile is denied outright — unlike port I/O and MMIO, an IRQ line
+ * always needs an explicit profile. */
 int capability_irq_line_allowed(uint32_t context_id, uint32_t irq_line) {
     if (irq_line >= 16) {
         return 0;
@@ -267,6 +342,9 @@ int capability_irq_line_allowed(uint32_t context_id, uint32_t irq_line) {
     return ((ctx->irq_mask & (uint16_t)(1u << irq_line)) != 0) ? 1 : 0;
 }
 
+/* 1 when the context has a spawn profile AND holds CAP_MMIO_MAP.  There is no
+ * per-address MMIO window in the profile, so this is a whole-capability answer
+ * and any permitted context may map any MMIO address. */
 int capability_mmio_allowed(uint32_t context_id) {
     const capability_context_state_t* ctx = capability_state_for_context(context_id, 0);
     if (!ctx) {
@@ -278,6 +356,10 @@ int capability_mmio_allowed(uint32_t context_id) {
     return (ctx->mask & (1u << 2)) != 0;
 }
 
+/* 1 when EVERY direction bit requested is present in the context's permitted set
+ * — a subset test, not an intersection test, so asking for bidirectional access
+ * against a to-device-only profile is denied rather than downgraded.  A zero
+ * request is denied.  Requires both a spawn profile and CAP_DMA_BUFFER. */
 int capability_dma_direction_allowed(uint32_t context_id, uint32_t direction_flags) {
     if (direction_flags == 0) {
         return 0;
@@ -292,6 +374,14 @@ int capability_dma_direction_allowed(uint32_t context_id, uint32_t direction_fla
     return (ctx->dma_direction_flags & direction_flags) == direction_flags;
 }
 
+/* 1 when [base, base+length) is contained in a SINGLE declared DMA window.  base
+ * is a physical address.  A range that spans two adjacent windows is denied,
+ * because containment is tested window by window.
+ *
+ * Denies a zero length, a range that wraps, an unknown context, a context
+ * without a spawn profile or CAP_DMA_BUFFER, and a window list that is empty or
+ * over the limit.  A window of zero length, or one that wraps, is skipped rather
+ * than treated as matching. */
 int capability_dma_range_allowed(uint32_t context_id, uint64_t base, uint64_t length) {
     if (length == 0) {
         return 0;
@@ -324,6 +414,10 @@ int capability_dma_range_allowed(uint32_t context_id, uint64_t base, uint64_t le
     return 0;
 }
 
+/* The context's total DMA budget in bytes, or 0 when it has none — which also
+ * covers an unknown context, a missing spawn profile and a missing
+ * CAP_DMA_BUFFER.  0 means no driver-owned DMA region may be created at all, not
+ * "unlimited". */
 uint32_t capability_dma_max_bytes(uint32_t context_id) {
     const capability_context_state_t* ctx = capability_state_for_context(context_id, 0);
     if (!ctx) {
@@ -335,6 +429,11 @@ uint32_t capability_dma_max_bytes(uint32_t context_id) {
     return ctx->dma_max_bytes;
 }
 
+/* 1 when charging `bytes` on top of what is already committed would stay within
+ * the context's budget.  A pure test: it does not reserve anything, so the
+ * caller must follow a successful allocation with capability_dma_commit, and
+ * nothing serialises the two.  A zero `bytes`, a missing profile or capability,
+ * and a zero budget are all denied. */
 int capability_dma_within_budget(uint32_t context_id, uint64_t bytes) {
     const capability_context_state_t* ctx = capability_state_for_context(context_id, 0);
     if (!ctx || bytes == 0) {
@@ -349,6 +448,10 @@ int capability_dma_within_budget(uint32_t context_id, uint64_t bytes) {
     return (ctx->dma_pinned_bytes + bytes) <= (uint64_t)ctx->dma_max_bytes;
 }
 
+/* Charges `bytes` against the context's cumulative DMA usage.  Monotonic: there
+ * is no matching release, so a driver that frees a DMA region does not get its
+ * budget back, and the counter is neither clamped to dma_max_bytes nor checked
+ * for overflow.  An unknown context is ignored. */
 void capability_dma_commit(uint32_t context_id, uint64_t bytes) {
     capability_context_state_t* ctx = capability_state_for_context(context_id, 0);
     if (!ctx) {

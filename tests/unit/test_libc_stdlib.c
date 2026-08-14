@@ -1,4 +1,16 @@
-/* test_libc_stdlib.c - unit tests for wasmos libc strtol */
+/* test_libc_stdlib.c - unit tests for wasmos libc strtol
+ *
+ * src/libc/src/stdlib.c and string.c are compiled in for real. What cannot be
+ * real on the host is the allocator underneath them: the compile line defines
+ * __builtin_wasm_memory_size away to 0 and __builtin_wasm_memory_grow to -1, and
+ * tests/unit/stubs_wasm_stdlib.c supplies the __heap_base the linker normally
+ * provides, so the heap can never grow and every malloc() returns NULL. Only
+ * the allocator-independent entry points are meaningfully covered here.
+ *
+ * The expected saturation values are spelled as expressions over `long` rather
+ * than as literals, so they hold at any width; the input strings around the
+ * boundary are the 64-bit ones, matching the host rather than wasm32's 32-bit
+ * `long`. */
 #include <stdint.h>
 #include <stddef.h>
 

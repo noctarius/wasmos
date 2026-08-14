@@ -5,10 +5,11 @@
  * the single-pass JIT compiler, and runs the compiled code in ring 3.
  *
  * Exception strategy: try/catch requires a working C++ unwinder, so the
- * per-CPU warp_exception_checkpoint from cxx_abi.cpp is used instead.
- * The WARP_CALL macro sets a __builtin_setjmp checkpoint before each WARP API
- * call; __cxa_throw longjmps directly back to that checkpoint so the exception
- * never propagates through kernel call frames. */
+ * per-CPU warp_exception_checkpoint from cxx_abi.cpp is used instead.  Each call into
+ * WARP arms a __builtin_setjmp checkpoint first; __cxa_throw longjmps directly back to
+ * it, so an exception never propagates through kernel call frames — and nothing between
+ * the throw and the checkpoint is unwound.  The WARP_CALL macro below packages that
+ * pattern, but the call sites open-code it so they can run their own recovery. */
 
 #include <cstdint>
 #ifndef WASMOS_WARP_RUNTIME_LOAD_AOT
@@ -68,17 +69,30 @@ static int warp_r3_call_export(vb::WasmModule* mod, const char* name, uint32_t a
 // Exception checkpoint helpers (defined in cxx_abi.cpp)
 // ---------------------------------------------------------------------------
 
+/* Per-CPU catch point for a WARP C++ exception, defined in warp/cxx_abi.cpp and
+ * mirrored here (the layouts must stay identical).  `jbuf` is a 5-slot
+ * __builtin_setjmp buffer; `active` gates whether __cxa_throw longjmps into it or
+ * panics.  Exactly one checkpoint per CPU, so checkpoints do not nest: arming a second
+ * one overwrites the first, and the code below always disarms (`active = 0`) before
+ * returning through a path that could throw again.  A checkpoint armed on one CPU is
+ * only usable while execution stays on that CPU. */
 struct WarpExceptionCheckpoint {
     void* jbuf[5];
     int active;
 };
+/* This CPU's checkpoint.  The pointer is stable for the CPU, not for the thread. */
 extern "C" WarpExceptionCheckpoint* warp_exception_get_checkpoint(void);
 
-/* WARP_CALL(retval_on_exception, expression):
- *   - Sets a per-CPU setjmp checkpoint.
- *   - Evaluates expression.
- *   - If __cxa_throw fires, execution resumes after the macro with the given
- *     return value. */
+/* WARP_CALL(err_ret, expr):
+ *   - Arms this CPU's exception checkpoint.
+ *   - Evaluates `expr`, then disarms the checkpoint.
+ *   - If __cxa_throw fires anywhere inside `expr`, it longjmps back here and the macro
+ *     RETURNS `err_ret` from the ENCLOSING function — it does not resume after the
+ *     macro, so anything the enclosing function still had to undo (a switched CR3, a
+ *     held lock) is skipped. Usable only in a function whose return type `err_ret`
+ *     converts to, and only where a checkpoint is not already armed.
+ * Currently unreferenced: the call sites below open-code this pattern so they can run
+ * their own recovery between the longjmp landing and the return. */
 #define WARP_CALL(err_ret, expr)                                                                   \
     do {                                                                                           \
         WarpExceptionCheckpoint* _ckpt = warp_exception_get_checkpoint();                          \
@@ -96,11 +110,16 @@ extern "C" WarpExceptionCheckpoint* warp_exception_get_checkpoint(void);
 // Helpers
 // ---------------------------------------------------------------------------
 
-/* Stack fence for WARP's ACTIVE_STACK_OVERFLOW_CHECK signed jle.
- * Kernel RSP is ~0xFFFFFFFF8... (signed ~-2GB).
- * 0xFFFFFFFF00000000 (signed ~-4GB) is always < kernel RSP, so jle never fires. */
+/* Stack fence handed to every ring-0 WARP entry point.  WARP's
+ * ACTIVE_STACK_OVERFLOW_CHECK compares RSP against this with a SIGNED jle, and a kernel
+ * RSP near 0xFFFFFFFF8... is signed ~-2 GiB, so a fence at signed ~-4 GiB never trips.
+ * It is therefore a disabling value, not a real guard: ring-0 WARP code gets no stack
+ * overflow detection.  The ring-3 path replaces it with a genuine fence inside the user
+ * stack (see warp_r3_patch_basedata). */
 static const uint8_t* const k_stack_fence = reinterpret_cast<const uint8_t*>(0xFFFFFFFF00000000ULL);
 
+/* The driver's vb::WasmModule, stored type-erased in the C struct.  Undefined for a
+ * driver whose wasm_module is null; every caller checks driver->active first. */
 static inline vb::WasmModule* module_of(wasm_driver_t* d) noexcept {
     return static_cast<vb::WasmModule*>(d->wasm_module);
 }
@@ -137,6 +156,12 @@ static KernelLogger g_logger;
 // Module start
 // ---------------------------------------------------------------------------
 
+/* Run the module's WASM start function under an exception checkpoint.  When `user_root`
+ * is non-zero the call is made with that user CR3 loaded, because start() still executes
+ * in ring 0 yet may call imports whose DYNAMIC_LINK pointers are user-space trampoline
+ * VAs that only resolve in the module's own address space; the previous root is restored
+ * before returning.  Returns 0 on success, -1 if WARP threw — in which case the CR3 is
+ * NOT restored here, since the longjmp bypasses the restore. */
 static int warp_driver_start_module(vb::WasmModule* mod, uint64_t user_root) {
     WarpExceptionCheckpoint* ckpt = warp_exception_get_checkpoint();
     ckpt->active = 1;
@@ -165,6 +190,12 @@ static int warp_driver_start_module(vb::WasmModule* mod, uint64_t user_root) {
     return 0;
 }
 
+/* Idempotently run start() once per driver, then, for a ring-3 driver, finish the
+ * address-space setup that only becomes possible after start(): the first WASM page is
+ * probed so a ring-3 wrapper does not immediately fault on WARP's own bookkeeping
+ * offsets, the linear-memory allocation is (re)published into the user root, and the
+ * basedata is patched for user-space execution.  Returns 0 when the driver is started,
+ * -1 for an inactive driver, a start() exception, or a linmem mapping failure. */
 static int warp_driver_ensure_started(wasm_driver_t* driver, uint64_t user_root,
                                       uint64_t stack_phys) {
     if (!driver || !driver->active || !driver->wasm_module) {
@@ -207,6 +238,12 @@ static int warp_driver_ensure_started(wasm_driver_t* driver, uint64_t user_root,
 // Call helper — invokes an exported function with 0-4 i32 args
 // ---------------------------------------------------------------------------
 
+/* Invoke exported function `name` with `argc` i32 arguments from `argv`.  With a
+ * non-zero `user_root` this becomes a ring-3 call via warp_r3_call_export; otherwise the
+ * JIT wrapper is called directly in ring 0 under an exception checkpoint.  `argc` above
+ * 4 is NOT rejected: the extra arguments are dropped and only argv[0..3] are passed, so
+ * `argv` must have at least 4 readable elements whenever argc >= 4.  Returns 0 when the
+ * call completed, -1 when WARP threw or the guest trapped. */
 static int call_export_mod(vb::WasmModule* mod, const char* name, uint32_t argc,
                            const uint32_t* argv, uint64_t user_root = 0, uint64_t stack_phys = 0) {
 #ifdef WASMOS_WASM_RUNTIME_WARP
@@ -248,6 +285,9 @@ static int call_export_mod(vb::WasmModule* mod, const char* name, uint32_t argc,
     return 0;
 }
 
+/* call_export_mod with the driver's ring-3 root and stack filled in.  Currently
+ * unreferenced; the public entry points call call_export_mod directly so they can drop
+ * the lock first. */
 __attribute__((unused)) static int call_export(wasm_driver_t* driver, const char* name,
                                                uint32_t argc, const uint32_t* argv) {
 #ifdef WASMOS_WASM_RUNTIME_WARP
@@ -371,8 +411,11 @@ static __attribute__((noinline)) void r3_do_iretq(uint64_t rip, uint64_t rsp, ui
     __builtin_unreachable();
 }
 
-/* Resolve the JIT wrapper entry point for exported function 'name' and return
- * its ring-3 user VA, or 0 on failure. */
+/* Ring-3 user VA of the JIT wrapper for exported function `name`.  Resolves the kernel
+ * address through WARP's runtime under an exception checkpoint, then rebases it into the
+ * user JIT window by its offset within the compiled binary.  Returns 0 when the lookup
+ * threw or the resolved address lies outside the compiled binary — which is the check
+ * that keeps a bad export from being turned into an arbitrary user VA. */
 static uint64_t warp_r3_resolve_export(vb::WasmModule* mod, const char* name) {
     vb::Span<char const> name_span(name, __builtin_strlen(name));
     uint8_t const* kernel_fn = nullptr;
@@ -398,7 +441,27 @@ static uint64_t warp_r3_resolve_export(vb::WasmModule* mod, const char* name) {
 }
 
 /* Invoke WASM export 'name' via ring-3 IRET, blocking the kernel thread until
- * the WARP_RETURN syscall fires.  Returns 0 on success, -1 on error. */
+ * the WARP_RETURN syscall fires.  Returns 0 on success, -1 on error.
+ *
+ * Entry/exit contract.  What is saved is exactly the calling process's page-table root,
+ * into t->warp_r3_old_cr3, and the resume point, into t->warp_r3_jbuf; both live on the
+ * THREAD, not on cpu_local, because the guest can block inside a host call and be
+ * resumed on a different CPU, and the WARP_RETURN handler must find this thread's
+ * landing pad wherever it fires.  Nothing else is saved: the guest's general registers
+ * are set up on the ring-3 stack and in the IRET frame, and the kernel keeps no copy.
+ *
+ * The checkpoint covers the whole guest execution, from the setjmp to WARP_RETURN.  It
+ * is NOT the C++ exception checkpoint — that one (warp_exception_get_checkpoint) is
+ * per-CPU and is armed here only around warp_r3_resolve_export; the guest itself leaves
+ * through the return trampoline or faults, it does not unwind into this frame.
+ *
+ * Between arming t->warp_r3_active and the IRET nothing may block, reschedule, or
+ * switch the root table: the CR3 is already the guest's, so a context switch out of
+ * here would restore a root that no longer matches the saved one.  The caller therefore
+ * drops driver->lock and the runtime binding before calling in (see
+ * warp_driver_ring3_call_policy_resolve) rather than holding them across the guest.
+ * After the longjmp lands, the kernel root is restored first and only then is the
+ * guest's trap code read out of the ring-3 stack through its kernel alias. */
 static int warp_r3_call_export(vb::WasmModule* mod, const char* name, uint32_t argc,
                                const uint32_t* argv, uint64_t user_root, uint64_t stack_phys,
                                uint64_t r3_linmem_base) {
@@ -480,6 +543,20 @@ static int warp_r3_call_export(vb::WasmModule* mod, const char* name, uint32_t a
     __builtin_unreachable();
 }
 
+/* Kernel side of WASMOS_SYSCALL_WARP_MEMORY_HELPER: a ring-3 guest asking for its
+ * linear memory to be grown to at least `min_linmem_len` bytes.  `original_linmem_user_va`
+ * is a USER VA (the guest's current linMem base) and `basedata_len` the byte distance
+ * from the allocation start to that base.
+ *
+ * Returns the USER VA of the allocation start (linMem base minus basedata) that the
+ * guest must reload, 0 on refusal, and ~0 when WARP's own helper signals that outcome.
+ * A request already covered by the committed size returns the existing base without
+ * growing.  On a real growth the new allocation is republished into the CURRENT user
+ * root and the ring-3 stack's proxy slot at WARP_R3_STACK_BASE is rewritten, because
+ * that slot is what the JIT's bounds-check reload dereferences.
+ *
+ * The current CR3 must already be the calling guest's root — it is, because this runs
+ * on the INT 0x80 path out of that guest and before any root switch. */
 extern "C" uint64_t warp_r3_memory_helper(uint64_t min_linmem_len, uint32_t basedata_len,
                                           uint64_t original_linmem_user_va) {
     if (basedata_len == 0 || original_linmem_user_va < USER_VA_MIN) {

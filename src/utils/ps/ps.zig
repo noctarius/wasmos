@@ -157,6 +157,8 @@ fn printTreeNode(out: *OutBuf, index: usize, count: usize, depth: u32) void {
     }
 }
 
+/// Program entry point; returns 0 normally, or 1 if the output buffer overflowed
+/// before the process rows were assembled.
 pub fn main() u8 {
     const args = wasmos.cliArgs();
     const show_tree = args.len > 0 and

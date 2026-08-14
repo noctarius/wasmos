@@ -22,25 +22,44 @@
 #include "wasmos/startup.h"
 #include "wasmos_driver_abi.h"
 
+/* Fixed window content size in pixels.  The window is not resizable, so every
+ * layout constant below is expressed against these. */
 #define EXPLORER_W 680
 #define EXPLORER_H 420
+/* Capacities of the directory listing.  EXPLORER_LIST_BUF is the raw reply text
+ * a single readdir is streamed into; EXPLORER_MAX_ENTRIES caps the parsed rows
+ * (and separately the sidebar's directory rows).  A directory with more entries
+ * than fits in either is truncated, with no indication in the UI. */
 #define EXPLORER_LIST_BUF 4096
 #define EXPLORER_MAX_ENTRIES 96
+/* Per-entry name and per-path buffer sizes, including the NUL.  Longer names and
+ * paths are truncated. */
 #define EXPLORER_NAME_MAX 96
 #define EXPLORER_PATH_MAX 256
+/* Vertical layout, in pixels: the outer padding, the gap between the four
+ * stacked rows, and the height of each fixed-height row.  The remaining height
+ * goes to the body row, floored at 80 px (see explorer_body_height). */
 #define EXPLORER_ROOT_PADDING 10
 #define EXPLORER_ROOT_GAP 8
 #define EXPLORER_PATH_H 30
 #define EXPLORER_STATUS_H 26
 #define EXPLORER_TOOLBAR_H 34
+/* Width of the directory-tree sidebar, in pixels; the file list takes the rest
+ * of the body row. */
 #define EXPLORER_SIDEBAR_W 220
+/* Rows the sidebar tree can hold across all expanded levels. */
 #define EXPLORER_TREE_MAX 128
 
+/* One parsed directory entry. */
 typedef struct {
     char name[EXPLORER_NAME_MAX];
-    int32_t is_dir;
+    int32_t is_dir; /* non-zero for a directory */
 } explorer_entry_t;
 
+/* One row of the sidebar tree.  `label` is the display string (the entry name
+ * with a trailing '/', which is why it has headroom over EXPLORER_NAME_MAX),
+ * `path` the absolute path the row navigates to, and `depth` the nesting level
+ * the tree widget indents by, 0 for the root. */
 typedef struct {
     char path[EXPLORER_PATH_MAX];
     char label[EXPLORER_NAME_MAX + 12];

@@ -209,6 +209,15 @@ static const boot_module_t* pm_module_at(uint32_t index) {
     return (const boot_module_t*)(mods + index * info->module_entry_size);
 }
 
+/* Index into the boot module table of the WASMOS-APP whose embedded name matches
+ * `name` exactly, or 0xFFFFFFFF when there is none — which is the sentinel
+ * g_pm.init_module_index carries and every caller tests against, NOT an index.
+ *
+ * Linear over every module, re-parsing each header on every call; only used at
+ * init and on module-index spawns, so that cost is not on a hot path.  Modules
+ * that are not WASMOS-APPs, are empty, or fail to parse are skipped rather than
+ * ending the search, and a name longer than 63 bytes never matches (it does not
+ * fit the comparison buffer). */
 uint32_t pm_find_module_index_by_name(const char* name) {
     const boot_info_t* info = g_pm.boot_info;
     if (!info || !name || !(info->flags & BOOT_INFO_FLAG_MODULES_PRESENT)) {
@@ -1002,6 +1011,28 @@ static int pm_fs_read_blob_for_spawn(uint32_t pm_context_id, const xfer_buffer_o
     return 0;
 }
 
+/* ---- Spawn request handlers ----------------------------------------------
+ * Every pm_handle_* below shares one convention: 0 means the handler has ALREADY
+ * sent its own reply (or, for the *_sync forms, has armed g_pm.spawn so the
+ * reply is sent later when the child reports ready).  A non-zero return is a
+ * packed WASMOS_ERR_* code that the PM run loop converts into a PROC_IPC_ERROR
+ * reply carrying it in arg1 — so a handler must never both return non-zero and
+ * send a reply itself.  `msg` is borrowed for the call.
+ *
+ * The identity of the caller is always established the same way: resolve
+ * msg->source's owning context, then the process behind that context.  That
+ * process becomes the child's parent, which is what makes the child waitable and
+ * killable by its spawner and nobody else.
+ *
+ * The *_sync forms complete on the child's READY rather than immediately.  Only
+ * ONE such spawn can be in flight, because g_pm.spawn is a single slot; a second
+ * is refused with WASMOS_ERR_PROC_PM_BUSY.  They arm the slot and then unpark
+ * the child LAST, so the child cannot report ready before the slot describes who
+ * to answer.
+ */
+
+/* Spawn by boot-module index (PROC_IPC_SPAWN_SYNC), replying when the child is
+ * ready.  arg0 = module index, arg1 = timeout in ms (0 = wait indefinitely). */
 int pm_handle_spawn_sync(uint32_t pm_context_id, const ipc_message_t* msg) {
     uint32_t owner_context = 0;
     process_t* caller = 0;
@@ -1040,6 +1071,15 @@ int pm_handle_spawn_sync(uint32_t pm_context_id, const ipc_message_t* msg) {
     return 0;
 }
 
+/* Spawn by boot-module index with capabilities (PROC_IPC_SPAWN_CAPS_SYNC),
+ * replying when the child is ready.  arg0 = module index, arg1 = cap_flags,
+ * arg2 = (io_port_max << 16) | io_port_min, arg3 = (timeout_ms << 16) | irq_mask
+ * — so the timeout here is capped at 65535 ms, unlike the path forms where arg3
+ * is the whole word.
+ *
+ * A caps failure kills the child rather than leaving it parked with the wrong
+ * authority.  The DMA bit expands to a fixed permissive default profile (bidir,
+ * 4 KiB, one 2 GiB window); the descriptor form is what carries a real policy. */
 int pm_handle_spawn_caps_sync(uint32_t pm_context_id, const ipc_message_t* msg) {
     pm_spawn_caps_t caps = {0};
     uint32_t owner_context = 0;
@@ -1103,6 +1143,16 @@ int pm_handle_spawn_caps_sync(uint32_t pm_context_id, const ipc_message_t* msg) 
     return 0;
 }
 
+/* Spawn from a filesystem path (PROC_IPC_SPAWN_PATH_SYNC), replying when the
+ * child is ready.  arg0 = PROC_SPAWN_PATH_FLAG_* request flags,
+ * arg1 = (caller_buffer_id << 12) | path_len, arg3 = timeout in ms.  The path
+ * bytes live at offset 0 of the caller's transfer buffer named by that id; PM
+ * reads them directly (it is kernel) and requires path_len < 256.
+ *
+ * The blob is read into a PM-OWNED per-operation buffer and the child is built
+ * from that, so the caller cannot mutate the image after PM has validated it.
+ * That buffer is released before the reply is armed, on both the success and the
+ * failure paths. */
 int pm_handle_spawn_path_sync(uint32_t pm_context_id, const ipc_message_t* msg) {
     uint32_t owner_context = 0;
     process_t* caller = 0;
@@ -1177,6 +1227,14 @@ int pm_handle_spawn_path_sync(uint32_t pm_context_id, const ipc_message_t* msg) 
     return 0;
 }
 
+/* Spawn from a path with capabilities (PROC_IPC_SPAWN_PATH_CAPS_SYNC), replying
+ * when the child is ready.  arg0 = (irq_mask << 16) | cap_flags,
+ * arg1 = (caller_buffer_id << 12) | path_len,
+ * arg2 = (io_port_max << 16) | io_port_min, arg3 = timeout in ms.
+ *
+ * The caller's buffer holds the path at offset 0 and, if the byte after it is
+ * not NUL, a NUL-terminated CLI argument string immediately following — which is
+ * why arg2 is spent on the I/O window and cannot carry an args length. */
 int pm_handle_spawn_path_caps_sync(uint32_t pm_context_id, const ipc_message_t* msg) {
     uint32_t caps_arg0 = (uint32_t)msg->arg0;
     uint32_t caps_arg2 = (uint32_t)msg->arg2;
@@ -1374,6 +1432,17 @@ void pm_poll_spawn(uint32_t pm_context_id) {
     pm_poll_sync_spawn(pm_context_id);
 }
 
+/* A child announcing itself (PROC_IPC_NOTIFY_READY).  Latches the sender's ready
+ * flag, completes an in-flight sync spawn if the sender IS that spawn's child,
+ * then acks the sender so its blocking wasmos_sys_notify_ready() returns.
+ * Returns 0, or a packed WASMOS_ERR_PROC_PM_* code.
+ *
+ * The sender identifies itself implicitly, by the context owning msg->source —
+ * there is no pid argument, so one process cannot report another as ready.  The
+ * ack is sent LAST, after the parent's spawn reply, so the child cannot resume
+ * and tear down its endpoint before that reply has been built.  A notify from a
+ * process that is not the pending spawn's child is still latched and acked; it
+ * simply does not complete the spawn. */
 int pm_handle_notify_ready(uint32_t pm_context_id, const ipc_message_t* msg) {
     uint32_t owner_context = 0;
     process_t* sender = 0;
@@ -1420,6 +1489,16 @@ int pm_handle_notify_ready(uint32_t pm_context_id, const ipc_message_t* msg) {
                : WASMOS_ERR_PROC_PM_REPLY_SEND;
 }
 
+/* Sweeps the PROC_IPC_WAIT list once, replying for every waiter whose target has
+ * exited and reaping that target afterwards.  Called once per PM dispatch — no
+ * IPC wakes PM for a child's exit, so this poll is what makes waits complete.
+ *
+ * A waiter whose reply endpoint no longer resolves, or now belongs to a
+ * different context than when the wait was registered, is DROPPED without a
+ * reply: the endpoint id may have been recycled to another process, and sending
+ * there would deliver one process's exit status to another.  A waiter whose
+ * target has not exited is simply left for the next sweep, so a wait on a pid
+ * that never exits occupies its slot indefinitely. */
 void pm_check_waits(uint32_t pm_context_id) {
     list_iter_t it;
     pm_wait_state_t* waiter = (pm_wait_state_t*)list_first(&g_pm.waits, &it);
@@ -1463,6 +1542,15 @@ void pm_check_waits(uint32_t pm_context_id) {
     }
 }
 
+/* Collects PM's own exited children once per dispatch: for each in-use app slot
+ * whose process has exited, stops the wasm instance, frees the slot's owned blob
+ * pages and clears the slot.  `owner` is PM's own process_t, needed because
+ * process_wait enforces the parent check — so this only reaps children PM
+ * itself spawned, never a CLI's.
+ *
+ * Deliberately non-blocking: process_get_exit_status is tested first, so
+ * process_wait is only ever reached on an already-exited child and cannot park
+ * PM.  A still-running app is skipped and retried next dispatch. */
 void pm_reap_apps(process_t* owner) {
     if (!owner) {
         return;
@@ -1489,6 +1577,12 @@ void pm_reap_apps(process_t* owner) {
     }
 }
 
+/* Spawn by boot-module index, replying IMMEDIATELY (PROC_IPC_SPAWN).  arg0 =
+ * module index, arg1 = PROC_SPAWN_PATH_FLAG_* (only AUTOREAP is honoured here).
+ * The reply carries the new pid in arg0 and is sent as soon as the child is
+ * unparked, so a successful reply means "spawned", not "ready" — use the _SYNC
+ * form when readiness matters.  Not gated on g_pm.spawn, so any number of these
+ * can be issued back to back. */
 int pm_handle_spawn(uint32_t pm_context_id, const ipc_message_t* msg) {
     uint32_t owner_context = 0;
     process_t* caller = 0;
@@ -1534,6 +1628,11 @@ int pm_handle_spawn(uint32_t pm_context_id, const ipc_message_t* msg) {
                : WASMOS_ERR_PROC_PM_REPLY_SEND;
 }
 
+/* Spawn by boot-module index with capabilities, replying immediately
+ * (PROC_IPC_SPAWN_CAPS).  arg0 = module index, arg1 = cap_flags,
+ * arg2 = (io_port_max << 16) | io_port_min, arg3 = irq_mask (whole word, unlike
+ * the _SYNC variant which shares arg3 with a timeout).  Caps are applied while
+ * the child is still parked, and a caps failure kills it. */
 int pm_handle_spawn_caps(uint32_t pm_context_id, const ipc_message_t* msg) {
     pm_spawn_caps_t caps = {0};
     uint32_t owner_context = 0;
@@ -1591,6 +1690,20 @@ int pm_handle_spawn_caps(uint32_t pm_context_id, const ipc_message_t* msg) {
                : WASMOS_ERR_PROC_PM_REPLY_SEND;
 }
 
+/* Spawn by boot-module index with a full capability DESCRIPTOR, replying
+ * immediately (PROC_IPC_SPAWN_CAPS_V2).  arg0 = module index, arg1 = the
+ * caller's transfer-buffer id holding a wasmos_spawn_caps_v2_t followed by
+ * io_range_count I/O ranges and then dma.window_count DMA windows,
+ * arg2 = the payload's byte length.
+ *
+ * The only spawn form that carries a real DMA policy and multiple I/O windows
+ * instead of the fixed defaults the packed forms substitute.  Validation is
+ * strict on purpose, since this grants device authority: unknown cap_flags bits,
+ * an inverted or over-long range list, a DMA request with no direction, zero
+ * max_bytes or too many windows, and a payload whose length does not match what
+ * the counts imply are each refused with WASMOS_ERR_PROC_PM_BAD_CAPS before any
+ * process is created.  A non-zero io_range_count supersedes the single
+ * io_port_min/max pair. */
 int pm_handle_spawn_caps_v2(uint32_t pm_context_id, const ipc_message_t* msg) {
     pm_spawn_caps_t caps = {0};
     wasmos_spawn_caps_v2_t in_caps;
@@ -1720,6 +1833,18 @@ int pm_handle_spawn_caps_v2(uint32_t pm_context_id, const ipc_message_t* msg) {
                : WASMOS_ERR_PROC_PM_REPLY_SEND;
 }
 
+/* Spawn from a filesystem path (PROC_IPC_SPAWN_PATH).  arg0 =
+ * PROC_SPAWN_PATH_FLAG_*, arg1 = (caller_buffer_id << 12) | path_len,
+ * arg2 = CLI argument byte length.  The caller's transfer buffer holds the path
+ * at offset 0 and, when args_len is non-zero, the arguments at path_len + 1.
+ *
+ * The only handler whose reply timing depends on the IMAGE rather than the
+ * opcode: if the parsed app declares that it must announce readiness, and the
+ * request did not ask to DETACH, this behaves like the _SYNC forms — it takes
+ * the single g_pm.spawn slot (refusing with WASMOS_ERR_PROC_PM_BUSY if taken)
+ * and defers the reply.  Otherwise it replies as soon as the child is unparked,
+ * with the app's flags in arg1.  A parse failure is not fatal: it just means no
+ * flags and no ready gating, so a non-WASMOS-APP image still spawns. */
 int pm_handle_spawn_path(uint32_t pm_context_id, const ipc_message_t* msg) {
     uint32_t owner_context = 0;
     process_t* caller = 0;
@@ -1848,6 +1973,14 @@ int pm_handle_spawn_path(uint32_t pm_context_id, const ipc_message_t* msg) {
                : WASMOS_ERR_PROC_PM_REPLY_SEND;
 }
 
+/* Spawn from a path with capabilities, replying immediately
+ * (PROC_IPC_SPAWN_PATH_CAPS).  arg0 = (irq_mask << 16) | cap_flags,
+ * arg1 = (caller_buffer_id << 12) | path_len,
+ * arg2 = (io_port_max << 16) | io_port_min.  CLI arguments, if any, follow the
+ * path's NUL in the caller's buffer, as in the _SYNC variant.
+ *
+ * Never ready-gates, whatever the image declares — that distinguishes it from
+ * pm_handle_spawn_path — so it never touches the single g_pm.spawn slot. */
 int pm_handle_spawn_path_caps(uint32_t pm_context_id, const ipc_message_t* msg) {
     uint32_t owner_context = 0;
     process_t* caller = 0;
@@ -2030,6 +2163,18 @@ int pm_handle_module_meta_desc(uint32_t pm_context_id, const ipc_message_t* msg)
                : WASMOS_ERR_PROC_PM_REPLY_SEND;
 }
 
+/* Driver-match metadata for a boot module, packed into the four reply words
+ * (PROC_IPC_MODULE_META).  arg0 = module index, arg1 = match index.  Returns 0
+ * once the PROC_IPC_RESP is sent, or a packed WASMOS_ERR_PROC_PM_* code —
+ * META_NOT_DRIVER for a module without the driver flag, META_BAD_INDEX for a
+ * match index past the end.
+ *
+ * Reply layout: arg0 = (io_port_max << 16) | io_port_min,
+ * arg1 = (class << 24) | (subclass << 16) | (prog_if << 8) |
+ *        (match_count << 1) | storage_bootstrap,
+ * arg2 = (vendor_id << 16) | device_id, arg3 = cap_flags.  match_count is
+ * therefore truncated to 7 bits, and the declared region list does not fit at
+ * all — pm_handle_module_meta_desc is the form that carries it. */
 int pm_handle_module_meta(uint32_t pm_context_id, const ipc_message_t* msg) {
     uint32_t owner_context = 0;
     process_t* caller = 0;
@@ -2085,6 +2230,16 @@ int pm_handle_module_meta(uint32_t pm_context_id, const ipc_message_t* msg) {
                : WASMOS_ERR_PROC_PM_REPLY_SEND;
 }
 
+/* Resolves a module by initfs PATH rather than index (PROC_IPC_MODULE_META_PATH)
+ * and replies with arg0 = module index, arg1 = app flags, arg2 = driver cap
+ * flags.  arg0 = a raw user VA for the path (0 to use a transfer buffer
+ * instead), arg1 = (caller_buffer_id << 12) | path_len, arg2 = the source.
+ *
+ * Only PROC_MODULE_SOURCE_INITFS is implemented; PROC_MODULE_SOURCE_FS and any
+ * other value are both refused with WASMOS_ERR_PROC_PM_META_BAD_SOURCE.  Unlike
+ * the other meta handlers this does NOT require the module to be a driver — it
+ * is the lookup that tells a caller what a path contains.  path_len must be
+ * under 96. */
 int pm_handle_module_meta_path(uint32_t pm_context_id, const ipc_message_t* msg) {
     uint32_t owner_context = 0;
     process_t* caller = 0;

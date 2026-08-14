@@ -4,14 +4,32 @@
 #include <string.h>
 #include <ctype.h>
 
+/* Container identity. MAGIC is the 8-byte signature, compared byte-for-byte and
+ * NOT NUL-terminated in the file. VERSION selects which header layout the parser
+ * applies; this packer only ever emits 6, while src/kernel/wasmos_app.c still
+ * accepts 1..6. */
 #define MAGIC "WASMOSAP"
 #define VERSION 6u
+
+/* Header flags, mirroring WASMOS_APP_FLAG_* in src/kernel/include/wasmos_app.h.
+ * DRIVER/SERVICE/APP are the package kind and exactly one is set, derived from
+ * the manifest's `kind`. NEEDS_PRIV (1<<3) is defined for parity with the kernel
+ * but never set by this tool. Three further bits have no name here and are
+ * written as literals in main(): 1<<4 NATIVE (the payload is an ELF, not WASM;
+ * the parser rejects it unless DRIVER or SERVICE is also set), 1<<5
+ * STORAGE_BOOTSTRAP, 1<<6 WANTS_TTY. */
 #define FLAG_DRIVER (1u << 0)
 #define FLAG_SERVICE (1u << 1)
 #define FLAG_APP (1u << 2)
 #define FLAG_NEEDS_PRIV (1u << 3)
+
+/* Capacity of the header's subsystem_tag field, in bytes. A tag shorter than
+ * this is NUL-padded; one of exactly this length is not terminated. */
 #define SUBSYSTEM_TAG_LEN 8u
 
+/* wasmos_mem_hint_t.kind values, a subset of WASMOS_APP_MEM_HINT_* in
+ * src/kernel/include/wasmos_app.h. Only these two are emitted, always as a pair
+ * and always in this order. */
 #define MEM_HINT_STACK 1u
 #define MEM_HINT_HEAP 2u
 /* Region kinds mirror src/drivers/include/wasmos_driver_abi.h and the bound
@@ -22,6 +40,10 @@
 #define WASMOS_APP_REGION_BAR 1u
 #define WASMOS_APP_MAX_REGIONS 4u
 
+/* Wildcards for a driver match field: the all-ones value of the field's width
+ * means "any", which is why a real class code or vendor ID of 0xFF/0xFFFF cannot
+ * be expressed. 0xFFFF is also the PCI "no device" vendor ID, so nothing is lost
+ * there. Written for every field a manifest leaves unset. */
 #define MATCH_ANY_U8 0xFFu
 #define MATCH_ANY_U16 0xFFFFu
 
@@ -39,7 +61,40 @@
  *   mem_hint_count x wasmos_mem_hint_t (stack then heap),
  *   wasm_size raw payload bytes, then compiled_size WARP AOT bytes if non-zero.
  * Nothing is padded or aligned between sections; the parser advances by the
- * counts in this header alone. */
+ * counts in this header alone.
+ *
+ * Fields, all little-endian (the format is not byte-order portable):
+ *   magic[8]                 "WASMOSAP", not NUL-terminated.
+ *   version                  Always 6 from this packer.
+ *   header_size              sizeof(this struct); the parser compares it against
+ *                            its own and also uses it as the offset of the first
+ *                            section, so name bytes start exactly here.
+ *   flags                    FLAG_* bitmask; see the flag definitions above.
+ *   name_len / entry_len     Byte lengths of the name and entry-symbol strings
+ *                            that follow the header, in that order. Neither is
+ *                            NUL-terminated and neither length includes a
+ *                            terminator. Both must be non-zero.
+ *   wasm_size                Byte length of the payload, which is WASM bytecode
+ *                            unless the NATIVE flag is set, in which case it is
+ *                            an ELF image.
+ *   req_ep_count             Number of required-endpoint records; 0 or 1 here,
+ *                            0 when the manifest's name is "-".
+ *   cap_count                Number of capability-request records (max 8).
+ *   entry_arg_binding_count  Number of entry-argument binding records (max 4).
+ *   mem_hint_count           Number of memory-hint records; always 2.
+ *   driver_match_*           The v2 single-match fields. From version 3 on the
+ *                            parser ignores them entirely and reads only the
+ *                            match table, so they are written as a copy of
+ *                            match 0 (or all-wildcard) and are dead weight.
+ *   driver_match_count       Number of wasmos_driver_match_t records that follow
+ *                            the binding table.
+ *   compiled_size            Byte length of the WARP AOT binary appended after
+ *                            the payload; 0 when absent.
+ *   subsystem_tag            Up-to-8-byte tag, NUL-padded, from [A-Z0-9+_-];
+ *                            defaults to "NATIVE" or "WASM".
+ *   region_count             Number of wasmos_region_entry_t records, written
+ *                            after the driver matches and before the mem hints.
+ */
 typedef struct __attribute__((packed)) {
     char magic[8];
     uint16_t version;
@@ -66,6 +121,12 @@ typedef struct __attribute__((packed)) {
     uint32_t region_count; /* declared register windows, written after the matches */
 } wasmos_app_header_t;
 
+/* One declared register window, carrying no trailing name. Its position in the
+ * region section IS the region index the driver addresses at runtime.
+ *   kind       WASMOS_APP_REGION_IO or _BAR.
+ *   bar_index  BAR number 0..5, read only when kind is _BAR.
+ *   first/last Inclusive I/O port range, read only when kind is _IO. The parser
+ *              rejects first > last; a single port is expressed as first==last. */
 typedef struct __attribute__((packed)) {
     uint8_t kind;
     uint8_t bar_index;
@@ -73,26 +134,43 @@ typedef struct __attribute__((packed)) {
     uint16_t last;
 } wasmos_region_entry_t;
 
+/* Required-endpoint record, followed immediately by name_len raw name bytes with
+ * no terminator. rights is an opaque bitmask handed to the kernel unchanged. */
 typedef struct __attribute__((packed)) {
     uint32_t name_len;
     uint32_t rights;
 } wasmos_req_endpoint_t;
 
+/* Capability-request record, followed immediately by name_len raw name bytes
+ * with no terminator. The name must be one capability_name_supported() accepts,
+ * and flags is required to be 0 on the positional command line. */
 typedef struct __attribute__((packed)) {
     uint32_t name_len;
     uint32_t flags;
 } wasmos_cap_request_t;
 
+/* Entry-argument binding record, followed immediately by name_len raw name bytes
+ * with no terminator. Record order is argument order. */
 typedef struct __attribute__((packed)) {
     uint32_t name_len;
 } wasmos_entry_arg_binding_t;
 
+/* Memory-hint record. kind is a MEM_HINT_* value and min_pages a count of 4 KiB
+ * pages, which the launcher multiplies out into a byte size. The parser reads
+ * min_pages only; max_pages is written as 0 and ignored. A hint of 0 pages means
+ * "unspecified" and the launcher substitutes its own 64 KiB default, so it does
+ * not request a zero-sized stack or heap. */
 typedef struct __attribute__((packed)) {
     uint32_t kind;
     uint32_t min_pages;
     uint32_t max_pages;
 } wasmos_mem_hint_t;
 
+/* One PCI match rule. Any of class_code/subclass/prog_if/vendor_id/device_id may
+ * be the MATCH_ANY_* wildcard; io_port_min/io_port_max are a legacy ISA-style
+ * window whose wildcard is 0, not all-ones. reserved0 is written as 0. priority
+ * breaks ties between drivers that both match, higher winning; the positional
+ * command line always writes 0, only the manifest can set it. */
 typedef struct __attribute__((packed)) {
     uint8_t class_code;
     uint8_t subclass;
@@ -220,6 +298,13 @@ typedef struct {
     uint16_t last;
 } manifest_region_t;
 
+/* Parsed form of a linker manifest: the packer's whole input apart from the
+ * payload bytes. Fixed-capacity throughout, and parse_linker_manifest() fails
+ * rather than truncating when a table overflows. `kind` is the manifest's kind
+ * string ("driver"/"service"/anything else meaning app) and is mapped to a
+ * FLAG_* bit in main(); `req_ep_name` holds "-" when no endpoint is required.
+ * Strings are NUL-terminated here but are written to the package as raw bytes
+ * with an explicit length. */
 typedef struct {
     char name[64];
     char entry[64];
@@ -270,6 +355,24 @@ static int manifest_parse_bool(const char* s, uint8_t* out) {
     return -1;
 }
 
+/* Read a TOML-ish linker manifest into *out. The accepted grammar is a small
+ * subset: '#' starts a comment to end of line, blank lines are skipped, section
+ * headers are [package], [resources], [ipc] and the repeatable [[capabilities]],
+ * [[regions]], [[matches]], and everything else must be a key = value line whose
+ * value may be double-quoted. Keys outside a known section, and unknown keys
+ * inside one, are ignored silently.
+ *
+ * Defaults applied before parsing: kind "app" and required_endpoint_name "-"
+ * (meaning none). Each [[matches]] block starts fully wildcarded; each
+ * [[regions]] block starts as an I/O region with an empty range. A missing
+ * subsystem is filled in from the native flag as "NATIVE" or "WASM".
+ *
+ * Returns 0 on success, -1 on any failure: unreadable file, a malformed numeric
+ * or boolean value, an unknown region kind, a bus other than "pci", a table
+ * exceeding its capacity (8 capabilities, 8 matches, 4 entry-arg bindings,
+ * WASMOS_APP_MAX_REGIONS regions), a missing name or entry, or an invalid
+ * subsystem tag. *out is fully overwritten either way and holds partial data on
+ * failure. */
 static int parse_linker_manifest(const char* path, linker_manifest_t* out) {
     if (!path || !out) {
         return -1;
@@ -558,6 +661,27 @@ static int parse_linker_manifest(const char* path, linker_manifest_t* out) {
     return 0;
 }
 
+/* Pack one payload into a .wap package. Two mutually exclusive command lines:
+ *
+ *   --manifest <path> --in <in.wasm|elf> --out <out.wap> [--compiled <in.warpbin>]
+ *       Preferred form. Everything except the payload comes from the linker
+ *       manifest, and --compiled appends a pre-built WARP AOT binary.
+ *
+ *   <in.wasm> <out.wap> <name> <entry> <stack_pages> <heap_pages> <flags>
+ *   <req_ep_name|-> <req_ep_rights> <cap_count> [<cap_name> <cap_flags>]...
+ *   [--entry-arg-bindings <n> <name>...] [--driver-match <class> <subclass>
+ *   <prog_if> <vendor> <device> <io_min> <io_max>]
+ *       Positional form, kept for callers that have no manifest. A 12-argument
+ *       invocation whose 10th argument is not a number is instead read as the
+ *       older single-<cap_name> <cap_flags> layout. This form emits no AOT
+ *       binary and no region records.
+ *
+ * Writes the header and sections in the exact order src/kernel/wasmos_app.c
+ * parses them, then the payload, then the AOT binary if present. Returns 0 on
+ * success and 1 on any failure: bad arguments, an unknown capability name, a
+ * non-zero capability flags value, an unreadable input, an empty --compiled
+ * file, or a short write. A failed run may leave a truncated output file behind,
+ * because errors after fopen do not remove it. */
 int main(int argc, char** argv) {
     if (argc >= 6 && strcmp(argv[1], "--manifest") == 0) {
         const char* manifest_path = argv[2];

@@ -14,13 +14,27 @@ constexpr T &&fwd(typename rmref<T>::type &&v) noexcept { return static_cast<T&&
 /* compat/tuple — freestanding shadow of <tuple>
  *
  * Provides: std::tuple<Ts...>, std::tuple_size<T>, std::tuple_element<N,T>,
- *           std::get<N>(t).
+ *           std::get<N>(t), std::make_tuple, std::tuple_cat, and the tuple
+ *           protocol for std::array (tuple_size, tuple_element, get<I>).
  *
  * Implementation uses recursive inheritance (the classical approach that does
  * not require compiler intrinsics and works in C++14).
  *
  * Only the subset required by WARP is implemented; in particular there is no
- * std::apply, std::tie, or structured-binding support. */
+ * std::apply, std::tie, or structured-binding support.  Those are compile
+ * errors at the call site.
+ *
+ * What WARP asks for: function_traits.hpp and ImportFunctionV2.hpp use tuple as
+ * a pure type list (tuple_size, tuple_element — never an instance), and
+ * RegPosArr.hpp uses get<I>, tuple_size and tuple_cat over std::array to build
+ * register-position tables at compile time.  Everything below is constexpr for
+ * that reason: these tables are built during compilation, not at boot.
+ *
+ * One deviation to know about.  The tuple_cat overload at the bottom takes two
+ * std::arrays and returns a std::array<T, N+M>, where the standard's tuple_cat
+ * would return a std::tuple.  RegPosArr.hpp feeds the result straight back into
+ * to_array(), so it works there, and a caller expecting a tuple gets a type
+ * error rather than a wrong value.  tuple_cat is also two-argument only. */
 
 #include "type_traits"
 #include "utility"

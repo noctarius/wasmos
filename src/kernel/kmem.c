@@ -41,6 +41,12 @@ static void* kmem_early_alloc(size_t size) {
     }
 }
 
+/* Slab first, early arena second.  Returns NULL for a zero size and when both
+ * fail — the arena is 256 KiB and, unlike the slab, cannot grow.  The slab caps
+ * a single request at its largest size class, so anything bigger comes from the
+ * arena and is therefore never reclaimed.
+ *
+ * The returned block is uninitialised and 8-byte aligned from either source. */
 void* kmem_alloc(size_t size) {
     void* ptr = 0;
     if (size == 0) {
@@ -53,6 +59,10 @@ void* kmem_alloc(size_t size) {
     return kmem_early_alloc(size);
 }
 
+/* Routes by address: a pointer inside the early arena is simply dropped, since
+ * a bump allocator has no reclaim, and everything else goes to kfree_small.
+ * NULL is ignored.  A pointer from neither source is handed to kfree_small,
+ * which rejects it on its header magic rather than corrupting a free list. */
 void kmem_free(void* ptr) {
     uintptr_t start = (uintptr_t)&g_kmem_early_arena[0];
     uintptr_t end = start + (uintptr_t)KMEM_EARLY_ARENA_BYTES;

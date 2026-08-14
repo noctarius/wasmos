@@ -31,6 +31,11 @@ int x86_page_fault_handler(uint64_t error_code, const uint64_t* frame);
 /* Update TSS.RSP0 so the next ring-3 → ring-0 transition lands on the correct stack. */
 void cpu_set_kernel_stack(uint64_t rsp0);
 
+/* Set / clear the interrupt flag on the calling CPU (sti / cli). Unconditional
+ * and unnested: neither remembers a previous state, so a nested pair leaves
+ * interrupts enabled at the inner leave. Code that must restore what it found
+ * uses the spinlock irq-save helpers instead. Orthogonal to preempt_disable,
+ * which gates rescheduling and not interrupt delivery. */
 void cpu_enable_interrupts(void);
 void cpu_disable_interrupts(void);
 

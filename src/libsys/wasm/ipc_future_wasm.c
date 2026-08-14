@@ -6,7 +6,10 @@ static int32_t ipc_future_status(int32_t status) {
 }
 
 /* libsys exposes the event loop as header inlines for C.  Language bindings
- * link against symbols, so these two shims give them callable exports. */
+ * link against symbols, so these two shims give them callable exports.
+ * Both forward verbatim to the inline of the same name minus the `_wasm_`
+ * infix, and inherit its contract exactly - including poll()'s parking
+ * behaviour when the loop owns a select-set. */
 void wasmos_sys_wasm_event_loop_init(wasmos_sys_event_loop_t* loop, int32_t endpoint,
                                      int32_t request_id_base) {
     wasmos_sys_event_loop_init(loop, endpoint, request_id_base);

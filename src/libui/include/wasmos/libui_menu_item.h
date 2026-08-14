@@ -7,6 +7,16 @@
  * open their own popup window on hover (preview, no focus) and hand it focus
  * on click.  Depth is arbitrary — each non-leaf item manages one popup window
  * that lists its direct children.
+ *
+ * A popup is a real compositor window with its own shared buffer, not an
+ * overlay in the bar window. Two consequences run through this file: popup
+ * pointer events arrive already in popup-local coordinates and are routed by
+ * window id (so ui_menu_item_popup_contains() must answer false for bar-window
+ * coordinates), and a popup row's component bounds are republished in SCREEN
+ * coordinates by ui_menu_item_popup_render() so a sub-popup can be positioned
+ * against them.
+ *
+ * Rows are a fixed 22 px tall and popups are at least 160 px wide.
  */
 
 static inline void ui_menu_item_popup_close(ui_context_t* ctx, ui_component_t* mi);
@@ -15,7 +25,8 @@ static inline void ui_menu_item_popup_render(ui_context_t* ctx, ui_component_t* 
                                              int32_t hovered_row);
 static inline void ui_menu_item_popup_present(ui_context_t* ctx, ui_menu_item_data_t* d);
 
-/* Count direct children of a MENU_ITEM component. */
+/* Count direct children of a MENU_ITEM component. Zero means the item is a
+ * leaf and has no popup; the count also sets the popup's height. */
 static inline int32_t ui_menu_item_child_count(const ui_context_t* ctx, const ui_component_t* mi) {
     int32_t n = 0;
     int32_t cid = mi->first_child_id;
@@ -29,7 +40,8 @@ static inline int32_t ui_menu_item_child_count(const ui_context_t* ctx, const ui
     return n;
 }
 
-/* Return the child component at zero-based row index, or NULL if out of range. */
+/* Return the child component at zero-based row index, or NULL if out of range.
+ * Row order is sibling order, which is the order the popup paints them in. */
 static inline ui_component_t* ui_menu_item_child_at_row(ui_context_t* ctx, const ui_component_t* mi,
                                                         int32_t row) {
     int32_t n = 0;
@@ -46,6 +58,11 @@ static inline ui_component_t* ui_menu_item_child_at_row(ui_context_t* ctx, const
     return NULL;
 }
 
+/* Render op for UI_COMPONENT_MENU_ITEM, drawing only the item's own label in
+ * the window it lives in (the bar for a top-level item), with a highlight fill
+ * while it is open or pressed. Its entries are children painted into the popup
+ * window by ui_menu_item_popup_render(), which is why the core stops here and
+ * does not descend. */
 static inline void ui_render_menu_item(ui_context_t* ctx, const ui_component_t* c,
                                        ui_rect_t draw_bounds, ui_rect_t clip, int32_t offset_y) {
     (void)offset_y;
@@ -64,7 +81,14 @@ static inline void ui_render_menu_item(ui_context_t* ctx, const ui_component_t* 
 
 /* Compute the screen position/size for the popup window of mi.
  * Respects the parent type: below the bar item if parent is MENU_BAR,
- * or to the right of the row if parent is another MENU_ITEM. */
+ * or to the right of the row if parent is another MENU_ITEM.
+ *
+ * Width is max(mi->bounds.w, 160) and height is child_count * 22. All four
+ * out-parameters are optional. Placement reads mi->bounds, which for a sub-menu
+ * is the row rect published by ui_menu_item_popup_render() — so that render
+ * must have run since the row moved, or the popup lands at a stale position.
+ * The result is not clamped to the display, so a popup near an edge can be
+ * positioned partly off-screen. */
 static inline void ui_menu_item_popup_position(const ui_context_t* ctx, const ui_component_t* mi,
                                                int32_t child_count, int32_t* out_x, int32_t* out_y,
                                                int32_t* out_w, int32_t* out_h) {
@@ -184,6 +208,10 @@ static inline void ui_menu_item_popup_render(ui_context_t* ctx, ui_component_t* 
     ctx->height = saved_h;
 }
 
+/* Flush the popup's shared buffer and present it. Does nothing when the popup
+ * is not fully set up. The compositor's reply status is discarded — a present
+ * refused because the popup is being torn down is not an error worth acting on
+ * here. Blocks for one compositor round trip. */
 static inline void ui_menu_item_popup_present(ui_context_t* ctx, ui_menu_item_data_t* d) {
     if (!d || !d->popup_base || d->popup_win_id == 0 || d->popup_buf_id == 0)
         return;
@@ -194,6 +222,15 @@ static inline void ui_menu_item_popup_present(ui_context_t* ctx, ui_menu_item_da
                 d->popup_win_id, d->popup_buf_id, 0, 0, &status, 0, 0, 0);
 }
 
+/* Tear down mi's popup window: release the shared buffer, unmap the shmem,
+ * destroy the window, reset the popup fields, and recursively close every
+ * descendant's popup (clearing their dropdown_open too). A no-op when no popup
+ * window exists. Blocks for the compositor round trips involved.
+ *
+ * mi's own dropdown_open is deliberately left alone, so a caller that closes
+ * the window without clearing the flag will see ui_menu_item_sync_popup()
+ * reopen it on the next drain — ui_menu_item_popup_open() relies on exactly
+ * that to reopen at a new size. */
 static inline void ui_menu_item_popup_close(ui_context_t* ctx, ui_component_t* mi) {
     ui_menu_item_data_t* d = (ui_menu_item_data_t*)mi->component_data;
     if (!d || d->popup_win_id == 0)
@@ -234,6 +271,17 @@ static inline void ui_menu_item_popup_close(ui_context_t* ctx, ui_component_t* m
     }
 }
 
+/* Create, paint and reveal mi's popup window. Requires dropdown_open to be set
+ * already and does nothing for a leaf item. Any existing popup is closed first,
+ * so this doubles as the reopen path after a size change.
+ *
+ * Whether the popup takes keyboard/pointer focus depends on the parent: a
+ * top-level item (parent is the MENU_BAR) focuses its popup, while a sub-menu
+ * opened by hover stays a focus-less preview until the row is clicked. The
+ * window is created INVISIBLE and revealed only after the first present, so no
+ * placeholder frame flashes. Every failure path destroys the partially built
+ * window and leaves the popup fields untouched, so the item stays closed.
+ * Blocks for several compositor round trips. */
 static inline void ui_menu_item_popup_open(ui_context_t* ctx, ui_component_t* mi) {
     ui_menu_item_data_t* d = (ui_menu_item_data_t*)mi->component_data;
     if (!d || !d->dropdown_open)
@@ -328,7 +376,11 @@ fail:
 }
 
 /* Flag-only open/close for a bar item. ui_loop_drain -> ui_menu_item_sync_popup
- * turns dropdown_open into the actual popup window. */
+ * turns dropdown_open into the actual popup window.
+ *
+ * Open is refused for a leaf (an item with no children), so nothing is marked
+ * dirty in that case. Close always sets the flag and marks dirty, whether or
+ * not a popup exists. Neither issues any compositor IPC. */
 static inline void ui_menu_item_open_dropdown(ui_context_t* ctx, ui_component_t* mi) {
     ui_menu_item_data_t* d = (ui_menu_item_data_t*)mi->component_data;
     if (!d)
@@ -349,7 +401,13 @@ static inline void ui_menu_item_close_dropdown(ui_context_t* ctx, ui_component_t
 
 /* Reconcile the popup window with dropdown_open. Called for every MENU_ITEM
  * from ui_loop_drain, so a flag flipped anywhere takes effect on the next
- * repaint; a size change reopens the window. */
+ * repaint; a size change reopens the window.
+ *
+ * Closed with no window, or open with a window of the right height, are both
+ * no-ops. The height comparison is how an item whose entries changed gets a
+ * correctly sized popup; a change that leaves the child count the same is not
+ * detected and the popup keeps its old contents until something else repaints
+ * it. */
 static inline void ui_menu_item_sync_popup(ui_context_t* ctx, ui_component_t* mi) {
     ui_menu_item_data_t* d = (ui_menu_item_data_t*)mi->component_data;
     if (!d)
@@ -372,7 +430,14 @@ static inline void ui_menu_item_sync_popup(ui_context_t* ctx, ui_component_t* mi
 /* Handle one GFX_EVENT_POINTER from mi's popup window. msg->arg3 carries
  * popup-window coordinates, so the row is py / item_h with no translation.
  * Hover moves open/close sub-popups as a preview; a left release activates a
- * leaf's on_click or hands the sub-popup focus. */
+ * leaf's on_click or hands the sub-popup focus.
+ *
+ * The caller must have routed the event to the component that owns the window
+ * it came from; this function does not check msg's window id. Button-down
+ * events queued before the popup existed are discarded until the first release
+ * (popup_flushing), so the click that opened a menu cannot immediately pick a
+ * row under the cursor. Activation happens on release, not press. A release
+ * outside the popup does nothing — dismissal comes from FOCUS_LOST. */
 static inline void ui_menu_item_handle_popup_event(ui_context_t* ctx, ui_component_t* mi,
                                                    const wasmos_ipc_message_t* msg) {
     ui_menu_item_data_t* d = (ui_menu_item_data_t*)mi->component_data;
@@ -481,7 +546,12 @@ static inline void ui_menu_item_handle_popup_event(ui_context_t* ctx, ui_compone
 
 /* Pointer release inside the bar window: a leaf bar item fires its on_click,
  * a non-leaf toggles its own dropdown after closing its siblings. Popup rows
- * are handled by ui_menu_item_handle_popup_event instead. */
+ * are handled by ui_menu_item_handle_popup_event instead.
+ *
+ * (x, y) are bar-window coordinates. Only items whose parent is a MENU_BAR are
+ * considered, and the first one containing the point wins; a release that hits
+ * none does nothing. Toggling only sets flags — the window itself follows on
+ * the next ui_loop_drain(). */
 static inline void ui_menu_item_handle_pointer_release(ui_context_t* ctx, int32_t x, int32_t y) {
     int32_t mi_id2 = -1;
     for (int32_t ci2 = 0; ci2 < ctx->component_count; ++ci2) {
@@ -529,7 +599,11 @@ static inline void ui_menu_item_handle_pointer_release(ui_context_t* ctx, int32_
 
 /* Close every menu popup in the context. The mi argument is the component that
  * observed the focus loss and is not otherwise consulted: dismissal is
- * all-or-nothing across the whole menu hierarchy. */
+ * all-or-nothing across the whole menu hierarchy.
+ *
+ * Clears dropdown_open on every MENU_ITEM in the pool and destroys any popup
+ * window each still owns, then marks the context dirty. Blocks for the
+ * compositor round trips of every window it closes. */
 static inline void ui_menu_item_dismiss_popup(ui_context_t* ctx, ui_component_t* mi) {
     for (int32_t i = 0; i < ctx->component_count; ++i) {
         ui_component_t* c = &ctx->components[i];
@@ -546,6 +620,10 @@ static inline void ui_menu_item_dismiss_popup(ui_context_t* ctx, ui_component_t*
     ui_mark_dirty(ctx);
 }
 
+/* destroy_data op for UI_COMPONENT_MENU_ITEM: frees the label, unmaps the popup
+ * shmem if one is still mapped, frees the data struct and clears
+ * component_data. Tolerates already-cleared data; the component pointer itself
+ * must be non-NULL. */
 static inline void ui_menu_item_destroy_data(ui_component_t* c) {
     ui_menu_item_data_t* d = (ui_menu_item_data_t*)c->component_data;
     if (!d)

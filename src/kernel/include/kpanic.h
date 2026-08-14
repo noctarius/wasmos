@@ -21,7 +21,18 @@
 extern "C" {
 #endif
 
+/* Stop the machine.  `reason` is a short NUL-terminated description and `a`/`b` are two
+ * free-form context values printed as hex alongside it (0 when there is nothing useful
+ * to pass).  Disables interrupts immediately and never returns; a second caller — on any
+ * CPU — halts silently so the first panicker's dump is not interleaved.  Callable from
+ * any context, including an ISR and before scheduling exists. */
 __attribute__((noreturn)) void kpanic(const char* reason, uint64_t a, uint64_t b);
+
+/* Record the register context a fault came from, so a later kpanic reports the faulting
+ * instruction instead of the panic call site.  Called by exception entry paths with the
+ * values out of the IRET frame; the calling CPU's slot is filled in, and once captured it
+ * is not overwritten by kpanic's own self-capture.  A CPU id past WASMOS_MAX_CPUS is
+ * silently ignored. */
 void kpanic_capture_origin(uint64_t rip, uint64_t rsp, uint64_t rbp, uint64_t rflags, uint64_t cs);
 
 /* Called from isr_nmi with a pointer to the pushed register frame (PUSH_REGS

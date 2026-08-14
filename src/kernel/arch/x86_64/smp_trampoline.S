@@ -44,6 +44,25 @@
 
 .section .text.smp_trampoline, "ax", @progbits
 
+/*
+ * Exported symbols. All three are position markers for the BSP-side copier in
+ * smp.c, not call targets:
+ *   smp_trampoline_start - first byte of the blob and the AP's reset entry
+ *                          point. The BSP copies [start, end) verbatim to
+ *                          TRAMP_BASE; every internal far-jump target is encoded
+ *                          as (label - smp_trampoline_start + TRAMP_BASE), so
+ *                          the blob only runs when copied to exactly TRAMP_BASE.
+ *   smp_trampoline_gdt   - the temporary GDT inside the blob. Its physical
+ *                          address after the copy is start-relative in the same
+ *                          way, and the BSP writes it into the AP_GDTR slot.
+ *   smp_trampoline_end   - one past the last byte; end - start is the copy
+ *                          length and must stay under one 4 KiB page, since only
+ *                          the page at TRAMP_BASE is identity-mapped.
+ *
+ * The trampoline runs on no stack at all until tramp_lm64 loads AP_RSP, so
+ * nothing before that point may push, call or take an interrupt (IF stays clear
+ * from the opening cli).
+ */
 .global smp_trampoline_start
 .global smp_trampoline_gdt
 .global smp_trampoline_end

@@ -23,6 +23,16 @@
 #define ATA_IO_REGION 0u
 #define ATA_REG_CTRL 0x206u /* 0x3F6 - 0x1F0: device control / alternate status */
 
+/* ATA task-file registers (ATA/ATAPI-6, "Register Delivery"), as offsets from
+ * the region base above. Three of them are two registers sharing one address,
+ * distinguished by direction: 0x01 reads Error and writes Features, 0x07 reads
+ * Status and writes Command. Reading Status has the side effect of clearing a
+ * pending interrupt, which is why the polled paths read the ALTERNATE status at
+ * ATA_REG_CTRL when they only want to look.
+ *
+ * LBA0..LBA2 carry bits 0-7, 8-15 and 16-23 of the sector address; the top four
+ * bits go in the low nibble of HDDEVSEL, which also selects master/slave. That
+ * 28-bit total is the limit of the LBA28 addressing this driver uses. */
 #define ATA_REG_DATA 0x00
 #define ATA_REG_ERROR 0x01
 #define ATA_REG_FEATURES 0x01
@@ -56,18 +66,35 @@
 #define ATA_PRD_MAX 2u
 #define ATA_PRD_BOUNDARY 0x10000u
 
+/* One Physical Region Descriptor, in the layout the bus-master controller reads
+ * directly from memory: a 32-bit PHYSICAL address (hence the 4 GiB ceiling on
+ * where a DMA buffer may live), a byte count where 0 encodes 64 KiB, and a flags
+ * word whose only defined bit is ATA_PRD_EOT marking the last entry. */
 typedef struct __attribute__((packed)) {
     uint32_t base;
     uint16_t bytes;
     uint16_t flags;
 } ata_prd_t;
 
+/* Command-register opcodes (ATA/ATAPI-6, LBA28 forms). IDENTIFY returns one
+ * 512-byte block of device parameters through PIO regardless of DMA support, so
+ * it is the probe that establishes whether a unit is present at all.
+ * READ_SECTORS/WRITE_SECTORS are the PIO transfers; READ_DMA is the bus-master
+ * read the driver prefers when the controller and request allow it (there is no
+ * WRITE_DMA here -- writes always take the PIO path). CACHE_FLUSH forces the
+ * device to commit its write cache, and is what makes a completed write durable
+ * rather than merely accepted. */
 #define ATA_CMD_READ_DMA 0xC8
 #define ATA_CMD_IDENTIFY 0xEC
 #define ATA_CMD_READ_SECTORS 0x20
 #define ATA_CMD_WRITE_SECTORS 0x30
 #define ATA_CMD_CACHE_FLUSH 0xE7
 
+/* Status-register bits. BSY means the device owns the task file and every other
+ * bit in the register is meaningless until it clears, so it must be tested
+ * first. DRQ means a data block is ready to move. ERR means the command failed
+ * and the Error register holds the reason. A status byte of 0xFF is not a status
+ * at all -- it is the float an absent device reads back. */
 #define ATA_SR_BSY 0x80
 #define ATA_SR_DRQ 0x08
 #define ATA_SR_ERR 0x01
@@ -83,6 +110,15 @@ typedef struct __attribute__((packed)) {
  * the spawn profile grants exactly 14|15 for this driver. */
 #define ATA_IRQ_LINE 14u
 
+/* ATA_SECTOR_SIZE is the fixed 512-byte block this driver assumes throughout.
+ * ATA_MAX_READ_SECTORS bounds one read request and must not exceed
+ * WASMOS_BLOCK_ZC_MAX_SECTORS, since that is what a zero-copy client may ask
+ * for. ATA_UNIT_COUNT is the two devices a single IDE channel addresses (master
+ * and slave), which is a property of the bus, not a local budget.
+ * ATA_CLIENT_MAP_CAP sizes the source-to-unit binding table. It is deliberately
+ * larger than ATA_UNIT_COUNT and is not what limits clients: a unit is claimed
+ * EXCLUSIVELY by the first source bound to it, so a second client asking for an
+ * already-claimed unit is refused while the table still has free slots. */
 #define ATA_SECTOR_SIZE 512u
 #define ATA_MAX_READ_SECTORS 8u
 #define ATA_UNIT_COUNT 2u
@@ -811,6 +847,19 @@ static int ata_handle_ipc(int32_t type, int32_t source, int32_t req_id, int32_t 
     return 0;
 }
 
+/* Driver entry point: create the block endpoint, register as the "block"
+ * service, identify the attached units, route IRQ 14, notify ready, then serve
+ * BLOCK_IPC_* requests forever.
+ *
+ * All four parameters are ignored, including proc_endpoint -- it is overwritten
+ * from the spawn-info contract on the first line, because the entry arguments
+ * are passed as zero.
+ *
+ * On success this does not return: the request loop is unbounded. A return is
+ * therefore always a bring-up failure.
+ * TODO: the failure paths return a bare -1 rather than a packed
+ * WASMOS_ERR_DRIVER_* code from abi/errors.yaml, so a caller cannot tell which
+ * step failed. The AssemblyScript drivers already return packed codes here. */
 WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t ignored_arg1,
                                       int32_t ignored_arg2, int32_t ignored_arg3) {
     /* proc.endpoint comes from the spawn-info contract, not an entry arg. */

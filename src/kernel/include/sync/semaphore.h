@@ -15,6 +15,9 @@ typedef struct {
 
 enum { KSYNC_SEMAPHORE_OK = 0, KSYNC_SEMAPHORE_BUSY = 1 };
 
+/* Put a semaphore at initial_count permits with an empty wait list. Required
+ * before first use, since the embedded event must be initialised. Calling it on
+ * a semaphore that has waiters discards them. */
 void ksync_semaphore_init(ksync_semaphore_t* sem, uint32_t initial_count);
 
 /* KSYNC_SEMAPHORE_OK when a permit was taken, KSYNC_SEMAPHORE_BUSY at count 0. */

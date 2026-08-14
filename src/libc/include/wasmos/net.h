@@ -74,14 +74,25 @@ static inline int32_t wasmos_net_resolve(int32_t stack_ep, int32_t reply_ep, con
  * the app writes/reads the rings in place and only exchanges lightweight
  * doorbells (NET_IPC_TX_NOTIFY / NET_IPC_RX_NOTIFY) with net-stack. */
 typedef struct {
+    /* Peer and reply addressing, set by wasmos_net__reset and stable for the
+     * socket's life. */
     int32_t stack_ep;
     int32_t reply_ep;
+    /* net-stack's handle for the connected socket, -1 until the handshake
+     * completes; every doorbell carries it. */
     int32_t socket_id;
+    /* Owned transfer buffers: the two data rings, and the socket-open
+     * descriptor (released as soon as net-stack has copied it). -1 when not
+     * held — wasmos_net_tcp_close relies on that to stay idempotent. */
     int32_t tx_bid;
     int32_t rx_bid;
     int32_t desc_bid;
+    /* Borrow ids handed to net.stack for the rings; they stay live for as long
+     * as the socket does. */
     int32_t tx_grant;
     int32_t rx_grant;
+    /* Next request id to use on reply_ep; private to this socket, so two
+     * sockets sharing a reply endpoint need disjoint id_base ranges. */
     int32_t request_id;
     wasmos_ringbuf_t tx; /* app is producer */
     wasmos_ringbuf_t rx; /* app is consumer */

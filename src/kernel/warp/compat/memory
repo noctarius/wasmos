@@ -1,7 +1,24 @@
 #pragma once
-/* Minimal <memory> stub — satisfies WARP's #include <memory> (MemWriter.cpp)
- * with std::unique_ptr.  No allocator customization; delete routes through the
- * global operator delete defined in warp/shim.cpp. */
+/* compat/memory — freestanding shadow of <memory>
+ *
+ * Provides default_delete, unique_ptr (with a T[] deleter specialisation),
+ * make_unique, addressof and align.  MemWriter.cpp is the only WARP source
+ * that includes <memory>, and the only name it takes from it is std::align;
+ * unique_ptr and make_unique are here for kernel-side WARP glue and are not
+ * driven by an observed WARP call site.
+ *
+ * unique_ptr is a working owning pointer, not a stub: it releases in its
+ * destructor, moves, and refuses to copy.  It routes through the global
+ * operator delete defined in warp/shim.cpp, so ownership must have come from
+ * the matching operator new.  Deviations to know about, all of which fail to
+ * compile rather than misbehave: only default_delete has a T[] specialisation,
+ * so unique_ptr<T[]> itself does not work (the primary template forms a
+ * pointer-to-array that never matches the deleter); and there is no
+ * deleter-argument constructor, no get_deleter(), no operator[], and no
+ * comparison against another unique_ptr.
+ *
+ * std::shared_ptr, std::weak_ptr, std::allocator and the uninitialized_*
+ * algorithms are absent; using them is a compile error. */
 #include "type_traits"
 #include "utility"
 
@@ -60,7 +77,11 @@ unique_ptr<T> make_unique(Args&&... args) {
 template<class T>
 T *addressof(T &r) noexcept { return __builtin_addressof(r); }
 
-// std::align — adjusts ptr and space for alignment
+// std::align — adjusts ptr and space for alignment.  Returns nullptr and leaves
+// ptr/space untouched when the aligned block would not fit, as the standard
+// requires.  The mask arithmetic assumes a power-of-two alignment; any other
+// value silently misaligns instead of failing.  MemWriter.cpp is the caller,
+// and it passes size 0, i.e. it asks only for the aligned address.
 inline void *align(size_t alignment, size_t size, void *&ptr, size_t &space) noexcept {
     uintptr_t p = reinterpret_cast<uintptr_t>(ptr);
     uintptr_t aligned = (p + alignment - 1u) & ~(alignment - 1u);

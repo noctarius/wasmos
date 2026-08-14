@@ -466,13 +466,34 @@ class ProcessManager {
 
 static ProcessManager g_process_manager;
 
+/* C entry points onto the single ProcessManager instance.  Everything below runs
+ * on PM's own process context: the g_pm fields they touch are unsynchronised and
+ * are only safe because PM is single-threaded and (outside a
+ * pm_preempt_safe_enter region) not preemptible.  The endpoint accessors are the
+ * exception — those go through pm_atomic_load_u32 because other CPUs read them. */
+
+/* Reuses the first free wait slot, or grows the list.  Returns 0 only when the
+ * list cannot grow.  The returned slot is NOT yet claimed: the caller sets
+ * in_use itself after filling the reply endpoint, request id and owner. */
 pm_wait_state_t* pm_wait_slot_acquire(void) {
     return g_process_manager.wait_slot_acquire();
 }
+/* Next controlling tty for a WANTS_TTY child, cycling 1..3 and advancing the
+ * cursor.  Hands out the number unconditionally: nothing checks whether that tty
+ * is already claimed, so with more than three live tty children they share. */
 uint32_t pm_alloc_cli_tty(void) {
     return g_process_manager.alloc_cli_tty();
 }
 
+/* Test seams.  Each fabricates one request that PM will process on a later
+ * dispatch, so the deny path under test logs its marker.  All four compile to
+ * no-ops unless WASMOS_PM_TEST_HOOKS is set, and all are best-effort: a failure
+ * to create the injection endpoint or claim a slot is swallowed, since a seam
+ * that cannot fire simply leaves the marker unlogged. */
+
+/* Plants a wait slot whose recorded owner context does not match the reply
+ * endpoint's real owner, so the next pm_check_waits() sweep takes the
+ * owner-mismatch branch and drops it. */
 void process_manager_inject_wait_owner_mismatch_test(uint32_t expected_owner_context_id) {
     ProcessManager::inject_request_t request;
     request.type = 0;
@@ -485,6 +506,9 @@ void process_manager_inject_wait_owner_mismatch_test(uint32_t expected_owner_con
     request.wait_owner_mismatch = 1;
     g_process_manager.inject(&request);
 }
+/* Sends a KILL/STATUS/SPAWN request from a freshly created KERNEL-owned endpoint.
+ * No process owns that context, so process_find_by_context() fails in each
+ * handler and the corresponding owner-deny marker is logged. */
 void process_manager_inject_kill_owner_deny_test(void) {
     ProcessManager::inject_request_t request;
     request.type = PROC_IPC_KILL;
@@ -522,10 +546,23 @@ void process_manager_inject_spawn_owner_deny_test(void) {
     g_process_manager.inject(&request);
 }
 
+/* Resets PM state and builds its three object lists.  Returns 0, or -1 if any
+ * list fails to initialise.  `boot_info` is BORROWED for the life of the system:
+ * the pointer is stored and the module table is read back from it on every
+ * module-index spawn, so it must reference memory that survives boot.  A NULL
+ * boot_info (or one without modules) is accepted and simply leaves the module
+ * count at 0 and the sysinit index unset.  Creates no endpoints — those are made
+ * lazily on PM's first dispatch, inside its own context. */
 int process_manager_init(const boot_info_t* boot_info) {
     return g_process_manager.init(boot_info);
 }
 
+/* Well-known endpoint accessors, readable from any CPU.  Each answers
+ * IPC_ENDPOINT_NONE until the corresponding service registers (or, for the proc
+ * endpoint, until PM's first dispatch creates it), so every caller must handle
+ * "not yet" rather than assume availability.  The values are atomics because the
+ * writers are PM and service registration while the readers are arbitrary
+ * kernel-side code on other CPUs. */
 uint32_t process_manager_endpoint(void) {
     return pm_atomic_load_u32(&g_pm.proc_endpoint);
 }
@@ -542,15 +579,34 @@ uint32_t process_manager_framebuffer_endpoint(void) {
     return pm_atomic_load_u32(&g_pm.fb_endpoint);
 }
 
+/* Publishes a framebuffer endpoint that has no registering process behind it —
+ * the in-kernel framebuffer.  Records it under the name "fb" owned by
+ * IPC_CONTEXT_KERNEL, so an ordinary service lookup finds it; a later
+ * registration of "fb" by a real process is then refused by pm_service_set,
+ * which does not allow an owner change. */
 void process_manager_set_framebuffer_endpoint(uint32_t endpoint) {
     pm_atomic_store_u32(&g_pm.fb_endpoint, endpoint);
     (void)pm_service_set("fb", endpoint, IPC_CONTEXT_KERNEL);
 }
 
+/* PM's process entry point: one dispatch does the periodic sweeps (wait replies,
+ * app reaping, class reaping, sync-spawn poll), then drains at most ONE request
+ * from the proc endpoint and dispatches it.  Always returns PROCESS_RUN_YIELDED,
+ * except PROCESS_RUN_EXITED if the first-dispatch endpoint setup fails.
+ *
+ * One request per dispatch is deliberate: it keeps the sweeps running between
+ * requests and lets other processes in.  With the queue empty it blocks on the
+ * select set for up to WASMOS_PM_POLL_INTERVAL_MS rather than spinning.  A
+ * handler returning non-zero is turned into a PROC_IPC_ERROR / SVC_IPC_ERROR
+ * reply carrying that code in arg1; a handler returning 0 has already sent its
+ * own reply. */
 process_run_result_t process_manager_entry(process_t* process, void* arg) {
     return g_process_manager.entry(process, arg);
 }
 
+/* Latches a child's readiness from OUTSIDE PM's dispatch loop — the native
+ * driver path calls this on its own CPU.  A no-op for an unknown pid.  It
+ * deliberately touches nothing but the child's ready flag; see below. */
 void process_manager_on_child_ready(uint32_t pid) {
     process_t* proc = process_get(pid);
     if (!proc) {

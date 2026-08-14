@@ -76,7 +76,14 @@ int net_stack_mbedtls_snprintf(char* buf, size_t size, const char* fmt, ...);
 #define MBEDTLS_PLATFORM_FREE_MACRO net_stack_mbedtls_std_free
 #define MBEDTLS_PLATFORM_SNPRINTF_MACRO net_stack_mbedtls_snprintf
 
-/* --- Big number / public key ------------------------------------------------ */
+/* --- Big number / public key ------------------------------------------------
+ * The floor under certificate parsing and signature verification: DER/ASN.1
+ * decoding plus the OID table that names algorithms and X.509 attributes, and
+ * the generic PK layer the X.509 code verifies through.  ASN1_WRITE is pulled in
+ * by the PK/X.509 writing helpers the library links unconditionally.
+ * RSA with both PKCS#1 padding schemes stays enabled because a server
+ * certificate chain still commonly signs with RSA (v1.5 for older signatures,
+ * v2.1/PSS for newer) even when the key exchange is ECDHE. */
 #define MBEDTLS_BIGNUM_C
 #define MBEDTLS_OID_C
 #define MBEDTLS_ASN1_PARSE_C
@@ -89,7 +96,10 @@ int net_stack_mbedtls_snprintf(char* buf, size_t size, const char* fmt, ...);
 #define MBEDTLS_PKCS1_V15
 #define MBEDTLS_PKCS1_V21
 
-/* Elliptic curves: ECDHE key exchange + ECDSA cert/signature verification. */
+/* Elliptic curves: ECDHE key exchange + ECDSA cert/signature verification.
+ * The three curves are what a public TLS 1.2 server realistically offers;
+ * every other curve mbedTLS supports is left out because each one costs code
+ * size and a table in a service that only ever acts as a client. */
 #define MBEDTLS_ECP_C
 #define MBEDTLS_ECDH_C
 #define MBEDTLS_ECDSA_C
@@ -97,7 +107,13 @@ int net_stack_mbedtls_snprintf(char* buf, size_t size, const char* fmt, ...);
 #define MBEDTLS_ECP_DP_SECP384R1_ENABLED
 #define MBEDTLS_ECP_DP_CURVE25519_ENABLED
 
-/* --- Symmetric / hashing ---------------------------------------------------- */
+/* --- Symmetric / hashing ----------------------------------------------------
+ * Exactly what the two enabled key exchanges need and nothing else: AES-GCM as
+ * the only record cipher (so no CBC, no ChaCha20, no stream ciphers), reached
+ * through the generic CIPHER layer the TLS record code uses, and the SHA-2
+ * family for the handshake transcript, the PRF, and certificate signatures.
+ * SHA224/SHA384 come with their 256/512 cores at negligible cost and cover
+ * certificates signed with them. */
 #define MBEDTLS_AES_C
 #define MBEDTLS_GCM_C
 #define MBEDTLS_CIPHER_C
@@ -117,7 +133,13 @@ int net_stack_mbedtls_snprintf(char* buf, size_t size, const char* fmt, ...);
 #define MBEDTLS_PEM_PARSE_C
 #define MBEDTLS_BASE64_C
 
-/* --- TLS 1.2 client --------------------------------------------------------- */
+/* --- TLS 1.2 client ---------------------------------------------------------
+ * Client role only: MBEDTLS_SSL_SRV_C is absent, so the server half of the
+ * handshake is not compiled in at all (lwIP's altcp_tls server config path
+ * therefore cannot be used, which is why the mbedTLS 3.x server-side shims in
+ * net_stack_mbedtls3_compat.h only have to compile, never run).  TLS 1.3 is off
+ * as well — it would require MBEDTLS_PSA_CRYPTO_C, which this freestanding
+ * build does not carry. */
 #define MBEDTLS_SSL_TLS_C
 #define MBEDTLS_SSL_CLI_C
 #define MBEDTLS_SSL_PROTO_TLS1_2

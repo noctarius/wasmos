@@ -7,6 +7,15 @@
  * a per-owner bound so one context cannot take every slot, and wholesale
  * release when a context dies. A wrapped id landing on a live endpoint and an
  * unbounded table starving its other owners have each been a real bug.
+ *
+ * idtable.c, the three list sources and kmem.c are compiled in for real; the
+ * slab allocator underneath kmem is replaced by tests/unit/stubs_slab.c (host
+ * heap, so allocation failure is unreachable) and the spinlocks by
+ * tests/unit/stubs_spinlock.c. The compile line defines
+ * WASMOS_IDTABLE_TEST_SEAMS=1, which exposes idtable_test_set_next_id so the id
+ * counter can be driven to its wrap point, and WASMOS_HOST_TEST_SMP=1, which
+ * routes cpu_local() through a _Thread_local; this suite is single-threaded, so
+ * the latter only makes the kernel headers compile hosted.
  */
 
 #include <stdint.h>
@@ -19,6 +28,10 @@
 static int g_failures;
 static int g_checks;
 
+/* Record one assertion: counts and CONTINUES on failure, printing the message
+ * and its source line, so a failing case runs to its end and later assertions in
+ * it still report. The cases return void; main() reports g_failures as the
+ * process exit status. */
 #define CHECK(cond, msg)                                                                           \
     do {                                                                                           \
         g_checks++;                                                                                \
@@ -34,9 +47,15 @@ typedef struct {
     uint32_t payload;
 } thing_t;
 
+/* Fixture sizes, both arbitrary but small: CHUNK_CAPACITY is the elements per
+ * ARRAY_CHUNK chunk, chosen so a case that allocates a few multiples of it
+ * crosses several chunk boundaries, and PER_OWNER_MAX is the per-owner quota the
+ * quota case fills. */
 #define CHUNK_CAPACITY 8u
 #define PER_OWNER_MAX 4u
 
+/* Fresh table for one case, asserting the initialisation itself so a case body
+ * never runs against an unusable table. `per_owner_max` of 0 means unbounded. */
 static void table_init(idtable_t* table, uint32_t per_owner_max) {
     CHECK(idtable_init(table, sizeof(thing_t), CHUNK_CAPACITY, per_owner_max) == WASMOS_OK,
           "the table initialises");
@@ -166,9 +185,16 @@ static void test_a_zero_quota_is_unbounded(void) {
     idtable_destroy(&table);
 }
 
+/* Release-callback log, reset by the one case that uses it rather than by a
+ * fixture: the count of elements handed to on_release and the sum of their
+ * payloads, which is what shows the element was still intact when called. */
 static uint32_t g_released;
 static uint32_t g_released_payload_sum;
 
+/* idtable_release_owner's on_release callback, standing in for the teardown a
+ * real caller does there (waking waiters, dropping a poll registration). It only
+ * records, so nothing here reallocates or re-enters the table during the walk,
+ * which a real callback could. */
 static void on_release(void* elem, void* user) {
     thing_t* t = (thing_t*)elem;
     (void)user;

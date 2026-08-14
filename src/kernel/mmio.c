@@ -30,6 +30,18 @@
 static ksync_spinlock_t g_mmio_scratch_lock;
 static uint8_t g_mmio_scratch_ready;
 
+/* Writes one 32-bit register at a raw PHYSICAL device address by mapping it into
+ * the shared kernel scratch VA, storing, reading back, and unmapping again.
+ *
+ * phys must be non-zero and 4-byte aligned, and must not overlap system RAM;
+ * each of those is refused with WASMOS_ERR_MSI_BAD_DEVICE.  A mapping failure
+ * gives WASMOS_ERR_MSI_MAP_FAILED.  Success returns 0.
+ *
+ * The scratch VA is a single global, so this serialises every caller on
+ * g_mmio_scratch_lock and spins there under contention.  The lock is initialised
+ * lazily on first use, which assumes the first call is not racing another CPU's
+ * first call.  The mapping is torn down before returning, so no caller-visible
+ * mapping survives the call. */
 int mmio_write32_phys(uint64_t phys, uint32_t value) {
     if (phys == 0 || (phys & 0x3u) != 0) {
         return WASMOS_ERR_MSI_BAD_DEVICE;

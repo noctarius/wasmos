@@ -121,6 +121,15 @@ static int rehash(hashmap_t* map) {
     return 0;
 }
 
+/* Get-or-create, not overwrite: an existing key returns its CURRENT value
+ * unchanged, and only a new key gets a zeroed one.  A caller that needs to know
+ * which happened must check hashmap_get first, or compare hashmap_count.
+ *
+ * The table grows before insertion when the load factor would be exceeded; a
+ * failed rehash is not fatal, the insert simply proceeds into the current
+ * table.  Returns 0 for a NULL or uninitialised map and for a failed node
+ * allocation.  The returned pointer stays valid until the key is removed or the
+ * map destroyed — rehashing re-links nodes but never moves them. */
 void* hashmap_put(hashmap_t* map, uint32_t key) {
     if (!map || !map->buckets) {
         return 0;

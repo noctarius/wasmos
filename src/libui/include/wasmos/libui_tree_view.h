@@ -1,6 +1,14 @@
 #ifndef WASMOS_LIBUI_TREE_VIEW_H
 #define WASMOS_LIBUI_TREE_VIEW_H
 
+/* libui_tree_view.h - Tree view component: a list view whose rows carry an
+ * indentation depth. The nesting is presentational only — every appended row is
+ * always visible, there is no collapse/expand state. */
+
+/* Row index at (pointer_x, pointer_y) in window coordinates, or -1 when the
+ * point is outside the component or past the last row. Rows are a fixed 20 px
+ * tall and the scroll offset is applied; indentation does not affect hit
+ * testing, so the blank indent area of a row still selects that row. */
 static inline int32_t ui_tree_view_index_at(const ui_component_t* tv, const ui_tree_view_data_t* d,
                                             int32_t pointer_x, int32_t pointer_y) {
     if (!tv || !d)
@@ -19,6 +27,10 @@ static inline int32_t ui_tree_view_index_at(const ui_component_t* tv, const ui_t
     return idx;
 }
 
+/* Render op for UI_COMPONENT_TREE_VIEW. Same as the list view, plus a 14 px
+ * horizontal offset and one vertical guide line per depth level. Paints its own
+ * border, so the core skips the generic one. Rows with no recorded depth (the
+ * depths array absent) are drawn at level 0. */
 static inline void ui_render_tree_view(ui_context_t* ctx, const ui_component_t* c,
                                        ui_rect_t draw_bounds, ui_rect_t clip, int32_t offset_y) {
     (void)offset_y;
@@ -67,6 +79,9 @@ static inline void ui_render_tree_view(ui_context_t* ctx, const ui_component_t* 
     }
 }
 
+/* Layout op for UI_COMPONENT_TREE_VIEW: recomputes scroll_max from the row
+ * count against the viewport, clamps scroll_y, and clamps the selection into
+ * [0, count) — which turns the initial -1 into row 0 for a non-empty tree. */
 static inline void ui_layout_tree_view(ui_context_t* ctx, ui_component_t* p) {
     (void)ctx;
     ui_tree_view_data_t* d = (ui_tree_view_data_t*)p->component_data;
@@ -87,6 +102,9 @@ static inline void ui_layout_tree_view(ui_context_t* ctx, ui_component_t* p) {
         d->list.selected = (d->list.count > 0) ? (d->list.count - 1) : 0;
 }
 
+/* Press op for UI_COMPONENT_TREE_VIEW: moves the selection to the row under the
+ * pointer and marks the context dirty. A press that hits no row changes
+ * nothing, and no callback fires here. */
 static inline void ui_tree_view_handle_pointer_press(ui_context_t* ctx, ui_component_t* tv,
                                                      int32_t pointer_x, int32_t pointer_y) {
     ui_tree_view_data_t* d = (ui_tree_view_data_t*)tv->component_data;
@@ -99,6 +117,8 @@ static inline void ui_tree_view_handle_pointer_press(ui_context_t* ctx, ui_compo
     }
 }
 
+/* Left double-click over a row: select it and invoke on_activate with the row
+ * index. Does nothing without a callback, on an empty tree, or on a miss. */
 static inline void ui_tree_view_handle_activate(ui_context_t* ctx, ui_component_t* tv,
                                                 int32_t pointer_x, int32_t pointer_y) {
     ui_tree_view_data_t* d = (ui_tree_view_data_t*)tv->component_data;
@@ -113,6 +133,8 @@ static inline void ui_tree_view_handle_activate(ui_context_t* ctx, ui_component_
     ui_mark_dirty(ctx);
 }
 
+/* Right click over a row: select it and invoke on_secondary_click with the row
+ * index. Same no-op conditions as ui_tree_view_handle_activate(). */
 static inline void ui_tree_view_handle_secondary_click(ui_context_t* ctx, ui_component_t* tv,
                                                        int32_t pointer_x, int32_t pointer_y) {
     ui_tree_view_data_t* d = (ui_tree_view_data_t*)tv->component_data;
@@ -127,6 +149,9 @@ static inline void ui_tree_view_handle_secondary_click(ui_context_t* ctx, ui_com
     ui_mark_dirty(ctx);
 }
 
+/* Scroll-drag op: converts `dy` of thumb travel into content pixels via
+ * ui_scroll_drag_delta() and clamps the offset into [0, scroll_max]. A tree
+ * that fits entirely does not scroll. */
 static inline void ui_tree_view_handle_scroll_drag(ui_context_t* ctx, ui_component_t* c,
                                                    int32_t dy) {
     ui_tree_view_data_t* d = (ui_tree_view_data_t*)c->component_data;
@@ -141,6 +166,11 @@ static inline void ui_tree_view_handle_scroll_drag(ui_context_t* ctx, ui_compone
     }
 }
 
+/* destroy_data op for UI_COMPONENT_TREE_VIEW: frees every item string, the item
+ * array, the depth array and the data struct itself, then clears
+ * component_data. The tree view needs its own op because the generic path in
+ * ui_destroy() would free only the outer struct and leak the two arrays.
+ * Tolerates a NULL component or already-cleared data. */
 static inline void ui_tree_view_destroy_data(ui_component_t* c) {
     ui_tree_view_data_t* d;
     if (!c || !c->component_data)

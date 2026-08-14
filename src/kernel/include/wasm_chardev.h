@@ -22,11 +22,16 @@ int wasm_chardev_endpoint(uint32_t* out_endpoint);
  * many messages were handled. */
 int wasm_chardev_run(void);
 
-/* Deliver a read request IPC message from client to the chardev endpoint. */
+/* Deliver a read request IPC message from client to the chardev endpoint.  The reply is
+ * addressed to client_reply_endpoint and carries request_id back, so the caller correlates
+ * it itself.  Returns the ipc_send_from status (IPC_OK on success, IPC_ERR_FULL when the
+ * chardev queue is full), not a 0/-1 flag.  Sends only — it does not wait for the reply. */
 int wasm_chardev_ipc_read_request(uint32_t client_context_id, uint32_t chardev_endpoint,
                                   uint32_t client_reply_endpoint, uint32_t request_id);
 
-/* Deliver a write-byte request IPC message from client to the chardev endpoint. */
+/* Deliver a write-byte request IPC message from client to the chardev endpoint.  One byte
+ * per message; same reply addressing and same ipc_send_from status convention as the read
+ * request. */
 int wasm_chardev_ipc_write_request(uint32_t client_context_id, uint32_t chardev_endpoint,
                                    uint32_t client_reply_endpoint, uint32_t request_id,
                                    uint8_t byte);

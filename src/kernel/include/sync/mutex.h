@@ -17,6 +17,9 @@ typedef struct {
 
 enum { KSYNC_MUTEX_OK = 0, KSYNC_MUTEX_BUSY = 1 };
 
+/* Put a mutex into the unlocked state with an empty wait list. Required before
+ * first use, since the embedded event must be initialised. Calling it on a
+ * mutex that is held or has waiters discards both. */
 void ksync_mutex_init(ksync_mutex_t* mutex);
 
 /* All three operations below return -1 for a NULL mutex or a rejected state.

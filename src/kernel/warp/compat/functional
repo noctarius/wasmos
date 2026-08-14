@@ -1,8 +1,24 @@
 #pragma once
-/* Minimal <functional> stub for WARP.
- * FunctionRef.hpp uses std::function only in a std::is_convertible trait check;
- * providing a forward declaration is enough to satisfy it without pulling in
- * the full hosted std::function (which requires RTTI and exceptions). */
+/* compat/functional — freestanding stub of <functional>
+ *
+ * Provides std::function<R(Args...)> and nothing else — no std::bind, no
+ * std::ref/cref, no std::less/plus and no std::hash.
+ *
+ * FunctionRef.hpp is the only WARP source that includes <functional>, and it
+ * names std::function solely inside a std::is_convertible constraint on its
+ * constructor.  It never stores or calls one; FunctionRef exists precisely to
+ * avoid std::function's dynamic allocation.  So the type only has to exist and
+ * be nameable, which is why the full hosted std::function (RTTI, type erasure,
+ * heap allocation) is not needed here.
+ *
+ * This std::function is not usable as a callable wrapper: its converting
+ * constructor accepts any F and stores nothing, so the constraint in
+ * FunctionRef.hpp is satisfied unconditionally rather than checking the
+ * signature (see the is_convertible note in compat/type_traits).  Actually
+ * invoking one hangs — operator() cannot return a value it never captured, so
+ * it loops forever instead of returning garbage.  Storing a callable in a
+ * std::function is a silent no-op at construction; only the eventual call
+ * reveals it. */
 #include "type_traits"
 
 namespace std {
@@ -16,6 +32,8 @@ public:
     function() noexcept = default;
     template<class F>
     function(F) noexcept {}
+    /* Spins forever rather than returning an uninitialised R.  Unreachable in
+     * the kernel: nothing here ever holds a callable to dispatch to. */
     R operator()(Args...) const { for(;;){} } // unreachable in kernel
 };
 

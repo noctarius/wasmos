@@ -9,10 +9,20 @@
 #include <stdint.h>
 
 /* Per-CPU data array.  g_cpus[0] is the BSP.  g_cpus[1..g_cpu_count-1] are
- * APs populated by MADT discovery (WASMOS_SMP builds only). */
+ * APs populated by MADT discovery (WASMOS_SMP builds only).
+ *
+ * Each slot is reached through that CPU's GS base once x86_cpu_init() or
+ * x86_ap_cpu_init() has loaded it, so cpu_local() and &g_cpus[cpu_id] denote the
+ * same object; the array is only indexed directly where the GS base is not yet
+ * valid.  Slots are zero-initialised, and started stays 0 until the AP itself
+ * sets it as the last step of bring-up. */
 cpu_local_t g_cpus[WASMOS_MAX_CPUS];
 
-/* Number of CPUs found in the MADT.  Always at least 1 (BSP). */
+/* Number of CPUs found in the MADT.  Always at least 1 (BSP).
+ *
+ * Written by the MADT scan inside ioapic_init() and read as the bound of every
+ * per-CPU loop, so it is only meaningful after that scan and is never lowered
+ * again — an AP that fails to start stays counted, with started == 0. */
 uint32_t g_cpu_count = 1;
 
 #if WASMOS_SMP
@@ -33,7 +43,13 @@ uint32_t g_cpu_count = 1;
 #define TRAMP_SIPI_VECTOR 0x01u
 
 /* Static stacks for APs.  Kept in BSS so they are in the kernel's higher-half
- * virtual address space and are covered by the existing page table. */
+ * virtual address space and are covered by the existing page table.
+ *
+ * Indexed by cpu_id - 1, since the BSP's equivalents live in cpu_x86_64.c.  Each
+ * row is one CPU's private stack and the TOP (base + CPU_IST_STACK_SIZE) is what
+ * gets installed; the ist row backs IST1 for the timer vector and the rsp0 row
+ * backs ring 3 -> ring 0 entry.  Neither carries the guard word the BSP's IST
+ * stack has, so the isr_irq_0 overflow check does not cover them. */
 uint8_t g_ap_ist_stacks[WASMOS_MAX_CPUS - 1][CPU_IST_STACK_SIZE] __attribute__((aligned(16)));
 uint8_t g_ap_rsp0_stacks[WASMOS_MAX_CPUS - 1][CPU_IST_STACK_SIZE] __attribute__((aligned(16)));
 
@@ -98,7 +114,18 @@ static void smp_trampoline_setup(cpu_local_t* ap, uint64_t ap_rsp) {
     write_slot_u32(AP_SLOT_CPU_ID, ap->cpu_id);
 }
 
-/* C entry point called by the AP trampoline after entering 64-bit long mode. */
+/* C entry point called by the AP trampoline after entering 64-bit long mode.
+ *
+ * Entry: runs on the AP, on the boot stack the BSP handed it through the AP_RSP
+ * slot, with the kernel page table loaded, interrupts disabled and no GDT/IDT of
+ * its own yet.  cpu_id is the logical index into g_cpus[] the BSP wrote into the
+ * AP_CPU_ID slot.
+ * Exit: never returns — it joins the scheduler loop.
+ *
+ * The step order closes two bring-up races: per-CPU scheduler state and this
+ * AP's idle thread must both exist before lapic_ap_enable() makes a timer tick
+ * possible, and started is published (behind a full barrier) only once all of
+ * that is done, because the BSP treats it as "this AP is safe to schedule on". */
 void smp_ap_c_entry(uint32_t cpu_id) {
     /* Perform per-CPU GDT/TSS/IDT/GS-base setup (runs on the AP). */
     x86_ap_cpu_init(cpu_id);
@@ -135,6 +162,10 @@ void smp_ap_c_entry(uint32_t cpu_id) {
  * smp_init() — called by the BSP after LAPIC and I/O APIC are live.
  * Records the BSP's hardware APIC ID into g_cpus[0].apic_id and logs
  * the number of CPUs discovered by MADT scanning in ioapic_init().
+ *
+ * Ordering: it must run after ioapic_init(), which is what populated g_cpus[1..]
+ * and g_cpu_count, and before smp_cpus_up(), which addresses APs by the APIC IDs
+ * recorded there.  Starts no CPU itself.
  */
 void smp_init(void) {
     g_cpus[0].apic_id = lapic_read_id();
@@ -153,6 +184,15 @@ void smp_init(void) {
  *
  * APs are brought up one at a time so the shared data slots at 0x500 are
  * not clobbered before the previous AP has read them.
+ *
+ * Blocks the BSP for the whole sequence, up to the spin bound per AP. Reports
+ * an AP that never sets started and moves on, so a partial bring-up is not
+ * fatal and g_cpu_count is left unchanged; callers that care must test
+ * g_cpus[i].started rather than assume every counted CPU is live. Returns early
+ * with a log line when the MADT found no AP.
+ *
+ * Overwrites physical pages 0x0000 and 0x1000 and identity-maps them, so nothing
+ * else may own that memory while this runs. BSP only, and not re-entrant.
  */
 void smp_cpus_up(void) {
     if (g_cpu_count <= 1u) {

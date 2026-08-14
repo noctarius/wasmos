@@ -11,10 +11,17 @@
 #include <stdarg.h>
 #include <stdio.h>
 
+/* Straight to serial_write, so it takes the serial lock and is unsuitable for
+ * panic/NMI contexts — those use the serial_*_unlocked writers directly. */
 void klog_write(const char* s) {
     serial_write(s);
 }
 
+/* Formats into a 512-byte stack buffer and emits it with serial_write.  Longer
+ * output is truncated without notice, and the whole line is emitted as one
+ * locked write so concurrent CPUs cannot interleave inside it.  Unlike
+ * serial_printf this does no rebasing of its own; vsnprintf handles kernel-image
+ * literals through kernel_str_ptr. */
 void klog_printf(const char* fmt, ...) {
     char buf[512];
     va_list ap;

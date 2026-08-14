@@ -26,15 +26,25 @@
 #define IDT_ENTRY_COUNT 256
 #define EXCEPTION_COUNT 32
 
+/* Segment selectors: byte offsets into k_gdt_template with RPL 0, so they double
+ * as GDT slot indices (slot n = 8*n). The user selectors are quoted here without
+ * the RPL 3 bits; ring-3 frames carry 0x1B/0x23, which is why CPL is tested as
+ * (cs & 3) rather than by comparing against these values. KERNEL_TSS_SELECTOR
+ * points at slot 5, the first half of the 16-byte 64-bit TSS descriptor. */
 #define KERNEL_CS_SELECTOR 0x08
 #define KERNEL_DS_SELECTOR 0x10
 #define USER_CS_SELECTOR 0x18
 #define USER_DS_SELECTOR 0x20
 #define KERNEL_TSS_SELECTOR 0x28
+/* IST slot for IRQ 0: 1-based (0 means "no IST"), selecting tss.ist1. */
 #define IRQ0_IST_INDEX 1
 
 #define IA32_GS_BASE_MSR 0xC0000101u
 
+/* IDT gate type/attribute bytes: present, 64-bit interrupt gate (which clears IF
+ * on entry, unlike a trap gate), DPL 0 and DPL 3 respectively. Only the syscall
+ * vector uses the DPL 3 form; every other gate must stay DPL 0 or ring 3 could
+ * invoke it directly with a forged frame. */
 #define IDT_TYPE_INTERRUPT_GATE 0x8E
 #define IDT_TYPE_INTERRUPT_GATE_USER 0xEE
 /* The user VA window is exactly PML4 slot 1 (512 GiB .. 1 TiB): every mapping the
@@ -44,11 +54,16 @@
 #define USER_VA_MIN 0x0000008000000000ULL
 #define USER_VA_MAX 0x0000010000000000ULL
 
+/* Operand of lgdt/lidt: limit is the table size in bytes MINUS ONE, base its
+ * linear address. Must stay packed — the hardware reads exactly 10 bytes. */
 typedef struct __attribute__((packed)) {
     uint16_t limit;
     uint64_t base;
 } descriptor_ptr_t;
 
+/* 64-bit IDT gate descriptor. The 64-bit handler address is split across
+ * offset_low/mid/high; ist selects a TSS interrupt-stack slot (0 = keep the
+ * current stack) and type_attr is one of the IDT_TYPE_* bytes above. */
 typedef struct __attribute__((packed)) {
     uint16_t offset_low;
     uint16_t selector;
@@ -124,6 +139,10 @@ uint64_t g_irq0_ist_canary = 0xCAFEBABEDEADC0DEULL;
 
 #define X86_MXCSR_DEFAULT 0x1F80u
 
+/* Page-fault classification used only for diagnostics and for the ring3 fault
+ * probes' markers. Derived from the #PF error code plus the faulting address;
+ * the order of tests matters, since a CPL 3 access outside the user VA window is
+ * reported as USER_TO_KERNEL whatever the present/write/instruction bits say. */
 typedef enum {
     PF_REASON_UNMAPPED = 0,
     PF_REASON_WRITE_VIOLATION,
@@ -486,14 +505,36 @@ static __attribute__((noreturn)) void x86_exception_panic_common(uint64_t vector
     kpanic("cpu_exception", vector, has_cr2 ? cr2 : rip);
 }
 
+/* Panic entry point for a CPU exception whose stub captured no register block.
+ * The dumped rip/cs/rflags/rsp are then this function's own, not the faulting
+ * instruction's, so the report identifies the vector but not where it came from.
+ * Called from assembly; does not return. */
 __attribute__((noreturn)) void x86_exception_panic(uint64_t vector) {
     x86_exception_panic_common(vector, 0);
 }
 
+/* Panic entry point taking the frame an ISR stub built. regs points at the
+ * 15-quadword PUSH_REGS block (r15 first, rax last), immediately followed by the
+ * error code and the CPU-pushed rip/cs/rflags/rsp/ss — the error-code form, so a
+ * stub for a vector that pushes none must supply a zero in its place. The
+ * pointer is borrowed and only read before the machine halts. Does not return. */
 __attribute__((noreturn)) void x86_exception_panic_frame(uint64_t vector, const uint64_t* regs) {
     x86_exception_panic_common(vector, regs);
 }
 
+/* Decide whether a CPU exception is a ring-3 process fault the kernel can absorb.
+ *
+ * frame is borrowed and points at the CPU-pushed frame in error-code form
+ * ([err, rip, cs, rflags, rsp, ss]); a NULL frame reads as CPL 0 and is declined.
+ * Returns 0 when the fault was attributed to the current process, in which case
+ * the process has already been given exit status -11 and yielded as EXITED and
+ * the caller must not resume it. Returns -1 when the fault is not attributable —
+ * no current process, CPL 0, or a vector outside the handled set (0, 1, 4, 6, 7,
+ * 12, 13, 17) — and the caller is expected to panic.
+ *
+ * The 0 path switches away inside process_yield and an exiting thread is never
+ * rescheduled, so control does not come back to the faulting instruction. It
+ * also emits the [test] markers the ring3 fault probes assert on. */
 int x86_user_exception_handler(uint64_t vector, const uint64_t* frame) {
     uint32_t pid = process_current_pid();
     process_t* proc = process_get(pid);
@@ -550,6 +591,22 @@ int x86_user_exception_handler(uint64_t vector, const uint64_t* frame) {
     return 0;
 }
 
+/* #PF handler, called from isr_exception_14 with the architectural error code and
+ * a borrowed pointer to the CPU-pushed frame in error-code form
+ * ([err, rip, cs, rflags, rsp, ss]). The faulting address is read from CR2 here
+ * rather than passed in, so this must run before anything else can fault.
+ *
+ * Returns 0 when the faulting instruction may be retried — the mapping was
+ * installed by the memory service, a stale-TLB linmem entry was invalidated
+ * locally, or a ring-3 process was terminated for the fault (in which case the
+ * stub's iretq resumes some other context, not the faulting one). Returns -1 when
+ * the fault is unhandled, and the stub then panics. Recovery is per-fault: the
+ * TLB retry path invalidates one page and returns without re-checking, so a
+ * genuinely absent mapping in that window faults again rather than looping here.
+ *
+ * Despite the name, memory_service_handle_fault_ipc() resolves the fault in-line
+ * rather than over IPC, so the only path that parks the caller is the ring-3
+ * termination one. */
 int x86_page_fault_handler(uint64_t error_code, const uint64_t* frame) {
     uint64_t cr2 = 0;
     __asm__ volatile("mov %%cr2, %0" : "=r"(cr2));
@@ -627,6 +684,25 @@ int x86_page_fault_handler(uint64_t error_code, const uint64_t* frame) {
     return 0;
 }
 
+/* BSP-only CPU bring-up, called once from kmain before interrupts are enabled.
+ * The ordering is load-bearing:
+ *
+ *   1. EFER.NXE, then CR0/CR4/MXCSR, so page-table NX bits and kernel SSE are
+ *      usable before anything relies on them.
+ *   2. g_cpus[0] is filled in through its address rather than cpu_local(),
+ *      because the GS base still points wherever the firmware left it.
+ *   3. TSS (with the IST1 canary planted), then GDT+LTR, then the IDT.
+ *   4. IRQ gates 32..47 — IRQ 0 on IST1 so a timer interrupt taken on a nearly
+ *      exhausted kernel stack still has a stack — then, where a LAPIC exists,
+ *      the MSI gates 48..63 and the spurious gate 255.
+ *   5. The int 0x80 syscall gate, the only DPL 3 gate installed.
+ *   6. IA32_GS_BASE last: cpu_local() is undefined before this point and valid
+ *      after it, which is why nothing above may call it.
+ *
+ * Gate handler addresses go through x86_kernel_handler_addr(), so they are
+ * higher-half aliases; the GDTR/IDTR bases, TSS stack tops and GS base are
+ * installed as-is and x86_cpu_relocate_tables_high() rewrites them if they were
+ * still lower-half. Ends by calling irq_init(). */
 void x86_cpu_init(void) {
     uint64_t efer = x86_read_msr(IA32_EFER_MSR);
     if ((efer & IA32_EFER_NXE) == 0) {
@@ -695,6 +771,13 @@ void x86_cpu_init(void) {
     (void)USER_DS_SELECTOR;
 }
 
+/* Publish the kernel stack the CPU switches to on a ring 3 -> ring 0 transition.
+ * rsp0 is the stack TOP (stacks grow down) and affects only the calling CPU's
+ * TSS, so it must be re-issued on every CPU that will run the thread. A zero
+ * argument is ignored rather than clearing the field, which would fault the next
+ * user-mode entry. Takes effect immediately: the CPU reads the TSS on each
+ * privilege-changing interrupt, so it must not be called with a value that is
+ * about to become invalid. */
 void x86_cpu_set_kernel_stack(uint64_t rsp0) {
     if (rsp0 == 0) {
         return;
@@ -734,6 +817,10 @@ void x86_cpu_relocate_tables_high(void) {
     __asm__ volatile("ltr %0" : : "r"(tss_selector) : "memory");
 }
 
+/* Unconditional sti/cli on the calling CPU. Neither saves nor restores the
+ * previous IF state, so they do not nest: a disable/enable pair around a region
+ * enables interrupts even if they were already masked on entry. Code that needs
+ * nesting uses the spinlock/critical-section helpers instead. */
 void x86_cpu_enable_interrupts(void) {
     __asm__ volatile("sti");
 }
@@ -746,6 +833,14 @@ void x86_cpu_disable_interrupts(void) {
 
 #if WASMOS_SMP
 
+/* Populate an AP's cpu_local slot from the BSP, before the INIT-SIPI-SIPI that
+ * starts it. cpu is borrowed and must be the g_cpus[] entry for that AP, with
+ * cpu_id already set; ist1_top and rsp0_top are stack TOPS of two distinct
+ * CPU_IST_STACK_SIZE regions the caller owns for the AP's lifetime. Writes the
+ * AP's private GDT (including the TSS descriptor at slots 5..6) and TSS but loads
+ * nothing: the AP itself does that in x86_ap_cpu_init(). Unlike the BSP path this
+ * plants no IST canary, so the isr_irq_0 overflow check does not cover AP
+ * stacks. */
 void x86_cpu_prepare_ap(cpu_local_t* cpu, uint64_t ist1_top, uint64_t rsp0_top) {
     for (uint32_t i = 0; i < GDT_ENTRY_COUNT; ++i) {
         cpu->gdt[i] = k_gdt_template[i];
@@ -759,6 +854,13 @@ void x86_cpu_prepare_ap(cpu_local_t* cpu, uint64_t ist1_top, uint64_t rsp0_top) 
     gdt_set_tss(cpu);
 }
 
+/* Per-CPU descriptor-table setup, executed by the AP itself as the first C code
+ * after the trampoline reaches long mode. cpu_id indexes g_cpus[] and must be the
+ * value the BSP wrote into the trampoline's AP_CPU_ID slot; it is not
+ * range-checked. Enables kernel SIMD, loads this AP's GDT/TSS and the IDT the BSP
+ * already built (the IDT is shared by every CPU), and sets IA32_GS_BASE last, so
+ * cpu_local() is only usable after this returns. Interrupts stay masked
+ * throughout; the caller enables them by starting the LAPIC timer later. */
 void x86_ap_cpu_init(uint32_t cpu_id) {
     cpu_local_t* cpu = &g_cpus[cpu_id];
 

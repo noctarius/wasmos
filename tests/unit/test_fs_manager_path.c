@@ -1,3 +1,22 @@
+/* test_fs_manager_path.c — mount routing for the FS manager
+ * (fs_manager_path.h): which mount a path belongs to, and what is left of the
+ * path once that mount's name is stripped.
+ *
+ * src/services/fs_manager/fs_manager_path.c is the only source linked in. It is
+ * split out of fs_manager.c precisely because it touches no IPC, no xfer buffer
+ * and no backend table, so nothing is stubbed and the mount list is passed in
+ * per call.
+ *
+ * fsmgr_route_path_for_mounts returns 1 on a match and 0 otherwise -- the
+ * opposite polarity to the kernel's 0-on-success convention -- and leaves its
+ * outputs untouched when it returns 0, which is why the cases assert on `ok`
+ * before reading anything else.
+ *
+ * The cases report through assert(), not through a failure counter: the first
+ * failure aborts the process, and main() prints "ok" only if every case ran to
+ * completion. The suite is compiled without -DNDEBUG, which those asserts
+ * depend on.
+ */
 #include <assert.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -7,6 +26,17 @@
 
 #include "fs_manager_path.h"
 
+/* Route a path and turn the mount index into that mount's backend endpoint,
+ * mirroring route_path_to_backend in src/services/fs_manager/fs_manager.c
+ * (including its re-check of the returned index against mount_count).
+ *
+ * `mounts` and `backends` are parallel arrays of `mount_count` entries, borrowed
+ * for the call; the real function builds them by walking its live g_backends
+ * registration table instead, and refuses outright when no backend is
+ * registered, which this composition cannot reach.
+ *
+ * Returns 1 on a routed path, with *out_backend, out_path and *out_path_len set;
+ * returns 0 otherwise, leaving *out_backend untouched. */
 static int32_t route_and_select_backend(const char* path, int32_t path_len,
                                         const char* const* mounts, const int32_t* backends,
                                         int32_t mount_count, int32_t allow_relative,

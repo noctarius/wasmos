@@ -12,6 +12,10 @@
  * NULL semaphore or that overflow refusal.
  */
 
+/* Publishes the semaphore with `initial_count` permits and an empty wait list.
+ * Any initial_count is accepted, including 0 (every acquire blocks until a
+ * release) and UINT32_MAX (already saturated: the next release is refused).  Not
+ * safe against a live semaphore — it drops the wait list without waking it. */
 void ksync_semaphore_init(ksync_semaphore_t* sem, uint32_t initial_count) {
     if (!sem) {
         return;
@@ -36,6 +40,11 @@ int ksync_semaphore_try_acquire(ksync_semaphore_t* sem) {
     return rc;
 }
 
+/* Blocks until a permit is taken; only ever returns KSYNC_SEMAPHORE_OK or -1 for
+ * a NULL semaphore, never BUSY.  The loop re-tests the count after each wake for
+ * the same reason the mutex does: release() increments and then wakes, so a
+ * third thread can consume the permit before the woken waiter runs.  Waiters are
+ * therefore not FIFO-fair with respect to the count. */
 int ksync_semaphore_acquire(ksync_semaphore_t* sem) {
     if (!sem) {
         return -1;
@@ -68,6 +77,11 @@ int ksync_semaphore_release(ksync_semaphore_t* sem) {
     return KSYNC_SEMAPHORE_OK;
 }
 
+/* Snapshot of the permit count, taken under event.lock so it is never torn.  It
+ * is stale the instant the lock is dropped, so it is a diagnostic only: deciding
+ * to acquire based on it reintroduces exactly the check-then-act race that
+ * ksync_semaphore_try_acquire exists to avoid.  A NULL semaphore reads 0, which
+ * is indistinguishable from a genuinely empty one. */
 uint32_t ksync_semaphore_count(ksync_semaphore_t* sem) {
     uint32_t count = 0;
 

@@ -61,6 +61,11 @@ static inline bool is_ring3_linmem_kernel_window(uint64_t virt) {
 }
 #endif
 
+/* Re-map `pages` 4 KiB pages of a direct-mapped kernel alias onto their own frames as
+ * RWX, splitting whatever large-page mapping covered them.  `ptr` must be a kernel
+ * higher-half address whose frame is virt - kHalfBase; anything below kHalfBase, a null
+ * pointer or a zero count is rejected with -1, as is a mapping failure.  Returns 0 on
+ * success.  Idempotent: re-mapping an already-4 KiB-mapped range is harmless. */
 static int remap_direct_alias_pages(uint8_t* ptr, uint64_t pages) {
     if (!ptr || pages == 0) {
         return -1;
@@ -85,6 +90,10 @@ static int remap_direct_alias_pages(uint8_t* ptr, uint64_t pages) {
  * The type field distinguishes linmem from JIT allocations for ring-3 mapping.
  * data_offset: bytes from phys to the first usable data byte (0 for mmap entries,
  * sizeof(AllocHeader) for warp_kmalloc large entries). */
+/* Which physical zone an allocation came from, and therefore how ring-3 mapping should
+ * treat it.  JIT allocations are taken from WARP_JIT_PHYS_MIN upward and linmem from
+ * WASMOS_SHMEM_PHYS_LIMIT upward precisely so a linmem commit's zero-fill can never
+ * land on JIT code. */
 enum MmapType : uint8_t { MMAP_OTHER = 0, MMAP_JIT = 1, MMAP_LINMEM = 2 };
 struct MmapEntry {
     uint8_t* virt;
@@ -93,9 +102,15 @@ struct MmapEntry {
     MmapType type;
     uint64_t data_offset;
 };
+/* Fixed 256-entry tracking table; an allocation that finds no free slot is not tracked
+ * and its physical range then cannot be resolved by find_entry_by_phys.  Unsynchronised
+ * — safe only under the WARP single-CPU invariant (warp/shim.cpp). */
 static MmapEntry g_mmap_table[256];
 
 /* Next-allocation type hint: set before calling allocPagedMemory. */
+/* Out-of-band argument to the next allocPagedMemory call, because vb::MemUtils' own
+ * signature carries no zone.  Every setter restores it to MMAP_OTHER immediately after
+ * the call; a path that forgets would mis-zone the next unrelated allocation. */
 static MmapType g_next_alloc_type = MMAP_OTHER;
 
 static MmapEntry* alloc_entry() {
@@ -132,6 +147,11 @@ static MmapEntry* find_entry_by_phys(uint64_t phys) {
     return nullptr;
 }
 
+/* Last linear-memory publication for one user root, so a re-publication can tell an
+ * incremental extension (same base, same phys identity, more pages — map only the tail)
+ * from a relocation (unmap the old range first).  32 slots, and when they are all taken
+ * by other roots the lookup falls back to slot 0 and that root's state is overwritten,
+ * which costs a redundant full remap rather than correctness. */
 struct Ring3LinmemMapState {
     uint64_t user_root;
     uint64_t user_va_base;
@@ -240,6 +260,9 @@ extern "C" void warp_mem_kmalloc_unregister(uint64_t phys) {
 
 /* Map JIT binary pages into the ring-3 user CR3 at WARP_R3_JIT_BASE.
  * jit_kernel_ptr = getCompiledBinary().data() (kernel alias of JIT code). */
+/* Returns 0 when every page was mapped, -1 on a null/empty range, a `jit_kernel_ptr`
+ * that is not a kernel higher-half address, or a mapping failure — in which case the
+ * pages mapped so far are left in place. */
 extern "C" int warp_mem_ring3_map_jit(uint64_t user_root, uint8_t const* jit_kernel_ptr,
                                       size_t jit_size) {
     if (!jit_kernel_ptr || jit_size == 0)
@@ -263,6 +286,13 @@ extern "C" int warp_mem_ring3_map_jit(uint64_t user_root, uint8_t const* jit_ker
  * linmem_kernel_ptr = getLinearMemoryRegion(0, 0) (= linmem base kernel alias).
  * Finds the containing MmapEntry (type=LINMEM) to get the alloc start and
  * page count, then maps from WARP_R3_LINMEM_BASE - basedataLength upwards. */
+/* Handles both linmem layouts: a dedicated-VA slot, whose frames are scattered and are
+ * resolved per page by walking the page tables, and a legacy contiguous allocation
+ * resolved through the tracking table.  A re-publication for the same root extends the
+ * existing mapping when base, physical identity and offsets are unchanged and only the
+ * page count grew; otherwise the previous range is unmapped first.  Returns 0 on
+ * success, -1 when the allocation cannot be located, a page has no backing frame, or a
+ * mapping failed — partial mappings are not rolled back. */
 extern "C" int warp_mem_ring3_map_linmem(uint64_t user_root, uint8_t const* linmem_kernel_ptr) {
     if (!linmem_kernel_ptr)
         return -1;
@@ -354,6 +384,21 @@ extern "C" int warp_mem_ring3_map_linmem(uint64_t user_root, uint8_t const* linm
     return 0;
 }
 #endif /* WASMOS_WASM_RUNTIME_WARP */
+
+/* Kernel implementation of the vb::MemUtils interface declared by libs/warp; the
+ * contracts are upstream's, and the notes below record only where this implementation
+ * deviates.
+ *
+ * setPermissionRWX / setPermissionRX / setPermissionRW are no-ops returning 0: every
+ * page this allocator hands out is already RWX and stays RWX, so a caller cannot rely
+ * on W^X here.  uncommitVirtualMemory is a no-op: nothing is ever decommitted, so
+ * committed memory is only reclaimed when the whole allocation is freed.
+ * clearInstructionCache is a no-op because x86_64 keeps the instruction cache coherent
+ * with the data cache.  getStackInfo returns a zero-filled struct — the kernel hands
+ * WARP its stack bounds directly instead.  allocAlignedMemory ignores the requested
+ * alignment and returns page-aligned memory, which satisfies every alignment WARP asks
+ * for; it and reallocAlignedMemory throw std::bad_alloc on exhaustion, which the
+ * driver's exception checkpoint turns into a longjmp rather than an unwind. */
 
 /* -----------------------------------------------------------------------
  * vb::MemUtils implementation

@@ -151,6 +151,24 @@ static int32_t script_register(int32_t proc_endpoint, int32_t broker_endpoint) {
     return SCRIPT_BROKER_OK;
 }
 
+/* Service entry point.  Creates the broker endpoint, registers the SCRIPT
+ * subsystem and its `#!` exec handler with PM, signals readiness, then serves
+ * PROC_BROKER_IPC_SPAWN_PLAN_REQ forever.
+ *
+ * Registration must complete before wasmos_sys_notify_ready: PM routes a
+ * matching spawn to this broker as soon as the handler exists, and readiness is
+ * what releases whoever is waiting on the broker to be usable.  Registration is
+ * also the capability check — PM rejects it unless the manifest declares
+ * `subsystem.register` — so a rejected register is fatal here.
+ *
+ * Returns only on a fatal startup or serve error, as one of the negative
+ * SCRIPT_BROKER_ERR_* exit statuses — endpoint creation, registration, or a
+ * failure to hand a finished plan back to PM, which ends the service because
+ * the requester would otherwise wait forever.  A per-request *parse* failure is
+ * instead answered with PROC_BROKER_IPC_SPAWN_PLAN_ERROR
+ * carrying a packed WASMOS_ERR_PROC_SPAWN_* code and does not end the service,
+ * and an unexpected opcode is ignored rather than answered.  arg1..arg3 are
+ * unused and proc_endpoint is overwritten from the spawn-info contract. */
 int32_t initialize(int32_t proc_endpoint, int32_t ignored_arg1, int32_t ignored_arg2,
                    int32_t ignored_arg3) {
     /* The 4-slot WASM service entry ABI is fixed, but the entry args carry

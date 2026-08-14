@@ -1,8 +1,26 @@
 #pragma once
-/* Minimal <ostream> stub.  compat/iostream builds std::cout/std::cerr on it
- * (defined in warp/iostream_stubs.cpp); every insertion is discarded, so no
- * output is ever produced.  WARP's own std::cout users (utils/MemUtils.cpp,
- * utils/OSAPIChecker.cpp) are replaced by kernel translation units. */
+/* compat/ostream — freestanding stub of <ostream>
+ *
+ * Provides an ostream class with a catch-all operator<< and the manipulator
+ * overload, plus endl and flush.  compat/iostream builds std::cout/std::cerr on
+ * it (the objects are defined in warp/iostream_stubs.cpp) and compat/sstream
+ * derives stringstream from it.
+ *
+ * EVERY INSERTION IS DISCARDED.  operator<< accepts any T and returns *this
+ * without formatting or emitting anything, and endl/flush are identity
+ * functions — no newline, no flush.  A diagnostic written to std::cout in WARP
+ * therefore vanishes rather than reaching the kernel log; use klog_write for
+ * anything that must be seen.  This is safe because the WARP sources that print
+ * are either not compiled into the kernel (utils/ExecutableMemory.cpp,
+ * utils/RAIISignalHandler.cpp) or replaced by kernel translation units that log
+ * properly — utils/MemUtils.cpp by warp/mem_utils_kernel.cpp and
+ * utils/OSAPIChecker.cpp by warp/os_api_checker_kernel.cpp, which routes the
+ * same failures to klog_write.
+ *
+ * The stream state interface is absent: no write(), no good()/fail()/rdbuf(),
+ * no width/precision manipulators, no std::streamsize.  Those are compile
+ * errors — which is what keeps utils/STDCompilerLogger.hpp, whose log() calls
+ * std::cout.write(), out of the kernel build rather than silently muted. */
 namespace std {
 struct ostream {
     template<class T> ostream &operator<<(T const &) noexcept { return *this; }

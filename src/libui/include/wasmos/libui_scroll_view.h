@@ -4,6 +4,14 @@
 /* libui_scroll_view.h - Scroll view component specific rendering (viewport, children with offset,
  * scrollbar). */
 
+/* Render op for UI_COMPONENT_SCROLL_VIEW: fills the viewport, strokes its own
+ * border, then renders every child through the core clip walker with the clip
+ * narrowed to the viewport and the scroll offset added to `offset_y`, and
+ * finally the scrollbar when the content overflows. Because it descends into
+ * children itself, the core skips its generic border and child pass.
+ *
+ * Children are rendered whether or not they are inside the viewport; the clip
+ * rectangle, not culling, keeps them from painting outside it. */
 static inline void ui_render_scroll_view(ui_context_t* ctx, const ui_component_t* c,
                                          ui_rect_t draw_bounds, ui_rect_t clip, int32_t offset_y) {
     ui_scroll_view_data_t* d = (ui_scroll_view_data_t*)c->component_data;
@@ -35,6 +43,16 @@ static inline void ui_render_scroll_view(ui_context_t* ctx, const ui_component_t
     }
 }
 
+/* Layout op for UI_COMPONENT_SCROLL_VIEW. Stacks children vertically inside the
+ * padding at their preferred_h (floored at 8 px) separated by gap_px, exactly
+ * like the generic vertical layout, and additionally sums the content height to
+ * derive scroll_max, then clamps scroll_y into [0, scroll_max].
+ *
+ * Child bounds are laid out in unscrolled coordinates — the scroll offset is
+ * applied at render time, not here — so the children of an overflowing scroll
+ * view legitimately have bounds below its bottom edge. Hit tests use those same
+ * unscrolled bounds, so clicks on children of a scrolled view do not follow the
+ * visible position. */
 static inline void ui_layout_scroll_view(ui_context_t* ctx, ui_component_t* p) {
     ui_scroll_view_data_t* d = (ui_scroll_view_data_t*)p->component_data;
     if (!d)
@@ -68,7 +86,10 @@ static inline void ui_layout_scroll_view(ui_context_t* ctx, ui_component_t* p) {
         d->scroll_y = d->scroll_max;
 }
 
-/* Component-owned scroll drag handler (for active scroll during pointer drag). */
+/* Component-owned scroll drag handler (for active scroll during pointer drag).
+ * `dy` is thumb travel; ui_scroll_drag_delta() converts it to content pixels
+ * and the offset is clamped into [0, scroll_max]. A view whose content fits
+ * does not scroll. */
 static inline void ui_scroll_view_handle_scroll_drag(ui_context_t* ctx, ui_component_t* c,
                                                      int32_t dy) {
     ui_scroll_view_data_t* d = (ui_scroll_view_data_t*)c->component_data;

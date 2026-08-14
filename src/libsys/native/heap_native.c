@@ -21,11 +21,23 @@
 #define SIZE_MAX ((size_t)-1)
 #endif
 
+/* HEAP_PAGE_SIZE is the x86_64 page granularity vm_map hands back, so large
+ * mappings are rounded to it. HEAP_SLAB_SIZE is the mapping every slab is cut
+ * from; it bounds how many blocks of a class share one mapping.
+ * HEAP_MAX_SMALL_ALLOCATION must equal the largest entry of heap_class_sizes -
+ * anything above it has no size class and takes the large path.
+ * HEAP_ALIGN is the alignment malloc guarantees (SysV x86_64 max_align_t) and
+ * is applied to both the block size and the slab's data start. */
 #define HEAP_PAGE_SIZE 4096u
 #define HEAP_SLAB_SIZE (64u * 1024u)
 #define HEAP_MAX_SMALL_ALLOCATION 4096u
 #define HEAP_ALIGN 16u
 
+/* Header tags used to catch corruption and double frees. ALLOCATION_MAGIC marks
+ * a live block, FREED_MAGIC replaces it on free, and SLAB/LARGE_MAGIC identify
+ * the two owner kinds a header points back to. HEAP_KEEP_EMPTY_SLABS is how
+ * many fully free slabs a size class caches before unmapping the rest, trading
+ * one mapping per class for not re-mapping on every alloc/free cycle. */
 #define HEAP_ALLOCATION_MAGIC 0xA110CA7Eu
 #define HEAP_FREED_MAGIC 0xFEE1DEADu
 #define HEAP_SLAB_MAGIC 0x51AB51ABu
@@ -36,7 +48,10 @@
 
 static wasmos_driver_api_t* g_heap_api = 0;
 
-/* Called once at service startup (before the first allocation). */
+/* Called once at service startup (before the first allocation).
+ * `api` is borrowed for the process lifetime and is the only page source this
+ * allocator has: until it is set, and whenever the table has no vm_map, every
+ * malloc returns NULL. */
 void wasmos_native_heap_init(wasmos_driver_api_t* api) {
     g_heap_api = api;
 }
@@ -74,7 +89,12 @@ static void* heap_memset(void* destination, int value, size_t size) {
 
 /* Allocator invariant broken (corruption / double free): a service that trips
  * this cannot safely continue. Report the reason and terminate the service.
- * Overridable via a strong definition. */
+ * Overridable via a strong definition.
+ * `reason` is a static NUL-terminated string and `pointer` the offending
+ * address, logged only through the driver console. This weak version does not
+ * return: it calls proc_exit(-1) and traps if that is unavailable. A strong
+ * override that DOES return leaves the allocator's callers to bail out on their
+ * own, which they do by returning NULL or nothing. */
 __attribute__((weak)) void heap_corruption_detected(const char* reason, const void* pointer) {
     (void)pointer;
     if (g_heap_api != 0 && g_heap_api->console_write != 0) {
@@ -367,6 +387,11 @@ static void* heap_allocate_large(size_t size) {
 
 /* --- malloc / free / calloc / realloc -------------------------------------- */
 
+/* Allocate `size` bytes aligned to HEAP_ALIGN, or NULL when no pages are
+ * available. A zero size is rounded up to 1, so it still returns a distinct
+ * freeable pointer. Sizes up to HEAP_MAX_SMALL_ALLOCATION come from a size-class
+ * slab, larger ones from their own page mapping. The contents are
+ * uninitialised, and the returned pointer stays valid until free()/realloc(). */
 void* malloc(size_t size) {
     heap_ensure_initialized();
     if (size == 0) {
@@ -443,6 +468,13 @@ static void heap_free_large(AllocationHeader* header, void* user_pointer) {
     os_vm_unmap(large, mapping_size);
 }
 
+/* Release a pointer from malloc/calloc/realloc. NULL is ignored. Anything else
+ * must be an unfreed pointer from this allocator: a bad or already-freed
+ * pointer is reported to heap_corruption_detected(), which terminates the
+ * service. Freeing a large allocation unmaps its pages immediately, so touching
+ * the memory afterwards faults; freeing a slab block only returns it to a free
+ * list, and the slab is unmapped once the class holds more than
+ * HEAP_KEEP_EMPTY_SLABS fully empty slabs. */
 void free(void* pointer) {
     if (pointer == 0) {
         return;
@@ -469,6 +501,9 @@ void free(void* pointer) {
     }
 }
 
+/* malloc(count * element_size) with the product zeroed, or NULL when the
+ * multiplication would overflow size_t or no pages are available. A zero count
+ * or element size still yields a freeable one-byte allocation. */
 void* calloc(size_t count, size_t element_size) {
     size_t total_size;
     if (heap_multiply_overflow(count, element_size, &total_size)) {
@@ -481,6 +516,14 @@ void* calloc(size_t count, size_t element_size) {
     return pointer;
 }
 
+/* Resize an allocation, preserving min(old, new) bytes. A NULL pointer behaves
+ * as malloc(new_size); a zero new_size frees and returns NULL. When the new
+ * size still fits the block's size class (or the large mapping's slack) the
+ * SAME pointer comes back and nothing is copied - including when shrinking, so
+ * this never returns pages to the kernel on its own. Otherwise a fresh block is
+ * allocated, the data copied, and the old one freed. Returns NULL on allocation
+ * failure with the ORIGINAL pointer still valid, and reports a pointer that is
+ * not a live allocation to heap_corruption_detected(). */
 void* realloc(void* pointer, size_t new_size) {
     if (pointer == 0) {
         return malloc(new_size);

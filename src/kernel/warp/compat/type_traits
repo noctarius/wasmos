@@ -6,12 +6,30 @@
  * Provides the subset used by WARP's template metaprogramming:
  *   ValidateSignatureType  → is_same, is_integral, is_enum
  *   ImportFunctionV2       → remove_cv, remove_reference, is_reference
- *   General glue           → enable_if, false_type, true_type, conditional,
- *                             integral_constant
+ *   FunctionRef            → enable_if_t, is_convertible
+ *   RegPosArr / to_array   → index_sequence, make_index_sequence, common_type
+ *   General glue           → false_type, true_type, conditional,
+ *                             integral_constant, decay, remove_pointer,
+ *                             underlying_type, is_pointer/is_void/is_arithmetic
  *
  * All implemented without compiler intrinsics where possible; uses
  * __is_enum / __is_integral built-ins (available in clang) for the ones
- * that cannot be expressed in pure C++14. */
+ * that cannot be expressed in pure C++14.
+ *
+ * index_sequence and make_index_sequence live here rather than in
+ * compat/utility, where the standard puts them, because compat/tuple and
+ * compat/array need them without pulling <utility> in.
+ *
+ * Most of these traits are exact.  Five are approximations that answer for the
+ * cases WARP asks about and quietly give a wrong answer outside them, which is
+ * the risk to watch: a trait that lies produces a silently different template
+ * instantiation, not a diagnostic.  They are common_type, is_convertible,
+ * is_signed/is_unsigned, make_unsigned/make_signed and is_function; each
+ * carries a note at its definition below.
+ *
+ * Missing traits (is_trivially_destructible, is_nothrow_*, aligned_storage,
+ * result_of/invoke_result, is_assignable, ...) fail loudly at the point of use.
+ * Nothing here is C++17: no _v variable templates, no void_t, no conjunction. */
 
 namespace std {
 
@@ -217,8 +235,12 @@ template <typename T> using add_const_t    = typename add_const<T>::type;
 // common_type (single-type and two-type; used by make_array)
 // ---------------------------------------------------------------------------
 
-// Simplified: WARP's make_array always passes homogeneous types so
-// common_type<T,T,...> = T is always correct in practice.
+// APPROXIMATION: common_type<T,U> yields decay_t<T> and ignores U entirely —
+// no ?: promotion is computed.  WARP's only caller is RegPosArr.hpp's
+// to_array(), which passes the element types of a homogeneous tuple, so
+// common_type<T,T,...> = T is correct there.  Given mixed types this silently
+// picks the first one instead of the promoted type; the mismatch then surfaces
+// (if at all) as a narrowing error further down, not here.
 template <typename... T> struct common_type;
 template <typename T>    struct common_type<T>       { using type = decay_t<T>; };
 template <typename T, typename U> struct common_type<T,U> { using type = decay_t<T>; };
@@ -242,6 +264,10 @@ using underlying_type_t = typename underlying_type<T>::type;
 
 // ---------------------------------------------------------------------------
 // is_signed / is_unsigned
+//
+// APPROXIMATION: both are gated on is_integral, so is_signed<float> is false
+// where the standard says true, and both are false for every enum, pointer and
+// class type rather than only is_signed being false.
 // ---------------------------------------------------------------------------
 
 template <typename T> struct is_signed   : integral_constant<bool,
@@ -251,6 +277,12 @@ template <typename T> struct is_unsigned : integral_constant<bool,
 
 // ---------------------------------------------------------------------------
 // make_unsigned / make_signed
+//
+// APPROXIMATION: the primary template is the identity, so anything without an
+// explicit specialisation below — an enum, bool, wchar_t, char16_t/char32_t, a
+// cv-qualified integer — comes back unchanged instead of being rejected.  The
+// standard makes those either ill-formed or a different type.  Note make_signed
+// has no `char` specialisation, so make_signed<char> is char.
 // ---------------------------------------------------------------------------
 
 template <typename T> struct make_unsigned { using type = T; };
@@ -302,6 +334,9 @@ template <typename T> using remove_pointer_t = typename remove_pointer<T>::type;
 // ---------------------------------------------------------------------------
 
 template <typename T> struct is_function        : false_type {};
+// APPROXIMATION: despite the note above, no ref-qualified (R(A...) &, &&) or
+// cv+vararg (R(A..., ...) const) specialisation is listed, so is_function is
+// false for those function types rather than true.
 // Specialise for all function types (non-cv, cv, ref-qualified, vararg).
 template <typename R, typename... A>       struct is_function<R(A...)>            : true_type {};
 template <typename R, typename... A>       struct is_function<R(A...) const>      : true_type {};
@@ -323,8 +358,14 @@ struct is_base_of : integral_constant<bool, __is_base_of(Base, Derived)> {};
 template <typename T, typename... Args>
 struct is_constructible : integral_constant<bool, __is_constructible(T, Args...)> {};
 
-// is_convertible<From,To>: true if To can be constructed from From (covers
-// lambdas → std::function<R(Args...)>, since this std::function takes any F).
+// APPROXIMATION: is_convertible<From,To> answers "is To constructible from
+// From", which also accepts explicit constructors that implicit conversion
+// would reject.  Its one WARP caller is FunctionRef.hpp's constructor
+// constraint, is_convertible<F&&, std::function<R(Args...)>>; compat/functional
+// gives std::function a constructor template accepting any F, so that
+// constraint is satisfied unconditionally here.  A callable with the wrong
+// signature is therefore admitted by the constraint and diagnosed later, at the
+// point the wrapper is invoked, instead of being SFINAE'd out.
 template <typename From, typename To>
 struct is_convertible : integral_constant<bool, __is_constructible(To, From)> {};
 

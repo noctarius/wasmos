@@ -61,6 +61,15 @@ static int map_user_page(uint64_t root, uint64_t user_va, uint64_t phys, uint64_
     return paging_map_4k_in_root(root, user_va, phys, flags);
 }
 
+/* Build one WARP guest's ring-3 address space: a fresh user root (which inherits the
+ * kernel higher half), the host-call trampoline page, the return/memory-helper/entry
+ * trampoline page, and the WARP_R3_STACK_PAGES user stack.  On success writes the root
+ * and the stack's physical base and returns 0; on any failure everything allocated so
+ * far is released and -1 is returned with the outputs untouched.  The two outputs are
+ * the whole handle — the caller stores them per driver and passes them back to
+ * warp_r3_teardown; no global state is created, so concurrent setups do not interfere.
+ * The JIT code and the linear memory are NOT mapped here (see warp_mem_ring3_map_jit /
+ * warp_mem_ring3_map_linmem); the root returned is not yet runnable. */
 int warp_r3_setup(uint64_t* out_user_root, uint64_t* out_stack_phys) {
     uint64_t root = 0;
 
@@ -226,6 +235,10 @@ int warp_r3_setup(uint64_t* out_user_root, uint64_t* out_stack_phys) {
     return 0;
 }
 
+/* Release what warp_r3_setup produced.  Destroying the address space also releases the
+ * two trampoline pages mapped into it.  Either argument may be 0, in which case that
+ * half is skipped, so a partially-set-up driver can be torn down with the same call.
+ * The caller must ensure no CPU still has `user_root` loaded. */
 void warp_r3_teardown(uint64_t user_root, uint64_t stack_phys) {
     if (user_root) {
         paging_destroy_address_space(user_root);

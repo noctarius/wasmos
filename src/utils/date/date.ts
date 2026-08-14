@@ -1,3 +1,20 @@
+// date - print or set the real-time clock through the `rtc` service.
+//
+// Usage:
+//   date                          print the current time
+//   date set YYYY-MM-DD HH:MM:SS  set the clock, then print it back
+//
+// The date and time are two separate arguments and both are required for `set`;
+// the format is fixed-width and validated character by character, so single-digit
+// fields are rejected. Accepted ranges are year 1970-2099, month 1-12, day 1-31
+// (no per-month or leap-year check), hour 0-23, minute and second 0-59. Output is
+// one line "YYYY-MM-DD HH:MM:SS". Exits 0 on success, or 1 with a diagnostic line
+// when the rtc service is missing, the arguments do not parse, or the set/read
+// round trip fails.
+//
+// Wire format for the rtc service (both directions):
+//   arg0 = second | minute<<8 | hour<<16 | day<<24   (one byte each)
+//   arg1 = month | year<<8                           (month one byte, year 16 bits)
 import {ipc, startup, std} from "./wasmos";
 
 const SVC_IPC_LOOKUP_REQ: i32 = 0x221;

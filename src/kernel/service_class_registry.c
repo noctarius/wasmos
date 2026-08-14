@@ -64,6 +64,11 @@ static void scr_list_clear(list_t* list) {
     }
 }
 
+/* Empties both the provider and the subscriber list and clears the event sink.
+ * No REMOVE events are emitted for the providers dropped here — the sink is
+ * being torn down with them.  Also serves as the explicit init: every entry
+ * point lazily initialises the lists, so this is only needed to return an
+ * already-populated registry to empty, as a test does between cases. */
 void service_class_registry_reset(void) {
     scr_ensure_init();
     scr_list_clear(&g_providers);
@@ -72,6 +77,11 @@ void service_class_registry_reset(void) {
     g_event_user = 0;
 }
 
+/* Installs the single callback through which ADD and REMOVE notifications reach
+ * subscribers; `user` is passed back to it unchanged and is borrowed, so it must
+ * outlive the registry's use of the sink.  A second call replaces the first, and
+ * a NULL fn disables notification entirely — subscriptions are still recorded,
+ * they just produce nothing. */
 void service_class_registry_set_event_sink(service_class_event_fn fn, void* user) {
     g_event_fn = fn;
     g_event_user = user;
@@ -92,6 +102,17 @@ static void scr_emit(uint32_t event, const char* class_name, uint32_t instance, 
     }
 }
 
+/* Registers a provider under (class_name, instance), or UPDATES the existing one
+ * when the same owner re-registers that pair — an update rewrites the endpoint
+ * and pid and, deliberately, emits NO event, since subscribers already know the
+ * provider.  A different owner claiming a live (class, instance) is refused.
+ *
+ * class_name is copied into a bounded field; an over-long name is REFUSED rather
+ * than truncated, so two names that share the first SVC_CLASS_NAME_MAX-1
+ * characters can never collide.
+ *
+ * Returns 0 on success, -1 for a NULL, empty or over-long class name, an
+ * ownership conflict, or a failed allocation. */
 int service_class_registry_add(const char* class_name, uint32_t instance, uint32_t endpoint,
                                uint32_t owner_ctx, uint32_t pid) {
     char norm[SVC_CLASS_NAME_MAX];
@@ -125,6 +146,16 @@ int service_class_registry_add(const char* class_name, uint32_t instance, uint32
     return 0;
 }
 
+/* Lists the providers of a class in ascending instance order.
+ *
+ * Returns the TOTAL number of matching providers, which can exceed `max`: only
+ * the first `max` are written to `out`, and a return greater than `max` means
+ * the caller's buffer was too small.  Passing out == 0 (or max == 0) therefore
+ * counts without copying.  An empty or NULL class name returns 0.
+ *
+ * The copied entries are snapshots; the endpoint or pid can change the moment
+ * the lock-free walk finishes.  Cost is O(providers^2) in the number of matches,
+ * since each pass rescans for the next instance. */
 uint32_t service_class_registry_lookup(const char* class_name, service_class_provider_t* out,
                                        uint32_t max) {
     uint32_t total = 0;
@@ -167,6 +198,17 @@ uint32_t service_class_registry_lookup(const char* class_name, service_class_pro
     return total;
 }
 
+/* Registers interest in a class, so future ADD and REMOVE events for it are
+ * delivered to notify_endpoint through the event sink.  Subscribing does NOT
+ * replay the providers already registered; combine it with
+ * service_class_registry_lookup to avoid missing them.
+ *
+ * Re-subscribing the same (class, endpoint) pair is a no-op returning 0.  There
+ * is no unsubscribe: a subscription ends when
+ * service_class_registry_reap_dead finds its owner gone.
+ *
+ * Returns -1 for a NULL, empty or over-long class name and for a failed
+ * allocation. */
 int service_class_registry_subscribe(const char* class_name, uint32_t notify_endpoint,
                                      uint32_t owner_ctx) {
     char norm[SVC_CLASS_NAME_MAX];
@@ -206,6 +248,17 @@ static void* scr_find_dead(list_t* list, uint32_t owner_off, service_class_alive
     return 0;
 }
 
+/* Garbage-collects entries whose owning context is gone, using the caller's
+ * liveness predicate — `alive` returns non-zero for a context that still exists,
+ * and `user` is passed through unchanged.
+ *
+ * Subscribers are reaped FIRST, so no REMOVE event is ever sent to an endpoint
+ * whose owner has already died.  Each surviving subscriber then receives a
+ * REMOVE for every provider dropped.  A NULL predicate makes the call a no-op —
+ * it cannot be defaulted to "everything is alive" or "everything is dead"
+ * safely.
+ *
+ * Reports nothing; call it periodically or after a process teardown. */
 void service_class_registry_reap_dead(service_class_alive_fn alive, void* user) {
     sub_t* dead_sub;
     provider_t* dead_prov;

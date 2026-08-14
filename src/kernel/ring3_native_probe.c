@@ -14,6 +14,10 @@
 #include "wasmos/mutex.h"
 #include "wasmos/syscall_x86_64.h"
 
+/* Flat-binary entry point: the loader jumps here with no C runtime, no
+ * arguments and no return address, so this must not return — it ends in
+ * wasmos_sys_thread_exit(0).  There is no dynamic loader, so no relocation is
+ * applied and the binary runs at whatever VA the probe loader mapped it to. */
 void _start(void) {
     /* Declare mutex on the stack so writes go to the writable stack region,
      * not the flat-binary data section which is mapped READ+EXEC. */

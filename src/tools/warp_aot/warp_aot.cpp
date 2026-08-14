@@ -66,6 +66,12 @@ static uint32_t stub_i8(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32
  * by position at load. Stubs (stub_i<N>/stub_v<N>) are defined above. */
 #include "wasmos_symbols_aot.inc"
 
+/* The symbol table WARP links the module against. Position is the contract: the
+ * kernel's initFromCompiledBinary() rebinds each entry by its index in this
+ * array, so an entry added, removed or reordered here without the same change in
+ * the kernel's WASMOS_SYMBOLS table silently binds a guest import to the wrong
+ * host function. The returned span borrows a function-local static that lives
+ * for the process's lifetime. */
 static vb::Span<vb::NativeSymbol const> aot_symbols() {
     static vb::NativeSymbol syms[] = {WASMOS_AOT_SYMBOLS(DYNAMIC_LINK)};
     return vb::Span<vb::NativeSymbol const>(syms, sizeof(syms) / sizeof(syms[0]));
@@ -75,6 +81,8 @@ static vb::Span<vb::NativeSymbol const> aot_symbols() {
  * Minimal no-op logger
  * ----------------------------------------------------------------------- */
 
+/* Discards everything WARP logs. The tool reports failures through the exception
+ * text instead, so the compiler's running commentary would only be noise. */
 struct NullLogger final : vb::ILogger {
     NullLogger& operator<<(char const*) override {
         return *this;
@@ -91,6 +99,17 @@ struct NullLogger final : vb::ILogger {
  * main
  * ----------------------------------------------------------------------- */
 
+/* Compile one .wasm to a .warpbin blob. argv[1] is the input path, argv[2] the
+ * output; extra arguments are ignored. Returns 0 on success and 1 on any failure
+ * — missing arguments, an empty or unreadable input, a WARP compilation error
+ * (including an import the symbol table above does not provide), an empty
+ * compiled span, or a write error. Progress and errors go to stderr, so stdout
+ * stays clean.
+ *
+ * The output is raw WARP compiled-binary bytes with no container of its own; the
+ * app packer appends it to a .wap. It is x86-64 code regardless of the host
+ * architecture, which is why the WASM start function is deliberately not run.
+ * A failed write may leave a partial output file behind. */
 int main(int argc, char* argv[]) {
     if (argc < 3) {
         fprintf(stderr, "usage: warp_aot <input.wasm> <output.warpbin>\n");

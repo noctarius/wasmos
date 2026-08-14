@@ -81,6 +81,9 @@ static wasm_shmem_linear_map_t g_wasm_shmem_maps[WASM_SHMEM_MAP_SLOTS];
 static wasm_dma_region_map_t g_wasm_dma_region_maps[WASM_DMA_REGION_MAP_SLOTS];
 static const boot_info_t* g_wasm_boot_info;
 
+/* Reinterpret a guest i32 argument as a non-negative u32.  Stores *out and returns 0, or
+ * -1 when raw is negative (or out is null).  Internal helper: the -1 never leaves a host
+ * call, callers map it onto a packed code. */
 static int wasm_arg_u32_nonneg(int32_t raw, uint32_t* out) {
     if (!out || raw < 0) {
         return -1;
@@ -334,6 +337,11 @@ static uint8_t wasm_linear_window_overlaps(uint32_t pid, uint32_t offset, uint32
            wasm_dma_region_map_overlaps(pid, offset, size);
 }
 
+/* Reclaim every per-pid side-table resource of a reaped process: the driver DMA regions
+ * (whose pages are returned to the PFA), the shmem/xfer-buffer overlay tracking entries, and
+ * the per-process block buffer (also returned to the PFA).  The page-table mappings
+ * themselves are torn down with the address space, so nothing is unmapped here.  A pid of 0
+ * is ignored.  Safe to call for a pid that owns none of these. */
 void wasm3_release_pid(uint32_t pid) {
     if (pid == 0) {
         return;
@@ -460,6 +468,7 @@ static int wasm_block_slot_phys_is_live(uint64_t phys) {
     return found;
 }
 
+/* Contract in wasm3/link_ipc.h. */
 int current_process_context(uint32_t* out_context_id) {
     uint32_t pid = process_current_pid();
     process_t* proc = process_get(pid);
@@ -472,6 +481,11 @@ int current_process_context(uint32_t* out_context_id) {
     return 0;
 }
 
+/* Translate a wasm32 linear-memory offset into the caller's user virtual address, bounding
+ * [offset, offset+span) against the MEM_REGION_WASM_LINEAR region of context_id.  The result
+ * is a VA in that context's address space -- not a host pointer and not valid from another
+ * CR3.  Returns 0 and stores the VA, or -1 for a zero context/span, a context or region that
+ * cannot be resolved, or a range that leaves the region's data area. */
 static int wasm_user_va_from_offset(uint32_t context_id, uint32_t offset, uint32_t span,
                                     uint64_t* out_user_va) {
     if (context_id == 0 || span == 0 || !out_user_va) {
@@ -502,6 +516,12 @@ static int wasm_user_va_from_offset(uint32_t context_id, uint32_t offset, uint32
     return 0;
 }
 
+/* Same translation as wasm_user_va_from_offset, but starting from the host pointer
+ * m3ApiGetArgMem produced: host_ptr is recovered as an offset relative to mem_base (the
+ * interpreter's linear-memory base, m3_GetMemory) and re-resolved to a user VA.  This is what
+ * makes a guest pointer safe to hand to mm_copy_*: the offset is bounded against mem_size
+ * here and against the region and its permissions by the caller.  Returns 0 and stores the
+ * VA, or -1 on a null/short argument or a range leaving linear memory. */
 static int wasm_user_va_from_host_ptr(uint32_t context_id, const uint8_t* mem_base,
                                       uint64_t mem_size, const void* host_ptr, uint32_t span,
                                       uint64_t* out_user_va) {
@@ -814,6 +834,14 @@ static int32_t wasm_buffer_unborrow_impl(int32_t borrow_id) {
     return xfer_buffer_unborrow(&borrow);
 }
 
+/* Map [offset, offset+length) of the caller's borrow `borrow_id` for device DMA in
+ * `direction_flags`.  Requires POLICY_ACTION_DMA_BUFFER, that the caller is the borrower, and
+ * that the direction is within both the borrow's rights and the context's DMA capability.
+ * Returns the device DMA address as a positive i32; failures are negative WASMOS_ERR_DMA_*:
+ * INVALID for a non-positive argument, DENY for a missing capability/borrow/direction or a
+ * failed mapping, RANGE when `length` exceeds the capability's byte budget or the resulting
+ * device address falls outside an approved window, UNAVAILABLE when the device address does
+ * not fit the signed i32 return.  The RANGE and UNAVAILABLE paths undo the mapping first. */
 m3ApiRawFunction(wasmos_dma_map_borrow) {
     m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, borrow_id) m3ApiGetArg(int32_t, offset)
         m3ApiGetArg(int32_t, length) m3ApiGetArg(int32_t, direction_flags) uint32_t context_id = 0;
@@ -855,6 +883,12 @@ m3ApiRawFunction(wasmos_dma_map_borrow) {
     m3ApiReturn((int32_t)mapping.device_addr);
 }
 
+/* Synchronise [offset, offset+length) of the DMA mapping behind borrow `borrow_id` for cache
+ * coherency.  `sync_op` must be one of WASMOS_DMA_SYNC_TO_DEVICE / _FROM_DEVICE / _BIDIR; it
+ * is validated but not forwarded -- xfer_buffer_dma_sync receives only the range, so the three
+ * directions behave identically.  Requires the DMA capability and that the caller is the
+ * borrower.  Returns WASMOS_ERR_NONE (0), else WASMOS_ERR_DMA_INVALID (bad argument) or
+ * WASMOS_ERR_DMA_DENY (capability, borrow lookup, or sync failure). */
 m3ApiRawFunction(wasmos_dma_sync_borrow) {
     m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, borrow_id) m3ApiGetArg(int32_t, offset)
         m3ApiGetArg(int32_t, length) m3ApiGetArg(int32_t, sync_op) uint32_t context_id = 0;
@@ -879,6 +913,10 @@ m3ApiRawFunction(wasmos_dma_sync_borrow) {
     m3ApiReturn(WASMOS_ERR_NONE);
 }
 
+/* Tear down the DMA mapping established by wasmos_dma_map_borrow for borrow `borrow_id`.
+ * Requires the DMA capability and that the caller is the borrower.  Returns WASMOS_ERR_NONE
+ * (0), WASMOS_ERR_DMA_INVALID for a non-positive borrow_id, or WASMOS_ERR_DMA_DENY when the
+ * borrow/mapping cannot be resolved or the unmap fails. */
 m3ApiRawFunction(wasmos_dma_unmap_borrow) {
     m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, borrow_id) uint32_t context_id = 0;
     xfer_buffer_borrow_t borrow;
@@ -900,6 +938,7 @@ m3ApiRawFunction(wasmos_dma_unmap_borrow) {
     m3ApiReturn(WASMOS_ERR_NONE);
 }
 
+/* BUFFER_KIND_TRANSFER-only form of buffer_acquire; contract at wasm_buffer_acquire_impl. */
 m3ApiRawFunction(wasmos_xfer_buffer_acquire) {
     m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, minimum_size)
         m3ApiReturn(wasm_buffer_acquire_impl((int32_t)BUFFER_KIND_TRANSFER, minimum_size));
@@ -909,23 +948,29 @@ m3ApiRawFunction(wasmos_spawn_info_buffer) {
     m3ApiReturnType(int32_t) m3ApiReturn(wasm_spawn_info_buffer_impl());
 }
 
+/* BUFFER_KIND_TRANSFER-only form of buffer_borrow; contract at wasm_buffer_borrow_impl. */
 m3ApiRawFunction(wasmos_xfer_buffer_borrow) {
     m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, grantee_endpoint) m3ApiGetArg(int32_t, buffer_id)
         m3ApiGetArg(int32_t, flags) m3ApiReturn(wasm_buffer_borrow_impl(
             (int32_t)BUFFER_KIND_TRANSFER, grantee_endpoint, buffer_id, flags));
 }
 
+/* BUFFER_KIND_TRANSFER-only form of buffer_reborrow; contract at wasm_buffer_reborrow_impl. */
 m3ApiRawFunction(wasmos_xfer_buffer_reborrow) {
     m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, grantee_endpoint) m3ApiGetArg(int32_t, borrow_id)
         m3ApiGetArg(int32_t, flags) m3ApiReturn(wasm_buffer_reborrow_impl(
             (int32_t)BUFFER_KIND_TRANSFER, grantee_endpoint, borrow_id, flags));
 }
 
+/* BUFFER_KIND_TRANSFER-only form of buffer_release; contract at wasm_buffer_release_impl. */
 m3ApiRawFunction(wasmos_xfer_buffer_release) {
     m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, buffer_id)
         m3ApiReturn(wasm_buffer_release_impl((int32_t)BUFFER_KIND_TRANSFER, buffer_id));
 }
 
+/* Identical to wasmos_buffer_unborrow -- unborrow names a (re)borrow, which already implies
+ * its kind, so the two host calls differ only in name.  Contract at
+ * wasm_buffer_unborrow_impl. */
 m3ApiRawFunction(wasmos_xfer_buffer_unborrow) {
     m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, borrow_id)
         m3ApiReturn(wasm_buffer_unborrow_impl(borrow_id));
@@ -972,6 +1017,13 @@ static wasmos_error_code_t wasm_block_buffer_validate_args(int32_t phys, int32_t
                                     (uint64_t)WASM_BLOCK_BUFFER_SIZE_BYTES);
 }
 
+/* Return the physical address of the calling process's 8 KiB (2-page) block buffer,
+ * allocating it below BLOCK_BUFFER_PHYS_LIMIT (2 GiB) on first use.  Idempotent: the slot is
+ * per-pid and the same address is returned for the process's lifetime; the pages are freed by
+ * wasm3_release_pid.  Returns the address as a positive i32, WASMOS_ERR_BLOCK_NO_SLOT when
+ * the process has no slot, WASMOS_ERR_BLOCK_NO_BACKING when the pages could not be allocated,
+ * or block_buffer_check_phys's code when the allocated address cannot be expressed on the
+ * shared i32 -- on that path the pages stay recorded in the slot and are reclaimed at reap. */
 m3ApiRawFunction(wasmos_block_buffer_phys) {
     m3ApiReturnType(int32_t) uint32_t pid = process_current_pid();
     wasm_block_slot_t* slot = wasm_block_slot_for_pid(pid);
@@ -996,6 +1048,17 @@ m3ApiRawFunction(wasmos_block_buffer_phys) {
     m3ApiReturn((int32_t)slot->buffer_phys);
 }
 
+/* Copy `len` bytes out of the block buffer whose physical base is `phys`, starting at
+ * `offset`, into the caller's linear memory at `ptr`.  `phys` may name the block buffer of any
+ * live process, which is what lets a block server fill a client's buffer; it is validated
+ * against the live slots so it cannot name arbitrary physical memory.  `ptr` is a wasm32
+ * linear-memory offset written by the kernel; a range outside linear memory TRAPS the module
+ * via m3ApiCheckMem rather than returning a code.  Returns 0 on success,
+ * WASMOS_ERR_BLOCK_NO_SLOT for an unknown `phys`, WASMOS_ERR_BLOCK_RANGE when
+ * [offset, offset+len) leaves the 8 KiB window (a negative `len`/`offset` arrives
+ * zero-extended and is refused here), WASMOS_ERR_KERNEL_BAD_POINTER when the destination is
+ * not writable by the caller, WASMOS_ERR_KERNEL_NO_CALLER, or
+ * WASMOS_ERR_KERNEL_COPY_FAILED. */
 m3ApiRawFunction(wasmos_block_buffer_copy) {
     m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, phys) m3ApiGetArgMem(uint8_t*, ptr)
         m3ApiGetArg(int32_t, len) m3ApiGetArg(int32_t, offset)
@@ -1025,6 +1088,13 @@ m3ApiRawFunction(wasmos_block_buffer_copy) {
     m3ApiReturn(0);
 }
 
+/* Copy `len` bytes from the caller's linear memory at `ptr` into the block buffer whose
+ * physical base is `phys`, starting at `offset`.  Mirror of wasmos_block_buffer_copy: same
+ * `phys` validation and same trap-on-out-of-range behaviour for `ptr`, except that `ptr` is
+ * read (MEM_REGION_FLAG_READ) and the payload moves through a 256-byte stack bounce buffer in
+ * <= 256-byte chunks.  Returns 0 on success, else WASMOS_ERR_BLOCK_NO_SLOT,
+ * WASMOS_ERR_BLOCK_RANGE, WASMOS_ERR_KERNEL_BAD_POINTER, WASMOS_ERR_KERNEL_NO_CALLER, or
+ * WASMOS_ERR_KERNEL_COPY_FAILED. */
 m3ApiRawFunction(wasmos_block_buffer_write) {
     m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, phys) m3ApiGetArgMem(const uint8_t*, ptr)
         m3ApiGetArg(int32_t, len) m3ApiGetArg(int32_t, offset)
@@ -1067,12 +1137,6 @@ m3ApiRawFunction(wasmos_block_buffer_write) {
     m3ApiReturn(0);
 }
 
-/* Overlay the caller's own 8 KiB block buffer into its linear-memory window so
- * the owner reads/writes block data in place instead of copying through
- * block_buffer_copy/write.  Idempotent: repeated calls return the same offset.
- * The physical pages are owned by the block slot and freed by wasm3_release_pid;
- * the overlay itself is torn down with the address space, so it is tracked with
- * a zero phys_base/pages to reserve the linmem window without a second free. */
 /* Choose a linear-memory offset for an overlay window: one page past everything
  * the module already has, growing linear memory to cover it.
  *
@@ -1141,6 +1205,18 @@ static wasmos_error_code_t wasm_linmem_place_overlay(IM3Runtime runtime, process
     return WASMOS_ERR_KERNEL_NO_WINDOW;
 }
 
+/* Overlay the caller's own 8 KiB block buffer into its linear-memory window so
+ * the owner reads/writes block data in place instead of copying through
+ * block_buffer_copy/write.  Idempotent: repeated calls return the same offset.
+ * The physical pages are owned by the block slot and freed by wasm3_release_pid;
+ * the overlay itself is torn down with the address space, so it is tracked with
+ * a zero phys_base/pages to reserve the linmem window without a second free.
+ *
+ * Allocates the block buffer on first use, exactly as wasmos_block_buffer_phys does, so the
+ * returned window aliases the same pages that call reports.  Returns the wasm32 linear-memory
+ * offset (>= 0), else WASMOS_ERR_KERNEL_NO_CALLER, WASMOS_ERR_BLOCK_NO_SLOT,
+ * WASMOS_ERR_BLOCK_NO_BACKING, WASMOS_ERR_BLOCK_ABOVE_4G, WASMOS_ERR_KERNEL_NO_WINDOW, or
+ * WASMOS_ERR_KERNEL_MAP_FAILED. */
 m3ApiRawFunction(wasmos_block_buffer_map) {
     m3ApiReturnType(int32_t)
 
@@ -1283,10 +1359,15 @@ m3ApiRawFunction(wasmos_xfer_buffer_unmap) {
     m3ApiReturn(0);
 }
 
+/* Return the fixed capacity in bytes of BUFFER_KIND_TRANSFER: the size an acquire yields and
+ * the largest extent xfer_buffer_read/write can address.  Has no failure path. */
 m3ApiRawFunction(wasmos_xfer_buffer_size) {
     m3ApiReturnType(int32_t) m3ApiReturn((int32_t)xfer_buffer_size(BUFFER_KIND_TRANSFER));
 }
 
+/* Return the IPC endpoint of the filesystem service as currently registered with the process
+ * manager.  A snapshot, not a wait: it returns immediately with WASMOS_NOENT while no FS
+ * service has registered. */
 m3ApiRawFunction(wasmos_fs_endpoint) {
     m3ApiReturnType(int32_t) uint32_t endpoint = process_manager_fs_endpoint();
     if (endpoint == IPC_ENDPOINT_NONE) {
@@ -1295,6 +1376,14 @@ m3ApiRawFunction(wasmos_fs_endpoint) {
     m3ApiReturn((int32_t)endpoint);
 }
 
+/* Copy `len` bytes of transfer buffer `buffer_id` starting at `offset` into the caller's
+ * linear memory at `ptr`.  The caller must own or hold a READ borrow of the buffer; the source
+ * is reached through the kernel higher-half alias of the object's physical pages.  `ptr` is a
+ * wasm32 linear-memory offset written by the kernel, and a range outside linear memory TRAPS
+ * the module via m3ApiCheckMem.  A zero `len` is a no-op success; a negative one is
+ * WASMOS_ERR_XFER_BUFFER_INVALID_SIZE and a negative `offset` is _RANGE.  Returns
+ * WASMOS_ERR_NONE (0) on success, else a negative WASMOS_ERR_XFER_BUFFER_* code
+ * (NOT_FOUND, INVALID_CONTEXT, NO_ACCESS, RANGE). */
 m3ApiRawFunction(wasmos_xfer_buffer_read) {
     m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, buffer_id) m3ApiGetArgMem(uint8_t*, ptr)
         m3ApiGetArg(int32_t, len) m3ApiGetArg(int32_t, offset) uint32_t context_id = 0;
@@ -1356,6 +1445,11 @@ m3ApiRawFunction(wasmos_xfer_buffer_read) {
     m3ApiReturn(WASMOS_ERR_NONE);
 }
 
+/* Copy `len` bytes from the caller's linear memory at `ptr` into transfer buffer `buffer_id`
+ * starting at `offset`.  Mirror of wasmos_xfer_buffer_read: the caller must own or hold a
+ * WRITE borrow, `ptr` is read rather than written, and the payload moves through a 256-byte
+ * stack bounce buffer in <= 256-byte chunks.  Same zero/negative `len` and `offset` handling
+ * and the same WASMOS_ERR_XFER_BUFFER_* codes. */
 m3ApiRawFunction(wasmos_xfer_buffer_write) {
     m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, buffer_id) m3ApiGetArgMem(const uint8_t*, ptr)
         m3ApiGetArg(int32_t, len) m3ApiGetArg(int32_t, offset) uint32_t context_id = 0;
@@ -1432,6 +1526,13 @@ m3ApiRawFunction(wasmos_early_log_size) {
     m3ApiReturnType(int32_t) m3ApiReturn((int32_t)serial_early_log_size());
 }
 
+/* Copy `len` bytes of the kernel early-log buffer starting at byte `offset` into the caller's
+ * linear memory at `ptr`, moving through a 256-byte stack bounce buffer.  The window is
+ * refused, never clamped: WASMOS_INVAL when `len`/`offset` is negative or
+ * [offset, offset+len) leaves the log.  A zero `len` is a no-op success.  `ptr` is a wasm32
+ * linear-memory offset; a range outside linear memory TRAPS the module via m3ApiCheckMem.
+ * Returns 0 on success, else WASMOS_INVAL, WASMOS_ERR_KERNEL_BAD_POINTER,
+ * WASMOS_ERR_KERNEL_NO_CALLER, or WASMOS_ERR_KERNEL_COPY_FAILED. */
 m3ApiRawFunction(wasmos_early_log_copy) {
     m3ApiReturnType(int32_t) m3ApiGetArgMem(uint8_t*, ptr) m3ApiGetArg(int32_t, len)
         m3ApiGetArg(int32_t, offset)
@@ -1477,6 +1578,8 @@ m3ApiRawFunction(wasmos_early_log_copy) {
     m3ApiReturn(0);
 }
 
+/* Return the byte size of the boot-config blob handed over by the bootloader, or WASMOS_NOENT
+ * when none is present or it is empty. */
 m3ApiRawFunction(wasmos_boot_config_size) {
     m3ApiReturnType(int32_t) if (!g_wasm_boot_info || !g_wasm_boot_info->boot_config ||
                                  g_wasm_boot_info->boot_config_size == 0) {
@@ -1485,6 +1588,12 @@ m3ApiRawFunction(wasmos_boot_config_size) {
     m3ApiReturn((int32_t)g_wasm_boot_info->boot_config_size);
 }
 
+/* Copy `len` bytes of the boot-config blob starting at byte `offset` into the caller's linear
+ * memory at `ptr`.  Like early_log_copy the window is refused rather than clamped
+ * (WASMOS_INVAL), a zero `len` is a no-op success, and a `ptr` range outside linear memory
+ * TRAPS the module via m3ApiCheckMem.  Returns 0 on success, WASMOS_NOENT when no boot config
+ * is present, else WASMOS_INVAL, WASMOS_ERR_KERNEL_BAD_POINTER, WASMOS_ERR_KERNEL_NO_CALLER,
+ * or WASMOS_ERR_KERNEL_COPY_FAILED. */
 m3ApiRawFunction(wasmos_boot_config_copy) {
     m3ApiReturnType(int32_t) m3ApiGetArgMem(uint8_t*, ptr) m3ApiGetArg(int32_t, len)
         m3ApiGetArg(int32_t, offset)
@@ -1526,6 +1635,16 @@ m3ApiRawFunction(wasmos_boot_config_copy) {
     m3ApiReturn(0);
 }
 
+/* Look up the kernel-environment variable named by name_ptr/name_len and write its value,
+ * NUL-terminated, to buf_ptr.  Both pointers are wasm32 linear-memory offsets -- the name is
+ * read, the buffer written -- and a range outside linear memory TRAPS the module via
+ * m3ApiCheckMem.  An over-long name is REFUSED with WASMOS_ERR_ENV_TOO_LONG rather than
+ * truncated, because a shortened name names a different variable; the VALUE is truncated, to
+ * min(buf_len, KENV_VAL_MAX) - 1 bytes.  Returns the WRITTEN length (so a truncated value
+ * reports the truncated length, unlike boot_module_name/initfs_entry_name which report the
+ * true one), else WASMOS_INVAL for a non-positive length, WASMOS_ERR_ENV_TOO_LONG,
+ * WASMOS_ERR_ENV_NOT_FOUND, WASMOS_ERR_KERNEL_BAD_POINTER, WASMOS_ERR_KERNEL_NO_CALLER, or
+ * WASMOS_ERR_KERNEL_COPY_FAILED. */
 m3ApiRawFunction(wasmos_env_get) {
     m3ApiReturnType(int32_t) m3ApiGetArgMem(const char*, name_ptr) m3ApiGetArg(int32_t, name_len)
         m3ApiGetArgMem(char*, buf_ptr) m3ApiGetArg(int32_t, buf_len)
@@ -1578,6 +1697,15 @@ m3ApiRawFunction(wasmos_env_get) {
     m3ApiReturn((int32_t)write_len);
 }
 
+/* Set the kernel-environment variable named by name_ptr/name_len to the value at
+ * val_ptr/val_len, creating a slot or overwriting an existing one.  Both pointers are wasm32
+ * linear-memory offsets read by the kernel, and a range outside linear memory TRAPS the module
+ * via m3ApiCheckMem.  A zero `val_len` is allowed and stores an empty value; val_ptr is then
+ * not examined.  Name and value are refused, not truncated, at KENV_KEY_MAX / KENV_VAL_MAX.
+ * Returns kenv_set's result (0 on success, WASMOS_ERR_ENV_TABLE_FULL when no slot is free),
+ * WASMOS_INVAL for a non-positive name_len or negative val_len, WASMOS_ERR_ENV_TOO_LONG,
+ * WASMOS_ERR_KERNEL_BAD_POINTER, WASMOS_ERR_KERNEL_NO_CALLER, or
+ * WASMOS_ERR_KERNEL_COPY_FAILED. */
 m3ApiRawFunction(wasmos_env_set) {
     m3ApiReturnType(int32_t) m3ApiGetArgMem(const char*, name_ptr) m3ApiGetArg(int32_t, name_len)
         m3ApiGetArgMem(const char*, val_ptr) m3ApiGetArg(int32_t, val_len)
@@ -1630,6 +1758,11 @@ m3ApiRawFunction(wasmos_env_set) {
     m3ApiReturn(kenv_set(local_name, local_val));
 }
 
+/* Remove the kernel-environment variable named by name_ptr/name_len, whose range is read from
+ * linear memory (a range outside it TRAPS the module via m3ApiCheckMem).  Every rejection --
+ * bad length, unresolvable caller, unreadable range -- returns 0, as does unsetting a variable
+ * that is not set, so a caller cannot tell those apart.  Only a name that is empty once copied
+ * yields kenv_unset's WASMOS_ERR_ENV_TOO_LONG. */
 m3ApiRawFunction(wasmos_env_unset) {
     m3ApiReturnType(int32_t) m3ApiGetArgMem(const char*, name_ptr) m3ApiGetArg(int32_t, name_len)
 
@@ -1674,7 +1807,11 @@ static int io_region_port(uint32_t region, uint32_t offset, uint32_t width, uint
 
 /* Reads return the datum through linear memory, not as the result: a 32-bit port
  * read can legitimately be 0xFFFFFFFF and must stay distinguishable from a
- * failure code. */
+ * failure code.  `out` is a wasm32 linear-memory offset the kernel writes through the
+ * interpreter's own pointer, and a range outside linear memory TRAPS the module via
+ * m3ApiCheckMem.  The return is 0 on success, WASMOS_ERR_IO_BAD_REGION for a negative
+ * region/offset, otherwise the specific WASMOS_ERR_IO_* code io_region_port produced; `out` is
+ * left untouched on every failure. */
 #define WASMOS_IO_REGION_READ(width, width_expr)                                                   \
     m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, region) m3ApiGetArg(int32_t, offset)             \
         m3ApiGetArgMem(uint32_t*, out) m3ApiCheckMem(out, sizeof(uint32_t));                       \
@@ -1702,6 +1839,10 @@ m3ApiRawFunction(wasmos_io_region_in32) {
     WASMOS_IO_REGION_READ(4u, (uint32_t)inl(port));
 }
 
+/* Writes take the datum as an argument, so they need no out-parameter; the return is purely
+ * the outcome: 0 on success, WASMOS_ERR_IO_BAD_REGION for a negative region/offset, otherwise
+ * the specific WASMOS_ERR_IO_* code io_region_port produced.  A value wider than the access
+ * is masked, not refused. */
 #define WASMOS_IO_REGION_WRITE(width, write_stmt)                                                  \
     m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, region) m3ApiGetArg(int32_t, offset)             \
         m3ApiGetArg(int32_t, value);                                                               \
@@ -1733,7 +1874,14 @@ m3ApiRawFunction(wasmos_io_region_out32) {
  * through the return. For in32 the two cannot share one signed i32 at all, since
  * a read uses the full range. For in8 and in16 the value could not collide with
  * a code, but no caller ever read the sign -- each masked it off -- so a denied
- * capability arrived as 0xFF / 0xFFFF, which is what an absent device reads. */
+ * capability arrived as 0xFF / 0xFFFF, which is what an absent device reads.
+ *
+ * `port` is an absolute x86 port and must be 0..0xFFFF; the caller must hold the io.port
+ * capability for that exact port, which is an allowlist, so a denial is an ordinary
+ * probe-and-skip outcome rather than a fault.  `out` is a wasm32 linear-memory offset written
+ * through the interpreter's own pointer, and a range outside linear memory TRAPS the module
+ * via m3ApiCheckMem.  Returns 0, WASMOS_ERR_IO_BAD_PORT, or WASMOS_ERR_IO_NOT_AUTHORIZED,
+ * leaving `out` untouched on failure. */
 m3ApiRawFunction(wasmos_io_in8) {
     m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, port) m3ApiGetArgMem(uint8_t*, out)
         m3ApiCheckMem(out, sizeof(uint8_t));
@@ -1779,6 +1927,11 @@ m3ApiRawFunction(wasmos_io_in32) {
     m3ApiReturn(0);
 }
 
+/* Write to an absolute x86 I/O port.  `port` must be 0..0xFFFF and the caller must hold the
+ * io.port capability for that exact port (allowlist, so a probe-and-skip denial is normal).
+ * out8/out16 also reject a `value` that does not fit the width; out32 does not range-check
+ * `value` because all 32 bits are meaningful.  Returns 0, WASMOS_ERR_IO_BAD_PORT, or
+ * WASMOS_ERR_IO_NOT_AUTHORIZED. */
 m3ApiRawFunction(wasmos_io_out8) {
     m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, port) m3ApiGetArg(int32_t, value)
         uint32_t context_id = 0;
@@ -1821,6 +1974,8 @@ m3ApiRawFunction(wasmos_io_out32) {
     m3ApiReturn(0);
 }
 
+/* Issue the conventional short I/O delay (a dummy write to port 0x80).  Gated on the io.port
+ * capability for port 0x80 specifically.  Returns 0 or WASMOS_ERR_IO_NOT_AUTHORIZED. */
 m3ApiRawFunction(wasmos_io_wait) {
     m3ApiReturnType(int32_t) uint32_t context_id = 0;
     if (current_process_context(&context_id) != 0 || require_io_capability(context_id, 0x80) != 0) {
@@ -1830,12 +1985,25 @@ m3ApiRawFunction(wasmos_io_wait) {
     m3ApiReturn(0);
 }
 
+/* Write 32-bit `color` to the framebuffer pixel at (x, y).  No capability gates this call.
+ * The coordinates are passed on as u32, so a negative one becomes a large positive value and
+ * is refused as an off-screen coordinate.  Returns framebuffer_put_pixel's code: 0,
+ * WASMOS_ERR_FRAMEBUFFER_NOT_PRESENT when no framebuffer was handed over at boot (or it has no
+ * stride), or WASMOS_INVAL when (x, y) is outside it. */
 m3ApiRawFunction(wasmos_framebuffer_pixel) {
     m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, x) m3ApiGetArg(int32_t, y)
         m3ApiGetArg(int32_t, color)
             m3ApiReturn(framebuffer_put_pixel((uint32_t)x, (uint32_t)y, (uint32_t)color));
 }
 
+/* Copy the GOP framebuffer descriptor (framebuffer_info_t: base, size, width, height, stride,
+ * format) into the caller's linear memory at out_ptr.  `len` is the caller's capacity and must
+ * be at least sizeof(framebuffer_info_t); exactly the struct is written regardless of a larger
+ * `len`.  out_ptr is a wasm32 linear-memory offset and a range outside linear memory TRAPS the
+ * module via m3ApiCheckMem.  Returns 0 on success, WASMOS_INVAL for a non-positive `len`,
+ * WASMOS_ERR_FRAMEBUFFER_TOO_SMALL, framebuffer_get_info's code when no framebuffer exists,
+ * WASMOS_ERR_KERNEL_BAD_POINTER, WASMOS_ERR_KERNEL_NO_CALLER, or
+ * WASMOS_ERR_KERNEL_COPY_FAILED. */
 m3ApiRawFunction(wasmos_framebuffer_info) {
     m3ApiReturnType(int32_t) m3ApiGetArgMem(uint8_t*, out_ptr) m3ApiGetArg(int32_t, len)
 
@@ -1872,6 +2040,16 @@ m3ApiRawFunction(wasmos_framebuffer_info) {
     m3ApiReturn(0);
 }
 
+/* Remap the caller's linear-memory pages at wasm32 offset `ptr` onto the framebuffer's
+ * physical pages, so guest writes there land in the display.  `size` must be page-aligned and
+ * at least the framebuffer size, and the user VA the offset resolves to must be page-aligned.
+ * Whatever the guest had in that window is replaced -- the caller owns picking a window it is
+ * not using.  Requires POLICY_ACTION_MMIO_MAP; "no caller" and "not authorized" stay distinct
+ * codes.  A per-page failure leaves the pages already remapped in place and returns
+ * WASMOS_ERR_KERNEL_MAP_FAILED.  Returns 0 on success, else WASMOS_INVAL,
+ * WASMOS_ERR_KERNEL_UNALIGNED, WASMOS_ERR_FRAMEBUFFER_TOO_SMALL, framebuffer_get_info's code,
+ * WASMOS_ERR_KERNEL_NO_CALLER, WASMOS_ERR_KERNEL_NOT_AUTHORIZED, WASMOS_ERR_KERNEL_NO_WINDOW,
+ * or WASMOS_ERR_KERNEL_BAD_POINTER. */
 m3ApiRawFunction(wasmos_framebuffer_map) {
     m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, ptr) m3ApiGetArg(int32_t, size)
 
@@ -1947,13 +2125,19 @@ m3ApiRawFunction(wasmos_framebuffer_map) {
     m3ApiReturn(0);
 }
 
-/* Map an arbitrary physical address range into a WASM linear-memory window.
- * phys_lo/phys_hi form a 64-bit physical address (hi=0 for 32-bit addresses).
- * wasm_offset must be page-aligned; size must be a multiple of 4096.
- * Requires the mmio.map capability. */
 /* Driver-owned DMA region allocation. The region is allocated from low
  * physical memory, mapped into a non-overlapping window in the caller's linear
- * memory, and reclaimed on process reap via wasm3_release_pid(). */
+ * memory, and reclaimed on process reap via wasm3_release_pid().
+ *
+ * `pages` is 1..1024 4 KiB pages and `cache_policy` must be WASMOS_REGION_CACHE_WB.
+ * out_phys_off is a wasm32 linear-memory offset at which the kernel stores the u64 physical
+ * base; it is bounds-checked before the placement that may grow linear memory, which only
+ * raises the bound.  Unlike wasmos_phys_map this is a real page remap, so guest writes reach
+ * the exact pages the device DMAs.  Requires POLICY_ACTION_DMA_BUFFER, an approved DMA window
+ * covering the allocation, and room in the caller's declared page budget, which the successful
+ * path charges.  Returns the wasm32 offset of the mapped region (>= 0), else a negative
+ * WASMOS_ERR_DMA_* code (INVALID, DENY, UNAVAILABLE, RANGE); every failure after the
+ * allocation returns the pages first. */
 m3ApiRawFunction(wasmos_region_alloc) {
     m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, pages) m3ApiGetArg(int32_t, cache_policy)
         m3ApiGetArg(int32_t, out_phys_off)
@@ -2037,6 +2221,15 @@ m3ApiRawFunction(wasmos_region_alloc) {
     m3ApiReturn(off32);
 }
 
+/* Despite the name this COPIES, it does not map: `size` bytes are read from the physical
+ * range through the kernel higher-half alias and memcpy'd into the caller's linear memory at
+ * `wasm_offset` (right for snapshotting ACPI tables, useless for programming a device -- see
+ * wasmos_mmio_write32).  phys_lo/phys_hi form the 64-bit source address; `size` and
+ * `wasm_offset` must be multiples of 4096, and [wasm_offset, wasm_offset+size) must lie inside
+ * linear memory.  The source range is not otherwise restricted, so the mmio.map capability
+ * this requires also buys reading any physical address reachable through the alias.  Returns 0
+ * on success, WASMOS_INVAL, WASMOS_ERR_KERNEL_UNALIGNED, WASMOS_ERR_KERNEL_NO_WINDOW,
+ * WASMOS_ERR_KERNEL_NO_CALLER, or WASMOS_ERR_KERNEL_NOT_AUTHORIZED. */
 m3ApiRawFunction(wasmos_phys_map) {
     m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, phys_lo) m3ApiGetArg(int32_t, phys_hi)
         m3ApiGetArg(int32_t, size) m3ApiGetArg(int32_t, wasm_offset)
@@ -2088,6 +2281,11 @@ m3ApiRawFunction(wasmos_phys_map) {
     m3ApiReturn(0);
 }
 
+/* Allocate a shared-memory region of `pages` 4 KiB pages owned by the caller and return its
+ * id (positive).  `flags` are MEM_REGION_FLAG_* for the region; a non-positive value defaults
+ * to READ|WRITE.  Creating does not map it -- shmem_map/_auto do.  Requires
+ * POLICY_ACTION_DMA_BUFFER.  Returns the id, WASMOS_ERR_SHMEM_BAD_ARGS for a non-positive
+ * `pages`, WASMOS_ERR_SHMEM_NO_CAP, or WASMOS_ERR_SHMEM_MAP when the allocation fails. */
 m3ApiRawFunction(wasmos_shmem_create) {
     m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, pages) m3ApiGetArg(int32_t, flags)
 
@@ -2112,11 +2310,14 @@ m3ApiRawFunction(wasmos_shmem_create) {
     m3ApiReturn((int32_t)id);
 }
 
-/* Register the caller's shared-memory region (id) as the kernel klog ring.  The
- * caller (the VT) has already created + mapped + wasmos_ringbuf_init'd it; the
- * kernel retains it and reaches it through the higher-half alias.  Ownership is
- * enforced by mm_shared_get_phys inside klog_register_ring, so no extra
- * capability gate is needed here beyond the one the caller used to create it. */
+/* Register the caller's BUFFER_KIND_TRANSFER xfer-buffer (id) as the kernel klog ring.  The
+ * caller (the VT) has already acquired + mapped + wasmos_ringbuf_init'd it; the kernel takes
+ * no retain and reaches the pages through the higher-half alias, so the caller must hold the
+ * buffer for as long as the kernel logs into it.  Ownership is enforced by
+ * xfer_buffer_describe inside klog_register_ring, which resolves the id against the caller's
+ * context, so no extra capability gate is needed here.  Returns 0, WASMOS_INVAL for a
+ * non-positive id, WASMOS_ERR_KERNEL_NO_CALLER, or klog_register_ring's -1 when the id is
+ * foreign or does not hold an initialised ring. */
 m3ApiRawFunction(wasmos_klog_register_ring) {
     m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, id)
 
@@ -2130,6 +2331,13 @@ m3ApiRawFunction(wasmos_klog_register_ring) {
     m3ApiReturn(klog_register_ring(proc->context_id, (uint32_t)id));
 }
 
+/* Map shared-memory region `id` over the caller-chosen wasm32 linear-memory offset `ptr`,
+ * replacing whatever that window held.  `size` must be page-aligned and at least the region's
+ * size; only the region's own pages are mapped, so a larger `size` bounds the window without
+ * widening the mapping.  The resolved user VA must be page-aligned.  Requires
+ * POLICY_ACTION_DMA_BUFFER and takes a retain on the region.  Returns 0 on success -- the
+ * caller already knows the offset -- else a negative WASMOS_ERR_SHMEM_* code (UNALIGNED,
+ * NO_CAP, BAD_ID, BAD_SIZE, NO_WINDOW, MAP). */
 m3ApiRawFunction(wasmos_shmem_map) {
     m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, id) m3ApiGetArg(int32_t, ptr)
         m3ApiGetArg(int32_t, size)
@@ -2187,6 +2395,12 @@ m3ApiRawFunction(wasmos_shmem_map) {
     m3ApiReturn(0);
 }
 
+/* Like wasmos_shmem_map but the kernel picks the window: the region is overlaid one page past
+ * everything the module currently has, growing linear memory as needed, and the chosen wasm32
+ * offset is RETURNED (>= 0).  `size` must be non-zero, page-aligned and at least the region's
+ * size.  Requires POLICY_ACTION_DMA_BUFFER and takes a retain on the region.  Failures are
+ * negative WASMOS_ERR_SHMEM_* codes (BAD_ARGS, NO_CAP, BAD_ID, BAD_SIZE, NO_WINDOW,
+ * UNALIGNED, MAP). */
 m3ApiRawFunction(wasmos_shmem_map_auto) {
     m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, id) m3ApiGetArg(int32_t, size)
 
@@ -2250,6 +2464,11 @@ m3ApiRawFunction(wasmos_shmem_map_auto) {
     m3ApiReturn((int32_t)off32);
 }
 
+/* Grant the caller's shared-memory region `id` to the process `target_pid`, resolved to its
+ * context, so that process may map it.  Requires POLICY_ACTION_DMA_BUFFER.  Returns
+ * mm_shared_grant's result (0 on success), WASMOS_ERR_SHMEM_BAD_ID for a non-positive `id` or
+ * `target_pid`, or WASMOS_ERR_SHMEM_NO_CAP when the caller has no context, lacks the
+ * capability, or `target_pid` names no live process. */
 m3ApiRawFunction(wasmos_shmem_grant) {
     m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, id) m3ApiGetArg(int32_t, target_pid)
 
@@ -2268,6 +2487,8 @@ m3ApiRawFunction(wasmos_shmem_grant) {
     m3ApiReturn(mm_shared_grant(proc->context_id, (uint32_t)id, target->context_id));
 }
 
+/* Withdraw a prior grant of the caller's shared-memory region `id` from process `target_pid`.
+ * Same gating and same code set as wasmos_shmem_grant; returns mm_shared_revoke's result. */
 m3ApiRawFunction(wasmos_shmem_revoke) {
     m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, id) m3ApiGetArg(int32_t, target_pid)
 
@@ -2286,6 +2507,11 @@ m3ApiRawFunction(wasmos_shmem_revoke) {
     m3ApiReturn(mm_shared_revoke(proc->context_id, (uint32_t)id, target->context_id));
 }
 
+/* Drop the caller's tracking of, and retain on, shared-memory region `id`.  The overlay
+ * itself stays in place (the FIXME below), so the linear-memory window keeps aliasing the
+ * region's pages until the address space is torn down.  Returns mm_shared_release's result (0
+ * on success), WASMOS_ERR_SHMEM_BAD_ARGS for a non-positive `id`, or WASMOS_ERR_SHMEM_NO_CAP
+ * when the caller has no context.  No capability is required to unmap. */
 m3ApiRawFunction(wasmos_shmem_unmap) {
     m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, id)
 
@@ -2302,6 +2528,13 @@ m3ApiRawFunction(wasmos_shmem_unmap) {
     m3ApiReturn(mm_shared_release(proc->context_id, (uint32_t)id));
 }
 
+/* Push `size` bytes from the caller's linear memory at wasm32 offset `ptr` into the backing
+ * pages of shared-memory region `id`, reached through the kernel higher-half alias
+ * (local-to-shared).  For callers that keep the data in ordinary linear memory rather than in
+ * a mapped window: a window mapped by shmem_map/_auto already aliases those pages and needs no
+ * flush.  `size` is bounded by both linear memory and the region size.  Requires
+ * POLICY_ACTION_DMA_BUFFER.  Returns 0 on success, else WASMOS_ERR_SHMEM_BAD_ARGS, _NO_CAP,
+ * _BAD_ID, _NO_WINDOW, or _BAD_SIZE. */
 m3ApiRawFunction(wasmos_shmem_flush) {
     m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, id) m3ApiGetArg(int32_t, ptr)
         m3ApiGetArg(int32_t, size)
@@ -2343,6 +2576,9 @@ m3ApiRawFunction(wasmos_shmem_flush) {
     m3ApiReturn(0);
 }
 
+/* Pull `size` bytes from the backing pages of shared-memory region `id` into the caller's
+ * linear memory at wasm32 offset `ptr` (shared-to-local).  Exact mirror of wasmos_shmem_flush,
+ * including the gating, the bounds and the code set. */
 m3ApiRawFunction(wasmos_shmem_refresh) {
     m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, id) m3ApiGetArg(int32_t, ptr)
         m3ApiGetArg(int32_t, size)
@@ -2384,6 +2620,10 @@ m3ApiRawFunction(wasmos_shmem_refresh) {
     m3ApiReturn(0);
 }
 
+/* Route hardware IRQ line `irq_line` to the caller's context, delivering each interrupt as an
+ * IPC message to `msg_endpoint`.  Requires POLICY_ACTION_IRQ_CONTROL.  Returns irq_register's
+ * result (0 on success), WASMOS_ERR_IRQ_BAD_LINE, WASMOS_ERR_IRQ_BAD_ENDPOINT, or
+ * WASMOS_ERR_IRQ_NOT_AUTHORIZED. */
 m3ApiRawFunction(wasmos_irq_route_ipc) {
     m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, irq_line) m3ApiGetArg(int32_t, msg_endpoint)
 
@@ -2401,6 +2641,12 @@ m3ApiRawFunction(wasmos_irq_route_ipc) {
     m3ApiReturn(irq_register(context_id, (uint32_t)irq_line, (uint32_t)msg_endpoint));
 }
 
+/* Acknowledge and re-arm IRQ line `irq_line` for the caller after handling a delivered
+ * interrupt; a level-triggered line stays masked until this runs.  No capability is enforced
+ * -- the ack is applied to the caller's own registration on that line, so it is only
+ * meaningful for a line the caller already had routed.  Returns irq_ack's result,
+ * WASMOS_ERR_IRQ_BAD_LINE, or WASMOS_ERR_IRQ_NOT_AUTHORIZED when the caller has no
+ * context. */
 m3ApiRawFunction(wasmos_irq_ack) {
     m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, irq_line)
 
@@ -2414,6 +2660,10 @@ m3ApiRawFunction(wasmos_irq_ack) {
     m3ApiReturn(irq_ack(context_id, (uint32_t)irq_line));
 }
 
+/* Set trigger mode and polarity for IRQ line `irq_line` (WASMOS_IRQ_TRIGGER_LEVEL /
+ * WASMOS_IRQ_POLARITY_LOW), as pci-bus does for PCI INTx lines.  Requires
+ * POLICY_ACTION_IRQ_CONTROL.  Acts on the line globally, not per context.  Returns
+ * irq_configure's result, WASMOS_ERR_IRQ_BAD_LINE, or WASMOS_ERR_IRQ_NOT_AUTHORIZED. */
 m3ApiRawFunction(wasmos_irq_configure) {
     m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, irq_line) m3ApiGetArg(int32_t, flags)
 
@@ -2428,6 +2678,9 @@ m3ApiRawFunction(wasmos_irq_configure) {
     m3ApiReturn(irq_configure((uint32_t)irq_line, (uint32_t)flags));
 }
 
+/* Remove the caller's routing of IRQ line `irq_line`.  Requires POLICY_ACTION_IRQ_CONTROL.
+ * Returns irq_unregister's result, WASMOS_ERR_IRQ_BAD_LINE, or
+ * WASMOS_ERR_IRQ_NOT_AUTHORIZED. */
 m3ApiRawFunction(wasmos_irq_unroute) {
     m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, irq_line)
 
@@ -2444,7 +2697,12 @@ m3ApiRawFunction(wasmos_irq_unroute) {
 
 /* Allocate an MSI vector bound to one of the caller's endpoints. The kernel owns
  * the vector namespace; the caller passes the returned address/data pair to the
- * bus driver that programs the device (pci-bus, PCI_IPC_MSI_BIND). */
+ * bus driver that programs the device (pci-bus, PCI_IPC_MSI_BIND).  An MSI vector is
+ * edge-triggered and exclusively owned, so its events need no wasmos_irq_ack.  `out` is a
+ * wasm32 linear-memory offset at which the 16-byte descriptor (address_lo, address_hi, data,
+ * vector) is written through the interpreter's own pointer; a range outside linear memory
+ * TRAPS the module via m3ApiCheckMem.  Requires POLICY_ACTION_IRQ_CONTROL.  Returns msi_alloc's
+ * result (0 on success), WASMOS_ERR_MSI_BAD_ENDPOINT, or WASMOS_ERR_MSI_NOT_AUTHORIZED. */
 m3ApiRawFunction(wasmos_msi_alloc) {
     typedef struct {
         uint32_t address_lo;
@@ -2466,6 +2724,11 @@ m3ApiRawFunction(wasmos_msi_alloc) {
                           &out->data, &out->vector));
 }
 
+/* Release MSI vector `vector`, which must have been allocated by the caller, returning it to
+ * the free pool.  Mask the device's table entry first (PCI_IPC_MSI_UNBIND) or the device can
+ * still raise a vector that is no longer bound.  Requires POLICY_ACTION_IRQ_CONTROL.  Returns
+ * msi_free's result (0 on success), WASMOS_ERR_MSI_BAD_VECTOR, or
+ * WASMOS_ERR_MSI_NOT_AUTHORIZED. */
 m3ApiRawFunction(wasmos_msi_free) {
     m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, vector)
 
@@ -2482,7 +2745,10 @@ m3ApiRawFunction(wasmos_msi_free) {
 
 /* Poke a memory-mapped device register (pci-bus placing an MSI-X table entry).
  * mmio_write32_phys refuses anything overlapping system RAM, so the mmio.map
- * capability buys MMIO access, not arbitrary physical memory access. */
+ * capability buys MMIO access, not arbitrary physical memory access.  phys_lo/phys_hi form the
+ * 64-bit target address.  Requires POLICY_ACTION_MMIO_MAP.  Returns mmio_write32_phys's result
+ * (0 on success) or WASMOS_ERR_MSI_NOT_AUTHORIZED when the caller has no context or lacks the
+ * capability. */
 m3ApiRawFunction(wasmos_mmio_write32) {
     m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, phys_lo) m3ApiGetArg(int32_t, phys_hi)
         m3ApiGetArg(int32_t, value)
@@ -2495,6 +2761,10 @@ m3ApiRawFunction(wasmos_mmio_write32) {
     m3ApiReturn(mmio_write32_phys(phys, (uint32_t)value));
 }
 
+/* Power the machine off.  Gated by policy_require, which KILLS a denied caller rather than
+ * answering it, so WASMOS_ERR_KERNEL_NOT_AUTHORIZED is only reached if the process could not
+ * be killed; on success the call does not return.  WASMOS_ERR_KERNEL_NO_CALLER when the
+ * caller's context cannot be resolved. */
 m3ApiRawFunction(wasmos_system_halt) {
     m3ApiReturnType(int32_t) uint32_t context_id = 0;
     if (current_process_context(&context_id) != 0) {
@@ -2507,6 +2777,7 @@ m3ApiRawFunction(wasmos_system_halt) {
     m3ApiReturn(0);
 }
 
+/* Reboot the machine.  Same capability handling and same codes as wasmos_system_halt. */
 m3ApiRawFunction(wasmos_system_reboot) {
     m3ApiReturnType(int32_t) uint32_t context_id = 0;
     if (current_process_context(&context_id) != 0) {
@@ -2519,6 +2790,14 @@ m3ApiRawFunction(wasmos_system_reboot) {
     m3ApiReturn(0);
 }
 
+/* Copy the ACPI RSDP blob handed over at boot into the caller's linear memory at out_ptr and
+ * store its byte length as a u32 at out_len_ptr.  Both are wasm32 linear-memory offsets
+ * written by the kernel, and a range outside linear memory TRAPS the module via m3ApiCheckMem.
+ * The blob is copied whole or not at all: it is refused with WASMOS_ERR_KERNEL_TOO_LARGE when
+ * it exceeds `max_len`, never truncated.  Returns 0 on success, WASMOS_INVAL for a
+ * non-positive `max_len`, WASMOS_NOENT when no RSDP was handed over,
+ * WASMOS_ERR_KERNEL_BAD_POINTER, WASMOS_ERR_KERNEL_NO_CALLER, or
+ * WASMOS_ERR_KERNEL_COPY_FAILED. */
 m3ApiRawFunction(wasmos_acpi_rsdp_info) {
     m3ApiReturnType(int32_t) m3ApiGetArgMem(uint8_t*, out_ptr)
         m3ApiGetArgMem(uint32_t*, out_len_ptr) m3ApiGetArg(int32_t, max_len)
@@ -2563,6 +2842,16 @@ m3ApiRawFunction(wasmos_acpi_rsdp_info) {
     m3ApiReturn(0);
 }
 
+/* Copy the NUL-terminated name of boot module `index` into the caller's linear memory at
+ * out_ptr, truncated to out_len-1 bytes.  Only modules of type BOOT_MODULE_TYPE_WASMOS_APP
+ * that parse as an app image are visible.  out_ptr is a wasm32 linear-memory offset written by
+ * the kernel; a range outside linear memory TRAPS the module via m3ApiCheckMem.  Returns the
+ * TRUE name length so a caller can detect truncation -- note the name is staged through a
+ * 64-byte kernel buffer, so a name of 64 bytes or more is truncated to 63 even when out_len
+ * would have held it, while the returned length still reports the full one.  Otherwise
+ * WASMOS_INVAL, WASMOS_NOENT when there is no such module,
+ * WASMOS_ERR_KERNEL_BAD_POINTER, WASMOS_ERR_KERNEL_NO_CALLER, or
+ * WASMOS_ERR_KERNEL_COPY_FAILED. */
 m3ApiRawFunction(wasmos_boot_module_name) {
     m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, index) m3ApiGetArgMem(char*, out_ptr)
         m3ApiGetArg(int32_t, out_len)
@@ -2603,6 +2892,11 @@ m3ApiRawFunction(wasmos_boot_module_name) {
     m3ApiReturn((int32_t)name_len);
 }
 
+/* Return the number of entries in the boot initfs image, after validating its header (magic,
+ * version, entry size, and that the entry table lies inside the image).  Returns the count,
+ * WASMOS_ERR_FS_NO_IMAGE when the image is absent or its header does not validate, or
+ * hostcall_value_check's WASMOS_ERR_KERNEL_TOO_LARGE if the count cannot be expressed on the
+ * i32 it shares with the error codes. */
 m3ApiRawFunction(wasmos_initfs_entry_count) {
     m3ApiReturnType(int32_t) const wasmos_initfs_header_t* hdr = 0;
     const uint8_t* base = 0;
@@ -2616,6 +2910,13 @@ m3ApiRawFunction(wasmos_initfs_entry_count) {
     m3ApiReturn((int32_t)hdr->entry_count);
 }
 
+/* Copy the NUL-terminated path of initfs entry `index` into the caller's linear memory at
+ * out_ptr, truncated to out_len-1 bytes.  out_ptr is a wasm32 linear-memory offset written by
+ * the kernel; a range outside linear memory TRAPS the module via m3ApiCheckMem.  Returns the
+ * TRUE path length, not the truncated one, so a caller can tell its buffer was too small.
+ * Otherwise WASMOS_INVAL, WASMOS_ERR_FS_NOT_FOUND, hostcall_name_clamp's code,
+ * WASMOS_ERR_KERNEL_BAD_POINTER, WASMOS_ERR_KERNEL_NO_CALLER, or
+ * WASMOS_ERR_KERNEL_COPY_FAILED. */
 m3ApiRawFunction(wasmos_initfs_entry_name) {
     m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, index) m3ApiGetArgMem(char*, out_ptr)
         m3ApiGetArg(int32_t, out_len)
@@ -2662,6 +2963,9 @@ m3ApiRawFunction(wasmos_initfs_entry_name) {
     m3ApiReturn((int32_t)name_len);
 }
 
+/* Return the payload size in bytes of initfs entry `index`, WASMOS_ERR_FS_NOT_FOUND for a
+ * negative index or one past the end, or hostcall_value_check's WASMOS_ERR_KERNEL_TOO_LARGE if
+ * the size cannot be expressed on the i32 it shares with the error codes. */
 m3ApiRawFunction(wasmos_initfs_entry_size) {
     m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, index) wasmos_initfs_entry_t entry;
     if (index < 0 || initfs_entry_at((uint32_t)index, &entry) != 0) {
@@ -2674,6 +2978,13 @@ m3ApiRawFunction(wasmos_initfs_entry_size) {
     m3ApiReturn((int32_t)entry.size);
 }
 
+/* Copy up to `len` bytes of initfs entry `index`, starting at byte `offset`, into the caller's
+ * linear memory at out_ptr (a wasm32 linear-memory offset; a range outside linear memory TRAPS
+ * the module via m3ApiCheckMem).  Returns the number of bytes actually copied: a trailing
+ * chunk is CLAMPED to what remains rather than refused, and an `offset` at or past the end
+ * copies nothing and returns 0.  Otherwise WASMOS_INVAL for a negative `index`/`offset` or a
+ * non-positive `len`, WASMOS_ERR_FS_NOT_FOUND, WASMOS_ERR_KERNEL_BAD_POINTER,
+ * WASMOS_ERR_KERNEL_NO_CALLER, or WASMOS_ERR_KERNEL_COPY_FAILED. */
 m3ApiRawFunction(wasmos_initfs_entry_copy) {
     m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, index) m3ApiGetArgMem(uint8_t*, out_ptr)
         m3ApiGetArg(int32_t, len) m3ApiGetArg(int32_t, offset)
@@ -2714,6 +3025,15 @@ m3ApiRawFunction(wasmos_initfs_entry_copy) {
     m3ApiReturn((int32_t)copy_len);
 }
 
+/* Resolve the path at path_ptr/path_len (a wasm32 linear-memory range read by the kernel; a
+ * range outside linear memory TRAPS the module via m3ApiCheckMem) to an initfs entry index.
+ * Leading '/' characters and one optional "init/" prefix are stripped, and the remainder is
+ * matched case-insensitively against each entry's full stored path and then against its
+ * basename, so "app.wasm" finds "apps/app.wasm".  Returns the entry index, WASMOS_INVAL for a
+ * non-positive `path_len` or a path that is empty once stripped,
+ * WASMOS_ERR_FS_PATH_TOO_LONG at 112 bytes or more, WASMOS_ERR_FS_NO_IMAGE,
+ * WASMOS_ERR_FS_NOT_FOUND, WASMOS_ERR_KERNEL_BAD_POINTER, WASMOS_ERR_KERNEL_NO_CALLER, or
+ * WASMOS_ERR_KERNEL_COPY_FAILED. */
 m3ApiRawFunction(wasmos_initfs_find_path) {
     m3ApiReturnType(int32_t) m3ApiGetArgMem(const char*, path_ptr) m3ApiGetArg(int32_t, path_len)
 
@@ -2783,6 +3103,13 @@ m3ApiRawFunction(wasmos_initfs_find_path) {
     m3ApiReturn(WASMOS_ERR_FS_NOT_FOUND);
 }
 
+/* Write `len` bytes from the caller's linear memory at `ptr` to the kernel log.  Preemption is
+ * disabled across the whole relay so a multi-chunk write is not interleaved with another
+ * process's output.  A zero `len` is a no-op success; a negative one is WASMOS_INVAL.  `ptr`
+ * is a wasm32 linear-memory range and one outside linear memory TRAPS the module via
+ * m3ApiCheckMem.  wasm3-only behaviour: the same bytes are additionally mirrored to the VT
+ * service for shell-launched app workloads (wasm_console_should_mirror_to_vt); WARP writes
+ * only to the kernel log.  Returns 0. */
 m3ApiRawFunction(wasmos_console_write) {
     m3ApiReturnType(int32_t) m3ApiGetArgMem(const char*, ptr) m3ApiGetArg(int32_t, len)
 
@@ -2816,6 +3143,10 @@ m3ApiRawFunction(wasmos_console_write) {
     m3ApiReturn(0);
 }
 
+/* Emit `tag` and the caller's pid as hex to the serial trace, on the unlocked path so it also
+ * works from contexts holding the serial lock.  The whole body is compiled out unless tracing
+ * is enabled, and nothing terminates the line.  Always returns 0.  WARP's counterpart is a
+ * no-op, so marks do not print there. */
 m3ApiRawFunction(wasmos_debug_mark) {
     m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, tag)
         trace_write_unlocked("[wasm] debug_mark tag=");
@@ -2825,6 +3156,10 @@ m3ApiRawFunction(wasmos_debug_mark) {
     m3ApiReturn(0);
 }
 
+/* Dump the caller's user page-table kernel mappings to the kernel log and, for a ring-3
+ * caller, verify no low-half slot survives in its root table.  Returns 0, -1 when that
+ * verification fails, or WASMOS_ERR_KERNEL_NO_CALLER when the caller or its root table cannot
+ * be resolved.  Diagnostics only; WARP's counterpart prints nothing and returns 0. */
 m3ApiRawFunction(wasmos_kmap_dump) {
     m3ApiReturnType(int32_t) process_t* proc = process_get(process_current_pid());
     if (!proc || proc->context_id == 0) {
@@ -2841,6 +3176,9 @@ m3ApiRawFunction(wasmos_kmap_dump) {
     m3ApiReturn(0);
 }
 
+/* Same dump as wasmos_kmap_dump, for every active process rather than the caller.  A process
+ * whose entry or context cannot be resolved is skipped, and one whose root table cannot be
+ * resolved counts as a failure.  Returns 0 when every context passed, -1 otherwise. */
 m3ApiRawFunction(wasmos_kmap_dump_all) {
     m3ApiReturnType(int32_t) uint32_t count = process_count_active();
     int failures = 0;
@@ -2884,6 +3222,14 @@ m3ApiRawFunction(wasmos_kmap_dump_all) {
     m3ApiReturn(failures == 0 ? 0 : -1);
 }
 
+/* Read at most ONE byte from the serial console into the caller's linear memory at `ptr`.
+ * `len` is only checked to be positive -- it bounds the caller's buffer, it does not batch --
+ * and a zero `len` is WASMOS_INVAL rather than the no-op success console_write gives, because
+ * a buffer with no room cannot receive a byte.  `ptr` is a wasm32 linear-memory offset and
+ * only its first byte is checked and written.  Returns 1 when a byte was stored, otherwise
+ * serial_read_char's rc (0 when nothing is queued -- this call does not block),
+ * WASMOS_INVAL, WASMOS_ERR_KERNEL_BAD_POINTER, WASMOS_ERR_KERNEL_NO_CALLER, or
+ * WASMOS_ERR_KERNEL_COPY_FAILED. */
 m3ApiRawFunction(wasmos_console_read) {
     m3ApiReturnType(int32_t) m3ApiGetArgMem(char*, ptr) m3ApiGetArg(int32_t, len)
 
@@ -2917,6 +3263,12 @@ m3ApiRawFunction(wasmos_console_read) {
     m3ApiReturn(1);
 }
 
+/* Re-read `len` bytes at wasm32 offset `ptr` through the caller's user mapping and copy them
+ * back over the interpreter's own view of that range, so the two agree after something wrote
+ * the pages behind the interpreter's back.  A zero `len` is a no-op success.  Returns 0,
+ * WASMOS_INVAL for a negative `len`, WASMOS_ERR_KERNEL_BAD_POINTER,
+ * WASMOS_ERR_KERNEL_NO_CALLER, or WASMOS_ERR_KERNEL_COPY_FAILED.  WARP's counterpart instead
+ * touches the range with volatile reads, since there the two views are the same memory. */
 m3ApiRawFunction(wasmos_sync_user_read) {
     m3ApiReturnType(int32_t) m3ApiGetArgMem(uint8_t*, ptr) m3ApiGetArg(int32_t, len)
 
@@ -2945,11 +3297,17 @@ m3ApiRawFunction(wasmos_sync_user_read) {
     m3ApiReturn(0);
 }
 
+/* Push the low byte of `ch` into the kernel serial input ring, where wasmos_input_read and
+ * the console layer pick it up (the VT keyboard path).  A full ring drops the byte silently.
+ * Always returns 0. */
 m3ApiRawFunction(wasmos_input_push) {
     m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, ch) serial_input_push((uint8_t)(ch & 0xFF));
     m3ApiReturn(0);
 }
 
+/* Take one byte from the kernel serial input ring.  Does not block: returns the byte as
+ * 0..255, or WASMOS_AGAIN when the ring is empty, which is "nothing yet" rather than a
+ * failure. */
 m3ApiRawFunction(wasmos_input_read) {
     m3ApiReturnType(int32_t) uint8_t ch = 0;
     if (serial_input_read(&ch)) {
@@ -2958,6 +3316,10 @@ m3ApiRawFunction(wasmos_input_read) {
     m3ApiReturn(WASMOS_AGAIN); /* nothing queued, not a failure */
 }
 
+/* Register the context owning `endpoint` as the remote serial backend, resetting the kernel's
+ * remote serial state so console reads are relayed to it.  Returns 0 on success, WASMOS_INVAL
+ * for a negative `endpoint`, or serial_register_remote_driver's -1 when the endpoint is
+ * IPC_ENDPOINT_NONE, unowned, or kernel-owned. */
 m3ApiRawFunction(wasmos_serial_register) {
     m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, endpoint) uint32_t endpoint_u32 = 0;
     if (wasm_arg_u32_nonneg(endpoint, &endpoint_u32) != 0) {
@@ -2970,6 +3332,10 @@ m3ApiRawFunction(wasmos_proc_count) {
     m3ApiReturnType(int32_t) m3ApiReturn((int32_t)process_count_active());
 }
 
+/* Terminate the calling process with exit status `status`: the status is recorded and the
+ * process yields as EXITED, so control does not come back and the trailing return is
+ * unreachable.  Returns WASMOS_ERR_KERNEL_NO_CALLER only when the caller cannot be
+ * resolved. */
 m3ApiRawFunction(wasmos_proc_exit) {
     m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, status) process_t* proc =
         process_get(process_current_pid());
@@ -2981,6 +3347,10 @@ m3ApiRawFunction(wasmos_proc_exit) {
     m3ApiReturn(0);
 }
 
+/* Set the calling process's ready flag, the signal that its initialisation finished and a
+ * spawner may treat the service as usable.  Setting the flag is all this does -- it wakes
+ * nothing.  Returns 0 even when the caller cannot be resolved, in which case no flag is
+ * set. */
 m3ApiRawFunction(wasmos_proc_notify_ready) {
     m3ApiReturnType(int32_t) process_t* proc = process_get(process_current_pid());
     if (proc) {
@@ -2996,6 +3366,8 @@ m3ApiRawFunction(wasmos_sched_ticks) {
     m3ApiReturnType(int32_t) m3ApiReturn(hostcall_value_counter(timer_ticks()));
 }
 
+/* Return the number of processes currently in the ready queues.  WARP's counterpart is a stub
+ * returning 0, so this number is only meaningful under wasm3. */
 m3ApiRawFunction(wasmos_sched_ready_count) {
     m3ApiReturnType(int32_t) m3ApiReturn((int32_t)process_ready_count());
 }
@@ -3004,6 +3376,10 @@ m3ApiRawFunction(wasmos_sched_cpu_count) {
     m3ApiReturnType(int32_t) m3ApiReturn((int32_t)g_cpu_count);
 }
 
+/* Fill the 16-byte record at `out` with the page-frame allocator's total and free byte counts.
+ * `out` is a wasm32 linear-memory offset the kernel writes through the interpreter's own
+ * pointer; a range outside linear memory TRAPS the module via m3ApiCheckMem.  Always
+ * returns 0. */
 m3ApiRawFunction(wasmos_physmem_stats) {
     typedef struct {
         uint64_t total_bytes;
@@ -3020,6 +3396,12 @@ m3ApiRawFunction(wasmos_kernel_runtime) {
     m3ApiReturnType(int32_t) m3ApiReturn(0); /* wasm3 */
 }
 
+/* Fill the record at `out` with per-CPU scheduler counters for `cpu_id`: ready_count summed
+ * over every priority band, the pid running there (0 if idle), and the steal, dispatch and
+ * last-dispatched-pid counters.  `out` is a wasm32 linear-memory offset written through the
+ * interpreter's own pointer; a range outside linear memory TRAPS the module via m3ApiCheckMem.
+ * The counters are read without a lock, so the record is a sample rather than a consistent
+ * snapshot.  Returns 0, or WASMOS_INVAL when `cpu_id` names no CPU. */
 m3ApiRawFunction(wasmos_sched_cpu_stats) {
     typedef struct {
         uint32_t ready_count;
@@ -3052,6 +3434,7 @@ m3ApiRawFunction(wasmos_sched_current_pid) {
     m3ApiReturnType(int32_t) m3ApiReturn((int32_t)process_current_pid());
 }
 
+/* Yield the CPU, leaving the caller runnable.  Returns 0 once it is scheduled again. */
 m3ApiRawFunction(wasmos_sched_yield) {
     m3ApiReturnType(int32_t) process_yield(PROCESS_RUN_YIELDED);
     m3ApiReturn(0);
@@ -3061,11 +3444,21 @@ m3ApiRawFunction(wasmos_thread_gettid) {
     m3ApiReturnType(int32_t) m3ApiReturn((int32_t)thread_current_tid());
 }
 
+/* Identical to wasmos_sched_yield: the yield is per process, and this name exists for the
+ * threading-flavoured guest API. */
 m3ApiRawFunction(wasmos_thread_yield) {
     m3ApiReturnType(int32_t) process_yield(PROCESS_RUN_YIELDED);
     m3ApiReturn(0);
 }
 
+/* Enumerate processes: look up the one at enumeration `index` and write its NUL-terminated
+ * name into the caller's linear memory at `buf`, truncated to buf_len-1 bytes and staged
+ * through a 256-byte kernel bounce buffer.  `buf` is a wasm32 linear-memory offset written by
+ * the kernel; a range outside linear memory TRAPS the module via m3ApiCheckMem.  `index` is a
+ * position in the active-process table, not a pid, and shifts as processes come and go.
+ * Returns the pid, WASMOS_INVAL, WASMOS_NOENT when there is no process at `index`,
+ * WASMOS_ERR_KERNEL_BAD_POINTER, WASMOS_ERR_KERNEL_NO_CALLER, or
+ * WASMOS_ERR_KERNEL_COPY_FAILED. */
 m3ApiRawFunction(wasmos_proc_info) {
     m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, index) m3ApiGetArgMem(char*, buf)
         m3ApiGetArg(int32_t, buf_len)
@@ -3125,6 +3518,9 @@ m3ApiRawFunction(wasmos_proc_info) {
     m3ApiReturn((int32_t)pid);
 }
 
+/* wasmos_proc_info plus the parent pid, written as a u32 at `parent_ptr`.  Same enumeration
+ * semantics, same truncation, same trap-on-out-of-range for both offsets, and the same return
+ * value and code set. */
 m3ApiRawFunction(wasmos_proc_info_ex) {
     m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, index) m3ApiGetArgMem(char*, buf)
         m3ApiGetArg(int32_t, buf_len) m3ApiGetArgMem(uint32_t*, parent_ptr)
@@ -3196,6 +3592,10 @@ m3ApiRawFunction(wasmos_proc_info_ex) {
     m3ApiReturn((int32_t)pid);
 }
 
+/* wasmos_proc_info_ex plus a full per-process statistics record at `stats_ptr` (state,
+ * block_reason, an 8-byte runtime tag, thread counts, current tid, context id, cpu ticks, and
+ * the VM/kstack/heap/rss byte totals).  Same enumeration semantics, same truncation, same
+ * trap-on-out-of-range for all three offsets, and the same return value and code set. */
 m3ApiRawFunction(wasmos_proc_info_stats) {
     typedef struct {
         uint32_t state;
@@ -3308,6 +3708,11 @@ m3ApiRawFunction(wasmos_proc_info_stats) {
     m3ApiReturn((int32_t)pid);
 }
 
+/* env.strlen, linked only under wasm3 (the IDL lists it outside the ring-3/AOT id space):
+ * length of the NUL-terminated string at `ptr`, scanning at most to the end of linear memory
+ * and reading byte by byte through the caller's user mapping.  Every failure -- unresolvable
+ * caller, unreadable or out-of-range pointer, a copy that fails mid-scan -- returns 0, which
+ * is indistinguishable from an empty string. */
 m3ApiRawFunction(wasmos_strlen) {
     m3ApiReturnType(int32_t) m3ApiGetArgMem(const char*, ptr)
 
@@ -3342,6 +3747,14 @@ m3ApiRawFunction(wasmos_strlen) {
     m3ApiReturn(len);
 }
 
+/* Block the caller while the 32-bit word at wasm32 linear-memory offset `addr` still equals
+ * `expected`, for at most `timeout_ms` milliseconds (0 waits indefinitely).  The offset is
+ * translated to a physical address and used as the wait key, so two processes sharing those
+ * pages wait on the same futex.  Returns 0 when woken or when the word already differed --
+ * which the caller must read as "re-check the word yourself", not as "the word still equals
+ * `expected`" -- IPC_ERR_INVALID when the caller's context or the address cannot be resolved,
+ * IPC_ERR_FULL when the futex table is exhausted, and IPC_ERR_TIMEOUT when the window
+ * elapses. */
 m3ApiRawFunction(wasmos_futex_wait) {
     m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, addr) m3ApiGetArg(int32_t, expected)
         m3ApiGetArg(int32_t, timeout_ms) uint32_t context_id = 0;
@@ -3354,6 +3767,10 @@ m3ApiRawFunction(wasmos_futex_wait) {
     m3ApiReturn((int32_t)result);
 }
 
+/* Wake up to `count` contexts waiting on the word at wasm32 linear-memory offset `addr`.
+ * Returns the number actually woken, which is 0 when none were waiting, when the address
+ * resolves to no futex, or when the caller has no context -- a caller cannot tell those
+ * apart. */
 m3ApiRawFunction(wasmos_futex_wake) {
     m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, addr) m3ApiGetArg(int32_t, count)
         uint32_t context_id = 0;
@@ -3364,6 +3781,10 @@ m3ApiRawFunction(wasmos_futex_wake) {
     m3ApiReturn((int32_t)woken);
 }
 
+/* env.abort, the AssemblyScript abort hook.  Its four arguments (message, file, line, column)
+ * are guest pointers and values that are deliberately ignored -- nothing is reported.  The
+ * caller is terminated with exit status -1 and does not return; the void return exists only to
+ * satisfy the import signature. */
 m3ApiRawFunction(wasmos_env_abort) {
     m3ApiReturnType(void)(void) raw_return;
     m3ApiGetArg(int32_t, msg) m3ApiGetArg(int32_t, file) m3ApiGetArg(int32_t, line)
@@ -3398,11 +3819,19 @@ static int wasm3_link_raw(IM3Module module, const char* mod, const char* name, c
     return 0;
 }
 
+/* Publish the boot handover to this translation unit (the boot-module, initfs, ACPI RSDP and
+ * boot-config host calls read it) and clear every per-pid side table.  Call once during kernel
+ * bring-up, before any module is instantiated; boot_info is retained by pointer, not copied,
+ * so it must outlive every guest. */
 void wasm3_link_init(const boot_info_t* boot_info) {
     g_wasm_boot_info = boot_info;
     wasm_ipc_slots_init();
 }
 
+/* Link the generated "wasmos" host-call table into `module`.  A module that does not import a
+ * given host call is not an error (m3Err_functionLookupFailed is tolerated), so the same table
+ * serves every guest.  Returns 0 when every import that was present linked, -1 on a null
+ * module or any real link failure, each of which is logged by name. */
 int wasm3_link_wasmos(IM3Module module) {
     if (!module) {
         return -1;
@@ -3422,6 +3851,9 @@ int wasm3_link_wasmos(IM3Module module) {
     return 0;
 }
 
+/* Link the "env" module imports that are not part of the generated table: env.strlen (wasm3
+ * only) and env.abort (the AssemblyScript abort hook).  Same tolerance for absent imports and
+ * same return convention as wasm3_link_wasmos. */
 int wasm3_link_env(IM3Module module) {
     if (!module) {
         return -1;

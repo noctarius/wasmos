@@ -4,6 +4,11 @@
 /* libui_list_view.h - List view component specific rendering (including scrolling and selection).
  */
 
+/* Row index at (pointer_x, pointer_y) in window coordinates, or -1 when the
+ * point is outside the component or past the last row. Rows are a fixed 20 px
+ * tall and the current scroll offset is applied, so the result indexes
+ * d->list.items directly. The scrollbar gutter is not excluded: a click on the
+ * scrollbar still resolves to the row beside it. */
 static inline int32_t ui_list_view_index_at(const ui_component_t* lv, const ui_list_view_data_t* d,
                                             int32_t pointer_x, int32_t pointer_y) {
     if (!lv || !d)
@@ -21,6 +26,15 @@ static inline int32_t ui_list_view_index_at(const ui_component_t* lv, const ui_l
     return idx;
 }
 
+/* Render op for UI_COMPONENT_LIST_VIEW: the inset content area, one 20 px row
+ * per item with alternating stripes and a highlight on the selection, this
+ * component's own border, and a vertical scrollbar when the content overflows.
+ * It paints its own border, so the core skips the generic one; it also has no
+ * child components to descend into.
+ *
+ * Rows are drawn for every item and clipped, not culled, so a long list costs
+ * one font round trip per item per frame regardless of visibility. The
+ * scrollbar gutter is reserved only while scroll_max > 0. */
 static inline void ui_render_list_view(ui_context_t* ctx, const ui_component_t* c,
                                        ui_rect_t draw_bounds, ui_rect_t clip, int32_t offset_y) {
     (void)offset_y;
@@ -58,6 +72,11 @@ static inline void ui_render_list_view(ui_context_t* ctx, const ui_component_t* 
     }
 }
 
+/* Layout op for UI_COMPONENT_LIST_VIEW. Assigns no child bounds (the rows are
+ * not components); it recomputes scroll_max from the row count against the
+ * viewport, clamps scroll_y into range, and clamps the selection into
+ * [0, count). Note the clamp turns the initial "no selection" (-1) into row 0
+ * as soon as the list is non-empty, so a list view always shows a selection. */
 static inline void ui_layout_list_view(ui_context_t* ctx, ui_component_t* p) {
     (void)ctx;
     ui_list_view_data_t* d = (ui_list_view_data_t*)p->component_data;
@@ -78,7 +97,11 @@ static inline void ui_layout_list_view(ui_context_t* ctx, ui_component_t* p) {
 }
 
 /* Component-owned reaction handler for pointer press (selection on list items).
- * Core (after ui_find_list_view_at) calls this so list owns its specific selection logic. */
+ * Core (after ui_find_list_view_at) calls this so list owns its specific selection logic.
+ *
+ * Moves the selection to the row under the pointer and marks the context dirty.
+ * A press that misses every row leaves the selection unchanged. No callback
+ * fires here — activation is a double-click (ui_list_view_handle_activate). */
 static inline void ui_list_view_handle_pointer_press(ui_context_t* ctx, ui_component_t* lv,
                                                      int32_t pointer_x, int32_t pointer_y) {
     ui_list_view_data_t* d = (ui_list_view_data_t*)lv->component_data;
@@ -91,6 +114,10 @@ static inline void ui_list_view_handle_pointer_press(ui_context_t* ctx, ui_compo
     }
 }
 
+/* Left double-click over a row: select it, then invoke on_activate with the row
+ * index. Does nothing when no callback is installed, the list is empty, or the
+ * point hits no row — including the case where the selection would otherwise
+ * have moved, so a miss changes nothing. */
 static inline void ui_list_view_handle_activate(ui_context_t* ctx, ui_component_t* lv,
                                                 int32_t pointer_x, int32_t pointer_y) {
     ui_list_view_data_t* d = (ui_list_view_data_t*)lv->component_data;
@@ -104,6 +131,8 @@ static inline void ui_list_view_handle_activate(ui_context_t* ctx, ui_component_
     ui_mark_dirty(ctx);
 }
 
+/* Right click over a row: select it, then invoke on_secondary_click with the
+ * row index. Same no-op conditions as ui_list_view_handle_activate(). */
 static inline void ui_list_view_handle_secondary_click(ui_context_t* ctx, ui_component_t* lv,
                                                        int32_t pointer_x, int32_t pointer_y) {
     ui_list_view_data_t* d = (ui_list_view_data_t*)lv->component_data;
@@ -117,7 +146,10 @@ static inline void ui_list_view_handle_secondary_click(ui_context_t* ctx, ui_com
     ui_mark_dirty(ctx);
 }
 
-/* Component-owned scroll drag handler (for active scroll during pointer drag). */
+/* Component-owned scroll drag handler (for active scroll during pointer drag).
+ * `dy` is thumb travel in pixels; it is converted to content pixels by
+ * ui_scroll_drag_delta() and the result is clamped into [0, scroll_max]. A drag
+ * on a list that fits entirely does nothing. */
 static inline void ui_list_view_handle_scroll_drag(ui_context_t* ctx, ui_component_t* c,
                                                    int32_t dy) {
     ui_list_view_data_t* d = (ui_list_view_data_t*)c->component_data;

@@ -1,11 +1,28 @@
 #pragma once
 /* compat/mutex — freestanding no-op stub of <mutex>
  *
- * WARP guards its JIT compilation critical sections with std::mutex.  The
- * kernel relies instead on the WARP single-CPU invariant (only one CPU inside
- * WARP at a time), so these are no-ops.  warp_runtime_enter/leave does NOT
- * enforce that invariant with a lock — see the FIXME(smp-warp) in warp/shim.cpp;
- * making WARP genuinely multi-CPU requires real locks here or there. */
+ * Provides mutex, unique_lock<M> and lock_guard<M>.  That is the whole <mutex>
+ * surface WARP reaches: WasmModule guards linear-memory reallocation with a
+ * std::mutex plus std::unique_lock, and RAIISignalHandler (reachable through
+ * WasmModule.cpp, but with no inline body used in this build) uses
+ * std::lock_guard.  recursive_mutex, timed_mutex, std::lock, std::try_lock,
+ * std::call_once and the defer_lock/try_to_lock/adopt_lock tags are absent, and
+ * a use of any of them is a compile error at the call site.
+ *
+ * THE LOCKS DO NOT LOCK.  mutex::lock/unlock are empty and try_lock always
+ * succeeds; unique_lock and lock_guard are faithful RAII wrappers around those
+ * no-ops, so ownership tracking and destructor ordering behave as written but
+ * exclude nothing.  This is safe only under the WARP single-CPU invariant —
+ * at most one CPU inside WARP at any time — which is the same assumption the
+ * per-CPU-slot context stack in warp/sjlj_unwind.cpp rests on.
+ *
+ * That invariant is an assumption, not an enforced property:
+ * warp_runtime_enter/leave in warp/shim.cpp only rebinds the per-CPU heap PID
+ * and takes no lock (see the FIXME(smp-warp) there).  It holds today because
+ * WARP modules run on CPU 0.  If WARP modules ever execute on APs, these
+ * no-ops stop protecting WasmModule's linear-memory realloc and the failure is
+ * silent data corruption under concurrency, not a compile or link error — the
+ * lock bodies here, or a real lock in warp_runtime_enter, must come first. */
 
 namespace std {
 

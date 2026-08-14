@@ -271,6 +271,11 @@ static uint32_t framebuffer_capacity(void) {
     return (uint32_t)fb_info.framebuffer_size;
 }
 
+/* Lock-free, unlike every other public entry point here, because it reads no
+ * registry state: TRANSFER answers the fixed conventional chunk size and
+ * FRAMEBUFFER queries the recorded aperture.  0 for an unrecognised kind and for
+ * a framebuffer that is not present, so 0 is not distinguishable from an error.
+ * An aperture above 4 GiB saturates at 0xFFFFFFFF rather than truncating. */
 uint32_t xfer_buffer_size(uint32_t kind) {
     if (kind == BUFFER_KIND_TRANSFER) {
         return transfer_capacity();

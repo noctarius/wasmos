@@ -1,3 +1,22 @@
+/* test_net_ifcfg.c — the /etc/network/interfaces-style parser
+ * (net_stack_ifcfg.h) the net stack reads its addressing from at startup.
+ *
+ * src/services/net_stack/net_stack_ifcfg.c is the only source linked in: it is
+ * pure text-to-struct work with no lwIP, no IPC and no allocation, so nothing is
+ * stubbed and no case configures an interface.
+ *
+ * net_ifcfg_parse returns 1 for a usable stanza and 0 otherwise -- the opposite
+ * polarity to the kernel's 0-on-success convention -- and a 0 return is also
+ * reflected in cfg.valid, since *out is zeroed on entry. Addresses are stored as
+ * four octets in dotted order, and a prefix length is expanded into the same
+ * mask form as an explicit netmask line, which is why both spellings assert the
+ * same bytes.
+ *
+ * The cases report through assert(), not through a failure counter: the first
+ * failure aborts the process, and main() prints "ok" only if every case ran to
+ * completion. The suite is compiled without -DNDEBUG, which those asserts
+ * depend on.
+ */
 #include <assert.h>
 #include <stdint.h>
 #include <stdio.h>

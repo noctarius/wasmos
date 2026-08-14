@@ -12,6 +12,14 @@ static int find_region(const mm_context_t* ctx, mem_region_type_t type, mem_regi
     return mm_context_region_for_type((mm_context_t*)ctx, type, out) == 0 ? 1 : 0;
 }
 
+/* Fills *out_ctx from ctx's region table.  All three of WASM_LINEAR, STACK and
+ * HEAP must be present, so it fails on a context that has not finished its
+ * standard region set-up.  Sizes are snapshots taken at bind time and do not
+ * track a later region grow; stack_size and heap_size are narrowed to 32 bits.
+ *
+ * out_ctx->mm keeps ctx as a BORROWED pointer, so the bound structure is only
+ * valid while the context lives.  Returns 0 on success, -1 for a NULL argument
+ * or a missing region. */
 int runtime_context_bind(mm_context_t* ctx, runtime_context_t* out_ctx) {
     if (!ctx || !out_ctx) {
         return -1;

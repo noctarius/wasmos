@@ -13,16 +13,27 @@
 extern "C" {
 #endif
 
+/* The one kernel IPC status these helpers act on rather than propagate: a send
+ * that found the destination queue full and is worth retrying. Mirrors the
+ * kernel's IPC_ERR_FULL; overridable so a component that already defines it
+ * keeps a single definition. */
 #ifndef WASMOS_IPC_ERR_FULL
 #define WASMOS_IPC_ERR_FULL (-3)
 #endif
 
+/* Default number of send attempts before a queue-full failure is reported to
+ * the caller, one scheduler yield apart. Large because the peer only has to be
+ * scheduled once to drain its queue; it bounds a livelock, not a latency. */
 #ifndef WASMOS_IPC_SEND_RETRY_LIMIT
 #define WASMOS_IPC_SEND_RETRY_LIMIT 4096
 #endif
 /* Decoded IPC message.  The kernel's IPC_FIELD ordering is:
  * field 0=type, 1=request_id, 2=arg0, 3=arg1, 4=source, 5=destination,
- * 6=arg2, 7=arg3 — arg2/arg3 are NOT fields 4/5. */
+ * 6=arg2, 7=arg3 — arg2/arg3 are NOT fields 4/5.
+ * `source` is the endpoint the sender declared as its reply address and is what
+ * a server answers on; `destination` is the endpoint the message was delivered
+ * to. The four args are opaque payload words whose meaning belongs to `type`;
+ * by convention arg2 carries a transfer-buffer id when one is involved. */
 typedef struct {
     int32_t type;
     int32_t request_id;
@@ -34,6 +45,7 @@ typedef struct {
     int32_t destination;
 } wasmos_ipc_message_t;
 
+/* Forward declarations; contracts are on the definitions below. */
 static inline int32_t wasmos_ipc_call_retry(int32_t destination_endpoint, int32_t source_endpoint,
                                             int32_t type, int32_t request_id, int32_t arg0,
                                             int32_t arg1, int32_t arg2, int32_t arg3,
@@ -45,7 +57,10 @@ static inline int32_t wasmos_ipc_call_managed(int32_t server, int32_t type, int3
                                               wasmos_ipc_message_t* out_reply);
 
 /* Populate message from the last received IPC fields.
- * Must be called immediately after wasmos_ipc_recv/try_recv returns > 0. */
+ * Must be called immediately after wasmos_ipc_recv/try_recv returns > 0.
+ * The last-message slot is per context and is overwritten by the next receive
+ * on ANY endpoint, so copy it out before receiving again. A NULL `message` is a
+ * no-op. */
 static inline void wasmos_ipc_message_read_last(wasmos_ipc_message_t* message) {
     if (!message) {
         return;
@@ -60,6 +75,11 @@ static inline void wasmos_ipc_message_read_last(wasmos_ipc_message_t* message) {
     message->arg3 = wasmos_ipc_last_field(7);
 }
 
+/* Send a two-argument reply to `reply_endpoint` (the requester's source
+ * endpoint), echoing `request_id` so the requester can correlate it; arg2/arg3
+ * are sent as 0. Returns wasmos_ipc_send's status: 0 on success, negative
+ * otherwise. Does not retry on a full queue — use wasmos_ipc_send_retry when the
+ * reply must not be dropped. */
 static inline int32_t wasmos_ipc_reply(int32_t reply_endpoint, int32_t source_endpoint,
                                        int32_t type, int32_t request_id, int32_t arg0,
                                        int32_t arg1) {
@@ -67,7 +87,11 @@ static inline int32_t wasmos_ipc_reply(int32_t reply_endpoint, int32_t source_en
 }
 
 /* Send with automatic retry on IPC_ERR_FULL (-3) up to retry_limit times,
- * yielding between each attempt.  Use 0 for the default limit. */
+ * yielding between each attempt.  Use 0 for the default limit.
+ * Returns 0 once the message is queued, or the last failing status: any error
+ * other than queue-full is returned immediately without a retry, and an
+ * exhausted retry budget returns WASMOS_IPC_ERR_FULL. Blocks only in the sense
+ * that it yields the CPU between attempts; it never parks the caller. */
 static inline int32_t wasmos_ipc_send_retry(int32_t destination_endpoint, int32_t source_endpoint,
                                             int32_t type, int32_t request_id, int32_t arg0,
                                             int32_t arg1, int32_t arg2, int32_t arg3,
@@ -90,6 +114,8 @@ static inline int32_t wasmos_ipc_send_retry(int32_t destination_endpoint, int32_
     }
 }
 
+/* wasmos_ipc_call_retry with the default send-retry budget; see there for the
+ * matching rules and return values. */
 static inline int32_t wasmos_ipc_call(int32_t destination_endpoint, int32_t source_endpoint,
                                       int32_t type, int32_t request_id, int32_t arg0, int32_t arg1,
                                       int32_t arg2, int32_t arg3, wasmos_ipc_message_t* out_reply) {
@@ -97,6 +123,20 @@ static inline int32_t wasmos_ipc_call(int32_t destination_endpoint, int32_t sour
                                  arg1, arg2, arg3, out_reply, WASMOS_IPC_SEND_RETRY_LIMIT);
 }
 
+/* Synchronous request/reply: send the request from `source_endpoint` to
+ * `destination_endpoint` (retrying a full queue up to `send_retry_limit`
+ * attempts), then BLOCK on `source_endpoint` until the matching reply arrives,
+ * copying it into *out_reply (may be NULL to discard it).
+ *
+ * `request_id` must be unique among the caller's in-flight requests on that
+ * endpoint. Only a message carrying this request_id AND sent from
+ * `destination_endpoint` is accepted; every other message that lands on
+ * `source_endpoint` meanwhile is consumed and DISCARDED, so this must be called
+ * on a private reply endpoint, never on a live service endpoint.
+ *
+ * Returns 0 on a matched reply, the send status if the request could not be
+ * queued, or the negative receive status. There is no timeout: a peer that never
+ * answers blocks the caller indefinitely. */
 static inline int32_t wasmos_ipc_call_retry(int32_t destination_endpoint, int32_t source_endpoint,
                                             int32_t type, int32_t request_id, int32_t arg0,
                                             int32_t arg1, int32_t arg2, int32_t arg3,
@@ -136,7 +176,11 @@ static inline int32_t wasmos_ipc_call_retry(int32_t destination_endpoint, int32_
 }
 
 /* Pack up to 16 chars of a service name into four int32 IPC args (4 bytes each,
- * little-endian).  Used by wasmos_svc_register/lookup. */
+ * little-endian).  Used by wasmos_svc_register/lookup.
+ * Unused byte positions stay zero, so a name shorter than 16 chars is
+ * zero-padded and a name of exactly 16 travels without a terminator; anything
+ * longer is silently truncated to its first 16 bytes. A NULL `name` yields four
+ * zero words, and a NULL `out_args` is a no-op. */
 static inline void wasmos_ipc_pack_name16(const char* name, int32_t out_args[4]) {
     if (!out_args) {
         return;
@@ -447,9 +491,21 @@ static inline int32_t wasmos_exec_handler_register(int32_t proc_endpoint, const 
  * even when multiple contexts belong to the same OS process (each context has
  * independent linear memory).
  */
+/* Create the context's managed reply endpoint on first use and return it
+ * thereafter; returns the endpoint id, or a negative value if the endpoint
+ * could not be created (the failure is not cached and the next call retries). */
 int32_t wasmos_ipc_ensure_reply_endpoint(void);
+/* Hand out the next request id for the managed endpoint. Ids increase from 1
+ * and wrap back to 1 on signed overflow, so they are unique only among the
+ * requests actually in flight, which is all the reply matcher needs. */
 int32_t wasmos_ipc_next_request_id(void);
 
+/* wasmos_ipc_call_retry on the context's managed reply endpoint with an
+ * automatically assigned request id — the common case for a client that has no
+ * reply endpoint of its own. Returns 0 on a matched reply, -1 if the managed
+ * endpoint could not be created, otherwise the underlying call's status.
+ * Blocks until the reply arrives, and discards unrelated traffic that lands on
+ * the managed endpoint while waiting. */
 static inline int32_t wasmos_ipc_call_managed(int32_t server, int32_t type, int32_t arg0,
                                               int32_t arg1, int32_t arg2, int32_t arg3,
                                               wasmos_ipc_message_t* out_reply) {
@@ -461,6 +517,9 @@ static inline int32_t wasmos_ipc_call_managed(int32_t server, int32_t type, int3
                                  arg2, arg3, out_reply, WASMOS_IPC_SEND_RETRY_LIMIT);
 }
 
+/* wasmos_ipc_reply with all four payload arguments; a plain wasmos_ipc_send
+ * named for the reply direction. Returns 0 on success, negative otherwise, and
+ * does not retry a full queue. */
 static inline int32_t wasmos_ipc_reply_full(int32_t destination, int32_t source, int32_t type,
                                             int32_t request_id, int32_t arg0, int32_t arg1,
                                             int32_t arg2, int32_t arg3) {

@@ -4,6 +4,10 @@
 
 #include <stdint.h>
 
+/* pids of the already-spawned fault probes, one per exception the policy watcher expects
+ * to see: a #PF read, a #PF write, a #PF instruction fetch, then #UD, #GP, #DE, #DB, #BP,
+ * #OF, #NM, #SS and #AC.  A zero entry means that probe was not spawned and is not
+ * awaited. */
 typedef struct {
     uint32_t fault_pid;
     uint32_t fault_write_pid;
@@ -19,9 +23,18 @@ typedef struct {
     uint32_t fault_ac_pid;
 } ring3_fault_policy_probes_t;
 
+/* Spawn one more faulting probe for churn round `churn_round` under parent_pid, writing
+ * its pid to *out_pid.  Returns 0 on success, non-zero to stop the churn. */
 typedef int (*ring3_fault_churn_spawn_fn)(uint32_t parent_pid, uint8_t churn_round,
                                           uint32_t* out_pid);
 
+/* Spawn the watcher that waits for each probe in *probes to die of its expected exception
+ * and then drives `churn_rounds` further spawn/fault cycles through churn_spawn, checking
+ * that repeated faulting teardown leaves no state behind.  *probes is copied into module
+ * state, so the caller need not keep it; churn_spawn is stored by pointer and may be NULL
+ * when churn_rounds is 0.  There is one watcher per kernel: a second call overwrites the
+ * first's state.  Returns 0 when the watcher was spawned, -1 on a NULL probes or a failed
+ * spawn.  The test outcome is reported through the log, not this return value. */
 int kernel_ring3_fault_policy_spawn(uint32_t init_pid, const ring3_fault_policy_probes_t* probes,
                                     uint8_t churn_rounds, ring3_fault_churn_spawn_fn churn_spawn);
 

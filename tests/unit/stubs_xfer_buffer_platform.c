@@ -15,8 +15,17 @@
 
 #include "framebuffer.h"
 
+/* Next address the bump allocator hands out, in bytes, page-aligned and only
+ * ever increasing. Starts at 1 MiB so a returned base is never 0, which is the
+ * allocator's failure value. */
 static uint64_t g_next_phys = 0x00100000ULL;
 
+/* Returns the base of a fresh run of `pages` 4 KiB pages, or 0 for pages == 0 --
+ * the same failure value the real allocator uses when it cannot satisfy a
+ * request. That zero-page case is the ONLY failure reachable here: there is no
+ * free pool to exhaust, so a caller's out-of-memory path stays uncovered. The
+ * range is not zeroed and its contents are undefined; nothing maps it, so the
+ * address is an identity token rather than memory a test may dereference. */
 uint64_t pfa_alloc_pages(uint64_t pages) {
     uint64_t base = g_next_phys;
 
@@ -27,11 +36,22 @@ uint64_t pfa_alloc_pages(uint64_t pages) {
     return base;
 }
 
+/* Accepts any (base, pages) and returns the frames nowhere. The real allocator
+ * refcounts frames, releasing one only when its count reaches zero and panicking
+ * on a free below zero; here a double free, a free of a range never allocated,
+ * and a free of a pinned range are all indistinguishable no-ops. A leak on the
+ * path under test is therefore invisible, and so is a double-free. */
 void pfa_free_pages(uint64_t base, uint64_t pages) {
     (void)base;
     (void)pages;
 }
 
+/* Fills *out with the fixed geometry above and returns WASMOS_OK (0), or
+ * WASMOS_INVAL (-1) for a NULL out. A framebuffer is always reported, so the
+ * real function's WASMOS_ERR_FRAMEBUFFER_NOT_PRESENT arm -- and any caller
+ * fallback behind it -- is unreachable in these suites. The base address names
+ * no mapped memory: it bounds a framebuffer-kind acquire and must not be
+ * dereferenced. */
 int framebuffer_get_info(framebuffer_info_t* out) {
     if (!out) {
         return -1;

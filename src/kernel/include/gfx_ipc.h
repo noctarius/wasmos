@@ -11,12 +11,19 @@
 
 #include <stdint.h>
 
+/* Handshake constants a client echoes into a request so a peer built against a different
+ * ABI is rejected rather than silently misread.  The magics are the ASCII tags in the
+ * comments; a caller sends the magic in one argument and (version << 16) | opcode in
+ * another (see the CREATE_WINDOW contract below). */
 #define FB_IPC_ABI_MAGIC 0x46424950u /* FBIP */
 #define FB_IPC_ABI_VERSION 1u
 
 #define GFX_IPC_ABI_MAGIC 0x47465850u /* GFXP */
 #define GFX_IPC_ABI_VERSION 1u
 
+/* Framebuffer-driver opcodes, the layer below the compositor: they address the scanout
+ * hardware itself rather than a window.  Numbered from 0x0100 in a space distinct from
+ * the generated GFX_IPC_* opcodes. */
 enum {
     FB_IPC_GET_INFO = 0x0100,
     FB_IPC_SET_MODE = 0x0101,
@@ -63,6 +70,8 @@ enum {
  *                           If shmem_id==0 only the length is returned.
  */
 
+/* Rectangle in pixels.  Used for damage lists passed through shared memory; x/y are
+ * window-relative and signed so a partially off-window rect can be expressed. */
 typedef struct {
     int32_t x;
     int32_t y;
@@ -70,6 +79,8 @@ typedef struct {
     int32_t h;
 } gfx_rect_t;
 
+/* `kind` of an event the compositor delivers to a window's owner.  GFX_EVENT_NONE means
+ * no event was available, so it is a queue-empty marker, not a deliverable event. */
 enum {
     GFX_EVENT_NONE = 0,
     GFX_EVENT_FOCUS_GAINED = 1,
@@ -81,8 +92,13 @@ enum {
     GFX_EVENT_POINTER_GESTURE = 7
 };
 
+/* Pointer button identifiers.  Numbered from 1 so 0 stays available as "no button", which
+ * is what a gesture that is not button-related packs. */
 enum { GFX_POINTER_BUTTON_LEFT = 1, GFX_POINTER_BUTTON_RIGHT = 2, GFX_POINTER_BUTTON_MIDDLE = 3 };
 
+/* Gesture kinds carried in a GFX_EVENT_POINTER_GESTURE payload.  DOWN/UP are raw
+ * transitions; CLICK, DOUBLE_CLICK and the DRAG_* triple are synthesised by the
+ * compositor from them, so a client that handles both sees each physical action twice. */
 enum {
     GFX_POINTER_GESTURE_DOWN = 1,
     GFX_POINTER_GESTURE_UP = 2,
@@ -93,6 +109,11 @@ enum {
     GFX_POINTER_GESTURE_DRAG_END = 7
 };
 
+/* Pack a pointer gesture into a single 32-bit IPC argument: x in bits [11:0], y in
+ * [23:12], button in [27:24], gesture kind in [31:28].  Each field is masked rather than
+ * range-checked, so a coordinate above 4095 wraps silently and a button or kind above 15
+ * is truncated — the packing bounds the addressable surface to 4096x4096 pixels.  The
+ * four accessors below extract the same fields. */
 static inline uint32_t gfx_pointer_gesture_pack(uint32_t x, uint32_t y, uint32_t button,
                                                 uint32_t gesture) {
     return (x & 0xFFFu) | ((y & 0xFFFu) << 12) | ((button & 0xFu) << 24) | ((gesture & 0xFu) << 28);

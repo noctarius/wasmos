@@ -27,6 +27,9 @@
 #define ND_IPC_OK 0
 #define ND_IPC_EMPTY 1
 
+/* Staging buffer for the early-log replay, and therefore the cap on how much of
+ * the kernel log is replayed at all: a longer log is TRUNCATED to its most
+ * recent EARLY_LOG_BUF bytes, with the oldest output skipped rather than shown. */
 #define EARLY_LOG_BUF 4096
 /* Bochs/QEMU VBE extensions (VBE_DISPI): write a register index to the index
  * port, then its value to the data port. ENABLE must be cleared before the
@@ -257,6 +260,20 @@ static int drain_console_ring(console_ring_t* ring, uint32_t budget) {
     return drained;
 }
 
+/* Native driver entry point (see native_driver_entry_fn_t in
+ * wasmos_native_driver.h). `api` is kernel-owned and borrowed for the whole
+ * call; module_count/arg2/arg3 are passed as zero and ignored.
+ *
+ * Verifies the ABI stamp before touching any other api field, since a mismatched
+ * table would put the function pointers at different offsets than this build
+ * expects. Then maps the framebuffer, builds the cell grid, replays the kernel
+ * early-log ring, and serves FBTEXT control IPC -- including the mode-setting
+ * opcodes this driver supports and the plain framebuffer driver does not.
+ *
+ * Returns -2 on an ABI mismatch, which the loader reports specifically. Returns
+ * 0 when the machine has no usable framebuffer -- a normal outcome on a headless
+ * boot, not an error. On success it does not return: the server loop is
+ * unbounded. */
 int initialize(wasmos_driver_api_t* api, int module_count, int arg2, int arg3) {
     (void)module_count;
     (void)arg2;

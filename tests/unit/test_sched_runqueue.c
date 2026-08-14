@@ -26,6 +26,18 @@
 
 /* ------------------------------------------------------------------ harness */
 
+/* The CPU table the linked scheduler sees, and the three symbols it resolves it through.
+ *
+ * cpu_local() is the WASMOS_HOST_TEST_SMP arm in arch/x86_64/smp.h, which reads
+ * g_host_cpu_local -- a pointer into g_cpus[]. Everything here runs on one thread, so
+ * act_as(n) simply re-points it and the following calls execute "on CPU n".
+ *
+ * g_cpu_count is what the scheduler treats as the online CPU count: it bounds the steal
+ * scan and is the modulus of both placement pickers. harness_reset() puts it back to 4;
+ * the degenerate-count cases mutate it and restore it themselves. Being ONLINE is a
+ * further condition on top of it: cpu_sched_online_mask walks entries below g_cpu_count
+ * and admits only those with started != 0, with CPU 0 always in. That mask is what
+ * affinity is tested against, which is why harness_reset sets started on every entry. */
 cpu_local_t g_cpus[WASMOS_MAX_CPUS];
 uint32_t g_cpu_count = 4;
 _Thread_local cpu_local_t* g_host_cpu_local;
@@ -107,10 +119,19 @@ int thread_wake_if_blocked(uint32_t tid) {
     return 0;
 }
 
+/* Run every subsequent call as `cpu`. The choice is sticky until the next act_as() or
+ * harness_reset() (which returns to CPU 0), which matters because several helpers here
+ * -- pick_on in particular -- leave it changed. `cpu` is not bounds-checked and must be
+ * below WASMOS_MAX_CPUS. */
 static void act_as(uint32_t cpu) {
     g_host_cpu_local = &g_cpus[cpu];
 }
 
+/* Whether any captured tripwire line contains `needle`, matched as a case-sensitive
+ * substring -- so a needle for a hex value must be spelled the way the scheduler formats
+ * it. Only lines captured since the last log_reset() are searched, and only the first
+ * LOG_MAX of them: once the buffer fills, serial_printf_unlocked stops recording, and a
+ * later report would go unseen. */
 static int saw(const char* needle) {
     for (int i = 0; i < g_log_count; ++i) {
         if (strstr(g_log[i], needle)) {
@@ -120,10 +141,20 @@ static int saw(const char* needle) {
     return 0;
 }
 
+/* Discard the captured lines so a case can assert on what one operation reported. It
+ * does not touch the sched_debug counters -- harness_reset clears those through
+ * sched_debug_reset -- and the two are asserted on separately: the counter is the
+ * contract, since a tripwire LINE is rate-limited to powers of two. */
 static void log_reset(void) {
     g_log_count = 0;
 }
 
+/* Counts every evaluation into g_checks and, on failure, counts g_failures and prints
+ * `msg` with the file and line. A failed check does NOT end the case: the remaining
+ * assertions still run, against the state the failure left behind, and check_invariants()
+ * reports into the same counters without the macro. main prints the totals and exits
+ * non-zero if any check failed. `msg` names the property being asserted, in the
+ * affirmative -- it is printed when that property does not hold. */
 #define CHECK(cond, msg)                                                                           \
     do {                                                                                           \
         g_checks++;                                                                                \
@@ -149,6 +180,15 @@ static thread_t* mk_thread(int idx, sched_prio_t prio, thread_state_t state) {
     return t;
 }
 
+/* Per-case fixture reset, called first by every case. Zeroes the CPU table and the
+ * thread pool, re-initialises every queue, marks every CPU online, installs a per-CPU
+ * idle thread, clears the captured log, the tripwire counters and the placement
+ * round-robin cursors, zeroes the resched counter, restores g_cpu_count to 4, and leaves
+ * the caller acting as CPU 0.
+ *
+ * It does NOT clear g_checks or g_failures: those are cumulative for the run and are
+ * what main reports. Threads are not handed out here either -- a case builds the ones it
+ * needs with mk_thread(), which recycles pool slots by index. */
 static void harness_reset(void) {
     memset(g_cpus, 0, sizeof(g_cpus));
     memset(g_pool, 0, sizeof(g_pool));
@@ -294,6 +334,12 @@ static void check_invariants(const char* where) {
  * dispatch ORDER is under test. Returns what was dispatched. */
 static thread_t* pick_and_requeue(uint32_t cpu);
 
+/* Dispatch one thread from `cpu`'s queue, taking and releasing that queue's lock exactly
+ * as the scheduler loop does. The caller is switched to `cpu` for the call and STAYS
+ * there afterwards, which is load-bearing: cpu_sched_pick_next answers its idle fallback
+ * from cpu_local(), so picking on a remote queue returns the CALLER's idle thread.
+ * Returns whatever pick_next returned -- a thread, an idle thread, or NULL when no idle
+ * is installed. */
 static thread_t* pick_on(uint32_t cpu) {
     act_as(cpu);
     cpu_sched_t* cs = &g_cpus[cpu].sched;
@@ -1204,6 +1250,10 @@ static void run_dispatches(int n, int hi, int lo, int* out_band) {
     (void)lo;
 }
 
+/* Enqueue `count` fresh READY threads at `prio` onto CPU 0, taking pool slots
+ * base_idx .. base_idx + count - 1. mk_thread recycles a slot by index, so two seed_band
+ * calls in one case must use disjoint ranges or the second silently reuses the first's
+ * threads. */
 static void seed_band(int prio, int count, int base_idx) {
     for (int i = 0; i < count; ++i) {
         cpu_sched_enqueue(&g_cpus[0].sched,

@@ -1,3 +1,24 @@
+// WASMOS "hello world" for the Go (TinyGo) guest binding.
+//
+// Demonstrates console output (std.Puts / std.Printf) and the async filesystem
+// API, which is the part worth studying. Each fs.*Async call returns an
+// operation whose Then chains the next step and yields a *Future; returning
+// that future is what schedules the step. RunAsyncApp drives the chain and
+// returns the app's exit status, and returning nil ends it — which is what the
+// fail* helpers do after printing their diagnostic.
+//
+// Unlike the Rust and Zig ports, Go closures can capture, so the fd is carried
+// in a closure rather than a global; only the read buffers are package state,
+// to keep them off the small guest stack.
+//
+// The chain reads one byte of /boot/startup.nsh, then creates a file with a
+// long (non-8.3) name, writes it, reads it back for comparison, unlinks it, and
+// stats the removed path expecting a rejection — CatchGo turns that rejection
+// into the success report, and it needs a caller-provided Continuation because
+// the runtime does not allocate one.
+//
+// Preconditions: /boot/startup.nsh must exist and be at least one byte, and the
+// working directory must be writable — the test file uses a relative path.
 package main
 
 const helloPath = "go-long-file-check.txt"
@@ -96,6 +117,11 @@ func fileUnlinked(unlink *AsyncFSOperation) *Future {
 	})
 }
 
+// Main is the app entry point the Go runtime shim calls; args carries the
+// spawn arguments and is unused here. It prints the banner and returns
+// RunAsyncApp's status, which is 0 for a chain that ran to completion — the
+// per-step outcomes are reported through the printed lines the boot test
+// matches on, not through this value.
 func Main(args []string) int32 {
 	_ = args
 	helloData.content = []byte("go shim long filename\n")

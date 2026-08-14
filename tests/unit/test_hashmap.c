@@ -1,8 +1,26 @@
+/* test_hashmap.c — the uint32-keyed hash map (hashmap.h).
+ *
+ * hashmap.c and kmem.c are compiled in for real; only the slab allocator
+ * underneath kmem is replaced, by tests/unit/stubs_slab.c, which forwards to the
+ * host heap. Allocation failure paths are therefore not reachable here.
+ *
+ * The properties under test are the ones callers rely on and a rehash can break:
+ * put is get-or-create and returns the same storage for a repeated key, a value
+ * pointer survives both rehash and the removal of other keys, and iteration
+ * visits every live entry exactly once. The map reads map.bucket_count directly
+ * to confirm growth actually happened rather than inferring it from the entry
+ * count.
+ *
+ * Each case returns 0 to pass or __LINE__ to fail, and wasmos_test_run_all
+ * shuffles the cases and stops at the first failure (test_shuffle.h).
+ */
 #include "hashmap.h"
 #include <stdint.h>
 
 #include "test_shuffle.h"
 
+/* Payload element. Both fields are the test's own: `tag` is a sentinel used to
+ * detect a value that moved or was overwritten during a rehash. */
 typedef struct {
     uint32_t tag;
     uint32_t value;

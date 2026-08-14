@@ -60,6 +60,9 @@ static inline void spinlock_irq_restore(void) {
     }
 }
 
+/* Publishes the lock as free.  Not atomic and not safe to run against a live
+ * lock: it is for a freshly allocated or embedded lock only, before any other
+ * CPU can reach it.  A NULL lock is ignored, as everywhere else in this file. */
 void spinlock_init(spinlock_t* lock) {
     if (!lock) {
         return;
@@ -80,6 +83,16 @@ int spinlock_try_lock(spinlock_t* lock) {
     return __sync_lock_test_and_set(&lock->state, 1u) == 0u;
 }
 
+/* Spins until acquired; returns holding the lock with IF=0 and preemption
+ * disabled one level deeper.  Must be paired with spinlock_unlock.
+ *
+ * The IRQ/preempt state is established and then RELEASED again on every failed
+ * attempt rather than held across the whole wait.  Backing out is what keeps the
+ * wait harmless: the pause loop otherwise runs with interrupts masked for as
+ * long as a remote holder takes, delaying every device IRQ on this CPU, and
+ * leaves the preempt depth raised so this CPU cannot even be rescheduled onto
+ * other work.  A NULL lock returns immediately WITHOUT acquiring anything, so a
+ * caller that ignores it and calls spinlock_unlock(NULL) stays balanced. */
 void spinlock_lock(spinlock_t* lock) {
     if (!lock) {
         return;
@@ -96,6 +109,10 @@ void spinlock_lock(spinlock_t* lock) {
     }
 }
 
+/* Undoes spinlock_lock in the exact reverse order: the lock word is released
+ * first, then the preempt depth, then RFLAGS.  Releasing the word last would
+ * leave a window in which this CPU has already re-enabled interrupts (and can
+ * take an IRQ, or be preempted) while still holding the lock. */
 void spinlock_unlock(spinlock_t* lock) {
     if (!lock) {
         return;

@@ -31,6 +31,12 @@ static volatile uint8_t g_timer_log_pending;
 static uint64_t g_timer_log_threshold;
 static uint32_t g_timer_hz = 250;
 
+/* hz is the requested tick rate; 0 is replaced by the 250 Hz default rather than
+ * refused, because a zero rate would make timer_ms_to_ticks() answer 0 for every
+ * duration and turn every timed wait into a busy retry.  In PIT mode the divisor
+ * is clamped to 1..0xFFFF, so the achieved rate saturates at roughly 18.2 Hz
+ * (divisor 0xFFFF) and PIT_BASE_HZ (divisor 1); g_timer_hz keeps the REQUESTED
+ * value either way, so tick conversions drift if the clamp engages. */
 void timer_init(uint32_t hz) {
     if (hz == 0) {
         hz = 250;
@@ -97,6 +103,10 @@ uint64_t timer_ticks(void) {
     return g_timer_ticks;
 }
 
+/* Rounds UP, so a non-zero millisecond duration never converts to a zero-tick
+ * deadline that would expire on the very next sched_timeout_check().  The result
+ * is still coarse: one tick is 1000/hz ms, so any ms below that rounds to a
+ * single tick and the real wait can be up to one tick longer than asked. */
 uint64_t timer_ms_to_ticks(uint32_t ms) {
     return ((uint64_t)ms * g_timer_hz + 999u) / 1000u;
 }

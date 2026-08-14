@@ -74,6 +74,25 @@ function plant(endpoint, type, requestId, source, arg0, arg1, arg2, arg3) {
   });
 }
 
+/* The fake fabric, bound as the guest's `wasmos` import module. Return
+ * polarities follow abi/hostcalls.yaml: ipc_send is 0 on success and negative on
+ * failure; ipc_drain is 1 received / 0 empty / -1 error; ipc_select_add and
+ * ipc_select_destroy are 0 on success and -1 on failure; ipc_select_create
+ * returns a positive set ID or -1; ipc_select_wait returns the ready endpoint.
+ *
+ * Divergences from the real host calls, all in the direction of being more
+ * permissive:
+ *  - ipc_last_field answers 0 for an out-of-range field and for a slot no
+ *    message has been written into, where the real call answers -1 for both. A
+ *    guest that distinguishes "field absent" from "field is zero" is not
+ *    exercised.
+ *  - ipc_drain never returns -1: an unknown endpoint reads as empty rather than
+ *    invalid, so the error arm of a drain loop is unreachable.
+ *  - ipc_select_add accepts any endpoint, including one that was never planted
+ *    to or that a real kernel would not let this context watch.
+ *  - Endpoints spring into existence on first use; there is no registration
+ *    step, no ownership, and no per-endpoint capacity, so a queue never fills.
+ */
 const wasmos = {
   ipc_send: (dest, src, type, reqId, a0, a1, a2, a3) => {
     sendCount++;
@@ -141,6 +160,8 @@ const harness = {
     sendFailFrom = endpoint;
     return 0;
   },
+  /* Messages queued on `endpoint` and not yet drained. An endpoint never sent to
+     reads as 0, the same as one that has been fully drained. */
   pending: (endpoint) => {
     const q = queues.get(endpoint);
     return q ? q.length : 0;
@@ -165,7 +186,12 @@ const harness = {
   reportOrder: (index) => {
     failedOrder.push(index);
   },
+  /* Blocking waits the guest has performed since the last reset, counting both
+     wait variants: the evidence that it blocked rather than spun. */
   waitCount: () => waitCount,
+  /* Of those, how many were the bounded variant, and the timeout the last one
+     asked for in milliseconds -- -1 when there has been none. A guest asking for
+     0 ms means "wait forever", so 0 and -1 are different answers. */
   timeoutWaitCount: () => timeoutWaits.length,
   lastTimeoutMs: () => (timeoutWaits.length ? timeoutWaits[timeoutWaits.length - 1] : -1),
   /* Refuse select-set creation, so a test can drive the cannot-block path. */
@@ -173,7 +199,14 @@ const harness = {
     selectBroken = broken !== 0;
     return 0;
   },
+  /* Sends attempted since the last reset, counting the ones made to fail. */
   sendCount: () => sendCount,
+  /* Return the fabric to its start state between cases: queues, select sets, the
+     last-received slot, the select-ID counter, every scripted behaviour and
+     every counter. Select-set IDs restart at 1, so an ID a case still holds
+     across a reset can collide with a freshly created set.
+     NOT reset, deliberately: the seed and the recorded failure order, which
+     belong to the run rather than to a case. */
   reset: () => {
     queues.clear();
     selects.clear();

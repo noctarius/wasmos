@@ -26,7 +26,35 @@
  *
  * Header-only (static inline), matching the rest of libsys. Descriptor
  * addresses are DEVICE addresses (region_phys + offset); the caller translates
- * between its linear-memory view of the region and those device addresses. */
+ * between its linear-memory view of the region and those device addresses.
+ *
+ * Descriptor lifecycle, driver side. A descriptor index is owned by exactly one
+ * of three places and moves between them in this order:
+ *
+ *   free list -> vring_alloc_desc() -> owned by the driver, being filled
+ *             -> vring_publish()    -> owned by the DEVICE, must not be touched
+ *             -> vring_get_used()   -> owned by the driver again, buffer readable
+ *             -> vring_free_desc()  -> free list
+ *
+ * Nothing enforces that order: publishing an index twice, or freeing one the
+ * device still owns, hands the same buffer to two users. The buffer a
+ * descriptor points at is likewise off-limits between publish and get_used -
+ * for a device-writable (VRING_DESC_F_WRITE) descriptor the device is writing
+ * into it, and its contents are only meaningful after get_used() reports the
+ * completion length.
+ *
+ * Ordering. vring_publish() fences between the descriptor/ring-entry stores and
+ * the avail_idx bump, so a device that observes the new index also observes
+ * what it points at. vring_kick() fences before the doorbell, so avail_idx is
+ * visible before the device is told to look. On the completion side the fence
+ * lives in vring_has_used(), which is why the used-ring element must only be
+ * read through vring_get_used(). Nothing here is a cache-maintenance
+ * operation: it is store/load ordering only, which is what a cache-coherent
+ * x86 DMA device needs.
+ *
+ * Concurrency. Single producer, single consumer: one context must own the
+ * queue. avail_idx, free_head/num_free and last_used_idx are all plain
+ * read-modify-write state with no locking. */
 
 #include <stdint.h>
 
@@ -39,19 +67,26 @@ extern "C" {
 #define VRING_DESC_F_WRITE 2u    /* device writes into this buffer (device-writable) */
 #define VRING_DESC_F_INDIRECT 4u /* buffer is an indirect descriptor table (unused) */
 
+/* One descriptor-table entry, laid out as the device reads it. While the
+ * descriptor sits on the free list `next` is reused as the free-list link. */
 typedef struct __attribute__((packed)) {
     uint64_t addr; /* device/physical address of the buffer */
-    uint32_t len;
+    uint32_t len;  /* buffer size in bytes */
     uint16_t flags;
     uint16_t next; /* chain index when VRING_DESC_F_NEXT is set */
 } vring_desc_t;
 
+/* One used-ring element: the device's report that it has finished with a
+ * previously published chain. */
 typedef struct __attribute__((packed)) {
     uint32_t id;  /* index of the head descriptor of the completed chain */
     uint32_t len; /* number of bytes written by the device */
 } vring_used_elem_t;
 
-/* A live virtqueue. Pointers reference into the caller's mapped region. */
+/* A live virtqueue. Pointers reference into the caller's mapped region, so the
+ * whole struct is invalidated if that region is unmapped or moved; re-run
+ * vring_layout() rather than patching it. All of it is filled in by
+ * vring_layout(); callers read it but do not assign to it. */
 typedef struct {
     uint16_t num;          /* queue size (power of two) */
     uint64_t region_phys;  /* device address of the region base */
@@ -80,6 +115,7 @@ static inline void vring_mb(void) {
     __atomic_thread_fence(__ATOMIC_SEQ_CST);
 }
 
+/* Round x up to a multiple of `a`, which must be a power of two. */
 static inline uint64_t vring_align_up(uint64_t x, uint64_t a) {
     return (x + (a - 1)) & ~(a - 1);
 }
@@ -139,6 +175,9 @@ static inline int32_t vring_layout(vring_t* vq, uint8_t* region_base, uint64_t r
     return 0;
 }
 
+/* Install the doorbell vring_kick() calls; vring_layout() clears it, so this
+ * must be re-done after every layout. A queue with no notify callback still
+ * publishes correctly, but the device is never told. */
 static inline void vring_set_notify(vring_t* vq, void (*notify)(void* user), void* user) {
     vq->notify = notify;
     vq->notify_user = user;
@@ -148,7 +187,12 @@ static inline void vring_set_notify(vring_t* vq, void (*notify)(void* user), voi
  * combination of VRING_DESC_F_*, with VRING_DESC_F_NEXT masked off. Returns the
  * descriptor index, or -1 if the free list is empty.
  * TODO: chained (multi-descriptor) buffers are unsupported, so a request whose
- * payload is not physically contiguous cannot be expressed. */
+ * payload is not physically contiguous cannot be expressed.
+ *
+ * The returned index is the driver's until it is published; the buffer it
+ * names must stay valid and untouched from vring_publish() until the matching
+ * vring_get_used(). Running out of descriptors is an ordinary backpressure
+ * signal, not an error: retry after reclaiming completions. */
 static inline int32_t vring_alloc_desc(vring_t* vq, uint64_t buf_phys, uint32_t len,
                                        uint16_t flags) {
     if (vq->num_free == 0)
@@ -163,7 +207,11 @@ static inline int32_t vring_alloc_desc(vring_t* vq, uint64_t buf_phys, uint32_t 
     return (int32_t)head;
 }
 
-/* Return a descriptor (chain head) to the free list. */
+/* Return a descriptor (chain head) to the free list, making it available to the
+ * next vring_alloc_desc(). Only legal once the device has reported the
+ * descriptor through vring_get_used(), or before it was ever published. An
+ * out-of-range index is ignored; a double free is not detected and corrupts the
+ * free list. */
 static inline void vring_free_desc(vring_t* vq, uint16_t head) {
     if (head >= vq->num)
         return;
@@ -190,7 +238,12 @@ static inline void vring_kick(vring_t* vq) {
         vq->notify(vq->notify_user);
 }
 
-/* Nonzero if the device has completed buffers that are not yet consumed. */
+/* Nonzero if the device has completed buffers that are not yet consumed.
+ * It compares the device's used_idx against last_used_idx, so it answers "is
+ * the used ring ahead of us" - not whether any particular descriptor is done.
+ * It is also the acquire fence for the used ring: a used-ring element may only
+ * be read after this has returned nonzero, which is why vring_get_used() calls
+ * it rather than re-reading used_idx itself. */
 static inline int32_t vring_has_used(vring_t* vq) {
     vring_mb(); /* observe the device's latest used_idx */
     return (int32_t)(*vq->used_idx != vq->last_used_idx);

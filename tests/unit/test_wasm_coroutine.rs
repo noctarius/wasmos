@@ -1,3 +1,15 @@
+//! Rust binding tests for the stackless WASM coroutine/future core.
+//!
+//! The cases drive src/libc/rust/coroutine.rs -- pulled in by path rather than
+//! as a crate -- against src/libsys/wasm/coroutine_wasm.c compiled for the build
+//! host, so the core is the same C implementation every other language suite
+//! runs and what is unique here is the `#[repr(C)]` binding.
+//!
+//! The harness must run single-threaded (`--test-threads=1`). coroutine_wasm.c
+//! keeps the runtime that is currently resuming a task in a file-global, which
+//! is sound for a single-threaded guest but not for libtest's default parallel
+//! cases: two of them racing on it park a waiter against another case's runtime,
+//! which then never wakes.
 #![allow(dead_code)]
 
 extern crate core;

@@ -62,6 +62,13 @@ static inline uint64_t page_align(uint64_t n) {
 /* 512 MB window — must stay below KERNEL_SHARED_HIGHER_HALF_WINDOW_BYTES */
 #define WARP_JIT_PHYS_LIMIT (512ULL * 1024ULL * 1024ULL)
 
+/* Allocate `length` bytes (rounded up to whole pages) of RWX memory for JIT code.
+ * `addr`, `prot`, `flags`, `fd` and `offset` are all ignored — the placement is always
+ * the kernel higher-half alias of a fresh physical run below WARP_JIT_PHYS_LIMIT, so a
+ * caller cannot request a fixed address or narrower permissions.  Returns that address,
+ * or MAP_FAILED for a zero length, when no physical run is available, or when the
+ * fixed WARP_MAX_MMAPS tracking table is full.  Only the returned base may be passed to
+ * munmap; partial unmapping is not supported. */
 void* mmap(void* addr, size_t length, int prot, int flags, int fd, long offset) {
     (void)addr;
     (void)prot;
@@ -101,6 +108,9 @@ int mprotect(void* addr, size_t len, int prot) {
     return 0;
 }
 
+/* Release a mapping created by mmap.  `addr` must be exactly the base mmap returned
+ * and `length` is ignored — the tracked page count is used instead.  Returns 0 on
+ * success, -1 for a null/MAP_FAILED address or one that is not a tracked base. */
 int munmap(void* addr, size_t length) {
     (void)length;
     if (!addr || addr == MAP_FAILED)
@@ -146,11 +156,14 @@ int sigaction(int sig, const struct sigaction* act, struct sigaction* oldact) {
     return 0;
 }
 
+/* No file descriptors exist in this build; accepts any `fd` and reports success. */
 int close(int fd) {
     (void)fd;
     return 0;
 }
 
+/* Frees a block from the slab-backed malloc in warp/linker_stubs.cpp.  A null pointer
+ * is a no-op. */
 void free(void* ptr) {
     kfree_small(ptr);
 }

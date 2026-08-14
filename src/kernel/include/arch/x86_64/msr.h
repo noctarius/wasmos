@@ -1,4 +1,10 @@
-/* msr.h - Inline rdmsr/wrmsr helpers for x86_64 Model Specific Registers. */
+/* msr.h - Inline rdmsr/wrmsr helpers for x86_64 Model Specific Registers.
+ *
+ * Both instructions are ring-0 only and split the 64-bit value across EDX:EAX; these
+ * wrappers hide that split and take/return one uint64_t.  Neither validates the MSR
+ * number: reading or writing an MSR the CPU does not implement raises #GP, and a
+ * write with reserved bits set does the same, so callers must read-modify-write rather
+ * than assign a whole register blind. */
 #pragma once
 
 #include <stdint.h>

@@ -1,12 +1,28 @@
 #pragma once
 /* compat/atomic — freestanding stub of <atomic>
  *
- * WARP uses std::atomic_thread_fence to ensure memory ordering around JIT
- * code emission.  It maps to the GCC/clang built-in __sync_synchronize(),
- * which emits a full memory barrier (MFENCE on x86_64).
+ * Provides memory_order, atomic_thread_fence, atomic_signal_fence and an
+ * atomic<T> with load, store, exchange, compare_exchange_strong/weak,
+ * assignment, conversion to T and is_lock_free.
  *
- * A minimal std::atomic<T> is also provided for load/store uses, built on the
- * __atomic_* built-ins that are always available in clang. */
+ * WARP uses std::atomic_thread_fence to order JIT code emission against the
+ * subsequent execution of that code (WasmModule.cpp), and std::atomic<T> as a
+ * plain word-sized cell: VirtualMemoryAllocator's committedSize_/totalSize_ and
+ * LinearMemoryAllocator's pagedMemoryLimit_ are only loaded, stored and
+ * assigned.  No compiled WARP source performs an atomic read-modify-write.
+ *
+ * Unlike compat/mutex, this is NOT a no-op stub: every operation lowers to a
+ * clang __atomic built-in and is genuinely atomic, so it stays correct if WARP
+ * is ever run on more than one CPU.  Two deliberate deviations:
+ *   - the memory_order argument is ignored and every operation is issued as
+ *     __ATOMIC_SEQ_CST.  That is strictly stronger than what the caller asked
+ *     for, so it can cost performance but never correctness.
+ *   - the default constructor leaves the value uninitialised, matching C++14.
+ *
+ * fetch_add/fetch_sub, operator++/--/+=, atomic_flag and the free-function
+ * atomic_load/atomic_store family are absent.  Reaching for them is a compile
+ * error at the call site — an accidental non-atomic read-modify-write through
+ * the conversion operator cannot be written, because there is no operator+=. */
 
 namespace std {
 

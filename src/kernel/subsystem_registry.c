@@ -304,6 +304,18 @@ static int exec_match_validate_tree(const wasmos_exec_match_node_t* nodes, uint3
     return max_prefix <= max_probe_bytes ? 0 : -1;
 }
 
+/* Registers a kernel-internal handler for request_tag, dispatched through the
+ * *ops vtable.  Entries created here carry owner_context_id 0, which is what
+ * makes them permanent: wasmos_subsystem_registry_drop_owner refuses to touch
+ * context 0, so only wasmos_subsystem_registry_reset removes them.
+ *
+ * ops is stored by pointer and borrowed; it must outlive the registration.  Both
+ * tags are validated and copied into the entry.  A request_tag already
+ * registered is REFUSED, so a built-in cannot be shadowed.
+ *
+ * Returns 0 on success and -1 for a NULL argument, an invalid tag, a duplicate
+ * tag, or an allocation failure.  Takes g_subsystem_lock and initialises the
+ * tables on first use. */
 int wasmos_subsystem_registry_register_builtin(const char* request_tag, const char* runtime_tag,
                                                uint8_t uses_wasm_payload,
                                                uint8_t needs_runtime_lock,
@@ -391,6 +403,25 @@ static void subsystem_count_brokers_locked(uint32_t owner_context_id, uint32_t* 
     }
 }
 
+/* Registers a USER-SPACE handler for request_tag, dispatched by IPC to
+ * broker_endpoint rather than through a vtable.
+ *
+ * owner_context_id is what ties the registration to a lifetime: a non-zero owner
+ * makes the entry disappear with its context through
+ * wasmos_subsystem_registry_drop_owner, and is also what the per-owner cap is
+ * counted against.  A zero owner registers a broker that only a full reset
+ * removes.
+ *
+ * broker_name is optional (NULL or empty is accepted); the tags are validated
+ * and every string is copied.  A request_tag already registered — built-in or
+ * broker — is refused.
+ *
+ * Two caps apply: WASMOS_SUBSYSTEM_MAX_BROKERS overall, and
+ * WASMOS_SUBSYSTEM_MAX_BROKERS_PER_OWNER for a non-zero owner, so one context
+ * cannot exhaust the table.
+ *
+ * Returns 0 on success and -1 for a NULL tag, an invalid tag or broker name, a
+ * duplicate, a cap, or an allocation failure.  Takes g_subsystem_lock. */
 int wasmos_subsystem_registry_register_broker(const char* request_tag, const char* runtime_tag,
                                               const char* broker_name, uint32_t broker_endpoint,
                                               uint32_t owner_context_id, uint8_t uses_wasm_payload,
@@ -463,6 +494,30 @@ int wasmos_subsystem_registry_register_broker(const char* request_tag, const cha
     return 0;
 }
 
+/* Registers an executable-format matcher that routes a blob to an already
+ * registered BROKER subsystem.
+ *
+ * request_tag must name an existing broker entry — a built-in cannot own an exec
+ * handler — and the new entry inherits that broker's runtime tag, broker name
+ * and endpoint rather than taking its own.
+ *
+ * The matcher is a tree of `node_count` nodes rooted at root_index, validated
+ * before acceptance: nodes must be in range, the tree acyclic, and the deepest
+ * byte it can examine must not exceed max_probe_bytes.  The node array is COPIED
+ * into kmem, so the caller's array is borrowed for the call only.
+ *
+ * priority orders handlers when several match; ties break on handler name and
+ * then request tag, so the choice is deterministic.  max_probe_bytes feeds the
+ * registry-wide maximum reported by
+ * wasmos_subsystem_registry_exec_max_probe_bytes.
+ *
+ * Caps mirror the broker ones: WASMOS_EXEC_HANDLER_MAX overall and
+ * WASMOS_EXEC_HANDLER_MAX_PER_OWNER for a non-zero owner.  A (handler_name,
+ * request_tag) pair that already exists is refused.
+ *
+ * Returns 0 on success and -1 for a NULL argument, an invalid tag, an invalid or
+ * too-deep matcher, an over-long handler name, a missing or non-broker owner
+ * entry, a duplicate, a cap, or an allocation failure. */
 int wasmos_subsystem_registry_register_exec_handler(const char* handler_name,
                                                     const char* request_tag,
                                                     uint32_t owner_context_id, uint32_t priority,
@@ -613,6 +668,12 @@ wasmos_subsystem_registry_find_exec_handler(const wasmos_exec_probe_t* probe) {
     return best;
 }
 
+/* The largest max_probe_bytes any registered exec handler declared, so a caller
+ * knows how much of a candidate blob to read before classifying.  0 when no exec
+ * handler is registered.
+ *
+ * It only ever grows as handlers are added: dropping a handler recomputes it,
+ * but registering never lowers it.  Takes g_subsystem_lock. */
 uint32_t wasmos_subsystem_registry_exec_max_probe_bytes(void) {
     uint32_t max_probe_bytes = 0u;
 
@@ -622,6 +683,16 @@ uint32_t wasmos_subsystem_registry_exec_max_probe_bytes(void) {
     return max_probe_bytes;
 }
 
+/* Frees BOTH tables completely — built-in entries included — and clears the
+ * probe maximum, returning the registry to its pre-init state.
+ *
+ * Any wasmos_subsystem_registry_entry_t or exec-handler pointer previously
+ * handed out is dangling afterwards, and every ops vtable reference is dropped
+ * (the vtables themselves are borrowed and not freed).  The built-ins must be
+ * re-registered before another package can resolve.
+ *
+ * Intended for test teardown.  Returns immediately when nothing was ever
+ * registered. */
 void wasmos_subsystem_registry_reset(void) {
     if (!g_subsystem_map_initialized && !g_exec_handlers) {
         return;
@@ -657,6 +728,16 @@ void wasmos_subsystem_registry_reset(void) {
     ksync_spinlock_unlock(&g_subsystem_lock);
 }
 
+/* Removes everything a dying context registered: its BROKER subsystem entries
+ * and its exec handlers, freeing both the entries and their matcher node arrays.
+ * Built-in entries are untouched — they are matched by kind, not only by owner.
+ *
+ * Context 0 is refused outright, so the kernel's own registrations cannot be
+ * dropped this way.
+ *
+ * The registry-wide exec probe maximum is RECOMPUTED from the survivors, which
+ * is the only path that ever lowers it.  Reports nothing; a context that
+ * registered nothing is a no-op. */
 void wasmos_subsystem_registry_drop_owner(uint32_t owner_context_id) {
     wasmos_exec_handler_registry_entry_t** link = 0;
     wasmos_exec_handler_registry_entry_t* entry = 0;

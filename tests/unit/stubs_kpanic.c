@@ -12,6 +12,16 @@
 
 #include "kpanic.h"
 
+/* Print `reason` with its two context words and abort. `a` and `b` are whatever
+ * the panicking call site chose to carry -- their meaning is per call site, not
+ * fixed. A NULL reason prints "(null)" rather than faulting. Never returns,
+ * matching the real declaration, and the process exits by SIGABRT so the suite
+ * fails.
+ *
+ * Only the message reaches a test. The real kpanic first NMI-IPIs every other
+ * CPU and dumps each one's register context and backtrace, none of which a host
+ * process has; the concurrent-panic race it arbitrates does not arise here
+ * either, so two threads panicking at once interleave their output. */
 __attribute__((noreturn)) void kpanic(const char* reason, uint64_t a, uint64_t b) {
     printf("  [KPANIC] %s (a=%llu b=%llu)\n", reason ? reason : "(null)", (unsigned long long)a,
            (unsigned long long)b);
@@ -19,6 +29,9 @@ __attribute__((noreturn)) void kpanic(const char* reason, uint64_t a, uint64_t b
     abort();
 }
 
+/* Discards the interrupted CPU context a caller would record before panicking.
+ * There is no per-CPU panic slot to fill on the host and nothing reads one back,
+ * so the register values a target dump would show are unavailable to a test. */
 void kpanic_capture_origin(uint64_t rip, uint64_t rsp, uint64_t rbp, uint64_t rflags, uint64_t cs) {
     (void)rip;
     (void)rsp;

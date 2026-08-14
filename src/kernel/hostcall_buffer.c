@@ -1,5 +1,18 @@
 #include "hostcall_buffer.h"
 
+/* Measures a bounded name and works out how much of it fits, without copying
+ * anything: the caller does the copy of *copy_len bytes and appends its own
+ * terminator.
+ *
+ * *true_len is the name's length as measured, itself capped at name_max, so an
+ * unterminated name reports name_max rather than running off the end.  *copy_len
+ * is *true_len clamped to out_size - 1, leaving room for that terminator.  A
+ * caller detects truncation by *true_len > *copy_len.
+ *
+ * Returns WASMOS_INVAL for a NULL argument or a zero out_size, WASMOS_OK
+ * otherwise.  Both outputs are zeroed once the pointers are known good, so a
+ * zero-out_size rejection still leaves them defined; a NULL-pointer rejection
+ * writes nothing. */
 wasmos_error_code_t hostcall_name_clamp(const char* name, uint32_t name_max, uint32_t out_size,
                                         uint32_t* true_len, uint32_t* copy_len) {
     if (!name || !true_len || !copy_len) {

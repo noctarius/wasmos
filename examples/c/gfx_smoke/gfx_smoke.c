@@ -1,3 +1,39 @@
+/* gfx_smoke - compositor and libui exercise, and the reference for how a C app
+ * drives the gfx service.
+ *
+ * Two levels are demonstrated side by side. Three windows are created through
+ * libui (ui_init) but painted by hand at the raw protocol level, and a fourth
+ * is a pure libui component demo (label, button, checkbox, text input, list
+ * view inside a panel) driven only by ui_loop_handle_ipc / ui_loop_drain.
+ *
+ * The raw painting sequence an app author has to get right:
+ *   1. GFX_IPC_ALLOC_SHARED_BUFFER returns a buffer id, a shmem id and a
+ *      stride; map the shmem with wasmos_shmem_map_auto over the whole
+ *      page-rounded byte length;
+ *   2. write ARGB32 pixels through that mapping;
+ *   3. wasmos_shmem_flush the written range — without it the compositor is not
+ *      guaranteed to observe the pixels;
+ *   4. GFX_IPC_PRESENT_WINDOW to publish the buffer;
+ *   5. on a resize event, allocate a new buffer, map it, release the old one.
+ * A damage rectangle is passed by a separate one-page shmem region that must be
+ * granted to the compositor's process before it can be read (see
+ * create_damage_rect_shmem); the drawing buffer needs no grant of its own,
+ * since the compositor allocated it.
+ *
+ * The run also asserts the refusal paths: presenting an unknown buffer id,
+ * presenting after the window is destroyed, and releasing a buffer twice must
+ * all be rejected.
+ *
+ * Prints "[test] gfx smoke app ok" on success; every failure exits with a
+ * distinct GFX_SMOKE_E_* code so the failing stage is identifiable from the
+ * status alone.
+ *
+ * While waiting it echoes every key event to serial, which is the observable
+ * channel keyboard-delivery tests match on.
+ *
+ * Preconditions: the "gfx" and "font" services must be running, and the test
+ * harness must close all three raw windows — the app does not exit until it has
+ * seen a close request for each. */
 #include <stdint.h>
 #include "stdio.h"
 #include "wasmos/api.h"

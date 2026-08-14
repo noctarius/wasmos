@@ -1,3 +1,25 @@
+//! WASMOS "hello world" for the Zig guest binding.
+//!
+//! Demonstrates console output (`wasmos.stdlib.println` / `printf`) and the
+//! async filesystem API in `wasmos.coroutine`, which is the part worth
+//! studying.
+//!
+//! Each `*Async` call returns an `AsyncFsOp`; `then` chains the next step and
+//! yields a `?*Future`, `catchReject` handles a rejection, and returning that
+//! future is what schedules the next step. `coroutine.runAsyncApp` drives the
+//! whole chain. Returning null ends it, which is what the `fail*` helpers do
+//! after printing their diagnostic.
+//!
+//! The chain reads one byte of `/boot/startup.nsh`, then creates a file with a
+//! long (non-8.3) name, writes it, reads it back for comparison, unlinks it,
+//! and stats the removed path expecting a rejection — the reject handler is
+//! where the success lines are printed.
+//!
+//! The callbacks are plain function pointers and cannot capture, so the fd and
+//! the read buffers threaded through the chain live in module-scope globals.
+//!
+//! Preconditions: `/boot/startup.nsh` must exist and be at least one byte, and
+//! the working directory must be writable — the test file uses a relative path.
 const std = @import("std");
 const wasmos = @import("wasmos.zig");
 const coroutine = wasmos.coroutine;
@@ -116,6 +138,9 @@ fn statRejected(status: i32) i32 {
     return 0;
 }
 
+/// App entry point. Prints the banner, then runs the async chain to completion.
+/// Always returns 0: the chain reports its own outcome through the printed
+/// lines the boot test matches on, and `runAsyncApp`'s status is discarded.
 pub fn main() u8 {
     _ = wasmos.stdlib.println("Hello from Zig on WASMOS!", .{}) catch {};
     _ = wasmos.stdlib.println("This is a tiny WASMOS-APP written in Zig.", .{}) catch {};

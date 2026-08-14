@@ -1,3 +1,15 @@
+/* test_net_socket.c — the net stack's socket table (socket.h): slot lifecycle,
+ * the owner check that keeps one client off another's socket, and the descriptor
+ * validation that stands between a client's claim and an attached ring.
+ *
+ * src/services/net_stack/socket.c is the only source linked in; the ring buffer
+ * is header-only. lwIP is absent, so every state here is the one socket.c itself
+ * assigns -- no pcb is created, no handshake completes, and the CLOSING state
+ * (entered only from the lwIP error callback) is unreachable.
+ *
+ * Each case returns 0 to pass or __LINE__ to fail, and wasmos_test_run_all
+ * shuffles the cases and stops at the first failure (test_shuffle.h).
+ */
 #include "socket.h"
 
 #include <stdint.h>
@@ -5,17 +17,36 @@
 
 #include "test_shuffle.h"
 
+/* Data-region bytes per ring. Must be a power of two -- wasmos_ringbuf_init
+ * refuses anything else, since the ring indexes with `pos & (capacity - 1)`.
+ * The value itself is arbitrary: no case moves bytes through a ring. */
 #define CAPACITY 64u
 
+/* The two shared ring regions, one per direction. Each is exactly what
+ * wasmos_ringbuf_bytes_for(CAPACITY) asks for -- the 64-byte header plus the
+ * data region -- and 64-byte aligned because the header type requires it. They
+ * are file statics shared by every case, and the cases run in a shuffled order,
+ * so a case that cares about the header state re-initialises it first: a
+ * previous case's close leaves PEER_CLOSED set. On target this memory would be
+ * an xfer buffer the client owns and the service maps. */
 static uint8_t tx_region[WASMOS_RINGBUF_HDR_BYTES + CAPACITY] __attribute__((aligned(64)));
 static uint8_t rx_region[WASMOS_RINGBUF_HDR_BYTES + CAPACITY] __attribute__((aligned(64)));
 
+/* Bail out of the case at the first failure, returning the line number as the
+ * marker wasmos_test_run_all prints. Nothing is counted and nothing after it in
+ * the case runs. */
 #define CHECK(expr)                                                                                \
     do {                                                                                           \
         if (!(expr))                                                                               \
             return __LINE__;                                                                       \
     } while (0)
 
+/* An open descriptor that passes every check in net_socket_open: current
+ * version, self-declared size, AF_INET/STREAM, and four non-zero buffer/borrow
+ * ids (a zero in any of them is the "no capability" spelling and is refused).
+ * tx_bytes/rx_bytes describe the regions above, so the attach that follows finds
+ * a whole ring. Returned by value; cases mutate one field to build a rejection
+ * case. */
 static net_socket_open_descriptor_v1_t valid_descriptor(void) {
     net_socket_open_descriptor_v1_t descriptor;
     memset(&descriptor, 0, sizeof(descriptor));

@@ -68,6 +68,12 @@ typedef struct {
 int idtable_init(idtable_t* table, uint32_t elem_size, uint32_t chunk_capacity,
                  uint32_t per_owner_max);
 
+/**
+ * Release the backing store. Element pointers and ids are invalid afterwards.
+ * No per-element callback runs, so anything the elements own must already have
+ * been undone (idtable_release_owner is the hook for that). The handle is left
+ * reusable by a fresh idtable_init.
+ */
 void idtable_destroy(idtable_t* table);
 
 /**

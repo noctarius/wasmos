@@ -1,12 +1,29 @@
 #pragma once
 /* compat/stdexcept — freestanding stub of <stdexcept>
  *
- * Provides std::runtime_error (and its ancestors in the hierarchy).  WARP
- * throws these; warp/cxx_abi.cpp turns a throw into a longjmp to the WARP_CALL
- * checkpoint, so the message is the only state that survives.
+ * Provides logic_error and runtime_error over compat/exception, plus
+ * invalid_argument, out_of_range, overflow_error, underflow_error and
+ * range_error.  domain_error and length_error are not provided.
  *
- * The message string is stored as a plain const char * (no heap copy) to
- * avoid pulling in allocator machinery. */
+ * This is the one compat header whose sufficiency is not pinned to observed
+ * WARP usage: no WARP source under libs/warp/src includes <stdexcept> or throws
+ * any of these types.  WARP names std::runtime_error and std::range_error only
+ * in @throws documentation comments (ExtendableMemory.hpp, Runtime.hpp,
+ * Compiler.hpp, Frontend.hpp) while actually throwing its own RuntimeError and
+ * ValidationException from core/common/VbExceptions.hpp.  So the set below is
+ * what the kernel build links, not a set derived from real call sites; treat a
+ * gap here as expected rather than surprising.
+ *
+ * Two deviations from the standard, both deliberate:
+ *   - the constructors take const char * rather than std::string, and the
+ *     pointer is stored without copying, so the caller must pass a string with
+ *     a lifetime at least as long as the exception object.  A string literal
+ *     always qualifies; a stack buffer does not.
+ *   - throwing does not unwind; see compat/exception for what survives the
+ *     longjmp to the driver checkpoint.  Because catch clauses never select on
+ *     type there, the distinction between these classes is documentation only.
+ * Constructing one from a std::string is a compile error, not a silent
+ * truncation. */
 
 #include "exception"
 

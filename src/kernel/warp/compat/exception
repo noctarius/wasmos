@@ -1,10 +1,27 @@
 #pragma once
 /* compat/exception — freestanding stub of <exception>
  *
- * Provides std::exception as a minimal base class so WARP code that derives
- * from it compiles.  Throwing works (the WARP translation units build with
- * -fexceptions); __cxa_throw in warp/cxx_abi.cpp longjmps to the WARP_CALL
- * checkpoint instead of unwinding. */
+ * Provides std::exception (default/copy construction, assignment, virtual
+ * destructor, virtual what()) and std::terminate.  That covers what WARP asks
+ * of the header: core/common/VbExceptions.hpp's RuntimeError and
+ * core/runtime/TrapException.hpp's TrapException derive from std::exception and
+ * override what(), and utils/VirtualMemoryAllocator.cpp calls std::terminate.
+ *
+ * Throwing works, but does not unwind.  The WARP translation units build with
+ * -fexceptions, so `throw` compiles and reaches __cxa_throw; that entry point
+ * in warp/cxx_abi.cpp __builtin_longjmps to the per-CPU checkpoint that
+ * warp_driver.cpp arms before each WARP call, rather than running the standard
+ * two-phase unwinder.  Callers may rely on the throw reaching the driver
+ * boundary and on the exception object staying readable until then, and must
+ * NOT rely on any of:
+ *   - destructors of locals between the throw and the driver boundary running;
+ *     the longjmp skips every one of them, so anything RAII-owned there leaks
+ *   - a catch clause selecting on type; the checkpoint is a catch-all
+ *   - nesting; there is one checkpoint per CPU (see warp/cxx_abi.cpp).
+ * With no checkpoint armed, __cxa_throw panics rather than returning.
+ *
+ * std::exception_ptr, std::current_exception, std::set_terminate and
+ * std::uncaught_exception are absent; using them is a compile error. */
 
 extern "C" {
 #include "kpanic.h"
@@ -22,7 +39,12 @@ public:
 };
 
 /* std::terminate — called by the ABI when exception handling fails.  Panics
- * (stops every CPU and halts); never returns. */
+ * (stops every CPU and halts); never returns.
+ *
+ * Defined inline here, so a translation unit that includes this header panics
+ * with the reason "cpp_exception_terminate".  warp/cxx_abi.cpp carries a
+ * second, out-of-line std::terminate that panics with "std_terminate_panic";
+ * that one serves callers which never saw this declaration. */
 [[noreturn]] inline void terminate() noexcept {
     kpanic("cpp_exception_terminate", 0, 0ULL);
 }

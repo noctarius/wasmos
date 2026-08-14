@@ -38,6 +38,10 @@ static void probe_cont_cb(void* ctx, int32_t status) {
     }
 }
 
+/* Flat-binary entry point, entered with no C runtime and no return address, so
+ * it must not return — it ends in wasmos_sys_thread_exit(0).  A spawn that fails
+ * simply skips its ordering rather than aborting the probe, so a run that
+ * spawned nothing still exits cleanly and reports nothing. */
 void _start(void) {
     probe_cont_t cont = {0};
     uint32_t join_tid = 0;

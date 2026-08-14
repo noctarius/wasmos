@@ -63,6 +63,14 @@ void pm_services_class_reap(uint32_t pm_context_id) {
     service_class_registry_reap_dead(pm_service_class_alive, 0);
 }
 
+/* Inverse of pm_pack_name_args: reassembles up to 16 bytes of name from four IPC
+ * argument words, little-endian within each word, into `out`.
+ *
+ * Always NUL-terminates within out_len, stopping at the first NUL byte or when
+ * out_len-1 characters have been written — so a name that filled all 16 bytes
+ * with no terminator comes back truncated to out_len-1 rather than overrunning.
+ * A NULL `out` or out_len 0 is a no-op, which leaves the caller's buffer
+ * untouched; every caller here passes a stack buffer and then tests out[0]. */
 void pm_unpack_name_args(uint32_t arg0, uint32_t arg1, uint32_t arg2, uint32_t arg3, char* out,
                          uint32_t out_len) {
     uint32_t args[4] = {arg0, arg1, arg2, arg3};
@@ -85,6 +93,14 @@ void pm_unpack_name_args(uint32_t arg0, uint32_t arg1, uint32_t arg2, uint32_t a
     out[pos] = '\0';
 }
 
+/* Packs a service name into the four IPC argument words, little-endian within
+ * each word.  out[] is zeroed first, so a short name is implicitly NUL-padded.
+ *
+ * Capacity is exactly 16 bytes and the excess is DROPPED SILENTLY: a 16-byte
+ * name carries no terminator, and anything longer is truncated to 16 with no
+ * indication.  Callers that need longer names use the descriptor form
+ * (SVC_IPC_REGISTER_DESC_REQ) instead.  A NULL out is a no-op; a NULL name
+ * yields four zero words, which unpacks to the empty string. */
 void pm_pack_name_args(const char* name, uint32_t out[4]) {
     if (!out) {
         return;
@@ -103,6 +119,14 @@ void pm_pack_name_args(const char* name, uint32_t out[4]) {
     }
 }
 
+/* Mirrors a just-registered service into the g_pm cache the kernel reads
+ * directly, for the handful of names PM itself and other kernel code need
+ * without a lookup round trip.  A name outside that set is ignored, so this is
+ * always safe to call after pm_service_set.
+ *
+ * "fs" is the one conditional case: it only fills the slot while it is still
+ * empty, so a "fs.vfs" registration keeps priority and a plain FS backend
+ * registering later cannot displace VFS as the spawn path's file source. */
 void pm_update_well_known_service_endpoint(const char* name, uint32_t endpoint) {
     if (!name) {
         return;
@@ -132,6 +156,21 @@ void pm_update_well_known_service_endpoint(const char* name, uint32_t endpoint) 
     }
 }
 
+/* Binds `name` to `endpoint` in the flat service table.  Returns 0 on success
+ * (whether the entry was created or an existing one re-pointed), -1 when the
+ * name is already held by a DIFFERENT context or the table cannot grow.
+ *
+ * Re-registration by the owner is how a service moves its endpoint; a name is
+ * never stolen, and there is no unregister — an entry outlives its owning
+ * process, so a lookup can return an endpoint whose owner is gone (callers see
+ * that as IPC_ERR_NOENT on first use).  Free slots are reused before the list is
+ * grown.  `name` is borrowed and copied into the entry.
+ *
+ * FIXME(svc-name-len): the entry's name field holds 16 characters plus NUL, but
+ * the descriptor registration path accepts up to WASMOS_SVC_NAME_MAX-1 (35).
+ * The copy loop below stops at sizeof(name) without forcing a terminator, so a
+ * longer name leaves the field unterminated and later strcmp() calls read past
+ * it; names differing only after the 16th character also collide. */
 int pm_service_set(const char* name, uint32_t endpoint, uint32_t owner_context_id) {
     pm_service_entry_t* empty = 0;
     list_iter_t it;
@@ -172,6 +211,10 @@ int pm_service_set(const char* name, uint32_t endpoint, uint32_t owner_context_i
     return 0;
 }
 
+/* Resolves a service name to its endpoint, or IPC_ENDPOINT_NONE if no live entry
+ * matches.  A hit only means the binding exists, not that the provider is still
+ * running: entries are never removed, so a stale endpoint is possible and the
+ * caller learns of it from the first send failing IPC_ERR_NOENT. */
 uint32_t pm_service_lookup(const char* name) {
     list_iter_t it;
     pm_service_entry_t* entry = (pm_service_entry_t*)list_first(&g_pm.services, &it);
@@ -184,6 +227,16 @@ uint32_t pm_service_lookup(const char* name) {
     return IPC_ENDPOINT_NONE;
 }
 
+/* Packed-args service registration (SVC_IPC_REGISTER_REQ): arg0..arg3 carry the
+ * name, and msg->source is BOTH the endpoint being registered and the reply
+ * endpoint.  Returns 0 once the SVC_IPC_REGISTER_RESP is sent, -1 on an empty
+ * name, an unresolvable source endpoint, a refused binding, or a failed reply —
+ * which the PM run loop turns into an SVC_IPC_ERROR carrying that code.
+ *
+ * Limited to 16-character names by the packing; longer ones need the descriptor
+ * form.  Because the registered endpoint IS the reply endpoint, a registrant
+ * that blocks for this reply on the endpoint it is about to serve risks the
+ * confusion pm_handle_service_register_desc's dedicated reply endpoint avoids. */
 int pm_handle_service_register(uint32_t pm_context_id, const ipc_message_t* msg) {
     char name[17];
     uint32_t owner_context_id = 0;
@@ -308,6 +361,14 @@ int pm_handle_service_register_desc(uint32_t pm_context_id, const ipc_message_t*
     return ipc_send_from(pm_context_id, msg->source, &resp) == IPC_OK ? 0 : -1;
 }
 
+/* Packed-args service lookup (SVC_IPC_LOOKUP_REQ): arg0..arg3 carry the name.
+ * Returns 0 once the SVC_IPC_LOOKUP_RESP is sent, -1 on an empty name or a
+ * failed reply.
+ *
+ * A name that is not registered is a SUCCESSFUL lookup, not an error: the reply
+ * carries (uint32_t)-1 in arg0 instead of an endpoint, so the caller can retry
+ * later without treating it as a protocol failure.  No permission check — any
+ * context may resolve any service name. */
 int pm_handle_service_lookup(uint32_t pm_context_id, const ipc_message_t* msg) {
     char name[17];
     ipc_message_t resp;
@@ -407,6 +468,16 @@ int pm_handle_class_subscribe(uint32_t pm_context_id, const ipc_message_t* msg) 
     return ipc_send_from(pm_context_id, msg->source, &resp) == IPC_OK ? 0 : -1;
 }
 
+/* Registers a subsystem broker (PROC_IPC_SUBSYSTEM_REGISTER_BROKER): arg1 is the
+ * descriptor byte length, arg2 the caller's transfer-buffer id holding a
+ * wasmos_subsystem_broker_register_desc_t.  Returns 0 once the PROC_IPC_RESP is
+ * sent, or a packed WASMOS_ERR_PROC_PM_* code.
+ *
+ * Requires CAP_SUBSYSTEM_REGISTER, and the broker endpoint named in the
+ * descriptor must belong to the same context as the request's source endpoint —
+ * a caller may only nominate its own endpoint as a broker.  The length must
+ * match sizeof exactly (no forward-compatible growth on this opcode) and the
+ * descriptor version must match exactly. */
 int pm_handle_subsystem_register_broker(uint32_t pm_context_id, const ipc_message_t* msg) {
     uint32_t owner_context = 0;
     uint32_t endpoint_owner = 0;
@@ -452,6 +523,18 @@ int pm_handle_subsystem_register_broker(uint32_t pm_context_id, const ipc_messag
                : WASMOS_ERR_PROC_PM_REPLY_SEND;
 }
 
+/* Registers an exec-format handler (PROC_IPC_EXEC_HANDLER_REGISTER): arg1 is the
+ * total payload length, arg2 the caller's transfer-buffer id holding a
+ * wasmos_exec_handler_register_desc_t immediately followed by node_count
+ * wasmos_exec_match_node_t entries.  Returns 0 once the PROC_IPC_RESP is sent,
+ * or a packed WASMOS_ERR_PROC_PM_* code.
+ *
+ * Requires CAP_SUBSYSTEM_REGISTER, and the caller must already own the BROKER
+ * registered under desc->request_tag — a handler can only be attached to a
+ * subsystem the same context registered.  node_count must be in
+ * [1, WASMOS_EXEC_MATCH_MAX_NODES] and the length must equal the header plus
+ * exactly that many nodes, so a truncated or over-long payload is refused rather
+ * than partially read. */
 int pm_handle_exec_handler_register(uint32_t pm_context_id, const ipc_message_t* msg) {
     uint32_t owner_context = 0;
     uint32_t broker_owner = 0;

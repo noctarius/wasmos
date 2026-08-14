@@ -11,6 +11,48 @@
  * per-endpoint queues plus a last-received slot. The `harness` imports below
  * are its control surface, so each case scripts the peer behaviour it needs.
  *
+ * MODELLING NOTE (blocking). On the target, ipc_select_wait parks the process
+ * until a peer sends. Node is single-threaded and the fabric cannot suspend, so
+ * the harness performs one scripted delivery -- whatever plantOnWait() armed --
+ * at the moment the guest blocks, which is precisely where a real peer's send
+ * would land, and then reports the set's first endpoint ready. A wait that
+ * delivered nothing therefore reads to the loop as a spurious wake, which is
+ * what the real hostcall allows anyway: the loop re-drains and gives up when
+ * the queue is still empty. Since the park itself is unobservable here,
+ * "blocked rather than spun" is asserted through the harness counters
+ * (waitCount, timeoutWaitCount, lastTimeoutMs) instead of through timing.
+ *
+ * Harness imports. All bind to the `harness` module of run_as_test.mjs and are
+ * test-only: no kernel host call corresponds to any of them. They script the
+ * `wasmos` fabric that the loop itself imports (ipc_send, ipc_drain,
+ * ipc_last_field, ipc_select_*):
+ *   plant             enqueue a message on an endpoint's queue, as a peer's
+ *                     ipc_send would.
+ *   plantOnWait       arm ONE delivery, performed the next time the guest
+ *                     blocks (either wait variant); a second call replaces an
+ *                     armed delivery that has not fired.
+ *   failSendsTo       make ipc_send to that endpoint return -1; -1 disables.
+ *                     Sends to any negative destination fail regardless, since
+ *                     an endpoint handle is never negative.
+ *   pending           queue depth of an endpoint. A guest cannot ask the kernel
+ *                     this; it exists so a case can assert what was left
+ *                     unconsumed.
+ *   peek              read one field of a queued message without consuming it,
+ *                     `field` numbered as ipc_last_field numbers it (0=type,
+ *                     1=requestId, 2=arg0, 3=arg1, 4=source, 5=destination,
+ *                     6=arg2, 7=arg3).
+ *   waitCount         ipc_select_wait calls so far, timed waits included.
+ *   timeoutWaitCount  ipc_select_wait_timeout calls so far.
+ *   lastTimeoutMs     timeout of the most recent timed wait, -1 if there was
+ *                     none.
+ *   breakSelect       make ipc_select_create fail, so a loop comes up with no
+ *                     select set and cannot park; the kernel reaches that state
+ *                     when the select table is exhausted.
+ *   sendCount         ipc_send calls so far, failed ones included.
+ *   reset             clear the whole fabric: every queue and select set, the
+ *                     last-received slot, all counters, the armed delivery and
+ *                     both failure switches.
+ *
  * Each case returns 0 or a distinct marker; runTests() returns the first
  * non-zero one, which the harness prints.
  */
@@ -73,9 +115,16 @@ declare function peek(endpoint: i32, index: i32, field: i32): i32;
 
 @external("harness", "reset") declare function reset(): i32;
 
+/* The loop's own receiver endpoint and the peer it talks to. Endpoint ids are
+ * queue keys in the fabric and nothing validates them, so these only have to
+ * differ for a request and its reply to travel opposite ways. */
 const SELF: i32 = 10;
 const PEER: i32 = 20;
 
+/* Message types, picked for these cases rather than mirroring a real opcode.
+ * TYPE_RESP carries no meaning for the loop: a reply is claimed by matching
+ * request id whatever its type, which is why a TYPE_NOTIFY carrying a live
+ * request id still settles that intent. */
 const TYPE_REQ: i32 = 0x100;
 const TYPE_RESP: i32 = 0x180;
 const TYPE_NOTIFY: i32 = 0x200;
@@ -109,6 +158,16 @@ class ExpectResp extends ReplyStatus {
     }
 }
 
+/**
+ * A loop bound to SELF, numbering request ids from 1, on a wiped fabric.
+ *
+ * The wipe is the harness's reset(), so it clears state shared by everything in
+ * the process: every endpoint queue and select set, the counters, the armed
+ * plantOnWait delivery and both failure switches. It does not reach loops that
+ * already exist -- a case calling this twice leaves the earlier loop holding a
+ * select id the harness has dropped, and because ids restart at 1 that stale id
+ * can name the new loop's select set.
+ */
 function freshLoop(): EventLoop {
     reset();
     const loop = new EventLoop();
@@ -276,6 +335,12 @@ function testSlotFreedBeforeCallback(): i32 {
     return 0;
 }
 
+/**
+ * Starts a follow-up request from inside a reply callback. `followUp` holds the
+ * new request id, and stays -1 if the callback never ran or the send was
+ * refused -- which is the failure this shape is here to detect, since the
+ * intent table is full at that point except for the slot just released.
+ */
 class ChainingHandler extends OnMessage {
     calls: i32 = 0;
     followUp: i32 = -1;
@@ -435,6 +500,14 @@ function testReentrantPollIsRefused(): i32 {
     return 0;
 }
 
+/**
+ * Calls poll() from inside a dispatch. `nestedHandled` keeps the first nested
+ * result and is then overwritten by any non-zero one, so a nested call that
+ * dispatched anything survives to the assertion. firstArg0/secondArg0 record
+ * each outer dispatch's arg0, captured before the nested call, so they pin the
+ * order and count of the outer dispatches rather than the record's contents
+ * after the nested attempt.
+ */
 class ReenteringHandler extends OnMessage {
     calls: i32 = 0;
     nestedHandled: i32 = -1;

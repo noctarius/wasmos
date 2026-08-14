@@ -53,6 +53,12 @@ static int wasmos_exec_is_wap_blob(const uint8_t* blob, uint32_t blob_size) {
     return 1;
 }
 
+/* How many leading bytes of a candidate executable a caller must read before
+ * wasmos_exec_format_classify can decide.  It is the largest probe any
+ * registered exec handler asks for, floored at the WAP header prefix so the
+ * built-in container check always has enough — so the value CHANGES as handlers
+ * are registered or the registry is reset, and must be re-read per classify
+ * rather than cached. */
 uint32_t wasmos_exec_format_probe_bytes_needed(void) {
     uint32_t probe_bytes = wasmos_subsystem_registry_exec_max_probe_bytes();
 
@@ -62,6 +68,19 @@ uint32_t wasmos_exec_format_probe_bytes_needed(void) {
     return probe_bytes;
 }
 
+/* Decides how a blob should be executed: as a native WAP container, by a
+ * registered broker handler, or not at all.
+ *
+ * The built-in WAP check runs first and wins; only a blob that is not a WAP is
+ * offered to the exec handlers, with `path` and up to
+ * wasmos_exec_format_probe_bytes_needed() leading bytes as the probe.  A blob
+ * shorter than that is probed with what there is.
+ *
+ * Returns 0 whenever it produced an answer — including WASMOS_EXEC_FORMAT_NONE,
+ * which means "nothing claims this", NOT an error — and -1 only for a NULL
+ * out_match.  *out_match is cleared first, so it is defined on every 0 return.
+ * A BROKER match leaves out_match->handler pointing at a registry entry, which
+ * stays valid only until the registry changes.  blob and path are borrowed. */
 int wasmos_exec_format_classify(const char* path, const uint8_t* blob, uint32_t blob_size,
                                 wasmos_exec_format_match_t* out_match) {
     wasmos_exec_probe_t probe;
@@ -120,6 +139,21 @@ static int exec_plan_string_region(const uint8_t* plan_bytes, uint32_t plan_size
     return 0;
 }
 
+/* Validates a spawn plan returned by a broker and projects it into *out_plan.
+ *
+ * The plan arrives as untrusted bytes from a user-space broker, so everything is
+ * checked: the response is at least header-sized, its version and plan kind are
+ * the ones this build understands, its request and runtime tags match the
+ * handler that produced it, and the host path ends in ".wap".
+ *
+ * Both embedded strings are bounds-checked against plan_size, must contain no
+ * interior NUL, and must be followed by one inside the buffer — so out_plan's
+ * host_path and host_args are NUL-terminated pointers INTO plan_bytes, borrowed,
+ * and valid only as long as that buffer is.  A zero-length host_args yields a
+ * NULL pointer rather than an empty string.
+ *
+ * Returns 0 when the plan is accepted and -1 on any failure; *out_plan is
+ * cleared first, so a rejected plan leaves it empty rather than half-filled. */
 int wasmos_exec_broker_plan_validate(const uint8_t* plan_bytes, uint32_t plan_size,
                                      const wasmos_exec_handler_registry_entry_t* handler,
                                      wasmos_exec_broker_plan_t* out_plan) {

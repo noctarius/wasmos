@@ -9,7 +9,14 @@
 #include "boot.h"
 #include <stdint.h>
 
+/* Locate the I/O APIC and the interrupt-source overrides in the ACPI MADT reached through
+ * boot_info's RSDP, map its MMIO window, and program every redirection entry to its
+ * IRQ_VECTOR_BASE-relative vector, masked.  Without a usable MADT no I/O APIC is recorded
+ * and every other entry point below becomes a no-op. */
 void ioapic_init(const boot_info_t* boot_info);
+
+/* Set / clear the mask bit of the redirection entry for an ISA line, leaving its vector,
+ * destination, trigger mode and polarity untouched. */
 void ioapic_mask_irq(uint32_t irq_line);
 void ioapic_unmask_irq(uint32_t irq_line);
 /* Set trigger mode and polarity, preserving the line's vector, destination and

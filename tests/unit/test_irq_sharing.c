@@ -6,7 +6,15 @@
  * Getting that accounting wrong either livelocks the machine (reopening while a
  * device still asserts) or kills a device permanently (never reopening). See
  * docs/architecture/05-x86-cpu-architecture.md §Interrupt Controller and IRQ
- * Routing. */
+ * Routing.
+ *
+ * src/kernel/irq_sharing.c is the only source linked in: it holds no state and
+ * hides no platform dependency, so the line table and every environmental effect
+ * come from this file. What the fakes below stand in for on target
+ * (src/kernel/arch/x86_64/irq_x86_64.c) is noted at each one; the differences
+ * that matter are that time only advances when a case advances it, and that the
+ * real caller runs dispatch/tick under g_irq_lines_lock while this module itself
+ * takes no lock. */
 #include <stdio.h>
 #include <string.h>
 
@@ -14,6 +22,8 @@
 
 #include "irq_sharing.h"
 
+/* Table geometry. TEST_LINES matches the kernel's IRQ_COUNT (the 16 legacy PIC
+ * lines), so a line index used here is one the real table would also accept. */
 #define TEST_LINES 16u
 #define LINE 11u /* the shared virtio-net/virtio-rng line in QEMU */
 #define TIMER_LINE 0u
@@ -21,6 +31,9 @@
 static int g_failures;
 static int g_checks;
 
+/* Record one assertion: counts and CONTINUES, so a failing case runs to its end
+ * and every later assertion in it still reports. Nothing here returns a marker;
+ * main() reports g_failures as the process exit status. */
 static void expect(int cond, const char* what) {
     g_checks++;
     if (!cond) {
@@ -31,6 +44,12 @@ static void expect(int cond, const char* what) {
 
 /* ---- fake ops -------------------------------------------------------------- */
 
+/* Call log for the injected ops. Each array keeps only its first 64 entries
+ * while the matching counter keeps counting, so a count stays exact past 64 but
+ * the recorded argument list goes stale — IRQ_DISPATCH_BUDGET_PER_TICK is 64, so
+ * the budget case sits exactly on that boundary. g_now is the fake tick counter
+ * in the same unit as IRQ_ACK_DEADLINE_TICKS; it starts at 100 (any non-zero
+ * base) and only moves when a case moves it. */
 static uint32_t g_mask_calls[64];
 static uint32_t g_mask_count;
 static uint32_t g_unmask_calls[64];
@@ -43,6 +62,9 @@ static uint64_t g_now;
 /* Endpoint whose delivery fails, modelling a full endpoint queue. 0 = none. */
 static uint32_t g_deliver_fail_endpoint;
 
+/* Stand in for x86_irq_mask/x86_irq_unmask, which program the PIC or IO-APIC.
+ * These only record, so a case observes the mask decision without any controller
+ * state: nothing here prevents a mask that the hardware would reject. */
 static void fake_mask(uint32_t line) {
     if (g_mask_count < 64) {
         g_mask_calls[g_mask_count] = line;
@@ -57,6 +79,12 @@ static void fake_unmask(uint32_t line) {
     g_unmask_count++;
 }
 
+/* Stand in for irq_ops_deliver, which posts an IPC_IRQ_EVENT_TYPE message with
+ * ipc_send_from and returns -1 whenever that is not IPC_OK. Failure is modelled
+ * by endpoint id rather than by queue depth, so it is deterministic and a
+ * "queue" here never drains: an endpoint set in g_deliver_fail_endpoint refuses
+ * every delivery for the rest of the case. Returns 0 when queued, matching the
+ * ops contract in irq_sharing.h. */
 static int fake_deliver(uint32_t endpoint, uint32_t line) {
     (void)line;
     if (g_deliver_fail_endpoint != 0 && endpoint == g_deliver_fail_endpoint) {
@@ -69,10 +97,16 @@ static int fake_deliver(uint32_t endpoint, uint32_t line) {
     return 0;
 }
 
+/* Stand in for timer_ticks(), which the timer interrupt advances. Time is
+ * therefore inert unless a case writes g_now, which is what lets the ack
+ * deadline be crossed exactly rather than waited out. */
 static uint64_t fake_now(void) {
     return g_now;
 }
 
+/* Stand in for irq_ops_log_throttle, which writes a diagnostic to the serial
+ * port. Captures the line and the call count so the once-per-throttle
+ * rate-limiting is observable. */
 static void fake_log_throttle(uint32_t line) {
     g_throttle_logged_line = line;
     g_throttle_log_count++;
@@ -84,6 +118,8 @@ static const irq_sharing_ops_t OPS = {
 
 static irq_line_t g_lines[TEST_LINES];
 
+/* Fixture reset: an empty line table plus a cleared call log, called first in
+ * every case because the cases run in a shuffled order and share both. */
 static void reset(void) {
     memset(g_lines, 0, sizeof(g_lines));
     irq_sharing_init(g_lines, TEST_LINES);
@@ -96,6 +132,8 @@ static void reset(void) {
     g_now = 100;
 }
 
+/* 1 when `endpoint` appears in the recorded deliveries, which says nothing about
+ * how many times or in what order; both helpers see only the first 64 calls. */
 static int delivered_to(uint32_t endpoint) {
     for (uint32_t i = 0; i < g_deliver_count && i < 64; ++i) {
         if (g_delivered_to[i] == endpoint) {
@@ -105,6 +143,8 @@ static int delivered_to(uint32_t endpoint) {
     return 0;
 }
 
+/* How many recorded unmasks name `line`. Cases zero g_unmask_count first so the
+ * answer covers only the step under test rather than the whole setup. */
 static uint32_t unmasks_of(uint32_t line) {
     uint32_t n = 0;
     for (uint32_t i = 0; i < g_unmask_count && i < 64; ++i) {

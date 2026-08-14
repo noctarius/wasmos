@@ -241,6 +241,15 @@ static process_run_result_t smp_stress_coordinator_entry(process_t* process, voi
     return PROCESS_RUN_YIELDED;
 }
 
+/* Spawns the SMP scheduler stress coordinator as a child of init_pid, resetting
+ * the module's static counters first, so only one run can be in flight.
+ *
+ * Returns 0 once the coordinator is spawned and -1 if it could not be; the
+ * stress result itself arrives later as a "[test] sched smp stress ..." log line
+ * and the coordinator's exit status.
+ *
+ * Compiled only under WASMOS_SCHED_SMP_STRESS; the stub below takes its place
+ * otherwise. */
 int kernel_sched_smp_stress_spawn(uint32_t init_pid) {
     uint32_t pid = 0;
     g_smp_stress_hops = 0;
@@ -256,6 +265,9 @@ int kernel_sched_smp_stress_spawn(uint32_t init_pid) {
 
 #else /* !WASMOS_SCHED_SMP_STRESS */
 
+/* No-op stand-in for builds without WASMOS_SCHED_SMP_STRESS, so the boot path
+ * can call it unconditionally.  Always succeeds without spawning anything, which
+ * is why a 0 return must not be read as "the stress test ran". */
 int kernel_sched_smp_stress_spawn(uint32_t init_pid) {
     (void)init_pid;
     return 0;

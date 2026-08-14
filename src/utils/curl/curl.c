@@ -23,7 +23,14 @@
 #include "wasmos/net.h"
 #include "wasmos/startup.h"
 
+/* Byte capacity requested for each of the socket's two SPSC data rings.  It
+ * bounds how much the net-stack can buffer before the transfer stalls waiting
+ * for this process to drain, so it is a throughput knob, not a size limit on the
+ * response. */
 #define RING_CAP 16384u
+/* Per-iteration receive chunk.  Also the granularity at which the header/body
+ * boundary is searched, which is why the CRLFCRLF match state is carried across
+ * iterations rather than restarted. */
 #define RECV_BUF 2048
 
 /* Parse a dotted-decimal IPv4 literal into a network-order word (octet a in the

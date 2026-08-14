@@ -25,6 +25,19 @@ import {
 } from "./wasmos_status";
 import {io_out8, io_wait, ipc_create_endpoint, ipc_send} from "./wasmos_imports";
 
+/* MC146818-compatible CMOS/RTC. Write a register index to 0x70, then read or
+ * write its value at 0x71; every access is that two-step pair, which is why a
+ * read here is not idempotent from the hardware's point of view.
+ *
+ * Bit 7 of the index port is the NMI-disable bit, so an index must be masked
+ * with 0x7F or selecting a register would disable NMI as a side effect.
+ *
+ * The registers this driver touches: 0x00 seconds, 0x02 minutes, 0x04 hours,
+ * 0x07 day of month, 0x08 month, 0x09 year (two digits). Status register A
+ * (0x0A) bit 7 is UIP, set while an update is in progress and the time fields
+ * are not coherent. Status register B (0x0B) bit 1 selects 24-hour mode, bit 2
+ * selects binary rather than BCD encoding, and bit 7 (SET) halts the update
+ * cycle so a multi-register write lands as one consistent time. */
 const CMOS_INDEX_PORT: i32 = 0x70;
 const CMOS_DATA_PORT: i32 = 0x71;
 

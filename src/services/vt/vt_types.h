@@ -57,9 +57,44 @@ typedef struct {
     vt_cell_t* cells;    /* pointer into the flat cell arena */
 } vt_tty_t;
 
+/* The tty slot model.
+ *
+ * The vt owns VT_MAX_TTYS slots, indexed 0..VT_MAX_TTYS-1 and selected by the
+ * user with Ctrl+Shift+F1..F4 or by a client sending VT_IPC_SWITCH_TTY.  Exactly
+ * one slot is *visible* (rendered to the framebuffer) at a time; every slot
+ * keeps a full cell grid and a live input queue whether or not it is visible.
+ *
+ * Slots are not interchangeable:
+ *   - slot 0 is the graphical slot.  The vt paints no text for it.  The first
+ *     client to send VT_IPC_SWITCH_TTY(0) — the gfx compositor at startup —
+ *     becomes slot 0's key/visibility sink and thereafter receives decoded keys
+ *     as VT_IPC_KEY_FORWARD and every visibility change as VT_IPC_VIS_NOTIFY.
+ *     A later switch to slot 0 does not reassign that sink.  The compositor owns
+ *     the framebuffer only while slot 0 is visible, and the vt tells it so.
+ *   - slot 1 is the system console: it is the default serial-bound slot, so COM1
+ *     RX (VT_IPC_SERIAL_INPUT_REQ) is injected into its input queue no matter
+ *     which slot is visible, and the kernel log ring is drained into it.
+ *   - the remaining slots are plain text ttys.
+ *
+ * Per slot the vt tracks at most one registered writer endpoint
+ * (VT_IPC_REGISTER_WRITER; a new registration replaces a stale one) and at most
+ * one reader endpoint, claimed by the first VT_IPC_READ_REQ and exclusive
+ * afterwards (WASMOS_ERR_VT_READER_BUSY for anyone else).  A write or a mode
+ * change is routed to the slot whose reader or writer is the message source, so
+ * an endpoint that is neither is dropped.
+ *
+ * The vt is the system's only keymap decoder: it consumes raw set-1 scancodes
+ * from the `kbd` driver and everything downstream — text slots and the
+ * compositor alike — sees decoded characters. */
 #define VT_MAX_TTYS 4u
+/* Text geometry used when the framebuffer geometry query fails, and the
+ * fallback the service retries with when the queried geometry's cell grids do
+ * not fit in its heap. */
 #define VT_COLS_DEFAULT 80u
 #define VT_ROWS_DEFAULT 25u
+/* Hard ceiling on a queried geometry.  These bound the per-slot cell arena
+ * (VT_MAX_TTYS * VT_MAX_COLS * VT_MAX_ROWS * sizeof(vt_cell_t)), so raising them
+ * raises the service's memory floor. */
 #define VT_MAX_COLS 160u
 #define VT_MAX_ROWS 64u
 

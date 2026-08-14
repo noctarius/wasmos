@@ -16,12 +16,25 @@
 #include "sync/spinlock.h"
 #include "arch/x86_64/smp.h"
 
+/* Arena tuning, all per process.
+ * DEFAULT_PAGES: chunk size used when wasm3_heap_configure is given 0 (4 MiB).
+ * MIN_PAGES:     floor on any configured size and on a chunk the grow loop will
+ *                accept, so a shrinking retry cannot degenerate to a useless chunk.
+ * ALIGN:         alignment of an ordinary allocation; large ones are page-aligned
+ *                instead so they can be remapped to devices.
+ * MAX_BYTES:     hard ceiling on committed arena per process, matching the 2 GiB
+ *                dedicated linear-memory VA slot stride.
+ * MAX_CHUNKS:    fixed chunk-array length; exhausting it fails the allocation. */
 #define WASM3_HEAP_DEFAULT_PAGES 1024u
 #define WASM3_HEAP_MIN_PAGES 32u
 #define WASM3_HEAP_ALIGN 16u
 #define WASM3_HEAP_MAX_BYTES (2ULL * 1024ULL * 1024ULL * 1024ULL)
 #define WASM3_HEAP_MAX_CHUNKS 64u
 
+/* One contiguous physical run of the arena. `base` is its kernel direct-map alias
+ * (phys + KERNEL_HIGHER_HALF_BASE) and `offset` the bump frontier within it: bytes
+ * below `offset` are handed out, bytes above are free. Only the tail chunk is ever
+ * bumped. */
 typedef struct {
     uint64_t phys;
     uint8_t* base;
@@ -50,12 +63,19 @@ typedef struct {
     wasm3_heap_chunk_t chunks[WASM3_HEAP_MAX_CHUNKS];
 } wasm3_heap_slot_t;
 
+/* Header immediately preceding every pointer this allocator returns. `size` is the
+ * requested byte count, `total` the aligned bytes consumed including this header, and
+ * `start` the block's offset within its chunk — which is what lets free() recognise the
+ * most recent allocation and rewind the frontier. */
 typedef struct {
     size_t size;
     size_t total;
     size_t start;
 } wasm3_heap_block_t;
 
+/* One arena per process, indexed by search rather than by pid. A slot with pid 0 is
+ * free; the table is fixed, so a spawn beyond PROCESS_MAX_COUNT live wasm3 processes
+ * gets no arena and its allocations fail. */
 static wasm3_heap_slot_t g_wasm3_heaps[PROCESS_MAX_COUNT];
 /* Protects g_wasm3_heaps[] globally — covers slot lookup AND allocation so
  * two CPUs cannot race on the same slot or the same chunk->offset. */
@@ -384,6 +404,20 @@ static void* wasm3_alloc(size_t size, int zero) {
     return ptr;
 }
 
+/* The C allocator wasm3 and its dependencies link against, served from the arena of
+ * whichever pid this CPU is bound to (falling back to the running process).
+ *
+ * malloc:  uninitialised bytes, or 0 for a zero size or an arena that cannot grow.
+ * calloc:  zeroed, with the nmemb*size product overflow-checked; 0 for a zero factor.
+ * free:    returns storage only when the pointer is the newest allocation in the tail
+ *          chunk — anything else leaves an interior hole that is never reclaimed, so
+ *          this allocator is stack-like, not general purpose. A pointer into the
+ *          dedicated linear-memory slot is routed to the slot release instead.
+ * realloc: grows in place only for that same newest-allocation case; otherwise it
+ *          allocates, copies and frees, so the returned pointer usually differs.
+ *          realloc(p, 0) returns 0 WITHOUT freeing p, which is not the C contract.
+ *
+ * Every entry point takes the global arena lock; none of them blocks. */
 void* malloc(size_t size) {
     return wasm3_alloc(size, 0);
 }
@@ -837,9 +871,20 @@ static int format_to_buffer(char* buf, size_t size, const char* fmt, va_list ap)
     return idx;
 }
 
+/* stderr exists only so wasm3's diagnostics link. It points at an otherwise unused FILE
+ * object; fprintf ignores its stream argument entirely, so writing to any stream — or to
+ * this one after reassigning it — goes to the kernel log all the same. */
 static FILE wasm3_stderr_instance;
 FILE* stderr = &wasm3_stderr_instance;
 
+/* printf/fprintf for wasm3, rendered into a 256-byte stack buffer and emitted to the
+ * kernel log as one klog_write. Output longer than 255 bytes is TRUNCATED, though the
+ * return value is the length the full format would have produced, as C requires.
+ * fprintf's `stream` is ignored. Only %%, %s, %d, %i, %u, %x and %p are recognised; any
+ * other conversion is copied through literally, and no width, precision, length modifier
+ * or floating-point conversion is supported — a %f would emit "%f" while leaving its
+ * argument unconsumed and desynchronising every later conversion. A null `fmt` produces
+ * the empty string, and a null %s argument prints "(null)". */
 int fprintf(FILE* stream, const char* fmt, ...) {
     (void)stream;
     char buf[256];
@@ -894,6 +939,12 @@ static unsigned long parse_ul(const char* nptr, char** endptr, int base) {
     return value;
 }
 
+/* Numeric parsing for wasm3. strtoul/strtoull accept optional leading spaces then
+ * digits valid in `base` (0 is treated as 10, not as C's auto-detect); there is no sign
+ * handling, no 0x prefix handling, and no overflow detection — the accumulator simply
+ * wraps. On no valid digits they return 0 with *endptr at the first unconsumed
+ * character. strtod parses an optional sign, an integer part and a fractional part only:
+ * exponents, inf and nan are not recognised and stop the parse. */
 unsigned long strtoul(const char* nptr, char** endptr, int base) {
     return parse_ul(nptr, endptr, base);
 }

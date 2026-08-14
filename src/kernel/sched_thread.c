@@ -42,6 +42,10 @@ static uint32_t sched_debug_bump(sched_debug_event_t ev) {
     return __atomic_fetch_add(&g_sched_debug[ev], 1u, __ATOMIC_RELAXED);
 }
 
+/* Zeroes every diagnostic counter and re-seeds the placement round-robin
+ * cursors.  A test fixture's setup hook, not a production path: it makes a
+ * placement assertion independent of how many spawns earlier cases performed.
+ * Relaxed stores throughout — these counters order nothing. */
 void sched_debug_reset(void) {
     for (unsigned i = 0; i < SCHED_DEBUG_EVENT_COUNT; ++i) {
         __atomic_store_n(&g_sched_debug[i], 0u, __ATOMIC_RELAXED);
@@ -50,6 +54,12 @@ void sched_debug_reset(void) {
     g_affine_rr = 0;
 }
 
+/* Records one occurrence of `ev` and returns the count BEFORE this one, so a
+ * caller can rate-limit with the (n & (n-1)) == 0 power-of-two test and still
+ * report the first hit.  An out-of-range `ev` is dropped and reports 0 — which
+ * the power-of-two test reads as "first hit", so an unknown event still logs
+ * once rather than never.  Never blocks; safe from inside a scheduler critical
+ * section, which is why it is a bare relaxed add and not a locked structure. */
 uint32_t sched_debug_note(sched_debug_event_t ev) {
     if ((unsigned)ev >= SCHED_DEBUG_EVENT_COUNT) {
         return 0;
@@ -57,6 +67,8 @@ uint32_t sched_debug_note(sched_debug_event_t ev) {
     return sched_debug_bump(ev);
 }
 
+/* Total occurrences of `ev` since boot or the last sched_debug_reset; 0 for an
+ * out-of-range `ev`, indistinguishable from a genuinely unseen event. */
 uint32_t sched_debug_count(sched_debug_event_t ev) {
     if ((unsigned)ev >= SCHED_DEBUG_EVENT_COUNT) {
         return 0;
@@ -149,6 +161,12 @@ static uint32_t cpu_sched_load_on(uint32_t cpu_id) {
     return load;
 }
 
+/* Publishes an empty run queue: no ready bands, zero counters, and NO idle
+ * thread.  cs->idle stays 0 until the idle bootstrap installs one
+ * (process_spawn_idle for the BSP, process_spawn_idle_ap for each AP), and both
+ * cross-CPU readers treat a 0 idle as "this CPU has no idle thread to exclude",
+ * so a queue left in that state looks permanently busy to placement and lets its
+ * idle thread be stolen.  Run once per CPU before that CPU can be preempted. */
 void cpu_sched_init(cpu_sched_t* cs) {
     ksync_spinlock_init(&cs->lock);
     cs->ready_bitmap = 0;
@@ -437,6 +455,14 @@ void cpu_sched_remove_thread(thread_t* t) {
                            (unsigned)__atomic_load_n((uint32_t*)&t->state, __ATOMIC_RELAXED));
 }
 
+/* cpu_sched_enqueue onto the CALLING CPU's queue, with `caller` carried through
+ * purely so the diagnostics below can name the original call site (the
+ * sched_enqueue_thread inline wrapper passes its own return address).  `caller`
+ * has no
+ * effect on placement or on whether the enqueue happens.
+ *
+ * Not a failure-reporting API: a thread still running on another CPU, or one
+ * that is not READY, is handled or reported and the call returns normally. */
 void sched_enqueue_thread_from(thread_t* t, uintptr_t caller) {
     /* A NULL thread must not reach the current_thread scan below: a CPU that
      * has not dispatched yet holds current_thread == NULL, so NULL == NULL
@@ -475,6 +501,10 @@ void sched_enqueue_thread_from(thread_t* t, uintptr_t caller) {
     cpu_sched_enqueue(cpu_sched(), t);
 }
 
+/* Unlink `t` from `cs`, which the caller must already know owns it.  No
+ * validation: passing a thread queued on a DIFFERENT CPU corrupts that CPU's
+ * band under this CPU's lock.  cpu_sched_remove_thread is the safe entry point
+ * when the owning queue is not known for certain.  Caller holds cs->lock. */
 void cpu_sched_dequeue(cpu_sched_t* cs, thread_t* t) {
     /* Caller holds cs->lock. */
     cpu_sched_unlink_locked(cs, t);
@@ -561,6 +591,9 @@ thread_t* cpu_sched_pick_next(cpu_sched_t* cs) {
     return cpu_local()->idle_thread;
 }
 
+/* Requests a reschedule on the CALLING CPU only — the flag lives in cpu_local().
+ * Marking another CPU's need_resched is not expressible here; that CPU notices
+ * new work through its own tick or by stealing. */
 void sched_set_need_resched(void) {
     /* Delegate to the existing process.c resched flag. */
     extern void process_set_need_resched(void);
@@ -657,6 +690,11 @@ void sched_thread_init(thread_t* t, sched_prio_t prio) {
     t->pend_data = 0;
 }
 
+/* Maps a thread's role flags to its starting band.  The tests are ordered, so
+ * the flags form a precedence chain rather than a set: idle beats kernel worker
+ * beats driver beats native service, and a thread with none of them gets
+ * SCHED_PRIO_WASM.  Passing several is therefore legal and resolves to the
+ * earliest, not to an error. */
 sched_prio_t sched_default_prio(int is_idle, int is_kernel_worker, int is_driver,
                                 int is_native_service) {
     if (is_idle) {
@@ -695,6 +733,14 @@ uint32_t cpu_sched_pick_target_cpu(void) {
     return best;
 }
 
+/* Least-loaded CPU that `t`'s affinity mask permits, with a round-robin
+ * tie-break.  An affinity mask whose intersection with the online set is empty
+ * is treated as "no constraint" rather than "unrunnable", matching
+ * cpu_sched_affinity_allows: a mask naming only offline CPUs must not strand the
+ * thread.  With prefer_last_cpu set, an allowed and in-range t->last_cpu short-
+ * circuits the search, trading balance for cache affinity.  A NULL `t` degrades
+ * to a plain least-loaded search over the online set.  The answer is advisory:
+ * load is read without the remote queue locks and is stale on return. */
 uint32_t cpu_sched_pick_target_cpu_for_thread(const thread_t* t, uint8_t prefer_last_cpu) {
     uint32_t online_mask = cpu_sched_online_mask();
     uint32_t allowed_mask = online_mask;
@@ -731,6 +777,14 @@ uint32_t cpu_sched_pick_target_cpu_for_thread(const thread_t* t, uint8_t prefer_
     return best;
 }
 
+/* Places a freshly initialised thread on its first CPU and enqueues it there.
+ *
+ * prefer_last_cpu is 0 because a new thread's last_cpu is whatever
+ * sched_thread_init left (0), which is not a cache-affinity signal — honouring
+ * it would pin every spawn to CPU 0.  The chosen target is written back to
+ * last_cpu so subsequent wakes DO have a real hint.  Requires the thread to be
+ * READY and fully initialised: cpu_sched_enqueue refuses anything else, which
+ * would leave the thread on no queue at all. */
 void sched_spawn_thread(struct thread* t) {
     uint32_t target = cpu_sched_pick_target_cpu_for_thread(t, 0);
     t->last_cpu = target;

@@ -119,6 +119,11 @@ static int thread_copy_name(thread_t* thread, const char* name) {
     return name[i] == '\0' ? 0 : -1;
 }
 
+/* Scrubs the whole table to UNUSED and restarts tid allocation at 1 (0 is the
+ * reserved "no thread" id).  Runs once on the BSP from process_init(), before
+ * any other thread exists — which is why it is the one thread_reset_slot caller
+ * that does not hold g_thread_table_lock, and why re-running it against a live
+ * system would silently free every thread out from under the scheduler. */
 void thread_init(void) {
     ksync_spinlock_init(&g_thread_table_lock);
     g_next_tid = 1;
@@ -127,10 +132,27 @@ void thread_init(void) {
     }
 }
 
+/* thread_spawn_in_owner, publishing straight to READY.  Only for a thread whose
+ * scheduler state is already usable, or whose caller runs before any other CPU
+ * can pick it up: publishing READY makes it a legal wake and enqueue target on
+ * every CPU immediately.  The worker and user-thread spawn paths deliberately
+ * use the BLOCKED form and promote after sched_thread_init instead. */
 int thread_spawn_main(uint32_t owner_pid, const char* name, uint32_t* out_tid) {
     return thread_spawn_in_owner(owner_pid, name, THREAD_STATE_READY, THREAD_BLOCK_NONE, out_tid);
 }
 
+/* Claims a free slot for `owner_pid`, initialises the bookkeeping, and publishes
+ * it in `initial_state` (READY or BLOCKED).  Returns 0 with *out_tid set, or -1
+ * for owner_pid 0, a NULL out_tid, an exhausted table, a name longer than
+ * THREAD_NAME_MAX-1, or a rejected publish; the slot is scrubbed back to UNUSED
+ * on every failure after the claim, so nothing leaks.  A NULL name is accepted
+ * and becomes "".
+ *
+ * The thread is NOT scheduler-ready on return: no kernel stack, no context, no
+ * sched_node — sched_thread_init and a stack allocation are the caller's job.
+ * That is why the workers spawn BLOCKED and are promoted afterwards.  The whole
+ * function runs under g_thread_table_lock, so the claim and the publish cannot
+ * be split by another CPU's spawn. */
 int thread_spawn_in_owner(uint32_t owner_pid, const char* name, thread_state_t initial_state,
                           thread_block_reason_t initial_reason, uint32_t* out_tid) {
     if (owner_pid == 0 || !out_tid) {
@@ -194,6 +216,16 @@ static thread_t* thread_get_nolock(uint32_t tid) {
     return 0;
 }
 
+/* Resolves a tid to its slot, or 0 for tid 0 (the "no thread" sentinel) and for
+ * a tid with no live slot.
+ *
+ * The table lock is dropped before returning, so the pointer is only as valid as
+ * the caller's independent reason to believe that thread is alive: once
+ * thread_reap/thread_reap_owner releases the slot, the same storage is handed to
+ * an unrelated spawn.  Every caller here holds that guarantee structurally (it
+ * is the current thread, or a thread of a process being held from reaping).
+ * Takes g_thread_table_lock, so it must not be called with that lock held —
+ * thread_get_nolock is the in-file variant for that. */
 thread_t* thread_get(uint32_t tid) {
     if (tid == 0) {
         return 0;
@@ -204,6 +236,13 @@ thread_t* thread_get(uint32_t tid) {
     return thread;
 }
 
+/* Raw slot access by table index, for whole-table sweeps (sched_timeout_check).
+ * Returns 0 only for an out-of-range index — an in-range slot is returned
+ * whatever its state, INCLUDING UNUSED, so a caller must filter on the fields it
+ * cares about rather than treat a non-NULL result as a live thread.  Takes no
+ * lock at all: the slot address is fixed for the life of the system, so the
+ * pointer never dangles, but every field read through it races the table lock's
+ * writers and must be an atomic load if the answer matters. */
 thread_t* thread_table_at(uint32_t index) {
     if (index >= THREAD_MAX_COUNT) {
         return 0;
@@ -211,6 +250,11 @@ thread_t* thread_table_at(uint32_t index) {
     return &g_threads[index];
 }
 
+/* First live slot in table order whose owner_pid matches.  It does NOT consult
+ * the owning process's main_tid, so with several threads in one process the
+ * answer is whichever slot the allocator handed out first, which need not be the
+ * main thread.  Returns 0 for owner_pid 0 or no match.  Same pointer-lifetime
+ * caveat as thread_get: the lock is dropped before returning. */
 thread_t* thread_find_main_for_pid(uint32_t owner_pid) {
     if (owner_pid == 0) {
         return 0;
@@ -227,6 +271,14 @@ thread_t* thread_find_main_for_pid(uint32_t owner_pid) {
     return 0;
 }
 
+/* Enumerates a process's threads: writes the `index`-th live thread of
+ * `owner_pid` into *out_tid and returns 0, or returns -1 once `index` is past
+ * the end (which is the loop-termination signal every caller uses).
+ *
+ * The enumeration is by table position and is only stable while nothing spawns
+ * or reaps a thread of that process, and the lock is released between calls — so
+ * a walk that races a reap can skip or repeat a thread.  Callers tolerate this
+ * by re-validating each tid with thread_get before use. */
 int thread_owner_tid_at(uint32_t owner_pid, uint32_t index, uint32_t* out_tid) {
     if (owner_pid == 0 || !out_tid) {
         return -1;
@@ -249,6 +301,14 @@ int thread_owner_tid_at(uint32_t owner_pid, uint32_t index, uint32_t* out_tid) {
     return -1;
 }
 
+/* Tombstones every live thread of `owner_pid` as ZOMBIE with the given status.
+ * Threads are NOT unlinked from their run queues here and their stacks are not
+ * freed — thread_reap_owner does that later, and until then the lazy sweeps in
+ * cpu_sched_pick_next / cpu_sched_steal_pick drop the tombstoned nodes as they
+ * meet them.  Because ZOMBIE is monotonic, this is what makes "the process is
+ * dead" a stable observation for the reap gate.  A thread currently RUNNING on
+ * another CPU is marked too; it finishes its timeslice and is then handled by
+ * the zombie branch of process_schedule_once_impl. */
 void thread_mark_owner_exited(uint32_t owner_pid, int32_t exit_status) {
     if (owner_pid == 0) {
         return;
@@ -268,6 +328,15 @@ void thread_mark_owner_exited(uint32_t owner_pid, int32_t exit_status) {
     ksync_spinlock_unlock(&g_thread_table_lock);
 }
 
+/* Releases every slot belonging to `owner_pid`, whatever its state.  Only safe
+ * from the process reap path, which has already won the ZOMBIE -> REAPING claim
+ * and therefore owns the process exclusively; called against a live process it
+ * would free threads out from under a running CPU.
+ *
+ * Lock order: g_thread_table_lock is held across thread_reset_slot, which calls
+ * cpu_sched_remove_thread and takes a run-queue lock inside it.  Nothing in the
+ * scheduler takes the thread table lock while holding a queue lock, so this
+ * direction is the only one and it does not invert. */
 void thread_reap_owner(uint32_t owner_pid) {
     if (owner_pid == 0) {
         return;
@@ -325,6 +394,16 @@ static int thread_transition_legal(thread_state_t from, thread_state_t to) {
     return 1;
 }
 
+/* Atomic conditional state change: succeeds (returns 1) only if the edge is
+ * legal per the table above AND the thread was still in `from`.  Returns 0
+ * otherwise, without distinguishing "illegal edge" from "lost the race" —
+ * callers do not act on the difference, they retry or give up.
+ *
+ * The CAS is what makes decide-and-write atomic across CPUs, so this is the
+ * primitive the lockless wake paths use INSTEAD of the table lock; a caller
+ * already holding g_thread_table_lock may use it too, the two do not conflict.
+ * from == to passes the legality table, so it reports success exactly when the
+ * thread is already in that state and 0 when it has moved on. */
 int thread_transit(thread_t* thread, thread_state_t from, thread_state_t to) {
     if (!thread) {
         return 0;
@@ -339,6 +418,11 @@ int thread_transit(thread_t* thread, thread_state_t from, thread_state_t to) {
                : 0;
 }
 
+/* Unconditional-target state write: moves the thread to `state` from WHATEVER it
+ * is in now, provided that edge is legal.  Reports nothing — an unknown tid and
+ * a rejected edge are both silent, so a caller that needs to know whether the
+ * change happened must use thread_transit instead.  `reason` is written only
+ * alongside an accepted change, so a rejected call leaves the old reason intact. */
 void thread_set_state(uint32_t tid, thread_state_t state, thread_block_reason_t reason) {
     ksync_spinlock_lock(&g_thread_table_lock);
     thread_t* thread = thread_get_nolock(tid);
@@ -376,6 +460,9 @@ int thread_wake_if_blocked(uint32_t tid) {
     return 1;
 }
 
+/* Records a thread's exit status.  Independent of the state machine: it neither
+ * requires nor causes a transition, so the caller tombstones the thread
+ * separately.  An unknown tid is a silent no-op. */
 void thread_set_exit_status(uint32_t tid, int32_t exit_status) {
     ksync_spinlock_lock(&g_thread_table_lock);
     thread_t* thread = thread_get_nolock(tid);
@@ -387,6 +474,13 @@ void thread_set_exit_status(uint32_t tid, int32_t exit_status) {
     ksync_spinlock_unlock(&g_thread_table_lock);
 }
 
+/* Releases a single thread slot: unlinks it from any run queue and scrubs it to
+ * UNUSED, making it available to the next spawn.  Any pointer previously
+ * obtained from thread_get for this tid is stale afterwards.  Unlike
+ * thread_reap_owner this does not check the thread is terminal, so the caller
+ * must have established that nothing will dispatch it — the join/detach paths
+ * reap only a ZOMBIE, the spawn-abort paths reap a thread never published.
+ * An unknown tid is a no-op. */
 void thread_reap(uint32_t tid) {
     ksync_spinlock_lock(&g_thread_table_lock);
     thread_t* thread = thread_get_nolock(tid);
@@ -398,6 +492,14 @@ void thread_reap(uint32_t tid) {
     ksync_spinlock_unlock(&g_thread_table_lock);
 }
 
+/* Points the CALLING CPU's current_thread at `tid`, or clears it for tid 0.  An
+ * unknown tid also clears it, because thread_get answers 0 — so a stale tid
+ * silently deconfigures the CPU rather than being reported.
+ *
+ * Resolves through thread_get, which takes g_thread_table_lock: this must not be
+ * called with that lock held.  The dispatcher calls it inside
+ * critical_section_enter/leave so the pid/process/thread trio is published as
+ * one unit with respect to preemption. */
 void thread_set_current(uint32_t tid) {
     if (tid == 0) {
         cpu_local()->current_thread = 0;
@@ -406,6 +508,9 @@ void thread_set_current(uint32_t tid) {
     cpu_local()->current_thread = thread_get(tid);
 }
 
+/* Tid running on the CALLING CPU, or 0 when nothing is dispatched — which is the
+ * normal state inside the scheduler itself and during early boot, not an error.
+ * Lock-free: reads only this CPU's own cpu_local() slot. */
 uint32_t thread_current_tid(void) {
     thread_t* thread = cpu_local()->current_thread;
     return thread ? thread->tid : 0;

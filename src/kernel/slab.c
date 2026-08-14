@@ -55,6 +55,14 @@ static slab_class_t g_classes[SLAB_CLASS_COUNT] = {
 };
 static ksync_spinlock_t g_slab_lock;
 
+/* Initialises the lock and threads every chunk of each class's static buffer
+ * onto that class's free list.  Must run before kalloc_small can return
+ * anything; kalloc_small before it finds empty free lists and, until the page
+ * allocator is up, cannot grow them either.
+ *
+ * Not idempotent: a second call rebuilds the free lists from the static buffers
+ * alone, which both re-offers chunks that are currently allocated and forgets
+ * every frame the classes have grown into. */
 void slab_init(void) {
     ksync_spinlock_init(&g_slab_lock);
     for (uint32_t c = 0; c < SLAB_CLASS_COUNT; ++c) {
@@ -97,6 +105,17 @@ static int slab_class_grow(slab_class_t* klass) {
     return count > 0 ? 0 : -1;
 }
 
+/* Allocates from the smallest class whose chunk holds size plus the 4-byte
+ * slab_header_t that precedes the returned pointer.  The largest class is 128
+ * bytes, so a request above 124 bytes has no class and returns 0 immediately,
+ * without touching the lock.
+ *
+ * 0 is also returned when the class free list is empty and slab_class_grow
+ * cannot obtain a frame — during very early boot, or once the higher-half window
+ * is out of memory.  Takes g_slab_lock for the list manipulation.
+ *
+ * The block is uninitialised.  It must be released with kfree_small, which reads
+ * the header immediately below the pointer. */
 void* kalloc_small(size_t size) {
     size_t total = size + sizeof(slab_header_t);
     int c = find_class(total);
@@ -122,6 +141,15 @@ void* kalloc_small(size_t size) {
     return ptr_cast(void, (hdr + 1));
 }
 
+/* Returns a chunk to its class free list, identified by the header just below
+ * ptr.  NULL is ignored, and a pointer whose header carries the wrong magic or
+ * an out-of-range class index is ignored too — so a foreign pointer is refused
+ * rather than corrupting a free list.
+ *
+ * Freeing clears the magic, which makes an immediate double free a silent no-op
+ * as well.  That only holds until the chunk is handed out again; there is no
+ * detection after that.  The frame itself is never returned to the page
+ * allocator. */
 void kfree_small(void* ptr) {
     if (!ptr) {
         return;

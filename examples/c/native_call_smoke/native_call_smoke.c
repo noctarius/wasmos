@@ -1,3 +1,22 @@
+/* native_call_smoke - host-call and IPC round-trip check from a guest app.
+ *
+ * Writes to the console, burns a busy loop, then sends a message to an endpoint
+ * it owns and receives it back, verifying every field survives the round trip.
+ * Sending to one's own endpoint is what makes this a self-contained test: no
+ * service and no peer process are needed.
+ *
+ * It also demonstrates the raw receive path. wasmos_ipc_select_one blocks until
+ * a message is queued, after which the fields of that message are read one at a
+ * time with wasmos_ipc_last_field(WASMOS_IPC_FIELD_*) — the "last message" is
+ * per-process state, so nothing may intervene between the select and the reads.
+ * (wasmos_ipc_message_read_last() does the same in one call; this app spells it
+ * out.)
+ *
+ * Returns -1 on a mismatch, otherwise the accumulated `sink` value, which is
+ * non-zero by construction — this app's exit status is not a pass/fail flag,
+ * the printed markers are.
+ *
+ * No preconditions: no service lookup, either runtime. */
 #include <stdint.h>
 #include "stdio.h"
 #include "wasmos/api.h"

@@ -21,7 +21,15 @@
 extern "C" {
 #endif
 
+/* Buffer-object kind selector for the generic wasmos_buffer_* host calls (the
+ * xfer-buffer kind is the only one the kernel implements; any other value is
+ * rejected with WASMOS_ERR_XFER_BUFFER_INVALID_KIND). The wasmos_xfer_buffer_*
+ * calls are the kind-less shorthand for the same objects and take no kind. */
 #define WASMOS_BUFFER_KIND_XFER 1
+/* Access rights passed as the `flags` bitmask of buffer_borrow/reborrow: READ
+ * lets the grantee call xfer_buffer_read, WRITE lets it call xfer_buffer_write.
+ * The mask must be non-zero and contain no other bits, and a reborrow may only
+ * narrow (never widen) the rights of the borrow it derives from. */
 #define WASMOS_BUFFER_GRANT_READ 0x1
 #define WASMOS_BUFFER_GRANT_WRITE 0x2
 
@@ -42,9 +50,25 @@ typedef struct {
     uint32_t vector;
 } wasmos_msi_desc_t;
 
-/* Per-process statistics returned by wasmos_proc_info_stats.
- * cpu_ticks: scheduler ticks attributed to this process.
- * rss_est_bytes: estimated resident set size (committed heap + kstack). */
+/* Per-process statistics returned by wasmos_proc_info_stats. The layout mirrors
+ * the kernel's process_stats_t; it is a snapshot taken while the process table
+ * is walked and is stale the moment it lands in guest memory.
+ *
+ * state: kernel process_state_t (1=READY, 2=RUNNING, 3=BLOCKED, 4=ZOMBIE,
+ *     7=NEW); enumeration skips free and mid-reap slots, so those never appear.
+ * block_reason: kernel process_block_reason_t (0=none, 1=IPC, 2=wait).
+ * runtime_tag: subsystem/runtime label ("WARP", "KERNEL", …), NUL-padded but
+ *     NOT NUL-terminated when the tag uses all 8 bytes.
+ * current_tid: the TID this process is running on the reporting CPU right now,
+ *     or 0 when it is not the CPU's current process.
+ * cpu_ticks: scheduler ticks summed over the process's threads.
+ * vm_total_bytes: mapped context memory (linear memory + code + stacks).
+ * thread_kstack_total_bytes: kernel stacks of all live threads.
+ * heap_committed_bytes: runtime heap committed for this pid (wasm3 plus native
+ *     driver heaps).
+ * rss_est_bytes: resident-set estimate; currently equal to vm_total_bytes,
+ *     since per-page presence is not tracked yet.
+ * last_cpu: CPU id the main thread last ran on. */
 typedef struct {
     uint32_t state;
     uint32_t block_reason;
@@ -61,6 +85,11 @@ typedef struct {
     uint32_t last_cpu;
 } wasmos_proc_stats_t;
 
+/* Per-CPU scheduler counters filled by wasmos_sched_cpu_stats(cpu_id, out).
+ * ready_count is the number of ready threads queued on that CPU summed over all
+ * priority bands; running_pid is 0 when the CPU runs no process; steal_count and
+ * dispatch_count are running totals (threads stolen from another CPU's queue,
+ * and threads dispatched here); last_pid is the pid dispatched most recently. */
 typedef struct {
     uint32_t ready_count;
     uint32_t running_pid;
@@ -69,6 +98,11 @@ typedef struct {
     uint32_t last_pid;
 } wasmos_sched_cpu_stats_t;
 
+/* GOP framebuffer geometry filled by wasmos_framebuffer_info. framebuffer_base
+ * is the PHYSICAL base (usable with wasmos_framebuffer_map, not dereferenceable
+ * from a guest); framebuffer_size is in bytes; framebuffer_stride is PIXELS per
+ * scanline and is >= framebuffer_width; framebuffer_gop_pixel_format is the raw
+ * EFI_GRAPHICS_PIXEL_FORMAT value reported by firmware. */
 typedef struct {
     uint64_t framebuffer_base;
     uint64_t framebuffer_size;

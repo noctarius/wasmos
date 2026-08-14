@@ -425,6 +425,21 @@ static int32_t* client_cwd_for_source(int32_t source) {
     return &g_clients[free_slot].cwd_dir;
 }
 
+/* Service entry point: index the kernel's built-in initfs image, register under
+ * the fs.backend class, and serve FS_IPC_* requests against it forever.
+ *
+ * All four parameters are ignored; proc_endpoint is overwritten from the
+ * spawn-info contract, because every entry argument is passed as zero at spawn.
+ *
+ * This backend is READ-ONLY: the image is baked into the boot modules, so it
+ * implements only OPEN / READ / CLOSE / READDIR / CHDIR. There is no write,
+ * create or unlink path at all -- those opcodes fall through to the default and
+ * are answered WASMOS_ERR_FS_UNSUPPORTED. It is what serves paths before any
+ * on-disk volume is mounted.
+ *
+ * On success this does not return. A bring-up failure parks the process in
+ * wasmos_sys_ipc_recv_loop() instead of returning, so there is no failure status
+ * on this path for a caller to observe. */
 WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t ignored_arg1,
                                       int32_t ignored_arg2, int32_t ignored_arg3) {
     /* proc.endpoint comes from the spawn-info contract, not an entry arg. */

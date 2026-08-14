@@ -20,10 +20,25 @@
 
 #include <stdint.h>
 
+/* state == 0 unlocked, 1 locked, as in the real lock, so all-zero storage is a
+ * valid unlocked instance and a static one needs no explicit init. */
 typedef struct {
     volatile uint32_t state;
 } spinlock_t;
 
+/* The family below tolerates a NULL lock throughout: init, unlock and the two
+ * _noirq forms do nothing, spinlock_try_lock reports failure, and spinlock_lock
+ * returns without acquiring anything. Passing NULL is therefore silent rather
+ * than fatal, so a test cannot use a NULL lock to detect a missing lock object.
+ *
+ * spinlock_try_lock returns 1 on acquisition and 0 when the lock is already held
+ * (and for NULL) -- non-zero means success, matching the real declaration.
+ *
+ * Because lock and lock_noirq are the same code here, so are the two releases:
+ * an acquisition made with one can be released with the other and the host build
+ * cannot tell. On target they are not interchangeable -- spinlock_lock raises a
+ * per-CPU preempt depth that only spinlock_unlock lowers -- so a mispaired
+ * acquire/release passes a suite built on this shadow. */
 static inline void spinlock_init(spinlock_t* lock) {
     if (lock) {
         lock->state = 0u;

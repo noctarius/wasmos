@@ -39,6 +39,19 @@ using namespace clang::ast_matchers;
 
 namespace clang::tidy::wasmos {
 
+// wasmos-standalone-block. Warns on every CompoundStmt nested directly inside
+// another CompoundStmt, which is a brace block that buys nothing but a level of
+// indentation. Blocks that are the body of a function or of an if/for/while/
+// switch are not matched, because their parent is the declaration or control
+// statement rather than a compound statement. Blocks whose braces come from a
+// macro expansion are skipped, since the source cannot be rewritten there.
+//
+// Carries a fixit that removes the two brace tokens and leaves the body in
+// place; clang-format restores the indentation afterwards. The fixit is not
+// semantics-preserving in general — merging the scopes can collide two
+// declarations of the same name or extend a lifetime — so the failure mode is a
+// compile error to resolve by hand, and a genuinely needed scope is kept with a
+// NOLINT(wasmos-standalone-block).
 class StandaloneBlockCheck : public ClangTidyCheck {
 public:
   StandaloneBlockCheck(StringRef Name, ClangTidyContext *Context)
@@ -74,9 +87,22 @@ public:
   }
 };
 
-// Rewrites the raw integer<->pointer double casts "(T *)(uintptr_t)e" and
-// "(intT)(uintptr_t)e" to ptr_cast(T, e) / addr_cast(intT, e) (see
-// src/libc/include/wasmos_cast.h). Fixit-driven: run with clang-tidy --fix.
+// wasmos-reinterpret-cast. Rewrites the raw integer<->pointer double casts
+// "(T *)(uintptr_t)e" and "(intT)(uintptr_t)e" to ptr_cast(T, e) /
+// addr_cast(intT, e) (see src/libc/include/wasmos_cast.h). The named macros are
+// the project's single spelling for the address/pointer conversions that the
+// higher-half aliasing work depends on, so the raw form is what this hunts.
+//
+// Matches an outer C-style cast over an inner C-style cast, then requires the
+// inner cast to be spelled exactly "uintptr_t" — a cast through an equivalent
+// canonical type such as unsigned long is not rewritten. Skips anything whose
+// outer cast or operand touches a macro: the rewrite is source-text based.
+// Of the outer types only a plain "T *" (never a function pointer, and never a
+// typedef that does not end in '*') and integer types are handled; the written
+// spelling is reused verbatim so typedefs survive.
+//
+// Fixit-driven: the diagnostic itself carries no analysis value, so running
+// without --fix reports occurrences and changes nothing.
 class ReinterpretCastCheck : public ClangTidyCheck {
 public:
   ReinterpretCastCheck(StringRef Name, ClangTidyContext *Context)
@@ -153,6 +179,11 @@ public:
   }
 };
 
+// Module registration. The names bound here are the ones .clang-tidy and the
+// NOLINT comments refer to, so renaming one silences every existing suppression
+// of it. Registering a check does not enable it: the repository's .clang-tidy
+// selects wasmos-standalone-block (as a hard error) and leaves
+// wasmos-reinterpret-cast to be requested explicitly for a --fix run.
 class WasmosModule : public ClangTidyModule {
 public:
   void addCheckFactories(ClangTidyCheckFactories &Factories) override {

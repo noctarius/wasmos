@@ -427,6 +427,17 @@ static process_run_result_t threading_ipc_stress_entry(process_t* process, void*
     return PROCESS_RUN_YIELDED;
 }
 
+/* Spawns the in-kernel threading self-tests as children of init_pid: the
+ * internal thread smoke test, the join-ordering test, and the IPC stress test.
+ * All three are marked auto-reap.
+ *
+ * ring3_thread_lifecycle_smoke_enabled is recorded for the self-tests to consult
+ * rather than acted on here; the ring-3 lifecycle probe itself is spawned by
+ * kernel_ring3_spawn_suite.
+ *
+ * Every test's static state is reset first, so only one run can be in flight.
+ * Returns 0 when all were spawned and -1 at the FIRST failure, leaving earlier
+ * ones running.  Verdicts arrive later as "[test] threading ..." log lines. */
 int kernel_threading_selftest_spawn(uint32_t init_pid,
                                     uint8_t ring3_thread_lifecycle_smoke_enabled) {
     uint32_t threading_internal_smoke_pid = 0;

@@ -52,6 +52,9 @@ class Channel {
         this.future.init(this.promise);
     }
 
+    /** Deliver `value` to whoever awaits next. Does nothing if the future is
+     * still settled from the previous round, since only the awaiting side
+     * re-arms it. */
     send(value: i32): void {
         this.promise.resolve(<usize>value);
     }
@@ -164,6 +167,9 @@ class Payload {
     }
 }
 
+/** Channel for a reference-typed value: the payload travels as its address in
+ * the Box, so the awaiting side reinterprets it rather than casting it. Re-armed
+ * from the awaiting side, as Channel is. */
 class PayloadChannel {
     future: Future = new Future();
     promise: Promise = new Promise();
@@ -243,6 +249,8 @@ class SumTwoByHand extends Task {
 
 // ------------------------------------------------------------------- helpers
 
+/** A future with the promise that settles it: `future` goes to the coroutine
+ * under test, `promise` stays with the case that drives it. */
 class Pair {
     future: Future = new Future();
     promise: Promise = new Promise();
@@ -478,6 +486,7 @@ function testReferenceResult(): i32 {
     return 0;
 }
 
+/** 0 if every case passed, else the failing case's marker. */
 export function runTests(): i32 {
     const cases: StaticArray<TestCase> = [
         testSequentialSuspensions,

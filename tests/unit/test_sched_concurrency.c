@@ -27,6 +27,18 @@
 
 /* ------------------------------------------------------------------ harness */
 
+/* The CPU table the linked scheduler sees, and the three symbols it resolves it through.
+ *
+ * cpu_local() is the WASMOS_HOST_TEST_SMP arm in arch/x86_64/smp.h, which reads
+ * g_host_cpu_local -- a _Thread_local pointer into g_cpus[]. A pthread therefore selects
+ * which CPU it is by calling be_cpu() once, and every kernel call it makes afterwards
+ * runs on that CPU's queue with that CPU's idle thread. A worker that never calls
+ * be_cpu() leaves the pointer NULL and the first cpu_local() dereference faults.
+ *
+ * g_cpu_count is what the scheduler treats as the online CPU count: it bounds the steal
+ * scan and is the modulus of both placement pickers. harness_init() sets it to NCPU;
+ * entries beyond NCPU exist in the table but fall outside both that count and the online
+ * mask, which admits only entries with started != 0. */
 cpu_local_t g_cpus[WASMOS_MAX_CPUS];
 uint32_t g_cpu_count = 4;
 _Thread_local cpu_local_t* g_host_cpu_local;
@@ -51,6 +63,12 @@ static thread_t g_idle[NCPU];
 static int g_failures;
 static int g_checks;
 
+/* Counts every evaluation into g_checks and, on failure, counts g_failures and prints
+ * `msg` with the file and line. A failed check does NOT end the case: the remaining
+ * assertions still run, and main prints the totals and exits non-zero if any failed.
+ * Both counters are updated atomically, so the macro is safe to evaluate from a worker
+ * thread; the printf is not synchronised, so concurrent failures may interleave. Cases
+ * here mostly assert after the join, where the state is quiescent. */
 #define CHECK(cond, msg)                                                                           \
     do {                                                                                           \
         __atomic_fetch_add(&g_checks, 1, __ATOMIC_RELAXED);                                        \
@@ -68,13 +86,27 @@ void serial_printf_unlocked(const char* fmt, ...) {
     (void)fmt;
     __atomic_fetch_add(&g_reports, 1, __ATOMIC_RELAXED);
 }
+/* Discarded: nothing here observes preemption requests. The kernel sets need_resched on
+ * the calling CPU for the dispatch loop to consume at the next preemption point;
+ * test_sched_runqueue.c counts the requests instead. */
 void process_set_need_resched(void) {}
+
+/* Exact mirror of the real initialiser, so sched_thread.c's join_event setup links
+ * without dragging in sched_event.c and, with it, the timer and the thread table. No
+ * case here blocks on an event. */
 void sched_event_init(sched_event_t* ev, sched_event_type_t type) {
     ksync_spinlock_init(&ev->lock);
     list_head_init(&ev->wait_list);
     ev->cnt = 0;
     ev->type = type;
 }
+/* The CAS half of thread.c's thread_transit, with the same acquire/release ordering.
+ * Returns non-zero when the state was swapped, 0 for a NULL thread or a state that no
+ * longer matches `from`. Faithfulness matters here: the scheduler depends on LOSING this
+ * race under contention, so a stub that always succeeded would hide exactly the bugs
+ * these cases exist for. thread.c also gates the edge through thread_transition_legal();
+ * every edge attempted here (BLOCKED -> READY) is legal there, so the bare CAS is
+ * equivalent for this harness. */
 int thread_transit(thread_t* t, thread_state_t from, thread_state_t to) {
     uint32_t expected = (uint32_t)from;
     if (!t) {
@@ -83,6 +115,14 @@ int thread_transit(thread_t* t, thread_state_t from, thread_state_t to) {
     return __atomic_compare_exchange_n((uint32_t*)&t->state, &expected, (uint32_t)to, 0,
                                        __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE);
 }
+/* Mirrors thread.c: tid 0 is refused, the transition is BLOCKED-only, block_reason is
+ * cleared, and the result is 1 when this call performed the transition and 0 otherwise
+ * -- the value sched_wake_thread uses to decide whether it owns the enqueue.
+ *
+ * The kernel serialises the whole sequence under g_thread_table_lock. This stub has no
+ * such lock, so the state change is a CAS (losing it means another CPU woke the thread
+ * first) and block_reason is stored atomically. Only pool slots are searched, so a tid
+ * outside 1..POOL_MAX -- an idle thread's, for instance -- never matches. */
 int thread_wake_if_blocked(uint32_t tid) {
     if (tid == 0) {
         return 0;
@@ -104,10 +144,25 @@ int thread_wake_if_blocked(uint32_t tid) {
     return 0;
 }
 
+/* Make the calling pthread act as CPU `id` for every kernel call it issues afterwards.
+ * Each worker calls it once on entry -- that is what makes a pthread a CPU here -- and
+ * the main thread calls it again after a join so the post-run checks run as CPU 0. `id`
+ * is not bounds-checked and must be below WASMOS_MAX_CPUS. The binding is per-thread, so
+ * one worker's choice never disturbs another's. */
 static void be_cpu(uint32_t id) {
     g_host_cpu_local = &g_cpus[id];
 }
 
+/* Rebuild the whole fixture between cases: zero the CPU table and the thread pool,
+ * re-initialise every queue, mark CPUs 0..NCPU-1 online, install one idle thread per
+ * online CPU (tid 9000+, held outside the pool so it is never mistaken for test work),
+ * and publish POOL_MAX READY threads spread across the priority bands. g_cpu_count
+ * becomes NCPU and the caller is left acting as CPU 0.
+ *
+ * Precondition: no worker thread is live. It writes every queue and every slot without
+ * holding a lock, so running it against a live worker corrupts what that worker is
+ * walking. g_checks, g_failures and g_reports are cumulative for the run and are not
+ * reset. */
 static void harness_init(void) {
     memset(g_cpus, 0, sizeof(g_cpus));
     memset(g_pool, 0, sizeof(g_pool));
@@ -218,11 +273,19 @@ typedef struct {
 
 static test_barrier_t g_barrier;
 
+/* Arm the barrier for exactly `n` participants. Single-use: there is no generation
+ * counter, so a second round needs a fresh init, and re-arming while a participant is
+ * still spinning in barrier_wait would release it early. Call it before creating the
+ * threads that will wait on it. */
 static void barrier_init(test_barrier_t* b, int n) {
     b->target = n;
     __atomic_store_n(&b->count, 0, __ATOMIC_RELEASE);
 }
 
+/* Announce arrival and spin until all `target` participants have arrived, then let them
+ * all proceed. Busy-waits rather than sleeping, so the release is as close to
+ * simultaneous as the host allows; a participant that never arrives hangs the run rather
+ * than timing out. */
 static void barrier_wait(test_barrier_t* b) {
     __atomic_fetch_add(&b->count, 1, __ATOMIC_ACQ_REL);
     while (__atomic_load_n(&b->count, __ATOMIC_ACQUIRE) < b->target) {

@@ -771,8 +771,12 @@ int32_t wasmos_sys_svc_lookup_retry_native(wasmos_driver_api_t* api, uint32_t pr
 
 /* Register service_endpoint under a name and (optionally) a virtual class +
  * instance, using the descriptor-based SVC_IPC_REGISTER_DESC_REQ. Pass
- * class_name=NULL/class_len=0 to register with no class. Returns the assigned
- * service handle, or -1 on failure. */
+ * class_name=NULL/class_len=0 to register with no class. Returns the reply's
+ * arg0, which the process manager always sets to 0, or -1 on failure.
+ * Blocking: waits on source_endpoint for the SVC_IPC_REGISTER_RESP. Names and
+ * class names that exceed WASMOS_SVC_NAME_MAX / WASMOS_SVC_CLASS_MAX are
+ * REFUSED, not truncated, and the descriptor field is left empty. The
+ * descriptor's transfer buffer is released on every exit path after acquire. */
 int32_t wasmos_sys_svc_register_class_native(wasmos_driver_api_t* api, uint32_t proc_endpoint,
                                              uint32_t source_endpoint, uint32_t service_endpoint,
                                              const uint8_t* name, uint32_t name_len,

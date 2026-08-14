@@ -8,6 +8,20 @@
 /*
  * shmem_target (shmtgt) — first half of the shmem end-to-end test.
  *
+ * Demonstrates the non-owner side of shared memory and, more importantly, that
+ * mapping is capability-gated: at each stage driven by shmownr this app asserts
+ * the outcome it is entitled to. A forged region id is refused, an unaligned
+ * fixed-offset map is refused, mapping before the grant is refused, mapping
+ * after the grant succeeds, and mapping after the revoke — including after the
+ * owner has unmapped its own view — is refused again.
+ *
+ * It also demonstrates wasmos_proc_notify_ready(), which detaches the app from
+ * the CLI so the prompt returns and the second half can be spawned while this
+ * one is still running.
+ *
+ * Preconditions: spawned before shmownr, and both halves need write access to
+ * /boot/shmem_e2e.bin.
+ *
  * Runs without busy-polling:
  *   1. Write PID + IPC endpoint to the sync file.
  *   2. Call wasmos_proc_notify_ready() so the CLI returns immediately and

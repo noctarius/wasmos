@@ -1008,10 +1008,21 @@ static void process_reap(process_t* proc) {
     }
 }
 
+/* The CALLING CPU's scheduler context — the one every dispatched thread switches
+ * back into.  The storage lives in that CPU's cpu_local_t and outlives every
+ * process, so the pointer never dangles, but it names a different object on each
+ * CPU and must not be cached across a migration. */
 process_context_t* cpu_local_sched_ctx(void) {
     return &cpu_local()->sched_ctx;
 }
 
+/* BSP-only bring-up: resets the pid counter, scrubs the process table to
+ * pristine UNUSED, initialises this CPU's scheduler state and diagnostics, and
+ * brings the thread table, run queue and futex table up.  Must run before any
+ * spawn and before interrupts can preempt, since it publishes the table slots by
+ * DIRECT write (the only producer of UNUSED — process_transit has no edge to
+ * it).  An AP runs process_ap_init instead, which touches only its own per-CPU
+ * state and must not repeat the global work here. */
 void process_init(void) {
     g_next_pid = 1;
     ksync_spinlock_init(&g_process_table_lock);
@@ -1082,10 +1093,28 @@ void process_ap_init(void) {
     cpu_sched_init(cpu_sched());
 }
 
+/* Spawns with the CALLING CPU's current process as the parent.  At boot, with
+ * nothing dispatched, current_pid is 0, so the child is parented to 0 — which
+ * process_kill treats as "no parent check applies" rather than as an error. */
 int process_spawn(const char* name, process_entry_t entry, void* arg, uint32_t* out_pid) {
     return process_spawn_as(cpu_local()->current_pid, name, entry, arg, out_pid);
 }
 
+/* Shared spawn body.  Claims a free slot as NEW under g_process_table_lock,
+ * builds the address space, main thread, kernel stack and initial ring-0
+ * context, then publishes NEW -> READY (and enqueues) or NEW -> BLOCKED
+ * (parked, awaiting process_unpark_pid), per `enqueue_initial`.  Returns 0 with
+ * *out_pid set, or -1.
+ *
+ * The slot is claimed under the table lock but built without it: NEW is not a
+ * schedulable state and no path other than this one moves a NEW slot, so the
+ * lock is only needed to make find-then-claim atomic against a concurrent spawn.
+ *
+ * FIXME(spawn-slot-leak): every failure AFTER the ->NEW claim returns without
+ * putting the slot back. process_find_slot only reclaims UNUSED/DEAD and
+ * process_transition_legal has no NEW -> DEAD edge, so a failed spawn strands
+ * that g_processes[] entry permanently, along with its mm context on the paths
+ * that create one first. */
 static int process_spawn_as_internal(uint32_t parent_pid, const char* name, process_entry_t entry,
                                      void* arg, uint32_t* out_pid,
                                      thread_state_t initial_thread_state,
@@ -1224,6 +1253,9 @@ static int process_spawn_as_internal(uint32_t parent_pid, const char* name, proc
     return 0;
 }
 
+/* Spawn READY and enqueued: the child may be dispatched on any CPU before this
+ * call even returns, so nothing may be configured on it afterwards that it needs
+ * at startup.  Use the parked form for that. */
 int process_spawn_as(uint32_t parent_pid, const char* name, process_entry_t entry, void* arg,
                      uint32_t* out_pid) {
     return process_spawn_as_internal(parent_pid, name, entry, arg, out_pid, THREAD_STATE_READY,
@@ -1238,6 +1270,13 @@ int process_spawn_as_parked(uint32_t parent_pid, const char* name, process_entry
                                      THREAD_BLOCK_NONE, 0);
 }
 
+/* Releases a process spawned parked, making its main thread runnable on the
+ * CALLING CPU.  Returns 0 on success AND on the no-op case where the thread was
+ * not blocked (already unparked, or running), -1 only for an unknown pid or a
+ * process with no main thread.  Unparking twice is therefore harmless.
+ *
+ * Everything the child needs — caps, cwd, priority band, ready gating — must be
+ * applied BEFORE this call; after it the child can run on any CPU. */
 int process_unpark_pid(uint32_t pid) {
     process_t* proc = process_get(pid);
     if (!proc) {
@@ -1276,6 +1315,17 @@ int process_spawn_as_ready_gated_parked(uint32_t parent_pid, const char* name,
     return 0;
 }
 
+/* Creates the single system-wide idle process and installs its main thread as
+ * the BSP's idle thread.  Returns -1 if one already exists, so it is not
+ * idempotent — the second call is a refusal, not a no-op.
+ *
+ * Deliberately does NOT take g_process_table_lock: it runs once during boot,
+ * before any AP is up, and is the documented exception to process_find_slot's
+ * locking rule.  The idle thread is pinned by affinity and never enqueued; the
+ * per-CPU fallback in cpu_sched_pick_next is what dispatches it.  It runs on the
+ * kernel root table, not a per-process one, and is never reaped, so the shared
+ * failure paths of the ordinary spawn do not apply.  Additional per-CPU idle
+ * threads are added afterwards by process_spawn_idle_ap. */
 int process_spawn_idle(const char* name, process_entry_t entry, void* arg, uint32_t* out_pid) {
     if (!entry || !out_pid) {
         return -1;
@@ -1371,6 +1421,11 @@ int process_spawn_idle(const char* name, process_entry_t entry, void* arg, uint3
     return 0;
 }
 
+/* Adds one more idle THREAD, inside the existing idle process, pinned to
+ * `cpu_id`, and installs it as that CPU's idle thread.  Returns -1 before
+ * process_spawn_idle has run, for cpu_id 0 (the BSP's idle thread comes from
+ * process_spawn_idle) and for a cpu_id outside the table.  Called by each AP
+ * during its own bring-up, hence the atomic bumps of the shared counters. */
 int process_spawn_idle_ap(uint32_t cpu_id) {
     if (!g_idle_process || cpu_id == 0 || cpu_id >= WASMOS_MAX_CPUS) {
         return -1;
@@ -1421,14 +1476,27 @@ int process_spawn_idle_ap(uint32_t cpu_id) {
     return 0;
 }
 
+/* Adds a kernel worker thread with no work: it is dispatched once and returns
+ * PROCESS_RUN_THREAD_EXITED immediately.  Kept for the entry-point-less
+ * signature; process_thread_spawn_worker_internal is the useful form.
+ *
+ * Compatibility shim: preserve legacy signature but create a schedulable
+ * worker thread that immediately exits when no explicit entry point exists. */
 int process_thread_spawn_internal(uint32_t owner_pid, const char* name, uint32_t* out_tid) {
-    /* Compatibility shim: preserve legacy signature but create a schedulable
-     * worker thread that immediately exits when no explicit entry point exists.
-     */
     return process_thread_spawn_worker_internal(owner_pid, name ? name : "thread-worker",
                                                 process_thread_spawn_default_worker, 0, out_tid);
 }
 
+/* Adds a ring-0 worker thread to a live process, running `entry(proc, tid, arg)`
+ * on its own kernel stack at SCHED_PRIO_SYSTEM.  Returns 0 with *out_tid set, or
+ * -1 for a NULL entry/out_tid, an unknown owner, an owner that is not in a live
+ * state or is already exiting, or an exhausted thread/stack/queue resource.
+ *
+ * `arg` is borrowed and stored verbatim; it must outlive the thread.  The worker
+ * shares the owner's address space and context id but not its stack, and its
+ * return value is a process_run_result_t interpreted exactly as a process entry
+ * point's.  Workers bypass the runtime_lock the trampoline applies to ordinary
+ * entry points. */
 int process_thread_spawn_worker_internal(uint32_t owner_pid, const char* name,
                                          process_thread_worker_entry_t entry, void* arg,
                                          uint32_t* out_tid) {
@@ -1493,6 +1561,19 @@ int process_thread_spawn_worker_internal(uint32_t owner_pid, const char* name,
     return 0;
 }
 
+/* Adds a ring-3 thread to a live process: its own kernel stack for trap entry,
+ * plus a user context (USER_CS/SS, entry_rip, user_stack_top) on the owner's
+ * root table.  Returns 0 with *out_tid set, or -1.
+ *
+ * user_stack_top is rounded DOWN to 16 bytes rather than refused, because the
+ * SysV entry alignment is the kernel's to establish, not the guest's to get
+ * right.  entry_rip and user_stack_top of 0 are refused; neither is otherwise
+ * validated against the owner's mappings, so a bad address faults in ring 3.
+ *
+ * Spawns BLOCKED and promotes via process_wake_thread only after
+ * sched_thread_init, for the reason spelled out on the worker path above.  Note
+ * the polarity: process_wake_thread returns NON-zero on success, so the 0 case
+ * here is the failure that unwinds the counters and reaps the slot. */
 int process_thread_spawn_user_internal(uint32_t owner_pid, const char* name, uint64_t entry_rip,
                                        uint64_t user_stack_top, uint32_t* out_tid) {
     process_t* owner = process_find_by_pid(owner_pid);
@@ -1557,9 +1638,21 @@ int process_thread_spawn_user_internal(uint32_t owner_pid, const char* name, uin
     return 0;
 }
 
+/* Converts an already-spawned process's MAIN thread to ring 3 at (rip,
+ * user_rsp).  Returns 0 on success, -1 for an unknown pid, a zero rip/rsp, a
+ * kernel stack that is not higher-half, or a root table that still exposes the
+ * low slot after stripping.
+ *
+ * Irreversible for the whole process, not just this thread: it strips the
+ * identity-mapped low slot out of the shared root table, so every existing and
+ * future thread of that process loses low-half addressability at the same
+ * moment.  The higher-half stack check is the precondition that makes that safe
+ * — a kernel stack below the higher-half base would become unmapped by the very
+ * strip this function performs.
+ *
+ * TODO: Wire this into process-manager launch policy once the first
+ * user-mode service/app path is selected and validated end-to-end. */
 int process_set_user_entry(uint32_t pid, uint64_t rip, uint64_t user_rsp) {
-    /* TODO: Wire this into process-manager launch policy once the first
-     * user-mode service/app path is selected and validated end-to-end. */
     process_t* proc = process_find_by_pid(pid);
     uint64_t higher_half_base = paging_get_higher_half_base();
     if (!proc || rip == 0 || user_rsp == 0) {
@@ -1590,20 +1683,37 @@ int process_set_user_entry(uint32_t pid, uint64_t rip, uint64_t user_rsp) {
     return 0;
 }
 
+/* Slot for `pid`, or 0 for pid 0 and for a pid with no live slot.  Lock-free on
+ * the terms set out on process_find_by_pid: the pointer is valid only while the
+ * caller has an independent reason to believe that process is alive, because a
+ * reaped slot is recycled by an unrelated spawn.  A ZOMBIE (exited, unreaped)
+ * process still resolves — that is how the wait/status paths read its exit
+ * status — so a non-NULL result does not mean "running". */
 process_t* process_get(uint32_t pid) {
     return process_find_by_pid(pid);
 }
 
+/* Slot owning `context_id` (the mm/IPC context id carried on every message), or
+ * 0.  This is how a handler turns a message's endpoint owner into a caller
+ * identity.  Same lifetime and ZOMBIE caveats as process_get. */
 process_t* process_find_by_context(uint32_t context_id) {
     return process_find_by_context_internal(context_id);
 }
 
+/* Pid dispatched on the CALLING CPU, or 0 when nothing is (inside the scheduler,
+ * or before the first dispatch).  Read through the higher-half alias so the
+ * answer is the same whether this code is executing from the kernel's linked
+ * addresses or from its low-mapped boot alias. */
 uint32_t process_current_pid(void) {
     uint32_t* pid_ptr =
         (uint32_t*)(void*)process_kernel_alias_addr((uintptr_t)&cpu_local()->current_pid);
     return *pid_ptr;
 }
 
+/* Stages the status a process will exit with.  Records it only — the process
+ * keeps running, and the exit paths (process_mark_exited, the EXITED branch of
+ * the dispatch loop) read it back when the timeslice ends.  This is how a
+ * ring-3 exit syscall communicates its status before yielding EXITED. */
 void process_set_exit_status(process_t* process, int32_t exit_status) {
     if (!process) {
         return;
@@ -1611,6 +1721,19 @@ void process_set_exit_status(process_t* process, int32_t exit_status) {
     process->exit_status = exit_status;
 }
 
+/* Switches out of the running thread and back into this CPU's scheduler context,
+ * publishing `result` as how the timeslice ended.  Returns only when the
+ * scheduler dispatches this thread again — possibly on a different CPU.
+ *
+ * `result` is what selects the completion path in process_schedule_once_impl:
+ * YIELDED re-enqueues and marks the thread sticky, BLOCKED expects it to be
+ * parked on an event already (sched_event_wait sets that up before calling
+ * here), EXITED/THREAD_EXITED tombstone it.  Passing BLOCKED without having
+ * blocked is tolerated — the RUNNING branch there treats it as a yield — but
+ * passing YIELDED after blocking would unlink the thread from its wait list.
+ *
+ * With no current process (the scheduler's own context) it returns immediately,
+ * which for a caller expecting to park means it spins instead. */
 void process_yield(process_run_result_t result) {
     if (!cpu_local()->current_process) {
         return;
@@ -1631,6 +1754,10 @@ void process_yield(process_run_result_t result) {
     context_switch_high(ctx, &cpu_local()->sched_ctx);
 }
 
+/* Marks a process as one that must announce itself (PROC_IPC_NOTIFY_READY /
+ * process_notify_ready) before the PM treats it as started.  One-way: there is
+ * no clear.  Meaningful only before the child first runs, which is why the PM
+ * sets it on a still-parked child. */
 void process_set_require_explicit_ready(process_t* process) {
     if (!process) {
         return;
@@ -1646,6 +1773,10 @@ void process_block_on_ipc(process_t* process) {
     (void)process;
 }
 
+/* Latches the "child has announced itself" flag the sync-spawn poll waits on.
+ * A latch, not an event: setting it twice is harmless and it is never cleared
+ * for the life of the slot.  Does not wake or unblock anything by itself —
+ * pm_poll_sync_spawn observes it on its next PM dispatch. */
 void process_notify_ready(process_t* process) {
     if (!process) {
         return;
@@ -1653,6 +1784,17 @@ void process_notify_ready(process_t* process) {
     process->ready = 1;
 }
 
+/* One step of a parent's wait for `target_pid`.  Tri-state, and the caller loops
+ * on it: 0 means the child was a zombie, *out_exit_status is filled and its slot
+ * has been reaped; 1 means the caller has been parked and must
+ * process_yield(PROCESS_RUN_BLOCKED) and call again on resume; -1 means the wait
+ * is impossible and never will succeed (target 0, waiting on itself, no such
+ * pid, or the target is not this process's child).
+ *
+ * The parent check is enforced here, which is why the PM — whose interactive
+ * children are parented to the CLI, not to it — cannot use this and reaps
+ * through process_reap_zombie_pid instead.  The reap is CAS-guarded, so racing
+ * an auto-reap on another CPU is safe; only one side frees the slot. */
 int process_wait(process_t* process, uint32_t target_pid, int32_t* out_exit_status) {
     if (!process || target_pid == 0 || process->pid == target_pid) {
         return -1;
@@ -1732,6 +1874,17 @@ int process_thread_join(process_t* process, uint32_t target_tid, int32_t* out_ex
     return 1;
 }
 
+/* Marks a thread as detached: nobody will join it, so it is reaped as soon as it
+ * exits rather than left as a joinable zombie.  Returns 0 on success (including
+ * detaching an already-detached thread), or a packed negative code — WASMOS_INVAL
+ * for target_tid 0, NO_CALLER with no current thread, THREAD_NOT_FOUND,
+ * THREAD_NOT_OWNER for a thread of another process, THREAD_BUSY when a DIFFERENT
+ * thread is already parked joining it.
+ *
+ * Detaching a thread that has already exited reaps it immediately here rather
+ * than deferring, since the exit path has already run and will not revisit it.
+ * One-way: there is no re-attach, and a later join of a detached thread is
+ * refused with WASMOS_ERR_THREAD_JOIN_FAILED. */
 int process_thread_detach(process_t* process, uint32_t target_tid) {
     thread_t* target = 0;
     uint32_t caller_tid = 0;
@@ -1762,6 +1915,16 @@ int process_thread_detach(process_t* process, uint32_t target_tid) {
     return 0;
 }
 
+/* Terminates `pid` with `exit_status`: tombstones its threads, wakes anyone
+ * waiting on it, and auto-reaps if that is enabled and nothing is waiting.
+ * Returns 0 on success and 0 again for an already-zombie target (the
+ * postcondition holds either way); -1 for an unknown pid, for suicide, and when
+ * the caller is a process that is not the target's parent.
+ *
+ * The parent check is skipped when current_pid is 0 — i.e. when the kernel calls
+ * this outside any process — which is what lets in-kernel cleanup paths kill a
+ * child they did not spawn.  Asynchronous: the target is not off-CPU on return,
+ * a thread of it may still be finishing a timeslice on another CPU. */
 int process_kill(uint32_t pid, int32_t exit_status) {
     process_t* target = process_find_by_pid(pid);
     if (!target) {
@@ -1781,6 +1944,16 @@ int process_kill(uint32_t pid, int32_t exit_status) {
     return 0;
 }
 
+/* Enables or disables "free this slot as soon as it exits with nobody waiting".
+ * Returns 0, or -1 for an unknown or free slot.  Enabling it re-tests
+ * immediately, so calling this on a process that has ALREADY exited reaps it
+ * right here — which is why the PM sets it before unparking a one-shot child,
+ * not after.
+ *
+ * Must not be enabled for a process the caller intends to PROC_IPC_WAIT on:
+ * process_has_waiters only sees kernel-side waiters (threads blocked in
+ * process_wait), not PM's IPC wait list, so auto-reap would free the slot before
+ * the status reply is built. */
 int process_set_auto_reap(uint32_t pid, uint8_t enabled) {
     process_t* proc = process_find_by_pid(pid);
     if (!proc || proc->state == PROCESS_STATE_UNUSED) {
@@ -1791,6 +1964,14 @@ int process_set_auto_reap(uint32_t pid, uint8_t enabled) {
     return 0;
 }
 
+/* Reads an exited process's status.  THREE-valued and NOT 0-on-failure: 0 means
+ * the process is a zombie and *out_exit_status is now set, 1 means it exists but
+ * has not exited (nothing written), -1 means unknown pid or NULL out pointer.
+ * Callers therefore test `!= 0` for "no status yet", which folds the
+ * still-running and does-not-exist cases together.
+ *
+ * Non-destructive: the zombie is left for a wait or a reap to collect, so this
+ * can be polled. */
 int process_get_exit_status(uint32_t pid, int32_t* out_exit_status) {
     process_t* proc = process_find_by_pid(pid);
     if (!proc || !out_exit_status) {
@@ -1803,6 +1984,15 @@ int process_get_exit_status(uint32_t pid, int32_t* out_exit_status) {
     return 0;
 }
 
+/* Wakes a blocked thread.  Returns NON-zero on success and 0 on failure — the
+ * inverse of the 0-on-success convention most of this file uses, so check the
+ * polarity at every call site.  0 covers tid 0, an unknown tid, and a thread
+ * that is not BLOCKED (already running or ready), none of which is an error
+ * worth distinguishing at a wake site.
+ *
+ * The actual wake goes through sched_wake_thread, so it participates in the
+ * Dekker handshake with the blocking-completion path: the thread may end up
+ * enqueued by this call or by the CPU it is yielding off, never by both. */
 int process_wake_thread(uint32_t tid) {
     if (tid == 0) {
         return 0;
@@ -1818,6 +2008,20 @@ int process_wake_thread(uint32_t tid) {
     return 1;
 }
 
+/* Runs one dispatch round on the calling CPU: pick a thread, switch into it, and
+ * handle whatever its timeslice produced.  Returns SCHED_OK or one of the
+ * SCHED_R_* codes; only SCHED_R_PICK, SCHED_R_CTX, SCHED_R_ROOT and
+ * SCHED_R_MAXCOUNT are fatal to the boot loop, the rest are recoverable races
+ * (a thread reaped mid-pick, a process that went zombie) and mean "try again".
+ *
+ * Blocks for the whole timeslice of whatever it dispatches.
+ *
+ * This wrapper exists only to normalise where the work runs before entering
+ * process_schedule_once_impl.  Two independent corrections: if this code is
+ * executing from the kernel's low boot alias, it re-enters itself through the
+ * higher-half address; and if it arrived on a low-mapped stack, it runs the impl
+ * on this CPU's dedicated scheduler stack.  Both matter because the impl
+ * switches CR3 to a user root table, under which low addresses are gone. */
 int process_schedule_once(void) {
     uint64_t higher_half_base = paging_get_higher_half_base();
     uintptr_t here = 0;
@@ -2185,6 +2389,20 @@ static int process_schedule_once_impl(void) {
     return (result == PROCESS_RUN_YIELDED) ? SCHED_OK : SCHED_R_RANDONE;
 }
 
+/* One timer tick's worth of accounting on the CALLING CPU, called from the timer
+ * IRQ handler.  Charges the tick to the running thread, decrements its quantum
+ * and raises need_resched when it reaches 0; it does NOT switch — the actual
+ * preemption happens later at process_preempt_from_irq on the IRQ return path.
+ *
+ * Does nothing when this CPU is inside the scheduler or has nothing dispatched,
+ * and nothing when the running process is no longer RUNNING (a concurrent kill),
+ * so a stale current_pid cannot be charged.
+ *
+ * The rest is the resched-stall watchdog: a resched that stays pending for
+ * SCHED_RESCHED_STALL_TICKS while preemption is disabled is reported, and the
+ * window restarts on every tick where no preemption-disabling lock is held, so
+ * ordinary short spinlock holds inside ring-0 work never accumulate into a
+ * report.  Reporting only: it never forces a switch. */
 void process_tick(void) {
     uint64_t now = timer_ticks();
     if (cpu_local()->current_pid == 0 || !cpu_local()->current_thread ||
@@ -2244,19 +2462,50 @@ void process_tick(void) {
     }
 }
 
+/* Whether the CALLING CPU has a reschedule pending.  A hint, not a lock: it can
+ * change under the reader, and acting on a stale answer only costs (or defers)
+ * one preemption. */
 int process_should_resched(void) {
     return cpu_local()->need_resched != 0;
 }
 
+/* Raises the reschedule request on the CALLING CPU.  Release-ordered so whatever
+ * made a thread runnable is visible before the flag that will act on it; the
+ * clearers are plain, since they run on the same CPU that consumes the flag. */
 void process_set_need_resched(void) {
     __atomic_store_n(&cpu_local()->need_resched, 1, __ATOMIC_RELEASE);
 }
 
+/* Drops the CALLING CPU's pending reschedule and resets the stall watchdog's
+ * window with it, so a resched that was declined does not later be reported as a
+ * stall. */
 void process_clear_resched(void) {
     cpu_local()->need_resched = 0;
     cpu_local()->resched_pending_since_tick = 0;
 }
 
+/* Decides whether to preempt the interrupted thread, from inside an IRQ handler.
+ *
+ * Returns 1 having REWRITTEN `frame` so the handler's iretq lands in
+ * process_preempt_trampoline on the kernel stack instead of resuming the
+ * interrupted code — the caller must iretq unchanged after that.  Returns 0 to
+ * mean "resume normally"; `frame` is then untouched.  `frame` is borrowed and
+ * points at the live saved-register frame on the interrupt stack.
+ *
+ * The gates that decline are, in order: already in the scheduler or a context
+ * switch; the process-manager outside a pm_preempt_safe_enter region; no resched
+ * pending or preemption disabled; the current process not RUNNING; inside a
+ * hostcall; a trap frame that fails validation.
+ *
+ * Then the decisive one: an interrupt taken FROM RING 0 is never preempted.
+ * Only ring-3 threads are preemptible here, which is why a wasm3 guest — which
+ * executes inside the ring-0 interpreter — runs its timeslice to completion
+ * regardless of need_resched, while a WARP guest in ring 3 is preempted.
+ *
+ * When it does preempt, the full ring-3 register state is snapshotted into the
+ * thread's context first, and the whole privilege-return frame is rewritten
+ * (CS/SS/RSP as well as RIP), because a bare RIP/CS rewrite would leave iretq
+ * restoring the stale user SS:RSP. */
 int process_preempt_from_irq(irq_frame_t* frame) {
     if (!frame) {
         return 0;
@@ -2389,24 +2638,43 @@ int process_preempt_from_irq(irq_frame_t* frame) {
     return 1;
 }
 
+/* Per-CPU nesting counter for "do not preempt me".  Nestable, so every disable
+ * must be matched by exactly one enable.
+ *
+ * Interrupts are NOT masked: this only suppresses the scheduler's decision to
+ * switch away at the IRQ return path, so device IRQs keep being serviced while
+ * it is raised.  That separation is what lets wasm_driver.c hold preemption off
+ * across a whole WASM execution without blocking interrupt delivery.  Not a
+ * lock, and not cross-CPU: another CPU can still run whatever it likes. */
 void preempt_disable(void) {
     cpu_local()->preempt_disable_count++;
 }
 
+/* Releases one level.  Saturates at 0 instead of underflowing, so an unmatched
+ * enable is absorbed silently rather than wrapping the counter to ~0 and pinning
+ * preemption off forever.  Does NOT poll for a pending reschedule on reaching 0
+ * — the switch waits for the next tick or an explicit preempt_safepoint(). */
 void preempt_enable(void) {
     if (cpu_local()->preempt_disable_count > 0) {
         cpu_local()->preempt_disable_count--;
     }
 }
 
+/* Non-zero when the CALLING CPU is currently preemptible (depth 0). */
 int preempt_is_enabled(void) {
     return cpu_local()->preempt_disable_count == 0;
 }
 
+/* Current nesting depth on the CALLING CPU; 0 means preemptible.  Used by the
+ * trampoline to unwind a depth a process left raised, and by the tick watchdog
+ * to tell a genuine lock hold from ordinary ring-0 work. */
 uint32_t preempt_disable_depth(void) {
     return cpu_local()->preempt_disable_count;
 }
 
+/* Named aliases of the preempt counter for code that is guarding a short
+ * multi-field update rather than a lock hold.  Identical mechanism; the separate
+ * spelling is what documents the intent at the call site. */
 void critical_section_enter(void) {
     preempt_disable();
 }
@@ -2415,6 +2683,11 @@ void critical_section_leave(void) {
     preempt_enable();
 }
 
+/* Voluntary preemption point: yields ONLY if a reschedule is already pending,
+ * and returns immediately otherwise, so it is cheap to sprinkle through a long
+ * ring-0 loop.  Does not consult the preempt depth — a caller inside a
+ * preempt-disabled region that calls this yields anyway, which is why it belongs
+ * at loop tops rather than inside a critical section. */
 void preempt_safepoint(void) {
     if (!cpu_local()->current_process) {
         return;
@@ -2426,6 +2699,12 @@ void preempt_safepoint(void) {
     process_yield(PROCESS_RUN_YIELDED);
 }
 
+/* Opt IN to preemption, for the process-manager only.  process_preempt_from_irq
+ * refuses to preempt a process named "process-manager" unless this per-CPU depth
+ * is non-zero, so PM runs non-preemptible by default and marks the regions where
+ * being switched out is safe.  Nestable, and the leave saturates at 0 like
+ * preempt_enable.  The depth is per-CPU, so it must be raised and dropped on the
+ * same CPU — which holds because PM is not preempted while it is raised. */
 void pm_preempt_safe_enter(void) {
     cpu_local()->pm_preempt_safe_depth++;
 }
@@ -2436,10 +2715,17 @@ void pm_preempt_safe_leave(void) {
     }
 }
 
+/* Total scheduler-health complaints, for the boot self-tests to assert on.  A
+ * mixed figure by construction: resched stalls are the CALLING CPU's count,
+ * invalid trap frames are a system-wide one, so the answer differs per CPU and
+ * is only meaningful as "is it still zero?". */
 uint64_t process_watchdog_issue_count(void) {
     return cpu_local()->resched_stall_reports + g_trap_frame_invalid_reports;
 }
 
+/* Number of enumerable process slots, i.e. the bound for a
+ * process_info_at_stats() walk.  Lock-free and immediately stale; treat it as a
+ * loop bound whose entries are re-validated, not as a live census. */
 uint32_t process_count_active(void) {
     /* Counts everything process_info_at_stats() enumerates, so `ps` iterates a
      * matching range.  Includes ZOMBIE (shown as "zmb") to surface not-yet-
@@ -2455,6 +2741,10 @@ uint32_t process_count_active(void) {
     return count;
 }
 
+/* Threads queued ready on the CALLING CPU, summed across bands under that CPU's
+ * queue lock.  Per-CPU, not system-wide: with work stealing the same thread can
+ * move between queues, so this is a load reading for this CPU only.  Excludes
+ * the running thread and the per-CPU idle thread, neither of which is queued. */
 uint32_t process_ready_count(void) {
     /* Sum the per-band counters, which the enqueue/unlink paths actually
      * maintain.  There is no aggregate thread count to read instead: any field
@@ -2470,6 +2760,17 @@ uint32_t process_ready_count(void) {
     return total;
 }
 
+/* Enumerates live processes by dense index: 0 with *out_pid and *out_name set, or -1
+ * once `index` is past the end (the loop-termination signal).
+ *
+ * The index space is NOT the one process_count_active() sizes: this skips
+ * ZOMBIE, that counts it.  Iterating to process_count_active() therefore ends in
+ * one or more harmless -1s whenever an unreaped child exists; use
+ * process_info_at_stats to enumerate the same set the count describes.
+ *
+ * *out_name borrows the slot's own storage: it stays valid only while that
+ * process lives, and is "" (never NULL) for an unnamed process.  Lock-free, so a
+ * walk that races a spawn or reap can skip or repeat an entry. */
 int process_info_at(uint32_t index, uint32_t* out_pid, const char** out_name) {
     if (!out_pid || !out_name) {
         return -1;
@@ -2492,6 +2793,8 @@ int process_info_at(uint32_t index, uint32_t* out_pid, const char** out_name) {
     return -1;
 }
 
+/* process_info_at plus the parent pid, over the same ZOMBIE-excluding index
+ * space and with the same borrowed-name lifetime. */
 int process_info_at_ex(uint32_t index, uint32_t* out_pid, uint32_t* out_parent_pid,
                        const char** out_name) {
     if (!out_pid || !out_parent_pid || !out_name) {
@@ -2577,6 +2880,16 @@ static uint64_t process_thread_kstack_total_bytes(const process_t* proc) {
     return total;
 }
 
+/* Full `ps` row for the `index`-th enumerable process: 0 with every out
+ * parameter written, -1 past the end or for any NULL out pointer.
+ *
+ * This is the enumeration process_count_active() sizes — ZOMBIE included, only
+ * free and in-reap slots skipped — so the two agree, unlike process_info_at.
+ * *out_stats is filled wholesale; current_tid is 0 unless that process happens
+ * to be running on the CALLING CPU at this instant, and rss_est_bytes is
+ * currently the VM total rather than a resident measurement.  Every figure is a
+ * lock-free snapshot assembled field by field, so the row can be internally
+ * inconsistent if the process changes mid-read. */
 int process_info_at_stats(uint32_t index, uint32_t* out_pid, uint32_t* out_parent_pid,
                           const char** out_name, process_stats_t* out_stats) {
     if (!out_pid || !out_parent_pid || !out_name || !out_stats) {
@@ -2629,6 +2942,12 @@ int process_info_at_stats(uint32_t index, uint32_t* out_pid, uint32_t* out_paren
     return -1;
 }
 
+/* Declares whether this process's entry point must be serialised against its own
+ * other threads.  Returns 0, or -1 for an unknown pid.  When set, the trampoline
+ * takes the process's runtime_lock around each entry-point call — with the
+ * no-IRQ spinlock variant, so the lock is held for a whole timeslice without
+ * masking device interrupts.  Kernel worker threads bypass it entirely.
+ * Any non-zero `required` enables it. */
 int process_set_runtime_lock_required(uint32_t pid, uint8_t required) {
     process_t* proc = process_get(pid);
     if (!proc) {
@@ -2638,6 +2957,13 @@ int process_set_runtime_lock_required(uint32_t pid, uint8_t required) {
     return 0;
 }
 
+/* Records the runtime that owns this process ("KERNEL", "WARP", ...).  Returns 0
+ * on success, -1 for an unknown pid, a NULL tag, or a tag longer than
+ * WASMOS_APP_SUBSYSTEM_TAG_LEN — in which case the prefix has already been
+ * stored, so the tag is left TRUNCATED rather than unchanged.  The dispatcher
+ * compares this against "WARP" to decide whether a linear-memory resync is
+ * needed before switching in, so an inaccurate tag is a correctness matter, not
+ * just cosmetic. */
 int process_set_runtime_tag(uint32_t pid, const char* tag) {
     process_t* proc = process_get(pid);
     if (!proc) {
@@ -2646,6 +2972,11 @@ int process_set_runtime_tag(uint32_t pid, const char* tag) {
     return process_copy_runtime_tag(proc, tag);
 }
 
+/* Re-bands a process's MAIN thread before it is first scheduled.  Returns 0, or
+ * -1 for a prio outside [0, SCHED_PRIO_MAX), an unknown pid, a process with no
+ * main thread, or — see below — a main thread that is already queued.  Lower
+ * numbers are higher priority.  Affects only the main thread; other threads of
+ * the process keep the band sched_thread_init gave them. */
 int process_set_main_prio(uint32_t pid, uint8_t prio) {
     if (prio >= SCHED_PRIO_MAX) {
         return -1;

@@ -15,12 +15,19 @@
 extern "C" {
 #endif
 
+/* Fixed capacities of an event loop's two tables, both embedded by value in
+ * wasmos_sys_event_loop_t so a guest needs no allocator. INTENT_MAX bounds the
+ * replies that may be outstanding at once (intent_send fails once full);
+ * HANDLER_MAX bounds the distinct message types that can carry a handler. */
 #define WASMOS_SYS_INTENT_MAX 16
 #define WASMOS_SYS_HANDLER_MAX 16
 
 /* Random-helper statuses are the packed hrng domain in abi/errors.yaml:
  * WASMOS_ERR_NONE (0) on success, else a negative WASMOS_ERR_HRNG_*. */
 
+/* One outstanding request awaiting the reply that carries `request_id`. The
+ * slot is freed and cleared before on_resolve runs, so the callback may issue a
+ * new intent through the same table. */
 typedef struct {
     int32_t in_use;
     int32_t request_id;
@@ -28,6 +35,8 @@ typedef struct {
     void* user;
 } wasmos_sys_intent_t;
 
+/* Dispatch entry for unsolicited messages of one `msg_type`; unlike an intent
+ * it stays registered across deliveries. */
 typedef struct {
     int32_t in_use;
     int32_t msg_type;
@@ -35,6 +44,10 @@ typedef struct {
     void* user;
 } wasmos_sys_handler_t;
 
+/* Caller-owned reactor state for one receive endpoint. A delivered message is
+ * matched against the intent table by request_id first, then against the
+ * handler table by type, and otherwise goes to the default handler.
+ * next_request_id is a per-loop counter handed out by intent_send(). */
 typedef struct {
     int32_t receiver_endpoint;
     int32_t select_id; /* select-set watching receiver_endpoint; -1 if not created */
@@ -56,6 +69,9 @@ typedef struct {
 typedef int32_t (*wasmos_sys_wasm_ipc_future_reply_status_fn)(void* user,
                                                               const wasmos_ipc_message_t* reply);
 
+/* `active` is set between a successful send and the reply (or a cancel);
+ * `reply` holds the last delivered message and is the value the future
+ * resolves with. */
 typedef struct {
     wasmos_future_t future;
     wasmos_promise_t promise;
@@ -77,6 +93,9 @@ typedef struct {
 /* A typed asynchronous filesystem operation.  It owns the transfer buffer
  * used for its path or payload until finish() is called after its future has
  * settled.  The caller owns this record and its destination/source memory. */
+/* `length` is the transfer-buffer size the operation was started with, and
+ * caps how much finish() will copy back; has_buffer is cleared once the buffer
+ * is released. */
 typedef struct {
     wasmos_sys_wasm_fs_request_t request;
     int32_t buffer_id;
@@ -86,8 +105,18 @@ typedef struct {
 } wasmos_sys_wasm_fs_operation_t;
 
 typedef struct wasmos_sys_random_request wasmos_sys_random_request_t;
+/* Runs once per entropy request, with the packed hrng status (0 on success).
+ * The request record and its destination buffer are the caller's again once it
+ * returns. */
 typedef void (*wasmos_sys_random_complete_fn)(void* user, int32_t status);
 
+/* Caller-owned state of one entropy request. The hrng service caps a single
+ * reply at HRNG_MAX_BYTES_PER_REQ and the transfer buffer caps it further, so
+ * `len` bytes are gathered as a chain of `chunk_max`-sized intents, with `done`
+ * counting the bytes already copied to `out`. float_out is set only by
+ * random_float_async(), which draws into float_word and converts on completion.
+ * Fields are runtime state: initialise via one of the *_async starters, not by
+ * hand. */
 struct wasmos_sys_random_request {
     wasmos_sys_event_loop_t* loop;
     int32_t hrng_endpoint;
@@ -116,6 +145,9 @@ typedef enum {
     WASMOS_SYS_WAIT_FAILED = 2,  /* the wait could not be performed at all */
 } wasmos_sys_wait_result_t;
 
+/* Classify the return of wasmos_ipc_select_wait_timeout() (or any wait sharing
+ * that convention): a non-negative value is the ready endpoint id, WASMOS_TIMEOUT
+ * (-5) is an elapsed window, and every other negative value is a failure. */
 static inline wasmos_sys_wait_result_t wasmos_sys_wait_classify(int32_t rc) {
     if (rc >= 0) {
         return WASMOS_SYS_WAIT_READY; /* endpoint 0 is an endpoint, not an error */
@@ -129,6 +161,12 @@ static inline int wasmos_sys_wait_parked(int32_t rc) {
     return wasmos_sys_wait_classify(rc) != WASMOS_SYS_WAIT_FAILED;
 }
 
+/* Block on `reply_endpoint` until a message carrying `request_id` arrives, copy
+ * it to out_reply (optional) and return 0; returns -1 as soon as the underlying
+ * blocking receive fails. Messages with any other request_id are consumed and
+ * DISCARDED, so this belongs on a private reply endpoint, never on a live
+ * service endpoint where it would silently drop incoming requests. It does not
+ * check the sender, so a request_id must be unique per reply endpoint. */
 static inline int32_t wasmos_sys_ipc_recv_matching(int32_t reply_endpoint, int32_t request_id,
                                                    wasmos_ipc_message_t* out_reply) {
     for (;;) {
@@ -147,6 +185,11 @@ static inline int32_t wasmos_sys_ipc_recv_matching(int32_t reply_endpoint, int32
     }
 }
 
+/* Bind a caller-owned loop to `receiver_endpoint` and clear both tables.
+ * `request_id_base` seeds the counter intent_send() draws from, so concurrent
+ * loops in one process must use disjoint ranges. Ignores a NULL loop; a
+ * negative receiver_endpoint is accepted but leaves the loop with no select-set
+ * and nothing to drain. */
 static inline void wasmos_sys_event_loop_init(wasmos_sys_event_loop_t* loop,
                                               int32_t receiver_endpoint, int32_t request_id_base) {
     if (!loop) {
@@ -187,6 +230,9 @@ static inline void wasmos_sys_event_loop_init(wasmos_sys_event_loop_t* loop,
     }
 }
 
+/* Install the fallback handler for messages that match no intent and no typed
+ * handler. Returns 0 on success, -1 for a NULL loop or callback. Replaces any
+ * previous default. */
 static inline int32_t
 wasmos_sys_event_set_default(wasmos_sys_event_loop_t* loop,
                              void (*on_message)(void* user, const wasmos_ipc_message_t* msg),
@@ -199,6 +245,10 @@ wasmos_sys_event_set_default(wasmos_sys_event_loop_t* loop,
     return 0;
 }
 
+/* Register (or replace) the handler for `msg_type`. Returns 0 on success, -1
+ * for a NULL loop or callback, or when all WASMOS_SYS_HANDLER_MAX slots are
+ * taken by other types. Registering the same type again rewrites its callback
+ * and user pointer rather than consuming a second slot. */
 static inline int32_t wasmos_sys_event_register(wasmos_sys_event_loop_t* loop, int32_t msg_type,
                                                 void (*on_message)(void* user,
                                                                    const wasmos_ipc_message_t* msg),
@@ -225,6 +275,12 @@ static inline int32_t wasmos_sys_event_register(wasmos_sys_event_loop_t* loop, i
     return -1;
 }
 
+/* Send a request and register `on_resolve` for the reply that carries the
+ * allocated request_id, which is reported through out_request_id (optional).
+ * Non-blocking: the reply is delivered from wasmos_sys_event_loop_poll().
+ * Returns 0 on success, or -1 for a NULL loop/callback, an exhausted intent
+ * table, or a failed send - in which case the slot is released and no callback
+ * will run. The request_id counter advances even on a failed send. */
 static inline int32_t
 wasmos_sys_intent_send(wasmos_sys_event_loop_t* loop, int32_t destination_endpoint,
                        int32_t source_endpoint, int32_t type, int32_t arg0, int32_t arg1,
@@ -259,6 +315,12 @@ wasmos_sys_intent_send(wasmos_sys_event_loop_t* loop, int32_t destination_endpoi
     return -1;
 }
 
+/* intent_send() with a caller-chosen `request_id`, for protocols where the id
+ * is derived rather than allocated. It must be positive and must not already be
+ * pending on this loop; the loop's own counter is left untouched, so a caller
+ * mixing both forms is responsible for keeping the ranges disjoint. Returns 0
+ * on success, -1 on a NULL loop/callback, a non-positive or duplicate id, a
+ * full intent table, or a failed send. */
 static inline int32_t wasmos_sys_intent_send_with_request_id(
     wasmos_sys_event_loop_t* loop, int32_t destination_endpoint, int32_t source_endpoint,
     int32_t request_id, int32_t type, int32_t arg0, int32_t arg1, int32_t arg2, int32_t arg3,
@@ -291,6 +353,11 @@ static inline int32_t wasmos_sys_intent_send_with_request_id(
     return -1;
 }
 
+/* Drop local tracking of a pending request so its callback can no longer run.
+ * The request itself is not recalled: a reply that arrives afterwards matches
+ * no intent and falls through to the type handler or the default handler.
+ * Silently does nothing for a NULL loop, a non-positive id, or an id that is
+ * not pending. */
 static inline void wasmos_sys_intent_cancel(wasmos_sys_event_loop_t* loop, int32_t request_id) {
     if (!loop || request_id <= 0) {
         return;
@@ -306,30 +373,65 @@ static inline void wasmos_sys_intent_cancel(wasmos_sys_event_loop_t* loop, int32
     }
 }
 
+/* Zero the record and put its future back in the pending state, with
+ * `reply_status` (optional; NULL accepts every reply) as the resolve/reject
+ * decision. Required before the first send and before every reuse. */
 void wasmos_sys_wasm_ipc_future_init(wasmos_sys_wasm_ipc_future_t* operation,
                                      wasmos_sys_wasm_ipc_future_reply_status_fn reply_status,
                                      void* user);
+/* Issue the request as a loop intent and return the record's future, or NULL
+ * when loop/operation is NULL, the record is already in flight, or its future
+ * has already settled (call init() again to reuse it). A failed send returns
+ * the future ALREADY REJECTED rather than NULL, so a non-NULL return does not
+ * imply the request is on the wire. out_request_id (optional) receives the
+ * allocated id, or 0 when nothing was sent. */
 wasmos_future_t* wasmos_sys_wasm_ipc_future_send(wasmos_sys_event_loop_t* loop,
                                                  wasmos_sys_wasm_ipc_future_t* operation,
                                                  int32_t destination_endpoint,
                                                  int32_t source_endpoint, int32_t msg_type,
                                                  int32_t arg0, int32_t arg1, int32_t arg2,
                                                  int32_t arg3, int32_t* out_request_id);
+/* Stop tracking the reply and reject the future with `status` (a non-negative
+ * status is normalised to -1). Does nothing when the record is not in flight.
+ * The transport request is not recalled - see the type comment above. */
 void wasmos_sys_wasm_ipc_future_cancel(wasmos_sys_wasm_ipc_future_t* operation, int32_t status);
+/* The record's stored reply, valid for the record's lifetime, or NULL for a
+ * NULL record. It is zeroed until a reply lands, so read it only after the
+ * future has settled READY. */
 const wasmos_ipc_message_t*
 wasmos_sys_wasm_ipc_future_reply(const wasmos_sys_wasm_ipc_future_t* operation);
 
+/* ipc_future_init() with the FS reply predicate installed: anything other than
+ * an FS_IPC_RESP rejects the future with -1. */
 void wasmos_sys_wasm_fs_request_init(wasmos_sys_wasm_fs_request_t* request);
+/* ipc_future_send() for an FS request. Additionally returns NULL when
+ * fs_endpoint or reply_endpoint is negative. */
 wasmos_future_t* wasmos_sys_wasm_fs_request_send(wasmos_sys_event_loop_t* loop,
                                                  wasmos_sys_wasm_fs_request_t* request,
                                                  int32_t fs_endpoint, int32_t reply_endpoint,
                                                  int32_t msg_type, int32_t arg0, int32_t arg1,
                                                  int32_t arg2, int32_t arg3,
                                                  int32_t* out_request_id);
+/* The FS reply stored in the record, with the same lifetime and read-after-
+ * settle rule as wasmos_sys_wasm_ipc_future_reply(). */
 const wasmos_ipc_message_t*
 wasmos_sys_wasm_fs_request_reply(const wasmos_sys_wasm_fs_request_t* request);
 
+/* Reset a typed FS operation to idle with no transfer buffer held. The *_async
+ * starters below re-run this themselves, so an explicit call is only needed to
+ * zero a fresh record. */
 void wasmos_sys_wasm_fs_operation_init(wasmos_sys_wasm_fs_operation_t* operation);
+/* Start one asynchronous filesystem operation on `operation` and return its
+ * future, or NULL when the record still holds a buffer or an in-flight request
+ * (call finish() first), when the arguments are invalid, or when the transfer
+ * buffer could not be acquired, filled, or granted to fs_endpoint. Each starter
+ * resets the record itself, acquires a buffer sized for its payload, grants
+ * fs_endpoint read+write over it, and ships buffer id and borrow as arg2/arg3;
+ * the buffer is held until wasmos_sys_wasm_fs_operation_finish(). The path
+ * pointer is borrowed for the duration of the call only (it is copied into the
+ * buffer, NUL included); `dst` for a read is ignored here and supplied again to
+ * finish(), while `src` for a write is copied up front. Replies are delivered
+ * through the loop, so the caller must keep polling it. */
 wasmos_future_t* wasmos_sys_wasm_fs_open_async(wasmos_sys_event_loop_t* loop,
                                                wasmos_sys_wasm_fs_operation_t* operation,
                                                int32_t fs_endpoint, int32_t reply_endpoint,
@@ -345,6 +447,8 @@ wasmos_future_t* wasmos_sys_wasm_fs_write_async(wasmos_sys_event_loop_t* loop,
                                                 int32_t fs_endpoint, int32_t reply_endpoint,
                                                 int32_t fd, const void* src, int32_t len,
                                                 int32_t* out_request_id);
+/* Close carries no payload, so it is the one starter that acquires no transfer
+ * buffer; finish() is still the way to read its status. */
 wasmos_future_t* wasmos_sys_wasm_fs_close_async(wasmos_sys_event_loop_t* loop,
                                                 wasmos_sys_wasm_fs_operation_t* operation,
                                                 int32_t fs_endpoint, int32_t reply_endpoint,
@@ -366,6 +470,15 @@ int32_t wasmos_sys_wasm_fs_operation_finish(wasmos_sys_wasm_fs_operation_t* oper
                                             void* read_dst, int32_t read_capacity,
                                             wasmos_ipc_message_t* out_reply);
 
+/* Deliver up to `budget` queued messages (0 is treated as 1) and return how
+ * many were dispatched; 0 for a NULL loop. Each message goes to the matching
+ * intent, else the handler for its type, else the default handler; a message
+ * matching none of those is counted as handled and dropped. If nothing is
+ * queued on the first iteration and the loop owns a select-set, this PARKS on
+ * that set until the endpoint becomes ready, so a caller that loops on poll()
+ * sleeps rather than spins. Without a select-set (init() could not create one)
+ * it degrades to a non-blocking drain and returns 0 immediately - a bare
+ * `while (1) poll()` then busy-spins. */
 static inline int32_t wasmos_sys_event_loop_poll(wasmos_sys_event_loop_t* loop, int32_t budget) {
     int32_t handled = 0;
     if (!loop) {
@@ -423,10 +536,16 @@ static inline int32_t wasmos_sys_event_loop_poll(wasmos_sys_event_loop_t* loop, 
     return handled;
 }
 
+/* Pack up to 16 bytes of a NUL-terminated name into four IPC args (4 bytes
+ * each, little-endian); a longer name is truncated and the args are zero-filled
+ * first, so a shorter name is NOT NUL-terminated when it exactly fills a slot.
+ * Verbatim forwarder to wasmos_ipc_pack_name16() (src/libc/include/wasmos/ipc.h). */
 static inline void wasmos_sys_ipc_pack_name16(const char* name, int32_t out_args[4]) {
     wasmos_ipc_pack_name16(name, out_args);
 }
 
+/* Inverse of pack_name16(): writes at most out_len-1 bytes plus a NUL, stopping
+ * early at the first zero byte. Does nothing for a NULL `out` or out_len 0. */
 static inline void wasmos_sys_ipc_unpack_name16(uint32_t arg0, uint32_t arg1, uint32_t arg2,
                                                 uint32_t arg3, char* out, uint32_t out_len) {
     uint32_t args[4] = {arg0, arg1, arg2, arg3};
@@ -524,6 +643,12 @@ static inline int32_t wasmos_sys_spawn_path_sync(int32_t proc_endpoint, int32_t 
     return reply.type == PROC_IPC_RESP ? (int32_t)reply.arg0 : -1;
 }
 
+/* Resolve `service_name` through the process manager, retrying up to `attempts`
+ * times (values <= 0 mean one attempt) and yielding between tries so a service
+ * that has not registered yet gets a chance to run. Each attempt consumes one
+ * request id from request_id_base upwards. Returns the endpoint id (>= 0) or -1
+ * once the attempts are exhausted. Blocks on `reply_endpoint` inside every
+ * attempt, which must therefore be a private reply endpoint. */
 static inline int32_t wasmos_sys_svc_lookup_retry(int32_t proc_endpoint, int32_t reply_endpoint,
                                                   const char* service_name, int32_t request_id_base,
                                                   int32_t attempts) {
@@ -541,6 +666,10 @@ static inline int32_t wasmos_sys_svc_lookup_retry(int32_t proc_endpoint, int32_t
     return -1;
 }
 
+/* Send, retrying up to `retries` times (values <= 0 mean one attempt) with a
+ * yield between tries. Returns 0 on success, the send's status unchanged for
+ * any failure other than a full destination queue, and IPC_ERR_FULL (-3) once
+ * the retries are used up. Does not wait for a reply. */
 static inline int32_t wasmos_sys_ipc_send_retry(int32_t destination_endpoint,
                                                 int32_t source_endpoint, int32_t type,
                                                 int32_t request_id, int32_t arg0, int32_t arg1,
@@ -568,7 +697,10 @@ static inline int32_t wasmos_sys_ipc_send_retry(int32_t destination_endpoint,
 
 /* Grantee-side read of a transfer buffer object named by `buffer_id`. The owner
  * must already have granted this context READ (via borrow/reborrow) before
- * sending buffer_id; the kernel enforces access. No borrow is taken here. */
+ * sending buffer_id; the kernel enforces access. No borrow is taken here.
+ * Copies `len` bytes from `offset` in the object into `dst`. Returns 0 on
+ * success, -1 for a NULL dst, a non-positive buffer_id, a negative len/offset,
+ * or a hostcall that refused the read. */
 static inline int32_t wasmos_sys_buffer_read(int32_t buffer_id, void* dst, int32_t len,
                                              int32_t offset) {
     if (!dst || buffer_id <= 0 || len < 0 || offset < 0) {
@@ -578,7 +710,10 @@ static inline int32_t wasmos_sys_buffer_read(int32_t buffer_id, void* dst, int32
 }
 
 /* Grantee-side write of a transfer buffer object named by `buffer_id`. The owner
- * must already have granted this context WRITE before sending buffer_id. */
+ * must already have granted this context WRITE before sending buffer_id.
+ * Copies `len` bytes from `src` to `offset` in the object. Returns 0 on
+ * success, -1 for a NULL src, a non-positive buffer_id, a negative len/offset,
+ * or a hostcall that refused the write. */
 static inline int32_t wasmos_sys_buffer_write(int32_t buffer_id, const void* src, int32_t len,
                                               int32_t offset) {
     if (!src || buffer_id <= 0 || len < 0 || offset < 0) {
@@ -587,6 +722,11 @@ static inline int32_t wasmos_sys_buffer_write(int32_t buffer_id, const void* src
     return wasmos_xfer_buffer_write(buffer_id, addr_cast(int32_t, src), len, offset) == 0 ? 0 : -1;
 }
 
+/* Terminate an entropy request with `status`: release the transfer buffer,
+ * convert the drawn word for a float request when status is 0, and run the
+ * completion callback. Called by the machinery below; a caller only invokes it
+ * to abandon a request it started, and must not do so from inside the
+ * completion callback. */
 static inline void wasmos_sys_random_finish(wasmos_sys_random_request_t* request, int32_t status) {
     if (!request) {
         return;
@@ -605,6 +745,11 @@ static inline void wasmos_sys_random_finish(wasmos_sys_random_request_t* request
 
 static inline int32_t wasmos_sys_random_issue(wasmos_sys_random_request_t* request);
 
+/* Intent callback for one HRNG_IPC_GET_BYTES_REQ chunk: copies the delivered
+ * bytes out of the transfer buffer, then either issues the next chunk or
+ * finishes the request. A malformed reply, an over-long byte count, or a failed
+ * copy finishes the request with a packed WASMOS_ERR_HRNG_* status. Registered
+ * by wasmos_sys_random_issue(); not called directly. */
 static inline void wasmos_sys_random_reply(void* user, const wasmos_ipc_message_t* reply) {
     wasmos_sys_random_request_t* request = (wasmos_sys_random_request_t*)user;
     int32_t wrote;
@@ -636,6 +781,10 @@ static inline void wasmos_sys_random_reply(void* user, const wasmos_ipc_message_
     }
 }
 
+/* Send the next chunk of an entropy request as a loop intent, capped at
+ * chunk_max. Returns 0 on success, WASMOS_ERR_HRNG_INVALID for a request that
+ * has no loop or is already complete, and -1 when the intent could not be sent.
+ * Internal to the random helpers. */
 static inline int32_t wasmos_sys_random_issue(wasmos_sys_random_request_t* request) {
     int32_t chunk;
     if (!request || !request->loop || request->done >= request->len) {
@@ -652,7 +801,14 @@ static inline int32_t wasmos_sys_random_issue(wasmos_sys_random_request_t* reque
 }
 
 /* Start a non-blocking entropy request. Callers retain `request` and `out`
- * until `on_complete` runs, and drive completion through event_loop_poll(). */
+ * until `on_complete` runs, and drive completion through event_loop_poll().
+ * Gathers `len` bytes into `out` as one or more chunks of at most
+ * min(xfer_buffer_size, HRNG_MAX_BYTES_PER_REQ) bytes. Returns 0 once the first
+ * chunk is on the wire, after which the outcome is reported only through
+ * on_complete; a negative packed WASMOS_ERR_HRNG_* means nothing was started and
+ * on_complete will NOT run: INVALID for a rejected argument, NOT_READY when no
+ * usable transfer buffer could be acquired or granted, IO_ERROR when the first
+ * intent could not be sent. */
 static inline int32_t
 wasmos_sys_random_bytes_async(wasmos_sys_event_loop_t* loop, int32_t hrng_endpoint, uint8_t* out,
                               int32_t len, wasmos_sys_random_request_t* request,
@@ -695,6 +851,9 @@ wasmos_sys_random_bytes_async(wasmos_sys_event_loop_t* loop, int32_t hrng_endpoi
     return 0;
 }
 
+/* random_bytes_async() for a single uint32: draws sizeof(uint32_t) bytes
+ * straight into *out_value, whose byte order is whatever the entropy source
+ * produced. Same return convention as random_bytes_async(). */
 static inline int32_t wasmos_sys_random_int_async(wasmos_sys_event_loop_t* loop,
                                                   int32_t hrng_endpoint, uint32_t* out_value,
                                                   wasmos_sys_random_request_t* request,
@@ -708,6 +867,10 @@ static inline int32_t wasmos_sys_random_int_async(wasmos_sys_event_loop_t* loop,
                                          (int32_t)sizeof(*out_value), request, on_complete, user);
 }
 
+/* random_bytes_async() for a float uniformly distributed in [0, 1): the drawn
+ * word is buffered in the request and its top 24 bits are converted into
+ * *out_value only when the request completes successfully. Same return
+ * convention as random_bytes_async(); *out_value is untouched on failure. */
 static inline int32_t wasmos_sys_random_float_async(wasmos_sys_event_loop_t* loop,
                                                     int32_t hrng_endpoint, float* out_value,
                                                     wasmos_sys_random_request_t* request,
@@ -732,7 +895,17 @@ static inline int32_t wasmos_sys_random_float_async(wasmos_sys_event_loop_t* loo
  * endpoint R|W over it (borrow -> b1), and ships buffer_id (arg2) + b1 (arg3).
  * fs-manager reborrows to the backend, which writes the blob straight back into
  * this buffer, then fs-manager unborrows b1 before replying so release()
- * succeeds. Returns bytes read or -1. */
+ * succeeds. Returns bytes read or -1.
+ *
+ * Blocking: waits for the reply on `reply_endpoint` via
+ * wasmos_sys_ipc_recv_matching(), so that must be a private reply endpoint.
+ * `out_text` needs room for at least 2 bytes and is always NUL-terminated on
+ * success; a blob longer than out_text_len-1 is silently TRUNCATED and the
+ * truncated length is what is returned. Returns -1 for a NULL argument, an
+ * empty path, a path that does not fit the transfer buffer, a transport or
+ * buffer failure, a reply that is not FS_IPC_RESP, or an FS status below zero -
+ * the FS status itself is not propagated. The transfer buffer is released on
+ * every exit path. */
 static inline int32_t wasmos_sys_fs_read_path(int32_t fs_endpoint, int32_t reply_endpoint,
                                               int32_t request_id, const char* path, char* out_text,
                                               int32_t out_text_len) {

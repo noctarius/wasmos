@@ -1,10 +1,19 @@
 #pragma once
 /* compat/cassert — freestanding shadow of <cassert>
+ * Provides the assert() macro; that is the whole header, and it is the only
+ * thing WARP includes <cassert> for (it is WARP's second most-included system
+ * header, used across the compiler backends and the bytecode frontend).
+ *
  * In a bare-metal kernel there is no stderr or process abort.  A failed
  * assertion is a fatal invariant violation, so it routes to kpanic() — which
  * stops every CPU, dumps their contexts, and halts — instead of silently
  * spinning one CPU forever. The failing expression is the panic reason and the
- * source line is passed as the first context value. */
+ * source line is passed as the first context value.
+ *
+ * The WARP kernel flags (CFLAGS_WARP_CXX in src/kernel/CMakeLists.txt) do not
+ * define NDEBUG, so the checking form below is the one that is compiled: every
+ * WARP assert is live and every failure is a kernel panic rather than a
+ * recoverable trap that unwinds to the WARP_CALL checkpoint. */
 
 extern "C" {
 #include "kpanic.h"
@@ -13,6 +22,10 @@ extern "C" {
 #undef assert
 
 #ifdef NDEBUG
+/* Deviation: the standard's NDEBUG assert discards its argument unevaluated.
+ * This one still evaluates it, so an assert with a side effect keeps that side
+ * effect and an unused-variable warning is suppressed.  Unreachable in the
+ * kernel build, which never defines NDEBUG. */
 #  define assert(expr) ((void)(expr))
 #else
 #  define assert(expr) \

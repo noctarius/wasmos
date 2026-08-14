@@ -1,3 +1,23 @@
+/* fs_write_smoke - write-side POSIX file API tutorial and regression check.
+ *
+ * The mutating counterpart to fs_open_smoke. Everything goes through plain libc
+ * calls, in both flavours: the descriptor API (open/read/write/close, plus
+ * mkdir/rmdir/unlink) and the stream API (fopen/fwrite/fread/fclose).
+ *
+ * Covered: O_CREAT of a new empty file, a 1 KiB write that forces the file to
+ * grow across clusters, directory create/remove including the requirement that
+ * rmdir refuse a non-empty directory, stream write then "ab" append then
+ * read-back, O_TRUNC replacing contents, O_APPEND extending them, and stat
+ * reporting the new size at each step.
+ *
+ * Prints "fs-write-smoke: ok" and exits 0, or a step-specific line and 1.
+ *
+ * Preconditions and side effects: /boot/write_smoke.txt must exist with the
+ * exact original contents this app compares against. The app rewrites that file
+ * during the run and restores it before exiting, so a failure part-way leaves
+ * it modified and the next run reports "original mismatch". It also leaves
+ * /boot/create.txt and /boot/stdio.txt behind — create.txt is deliberately not
+ * deleted, see the note at the recreate step. */
 #include "fcntl.h"
 #include "stdio.h"
 #include "string.h"

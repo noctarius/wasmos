@@ -32,6 +32,9 @@
  * adding stubs to x86_msi_stub_table, nothing more. */
 #define MSI_VECTOR_COUNT 16u
 
+/* One vector slot.  Its position in the caller's array IS the vector index; nothing here
+ * records it.  owner_context_id and endpoint are meaningful only while in_use is 1, and
+ * an all-zero slot is a valid free slot. */
 typedef struct {
     uint8_t in_use;
     uint32_t owner_context_id;

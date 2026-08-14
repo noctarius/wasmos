@@ -37,6 +37,23 @@
 # Every displacement below indexes process_context_t (process.h), which pins the
 # layout with _Static_asserts: r15 at 0 through rax at 112, then rsp 120,
 # rip 128, rflags 136, cs 144, ss 152, user_rsp 160, root_table 168.
+
+# context_switch(process_context_t *out, process_context_t *in)
+#
+# Entry: rdi = outgoing context to save into, rsi = incoming context to restore.
+# Either pointer may be a lower-half physical alias; a non-negative value is
+# rebased onto KERNEL_HIGHER_HALF_BASE before it is dereferenced. Runs on the
+# caller's kernel stack with the caller's CR3.
+# Exit: returns to the *incoming* context, not to the caller. The call returns
+# normally only later, when some other switch restores the context saved here;
+# at that point every general-purpose register and RFLAGS hold the values they
+# had on entry, because the restore replays the block saved below.
+# Loads the incoming context's root_table into CR3, so the caller must not hold
+# a pointer into an address space that the incoming context does not map.
+# Sets cpu_local_t.in_context_switch through GS for the duration of the
+# save/restore window, so a fault handler can tell a genuinely corrupt context
+# from one mid-switch; it is cleared on every exit path, including the ret at
+# label 1 taken when this context is resumed.
 context_switch:
     # Mark the transition so debug code can distinguish genuine process state
     # corruption from an in-flight save/restore sequence.
@@ -186,6 +203,15 @@ context_switch:
     movb $0, %gs:CPU_LOCAL_IN_CTX_SW_OFFSET
     ret
 
+# context_switch_to(process_context_t *in)
+#
+# Entry: rdi = context to restore, subject to the same lower-half rebasing as
+# context_switch. Runs on the caller's kernel stack, which it abandons.
+# Exit: never returns to its caller. Restores rsp/CR3/GPRs from the context and
+# resumes it with ret (CS.RPL 0) or iretq (CS.RPL 3, also restoring ss and the
+# user rsp). The caller's stack contents are not preserved and no register is
+# handed back.
+# Clears cpu_local_t.in_context_switch immediately before the transfer.
 context_switch_to:
     # context_switch_to is the one-way variant used when no outgoing task state
     # needs to be saved, for example when jumping from the scheduler context
@@ -281,6 +307,15 @@ context_switch_to:
     iretq
 
 .global process_preempt_trampoline
+# process_preempt_trampoline - resume target planted by the timer IRQ handler.
+#
+# Entry: reached by the iretq at the end of the IRQ 0 stub, never by a call, and
+# always with CS = the kernel code selector (the stub rejects any other rewrite).
+# Takes no arguments; the interrupted register state has already been restored
+# by that iretq and is discarded here.
+# Exit: does not return. Tail-jumps into context_switch_to with this CPU's
+# scheduler context, so the next scheduling decision is made on the scheduler's
+# own stack rather than on the preempted thread's.
 process_preempt_trampoline:
     # Timer IRQ preemption rewrites the interrupted RIP to this symbol. Instead
     # of re-entering user code directly, control returns to the scheduler

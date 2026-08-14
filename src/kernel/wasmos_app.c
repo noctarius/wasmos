@@ -359,6 +359,15 @@ static int wasmos_subsystem_register_locked(const char* request_tag, const char*
         ops->gates_ready_for_services, ops);
 }
 
+/* Registers a BUILTIN subsystem handler under request_tag, taking its payload,
+ * locking and readiness properties from *ops.
+ *
+ * ops is borrowed and stored by pointer, so the vtable must be statically
+ * allocated or otherwise outlive the registry.  Registering a tag that already
+ * exists is decided by the registry, not here.
+ *
+ * Returns 0 on success and -1 for a NULL ops or a registry rejection.  Takes the
+ * subsystem lock, which it also initialises on first use. */
 int wasmos_subsystem_register(const char* request_tag, const char* runtime_tag,
                               const wasmos_subsystem_ops_t* ops) {
     int rc = -1;
@@ -400,6 +409,15 @@ static int wasmos_register_builtin_subsystems_once_locked(void) {
     return 0;
 }
 
+/* Registers the built-in subsystem handlers — the native one, the generic
+ * "WASM" tag, and the tag of whichever WASM runtime this build uses (plus
+ * "WARP+JIT" on a WARP build).  Idempotent: a second call sees the initialised
+ * flag and returns 0 without re-registering.
+ *
+ * Must run before any package is resolved, since wasmos_app_resolve_subsystem
+ * fails for a tag with no handler.  Returns 0 on success and -1 if any
+ * registration failed, in which case the flag stays clear and a later call
+ * retries from the beginning — over registrations that already succeeded. */
 int wasmos_app_init_subsystems(void) {
     int rc = -1;
     wasmos_subsystem_lock_init_once();
@@ -417,6 +435,20 @@ wasmos_app_find_subsystem_handler(const char* request_tag) {
     return wasmos_subsystem_registry_find(request_tag);
 }
 
+/* Parses a WASMOS-APP container header into *out_desc, handling every header
+ * version this build knows and defaulting the fields a older version omits.
+ *
+ * NOTHING IS COPIED: the descriptor's name, entry export, capability names,
+ * payload and compiled-code pointers all point INTO `blob`, which is borrowed.
+ * The descriptor is valid only while that blob stays mapped and unmodified, and
+ * the caller must not free it while a descriptor refers to it.
+ *
+ * Every variable-length field is bounds-checked against blob_size, and counts
+ * above the descriptor's fixed array sizes are refused, so a malformed or
+ * hostile package is rejected rather than parsed off the end.
+ *
+ * Returns 0 on success and -1 for a NULL argument, a blob too short for even a
+ * v1 header, an unknown version, or any field that fails validation. */
 int wasmos_app_parse(const uint8_t* blob, uint32_t blob_size, wasmos_app_desc_t* out_desc) {
     if (!blob || !out_desc || blob_size < sizeof(wasmos_app_header_v1_t)) {
         return -1;
@@ -767,6 +799,19 @@ int wasmos_app_parse(const uint8_t* blob, uint32_t blob_size, wasmos_app_desc_t*
     return 0;
 }
 
+/* Looks up the registered handler for a package's subsystem tag and copies its
+ * properties into *out_info.
+ *
+ * It also CHECKS CONSISTENCY: a package flagged native must resolve to a handler
+ * that takes no wasm payload, and a non-native package to one that does.  A
+ * mismatch is refused, so a native binary cannot be handed to a wasm runtime or
+ * the reverse.
+ *
+ * out_info->ops points at the handler's borrowed vtable and is valid only while
+ * the registry entry lives; the tag strings are copied into out_info.
+ *
+ * Returns 0 on success and -1 for a NULL argument, an unregistered tag, or the
+ * native/payload mismatch. */
 int wasmos_app_resolve_subsystem(const wasmos_app_desc_t* desc,
                                  wasmos_app_subsystem_info_t* out_info) {
     if (!desc || !out_info) {
@@ -792,6 +837,15 @@ int wasmos_app_resolve_subsystem(const wasmos_app_desc_t* desc,
     return 0;
 }
 
+/* Whether the spawner must wait for this package to announce readiness rather
+ * than treating a successful start as ready.
+ *
+ * THREE-VALUED: 1 yes, 0 no, and -1 for "cannot tell" — a NULL desc, a subsystem
+ * that does not resolve, a non-builtin handler, or a builtin without a vtable.
+ * A caller that tests `!= 0` treats the error as a yes.
+ *
+ * Only drivers and services can require it; an ordinary application is always 0.
+ * Among those, the handler's gates_ready_for_services decides. */
 int wasmos_app_requires_explicit_ready(const wasmos_app_desc_t* desc) {
     wasmos_app_subsystem_info_t info;
     if (!desc) {
@@ -809,6 +863,13 @@ int wasmos_app_requires_explicit_ready(const wasmos_app_desc_t* desc) {
     return info.gates_ready_for_services ? 1 : 0;
 }
 
+/* Invokes the instance's entry export through its subsystem vtable, with uniform
+ * diagnostic framing around the call so every package kind logs the same way.
+ *
+ * BLOCKS for the whole life of the export, which for a service or driver is
+ * usually its entire run.  Returns the subsystem's own status — 0 on success —
+ * or -1 without calling anything when the instance is inactive, has no vtable,
+ * or its vtable has no call_entry. */
 int wasmos_app_call_entry(wasmos_app_instance_t* instance) {
     if (!instance || !instance->active || !instance->ops || !instance->ops->call_entry) {
         trace_write("[wasmos-app] entry skipped (inactive)\n");
@@ -826,6 +887,28 @@ int wasmos_app_call_entry(wasmos_app_instance_t* instance) {
     return rc;
 }
 
+/* Brings a parsed package up as a live instance owned by owner_context_id:
+ * copies its name and entry export into the instance, resolves every required
+ * endpoint, grants every requested capability, resolves the subsystem, and calls
+ * that subsystem's start hook.  The entry export is NOT invoked;
+ * wasmos_app_call_entry does that.
+ *
+ * The endpoint resolver and capability granter must have been installed with
+ * wasmos_app_set_policy_hooks whenever the package requires either — a package
+ * that requires none does not need them.
+ *
+ * init_argv supplies up to FOUR entry arguments and is read as four words
+ * regardless of init_argc; a NULL init_argv is read as four zeros.  init_argc is
+ * stored verbatim and passed on to the subsystem.
+ *
+ * desc is borrowed and, since it points into the package blob, that blob must
+ * stay mapped through the call.
+ *
+ * Returns 0 with the instance marked active, or -1 for a NULL instance or desc,
+ * a zero owner context, a name or entry that does not fit, an unresolvable
+ * endpoint, a refused capability, an unresolvable subsystem, or a failed start
+ * hook.  On failure the instance is left inactive, but capabilities already
+ * granted to the context are NOT withdrawn. */
 int wasmos_app_start(wasmos_app_instance_t* instance, const wasmos_app_desc_t* desc,
                      uint32_t owner_context_id, const uint32_t* init_argv, uint32_t init_argc) {
     if (!instance || !desc || owner_context_id == 0) {
@@ -918,6 +1001,12 @@ int wasmos_app_start(wasmos_app_instance_t* instance, const wasmos_app_desc_t* d
     return 0;
 }
 
+/* Stops the instance through its subsystem's stop hook and clears the fields
+ * that make it live, so a later wasmos_app_call_entry refuses.
+ *
+ * Idempotent for an inactive or NULL instance.  The resolved endpoints are
+ * forgotten but not destroyed, and granted capabilities are not withdrawn: both
+ * belong to the owning context, which is torn down separately. */
 void wasmos_app_stop(wasmos_app_instance_t* instance) {
     if (!instance || !instance->active) {
         return;
@@ -933,6 +1022,11 @@ void wasmos_app_stop(wasmos_app_instance_t* instance) {
     instance->entry_argc = 0;
 }
 
+/* Installs the two policy callbacks wasmos_app_start uses to satisfy a package's
+ * declared endpoint and capability requirements.  Both are global, so this is
+ * kernel-wide policy rather than per-instance; passing 0 for either makes
+ * wasmos_app_start fail for any package that requires it.  Set them before the
+ * first package is started. */
 void wasmos_app_set_policy_hooks(wasmos_app_endpoint_resolver_t endpoint_resolver,
                                  wasmos_app_capability_granter_t capability_granter) {
     g_endpoint_resolver = endpoint_resolver;

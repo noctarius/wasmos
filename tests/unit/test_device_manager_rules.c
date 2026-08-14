@@ -1,3 +1,23 @@
+/* test_device_manager_rules.c — the udev-flavoured rule-file parser
+ * (device_manager_rules.h), which decides which driver .wap the device manager
+ * spawns for a boot, block or PCI device.
+ *
+ * src/services/device_manager/device_manager_rules.c and the libc string.c that
+ * supplies strcasecmp are the only sources linked in; the parser is pure text
+ * handling over a caller-owned device_manager_state_t, so nothing is stubbed and
+ * no rule is ever acted on here.
+ *
+ * Each case owns its own zeroed state, so the loaders' "clear my kind first"
+ * behaviour is exercised only from an empty table -- a second load over a
+ * populated state is not covered. The same rule text is fed to every loader in
+ * the rejection case, which is how one file feeds all four kinds on target: a
+ * line whose SUBSYSTEM does not match the loader being run is skipped silently.
+ *
+ * The cases report through assert(), not through a failure counter: the first
+ * failure aborts the process, and main() prints "ok" only if every case ran to
+ * completion. The suite is compiled without -DNDEBUG, which those asserts
+ * depend on.
+ */
 #include <assert.h>
 #include <stdint.h>
 #include <stdio.h>

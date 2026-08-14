@@ -1,4 +1,33 @@
-/* net_udp_echo - UDP socket-ring smoke client for the native net-stack. */
+/* net_udp_echo - UDP socket-ring smoke client for the native net-stack.
+ *
+ * Demonstrates the socket data plane at its lowest level: instead of the
+ * wasmos/net.h helpers, this app builds the wire structures itself, so it
+ * doubles as documentation of the layout net-stack expects.
+ *
+ * The setup, which every socket follows:
+ *   1. acquire three xfer buffers — a TX ring, an RX ring and a one-shot
+ *      descriptor;
+ *   2. write the SPSC ring header (magic 'WRNG', version, header size, data
+ *      capacity) at offset 0 of each ring;
+ *   3. borrow the rings to net-stack R|W and the descriptor R-only, keeping the
+ *      grant handles the borrow returns;
+ *   4. fill a net_socket_open_descriptor_v1_t with the address family, socket
+ *      type and the (buffer id, grant, region size) triple for each ring, and
+ *      send it with NET_IPC_SOCKET_OPEN.
+ * The reply's arg0 is the socket id. Ownership stays with this process: the
+ * rings are its buffers, net-stack only holds a borrow.
+ *
+ * Sending is: append a length-prefixed net_udp_datagram_record_v1_t (carrying
+ * the destination address and port, since the socket is unconnected) after the
+ * TX ring header, publish the new write offset into the header, then ring the
+ * doorbell with NET_IPC_TX_NOTIFY. Receiving is the mirror, woken by an
+ * unsolicited NET_IPC_RX_NOTIFY naming the socket id.
+ *
+ * Prints "[net-udp-echo] echo ok" and exits 0, or a step-specific line and 1.
+ *
+ * Preconditions: the "net.stack" service must be running with a configured
+ * interface, and the host must answer UDP on 10.0.2.2:5555 (the QEMU SLIRP
+ * gateway plus the echo server the test harness starts). */
 #include <stdint.h>
 
 #include "stdio.h"

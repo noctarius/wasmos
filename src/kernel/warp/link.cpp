@@ -103,6 +103,8 @@ static int warp_ring3_sync_user_range(WarpCallContext* ctx, uint32_t wasm_off, u
 // single-CPU invariant (see warp/shim.cpp), revisit for SMP.
 static hashmap_t g_ctx_map;
 
+/* Look up the WARP call context for `pid` without creating one.  Returns nullptr for
+ * pid 0 and for a pid whose module has not been bound (or was already released). */
 static WarpCallContext* ctx_find(uint32_t pid) {
     if (pid == 0) {
         return nullptr;
@@ -117,6 +119,14 @@ static WarpCallContext* ctx_find(uint32_t pid) {
  * the target physical page, the data copied, then the mapping restored. */
 static uint8_t g_phys_scratch[4096] __attribute__((aligned(4096)));
 
+/* Kernel-side pointer for the guest linear-memory range [offset, offset+size).
+ * `offset` is a wasm32 offset, never a host address; the returned pointer is a KERNEL
+ * alias of those bytes, while a ring-3 guest reaches the same bytes at
+ * WARP_R3_LINMEM_BASE plus the linear-memory base's own sub-page offset plus `offset`,
+ * so this pointer is never what the guest sees.  It is borrowed and only valid until
+ * something can move or extend linear memory (a later probe past the current end, or
+ * warp_r3_memory_helper); re-fetch the base after any such call rather than caching it.
+ * Returns nullptr when the context has no module or the range leaves linear memory. */
 static inline uint8_t* warp_mem(WarpCallContext* ctx, uint32_t offset, uint32_t size) {
     /* Use the full getLinearMemoryRegion(offset, size) path with non-zero size.
      * With LINEAR_MEMORY_BOUNDS_CHECKS=1, this triggers probe() →
@@ -130,6 +140,12 @@ static inline uint8_t* warp_mem(WarpCallContext* ctx, uint32_t offset, uint32_t 
     return ctx->module->getLinearMemoryRegion(offset, size);
 }
 
+/* Kernel-side pointer for a range that is already committed, bounded by the module's
+ * DECLARED linear-memory size (pages << 16) and derived from a zero-size base probe.
+ * Unlike warp_mem this cannot trigger ensureLinearSize, so it neither commits nor
+ * zero-fills — which is the point at a mapped window, where a commit would overwrite
+ * the mapped pages.  Use warp_mem for a range the guest may not have touched yet.
+ * Returns nullptr when the module is absent or the range leaves declared memory. */
 static inline uint8_t* warp_linear_mem_window(WarpCallContext* ctx, uint32_t offset,
                                               uint32_t size) {
     if (!ctx || !ctx->module) {
@@ -146,6 +162,11 @@ static inline uint8_t* warp_linear_mem_window(WarpCallContext* ctx, uint32_t off
     return base + offset;
 }
 
+/* Resolve the call context for the host call now running.  The running process's own
+ * bound context wins; otherwise `ctx_` is used, either as a registered context or —
+ * for the ring-3 path, where the JIT hands over the module — as a vb::WasmModule*
+ * whose setContext() value is the context.  Returns nullptr when neither resolves, and
+ * every caller must treat that as "no guest memory reachable". */
 static inline WarpCallContext* warp_call_ctx(void* ctx_) {
     WarpCallContext* cur = ctx_find(process_current_pid());
     if (cur && cur->module) {
@@ -177,6 +198,9 @@ static hashmap_t g_fs_peer_map;
 
 static void warp_block_slots_init(void);
 
+/* Create the per-pid IPC last-message, FS-peer and block-DMA tables.  Called once from
+ * warp_link_init; the tables grow on demand and entries are dropped by
+ * warp_release_pid. */
 static void warp_ipc_slots_init(void) {
     hashmap_init(&g_ipc_last_map, sizeof(WarpIpcLastSlot), 64);
     hashmap_init(&g_fs_peer_map, sizeof(WarpFsPeerSlot), 64);
@@ -213,6 +237,8 @@ int warp_current_context_id(uint32_t* out) {
     return 0;
 }
 
+/* NUL-terminated string equality; 0 for a null argument.  Currently unreferenced — the
+ * -Wunused-function suppression at the top of this file hides that. */
 static int warp_process_name_eq(const char* a, const char* b) {
     if (!a || !b) {
         return 0;
@@ -251,6 +277,11 @@ static uint32_t warp_console_read(uint32_t buf_offset, uint32_t len, void* ctx_)
     return 1;
 }
 
+/* hostcalls.yaml `console_write`.  Relays `len` bytes of guest memory at `buf_offset`
+ * to the kernel log; the guest buffer is read-only to this call.  Returns 0 on success,
+ * 0 for len == 0 (a no-op, not a failure), WASMOS_INVAL for a negative `len`, and
+ * WASMOS_ERR_KERNEL_BAD_POINTER when the range leaves the caller's linear memory.
+ * Preemption is disabled across the whole relay so one write is not interleaved. */
 static uint32_t warp_console_write(uint32_t buf_offset, uint32_t len, void* ctx_) {
     auto* ctx = warp_call_ctx(ctx_);
     if ((int32_t)len < 0)
@@ -293,10 +324,17 @@ static uint32_t warp_proc_exit(uint32_t code, void* ctx_) {
     return 0;
 }
 
+/* wasi_snapshot_preview1.proc_exit — registered under WARP only; wasm3 links no WASI
+ * imports.  Same effect as warp_proc_exit with a void WASM signature. */
 static void warp_wasi_proc_exit(uint32_t code, void* ctx_) {
     (void)warp_proc_exit(code, ctx_);
 }
 
+/* wasi_snapshot_preview1.random_get — registered under WARP only.  Fills `len` bytes of
+ * guest memory at `buf_offset` with ZEROS, so it satisfies a startup probe but is not a
+ * source of randomness; guests needing entropy must use the hardware RNG service.
+ * Returns 0 on success and for len == 0, WASMOS_ERR_KERNEL_BAD_POINTER for a range
+ * outside the caller's linear memory. */
 static uint32_t warp_wasi_random_get(uint32_t buf_offset, uint32_t len, void* ctx_) {
     auto* ctx = warp_call_ctx(ctx_);
     if (len == 0) {
@@ -313,6 +351,9 @@ static uint32_t warp_wasi_random_get(uint32_t buf_offset, uint32_t len, void* ct
     return 0;
 }
 
+/* hostcalls.yaml `proc_notify_ready`: mark the calling process initialised so a waiting
+ * spawner is released.  Returns 0 unconditionally, including when there is no current
+ * process. */
 static uint32_t warp_proc_notify_ready(void* ctx_) {
     (void)ctx_;
     process_t* proc = process_get(process_current_pid());
@@ -321,6 +362,8 @@ static uint32_t warp_proc_notify_ready(void* ctx_) {
     return 0;
 }
 
+/* hostcalls.yaml `sched_yield`: give the CPU up voluntarily.  Blocks the caller only
+ * until the scheduler picks it again; returns 0. */
 static uint32_t warp_sched_yield(void* ctx_) {
     (void)ctx_;
     process_yield(PROCESS_RUN_YIELDED);
@@ -353,6 +396,10 @@ static uint32_t warp_futex_wait(uint32_t addr_off, uint32_t val, uint32_t timeou
     return (uint32_t)futex_wait(addr_off, val, timeout_ms, context_id);
 }
 
+/* hostcalls.yaml `futex_wake`.  `addr_off` is a raw guest linear-memory offset — the
+ * futex table keys on the (context, offset) pair, so no host pointer is derived and the
+ * offset is not dereferenced here.  Returns the number of waiters actually woken (0 if
+ * none), or WASMOS_ERR_KERNEL_NO_CALLER when the caller's context cannot be resolved. */
 static uint32_t warp_futex_wake(uint32_t addr_off, uint32_t count, void* ctx_) {
     auto* ctx = warp_call_ctx(ctx_);
     uint32_t context_id = 0;
@@ -375,6 +422,10 @@ static uint32_t warp_xfer_buffer_size(void* ctx_) {
     return (uint32_t)xfer_buffer_size(BUFFER_KIND_TRANSFER);
 }
 
+/* hostcalls.yaml `fs_endpoint`: the endpoint of whichever service currently holds the
+ * FS registration.  Returns that endpoint id, or WASMOS_NOENT before any FS service has
+ * registered.  The value can change across calls, so it is not cacheable for the life
+ * of the process. */
 static uint32_t warp_fs_endpoint(void* ctx_) {
     (void)ctx_;
     uint32_t ep = process_manager_fs_endpoint();
@@ -382,6 +433,12 @@ static uint32_t warp_fs_endpoint(void* ctx_) {
     return (ep == IPC_ENDPOINT_NONE) ? (uint32_t)WASMOS_NOENT : ep;
 }
 
+/* hostcalls.yaml `xfer_buffer_read`: copy `len` bytes out of transfer buffer
+ * `buffer_id` starting at `offset` into guest memory at `ptr_off`.  The caller must be
+ * the owner or a borrower holding BUFFER_BORROW_READ.  Returns 0 on success and for
+ * len == 0, otherwise a negative WASMOS_ERR_XFER_BUFFER_* code.  Under ring 3 the copy
+ * lands in the kernel alias first and the destination pages are then re-published into
+ * the guest's own root, so the guest sees them without a further sync. */
 static uint32_t warp_xfer_buffer_read(uint32_t buffer_id, uint32_t ptr_off, uint32_t len,
                                       uint32_t offset, void* ctx_) {
     auto* ctx = warp_call_ctx(ctx_);
@@ -420,6 +477,11 @@ static uint32_t warp_xfer_buffer_read(uint32_t buffer_id, uint32_t ptr_off, uint
     return (uint32_t)WASMOS_ERR_NONE;
 }
 
+/* hostcalls.yaml `xfer_buffer_write`: the reverse direction, requiring
+ * BUFFER_BORROW_WRITE.  Reads `len` bytes of guest memory at `ptr_off` into the buffer
+ * at `offset`.  Returns 0 on success and for len == 0, otherwise a negative
+ * WASMOS_ERR_XFER_BUFFER_* code.  No ring-3 republish is needed: the destination is the
+ * buffer object, not guest memory. */
 static uint32_t warp_xfer_buffer_write(uint32_t buffer_id, uint32_t ptr_off, uint32_t len,
                                        uint32_t offset, void* ctx_) {
     auto* ctx = warp_call_ctx(ctx_);
@@ -465,6 +527,11 @@ static int warp_buffer_role_allowed(uint32_t context_id, process_t* proc) {
     return proc != nullptr;
 }
 
+/* hostcalls.yaml `buffer_acquire`.  Acquire a buffer of `kind` (only
+ * BUFFER_KIND_TRANSFER is accepted) with at least `minimum_size` bytes; the caller
+ * becomes its owner and must release it.  `minimum_size` is a floor, not the resulting
+ * capacity: the object may be larger, and its actual extent is what xfer_buffer_describe
+ * reports.  Returns the new buffer_id, or a negative WASMOS_ERR_XFER_BUFFER_* code. */
 static uint32_t warp_buffer_acquire(uint32_t kind, uint32_t minimum_size, void* ctx_) {
     (void)ctx_;
     uint32_t context_id = 0;
@@ -545,6 +612,9 @@ static uint32_t warp_buffer_reborrow(uint32_t kind, uint32_t grantee_ep, uint32_
     return out.borrow_id;
 }
 
+/* hostcalls.yaml `buffer_release`: the OWNER drops `buffer_id` and its backing.  A
+ * borrower cannot release; it gets WASMOS_ERR_XFER_BUFFER_NO_ACCESS from the ownership
+ * lookup.  Returns 0 on success, otherwise a negative WASMOS_ERR_XFER_BUFFER_* code. */
 static uint32_t warp_buffer_release(uint32_t kind, uint32_t buffer_id, void* ctx_) {
     (void)ctx_;
     uint32_t context_id = 0;
@@ -598,6 +668,7 @@ struct WarpBlockSlot {
  * warp_release_pid. */
 static hashmap_t g_block_map;
 
+/* Create the per-pid block-DMA slot table.  Called from warp_ipc_slots_init. */
 static void warp_block_slots_init(void) {
     hashmap_init(&g_block_map, sizeof(WarpBlockSlot), 64);
 }
@@ -624,6 +695,14 @@ static WarpBlockSlot* warp_block_slot_by_phys(uint64_t phys) {
     return nullptr;
 }
 
+/* hostcalls.yaml `block_buffer_phys`: physical base of this process's private 8 KiB
+ * block buffer, allocated on first call and freed by warp_release_pid.  This backend
+ * allocates below 512 MiB (the kernel's higher-half window and the 32-bit ATA DMA
+ * range); the wasm3 backend uses BLOCK_BUFFER_PHYS_LIMIT (2 GiB), so a guest cannot
+ * assume the address is in the low 512 MiB.
+ * Returns the address as a u32 — it shares one signed i32 with the error codes, which
+ * is why block_buffer_check_phys asserts bit 31 stays clear instead of trusting the
+ * allocator's pool.  Errors are WASMOS_ERR_BLOCK_NO_SLOT / NO_BACKING / ABOVE_4G. */
 static uint32_t warp_block_buffer_phys(void* ctx_) {
     (void)ctx_;
     uint32_t pid = process_current_pid();
@@ -645,6 +724,12 @@ static uint32_t warp_block_buffer_phys(void* ctx_) {
     return (uint32_t)slot->phys;
 }
 
+/* hostcalls.yaml `block_buffer_copy`: copy `len` bytes out of the block buffer named by
+ * physical address `phys`, from `offset`, into guest memory at `ptr_off`.  `phys` is
+ * looked up across ALL processes' slots, so a driver can drain a buffer whose owner is
+ * a different process.  Returns 0 on success, WASMOS_ERR_BLOCK_NO_SLOT for an unknown
+ * `phys`, WASMOS_ERR_BLOCK_RANGE when [offset, offset+len) leaves the 8 KiB buffer, or
+ * WASMOS_ERR_KERNEL_BAD_POINTER for a guest range outside linear memory. */
 static uint32_t warp_block_buffer_copy(uint32_t phys, uint32_t ptr_off, uint32_t len,
                                        uint32_t offset, void* ctx_) {
     auto* ctx = warp_call_ctx(ctx_);
@@ -665,6 +750,8 @@ static uint32_t warp_block_buffer_copy(uint32_t phys, uint32_t ptr_off, uint32_t
     return 0;
 }
 
+/* hostcalls.yaml `block_buffer_write`: the reverse direction of warp_block_buffer_copy,
+ * with the same lookup, range rules and return codes. */
 static uint32_t warp_block_buffer_write(uint32_t phys, uint32_t ptr_off, uint32_t len,
                                         uint32_t offset, void* ctx_) {
     auto* ctx = warp_call_ctx(ctx_);
@@ -723,6 +810,10 @@ static uint32_t warp_io_region_read(uint32_t region, uint32_t offset, uint32_t o
     return 0;
 }
 
+/* hostcalls.yaml `io_region_in8/16/32`: read from the caller's granted I/O window
+ * `region` at `offset`, storing the datum at guest offset `out_off` (1, 2 and 4 bytes
+ * respectively, all written through a 4-byte scratch).  Returns 0 on success, otherwise
+ * a negative WASMOS_ERR_IO_* code. */
 static uint32_t warp_io_region_in8(uint32_t region, uint32_t offset, uint32_t out_off, void* ctx_) {
     return warp_io_region_read(region, offset, out_off, ctx_, 1u);
 }
@@ -734,6 +825,10 @@ static uint32_t warp_io_region_in32(uint32_t region, uint32_t offset, uint32_t o
                                     void* ctx_) {
     return warp_io_region_read(region, offset, out_off, ctx_, 4u);
 }
+/* hostcalls.yaml `io_region_out8/16/32`: write the low 8, 16 or 32 bits of `value` to
+ * the caller's granted I/O window `region` at `offset`.  Returns 0 on success,
+ * otherwise a negative WASMOS_ERR_IO_* code.  Excess high bits of `value` are masked
+ * off rather than refused. */
 static uint32_t warp_io_region_out8(uint32_t region, uint32_t offset, uint32_t value, void* ctx_) {
     (void)ctx_;
     uint16_t port = 0;
@@ -867,6 +962,9 @@ static uint32_t warp_io_out32(uint32_t port, uint32_t val, void* ctx_) {
     outl((uint16_t)port, (uint32_t)val);
     return 0;
 }
+/* hostcalls.yaml `io_wait`: a short bus delay (a dummy access to port 0x80).  Gated on
+ * the io.port capability for port 0x80, so a driver that was not granted it gets
+ * WASMOS_ERR_IO_NOT_AUTHORIZED; returns 0 otherwise. */
 static uint32_t warp_io_wait(void* ctx_) {
     (void)ctx_;
     uint32_t context_id = 0;
@@ -884,6 +982,12 @@ static uint32_t warp_io_wait(void* ctx_) {
 
 static const boot_info_t* g_warp_boot_info = nullptr;
 
+/* hostcalls.yaml `acpi_rsdp_info`: copy the ACPI RSDP blob handed over at boot into
+ * guest memory at `out_off` and store its byte length at `out_len_off`.  The blob is
+ * copied whole or not at all — a blob longer than `max_len` is WASMOS_ERR_KERNEL_TOO_LARGE,
+ * never a truncated copy.  Returns 0 on success, WASMOS_INVAL for a non-positive
+ * `max_len`, WASMOS_NOENT when no RSDP was handed over, or
+ * WASMOS_ERR_KERNEL_BAD_POINTER for an output range outside linear memory. */
 static uint32_t warp_acpi_rsdp_info(uint32_t out_off, uint32_t out_len_off, uint32_t max_len,
                                     void* ctx_) {
     auto* ctx = warp_call_ctx(ctx_);
@@ -905,6 +1009,11 @@ static uint32_t warp_acpi_rsdp_info(uint32_t out_off, uint32_t out_len_off, uint
     return 0;
 }
 
+/* hostcalls.yaml `boot_module_name`: copy the name of boot module `index` into guest
+ * memory at `out_off`, NUL-terminated and truncated to `out_len - 1` bytes.  Returns the
+ * module's TRUE name length, which may exceed what was written — that is how a caller
+ * detects truncation — or WASMOS_INVAL, WASMOS_NOENT for no such module, or
+ * WASMOS_ERR_KERNEL_BAD_POINTER. */
 static uint32_t warp_boot_module_name(uint32_t index, uint32_t out_off, uint32_t out_len,
                                       void* ctx_) {
     auto* ctx = warp_call_ctx(ctx_);
@@ -930,6 +1039,10 @@ static uint32_t warp_boot_module_name(uint32_t index, uint32_t out_off, uint32_t
     return true_len;
 }
 
+/* hostcalls.yaml `sync_user_read`: touch `len` bytes of guest memory at `ptr_off` with
+ * volatile reads so the range is committed and its mapping resolved.  Nothing is
+ * written and no data is returned.  Returns 0 on success and for len == 0, or
+ * WASMOS_ERR_KERNEL_BAD_POINTER when the range leaves linear memory. */
 static uint32_t warp_sync_user_read(uint32_t ptr_off, uint32_t len, void* ctx_) {
     auto* ctx = warp_call_ctx(ctx_);
     if (!len)
@@ -961,6 +1074,8 @@ static uint32_t warp_system_halt(void* ctx_) {
     }
     kernel_system_poweroff();
 }
+/* hostcalls.yaml `system_reboot`: counterpart of warp_system_halt, same capability
+ * gate and the same "returns only on refusal" contract. */
 static uint32_t warp_system_reboot(void* ctx_) {
     (void)ctx_;
     uint32_t context_id = 0;
@@ -983,6 +1098,8 @@ static uint32_t warp_sched_ticks(void* ctx_) {
      * return is how this ABI spells "error". */
     return (uint32_t)hostcall_value_counter(timer_ticks());
 }
+/* hostcalls.yaml `proc_count`: number of processes currently alive.  A snapshot, valid
+ * only at the moment of the call. */
 static uint32_t warp_proc_count(void* ctx_) {
     (void)ctx_;
     return (uint32_t)process_count_active();
@@ -1012,6 +1129,9 @@ static int warp_initfs_header_get(const wasmos_initfs_header_t** out_hdr,
     return 0;
 }
 
+/* Copy initfs directory entry `index` into *out, re-validating that the entry's
+ * [offset, offset+size) stays inside the image.  Returns 0 on success, -1 for a null
+ * `out`, a malformed image, an index past the end, or an entry whose extent escapes. */
 static int warp_initfs_entry_at(uint32_t index, wasmos_initfs_entry_t* out) {
     const wasmos_initfs_header_t* hdr = nullptr;
     const uint8_t* base = nullptr;
@@ -1025,6 +1145,10 @@ static int warp_initfs_entry_at(uint32_t index, wasmos_initfs_entry_t* out) {
     return 0;
 }
 
+/* hostcalls.yaml `initfs_entry_count`: number of entries in the boot initfs image.
+ * Returns the count, WASMOS_ERR_FS_NO_IMAGE when no valid image was handed over, or the
+ * hostcall_value_check code if the count cannot be expressed in the positive i32 range
+ * this ABI reserves for values. */
 static uint32_t warp_initfs_entry_count(void* ctx_) {
     (void)ctx_;
     const wasmos_initfs_header_t* hdr = nullptr;
@@ -1037,6 +1161,10 @@ static uint32_t warp_initfs_entry_count(void* ctx_) {
     return (uint32_t)hdr->entry_count;
 }
 
+/* hostcalls.yaml `initfs_entry_name`: copy entry `index`'s path into guest memory at
+ * `out_off`, NUL-terminated and truncated to `out_len - 1` bytes.  Returns the TRUE
+ * path length so truncation stays detectable, or WASMOS_INVAL /
+ * WASMOS_ERR_FS_NOT_FOUND / WASMOS_ERR_KERNEL_BAD_POINTER. */
 static uint32_t warp_initfs_entry_name(uint32_t index, uint32_t out_off, uint32_t out_len,
                                        void* ctx_) {
     auto* ctx = warp_call_ctx(ctx_);
@@ -1062,6 +1190,9 @@ static uint32_t warp_initfs_entry_name(uint32_t index, uint32_t out_off, uint32_
     return true_len;
 }
 
+/* hostcalls.yaml `initfs_entry_size`: payload length in bytes of entry `index`.
+ * Returns the size, WASMOS_ERR_FS_NOT_FOUND for a bad index or malformed image, or the
+ * hostcall_value_check code when the size does not fit the positive i32 value range. */
 static uint32_t warp_initfs_entry_size(uint32_t index, void* ctx_) {
     (void)ctx_;
     wasmos_initfs_entry_t e;
@@ -1073,6 +1204,11 @@ static uint32_t warp_initfs_entry_size(uint32_t index, void* ctx_) {
     return (uint32_t)e.size;
 }
 
+/* hostcalls.yaml `initfs_entry_copy`: copy up to `len` bytes of entry `index` starting
+ * at `offset` into guest memory at `out_off`.  Returns the number of bytes actually
+ * copied, which is 0 at or past the entry's end and short for a trailing chunk — a
+ * request longer than the remainder is clamped, not refused.  Errors are WASMOS_INVAL,
+ * WASMOS_ERR_FS_NOT_FOUND and WASMOS_ERR_KERNEL_BAD_POINTER. */
 static uint32_t warp_initfs_entry_copy(uint32_t index, uint32_t out_off, uint32_t len,
                                        uint32_t offset, void* ctx_) {
     auto* ctx = warp_call_ctx(ctx_);
@@ -1124,6 +1260,12 @@ static uint32_t warp_dma_map_borrow(uint32_t borrow_id, uint32_t offset, uint32_
     return (uint32_t)mapping.device_addr;
 }
 
+/* hostcalls.yaml `dma_sync_borrow`: make the CPU's and the device's view of
+ * [offset, offset+length) within the borrow's mapping coherent.  `op` (the direction)
+ * is accepted and ignored — this architecture is DMA-coherent, so both directions are
+ * the same no-op-plus-validation.  Returns 0 on success, WASMOS_ERR_DMA_INVALID for a
+ * non-positive borrow, or WASMOS_ERR_DMA_DENY when the borrow, its mapping or the range
+ * does not check out. */
 static uint32_t warp_dma_sync_borrow(uint32_t borrow_id, uint32_t offset, uint32_t length,
                                      uint32_t op, void* ctx_) {
     (void)ctx_;
@@ -1142,6 +1284,10 @@ static uint32_t warp_dma_sync_borrow(uint32_t borrow_id, uint32_t offset, uint32
     return (uint32_t)WASMOS_ERR_NONE;
 }
 
+/* hostcalls.yaml `dma_unmap_borrow`: tear down the DMA mapping of `borrow_id`, after
+ * which the device address returned by dma_map_borrow is no longer valid.  Returns 0 on
+ * success, WASMOS_ERR_DMA_INVALID for a non-positive borrow, WASMOS_ERR_DMA_DENY when
+ * the caller does not hold that borrow or it has no mapping. */
 static uint32_t warp_dma_unmap_borrow(uint32_t borrow_id, void* ctx_) {
     (void)ctx_;
     uint32_t context_id = 0;
@@ -1242,6 +1388,13 @@ static uint32_t warp_env_get(uint32_t name_off, uint32_t name_len, uint32_t buf_
     return write_len;
 }
 
+/* hostcalls.yaml `env_set`: set the kernel environment variable named by the
+ * `name_len` guest bytes at `name_off` to the `val_len` bytes at `val_off`.  Neither
+ * range needs a NUL — the lengths are authoritative and the copies are terminated in
+ * kernel scratch.  A `val_len` of 0 sets the empty string.  Names/values at or above
+ * KENV_KEY_MAX / KENV_VAL_MAX are refused with WASMOS_ERR_ENV_TOO_LONG rather than
+ * truncated; other returns are 0, WASMOS_INVAL, WASMOS_ERR_KERNEL_BAD_POINTER and
+ * kenv_set's own code. */
 static uint32_t warp_env_set(uint32_t name_off, uint32_t name_len, uint32_t val_off,
                              uint32_t val_len, void* ctx_) {
     auto* ctx = warp_call_ctx(ctx_);
@@ -1267,6 +1420,9 @@ static uint32_t warp_env_set(uint32_t name_off, uint32_t name_len, uint32_t val_
     return (uint32_t)kenv_set(local_name, local_val);
 }
 
+/* hostcalls.yaml `env_unset`: remove the variable named by the `name_len` guest bytes
+ * at `name_off`.  Returns kenv_unset's code, or WASMOS_INVAL /
+ * WASMOS_ERR_ENV_TOO_LONG / WASMOS_ERR_KERNEL_BAD_POINTER on argument failures. */
 static uint32_t warp_env_unset(uint32_t name_off, uint32_t name_len, void* ctx_) {
     auto* ctx = warp_call_ctx(ctx_);
     if ((int32_t)name_len <= 0)
@@ -1289,6 +1445,11 @@ static uint32_t warp_env_unset(uint32_t name_off, uint32_t name_len, void* ctx_)
 static int warp_require_dma_capability(uint32_t context_id) {
     return policy_authorize(context_id, POLICY_ACTION_DMA_BUFFER, 0);
 }
+/* Capability gates.  Each returns 0 when `context_id` may perform the action and
+ * non-zero when it may not; callers translate that into the NOT_AUTHORIZED code of
+ * their own domain.  policy_authorize consults the context's granted capabilities;
+ * policy_require additionally refuses a context that has no policy at all, which is why
+ * system control uses it. */
 static int warp_require_io_capability(uint32_t context_id, uint16_t port) {
     return policy_authorize(context_id, POLICY_ACTION_IO_PORT, port);
 }
@@ -1318,6 +1479,17 @@ struct WarpShmemLinearMap {
 
 static WarpShmemLinearMap g_warp_shmem_maps[WARP_SHMEM_MAP_SLOTS];
 
+/* Registry of the linear-memory windows a process has had something mapped into, used
+ * only to keep a later placement from overlapping an earlier one.  Three id namespaces
+ * share it: small positive ids are real shmem ids, bit 31 marks a region/block window
+ * and bit 30 an xfer-buffer overlay.  The table is a fixed PROCESS_MAX_COUNT*32 array;
+ * when it is full a new window is simply not recorded, so it can no longer be seen by
+ * the overlap check.  Unsynchronised — safe only under the WARP single-CPU invariant.
+ *
+ * warp_shmem_map_track: record or resize the (pid, id, offset) window.
+ * warp_shmem_map_untrack: drop every window this pid holds under `id`.
+ * warp_shmem_map_find: the first window matching (pid, id), or nullptr.
+ * warp_shmem_map_overlaps: whether [offset, offset+size) intersects any window of pid. */
 static void warp_shmem_map_track(uint32_t pid, uint32_t id, uint32_t offset, uint32_t size) {
     WarpShmemLinearMap* empty = nullptr;
     for (uint32_t i = 0; i < WARP_SHMEM_MAP_SLOTS; ++i) {
@@ -1368,6 +1540,10 @@ static uint8_t warp_shmem_map_overlaps(uint32_t pid, uint32_t offset, uint32_t s
     return 0;
 }
 
+/* Bytes of linear memory WARP currently treats as live, read from the basedata field
+ * that precedes the linear-memory base.  This is the committed frontier, not the
+ * declared maximum, and it is the floor the window scan starts above.  Returns 0 when
+ * the base cannot be resolved. */
 static uint32_t warp_linear_memory_active_size(WarpCallContext* ctx) {
     uint8_t* base = warp_mem(ctx, 0, 0);
     if (!base) {
@@ -1376,6 +1552,13 @@ static uint32_t warp_linear_memory_active_size(WarpCallContext* ctx) {
     return *(uint32_t*)(void*)(base - Basedata::FromEnd::actualLinMemByteSize);
 }
 
+/* Undo a window remap: put ordinary backing back under [offset, offset+size) of the
+ * caller's linear memory so the guest does not keep reading the unmapped object.  For a
+ * dedicated-VA slot the original frames were released when the window was mapped and
+ * cannot be re-derived, so FRESH ZEROED pages are committed instead — the previous
+ * contents of that range are not preserved.  For direct-mapped linmem the frame is
+ * re-derived from the VA and remapped, preserving contents.  Returns 0 on success, -1
+ * for a zero size, an unresolvable or misaligned window, or a mapping failure. */
 static int warp_restore_linear_window(WarpCallContext* ctx, uint32_t offset, uint32_t size) {
     if (!ctx || !ctx->module || size == 0) {
         return -1;
@@ -1421,6 +1604,11 @@ static int warp_restore_linear_window(WarpCallContext* ctx, uint32_t offset, uin
 }
 
 #ifdef WASMOS_WASM_RUNTIME_WARP
+/* Re-publish the whole linear-memory allocation into the user root that is active
+ * right now, so a ring-3 guest sees the kernel-side layout after it changed.  A no-op
+ * returning 0 when the current root is the kernel root (a ring-0 call), which is what
+ * makes it safe to call unconditionally.  Returns -1 on a null base or a mapping
+ * failure. */
 static int warp_ring3_sync_linmem_user_window(uint8_t* linmem_base) {
     if (!linmem_base) {
         return -1;
@@ -1432,6 +1620,11 @@ static int warp_ring3_sync_linmem_user_window(uint8_t* linmem_base) {
     return warp_mem_ring3_map_linmem(current_root, linmem_base);
 }
 
+/* Narrower counterpart of warp_ring3_sync_linmem_user_window: re-publish only the
+ * pages spanned by guest range [wasm_off, wasm_off+size) into the active user root, at
+ * WARP_R3_LINMEM_BASE plus the base's sub-page offset plus wasm_off.  Used after the
+ * kernel writes into guest memory through its own alias, so the ring-3 view is not
+ * stale.  Returns 0 (including the ring-0 no-op case) or -1. */
 static int warp_ring3_sync_user_range(WarpCallContext* ctx, uint32_t wasm_off, uint32_t size) {
     if (!ctx || !ctx->module || size == 0) {
         return -1;
@@ -1467,6 +1660,10 @@ static int warp_ring3_sync_user_range(WarpCallContext* ctx, uint32_t wasm_off, u
     return 0;
 }
 
+/* Publish `pages` frames starting at `phys_base` into the active user root at the guest
+ * address corresponding to `wasm_off`, i.e. mirror a kernel-side window remap into
+ * ring 3.  `linmem_base` supplies only the sub-page offset of the linear-memory base.
+ * Returns 0 (including the ring-0 no-op case) or -1 on a mapping failure. */
 static int warp_ring3_map_user_window(uint8_t* linmem_base, uint32_t wasm_off, uint64_t phys_base,
                                       uint64_t pages) {
     if (!linmem_base || pages == 0) {
@@ -1508,6 +1705,11 @@ static uint32_t warp_spawn_info_buffer(void* ctx_) {
     return proc->spawn_info_buffer_id;
 }
 
+/* hostcalls.yaml `xfer_buffer_borrow` / `_reborrow` / `_release` / `_unborrow`: the
+ * transfer-kind spellings of the generic buffer calls above, with `kind` fixed to
+ * BUFFER_KIND_TRANSFER.  Arguments, rights and return codes are those of the generic
+ * form; borrow grants from the owner, reborrow sub-grants from a borrower, release
+ * drops ownership and unborrow is the LENDER withdrawing a grant it made. */
 static uint32_t warp_xfer_buffer_borrow(uint32_t grantee_endpoint, uint32_t buffer_id,
                                         uint32_t flags, void* ctx_) {
     return warp_buffer_borrow((uint32_t)BUFFER_KIND_TRANSFER, grantee_endpoint, buffer_id, flags,
@@ -1584,6 +1786,9 @@ static uint32_t warp_proc_info(uint32_t index, uint32_t buf_off, uint32_t buf_le
     return pid;
 }
 
+/* hostcalls.yaml `proc_info_ex`: warp_proc_info plus the parent pid, written as a u32
+ * at guest offset `parent_off`.  Same enumeration and truncation rules; returns the pid
+ * at `index`, or WASMOS_INVAL / WASMOS_NOENT / WASMOS_ERR_KERNEL_BAD_POINTER. */
 static uint32_t warp_proc_info_ex(uint32_t index, uint32_t buf_off, uint32_t buf_len,
                                   uint32_t parent_off, void* ctx_) {
     auto* ctx = warp_call_ctx(ctx_);
@@ -1607,6 +1812,11 @@ static uint32_t warp_proc_info_ex(uint32_t index, uint32_t buf_off, uint32_t buf
     return pid;
 }
 
+/* hostcalls.yaml `proc_info_stats`: warp_proc_info_ex plus a fixed-layout statistics
+ * record written at guest offset `stats_off`.  The struct declared here mirrors the
+ * guest-side layout field for field; changing either side without the other silently
+ * misreads the record.  Returns the pid at `index`, or WASMOS_INVAL / WASMOS_NOENT /
+ * WASMOS_ERR_KERNEL_BAD_POINTER. */
 static uint32_t warp_proc_info_stats(uint32_t index, uint32_t buf_off, uint32_t buf_len,
                                      uint32_t parent_off, uint32_t stats_off, void* ctx_) {
     typedef struct {
@@ -1691,6 +1901,13 @@ static uint32_t warp_shmem_create(uint32_t pages, uint32_t flags, void* ctx_) {
     return id;
 }
 
+/* hostcalls.yaml `klog_register_ring`: adopt the caller's OWNED transfer buffer `id` as
+ * the kernel log ring, after which klog output is also published into that ringbuf.
+ * `id` is a BUFFER_KIND_TRANSFER buffer_id, not a shared-memory id; ownership, physical
+ * backing, page alignment and ringbuf validity are all checked inside
+ * klog_register_ring, which takes no retain — the caller must keep the buffer alive for
+ * as long as the kernel logs into it.  Returns klog_register_ring's result (0, or a
+ * bare -1 on any of those checks), or WASMOS_INVAL / WASMOS_ERR_KERNEL_NO_CALLER. */
 static uint32_t warp_klog_register_ring(uint32_t id, void* ctx_) {
     (void)ctx_;
     if ((int32_t)id <= 0)
@@ -1698,11 +1915,17 @@ static uint32_t warp_klog_register_ring(uint32_t id, void* ctx_) {
     uint32_t context_id = 0;
     if (warp_current_context_id(&context_id) != 0)
         return (uint32_t)WASMOS_ERR_KERNEL_NO_CALLER;
-    /* Ownership of the shared region is enforced inside klog_register_ring
-     * (mm_shared_get_phys), matching the wasm3 path. */
+    /* Ownership of the transfer buffer is enforced inside klog_register_ring
+     * (xfer_buffer_describe against this context), matching the wasm3 path. */
     return (uint32_t)klog_register_ring(context_id, id);
 }
 
+/* hostcalls.yaml `shmem_grant` / `shmem_revoke`: give the process `target_pid` access
+ * to the caller's shared region `id`, or take it away.  Both require the caller to hold
+ * the DMA-buffer capability and to own the region.  The target is named by pid and
+ * resolved to its context here, so a pid with no context is refused.  Returns
+ * mm_shared_grant / mm_shared_revoke's code, or WASMOS_ERR_SHMEM_BAD_ID /
+ * WASMOS_ERR_SHMEM_NO_CAP. */
 static uint32_t warp_shmem_grant(uint32_t id, uint32_t target_pid, void* ctx_) {
     (void)ctx_;
     if ((int32_t)id <= 0 || (int32_t)target_pid <= 0)
@@ -1729,6 +1952,14 @@ static uint32_t warp_shmem_revoke(uint32_t id, uint32_t target_pid, void* ctx_) 
     return (uint32_t)mm_shared_revoke(context_id, id, tgt->context_id);
 }
 
+/* hostcalls.yaml `shmem_map`: map shared region `id` at a guest offset the CALLER
+ * chooses.  `wasm_off` must land on a page boundary once the linear-memory base's own
+ * sub-page offset is added — WARP's base is not page-aligned, so a 4 KiB-aligned
+ * `wasm_off` is not sufficient and a misfit is WASMOS_ERR_SHMEM_NO_WINDOW.  `size` must
+ * be page-aligned and at least the region's size.  The range is committed by probe
+ * BEFORE the remap, because a later commit would zero-fill the freshly mapped frames.
+ * Returns 0 on success, otherwise a negative WASMOS_ERR_SHMEM_* code.  Prefer
+ * warp_shmem_map_auto, which picks a placement that satisfies these constraints. */
 static uint32_t warp_shmem_map(uint32_t id, uint32_t wasm_off, uint32_t size, void* ctx_) {
     auto* ctx = warp_call_ctx(ctx_);
     if ((int32_t)id <= 0 || (int32_t)size <= 0 || (size & 0xFFF))
@@ -1895,6 +2126,12 @@ static int64_t warp_linmem_place_phys(WarpCallContext* ctx, uint64_t phys_base, 
     return (int64_t)found_off;
 }
 
+/* hostcalls.yaml `shmem_map_auto`: map shared region `id` into a guest window the
+ * KERNEL places, avoiding the alignment trap of warp_shmem_map.  `size` must be
+ * page-aligned and at least the region's size.  Requires the DMA-buffer capability.
+ * Returns the chosen guest offset (a value, not a status), or a negative
+ * WASMOS_ERR_SHMEM_* code — WASMOS_ERR_SHMEM_NO_WINDOW when no free, aligned,
+ * non-overlapping window of that size exists inside the app's reserved linear memory. */
 static uint32_t warp_shmem_map_auto(uint32_t id, uint32_t size, void* ctx_) {
     auto* ctx = warp_call_ctx(ctx_);
     if ((int32_t)id <= 0 || (int32_t)size <= 0) {
@@ -2139,6 +2376,12 @@ static uint32_t warp_xfer_buffer_unmap(uint32_t buffer_id, void* ctx_) {
     return 0;
 }
 
+/* hostcalls.yaml `shmem_unmap`: drop the caller's reference to shared region `id` and
+ * restore ordinary backing under whatever window it occupied.  For a dedicated-VA slot
+ * the restored pages are fresh and ZEROED, so the window's previous contents do not
+ * survive the unmap.  Unmapping an id that was never mapped still releases the
+ * reference.  Returns mm_shared_release's code, or WASMOS_ERR_SHMEM_BAD_ARGS /
+ * NO_CAP / NO_WINDOW. */
 static uint32_t warp_shmem_unmap(uint32_t id, void* ctx_) {
     auto* ctx = warp_call_ctx(ctx_);
     if ((int32_t)id <= 0)
@@ -2162,6 +2405,11 @@ static uint32_t warp_shmem_unmap(uint32_t id, void* ctx_) {
     return (uint32_t)mm_shared_release(context_id, id);
 }
 
+/* hostcalls.yaml `shmem_flush`: copy `size` bytes from guest memory at `wasm_off` into
+ * the front of shared region `id`.  A copy, not a mapping operation — for a region that
+ * is already mapped into linear memory this would copy the window onto itself.  `size`
+ * may not exceed the region.  Returns 0 on success, otherwise a negative
+ * WASMOS_ERR_SHMEM_* code. */
 static uint32_t warp_shmem_flush(uint32_t id, uint32_t wasm_off, uint32_t size, void* ctx_) {
     auto* ctx = warp_call_ctx(ctx_);
     /* wasm_off arrives as u32, so a negative offset becomes a huge one. Reject
@@ -2186,6 +2434,11 @@ static uint32_t warp_shmem_flush(uint32_t id, uint32_t wasm_off, uint32_t size, 
     return 0;
 }
 
+/* hostcalls.yaml `shmem_refresh`: the reverse of warp_shmem_flush — copy `size` bytes
+ * from the front of shared region `id` into guest memory at `wasm_off`.  The
+ * destination must already be committed; this call deliberately does not extend linear
+ * memory (see the comment on the window lookup below).  Returns 0 on success, otherwise
+ * a negative WASMOS_ERR_SHMEM_* code. */
 static uint32_t warp_shmem_refresh(uint32_t id, uint32_t wasm_off, uint32_t size, void* ctx_) {
     auto* ctx = warp_call_ctx(ctx_);
     /* wasm_off arrives as u32, so a negative offset becomes a huge one. Reject
@@ -2227,6 +2480,10 @@ static bool warp_irq_line_valid(uint32_t irq_line) {
     return irq_line <= 0x7FFFFFFFu;
 }
 
+/* hostcalls.yaml `irq_route_ipc`: deliver interrupts on `irq_line` as IPC messages to
+ * `endpoint`.  Requires the IRQ capability.  Returns irq_register's code, or
+ * WASMOS_ERR_IRQ_BAD_LINE / BAD_ENDPOINT / NOT_AUTHORIZED.  Each delivered interrupt
+ * must be acknowledged with warp_irq_ack before the line is unmasked again. */
 static uint32_t warp_irq_route_ipc(uint32_t irq_line, uint32_t endpoint, void* ctx_) {
     (void)ctx_;
     uint32_t context_id = 0;
@@ -2239,6 +2496,13 @@ static uint32_t warp_irq_route_ipc(uint32_t irq_line, uint32_t endpoint, void* c
     return (uint32_t)irq_register(context_id, irq_line, endpoint);
 }
 
+/* hostcalls.yaml `irq_ack`: acknowledge the interrupt the caller was notified of.  Only
+ * a context registered as a sharer of `irq_line` may ack, which the IRQ layer enforces
+ * (WASMOS_ERR_IRQ_NOT_A_SHARER otherwise); the IRQ capability is deliberately NOT
+ * re-checked, so a driver that routed a line can keep acking it.  A line shared by
+ * several drivers is only unmasked once every sharer has acked, and a duplicate or late
+ * ack is a benign 0 rather than an error.  Also returns WASMOS_ERR_IRQ_BAD_LINE, or
+ * WASMOS_ERR_IRQ_NOT_AUTHORIZED when the caller has no context. */
 static uint32_t warp_irq_ack(uint32_t irq_line, void* ctx_) {
     (void)ctx_;
     uint32_t context_id = 0;
@@ -2263,6 +2527,9 @@ static uint32_t warp_irq_configure(uint32_t irq_line, uint32_t flags, void* ctx_
     return (uint32_t)irq_configure(irq_line, flags);
 }
 
+/* hostcalls.yaml `irq_unroute`: stop delivering `irq_line` to the caller.  Requires the
+ * IRQ capability.  Returns irq_unregister's code, or WASMOS_ERR_IRQ_BAD_LINE /
+ * NOT_AUTHORIZED. */
 static uint32_t warp_irq_unroute(uint32_t irq_line, void* ctx_) {
     (void)ctx_;
     uint32_t context_id = 0;
@@ -2299,6 +2566,10 @@ static uint32_t warp_msi_alloc(uint32_t endpoint, uint32_t out_off, void* ctx_) 
     return 0;
 }
 
+/* hostcalls.yaml `msi_free`: return an MSI vector allocated by warp_msi_alloc.  The
+ * caller must hold the IRQ capability and own the vector, which msi_free checks.
+ * Returns msi_free's code or WASMOS_ERR_MSI_NOT_AUTHORIZED.  The device must already
+ * have been programmed to stop using the vector; this only frees the kernel binding. */
 static uint32_t warp_msi_free(uint32_t vector, void* ctx_) {
     (void)ctx_;
     uint32_t context_id = 0;
@@ -2328,12 +2599,18 @@ static uint32_t warp_serial_register(uint32_t endpoint, void* ctx_) {
     return (uint32_t)serial_register_remote_driver(endpoint);
 }
 
+/* hostcalls.yaml `input_push`: append the low byte of `ch` to the kernel's serial input
+ * queue, as a keyboard driver injecting a decoded character.  Higher bits are discarded.
+ * Returns 0; a full queue is not reported. */
 static uint32_t warp_input_push(uint32_t ch, void* ctx_) {
     (void)ctx_;
     serial_input_push((uint8_t)(ch & 0xFF));
     return 0;
 }
 
+/* hostcalls.yaml `input_read`: take one byte from the kernel's serial input queue.
+ * Does not block.  Returns the byte (0..255), or WASMOS_AGAIN when nothing is queued —
+ * an empty queue is a retry condition, not a failure. */
 static uint32_t warp_input_read(void* ctx_) {
     (void)ctx_;
     uint8_t ch = 0;
@@ -2350,6 +2627,12 @@ static uint32_t warp_framebuffer_pixel(uint32_t x, uint32_t y, uint32_t color, v
     return (uint32_t)framebuffer_put_pixel(x, y, color);
 }
 
+/* hostcalls.yaml `framebuffer_info`: write the framebuffer geometry record to guest
+ * offset `out_off`.  `len` is the caller's buffer size and must be at least
+ * sizeof(framebuffer_info_t), otherwise WASMOS_ERR_FRAMEBUFFER_TOO_SMALL; exactly
+ * sizeof(framebuffer_info_t) bytes are written regardless of a larger `len`.  Returns 0
+ * on success, or WASMOS_INVAL / framebuffer_get_info's code /
+ * WASMOS_ERR_KERNEL_BAD_POINTER. */
 static uint32_t warp_framebuffer_info(uint32_t out_off, uint32_t len, void* ctx_) {
     auto* ctx = warp_call_ctx(ctx_);
     if ((int32_t)len <= 0)
@@ -2368,6 +2651,13 @@ static uint32_t warp_framebuffer_info(uint32_t out_off, uint32_t len, void* ctx_
     return 0;
 }
 
+/* hostcalls.yaml `framebuffer_map`: remap the guest window at `wasm_off` onto the
+ * framebuffer's physical pages, so stores into linear memory go straight to the display.
+ * `size` must be page-aligned and cover the whole framebuffer, and the window's host
+ * address must land on a page boundary — the caller picks `wasm_off`, so a misfit is
+ * WASMOS_ERR_KERNEL_UNALIGNED rather than a relocation.  Requires the MMIO-map
+ * capability.  Returns 0 on success, otherwise a negative code.  The remap replaces the
+ * previous backing of that window; nothing restores it. */
 static uint32_t warp_framebuffer_map(uint32_t wasm_off, uint32_t size, void* ctx_) {
     auto* ctx = warp_call_ctx(ctx_);
     if ((int32_t)size <= 0)
@@ -2415,6 +2705,11 @@ static uint32_t warp_boot_config_size(void* ctx_) {
     return (uint32_t)g_warp_boot_info->boot_config_size;
 }
 
+/* hostcalls.yaml `boot_config_copy`: copy exactly `len` bytes of the boot config blob
+ * starting at `offset` into guest memory at `buf_off`.  Unlike initfs_entry_copy this
+ * refuses a range that runs past the end (WASMOS_INVAL) instead of clamping it, and
+ * returns 0 on success rather than a byte count.  WASMOS_NOENT when no boot config was
+ * handed over, WASMOS_ERR_KERNEL_BAD_POINTER for a guest range outside linear memory. */
 static uint32_t warp_boot_config_copy(uint32_t buf_off, uint32_t len, uint32_t offset, void* ctx_) {
     auto* ctx = warp_call_ctx(ctx_);
     /* The size check belongs here, as in wasm3: without it a zero-length boot
@@ -2455,6 +2750,13 @@ static bool warp_path_ieq(const char* a, const char* b) {
     }
 }
 
+/* hostcalls.yaml `initfs_find_path`: resolve the `path_len` guest bytes at `path_off`
+ * to an initfs entry index.  Matching is ASCII case-insensitive; leading '/' and an
+ * "init/" prefix are stripped, and an entry matches on either its full stored path or
+ * its basename, so "/init/foo.wasm", "foo.wasm" and "dir/foo.wasm" can all resolve.
+ * Returns the entry index, or WASMOS_INVAL, WASMOS_ERR_FS_PATH_TOO_LONG for 112 bytes
+ * or more, WASMOS_ERR_FS_NO_IMAGE, WASMOS_ERR_FS_NOT_FOUND,
+ * WASMOS_ERR_KERNEL_BAD_POINTER. */
 static uint32_t warp_initfs_find_path(uint32_t path_off, uint32_t path_len, void* ctx_) {
     auto* ctx = warp_call_ctx(ctx_);
     if ((int32_t)path_len <= 0)
@@ -2506,6 +2808,11 @@ static uint32_t warp_early_log_size(void* ctx_) {
     return (uint32_t)serial_early_log_size();
 }
 
+/* hostcalls.yaml `early_log_copy`: copy exactly `len` bytes of the pre-service serial
+ * log starting at `offset` into guest memory at `buf_off`.  A range past the end is
+ * refused with WASMOS_INVAL, not clamped.  Returns 0 on success and for len == 0, or
+ * WASMOS_ERR_KERNEL_BAD_POINTER.  The log can still be appended to, so a size read
+ * earlier may already be stale. */
 static uint32_t warp_early_log_copy(uint32_t buf_off, uint32_t len, uint32_t offset, void* ctx_) {
     auto* ctx = warp_call_ctx(ctx_);
     uint32_t total = (uint32_t)serial_early_log_size();
@@ -2543,15 +2850,22 @@ static uint32_t warp_sched_ready_count(void* ctx_) {
     (void)ctx_;
     return 0;
 }
+/* hostcalls.yaml `sched_cpu_count`: number of CPUs the kernel brought up. */
 static uint32_t warp_sched_cpu_count(void* ctx_) {
     (void)ctx_;
     return (uint32_t)g_cpu_count;
 }
+/* hostcalls.yaml `kernel_runtime`: which WASM backend the guest is running under.
+ * 1 = WARP; the wasm3 build of this call answers differently, and it is the supported
+ * way for a guest to tell the two apart at runtime. */
 static uint32_t warp_kernel_runtime(void* ctx_) {
     (void)ctx_;
     return 1u; /* WARP */
 }
 
+/* hostcalls.yaml `physmem_stats`: write {total_bytes, free_bytes} as two u64s at guest
+ * offset `out_off`.  Returns 0 on success or WASMOS_ERR_KERNEL_BAD_POINTER.  A
+ * snapshot: free_bytes can change before the guest reads it. */
 static uint32_t warp_physmem_stats(uint32_t out_off, void* ctx_) {
     auto* ctx = warp_call_ctx(ctx_);
     typedef struct {
@@ -2614,6 +2928,8 @@ static WarpCallContext* ctx_acquire(uint32_t pid) {
     return c;
 }
 
+/* Contracts for warp_bind_module / warp_context_for_pid / warp_ctx_release_pid are on
+ * their declarations in warp/link.h. */
 void warp_bind_module(vb::WasmModule* module, uint32_t pid) {
     WarpCallContext* c = ctx_acquire(pid);
     if (!c) {
@@ -2660,6 +2976,8 @@ extern "C" void warp_release_pid(uint32_t pid) {
     warp_heap_release(pid);
 }
 
+/* process_reap() calls both backends' release hooks unconditionally; in a WARP kernel
+ * no wasm3 per-pid state exists, so this one does nothing. */
 extern "C" void wasm3_release_pid(uint32_t pid) {
     (void)pid;
 }
@@ -2730,6 +3048,7 @@ extern "C" uint32_t warp_ring3_dispatch(uint32_t hc_id, void* frame_ptr) {
 
 extern "C" {
 
+/* Contract on the declaration in warp/link.h. */
 void warp_link_init(const boot_info_t* boot_info) {
     g_warp_boot_info = boot_info;
     warp_ipc_slots_init();
@@ -2740,6 +3059,12 @@ void warp_link_init(const boot_info_t* boot_info) {
 }
 
 #ifdef WASMOS_WASM_RUNTIME_WARP
+/* Re-publish `pid`'s whole linear-memory allocation into `user_root`.  Called from the
+ * context-switch path so a ring-3 WARP process resuming on any CPU sees a linear memory
+ * that grew or was remapped while it was descheduled.  Unlike
+ * warp_ring3_sync_linmem_user_window the root is named explicitly rather than taken
+ * from the current CR3, because the target address space is not yet active.  Returns 0
+ * on success, -1 for a zero pid or root, an unbound pid, or a mapping failure. */
 int warp_sync_linmem_for_pid(uint32_t pid, uint64_t user_root) {
     if (pid == 0 || user_root == 0) {
         return -1;

@@ -1,7 +1,24 @@
 #pragma once
 /* compat/cstdlib — freestanding shadow of <cstdlib>
- * In a bare-metal kernel there is no process exit.  Only the symbols WARP
- * actually references are declared here. */
+ *
+ * Provides malloc, realloc, free and abort, in the global namespace and
+ * re-exported into std.  Deliberately omitted: exit, atexit, getenv, the
+ * str-to-number conversions, qsort/bsearch and rand — a bare-metal kernel has
+ * no process to exit and no environment, and no compiled WARP source calls any
+ * of them.  The four WARP sources that include <cstdlib> (Runtime.cpp,
+ * util.hpp, SafeInt.hpp, MemUtils.hpp) do not in fact name any symbol from it —
+ * WARP reaches the heap through the embedder-supplied WasmModule
+ * MallocFunction, which warp/shim.cpp installs.  So this header exists to make
+ * the include resolve and to give kernel-side WARP glue the C names; the subset
+ * is not derived from live WARP call sites.
+ *
+ * Note that this does NOT put size_t into namespace std the way the real
+ * <cstdlib> does; <stddef.h> is included below only for the declarations.  A
+ * source wanting std::size_t must include <cstddef>.
+ *
+ * The three allocators are the real kernel allocator, not stubs, so pointers
+ * from malloc/realloc are usable memory and may be freed.  A use of a function
+ * that is not declared here is a compile error at the call site. */
 
 #include <stddef.h>
 

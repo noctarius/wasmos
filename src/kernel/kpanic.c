@@ -75,6 +75,14 @@ static void panic_backtrace(uint64_t rbp) {
     }
 }
 
+/* Records the faulting register state for the CALLING CPU so a later kpanic
+ * prints the exception's own frame instead of kpanic's.  Meant to be called from
+ * an exception entry path, before it decides to panic.
+ *
+ * The capture is published with a release store to a per-CPU slot, so it is the
+ * last write and a reader that sees `captured` sees the whole frame.  It
+ * overwrites any earlier capture for this CPU, so the most recent one wins.  A
+ * CPU id at or above WASMOS_MAX_CPUS is ignored. */
 void kpanic_capture_origin(uint64_t rip, uint64_t rsp, uint64_t rbp, uint64_t rflags, uint64_t cs) {
     uint32_t self = cpu_local()->cpu_id;
     if (self >= WASMOS_MAX_CPUS) {
@@ -92,6 +100,19 @@ void kpanic_capture_origin(uint64_t rip, uint64_t rsp, uint64_t rbp, uint64_t rf
     __atomic_store_n(&c->captured, 1u, __ATOMIC_RELEASE);
 }
 
+/* NMI vector, with two entirely different behaviours depending on whether a
+ * panic is in progress.
+ *
+ * Outside a panic the NMI was not ours: it is logged through the UNLOCKED serial
+ * writer (an NMI can interrupt a CPU holding the serial lock) and the handler
+ * RETURNS, resuming the interrupted code.
+ *
+ * During a panic the NMI is the panicking CPU's stop signal.  This CPU publishes
+ * its register frame into its per-CPU panic slot so the dump can include it, and
+ * then HALTS FOREVER with interrupts masked — this path does not return.
+ *
+ * regs points at the interrupt frame saved by the NMI stub, indexed by the
+ * NMI_REG_* constants, and is borrowed for the call. */
 void x86_nmi_handler(uint64_t* regs) {
     if (!__atomic_load_n(&g_panicking, __ATOMIC_ACQUIRE)) {
         /* Not a panic stop — an NMI the kernel did not initiate. Log and resume. */
@@ -118,6 +139,24 @@ void x86_nmi_handler(uint64_t* regs) {
     }
 }
 
+/* Stops the machine and dumps every CPU's state.  Does not return under any
+ * circumstances.
+ *
+ * reason is a short tag printed verbatim; NULL prints "(none)".  a and b are two
+ * free-form 64-bit values printed in hex, by convention the identifiers that
+ * make the failure diagnosable.
+ *
+ * Only the FIRST CPU to arrive produces the dump; a second panicking CPU halts
+ * immediately so the output is not interleaved.  The winner NMIs every other CPU
+ * to make it snapshot itself, waits a bounded spin for those snapshots, then
+ * prints the reason and, per CPU, its frame and a backtrace.  Its own frame is
+ * captured here only if kpanic_capture_origin has not already filled the slot,
+ * so an exception's frame takes precedence over kpanic's own call site.
+ *
+ * Everything is written with the UNLOCKED serial writers: the serial lock may be
+ * held by an interrupted CPU that will never release it.  A CPU that never
+ * answers the NMI is reported as uncaptured rather than waited for
+ * indefinitely. */
 __attribute__((noreturn)) void kpanic(const char* reason, uint64_t a, uint64_t b) {
     __asm__ volatile("cli");
 

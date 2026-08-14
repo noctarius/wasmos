@@ -1,20 +1,124 @@
+//! gfx_compositor - the native windowing service ("gfx"), written in Zig.
+//!
+//! Window / surface model
+//! ----------------------
+//! A *window* is a rectangle the compositor owns: position, logical content
+//! size, z-order, flags and a title.  Clients never draw into a window; they
+//! draw into a *shared buffer* and hand it over.  The two are separate objects
+//! with separate ids, and either can exist without the other.
+//!
+//! The client-side cycle is: GFX_IPC_CREATE_WINDOW (content width/height) ->
+//! GFX_IPC_ALLOC_SHARED_BUFFER (compositor creates shmem and grants it to the
+//! caller's context, replying with buffer_id, shmem_id and stride) -> the client
+//! renders into that shmem -> GFX_IPC_PRESENT_WINDOW binds the buffer to the
+//! window, optionally with a damage-rect list in a second shmem.  The window's
+//! content rect is what the client sizes to; chrome (border, title bar, close
+//! and maximize buttons, resize handle) is drawn OUTSIDE it by the compositor
+//! unless GFX_WINDOW_FLAG_NO_CHROME is set.  A window with no presented buffer
+//! yet is drawn as a placeholder.
+//!
+//! Composition runs into an off-screen backbuffer sized to the framebuffer, and
+//! only the damaged region is copied out to the framebuffer.  A present with no
+//! usable damage list degrades to a full repaint rather than failing.
+//!
+//! Shared-buffer ownership
+//! -----------------------
+//! Ownership is per owning *process*, not per endpoint: a client may drive its
+//! window from any endpoint its process owns, which is what lets a caller use a
+//! separate reply endpoint for synchronous requests while events are pushed to
+//! the window's owner endpoint.  Every mutating request is checked with
+//! same_owner() and answered WASMOS_ERR_GFX_PERMISSION otherwise.
+//!
+//! The rules a client must respect:
+//!   - A buffer allocated *bound* to a window (window_id != 0 in the alloc
+//!     request) must match that window's current size exactly, and may only be
+//!     presented to that window and only while the window's generation is
+//!     unchanged — a resize bumps the generation and retires the binding.
+//!   - Presenting transfers the buffer to the compositor: the slot enters the
+//!     `acquired` state and stays there.  The compositor reads from it on every
+//!     composite, so a client that keeps drawing into an acquired buffer will
+//!     see tearing; the intended pattern is a second buffer.  Presenting an
+//!     already-acquired buffer to a *different* window is refused with
+//!     WASMOS_ERR_GFX_BUSY.
+//!   - The buffer must be at least as large as the window in both dimensions;
+//!     larger is allowed (the excess is not drawn).
+//!   - GFX_IPC_RELEASE_SHARED_BUFFER is refused with WASMOS_ERR_GFX_BUSY while
+//!     the buffer is any window's current buffer, so a client must present
+//!     another buffer (or destroy the window) first.
+//!   - Destroying a window does not free its buffers.  Windows and buffers whose
+//!     owner endpoint is no longer alive are reclaimed by the periodic idle
+//!     housekeeping pass, which also unmaps the buffer's shmem — a client that
+//!     exits without releasing does not leak indefinitely, but the reclaim is
+//!     not immediate.
+//!
+//! Input, and the deal with the vt
+//! -------------------------------
+//! The compositor is not a keymap decoder.  The vt owns every scancode in the
+//! system and forwards already-decoded keys for slot vt-0 as
+//! VT_IPC_KEY_FORWARD (arg0=character, arg1=raw set-1 scancode, arg2=flags).
+//! Those are repacked into a GFX_EVENT_KEY for the focused window's owner, with
+//! the two halves in ONE word: low byte = the decoded character (0 for a key
+//! with no character, e.g. arrows and function keys), high byte = the raw set-1
+//! scancode.  Consumers must mask — the packed value is not a codepoint.  The
+//! flags word passes through unchanged (bit0=down, bit1=extended, bit2=shift,
+//! bit3=ctrl, bit4=altgr), so key *releases* arrive too.  Events reach clients
+//! as GFX_IPC_PUSH_EVENT with arg1=event_type, arg2 and arg3 = the event's two
+//! payload words; see gfx_ipc.h for the per-event-type meaning.  Pointer input
+//! comes straight from the mouse driver instead, since it needs no decoding.
+//!
+//! Framebuffer ownership is arbitrated by the vt as well: the compositor owns
+//! the framebuffer only while vt-0 is the visible slot.  The vt announces every
+//! change with VT_IPC_VIS_NOTIFY; on hide the compositor stops drawing entirely,
+//! and on show it repaints the whole screen, because the vt's text rendering
+//! left console content behind.  The compositor requests the switch to vt-0 once,
+//! when its first window appears, and never auto-switches again — moving between
+//! slots afterwards is a user action.
 const c = @cImport({
     @cInclude("gfx_compositor_imports.h");
 });
 const sys = @import("libsys");
 
+// Native-ABI return codes and the sentinel for "no endpoint", mirroring the C
+// side; an endpoint field equal to IPC_ENDPOINT_NONE means unset, not endpoint 0.
 const IPC_OK: i32 = 0;
 const IPC_EMPTY: i32 = 1;
 const IPC_ENDPOINT_NONE: u32 = 0xFFFF_FFFF;
+// Seed for request ids this service originates.  Distinct per service so a
+// stray reply is attributable to its originator rather than being ambiguous.
 const GFX_REQUEST_BASE: u32 = 0x7000;
+// Yield-and-retry rounds spent looking up the "fb" service at startup; the
+// framebuffer driver may still be coming up.  Exhausting it is not fatal.
 const GFX_FB_LOOKUP_RETRIES: u32 = 2048;
+// Fixed table sizes; each is a statically allocated array, so these are the hard
+// ceilings on the service.  Windows and buffers are separate objects with
+// separate lifetimes, which is why there are twice as many buffer slots as
+// window slots, since a double-buffering client holds two.  Exceeding either
+// answers WASMOS_ERR_GFX_BUSY.  GFX_MAX_DAMAGE_RECTS bounds a single present's
+// damage list; a larger count is treated as "damage unknown" and degrades to a
+// full repaint instead of failing.  GFX_MAX_EVENTS is the shared outbound event
+// ring across all clients: it is overwritten oldest-first when full, so a client
+// that stops draining loses its oldest events.
 const GFX_MAX_WINDOWS: usize = 32;
 const GFX_MAX_BUFFERS: usize = 64;
 const GFX_MAX_DAMAGE_RECTS: u32 = 256;
 const GFX_MAX_EVENTS: usize = 128;
+// Title-bar text rendering.  Glyphs are rasterised through the font service and
+// cached by codepoint in a fixed GFX_MAX_GLYPH_CACHE-entry table; a rendered
+// title run is cached per window as well.  GFX_MAX_GLYPH_BYTES caps the coverage
+// mask of both a single glyph and a whole title run — anything larger is not
+// cached and the text is skipped rather than clipped.  GFX_MAX_TITLE_LABEL is
+// the label length actually drawn in the chrome, independent of the 47-byte
+// title a client may set.  TITLE_GLYPHS is the character set primed into the
+// cache at startup, one glyph per idle pass.
 const GFX_MAX_GLYPH_CACHE: usize = 64;
 const GFX_MAX_GLYPH_BYTES: usize = 4096;
 const GFX_MAX_TITLE_LABEL: usize = 24;
+// The font service may not exist yet when the compositor starts, so title-font
+// setup is retried lazily from the idle path — but only on idle passes where the
+// housekeeping counter clears FONT_INIT_RETRY_MASK, i.e. one attempt per 64 idle
+// passes, and only while at least one window exists.  Retrying stops on the
+// first success or on a hard failure, which leaves windows with untitled chrome.
+// FONT_INIT_MAX_ATTEMPTS is not referenced by any code path.
 const FONT_INIT_MAX_ATTEMPTS: u32 = 64;
 const FONT_INIT_RETRY_MASK: u32 = 0x3F;
 const TITLE_GLYPHS: []const u8 = "win 0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ -_.";
@@ -23,8 +127,16 @@ const build_options = @import("build_options");
 /// Enable per-event serial traces for click/pointer/present debugging.
 /// Controlled by cmake -DWASMOS_TRACE=ON (mirrors the C-side WASMOS_TRACE flag).
 const GFX_TRACE: bool = build_options.gfx_trace;
+// Accepted range for a window's (and a shared buffer's) content dimensions, in
+// pixels.  Both create and resize validate against these and answer
+// WASMOS_ERR_GFX_INVALID outside them; the range is deliberately independent of
+// the current display size, so a window may be larger than the screen.
 const GFX_WINDOW_MIN_DIM: u32 = 1;
 const GFX_WINDOW_MAX_DIM: u32 = 8192;
+// Zig-side copies of the GFX_WINDOW_FLAG_* bits declared in gfx_ipc.h; the C
+// header spells them as macros, which @cImport does not surface as constants.
+// They must stay bit-for-bit identical to that header, since a client sets them
+// through GFX_IPC_SET_WINDOW_FLAGS.
 const GFX_WINDOW_FLAG_TOPMOST: u32 = 1 << 0;
 const GFX_WINDOW_FLAG_NO_CHROME: u32 = 1 << 1;
 const GFX_WINDOW_FLAG_INVISIBLE: u32 = 1 << 2;
@@ -32,13 +144,30 @@ const GFX_WINDOW_FLAG_PASSTHROUGH_ZERO: u32 = 1 << 3;
 const GFX_WINDOW_FLAG_NO_ACTIVATE: u32 = 1 << 4;
 const GFX_WINDOW_FLAG_NO_CONTENT: u32 = 1 << 5;
 const GFX_WINDOW_FLAG_NO_TASK_LIST: u32 = 1 << 6;
+// Z value assigned to a GFX_WINDOW_FLAG_TOPMOST window so it sorts above every
+// normally stacked window, which are numbered upward from 1 as they are raised.
+// One below u32 max, leaving headroom above it.
 const GFX_WINDOW_Z_SYSTEM: u32 = 0xFFFF_FFFE;
+// Page granularity of the kernel's shmem allocator: a shared buffer is rounded
+// up to a whole number of these.
 const PAGE_SIZE: u64 = 4096;
+// Dimensions of the built-in mouse cursor bitmap, in pixels.
 const CURSOR_W: i32 = 9;
 const CURSOR_H: i32 = 14;
+// Pointer gesture recognition, in scheduler ticks and pixels.  A press/release
+// pair within POINTER_GESTURE_CLICK_TICKS is a click; a second click within
+// POINTER_GESTURE_DOUBLE_TICKS of the first is a double click.  Movement up to
+// POINTER_GESTURE_SLOP pixels from the press point does not start a drag, so a
+// click with a slightly shaky pointer is still a click.
 const POINTER_GESTURE_CLICK_TICKS: u32 = 100;
 const POINTER_GESTURE_DOUBLE_TICKS: u32 = 100;
 const POINTER_GESTURE_SLOP: i32 = 4;
+// Window chrome geometry in pixels: the frame drawn around a window's content
+// rect and the hit boxes inside it.  A chromed window's on-screen extent is its
+// content width plus 2*CHROME_BORDER, and its content height plus CHROME_TITLE_H
+// (above) plus CHROME_BORDER (below); GFX_WINDOW_FLAG_NO_CHROME makes the outer
+// rect equal the content rect.  CHROME_MAX_HIT_W is the maximize button's hit
+// box and is deliberately wider than the drawn CHROME_MAX_SZ button.
 const CHROME_BORDER: i32 = 1;
 const CHROME_TITLE_H: i32 = 24;
 const CHROME_CLOSE_SZ: i32 = 14;
@@ -49,8 +178,13 @@ const CHROME_BTN_GAP: i32 = 4;
 const CHROME_MAX_HIT_W: i32 = 30;
 const CHROME_RESIZE_HANDLE_SZ: i32 = 12;
 const CHROME_TITLE_FONT_PX: u32 = 14;
+// Scancodes 0..57 of the set-1 make-code range, which is what the built-in
+// keymap tables below cover; anything at or above this decodes to 0.
 const SCANCODE_MAP_LEN: usize = 58;
 
+// Built-in keymaps.  The vt is the system's keymap decoder and the compositor
+// receives already-decoded characters, so scancode_to_ascii and these tables are
+// not reached by any live path; g_key_layout selects between them if they are.
 const key_layout_t = enum(u8) {
     us_qwerty = 0,
     de_nodeadkeys = 1,
@@ -3040,6 +3174,26 @@ fn register_ipc_handlers() i32 {
     return 0;
 }
 
+/// Native service entry point, called by the process manager.
+///
+/// `driver_api` is the native ABI table; it is borrowed for the process's whole
+/// lifetime and its magic/version are checked before anything else is touched.
+/// The remaining three arguments are part of the fixed entry ABI and carry
+/// nothing — the proc endpoint comes from the spawn-info contract instead.
+///
+/// Startup order: validate the ABI table, read spawn info, create the service
+/// endpoint and register its IPC handlers, publish the name "gfx", then look up
+/// the fb/vt/mouse peers, map the framebuffer, allocate the backbuffer, and
+/// finally signal readiness.  Registering "gfx" before proc_notify_ready is what
+/// makes a client woken by the ready signal able to find the service.  Missing
+/// peers are not fatal: without a framebuffer the compositor still serves
+/// requests, it just cannot draw.
+///
+/// Does not return in normal operation — it runs the event loop forever,
+/// blocking in ipc_wait when idle rather than spinning.  Returns -2 if the
+/// native ABI table does not match this build, and -1 for any other startup
+/// failure (no spawn info, endpoint or handler registration failure, name
+/// registration refused, backbuffer allocation failure) or an event-loop error.
 pub export fn initialize(driver_api: *c.wasmos_driver_api_t, module_count: c_int, arg2: c_int, arg3: c_int) c_int {
     _ = module_count; // entry args carry nothing; state comes from spawn_info below
     _ = arg2;

@@ -15,7 +15,10 @@
 #include "sync/mutex.h"
 #include "sync/spinlock.h"
 
-/* Parameters needed to instantiate and run a WASM module. */
+/* Parameters needed to instantiate and run a WASM module.  Every pointer is BORROWED:
+ * wasm_driver_start copies this struct by value but not the memory it points at, so the
+ * module bytes, the name, the export name and the argument array must outlive the driver
+ * instance.  stack_size and heap_size are in BYTES. */
 typedef struct {
     const char* name;
     const uint8_t* module_bytes;
@@ -25,7 +28,7 @@ typedef struct {
     const char* entry_export; /* exported function name called as the driver entry point */
     uint32_t stack_size;
     uint32_t heap_size;
-    uint32_t entry_argc;
+    uint32_t entry_argc; /* meaningful values in entry_argv; at most 4 */
     const uint32_t* entry_argv;
 } wasm_driver_manifest_t;
 
@@ -68,7 +71,9 @@ typedef struct {
 
 #endif /* WASMOS_WASM_RUNTIME */
 
-/* Initialize the WASM driver subsystem; called once during kernel startup. */
+/* Initialize the WASM driver subsystem; called once during kernel startup, before any
+ * wasm_driver_start.  Only prepares the per-pid driver registry's lock; it does not
+ * create a runtime. */
 void wasm_driver_init(void);
 
 /* Instantiate the configured runtime backend and load the WASM module described
@@ -79,6 +84,10 @@ void wasm_driver_init(void);
 int wasm_driver_start(wasm_driver_t* driver, const wasm_driver_manifest_t* manifest,
                       uint32_t owner_context_id);
 
+/* Tear down a started driver: free the runtime and environment, drop it from the per-pid
+ * registry, and reset the struct so it can be started again.  A NULL driver is ignored,
+ * and stopping an inactive driver is harmless.  Does not free the module bytes the
+ * manifest borrowed, and does not destroy the owner's mm_context. */
 void wasm_driver_stop(wasm_driver_t* driver);
 
 /* Return the IPC endpoint number for driver in *out_endpoint.

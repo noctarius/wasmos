@@ -6,6 +6,11 @@
 #include "msi.h"
 #include "arch/x86_64/irq_x86_64.h"
 
+/* Every function below is a one-line forwarder with no logic of its own, so the
+ * contract of each — argument validation, return convention, locking, and what
+ * an IRQ line number is allowed to be — is entirely the x86_64 backend's in
+ * arch/x86_64/irq_x86_64.c.  Read it there, not here.  irq_init is the one
+ * exception: it also brings up the MSI vector table. */
 void irq_init(void) {
     x86_irq_init();
     /* The MSI vector table shares this init point. Its IDT gates are installed

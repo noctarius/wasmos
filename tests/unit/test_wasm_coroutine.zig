@@ -1,3 +1,13 @@
+//! Zig binding tests for the stackless WASM coroutine/future core.
+//!
+//! `zig test` compiles src/libsys/wasm/coroutine_wasm.c for the build host and
+//! links it against src/libc/zig/coroutine.zig, so the core exercised here is
+//! the same C implementation every other language suite runs, executed as host
+//! code rather than as wasm. What is unique is the BINDING: coroutine.zig
+//! re-declares the C types as `extern struct`s and enums, and a wrong field
+//! order, width or tag type surfaces only as a garbled value.
+//!
+//! The scenarios mirror tests/unit/test_wasm_coroutine.c.
 const std = @import("std");
 const coroutine = @import("coroutine");
 

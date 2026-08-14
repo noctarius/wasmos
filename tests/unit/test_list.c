@@ -1,8 +1,30 @@
+/* test_list.c — the generic list (list.h) over both storage backends.
+ *
+ * list.c, list_linked.c, list_array_chunk.c and kmem.c are compiled in for real;
+ * the only substitution is the slab allocator underneath kmem, which
+ * tests/unit/stubs_slab.c forwards to the host heap. A kmem allocation therefore
+ * fails only when the host is out of memory, so the out-of-memory arms of
+ * list_init/list_alloc are not reachable from here.
+ *
+ * The cases pin what list.h promises and what the two backends implement
+ * differently: argument validation (including the chunk capacity that only
+ * LIST_IMPL_ARRAY_CHUNK requires), interior pointers that stay usable while
+ * other elements come and go, refusal of a pointer the list never handed out,
+ * and slot reuse across chunk growth. Iteration order is unspecified in both
+ * backends, so every walk is checked by element count and value sum rather than
+ * by sequence.
+ *
+ * Each case returns 0 to pass or __LINE__ to fail, and wasmos_test_run_all
+ * shuffles the cases and stops at the first failure (test_shuffle.h).
+ */
 #include "list.h"
 #include <stdint.h>
 
 #include "test_shuffle.h"
 
+/* Payload element. `in_use` is the test's own field, not the backends' occupancy
+ * bookkeeping (which the list keeps privately); both fields are read straight
+ * after list_alloc to confirm the slot is handed back zeroed. */
 typedef struct {
     uint32_t in_use;
     uint32_t value;

@@ -45,6 +45,9 @@ typedef struct {
     volatile uint32_t state;
 } spinlock_t;
 
+/* Put a lock into the unlocked state.  Redundant for zero-initialised storage, and
+ * required for a lock built on a stack or in a heap block whose bytes are undefined.
+ * Resetting a lock that is currently held silently releases it. */
 void spinlock_init(spinlock_t* lock);
 
 /* Try to acquire without spinning; returns 1 on success, 0 if already held (and

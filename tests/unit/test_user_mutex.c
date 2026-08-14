@@ -1,3 +1,23 @@
+/* test_user_mutex.c — host tests for the recursive user-space mutex state machine.
+ *
+ * user_mutex_state_try_lock and user_mutex_state_unlock are static inlines in
+ * user_mutex.h, so the code under test is the real one and nothing is stubbed: no
+ * kernel object is linked and the state word lives in a plain host-local
+ * user_mutex_state_t rather than in ring-3 memory.
+ *
+ * What that leaves uncovered is everything wrapped around them in
+ * src/kernel/user_mutex.c: the context/address validation, the 4-byte alignment
+ * check, the global spinlock, and the two mm_copy_{from,to}_user round trips that
+ * carry the state to and from the guest. There is no blocking behaviour to model
+ * here -- the primitive is non-blocking by construction, a contended try-lock
+ * reports USER_MUTEX_BUSY and it is the caller's job to retry or park on a futex.
+ *
+ * Return convention of both helpers: USER_MUTEX_OK (0) on success,
+ * USER_MUTEX_BUSY (1) when another tid holds the lock, and -1 for a NULL state, a
+ * tid of 0, an unlock by a non-owner or of an unheld lock, and recursion-depth
+ * overflow. Both mutate *state in place on the paths that succeed.
+ */
+
 #include <assert.h>
 #include <stdint.h>
 

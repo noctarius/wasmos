@@ -43,10 +43,14 @@ const TITLE_BYTES_MAX: i32 = 127;
 
 @external("wasmos", "sched_yield") declare function sched_yield(): i32;
 
+// Bit masks for the pointer button state carried by GFX_EVENT_POINTER, for use
+// with Context.pointerPressed and Context.activate.
 export const POINTER_LEFT: u32 = 1;
 export const POINTER_RIGHT: u32 = 2;
 export const POINTER_MIDDLE: u32 = 4;
 
+// Axis-aligned rectangle in window pixels. Used for hit-testing, not drawing;
+// the Surface methods take loose coordinates.
 export class Rect {
     constructor(
         public x: i32 = 0,
@@ -56,6 +60,9 @@ export class Rect {
     ) {}
 }
 
+// A clickable region. This binding is immediate-mode: a Button carries only its
+// bounds, has no appearance of its own, and does not join any component tree.
+// The app draws it each frame and asks Context.activate whether it was clicked.
 export class Button {
     bounds: Rect;
 
@@ -63,6 +70,8 @@ export class Button {
         this.bounds = new Rect(x, y, w, h);
     }
 
+    // Move/resize the region. Typically called every frame from the renderer so
+    // the hit area follows the layout it just drew.
     setBounds(x: i32, y: i32, w: i32, h: i32): void {
         this.bounds.x = x;
         this.bounds.y = y;
@@ -98,30 +107,52 @@ function zeroMemory(dst: i32, len: i32): void {
     memory.fill(dst, 0, len);
 }
 
+// Drawing interface over the window's shared buffer, obtained from
+// Context.beginFrame and only meaningful until the matching endFrame. Every
+// method writes 0xAARRGGBB pixels directly with no blending, and clips to the
+// window; drawing before a buffer is mapped is a silent no-op. The pixels of a
+// new frame are whatever the previous frame left, so a full clear is the
+// caller's job.
 export class Surface {
     constructor(private ctx: Context) {}
 
+    // Overwrite the whole window with a single colour.
     clear(color: u32): void {
         this.fillRect(0, 0, this.ctx.contentWidth(), this.ctx.contentHeight(), color);
     }
 
+    // Fill a rectangle, clipped to the window. A non-positive width or height
+    // draws nothing.
     fillRect(x: i32, y: i32, w: i32, h: i32, color: u32): void {
         this.ctx.fillRectInternal(x, y, w, h, color);
     }
 
+    // Draw a `thickness`-pixel border inset inside the rectangle (the edges are
+    // painted within it, not around it). A non-positive thickness draws nothing.
     strokeRect(x: i32, y: i32, w: i32, h: i32, thickness: i32, color: u32): void {
         this.ctx.strokeRectInternal(x, y, w, h, thickness, color);
     }
 
+    // Fill a disc of `radius` pixels centred on (cx, cy). Unantialiased, and a
+    // non-positive radius draws nothing.
     fillCircle(cx: i32, cy: i32, radius: i32, color: u32): void {
         this.ctx.fillCircleInternal(cx, cy, radius, color);
     }
 
+    // Draw one digit from the built-in 3x5 bitmap font with its top-left at
+    // (x, y), each font pixel expanded to `scale` screen pixels. Only 0-8 are
+    // available; see drawDigit3x5Internal.
     drawDigit3x5(x: i32, y: i32, digit: i32, scale: i32, color: u32): void {
         this.ctx.drawDigit3x5Internal(x, y, digit, scale, color);
     }
 }
 
+// One compositor window plus its shared framebuffer and input state.
+//
+// This is a self-contained immediate-mode client, not a binding to the C libui:
+// it speaks the gfx IPC protocol directly and offers no components, layout,
+// text rendering or event callbacks. A frame is beginFrame -> draw -> endFrame,
+// and input is polled with pump/pointerPressed rather than dispatched.
 export class Context {
     private procEndpoint: i32 = -1;
     private gfxEndpoint: i32 = -1;
@@ -148,6 +179,13 @@ export class Context {
     private previousButtons: u32 = 0;
     private surface: Surface = new Surface(this);
 
+    // Create a `width` x `height` window titled `title`, returning null on any
+    // failure. Takes the process-manager endpoint from startup argument 0, so
+    // it only works in a spawned WASMOS app, and blocks while it looks the gfx
+    // service up (retrying up to 4096 times with sched_yield before giving up).
+    // A returned Context owns a window, a shared buffer and two shmem mappings
+    // that destroy() releases.
+    //
     // TODO: Once the AssemblyScript build grows a real Wasm link step, replace
     // the transport-backed implementation here with the shared C libui shim ABI.
     static open(width: i32, height: i32, title: string): Context | null {
@@ -206,6 +244,8 @@ export class Context {
         return ctx;
     }
 
+    // Release the window, the shared buffer and both shmem mappings, and reset
+    // the ids so a second call is harmless. Drawing after this does nothing.
     destroy(): void {
         if (this.titleShmemId > 0 && this.titlePtr != 0) {
             let _ = shmem_unmap(this.titleShmemId);
@@ -237,10 +277,14 @@ export class Context {
         this.windowId = -1;
     }
 
+    // True once the compositor has asked this window to close. Only updated by
+    // pump, so it changes between iterations of the app's own loop.
     shouldClose(): bool {
         return this.closeRequestedFlag;
     }
 
+    // Current window size in pixels. It changes when pump handles a resize
+    // event, so a layout computed from it is only valid for the current frame.
     contentWidth(): i32 {
         return this.width;
     }
@@ -249,6 +293,8 @@ export class Context {
         return this.height;
     }
 
+    // Last pointer position seen for this window, in window pixels. Retains the
+    // last value while the pointer is elsewhere; it is not clamped or reset.
     pointerX(): i32 {
         return this.pointerXValue;
     }
@@ -257,10 +303,20 @@ export class Context {
         return this.pointerYValue;
     }
 
+    // Start a frame. Returns the context's single Surface — the same object
+    // every time, not a new buffer — so drawing is always into the currently
+    // mapped shared buffer.
     beginFrame(): Surface {
         return this.surface;
     }
 
+    // Flush the shared buffer and present it. Returns true when the compositor
+    // acknowledged the present, false when the window is not fully set up, the
+    // flush failed, or the compositor refused (which also happens when the
+    // window resized underneath this frame).
+    //
+    // The flush is required: it is what makes the pixels written through the
+    // mapping visible to the compositor.
     endFrame(): bool {
         if (
             this.shmemId <= 0 ||
@@ -322,6 +378,10 @@ export class Context {
         return handled;
     }
 
+    // Set the window title, returning true when the compositor acknowledged it.
+    // The string is UTF-8 encoded into a shmem page granted to the compositor
+    // and truncated to 127 bytes — by byte, so it can split a multi-byte
+    // sequence. Blocks for one compositor round trip.
     setTitle(title: string): bool {
         if (!this.ensureTitleBuffer()) {
             return false;
@@ -352,6 +412,9 @@ export class Context {
         return reply != null && reply.type == 0x0280 && reply.arg0 == WASMOS_ERR_NONE;
     }
 
+    // True when the last known pointer position lies inside `rect`, with the
+    // left/top edges inside and the right/bottom edges outside. Says nothing
+    // about button state.
     hitTest(rect: Rect): bool {
         return (
             this.pointerXValue >= rect.x &&
@@ -361,18 +424,30 @@ export class Context {
         );
     }
 
+    // True on the frame where `button` is clicked: a press edge for `mask`
+    // combined with the pointer being inside the button's bounds. Call it once
+    // per frame after pump — the edge stays true until the next pump.
     activate(button: Button, mask: u32 = POINTER_LEFT): bool {
         return this.pointerPressed(mask) && this.hitTest(button.bounds);
     }
 
+    // True when any button in `mask` is down now and was up at the previous
+    // pump, i.e. a press edge rather than a held button. Releases are not
+    // reported.
     pointerPressed(mask: u32): bool {
         return (this.pointerButtonsValue & mask) != 0 && (this.previousButtons & mask) == 0;
     }
 
+    // Yield the CPU to the scheduler. pump already blocks until an event
+    // arrives, so this is only needed by a loop that also does work between
+    // frames and wants to be a good citizen.
     yield(): void {
         let _ = sched_yield();
     }
 
+    // Implementation behind Surface.fillRect. Public only because Surface holds
+    // the Context by reference rather than the framebuffer; prefer the Surface
+    // methods. Clips to the window and no-ops without a mapped buffer.
     fillRectInternal(x: i32, y: i32, w: i32, h: i32, color: u32): void {
         if (this.mappedPtr == 0 || w <= 0 || h <= 0) {
             return;
@@ -394,6 +469,8 @@ export class Context {
         }
     }
 
+    // Implementation behind Surface.strokeRect: four inset edge fills. A
+    // thickness above half the rectangle overdraws the middle.
     strokeRectInternal(x: i32, y: i32, w: i32, h: i32, thickness: i32, color: u32): void {
         if (thickness <= 0 || w <= 0 || h <= 0) {
             return;
@@ -404,6 +481,8 @@ export class Context {
         this.fillRectInternal(x + w - thickness, y, thickness, h, color);
     }
 
+    // Implementation behind Surface.fillCircle: a hard-edged distance test over
+    // the bounding box, so the edge is aliased and cost is O(radius^2).
     fillCircleInternal(cx: i32, cy: i32, radius: i32, color: u32): void {
         if (radius <= 0 || this.mappedPtr == 0) {
             return;

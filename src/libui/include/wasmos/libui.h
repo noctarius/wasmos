@@ -1,12 +1,37 @@
 #ifndef WASMOS_LIBUI_H
 #define WASMOS_LIBUI_H
 
+/* libui — retained-mode widget toolkit for WASMOS guest apps.
+ *
+ * The whole toolkit is header-only static-inline C: including this header
+ * compiles the implementation into the including translation unit, so there is
+ * no libui object to link against. Component headers are included in the middle
+ * of this file (after the core helpers they call, before the dispatchers that
+ * call them); include order there is load-bearing.
+ *
+ * Component model: every widget is a ui_component_t, a generic base whose
+ * component_data points at a per-kind struct chosen by ui_component_alloc().
+ * That pointer is type-punned, so an accessor is only valid for the kinds whose
+ * data actually carries the field it reads — each function below states which
+ * kinds it accepts. Components are addressed by int32_t id, never by pointer
+ * across calls: ui_components_reserve() reallocates the component array, which
+ * invalidates every ui_component_t* previously returned by ui_component_by_id().
+ *
+ * Threading: a ui_context_t is owned by one process/thread. Nothing here takes
+ * a lock; concurrent use from two threads is not supported.
+ */
 #include "wasmos_cast.h"
 
+/* Compile-time trace switch, defaulting to the build-wide WASMOS_TRACE (the
+ * -DWASMOS_TRACE cmake flag). Define UI_TRACE=1 before including this header to
+ * force libui tracing on without turning it on tree-wide. */
 #ifndef UI_TRACE
 #define UI_TRACE WASMOS_TRACE
 #endif
 
+/* Write a string literal to the console when tracing is on, and compile to
+ * nothing when it is off. `msg` must be a literal or char array — the length is
+ * taken as sizeof(msg) - 1, so a `const char*` would measure the pointer. */
 #if UI_TRACE
 #define UI_DBG(msg)                                                                                \
     ((void)wasmos_console_write(addr_cast(int32_t, (msg)), (int32_t)(sizeof(msg) - 1)))
@@ -30,17 +55,38 @@
 extern "C" {
 #endif
 
+/* The allocator libui builds on. Redeclared here because a freestanding guest
+ * (the Zig binding's libui_shim.c, for one) supplies its own pair rather than a
+ * full <stdlib.h>. Every libui allocation returns NULL-checked memory and libui
+ * propagates the failure as -1 rather than aborting. */
 void* malloc(size_t size);
 void free(void* ptr);
 
+/* UI_PAGE_SIZE      shmem granularity: every shared mapping libui creates is
+ *                   rounded up to a multiple of this, matching the kernel's
+ *                   4 KiB page.
+ * UI_REQ_BASE       first value of ctx->req_id. Request ids only have to be
+ *                   unique within one endpoint's in-flight window; a distinct
+ *                   base per subsystem keeps libui's traffic recognisable in
+ *                   traces next to the app's own requests.
+ * *_INITIAL_CAP     first allocation size of the three growable arrays
+ *                   (component pool, component text, list items). Each doubles
+ *                   on overflow, so these only set the smallest allocation. */
 #define UI_PAGE_SIZE 4096
 #define UI_REQ_BASE 0x7400
 #define UI_COMPONENTS_INITIAL_CAP 16
 #define UI_TEXT_INITIAL_CAP 32
 #define UI_LIST_INITIAL_CAP 8
 
+/* Result of ui_loop_handle_ipc() / ui_wait_and_handle(): ERROR for a null
+ * argument, IGNORED for a message libui does not own (the app may handle it),
+ * CONSUMED when libui processed it and the app must not. */
 enum { UI_MSG_ERROR = -1, UI_MSG_IGNORED = 0, UI_MSG_CONSUMED = 1 };
 
+/* Widget kind. Selects which struct ui_component_alloc() puts in
+ * component_data, and which ui_component_ops entry the dispatchers use.
+ * NONE (0) is the value of a zeroed component and has no ops of its own; PANEL
+ * carries no per-instance data at all. */
 typedef enum {
     UI_COMPONENT_NONE = 0,
     UI_COMPONENT_PANEL = 1,
@@ -57,6 +103,10 @@ typedef enum {
     UI_COMPONENT_MENU_ITEM = 12
 } ui_component_type_t;
 
+/* Axis-aligned rectangle in pixels. Coordinates are relative to the window the
+ * component belongs to (the popup windows in libui_menu_item.h are their own
+ * coordinate space). A rect with w <= 0 or h <= 0 is empty and every drawing
+ * helper skips it. */
 typedef struct {
     int32_t x;
     int32_t y;
@@ -65,29 +115,40 @@ typedef struct {
 } ui_rect_t;
 
 struct ui_context;
+/* Click/activation callback. `component_id` is the component that fired (for a
+ * menu popup row that is the child row, not the item that owns the popup), and
+ * `user` is the pointer registered alongside the callback — libui never
+ * dereferences or frees it. Callbacks run inside event dispatch, so they may
+ * mutate the component tree, but any ui_component_t* held across a call that
+ * creates a component is invalidated. */
 typedef void (*ui_button_click_cb_t)(struct ui_context* ctx, int32_t component_id, void* user);
+/* List/tree row callback. `item_index` is the zero-based row in the component's
+ * ui_list_data_t, already stored as the selection before the call. */
 typedef void (*ui_list_view_item_cb_t)(struct ui_context* ctx, int32_t component_id,
                                        int32_t item_index, void* user);
 
 /* Pure base component. All type-specific state lives in component_data.
  * This keeps the core struct small and stable across added widget kinds. */
 typedef struct {
-    int32_t in_use;
-    int32_t id;
-    int32_t parent_id;
-    int32_t first_child_id;
+    int32_t in_use;         /* 0 marks a retired slot the walkers skip */
+    int32_t id;             /* >= 1, unique within the context, never reused */
+    int32_t parent_id;      /* 0 for the root */
+    int32_t first_child_id; /* 0 when childless; siblings chain via next_sibling_id */
     int32_t next_sibling_id;
     ui_component_type_t type;
-    ui_rect_t bounds;
+    ui_rect_t bounds; /* window coordinates, rewritten by the layout pass */
+    /* Preferred height in pixels, used by the vertical layouts. MENU_BAR
+     * reinterprets a child's preferred_h as its preferred WIDTH, and treats 0
+     * as "hidden" (the item is skipped and keeps its stale bounds). */
     int32_t preferred_h;
-    uint32_t bg_color;
+    uint32_t bg_color; /* 0xAARRGGBB; the alpha byte is stored, not blended */
     uint32_t fg_color;
     uint32_t border_color;
-    int32_t border_px;
-    int32_t padding_px;
-    int32_t gap_px;
-    int32_t clickable;
-    int32_t pressed;
+    int32_t border_px;  /* generic border width; <= 0 draws no border */
+    int32_t padding_px; /* inset applied on all four sides by layout and render */
+    int32_t gap_px;     /* spacing a container leaves between children */
+    int32_t clickable;  /* non-zero makes the component answer hit-tests for clicks */
+    int32_t pressed;    /* 1 between button-down and button-up over this component */
 
     ui_button_click_cb_t on_click;
     void* on_click_user;
@@ -99,22 +160,45 @@ typedef struct {
  * so the core can dispatch without giant type switches.
  * Use struct tags to avoid typedef ordering issues (declared before full ui_context_t). */
 typedef struct {
+    /* Paint the component. `draw_bounds` is c->bounds already shifted by the
+     * enclosing scroll offset; `clip` is the rectangle outside which nothing may
+     * be drawn; `offset_y` is that same scroll offset, to be passed on when the
+     * implementation renders children itself. The background fill has already
+     * happened; the generic border and child descent happen afterwards unless
+     * the kind is one of the self-contained painters listed in
+     * ui_render_component_clip(). */
     void (*render)(struct ui_context* ctx, const ui_component_t* c, ui_rect_t draw_bounds,
                    ui_rect_t clip, int32_t offset_y);
+    /* Assign bounds to this component's children. When set, it fully replaces
+     * the core's generic vertical layout for that kind and is responsible for
+     * recursing into grandchildren. c->bounds is already final on entry. */
     void (*layout)(struct ui_context* ctx, ui_component_t* c);
 
+    /* Pointer went down at (x, y) in window coordinates, on a component this
+     * kind's finder selected (list/tree: ui_find_list_view_at). */
     void (*handle_pointer_press)(struct ui_context* ctx, ui_component_t* c, int32_t x, int32_t y);
+    /* Pointer came up over a component that was pressed. When set it replaces
+     * the core's plain on_click invocation, so an implementation that wants the
+     * application callback must call c->on_click itself. */
     void (*handle_pointer_release)(struct ui_context* ctx, ui_component_t* c);
     /* `key` is the packed GFX_EVENT_KEY code: decode it with ui_key_char() /
      * ui_key_scancode(), never compare it against a character directly. */
     void (*handle_key)(struct ui_context* ctx, ui_component_t* c, uint32_t key);
+    /* Pointer dragged `dy` pixels vertically while this component was the
+     * active scroll target. `dy` is thumb travel, not content travel — convert
+     * with ui_scroll_drag_delta(). */
     void (*handle_scroll_drag)(struct ui_context* ctx, ui_component_t* c, int32_t dy);
 
-    /* Optional: for hit-testing popups/overlays owned by the component. */
+    /* Optional: for hit-testing popups/overlays owned by the component.
+     * (x, y) are in the coordinates of the window the core is walking, so a
+     * component whose popup lives in a separate compositor window must answer
+     * false — see ui_menu_item_popup_contains(). */
     bool (*popup_contains)(const struct ui_context* ctx, const ui_component_t* c, int32_t x,
                            int32_t y);
 
-    /* Free the component_data (and anything it owns). */
+    /* Free the component_data (and anything it owns). Called once per component
+     * from ui_destroy(); when unset, ui_destroy() free()s component_data
+     * directly, which is only correct for data that owns no further pointers. */
     void (*destroy_data)(ui_component_t* c);
 } ui_component_ops_t;
 
@@ -129,12 +213,21 @@ static inline void ui_init_component_ops(void);
 /* Small reusable data blocks for common component aspects.
  * Individual component headers may use these directly as their component_data
  * or define richer per-type structs that contain them. */
+/* Owned NUL-terminated string. text_len excludes the terminator; text_cap is
+ * the malloc'd size including it. text is NULL until the first set, and the
+ * text-bearing kinds all place this struct at offset 0 of their data so the
+ * generic accessors can reach it: LABEL, BUTTON, TEXT_INPUT, CHECKBOX,
+ * DROPDOWN, MENU_ITEM. */
 typedef struct {
     char* text;
     int32_t text_len;
     int32_t text_cap;
 } ui_text_data_t;
 
+/* Owned array of NUL-terminated strings. Each entry is an individually
+ * malloc'd copy of the string the caller appended. `selected` is -1 for "no
+ * selection" as allocated, but the layout passes clamp it into [0, count) as
+ * soon as the component is laid out with a non-empty list. */
 typedef struct {
     char** items;
     int32_t count;
@@ -146,14 +239,20 @@ typedef struct {
  * struct eagerly so all code can cast component_data without size mismatches. */
 typedef struct {
     ui_text_data_t text;
-    int32_t checked;
+    int32_t checked; /* 0 or 1; toggled by ui_checkbox_toggle() before on_click */
 } ui_checkbox_data_t;
 
+/* scroll_y is the content offset in pixels, always clamped to
+ * [0, scroll_max]; scroll_max is recomputed each layout as
+ * max(0, content_height - viewport_height) and is 0 when everything fits. */
 typedef struct {
     int32_t scroll_y;
     int32_t scroll_max;
 } ui_scroll_view_data_t;
 
+/* Rows are a flat list of 20 px items. on_activate fires on a left
+ * double-click, on_secondary_click on a right click; both are optional and
+ * receive the row index. */
 typedef struct {
     ui_list_data_t list;
     int32_t scroll_y;
@@ -164,6 +263,10 @@ typedef struct {
     void* on_secondary_click_user;
 } ui_list_view_data_t;
 
+/* Like ui_list_view_data_t plus one indentation level per row. `depths` is a
+ * parallel array grown to list.capacity by ui_component_tree_append(); it stays
+ * NULL while no row has been appended. Nesting is presentational only — rows
+ * are never collapsed or filtered by depth. */
 typedef struct {
     ui_list_data_t list;
     int32_t* depths;
@@ -176,6 +279,9 @@ typedef struct {
     void* on_secondary_click_user;
 } ui_tree_view_data_t;
 
+/* `text` is the placeholder shown while no item is selected. The popup is drawn
+ * into the owning window's framebuffer (unlike a menu item's), so dropdown_open
+ * only affects painting and hit-testing inside this window. */
 typedef struct {
     ui_text_data_t text;
     ui_list_data_t list;
@@ -188,56 +294,72 @@ typedef struct {
      * next_sibling_id), not a flat list: a leaf carries an on_click callback,
      * a non-leaf opens its own sub-popup on hover and takes focus on click. */
     int32_t hovered_child_id; /* component id of the child currently highlighted, or 0 */
+    /* Requested popup state. Setting it does not open anything: the window is
+     * reconciled on the next ui_loop_drain() by ui_menu_item_sync_popup(). */
     int32_t dropdown_open;
     /* popup window — managed by ui_menu_item_sync_popup (libui_menu_item.h) */
-    int32_t popup_win_id;
-    int32_t popup_buf_id;
-    int32_t popup_shmem_id;
-    uint8_t* popup_base;
+    int32_t popup_win_id;   /* 0 when no popup window exists */
+    int32_t popup_buf_id;   /* compositor shared-buffer id backing popup_base */
+    int32_t popup_shmem_id; /* shmem id of that buffer, mapped at popup_base */
+    uint8_t* popup_base;    /* BGRA32 pixels, popup_w * popup_h * 4 bytes */
     int32_t popup_w;
     int32_t popup_h;
+    /* popup_hovered is the row index under the pointer, -1 for none;
+     * popup_prev_buttons is the previous pointer button mask, kept so the popup
+     * handler can detect press and release edges. */
     int32_t popup_hovered;
     uint32_t popup_prev_buttons;
     int32_t popup_flushing;  /* 1 while discarding pre-open stale button-down events */
     int32_t popup_has_focus; /* 1 when compositor focus is currently on this popup window */
 } ui_menu_item_data_t;
 
+/* Right-aligned status text painted by the menu bar. Purely presentational:
+ * libui never reads a clock itself, the application pushes the string with
+ * ui_menu_bar_set_clock(). */
 typedef struct {
     char clock_text[24]; /* "YYYY-MM-DD HH:MM:SS\0" or empty */
 } ui_menu_bar_data_t;
 
+/* One libui window plus its component tree. Zero-initialised and populated by
+ * ui_init() or ui_menu_bar_init(); torn down by ui_destroy(), which also zeroes
+ * it, so a context may be re-initialised afterwards. Applications read fields
+ * such as close_requested, root_id, event_endpoint and req_id directly; the
+ * gfx/font/buffer members are libui's own bookkeeping. */
 typedef struct ui_context {
-    int32_t proc_endpoint;
-    int32_t reply_endpoint;
+    int32_t proc_endpoint;  /* process-manager endpoint, used for service lookups */
+    int32_t reply_endpoint; /* endpoint synchronous request replies come back on */
     /* Dedicated endpoint the compositor pushes GFX_IPC_PUSH_EVENT to. It is the
      * window's owner endpoint (source of CREATE_WINDOW); the loop blocks on it.
      * Synchronous requests use reply_endpoint so their replies never mix with
      * pushed events (compositor ownership is per-process, not per-endpoint). */
     int32_t event_endpoint;
-    int32_t gfx_endpoint;
-    int32_t req_id;
-    int32_t window_id;
-    int32_t width;
+    int32_t gfx_endpoint; /* compositor service endpoint */
+    int32_t req_id;       /* monotonically increasing request id, seeded at UI_REQ_BASE */
+    int32_t window_id;    /* compositor window id, 0 before ui_init succeeds */
+    int32_t width;        /* content size in pixels; also the framebuffer stride in pixels */
     int32_t height;
-    int32_t stride_bytes;
-    int32_t buffer_id;
-    int32_t shmem_id;
-    uint8_t* mapped_base;
-    int32_t pointer_x;
+    int32_t stride_bytes; /* bytes per row as reported by the compositor */
+    int32_t buffer_id;    /* compositor shared-buffer id currently presented */
+    int32_t shmem_id;     /* shmem id of that buffer */
+    uint8_t* mapped_base; /* BGRA32 pixels; invalidated by every ui_realloc_buffer() */
+    int32_t pointer_x;    /* last pointer position, clamped into the window */
     int32_t pointer_y;
-    uint32_t pointer_buttons;
-    uint32_t pointer_drag_button;
-    int32_t pointer_drag_x;
+    uint32_t pointer_buttons;     /* button mask from the last pointer event; bit 0 is left */
+    uint32_t pointer_drag_button; /* button held during an in-progress drag, 0 when none */
+    int32_t pointer_drag_x;       /* position of the previous drag sample */
     int32_t pointer_drag_y;
-    int32_t dirty;
-    int32_t close_requested;
-    int32_t root_id;
-    int32_t focused_component_id;
-    int32_t active_scroll_component_id;
-    int32_t font_reply_endpoint;
+    int32_t dirty;                /* non-zero asks the next ui_loop_drain() to repaint */
+    int32_t close_requested;      /* set once the compositor asks this window to close */
+    int32_t root_id;              /* component id of the tree root (PANEL, or MENU_BAR for a bar) */
+    int32_t focused_component_id; /* keyboard target; TEXT_INPUT / DROPDOWN only, 0 for none */
+    int32_t active_scroll_component_id; /* scroll target for the current drag, 0 when none */
+    int32_t font_reply_endpoint;        /* reply endpoint for font-service requests */
     int32_t font_endpoint;
-    int32_t font_handle;
-    int32_t font_px;
+    int32_t font_handle; /* open font handle; > 0 once ui_init_font() succeeded */
+    int32_t font_px;     /* requested pixel size, also used as the text line height */
+    /* Scratch shmem regions shared with the font service: the UTF-8 string to
+     * measure/raster, and the 8-bit coverage mask it writes back. Both grow on
+     * demand via ui_font_ensure_shmem_buffer(). */
     int32_t font_text_shmem_id;
     uint8_t* font_text_ptr;
     int32_t font_text_cap;
@@ -245,12 +367,15 @@ typedef struct ui_context {
     uint8_t* font_mask_ptr;
     int32_t font_mask_cap;
 
-    int32_t next_component_id;
-    ui_component_t* components;
-    int32_t component_count;
+    int32_t next_component_id;  /* id handed to the next allocated component */
+    ui_component_t* components; /* pool; reallocation invalidates every element pointer */
+    int32_t component_count;    /* slots in use, including retired (in_use == 0) ones */
     int32_t component_capacity;
 } ui_context_t;
 
+/* Field extractors for the packed 32-bit payloads the compositor sends.
+ * u16_lo/u16_hi split a pair of unsigned halves (RESIZE carries width, height);
+ * i16_lo/i16_hi do the same sign-extended (font metrics carry bearings). */
 static inline int32_t ui_u16_lo(int32_t packed) {
     return (packed & 0xFFFF);
 }
@@ -263,6 +388,9 @@ static inline int32_t ui_i16_lo(int32_t packed) {
 static inline int32_t ui_i16_hi(int32_t packed) {
     return (int16_t)((packed >> 16) & 0xFFFF);
 }
+/* GFX_EVENT_POINTER payload: 12-bit x, 12-bit y, then an 8-bit button mask.
+ * Coordinates are relative to the window the event names, so a popup window's
+ * events are already popup-local. */
 static inline int32_t ui_ptr_evt_x(int32_t packed) {
     return (packed & 0xFFF);
 }
@@ -272,6 +400,8 @@ static inline int32_t ui_ptr_evt_y(int32_t packed) {
 static inline uint32_t ui_ptr_evt_buttons(int32_t packed) {
     return (uint32_t)((packed >> 24) & 0xFF);
 }
+/* GFX_EVENT_POINTER_GESTURE payload: 12-bit x, 12-bit y, a 4-bit button
+ * (GFX_POINTER_BUTTON_*), then a 4-bit gesture kind (GFX_POINTER_GESTURE_*). */
 static inline int32_t ui_ptr_gesture_x(int32_t packed) {
     return (packed & 0xFFF);
 }
@@ -285,11 +415,19 @@ static inline uint32_t ui_ptr_gesture_kind(int32_t packed) {
     return (uint32_t)((packed >> 28) & 0xF);
 }
 
+/* Request a repaint on the next ui_loop_drain(). Tolerates a NULL context.
+ * Nothing is drawn here — the flag is only consumed by the drain. */
 static inline void ui_mark_dirty(ui_context_t* ctx) {
     if (ctx)
         ctx->dirty = 1;
 }
 
+/* Convert `dy` pixels of scrollbar-thumb travel into content pixels, given the
+ * viewport height and the scrollable range. Returns 0 when nothing can scroll
+ * (dy == 0, viewport_h <= 8, or scroll_max <= 0), and never returns 0 for a
+ * non-zero dy that could scroll: a delta that rounds to zero is rounded away
+ * from zero to +/-1 so slow drags still move. The caller must clamp the
+ * resulting scroll offset into [0, scroll_max]. */
 static inline int32_t ui_scroll_drag_delta(int32_t dy, int32_t viewport_h, int32_t scroll_max) {
     if (dy == 0 || viewport_h <= 8 || scroll_max <= 0)
         return 0;
@@ -311,6 +449,11 @@ static inline int32_t ui_scroll_drag_delta(int32_t dy, int32_t viewport_h, int32
     return delta;
 }
 
+/* Fill a rectangle in an ARGB32 framebuffer. `base` is the pixel origin, `bw` /
+ * `bh` its size in pixels, and rows are assumed packed at bw * 4 bytes — a
+ * padded stride is not supported. The rectangle is clipped to the framebuffer;
+ * a NULL base, a non-positive size or a fully off-screen rectangle draws
+ * nothing. `color` is written verbatim, with no blending. */
 static inline void ui_fill_rect(uint8_t* base, int32_t bw, int32_t bh, int32_t x, int32_t y,
                                 int32_t w, int32_t h, uint32_t color) {
     if (!base || bw <= 0 || bh <= 0 || w <= 0 || h <= 0)
@@ -334,6 +477,8 @@ static inline void ui_fill_rect(uint8_t* base, int32_t bw, int32_t bh, int32_t x
     }
 }
 
+/* Intersection of two rectangles. A disjoint pair yields w and h clamped to 0
+ * (x and y are then meaningless), which every drawing helper treats as empty. */
 static inline ui_rect_t ui_rect_intersect(ui_rect_t a, ui_rect_t b) {
     ui_rect_t r;
     const int32_t x0 = (a.x > b.x) ? a.x : b.x;
@@ -355,6 +500,9 @@ static inline ui_rect_t ui_rect_intersect(ui_rect_t a, ui_rect_t b) {
     return r;
 }
 
+/* ui_fill_rect() restricted to `clip` as well as to the framebuffer. This is
+ * the form the component renderers use, since every render callback receives
+ * the clip rectangle it must respect. */
 static inline void ui_fill_rect_clip(uint8_t* base, int32_t bw, int32_t bh, int32_t x, int32_t y,
                                      int32_t w, int32_t h, uint32_t color, ui_rect_t clip) {
     ui_rect_t r = {x, y, w, h};
@@ -364,6 +512,9 @@ static inline void ui_fill_rect_clip(uint8_t* base, int32_t bw, int32_t bh, int3
     ui_fill_rect(base, bw, bh, i.x, i.y, i.w, i.h, color);
 }
 
+/* Draw a `border_px`-wide border inset inside `r` (the four edges are painted
+ * within the rectangle, not around it). A border_px <= 0 draws nothing; a
+ * border_px larger than half the rectangle overdraws the middle. */
 static inline void ui_stroke_rect_clip(uint8_t* base, int32_t bw, int32_t bh, ui_rect_t r,
                                        int32_t border_px, uint32_t color, ui_rect_t clip) {
     if (border_px <= 0)
@@ -374,6 +525,11 @@ static inline void ui_stroke_rect_clip(uint8_t* base, int32_t bw, int32_t bh, ui
     ui_fill_rect_clip(base, bw, bh, r.x + r.w - border_px, r.y, border_px, r.h, color, clip);
 }
 
+/* Paint a vertical scrollbar into the track rectangle (x, y, w, h). The thumb
+ * is sized proportionally to the visible fraction, floored at 12 px (8 px when
+ * the track is too short for that), and positioned from scroll_y / scroll_max.
+ * Draws nothing when there is nothing to scroll (scroll_max <= 0), when the
+ * track is degenerate (w <= 2 or h <= 8), or when base is NULL. */
 static inline void ui_draw_v_scrollbar(uint8_t* base, int32_t bw, int32_t bh, int32_t x, int32_t y,
                                        int32_t w, int32_t h, int32_t scroll_y, int32_t scroll_max,
                                        uint32_t track_color, uint32_t thumb_color,
@@ -399,6 +555,9 @@ static inline void ui_draw_v_scrollbar(uint8_t* base, int32_t bw, int32_t bh, in
                         thumb_border_color, clip);
 }
 
+/* Source-over blend of `src` onto `dst` at coverage `alpha` (0 = keep dst,
+ * 255 = replace with src). Only the RGB bytes of both operands participate;
+ * the result is always returned fully opaque (alpha byte 0xFF). */
 static inline uint32_t ui_blend_u8(uint32_t dst, uint32_t src, uint8_t alpha) {
     const uint32_t a = (uint32_t)alpha;
     const uint32_t inv = 255u - a;
@@ -427,6 +586,9 @@ static inline uint32_t ui_key_scancode(uint32_t key) {
     return (key >> 8) & 0xFFu;
 }
 
+/* Encode one code point into `out` and return the byte count (1..4). Returns 0
+ * without writing anything for a NULL out, a surrogate (U+D800..U+DFFF) or a
+ * value above U+10FFFF. `out` is not NUL-terminated. */
 static inline int32_t ui_utf8_encode(uint32_t cp, uint8_t out[4]) {
     if (!out)
         return 0;
@@ -457,6 +619,10 @@ static inline int32_t ui_utf8_encode(uint32_t cp, uint8_t out[4]) {
     return 0;
 }
 
+/* Byte offset where the last code point of s[0..len) starts, i.e. the length
+ * that remains after deleting one character. Returns 0 for NULL or len <= 0.
+ * Scans back over continuation bytes and stops at index 0, so a malformed
+ * sequence truncates to empty rather than running off the front. */
 static inline int32_t ui_utf8_prev_boundary(const char* s, int32_t len) {
     if (!s || len <= 0)
         return 0;
@@ -470,6 +636,12 @@ static inline int32_t ui_utf8_prev_boundary(const char* s, int32_t len) {
     return i;
 }
 
+/* Make sure *shmem_id names a mapped shmem region of at least `need_bytes`,
+ * creating and mapping a new one (rounded up to whole UI_PAGE_SIZE pages) when
+ * the current one is absent or too small. On success the three out-parameters
+ * describe the region and 0 is returned; on failure they are left untouched and
+ * -1 is returned. Growing replaces the region, so any pointer previously read
+ * out of *mapped_ptr is stale and the old contents are not carried over. */
 static inline int32_t ui_font_ensure_shmem_buffer(int32_t* shmem_id, uint8_t** mapped_ptr,
                                                   int32_t* cap, int32_t need_bytes) {
     if (!shmem_id || !mapped_ptr || !cap || need_bytes <= 0)
@@ -491,6 +663,16 @@ static inline int32_t ui_font_ensure_shmem_buffer(int32_t* shmem_id, uint8_t** m
     return 0;
 }
 
+/* Ask the font service for the metrics of `text` at the context's font size.
+ * Returns 0 on success and -1 on failure (no font opened, allocation or IPC
+ * failure, or an error reply). All five out-parameters are optional.
+ *
+ * out_w / out_h  size of the rendered bitmap in pixels
+ * out_x0 / out_y0 signed bearing of that bitmap relative to the pen position
+ * out_adv        pen advance, which is the value to use for text width
+ *
+ * An empty string is a success that zeroes every out-parameter without any IPC.
+ * Blocks on the font service for one request/reply round trip. */
 static inline int32_t ui_font_measure_text(ui_context_t* ctx, const char* text, int32_t* out_w,
                                            int32_t* out_h, int32_t* out_x0, int32_t* out_y0,
                                            int32_t* out_adv) {
@@ -541,6 +723,15 @@ static inline int32_t ui_font_measure_text(ui_context_t* ctx, const char* text, 
     return 0;
 }
 
+/* Measure `text` and rasterise it into ctx->font_mask_ptr as an 8-bit coverage
+ * mask of out_w * out_h bytes, row-major with no padding. Returns 0 on success
+ * and -1 on failure; out_w and out_h are mandatory here (a NULL for either is
+ * an error), the other three follow ui_font_measure_text().
+ *
+ * A string that measures to an empty bitmap returns 0 with no mask written, so
+ * callers must check *out_w and *out_h before reading the mask. The mask buffer
+ * is context-wide scratch: the next call overwrites it, and growing it moves it.
+ * Blocks for two font-service round trips. */
 static inline int32_t ui_font_measure_and_raster_text(ui_context_t* ctx, const char* text,
                                                       int32_t text_len, int32_t* out_w,
                                                       int32_t* out_h, int32_t* out_x0,
@@ -576,6 +767,15 @@ static inline int32_t ui_font_measure_and_raster_text(ui_context_t* ctx, const c
     return 0;
 }
 
+/* Draw `text` into ctx->mapped_base with its top-left at (x, y), alpha-blended
+ * with `color` through the font coverage mask and clipped to both `clip` and the
+ * context's width/height. Silently draws nothing when no font is open, when the
+ * string is empty, or when rasterisation fails.
+ *
+ * The destination is always ctx->mapped_base at ctx->width x ctx->height, never
+ * a caller-supplied surface — painting into a different framebuffer means
+ * temporarily repointing those three fields (ui_menu_item_popup_render() does
+ * exactly that). Each call costs two font-service round trips. */
 static inline void ui_draw_text_clip(ui_context_t* ctx, int32_t x, int32_t y, const char* text,
                                      uint32_t color, ui_rect_t clip) {
     if (!ctx || !ctx->mapped_base || !text || ctx->font_endpoint <= 0 ||
@@ -611,6 +811,9 @@ static inline void ui_draw_text_clip(ui_context_t* ctx, int32_t x, int32_t y, co
     }
 }
 
+/* Advance width of `text` in pixels, for centring and caret placement. Returns
+ * 0 both for an empty string and for any failure (no font, IPC error), so it
+ * cannot distinguish the two. */
 static inline int32_t ui_measure_text_width(ui_context_t* ctx, const char* text) {
     int32_t w = 0, h = 0, x0 = 0, y0 = 0, adv = 0;
     if (ui_font_measure_text(ctx, text, &w, &h, &x0, &y0, &adv) != 0)
@@ -618,6 +821,11 @@ static inline int32_t ui_measure_text_width(ui_context_t* ctx, const char* text)
     return adv;
 }
 
+/* Send one compositor request and block for its reply on `reply_ep`. Returns 0
+ * when a GFX_IPC_RESP or GFX_IPC_ERROR message came back — including an error
+ * reply, whose status is in out_raw->arg0 — and -1 when the call itself failed
+ * or the reply was some other message type. Callers must therefore check the
+ * status separately; `out_raw` is only valid on a 0 return. */
 static inline int32_t ui_send_gfx_raw(int32_t gfx_ep, int32_t reply_ep, int32_t req_id,
                                       int32_t opcode, int32_t arg0, int32_t arg1, int32_t arg2,
                                       int32_t arg3, wasmos_ipc_message_t* out_raw) {
@@ -632,6 +840,10 @@ static inline int32_t ui_send_gfx_raw(int32_t gfx_ep, int32_t reply_ep, int32_t 
     return 0;
 }
 
+/* ui_send_gfx_raw() with the reply unpacked into optional out-parameters.
+ * *out_status receives arg0, which is a packed abi/errors.yaml code
+ * (WASMOS_ERR_NONE for success) — a 0 return only means the round trip
+ * completed, so both the return value and the status have to be checked. */
 static inline int32_t ui_send_gfx(int32_t gfx_ep, int32_t reply_ep, int32_t req_id, int32_t opcode,
                                   int32_t arg0, int32_t arg1, int32_t arg2, int32_t arg3,
                                   int32_t* out_status, int32_t* out_a1, int32_t* out_a2,
@@ -651,6 +863,13 @@ static inline int32_t ui_send_gfx(int32_t gfx_ep, int32_t reply_ep, int32_t req_
     return 0;
 }
 
+/* Resolve a component id to its slot, or NULL for a NULL context, a
+ * non-positive id, or an id that is retired or unknown. The search is a linear
+ * scan of the pool.
+ *
+ * Lifetime: the returned pointer is only valid until the next call that can
+ * allocate a component (ui_component_alloc() and everything built on it), since
+ * growing the pool moves every element. Hold the id, not the pointer. */
 static inline ui_component_t* ui_component_by_id(ui_context_t* ctx, int32_t id) {
     if (!ctx || id <= 0)
         return 0;
@@ -661,6 +880,10 @@ static inline ui_component_t* ui_component_by_id(ui_context_t* ctx, int32_t id) 
     return 0;
 }
 
+/* Copy `text` into the component's own ui_text_data_t, growing it as needed.
+ * Returns 0 on success, -1 for a NULL component, absent component_data or a
+ * failed allocation. A NULL `text` is treated as the empty string. The caller
+ * keeps ownership of `text`; libui stores a copy. */
 static inline int32_t ui_component_set_text_owned(ui_component_t* c, const char* text) {
     if (!c)
         return -1;
@@ -699,6 +922,11 @@ static inline int32_t ui_component_set_text_owned(ui_component_t* c, const char*
     return 0;
 }
 
+/* Grow the component pool to hold at least `target` slots, doubling from
+ * UI_COMPONENTS_INITIAL_CAP. Returns 0 when the capacity is already sufficient
+ * or the growth succeeded, -1 for a NULL context or a failed allocation.
+ * A successful growth moves the pool, invalidating every outstanding
+ * ui_component_t*. */
 static inline int32_t ui_components_reserve(ui_context_t* ctx, int32_t target) {
     if (!ctx || target <= ctx->component_capacity)
         return 0;
@@ -717,6 +945,17 @@ static inline int32_t ui_components_reserve(ui_context_t* ctx, int32_t target) {
     return 0;
 }
 
+/* Allocate a component of `type` and its matching component_data (PANEL and
+ * ROW get none), and return its id, or -1 on failure. The component starts
+ * detached — it is not part of the tree until ui_component_append_child() links
+ * it — and carries the shared defaults: 24 px preferred height, the dark theme
+ * colours, 1 px border, 6 px padding and gap. LIST_VIEW, TREE_VIEW and DROPDOWN
+ * additionally start with no selection (-1).
+ *
+ * May grow the pool, so it invalidates outstanding ui_component_t*. A failed
+ * component_data allocation returns -1 before component_count is incremented,
+ * so the half-filled slot is simply reused by the next allocation; the id it
+ * consumed is not. */
 static inline int32_t ui_component_alloc(ui_context_t* ctx, ui_component_type_t type) {
     if (!ctx)
         return -1;
@@ -784,6 +1023,11 @@ static inline int32_t ui_component_alloc(ui_context_t* ctx, ui_component_type_t 
     return c->id;
 }
 
+/* Append `child_id` as the last child of `parent_id`. Returns 0 on success and
+ * -1 when either id does not resolve or the two are the same. The child is
+ * re-parented unconditionally: it is not unlinked from a previous parent first,
+ * so appending an already-linked component leaves the old parent's sibling
+ * chain pointing at it. Cycles are not detected beyond the self-append check. */
 static inline int32_t ui_component_append_child(ui_context_t* ctx, int32_t parent_id,
                                                 int32_t child_id) {
     ui_component_t* parent = ui_component_by_id(ctx, parent_id);
@@ -810,6 +1054,10 @@ static inline int32_t ui_component_append_child(ui_context_t* ctx, int32_t paren
     return -1;
 }
 
+/* Typed wrappers over ui_component_alloc(): each returns the new component's
+ * id, or -1 on failure, and leaves it detached for ui_component_append_child().
+ * PANEL stacks its children vertically; ROW and MENU_BAR stack them
+ * horizontally (MENU_BAR reading each child's preferred_h as a width). */
 static inline int32_t ui_component_create_panel(ui_context_t* ctx) {
     return ui_component_alloc(ctx, UI_COMPONENT_PANEL);
 }
@@ -847,6 +1095,14 @@ static inline int32_t ui_component_create_menu_item(ui_context_t* ctx) {
     return ui_component_alloc(ctx, UI_COMPONENT_MENU_ITEM);
 }
 
+/* Set the label of a text-bearing component (LABEL, BUTTON, TEXT_INPUT,
+ * CHECKBOX, DROPDOWN, MENU_ITEM). A NULL `text` clears it to the empty string.
+ * Silently does nothing for an unknown id, and silently ignores an allocation
+ * failure. Does not mark the context dirty — call ui_mark_dirty() to repaint.
+ *
+ * FIXME: no type check happens (see ui_component_set_text_owned), so calling
+ * this on a LIST_VIEW, TREE_VIEW, SCROLL_VIEW or MENU_BAR corrupts that
+ * component's data instead of failing. */
 static inline void ui_component_set_text(ui_context_t* ctx, int32_t id, const char* text) {
     ui_component_t* c = ui_component_by_id(ctx, id);
     if (!c)
@@ -867,6 +1123,11 @@ static inline int32_t ui_menu_item_add_item(ui_context_t* ctx, int32_t parent_id
     return child_id;
 }
 
+/* Install the click callback on any component kind and mark it clickable, so it
+ * starts answering hit-tests. `user` is stored verbatim and handed back to the
+ * callback; libui neither copies nor frees it, so it must outlive the context.
+ * A NULL `cb` clears the callback but still leaves the component clickable.
+ * Does nothing for an unknown id. */
 static inline void ui_component_set_button_action(ui_context_t* ctx, int32_t id,
                                                   ui_button_click_cb_t cb, void* user) {
     ui_component_t* c = ui_component_by_id(ctx, id);
@@ -877,6 +1138,9 @@ static inline void ui_component_set_button_action(ui_context_t* ctx, int32_t id,
     c->on_click_user = user;
 }
 
+/* Install the row-activation callback, fired on a left double-click over a row.
+ * Accepts LIST_VIEW and TREE_VIEW only; any other kind (or an unknown id) is
+ * silently ignored rather than reinterpreting its data. */
 static inline void ui_component_set_list_view_activate_action(ui_context_t* ctx, int32_t id,
                                                               ui_list_view_item_cb_t cb,
                                                               void* user) {
@@ -892,6 +1156,8 @@ static inline void ui_component_set_list_view_activate_action(ui_context_t* ctx,
     }
 }
 
+/* Install the secondary-click callback, fired on a right click over a row.
+ * Accepts LIST_VIEW and TREE_VIEW only; other kinds are silently ignored. */
 static inline void ui_component_set_list_view_secondary_click_action(ui_context_t* ctx, int32_t id,
                                                                      ui_list_view_item_cb_t cb,
                                                                      void* user) {
@@ -907,6 +1173,8 @@ static inline void ui_component_set_list_view_secondary_click_action(ui_context_
     }
 }
 
+/* Set a CHECKBOX's state; any non-zero `checked` stores 1. Type-checked: a
+ * non-CHECKBOX id does nothing. Does not mark the context dirty. */
 static inline void ui_component_set_checked(ui_context_t* ctx, int32_t id, int32_t checked) {
     ui_component_t* c = ui_component_by_id(ctx, id);
     if (!c || c->type != UI_COMPONENT_CHECKBOX || !c->component_data)
@@ -914,12 +1182,24 @@ static inline void ui_component_set_checked(ui_context_t* ctx, int32_t id, int32
     ((ui_checkbox_data_t*)c->component_data)->checked = checked ? 1 : 0;
 }
 
+/* Read a CHECKBOX's state: 1 when checked, 0 when unchecked and also 0 for
+ * NULL, a non-CHECKBOX component or missing data — the two cases are not
+ * distinguishable. Unlike the setters this takes the component pointer, so it
+ * is usable from inside a callback that already resolved it. */
 static inline int32_t ui_component_get_checked(const ui_component_t* c) {
     if (!c || c->type != UI_COMPONENT_CHECKBOX || !c->component_data)
         return 0;
     return ((ui_checkbox_data_t*)c->component_data)->checked;
 }
 
+/* Append an entry to a collection component. Accepts LIST_VIEW, TREE_VIEW,
+ * DROPDOWN — which store a copy of `item` in their flat list and return its
+ * zero-based index — and MENU_ITEM, which instead creates a child MENU_ITEM and
+ * returns that child's component id (see the note below). Returns -1 for any
+ * other kind, an unknown id, a NULL `item`, or a failed allocation.
+ *
+ * The caller keeps ownership of `item`; the copy is freed by
+ * ui_component_collection_clear() or by the component's destroy_data. */
 static inline int32_t ui_component_list_append(ui_context_t* ctx, int32_t id, const char* item) {
     ui_component_t* c = ui_component_by_id(ctx, id);
     if (!c || !item || !c->component_data)
@@ -974,6 +1254,10 @@ static inline int32_t ui_component_list_append(ui_context_t* ctx, int32_t id, co
     return ld->count - 1;
 }
 
+/* Append a row to a TREE_VIEW at indentation level `depth` (negative depths are
+ * stored as 0). Returns the row index, or -1 for a non-TREE_VIEW id or a failed
+ * allocation. The depth array is grown to match the item array, so a failure
+ * here can leave the row appended without its depth recorded. */
 static inline int32_t ui_component_tree_append(ui_context_t* ctx, int32_t id, const char* item,
                                                int32_t depth) {
     ui_component_t* c = ui_component_by_id(ctx, id);
@@ -1009,6 +1293,12 @@ static inline int32_t ui_component_tree_append(ui_context_t* ctx, int32_t id, co
     return idx;
 }
 
+/* Free every item of a LIST_VIEW, TREE_VIEW or DROPDOWN and reset the selection
+ * to -1; for the two scrolling kinds the scroll offset and range are reset too.
+ * The items array itself is kept for reuse, so the capacity survives. Other
+ * kinds (including MENU_ITEM, whose entries are child components) and unknown
+ * ids are ignored. A TREE_VIEW's depth array is not cleared — stale depths are
+ * overwritten as rows are appended again. */
 static inline void ui_component_collection_clear(ui_context_t* ctx, int32_t id) {
     ui_component_t* c = ui_component_by_id(ctx, id);
     ui_list_data_t* ld = NULL;
@@ -1047,6 +1337,12 @@ static inline void ui_component_collection_clear(ui_context_t* ctx, int32_t id) 
         *scroll_max = 0;
 }
 
+/* Length in bytes (not code points) of a text-bearing component's string,
+ * excluding the terminator. Returns 0 for NULL or missing data.
+ *
+ * Valid only for the kinds whose data starts with ui_text_data_t (LABEL,
+ * BUTTON, TEXT_INPUT, CHECKBOX, DROPDOWN, MENU_ITEM); like the setter it does
+ * not check the type, so any other kind yields a misread field. */
 static inline int32_t ui_component_text_len(const ui_component_t* c) {
     if (!c || !c->component_data)
         return 0;
@@ -1055,6 +1351,10 @@ static inline int32_t ui_component_text_len(const ui_component_t* c) {
     return td->text_len;
 }
 
+/* Commit a freshly allocated framebuffer into the context. `mapped_ptr` is the
+ * guest address the shmem mapping returned. On the first allocation the pointer
+ * position is centred in the new window; afterwards the caller's saved position
+ * is restored, so a resize does not teleport the cursor. */
 __attribute__((noinline)) static void
 ui_apply_realloc_state(ui_context_t* ctx, int32_t new_buffer_id, int32_t new_shmem_id,
                        int32_t new_stride, int32_t new_w, int32_t new_h, int32_t mapped_ptr,
@@ -1071,6 +1371,17 @@ ui_apply_realloc_state(ui_context_t* ctx, int32_t new_buffer_id, int32_t new_shm
     ctx->pointer_y = first_alloc ? ctx->height / 2 : prev_ptr_y;
 }
 
+/* Allocate a new shared framebuffer of new_w x new_h for the context's window,
+ * map it, and release the previous one. Returns 0 on success (including the
+ * no-op case where the size already matches and a buffer is mapped) and -1 on
+ * failure, in which case the old buffer stays in place except when the
+ * compositor allocation itself succeeded but the mapping failed — that path
+ * releases the new buffer and leaves the old one current.
+ *
+ * On success ctx->mapped_base, ctx->width, ctx->height and ctx->stride_bytes
+ * all change, so any pixel pointer the caller cached is stale. The new buffer's
+ * contents are undefined until painted. Blocks for up to three compositor round
+ * trips. */
 static inline int32_t ui_realloc_buffer(ui_context_t* ctx, int32_t new_w, int32_t new_h) {
     int32_t status = 0, new_buffer_id = 0, new_shmem_id = 0, new_stride = 0;
     if (!ctx || new_w <= 0 || new_h <= 0)
@@ -1106,6 +1417,11 @@ static inline int32_t ui_realloc_buffer(ui_context_t* ctx, int32_t new_w, int32_
 
 static inline void ui_destroy(ui_context_t* ctx);
 
+/* Create the font reply endpoint, look up the "font" service and open Roboto at
+ * ctx->font_px, storing the handle in ctx->font_handle. Returns 0 on success
+ * and -1 on failure. The lookup retries up to 2048 times, yielding the
+ * scheduler between attempts, so it tolerates the font service still starting
+ * up but gives up rather than waiting forever. */
 static inline int32_t ui_init_font(ui_context_t* ctx) {
     wasmos_ipc_message_t reply;
     if (!ctx)
@@ -1131,6 +1447,20 @@ static inline int32_t ui_init_font(ui_context_t* ctx) {
     return 0;
 }
 
+/* Bring up a libui window: zero the context, create the pushed-event endpoint,
+ * resolve the gfx and font services, create a `width` x `height` window,
+ * allocate its framebuffer, register the component vtables, and create the root
+ * PANEL sized to the window. Returns 0 on success, -1 on any failure — the
+ * failure path runs ui_destroy(), so the context is left zeroed and safe to
+ * discard or re-initialise.
+ *
+ * `proc_endpoint` must be > 0 (the process-manager endpoint from startup arg 0)
+ * and `reply_endpoint` an endpoint the caller owns, used for libui's
+ * synchronous requests. The context takes no ownership of either. Service
+ * lookups retry with sched_yield up to 2048 times.
+ *
+ * After this returns, ctx->root_id is the tree root and ctx->dirty is set, so
+ * the first ui_loop_drain() paints. */
 static inline int32_t ui_init(ui_context_t* ctx, int32_t proc_endpoint, int32_t reply_endpoint,
                               int32_t width, int32_t height) {
     int32_t status = 0;
@@ -1193,6 +1523,12 @@ fail:
     return -1;
 }
 
+/* Set the window title shown in the compositor chrome and task list. Returns 0
+ * on success and -1 on failure, including a `title` that is empty or longer
+ * than 47 bytes — the limit is a refusal, not a truncation. The string is
+ * handed over through a one-page shmem region that is unmapped again before
+ * returning, so the caller keeps ownership of `title`. Blocks for one
+ * compositor round trip. */
 static inline int32_t ui_window_set_title(ui_context_t* ctx, const char* title) {
     if (!ctx || !title || ctx->gfx_endpoint <= 0 || ctx->window_id <= 0)
         return -1;
@@ -1221,6 +1557,14 @@ static inline int32_t ui_window_set_title(ui_context_t* ctx, const char* title) 
     return (status == WASMOS_ERR_NONE) ? 0 : -1;
 }
 
+/* ui_init() variant for the system menu bar: sizes the window to the full
+ * display width by a fixed 28 px height, pins it to the top-left, and marks it
+ * TOPMOST | NO_CHROME | NO_TASK_LIST so it is not itself a manageable window.
+ * The root is a MENU_BAR (horizontal layout) rather than a PANEL, and the font
+ * is 13 px instead of 14. Returns 0 on success, -1 on failure with the context
+ * destroyed and zeroed.
+ *
+ * Only one menu bar makes sense per display; nothing here enforces that. */
 static inline int32_t ui_menu_bar_init(ui_context_t* ctx, int32_t proc_endpoint,
                                        int32_t reply_endpoint) {
     int32_t status = 0, a1 = 0, a2 = 0, a3 = 0;
@@ -1303,6 +1647,15 @@ mb_fail:
     return -1;
 }
 
+/* Tear the context down: destroy the window, release and unmap the framebuffer
+ * and the font scratch regions, free every component's data through its
+ * destroy_data (or plain free() when it has none), free the pool, and zero the
+ * context. Safe on a NULL pointer, on a partially initialised context (each
+ * step is guarded by its own id check) and when called twice.
+ *
+ * The endpoints passed to ui_init() are not destroyed — the caller owns those.
+ * Menu-item popups still open are only partly reclaimed; see the FIXME in
+ * ui_menu_item_destroy_data(). */
 static inline void ui_destroy(ui_context_t* ctx) {
     int32_t status = 0;
     if (!ctx)
@@ -1337,6 +1690,8 @@ static inline void ui_destroy(ui_context_t* ctx) {
     memset(ctx, 0, sizeof(*ctx));
 }
 
+/* Non-zero when (x, y) is inside `r`, treating the left/top edges as inside and
+ * the right/bottom edges as outside. An empty rect contains nothing. */
 static inline int32_t ui_point_in_bounds(int32_t x, int32_t y, ui_rect_t r) {
     return x >= r.x && y >= r.y && x < (r.x + r.w) && y < (r.y + r.h);
 }
@@ -1421,6 +1776,13 @@ static inline void ui_init_component_ops(void) {
     ui_component_ops[UI_COMPONENT_MENU_ITEM].destroy_data = ui_menu_item_destroy_data;
 }
 
+/* Lay out `parent_id`'s children and recurse into theirs. When the parent's
+ * kind registered a layout op, that op takes over completely; otherwise
+ * children are stacked top to bottom inside the parent's padding, each taking
+ * the full inner width and its own preferred_h (floored at 8 px), separated by
+ * gap_px. The parent's own bounds are an input, never modified here, and
+ * children may be laid out past the parent's bottom edge — clipping, not
+ * layout, keeps them inside. */
 static inline void ui_layout_vertical(ui_context_t* ctx, int32_t parent_id) {
     ui_component_t* p = ui_component_by_id(ctx, parent_id);
     if (!p)
@@ -1460,6 +1822,17 @@ static inline void ui_layout_vertical(ui_context_t* ctx, int32_t parent_id) {
     }
 }
 
+/* Paint one component and, for most kinds, its subtree.
+ *
+ * The pass is: shift the component's bounds up by `offset_y` (the accumulated
+ * scroll offset of the enclosing scroll views), fill that rectangle with
+ * bg_color, run the kind's render op, then — unless the kind paints its own
+ * children — stroke the generic border and recurse into the children with the
+ * same clip and offset. Nothing is drawn outside `clip`, which callers intersect
+ * as they descend, and nothing is drawn at all without a mapped framebuffer.
+ *
+ * Draw order is parent first, then children in sibling order, so a later
+ * sibling overdraws an earlier one where they overlap. */
 static inline void ui_render_component_clip(ui_context_t* ctx, int32_t id, ui_rect_t clip,
                                             int32_t offset_y) {
     ui_component_t* c = ui_component_by_id(ctx, id);
@@ -1502,11 +1875,20 @@ static inline void ui_render_component_clip(ui_context_t* ctx, int32_t id, ui_re
     }
 }
 
+/* Render a subtree against the whole window: ui_render_component_clip() with
+ * the clip set to the full framebuffer and no scroll offset. */
 static inline void ui_render_component(ui_context_t* ctx, int32_t id) {
     ui_rect_t clip = {0, 0, ctx->width, ctx->height};
     ui_render_component_clip(ctx, id, clip, 0);
 }
 
+/* Deepest-last-child-first hit test over the subtree rooted at `id`, returning
+ * the component id under (x, y) or -1 when nothing matches. Children are tried
+ * in sibling order and the first hit wins, so an earlier sibling shadows a
+ * later one where they overlap — the opposite of the paint order. A component
+ * answers if its popup_contains op says so, or if the point is inside its
+ * bounds; hidden and retired components have stale or zero bounds and are
+ * matched or missed accordingly. */
 static inline int32_t ui_find_component_at(ui_context_t* ctx, int32_t id, int32_t x, int32_t y) {
     ui_component_t* c = ui_component_by_id(ctx, id);
     if (!c)
@@ -1529,6 +1911,10 @@ static inline int32_t ui_find_component_at(ui_context_t* ctx, int32_t id, int32_
     return -1;
 }
 
+/* Like ui_find_component_at() but only SCROLL_VIEW, LIST_VIEW and TREE_VIEW
+ * answer, and only on their own bounds — popups are not consulted. Used to pick
+ * the component a drag scrolls. Returns -1 when the point is over nothing
+ * scrollable. */
 static inline int32_t ui_find_scrollable_at(ui_context_t* ctx, int32_t id, int32_t x, int32_t y) {
     ui_component_t* c = ui_component_by_id(ctx, id);
     if (!c)
@@ -1550,6 +1936,10 @@ static inline int32_t ui_find_scrollable_at(ui_context_t* ctx, int32_t id, int32
     return -1;
 }
 
+/* Like ui_find_component_at() but restricted to the row-bearing kinds:
+ * LIST_VIEW and TREE_VIEW on their bounds, plus any component whose
+ * popup_contains op claims the point. Used to route presses, double-clicks and
+ * right-clicks to row handlers. Returns -1 when nothing matches. */
 static inline int32_t ui_find_list_view_at(ui_context_t* ctx, int32_t id, int32_t x, int32_t y) {
     ui_component_t* c = ui_component_by_id(ctx, id);
     if (!c)
@@ -1573,6 +1963,11 @@ static inline int32_t ui_find_list_view_at(ui_context_t* ctx, int32_t id, int32_
     return -1;
 }
 
+/* Find the component that should receive a click at (x, y): one the application
+ * marked clickable, one whose popup_contains op claims the point, or a DROPDOWN
+ * or MENU_ITEM on its own bounds regardless of the clickable flag. Returns -1
+ * when the click misses everything, which the event loop treats as an
+ * outside-click and uses to close open dropdowns. */
 static inline int32_t ui_find_clickable_at(ui_context_t* ctx, int32_t id, int32_t x, int32_t y) {
     ui_component_t* c = ui_component_by_id(ctx, id);
     if (!c)
@@ -1603,6 +1998,23 @@ static inline int32_t ui_find_clickable_at(ui_context_t* ctx, int32_t id, int32_
     return -1;
 }
 
+/* Dispatch one received IPC message into the UI.
+ *
+ * Returns UI_MSG_CONSUMED for anything libui handled, UI_MSG_IGNORED for a
+ * message that is not a compositor event or is an event kind libui does not
+ * act on, and UI_MSG_ERROR for a NULL argument. Applications that share the
+ * event endpoint with their own traffic should feed every message here and only
+ * handle the ones that come back IGNORED.
+ *
+ * Never blocks — the caller does the receiving. Handling an event can call
+ * application callbacks, open or close popup windows (which issues compositor
+ * requests and blocks for their replies), and reallocate the framebuffer on a
+ * RESIZE. Events for a window id that is neither this window nor one of its
+ * popups are consumed and dropped.
+ *
+ * Pointer and focus events are routed to a menu popup first when any popup is
+ * open, by window id for pointer events and by focus ownership otherwise, so
+ * popup coordinates are never hit-tested against the bar window's tree. */
 static inline int32_t ui_loop_handle_ipc(ui_context_t* ctx, const wasmos_ipc_message_t* msg) {
     if (!ctx || !msg)
         return UI_MSG_ERROR;

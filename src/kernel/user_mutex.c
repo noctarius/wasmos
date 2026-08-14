@@ -10,7 +10,14 @@
  * Return contract of both entry points: >= 0 is the op's own result
  * (USER_MUTEX_OK / USER_MUTEX_BUSY), -1 for a bad context/address, a
  * misaligned user_addr, a failed user copy in either direction, or a state the
- * op rejects (unlock by a non-owner, recursion-depth overflow). */
+ * op rejects (unlock by a non-owner, recursion-depth overflow).
+ *
+ * out_state is optional and is written on EVERY path that reaches the copy step,
+ * success or failure: it reports the state as the op left it, which for a
+ * rejected op is the state read from user memory and for an unreadable address
+ * is all-zero.  It is therefore a diagnostic, not a success signal — read the
+ * return value for that.  Neither entry point blocks; the only wait is the
+ * spinlock, held across two user-memory copies. */
 #include "user_mutex.h"
 
 #include "memory.h"

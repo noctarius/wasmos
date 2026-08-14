@@ -6,10 +6,24 @@
 #include <stdint.h>
 #include "wasmos_driver_abi.h" /* wasmos_pci_bar_t, WASMOS_PCI_BAR_COUNT */
 
+/* PCI/ACPI functions the registry can hold.  64 is not arbitrary: the
+ * per-rule spawned_device_mask below is a uint64_t whose bit i marks registry
+ * index i as already spawned, so raising this past 64 needs a wider mask.
+ * Publishes past the cap are dropped. */
 #define DEVICE_REGISTRY_CAP 64
+/* Block devices (ATA/AHCI units) the registry can hold. */
 #define BLOCK_REGISTRY_CAP 16
+/* Value a rule field carries when the corresponding ATTR{} was absent from the
+ * rule line, meaning "match any device".  A device that genuinely reports 0xFF /
+ * 0xFFFF in that field is therefore indistinguishable from the wildcard and
+ * cannot be matched on alone — match it on another attribute instead. */
 #define MATCH_ANY_U8 0xFFu    /* wildcard for class/subclass byte fields */
 #define MATCH_ANY_U16 0xFFFFu /* wildcard for vendor/device ID fields */
+/* The two rule roots, read in this order: the initfs copy is available before
+ * any storage driver exists and carries the bootstrap rules; the boot-FAT copy
+ * is read once storage is online and replaces the matching tables (each
+ * dm_rules_load_* call clears its table first, so loading is a replace, not a
+ * merge). */
 #define DEVMGR_RULES_INIT_ROOT "/init/devmgr/rules"
 #define DEVMGR_RULES_BOOT_ROOT "/boot/system/devmgr/rules"
 #define DEVMGR_RULE_FILE "default.rules"

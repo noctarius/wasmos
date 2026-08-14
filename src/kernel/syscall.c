@@ -128,6 +128,19 @@ static int syscall_arg_i32(uint64_t raw, int32_t* out) {
     return 0;
 }
 
+/* Ring-3 self-test wiring.  Each installs one distinguished endpoint id that
+ * IPC_CALL / IPC_NOTIFY special-case, so a guest can exercise a path that has no
+ * other trigger.  IPC_ENDPOINT_NONE disarms; all three default to it, and the
+ * special cases below are written so a disarmed value can never match a real
+ * endpoint.  Set once during boot before the probe guest runs — they are plain
+ * globals with no synchronisation. */
+
+/* Endpoint whose IPC_CALLs are answered by the kernel itself instead of being
+ * delivered.  Also the one kernel-owned destination a guest is allowed to call:
+ * syscall_ipc_call_kernel_endpoint_allowed permits exactly this id.  Message
+ * types 0x9ABC and 0x9ABD additionally inject stale, out-of-order, forged and
+ * invalid-source replies to drive the reply-correlation and authenticity checks;
+ * every other type is echoed straight back in RDX. */
 void syscall_set_ipc_call_echo_endpoint(uint32_t endpoint) {
     g_ipc_call_echo_endpoint = endpoint;
 }
@@ -136,6 +149,9 @@ uint32_t syscall_ipc_call_echo_endpoint(void) {
     return g_ipc_call_echo_endpoint;
 }
 
+/* Endpoints that IPC_CALL / IPC_NOTIFY refuse with IPC_ERR_PERM regardless of
+ * ownership, so the control-plane deny paths can be exercised against an
+ * otherwise valid endpoint. */
 void syscall_set_ipc_call_control_deny_endpoint(uint32_t endpoint) {
     g_ipc_call_control_deny_endpoint = endpoint;
 }
@@ -250,16 +266,26 @@ static int syscall_ipc_pending_take_request(syscall_ipc_call_slot_t* slot, uint3
  * -- which no host fixture drives.  These let a test exercise the ring itself
  * rather than infer it.
  */
+/* Parks a reply in `pid`'s pending ring.  0 on success; -1 if no slot can be
+ * allocated for the pid, or if the message's request_id has not been issued yet
+ * (the retention refusal the ring enforces for real replies too).  Allocates the
+ * slot on first use, so a pid with no IPC_CALL history is still usable. */
 int syscall_test_pending_enqueue(uint32_t pid, const ipc_message_t* msg) {
     syscall_ipc_call_slot_t* slot = syscall_ipc_call_slot_for_pid(pid);
     return slot ? syscall_ipc_pending_enqueue(slot, msg) : -1;
 }
 
+/* Removes the parked reply matching `request_id`, preserving the order of the
+ * rest.  0 with *out written, -1 if no slot exists or nothing matches. */
 int syscall_test_pending_take(uint32_t pid, uint32_t request_id, ipc_message_t* out) {
     syscall_ipc_call_slot_t* slot = syscall_ipc_call_slot_for_pid(pid);
     return slot ? syscall_ipc_pending_take_request(slot, request_id, out) : -1;
 }
 
+/* The id the NEXT IPC_CALL will consume — i.e. one past the highest issued.  It
+ * is the boundary syscall_ipc_request_id_issued compares against, so a test
+ * builds an "already issued" id as this minus one and a "never issued" id as
+ * this or beyond. */
 uint32_t syscall_test_next_request_id(void) {
     return g_syscall_ipc_call_next_request_id;
 }
@@ -352,6 +378,30 @@ static void syscall_trace_ring3_stress(syscall_frame_t* frame) {
     }
 }
 
+/* The int 0x80 dispatch body, called from isr_syscall_128 with `frame` pointing
+ * at the live saved-register block on the interrupt stack.
+ *
+ * The returned value is stored over the frame's saved RAX before POP_REGS, so it
+ * IS the guest's RAX on return.  Fields written into `frame` are likewise
+ * restored into the guest — which is how the secondary return works: THREAD_JOIN
+ * delivers the joined status and IPC_CALL the reply's arg0 in frame->rdx, both
+ * cleared up front so a failure never leaves a stale value there.
+ *
+ * `frame` is borrowed and must not be retained.  A NULL frame and an unknown
+ * call number both answer (uint64_t)-1; per-call errors are the packed
+ * abi/errors.yaml or IPC_ERR_* codes, sign-extended into RAX, so a guest reads
+ * them back as negative int32.
+ *
+ * Blocking calls (WAIT, THREAD_JOIN, and IPC_CALL awaiting its reply) park the
+ * caller inside this handler and resume here, so the handler can span many
+ * timeslices.  Their retry loops are what make a spurious wake harmless.  The
+ * ring-3 register snapshot at the top exists for exactly that: a blocking call
+ * must resume at the post-syscall RIP, not re-enter the trap.
+ *
+ * Under WARP three ranges are intercepted before the switch — the return
+ * trampoline, the memory helper, and RAX in [WARP_HC_SYSCALL_BASE,
+ * +WARP_HC_MAX), which is forwarded to warp_ring3_dispatch for its own
+ * validation. */
 uint64_t x86_syscall_handler(syscall_frame_t* frame) {
     thread_t* current_thread = 0;
     if (!frame) {

@@ -1,3 +1,25 @@
+// Minesweeper — the graphical AssemblyScript example.
+//
+// Demonstrates the AssemblyScript libui binding, which is immediate mode rather
+// than retained: there is no component tree, no layout and no event callbacks.
+// The whole app is a frame loop —
+//
+//   Context.open -> while (!shouldClose()) { pump(); input; draw; endFrame(); }
+//
+// where pump blocks for one pushed compositor event and updates the pointer and
+// close state, drawing goes through the Surface from beginFrame, and endFrame
+// flushes the shared buffer and presents it. A Button is only a rectangle: the
+// app draws it and asks ctx.activate whether it was clicked this frame, so hit
+// regions must be re-published every frame from the same layout used to draw.
+//
+// Board rules are the standard ones: mines are placed after the first reveal so
+// that reveal is always safe, an empty cell flood-fills its region, a right
+// click toggles a flag, and clearing every non-mine cell wins. State lives in
+// module-scope typed arrays because the app is a singleton.
+//
+// Preconditions: the "gfx" service must be running. Text is drawn with the
+// binding's built-in 3x5 digit font, so the font service is not needed — the
+// window title carries the status line instead.
 import {Button, Context, POINTER_LEFT, POINTER_RIGHT, Rect, Surface} from "./libui";
 
 const BOARD_W: i32 = 8;
@@ -276,6 +298,9 @@ function handleInput(ctx: Context): void {
     }
 }
 
+// App entry point. Returns 0 on a clean close, 1 when the window could not be
+// opened, and 2 when a present failed mid-game (the window is destroyed first
+// in that case).
 export function main(_args: Array<string>): i32 {
     const ctx = Context.open(WINDOW_W, WINDOW_H, "Minesweeper");
     if (ctx == null) {

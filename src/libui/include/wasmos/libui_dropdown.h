@@ -3,6 +3,13 @@
 
 /* libui_dropdown.h - Dropdown component specific rendering (including popup). */
 
+/* Render op for UI_COMPONENT_DROPDOWN: the closed field showing the selected
+ * item (falling back to the component's placeholder text when nothing is
+ * selected), a 'v'/'^' marker, a focus highlight, and — while open — the popup
+ * list drawn straight into this window's framebuffer below the field, flipped
+ * above it when it would fall off the bottom. The popup is capped at 120 px, so
+ * a longer list is truncated rather than scrolled. Paints its own border, so
+ * the core skips the generic one. */
 static inline void ui_render_dropdown(ui_context_t* ctx, const ui_component_t* c,
                                       ui_rect_t draw_bounds, ui_rect_t clip, int32_t offset_y) {
     (void)offset_y;
@@ -57,6 +64,9 @@ static inline void ui_render_dropdown(ui_context_t* ctx, const ui_component_t* c
     }
 }
 
+/* Layout op for UI_COMPONENT_DROPDOWN. The dropdown has no child components, so
+ * this only clamps the selection into [0, count) — which turns the initial -1
+ * into row 0 once the list is non-empty. */
 static inline void ui_layout_dropdown(ui_context_t* ctx, ui_component_t* p) {
     (void)ctx;
     ui_dropdown_data_t* d = (ui_dropdown_data_t*)p->component_data;
@@ -71,6 +81,11 @@ static inline void ui_layout_dropdown(ui_context_t* ctx, ui_component_t* p) {
     d->list.capacity = d->list.capacity;
 }
 
+/* Rectangle the open popup occupies, in the owning window's coordinates. The
+ * popup matches the field's x and width, sits directly below it, flips above
+ * when it would overflow the window and is pinned to y = 0 if it still does not
+ * fit. Returns an all-zero (empty) rect when the component is not a DROPDOWN,
+ * is closed, or has no items — callers test w and h rather than a flag. */
 static inline ui_rect_t ui_dropdown_popup_bounds(const ui_context_t* ctx, const ui_component_t* c) {
     ui_rect_t popup = {0, 0, 0, 0};
     ui_dropdown_data_t* d = (ui_dropdown_data_t*)c->component_data;
@@ -104,7 +119,12 @@ static inline bool ui_dropdown_popup_contains(const ui_context_t* ctx, const ui_
 
 /* Component-owned reaction handlers.
  * Core calls these after routing (find target, focus, pressed, etc.) so dropdown owns
- * its specific behavior for pointer (toggle/pick) and keys (open/close/nav). */
+ * its specific behavior for pointer (toggle/pick) and keys (open/close/nav).
+ *
+ * A press on the field toggles the popup; a press on a row of the open popup
+ * selects it (by 20 px row height) and closes the popup. A press elsewhere is
+ * ignored here — closing on an outside click is driven by the core through
+ * ui_dropdown_close_all_open(). Marks the context dirty on any state change. */
 static inline void ui_dropdown_handle_pointer_press(ui_context_t* ctx, ui_component_t* c,
                                                     int32_t pointer_x, int32_t pointer_y) {
     ui_dropdown_data_t* d = (ui_dropdown_data_t*)c->component_data;
@@ -125,6 +145,12 @@ static inline void ui_dropdown_handle_pointer_press(ui_context_t* ctx, ui_compon
     }
 }
 
+/* Key op for a focused UI_COMPONENT_DROPDOWN. `key` is the packed
+ * GFX_EVENT_KEY code; only its character byte is used. Escape closes the popup,
+ * Return/Enter/Space toggles it, and 'j'/'k' (either case) move the selection
+ * down/up without wrapping. Arrow keys carry no character and therefore do
+ * nothing. Selection changes take effect immediately, whether or not the popup
+ * is open, and no callback fires — the application reads list.selected. */
 static inline void ui_dropdown_handle_key(ui_context_t* ctx, ui_component_t* c, uint32_t key) {
     ui_dropdown_data_t* d = (ui_dropdown_data_t*)c->component_data;
     if (!d)
@@ -151,7 +177,10 @@ static inline void ui_dropdown_handle_key(ui_context_t* ctx, ui_component_t* c, 
     }
 }
 
-/* Simple close helper for orchestration in core (e.g. click outside). */
+/* Simple close helper for orchestration in core (e.g. click outside).
+ * Closes the popup and marks the context dirty only if it was open, so calling
+ * it on an already-closed dropdown costs no repaint. The component's type is
+ * not checked; the callers below filter by kind. */
 static inline void ui_dropdown_close(ui_context_t* ctx, ui_component_t* c) {
     ui_dropdown_data_t* d = (ui_dropdown_data_t*)c->component_data;
     if (d && d->dropdown_open) {
@@ -163,7 +192,8 @@ static inline void ui_dropdown_close(ui_context_t* ctx, ui_component_t* c) {
 /* Component-owned helper: close every open dropdown.
  * Core calls this on pointer release when the click was a miss (no clickable hit),
  * so that dropdown "owns" knowing which of its instances are open and how to close them.
- */
+ * Scans the whole component pool and closes every open DROPDOWN, including ones
+ * in unrelated subtrees. */
 static inline void ui_dropdown_close_all_open(ui_context_t* ctx) {
     for (int32_t i = 0; i < ctx->component_count; ++i) {
         ui_component_t* c = &ctx->components[i];

@@ -72,6 +72,7 @@ export class IpcMessage {
         this.arg3 = ipc_last_field(IPC_FIELD_ARG3);
     }
 
+    /** Field-by-field copy, so a record can outlive the loop's reused one. */
     copyFrom(other: IpcMessage): void {
         this.type = other.type;
         this.requestId = other.requestId;
@@ -125,14 +126,24 @@ function bridgeStatus(status: i32): i32 {
     return status < 0 ? status : -1;
 }
 
+/**
+ * The IPC demultiplexer: one receive endpoint, a table of in-flight requests
+ * keyed by request id, a table of per-message-type handlers, and a small ring of
+ * messages nothing claimed. Bind it with init, drive it with poll or receive.
+ */
 export class EventLoop {
+    /** Endpoint every message is drained from; -1 until init binds one. */
     receiverEndpoint: i32 = -1;
     /** Select set watching receiverEndpoint, so poll can block; -1 if unavailable. */
     selectId: i32 = -1;
+    /** Next request id intentSend hands out; seeded by init. */
     nextRequestId: i32 = 1;
+    /** Runs for every message no typed handler claimed; see setDefault. */
     defaultHandler: OnMessage | null = null;
     /* Reused across poll iterations rather than allocated per message. */
     message: IpcMessage = new IpcMessage();
+    /* Set while inside pollTimeout; a nested poll returns 0 instead of
+     * overwriting the message its caller is still dispatching. */
     polling: bool = false;
     intents: StaticArray<Intent> = new StaticArray<Intent>(INTENT_MAX);
     handlers: StaticArray<Handler> = new StaticArray<Handler>(HANDLER_MAX);
@@ -547,10 +558,13 @@ export class EventLoop {
 export class IpcFuture extends OnMessage {
     future: Future = new Future();
     promise: Promise = new Promise();
+    /** The reply, copied in before the future settles; zeroed until then. */
     reply: IpcMessage = new IpcMessage();
     loop: EventLoop | null = null;
     replyStatus: ReplyStatus | null = null;
+    /** Id of the in-flight request, 0 once it settled or was cancelled. */
     requestId: i32 = 0;
+    /** True between a successful send and settlement; send refuses meanwhile. */
     active: bool = false;
 
     /* Its own reply callback: a separate resolver object would be one

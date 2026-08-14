@@ -1,3 +1,18 @@
+//! Zig wrapper tests for the native stackful coroutine runtime.
+//!
+//! `zig test` builds the real native libsys -- coroutine_native.c,
+//! ipc_future_native.c, service_runtime_native.c, libsys_native.c and the
+//! host's context-switch assembly -- and drives it through
+//! src/libsys/native/zig/libsys.zig, so the coroutines really switch stacks.
+//!
+//! The types come from @cImport, i.e. translated headers rather than
+//! hand-written declarations, so field layout cannot drift and is not what
+//! these cases pin. What they pin is the wrapper surface: slices lowered to
+//! pointer + length, an optional pointer standing for "refused", and bool
+//! returns. That is the opposite of the WASM binding in
+//! tests/unit/test_wasm_coroutine.zig, where the layout IS the thing at risk.
+//!
+//! Every stack is a caller-owned array; the runtime allocates nothing.
 const std = @import("std");
 const libsys = @import("libsys");
 

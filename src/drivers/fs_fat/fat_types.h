@@ -10,6 +10,14 @@
 
 #include <stdint.h>
 
+/* FAT_SECTOR_SIZE is the assumed 512-byte sector; FAT_MAX_SECTOR_BYTES is what
+ * the staging buffer is actually sized for, so a volume declaring a larger
+ * bytes_per_sector in its BPB is still readable up to 4096. FAT_LFN_MAX is the
+ * FAT specification's long-name limit in characters, excluding the NUL the
+ * accumulator adds. FAT_MAX_OPEN_FILES bounds the whole driver's open-file table
+ * across every client (fd = index + 3, so the highest fd is 18), and
+ * FAT_MAX_PATH bounds a single path INCLUDING its NUL -- a longer path is
+ * refused rather than truncated. */
 #define FAT_SECTOR_SIZE 512u
 #define FAT_MAX_SECTOR_BYTES 4096u
 #define FAT_LFN_MAX 255u
@@ -32,14 +40,30 @@
 #define FAT_IO_QUEUE_CAP FAT_MAX_INFLIGHT
 
 /* IPC send retry budget for streamed READDIR output when the client endpoint is
- * transiently full. */
+ * transiently full.
+ *
+ * IPC_ERR_FULL restates the kernel's transport code (see the IPC_ERR_* enum in
+ * the kernel's ipc.h) because this driver cannot include kernel headers; the two
+ * must move together. A full endpoint is ordinary backpressure from a client
+ * that has not drained its stream yet, not a failure, which is why the sender
+ * retries instead of aborting the listing. The budget is a bound, not a
+ * timeout: exhausting it means the client is not consuming at all. */
 #define IPC_ERR_FULL (-3)
 #define FAT_STREAM_SEND_RETRIES 8192
 
+/* Bring-up state of the driver as a whole. WAIT means the mount coroutine has
+ * block I/O outstanding; FAILED is terminal for the volume -- it is not retried,
+ * and every subsequent request fails rather than re-probing. */
 typedef enum { FAT_BOOT_INIT = 0, FAT_BOOT_WAIT, FAT_BOOT_READY, FAT_BOOT_FAILED } fat_boot_phase_t;
 
+/* FAT width, decided from the cluster count during mount. FAT_TYPE_32 is
+ * recognised as a value but the allocation paths only support 12 and 16: the
+ * end-of-chain marker helper returns 0 for anything else, which callers treat as
+ * unsupported. */
 typedef enum { FAT_TYPE_UNKNOWN = 0, FAT_TYPE_12, FAT_TYPE_16, FAT_TYPE_32 } fat_type_t;
 
+/* Mount namespace tag. This backend serves exactly one volume, so BOOT is the
+ * only member; it exists so the cwd records which mount it belongs to. */
 typedef enum { VFS_MOUNT_BOOT = 0 } vfs_mount_t;
 
 /* Top-level operation an fat_op_ctx_t is executing. */
@@ -65,6 +89,15 @@ typedef enum {
     FAT_R_ERR = 2   /* op failed: send FS_IPC_ERROR using ctx->err (an WASMOS_ERR_FS_*) */
 } fat_r_t;
 
+/* The FAT BIOS Parameter Block, exactly as it sits at offset 0 of a volume boot
+ * sector -- field order and widths mirror the specification and must not be
+ * reordered. All multi-byte fields are little-endian on disk, which matches x86,
+ * so the struct is read by overlaying it on the sector rather than by parsing.
+ *
+ * The pairs exist because FAT12/16 and FAT32 disagree: total_sectors_16 and
+ * fat_size_16 are zero on a volume large enough to need total_sectors_32, and
+ * `ext` holds whichever extended block the volume type defines. root_entry_count
+ * is zero on FAT32, where the root directory is an ordinary cluster chain. */
 #pragma pack(push, 1)
 typedef struct {
     uint8_t jump[3];
@@ -85,6 +118,10 @@ typedef struct {
 } fat_bpb_t;
 #pragma pack(pop)
 
+/* One 16-byte MBR partition-table entry, as found at offset 0x1BE of LBA 0.
+ * Probed only when LBA 0 does not parse as a BPB. The CHS fields are legacy and
+ * ignored; `lba_start` is what the mount uses, and it becomes the volume's
+ * boot_lba so every later LBA is relative to it. `type` 0 means an unused slot. */
 typedef struct {
     uint8_t status;
     uint8_t chs_first[3];
@@ -94,7 +131,25 @@ typedef struct {
     uint32_t sectors;
 } fat_mbr_entry_t;
 
-/* An open file descriptor (fd = index + 3). */
+/* An open file descriptor (fd = index + 3).
+ *
+ * `owner` is the endpoint that opened it: a slot belongs to that client and
+ * lookups by another endpoint miss, so an fd is not transferable. `flags` is the
+ * FAT_OPEN_* subset the client passed.
+ *
+ * The cursor is split across four fields that must stay consistent: `offset` is
+ * the authoritative byte position, and current_cluster / current_sector /
+ * file_lba are its derived location on disk. Only the reposition coroutine may
+ * move `offset` across a cluster boundary, because doing so requires walking the
+ * chain; fat_set_open_file_offset covers the cheap in-first-cluster case and
+ * refuses the rest.
+ *
+ * `size` is the file's length as recorded in its directory entry, while
+ * `capacity` is the space its cluster chain already covers, which is always >=
+ * size and is what a write compares against before growing the chain. The three
+ * dir_* fields locate the directory entry itself, so a size or first-cluster
+ * change can be written back without re-resolving the path -- and so the
+ * unlink path can tell whether an entry it is about to remove is open. */
 typedef struct {
     uint8_t in_use;
     int32_t owner;
@@ -111,7 +166,15 @@ typedef struct {
     uint32_t dir_index;
 } fat_open_file_t;
 
-/* A resolved directory entry (result of a directory scan). */
+/* A resolved directory entry (result of a directory scan).
+ *
+ * `valid` is the hit/miss flag: a scan that runs off the end of a directory
+ * leaves it 0 and still reports success, so callers must test it rather than
+ * treating FAT_R_DONE as a match. `attr` is the raw FAT attribute byte (0x10 =
+ * directory). `cluster` is the entry's first cluster, 0 for an empty file. The
+ * dir_* triple locates the 32-byte entry itself -- first LBA of the directory,
+ * sector within it, and entry index -- which is what lets a later write patch
+ * the entry in place. */
 typedef struct {
     uint8_t valid;
     uint8_t attr;

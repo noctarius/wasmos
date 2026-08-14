@@ -1,6 +1,22 @@
 #pragma once
 /* compat/array — freestanding shadow of <array>
- * Provides std::array<T,N> with data(), size(), operator[], begin(), end(). */
+ *
+ * Provides std::array<T,N> with operator[], front(), back(), data(), size(),
+ * max_size(), empty(), begin()/cbegin(), end()/cend() and fill(), plus an
+ * array<T,0> specialisation.  The tuple protocol for arrays (tuple_size,
+ * tuple_element, get<I>, and the array+array tuple_cat overload that
+ * RegPosArr.hpp's to_array() needs) lives in compat/tuple, not here.
+ *
+ * <array> is WARP's most-used container header (register tables, opcode
+ * dispatch tables, RegPosArr).  Those uses are aggregate initialisation,
+ * indexing, iteration and size queries only — no compiled WARP source calls
+ * at(), rbegin()/rend(), swap(), or the relational operators, so none are
+ * provided.
+ *
+ * Element access matches the standard: operator[] is unchecked, and reading a
+ * default-initialised array of a trivial type reads indeterminate values.
+ * Using a missing member (at(), reverse iterators, ==) is a compile error at
+ * the call site, not a silent behaviour change. */
 
 #include "type_traits"
 #include "utility"

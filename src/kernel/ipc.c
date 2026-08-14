@@ -95,6 +95,9 @@ static uint32_t ipc_endpoint_owner_context(uint32_t endpoint_id) {
     return ctx;
 }
 
+/* Brings both object tables up.  Call once, before any other entry point in this
+ * file; a table that fails to initialise is a kpanic rather than an error return
+ * because every IPC path below would otherwise dereference an unbuilt store. */
 void ipc_init(void) {
     ksync_spinlock_init(&g_endpoint_table_lock);
     /* idtable owns id allocation (including skipping live ids after a wrap),
@@ -199,6 +202,13 @@ int ipc_notification_create(uint32_t owner_context_id, uint32_t* out_endpoint) {
                                      out_endpoint);
 }
 
+/* Reports who owns `endpoint`.  IPC_OK with *out_owner_context_id set,
+ * IPC_ERR_NOENT if the id does not resolve, IPC_ERR_INVALID for a NULL out
+ * pointer.  Deliberately performs NO ownership check of its own — resolving an
+ * endpoint's owner is how callers (syscall reply authentication, PM handlers)
+ * establish identity, so refusing non-owners would defeat the purpose.  Unlike
+ * the static ipc_endpoint_owner_context this takes ep->lock, so it must not be
+ * called with an endpoint lock already held. */
 int ipc_endpoint_owner(uint32_t endpoint, uint32_t* out_owner_context_id) {
     ipc_endpoint_t* ep = ipc_endpoint_get(endpoint);
     if (!ep) {
@@ -213,6 +223,11 @@ int ipc_endpoint_owner(uint32_t endpoint, uint32_t* out_owner_context_id) {
     return IPC_OK;
 }
 
+/* Queue depth of `endpoint` right now, in messages (0..IPC_QUEUE_DEPTH).  A
+ * snapshot: it is stale as soon as ep->lock is dropped, so acting on a non-zero
+ * answer with a receive that assumes a message is there is a race — the receive
+ * primitives already report IPC_EMPTY for that.  Type is not checked, so a
+ * notification endpoint answers 0 (its counter is notify_count, not count). */
 int ipc_endpoint_count(uint32_t endpoint, uint32_t* out_count) {
     ipc_endpoint_t* ep = ipc_endpoint_get(endpoint);
     if (!ep) {
@@ -227,6 +242,16 @@ int ipc_endpoint_count(uint32_t endpoint, uint32_t* out_count) {
     return IPC_OK;
 }
 
+/* Enqueues a COPY of `message` on `endpoint` and wakes at most one parked
+ * receiver plus every poll watcher.  Never blocks: a full queue is refused with
+ * IPC_ERR_FULL rather than waiting, so back-pressure is the sender's problem.
+ *
+ * `message` is borrowed for the duration of the call.  message->destination is
+ * overwritten with `endpoint` in the stored copy; message->source is the
+ * caller's claimed reply endpoint and is what the permission check below
+ * validates.  Any context may send to any message endpoint — send is the one
+ * operation without an ownership requirement on the destination — so the
+ * spoofing defence is entirely on the source side. */
 int ipc_send_from(uint32_t sender_context_id, uint32_t endpoint, const ipc_message_t* message) {
     if (!message) {
         return IPC_ERR_INVALID;
@@ -454,6 +479,13 @@ static void ipc_endpoint_teardown(void* elem, void* user) {
     ksync_spinlock_unlock(&ep->lock);
 }
 
+/* Releases every endpoint owned by `owner_context_id`, running the teardown
+ * above on each.  Called from the process reap path, so the owner is already
+ * dead and cannot race its own endpoints.  Peers are not notified: a thread
+ * blocked on one of these endpoints is aborted by the teardown and its
+ * ipc_recv_blocking_for re-resolve then answers IPC_ERR_PEER_GONE.  Context 0 is
+ * ignored, since it is the "no context" sentinel and matching on it would
+ * release endpoints indiscriminately. */
 void ipc_endpoints_release_owner(uint32_t owner_context_id) {
     if (owner_context_id == 0) {
         return;
@@ -488,6 +520,13 @@ static ipc_select_t* ipc_select_find(uint32_t select_id, uint32_t owner_context_
     return sel;
 }
 
+/* Allocates an empty select set owned by `owner_context_id`.  IPC_OK with
+ * *out_select_id set, IPC_ERR_INVALID for a NULL out pointer or a context the
+ * store rejects, IPC_ERR_FULL when the per-context quota is reached or the store
+ * cannot grow.  The set watches nothing until ipc_select_add is called, and a
+ * wait on an empty set therefore blocks until its timeout.  The caller owns the
+ * id and must ipc_select_destroy it; process teardown does not sweep select
+ * sets the way it sweeps endpoints. */
 int ipc_select_create(uint32_t owner_context_id, uint32_t* out_select_id) {
     if (!out_select_id) {
         return IPC_ERR_INVALID;
@@ -694,6 +733,16 @@ int ipc_select_recv(uint32_t select_id, uint32_t owner_context_id, uint32_t* out
     return ipc_recv_for(owner_context_id, ready, out_message);
 }
 
+/* Unregisters the set from every endpoint it watches, aborts anyone parked on
+ * it, and frees the id.  Silent on failure by design — there is nothing a caller
+ * could do about "the set was already gone" or "it is not yours", and both leave
+ * the system in the state the caller wanted.
+ *
+ * Takes g_select_table_lock and then, per watched endpoint, ep->lock via
+ * ipc_endpoint_get: the file-wide order (see ipc_send_from), so it must not be
+ * called with an endpoint lock held.  A waiter woken by the abort here re-
+ * resolves the id under the table lock and finds it gone; that re-resolve is why
+ * the free is safe while a thread still holds a stale `sel` pointer. */
 void ipc_select_destroy(uint32_t select_id, uint32_t owner_context_id) {
     int rc = IPC_OK;
     ksync_spinlock_lock(&g_select_table_lock);

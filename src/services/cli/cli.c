@@ -18,6 +18,37 @@
  * regression target.  One command is in flight at a time (see cli_send_fs), and
  * an idle CLI parks blocked on a select set over its own endpoints rather than
  * spinning, so background processes keep the CPU.
+ *
+ * Command grammar.  A line is matched case-insensitively against the built-ins
+ * below, in this order; anything else is treated as a program name:
+ *
+ *   help                    print the built-in list
+ *   ls                      list the current directory
+ *   cd <path>               change directory.  A path fits in one request only
+ *                           while it is under 16 bytes (FS_IPC_CHDIR_REQ packs
+ *                           the name into arg0..arg3); a longer absolute path is
+ *                           issued as a chdir to root followed by a second
+ *                           request for the remainder
+ *   mount                   list mount points
+ *   kmaps [all]             dump kernel page mappings
+ *   tty <0-3>               make that vt slot visible; exactly one digit
+ *   script <file>           run a .rc script in a child interpreter
+ *   source <file> | . <file>  run a .rc script in THIS shell, so its variable
+ *                           and directory changes persist
+ *   export VAR=<value>      set a variable exported to child processes
+ *   set VAR=<value>         set a shell-local variable
+ *   echo [-n] [-e|-E] [--] [text|${VAR}...]
+ *   spawn <cmd> [args]      start a program detached; the shell does not wait
+ *                           and $? is left unchanged
+ *   halt | reboot           stop or restart the machine
+ *
+ * A non-built-in line is resolved to an executable path and spawned, and the
+ * shell then WAITS for it and puts its exit code in $?.  The exception is a
+ * process the process manager spawns as a service or driver: PM has already
+ * waited for its readiness signal, so the shell does not wait again and sets
+ * $? to 0.  A command that cannot be resolved prints "no such command found"
+ * and leaves $? untouched.  The first whitespace run separates the command from
+ * its arguments, which are passed on as a single unsplit string.
  */
 
 static cli_phase_t g_phase = CLI_PHASE_INIT;

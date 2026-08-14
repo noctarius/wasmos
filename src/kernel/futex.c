@@ -19,6 +19,9 @@
  * Design mirrors Minos2's kernel/userspace/futex.c.
  */
 
+/* Hash table sizing.  16 buckets is a compromise: each bucket costs one spinlock
+ * plus a list head, and collisions only cost a short walk plus contention on
+ * that bucket's lock, never correctness. */
 #define FUTEX_TABLE_BITS 4
 #define FUTEX_TABLE_SIZE (1u << FUTEX_TABLE_BITS)
 
@@ -33,10 +36,17 @@ static struct {
     futex_t* head;
 } g_futex_table[FUTEX_TABLE_SIZE];
 
+/* Hashes on the PAGE number, not the word address, so every futex within one
+ * page lands in the same bucket and shares its lock.  Cheap and adequate here
+ * because a process's futexes are few; a workload with many hot futexes in one
+ * page would serialise on that bucket. */
 static inline uint32_t futex_bucket(uintptr_t paddr) {
     return (uint32_t)((paddr >> 12) & (FUTEX_TABLE_SIZE - 1u));
 }
 
+/* Publishes an empty table.  Call once, before any futex_wait/futex_wake, from
+ * process_init(); it re-initialises every bucket lock, so running it against a
+ * live table would leak the entries and strand their waiters. */
 void futex_init(void) {
     for (uint32_t i = 0; i < FUTEX_TABLE_SIZE; i++) {
         ksync_spinlock_init(&g_futex_table[i].lock);
@@ -129,7 +139,12 @@ int futex_wait(uint32_t uaddr, uint32_t expected, uint32_t timeout_ms, uint32_t 
     ksync_spinlock_unlock(&g_futex_table[bucket].lock);
 
     /* Re-read the futex word under the event lock to prevent the lost-wakeup
-     * race: if the word already changed, return immediately. */
+     * race: if the word already changed, return immediately.  Read through the
+     * kernel's higher-half alias of the same physical page the guest writes, so
+     * no user mapping has to be walked.  The load is plain rather than atomic:
+     * a concurrent guest write is only guaranteed to be observed by the NEXT
+     * pass, which is why the caller must treat a 0 return as "re-check the word
+     * yourself" and not as "the word equals `expected`". */
     uint32_t* kaddr = ptr_cast(uint32_t, (paddr + KERNEL_HIGHER_HALF_BASE));
     if (*kaddr != expected) {
         ksync_spinlock_unlock(&ft->event.lock);
@@ -149,6 +164,14 @@ int futex_wait(uint32_t uaddr, uint32_t expected, uint32_t timeout_ms, uint32_t 
     return 0;
 }
 
+/* Wakes up to `count` threads parked on the word at `uaddr` and returns how many
+ * were actually woken — always >= 0, never a packed error code.  A word nobody
+ * is waiting on, and an address that does not resolve in `context_id`, both
+ * report 0: the caller cannot tell a bad address from an idle futex, which is
+ * deliberate because neither is actionable at a wake site.  Never blocks.
+ *
+ * Waking is not conditional on the word's value: the caller is expected to have
+ * published the new value before calling, and the woken waiters re-read it. */
 int futex_wake(uint32_t uaddr, uint32_t count, uint32_t context_id) {
     uintptr_t paddr = futex_uaddr_to_paddr(uaddr, context_id);
     if (!paddr) {

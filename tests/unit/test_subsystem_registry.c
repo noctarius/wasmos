@@ -1,3 +1,21 @@
+/* test_subsystem_registry.c — the subsystem and exec-handler tables
+ * (subsystem_registry.h), which map a request tag to the runtime or broker that
+ * handles it and a file to the exec handler that claims it.
+ *
+ * subsystem_registry.c, hashmap.c and kmem.c are compiled in for real, together
+ * with the libc string.c that supplies str_copy/str_copy_bytes; the slab
+ * allocator underneath kmem is replaced by tests/unit/stubs_slab.c (host heap)
+ * and the spinlocks by tests/unit/stubs_spinlock.c. tests/unit/include/klog.h
+ * shadows the kernel's, discarding every klog_write the registry makes on a
+ * rejection, so a case can assert only the return value and never the reason
+ * logged with it. The registry's tables are
+ * process-global file statics, so every case brackets itself with
+ * wasmos_subsystem_registry_reset() — the cases run in a shuffled order and
+ * would otherwise inherit each other's registrations.
+ *
+ * Each case returns 0 to pass or __LINE__ to fail, and wasmos_test_run_all stops
+ * at the first failure (test_shuffle.h).
+ */
 #include "subsystem_registry.h"
 #include <stdint.h>
 #include <stdio.h>
@@ -5,9 +23,15 @@
 
 #include "test_shuffle.h"
 
+/* Two distinct non-NULL ops pointers. The registry only null-checks and stores
+ * ops, never dereferencing it, so the address of an int serves: what the cases
+ * assert is that each entry kept the pointer it was registered with. */
 static const int g_ops_a = 1;
 static const int g_ops_b = 2;
 
+/* Register the three broker subsystems the exec-handler cases name as owners: an
+ * exec handler is refused unless its request tag already belongs to a registered
+ * broker. Returns 0, or __LINE__ as a failure marker the caller propagates. */
 static int register_test_brokers(void) {
     if (wasmos_subsystem_registry_register_broker("LUA", "NATIVE", "LUA", 101u, 0u, 0u, 0u, 1u) !=
         0) {

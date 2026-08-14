@@ -1,3 +1,16 @@
+/* irq_route_deny - negative half of the IRQ routing capability test.
+ *
+ * The counterpart to irq_route_allow: this app holds no irq.route capability,
+ * so a routing attempt must be refused outright. It asks for line 1 — the very
+ * line irq_route_allow is permitted — which is what makes the deny attributable
+ * to the missing capability rather than to a line policy.
+ *
+ * Prints "ok" and exits 0 when the call returns WASMOS_ERR_IRQ_NOT_AUTHORIZED,
+ * otherwise exits 1.
+ *
+ * Precondition: the app must remain absent from the irq.route capability grants
+ * in src/kernel/policy.c; granting it turns the expected deny into a success
+ * and this app then reports failure. */
 #include "stdio.h"
 #include "wasmos/api.h"
 

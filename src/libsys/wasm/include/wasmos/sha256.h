@@ -12,6 +12,10 @@
 extern "C" {
 #endif
 
+/* Streaming hash state, caller-owned and valid only between init() and final().
+ * `data` buffers the partial 64-byte block, `datalen` how much of it is filled,
+ * `bitlen` the message length in bits of the blocks already absorbed, and
+ * `state` the eight chaining words. None of it is meant to be read directly. */
 typedef struct {
     uint8_t data[64];
     uint32_t datalen;
@@ -19,10 +23,14 @@ typedef struct {
     uint32_t state[8];
 } wasmos_sha256_ctx_t;
 
+/* Rotate right by n, which must be in 1..31 (a zero or 32 shift would be
+ * undefined). */
 static inline uint32_t wasmos_sha256_rotr(uint32_t x, uint32_t n) {
     return (x >> n) | (x << (32u - n));
 }
 
+/* Absorb one full 64-byte block into the chaining state. Internal to the
+ * update/final pair; it neither updates `bitlen` nor touches `datalen`. */
 static inline void wasmos_sha256_transform(wasmos_sha256_ctx_t* ctx, const uint8_t data[64]) {
     static const uint32_t k[64] = {
         0x428a2f98u, 0x71374491u, 0xb5c0fbcfu, 0xe9b5dba5u, 0x3956c25bu, 0x59f111f1u, 0x923f82a4u,
@@ -91,6 +99,10 @@ static inline void wasmos_sha256_init(wasmos_sha256_ctx_t* ctx) {
     ctx->state[7] = 0x5be0cd19u;
 }
 
+/* Absorb `len` more bytes. May be called any number of times; splitting a
+ * message across calls does not change the digest. `ctx` must be initialised
+ * and neither pointer may be NULL (a zero len with a NULL data pointer is
+ * harmless because the loop body never runs). */
 static inline void wasmos_sha256_update(wasmos_sha256_ctx_t* ctx, const uint8_t* data,
                                         uint32_t len) {
     for (uint32_t i = 0; i < len; ++i) {
@@ -103,6 +115,9 @@ static inline void wasmos_sha256_update(wasmos_sha256_ctx_t* ctx, const uint8_t*
     }
 }
 
+/* Pad the message, absorb the tail, and write the 32-byte big-endian digest.
+ * Consumes the context: it is left holding padding state, so re-init before
+ * hashing anything else and do not call final() twice. */
 static inline void wasmos_sha256_final(wasmos_sha256_ctx_t* ctx, uint8_t hash[32]) {
     uint32_t i = ctx->datalen;
     if (ctx->datalen < 56) {
@@ -135,7 +150,9 @@ static inline void wasmos_sha256_final(wasmos_sha256_ctx_t* ctx, uint8_t hash[32
 }
 
 /* Compute SHA-256(in) and write the first 16 hex characters into out[0..15],
- * NUL-terminated at out[16].  Yields a stable compact identifier for a name. */
+ * NUL-terminated at out[16].  Yields a stable compact identifier for a name.
+ * `in` must be a non-NULL NUL-terminated string and `out` must have room for
+ * all 17 bytes; the hex digits are lowercase. */
 static inline void wasmos_sha256_hex16_prefix(const char* in, char out[17]) {
     static const char* hex = "0123456789abcdef";
     wasmos_sha256_ctx_t ctx;

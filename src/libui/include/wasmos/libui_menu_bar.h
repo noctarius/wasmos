@@ -3,6 +3,11 @@
 
 /* libui_menu_bar.h - Menu bar component specific rendering. */
 
+/* Render op for UI_COMPONENT_MENU_BAR: a 1 px separator along the bottom edge,
+ * every child menu item through the core clip walker, then the clock text
+ * right-aligned with a 10 px inset (skipped when it would start at or left of
+ * x = 0). Descends into children itself, so the core skips its generic border
+ * and child pass. */
 static inline void ui_render_menu_bar(ui_context_t* ctx, const ui_component_t* c,
                                       ui_rect_t draw_bounds, ui_rect_t clip, int32_t offset_y) {
     ui_fill_rect_clip(ctx->mapped_base, ctx->width, ctx->height, draw_bounds.x,
@@ -27,6 +32,12 @@ static inline void ui_render_menu_bar(ui_context_t* ctx, const ui_component_t* c
     }
 }
 
+/* Set the menu bar's right-aligned status text and mark the context dirty.
+ * Type-checked: does nothing unless `id` is a MENU_BAR. A NULL `text` clears
+ * the string. Longer input is truncated to 23 bytes, not refused, and the cut
+ * is by byte, so it can split a multi-byte UTF-8 sequence. The application owns
+ * `text`; a copy is stored. libui never updates this by itself — the caller
+ * decides when to re-read a clock and push the new string. */
 static inline void ui_menu_bar_set_clock(ui_context_t* ctx, int32_t id, const char* text) {
     ui_component_t* c = ui_component_by_id(ctx, id);
     if (!c || c->type != UI_COMPONENT_MENU_BAR || !c->component_data)
@@ -42,6 +53,12 @@ static inline void ui_menu_bar_set_clock(ui_context_t* ctx, int32_t id, const ch
     ui_mark_dirty(ctx);
 }
 
+/* Layout op for UI_COMPONENT_MENU_BAR: places children left to right from the
+ * bar's left padding, separated by gap_px, each spanning the bar's full height.
+ * A child's preferred_h is read as its WIDTH here — 0 means hidden (the item is
+ * skipped, keeping whatever bounds it last had, so it stays hit-testable at its
+ * old position), and any value of 4 or less falls back to 80 px. Children are
+ * not recursed into; a menu item's own entries live in its popup window. */
 static inline void ui_layout_menu_bar(ui_context_t* ctx, ui_component_t* p) {
     int32_t x_cur = p->bounds.x + p->padding_px;
     int32_t child_id2 = p->first_child_id;

@@ -32,9 +32,15 @@ typedef void (*service_class_event_fn)(void* user, uint32_t notify_endpoint, uin
 /* Nonzero iff owner_ctx still has a live process. */
 typedef int (*service_class_alive_fn)(void* user, uint32_t owner_ctx);
 
-/* Clear all providers, subscribers, and the event sink. */
+/* Clear all providers, subscribers, and the event sink. No events are fired for
+ * the entries it drops. */
 void service_class_registry_reset(void);
 
+/* Install the callback used to deliver ADD/REMOVE events, replacing any
+ * previous one; `fn` may be NULL to stop delivering them (registrations still
+ * proceed). `user` is passed through unchanged and is borrowed -- it must
+ * outlive the sink. The sink is invoked synchronously from add / reap_dead, so
+ * it must not block or re-enter the registry. */
 void service_class_registry_set_event_sink(service_class_event_fn fn, void* user);
 
 /* Register a provider under (class_name, instance). Re-registration by the same

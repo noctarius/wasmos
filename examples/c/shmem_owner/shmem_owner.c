@@ -8,6 +8,21 @@
 /*
  * shmem_owner (shmownr) — second half of the shmem end-to-end test.
  *
+ * Demonstrates the owner side of shared memory: wasmos_shmem_create,
+ * wasmos_shmem_map_auto, wasmos_shmem_grant / wasmos_shmem_revoke against
+ * another process's pid, and wasmos_shmem_unmap. It walks shmtgt through the
+ * whole capability lifecycle (ungranted, granted, revoked, owner-unmapped) and
+ * shmtgt asserts what it may and may not do at each stage.
+ *
+ * Map with wasmos_shmem_map_auto, not wasmos_shmem_map: under WARP the host
+ * linear-memory base is not page-aligned, so a caller-chosen guest offset
+ * cannot land on a page boundary. map_auto scans for a valid window instead.
+ *
+ * Preconditions: shmtgt must already be running and have published its endpoint
+ * (the test script spawns it first and waits for the CLI prompt, which returns
+ * only after shmtgt's notify_ready). Both halves need write access to
+ * /boot/shmem_e2e.bin.
+ *
  * The two halves rendezvous without busy-polling. shmtgt writes its IPC
  * endpoint to the sync file before calling notify_ready, and the CLI only
  * returns its prompt after that, so the file already carries target_ep by the

@@ -37,6 +37,12 @@
 #include "sched_event.h"
 #include "thread.h"
 
+/* How many host threads -- CPUs, in this file's model -- take part, and how many
+ * messages each sender pushes. Both are compile-time overridable so a soak run
+ * can raise the pressure; NTHREADS must stay at or below POOL_MAX, which is
+ * derived from it, and a case that needs a distinct sender and receiver assumes
+ * at least two. Raising the round count lengthens every case linearly and is the
+ * usual knob for making a rare interleaving show up. */
 #ifndef WASMOS_TEST_NTHREADS
 #define WASMOS_TEST_NTHREADS 4
 #endif
@@ -49,6 +55,11 @@
 static int g_failures;
 static int g_checks;
 
+/* Record one assertion, countable from any worker: both counters are bumped
+ * atomically. A failed condition is counted and printed with its source line and
+ * the caller CONTINUES, so one case can report several failures. Workers do not
+ * normally call this -- they report through worker_arg_t::result, which the
+ * parent turns into a CHECK after the join. */
 #define CHECK(cond, msg)                                                                           \
     do {                                                                                           \
         __atomic_fetch_add(&g_checks, 1, __ATOMIC_RELAXED);                                        \
@@ -60,10 +71,18 @@ static int g_checks;
 
 /* ------------------------------------------------------------------ stubs */
 
+/* One pool entry per host thread, plus slack. g_current_tid is thread-local
+ * because a pthread stands in for a CPU: each worker sets it once on entry and
+ * every kernel path it then calls sees that as the running thread. A worker that
+ * forgets to set it acts as tid 0, which resolves to no thread at all. */
 #define POOL_MAX (NTHREADS + 4)
 static thread_t g_pool[POOL_MAX];
 static _Thread_local uint32_t g_current_tid;
 
+/* The clock stands still: no case here arms a timeout, so nothing needs to
+ * advance and a frozen clock keeps runs reproducible. The kernel's timer_ticks
+ * counts timer interrupts, and its timer_ms_to_ticks scales by the configured
+ * tick rate (rounding up) rather than treating a millisecond as a tick. */
 uint64_t timer_ticks(void) {
     return 0;
 }
@@ -71,10 +90,17 @@ uint64_t timer_ms_to_ticks(uint32_t ms) {
     return (uint64_t)ms;
 }
 
+/* Index the fake table, bounded by POOL_MAX rather than THREAD_MAX_COUNT, and
+ * hand back the slot whatever state it is in -- as the kernel's does. */
 thread_t* thread_table_at(uint32_t index) {
     return (index < POOL_MAX) ? &g_pool[index] : 0;
 }
 
+/* Map a tid straight onto its pool slot. The kernel takes the thread-table lock
+ * and skips THREAD_STATE_UNUSED slots; the direct index here is unlocked, which
+ * is safe only because pool_init runs before any worker starts and no slot is
+ * ever freed. Out-of-range tids and tid 0 resolve to no thread, as in the
+ * kernel. */
 thread_t* thread_get(uint32_t tid) {
     if (tid == 0 || tid > POOL_MAX) {
         return 0;
@@ -82,10 +108,18 @@ thread_t* thread_get(uint32_t tid) {
     return &g_pool[tid - 1u];
 }
 
+/* The kernel reads the executing CPU's current thread; here the executing host
+ * thread carries its own tid, which is the same statement one level down. */
 uint32_t thread_current_tid(void) {
     return g_current_tid;
 }
 
+/* Publish the new state with a release store so a concurrent reader sees it
+ * ordered after whatever the writer did first. The kernel additionally validates
+ * the edge against the thread state machine under the table lock and drops an
+ * illegal one -- notably any attempt to leave ZOMBIE -- so a transition the real
+ * kernel would refuse still lands here. block_reason is written plainly, so it
+ * is only meaningful to the thread itself. */
 void thread_set_state(uint32_t tid, thread_state_t state, thread_block_reason_t reason) {
     thread_t* t = thread_get(tid);
     if (t) {
@@ -95,13 +129,23 @@ void thread_set_state(uint32_t tid, thread_state_t state, thread_block_reason_t 
 }
 
 /* Atomic so the sanitizer arms report races in ipc.c rather than in the stub:
- * a waker on one host thread stores here while the owning thread loads. */
+ * a waker on one host thread stores here while the owning thread loads.
+ *
+ * The kernel's version does considerably more: it claims the wake against the
+ * thread's completion path, drops it unless the thread is genuinely BLOCKED,
+ * enqueues the thread on a run queue and may request a preemption. Here a wake
+ * is only a state store, so a stale or duplicated wake that the real scheduler
+ * would discard is applied instead -- which is why the cases assert on message
+ * delivery rather than on who was made runnable. */
 void sched_wake_thread(thread_t* t) {
     if (t) {
         __atomic_store_n((uint32_t*)&t->state, (uint32_t)THREAD_STATE_READY, __ATOMIC_RELEASE);
     }
 }
 
+/* Returns immediately -- see the MODELLING NOTE at the top -- and ends with a
+ * host sched_yield, offering the CPU to another worker at exactly the point the
+ * kernel would have descheduled the caller. */
 void process_yield(process_run_result_t result) {
     (void)result;
     thread_t* self = thread_get(g_current_tid);
@@ -126,6 +170,11 @@ void process_yield(process_run_result_t result) {
 
 /* --------------------------------------------------------------- harness */
 
+/* Lay out the fake thread table once, before any worker exists: every slot
+ * RUNNING, tid == index + 1 so thread_get is a direct index, and both list nodes
+ * self-linked so an unlink on a thread that never blocked is harmless. Called
+ * from main only -- there is no between-case reset, because a worker still
+ * holding a pool pointer would race one. */
 static void pool_init(void) {
     memset(g_pool, 0, sizeof(g_pool));
     for (uint32_t i = 0; i < POOL_MAX; ++i) {
@@ -145,6 +194,11 @@ typedef struct {
 } spin_barrier_t;
 static spin_barrier_t g_spin_barrier;
 
+/* BARRIER_INIT(n) arms the barrier for exactly n arrivals and must run before
+ * the workers are created; BARRIER_WAIT() spins until all n have arrived. The
+ * barrier is single-use per BARRIER_INIT and there is only one, so cases run one
+ * at a time and every worker of a case must reach BARRIER_WAIT or the rest spin
+ * forever. */
 #define BARRIER_INIT(n)                                                                            \
     do {                                                                                           \
         __atomic_store_n(&g_spin_barrier.target, (int)(n), __ATOMIC_RELEASE);                      \
@@ -159,16 +213,31 @@ static spin_barrier_t g_spin_barrier;
         }                                                                                          \
     } while (0)
 
+/* Non-zero when the endpoint resolves AND its queue is empty. A failed query
+ * reads the same as a non-empty queue, so this answers "drained" only in the
+ * affirmative and is used after the workers have joined. */
 static int count_of_is_zero_impl(uint32_t ep) {
     uint32_t n = 0xFFFFFFFFu;
     return ipc_endpoint_count(ep, &n) == IPC_OK && n == 0;
 }
 
+/* A previously unused owner context id. The counter is bumped atomically, so
+ * concurrent callers still get distinct ids; what they do not get is a
+ * CONTIGUOUS run of them, which is why a worker needing a block of ids has the
+ * parent reserve it. Ids are never recycled within a run, so no case can meet an
+ * endpoint an earlier one left under the same owner. */
 static uint32_t g_next_ctx = 1000u;
 static uint32_t fresh_ctx(void) {
     return __atomic_fetch_add(&g_next_ctx, 1u, __ATOMIC_RELAXED);
 }
 
+/* What every worker body receives. run_workers fills tid (index + 1, naming a
+ * pool slot) and index (the worker's position in the args array); the case fills
+ * ctx, endpoint and rounds before the workers start, and aux/aux2 carry whatever
+ * else a particular body needs. result is the worker's only channel back: 0
+ * means it finished clean, and anything else is a code that body defines -- an
+ * ipc_result_t it did not expect, or a negative sentinel for a violated
+ * invariant. The parent reads it after joining, never before. */
 typedef struct {
     uint32_t tid;
     uint32_t index;
@@ -180,6 +249,10 @@ typedef struct {
     void* aux2;
 } worker_arg_t;
 
+/* Start n workers on `fn`, arm the barrier for exactly them, and join them all
+ * before returning. args must hold at least n entries and n must not exceed
+ * POOL_MAX, since each worker's tid indexes the thread pool. A case that needs
+ * two different worker bodies drives pthread_create itself instead. */
 static void run_workers(void* (*fn)(void*), worker_arg_t* args, int n) {
     pthread_t th[POOL_MAX];
     BARRIER_INIT(n);
@@ -200,6 +273,11 @@ static void run_workers(void* (*fn)(void*), worker_arg_t* args, int n) {
 
 static uint8_t* g_seen; /* [sender][seq] */
 
+/* Push a->rounds messages into a->endpoint, each tagged with a->index in arg0
+ * and its sequence number in arg1 so a receiver can check per-sender order.
+ * Sends carry no source, i.e. as the kernel, so no ownership check applies. A
+ * full queue is the one transient it retries; any other non-OK code is recorded
+ * in a->result and ends the worker with its remaining messages unsent. */
 static void* sender_thread(void* p) {
     worker_arg_t* a = (worker_arg_t*)p;
     g_current_tid = a->tid;
@@ -226,6 +304,13 @@ static void* sender_thread(void* p) {
     return 0;
 }
 
+/* The only receiver on a->endpoint: drain SENDERS * PER_SENDER messages,
+ * marking each in g_seen and checking per-sender order as they arrive. Reports
+ * through a->result -- an unexpected ipc code, or -100 for a message nobody
+ * sent, -101 for a duplicate, -102 for an out-of-order arrival within one
+ * sender, -103 for a destination the send failed to stamp. It runs until the
+ * whole expected total arrives, so a message that is lost rather than misrouted
+ * hangs the case instead of failing it. */
 static void* single_receiver_thread(void* p) {
     worker_arg_t* a = (worker_arg_t*)p;
     uint32_t next_expected[POOL_MAX];
@@ -324,6 +409,11 @@ static uint32_t g_drained;
  * so it cannot be derived from SENDERS. */
 static uint32_t g_expect_total;
 
+/* One of several receivers draining the same endpoint, until g_drained reaches
+ * g_expect_total. Same sentinels as single_receiver_thread minus the ordering
+ * one: with several receivers no single one of them observes the true order.
+ * Every receiver exits on the shared count, so a lost message leaves all of them
+ * spinning rather than failing. */
 static void* multi_receiver_thread(void* p) {
     worker_arg_t* a = (worker_arg_t*)p;
     g_current_tid = a->tid;
@@ -406,6 +496,11 @@ static void test_no_message_is_delivered_twice_across_receivers(void) {
 #define CREATE_PER_THREAD 200
 #define CTX_PER_THREAD (CREATE_PER_THREAD / IPC_ENDPOINT_PER_CONTEXT_MAX + 1u)
 
+/* Create CREATE_PER_THREAD endpoints, alternating message and notification, and
+ * record their ids in the shared array at a->aux starting at
+ * a->index * CREATE_PER_THREAD. The ids are the subject: the case sorts the
+ * union afterwards and looks for collisions. The first failing create stops the
+ * worker with its code in a->result. */
 static void* creator_thread(void* p) {
     worker_arg_t* a = (worker_arg_t*)p;
     uint32_t* ids = (uint32_t*)a->aux;
@@ -498,6 +593,9 @@ typedef struct {
     int stop;
 } teardown_shared_t;
 
+/* Hammer sends at whichever endpoint the teardown worker currently publishes,
+ * until it raises stop. The endpoint id is re-read every round because it is
+ * deliberately being destroyed and replaced underneath. */
 static void* teardown_sender_thread(void* p) {
     worker_arg_t* a = (worker_arg_t*)p;
     teardown_shared_t* sh = (teardown_shared_t*)a->aux;
@@ -521,6 +619,12 @@ static void* teardown_sender_thread(void* p) {
     return 0;
 }
 
+/* Create an endpoint, put a watching select set on it, publish the endpoint to
+ * the senders and tear both down -- a->rounds times, alternating the order of
+ * destruction. Reports -1 when the endpoint cannot be created and -2 when the
+ * set cannot be built, and either way stops early. Raises stop on the way out,
+ * which is what ends the sender workers, so this must be the only worker driving
+ * teardown. */
 static void* teardown_thread(void* p) {
     worker_arg_t* a = (worker_arg_t*)p;
     teardown_shared_t* sh = (teardown_shared_t*)a->aux;
@@ -684,6 +788,11 @@ static void test_select_delivers_under_concurrent_signals(void) {
 
 /* --------------------------------------------- select table slot accounting */
 
+/* Create a select set, point it at a->endpoint and destroy it again, a->rounds
+ * times, against the context every churn worker shares. A FULL create is
+ * expected -- they contend for one per-context allowance -- and consumes its
+ * round rather than being retried; any other non-OK code, or a zero id from a
+ * create that claimed to succeed (-120), ends the worker through a->result. */
 static void* select_churn_thread(void* p) {
     worker_arg_t* a = (worker_arg_t*)p;
     g_current_tid = a->tid;
@@ -757,6 +866,11 @@ static void test_select_slots_are_conserved_under_churn(void) {
 
 /* -------------------------------------------------------------------- main */
 
+/* Lay out the thread pool and initialise the IPC layer once, then run every case
+ * in a shuffled order. Returns 0 only when every CHECK passed and 1 otherwise;
+ * on failure the shuffle seed is printed so the order can be replayed through
+ * WASMOS_TEST_SEED. Neither the pool nor the endpoint table is reset between
+ * cases, so each works under its own fresh_ctx() and releases it. */
 int main(void) {
     struct {
         const char* name;

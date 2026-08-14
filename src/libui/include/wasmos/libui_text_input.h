@@ -3,6 +3,11 @@
 
 /* libui_text_input.h - Text input component specific rendering. */
 
+/* Render op for UI_COMPONENT_TEXT_INPUT. Draws the field, its text in white,
+ * and — while this component holds keyboard focus — a highlighted outline plus
+ * a caret bar after the last character. The text is never scrolled or clipped
+ * to the field: a string wider than the component is clipped only by the clip
+ * rectangle the core passes in. */
 static inline void ui_render_text_input(ui_context_t* ctx, const ui_component_t* c,
                                         ui_rect_t draw_bounds, ui_rect_t clip, int32_t offset_y) {
     (void)offset_y;
@@ -24,7 +29,15 @@ static inline void ui_render_text_input(ui_context_t* ctx, const ui_component_t*
 }
 
 /* Component-owned key handler for focused text input.
- * Core dispatches here for the specific editing behavior (backspace, append printable). */
+ * Core dispatches here for the specific editing behavior (backspace, append printable).
+ *
+ * `key` is the packed GFX_EVENT_KEY code, decoded with ui_key_char(). Backspace
+ * and delete (8, 127) remove one whole UTF-8 character; characters from 32 up
+ * are appended, growing the buffer by doubling. Control characters below 32
+ * other than backspace, and keys with no character at all (arrows, function
+ * keys, which decode to 0), are ignored. The text is edited in place with no
+ * caret motion — insertion is always at the end. An allocation failure drops
+ * the keystroke silently. */
 static inline void ui_text_input_handle_key(ui_context_t* ctx, ui_component_t* c, uint32_t key) {
     ui_text_data_t* td = (ui_text_data_t*)c->component_data;
     if (!td)

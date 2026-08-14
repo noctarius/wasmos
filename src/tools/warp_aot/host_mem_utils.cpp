@@ -38,6 +38,22 @@ static size_t round_up_page(size_t n) {
  * vb::MemUtils implementation
  * ----------------------------------------------------------------------- */
 
+/* Implementations of the vb::MemUtils interface WARP declares; the contracts are
+ * WARP's, this file only supplies host behaviour for them. Conventions that hold
+ * across the whole namespace:
+ *
+ *  - Page size is the host's, queried once and cached; every size argument is
+ *    rounded up to it, so an allocation is never smaller than requested but is
+ *    usually larger.
+ *  - The setPermission* family returns 0 on SUCCESS and -1 on failure, which is
+ *    the opposite polarity to most of this tree. A null pointer or zero length
+ *    is a no-op that reports success.
+ *  - The alloc* family signals failure by throwing std::bad_alloc, never by
+ *    returning null; allocPagedMemory is the exception and reports failure as a
+ *    null MmapMemory::ptr.
+ *  - Nothing here is thread-safe beyond what mmap/mprotect themselves guarantee,
+ *    and freePagedMemory must be given the same size the allocation used, since
+ *    no side table records it. */
 namespace vb {
 namespace MemUtils {
 
@@ -99,6 +115,10 @@ int32_t setPermissionRW(uint8_t* start, size_t len) VB_NOEXCEPT {
     return mprotect(start, round_up_page(len), PROT_READ | PROT_WRITE) == 0 ? 0 : -1;
 }
 
+/* Copy freshly generated code and make it visible to instruction fetch. On
+ * x86-64 the instruction cache is coherent with data writes, so the copy plus a
+ * compiler barrier is the whole operation and clearInstructionCache is empty;
+ * both would need real cache maintenance on a weakly ordered target. */
 void memcpyAndClearInstrCache(uint8_t* dest, uint8_t const* src, size_t n) VB_NOEXCEPT {
     if (!dest || !src || !n)
         return;
@@ -119,6 +139,12 @@ uint8_t* allocAlignedMemory(size_t size, size_t /*alignment*/) {
     return m.ptr;
 }
 
+/* Grow or shrink a page allocation. Returns `old` unchanged when the rounded
+ * sizes match, so the caller cannot assume the pointer moved or that it did not.
+ * Otherwise it allocates, copies min(oldSz, newSz) bytes and frees the original,
+ * which means shrinking discards the tail. alignment is ignored: every mapping
+ * is already page-aligned, which is at least as strict as anything WARP asks
+ * for. Throws std::bad_alloc if the new mapping fails, leaving `old` valid. */
 uint8_t* reallocAlignedMemory(uint8_t* old, size_t oldSz, size_t newSz, size_t alignment) {
     newSz = round_up_page(newSz);
     if (oldSz == newSz)
@@ -154,6 +180,11 @@ void freeVirtualMemory(void* ptr, size_t size) VB_NOEXCEPT {
     freePagedMemory(static_cast<uint8_t*>(ptr), size);
 }
 
+/* Reserve/release virtual address space. On the host a reservation is a normal
+ * anonymous mapping, so commit and uncommit have nothing left to do: the pages
+ * are already backed on demand by the kernel. A target that separates reserve
+ * from commit would implement these; here they are deliberately empty and
+ * ignore their arguments. */
 void commitVirtualMemory(void*, size_t) { /* no-op on host */ }
 void uncommitVirtualMemory(void*, size_t) { /* no-op on host */ }
 
@@ -172,6 +203,12 @@ uint8_t* mapRXMemory(size_t size, int32_t /*fd*/) {
     return static_cast<uint8_t*>(p);
 }
 
+/* Bounds of the current thread's stack, used by WARP's stack-overflow guard.
+ * Returns an all-zero struct, which reports no usable stack window rather than a
+ * wrong one. warp_aot only compiles and never calls into generated code, so the
+ * guard is not consulted there. This file is also linked into the host WARP
+ * coroutine test, which does execute generated code, so whatever that guard does
+ * with an empty window is what it does there. */
 StackInfo getStackInfo() {
     /* Not needed for AOT compilation — return zeroed struct. */
     return StackInfo{};
@@ -210,6 +247,10 @@ ExecutableMemory::ExecutableMemory(uint8_t const* data, size_t size)
         throw std::bad_alloc();
 }
 
+/* Move operations and destructor. The moved-from object is left empty so its
+ * destructor unmaps nothing, and the destructor frees only when data_ is
+ * non-null. Ownership of the mapping is what moves; the code inside it is not
+ * copied. */
 ExecutableMemory::ExecutableMemory(ExecutableMemory&& o) VB_NOEXCEPT : data_(o.data_),
                                                                        size_(o.size_),
                                                                        fd_(o.fd_) {
@@ -241,6 +282,9 @@ void ExecutableMemory::init(uint8_t const* data) {
         throw std::bad_alloc();
 }
 
+/* Unmap the code mapping. Tolerates a null or zero-sized object and does not
+ * clear data_/size_ (it is const), so it must not be called twice on the same
+ * live object; the destructor is the only caller. */
 void ExecutableMemory::freeExecutableMemory() const VB_NOEXCEPT {
     if (data_ && size_) {
         MemUtils::freePagedMemory(data_, size_);

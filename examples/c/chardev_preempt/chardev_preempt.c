@@ -1,3 +1,15 @@
+/* chardev_preempt - chardev_client run under scheduler pressure.
+ *
+ * Same write-then-read exchange with the wasm chardev driver as
+ * chardev_client, with a different byte value and request ids, and it prints an
+ * "ok" line on success so a boot test can match on output rather than only on
+ * the exit status. It exists as a second, concurrently spawned chardev consumer:
+ * with both in flight the driver has to keep each client's request id and reply
+ * separate across preemption.
+ *
+ * Returns 0 on success and -1 at the first failed step.
+ *
+ * Precondition: the "chardev" driver must be running. */
 #include <stdint.h>
 #include "stdio.h"
 #include "wasmos/api.h"

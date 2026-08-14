@@ -63,6 +63,16 @@ static inline uint32_t* panic_bg_slot(void) {
     return (uint32_t*)(void*)framebuffer_alias_ptr((uintptr_t)&g_panic_bg);
 }
 
+/* Records the GOP aperture the bootloader reported.  It stores geometry only —
+ * the base kept here is the raw PHYSICAL address and nothing is mapped, so no
+ * pixel may be touched until framebuffer_map_high has run.
+ *
+ * The whole descriptor is REJECTED unless the GOP-present flag is set and the
+ * base, size, width and height are all non-zero; a partially valid one leaves
+ * the recorded state untouched (all zero on a first call), which every draw path
+ * then reads as "no framebuffer".  No failure is reported beyond the log line.
+ *
+ * info is borrowed for the call: the fields are copied out. */
 void framebuffer_init(const boot_info_t* info) {
     framebuffer_info_t* fb = framebuffer_info_slot();
     klog_printf(
@@ -91,6 +101,13 @@ void framebuffer_init(const boot_info_t* info) {
                 (unsigned long long)info->framebuffer_pixels_per_scanline);
 }
 
+/* Copies the recorded geometry into the caller's structure.  framebuffer_base in
+ * the result is the PHYSICAL aperture address, not a usable pointer.
+ *
+ * Returns WASMOS_OK, WASMOS_INVAL for a NULL out, or
+ * WASMOS_ERR_FRAMEBUFFER_NOT_PRESENT when no usable framebuffer was recorded.
+ * Success says the firmware described one, NOT that it is mapped — that is
+ * framebuffer_map_high's business. */
 wasmos_error_code_t framebuffer_get_info(framebuffer_info_t* out) {
     framebuffer_info_t* fb = framebuffer_info_slot();
     if (!out) {
@@ -159,6 +176,14 @@ wasmos_error_code_t framebuffer_put_pixel(uint32_t x, uint32_t y, uint32_t color
     return WASMOS_OK;
 }
 
+/* Fills the visible area with one 32-bit pixel value, writing stride * height
+ * pixels and clamping to the aperture size so a stride the firmware overstated
+ * cannot run past it.  `color` is stored raw, in whatever channel order the
+ * recorded GOP pixel format uses; no conversion happens here.
+ *
+ * Returns 0 on success and -1 when the aperture is not mapped yet or the
+ * recorded geometry is incomplete.  Writes device memory directly and takes no
+ * lock, so a concurrent drawer sees a torn result. */
 int framebuffer_fill(uint32_t color) {
     framebuffer_info_t* fb_info = framebuffer_info_slot();
     uint64_t fb_va = _fb_mmio_va();
@@ -230,6 +255,13 @@ static void framebuffer_panic_newline(void) {
     }
 }
 
+/* Takes the screen over for a panic dump: clears it to black and resets the
+ * panic text cursor to row 1, column 1 with white on black.  If the fill fails —
+ * no mapped framebuffer — the cursor is left as it was and subsequent
+ * framebuffer_panic_write calls have nothing to draw on.
+ *
+ * Intended for the panic path only: it takes no lock and does not coordinate
+ * with the compositor or any driver that owns the framebuffer. */
 void framebuffer_panic_begin(void) {
     uint32_t* panic_col = panic_col_slot();
     uint32_t* panic_row = panic_row_slot();
@@ -244,6 +276,14 @@ void framebuffer_panic_begin(void) {
     *panic_bg = 0x00000000;
 }
 
+/* Draws a string with the built-in panic font, advancing the persistent panic
+ * cursor.  '\r' returns to column 0 and '\n' starts a new row; the line wraps at
+ * the screen edge.  Text that reaches the bottom row CLIPS — the last row is
+ * overdrawn rather than scrolled (see the FIXME in framebuffer_panic_newline).
+ *
+ * A NULL string, an unrecorded framebuffer, and a screen too small for one
+ * character cell are all silent no-ops.  Lock-free, for the same panic-context
+ * reason as the unlocked serial writers. */
 void framebuffer_panic_write(const char* text) {
     framebuffer_info_t* fb_info = framebuffer_info_slot();
     uint32_t* panic_col = panic_col_slot();

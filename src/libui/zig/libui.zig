@@ -15,6 +15,9 @@
 ///   while (!ui.closeRequested()) {
 ///       ui.pollAndDrain();
 ///   }
+/// InitFailed covers both the arena allocation of the context and the window
+/// bring-up itself; CreateFailed means a component could not be allocated.
+/// Neither carries a status code — the underlying C API only reports -1.
 const Error = error{ InitFailed, CreateFailed };
 
 // ---------------------------------------------------------------------------
@@ -53,10 +56,18 @@ extern fn libui_zig_set_clickable(ctx: *anyopaque, id: i32, val: i32) callconv(.
 // Public types
 // ---------------------------------------------------------------------------
 
-/// C-compatible button-click callback type.
+/// C-compatible button-click callback type. `ctx` is the same opaque context
+/// pointer the Context wraps, so a callback can drive the shim's extern
+/// functions directly (see calculator.zig). `id` is the component that fired
+/// and `user` the pointer registered with it, which libui never dereferences.
+/// The callback runs inside pollAndDrain, on the app's own thread.
 pub const ClickCallback = *const fn (ctx: *anyopaque, id: i32, user: ?*anyopaque) callconv(.c) void;
 
-/// Style parameters passed to Context.style().
+/// Style parameters passed to Context.style(). Colours are 0xAARRGGBB.
+/// `preferred_h` is a height under a panel and a WIDTH under a row; `pad` is
+/// the inset on all four sides, `gap` the spacing between children, and
+/// `border_px` the border width. Note the defaults are not "leave unchanged":
+/// see Context.style() for which fields are written unconditionally.
 pub const Style = struct {
     bg: u32 = 0xFF202833,
     fg: u32 = 0xFFFFFFFF,
@@ -68,11 +79,20 @@ pub const Style = struct {
     clickable: bool = false,
 };
 
-/// Wraps the opaque C ui_context_t*.
+/// Wraps the opaque C ui_context_t*. The pointer is arena-allocated and lives
+/// for the rest of the process, so a Context may be copied freely; deinit
+/// releases the window and the component tree, not the allocation.
 pub const Context = struct {
     handle: *anyopaque,
 
     /// Allocate and initialise a libui window of the given pixel dimensions.
+    ///
+    /// `proc_ep` is the process-manager endpoint (startup argument 0) and
+    /// `reply_ep` an endpoint the caller owns, used for libui's synchronous
+    /// compositor and font requests; the Context does not take ownership of it.
+    /// Blocks while it resolves the gfx and font services, which it retries with
+    /// sched_yield rather than waiting indefinitely. Returns InitFailed on any
+    /// failure, with nothing left to clean up.
     pub fn init(proc_ep: i32, reply_ep: i32, width: i32, height: i32) Error!Context {
         const h = libui_zig_alloc_ctx() orelse return Error.InitFailed;
         if (libui_zig_ui_init(h, proc_ep, reply_ep, width, height) != 0) {
@@ -81,22 +101,35 @@ pub const Context = struct {
         return Context{ .handle = h };
     }
 
+    /// Destroy the window and free the component tree, leaving the underlying
+    /// context zeroed. Safe to call twice; the handle itself stays valid but
+    /// must not be used for anything else afterwards.
     pub fn deinit(self: *Context) void {
         libui_zig_ui_destroy(self.handle);
     }
 
+    /// Set the window title. Silently ignored when the title is empty or longer
+    /// than 47 bytes — the underlying call refuses rather than truncating, and
+    /// the failure is not surfaced here.
     pub fn setTitle(self: *Context, title: [*:0]const u8) void {
         libui_zig_set_title(self.handle, title);
     }
 
+    /// True once the compositor has asked this window to close. The flag is
+    /// only updated by event dispatch, so it changes across pollAndDrain.
     pub fn closeRequested(self: *const Context) bool {
         return libui_zig_close_requested(self.handle) != 0;
     }
 
+    /// Mark the tree dirty so the next drain repaints. Required after any
+    /// setText or style change made outside libui's own event handling.
     pub fn markDirty(self: *Context) void {
         libui_zig_mark_dirty(self.handle);
     }
 
+    /// Lay out, render and present if the tree is dirty; a no-op otherwise.
+    /// Blocks for the compositor round trips a repaint needs. The failure
+    /// result is discarded.
     pub fn drain(self: *Context) void {
         _ = libui_zig_drain(self.handle);
     }
@@ -104,26 +137,39 @@ pub const Context = struct {
     /// Block until the compositor pushes one GFX event, dispatch it through
     /// libui, then lay out and render if anything became dirty. An idle UI
     /// sleeps in the kernel here rather than spinning.
+    ///
+    /// One event per call, so this belongs in a `while (!closeRequested())`
+    /// loop; once close has been requested it stops waiting and only drains.
+    /// Application click callbacks run from inside this call.
     pub fn pollAndDrain(self: *Context) void {
         libui_zig_poll_and_drain(self.handle);
     }
 
+    /// Component id of the root panel, which init sized to the window. Parent
+    /// for the app's own top-level components.
     pub fn rootId(self: *const Context) i32 {
         return libui_zig_root_id(self.handle);
     }
 
     // ---- Component creation ------------------------------------------------
+    // Each returns the new component's id, or CreateFailed when the arena is
+    // exhausted. The component starts detached: appendChild puts it in the tree.
 
+    /// Vertical container: children are stacked top to bottom at their
+    /// preferred_h, separated by the panel's gap.
     pub fn createPanel(self: *Context) Error!i32 {
         const id = libui_zig_create_panel(self.handle);
         return if (id > 0) id else Error.CreateFailed;
     }
 
+    /// Left-aligned, vertically centred text in the component's fg colour.
     pub fn createLabel(self: *Context) Error!i32 {
         const id = libui_zig_create_label(self.handle);
         return if (id > 0) id else Error.CreateFailed;
     }
 
+    /// Centred text with a pressed state. Needs `clickable` in its Style, or a
+    /// setClickCallback, before it responds to a click.
     pub fn createButton(self: *Context) Error!i32 {
         const id = libui_zig_create_button(self.handle);
         return if (id > 0) id else Error.CreateFailed;
@@ -138,14 +184,22 @@ pub const Context = struct {
 
     // ---- Component manipulation --------------------------------------------
 
+    /// Append `child_id` as the last child of `parent_id`. Failures (an unknown
+    /// id, or appending a component to itself) are silently ignored.
     pub fn appendChild(self: *Context, parent_id: i32, child_id: i32) void {
         libui_zig_append_child(self.handle, parent_id, child_id);
     }
 
+    /// Copy `text` into the component. libui stores its own copy, so `text`
+    /// only has to live for the duration of the call. Does not repaint by
+    /// itself — pair it with markDirty when changing a live component.
     pub fn setText(self: *Context, id: i32, text: [*:0]const u8) void {
         libui_zig_set_text(self.handle, id, text);
     }
 
+    /// Install `cb` and make the component clickable. `user` is stored as an
+    /// opaque pointer and passed back on every call; it must outlive the
+    /// context, since libui neither copies nor frees it.
     pub fn setClickCallback(self: *Context, id: i32, cb: ClickCallback, user: ?*anyopaque) void {
         libui_zig_set_button_action(self.handle, id, @ptrCast(cb), user);
     }

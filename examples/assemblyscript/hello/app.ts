@@ -1,7 +1,28 @@
+// WASMOS "hello world" for the AssemblyScript guest binding.
+//
+// Demonstrates console output (std.println / std.printf) and the synchronous
+// filesystem API in ./wasmos: fs.create and fs.openRead return a handle object
+// whose write/read/close report success, while fs.unlink, fs.stat and
+// fs.readTextFile are one-shot helpers. Unlike the Rust, Zig and Go ports there
+// is no async chain here — this binding has no coroutine runtime.
+//
+// It reads /boot/startup.nsh and looks for a known substring, then creates a
+// file with a long (non-8.3) name, writes it, reads it back for comparison,
+// unlinks it and confirms the stat now fails, printing one true/false line per
+// check for the boot test to match on.
+//
+// The `printed` guard makes a second call a no-op, so a re-entered main cannot
+// duplicate the output the test matches on.
+//
+// Preconditions: /boot/startup.nsh must exist and contain "BOOTX64.EFI", and
+// the working directory must be writable — the test file uses a relative path.
 import {fs, std} from "./wasmos";
 
 let printed = false;
 
+// App entry point. `args` carries the spawn arguments and is expected to be
+// empty; anything else is reported and otherwise ignored. Always returns 0 —
+// the printed lines carry the result.
 export function main(args: Array<string>): i32 {
     if (args.length != 0) {
         std.println("unexpected args");

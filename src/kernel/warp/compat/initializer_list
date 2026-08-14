@@ -4,7 +4,20 @@
  * std::initializer_list is a compiler-magic type: clang generates the
  * underlying array and passes a pointer+length pair to the constructor.  The
  * class must therefore be declared in namespace std with the exact layout the
- * compiler expects (pointer + size_t).  No extra includes needed. */
+ * compiler expects (pointer + size_t).  No extra includes needed.
+ *
+ * Provides size(), begin(), end() and the free begin()/end() — the full
+ * interface of the real header apart from the value_type/iterator typedefs,
+ * which are here too.  WARP's single use is core/runtime/ImportFunctionV2.hpp,
+ * which builds a throwaway std::initializer_list<int> purely to force
+ * left-to-right evaluation of a parameter-pack expansion and discards it, so it
+ * touches none of the accessors.
+ *
+ * A caller may rely on the usual guarantee: the list refers to a compiler-owned
+ * temporary array valid for the full expression, and nothing here copies it.
+ * If the layout ever stopped matching what clang emits, the failure would be a
+ * silently misread pointer/length pair rather than a compile error — which is
+ * why the member order below must not be changed. */
 
 #include <stddef.h>
 

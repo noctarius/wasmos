@@ -54,13 +54,22 @@ typedef enum {
 
 struct thread;
 
+/* One CPU's run queue. Every field is guarded by ->lock EXCEPT the two the
+ * enqueue path claims first: a thread's membership is decided by the atomic
+ * thread_t::on_rq exchange before any queue lock is taken, because the claiming
+ * CPU cannot know in advance which queue's lock protects the node. */
 typedef struct cpu_sched_s {
     ksync_spinlock_t lock;
     uint8_t ready_bitmap;                   /* bit i set ↔ ready_list[i] non-empty */
     list_head_t ready_list[SCHED_PRIO_MAX]; /* one FIFO per priority */
+    /* Threads linked into each band. Maintained against thread_t::rq_prio, the
+     * band a node actually joined -- never against its current sched_prio. */
     uint32_t thread_count[SCHED_PRIO_MAX];
     struct thread* running; /* currently executing thread */
-    struct thread* idle;    /* this CPU's idle thread */
+    /* This CPU's idle thread. Read from other CPUs (load accounting and
+     * steal refusal), so leaving it NULL on an AP makes that CPU look busy and
+     * its idle thread stealable. */
+    struct thread* idle;
     /* Anti-starvation bookkeeping.  PER-CPU, and only correct that way: it
      * describes what THIS CPU has been dispatching.  A global counter would
      * race (plain bytes written by every CPU under different locks), advance N
@@ -75,7 +84,12 @@ typedef struct cpu_sched_s {
 void cpu_sched_init(cpu_sched_t* cs);
 
 /* Enqueue a READY thread.  Sends a reschedule hint if the new thread
- * has higher priority than the currently running one. */
+ * has higher priority than the currently running one.
+ * Takes cs->lock itself, so the caller must hold no queue lock. Idempotent
+ * through the on_rq claim: a thread already queued anywhere is dropped rather
+ * than double-linked. Idle threads and non-READY threads are refused and
+ * counted via sched_debug_note. Prefer sched_enqueue_thread, which routes every
+ * dispatch through one place. */
 void cpu_sched_enqueue(cpu_sched_t* cs, struct thread* t);
 
 /* Remove a thread from whichever priority bucket it is in.
@@ -90,14 +104,21 @@ void cpu_sched_dequeue(cpu_sched_t* cs, struct thread* t);
 void cpu_sched_remove_thread(struct thread* t);
 
 /* Return the highest-priority ready thread, or cs->idle if none.
- * Caller must hold cs->lock. */
+ * Caller must hold cs->lock.  Unlinks the thread it returns, so the caller owns
+ * it and must either dispatch it or re-enqueue it -- the anti-starvation
+ * bookkeeping above is also advanced by this call. */
 struct thread* cpu_sched_pick_next(cpu_sched_t* cs);
 
 /* Mark the current CPU as needing a reschedule. */
 void sched_set_need_resched(void);
 
 /* Wake a blocked thread: wait for its blocking_transition to clear,
- * set state READY, and enqueue it. */
+ * set state READY, and enqueue it.
+ * Enqueues on the CALLING CPU's queue and takes only that lock. Silently does
+ * nothing when the thread is not BLOCKED (a stale wake arriving after it
+ * already resumed) or when the wake/block handshake hands the enqueue to the
+ * thread's own completion path -- in which case the state change is still made
+ * so that path has something to enqueue. Never blocks. */
 void sched_wake_thread(struct thread* t);
 
 /* Scheduler tripwires, as counters rather than only log lines.  Each tripwire
@@ -130,13 +151,23 @@ uint32_t sched_debug_count(sched_debug_event_t ev);
  * distribution rather than on the CPU actually chosen. */
 void sched_debug_reset(void);
 
-/* Assign a default scheduler priority based on process flags. */
+/* Assign a default scheduler priority based on process flags.  The flags are
+ * tested in the order idle, kernel worker, driver, native service, so the first
+ * one set wins; none set gives SCHED_PRIO_WASM. */
 sched_prio_t sched_default_prio(int is_idle, int is_kernel_worker, int is_driver,
                                 int is_native_service);
 
 /*
  * Initialise the scheduler fields of a freshly spawned thread.
  * Must be called for every thread before its first enqueue.
+ *
+ * Sets the priority band, affinity (any CPU), the context canaries and the
+ * detached run-queue linkage. The thread must NOT be queued: re-initialising a
+ * linked node self-links it while a queue still points at it, which is
+ * unrecoverable for that band. A queued thread is therefore unlinked first and
+ * counted as SCHED_DEBUG_INIT_ON_QUEUED -- recovery for a caller bug, not a
+ * supported way to re-band a thread. Takes no lock of its own (the recovery
+ * unlink takes the owning queue's).
  */
 void sched_thread_init(struct thread* t, sched_prio_t prio);
 
@@ -165,6 +196,8 @@ uint32_t cpu_sched_pick_target_cpu_for_thread(const struct thread* t, uint8_t pr
  * Enqueue a freshly spawned thread on the least-loaded CPU and set
  * last_cpu accordingly.  Use only for the initial spawn enqueue; all
  * subsequent re-queues go through sched_enqueue_thread / sched_wake_thread.
+ * The thread must already be READY and fully initialised by sched_thread_init;
+ * takes the target queue's lock itself and does not block.
  */
 void sched_spawn_thread(struct thread* t);
 

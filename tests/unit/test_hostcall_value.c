@@ -29,6 +29,11 @@
 static int g_failures;
 static int g_checks;
 
+/* Count-and-continue assertion: tallies every check in g_checks, and on failure
+ * bumps g_failures and prints the message with this file and line. It does not
+ * return or abort, so a failing check leaves the rest of its case running and
+ * the suite reports the total number of failing checks rather than stopping at
+ * the first. Cases return void; main's exit status comes from g_failures. */
 #define CHECK(cond, msg)                                                                           \
     do {                                                                                           \
         g_checks++;                                                                                \

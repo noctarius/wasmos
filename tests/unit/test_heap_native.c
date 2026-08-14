@@ -26,12 +26,21 @@ static int g_failures = 0;
 static int g_corrupt = 0;
 
 /* Strong override of heap_native.c's weak hook: record instead of proc_exit. */
+/* Divergence worth knowing: the weak definition prints the reason, calls
+ * proc_exit(-1) and traps if that returns, so in a real service the hook never
+ * returns and the allocator makes no further progress. This one returns, so the
+ * allocator continues from a state it has already declared broken, and later
+ * cases run on that heap. Cases that expect corruption zero g_corrupt before
+ * the operation and again afterwards, since nothing else resets it. */
 void heap_corruption_detected(const char* reason, const void* p) {
     (void)reason;
     (void)p;
     g_corrupt = 1;
 }
 
+/* Count-and-continue assertion: a false `cond` prints `what` and bumps
+ * g_failures, then returns. Nothing aborts, so the rest of the case runs on
+ * whatever state the failure left; main's exit status comes from g_failures. */
 static void expect(int cond, const char* what) {
     if (!cond) {
         printf("  [FAIL] %s\n", what);
@@ -39,6 +48,18 @@ static void expect(int cond, const char* what) {
     }
 }
 
+/* Stand-ins for the driver API's anonymous page mapper, installed on the
+ * wasmos_driver_api_t handed to wasmos_native_heap_init. The real vm_map
+ * returns a page-aligned kernel higher-half region rounded up to whole pages,
+ * and NULL when no pages are available; host malloc returns an
+ * arbitrarily-aligned block of exactly `size` bytes with no rounding and no
+ * zeroing, and in practice never fails. The allocator's map-failure path
+ * (hn_malloc returning NULL because a slab or large mapping could not be
+ * obtained) is therefore effectively unreachable here, so the "non-NULL"
+ * expectations below are cheap and the out-of-memory behaviour is untested.
+ * Addresses ARE recycled: host free returns a block to the host allocator, so a
+ * later mapping can land on a region a freed slab occupied, which is what makes
+ * the stress loop's aliasing checks meaningful. */
 static void* mock_vm_map(uint32_t size) {
     /* heap_native aligns its blocks internally, so host malloc's alignment is
      * sufficient for a logic test (the real vm_map returns page-aligned pages). */
@@ -49,6 +70,8 @@ static void mock_vm_unmap(void* addr, uint32_t size) {
     free(addr);
 }
 
+/* Returns 1 when all `n` bytes at `p` equal `v`, 0 at the first byte that does
+ * not. n == 0 is vacuously 1. */
 static int filled_with(const void* p, uint32_t n, uint8_t v) {
     const uint8_t* b = p;
     for (uint32_t i = 0; i < n; ++i) {
@@ -59,6 +82,8 @@ static int filled_with(const void* p, uint32_t n, uint8_t v) {
     return 1;
 }
 
+/* xorshift32 with a fixed seed and no reseeding, so the stress loop's sizes and
+ * free/realloc choices are the same on every run and on every host. */
 static uint32_t g_rng = 0x12345678u;
 static uint32_t xr(void) {
     g_rng ^= g_rng << 13;
@@ -67,6 +92,10 @@ static uint32_t xr(void) {
     return g_rng;
 }
 
+/* Live-allocation table for the stress case: g_ptrs[i] is a block or NULL when
+ * that slot is free, and g_sizes[i] is the size most recently requested for it,
+ * which is the length the integrity check compares. 4000 slots is enough that
+ * the small path spans many slabs while the arrays stay static. */
 #define STRESS_N 4000
 static void* g_ptrs[STRESS_N];
 static uint32_t g_sizes[STRESS_N];
@@ -199,6 +228,9 @@ static void test_mixed_stress(void) {
     expect(g_corrupt == 0, "no corruption across stress rounds");
 }
 
+/* Installs the vm_map/vm_unmap mocks on an otherwise zeroed driver API and
+ * hands it to the allocator's init, then runs every case (none stop early).
+ * Exits 1 when any expect() failed, 0 otherwise. */
 int main(void) {
     wasmos_driver_api_t api;
     memset(&api, 0, sizeof(api));

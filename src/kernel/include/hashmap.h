@@ -11,6 +11,10 @@
  * with an early-boot arena fallback), same as list.c, so entries survive the
  * reaping of whichever process happened to be running when they were made.
  *
+ * The map owns every node: hashmap_remove frees the one it unlinks and
+ * hashmap_destroy frees them all, so a value pointer must never be freed by the
+ * caller and must not be used after the key is removed.
+ *
  * The map carries no lock; a caller sharing one across CPUs must supply its
  * own. */
 #ifndef WASMOS_HASHMAP_H
@@ -29,7 +33,12 @@ typedef struct {
     hashmap_node_t** buckets;
 } hashmap_t;
 
-/* Iterator.  Invalidated by any hashmap_put/hashmap_remove during traversal. */
+/* Iterator.  Invalidated by any hashmap_put/hashmap_remove during traversal:
+ * it holds the node it last returned plus a bucket index, so removing that node
+ * frees it and a rehash triggered by an insert re-links every node into a new
+ * bucket array, leaving the index meaningless.  Restart the walk after any
+ * mutation.  Reading through an already-returned VALUE pointer stays safe, as
+ * nodes are never moved -- only the traversal position is lost. */
 typedef struct {
     hashmap_t* map;
     uint32_t bucket;
@@ -48,7 +57,10 @@ void hashmap_destroy(hashmap_t* map);
 void* hashmap_get(hashmap_t* map, uint32_t key);
 
 /* Return the value for key, creating a new zeroed entry if absent (grows the
- * table as needed).  Returns NULL only on allocation failure. */
+ * table as needed).  An EXISTING entry is returned as-is, not re-zeroed, so
+ * this doubles as get-or-create.  Returns NULL only on allocation failure --
+ * and a failed rehash is not fatal: the insert proceeds into the current
+ * bucket array at a higher load factor. */
 void* hashmap_put(hashmap_t* map, uint32_t key);
 
 /* Remove key.  Returns 0 if removed, -1 if the key was absent. */

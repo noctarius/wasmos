@@ -11,6 +11,14 @@
  *   ip dns set <ip> [<ip2>]              replace the resolver list
  *   ip dns del <ip>                      drop one resolver from the list
  *
+ * `show` and `list` are interchangeable for both `ip addr` and `ip dns`, and a
+ * bare `ip dns` means `ip dns show`. `ip addr add` defaults the gateway to the
+ * network's .1 host and the prefix to /24 when it is omitted. `ip dns set`
+ * replaces the whole list, so it is also how the list is cleared to one entry;
+ * `ip dns del` re-reads the list, drops the named address, and writes back what
+ * is left. At most two resolvers exist, since the reply carries them in two
+ * message words.
+ *
  * `<name>` is ethN/enN; its trailing digits are the interface index. Talks to the
  * `net.stack` service via NET_IPC_IFADDR_ADD/DEL/LIST, NET_IPC_IF_SET_STATE,
  * NET_IPC_DHCP_SET, and NET_IPC_DNS_SET/LIST.
@@ -28,6 +36,11 @@
 
 /* Upper bound for `ip addr show`; net-stack caps its interface table at 8. */
 #define IP_MAX_IFACES 8u
+/* Wire size of one net_ifaddr_record_v1_t (wasmos_driver_abi.h): six 32-bit
+ * little-endian words, packed.  This tool reads the fields by byte offset rather
+ * than through the struct, so this must track that layout: 0=version,
+ * 4=if_index, 8=address, 12=netmask, 16=gateway, 20=flags, with every IPv4 word
+ * in network byte order (first octet in the low byte). */
 #define IP_IFADDR_RECORD_BYTES 24u
 
 static void put_u32(uint8_t* out, uint32_t off, uint32_t v) {

@@ -78,6 +78,11 @@ static inline uint8_t* pic_mask2_slot(void) {
 }
 #endif
 
+/* Report and halt after the IRQ 0 stub found its IRET frame altered in a way the
+ * preemption rewrite does not explain. saved points at the three-quadword copy
+ * (rip, cs, rflags) the stub took on entry, current at the live frame; both are
+ * borrowed. Called from assembly only, and does not return: it always ends in
+ * kpanic(), including when either pointer is NULL. */
 void x86_irq_iret_corrupt(const uint64_t* saved, const uint64_t* current) {
     serial_write("[irq] iret frame corrupt\n");
     if (!saved || !current) {
@@ -96,6 +101,10 @@ void x86_irq_iret_corrupt(const uint64_t* saved, const uint64_t* current) {
     kpanic("irq_iret_frame_corrupt", saved[0], current[0]);
 }
 
+/* Report and halt after the IRQ 0 stub found the IST1 guard word overwritten,
+ * i.e. the interrupt stack grew down into its own base. Called from assembly on
+ * the very stack that overflowed, so it takes no arguments and does no work
+ * beyond kpanic(); it does not return. */
 void x86_irq_ist_corrupt(void) {
     kpanic("irq_ist_stack_canary_corrupt", 0ULL, 0ULL);
 }
@@ -175,6 +184,12 @@ static void irq_send_eoi(uint32_t irq_line) {
 #endif
 }
 
+/* Early interrupt-controller setup, called from x86_cpu_init() on the BSP with
+ * interrupts still masked. Initialises the sharing table and, in modes 0 and 1,
+ * remaps the 8259 pair to vectors IRQ_VECTOR_BASE..+15 while preserving the
+ * firmware's mask state, so no line becomes live here. The IOAPIC half of mode 2
+ * is not done now: it needs the ACPI tables and happens later in
+ * x86_irq_late_init(). */
 void x86_irq_init(void) {
     ksync_spinlock_init(&g_irq_lines_lock);
     irq_sharing_init(irq_lines_ptr(), IRQ_COUNT);
@@ -219,6 +234,16 @@ void x86_irq_init(void) {
 #endif
 }
 
+/* Mask/unmask one ISA IRQ line at whichever controller the build selected: the
+ * 8259 mask registers in modes 0 and 1, the matching IOAPIC redirection entry in
+ * mode 2. Return 0 on success and -1 for a line >= IRQ_COUNT; the -1 is an
+ * internal-only value, since both entry points are reached from the irq_sharing
+ * ops table rather than from a host call. Unmasking a slave line (>= 8) also
+ * clears the master's cascade bit, without which no slave IRQ is delivered.
+ * Locking: the IOAPIC path takes the IOAPIC register lock internally. The PIC
+ * path takes none and read-modify-writes the cached mask bytes, so callers that
+ * can run concurrently must serialise themselves; the irq_sharing ops path does,
+ * by holding g_irq_lines_lock. */
 int x86_irq_mask(uint32_t irq_line) {
     if (irq_line >= IRQ_COUNT) {
         return -1;
@@ -281,6 +306,10 @@ int x86_irq_configure(uint32_t irq_line, uint32_t flags) {
     return 0;
 }
 
+/* Second-stage interrupt-controller setup, run once the ACPI tables from
+ * boot_info are reachable. In IOAPIC mode this parses the MADT and programs the
+ * redirection entries (all initially masked); in every other mode it is a no-op
+ * and boot_info is unused. boot_info is borrowed and must carry a valid rsdp. */
 void x86_irq_late_init(const boot_info_t* boot_info) {
 #if WASMOS_IRQ_MODE == 2
     ioapic_init(boot_info);
@@ -322,6 +351,16 @@ static const irq_sharing_ops_t g_irq_ops = {
     irq_ops_mask, irq_ops_unmask, irq_ops_deliver, timer_ticks, irq_ops_log_throttle,
 };
 
+/* Route an IRQ line to an IPC endpoint on behalf of a guest context.
+ *
+ * Returns 0 on success, or a packed abi/errors.yaml code: WASMOS_ERR_IRQ_BAD_LINE
+ * for a line >= IRQ_COUNT, WASMOS_ERR_IRQ_BAD_ENDPOINT for IPC_ENDPOINT_NONE or
+ * an endpoint the calling context does not own, WASMOS_ERR_IRQ_NOT_AUTHORIZED
+ * when policy denies the route, and whatever irq_sharing_register() returns
+ * otherwise (WASMOS_ERR_IRQ_LINE_FULL when the line has no free sharer slot).
+ * Lines are shareable, and re-registering a context that already holds the line
+ * updates its endpoint rather than adding a second entry.
+ * Takes g_irq_lines_lock, which masks interrupts for the duration. */
 int x86_irq_register(uint32_t context_id, uint32_t irq_line, uint32_t endpoint) {
     if (irq_line >= IRQ_COUNT) {
         return WASMOS_ERR_IRQ_BAD_LINE;
@@ -343,6 +382,13 @@ int x86_irq_register(uint32_t context_id, uint32_t irq_line, uint32_t endpoint) 
     return rc;
 }
 
+/* Report that a driver has serviced its device for one delivery of irq_line.
+ * The line is unmasked once every sharer that was notified has acked, so a
+ * driver that never acks leaves the line dead until the tick-driven deadline
+ * forces completion. Returns 0 on success — including an ack nothing was waiting
+ * for, since drivers may ack defensively — WASMOS_ERR_IRQ_BAD_LINE for a line
+ * >= IRQ_COUNT, or WASMOS_ERR_IRQ_NOT_A_SHARER when the context does not hold
+ * the line. Takes g_irq_lines_lock. */
 int x86_irq_ack(uint32_t context_id, uint32_t irq_line) {
     if (irq_line >= IRQ_COUNT) {
         return WASMOS_ERR_IRQ_BAD_LINE;
@@ -353,6 +399,11 @@ int x86_irq_ack(uint32_t context_id, uint32_t irq_line) {
     return rc;
 }
 
+/* Drop a route. A normal context removes only its own sharer entry and any ack
+ * it still owed; IPC_CONTEXT_KERNEL is privileged and removes every sharer of the
+ * line. Returns 0 on success, WASMOS_ERR_IRQ_BAD_LINE for a line >= IRQ_COUNT, or
+ * WASMOS_ERR_IRQ_NOT_A_SHARER when there was nothing to remove.
+ * Takes g_irq_lines_lock. */
 int x86_irq_unregister(uint32_t context_id, uint32_t irq_line) {
     if (irq_line >= IRQ_COUNT) {
         return WASMOS_ERR_IRQ_BAD_LINE;
@@ -365,12 +416,28 @@ int x86_irq_unregister(uint32_t context_id, uint32_t irq_line) {
     return rc;
 }
 
+/* Teardown hook for a dying context: drops its routes on every line and forgives
+ * the acks it owed, so a line whose only remaining sharers have acked is unmasked
+ * rather than left dead. Idempotent, and silent when the context held no line.
+ * Takes g_irq_lines_lock. */
 void x86_irq_release_context(uint32_t context_id) {
     ksync_spinlock_lock(&g_irq_lines_lock);
     irq_sharing_release_context(irq_lines_ptr(), IRQ_COUNT, context_id, &g_irq_ops);
     ksync_spinlock_unlock(&g_irq_lines_lock);
 }
 
+/* Common device-IRQ body, called from the isr_irq_* stubs with the raw vector
+ * number (not the line). Runs in interrupt context with IF clear.
+ *
+ * A vector outside IRQ_VECTOR_BASE..+IRQ_COUNT returns immediately and sends no
+ * EOI, which is deliberate: nothing in the controller is pending for it. In PIC
+ * modes a spurious IRQ 7/15 also returns early, sending the master-only EOI that
+ * a spurious 15 needs and none at all for a spurious 7.
+ *
+ * Otherwise it does the smallest safe amount of work: timer accounting for line
+ * 0, the per-tick sharing maintenance pass, the masked dispatch to registered
+ * sharers, and finally the EOI appropriate to the delivery path. Takes
+ * g_irq_lines_lock around the sharing calls only, so the EOI is issued unlocked. */
 void x86_irq_handler(uint64_t vector) {
     if (vector < IRQ_VECTOR_BASE || vector >= (IRQ_VECTOR_BASE + IRQ_COUNT)) {
         return;
@@ -405,6 +472,15 @@ void x86_irq_handler(uint64_t vector) {
     irq_send_eoi(irq_line);
 }
 
+/* IRQ 0 handler, called from isr_irq_0 with a borrowed pointer to the register
+ * frame the stub built. Runs on the IST1 stack with IF clear.
+ *
+ * Performs the normal IRQ 0 work (tick accounting, sharing maintenance, EOI) and
+ * then hands the frame to process_preempt_from_irq(), which is allowed to rewrite
+ * the interrupted rip/cs/rsp/ss in place so the iretq lands in
+ * process_preempt_trampoline instead of the interrupted code. That rewrite is the
+ * ONLY frame mutation the stub tolerates; any other difference is treated as
+ * corruption and panics. RFLAGS in particular must be left alone. */
 void x86_timer_irq_handler(irq_frame_t* frame) {
     static uint8_t logged;
     if (WASMOS_TRACE && !logged) {

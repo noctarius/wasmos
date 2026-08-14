@@ -12,6 +12,12 @@
  * The design mirrors Minos2's struct event / __wait_event / __wake_up_event_waiter.
  */
 
+/* Publishes an event with an empty wait list, a zero counter and no lock held.
+ * `type` is carried purely for diagnostics — nothing in this file branches on it
+ * — so the owning primitive picks the tag that identifies it in a dump.  ev->cnt
+ * is left to the owner to interpret: the semaphore keeps its permit count there,
+ * every other user ignores it.  Not safe against a live event: it re-initialises
+ * the lock and drops the wait list head, stranding anyone already parked. */
 void sched_event_init(sched_event_t* ev, sched_event_type_t type) {
     ksync_spinlock_init(&ev->lock);
     list_head_init(&ev->wait_list);
@@ -85,6 +91,15 @@ static void sched_timeout_fire(thread_t* t) {
     }
 }
 
+/* Sweeps every thread slot for an expired deadline and fires it.  Called from
+ * scheduler context with no event or run-queue lock held, which is what lets it
+ * take an arbitrary ev->lock and enqueue inside sched_timeout_fire.
+ *
+ * O(THREAD_MAX_COUNT) when it runs at all, but the g_sched_timeout_next hint
+ * short-circuits it to a single compare whenever nothing armed is due — the
+ * common case on every dispatch.  Also opportunistically clears the deadline of
+ * any thread that is no longer BLOCKED, so a stale arm cannot fire against a
+ * later, unrelated block. */
 void sched_timeout_check(void) {
     uint64_t now = timer_ticks();
     uint64_t observed = __atomic_load_n(&g_sched_timeout_next, __ATOMIC_ACQUIRE);
@@ -130,6 +145,19 @@ void sched_timeout_check(void) {
     }
 }
 
+/* Parks the calling thread on `ev`.  The caller MUST hold ev->lock; this
+ * function releases it, and it is that hand-off — decide-to-block and join the
+ * wait list under one lock — that closes the lost-wakeup window against a waker
+ * holding the same lock.  timeout_ms == 0 means no deadline.
+ *
+ * Returns once the thread is resumed, by a waker, a timeout, or an abort;
+ * t->pend_state distinguishes them (SCHED_PEND_OK / _TIMEOUT / _ABORT) and
+ * t->pend_data carries the waker's payload.  A wake is not a guarantee that the
+ * awaited condition holds, so every caller re-tests it in a loop.
+ *
+ * With no current thread (early boot, before the thread table is live) there is
+ * nothing to park: the lock is released and the call returns immediately, which
+ * turns the caller's wait loop into a spin. */
 void sched_event_wait(sched_event_t* ev, uint32_t timeout_ms) {
     thread_t* t = thread_get(thread_current_tid());
     if (!t) {
@@ -206,6 +234,13 @@ static void sched_event_detach_wake(thread_t* t, uint64_t data, sched_pend_state
     sched_wake_thread(t);
 }
 
+/* Detaches and wakes the LONGEST-waiting thread (the list is appended at the
+ * tail), delivering `data` as its pend_data and `pend` as its pend_state.
+ * Returns that thread, or 0 if nobody was waiting — which is not an error: it is
+ * how a waker learns the condition it just published has no audience yet.  The
+ * returned pointer is only meaningful under the caller's ev->lock; the thread is
+ * already runnable and may be dispatched on another CPU the moment it drops.
+ * Caller holds ev->lock. */
 thread_t* sched_event_wake_one(sched_event_t* ev, uint64_t data, sched_pend_state_t pend) {
     /* Caller holds ev->lock. */
     if (list_head_empty(&ev->wait_list)) {
@@ -216,6 +251,10 @@ thread_t* sched_event_wake_one(sched_event_t* ev, uint64_t data, sched_pend_stat
     return t;
 }
 
+/* Drains the wait list, giving every waiter the same `data`/`pend`, and returns
+ * how many were woken (0 if the list was empty).  Iterated with the _safe
+ * variant because sched_event_detach_wake unlinks the node it is standing on.
+ * Caller holds ev->lock. */
 int sched_event_wake_all(sched_event_t* ev, uint64_t data, sched_pend_state_t pend) {
     /* Caller holds ev->lock. */
     int woken = 0;
@@ -228,6 +267,11 @@ int sched_event_wake_all(sched_event_t* ev, uint64_t data, sched_pend_state_t pe
     return woken;
 }
 
+/* Wakes every waiter with SCHED_PEND_ABORT, meaning "the thing you were waiting
+ * on is going away".  Used by teardown paths (endpoint release, select-set
+ * destroy) so a parked thread returns from sched_event_wait instead of waiting
+ * on an object that no longer exists.  The waiters must NOT re-touch that
+ * object; they re-resolve it by id or give up.  Caller holds ev->lock. */
 void sched_event_abort_all(sched_event_t* ev) {
     /* Caller holds ev->lock. */
     sched_event_wake_all(ev, 0, SCHED_PEND_ABORT);

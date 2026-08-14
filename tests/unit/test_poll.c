@@ -24,6 +24,11 @@
 static int g_failures;
 static int g_checks;
 
+/* Counts every evaluation into g_checks and, on failure, counts g_failures and prints
+ * `msg` with the file and line. A failed check does NOT end the case: the remaining
+ * assertions still run, against the state the failure left behind. main prints the
+ * totals and exits non-zero if any check failed. `msg` names the property being
+ * asserted, in the affirmative -- it is printed when that property does not hold. */
 #define CHECK(cond, msg)                                                                           \
     do {                                                                                           \
         g_checks++;                                                                                \
@@ -55,6 +60,15 @@ static struct {
 } g_signals[SIGNAL_MAX];
 static int g_signal_count;
 
+/* Records the notification instead of delivering it. The kernel's version takes the
+ * select set's event lock, publishes ready_ep and wakes one waiter; here the
+ * (set, endpoint) pair is appended to g_signals in call order, which is what lets a case
+ * assert exactly which sets a notify reached and in which order. `sel` is never
+ * dereferenced -- poll.c only stores and compares the pointer -- so the stand-in sets
+ * need no real ipc_select_t behind them.
+ *
+ * g_signal_count counts every call, but only the first SIGNAL_MAX pairs are stored:
+ * past that the count keeps rising while signalled() stops seeing new entries. */
 void ipc_select_signal(struct ipc_select* sel, uint32_t ep_id) {
     if (g_signal_count < SIGNAL_MAX) {
         g_signals[g_signal_count].sel = sel;
@@ -71,12 +85,19 @@ static int g_set_a, g_set_b, g_set_c, g_set_d;
 #define SET_C ((struct ipc_select*)&g_set_c)
 #define SET_D ((struct ipc_select*)&g_set_d)
 
+/* Clears the recorded notifications and re-enables allocation. Called at the start of a
+ * case, and again mid-case wherever the counts are to be read fresh after a removal. It
+ * owns no poll_struct_t -- each case allocates and frees its own -- and leaves g_checks
+ * and g_failures cumulative across the whole run. */
 static void reset(void) {
     memset(g_signals, 0, sizeof(g_signals));
     g_signal_count = 0;
     g_malloc_fail = 0;
 }
 
+/* How many recorded notifications named `sel` since the last reset(). Counts entries,
+ * not distinct notifies, so a set registered twice on one event answers 2 for a single
+ * poll_notify; and it saturates once more than SIGNAL_MAX signals have been issued. */
 static int signalled(struct ipc_select* sel) {
     int n = 0;
     for (int i = 0; i < g_signal_count && i < SIGNAL_MAX; ++i) {

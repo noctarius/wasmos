@@ -1,12 +1,68 @@
+//! font_service - the TrueType rasteriser service ("font"), written in Zig.
+//!
+//! Wraps the vendored stb_truetype over an IPC surface.  It is purely reactive:
+//! every request lands on its one endpoint, it originates nothing, and it blocks
+//! rather than polls when idle.
+//!
+//! Object model.  A *font* is a TTF blob loaded once at startup from the
+//! filesystem into a fixed MAX_FONTS-slot table, named by the FONT_ID_*
+//! selectors in font_ipc.h.  A *handle* is a (font, pixel size) pair a client
+//! opens; every later request names a handle, and only the endpoint that opened
+//! a handle may use it (WASMOS_ERR_FONT_PERMISSION otherwise).  Handles are not
+//! closed explicitly and the table is not reclaimed on client exit, so a client
+//! that repeatedly reopens will eventually get WASMOS_ERR_FONT_BUSY.
+//!
+//! IPC surface.  Every reply is FONT_IPC_RESP with arg0 = WASMOS_ERR_NONE, or
+//! FONT_IPC_ERROR with arg0 = a negative packed WASMOS_ERR_FONT_* code; a request
+//! with request_id 0 is never answered.  Pixel-size and dimension pairs travel
+//! packed two-per-word, first value in the LOW 16 bits:
+//!
+//!   FONT_IPC_OPEN_FONT_REQ    arg0=FONT_ID_*, arg1=pixel size (1..256).
+//!                             reply arg1=handle_id.
+//!   FONT_IPC_GET_METRICS_REQ  arg0=handle_id.
+//!                             reply arg1=ascent, arg2=descent, arg3=line gap,
+//!                             each an int32 already scaled from font units to
+//!                             the handle's pixel size (so they are pixels, and
+//!                             carry the font's own sign convention).
+//!   FONT_IPC_RASTER_GLYPH_REQ arg0=handle_id, arg1=Unicode codepoint.
+//!                             reply arg1=shmem_id of the 8-bit coverage bitmap,
+//!                             arg2=(width | height<<16),
+//!                             arg3=(x0 | y0<<16) as signed 16-bit bearings.
+//!                             A glyph with an empty box (space) replies success
+//!                             with arg1=0 and arg2=0.  The bitmap lives in the
+//!                             service's single reused scratch shmem, granted to
+//!                             the caller's context: it is valid only until the
+//!                             next raster request, and its stride equals width.
+//!   FONT_IPC_MEASURE_GLYPH_REQ  arg0=handle_id, arg1=shmem_id holding UTF-8
+//!                             text, arg2=byte length.  Measures the whole run
+//!                             including kerning; reply arg1=(w | h<<16),
+//!                             arg2=(x0 | y0<<16), arg3=total advance.
+//!   FONT_IPC_RASTER_GLYPH_INTO_REQ  as MEASURE plus arg3=destination shmem_id.
+//!                             Rasterises the whole run into the CALLER's buffer
+//!                             (8-bit coverage, stride = width) and replies with
+//!                             the same three words as MEASURE.  The caller must
+//!                             size the destination from a prior measure; a run
+//!                             that measures empty replies success without
+//!                             writing.
+//!
+//! Text is UTF-8 and is decoded per codepoint; an undecodable byte does not fail
+//! the request.
 const c = @cImport({
     @cInclude("font_service_imports.h");
 });
 const sys = @import("libsys");
 
+// Native-ABI return codes and the "no endpoint" sentinel, mirroring the C side.
 const IPC_OK: i32 = 0;
 const IPC_EMPTY: i32 = 1;
 const IPC_ENDPOINT_NONE: u32 = 0xFFFF_FFFF;
+// Seed for request ids this service originates (font-file reads at startup), and
+// the base for the event loop's own id range.  Distinct per service so a stray
+// reply is attributable to its originator.
 const REQ_BASE: u32 = 0xA000;
+// Size of the per-context xfer buffer the process manager provides, and hence
+// the largest font file that can be read in at startup; a larger TTF is rejected
+// rather than partially loaded.
 const PM_XFER_BUFFER_SIZE: usize = 256 * 1024;
 // Reply-wait budget for a synchronous ipc_call: block on the reply endpoint for
 // up to IPC_CALL_WAIT_MS per empty wait and give up after
@@ -14,8 +70,18 @@ const PM_XFER_BUFFER_SIZE: usize = 256 * 1024;
 // hang the call forever.
 const IPC_CALL_WAIT_MS: u32 = 50;
 const IPC_CALL_MAX_EMPTY_WAITS: u32 = 200;
+// Loaded-font slots; one per FONT_ID_* selector in font_ipc.h, all filled at
+// startup, so this is not a runtime limit.
 const MAX_FONTS: usize = 3;
+// Open (font, pixel size) handles across all clients.  There is no close
+// operation and handles are not reclaimed when a client exits, so exhausting
+// this answers WASMOS_ERR_FONT_BUSY for the rest of the service's life.
 const MAX_HANDLES: usize = 16;
+// Largest single-glyph coverage bitmap, in bytes (width * height, 1 byte per
+// pixel).  A glyph whose box exceeds it is refused with WASMOS_ERR_FONT_IO
+// rather than clipped — at the sizes used for window titles and console text
+// this is not reachable.  It also sizes the on-stack scratch the text-run
+// rasteriser blits each glyph through.
 const RASTER_SCRATCH_BYTES: usize = 4096;
 
 const font_handle_t = struct {
@@ -888,6 +954,24 @@ fn load_builtin_fonts() void {
     }
 }
 
+/// Native service entry point, called by the process manager.
+///
+/// `driver_api` is the native ABI table, borrowed for the process's lifetime and
+/// version-checked first.  The other three arguments are part of the fixed entry
+/// ABI and carry nothing; the proc endpoint comes from the spawn-info contract.
+///
+/// Startup order: validate the ABI table, read spawn info, create the service
+/// endpoint and register its handlers, publish the name "font", look up
+/// "fs.vfs" (retried, since the VFS may still be starting), load the built-in
+/// TTFs, and only then signal readiness — so a client woken by the ready signal
+/// finds both the name and the fonts.  A missing VFS is not fatal: the service
+/// still answers, but with no font loaded every request fails.
+///
+/// Does not return in normal operation: it serves the event loop forever,
+/// blocking in ipc_wait when idle.  Returns -2 when the native ABI table does
+/// not match this build, and -1 for a startup failure (no spawn info, endpoint
+/// or handler registration failure, name registration refused) or an event-loop
+/// error.
 pub export fn initialize(driver_api: *c.wasmos_driver_api_t, module_count: c_int, arg2: c_int, arg3: c_int) c_int {
     _ = arg2;
     _ = arg3;

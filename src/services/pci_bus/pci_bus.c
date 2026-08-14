@@ -596,6 +596,27 @@ static void reply_error(int32_t dest, int32_t src, int32_t request_id, int32_t c
     (void)wasmos_ipc_send(dest, src, PCI_IPC_ERROR, request_id, 0, code, 0, 0);
 }
 
+/* Serve one request on the service endpoint.
+ *
+ * Argument layout, shared with every driver that programs MSI/MSI-X.  `bdf` is
+ * the standard 16-bit PCI address (bus << 8) | (slot << 3) | function, and
+ * `entry` is the MSI-X table index (0 for plain MSI):
+ *
+ *   PCI_IPC_MSI_QUERY   arg0 = bdf (low 16 bits; no entry field)
+ *                       reply arg0 = WASMOS_PCI_MSI_KIND_* , arg1 = vector count
+ *   PCI_IPC_MSI_BIND    arg0 = (bdf << 8) | entry  [entry in bits 7:0]
+ *                       arg1 = MSI address low, arg2 = address high,
+ *                       arg3 = message data — the triple the kernel returned
+ *                       from wasmos_msi_alloc, written verbatim into the device
+ *                       reply arg0 = entry
+ *   PCI_IPC_MSI_UNBIND  arg0 = (bdf << 8) | entry
+ *                       reply arg0 = entry
+ *
+ * A failure answers PCI_IPC_ERROR with the packed code in arg1 (arg0 is 0).  A
+ * message from a negative source, and any opcode not listed above, is dropped
+ * without a reply on purpose: answering an unsolicited message is how two
+ * services end up trading errors forever.  Serves entirely out of PCI config
+ * space, so it never blocks on another service. */
 static void handle_request(int32_t service_endpoint, const wasmos_ipc_message_t* msg) {
     int32_t reply_to = msg->source;
     if (reply_to < 0) {

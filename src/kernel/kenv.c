@@ -27,6 +27,18 @@ static int kenv_find(const char* key) {
     return -1;
 }
 
+/* Copies a variable's value into the caller's buffer, always NUL-terminating.
+ *
+ * The VALUE is truncated to out_size - 1 bytes when it does not fit, and
+ * *written reports how much was actually copied — so *written < the stored
+ * length is the only signal of truncation, and WASMOS_OK is still returned.
+ * The KEY is never shortened: an over-long key is refused outright, because a
+ * shortened one would resolve to a different variable.
+ *
+ * Returns WASMOS_OK on a hit, WASMOS_INVAL for a NULL key or out or a zero
+ * out_size, WASMOS_ERR_ENV_TOO_LONG for an empty or over-long key, and
+ * WASMOS_ERR_ENV_NOT_FOUND when no such variable exists.  *written is zeroed
+ * before any lookup, so it is defined on the failure paths that reach it. */
 wasmos_error_code_t kenv_get(const char* key, char* out, uint32_t out_size, uint32_t* written) {
     if (!key || !out || out_size == 0) {
         return WASMOS_INVAL;
@@ -59,6 +71,14 @@ wasmos_error_code_t kenv_get(const char* key, char* out, uint32_t out_size, uint
     return WASMOS_OK;
 }
 
+/* Creates or overwrites a variable.  Both strings are copied into the fixed
+ * table, so the caller's buffers are borrowed for the call only.
+ *
+ * Nothing is truncated: a key at or over KENV_KEY_MAX, a value at or over
+ * KENV_VAL_MAX, and an empty key are all WASMOS_ERR_ENV_TOO_LONG.  A NULL
+ * argument is WASMOS_INVAL, and a table with no free slot is
+ * WASMOS_ERR_ENV_TABLE_FULL — the slot count is only consulted for a NEW key, so
+ * overwriting an existing one always succeeds.  An empty value is allowed. */
 wasmos_error_code_t kenv_set(const char* key, const char* value) {
     if (!key || !value) {
         return WASMOS_INVAL;
@@ -87,6 +107,13 @@ wasmos_error_code_t kenv_set(const char* key, const char* value) {
     return WASMOS_OK;
 }
 
+/* Removes a variable if it exists.  Returns WASMOS_OK whether or not anything
+ * was removed, so it is idempotent and gives no way to test existence — use
+ * kenv_get for that.  WASMOS_INVAL for a NULL key and WASMOS_ERR_ENV_TOO_LONG
+ * for an empty or over-long one.
+ *
+ * The slot is only marked free; its key and value bytes stay in the table until
+ * a later kenv_set reuses the slot. */
 wasmos_error_code_t kenv_unset(const char* key) {
     if (!key) {
         return WASMOS_INVAL;
@@ -112,6 +139,9 @@ uint32_t kenv_count(void) {
     return n;
 }
 
+/* Drops every variable by clearing the in-use flags; the stored bytes are left
+ * behind, as in kenv_unset.  Intended for test setup — there is no lock, so it
+ * must not race a concurrent kenv_set. */
 void kenv_reset(void) {
     for (int i = 0; i < KENV_MAX_ENTRIES; i++) {
         g_kenv[i].in_use = 0;

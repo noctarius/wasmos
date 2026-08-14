@@ -100,6 +100,15 @@ void operator delete[](void* p, size_t) noexcept {
 
 namespace {
 
+/* Header prepended to every block this allocator returns; the pointer handed out is
+ * hdr + 1.  `is_pages` selects which free path applies and which of the other fields
+ * mean anything: 1 = one contiguous physical run of `pages` frames in the kernel direct
+ * map, 2 = the process's dedicated-VA linear-memory slot (scattered frames, `pages` is
+ * how many are COMMITTED so far and `capacity` is the whole reserved slot), 3 = a
+ * 256-byte block from the WARP small pool.  `size` is the last requested byte count and
+ * `capacity` the usable bytes; a realloc within `capacity` only rewrites `size`.
+ * `owner_pid` is meaningful for is_pages == 2 only, and is what routes a free to the
+ * right slot. */
 struct AllocHeader {
     size_t size;        /* requested byte count */
     size_t capacity;    /* usable byte capacity */
@@ -108,6 +117,13 @@ struct AllocHeader {
     uint32_t owner_pid; /* is_pages==2 only: owning pid, for slot free/dispatch */
 };
 
+/* kLargeThreshold: header + payload at or below this goes to the small pool; above it
+ *   to whole physical pages.  112 is the largest usable slab block.
+ * kHalfBase: kernel higher-half base — a direct-mapped frame is reachable at
+ *   phys | kHalfBase.
+ * kPhysLimit: the 512 MiB the kernel maps in that window.
+ * kWarpSmallBlockSize: small-pool block stride; one page yields
+ *   kWarpSmallBlocksPerPage blocks because block 0 holds the page's own metadata. */
 static constexpr size_t kLargeThreshold = 112; /* slab max usable */
 static constexpr uint64_t kHalfBase = 0xFFFFFFFF80000000ULL;
 static constexpr uint64_t kPhysLimit = 512ULL * 1024ULL * 1024ULL;
@@ -417,7 +433,10 @@ static KernelLogger g_kernel_logger;
 
 } // namespace
 
-// ILogger accessor used by warp/link.cpp.
+// ILogger accessor.
+/* The ILogger that routes WARP diagnostics to klog.  Currently unreferenced —
+ * warp_driver.cpp constructs its own logger — so the returned object is a live but
+ * unused singleton.  The reference stays valid for the life of the kernel. */
 vb::ILogger& warp_kernel_logger() {
     return g_kernel_logger;
 }
@@ -428,6 +447,13 @@ vb::ILogger& warp_kernel_logger() {
 
 namespace {
 
+/* Per-pid WARP heap state.  `heap_size` / `heap_max` are the bytes passed to
+ * warp_heap_configure, stored unmodified.  The remaining fields describe the dedicated
+ * linear-memory VA slot and are only populated once the block has moved into one:
+ * `linmem_slot` is LINMEM_SLOT_NONE until then, `linmem_reserved` is the map_auto scan
+ * ceiling (set to heap_size, deliberately not the 2 GiB slot stride), and
+ * `linmem_committed_pages` tracks how much of the slot is backed so teardown knows what
+ * to decommit. */
 struct WarpPidConfig {
     uint64_t heap_size;
     uint64_t heap_max;
@@ -642,6 +668,14 @@ void warp_linmem_reserve_hint(uint32_t pid, uint64_t reserve_bytes) {
     g_linmem_reserve_bytes = reserve_bytes;
 }
 
+/* Describe the dedicated-VA linmem slot that contains `linmem_kernel_ptr`, which must
+ * be a KERNEL address inside the WARP_LINMEM_* window (the module's linear-memory base
+ * alias), not a user VA and not a guest offset.  On success writes the slot's VA base,
+ * the basedata length — the byte distance from the block's data start to
+ * `linmem_kernel_ptr` — and the number of pages currently committed, and returns 0.
+ * Returns -1 for a null argument, an address below the window, a slot index past the
+ * pool, a slot whose header is not a linmem block, or an address below the block's data
+ * start.  Declared locally by warp/mem_utils_kernel.cpp; there is no shared header. */
 int warp_linmem_kernel_window_query(const uint8_t* linmem_kernel_ptr, uint64_t* out_slot_va_base,
                                     uint64_t* out_basedata_length, uint64_t* out_committed_pages) {
     if (!linmem_kernel_ptr || !out_slot_va_base || !out_basedata_length || !out_committed_pages) {

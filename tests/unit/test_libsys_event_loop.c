@@ -10,7 +10,19 @@
  * The dispatch core is static inline over the WASM hostcall imports, and off
  * wasm WASMOS_WASM_IMPORT expands to nothing, so this file supplies its own
  * definitions of those imports: the kernel side becomes a scripted queue and
- * the dispatch logic runs unmodified.
+ * the dispatch logic runs unmodified. Nothing runs under wasm3 or WARP here;
+ * the imports below are the only thing standing in for a kernel.
+ *
+ * MODELLING NOTE (blocking). wasmos_ipc_select_wait parks the calling guest
+ * until one of the watched endpoints is ready. A host stub cannot suspend and
+ * no other thread exists to feed the queue, so the stub returns immediately and
+ * the loop observes what a spurious wake looks like: it re-drains and, finding
+ * nothing, gives up for this poll. Traffic that "arrives while blocked" is
+ * modelled by g_deliver_on_wait, which pushes into the inbox from inside the
+ * wait -- the point where a real sender on another CPU would have run -- so the
+ * delivered-during-block path goes through the loop's own re-drain rather than
+ * a fabricated one. g_select_wait_calls is what pins that the loop parked once
+ * instead of spinning its whole budget.
  */
 
 /* The libsys headers must come first: the in-tree string.h declares strcpy, and
@@ -26,6 +38,9 @@
 static int g_failures;
 static int g_checks;
 
+/* Counts the assertion and continues on failure -- it never aborts, so one
+ * broken expectation does not hide the rest of its case. g_failures is the
+ * verdict main returns. */
 #define CHECK(cond, msg)                                                                           \
     do {                                                                                           \
         g_checks++;                                                                                \
@@ -56,6 +71,9 @@ static int g_select_destroy_calls;
  * once the loop actually blocks. */
 static int g_deliver_on_wait;
 
+/* Appends one message to the single scripted inbox. Fields other than
+ * type/request_id/arg0 are zeroed. A push past INBOX_MAX is dropped silently,
+ * so a case that queues more than that is measuring the ring, not the loop. */
 static void inbox_push(int32_t type, int32_t request_id, int32_t arg0) {
     if (g_inbox_count >= INBOX_MAX) {
         return;
@@ -68,6 +86,11 @@ static void inbox_push(int32_t type, int32_t request_id, int32_t arg0) {
     g_inbox_count++;
 }
 
+/* Dequeues the oldest scripted message into g_last: 1 when one was taken, 0
+ * when the inbox is empty. One inbox serves every endpoint -- `endpoint` is
+ * ignored -- so the kernel shim's negative result for an unknown or foreign
+ * endpoint cannot occur, and only the 1/0 half of the contract is under test
+ * (the error half is covered by tests/unit/test_hostcall_ipc.cpp). */
 int32_t wasmos_ipc_drain(int32_t endpoint) {
     (void)endpoint;
     if (g_inbox_count == 0) {
@@ -79,6 +102,12 @@ int32_t wasmos_ipc_drain(int32_t endpoint) {
     return 1;
 }
 
+/* Reads the last drained message by the ABI's field index -- 0=type,
+ * 1=request_id, 2=arg0, 3=arg1, 4=source, 5=destination, 6=arg2, 7=arg3 -- the
+ * order wasmos_ipc_message_read_last walks. Diverges from the kernel shims at
+ * both edges: any other index reports arg3 rather than IPC_ERR_INVALID, and
+ * reading before the first drain reports the zeroed g_last rather than
+ * IPC_ERR_NOENT. */
 int32_t wasmos_ipc_last_field(int32_t field) {
     switch (field) {
     case 0:
@@ -100,6 +129,11 @@ int32_t wasmos_ipc_last_field(int32_t field) {
     }
 }
 
+/* Records the whole outgoing message in g_sent and reports success (0), or
+ * reports g_send_result and records NOTHING when a failure is forced. Sends
+ * past SENT_MAX are not stored but still counted, so g_sent_count is the number
+ * of attempts and only the first SENT_MAX are inspectable. Nothing is delivered
+ * anywhere: a reply has to be inbox_push'd by the case. */
 int32_t wasmos_ipc_send(int32_t destination, int32_t source, int32_t type, int32_t request_id,
                         int32_t arg0, int32_t arg1, int32_t arg2, int32_t arg3) {
     if (g_send_result != 0) {
@@ -121,6 +155,12 @@ int32_t wasmos_ipc_send(int32_t destination, int32_t source, int32_t type, int32
     return 0;
 }
 
+/* The select set is entirely scripted: create and add report whatever the
+ * g_select_*_result knobs hold (1 and 0, i.e. success, after reset), destroy
+ * always succeeds and is counted, and wait does not block -- see the MODELLING
+ * NOTE at the top of the file. wait always reports 0 where the real host call
+ * reports the ready endpoint id; wasmos_sys_event_loop_poll discards that value
+ * and re-drains, so the difference is not observable from here. */
 int32_t wasmos_ipc_select_create(void) {
     return g_select_create_result;
 }
@@ -169,6 +209,10 @@ static struct {
 } g_trace[TRACE_MAX];
 static int g_trace_count;
 
+/* Appends one dispatch record. `who` is the label a case passed as the
+ * callback's user pointer, so it names the ROUTE the message took. Records past
+ * TRACE_MAX are dropped while g_trace_count keeps counting, which is why
+ * traced() bounds its own scan. */
 static void trace(const char* who, const wasmos_ipc_message_t* m) {
     if (g_trace_count < TRACE_MAX) {
         g_trace[g_trace_count].who = who;
@@ -179,6 +223,9 @@ static void trace(const char* who, const wasmos_ipc_message_t* m) {
     g_trace_count++;
 }
 
+/* The three dispatch routes the loop can pick, each recording the label it was
+ * registered with so a case can tell which one ran. They are otherwise
+ * identical: the route names come from the label, not from the function. */
 static void on_intent(void* user, const wasmos_ipc_message_t* m) {
     trace(user ? (const char*)user : "intent", m);
 }
@@ -189,6 +236,12 @@ static void on_default(void* user, const wasmos_ipc_message_t* m) {
     trace(user ? (const char*)user : "default", m);
 }
 
+/* Returns the scripted kernel side and the trace to their defaults: an empty
+ * inbox, no recorded sends, successful select calls, and no injected wait
+ * delivery. Loop objects are NOT touched -- each case declares its own on the
+ * stack -- so a case that resets mid-way keeps the loop it already built, which
+ * is how the "same reply arriving twice" and "cancelled intent" checks are
+ * written. */
 static void reset(void) {
     memset(g_inbox, 0, sizeof(g_inbox));
     g_inbox_head = 0;
@@ -206,6 +259,9 @@ static void reset(void) {
     memset(g_trace, 0, sizeof(g_trace));
 }
 
+/* How many dispatches went to `who`, compared by string value. Only the first
+ * TRACE_MAX records exist, so this undercounts a case that overflows the
+ * trace. */
 static int traced(const char* who) {
     int n = 0;
     for (int i = 0; i < g_trace_count && i < TRACE_MAX; ++i) {

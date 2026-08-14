@@ -1,7 +1,20 @@
 #pragma once
-/* Minimal <string> stub.  The only WARP source that includes <string> is
- * utils/MemUtils.cpp, which the kernel replaces with warp/mem_utils_kernel.cpp;
- * this exists so the include resolves if any header pulls it back in. */
+/* compat/string — freestanding stub of <string>
+ *
+ * Provides a std::string that is a non-owning wrapper around a const char *,
+ * with c_str(), size() and empty().  The only WARP source that includes
+ * <string> is utils/MemUtils.cpp, which the kernel replaces with
+ * warp/mem_utils_kernel.cpp; this exists so the include resolves if any header
+ * pulls it back in, and nothing in the kernel build depends on its behaviour.
+ *
+ * IT DOES NOT OWN OR COPY ITS CHARACTERS.  Constructing from a const char *
+ * stores the pointer, so the string is only valid while that buffer is; a
+ * default-constructed one points at a literal "".  There is no concatenation,
+ * no assignment from characters, no substr, no operator[], no comparison and no
+ * conversion to const char *, so the usual std::string idioms fail to compile
+ * rather than producing a dangling or truncated result.  The dangerous case is
+ * the one that does compile: holding one of these past the lifetime of the
+ * buffer it was built from. */
 #include "cstring"
 namespace std {
 struct string {

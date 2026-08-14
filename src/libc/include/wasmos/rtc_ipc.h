@@ -26,6 +26,9 @@
  *   arg0=status (<0), arg1..arg3 reserved
  */
 
+/* Wall-clock time as the RTC reports and accepts it: 24-hour `hour`, 1-based
+ * `day` and `month`, and a full `year` (2026, not 26). No timezone, no
+ * sub-second resolution — the value is whatever the hardware clock holds. */
 typedef struct {
     uint8_t second;
     uint8_t minute;
@@ -35,6 +38,9 @@ typedef struct {
     uint16_t year;
 } rtc_ipc_time_t;
 
+/* Pack a time into the two IPC argument words described above (arg0 carries
+ * second/minute/hour/day, arg1 month/year). A NULL `t` packs to 0, which is not
+ * a valid date and is rejected by the RTC service rather than silently used. */
 static inline int32_t rtc_ipc_pack_time_arg0(const rtc_ipc_time_t* t) {
     if (!t) {
         return 0;

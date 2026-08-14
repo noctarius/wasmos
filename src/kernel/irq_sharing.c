@@ -54,6 +54,13 @@ static void complete_ack(irq_line_t* line, uint32_t irq_line, const irq_sharing_
     unmask_if_open(line, irq_line, ops);
 }
 
+/* Resets every line in the caller's table to "no sharers, nothing owed, not
+ * throttled".  It issues no mask/unmask, so the interrupt controller's actual
+ * state is unchanged and the caller must bring the two into agreement.  A NULL
+ * table is ignored.
+ *
+ * `lines` is borrowed for the call; the whole module keeps no state of its own,
+ * which is what makes it host-testable. */
 void irq_sharing_init(irq_line_t* lines, uint32_t line_count) {
     if (!lines) {
         return;
@@ -63,6 +70,18 @@ void irq_sharing_init(irq_line_t* lines, uint32_t line_count) {
     }
 }
 
+/* Adds context_id as a sharer of `line`, or updates its endpoint if it is
+ * already one — re-registering is not an error and does not consume a second
+ * slot.
+ *
+ * The line is unmasked as a side effect, but only when nothing is currently owed
+ * on it and it is not the timer line, so a late arrival cannot reopen a line an
+ * earlier sharer has not acked.
+ *
+ * `line` is used as an unchecked index into `lines`: this function and the rest
+ * of the family take no line_count, so the CALLER must bound it.  Returns 0 on
+ * success, WASMOS_ERR_IRQ_BAD_LINE for a NULL table, and
+ * WASMOS_ERR_IRQ_LINE_FULL when all IRQ_SHARERS_MAX slots are taken. */
 int irq_sharing_register(irq_line_t* lines, uint32_t line, uint32_t context_id, uint32_t endpoint,
                          const irq_sharing_ops_t* ops) {
     if (!lines) {
@@ -94,6 +113,14 @@ int irq_sharing_register(irq_line_t* lines, uint32_t line, uint32_t context_id, 
     return 0;
 }
 
+/* Clears one sharer's outstanding ack.  The line is unmasked only when this was
+ * the LAST ack owed, so a shared line stays masked until every driver has
+ * reported — that is the whole point of the ack accounting.
+ *
+ * An ack from a sharer with nothing outstanding returns 0 and changes nothing,
+ * so a duplicate or late ack cannot reopen the line early.  Returns
+ * WASMOS_ERR_IRQ_BAD_LINE for a NULL table and WASMOS_ERR_IRQ_NOT_A_SHARER when
+ * the context is not registered on this line. */
 int irq_sharing_ack(irq_line_t* lines, uint32_t line, uint32_t context_id,
                     const irq_sharing_ops_t* ops) {
     if (!lines) {
@@ -136,6 +163,12 @@ static void drop_sharer(irq_line_t* l, uint32_t line, irq_sharer_t* slot,
     }
 }
 
+/* Removes one sharer.  Any ack it still owed is forgiven, so a dying driver
+ * cannot leave the line masked for the others, and the line is MASKED when the
+ * last sharer leaves (except the timer line, which is never masked).
+ *
+ * Returns 0 on success, WASMOS_ERR_IRQ_BAD_LINE for a NULL table, and
+ * WASMOS_ERR_IRQ_NOT_A_SHARER when the context is not registered here. */
 int irq_sharing_unregister(irq_line_t* lines, uint32_t line, uint32_t context_id,
                            const irq_sharing_ops_t* ops) {
     if (!lines) {
@@ -150,6 +183,10 @@ int irq_sharing_unregister(irq_line_t* lines, uint32_t line, uint32_t context_id
     return 0;
 }
 
+/* Drops every sharer of one line, with the same forgiveness and end-state
+ * masking as irq_sharing_unregister.  Returns 0 when at least one sharer was
+ * removed, WASMOS_ERR_IRQ_NOT_A_SHARER when the line had none, and
+ * WASMOS_ERR_IRQ_BAD_LINE for a NULL table. */
 int irq_sharing_unregister_all(irq_line_t* lines, uint32_t line, const irq_sharing_ops_t* ops) {
     if (!lines) {
         return WASMOS_ERR_IRQ_BAD_LINE;
@@ -165,6 +202,10 @@ int irq_sharing_unregister_all(irq_line_t* lines, uint32_t line, const irq_shari
     return found;
 }
 
+/* Sweeps a dying context off every line in the table, dropping at most one
+ * sharer slot per line.  Reports nothing: a context that shared no line is a
+ * no-op, which is the expected case for most teardowns.  Unlike the rest of the
+ * family this one IS given line_count and stays inside it. */
 void irq_sharing_release_context(irq_line_t* lines, uint32_t line_count, uint32_t context_id,
                                  const irq_sharing_ops_t* ops) {
     if (!lines) {
@@ -178,6 +219,21 @@ void irq_sharing_release_context(irq_line_t* lines, uint32_t line_count, uint32_
     }
 }
 
+/* Fans one hardware interrupt out to every sharer of the line and records how
+ * many acks are now owed.  Called from the ISR, so it must not block.
+ *
+ * Sequence: mask the line (never the timer line), charge the per-tick dispatch
+ * budget, deliver to each sharer, and arm an ack deadline
+ * IRQ_ACK_DEADLINE_TICKS out.  A sharer whose delivery fails — typically a full
+ * endpoint queue — is skipped and owes nothing, so an unreachable driver cannot
+ * strand the line; if that leaves nobody owing, the line is reopened at once.
+ *
+ * Exceeding IRQ_DISPATCH_BUDGET_PER_TICK dispatches in one tick throttles the
+ * line: it stays masked and is skipped until irq_sharing_tick reopens it, and
+ * the throttle is logged once per episode.  A line with no sharers, or one
+ * already throttled, dispatches nothing.
+ *
+ * Reports nothing; ops must be non-NULL or the call is a no-op. */
 void irq_sharing_dispatch(irq_line_t* lines, uint32_t line, const irq_sharing_ops_t* ops) {
     if (!lines || !ops) {
         return;
@@ -230,6 +286,16 @@ void irq_sharing_dispatch(irq_line_t* lines, uint32_t line, const irq_sharing_op
     l->ack_deadline = now + IRQ_ACK_DEADLINE_TICKS;
 }
 
+/* Periodic recovery pass over the whole table, expected once per timer tick.
+ *
+ * Two jobs.  A line whose ack deadline has passed has ALL outstanding acks
+ * forgiven and is reopened, so one wedged driver cannot disable a shared device
+ * for the rest — the wedged driver's later ack then finds nothing outstanding
+ * and is ignored.  A throttled line has its budget reset and is reopened, unless
+ * it is now waiting on acks or has lost all its sharers.
+ *
+ * Reports nothing.  A NULL table or NULL ops makes it a no-op, which also means
+ * throttled lines are never reopened without an ops. */
 void irq_sharing_tick(irq_line_t* lines, uint32_t line_count, const irq_sharing_ops_t* ops) {
     if (!lines || !ops) {
         return;
@@ -257,6 +323,8 @@ void irq_sharing_tick(irq_line_t* lines, uint32_t line_count, const irq_sharing_
     }
 }
 
+/* 1 when the line has at least one registered sharer, 0 otherwise or for a NULL
+ * table.  `line` is again an unchecked index. */
 int irq_sharing_has_sharers(const irq_line_t* lines, uint32_t line) {
     return (lines && lines[line].sharer_count > 0) ? 1 : 0;
 }

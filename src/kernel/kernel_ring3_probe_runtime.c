@@ -47,6 +47,19 @@ static process_run_result_t ring3_probe_bootstrap_entry(process_t* process, void
     return PROCESS_RUN_EXITED;
 }
 
+/* Spawns the flat ring3_native_probe.bin as a ring-3 child of parent_pid.
+ *
+ * The process is created PARKED and only unparked after the code is copied in,
+ * the linear region is remapped read-execute (and its region flags updated to
+ * match, so a later fault is judged against R+X), the top stack page is made
+ * user-writable, and the user entry is set — otherwise it could run the
+ * bootstrap entry and exit before that setup lands.
+ *
+ * *out_pid receives the probe's pid.  Returns 0 once the process is running, and
+ * -1 for a NULL out_pid, an empty probe binary, or any failure along that setup
+ * chain — a failure leaves the process parked with the bootstrap entry, which
+ * exits with status -1 if it is ever unparked.  Nothing here waits for or checks
+ * the probe's outcome. */
 int kernel_ring3_spawn_native_probe(uint32_t parent_pid, uint32_t* out_pid) {
     process_t* proc = 0;
     mm_context_t* ctx = 0;
@@ -127,6 +140,10 @@ int kernel_ring3_spawn_native_probe(uint32_t parent_pid, uint32_t* out_pid) {
     return 0;
 }
 
+/* As kernel_ring3_spawn_native_probe, but loads ring3_thread_lifecycle_probe.bin
+ * — the probe that exercises the spawn/join/detach orderings from ring 3.  Same
+ * parked-until-ready sequence, same 0-once-running / -1-on-any-setup-failure
+ * convention, and the same absence of any outcome check. */
 int kernel_ring3_spawn_thread_lifecycle_probe(uint32_t parent_pid, uint32_t* out_pid) {
     process_t* proc = 0;
     mm_context_t* ctx = 0;
@@ -278,7 +295,13 @@ static int spawn_ring3_fault_probe_named(uint32_t parent_pid, const char* name, 
  * the function (#PF read/write/exec, #UD, #GP, #DE, #DB, #BP, #OF, #NM, #SS,
  * #AC); and each ends in `EB FE`, a self-jump that is reached only if the fault
  * fails to arrive -- the process then spins instead of running off into
- * whatever follows, and the policy runtime never sees an exit status. */
+ * whatever follows, and the policy runtime never sees an exit status.
+ *
+ * They share one signature too: the probe is spawned as a child of parent_pid,
+ * *out_pid receives its pid, and the return is 0 once the process is unparked
+ * and running, -1 for a NULL out_pid or any failure during spawn, region lookup,
+ * code copy or mapping.  A 0 says the probe STARTED, never that it produced the
+ * fault it is named for. */
 int kernel_ring3_spawn_fault_probe(uint32_t parent_pid, uint32_t* out_pid) {
     static const uint8_t code[] = {0xB8, 0x01, 0x00, 0x00, 0x00, 0xCD, 0x80, 0x48, 0x8B,
                                    0x04, 0x25, 0x00, 0x00, 0x00, 0x00, 0xEB, 0xFE};

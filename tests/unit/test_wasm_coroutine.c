@@ -1,10 +1,33 @@
-/* Runtime-behaviour tests for the WASM stackless coroutine/future core. */
+/* Runtime-behaviour tests for the WASM stackless coroutine/future core.
+ *
+ * The core under test is real: this binary links src/libsys/wasm/coroutine_wasm.c
+ * and ipc_future_wasm.c and runs them on the build host, not inside wasm3 or
+ * WARP. What is replaced is the layer beneath them, the WASM host-call imports:
+ * WASMOS_WASM_IMPORT expands to nothing off wasm, so the definitions below link
+ * in place of the kernel's shims and turn the transport into a scripted
+ * single-message queue.
+ *
+ * MODELLING NOTE (blocking). The real event loop parks on a select set when its
+ * endpoint is empty (wasmos_ipc_select_wait). A host thread cannot be suspended
+ * here and nothing would wake it, so wasmos_ipc_select_create fails on purpose:
+ * the loop keeps select_id < 0 and wasmos_sys_event_loop_poll degrades to a
+ * plain non-blocking drain. Every reply a case expects is therefore armed BEFORE
+ * the poll that must observe it. The stackless coroutine model needs no such
+ * simulation -- a task suspends by returning WASMOS_WASM_TASK_YIELDED, which is
+ * how it suspends on target too.
+ */
 #include <stdint.h>
 
 #include "test_shuffle.h"
 
 #include "wasmos/libsys.h"
 
+/* The scripted transport. sent_message keeps only the LAST message handed to
+ * wasmos_ipc_send; queued_message plus queued_reply are one pending reply that
+ * the next wasmos_ipc_drain delivers; send_status is what wasmos_ipc_send
+ * reports. Nothing resets these between cases and the cases run in randomized
+ * order, so every case that depends on them arms send_status and queued_reply
+ * itself before its first send. */
 static wasmos_ipc_message_t sent_message;
 static wasmos_ipc_message_t queued_message;
 static int queued_reply;
@@ -41,6 +64,12 @@ int32_t wasmos_xfer_buffer_read(int32_t buffer, int32_t ptr, int32_t len, int32_
     return 0;
 }
 
+/* Records the outgoing message and reports send_status; no endpoint exists and
+ * nothing is queued, so a reply has to be scripted into queued_message. The
+ * kernel shim returns 0 on success and a negative transport code otherwise,
+ * while send_status is returned verbatim: the failure cases use +1, a value the
+ * real ABI never produces, and it still reaches the failure path because
+ * wasmos_sys_intent_send only tests for non-zero. */
 int32_t wasmos_ipc_send(int32_t destination, int32_t source, int32_t type, int32_t request_id,
                         int32_t arg0, int32_t arg1, int32_t arg2, int32_t arg3) {
     sent_message = (wasmos_ipc_message_t){.type = type,
@@ -54,6 +83,10 @@ int32_t wasmos_ipc_send(int32_t destination, int32_t source, int32_t type, int32
     return send_status;
 }
 
+/* Hands over the one armed reply and disarms it: 1 when queued_message becomes
+ * the last-received message, 0 when nothing is armed. `endpoint` is ignored --
+ * a single queue serves every endpoint -- so the kernel shim's IPC_ERR_NOENT
+ * for an unknown endpoint is unreachable from here. */
 int32_t wasmos_ipc_drain(int32_t endpoint) {
     (void)endpoint;
     if (!queued_reply) {
@@ -63,6 +96,13 @@ int32_t wasmos_ipc_drain(int32_t endpoint) {
     return 1;
 }
 
+/* Reads queued_message by the ABI's field index -- 0=type, 1=request_id,
+ * 2=arg0, 3=arg1, 4=source, 5=destination, 6=arg2, 7=arg3 -- which is the order
+ * wasmos_ipc_message_read_last walks. Two divergences from the kernel shims: an
+ * out-of-range index yields 0 instead of IPC_ERR_INVALID, and the scripted
+ * message is readable before any drain has delivered it, where the shims report
+ * IPC_ERR_NOENT until a message is stored. Neither is exercised: the cases only
+ * read fields after a successful poll. */
 int32_t wasmos_ipc_last_field(int32_t field) {
     switch (field) {
     case 0:

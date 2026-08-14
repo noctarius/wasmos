@@ -28,6 +28,17 @@ const (
 	ipcFieldArg3        int32 = 7
 )
 
+// SeekSet, SeekCur and SeekEnd are the whence values for File.Seek: the new
+// offset is measured from the start of the file, from the current offset, or
+// from the file size. The FS backend refuses a resulting offset outside
+// [0, size], so seeking past the end fails instead of extending the file.
+//
+// SIFREG and SIFDIR are the file-type bits of FileStat.Mode; Stat masks off
+// everything else, and the FS reply carries no permission bits.
+//
+// O_RDONLY..O_TRUNC are POSIX-valued open flags. Bit 0 is the access mode
+// (O_RDONLY or O_WRONLY); the rest are modifiers the FS backend accepts only
+// alongside O_WRONLY. There is no read/write mode: any other bit is rejected.
 const (
 	SeekSet     int32 = 0
 	SeekCur     int32 = 1
@@ -42,8 +53,22 @@ const (
 	xferGrantRW int32 = 0x3
 )
 
+// Error is this port's own failure taxonomy, not a packed abi/errors.yaml code:
+// the filesystem protocol's WASMOS_ERR_FS_* status is not surfaced, because a
+// request the backend refuses comes back as an FS error message that every entry
+// point here reports as ErrBadResponse.
 type Error int32
 
+// Error values. ErrOK is success and is what a call returns when it worked; the
+// rest are the failure modes:
+//
+//	ErrBadResponse     a reply arrived but did not match the request (wrong
+//	                   message type, wrong request id, or a negative status)
+//	ErrBufferTooSmall  the path plus its NUL does not fit the transfer buffer
+//	ErrHostCallFailed  a host call refused the operation
+//	ErrInvalidArgument an empty path, or a ReadLine buffer under two bytes
+//	ErrNameTooLong     the path plus its NUL exceeds the 256-byte staging buffer
+//	ErrNotAvailable    no FS service, no endpoint, or no transfer buffer
 const (
 	ErrOK Error = iota
 	ErrBadResponse
@@ -119,6 +144,9 @@ type stdAPI struct{}
 
 var std = stdAPI{}
 
+// IPCReply is a received message, copied out of the caller's last-received
+// slot. The four argument words are protocol-defined; Source is the endpoint to
+// address a reply to, Destination the endpoint it arrived on.
 type IPCReply struct {
 	Type        int32
 	RequestID   int32
@@ -134,11 +162,23 @@ type ipcAPI struct{}
 
 var ipc = ipcAPI{}
 
+// Mutex is a recursive mutex whose state lives in guest memory and whose
+// arbitration is done by the kernel, layout-compatible with wasmos_mutex_t.
+// OwnerTID is the thread id of the current owner (0 when unlocked) and
+// RecursionDepth the number of unmatched acquisitions it holds; both are written
+// by the kernel.
+//
+// The kernel link tables export no wasmos.mutex_try_lock or mutex_unlock
+// (FIXME(user-mutex-import) in src/libc/include/wasmos/api.h), so a module that
+// actually calls these fails to instantiate on an unresolved import.
 type Mutex struct {
 	OwnerTID       uint32
 	RecursionDepth uint32
 }
 
+// Init resets the mutex to the unlocked state, and does nothing on a nil
+// receiver. Zeroing a mutex another thread holds loses that ownership, so only
+// init one nobody has locked.
 func (m *Mutex) Init() {
 	if m == nil {
 		return
@@ -147,10 +187,15 @@ func (m *Mutex) Init() {
 	m.RecursionDepth = 0
 }
 
+// CurrentTID returns the calling thread's id, as the kernel records it in
+// Mutex.OwnerTID.
 func CurrentTID() int32 {
 	return threadGetTid()
 }
 
+// TryLock makes one acquisition attempt without blocking: 0 when the mutex is
+// now held by this thread (raising RecursionDepth if it already was), 1 when
+// another thread owns it, negative on error or a nil receiver.
 func (m *Mutex) TryLock() int32 {
 	if m == nil {
 		return -1
@@ -158,6 +203,9 @@ func (m *Mutex) TryLock() int32 {
 	return mutexTryLock(uint32(uintptr(unsafe.Pointer(m))))
 }
 
+// Lock acquires the mutex, yielding the thread between attempts while another
+// owner holds it. It returns 0 once held, or the negative code that ended the
+// retry loop. This is a yield-spin, not a sleep.
 func (m *Mutex) Lock() int32 {
 	if m == nil {
 		return -1
@@ -171,6 +219,9 @@ func (m *Mutex) Lock() int32 {
 	}
 }
 
+// Unlock drops one acquisition, releasing the mutex when RecursionDepth reaches
+// zero. It returns 0 on success, negative when the caller is not the owner or
+// the receiver is nil.
 func (m *Mutex) Unlock() int32 {
 	if m == nil {
 		return -1
@@ -233,6 +284,10 @@ func (ipcAPI) Call(server int32, msgType int32, arg0 int32, arg1 int32, arg2 int
 }
 
 // Recv blocks until a message arrives on endpoint (for servers).
+// It parks the process indefinitely: no timeout, no interruption. Every message
+// queued on endpoint is returned, replies and requests alike, so a server that
+// also issues requests must demultiplex on RequestID itself. ErrHostCallFailed
+// on an invalid endpoint or a receive error.
 func (ipcAPI) Recv(endpoint int32) (IPCReply, Error) {
 	if ipcRecv(endpoint) < 0 {
 		return IPCReply{}, ErrHostCallFailed
@@ -243,6 +298,9 @@ func (ipcAPI) Recv(endpoint int32) (IPCReply, Error) {
 // Reply sends a reply from a server back to the caller's private reply endpoint.
 // source should be the server's own service endpoint.
 // destination should be req.Source from the incoming request.
+// requestID must be echoed from the request or the caller cannot match the
+// reply. It returns once the message is queued, not once the peer has read it;
+// ErrHostCallFailed means the send itself was refused.
 func (ipcAPI) Reply(destination int32, source int32, msgType int32, requestID int32, arg0 int32, arg1 int32, arg2 int32, arg3 int32) Error {
 	if ipcSend(destination, source, msgType, requestID, arg0, arg1, arg2, arg3) != 0 {
 		return ErrHostCallFailed
@@ -259,10 +317,14 @@ func (ipcAPI) CreateEndpoint() (int32, Error) {
 	return ep, ErrOK
 }
 
+// File is an open file, holding the FS manager's client-side descriptor. It is a
+// value type: copying it copies the descriptor, and only Close releases it.
 type File struct {
 	fd int32
 }
 
+// FileStat is the result of Stat: Size is the file length in bytes, Mode carries
+// only the SIFREG / SIFDIR type bits.
 type FileStat struct {
 	Size int32
 	Mode int32
@@ -385,8 +447,16 @@ func (startupAPI) Arg(index int) int32 {
 	return startupArgs[index]
 }
 
+// main exists only to satisfy the Go toolchain: a WASMOS guest is entered
+// through the wasmos_main export below, never through this function.
 func main() {}
 
+// wasmos_main is the entry point the process manager calls instead of _start. It
+// records the four entry-arg registers for startup.Arg, calls the application's
+// Main with an empty argument slice (this port does not read the spawn-info argv
+// blob), and reports Main's return value to the process manager. proc_exit does
+// not return, so the trailing return is unreachable in a live process.
+//
 //export wasmos_main
 func wasmos_main(arg0, arg1, arg2, arg3 int32) int32 {
 	startupArgs[0] = arg0
@@ -496,26 +566,46 @@ func fsRequestStream(msgType int32, arg0 int32, arg1 int32, arg2 int32, arg3 int
 	}
 }
 
+// WriteString writes s verbatim to the console. No newline is added, an empty
+// string is a no-op success, and ErrHostCallFailed means the console write was
+// refused.
 func (stdAPI) WriteString(s string) Error {
 	return rawWriteString(s)
 }
 
+// WriteBytes writes b verbatim to the console; see WriteString.
 func (stdAPI) WriteBytes(b []byte) Error {
 	return rawWriteBytes(b)
 }
 
+// Puts is identical to WriteString: the trailing newline C's puts adds is not
+// added here.
 func (stdAPI) Puts(s string) Error {
 	return rawWriteString(s)
 }
 
+// Println writes s followed by a newline. The concatenation allocates, so a hot
+// loop is better served by WriteString.
 func (stdAPI) Println(s string) Error {
 	return rawWriteString(s + "\n")
 }
 
+// Printf writes s verbatim: this port does no formatting and takes no format
+// arguments. The name is kept for parity with the other language ports; use
+// Go's own string formatting to build s.
 func (stdAPI) Printf(s string) Error {
 	return rawWriteString(s)
 }
 
+// ReadLine reads console bytes into buffer up to and including the first
+// newline, NUL-terminates them, and returns the byte count excluding the NUL.
+//
+// The newline, when one arrived, is part of the count. Reads stop as soon as the
+// console has no byte ready, so a short return is normal and does not mean end
+// of input; this does not park until a full line exists. A buffer shorter than
+// two bytes is ErrInvalidArgument, a full buffer ends the read with the
+// terminator in the last byte, and a host-call failure clears buffer[0] and
+// returns (0, ErrHostCallFailed).
 func (stdAPI) ReadLine(buffer []byte) (int, Error) {
 	if len(buffer) <= 1 {
 		return 0, ErrInvalidArgument
@@ -539,10 +629,21 @@ func (stdAPI) ReadLine(buffer []byte) (int, Error) {
 	return pos, ErrOK
 }
 
+// Invalid returns a File carrying the sentinel descriptor -1, the value the
+// open helpers return alongside a failure. The receiver is ignored, so it can be
+// called on any File value.
 func (File) Invalid() File {
 	return File{fd: -1}
 }
 
+// Read reads up to len(buffer) bytes at the file's current offset and returns
+// how many were stored.
+//
+// It loops over transfer-buffer-sized chunks, so a short reply ends the read: 0
+// means end of file, and a value below len(buffer) is not an error. An empty
+// buffer is a 0-byte success that issues no request. On failure the count read
+// so far is returned along with the error, and the transfer buffer is released
+// on every path, which also revokes the FS manager's borrow.
 func (f File) Read(buffer []byte) (int, Error) {
 	if len(buffer) == 0 {
 		return 0, ErrOK
@@ -591,11 +692,20 @@ func (f File) Read(buffer []byte) (int, Error) {
 	return done, ErrOK
 }
 
+// Close releases the descriptor at the FS manager. A refusal surfaces as
+// ErrBadResponse and the status word of a successful response is ignored; the
+// File value itself is unchanged, so closing twice sends a second request.
 func (f File) Close() Error {
 	_, _, err := fsRequest(fsIPCCloseReq, f.fd, 0, 0, 0)
 	return err
 }
 
+// Write writes buffer at the file's current offset and returns how many bytes
+// the FS manager accepted.
+//
+// Chunked like Read: a chunk only partially accepted ends the loop, so a short
+// return is a real short write rather than an error. An empty buffer is a 0-byte
+// success that issues no request.
 func (f File) Write(buffer []byte) (int, Error) {
 	if len(buffer) == 0 {
 		return 0, ErrOK
@@ -636,6 +746,10 @@ func (f File) Write(buffer []byte) (int, Error) {
 	return done, ErrOK
 }
 
+// Seek moves the file offset to offset bytes from the SeekSet / SeekCur /
+// SeekEnd origin and returns the new absolute offset. A target outside
+// [0, size] is refused by the backend and surfaces as (-1, ErrBadResponse);
+// seeking past the end does not extend the file.
 func (f File) Seek(offset int32, whence int32) (int32, Error) {
 	position, _, err := fsRequest(fsIPCSeekReq, f.fd, offset, whence, 0)
 	if err != ErrOK {
@@ -664,22 +778,33 @@ func (fsAPI) openWithFlags(path string, flags int32) (File, Error) {
 	return File{fd: fd}, ErrOK
 }
 
+// OpenRead opens an existing file for reading. path must be non-empty and
+// shorter than 256 bytes including its NUL. A missing file yields
+// (Invalid, ErrBadResponse).
 func (api fsAPI) OpenRead(path string) (File, Error) {
 	return api.openWithFlags(path, O_RDONLY)
 }
 
+// OpenWrite opens an existing file for writing at offset 0 without truncating
+// it. It does not create the file.
 func (api fsAPI) OpenWrite(path string) (File, Error) {
 	return api.openWithFlags(path, O_WRONLY)
 }
 
+// Create opens path for writing, creating it if needed and truncating it to zero
+// length.
 func (api fsAPI) Create(path string) (File, Error) {
 	return api.openWithFlags(path, O_WRONLY|O_CREAT|O_TRUNC)
 }
 
+// OpenAppend opens path for writing, creating it if needed and positioning
+// writes at the end.
 func (api fsAPI) OpenAppend(path string) (File, Error) {
 	return api.openWithFlags(path, O_WRONLY|O_CREAT|O_APPEND)
 }
 
+// Stat returns the size and file-type bits of path without opening it. A missing
+// path yields ErrBadResponse.
 func (fsAPI) Stat(path string) (FileStat, Error) {
 	staged, err := stagePath(path)
 	if err != ErrOK {
@@ -697,6 +822,9 @@ func (fsAPI) Stat(path string) (FileStat, Error) {
 	return FileStat{Size: size, Mode: mode & (SIFREG | SIFDIR)}, ErrOK
 }
 
+// Unlink removes a file. A refusal by the backend (missing file, directory,
+// read-only mount) arrives as an FS error message and surfaces as
+// ErrBadResponse; the status word of a successful response is not inspected.
 func (fsAPI) Unlink(path string) Error {
 	staged, err := stagePath(path)
 	if err != ErrOK {
@@ -707,6 +835,7 @@ func (fsAPI) Unlink(path string) Error {
 	return err
 }
 
+// Mkdir creates a directory. It reports failure the same way as Unlink.
 func (fsAPI) Mkdir(path string) Error {
 	staged, err := stagePath(path)
 	if err != ErrOK {
@@ -717,6 +846,7 @@ func (fsAPI) Mkdir(path string) Error {
 	return err
 }
 
+// Rmdir removes a directory. It reports failure the same way as Unlink.
 func (fsAPI) Rmdir(path string) Error {
 	staged, err := stagePath(path)
 	if err != ErrOK {
@@ -727,6 +857,13 @@ func (fsAPI) Rmdir(path string) Error {
 	return err
 }
 
+// ReadDir lists the current directory into buffer as a NUL-terminated text blob
+// and returns its length excluding the terminator.
+//
+// The listing arrives as a stream of messages carrying four bytes each, and zero
+// bytes inside a message are skipped rather than stored. A buffer too small is
+// filled, terminated and returned truncated -- the remaining stream messages
+// keep arriving on the reply endpoint and are not drained.
 func (fsAPI) ReadDir(buffer []byte) (int, Error) {
 	return fsRequestStream(fsIPCReaddirReq, 0, 0, 0, 0, buffer)
 }

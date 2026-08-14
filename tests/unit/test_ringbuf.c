@@ -38,6 +38,10 @@ static long g_cases = 0;
 /* Backing store for one ring: header + data, generously aligned. */
 static uint8_t g_region[WASMOS_RINGBUF_HDR_BYTES + CAP] __attribute__((aligned(64)));
 
+/* Doorbell stand-in for the transport's real notification (an IPC notify or a
+ * device kick): it only counts invocations, so a case asserts on edges rather
+ * than on delivery. Nothing resets the counter, so each case that uses it zeroes
+ * g_notify_calls itself after installing the callback. */
 static int g_notify_calls;
 static void count_notify(void* user) {
     (void)user;
@@ -677,8 +681,17 @@ static int test_full_state_backpressure(void) {
  * consumer verifies every byte arrives exactly once, in order. */
 #define CC_BYTES (2u * 1000u * 1000u)
 static uint8_t g_cc_region[WASMOS_RINGBUF_HDR_BYTES + CAP] __attribute__((aligned(64)));
+/* Set by the consumer thread when a byte arrives out of sequence; the driver
+ * reads it after joining both threads and reports any nonzero value as a
+ * failure. Only the consumer writes it, so no ordering beyond the join is
+ * needed. */
 static volatile int g_cc_fail;
 
+/* All four thread drivers below busy-retry with sched_yield: the core has no
+ * blocking primitive, so a full ring (write copies 0) or an empty one (read
+ * returns 0, read_record returns -1) is simply retried until the peer makes
+ * room or data. Each returns 0 unconditionally; failures are reported through
+ * the g_cc_*_fail flags. */
 static void* cc_byte_producer(void* arg) {
     wasmos_ringbuf_t* p = (wasmos_ringbuf_t*)arg;
     uint8_t stage[37]; /* odd sizes keep producer/consumer chunk boundaries misaligned */
@@ -749,7 +762,14 @@ static int test_concurrent_byte_stream(void) {
  * checkable payload; the consumer verifies record boundaries, ordering, and
  * content are preserved under real threading and wraparound. */
 #define CC_RECS 200000u
+/* 256-byte capacity rather than CAP: a record here is up to 4+20 bytes, and the
+ * ring must hold at least one whole record for the producer to make progress,
+ * while staying small enough to keep it near-full throughout. */
 static uint8_t g_cc_rec_region[WASMOS_RINGBUF_HDR_BYTES + 256u] __attribute__((aligned(64)));
+/* Consumer-side failure code, read after the join: 1 = the read returned
+ * anything other than the length the producer wrote for that record, 2 =
+ * records arrived out of order (the index embedded in the payload does not
+ * match), 3 = payload bytes differ. */
 static volatile int g_cc_rec_fail;
 
 static void* cc_rec_producer(void* arg) {

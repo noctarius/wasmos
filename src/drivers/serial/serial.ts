@@ -42,6 +42,16 @@ import {
     serial_register,
 } from "./wasmos_imports";
 
+/* 16550 UART at the fixed ISA COM1 base. Registers are offsets from that base:
+ * +0 is the receive/transmit holding register (and, with DLAB set, the low
+ * divisor byte), +1 the Interrupt Enable Register (high divisor byte under
+ * DLAB), +2 the FIFO control register, +3 the line control register holding
+ * DLAB, +4 modem control, +5 the Line Status Register.
+ *
+ * Only the three used repeatedly are named; the rest appear as COM1_PORT + n in
+ * serialInitHw, where the write order matters more than the names. In the line
+ * status register bit 0 (0x01) is "receive data available" and bit 5 (0x20) is
+ * "transmit holding register empty". */
 const COM1_PORT: i32 = 0x3f8;
 const COM1_IER: i32 = COM1_PORT + 1;
 const COM1_STATUS: i32 = COM1_PORT + 5;

@@ -24,10 +24,17 @@ extern "C" {
 
 extern "C" {
 
+/* malloc for WARP's dependencies, backed by the kernel slab.  Bounded by the slab's
+ * largest class, so a large request returns nullptr rather than falling back to pages;
+ * the WARP module allocator (warp/shim.cpp) is the one that handles large blocks.  The
+ * matching free() is in warp/posix_kernel.c. */
 void* malloc(size_t size) {
     return kalloc_small(size);
 }
 
+/* memchr over exactly `n` bytes, comparing against the low 8 bits of `c`; returns a
+ * mutable pointer into the const input (the caller must not write through it), or
+ * nullptr when the byte does not occur.  Reads all of [s, s+n) — no NUL stops it. */
 void* memchr(const void* s, int c, size_t n) {
     const unsigned char* p = static_cast<const unsigned char*>(s);
     for (size_t i = 0; i < n; ++i) {
@@ -43,6 +50,9 @@ void* memchr(const void* s, int c, size_t n) {
 // ---------------------------------------------------------------------------
 
 struct boot_info;
+/* wasm3 heap entry points referenced unconditionally by kernel_init_runtime.c and
+ * process.c.  In a WARP build no wasm3 process exists, so these are never reached;
+ * release does nothing and committed_bytes reports 0. */
 void wasm3_heap_release(unsigned int) {}
 unsigned long long wasm3_heap_committed_bytes(unsigned int) {
     return 0;
@@ -61,6 +71,10 @@ namespace __cxxabiv1 {
  * All virtual functions must be out-of-line for the vtable to be generated
  * in exactly one translation unit (the one holding the first non-inline
  * virtual function definition). */
+/* The two typeinfo classes the Itanium C++ ABI names for a catch clause over a class
+ * type.  Only their vtables matter: nothing here is ever consulted at runtime, because
+ * warp/cxx_abi.cpp delivers exceptions by longjmp without type matching.  __base_type
+ * is never read. */
 struct __class_type_info {
     virtual ~__class_type_info();
 };

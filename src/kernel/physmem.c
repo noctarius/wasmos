@@ -283,6 +283,23 @@ static int pfa_upgrade_refcount(uint64_t* out_pages, uint64_t* out_alloc_pages) 
     return 1;
 }
 
+/* Builds both structures from the UEFI memory map handed over by the bootloader
+ * and must run before any other pfa_* call.  Runs once on the BSP; the lock it
+ * initialises here protects everything afterwards.
+ *
+ * boot_info->memory_map is borrowed for the duration of the call and is read
+ * through whatever mapping is active at the time (the identity map during early
+ * boot).  A missing or empty map leaves the allocator with zero ranges, so every
+ * later allocation returns 0 rather than failing loudly.  At most 4096
+ * descriptors are examined; a larger map is truncated, and extents beyond
+ * g_ranges' 128 entries are silently dropped by add_range.
+ *
+ * Physical page 0 is trimmed off so a NULL-looking frame is never handed out,
+ * and the kernel image and the 0x1000 AP trampoline page are carved back out of
+ * the free list.
+ *
+ * Panics if the refcount array cannot be upgraded to cover all of RAM, since
+ * every later free would then be unchecked past the static 64 MiB window. */
 void pfa_init(const boot_info_t* boot_info) {
     ksync_spinlock_init(&g_pfa_lock);
     g_range_count = 0;
@@ -357,6 +374,19 @@ static uint64_t pfa_alloc_pages_nolock(uint64_t pages) {
     return 0;
 }
 
+/* First-fit from the front of the first free extent that is large enough, so the
+ * result is `pages` PHYSICALLY CONTIGUOUS frames.  The returned value is a
+ * physical address with no mapping attached: reach it through the kernel
+ * higher-half alias, or map it, before dereferencing.
+ *
+ * Each frame's refcount is SET to 1 rather than incremented, so a caller holds
+ * exactly one reference and one pfa_free_pages of the same range releases it.
+ * Frames beyond the tracked window carry no count at all.
+ *
+ * Returns 0 for a zero page count and when no extent can satisfy the request;
+ * there is no partial allocation.  Takes g_pfa_lock, so this must not be called
+ * from anything already holding it (klog_* can reach the allocator — see the
+ * deferred logging in pfa_init). */
 uint64_t pfa_alloc_pages(uint64_t pages) {
     if (pages == 0) {
         return 0;
@@ -367,6 +397,15 @@ uint64_t pfa_alloc_pages(uint64_t pages) {
     return addr;
 }
 
+/* pfa_alloc_pages restricted to a physical ceiling: the whole run lies below
+ * max_addr, which is rounded down to a page boundary.  Callers use it for memory
+ * that must be reachable through a limited window — page tables must land inside
+ * the shared higher-half window, and some devices cannot address high memory.
+ *
+ * Allocation always carves from the FRONT of a candidate extent, so an extent
+ * that starts at or above the ceiling is skipped entirely even if it is the only
+ * one large enough.  Returns 0 for a zero page count, a zero ceiling, or when no
+ * extent qualifies. */
 uint64_t pfa_alloc_pages_below(uint64_t pages, uint64_t max_addr) {
     if (pages == 0 || max_addr == 0) {
         return 0;
@@ -403,6 +442,17 @@ uint64_t pfa_alloc_pages_below(uint64_t pages, uint64_t max_addr) {
     return 0;
 }
 
+/* pfa_alloc_pages restricted to a physical floor: the whole run starts at or
+ * above min_addr, rounded up to a page boundary.
+ *
+ * Unlike the _below variant this can carve from the front, the back, or the
+ * MIDDLE of an extent, splitting it into two free extents.  When the 128-entry
+ * extent table is already full the split is not possible and the lower remnant
+ * is discarded instead (front-allocation), which loses those frames from the
+ * free list rather than failing the request.
+ *
+ * Returns 0 for a zero page count and when no extent has a run of `pages`
+ * contiguous frames at or above the floor. */
 uint64_t pfa_alloc_pages_above(uint64_t pages, uint64_t min_addr) {
     if (pages == 0) {
         return 0;
@@ -522,10 +572,25 @@ void pfa_pin_pages(uint64_t base, uint64_t pages) {
     ksync_spinlock_unlock(&g_pfa_lock);
 }
 
+/* Usable RAM as pfa_init accounted it: the sum of every extent that entered the
+ * free list, so page 0 is excluded and extents dropped for want of a g_ranges
+ * slot are not counted.  This is a boot-time constant — allocation does not
+ * reduce it — and it is read without the lock. */
 uint64_t pfa_total_bytes(void) {
     return g_initial_total_pages * PAGE_SIZE;
 }
 
+/* Fail-closed test of whether [base, base+length) touches firmware-reported
+ * system RAM.  Non-zero means "treat this as RAM"; 0 means "definitely not RAM",
+ * and only that answer permits a caller such as mmio_write32_phys to proceed.
+ *
+ * Non-zero is therefore also the answer for cases where no honest answer exists:
+ * an address range that wraps, a memory map that was never parsed, and a RAM
+ * list that overflowed its 128 entries.  A zero length is the one benign case
+ * and returns 0.
+ *
+ * Answered from the original usable-RAM extents, not the free list, so a frame
+ * currently handed out still counts as RAM. */
 int pfa_range_overlaps_ram(uint64_t base, uint64_t length) {
     if (length == 0) {
         return 0;
@@ -551,6 +616,10 @@ int pfa_range_overlaps_ram(uint64_t base, uint64_t length) {
     return 0;
 }
 
+/* Sums the free extents under the lock, so the figure is consistent but stale
+ * the moment it is returned.  Counts only what is on the free list, so neither a
+ * frame whose refcount has yet to reach 0 nor one dropped for want of an extent
+ * slot appears here. */
 uint64_t pfa_free_bytes(void) {
     ksync_spinlock_lock(&g_pfa_lock);
     uint64_t free_pages = 0;

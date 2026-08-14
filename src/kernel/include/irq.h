@@ -27,10 +27,20 @@ int irq_register(uint32_t context_id, uint32_t irq_line, uint32_t endpoint);
  * every sharer on it has acked. */
 int irq_ack(uint32_t context_id, uint32_t irq_line);
 
+/* Drop context_id's route on irq_line; with IPC_CONTEXT_KERNEL, drops every route on that
+ * line.  Returns 0 or a packed WASMOS_ERR_IRQ_* code.  The line is re-masked once it has
+ * no sharers left. */
 int irq_unregister(uint32_t context_id, uint32_t irq_line);
 
 /* Drop every route held by a dying context (called from process teardown). */
 void irq_release_context(uint32_t context_id);
+
+/* Mask/unmask a line at the active interrupt controller: the 8259 pair under
+ * WASMOS_IRQ_MODE <= 1, the I/O APIC redirection entry under mode 2.  Returns 0,
+ * or -1 if irq_line >= IRQ_COUNT.  These act on the controller only and do not
+ * touch routing, so a masked line keeps its registered sharers; the shared-line
+ * ack path (irq_ack) is what normally reopens a line, and calling irq_unmask
+ * directly on a shared line bypasses the "every sharer has acked" rule. */
 int irq_mask(uint32_t irq_line);
 int irq_unmask(uint32_t irq_line);
 

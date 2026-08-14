@@ -117,7 +117,13 @@ typedef enum {
     NET_IFC_LINK_QUERIED,
     NET_IFC_NETIF_UP
 } net_ifc_state_t;
+/* Interface slots.  A ninth `net.ifc` provider is ignored rather than queued. */
 #define NET_STACK_MAX_INTERFACES 8u
+/* Per-interface TX slots held in flight towards the driver.  A frame that finds
+ * no free slot is DROPPED (reported to lwIP as ERR_MEM), which under a burst is
+ * visible as packet loss rather than as backpressure.
+ * FIXME: the driver framing is still one IPC per frame; migrating it to the
+ * ringbuf transport, or queueing deferred TX here, removes the drop. */
 #define NET_STACK_TX_QUEUE_DEPTH 4u
 typedef struct {
     uint32_t buffer_id;
@@ -204,23 +210,37 @@ static wasmos_sys_native_random_request_t g_hrng_request;
 static wasmos_sys_native_event_loop_t g_control_loop;
 static wasmos_sys_native_event_loop_t g_netdrv_loop;
 
+/* Native ipc_recv return codes: 0 = a message was read, 1 = nothing queued. */
 #define ND_IPC_OK 0
 #define ND_IPC_EMPTY 1
+/* Fixed request ids for the one-shot conversations this service originates, and
+ * the base for the per-frame TX ids.  They share the 'NS' prefix (0x4E53) so an
+ * unexpected reply is attributable to net-stack in a trace; being fixed rather
+ * than counted is what lets a reply be matched without keeping state. */
 #define NET_STACK_REGISTER_REQUEST_ID 0x4E530001u
 #define NET_STACK_RX_POLL_REQUEST_ID 0x4E530003u
 #define NET_STACK_TX_REQUEST_BASE 0x4E535000u
+/* Largest Ethernet frame moved between the driver and the stack, in bytes: a
+ * 1500-byte MTU plus headers, rounded up to a power of two.  Also sizes the
+ * per-frame xfer buffers. */
 #define NET_STACK_FRAME_BYTES 2048u
+/* Largest UDP payload accepted or delivered in one datagram ring record:
+ * 1500 - 20 (IPv4 header) - 8 (UDP header). */
 #define NET_STACK_UDP_DATAGRAM_BYTES 1472u
 /* One TX-drain chunk pulled from a stream socket's TX ring per tcp_write. */
 #define NET_STACK_TCP_CHUNK_BYTES 1024u
 #define NET_STACK_HRNG_LOOKUP_REQUEST_ID 0x4E530004u
 #define NET_STACK_HRNG_REQUEST_ID 0x4E530005u
+/* Scheduler ticks between empty-RX polls of the network driver (~12 ms at
+ * 250 Hz).  A frame notification from the driver preempts the interval; this
+ * only bounds how long an unnoticed frame can sit. */
 #define NET_STACK_RX_POLL_INTERVAL_TICKS 3u
 /* Upper bound on the idle select-wait so the empty-RX poll and other periodic
  * work still run when no watched endpoint fires (~12 ms, matching the RX poll
  * cadence at 250 Hz). Incoming frames and IPC replies wake the wait earlier. */
 #define NET_STACK_IDLE_WAIT_MS 12u
 #define NET_STACK_IFCFG_PATH "/boot/system/net/interfaces"
+/* Read buffer for the interfaces file; a larger file is truncated to this. */
 #define NET_STACK_IFCFG_CAP 1024u
 #define NET_STACK_IFCFG_RETRY_TICKS 25u    /* ~100 ms at 250 Hz between attempts */
 #define NET_STACK_IFCFG_MAX_ATTEMPTS 50u   /* bounded post-up retry, then give up */
@@ -2230,6 +2250,15 @@ static void net_stack_handle_resolve(const nd_ipc_message_t* request) {
     }
 }
 
+/* NET_IPC_IFADDR_LIST: fill the caller's buffer with one net_ifaddr_record_v1_t
+ * per in-use interface slot.  arg0 = the client's buffer_id, arg1 = the borrow
+ * it granted this service, arg2 = the buffer's byte capacity (which also caps
+ * how many records are written; the excess is not reported).
+ *
+ * The success reply overloads the status word: arg0 carries the RECORD COUNT,
+ * not WASMOS_ERR_NONE.  A client therefore reads arg0 as a count and must treat
+ * only a negative arg0 as a failure.  An interface with no netif installed still
+ * gets a record, with its three address words zero. */
 static void net_stack_handle_ifaddr_list(const nd_ipc_message_t* request) {
     net_ifaddr_record_v1_t* out;
     uint32_t capacity;

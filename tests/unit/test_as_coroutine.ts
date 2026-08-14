@@ -35,6 +35,11 @@ import {runShuffled, TestCase} from "./shuffle";
 
 // ------------------------------------------------------------- case 1 tasks
 
+/**
+ * Yields once, then completes with 7. Records 1 on its first resume and 3 on
+ * its second into the caller-owned `events` array (two slots used), so the
+ * order of the two halves is observable and not only the resume count.
+ */
 class YieldTask extends Task {
     pc: i32 = 0;
     events: StaticArray<u32>;
@@ -57,6 +62,13 @@ class YieldTask extends Task {
     }
 }
 
+/**
+ * Awaits `future` and completes with its value, publishing the await's status
+ * and value as fields. The await is re-run on resume, which is what a stackless
+ * task must do: the value is only readable out of the future, and a resume that
+ * finds it still pending parks again. A rejected future makes the task fail
+ * with that negative status.
+ */
 class WaiterTask extends Task {
     pc: i32 = 0;
     status: i32 = 0;
@@ -85,6 +97,11 @@ class WaiterTask extends Task {
     }
 }
 
+/**
+ * Resolves `promise` with `v` on its first resume and completes with the same
+ * value; a promise that was already settled refuses, and the task then fails
+ * with -1 instead of completing.
+ */
 class ResolverTask extends Task {
     constructor(
         private promise: Promise,
@@ -143,6 +160,8 @@ function testYieldAwaitAndJoin(): i32 {
 
 // ------------------------------------------------------------- case 2 tasks
 
+/** Boxes value + 1 and counts its invocations; returns 0, so the child future
+ * resolves with that sum. */
 class Increment extends OnSuccess {
     calls: u32 = 0;
     call(value: usize, out: Box): i32 {
@@ -152,6 +171,9 @@ class Increment extends OnSuccess {
     }
 }
 
+/** Turns a rejection into a successful 55, so the child future RESOLVES rather
+ * than propagating the status. A non-negative status -- which the error path
+ * cannot produce -- is refused with -1. */
 class Recover extends OnError {
     calls: u32 = 0;
     call(status: i32, out: Box): i32 {
@@ -162,6 +184,8 @@ class Recover extends OnError {
     }
 }
 
+/** A success callback that fails, rejecting the child future with -41 even
+ * though the source future succeeded. */
 class RejectCallback extends OnSuccess {
     call(value: usize, out: Box): i32 {
         return -41;
@@ -383,6 +407,11 @@ function testContracts(): i32 {
 
 const WAITER_COUNT: i32 = 4;
 
+/**
+ * Awaits one shared future and completes with its value, keeping the status and
+ * value for inspection afterwards. On rejection it fails with that status and
+ * leaves `value` 0, because a rejected future carries no value.
+ */
 class ManyWaiterTask extends Task {
     pc: i32 = 0;
     status: i32 = 0;
@@ -447,6 +476,7 @@ function testMultipleWaiters(): i32 {
     return 0;
 }
 
+/** Yields once, then completes with 23 -- the value every joiner must see. */
 class TargetTask extends Task {
     pc: i32 = 0;
     resume(out: Box): i32 {
@@ -459,6 +489,11 @@ class TargetTask extends Task {
     }
 }
 
+/**
+ * Joins `target`, recording the join status and the joined result. It completes
+ * with 0 in every case, a failed join included, so the assertions read `status`
+ * and `result` rather than its own completion value.
+ */
 class JoinerTask extends Task {
     status: i32 = 0;
     result: usize = 0;
@@ -503,9 +538,14 @@ function testMultipleJoiners(): i32 {
     return 0;
 }
 
+/* The stress schedule. STRESS_COUNT coroutines that each yield STRESS_YIELDS
+ * times take exactly STRESS_COUNT * (STRESS_YIELDS + 1) resumes to finish under
+ * a fair round-robin, which is the count testSchedulerStress asserts. */
 const STRESS_COUNT: i32 = 8;
 const STRESS_YIELDS: i32 = 4;
 
+/** Yields STRESS_YIELDS times, then counts itself in the shared `counter` box
+ * and completes with 0. The box is caller-owned and shared by every task. */
 class StressTask extends Task {
     private remaining: i32 = STRESS_YIELDS;
     constructor(private counter: Box) {
@@ -565,6 +605,8 @@ class ReentrantCallback extends OnSuccess {
     }
 }
 
+/** Counts one run in the shared box and completes at once, so a coroutine
+ * record that was started twice shows up as two increments. */
 class RespawnTask extends Task {
     constructor(private runs: Box) {
         super();

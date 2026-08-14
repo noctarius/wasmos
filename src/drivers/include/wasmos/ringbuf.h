@@ -92,6 +92,10 @@ typedef struct {
 
 /* --- sizing / validation helpers --- */
 
+/* 1 if x is a power of two, else 0. Zero is NOT a power of two here, which is
+ * what makes this usable as the capacity check on its own: the `pos & (cap - 1)`
+ * indexing the whole ring depends on, and the full/empty distinction, both
+ * require a non-zero power-of-two capacity. */
 static inline int32_t wasmos_ringbuf_is_pow2(uint32_t x) {
     return x != 0u && (x & (x - 1u)) == 0u;
 }
@@ -167,13 +171,29 @@ static inline int32_t wasmos_ringbuf_attach(wasmos_ringbuf_t* rb, void* base,
     return 0;
 }
 
+/* Install the doorbell this ring rings on an empty->non-empty edge. PRODUCER
+ * side only: nothing on the consumer path calls `notify`. The callback is
+ * invoked synchronously from inside wasmos_ringbuf_write_signal /
+ * _write_record_signal, so it runs with the producer's bytes already published
+ * and must not re-enter this ring. `notify` may be NULL to disable signalling;
+ * both init() and attach() leave it that way, so a producer that wants a
+ * doorbell must call this after either. The handle is private per party, so this
+ * writes no shared state and needs no ordering. */
 static inline void wasmos_ringbuf_set_notify(wasmos_ringbuf_t* rb, void (*notify)(void* user),
                                              void* user) {
     rb->notify = notify;
     rb->notify_user = user;
 }
 
-/* --- occupancy queries (safe from either side) --- */
+/* --- occupancy queries (safe from either side) ---
+ *
+ * All four acquire-load BOTH indices, so either party may call any of them. What
+ * they cannot give is a stable answer: the peer owns one of the two indices and
+ * may advance it at any moment. The result is therefore a bound, not a fact, and
+ * only in the direction each party controls -- a producer's view of `free` can
+ * only grow behind its back, a consumer's view of `used` likewise. Code that
+ * needs an exact count must take it from the return value of the write/read that
+ * actually moved the data, never from these. */
 
 /* Bytes currently queued (written but not yet consumed). Acquire-loads both
  * indices so it is correct whether the caller is producer or consumer. */
@@ -195,7 +215,15 @@ static inline int32_t wasmos_ringbuf_is_full(const wasmos_ringbuf_t* rb) {
     return wasmos_ringbuf_used(rb) == rb->capacity;
 }
 
-/* --- flags --- */
+/* --- flags ---
+ *
+ * Either party may read or set these; they sit outside the index protocol, so
+ * setting one neither publishes data nor orders anything relative to it. set
+ * ORs the mask in atomically and never clears, so a flag raised is permanent for
+ * the life of the region -- there is no clear operation, by design: these record
+ * that something happened (the peer closed, data was dropped), and un-recording
+ * it would lose the only evidence. Reading is an acquire load and gives a
+ * snapshot the peer may already have added to. */
 
 static inline uint32_t wasmos_ringbuf_flags(const wasmos_ringbuf_t* rb) {
     return __atomic_load_n(&rb->hdr->flags, __ATOMIC_ACQUIRE);
@@ -205,7 +233,15 @@ static inline void wasmos_ringbuf_set_flags(wasmos_ringbuf_t* rb, uint32_t mask)
     __atomic_or_fetch(&rb->hdr->flags, mask, __ATOMIC_RELEASE);
 }
 
-/* --- internal copy helpers (wraparound-aware) --- */
+/* --- internal copy helpers (wraparound-aware) ---
+ *
+ * Not part of the API (the `__` marks them private). Each splits one logical
+ * copy of `n` bytes at the capacity boundary into at most two memcpys. `n` must
+ * already have been clamped to the live free/used span by the caller: these do
+ * no bounds checking of their own beyond the wrap split, so an `n` larger than
+ * the capacity would overwrite the ring's own data. Neither touches an index or
+ * issues a barrier -- the caller owns the acquire-load-before / release-store-
+ * after discipline that makes the copy visible in the right order. */
 
 static inline void wasmos_ringbuf__store(wasmos_ringbuf_t* rb, uint32_t wpos, const uint8_t* src,
                                          uint32_t n) {

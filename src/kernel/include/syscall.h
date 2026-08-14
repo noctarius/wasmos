@@ -81,6 +81,11 @@ typedef enum {
  * - MUTEX_UNLOCK:   RDI=user_mutex_ptr; RAX=0 on success, -1 on invalid
  *                   pointer or non-owner unlock.
  */
+/* The register frame isr_syscall_128 builds on the kernel stack: the GPRs it
+ * pushed, then the rip/cs/rflags the CPU pushed. Layout is fixed by that stub.
+ * The handler MUTATES this frame -- it writes rdx for the calls with a
+ * secondary return value -- and the stub restores from it, so a caller must not
+ * assume the frame it passed is unchanged. */
 typedef struct {
     uint64_t r15;
     uint64_t r14;
@@ -102,7 +107,22 @@ typedef struct {
     uint64_t rflags;
 } syscall_frame_t;
 
+/* Dispatch one int 0x80. Returns the value the stub loads into RAX (the
+ * per-syscall contract above), or (uint64_t)-1 for a NULL frame. Blocks for as
+ * long as the requested operation does -- WAIT, IPC_CALL and THREAD_JOIN all
+ * park the calling thread -- and EXIT/THREAD_EXIT may not return through the
+ * caller's path at all. On entry from ring 3 it first snapshots the frame into
+ * the current thread's saved context so a blocking syscall resumes at the right
+ * post-syscall RIP, possibly on another CPU. */
 uint64_t x86_syscall_handler(syscall_frame_t* frame);
+/* Test-only wiring for the ring-3 syscall suites, honoured by the IPC_CALL and
+ * IPC_NOTIFY paths and unset (IPC_ENDPOINT_NONE) in a normal boot.
+ *
+ * The echo endpoint makes IPC_CALL answer certain message types from inside the
+ * kernel instead of forwarding them, so a ring-3 probe can exercise the call
+ * path with no peer process. The two deny endpoints name an endpoint whose
+ * refusal should emit the one-shot "control deny ok" marker, which is how the
+ * suite observes that an ownership check fired. Global, not per-process. */
 void syscall_set_ipc_call_echo_endpoint(uint32_t endpoint);
 uint32_t syscall_ipc_call_echo_endpoint(void);
 void syscall_set_ipc_call_control_deny_endpoint(uint32_t endpoint);
@@ -113,8 +133,15 @@ void syscall_set_ipc_notify_control_deny_endpoint(uint32_t endpoint);
  * directly; see the definitions in syscall.c for why that is not reachable
  * through x86_syscall_handler alone. */
 #include "ipc.h"
+/* Park a reply in pid's ring. Returns 0, or -1 when no slot could be obtained
+ * or msg->request_id has not been issued yet -- the ring deliberately refuses
+ * to hold a reply to a call that does not exist. Overflow drops the oldest. */
 int syscall_test_pending_enqueue(uint32_t pid, const ipc_message_t* msg);
+/* Remove the reply matching request_id. Returns 0 with *out filled, or -1 if
+ * the ring holds no such reply. */
 int syscall_test_pending_take(uint32_t pid, uint32_t request_id, ipc_message_t* out);
+/* The next request id to be issued, so a test can construct ids that are and
+ * are not yet valid. */
 uint32_t syscall_test_next_request_id(void);
 #endif
 

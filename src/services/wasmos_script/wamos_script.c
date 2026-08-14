@@ -194,6 +194,15 @@ static int wamos_script_on_export(void* user, const char* name, const char* valu
     return 0;
 }
 
+/* Executor entry point.  argc/argv are ignored: the guest script path is the
+ * single startup argument delivered through the spawn-info buffer, and the proc
+ * endpoint is startup argument 0.  A path longer than 127 bytes is truncated.
+ *
+ * Runs the script to completion synchronously and returns the process exit
+ * status: WAMOS_SCRIPT_OK (0) on success, or one of the negative
+ * WAMOS_SCRIPT_ERR_* codes.  The script's own commands may block (a `start`
+ * waits for the child's readiness, an `exec` waits for the child to exit), so
+ * this can park for as long as the script does. */
 int main(int argc, char** argv) {
     /* Static (data-segment) storage, not a stack local: the FS-buffer read
      * lands in already-committed linear memory, matching the proven cliArgs

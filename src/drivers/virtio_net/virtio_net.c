@@ -10,10 +10,19 @@
 #include "wasmos/vring.h"
 #include "wasmos_driver_abi.h"
 
+/* PCI identity of a virtio-net function. 0x1AF4 is the Red Hat / virtio vendor
+ * id. A legacy device reports 0x1000 (the transitional device id range 0x1000 +
+ * subsystem), a modern one 0x1041 (0x1040 + virtio device type 1 = network).
+ * Both are accepted; this driver speaks the legacy register interface either
+ * way. */
 #define VIRTIO_PCI_VENDOR_ID 0x1AF4u
 #define VIRTIO_NET_DEV_LEGACY 0x1000u
 #define VIRTIO_NET_DEV_TRANSITIONAL 0x1041u
 
+/* Legacy virtio PCI common configuration (virtio 0.9.5, "Virtio Header"), as
+ * byte offsets into the device's I/O BAR. Feature negotiation is a 32-bit
+ * bitmask each way: the device advertises through DEVICE_FEATURES (read-only)
+ * and the driver accepts a subset by writing DRIVER_FEATURES. */
 #define VIRTIO_PCI_DEVICE_FEATURES 0x00u
 #define VIRTIO_PCI_DRIVER_FEATURES 0x04u
 /* Legacy virtqueue registers (no MSI-X: device config starts at 0x14). */
@@ -43,6 +52,13 @@
 #define VIRTIO_NET_MSIX_ENTRY_CONFIG 2u
 #define VIRTIO_NET_MSIX_ENTRIES 3u
 
+/* Legacy vring layout alignment (virtio 0.9.5): the used ring must start on a
+ * 4096-byte boundary within the queue's contiguous allocation, and the queue's
+ * address is programmed as a page frame number, so 4096 is fixed by the spec's
+ * page granularity rather than chosen here.
+ *
+ * Queue indices are fixed by the virtio-net device type: queue 0 is receive,
+ * queue 1 is transmit, both named from the DRIVER's point of view. */
 #define VIRTIO_PCI_VRING_ALIGN 4096u
 #define VIRTIO_NET_RX_QUEUE 0u
 #define VIRTIO_NET_TX_QUEUE 1u
@@ -66,15 +82,32 @@
  * device's INTX_DISABLE. */
 #define IPC_IRQ_EVENT_TYPE 0xFF00
 
+/* Device-status bits, written to VIRTIO_PCI_DEVICE_STATUS in ascending order as
+ * bring-up progresses: ACK ("I see the device"), DRIVER ("I can drive it"),
+ * then DRIVER_OK once the queues are live. The bits ACCUMULATE -- each write
+ * ORs the next one in, and writing DRIVER_OK alone would retract the earlier
+ * acknowledgements. FAILED is the driver telling the device it gave up; a
+ * status of 0 is a device reset. */
 #define VIRTIO_STATUS_ACK 1u
 #define VIRTIO_STATUS_DRIVER 2u
 #define VIRTIO_STATUS_DRIVER_OK 4u
 #define VIRTIO_STATUS_FAILED 128u
 
+/* virtio-net feature bits this driver understands. F_MAC means the device
+ * supplies a MAC address in its config region (without it the driver would have
+ * to invent one); F_STATUS means the config region carries a live link-status
+ * word. VIRTIO_NET_FEATURES_DRIVER is the mask offered back to the device, so a
+ * bit absent here is declined even when the device advertises it -- notably
+ * MRG_RXBUF, whose absence is what fixes the RX header at
+ * VIRTIO_NET_HDR_LEN bytes. */
 #define VIRTIO_NET_F_MAC (1u << 5)
 #define VIRTIO_NET_F_STATUS (1u << 16)
 #define VIRTIO_NET_FEATURES_DRIVER (VIRTIO_NET_F_MAC | VIRTIO_NET_F_STATUS)
 
+/* Bit 0 of the config status word (valid only when F_STATUS was negotiated):
+ * set means the link is up. VIRTIO_NET_MTU_BASELINE is the standard Ethernet
+ * payload MTU reported to clients; it is the frame limit
+ * (VIRTIO_NET_MAX_FRAME, 1514) less the 14-byte Ethernet header. */
 #define VIRTIO_NET_S_LINK_UP 1u
 #define VIRTIO_NET_MTU_BASELINE 1500u
 

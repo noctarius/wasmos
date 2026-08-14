@@ -58,11 +58,32 @@ static int msi_ops_deliver(uint32_t endpoint, uint32_t index) {
 
 static const msi_vector_ops_t g_msi_ops = {msi_ops_deliver};
 
+/* Reset the MSI vector table to "all free" and initialise its lock. Called once
+ * during kernel bring-up, before any context can allocate; it does not touch the
+ * IDT, whose MSI gates cpu_x86_64.c installs separately. */
 void msi_init(void) {
     ksync_spinlock_init(&g_msi_lock);
     msi_vectors_init(msi_vectors_ptr(), MSI_VECTOR_COUNT);
 }
 
+/* Reserve one MSI vector for a driver context and return the message the driver
+ * must program into its device's MSI/MSI-X capability.
+ *
+ * On success returns 0 and fills all four out-parameters: *out_address_lo /
+ * *out_address_hi are the message address (high half is always 0 here) and
+ * *out_data the message data, which reduces to the bare vector number under the
+ * fixed/edge/physical encoding this file uses. *out_vector is the absolute IDT
+ * vector, MSI_VECTOR_BASE + index; the arg0 a driver later receives in the event
+ * IPC is the index, not this vector.
+ *
+ * Returns a packed abi/errors.yaml code on failure and writes nothing:
+ * WASMOS_ERR_MSI_UNSUPPORTED in IRQ mode 0, which has no LAPIC to receive the
+ * message write; WASMOS_ERR_MSI_BAD_ENDPOINT for a NULL out-pointer,
+ * IPC_ENDPOINT_NONE, or an endpoint the calling context does not own; or
+ * whatever msi_vectors_alloc() returns when the table is full.
+ *
+ * Every vector is delivered to LAPIC 0 (the BSP). Takes the MSI lock only around
+ * the table update. */
 int msi_alloc(uint32_t context_id, uint32_t endpoint, uint32_t* out_address_lo,
               uint32_t* out_address_hi, uint32_t* out_data, uint32_t* out_vector) {
 #if WASMOS_IRQ_MODE == 0
@@ -103,6 +124,12 @@ int msi_alloc(uint32_t context_id, uint32_t endpoint, uint32_t* out_address_lo,
 #endif
 }
 
+/* Release a vector previously returned by msi_alloc(). vector is the absolute IDT
+ * vector, not the index. Returns 0 on success, WASMOS_ERR_MSI_BAD_VECTOR when it
+ * falls outside MSI_VECTOR_BASE..+MSI_VECTOR_COUNT, or whatever
+ * msi_vectors_free() returns when the slot is not owned by context_id. Frees only
+ * the kernel-side reservation: the device keeps writing the message until its
+ * driver disables the capability, so a freed vector can still be raised. */
 int msi_free(uint32_t context_id, uint32_t vector) {
     if (vector < MSI_VECTOR_BASE || vector >= (MSI_VECTOR_BASE + MSI_VECTOR_COUNT)) {
         return WASMOS_ERR_MSI_BAD_VECTOR;
@@ -114,12 +141,20 @@ int msi_free(uint32_t context_id, uint32_t vector) {
     return rc;
 }
 
+/* Teardown hook for a dying context: frees every MSI vector it held. Idempotent
+ * and silent when it held none. Takes the MSI lock. */
 void msi_release_context(uint32_t context_id) {
     ksync_spinlock_lock(&g_msi_lock);
     msi_vectors_release_context(msi_vectors_ptr(), MSI_VECTOR_COUNT, context_id);
     ksync_spinlock_unlock(&g_msi_lock);
 }
 
+/* Dispatch body for the isr_msi_* stubs, called with the raw vector number in
+ * interrupt context with IF clear. A vector outside the MSI range returns without
+ * an EOI. Otherwise it delivers one IPC to the owning endpoint and issues the
+ * LAPIC EOI; a delivery failure (no owner, full queue) is swallowed, since there
+ * is no line to leave masked and nothing to retry. Takes the MSI lock around the
+ * dispatch, and the EOI is issued unlocked. */
 void x86_msi_handler(uint64_t vector) {
     if (vector < MSI_VECTOR_BASE || vector >= (MSI_VECTOR_BASE + MSI_VECTOR_COUNT)) {
         return;

@@ -9,7 +9,13 @@
  * (scancode 0x1E) would append U+1E61 instead of 'a' — a codepoint the font
  * service has no glyph for and renders as .notdef (a tofu box) — and Backspace
  * (0x0E08) and Enter (0x1C0A) would stop matching their control codes.  These
- * tests pin the decode contract at the two handlers that consume characters. */
+ * tests pin the decode contract at the two handlers that consume characters.
+ *
+ * libui is header-only, so the widgets under test are compiled straight into
+ * this binary and nothing is stubbed. Their text buffer comes from the host
+ * malloc/free rather than the guest allocator, which is why each case frees
+ * td.text itself. Rendering, the compositor and the font service are absent: a
+ * case can see what a keystroke put in the buffer, never what it looks like. */
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -21,6 +27,8 @@
 static int g_failures;
 static int g_checks;
 
+/* Record one assertion: counts and CONTINUES, so a failing case runs to its end.
+ * Nothing here returns a marker; main() reports g_failures as the exit status. */
 static void expect(int cond, const char* what) {
     g_checks++;
     if (!cond) {
@@ -29,6 +37,10 @@ static void expect(int cond, const char* what) {
     }
 }
 
+/* Assert a text input's contents: the bytes must equal `want`, and text_len must
+ * agree with them. A NULL td->text reads as the empty string, so "" passes
+ * before anything has been typed. A byte mismatch returns early, so it costs one
+ * recorded check while a match costs two. */
 static void expect_text(const ui_text_data_t* td, const char* want, const char* what) {
     const char* got = td->text ? td->text : "";
     g_checks++;
@@ -67,6 +79,10 @@ static void test_accessors(void) {
 
 /* ---- text input ------------------------------------------------------------ */
 
+/* Minimal text-input fixture: a zeroed component pointing at a zeroed
+ * ui_text_data_t, which is the state a freshly created input carries. The buffer
+ * is allocated lazily by the first keystroke, so td.text is NULL until then and
+ * the case owns it (and must free it) from that point on. */
 static void text_input_init(ui_component_t* c, ui_text_data_t* td) {
     memset(c, 0, sizeof(*c));
     memset(td, 0, sizeof(*td));
@@ -204,6 +220,9 @@ static void test_text_input_growth(void) {
 
 /* ---- dropdown -------------------------------------------------------------- */
 
+/* Minimal dropdown fixture: three items with the first selected and the list
+ * closed. The items themselves are absent -- only list.count bounds the
+ * selection movement the cases check -- so nothing here may render the list. */
 static void dropdown_init(ui_component_t* c, ui_dropdown_data_t* d) {
     memset(c, 0, sizeof(*c));
     memset(d, 0, sizeof(*d));

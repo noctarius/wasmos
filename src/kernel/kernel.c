@@ -58,6 +58,9 @@ static const uint8_t g_ring3_smoke_enabled = WASMOS_RING3_SMOKE_DEFAULT;
 static const uint8_t g_ring3_thread_lifecycle_smoke_enabled =
     WASMOS_RING3_THREAD_LIFECYCLE_SMOKE_DEFAULT;
 
+/* Whether the adversarial ring-3 smoke probes run during boot.  Fixed at compile
+ * time by WASMOS_RING3_SMOKE_DEFAULT (0 unless a ring3 test target overrides it),
+ * so this is a build-configuration read, not runtime state. */
 uint8_t kernel_ring3_smoke_enabled(void) {
     return g_ring3_smoke_enabled;
 }
@@ -131,6 +134,11 @@ static void __attribute__((noreturn)) kernel_halt_forever(void) {
     }
 }
 
+/* Powers the machine off and does not return.  Interrupts are masked first, then
+ * the three ACPI-ish shutdown ports are written in turn — QEMU's newer 0x604,
+ * its older 0xB004, and VirtualBox's 0x4004 — because the platform is not probed
+ * and only one of them will be listened to.  On hardware that answers none of
+ * them the CPU ends up halted with interrupts off instead. */
 void kernel_system_poweroff(void) {
     __asm__ volatile("cli");
 
@@ -144,6 +152,10 @@ void kernel_system_poweroff(void) {
     kernel_halt_forever();
 }
 
+/* Resets the machine and does not return.  Tries the keyboard-controller pulse
+ * (0x64) first and then both PCI reset-control forms (0xCF9), for the same
+ * reason poweroff writes several ports.  Falls back to a halt with interrupts
+ * masked when none of them takes effect. */
 void kernel_system_reboot(void) {
     __asm__ volatile("cli");
 
@@ -157,6 +169,26 @@ void kernel_system_reboot(void) {
     kernel_halt_forever();
 }
 
+/* The kernel's C entry point, reached from the architecture start-up stub once a
+ * stack exists and BSS is cleared.  Never returns: it ends inside the scheduler
+ * loop, or in kpanic.
+ *
+ * boot_info is the bootloader's structure, initially living in firmware-owned
+ * memory reachable only through the identity map.  It is validated by version
+ * and size and rejected with a panic if either disagrees, then copied into a
+ * kernel-owned shadow (kernel_boot_build_bootinfo_shadow) as soon as the memory
+ * subsystem is up.  Everything after that point uses the shadow, because the
+ * original becomes unreachable once the low identity mapping goes away.
+ *
+ * The ordering is load-bearing throughout, notably: framebuffer_init before
+ * mm_init records the GOP aperture while it is still identity-mapped;
+ * serial_enable_high_alias(1) only after framebuffer_map_high and mm_init have
+ * established the higher-half alias; the memory-service endpoints only after its
+ * process exists; and the APs are started last, since each installs its own idle
+ * thread and the BSP must not do it for them.
+ *
+ * Any failure in the bring-up chain panics rather than degrading — there is no
+ * caller left to report to. */
 void kmain(boot_info_t* boot_info) {
     uint32_t mem_service_pid = 0;
     process_t* mem_service_proc = 0;

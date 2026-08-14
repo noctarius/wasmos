@@ -95,6 +95,16 @@ static const list_ops_t g_list_linked_ops = {.destroy = list_linked_destroy,
                                              .first = list_linked_first,
                                              .next = list_linked_next};
 
+/* Backend constructor called by list_init; not part of the public list.h API.
+ *
+ * Allocates the state block and installs the linked vtable, after which every
+ * list_* facade call routes here.  list->elem_size must already be set;
+ * config_value is ignored by this backend.
+ *
+ * Returns 0 on success and -1 for a NULL list, a zero elem_size, or a failed
+ * state allocation — in which case list->ops stays 0 and the facade degrades to
+ * NULL/-1 rather than faulting.  The state block is released by
+ * list_destroy. */
 int list_linked_impl_init(list_t* list) {
     list_linked_state_t* state = 0;
     if (!list || list->elem_size == 0) {

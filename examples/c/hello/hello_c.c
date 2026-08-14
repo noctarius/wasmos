@@ -1,3 +1,20 @@
+/* hello_c - the "hello world" tutorial app for the C guest binding.
+ *
+ * Demonstrates the two things every C WASMOS-APP needs: console output through
+ * libc (putsn), and the in-process coroutine runtime from
+ * wasmos/coroutine_wasm.h.
+ *
+ * The coroutine part is the interesting half. A task is a plain resume
+ * function: it is called repeatedly, returns wasmos_wasm_coroutine_yield() to
+ * be called again later, and WASMOS_WASM_TASK_COMPLETE with a value written to
+ * *out_value when it is done. wasmos_async_start registers it,
+ * wasmos_wasm_coroutine_run drives every runnable task until none can make
+ * progress, and wasmos_future_poll reads the completion status without
+ * blocking. This task deliberately yields once; since it is immediately
+ * runnable again, the one unbounded run call resumes it twice and the poll then
+ * sees the completed value.
+ *
+ * No preconditions: no service lookup, no IPC, runs on either runtime. */
 #include "stdio.h"
 #include "wasmos/coroutine_wasm.h"
 

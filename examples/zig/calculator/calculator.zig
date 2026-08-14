@@ -4,6 +4,23 @@
 /// for vertical stacking and libui "row" (MENU_BAR) components for the
 /// horizontal button grid.  Per-button theming goes through bg_color, which is
 /// the only colour the button renderer reads per component.
+///
+/// Worth copying for a new libui app:
+///   - `libui.Context.init` takes the process-manager endpoint (startup
+///     argument 0) and a caller-owned reply endpoint;
+///   - components are created detached and linked with `appendChild`, so the
+///     tree is built explicitly rather than by nesting;
+///   - `style` writes bg and fg unconditionally and the rest only when
+///     non-zero, so a partially filled Style keeps the current geometry;
+///   - the event loop is `while (!closeRequested()) pollAndDrain()`, which
+///     blocks in the kernel for each event instead of polling;
+///   - the click callback is a C function pointer and cannot capture, so all
+///     state it touches lives at module scope.
+///
+/// Arithmetic is fixed-point: values are integers scaled by 1e6, so there is no
+/// float dependency and the display is exact to six fractional digits.
+///
+/// Preconditions: the "gfx" and "font" services must be running.
 const wasmos = @import("wasmos.zig");
 const libui = @import("libui.zig");
 // ---------------------------------------------------------------------------
@@ -34,8 +51,16 @@ const Action = enum {
     backspace,
 };
 
+/// Calculator state machine. Values are fixed-point i64 scaled by `scale`, so
+/// every stored number is exact to `frac_digits` decimals and multiplication
+/// and division rescale explicitly. There is one pending operator at a time —
+/// entering a second one applies the first, so input evaluates left to right
+/// with no precedence.
 const Calc = struct {
+    /// Fixed-point scale factor: a stored value of `scale` represents 1.0.
     const scale: i64 = 1_000_000;
+    /// Fractional decimals `scale` supports, and the most `setDisplay` emits
+    /// (trailing zeros are trimmed).
     const frac_digits: usize = 6;
 
     // Current display string (null-terminated)
@@ -48,6 +73,9 @@ const Calc = struct {
     fresh: bool = true,
     err: bool = false,
 
+    /// Reset to the power-on state: display "0", no accumulator, no pending
+    /// operator, no error. Must be called before any other method — the struct
+    /// is declared `undefined` and `display` is not otherwise terminated.
     pub fn init(self: *Calc) void {
         self.display[0] = '0';
         self.display[1] = 0;
@@ -58,6 +86,9 @@ const Calc = struct {
         self.err = false;
     }
 
+    /// The display string as a NUL-terminated pointer for libui's setText.
+    /// It borrows the Calc's own buffer, so it is only valid until the next
+    /// `handle` call rewrites it.
     pub fn displayText(self: *const Calc) [*:0]const u8 {
         return @ptrCast(&self.display);
     }
@@ -176,6 +207,12 @@ const Calc = struct {
         };
     }
 
+    /// Apply one button press, updating the display in place.
+    ///
+    /// Entry is capped at 12 characters and further digits are dropped rather
+    /// than scrolling. Division by zero latches an error: the display reads
+    /// "Error" and every action except clear and clear_entry is ignored until
+    /// one of those clears it.
     pub fn handle(self: *Calc, action: Action) void {
         if (self.err and action != .clear and action != .clear_entry) return;
         switch (action) {
@@ -391,6 +428,11 @@ extern fn libui_zig_mark_dirty(ctx: *anyopaque) callconv(.c) void;
 // Entry point
 // ---------------------------------------------------------------------------
 
+/// App entry point: self-test the arithmetic, build the window, then run the
+/// event loop until the compositor asks the window to close.
+///
+/// Returns 0 on a clean exit and 1 when the self-test or any bring-up step
+/// fails, in which case nothing is left on screen.
 pub fn main() u8 {
     const proc_ep = wasmos.startup.arg(0);
     _ = wasmos.stdlib.println("[calculator] start", .{}) catch {};

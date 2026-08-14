@@ -1,7 +1,23 @@
 #pragma once
 /* compat/csignal — freestanding shadow of <csignal>
- * Pulls in the compat sys/signal.h and re-exports identifiers into
- * namespace std where WARP or its dependencies reference them that way. */
+ *
+ * Pulls in compat/sys/signal.h and re-exports the four names WARP's signal
+ * headers spell with a std:: qualifier.  The signal numbers, SA_SIGINFO and
+ * sigaction() itself stay in the global namespace; see compat/sys/signal.h for
+ * which of those have a real kernel definition (only sigaction, a no-op in
+ * src/kernel/warp/posix_kernel.c).
+ *
+ * The WARP sources that include <csignal> — utils/RAIISignalHandler.{hpp,cpp}
+ * and utils/SignalFunctionWrapper_unix.cpp — implement the SIGSEGV-based
+ * stack-overflow and bounds-check recovery paths.  Those paths are dead in the
+ * kernel build (ACTIVE_STACK_OVERFLOW_CHECK=1 and LINEAR_MEMORY_BOUNDS_CHECKS=1
+ * select the explicit checks instead) and only RAIISignalHandler.hpp is even
+ * reachable, via WasmModule.cpp, without any of its inline bodies being used.
+ *
+ * signal(), raise(), sigprocmask() and pthread_sigmask() are absent.  Code that
+ * starts depending on them fails to compile here, which is the safer outcome:
+ * the kernel has no signal delivery, so a handler registered through the
+ * sigaction() stub is accepted and then never fires. */
 
 #include "sys/signal.h"
 

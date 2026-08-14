@@ -27,6 +27,10 @@
  *   arg0=status (<0), arg1..arg3 reserved
  */
 
+/* Unpacked wall-clock time as the RTC service exchanges it: 0-59 second and
+ * minute, 0-23 hour, 1-31 day, 1-12 month, and a full year (e.g. 2026). No
+ * timezone, no sub-second resolution; the helpers below neither validate nor
+ * normalise these ranges. */
 typedef struct {
     uint8_t second;
     uint8_t minute;
@@ -36,6 +40,9 @@ typedef struct {
     uint16_t year;
 } rtc_ipc_time_t;
 
+/* Pack the time-of-day half (second, minute, hour, day) into arg0 per the v1
+ * payload contract above. Returns 0 for a NULL argument, which is also a
+ * legal-looking encoding, so check the pointer rather than the result. */
 static inline int32_t rtc_ipc_pack_time_arg0(const rtc_ipc_time_t* t) {
     if (!t) {
         return 0;
@@ -44,6 +51,8 @@ static inline int32_t rtc_ipc_pack_time_arg0(const rtc_ipc_time_t* t) {
                      (((uint32_t)t->hour & 0xFFu) << 16) | (((uint32_t)t->day & 0xFFu) << 24));
 }
 
+/* Pack the date half (month, year) into arg1. The year occupies 16 bits, so it
+ * is truncated modulo 65536; returns 0 for a NULL argument. */
 static inline int32_t rtc_ipc_pack_time_arg1(const rtc_ipc_time_t* t) {
     if (!t) {
         return 0;
@@ -51,6 +60,9 @@ static inline int32_t rtc_ipc_pack_time_arg1(const rtc_ipc_time_t* t) {
     return (int32_t)(((uint32_t)t->month & 0xFFu) | (((uint32_t)t->year & 0xFFFFu) << 8));
 }
 
+/* Inverse of the two packers; writes every field of *out. A NULL out is
+ * ignored. The bit fields are copied verbatim, so a malformed message yields
+ * out-of-range values rather than an error. */
 static inline void rtc_ipc_unpack_time(int32_t arg0, int32_t arg1, rtc_ipc_time_t* out) {
     if (!out) {
         return;

@@ -274,6 +274,19 @@ static process_run_result_t ring3_fault_policy_entry(process_t* process, void* a
     return PROCESS_RUN_YIELDED;
 }
 
+/* Starts the verdict process that polls the twelve fault probes.  Must be called
+ * AFTER those probes are spawned, since *probes carries their pids.
+ *
+ * *probes is copied into the module's single static state, so only one
+ * fault-policy run can be in flight — a second call overwrites the first run's
+ * state while its process may still be executing.  churn_spawn is stored as a
+ * borrowed function pointer and is used to spawn each churn round; passing 0 for
+ * churn_rounds skips that phase.
+ *
+ * Returns 0 once the verdict process is spawned and -1 for a NULL probes or a
+ * failed spawn.  It does NOT wait for or report the verdict; that arrives later
+ * as "[test] ring3 ..." log lines and as the verdict process's own exit status,
+ * 0 for pass and -1 for any mismatch. */
 int kernel_ring3_fault_policy_spawn(uint32_t init_pid, const ring3_fault_policy_probes_t* probes,
                                     uint8_t churn_rounds, ring3_fault_churn_spawn_fn churn_spawn) {
     uint32_t ring3_fault_policy_pid = 0;

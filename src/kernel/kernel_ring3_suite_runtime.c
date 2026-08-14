@@ -29,6 +29,17 @@ static int spawn_ring3_fault_churn_probe_process(uint32_t parent_pid, uint8_t ch
     return kernel_ring3_spawn_fault_gp_probe(parent_pid, out_pid);
 }
 
+/* Spawns the whole ring-3 test suite as children of init_pid and returns as soon
+ * as everything is started.
+ *
+ * ring3_thread_lifecycle_smoke_enabled adds the thread-lifecycle probe;
+ * ring3_fault_churn_rounds is passed through to the fault-policy process as the
+ * number of extra spawn/fault/reap rounds to run, and 0 skips that phase.
+ *
+ * Returns 0 when every process was spawned and -1 at the FIRST spawn that fails
+ * — the processes already spawned keep running, and no cleanup is attempted.  A
+ * 0 means the suite is running, not that it passed: the verdicts arrive later as
+ * "[test] ring3 ..." log lines. */
 int kernel_ring3_spawn_suite(uint32_t init_pid, uint8_t ring3_thread_lifecycle_smoke_enabled,
                              uint8_t ring3_fault_churn_rounds) {
     uint32_t ring3_smoke_pid = 0;

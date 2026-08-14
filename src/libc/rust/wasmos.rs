@@ -2,6 +2,8 @@
 
 use core::fmt::{self, Write};
 
+/// Stackless coroutines, futures/promises, the IPC event loop and the typed
+/// asynchronous filesystem operations; see `coroutine.rs` for the contracts.
 pub mod coroutine;
 
 const FS_IPC_OPEN_REQ: i32 = 0x400;
@@ -26,11 +28,20 @@ const IPC_FIELD_DESTINATION: i32 = 5;
 const IPC_FIELD_ARG2: i32 = 6;
 const IPC_FIELD_ARG3: i32 = 7;
 
+// `whence` values for fs::File::seek: the new offset is measured from the start
+// of the file, from the current offset, or from the file size. The FS backend
+// refuses a resulting offset outside [0, size], so seeking past the end fails
+// instead of extending the file.
 pub const SEEK_SET: i32 = 0;
 pub const SEEK_CUR: i32 = 1;
 pub const SEEK_END: i32 = 2;
+// File-type bits of fs::Stat::mode; `stat` masks off everything else, and the
+// FS reply carries no permission bits.
 pub const S_IFREG: u32 = 0x8000;
 pub const S_IFDIR: u32 = 0x4000;
+// Open flags, POSIX-valued. Bit 0 is the access mode (O_RDONLY or O_WRONLY);
+// the remaining flags are modifiers the FS backend accepts only alongside
+// O_WRONLY. There is no read/write mode: any other bit is rejected.
 pub const O_RDONLY: i32 = 0;
 pub const O_WRONLY: i32 = 1;
 pub const O_APPEND: i32 = 0x0008;
@@ -69,13 +80,28 @@ unsafe extern "C" {
     fn mutex_unlock(ptr: i32) -> i32;
 }
 
+/// Failure modes of this module. The filesystem protocol's own packed
+/// `WASMOS_ERR_FS_*` status is not surfaced: a request the backend refuses comes
+/// back as an FS error message, which every entry point reports as
+/// `BadResponse`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Error {
+    /// A reply arrived but did not match the request: wrong message type (an
+    /// error reply included), wrong request id, or a negative status field.
     BadResponse,
+    /// The path plus its NUL does not fit the transfer buffer the FS manager
+    /// reads it from.
     BufferTooSmall,
+    /// A host call refused the operation (console write, transfer-buffer
+    /// read/write/borrow, or IPC send/receive), or formatting failed.
     HostCallFailed,
+    /// A caller-supplied argument is unusable: an empty path, or a `readline`
+    /// buffer with no room for a byte plus the NUL terminator.
     InvalidArgument,
+    /// The path plus its NUL exceeds the 256-byte staging buffer.
     NameTooLong,
+    /// A prerequisite does not exist yet: no FS service has registered, no
+    /// endpoint could be created, or no transfer buffer could be acquired.
     NotAvailable,
 }
 
@@ -85,6 +111,11 @@ static mut G_IPC_REPLY_ENDPOINT: i32 = -1;
 static mut G_IPC_REQUEST_ID: i32 = 1;
 static mut G_STARTUP_ARGS: [i32; 4] = [0; 4];
 
+/// Values the process manager passed at spawn time.
+///
+/// Unlike the C, Zig and AssemblyScript ports this module exposes only the entry
+/// registers, with none of the spawn-info fields (process manager endpoint, tty,
+/// module count/index, argv); see the FIXME on `arg`.
 pub mod startup {
     use super::G_STARTUP_ARGS;
 
@@ -107,14 +138,23 @@ pub mod startup {
 
 static EMPTY_ARGS: [&str; 0] = [];
 
+/// Recursive mutex whose state lives in guest memory and whose arbitration is
+/// done by the kernel, layout-compatible with `wasmos_mutex_t`.
+///
+/// The kernel link tables export no `wasmos.mutex_try_lock` / `mutex_unlock`
+/// (FIXME(user-mutex-import) in `src/libc/include/wasmos/api.h`), so a module
+/// that actually calls these fails to instantiate on an unresolved import.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct Mutex {
+    /// Thread id of the current owner, 0 when unlocked. Written by the kernel.
     pub owner_tid: u32,
+    /// Number of unmatched acquisitions held by the owner.
     pub recursion_depth: u32,
 }
 
 impl Mutex {
+    /// An unlocked mutex, usable in a `static`.
     pub const fn new() -> Self {
         Self {
             owner_tid: 0,
@@ -122,19 +162,28 @@ impl Mutex {
         }
     }
 
+    /// Resets to the unlocked state. Zeroing a mutex another thread holds loses
+    /// that ownership, so only init one nobody has locked.
     pub fn init(&mut self) {
         self.owner_tid = 0;
         self.recursion_depth = 0;
     }
 
+    /// Thread id of the calling thread, as the kernel records it in `owner_tid`.
     pub fn current_tid() -> i32 {
         unsafe { thread_gettid() }
     }
 
+    /// One acquisition attempt: 0 when the mutex is now held by this thread
+    /// (raising `recursion_depth` if it already was), 1 when another thread owns
+    /// it, negative on error. Never blocks.
     pub fn try_lock(&mut self) -> i32 {
         unsafe { mutex_try_lock(self as *mut Self as usize as i32) }
     }
 
+    /// Acquires the mutex, yielding the thread between attempts while another
+    /// owner holds it. Returns 0 once held, or the negative code that ended the
+    /// retry loop. A yield-spin, not a sleep.
     pub fn lock(&mut self) -> i32 {
         loop {
             let rc = self.try_lock();
@@ -147,6 +196,8 @@ impl Mutex {
         }
     }
 
+    /// Drops one acquisition, releasing the mutex when `recursion_depth` reaches
+    /// zero. Returns 0 on success, negative when the caller is not the owner.
     pub fn unlock(&mut self) -> i32 {
         unsafe { mutex_unlock(self as *mut Self as usize as i32) }
     }
@@ -349,9 +400,14 @@ fn fs_request_stream(
     }
 }
 
+/// Console output and line input. Everything here goes to the process's console
+/// (the kernel log / its terminal), not to a file descriptor.
 pub mod std {
     use super::{console_read, fmt, raw_write, Error, Write};
 
+    /// `core::fmt::Write` sink over the console, so `write!` can target it
+    /// directly. Each `write_str` is one console host call; no buffering, and a
+    /// refused write surfaces as `fmt::Error`.
     pub struct Writer;
 
     impl Write for Writer {
@@ -360,23 +416,40 @@ pub mod std {
         }
     }
 
+    /// Writes `bytes` verbatim; no newline is added and no NUL is required. An
+    /// empty slice is a no-op success.
     pub fn write(bytes: &[u8]) -> Result<(), Error> {
         raw_write(bytes)
     }
 
+    /// Identical to `write`: the trailing newline C's `puts` adds is not added
+    /// here.
     pub fn puts(bytes: &[u8]) -> Result<(), Error> {
         raw_write(bytes)
     }
 
+    /// Formats `args` straight to the console with no intermediate buffer, so
+    /// there is no line-length limit and partial output survives a mid-format
+    /// failure. Any failure is reported as `Error::HostCallFailed`.
     pub fn print(args: fmt::Arguments<'_>) -> Result<(), Error> {
         let mut writer = Writer;
         writer.write_fmt(args).map_err(|_| Error::HostCallFailed)
     }
 
+    /// Alias of `print`, for guests written against the C API's name.
     pub fn printf(args: fmt::Arguments<'_>) -> Result<(), Error> {
         print(args)
     }
 
+    /// Reads console bytes into `buffer` up to and including the first newline,
+    /// NUL-terminates them, and returns the byte count excluding the NUL.
+    ///
+    /// The newline, when one arrived, is part of the count. Reads stop as soon
+    /// as the console has no byte ready, so a short return is normal and does
+    /// not mean end of input; this does not park until a full line exists. A
+    /// `buffer` shorter than two bytes is `InvalidArgument`, a full buffer ends
+    /// the read with the terminator in the last byte, and a host-call failure
+    /// clears `buffer[0]` before returning `HostCallFailed`.
     pub fn readline(buffer: &mut [u8]) -> Result<usize, Error> {
         if buffer.len() <= 1 {
             return Err(Error::InvalidArgument);
@@ -401,6 +474,9 @@ pub mod std {
     }
 }
 
+/// Synchronous message passing. `call` and `recv` park the process in the kernel
+/// until a message arrives; a component that must keep serving its own endpoint
+/// while a request is outstanding uses `coroutine::EventLoop` instead.
 pub mod ipc {
     use super::{
         ensure_ipc_reply_endpoint, ipc_create_endpoint, ipc_last_field, ipc_select_one, ipc_send,
@@ -408,6 +484,9 @@ pub mod ipc {
         IPC_FIELD_DESTINATION, IPC_FIELD_REQUEST_ID, IPC_FIELD_SOURCE, IPC_FIELD_TYPE,
     };
 
+    /// A received message, copied out of the caller's last-received slot. The
+    /// four argument words are protocol-defined; `source` is the endpoint to
+    /// address a reply to, `destination` the endpoint it arrived on.
     #[derive(Clone, Copy, Debug)]
     pub struct Reply {
         pub r#type: i32,
@@ -465,6 +544,10 @@ pub mod ipc {
     }
 
     /// Block until a message arrives on endpoint (for servers).
+    /// Parks the process indefinitely: no timeout, no interruption. Every
+    /// message queued on `endpoint` is returned, replies and requests alike, so
+    /// a server that also issues requests must demultiplex on `request_id`
+    /// itself. `HostCallFailed` on an invalid endpoint or a receive error.
     pub fn recv(endpoint: i32) -> Result<Reply, Error> {
         if unsafe { ipc_select_one(endpoint) } < 0 {
             return Err(Error::HostCallFailed);
@@ -475,6 +558,9 @@ pub mod ipc {
     /// Send a reply from a server back to the caller's private reply endpoint.
     /// source should be the server's own service endpoint.
     /// destination should be req.source from the incoming request.
+    /// `request_id` must be echoed from the request or the caller cannot match
+    /// the reply. Returns once the message is queued, not once the peer has read
+    /// it; `HostCallFailed` means the send itself was refused.
     pub fn reply(
         destination: i32,
         source: i32,
@@ -513,6 +599,9 @@ pub mod ipc {
     }
 }
 
+/// Synchronous filesystem access over the FS manager's IPC protocol. Every call
+/// stages its payload through an owned transfer buffer, sends one request, and
+/// parks until the reply arrives.
 pub mod fs {
     use super::{
         fs_endpoint, fs_request, fs_request_stream, xfer_buffer_acquire, xfer_buffer_borrow,
@@ -523,12 +612,17 @@ pub mod fs {
     };
     use crate::wasmos::coroutine::{EventLoop, FsRequest, Future};
 
+    /// Result of `stat`: `size` is the file length in bytes, `mode` carries only
+    /// the `S_IFREG` / `S_IFDIR` type bits.
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
     pub struct Stat {
         pub size: u32,
         pub mode: u32,
     }
 
+    /// An open file, holding the FS manager's client-side descriptor. Dropping
+    /// it does not close the file -- only `close` does, and it consumes the
+    /// handle so a descriptor cannot be closed twice from here.
     pub struct File {
         fd: i32,
     }
@@ -588,6 +682,14 @@ pub mod fs {
     }
 
     impl File {
+        /// Reads up to `buffer.len()` bytes at the file's current offset and
+        /// returns how many were stored.
+        ///
+        /// Loops over transfer-buffer-sized chunks, so a short reply ends the
+        /// read: 0 means end of file, and a value below `buffer.len()` is not an
+        /// error. An empty `buffer` is a 0-byte success that issues no request.
+        /// The transfer buffer is released when the call returns, which also
+        /// revokes the FS manager's borrow.
         pub fn read(&self, buffer: &mut [u8]) -> Result<usize, Error> {
             if buffer.is_empty() {
                 return Ok(0);
@@ -632,11 +734,20 @@ pub mod fs {
             Ok(done)
         }
 
+        /// Releases the descriptor at the FS manager, consuming the handle. A
+        /// refusal surfaces as `BadResponse`; the status word of a successful
+        /// response is ignored.
         pub fn close(self) -> Result<(), Error> {
             let _ = fs_request(FS_IPC_CLOSE_REQ, self.fd, 0, 0, 0)?;
             Ok(())
         }
 
+        /// Writes `buffer` at the file's current offset and returns how many
+        /// bytes the FS manager accepted.
+        ///
+        /// Chunked like `read`: a chunk only partially accepted ends the loop,
+        /// so a short return is a real short write rather than an error. An
+        /// empty `buffer` is a 0-byte success that issues no request.
         pub fn write(&self, buffer: &[u8]) -> Result<usize, Error> {
             if buffer.is_empty() {
                 return Ok(0);
@@ -685,6 +796,10 @@ pub mod fs {
             Ok(done)
         }
 
+        /// Moves the file offset to `offset` bytes from the `SEEK_SET` /
+        /// `SEEK_CUR` / `SEEK_END` origin and returns the new absolute offset.
+        /// A target outside [0, size] is refused by the backend and surfaces as
+        /// `BadResponse`; seeking past the end does not extend the file.
         pub fn seek(&self, offset: i32, whence: i32) -> Result<i32, Error> {
             let (position, _) = fs_request(FS_IPC_SEEK_REQ, self.fd, offset, whence, 0)?;
             if position < 0 {
@@ -750,22 +865,31 @@ pub mod fs {
         Ok(File { fd })
     }
 
+    /// Opens an existing file for reading. `path` is borrowed for the call and
+    /// must be non-empty and shorter than 256 bytes including its NUL. A missing
+    /// file is reported as `BadResponse`.
     pub fn open_read(path: &str) -> Result<File, Error> {
         open_with_flags(path, O_RDONLY)
     }
 
+    /// Opens an existing file for writing at offset 0 without truncating it.
+    /// Does not create the file.
     pub fn open_write(path: &str) -> Result<File, Error> {
         open_with_flags(path, O_WRONLY)
     }
 
+    /// Creates the file if needed and truncates it to zero length.
     pub fn create(path: &str) -> Result<File, Error> {
         open_with_flags(path, O_WRONLY | O_CREAT | O_TRUNC)
     }
 
+    /// Creates the file if needed and positions writes at the end.
     pub fn open_append(path: &str) -> Result<File, Error> {
         open_with_flags(path, O_WRONLY | O_CREAT | O_APPEND)
     }
 
+    /// Returns the size and file-type bits of `path` without opening it.
+    /// `BadResponse` when the path does not exist.
     pub fn stat(path: &str) -> Result<Stat, Error> {
         let staged = stage_path(path)?;
         let (size, mode) = fs_request(
@@ -785,6 +909,9 @@ pub mod fs {
         })
     }
 
+    /// Removes a file. A refusal by the backend (missing file, directory,
+    /// read-only mount) arrives as an FS error message and surfaces as
+    /// `BadResponse`; the status word of a successful response is not inspected.
     pub fn unlink(path: &str) -> Result<(), Error> {
         let staged = stage_path(path)?;
         let _ = fs_request(
@@ -797,6 +924,7 @@ pub mod fs {
         Ok(())
     }
 
+    /// Creates a directory. Reports failure the same way as `unlink`.
     pub fn mkdir(path: &str) -> Result<(), Error> {
         let staged = stage_path(path)?;
         let _ = fs_request(
@@ -809,6 +937,7 @@ pub mod fs {
         Ok(())
     }
 
+    /// Removes a directory. Reports failure the same way as `unlink`.
     pub fn rmdir(path: &str) -> Result<(), Error> {
         let staged = stage_path(path)?;
         let _ = fs_request(
@@ -821,6 +950,13 @@ pub mod fs {
         Ok(())
     }
 
+    /// Lists the current directory into `buffer` as a NUL-terminated text blob
+    /// and returns its length excluding the terminator.
+    ///
+    /// The listing arrives as a stream of messages carrying four bytes each, and
+    /// zero bytes inside a message are skipped rather than stored. A `buffer`
+    /// too small is filled, terminated and returned truncated -- the remaining
+    /// stream messages keep arriving on the reply endpoint and are not drained.
     pub fn read_dir(buffer: &mut [u8]) -> Result<usize, Error> {
         fs_request_stream(FS_IPC_READDIR_REQ, 0, 0, 0, 0, buffer)
     }

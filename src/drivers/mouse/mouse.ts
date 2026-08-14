@@ -35,6 +35,17 @@ import {
 /* TODO(mouse-startup): wire mouse driver into device-manager startup policy
  * once compositor pointer-event routing is implemented end-to-end. */
 
+/* i8042 PS/2 controller. Port 0x64 is one address serving two registers by
+ * direction -- reading it returns status, writing it issues a controller command
+ * -- which is why the two names below share a value. 0x60 is the data port,
+ * shared with the keyboard driver.
+ *
+ * The three status bits gate every access. OBF (bit 0) means a byte is waiting
+ * for the host; IBF (bit 1) means the controller has not yet consumed the last
+ * byte written, so a write must wait for it to CLEAR. AUX (0x20) tags a pending
+ * byte as coming from the mouse: this driver reads only when it is set, and the
+ * keyboard driver skips exactly those bytes, which is how one data port feeds
+ * both. Reading 0x60 clears OBF and must precede the IRQ ack. */
 const CTRL_STATUS_PORT: i32 = 0x64;
 const CTRL_CMD_PORT: i32 = 0x64;
 const CTRL_DATA_PORT: i32 = 0x60;
@@ -57,8 +68,15 @@ const MOUSE_IPC_IRQ_EVENT: i32 = 0xff00;
 const MOUSE_NAME_PACKED: i32 = 0x73756f6d;
 const MOUSE_NAME_TAIL: i32 = 0x65;
 
+/* Subscriber slots. A subscribe beyond this is REFUSED (reported back as a
+ * non-zero status), not queued and not displacing an existing subscriber. */
 const MAX_SUBSCRIBERS: i32 = 4;
-/* Idle wait when the device is polled rather than IRQ-driven. */
+/* Idle wait when the device is polled rather than IRQ-driven. This is the pump's
+ * idleIntervalMs, and its value IS the waiting strategy: it stays 0 on the
+ * IRQ-driven path, meaning the pump parks indefinitely and an idle mouse costs
+ * no CPU because packets arrive as IPC. It is set to this bounded value only on
+ * the polling fallback, where nothing wakes the process and the idle hook must
+ * drain the controller itself. */
 const POLL_INTERVAL_MS: i32 = 10;
 
 const g_loop: EventLoop = defaultLoop;

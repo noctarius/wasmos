@@ -4,13 +4,26 @@
 
 #include <stdint.h>
 
+/* Slots per client-state chunk, not a global ceiling: the chunk list grows by
+ * one FS_CLIENT_CHUNK_CAP-slot chunk from the bump heap whenever every existing
+ * slot is taken, so the real limit is the heap. */
 #define FS_CLIENT_CHUNK_CAP 32 /* max concurrent per-context client state slots */
-#define FS_BACKEND_CAP 8       /* max registered FS backend instances */
+/* Hard cap on simultaneously registered backends; a class event for a ninth
+ * provider finds no free slot and is dropped. */
+#define FS_BACKEND_CAP 8 /* max registered FS backend instances */
+/* Hard cap on open files per client context.  Exhausting it fails the open with
+ * WASMOS_ERR_FS_NO_FD, after fs-manager has closed the backend fd again. */
 #define FSMGR_CLIENT_FD_CAP 32 /* max forwarded open files per client context */
 
 /* Whether a request is being handled at the VFS root or forwarded to a backend. */
 typedef enum { FS_MOUNT_ROOT = 0, FS_MOUNT_BACKEND = 1 } fs_mount_t;
 
+/* One open file, as seen by a client.  fs-manager hands the client the slot's
+ * index in fs_client_state_t.fds[] as the fd, and keeps here the backend that
+ * actually owns the file plus the fd that backend issued; every fd-carrying
+ * request is rewritten through this mapping before being forwarded.  The
+ * indirection is what stops one backend's fd numbers from colliding with
+ * another's. Meaningful only while in_use is non-zero. */
 typedef struct {
     uint8_t in_use;
     int32_t backend_endpoint;

@@ -8,6 +8,9 @@
 #include "../../../abi/generated/c/wasmos_opcodes.h"
 #include "../../../abi/generated/c/wasmos_status.h"
 
+/* Fonts the rasterizer service has built in, selected by id in a FONT_IPC_* request.
+ * Numbered from 1 so 0 stays available as "unspecified"; there is no id for a font loaded
+ * at runtime. */
 enum { FONT_ID_ROBOTO = 1, FONT_ID_ROBOTO_MONO = 2, FONT_ID_NOTO_SERIF = 3 };
 
 /* Status codes are the packed font domain in abi/errors.yaml:

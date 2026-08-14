@@ -1,3 +1,23 @@
+/* chardev_client - the minimal "talk to a driver over IPC" tutorial.
+ *
+ * Demonstrates the standard client sequence every WASMOS guest uses to reach a
+ * service:
+ *   1. read the process-manager endpoint from startup argument 0
+ *      (wasmos_startup_arg(0)) — it is not passed in argv;
+ *   2. create an endpoint of one's own for replies;
+ *   3. resolve the service by name with wasmos_svc_lookup, retrying with
+ *      sched_yield because a driver may still be registering (bounded at 2048
+ *      attempts rather than waiting forever);
+ *   4. send a request and block for its reply with wasmos_ipc_select_one +
+ *      wasmos_ipc_message_read_last.
+ *
+ * The exchange itself writes one byte to the wasm chardev driver and reads it
+ * back, checking the opcode, the request id and the echoed byte each time.
+ *
+ * Returns 0 on success and -1 at the first failed step; there is no console
+ * output, so the exit status is the whole result.
+ *
+ * Precondition: the "chardev" driver must be running. */
 #include <stdint.h>
 #include "wasmos/api.h"
 #include "wasmos/ipc.h"

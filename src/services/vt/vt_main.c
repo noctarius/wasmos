@@ -3,7 +3,42 @@
  * keymap decoder), and renders the visible slot through the "fb" framebuffer
  * driver.  Slot vt-0 belongs to the gfx compositor: for that slot the vt
  * forwards decoded keys (VT_IPC_KEY_FORWARD) and visibility changes
- * (VT_IPC_VIS_NOTIFY) instead of painting text itself. */
+ * (VT_IPC_VIS_NOTIFY) instead of painting text itself.
+ *
+ * IPC surface, as served by the loop in initialize().  The slot model, the
+ * reader/writer registration rules and the role of slot 0 and slot 1 are
+ * documented in vt_types.h; opcode values and request packing come from
+ * abi/opcodes.yaml.  Replies carry only two payload words (arg0, arg1):
+ *
+ *   VT_IPC_WRITE_REQ       1-4 bytes for the source's slot.  NOT acknowledged.
+ *                          request_id is NOT a request id here: it carries the
+ *                          sender's cached switch generation, and a chunk whose
+ *                          value is stale is dropped.  A write from a negative
+ *                          (kernel) source is a mirrored console write: it goes
+ *                          to whichever slot is visible and skips both the
+ *                          ownership and the generation check.
+ *   VT_IPC_SERIAL_INPUT_REQ  same byte packing, from the serial driver; the
+ *                          bytes enter the serial-bound slot's line discipline.
+ *                          Not acknowledged.
+ *   VT_IPC_READ_REQ        arg0=slot.  RESP arg0=0 with arg1=the byte, or
+ *                          arg0=1 with arg1=0 when the queue is empty (a
+ *                          non-blocking poll, not a wait).  The first caller
+ *                          claims the slot's reader role.
+ *   VT_IPC_SET_ATTR_REQ    arg0=fg, arg1=bg, arg2=attr (low byte of each); a
+ *                          colour above 15 is ignored, attr is taken as-is.
+ *                          RESP arg0=0.
+ *   VT_IPC_SWITCH_TTY      arg0=slot.  RESP arg0=the new switch generation,
+ *                          arg1=the now-visible slot.
+ *   VT_IPC_GET_ACTIVE_TTY  RESP arg0=switch generation, arg1=visible slot.
+ *   VT_IPC_REGISTER_WRITER arg0=slot.  RESP arg0=switch generation, arg1=slot.
+ *   VT_IPC_SET_MODE_REQ    arg0=VT_INPUT_MODE_* bits (other bits are masked
+ *                          off).  RESP arg0=the mode applied, arg1=the slot.
+ *
+ * Every failure answers VT_IPC_ERROR with arg0 set to a packed vt-domain code
+ * from abi/errors.yaml, including an unrecognised opcode
+ * (WASMOS_ERR_VT_UNSUPPORTED_REQUEST).  A request that arrives with request_id 0
+ * or from a negative source is never answered, since there is nowhere to reply
+ * to. */
 #include <stdint.h>
 #include "stdio.h"
 #include "wasmos/api.h"

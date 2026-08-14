@@ -60,11 +60,14 @@ extern "C" {
  * </ul>
  */
 
-/* Transfer-buffer kinds. */
+/* Transfer-buffer kinds.  TRANSFER objects are right-sized at acquire; FRAMEBUFFER names
+ * the single hardware scanout buffer, whose size is fixed by the display.  0 is not a
+ * kind, so it is what an unknown kind reports. */
 #define BUFFER_KIND_TRANSFER 1u
 #define BUFFER_KIND_FRAMEBUFFER 2u
 
-/* Borrow access rights. */
+/* Borrow access rights; they compose.  A borrow with neither bit is not useful and a
+ * reborrow may never widen the rights it was given. */
 #define BUFFER_BORROW_READ 0x1u
 #define BUFFER_BORROW_WRITE 0x2u
 
@@ -116,14 +119,18 @@ typedef struct {
  */
 typedef struct {
     xfer_buffer_t buffer;
-    uint32_t owner_context_id;
-    uint32_t borrow_id;
-    uint32_t offset;
-    uint32_t length;
-    uint32_t direction_flags;
+    uint32_t owner_context_id; /* object's owner at map time */
+    uint32_t borrow_id;        /* the borrow this is attached to; 0 for an owner mapping */
+    uint32_t offset;           /* byte offset of the mapped range from the object's base */
+    uint32_t length;           /* mapped range in bytes; [offset, offset+length) is in-object */
+    uint32_t direction_flags;  /* TO_DEVICE / FROM_DEVICE, checked against access rights */
+    /* PHYSICAL address the device is programmed with: the object's physical base plus
+     * offset.  Not a kernel VA and not a user VA, so it must not be dereferenced.  The
+     * backing is physically contiguous over the mapped range, which is what makes a single
+     * address sufficient. */
     uint64_t device_addr;
-    uint8_t attached_via_borrow;
-    uint8_t active;
+    uint8_t attached_via_borrow; /* 1 = borrow mapping, 0 = owner mapping */
+    uint8_t active;              /* cleared by unmap; an inactive mapping is rejected */
 } xfer_buffer_dma_mapping_t;
 
 /**

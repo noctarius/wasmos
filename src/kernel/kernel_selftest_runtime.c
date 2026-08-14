@@ -448,6 +448,18 @@ static process_run_result_t broker_spawn_request_entry(process_t* process, void*
     return PROCESS_RUN_EXITED;
 }
 
+/* Spawns the baseline kernel self-tests as children of init_pid: the demand
+ * page-fault test, the IPC wait/send pair, the broker spawn-delegation test,
+ * and — only when preempt_test_enabled is non-zero — the preemption
+ * busy/observer pair.
+ *
+ * The one-shot tests are marked auto-reap so they do not linger as zombies
+ * holding process slots.  Each test's static state is reset here, so only one
+ * baseline run can be in flight.
+ *
+ * Returns 0 when everything was spawned and -1 at the FIRST failure, leaving
+ * earlier tests running.  A 0 says they started; the verdicts arrive later as
+ * "[test] ..." log lines and the individual exit statuses. */
 int kernel_selftest_spawn_baseline(uint32_t init_pid, uint8_t preempt_test_enabled) {
     uint32_t pf_test_pid = 0;
     uint32_t ipc_wait_pid = 0;

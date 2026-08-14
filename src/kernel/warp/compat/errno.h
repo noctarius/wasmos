@@ -1,16 +1,28 @@
 #pragma once
 /* compat/errno.h — freestanding errno stub for bare-metal kernel.
  *
- * The kernel has no per-thread errno cell.  errno is a constant zero (no
- * error), so code checking it after a syscall stub gets a safe default.  WARP only checks errno
- * after mmap/mprotect; those stubs set it to ENOMEM on failure via the macro below if needed.
+ * Provides the POSIX error-number constants listed below plus an errno macro.
+ * compat/cerrno is a one-line wrapper around this file.
  *
- * NOTE: if WARP code *writes* to errno (e.g. errno = ENOMEM), the macro
- * expands to a write to a discarded rvalue — the compiler will warn. A
- * writable global would require per-CPU storage; add one if WARP starts
- * writing errno. */
+ * The kernel has no per-thread errno cell, so errno expands to the literal 0
+ * (no error).  Nothing in the kernel sets it: the POSIX stubs in
+ * src/kernel/warp/posix_kernel.c report failure through their return value
+ * (MAP_FAILED from mmap, EINVAL/ENOMEM returned directly by posix_memalign) and
+ * never touch errno.  No WARP translation unit in the kernel build reads errno
+ * either — the one WARP source that does, utils/ExecutableMemory.cpp, is not
+ * compiled here.  The constants exist so that WARP code and posix_kernel.c
+ * agree on the numeric values.
+ *
+ * Consequences of the constant-zero errno, both of which are compile-time
+ * failures rather than silent misbehaviour:
+ *   - `errno = ENOMEM` expands to `0 = 12`, which is a hard error ("expression
+ *     is not assignable"), not a warning.
+ *   - `&errno` and any other lvalue use fail the same way.
+ * A reader that only tests errno compiles and always sees success, which is the
+ * one silent case; add real per-CPU storage before letting WARP branch on it. */
 
-/* Common POSIX error numbers. */
+/* Common POSIX error numbers.  Values match Linux/glibc so that a WARP source
+ * comparing against its own copy of these names agrees with posix_kernel.c. */
 #define EPERM 1    /* Operation not permitted */
 #define ENOENT 2   /* No such file or directory */
 #define ESRCH 3    /* No such process */
@@ -28,5 +40,6 @@
 #define ENOSYS 38  /* Function not implemented */
 #define ENOTSUP 95 /* Operation not supported */
 
-/* errno is always 0 in the freestanding kernel context. */
+/* errno is always 0 in the freestanding kernel context.  Read-only: this is an
+ * rvalue, so it can be compared but never assigned or address-taken. */
 #define errno 0

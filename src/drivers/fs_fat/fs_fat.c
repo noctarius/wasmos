@@ -332,6 +332,21 @@ static void fat_mount_bringup(void) {
     }
 }
 
+/* Driver entry point: acquire a block server, mount the volume, register under
+ * the fs.backend class, then run the reactor loop forever.
+ *
+ * `proc_endpoint` is overwritten from the spawn-info contract. `block_endpoint`
+ * is nominally a caller-supplied override, but every entry argument is passed as
+ * zero at spawn, so the `block_endpoint > 0` test never holds and the block
+ * server is ALWAYS discovered through svc_lookup below -- that discovery loop
+ * spins with a yield until a "block" provider registers, so this call does not
+ * return until one exists.
+ *
+ * Mounting happens BEFORE the ready notification, so the driver never advertises
+ * a volume it has not parsed. On success this does not return: the reactor loop
+ * is unbounded. Every bring-up failure calls fat_stall() rather than returning,
+ * so a failed mount leaves the process parked instead of exiting -- there is no
+ * failure status on this path for a caller to observe. */
 WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t block_endpoint,
                                       int32_t ignored_arg2, int32_t ignored_arg3) {
     int32_t reply_endpoint;

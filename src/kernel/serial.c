@@ -84,10 +84,18 @@ static inline ksync_spinlock_t* serial_lock_ptr(void) {
     return (ksync_spinlock_t*)(void*)addr;
 }
 
+/* Arms the higher-half rebasing described in the file header.  Set it once the
+ * kernel is executing from the higher-half alias and the low identity map may be
+ * gone; every *_slot() accessor, the string-literal rebasing, and the console and
+ * klog ring pointers key off this one flag.  Any non-zero value enables it.
+ * Turning it back off while running from a root without a low identity map makes
+ * the logging path dereference unmapped low addresses. */
 void serial_enable_high_alias(uint8_t enabled) {
     g_serial_high_alias_enabled = enabled ? 1 : 0;
 }
 
+/* Normalised to 0 or 1.  Also read from libc.c's kernel_str_ptr, which is why it
+ * has to stay cheap and side-effect free. */
 uint8_t serial_high_alias_enabled(void) {
     return g_serial_high_alias_enabled;
 }
@@ -313,6 +321,12 @@ static int serial_remote_read_char(uint8_t* out_char) {
     return 0;
 }
 
+/* Appends one byte to the 64-entry keyboard ring under g_serial_lock.  A full
+ * ring drops the byte silently: keystrokes are advisory and blocking here would
+ * stall whatever driver context pushed it.
+ *
+ * Because it takes the same lock as serial_write, this must not run from a
+ * context that can interrupt a locked writer on the same CPU. */
 void serial_input_push(uint8_t ch) {
     ksync_spinlock_lock(serial_lock_ptr());
     if (g_input_count < INPUT_RING_SIZE) {
@@ -323,6 +337,10 @@ void serial_input_push(uint8_t ch) {
     ksync_spinlock_unlock(serial_lock_ptr());
 }
 
+/* Pops the oldest pushed keystroke.  Returns 1 and stores it in *out, or 0 with
+ * *out untouched when the ring is empty — never blocks, and never falls back to
+ * COM1.  out is not checked for NULL and is dereferenced whenever a byte is
+ * available.  Takes g_serial_lock. */
 int serial_input_read(uint8_t* out) {
     ksync_spinlock_lock(serial_lock_ptr());
     if (g_input_count == 0) {
@@ -336,6 +354,9 @@ int serial_input_read(uint8_t* out) {
     return 1;
 }
 
+/* Shared-memory id of the one-page console ring, creating it on first use.
+ * Returns 0 when creation fails, which is the same value as "not yet created" —
+ * the caller cannot distinguish the two, and a later call retries. */
 uint32_t serial_console_ring_id(void) {
     uint32_t* ring_id_slot = serial_console_ring_id_slot();
     if (*ring_id_slot == 0) {
@@ -344,6 +365,11 @@ uint32_t serial_console_ring_id(void) {
     return *ring_id_slot;
 }
 
+/* The console ring as the raw value mm_shared_create handed back: a PHYSICAL
+ * base, NOT rebased onto the higher-half alias even when that alias is armed.
+ * serial_ring_write does that rebasing itself on every write; a caller that
+ * dereferences this pointer has to do the same, or run under a root that still
+ * identity-maps low memory.  0 when the ring could not be created. */
 void* serial_console_ring_ptr(void) {
     console_ring_t** ring_slot = serial_console_ring_slot();
     if (!*ring_slot) {
@@ -352,6 +378,15 @@ void* serial_console_ring_ptr(void) {
     return *ring_slot;
 }
 
+/* Points the console's READ path at a user-space serial driver reachable at
+ * `endpoint`, creating the kernel-owned reply endpoint on first use and clearing
+ * any in-flight read request.  The transmit path is unaffected and keeps writing
+ * COM1 directly (see serial_transmit).
+ *
+ * Returns 0 on success and -1 when the endpoint is IPC_ENDPOINT_NONE, has no
+ * owner, is owned by the kernel itself (which would make the kernel its own
+ * peer), or when the reply endpoint cannot be created.  The link is dropped
+ * again automatically by serial_remote_reset on a fatal IPC error. */
 int serial_register_remote_driver(uint32_t endpoint) {
     if (endpoint == IPC_ENDPOINT_NONE) {
         return -1;
@@ -377,12 +412,23 @@ int serial_register_remote_driver(uint32_t endpoint) {
     return 0;
 }
 
+/* Installs a driver vtable and returns the previous one, so a caller can restore
+ * it.  A NULL argument restores the built-in COM1 driver rather than clearing
+ * the slot.  The vtable is borrowed, not copied: it must outlive the
+ * installation.
+ *
+ * Only the init hook is reached from the kernel's own paths.  serial_transmit
+ * and serial_read_char call COM1 directly and deliberately bypass this pointer,
+ * because both run in contexts where a low-address global must not be
+ * dereferenced. */
 const serial_driver_t* serial_set_driver(const serial_driver_t* driver) {
     const serial_driver_t* prev = g_serial_driver;
     g_serial_driver = driver ? driver : &g_com1_driver;
     return prev;
 }
 
+/* Never NULL: the slot is initialised to the built-in COM1 driver and
+ * serial_set_driver refuses to clear it. */
 const serial_driver_t* serial_get_driver(void) {
     return g_serial_driver;
 }
@@ -445,6 +491,16 @@ static void klog_ring_write(const char* s) {
     }
 }
 
+/* Adopts an already-initialised ringbuf, owned by owner_context_id as
+ * xfer-buffer `id`, as the destination of the additional klog stream.  Only one
+ * ring is tracked; a second successful call replaces the first, and there is no
+ * unregister.
+ *
+ * Returns 0 once the ring is live, -1 for a zero id, an id that does not resolve
+ * to a BUFFER_KIND_TRANSFER buffer of that owner, a base that is zero or not
+ * page-aligned, a zero size, or a region that does not carry a valid ringbuf
+ * header.  The rejection matters: an accepted bad region would corrupt memory on
+ * every subsequent klog write. */
 int klog_register_ring(uint32_t owner_context_id, uint32_t id) {
     if (id == 0) {
         return -1;
@@ -490,6 +546,11 @@ static void serial_transmit(char c) {
     serial_put_internal(c);
 }
 
+/* Programs the UART through the installed driver's init hook and creates the
+ * console ring.  Safe to call again: com1_serial_init only rewrites UART
+ * registers, and serial_ring_init returns immediately once a ring exists.
+ * Failure to create the ring is not reported; logging then reaches COM1 and the
+ * early-log buffer only. */
 void serial_init(void) {
     if (g_serial_driver && g_serial_driver->init) {
         g_serial_driver->init();
@@ -497,6 +558,13 @@ void serial_init(void) {
     serial_ring_init();
 }
 
+/* The normal console writer: takes g_serial_lock so concurrent CPUs cannot
+ * interleave their output, then does the work in serial_write_unlocked.
+ *
+ * Spins on the UART's TX-ready bit for every byte, so cost is proportional to
+ * the string at 115200 baud.  NULL is ignored.  Not safe from an exception, NMI
+ * or panic path, or from anything that can interrupt a CPU already inside this
+ * lock — use serial_write_unlocked there. */
 void serial_write(const char* s) {
     if (!s) {
         return;
@@ -506,6 +574,11 @@ void serial_write(const char* s) {
     ksync_spinlock_unlock(serial_lock_ptr());
 }
 
+/* Formats through vsnprintf into a 512-byte stack buffer and emits it with
+ * serial_write, so it takes g_serial_lock and carries the same context
+ * restrictions.  Output longer than 511 bytes is truncated, silently.  fmt is
+ * rebased onto the higher-half alias when it points into the kernel image; the
+ * variadic string arguments are rebased later, inside vsnprintf. */
 void serial_printf(const char* fmt, ...) {
     char buf[512];
     if (serial_ptr_needs_kernel_alias((uintptr_t)fmt)) {
@@ -518,6 +591,9 @@ void serial_printf(const char* fmt, ...) {
     serial_write(buf);
 }
 
+/* serial_printf without the lock, for panic, exception and NMI paths.  See
+ * serial_write_unlocked for why the unlocked variants exist and what they give
+ * up. */
 void serial_printf_unlocked(const char* fmt, ...) {
     char buf[512];
     if (serial_ptr_needs_kernel_alias((uintptr_t)fmt)) {
@@ -530,6 +606,9 @@ void serial_printf_unlocked(const char* fmt, ...) {
     serial_write_unlocked(buf);
 }
 
+/* Emits value as a fixed 16-digit uppercase "0x…" line with a trailing newline —
+ * no width suppression, no vsnprintf, nothing that could allocate or recurse.
+ * Takes g_serial_lock. */
 void serial_write_hex64(uint64_t value) {
     char buf[20];
     static const char hex[] = "0123456789ABCDEF";
@@ -543,6 +622,9 @@ void serial_write_hex64(uint64_t value) {
     serial_write(buf);
 }
 
+/* serial_write_hex64 without the lock.  The lowest-dependency way to get a
+ * 64-bit value out of a fault handler: stack buffer only, no formatter, no
+ * lock. */
 void serial_write_hex64_unlocked(uint64_t value) {
     char buf[20];
     static const char hex[] = "0123456789ABCDEF";
@@ -556,6 +638,21 @@ void serial_write_hex64_unlocked(uint64_t value) {
     serial_write_unlocked(buf);
 }
 
+/* The whole write path — console ring, klog ring, COM1 TX with LF->CRLF
+ * expansion, early-log capture — with the lock deliberately NOT taken.
+ *
+ * It exists for contexts that cannot wait on g_serial_lock: a panic or exception
+ * handler may have interrupted a CPU that is holding it, and an NMI can arrive
+ * while this very CPU holds it, so taking it there deadlocks instead of
+ * printing.  The cost is that output from another CPU can interleave
+ * mid-string, and a concurrent writer can corrupt the ring positions; a
+ * garbled panic line is the accepted trade for one that appears at all.
+ *
+ * Also the body of serial_write, which supplies the lock.  Preemption is
+ * disabled across the transmit loop either way, so a preemptible caller cannot
+ * be descheduled part-way through a line.  A NULL string is ignored, and a
+ * string literal in the kernel image is rebased onto the higher-half alias when
+ * that alias is armed. */
 void serial_write_unlocked(const char* s) {
     if (!s) {
         return;
@@ -594,10 +691,22 @@ void serial_write_unlocked(const char* s) {
     preempt_enable();
 }
 
+/* Bytes currently retrievable through serial_early_log_copy, saturating at
+ * EARLY_LOG_SIZE (4096) once the capture buffer has wrapped.  Read without the
+ * lock, so it can grow between this call and the copy. */
 uint32_t serial_early_log_size(void) {
     return *serial_early_log_count_slot();
 }
 
+/* Copies up to len bytes of the captured early log into dst, where offset 0 is
+ * the OLDEST retained byte rather than a buffer index — the ring's wrap is
+ * resolved here, so a caller can page through it with a plain counter.
+ *
+ * len is clamped to what remains after offset; an offset at or past the end
+ * copies nothing.  There is no return value and no way to tell a clamp from a
+ * full copy, so pair it with serial_early_log_size.  dst is a caller buffer of
+ * at least len bytes, borrowed for the call; NULL is ignored.  Takes no lock, so
+ * a concurrent serial_write can tear the result. */
 void serial_early_log_copy(uint8_t* dst, uint32_t offset, uint32_t len) {
     uint8_t* early_log = serial_early_log_buf();
     uint32_t early_head = *serial_early_log_head_slot();
@@ -616,6 +725,14 @@ void serial_early_log_copy(uint8_t* dst, uint32_t offset, uint32_t len) {
     }
 }
 
+/* Non-blocking single-character read from the console.  Returns 1 with *out_char
+ * set, 0 when no character is available yet, or -1 for a NULL out_char.
+ *
+ * A registered remote driver is tried first and is pipelined, not synchronous:
+ * the first call with nothing outstanding sends a read request and returns 0, and
+ * a later call collects the reply.  Any failure of that exchange falls through to
+ * a direct COM1 poll, so the console keeps working when the driver dies.  Takes
+ * no lock. */
 int serial_read_char(uint8_t* out_char) {
     if (!out_char) {
         return -1;

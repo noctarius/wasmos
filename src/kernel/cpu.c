@@ -1,5 +1,12 @@
 /* cpu.c - x86_64 CPU early-init wrapper: delegates to arch/x86_64/cpu_x86_64.c.
- * Also hosts the exception/page-fault dispatch called from cpu_isr.S stubs. */
+ * Also hosts the exception/page-fault dispatch called from cpu_isr.S stubs.
+ *
+ * Every entry point here acts on the CALLING CPU only: the GDT, IDT pointer and
+ * TSS all live in that CPU's cpu_local_t slot, so an AP must call cpu_init()
+ * itself rather than inherit the BSP's tables.  These are thin forwarders; the
+ * behaviour, including x86_cpu_set_kernel_stack's rsp0 == 0 no-op and the
+ * BSP-only, idempotent nature of x86_cpu_relocate_tables_high, is documented at
+ * the arch implementations. */
 #include "cpu.h"
 #include "arch/x86_64/cpu_x86_64.h"
 

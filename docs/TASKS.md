@@ -365,9 +365,6 @@ and `architecture/33-completion-ports.md`.
   unsigned wire representation and the reserved invalid value).
 - [ ] [BUG][P1] Make console-backed libc `read`/`write` reject or chunk counts beyond the
   `int32_t` ABI limit and return the actual byte count from the console backend.
-- [ ] [FEATURE][P2] Add the AssemblyScript async/coroutine wrappers over the shared
-  future/promise contract (native and WASM cores plus Rust/Go/Zig are done;
-  AssemblyScript remains deferred).
 - [ ] [FEATURE][P2] Defer true WASM parallelism and hard coroutine preemption until runtime
   locking/reentrancy has a dedicated design and validation plan.
 - [ ] [FEATURE][P2] Implement completion ports (`architecture/33`, design proposal only): a
@@ -444,6 +441,50 @@ and `architecture/33-completion-ports.md`.
   owns it, allow" and admit a forged source endpoint. Return the owner through an
   out-parameter with a status, as the endpoint lookups already do, so "no such
   endpoint" and "owned by the kernel" stop sharing a value.
+
+- [ ] [CLEANUP][P1] Retire blocking IPC from app and service CALL SITES, then delete
+  the blocking primitives that only those call sites use. Sequenced, because the
+  order is forced by what gates what:
+
+  1. **AssemblyScript coroutines: DONE.** All four AS drivers (keyboard, mouse,
+     serial, rtc) are `@coroutine` entry points with `@suspend` waits driven by
+     libc's pump; their only remaining mention of `ipc_recv` is a comment saying
+     registration deliberately does not use it. `src/libc/assemblyscript/` carries
+     coroutine.ts / eventloop.ts / runtime.ts and `tools/as_coroutine_transform.mjs`
+     lowers the entry point. This did NOT need the generated coroutine host-call
+     family that was once proposed as the prerequisite -- AS got its own
+     implementation instead, so nothing here gates the rest.
+  2. **AssemblyScript surface that is still blocking**: five `ipc_recv(...)` sites
+     in `src/libc/assemblyscript/wasmos.ts`, eight `ipc.call` sites in
+     `src/libui/assemblyscript/libui.ts`, three in `src/utils/date/date.ts`, and
+     `examples/assemblyscript/minesweeper`. libui.ts is the one that matters: every
+     AS UI app inherits its blocking behaviour, so a UI cannot service input while
+     it waits on the compositor.
+  3. **C**, ~36 files and not uniform. cli, fs_manager, virtio_net, pci_bus and the
+     net_tcp_* examples already touch futures, so they are partial conversions; the
+     utils and examples are shallow. fs_manager (6 sites), cli (5) and fs_fat (5)
+     are the bulk.
+  4. **Zig / Rust / Go**, small: font_service (a hand-rolled 50 ms x 200 poll, the
+     one with a symptom to point at), gfx_compositor, `libc/rust/wasmos.rs`,
+     tetris, `libc/go/wasmos.go`.
+  5. **Delete the primitives** -- `ipc_select_one`/`ipc_recv` host calls,
+     `wasmos_ipc_call*`, `wasmos_sys_ipc_call_native`. Only meaningful after 2-4;
+     doing it earlier is a flag day.
+
+  **Syscall 6 (`WASMOS_SYSCALL_IPC_CALL`) is independent and can go now.** Its
+  libc wrapper `wasmos_sys_ipc_call` has zero callers, and the kernel handler at
+  `src/kernel/syscall.c:724` is reachable only through it. Removing it also
+  removes the reply-replay surface that `syscall_ipc_request_id_issued` guards.
+  Do not confuse it with `wasmos_sys_ipc_call_native`, which is the native
+  vtable path and has live callers.
+
+  **`ipc_endpoint_wait_for` stays.** A coroutine still has to park somewhere: the
+  bottom of an event loop must block or the CPU spins, which is the whole point of
+  the idle/yield-spin work (native drivers already call `api->ipc_wait` so the CPU
+  can reach idle/hlt). So the target is not "no blocking anywhere" but exactly one
+  sanctioned blocking point per component, at the bottom of its loop -- and none in
+  a call site, where blocking is what makes a component unable to service anything
+  else while it waits.
 
 ## Runtime, Packaging, and Service Discovery
 

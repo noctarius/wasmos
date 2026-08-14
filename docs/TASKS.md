@@ -339,6 +339,16 @@ and `architecture/33-completion-ports.md`.
     (`INIT/PROMPT/READ/WAIT_IPC/FAILED`) machine with a coroutine per command.
     Do not collapse the endpoints first: sharing one endpoint while those
     blocking receives remain just moves the input loss into them.
+  - [ ] AssemblyScript surface, which the UI apps sit on:
+    `src/libui/assemblyscript/libui.ts` (8 `ipc.call` sites),
+    `src/utils/date/date.ts` (3), and `examples/assemblyscript/minesweeper`.
+    libui.ts is the one that matters -- every AS UI app inherits its blocking
+    behaviour, so a UI cannot service input while it waits on the compositor.
+  - [ ] `examples/c/menu_bar/menu_bar.c` (C, not AssemblyScript): one blocking
+    `wasmos_ipc_call` at line 50, plus a `sched_yield` spin waiting for the rtc
+    service to appear. The spin is the more objectionable of the two under the
+    project's no-busy-spin rule; the service-discovery wait belongs on a class
+    subscription or a bounded park.
 - [ ] [BUG][P1] Publish `POLL_EV_IN` on the notification path so NOTIFICATION endpoints
   are visible to `ipc_select_wait`: `ipc_notify_from` does not call
   `poll_notify` (`src/kernel/ipc.c:363-385`). Prerequisite for completion ports.
@@ -864,6 +874,14 @@ returns; `FS_ERR_*`/`PROC_*` ride IPC opcodes), so the migration depends on them
   of zeros -- harmless, but do not "fix" the bound in isolation and leave the dead
   mechanism looking deliberate.
 
+- [ ] [ENHANCEMENT][P3] Decide what the generated cause-chain helpers are for, or
+  drop them. `wrap`/`unwrap`/`root`/`is`/`as` and the 8-byte frame / 40-byte error
+  object are generated in all five languages and have **zero call sites**, because
+  an IPC reply's `arg0..arg3` fits only two frames -- so a chain cannot cross the
+  boundary the error model exists to serve. Either give them a transport (an error
+  object in a transfer buffer, say) and convert real call sites, or remove the
+  generators and keep the packed `(domain, code)` axis alone.
+
 ## Filesystems and Storage
 - [ ] [BUG][P0] Fix `test_exec_fs_write_smoke`, the last failing test in the QEMU
   integration suite (run 31081191205, job 92550164406 — everything else in that
@@ -1241,3 +1259,73 @@ Source: `architecture/25-diagnostics-status.md`,
   because it is the only target that exercises cross-CPU work stealing under
   load, every change to that path currently lands without a working end-to-end
   check (`src/kernel/kernel_sched_smp_stress_runtime.c`).
+
+- [ ] [BUG][P1] `test_virtio_net_notify_e2e` (the `notify rx=` / RX-frame-notify
+  case) fails intermittently, roughly 1 run in 5: the guest stays alive and
+  reaches `arp sent`, then no `notify rx=` arrives, so it fails as an assertion
+  rather than a timeout. Distinguish it from the whole-session stalls, where
+  everything stops and the test ERRORs instead.
+
+  The cause is known, so this is a scheduling question rather than an
+  investigation: the net-stack-to-driver framing is still legacy per-frame IPC
+  with `tx_slots[4]` and drop-on-`ERR_MEM` under burst, not the ring transport
+  (see the owner-push wire-protocol item under Networking, which is the real
+  fix). Until that lands the test is expected to flake.
+
+  If bisecting it anyway: **use separate build directories and do not `git
+  stash`.** A previous attempt was unsound because a stash silently did not
+  take, so both arms ran identical code and the result meant nothing.
+
+- [ ] [BUG][P1] Chase the intermittent whole-session hang: roughly 2 sessions per
+  full CI suite run go silent for 100-120 s and are killed by the harness, with
+  the next log line a fresh UEFI boot, so they never resume. The stall point
+  differs every run (`fat` backend registered, `native-call-smoke` start, `using
+  AOT binary`, `[calculator] ready`), which points at a timing race rather than a
+  deterministic bug. Whichever test owns the dead session fails, reported as
+  `ERROR: setUpClass ... CLI prompt not reached` when it needed the prompt.
+
+  Rate was unchanged across a large ABI change (2 stalls / 36 boots before, 2 / 36
+  after), and it has only ever been seen in CI -- the full suite is green locally
+  on WARP. Reproducing needs a Linux x86 host with `-smp 4` and repeated runs;
+  MTTCG on Apple Silicon masks memory-ordering races, which is why local runs say
+  nothing about it.
+
+  Do not conflate it with the virtio-net notify flake above: there the guest stays
+  alive and one expected message is missing (an assertion FAIL); here everything
+  stops (a test ERROR). Both merely present as "timed out waiting for something".
+
+- [ ] [BUG][P2] Make `run-qemu-ring3-threading-test` assert the probe it names.
+  The ring-3 thread lifecycle probe never issues a join syscall: instrumenting
+  every join for the `ring3-threading` process name gave zero hits, so all three
+  `wasmos_thread_spawn_cont(...) > 0` guards in
+  `src/kernel/ring3_thread_lifecycle_probe.c` are false and every join is skipped.
+  The test cannot notice, because every marker it requires (`thread create`,
+  `join`, `join self deny`, `detach syscall ok`) is gated on the `ring3-native`
+  process name and comes from the OTHER probe -- so the "lifecycle marker test"
+  asserts a different process's markers and the lifecycle probe contributes
+  nothing observable.
+
+  When fixing: the probe blob is mapped exec+non-writable over `code_size` bytes
+  only, so growing its `.bss` (for example adding a fourth 4 KiB stack) is not
+  obviously safe.
+
+- [ ] [DOCS][P3] Correct the eight commit messages in `fdd4472ef6..1c6bc236ec`
+  whose "verified on both runtimes" gate lines actually name WARP twice. The work
+  itself was verified; only the messages are wrong. A follow-up note commit is
+  preferable to a history rewrite.
+
+- [ ] [ENHANCEMENT][P2] Make the build configuration say what it is, or refuse.
+  Two related traps, both of which have already cost a session by testing the
+  wrong runtime:
+  - `-DWASMOS_WASM_RUNTIME_*` on the command line LOSES to a `.config` already
+    seeded in the build directory, because kconfig FORCEs the cached value
+    afterwards. Consistent with the documentation, but the flag silently does
+    nothing rather than erroring.
+  - A build tree seeded from the base defconfig ends up with a `.config` that does
+    not describe its own runtime (the cache retains the previous value). Trees
+    seeded from a runtime-bearing defconfig are correct.
+
+  Either make the explicit flag win, or fail the configure step when it disagrees
+  with the cached value. Until then the only reliable check is the `runtime=` boot
+  marker plus `nm` on the staged `kernel.elf`
+  (`skills/wasmos-build-and-run/SKILL.md`).

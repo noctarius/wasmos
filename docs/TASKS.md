@@ -297,6 +297,38 @@ Source: `architecture/06-memory-management.md`,
   `paging_clone_low_slot_in_root` copies PML4[511]; it deep-copies PML4[0], the
   low identity slot. PML4[511] is copied by `paging_create_address_space`.
 
+- [ ] [BUG][P1] Refuse a fault against a region with `phys_base == 0` instead of
+  mapping physical page 0. `mm_handle_page_fault` computes
+  `phys_base + (page_base - region->base)`, so a region whose backing was never
+  assigned resolves to low physical memory and maps it into the faulting process
+  (`src/kernel/memory.c`).
+- [ ] [BUG][P1] Balance `mm_shared_map`'s pin in `mm_shared_unmap`. Unmap drops the
+  logical reference but neither undoes the `pfa_pin_pages` that map installed nor
+  tears down the PTEs; only `mm_context_release_regions` balances it, so a map/unmap
+  pair leaks the pin for the life of the context (`src/kernel/memory.c`).
+- [ ] [BUG][P2] Reclaim a shared region that is created and never used.
+  `mm_shared_create` publishes with `refcount == 0` while reclamation happens only
+  on the release/unmap paths, so a region nobody retains or maps holds its frames
+  until the kernel exits (`src/kernel/memory.c`).
+- [ ] [BUG][P2] Give `capability_dma_commit` a matching release, a clamp to
+  `dma_max_bytes`, and an overflow check. It only ever accumulates, so a long-lived
+  context's committed total drifts upward and past the window it is meant to
+  enforce (`src/kernel/capability.c`).
+- [ ] [ENHANCEMENT][P2] Make `kernel_boot_run_low_slot_sweep_diagnostic` behave like
+  its name. It mutates every root it visits, returns nothing, and stops at the first
+  failure -- leaving later processes with their low slot intact and no indication
+  which ones (`src/kernel/kernel_boot_runtime.c`).
+- [ ] [CLEANUP][P3] Remove the dead branch in `paging.c` whose
+  `if (pt[pt_idx] & PT_FLAG_PRESENT)` arm is byte-identical to its fallthrough.
+- [ ] [CLEANUP][P3] Resolve the unused serial driver-hook surface:
+  `serial_set_driver`'s `put_char`/`read_char` hooks are never invoked (only
+  `.init` is honoured, because `serial_transmit`/`serial_read_char` address COM1
+  directly by design), and `serial_set_driver`, `serial_get_driver` and
+  `serial_console_ring_ptr` have no in-tree callers (`src/kernel/serial.c`).
+- [ ] [CLEANUP][P3] Remove or wire up `g_mem_service_reply_endpoint`: memory_service
+  registers and stores it, and nothing ever reads it
+  (`src/kernel/memory_service.c`).
+
 ## Scheduler, Threads, and IPC
 
 Source: `architecture/07-scheduling-and-preemption.md`,
@@ -1119,7 +1151,7 @@ Remaining:
 - [ ] [ENHANCEMENT][P2] Steer MSI vectors at CPUs other than the BSP. Both `msi_x86_64.c`
   (`MSI_DEST_APIC_ID`) and `ioapic_program_rtes()` hardcode LAPIC 0; changing
   one without the other splits interrupt affinity across two models.
-- [ ] [CLEANUP][P3] Move the kernel notify-type space (`IPC_IRQ_EVENT_TYPE` 0xFF00,
+- [ ] [CLEANUP][P2] Move the kernel notify-type space (`IPC_IRQ_EVENT_TYPE` 0xFF00,
   `IPC_MSI_EVENT_TYPE` 0xFF01) into `abi/opcodes.yaml`. Both are currently
   hand-mirrored into each driver source instead of generated.
 - [ ] [FEATURE][P2] Define the net owner-push wire protocol so TX/RX carry an explicit
@@ -1397,3 +1429,18 @@ Source: `architecture/25-diagnostics-status.md`,
   order- or timing-dependent rather than broken. Uninvestigated; the value is in
   finding out whether it shares a cause with the other intermittent CLI-suite
   failures rather than in the case itself.
+
+- [ ] [BUG][P1] Make the kernel build track header dependencies. The kernel objects
+  are produced by hand-written `clang -c` commands whose DEPENDS list names only the
+  source file, so editing a header -- or even touching the `.c` -- does not trigger a
+  rebuild. Every compile-time guarantee in the kernel is therefore only evaluated on
+  a clean build: `_Static_assert`s added to couple two constants pass locally while
+  the object is stale, and a changed struct layout can link against callers compiled
+  against the old one.
+
+  This is the same defect class as the AOT symbol-table staleness already fixed at
+  `CMakeLists.txt:1147`, where `warp_aot.cpp` depended only on its own source while
+  including a generated table named by arity. That one was found only after it
+  produced an "Imported symbol could not be found" that was mistaken for a WARP
+  quirk for a whole session; the kernel rule has the same shape and has not
+  produced a visible symptom yet.

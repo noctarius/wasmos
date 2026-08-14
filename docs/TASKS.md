@@ -938,10 +938,12 @@ returns; `FS_ERR_*`/`PROC_*` ride IPC opcodes), so the migration depends on them
   `wasm_driver_manifest_t` (which also removes the fixed `args[4]` marshalling
   limit in the wasm3 backend).
 
-  The entry-argument half is entirely dead, and misleadingly so. Around fifty
-  `linker.metadata` files declare `entry_arg_bindings = ["proc.endpoint"]`, the
-  packer writes those records into every container, and `wasmos_app.c` parses them
-  into `desc->entry_arg_bindings[]` -- which **nothing reads**.
+  The entry-argument half is entirely dead, and misleadingly so. 39 of the 59
+  `linker.metadata` files declare `entry_arg_bindings = ["proc.endpoint"]` and the
+  packer writes those records into every container. The kernel no longer projects
+  them: `wasmos_app_desc_t` carries `reserved[4]` in their place and the parser
+  walks the records for offset integrity only. What remains is the packer and
+  manifest side still publishing a binding that binds nothing.
   `pm_apply_entry_bindings` ignores its `desc` argument and hardcodes
   `entry_argc = 4` with all four words zero. A driver author reading a manifest
   reasonably concludes that is how a service receives its endpoint; it is not, and

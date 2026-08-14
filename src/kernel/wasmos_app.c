@@ -663,7 +663,10 @@ int wasmos_app_parse(const uint8_t* blob, uint32_t blob_size, wasmos_app_desc_t*
 
     out_desc->req_ep_count = 0;
     out_desc->cap_count = 0;
-    out_desc->entry_arg_binding_count = 0;
+    out_desc->reserved[0] = 0u;
+    out_desc->reserved[1] = 0u;
+    out_desc->reserved[2] = 0u;
+    out_desc->reserved[3] = 0u;
 
     /* The parser walks the blob linearly in the same order the packer writes it:
      * fixed header, name, entry, endpoint table, capability table, entry-arg
@@ -717,6 +720,11 @@ int wasmos_app_parse(const uint8_t* blob, uint32_t blob_size, wasmos_app_desc_t*
         out_desc->cap_count++;
     }
 
+    /* Walked but not projected: the records must still be stepped over so the
+     * driver-match, region and memory-hint sections that follow are read at the
+     * right offset, and their bounds still validated because a malformed length
+     * here would desynchronise all of them.  Nothing consumes the names -- see
+     * wasmos_app_desc_t::reserved. */
     for (uint32_t i = 0; i < entry_arg_binding_count; ++i) {
         if (check_bounds(off, sizeof(wasmos_entry_arg_binding_t), blob_size) != 0) {
             return -1;
@@ -726,10 +734,7 @@ int wasmos_app_parse(const uint8_t* blob, uint32_t blob_size, wasmos_app_desc_t*
         if (check_bounds(off, binding->name_len, blob_size) != 0) {
             return -1;
         }
-        out_desc->entry_arg_bindings[i].name = &blob[off];
-        out_desc->entry_arg_bindings[i].name_len = binding->name_len;
         off += binding->name_len;
-        out_desc->entry_arg_binding_count++;
     }
 
     for (uint32_t i = 0; i < driver_match_count; ++i) {

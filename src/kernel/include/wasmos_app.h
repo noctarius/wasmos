@@ -69,6 +69,9 @@
  * truncated table would desynchronise the section walk. */
 #define WASMOS_APP_MAX_REQUIRED_ENDPOINTS 8u
 #define WASMOS_APP_MAX_CAP_REQUESTS 8u
+/* Bounds the header's entry_arg_binding_count only.  The records are still walked
+ * for offset integrity but no longer projected into the descriptor, so this caps
+ * what the parser will step over rather than what it will store. */
 #define WASMOS_APP_MAX_ENTRY_ARG_BINDINGS 4u
 #define WASMOS_APP_MAX_DRIVER_MATCHES 8u
 
@@ -88,14 +91,6 @@ typedef struct {
     uint32_t name_len;
     uint32_t flags;
 } wasmos_app_cap_request_t;
-
-/* One entry of the entry-arg binding table: the name of a value the spawner is expected
- * to bind into the corresponding entry-point argument slot, by position.  `name` is a
- * non-NUL-terminated alias into the blob. */
-typedef struct {
-    const uint8_t* name;
-    uint32_t name_len;
-} wasmos_app_entry_arg_binding_t;
 
 /* One PCI/legacy device pattern a driver package claims.  This layout is also the
  * on-wire record: the parser copies it straight out of the blob, so its size and field
@@ -168,8 +163,17 @@ typedef struct {
     wasmos_app_req_endpoint_t req_eps[WASMOS_APP_MAX_REQUIRED_ENDPOINTS];
     uint32_t cap_count;
     wasmos_app_cap_request_t caps[WASMOS_APP_MAX_CAP_REQUESTS];
-    uint32_t entry_arg_binding_count;
-    wasmos_app_entry_arg_binding_t entry_arg_bindings[WASMOS_APP_MAX_ENTRY_ARG_BINDINGS];
+    /* Reserved for future header information.  The .wap format still carries an
+     * entry-argument binding section, and the parser still walks it so every
+     * following section lands at the right offset, but nothing projects it here:
+     * the mechanism it fed -- four spawn arguments delivered in registers -- is
+     * inert, since pm_apply_entry_bindings passes zeros and startup values travel
+     * in the spawn-info buffer instead.
+     *
+     * These four words are kept rather than removed so a later header field can
+     * claim them without disturbing the struct around them.  Zeroed by
+     * wasmos_app_parse; no reader may assume any meaning until one is assigned. */
+    uint32_t reserved[4];
 } wasmos_app_desc_t;
 
 /* Everything a subsystem's start hook needs, assembled by wasmos_app_start.  All

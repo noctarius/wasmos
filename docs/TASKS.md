@@ -238,10 +238,6 @@ Source: `architecture/06-memory-management.md`,
   (`src/boot/boot.c:617`, `:861`).
 
 
-- [ ] [BUG][P1] Stop `wasmos_app_start` over-reading `init_argv`. It clamps
-  `init_argc` to 4 and then unconditionally copies 4 elements, so a caller
-  passing a 1-element array has 3 elements read past the end
-  (`src/kernel/wasmos_app.c`).
 - [ ] [BUG][P1] Free the two ring-3 trampoline pages at
   `warp_r3_teardown`. `paging_destroy_address_space` reclaims page-table
   structures only, not mapped leaf frames, so 8 KiB leaks on every WARP guest
@@ -828,6 +824,26 @@ returns; `FS_ERR_*`/`PROC_*` ride IPC opcodes), so the migration depends on them
   and the four `entry_argv` words from `wasmos_app_instance_t` /
   `wasm_driver_manifest_t` (which also removes the fixed `args[4]` marshalling
   limit in the wasm3 backend).
+
+  The entry-argument half is entirely dead, and misleadingly so. Around fifty
+  `linker.metadata` files declare `entry_arg_bindings = ["proc.endpoint"]`, the
+  packer writes those records into every container, and `wasmos_app.c` parses them
+  into `desc->entry_arg_bindings[]` -- which **nothing reads**.
+  `pm_apply_entry_bindings` ignores its `desc` argument and hardcodes
+  `entry_argc = 4` with all four words zero. A driver author reading a manifest
+  reasonably concludes that is how a service receives its endpoint; it is not, and
+  the real path is the spawn-info buffer. So this is not only a limit to remove
+  but a false contract to stop publishing.
+
+  The one thing holding `argc` at 4 is guest arity: entry points still declare
+  four `i32` parameters (`wasmos_main(int32_t, int32_t, int32_t, int32_t)`,
+  `initialize(_proc_endpoint, _arg1, _arg2, _arg3)`) and `m3_Call` validates the
+  count. So the order is: drop the parameters from every guest entry point and the
+  AssemblyScript coroutine transform, then `argc` can be 0 and the whole
+  argv/binding surface (format records included, behind a version bump) deletes
+  cleanly. Until then `wasmos_app_start` copies four words from a four-word array
+  of zeros -- harmless, but do not "fix" the bound in isolation and leave the dead
+  mechanism looking deliberate.
 
 ## Filesystems and Storage
 - [ ] [BUG][P0] Fix `test_exec_fs_write_smoke`, the last failing test in the QEMU

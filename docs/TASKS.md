@@ -938,27 +938,20 @@ returns; `FS_ERR_*`/`PROC_*` ride IPC opcodes), so the migration depends on them
   `wasm_driver_manifest_t` (which also removes the fixed `args[4]` marshalling
   limit in the wasm3 backend).
 
-  The entry-argument half is entirely dead, and misleadingly so. 39 of the 59
-  `linker.metadata` files declare `entry_arg_bindings = ["proc.endpoint"]` and the
-  packer writes those records into every container. The kernel no longer projects
-  them: `wasmos_app_desc_t` carries `reserved[4]` in their place and the parser
-  walks the records for offset integrity only. What remains is the packer and
-  manifest side still publishing a binding that binds nothing.
-  `pm_apply_entry_bindings` ignores its `desc` argument and hardcodes
-  `entry_argc = 4` with all four words zero. A driver author reading a manifest
-  reasonably concludes that is how a service receives its endpoint; it is not, and
-  the real path is the spawn-info buffer. So this is not only a limit to remove
-  but a false contract to stop publishing.
+  The container half of the entry-argument mechanism is gone: the manifest key, the
+  packer flag, the header count, the record section and the parser's walk over it
+  no longer exist, and `wasmos_app_desc_t` carries `reserved[4]` in their place.
+  What survives is the runtime half. `pm_apply_entry_bindings` still hardcodes
+  `entry_argc = 4` with all four words zero, and `wasmos_app_start` still copies
+  four words out of that zero array into `wasmos_app_instance_t::entry_argv`.
 
   The one thing holding `argc` at 4 is guest arity: entry points still declare
   four `i32` parameters (`wasmos_main(int32_t, int32_t, int32_t, int32_t)`,
   `initialize(_proc_endpoint, _arg1, _arg2, _arg3)`) and `m3_Call` validates the
   count. So the order is: drop the parameters from every guest entry point and the
   AssemblyScript coroutine transform, then `argc` can be 0 and the whole
-  argv/binding surface (format records included, behind a version bump) deletes
-  cleanly. Until then `wasmos_app_start` copies four words from a four-word array
-  of zeros -- harmless, but do not "fix" the bound in isolation and leave the dead
-  mechanism looking deliberate.
+  argv surface deletes cleanly. Do not "fix" the bound in isolation and leave the
+  dead mechanism looking deliberate.
 
 - [ ] [ENHANCEMENT][P3] Decide what the generated cause-chain helpers are for, or
   drop them. `wrap`/`unwrap`/`root`/`is`/`as` and the 8-byte frame / 40-byte error

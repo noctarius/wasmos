@@ -7,16 +7,18 @@
 #include "wasmos_driver_abi.h"
 #include "subsystem_registry.h"
 
-/* Highest .wap container version the built-in probe recognises.  It MUST equal
- * WASMOS_APP_VERSION (wasmos_app.h); wasmos_app.c static-asserts that, because
- * the two live in different translation units and nothing else couples them.
+/* The .wap container version the built-in probe recognises, and the byte length
+ * of that version's header.  Both MUST equal what wasmos_app.h and
+ * wasmos_app_header_t define; wasmos_app.c static-asserts both, because the two
+ * live in different translation units and nothing else couples them.
  *
  * The failure mode when they drift is quiet: the probe only answers "is this a
  * WAP", so a version the parser accepts but the probe does not know is reported
  * as NOT a WAP.  That downgrades the classify() in pm_resolve_spawn_target from
  * WAP to NONE and fails broker-delegated spawns with
  * WASMOS_ERR_PROC_SPAWN_BROKER_PLAN, rather than rejecting the package. */
-#define WASMOS_EXEC_APP_VERSION 7u
+#define WASMOS_EXEC_APP_VERSION 8u
+#define WASMOS_EXEC_APP_HEADER_SIZE 60u
 
 typedef enum {
     WASMOS_EXEC_FORMAT_NONE = 0,   /* nothing claimed it; not spawnable */

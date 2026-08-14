@@ -17,6 +17,18 @@
  * exposes parsed descriptors, and translates metadata into runtime startup.
  */
 
+/* Fixed head of a .wap container, and the only layout this build accepts.
+ *
+ * Versions 1 through 7 are gone: each was superseded before any container
+ * outlived the tree that produced it, since every package is repacked from
+ * source on every build and none is distributed or persisted across a rebuild.
+ * Keeping their layouts meant keeping seven parse branches and eight fields that
+ * only the v2 branch read.  A container at any other version is now rejected by
+ * the version check rather than parsed, which is the correct answer for a
+ * package this kernel cannot have produced.
+ *
+ * Must stay byte-identical to wasmos_app_header_t in scripts/make_wasmos_app.c,
+ * which cannot include this file because it builds for the host. */
 typedef struct __attribute__((packed)) {
     char magic[8];
     uint16_t version;
@@ -27,168 +39,14 @@ typedef struct __attribute__((packed)) {
     uint32_t wasm_size;
     uint32_t req_ep_count;
     uint32_t cap_count;
-    uint32_t entry_arg_binding_count;
     uint32_t mem_hint_count;
-    uint8_t driver_match_class;
-    uint8_t driver_match_subclass;
-    uint8_t driver_match_prog_if;
-    uint8_t driver_match_reserved0;
-    uint16_t driver_match_vendor_id;
-    uint16_t driver_match_device_id;
-    uint16_t driver_io_port_min;
-    uint16_t driver_io_port_max;
-    uint32_t reserved;
-} wasmos_app_header_v2_t;
-
-typedef struct __attribute__((packed)) {
-    char magic[8];
-    uint16_t version;
-    uint16_t header_size;
-    uint32_t flags;
-    uint32_t name_len;
-    uint32_t entry_len;
-    uint32_t wasm_size;
-    uint32_t req_ep_count;
-    uint32_t cap_count;
-    uint32_t entry_arg_binding_count;
-    uint32_t mem_hint_count;
-    uint8_t driver_match_class;
-    uint8_t driver_match_subclass;
-    uint8_t driver_match_prog_if;
-    uint8_t driver_match_reserved0;
-    uint16_t driver_match_vendor_id;
-    uint16_t driver_match_device_id;
-    uint16_t driver_io_port_min;
-    uint16_t driver_io_port_max;
     uint32_t driver_match_count;
-    uint32_t reserved;
-} wasmos_app_header_v3_t;
-
-/* Version 4: identical to v3 except reserved is repurposed as compiled_size.
- * When compiled_size > 0, a pre-compiled WARP AOT binary follows immediately
- * after the WASM bytes in the blob. */
-typedef struct __attribute__((packed)) {
-    char magic[8];
-    uint16_t version;
-    uint16_t header_size;
-    uint32_t flags;
-    uint32_t name_len;
-    uint32_t entry_len;
-    uint32_t wasm_size;
-    uint32_t req_ep_count;
-    uint32_t cap_count;
-    uint32_t entry_arg_binding_count;
-    uint32_t mem_hint_count;
-    uint8_t driver_match_class;
-    uint8_t driver_match_subclass;
-    uint8_t driver_match_prog_if;
-    uint8_t driver_match_reserved0;
-    uint16_t driver_match_vendor_id;
-    uint16_t driver_match_device_id;
-    uint16_t driver_io_port_min;
-    uint16_t driver_io_port_max;
-    uint32_t driver_match_count;
-    uint32_t compiled_size; /* size of WARP AOT binary appended after WASM bytes; 0 if absent */
-} wasmos_app_header_v4_t;
-
-typedef struct __attribute__((packed)) {
-    char magic[8];
-    uint16_t version;
-    uint16_t header_size;
-    uint32_t flags;
-    uint32_t name_len;
-    uint32_t entry_len;
-    uint32_t wasm_size;
-    uint32_t req_ep_count;
-    uint32_t cap_count;
-    uint32_t entry_arg_binding_count;
-    uint32_t mem_hint_count;
-    uint8_t driver_match_class;
-    uint8_t driver_match_subclass;
-    uint8_t driver_match_prog_if;
-    uint8_t driver_match_reserved0;
-    uint16_t driver_match_vendor_id;
-    uint16_t driver_match_device_id;
-    uint16_t driver_io_port_min;
-    uint16_t driver_io_port_max;
-    uint32_t driver_match_count;
+    /* Byte length of a WARP AOT binary appended after the payload; 0 if absent. */
     uint32_t compiled_size;
     char subsystem_tag[WASMOS_APP_SUBSYSTEM_TAG_LEN];
-} wasmos_app_header_v5_t;
-
-/* Version 6: v5 plus the declared register windows, written after the driver
- * matches. A driver names the windows it needs instead of the ports, so this is
- * where "region 1" acquires a meaning. */
-typedef struct __attribute__((packed)) {
-    char magic[8];
-    uint16_t version;
-    uint16_t header_size;
-    uint32_t flags;
-    uint32_t name_len;
-    uint32_t entry_len;
-    uint32_t wasm_size;
-    uint32_t req_ep_count;
-    uint32_t cap_count;
-    uint32_t entry_arg_binding_count;
-    uint32_t mem_hint_count;
-    uint8_t driver_match_class;
-    uint8_t driver_match_subclass;
-    uint8_t driver_match_prog_if;
-    uint8_t driver_match_reserved0;
-    uint16_t driver_match_vendor_id;
-    uint16_t driver_match_device_id;
-    uint16_t driver_io_port_min;
-    uint16_t driver_io_port_max;
-    uint32_t driver_match_count;
-    uint32_t compiled_size;
-    char subsystem_tag[WASMOS_APP_SUBSYSTEM_TAG_LEN];
+    /* Declared register windows, written after the driver matches. */
     uint32_t region_count;
-} wasmos_app_header_v6_t;
-
-/* Version 7: v6 without the entry-argument binding count.  The mechanism that
- * field served is gone -- the records bound spawn arguments into four registers
- * the process manager now always zeroes, with startup values travelling in the
- * spawn-info buffer -- so v7 drops both the count and the record section.  A v6
- * container may still carry records, which is why the v6 layout and its walk are
- * retained below. */
-typedef struct __attribute__((packed)) {
-    char magic[8];
-    uint16_t version;
-    uint16_t header_size;
-    uint32_t flags;
-    uint32_t name_len;
-    uint32_t entry_len;
-    uint32_t wasm_size;
-    uint32_t req_ep_count;
-    uint32_t cap_count;
-    uint32_t mem_hint_count;
-    uint8_t driver_match_class;
-    uint8_t driver_match_subclass;
-    uint8_t driver_match_prog_if;
-    uint8_t driver_match_reserved0;
-    uint16_t driver_match_vendor_id;
-    uint16_t driver_match_device_id;
-    uint16_t driver_io_port_min;
-    uint16_t driver_io_port_max;
-    uint32_t driver_match_count;
-    uint32_t compiled_size;
-    char subsystem_tag[WASMOS_APP_SUBSYSTEM_TAG_LEN];
-    uint32_t region_count;
-} wasmos_app_header_v7_t;
-
-typedef struct __attribute__((packed)) {
-    char magic[8];
-    uint16_t version;
-    uint16_t header_size;
-    uint32_t flags;
-    uint32_t name_len;
-    uint32_t entry_len;
-    uint32_t wasm_size;
-    uint32_t req_ep_count;
-    uint32_t cap_count;
-    uint32_t mem_hint_count;
-    uint32_t reserved;
-} wasmos_app_header_v1_t;
+} wasmos_app_header_t;
 
 typedef struct __attribute__((packed)) {
     uint32_t name_len;
@@ -199,10 +57,6 @@ typedef struct __attribute__((packed)) {
     uint32_t name_len;
     uint32_t flags;
 } wasmos_cap_request_t;
-
-typedef struct __attribute__((packed)) {
-    uint32_t name_len;
-} wasmos_entry_arg_binding_t;
 
 typedef struct __attribute__((packed)) {
     uint32_t kind;
@@ -216,6 +70,8 @@ typedef struct __attribute__((packed)) {
  * it, which fails broker-delegated spawns rather than the package. */
 _Static_assert(WASMOS_EXEC_APP_VERSION == WASMOS_APP_VERSION,
                "wasmos_exec_format.h's WASMOS_EXEC_APP_VERSION must track WASMOS_APP_VERSION");
+_Static_assert(WASMOS_EXEC_APP_HEADER_SIZE == sizeof(wasmos_app_header_t),
+               "wasmos_exec_format.h's WASMOS_EXEC_APP_HEADER_SIZE must track the header layout");
 
 static wasmos_app_endpoint_resolver_t g_endpoint_resolver;
 static wasmos_app_capability_granter_t g_capability_granter;
@@ -478,8 +334,8 @@ static int wasmos_app_find_subsystem_handler(const char* request_tag,
     return wasmos_subsystem_registry_find(request_tag, out);
 }
 
-/* Parses a WASMOS-APP container header into *out_desc, handling every header
- * version this build knows and defaulting the fields a older version omits.
+/* Parses a WASMOS-APP container header into *out_desc.  Only the current version
+ * is accepted; see wasmos_app_header_t for why no older layout is.
  *
  * NOTHING IS COPIED: the descriptor's name, entry export, capability names,
  * payload and compiled-code pointers all point INTO `blob`, which is borrowed.
@@ -490,14 +346,15 @@ static int wasmos_app_find_subsystem_handler(const char* request_tag,
  * above the descriptor's fixed array sizes are refused, so a malformed or
  * hostile package is rejected rather than parsed off the end.
  *
- * Returns 0 on success and -1 for a NULL argument, a blob too short for even a
- * v1 header, an unknown version, or any field that fails validation. */
+ * Returns 0 on success and -1 for a NULL argument, a blob too short to hold a
+ * header, a version other than WASMOS_APP_VERSION, or any field that fails
+ * validation. */
 int wasmos_app_parse(const uint8_t* blob, uint32_t blob_size, wasmos_app_desc_t* out_desc) {
-    if (!blob || !out_desc || blob_size < sizeof(wasmos_app_header_v1_t)) {
+    if (!blob || !out_desc || blob_size < sizeof(wasmos_app_header_t)) {
         return -1;
     }
-    const wasmos_app_header_v1_t* hdr_v1 = (const wasmos_app_header_v1_t*)blob;
-    uint32_t version = hdr_v1->version;
+    const wasmos_app_header_t* hdr = (const wasmos_app_header_t*)blob;
+    uint32_t version = hdr->version;
     uint32_t header_size = 0;
     uint32_t flags = 0;
     uint32_t name_len = 0;
@@ -505,9 +362,7 @@ int wasmos_app_parse(const uint8_t* blob, uint32_t blob_size, wasmos_app_desc_t*
     uint32_t wasm_size = 0;
     uint32_t req_ep_count = 0;
     uint32_t cap_count = 0;
-    uint32_t entry_arg_binding_count = 0;
     uint32_t mem_hint_count = 0;
-    uint32_t reserved = 0;
     uint32_t compiled_size = 0;
     char subsystem_tag[WASMOS_APP_SUBSYSTEM_TAG_LEN + 1];
     wasmos_app_driver_match_t driver_matches[WASMOS_APP_MAX_DRIVER_MATCHES];
@@ -525,192 +380,40 @@ int wasmos_app_parse(const uint8_t* blob, uint32_t blob_size, wasmos_app_desc_t*
     }
     uint32_t driver_match_count = 0;
     uint32_t region_count = 0;
-    if (version == 1u) {
-        if (blob_size < sizeof(wasmos_app_header_v1_t)) {
-            return -1;
-        }
-        header_size = hdr_v1->header_size;
-        flags = hdr_v1->flags;
-        name_len = hdr_v1->name_len;
-        entry_len = hdr_v1->entry_len;
-        wasm_size = hdr_v1->wasm_size;
-        req_ep_count = hdr_v1->req_ep_count;
-        cap_count = hdr_v1->cap_count;
-        mem_hint_count = hdr_v1->mem_hint_count;
-        reserved = hdr_v1->reserved;
-    } else if (version == 2u) {
-        if (blob_size < sizeof(wasmos_app_header_v2_t)) {
-            return -1;
-        }
-        const wasmos_app_header_v2_t* hdr_v2 = (const wasmos_app_header_v2_t*)blob;
-        header_size = hdr_v2->header_size;
-        flags = hdr_v2->flags;
-        name_len = hdr_v2->name_len;
-        entry_len = hdr_v2->entry_len;
-        wasm_size = hdr_v2->wasm_size;
-        req_ep_count = hdr_v2->req_ep_count;
-        cap_count = hdr_v2->cap_count;
-        entry_arg_binding_count = hdr_v2->entry_arg_binding_count;
-        mem_hint_count = hdr_v2->mem_hint_count;
-        reserved = hdr_v2->reserved;
-        if (hdr_v2->driver_match_class != WASMOS_DRIVER_MATCH_ANY_U8 ||
-            hdr_v2->driver_match_subclass != WASMOS_DRIVER_MATCH_ANY_U8 ||
-            hdr_v2->driver_match_prog_if != WASMOS_DRIVER_MATCH_ANY_U8 ||
-            hdr_v2->driver_match_vendor_id != WASMOS_DRIVER_MATCH_ANY_U16 ||
-            hdr_v2->driver_match_device_id != WASMOS_DRIVER_MATCH_ANY_U16) {
-            driver_match_count = 1;
-            driver_matches[0].class_code = hdr_v2->driver_match_class;
-            driver_matches[0].subclass = hdr_v2->driver_match_subclass;
-            driver_matches[0].prog_if = hdr_v2->driver_match_prog_if;
-            driver_matches[0].reserved0 = 0;
-            driver_matches[0].vendor_id = hdr_v2->driver_match_vendor_id;
-            driver_matches[0].device_id = hdr_v2->driver_match_device_id;
-            driver_matches[0].io_port_min = hdr_v2->driver_io_port_min;
-            driver_matches[0].io_port_max = hdr_v2->driver_io_port_max;
-            driver_matches[0].priority = 0;
-        }
-    } else if (version == 3u) {
-        if (blob_size < sizeof(wasmos_app_header_v3_t)) {
-            return -1;
-        }
-        const wasmos_app_header_v3_t* hdr_v3 = (const wasmos_app_header_v3_t*)blob;
-        header_size = hdr_v3->header_size;
-        flags = hdr_v3->flags;
-        name_len = hdr_v3->name_len;
-        entry_len = hdr_v3->entry_len;
-        wasm_size = hdr_v3->wasm_size;
-        req_ep_count = hdr_v3->req_ep_count;
-        cap_count = hdr_v3->cap_count;
-        entry_arg_binding_count = hdr_v3->entry_arg_binding_count;
-        mem_hint_count = hdr_v3->mem_hint_count;
-        driver_match_count = hdr_v3->driver_match_count;
-        if (driver_match_count > WASMOS_APP_MAX_DRIVER_MATCHES) {
-            return -1;
-        }
-        reserved = hdr_v3->reserved;
-    } else if (version == 4u) {
-        if (blob_size < sizeof(wasmos_app_header_v4_t)) {
-            return -1;
-        }
-        const wasmos_app_header_v4_t* hdr_v4 = (const wasmos_app_header_v4_t*)blob;
-        header_size = hdr_v4->header_size;
-        flags = hdr_v4->flags;
-        name_len = hdr_v4->name_len;
-        entry_len = hdr_v4->entry_len;
-        wasm_size = hdr_v4->wasm_size;
-        req_ep_count = hdr_v4->req_ep_count;
-        cap_count = hdr_v4->cap_count;
-        entry_arg_binding_count = hdr_v4->entry_arg_binding_count;
-        mem_hint_count = hdr_v4->mem_hint_count;
-        driver_match_count = hdr_v4->driver_match_count;
-        if (driver_match_count > WASMOS_APP_MAX_DRIVER_MATCHES) {
-            return -1;
-        }
-        compiled_size = hdr_v4->compiled_size;
-        reserved = 0; /* v4 has no reserved field */
-        subsystem_tag_default_for_flags(flags, subsystem_tag);
-    } else if (version == 5u) {
-        if (blob_size < sizeof(wasmos_app_header_v5_t)) {
-            return -1;
-        }
-        const wasmos_app_header_v5_t* hdr_v5 = (const wasmos_app_header_v5_t*)blob;
-        header_size = hdr_v5->header_size;
-        flags = hdr_v5->flags;
-        name_len = hdr_v5->name_len;
-        entry_len = hdr_v5->entry_len;
-        wasm_size = hdr_v5->wasm_size;
-        req_ep_count = hdr_v5->req_ep_count;
-        cap_count = hdr_v5->cap_count;
-        entry_arg_binding_count = hdr_v5->entry_arg_binding_count;
-        mem_hint_count = hdr_v5->mem_hint_count;
-        driver_match_count = hdr_v5->driver_match_count;
-        if (driver_match_count > WASMOS_APP_MAX_DRIVER_MATCHES) {
-            return -1;
-        }
-        compiled_size = hdr_v5->compiled_size;
-        reserved = 0;
-        for (uint32_t i = 0; i < WASMOS_APP_SUBSYSTEM_TAG_LEN; ++i) {
-            subsystem_tag[i] = hdr_v5->subsystem_tag[i];
-        }
-        subsystem_tag[WASMOS_APP_SUBSYSTEM_TAG_LEN] = '\0';
-    } else if (version == 6u) {
-        if (blob_size < sizeof(wasmos_app_header_v6_t)) {
-            return -1;
-        }
-        const wasmos_app_header_v6_t* hdr_v6 = (const wasmos_app_header_v6_t*)blob;
-        header_size = hdr_v6->header_size;
-        flags = hdr_v6->flags;
-        name_len = hdr_v6->name_len;
-        entry_len = hdr_v6->entry_len;
-        wasm_size = hdr_v6->wasm_size;
-        req_ep_count = hdr_v6->req_ep_count;
-        cap_count = hdr_v6->cap_count;
-        entry_arg_binding_count = hdr_v6->entry_arg_binding_count;
-        mem_hint_count = hdr_v6->mem_hint_count;
-        driver_match_count = hdr_v6->driver_match_count;
-        if (driver_match_count > WASMOS_APP_MAX_DRIVER_MATCHES) {
-            return -1;
-        }
-        region_count = hdr_v6->region_count;
-        if (region_count > WASMOS_APP_MAX_REGIONS) {
-            return -1;
-        }
-        compiled_size = hdr_v6->compiled_size;
-        reserved = 0;
-        for (uint32_t i = 0; i < WASMOS_APP_SUBSYSTEM_TAG_LEN; ++i) {
-            subsystem_tag[i] = hdr_v6->subsystem_tag[i];
-        }
-        subsystem_tag[WASMOS_APP_SUBSYSTEM_TAG_LEN] = '\0';
-    } else if (version == WASMOS_APP_VERSION) {
-        if (blob_size < sizeof(wasmos_app_header_v7_t)) {
-            return -1;
-        }
-        const wasmos_app_header_v7_t* hdr_v7 = (const wasmos_app_header_v7_t*)blob;
-        header_size = hdr_v7->header_size;
-        flags = hdr_v7->flags;
-        name_len = hdr_v7->name_len;
-        entry_len = hdr_v7->entry_len;
-        wasm_size = hdr_v7->wasm_size;
-        req_ep_count = hdr_v7->req_ep_count;
-        cap_count = hdr_v7->cap_count;
-        /* v7 has no entry-argument section at all, so there is nothing to skip. */
-        entry_arg_binding_count = 0u;
-        mem_hint_count = hdr_v7->mem_hint_count;
-        driver_match_count = hdr_v7->driver_match_count;
-        if (driver_match_count > WASMOS_APP_MAX_DRIVER_MATCHES) {
-            return -1;
-        }
-        region_count = hdr_v7->region_count;
-        if (region_count > WASMOS_APP_MAX_REGIONS) {
-            return -1;
-        }
-        compiled_size = hdr_v7->compiled_size;
-        reserved = 0;
-        for (uint32_t i = 0; i < WASMOS_APP_SUBSYSTEM_TAG_LEN; ++i) {
-            subsystem_tag[i] = hdr_v7->subsystem_tag[i];
-        }
-        subsystem_tag[WASMOS_APP_SUBSYSTEM_TAG_LEN] = '\0';
-    } else {
+    if (version != WASMOS_APP_VERSION) {
         return -1;
     }
-    if ((version == 1u && header_size != sizeof(wasmos_app_header_v1_t)) ||
-        (version == 2u && header_size != sizeof(wasmos_app_header_v2_t)) ||
-        (version == 3u && header_size != sizeof(wasmos_app_header_v3_t)) ||
-        (version == 4u && header_size != sizeof(wasmos_app_header_v4_t)) ||
-        (version == 5u && header_size != sizeof(wasmos_app_header_v5_t)) ||
-        (version == 6u && header_size != sizeof(wasmos_app_header_v6_t)) ||
-        (version == WASMOS_APP_VERSION && header_size != sizeof(wasmos_app_header_v7_t)) ||
-        reserved != 0) {
+    header_size = hdr->header_size;
+    if (header_size != sizeof(wasmos_app_header_t)) {
         return -1;
     }
+    flags = hdr->flags;
+    name_len = hdr->name_len;
+    entry_len = hdr->entry_len;
+    wasm_size = hdr->wasm_size;
+    req_ep_count = hdr->req_ep_count;
+    cap_count = hdr->cap_count;
+    mem_hint_count = hdr->mem_hint_count;
+    driver_match_count = hdr->driver_match_count;
+    if (driver_match_count > WASMOS_APP_MAX_DRIVER_MATCHES) {
+        return -1;
+    }
+    region_count = hdr->region_count;
+    if (region_count > WASMOS_APP_MAX_REGIONS) {
+        return -1;
+    }
+    compiled_size = hdr->compiled_size;
+    for (uint32_t i = 0; i < WASMOS_APP_SUBSYSTEM_TAG_LEN; ++i) {
+        subsystem_tag[i] = hdr->subsystem_tag[i];
+    }
+    subsystem_tag[WASMOS_APP_SUBSYSTEM_TAG_LEN] = '\0';
     for (uint32_t i = 0; i < 8; ++i) {
-        if ((uint8_t)hdr_v1->magic[i] != (uint8_t)WASMOS_APP_MAGIC[i]) {
+        if ((uint8_t)hdr->magic[i] != (uint8_t)WASMOS_APP_MAGIC[i]) {
             return -1;
         }
     }
     if (req_ep_count > WASMOS_APP_MAX_REQUIRED_ENDPOINTS ||
-        cap_count > WASMOS_APP_MAX_CAP_REQUESTS ||
-        entry_arg_binding_count > WASMOS_APP_MAX_ENTRY_ARG_BINDINGS) {
+        cap_count > WASMOS_APP_MAX_CAP_REQUESTS) {
         return -1;
     }
     /* Native payloads are privileged and valid for driver/service kinds. */
@@ -730,12 +433,11 @@ int wasmos_app_parse(const uint8_t* blob, uint32_t blob_size, wasmos_app_desc_t*
     out_desc->reserved[3] = 0u;
 
     /* The parser walks the blob linearly in the same order the packer writes it:
-     * fixed header, name, entry, endpoint table, capability table, entry-arg
-     * binding table, driver-match table, region table, mem hints, then raw WASM
-     * bytes.  Each of the five tables is a fixed-size record optionally followed
-     * by that record's variable-length name, so every count in the header has to
-     * be walked -- even one this build ignores -- or `off` desynchronises and
-     * every later section is misread. */
+     * fixed header, name, entry, endpoint table, capability table, driver-match
+     * table, region table, mem hints, then raw WASM bytes.  The endpoint and
+     * capability records each carry a variable-length name, so every count in the
+     * header has to be walked or `off` desynchronises and every later section is
+     * misread. */
     uint32_t off = header_size;
     if (check_bounds(off, name_len, blob_size) != 0) {
         return -1;
@@ -779,23 +481,6 @@ int wasmos_app_parse(const uint8_t* blob, uint32_t blob_size, wasmos_app_desc_t*
         out_desc->caps[i].flags = cap->flags;
         off += cap->name_len;
         out_desc->cap_count++;
-    }
-
-    /* Walked but not projected: the records must still be stepped over so the
-     * driver-match, region and memory-hint sections that follow are read at the
-     * right offset, and their bounds still validated because a malformed length
-     * here would desynchronise all of them.  Nothing consumes the names -- see
-     * wasmos_app_desc_t::reserved. */
-    for (uint32_t i = 0; i < entry_arg_binding_count; ++i) {
-        if (check_bounds(off, sizeof(wasmos_entry_arg_binding_t), blob_size) != 0) {
-            return -1;
-        }
-        const wasmos_entry_arg_binding_t* binding = (const wasmos_entry_arg_binding_t*)&blob[off];
-        off += sizeof(wasmos_entry_arg_binding_t);
-        if (check_bounds(off, binding->name_len, blob_size) != 0) {
-            return -1;
-        }
-        off += binding->name_len;
     }
 
     for (uint32_t i = 0; i < driver_match_count; ++i) {

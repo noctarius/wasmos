@@ -21,11 +21,10 @@
 /* First 8 bytes of every .wap blob, compared byte for byte (not NUL-terminated on the
  * wire). */
 #define WASMOS_APP_MAGIC "WASMOSAP"
-/* Container version the packer (scripts/make_wasmos_app.c) emits.  The parser also
- * accepts versions 1..5 and derives the missing fields; each version is bound to an
- * exact header_size, so a blob whose header_size disagrees with its version is
- * rejected rather than reinterpreted. */
-#define WASMOS_APP_VERSION 7u
+/* Container version the packer (scripts/make_wasmos_app.c) emits, and the only one
+ * the parser accepts.  The version is bound to an exact header_size, so a blob whose
+ * header_size disagrees is rejected rather than reinterpreted. */
+#define WASMOS_APP_VERSION 8u
 /* On-wire width of the subsystem tag field (v5+).  Struct fields that hold a parsed tag
  * are this + 1 so the tag is always NUL-terminated in memory. */
 #define WASMOS_APP_SUBSYSTEM_TAG_LEN 8u
@@ -69,10 +68,6 @@
  * truncated table would desynchronise the section walk. */
 #define WASMOS_APP_MAX_REQUIRED_ENDPOINTS 8u
 #define WASMOS_APP_MAX_CAP_REQUESTS 8u
-/* Bounds the header's entry_arg_binding_count only.  The records are still walked
- * for offset integrity but no longer projected into the descriptor, so this caps
- * what the parser will step over rather than what it will store. */
-#define WASMOS_APP_MAX_ENTRY_ARG_BINDINGS 4u
 #define WASMOS_APP_MAX_DRIVER_MATCHES 8u
 
 /* One entry of the endpoint table: the name of an IPC endpoint the package must have

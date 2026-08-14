@@ -24,13 +24,36 @@
 
 #include "test_shuffle.h"
 
-/* On-disk .wap headers, current (v5) and oldest still accepted (v1).
+/* The on-disk .wap header, and a retired layout kept only to prove it is
+ * refused.
  *
- * wasmos_exec_format.c accepts a blob only when its header_size field equals
- * the size its version table lists (72 for v5, 44 for v1), and the fixtures
- * below fill that field with sizeof(). These layouts must therefore stay
- * byte-identical to the packer's; a field added to one and not the other turns
- * every fixture here into a non-WAP blob. */
+ * wasmos_exec_format.c accepts a blob only when its version is the current one
+ * AND its header_size equals WASMOS_EXEC_APP_HEADER_SIZE, so the current fixture
+ * fills that field with sizeof() and must stay byte-identical to the packer's
+ * layout; a field added to one and not the other turns every fixture here into a
+ * non-WAP blob.
+ *
+ * test_wap_header_retired_t is the v6 layout. Nothing in the tree produces it --
+ * every package is repacked from source on each build -- and it exists here so
+ * one case can assert that a container from a superseded version classifies as
+ * NONE rather than being reinterpreted under the current layout. */
+typedef struct __attribute__((packed)) {
+    char magic[8];
+    uint16_t version;
+    uint16_t header_size;
+    uint32_t flags;
+    uint32_t name_len;
+    uint32_t entry_len;
+    uint32_t wasm_size;
+    uint32_t req_ep_count;
+    uint32_t cap_count;
+    uint32_t mem_hint_count;
+    uint32_t driver_match_count;
+    uint32_t compiled_size;
+    char subsystem_tag[8];
+    uint32_t region_count;
+} test_wap_header_t;
+
 typedef struct __attribute__((packed)) {
     char magic[8];
     uint16_t version;
@@ -54,21 +77,8 @@ typedef struct __attribute__((packed)) {
     uint32_t driver_match_count;
     uint32_t compiled_size;
     char subsystem_tag[8];
-} test_wap_header_v5_t;
-
-typedef struct __attribute__((packed)) {
-    char magic[8];
-    uint16_t version;
-    uint16_t header_size;
-    uint32_t flags;
-    uint32_t name_len;
-    uint32_t entry_len;
-    uint32_t wasm_size;
-    uint32_t req_ep_count;
-    uint32_t cap_count;
-    uint32_t mem_hint_count;
-    uint32_t reserved;
-} test_wap_header_v1_t;
+    uint32_t region_count;
+} test_wap_header_retired_t;
 
 /* Register the two broker subsystems and the two exec handlers the cases match
  * against: LUA claims ".lua OR a #! prefix" and JAVA claims ".jar AND a PK\x03\x04
@@ -101,18 +111,24 @@ static int register_test_handlers(void) {
     return 0;
 }
 
+/* A container at the current version classifies as WAP even when its path
+ * carries an extension a broker handler claims: the in-kernel format wins over a
+ * registered broker, otherwise a .wap named demo.jar would be handed to the Java
+ * host. A container at a retired version classifies as NONE -- refused outright
+ * rather than reinterpreted under the current layout, which would misread every
+ * field after the first removed one. */
 static int test_classify_real_wap_fixtures(void) {
     static const struct {
-        test_wap_header_v5_t header;
+        test_wap_header_t header;
         char name[1];
         char entry[1];
         uint8_t payload[1];
-    } wap_v5 = {
+    } wap_current = {
         .header =
             {
                 .magic = {'W', 'A', 'S', 'M', 'O', 'S', 'A', 'P'},
-                .version = 5u,
-                .header_size = sizeof(test_wap_header_v5_t),
+                .version = WASMOS_EXEC_APP_VERSION,
+                .header_size = sizeof(test_wap_header_t),
                 .flags = 1u << 2,
                 .name_len = 1u,
                 .entry_len = 1u,
@@ -124,20 +140,21 @@ static int test_classify_real_wap_fixtures(void) {
         .payload = {0x00u},
     };
     static const struct {
-        test_wap_header_v1_t header;
+        test_wap_header_retired_t header;
         char name[1];
         char entry[1];
         uint8_t payload[1];
-    } wap_v1 = {
+    } wap_retired = {
         .header =
             {
                 .magic = {'W', 'A', 'S', 'M', 'O', 'S', 'A', 'P'},
-                .version = 1u,
-                .header_size = sizeof(test_wap_header_v1_t),
+                .version = 6u,
+                .header_size = sizeof(test_wap_header_retired_t),
                 .flags = 1u << 2,
                 .name_len = 1u,
                 .entry_len = 1u,
                 .wasm_size = 1u,
+                .subsystem_tag = "WASM",
             },
         .name = {'y'},
         .entry = {'n'},
@@ -145,20 +162,24 @@ static int test_classify_real_wap_fixtures(void) {
     };
     wasmos_exec_format_match_t match;
 
+    if (sizeof(test_wap_header_t) != WASMOS_EXEC_APP_HEADER_SIZE) {
+        return __LINE__;
+    }
+
     memset(&match, 0, sizeof(match));
-    if (wasmos_exec_format_classify("/boot/apps/demo.jar", (const uint8_t*)&wap_v5,
-                                    (uint32_t)sizeof(wap_v5), &match) != 0) {
+    if (wasmos_exec_format_classify("/boot/apps/demo.jar", (const uint8_t*)&wap_current,
+                                    (uint32_t)sizeof(wap_current), &match) != 0) {
         return __LINE__;
     }
     if (match.kind != WASMOS_EXEC_FORMAT_WAP || match.handler.handler_name[0] != '\0')
         return __LINE__;
 
     memset(&match, 0, sizeof(match));
-    if (wasmos_exec_format_classify("/boot/apps/legacy.lua", (const uint8_t*)&wap_v1,
-                                    (uint32_t)sizeof(wap_v1), &match) != 0) {
+    if (wasmos_exec_format_classify("/boot/apps/legacy.wap", (const uint8_t*)&wap_retired,
+                                    (uint32_t)sizeof(wap_retired), &match) != 0) {
         return __LINE__;
     }
-    if (match.kind != WASMOS_EXEC_FORMAT_WAP || match.handler.handler_name[0] != '\0')
+    if (match.kind != WASMOS_EXEC_FORMAT_NONE)
         return __LINE__;
 
     return 0;

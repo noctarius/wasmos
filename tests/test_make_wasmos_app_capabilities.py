@@ -12,17 +12,14 @@ from scripts.qemu_test_framework import default_host_tool_path
 # mem_hint_count, the four driver_match u8s, the four driver match/io u16s,
 # driver_match_count, compiled_size.
 #
-# The tag must be located by OFFSET, never from the end of the header -- v6 added
-# region_count after the tag, so "the last 8 bytes" silently became region_count
-# plus padding and read back as zeros.
+# The tag must be located by OFFSET, never from the end of the header:
+# region_count follows the tag, so "the last 8 bytes" reads region_count plus
+# padding and comes back as zeros.
 #
-# Every version up to v6 extended the format by APPENDING, which kept older
-# offsets stable. v7 is the first that does not: it REMOVED
-# entry_arg_binding_count from the middle, shifting subsystem_tag and
-# region_count down by four bytes. Any reader that hardcodes an offset past that
-# field has to be revised per version rather than written once -- which is why
-# this prefix is spelled out field by field instead of being counted from the end.
-_HEADER_PREFIX = "<8sHHIIIIIIIBBBBHHHHII"
+# The prefix is spelled out field by field rather than counted, because the
+# format is not append-only -- fields have been removed from the middle, which
+# shifts everything after them. A layout change requires revising this string.
+_HEADER_PREFIX = "<8sHHIIIIIIIII"
 _SUBSYSTEM_TAG_OFFSET = struct.calcsize(_HEADER_PREFIX)
 _SUBSYSTEM_TAG_LEN = 8
 

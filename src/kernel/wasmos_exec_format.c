@@ -9,29 +9,16 @@ typedef struct __attribute__((packed)) {
     uint16_t header_size;
 } wasmos_exec_wap_header_prefix_t;
 
-/* Whether `blob` starts with a WASMOS-APP container header: right magic, a known
- * version, and the exact header size that version defines.
+/* Whether `blob` starts with a WASMOS-APP container header: right magic, the
+ * current version, and exactly that version's header size.
  *
- * g_header_sizes is indexed by version and MUST carry an entry for every version
- * up to WASMOS_APP_VERSION; the static assert below enforces that. A missing
- * entry does not reject the package -- it reports "not a WAP", which downgrades
- * the classify() in pm_resolve_spawn_target from WAP to NONE and fails
- * broker-delegated spawns with WASMOS_ERR_PROC_SPAWN_BROKER_PLAN. */
+ * Only one version exists, so the size is a constant rather than a table lookup.
+ * Getting either constant wrong does not reject the package -- it reports "not a
+ * WAP", which downgrades the classify() in pm_resolve_spawn_target from WAP to
+ * NONE and fails broker-delegated spawns with
+ * WASMOS_ERR_PROC_SPAWN_BROKER_PLAN.  wasmos_app.c static-asserts both against
+ * the parser's own definitions. */
 static int wasmos_exec_is_wap_blob(const uint8_t* blob, uint32_t blob_size) {
-    static const uint16_t g_header_sizes[] = {
-        0u,  44u, /* v1 */
-        56u,      /* v2 */
-        60u,      /* v3 */
-        64u,      /* v4 */
-        72u,      /* v5 */
-        76u,      /* v6: adds region_count */
-        72u,      /* v7: drops the entry-argument binding count */
-    };
-    /* One entry per version, plus the unused index 0. */
-    _Static_assert(sizeof(g_header_sizes) / sizeof(g_header_sizes[0]) ==
-                       (size_t)WASMOS_EXEC_APP_VERSION + 1u,
-                   "g_header_sizes must carry an entry for every version up to "
-                   "WASMOS_EXEC_APP_VERSION");
     const wasmos_exec_wap_header_prefix_t* hdr = 0;
     uint16_t version = 0u;
     uint16_t header_size = 0u;
@@ -45,10 +32,10 @@ static int wasmos_exec_is_wap_blob(const uint8_t* blob, uint32_t blob_size) {
     }
     version = hdr->version;
     header_size = hdr->header_size;
-    if (version == 0u || version > WASMOS_EXEC_APP_VERSION) {
+    if (version != WASMOS_EXEC_APP_VERSION) {
         return 0;
     }
-    if (header_size != g_header_sizes[version]) {
+    if (header_size != WASMOS_EXEC_APP_HEADER_SIZE) {
         return 0;
     }
     if ((uint32_t)header_size > blob_size) {

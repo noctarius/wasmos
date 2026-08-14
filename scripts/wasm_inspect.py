@@ -5,6 +5,12 @@ import struct
 WASM_MAGIC = b"\0asm"
 WASM_VERSION = 1
 WASMOS_MAGIC = b"WASMOSAP"
+WASMOS_APP_VERSION = 8
+SUBSYSTEM_TAG_LEN = 8
+# Fixed-size records with no trailing name: wasmos_driver_match_t and
+# wasmos_region_entry_t in scripts/make_wasmos_app.c.
+DRIVER_MATCH_RECORD_LEN = 16
+REGION_RECORD_LEN = 6
 
 
 class ReadError(Exception):
@@ -67,20 +73,19 @@ def parse_wasmos_app(data):
     wasm_size, off = read_u32_le(data, off)
     req_ep_count, off = read_u32_le(data, off)
     cap_count, off = read_u32_le(data, off)
-    # Versions 2..6 carry an entry-argument binding count and its record section;
-    # v7 dropped both, so reading the field there would consume mem_hint_count and
-    # desynchronise every following section.
-    entry_arg_binding_count = 0
-    if 2 <= version <= 6:
-        entry_arg_binding_count, off = read_u32_le(data, off)
     mem_hint_count, off = read_u32_le(data, off)
-    header_end = header_size
-    # Every version defines its variable-length sections as starting immediately
-    # after the fixed header, so seek there rather than continuing from whatever
-    # the field-by-field read reached. Versions 3+ added driver-match, region,
-    # compiled-size and subsystem-tag fields that are not parsed above, and
-    # walking on from that offset lands inside the header and misreads every
-    # section that follows.
+    driver_match_count, off = read_u32_le(data, off)
+    compiled_size, off = read_u32_le(data, off)
+    off += SUBSYSTEM_TAG_LEN
+    region_count, off = read_u32_le(data, off)
+    if version != WASMOS_APP_VERSION or header_size != off:
+        raise ReadError(
+            f"unsupported WASMOS-APP version {version} (header_size {header_size}); "
+            f"this tool reads version {WASMOS_APP_VERSION} only"
+        )
+    # Sections begin immediately after the fixed header and are walked in exactly
+    # the order the packer writes them. Every count has to be stepped over, even
+    # one nothing here reports, or the payload offset lands mid-section.
     off = header_size
     name_raw, off = read_bytes(data, off, name_len)
     entry_raw, off = read_bytes(data, off, entry_len)
@@ -92,16 +97,13 @@ def parse_wasmos_app(data):
         _name_len, off = read_u32_le(data, off)
         _flags, off = read_u32_le(data, off)
         _, off = read_bytes(data, off, _name_len)
-    for _ in range(entry_arg_binding_count):
-        _name_len, off = read_u32_le(data, off)
-        _, off = read_bytes(data, off, _name_len)
+    off += driver_match_count * DRIVER_MATCH_RECORD_LEN
+    off += region_count * REGION_RECORD_LEN
     for _ in range(mem_hint_count):
         _, off = read_u32_le(data, off)
         _, off = read_u32_le(data, off)
         _, off = read_u32_le(data, off)
-    if header_end < off:
-        header_end = off
-    wasm_off = header_end
+    wasm_off = off
     if wasm_off + wasm_size > len(data):
         raise ReadError("wasm payload exceeds file size")
     return {

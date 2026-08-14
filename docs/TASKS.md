@@ -431,6 +431,20 @@ and `architecture/33-completion-ports.md`.
   `POLL_EV_KERNEL`, which are declared but never signalled
   (`src/kernel/include/poll.h`).
 
+- [ ] [ENHANCEMENT][P2] Make `ipc_endpoint_owner_context` distinguish its outcomes.
+  It returns 0 for a rejected argument, for an endpoint that does not exist, and
+  for an endpoint owned by the kernel -- because `IPC_CONTEXT_KERNEL` *is* 0
+  (`src/kernel/ipc.c:87`). Its only caller (`ipc_send_from`, `ipc.c:269`) is
+  reached solely when the sender is not the kernel, where every one of those three
+  cases must deny, so the answer is right today for reasons the function cannot
+  express.
+
+  That is the hazard rather than a live bug: a second caller, or a guard that
+  learns to treat kernel-owned sources as permitted, would read 0 as "the kernel
+  owns it, allow" and admit a forged source endpoint. Return the owner through an
+  out-parameter with a status, as the endpoint lookups already do, so "no such
+  endpoint" and "owned by the kernel" stop sharing a value.
+
 ## Runtime, Packaging, and Service Discovery
 
 Source: `architecture/13-runtime-and-packaging.md`,
@@ -1326,3 +1340,19 @@ Source: `architecture/25-diagnostics-status.md`,
   with the cached value. Until then the only reliable check is the `runtime=` boot
   marker plus `nm` on the staged `kernel.elf`
   (`skills/wasmos-build-and-run/SKILL.md`).
+
+- [ ] [TEST][P1] Give the host unit gate a per-test timeout. A corrupted wait
+  list HANGS the gate instead of failing it -- demonstrated by the M-D mutant --
+  and the scheduler suite has the same property, because nothing bounds an
+  individual case. The consequence is worse than a slow gate: the bugs most
+  likely to produce a corrupted list or a lost wake are exactly the run-queue and
+  wait-list defects this suite exists to catch, so the suite converts a
+  diagnosable red test into an indefinite stall with no indication of which case
+  was running. A per-case alarm that reports the case name and aborts would make
+  those failures readable.
+
+- [ ] [TEST][P2] Investigate the `ps tree` flake under the 64-test CLI suite. It
+  passes in isolation in ~12 s and the suite went green on a re-run, so it is
+  order- or timing-dependent rather than broken. Uninvestigated; the value is in
+  finding out whether it shares a cause with the other intermittent CLI-suite
+  failures rather than in the case itself.

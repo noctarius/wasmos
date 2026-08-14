@@ -26,9 +26,10 @@ typedef enum {
 
 typedef struct {
     wasmos_exec_format_kind_t kind;
-    /* Set only for BROKER; borrowed from the registry, so it is invalidated when
-     * the registering context exits. */
-    const wasmos_exec_handler_registry_entry_t* handler;
+    /* Meaningful only when kind == WASMOS_EXEC_FORMAT_BROKER. Held BY VALUE: the
+     * registry frees an exec handler with the context that registered it, so a
+     * borrowed pointer here could dangle before the caller acts on the match. */
+    wasmos_exec_handler_registry_entry_t handler;
 } wasmos_exec_format_match_t;
 
 /* All pointers alias into the plan bytes passed to the validator and are live

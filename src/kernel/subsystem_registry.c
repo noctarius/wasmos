@@ -619,21 +619,22 @@ int wasmos_subsystem_registry_register_exec_handler(const char* handler_name,
     return 0;
 }
 
-/* FIXME: the entry is returned after g_subsystem_lock is dropped, so a broker
- * entry can be freed by wasmos_subsystem_registry_drop_owner while the caller
- * still holds the pointer. Built-in entries are never freed, so only broker
- * lookups are exposed; a refcount or a copy-out would close the window. */
-const wasmos_subsystem_registry_entry_t* wasmos_subsystem_registry_find(const char* request_tag) {
-    if (!request_tag) {
-        return 0;
+int wasmos_subsystem_registry_find(const char* request_tag,
+                                   wasmos_subsystem_registry_entry_t* out) {
+    if (!request_tag || !out) {
+        return -1;
     }
     ksync_spinlock_lock(&g_subsystem_lock);
 
     wasmos_subsystem_registry_entry_t* entry = subsystem_registry_find_locked(request_tag);
-    if (entry) {
+    if (!entry) {
         ksync_spinlock_unlock(&g_subsystem_lock);
-        return entry;
+        return -1;
     }
+    /* Copy while still holding the lock: a broker entry is freed by
+     * drop_owner when its context exits, so nothing may outlive this section. */
+    *out = *entry;
+    out->next = 0; /* the bucket chain belongs to the registry */
 
     ksync_spinlock_unlock(&g_subsystem_lock);
     return 0;
@@ -642,13 +643,13 @@ const wasmos_subsystem_registry_entry_t* wasmos_subsystem_registry_find(const ch
 /* Highest priority wins; ties go to the lexicographically smaller handler_name,
  * then request_tag, so the choice does not depend on registration order. Same
  * post-unlock lifetime caveat as wasmos_subsystem_registry_find above. */
-const wasmos_exec_handler_registry_entry_t*
-wasmos_subsystem_registry_find_exec_handler(const wasmos_exec_probe_t* probe) {
+int wasmos_subsystem_registry_find_exec_handler(const wasmos_exec_probe_t* probe,
+                                                wasmos_exec_handler_registry_entry_t* out) {
     wasmos_exec_handler_registry_entry_t* entry = 0;
     wasmos_exec_handler_registry_entry_t* best = 0;
 
-    if (!probe) {
-        return 0;
+    if (!probe || !out) {
+        return -1;
     }
     ksync_spinlock_lock(&g_subsystem_lock);
     for (entry = g_exec_handlers; entry; entry = entry->next) {
@@ -664,8 +665,20 @@ wasmos_subsystem_registry_find_exec_handler(const wasmos_exec_probe_t* probe) {
             best = entry;
         }
     }
+    if (!best) {
+        ksync_spinlock_unlock(&g_subsystem_lock);
+        return -1;
+    }
+    /* Copy under the lock: an exec handler is freed with the context that
+     * registered it, so no pointer into it may escape this section. */
+    *out = *best;
+    out->next = 0;  /* handler chain belongs to the registry */
+    out->nodes = 0; /* match tree is registry-owned and already consumed */
+    out->node_count = 0;
+    out->root_index = 0;
+
     ksync_spinlock_unlock(&g_subsystem_lock);
-    return best;
+    return 0;
 }
 
 /* The largest max_probe_bytes any registered exec handler declared, so a caller

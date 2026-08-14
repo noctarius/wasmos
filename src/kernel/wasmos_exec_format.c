@@ -82,8 +82,8 @@ uint32_t wasmos_exec_format_probe_bytes_needed(void) {
  * Returns 0 whenever it produced an answer — including WASMOS_EXEC_FORMAT_NONE,
  * which means "nothing claims this", NOT an error — and -1 only for a NULL
  * out_match.  *out_match is cleared first, so it is defined on every 0 return.
- * A BROKER match leaves out_match->handler pointing at a registry entry, which
- * stays valid only until the registry changes.  blob and path are borrowed. */
+ * A BROKER match fills out_match->handler by value, so it stays usable even if
+ * the registering context exits meanwhile.  blob and path are borrowed. */
 int wasmos_exec_format_classify(const char* path, const uint8_t* blob, uint32_t blob_size,
                                 wasmos_exec_format_match_t* out_match) {
     wasmos_exec_probe_t probe;
@@ -93,7 +93,7 @@ int wasmos_exec_format_classify(const char* path, const uint8_t* blob, uint32_t 
         return -1;
     }
     out_match->kind = WASMOS_EXEC_FORMAT_NONE;
-    out_match->handler = 0;
+    memset(&out_match->handler, 0, sizeof(out_match->handler));
 
     if (wasmos_exec_is_wap_blob(blob, blob_size)) {
         out_match->kind = WASMOS_EXEC_FORMAT_WAP;
@@ -108,8 +108,7 @@ int wasmos_exec_format_classify(const char* path, const uint8_t* blob, uint32_t 
         probe_len = blob_size;
     }
     probe.initial_size = probe_len;
-    out_match->handler = wasmos_subsystem_registry_find_exec_handler(&probe);
-    if (out_match->handler) {
+    if (wasmos_subsystem_registry_find_exec_handler(&probe, &out_match->handler) == 0) {
         out_match->kind = WASMOS_EXEC_FORMAT_BROKER;
     }
     return 0;

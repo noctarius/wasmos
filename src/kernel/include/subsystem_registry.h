@@ -115,17 +115,27 @@ int wasmos_subsystem_registry_register_exec_handler(const char* handler_name,
  * Called from process teardown so a dead broker leaves no stale endpoint.
  * Context 0 (the kernel built-ins) is ignored, so built-ins survive. */
 void wasmos_subsystem_registry_drop_owner(uint32_t owner_context_id);
-/* Entry for `request_tag`, or NULL if none. The pointer is returned after the
- * registry lock is dropped: built-in entries are never freed, but a BROKER
- * entry can be freed by wasmos_subsystem_registry_drop_owner while the caller
- * still holds it (see the FIXME at the definition). */
-const wasmos_subsystem_registry_entry_t* wasmos_subsystem_registry_find(const char* request_tag);
-/* Best exec handler whose match tree accepts `probe`, or NULL. "Best" is the
- * highest priority, with ties broken by handler_name and then request_tag, so
- * the result does not depend on registration order. Same post-unlock lifetime
- * caveat as wasmos_subsystem_registry_find. */
-const wasmos_exec_handler_registry_entry_t*
-wasmos_subsystem_registry_find_exec_handler(const wasmos_exec_probe_t* probe);
+/* Copies the entry for `request_tag` into *out and returns 0, or returns -1 when
+ * no entry matches (leaving *out untouched) or either argument is NULL.
+ *
+ * The copy is the contract, not a convenience: a BROKER entry is freed by
+ * wasmos_subsystem_registry_drop_owner when its registering context exits, so a
+ * pointer handed out from under the registry lock can be dangling by the time the
+ * caller reads it. out->next is cleared because the bucket chain belongs to the
+ * registry; out->ops is copied as-is and remains valid, being NULL for a broker
+ * and a static table for a built-in. */
+int wasmos_subsystem_registry_find(const char* request_tag, wasmos_subsystem_registry_entry_t* out);
+/* Copies the highest-priority exec handler whose match tree accepts `probe` into
+ * *out and returns 0, or returns -1 when nothing matches or either argument is
+ * NULL.  Ties break on handler_name then request_tag, so the choice is stable.
+ *
+ * As with wasmos_subsystem_registry_find, the copy is what makes the result safe
+ * to hold: an exec handler is owned by the context that registered it and is
+ * freed with that context.  out->nodes and out->next are cleared -- the match
+ * tree is registry-owned storage and has already served its purpose by the time
+ * a caller sees the result. */
+int wasmos_subsystem_registry_find_exec_handler(const wasmos_exec_probe_t* probe,
+                                                wasmos_exec_handler_registry_entry_t* out);
 /* Largest max_probe_bytes any registered handler declared -- how many leading
  * bytes a caller needs to read before probing. 0 when no handler is registered,
  * and it does NOT fall when handlers are dropped, so it is an upper bound

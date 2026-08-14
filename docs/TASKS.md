@@ -374,12 +374,6 @@ and `architecture/33-completion-ports.md`.
 - [ ] [BUG][P1] Serialize `kenv_set`/`kenv_unset`. The store has no lock, and the
   "callers run descheduled" justification does not hold on SMP: two CPUs can
   claim the same free slot (`src/kernel/include/kenv.h:23` `FIXME`).
-- [ ] [BUG][P1] Hold `g_subsystem_lock` across use of a looked-up entry, or refcount it.
-  Both lookups return a heap entry pointer after dropping the lock, while
-  `wasmos_subsystem_registry_drop_owner` frees broker entries and handler node
-  arrays (`src/kernel/subsystem_registry.c:567` `FIXME`).
-
-
 - [ ] [BUG][P1] Release the process slot on every `process_spawn_as_internal`
   failure after the `->NEW` claim. `process_find_slot` reclaims only
   UNUSED/DEAD and there is no NEW->DEAD edge, so the slot is stranded for the

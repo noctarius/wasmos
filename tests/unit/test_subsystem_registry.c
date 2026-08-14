@@ -67,7 +67,9 @@ static uint32_t test_subsystem_tag_hash(const char* tag) {
 static int test_collision_bucket_lookup(void) {
     const char* tag_a = "H67";
     const char* tag_b = "WTAA";
+    wasmos_subsystem_registry_entry_t entry_a_val;
     const wasmos_subsystem_registry_entry_t* entry_a = 0;
+    wasmos_subsystem_registry_entry_t entry_b_val;
     const wasmos_subsystem_registry_entry_t* entry_b = 0;
     const wasmos_subsystem_ops_t* ops_a = (const wasmos_subsystem_ops_t*)&g_ops_a;
     const wasmos_subsystem_ops_t* ops_b = (const wasmos_subsystem_ops_t*)&g_ops_b;
@@ -81,8 +83,8 @@ static int test_collision_bucket_lookup(void) {
     if (wasmos_subsystem_registry_register_builtin(tag_b, "NATIVE", 0u, 0u, 1u, ops_b) != 0)
         return __LINE__;
 
-    entry_a = wasmos_subsystem_registry_find(tag_a);
-    entry_b = wasmos_subsystem_registry_find(tag_b);
+    entry_a = (wasmos_subsystem_registry_find(tag_a, &entry_a_val) == 0) ? &entry_a_val : 0;
+    entry_b = (wasmos_subsystem_registry_find(tag_b, &entry_b_val) == 0) ? &entry_b_val : 0;
     if (!entry_a || !entry_b)
         return __LINE__;
     if (strcmp(entry_a->request_tag, tag_a) != 0)
@@ -113,6 +115,7 @@ static int test_broker_registration_lookup(void) {
     const char* runtime_tag = "NATIVE";
     const char* broker_name = "BEAM";
     const uint32_t endpoint = 77u;
+    wasmos_subsystem_registry_entry_t entry_val;
     const wasmos_subsystem_registry_entry_t* entry = 0;
 
     wasmos_subsystem_registry_reset();
@@ -121,7 +124,7 @@ static int test_broker_registration_lookup(void) {
         return __LINE__;
     }
 
-    entry = wasmos_subsystem_registry_find(tag);
+    entry = (wasmos_subsystem_registry_find(tag, &entry_val) == 0) ? &entry_val : 0;
     if (!entry)
         return __LINE__;
     if (entry->kind != WASMOS_SUBSYSTEM_HANDLER_BROKER)
@@ -189,6 +192,7 @@ static int test_exec_handler_registration_lookup(void) {
     static const uint8_t shebang_bytes[] = {'#', '!', '/', 'b', 'i', 'n', '/', 'l', 'u', 'a', '\n'};
     static const uint8_t jar_bytes[] = {'P', 'K', 0x03, 0x04, 0x14, 0x00};
     wasmos_exec_probe_t probe;
+    wasmos_exec_handler_registry_entry_t handler_val;
     const wasmos_exec_handler_registry_entry_t* handler = 0;
 
     wasmos_subsystem_registry_reset();
@@ -207,7 +211,8 @@ static int test_exec_handler_registration_lookup(void) {
 
     memset(&probe, 0, sizeof(probe));
     probe.path = "/boot/apps/demo.lua";
-    handler = wasmos_subsystem_registry_find_exec_handler(&probe);
+    handler =
+        (wasmos_subsystem_registry_find_exec_handler(&probe, &handler_val) == 0) ? &handler_val : 0;
     if (!handler)
         return __LINE__;
     if (strcmp(handler->handler_name, "lua-file") != 0)
@@ -221,7 +226,8 @@ static int test_exec_handler_registration_lookup(void) {
     probe.path = "/user/bin/startup";
     probe.initial_bytes = shebang_bytes;
     probe.initial_size = sizeof(shebang_bytes);
-    handler = wasmos_subsystem_registry_find_exec_handler(&probe);
+    handler =
+        (wasmos_subsystem_registry_find_exec_handler(&probe, &handler_val) == 0) ? &handler_val : 0;
     if (!handler)
         return __LINE__;
     if (strcmp(handler->handler_name, "lua-file") != 0)
@@ -231,7 +237,8 @@ static int test_exec_handler_registration_lookup(void) {
     probe.path = "/boot/apps/tool.jar";
     probe.initial_bytes = jar_bytes;
     probe.initial_size = sizeof(jar_bytes);
-    handler = wasmos_subsystem_registry_find_exec_handler(&probe);
+    handler =
+        (wasmos_subsystem_registry_find_exec_handler(&probe, &handler_val) == 0) ? &handler_val : 0;
     if (!handler)
         return __LINE__;
     if (strcmp(handler->handler_name, "jar-file") != 0)
@@ -243,7 +250,8 @@ static int test_exec_handler_registration_lookup(void) {
     probe.path = "/boot/apps/bad.jar";
     probe.initial_bytes = (const uint8_t*)"NOPE";
     probe.initial_size = 4u;
-    handler = wasmos_subsystem_registry_find_exec_handler(&probe);
+    handler =
+        (wasmos_subsystem_registry_find_exec_handler(&probe, &handler_val) == 0) ? &handler_val : 0;
     if (handler)
         return __LINE__;
 
@@ -292,6 +300,7 @@ static int test_exec_handler_not_and_priority(void) {
     };
     static const uint8_t shebang_bytes[] = {'#', '!', '/', 'b', 'i', 'n', '/', 's', 'h', '\n'};
     wasmos_exec_probe_t probe;
+    wasmos_exec_handler_registry_entry_t handler_val;
     const wasmos_exec_handler_registry_entry_t* handler = 0;
 
     wasmos_subsystem_registry_reset();
@@ -310,7 +319,8 @@ static int test_exec_handler_not_and_priority(void) {
     probe.path = "/user/bin/script";
     probe.initial_bytes = shebang_bytes;
     probe.initial_size = sizeof(shebang_bytes);
-    handler = wasmos_subsystem_registry_find_exec_handler(&probe);
+    handler =
+        (wasmos_subsystem_registry_find_exec_handler(&probe, &handler_val) == 0) ? &handler_val : 0;
     if (!handler)
         return __LINE__;
     if (strcmp(handler->handler_name, "aaa-script") != 0)
@@ -320,7 +330,8 @@ static int test_exec_handler_not_and_priority(void) {
     probe.path = "/user/bin/module.lua";
     probe.initial_bytes = shebang_bytes;
     probe.initial_size = sizeof(shebang_bytes);
-    handler = wasmos_subsystem_registry_find_exec_handler(&probe);
+    handler =
+        (wasmos_subsystem_registry_find_exec_handler(&probe, &handler_val) == 0) ? &handler_val : 0;
     if (handler)
         return __LINE__;
 
@@ -328,7 +339,8 @@ static int test_exec_handler_not_and_priority(void) {
     probe.path = "/user/bin/runme";
     probe.initial_bytes = shebang_bytes;
     probe.initial_size = sizeof(shebang_bytes);
-    handler = wasmos_subsystem_registry_find_exec_handler(&probe);
+    handler =
+        (wasmos_subsystem_registry_find_exec_handler(&probe, &handler_val) == 0) ? &handler_val : 0;
     if (!handler)
         return __LINE__;
     if (strcmp(handler->handler_name, "generic-script") != 0)
@@ -388,6 +400,10 @@ static int test_exec_handler_validation(void) {
  * torn down when that owning context exits (wasmos_subsystem_registry_drop_owner),
  * so a dead broker leaves no stale endpoint or matcher behind. */
 static int test_owner_drop(void) {
+    /* Existence-only probes: the copy-out lookups need a destination even when
+     * the caller only cares whether an entry is there. */
+    wasmos_subsystem_registry_entry_t probe_entry;
+    wasmos_exec_handler_registry_entry_t probe_handler;
     static const wasmos_exec_match_node_t ext_nodes[] = {
         {
             .kind = WASMOS_EXEC_MATCH_EXTENSION,
@@ -414,11 +430,11 @@ static int test_owner_drop(void) {
                                                         ext_nodes, 1u, 0u) != 0) {
         return __LINE__;
     }
-    if (!wasmos_subsystem_registry_find("SCRIPT"))
+    if (wasmos_subsystem_registry_find("SCRIPT", &probe_entry) != 0)
         return __LINE__;
     memset(&probe, 0, sizeof(probe));
     probe.path = "/init/apps/hello.rc";
-    if (!wasmos_subsystem_registry_find_exec_handler(&probe))
+    if (wasmos_subsystem_registry_find_exec_handler(&probe, &probe_handler) != 0)
         return __LINE__;
     if (wasmos_subsystem_registry_exec_max_probe_bytes() != 4u)
         return __LINE__;
@@ -426,13 +442,13 @@ static int test_owner_drop(void) {
     wasmos_subsystem_registry_drop_owner(owner);
 
     /* Owner 500's broker + handler are gone; owner 501's broker survives. */
-    if (wasmos_subsystem_registry_find("SCRIPT"))
+    if (wasmos_subsystem_registry_find("SCRIPT", &probe_entry) == 0)
         return __LINE__;
-    if (wasmos_subsystem_registry_find_exec_handler(&probe))
+    if (wasmos_subsystem_registry_find_exec_handler(&probe, &probe_handler) == 0)
         return __LINE__;
     if (wasmos_subsystem_registry_exec_max_probe_bytes() != 0u)
         return __LINE__;
-    if (!wasmos_subsystem_registry_find("LUA"))
+    if (wasmos_subsystem_registry_find("LUA", &probe_entry) != 0)
         return __LINE__;
 
     /* After the drop, the freed tag can be registered again. */

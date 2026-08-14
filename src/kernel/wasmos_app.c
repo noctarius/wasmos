@@ -435,12 +435,16 @@ int wasmos_app_init_subsystems(void) {
     return rc;
 }
 
-static const wasmos_subsystem_registry_entry_t*
-wasmos_app_find_subsystem_handler(const char* request_tag) {
-    if (!request_tag) {
-        return 0;
+/* Copies the subsystem entry for `request_tag` into *out; 0 on success, -1 when
+ * the tag is unknown.  The copy is the registry's contract -- see
+ * wasmos_subsystem_registry_find -- because a broker entry dies with its
+ * registering context. */
+static int wasmos_app_find_subsystem_handler(const char* request_tag,
+                                             wasmos_subsystem_registry_entry_t* out) {
+    if (!request_tag || !out) {
+        return -1;
     }
-    return wasmos_subsystem_registry_find(request_tag);
+    return wasmos_subsystem_registry_find(request_tag, out);
 }
 
 /* Parses a WASMOS-APP container header into *out_desc, handling every header
@@ -825,23 +829,22 @@ int wasmos_app_resolve_subsystem(const wasmos_app_desc_t* desc,
     if (!desc || !out_info) {
         return -1;
     }
-    const wasmos_subsystem_registry_entry_t* handler =
-        wasmos_app_find_subsystem_handler(desc->subsystem_tag);
-    if (!handler) {
+    wasmos_subsystem_registry_entry_t handler;
+    if (wasmos_app_find_subsystem_handler(desc->subsystem_tag, &handler) != 0) {
         return -1;
     }
-    if (((desc->flags & WASMOS_APP_FLAG_NATIVE) != 0) != (handler->uses_wasm_payload == 0u)) {
+    if (((desc->flags & WASMOS_APP_FLAG_NATIVE) != 0) != (handler.uses_wasm_payload == 0u)) {
         return -1;
     }
-    copy_subsystem_tag(out_info->requested_tag, handler->request_tag);
-    copy_subsystem_tag(out_info->runtime_tag, handler->runtime_tag);
-    copy_subsystem_tag(out_info->broker_name, handler->broker_name);
-    out_info->kind = handler->kind;
-    out_info->uses_wasm_payload = handler->uses_wasm_payload;
-    out_info->needs_runtime_lock = handler->needs_runtime_lock;
-    out_info->gates_ready_for_services = handler->gates_ready_for_services;
-    out_info->broker_endpoint = handler->broker_endpoint;
-    out_info->ops = handler->ops;
+    copy_subsystem_tag(out_info->requested_tag, handler.request_tag);
+    copy_subsystem_tag(out_info->runtime_tag, handler.runtime_tag);
+    copy_subsystem_tag(out_info->broker_name, handler.broker_name);
+    out_info->kind = handler.kind;
+    out_info->uses_wasm_payload = handler.uses_wasm_payload;
+    out_info->needs_runtime_lock = handler.needs_runtime_lock;
+    out_info->gates_ready_for_services = handler.gates_ready_for_services;
+    out_info->broker_endpoint = handler.broker_endpoint;
+    out_info->ops = handler.ops;
     return 0;
 }
 

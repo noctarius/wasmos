@@ -868,7 +868,7 @@ static int pm_resolve_spawn_path(uint32_t pm_context_id, const xfer_buffer_owner
         return 0;
     }
     broker_rc = pm_request_broker_spawn_plan(
-        pm_context_id, pmbuf, format_match.handler, out_resolved->path, out_resolved->path_len,
+        pm_context_id, pmbuf, &format_match.handler, out_resolved->path, out_resolved->path_len,
         out_resolved->args_len > 0u ? out_resolved->args : 0, out_resolved->args_len, spawn_flags,
         out_resolved->blob_size, &broker_plan);
     if (broker_rc != 0) {

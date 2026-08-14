@@ -536,7 +536,7 @@ int pm_handle_exec_handler_register(uint32_t pm_context_id, const ipc_message_t*
     uint32_t len = (uint32_t)msg->arg1;
     uint32_t node_bytes = 0;
     const wasmos_exec_handler_register_desc_t* desc = 0;
-    const wasmos_subsystem_registry_entry_t* owner = 0;
+    wasmos_subsystem_registry_entry_t owner;
     const wasmos_exec_match_node_t* nodes = 0;
     ipc_message_t resp;
 
@@ -559,11 +559,11 @@ int pm_handle_exec_handler_register(uint32_t pm_context_id, const ipc_message_t*
     if (len != sizeof(*desc) + node_bytes) {
         return WASMOS_ERR_PROC_PM_BAD_HANDLER;
     }
-    owner = wasmos_subsystem_registry_find(desc->request_tag);
-    if (!owner || owner->kind != WASMOS_SUBSYSTEM_HANDLER_BROKER) {
+    if (wasmos_subsystem_registry_find(desc->request_tag, &owner) != 0 ||
+        owner.kind != WASMOS_SUBSYSTEM_HANDLER_BROKER) {
         return WASMOS_ERR_PROC_PM_BAD_HANDLER;
     }
-    if (ipc_endpoint_owner(owner->broker_endpoint, &broker_owner) != IPC_OK ||
+    if (ipc_endpoint_owner(owner.broker_endpoint, &broker_owner) != IPC_OK ||
         broker_owner != owner_context) {
         return WASMOS_ERR_PROC_PM_BAD_HANDLER;
     }

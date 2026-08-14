@@ -150,7 +150,7 @@ static int test_classify_real_wap_fixtures(void) {
                                     (uint32_t)sizeof(wap_v5), &match) != 0) {
         return __LINE__;
     }
-    if (match.kind != WASMOS_EXEC_FORMAT_WAP || match.handler != 0)
+    if (match.kind != WASMOS_EXEC_FORMAT_WAP || match.handler.handler_name[0] != '\0')
         return __LINE__;
 
     memset(&match, 0, sizeof(match));
@@ -158,7 +158,7 @@ static int test_classify_real_wap_fixtures(void) {
                                     (uint32_t)sizeof(wap_v1), &match) != 0) {
         return __LINE__;
     }
-    if (match.kind != WASMOS_EXEC_FORMAT_WAP || match.handler != 0)
+    if (match.kind != WASMOS_EXEC_FORMAT_WAP || match.handler.handler_name[0] != '\0')
         return __LINE__;
 
     return 0;
@@ -175,9 +175,9 @@ static int test_classify_broker_formats(void) {
                                     (uint32_t)sizeof(lua_script) - 1u, &match) != 0) {
         return __LINE__;
     }
-    if (match.kind != WASMOS_EXEC_FORMAT_BROKER || !match.handler)
+    if (match.kind != WASMOS_EXEC_FORMAT_BROKER || match.handler.handler_name[0] == '\0')
         return __LINE__;
-    if (strcmp(match.handler->handler_name, "lua-file") != 0)
+    if (strcmp(match.handler.handler_name, "lua-file") != 0)
         return __LINE__;
 
     memset(&match, 0, sizeof(match));
@@ -185,9 +185,9 @@ static int test_classify_broker_formats(void) {
                                     &match) != 0) {
         return __LINE__;
     }
-    if (match.kind != WASMOS_EXEC_FORMAT_BROKER || !match.handler)
+    if (match.kind != WASMOS_EXEC_FORMAT_BROKER || match.handler.handler_name[0] == '\0')
         return __LINE__;
-    if (strcmp(match.handler->handler_name, "jar-file") != 0)
+    if (strcmp(match.handler.handler_name, "jar-file") != 0)
         return __LINE__;
 
     memset(&match, 0, sizeof(match));
@@ -195,7 +195,7 @@ static int test_classify_broker_formats(void) {
                                     (uint32_t)sizeof(other_blob) - 1u, &match) != 0) {
         return __LINE__;
     }
-    if (match.kind != WASMOS_EXEC_FORMAT_NONE || match.handler != 0)
+    if (match.kind != WASMOS_EXEC_FORMAT_NONE || match.handler.handler_name[0] != '\0')
         return __LINE__;
 
     return 0;
@@ -216,18 +216,21 @@ static int test_validate_broker_plan(void) {
     uint32_t off = sizeof(wasmos_broker_spawn_plan_response_t);
     uint32_t host_path_offset = 0u;
     uint32_t host_args_offset = 0u;
+    wasmos_exec_handler_registry_entry_t handler_copy;
     const wasmos_exec_handler_registry_entry_t* handler = 0;
     wasmos_broker_spawn_plan_response_t* plan = 0;
     wasmos_exec_broker_plan_t parsed;
 
     memset(plan_blob, 0, sizeof(plan_blob));
-    handler = wasmos_subsystem_registry_find_exec_handler(&(wasmos_exec_probe_t){
-        .path = "/user/bin/tool.jar",
-        .initial_bytes = (const uint8_t*)"PK\x03\x04more",
-        .initial_size = 8u,
-    });
-    if (!handler)
+    if (wasmos_subsystem_registry_find_exec_handler(
+            &(wasmos_exec_probe_t){
+                .path = "/user/bin/tool.jar",
+                .initial_bytes = (const uint8_t*)"PK\x03\x04more",
+                .initial_size = 8u,
+            },
+            &handler_copy) != 0)
         return __LINE__;
+    handler = &handler_copy;
 
     host_path_offset = off;
     memcpy(plan_blob + off, "/boot/system/brokers/java-host.wap",

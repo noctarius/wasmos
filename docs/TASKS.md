@@ -173,8 +173,37 @@ Source: `architecture/06-memory-management.md`,
 - [ ] [ENHANCEMENT][P2] Replace the 64-bit-bitmap linmem-slot ceiling with a growable pool so
   concurrent linear-memory slots are bounded by memory, not 64
   (`src/kernel/linmem_slots.c:15` `TODO(linmem-pool)`).
-- [ ] [ENHANCEMENT][P2] Move the process table off its static array onto kernel list storage
-  (`src/kernel/process.c:36` `FIXME(process-list)`).
+- [ ] [ENHANCEMENT][P2] Retire `PROCESS_MAX_COUNT` (48) and `THREAD_MAX_COUNT`
+  (128), moving `g_processes[]` and `g_threads[]` onto `idtable` so live processes
+  and threads are bounded by memory rather than by a compile-time constant. Spawn
+  currently fails outright past 48 processes (`src/kernel/process.c:42`,
+  `src/kernel/thread.c:9`, `FIXME(process-list)`).
+
+  This is a storage swap, not an identity change: `pid` and `tid` already come
+  from monotonic counters (`g_next_pid`, `g_next_tid`), not from the slot index,
+  so nothing outside these two files depends on an element's position. `idtable`
+  already provides the needed shape -- id-keyed lookup, chunked growth, and
+  `idtable_release_owner` for teardown -- and the endpoint table is precedent.
+
+  Three things make it more than a mechanical substitution:
+
+  - **`PROCESS_MAX_COUNT` also sizes three unrelated per-process side tables**,
+    each indexed by process slot: `g_wasm_driver_registry`
+    (`src/kernel/wasm_driver.c:26`), `ND_HEAP_SLOTS`
+    (`src/kernel/native_driver.c:79`), and `g_syscall_ipc_call_slots`
+    (`src/kernel/syscall.c:78`). Leaving these behind keeps the 48-process cap in
+    disguise, so they have to become id-keyed too (or move into the process
+    record).
+  - **Roughly eighteen `for (i = 0; i < MAX; ++i)` scans** across `process.c`,
+    `thread.c` and `wasm_driver.c` become iterations. `sched_event.c:98`
+    documents its timeout sweep as O(`THREAD_MAX_COUNT`) and leans on the
+    `g_sched_timeout_next` hint to stay cheap; that cost model needs re-checking
+    against unbounded storage.
+  - **`idtable` recycles ids after the id space wraps** (`src/kernel/idtable.c`),
+    whereas the current counters are monotonic for the kernel's lifetime. Reused
+    pids/tids must be checked against `process_wait` and `thread_join`, which
+    park on a target id and would otherwise be satisfiable by an unrelated
+    later process.
 - [ ] [ENHANCEMENT][P2] Replace the global shared-region cap, make context region sizing
   configurable, and add committed/resident (RSS) memory accounting for `ps`
   (`src/kernel/process.c:2492` `TODO(memory-rss)`; `architecture/06`:507-512).

@@ -830,12 +830,13 @@ struct thread* cpu_sched_try_steal(uint32_t my_cpu_id) {
     /* Start scan from the next CPU so each AP preferentially targets a
      * different victim, preventing all APs from racing over CPU 0's queue.
      *
-     * FIXME: this loop bound and modulus use g_cpu_count raw, unlike the
-     * placement paths which go through cpu_sched_usable_cpus().  A MADT-reported
-     * count of 0 divides by zero here, and one above WASMOS_MAX_CPUS indexes
-     * past g_cpus[]. */
-    for (uint32_t n = 1; n < g_cpu_count; n++) {
-        uint32_t i = (my_cpu_id + n) % g_cpu_count;
+     * Bound and modulus both come from cpu_sched_usable_cpus(), not g_cpu_count:
+     * that value is unvalidated MADT data, so a firmware-reported 0 would divide
+     * by zero in the modulus and anything above WASMOS_MAX_CPUS would index past
+     * g_cpus[].  The placement paths already go through the same accessor. */
+    const uint32_t cpus = cpu_sched_usable_cpus();
+    for (uint32_t n = 1; n < cpus; n++) {
+        uint32_t i = (my_cpu_id + n) % cpus;
         if (i == my_cpu_id) {
             continue;
         }

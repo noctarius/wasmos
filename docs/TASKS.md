@@ -359,10 +359,6 @@ and `architecture/33-completion-ports.md`.
   Migration must keep the net stack + TLS green throughout.
 
 
-- [ ] [BUG][P1] Bound `cpu_sched_try_steal`'s CPU loop and modulus by
-  `cpu_sched_usable_cpus()` rather than raw `g_cpu_count`. The raw value is
-  unvalidated MADT data: 0 divides by zero, a value above `WASMOS_MAX_CPUS`
-  indexes `g_cpus[]` out of bounds (`src/kernel/sched_thread.c:779` `FIXME`).
 - [ ] [BUG][P1] Make the `IPC_CALL` request-id counter atomic and lock the per-pid slot
   table. Two CPUs issuing `IPC_CALL` concurrently can mint the same id, which
   both reply correlation and the `syscall_ipc_request_id_issued` replay guard
@@ -1207,3 +1203,12 @@ Source: `architecture/25-diagnostics-status.md`,
 - [ ] [TEST][P2] Make `test_hostcall_ipc.cpp`'s timed-select rows actually reach a
   deadline. `timer_ticks()` is frozen and nothing calls `sched_timeout_check`,
   so `WASMOS_TIMEOUT` arrives via the spurious-wake path instead.
+
+- [ ] [BUG][P0] `run-qemu-sched-stress-test` fails on main: "SMP scheduler stress
+  test did not pass (stalled ring or never started)". Confirmed pre-existing by
+  reverting an unrelated scheduler change and re-running -- the failure and its
+  message are identical either way, so it is not attributable to recent work.
+  This is a second red integration gate alongside `test_exec_fs_write_smoke`, and
+  because it is the only target that exercises cross-CPU work stealing under
+  load, every change to that path currently lands without a working end-to-end
+  check (`src/kernel/kernel_sched_smp_stress_runtime.c`).

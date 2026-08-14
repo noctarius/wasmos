@@ -166,11 +166,9 @@ void pm_update_well_known_service_endpoint(const char* name, uint32_t endpoint) 
  * that as IPC_ERR_NOENT on first use).  Free slots are reused before the list is
  * grown.  `name` is borrowed and copied into the entry.
  *
- * FIXME(svc-name-len): the entry's name field holds 16 characters plus NUL, but
- * the descriptor registration path accepts up to WASMOS_SVC_NAME_MAX-1 (35).
- * The copy loop below stops at sizeof(name) without forcing a terminator, so a
- * longer name leaves the field unterminated and later strcmp() calls read past
- * it; names differing only after the 16th character also collide. */
+ * A name that does not fit the entry is REFUSED rather than truncated: two names
+ * sharing a truncated prefix would otherwise collide onto one entry, silently
+ * rebinding an unrelated service. */
 int pm_service_set(const char* name, uint32_t endpoint, uint32_t owner_context_id) {
     pm_service_entry_t* empty = 0;
     list_iter_t it;
@@ -199,15 +197,12 @@ int pm_service_set(const char* name, uint32_t endpoint, uint32_t owner_context_i
             return -1;
         }
     }
+    if (str_copy_bytes(empty->name, sizeof(empty->name), (const uint8_t*)name, strlen(name)) != 0) {
+        return -1;
+    }
     empty->in_use = 1;
     empty->endpoint = endpoint;
     empty->owner_context_id = owner_context_id;
-    for (uint32_t i = 0; i < sizeof(empty->name); ++i) {
-        empty->name[i] = name[i];
-        if (!name[i]) {
-            break;
-        }
-    }
     return 0;
 }
 

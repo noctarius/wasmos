@@ -128,15 +128,22 @@ typedef struct {
     wasmos_dma_window_t dma_windows[PM_DMA_WINDOW_LIMIT];
 } pm_spawn_caps_t;
 
-/* One entry of the flat name -> endpoint service table. `name` holds 16
- * characters plus NUL, matching the four packed IPC args a lookup carries.
+/* One entry of the flat name -> endpoint service table.
+ *
+ * `name` is sized for the LONGEST name any registration path accepts, which is
+ * the descriptor path's WASMOS_SVC_NAME_MAX-1 characters plus NUL -- not the 16
+ * characters the four packed IPC args of a lookup can carry. Sizing it for the
+ * packed path instead truncates a descriptor-registered name into this field,
+ * which both loses the NUL (leaving strcmp to read past the entry) and makes two
+ * names sharing their first 16 characters collide onto one entry.
+ *
  * Re-registration is allowed only by the owning context; another context asking
  * for a name already taken is refused. */
 typedef struct {
     uint8_t in_use;
     uint32_t endpoint;
     uint32_t owner_context_id;
-    char name[17];
+    char name[WASMOS_SVC_NAME_MAX];
 } pm_service_entry_t;
 
 /* The whole of the process manager's state. Single instance (g_pm), zeroed

@@ -349,9 +349,6 @@ and `architecture/33-completion-ports.md`.
     service to appear. The spin is the more objectionable of the two under the
     project's no-busy-spin rule; the service-discovery wait belongs on a class
     subscription or a bounded park.
-- [ ] [BUG][P1] Publish `POLL_EV_IN` on the notification path so NOTIFICATION endpoints
-  are visible to `ipc_select_wait`: `ipc_notify_from` does not call
-  `poll_notify` (`src/kernel/ipc.c:363-385`). Prerequisite for completion ports.
 - [ ] [CLEANUP][P3] Remove the legacy `process_block_on_ipc` shim once all callers move to the
   select/idle-wait path (`src/kernel/process.h:225`, `src/kernel/process.c:1588`).
 - [ ] [DOCS][P2] Reconcile `architecture/30-ipc-direct-switch.md` (fully unimplemented; its

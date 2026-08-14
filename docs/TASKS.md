@@ -31,6 +31,18 @@ history, and `ARCHITECTURE.md` for the complete document map.
   - `[DOCS]` — a documentation or IDL-doc statement that disagrees with the
     code. Fixing one changes no behaviour, but a wrong contract in a header or
     in `abi/*.yaml` propagates to every caller written against it.
+- Every item also carries a priority tag. Priority is about consequence and
+  blocking, not effort:
+  - `[P0]` — something is broken right now on a default path: a gate that is
+    red, a feature that cannot work at all, or a defect reachable by an
+    unprivileged guest. Fix before starting anything new in that subsystem.
+  - `[P1]` — memory-unsafe, a silently-unenforced security check, data loss, or
+    a limitation that blocks a direction the project has already committed to.
+  - `[P2]` — should be fixed; nothing is blocked on it.
+  - `[P3]` — opportunistic. Do it while already in the file.
+- A `[P0]`/`[P1]` `[BUG]` in a subsystem is a reason not to build on that
+  subsystem yet; that is the whole point of carrying both tags.
+
 - Prefer draining `[BUG]` before `[FEATURE]` in a subsystem you are about to
   extend: several entries here describe defects that a new caller would
   otherwise inherit.
@@ -42,11 +54,11 @@ Source: `architecture/06-memory-management.md`,
 `architecture/11-ring3-isolation-and-separation.md`, and
 `architecture/28-smp.md`.
 
-- [ ] [ENHANCEMENT] Replace the WARP shared-linear-memory local fault retry with cross-CPU
+- [ ] [ENHANCEMENT][P2] Replace the WARP shared-linear-memory local fault retry with cross-CPU
   TLB-shootdown IPIs before any live page-table reclaim under concurrent APs
   (`src/kernel/arch/x86_64/cpu_x86_64.c:554` `TODO(smp-tlb)`,
   `src/kernel/warp/ring3_trampolines.c:166`).
-- [ ] [CLEANUP] Retire the `shmem` subsystem in favour of a single `xfer_buffer` sharing
+- [ ] [CLEANUP][P3] Retire the `shmem` subsystem in favour of a single `xfer_buffer` sharing
   mechanism. The two are implementations of one concept -- an id, a
   grant/borrow step, a copy path and a zero-copy map path -- differing mainly
   in that `shmem_grant` addresses a **pid** while `xfer_buffer_borrow`
@@ -80,11 +92,11 @@ Source: `architecture/06-memory-management.md`,
   renumbered per the ID RULES, whole-world rebuild + `.cache/warp_aot`
   cleared), both runtimes' shims are gone, and gfx/libui/tetris run on xfer
   buffers under wasm3 AND WARP.
-- [ ] [FEATURE] Move native `.wap` services from ring 0 to the ring-3 native execution
+- [ ] [FEATURE][P2] Move native `.wap` services from ring 0 to the ring-3 native execution
   path (syscall-backed `libsys_native` primitives + capability enforcement).
   Unblocks isolating `gfx-compositor`, `font-service`, and `net-stack`
   (`architecture/11`:380-414).
-- [ ] [FEATURE] Run the **wasm3 interpreter at CPL=3** via a ring-3 trampoline, reusing the
+- [ ] [FEATURE][P2] Run the **wasm3 interpreter at CPL=3** via a ring-3 trampoline, reusing the
   WARP scaffolding. Depends on the native ring-3 execution path above.
 
   Two payoffs, the second bigger than the first. (a) A wasm3 guest is currently
@@ -142,121 +154,121 @@ Source: `architecture/06-memory-management.md`,
   Risks: the user code model versus `-mcmodel=kernel`; wasm3 internals that
   assume a kernel-ish environment (`setjmp`/`longjmp`, allocator assumptions);
   and step 3, which is where the historical linmem aliasing bugs lived.
-- [ ] [ENHANCEMENT] Finish ring-3 hardening TODOs: drop `PML4[0]` from the kernel root once
+- [ ] [ENHANCEMENT][P2] Finish ring-3 hardening TODOs: drop `PML4[0]` from the kernel root once
   bootstrap no longer needs the low slot (`src/kernel/paging.c:338`
   `TODO(ring3-phase3)`); add process-local exception handling beyond the
   current `-11` kill (`src/kernel/arch/x86_64/cpu_x86_64.c:484`
   `TODO(ring3-phase5)`); handle stack allocations that can exceed the 512 MB
   higher-half window (`src/kernel/process.c:131` `TODO(ring3-phase2)`).
-- [ ] [ENHANCEMENT] Tighten the temporarily-broadened page-fault reason back to
+- [ ] [ENHANCEMENT][P2] Tighten the temporarily-broadened page-fault reason back to
   `EXEC_VIOLATION`-only once the ring-3 fault tests are stable
   (`src/kernel/arch/x86_64/cpu_x86_64.c:578`).
-- [ ] [ENHANCEMENT] Introduce allocation intents (`STACK`, `PGTABLE`, `DMA32`, `GENERIC`),
+- [ ] [ENHANCEMENT][P2] Introduce allocation intents (`STACK`, `PGTABLE`, `DMA32`, `GENERIC`),
   then remove the low-memory DMA constraint from kernel stacks and page tables
   (`src/kernel/paging.c:31`; `architecture/06`:455-497).
-- [ ] [FEATURE] Decide and implement kernel reachability beyond the current 512 MB low
+- [ ] [FEATURE][P2] Decide and implement kernel reachability beyond the current 512 MB low
   window: full physmap or a bounded `kmap` cache (`architecture/06`).
-- [ ] [ENHANCEMENT] Route pointer-bearing syscall/IPC entry paths through
+- [ ] [ENHANCEMENT][P2] Route pointer-bearing syscall/IPC entry paths through
   `mm_user_range_permitted` (`src/kernel/memory.c:1204`).
-- [ ] [ENHANCEMENT] Replace the 64-bit-bitmap linmem-slot ceiling with a growable pool so
+- [ ] [ENHANCEMENT][P2] Replace the 64-bit-bitmap linmem-slot ceiling with a growable pool so
   concurrent linear-memory slots are bounded by memory, not 64
   (`src/kernel/linmem_slots.c:15` `TODO(linmem-pool)`).
-- [ ] [ENHANCEMENT] Move the process table off its static array onto kernel list storage
+- [ ] [ENHANCEMENT][P2] Move the process table off its static array onto kernel list storage
   (`src/kernel/process.c:36` `FIXME(process-list)`).
-- [ ] [ENHANCEMENT] Replace the global shared-region cap, make context region sizing
+- [ ] [ENHANCEMENT][P2] Replace the global shared-region cap, make context region sizing
   configurable, and add committed/resident (RSS) memory accounting for `ps`
   (`src/kernel/process.c:2492` `TODO(memory-rss)`; `architecture/06`:507-512).
-- [ ] [CLEANUP] Wire the kernel-thread trampoline into PM launch policy and delete the
+- [ ] [CLEANUP][P3] Wire the kernel-thread trampoline into PM launch policy and delete the
   legacy trampoline (`src/kernel/process.c:1503,1771`).
-- [ ] [BUG] Fix the `dma_map_borrow` capability-enforcement divergence: the WARP
+- [ ] [BUG][P1] Fix the `dma_map_borrow` capability-enforcement divergence: the WARP
   wrapper (`src/kernel/warp/link.cpp`) omits the DMA-capability + max-bytes/range
   check that the wasm3 wrapper (`src/kernel/wasm3/link.c`) enforces, so the WARP
   path is weaker. Bring WARP to parity. Found during the host-call ABI inventory.
-- [ ] [BUG] Fix the `warp_ring3_dispatch` `proc_info_stats` ctx bug: the case passes
+- [ ] [BUG][P1] Fix the `warp_ring3_dispatch` `proc_info_stats` ctx bug: the case passes
   `ctx5` (== `a4`, the `stats` param) as the kernel ctx, but a 5-param host call
   needs ctx in `a5` (R9) — there is no `ctx6`, so the hand-written case silently
   reused `ctx5`. Ring-3 `proc_info_stats` therefore gets a garbage ctx (a user
   offset) → wrong `warp_mem` resolution. The generated dispatch computes
   `ctx = a<arity>` and fixes it; fix lands when the ring-3 dispatch is swapped in.
   Found during host-call dispatch codegen (`src/kernel/warp/link.cpp:3130`).
-- [ ] [FEATURE] Extend DMA isolation to an IOMMU domain model (VT-d/AMD-Vi) and add
+- [ ] [FEATURE][P2] Extend DMA isolation to an IOMMU domain model (VT-d/AMD-Vi) and add
   non-coherent cache-maintenance hooks before targeting non-coherent hardware
   (`architecture/12`:88,618,625).
-- [ ] [ENHANCEMENT] Harden the boot and native ELF loaders with checked arithmetic for
+- [ ] [ENHANCEMENT][P2] Harden the boot and native ELF loaders with checked arithmetic for
   program-header offsets, segment file/virtual ranges, boot-info layout totals,
   and cursor advances; reject values that overflow allocation sizes or boot ABI
   fields before copying.
 
 
-- [ ] [BUG] Pass `MEM_REGION_FLAG_*` to `paging_map_4k`, not raw `PT_FLAG_*`. The
+- [ ] [BUG][P1] Pass `MEM_REGION_FLAG_*` to `paging_map_4k`, not raw `PT_FLAG_*`. The
   callee rebuilds the PTE from its own flag space, so `PT_FLAG_PCD` is dropped
   and device scratch pages lose cache-disable, leaving their memory type to the
   MTRRs alone. Same pattern in `arch/x86_64/lapic.c` and `ioapic.c`
   (`src/kernel/mmio.c:17` `FIXME`).
-- [ ] [BUG] Apply the shmem/WARP physical-zone floor in `linmem_slot_commit`. It
+- [ ] [BUG][P1] Apply the shmem/WARP physical-zone floor in `linmem_slot_commit`. It
   calls `pfa_alloc_pages` with no floor, so slot-backed linear memory falls
   outside the guarded zone that `memory.h` and `physmem.h` still describe as an
   invariant (`src/kernel/linmem_slots.c:105`).
-- [ ] [BUG] Serialize the capability table. Grants (spawn) and checks (hardware host
+- [ ] [BUG][P1] Serialize the capability table. Grants (spawn) and checks (hardware host
   calls) run on any CPU with no lock, so a grant that grows `g_cap_ctx` can race
   a concurrent lookup (`src/kernel/capability.c`).
-- [ ] [ENHANCEMENT] Validate the initfs higher-half alias. The pointer fixup assumes initfs
+- [ ] [ENHANCEMENT][P2] Validate the initfs higher-half alias. The pointer fixup assumes initfs
   lies inside the 512 MiB shared window; a higher firmware placement yields an
   unmapped pointer with no diagnostic (`src/kernel/kernel_boot_runtime.c:69`).
-- [ ] [BUG] Give `isr_exception_1` (#DB) the `PUSH_REGS` every other user-fault stub
+- [ ] [BUG][P1] Give `isr_exception_1` (#DB) the `PUSH_REGS` every other user-fault stub
   performs. Without it `x86_exception_panic_frame` reads the CPU frame where it
   expects the register block, so the #DB dump is garbage and reads past the
   frame (`src/kernel/arch/x86_64/cpu_isr.S:140` `FIXME`).
-- [ ] [BUG] Push a zero error code in `DECL_EXC` for the vectors that do not supply
+- [ ] [BUG][P1] Push a zero error code in `DECL_EXC` for the vectors that do not supply
   one. The macro passes the post-`PUSH_REGS` `%rsp` unconditionally, which the
   panic decoder reads as the error-code layout; for vectors 5, 9, 15, 16, 18-20,
   22-28 and 31 the dump prints rip as "err" and cs as "rip"
   (`src/kernel/arch/x86_64/cpu_isr.S:102` `FIXME`).
-- [ ] [BUG] Read the interrupted RSP from `frame[4]` for kernel faults too. In long
+- [ ] [BUG][P1] Read the interrupted RSP from `frame[4]` for kernel faults too. In long
   mode the IRET frame always carries SS:RSP, so the current
   `(cs & 3) == 3` branch reports the IST/exception-stack address instead of the
   interrupted stack (`src/kernel/arch/x86_64/cpu_x86_64.c`,
   `x86_exception_panic_frame`).
-- [ ] [BUG] Correct both PCI protocol GUIDs in the bootloader. Neither matches the
+- [ ] [BUG][P1] Correct both PCI protocol GUIDs in the bootloader. Neither matches the
   UEFI spec value, so both `ConnectController` passes are silent no-ops
   (`src/boot/boot.c:213` `FIXME`, `src/boot/uefi.h`).
-- [ ] [BUG] Free the previous buffer on the `EFI_BUFFER_TOO_SMALL` memory-map retry
+- [ ] [BUG][P1] Free the previous buffer on the `EFI_BUFFER_TOO_SMALL` memory-map retry
   and on `boot_capacity` growth. Both paths reallocate without releasing, so the
   pages leak as `EFI_LOADER_DATA` and the kernel never reclaims them
   (`src/boot/boot.c:617`, `:861`).
 
 
-- [ ] [BUG] Stop `wasmos_app_start` over-reading `init_argv`. It clamps
+- [ ] [BUG][P1] Stop `wasmos_app_start` over-reading `init_argv`. It clamps
   `init_argc` to 4 and then unconditionally copies 4 elements, so a caller
   passing a 1-element array has 3 elements read past the end
   (`src/kernel/wasmos_app.c`).
-- [ ] [BUG] Free the two ring-3 trampoline pages at
+- [ ] [BUG][P1] Free the two ring-3 trampoline pages at
   `warp_r3_teardown`. `paging_destroy_address_space` reclaims page-table
   structures only, not mapped leaf frames, so 8 KiB leaks on every WARP guest
   teardown (`src/kernel/warp/ring3_trampolines.c`).
-- [ ] [BUG] Free the private PD/PT frames beneath a cloned low slot.
+- [ ] [BUG][P1] Free the private PD/PT frames beneath a cloned low slot.
   `paging_destroy_address_space` frees only the slot-0 PDPT frame and never
   walks below it, so every root that went through
   `paging_clone_low_slot_in_root` leaks its lower tables; the clone's own error
   paths leak earlier iterations' PDs/PTs too (`src/kernel/paging.c`).
-- [ ] [BUG] Serialize `x86_irq_mask`/`x86_irq_unmask`. They read-modify-write
+- [ ] [BUG][P1] Serialize `x86_irq_mask`/`x86_irq_unmask`. They read-modify-write
   `g_pic_mask1/2` with no lock, while only the `irq_sharing` ops path holds
   `g_irq_lines_lock` (`src/kernel/arch/x86_64/irq_x86_64.c`).
-- [ ] [BUG] Recover the lower remnant in `pfa_alloc_pages_above`. When
+- [ ] [BUG][P1] Recover the lower remnant in `pfa_alloc_pages_above`. When
   `g_ranges` is full the middle-split fallback front-allocates and silently
   drops `[rbase, start)` from the free list; those frames become unreachable
   and invisible to `pfa_free_bytes` (`src/kernel/physmem.c`).
-- [ ] [ENHANCEMENT] Pack `EFI_ADDRESS_SPACE_DESCRIPTOR`. Without
+- [ ] [ENHANCEMENT][P2] Pack `EFI_ADDRESS_SPACE_DESCRIPTOR`. Without
   `__attribute__((packed))` the padding disagrees with the ACPI byte stream it
   mirrors; harmless only because nothing reads it (`src/boot/uefi.h`).
-- [ ] [ENHANCEMENT] Give the 64 KiB boot stack a real output section.
+- [ ] [ENHANCEMENT][P2] Give the 64 KiB boot stack a real output section.
   `linker.ld` reserves it by address arithmetic only, so no program header
   allocates or zeroes it; it works because entry.S's 2 MiB identity map happens
   to cover the range (`src/kernel/arch/x86_64/linker.ld`).
-- [ ] [ENHANCEMENT] Clear `bootstrap_pd_high` entries 32..511 in `_start`. Only
+- [ ] [ENHANCEMENT][P2] Clear `bootstrap_pd_high` entries 32..511 in `_start`. Only
   the first 32 are written, unlike the three upper-level tables, so their
   contents depend on section placement (`src/kernel/arch/x86_64/entry.S`).
-- [ ] [DOCS] Correct `architecture/06-memory-management.md:112`: it states
+- [ ] [DOCS][P2] Correct `architecture/06-memory-management.md:112`: it states
   `paging_clone_low_slot_in_root` copies PML4[511]; it deep-copies PML4[0], the
   low identity slot. PML4[511] is copied by `paging_create_address_space`.
 
@@ -268,22 +280,22 @@ Source: `architecture/07-scheduling-and-preemption.md`,
 `architecture/30-ipc-direct-switch.md`, `architecture/32-coroutines-futures-promises.md`,
 and `architecture/33-completion-ports.md`.
 
-- [ ] [FEATURE] Add scheduler/process observability: committed-memory-aware process
+- [ ] [FEATURE][P2] Add scheduler/process observability: committed-memory-aware process
   reporting (feeds `memory-rss`), scheduler latency/stall counters, and useful
   per-process metrics.
-- [ ] [FEATURE] Define a fairness/budget policy now that the priority bands are actually
+- [ ] [FEATURE][P2] Define a fairness/budget policy now that the priority bands are actually
   wired (`pm_sched_prio_for_flags` → `process_set_main_prio`); measure first and
   keep the existing preemption and SMP regression gates.
-- [ ] [FEATURE] Surface futex to userspace. The kernel primitive exists (`futex_wait/wake`
+- [ ] [FEATURE][P2] Surface futex to userspace. The kernel primitive exists (`futex_wait/wake`
   in `src/kernel/futex.c`, WASM hostcalls at `src/kernel/wasm3/link.c:3800`) but
   is absent from libc `api.h` and the native `int 0x80` path; user mutexes still
   yield-spin (`src/libsys/wasm/include/wasmos/mutex.h:44`,
   `src/libsys/native/include/wasmos/libsys_native.h:296`,
   `src/libc/include/wasmos/mutex.h:44`). Add the declarations + native syscall
   and make the user mutex consume it.
-- [ ] [ENHANCEMENT] Promote libsys event-loop intents into the shared future/promise contract
+- [ ] [ENHANCEMENT][P2] Promote libsys event-loop intents into the shared future/promise contract
   with one receive pump per endpoint and request-id/generation cancellation.
-- [ ] [CLEANUP] Remove synchronous request/reply IPC from libc, libsys, native wrappers,
+- [ ] [CLEANUP][P3] Remove synchronous request/reply IPC from libc, libsys, native wrappers,
   and remaining service call sites (nested `ipc_select_one` reply-waits). The
   future/promise bridge has landed and net-stack uses it, but the
   fs-manager↔device-manager sync-round-trip deadlock hazard remains
@@ -302,35 +314,35 @@ and `architecture/33-completion-ports.md`.
     (`INIT/PROMPT/READ/WAIT_IPC/FAILED`) machine with a coroutine per command.
     Do not collapse the endpoints first: sharing one endpoint while those
     blocking receives remain just moves the input loss into them.
-- [ ] [BUG] Publish `POLL_EV_IN` on the notification path so NOTIFICATION endpoints
+- [ ] [BUG][P1] Publish `POLL_EV_IN` on the notification path so NOTIFICATION endpoints
   are visible to `ipc_select_wait`: `ipc_notify_from` does not call
   `poll_notify` (`src/kernel/ipc.c:363-385`). Prerequisite for completion ports.
-- [ ] [CLEANUP] Remove the legacy `process_block_on_ipc` shim once all callers move to the
+- [ ] [CLEANUP][P3] Remove the legacy `process_block_on_ipc` shim once all callers move to the
   select/idle-wait path (`src/kernel/process.h:225`, `src/kernel/process.c:1588`).
-- [ ] [DOCS] Reconcile `architecture/30-ipc-direct-switch.md` (fully unimplemented; its
+- [ ] [DOCS][P2] Reconcile `architecture/30-ipc-direct-switch.md` (fully unimplemented; its
   header flags conflict with the futures direction) with the futures model, or
   formally drop it. Do not add a direct-switch API that reintroduces nested
   blocking IPC.
-- [ ] [FEATURE] Define a PM-mediated cooperative lifecycle-control protocol over IPC:
+- [ ] [FEATURE][P2] Define a PM-mediated cooperative lifecycle-control protocol over IPC:
   capability-gated shutdown/cancel, acknowledgement, deadline-based escalation
   to `process_kill`, and event-loop safe points. No POSIX signal handlers or
   arbitrary asynchronous thread interruption.
-- [ ] [FEATURE] Add asynchronous, capability-gated process-death watches for supervisors
+- [ ] [FEATURE][P2] Add asynchronous, capability-gated process-death watches for supervisors
   and integrate them with the lifecycle-control event path.
-- [ ] [ENHANCEMENT] Normalize request-id validity across WASM and native `libsys` (signed vs
+- [ ] [ENHANCEMENT][P2] Normalize request-id validity across WASM and native `libsys` (signed vs
   unsigned wire representation and the reserved invalid value).
-- [ ] [BUG] Make console-backed libc `read`/`write` reject or chunk counts beyond the
+- [ ] [BUG][P1] Make console-backed libc `read`/`write` reject or chunk counts beyond the
   `int32_t` ABI limit and return the actual byte count from the console backend.
-- [ ] [FEATURE] Add the AssemblyScript async/coroutine wrappers over the shared
+- [ ] [FEATURE][P2] Add the AssemblyScript async/coroutine wrappers over the shared
   future/promise contract (native and WASM cores plus Rust/Go/Zig are done;
   AssemblyScript remains deferred).
-- [ ] [FEATURE] Defer true WASM parallelism and hard coroutine preemption until runtime
+- [ ] [FEATURE][P2] Defer true WASM parallelism and hard coroutine preemption until runtime
   locking/reentrancy has a dedicated design and validation plan.
-- [ ] [FEATURE] Implement completion ports (`architecture/33`, design proposal only): a
+- [ ] [FEATURE][P2] Implement completion ports (`architecture/33`, design proposal only): a
   kernel-owned bounded CQ with notification doorbells and generation-tagged
   operation tokens, as a batched completion source for the future/promise
   runtime and high-rate networking.
-- [ ] [FEATURE] Green-thread coroutine runtime (`architecture/32` §52, spike): re-base the
+- [ ] [FEATURE][P2] Green-thread coroutine runtime (`architecture/32` §52, spike): re-base the
   WASM coroutine substrate onto stackful **green threads** (M:1 — many coroutines
   on one OS-scheduled entity per instance), suspending guests at the host-call
   boundary rather than the §51 stackless C baseline. Public API stays
@@ -351,53 +363,48 @@ and `architecture/33-completion-ports.md`.
   Migration must keep the net stack + TLS green throughout.
 
 
-- [ ] [BUG] Bound `cpu_sched_try_steal`'s CPU loop and modulus by
+- [ ] [BUG][P1] Bound `cpu_sched_try_steal`'s CPU loop and modulus by
   `cpu_sched_usable_cpus()` rather than raw `g_cpu_count`. The raw value is
   unvalidated MADT data: 0 divides by zero, a value above `WASMOS_MAX_CPUS`
   indexes `g_cpus[]` out of bounds (`src/kernel/sched_thread.c:779` `FIXME`).
-- [ ] [BUG] Make the `IPC_CALL` request-id counter atomic and lock the per-pid slot
+- [ ] [BUG][P1] Make the `IPC_CALL` request-id counter atomic and lock the per-pid slot
   table. Two CPUs issuing `IPC_CALL` concurrently can mint the same id, which
   both reply correlation and the `syscall_ipc_request_id_issued` replay guard
   assume is unique (`src/kernel/syscall.c:58` `FIXME`).
-- [ ] [BUG] Bounds-check `line` in `irq_sharing_register/ack/unregister/dispatch/
+- [ ] [BUG][P1] Bounds-check `line` in `irq_sharing_register/ack/unregister/dispatch/
   has_sharers`. `WASMOS_ERR_IRQ_BAD_LINE` exists but is returned only for a
   NULL table; an out-of-range line is an out-of-bounds access
   (`src/kernel/irq_sharing.c:71`, `:102`, `:144`).
-- [ ] [BUG] Serialize `kenv_set`/`kenv_unset`. The store has no lock, and the
+- [ ] [BUG][P1] Serialize `kenv_set`/`kenv_unset`. The store has no lock, and the
   "callers run descheduled" justification does not hold on SMP: two CPUs can
   claim the same free slot (`src/kernel/include/kenv.h:23` `FIXME`).
-- [ ] [BUG] Hold `g_subsystem_lock` across use of a looked-up entry, or refcount it.
+- [ ] [BUG][P1] Hold `g_subsystem_lock` across use of a looked-up entry, or refcount it.
   Both lookups return a heap entry pointer after dropping the lock, while
   `wasmos_subsystem_registry_drop_owner` frees broker entries and handler node
   arrays (`src/kernel/subsystem_registry.c:567` `FIXME`).
 
 
-- [ ] [BUG] Release the process slot on every `process_spawn_as_internal`
+- [ ] [BUG][P1] Release the process slot on every `process_spawn_as_internal`
   failure after the `->NEW` claim. `process_find_slot` reclaims only
   UNUSED/DEAD and there is no NEW->DEAD edge, so the slot is stranded for the
   life of the kernel, plus a leaked mm context on the later paths
   (`src/kernel/process.c` `FIXME(spawn-slot-leak)`).
-- [ ] [BUG] Fix the `pm_service_set` name copy. `pm_service_entry_t::name` is
-  `char[17]` while registration accepts up to `WASMOS_SVC_NAME_MAX-1` (35); the
-  copy stops at `sizeof(name)` without forcing a terminator, so later `strcmp`
-  reads past the field, and names differing only after the 16th character
-  collide (`src/kernel/process_manager_services.c` `FIXME(svc-name-len)`).
-- [ ] [BUG] Sweep select sets on owner death. Endpoints are reclaimed via
+- [ ] [BUG][P1] Sweep select sets on owner death. Endpoints are reclaimed via
   `idtable_release_owner`; `g_select_table` has no equivalent, so a process
   exiting without `ipc_select_destroy` leaks its select-set id and its
   per-context quota (`src/kernel/ipc.c`).
-- [ ] [ENHANCEMENT] Initialise `g_user_mutex_lock` with `ksync_spinlock_init`.
+- [ ] [ENHANCEMENT][P2] Initialise `g_user_mutex_lock` with `ksync_spinlock_init`.
   It is never initialised, benign today only because all-zero storage happens
   to be a valid unlocked `spinlock_t` (`src/kernel/user_mutex.c`).
-- [ ] [CLEANUP] Remove `process_t::wait_event` and `process_t::wait_target_pid`.
+- [ ] [CLEANUP][P3] Remove `process_t::wait_event` and `process_t::wait_target_pid`.
   Nothing waits on or signals the event, and the pid field is only ever written
   0; real waiters park on `thread_t` and `process_wake_waiters` scans the thread
   table (`src/kernel/include/process.h`).
-- [ ] [CLEANUP] Resolve `thread_find_main_for_pid`: it returns the first slot
+- [ ] [CLEANUP][P3] Resolve `thread_find_main_for_pid`: it returns the first slot
   with a matching `owner_pid` rather than consulting the owner's `main_tid`, so
   it is not the main thread for a multi-threaded process. Zero callers today
   (`src/kernel/thread.c`).
-- [ ] [CLEANUP] Retire `poll_watcher_t::user_data` (stored by `poll_struct_add`,
+- [ ] [CLEANUP][P3] Retire `poll_watcher_t::user_data` (stored by `poll_struct_add`,
   never read) and either raise or remove `POLL_EV_OUT`/`POLL_EV_CLOSE`/
   `POLL_EV_KERNEL`, which are declared but never signalled
   (`src/kernel/include/poll.h`).
@@ -408,64 +415,60 @@ Source: `architecture/13-runtime-and-packaging.md`,
 `architecture/14-libsys-and-service-runtime.md`, and
 `architecture/15-drivers-and-services.md`.
 
-- [ ] [ENHANCEMENT] Close the remaining WARP refinement TODOs (host-call coverage itself is
+- [ ] [ENHANCEMENT][P2] Close the remaining WARP refinement TODOs (host-call coverage itself is
   broad): synchronise symbol lookups/alloc under SMP (`src/kernel/warp/link.cpp:90`
   `TODO(smp-warp)`, `src/kernel/warp/shim.cpp:579` `FIXME(smp-warp)`); reserve
   shmem auto-map windows against real heap growth (`link.cpp:1988`); write-combining
   PAT for framebuffer/scanout (`link.cpp:2145`); enable W^X once kernel paging
   supports per-4K remap (`src/kernel/warp/posix_kernel.c:97`). Provide a supported
   alternative to the vendored-runtime-pointer shim without modifying `libs/warp`.
-- [ ] [FEATURE] Make WARP multithreaded WASM either functional (locate the owner module
+- [ ] [FEATURE][P2] Make WARP multithreaded WASM either functional (locate the owner module
   bytes so VM threads run under WARP — `src/kernel/warp_driver.cpp:952`
   `module_bytes = nullptr`) or explicitly unavailable at the API boundary.
-- [ ] [BUG] Fix (or confirm resolved) the WARP ring-3 delegated-executor argv
+- [ ] [BUG][P1] Fix (or confirm resolved) the WARP ring-3 delegated-executor argv
   coherence bug: `wasmos_script`'s first xfer-buffer read of argv can read as
   zero because the kernel higher-half alias and the ring-3 user-VA view diverge
   for that page (wasm3 is unaffected). Verify against a repro before asserting
   fixed (`architecture/13`:549-551; STATUS known non-green path).
-- [ ] [BUG] Restore prior linear-memory PTEs on wasm3 `xfer_buffer`/`shmem` unmap
+- [ ] [BUG][P1] Restore prior linear-memory PTEs on wasm3 `xfer_buffer`/`shmem` unmap
   instead of only dropping shared refcounts (`src/kernel/wasm3/link.c:1553,1563,2504,2552`
   `FIXME(xfer-unmap)`/`FIXME(shmem-map-auto)`).
-- [ ] [ENHANCEMENT] Replace the wasm3 parent-name spawn heuristic with explicit per-process
+- [ ] [ENHANCEMENT][P2] Replace the wasm3 parent-name spawn heuristic with explicit per-process
   identity (`src/kernel/wasm3/link.c:589` `FIXME`).
-- [ ] [BUG] Track native VM `malloc`/`free` per-PID so a reaped process's native heap
+- [ ] [BUG][P1] Track native VM `malloc`/`free` per-PID so a reaped process's native heap
   pages are reclaimed (`src/kernel/native_driver.c:597` `TODO(nd-vm)`; native
   services are currently long-lived, so this leaks).
-- [ ] [FEATURE] Complete executable-broker handoff: route non-builtin subsystem handler
+- [ ] [FEATURE][P2] Complete executable-broker handoff: route non-builtin subsystem handler
   kinds to a userland broker instead of returning `-1` (`src/kernel/wasmos_app.c:797`),
   ensure delegated argv/transfer-buffer reads are coherent, define failure
   handling, and add end-to-end broker tests.
-- [ ] [FEATURE] Finish service-class discovery lifecycle: enumeration,
+- [ ] [FEATURE][P2] Finish service-class discovery lifecycle: enumeration,
   add/remove/death notifications, capability-gated registration, and consumer
   migration where class lookup removes hardwired provider names.
-- [ ] [FEATURE] Add driver/service supervision, restart/reincarnation, and controlled
+- [ ] [FEATURE][P2] Add driver/service supervision, restart/reincarnation, and controlled
   capability revoke/reissue on restart.
 
 
-- [ ] [BUG] Raise `WASMOS_EXEC_APP_VERSION`/`g_header_sizes` to v6. They stop at v5
+- [ ] [BUG][P0] Raise `WASMOS_EXEC_APP_VERSION`/`g_header_sizes` to v6. They stop at v5
   while `WASMOS_APP_VERSION` is 6 and the packer writes a 76-byte header, so
   `wasmos_exec_is_wap_blob()` always returns 0 and every broker-delegated spawn
   (`.lua`/`.jar` via `wasmos_script`) fails with
   `WASMOS_ERR_PROC_SPAWN_BROKER_PLAN` (`src/kernel/wasmos_exec_format.c:16`
   `FIXME(wap-v6)`).
-- [ ] [BUG] Initialise `hdr.region_count` on the packer's positional path. It is left
-  as stack garbage and written into the `.wap`, so the kernel either rejects the
-  package or walks N garbage region records and desynchronises every later
-  section (`scripts/make_wasmos_app.c:1024` `FIXME`).
-- [ ] [BUG] Bound `argc` in `wasm_driver_call` before marshalling. The wasm3 backend
+- [ ] [BUG][P1] Bound `argc` in `wasm_driver_call` before marshalling. The wasm3 backend
   builds a fixed 4-slot argument array and passes `argc` straight to `m3_Call`;
   `wasm_driver_call_entry` checks, this path does not
   (`src/kernel/include/wasm_driver.h:96` `FIXME`).
-- [ ] [CLEANUP] Retire or build `wasm_chardev.c`. It is absent from the kernel source
+- [ ] [CLEANUP][P3] Retire or build `wasm_chardev.c`. It is absent from the kernel source
   list, nothing calls its API, and no rule emits the
   `_binary_chardev_server_wasm_*` symbols it references
   (`src/kernel/wasm_chardev.c:8` `FIXME(chardev-dead)`).
-- [ ] [BUG] Fix `freeAlignedMemory` in the AOT host shim. It reads a size header at
+- [ ] [BUG][P1] Fix `freeAlignedMemory` in the AOT host shim. It reads a size header at
   `ptr - sizeof(size_t)` that `allocAlignedMemory` never writes, so it faults or
   `munmap`s a garbage length (`src/tools/warp_aot/host_mem_utils.cpp:141`).
 
 
-- [ ] [BUG] Replace the WARP C++ compat stubs that return silently wrong values
+- [ ] [BUG][P1] Replace the WARP C++ compat stubs that return silently wrong values
   with either a correct implementation or a hard failure. Each compiles and
   links, produces no diagnostic, and yields a wrong answer:
   `numeric_limits<T>::max()` returns 0 for an unspecialised T
@@ -475,14 +478,14 @@ Source: `architecture/13-runtime-and-packaging.md`,
   `FunctionRef`'s signature constraint unconditional (`compat/type_traits`);
   `mprotect` no-ops returning 0, so a W^X request appears to succeed, and
   `posix_memalign` ignores its alignment (`warp/posix_kernel.c`).
-- [ ] [BUG] Resolve the `std::terminate` ODR violation: an inline definition in
+- [ ] [BUG][P1] Resolve the `std::terminate` ODR violation: an inline definition in
   `warp/compat/exception` and an out-of-line one in `warp/cxx_abi.cpp`. It
   links, but which one runs depends on whether the translation unit saw the
   compat header.
-- [ ] [BUG] Make `realloc(ptr, 0)` free and return NULL in the wasm3 shim. It
+- [ ] [BUG][P1] Make `realloc(ptr, 0)` free and return NULL in the wasm3 shim. It
   currently returns 0 without freeing -- neither the C contract nor
   leak-free (`src/kernel/wasm3/shim.c`).
-- [ ] [ENHANCEMENT] Reconcile the wasm3/WARP behavioural divergences a guest can
+- [ ] [ENHANCEMENT][P2] Reconcile the wasm3/WARP behavioural divergences a guest can
   observe, or document them as ABI: physical allocation floor for
   `block_buffer_phys` (512 MiB under WARP vs 2 GiB under wasm3); an
   out-of-linear-memory guest pointer traps the module under wasm3 but returns
@@ -699,7 +702,7 @@ returns; `FS_ERR_*`/`PROC_*` ride IPC opcodes), so the migration depends on them
     numbering, which namespaced domains make unnecessary; `abi/hostcalls.yaml`
     and `abi/opcodes.yaml` documented the old names in prose and were updated so
     all three re-gen guards stay clean.
-- [ ] [CLEANUP] Unify the transport axis: `IPC_ERR_INVALID/PERM/FULL` in
+- [ ] [CLEANUP][P3] Unify the transport axis: `IPC_ERR_INVALID/PERM/FULL` in
   `src/kernel/include/ipc.h` duplicates `wasmos_status_t`'s `INVAL`/`DENIED`/
   `FULL` at the same values, and the same three names are redeclared in
   `fs_fat/fat_types.h` and `services/vt/vt_types.h`. Replace them with the
@@ -708,36 +711,36 @@ returns; `FS_ERR_*`/`PROC_*` ride IPC opcodes), so the migration depends on them
   Deliberately left alone: `PM_SPAWN_INTERNAL_ERR_*` (internal by name) and
   `WAMOS_SCRIPT_ERR_*` / `SCRIPT_BROKER_ERR_*`, which are service startup/exit
   statuses returned from `initialize()`, not IPC reply codes.
-- [ ] [ENHANCEMENT] Extend the `quality` re-gen guard to the host-call and opcode generators
+- [ ] [ENHANCEMENT][P2] Extend the `quality` re-gen guard to the host-call and opcode generators
   as they land (the errors guard already exists), so generated output can never
   silently drift from the IDL.
-- [ ] [ENHANCEMENT] Widen the advisory `-1` lint: it greps for a literal `return -1;`, which is
+- [ ] [ENHANCEMENT][P2] Widen the advisory `-1` lint: it greps for a literal `return -1;`, which is
   why both the `fs_init` reply-code default and every named `*_STATUS_-1` above
   escaped subsystem 4. It should also flag a reply code arg that is a variable
   reaching `-1`, and any negative-int status enum defined outside
   `abi/errors.yaml`.
 
 
-- [ ] [BUG] Read startup values from the spawn-info buffer in the Rust and Go libc
+- [ ] [BUG][P0] Read startup values from the spawn-info buffer in the Rust and Go libc
   ports. `pm_apply_entry_bindings` always passes zeros in the four `wasmos_main`
   entry-arg registers, and both ports still return those registers, so
   `startup::arg(0)`/`startup.Arg(0)` yield 0, a guest cannot obtain its PM
   endpoint, and `main` receives an empty argv. C, Zig and AssemblyScript already
   read spawn-info (`src/libc/rust/wasmos.rs:93`, `src/libc/go/wasmos.go:374`
   `FIXME(spawn-info)`).
-- [ ] [BUG] Match replies by request id in the Zig, Rust and Go `ipc.call`. All three
+- [ ] [BUG][P1] Match replies by request id in the Zig, Rust and Go `ipc.call`. All three
   return the first message arriving on the shared managed reply endpoint; C
   matches both request id and source, AssemblyScript matches request id. A
   context with two requests in flight can be handed the wrong reply.
-- [ ] [BUG] Add `//go:linkname` beside `//go:extern` on `wasmFutureThen` and the four
+- [ ] [BUG][P1] Add `//go:linkname` beside `//go:extern` on `wasmFutureThen` and the four
   `wasmIPCFuture*` declarations. Without both, the symbols stay undefined at
   link, so `Future.Then` and the `IPCFuture` methods fail to link for any Go
   guest that uses them (`src/libc/go/coroutine.go:113`
   `FIXME(go-extern-linkname)`).
-- [ ] [BUG] Zero the whole `spawn_info` record when the magic check fails. Only
+- [ ] [BUG][P1] Zero the whole `spawn_info` record when the magic check fails. Only
   `magic` is cleared, so the accessors can return buffer garbage rather than the
   documented zeros (`src/libc/src/spawn_info.c`).
-- [ ] [BUG] Replace the remaining bare `-1`/ad-hoc integers that cross a subsystem
+- [ ] [BUG][P1] Replace the remaining bare `-1`/ad-hoc integers that cross a subsystem
   boundary with packed `abi/errors.yaml` codes: `PROC_IPC_ERROR` arg1 in
   `src/kernel/process_manager_spawn.c`, the PM spawn retry match in
   `src/kernel/kernel_init_runtime.c`, `x86_irq_configure` (guest-reachable via
@@ -747,71 +750,93 @@ returns; `FS_ERR_*`/`PROC_*` ride IPC opcodes), so the migration depends on them
   (`src/drivers/fs_fat/fat_block.c:108` `FIXME`), `virtio_serial` (-2/-22/-38),
   the AssemblyScript serial/keyboard/mouse reply statuses, `ata.c`'s 1..5 status
   ints, and `chardev_server.c`.
-- [ ] [DOCS] Correct `BLOCK_ABOVE_4G`'s documented threshold. `abi/errors.yaml:335`
+- [ ] [DOCS][P2] Correct `BLOCK_ABOVE_4G`'s documented threshold. `abi/errors.yaml:335`
   says "above 4 GiB"; `block_buffer_check_phys` rejects at 2 GiB
   (`0x80000000`).
-- [ ] [BUG] Reconcile the wrong-owner code in `socket.c`: bind/connect/listen return
+- [ ] [BUG][P1] Reconcile the wrong-owner code in `socket.c`: bind/connect/listen return
   `WASMOS_ERR_NET_INVALID` while close returns `WASMOS_ERR_NET_DENIED`
   (`src/services/net_stack/socket.c:22`).
-- [ ] [CLEANUP] Resolve the duplicate mutex API. `src/libsys/wasm/include/wasmos/mutex.h`
+- [ ] [CLEANUP][P3] Resolve the duplicate mutex API. `src/libsys/wasm/include/wasmos/mutex.h`
   and `src/libc/include/wasmos/mutex.h` define the same type and functions under
   different include guards; including both in one TU is a redefinition error.
-- [ ] [BUG] Correct or replace `logf`'s accuracy claim and implementation. The
+- [ ] [BUG][P1] Correct or replace `logf`'s accuracy claim and implementation. The
   coefficients are the truncated `ln(1+t)` series, not a minimax polynomial, and
   the error reaches ~0.08 near `m -> 2`, which `powf`'s fractional-exponent path
   inherits (`src/libc/src/math.c`).
 
 
-- [ ] [BUG] Stop `%lld`/`%llx` truncating to 32 bits on wasm32. `vsnprintf`
+- [ ] [BUG][P1] Stop `%lld`/`%llx` truncating to 32 bits on wasm32. `vsnprintf`
   casts `long long` through `long`, which is 32-bit on this target
   (`src/libc/src/stdio.c`).
-- [ ] [BUG] Fix `sqrtf` for large arguments: 12 Newton iterations seeded with
+- [ ] [BUG][P1] Fix `sqrtf` for large arguments: 12 Newton iterations seeded with
   `x` do not converge above ~1e7 (`sqrtf(1e10)` returns ~2.4e6 against 1e5)
   (`src/libc/src/math.c`).
-- [ ] [BUG] Stop `fread`/`fwrite` silently dropping a trailing partial item.
+- [ ] [BUG][P1] Stop `fread`/`fwrite` silently dropping a trailing partial item.
   Both return `bytes / size`, so bytes below one whole item are consumed and
   never reported (`src/libc/src/unistd.c`).
-- [ ] [BUG] Align the wasm and native coroutine completion polarity. A wasm task
+- [ ] [BUG][P1] Align the wasm and native coroutine completion polarity. A wasm task
   returning a non-zero, non-yield status REJECTS its completion future, so
   `join()` yields that negative status; `wasmos_native_coroutine_exit()` always
   RESOLVES, so `join()` yields 0 and the value lands in `out_result`. Same API
   name, opposite failure signalling.
-- [ ] [BUG] Guard group reuse and partial registration in the wasm coroutine
+- [ ] [BUG][P1] Guard group reuse and partial registration in the wasm coroutine
   runtime. `future_group` does not test `group->active` before overwriting the
   record (native does), orphaning continuations that still point at it; and a
   registration that fails part-way returns NULL with some continuations already
   linked and `active == false`, a half-built state the caller cannot detect
   (`src/libsys/wasm/coroutine_wasm.c`).
-- [ ] [ENHANCEMENT] Reconcile the remaining wasm/native `libsys` divergences:
+- [ ] [ENHANCEMENT][P2] Reconcile the remaining wasm/native `libsys` divergences:
   `intent_send` returns -1 on wasm but the raw `ipc_send` status on native (a
   caller testing `== -1` misses native failures); `event_loop_poll` never
   returns negative on wasm but returns -1 on native, discarding the count
   already dispatched; `HANDLER_MAX` is 16 vs 24; "no endpoint" is a negative
   value vs `0xFFFFFFFF`.
-- [ ] [ENHANCEMENT] Add a `wasmos_sys_event_loop_destroy`. `event_loop_init`
+- [ ] [ENHANCEMENT][P2] Add a `wasmos_sys_event_loop_destroy`. `event_loop_init`
   creates a select set that is never released, so a transient loop leaks it
   (`src/libsys/wasm/include/wasmos/libsys.h`).
-- [ ] [ENHANCEMENT] Give `memcmp` the NULL guards every other `string.c` entry
+- [ ] [ENHANCEMENT][P2] Give `memcmp` the NULL guards every other `string.c` entry
   point has; it checks `lhs == rhs || count == 0` and then dereferences
   (`src/libc/src/string.c`).
-- [ ] [DOCS] Correct `ipc_last_field` in `abi/hostcalls.yaml` (~line 132): it
+- [ ] [DOCS][P2] Correct `ipc_last_field` in `abi/hostcalls.yaml` (~line 132): it
   documents -1 for both "no message stored" and "field out of range". Both
   shims return `IPC_ERR_NOENT` (-4) for the former and `IPC_ERR_INVALID` (-1)
   only for the latter (`src/kernel/warp/link_ipc.cpp:209,236`,
   `src/kernel/wasm3/link_ipc.c:296,317`). The generated C header inherits the
   wrong text.
-- [ ] [DOCS] Document the argument layouts missing from `abi/opcodes.yaml`:
+- [ ] [DOCS][P2] Document the argument layouts missing from `abi/opcodes.yaml`:
   `FONT_IPC_*` and `PCI_IPC_MSI_*` have none at all, unlike the vt/gfx
   families; `VT_IPC_WRITE_REQ`/`VT_IPC_SERIAL_INPUT_REQ` omit that `request_id`
   carries the sender's cached switch generation rather than a request id, and
   that a stale value silently drops the chunk; `NET_IPC_IFADDR_LIST` overloads
   `arg0` (the status slot) with the record count.
-- [ ] [DOCS] Correct `wasm_driver.h`'s claim that `wasm_driver_call_entry`
+- [ ] [DOCS][P2] Correct `wasm_driver.h`'s claim that `wasm_driver_call_entry`
   returns -1 when `entry_argc` exceeds 4: the WARP backend does not check
   `argc` and silently drops the extras.
 
+- [ ] [CLEANUP][P1] Retire the register/packed-args spawn and service-registration
+  path in favour of the descriptor form, then delete it. Packing a name into
+  `arg0..arg3` caps it at 16 characters, and packing spawn arguments into the four
+  entry-arg registers caps those at four words -- limits that come from the
+  transport, not from anything the system needs. The register form has already
+  been half-abandoned: `pm_apply_entry_bindings` passes zeros in all four entry-arg
+  registers and startup values travel in the spawn-info buffer instead, which is
+  why the Rust and Go ports (still reading the registers) cannot obtain their PM
+  endpoint. Sizing storage to the packed form is also what produced the
+  service-table name truncation fixed in fa19006629.
+
+  Callers to migrate to `SVC_IPC_REGISTER_DESC_REQ`: all four AssemblyScript
+  drivers (`src/drivers/{serial,keyboard,rtc,mouse}/*.ts`),
+  `src/services/net_stack/net_stack.c:1407`, and
+  `src/libsys/native/zig/libsys_native.c:699`. Each needs an xfer buffer for the
+  descriptor, which the AssemblyScript drivers do not currently acquire -- that is
+  the bulk of the work. Then drop `SVC_IPC_REGISTER_REQ`,
+  `pm_handle_service_register`, `pm_unpack_name_args`, the `char name[17]` locals,
+  and the four `entry_argv` words from `wasmos_app_instance_t` /
+  `wasm_driver_manifest_t` (which also removes the fixed `args[4]` marshalling
+  limit in the wasm3 backend).
+
 ## Filesystems and Storage
-- [ ] [BUG] Fix `test_exec_fs_write_smoke`, the last failing test in the QEMU
+- [ ] [BUG][P0] Fix `test_exec_fs_write_smoke`, the last failing test in the QEMU
   integration suite (run 31081191205, job 92550164406 — everything else in that
   suite is green, as are all four boot configs and the kernel unit tests). The app
   never prints `fs-write-smoke: ok`; the session tail shows a kernel fault:
@@ -843,54 +868,54 @@ returns; `FS_ERR_*`/`PROC_*` ride IPC opcodes), so the migration depends on them
   hardware backstop against a guest write landing in kernel memory (see
   `architecture/11` ring-3 work, and the shmem/linmem aliasing bug class).
 
-- [ ] [FEATURE] Implement FAT32 cluster read/write in the FAT-table layer: FAT32 is
+- [ ] [FEATURE][P2] Implement FAT32 cluster read/write in the FAT-table layer: FAT32 is
   detected at mount (`fat_geom.c:92`) but `fat_fatent_read`/`fat_fatent_write`
   return `FS_ERR_CORRUPT` and `fat_chain_next` decodes only FAT12/16 and stores
   clusters as `uint16_t` (truncation) (`src/drivers/fs_fat/fat_alloc.c:43-44,83-84,148-154`).
   Done when a FAT32 `/user` volume mounts and round-trips a file.
-- [ ] [ENHANCEMENT] Apply the non-blocking reactor model to `fs-init` (currently a blocking
+- [ ] [ENHANCEMENT][P2] Apply the non-blocking reactor model to `fs-init` (currently a blocking
   dispatcher with no SEEK/STAT — `src/drivers/fs_init/fs_init.c:498-569`) and
   preserve the transfer-buffer ownership contract through all VFS relay paths.
-- [ ] [ENHANCEMENT] Re-enable ATA bus-master DMA under the owner-push ABI: `ata_dma_prepare`
+- [ ] [ENHANCEMENT][P2] Re-enable ATA bus-master DMA under the owner-push ABI: `ata_dma_prepare`
   is stubbed to `WASMOS_DMA_STATUS_DENY` so every op is PIO
   (`src/drivers/ata/ata.c:248-264`). Carry the client `borrow_id` in the block
   IPC and map via `dma_map_borrow`, then drive the PRDT/descriptor path.
-- [ ] [FEATURE] Complete initfs zero-copy mapping with an explicit entry-offset ABI and
+- [ ] [FEATURE][P2] Complete initfs zero-copy mapping with an explicit entry-offset ABI and
   correct revoke/lifetime behavior (still copy-based today).
-- [ ] [ENHANCEMENT] Extend LFN creation beyond ASCII: new-file LFN entries currently store
+- [ ] [ENHANCEMENT][P2] Extend LFN creation beyond ASCII: new-file LFN entries currently store
   `?`-mapped ASCII, not UTF-16 (`src/drivers/fs_fat/fat_name.c:175`; read-side
   LFN already works).
-- [ ] [BUG] Fix FAT12/16 `..` self-reference and cross-cluster-boundary parent
+- [ ] [BUG][P1] Fix FAT12/16 `..` self-reference and cross-cluster-boundary parent
   assumptions (`src/drivers/fs_fat/fat_dir.c:771,775`).
-- [ ] [ENHANCEMENT] Port the reactor open-file table into `fat_file` so `fat_dir` reads it
+- [ ] [ENHANCEMENT][P2] Port the reactor open-file table into `fat_file` so `fat_dir` reads it
   there rather than the stubbed path (`src/drivers/fs_fat/fat_dir.c:339`,
   `fat_dir.h:54`).
-- [ ] [ENHANCEMENT] Refetch fs-manager boot metadata out-of-band (push/idle-step) to remove
+- [ ] [ENHANCEMENT][P2] Refetch fs-manager boot metadata out-of-band (push/idle-step) to remove
   the nested synchronous `DEVMGR_QUERY_MOUNT_REQ` deadlock hazard during
   class discovery (`src/services/fs_manager/fs_manager.c:608`).
-- [ ] [BUG] Guard FAT file-capacity growth against `uint32_t` overflow and reject
+- [ ] [BUG][P1] Guard FAT file-capacity growth against `uint32_t` overflow and reject
   writes not representable by the on-disk/open-file size fields.
-- [ ] [TEST] Expand FAT coverage deliberately: FAT32 update modes and behavioral tests
+- [ ] [TEST][P2] Expand FAT coverage deliberately: FAT32 update modes and behavioral tests
   for each added contract.
-- [ ] [FEATURE] Evaluate additional filesystems and dynamic mount lifecycle only after the
+- [ ] [FEATURE][P2] Evaluate additional filesystems and dynamic mount lifecycle only after the
   existing VFS/backends have clear mount, ownership, and recovery semantics.
 
 
-- [ ] [BUG] Serve FAT32 or refuse the mount. `fat_parse_boot` detects it, then every
+- [ ] [BUG][P1] Serve FAT32 or refuse the mount. `fat_parse_boot` detects it, then every
   `fat_fatent_read/write` fails `WASMOS_ERR_FS_CORRUPT` and
   `fat_end_of_chain_marker` returns 0, so the volume mounts unusable
   (`src/drivers/fs_fat/fat_geom.c:94` `TODO`).
-- [ ] [BUG] Honour `mnt->bytes_per_sector` in `fat_block_start`. The transfer is fixed
+- [ ] [BUG][P1] Honour `mnt->bytes_per_sector` in `fat_block_start`. The transfer is fixed
   at `FAT_SECTOR_SIZE` (512) while `fat_parse_boot` accepts 1024/2048/4096 and
   the FAT/dir code then parses `bytes_per_sector` bytes out of the staged
   sector, silently truncating (`src/drivers/fs_fat/fat_block.c:58` `TODO`).
-- [ ] [BUG] Resolve `..` against the on-disk parent. `fat_resolve_path`,
+- [ ] [BUG][P1] Resolve `..` against the on-disk parent. `fat_resolve_path`,
   `fat_resolve_parent_dir` and `fat_chdir_next_component` all reset to the root
   region, so `a/b/../c` resolves against the root
   (`src/drivers/fs_fat/fat_dir.c`).
 
 
-- [ ] [CLEANUP] Remove the unreachable `block_endpoint` parameter path in the
+- [ ] [CLEANUP][P3] Remove the unreachable `block_endpoint` parameter path in the
   FAT backend's `initialize`. `wasmos_app_start` is invoked with
   `init_args[4] = {0,0,0,0}`, so `block_endpoint > 0` is never true and
   discovery always falls through to `svc_lookup` (`src/drivers/fs_fat/fs_fat.c`).
@@ -901,39 +926,39 @@ Source: `architecture/16-device-manager-and-bus-enumeration.md`,
 `architecture/17-console-io-and-character-device.md`, and
 `architecture/21-virtual-input-testing-via-virtio-serial.md`.
 
-- [ ] [FEATURE] Implement virtio-serial queue setup plus data/control-plane byte-stream
+- [ ] [FEATURE][P2] Implement virtio-serial queue setup plus data/control-plane byte-stream
   IPC; discovery/register access alone cannot transport host data
   (`src/drivers/virtio_serial/virtio_serial.c:160` `TODO(virtio-serial-transport)`).
-- [ ] [FEATURE] Build the `virt-input` service and host bridge after virtio-serial data
+- [ ] [FEATURE][P2] Build the `virt-input` service and host bridge after virtio-serial data
   transport exists; inject keyboard/mouse events through the normal compositor
   IPC path and add sequential QEMU UI automation tests (no source exists yet;
   `architecture/21`).
-- [ ] [FEATURE] Wire parsed device-manager rules into runtime bind/unbind/mount policy;
+- [ ] [FEATURE][P2] Wire parsed device-manager rules into runtime bind/unbind/mount policy;
   spawn already works but the rule actions are still informational
   (`src/services/device_manager/device_manager.c:127`).
-- [ ] [ENHANCEMENT] Split a dedicated `irq.configure` capability from `irq.route` for
+- [ ] [ENHANCEMENT][P2] Split a dedicated `irq.configure` capability from `irq.route` for
   level/active-low configuration (`src/services/pci_bus/linker.metadata:25`;
   kernel side `src/kernel/warp/link.cpp:2414`).
-- [ ] [ENHANCEMENT] Preserve each driver module's declared IRQ capability mask in
+- [ ] [ENHANCEMENT][P2] Preserve each driver module's declared IRQ capability mask in
   device-manager metadata instead of granting the fixed IRQ 14/15 pair.
-- [ ] [CLEANUP] Remove the now-dead DMA-window defaulting in the individual
+- [ ] [CLEANUP][P3] Remove the now-dead DMA-window defaulting in the individual
   `PROC_IPC_SPAWN_*_CAPS` handlers (`process_manager_spawn.c`); DMA windows are
   now installed from the driver's `dma.buffer` manifest capability
   (`capability_grant_name`), not the spawner.
-- [ ] [CLEANUP] Consolidate the per-file `#define PAGE_SIZE 0x1000` copies
+- [ ] [CLEANUP][P3] Consolidate the per-file `#define PAGE_SIZE 0x1000` copies
   (physmem.c/process.c/memory.c/native_driver.c/capability.c/…) into one shared
   header.
-- [ ] [ENHANCEMENT] Replace the fixed `DEVMGR_RULE_TEXT_CAP` rules-file read buffer (now 4096)
+- [ ] [ENHANCEMENT][P2] Replace the fixed `DEVMGR_RULE_TEXT_CAP` rules-file read buffer (now 4096)
   with an `FS_IPC_STAT_REQ`-sized (or streaming/chunked) read so the rules file
   has no size limit; a fixed buffer silently truncates trailing rules.
-- [ ] [FEATURE] Add hotplug/event publication and future bus providers (USB/virtual)
+- [ ] [FEATURE][P2] Add hotplug/event publication and future bus providers (USB/virtual)
   through the normalized device-record contract.
 
 
-- [ ] [BUG] Correct 12-hour RTC decoding. The noon and midnight hours are off by 12 in
+- [ ] [BUG][P1] Correct 12-hour RTC decoding. The noon and midnight hours are off by 12 in
   both the BCD and binary branches; unreached while register B reports 24-hour
   mode (`src/drivers/rtc/rtc.ts:218` `FIXME`).
-- [ ] [BUG] Add the producer-lapped snap-forward to the PCI framebuffer's console-ring
+- [ ] [BUG][P1] Add the producer-lapped snap-forward to the PCI framebuffer's console-ring
   drain. The UEFI driver performs `rp = wp - cap`; this copy does not, so an
   overrun leaves it reading overwritten bytes
   (`src/drivers/framebuffer_pci/framebuffer_pci_native.c:237` `FIXME`).
@@ -947,18 +972,18 @@ TCP client (connect/stream/close) and server (listen/accept/echo) over rings,
 DHCP/static addressing, DNS (`NET_IPC_RESOLVE`), and a verifying TLS 1.2 client.
 Remaining:
 
-- [ ] [ENHANCEMENT] Harden TCP timeout/retransmit and the close path: drive
+- [ ] [ENHANCEMENT][P2] Harden TCP timeout/retransmit and the close path: drive
   `sys_check_timeouts()` from a dedicated timer source rather than only the idle
   loop, with retransmit/close e2e tests (`src/services/net_stack/net_stack.c:2646`;
   STATUS `Current Gaps`).
-- [ ] [FEATURE] Add IPv6 / NDP / ICMPv6 / dual-stack, multiple addresses per interface,
+- [ ] [FEATURE][P2] Add IPv6 / NDP / ICMPv6 / dual-stack, multiple addresses per interface,
   and isolated multi-stack instances (`src/services/net_stack/lwipopts.h:41`
   `LWIP_IPV6 0`).
-- [ ] [FEATURE] Validate TLS certificate dates: wire an RTC time source into mbedTLS
+- [ ] [FEATURE][P2] Validate TLS certificate dates: wire an RTC time source into mbedTLS
   (`MBEDTLS_HAVE_TIME`/`HAVE_TIME_DATE`) so validity windows are checked.
-- [ ] [ENHANCEMENT] Harden TLS/large-transfer RX-ring backpressure so big bodies do not stall
+- [ ] [ENHANCEMENT][P2] Harden TLS/large-transfer RX-ring backpressure so big bodies do not stall
   on a full RX ring (app-side flow control).
-- [ ] [FEATURE] Enable guest-to-guest loopback (`LWIP_NETIF_LOOPBACK` + net-stack loopback
+- [ ] [FEATURE][P2] Enable guest-to-guest loopback (`LWIP_NETIF_LOOPBACK` + net-stack loopback
   polling) so an in-guest server is reachable.
 - [x] Migrate virtio-net to per-vq MSI-X so RX interrupts re-deliver per
   notification and the timed-poll workaround drops to a plain blocking wait.
@@ -967,54 +992,54 @@ Remaining:
   the `msi` error domain, a resident pci-bus owning the capability walk and
   device programming (`PCI_IPC_MSI_*`), and `mmio_write32` for the MSI-X table
   BAR. virtio-net takes RX/TX/config vectors; virtio-rng takes one.
-- [ ] [BUG] Fix the unit-test IDE target so the lint gate is green again:
+- [ ] [BUG][P0] Fix the unit-test IDE target so the lint gate is green again:
   `wasmos_ide_unit` fails on `tests/unit/test_device_manager_rules.c`
   (undeclared `abort`), so it never reaches `tests/unit/test_libui_key_decode.c`,
   which then has no compile-DB entry and clang-tidy cannot find
   `wasmos/libui.h`. Adding `src/libui/include` to the target is NOT sufficient on
   its own — it pulls the project `string.h` into a hosted TU and breaks the
   target differently. See `skills/wasmos-ide-targets`.
-- [ ] [FEATURE] Give `ata` real device DMA. There is no bus-master IDE (BMIDE/PRD)
+- [ ] [FEATURE][P2] Give `ata` real device DMA. There is no bus-master IDE (BMIDE/PRD)
   programming today, so every transfer is PIO regardless of the `dma_*`
   scaffolding. On QEMU's PIIX this means bus-master IDE; an AHCI controller
   (`ich9-ahci`) would be the better target and would also bring MSI, which
   legacy IDE cannot offer at all.
-- [ ] [ENHANCEMENT] Move the resident pci-bus request loop onto the coroutine/event-loop
+- [ ] [ENHANCEMENT][P2] Move the resident pci-bus request loop onto the coroutine/event-loop
   runtime. It blocks (never spins), which is sufficient while every request is
   answered from config space, but hot-plug will need it to originate requests
   while serving.
-- [ ] [FEATURE] PCI hot-plug: add a rescan opcode over `pci_scan_and_publish()` — small on
+- [ ] [FEATURE][P2] PCI hot-plug: add a rescan opcode over `pci_scan_and_publish()` — small on
   its own, but knowing *when* to rescan needs an ACPI GPE/SCI path that does not
   exist yet. Depends on the coroutine-loop item above.
-- [ ] [FEATURE] Support multi-message plain MSI (cap `0x05`): needs a contiguous,
+- [ ] [FEATURE][P2] Support multi-message plain MSI (cap `0x05`): needs a contiguous,
   naturally-aligned vector block from the kernel (an `msi_alloc_block`), so
   pci-bus currently reports MSI as exactly one vector
   (`src/services/pci_bus/pci_bus.c`, `msi_query`). Only the MSI-X path is
   exercised in-tree — no QEMU device in the default boot offers MSI without
   MSI-X.
-- [ ] [ENHANCEMENT] Steer MSI vectors at CPUs other than the BSP. Both `msi_x86_64.c`
+- [ ] [ENHANCEMENT][P2] Steer MSI vectors at CPUs other than the BSP. Both `msi_x86_64.c`
   (`MSI_DEST_APIC_ID`) and `ioapic_program_rtes()` hardcode LAPIC 0; changing
   one without the other splits interrupt affinity across two models.
-- [ ] [CLEANUP] Move the kernel notify-type space (`IPC_IRQ_EVENT_TYPE` 0xFF00,
+- [ ] [CLEANUP][P3] Move the kernel notify-type space (`IPC_IRQ_EVENT_TYPE` 0xFF00,
   `IPC_MSI_EVENT_TYPE` 0xFF01) into `abi/opcodes.yaml`. Both are currently
   hand-mirrored into each driver source instead of generated.
-- [ ] [FEATURE] Define the net owner-push wire protocol so TX/RX carry an explicit
+- [ ] [FEATURE][P2] Define the net owner-push wire protocol so TX/RX carry an explicit
   client `buffer_id`/grant instead of overloading `msg.arg0`/`arg1`
   (`src/drivers/virtio_net/virtio_net.c:479,718,752,775,900` `FIXME(owner-push)`).
-- [ ] [FEATURE] Add a multi-interface ifcfg selector so boot config can target non-default
+- [ ] [FEATURE][P2] Add a multi-interface ifcfg selector so boot config can target non-default
   interfaces (`src/services/net_stack/net_stack.c:977` `FIXME(multinet-ifcfg)`).
-- [ ] [ENHANCEMENT] Evaluate a packet DMA fast path that removes the RX copy (only after the
+- [ ] [ENHANCEMENT][P2] Evaluate a packet DMA fast path that removes the RX copy (only after the
   negative-path/restart/link-down test coverage lands).
-- [ ] [ENHANCEMENT] Minor: expand the net-stack lwIP diagnostic `vprintf`
+- [ ] [ENHANCEMENT][P2] Minor: expand the net-stack lwIP diagnostic `vprintf`
   (`net_stack.c:316`) and source net-stack's clock directly from a native
   driver-api millisecond hook (`src/services/net_stack/port.c:34`).
 
 
-- [ ] [ENHANCEMENT] Raise `MEM_ALIGNMENT` to 8 in `lwipopts.h`. It is 4 on an
+- [ ] [ENHANCEMENT][P2] Raise `MEM_ALIGNMENT` to 8 in `lwipopts.h`. It is 4 on an
   LP64 x86_64 target against lwIP's guidance of 8 for 64-bit platforms; it
   works only because x86 tolerates misaligned access
   (`src/services/net_stack/lwipopts.h`).
-- [ ] [CLEANUP] Use `IP_IFADDR_RECORD_BYTES` in `ip`'s `cmd_show` instead of the
+- [ ] [CLEANUP][P3] Use `IP_IFADDR_RECORD_BYTES` in `ip`'s `cmd_show` instead of the
   hardcoded `24u` it repeats twice; a record-size change would otherwise desync
   silently (`src/utils/ip/ip.c`).
 
@@ -1027,57 +1052,57 @@ Source: `architecture/19-virtual-terminal.md`,
 
 VT I/O-multiplexer phase 5 (remaining; phases 0–4 shipped):
 
-- [ ] [ENHANCEMENT] Make vt-1 default-visible at boot (`src/services/vt/vt_main.c:21`,
+- [ ] [ENHANCEMENT][P2] Make vt-1 default-visible at boot (`src/services/vt/vt_main.c:21`,
   `g_active_tty = 0`).
-- [ ] [CLEANUP] Retire the framebuffer-PCI console-ring drain so the framebuffer is a pure
+- [ ] [CLEANUP][P3] Retire the framebuffer-PCI console-ring drain so the framebuffer is a pure
   blit surface (`src/drivers/framebuffer_pci/framebuffer_pci_native.c:41,233,336`).
-- [ ] [FEATURE] Add the serial-bound-slot selector (`VT_IPC_BIND_SERIAL_REQ`, undefined;
+- [ ] [FEATURE][P2] Add the serial-bound-slot selector (`VT_IPC_BIND_SERIAL_REQ`, undefined;
   `g_serial_tty` is fixed at 1 — `vt_main.c:24`).
-- [ ] [FEATURE] Lazy per-slot CLI spawn: have the VT spawn `cli.wap` pinned to a slot on
+- [ ] [FEATURE][P2] Lazy per-slot CLI spawn: have the VT spawn `cli.wap` pinned to a slot on
   first switch and drop `start cli.wap` from `sysinit.rc`.
 
 Other graphics/VT/UI:
 
-- [ ] [BUG] Reclaim old libui font shared-memory objects when text buffers grow
+- [ ] [BUG][P1] Reclaim old libui font shared-memory objects when text buffers grow
   (`src/libui/include/libui.h:471`) and the compositor's title-glyph shmem IDs
   on growth (`src/services/gfx_compositor/gfx_compositor.zig:2007`).
-- [ ] [ENHANCEMENT] Make `libui`, font-service, and compositor allocation/index arithmetic
+- [ ] [ENHANCEMENT][P2] Make `libui`, font-service, and compositor allocation/index arithmetic
   overflow-safe: validate dimensions before multiplication, compute buffer
   indexes in `usize`, and cap growth before capacity doubling.
-- [ ] [FEATURE] Add an explicit mode-set / update-framebuffer-info path before the VBE
+- [ ] [FEATURE][P2] Add an explicit mode-set / update-framebuffer-info path before the VBE
   reprogram after ExitBootServices
   (`src/drivers/framebuffer/framebuffer_native.c:159`,
   `src/drivers/framebuffer_pci/framebuffer_pci_native.c:275`).
-- [ ] [ENHANCEMENT] Make VT cell/reply/replay writes robust under framebuffer backpressure;
+- [ ] [ENHANCEMENT][P2] Make VT cell/reply/replay writes robust under framebuffer backpressure;
   they are best-effort today and drop on persistent queue-full
   (`src/services/vt/vt_main.c:244,287,892`).
-- [ ] [BUG] Reproduce and fix the deferred rapid-TTY-switch prompt
+- [ ] [BUG][P1] Reproduce and fix the deferred rapid-TTY-switch prompt
   duplication/misalignment (`src/services/vt/vt_main.c:1755`); keep deferred
   until a stable repro exists.
-- [ ] [FEATURE] Add a real WASM link step to the AssemblyScript `libui` build (currently a
+- [ ] [FEATURE][P2] Add a real WASM link step to the AssemblyScript `libui` build (currently a
   stub — `src/libui/assemblyscript/libui.ts:133`).
-- [ ] [ENHANCEMENT] Add script-engine diagnostics for unclosed `if` blocks (the EOF
+- [ ] [ENHANCEMENT][P2] Add script-engine diagnostics for unclosed `if` blocks (the EOF
   `total_depth > 0` warn path is a no-op) and preserve the documented `script`
   vs `source` environment-scope semantics.
-- [ ] [FEATURE] Expand VT behavior only from an explicit compatibility need: richer ANSI,
+- [ ] [FEATURE][P2] Expand VT behavior only from an explicit compatibility need: richer ANSI,
   UTF-8, scrollback, or input APIs should each include focused behavioral tests.
 
 
-- [ ] [BUG] Type-check `ui_component_set_text`. It casts `component_data` to
+- [ ] [BUG][P1] Type-check `ui_component_set_text`. It casts `component_data` to
   `ui_text_data_t*` with no check, so setting text on a LIST_VIEW, TREE_VIEW,
   SCROLL_VIEW or MENU_BAR reinterprets that component's data
   (`src/libui/include/wasmos/libui.h:676` `FIXME`).
-- [ ] [BUG] Destroy an open popup's compositor window at teardown.
+- [ ] [BUG][P1] Destroy an open popup's compositor window at teardown.
   `ui_menu_item_destroy_data` releases only the shmem, leaking the window and
   its shared buffer (`src/libui/include/wasmos/libui_menu_item.h:557` `FIXME`).
-- [ ] [BUG] Bound the realloc copy in the libui Zig shim by the OLD block size. A grow
+- [ ] [BUG][P1] Bound the realloc copy in the libui Zig shim by the OLD block size. A grow
   reads past the end of the old block, and past the arena for a block at its
   tail (`src/libui/zig/libui_shim.c:67` `FIXME`).
-- [ ] [BUG] Add the '9' glyph to `drawDigit3x5`; the table holds 0-8 and the guard
+- [ ] [BUG][P3] Add the '9' glyph to `drawDigit3x5`; the table holds 0-8 and the guard
   rejects 9 (`src/libui/assemblyscript/libui.ts`).
-- [ ] [CLEANUP] Remove the no-op self-assignment `d->list.capacity = d->list.capacity`
+- [ ] [CLEANUP][P3] Remove the no-op self-assignment `d->list.capacity = d->list.capacity`
   (`src/libui/include/wasmos/libui_dropdown.h:69` `FIXME`).
-- [ ] [BUG] Flush after the tetris back-buffer blit under wasm3, or gate the app on
+- [ ] [BUG][P1] Flush after the tetris back-buffer blit under wasm3, or gate the app on
   WARP. `present()` writes through the mapped window, which aliases the shared
   region's own pages only under WARP; under wasm3 `shmem_map_auto` rewrites the
   process page tables while the interpreter reads linear memory through its
@@ -1085,31 +1110,31 @@ Other graphics/VT/UI:
   for both runtimes (`examples/rust/tetris/tetris.rs:414` `TODO`).
 
 
-- [ ] [BUG] Apply the scroll offset when hit-testing scroll-view children.
+- [ ] [BUG][P1] Apply the scroll offset when hit-testing scroll-view children.
   `ui_layout_scroll_view` assigns child bounds without it and
   `ui_render_component_clip` subtracts `offset_y` only at paint time, while
   `ui_find_clickable_at`/`ui_find_component_at` test the raw `bounds` -- so a
   click inside a scrolled container does not match what is on screen
   (`src/libui/include/wasmos/libui.h`,
   `src/libui/include/wasmos/libui_scroll_view.h`).
-- [ ] [BUG] Type-check `ui_component_text_len`, which has the same missing check
+- [ ] [BUG][P1] Type-check `ui_component_text_len`, which has the same missing check
   as `ui_component_set_text` and reinterprets LIST_VIEW/TREE_VIEW/SCROLL_VIEW/
   MENU_BAR data as `ui_text_data_t` (`src/libui/include/wasmos/libui.h`).
-- [ ] [BUG] Make "no selection" representable. `ui_component_alloc` and
+- [ ] [BUG][P1] Make "no selection" representable. `ui_component_alloc` and
   `ui_component_collection_clear` set `selected = -1`, but the list, tree and
   dropdown layout passes clamp it to 0 for a non-empty collection, so the state
   cannot survive a layout (`src/libui/include/wasmos/libui.h`).
-- [ ] [BUG] Reopen a menu popup when its entries change without changing the
+- [ ] [BUG][P1] Reopen a menu popup when its entries change without changing the
   child count: `ui_menu_item_sync_popup` compares only the height, so replacing
   entries leaves a stale popup (`src/libui/include/wasmos/libui_menu_item.h`).
-- [ ] [BUG] Overflow-check `calloc`'s `n * size` in the libui Zig shim; a
+- [ ] [BUG][P1] Overflow-check `calloc`'s `n * size` in the libui Zig shim; a
   wrapped product yields an undersized block instead of NULL
   (`src/libui/zig/libui_shim.c`).
-- [ ] [ENHANCEMENT] Split `ui_component_list_append`'s return: it yields a row
+- [ ] [ENHANCEMENT][P2] Split `ui_component_list_append`'s return: it yields a row
   index for LIST_VIEW/TREE_VIEW/DROPDOWN but a component id for MENU_ITEM, two
   incompatible non-negative domains a caller cannot tell apart
   (`src/libui/include/wasmos/libui.h`).
-- [ ] [CLEANUP] Delete the compositor's dead keymap path -- `SCANCODE_MAP_LEN`,
+- [ ] [CLEANUP][P3] Delete the compositor's dead keymap path -- `SCANCODE_MAP_LEN`,
   `keymap_t`, `KEYMAP_US`, `KEYMAP_DE_NODEADKEYS`, `active_keymap`,
   `scancode_to_ascii`, `g_key_layout`. Nothing calls the decoder, and its
   presence contradicts the "vt is the single keymap decoder" invariant. The
@@ -1123,21 +1148,21 @@ Source: `architecture/25-diagnostics-status.md`,
 `architecture/26-repo-map-and-validation.md`, and
 `architecture/27-python-test-framework.md`.
 
-- [ ] [TEST] Add behavioral regression coverage with every new subsystem contract;
+- [ ] [TEST][P2] Add behavioral regression coverage with every new subsystem contract;
   reject source-text assertions.
-- [ ] [TEST] Add focused stress/negative tests for TLB shootdown, service restart,
+- [ ] [TEST][P2] Add focused stress/negative tests for TLB shootdown, service restart,
   futures cancellation, virtio-serial transport, networking link-down/restart,
   and new DMA paths.
-- [ ] [TEST] Add graphical input-injection tests only after virtio-serial transport is
+- [ ] [TEST][P2] Add graphical input-injection tests only after virtio-serial transport is
   usable; use distinct sockets and never run QEMU sessions in parallel.
-- [ ] [ENHANCEMENT] Extend `scripts/kconfig_to_cmake.py:37` symbol map as more CMake cache
+- [ ] [ENHANCEMENT][P2] Extend `scripts/kconfig_to_cmake.py:37` symbol map as more CMake cache
   settings migrate to Kconfig, and make `scripts/quality.sh:133` clang-tidy lint
   C++ sources (missing `--extra-arg` flags).
-- [ ] [DOCS] Keep architecture documents authoritative for design, `STATUS.md` concise
+- [ ] [DOCS][P2] Keep architecture documents authoritative for design, `STATUS.md` concise
   for current behavior, and this file limited to unfinished work.
 
 
-- [ ] [TEST] Restore coverage for the cases whose assertions no longer reach the
+- [ ] [TEST][P2] Restore coverage for the cases whose assertions no longer reach the
   documented scenario: the `sched_timeout_arm` 0-to-1 coercion is unreachable
   through `sched_event_wait` (`tests/unit/test_sched_event.c:312` `FIXME`);
   `test_malloc_overflow` cannot distinguish overflow handling from a heap the
@@ -1146,35 +1171,35 @@ Source: `architecture/25-diagnostics-status.md`,
   scheduler reads (`tests/unit/test_sched_runqueue.c:1450` `FIXME`); the libui
   key-decode clamp case reaches only the lower bound; `test_ipc.c` S4 duplicates
   Q10 rather than exhausting the select table.
-- [ ] [TEST] Align `stubs_native_libsys.c`'s `str_copy_bytes` with the real one. The
+- [ ] [TEST][P2] Align `stubs_native_libsys.c`'s `str_copy_bytes` with the real one. The
   stub accepts `src_len == 0` where `src/libc/src/string.c` refuses it, and
   `libsys_native.c` branches on that return, so host and target disagree
   (`tests/unit/stubs_native_libsys.c:7` `FIXME`).
-- [ ] [TEST] Correct the `user_mutex_user_try_lock`/`_unlock` stub arity. The stubs take
+- [ ] [TEST][P2] Correct the `user_mutex_user_try_lock`/`_unlock` stub arity. The stubs take
   2 parameters; `user_mutex.h` declares 4 and `syscall.c` calls with 4. It
   compiles only because the test never includes the header
   (`tests/unit/test_syscall_ipc.c`).
-- [ ] [TEST] Wire up or delete `tests/unit/include/spinlock.h`. Nothing includes it, so
+- [ ] [TEST][P2] Wire up or delete `tests/unit/include/spinlock.h`. Nothing includes it, so
   `-DWASMOS_TEST_USE_REAL_SPINLOCK_DECLS` has no effect
   (`tests/unit/include/spinlock.h:11` `TODO`).
-- [ ] [TEST] Make the threading selftest's join markers reflect what they name. Three
+- [ ] [TEST][P2] Make the threading selftest's join markers reflect what they name. Three
   markers are emitted from the wait/kill result, so a broken join-after-kill
   still prints "ok" (`src/kernel/kernel_threading_selftest_runtime.c:320`
   `FIXME`).
 
 
-- [ ] [TEST] Make `stubs_xfer_buffer_platform.c`'s `pfa_free_pages` model the
+- [ ] [TEST][P2] Make `stubs_xfer_buffer_platform.c`'s `pfa_free_pages` model the
   real allocator. It is a total no-op, so both leaks and double-frees are
   invisible to every test built on it.
-- [ ] [TEST] Distinguish the `_noirq` spinlock forms in `stubs_spinlock.c`. On
+- [ ] [TEST][P2] Distinguish the `_noirq` spinlock forms in `stubs_spinlock.c`. On
   the host lock/unlock and their `_noirq` variants are interchangeable, so a
   mispaired acquire/release passes in tests and corrupts the preempt depth on
   target.
-- [ ] [TEST] Close the gaps in `tests/unit/include/sched_event.h`: it is
+- [ ] [TEST][P2] Close the gaps in `tests/unit/include/sched_event.h`: it is
   layout-incompatible with the kernel struct (`wait_list` replaced by a pthread
   mutex/condvar), ignores `timeout_ms` so no timed-wait path is covered, and
   loses a wake raised before a waiter parks -- something the kernel's
   under-lock enqueue cannot do.
-- [ ] [TEST] Make `test_hostcall_ipc.cpp`'s timed-select rows actually reach a
+- [ ] [TEST][P2] Make `test_hostcall_ipc.cpp`'s timed-select rows actually reach a
   deadline. `timer_ticks()` is frozen and nothing calls `sched_timeout_check`,
   so `WASMOS_TIMEOUT` arrives via the spurious-wake path instead.

@@ -836,7 +836,9 @@ int main(int argc, char** argv) {
             return 1;
         }
 
-        wasmos_app_header_t hdr;
+        /* Zero-initialised so a header field added later cannot reach the package
+         * as stack garbage on a path that forgets to assign it. */
+        wasmos_app_header_t hdr = {0};
         memcpy(hdr.magic, MAGIC, 8);
         hdr.version = VERSION;
         hdr.header_size = sizeof(hdr);
@@ -1122,7 +1124,8 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    wasmos_app_header_t hdr;
+    /* Zero-initialised: see the manifest path's note. */
+    wasmos_app_header_t hdr = {0};
     memcpy(hdr.magic, MAGIC, 8);
     hdr.version = VERSION;
     hdr.header_size = sizeof(hdr);
@@ -1145,11 +1148,12 @@ int main(int argc, char** argv) {
     hdr.driver_match_count = driver_match_count;
     hdr.compiled_size = 0; /* positional path emits no AOT binary; use --manifest --compiled */
     subsystem_tag_copy(hdr.subsystem_tag, (flags & (1u << 4)) != 0 ? "NATIVE" : "WASM");
-    /* FIXME: hdr.region_count is left uninitialised on this path, so a stack
-     * garbage value is written into the package. wasmos_app_parse() rejects the
-     * package when it exceeds WASMOS_APP_MAX_REGIONS and otherwise consumes that
-     * many bytes as region entries, desynchronising every following section.
-     * Only the --manifest path above assigns it. */
+    /* No regions without a manifest: declaring a register window needs the
+     * [[regions]] table, so this path emits none.  The count must still be
+     * written, because the parser consumes exactly this many region entries
+     * before the memory hints and would otherwise read the following section at
+     * the wrong offset. */
+    hdr.region_count = 0;
 
     wasmos_mem_hint_t stack_hint = {MEM_HINT_STACK, stack_pages, 0};
     wasmos_mem_hint_t heap_hint = {MEM_HINT_HEAP, heap_pages, 0};

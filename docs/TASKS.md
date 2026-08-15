@@ -1463,12 +1463,20 @@ Source: `architecture/25-diagnostics-status.md`,
   take, so both arms ran identical code and the result meant nothing.
 
 - [ ] [BUG][P1] Chase the intermittent whole-session hang: roughly 2 sessions per
-  full CI suite run go silent for 100-120 s and are killed by the harness, with
-  the next log line a fresh UEFI boot, so they never resume. The stall point
-  differs every run (`fat` backend registered, `native-call-smoke` start, `using
-  AOT binary`, `[calculator] ready`), which points at a timing race rather than a
-  deterministic bug. Whichever test owns the dead session fails, reported as
-  `ERROR: setUpClass ... CLI prompt not reached` when it needed the prompt.
+  full CI suite run go silent and never resume. The stall point differs every run
+  (`fat` backend registered, `native-call-smoke` start, `using AOT binary`,
+  `[calculator] ready`, and in run 31889615410 the prompt after an `ls` in
+  `/boot`), which points at a timing race rather than a deterministic bug.
+
+  Two parts of the old description were the harness, not the guest, and are gone:
+  "killed by the harness" and "the next log line a fresh UEFI boot" were
+  `expect_from` calling `force_stop` on a per-command timeout, which killed a VM
+  shared by a whole test class; and the "100-120 s" was that timeout
+  (`20 s x WASMOS_TEST_TIMEOUT_SCALE=3`, once or twice per command), not a
+  property of the stall. `expect_from` no longer stops the VM, so an occurrence
+  now costs one failed test and the session stays up -- which also means the
+  remaining tests act as a free probe of whether the guest recovers. Read the
+  next run's log with that in mind: the old signature will not reappear.
 
   Rate was unchanged across a large ABI change (2 stalls / 36 boots before, 2 / 36
   after), and it has only ever been seen in CI -- the full suite is green locally
@@ -1478,7 +1486,15 @@ Source: `architecture/25-diagnostics-status.md`,
 
   Do not conflate it with the virtio-net notify flake above: there the guest stays
   alive and one expected message is missing (an assertion FAIL); here everything
-  stops (a test ERROR). Both merely present as "timed out waiting for something".
+  stops. Both merely present as "timed out waiting for something".
+
+  The best-documented instance is CI run 31889615410, job 95023862160. The console
+  shows `cd /`, `cd boot`, then `ls` printing its full eight-entry listing down to
+  `system/` -- and then no prompt, ever. So the CLI serviced the command and
+  produced all of its output; what is missing is only the prompt that follows.
+  That is a narrower symptom than "the session went silent" and worth checking
+  first: whatever the CLI does between finishing a command's output and writing
+  the next prompt.
 
 - [ ] [BUG][P2] Make `run-qemu-ring3-threading-test` assert the probe it names.
   The ring-3 thread lifecycle probe never issues a join syscall: instrumenting

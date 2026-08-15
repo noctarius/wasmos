@@ -886,6 +886,21 @@ class QemuSession:
         needle: Union[bytes, str, Pattern[bytes]],
         timeout_s: Optional[int] = None,
     ) -> bool:
+        """Wait for `needle` in the output produced after `start`.
+
+        Unlike expect(), a timeout here never stops the VM. The two answer
+        different questions: expect() waits for a session-level milestone, so a
+        timeout there means the session is unusable and killing it is right;
+        expect_from() waits for one command's output within a session the caller
+        already has, and every caller reports that timeout itself -- often as a
+        retry (`if expect_from(...): break`), where a miss is the normal case.
+
+        Stopping the VM here punished the whole test class for one command,
+        because the session is created in setUpClass and shared: a single
+        missing prompt after `ls` became 14 failures and 13 minutes of timing
+        out against a dead machine (CI run 31889615410). Sessions are torn down
+        explicitly in tearDownClass, so nothing depended on this kill.
+        """
         if isinstance(needle, str):
             needle_b = needle.encode("utf-8")
             pattern = None
@@ -909,8 +924,6 @@ class QemuSession:
                 if needle_b in view:
                     return True
             self._pump(0.2)
-        if self.force_stop_on_timeout:
-            self.force_stop()
         return False
 
     def settle(self, probe_s: int = 3, timeout_s: int = 30) -> bool:
@@ -926,24 +939,19 @@ class QemuSession:
         exactly the property a caller needs -- that a command completes quickly --
         and is unaffected by whatever else is printing.
 
-        force_stop_on_timeout is suspended for the probes: a CLI too busy to
-        answer within probe_s is the condition being waited out, not a dead VM,
-        and killing QEMU here would fail every later test in the session.
+        An unanswered probe is the condition being waited out, not a dead VM,
+        which is why the probes go through expect_from -- it does not stop the
+        machine on a timeout.
 
         Returns True once a probe is answered, False if none is within timeout_s.
         """
         deadline = time.time() + timeout_s * _TIMEOUT_SCALE
-        previous = self.force_stop_on_timeout
-        self.force_stop_on_timeout = False
-        try:
-            while time.time() < deadline:
-                mark = self.mark()
-                self.send("")
-                if self.expect_from(mark, CLI_PROMPT, timeout_s=probe_s):
-                    return True
-            return False
-        finally:
-            self.force_stop_on_timeout = previous
+        while time.time() < deadline:
+            mark = self.mark()
+            self.send("")
+            if self.expect_from(mark, CLI_PROMPT, timeout_s=probe_s):
+                return True
+        return False
 
     def tail(self, max_bytes: int = 2048) -> str:
         if max_bytes <= 0:

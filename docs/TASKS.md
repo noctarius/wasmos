@@ -824,13 +824,6 @@ returns; `FS_ERR_*`/`PROC_*` ride IPC opcodes), so the migration depends on them
   `abi/errors.yaml`.
 
 
-- [ ] [BUG][P0] Read startup values from the spawn-info buffer in the Rust and Go libc
-  ports. `pm_apply_entry_bindings` always passes zeros in the four `wasmos_main`
-  entry-arg registers, and both ports still return those registers, so
-  `startup::arg(0)`/`startup.Arg(0)` yield 0, a guest cannot obtain its PM
-  endpoint, and `main` receives an empty argv. C, Zig and AssemblyScript already
-  read spawn-info (`src/libc/rust/wasmos.rs:93`, `src/libc/go/wasmos.go:374`
-  `FIXME(spawn-info)`).
 - [ ] [BUG][P1] Match replies by request id in the Zig, Rust and Go `ipc.call`. All three
   return the first message arriving on the shared managed reply endpoint; C
   matches both request id and source, AssemblyScript matches request id. A
@@ -840,9 +833,6 @@ returns; `FS_ERR_*`/`PROC_*` ride IPC opcodes), so the migration depends on them
   link, so `Future.Then` and the `IPCFuture` methods fail to link for any Go
   guest that uses them (`src/libc/go/coroutine.go:113`
   `FIXME(go-extern-linkname)`).
-- [ ] [BUG][P1] Zero the whole `spawn_info` record when the magic check fails. Only
-  `magic` is cleared, so the accessors can return buffer garbage rather than the
-  documented zeros (`src/libc/src/spawn_info.c`).
 - [ ] [BUG][P1] Replace the remaining bare `-1`/ad-hoc integers that cross a subsystem
   boundary with packed `abi/errors.yaml` codes: `PROC_IPC_ERROR` arg1 in
   `src/kernel/process_manager_spawn.c`, the PM spawn retry match in

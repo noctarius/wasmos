@@ -200,9 +200,20 @@ extern "C" fn stat_rejected(_status: i32) -> i32 {
     0
 }
 
-fn main(_args: &[&str]) -> i32 {
+fn main(args: &[&str]) -> i32 {
     let _ = wasmos::std::puts(b"Hello from Rust on WASMOS!\n");
     let _ = wasmos::std::puts(b"This is a tiny WASMOS-APP written in Rust.\n");
     let _ = wasmos::std::printf(format_args!("Entry: {}\n", "main"));
+    // Both values come from the spawn-info buffer. Reported so the startup
+    // contract is covered by a behavioural assertion rather than inspection:
+    // a guest with no PM endpoint cannot reach any service.
+    let _ = wasmos::std::printf(format_args!(
+        "startup: pm={} argc={}\n",
+        wasmos::startup::proc_endpoint() > 0,
+        args.len()
+    ));
+    for arg in args {
+        let _ = wasmos::std::printf(format_args!("arg: {}\n", arg));
+    }
     coroutine::run_async_app(app_start)
 }

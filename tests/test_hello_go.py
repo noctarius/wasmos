@@ -50,9 +50,28 @@ class HelloGoTest(unittest.TestCase):
             "hello_go",
             [
                 b"Hello from Go on WASMOS!",
+                b"startup: pm=true argc=0",
                 b"startup.nsh readable: true",
                 b"long filename write: true",
                 b"long filename unlink: true",
+            ],
+        )
+
+    def test_startup_contract_reaches_the_guest(self):
+        """The Go port reads its startup values from the spawn-info buffer.
+
+        It used to return the four wasmos_main entry-arg registers, which PM
+        fills with zeros (pm_apply_entry_bindings), so `pm=` proves the guest can
+        reach its process manager at all and the `arg:` lines prove the argv blob
+        is parsed. Both are spawn-info fields; neither is reachable through the
+        entry registers."""
+        self._cmd_expect("cd apps", [b"/apps wamos>"])
+        self._cmd_expect(
+            "hello_go alpha beta",
+            [
+                b"startup: pm=true argc=2",
+                b"arg: alpha",
+                b"arg: beta",
             ],
         )
 

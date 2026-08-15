@@ -29,6 +29,16 @@ var helloData struct {
 	content []byte
 }
 
+// digit renders a small non-negative count. Only single digits are expected
+// here (the argv parser caps at 16 arguments), so anything larger reports "?"
+// rather than pulling in a formatter this guest does not otherwise need.
+func digit(n int) string {
+	if n < 0 || n > 9 {
+		return "?"
+	}
+	return string(rune('0' + n))
+}
+
 func failStartup(*AsyncFSOperation) *Future {
 	_ = std.Puts("startup.nsh readable: false\n")
 	return nil
@@ -123,11 +133,22 @@ func fileUnlinked(unlink *AsyncFSOperation) *Future {
 // per-step outcomes are reported through the printed lines the boot test
 // matches on, not through this value.
 func Main(args []string) int32 {
-	_ = args
 	helloData.content = []byte("go shim long filename\n")
 	_ = std.Puts("Hello from Go on WASMOS!\n")
 	_ = std.Puts("This is a tiny WASMOS-APP written in Go.\n")
 	_ = std.Printf("Entry: main\n")
+	// Both values come from the spawn-info buffer. Reported so the startup
+	// contract is covered by a behavioural assertion rather than inspection: a
+	// guest with no PM endpoint cannot reach any service. std.Printf takes no
+	// format verbs, so the line is assembled by hand.
+	pm := "false"
+	if startup.ProcEndpoint() > 0 {
+		pm = "true"
+	}
+	_ = std.Puts("startup: pm=" + pm + " argc=" + digit(len(args)) + "\n")
+	for _, arg := range args {
+		_ = std.Puts("arg: " + arg + "\n")
+	}
 	return RunAsyncApp(func() *Future {
 		return fs.OpenAsync("/boot/startup.nsh", O_RDONLY).Then(startupOpened)
 	})

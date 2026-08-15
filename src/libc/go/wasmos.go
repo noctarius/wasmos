@@ -133,12 +133,102 @@ func mutexTryLock(ptr uint32) int32
 //go:wasmimport wasmos mutex_unlock
 func mutexUnlock(ptr uint32) int32
 
+//go:wasmimport wasmos spawn_info_buffer
+func spawnInfoBuffer() int32
+
 var fsReplyEndpoint int32 = -1
 var fsRequestID int32 = 1
 var ipcReplyEndpoint int32 = -1
 var ipcRequestID int32 = 1
-var startupArgs [4]int32
 var startup = startupAPI{}
+
+// spawnInfo is the process-startup contract, mirroring wasmos_spawn_info_t in
+// wasmos_spawn_info.h. Field order and widths are the wire layout: the header is
+// read straight out of the spawn-info transfer buffer.
+type spawnInfo struct {
+	magic        uint32
+	version      uint32
+	headerSize   uint32
+	procEndpoint uint32
+	tty          uint32
+	moduleCount  uint32
+	moduleIndex  uint32
+	argsOff      uint32
+	argsLen      uint32
+}
+
+// spawnInfoMagic is 'W','S','P','I' packed high byte first
+// (WASMOS_SPAWN_INFO_MAGIC).
+const spawnInfoMagic uint32 = 0x57535049
+
+const (
+	cliArgsBufLen = 128
+	cliArgsMax    = 16
+)
+
+var gSpawnInfo spawnInfo
+var gCLIArgsRaw [cliArgsBufLen]byte
+var gCLIArgs [cliArgsMax]string
+var gCLIArgc int
+
+// loadSpawnInfo reads this process's spawn-info header into gSpawnInfo.
+//
+// The whole record is zeroed unless the read succeeds AND the magic matches, so
+// a buffer that is absent, short, or not a spawn-info record leaves every
+// accessor reporting 0 rather than whatever bytes were there.
+func loadSpawnInfo() {
+	gSpawnInfo = spawnInfo{}
+	bid := spawnInfoBuffer()
+	if bid <= 0 {
+		return
+	}
+	ptr := uint32(uintptr(unsafe.Pointer(&gSpawnInfo)))
+	if fsBufferCopy(bid, ptr, uint32(unsafe.Sizeof(gSpawnInfo)), 0) != 0 ||
+		gSpawnInfo.magic != spawnInfoMagic {
+		gSpawnInfo = spawnInfo{}
+	}
+}
+
+// parseCLIArgs reads the argv blob that follows the header and splits it.
+//
+// Splitting is a plain split on spaces and tabs with no quoting, matching the
+// Zig and Rust ports. At most cliArgsMax arguments and cliArgsBufLen-1 bytes
+// survive; the rest are dropped rather than reported.
+func parseCLIArgs() {
+	gCLIArgc = 0
+	if gSpawnInfo.magic != spawnInfoMagic || gSpawnInfo.argsLen == 0 {
+		return
+	}
+	bid := spawnInfoBuffer()
+	if bid <= 0 {
+		return
+	}
+	n := int(gSpawnInfo.argsLen)
+	if n > cliArgsBufLen-1 {
+		n = cliArgsBufLen - 1
+	}
+	ptr := uint32(uintptr(unsafe.Pointer(&gCLIArgsRaw[0])))
+	if fsBufferCopy(bid, ptr, uint32(n), gSpawnInfo.argsOff) != 0 {
+		return
+	}
+	gCLIArgsRaw[n] = 0
+
+	pos := 0
+	for pos < n && gCLIArgc < cliArgsMax {
+		for pos < n && (gCLIArgsRaw[pos] == ' ' || gCLIArgsRaw[pos] == '\t') {
+			pos++
+		}
+		if pos >= n || gCLIArgsRaw[pos] == 0 {
+			break
+		}
+		start := pos
+		for pos < n && gCLIArgsRaw[pos] != 0 && gCLIArgsRaw[pos] != ' ' && gCLIArgsRaw[pos] != '\t' {
+			pos++
+		}
+		gCLIArgs[gCLIArgc] = string(gCLIArgsRaw[start:pos])
+		gCLIArgc++
+	}
+}
 
 type stdAPI struct{}
 
@@ -408,8 +498,6 @@ func stagePath(path string) (stagedPath, Error) {
 
 type startupAPI struct{}
 
-var emptyArgs = []string{}
-
 func rawWriteString(s string) Error {
 	if len(s) == 0 {
 		return ErrOK
@@ -431,39 +519,68 @@ func rawWriteBytes(b []byte) Error {
 	return ErrOK
 }
 
-// Arg returns one of the four wasmos_main entry-arg registers, as received.
+// Arg is the legacy accessor: index 0 is the process-manager endpoint, and
+// 1..3 are 0.
 //
-// FIXME(spawn-info): PM retired the entry-arg bindings and always passes zeros
-// (pm_apply_entry_bindings in process_manager_spawn.c), so every index reads 0
-// here. The C, Zig and AssemblyScript ports instead read the spawn-info buffer
-// (wasmos_spawn_info.h) via the spawn_info_buffer host call, where index 0 means
-// proc.endpoint, and expose tty/module count+index and the argv blob alongside
-// it; this port has none of that, so a Go guest cannot reach its process manager
-// endpoint or its argv (Main is likewise always handed an empty slice).
+// The four wasmos_main entry-arg registers this once returned are dead —
+// pm_apply_entry_bindings (process_manager_spawn.c) passes zeros in all four —
+// so index 0 is served from spawn-info instead, matching the C, Zig and
+// AssemblyScript ports. Prefer ProcEndpoint.
 func (startupAPI) Arg(index int) int32 {
-	if index < 0 || index >= len(startupArgs) {
-		return 0
+	if index == 0 {
+		return int32(gSpawnInfo.procEndpoint)
 	}
-	return startupArgs[index]
+	return 0
+}
+
+// ProcEndpoint returns the IPC endpoint of the process manager, for spawn/exit
+// protocol requests. 0 when no spawn info was loaded.
+func (startupAPI) ProcEndpoint() int32 {
+	return int32(gSpawnInfo.procEndpoint)
+}
+
+// TTY returns the id of the controlling TTY the process manager allocated, 0
+// when none was allocated or no spawn info was loaded.
+func (startupAPI) TTY() int32 {
+	return int32(gSpawnInfo.tty)
+}
+
+// ModuleCount returns the number of boot modules in this process's boot list.
+func (startupAPI) ModuleCount() uint32 {
+	return gSpawnInfo.moduleCount
+}
+
+// ModuleIndex returns this module's index in that boot list, 0 when not
+// applicable.
+func (startupAPI) ModuleIndex() uint32 {
+	return gSpawnInfo.moduleIndex
+}
+
+// Available reports whether a spawn-info record was loaded and validated for
+// this process.
+func (startupAPI) Available() bool {
+	return gSpawnInfo.magic == spawnInfoMagic
 }
 
 // main exists only to satisfy the Go toolchain: a WASMOS guest is entered
 // through the wasmos_main export below, never through this function.
 func main() {}
 
-// wasmos_main is the entry point the process manager calls instead of _start. It
-// records the four entry-arg registers for startup.Arg, calls the application's
-// Main with an empty argument slice (this port does not read the spawn-info argv
-// blob), and reports Main's return value to the process manager. proc_exit does
-// not return, so the trailing return is unreachable in a live process.
+// wasmos_main is the entry point the process manager calls instead of _start.
+//
+// It loads the spawn-info header and argv blob, calls the application's Main
+// with the parsed arguments, and reports Main's return value to the process
+// manager. The four entry-arg registers are ignored: pm_apply_entry_bindings
+// passes zeros in all of them, and every startup value comes from spawn-info
+// instead. proc_exit does not return, so the trailing return is unreachable in a
+// live process.
 //
 //export wasmos_main
 func wasmos_main(arg0, arg1, arg2, arg3 int32) int32 {
-	startupArgs[0] = arg0
-	startupArgs[1] = arg1
-	startupArgs[2] = arg2
-	startupArgs[3] = arg3
-	rc := Main(emptyArgs)
+	_, _, _, _ = arg0, arg1, arg2, arg3
+	loadSpawnInfo()
+	parseCLIArgs()
+	rc := Main(gCLIArgs[:gCLIArgc])
 	procExit(rc)
 	return rc
 }

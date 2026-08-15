@@ -19,13 +19,22 @@ static wasmos_spawn_info_t g_spawn_info;
 static char g_spawn_args[WASMOS_STARTUP_ARGS_MAX];
 static int g_spawn_loaded;
 
+/* Zero the whole record. A partial reset is not enough: the accessors below read
+ * proc_endpoint/tty/module_* unconditionally, so any field left holding buffer
+ * bytes is returned to the caller as a startup value. */
+static void wasmos_spawn_info_clear(void) {
+    uint8_t* p = ptr_cast(uint8_t, &g_spawn_info);
+    uint32_t i;
+    for (i = 0; i < (uint32_t)sizeof(g_spawn_info); ++i) {
+        p[i] = 0u;
+    }
+}
+
 /* Read this process's spawn-info header + args blob into static storage, once.
  * Lazy + idempotent: works for main-entry apps and initialize-entry
- * services/drivers alike. Leaves g_spawn_info.magic == 0 when no buffer is
- * available or the header does not carry WASMOS_SPAWN_INFO_MAGIC.
- * FIXME: a header that reads back but fails the magic check leaves the other
- * fields holding whatever was in the buffer, so the accessors below can return
- * that garbage instead of zero. */
+ * services/drivers alike. Leaves the record all-zero when no buffer is
+ * available or the header does not carry WASMOS_SPAWN_INFO_MAGIC, so every
+ * accessor reports 0 rather than whatever the buffer held. */
 static void wasmos_startup_load(void) {
     int32_t bid;
     uint32_t n = 0;
@@ -35,7 +44,7 @@ static void wasmos_startup_load(void) {
     }
     g_spawn_loaded = 1;
     bid = wasmos_spawn_info_buffer();
-    g_spawn_info.magic = 0u;
+    wasmos_spawn_info_clear();
     g_spawn_args[0] = '\0';
     if (bid <= 0) {
         return;
@@ -43,7 +52,7 @@ static void wasmos_startup_load(void) {
     if (wasmos_xfer_buffer_read(bid, addr_cast(int32_t, &g_spawn_info),
                                 (int32_t)sizeof(g_spawn_info), 0) != 0 ||
         g_spawn_info.magic != WASMOS_SPAWN_INFO_MAGIC) {
-        g_spawn_info.magic = 0u;
+        wasmos_spawn_info_clear();
         return;
     }
     n = g_spawn_info.args_len;

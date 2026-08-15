@@ -356,7 +356,11 @@ linked feature documents for rationale and rollout plans.
 - The transfer-buffer object model is canonical: objects have an owner,
   explicit borrow/grant lifecycle, and `(buffer_id, ptr, len, offset)` ABI.
   Keep libc/libsys wrappers and all runtime variants in sync when changing it.
-- Startup data is supplied through spawn-info buffers, not legacy entry args.
+- Startup data is supplied through spawn-info buffers, not legacy entry args,
+  in all five guest languages: C, Zig, AssemblyScript, Rust and Go each read the
+  `wasmos_spawn_info_t` header (PM endpoint, tty, module count/index) and the
+  argv blob from the buffer. The four entry-arg registers are still declared on
+  every entry point but carry zeros and are read by nobody.
   Path spawning first recognizes `.wap`; executable-format brokers can return
   a validated `.wap` launch plan for other formats.
 - Service discovery supports named services and class instances. Multi-instance

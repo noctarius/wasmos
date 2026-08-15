@@ -74,6 +74,7 @@ unsafe extern "C" {
     fn xfer_buffer_release(buffer_id: i32) -> i32;
     fn xfer_buffer_write(buffer_id: i32, ptr: i32, len: i32, offset: i32) -> i32;
     fn xfer_buffer_read(buffer_id: i32, ptr: i32, len: i32, offset: i32) -> i32;
+    fn spawn_info_buffer() -> i32;
     fn thread_gettid() -> i32;
     fn thread_yield() -> i32;
     fn mutex_try_lock(ptr: i32) -> i32;
@@ -109,34 +110,178 @@ static mut G_FS_REPLY_ENDPOINT: i32 = -1;
 static mut G_FS_REQUEST_ID: i32 = 1;
 static mut G_IPC_REPLY_ENDPOINT: i32 = -1;
 static mut G_IPC_REQUEST_ID: i32 = 1;
-static mut G_STARTUP_ARGS: [i32; 4] = [0; 4];
+/// The process-startup contract, mirroring `wasmos_spawn_info_t` in
+/// `wasmos_spawn_info.h`. Field order and widths are the wire layout: the header
+/// is read straight out of the spawn-info transfer buffer.
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+struct SpawnInfo {
+    magic: u32,
+    version: u32,
+    header_size: u32,
+    proc_endpoint: u32,
+    tty: u32,
+    module_count: u32,
+    module_index: u32,
+    args_off: u32,
+    args_len: u32,
+}
 
-/// Values the process manager passed at spawn time.
+/// 'W','S','P','I' packed high byte first (WASMOS_SPAWN_INFO_MAGIC).
+const SPAWN_INFO_MAGIC: u32 = 0x5753_5049;
+
+static mut G_SPAWN_INFO: SpawnInfo = SpawnInfo {
+    magic: 0,
+    version: 0,
+    header_size: 0,
+    proc_endpoint: 0,
+    tty: 0,
+    module_count: 0,
+    module_index: 0,
+    args_off: 0,
+    args_len: 0,
+};
+
+const CLI_ARGS_BUF_LEN: usize = 128;
+const CLI_ARGS_MAX: usize = 16;
+static mut G_CLI_ARGS_RAW: [u8; CLI_ARGS_BUF_LEN] = [0; CLI_ARGS_BUF_LEN];
+/// (offset, length) into `G_CLI_ARGS_RAW` per parsed argument.
+static mut G_CLI_ARG_SPANS: [(usize, usize); CLI_ARGS_MAX] = [(0, 0); CLI_ARGS_MAX];
+static mut G_CLI_ARGC: usize = 0;
+
+/// Reads this process's spawn-info header into `G_SPAWN_INFO`.
 ///
-/// Unlike the C, Zig and AssemblyScript ports this module exposes only the entry
-/// registers, with none of the spawn-info fields (process manager endpoint, tty,
-/// module count/index, argv); see the FIXME on `arg`.
-pub mod startup {
-    use super::G_STARTUP_ARGS;
-
-    /// The four wasmos_main entry-arg registers, as received.
-    ///
-    /// FIXME(spawn-info): PM retired the entry-arg bindings and always passes
-    /// zeros (pm_apply_entry_bindings in process_manager_spawn.c), so every
-    /// index reads 0 here. The C, Zig and AssemblyScript ports instead read the
-    /// spawn-info buffer (wasmos_spawn_info.h) via the spawn_info_buffer host
-    /// call, where index 0 means proc.endpoint, and expose tty/module
-    /// count+index and the argv blob alongside it; this port has none of that,
-    /// so a Rust guest cannot reach its process manager endpoint or its argv.
-    pub fn arg(index: usize) -> i32 {
-        if index >= 4 {
-            return 0;
+/// The whole record is zeroed unless the read succeeds AND the magic matches, so
+/// a buffer that is absent, short, or not a spawn-info record leaves every
+/// accessor reporting 0 rather than whatever bytes were there.
+fn load_spawn_info() {
+    unsafe {
+        G_SPAWN_INFO = SpawnInfo::default();
+        let bid = spawn_info_buffer();
+        if bid <= 0 {
+            return;
         }
-        unsafe { G_STARTUP_ARGS[index] }
+        let ptr = core::ptr::addr_of_mut!(G_SPAWN_INFO) as usize as i32;
+        let size = core::mem::size_of::<SpawnInfo>() as i32;
+        if xfer_buffer_read(bid, ptr, size, 0) != 0 || G_SPAWN_INFO.magic != SPAWN_INFO_MAGIC {
+            G_SPAWN_INFO = SpawnInfo::default();
+        }
     }
 }
 
-static EMPTY_ARGS: [&str; 0] = [];
+/// Reads the argv blob that follows the header and splits it into spans.
+///
+/// Splitting is a plain split on spaces and tabs with no quoting, matching the
+/// Zig port. At most `CLI_ARGS_MAX` arguments and `CLI_ARGS_BUF_LEN - 1` bytes
+/// survive; the rest are dropped rather than reported.
+fn parse_cli_args() {
+    unsafe {
+        G_CLI_ARGC = 0;
+        if G_SPAWN_INFO.magic != SPAWN_INFO_MAGIC || G_SPAWN_INFO.args_len == 0 {
+            return;
+        }
+        let bid = spawn_info_buffer();
+        if bid <= 0 {
+            return;
+        }
+        let mut n = G_SPAWN_INFO.args_len as usize;
+        if n > CLI_ARGS_BUF_LEN - 1 {
+            n = CLI_ARGS_BUF_LEN - 1;
+        }
+        let raw = core::ptr::addr_of_mut!(G_CLI_ARGS_RAW) as usize as i32;
+        if xfer_buffer_read(bid, raw, n as i32, G_SPAWN_INFO.args_off as i32) != 0 {
+            return;
+        }
+        G_CLI_ARGS_RAW[n] = 0;
+
+        let mut pos = 0usize;
+        while pos < n && G_CLI_ARGC < CLI_ARGS_MAX {
+            while pos < n && (G_CLI_ARGS_RAW[pos] == b' ' || G_CLI_ARGS_RAW[pos] == b'\t') {
+                pos += 1;
+            }
+            if pos >= n || G_CLI_ARGS_RAW[pos] == 0 {
+                break;
+            }
+            let start = pos;
+            while pos < n
+                && G_CLI_ARGS_RAW[pos] != 0
+                && G_CLI_ARGS_RAW[pos] != b' '
+                && G_CLI_ARGS_RAW[pos] != b'\t'
+            {
+                pos += 1;
+            }
+            G_CLI_ARG_SPANS[G_CLI_ARGC] = (start, pos - start);
+            G_CLI_ARGC += 1;
+        }
+    }
+}
+
+/// Borrows one parsed argument out of the static blob.
+///
+/// The blob lives for the life of the process, hence the `'static` lifetime.
+/// Non-UTF-8 bytes yield an empty string rather than a panic: this is a
+/// `panic=abort` guest with no unwinder, so a malformed argument must not be
+/// able to kill it.
+fn cli_arg(index: usize) -> &'static str {
+    unsafe {
+        if index >= G_CLI_ARGC {
+            return "";
+        }
+        let (off, len) = G_CLI_ARG_SPANS[index];
+        let base = core::ptr::addr_of!(G_CLI_ARGS_RAW) as *const u8;
+        let bytes = core::slice::from_raw_parts(base.add(off), len);
+        core::str::from_utf8(bytes).unwrap_or("")
+    }
+}
+
+/// Values the process manager passed at spawn time.
+///
+/// Every value comes from the spawn-info buffer (`wasmos_spawn_info.h`), which
+/// `wasmos_main` loads before calling the guest. A module entered through
+/// anything other than `wasmos_main` sees zeros throughout.
+pub mod startup {
+    use super::{G_SPAWN_INFO, SPAWN_INFO_MAGIC};
+
+    /// Legacy accessor: index 0 is the process-manager endpoint, 1..3 are 0.
+    ///
+    /// The four `wasmos_main` entry-arg registers this once returned are dead —
+    /// `pm_apply_entry_bindings` (process_manager_spawn.c) passes zeros in all
+    /// four — so index 0 is served from spawn-info instead, matching the C, Zig
+    /// and AssemblyScript ports. Prefer `proc_endpoint()`.
+    pub fn arg(index: usize) -> i32 {
+        if index == 0 {
+            return proc_endpoint();
+        }
+        0
+    }
+
+    /// IPC endpoint of the process manager, for spawn/exit protocol requests.
+    /// 0 when no spawn info was loaded.
+    pub fn proc_endpoint() -> i32 {
+        unsafe { G_SPAWN_INFO.proc_endpoint as i32 }
+    }
+
+    /// Id of the controlling TTY the process manager allocated, 0 when none was
+    /// allocated or no spawn info was loaded.
+    pub fn tty() -> i32 {
+        unsafe { G_SPAWN_INFO.tty as i32 }
+    }
+
+    /// Number of boot modules in this process's boot list.
+    pub fn module_count() -> u32 {
+        unsafe { G_SPAWN_INFO.module_count }
+    }
+
+    /// This module's index in that boot list, 0 when not applicable.
+    pub fn module_index() -> u32 {
+        unsafe { G_SPAWN_INFO.module_index }
+    }
+
+    /// Whether a spawn-info record was loaded and validated for this process.
+    pub fn available() -> bool {
+        unsafe { G_SPAWN_INFO.magic == SPAWN_INFO_MAGIC }
+    }
+}
 
 /// Recursive mutex whose state lives in guest memory and whose arbitration is
 /// done by the kernel, layout-compatible with `wasmos_mutex_t`.
@@ -203,18 +348,25 @@ impl Mutex {
     }
 }
 
-/// WASM export PM calls instead of `_start`. `main` always receives an empty
-/// argument slice: the argv blob lives in the spawn-info buffer, which this port
-/// does not read (see `startup::arg`).
+/// WASM export PM calls instead of `_start`.
+///
+/// Loads the spawn-info header and argv blob, then calls the guest's `main` with
+/// the parsed arguments and reports its return value to PM. The four entry-arg
+/// registers are ignored: `pm_apply_entry_bindings` passes zeros in all of them,
+/// and every startup value comes from spawn-info instead. `proc_exit` does not
+/// return, so the trailing return is unreachable in a live process.
 #[no_mangle]
-pub extern "C" fn wasmos_main(arg0: i32, arg1: i32, arg2: i32, arg3: i32) -> i32 {
-    unsafe {
-        G_STARTUP_ARGS[0] = arg0;
-        G_STARTUP_ARGS[1] = arg1;
-        G_STARTUP_ARGS[2] = arg2;
-        G_STARTUP_ARGS[3] = arg3;
+pub extern "C" fn wasmos_main(_arg0: i32, _arg1: i32, _arg2: i32, _arg3: i32) -> i32 {
+    load_spawn_info();
+    parse_cli_args();
+    // The &str values borrow the static args blob; this array only has to
+    // outlive the call, so it lives on this frame rather than in a static.
+    let mut args: [&str; CLI_ARGS_MAX] = [""; CLI_ARGS_MAX];
+    let argc = unsafe { G_CLI_ARGC };
+    for (i, slot) in args.iter_mut().enumerate().take(argc) {
+        *slot = cli_arg(i);
     }
-    let rc = crate::main(&EMPTY_ARGS);
+    let rc = crate::main(&args[..argc]);
     unsafe {
         let _ = proc_exit(rc);
     }

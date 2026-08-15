@@ -440,13 +440,9 @@ static int32_t* client_cwd_for_source(int32_t source) {
  * On success this does not return. A bring-up failure parks the process in
  * wasmos_sys_ipc_recv_loop() instead of returning, so there is no failure status
  * on this path for a caller to observe. */
-WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t ignored_arg1,
-                                      int32_t ignored_arg2, int32_t ignored_arg3) {
+WASMOS_WASM_EXPORT int32_t initialize(void) {
     /* proc.endpoint comes from the spawn-info contract, not an entry arg. */
-    proc_endpoint = wasmos_startup_proc_endpoint();
-    (void)ignored_arg1;
-    (void)ignored_arg2;
-    (void)ignored_arg3;
+    int32_t proc_endpoint = wasmos_startup_proc_endpoint();
 
     g_fs_endpoint = wasmos_ipc_create_endpoint();
     g_reply_endpoint = wasmos_ipc_create_endpoint();

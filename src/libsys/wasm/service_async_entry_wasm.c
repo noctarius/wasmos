@@ -2,6 +2,9 @@
 
 extern wasmos_sys_wasm_async_config_t wasmos_async_service;
 
-int32_t async_initialize(int32_t a, int32_t b, int32_t c, int32_t d) {
-    return wasmos_sys_wasm_async_run(&wasmos_async_service, a, b, c, d);
+/* Loader entry point for an async WASM service. Takes no arguments: startup
+ * values come from the spawn-info buffer, and the four zeros below are what the
+ * runner still forwards to config->prepare. */
+int32_t async_initialize(void) {
+    return wasmos_sys_wasm_async_run(&wasmos_async_service, 0, 0, 0, 0);
 }

@@ -1880,12 +1880,9 @@ static void drain_reply_endpoint_nonblocking(int32_t budget) {
  * NOTE: boot rules (DEVMGR_RULES_BOOT_ROOT) must be fully loaded before new
  * rule-driven spawns begin — poll_boot_rules_async must not be called while
  * a rule spawn is active or it will corrupt active_rule_spawn_* state. */
-WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t module_count,
-                                      int32_t ignored_arg2, int32_t ignored_arg3) {
-    (void)ignored_arg2;
-    (void)ignored_arg3;
-    proc_endpoint = wasmos_startup_proc_endpoint();
-    module_count = (int32_t)wasmos_startup_module_count();
+WASMOS_WASM_EXPORT int32_t initialize(void) {
+    int32_t proc_endpoint = wasmos_startup_proc_endpoint();
+    int32_t module_count = (int32_t)wasmos_startup_module_count();
 
     g_dm.reply_endpoint = wasmos_ipc_create_endpoint();
     if (g_dm.reply_endpoint < 0) {

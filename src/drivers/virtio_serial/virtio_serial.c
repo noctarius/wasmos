@@ -172,13 +172,9 @@ static void handle_write_reg32(int32_t source, int32_t request_id, int32_t offse
  * On success this does not return.
  * TODO: the bring-up failure paths return a bare -1, and the unknown-request
  * path replies with a bare -38, rather than packed abi/errors.yaml codes. */
-WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t ignored_arg1,
-                                      int32_t ignored_arg2, int32_t ignored_arg3) {
+WASMOS_WASM_EXPORT int32_t initialize(void) {
     /* proc.endpoint comes from the spawn-info contract, not an entry arg. */
-    proc_endpoint = wasmos_startup_proc_endpoint();
-    (void)ignored_arg1;
-    (void)ignored_arg2;
-    (void)ignored_arg3;
+    int32_t proc_endpoint = wasmos_startup_proc_endpoint();
     if (proc_endpoint < 0) {
         return -1;
     }

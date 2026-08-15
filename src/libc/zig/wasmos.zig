@@ -282,16 +282,10 @@ pub const startup = struct {
 ///
 /// Loads the spawn-info header and argv blob, then calls the guest's `main`
 /// (resolved from the root module) and reports its return value to the process
-/// manager via proc_exit. The four entry-arg registers are ignored: PM passes
-/// zeros in them. proc_exit does not return, so the trailing return is
+/// manager via proc_exit. Takes no arguments: every startup value comes from the
+/// spawn-info buffer. proc_exit does not return, so the trailing return is
 /// unreachable in a live process.
-pub export fn wasmos_main(arg0: i32, arg1: i32, arg2: i32, arg3: i32) callconv(.c) i32 {
-    // PM always passes zeros in the entry-arg registers; every startup value
-    // comes from the spawn-info buffer instead.
-    _ = arg0;
-    _ = arg1;
-    _ = arg2;
-    _ = arg3;
+pub export fn wasmos_main() callconv(.c) i32 {
     loadSpawnInfo();
     g_startup_args[0] = @bitCast(g_spawn_info.proc_endpoint);
     g_startup_args[1] = 0;

@@ -860,13 +860,9 @@ static int ata_handle_ipc(int32_t type, int32_t source, int32_t req_id, int32_t 
  * TODO: the failure paths return a bare -1 rather than a packed
  * WASMOS_ERR_DRIVER_* code from abi/errors.yaml, so a caller cannot tell which
  * step failed. The AssemblyScript drivers already return packed codes here. */
-WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t ignored_arg1,
-                                      int32_t ignored_arg2, int32_t ignored_arg3) {
+WASMOS_WASM_EXPORT int32_t initialize(void) {
     /* proc.endpoint comes from the spawn-info contract, not an entry arg. */
-    proc_endpoint = wasmos_startup_proc_endpoint();
-    (void)ignored_arg1;
-    (void)ignored_arg2;
-    (void)ignored_arg3;
+    int32_t proc_endpoint = wasmos_startup_proc_endpoint();
 
     g_block_endpoint = wasmos_ipc_create_endpoint();
     if (g_block_endpoint < 0) {

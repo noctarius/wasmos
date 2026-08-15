@@ -315,7 +315,7 @@ typedef struct wasmos_driver_api {
  * checks both before using any function pointer; see those fields for what a
  * version bump obliges. */
 #define WASMOS_NATIVE_ABI_MAGIC 0x574E4150u /* 'WNAP' */
-#define WASMOS_NATIVE_ABI_VERSION 13u
+#define WASMOS_NATIVE_ABI_VERSION 14u
 
 /* Entry point that every native driver must provide via ELF e_entry.
  *
@@ -324,16 +324,16 @@ typedef struct wasmos_driver_api {
  * loop does not return. The driver must not free it or retain the pointer past a
  * return.
  *
- * module_count, arg2 and arg3 are ALL passed as zero. A driver reads its startup
- * values from api->spawn_info() instead; the parameters remain only because they
- * are part of the ELF entry signature.
+ * `api` is the only argument. A driver reads every startup value -- process
+ * manager endpoint, tty, module count and index, argv -- from api->spawn_info()
+ * instead. ABI 14 dropped the three trailing int parameters, which the loader
+ * had always passed as zero.
  *
  * Returning at all is the failure path (the loader logs it and propagates the
  * value; -2 is additionally reported as an ABI mismatch). A driver that fails
  * bring-up returns a packed abi/errors.yaml code -- WASMOS_ERR_DRIVER_* -- never
  * a bare -1, and one that means to terminate normally calls api->proc_exit,
  * which does not return. */
-typedef int (*native_driver_entry_fn_t)(wasmos_driver_api_t* api, int module_count, int arg2,
-                                        int arg3);
+typedef int (*native_driver_entry_fn_t)(wasmos_driver_api_t* api);
 
 #endif

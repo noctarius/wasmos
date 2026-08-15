@@ -189,7 +189,7 @@ class ScancodeDrain extends OnIdle {
  * parks; between them this is ordinary code.
  */
 @coroutine
-export function initialize(_proc_endpoint: i32, _arg1: i32, _arg2: i32, _arg3: i32): i32 {
+export function initialize(): i32 {
     // proc.endpoint comes from the spawn-info contract, not an entry arg.
     let procEndpoint: i32 = startup.procEndpoint();
     let slot: i32 = 0;

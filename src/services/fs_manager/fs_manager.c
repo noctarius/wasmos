@@ -897,14 +897,10 @@ static int handle_chdir_mount(fs_client_state_t* state, int32_t source, int32_t 
  * parks the process in wasmos_sys_ipc_recv_loop instead of exiting, so the
  * declared int32_t result is never produced.  arg1..arg3 are ignored and
  * proc_endpoint is overwritten from the spawn-info contract. */
-WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t arg1, int32_t arg2,
-                                      int32_t arg3) {
+WASMOS_WASM_EXPORT int32_t initialize(void) {
     /* The proc endpoint comes from the spawn-info contract; the entry args carry
      * nothing and the parameter is overwritten. */
-    proc_endpoint = wasmos_startup_proc_endpoint();
-    (void)arg1;
-    (void)arg2;
-    (void)arg3;
+    int32_t proc_endpoint = wasmos_startup_proc_endpoint();
 
     g_proc_endpoint = proc_endpoint;
     fsmgr_heap_init();

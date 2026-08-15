@@ -3194,11 +3194,7 @@ fn register_ipc_handlers() i32 {
 /// native ABI table does not match this build, and -1 for any other startup
 /// failure (no spawn info, endpoint or handler registration failure, name
 /// registration refused, backbuffer allocation failure) or an event-loop error.
-pub export fn initialize(driver_api: *c.wasmos_driver_api_t, module_count: c_int, arg2: c_int, arg3: c_int) c_int {
-    _ = module_count; // entry args carry nothing; state comes from spawn_info below
-    _ = arg2;
-    _ = arg3;
-
+pub export fn initialize(driver_api: *c.wasmos_driver_api_t) c_int {
     g_api = driver_api;
     if (driver_api.abi_magic != c.WASMOS_NATIVE_ABI_MAGIC or
         driver_api.abi_version != c.WASMOS_NATIVE_ABI_VERSION)

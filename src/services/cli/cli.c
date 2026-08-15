@@ -2278,14 +2278,11 @@ static void cli_phase_wait_ipc_step(void) {
  * the controlling TTY come from the spawn-info contract and overwrite the
  * corresponding parameters below.  Runs the phase state machine forever and
  * never returns; a fatal error parks in wasmos_sys_ipc_recv_loop instead. */
-WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t home_tty_arg,
-                                      int32_t ignored_arg2, int32_t ignored_arg3) {
-    (void)ignored_arg2;
-    (void)ignored_arg3;
+WASMOS_WASM_EXPORT int32_t initialize(void) {
     /* The spawn-info contract supplies both values; the entry args carry
      * nothing. */
-    proc_endpoint = wasmos_startup_proc_endpoint();
-    home_tty_arg = wasmos_startup_tty();
+    int32_t proc_endpoint = wasmos_startup_proc_endpoint();
+    int32_t home_tty_arg = wasmos_startup_tty();
     g_phase = CLI_PHASE_INIT;
 
     for (;;) {

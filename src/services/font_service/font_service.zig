@@ -972,11 +972,7 @@ fn load_builtin_fonts() void {
 /// not match this build, and -1 for a startup failure (no spawn info, endpoint
 /// or handler registration failure, name registration refused) or an event-loop
 /// error.
-pub export fn initialize(driver_api: *c.wasmos_driver_api_t, module_count: c_int, arg2: c_int, arg3: c_int) c_int {
-    _ = arg2;
-    _ = arg3;
-
-    _ = module_count; // entry-arg convention retired; use the spawn-info contract
+pub export fn initialize(driver_api: *c.wasmos_driver_api_t) c_int {
     g_api = driver_api;
     if (driver_api.abi_magic != c.WASMOS_NATIVE_ABI_MAGIC or driver_api.abi_version != c.WASMOS_NATIVE_ABI_VERSION) {
         return -2;

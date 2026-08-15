@@ -672,14 +672,10 @@ static void handle_request(int32_t service_endpoint, const wasmos_ipc_message_t*
 /* Service entry point. Looks up "devmgr.inv", registers "pci" so drivers can
  * find it, scans and publishes, sends DEVMGR_PCI_SCAN_DONE, announces readiness,
  * and then serves MSI programming requests for the rest of the boot. */
-WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t ignored_arg1,
-                                      int32_t ignored_arg2, int32_t ignored_arg3) {
+WASMOS_WASM_EXPORT int32_t initialize(void) {
     /* The proc endpoint comes from the spawn-info contract; the entry args carry
      * nothing and the parameter is overwritten. */
-    proc_endpoint = wasmos_startup_proc_endpoint();
-    (void)ignored_arg1;
-    (void)ignored_arg2;
-    (void)ignored_arg3;
+    int32_t proc_endpoint = wasmos_startup_proc_endpoint();
     if (proc_endpoint < 0) {
         return -1;
     }

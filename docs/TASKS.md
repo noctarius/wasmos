@@ -931,17 +931,19 @@ returns; `FS_ERR_*`/`PROC_*` ride IPC opcodes), so the migration depends on them
   The container half of the entry-argument mechanism is gone: the manifest key, the
   packer flag, the header count, the record section and the parser's walk over it
   no longer exist, and `wasmos_app_desc_t` carries `reserved[4]` in their place.
-  What survives is the runtime half. `pm_apply_entry_bindings` still hardcodes
-  `entry_argc = 4` with all four words zero, and `wasmos_app_start` still copies
-  four words out of that zero array into `wasmos_app_instance_t::entry_argv`.
+  **The guest-arity half is now gone too.** Every entry point takes no arguments:
+  all five `wasmos_main` ports, the 19 wasm `initialize` entries, the two wasm
+  libsys async shims, and -- behind native ABI 14 -- the four native entries,
+  where `driver_api` is the only surviving parameter. `pm_apply_entry_bindings`
+  sets `entry_argc = 0` and `native_driver.c` calls `entry(&api)`. Verified on
+  BOTH runtimes, which matters here: `m3_Call` validates the count, so wasm3 is
+  the arm that can actually fail, while the WARP backend does not check `argc`.
 
-  The one thing holding `argc` at 4 is guest arity: entry points still declare
-  four `i32` parameters (`wasmos_main(int32_t, int32_t, int32_t, int32_t)`,
-  `initialize(_proc_endpoint, _arg1, _arg2, _arg3)`) and `m3_Call` validates the
-  count. So the order is: drop the parameters from every guest entry point and the
-  AssemblyScript coroutine transform, then `argc` can be 0 and the whole
-  argv surface deletes cleanly. Do not "fix" the bound in isolation and leave the
-  dead mechanism looking deliberate.
+  What remains is inert storage: the `entry_arg0..3` words in `pm_app_state_t`,
+  `entry_argv`/`entry_argc` in `wasm_driver_manifest_t` and
+  `wasmos_app_instance_t`, and the fixed `args[4]` marshalling in the wasm3
+  backend. Nothing reads them now that `argc` is 0, so removing them is
+  mechanical rather than a flag day.
 
 - [ ] [ENHANCEMENT][P3] Decide what the generated cause-chain helpers are for, or
   drop them. `wrap`/`unwrap`/`root`/`is`/`as` and the 8-byte frame / 40-byte error
@@ -1120,10 +1122,6 @@ returns; `FS_ERR_*`/`PROC_*` ride IPC opcodes), so the migration depends on them
   (`src/drivers/fs_fat/fat_dir.c`).
 
 
-- [ ] [CLEANUP][P3] Remove the unreachable `block_endpoint` parameter path in the
-  FAT backend's `initialize`. `wasmos_app_start` is invoked with
-  `init_args[4] = {0,0,0,0}`, so `block_endpoint > 0` is never true and
-  discovery always falls through to `svc_lookup` (`src/drivers/fs_fat/fs_fat.c`).
 
 ## Device Drivers and Input
 

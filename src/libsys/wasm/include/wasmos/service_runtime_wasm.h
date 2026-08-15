@@ -32,12 +32,13 @@ typedef struct {
 int32_t wasmos_sys_wasm_async_run(wasmos_sys_wasm_async_config_t* config, int32_t arg0,
                                   int32_t arg1, int32_t arg2, int32_t arg3);
 /* Loader entry points supplied by libsys: async_initialize is the driver and
- * service entry, async_wasmos_main the application entry. Each forwards its
- * four entry arguments to wasmos_sys_wasm_async_run() on the corresponding
- * global config and returns what that returns. A guest links exactly one of
- * them by linking the matching entry object. */
-int32_t async_initialize(int32_t arg0, int32_t arg1, int32_t arg2, int32_t arg3);
-int32_t async_wasmos_main(int32_t arg0, int32_t arg1, int32_t arg2, int32_t arg3);
+ * service entry, async_wasmos_main the application entry. Neither takes
+ * arguments -- startup values come from the spawn-info buffer -- and each calls
+ * wasmos_sys_wasm_async_run() on the corresponding global config and returns
+ * what that returns. A guest links exactly one of them by linking the matching
+ * entry object. */
+int32_t async_initialize(void);
+int32_t async_wasmos_main(void);
 /* Valid while an async app/service wrapper is running.  Applications submit
  * futures through this loop; they never poll or create their own reply port. */
 wasmos_sys_event_loop_t* wasmos_sys_wasm_async_event_loop(void);

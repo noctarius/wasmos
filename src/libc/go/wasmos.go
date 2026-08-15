@@ -570,14 +570,12 @@ func main() {}
 //
 // It loads the spawn-info header and argv blob, calls the application's Main
 // with the parsed arguments, and reports Main's return value to the process
-// manager. The four entry-arg registers are ignored: pm_apply_entry_bindings
-// passes zeros in all of them, and every startup value comes from spawn-info
-// instead. proc_exit does not return, so the trailing return is unreachable in a
-// live process.
+// manager. Takes no arguments: every startup value comes from spawn-info.
+// proc_exit does not return, so the trailing return is unreachable in a live
+// process.
 //
 //export wasmos_main
-func wasmos_main(arg0, arg1, arg2, arg3 int32) int32 {
-	_, _, _, _ = arg0, arg1, arg2, arg3
+func wasmos_main() int32 {
 	loadSpawnInfo()
 	parseCLIArgs()
 	rc := Main(gCLIArgs[:gCLIArgc])

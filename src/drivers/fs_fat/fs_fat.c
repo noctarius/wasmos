@@ -335,28 +335,23 @@ static void fat_mount_bringup(void) {
 /* Driver entry point: acquire a block server, mount the volume, register under
  * the fs.backend class, then run the reactor loop forever.
  *
- * `proc_endpoint` is overwritten from the spawn-info contract. `block_endpoint`
- * is nominally a caller-supplied override, but every entry argument is passed as
- * zero at spawn, so the `block_endpoint > 0` test never holds and the block
- * server is ALWAYS discovered through svc_lookup below -- that discovery loop
- * spins with a yield until a "block" provider registers, so this call does not
- * return until one exists.
+ * The block server is discovered through svc_lookup; that discovery loop spins
+ * with a yield until a "block" provider registers, so this call does not return
+ * until one exists.
  *
  * Mounting happens BEFORE the ready notification, so the driver never advertises
  * a volume it has not parsed. On success this does not return: the reactor loop
  * is unbounded. Every bring-up failure calls fat_stall() rather than returning,
  * so a failed mount leaves the process parked instead of exiting -- there is no
  * failure status on this path for a caller to observe. */
-WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t block_endpoint,
-                                      int32_t ignored_arg2, int32_t ignored_arg3) {
+WASMOS_WASM_EXPORT int32_t initialize(void) {
+    int32_t block_endpoint;
     int32_t reply_endpoint;
     int32_t sel;
     char mount_alias[16];
     char service_name[16];
     int32_t mount_alias_len;
 
-    (void)ignored_arg2;
-    (void)ignored_arg3;
     g_proc_endpoint = wasmos_startup_proc_endpoint();
 
     g_fs_endpoint = wasmos_ipc_create_endpoint();
@@ -367,15 +362,12 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t block_endpo
     }
 
     g_requested_unit = fat_parse_requested_unit();
-    block_endpoint = (g_requested_unit < 0 && block_endpoint > 0) ? block_endpoint : -1;
-    if (block_endpoint <= 0) {
-        for (;;) {
-            block_endpoint = wasmos_svc_lookup(g_proc_endpoint, reply_endpoint, "block", 1);
-            if (block_endpoint > 0) {
-                break;
-            }
-            (void)wasmos_sched_yield();
+    for (;;) {
+        block_endpoint = wasmos_svc_lookup(g_proc_endpoint, reply_endpoint, "block", 1);
+        if (block_endpoint > 0) {
+            break;
         }
+        (void)wasmos_sched_yield();
     }
 
     fat_block_configure(&g_blk, block_endpoint, reply_endpoint);

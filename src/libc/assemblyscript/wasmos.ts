@@ -303,15 +303,8 @@ function readSpawnArgs(): Array<string> {
  * to 127 bytes. proc_exit does not return, so the trailing return is unreachable
  * in a live process.
  */
-export function runMain(
-    entry: (args: Array<string>) => i32,
-    arg0: i32,
-    arg1: i32,
-    arg2: i32,
-    arg3: i32,
-): i32 {
-    // PM always passes zeros in the entry-arg registers (arg0..arg3); every
-    // startup value comes from the spawn-info buffer instead.
+export function runMain(entry: (args: Array<string>) => i32): i32 {
+    // Every startup value comes from the spawn-info buffer.
     loadSpawnInfo();
     unchecked((g_startupArgs[0] = g_spawnProcEndpoint));
     unchecked((g_startupArgs[1] = 0));

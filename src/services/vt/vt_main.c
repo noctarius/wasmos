@@ -1689,14 +1689,10 @@ static void vt_blit_init(void) {
  * forever.  Never returns except on an init failure (-1).
  * g_switch_generation is a monotonic counter bumped on every TTY switch; writes
  * whose request_id carries a stale generation are dropped. */
-WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t arg1, int32_t arg2,
-                                      int32_t arg3) {
+WASMOS_WASM_EXPORT int32_t initialize(void) {
     /* The proc endpoint comes from the spawn-info contract; the entry args are
      * unused and the parameter is overwritten. */
-    proc_endpoint = wasmos_startup_proc_endpoint();
-    (void)arg1;
-    (void)arg2;
-    (void)arg3;
+    int32_t proc_endpoint = wasmos_startup_proc_endpoint();
 
     g_vt_ep = wasmos_ipc_create_endpoint();
     if (g_vt_ep < 0) {

@@ -1574,7 +1574,7 @@ fn proc_endpoint_from_spawn_info() -> i32 {
 /// Calls proc_exit with the game's status before returning it, so the returned
 /// value is only reached if that host call does not terminate the process.
 #[no_mangle]
-pub extern "C" fn wasmos_main(_a0: i32, _a1: i32, _a2: i32, _a3: i32) -> i32 {
+pub extern "C" fn wasmos_main() -> i32 {
     let proc_ep = proc_endpoint_from_spawn_info();
     let rc = run(proc_ep);
     unsafe {

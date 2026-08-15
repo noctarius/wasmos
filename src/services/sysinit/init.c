@@ -320,14 +320,10 @@ static int sysinit_on_export(void* user, const char* name, const char* value) {
 /* Service entry point.  Calls wasmos_sys_notify_ready immediately (sysinit
  * has no readiness dependency of its own), then runs the sysinit.rc script
  * via wasmos_script_run.  Loops on ipc_recv after the script completes. */
-WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t ignored_arg1,
-                                      int32_t ignored_arg2, int32_t ignored_arg3) {
-    (void)ignored_arg1;
-    (void)ignored_arg2;
-    (void)ignored_arg3;
+WASMOS_WASM_EXPORT int32_t initialize(void) {
     /* The proc endpoint comes from the spawn-info contract; the entry args carry
      * nothing and the parameter is overwritten. */
-    proc_endpoint = wasmos_startup_proc_endpoint();
+    int32_t proc_endpoint = wasmos_startup_proc_endpoint();
 
     g_console_write = wasmos_console_write;
     g_debug_mark = wasmos_debug_mark;

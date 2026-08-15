@@ -7,12 +7,8 @@ extern wasmos_sys_native_async_service_config_t wasmos_async_service;
  * and defines the `wasmos_async_service` global; this bootstraps that config's
  * root coroutine and blocks in the service pump until main returns, so the
  * return value is main's result (or -1 on a bootstrap failure). `api` is
- * borrowed for the service's whole lifetime. The loader's remaining three
- * arguments are unused by the async entry. */
-int async_initialize(wasmos_driver_api_t* api, int module_count, int arg2, int arg3) {
-    (void)module_count;
-    (void)arg2;
-    (void)arg3;
+ * borrowed for the service's whole lifetime. */
+int async_initialize(wasmos_driver_api_t* api) {
     wasmos_sys_native_service_init(&wasmos_async_service.service, wasmos_async_service.root_stack,
                                    wasmos_async_service.root_stack_size);
     wasmos_async_service.service.idle = wasmos_async_service.idle;

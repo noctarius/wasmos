@@ -351,12 +351,11 @@ impl Mutex {
 /// WASM export PM calls instead of `_start`.
 ///
 /// Loads the spawn-info header and argv blob, then calls the guest's `main` with
-/// the parsed arguments and reports its return value to PM. The four entry-arg
-/// registers are ignored: `pm_apply_entry_bindings` passes zeros in all of them,
-/// and every startup value comes from spawn-info instead. `proc_exit` does not
-/// return, so the trailing return is unreachable in a live process.
+/// the parsed arguments and reports its return value to PM. Takes no arguments:
+/// every startup value comes from spawn-info. `proc_exit` does not return, so
+/// the trailing return is unreachable in a live process.
 #[no_mangle]
-pub extern "C" fn wasmos_main(_arg0: i32, _arg1: i32, _arg2: i32, _arg3: i32) -> i32 {
+pub extern "C" fn wasmos_main() -> i32 {
     load_spawn_info();
     parse_cli_args();
     // The &str values borrow the static args blob; this array only has to

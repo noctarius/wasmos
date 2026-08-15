@@ -359,8 +359,10 @@ linked feature documents for rationale and rollout plans.
 - Startup data is supplied through spawn-info buffers, not legacy entry args,
   in all five guest languages: C, Zig, AssemblyScript, Rust and Go each read the
   `wasmos_spawn_info_t` header (PM endpoint, tty, module count/index) and the
-  argv blob from the buffer. The four entry-arg registers are still declared on
-  every entry point but carry zeros and are read by nobody.
+  argv blob from the buffer. Guest entry points take no arguments at all: the
+  four entry-arg registers were removed from every `wasmos_main` and
+  `initialize`, and native ABI 14 leaves `driver_api` as the only parameter of a
+  native entry.
   Path spawning first recognizes `.wap`; executable-format brokers can return
   a validated `.wap` launch plan for other formats.
 - Service discovery supports named services and class instances. Multi-instance

@@ -169,14 +169,10 @@ static int32_t script_register(int32_t proc_endpoint, int32_t broker_endpoint) {
  * carrying a packed WASMOS_ERR_PROC_SPAWN_* code and does not end the service,
  * and an unexpected opcode is ignored rather than answered.  arg1..arg3 are
  * unused and proc_endpoint is overwritten from the spawn-info contract. */
-int32_t initialize(int32_t proc_endpoint, int32_t ignored_arg1, int32_t ignored_arg2,
-                   int32_t ignored_arg3) {
+int32_t initialize(void) {
     /* The 4-slot WASM service entry ABI is fixed, but the entry args carry
      * nothing: startup values come from the spawn-info contract. */
-    (void)ignored_arg1;
-    (void)ignored_arg2;
-    (void)ignored_arg3;
-    proc_endpoint = wasmos_startup_proc_endpoint();
+    int32_t proc_endpoint = wasmos_startup_proc_endpoint();
     int32_t broker_endpoint = wasmos_ipc_create_endpoint();
     int32_t register_rc = 0;
 

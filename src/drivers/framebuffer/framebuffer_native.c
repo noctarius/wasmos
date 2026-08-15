@@ -134,7 +134,7 @@ static int drain_console_ring(console_ring_t* ring, uint32_t budget) {
 
 /* Native driver entry point (see native_driver_entry_fn_t in
  * wasmos_native_driver.h). `api` is kernel-owned and borrowed for the whole
- * call; module_count/arg2/arg3 are passed as zero and ignored.
+ * call; it takes no other arguments (native ABI 14).
  *
  * Verifies the ABI stamp before touching any other api field, since a mismatched
  * table would put the function pointers at different offsets than this build
@@ -145,10 +145,7 @@ static int drain_console_ring(console_ring_t* ring, uint32_t budget) {
  * 0 when the machine has no usable framebuffer -- a normal outcome on a headless
  * boot, not an error, so the driver exits quietly rather than failing the spawn.
  * On success it does not return: the server loop is unbounded. */
-int initialize(wasmos_driver_api_t* api, int module_count, int arg2, int arg3) {
-    (void)module_count;
-    (void)arg2;
-    (void)arg3;
+int initialize(wasmos_driver_api_t* api) {
     if (!api || api->abi_magic != WASMOS_NATIVE_ABI_MAGIC ||
         api->abi_version != WASMOS_NATIVE_ABI_VERSION || !api->console_write ||
         !api->xfer_buffer_acquire) {

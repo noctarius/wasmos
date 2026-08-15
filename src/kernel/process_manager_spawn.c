@@ -277,14 +277,14 @@ static int pm_caps_set_io_window(pm_spawn_caps_t* caps, uint16_t first, uint16_t
 
 /* Startup values reach the child through the spawn-info contract (see
  * wasmos_spawn_info.h and the buffer pm_app_entry builds), and service endpoints
- * through svc_lookup -- not through entry arguments.  The 4-slot wasm entry
- * signature is part of the module ABI, so it is still declared and still passed
- * argc == 4, but every slot is zero. */
+ * through svc_lookup -- not through entry arguments.  Guest entry points
+ * therefore take no arguments and argc is 0; the entry_arg* slots remain only
+ * as the zero-filled storage the manifest still carries. */
 static int pm_apply_entry_bindings(pm_app_state_t* slot, const wasmos_app_desc_t* desc) {
     if (!slot || !desc) {
         return PM_SPAWN_INTERNAL_ERR_BAD_ARGS;
     }
-    slot->entry_argc = 4;
+    slot->entry_argc = 0;
     slot->entry_arg0 = 0;
     slot->entry_arg1 = 0;
     slot->entry_arg2 = 0;

@@ -38,13 +38,9 @@ static void chardev_reply(int32_t reply_endpoint, int32_t type, int32_t request_
  * On success this does not return.
  * TODO: the two bring-up failure paths return a bare -1 rather than a packed
  * WASMOS_ERR_DRIVER_* code from abi/errors.yaml. */
-WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t arg1, int32_t arg2,
-                                      int32_t arg3) {
-    (void)arg1;
-    (void)arg2;
-    (void)arg3;
+WASMOS_WASM_EXPORT int32_t initialize(void) {
 
-    proc_endpoint = wasmos_startup_proc_endpoint();
+    int32_t proc_endpoint = wasmos_startup_proc_endpoint();
     g_last_byte = 0;
     g_has_data = 0;
     g_service_endpoint = wasmos_ipc_create_endpoint();

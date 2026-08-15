@@ -1096,12 +1096,12 @@ int native_driver_start(uint32_t context_id, const uint8_t* elf_data, uint32_t e
         klog_write("[native-driver] CR3 switch to driver failed\n");
         return -1;
     }
-    /* entry()'s three integer parameters are always passed as zero. A native
-     * driver reads its startup values from api->spawn_info() instead, so
-     * init_argv/init_argc are deliberately not forwarded. */
+    /* entry() takes only the api table: a native driver reads its startup
+     * values from api->spawn_info(), so init_argv/init_argc have nothing to
+     * forward (ABI 14 dropped the three always-zero int parameters). */
     (void)init_argv;
     (void)init_argc;
-    int rc = entry(&api, 0, 0, 0);
+    int rc = entry(&api);
     /* Restore kernel CR3 if entry() returned (error path or graceful exit
      * that did not go through process_yield(PROCESS_RUN_EXITED)). */
     (void)paging_switch_root(kernel_cr3);

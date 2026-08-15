@@ -883,6 +883,47 @@ class QemuSession:
             self.force_stop()
         return False
 
+    def settle(
+        self, quiet_s: float = 2.0, timeout_s: float = 60.0, probe_s: int = 5
+    ) -> bool:
+        """Wait until the console stops producing output, i.e. startup is done.
+
+        Reaching the first `wamos> ` does NOT mean the system is idle: the CLI
+        prompts as soon as it is up while services behind it are still starting
+        (font service, script broker, vt, the demo apps). A test that begins
+        issuing commands there is racing the rest of boot, and on a loaded
+        machine the remaining startup work starves the CLI long enough that the
+        prompt after a command misses its timeout -- a failure that looks like
+        the command failed when nothing was wrong with it.
+
+        Returns True once no new bytes have arrived for `quiet_s`, False if the
+        console never goes quiet within `timeout_s` (a system still churning
+        after a minute is a real problem, so the caller should not ignore it).
+        """
+        deadline = time.time() + timeout_s
+        last_len = len(self.buf)
+        quiet_since = time.time()
+        while time.time() < deadline:
+            self._pump(0.2)
+            if len(self.buf) != last_len:
+                last_len = len(self.buf)
+                quiet_since = time.time()
+                continue
+            if time.time() - quiet_since < quiet_s:
+                continue
+            # Quiet is necessary but not sufficient: startup has natural gaps
+            # between services, and a quiet window can land in one. Probe the
+            # console for the property the caller actually needs -- that a
+            # command comes back promptly -- and only accept silence that
+            # survives it.
+            mark = self.mark()
+            self.send("")
+            if self.expect_from(mark, b"wamos> ", timeout_s=probe_s):
+                return True
+            quiet_since = time.time()
+            last_len = len(self.buf)
+        return False
+
     def tail(self, max_bytes: int = 2048) -> str:
         if max_bytes <= 0:
             return ""

@@ -106,6 +106,15 @@ int main(int argc, char** argv) {
         puts("fs-write-smoke: grow verify failed");
         return 1;
     }
+    /* Clear anything a previous run left behind, so mkdir below is verifying
+     * that creation works rather than that this is the first run on this
+     * filesystem. Without it the test passes exactly once per ESP and fails on
+     * every later run with "mkdir failed" -- which reads as an FS regression and
+     * looks intermittent, because CI gets a fresh ESP each time while a
+     * developer's tree keeps the directory forever. Failures here are ignored on
+     * purpose: not existing is the normal case. */
+    (void)unlink("/boot/create_dir/nested.txt");
+    (void)rmdir("/boot/create_dir");
     if (mkdir("/boot/create_dir", 0) != 0) {
         puts("fs-write-smoke: mkdir failed");
         return 1;

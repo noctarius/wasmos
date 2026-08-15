@@ -875,8 +875,7 @@ class QemuSession:
         if self._cli_settled or CLI_PROMPT not in needle:
             return True
         self._cli_settled = True
-        self.settle()
-        return True
+        return self.settle()
 
     def mark(self) -> int:
         return len(self.buf)
@@ -914,46 +913,37 @@ class QemuSession:
             self.force_stop()
         return False
 
-    def settle(
-        self, quiet_s: float = 2.0, timeout_s: float = 60.0, probe_s: int = 5
-    ) -> bool:
-        """Wait until the console stops producing output, i.e. startup is done.
+    def settle(self, probe_s: int = 3, timeout_s: int = 30) -> bool:
+        """Wait until the CLI answers promptly, i.e. it is usable.
 
-        Reaching the first `wamos> ` does NOT mean the system is idle: the CLI
-        prompts as soon as it is up while services behind it are still starting
-        (font service, script broker, vt, the demo apps). A test that begins
-        issuing commands there is racing the rest of boot, and on a loaded
-        machine the remaining startup work starves the CLI long enough that the
-        prompt after a command misses its timeout -- a failure that looks like
-        the command failed when nothing was wrong with it.
+        Readiness is a PROBE, not silence. An earlier version of this waited for
+        the console to go quiet first, which is wrong twice: a system running the
+        gfx demos or a vt never goes quiet, so it burned its whole budget and
+        made every battery minutes slower; and startup has natural gaps, so on a
+        quiet system the window lands in one and proves nothing.
 
-        Returns True once no new bytes have arrived for `quiet_s`, False if the
-        console never goes quiet within `timeout_s` (a system still churning
-        after a minute is a real problem, so the caller should not ignore it).
+        Sending an empty line and requiring the prompt back within probe_s tests
+        exactly the property a caller needs -- that a command completes quickly --
+        and is unaffected by whatever else is printing.
+
+        force_stop_on_timeout is suspended for the probes: a CLI too busy to
+        answer within probe_s is the condition being waited out, not a dead VM,
+        and killing QEMU here would fail every later test in the session.
+
+        Returns True once a probe is answered, False if none is within timeout_s.
         """
         deadline = time.time() + timeout_s * _TIMEOUT_SCALE
-        last_len = len(self.buf)
-        quiet_since = time.time()
-        while time.time() < deadline:
-            self._pump(0.2)
-            if len(self.buf) != last_len:
-                last_len = len(self.buf)
-                quiet_since = time.time()
-                continue
-            if time.time() - quiet_since < quiet_s:
-                continue
-            # Quiet is necessary but not sufficient: startup has natural gaps
-            # between services, and a quiet window can land in one. Probe the
-            # console for the property the caller actually needs -- that a
-            # command comes back promptly -- and only accept silence that
-            # survives it.
-            mark = self.mark()
-            self.send("")
-            if self.expect_from(mark, b"wamos> ", timeout_s=probe_s):
-                return True
-            quiet_since = time.time()
-            last_len = len(self.buf)
-        return False
+        previous = self.force_stop_on_timeout
+        self.force_stop_on_timeout = False
+        try:
+            while time.time() < deadline:
+                mark = self.mark()
+                self.send("")
+                if self.expect_from(mark, CLI_PROMPT, timeout_s=probe_s):
+                    return True
+            return False
+        finally:
+            self.force_stop_on_timeout = previous
 
     def tail(self, max_bytes: int = 2048) -> str:
         if max_bytes <= 0:

@@ -102,10 +102,14 @@ Points that repeatedly matter:
   False on timeout; give the assertion a message naming what the absence implies,
   because that message is the whole failure report in CI.
 - **The first `wamos> ` is handled for you.** It does not mean the CLI is usable
-  -- services keep starting behind it -- so `expect()` waits for the console to
-  go quiet and answer a probe the first time it matches the prompt. Later prompt
-  matches do not settle, since those are a command completing. You do not need
-  to call `settle()` yourself; it is public for a test with an unusual boot.
+  -- services keep starting behind it -- so on the first prompt match `expect()`
+  probes the console (sends an empty line, requires the prompt back promptly)
+  and reports the prompt found only once it answers. Later matches do not probe,
+  since those are a command completing. You do not need to call `settle()`
+  yourself; it is public for a test with an unusual boot.
+  Readiness is deliberately a probe and NOT console silence: a system running the
+  gfx demos or a vt never goes quiet, so waiting for silence there burns the whole
+  budget and makes every battery minutes slower.
 - **Do not raise a timeout to fix a CI-only failure.** `WASMOS_TEST_TIMEOUT_SCALE`
   multiplies every deadline and CI sets it to 3, so a slow runner is already
   accounted for. A test that still times out is telling you something.

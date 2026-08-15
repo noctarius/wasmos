@@ -1207,13 +1207,6 @@ Remaining:
   the `msi` error domain, a resident pci-bus owning the capability walk and
   device programming (`PCI_IPC_MSI_*`), and `mmio_write32` for the MSI-X table
   BAR. virtio-net takes RX/TX/config vectors; virtio-rng takes one.
-- [ ] [BUG][P0] Fix the unit-test IDE target so the lint gate is green again:
-  `wasmos_ide_unit` fails on `tests/unit/test_device_manager_rules.c`
-  (undeclared `abort`), so it never reaches `tests/unit/test_libui_key_decode.c`,
-  which then has no compile-DB entry and clang-tidy cannot find
-  `wasmos/libui.h`. Adding `src/libui/include` to the target is NOT sufficient on
-  its own — it pulls the project `string.h` into a hosted TU and breaks the
-  target differently. See `skills/wasmos-ide-targets`.
 - [ ] [FEATURE][P2] Give `ata` real device DMA. There is no bus-master IDE (BMIDE/PRD)
   programming today, so every transfer is PIO regardless of the `dma_*`
   scaffolding. On QEMU's PIIX this means bus-master IDE; an AHCI controller
@@ -1373,6 +1366,17 @@ Source: `architecture/25-diagnostics-status.md`,
 - [ ] [ENHANCEMENT][P2] Extend `scripts/kconfig_to_cmake.py:37` symbol map as more CMake cache
   settings migrate to Kconfig, and make `scripts/quality.sh:133` clang-tidy lint
   C++ sources (missing `--extra-arg` flags).
+- [ ] [BUG][P2] Make `wasmos_ide_libc` and `wasmos_ide_tools` compile. Both emit
+  compile-DB entries whose flags cannot parse, so CLion indexes those files with
+  errors: `wasmos_ide_libc` builds `src/libc` for the host, where
+  `__builtin_wasm_memory_size`/`_grow` do not exist (`src/libc/src/stdlib.c:30`;
+  the real build passes `--target=wasm32`), and `wasmos_ide_tools` builds the
+  host tools with no sysroot, so libc++'s `<cstring>`/`<cstdlib>` cannot find
+  their C headers — the top-level `CMakeLists.txt` blanks `CMAKE_OSX_SYSROOT` for
+  the freestanding targets. `scripts/quality.sh lint` is green regardless,
+  because it rewrites the DB: it injects `--target=wasm32` for `src/libc` and
+  drops `src/tools` from clang-tidy entirely. The fix is a target-triple and a
+  sysroot option on `wasmos_add_ide_c_target` (`skills/wasmos-ide-targets`).
 - [ ] [DOCS][P2] Keep architecture documents authoritative for design, `STATUS.md` concise
   for current behavior, and this file limited to unfinished work.
 

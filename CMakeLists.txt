@@ -3180,6 +3180,33 @@ wasmos_ide_index(wasmos_ide_unit_sched
           WASMOS_POLL_TEST_SEAMS=1
           WASMOS_SYSCALL_TEST_SEAMS=1)
 
+# test_hostcall_ipc.cpp drives the real kernel IPC host-call shims, so it takes
+# the real kernel headers and not the tests/unit/include shims, exactly like the
+# sched tests above. It is a separate target rather than another entry in that
+# list for two reasons its real compile line makes explicit: it needs KERNEL_DIR
+# itself on -iquote (it reaches the backend shims by subdirectory,
+# "warp/link_ipc.h" and "wasm3/link_ipc.h", which KERNEL_DIR/include does not
+# serve), and it passes none of the *_TEST_SEAMS defines, which change what the
+# kernel headers declare.
+wasmos_ide_index(wasmos_ide_unit_hostcall_ipc
+  SOURCES ${CMAKE_SOURCE_DIR}/tests/unit/test_hostcall_ipc.cpp
+  IQUOTE ${KERNEL_DIR} ${KERNEL_DIR}/include ${WASM3_DIR}/source
+         ${CMAKE_SOURCE_DIR}/abi/generated/c ${DRIVER_WASM_DIR}/include
+  DEFINES WASMOS_HOST_TEST_SMP=1)
+
+# test_warp_wasm_coroutine.cpp links nothing of WASMOS: it drives the vendored
+# WARP JIT directly and resolves its headers relative to WARP_DIR
+# ("src/WasmModule/WasmModule.hpp"). The defines are the subset of
+# WARP_AOT_FLAGS that WARP's headers branch on; without them the headers select
+# a different configuration than the real compile line does. Indexed in every
+# configure, not only a WARP one -- libs/warp is always in the tree, and the
+# real target additionally builds only on an x86_64 host.
+wasmos_ide_index(wasmos_ide_unit_warp
+  SOURCES ${CMAKE_SOURCE_DIR}/tests/unit/test_warp_wasm_coroutine.cpp
+  INCLUDES ${WARP_DIR} ${WARP_DIR}/src ${CMAKE_SOURCE_DIR}/abi/generated/c
+  DEFINES JIT_TARGET_X86_64 ACTIVE_STACK_OVERFLOW_CHECK=1
+          LINEAR_MEMORY_BOUNDS_CHECKS=1 VB_POSIX VB_WIN32_OR_POSIX NVALGRIND)
+
 wasmos_ide_index(wasmos_ide_unit_libc
   SOURCES ${WASMOS_UNIT_LIBC_TESTS}
   INCLUDES ${LIBC_DIR}/include ${LIBC_DIR}/src
@@ -3203,6 +3230,8 @@ wasmos_ide_index(wasmos_ide_unit_libc
 wasmos_ide_index(wasmos_ide_unit
   DIRS ${CMAKE_SOURCE_DIR}/tests/unit
   EXCLUDE ${WASMOS_UNIT_LIBC_TESTS} ${WASMOS_UNIT_SCHED_TESTS}
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_hostcall_ipc.cpp
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_warp_wasm_coroutine.cpp
           ${CMAKE_SOURCE_DIR}/tests/unit/test_go_abi_sizes.c
   IQUOTE ${CMAKE_SOURCE_DIR}/tests/unit/include ${LIBC_DIR}/include
          ${KERNEL_DIR}/include ${DRIVER_WASM_DIR}/include

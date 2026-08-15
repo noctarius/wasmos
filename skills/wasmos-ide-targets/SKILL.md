@@ -64,7 +64,9 @@ Pick the mechanism that owns the file's area:
 - **A file in a globbed area needing a different include set than its
   neighbours:** name it in a sibling `wasmos_ide_index(<name> SOURCES <files>
   INCLUDES ...)` and list the same files in the glob's `EXCLUDE`, so it lands in
-  exactly one index target. `tests/unit` is split this way.
+  exactly one index target. `tests/unit` is split five ways this way: the glob
+  plus `wasmos_ide_unit_libc`, `_unit_sched`, `_unit_hostcall_ipc` and
+  `_unit_warp`.
 - **Complex bespoke build** (lwIP/mbedTLS-style, like `net_stack`): extend that
   target's `wasmos_add_ide_c_target(... SOURCES ... INCLUDES ...)`.
 
@@ -93,6 +95,15 @@ line:
 
 Put a test in the wrong bucket and `scripts/quality.sh lint` fails on it with a
 header conflict or an undeclared libc function, not with anything about the test.
+
+A test that compiles **real kernel or vendored-library sources** takes a third
+form: it must see those sources' own headers and not the `tests/unit/include`
+shims, which are deliberately minimal (`thread.h` is `struct thread { uint32_t
+tid; }`) and collide with the real ones. `wasmos_ide_unit_sched` holds the
+scheduler/IPC/poll/futex tests, `wasmos_ide_unit_hostcall_ipc` the one that also
+needs `${KERNEL_DIR}` itself on `-iquote` for the per-backend shim headers, and
+`wasmos_ide_unit_warp` the one that drives `libs/warp` directly. Each carries the
+`-D` set its real compile line passes, because the headers branch on them.
 
 ## Step 3: Reconfigure and verify
 

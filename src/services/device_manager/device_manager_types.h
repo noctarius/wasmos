@@ -208,6 +208,12 @@ typedef struct {
      * every other driver's. */
     uint8_t selected_storage_has_record;
     pci_device_record_t selected_storage_record;
+    /* A rule set was loaded and the per-rule module descriptors need refetching.
+     * Refreshing takes blocking requests to process-manager, which must not run
+     * while a rule spawn is in flight -- draining the reply endpoint mid-spawn
+     * corrupts active_rule_spawn_* state -- so the refresh is deferred to a
+     * point where nothing is pending. */
+    uint8_t pci_rule_meta_dirty;
     uint8_t rules_roots_logged;
     uint8_t idle_logged;
     uint8_t rules_init_fail_logged;

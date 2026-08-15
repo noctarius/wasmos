@@ -527,14 +527,12 @@ static void poll_boot_rules_async(void) {
     dm_rules_load_always_spawn(&g_dm, text);
     dm_rules_load_block_fs(&g_dm, text);
     dm_rules_load_pci_match(&g_dm, text);
-    /* Loading rules dropped every cached module descriptor. Refresh them now if
-     * the PCI inventory is already in hand; otherwise the inventory pass does
-     * it. Reached only from initialize()'s state machine, never from an
-     * event-handler callback, so the blocking request this makes cannot become
-     * a nested receive. */
-    if (g_dm.registry_count > 0u) {
-        load_pci_rule_metadata();
-    }
+    /* Loading rules dropped every cached module descriptor. Refetching them
+     * takes blocking requests, which must not run here: a rule spawn may be in
+     * flight, and draining the reply endpoint under it corrupts
+     * active_rule_spawn_* state. Mark it and let the spawn-quiescent point in
+     * initialize() do the work. */
+    g_dm.pci_rule_meta_dirty = 1;
     dm_rules_load_acpi_match(&g_dm, text);
     g_dm.rules_boot_active = count_loaded_active_rules();
     if (g_dm.always_spawn_rule_count > 0) {
@@ -575,14 +573,12 @@ static void load_rules_if_available(void) {
             dm_rules_load_always_spawn(&g_dm, text);
             dm_rules_load_block_fs(&g_dm, text);
             dm_rules_load_pci_match(&g_dm, text);
-            /* Loading rules dropped every cached module descriptor. Refresh them now if
-             * the PCI inventory is already in hand; otherwise the inventory pass does
-             * it. Reached only from initialize()'s state machine, never from an
-             * event-handler callback, so the blocking request this makes cannot become
-             * a nested receive. */
-            if (g_dm.registry_count > 0u) {
-                load_pci_rule_metadata();
-            }
+            /* Loading rules dropped every cached module descriptor. Refetching them
+             * takes blocking requests, which must not run here: a rule spawn may be in
+             * flight, and draining the reply endpoint under it corrupts
+             * active_rule_spawn_* state. Mark it and let the spawn-quiescent point in
+             * initialize() do the work. */
+            g_dm.pci_rule_meta_dirty = 1;
             dm_rules_load_acpi_match(&g_dm, text);
             if (g_dm.always_spawn_rule_count > 0) {
                 console_write("[device-manager] init rules loaded always_spawn\n");
@@ -986,18 +982,16 @@ static int hw_spawn_rule_target(const char* rule_path) {
         return hw_spawn_driver_path(rule_path);
     }
     module_index = rule_module_index(rule_path);
-    {
-        if (module_index < 0) {
-            /* Rule paths may target drivers only available on /boot. */
-            char boot_path[96];
-            boot_path[0] = '\0';
-            str_copy(boot_path, sizeof(boot_path), "/boot/");
-            wasmos_sys_str_append(boot_path, sizeof(boot_path), rule_path);
-            if (hw_spawn_driver_path(boot_path) == 0) {
-                return 0;
-            }
-            return hw_spawn_driver_path(rule_path);
+    if (module_index < 0) {
+        /* Rule paths may target drivers only available on /boot. */
+        char boot_path[96];
+        boot_path[0] = '\0';
+        str_copy(boot_path, sizeof(boot_path), "/boot/");
+        wasmos_sys_str_append(boot_path, sizeof(boot_path), rule_path);
+        if (hw_spawn_driver_path(boot_path) == 0) {
+            return 0;
         }
+        return hw_spawn_driver_path(rule_path);
     }
     return hw_spawn_driver_index(module_index);
 }
@@ -1625,6 +1619,7 @@ static int pci_rule_matches_record(const pci_match_rule_t* rule, const pci_devic
  * whose module declares storage_bootstrap supplies it. The first such pair wins,
  * so rule order is the tiebreak. */
 static void load_pci_rule_metadata(void) {
+    g_dm.pci_rule_meta_dirty = 0;
     reset_selected_storage();
     for (uint32_t ri = 0; ri < g_dm.pci_match_rule_count; ++ri) {
         pci_match_rule_t* rule = &g_dm.pci_match_rules[ri];
@@ -2003,6 +1998,14 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t module_coun
 
     for (;;) {
         handle_query_endpoint_nonblocking();
+        /* Refetch the per-rule module descriptors a rules load invalidated. Only
+         * here: the refresh makes blocking requests, and doing that with a rule
+         * spawn in flight drains the reply endpoint under it and corrupts
+         * active_rule_spawn_* state. This loop is the one context that is
+         * neither an event-handler callback nor mid-spawn. */
+        if (g_dm.pci_rule_meta_dirty && !g_dm.rule_spawn_pending && g_dm.registry_count > 0u) {
+            load_pci_rule_metadata();
+        }
         if (g_dm.phase == HW_PHASE_SPAWN) {
             hw_spawn_target_t target = next_spawn_target();
             if (target == HW_SPAWN_NONE) {

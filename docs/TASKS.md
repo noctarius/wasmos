@@ -986,6 +986,70 @@ returns; `FS_ERR_*`/`PROC_*` ride IPC opcodes), so the migration depends on them
   present/absent flag per field would remove the collision; the same convention
   makes a real class or vendor of 0xFF/0xFFFF inexpressible.
 
+- [ ] [CLEANUP][P2] Generate the POSIX libc constants; they are hand-copied into
+  four languages today. `abi/constants.yaml` and `gen_abi_constants.py` now exist,
+  so this is adopting a generator rather than building one.
+
+  `O_RDONLY`, `O_WRONLY`, `O_CREAT`, `O_TRUNC`, `O_APPEND` (`libc/include/fcntl.h`),
+  `SEEK_SET`, `SEEK_CUR`, `SEEK_END` (`unistd.h`) and `S_IFDIR`, `S_IFREG`
+  (`sys/stat.h`) are each re-declared in `src/libc/rust/wasmos.rs`,
+  `src/libc/zig/wasmos.zig` and the AssemblyScript runtime. The copies are
+  byte-identical down to their comments ("Open flags, POSIX-valued. Bit 0 is the
+  access mode..." appears verbatim in the Rust and Zig files), which is what makes
+  drift a matter of time rather than a risk: nothing detects it. They cross a
+  boundary in both directions -- the flags go to the FS service, the `S_IF*` bits
+  come back in a stat reply -- so they are ABI, not a per-language convenience.
+  Phase 3b deferred these deliberately ("can adopt the generated files
+  incrementally"); the value generator is what was missing.
+
+- [ ] [CLEANUP][P2] Generate the gfx protocol values, and move the gfx/fb opcodes
+  to `abi/opcodes.yaml` where they belong. `libc/include/wasmos/gfx_ipc.h` holds
+  30 hand-written constants of two different kinds, and the split matters:
+
+  Message opcodes -- `FB_IPC_GET_INFO` (0x0100) through `FB_IPC_QUERY_MODES`
+  (0x0107) -- are `ipc_message_t.type` values and belong in `opcodes.yaml`, which
+  already models fb/gfx as subsystems.
+
+  Everything else is a value a peer interprets and belongs in `constants.yaml`:
+  `GFX_EVENT_*` (8 event codes), `GFX_POINTER_BUTTON_*` (3),
+  `GFX_POINTER_GESTURE_*` (7), and the `FB_IPC_ABI_MAGIC`/`_VERSION` +
+  `GFX_IPC_ABI_MAGIC`/`_VERSION` handshake pairs. Five of them
+  (`GFX_EVENT_KEY`, `_POINTER`, `_CLOSE_REQUEST`, `GFX_IPC_ABI_MAGIC`,
+  `_VERSION`) are already hand-declared in Rust, so the duplication has started.
+  A gfx app in any language has to name an event code to dispatch on it.
+
+- [ ] [CLEANUP][P3] Generate the remaining cross-service values in
+  `wasmos_driver_abi.h`. That header exists to be shared, so a value in it is
+  boundary-crossing by construction; 60 are still hand-written. The ones that
+  clearly qualify:
+
+  Enum-like alternatives a peer switches on -- `PROC_STATUS_*` (3),
+  `PROC_MODULE_SOURCE_INITFS`/`_FS`, `WASMOS_EXEC_MATCH_*` (6 node kinds),
+  `WASMOS_BROKER_PLAN_KIND_*` (2), `SVC_CLASS_EVENT_ADD`/`_REMOVE`,
+  `FSMGR_BACKEND_BOOT`/`_INIT`, `VT_INPUT_MODE_*`.
+
+  Descriptor versions both sides check -- `WASMOS_SVC_REGISTER_DESC_VERSION`,
+  `WASMOS_MODULE_META_DESC_VERSION`, `WASMOS_PCI_DEVICE_DESC_VERSION`,
+  `WASMOS_BROKER_SPAWN_PLAN_VERSION`, and the two register-desc versions.
+
+  Capacities both sides size buffers from -- `WASMOS_SVC_NAME_MAX`,
+  `WASMOS_SVC_CLASS_MAX`, `WASMOS_SUBSYSTEM_TAG_LEN`,
+  `WASMOS_EXEC_HANDLER_NAME_LEN`, `WASMOS_IO_RANGE_LIMIT`,
+  `WASMOS_MODULE_META_MAX_REGIONS`, `WASMOS_PCI_BAR_COUNT`,
+  `HRNG_MAX_BYTES_PER_REQ`, `WASMOS_BLOCK_ZC_*`.
+
+  `WASMOS_IPC_MSI_EVENT_TYPE` (0xFF01) is NOT one of these -- it is a message
+  type and is already tracked for `opcodes.yaml` with `IPC_IRQ_EVENT_TYPE`.
+  Struct layouts stay hand-written; layout is not what the constant IDL
+  expresses.
+
+- [ ] [CLEANUP][P3] Generate the capability-grant flags and font ids.
+  `WASMOS_BUFFER_GRANT_READ`/`_WRITE` (`libc/include/wasmos/api.h`) are passed by
+  every app that lends a buffer and are already duplicated into AssemblyScript.
+  `FONT_ID_ROBOTO`/`_ROBOTO_MONO`/`_NOTO_SERIF` (`font_ipc.h`) are picked by any
+  client asking for text. Both are small, and both are values a non-C client
+  cannot currently name.
+
 ## Filesystems and Storage
 - [ ] [BUG][P0] Fix `test_exec_fs_write_smoke`, the last failing test in the QEMU
   integration suite (run 31081191205, job 92550164406 — everything else in that

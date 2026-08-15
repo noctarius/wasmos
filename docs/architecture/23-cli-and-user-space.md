@@ -22,9 +22,8 @@ declares:
 | Capabilities | `system.control`                        |
 | `wants_tty`  | `true` (PM allocates a controlling TTY) |
 
-The `initialize` entry args are unused (the entry-arg binding mechanism is
-retired; the manifest's `entry_arg_bindings` key is kept only for backward
-compatibility and ignored by the kernel). At runtime the CLI reads its startup
+The `initialize` entry args are unused: the entry-argument mechanism is retired
+and nothing in the container carries one. At runtime the CLI reads its startup
 values from the spawn-info buffer:
 
 ```c

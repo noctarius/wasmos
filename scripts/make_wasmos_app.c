@@ -6,9 +6,9 @@
 
 /* Container identity. MAGIC is the 8-byte signature, compared byte-for-byte and
  * NOT NUL-terminated in the file. VERSION selects which header layout the parser
- * applies; this packer emits 8, and src/kernel/wasmos_app.c accepts only 8. */
+ * applies; this packer emits 9, and src/kernel/wasmos_app.c accepts only 9. */
 #define MAGIC "WASMOSAP"
-#define VERSION 8u
+#define VERSION 9u
 
 /* Header flags, mirroring WASMOS_APP_FLAG_* in src/kernel/include/wasmos_app.h.
  * DRIVER/SERVICE/APP are the package kind and exactly one is set, derived from
@@ -39,13 +39,6 @@
 #define WASMOS_APP_REGION_BAR 1u
 #define WASMOS_APP_MAX_REGIONS 4u
 
-/* Wildcards for a driver match field: the all-ones value of the field's width
- * means "any", which is why a real class code or vendor ID of 0xFF/0xFFFF cannot
- * be expressed. 0xFFFF is also the PCI "no device" vendor ID, so nothing is lost
- * there. Written for every field a manifest leaves unset. */
-#define MATCH_ANY_U8 0xFFu
-#define MATCH_ANY_U16 0xFFFFu
-
 /* Fixed head of a .wap package. It must stay byte-identical to
  * wasmos_app_header_t in src/kernel/wasmos_app.c, which rejects the package
  * unless header_size equals its own sizeof.
@@ -54,7 +47,6 @@
  * order wasmos_app_parse() walks them:
  *   header, name, entry, req_ep_count x (wasmos_req_endpoint_t + name bytes),
  *   cap_count x (wasmos_cap_request_t + name bytes),
- *   driver_match_count x wasmos_driver_match_t,
  *   region_count x wasmos_region_entry_t,
  *   mem_hint_count x wasmos_mem_hint_t (stack then heap),
  *   wasm_size raw payload bytes, then compiled_size WARP AOT bytes if non-zero.
@@ -63,7 +55,7 @@
  *
  * Fields, all little-endian (the format is not byte-order portable):
  *   magic[8]                 "WASMOSAP", not NUL-terminated.
- *   version                  Always 8 from this packer.
+ *   version                  Always 9 from this packer.
  *   header_size              sizeof(this struct); the parser compares it against
  *                            its own and also uses it as the offset of the first
  *                            section, so name bytes start exactly here.
@@ -79,14 +71,12 @@
  *                            0 when the manifest's name is "-".
  *   cap_count                Number of capability-request records (max 8).
  *   mem_hint_count           Number of memory-hint records; always 2.
- *   driver_match_count       Number of wasmos_driver_match_t records that follow
- *                            the capability table.
  *   compiled_size            Byte length of the WARP AOT binary appended after
  *                            the payload; 0 when absent.
  *   subsystem_tag            Up-to-8-byte tag, NUL-padded, from [A-Z0-9+_-];
  *                            defaults to "NATIVE" or "WASM".
  *   region_count             Number of wasmos_region_entry_t records, written
- *                            after the driver matches and before the mem hints.
+ *                            after the capability table and before the mem hints.
  */
 typedef struct __attribute__((packed)) {
     char magic[8];
@@ -99,10 +89,9 @@ typedef struct __attribute__((packed)) {
     uint32_t req_ep_count;
     uint32_t cap_count;
     uint32_t mem_hint_count;
-    uint32_t driver_match_count;
     uint32_t compiled_size; /* size of the WARP AOT binary appended after WASM; 0 if absent */
     char subsystem_tag[SUBSYSTEM_TAG_LEN];
-    uint32_t region_count; /* declared register windows, written after the matches */
+    uint32_t region_count; /* declared register windows */
 } wasmos_app_header_t;
 
 /* One declared register window, carrying no trailing name. Its position in the
@@ -143,73 +132,6 @@ typedef struct __attribute__((packed)) {
     uint32_t min_pages;
     uint32_t max_pages;
 } wasmos_mem_hint_t;
-
-/* One PCI match rule. Any of class_code/subclass/prog_if/vendor_id/device_id may
- * be the MATCH_ANY_* wildcard; io_port_min/io_port_max are a legacy ISA-style
- * window whose wildcard is 0, not all-ones. reserved0 is written as 0. priority
- * breaks ties between drivers that both match, higher winning; the positional
- * command line always writes 0, only the manifest can set it. */
-typedef struct __attribute__((packed)) {
-    uint8_t class_code;
-    uint8_t subclass;
-    uint8_t prog_if;
-    uint8_t reserved0;
-    uint16_t vendor_id;
-    uint16_t device_id;
-    uint16_t io_port_min;
-    uint16_t io_port_max;
-    uint32_t priority;
-} wasmos_driver_match_t;
-
-static int parse_u32(const char* s, uint32_t* out) {
-    if (!s || !out || !*s) {
-        return -1;
-    }
-    char* end = NULL;
-    unsigned long v = strtoul(s, &end, 10);
-    if ((end && *end != '\0') || v > 0xFFFFFFFFUL) {
-        return -1;
-    }
-    *out = (uint32_t)v;
-    return 0;
-}
-
-static char* trim(char* s) {
-    while (*s && isspace((unsigned char)*s)) {
-        s++;
-    }
-    char* end = s + strlen(s);
-    while (end > s && isspace((unsigned char)end[-1])) {
-        end--;
-    }
-    *end = '\0';
-    return s;
-}
-
-static void strip_quotes(char* s) {
-    size_t n = strlen(s);
-    if (n >= 2 && s[0] == '"' && s[n - 1] == '"') {
-        memmove(s, s + 1, n - 2);
-        s[n - 2] = '\0';
-    }
-}
-
-static int parse_u16_any(const char* s, uint16_t* out, uint16_t any_value) {
-    if (!s || !out) {
-        return -1;
-    }
-    if (strcmp(s, "any") == 0) {
-        *out = any_value;
-        return 0;
-    }
-    char* end = NULL;
-    unsigned long v = strtoul(s, &end, 0);
-    if (!*s || (end && *end != '\0') || v > 0xFFFFUL) {
-        return -1;
-    }
-    *out = (uint16_t)v;
-    return 0;
-}
 
 static int capability_name_supported(const char* name) {
     if (!name) {
@@ -254,17 +176,6 @@ typedef struct {
     uint32_t flags;
 } manifest_cap_t;
 
-typedef struct {
-    uint8_t class_code;
-    uint8_t subclass;
-    uint8_t prog_if;
-    uint16_t vendor_id;
-    uint16_t device_id;
-    uint16_t io_port_min;
-    uint16_t io_port_max;
-    uint32_t priority;
-} manifest_match_t;
-
 /* One register window the driver declares it needs. A driver names windows, not
  * ports: `io` is a fixed range it knows statically (legacy/ISA-compat), `bar` is
  * wherever firmware put a BAR of the matched device. Declaration order is the
@@ -297,8 +208,6 @@ typedef struct {
     uint32_t req_ep_rights;
     manifest_cap_t caps[8];
     uint32_t cap_count;
-    manifest_match_t matches[8];
-    uint32_t match_count;
     manifest_region_t regions[WASMOS_APP_MAX_REGIONS];
     uint32_t region_count;
 } linker_manifest_t;
@@ -331,23 +240,55 @@ static int manifest_parse_bool(const char* s, uint8_t* out) {
     return -1;
 }
 
+static int parse_u32(const char* s, uint32_t* out) {
+    if (!s || !out || !*s) {
+        return -1;
+    }
+    char* end = NULL;
+    unsigned long v = strtoul(s, &end, 10);
+    if ((end && *end != '\0') || v > 0xFFFFFFFFUL) {
+        return -1;
+    }
+    *out = (uint32_t)v;
+    return 0;
+}
+
+static char* trim(char* s) {
+    while (*s && isspace((unsigned char)*s)) {
+        s++;
+    }
+    char* end = s + strlen(s);
+    while (end > s && isspace((unsigned char)end[-1])) {
+        end--;
+    }
+    *end = '\0';
+    return s;
+}
+
+static void strip_quotes(char* s) {
+    size_t n = strlen(s);
+    if (n >= 2 && s[0] == '"' && s[n - 1] == '"') {
+        memmove(s, s + 1, n - 2);
+        s[n - 2] = '\0';
+    }
+}
+
 /* Read a TOML-ish linker manifest into *out. The accepted grammar is a small
  * subset: '#' starts a comment to end of line, blank lines are skipped, section
- * headers are [package], [resources], [ipc] and the repeatable [[capabilities]],
- * [[regions]], [[matches]], and everything else must be a key = value line whose
+ * headers are [package], [resources], [ipc] and the repeatable [[capabilities]]
+ * and [[regions]], and everything else must be a key = value line whose
  * value may be double-quoted. Keys outside a known section, and unknown keys
  * inside one, are ignored silently.
  *
  * Defaults applied before parsing: kind "app" and required_endpoint_name "-"
- * (meaning none). Each [[matches]] block starts fully wildcarded; each
- * [[regions]] block starts as an I/O region with an empty range. A missing
+ * (meaning none). Each [[regions]] block starts as an I/O region with an empty
+ * range. A missing
  * subsystem is filled in from the native flag as "NATIVE" or "WASM".
  *
  * Returns 0 on success, -1 on any failure: unreadable file, a malformed numeric
- * or boolean value, an unknown region kind, a bus other than "pci", a table
- * exceeding its capacity (8 capabilities, 8 matches, WASMOS_APP_MAX_REGIONS
- * regions), a missing name or entry, or an invalid
- * subsystem tag. *out is fully overwritten either way and holds partial data on
+ * or boolean value, an unknown region kind, a table exceeding its capacity (8
+ * capabilities, WASMOS_APP_MAX_REGIONS regions), a missing name or entry, or an
+ * invalid subsystem tag. *out is fully overwritten either way and holds partial data on
  * failure. */
 static int parse_linker_manifest(const char* path, linker_manifest_t* out) {
     if (!path || !out) {
@@ -360,18 +301,9 @@ static int parse_linker_manifest(const char* path, linker_manifest_t* out) {
     if (!f) {
         return -1;
     }
-    enum {
-        SEC_NONE,
-        SEC_PACKAGE,
-        SEC_RESOURCES,
-        SEC_IPC,
-        SEC_CAP,
-        SEC_MATCH,
-        SEC_REGION
-    } sec = SEC_NONE;
+    enum { SEC_NONE, SEC_PACKAGE, SEC_RESOURCES, SEC_IPC, SEC_CAP, SEC_REGION } sec = SEC_NONE;
     int region_idx = -1;
     int cap_idx = -1;
-    int match_idx = -1;
     char line[512];
     while (fgets(line, sizeof(line), f)) {
         char* s = trim(line);
@@ -421,21 +353,6 @@ static int parse_linker_manifest(const char* path, linker_manifest_t* out) {
             out->regions[region_idx].last = 0;
             continue;
         }
-        if (strcmp(s, "[[matches]]") == 0) {
-            sec = SEC_MATCH;
-            if (out->match_count >= 8) {
-                fclose(f);
-                return -1;
-            }
-            match_idx = (int)out->match_count++;
-            out->matches[match_idx].class_code = MATCH_ANY_U8;
-            out->matches[match_idx].subclass = MATCH_ANY_U8;
-            out->matches[match_idx].prog_if = MATCH_ANY_U8;
-            out->matches[match_idx].vendor_id = MATCH_ANY_U16;
-            out->matches[match_idx].device_id = MATCH_ANY_U16;
-            continue;
-        }
-
         char* eq = strchr(s, '=');
         if (!eq) {
             continue;
@@ -535,64 +452,6 @@ static int parse_linker_manifest(const char* path, linker_manifest_t* out) {
                     return -1;
                 }
             }
-        } else if (sec == SEC_MATCH && match_idx >= 0) {
-            manifest_match_t* m = &out->matches[match_idx];
-            uint16_t u16 = 0;
-            uint32_t u32 = 0;
-            if (strcmp(key, "bus") == 0) {
-                if (strcmp(val, "pci") != 0) {
-                    fclose(f);
-                    return -1;
-                }
-            } else if (strcmp(key, "class") == 0) {
-                if (parse_u16_any(val, &u16, MATCH_ANY_U8) != 0) {
-                    fclose(f);
-                    return -1;
-                }
-                m->class_code = (uint8_t)u16;
-            } else if (strcmp(key, "subclass") == 0) {
-                if (parse_u16_any(val, &u16, MATCH_ANY_U8) != 0) {
-                    fclose(f);
-                    return -1;
-                }
-                m->subclass = (uint8_t)u16;
-            } else if (strcmp(key, "prog_if") == 0) {
-                if (parse_u16_any(val, &u16, MATCH_ANY_U8) != 0) {
-                    fclose(f);
-                    return -1;
-                }
-                m->prog_if = (uint8_t)u16;
-            } else if (strcmp(key, "vendor") == 0) {
-                if (parse_u16_any(val, &u16, MATCH_ANY_U16) != 0) {
-                    fclose(f);
-                    return -1;
-                }
-                m->vendor_id = u16;
-            } else if (strcmp(key, "device") == 0) {
-                if (parse_u16_any(val, &u16, MATCH_ANY_U16) != 0) {
-                    fclose(f);
-                    return -1;
-                }
-                m->device_id = u16;
-            } else if (strcmp(key, "io_port_min") == 0) {
-                if (parse_u16_any(val, &u16, 0) != 0) {
-                    fclose(f);
-                    return -1;
-                }
-                m->io_port_min = u16;
-            } else if (strcmp(key, "io_port_max") == 0) {
-                if (parse_u16_any(val, &u16, 0) != 0) {
-                    fclose(f);
-                    return -1;
-                }
-                m->io_port_max = u16;
-            } else if (strcmp(key, "priority") == 0) {
-                if (parse_u32_auto(val, &u32) != 0) {
-                    fclose(f);
-                    return -1;
-                }
-                m->priority = u32;
-            }
         }
     }
     fclose(f);
@@ -616,8 +475,6 @@ static int parse_linker_manifest(const char* path, linker_manifest_t* out) {
  *
  *   <in.wasm> <out.wap> <name> <entry> <stack_pages> <heap_pages> <flags>
  *   <req_ep_name|-> <req_ep_rights> <cap_count> [<cap_name> <cap_flags>]...
- *   [--driver-match <class> <subclass> <prog_if> <vendor> <device> <io_min>
- *   <io_max>]
  *       Positional form, kept for callers that have no manifest. A 12-argument
  *       invocation whose 10th argument is not a number is instead read as the
  *       older single-<cap_name> <cap_flags> layout. This form emits no AOT
@@ -684,20 +541,6 @@ int main(int argc, char** argv) {
             cap_names[i] = lm.caps[i].name;
             caps[i].name_len = (uint32_t)strlen(lm.caps[i].name);
             caps[i].flags = lm.caps[i].flags;
-        }
-
-        wasmos_driver_match_t driver_matches[8];
-        uint32_t driver_match_count = lm.match_count;
-        for (uint32_t i = 0; i < driver_match_count; ++i) {
-            driver_matches[i].class_code = lm.matches[i].class_code;
-            driver_matches[i].subclass = lm.matches[i].subclass;
-            driver_matches[i].prog_if = lm.matches[i].prog_if;
-            driver_matches[i].reserved0 = 0;
-            driver_matches[i].vendor_id = lm.matches[i].vendor_id;
-            driver_matches[i].device_id = lm.matches[i].device_id;
-            driver_matches[i].io_port_min = lm.matches[i].io_port_min;
-            driver_matches[i].io_port_max = lm.matches[i].io_port_max;
-            driver_matches[i].priority = lm.matches[i].priority;
         }
 
         FILE* in = fopen(in_path, "rb");
@@ -796,7 +639,6 @@ int main(int argc, char** argv) {
         hdr.req_ep_count = (lm.req_ep_name[0] == '-' && lm.req_ep_name[1] == '\0') ? 0u : 1u;
         hdr.cap_count = cap_count;
         hdr.mem_hint_count = 2;
-        hdr.driver_match_count = driver_match_count;
         hdr.compiled_size = (uint32_t)compiled_data_size;
         subsystem_tag_copy(hdr.subsystem_tag, lm.subsystem);
         hdr.region_count = lm.region_count;
@@ -816,9 +658,6 @@ int main(int argc, char** argv) {
         for (uint32_t i = 0; i < cap_count; ++i) {
             ok &= fwrite(&caps[i], sizeof(caps[i]), 1, outf) == 1;
             ok &= fwrite(cap_names[i], 1, caps[i].name_len, outf) == caps[i].name_len;
-        }
-        for (uint32_t i = 0; i < driver_match_count; ++i) {
-            ok &= fwrite(&driver_matches[i], sizeof(driver_matches[i]), 1, outf) == 1;
         }
         for (uint32_t i = 0; i < lm.region_count; ++i) {
             wasmos_region_entry_t region_entry;
@@ -865,14 +704,6 @@ int main(int argc, char** argv) {
     const uint32_t cap_max = 8;
     const char* cap_names[8];
     wasmos_cap_request_t caps[8];
-    uint8_t driver_match_class = MATCH_ANY_U8;
-    uint8_t driver_match_subclass = MATCH_ANY_U8;
-    uint8_t driver_match_prog_if = MATCH_ANY_U8;
-    uint16_t driver_match_vendor_id = MATCH_ANY_U16;
-    uint16_t driver_match_device_id = MATCH_ANY_U16;
-    uint16_t driver_io_port_min = 0;
-    uint16_t driver_io_port_max = 0;
-    uint32_t driver_match_count = 0;
     if (parse_u32(argv[5], &stack_pages) != 0 || parse_u32(argv[6], &heap_pages) != 0) {
         fprintf(stderr, "invalid stack/heap page value\n");
         return 1;
@@ -914,39 +745,11 @@ int main(int argc, char** argv) {
             caps[i].name_len = (uint32_t)strlen(cap_name);
             caps[i].flags = cap_flags;
         }
-        int next = min_tail;
-        if (argc > next) {
-            while (next < argc) {
-                if (strcmp(argv[next], "--driver-match") == 0) {
-                    if (next + 7 >= argc) {
-                        fprintf(stderr, "invalid --driver-match layout\n");
-                        return 1;
-                    }
-                    uint16_t cls = 0;
-                    uint16_t sub = 0;
-                    uint16_t prog = 0;
-                    if (parse_u16_any(argv[next + 1], &cls, MATCH_ANY_U8) != 0 ||
-                        parse_u16_any(argv[next + 2], &sub, MATCH_ANY_U8) != 0 ||
-                        parse_u16_any(argv[next + 3], &prog, MATCH_ANY_U8) != 0 ||
-                        parse_u16_any(argv[next + 4], &driver_match_vendor_id, MATCH_ANY_U16) !=
-                            0 ||
-                        parse_u16_any(argv[next + 5], &driver_match_device_id, MATCH_ANY_U16) !=
-                            0 ||
-                        parse_u16_any(argv[next + 6], &driver_io_port_min, 0) != 0 ||
-                        parse_u16_any(argv[next + 7], &driver_io_port_max, 0) != 0) {
-                        fprintf(stderr, "invalid --driver-match value\n");
-                        return 1;
-                    }
-                    driver_match_class = (uint8_t)cls;
-                    driver_match_subclass = (uint8_t)sub;
-                    driver_match_prog_if = (uint8_t)prog;
-                    driver_match_count = 1;
-                    next += 8;
-                } else {
-                    fprintf(stderr, "unknown trailing argument '%s'\n", argv[next]);
-                    return 1;
-                }
-            }
+        /* The positional form takes no trailing options: everything past the
+         * capability pairs would have to be a flag, and none remain. */
+        if (argc > min_tail) {
+            fprintf(stderr, "unknown trailing argument '%s'\n", argv[min_tail]);
+            return 1;
         }
     } else if (argc == 12) {
         /* Backward compatibility mode: one optional capability pair. */
@@ -1037,7 +840,6 @@ int main(int argc, char** argv) {
     hdr.req_ep_count = has_req_ep ? 1u : 0u;
     hdr.cap_count = cap_count;
     hdr.mem_hint_count = 2;
-    hdr.driver_match_count = driver_match_count;
     hdr.compiled_size = 0; /* positional path emits no AOT binary; use --manifest --compiled */
     subsystem_tag_copy(hdr.subsystem_tag, (flags & (1u << 4)) != 0 ? "NATIVE" : "WASM");
     /* No regions without a manifest: declaring a register window needs the
@@ -1062,19 +864,6 @@ int main(int argc, char** argv) {
     for (uint32_t i = 0; i < cap_count; ++i) {
         ok &= fwrite(&caps[i], sizeof(caps[i]), 1, out) == 1;
         ok &= fwrite(cap_names[i], 1, caps[i].name_len, out) == caps[i].name_len;
-    }
-    if (driver_match_count > 0) {
-        wasmos_driver_match_t dm;
-        dm.class_code = driver_match_class;
-        dm.subclass = driver_match_subclass;
-        dm.prog_if = driver_match_prog_if;
-        dm.reserved0 = 0;
-        dm.vendor_id = driver_match_vendor_id;
-        dm.device_id = driver_match_device_id;
-        dm.io_port_min = driver_io_port_min;
-        dm.io_port_max = driver_io_port_max;
-        dm.priority = 0;
-        ok &= fwrite(&dm, sizeof(dm), 1, out) == 1;
     }
     ok &= fwrite(&stack_hint, sizeof(stack_hint), 1, out) == 1;
     ok &= fwrite(&heap_hint, sizeof(heap_hint), 1, out) == 1;

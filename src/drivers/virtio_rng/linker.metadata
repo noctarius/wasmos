@@ -37,16 +37,3 @@ flags = 4
 [[capabilities]]
 name = "svc.class"
 flags = 0
-
-# QEMU presents virtio-rng-pci as class 0x00 / subclass 0xFF, and the
-# device-manager matcher reserves 0xFF/0xFFFF as its "any" wildcard, so class
-# fields cannot reliably select this device. Match the vendor/device IDs instead
-# (transitional entropy device 1AF4:1005); class/subclass default to "any".
-[[matches]]
-bus = "pci"
-prog_if = "any"
-vendor = 0x1AF4
-device = 0x1005
-io_port_min = 0x0CF8
-io_port_max = 0x0CFF
-priority = 100

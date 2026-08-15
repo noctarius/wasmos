@@ -128,6 +128,7 @@ static void log_rule_roots_once(void) {
 static int proc_running(const char* name);
 static int ensure_fs_endpoint(void);
 static int query_module_meta_by_path(const char* path, uint32_t source, int32_t* out_index);
+static int pci_rule_matches_record(const pci_match_rule_t* rule, const pci_device_record_t* rec);
 static void kick_boot_rules_read_async(void);
 static void poll_boot_rules_async(void);
 static void queue_always_spawn_rules(void);
@@ -915,6 +916,49 @@ static int build_pci_spawn_args(const pci_device_record_t* rec, char* out, uint3
     return n;
 }
 
+/* Resolve a rule's RUN+= target to a boot-module index, without spawning
+ * anything.  Tries the path as an initfs module, then the basename with the
+ * extension stripped, then that basename with underscores turned into dashes
+ * (manifest names use dashes where file names use underscores).  Returns the
+ * index, or -1 when the rule names something not among the boot modules -- which
+ * a caller may legitimately handle by loading it from /boot instead. */
+static int32_t rule_module_index(const char* rule_path) {
+    int32_t module_index = -1;
+    if (!rule_path || rule_path[0] == '\0' || rule_path[0] == '/') {
+        return -1;
+    }
+    if (query_module_meta_by_path(rule_path, PROC_MODULE_SOURCE_INITFS, &module_index) == 0 &&
+        module_index >= 0) {
+        return module_index;
+    }
+    const char* tail = rule_path;
+    char name[32];
+    uint32_t n = 0;
+    for (uint32_t i = 0; rule_path[i] != '\0'; ++i) {
+        if (rule_path[i] == '/') {
+            tail = &rule_path[i + 1];
+        }
+    }
+    while (tail[n] && tail[n] != '.' && n + 1u < sizeof(name)) {
+        name[n] = tail[n];
+        n++;
+    }
+    name[n] = '\0';
+    if (name[0] == '\0') {
+        return -1;
+    }
+    module_index = module_index_by_name(name);
+    if (module_index < 0) {
+        for (uint32_t i = 0; name[i]; ++i) {
+            if (name[i] == '_') {
+                name[i] = '-';
+            }
+        }
+        module_index = module_index_by_name(name);
+    }
+    return module_index;
+}
+
 static int hw_spawn_rule_target(const char* rule_path) {
     int32_t module_index = -1;
     if (!rule_path || rule_path[0] == '\0') {
@@ -923,33 +967,8 @@ static int hw_spawn_rule_target(const char* rule_path) {
     if (rule_path[0] == '/') {
         return hw_spawn_driver_path(rule_path);
     }
-    if (query_module_meta_by_path(rule_path, PROC_MODULE_SOURCE_INITFS, &module_index) != 0 ||
-        module_index < 0) {
-        const char* tail = rule_path;
-        char name[32];
-        uint32_t n = 0;
-        for (uint32_t i = 0; rule_path[i] != '\0'; ++i) {
-            if (rule_path[i] == '/') {
-                tail = &rule_path[i + 1];
-            }
-        }
-        while (tail[n] && tail[n] != '.' && n + 1u < sizeof(name)) {
-            name[n] = tail[n];
-            n++;
-        }
-        name[n] = '\0';
-        if (name[0] == '\0') {
-            return -1;
-        }
-        module_index = module_index_by_name(name);
-        if (module_index < 0) {
-            for (uint32_t i = 0; name[i]; ++i) {
-                if (name[i] == '_') {
-                    name[i] = '-';
-                }
-            }
-            module_index = module_index_by_name(name);
-        }
+    module_index = rule_module_index(rule_path);
+    {
         if (module_index < 0) {
             /* Rule paths may target drivers only available on /boot. */
             char boot_path[96];
@@ -1106,14 +1125,7 @@ static void queue_pci_match_rule_spawns(void) {
             if (di >= 64u || ((rule->spawned_device_mask >> di) & 1u) != 0u) {
                 continue;
             }
-            if ((rule->class_code != MATCH_ANY_U8 && rec->class_code != rule->class_code) ||
-                (rule->bus != MATCH_ANY_U8 && rec->bus != rule->bus) ||
-                (rule->slot != MATCH_ANY_U8 && rec->device != rule->slot) ||
-                (rule->function != MATCH_ANY_U8 && rec->function != rule->function) ||
-                (rule->subclass != MATCH_ANY_U8 && rec->subclass != rule->subclass) ||
-                (rule->prog_if != MATCH_ANY_U8 && rec->prog_if != rule->prog_if) ||
-                (rule->vendor_id != MATCH_ANY_U16 && rec->vendor_id != rule->vendor_id) ||
-                (rule->device_id != MATCH_ANY_U16 && rec->device_id != rule->device_id)) {
+            if (!pci_rule_matches_record(rule, rec)) {
                 continue;
             }
             g_dm.active_rule_spawn_caps.cap_flags = 0u;
@@ -1389,22 +1401,23 @@ static void resolve_declared_regions(const wasmos_module_meta_desc_t* meta,
     }
 }
 
-/* Query PROC_IPC_MODULE_META_DESC for the given module_index/match_index. The
- * answer lands in a device-manager-owned buffer lent WRITE, because the declared
- * region list is variable-length and cannot be packed into IPC arguments.
+/* Query PROC_IPC_MODULE_META_DESC for one boot module.  The answer lands in a
+ * device-manager-owned buffer lent WRITE, because the declared region list is
+ * variable-length and cannot be packed into IPC arguments.
+ *
+ * Reports the module's capability flags and its declared register windows, plus
+ * whether it is flagged storage_bootstrap.  Which DEVICE a module drives is not
+ * asked here and is not the module's to declare: that binding comes from the
+ * pci_match rules (see select_storage_bootstrap).
+ *
  * Returns 0 on success, -1 otherwise. */
-static int query_driver_module_meta(int32_t module_index, uint32_t match_index,
-                                    uint8_t* out_class_code, uint8_t* out_subclass,
-                                    uint8_t* out_prog_if, uint16_t* out_vendor_id,
-                                    uint16_t* out_device_id, uint8_t* out_storage_bootstrap,
-                                    uint8_t* out_match_count, spawn_caps_t* out_caps,
-                                    wasmos_module_meta_desc_t* out_desc) {
+static int query_driver_module_meta(int32_t module_index, uint8_t* out_storage_bootstrap,
+                                    spawn_caps_t* out_caps, wasmos_module_meta_desc_t* out_desc) {
     wasmos_ipc_message_t resp;
     wasmos_module_meta_desc_t desc;
     int rc = -1;
 
-    if (!out_class_code || !out_subclass || !out_prog_if || !out_vendor_id || !out_device_id ||
-        !out_storage_bootstrap || !out_match_count || !out_caps) {
+    if (!out_storage_bootstrap || !out_caps) {
         return -1;
     }
     /* One buffer for the life of the service rather than one per query:
@@ -1413,22 +1426,15 @@ static int query_driver_module_meta(int32_t module_index, uint32_t match_index,
         return -1;
     }
     if (dm_ipc_call(g_dm.proc_endpoint, g_dm.reply_endpoint, PROC_IPC_MODULE_META_DESC,
-                    g_dm.request_id++, module_index, (int32_t)match_index, g_dm_meta_bid, 0, &resp,
-                    128) == 0 &&
+                    g_dm.request_id++, module_index, 0, g_dm_meta_bid, 0, &resp, 128) == 0 &&
         resp.type == PROC_IPC_RESP && resp.arg0 >= (int32_t)sizeof(desc) &&
         wasmos_xfer_buffer_read(g_dm_meta_bid, addr_cast(int32_t, &desc), (int32_t)sizeof(desc),
                                 0) == 0 &&
         desc.version == WASMOS_MODULE_META_DESC_VERSION) {
-        *out_class_code = desc.class_code;
-        *out_subclass = desc.subclass;
-        *out_prog_if = desc.prog_if;
         *out_storage_bootstrap = desc.storage_bootstrap;
-        *out_match_count = (uint8_t)(desc.match_count & 0x7Fu);
-        *out_vendor_id = desc.vendor_id;
-        *out_device_id = desc.device_id;
         out_caps->cap_flags = desc.cap_flags & 0xFFFFu;
-        out_caps->io_port_min = desc.io_port_min;
-        out_caps->io_port_max = desc.io_port_max;
+        out_caps->io_port_min = 0u;
+        out_caps->io_port_max = 0u;
         out_caps->irq_mask = (uint16_t)((1u << 14) | (1u << 15));
         if (out_desc) {
             *out_desc = desc;
@@ -1550,94 +1556,81 @@ static int dm_register_rules_handlers(void) {
     return 0;
 }
 
-static int match_any_or_u8(uint8_t actual, uint8_t expected) {
-    return (expected == MATCH_ANY_U8 || actual == expected) ? 1 : 0;
+/* Whether one pci_match rule accepts one enumerated device.  A rule constrains
+ * only the fields it names; every field it leaves unset holds the wildcard
+ * (MATCH_ANY_U8 / MATCH_ANY_U16), so 0 is a real class or vendor value and not a
+ * "don't care". */
+static int pci_rule_matches_record(const pci_match_rule_t* rule, const pci_device_record_t* rec) {
+    if (!rule || !rec) {
+        return 0;
+    }
+    return (rule->bus == MATCH_ANY_U8 || rec->bus == rule->bus) &&
+           (rule->slot == MATCH_ANY_U8 || rec->device == rule->slot) &&
+           (rule->function == MATCH_ANY_U8 || rec->function == rule->function) &&
+           (rule->class_code == MATCH_ANY_U8 || rec->class_code == rule->class_code) &&
+           (rule->subclass == MATCH_ANY_U8 || rec->subclass == rule->subclass) &&
+           (rule->prog_if == MATCH_ANY_U8 || rec->prog_if == rule->prog_if) &&
+           (rule->vendor_id == MATCH_ANY_U16 || rec->vendor_id == rule->vendor_id) &&
+           (rule->device_id == MATCH_ANY_U16 || rec->device_id == rule->device_id);
 }
 
-static int match_any_or_u16(uint16_t actual, uint16_t expected) {
-    return (expected == MATCH_ANY_U16 || actual == expected) ? 1 : 0;
-}
-
-static int select_pci_matched_driver(int32_t module_index, spawn_caps_t* out_caps) {
-    uint8_t class_code = 0, subclass = 0, prog_if = 0, storage_bootstrap = 0, match_count = 0;
-    uint16_t vendor_id = 0, device_id = 0;
-    spawn_caps_t caps = {0};
-    if (module_index < 0 || !out_caps) {
-        return -1;
-    }
-    if (query_driver_module_meta(module_index, 0, &class_code, &subclass, &prog_if, &vendor_id,
-                                 &device_id, &storage_bootstrap, &match_count, &caps, 0) != 0 ||
-        match_count == 0) {
-        return -1;
-    }
-    for (uint32_t m = 0; m < match_count; ++m) {
-        if (m != 0) {
-            if (query_driver_module_meta(module_index, m, &class_code, &subclass, &prog_if,
-                                         &vendor_id, &device_id, &storage_bootstrap, &match_count,
-                                         &caps, 0) != 0) {
-                continue;
-            }
-        }
-        for (uint32_t i = 0; i < g_dm.registry_count; ++i) {
-            const pci_device_record_t* rec = &g_dm.registry[i];
-            if (!match_any_or_u8(rec->class_code, class_code) ||
-                !match_any_or_u8(rec->subclass, subclass) ||
-                !match_any_or_u8(rec->prog_if, prog_if) ||
-                !match_any_or_u16(rec->vendor_id, vendor_id) ||
-                !match_any_or_u16(rec->device_id, device_id)) {
-                continue;
-            }
-            *out_caps = caps;
-            if ((out_caps->cap_flags & DEVMGR_CAP_IRQ) != 0 && rec->irq_hint < 16u) {
-                out_caps->irq_mask = (uint16_t)(1u << rec->irq_hint);
-            }
-            return 0;
-        }
-    }
-    return -1;
-}
-
-static void apply_pci_matches(void) {
+/* Identify the boot storage controller and the driver that will own it, before
+ * any rule spawn runs.
+ *
+ * The early storage path needs more than "spawn this driver": the block registry
+ * names its units by the controller's PCI address, and the driver must be handed
+ * its DECLARED register windows rather than the generic one-window guess the
+ * ordinary rule-spawn path derives from io_port_base.  An ATA controller is the
+ * case that forces this -- its task file is at fixed legacy ISA ports that BAR0
+ * does not describe, and its bus-master registers are wherever firmware put
+ * BAR4.
+ *
+ * Which device a driver binds to comes from the pci_match rules, the same source
+ * that spawns it; the module contributes only what it declares about itself, its
+ * storage_bootstrap flag and its region list.  The first rule/device pair whose
+ * module claims the flag wins, so rule order decides among several candidates. */
+static void select_storage_bootstrap(void) {
     reset_selected_storage();
-    for (int32_t module_index = 0; module_index < g_dm.module_count; ++module_index) {
-        uint8_t class_code = 0, subclass = 0, prog_if = 0, storage_bootstrap = 0, match_count = 0;
-        uint16_t vendor_id = 0, device_id = 0;
+    for (uint32_t ri = 0; ri < g_dm.pci_match_rule_count; ++ri) {
+        const pci_match_rule_t* rule = &g_dm.pci_match_rules[ri];
+        uint8_t storage_bootstrap = 0;
         spawn_caps_t caps = {0};
         wasmos_module_meta_desc_t meta;
-        if (query_driver_module_meta(module_index, 0, &class_code, &subclass, &prog_if, &vendor_id,
-                                     &device_id, &storage_bootstrap, &match_count, &caps,
-                                     &meta) != 0 ||
-            !storage_bootstrap || match_count == 0) {
+        int32_t module_index = -1;
+
+        if (!rule->active || rule->spawn_path[0] == '\0') {
             continue;
         }
-        for (uint32_t m = 0; m < match_count; ++m) {
-            if (m != 0) {
-                if (query_driver_module_meta(module_index, m, &class_code, &subclass, &prog_if,
-                                             &vendor_id, &device_id, &storage_bootstrap,
-                                             &match_count, &caps, &meta) != 0) {
-                    continue;
-                }
+        module_index = rule_module_index(rule->spawn_path);
+        if (module_index < 0) {
+            continue;
+        }
+        if (query_driver_module_meta(module_index, &storage_bootstrap, &caps, &meta) != 0 ||
+            !storage_bootstrap) {
+            continue;
+        }
+        for (uint32_t di = 0; di < g_dm.registry_count; ++di) {
+            const pci_device_record_t* rec = &g_dm.registry[di];
+            if (!pci_rule_matches_record(rule, rec)) {
+                continue;
             }
-            for (uint32_t i = 0; i < g_dm.registry_count; ++i) {
-                const pci_device_record_t* rec = &g_dm.registry[i];
-                if (!match_any_or_u8(rec->class_code, class_code) ||
-                    !match_any_or_u8(rec->subclass, subclass) ||
-                    !match_any_or_u8(rec->prog_if, prog_if) ||
-                    !match_any_or_u16(rec->vendor_id, vendor_id) ||
-                    !match_any_or_u16(rec->device_id, device_id)) {
-                    continue;
-                }
-                g_dm.selected_storage_index = module_index;
-                g_dm.selected_storage_caps = caps;
-                g_dm.selected_storage_record = *rec;
-                g_dm.selected_storage_has_record = 1;
-                if ((g_dm.selected_storage_caps.cap_flags & DEVMGR_CAP_IRQ) != 0 &&
-                    rec->irq_hint < 16u) {
-                    g_dm.selected_storage_caps.irq_mask = (uint16_t)(1u << rec->irq_hint);
-                }
+            g_dm.selected_storage_index = module_index;
+            g_dm.selected_storage_caps = caps;
+            g_dm.selected_storage_record = *rec;
+            g_dm.selected_storage_has_record = 1;
+            if ((g_dm.selected_storage_caps.cap_flags & DEVMGR_CAP_IRQ) != 0 &&
+                rec->irq_hint < 16u) {
+                g_dm.selected_storage_caps.irq_mask = (uint16_t)(1u << rec->irq_hint);
+            }
+            if (meta.region_count > 0u) {
                 resolve_declared_regions(&meta, rec, &g_dm.selected_storage_caps);
-                return;
+            } else if (rec->io_port_base != 0u) {
+                /* No declared windows: fall back to the same single window the
+                 * ordinary rule-spawn path grants. */
+                g_dm.selected_storage_caps.io_port_min = rec->io_port_base;
+                g_dm.selected_storage_caps.io_port_max = (uint16_t)(rec->io_port_base + 0x3Fu);
             }
+            return;
         }
     }
 }
@@ -1662,7 +1655,7 @@ static void consume_pci_inventory(void) {
     if (g_dm_pci_scan_done) {
         console_write("[device-manager] pci-bus scan complete\n");
     }
-    apply_pci_matches();
+    select_storage_bootstrap();
     queue_block_fs_rule_spawns();
 }
 

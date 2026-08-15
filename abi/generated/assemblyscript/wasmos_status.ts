@@ -72,17 +72,16 @@ export const WASMOS_ERR_PROC_PM_BAD_USER_PTR: i32 = -0x0002000D; // supplied use
 export const WASMOS_ERR_PROC_PM_USER_COPY: i32 = -0x0002000E; // mm_copy_from_user failed for PM input payload
 export const WASMOS_ERR_PROC_PM_META_LOOKUP: i32 = -0x0002000F; // module metadata lookup failed
 export const WASMOS_ERR_PROC_PM_META_NOT_DRIVER: i32 = -0x00020010; // requested module metadata was not for a driver
-export const WASMOS_ERR_PROC_PM_META_BAD_INDEX: i32 = -0x00020011; // requested driver match index was out of range
-export const WASMOS_ERR_PROC_PM_META_BAD_SOURCE: i32 = -0x00020012; // unsupported module metadata source selector
-export const WASMOS_ERR_PROC_PM_CALLER_FSBUF: i32 = -0x00020013; // caller filesystem transfer buffer was missing/invalid
-export const WASMOS_ERR_PROC_PM_REPLY_SEND: i32 = -0x00020014; // PM failed to send the final IPC response
-export const WASMOS_ERR_PROC_PM_FS_REPLY: i32 = -0x00020015; // PM received an unexpected filesystem reply
-export const WASMOS_ERR_PROC_PM_BAD_BROKER: i32 = -0x00020016; // broker registration payload or endpoint was invalid
-export const WASMOS_ERR_PROC_PM_BAD_HANDLER: i32 = -0x00020017; // exec-handler registration payload was invalid
-export const WASMOS_ERR_PROC_PM_SUBSYSTEM_REG: i32 = -0x00020018; // subsystem broker registration failed
-export const WASMOS_ERR_PROC_PM_HANDLER_REG: i32 = -0x00020019; // exec-handler registration failed
-export const WASMOS_ERR_PROC_PM_NOT_AUTHORIZED: i32 = -0x0002001A; // caller lacks the subsystem.register capability
-export const WASMOS_ERR_PROC_PM_NO_PM_FSBUF: i32 = -0x0002001B; // PM could not acquire its own xfer buffer
+export const WASMOS_ERR_PROC_PM_META_BAD_SOURCE: i32 = -0x00020011; // unsupported module metadata source selector
+export const WASMOS_ERR_PROC_PM_CALLER_FSBUF: i32 = -0x00020012; // caller filesystem transfer buffer was missing/invalid
+export const WASMOS_ERR_PROC_PM_REPLY_SEND: i32 = -0x00020013; // PM failed to send the final IPC response
+export const WASMOS_ERR_PROC_PM_FS_REPLY: i32 = -0x00020014; // PM received an unexpected filesystem reply
+export const WASMOS_ERR_PROC_PM_BAD_BROKER: i32 = -0x00020015; // broker registration payload or endpoint was invalid
+export const WASMOS_ERR_PROC_PM_BAD_HANDLER: i32 = -0x00020016; // exec-handler registration payload was invalid
+export const WASMOS_ERR_PROC_PM_SUBSYSTEM_REG: i32 = -0x00020017; // subsystem broker registration failed
+export const WASMOS_ERR_PROC_PM_HANDLER_REG: i32 = -0x00020018; // exec-handler registration failed
+export const WASMOS_ERR_PROC_PM_NOT_AUTHORIZED: i32 = -0x00020019; // caller lacks the subsystem.register capability
+export const WASMOS_ERR_PROC_PM_NO_PM_FSBUF: i32 = -0x0002001A; // PM could not acquire its own xfer buffer
 export const WASMOS_ERR_SHMEM_BAD_ARGS: i32 = -0x00030001; // id/size invalid or size not page-aligned
 export const WASMOS_ERR_SHMEM_NO_CAP: i32 = -0x00030002; // caller lacks the DMA capability / no context
 export const WASMOS_ERR_SHMEM_BAD_ID: i32 = -0x00030003; // shmem id unknown / no backing pages
@@ -325,7 +324,6 @@ export function strerror(c: i32): string {
     case WASMOS_ERR_PROC_PM_USER_COPY: return "mm_copy_from_user failed for PM input payload";
     case WASMOS_ERR_PROC_PM_META_LOOKUP: return "module metadata lookup failed";
     case WASMOS_ERR_PROC_PM_META_NOT_DRIVER: return "requested module metadata was not for a driver";
-    case WASMOS_ERR_PROC_PM_META_BAD_INDEX: return "requested driver match index was out of range";
     case WASMOS_ERR_PROC_PM_META_BAD_SOURCE: return "unsupported module metadata source selector";
     case WASMOS_ERR_PROC_PM_CALLER_FSBUF: return "caller filesystem transfer buffer was missing/invalid";
     case WASMOS_ERR_PROC_PM_REPLY_SEND: return "PM failed to send the final IPC response";

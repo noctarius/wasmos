@@ -157,20 +157,17 @@ heap_pages  = 16
 
 [[capabilities]]
 name = "io.port"   # PCI config-space access at 0x0CF8–0x0CFF
-
-[[matches]]
-bus       = "pci"
-class     = 0x07
-subclass  = 0x00
-prog_if   = 0x00
-vendor    = 0x1AF4
-device    = "any"
-io_port_min = 0x0CF8
-io_port_max = 0x0CFF
-priority  = 100
 ```
 
 No `irq.route` capability is declared; the driver does not handle interrupts.
+
+The device it binds to is named by a rule, not by the package:
+
+```
+SUBSYSTEM=="pci", ATTR{class}=="0x07", ATTR{subclass}=="0x00", \
+  ATTR{prog_if}=="0x00", ATTR{vendor}=="0x1AF4", \
+  RUN+="system/drivers/virtio_serial.wap"
+```
 
 ---
 

@@ -76,7 +76,6 @@ domains:
       - { name: USER_COPY,       description: "mm_copy_from_user failed for PM input payload" }
       - { name: META_LOOKUP,     description: "module metadata lookup failed" }
       - { name: META_NOT_DRIVER, description: "requested module metadata was not for a driver" }
-      - { name: META_BAD_INDEX,  description: "requested driver match index was out of range" }
       - { name: META_BAD_SOURCE, description: "unsupported module metadata source selector" }
       - { name: CALLER_FSBUF,    description: "caller filesystem transfer buffer was missing/invalid" }
       - { name: REPLY_SEND,      description: "PM failed to send the final IPC response" }

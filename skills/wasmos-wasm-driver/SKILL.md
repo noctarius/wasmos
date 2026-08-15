@@ -93,7 +93,8 @@ native = false          # true selects the native ELF toolchain/runtime
 stack_pages = 16
 heap_pages = 512        # native drivers use 0/0 and get heap via vm_map
 [ipc]
-entry_arg_bindings = ["proc.endpoint"]
+required_endpoint_name = "-"
+required_endpoint_rights = 0
 [[capabilities]]        # one block per capability the driver needs
 name = "io.port"
 flags = 0
@@ -103,12 +104,15 @@ flags = 4               # DMA budget in pages
 [[capabilities]]
 name = "svc.class"
 flags = 0
-[[matches]]             # optional: device-manager PCI auto-match
-bus = "pci"
-vendor = 0x1AF4
-device = 0x1005
-priority = 100
+[[regions]]             # optional: register windows, in the order the driver
+kind = "io"             # addresses them; declaration order IS the region index
+first = 0x01F0
+last = 0x03F7
 ```
+
+A manifest declares what the driver needs, never which device it gets. There is
+no match table in the package: the device it binds to is decided by a rule (Step
+5), so that binding lives in one place and can be changed without repacking.
 
 Capability names in the tree: `io.port`, `irq.route`, `mmio.map`, `dma.buffer`,
 `system.control`, `subsystem.register`, `svc.class`, `ipc.basic`.

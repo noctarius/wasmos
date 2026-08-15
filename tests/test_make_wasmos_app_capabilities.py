@@ -9,8 +9,7 @@ from scripts.qemu_test_framework import default_host_tool_path
 # Packed .wap header prefix, in the field order of wasmos_app_header_t in
 # scripts/make_wasmos_app.c, up to but excluding subsystem_tag: magic, version,
 # header_size, flags, name_len, entry_len, wasm_size, req_ep_count, cap_count,
-# mem_hint_count, the four driver_match u8s, the four driver match/io u16s,
-# driver_match_count, compiled_size.
+# mem_hint_count, compiled_size.
 #
 # The tag must be located by OFFSET, never from the end of the header:
 # region_count follows the tag, so "the last 8 bytes" reads region_count plus
@@ -19,7 +18,7 @@ from scripts.qemu_test_framework import default_host_tool_path
 # The prefix is spelled out field by field rather than counted, because the
 # format is not append-only -- fields have been removed from the middle, which
 # shifts everything after them. A layout change requires revising this string.
-_HEADER_PREFIX = "<8sHHIIIIIIIII"
+_HEADER_PREFIX = "<8sHHIIIIIIII"
 _SUBSYSTEM_TAG_OFFSET = struct.calcsize(_HEADER_PREFIX)
 _SUBSYSTEM_TAG_LEN = 8
 

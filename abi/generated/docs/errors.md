@@ -61,17 +61,16 @@ and **domains** (namespaced operation errors: the negative of `(domain << 16) | 
 | `WASMOS_ERR_PROC_PM_USER_COPY` | -0x0002000E | mm_copy_from_user failed for PM input payload |
 | `WASMOS_ERR_PROC_PM_META_LOOKUP` | -0x0002000F | module metadata lookup failed |
 | `WASMOS_ERR_PROC_PM_META_NOT_DRIVER` | -0x00020010 | requested module metadata was not for a driver |
-| `WASMOS_ERR_PROC_PM_META_BAD_INDEX` | -0x00020011 | requested driver match index was out of range |
-| `WASMOS_ERR_PROC_PM_META_BAD_SOURCE` | -0x00020012 | unsupported module metadata source selector |
-| `WASMOS_ERR_PROC_PM_CALLER_FSBUF` | -0x00020013 | caller filesystem transfer buffer was missing/invalid |
-| `WASMOS_ERR_PROC_PM_REPLY_SEND` | -0x00020014 | PM failed to send the final IPC response |
-| `WASMOS_ERR_PROC_PM_FS_REPLY` | -0x00020015 | PM received an unexpected filesystem reply |
-| `WASMOS_ERR_PROC_PM_BAD_BROKER` | -0x00020016 | broker registration payload or endpoint was invalid |
-| `WASMOS_ERR_PROC_PM_BAD_HANDLER` | -0x00020017 | exec-handler registration payload was invalid |
-| `WASMOS_ERR_PROC_PM_SUBSYSTEM_REG` | -0x00020018 | subsystem broker registration failed |
-| `WASMOS_ERR_PROC_PM_HANDLER_REG` | -0x00020019 | exec-handler registration failed |
-| `WASMOS_ERR_PROC_PM_NOT_AUTHORIZED` | -0x0002001A | caller lacks the subsystem.register capability |
-| `WASMOS_ERR_PROC_PM_NO_PM_FSBUF` | -0x0002001B | PM could not acquire its own xfer buffer |
+| `WASMOS_ERR_PROC_PM_META_BAD_SOURCE` | -0x00020011 | unsupported module metadata source selector |
+| `WASMOS_ERR_PROC_PM_CALLER_FSBUF` | -0x00020012 | caller filesystem transfer buffer was missing/invalid |
+| `WASMOS_ERR_PROC_PM_REPLY_SEND` | -0x00020013 | PM failed to send the final IPC response |
+| `WASMOS_ERR_PROC_PM_FS_REPLY` | -0x00020014 | PM received an unexpected filesystem reply |
+| `WASMOS_ERR_PROC_PM_BAD_BROKER` | -0x00020015 | broker registration payload or endpoint was invalid |
+| `WASMOS_ERR_PROC_PM_BAD_HANDLER` | -0x00020016 | exec-handler registration payload was invalid |
+| `WASMOS_ERR_PROC_PM_SUBSYSTEM_REG` | -0x00020017 | subsystem broker registration failed |
+| `WASMOS_ERR_PROC_PM_HANDLER_REG` | -0x00020018 | exec-handler registration failed |
+| `WASMOS_ERR_PROC_PM_NOT_AUTHORIZED` | -0x00020019 | caller lacks the subsystem.register capability |
+| `WASMOS_ERR_PROC_PM_NO_PM_FSBUF` | -0x0002001A | PM could not acquire its own xfer buffer |
 
 ### `shmem` (domain 3) — shared-memory map/map_auto failures (was SHMEM_ERR_*)
 

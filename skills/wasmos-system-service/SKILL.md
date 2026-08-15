@@ -99,7 +99,6 @@ stack_pages = 16
 heap_pages  = 512       # for WASM services this sizes the WARP reserved linmem slot
 [ipc]
 required_endpoint_name  = "proc"
-entry_arg_bindings = ["proc.endpoint"]   # cli adds "cli.tty.alloc"; sysinit adds module.count/index
 [[capabilities]]
 name  = "ipc.basic"     # or "system.control" (cli, fs_manager)
 flags = 0

@@ -27,13 +27,14 @@ enum {
     PROC_IPC_STATUS = 0x203,
     PROC_IPC_SPAWN_NAME = 0x204,
     PROC_IPC_SPAWN_CAPS = 0x205,
-    PROC_IPC_MODULE_META = 0x206,
-    /* Module metadata as a wasmos_module_meta_desc_t, written into a transfer
-     * buffer the caller owns and has lent WRITE to process-manager.
-     * arg0=module_index arg1=match_index arg2=buffer_id arg3=byte_offset.
+    /* What a boot module declares about itself, as a wasmos_module_meta_desc_t
+     * written into a transfer buffer the caller owns and has lent WRITE to
+     * process-manager: capability flags, declared register windows, and the
+     * storage-bootstrap flag.
+     * arg0=module_index arg2=buffer_id arg3=byte_offset.
      * On success: PROC_IPC_RESP, arg0=bytes written.
-     * Supersedes PROC_IPC_MODULE_META, whose four response words are full and
-     * cannot carry a variable-length region declaration.
+     * Which device a driver binds to is not asked here; that comes from the
+     * device-manager rules.
      */
     PROC_IPC_MODULE_META_DESC = 0x212,
     PROC_IPC_MODULE_META_PATH = 0x207,
@@ -562,7 +563,6 @@ static inline const char* wasmos_opcode_name(uint32_t subsystem_id, uint32_t typ
         case 0x203: return "PROC_IPC_STATUS";
         case 0x204: return "PROC_IPC_SPAWN_NAME";
         case 0x205: return "PROC_IPC_SPAWN_CAPS";
-        case 0x206: return "PROC_IPC_MODULE_META";
         case 0x212: return "PROC_IPC_MODULE_META_DESC";
         case 0x207: return "PROC_IPC_MODULE_META_PATH";
         case 0x208: return "PROC_IPC_SPAWN_CAPS_V2";

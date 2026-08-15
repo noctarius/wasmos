@@ -2090,17 +2090,23 @@ int pm_handle_spawn_path_caps(uint32_t pm_context_id, const ipc_message_t* msg) 
                : WASMOS_ERR_PROC_PM_REPLY_SEND;
 }
 
-/* Module metadata as a descriptor.  Same lookup as pm_handle_module_meta, but
- * the answer is written into a transfer buffer the caller owns (arg2 = its
+/* What a boot module declares about itself: its capability flags, its declared
+ * register windows, and whether the early storage path depends on it
+ * (PROC_IPC_MODULE_META_DESC).  arg0 = module index.
+ *
+ * The answer is written into a transfer buffer the caller owns (arg2 = its
  * buffer_id, arg3 = the offset to write at), because the declared region list is
- * variable-length and the packed form's four response words are full. */
+ * variable-length and does not fit in four reply words.
+ *
+ * Returns 0 once the PROC_IPC_RESP is sent, or a packed WASMOS_ERR_PROC_PM_*
+ * code -- META_LOOKUP for an unknown module index, META_NOT_DRIVER for a module
+ * without the driver flag, CALLER_FSBUF for a buffer that cannot hold the
+ * descriptor at the requested offset. */
 int pm_handle_module_meta_desc(uint32_t pm_context_id, const ipc_message_t* msg) {
     uint32_t owner_context = 0;
     process_t* caller = 0;
     wasmos_app_desc_t desc;
     wasmos_module_meta_desc_t out;
-    const wasmos_app_driver_match_t* match = 0;
-    uint32_t match_index = (uint32_t)msg->arg1;
     uint32_t buffer_size = 0;
     uint32_t offset = (uint32_t)msg->arg3;
     const uint8_t* buf = 0;
@@ -2119,10 +2125,6 @@ int pm_handle_module_meta_desc(uint32_t pm_context_id, const ipc_message_t* msg)
     if ((desc.flags & WASMOS_APP_FLAG_DRIVER) == 0) {
         return WASMOS_ERR_PROC_PM_META_NOT_DRIVER;
     }
-    if (desc.driver_match_count == 0 || match_index >= desc.driver_match_count) {
-        return WASMOS_ERR_PROC_PM_META_BAD_INDEX;
-    }
-    match = &desc.driver_matches[match_index];
 
     buf = pm_foreign_xfer_ptr((uint32_t)msg->arg2, owner_context, &buffer_size);
     if (!buf || (uint64_t)offset + sizeof(out) > (uint64_t)buffer_size) {
@@ -2131,16 +2133,8 @@ int pm_handle_module_meta_desc(uint32_t pm_context_id, const ipc_message_t* msg)
 
     __builtin_memset(&out, 0, sizeof(out));
     out.version = WASMOS_MODULE_META_DESC_VERSION;
-    out.class_code = match->class_code;
-    out.subclass = match->subclass;
-    out.prog_if = match->prog_if;
     out.storage_bootstrap = ((desc.flags & WASMOS_APP_FLAG_STORAGE_BOOTSTRAP) != 0) ? 1u : 0u;
-    out.vendor_id = match->vendor_id;
-    out.device_id = match->device_id;
-    out.io_port_min = match->io_port_min;
-    out.io_port_max = match->io_port_max;
     out.cap_flags = wasmos_app_driver_cap_flags(&desc);
-    out.match_count = desc.driver_match_count;
     out.region_count = desc.region_count;
     for (uint32_t i = 0; i < desc.region_count && i < WASMOS_MODULE_META_MAX_REGIONS; ++i) {
         out.regions[i].kind = desc.regions[i].kind;
@@ -2158,73 +2152,6 @@ int pm_handle_module_meta_desc(uint32_t pm_context_id, const ipc_message_t* msg)
     resp.arg1 = 0;
     resp.arg2 = 0;
     resp.arg3 = 0;
-    return ipc_send_from(pm_context_id, msg->source, &resp) == IPC_OK
-               ? 0
-               : WASMOS_ERR_PROC_PM_REPLY_SEND;
-}
-
-/* Driver-match metadata for a boot module, packed into the four reply words
- * (PROC_IPC_MODULE_META).  arg0 = module index, arg1 = match index.  Returns 0
- * once the PROC_IPC_RESP is sent, or a packed WASMOS_ERR_PROC_PM_* code —
- * META_NOT_DRIVER for a module without the driver flag, META_BAD_INDEX for a
- * match index past the end.
- *
- * Reply layout: arg0 = (io_port_max << 16) | io_port_min,
- * arg1 = (class << 24) | (subclass << 16) | (prog_if << 8) |
- *        (match_count << 1) | storage_bootstrap,
- * arg2 = (vendor_id << 16) | device_id, arg3 = cap_flags.  match_count is
- * therefore truncated to 7 bits, and the declared region list does not fit at
- * all — pm_handle_module_meta_desc is the form that carries it. */
-int pm_handle_module_meta(uint32_t pm_context_id, const ipc_message_t* msg) {
-    uint32_t owner_context = 0;
-    process_t* caller = 0;
-    wasmos_app_desc_t desc;
-    uint32_t match_index = msg->arg1;
-    uint32_t match_count = 0;
-    wasmos_app_driver_match_t* match = 0;
-    uint32_t cap_flags = 0;
-    uint32_t packed_match = 0;
-    uint32_t packed_vendor_device = 0;
-    uint32_t packed_caps = 0;
-    uint32_t packed_io = 0;
-
-    if (ipc_endpoint_owner(msg->source, &owner_context) != IPC_OK) {
-        return WASMOS_ERR_PROC_PM_BAD_ENDPOINT;
-    }
-    caller = process_find_by_context(owner_context);
-    if (!caller) {
-        return WASMOS_ERR_PROC_PM_NO_CALLER;
-    }
-    if (wasmos_app_module_desc(g_pm.boot_info, msg->arg0, &desc) != 0) {
-        return WASMOS_ERR_PROC_PM_META_LOOKUP;
-    }
-    if ((desc.flags & WASMOS_APP_FLAG_DRIVER) == 0) {
-        return WASMOS_ERR_PROC_PM_META_NOT_DRIVER;
-    }
-    match_count = desc.driver_match_count;
-    if (match_count == 0 || match_index >= match_count) {
-        return WASMOS_ERR_PROC_PM_META_BAD_INDEX;
-    }
-    match = &desc.driver_matches[match_index];
-    cap_flags = wasmos_app_driver_cap_flags(&desc);
-
-    packed_match = ((uint32_t)match->class_code << 24) | ((uint32_t)match->subclass << 16) |
-                   ((uint32_t)match->prog_if << 8) |
-                   ((((desc.flags & WASMOS_APP_FLAG_STORAGE_BOOTSTRAP) != 0) ? 1u : 0u) |
-                    ((match_count & 0x7Fu) << 1));
-    packed_vendor_device = ((uint32_t)match->vendor_id << 16) | (uint32_t)match->device_id;
-    packed_caps = (uint32_t)cap_flags;
-    packed_io = ((uint32_t)match->io_port_max << 16) | ((uint32_t)match->io_port_min & 0xFFFFu);
-
-    ipc_message_t resp;
-    resp.type = PROC_IPC_RESP;
-    resp.source = g_pm.proc_endpoint;
-    resp.destination = msg->source;
-    resp.request_id = msg->request_id;
-    resp.arg0 = packed_io;
-    resp.arg1 = packed_match;
-    resp.arg2 = packed_vendor_device;
-    resp.arg3 = packed_caps;
     return ipc_send_from(pm_context_id, msg->source, &resp) == IPC_OK
                ? 0
                : WASMOS_ERR_PROC_PM_REPLY_SEND;

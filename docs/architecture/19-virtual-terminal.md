@@ -118,7 +118,6 @@ Source: `src/services/vt/linker.metadata`
 | `stack_pages`            | 16 (64 KB)          |
 | `heap_pages`             | 16 (64 KB)          |
 | `required_endpoint_name` | `proc`              |
-| `entry_arg_bindings`     | `["proc.endpoint"]` |
 | Capability               | `ipc.basic`         |
 
 ---

@@ -24,7 +24,7 @@
 /* Container version the packer (scripts/make_wasmos_app.c) emits, and the only one
  * the parser accepts.  The version is bound to an exact header_size, so a blob whose
  * header_size disagrees is rejected rather than reinterpreted. */
-#define WASMOS_APP_VERSION 8u
+#define WASMOS_APP_VERSION 9u
 /* On-wire width of the subsystem tag field (v5+).  Struct fields that hold a parsed tag
  * are this + 1 so the tag is always NUL-terminated in memory. */
 #define WASMOS_APP_SUBSYSTEM_TAG_LEN 8u
@@ -49,12 +49,6 @@
 /* Process wants a controlling TTY allocated at spawn; PM fills spawn_info.tty. */
 #define WASMOS_APP_FLAG_WANTS_TTY (1u << 6)
 
-/* Wildcard sentinels in a driver-match record: a field set to these matches any device.
- * A v2 package that leaves all of class/subclass/prog_if/vendor/device at the wildcard is
- * read as having no match record at all. */
-#define WASMOS_DRIVER_MATCH_ANY_U8 0xFFu
-#define WASMOS_DRIVER_MATCH_ANY_U16 0xFFFFu
-
 /* `kind` values of a memory-hint record in the blob.  Only STACK and HEAP are consumed
  * by the parser (as min_pages); the others are parsed for section walking and ignored. */
 #define WASMOS_APP_MEM_HINT_LINEAR 0u
@@ -68,7 +62,6 @@
  * truncated table would desynchronise the section walk. */
 #define WASMOS_APP_MAX_REQUIRED_ENDPOINTS 8u
 #define WASMOS_APP_MAX_CAP_REQUESTS 8u
-#define WASMOS_APP_MAX_DRIVER_MATCHES 8u
 
 /* One entry of the endpoint table: the name of an IPC endpoint the package must have
  * resolved before its entry point runs, plus the rights mask it asks for.  `name` is
@@ -86,25 +79,6 @@ typedef struct {
     uint32_t name_len;
     uint32_t flags;
 } wasmos_app_cap_request_t;
-
-/* One PCI/legacy device pattern a driver package claims.  This layout is also the
- * on-wire record: the parser copies it straight out of the blob, so its size and field
- * order are part of the format.  class_code/subclass/prog_if take
- * WASMOS_DRIVER_MATCH_ANY_U8 and vendor_id/device_id WASMOS_DRIVER_MATCH_ANY_U16 as
- * "don't care".  io_port_min/io_port_max describe a legacy I/O window (inclusive) for
- * non-PCI matches.  `priority` breaks ties when several drivers claim one device; higher
- * wins. */
-typedef struct {
-    uint8_t class_code;
-    uint8_t subclass;
-    uint8_t prog_if;
-    uint8_t reserved0;
-    uint16_t vendor_id;
-    uint16_t device_id;
-    uint16_t io_port_min;
-    uint16_t io_port_max;
-    uint32_t priority;
-} wasmos_app_driver_match_t;
 
 /* Register windows a driver declares it needs, in the order it addresses them.
  * A driver names windows rather than ports: IO is a fixed range it knows
@@ -150,8 +124,6 @@ typedef struct {
      * gave no hint, and wasmos_app_start substitutes 64 KiB. */
     uint32_t stack_pages_hint;
     uint32_t heap_pages_hint;
-    uint32_t driver_match_count;
-    wasmos_app_driver_match_t driver_matches[WASMOS_APP_MAX_DRIVER_MATCHES];
     uint32_t region_count;
     wasmos_app_region_t regions[WASMOS_APP_MAX_REGIONS];
     uint32_t req_ep_count;

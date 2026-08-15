@@ -36,14 +36,3 @@ flags = 80
 [[capabilities]]
 name = "svc.class"
 flags = 0
-
-[[matches]]
-bus = "pci"
-class = 0x02
-subclass = 0x00
-prog_if = "any"
-vendor = 0x1AF4
-device = "any"
-io_port_min = 0x0CF8
-io_port_max = 0x0CFF
-priority = 100

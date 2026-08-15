@@ -257,10 +257,6 @@ The libc shims expose the header through `wasmos_startup_proc_endpoint()`,
 `startup.*` accessors in Zig/AssemblyScript). `wasmos_startup_arg(0)` remains as
 a compatibility alias for `proc.endpoint`.
 
-> The legacy `entry_arg_bindings` manifest key is deprecated and ignored by the
-> kernel; it is retained in the `.wap` format only for backward compatibility
-> and will be removed.
-
 #### Capability Names (fail-closed at pack time)
 
 `make_wasmos_app` validates capability names against a static allowlist:
@@ -304,23 +300,21 @@ heap_pages  = 16
 [ipc]
 required_endpoint_name    = "-"   # "-" means none
 required_endpoint_rights  = 0
-entry_arg_bindings        = ["proc.endpoint"]
 
 [[capabilities]]           # zero or more; each is a separate table
 name  = "io.port"
 flags = 0
 
-[[matches]]                # zero or more PCI match records
-bus        = "pci"         # only "pci" is recognized
-class      = 0x01
-subclass   = "any"
-prog_if    = "any"
-vendor     = "any"
-device     = "any"
-io_port_min = 0x01F0
-io_port_max = 0x03F7
-priority   = 100
+[[regions]]                # zero or more register windows, in the order the
+kind  = "io"               # driver addresses them; position IS the region index
+first = 0x01F0
+last  = 0x03F7
 ```
+
+A manifest declares what a package needs, never which device it is given. Device
+binding is expressed in the device-manager rules
+(`scripts/{initfs,system}/devmgr/rules/`), so it lives in one place and changes
+without repacking the driver.
 
 Subsystem tags are uppercase ASCII, at most 8 bytes, and are part of the
 package ABI. Current in-tree tags:

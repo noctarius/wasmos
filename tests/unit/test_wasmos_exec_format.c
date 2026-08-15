@@ -33,10 +33,12 @@
  * layout; a field added to one and not the other turns every fixture here into a
  * non-WAP blob.
  *
- * test_wap_header_retired_t is the v6 layout. Nothing in the tree produces it --
- * every package is repacked from source on each build -- and it exists here so
- * one case can assert that a container from a superseded version classifies as
- * NONE rather than being reinterpreted under the current layout. */
+ * test_wap_header_retired_t is the immediately preceding layout, which carried a
+ * driver-match table. Nothing in the tree produces it -- every package is
+ * repacked from source on each build -- and it exists here so one case can assert
+ * that a container from a superseded version classifies as NONE rather than being
+ * reinterpreted under the current layout, which would misread every field after
+ * the first removed one. */
 typedef struct __attribute__((packed)) {
     char magic[8];
     uint16_t version;
@@ -48,7 +50,6 @@ typedef struct __attribute__((packed)) {
     uint32_t req_ep_count;
     uint32_t cap_count;
     uint32_t mem_hint_count;
-    uint32_t driver_match_count;
     uint32_t compiled_size;
     char subsystem_tag[8];
     uint32_t region_count;
@@ -64,16 +65,7 @@ typedef struct __attribute__((packed)) {
     uint32_t wasm_size;
     uint32_t req_ep_count;
     uint32_t cap_count;
-    uint32_t entry_arg_binding_count;
     uint32_t mem_hint_count;
-    uint8_t driver_match_class;
-    uint8_t driver_match_subclass;
-    uint8_t driver_match_prog_if;
-    uint8_t driver_match_reserved0;
-    uint16_t driver_match_vendor_id;
-    uint16_t driver_match_device_id;
-    uint16_t driver_io_port_min;
-    uint16_t driver_io_port_max;
     uint32_t driver_match_count;
     uint32_t compiled_size;
     char subsystem_tag[8];
@@ -148,7 +140,7 @@ static int test_classify_real_wap_fixtures(void) {
         .header =
             {
                 .magic = {'W', 'A', 'S', 'M', 'O', 'S', 'A', 'P'},
-                .version = 6u,
+                .version = 8u,
                 .header_size = sizeof(test_wap_header_retired_t),
                 .flags = 1u << 2,
                 .name_len = 1u,

@@ -93,17 +93,16 @@ enum {
     WASMOS_ERR_PROC_PM_USER_COPY = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_PROC_PM, 14), /* mm_copy_from_user failed for PM input payload */
     WASMOS_ERR_PROC_PM_META_LOOKUP = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_PROC_PM, 15), /* module metadata lookup failed */
     WASMOS_ERR_PROC_PM_META_NOT_DRIVER = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_PROC_PM, 16), /* requested module metadata was not for a driver */
-    WASMOS_ERR_PROC_PM_META_BAD_INDEX = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_PROC_PM, 17), /* requested driver match index was out of range */
-    WASMOS_ERR_PROC_PM_META_BAD_SOURCE = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_PROC_PM, 18), /* unsupported module metadata source selector */
-    WASMOS_ERR_PROC_PM_CALLER_FSBUF = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_PROC_PM, 19), /* caller filesystem transfer buffer was missing/invalid */
-    WASMOS_ERR_PROC_PM_REPLY_SEND = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_PROC_PM, 20), /* PM failed to send the final IPC response */
-    WASMOS_ERR_PROC_PM_FS_REPLY = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_PROC_PM, 21), /* PM received an unexpected filesystem reply */
-    WASMOS_ERR_PROC_PM_BAD_BROKER = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_PROC_PM, 22), /* broker registration payload or endpoint was invalid */
-    WASMOS_ERR_PROC_PM_BAD_HANDLER = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_PROC_PM, 23), /* exec-handler registration payload was invalid */
-    WASMOS_ERR_PROC_PM_SUBSYSTEM_REG = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_PROC_PM, 24), /* subsystem broker registration failed */
-    WASMOS_ERR_PROC_PM_HANDLER_REG = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_PROC_PM, 25), /* exec-handler registration failed */
-    WASMOS_ERR_PROC_PM_NOT_AUTHORIZED = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_PROC_PM, 26), /* caller lacks the subsystem.register capability */
-    WASMOS_ERR_PROC_PM_NO_PM_FSBUF = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_PROC_PM, 27), /* PM could not acquire its own xfer buffer */
+    WASMOS_ERR_PROC_PM_META_BAD_SOURCE = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_PROC_PM, 17), /* unsupported module metadata source selector */
+    WASMOS_ERR_PROC_PM_CALLER_FSBUF = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_PROC_PM, 18), /* caller filesystem transfer buffer was missing/invalid */
+    WASMOS_ERR_PROC_PM_REPLY_SEND = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_PROC_PM, 19), /* PM failed to send the final IPC response */
+    WASMOS_ERR_PROC_PM_FS_REPLY = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_PROC_PM, 20), /* PM received an unexpected filesystem reply */
+    WASMOS_ERR_PROC_PM_BAD_BROKER = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_PROC_PM, 21), /* broker registration payload or endpoint was invalid */
+    WASMOS_ERR_PROC_PM_BAD_HANDLER = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_PROC_PM, 22), /* exec-handler registration payload was invalid */
+    WASMOS_ERR_PROC_PM_SUBSYSTEM_REG = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_PROC_PM, 23), /* subsystem broker registration failed */
+    WASMOS_ERR_PROC_PM_HANDLER_REG = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_PROC_PM, 24), /* exec-handler registration failed */
+    WASMOS_ERR_PROC_PM_NOT_AUTHORIZED = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_PROC_PM, 25), /* caller lacks the subsystem.register capability */
+    WASMOS_ERR_PROC_PM_NO_PM_FSBUF = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_PROC_PM, 26), /* PM could not acquire its own xfer buffer */
     WASMOS_ERR_SHMEM_BAD_ARGS = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_SHMEM, 1), /* id/size invalid or size not page-aligned */
     WASMOS_ERR_SHMEM_NO_CAP = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_SHMEM, 2), /* caller lacks the DMA capability / no context */
     WASMOS_ERR_SHMEM_BAD_ID = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_SHMEM, 3), /* shmem id unknown / no backing pages */
@@ -362,7 +361,6 @@ static inline const char *wasmos_error_code_name(wasmos_error_code_t c) {
     case WASMOS_ERR_PROC_PM_USER_COPY: return "proc_pm.USER_COPY";
     case WASMOS_ERR_PROC_PM_META_LOOKUP: return "proc_pm.META_LOOKUP";
     case WASMOS_ERR_PROC_PM_META_NOT_DRIVER: return "proc_pm.META_NOT_DRIVER";
-    case WASMOS_ERR_PROC_PM_META_BAD_INDEX: return "proc_pm.META_BAD_INDEX";
     case WASMOS_ERR_PROC_PM_META_BAD_SOURCE: return "proc_pm.META_BAD_SOURCE";
     case WASMOS_ERR_PROC_PM_CALLER_FSBUF: return "proc_pm.CALLER_FSBUF";
     case WASMOS_ERR_PROC_PM_REPLY_SEND: return "proc_pm.REPLY_SEND";
@@ -567,7 +565,6 @@ static inline const char *wasmos_strerror(wasmos_error_code_t c) {
     case WASMOS_ERR_PROC_PM_USER_COPY: return "mm_copy_from_user failed for PM input payload";
     case WASMOS_ERR_PROC_PM_META_LOOKUP: return "module metadata lookup failed";
     case WASMOS_ERR_PROC_PM_META_NOT_DRIVER: return "requested module metadata was not for a driver";
-    case WASMOS_ERR_PROC_PM_META_BAD_INDEX: return "requested driver match index was out of range";
     case WASMOS_ERR_PROC_PM_META_BAD_SOURCE: return "unsupported module metadata source selector";
     case WASMOS_ERR_PROC_PM_CALLER_FSBUF: return "caller filesystem transfer buffer was missing/invalid";
     case WASMOS_ERR_PROC_PM_REPLY_SEND: return "PM failed to send the final IPC response";

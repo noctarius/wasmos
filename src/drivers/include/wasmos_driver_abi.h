@@ -519,7 +519,7 @@ enum { WASMOS_IRQ_TRIGGER_LEVEL = 1 << 0, WASMOS_IRQ_POLARITY_LOW = 1 << 1 };
  *
  * The consumer supplies the buffer and lends it WRITE; PM fills it and replies
  * with the byte count. Versioned and length-checked, so it grows by appending. */
-#define WASMOS_MODULE_META_DESC_VERSION 1u
+#define WASMOS_MODULE_META_DESC_VERSION 2u
 
 /* Region kinds. Mirrors the app-format enum in src/kernel/include/wasmos_app.h;
  * a service cannot include kernel headers, so the two must move together. */
@@ -539,31 +539,24 @@ typedef struct __attribute__((packed)) {
  * windows than this is describing a device the model does not fit. */
 #define WASMOS_MODULE_META_MAX_REGIONS 4u
 
-/* PM's report on ONE match rule of one packaged driver -- not the whole module.
- * A module may declare several rules, so the request names both the module and a
- * match index, and `match_count` reports how many rules exist in total; a
- * consumer wanting all of them asks again for each index 0..match_count-1, and
- * every reply repeats the module-wide fields.
+/* PM's report on what a packaged driver declares ABOUT ITSELF: the capabilities
+ * it requests, the register windows it needs, and whether the early storage path
+ * depends on it.
  *
- * The PCI triplet and vendor/device carry that rule's constraints, using
- * device-manager's wildcard convention: 0xFF for the byte fields and 0xFFFF for
- * the ID fields mean "match anything", so 0 is a real class/vendor value and not
- * a wildcard. `storage_bootstrap` is a module-wide flag marking a driver the
- * early storage path depends on. `region_count` is how many of `regions` are
- * populated; the descriptor is zero-filled before use, so entries past it read
- * as zero rather than being meaningful. */
+ * It deliberately says nothing about which DEVICE the driver binds to. That
+ * binding is a policy decision expressed in the device-manager rules
+ * (scripts/system/devmgr/rules/), not a property a package may assert about the
+ * hardware it will be given; a driver that could name its own device would bind
+ * ahead of the rules and there would be two answers to the same question.
+ *
+ * `region_count` is how many of `regions` are populated; the descriptor is
+ * zero-filled before use, so entries past it read as zero rather than being
+ * meaningful. */
 typedef struct __attribute__((packed)) {
     uint32_t version; /* = WASMOS_MODULE_META_DESC_VERSION */
-    uint8_t class_code;
-    uint8_t subclass;
-    uint8_t prog_if;
     uint8_t storage_bootstrap;
-    uint16_t vendor_id;
-    uint16_t device_id;
-    uint16_t io_port_min; /* the match rule's window; regions supersede it */
-    uint16_t io_port_max;
+    uint8_t reserved0[3];
     uint32_t cap_flags;
-    uint32_t match_count;
     uint32_t region_count;
     wasmos_region_desc_t regions[WASMOS_MODULE_META_MAX_REGIONS];
 } wasmos_module_meta_desc_t;

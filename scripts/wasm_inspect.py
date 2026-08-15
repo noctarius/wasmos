@@ -5,11 +5,10 @@ import struct
 WASM_MAGIC = b"\0asm"
 WASM_VERSION = 1
 WASMOS_MAGIC = b"WASMOSAP"
-WASMOS_APP_VERSION = 8
+WASMOS_APP_VERSION = 9
 SUBSYSTEM_TAG_LEN = 8
-# Fixed-size records with no trailing name: wasmos_driver_match_t and
-# wasmos_region_entry_t in scripts/make_wasmos_app.c.
-DRIVER_MATCH_RECORD_LEN = 16
+# Fixed-size record with no trailing name: wasmos_region_entry_t in
+# scripts/make_wasmos_app.c.
 REGION_RECORD_LEN = 6
 
 
@@ -74,7 +73,6 @@ def parse_wasmos_app(data):
     req_ep_count, off = read_u32_le(data, off)
     cap_count, off = read_u32_le(data, off)
     mem_hint_count, off = read_u32_le(data, off)
-    driver_match_count, off = read_u32_le(data, off)
     compiled_size, off = read_u32_le(data, off)
     off += SUBSYSTEM_TAG_LEN
     region_count, off = read_u32_le(data, off)
@@ -97,7 +95,6 @@ def parse_wasmos_app(data):
         _name_len, off = read_u32_le(data, off)
         _flags, off = read_u32_le(data, off)
         _, off = read_bytes(data, off, _name_len)
-    off += driver_match_count * DRIVER_MATCH_RECORD_LEN
     off += region_count * REGION_RECORD_LEN
     for _ in range(mem_hint_count):
         _, off = read_u32_le(data, off)

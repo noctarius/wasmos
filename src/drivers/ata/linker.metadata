@@ -41,14 +41,3 @@ last = 0x03F7
 [[regions]]
 kind = "bar"
 index = 4
-
-[[matches]]
-bus = "pci"
-class = 0x01
-subclass = "any"
-prog_if = "any"
-vendor = "any"
-device = "any"
-io_port_min = 0x01F0
-io_port_max = 0x03F7
-priority = 100

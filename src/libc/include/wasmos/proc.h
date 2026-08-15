@@ -36,59 +36,26 @@ static inline void wasmos_proc_pack_name16(const char* name, int32_t out_args[4]
     out_args[3] = (int32_t)packed[3];
 }
 
-/* Query PM for metadata of a module by index and match_index.
- * NOTE: uses a file-static request_id counter — not safe to call concurrently
- * from multiple threads without external synchronisation.
- *
- * Blocks on `reply_endpoint` for exactly one message and accepts it only if it
- * is a PROC_IPC_RESP carrying this request's id; anything else fails the call
- * (it is not skipped and retried), so `reply_endpoint` must be private to the
- * caller. The four reply words are copied to whichever out pointers are
- * non-NULL. Returns 0 on success, -1 on a send failure, a receive failure, or a
- * non-matching reply. */
-static inline int32_t wasmos_proc_module_meta(int32_t proc_endpoint, int32_t reply_endpoint,
-                                              int32_t module_index, int32_t match_index,
-                                              int32_t* out_arg0, int32_t* out_arg1,
-                                              int32_t* out_arg2, int32_t* out_arg3) {
-    static uint32_t request_id = 1u;
-    uint32_t req = request_id++;
-    if (wasmos_ipc_send(proc_endpoint, reply_endpoint, PROC_IPC_MODULE_META, (int32_t)req,
-                        module_index, match_index, 0, 0) != 0) {
-        return -1;
-    }
-    if (wasmos_ipc_select_one(reply_endpoint) < 0) {
-        return -1;
-    }
-    if ((uint32_t)wasmos_ipc_last_field(WASMOS_IPC_FIELD_REQUEST_ID) != req ||
-        wasmos_ipc_last_field(WASMOS_IPC_FIELD_TYPE) != PROC_IPC_RESP) {
-        return -1;
-    }
-    if (out_arg0)
-        *out_arg0 = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG0);
-    if (out_arg1)
-        *out_arg1 = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG1);
-    if (out_arg2)
-        *out_arg2 = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG2);
-    if (out_arg3)
-        *out_arg3 = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG3);
-    return 0;
-}
-
 /* Query PM for module metadata by xfer path; writes path into the xfer buffer
- * before sending.  Uses a separate static counter starting at 0x40000000
- * to avoid clashing with wasmos_proc_module_meta's counter.
+ * before sending.  Uses a static request-id counter starting at 0x40000000, so
+ * ids from this call cannot collide with those of any other request family.
+ *
+ * NOTE: that counter is file-static — not safe to call concurrently from
+ * multiple threads without external synchronisation.
  *
  * The path is staged in a transfer buffer owned for the duration of the call and
  * released before returning; arg1 packs (buffer_id << 12 | path_len), which caps
  * path_len at 4095 here, though PM itself rejects anything from 96 bytes up.
  * `source_kind` selects the module namespace and must be
  * PROC_MODULE_SOURCE_INITFS — PM answers any other value, PROC_MODULE_SOURCE_FS
- * included, with an error. Blocks on
- * `reply_endpoint` for one message and, as in wasmos_proc_module_meta, accepts
- * only a matching PROC_IPC_RESP. On success returns 0 and writes the module
- * index, flags and capability flags to whichever out pointers are non-NULL;
- * returns -1 on a bad path length, staging failure, send/receive failure, or a
- * non-matching reply. */
+ * included, with an error.
+ *
+ * Blocks on `reply_endpoint` for exactly one message and accepts it only if it is
+ * a PROC_IPC_RESP carrying this request's id; anything else fails the call rather
+ * than being skipped and retried, so `reply_endpoint` must be private to the
+ * caller. On success returns 0 and writes the module index, flags and capability
+ * flags to whichever out pointers are non-NULL; returns -1 on a bad path length,
+ * staging failure, send/receive failure, or a non-matching reply. */
 static inline int32_t wasmos_proc_module_meta_path(int32_t proc_endpoint, int32_t reply_endpoint,
                                                    const char* path, int32_t source_kind,
                                                    int32_t* out_module_index, int32_t* out_flags,

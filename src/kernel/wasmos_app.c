@@ -40,7 +40,6 @@ typedef struct __attribute__((packed)) {
     uint32_t req_ep_count;
     uint32_t cap_count;
     uint32_t mem_hint_count;
-    uint32_t driver_match_count;
     /* Byte length of a WARP AOT binary appended after the payload; 0 if absent. */
     uint32_t compiled_size;
     char subsystem_tag[WASMOS_APP_SUBSYSTEM_TAG_LEN];
@@ -365,20 +364,7 @@ int wasmos_app_parse(const uint8_t* blob, uint32_t blob_size, wasmos_app_desc_t*
     uint32_t mem_hint_count = 0;
     uint32_t compiled_size = 0;
     char subsystem_tag[WASMOS_APP_SUBSYSTEM_TAG_LEN + 1];
-    wasmos_app_driver_match_t driver_matches[WASMOS_APP_MAX_DRIVER_MATCHES];
     subsystem_tag_default_for_flags(0, subsystem_tag);
-    for (uint32_t i = 0; i < WASMOS_APP_MAX_DRIVER_MATCHES; ++i) {
-        driver_matches[i].class_code = WASMOS_DRIVER_MATCH_ANY_U8;
-        driver_matches[i].subclass = WASMOS_DRIVER_MATCH_ANY_U8;
-        driver_matches[i].prog_if = WASMOS_DRIVER_MATCH_ANY_U8;
-        driver_matches[i].reserved0 = 0;
-        driver_matches[i].vendor_id = WASMOS_DRIVER_MATCH_ANY_U16;
-        driver_matches[i].device_id = WASMOS_DRIVER_MATCH_ANY_U16;
-        driver_matches[i].io_port_min = 0;
-        driver_matches[i].io_port_max = 0;
-        driver_matches[i].priority = 0;
-    }
-    uint32_t driver_match_count = 0;
     uint32_t region_count = 0;
     if (version != WASMOS_APP_VERSION) {
         return -1;
@@ -394,10 +380,6 @@ int wasmos_app_parse(const uint8_t* blob, uint32_t blob_size, wasmos_app_desc_t*
     req_ep_count = hdr->req_ep_count;
     cap_count = hdr->cap_count;
     mem_hint_count = hdr->mem_hint_count;
-    driver_match_count = hdr->driver_match_count;
-    if (driver_match_count > WASMOS_APP_MAX_DRIVER_MATCHES) {
-        return -1;
-    }
     region_count = hdr->region_count;
     if (region_count > WASMOS_APP_MAX_REGIONS) {
         return -1;
@@ -433,8 +415,8 @@ int wasmos_app_parse(const uint8_t* blob, uint32_t blob_size, wasmos_app_desc_t*
     out_desc->reserved[3] = 0u;
 
     /* The parser walks the blob linearly in the same order the packer writes it:
-     * fixed header, name, entry, endpoint table, capability table, driver-match
-     * table, region table, mem hints, then raw WASM bytes.  The endpoint and
+     * fixed header, name, entry, endpoint table, capability table, region table,
+     * mem hints, then raw WASM bytes.  The endpoint and
      * capability records each carry a variable-length name, so every count in the
      * header has to be walked or `off` desynchronises and every later section is
      * misread. */
@@ -481,15 +463,6 @@ int wasmos_app_parse(const uint8_t* blob, uint32_t blob_size, wasmos_app_desc_t*
         out_desc->caps[i].flags = cap->flags;
         off += cap->name_len;
         out_desc->cap_count++;
-    }
-
-    for (uint32_t i = 0; i < driver_match_count; ++i) {
-        if (check_bounds(off, sizeof(wasmos_app_driver_match_t), blob_size) != 0) {
-            return -1;
-        }
-        const wasmos_app_driver_match_t* m = (const wasmos_app_driver_match_t*)&blob[off];
-        driver_matches[i] = *m;
-        off += sizeof(wasmos_app_driver_match_t);
     }
 
     out_desc->region_count = 0;
@@ -555,10 +528,6 @@ int wasmos_app_parse(const uint8_t* blob, uint32_t blob_size, wasmos_app_desc_t*
     out_desc->compiled_size = compiled_size;
     out_desc->stack_pages_hint = stack_pages_hint;
     out_desc->heap_pages_hint = heap_pages_hint;
-    out_desc->driver_match_count = driver_match_count;
-    for (uint32_t i = 0; i < driver_match_count; ++i) {
-        out_desc->driver_matches[i] = driver_matches[i];
-    }
     return 0;
 }
 

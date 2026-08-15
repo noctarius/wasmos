@@ -31,17 +31,18 @@ subsystems:
       - { symbol: PROC_IPC_STATUS, value: 0x203, kind: req }
       - { symbol: PROC_IPC_SPAWN_NAME, value: 0x204, kind: req }
       - { symbol: PROC_IPC_SPAWN_CAPS, value: 0x205, kind: req }
-      - { symbol: PROC_IPC_MODULE_META, value: 0x206, kind: req }
       - symbol: PROC_IPC_MODULE_META_DESC
         value: 0x212
         kind: req
         doc: |
-          Module metadata as a wasmos_module_meta_desc_t, written into a transfer
-          buffer the caller owns and has lent WRITE to process-manager.
-          arg0=module_index arg1=match_index arg2=buffer_id arg3=byte_offset.
+          What a boot module declares about itself, as a wasmos_module_meta_desc_t
+          written into a transfer buffer the caller owns and has lent WRITE to
+          process-manager: capability flags, declared register windows, and the
+          storage-bootstrap flag.
+          arg0=module_index arg2=buffer_id arg3=byte_offset.
           On success: PROC_IPC_RESP, arg0=bytes written.
-          Supersedes PROC_IPC_MODULE_META, whose four response words are full and
-          cannot carry a variable-length region declaration.
+          Which device a driver binds to is not asked here; that comes from the
+          device-manager rules.
       - { symbol: PROC_IPC_MODULE_META_PATH, value: 0x207, kind: req }
       - symbol: PROC_IPC_SPAWN_CAPS_V2
         value: 0x208

@@ -140,8 +140,6 @@ static const char* kernel_selftest_spawn_error_name(int32_t err) {
         return "WASMOS_ERR_PROC_PM_META_LOOKUP";
     case WASMOS_ERR_PROC_PM_META_NOT_DRIVER:
         return "WASMOS_ERR_PROC_PM_META_NOT_DRIVER";
-    case WASMOS_ERR_PROC_PM_META_BAD_INDEX:
-        return "WASMOS_ERR_PROC_PM_META_BAD_INDEX";
     case WASMOS_ERR_PROC_PM_META_BAD_SOURCE:
         return "WASMOS_ERR_PROC_PM_META_BAD_SOURCE";
     case WASMOS_ERR_PROC_PM_CALLER_FSBUF:

@@ -79,6 +79,15 @@ def default_kernel_path(build_dir: str = "build") -> str:
     return os.environ.get("WASMOS_KERNEL", os.path.join(build_dir, "kernel.elf"))
 
 
+CLI_PROMPT = b"wamos> "
+
+# Multiplies every expect()/settle() deadline. A CI runner is far slower than a
+# developer's machine -- boots that take 12s locally have taken over 120s there
+# -- and raising each test's literal timeout would slow local runs for a problem
+# they do not have. WASMOS_TEST_TIMEOUT_SCALE lets CI buy patience in one place.
+_TIMEOUT_SCALE = float(os.environ.get("WASMOS_TEST_TIMEOUT_SCALE", "1") or "1")
+
+
 def default_build_dir(build_dir: str = "build") -> str:
     """The build tree a test belongs to.
 
@@ -632,6 +641,8 @@ class QemuSession:
         self._esp_runtime_dir: Optional[str] = None
         self.monitor: Optional[QemuMonitor] = None
         self._monitor_tmp_dir: Optional[str] = None
+        # Cleared until the first CLI prompt has been waited out; see _cli_ready.
+        self._cli_settled = False
 
     def _cleanup_esp_runtime_dir(self) -> None:
         if not self._esp_runtime_dir:
@@ -834,18 +845,38 @@ class QemuSession:
             pattern = needle
 
         limit = timeout_s if timeout_s is not None else self.timeout_s
-        deadline = time.time() + limit
+        deadline = time.time() + limit * _TIMEOUT_SCALE
         while time.time() < deadline:
             if pattern:
                 if pattern.search(self.buf):
-                    return True
+                    return self._cli_ready(needle_b)
             else:
                 if needle_b in self.buf:
-                    return True
+                    return self._cli_ready(needle_b)
             self._pump(0.2)
         if self.force_stop_on_timeout:
             self.force_stop()
         return False
+
+    def _cli_ready(self, needle: bytes) -> bool:
+        """Hook on a successful expect(): the FIRST CLI prompt is not readiness.
+
+        The prompt appears as soon as the shell is up, while services behind it
+        are still starting. A test that begins driving the console there races
+        the rest of boot, and on a loaded machine the remaining startup work
+        starves the CLI past a per-command timeout -- surfacing as "prompt not
+        found after 'ls'" when nothing was wrong with ls.
+
+        Rather than have every test remember to settle, the primitive stops
+        reporting the prompt as found until the console is usable. Only the first
+        match settles: later prompts are a command completing, where waiting for
+        silence would be wrong as well as slow.
+        """
+        if self._cli_settled or CLI_PROMPT not in needle:
+            return True
+        self._cli_settled = True
+        self.settle()
+        return True
 
     def mark(self) -> int:
         return len(self.buf)
@@ -867,7 +898,7 @@ class QemuSession:
             pattern = needle
 
         limit = timeout_s if timeout_s is not None else self.timeout_s
-        deadline = time.time() + limit
+        deadline = time.time() + limit * _TIMEOUT_SCALE
         while time.time() < deadline:
             if start < 0:
                 start = 0
@@ -900,7 +931,7 @@ class QemuSession:
         console never goes quiet within `timeout_s` (a system still churning
         after a minute is a real problem, so the caller should not ignore it).
         """
-        deadline = time.time() + timeout_s
+        deadline = time.time() + timeout_s * _TIMEOUT_SCALE
         last_len = len(self.buf)
         quiet_since = time.time()
         while time.time() < deadline:

@@ -206,6 +206,11 @@ jobs:
     env:
       # See defconfig job: wasmos only boots correctly under TCG, not KVM.
       WASMOS_QEMU_ACCEL: "tcg"
+      # A runner is far slower than a developer's machine: boots that take 12s
+      # locally have exceeded 120s here, failing tests that were never wrong.
+      # Scale the framework's deadlines rather than editing 33 tests' literals,
+      # which would slow local runs for a problem they do not have.
+      WASMOS_TEST_TIMEOUT_SCALE: "3"
     steps:
       - uses: actions/checkout@v4
 

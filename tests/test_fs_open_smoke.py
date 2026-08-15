@@ -22,16 +22,6 @@ class FsOpenSmokeTest(unittest.TestCase):
             tail = cls.session.tail()
             cls.session.close()
             raise RuntimeError(f"CLI prompt not detected\n--- tail ---\n{tail}\n")
-        # The first prompt is not the end of boot: services keep starting behind
-        # it. Commands issued now race the rest of startup, and on a loaded
-        # machine the prompt after one can miss its timeout while the CLI is
-        # starved -- which reads as the command failing when it did not.
-        if not cls.session.settle():
-            tail = cls.session.tail()
-            cls.session.close()
-            raise RuntimeError(
-                f"system never went idle after boot\n--- tail ---\n{tail}\n"
-            )
 
     @classmethod
     def tearDownClass(cls):

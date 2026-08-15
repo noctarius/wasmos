@@ -101,6 +101,14 @@ Points that repeatedly matter:
 - **Assert on markers the guest prints**, never on timing. `expect()` returns
   False on timeout; give the assertion a message naming what the absence implies,
   because that message is the whole failure report in CI.
+- **The first `wamos> ` is handled for you.** It does not mean the CLI is usable
+  -- services keep starting behind it -- so `expect()` waits for the console to
+  go quiet and answer a probe the first time it matches the prompt. Later prompt
+  matches do not settle, since those are a command completing. You do not need
+  to call `settle()` yourself; it is public for a test with an unusual boot.
+- **Do not raise a timeout to fix a CI-only failure.** `WASMOS_TEST_TIMEOUT_SCALE`
+  multiplies every deadline and CI sets it to 3, so a slow runner is already
+  accounted for. A test that still times out is telling you something.
 - **Boot once per class** (`setUpClass`), not per test. A boot is seconds.
 - **`force_stop()` then `close()`** in teardown, or a stray QEMU outlives the run.
 - Serial output interleaves from several processes, so ordering between two
@@ -165,6 +173,11 @@ cmake --build build --target run-qemu-test   # boot gate, always
 ## Diagnosing a failure
 
 - Serial output is not always clean; `grep -a` rather than `grep`.
+- **A test that mutates the filesystem must clean up first, not after.** The ESP
+  persists between local runs, so a test that creates something and leaves it
+  passes once and fails forever after, while CI's fresh ESP passes every time --
+  which reads as flakiness. `fs_write_smoke` had exactly this: it removes its
+  directory before creating it.
 - A test that passes locally and fails in CI is usually timing: CI is Linux
   MTTCG with SMP, local macOS is often `thread=single`, which masks
   memory-ordering races (see `skills/wasmos-build-and-run`).

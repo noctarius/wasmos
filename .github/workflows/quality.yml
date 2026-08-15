@@ -92,11 +92,15 @@ jobs:
           pip install "black==${BLACK_VERSION}" "ruff==${RUFF_VERSION}" \
             "PyYAML==${PYYAML_VERSION}" \
             "clang-format==$(tr -d '[:space:]' < .clang-format-version)"
-          # Resolved through sysconfig rather than `command -v`: the LLVM step
-          # above puts /usr/lib/llvm-N/bin on PATH ahead of the pip scripts dir,
-          # so a PATH lookup would find the toolchain's clang-format instead of
-          # the pinned one.
-          echo "CLANG_FORMAT=$(python -c 'import os, sysconfig; print(os.path.join(sysconfig.get_path("scripts"), "clang-format"))')" >> "$GITHUB_ENV"
+          # Resolved to the binary the wheel bundles, not to a directory that
+          # merely ought to contain it. `command -v` finds the LLVM toolchain's
+          # copy, because the step above puts /usr/lib/llvm-N/bin first on PATH;
+          # sysconfig's scripts dir is wrong too, because pip may install to the
+          # user site (~/.local/bin) while sysconfig names the system dir -- on
+          # this runner that dir already held an older clang-format, so the pin
+          # silently resolved to 20.1.8 with 22.1.0 installed elsewhere. The
+          # package's own data/bin path is true wherever pip put it.
+          echo "CLANG_FORMAT=$(python -c 'import clang_format, os; print(os.path.join(os.path.dirname(clang_format.__file__), "data", "bin", "clang-format"))')" >> "$GITHUB_ENV"
 
       # asc is needed both at configure time and by the AssemblyScript linter.
       - name: Install AssemblyScript compiler

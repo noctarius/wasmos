@@ -76,7 +76,9 @@ static void emit_string(stdio_emit_fn emit, void* ctx, const char* s, size_t len
     }
 }
 
-static size_t utoa_base(unsigned long value, unsigned int base, int uppercase, char* buffer,
+/* Widest integer the conversions handle. long is 32-bit on wasm32, so the whole
+ * chain is long long: narrowing here silently truncated every %lld/%llx. */
+static size_t utoa_base(unsigned long long value, unsigned int base, int uppercase, char* buffer,
                         size_t size) {
     static const char digits_lower[] = "0123456789abcdef";
     static const char digits_upper[] = "0123456789ABCDEF";
@@ -104,8 +106,8 @@ static size_t utoa_base(unsigned long value, unsigned int base, int uppercase, c
     return len;
 }
 
-static void format_unsigned(stdio_emit_fn emit, void* ctx, unsigned long value, unsigned int base,
-                            int uppercase, size_t width, char pad_char) {
+static void format_unsigned(stdio_emit_fn emit, void* ctx, unsigned long long value,
+                            unsigned int base, int uppercase, size_t width, char pad_char) {
     char digits[32];
     size_t len = utoa_base(value, base, uppercase, digits, sizeof(digits));
 
@@ -118,8 +120,9 @@ static void format_unsigned(stdio_emit_fn emit, void* ctx, unsigned long value, 
     emit_string(emit, ctx, digits, len);
 }
 
-static void format_signed(stdio_emit_fn emit, void* ctx, long value, size_t width, char pad_char) {
-    unsigned long magnitude = (unsigned long)value;
+static void format_signed(stdio_emit_fn emit, void* ctx, long long value, size_t width,
+                          char pad_char) {
+    unsigned long long magnitude = (unsigned long long)value;
     char digits[32];
     size_t len;
     size_t pad = 0;
@@ -127,7 +130,7 @@ static void format_signed(stdio_emit_fn emit, void* ctx, long value, size_t widt
 
     if (value < 0) {
         negative = 1;
-        magnitude = (unsigned long)(-(value + 1)) + 1ul;
+        magnitude = (unsigned long long)(-(value + 1)) + 1ull;
     }
 
     len = utoa_base(magnitude, 10u, 0, digits, sizeof(digits));
@@ -216,34 +219,33 @@ static int vformat(stdio_emit_fn emit, void* ctx, const char* format, va_list ar
         case 'd':
         case 'i':
             if (long_flag == 2) {
-                format_signed(emit, ctx, (long)va_arg(ap, long long), width, pad_char);
+                format_signed(emit, ctx, va_arg(ap, long long), width, pad_char);
             } else if (long_flag) {
                 format_signed(emit, ctx, va_arg(ap, long), width, pad_char);
             } else {
-                format_signed(emit, ctx, (long)va_arg(ap, int), width, pad_char);
+                format_signed(emit, ctx, (long long)va_arg(ap, int), width, pad_char);
             }
             break;
         case 'u':
             if (long_flag == 2) {
-                format_unsigned(emit, ctx, (unsigned long)va_arg(ap, unsigned long long), 10u, 0,
-                                width, pad_char);
+                format_unsigned(emit, ctx, va_arg(ap, unsigned long long), 10u, 0, width, pad_char);
             } else if (long_flag) {
                 format_unsigned(emit, ctx, va_arg(ap, unsigned long), 10u, 0, width, pad_char);
             } else {
-                format_unsigned(emit, ctx, (unsigned long)va_arg(ap, unsigned int), 10u, 0, width,
-                                pad_char);
+                format_unsigned(emit, ctx, (unsigned long long)va_arg(ap, unsigned int), 10u, 0,
+                                width, pad_char);
             }
             break;
         case 'x':
         case 'X':
             if (long_flag == 2) {
-                format_unsigned(emit, ctx, (unsigned long)va_arg(ap, unsigned long long), 16u,
-                                *format == 'X', width, pad_char);
+                format_unsigned(emit, ctx, va_arg(ap, unsigned long long), 16u, *format == 'X',
+                                width, pad_char);
             } else if (long_flag) {
                 format_unsigned(emit, ctx, va_arg(ap, unsigned long), 16u, *format == 'X', width,
                                 pad_char);
             } else {
-                format_unsigned(emit, ctx, (unsigned long)va_arg(ap, unsigned int), 16u,
+                format_unsigned(emit, ctx, (unsigned long long)va_arg(ap, unsigned int), 16u,
                                 *format == 'X', width, pad_char);
             }
             break;

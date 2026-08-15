@@ -498,6 +498,7 @@ FILE* fopen(const char* path, const char* mode) {
 size_t fread(void* ptr, size_t size, size_t nmemb, FILE* stream) {
     ssize_t rc;
     size_t total;
+    size_t done;
 
     if (!ptr || !stream || stream->fd < 0 || size == 0 || nmemb == 0) {
         return 0;
@@ -508,20 +509,35 @@ size_t fread(void* ptr, size_t size, size_t nmemb, FILE* stream) {
     }
 
     total = size * nmemb;
-    rc = read(stream->fd, ptr, total);
-    if (rc < 0) {
-        stream->error = 1;
-        return 0;
+    /* Refill until the request is met. A single read() short of `total` is not
+     * end of file -- a console or pipe backend returns what it has -- so the
+     * old one-shot form both misreported a short read as EOF and dropped the
+     * bytes of a trailing partial item without saying so. The loop only
+     * advances on positive progress, so a backend answering 0 ("nothing ready")
+     * terminates it rather than spinning. */
+    done = 0;
+    while (done < total) {
+        rc = read(stream->fd, (char*)ptr + done, total - done);
+        if (rc < 0) {
+            stream->error = 1;
+            break;
+        }
+        if (rc == 0) {
+            stream->eof = 1;
+            break;
+        }
+        done += (size_t)rc;
     }
-    if ((size_t)rc < total) {
-        stream->eof = 1;
-    }
-    return (size_t)rc / size;
+    /* Bytes past the last whole item are consumed and unreportable -- C leaves a
+     * partially read element indeterminate -- so a caller that must not lose
+     * them reads in units of 1. */
+    return done / size;
 }
 
 size_t fwrite(const void* ptr, size_t size, size_t nmemb, FILE* stream) {
     ssize_t rc;
     size_t total;
+    size_t done;
 
     if (!ptr || !stream || stream->fd < 0 || size == 0 || nmemb == 0) {
         return 0;
@@ -532,12 +548,24 @@ size_t fwrite(const void* ptr, size_t size, size_t nmemb, FILE* stream) {
     }
 
     total = size * nmemb;
-    rc = write(stream->fd, ptr, total);
-    if (rc < 0) {
-        stream->error = 1;
-        return 0;
+    /* Drain the whole request. A short write is a failure to store what the
+     * caller handed over, so it raises the error flag: the old form reported it
+     * only as a smaller item count, which a caller cannot tell apart from
+     * having asked for fewer items. As in fread, the loop advances only on
+     * positive progress, so a backend that accepts nothing ends it. */
+    done = 0;
+    while (done < total) {
+        rc = write(stream->fd, (const char*)ptr + done, total - done);
+        if (rc <= 0) {
+            stream->error = 1;
+            break;
+        }
+        done += (size_t)rc;
     }
-    return (size_t)rc / size;
+    if (done < total) {
+        stream->error = 1;
+    }
+    return done / size;
 }
 
 int fclose(FILE* stream) {

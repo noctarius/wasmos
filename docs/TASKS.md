@@ -858,15 +858,6 @@ returns; `FS_ERR_*`/`PROC_*` ride IPC opcodes), so the migration depends on them
   inherits (`src/libc/src/math.c`).
 
 
-- [ ] [BUG][P1] Stop `%lld`/`%llx` truncating to 32 bits on wasm32. `vsnprintf`
-  casts `long long` through `long`, which is 32-bit on this target
-  (`src/libc/src/stdio.c`).
-- [ ] [BUG][P1] Fix `sqrtf` for large arguments: 12 Newton iterations seeded with
-  `x` do not converge above ~1e7 (`sqrtf(1e10)` returns ~2.4e6 against 1e5)
-  (`src/libc/src/math.c`).
-- [ ] [BUG][P1] Stop `fread`/`fwrite` silently dropping a trailing partial item.
-  Both return `bytes / size`, so bytes below one whole item are consumed and
-  never reported (`src/libc/src/unistd.c`).
 - [ ] [BUG][P1] Align the wasm and native coroutine completion polarity. A wasm task
   returning a non-zero, non-yield status REJECTS its completion future, so
   `join()` yields that negative status; `wasmos_native_coroutine_exit()` always
@@ -887,9 +878,6 @@ returns; `FS_ERR_*`/`PROC_*` ride IPC opcodes), so the migration depends on them
 - [ ] [ENHANCEMENT][P2] Add a `wasmos_sys_event_loop_destroy`. `event_loop_init`
   creates a select set that is never released, so a transient loop leaks it
   (`src/libsys/wasm/include/wasmos/libsys.h`).
-- [ ] [ENHANCEMENT][P2] Give `memcmp` the NULL guards every other `string.c` entry
-  point has; it checks `lhs == rhs || count == 0` and then dereferences
-  (`src/libc/src/string.c`).
 - [ ] [DOCS][P2] Correct `ipc_last_field` in `abi/hostcalls.yaml` (~line 132): it
   documents -1 for both "no message stored" and "field out of range". Both
   shims return `IPC_ERR_NOENT` (-4) for the former and `IPC_ERR_INVALID` (-1)
@@ -1346,6 +1334,22 @@ Source: `architecture/25-diagnostics-status.md`,
 
 - [ ] [TEST][P2] Add behavioral regression coverage with every new subsystem contract;
   reject source-text assertions.
+- [ ] [TEST][P2] Give the host suite a way to test wasm32-only libc behaviour.
+  Some defects are invisible on the host by construction: `%lld`/`%llx` truncated
+  to 32 bits because `vsnprintf` cast `long long` through `long`, which is 64-bit
+  on the host and 32-bit on wasm32, so `test_libc_stdio.c`'s existing `%lld`
+  cases passed throughout and the fix is verified by inspection alone. The only
+  wasm32 coverage today is `test_go_abi_sizes.c`, which is `-fsyntax-only` and
+  therefore limited to `_Static_assert`. A runtime harness would need a C module
+  compiled `--target=wasm32` and executed — node with a stub import table, as
+  `tests/unit/{as,go}/run_*_test.mjs` already do for those languages, is the
+  cheapest route and would serve every future bug of this class.
+- [ ] [TEST][P2] Cover `fread`/`fwrite`. Both were fixed (short reads no longer
+  report EOF, short writes now raise the error flag) with no test, because a
+  `FILE` here is backed by an fd whose `read`/`write` go through FS IPC, and the
+  host suite has no stub for that layer. A fake backend would also make the
+  console-vs-file split testable, which is where the remaining `read`/`write`
+  ABI-limit item lives (`src/libc/src/unistd.c`).
 - [ ] [TEST][P2] Add focused stress/negative tests for TLB shootdown, service restart,
   futures cancellation, virtio-serial transport, networking link-down/restart,
   and new DMA paths.

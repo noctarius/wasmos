@@ -2738,6 +2738,37 @@ add_custom_command(TARGET run-kernel-unit-tests POST_BUILD
           ${LIBC_DIR}/src/string.c
           -o ${BUILD_DIR}/test_libc_stdio
   COMMAND ${BUILD_DIR}/test_libc_stdio
+  # sqrtf convergence across the exponent range. math.c only, no stubs: these
+  # are pure functions, and the reference is the defining property (got*got == x)
+  # rather than the host libm, which this TU cannot reach anyway -- the project
+  # <math.h> is on -I and the two libcs cannot both be in scope.
+  #
+  # -fno-builtin is load-bearing, not hygiene: clang knows sqrtf and constant-
+  # folds every call with a literal argument to the correct IEEE result, so
+  # without it the cases never reach math.c and the suite passes against an
+  # arbitrarily broken implementation. It was written without the flag first,
+  # and both the old and the fixed sqrtf produced identical output.
+  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
+          -fno-builtin
+          -I${LIBC_DIR}/include
+          -I${LIBC_DIR}/src
+          -include ${LIBC_DIR}/include/wasmos_cast.h
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_libc_math.c
+          ${LIBC_DIR}/src/math.c
+          -o ${BUILD_DIR}/test_libc_math
+  COMMAND ${BUILD_DIR}/test_libc_math
+  # memcmp's argument guards and comparison sign. -fno-builtin for the same
+  # reason as the math suite above: memcmp is a clang builtin and a folded call
+  # never reaches string.c.
+  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
+          -fno-builtin
+          -I${LIBC_DIR}/include
+          -I${LIBC_DIR}/src
+          -include ${LIBC_DIR}/include/wasmos_cast.h
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_libc_string.c
+          ${LIBC_DIR}/src/string.c
+          -o ${BUILD_DIR}/test_libc_string
+  COMMAND ${BUILD_DIR}/test_libc_string
   COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
           -Wno-error=implicit-function-declaration -Wno-sign-compare
           "-D__builtin_wasm_memory_size(x)=((int)(0))"
@@ -3140,8 +3171,10 @@ wasmos_ide_index(wasmos_ide_libui
 set(WASMOS_UNIT_LIBC_TESTS
     ${CMAKE_SOURCE_DIR}/tests/unit/stubs_native_libsys.c
     ${CMAKE_SOURCE_DIR}/tests/unit/stubs_wasm_stdlib.c
+    ${CMAKE_SOURCE_DIR}/tests/unit/test_libc_math.c
     ${CMAKE_SOURCE_DIR}/tests/unit/test_libc_stdio.c
     ${CMAKE_SOURCE_DIR}/tests/unit/test_libc_stdlib.c
+    ${CMAKE_SOURCE_DIR}/tests/unit/test_libc_string.c
     ${CMAKE_SOURCE_DIR}/tests/unit/test_libui_key_decode.c
     ${CMAKE_SOURCE_DIR}/tests/unit/test_native_ipc_future.c
     ${CMAKE_SOURCE_DIR}/tests/unit/test_wasm_coroutine.c)

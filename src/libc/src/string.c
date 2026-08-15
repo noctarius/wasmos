@@ -349,8 +349,15 @@ int memcmp(const void* lhs, const void* rhs, size_t count) {
     const unsigned char* a = (const unsigned char*)lhs;
     const unsigned char* b = (const unsigned char*)rhs;
 
+    /* The equal-pointer and zero-count arms already cover the NULL/NULL and
+     * "nothing to compare" cases; this is the one every other entry point in
+     * this file guards and memcmp did not, so a single NULL argument with a
+     * non-zero count dereferenced it. */
     if (lhs == rhs || count == 0) {
         return 0;
+    }
+    if (!lhs || !rhs) {
+        return lhs ? 1 : -1;
     }
     for (size_t i = 0; i < count; ++i) {
         if (a[i] != b[i]) {

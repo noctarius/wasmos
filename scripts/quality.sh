@@ -648,6 +648,10 @@ run_abi_gen_check() {
     "$py" "$repo_root/scripts/gen_abi_constants.py" --check
     step "Verifying constants match wasmos_driver_abi.h..."
     "$py" "$repo_root/scripts/gen_abi_constants.py" --verify-source
+    # Boots nothing, so it belongs here rather than in the QEMU suite: a test
+    # file in no battery would never run, and only this catches it.
+    step "Verifying every test file belongs to exactly one battery..."
+    "$py" "$repo_root/scripts/run_unittest_suite.py" --verify-batteries
 }
 
 case "$mode" in

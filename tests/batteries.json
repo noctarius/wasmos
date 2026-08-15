@@ -1,0 +1,109 @@
+{
+  "_comment": [
+    "Test batteries: the integration suite partitioned by subsystem, one battery",
+    "per CI runner. THE single source — scripts/run_unittest_suite.py selects",
+    "files from it and .github/workflows/ci.yml builds its matrix from it, so a",
+    "battery is added in one place and both follow.",
+    "",
+    "Batteries are semantic, not duration-balanced: 'net' is far the largest and",
+    "sets the critical path. That is deliberate. A red job named 'net' says what",
+    "broke without opening a log, and membership stays stable as tests are added,",
+    "so a battery's history stays comparable run to run — neither of which is true",
+    "of an i-of-N shard, where adding one test reshuffles every partition.",
+    "",
+    "Every file under tests/ MUST appear in exactly one battery.",
+    "run_unittest_suite.py --verify-batteries enforces it and runs in the quality",
+    "gate; without it a newly added test could belong to no battery and silently",
+    "never run, which is the one failure mode a numeric shard cannot have.",
+    "",
+    "needs_qemu=false marks a battery that runs without the emulation toolchain,",
+    "so CI can schedule it on a cheap fast job instead of paying for OVMF/QEMU."
+  ],
+  "batteries": [
+    {
+      "name": "boot",
+      "description": "Boot chain, init, CLI and panic decoding: the system comes up and is usable.",
+      "needs_qemu": true,
+      "files": [
+        "test_boot_smoke.py",
+        "test_cli.py",
+        "test_decode_kernel_panic.py",
+        "test_device_manager.py",
+        "test_init_smoke.py",
+        "test_ring3_smoke_target.py"
+      ]
+    },
+    {
+      "name": "sched",
+      "description": "Scheduler, preemption, threading, IPC wakeup and shared-memory grants.",
+      "needs_qemu": true,
+      "files": [
+        "test_chardev_preempt.py",
+        "test_ipc_wakeup.py",
+        "test_preempt_smoke.py",
+        "test_shmem_grant_revoke_e2e.py",
+        "test_threading_ipc_stress.py",
+        "test_timer_tick.py",
+        "test_work_stealing.py"
+      ]
+    },
+    {
+      "name": "net",
+      "description": "Networking end to end: the virtio-net driver, net-stack, sockets, DNS and TLS.",
+      "needs_qemu": true,
+      "files": [
+        "test_net_stack_arp_e2e.py",
+        "test_net_stack_curl_e2e.py",
+        "test_net_stack_dhcp_e2e.py",
+        "test_net_stack_dns_e2e.py",
+        "test_net_stack_dns_resolve_e2e.py",
+        "test_net_stack_https_e2e.py",
+        "test_net_stack_https_verify_e2e.py",
+        "test_net_stack_ifaddr_e2e.py",
+        "test_net_stack_link_notify_e2e.py",
+        "test_net_stack_tcp_echo_e2e.py",
+        "test_net_stack_tcp_server_e2e.py",
+        "test_net_stack_udp_echo_e2e.py",
+        "test_virtio_net_e2e.py",
+        "test_virtio_net_notify_e2e.py"
+      ]
+    },
+    {
+      "name": "gfx",
+      "description": "Graphics, virtual terminals and hardware input routing.",
+      "needs_qemu": true,
+      "files": [
+        "test_gfx_keyboard.py",
+        "test_irq_input.py",
+        "test_irq_route_capability.py",
+        "test_libui_click.py",
+        "test_vt_cli_lockup.py",
+        "test_vt_tty_switch.py"
+      ]
+    },
+    {
+      "name": "fs",
+      "description": "Filesystem reads and writes through the FAT backend.",
+      "needs_qemu": true,
+      "files": ["test_fs_open_smoke.py", "test_fs_write_smoke.py"]
+    },
+    {
+      "name": "lang",
+      "description": "One guest per supported source language boots and runs.",
+      "needs_qemu": true,
+      "files": [
+        "test_hello_as.py",
+        "test_hello_c.py",
+        "test_hello_go.py",
+        "test_hello_rust.py",
+        "test_hello_zig.py"
+      ]
+    },
+    {
+      "name": "host",
+      "description": "Host tools, exercised directly. Boots nothing and needs no emulation.",
+      "needs_qemu": false,
+      "files": ["test_make_wasmos_app_capabilities.py"]
+    }
+  ]
+}

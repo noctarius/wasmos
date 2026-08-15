@@ -25,6 +25,10 @@ This repository uses Codex CLI to assist with development. Follow these conventi
   - `skills/wasmos-system-util` — create a one-shot CLI utility under `src/utils/`.
   - `skills/wasmos-ide-targets` — keep CLion/clangd IDE coverage in sync (audit +
     fix "not in a project target").
+  - `skills/wasmos-integration-test` — add or change a QEMU integration test
+    under `tests/` and assign it to a battery (`tests/batteries.json` is the
+    single source for both the runner and the CI matrix; every test file must
+    belong to exactly one battery).
   - `skills/wasmos-build-and-run` — build/run QEMU + test targets with the right
     runtime (wasm3 vs WARP) via Kconfig `.config` / `configs/*_defconfig`; the
     one-build-dir-per-config rule and why `-D` runtime flags can be overridden.
@@ -229,7 +233,12 @@ Do not:
 - Unit/integration test targets MUST NOT be started in parallel (for example,
   do not run `run-qemu-test` and `run-qemu-cli-test` at the same time). They
   share mutable `build/esp` artifacts and parallel runs can cause flaky
-  failures like `Error deleting` and boot-config corruption.
+  failures like `Error deleting` and boot-config corruption. CI runs the test
+  batteries concurrently only because each runner has its own filesystem; that
+  is a cross-machine property and does not make local parallel runs safe.
+- Every file under `tests/` must belong to exactly one battery in
+  `tests/batteries.json`, or it never runs. See
+  `skills/wasmos-integration-test`.
 
 ## Testing Policy
 - Valid unit tests MUST verify runtime behavior, outputs, state transitions, or API contracts.

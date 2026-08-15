@@ -149,9 +149,57 @@ jobs:
       - name: Build + boot test (${{ matrix.config }})
         run: cmake --build "build-${{ matrix.config }}" --target run-qemu-test
 
-  integration-tests:
-    name: QEMU integration suite (Python)
+  # The battery list comes from tests/batteries.json so the matrix and the test
+  # runner share one source. Adding a battery there adds a runner here; nothing
+  # in this file enumerates them.
+  batteries:
+    name: Resolve test batteries
     runs-on: ubuntu-latest
+    outputs:
+      qemu: ${{ steps.resolve.outputs.qemu }}
+      host: ${{ steps.resolve.outputs.host }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: resolve
+        run: |
+          python3 scripts/run_unittest_suite.py --verify-batteries
+          echo "qemu=$(python3 -c "import json;print(json.dumps([b['name'] for b in json.load(open('tests/batteries.json'))['batteries'] if b['needs_qemu']]))")" >> "$GITHUB_OUTPUT"
+          echo "host=$(python3 -c "import json;print(json.dumps([b['name'] for b in json.load(open('tests/batteries.json'))['batteries'] if not b['needs_qemu']]))")" >> "$GITHUB_OUTPUT"
+
+  # Batteries that boot nothing: no emulation toolchain, no OVMF, seconds not
+  # minutes. Kept off the QEMU runners so they cannot queue behind them.
+  host-tests:
+    name: ${{ matrix.battery }} (host)
+    needs: batteries
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        battery: ${{ fromJSON(needs.batteries.outputs.host) }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install host toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cmake ninja-build python3-pip
+          python3 -m pip install --user kconfiglib
+      - name: Configure
+        run: cmake -S . -B build
+      - name: Build host tools
+        run: cmake --build build --target make_wasmos_app
+      - name: Run battery (${{ matrix.battery }})
+        run: python3 scripts/run_unittest_suite.py --battery "${{ matrix.battery }}"
+
+  integration-tests:
+    name: ${{ matrix.battery }} (QEMU)
+    needs: batteries
+    runs-on: ubuntu-latest
+    strategy:
+      # One battery's failure must not cancel the others: the whole point is to
+      # learn which subsystems are red in a single run.
+      fail-fast: false
+      matrix:
+        battery: ${{ fromJSON(needs.batteries.outputs.qemu) }}
     env:
       # See defconfig job: wasmos only boots correctly under TCG, not KVM.
       WASMOS_QEMU_ACCEL: "tcg"
@@ -208,5 +256,10 @@ jobs:
             -DOVMF_CODE="$RUNNER_TEMP/ovmf/OVMF_CODE.fd" \
             -DOVMF_VARS="$RUNNER_TEMP/ovmf/OVMF_VARS.fd"
 
-      - name: Run QEMU integration suite (tests/*.py)
+      # WASMOS_TEST_BATTERY selects the battery inside the existing target, so
+      # the ESP staging and QEMU wiring stay in one place rather than being
+      # duplicated per battery.
+      - name: Run battery (${{ matrix.battery }})
+        env:
+          WASMOS_TEST_BATTERY: ${{ matrix.battery }}
         run: cmake --build build --target run-qemu-cli-test

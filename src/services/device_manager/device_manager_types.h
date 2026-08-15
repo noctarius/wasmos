@@ -139,7 +139,15 @@ typedef struct {
 } block_fs_rule_t;
 
 /* Rule: spawn a driver when a PCI device matching class/vendor/device is found.
- * spawned_device_mask is a bitmask of registry[] indices already spawned. */
+ * spawned_device_mask is a bitmask of registry[] indices already spawned.
+ *
+ * `meta` caches what the module this rule names declares about itself, fetched
+ * once when the PCI inventory is consumed. It is cached rather than queried on
+ * demand because the queue walk runs inside event-handler dispatch, where a
+ * blocking request would be a nested receive; with the descriptor in hand,
+ * resolving a device's windows is pure. `meta_valid` is 0 when the module could
+ * not be resolved, in which case the rule still spawns, just without declared
+ * windows. */
 typedef struct {
     uint8_t active;
     uint8_t bus;
@@ -152,6 +160,8 @@ typedef struct {
     uint16_t device_id;
     uint64_t spawned_device_mask; /* registry entry index bits already spawned */
     char spawn_path[96];
+    uint8_t meta_valid;
+    wasmos_module_meta_desc_t meta;
 } pci_match_rule_t;
 
 /* Rule: spawn a driver when an ACPI/ISA device with matching class is found. */
@@ -191,9 +201,11 @@ typedef struct {
     uint32_t registry_count;
     block_device_record_t block_registry[BLOCK_REGISTRY_CAP];
     uint32_t block_registry_count;
-    int32_t selected_storage_index;
-    spawn_caps_t selected_storage_caps;
     spawn_caps_t active_rule_spawn_caps;
+    /* The PCI function the storage-bootstrap driver was matched to. Kept because
+     * the block registry names its units by that address and the mount-info
+     * replies report it; the driver's own grants come from the rule spawn like
+     * every other driver's. */
     uint8_t selected_storage_has_record;
     pci_device_record_t selected_storage_record;
     uint8_t rules_roots_logged;

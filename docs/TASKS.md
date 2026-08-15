@@ -961,6 +961,31 @@ returns; `FS_ERR_*`/`PROC_*` ride IPC opcodes), so the migration depends on them
   object in a transfer buffer, say) and convert real call sites, or remove the
   generators and keep the packed `(domain, code)` axis alone.
 
+- [ ] [FEATURE][P2] Give the path-based spawn a descriptor form, so a driver can
+  have BOTH declared register windows and startup args. `PROC_IPC_SPAWN_PATH_CAPS_SYNC`
+  packs a single `io_port_min`/`io_port_max` pair and cannot describe more than one
+  window; only the index-based form escalates to `wasmos_spawn_caps_v2_t`. Device
+  manager therefore picks one or the other (`device_manager.c`, the rule-spawn
+  branch): a driver with `[[regions]]` spawns by module index and forgoes the
+  `pci=..:..:.. vendor=... irq=...` args, and everything else spawns by path with
+  args and a single window. Today nothing needs both -- `ata` is the only package
+  declaring regions and takes no args -- so this is a latent limit, not a live bug.
+  It becomes live the moment a driver on `/boot` (not a boot module, so
+  path-spawned only) declares more than one window.
+
+- [ ] [ENHANCEMENT][P3] Let a device-manager rule express alternatives, so one
+  driver does not need N near-identical lines. `virtio_rng` has two rules solely
+  because virtio exposes a transitional (0x1005) and a modern (0x1044) device ID
+  for the same function, and the grammar has no OR. A list value
+  (`ATTR{device}=="0x1005|0x1044"`) would collapse them.
+
+- [ ] [ENHANCEMENT][P3] Rule matching cannot express "subclass is 0xFF", because
+  `MATCH_ANY_U8` is 0xFF and reads as the wildcard. `virtio-rng` presents PCI
+  class 0x00 / subclass 0xFF and is matched on vendor/device instead, with a
+  comment in `default.rules` explaining the workaround. A separate
+  present/absent flag per field would remove the collision; the same convention
+  makes a real class or vendor of 0xFF/0xFFFF inexpressible.
+
 ## Filesystems and Storage
 - [ ] [BUG][P0] Fix `test_exec_fs_write_smoke`, the last failing test in the QEMU
   integration suite (run 31081191205, job 92550164406 — everything else in that

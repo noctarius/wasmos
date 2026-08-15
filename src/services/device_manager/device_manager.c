@@ -27,7 +27,6 @@ static device_manager_state_t g_dm = {
     .fs_endpoint = -1,
     .request_id = 1,
     .module_count = 0,
-    .selected_storage_index = -1,
     .pci_bus_index = -1,
     .fat_index = -1,
     .fs_init_index = -1,
@@ -129,6 +128,9 @@ static int proc_running(const char* name);
 static int ensure_fs_endpoint(void);
 static int query_module_meta_by_path(const char* path, uint32_t source, int32_t* out_index);
 static int pci_rule_matches_record(const pci_match_rule_t* rule, const pci_device_record_t* rec);
+static void load_pci_rule_metadata(void);
+static void resolve_declared_regions(const wasmos_module_meta_desc_t* meta,
+                                     const pci_device_record_t* rec, spawn_caps_t* caps);
 static void kick_boot_rules_read_async(void);
 static void poll_boot_rules_async(void);
 static void queue_always_spawn_rules(void);
@@ -525,6 +527,14 @@ static void poll_boot_rules_async(void) {
     dm_rules_load_always_spawn(&g_dm, text);
     dm_rules_load_block_fs(&g_dm, text);
     dm_rules_load_pci_match(&g_dm, text);
+    /* Loading rules dropped every cached module descriptor. Refresh them now if
+     * the PCI inventory is already in hand; otherwise the inventory pass does
+     * it. Reached only from initialize()'s state machine, never from an
+     * event-handler callback, so the blocking request this makes cannot become
+     * a nested receive. */
+    if (g_dm.registry_count > 0u) {
+        load_pci_rule_metadata();
+    }
     dm_rules_load_acpi_match(&g_dm, text);
     g_dm.rules_boot_active = count_loaded_active_rules();
     if (g_dm.always_spawn_rule_count > 0) {
@@ -565,6 +575,14 @@ static void load_rules_if_available(void) {
             dm_rules_load_always_spawn(&g_dm, text);
             dm_rules_load_block_fs(&g_dm, text);
             dm_rules_load_pci_match(&g_dm, text);
+            /* Loading rules dropped every cached module descriptor. Refresh them now if
+             * the PCI inventory is already in hand; otherwise the inventory pass does
+             * it. Reached only from initialize()'s state machine, never from an
+             * event-handler callback, so the blocking request this makes cannot become
+             * a nested receive. */
+            if (g_dm.registry_count > 0u) {
+                load_pci_rule_metadata();
+            }
             dm_rules_load_acpi_match(&g_dm, text);
             if (g_dm.always_spawn_rule_count > 0) {
                 console_write("[device-manager] init rules loaded always_spawn\n");
@@ -981,9 +999,6 @@ static int hw_spawn_rule_target(const char* rule_path) {
             return hw_spawn_driver_path(rule_path);
         }
     }
-    if (module_index == g_dm.selected_storage_index && g_dm.selected_storage_caps.cap_flags != 0) {
-        return hw_spawn_driver_index_caps(module_index, &g_dm.selected_storage_caps);
-    }
     return hw_spawn_driver_index(module_index);
 }
 
@@ -1128,13 +1143,34 @@ static void queue_pci_match_rule_spawns(void) {
             if (!pci_rule_matches_record(rule, rec)) {
                 continue;
             }
-            g_dm.active_rule_spawn_caps.cap_flags = 0u;
-            if (rec->io_port_base != 0u) {
-                /* Grant only the device's own resources: its I/O-port window and
-                 * IRQ line. DMA is NOT granted here — a DMA window is installed
-                 * by PM only when the driver's manifest declares the dma.buffer
-                 * capability (see pm_apply_spawn_caps). The device manager does
-                 * not hand out DMA windows per spawn path. */
+            /* Grant only the device's own resources: its I/O-port window and
+             * IRQ line. DMA is NOT granted here — a DMA window is installed by
+             * PM only when the driver's manifest declares the dma.buffer
+             * capability (see pm_apply_spawn_caps). The device manager does not
+             * hand out DMA windows per spawn path.
+             *
+             * A driver that declares its windows gets those instead of the
+             * single io_port_base-derived guess, which cannot describe a device
+             * whose registers are split across a fixed legacy range and a
+             * firmware-assigned BAR. */
+            g_dm.active_rule_spawn_caps = (spawn_caps_t){0};
+            if (rule->meta_valid && rule->meta.region_count > 0u) {
+                /* The driver named its windows, so grant those and the
+                 * capability set it declared -- not the single
+                 * io_port_base-derived guess, which cannot describe a device
+                 * whose registers are split across a fixed legacy range and a
+                 * firmware-assigned BAR.
+                 *
+                 * The irq_mask default is the (1<<14)|(1<<15) sentinel meaning
+                 * "PM resolves the line", used when the device record carries no
+                 * usable hint; a real hint overrides it. */
+                g_dm.active_rule_spawn_caps.cap_flags = rule->meta.cap_flags & 0xFFFFu;
+                g_dm.active_rule_spawn_caps.irq_mask = (uint16_t)((1u << 14) | (1u << 15));
+                if (rec->irq_hint < 16u) {
+                    g_dm.active_rule_spawn_caps.irq_mask = (uint16_t)(1u << rec->irq_hint);
+                }
+                resolve_declared_regions(&rule->meta, rec, &g_dm.active_rule_spawn_caps);
+            } else if (rec->io_port_base != 0u) {
                 g_dm.active_rule_spawn_caps.cap_flags = DEVMGR_CAP_IO_PORT | DEVMGR_CAP_IRQ;
                 g_dm.active_rule_spawn_caps.io_port_min = rec->io_port_base;
                 g_dm.active_rule_spawn_caps.io_port_max = (uint16_t)(rec->io_port_base + 0x3Fu);
@@ -1214,6 +1250,10 @@ static void queue_block_fs_rule_spawns(void) {
             continue;
         }
         str_copy(g_dm.rule_spawn_path, sizeof(g_dm.rule_spawn_path), rule->spawn_path);
+        /* Clear the grant: active_rule_spawn_caps is one shared slot, and a
+         * spawn must never inherit the capabilities resolved for a previous
+         * one. An always-spawn rule targets no device and grants nothing. */
+        g_dm.active_rule_spawn_caps = (spawn_caps_t){0};
         g_dm.rule_spawn_pending = 1;
         g_dm.rule_spawn_retries = 0;
         g_dm.active_rule_spawn_kind = RULE_SPAWN_KIND_ALWAYS;
@@ -1243,6 +1283,9 @@ static void queue_block_fs_rule_spawns(void) {
             continue;
         }
         str_copy(g_dm.rule_spawn_path, sizeof(g_dm.rule_spawn_path), rule->spawn_path);
+        /* Clear the grant: see the always-spawn path. A block-filesystem
+         * driver reaches its device over IPC and needs no hardware window. */
+        g_dm.active_rule_spawn_caps = (spawn_caps_t){0};
         g_dm.rule_spawn_pending = 1;
         g_dm.rule_spawn_retries = 0;
         g_dm.active_rule_spawn_kind = RULE_SPAWN_KIND_BLOCK_FS;
@@ -1352,12 +1395,7 @@ static void registry_add_block_from_ipc(int32_t arg0, int32_t arg1, int32_t arg2
 }
 
 static void reset_selected_storage(void) {
-    g_dm.selected_storage_index = -1;
     g_dm.selected_storage_has_record = 0;
-    g_dm.selected_storage_caps.cap_flags = 0;
-    g_dm.selected_storage_caps.io_port_min = 0;
-    g_dm.selected_storage_caps.io_port_max = 0;
-    g_dm.selected_storage_caps.irq_mask = 0;
 }
 
 /* Turn a driver's declared windows into the grant it actually gets. A static
@@ -1574,30 +1612,27 @@ static int pci_rule_matches_record(const pci_match_rule_t* rule, const pci_devic
            (rule->device_id == MATCH_ANY_U16 || rec->device_id == rule->device_id);
 }
 
-/* Identify the boot storage controller and the driver that will own it, before
- * any rule spawn runs.
+/* Fetch and cache each PCI rule's module descriptor, and identify the boot
+ * storage controller.
  *
- * The early storage path needs more than "spawn this driver": the block registry
- * names its units by the controller's PCI address, and the driver must be handed
- * its DECLARED register windows rather than the generic one-window guess the
- * ordinary rule-spawn path derives from io_port_base.  An ATA controller is the
- * case that forces this -- its task file is at fixed legacy ISA ports that BAR0
- * does not describe, and its bus-master registers are wherever firmware put
- * BAR4.
+ * Runs once when the PCI inventory is consumed, which is the only context where
+ * a blocking request to process-manager is safe: the queue walk that consumes
+ * this runs inside event-handler dispatch, where the same request would be a
+ * nested receive.
  *
- * Which device a driver binds to comes from the pci_match rules, the same source
- * that spawns it; the module contributes only what it declares about itself, its
- * storage_bootstrap flag and its region list.  The first rule/device pair whose
- * module claims the flag wins, so rule order decides among several candidates. */
-static void select_storage_bootstrap(void) {
+ * The storage controller needs identifying separately because the block registry
+ * names its units by the controller's PCI address, and only a rule/device pair
+ * whose module declares storage_bootstrap supplies it. The first such pair wins,
+ * so rule order is the tiebreak. */
+static void load_pci_rule_metadata(void) {
     reset_selected_storage();
     for (uint32_t ri = 0; ri < g_dm.pci_match_rule_count; ++ri) {
-        const pci_match_rule_t* rule = &g_dm.pci_match_rules[ri];
+        pci_match_rule_t* rule = &g_dm.pci_match_rules[ri];
         uint8_t storage_bootstrap = 0;
         spawn_caps_t caps = {0};
-        wasmos_module_meta_desc_t meta;
         int32_t module_index = -1;
 
+        rule->meta_valid = 0;
         if (!rule->active || rule->spawn_path[0] == '\0') {
             continue;
         }
@@ -1605,8 +1640,11 @@ static void select_storage_bootstrap(void) {
         if (module_index < 0) {
             continue;
         }
-        if (query_driver_module_meta(module_index, &storage_bootstrap, &caps, &meta) != 0 ||
-            !storage_bootstrap) {
+        if (query_driver_module_meta(module_index, &storage_bootstrap, &caps, &rule->meta) != 0) {
+            continue;
+        }
+        rule->meta_valid = 1;
+        if (!storage_bootstrap || g_dm.selected_storage_has_record) {
             continue;
         }
         for (uint32_t di = 0; di < g_dm.registry_count; ++di) {
@@ -1614,23 +1652,9 @@ static void select_storage_bootstrap(void) {
             if (!pci_rule_matches_record(rule, rec)) {
                 continue;
             }
-            g_dm.selected_storage_index = module_index;
-            g_dm.selected_storage_caps = caps;
             g_dm.selected_storage_record = *rec;
             g_dm.selected_storage_has_record = 1;
-            if ((g_dm.selected_storage_caps.cap_flags & DEVMGR_CAP_IRQ) != 0 &&
-                rec->irq_hint < 16u) {
-                g_dm.selected_storage_caps.irq_mask = (uint16_t)(1u << rec->irq_hint);
-            }
-            if (meta.region_count > 0u) {
-                resolve_declared_regions(&meta, rec, &g_dm.selected_storage_caps);
-            } else if (rec->io_port_base != 0u) {
-                /* No declared windows: fall back to the same single window the
-                 * ordinary rule-spawn path grants. */
-                g_dm.selected_storage_caps.io_port_min = rec->io_port_base;
-                g_dm.selected_storage_caps.io_port_max = (uint16_t)(rec->io_port_base + 0x3Fu);
-            }
-            return;
+            break;
         }
     }
 }
@@ -1655,7 +1679,7 @@ static void consume_pci_inventory(void) {
     if (g_dm_pci_scan_done) {
         console_write("[device-manager] pci-bus scan complete\n");
     }
-    select_storage_bootstrap();
+    load_pci_rule_metadata();
     queue_block_fs_rule_spawns();
 }
 
@@ -2043,12 +2067,21 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t module_coun
                     char spawn_path[104];
                     char spawn_args[DM_RULE_SPAWN_ARGS_MAX];
                     const char* args = 0;
-                    spawn_path[0] = '\0';
-                    if (g_dm.active_rule_spawn_kind == RULE_SPAWN_KIND_BLOCK_FS) {
-                        str_copy(spawn_path, sizeof(spawn_path), "/init/");
-                    } else {
-                        str_copy(spawn_path, sizeof(spawn_path), "/boot/");
+                    /* Read the package from where it actually lives. A rule
+                     * naming a boot module must spawn from initfs: /boot is the
+                     * FAT volume the storage driver itself brings up, so
+                     * spawning that driver from /boot cannot work. For a PCI
+                     * rule, meta_valid already records that its target resolved
+                     * to a boot module. */
+                    int from_initfs = (g_dm.active_rule_spawn_kind == RULE_SPAWN_KIND_BLOCK_FS);
+                    if (g_dm.active_rule_spawn_kind == RULE_SPAWN_KIND_PCI_MATCH &&
+                        g_dm.active_rule_spawn_index >= 0 &&
+                        g_dm.active_rule_spawn_index < (int32_t)g_dm.pci_match_rule_count &&
+                        g_dm.pci_match_rules[g_dm.active_rule_spawn_index].meta_valid) {
+                        from_initfs = 1;
                     }
+                    spawn_path[0] = '\0';
+                    str_copy(spawn_path, sizeof(spawn_path), from_initfs ? "/init/" : "/boot/");
                     wasmos_sys_str_append(spawn_path, sizeof(spawn_path), g_dm.rule_spawn_path);
                     if (g_dm.active_rule_spawn_kind == RULE_SPAWN_KIND_PCI_MATCH &&
                         g_dm.active_rule_spawn_device_index >= 0 &&
@@ -2064,8 +2097,27 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t module_coun
                                    spawn_args, sizeof(spawn_args)) > 0) {
                         args = spawn_args;
                     }
-                    rc = hw_spawn_driver_path_caps_args(spawn_path, &g_dm.active_rule_spawn_caps,
-                                                        args);
+                    /* A driver with declared windows must spawn by module
+                     * index: PROC_IPC_SPAWN_PATH_CAPS_SYNC packs one
+                     * io_port_min/max pair and cannot describe more than a
+                     * single window, while the index form escalates to the
+                     * descriptor variant when io_range_count > 0. The path form
+                     * carries the startup args, so it stays in use for every
+                     * driver that needs those instead.
+                     * TODO: a descriptor-carrying path spawn would remove this
+                     * either/or; a driver needing both declared windows AND
+                     * startup args cannot be expressed today. */
+                    int32_t spawn_module_index = -1;
+                    if (g_dm.active_rule_spawn_caps.io_range_count > 0u) {
+                        spawn_module_index = rule_module_index(g_dm.rule_spawn_path);
+                    }
+                    if (spawn_module_index >= 0) {
+                        rc = hw_spawn_driver_index_caps(spawn_module_index,
+                                                        &g_dm.active_rule_spawn_caps);
+                    } else {
+                        rc = hw_spawn_driver_path_caps_args(spawn_path,
+                                                            &g_dm.active_rule_spawn_caps, args);
+                    }
                 } else {
                     rc = hw_spawn_rule_target(g_dm.rule_spawn_path);
                 }

@@ -496,6 +496,11 @@ void dm_rules_load_pci_match(device_manager_state_t* state, const char* text) {
     for (uint32_t i = 0; i < PCI_MATCH_RULE_CAP; ++i) {
         state->pci_match_rules[i].active = 0;
         state->pci_match_rules[i].spawned_device_mask = 0;
+        /* The cached module descriptor belongs to the rule that occupied this
+         * slot, not to the slot. Loading a rule set rebinds every slot, so the
+         * cache must be dropped or the next rule inherits the previous rule's
+         * declared windows and capability set. */
+        state->pci_match_rules[i].meta_valid = 0;
     }
     for (int32_t i = 0;;) {
         int32_t line_start = i;

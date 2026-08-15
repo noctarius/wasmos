@@ -3017,6 +3017,15 @@ endif()
 # CMAKE_EXPORT_COMPILE_COMMANDS (set at the top of this file) gives clang-tidy
 # its compile database under the build dir.
 # ---------------------------------------------------------------------------
+# An exported CLANG_FORMAT wins over the search. The fmt/lint targets run the
+# script through `cmake -E env CLANG_FORMAT=...`, so whatever is found here
+# REPLACES the caller's environment rather than defaulting to it -- which meant
+# a pinned clang-format exported by CI was overridden by the toolchain copy
+# find_program happened to locate, and the version guard then reported the pin
+# as wrong. Searching remains the behaviour when the variable is unset.
+if (DEFINED ENV{CLANG_FORMAT} AND NOT QUALITY_CLANG_FORMAT)
+  set(QUALITY_CLANG_FORMAT "$ENV{CLANG_FORMAT}" CACHE FILEPATH "clang-format for the quality gate")
+endif ()
 find_program(QUALITY_CLANG_FORMAT clang-format HINTS ${CLANG_BIN_DIR} ${LLVM_HINTS})
 find_program(QUALITY_CLANG_TIDY clang-tidy HINTS ${CLANG_BIN_DIR} ${LLVM_HINTS})
 find_program(QUALITY_ZIG zig)

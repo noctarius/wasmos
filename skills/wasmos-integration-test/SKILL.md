@@ -22,13 +22,13 @@ The suite is partitioned by subsystem into **batteries**, one per CI runner:
 
 | Battery | What it covers |
 | --- | --- |
-| `boot` | Boot chain, init, CLI, panic decoding, device manager |
-| `sched` | Scheduler, preemption, threading, IPC wakeup, shmem grants |
-| `net` | virtio-net, net-stack, sockets, DNS, TLS |
-| `gfx` | Graphics, virtual terminals, hardware input |
-| `fs` | Filesystem reads and writes |
-| `lang` | One guest per supported source language |
-| `host` | Host tools only — boots nothing, needs no emulation |
+| `boot-and-init` | Boot chain, init, CLI, panic decoding, device manager |
+| `scheduler-and-ipc` | Scheduler, preemption, threading, IPC wakeup, shmem grants |
+| `networking` | virtio-net, net-stack, sockets, DNS, TLS |
+| `graphics-and-vt` | Graphics, virtual terminals, hardware input |
+| `filesystem` | Filesystem reads and writes |
+| `language-runtimes` | One guest per supported source language |
+| `host-tools` | Host tools only — boots nothing, needs no emulation |
 
 `tests/batteries.json` is the single source. Two consumers read it and neither
 enumerates batteries itself:
@@ -38,11 +38,11 @@ enumerates batteries itself:
 
 Add a battery there and a CI runner appears; nothing else needs editing.
 
-Batteries are **semantic, not duration-balanced** — `net` is much the largest and
-sets the critical path, deliberately. A red job named `net` says what broke
-without opening a log, and membership stays stable as tests are added, so a
-battery's history stays comparable run to run. An i-of-N shard has neither
-property: adding one test reshuffles every partition.
+Batteries are **semantic, not duration-balanced** — `networking` is much the
+largest and sets the critical path, deliberately. A red job named `networking`
+says what broke without opening a log, and membership stays stable as tests are
+added, so a battery's history stays comparable run to run. An i-of-N shard has
+neither property: adding one test reshuffles every partition.
 
 ### The rule that matters
 
@@ -130,7 +130,7 @@ python3 scripts/run_unittest_suite.py --verify-batteries
 python3 -m unittest tests.test_my_feature
 
 # the battery it belongs to
-python3 scripts/run_unittest_suite.py --battery fs
+python3 scripts/run_unittest_suite.py --battery filesystem
 
 # everything (what CI runs, split across runners)
 cmake --build build --target run-qemu-cli-test
@@ -140,7 +140,7 @@ The CMake target honours `WASMOS_TEST_BATTERY`, which is how CI runs one battery
 per runner without duplicating the ESP staging:
 
 ```sh
-WASMOS_TEST_BATTERY=fs cmake --build build --target run-qemu-cli-test
+WASMOS_TEST_BATTERY=filesystem cmake --build build --target run-qemu-cli-test
 ```
 
 **Never run two QEMU integration targets at once.** They share a mutable

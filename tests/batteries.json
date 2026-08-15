@@ -5,8 +5,8 @@
     "files from it and .github/workflows/ci.yml builds its matrix from it, so a",
     "battery is added in one place and both follow.",
     "",
-    "Batteries are semantic, not duration-balanced: 'net' is far the largest and",
-    "sets the critical path. That is deliberate. A red job named 'net' says what",
+    "Batteries are semantic, not duration-balanced: 'networking' is far the largest and",
+    "sets the critical path. That is deliberate. A red job named 'networking' says what",
     "broke without opening a log, and membership stays stable as tests are added,",
     "so a battery's history stays comparable run to run — neither of which is true",
     "of an i-of-N shard, where adding one test reshuffles every partition.",
@@ -21,7 +21,7 @@
   ],
   "batteries": [
     {
-      "name": "boot",
+      "name": "boot-and-init",
       "description": "Boot chain, init, CLI and panic decoding: the system comes up and is usable.",
       "needs_qemu": true,
       "files": [
@@ -34,7 +34,7 @@
       ]
     },
     {
-      "name": "sched",
+      "name": "scheduler-and-ipc",
       "description": "Scheduler, preemption, threading, IPC wakeup and shared-memory grants.",
       "needs_qemu": true,
       "files": [
@@ -48,7 +48,7 @@
       ]
     },
     {
-      "name": "net",
+      "name": "networking",
       "description": "Networking end to end: the virtio-net driver, net-stack, sockets, DNS and TLS.",
       "needs_qemu": true,
       "files": [
@@ -69,7 +69,7 @@
       ]
     },
     {
-      "name": "gfx",
+      "name": "graphics-and-vt",
       "description": "Graphics, virtual terminals and hardware input routing.",
       "needs_qemu": true,
       "files": [
@@ -82,13 +82,13 @@
       ]
     },
     {
-      "name": "fs",
+      "name": "filesystem",
       "description": "Filesystem reads and writes through the FAT backend.",
       "needs_qemu": true,
       "files": ["test_fs_open_smoke.py", "test_fs_write_smoke.py"]
     },
     {
-      "name": "lang",
+      "name": "language-runtimes",
       "description": "One guest per supported source language boots and runs.",
       "needs_qemu": true,
       "files": [
@@ -100,7 +100,7 @@
       ]
     },
     {
-      "name": "host",
+      "name": "host-tools",
       "description": "Host tools, exercised directly. Boots nothing and needs no emulation.",
       "needs_qemu": false,
       "files": ["test_make_wasmos_app_capabilities.py"]

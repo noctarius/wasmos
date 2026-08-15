@@ -986,6 +986,29 @@ returns; `FS_ERR_*`/`PROC_*` ride IPC opcodes), so the migration depends on them
   present/absent flag per field would remove the collision; the same convention
   makes a real class or vendor of 0xFF/0xFFFF inexpressible.
 
+- [ ] [FEATURE][P2] Add a raw socket type so an app never has to talk to a NIC
+  driver directly. ARP has no socket to sit on, which is why
+  `examples/c/net_smoke` bypasses the stack entirely and drives the driver over
+  `NETDRV_IPC_LINK_GET` / `RX_POLL` / `TX_FRAME`. It is the only app that does;
+  `net_tcp_echo`, `net_tcp_server` and `net_udp_echo` all go through sockets.
+
+  That bypass is what made the RX contention possible: an app and net-stack were
+  both consumers of one NIC. 7d65623019 fixed the driver side (each consumer now
+  has its own subscription and queue), but the layering is still wrong -- raw
+  frame access should be net-stack's privilege, and net-stack should be the
+  driver's only consumer.
+
+  The axis already exists: `net_socket_t` carries `type`
+  (`NET_SOCKET_STREAM` / `NET_SOCKET_DGRAM`) alongside `family`
+  (`NET_SOCKET_AF_INET` / `_INET6`), so this is a new value on an existing field,
+  not a new concept. Work: define the raw type (L2 frames including the ethernet
+  header, which is what an ARP test needs); have `net_stack_handle_open` accept
+  it -- it currently hard-rejects anything but `AF_INET`; fan received frames out
+  to raw-socket owners the same way the driver now fans out to subscribers; and
+  rewrite `net_smoke` on top of it. Then the driver's subscriber set is
+  defence-in-depth rather than something apps rely on, and the app keeps proving
+  the interrupt re-delivery path it was written for.
+
 ## Filesystems and Storage
 - [ ] [BUG][P0] Fix `test_exec_fs_write_smoke`, the last failing test in the QEMU
   integration suite (run 31081191205, job 92550164406 — everything else in that

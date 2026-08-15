@@ -33,4 +33,15 @@ cmake --build build-warp-smp --target run-qemu-test
 
 `run-qemu-test` is the boot-to-CLI gate. The runtime-independent SMP scheduler
 stress test is a separate target on an SMP build configured with
-`-DWASMOS_SCHED_SMP_STRESS=ON` (`run-qemu-sched-stress-test`).
+`-DWASMOS_SCHED_SMP_STRESS=ON` (`run-qemu-sched-stress-test`):
+
+```sh
+cmake -S . -B build-sched-stress -DWASMOS_DOTCONFIG=configs/warp_smp_defconfig \
+      -DWASMOS_SCHED_SMP_STRESS=ON
+cmake --build build-sched-stress --target run-qemu-sched-stress-test
+```
+
+The option is a plain CMake option rather than a Kconfig symbol, so it can also
+be flipped on an existing tree with a reconfigure; only the kernel rebuilds. Run
+the target without it and the gate refuses (exit 2) instead of booting, because
+a kernel that cannot emit the marker is indistinguishable from a stalled ring.

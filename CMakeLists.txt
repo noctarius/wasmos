@@ -1795,10 +1795,11 @@ if (OVMF_VARS)
     COMMENT "Running QEMU halt test"
     VERBATIM
   )
-  # Standalone SMP scheduler stress gate. Only meaningful when the kernel was
-  # configured with -DWASMOS_SCHED_SMP_STRESS=ON (otherwise the marker is never
-  # emitted and this target times out). Runtime-independent: works on any SMP
-  # build and does not require a bootable userspace.
+  # Standalone SMP scheduler stress gate. Requires a kernel configured with
+  # -DWASMOS_SCHED_SMP_STRESS=ON; without it the marker is never emitted, and
+  # the script refuses up front (exit 2) rather than reporting the timeout as a
+  # stalled ring. Runtime-independent: works on any SMP build and does not
+  # require a bootable userspace.
   add_custom_target(run-qemu-sched-stress-test
     ${WASMOS_ESP_POPULATE_CMDS}
     COMMAND ${CMAKE_SOURCE_DIR}/scripts/qemu_sched_stress_test.py
@@ -2042,6 +2043,7 @@ add_dependencies(make_initfs c_examples drivers services wamos_script_initfs_dat
 
 set(_wasmos_qemu_targets
   run-qemu run-qemu-ui run-qemu-test run-qemu-cli-test run-qemu-debug
+  run-qemu-sched-stress-test
   run-qemu-ring3-check run-qemu-ring3-threading-check run-qemu-ring3-fault-storm-check
 )
 if (TARGET run-qemu-ui-test)

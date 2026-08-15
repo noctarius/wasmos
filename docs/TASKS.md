@@ -1423,14 +1423,16 @@ Source: `architecture/25-diagnostics-status.md`,
   deadline. `timer_ticks()` is frozen and nothing calls `sched_timeout_check`,
   so `WASMOS_TIMEOUT` arrives via the spurious-wake path instead.
 
-- [ ] [BUG][P0] `run-qemu-sched-stress-test` fails on main: "SMP scheduler stress
-  test did not pass (stalled ring or never started)". Confirmed pre-existing by
-  reverting an unrelated scheduler change and re-running -- the failure and its
-  message are identical either way, so it is not attributable to recent work.
-  This is a second red integration gate alongside `test_exec_fs_write_smoke`, and
-  because it is the only target that exercises cross-CPU work stealing under
-  load, every change to that path currently lands without a working end-to-end
-  check (`src/kernel/kernel_sched_smp_stress_runtime.c`).
+- [ ] [TEST][P2] Require cross-CPU hops in `run-qemu-sched-stress-test`, or state
+  that it does not. The gate exists to exercise cross-CPU work stealing, but its
+  pass condition is only "every worker finished with no orphans": the summary
+  line reports `cpus=` (the popcount of the union of the workers' `cpu_mask`,
+  `smp_stress_report`) and nothing checks it. A `wasm3_smp` run passes with
+  `cpus=1` -- all 2048 hops on one CPU, so that run exercised no cross-CPU path
+  at all -- while `warp_smp` reports `cpus=3`. Asserting `cpus > 1` is the
+  obvious fix and is deliberately not done blind: thread placement is scheduler-
+  and timing-dependent, so measure across configs and repeated boots before
+  turning a green gate red (`src/kernel/kernel_sched_smp_stress_runtime.c:138`).
 
 - [ ] [BUG][P1] `test_virtio_net_notify_e2e` (the `notify rx=` / RX-frame-notify
   case) fails intermittently, roughly 1 run in 5: the guest stays alive and

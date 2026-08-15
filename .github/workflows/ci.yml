@@ -149,6 +149,17 @@ jobs:
       - name: Build + boot test (${{ matrix.config }})
         run: cmake --build "build-${{ matrix.config }}" --target run-qemu-test
 
+      # The only gate that exercises cross-CPU work stealing under load, so it
+      # runs on the SMP configs alone. WASMOS_SCHED_SMP_STRESS is a plain CMake
+      # option (not a Kconfig symbol), so flipping it on the tree that just
+      # booted rebuilds the kernel and nothing else; the boot test above has
+      # already run against the kernel without it.
+      - name: SMP scheduler stress test (${{ matrix.config }})
+        if: endsWith(matrix.config, '_smp')
+        run: |
+          cmake -S . -B "build-${{ matrix.config }}" -DWASMOS_SCHED_SMP_STRESS=ON
+          cmake --build "build-${{ matrix.config }}" --target run-qemu-sched-stress-test
+
   # The battery list comes from tests/batteries.json so the matrix and the test
   # runner share one source. Adding a battery there adds a runner here; nothing
   # in this file enumerates them.

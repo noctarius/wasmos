@@ -162,20 +162,34 @@ static uint32_t g_tx_buf_top;
 static uint16_t g_tx_desc_buf[VIRTIO_NET_MAX_QUEUE];
 static uint32_t g_tx_completed; /* completed transmits reaped from the used ring */
 
-/* Received-frame delivery. When a consumer has subscribed (via RX_POLL), the IRQ
- * handler drains RX frames into this ring and posts a single RX_FRAME_NOTIFY;
- * the consumer then drains them with RX_POLL. Before any subscriber exists (e.g.
- * the boot ARP self-probe reply) frames are logged once and dropped. */
-#define VIRTIO_NET_RXQ_DEPTH 16u
+/* Received-frame delivery. Each consumer that has subscribed (via RX_POLL) gets
+ * its OWN queue, and a drained frame is copied into every one of them; RX_POLL
+ * then serves the calling consumer from its own queue and posts
+ * RX_FRAME_NOTIFY to each subscriber. Before any subscriber exists (e.g. the
+ * boot ARP self-probe reply) frames are logged once and dropped.
+ *
+ * Per-consumer queues rather than one shared ring, because consumers here are
+ * independent: net-stack polls on a timer as well as on notification, and a
+ * single ring let whichever consumer asked first take a frame another was
+ * waiting for -- and a single subscriber slot let the same poll silently
+ * reassign the notification channel out from under a second consumer, which is
+ * why an app subscribing alongside net-stack never received a push. Depth is
+ * halved so two queues cost what one used to. */
+#define VIRTIO_NET_RXQ_DEPTH 8u
+#define VIRTIO_NET_RX_SUBS_MAX 2u
 typedef struct {
     uint16_t len;
     uint8_t data[VIRTIO_NET_MAX_FRAME];
 } net_rx_slot_t;
-static net_rx_slot_t g_rx_queue[VIRTIO_NET_RXQ_DEPTH];
-static uint32_t g_rx_q_head;
-static uint32_t g_rx_q_tail;
-static uint32_t g_rx_q_count;
-static int32_t g_rx_sub_endpoint = -1; /* subscriber for RX_FRAME_NOTIFY, -1 = none */
+typedef struct {
+    int32_t endpoint; /* -1 when the slot is free */
+    uint32_t head;
+    uint32_t tail;
+    uint32_t count;
+    net_rx_slot_t slots[VIRTIO_NET_RXQ_DEPTH];
+} net_rx_sub_t;
+static net_rx_sub_t g_rx_subs[VIRTIO_NET_RX_SUBS_MAX];
+static uint8_t g_rx_subs_initialised;
 static int32_t g_link_sub_endpoint = -1;
 
 static uint16_t io_read16(uint16_t port) {
@@ -411,36 +425,89 @@ static int rx_arm(void) {
     return (int)VIRTIO_NET_RX_BUF_COUNT;
 }
 
-/* Push a received frame into the delivery ring (drops + counts if full). */
-static void rx_queue_push(const uint8_t* frame, uint16_t len) {
-    if (g_rx_q_count >= VIRTIO_NET_RXQ_DEPTH) {
-        g_stats.rx_drops++;
+static void rx_subs_init(void) {
+    if (g_rx_subs_initialised) {
         return;
     }
+    for (uint32_t i = 0; i < VIRTIO_NET_RX_SUBS_MAX; ++i) {
+        g_rx_subs[i].endpoint = -1;
+        g_rx_subs[i].head = 0;
+        g_rx_subs[i].tail = 0;
+        g_rx_subs[i].count = 0;
+    }
+    g_rx_subs_initialised = 1u;
+}
+
+/* The subscriber record for `endpoint`, claiming a free slot on first use.
+ * Returns 0 when every slot is taken by a different consumer; the caller still
+ * gets its RX_POLL answered, it just receives no pushes. */
+static net_rx_sub_t* rx_sub_for(int32_t endpoint) {
+    rx_subs_init();
+    for (uint32_t i = 0; i < VIRTIO_NET_RX_SUBS_MAX; ++i) {
+        if (g_rx_subs[i].endpoint == endpoint) {
+            return &g_rx_subs[i];
+        }
+    }
+    for (uint32_t i = 0; i < VIRTIO_NET_RX_SUBS_MAX; ++i) {
+        if (g_rx_subs[i].endpoint < 0) {
+            g_rx_subs[i].endpoint = endpoint;
+            g_rx_subs[i].head = 0;
+            g_rx_subs[i].tail = 0;
+            g_rx_subs[i].count = 0;
+            return &g_rx_subs[i];
+        }
+    }
+    return 0;
+}
+
+static int rx_subs_any(void) {
+    rx_subs_init();
+    for (uint32_t i = 0; i < VIRTIO_NET_RX_SUBS_MAX; ++i) {
+        if (g_rx_subs[i].endpoint >= 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* Copy a received frame into every subscriber's queue. A full queue drops for
+ * that consumer alone, so a stalled reader cannot blind the others. */
+static void rx_queue_push(const uint8_t* frame, uint16_t len) {
+    rx_subs_init();
     if (len > VIRTIO_NET_MAX_FRAME) {
         len = VIRTIO_NET_MAX_FRAME;
     }
-    net_rx_slot_t* slot = &g_rx_queue[g_rx_q_tail];
-    slot->len = len;
-    __builtin_memcpy(slot->data, frame, len);
-    g_rx_q_tail = (g_rx_q_tail + 1u) % VIRTIO_NET_RXQ_DEPTH;
-    g_rx_q_count++;
+    for (uint32_t i = 0; i < VIRTIO_NET_RX_SUBS_MAX; ++i) {
+        net_rx_sub_t* sub = &g_rx_subs[i];
+        if (sub->endpoint < 0) {
+            continue;
+        }
+        if (sub->count >= VIRTIO_NET_RXQ_DEPTH) {
+            g_stats.rx_drops++;
+            continue;
+        }
+        net_rx_slot_t* slot = &sub->slots[sub->tail];
+        slot->len = len;
+        __builtin_memcpy(slot->data, frame, len);
+        sub->tail = (sub->tail + 1u) % VIRTIO_NET_RXQ_DEPTH;
+        sub->count++;
+    }
 }
 
-/* Pop the oldest queued frame into out (up to max bytes). Returns its length, or
- * 0 if the queue is empty. */
-static uint16_t rx_queue_pop(uint8_t* out, uint32_t max) {
-    if (g_rx_q_count == 0u) {
+/* Pop the oldest frame queued for one subscriber into out (up to max bytes).
+ * Returns its length, or 0 if that subscriber has nothing queued. */
+static uint16_t rx_queue_pop(net_rx_sub_t* sub, uint8_t* out, uint32_t max) {
+    if (!sub || sub->count == 0u) {
         return 0;
     }
-    net_rx_slot_t* slot = &g_rx_queue[g_rx_q_head];
+    net_rx_slot_t* slot = &sub->slots[sub->head];
     uint16_t len = slot->len;
     if (len > max) {
         len = (uint16_t)max;
     }
     __builtin_memcpy(out, slot->data, len);
-    g_rx_q_head = (g_rx_q_head + 1u) % VIRTIO_NET_RXQ_DEPTH;
-    g_rx_q_count--;
+    sub->head = (sub->head + 1u) % VIRTIO_NET_RXQ_DEPTH;
+    sub->count--;
     return len;
 }
 
@@ -620,7 +687,7 @@ static int net_drain_rx(void) {
     int enqueued = 0;
     int n;
     while ((n = rx_poll_local(frame, sizeof frame)) > 0) {
-        if (g_rx_sub_endpoint >= 0) {
+        if (rx_subs_any()) {
             rx_queue_push(frame, (uint16_t)n);
             enqueued++;
         } else if (!g_irq_rx_logged) {
@@ -637,9 +704,14 @@ static int net_drain_rx(void) {
 /* Tell the RX subscriber, if there is one, how many frames are queued for it.
  * Fire-and-forget: one notify per drained batch, not per frame. */
 static void net_notify_subscriber(void) {
-    if (g_rx_sub_endpoint >= 0) {
-        (void)wasmos_ipc_send(g_rx_sub_endpoint, g_endpoint, NETDRV_IPC_RX_FRAME_NOTIFY, 0,
-                              (int32_t)g_rx_q_count, 0, 0, 0);
+    rx_subs_init();
+    for (uint32_t i = 0; i < VIRTIO_NET_RX_SUBS_MAX; ++i) {
+        const net_rx_sub_t* sub = &g_rx_subs[i];
+        if (sub->endpoint < 0 || sub->count == 0u) {
+            continue;
+        }
+        (void)wasmos_ipc_send(sub->endpoint, g_endpoint, NETDRV_IPC_RX_FRAME_NOTIFY, 0,
+                              (int32_t)sub->count, 0, 0, 0);
     }
 }
 
@@ -909,11 +981,11 @@ static void handle_rx_poll(int32_t source, int32_t request_id, int32_t buffer_id
         send_error(source, request_id, WASMOS_ERR_NET_NOT_READY);
         return;
     }
-    g_rx_sub_endpoint = source; /* subscribe / refresh */
-    (void)net_drain_rx();       /* pull path: also collect anything in the vring */
+    net_rx_sub_t* sub = rx_sub_for(source); /* subscribe on first poll */
+    (void)net_drain_rx();                   /* pull path: also collect anything in the vring */
 
     uint8_t frame[VIRTIO_NET_MAX_FRAME];
-    uint16_t len = rx_queue_pop(frame, sizeof frame);
+    uint16_t len = rx_queue_pop(sub, frame, sizeof frame);
     if (len > 0u) {
         if (wasmos_sys_buffer_write(buffer_id, frame, (int32_t)len, 0) != 0) {
             send_error(source, request_id, WASMOS_ERR_NET_IO_ERROR);
@@ -921,7 +993,7 @@ static void handle_rx_poll(int32_t source, int32_t request_id, int32_t buffer_id
         }
     }
     (void)wasmos_ipc_send(source, g_endpoint, NETDRV_IPC_RESP, request_id, (int32_t)len,
-                          (int32_t)g_rx_q_count, 0, 0);
+                          (int32_t)(sub ? sub->count : 0u), 0, 0);
 }
 
 /* NETDRV_IPC_TX_FRAME: transmit the frame in the caller's borrowed buffer.

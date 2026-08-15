@@ -1279,9 +1279,6 @@ Other graphics/VT/UI:
 - [ ] [BUG][P1] Destroy an open popup's compositor window at teardown.
   `ui_menu_item_destroy_data` releases only the shmem, leaking the window and
   its shared buffer (`src/libui/include/wasmos/libui_menu_item.h:557` `FIXME`).
-- [ ] [BUG][P1] Bound the realloc copy in the libui Zig shim by the OLD block size. A grow
-  reads past the end of the old block, and past the arena for a block at its
-  tail (`src/libui/zig/libui_shim.c:67` `FIXME`).
 - [ ] [BUG][P3] Add the '9' glyph to `drawDigit3x5`; the table holds 0-8 and the guard
   rejects 9 (`src/libui/assemblyscript/libui.ts`).
 - [ ] [CLEANUP][P3] Remove the no-op self-assignment `d->list.capacity = d->list.capacity`
@@ -1311,9 +1308,6 @@ Other graphics/VT/UI:
 - [ ] [BUG][P1] Reopen a menu popup when its entries change without changing the
   child count: `ui_menu_item_sync_popup` compares only the height, so replacing
   entries leaves a stale popup (`src/libui/include/wasmos/libui_menu_item.h`).
-- [ ] [BUG][P1] Overflow-check `calloc`'s `n * size` in the libui Zig shim; a
-  wrapped product yields an undersized block instead of NULL
-  (`src/libui/zig/libui_shim.c`).
 - [ ] [ENHANCEMENT][P2] Split `ui_component_list_append`'s return: it yields a row
   index for LIST_VIEW/TREE_VIEW/DROPDOWN but a component id for MENU_ITEM, two
   incompatible non-negative domains a caller cannot tell apart

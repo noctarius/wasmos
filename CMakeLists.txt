@@ -2757,6 +2757,23 @@ add_custom_command(TARGET run-kernel-unit-tests POST_BUILD
           ${LIBC_DIR}/src/math.c
           -o ${BUILD_DIR}/test_libc_math
   COMMAND ${BUILD_DIR}/test_libc_math
+  # The libui Zig shim's arena allocator. Compiled for wasm32 in the real build
+  # and linked only into the Zig calculator, but it is plain freestanding C over
+  # a static buffer, so the host runs it unchanged. -fno-builtin keeps clang from
+  # recognising malloc/calloc/realloc and reasoning about them instead of
+  # calling these. WASMOS_LIBUI_SHIM_TEST_SEAMS exposes an arena reset so each
+  # case starts clean and the suite can be shuffled; the guest build never
+  # defines it, and the arena still never reclaims there.
+  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
+          -fno-builtin
+          -DWASMOS_LIBUI_SHIM_TEST_SEAMS=1
+          -I${LIBC_DIR}/include
+          -I${CMAKE_SOURCE_DIR}/src/libui/include
+          -I${DRIVER_WASM_DIR}/include
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_libui_shim_alloc.c
+          ${CMAKE_SOURCE_DIR}/src/libui/zig/libui_shim.c
+          -o ${BUILD_DIR}/test_libui_shim_alloc
+  COMMAND ${BUILD_DIR}/test_libui_shim_alloc
   # memcmp's argument guards and comparison sign. -fno-builtin for the same
   # reason as the math suite above: memcmp is a clang builtin and a folded call
   # never reaches string.c.
@@ -3176,6 +3193,7 @@ set(WASMOS_UNIT_LIBC_TESTS
     ${CMAKE_SOURCE_DIR}/tests/unit/test_libc_stdlib.c
     ${CMAKE_SOURCE_DIR}/tests/unit/test_libc_string.c
     ${CMAKE_SOURCE_DIR}/tests/unit/test_libui_key_decode.c
+    ${CMAKE_SOURCE_DIR}/tests/unit/test_libui_shim_alloc.c
     ${CMAKE_SOURCE_DIR}/tests/unit/test_native_ipc_future.c
     ${CMAKE_SOURCE_DIR}/tests/unit/test_wasm_coroutine.c)
 

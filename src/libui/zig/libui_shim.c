@@ -39,8 +39,55 @@
 /* Total bytes available to the app through malloc for its entire run. */
 #define ARENA_SIZE 12288
 
-static uint8_t g_arena[ARENA_SIZE];
+/* Per-block header holding the payload size, so realloc can copy exactly what
+ * the old block held instead of guessing. Eight bytes rather than four keeps
+ * every payload 8-byte aligned, which is the alignment malloc promises. */
+#define ARENA_HEADER_BYTES 8u
+
+/* Aligned so the header can be read and written as a uint32_t: every block
+ * starts at a multiple of 8 because both the header and the rounded payload
+ * are. */
+static uint8_t g_arena[ARENA_SIZE] __attribute__((aligned(8)));
 static uint32_t g_arena_pos;
+
+/* True when `payload` is a block this arena handed out: inside the arena, past
+ * room for a header, and 8-aligned as malloc returns. A pointer that fails this
+ * did not come from here and its header must not be read. */
+static int arena_owns(const void* payload) {
+    const uint8_t* p = (const uint8_t*)payload;
+    size_t offset;
+
+    if (!p || p < g_arena + ARENA_HEADER_BYTES || p >= g_arena + ARENA_SIZE) {
+        return 0;
+    }
+    offset = (size_t)(p - g_arena);
+    return (offset % ARENA_HEADER_BYTES) == 0;
+}
+
+#ifdef WASMOS_LIBUI_SHIM_TEST_SEAMS
+/* Test seam: return the arena to its initial state.
+ *
+ * Not compiled into a guest. The arena deliberately never reclaims at runtime,
+ * but a test suite that cannot reset it has to share one finite budget across
+ * its cases and therefore run them in a fixed order -- which stops the suite
+ * from proving that each case passes on its own. */
+void libui_shim_arena_reset(void) {
+    g_arena_pos = 0;
+}
+#endif
+
+/* Payload size recorded for a block this arena owns. */
+static uint32_t arena_block_size(const void* payload) {
+    const uint8_t* header = (const uint8_t*)payload - ARENA_HEADER_BYTES;
+    uint32_t size;
+    /* Byte-wise so this does not depend on the arena's alignment holding after
+     * a future change to ARENA_HEADER_BYTES. */
+    size = (uint32_t)header[0];
+    size |= (uint32_t)header[1] << 8;
+    size |= (uint32_t)header[2] << 16;
+    size |= (uint32_t)header[3] << 24;
+    return size;
+}
 
 /* Allocate `size` bytes, 8-byte aligned and zero-filled.  Returns NULL for a
  * zero size and when the arena cannot satisfy the request; the arena is never
@@ -54,10 +101,25 @@ void* malloc(size_t size) {
     if (!size)
         return 0;
     size = (size + 7u) & ~7u; /* 8-byte align */
-    if (g_arena_pos + (uint32_t)size > ARENA_SIZE)
+    /* Checked against the remaining space rather than by adding to g_arena_pos,
+     * so a size near SIZE_MAX cannot wrap the comparison into a false pass. The
+     * header room is subtracted in its own step: folding it into the same
+     * expression underflows once the arena is full and turns the test into a
+     * comparison against ~4 GiB, which passes. */
+    if (size > ARENA_SIZE)
         return 0;
-    void* ptr = &g_arena[g_arena_pos];
-    g_arena_pos += (uint32_t)size;
+    if (g_arena_pos + ARENA_HEADER_BYTES > ARENA_SIZE)
+        return 0;
+    if ((uint32_t)size > ARENA_SIZE - g_arena_pos - ARENA_HEADER_BYTES)
+        return 0;
+    uint8_t* header = &g_arena[g_arena_pos];
+    g_arena_pos += ARENA_HEADER_BYTES + (uint32_t)size;
+    header[0] = (uint8_t)(size & 0xFFu);
+    header[1] = (uint8_t)((size >> 8) & 0xFFu);
+    header[2] = (uint8_t)((size >> 16) & 0xFFu);
+    header[3] = (uint8_t)((size >> 24) & 0xFFu);
+    header[4] = header[5] = header[6] = header[7] = 0;
+    void* ptr = header + ARENA_HEADER_BYTES;
     /* calloc-style zero-init so libui structs start clean */
     uint8_t* p = (uint8_t*)ptr;
     for (size_t i = 0; i < size; i++)
@@ -73,10 +135,13 @@ void free(void* ptr) {
     (void)ptr; /* arena: no-op */
 }
 
-/* Allocate n * size zeroed bytes.  Weaker than the real libc: the product is
- * computed without an overflow check, so a pair of large arguments wraps and
- * yields a block smaller than requested rather than NULL. */
+/* Allocate n * size zeroed bytes, or NULL when that product overflows -- a
+ * wrapped product would otherwise hand back a block smaller than the caller
+ * asked for, which it then writes past. */
 void* calloc(size_t n, size_t size) {
+    if (n && size > (size_t)-1 / n) {
+        return 0;
+    }
     return malloc(n * size); /* malloc already zeroes */
 }
 
@@ -84,18 +149,37 @@ void* calloc(size_t n, size_t size) {
  * NULL when the arena is exhausted, leaving the old block untouched; a NULL
  * `old` behaves as a plain malloc.  The old block is never reclaimed.
  *
- * Weaker than the real libc: block sizes are not tracked, so the copy length is
- * `size` rather than the smaller of the two — see the FIXME below. */
+ * The copy is bounded by the OLD block's recorded size, so a grow no longer
+ * reads past it -- previously `size` bytes were copied unconditionally, which
+ * for a block at the arena's tail read past g_arena entirely. Bytes beyond the
+ * old contents keep malloc's zero fill.
+ *
+ * Weaker than the real libc in one remaining way: `old` must be a pointer this
+ * arena returned. There is no way to know a foreign block's length, and reading
+ * a header that was never written is exactly the fault being fixed, so such a
+ * pointer yields NULL rather than a guess. */
 void* realloc(void* old, size_t size) {
+    if (!old) {
+        return malloc(size);
+    }
+    if (!arena_owns(old)) {
+        return 0;
+    }
+    uint32_t old_size = arena_block_size(old);
     void* n = malloc(size);
-    if (!n || !old)
-        return n;
+    if (!n)
+        return 0;
+    size_t copy = size < (size_t)old_size ? size : (size_t)old_size;
+    /* Final clamp to what physically remains in the arena from `old`. The
+     * ownership test cannot tell a real block start from any other 8-aligned
+     * address inside the arena, so a recorded size read from the wrong place
+     * must still not be able to drive a read past g_arena. */
+    size_t available = (size_t)((g_arena + ARENA_SIZE) - (const uint8_t*)old);
+    if (copy > available)
+        copy = available;
     uint8_t* dst = (uint8_t*)n;
     const uint8_t* src = (const uint8_t*)old;
-    /* Block sizes are not tracked, so `size` bytes are copied unconditionally.
-     * FIXME: a grow reads past the end of the old block; the bytes past it are
-     * arena memory (or, for a block at the arena's tail, past g_arena). */
-    for (size_t i = 0; i < size; i++)
+    for (size_t i = 0; i < copy; i++)
         dst[i] = src[i];
     return n;
 }

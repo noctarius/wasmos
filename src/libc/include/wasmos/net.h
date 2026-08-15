@@ -373,6 +373,132 @@ static inline int32_t wasmos_net__connect_flags(wasmos_net_tcp_t* s, int32_t sta
     return 0;
 }
 
+/* Read the link-layer address of the interface a packet socket transmits on.
+ * Writes six bytes in wire order to `out`. Returns 0, or -1 if no interface is
+ * up yet or the stack answers with an error.
+ *
+ * A packet socket needs this: the caller builds the ethernet header itself, and
+ * a frame sent with a made-up source address gets its reply delivered to a
+ * machine that does not exist. */
+static inline int32_t wasmos_net_if_hwaddr(int32_t stack_ep, int32_t reply_ep, uint8_t* out,
+                                           int32_t request_id) {
+    wasmos_ipc_message_t reply;
+    if (stack_ep < 0 || reply_ep < 0 || out == 0) {
+        return -1;
+    }
+    if (wasmos_ipc_send(stack_ep, reply_ep, NET_IPC_IF_HWADDR, request_id, 0, 0, 0, 0) != 0 ||
+        wasmos_net__recv_reply(reply_ep, request_id, &reply) != 0 || reply.type != NET_IPC_RESP) {
+        return -1;
+    }
+    out[0] = (uint8_t)(reply.arg0 & 0xFFu);
+    out[1] = (uint8_t)((reply.arg0 >> 8) & 0xFFu);
+    out[2] = (uint8_t)((reply.arg0 >> 16) & 0xFFu);
+    out[3] = (uint8_t)((reply.arg0 >> 24) & 0xFFu);
+    out[4] = (uint8_t)(reply.arg1 & 0xFFu);
+    out[5] = (uint8_t)((reply.arg1 >> 8) & 0xFFu);
+    return 0;
+}
+
+/* Open an AF_PACKET / NET_SOCKET_RAW socket: whole ethernet frames in both
+ * directions, with the caller owning the ethernet header.
+ *
+ * This is the only socket that can carry a protocol below IP -- ARP is the
+ * reason it exists -- so an app never has to talk to a NIC driver directly to
+ * reach the link layer. There is no address to bind and no peer to connect to,
+ * so the socket is usable as soon as this returns; net-stack copies every
+ * received frame to each packet socket, so several may listen at once without
+ * taking frames from each other or from the stack.
+ *
+ * Frames are RECORDS, not a byte stream: use wasmos_net_packet_send /
+ * wasmos_net_packet_recv rather than the tcp send/recv helpers, which would
+ * split or merge frames.
+ *
+ * `ring_capacity` is the per-direction region size and MUST be a power of two.
+ * Returns 0 on success, -1 on any failure (the socket is cleaned up). */
+static inline int32_t wasmos_net_packet_open(wasmos_net_tcp_t* s, int32_t stack_ep,
+                                             int32_t reply_ep, uint32_t ring_capacity,
+                                             int32_t request_id_base) {
+    wasmos_ipc_message_t reply;
+    net_socket_open_descriptor_v1_t desc;
+    uint32_t region;
+    int32_t desc_grant;
+    int32_t rid;
+    if (s == 0 || stack_ep < 0 || reply_ep < 0 || !wasmos_ringbuf_is_pow2(ring_capacity)) {
+        return -1;
+    }
+    wasmos_net__reset(s, stack_ep, reply_ep, request_id_base);
+    region = wasmos_ringbuf_bytes_for(ring_capacity);
+    s->desc_bid = wasmos_xfer_buffer_acquire((int32_t)sizeof(desc));
+    if (s->desc_bid < 0 || wasmos_net__setup_rings(s, stack_ep, ring_capacity) != 0) {
+        wasmos_net_tcp_close(s);
+        return -1;
+    }
+    desc_grant = wasmos_xfer_buffer_borrow(stack_ep, s->desc_bid, WASMOS_BUFFER_GRANT_READ);
+    if (desc_grant < 0) {
+        wasmos_net_tcp_close(s);
+        return -1;
+    }
+    wasmos_net__fill_desc(&desc, s->tx_bid, s->tx_grant, s->rx_bid, s->rx_grant, region, 0u, 0);
+    desc.family = NET_SOCKET_AF_PACKET;
+    desc.type = NET_SOCKET_RAW;
+    rid = s->request_id++;
+    if (wasmos_xfer_buffer_write(s->desc_bid, addr_cast(int32_t, &desc), (int32_t)sizeof(desc),
+                                 0) != 0 ||
+        wasmos_ipc_send(stack_ep, reply_ep, NET_IPC_SOCKET_OPEN, rid, s->desc_bid, desc_grant,
+                        (int32_t)sizeof(desc), 0) != 0 ||
+        wasmos_net__recv_reply(reply_ep, rid, &reply) != 0 || reply.type != NET_IPC_RESP ||
+        (int32_t)reply.arg0 < 0) {
+        wasmos_net_tcp_close(s);
+        return -1;
+    }
+    s->socket_id = (int32_t)reply.arg0;
+    (void)wasmos_xfer_buffer_release(s->desc_bid);
+    s->desc_bid = -1;
+    return 0;
+}
+
+/* Transmit one complete ethernet frame, destination MAC first. Returns `len` on
+ * success or -1 if the frame does not fit the TX ring, which is a caller error
+ * rather than backpressure: a frame is written whole or not at all. */
+static inline int32_t wasmos_net_packet_send(wasmos_net_tcp_t* s, const void* frame, int32_t len) {
+    if (s == 0 || s->socket_id < 0 || len < 14) {
+        return -1;
+    }
+    if (wasmos_ringbuf_write_record(&s->tx, frame, (uint32_t)len) < 0) {
+        return -1;
+    }
+    (void)wasmos_ipc_send(s->stack_ep, s->reply_ep, NET_IPC_TX_NOTIFY, s->request_id++,
+                          (uint32_t)s->socket_id, 0, 0, 0);
+    return len;
+}
+
+/* Receive one complete ethernet frame into `buf`. Returns its length, or -1 if
+ * no frame arrives before `rounds` doorbells have been waited on. Each frame is
+ * delivered whole; a frame larger than `cap` is skipped rather than truncated,
+ * so the caller never sees a partial frame. */
+static inline int32_t wasmos_net_packet_recv(wasmos_net_tcp_t* s, void* buf, int32_t cap,
+                                             int32_t rounds) {
+    wasmos_ipc_message_t msg;
+    if (s == 0 || s->socket_id < 0 || cap <= 0) {
+        return -1;
+    }
+    for (int32_t i = 0; i < rounds; ++i) {
+        uint32_t len = 0u;
+        int32_t got = wasmos_ringbuf_read_record(&s->rx, buf, (uint32_t)cap, &len);
+        if (got >= 0) {
+            return got;
+        }
+        if (got == -2) {
+            (void)wasmos_ringbuf_skip(&s->rx, len + 4u);
+            continue;
+        }
+        if (wasmos_net__recv_on(s->reply_ep, &msg) != 0) {
+            return -1;
+        }
+    }
+    return -1;
+}
+
 /* Open a TCP socket and connect to `addr_no`:`port` (addr_no is a network-order
  * IPv4 word, octet a in the low byte — the form wasmos_net_resolve yields).
  * `ring_capacity` is the per-direction data-region size and MUST be a power of

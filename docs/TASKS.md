@@ -986,29 +986,23 @@ returns; `FS_ERR_*`/`PROC_*` ride IPC opcodes), so the migration depends on them
   present/absent flag per field would remove the collision; the same convention
   makes a real class or vendor of 0xFF/0xFFFF inexpressible.
 
-- [ ] [FEATURE][P2] Add a raw socket type so an app never has to talk to a NIC
-  driver directly. ARP has no socket to sit on, which is why
-  `examples/c/net_smoke` bypasses the stack entirely and drives the driver over
-  `NETDRV_IPC_LINK_GET` / `RX_POLL` / `TX_FRAME`. It is the only app that does;
-  `net_tcp_echo`, `net_tcp_server` and `net_udp_echo` all go through sockets.
+- [ ] [FEATURE][P2] Generate the socket value constants instead of hand-writing
+  them in a C-only header. `abi/` has IDLs for opcodes, errors and hostcalls, and
+  emits all three into five languages; there is no IDL for plain value constants,
+  so `NET_SOCKET_AF_INET` / `_AF_PACKET` / `_STREAM` / `_DGRAM` / `_RAW`, the
+  `NET_SOCKET_OPEN_FLAG_*` bits and `NET_PACKET_FRAME_MAX` live as a hand-written
+  enum in `src/drivers/include/wasmos_driver_abi.h`.
 
-  That bypass is what made the RX contention possible: an app and net-stack were
-  both consumers of one NIC. 7d65623019 fixed the driver side (each consumer now
-  has its own subscription and queue), but the layering is still wrong -- raw
-  frame access should be net-stack's privilege, and net-stack should be the
-  driver's only consumer.
+  Only C can include that header. A Rust, Go, Zig or AssemblyScript app has to
+  hard-code `2` and `1` to open a socket -- exactly the ambiguity the packed error
+  codes and the opcode table were generated to remove. The opcode side of the same
+  API is already generated, so an app can name `NET_IPC_SOCKET_OPEN` but not the
+  family it must pass to it.
 
-  The axis already exists: `net_socket_t` carries `type`
-  (`NET_SOCKET_STREAM` / `NET_SOCKET_DGRAM`) alongside `family`
-  (`NET_SOCKET_AF_INET` / `_INET6`), so this is a new value on an existing field,
-  not a new concept. Work: define the raw type (L2 frames including the ethernet
-  header, which is what an ARP test needs); have `net_stack_handle_open` accept
-  it -- it currently hard-rejects anything but `AF_INET`; fan received frames out
-  to raw-socket owners the same way the driver now fans out to subscribers; and
-  rewrite `net_smoke` on top of it. Then the driver's subscriber set is
-  defence-in-depth rather than something apps rely on, and the app keeps proving
-  the interrupt re-delivery path it was written for.
-
+  Work: an `abi/constants.yaml` (or a `constants:` section in `opcodes.yaml`,
+  which already has the per-language emitters) covering at least the socket
+  family/type/flag values and the frame ceiling, then delete the hand-written
+  enum. Verify by opening a socket from a non-C example.
 ## Filesystems and Storage
 - [ ] [BUG][P0] Fix `test_exec_fs_write_smoke`, the last failing test in the QEMU
   integration suite (run 31081191205, job 92550164406 — everything else in that

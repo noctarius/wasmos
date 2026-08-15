@@ -223,7 +223,8 @@ static wasmos_sys_native_event_loop_t g_netdrv_loop;
 /* Largest Ethernet frame moved between the driver and the stack, in bytes: a
  * 1500-byte MTU plus headers, rounded up to a power of two.  Also sizes the
  * per-frame xfer buffers. */
-#define NET_STACK_FRAME_BYTES 2048u
+/* The packet-socket ABI fixes this; see NET_PACKET_FRAME_MAX. */
+#define NET_STACK_FRAME_BYTES NET_PACKET_FRAME_MAX
 /* Largest UDP payload accepted or delivered in one datagram ring record:
  * 1500 - 20 (IPv4 header) - 8 (UDP header). */
 #define NET_STACK_UDP_DATAGRAM_BYTES 1472u
@@ -284,6 +285,8 @@ static uint32_t g_ca_len = 0u;     /* bytes + 1 (includes trailing NUL) */
 static uint8_t g_ca_missing_logged = 0u;
 
 static err_t net_stack_linkoutput(struct netif* netif, struct pbuf* p);
+static err_t net_stack_tx_frame_raw(net_interface_slot_t* interface, const uint8_t* frame,
+                                    uint32_t len);
 static void net_stack_start_rx_poll(net_interface_slot_t* interface, uint8_t immediate);
 static void net_stack_begin_registration(void);
 static void net_stack_try_bind_virtio(void);
@@ -427,6 +430,53 @@ static void net_stack_udp_recv(void* arg, struct udp_pcb* pcb, struct pbuf* p,
         return;
     }
     net_stack_notify_rx(socket);
+}
+
+/* Transmit whole frames a packet socket wrote into its TX ring.
+ *
+ * The frame goes to the driver exactly as the client wrote it -- the client owns
+ * the ethernet header, which is the point of the socket -- so this bypasses lwIP
+ * entirely rather than going through netif output. It uses the first interface
+ * that is up; a packet socket carries no interface selector yet.
+ *
+ * A record larger than a frame is dropped rather than truncated, so a bad client
+ * write cannot wedge the ring or put a malformed frame on the wire. */
+static void net_stack_drain_packet_tx(net_socket_t* socket) {
+    uint8_t frame[NET_STACK_FRAME_BYTES];
+    net_interface_slot_t* interface = NULL;
+    uint32_t len;
+    int32_t got;
+
+    if (socket == NULL || socket->family != NET_SOCKET_AF_PACKET ||
+        socket->type != NET_SOCKET_RAW) {
+        return;
+    }
+    for (uint32_t i = 0u; i < NET_STACK_MAX_INTERFACES; ++i) {
+        if (g_interfaces[i].in_use && g_interfaces[i].endpoint != 0u) {
+            interface = &g_interfaces[i];
+            break;
+        }
+    }
+    if (interface == NULL) {
+        return;
+    }
+    for (;;) {
+        got = wasmos_ringbuf_read_record(&socket->tx_ring, frame, sizeof(frame), &len);
+        if (got == -1) {
+            return;
+        }
+        if (got == -2) {
+            (void)wasmos_ringbuf_skip(&socket->tx_ring, len + 4u);
+            wasmos_ringbuf_set_flags(&socket->tx_ring, WASMOS_RINGBUF_FLAG_OVERFLOW_DROPPED);
+            continue;
+        }
+        if (got < 14) {
+            /* Shorter than an ethernet header: not a frame. */
+            wasmos_ringbuf_set_flags(&socket->tx_ring, WASMOS_RINGBUF_FLAG_OVERFLOW_DROPPED);
+            continue;
+        }
+        (void)net_stack_tx_frame_raw(interface, frame, (uint32_t)got);
+    }
 }
 
 static void net_stack_drain_udp_tx(net_socket_t* socket) {
@@ -722,14 +772,19 @@ static err_t net_stack_netif_init(struct netif* netif) {
     return ERR_OK;
 }
 
-static err_t net_stack_linkoutput(struct netif* netif, struct pbuf* p) {
-    net_interface_slot_t* interface = net_stack_interface_from_netif(netif);
+/* Hand one complete frame to the interface's driver, claiming a free TX slot to
+ * stage it in. Returns ERR_MEM when every slot is still awaiting its completion,
+ * which is the caller's signal to retry rather than drop.
+ *
+ * Shared by the lwIP link output and the packet-socket drain: both have a whole
+ * ethernet frame and differ only in where the bytes came from. */
+static err_t net_stack_tx_frame_raw(net_interface_slot_t* interface, const uint8_t* frame,
+                                    uint32_t len) {
     nd_ipc_message_t request;
-    uint16_t copied = 0u;
     uint32_t request_id;
     net_tx_slot_t* slot = NULL;
-    struct pbuf* q;
-    if (p == NULL || p->tot_len > NET_STACK_FRAME_BYTES || interface == NULL ||
+
+    if (interface == NULL || frame == NULL || len == 0u || len > NET_STACK_FRAME_BYTES ||
         interface->endpoint == 0u) {
         return ERR_BUF;
     }
@@ -739,22 +794,18 @@ static err_t net_stack_linkoutput(struct netif* netif, struct pbuf* p) {
             break;
         }
     }
-    if (slot == NULL)
+    if (slot == NULL) {
         return ERR_MEM;
-    for (q = p; q != NULL; q = q->next) {
-        uint8_t* src = (uint8_t*)q->payload;
-        uint16_t i;
-        for (i = 0u; i < q->len; ++i) {
-            slot->buffer[copied + i] = src[i];
-        }
-        copied = (uint16_t)(copied + q->len);
+    }
+    for (uint32_t i = 0u; i < len; ++i) {
+        slot->buffer[i] = frame[i];
     }
     request_id = NET_STACK_TX_REQUEST_BASE + (uint32_t)(slot - interface->tx_slots);
     request.type = NETDRV_IPC_TX_FRAME;
     request.source = g_netdrv_reply_endpoint;
     request.destination = interface->endpoint;
     request.request_id = request_id;
-    request.arg0 = copied;
+    request.arg0 = len;
     request.arg1 = slot->buffer_id;
     request.arg2 = 0u;
     request.arg3 = 0u;
@@ -763,6 +814,46 @@ static err_t net_stack_linkoutput(struct netif* netif, struct pbuf* p) {
     }
     slot->pending = 1u;
     return ERR_OK;
+}
+
+static err_t net_stack_linkoutput(struct netif* netif, struct pbuf* p) {
+    net_interface_slot_t* interface = net_stack_interface_from_netif(netif);
+    uint8_t frame[NET_STACK_FRAME_BYTES];
+    uint16_t copied = 0u;
+    struct pbuf* q;
+    if (p == NULL || p->tot_len > NET_STACK_FRAME_BYTES || interface == NULL) {
+        return ERR_BUF;
+    }
+    for (q = p; q != NULL; q = q->next) {
+        uint8_t* src = (uint8_t*)q->payload;
+        uint16_t i;
+        for (i = 0u; i < q->len; ++i) {
+            frame[copied + i] = src[i];
+        }
+        copied = (uint16_t)(copied + q->len);
+    }
+    return net_stack_tx_frame_raw(interface, frame, copied);
+}
+
+/* Copy one received frame into every open packet socket's RX ring and ring its
+ * doorbell. A ring with no room drops for that socket alone and is flagged, so a
+ * client that stopped reading loses frames without affecting anyone else. */
+static void net_stack_deliver_packet_sockets(const uint8_t* frame, uint32_t len) {
+    if (frame == NULL || len == 0u) {
+        return;
+    }
+    for (uint32_t i = 0u; i < NET_SOCKET_MAX; ++i) {
+        net_socket_t* socket = &g_socket_pool.sockets[i];
+        if (socket->owner_endpoint == 0u || socket->family != NET_SOCKET_AF_PACKET ||
+            socket->type != NET_SOCKET_RAW) {
+            continue;
+        }
+        if (wasmos_ringbuf_write_record(&socket->rx_ring, frame, len) < 0) {
+            wasmos_ringbuf_set_flags(&socket->rx_ring, WASMOS_RINGBUF_FLAG_OVERFLOW_DROPPED);
+            continue;
+        }
+        net_stack_notify_rx(socket);
+    }
 }
 
 static void net_stack_deliver_rx(net_interface_slot_t* interface, uint32_t len) {
@@ -783,6 +874,12 @@ static void net_stack_deliver_rx(net_interface_slot_t* interface, uint32_t len) 
         static const char msg[] = "[net-stack] arp rx\n";
         g_api->console_write(msg, (int)(sizeof(msg) - 1));
     }
+    /* Packet sockets see the frame before the stack consumes it, and they see a
+     * COPY: ethernet_input takes ownership of the pbuf and a protocol that
+     * handles the frame (ARP above all) frees it, so reading it afterwards would
+     * be a use-after-free. Delivery is per socket, so one client that stops
+     * reading cannot stall another or the stack itself. */
+    net_stack_deliver_packet_sockets(interface->rx_buffer, len);
     (void)ethernet_input(p, &interface->netif);
 }
 
@@ -1715,7 +1812,22 @@ static struct altcp_tls_config* net_stack_ensure_tls_config(void) {
 }
 
 static int32_t net_stack_pcb_open(net_socket_t* socket, uint32_t open_flags) {
-    if (socket == NULL || socket->family != NET_SOCKET_AF_INET) {
+    if (socket == NULL) {
+        return WASMOS_ERR_NET_INVALID;
+    }
+    /* A packet socket carries whole ethernet frames and has no lwIP protocol
+     * control block: nothing above the link layer owns it. It is usable the
+     * moment it is open -- there is no address to bind and no peer to connect
+     * to -- so it goes straight to BOUND rather than waiting for either. */
+    if (socket->family == NET_SOCKET_AF_PACKET) {
+        if (socket->type != NET_SOCKET_RAW) {
+            return WASMOS_ERR_NET_INVALID;
+        }
+        socket->pcb = NULL;
+        socket->state = NET_SOCKET_BOUND;
+        return WASMOS_ERR_NONE;
+    }
+    if (socket->family != NET_SOCKET_AF_INET) {
         return WASMOS_ERR_NET_INVALID;
     }
     if (socket->type == NET_SOCKET_DGRAM) {
@@ -1864,8 +1976,9 @@ static void net_stack_handle_open(const nd_ipc_message_t* request) {
         net_stack_reply_error(request, WASMOS_ERR_NET_DENIED);
         return;
     }
-    if (descriptor->family != NET_SOCKET_AF_INET || descriptor->tx_bytes == 0u ||
-        descriptor->rx_bytes == 0u) {
+    if ((descriptor->family != NET_SOCKET_AF_INET &&
+         !(descriptor->family == NET_SOCKET_AF_PACKET && descriptor->type == NET_SOCKET_RAW)) ||
+        descriptor->tx_bytes == 0u || descriptor->rx_bytes == 0u) {
         (void)g_api->xfer_buffer_unmap_borrowed(request->arg1);
         net_stack_reply_error(request, WASMOS_ERR_NET_INVALID);
         return;
@@ -2509,6 +2622,30 @@ static void net_stack_dispatch(const nd_ipc_message_t* request) {
     case NET_IPC_STACK_CREATE:
     case NET_IPC_STACK_DESTROY:
     case NET_IPC_STACK_SELECT:
+    case NET_IPC_IF_HWADDR: {
+        /* The client owns the ethernet header on a packet socket, so it needs a
+         * real source address to put in it. Two words rather than a descriptor
+         * because six bytes fit exactly and the answer never grows. */
+        net_interface_slot_t* interface = NULL;
+        uint32_t lo = 0u;
+        uint32_t hi = 0u;
+        for (uint32_t i = 0u; i < NET_STACK_MAX_INTERFACES; ++i) {
+            if (g_interfaces[i].in_use && g_interfaces[i].endpoint != 0u) {
+                interface = &g_interfaces[i];
+                break;
+            }
+        }
+        if (interface == NULL) {
+            net_stack_reply_error(request, WASMOS_ERR_NET_NOT_READY);
+            break;
+        }
+        lo = (uint32_t)interface->netif.hwaddr[0] | ((uint32_t)interface->netif.hwaddr[1] << 8) |
+             ((uint32_t)interface->netif.hwaddr[2] << 16) |
+             ((uint32_t)interface->netif.hwaddr[3] << 24);
+        hi = (uint32_t)interface->netif.hwaddr[4] | ((uint32_t)interface->netif.hwaddr[5] << 8);
+        net_stack_send_reply(request, NET_IPC_RESP, (int32_t)lo, hi, 0u, 0u);
+        break;
+    }
     case NET_IPC_TX_NOTIFY: {
         net_socket_t* socket;
         if (request->arg0 >= NET_SOCKET_MAX ||
@@ -2519,7 +2656,9 @@ static void net_stack_dispatch(const nd_ipc_message_t* request) {
         socket = &g_socket_pool.sockets[request->arg0];
         /* A TX doorbell just advances the data plane; there is no reply. The ring
          * type selects the transport drain. */
-        if (socket->type == NET_SOCKET_DGRAM) {
+        if (socket->family == NET_SOCKET_AF_PACKET) {
+            net_stack_drain_packet_tx(socket);
+        } else if (socket->type == NET_SOCKET_DGRAM) {
             net_stack_drain_udp_tx(socket);
         } else if (socket->type == NET_SOCKET_STREAM) {
             net_stack_drain_tcp_tx(socket);

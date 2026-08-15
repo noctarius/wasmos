@@ -22,8 +22,14 @@ int32_t net_socket_open(net_socket_pool_t* pool, uint32_t owner_endpoint,
         return WASMOS_ERR_NET_INVALID;
     if (descriptor->version != NET_SOCKET_OPEN_DESCRIPTOR_VERSION ||
         descriptor->bytes != sizeof(*descriptor) ||
-        (descriptor->family != NET_SOCKET_AF_INET && descriptor->family != NET_SOCKET_AF_INET6) ||
-        (descriptor->type != NET_SOCKET_STREAM && descriptor->type != NET_SOCKET_DGRAM) ||
+        (descriptor->family != NET_SOCKET_AF_INET && descriptor->family != NET_SOCKET_AF_INET6 &&
+         descriptor->family != NET_SOCKET_AF_PACKET) ||
+        (descriptor->type != NET_SOCKET_STREAM && descriptor->type != NET_SOCKET_DGRAM &&
+         descriptor->type != NET_SOCKET_RAW) ||
+        /* The two axes are not independent in practice: RAW carries an ethernet
+         * header, which only the link-layer family can address, and AF_PACKET
+         * has no protocol above it to run a stream or datagram over. */
+        ((descriptor->family == NET_SOCKET_AF_PACKET) != (descriptor->type == NET_SOCKET_RAW)) ||
         descriptor->tx_buffer_id == 0u || descriptor->tx_borrow_id == 0u ||
         descriptor->rx_buffer_id == 0u || descriptor->rx_borrow_id == 0u || tx_base == 0 ||
         rx_base == 0) {

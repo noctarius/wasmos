@@ -1,92 +1,76 @@
-/* net_smoke - minimal virtio-net consumer that validates RX_FRAME_NOTIFY.
+/* net_smoke - packet-socket smoke client that validates the RX push path.
  *
- * Looks up the virtio.net driver, fetches the NIC MAC, subscribes to RX
- * notifications, transmits an ARP request for the SLIRP gateway (10.0.2.2), and
- * waits for the reply to be pushed back via NETDRV_IPC_RX_FRAME_NOTIFY (rather
- * than polling). Proves the driver -> consumer receive path end to end. */
+ * Opens an AF_PACKET / NET_SOCKET_RAW socket on net-stack, transmits an ARP
+ * request for the SLIRP gateway (10.0.2.2), and waits for the reply to be pushed
+ * back over the socket's RX ring rather than polled for.
+ *
+ * ARP is the reason a packet socket exists: it lives below IP, so no stream or
+ * datagram socket can carry it. Everything under this app -- net-stack's frame
+ * fan-out, the driver's per-consumer RX queues, and the device interrupt that
+ * starts it -- has to work for the reply to arrive, and the app reaches none of
+ * it directly: it never talks to the NIC driver, so it cannot compete with
+ * net-stack for the device's frames. */
 
 #include <stdint.h>
 
 #include "stdio.h"
 #include "wasmos/api.h"
 #include "wasmos/ipc.h"
+#include "wasmos/net.h"
 #include "wasmos/startup.h"
 #include "wasmos/libsys.h"
 #include "wasmos_driver_abi.h"
 
-/* Block on `ep` until a message arrives, then fill `m` and return 0. Returns -1
- * after the retry budget is spent, which only happens when select_one keeps
- * returning an error; a driver that simply never answers leaves this parked
- * inside the first select_one, since that call has no timeout. */
-static int recv_on(int32_t ep, wasmos_ipc_message_t* m) {
-    for (int spin = 0; spin < 200000; ++spin) {
-        if (wasmos_ipc_select_one(ep) == 1) {
-            wasmos_ipc_message_read_last(m);
-            return 0;
-        }
-        (void)wasmos_sched_yield();
-    }
-    return -1;
-}
+/* Per-direction ring capacity. A power of two, and large enough for a burst of
+ * full-size frames so a slow reader does not drop the reply it is waiting for. */
+#define NET_SMOKE_RING_CAP 4096u
+
+/* How many RX doorbells to wait through before giving up. Broadcast traffic
+ * shares the socket, so the ARP reply is not necessarily the first frame in. */
+#define NET_SMOKE_RX_ROUNDS 16
 
 int main(int argc, char** argv) {
     (void)argc;
     (void)argv;
 
-    int32_t proc_ep = wasmos_startup_arg(0);
+    int32_t proc_ep = wasmos_startup_proc_endpoint();
     int32_t reply_ep = wasmos_ipc_create_endpoint();
     if (proc_ep <= 0 || reply_ep < 0) {
         puts("[net-smoke] setup failed");
         return 1;
     }
 
-    int32_t req = 1;
-    int32_t net_ep = -1;
-    for (int spin = 0; spin < 2048 && net_ep < 0; ++spin) {
-        net_ep = wasmos_svc_lookup(proc_ep, reply_ep, "virtio.net", req++);
-        if (net_ep < 0) {
+    int32_t rid = 1;
+    int32_t stack_ep = -1;
+    for (int spin = 0; spin < 2048 && stack_ep < 0; ++spin) {
+        stack_ep = wasmos_svc_lookup(proc_ep, reply_ep, "net.stack", rid++);
+        if (stack_ep < 0) {
             (void)wasmos_sched_yield();
         }
     }
-    if (net_ep < 0) {
-        puts("[net-smoke] no virtio.net");
+    if (stack_ep < 0) {
+        puts("[net-smoke] no net.stack");
         return 1;
     }
-    puts("[net-smoke] found virtio.net");
+    puts("[net-smoke] found net.stack");
 
-    /* Owner-push: own one buffer and grant the driver R|W over it. The buffer_id
-     * travels in the arg the driver reads (arg0 for link/rx, arg1 for tx).
-     * FIXME(owner-push): the net wire protocol carrying buffer_id/grant is a
-     * documented follow-up; this matches virtio_net's current placeholder args.
-     * The grant is left to process-exit teardown for this short-lived example. */
-    int32_t bid = wasmos_xfer_buffer_acquire(2048);
-    if (bid < 0 || wasmos_xfer_buffer_borrow(
-                       net_ep, bid, WASMOS_BUFFER_GRANT_READ | WASMOS_BUFFER_GRANT_WRITE) < 0) {
-        puts("[net-smoke] buffer setup failed");
+    wasmos_net_tcp_t sock;
+    if (wasmos_net_packet_open(&sock, stack_ep, reply_ep, NET_SMOKE_RING_CAP, rid) != 0) {
+        puts("[net-smoke] packet socket open failed");
         return 1;
     }
+    puts("[net-smoke] packet socket open");
 
-    wasmos_ipc_message_t m;
-
-    /* Fetch the NIC MAC (the driver writes 6 bytes into the xfer buffer). SLIRP
-     * unicasts its ARP reply to the sender MAC, so it must be the real NIC MAC
-     * or the device would filter the reply out. */
+    /* The interface's own MAC, so the gateway's reply is unicast back to this
+     * machine rather than dropped as being for someone else. */
     uint8_t mac[6];
-    if (wasmos_ipc_send(net_ep, reply_ep, NETDRV_IPC_LINK_GET, req++, bid, 0, 0, 0) != 0 ||
-        recv_on(reply_ep, &m) != 0 || m.type != NETDRV_IPC_RESP ||
-        wasmos_xfer_buffer_read(bid, addr_cast(int32_t, mac), 6, 0) != 0) {
-        puts("[net-smoke] link_get failed");
+    if (wasmos_net_if_hwaddr(stack_ep, reply_ep, mac, rid++) != 0) {
+        puts("[net-smoke] hwaddr failed");
         return 1;
     }
 
-    /* Subscribe (and drain any already-queued frames). */
-    if (wasmos_ipc_send(net_ep, reply_ep, NETDRV_IPC_RX_POLL, req++, 0, 0, 0, 0) != 0 ||
-        recv_on(reply_ep, &m) != 0) {
-        puts("[net-smoke] subscribe failed");
-        return 1;
-    }
-
-    /* Build an ARP request for 10.0.2.2 with the NIC MAC as sender. */
+    /* ARP request for 10.0.2.2, sent from 10.0.2.15 — QEMU's SLIRP gateway and
+     * the address it hands out. */
     static const uint8_t sender_ip[4] = {10, 0, 2, 15};
     static const uint8_t target_ip[4] = {10, 0, 2, 2};
     uint8_t arp[42];
@@ -95,67 +79,54 @@ int main(int argc, char** argv) {
     for (i = 0; i < 6; ++i)
         arp[p++] = 0xFFu; /* dst broadcast */
     for (i = 0; i < 6; ++i)
-        arp[p++] = mac[i]; /* src NIC MAC */
+        arp[p++] = mac[i]; /* src: this interface */
     arp[p++] = 0x08u;
     arp[p++] = 0x06u; /* ethertype ARP */
     arp[p++] = 0x00u;
-    arp[p++] = 0x01u; /* htype */
+    arp[p++] = 0x01u; /* hardware type ethernet */
     arp[p++] = 0x08u;
-    arp[p++] = 0x00u; /* ptype */
-    arp[p++] = 0x06u;
-    arp[p++] = 0x04u; /* hlen, plen */
+    arp[p++] = 0x00u; /* protocol type IPv4 */
+    arp[p++] = 6u;    /* hardware address length */
+    arp[p++] = 4u;    /* protocol address length */
     arp[p++] = 0x00u;
-    arp[p++] = 0x01u; /* oper=request */
+    arp[p++] = 0x01u; /* opcode: request */
     for (i = 0; i < 6; ++i)
-        arp[p++] = mac[i]; /* sender MAC */
+        arp[p++] = mac[i];
     for (i = 0; i < 4; ++i)
-        arp[p++] = sender_ip[i]; /* sender IP */
+        arp[p++] = sender_ip[i];
     for (i = 0; i < 6; ++i)
-        arp[p++] = 0x00u; /* target MAC */
+        arp[p++] = 0x00u; /* target hardware address: unknown */
     for (i = 0; i < 4; ++i)
-        arp[p++] = target_ip[i]; /* target IP */
+        arp[p++] = target_ip[i];
 
-    if (wasmos_xfer_buffer_write(bid, addr_cast(int32_t, arp), (int32_t)p, 0) != 0 ||
-        wasmos_ipc_send(net_ep, reply_ep, NETDRV_IPC_TX_FRAME, req++, (int32_t)p, bid, 0, 0) != 0 ||
-        recv_on(reply_ep, &m) != 0 || m.type != NETDRV_IPC_RESP) {
-        puts("[net-smoke] tx failed");
+    if (wasmos_net_packet_send(&sock, arp, (int32_t)p) != (int32_t)p) {
+        puts("[net-smoke] arp send failed");
+        wasmos_net_tcp_close(&sock);
         return 1;
     }
     puts("[net-smoke] arp sent");
 
-    /* Block for the driver's RX_FRAME_NOTIFY push, then pull the frame with
-     * RX_POLL. This is a pure push path — no polling — and depends on the device
-     * interrupt re-firing: an MSI-X vector when virtio-net bound one, otherwise
-     * the shared PCI INTx line (level/active-low + directed IOAPIC EOI).
-     * The driver's own boot ARP is interrupt #1; this reply is interrupt #2, so
-     * receiving the notify proves re-delivery works. */
-    for (int rounds = 0; rounds < 8; ++rounds) {
-        if (recv_on(reply_ep, &m) != 0) {
-            break; /* no notify arrived — re-delivery broken */
-        }
-        if (m.type != NETDRV_IPC_RX_FRAME_NOTIFY) {
+    /* Wait for the reply to be PUSHED to the socket. Frames other than the reply
+     * may arrive first, so keep reading until an ARP frame shows up or the
+     * doorbell budget runs out. */
+    for (int round = 0; round < NET_SMOKE_RX_ROUNDS; ++round) {
+        uint8_t frame[NET_PACKET_FRAME_MAX];
+        int32_t len = wasmos_net_packet_recv(&sock, frame, (int32_t)sizeof frame, 2);
+        if (len < 14) {
             continue;
-        }
-        if (wasmos_ipc_send(net_ep, reply_ep, NETDRV_IPC_RX_POLL, req++, bid, 0, 0, 0) != 0 ||
-            recv_on(reply_ep, &m) != 0 || m.type != NETDRV_IPC_RESP) {
-            break;
-        }
-        int32_t len = m.arg0;
-        if (len <= 0) {
-            continue;
-        }
-        uint8_t frame[128];
-        int32_t rd = len < (int32_t)sizeof frame ? len : (int32_t)sizeof frame;
-        if (wasmos_xfer_buffer_read(bid, addr_cast(int32_t, frame), rd, 0) != 0) {
-            break;
         }
         unsigned et = ((unsigned)frame[12] << 8) | (unsigned)frame[13];
+        if (et != 0x0806u) {
+            continue;
+        }
         (void)printf("[net-smoke] notify rx=%d ethertype=0x%04X "
                      "from=%02X:%02X:%02X:%02X:%02X:%02X\n",
                      (int)len, et, frame[6], frame[7], frame[8], frame[9], frame[10], frame[11]);
+        wasmos_net_tcp_close(&sock);
         return 0;
     }
 
     puts("[net-smoke] no notify");
+    wasmos_net_tcp_close(&sock);
     return 1;
 }

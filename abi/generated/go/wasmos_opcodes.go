@@ -334,6 +334,14 @@ const NET_IPC_POLL int32 = 0xB06
 const NET_IPC_IFADDR_ADD int32 = 0xB07
 const NET_IPC_IFADDR_DEL int32 = 0xB08
 const NET_IPC_IFADDR_LIST int32 = 0xB09
+// The link-layer address of the interface a packet socket transmits on.
+// arg0=interface index (0 selects the first interface that is up).
+// On success: NET_IPC_RESP, arg0 = the low four address bytes, arg1 = the
+// high two, both in wire order with byte 0 in the low byte.
+// A packet socket needs this because the client owns the ethernet header
+// and must put a real source address in it, or a reply is addressed to a
+// machine that does not exist.
+const NET_IPC_IF_HWADDR int32 = 0xB17
 const NET_IPC_STACK_CREATE int32 = 0xB0A
 const NET_IPC_STACK_DESTROY int32 = 0xB0B
 const NET_IPC_STACK_SELECT int32 = 0xB0C

@@ -186,6 +186,10 @@ wasmos_add_wasm_c_app_target(net_smoke
   EXPORT      wasmos_main
   NO_BUILTIN
   STARTUP_SHIM
+  # Room for the packet socket's rings overlaid into linear memory (scanned in
+  # above the 2 MiB floor, clear of the heap) via wasmos_xfer_buffer_map.
+  INITIAL_MEMORY 4194304
+  MAX_MEMORY     4194304
   BUILD_COMMENT "Building wasm net-smoke module"
   PACK_COMMENT  "Packing wasm net-smoke as WASMOS-APP"
 )

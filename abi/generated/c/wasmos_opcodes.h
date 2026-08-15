@@ -400,6 +400,15 @@ enum {
     NET_IPC_IFADDR_ADD = 0xB07,
     NET_IPC_IFADDR_DEL = 0xB08,
     NET_IPC_IFADDR_LIST = 0xB09,
+    /* The link-layer address of the interface a packet socket transmits on.
+     * arg0=interface index (0 selects the first interface that is up).
+     * On success: NET_IPC_RESP, arg0 = the low four address bytes, arg1 = the
+     * high two, both in wire order with byte 0 in the low byte.
+     * A packet socket needs this because the client owns the ethernet header
+     * and must put a real source address in it, or a reply is addressed to a
+     * machine that does not exist.
+     */
+    NET_IPC_IF_HWADDR = 0xB17,
     NET_IPC_STACK_CREATE = 0xB0A,
     NET_IPC_STACK_DESTROY = 0xB0B,
     NET_IPC_STACK_SELECT = 0xB0C,
@@ -766,6 +775,7 @@ static inline const char* wasmos_opcode_name(uint32_t subsystem_id, uint32_t typ
         case 0xB07: return "NET_IPC_IFADDR_ADD";
         case 0xB08: return "NET_IPC_IFADDR_DEL";
         case 0xB09: return "NET_IPC_IFADDR_LIST";
+        case 0xB17: return "NET_IPC_IF_HWADDR";
         case 0xB0A: return "NET_IPC_STACK_CREATE";
         case 0xB0B: return "NET_IPC_STACK_DESTROY";
         case 0xB0C: return "NET_IPC_STACK_SELECT";

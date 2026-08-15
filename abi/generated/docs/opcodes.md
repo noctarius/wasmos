@@ -243,6 +243,7 @@ endpoint-scoped and may repeat across subsystems.
 | `NET_IPC_IFADDR_ADD` | 0xB07 | req |  |
 | `NET_IPC_IFADDR_DEL` | 0xB08 | req |  |
 | `NET_IPC_IFADDR_LIST` | 0xB09 | req |  |
+| `NET_IPC_IF_HWADDR` | 0xB17 | req | The link-layer address of the interface a packet socket transmits on. arg0=interface index (0 selects the first interface that is up). On success: NET_IPC_RESP, arg0 = the low four address bytes, arg1 = the high two, both in wire order with byte 0 in the low byte. A packet socket needs this because the client owns the ethernet header and must put a real source address in it, or a reply is addressed to a machine that does not exist.  |
 | `NET_IPC_STACK_CREATE` | 0xB0A | req |  |
 | `NET_IPC_STACK_DESTROY` | 0xB0B | req |  |
 | `NET_IPC_STACK_SELECT` | 0xB0C | req |  |

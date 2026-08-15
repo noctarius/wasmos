@@ -366,12 +366,30 @@ enum {
  * arg2=descriptor bytes, arg3=0. The descriptor transfers persistent grants
  * for the client-owned TX/RX SPSC rings, while TX/RX_NOTIFY are
  * empty-to-non-empty doorbells. */
+/* Address family and socket type are independent axes, as in BSD sockets.
+ *
+ * AF_PACKET is the link layer: its payload is a complete ethernet frame,
+ * destination MAC first, and it is the only family that can carry a protocol
+ * living below IP -- ARP being the reason it exists here. It pairs only with
+ * NET_SOCKET_RAW; AF_INET with RAW would be raw IP, which cannot express an
+ * ethernet header. The value matches Linux's AF_PACKET so the number is not a
+ * fresh invention a reader has to look up. */
 enum {
     NET_SOCKET_AF_INET = 2,
     NET_SOCKET_AF_INET6 = 10,
+    NET_SOCKET_AF_PACKET = 17,
     NET_SOCKET_STREAM = 1,
-    NET_SOCKET_DGRAM = 2
+    NET_SOCKET_DGRAM = 2,
+    NET_SOCKET_RAW = 3
 };
+
+/* Largest ethernet frame carried over a packet socket, in bytes. Both sides of
+ * the socket size their staging buffers from this, so it is part of the ABI
+ * rather than a private choice: net-stack refuses a longer frame in either
+ * direction, and a client reading into anything smaller would see frames
+ * skipped. Generous next to the 1514-byte classic MTU so a jumbo-ish frame is
+ * not silently truncated. */
+#define NET_PACKET_FRAME_MAX 2048u
 
 #define NET_SOCKET_OPEN_DESCRIPTOR_VERSION 1u
 
@@ -411,7 +429,8 @@ typedef struct __attribute__((packed)) {
 /* What a client hands the network stack to open a socket: the whole data plane,
  * described once. `bytes` is the descriptor's own length, which is what lets the
  * stack accept a shorter (older) descriptor; `family` is NET_SOCKET_AF_*, `type`
- * is NET_SOCKET_STREAM or _DGRAM, and `flags` carries NET_SOCKET_OPEN_FLAG_*.
+ * is NET_SOCKET_STREAM, _DGRAM or _RAW, and `flags` carries
+ * NET_SOCKET_OPEN_FLAG_*.
  *
  * The two ring triples are the point of the descriptor. The CLIENT owns both
  * rings and lends them to the stack, so the ids here transfer PERSISTENT grants

@@ -412,8 +412,12 @@ int thread_transit(thread_t* thread, thread_state_t from, thread_state_t to) {
         return 0;
     }
     uint32_t expected = (uint32_t)from;
-    return __atomic_compare_exchange_n((uint32_t*)&thread->state, &expected, (uint32_t)to, 0,
-                                       __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)
+    return __atomic_compare_exchange_n((uint32_t*)&thread->state,
+                                       &expected,
+                                       (uint32_t)to,
+                                       0,
+                                       __ATOMIC_ACQ_REL,
+                                       __ATOMIC_ACQUIRE)
                ? 1
                : 0;
 }

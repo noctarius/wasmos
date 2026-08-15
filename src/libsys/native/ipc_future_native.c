@@ -53,9 +53,17 @@ wasmos_future_t* wasmos_sys_native_ipc_future_send(wasmos_sys_native_event_loop_
         operation->future.state != WASMOS_FUTURE_PENDING) {
         return 0;
     }
-    status = wasmos_sys_native_intent_send(loop, destination_endpoint, source_endpoint, msg_type,
-                                           arg0, arg1, arg2, arg3, native_ipc_future_reply,
-                                           operation, &request_id);
+    status = wasmos_sys_native_intent_send(loop,
+                                           destination_endpoint,
+                                           source_endpoint,
+                                           msg_type,
+                                           arg0,
+                                           arg1,
+                                           arg2,
+                                           arg3,
+                                           native_ipc_future_reply,
+                                           operation,
+                                           &request_id);
     if (status != 0) {
         (void)wasmos_promise_reject(&operation->promise, native_ipc_future_status(status));
         return &operation->future;

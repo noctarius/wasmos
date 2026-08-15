@@ -458,7 +458,7 @@ process_run_result_t kernel_init_entry(process_t* process, void* arg) {
      * process.c) — a spin that keeps the run queue non-empty, so the idle
      * thread's sti;hlt never runs and the host vCPU sits at full load.  The
      * timeout keeps a low-rate heartbeat. */
-    (void)ipc_endpoint_wait_for(process->context_id, state->reply_endpoint,
-                                KERNEL_INIT_IDLE_WAIT_MS);
+    (void)ipc_endpoint_wait_for(
+        process->context_id, state->reply_endpoint, KERNEL_INIT_IDLE_WAIT_MS);
     return PROCESS_RUN_YIELDED;
 }

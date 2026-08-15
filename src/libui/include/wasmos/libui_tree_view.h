@@ -36,15 +36,23 @@ static inline void ui_render_tree_view(ui_context_t* ctx, const ui_component_t* 
     (void)offset_y;
     ui_tree_view_data_t* d = (ui_tree_view_data_t*)c->component_data;
     const int32_t scrollbar_w = (d && d->scroll_max > 0) ? 10 : 0;
-    const ui_rect_t inner = {draw_bounds.x + c->padding_px, draw_bounds.y + c->padding_px,
+    const ui_rect_t inner = {draw_bounds.x + c->padding_px,
+                             draw_bounds.y + c->padding_px,
                              draw_bounds.w - (c->padding_px * 2),
                              draw_bounds.h - (c->padding_px * 2)};
     const int32_t content_w = inner.w - scrollbar_w;
     const ui_rect_t content_clip = {inner.x, inner.y, content_w, inner.h};
     const int32_t item_h = 20;
 
-    ui_fill_rect_clip(ctx->mapped_base, ctx->width, ctx->height, inner.x, inner.y, inner.w, inner.h,
-                      0xFF172233u, clip);
+    ui_fill_rect_clip(ctx->mapped_base,
+                      ctx->width,
+                      ctx->height,
+                      inner.x,
+                      inner.y,
+                      inner.w,
+                      inner.h,
+                      0xFF172233u,
+                      clip);
 
     const ui_rect_t item_clip = ui_rect_intersect(clip, content_clip);
     if (d) {
@@ -55,27 +63,67 @@ static inline void ui_render_tree_view(ui_context_t* ctx, const ui_component_t* 
             const uint32_t row_bg =
                 (i == d->list.selected) ? 0xFF2F5C88u : ((i & 1) ? 0xFF1F2E43u : 0xFF1A283B);
 
-            ui_fill_rect_clip(ctx->mapped_base, ctx->width, ctx->height, inner.x, row_y, content_w,
-                              item_h, row_bg, item_clip);
+            ui_fill_rect_clip(ctx->mapped_base,
+                              ctx->width,
+                              ctx->height,
+                              inner.x,
+                              row_y,
+                              content_w,
+                              item_h,
+                              row_bg,
+                              item_clip);
             for (int32_t level = 0; level < depth; ++level) {
                 const int32_t guide_x = inner.x + 10 + (level * 14);
-                ui_fill_rect_clip(ctx->mapped_base, ctx->width, ctx->height, guide_x, row_y + 3, 1,
-                                  item_h - 6, 0xFF3B516Au, item_clip);
+                ui_fill_rect_clip(ctx->mapped_base,
+                                  ctx->width,
+                                  ctx->height,
+                                  guide_x,
+                                  row_y + 3,
+                                  1,
+                                  item_h - 6,
+                                  0xFF3B516Au,
+                                  item_clip);
             }
-            ui_draw_text_clip(ctx, text_x, row_y + (item_h - ctx->font_px) / 2,
-                              d->list.items[i] ? d->list.items[i] : "", 0xFFFFFFFFu, item_clip);
+            ui_draw_text_clip(ctx,
+                              text_x,
+                              row_y + (item_h - ctx->font_px) / 2,
+                              d->list.items[i] ? d->list.items[i] : "",
+                              0xFFFFFFFFu,
+                              item_clip);
         }
     }
 
-    ui_stroke_rect_clip(ctx->mapped_base, ctx->width, ctx->height, draw_bounds, c->border_px,
-                        c->border_color, clip);
+    ui_stroke_rect_clip(ctx->mapped_base,
+                        ctx->width,
+                        ctx->height,
+                        draw_bounds,
+                        c->border_px,
+                        c->border_color,
+                        clip);
     if (d && d->scroll_max > 0 && inner.h > 8) {
         const int32_t track_x = inner.x + inner.w - scrollbar_w;
-        ui_fill_rect_clip(ctx->mapped_base, ctx->width, ctx->height, track_x - 1, inner.y, 1,
-                          inner.h, 0xFF31475Fu, clip);
-        ui_draw_v_scrollbar(ctx->mapped_base, ctx->width, ctx->height, track_x, inner.y,
-                            scrollbar_w, inner.h, d->scroll_y, d->scroll_max, 0xFF0E1622u,
-                            0xFF8CB6D8u, 0xFFD7ECFFu, clip);
+        ui_fill_rect_clip(ctx->mapped_base,
+                          ctx->width,
+                          ctx->height,
+                          track_x - 1,
+                          inner.y,
+                          1,
+                          inner.h,
+                          0xFF31475Fu,
+                          clip);
+        ui_draw_v_scrollbar(ctx->mapped_base,
+                            ctx->width,
+                            ctx->height,
+                            track_x,
+                            inner.y,
+                            scrollbar_w,
+                            inner.h,
+                            d->scroll_y,
+                            d->scroll_max,
+                            0xFF0E1622u,
+                            0xFF8CB6D8u,
+                            0xFFD7ECFFu,
+                            clip);
     }
 }
 

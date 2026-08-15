@@ -588,7 +588,12 @@ static void test_arguments_must_be_32_bit_clean(void) {
         const char* what;
         int field;
     } cases[] = {
-        {"destination", 0}, {"type", 1}, {"arg0", 2}, {"arg1", 3}, {"arg2", 4}, {"arg3", 5},
+        {"destination", 0},
+        {"type", 1},
+        {"arg0", 2},
+        {"arg1", 3},
+        {"arg2", 4},
+        {"arg3", 5},
     };
     for (unsigned i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
         syscall_frame_t f = make_call(g_dest_ep, 1u, 1u, 1u, 1u, 1u);

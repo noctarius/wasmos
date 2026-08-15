@@ -188,8 +188,8 @@ static void connect_handles_for_protocol(EFI_SYSTEM_TABLE* system,
     }
     EFI_HANDLE* handles = 0;
     UINTN handle_count = 0;
-    EFI_STATUS status = locate_handle_buffer(EFI_LOCATE_SEARCH_TYPE_BY_PROTOCOL, protocol, 0,
-                                             &handle_count, &handles);
+    EFI_STATUS status = locate_handle_buffer(
+        EFI_LOCATE_SEARCH_TYPE_BY_PROTOCOL, protocol, 0, &handle_count, &handles);
     if (EFI_ERROR(status) || !handles || handle_count == 0) {
         return;
     }
@@ -236,11 +236,11 @@ static void connect_graphics_controllers(EFI_SYSTEM_TABLE* system) {
         0x2f707eb9, 0x3a1a, 0x11d4, {0x9a, 0x46, 0x00, 0x90, 0x27, 0x3f, 0xcc, 0x69}};
     static const EFI_GUID root_bridge_guid = EFI_PCI_ROOT_BRIDGE_IO_PROTOCOL_GUID;
 
-    connect_handles_for_protocol(system, connect_controller, locate_handle_buffer,
-                                 &text_output_guid);
+    connect_handles_for_protocol(
+        system, connect_controller, locate_handle_buffer, &text_output_guid);
     connect_handles_for_protocol(system, connect_controller, locate_handle_buffer, &pci_io_guid);
-    connect_handles_for_protocol(system, connect_controller, locate_handle_buffer,
-                                 &root_bridge_guid);
+    connect_handles_for_protocol(
+        system, connect_controller, locate_handle_buffer, &root_bridge_guid);
     g_graphics_connected = 1;
 }
 
@@ -372,8 +372,13 @@ static int capture_framebuffer_from_pci_config(EFI_SYSTEM_TABLE* system,
                     uint64_t candidate_base = 0;
                     uint64_t candidate_size = 0;
                     int consumed = 0;
-                    if (pci_probe_mem_bar(bus, device, function, (uint8_t)bar_index,
-                                          &candidate_base, &candidate_size, &consumed) == 0) {
+                    if (pci_probe_mem_bar(bus,
+                                          device,
+                                          function,
+                                          (uint8_t)bar_index,
+                                          &candidate_base,
+                                          &candidate_size,
+                                          &consumed) == 0) {
                         if (candidate_size > best_size && candidate_base != 0) {
                             best_size = candidate_size;
                             best_base = candidate_base;
@@ -441,8 +446,8 @@ static int capture_framebuffer_snapshot(EFI_SYSTEM_TABLE* system,
     }
 
     if ((EFI_ERROR(status) || !gop) && locate_handle_buffer && handle_protocol) {
-        status = locate_handle_buffer(EFI_LOCATE_SEARCH_TYPE_BY_PROTOCOL, &gop_guid, 0,
-                                      &handle_count, &handles);
+        status = locate_handle_buffer(
+            EFI_LOCATE_SEARCH_TYPE_BY_PROTOCOL, &gop_guid, 0, &handle_count, &handles);
         if (EFI_ERROR(status)) {
             if (!gop_handle_locate_failed) {
                 uefi_log_status(system, "[boot] LocateHandleBuffer error: ", status);

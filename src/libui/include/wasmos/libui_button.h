@@ -21,8 +21,15 @@ static inline void ui_render_button(ui_context_t* ctx, const ui_component_t* c,
         const uint32_t g = ((col >> 8) & 0xFFu) * 3u / 4u;
         const uint32_t b = (col & 0xFFu) * 3u / 4u;
         col = (col & 0xFF000000u) | (r << 16) | (g << 8) | b;
-        ui_fill_rect_clip(ctx->mapped_base, ctx->width, ctx->height, draw_bounds.x, draw_bounds.y,
-                          draw_bounds.w, draw_bounds.h, col, clip);
+        ui_fill_rect_clip(ctx->mapped_base,
+                          ctx->width,
+                          ctx->height,
+                          draw_bounds.x,
+                          draw_bounds.y,
+                          draw_bounds.w,
+                          draw_bounds.h,
+                          col,
+                          clip);
     }
     /* Centre text horizontally and vertically. */
     const char* text = (td && td->text) ? td->text : "";

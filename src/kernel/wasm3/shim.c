@@ -368,7 +368,8 @@ static void* wasm3_alloc(size_t size, int zero) {
                         "[wasm3-heap] req=%016llx\n"
                         "[wasm3-heap] committed=%016llx\n"
                         "[wasm3-heap] limit=%016llx\n",
-                        (unsigned long long)slot->pid, (unsigned long long)size,
+                        (unsigned long long)slot->pid,
+                        (unsigned long long)size,
                         (unsigned long long)slot->committed_size,
                         (unsigned long long)slot->max_size);
             ksync_spinlock_unlock(&g_wasm3_heap_lock);
@@ -703,8 +704,8 @@ void* wasm3_linmem_grow(void* blockp, size_t new_total_bytes) {
         slot->linmem_committed_pages = need_pages;
         /* Bind ONLY the freshly committed tail into the user window; lower pages
          * keep their bindings and any overlays mapped over them. */
-        if (mm_context_bind_wasm_linear_scattered(context_id, slot->linmem_va_base, from_page,
-                                                  need_pages) != 0) {
+        if (mm_context_bind_wasm_linear_scattered(
+                context_id, slot->linmem_va_base, from_page, need_pages) != 0) {
             ksync_spinlock_unlock(&g_wasm3_heap_lock);
             return 0;
         }

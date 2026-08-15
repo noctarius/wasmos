@@ -96,8 +96,8 @@ static void scr_emit(uint32_t event, const char* class_name, uint32_t instance, 
     }
     for (s = (sub_t*)list_first(&g_subs, &it); s; s = (sub_t*)list_next(&it)) {
         if (scr_streq(s->class_name, class_name)) {
-            g_event_fn(g_event_user, s->notify_endpoint, event, class_name, instance, endpoint,
-                       pid);
+            g_event_fn(
+                g_event_user, s->notify_endpoint, event, class_name, instance, endpoint, pid);
         }
     }
 }
@@ -275,8 +275,11 @@ void service_class_registry_reap_dead(service_class_alive_fn alive, void* user) 
     while ((dead_prov = (provider_t*)scr_find_dead(
                 &g_providers, (uint32_t)__builtin_offsetof(provider_t, owner_ctx), alive, user)) !=
            0) {
-        scr_emit(SVC_CLASS_EVENT_REMOVE, dead_prov->class_name, dead_prov->instance,
-                 dead_prov->endpoint, dead_prov->pid);
+        scr_emit(SVC_CLASS_EVENT_REMOVE,
+                 dead_prov->class_name,
+                 dead_prov->instance,
+                 dead_prov->endpoint,
+                 dead_prov->pid);
         list_remove(&g_providers, dead_prov);
     }
 }

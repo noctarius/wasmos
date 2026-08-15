@@ -255,10 +255,10 @@ static int exec_match_validate_node(const wasmos_exec_match_node_t* nodes, uint3
         if (node->left_index >= node_count || node->right_index >= node_count) {
             return -1;
         }
-        if (exec_match_validate_node(nodes, node_count, node->left_index, visiting, visited,
-                                     out_max_prefix) != 0 ||
-            exec_match_validate_node(nodes, node_count, node->right_index, visiting, visited,
-                                     out_max_prefix) != 0) {
+        if (exec_match_validate_node(
+                nodes, node_count, node->left_index, visiting, visited, out_max_prefix) != 0 ||
+            exec_match_validate_node(
+                nodes, node_count, node->right_index, visiting, visited, out_max_prefix) != 0) {
             return -1;
         }
         break;
@@ -266,8 +266,8 @@ static int exec_match_validate_node(const wasmos_exec_match_node_t* nodes, uint3
         if (node->left_index >= node_count) {
             return -1;
         }
-        if (exec_match_validate_node(nodes, node_count, node->left_index, visiting, visited,
-                                     out_max_prefix) != 0) {
+        if (exec_match_validate_node(
+                nodes, node_count, node->left_index, visiting, visited, out_max_prefix) != 0) {
             return -1;
         }
         break;
@@ -368,8 +368,8 @@ int wasmos_subsystem_registry_register_builtin(const char* request_tag, const ch
     entry->ops = ops;
     entry->next = bucket->head;
     bucket->head = entry;
-    klog_printf("[subsystem] register request=%s runtime=%s\n", entry->request_tag,
-                entry->runtime_tag);
+    klog_printf(
+        "[subsystem] register request=%s runtime=%s\n", entry->request_tag, entry->runtime_tag);
     ksync_spinlock_unlock(&g_subsystem_lock);
     return 0;
 }
@@ -384,7 +384,8 @@ static void subsystem_count_brokers_locked(uint32_t owner_context_id, uint32_t* 
     uint32_t owned = 0u;
     for (wasmos_subsystem_bucket_t* bucket =
              (wasmos_subsystem_bucket_t*)hashmap_first(&g_subsystem_map, &it, &key);
-         bucket; bucket = (wasmos_subsystem_bucket_t*)hashmap_next(&it, &key)) {
+         bucket;
+         bucket = (wasmos_subsystem_bucket_t*)hashmap_next(&it, &key)) {
         for (wasmos_subsystem_registry_entry_t* entry = bucket->head; entry; entry = entry->next) {
             if (entry->kind != WASMOS_SUBSYSTEM_HANDLER_BROKER) {
                 continue;
@@ -464,8 +465,8 @@ int wasmos_subsystem_registry_register_broker(const char* request_tag, const cha
     subsystem_count_brokers_locked(owner_context_id, &broker_total, &broker_owned);
     if (broker_total >= WASMOS_SUBSYSTEM_MAX_BROKERS ||
         (owner_context_id != 0u && broker_owned >= WASMOS_SUBSYSTEM_MAX_BROKERS_PER_OWNER)) {
-        klog_printf("[subsystem] broker cap reached total=%u owner=%u\n", broker_total,
-                    broker_owned);
+        klog_printf(
+            "[subsystem] broker cap reached total=%u owner=%u\n", broker_total, broker_owned);
         ksync_spinlock_unlock(&g_subsystem_lock);
         return -1;
     }
@@ -488,8 +489,10 @@ int wasmos_subsystem_registry_register_broker(const char* request_tag, const cha
     entry->next = bucket->head;
     bucket->head = entry;
     klog_printf("[subsystem] register request=%s runtime=%s broker=%s endpoint=%u\n",
-                entry->request_tag, entry->runtime_tag,
-                entry->broker_name[0] != '\0' ? entry->broker_name : "-", entry->broker_endpoint);
+                entry->request_tag,
+                entry->runtime_tag,
+                entry->broker_name[0] != '\0' ? entry->broker_name : "-",
+                entry->broker_endpoint);
     ksync_spinlock_unlock(&g_subsystem_lock);
     return 0;
 }
@@ -570,7 +573,8 @@ int wasmos_subsystem_registry_register_exec_handler(const char* handler_name,
     }
     if (handler_total >= WASMOS_EXEC_HANDLER_MAX ||
         (owner_context_id != 0u && handler_owned >= WASMOS_EXEC_HANDLER_MAX_PER_OWNER)) {
-        klog_printf("[subsystem] exec handler cap reached total=%u owner=%u\n", handler_total,
+        klog_printf("[subsystem] exec handler cap reached total=%u owner=%u\n",
+                    handler_total,
                     handler_owned);
         ksync_spinlock_unlock(&g_subsystem_lock);
         return -1;
@@ -614,7 +618,10 @@ int wasmos_subsystem_registry_register_exec_handler(const char* handler_name,
         g_exec_max_probe_bytes = max_probe_bytes;
     }
     klog_printf("[subsystem] exec handler register name=%s subsystem=%s priority=%u probe=%u\n",
-                entry->handler_name, entry->request_tag, entry->priority, entry->max_probe_bytes);
+                entry->handler_name,
+                entry->request_tag,
+                entry->priority,
+                entry->max_probe_bytes);
     ksync_spinlock_unlock(&g_subsystem_lock);
     return 0;
 }
@@ -716,7 +723,8 @@ void wasmos_subsystem_registry_reset(void) {
         uint32_t key = 0;
         for (wasmos_subsystem_bucket_t* bucket =
                  (wasmos_subsystem_bucket_t*)hashmap_first(&g_subsystem_map, &it, &key);
-             bucket; bucket = (wasmos_subsystem_bucket_t*)hashmap_next(&it, &key)) {
+             bucket;
+             bucket = (wasmos_subsystem_bucket_t*)hashmap_next(&it, &key)) {
             wasmos_subsystem_registry_entry_t* entry = bucket->head;
             while (entry) {
                 wasmos_subsystem_registry_entry_t* next = entry->next;
@@ -766,7 +774,8 @@ void wasmos_subsystem_registry_drop_owner(uint32_t owner_context_id) {
         uint32_t key = 0;
         for (wasmos_subsystem_bucket_t* bucket =
                  (wasmos_subsystem_bucket_t*)hashmap_first(&g_subsystem_map, &it, &key);
-             bucket; bucket = (wasmos_subsystem_bucket_t*)hashmap_next(&it, &key)) {
+             bucket;
+             bucket = (wasmos_subsystem_bucket_t*)hashmap_next(&it, &key)) {
             wasmos_subsystem_registry_entry_t** bhead = &bucket->head;
             while (*bhead) {
                 wasmos_subsystem_registry_entry_t* cur = *bhead;

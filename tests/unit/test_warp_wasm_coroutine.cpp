@@ -46,7 +46,8 @@ int main(int argc, char** argv) {
         {
             vb::WasmModule module(logger);
             module.initFromBytecode(vb::Span<uint8_t const>(bytes.data(), bytes.size()),
-                                    vb::Span<vb::NativeSymbol const>(), false);
+                                    vb::Span<vb::NativeSymbol const>(),
+                                    false);
             module.start(stack.data() + stack.size());
             const auto result = module.callExportedFunctionWithName<1>(
                 stack.data() + stack.size(), "wasmos_coroutine_wasm_test");

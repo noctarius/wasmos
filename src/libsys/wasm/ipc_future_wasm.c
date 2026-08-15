@@ -66,8 +66,17 @@ wasmos_future_t* wasmos_sys_wasm_ipc_future_send(wasmos_sys_event_loop_t* loop,
         operation->future.state != WASMOS_FUTURE_PENDING) {
         return NULL;
     }
-    status = wasmos_sys_intent_send(loop, destination_endpoint, source_endpoint, msg_type, arg0,
-                                    arg1, arg2, arg3, ipc_future_reply, operation, &request_id);
+    status = wasmos_sys_intent_send(loop,
+                                    destination_endpoint,
+                                    source_endpoint,
+                                    msg_type,
+                                    arg0,
+                                    arg1,
+                                    arg2,
+                                    arg3,
+                                    ipc_future_reply,
+                                    operation,
+                                    &request_id);
     if (status != 0) {
         (void)wasmos_promise_reject(&operation->promise, ipc_future_status(status));
         return &operation->future;
@@ -117,8 +126,16 @@ wasmos_future_t* wasmos_sys_wasm_fs_request_send(wasmos_sys_event_loop_t* loop,
     if (!request || fs_endpoint < 0 || reply_endpoint < 0) {
         return NULL;
     }
-    return wasmos_sys_wasm_ipc_future_send(loop, &request->ipc, fs_endpoint, reply_endpoint,
-                                           msg_type, arg0, arg1, arg2, arg3, out_request_id);
+    return wasmos_sys_wasm_ipc_future_send(loop,
+                                           &request->ipc,
+                                           fs_endpoint,
+                                           reply_endpoint,
+                                           msg_type,
+                                           arg0,
+                                           arg1,
+                                           arg2,
+                                           arg3,
+                                           out_request_id);
 }
 
 const wasmos_ipc_message_t*
@@ -177,9 +194,16 @@ static wasmos_future_t* fs_operation_buffer_send(wasmos_sys_event_loop_t* loop,
     operation->buffer_borrow = borrow;
     operation->length = length;
     operation->has_buffer = 1;
-    wasmos_future_t* future =
-        wasmos_sys_wasm_fs_request_send(loop, &operation->request, fs_endpoint, reply_endpoint,
-                                        type, arg0, arg1, bid, borrow, out_request_id);
+    wasmos_future_t* future = wasmos_sys_wasm_fs_request_send(loop,
+                                                              &operation->request,
+                                                              fs_endpoint,
+                                                              reply_endpoint,
+                                                              type,
+                                                              arg0,
+                                                              arg1,
+                                                              bid,
+                                                              borrow,
+                                                              out_request_id);
     if (!future)
         fs_operation_release(operation);
     return future;
@@ -195,8 +219,16 @@ static wasmos_future_t* fs_operation_path_send(wasmos_sys_event_loop_t* loop,
         return NULL;
     while (path[length])
         ++length;
-    return fs_operation_buffer_send(loop, operation, fs_endpoint, reply_endpoint, type, path,
-                                    length + 1, length, arg1, out_request_id);
+    return fs_operation_buffer_send(loop,
+                                    operation,
+                                    fs_endpoint,
+                                    reply_endpoint,
+                                    type,
+                                    path,
+                                    length + 1,
+                                    length,
+                                    arg1,
+                                    out_request_id);
 }
 
 wasmos_future_t* wasmos_sys_wasm_fs_open_async(wasmos_sys_event_loop_t* loop,
@@ -206,8 +238,8 @@ wasmos_future_t* wasmos_sys_wasm_fs_open_async(wasmos_sys_event_loop_t* loop,
                                                int32_t* out_request_id) {
     if (fs_operation_prepare(operation) != 0)
         return NULL;
-    return fs_operation_path_send(loop, operation, fs_endpoint, reply_endpoint, FS_IPC_OPEN_REQ,
-                                  path, flags, out_request_id);
+    return fs_operation_path_send(
+        loop, operation, fs_endpoint, reply_endpoint, FS_IPC_OPEN_REQ, path, flags, out_request_id);
 }
 wasmos_future_t* wasmos_sys_wasm_fs_read_async(wasmos_sys_event_loop_t* loop,
                                                wasmos_sys_wasm_fs_operation_t* operation,
@@ -217,8 +249,16 @@ wasmos_future_t* wasmos_sys_wasm_fs_read_async(wasmos_sys_event_loop_t* loop,
     if (fs_operation_prepare(operation) != 0)
         return NULL;
     (void)dst; /* destination is supplied to finish after reply validation. */
-    return fs_operation_buffer_send(loop, operation, fs_endpoint, reply_endpoint, FS_IPC_READ_REQ,
-                                    NULL, len, fd, len, out_request_id);
+    return fs_operation_buffer_send(loop,
+                                    operation,
+                                    fs_endpoint,
+                                    reply_endpoint,
+                                    FS_IPC_READ_REQ,
+                                    NULL,
+                                    len,
+                                    fd,
+                                    len,
+                                    out_request_id);
 }
 wasmos_future_t* wasmos_sys_wasm_fs_write_async(wasmos_sys_event_loop_t* loop,
                                                 wasmos_sys_wasm_fs_operation_t* operation,
@@ -227,8 +267,16 @@ wasmos_future_t* wasmos_sys_wasm_fs_write_async(wasmos_sys_event_loop_t* loop,
                                                 int32_t* out_request_id) {
     if (fs_operation_prepare(operation) != 0)
         return NULL;
-    return fs_operation_buffer_send(loop, operation, fs_endpoint, reply_endpoint, FS_IPC_WRITE_REQ,
-                                    src, len, fd, len, out_request_id);
+    return fs_operation_buffer_send(loop,
+                                    operation,
+                                    fs_endpoint,
+                                    reply_endpoint,
+                                    FS_IPC_WRITE_REQ,
+                                    src,
+                                    len,
+                                    fd,
+                                    len,
+                                    out_request_id);
 }
 wasmos_future_t* wasmos_sys_wasm_fs_close_async(wasmos_sys_event_loop_t* loop,
                                                 wasmos_sys_wasm_fs_operation_t* operation,
@@ -236,8 +284,16 @@ wasmos_future_t* wasmos_sys_wasm_fs_close_async(wasmos_sys_event_loop_t* loop,
                                                 int32_t fd, int32_t* out_request_id) {
     if (fs_operation_prepare(operation) != 0)
         return NULL;
-    return wasmos_sys_wasm_fs_request_send(loop, &operation->request, fs_endpoint, reply_endpoint,
-                                           FS_IPC_CLOSE_REQ, fd, 0, 0, 0, out_request_id);
+    return wasmos_sys_wasm_fs_request_send(loop,
+                                           &operation->request,
+                                           fs_endpoint,
+                                           reply_endpoint,
+                                           FS_IPC_CLOSE_REQ,
+                                           fd,
+                                           0,
+                                           0,
+                                           0,
+                                           out_request_id);
 }
 wasmos_future_t* wasmos_sys_wasm_fs_unlink_async(wasmos_sys_event_loop_t* loop,
                                                  wasmos_sys_wasm_fs_operation_t* operation,
@@ -245,8 +301,8 @@ wasmos_future_t* wasmos_sys_wasm_fs_unlink_async(wasmos_sys_event_loop_t* loop,
                                                  const char* path, int32_t* out_request_id) {
     if (fs_operation_prepare(operation) != 0)
         return NULL;
-    return fs_operation_path_send(loop, operation, fs_endpoint, reply_endpoint, FS_IPC_UNLINK_REQ,
-                                  path, 0, out_request_id);
+    return fs_operation_path_send(
+        loop, operation, fs_endpoint, reply_endpoint, FS_IPC_UNLINK_REQ, path, 0, out_request_id);
 }
 wasmos_future_t* wasmos_sys_wasm_fs_stat_async(wasmos_sys_event_loop_t* loop,
                                                wasmos_sys_wasm_fs_operation_t* operation,
@@ -254,8 +310,8 @@ wasmos_future_t* wasmos_sys_wasm_fs_stat_async(wasmos_sys_event_loop_t* loop,
                                                const char* path, int32_t* out_request_id) {
     if (fs_operation_prepare(operation) != 0)
         return NULL;
-    return fs_operation_path_send(loop, operation, fs_endpoint, reply_endpoint, FS_IPC_STAT_REQ,
-                                  path, 0, out_request_id);
+    return fs_operation_path_send(
+        loop, operation, fs_endpoint, reply_endpoint, FS_IPC_STAT_REQ, path, 0, out_request_id);
 }
 int32_t wasmos_sys_wasm_fs_operation_finish(wasmos_sys_wasm_fs_operation_t* operation,
                                             void* read_dst, int32_t read_capacity,
@@ -271,8 +327,8 @@ int32_t wasmos_sys_wasm_fs_operation_finish(wasmos_sys_wasm_fs_operation_t* oper
         result = reply->arg0;
         if (read_dst && result >= 0 && result <= read_capacity && result <= operation->length &&
             operation->has_buffer &&
-            wasmos_xfer_buffer_read(operation->buffer_id, addr_cast(int32_t, read_dst), result,
-                                    0) != 0)
+            wasmos_xfer_buffer_read(
+                operation->buffer_id, addr_cast(int32_t, read_dst), result, 0) != 0)
             result = -1;
     }
     fs_operation_release(operation);

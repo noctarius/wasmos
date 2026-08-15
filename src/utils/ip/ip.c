@@ -207,8 +207,8 @@ static void usage(void) {
 static int cmd_dhcp(int32_t stack_ep, int32_t reply_ep, int32_t* rid, const char* dev,
                     uint32_t on) {
     wasmos_ipc_message_t message;
-    if (wasmos_ipc_send(stack_ep, reply_ep, NET_IPC_DHCP_SET, *rid, name_to_index(dev), on, 0u,
-                        0) != 0 ||
+    if (wasmos_ipc_send(
+            stack_ep, reply_ep, NET_IPC_DHCP_SET, *rid, name_to_index(dev), on, 0u, 0) != 0 ||
         recv_reply(reply_ep, (*rid)++, &message) != 0 || message.type != NET_IPC_RESP) {
         puts(on ? "[ip] dhcp on failed" : "[ip] dhcp off failed");
         return 1;
@@ -318,8 +318,8 @@ static int cmd_dns_del(int32_t stack_ep, int32_t reply_ep, int32_t* rid, const c
 static int cmd_dev_state(int32_t stack_ep, int32_t reply_ep, int32_t* rid, const char* dev,
                          uint32_t up) {
     wasmos_ipc_message_t message;
-    if (wasmos_ipc_send(stack_ep, reply_ep, NET_IPC_IF_SET_STATE, *rid, name_to_index(dev), up, 0u,
-                        0) != 0 ||
+    if (wasmos_ipc_send(
+            stack_ep, reply_ep, NET_IPC_IF_SET_STATE, *rid, name_to_index(dev), up, 0u, 0) != 0 ||
         recv_reply(reply_ep, (*rid)++, &message) != 0 || message.type != NET_IPC_RESP) {
         puts(up ? "[ip] dev up failed" : "[ip] dev down failed");
         return 1;
@@ -336,14 +336,20 @@ static int cmd_show(int32_t stack_ep, int32_t reply_ep, int32_t* rid) {
     uint32_t count;
     if (bid < 0)
         return 1;
-    grant = wasmos_xfer_buffer_borrow(stack_ep, bid,
-                                      WASMOS_BUFFER_GRANT_READ | WASMOS_BUFFER_GRANT_WRITE);
+    grant = wasmos_xfer_buffer_borrow(
+        stack_ep, bid, WASMOS_BUFFER_GRANT_READ | WASMOS_BUFFER_GRANT_WRITE);
     if (grant < 0) {
         (void)wasmos_xfer_buffer_release(bid);
         return 1;
     }
-    if (wasmos_ipc_send(stack_ep, reply_ep, NET_IPC_IFADDR_LIST, *rid, bid, grant,
-                        (int32_t)sizeof(records), 0) != 0 ||
+    if (wasmos_ipc_send(stack_ep,
+                        reply_ep,
+                        NET_IPC_IFADDR_LIST,
+                        *rid,
+                        bid,
+                        grant,
+                        (int32_t)sizeof(records),
+                        0) != 0 ||
         recv_reply(reply_ep, (*rid)++, &message) != 0 || message.type != NET_IPC_RESP ||
         (int32_t)message.arg0 < 0) {
         puts("[ip] list failed");
@@ -369,9 +375,13 @@ static int cmd_show(int32_t stack_ep, int32_t reply_ep, int32_t* rid) {
         app_dec(line, (int)sizeof(line), &n, mask_prefix(get_u32(r, 12u)));
         app_str(line, (int)sizeof(line), &n, " gw ");
         app_ipv4(line, (int)sizeof(line), &n, get_u32(r, 16u));
-        app_str(line, (int)sizeof(line), &n,
+        app_str(line,
+                (int)sizeof(line),
+                &n,
                 (get_u32(r, 20u) & NET_IFADDR_FLAG_ADMIN_UP) ? " state up" : " state down");
-        app_str(line, (int)sizeof(line), &n,
+        app_str(line,
+                (int)sizeof(line),
+                &n,
                 (get_u32(r, 20u) & NET_IFADDR_FLAG_LINK_UP) ? " link up" : " link down");
         if (get_u32(r, 20u) & NET_IFADDR_FLAG_DHCP)
             app_str(line, (int)sizeof(line), &n, " dhcp");
@@ -431,8 +441,9 @@ static int cmd_add(int32_t stack_ep, int32_t reply_ep, int32_t* rid, const char*
         (void)wasmos_xfer_buffer_release(bid);
         return 1;
     }
-    if (wasmos_ipc_send(stack_ep, reply_ep, NET_IPC_IFADDR_ADD, *rid, bid, grant,
-                        (int32_t)sizeof(record), 0) != 0 ||
+    if (wasmos_ipc_send(
+            stack_ep, reply_ep, NET_IPC_IFADDR_ADD, *rid, bid, grant, (int32_t)sizeof(record), 0) !=
+            0 ||
         recv_reply(reply_ep, (*rid)++, &message) != 0 || message.type != NET_IPC_RESP) {
         puts("[ip] addr add failed");
         (void)wasmos_xfer_buffer_release(bid);
@@ -445,8 +456,8 @@ static int cmd_add(int32_t stack_ep, int32_t reply_ep, int32_t* rid, const char*
 
 static int cmd_del(int32_t stack_ep, int32_t reply_ep, int32_t* rid, const char* dev) {
     wasmos_ipc_message_t message;
-    if (wasmos_ipc_send(stack_ep, reply_ep, NET_IPC_IFADDR_DEL, *rid, name_to_index(dev), 0u, 0u,
-                        0) != 0 ||
+    if (wasmos_ipc_send(
+            stack_ep, reply_ep, NET_IPC_IFADDR_DEL, *rid, name_to_index(dev), 0u, 0u, 0) != 0 ||
         recv_reply(reply_ep, (*rid)++, &message) != 0 || message.type != NET_IPC_RESP) {
         puts("[ip] addr del failed");
         return 1;

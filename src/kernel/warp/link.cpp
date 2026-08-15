@@ -1594,7 +1594,8 @@ static int warp_restore_linear_window(WarpCallContext* ctx, uint32_t offset, uin
         if (!page_phys) {
             return -1;
         }
-        if (paging_map_4k(page_virt, page_phys,
+        if (paging_map_4k(page_virt,
+                          page_phys,
                           MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE | MEM_REGION_FLAG_EXEC) !=
             0) {
             return -1;
@@ -1651,7 +1652,9 @@ static int warp_ring3_sync_user_range(WarpCallContext* ctx, uint32_t wasm_off, u
         if (!phys_page) {
             return -1;
         }
-        if (paging_map_4k_in_root(current_root, user_page_base + i * 0x1000ULL, phys_page,
+        if (paging_map_4k_in_root(current_root,
+                                  user_page_base + i * 0x1000ULL,
+                                  phys_page,
                                   MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE |
                                       MEM_REGION_FLAG_USER) != 0) {
             return -1;
@@ -1676,7 +1679,9 @@ static int warp_ring3_map_user_window(uint8_t* linmem_base, uint32_t wasm_off, u
     uint64_t user_va =
         WARP_R3_LINMEM_BASE + (addr_cast(uint64_t, linmem_base) & 0xFFFULL) + wasm_off;
     for (uint64_t i = 0; i < pages; ++i) {
-        if (paging_map_4k_in_root(current_root, user_va + i * 0x1000ULL, phys_base + i * 0x1000ULL,
+        if (paging_map_4k_in_root(current_root,
+                                  user_va + i * 0x1000ULL,
+                                  phys_base + i * 0x1000ULL,
                                   MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE |
                                       MEM_REGION_FLAG_USER) != 0) {
             return -1;
@@ -1712,14 +1717,14 @@ static uint32_t warp_spawn_info_buffer(void* ctx_) {
  * drops ownership and unborrow is the LENDER withdrawing a grant it made. */
 static uint32_t warp_xfer_buffer_borrow(uint32_t grantee_endpoint, uint32_t buffer_id,
                                         uint32_t flags, void* ctx_) {
-    return warp_buffer_borrow((uint32_t)BUFFER_KIND_TRANSFER, grantee_endpoint, buffer_id, flags,
-                              ctx_);
+    return warp_buffer_borrow(
+        (uint32_t)BUFFER_KIND_TRANSFER, grantee_endpoint, buffer_id, flags, ctx_);
 }
 
 static uint32_t warp_xfer_buffer_reborrow(uint32_t grantee_endpoint, uint32_t borrow_id,
                                           uint32_t flags, void* ctx_) {
-    return warp_buffer_reborrow((uint32_t)BUFFER_KIND_TRANSFER, grantee_endpoint, borrow_id, flags,
-                                ctx_);
+    return warp_buffer_reborrow(
+        (uint32_t)BUFFER_KIND_TRANSFER, grantee_endpoint, borrow_id, flags, ctx_);
 }
 
 static uint32_t warp_xfer_buffer_release(uint32_t buffer_id, void* ctx_) {
@@ -2157,7 +2162,9 @@ static uint32_t warp_shmem_map_auto(uint32_t id, uint32_t size, void* ctx_) {
 #if WASMOS_TRACE
     klog_printf("[trace-shmem] map_auto pid=%u size=%llx shpg=%llx reserved=%llx "
                 "linmem_pages=%u committed=%llx\n",
-                (unsigned)ctx->pid, (unsigned long long)size, (unsigned long long)shared_pages,
+                (unsigned)ctx->pid,
+                (unsigned long long)size,
+                (unsigned long long)shared_pages,
                 (unsigned long long)warp_linmem_reserved_bytes(ctx->pid),
                 (unsigned)ctx->module->getLinearMemorySizeInPages(),
                 (unsigned long long)warp_heap_committed_bytes(ctx->pid));
@@ -2240,8 +2247,8 @@ static uint32_t warp_region_alloc(uint32_t pages, uint32_t cache_policy, uint32_
      * lifetime.  Single-threaded WARP kernel context: nothing allocates between
      * alloc and pin. */
     pfa_pin_pages(phys_base, pages);
-    warp_shmem_map_track(ctx->pid, WARP_REGION_TRACK_ID(found_off), found_off,
-                         (uint32_t)region_bytes);
+    warp_shmem_map_track(
+        ctx->pid, WARP_REGION_TRACK_ID(found_off), found_off, (uint32_t)region_bytes);
     __builtin_memcpy(out_ptr, &phys_base, sizeof(uint64_t));
     capability_dma_commit(context_id, region_bytes); /* charge the pinned footprint */
     return found_off;
@@ -3037,8 +3044,8 @@ extern "C" uint32_t warp_ring3_dispatch(uint32_t hc_id, void* frame_ptr) {
      * ring-3 -> ring-0 INT transition); stack args live past [user_rsp+0]. */
     uint64_t user_rsp =
         *reinterpret_cast<uint64_t*>(reinterpret_cast<uint8_t*>(frame) + sizeof(syscall_frame_t));
-    return warp_ring3_dispatch_table(hc_id, frame->rdi, frame->rsi, frame->rdx, frame->rcx,
-                                     frame->r8, frame->r9, user_rsp);
+    return warp_ring3_dispatch_table(
+        hc_id, frame->rdi, frame->rsi, frame->rdx, frame->rcx, frame->r8, frame->r9, user_rsp);
 }
 #endif /* WASMOS_WASM_RUNTIME_WARP */
 

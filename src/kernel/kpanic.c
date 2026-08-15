@@ -220,15 +220,20 @@ __attribute__((noreturn)) void kpanic(const char* reason, uint64_t a, uint64_t b
 
     for (uint32_t i = 0; i < g_cpu_count && i < WASMOS_MAX_CPUS; ++i) {
         panic_cpu_ctx_t* c = &g_panic_ctx[i];
-        serial_printf_unlocked("--- CPU %u captured=%u pid=%u tid=%u ---\n", (unsigned)i,
-                               (unsigned)c->captured, (unsigned)c->pid, (unsigned)c->tid);
+        serial_printf_unlocked("--- CPU %u captured=%u pid=%u tid=%u ---\n",
+                               (unsigned)i,
+                               (unsigned)c->captured,
+                               (unsigned)c->pid,
+                               (unsigned)c->tid);
         if (!c->captured) {
             serial_printf_unlocked("    <no NMI capture (offline or stuck with NMIs masked)>\n");
             continue;
         }
         serial_printf_unlocked("    rip=%016llx rsp=%016llx rbp=%016llx rflags=%016llx\n",
-                               (unsigned long long)c->rip, (unsigned long long)c->rsp,
-                               (unsigned long long)c->rbp, (unsigned long long)c->rflags);
+                               (unsigned long long)c->rip,
+                               (unsigned long long)c->rsp,
+                               (unsigned long long)c->rbp,
+                               (unsigned long long)c->rflags);
         serial_printf_unlocked("    backtrace:\n");
         panic_backtrace(c->rbp);
     }

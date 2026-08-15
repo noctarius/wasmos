@@ -351,7 +351,8 @@ void pfa_init(const boot_info_t* boot_info) {
     }
     if (rc_status > 0) {
         klog_printf("[pfa] refcount upgraded: %llu pages tracked (%llu KB)\n",
-                    (unsigned long long)rc_pages, (unsigned long long)(rc_pages / 1024));
+                    (unsigned long long)rc_pages,
+                    (unsigned long long)(rc_pages / 1024));
     }
     klog_printf("[pfa] test alloc=0x%016llX\n", (unsigned long long)test);
 }

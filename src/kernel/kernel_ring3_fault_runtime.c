@@ -234,8 +234,8 @@ static process_run_result_t ring3_fault_policy_entry(process_t* process, void* a
             } else {
                 if (state->churn_pid == 0) {
                     if (!g_ring3_fault_churn_spawn ||
-                        g_ring3_fault_churn_spawn(process->pid, state->churn_round,
-                                                  &state->churn_pid) != 0 ||
+                        g_ring3_fault_churn_spawn(
+                            process->pid, state->churn_round, &state->churn_pid) != 0 ||
                         state->churn_pid == 0) {
                         klog_write("[test] ring3 mixed stress spawn failed\n");
                         process_set_exit_status(process, -1);
@@ -297,8 +297,11 @@ int kernel_ring3_fault_policy_spawn(uint32_t init_pid, const ring3_fault_policy_
     g_ring3_fault_policy_state.probes = *probes;
     g_ring3_fault_policy_state.churn_rounds = churn_rounds;
     g_ring3_fault_churn_spawn = churn_spawn;
-    if (process_spawn_as(init_pid, "ring3-fault-policy", ring3_fault_policy_entry,
-                         &g_ring3_fault_policy_state, &ring3_fault_policy_pid) != 0) {
+    if (process_spawn_as(init_pid,
+                         "ring3-fault-policy",
+                         ring3_fault_policy_entry,
+                         &g_ring3_fault_policy_state,
+                         &ring3_fault_policy_pid) != 0) {
         klog_write("[kernel] ring3 fault policy spawn failed\n");
         return -1;
     }

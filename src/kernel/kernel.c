@@ -206,7 +206,8 @@ void kmain(boot_info_t* boot_info) {
         kpanic("invalid_boot_info", 0ULL, 0ULL);
     }
     klog_printf("[kernel] boot_info version=%016llx\n[kernel] boot_info size=%016llx\n",
-                (unsigned long long)boot_info->version, (unsigned long long)boot_info->size);
+                (unsigned long long)boot_info->version,
+                (unsigned long long)boot_info->size);
     g_boot_info = boot_info;
     framebuffer_init(boot_info);
     cpu_init();
@@ -278,8 +279,8 @@ void kmain(boot_info_t* boot_info) {
     process_t* init_proc = process_get(init_pid);
     if (init_proc) {
         kernel_shmem_owner_isolation_test(mem_service_proc->context_id, init_proc->context_id);
-        kernel_shmem_misuse_matrix_test(mem_service_proc->context_id, init_proc->context_id,
-                                        g_ring3_smoke_enabled);
+        kernel_shmem_misuse_matrix_test(
+            mem_service_proc->context_id, init_proc->context_id, g_ring3_smoke_enabled);
     }
 
     wasmos_app_set_policy_hooks(wasmos_endpoint_resolve, wasmos_capability_grant);
@@ -297,7 +298,8 @@ void kmain(boot_info_t* boot_info) {
     }
 
     if (g_ring3_smoke_enabled) {
-        if (kernel_ring3_spawn_suite(init_pid, g_ring3_thread_lifecycle_smoke_enabled,
+        if (kernel_ring3_spawn_suite(init_pid,
+                                     g_ring3_thread_lifecycle_smoke_enabled,
                                      g_ring3_fault_churn_rounds) != 0) {
             kpanic("ring3_spawn_suite_failed", 0ULL, 0ULL);
         }

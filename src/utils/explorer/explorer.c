@@ -105,8 +105,15 @@ static int explorer_fs_request(int32_t type, int32_t arg0, int32_t arg1, int32_t
     if (fs_endpoint < 0 || g_fs_reply_endpoint < 0) {
         return -1;
     }
-    if (wasmos_ipc_call(fs_endpoint, g_fs_reply_endpoint, type, g_ctx.req_id++, arg0, arg1, arg2,
-                        arg3, &reply) != 0) {
+    if (wasmos_ipc_call(fs_endpoint,
+                        g_fs_reply_endpoint,
+                        type,
+                        g_ctx.req_id++,
+                        arg0,
+                        arg1,
+                        arg2,
+                        arg3,
+                        &reply) != 0) {
         return -1;
     }
     if (reply.type != FS_IPC_RESP) {
@@ -127,8 +134,8 @@ static ssize_t explorer_fs_request_stream(int32_t type, int32_t arg0, int32_t ar
     if (fs_endpoint < 0 || g_fs_reply_endpoint < 0 || !out || out_cap == 0) {
         return -1;
     }
-    if (wasmos_ipc_send(fs_endpoint, g_fs_reply_endpoint, type, g_ctx.req_id++, arg0, arg1, arg2,
-                        arg3) != 0) {
+    if (wasmos_ipc_send(
+            fs_endpoint, g_fs_reply_endpoint, type, g_ctx.req_id++, arg0, arg1, arg2, arg3) != 0) {
         return -1;
     }
     for (;;) {
@@ -417,8 +424,8 @@ static void explorer_rebuild_tree(void) {
     explorer_tree_append_node("/", "/", 0);
     explorer_tree_walk("/", 1);
     for (int32_t i = 0; i < g_tree_count; ++i) {
-        (void)ui_component_tree_append(&g_ctx, g_tree_id, g_tree_nodes[i].label,
-                                       g_tree_nodes[i].depth);
+        (void)ui_component_tree_append(
+            &g_ctx, g_tree_id, g_tree_nodes[i].label, g_tree_nodes[i].depth);
     }
     if (!list || list->type != UI_COMPONENT_TREE_VIEW || !list->component_data)
         return;
@@ -542,7 +549,10 @@ static int explorer_reload(void) {
     explorer_rebuild_rows();
     explorer_rebuild_tree();
     explorer_update_path_label();
-    snprintf(g_status_buf, sizeof(g_status_buf), "%d item%s", (int)g_entry_count,
+    snprintf(g_status_buf,
+             sizeof(g_status_buf),
+             "%d item%s",
+             (int)g_entry_count,
              g_entry_count == 1 ? "" : "s");
     explorer_set_status(g_status_buf);
     ui_mark_dirty(&g_ctx);
@@ -589,11 +599,13 @@ static void explorer_open_selected(ui_context_t* ctx, int32_t id, void* user) {
         if (path_len > 0 && path_len <= 0xFFFu) {
             int32_t bid = wasmos_xfer_buffer_acquire((int32_t)path_len);
             if (bid >= 0) {
-                if (wasmos_xfer_buffer_write(bid, addr_cast(int32_t, full_path), (int32_t)path_len,
-                                             0) == 0) {
+                if (wasmos_xfer_buffer_write(
+                        bid, addr_cast(int32_t, full_path), (int32_t)path_len, 0) == 0) {
                     pid = wasmos_sys_spawn_path_sync(
-                        g_proc_endpoint, g_proc_reply_endpoint,
-                        (int32_t)(((uint32_t)bid << 12) | ((uint32_t)path_len & 0xFFFu)), 2000,
+                        g_proc_endpoint,
+                        g_proc_reply_endpoint,
+                        (int32_t)(((uint32_t)bid << 12) | ((uint32_t)path_len & 0xFFFu)),
+                        2000,
                         g_ctx.req_id++);
                 }
                 (void)wasmos_xfer_buffer_release(bid);
@@ -674,8 +686,8 @@ static void explorer_secondary_click(ui_context_t* ctx, int32_t component_id, in
     if (item_index < 0 || item_index >= g_entry_count) {
         return;
     }
-    snprintf(status, sizeof(status), "Context menu not implemented for %s",
-             g_entries[item_index].name);
+    snprintf(
+        status, sizeof(status), "Context menu not implemented for %s", g_entries[item_index].name);
     explorer_set_status(status);
     ui_mark_dirty(&g_ctx);
 }
@@ -822,8 +834,8 @@ static int explorer_init_ui(int32_t proc_endpoint, int32_t reply_endpoint) {
     ui_component_set_button_action(&g_ctx, g_refresh_button_id, explorer_refresh, NULL);
     ui_component_set_list_view_activate_action(&g_ctx, g_tree_id, explorer_activate_tree, NULL);
     ui_component_set_list_view_activate_action(&g_ctx, g_list_id, explorer_activate_entry, NULL);
-    ui_component_set_list_view_secondary_click_action(&g_ctx, g_list_id, explorer_secondary_click,
-                                                      NULL);
+    ui_component_set_list_view_secondary_click_action(
+        &g_ctx, g_list_id, explorer_secondary_click, NULL);
 
     (void)ui_component_append_child(&g_ctx, g_ctx.root_id, g_path_label_id);
     (void)ui_component_append_child(&g_ctx, g_ctx.root_id, g_toolbar_row_id);

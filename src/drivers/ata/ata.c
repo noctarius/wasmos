@@ -319,8 +319,14 @@ static void ata_publish_block_device(uint8_t unit, uint32_t sectors, uint8_t pre
     if (unit == 0 && g_present) {
         flags |= 2u;
     }
-    (void)wasmos_ipc_send(g_devmgr_endpoint, g_block_endpoint, DEVMGR_PUBLISH_BLOCK_DEVICE, 0,
-                          (int32_t)unit, (int32_t)sectors, (int32_t)flags, 0);
+    (void)wasmos_ipc_send(g_devmgr_endpoint,
+                          g_block_endpoint,
+                          DEVMGR_PUBLISH_BLOCK_DEVICE,
+                          0,
+                          (int32_t)unit,
+                          (int32_t)sectors,
+                          (int32_t)flags,
+                          0);
 }
 
 /* Where a read deposits each sector. The block buffer is the caller's own
@@ -338,11 +344,11 @@ static int ata_sink_write(const ata_sink_t* sink, const uint8_t* src, uint32_t l
                           uint32_t sector_offset) {
     uint32_t offset = sink->dst_offset + sector_offset;
     if (sink->to_xfer) {
-        return wasmos_xfer_buffer_write(sink->id, addr_cast(int32_t, src), (int32_t)len,
-                                        (int32_t)offset);
+        return wasmos_xfer_buffer_write(
+            sink->id, addr_cast(int32_t, src), (int32_t)len, (int32_t)offset);
     }
-    return wasmos_block_buffer_write(sink->id, addr_cast(int32_t, src), (int32_t)len,
-                                     (int32_t)offset);
+    return wasmos_block_buffer_write(
+        sink->id, addr_cast(int32_t, src), (int32_t)len, (int32_t)offset);
 }
 
 /* Bus-master register helpers. Region-addressed like everything else, so a
@@ -387,8 +393,8 @@ static uint32_t ata_build_prd(uint64_t phys, uint32_t bytes) {
         return 0;
     }
     prd[used - 1u].flags = ATA_PRD_EOT;
-    if (wasmos_block_buffer_write(g_prd_phys, addr_cast(int32_t, prd),
-                                  (int32_t)(used * sizeof(ata_prd_t)), 0) != 0) {
+    if (wasmos_block_buffer_write(
+            g_prd_phys, addr_cast(int32_t, prd), (int32_t)(used * sizeof(ata_prd_t)), 0) != 0) {
         return 0;
     }
     return used;
@@ -422,7 +428,8 @@ static int ata_read_lba28_dma(uint8_t unit, uint32_t lba, uint8_t count, uint64_
      * read after completion describes this transfer. */
     (void)ata_bm_write8(ATA_BM_STATUS, ATA_BM_STATUS_ERROR | ATA_BM_STATUS_IRQ);
 
-    wasmos_io_region_out8(ATA_IO_REGION, ATA_REG_HDDEVSEL,
+    wasmos_io_region_out8(ATA_IO_REGION,
+                          ATA_REG_HDDEVSEL,
                           (uint8_t)(0xE0u | ((unit & 1u) << 4) | ((lba >> 24) & 0x0Fu)));
     wasmos_io_wait();
     wasmos_io_region_out8(ATA_IO_REGION, ATA_REG_SECCOUNT0, count);
@@ -481,8 +488,8 @@ static int ata_read_zc_dma(uint8_t unit, uint32_t lba, uint8_t count, int32_t bo
     if (!g_dma_ready || borrow_id <= 0 || count == 0) {
         return -1;
     }
-    dest_phys = wasmos_dma_map_borrow(borrow_id, (int32_t)dst_offset, (int32_t)bytes,
-                                      WASMOS_DMA_DIR_FROM_DEVICE);
+    dest_phys = wasmos_dma_map_borrow(
+        borrow_id, (int32_t)dst_offset, (int32_t)bytes, WASMOS_DMA_DIR_FROM_DEVICE);
     if (dest_phys <= 0) {
         return -1; /* negative is a packed WASMOS_ERR_DMA_* code; either way, copy instead */
     }
@@ -510,7 +517,8 @@ static int ata_read_lba28(uint8_t unit, uint32_t lba, uint8_t count, const ata_s
         return -1;
     }
 
-    wasmos_io_region_out8(ATA_IO_REGION, ATA_REG_HDDEVSEL,
+    wasmos_io_region_out8(ATA_IO_REGION,
+                          ATA_REG_HDDEVSEL,
                           (uint8_t)(0xE0u | ((unit & 1u) << 4) | ((lba >> 24) & 0x0Fu)));
     wasmos_io_wait();
     wasmos_io_region_out8(ATA_IO_REGION, ATA_REG_SECCOUNT0, count);
@@ -547,7 +555,8 @@ static int ata_write_lba28(uint8_t unit, uint32_t lba, uint8_t count, uint32_t b
         return -1;
     }
 
-    wasmos_io_region_out8(ATA_IO_REGION, ATA_REG_HDDEVSEL,
+    wasmos_io_region_out8(ATA_IO_REGION,
+                          ATA_REG_HDDEVSEL,
                           (uint8_t)(0xE0u | ((unit & 1u) << 4) | ((lba >> 24) & 0x0Fu)));
     wasmos_io_wait();
     wasmos_io_region_out8(ATA_IO_REGION, ATA_REG_SECCOUNT0, count);
@@ -560,8 +569,10 @@ static int ata_write_lba28(uint8_t unit, uint32_t lba, uint8_t count, uint32_t b
         if (ata_wait_drq() != 0) {
             return -1;
         }
-        if (wasmos_block_buffer_copy((int32_t)buffer_phys, addr_cast(int32_t, g_sector_buf),
-                                     ATA_SECTOR_SIZE, (int32_t)(sector * ATA_SECTOR_SIZE)) != 0) {
+        if (wasmos_block_buffer_copy((int32_t)buffer_phys,
+                                     addr_cast(int32_t, g_sector_buf),
+                                     ATA_SECTOR_SIZE,
+                                     (int32_t)(sector * ATA_SECTOR_SIZE)) != 0) {
             return -1;
         }
         uint16_t* in = (uint16_t*)g_sector_buf;
@@ -740,8 +751,14 @@ static int ata_handle_ipc(int32_t type, int32_t source, int32_t req_id, int32_t 
     }
 
     if (type == BLOCK_IPC_IDENTIFY_REQ) {
-        wasmos_ipc_send(source, g_block_endpoint, BLOCK_IPC_IDENTIFY_RESP, req_id, 0,
-                        (int32_t)g_unit_sectors[unit], (int32_t)unit, 0);
+        wasmos_ipc_send(source,
+                        g_block_endpoint,
+                        BLOCK_IPC_IDENTIFY_RESP,
+                        req_id,
+                        0,
+                        (int32_t)g_unit_sectors[unit],
+                        (int32_t)unit,
+                        0);
         return 0;
     }
 
@@ -915,7 +932,9 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
     /* The driver addresses its device by region index and never sees a port, so
      * name what each region is for; device-manager logs the window it granted. */
     (void)printf("[ata] io region %u = task file (+%02X status, +%03X control), irq line %u\n",
-                 (unsigned)ATA_IO_REGION, (unsigned)ATA_REG_STATUS, (unsigned)ATA_REG_CTRL,
+                 (unsigned)ATA_IO_REGION,
+                 (unsigned)ATA_REG_STATUS,
+                 (unsigned)ATA_REG_CTRL,
                  (unsigned)ATA_IRQ_LINE);
     ata_dma_setup();
     ata_log_transfer_mode();

@@ -46,8 +46,14 @@ int main(int argc, char** argv) {
     const int32_t read_req = 102;
     const int32_t write_value = 0x5A;
 
-    if (wasmos_ipc_send(chardev_endpoint, reply_endpoint, WASM_CHARDEV_IPC_WRITE_REQ, write_req,
-                        write_value, 0, 0, 0) != 0) {
+    if (wasmos_ipc_send(chardev_endpoint,
+                        reply_endpoint,
+                        WASM_CHARDEV_IPC_WRITE_REQ,
+                        write_req,
+                        write_value,
+                        0,
+                        0,
+                        0) != 0) {
         return -1;
     }
 
@@ -61,8 +67,9 @@ int main(int argc, char** argv) {
         return -1;
     }
 
-    if (wasmos_ipc_send(chardev_endpoint, reply_endpoint, WASM_CHARDEV_IPC_READ_REQ, read_req, 0, 0,
-                        0, 0) != 0) {
+    if (wasmos_ipc_send(
+            chardev_endpoint, reply_endpoint, WASM_CHARDEV_IPC_READ_REQ, read_req, 0, 0, 0, 0) !=
+        0) {
         return -1;
     }
 

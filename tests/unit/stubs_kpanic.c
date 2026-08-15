@@ -23,7 +23,9 @@
  * process has; the concurrent-panic race it arbitrates does not arise here
  * either, so two threads panicking at once interleave their output. */
 __attribute__((noreturn)) void kpanic(const char* reason, uint64_t a, uint64_t b) {
-    printf("  [KPANIC] %s (a=%llu b=%llu)\n", reason ? reason : "(null)", (unsigned long long)a,
+    printf("  [KPANIC] %s (a=%llu b=%llu)\n",
+           reason ? reason : "(null)",
+           (unsigned long long)a,
            (unsigned long long)b);
     fflush(0);
     abort();

@@ -9,9 +9,10 @@ extern wasmos_sys_native_async_service_config_t wasmos_async_service;
  * return value is main's result (or -1 on a bootstrap failure). `api` is
  * borrowed for the service's whole lifetime. */
 int async_initialize(wasmos_driver_api_t* api) {
-    wasmos_sys_native_service_init(&wasmos_async_service.service, wasmos_async_service.root_stack,
+    wasmos_sys_native_service_init(&wasmos_async_service.service,
+                                   wasmos_async_service.root_stack,
                                    wasmos_async_service.root_stack_size);
     wasmos_async_service.service.idle = wasmos_async_service.idle;
-    return wasmos_sys_native_service_run(&wasmos_async_service.service, api,
-                                         wasmos_async_service.main, wasmos_async_service.user);
+    return wasmos_sys_native_service_run(
+        &wasmos_async_service.service, api, wasmos_async_service.main, wasmos_async_service.user);
 }

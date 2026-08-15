@@ -437,8 +437,8 @@ static void* multi_receiver_thread(void* p) {
             return 0;
         }
         /* Exactly-once across receivers: the claim is the exchange itself. */
-        if (__atomic_exchange_n(&g_seen[m.arg0 * PER_SENDER + m.arg1], (uint8_t)1,
-                                __ATOMIC_ACQ_REL) != 0) {
+        if (__atomic_exchange_n(
+                &g_seen[m.arg0 * PER_SENDER + m.arg1], (uint8_t)1, __ATOMIC_ACQ_REL) != 0) {
             a->result = -101;
             return 0;
         }

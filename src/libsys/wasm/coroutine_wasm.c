@@ -190,9 +190,12 @@ static void continuation_dispatch(wasmos_future_continuation_t* continuation) {
         wasmos_future_t* next = (wasmos_future_t*)value;
         wasmos_future_continuation_t* adopt = (wasmos_future_continuation_t*)continuation->group;
         continuation->group = NULL;
-        if (!next ||
-            !wasmos_future_then(continuation->child.runtime, next, adopt, flat_forward_success,
-                                flat_forward_error, &continuation->child_promise))
+        if (!next || !wasmos_future_then(continuation->child.runtime,
+                                         next,
+                                         adopt,
+                                         flat_forward_success,
+                                         flat_forward_error,
+                                         &continuation->child_promise))
             (void)wasmos_promise_reject(&continuation->child_promise, -1);
     } else if (status == 0)
         (void)wasmos_promise_resolve(&continuation->child_promise, value);
@@ -339,8 +342,8 @@ static void continuation_cancel(wasmos_wasm_runtime_t* runtime,
     if (future && future->state == WASMOS_FUTURE_PENDING)
         continuation_list_remove(&future->continuations, NULL, continuation);
     else if (runtime)
-        continuation_list_remove(&runtime->continuation_head, &runtime->continuation_tail,
-                                 continuation);
+        continuation_list_remove(
+            &runtime->continuation_head, &runtime->continuation_tail, continuation);
     continuation->next = NULL;
     continuation->future = NULL;
     continuation->active = false;
@@ -419,8 +422,12 @@ future_group_start(wasmos_wasm_runtime_t* runtime, wasmos_future_group_t* group,
     wasmos_future_init(&group->future, &group->promise);
     group->future.runtime = runtime;
     for (size_t i = 0; i < count; ++i) {
-        if (!inputs[i] || !wasmos_future_then(runtime, inputs[i], &continuations[i], group_success,
-                                              group_error, &continuations[i])) {
+        if (!inputs[i] || !wasmos_future_then(runtime,
+                                              inputs[i],
+                                              &continuations[i],
+                                              group_success,
+                                              group_error,
+                                              &continuations[i])) {
             group->active = false;
             return NULL;
         }
@@ -433,13 +440,13 @@ future_group_start(wasmos_wasm_runtime_t* runtime, wasmos_future_group_t* group,
 wasmos_future_t* wasmos_future_race(wasmos_wasm_runtime_t* runtime, wasmos_future_group_t* group,
                                     wasmos_future_t* const* inputs, size_t count,
                                     wasmos_future_continuation_t* continuations) {
-    return future_group_start(runtime, group, inputs, count, NULL, continuations,
-                              WASMOS_FUTURE_GROUP_RACE);
+    return future_group_start(
+        runtime, group, inputs, count, NULL, continuations, WASMOS_FUTURE_GROUP_RACE);
 }
 
 wasmos_future_t* wasmos_future_all(wasmos_wasm_runtime_t* runtime, wasmos_future_group_t* group,
                                    wasmos_future_t* const* inputs, size_t count, uintptr_t* values,
                                    wasmos_future_continuation_t* continuations) {
-    return future_group_start(runtime, group, inputs, count, values, continuations,
-                              WASMOS_FUTURE_GROUP_ALL);
+    return future_group_start(
+        runtime, group, inputs, count, values, continuations, WASMOS_FUTURE_GROUP_ALL);
 }

@@ -222,7 +222,10 @@ static int warp_driver_ensure_started(wasm_driver_t* driver, uint64_t user_root,
             return -1;
         }
         uint64_t bd_len = warp_mem_linmem_basedata_length(linmem);
-        warp_r3_patch_basedata(linmem, bd_len, stack_phys, driver->r3_linmem_base,
+        warp_r3_patch_basedata(linmem,
+                               bd_len,
+                               stack_phys,
+                               driver->r3_linmem_base,
                                reinterpret_cast<uint64_t>(compiled.data()),
                                static_cast<uint64_t>(compiled.size()),
                                reinterpret_cast<uint64_t>(mod->getContext()),
@@ -249,7 +252,12 @@ static int call_export_mod(vb::WasmModule* mod, const char* name, uint32_t argc,
 #ifdef WASMOS_WASM_RUNTIME_WARP
     if (user_root)
         return warp_r3_call_export(
-            mod, name, argc, argv, user_root, stack_phys,
+            mod,
+            name,
+            argc,
+            argv,
+            user_root,
+            stack_phys,
             WARP_R3_LINMEM_BASE +
                 (reinterpret_cast<uint64_t>(mod->getLinearMemoryRegion(0, 0)) & 0xFFFULL));
 #else
@@ -277,8 +285,8 @@ static int call_export_mod(vb::WasmModule* mod, const char* name, uint32_t argc,
         mod->callExportedFunctionWithName<1>(k_stack_fence, name, argv[0], argv[1], argv[2]);
         break;
     default:
-        mod->callExportedFunctionWithName<1>(k_stack_fence, name, argv[0], argv[1], argv[2],
-                                             argv[3]);
+        mod->callExportedFunctionWithName<1>(
+            k_stack_fence, name, argv[0], argv[1], argv[2], argv[3]);
         break;
     }
     ckpt->active = 0;
@@ -291,8 +299,8 @@ static int call_export_mod(vb::WasmModule* mod, const char* name, uint32_t argc,
 __attribute__((unused)) static int call_export(wasm_driver_t* driver, const char* name,
                                                uint32_t argc, const uint32_t* argv) {
 #ifdef WASMOS_WASM_RUNTIME_WARP
-    return call_export_mod(module_of(driver), name, argc, argv, driver->r3_user_root,
-                           driver->r3_stack_phys);
+    return call_export_mod(
+        module_of(driver), name, argc, argv, driver->r3_user_root, driver->r3_stack_phys);
 #else
     return call_export_mod(module_of(driver), name, argc, argv);
 #endif
@@ -393,21 +401,27 @@ static __attribute__((noinline)) void r3_do_iretq(uint64_t rip, uint64_t rsp, ui
                                                   uint64_t rcx_v) {
     uint64_t user_cs = kUserCS;
     uint64_t user_ss = kUserSS;
-    __asm__ volatile(
-        "movq %[rdi_v], %%rdi\n\t"
-        "movq %[rsi_v], %%rsi\n\t"
-        "movq %[rdx_v], %%rdx\n\t"
-        "movq %[rcx_v], %%rcx\n\t"
-        "pushq %[ss]\n\t"
-        "pushq %[rsp_v]\n\t"
-        "pushq %[rf]\n\t"
-        "pushq %[cs]\n\t"
-        "pushq %[rip_v]\n\t"
-        "iretq"
-        :
-        : [rdi_v] "m"(rdi_v), [rsi_v] "m"(rsi_v), [rdx_v] "m"(rdx_v), [rcx_v] "m"(rcx_v),
-          [ss] "r"(user_ss), [rsp_v] "r"(rsp), [rf] "r"(rflags), [cs] "r"(user_cs), [rip_v] "r"(rip)
-        : "memory", "rdi", "rsi", "rdx", "rcx");
+    __asm__ volatile("movq %[rdi_v], %%rdi\n\t"
+                     "movq %[rsi_v], %%rsi\n\t"
+                     "movq %[rdx_v], %%rdx\n\t"
+                     "movq %[rcx_v], %%rcx\n\t"
+                     "pushq %[ss]\n\t"
+                     "pushq %[rsp_v]\n\t"
+                     "pushq %[rf]\n\t"
+                     "pushq %[cs]\n\t"
+                     "pushq %[rip_v]\n\t"
+                     "iretq"
+                     :
+                     : [rdi_v] "m"(rdi_v),
+                       [rsi_v] "m"(rsi_v),
+                       [rdx_v] "m"(rdx_v),
+                       [rcx_v] "m"(rcx_v),
+                       [ss] "r"(user_ss),
+                       [rsp_v] "r"(rsp),
+                       [rf] "r"(rflags),
+                       [cs] "r"(user_cs),
+                       [rip_v] "r"(rip)
+                     : "memory", "rdi", "rsi", "rdx", "rcx");
     __builtin_unreachable();
 }
 
@@ -858,19 +872,28 @@ int wasm_driver_call_entry(wasm_driver_t* driver) {
         if (policy.clear_resched_before_call) {
             process_clear_resched();
         }
-        return call_export_mod(module_of(driver), driver->manifest.entry_export,
-                               driver->manifest.entry_argc, driver->manifest.entry_argv, r3_root,
+        return call_export_mod(module_of(driver),
+                               driver->manifest.entry_export,
+                               driver->manifest.entry_argc,
+                               driver->manifest.entry_argv,
+                               r3_root,
                                r3_stack);
     }
-    int rc = call_export_mod(module_of(driver), driver->manifest.entry_export,
-                             driver->manifest.entry_argc, driver->manifest.entry_argv, r3_root,
+    int rc = call_export_mod(module_of(driver),
+                             driver->manifest.entry_export,
+                             driver->manifest.entry_argc,
+                             driver->manifest.entry_argv,
+                             r3_root,
                              r3_stack);
     warp_runtime_leave(prev);
     ksync_spinlock_unlock_noirq(&driver->lock);
     return rc;
 #else
-    int rc = call_export_mod(module_of(driver), driver->manifest.entry_export,
-                             driver->manifest.entry_argc, driver->manifest.entry_argv, r3_root,
+    int rc = call_export_mod(module_of(driver),
+                             driver->manifest.entry_export,
+                             driver->manifest.entry_argc,
+                             driver->manifest.entry_argv,
+                             r3_root,
                              r3_stack);
     warp_runtime_leave(prev);
     ksync_spinlock_unlock(&driver->lock);

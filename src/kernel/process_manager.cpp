@@ -140,15 +140,21 @@ class ProcessManager {
             g_pm.module_count = boot_info->module_count;
             g_pm.init_module_index = pm_find_module_index_by_name("sysinit");
         }
-        if (list_init(&g_pm.apps, sizeof(pm_app_state_t), (list_impl_t)WASMOS_PM_LIST_IMPL,
+        if (list_init(&g_pm.apps,
+                      sizeof(pm_app_state_t),
+                      (list_impl_t)WASMOS_PM_LIST_IMPL,
                       WASMOS_PM_LIST_ARRAY_CHUNK_CAP) != 0) {
             return -1;
         }
-        if (list_init(&g_pm.waits, sizeof(pm_wait_state_t), (list_impl_t)WASMOS_PM_LIST_IMPL,
+        if (list_init(&g_pm.waits,
+                      sizeof(pm_wait_state_t),
+                      (list_impl_t)WASMOS_PM_LIST_IMPL,
                       WASMOS_PM_LIST_ARRAY_CHUNK_CAP) != 0) {
             return -1;
         }
-        if (list_init(&g_pm.services, sizeof(pm_service_entry_t), (list_impl_t)WASMOS_PM_LIST_IMPL,
+        if (list_init(&g_pm.services,
+                      sizeof(pm_service_entry_t),
+                      (list_impl_t)WASMOS_PM_LIST_IMPL,
                       WASMOS_PM_LIST_ARRAY_CHUNK_CAP) != 0) {
             return -1;
         }
@@ -356,8 +362,10 @@ class ProcessManager {
              * (productive work, not a spin); the sleep happens only once the
              * queue is empty. */
             uint32_t ready_ep = IPC_ENDPOINT_NONE;
-            (void)ipc_select_wait(pm_atomic_load_u32(&g_pm.select_id), process->context_id,
-                                  &ready_ep, WASMOS_PM_POLL_INTERVAL_MS);
+            (void)ipc_select_wait(pm_atomic_load_u32(&g_pm.select_id),
+                                  process->context_id,
+                                  &ready_ep,
+                                  WASMOS_PM_POLL_INTERVAL_MS);
             return PROCESS_RUN_YIELDED;
         }
 

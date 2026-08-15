@@ -374,8 +374,8 @@ static void vt_fb_set_cursor(const vt_tty_t* tty) {
     if (!tty || !tty->cursor_visible) {
         return;
     }
-    (void)vt_fb_send(FBTEXT_IPC_CURSOR_SET_REQ, (int32_t)tty->cursor_col, (int32_t)tty->cursor_row,
-                     0, 0);
+    (void)vt_fb_send(
+        FBTEXT_IPC_CURSOR_SET_REQ, (int32_t)tty->cursor_col, (int32_t)tty->cursor_row, 0, 0);
 }
 
 static void vt_fb_console_mode(uint8_t enabled) {
@@ -639,8 +639,8 @@ static void vt_render_cell(const vt_tty_t* tty, uint16_t row, uint16_t col) {
     uint32_t idx = vt_cell_index(row, col);
     const vt_cell_t* cell = &tty->cells[idx];
     uint32_t packed = vt_pack_cell_colors(cell);
-    (void)vt_fb_send(FBTEXT_IPC_CELL_WRITE_REQ, (int32_t)col, (int32_t)row, (int32_t)cell->ch,
-                     (int32_t)packed);
+    (void)vt_fb_send(
+        FBTEXT_IPC_CELL_WRITE_REQ, (int32_t)col, (int32_t)row, (int32_t)cell->ch, (int32_t)packed);
 }
 
 static int32_t vt_render_cell_switch(const vt_tty_t* tty, uint16_t row, uint16_t col) {
@@ -650,8 +650,8 @@ static int32_t vt_render_cell_switch(const vt_tty_t* tty, uint16_t row, uint16_t
     uint32_t idx = vt_cell_index(row, col);
     const vt_cell_t* cell = &tty->cells[idx];
     uint32_t packed = vt_pack_cell_colors(cell);
-    return vt_fb_send_switch(FBTEXT_IPC_CELL_WRITE_REQ, (int32_t)col, (int32_t)row,
-                             (int32_t)cell->ch, (int32_t)packed);
+    return vt_fb_send_switch(
+        FBTEXT_IPC_CELL_WRITE_REQ, (int32_t)col, (int32_t)row, (int32_t)cell->ch, (int32_t)packed);
 }
 
 static void vt_scroll_up(vt_tty_t* tty, uint8_t render_now) {
@@ -902,8 +902,8 @@ static int32_t vt_replay_tty(uint32_t tty_index, uint8_t reliable) {
             cells = VT_BLIT_MAX_CELLS;
         }
         memcpy(g_blit_grid, tty->cells, cells * (uint32_t)sizeof(fbtext_blit_cell_t));
-        (void)vt_fb_send_switch(FBTEXT_IPC_BLIT_GRID_REQ, (int32_t)g_vt_cols, (int32_t)g_vt_rows, 0,
-                                0);
+        (void)vt_fb_send_switch(
+            FBTEXT_IPC_BLIT_GRID_REQ, (int32_t)g_vt_cols, (int32_t)g_vt_rows, 0, 0);
         vt_fb_set_cursor(tty);
         return 0;
     }
@@ -994,7 +994,8 @@ static int32_t vt_switch_tty(uint32_t tty_index) {
     if (g_fb_ep < 0) {
         g_switch_generation++;
         g_active_tty = tty_index;
-        vt_trace_mark(VT_TRACE_SWITCH, (uint16_t)(tty_index & 0x0FFFu),
+        vt_trace_mark(VT_TRACE_SWITCH,
+                      (uint16_t)(tty_index & 0x0FFFu),
                       (uint16_t)(g_switch_generation & 0x0FFFu));
         g_switch_barrier = 0;
         return 0;
@@ -1049,7 +1050,8 @@ static int32_t vt_switch_tty(uint32_t tty_index) {
     }
     g_switch_generation++;
     g_active_tty = tty_index;
-    vt_trace_mark(VT_TRACE_SWITCH, (uint16_t)(tty_index & 0x0FFFu),
+    vt_trace_mark(VT_TRACE_SWITCH,
+                  (uint16_t)(tty_index & 0x0FFFu),
                   (uint16_t)(g_switch_generation & 0x0FFFu));
     g_switch_barrier = 0;
     if (tty_index == 0) {
@@ -1201,8 +1203,8 @@ static int vt_read_keymap_file(const char* path, char* out, uint32_t out_cap, ui
         (void)wasmos_xfer_buffer_release(bid);
         return -1;
     }
-    int32_t b1 = wasmos_xfer_buffer_borrow(g_fs_ep, bid,
-                                           WASMOS_BUFFER_GRANT_READ | WASMOS_BUFFER_GRANT_WRITE);
+    int32_t b1 = wasmos_xfer_buffer_borrow(
+        g_fs_ep, bid, WASMOS_BUFFER_GRANT_READ | WASMOS_BUFFER_GRANT_WRITE);
     if (b1 < 0) {
         (void)wasmos_xfer_buffer_release(bid);
         return -1;
@@ -1674,8 +1676,8 @@ static void vt_blit_init(void) {
         return;
     }
     /* Hand the driver the ids to map; it renders on FBTEXT_IPC_BLIT_GRID_REQ. */
-    if (vt_fb_send_switch(FBTEXT_IPC_BLIT_ATTACH_REQ, bid, grant, (int32_t)g_vt_cols,
-                          (int32_t)g_vt_rows) != 0) {
+    if (vt_fb_send_switch(
+            FBTEXT_IPC_BLIT_ATTACH_REQ, bid, grant, (int32_t)g_vt_cols, (int32_t)g_vt_rows) != 0) {
         return;
     }
     g_blit_grid = ptr_cast(fbtext_blit_cell_t, (uint32_t)off);
@@ -1786,12 +1788,14 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
             if (tty_index < 0 || tty_index >= (int32_t)VT_MAX_TTYS) {
                 vt_trace_mark(
                     VT_TRACE_DROP_UNOWNED,
-                    (uint16_t)(msg.source < 0 ? 0x0FFFu : ((uint32_t)msg.source & 0x0FFFu)), 0);
+                    (uint16_t)(msg.source < 0 ? 0x0FFFu : ((uint32_t)msg.source & 0x0FFFu)),
+                    0);
                 break;
             }
             if (msg.source >= 0 && (uint32_t)msg.request_id != g_switch_generation) {
                 /* Drop stale write chunks queued before the last tty switch. */
-                vt_trace_mark(VT_TRACE_DROP_STALE, (uint16_t)((uint32_t)tty_index & 0x0FFFu),
+                vt_trace_mark(VT_TRACE_DROP_STALE,
+                              (uint16_t)((uint32_t)tty_index & 0x0FFFu),
                               (uint16_t)(((uint32_t)msg.request_id) & 0x0FFFu));
                 break;
             }
@@ -1834,8 +1838,11 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
             int32_t tty_index = vt_tty_index_for_source(msg.source);
             if (tty_index < 0 || tty_index >= (int32_t)VT_MAX_TTYS) {
                 if (msg.source >= 0 && msg.request_id != 0) {
-                    (void)vt_ipc_reply_retry(msg.source, VT_IPC_ERROR, msg.request_id,
-                                             WASMOS_ERR_VT_NO_TTY_FOR_SOURCE, 0);
+                    (void)vt_ipc_reply_retry(msg.source,
+                                             VT_IPC_ERROR,
+                                             msg.request_id,
+                                             WASMOS_ERR_VT_NO_TTY_FOR_SOURCE,
+                                             0);
                 }
                 break;
             }
@@ -1867,17 +1874,22 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
             }
             int32_t sw = vt_switch_tty((uint32_t)msg.arg0);
             if (msg.source >= 0 && msg.request_id != 0) {
-                (void)vt_ipc_reply_retry(
-                    msg.source, (sw == 0) ? VT_IPC_RESP : VT_IPC_ERROR, msg.request_id,
-                    (sw == 0) ? (int32_t)g_switch_generation : sw, (int32_t)g_active_tty);
+                (void)vt_ipc_reply_retry(msg.source,
+                                         (sw == 0) ? VT_IPC_RESP : VT_IPC_ERROR,
+                                         msg.request_id,
+                                         (sw == 0) ? (int32_t)g_switch_generation : sw,
+                                         (int32_t)g_active_tty);
             }
             break;
         }
 
         case VT_IPC_GET_ACTIVE_TTY:
             if (msg.source >= 0 && msg.request_id != 0) {
-                (void)vt_ipc_reply_retry(msg.source, VT_IPC_RESP, msg.request_id,
-                                         (int32_t)g_switch_generation, (int32_t)g_active_tty);
+                (void)vt_ipc_reply_retry(msg.source,
+                                         VT_IPC_RESP,
+                                         msg.request_id,
+                                         (int32_t)g_switch_generation,
+                                         (int32_t)g_active_tty);
             }
             break;
 
@@ -1887,23 +1899,25 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
             }
             int32_t tty_id = msg.arg0;
             if (tty_id < 0 || tty_id >= (int32_t)VT_MAX_TTYS) {
-                (void)vt_ipc_reply_retry(msg.source, VT_IPC_ERROR, msg.request_id,
-                                         WASMOS_ERR_VT_BAD_TTY_ID, 0);
+                (void)vt_ipc_reply_retry(
+                    msg.source, VT_IPC_ERROR, msg.request_id, WASMOS_ERR_VT_BAD_TTY_ID, 0);
                 break;
             }
             uint32_t idx = (uint32_t)tty_id;
             if (g_tty_writer_ep[idx] >= 0 && g_tty_writer_ep[idx] != msg.source) {
-                vt_trace_mark(VT_TRACE_WRITER_CONFLICT, (uint16_t)(idx & 0x0FFFu),
+                vt_trace_mark(VT_TRACE_WRITER_CONFLICT,
+                              (uint16_t)(idx & 0x0FFFu),
                               (uint16_t)((uint32_t)msg.source & 0x0FFFu));
                 /* Replace stale/previous writer ownership instead of rejecting
                  * new registrations. This keeps CLI recovery robust when a
                  * prior writer process exited without an explicit unregister. */
             }
             g_tty_writer_ep[idx] = msg.source;
-            vt_trace_mark(VT_TRACE_WRITER_OK, (uint16_t)(idx & 0x0FFFu),
+            vt_trace_mark(VT_TRACE_WRITER_OK,
+                          (uint16_t)(idx & 0x0FFFu),
                           (uint16_t)((uint32_t)msg.source & 0x0FFFu));
-            (void)vt_ipc_reply_retry(msg.source, VT_IPC_RESP, msg.request_id,
-                                     (int32_t)g_switch_generation, tty_id);
+            (void)vt_ipc_reply_retry(
+                msg.source, VT_IPC_RESP, msg.request_id, (int32_t)g_switch_generation, tty_id);
             break;
         }
 
@@ -1913,15 +1927,15 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
             }
             int32_t tty_id = msg.arg0;
             if (tty_id < 0 || tty_id >= (int32_t)VT_MAX_TTYS) {
-                (void)vt_ipc_reply_retry(msg.source, VT_IPC_ERROR, msg.request_id,
-                                         WASMOS_ERR_VT_BAD_TTY_ID, 0);
+                (void)vt_ipc_reply_retry(
+                    msg.source, VT_IPC_ERROR, msg.request_id, WASMOS_ERR_VT_BAD_TTY_ID, 0);
                 break;
             }
             if (g_tty_reader_ep[(uint32_t)tty_id] < 0) {
                 g_tty_reader_ep[(uint32_t)tty_id] = msg.source;
             } else if (g_tty_reader_ep[(uint32_t)tty_id] != msg.source) {
-                (void)vt_ipc_reply_retry(msg.source, VT_IPC_ERROR, msg.request_id,
-                                         WASMOS_ERR_VT_READER_BUSY, 0);
+                (void)vt_ipc_reply_retry(
+                    msg.source, VT_IPC_ERROR, msg.request_id, WASMOS_ERR_VT_READER_BUSY, 0);
                 break;
             }
             uint8_t ch = 0;
@@ -1939,14 +1953,14 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
             }
             int32_t tty_index = vt_tty_index_for_source(msg.source);
             if (tty_index < 0 || tty_index >= (int32_t)VT_MAX_TTYS) {
-                (void)vt_ipc_reply_retry(msg.source, VT_IPC_ERROR, msg.request_id,
-                                         WASMOS_ERR_VT_NO_TTY_FOR_SOURCE, 0);
+                (void)vt_ipc_reply_retry(
+                    msg.source, VT_IPC_ERROR, msg.request_id, WASMOS_ERR_VT_NO_TTY_FOR_SOURCE, 0);
                 break;
             }
             uint8_t mode = (uint8_t)(msg.arg0 & (VT_INPUT_MODE_CANONICAL | VT_INPUT_MODE_ECHO));
             vt_set_input_mode(&g_ttys[(uint32_t)tty_index], mode);
-            (void)vt_ipc_reply_retry(msg.source, VT_IPC_RESP, msg.request_id, (int32_t)mode,
-                                     tty_index);
+            (void)vt_ipc_reply_retry(
+                msg.source, VT_IPC_RESP, msg.request_id, (int32_t)mode, tty_index);
             break;
         }
 
@@ -1959,8 +1973,8 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
 
         default:
             if (msg.source >= 0 && msg.request_id != 0) {
-                (void)vt_ipc_reply_retry(msg.source, VT_IPC_ERROR, msg.request_id,
-                                         WASMOS_ERR_VT_UNSUPPORTED_REQUEST, 0);
+                (void)vt_ipc_reply_retry(
+                    msg.source, VT_IPC_ERROR, msg.request_id, WASMOS_ERR_VT_UNSUPPORTED_REQUEST, 0);
             }
             break;
         }

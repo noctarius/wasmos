@@ -65,8 +65,8 @@ static int fat_block_start(fat_block_t* blk, uint32_t lba, int rw) {
         return -1;
     }
     if (rw == 1 /* write */ &&
-        wasmos_block_buffer_write(blk->buf_phys, addr_cast(int32_t, blk->sector),
-                                  (int32_t)FAT_SECTOR_SIZE, 0) != 0) {
+        wasmos_block_buffer_write(
+            blk->buf_phys, addr_cast(int32_t, blk->sector), (int32_t)FAT_SECTOR_SIZE, 0) != 0) {
         return -1;
     }
 
@@ -79,8 +79,14 @@ static int fat_block_start(fat_block_t* blk, uint32_t lba, int rw) {
     blk->copy_into_sector = rw ? 0u : 1u;
     req_type = rw ? BLOCK_IPC_WRITE_REQ : BLOCK_IPC_READ_REQ;
 
-    if (wasmos_ipc_send(blk->block_endpoint, blk->reply_endpoint, req_type, blk->cur_req_id,
-                        blk->buf_phys, (int32_t)lba, 1, 0) != 0) {
+    if (wasmos_ipc_send(blk->block_endpoint,
+                        blk->reply_endpoint,
+                        req_type,
+                        blk->cur_req_id,
+                        blk->buf_phys,
+                        (int32_t)lba,
+                        1,
+                        0) != 0) {
         blk->cur_req_id = 0;
         return -1;
     }
@@ -125,8 +131,12 @@ fat_r_t fat_block_read_direct(fat_block_t* blk, uint32_t lba, uint32_t count, in
 
     /* The borrow rides above the count so the server can map the destination for
      * device DMA; a server that only copies just masks it off. */
-    if (wasmos_ipc_send(blk->block_endpoint, blk->reply_endpoint, BLOCK_IPC_READ_ZC_REQ,
-                        blk->cur_req_id, buffer_id, (int32_t)lba,
+    if (wasmos_ipc_send(blk->block_endpoint,
+                        blk->reply_endpoint,
+                        BLOCK_IPC_READ_ZC_REQ,
+                        blk->cur_req_id,
+                        buffer_id,
+                        (int32_t)lba,
                         (int32_t)((uint32_t)borrow_id << WASMOS_BLOCK_ZC_BORROW_SHIFT) |
                             (int32_t)count,
                         (int32_t)dst_offset) != 0) {
@@ -210,8 +220,8 @@ fat_op_ctx_t* fat_block_complete(fat_block_t* blk, int* out_ok) {
         return owner; /* out_ok stays 0 */
     }
     if (blk->copy_into_sector &&
-        wasmos_block_buffer_copy(blk->buf_phys, addr_cast(int32_t, blk->sector),
-                                 (int32_t)FAT_SECTOR_SIZE, 0) != 0) {
+        wasmos_block_buffer_copy(
+            blk->buf_phys, addr_cast(int32_t, blk->sector), (int32_t)FAT_SECTOR_SIZE, 0) != 0) {
         blk->loaded_lba = FAT_BLOCK_NO_LBA;
         return owner;
     }

@@ -247,8 +247,8 @@ static int nd_map_pages(mm_context_t* ctx, uint64_t virt, uint64_t phys_base, ui
     }
     for (uint64_t i = 0; i < pages; ++i) {
         (void)paging_unmap_4k_in_root(ctx->root_table, virt + i * PAGE_SIZE);
-        if (paging_map_4k_in_root(ctx->root_table, virt + i * PAGE_SIZE, phys_base + i * PAGE_SIZE,
-                                  map_flags) < 0) {
+        if (paging_map_4k_in_root(
+                ctx->root_table, virt + i * PAGE_SIZE, phys_base + i * PAGE_SIZE, map_flags) < 0) {
             for (uint64_t j = 0; j < i; ++j) {
                 (void)paging_unmap_4k_in_root(ctx->root_table, virt + j * PAGE_SIZE);
             }
@@ -889,8 +889,8 @@ static int load_segments(const uint8_t* elf_data, uint32_t elf_size, uint64_t ro
 
         for (uint64_t p = 0; p < alloc_pages; ++p) {
             (void)paging_unmap_4k_in_root(root_table, vpage + p * PAGE_SIZE);
-            if (paging_map_4k_in_root(root_table, vpage + p * PAGE_SIZE, phys + p * PAGE_SIZE,
-                                      copy_flags) < 0) {
+            if (paging_map_4k_in_root(
+                    root_table, vpage + p * PAGE_SIZE, phys + p * PAGE_SIZE, copy_flags) < 0) {
                 goto fail;
             }
         }
@@ -903,8 +903,8 @@ static int load_segments(const uint8_t* elf_data, uint32_t elf_size, uint64_t ro
             }
         }
         if (ph->p_memsz > ph->p_filesz) {
-            if (zero_into_root(root_table, ph->p_vaddr + ph->p_filesz,
-                               ph->p_memsz - ph->p_filesz) != 0) {
+            if (zero_into_root(
+                    root_table, ph->p_vaddr + ph->p_filesz, ph->p_memsz - ph->p_filesz) != 0) {
                 goto fail;
             }
         }
@@ -912,8 +912,8 @@ static int load_segments(const uint8_t* elf_data, uint32_t elf_size, uint64_t ro
         /* Drop the temporary write permission for read-only/execute segments. */
         if (copy_flags != final_flags) {
             for (uint64_t p = 0; p < alloc_pages; ++p) {
-                (void)paging_map_4k_in_root(root_table, vpage + p * PAGE_SIZE, phys + p * PAGE_SIZE,
-                                            final_flags);
+                (void)paging_map_4k_in_root(
+                    root_table, vpage + p * PAGE_SIZE, phys + p * PAGE_SIZE, final_flags);
             }
         }
         total_bytes += alloc_pages * PAGE_SIZE;

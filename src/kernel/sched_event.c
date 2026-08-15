@@ -50,8 +50,12 @@ static void sched_timeout_arm(thread_t* t, uint64_t deadline_tick) {
      * sched_timeout_check() publishes a recomputed bound concurrently. */
     uint64_t cur = __atomic_load_n(&g_sched_timeout_next, __ATOMIC_ACQUIRE);
     while (deadline_tick < cur) {
-        if (__atomic_compare_exchange_n(&g_sched_timeout_next, &cur, deadline_tick, 1,
-                                        __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
+        if (__atomic_compare_exchange_n(&g_sched_timeout_next,
+                                        &cur,
+                                        deadline_tick,
+                                        1,
+                                        __ATOMIC_ACQ_REL,
+                                        __ATOMIC_ACQUIRE)) {
             break;
         }
     }
@@ -140,8 +144,8 @@ void sched_timeout_check(void) {
      * is self-correcting. */
     uint32_t arm_seq_now = __atomic_load_n(&g_sched_timeout_arm_seq, __ATOMIC_ACQUIRE);
     if (arm_seq_now == arm_seq) {
-        (void)__atomic_compare_exchange_n(&g_sched_timeout_next, &observed, next, 0,
-                                          __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE);
+        (void)__atomic_compare_exchange_n(
+            &g_sched_timeout_next, &observed, next, 0, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE);
     }
 }
 

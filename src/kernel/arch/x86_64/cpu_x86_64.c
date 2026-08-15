@@ -101,8 +101,13 @@ static idt_entry_t g_idt[IDT_ENTRY_COUNT];
  * code/data (DPL 0), user code/data (DPL 3); slots [5..6] hold the 16-byte
  * 64-bit TSS descriptor and are filled in by gdt_set_tss_base(). */
 static const uint64_t k_gdt_template[GDT_ENTRY_COUNT] = {
-    0x0000000000000000ULL, 0x00AF9A000000FFFFULL, 0x00AF92000000FFFFULL, 0x00AFFA000000FFFFULL,
-    0x00AFF2000000FFFFULL, 0x0000000000000000ULL, 0x0000000000000000ULL,
+    0x0000000000000000ULL,
+    0x00AF9A000000FFFFULL,
+    0x00AF92000000FFFFULL,
+    0x00AFFA000000FFFFULL,
+    0x00AFF2000000FFFFULL,
+    0x0000000000000000ULL,
+    0x0000000000000000ULL,
 };
 
 /* BSP interrupt stacks.  g_irq0_ist_stack is a standalone global so cpu_isr.S can
@@ -273,7 +278,8 @@ static void panic_render_screen(uint64_t vector, uint64_t err, uint64_t rip, uin
     if (have_fb) {
         panic_fb_printf("fb_base  %016llx\n", (unsigned long long)fb_info.framebuffer_base);
         panic_fb_printf("fb_size  %016llx\n", (unsigned long long)fb_info.framebuffer_size);
-        panic_fb_printf("fb_w/h   %u x %u\n", (unsigned)fb_info.framebuffer_width,
+        panic_fb_printf("fb_w/h   %u x %u\n",
+                        (unsigned)fb_info.framebuffer_width,
                         (unsigned)fb_info.framebuffer_height);
         panic_fb_printf("fb_strd  %u\n", (unsigned)fb_info.framebuffer_stride);
     } else {
@@ -458,8 +464,10 @@ static __attribute__((noreturn)) void x86_exception_panic_common(uint64_t vector
                            "[cpu] rip=%016llx\n"
                            "[cpu] cs=%016llx\n"
                            "[cpu] rflags=%016llx\n",
-                           (unsigned long long)vector, (unsigned long long)err,
-                           (unsigned long long)rip, (unsigned long long)cs,
+                           (unsigned long long)vector,
+                           (unsigned long long)err,
+                           (unsigned long long)rip,
+                           (unsigned long long)cs,
                            (unsigned long long)rflags);
     if (has_cr2) {
         serial_printf_unlocked("[cpu] cr2=%016llx\n", (unsigned long long)cr2);
@@ -470,7 +478,10 @@ static __attribute__((noreturn)) void x86_exception_panic_common(uint64_t vector
             0) {
             serial_printf_unlocked(
                 "[cpu] linmem-fault slot=%u owner_pid=%u off=%016llx reserved=%u present=%u\n",
-                lm_slot, lm_owner, (unsigned long long)lm_off, (unsigned)lm_reserved,
+                lm_slot,
+                lm_owner,
+                (unsigned long long)lm_off,
+                (unsigned)lm_reserved,
                 (unsigned)lm_present);
         }
     }
@@ -479,25 +490,47 @@ static __attribute__((noreturn)) void x86_exception_panic_common(uint64_t vector
                            "[cpu] name=%s\n"
                            "[cpu] stack base=%016llx\n"
                            "[cpu] stack top=%016llx\n",
-                           addr_cast(unsigned long long, frame), pid, name ? name : "(null)",
-                           (unsigned long long)stack_base, (unsigned long long)stack_top);
+                           addr_cast(unsigned long long, frame),
+                           pid,
+                           name ? name : "(null)",
+                           (unsigned long long)stack_base,
+                           (unsigned long long)stack_top);
     serial_printf_unlocked(
         "[cpu] ctxsw out ctx=%016llx rip=%016llx rsp=%016llx rflags=%016llx\n"
         "[cpu] ctxsw in ctx=%016llx rip=%016llx rsp=%016llx rflags=%016llx\n"
         "[cpu] ctxsw restore ctx=%016llx rip=%016llx rsp=%016llx rflags=%016llx\n",
-        (unsigned long long)g_ctxsw_last_out_ctx, (unsigned long long)g_ctxsw_last_out_rip,
-        (unsigned long long)g_ctxsw_last_out_rsp, (unsigned long long)g_ctxsw_last_out_rflags,
-        (unsigned long long)g_ctxsw_last_in_ctx, (unsigned long long)g_ctxsw_last_in_rip,
-        (unsigned long long)g_ctxsw_last_in_rsp, (unsigned long long)g_ctxsw_last_in_rflags,
-        (unsigned long long)g_ctx_restore_ctx, (unsigned long long)g_ctx_restore_rip,
-        (unsigned long long)g_ctx_restore_rsp, (unsigned long long)g_ctx_restore_rflags);
+        (unsigned long long)g_ctxsw_last_out_ctx,
+        (unsigned long long)g_ctxsw_last_out_rip,
+        (unsigned long long)g_ctxsw_last_out_rsp,
+        (unsigned long long)g_ctxsw_last_out_rflags,
+        (unsigned long long)g_ctxsw_last_in_ctx,
+        (unsigned long long)g_ctxsw_last_in_rip,
+        (unsigned long long)g_ctxsw_last_in_rsp,
+        (unsigned long long)g_ctxsw_last_in_rflags,
+        (unsigned long long)g_ctx_restore_ctx,
+        (unsigned long long)g_ctx_restore_rip,
+        (unsigned long long)g_ctx_restore_rsp,
+        (unsigned long long)g_ctx_restore_rflags);
     if (rip >= kernel_start && (rip + 16) <= kernel_end) {
         serial_dump_bytes_unlocked("[cpu] rip bytes", (const uint8_t*)rip, 16);
     }
     serial_printf_unlocked("[cpu] cr3=%016llx\n", (unsigned long long)cr3);
 
-    panic_render_screen(vector, err, rip, cs, rflags, cr2, has_cr2, frame, pid, name, stack_base,
-                        stack_top, kernel_start, kernel_end, cr3);
+    panic_render_screen(vector,
+                        err,
+                        rip,
+                        cs,
+                        rflags,
+                        cr2,
+                        has_cr2,
+                        frame,
+                        pid,
+                        name,
+                        stack_base,
+                        stack_top,
+                        kernel_start,
+                        kernel_end,
+                        cr3);
 
     /* Stop the world, dump every CPU, and halt. a=vector; b=cr2 for a page
      * fault, else the faulting rip. */
@@ -553,8 +586,10 @@ int x86_user_exception_handler(uint64_t vector, const uint64_t* frame) {
         return -1;
     }
 
-    serial_printf("[fault] user-exc pid=%u vector=%llu rip=%016llx\n", pid,
-                  (unsigned long long)vector, (unsigned long long)rip);
+    serial_printf("[fault] user-exc pid=%u vector=%llu rip=%016llx\n",
+                  pid,
+                  (unsigned long long)vector,
+                  (unsigned long long)rip);
     if (proc->name && strcmp(proc->name, "ring3-fault-ud") == 0) {
         serial_write("[test] ring3 fault ud reason ok\n");
     }
@@ -641,10 +676,15 @@ int x86_page_fault_handler(uint64_t error_code, const uint64_t* frame) {
     if (memory_service_handle_fault_ipc(proc->context_id, cr2, error_code) != 0) {
         if (from_user) {
             serial_printf("[fault] user-pf pid=%u reason=%s err=%016llx cr2=%016llx rip=%016llx\n",
-                          pid, pf_reason_name(reason), (unsigned long long)error_code,
-                          (unsigned long long)cr2, (unsigned long long)rip);
-            serial_printf("[cpu] user page fault terminate pid=%u err=%016llx cr2=%016llx\n", pid,
-                          (unsigned long long)error_code, (unsigned long long)cr2);
+                          pid,
+                          pf_reason_name(reason),
+                          (unsigned long long)error_code,
+                          (unsigned long long)cr2,
+                          (unsigned long long)rip);
+            serial_printf("[cpu] user page fault terminate pid=%u err=%016llx cr2=%016llx\n",
+                          pid,
+                          (unsigned long long)error_code,
+                          (unsigned long long)cr2);
             if (proc->name && strcmp(proc->name, "ring3-fault") == 0 &&
                 reason == PF_REASON_USER_TO_KERNEL) {
                 serial_write("[test] ring3 fault isolate ok\n");
@@ -728,8 +768,8 @@ void x86_cpu_init(void) {
     for (uint32_t i = 0; i < IRQ_COUNT; ++i) {
         uintptr_t handler = x86_kernel_handler_addr((uintptr_t)x86_irq_stub_table[i]);
         if (i == 0) {
-            idt_set_gate_ist((uint8_t)(IRQ_VECTOR_BASE + i), handler, IDT_TYPE_INTERRUPT_GATE,
-                             IRQ0_IST_INDEX);
+            idt_set_gate_ist(
+                (uint8_t)(IRQ_VECTOR_BASE + i), handler, IDT_TYPE_INTERRUPT_GATE, IRQ0_IST_INDEX);
         } else {
             idt_set_gate((uint8_t)(IRQ_VECTOR_BASE + i), handler, IDT_TYPE_INTERRUPT_GATE);
         }
@@ -747,17 +787,18 @@ void x86_cpu_init(void) {
      * handler just returns.  Intel SDM Vol 3A §10.9 explicitly states that
      * the processor does not latch the spurious-interrupt vector. */
     extern void isr_lapic_spurious(void);
-    idt_set_gate(255u, x86_kernel_handler_addr((uintptr_t)isr_lapic_spurious),
-                 IDT_TYPE_INTERRUPT_GATE);
+    idt_set_gate(
+        255u, x86_kernel_handler_addr((uintptr_t)isr_lapic_spurious), IDT_TYPE_INTERRUPT_GATE);
 #endif
     /* The syscall gate is the only user-reachable gate (DPL 3), so ring 3 can
      * issue int 0x80; every other vector stays DPL 0.
      * TODO: the first installation writes the raw stub address and is
      * immediately overwritten by the higher-half alias on the next call. Nothing
      * reads the literal form any more, so it can be dropped. */
-    idt_set_gate((uint8_t)X86_VECTOR_SYSCALL, (uintptr_t)isr_syscall_128,
-                 IDT_TYPE_INTERRUPT_GATE_USER);
-    idt_set_gate((uint8_t)X86_VECTOR_SYSCALL, x86_kernel_handler_addr((uintptr_t)isr_syscall_128),
+    idt_set_gate(
+        (uint8_t)X86_VECTOR_SYSCALL, (uintptr_t)isr_syscall_128, IDT_TYPE_INTERRUPT_GATE_USER);
+    idt_set_gate((uint8_t)X86_VECTOR_SYSCALL,
+                 x86_kernel_handler_addr((uintptr_t)isr_syscall_128),
                  IDT_TYPE_INTERRUPT_GATE_USER);
     /* Set GS base to &g_cpus[0] so cpu_local() via GS:0 works from here on.
      * The self-pointer must be written before the MSR load. */

@@ -464,8 +464,12 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
      * class + subscription and pulls mount info, so there is no push
      * registration here. Class registration needs the svc.class capability
      * (see linker.metadata). */
-    if (wasmos_svc_register_class(proc_endpoint, g_fs_endpoint, "initfs.rules", FSMGR_BACKEND_CLASS,
-                                  FSMGR_BACKEND_INSTANCE(FSMGR_BACKEND_INIT, 0), 1) != 0) {
+    if (wasmos_svc_register_class(proc_endpoint,
+                                  g_fs_endpoint,
+                                  "initfs.rules",
+                                  FSMGR_BACKEND_CLASS,
+                                  FSMGR_BACKEND_INSTANCE(FSMGR_BACKEND_INIT, 0),
+                                  1) != 0) {
         console_write("[fs-init] register failed\n");
         wasmos_sys_ipc_recv_loop();
     }
@@ -478,10 +482,14 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
             continue;
         }
         if (wasmos_ipc_last_field(WASMOS_IPC_FIELD_TYPE) == FSMGR_IPC_BACKEND_INFO_REQ) {
-            (void)wasmos_ipc_send(wasmos_ipc_last_field(WASMOS_IPC_FIELD_SOURCE), g_fs_endpoint,
+            (void)wasmos_ipc_send(wasmos_ipc_last_field(WASMOS_IPC_FIELD_SOURCE),
+                                  g_fs_endpoint,
                                   FSMGR_IPC_BACKEND_INFO_RESP,
                                   wasmos_ipc_last_field(WASMOS_IPC_FIELD_REQUEST_ID),
-                                  FSMGR_BACKEND_INIT, 0, 0, 0);
+                                  FSMGR_BACKEND_INIT,
+                                  0,
+                                  0,
+                                  0);
             break;
         }
     }
@@ -501,8 +509,14 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
         /* fs-manager pull: report kind=INIT. No mount buffer (arg2=0) → fs-manager
          * uses its default "init" mount name; unit 0. */
         if (type == FSMGR_IPC_BACKEND_INFO_REQ) {
-            (void)wasmos_ipc_send(source, g_fs_endpoint, FSMGR_IPC_BACKEND_INFO_RESP, req_id,
-                                  FSMGR_BACKEND_INIT, 0, 0, 0);
+            (void)wasmos_ipc_send(source,
+                                  g_fs_endpoint,
+                                  FSMGR_IPC_BACKEND_INFO_RESP,
+                                  req_id,
+                                  FSMGR_BACKEND_INIT,
+                                  0,
+                                  0,
+                                  0);
             continue;
         }
         int32_t* cwd_dir = client_cwd_for_source(source);
@@ -512,8 +526,8 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
         if (!cwd_dir) {
             /* Every INITFS_MAX_CLIENTS slot is taken, so this client's cwd
              * cannot be tracked. */
-            (void)wasmos_ipc_send(source, g_fs_endpoint, FS_IPC_ERROR, req_id,
-                                  WASMOS_ERR_FS_NO_CLIENT_SLOT, 0, 0, 0);
+            (void)wasmos_ipc_send(
+                source, g_fs_endpoint, FS_IPC_ERROR, req_id, WASMOS_ERR_FS_NO_CLIENT_SLOT, 0, 0, 0);
             continue;
         }
 
@@ -571,8 +585,8 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
                         if (copied == 0) {
                             break;
                         }
-                        if (wasmos_xfer_buffer_write(arg2, addr_cast(int32_t, tmp), copied,
-                                                     total) != 0) {
+                        if (wasmos_xfer_buffer_write(
+                                arg2, addr_cast(int32_t, tmp), copied, total) != 0) {
                             copy_err = WASMOS_ERR_FS_BUFFER;
                             break;
                         }
@@ -600,14 +614,20 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
             status = emit_init_listing(source, req_id);
         } else if (type == FS_IPC_CHDIR_REQ) {
             char name[INITFS_PATH_MAX];
-            unpack_name((uint32_t)arg0, (uint32_t)arg1, (uint32_t)arg2, (uint32_t)arg3, name,
-                        sizeof(name));
+            unpack_name(
+                (uint32_t)arg0, (uint32_t)arg1, (uint32_t)arg2, (uint32_t)arg3, name, sizeof(name));
             status = chdir_to_path(cwd_dir, name);
         } else if (type == FS_IPC_READY_REQ) {
             status = 0;
         }
 
-        (void)wasmos_ipc_send(source, g_fs_endpoint, status >= 0 ? FS_IPC_RESP : FS_IPC_ERROR,
-                              req_id, status, 0, 0, 0);
+        (void)wasmos_ipc_send(source,
+                              g_fs_endpoint,
+                              status >= 0 ? FS_IPC_RESP : FS_IPC_ERROR,
+                              req_id,
+                              status,
+                              0,
+                              0,
+                              0);
     }
 }

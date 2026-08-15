@@ -94,11 +94,11 @@ static int register_test_handlers(void) {
     if (wasmos_subsystem_registry_register_broker("JAVA", "NATIVE", "JAVA", 102u, 0u, 0u, 0u, 1u) !=
         0)
         return -1;
-    if (wasmos_subsystem_registry_register_exec_handler("lua-file", "LUA", 0u, 40u, 2u, lua_nodes,
-                                                        3u, 0u) != 0)
+    if (wasmos_subsystem_registry_register_exec_handler(
+            "lua-file", "LUA", 0u, 40u, 2u, lua_nodes, 3u, 0u) != 0)
         return -1;
-    if (wasmos_subsystem_registry_register_exec_handler("jar-file", "JAVA", 0u, 50u, 4u, java_nodes,
-                                                        3u, 0u) != 0)
+    if (wasmos_subsystem_registry_register_exec_handler(
+            "jar-file", "JAVA", 0u, 50u, 4u, java_nodes, 3u, 0u) != 0)
         return -1;
     return 0;
 }
@@ -159,16 +159,20 @@ static int test_classify_real_wap_fixtures(void) {
     }
 
     memset(&match, 0, sizeof(match));
-    if (wasmos_exec_format_classify("/boot/apps/demo.jar", (const uint8_t*)&wap_current,
-                                    (uint32_t)sizeof(wap_current), &match) != 0) {
+    if (wasmos_exec_format_classify("/boot/apps/demo.jar",
+                                    (const uint8_t*)&wap_current,
+                                    (uint32_t)sizeof(wap_current),
+                                    &match) != 0) {
         return __LINE__;
     }
     if (match.kind != WASMOS_EXEC_FORMAT_WAP || match.handler.handler_name[0] != '\0')
         return __LINE__;
 
     memset(&match, 0, sizeof(match));
-    if (wasmos_exec_format_classify("/boot/apps/legacy.wap", (const uint8_t*)&wap_retired,
-                                    (uint32_t)sizeof(wap_retired), &match) != 0) {
+    if (wasmos_exec_format_classify("/boot/apps/legacy.wap",
+                                    (const uint8_t*)&wap_retired,
+                                    (uint32_t)sizeof(wap_retired),
+                                    &match) != 0) {
         return __LINE__;
     }
     if (match.kind != WASMOS_EXEC_FORMAT_NONE)
@@ -184,8 +188,8 @@ static int test_classify_broker_formats(void) {
     wasmos_exec_format_match_t match;
 
     memset(&match, 0, sizeof(match));
-    if (wasmos_exec_format_classify("/user/bin/demo.lua", lua_script,
-                                    (uint32_t)sizeof(lua_script) - 1u, &match) != 0) {
+    if (wasmos_exec_format_classify(
+            "/user/bin/demo.lua", lua_script, (uint32_t)sizeof(lua_script) - 1u, &match) != 0) {
         return __LINE__;
     }
     if (match.kind != WASMOS_EXEC_FORMAT_BROKER || match.handler.handler_name[0] == '\0')
@@ -194,8 +198,8 @@ static int test_classify_broker_formats(void) {
         return __LINE__;
 
     memset(&match, 0, sizeof(match));
-    if (wasmos_exec_format_classify("/user/bin/tool.jar", jar_blob, (uint32_t)sizeof(jar_blob),
-                                    &match) != 0) {
+    if (wasmos_exec_format_classify(
+            "/user/bin/tool.jar", jar_blob, (uint32_t)sizeof(jar_blob), &match) != 0) {
         return __LINE__;
     }
     if (match.kind != WASMOS_EXEC_FORMAT_BROKER || match.handler.handler_name[0] == '\0')
@@ -204,8 +208,8 @@ static int test_classify_broker_formats(void) {
         return __LINE__;
 
     memset(&match, 0, sizeof(match));
-    if (wasmos_exec_format_classify("/user/bin/other.txt", other_blob,
-                                    (uint32_t)sizeof(other_blob) - 1u, &match) != 0) {
+    if (wasmos_exec_format_classify(
+            "/user/bin/other.txt", other_blob, (uint32_t)sizeof(other_blob) - 1u, &match) != 0) {
         return __LINE__;
     }
     if (match.kind != WASMOS_EXEC_FORMAT_NONE || match.handler.handler_name[0] != '\0')
@@ -246,7 +250,8 @@ static int test_validate_broker_plan(void) {
     handler = &handler_copy;
 
     host_path_offset = off;
-    memcpy(plan_blob + off, "/boot/system/brokers/java-host.wap",
+    memcpy(plan_blob + off,
+           "/boot/system/brokers/java-host.wap",
            sizeof("/boot/system/brokers/java-host.wap"));
     off += (uint32_t)sizeof("/boot/system/brokers/java-host.wap");
     host_args_offset = off;

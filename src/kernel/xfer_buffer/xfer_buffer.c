@@ -687,8 +687,8 @@ static int xfer_buffer_reborrow_locked(const xfer_buffer_borrow_t* upstream,
     if (borrow_find_for(up->buffer_id, borrower_context_id)) {
         return WASMOS_ERR_XFER_BUFFER_ALREADY_BORROWED;
     }
-    return attach_borrow(object, up->borrow_id, up->borrower_context_id, borrower_context_id, flags,
-                         out_borrow);
+    return attach_borrow(
+        object, up->borrow_id, up->borrower_context_id, borrower_context_id, flags, out_borrow);
 }
 
 static int xfer_buffer_unborrow_locked(const xfer_buffer_borrow_t* borrow) {

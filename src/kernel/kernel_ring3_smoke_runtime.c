@@ -53,8 +53,9 @@ void kernel_shmem_owner_isolation_test(uint32_t owner_context_id, uint32_t forei
         owner_context_id == foreign_context_id) {
         return;
     }
-    if (mm_shared_create(owner_context_id, 1, MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE,
-                         &shmem_id, &phys) != 0 ||
+    if (mm_shared_create(
+            owner_context_id, 1, MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE, &shmem_id, &phys) !=
+            0 ||
         shmem_id == 0 || phys == 0) {
         klog_write("[test] shmem owner setup failed\n");
         return;
@@ -97,8 +98,9 @@ void kernel_ring3_shmem_isolation_test(uint32_t owner_context_id, uint32_t forei
         klog_write("[test] ring3 shmem setup failed\n");
         return;
     }
-    if (mm_shared_create(owner_context_id, 1, MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE,
-                         &shmem_id, &phys) != 0 ||
+    if (mm_shared_create(
+            owner_context_id, 1, MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE, &shmem_id, &phys) !=
+            0 ||
         shmem_id == 0 || phys == 0) {
         klog_write("[test] ring3 shmem setup failed\n");
         return;
@@ -159,8 +161,9 @@ void kernel_shmem_misuse_matrix_test(uint32_t owner_context_id, uint32_t foreign
         ok = 0;
         goto done;
     }
-    if (mm_shared_create(owner_context_id, 1, MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE,
-                         &shmem_id, &phys) != 0 ||
+    if (mm_shared_create(
+            owner_context_id, 1, MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE, &shmem_id, &phys) !=
+            0 ||
         shmem_id == 0 || phys == 0) {
         ok = 0;
         goto done;
@@ -179,15 +182,15 @@ void kernel_shmem_misuse_matrix_test(uint32_t owner_context_id, uint32_t foreign
         mm_shared_revoke(foreign_context_id, shmem_id, owner_context_id) == 0) {
         ok = 0;
     }
-    if (mm_shared_map(foreign_ctx, shmem_id, MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE,
-                      &map_base) == 0) {
+    if (mm_shared_map(
+            foreign_ctx, shmem_id, MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE, &map_base) == 0) {
         ok = 0;
     }
     if (mm_shared_grant(owner_context_id, shmem_id, foreign_context_id) != 0) {
         ok = 0;
     }
-    if (mm_shared_map(foreign_ctx, shmem_id, MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE,
-                      &map_base) != 0 ||
+    if (mm_shared_map(
+            foreign_ctx, shmem_id, MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE, &map_base) != 0 ||
         map_base == 0 || mm_shared_unmap(foreign_ctx, shmem_id) != 0) {
         ok = 0;
     }
@@ -195,8 +198,8 @@ void kernel_shmem_misuse_matrix_test(uint32_t owner_context_id, uint32_t foreign
         mm_shared_revoke(owner_context_id, shmem_id, foreign_context_id) != 0) {
         ok = 0;
     }
-    if (mm_shared_map(foreign_ctx, shmem_id, MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE,
-                      &map_base) == 0 ||
+    if (mm_shared_map(
+            foreign_ctx, shmem_id, MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE, &map_base) == 0 ||
         mm_shared_release(foreign_context_id, shmem_id) == 0) {
         ok = 0;
     }
@@ -305,9 +308,12 @@ int kernel_ring3_spawn_smoke_process(uint32_t parent_pid, uint32_t* out_pid) {
         linear.size < sizeof(ring3_code) || stack.base == 0 || stack.size < 16u) {
         return -1;
     }
-    if (map_linear_pages(
-            ctx->root_table, linear.base, linear.phys_base, (uint32_t)sizeof(ring3_code),
-            MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE | MEM_REGION_FLAG_USER) != 0) {
+    if (map_linear_pages(ctx->root_table,
+                         linear.base,
+                         linear.phys_base,
+                         (uint32_t)sizeof(ring3_code),
+                         MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE | MEM_REGION_FLAG_USER) !=
+        0) {
         return -1;
     }
     memcpy(ring3_code_patched, ring3_code, sizeof(ring3_code_patched));
@@ -317,8 +323,12 @@ int kernel_ring3_spawn_smoke_process(uint32_t parent_pid, uint32_t* out_pid) {
      * such immediate and pairs positionally with values[]; the two arrays and
      * the loop bound must be updated together whenever the blob changes. */
     const uint32_t offsets[] = {30u, 42u, 76u, 98u, 120u, 142u, 164u};
-    const uint32_t values[] = {ring3_notify_ep,       ring3_notify_control_ep, ring3_call_denied_ep,
-                               ring3_call_control_ep, ring3_call_echo_ep,      ring3_call_echo_ep,
+    const uint32_t values[] = {ring3_notify_ep,
+                               ring3_notify_control_ep,
+                               ring3_call_denied_ep,
+                               ring3_call_control_ep,
+                               ring3_call_echo_ep,
+                               ring3_call_echo_ep,
                                ring3_call_echo_ep};
     for (uint32_t i = 0; i < 7u; ++i) {
         uint32_t value = values[i];
@@ -329,9 +339,13 @@ int kernel_ring3_spawn_smoke_process(uint32_t parent_pid, uint32_t* out_pid) {
         ring3_code_patched[offset + 3] = (uint8_t)((value >> 24) & 0xFFu);
     }
 
-    if (mm_copy_to_user(proc->context_id, linear.base, ring3_code_patched,
+    if (mm_copy_to_user(proc->context_id,
+                        linear.base,
+                        ring3_code_patched,
                         (uint32_t)sizeof(ring3_code_patched)) != 0 ||
-        map_linear_pages(ctx->root_table, linear.base, linear.phys_base,
+        map_linear_pages(ctx->root_table,
+                         linear.base,
+                         linear.phys_base,
                          (uint32_t)sizeof(ring3_code),
                          MEM_REGION_FLAG_READ | MEM_REGION_FLAG_EXEC | MEM_REGION_FLAG_USER) != 0) {
         return -1;

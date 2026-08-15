@@ -17,8 +17,15 @@ static inline void ui_render_dropdown(ui_context_t* ctx, const ui_component_t* c
     const int32_t active = (ctx->focused_component_id == c->id);
     const uint32_t inner = active ? 0xFF1F3148u : 0xFF1C2738u;
     const uint32_t outline = active ? 0xFF89C9FFu : c->border_color;
-    ui_fill_rect_clip(ctx->mapped_base, ctx->width, ctx->height, draw_bounds.x + 1,
-                      draw_bounds.y + 1, draw_bounds.w - 2, draw_bounds.h - 2, inner, clip);
+    ui_fill_rect_clip(ctx->mapped_base,
+                      ctx->width,
+                      ctx->height,
+                      draw_bounds.x + 1,
+                      draw_bounds.y + 1,
+                      draw_bounds.w - 2,
+                      draw_bounds.h - 2,
+                      inner,
+                      clip);
     ui_stroke_rect_clip(ctx->mapped_base, ctx->width, ctx->height, draw_bounds, 1, outline, clip);
 
     const char* selected = "";
@@ -30,12 +37,18 @@ static inline void ui_render_dropdown(ui_context_t* ctx, const ui_component_t* c
             selected = d->text.text;
         }
     }
-    ui_draw_text_clip(ctx, draw_bounds.x + c->padding_px,
-                      draw_bounds.y + (draw_bounds.h - ctx->font_px) / 2, selected, 0xFFFFFFFFu,
-                      clip);
-    ui_draw_text_clip(ctx, draw_bounds.x + draw_bounds.w - 12,
+    ui_draw_text_clip(ctx,
+                      draw_bounds.x + c->padding_px,
                       draw_bounds.y + (draw_bounds.h - ctx->font_px) / 2,
-                      (d && d->dropdown_open) ? "^" : "v", 0xFF9CB6CEu, clip);
+                      selected,
+                      0xFFFFFFFFu,
+                      clip);
+    ui_draw_text_clip(ctx,
+                      draw_bounds.x + draw_bounds.w - 12,
+                      draw_bounds.y + (draw_bounds.h - ctx->font_px) / 2,
+                      (d && d->dropdown_open) ? "^" : "v",
+                      0xFF9CB6CEu,
+                      clip);
 
     if (d && d->dropdown_open && d->list.count > 0) {
         const int32_t item_h = 20;
@@ -45,10 +58,17 @@ static inline void ui_render_dropdown(ui_context_t* ctx, const ui_component_t* c
             popup.y = draw_bounds.y - popup_h;
         if (popup.y < 0)
             popup.y = 0;
-        ui_fill_rect_clip(ctx->mapped_base, ctx->width, ctx->height, popup.x, popup.y, popup.w,
-                          popup_h, 0xFF172233u, clip);
-        ui_stroke_rect_clip(ctx->mapped_base, ctx->width, ctx->height, popup, 1, c->border_color,
-                            clip);
+        ui_fill_rect_clip(ctx->mapped_base,
+                          ctx->width,
+                          ctx->height,
+                          popup.x,
+                          popup.y,
+                          popup.w,
+                          popup_h,
+                          0xFF172233u,
+                          clip);
+        ui_stroke_rect_clip(
+            ctx->mapped_base, ctx->width, ctx->height, popup, 1, c->border_color, clip);
         const ui_rect_t popup_clip = ui_rect_intersect(clip, popup);
         for (int32_t i = 0; i < d->list.count; ++i) {
             const int32_t row_y = popup.y + (i * item_h);
@@ -56,10 +76,21 @@ static inline void ui_render_dropdown(ui_context_t* ctx, const ui_component_t* c
                 break;
             const uint32_t row_bg =
                 (i == d->list.selected) ? 0xFF2F5C88u : ((i & 1) ? 0xFF1F2E43u : 0xFF1A283B);
-            ui_fill_rect_clip(ctx->mapped_base, ctx->width, ctx->height, popup.x, row_y, popup.w,
-                              item_h, row_bg, popup_clip);
-            ui_draw_text_clip(ctx, popup.x + 6, row_y + (item_h - ctx->font_px) / 2,
-                              d->list.items[i] ? d->list.items[i] : "", 0xFFFFFFFFu, popup_clip);
+            ui_fill_rect_clip(ctx->mapped_base,
+                              ctx->width,
+                              ctx->height,
+                              popup.x,
+                              row_y,
+                              popup.w,
+                              item_h,
+                              row_bg,
+                              popup_clip);
+            ui_draw_text_clip(ctx,
+                              popup.x + 6,
+                              row_y + (item_h - ctx->font_px) / 2,
+                              d->list.items[i] ? d->list.items[i] : "",
+                              0xFFFFFFFFu,
+                              popup_clip);
         }
     }
 }

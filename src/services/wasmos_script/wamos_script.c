@@ -68,8 +68,9 @@ static int32_t wamos_script_write_spawn_buf(const char* path, const char* args,
         (void)wasmos_xfer_buffer_release(bid);
         return -1;
     }
-    if (args_len > 0u && wasmos_xfer_buffer_write(bid, addr_cast(int32_t, args), (int32_t)args_len,
-                                                  (int32_t)write_off) != 0) {
+    if (args_len > 0u &&
+        wasmos_xfer_buffer_write(
+            bid, addr_cast(int32_t, args), (int32_t)args_len, (int32_t)write_off) != 0) {
         (void)wasmos_xfer_buffer_release(bid);
         return -1;
     }
@@ -95,10 +96,15 @@ static int32_t wamos_script_spawn(wamos_script_ctx_t* ctx, const char* path, con
     if (path_len < 0) {
         return -1;
     }
-    if (wasmos_ipc_call(ctx->proc_endpoint, ctx->reply_endpoint, PROC_IPC_SPAWN_PATH,
-                        (int32_t)ctx->request_id++, 0,
+    if (wasmos_ipc_call(ctx->proc_endpoint,
+                        ctx->reply_endpoint,
+                        PROC_IPC_SPAWN_PATH,
+                        (int32_t)ctx->request_id++,
+                        0,
                         (int32_t)(((uint32_t)bid << 12) | ((uint32_t)path_len & 0xFFFu)),
-                        (int32_t)args_len, 0, &reply) != 0) {
+                        (int32_t)args_len,
+                        0,
+                        &reply) != 0) {
         (void)wasmos_xfer_buffer_release(bid);
         return -1;
     }
@@ -121,8 +127,15 @@ static int32_t wamos_script_wait(wamos_script_ctx_t* ctx, int32_t pid, int32_t* 
     if (pid <= 0) {
         return -1;
     }
-    if (wasmos_ipc_call(ctx->proc_endpoint, ctx->reply_endpoint, PROC_IPC_WAIT,
-                        (int32_t)ctx->request_id++, pid, 0, 0, 0, &reply) != 0) {
+    if (wasmos_ipc_call(ctx->proc_endpoint,
+                        ctx->reply_endpoint,
+                        PROC_IPC_WAIT,
+                        (int32_t)ctx->request_id++,
+                        pid,
+                        0,
+                        0,
+                        0,
+                        &reply) != 0) {
         return -1;
     }
     if (reply.type != PROC_IPC_RESP || (int32_t)reply.arg0 != pid) {
@@ -165,8 +178,8 @@ static int wamos_script_on_exec(void* user, const char* path, const char* args,
 
 static int wamos_script_on_wait_svc(void* user, const char* name) {
     wamos_script_ctx_t* ctx = (wamos_script_ctx_t*)user;
-    int32_t endpoint = wasmos_sys_svc_lookup_retry(ctx->proc_endpoint, ctx->reply_endpoint, name,
-                                                   (int32_t)ctx->request_id, 256);
+    int32_t endpoint = wasmos_sys_svc_lookup_retry(
+        ctx->proc_endpoint, ctx->reply_endpoint, name, (int32_t)ctx->request_id, 256);
     ctx->request_id += 256u;
     return endpoint >= 0 ? 0 : -1;
 }

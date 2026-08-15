@@ -89,8 +89,14 @@ static void fat_report_backend_info(int32_t dst, int32_t request_id) {
         wasmos_xfer_buffer_borrow(dst, g_mount_bid, WASMOS_BUFFER_GRANT_READ) >= 0) {
         mount_arg = (int32_t)(((uint32_t)g_mount_bid << 12) | ((uint32_t)g_mount_len & 0xFFFu));
     }
-    (void)wasmos_ipc_send(dst, g_fs_endpoint, FSMGR_IPC_BACKEND_INFO_RESP, request_id,
-                          FSMGR_BACKEND_BOOT, 0, mount_arg, (int32_t)g_mount_unit);
+    (void)wasmos_ipc_send(dst,
+                          g_fs_endpoint,
+                          FSMGR_IPC_BACKEND_INFO_RESP,
+                          request_id,
+                          FSMGR_BACKEND_BOOT,
+                          0,
+                          mount_arg,
+                          (int32_t)g_mount_unit);
 }
 
 /* Resolve the mount alias + unit via BLOCK_IPC_IDENTIFY + devmgr query. */
@@ -105,8 +111,14 @@ static int fat_resolve_mount_alias(char* out_mount, uint32_t out_mount_len, uint
     }
     out_mount[0] = '\0';
     *out_unit = 0;
-    if (wasmos_ipc_send(g_blk.block_endpoint, reply, BLOCK_IPC_IDENTIFY_REQ, req_id,
-                        g_requested_unit, 0, 0, 0) != 0 ||
+    if (wasmos_ipc_send(g_blk.block_endpoint,
+                        reply,
+                        BLOCK_IPC_IDENTIFY_REQ,
+                        req_id,
+                        g_requested_unit,
+                        0,
+                        0,
+                        0) != 0 ||
         wasmos_ipc_select_one(reply) < 0) {
         return -1;
     }
@@ -252,8 +264,8 @@ static void fat_send_response(fat_op_ctx_t* op, fat_r_t r) {
          * can decode; every failure leaving this backend owes a packed
          * WASMOS_ERR_FS_* from abi/errors.yaml. */
         int32_t err = op->err ? op->err : -1;
-        (void)wasmos_ipc_send(op->source, g_fs_endpoint, FS_IPC_ERROR, op->request_id, err, 0, 0,
-                              0);
+        (void)wasmos_ipc_send(
+            op->source, g_fs_endpoint, FS_IPC_ERROR, op->request_id, err, 0, 0, 0);
     }
 }
 
@@ -396,13 +408,17 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
         fat_stall();
     }
     g_mount_bid = wasmos_xfer_buffer_acquire(mount_alias_len);
-    if (g_mount_bid < 0 || wasmos_xfer_buffer_write(g_mount_bid, addr_cast(int32_t, mount_alias),
-                                                    mount_alias_len, 0) != 0) {
+    if (g_mount_bid < 0 ||
+        wasmos_xfer_buffer_write(
+            g_mount_bid, addr_cast(int32_t, mount_alias), mount_alias_len, 0) != 0) {
         fat_log("mount alias buffer write failed\n");
         fat_stall();
     }
     g_mount_len = mount_alias_len;
-    if (wasmos_svc_register_class(g_proc_endpoint, g_fs_endpoint, service_name, FSMGR_BACKEND_CLASS,
+    if (wasmos_svc_register_class(g_proc_endpoint,
+                                  g_fs_endpoint,
+                                  service_name,
+                                  FSMGR_BACKEND_CLASS,
                                   FSMGR_BACKEND_INSTANCE(FSMGR_BACKEND_BOOT, g_mount_unit),
                                   1) != 0) {
         fat_log("fs.backend register failed\n");
@@ -468,17 +484,26 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
                 continue;
             }
             if (type == FS_IPC_READY_REQ) {
-                (void)wasmos_ipc_send(
-                    wasmos_ipc_last_field(WASMOS_IPC_FIELD_SOURCE), g_fs_endpoint, FS_IPC_RESP,
-                    wasmos_ipc_last_field(WASMOS_IPC_FIELD_REQUEST_ID), 0, 0, 0, 0);
+                (void)wasmos_ipc_send(wasmos_ipc_last_field(WASMOS_IPC_FIELD_SOURCE),
+                                      g_fs_endpoint,
+                                      FS_IPC_RESP,
+                                      wasmos_ipc_last_field(WASMOS_IPC_FIELD_REQUEST_ID),
+                                      0,
+                                      0,
+                                      0,
+                                      0);
                 continue;
             }
             op = fat_op_alloc();
             if (!op) {
-                (void)wasmos_ipc_send(wasmos_ipc_last_field(WASMOS_IPC_FIELD_SOURCE), g_fs_endpoint,
+                (void)wasmos_ipc_send(wasmos_ipc_last_field(WASMOS_IPC_FIELD_SOURCE),
+                                      g_fs_endpoint,
                                       FS_IPC_ERROR,
                                       wasmos_ipc_last_field(WASMOS_IPC_FIELD_REQUEST_ID),
-                                      WASMOS_ERR_FS_BUSY, 0, 0, 0);
+                                      WASMOS_ERR_FS_BUSY,
+                                      0,
+                                      0,
+                                      0);
                 continue;
             }
             op->type = type;
@@ -491,8 +516,12 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
             op->source = wasmos_ipc_last_field(WASMOS_IPC_FIELD_SOURCE);
             if (op->op == FAT_OP_CHDIR) {
                 /* CHDIR carries the target name packed in arg0..arg3. */
-                fat_unpack_name((uint32_t)op->arg0, (uint32_t)op->arg1, (uint32_t)op->arg2,
-                                (uint32_t)op->arg3, op->dir_name, sizeof(op->dir_name));
+                fat_unpack_name((uint32_t)op->arg0,
+                                (uint32_t)op->arg1,
+                                (uint32_t)op->arg2,
+                                (uint32_t)op->arg3,
+                                op->dir_name,
+                                sizeof(op->dir_name));
             }
             fat_fifo_push(op);
         }

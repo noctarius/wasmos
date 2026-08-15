@@ -53,8 +53,14 @@ int main(int argc, char** argv) {
         return -1;
     }
 
-    if (wasmos_ipc_send(chardev_endpoint, reply_endpoint, WASM_CHARDEV_IPC_WRITE_REQ,
-                        write_request_id, write_value, 0, 0, 0) != 0) {
+    if (wasmos_ipc_send(chardev_endpoint,
+                        reply_endpoint,
+                        WASM_CHARDEV_IPC_WRITE_REQ,
+                        write_request_id,
+                        write_value,
+                        0,
+                        0,
+                        0) != 0) {
         return -1;
     }
 
@@ -69,8 +75,14 @@ int main(int argc, char** argv) {
         return -1;
     }
 
-    if (wasmos_ipc_send(chardev_endpoint, reply_endpoint, WASM_CHARDEV_IPC_READ_REQ,
-                        read_request_id, 0, 0, 0, 0) != 0) {
+    if (wasmos_ipc_send(chardev_endpoint,
+                        reply_endpoint,
+                        WASM_CHARDEV_IPC_READ_REQ,
+                        read_request_id,
+                        0,
+                        0,
+                        0,
+                        0) != 0) {
         return -1;
     }
 

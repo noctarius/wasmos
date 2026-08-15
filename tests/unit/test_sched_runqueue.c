@@ -92,8 +92,8 @@ int thread_transit(thread_t* t, thread_state_t from, thread_state_t to) {
     if (!t) {
         return 0;
     }
-    return __atomic_compare_exchange_n((uint32_t*)&t->state, &expected, (uint32_t)to, 0,
-                                       __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE);
+    return __atomic_compare_exchange_n(
+        (uint32_t*)&t->state, &expected, (uint32_t)to, 0, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE);
 }
 
 /* Mirrors thread.c: the tid==0 guard, the BLOCKED-only precondition and the
@@ -257,7 +257,9 @@ static void check_invariants(const char* where) {
                 /* I7: only READY threads belong in a ready queue. */
                 if (t->state != THREAD_STATE_READY) {
                     g_failures++;
-                    printf("  [FAIL] %s: queued non-READY tid=%u state=%u\n", where, t->tid,
+                    printf("  [FAIL] %s: queued non-READY tid=%u state=%u\n",
+                           where,
+                           t->tid,
                            (unsigned)t->state);
                 }
                 /* I2/I3: the claim and its queue pointer must agree with linkage. */
@@ -278,8 +280,12 @@ static void check_invariants(const char* where) {
             /* I5: the counter is a statistic, but must still match the list. */
             if (cs->thread_count[p] != walked) {
                 g_failures++;
-                printf("  [FAIL] %s: cpu%u band%d count=%u walked=%u\n", where, c, p,
-                       cs->thread_count[p], walked);
+                printf("  [FAIL] %s: cpu%u band%d count=%u walked=%u\n",
+                       where,
+                       c,
+                       p,
+                       cs->thread_count[p],
+                       walked);
             }
         }
     }
@@ -294,7 +300,9 @@ static void check_invariants(const char* where) {
         }
         if (g_cpus[c].sched.last_dispatched_prio > SCHED_PRIO_IDLE) {
             g_failures++;
-            printf("  [FAIL] %s: cpu%u last_dispatched_prio=%u out of range\n", where, c,
+            printf("  [FAIL] %s: cpu%u last_dispatched_prio=%u out of range\n",
+                   where,
+                   c,
                    (unsigned)g_cpus[c].sched.last_dispatched_prio);
         }
     }
@@ -512,8 +520,8 @@ static void test_zero_filled_node_reads_as_linked(void) {
 /* ------------------------------------- Kind 2: inputs the API must refuse */
 
 static void test_enqueue_refuses_non_ready(void) {
-    const thread_state_t bad[] = {THREAD_STATE_BLOCKED, THREAD_STATE_ZOMBIE, THREAD_STATE_RUNNING,
-                                  THREAD_STATE_NEW};
+    const thread_state_t bad[] = {
+        THREAD_STATE_BLOCKED, THREAD_STATE_ZOMBIE, THREAD_STATE_RUNNING, THREAD_STATE_NEW};
     for (unsigned i = 0; i < sizeof(bad) / sizeof(bad[0]); ++i) {
         harness_reset();
         thread_t* t = mk_thread(0, SCHED_PRIO_WASM, bad[i]);

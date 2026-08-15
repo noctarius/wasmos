@@ -125,8 +125,8 @@ static int test_resolve_and_copy_reply(void) {
     api.sched_current_pid = fake_current_pid;
     wasmos_sys_native_event_loop_init(&loop, &api, 55u, 700u);
     wasmos_sys_native_ipc_future_init(&operation, NULL, NULL);
-    future = wasmos_sys_native_ipc_future_send(&loop, &operation, 44u, 55u, 0x123u, 1u, 2u, 3u, 4u,
-                                               &request_id);
+    future = wasmos_sys_native_ipc_future_send(
+        &loop, &operation, 44u, 55u, 0x123u, 1u, 2u, 3u, 4u, &request_id);
     if (future != &operation.future || request_id != 700u || !operation.active ||
         sent_message.type != 0x123u || sent_message.source != 55u ||
         sent_message.destination != 44u || sent_message.request_id != request_id ||

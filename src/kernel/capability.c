@@ -82,8 +82,9 @@ static capability_context_state_t* capability_state_for_context(uint32_t context
  * Reports nothing: a failed list_init or a failed kernel record simply returns.
  * Not idempotent — a second call re-inits the list and abandons every record. */
 void capability_init(void) {
-    if (list_init(&g_cap_ctx, (uint32_t)sizeof(capability_context_state_t), LIST_IMPL_ARRAY_CHUNK,
-                  16) != 0) {
+    if (list_init(
+            &g_cap_ctx, (uint32_t)sizeof(capability_context_state_t), LIST_IMPL_ARRAY_CHUNK, 16) !=
+        0) {
         return;
     }
     /* Kernel context has all capabilities by construction. */

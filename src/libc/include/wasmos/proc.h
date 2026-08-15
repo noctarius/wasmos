@@ -74,9 +74,14 @@ static inline int32_t wasmos_proc_module_meta_path(int32_t proc_endpoint, int32_
         (void)wasmos_xfer_buffer_release(bid);
         return -1;
     }
-    if (wasmos_ipc_send(proc_endpoint, reply_endpoint, PROC_IPC_MODULE_META_PATH, (int32_t)req, 0,
+    if (wasmos_ipc_send(proc_endpoint,
+                        reply_endpoint,
+                        PROC_IPC_MODULE_META_PATH,
+                        (int32_t)req,
+                        0,
                         (int32_t)(((uint32_t)bid << 12) | ((uint32_t)path_len & 0xFFFu)),
-                        source_kind, 0) != 0) {
+                        source_kind,
+                        0) != 0) {
         (void)wasmos_xfer_buffer_release(bid);
         return -1;
     }

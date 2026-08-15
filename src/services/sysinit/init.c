@@ -116,10 +116,15 @@ static int spawn_path(const char* path) {
     }
     for (uint32_t attempt = 0; attempt < SYSINIT_MAX_SPAWN_ATTEMPTS; ++attempt) {
         if (wasmos_ipc_call(
-                g_state.proc_endpoint, g_state.reply_endpoint, PROC_IPC_SPAWN_PATH,
+                g_state.proc_endpoint,
+                g_state.reply_endpoint,
+                PROC_IPC_SPAWN_PATH,
                 g_state.spawn_request_id,
                 PROC_SPAWN_PATH_FLAG_AUTOREAP, /* fire-and-forget: reap the child on exit */
-                (int32_t)(((uint32_t)bid << 12) | (path_len & 0xFFFu)), 0, 0, &reply) != 0) {
+                (int32_t)(((uint32_t)bid << 12) | (path_len & 0xFFFu)),
+                0,
+                0,
+                &reply) != 0) {
             (void)wasmos_xfer_buffer_release(bid);
             return -1;
         }
@@ -164,10 +169,15 @@ static int sysinit_on_start(void* user, const char* path) {
         (void)wasmos_xfer_buffer_release(bid);
         return -1;
     }
-    if (wasmos_ipc_call(g_state.proc_endpoint, g_state.reply_endpoint, PROC_IPC_SPAWN_PATH_SYNC,
-                        g_state.spawn_request_id, 0,
-                        (int32_t)(((uint32_t)bid << 12) | (path_len & 0xFFFu)), 0,
-                        SYSINIT_START_TIMEOUT_MS, &reply) != 0) {
+    if (wasmos_ipc_call(g_state.proc_endpoint,
+                        g_state.reply_endpoint,
+                        PROC_IPC_SPAWN_PATH_SYNC,
+                        g_state.spawn_request_id,
+                        0,
+                        (int32_t)(((uint32_t)bid << 12) | (path_len & 0xFFFu)),
+                        0,
+                        SYSINIT_START_TIMEOUT_MS,
+                        &reply) != 0) {
         (void)wasmos_xfer_buffer_release(bid);
         sysinit_log_spawn_failure("start", path, -1);
         return -1;
@@ -229,15 +239,19 @@ static int sysinit_on_exec(void* user, const char* path, const char* args, int32
             (void)wasmos_xfer_buffer_release(bid);
             return -1;
         }
-        if (wasmos_xfer_buffer_write(bid, addr_cast(int32_t, args), (int32_t)args_len,
-                                     (int32_t)write_off) != 0) {
+        if (wasmos_xfer_buffer_write(
+                bid, addr_cast(int32_t, args), (int32_t)args_len, (int32_t)write_off) != 0) {
             (void)wasmos_xfer_buffer_release(bid);
             return -1;
         }
     }
-    if (wasmos_ipc_send(g_state.proc_endpoint, g_state.reply_endpoint, PROC_IPC_SPAWN_PATH,
-                        g_state.spawn_request_id, 0,
-                        (int32_t)(((uint32_t)bid << 12) | (path_len & 0xFFFu)), (int32_t)args_len,
+    if (wasmos_ipc_send(g_state.proc_endpoint,
+                        g_state.reply_endpoint,
+                        PROC_IPC_SPAWN_PATH,
+                        g_state.spawn_request_id,
+                        0,
+                        (int32_t)(((uint32_t)bid << 12) | (path_len & 0xFFFu)),
+                        (int32_t)args_len,
                         0) != 0) {
         (void)wasmos_xfer_buffer_release(bid);
         return -1;
@@ -262,8 +276,14 @@ static int sysinit_on_exec(void* user, const char* path, const char* args, int32
     if (pid <= 0) {
         return -1;
     }
-    if (wasmos_ipc_send(g_state.proc_endpoint, g_state.reply_endpoint, PROC_IPC_WAIT,
-                        g_state.spawn_request_id, pid, 0, 0, 0) != 0) {
+    if (wasmos_ipc_send(g_state.proc_endpoint,
+                        g_state.reply_endpoint,
+                        PROC_IPC_WAIT,
+                        g_state.spawn_request_id,
+                        pid,
+                        0,
+                        0,
+                        0) != 0) {
         return -1;
     }
     recv_rc = wasmos_ipc_select_one(g_state.reply_endpoint);

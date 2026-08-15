@@ -48,23 +48,35 @@ void _start(void) {
     uint32_t detach_tid = 0;
     uint32_t post_exit_tid = 0;
 
-    if (wasmos_thread_spawn_cont(g_probe_join_stack, PROBE_STACK_SIZE,
-                                 (wasmos_thread_entry_fn_t)join_helper_thread, 0, probe_cont_cb,
-                                 &cont, &join_tid) > 0) {
+    if (wasmos_thread_spawn_cont(g_probe_join_stack,
+                                 PROBE_STACK_SIZE,
+                                 (wasmos_thread_entry_fn_t)join_helper_thread,
+                                 0,
+                                 probe_cont_cb,
+                                 &cont,
+                                 &join_tid) > 0) {
         (void)wasmos_thread_join_cont(join_tid, probe_cont_cb, &cont, 0);
     }
 
-    if (wasmos_thread_spawn_cont(g_probe_detach_stack, PROBE_STACK_SIZE,
-                                 (wasmos_thread_entry_fn_t)detach_helper_thread, 0, probe_cont_cb,
-                                 &cont, &detach_tid) > 0) {
+    if (wasmos_thread_spawn_cont(g_probe_detach_stack,
+                                 PROBE_STACK_SIZE,
+                                 (wasmos_thread_entry_fn_t)detach_helper_thread,
+                                 0,
+                                 probe_cont_cb,
+                                 &cont,
+                                 &detach_tid) > 0) {
         (void)wasmos_thread_detach_cont(detach_tid, probe_cont_cb, &cont);
         (void)wasmos_thread_join_cont(detach_tid, probe_cont_cb, &cont, 0);
     }
 
     /* Join-after-exit ordering probe: let target finish, then join. */
-    if (wasmos_thread_spawn_cont(g_probe_post_exit_stack, PROBE_STACK_SIZE,
-                                 (wasmos_thread_entry_fn_t)post_exit_helper_thread, 0,
-                                 probe_cont_cb, &cont, &post_exit_tid) > 0) {
+    if (wasmos_thread_spawn_cont(g_probe_post_exit_stack,
+                                 PROBE_STACK_SIZE,
+                                 (wasmos_thread_entry_fn_t)post_exit_helper_thread,
+                                 0,
+                                 probe_cont_cb,
+                                 &cont,
+                                 &post_exit_tid) > 0) {
         for (uint32_t i = 0; i < 8u; ++i) {
             (void)wasmos_sys_thread_yield();
         }

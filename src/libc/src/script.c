@@ -904,8 +904,12 @@ static int script_exec_line(wasmos_script_state_t* state, const wasmos_script_op
         const char* text = &line[5];
         char expanded[WASMOS_SCRIPT_LINE_MAX];
         int newline = 1;
-        if (wasmos_script_echo_expand(text, script_echo_resolve_var, state, expanded,
-                                      (int32_t)sizeof(expanded), &newline) != 0) {
+        if (wasmos_script_echo_expand(text,
+                                      script_echo_resolve_var,
+                                      state,
+                                      expanded,
+                                      (int32_t)sizeof(expanded),
+                                      &newline) != 0) {
             return 0;
         }
         if (ops->on_echo_ex) {

@@ -146,9 +146,11 @@ static process_run_result_t threading_wait_join_worker_entry(process_t* process,
         return PROCESS_RUN_THREAD_EXITED;
     }
     if (!worker_arg->state->wait_join_spawned) {
-        if (process_thread_spawn_worker_internal(
-                process->pid, "thr-wait-join-target", threading_wait_join_worker_entry,
-                &g_threading_wait_join_target_arg, &worker_arg->state->wait_join_target_tid) != 0) {
+        if (process_thread_spawn_worker_internal(process->pid,
+                                                 "thr-wait-join-target",
+                                                 threading_wait_join_worker_entry,
+                                                 &g_threading_wait_join_target_arg,
+                                                 &worker_arg->state->wait_join_target_tid) != 0) {
             process_set_exit_status(process, -1);
             return PROCESS_RUN_EXITED;
         }
@@ -204,16 +206,20 @@ static process_run_result_t threading_join_order_smoke_entry(process_t* process,
         return PROCESS_RUN_EXITED;
     }
     if (!state->spawned) {
-        if (process_thread_spawn_worker_internal(
-                process->pid, "thr-join-target", threading_join_order_worker_entry,
-                &g_threading_join_target_arg, &state->target_tid) != 0) {
+        if (process_thread_spawn_worker_internal(process->pid,
+                                                 "thr-join-target",
+                                                 threading_join_order_worker_entry,
+                                                 &g_threading_join_target_arg,
+                                                 &state->target_tid) != 0) {
             klog_write("[test] threading join wake order failed\n");
             process_set_exit_status(process, -1);
             return PROCESS_RUN_EXITED;
         }
-        if (process_thread_spawn_worker_internal(
-                process->pid, "thr-join-waiter", threading_join_order_worker_entry,
-                &g_threading_join_waiter_arg, &state->waiter_tid) != 0) {
+        if (process_thread_spawn_worker_internal(process->pid,
+                                                 "thr-join-waiter",
+                                                 threading_join_order_worker_entry,
+                                                 &g_threading_join_waiter_arg,
+                                                 &state->waiter_tid) != 0) {
             klog_write("[test] threading join wake order failed\n");
             process_set_exit_status(process, -1);
             return PROCESS_RUN_EXITED;
@@ -250,9 +256,11 @@ static process_run_result_t threading_internal_worker_entry(process_t* process, 
     }
     if (g_ring3_thread_lifecycle_smoke_enabled && !worker_arg->state->wait_join_spawned &&
         !worker_arg->state->wait_join_waiter_tid) {
-        if (process_thread_spawn_worker_internal(
-                process->pid, "thr-wait-join-waiter", threading_wait_join_worker_entry,
-                &g_threading_wait_join_waiter_arg, &worker_arg->state->wait_join_waiter_tid) != 0) {
+        if (process_thread_spawn_worker_internal(process->pid,
+                                                 "thr-wait-join-waiter",
+                                                 threading_wait_join_worker_entry,
+                                                 &g_threading_wait_join_waiter_arg,
+                                                 &worker_arg->state->wait_join_waiter_tid) != 0) {
             process_set_exit_status(process, -1);
             return PROCESS_RUN_EXITED;
         }
@@ -273,21 +281,30 @@ static process_run_result_t threading_internal_smoke_entry(process_t* process, v
         return PROCESS_RUN_EXITED;
     }
     if (!state->spawned) {
-        if (process_thread_spawn_worker_internal(
-                process->pid, "thr-smoke-a", threading_internal_worker_entry,
-                &g_threading_worker_a_arg, &state->worker_a_tid) != 0 ||
-            process_thread_spawn_worker_internal(
-                process->pid, "thr-smoke-b", threading_internal_worker_entry,
-                &g_threading_worker_b_arg, &state->worker_b_tid) != 0) {
+        if (process_thread_spawn_worker_internal(process->pid,
+                                                 "thr-smoke-a",
+                                                 threading_internal_worker_entry,
+                                                 &g_threading_worker_a_arg,
+                                                 &state->worker_a_tid) != 0 ||
+            process_thread_spawn_worker_internal(process->pid,
+                                                 "thr-smoke-b",
+                                                 threading_internal_worker_entry,
+                                                 &g_threading_worker_b_arg,
+                                                 &state->worker_b_tid) != 0) {
             klog_write("[test] threading internal worker spawn failed\n");
             process_set_exit_status(process, -1);
             return PROCESS_RUN_EXITED;
         }
         if (g_ring3_thread_lifecycle_smoke_enabled) {
-            if (process_spawn_as(process->pid, "thr-wait-target", threading_wait_target_entry,
-                                 state, &state->wait_target_pid) != 0 ||
-                process_thread_spawn_worker_internal(process->pid, "thr-wait-killer",
-                                                     threading_wait_killer_entry, state,
+            if (process_spawn_as(process->pid,
+                                 "thr-wait-target",
+                                 threading_wait_target_entry,
+                                 state,
+                                 &state->wait_target_pid) != 0 ||
+                process_thread_spawn_worker_internal(process->pid,
+                                                     "thr-wait-killer",
+                                                     threading_wait_killer_entry,
+                                                     state,
                                                      &state->wait_killer_tid) != 0) {
                 klog_write("[test] threading wait/kill setup failed\n");
                 process_set_exit_status(process, -1);
@@ -392,12 +409,16 @@ static process_run_result_t threading_ipc_stress_entry(process_t* process, void*
     if (!state->spawned) {
         if (ipc_endpoint_create(process->context_id, &state->endpoint) != IPC_OK ||
             ipc_endpoint_create(process->context_id, &state->sender_endpoint) != IPC_OK ||
-            process_thread_spawn_worker_internal(
-                process->pid, "thr-ipc-recv", threading_ipc_worker_entry,
-                &g_threading_ipc_receiver_arg, &state->receiver_tid) != 0 ||
-            process_thread_spawn_worker_internal(
-                process->pid, "thr-ipc-send", threading_ipc_worker_entry,
-                &g_threading_ipc_sender_arg, &state->sender_tid) != 0) {
+            process_thread_spawn_worker_internal(process->pid,
+                                                 "thr-ipc-recv",
+                                                 threading_ipc_worker_entry,
+                                                 &g_threading_ipc_receiver_arg,
+                                                 &state->receiver_tid) != 0 ||
+            process_thread_spawn_worker_internal(process->pid,
+                                                 "thr-ipc-send",
+                                                 threading_ipc_worker_entry,
+                                                 &g_threading_ipc_sender_arg,
+                                                 &state->sender_tid) != 0) {
             klog_write("[test] threading ipc stress setup failed\n");
             process_set_exit_status(process, -1);
             return PROCESS_RUN_EXITED;
@@ -460,13 +481,18 @@ int kernel_threading_selftest_spawn(uint32_t init_pid,
     g_threading_join_target_arg.role = 0;
     g_threading_join_waiter_arg.state = &g_threading_join_order_smoke_state;
     g_threading_join_waiter_arg.role = 1;
-    if (process_spawn_as(init_pid, "threading-internal-smoke", threading_internal_smoke_entry,
-                         &g_threading_internal_smoke_state, &threading_internal_smoke_pid) != 0) {
+    if (process_spawn_as(init_pid,
+                         "threading-internal-smoke",
+                         threading_internal_smoke_entry,
+                         &g_threading_internal_smoke_state,
+                         &threading_internal_smoke_pid) != 0) {
         klog_write("[kernel] threading internal smoke spawn failed\n");
         return -1;
     }
     (void)process_set_auto_reap(threading_internal_smoke_pid, 1);
-    if (process_spawn_as(init_pid, "threading-join-order-smoke", threading_join_order_smoke_entry,
+    if (process_spawn_as(init_pid,
+                         "threading-join-order-smoke",
+                         threading_join_order_smoke_entry,
                          &g_threading_join_order_smoke_state,
                          &threading_join_order_smoke_pid) != 0) {
         klog_write("[kernel] threading join-order smoke spawn failed\n");
@@ -480,8 +506,11 @@ int kernel_threading_selftest_spawn(uint32_t init_pid,
     g_threading_ipc_receiver_arg.is_sender = 0;
     g_threading_ipc_sender_arg.state = &g_threading_ipc_stress_state;
     g_threading_ipc_sender_arg.is_sender = 1;
-    if (process_spawn_as(init_pid, "threading-ipc-stress", threading_ipc_stress_entry,
-                         &g_threading_ipc_stress_state, &threading_ipc_stress_pid) != 0) {
+    if (process_spawn_as(init_pid,
+                         "threading-ipc-stress",
+                         threading_ipc_stress_entry,
+                         &g_threading_ipc_stress_state,
+                         &threading_ipc_stress_pid) != 0) {
         klog_write("[kernel] threading ipc stress spawn failed\n");
         return -1;
     }

@@ -126,8 +126,14 @@ static void handle_query(int32_t source, int32_t request_id) {
     int32_t packed0 = ((int32_t)g_dev.vendor_id << 16) | (int32_t)g_dev.device_id;
     int32_t packed1 = ((int32_t)g_dev.bus << 24) | ((int32_t)g_dev.slot << 16) |
                       ((int32_t)g_dev.function << 8) | (int32_t)g_dev.irq;
-    (void)wasmos_ipc_send(source, g_endpoint, VIRTIO_SERIAL_IPC_RESP, request_id, present, packed0,
-                          packed1, (int32_t)g_dev.io_base);
+    (void)wasmos_ipc_send(source,
+                          g_endpoint,
+                          VIRTIO_SERIAL_IPC_RESP,
+                          request_id,
+                          present,
+                          packed0,
+                          packed1,
+                          (int32_t)g_dev.io_base);
 }
 
 /* Register access is confined to the first 64 bytes of the device's I/O window
@@ -143,8 +149,8 @@ static void handle_read_reg32(int32_t source, int32_t request_id, int32_t offset
     }
     uint32_t value = 0;
     (void)wasmos_io_in32((int32_t)((uint32_t)g_dev.io_base + (uint32_t)offset), &value);
-    (void)wasmos_ipc_send(source, g_endpoint, VIRTIO_SERIAL_IPC_RESP, request_id, 0, (int32_t)value,
-                          offset, 0);
+    (void)wasmos_ipc_send(
+        source, g_endpoint, VIRTIO_SERIAL_IPC_RESP, request_id, 0, (int32_t)value, offset, 0);
 }
 
 static void handle_write_reg32(int32_t source, int32_t request_id, int32_t offset, int32_t value) {
@@ -157,8 +163,8 @@ static void handle_write_reg32(int32_t source, int32_t request_id, int32_t offse
         return;
     }
     (void)wasmos_io_out32((int32_t)((uint32_t)g_dev.io_base + (uint32_t)offset), value);
-    (void)wasmos_ipc_send(source, g_endpoint, VIRTIO_SERIAL_IPC_RESP, request_id, 0, offset, value,
-                          0);
+    (void)wasmos_ipc_send(
+        source, g_endpoint, VIRTIO_SERIAL_IPC_RESP, request_id, 0, offset, value, 0);
 }
 
 /* Driver entry point: probe the virtio-serial PCI function, register, and serve
@@ -193,8 +199,10 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
         return -1;
     }
     if (g_dev.present) {
-        (void)printf("[virtio-serial] ready io=0x%04X irq=%u dev=%04X\n", (unsigned)g_dev.io_base,
-                     (unsigned)g_dev.irq, (unsigned)g_dev.device_id);
+        (void)printf("[virtio-serial] ready io=0x%04X irq=%u dev=%04X\n",
+                     (unsigned)g_dev.io_base,
+                     (unsigned)g_dev.irq,
+                     (unsigned)g_dev.device_id);
     } else {
         (void)printf("[virtio-serial] no device found\n");
     }

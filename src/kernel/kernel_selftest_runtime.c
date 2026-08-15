@@ -363,9 +363,10 @@ static process_run_result_t broker_spawn_request_entry(process_t* process, void*
     }
 
     if (state->phase == 0u) {
-        uint32_t arg1 =
-            broker_selftest_stage_path(state, process->context_id, BROKER_TEST_SERVICE_PATH,
-                                       (uint32_t)sizeof(BROKER_TEST_SERVICE_PATH) - 1u);
+        uint32_t arg1 = broker_selftest_stage_path(state,
+                                                   process->context_id,
+                                                   BROKER_TEST_SERVICE_PATH,
+                                                   (uint32_t)sizeof(BROKER_TEST_SERVICE_PATH) - 1u);
         if (arg1 == 0u) {
             klog_write("[test] broker spawn xfer buffer missing\n");
             process_set_exit_status(process, -1);
@@ -387,8 +388,8 @@ static process_run_result_t broker_spawn_request_entry(process_t* process, void*
     }
 
     if (state->phase == 2u) {
-        uint32_t arg1 = broker_selftest_stage_path(state, process->context_id, BROKER_TEST_PATH,
-                                                   (uint32_t)sizeof(BROKER_TEST_PATH) - 1u);
+        uint32_t arg1 = broker_selftest_stage_path(
+            state, process->context_id, BROKER_TEST_PATH, (uint32_t)sizeof(BROKER_TEST_PATH) - 1u);
         if (arg1 == 0u) {
             klog_write("[test] broker spawn xf buffer missing\n");
             process_set_exit_status(process, -1);
@@ -441,7 +442,8 @@ static process_run_result_t broker_spawn_request_entry(process_t* process, void*
     }
 
     klog_printf("[test] broker spawn delegation failed err=%016llx (%s)\n",
-                (unsigned long long)msg.arg1, kernel_selftest_spawn_error_name((int32_t)msg.arg1));
+                (unsigned long long)msg.arg1,
+                kernel_selftest_spawn_error_name((int32_t)msg.arg1));
     process_set_exit_status(process, -1);
     return PROCESS_RUN_EXITED;
 }
@@ -469,8 +471,9 @@ int kernel_selftest_spawn_baseline(uint32_t init_pid, uint8_t preempt_test_enabl
 
     g_pf_test_state.addr = 0;
     g_pf_test_state.stage = 0;
-    if (process_spawn_as(init_pid, "pagefault-test", page_fault_test_entry, &g_pf_test_state,
-                         &pf_test_pid) != 0) {
+    if (process_spawn_as(
+            init_pid, "pagefault-test", page_fault_test_entry, &g_pf_test_state, &pf_test_pid) !=
+        0) {
         klog_write("[kernel] page fault test spawn failed\n");
         return -1;
     }
@@ -484,10 +487,12 @@ int kernel_selftest_spawn_baseline(uint32_t init_pid, uint8_t preempt_test_enabl
     g_ipc_test_state.sender_endpoint = IPC_ENDPOINT_NONE;
     g_ipc_test_state.sender_ticks = 0;
     g_ipc_test_state.done = 0;
-    if (process_spawn_as(init_pid, "ipc-wait-test", ipc_wait_test_entry, &g_ipc_test_state,
-                         &ipc_wait_pid) != 0 ||
-        process_spawn_as(init_pid, "ipc-send-test", ipc_send_test_entry, &g_ipc_test_state,
-                         &ipc_send_pid) != 0) {
+    if (process_spawn_as(
+            init_pid, "ipc-wait-test", ipc_wait_test_entry, &g_ipc_test_state, &ipc_wait_pid) !=
+            0 ||
+        process_spawn_as(
+            init_pid, "ipc-send-test", ipc_send_test_entry, &g_ipc_test_state, &ipc_send_pid) !=
+            0) {
         klog_write("[kernel] ipc test spawn failed\n");
         return -1;
     }
@@ -517,8 +522,11 @@ int kernel_selftest_spawn_baseline(uint32_t init_pid, uint8_t preempt_test_enabl
     g_broker_spawn_request_state.phase = 0u;
 
     uint32_t broker_request_pid = 0;
-    if (process_spawn_as(init_pid, "broker-spawn-test", broker_spawn_request_entry,
-                         &g_broker_spawn_request_state, &broker_request_pid) != 0) {
+    if (process_spawn_as(init_pid,
+                         "broker-spawn-test",
+                         broker_spawn_request_entry,
+                         &g_broker_spawn_request_state,
+                         &broker_request_pid) != 0) {
         klog_write("[kernel] broker spawn request failed\n");
         return -1;
     }
@@ -528,10 +536,16 @@ int kernel_selftest_spawn_baseline(uint32_t init_pid, uint8_t preempt_test_enabl
         g_preempt_test_state.observer_runs = 0;
         g_preempt_test_state.done = 0;
         g_preempt_test_state.stop_busy = 0;
-        if (process_spawn_as(init_pid, "preempt-busy", preempt_busy_entry, &g_preempt_test_state,
+        if (process_spawn_as(init_pid,
+                             "preempt-busy",
+                             preempt_busy_entry,
+                             &g_preempt_test_state,
                              &preempt_busy_pid) != 0 ||
-            process_spawn_as(init_pid, "preempt-observer", preempt_observer_entry,
-                             &g_preempt_test_state, &preempt_observer_pid) != 0) {
+            process_spawn_as(init_pid,
+                             "preempt-observer",
+                             preempt_observer_entry,
+                             &g_preempt_test_state,
+                             &preempt_observer_pid) != 0) {
             klog_write("[kernel] preempt test spawn failed\n");
             return -1;
         }

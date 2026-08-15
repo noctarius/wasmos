@@ -2559,7 +2559,8 @@ static void test_error_code_contract(void) {
         {"recv_blocking_for(notification endpoint)", IPC_ERR_UNSUPPORTED, c_brecv_notification},
         {"recv_blocking_for(non-owner)", IPC_ERR_PERM, c_brecv_non_owner},
         {"recv_blocking_for(spurious wake)", IPC_EMPTY, c_brecv_spurious},
-        {"recv_blocking_for(endpoint destroyed while parked)", IPC_ERR_PEER_GONE,
+        {"recv_blocking_for(endpoint destroyed while parked)",
+         IPC_ERR_PEER_GONE,
          c_brecv_endpoint_destroyed},
         {"recv_blocking_for(valid)", IPC_OK, c_brecv_ok},
 
@@ -2616,8 +2617,12 @@ static void test_error_code_contract(void) {
         g_checks++;
         if (rc != cases[i].expect) {
             g_failures++;
-            printf("  [FAIL] %s: expected %s, got %s (%s:%d)\n", cases[i].what,
-                   code_name(cases[i].expect), code_name(rc), __FILE__, __LINE__);
+            printf("  [FAIL] %s: expected %s, got %s (%s:%d)\n",
+                   cases[i].what,
+                   code_name(cases[i].expect),
+                   code_name(rc),
+                   __FILE__,
+                   __LINE__);
         }
         contract_env_teardown();
     }

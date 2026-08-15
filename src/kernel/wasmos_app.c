@@ -129,8 +129,12 @@ static int wasmos_native_subsystem_start(wasmos_app_runtime_state_t* state,
     if (!state || !params) {
         return -1;
     }
-    rc = native_driver_start(owner_context_id, params->module_bytes, params->module_size,
-                             params->name, params->entry_argv, params->entry_argc);
+    rc = native_driver_start(owner_context_id,
+                             params->module_bytes,
+                             params->module_size,
+                             params->name,
+                             params->entry_argv,
+                             params->entry_argc);
     state->native.started = 1;
     state->native.entry_rc = rc;
     return rc == 0 ? 0 : -1;
@@ -210,8 +214,9 @@ static int subsystem_tag_validate_bytes(const char* tag, uint32_t len) {
 
 static void subsystem_tag_default_for_flags(uint32_t flags,
                                             char out_tag[WASMOS_APP_SUBSYSTEM_TAG_LEN + 1]) {
-    copy_subsystem_tag(out_tag, (flags & WASMOS_APP_FLAG_NATIVE) != 0 ? WASMOS_SUBSYSTEM_TAG_NATIVE
-                                                                      : WASMOS_SUBSYSTEM_TAG_WASM);
+    copy_subsystem_tag(out_tag,
+                       (flags & WASMOS_APP_FLAG_NATIVE) != 0 ? WASMOS_SUBSYSTEM_TAG_NATIVE
+                                                             : WASMOS_SUBSYSTEM_TAG_WASM);
 }
 
 static int check_u32_add(uint32_t a, uint32_t b, uint32_t* out) {
@@ -248,9 +253,12 @@ static int wasmos_subsystem_register_locked(const char* request_tag, const char*
     if (!ops) {
         return -1;
     }
-    return wasmos_subsystem_registry_register_builtin(
-        request_tag, runtime_tag, ops->uses_wasm_payload, ops->needs_runtime_lock,
-        ops->gates_ready_for_services, ops);
+    return wasmos_subsystem_registry_register_builtin(request_tag,
+                                                      runtime_tag,
+                                                      ops->uses_wasm_payload,
+                                                      ops->needs_runtime_lock,
+                                                      ops->gates_ready_for_services,
+                                                      ops);
 }
 
 /* Registers a BUILTIN subsystem handler under request_tag, taking its payload,
@@ -273,7 +281,8 @@ int wasmos_subsystem_register(const char* request_tag, const char* runtime_tag,
 }
 
 static int wasmos_register_builtin_subsystems(void) {
-    if (wasmos_subsystem_register_locked(WASMOS_SUBSYSTEM_TAG_NATIVE, WASMOS_SUBSYSTEM_TAG_NATIVE,
+    if (wasmos_subsystem_register_locked(WASMOS_SUBSYSTEM_TAG_NATIVE,
+                                         WASMOS_SUBSYSTEM_TAG_NATIVE,
                                          &g_wasmos_native_subsystem_ops) != 0 ||
         wasmos_subsystem_register_locked(WASMOS_SUBSYSTEM_TAG_WASM,
                                          WASMOS_ACTIVE_WASM_SUBSYSTEM_TAG,
@@ -284,8 +293,8 @@ static int wasmos_register_builtin_subsystems(void) {
         return -1;
     }
 #if WASMOS_WASM_RUNTIME == 1
-    if (wasmos_subsystem_register_locked("WARP+JIT", WASMOS_ACTIVE_WASM_SUBSYSTEM_TAG,
-                                         &g_wasmos_wasm_subsystem_ops) != 0) {
+    if (wasmos_subsystem_register_locked(
+            "WARP+JIT", WASMOS_ACTIVE_WASM_SUBSYSTEM_TAG, &g_wasmos_wasm_subsystem_ops) != 0) {
         return -1;
     }
 #endif
@@ -610,10 +619,11 @@ int wasmos_app_call_entry(wasmos_app_instance_t* instance) {
         klog_printf("[wasmos-app] entry start %s export=%s\n", instance->name, instance->entry));
     /* Entry dispatch is centralized here so drivers, services, and applications
      * all produce the same diagnostic framing around their actual export call. */
-    int rc = instance->ops->call_entry(&instance->runtime, instance->entry, instance->entry_argc,
-                                       instance->entry_argv);
+    int rc = instance->ops->call_entry(
+        &instance->runtime, instance->entry, instance->entry_argc, instance->entry_argv);
     trace_do(klog_printf("[wasmos-app] entry rc=%016llx\n[wasmos-app] entry %s %s\n",
-                         (unsigned long long)(uint32_t)rc, rc == 0 ? "ok" : "failed",
+                         (unsigned long long)(uint32_t)rc,
+                         rc == 0 ? "ok" : "failed",
                          instance->name));
     return rc;
 }
@@ -659,8 +669,11 @@ int wasmos_app_start(wasmos_app_instance_t* instance, const wasmos_app_desc_t* d
             return -1;
         }
         uint32_t endpoint = IPC_ENDPOINT_NONE;
-        if (g_endpoint_resolver(owner_context_id, desc->req_eps[i].name, desc->req_eps[i].name_len,
-                                desc->req_eps[i].rights, &endpoint) != 0 ||
+        if (g_endpoint_resolver(owner_context_id,
+                                desc->req_eps[i].name,
+                                desc->req_eps[i].name_len,
+                                desc->req_eps[i].rights,
+                                &endpoint) != 0 ||
             endpoint == IPC_ENDPOINT_NONE) {
             klog_write("[wasmos-app] endpoint resolve failed\n");
             return -1;
@@ -673,7 +686,9 @@ int wasmos_app_start(wasmos_app_instance_t* instance, const wasmos_app_desc_t* d
             klog_write("[wasmos-app] capability granter missing\n");
             return -1;
         }
-        if (g_capability_granter(owner_context_id, desc->caps[i].name, desc->caps[i].name_len,
+        if (g_capability_granter(owner_context_id,
+                                 desc->caps[i].name,
+                                 desc->caps[i].name_len,
                                  desc->caps[i].flags) != 0) {
             klog_write("[wasmos-app] capability grant failed\n");
             return -1;

@@ -43,8 +43,8 @@ static int32_t libc_fs_endpoint(void) {
  * client's release() afterwards finds no active borrows. Returns b1 (>0) or <0.
  * TODO: narrow rights per op (READ needs W, WRITE needs R) once profiled. */
 static int32_t libc_fs_grant(int32_t buffer_id) {
-    return wasmos_xfer_buffer_borrow(libc_fs_endpoint(), buffer_id,
-                                     WASMOS_BUFFER_GRANT_READ | WASMOS_BUFFER_GRANT_WRITE);
+    return wasmos_xfer_buffer_borrow(
+        libc_fs_endpoint(), buffer_id, WASMOS_BUFFER_GRANT_READ | WASMOS_BUFFER_GRANT_WRITE);
 }
 
 /* Acquire a per-operation transfer buffer, write the NUL-terminated path into

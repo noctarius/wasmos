@@ -172,8 +172,9 @@ static int dm_ipc_call(int32_t destination_endpoint, int32_t source_endpoint, in
     if (request_id <= 0 || !out_msg) {
         return -1;
     }
-    if (wasmos_ipc_send(destination_endpoint, source_endpoint, msg_type, request_id, arg0, arg1,
-                        arg2, arg3) != 0) {
+    if (wasmos_ipc_send(
+            destination_endpoint, source_endpoint, msg_type, request_id, arg0, arg1, arg2, arg3) !=
+        0) {
         return -1;
     }
     for (;;) {
@@ -272,8 +273,16 @@ static int is_mount_already_active(const char* mount) {
         (void)wasmos_xfer_buffer_release(bid);
         return 0;
     }
-    if (dm_ipc_call(g_dm.fs_endpoint, g_dm.reply_endpoint, FSMGR_IPC_QUERY_MOUNTS_REQ, req_id, 0, 0,
-                    bid, b1, &resp, 128) != 0) {
+    if (dm_ipc_call(g_dm.fs_endpoint,
+                    g_dm.reply_endpoint,
+                    FSMGR_IPC_QUERY_MOUNTS_REQ,
+                    req_id,
+                    0,
+                    0,
+                    bid,
+                    b1,
+                    &resp,
+                    128) != 0) {
         (void)wasmos_xfer_buffer_release(bid);
         return 0;
     }
@@ -319,8 +328,8 @@ static void log_mount_already_active(const char* mount) {
     if (!mount || mount[0] == '\0') {
         return;
     }
-    (void)snprintf(msg, sizeof(msg),
-                   "[device-manager] mount already active; skipping rule mount=%s\n", mount);
+    (void)snprintf(
+        msg, sizeof(msg), "[device-manager] mount already active; skipping rule mount=%s\n", mount);
     console_write(msg);
 }
 
@@ -357,8 +366,12 @@ static int read_rules_file(const char* path, char* out_text, uint32_t out_text_l
     if (ensure_fs_endpoint() != 0) {
         return -1;
     }
-    read_len = wasmos_sys_fs_read_path(g_dm.fs_endpoint, g_dm.reply_endpoint, g_dm.request_id++,
-                                       path, out_text, (int32_t)out_text_len);
+    read_len = wasmos_sys_fs_read_path(g_dm.fs_endpoint,
+                                       g_dm.reply_endpoint,
+                                       g_dm.request_id++,
+                                       path,
+                                       out_text,
+                                       (int32_t)out_text_len);
     if (read_len < 0) {
         return -1;
     }
@@ -424,8 +437,8 @@ static void kick_boot_rules_read_async(void) {
         console_write("[device-manager] boot rules buffer write failed; skipping\n");
         return;
     }
-    int32_t b1 = wasmos_xfer_buffer_borrow(g_dm.fs_endpoint, bid,
-                                           WASMOS_BUFFER_GRANT_READ | WASMOS_BUFFER_GRANT_WRITE);
+    int32_t b1 = wasmos_xfer_buffer_borrow(
+        g_dm.fs_endpoint, bid, WASMOS_BUFFER_GRANT_READ | WASMOS_BUFFER_GRANT_WRITE);
     if (b1 < 0) {
         (void)wasmos_xfer_buffer_release(bid);
         g_dm.rules_boot_loaded = 1;
@@ -434,8 +447,14 @@ static void kick_boot_rules_read_async(void) {
         return;
     }
     g_dm.rules_boot_request_id = g_dm.request_id++;
-    if (wasmos_ipc_send(g_dm.fs_endpoint, g_dm.rule_reply_endpoint, FS_IPC_READ_PATH_REQ,
-                        g_dm.rules_boot_request_id, path_len, buf_size, bid, b1) != 0) {
+    if (wasmos_ipc_send(g_dm.fs_endpoint,
+                        g_dm.rule_reply_endpoint,
+                        FS_IPC_READ_PATH_REQ,
+                        g_dm.rules_boot_request_id,
+                        path_len,
+                        buf_size,
+                        bid,
+                        b1) != 0) {
         (void)wasmos_xfer_buffer_release(bid);
         g_dm.rules_boot_loaded = 1;
         g_dm.rules_boot_active = 0;
@@ -552,7 +571,9 @@ static void poll_boot_rules_async(void) {
         queue_acpi_match_rule_spawns();
     }
     g_dm.rules_boot_loaded = 1;
-    snprintf(msg, sizeof(msg), "[device-manager] loaded boot rules: %d active\n",
+    snprintf(msg,
+             sizeof(msg),
+             "[device-manager] loaded boot rules: %d active\n",
              (int)g_dm.rules_boot_active);
     console_write(msg);
 }
@@ -655,8 +676,8 @@ static int module_index_by_name(const char* name) {
 static void hw_scan_acpi(void) {
     acpi_rsdp_t rsdp;
     uint32_t length = 0;
-    int32_t rc = wasmos_acpi_rsdp_info(addr_cast(int32_t, &rsdp), addr_cast(int32_t, &length),
-                                       (int32_t)sizeof(rsdp));
+    int32_t rc = wasmos_acpi_rsdp_info(
+        addr_cast(int32_t, &rsdp), addr_cast(int32_t, &length), (int32_t)sizeof(rsdp));
     if (rc != 0) {
         console_write("[device-manager] ACPI RSDP not found\n");
         return;
@@ -682,8 +703,16 @@ static void hw_scan_acpi(void) {
 static int dm_spawn_sync_call(int32_t msg_type, int32_t arg0, int32_t arg1, int32_t arg2,
                               int32_t arg3) {
     wasmos_ipc_message_t resp;
-    if (dm_ipc_call(g_dm.proc_endpoint, g_dm.reply_endpoint, msg_type, g_dm.request_id++, arg0,
-                    arg1, arg2, arg3, &resp, DM_SPAWN_SYNC_POLL_MAX) != 0) {
+    if (dm_ipc_call(g_dm.proc_endpoint,
+                    g_dm.reply_endpoint,
+                    msg_type,
+                    g_dm.request_id++,
+                    arg0,
+                    arg1,
+                    arg2,
+                    arg3,
+                    &resp,
+                    DM_SPAWN_SYNC_POLL_MAX) != 0) {
         return -1;
     }
     return resp.type == PROC_IPC_RESP ? 0 : -1;
@@ -701,17 +730,22 @@ static int hw_spawn_driver_index(int32_t index) {
  * refusal surfaces far from here. One line at the point of decision makes a
  * mis-granted window obvious in a boot log instead of a mystery later. */
 static void log_spawn_grant(int32_t index, const spawn_caps_t* caps) {
-    (void)printf("[device-manager] grant module=%d irq_mask=%04X caps=%X windows=%u\n", (int)index,
-                 (unsigned)caps->irq_mask, (unsigned)caps->cap_flags,
+    (void)printf("[device-manager] grant module=%d irq_mask=%04X caps=%X windows=%u\n",
+                 (int)index,
+                 (unsigned)caps->irq_mask,
+                 (unsigned)caps->cap_flags,
                  (unsigned)(caps->io_range_count ? caps->io_range_count : 1u));
     if (caps->io_range_count == 0u) {
-        (void)printf("[device-manager]   io[0] %04X-%04X\n", (unsigned)caps->io_port_min,
+        (void)printf("[device-manager]   io[0] %04X-%04X\n",
+                     (unsigned)caps->io_port_min,
                      (unsigned)caps->io_port_max);
         return;
     }
     for (uint32_t i = 0; i < caps->io_range_count; ++i) {
-        (void)printf("[device-manager]   io[%u] %04X-%04X\n", (unsigned)i,
-                     (unsigned)caps->io_ranges[i].first, (unsigned)caps->io_ranges[i].last);
+        (void)printf("[device-manager]   io[%u] %04X-%04X\n",
+                     (unsigned)i,
+                     (unsigned)caps->io_ranges[i].first,
+                     (unsigned)caps->io_ranges[i].last);
     }
 }
 
@@ -789,18 +823,22 @@ static int hw_spawn_driver_index_caps_v2(int32_t index, const spawn_caps_t* caps
     }
     memcpy(g_dm_caps_payload, &header, sizeof(header));
     offset = (uint32_t)sizeof(header);
-    memcpy(g_dm_caps_payload + offset, caps->io_ranges,
+    memcpy(g_dm_caps_payload + offset,
+           caps->io_ranges,
            caps->io_range_count * sizeof(wasmos_io_range_t));
     offset += caps->io_range_count * (uint32_t)sizeof(wasmos_io_range_t);
     if (window_count > 0) {
         memcpy(g_dm_caps_payload + offset, &window, sizeof(window));
     }
     if (dm_pm_buffer() < 0 ||
-        wasmos_xfer_buffer_write(g_dm_meta_bid, addr_cast(int32_t, g_dm_caps_payload),
-                                 (int32_t)payload_size, 0) != 0) {
+        wasmos_xfer_buffer_write(
+            g_dm_meta_bid, addr_cast(int32_t, g_dm_caps_payload), (int32_t)payload_size, 0) != 0) {
         return -1;
     }
-    return dm_spawn_sync_call(PROC_IPC_SPAWN_CAPS_V2, index, g_dm_meta_bid, (int32_t)payload_size,
+    return dm_spawn_sync_call(PROC_IPC_SPAWN_CAPS_V2,
+                              index,
+                              g_dm_meta_bid,
+                              (int32_t)payload_size,
                               (int32_t)DM_SPAWN_TIMEOUT_MS);
 }
 
@@ -819,8 +857,11 @@ static int hw_spawn_driver_index_caps(int32_t index, const spawn_caps_t* caps) {
     }
     io_packed = ((uint32_t)caps->io_port_min) | ((uint32_t)caps->io_port_max << 16);
     arg3 = (caps->irq_mask & 0xFFFFu) | ((DM_SPAWN_TIMEOUT_MS & 0xFFFFu) << 16);
-    return dm_spawn_sync_call(PROC_IPC_SPAWN_CAPS_SYNC, index, (int32_t)caps->cap_flags,
-                              (int32_t)io_packed, (int32_t)arg3);
+    return dm_spawn_sync_call(PROC_IPC_SPAWN_CAPS_SYNC,
+                              index,
+                              (int32_t)caps->cap_flags,
+                              (int32_t)io_packed,
+                              (int32_t)arg3);
 }
 
 static int hw_spawn_driver_path(const char* path) {
@@ -846,7 +887,9 @@ static int hw_spawn_driver_path(const char* path) {
     int rc = dm_spawn_sync_call(
         PROC_IPC_SPAWN_PATH_SYNC,
         PROC_SPAWN_PATH_FLAG_AUTOREAP, /* reap one-shot enumerators (pci/acpi) on exit */
-        (int32_t)(((uint32_t)bid << 12) | (path_len & 0xFFFu)), 0, DM_SPAWN_TIMEOUT_MS);
+        (int32_t)(((uint32_t)bid << 12) | (path_len & 0xFFFu)),
+        0,
+        DM_SPAWN_TIMEOUT_MS);
     (void)wasmos_xfer_buffer_release(bid);
     return rc;
 }
@@ -884,8 +927,8 @@ static int hw_spawn_driver_path_caps_args(const char* path, const spawn_caps_t* 
         return -1;
     }
     if (args_len > 0u &&
-        wasmos_xfer_buffer_write(bid, addr_cast(int32_t, args), (int32_t)(args_len + 1u),
-                                 (int32_t)path_len) != 0) {
+        wasmos_xfer_buffer_write(
+            bid, addr_cast(int32_t, args), (int32_t)(args_len + 1u), (int32_t)path_len) != 0) {
         (void)wasmos_xfer_buffer_release(bid);
         return -1;
     }
@@ -896,9 +939,11 @@ static int hw_spawn_driver_path_caps_args(const char* path, const spawn_caps_t* 
     }
     caps_arg0 = ((uint32_t)caps->irq_mask << 16) | ((uint32_t)caps->cap_flags & 0xFFFFu);
     caps_arg2 = ((uint32_t)caps->io_port_max << 16) | (uint32_t)caps->io_port_min;
-    int rc = dm_spawn_sync_call(PROC_IPC_SPAWN_PATH_CAPS_SYNC, (int32_t)caps_arg0,
+    int rc = dm_spawn_sync_call(PROC_IPC_SPAWN_PATH_CAPS_SYNC,
+                                (int32_t)caps_arg0,
                                 (int32_t)(((uint32_t)bid << 12) | (path_len & 0xFFFu)),
-                                (int32_t)caps_arg2, DM_SPAWN_TIMEOUT_MS);
+                                (int32_t)caps_arg2,
+                                DM_SPAWN_TIMEOUT_MS);
     (void)wasmos_xfer_buffer_release(bid);
     return rc;
 }
@@ -920,9 +965,15 @@ static int build_pci_spawn_args(const pci_device_record_t* rec, char* out, uint3
     if (!rec || !out || out_cap == 0u) {
         return -1;
     }
-    n = snprintf(out, out_cap, "pci=%02X:%02X.%02X vendor=%04X device=%04X io=%04X irq=%02X",
-                 (unsigned)rec->bus, (unsigned)rec->device, (unsigned)rec->function,
-                 (unsigned)rec->vendor_id, (unsigned)rec->device_id, (unsigned)rec->io_port_base,
+    n = snprintf(out,
+                 out_cap,
+                 "pci=%02X:%02X.%02X vendor=%04X device=%04X io=%04X irq=%02X",
+                 (unsigned)rec->bus,
+                 (unsigned)rec->device,
+                 (unsigned)rec->function,
+                 (unsigned)rec->vendor_id,
+                 (unsigned)rec->device_id,
+                 (unsigned)rec->io_port_base,
                  (unsigned)rec->irq_hint);
     if (n <= 0 || (uint32_t)n >= out_cap) {
         return -1;
@@ -1018,9 +1069,16 @@ static int query_module_meta_by_path(const char* path, uint32_t source, int32_t*
         (void)wasmos_xfer_buffer_release(bid);
         return -1;
     }
-    if (dm_ipc_call(g_dm.proc_endpoint, g_dm.reply_endpoint, PROC_IPC_MODULE_META_PATH,
-                    g_dm.request_id++, 0, (int32_t)(((uint32_t)bid << 12) | (path_len & 0xFFFu)),
-                    (int32_t)source, 0, &resp, 128) != 0) {
+    if (dm_ipc_call(g_dm.proc_endpoint,
+                    g_dm.reply_endpoint,
+                    PROC_IPC_MODULE_META_PATH,
+                    g_dm.request_id++,
+                    0,
+                    (int32_t)(((uint32_t)bid << 12) | (path_len & 0xFFFu)),
+                    (int32_t)source,
+                    0,
+                    &resp,
+                    128) != 0) {
         (void)wasmos_xfer_buffer_release(bid);
         return -1;
     }
@@ -1043,8 +1101,8 @@ static void registry_add_from_desc(int32_t buffer_id, int32_t offset, int32_t si
         return;
     }
     if (size < (int32_t)sizeof(desc) ||
-        wasmos_xfer_buffer_read(buffer_id, addr_cast(int32_t, &desc), (int32_t)sizeof(desc),
-                                offset) != 0) {
+        wasmos_xfer_buffer_read(
+            buffer_id, addr_cast(int32_t, &desc), (int32_t)sizeof(desc), offset) != 0) {
         console_write("[device-manager] device descriptor read failed\n");
         return;
     }
@@ -1348,19 +1406,29 @@ static void registry_add_block_from_ipc(int32_t arg0, int32_t arg1, int32_t arg2
     rec->sector_count = sectors;
     if (g_dm.selected_storage_has_record) {
         const pci_device_record_t* p = &g_dm.selected_storage_record;
-        (void)snprintf(rec->canonical_id, sizeof(rec->canonical_id),
-                       "block:pci:%02X:%02X.%02X:ata%u", (unsigned)p->bus, (unsigned)p->device,
-                       (unsigned)p->function, (unsigned)unit);
+        (void)snprintf(rec->canonical_id,
+                       sizeof(rec->canonical_id),
+                       "block:pci:%02X:%02X.%02X:ata%u",
+                       (unsigned)p->bus,
+                       (unsigned)p->device,
+                       (unsigned)p->function,
+                       (unsigned)unit);
     } else {
-        (void)snprintf(rec->canonical_id, sizeof(rec->canonical_id), "block:pci:??:??.??:ata%u",
+        (void)snprintf(rec->canonical_id,
+                       sizeof(rec->canonical_id),
+                       "block:pci:??:??.??:ata%u",
                        (unsigned)unit);
     }
     hex16_from_sha256(rec->canonical_id, rec->hash_id);
 
     char msg[224];
-    (void)snprintf(
-        msg, sizeof(msg), "[device-manager] block add id=%s hash=%s present=%u sectors=%u\n",
-        rec->canonical_id, rec->hash_id, (unsigned)rec->present, (unsigned)rec->sector_count);
+    (void)snprintf(msg,
+                   sizeof(msg),
+                   "[device-manager] block add id=%s hash=%s present=%u sectors=%u\n",
+                   rec->canonical_id,
+                   rec->hash_id,
+                   (unsigned)rec->present,
+                   (unsigned)rec->sector_count);
     console_write(msg);
 
     if (rec->present) {
@@ -1457,11 +1525,19 @@ static int query_driver_module_meta(int32_t module_index, uint8_t* out_storage_b
     if (dm_pm_buffer() < 0) {
         return -1;
     }
-    if (dm_ipc_call(g_dm.proc_endpoint, g_dm.reply_endpoint, PROC_IPC_MODULE_META_DESC,
-                    g_dm.request_id++, module_index, 0, g_dm_meta_bid, 0, &resp, 128) == 0 &&
+    if (dm_ipc_call(g_dm.proc_endpoint,
+                    g_dm.reply_endpoint,
+                    PROC_IPC_MODULE_META_DESC,
+                    g_dm.request_id++,
+                    module_index,
+                    0,
+                    g_dm_meta_bid,
+                    0,
+                    &resp,
+                    128) == 0 &&
         resp.type == PROC_IPC_RESP && resp.arg0 >= (int32_t)sizeof(desc) &&
-        wasmos_xfer_buffer_read(g_dm_meta_bid, addr_cast(int32_t, &desc), (int32_t)sizeof(desc),
-                                0) == 0 &&
+        wasmos_xfer_buffer_read(
+            g_dm_meta_bid, addr_cast(int32_t, &desc), (int32_t)sizeof(desc), 0) == 0 &&
         desc.version == WASMOS_MODULE_META_DESC_VERSION) {
         *out_storage_bootstrap = desc.storage_bootstrap;
         out_caps->cap_flags = desc.cap_flags & 0xFFFFu;
@@ -1490,7 +1566,8 @@ static void dm_handle_ipc_default(void* user, const wasmos_ipc_message_t* msg) {
     if (!msg) {
         return;
     }
-    (void)printf("[device-manager] unhandled opcode 0x%03X (%s) from ep=%d\n", (unsigned)msg->type,
+    (void)printf("[device-manager] unhandled opcode 0x%03X (%s) from ep=%d\n",
+                 (unsigned)msg->type,
                  wasmos_opcode_name(WASMOS_OPCODE_SUBSYS_DEVICE_MANAGER, (uint32_t)msg->type),
                  (int)msg->source);
 }
@@ -1534,24 +1611,26 @@ static void dm_handle_inventory_message(void* user, const wasmos_ipc_message_t* 
 }
 
 static int dm_register_inventory_handlers(void) {
-    if (wasmos_sys_event_register(&g_dm_inventory_loop, DEVMGR_PUBLISH_BLOCK_DEVICE,
-                                  dm_handle_inventory_message, 0) != 0) {
+    if (wasmos_sys_event_register(
+            &g_dm_inventory_loop, DEVMGR_PUBLISH_BLOCK_DEVICE, dm_handle_inventory_message, 0) !=
+        0) {
         return -1;
     }
-    if (wasmos_sys_event_register(&g_dm_inventory_loop, DEVMGR_PUBLISH_DEVICE_DESC,
-                                  dm_handle_inventory_message, 0) != 0) {
+    if (wasmos_sys_event_register(
+            &g_dm_inventory_loop, DEVMGR_PUBLISH_DEVICE_DESC, dm_handle_inventory_message, 0) !=
+        0) {
         return -1;
     }
-    if (wasmos_sys_event_register(&g_dm_inventory_loop, DEVMGR_PUBLISH_DEVICE,
-                                  dm_handle_inventory_message, 0) != 0) {
+    if (wasmos_sys_event_register(
+            &g_dm_inventory_loop, DEVMGR_PUBLISH_DEVICE, dm_handle_inventory_message, 0) != 0) {
         return -1;
     }
-    if (wasmos_sys_event_register(&g_dm_inventory_loop, DEVMGR_PCI_SCAN_DONE,
-                                  dm_handle_inventory_message, 0) != 0) {
+    if (wasmos_sys_event_register(
+            &g_dm_inventory_loop, DEVMGR_PCI_SCAN_DONE, dm_handle_inventory_message, 0) != 0) {
         return -1;
     }
-    if (wasmos_sys_event_register(&g_dm_inventory_loop, DEVMGR_ACPI_SCAN_DONE,
-                                  dm_handle_inventory_message, 0) != 0) {
+    if (wasmos_sys_event_register(
+            &g_dm_inventory_loop, DEVMGR_ACPI_SCAN_DONE, dm_handle_inventory_message, 0) != 0) {
         return -1;
     }
     if (wasmos_sys_event_set_default(&g_dm_inventory_loop, dm_handle_ipc_default, 0) != 0) {
@@ -1561,12 +1640,12 @@ static int dm_register_inventory_handlers(void) {
 }
 
 static int dm_register_query_handlers(void) {
-    if (wasmos_sys_event_register(&g_dm_query_loop, DEVMGR_QUERY_MOUNT_REQ,
-                                  dm_handle_inventory_message, 0) != 0) {
+    if (wasmos_sys_event_register(
+            &g_dm_query_loop, DEVMGR_QUERY_MOUNT_REQ, dm_handle_inventory_message, 0) != 0) {
         return -1;
     }
-    if (wasmos_sys_event_register(&g_dm_query_loop, DEVMGR_QUERY_BLOCK_MOUNT_REQ,
-                                  dm_handle_inventory_message, 0) != 0) {
+    if (wasmos_sys_event_register(
+            &g_dm_query_loop, DEVMGR_QUERY_BLOCK_MOUNT_REQ, dm_handle_inventory_message, 0) != 0) {
         return -1;
     }
     if (wasmos_sys_event_set_default(&g_dm_query_loop, dm_handle_ipc_default, 0) != 0) {
@@ -1738,8 +1817,14 @@ static void handle_query_message_fields(const wasmos_ipc_message_t* msg) {
     int32_t index = msg ? msg->arg0 : 0;
     if (type != DEVMGR_QUERY_MOUNT_REQ && type != DEVMGR_QUERY_BLOCK_MOUNT_REQ) {
         /* arg1 echoes the rejected type for diagnostics. */
-        (void)wasmos_ipc_send(source, g_dm.query_endpoint, FS_IPC_ERROR, req_id,
-                              WASMOS_ERR_DEVMGR_UNSUPPORTED_QUERY, type, 0, 0);
+        (void)wasmos_ipc_send(source,
+                              g_dm.query_endpoint,
+                              FS_IPC_ERROR,
+                              req_id,
+                              WASMOS_ERR_DEVMGR_UNSUPPORTED_QUERY,
+                              type,
+                              0,
+                              0);
         return;
     }
     if (type == DEVMGR_QUERY_BLOCK_MOUNT_REQ) {
@@ -1757,8 +1842,14 @@ static void handle_query_message_fields(const wasmos_ipc_message_t* msg) {
             }
         }
         if (!mount || mount[0] == '\0') {
-            (void)wasmos_ipc_send(source, g_dm.query_endpoint, FS_IPC_ERROR, req_id,
-                                  WASMOS_ERR_DEVMGR_NO_MOUNT_RULE, 0, 0, 0);
+            (void)wasmos_ipc_send(source,
+                                  g_dm.query_endpoint,
+                                  FS_IPC_ERROR,
+                                  req_id,
+                                  WASMOS_ERR_DEVMGR_NO_MOUNT_RULE,
+                                  0,
+                                  0,
+                                  0);
             return;
         }
         for (uint32_t i = 0; mount[i] && i < 16u; ++i) {
@@ -1766,8 +1857,13 @@ static void handle_query_message_fields(const wasmos_ipc_message_t* msg) {
             uint32_t shift = (i % 4u) * 8u;
             packed[slot] |= ((uint32_t)(uint8_t)mount[i]) << shift;
         }
-        (void)wasmos_ipc_send(source, g_dm.query_endpoint, DEVMGR_BLOCK_MOUNT_INFO, req_id,
-                              (int32_t)packed[0], (int32_t)packed[1], (int32_t)packed[2],
+        (void)wasmos_ipc_send(source,
+                              g_dm.query_endpoint,
+                              DEVMGR_BLOCK_MOUNT_INFO,
+                              req_id,
+                              (int32_t)packed[0],
+                              (int32_t)packed[1],
+                              (int32_t)packed[2],
                               (int32_t)packed[3]);
         return;
     }
@@ -1783,17 +1879,23 @@ static void handle_query_message_fields(const wasmos_ipc_message_t* msg) {
                  (uint32_t)rec->vendor_id;
             a3 = (uint32_t)rec->device_id | ((uint32_t)1u << 31);
         }
-        (void)wasmos_ipc_send(source, g_dm.query_endpoint, DEVMGR_MOUNT_INFO, req_id, 0,
-                              (int32_t)a1, (int32_t)a2, (int32_t)a3);
+        (void)wasmos_ipc_send(source,
+                              g_dm.query_endpoint,
+                              DEVMGR_MOUNT_INFO,
+                              req_id,
+                              0,
+                              (int32_t)a1,
+                              (int32_t)a2,
+                              (int32_t)a3);
         return;
     }
     if (index == 1) {
         if (g_dm.boot_mount_ready) {
-            (void)wasmos_ipc_send(source, g_dm.query_endpoint, DEVMGR_MOUNT_INFO, req_id, 1, 0, 0,
-                                  0);
+            (void)wasmos_ipc_send(
+                source, g_dm.query_endpoint, DEVMGR_MOUNT_INFO, req_id, 1, 0, 0, 0);
         } else {
-            (void)wasmos_ipc_send(source, g_dm.query_endpoint, DEVMGR_QUERY_DONE, req_id, 0, 0, 0,
-                                  0);
+            (void)wasmos_ipc_send(
+                source, g_dm.query_endpoint, DEVMGR_QUERY_DONE, req_id, 0, 0, 0, 0);
         }
         return;
     }
@@ -1810,11 +1912,17 @@ static void handle_query_message_fields(const wasmos_ipc_message_t* msg) {
                      (uint32_t)rec->vendor_id;
                 a3 = (uint32_t)rec->device_id | ((uint32_t)1u << 31);
             }
-            (void)wasmos_ipc_send(source, g_dm.query_endpoint, DEVMGR_MOUNT_INFO, req_id, 2,
-                                  (int32_t)a1, (int32_t)a2, (int32_t)a3);
+            (void)wasmos_ipc_send(source,
+                                  g_dm.query_endpoint,
+                                  DEVMGR_MOUNT_INFO,
+                                  req_id,
+                                  2,
+                                  (int32_t)a1,
+                                  (int32_t)a2,
+                                  (int32_t)a3);
         } else {
-            (void)wasmos_ipc_send(source, g_dm.query_endpoint, DEVMGR_QUERY_DONE, req_id, 0, 0, 0,
-                                  0);
+            (void)wasmos_ipc_send(
+                source, g_dm.query_endpoint, DEVMGR_QUERY_DONE, req_id, 0, 0, 0, 0);
         }
         return;
     }
@@ -1959,28 +2067,28 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
     log_rule_roots_once();
     load_rules_if_available();
     hw_scan_acpi();
-    (void)query_module_meta_by_path("system/services/pci_bus.wap", PROC_MODULE_SOURCE_INITFS,
-                                    &g_dm.pci_bus_index);
+    (void)query_module_meta_by_path(
+        "system/services/pci_bus.wap", PROC_MODULE_SOURCE_INITFS, &g_dm.pci_bus_index);
     if (g_dm.pci_bus_index < 0) {
         g_dm.pci_bus_index = module_index_by_name("pci-bus");
     }
-    (void)query_module_meta_by_path("system/services/acpi_bus.wap", PROC_MODULE_SOURCE_INITFS,
-                                    &g_dm.acpi_bus_index);
+    (void)query_module_meta_by_path(
+        "system/services/acpi_bus.wap", PROC_MODULE_SOURCE_INITFS, &g_dm.acpi_bus_index);
     if (g_dm.acpi_bus_index < 0) {
         g_dm.acpi_bus_index = module_index_by_name("acpi-bus");
     }
-    (void)query_module_meta_by_path("system/drivers/fs_fat.wap", PROC_MODULE_SOURCE_INITFS,
-                                    &g_dm.fat_index);
+    (void)query_module_meta_by_path(
+        "system/drivers/fs_fat.wap", PROC_MODULE_SOURCE_INITFS, &g_dm.fat_index);
     if (g_dm.fat_index < 0) {
         g_dm.fat_index = module_index_by_name("fs-fat");
     }
-    (void)query_module_meta_by_path("system/drivers/fs_init.wap", PROC_MODULE_SOURCE_INITFS,
-                                    &g_dm.fs_init_index);
+    (void)query_module_meta_by_path(
+        "system/drivers/fs_init.wap", PROC_MODULE_SOURCE_INITFS, &g_dm.fs_init_index);
     if (g_dm.fs_init_index < 0) {
         g_dm.fs_init_index = module_index_by_name("fs-init");
     }
-    (void)query_module_meta_by_path("system/services/fs_manager.wap", PROC_MODULE_SOURCE_INITFS,
-                                    &g_dm.fs_manager_index);
+    (void)query_module_meta_by_path(
+        "system/services/fs_manager.wap", PROC_MODULE_SOURCE_INITFS, &g_dm.fs_manager_index);
     if (g_dm.fs_manager_index < 0) {
         g_dm.fs_manager_index = module_index_by_name("fs-manager");
     }
@@ -2087,14 +2195,16 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
                         g_dm.active_rule_spawn_device_index >= 0 &&
                         g_dm.active_rule_spawn_device_index < (int32_t)g_dm.registry_count &&
                         build_pci_spawn_args(&g_dm.registry[g_dm.active_rule_spawn_device_index],
-                                             spawn_args, sizeof(spawn_args)) > 0) {
+                                             spawn_args,
+                                             sizeof(spawn_args)) > 0) {
                         args = spawn_args;
                     } else if (g_dm.active_rule_spawn_kind == RULE_SPAWN_KIND_BLOCK_FS &&
                                g_dm.active_rule_spawn_index >= 0 &&
                                g_dm.active_rule_spawn_index < (int32_t)g_dm.block_fs_rule_count &&
                                build_block_fs_spawn_args(
                                    g_dm.block_fs_rules[g_dm.active_rule_spawn_index].unit,
-                                   spawn_args, sizeof(spawn_args)) > 0) {
+                                   spawn_args,
+                                   sizeof(spawn_args)) > 0) {
                         args = spawn_args;
                     }
                     /* A driver with declared windows must spawn by module
@@ -2115,8 +2225,8 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
                         rc = hw_spawn_driver_index_caps(spawn_module_index,
                                                         &g_dm.active_rule_spawn_caps);
                     } else {
-                        rc = hw_spawn_driver_path_caps_args(spawn_path,
-                                                            &g_dm.active_rule_spawn_caps, args);
+                        rc = hw_spawn_driver_path_caps_args(
+                            spawn_path, &g_dm.active_rule_spawn_caps, args);
                     }
                 } else {
                     rc = hw_spawn_rule_target(g_dm.rule_spawn_path);

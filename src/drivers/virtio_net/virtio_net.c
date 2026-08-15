@@ -372,8 +372,9 @@ static int setup_queue(virtio_net_queue_t* q, uint16_t idx) {
     }
     /* In wasm32 a pointer is the linear-memory byte offset region_alloc returned. */
     uint8_t* ring = ptr_cast(uint8_t, (uint32_t)off);
-    if (vring_layout(&q->vq, ring, ring_phys, (uint64_t)pages * 0x1000u, qsize,
-                     VIRTIO_PCI_VRING_ALIGN) != 0) {
+    if (vring_layout(
+            &q->vq, ring, ring_phys, (uint64_t)pages * 0x1000u, qsize, VIRTIO_PCI_VRING_ALIGN) !=
+        0) {
         return -1;
     }
     q->queue_idx = idx;
@@ -414,8 +415,10 @@ static int rx_arm(void) {
     g_rx_pool_phys = phys;
 
     for (uint32_t i = 0; i < VIRTIO_NET_RX_BUF_COUNT; ++i) {
-        int32_t d = vring_alloc_desc(&g_rxq.vq, phys + (uint64_t)i * VIRTIO_NET_RX_BUF_SIZE,
-                                     VIRTIO_NET_RX_BUF_SIZE, VRING_DESC_F_WRITE);
+        int32_t d = vring_alloc_desc(&g_rxq.vq,
+                                     phys + (uint64_t)i * VIRTIO_NET_RX_BUF_SIZE,
+                                     VIRTIO_NET_RX_BUF_SIZE,
+                                     VRING_DESC_F_WRITE);
         if (d < 0) {
             return -1;
         }
@@ -557,8 +560,10 @@ static int32_t tx_take_buf(void) {
  * readable descriptor and kick. On ring-full, returns the buffer to the free
  * stack and returns -1. */
 static int tx_post(uint16_t b, uint32_t total_len) {
-    int32_t d = vring_alloc_desc(&g_txq.vq, g_tx_pool_phys + (uint64_t)b * VIRTIO_NET_TX_BUF_SIZE,
-                                 total_len, 0 /* device-readable */);
+    int32_t d = vring_alloc_desc(&g_txq.vq,
+                                 g_tx_pool_phys + (uint64_t)b * VIRTIO_NET_TX_BUF_SIZE,
+                                 total_len,
+                                 0 /* device-readable */);
     if (d < 0) {
         g_tx_buf_free[g_tx_buf_top++] = b;
         return -1;
@@ -695,7 +700,14 @@ static int net_drain_rx(void) {
             unsigned et = ((unsigned)frame[12] << 8) | (unsigned)frame[13];
             (void)printf("[virtio-net] irq rx=%d ethertype=0x%04X "
                          "gw_mac=%02X:%02X:%02X:%02X:%02X:%02X\n",
-                         n, et, frame[6], frame[7], frame[8], frame[9], frame[10], frame[11]);
+                         n,
+                         et,
+                         frame[6],
+                         frame[7],
+                         frame[8],
+                         frame[9],
+                         frame[10],
+                         frame[11]);
         }
     }
     return enqueued;
@@ -710,8 +722,8 @@ static void net_notify_subscriber(void) {
         if (sub->endpoint < 0 || sub->count == 0u) {
             continue;
         }
-        (void)wasmos_ipc_send(sub->endpoint, g_endpoint, NETDRV_IPC_RX_FRAME_NOTIFY, 0,
-                              (int32_t)sub->count, 0, 0, 0);
+        (void)wasmos_ipc_send(
+            sub->endpoint, g_endpoint, NETDRV_IPC_RX_FRAME_NOTIFY, 0, (int32_t)sub->count, 0, 0, 0);
     }
 }
 
@@ -786,8 +798,8 @@ static int net_setup_msix(void) {
         ((uint32_t)g_dev.bus << 8) | ((uint32_t)g_dev.slot << 3) | (uint32_t)g_dev.function;
     wasmos_ipc_message_t reply;
 
-    if (wasmos_ipc_call(g_pci_endpoint, g_endpoint, PCI_IPC_MSI_QUERY, 1, (int32_t)bdf, 0, 0, 0,
-                        &reply) != 0 ||
+    if (wasmos_ipc_call(
+            g_pci_endpoint, g_endpoint, PCI_IPC_MSI_QUERY, 1, (int32_t)bdf, 0, 0, 0, &reply) != 0 ||
         reply.type != PCI_IPC_RESP) {
         return -1;
     }
@@ -806,9 +818,15 @@ static int net_setup_msix(void) {
         }
         g_dev.msix_vectors[entry] = desc.vector;
         int32_t arg0 = (int32_t)((bdf << 8) | entry);
-        if (wasmos_ipc_call(g_pci_endpoint, g_endpoint, PCI_IPC_MSI_BIND, (int32_t)(2u + entry),
-                            arg0, (int32_t)desc.address_lo, (int32_t)desc.address_hi,
-                            (int32_t)desc.data, &reply) != 0 ||
+        if (wasmos_ipc_call(g_pci_endpoint,
+                            g_endpoint,
+                            PCI_IPC_MSI_BIND,
+                            (int32_t)(2u + entry),
+                            arg0,
+                            (int32_t)desc.address_lo,
+                            (int32_t)desc.address_hi,
+                            (int32_t)desc.data,
+                            &reply) != 0 ||
             reply.type != PCI_IPC_RESP) {
             (void)wasmos_msi_free((int32_t)desc.vector);
             g_dev.msix_vectors[entry] = 0;
@@ -821,8 +839,8 @@ static int net_setup_msix(void) {
          * silently undelivered, which is worse than plain INTx. */
         for (uint32_t entry = 0; entry < bound; ++entry) {
             int32_t arg0 = (int32_t)((bdf << 8) | entry);
-            (void)wasmos_ipc_call(g_pci_endpoint, g_endpoint, PCI_IPC_MSI_UNBIND, 100, arg0, 0, 0,
-                                  0, &reply);
+            (void)wasmos_ipc_call(
+                g_pci_endpoint, g_endpoint, PCI_IPC_MSI_UNBIND, 100, arg0, 0, 0, 0, &reply);
             (void)wasmos_msi_free((int32_t)g_dev.msix_vectors[entry]);
             g_dev.msix_vectors[entry] = 0;
         }
@@ -900,8 +918,10 @@ static int initialize_device(void) {
     status |= VIRTIO_STATUS_DRIVER_OK;
     io_write8(g_dev.io_base + VIRTIO_PCI_DEVICE_STATUS, status);
     g_dev.ready = 1u;
-    (void)printf("[virtio-net] vq ready rx=%d tx=%d rx_phys=0x%08X tx_phys=0x%08X\n", rx_size,
-                 tx_size, (unsigned)(g_rxq.vq.region_phys & 0xFFFFFFFFu),
+    (void)printf("[virtio-net] vq ready rx=%d tx=%d rx_phys=0x%08X tx_phys=0x%08X\n",
+                 rx_size,
+                 tx_size,
+                 (unsigned)(g_rxq.vq.region_phys & 0xFFFFFFFFu),
                  (unsigned)(g_txq.vq.region_phys & 0xFFFFFFFFu));
 
     /* Post the receive buffers now that the device is live (RX buffers may be
@@ -911,7 +931,8 @@ static int initialize_device(void) {
         (void)printf("[virtio-net] rx arm failed\n");
         return -1;
     }
-    (void)printf("[virtio-net] rx armed bufs=%d rx_pool=0x%08X\n", rx_bufs,
+    (void)printf("[virtio-net] rx armed bufs=%d rx_pool=0x%08X\n",
+                 rx_bufs,
                  (unsigned)(g_rx_pool_phys & 0xFFFFFFFFu));
 
     if (tx_arm() != 0) {
@@ -919,7 +940,8 @@ static int initialize_device(void) {
         return -1;
     }
     (void)printf("[virtio-net] tx armed bufs=%u tx_pool=0x%08X\n",
-                 (unsigned)VIRTIO_NET_TX_BUF_COUNT, (unsigned)(g_tx_pool_phys & 0xFFFFFFFFu));
+                 (unsigned)VIRTIO_NET_TX_BUF_COUNT,
+                 (unsigned)(g_tx_pool_phys & 0xFFFFFFFFu));
     return 0;
 }
 
@@ -939,8 +961,14 @@ static void handle_link_get(int32_t source, int32_t request_id, int32_t buffer_i
     }
     link_up = ((g_dev.status_word & VIRTIO_NET_S_LINK_UP) != 0u) ? 1 : 0;
     g_link_sub_endpoint = source;
-    (void)wasmos_ipc_send(source, g_endpoint, NETDRV_IPC_RESP, request_id, link_up,
-                          (int32_t)g_dev.status_word, (int32_t)VIRTIO_NET_MTU_BASELINE, 0);
+    (void)wasmos_ipc_send(source,
+                          g_endpoint,
+                          NETDRV_IPC_RESP,
+                          request_id,
+                          link_up,
+                          (int32_t)g_dev.status_word,
+                          (int32_t)VIRTIO_NET_MTU_BASELINE,
+                          0);
 }
 
 static void net_publish_link_change(void) {
@@ -954,9 +982,14 @@ static void net_publish_link_change(void) {
     }
     g_dev.status_word = status_word;
     if (g_link_sub_endpoint >= 0) {
-        (void)wasmos_ipc_send(g_link_sub_endpoint, g_endpoint, NETDRV_IPC_LINK_NOTIFY, 0,
+        (void)wasmos_ipc_send(g_link_sub_endpoint,
+                              g_endpoint,
+                              NETDRV_IPC_LINK_NOTIFY,
+                              0,
                               (status_word & VIRTIO_NET_S_LINK_UP) != 0u ? 1 : 0,
-                              (int32_t)status_word, (int32_t)VIRTIO_NET_MTU_BASELINE, 0);
+                              (int32_t)status_word,
+                              (int32_t)VIRTIO_NET_MTU_BASELINE,
+                              0);
     }
 }
 
@@ -969,8 +1002,8 @@ static void handle_stats_get(int32_t source, int32_t request_id, int32_t buffer_
         send_error(source, request_id, WASMOS_ERR_NET_IO_ERROR);
         return;
     }
-    (void)wasmos_ipc_send(source, g_endpoint, NETDRV_IPC_RESP, request_id, WASMOS_ERR_NONE, 0, 0,
-                          0);
+    (void)wasmos_ipc_send(
+        source, g_endpoint, NETDRV_IPC_RESP, request_id, WASMOS_ERR_NONE, 0, 0, 0);
 }
 
 /* NETDRV_IPC_RX_POLL: register the caller as the RX_FRAME_NOTIFY subscriber and
@@ -992,8 +1025,14 @@ static void handle_rx_poll(int32_t source, int32_t request_id, int32_t buffer_id
             return;
         }
     }
-    (void)wasmos_ipc_send(source, g_endpoint, NETDRV_IPC_RESP, request_id, (int32_t)len,
-                          (int32_t)(sub ? sub->count : 0u), 0, 0);
+    (void)wasmos_ipc_send(source,
+                          g_endpoint,
+                          NETDRV_IPC_RESP,
+                          request_id,
+                          (int32_t)len,
+                          (int32_t)(sub ? sub->count : 0u),
+                          0,
+                          0);
 }
 
 /* NETDRV_IPC_TX_FRAME: transmit the frame in the caller's borrowed buffer.
@@ -1009,8 +1048,8 @@ static void handle_tx_frame(int32_t source, int32_t request_id, int32_t frame_le
         send_error(source, request_id, rc);
         return;
     }
-    (void)wasmos_ipc_send(source, g_endpoint, NETDRV_IPC_RESP, request_id, WASMOS_ERR_NONE, 0, 0,
-                          0);
+    (void)wasmos_ipc_send(
+        source, g_endpoint, NETDRV_IPC_RESP, request_id, WASMOS_ERR_NONE, 0, 0, 0);
 }
 
 WASMOS_WASM_EXPORT int32_t initialize(void) {
@@ -1041,17 +1080,26 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
         (void)printf("[virtio-net] pci service unavailable; msi-x disabled\n");
     }
     if (initialize_device() != 0) {
-        (void)printf("[virtio-net] init failed io=0x%04X dev=0x%04X\n", (unsigned)g_dev.io_base,
+        (void)printf("[virtio-net] init failed io=0x%04X dev=0x%04X\n",
+                     (unsigned)g_dev.io_base,
                      (unsigned)g_dev.device_id);
         return WASMOS_ERR_DRIVER_DEVICE_INIT;
     }
-    (void)printf("[virtio-net] probe ok bus=%u slot=%u dev=0x%04X irq=%u\n", (unsigned)g_dev.bus,
-                 (unsigned)g_dev.slot, (unsigned)g_dev.device_id, (unsigned)g_dev.irq);
+    (void)printf("[virtio-net] probe ok bus=%u slot=%u dev=0x%04X irq=%u\n",
+                 (unsigned)g_dev.bus,
+                 (unsigned)g_dev.slot,
+                 (unsigned)g_dev.device_id,
+                 (unsigned)g_dev.irq);
     (void)printf("[virtio-net] mac %02X:%02X:%02X:%02X:%02X:%02X io=0x%04X\n",
-                 (unsigned)g_dev.mac[0], (unsigned)g_dev.mac[1], (unsigned)g_dev.mac[2],
-                 (unsigned)g_dev.mac[3], (unsigned)g_dev.mac[4], (unsigned)g_dev.mac[5],
+                 (unsigned)g_dev.mac[0],
+                 (unsigned)g_dev.mac[1],
+                 (unsigned)g_dev.mac[2],
+                 (unsigned)g_dev.mac[3],
+                 (unsigned)g_dev.mac[4],
+                 (unsigned)g_dev.mac[5],
                  (unsigned)g_dev.io_base);
-    (void)printf("[virtio-net] features dev=0x%08X drv=0x%08X\n", (unsigned)g_dev.device_features,
+    (void)printf("[virtio-net] features dev=0x%08X drv=0x%08X\n",
+                 (unsigned)g_dev.device_features,
                  (unsigned)g_dev.driver_features);
     (void)printf("[virtio-net] driver ok link=%s mtu=%u\n",
                  ((g_dev.status_word & VIRTIO_NET_S_LINK_UP) != 0u) ? "up" : "down",

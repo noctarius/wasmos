@@ -69,9 +69,16 @@ typedef struct {
     uint16_t height;
 } fb_mode_t;
 
-static const fb_mode_t g_modes[] = {{640u, 480u},  {800u, 600u},  {1024u, 768u},  {1152u, 864u},
-                                    {1280u, 720u}, {1280u, 800u}, {1280u, 1024u}, {1366u, 768u},
-                                    {1440u, 900u}, {1600u, 900u}};
+static const fb_mode_t g_modes[] = {{640u, 480u},
+                                    {800u, 600u},
+                                    {1024u, 768u},
+                                    {1152u, 864u},
+                                    {1280u, 720u},
+                                    {1280u, 800u},
+                                    {1280u, 1024u},
+                                    {1366u, 768u},
+                                    {1440u, 900u},
+                                    {1600u, 900u}};
 
 static int str_len(const char* s) {
     int n = 0;

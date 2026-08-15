@@ -94,9 +94,12 @@ void x86_irq_iret_corrupt(const uint64_t* saved, const uint64_t* current) {
                   "[irq] current rip=%016llx\n"
                   "[irq] current cs=%016llx\n"
                   "[irq] current rflags=%016llx\n",
-                  (unsigned long long)saved[0], (unsigned long long)saved[1],
-                  (unsigned long long)saved[2], (unsigned long long)current[0],
-                  (unsigned long long)current[1], (unsigned long long)current[2]);
+                  (unsigned long long)saved[0],
+                  (unsigned long long)saved[1],
+                  (unsigned long long)saved[2],
+                  (unsigned long long)current[0],
+                  (unsigned long long)current[1],
+                  (unsigned long long)current[2]);
     /* Corrupt return frame — unrecoverable. a=saved rip, b=current rip. */
     kpanic("irq_iret_frame_corrupt", saved[0], current[0]);
 }
@@ -348,7 +351,11 @@ static void irq_ops_log_throttle(uint32_t line) {
 }
 
 static const irq_sharing_ops_t g_irq_ops = {
-    irq_ops_mask, irq_ops_unmask, irq_ops_deliver, timer_ticks, irq_ops_log_throttle,
+    irq_ops_mask,
+    irq_ops_unmask,
+    irq_ops_deliver,
+    timer_ticks,
+    irq_ops_log_throttle,
 };
 
 /* Route an IRQ line to an IPC endpoint on behalf of a guest context.

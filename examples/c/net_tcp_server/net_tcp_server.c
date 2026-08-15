@@ -81,16 +81,16 @@ static int prepare_bufs(int32_t stack_ep, sock_bufs_t* b) {
     put_u16(ring_header, 4u, 1u);
     put_u16(ring_header, 6u, RING_HEADER_BYTES);
     put_u32(ring_header, 8u, RING_BYTES);
-    if (wasmos_xfer_buffer_write(b->tx_bid, addr_cast(int32_t, ring_header), sizeof(ring_header),
-                                 0) != 0 ||
-        wasmos_xfer_buffer_write(b->rx_bid, addr_cast(int32_t, ring_header), sizeof(ring_header),
-                                 0) != 0) {
+    if (wasmos_xfer_buffer_write(
+            b->tx_bid, addr_cast(int32_t, ring_header), sizeof(ring_header), 0) != 0 ||
+        wasmos_xfer_buffer_write(
+            b->rx_bid, addr_cast(int32_t, ring_header), sizeof(ring_header), 0) != 0) {
         return -1;
     }
-    b->tx_grant = wasmos_xfer_buffer_borrow(stack_ep, b->tx_bid,
-                                            WASMOS_BUFFER_GRANT_READ | WASMOS_BUFFER_GRANT_WRITE);
-    b->rx_grant = wasmos_xfer_buffer_borrow(stack_ep, b->rx_bid,
-                                            WASMOS_BUFFER_GRANT_READ | WASMOS_BUFFER_GRANT_WRITE);
+    b->tx_grant = wasmos_xfer_buffer_borrow(
+        stack_ep, b->tx_bid, WASMOS_BUFFER_GRANT_READ | WASMOS_BUFFER_GRANT_WRITE);
+    b->rx_grant = wasmos_xfer_buffer_borrow(
+        stack_ep, b->rx_bid, WASMOS_BUFFER_GRANT_READ | WASMOS_BUFFER_GRANT_WRITE);
     b->desc_grant = wasmos_xfer_buffer_borrow(stack_ep, b->desc_bid, WASMOS_BUFFER_GRANT_READ);
     if (b->tx_grant < 0 || b->rx_grant < 0 || b->desc_grant < 0) {
         return -1;
@@ -142,16 +142,22 @@ int main(int argc, char** argv) {
         puts("[net-tcp-srv] listen buffer setup failed");
         return 1;
     }
-    if (wasmos_ipc_send(stack_ep, reply_ep, NET_IPC_SOCKET_OPEN, request_id, listen_bufs.desc_bid,
-                        listen_bufs.desc_grant, sizeof(net_socket_open_descriptor_v1_t), 0) != 0 ||
+    if (wasmos_ipc_send(stack_ep,
+                        reply_ep,
+                        NET_IPC_SOCKET_OPEN,
+                        request_id,
+                        listen_bufs.desc_bid,
+                        listen_bufs.desc_grant,
+                        sizeof(net_socket_open_descriptor_v1_t),
+                        0) != 0 ||
         recv_reply(reply_ep, request_id++, &message) != 0 || message.type != NET_IPC_RESP ||
         (int32_t)message.arg0 < 0) {
         puts("[net-tcp-srv] open failed");
         return 1;
     }
     listen_id = message.arg0;
-    if (wasmos_ipc_send(stack_ep, reply_ep, NET_IPC_BIND, request_id, listen_id, LISTEN_PORT, 0u,
-                        0) != 0 ||
+    if (wasmos_ipc_send(
+            stack_ep, reply_ep, NET_IPC_BIND, request_id, listen_id, LISTEN_PORT, 0u, 0) != 0 ||
         recv_reply(reply_ep, request_id++, &message) != 0 || message.type != NET_IPC_RESP) {
         puts("[net-tcp-srv] bind failed");
         return 1;
@@ -169,8 +175,13 @@ int main(int argc, char** argv) {
         return 1;
     }
     int32_t accept_rid = request_id++;
-    if (wasmos_ipc_send(stack_ep, reply_ep, NET_IPC_ACCEPT, accept_rid, listen_id,
-                        accept_bufs.desc_bid, accept_bufs.desc_grant,
+    if (wasmos_ipc_send(stack_ep,
+                        reply_ep,
+                        NET_IPC_ACCEPT,
+                        accept_rid,
+                        listen_id,
+                        accept_bufs.desc_bid,
+                        accept_bufs.desc_grant,
                         sizeof(net_socket_open_descriptor_v1_t)) != 0) {
         puts("[net-tcp-srv] accept post failed");
         return 1;
@@ -194,8 +205,10 @@ int main(int argc, char** argv) {
             continue;
         }
         uint32_t rx_write = 0u;
-        if (wasmos_xfer_buffer_read(accept_bufs.rx_bid, addr_cast(int32_t, &rx_write),
-                                    sizeof(rx_write), RING_OFF_WRITE) != 0) {
+        if (wasmos_xfer_buffer_read(accept_bufs.rx_bid,
+                                    addr_cast(int32_t, &rx_write),
+                                    sizeof(rx_write),
+                                    RING_OFF_WRITE) != 0) {
             break;
         }
         if (rx_write == 0u) {
@@ -205,14 +218,16 @@ int main(int argc, char** argv) {
             rx_write = RING_BYTES;
         }
         uint8_t buf[RING_BYTES];
-        if (wasmos_xfer_buffer_read(accept_bufs.rx_bid, addr_cast(int32_t, buf), rx_write,
-                                    RING_HEADER_BYTES) != 0 ||
-            wasmos_xfer_buffer_write(accept_bufs.tx_bid, addr_cast(int32_t, buf), rx_write,
-                                     RING_HEADER_BYTES) != 0 ||
-            wasmos_xfer_buffer_write(accept_bufs.tx_bid, addr_cast(int32_t, &rx_write),
-                                     sizeof(rx_write), RING_OFF_WRITE) != 0 ||
-            wasmos_ipc_send(stack_ep, reply_ep, NET_IPC_TX_NOTIFY, request_id++, accept_id, 0, 0,
-                            0) != 0) {
+        if (wasmos_xfer_buffer_read(
+                accept_bufs.rx_bid, addr_cast(int32_t, buf), rx_write, RING_HEADER_BYTES) != 0 ||
+            wasmos_xfer_buffer_write(
+                accept_bufs.tx_bid, addr_cast(int32_t, buf), rx_write, RING_HEADER_BYTES) != 0 ||
+            wasmos_xfer_buffer_write(accept_bufs.tx_bid,
+                                     addr_cast(int32_t, &rx_write),
+                                     sizeof(rx_write),
+                                     RING_OFF_WRITE) != 0 ||
+            wasmos_ipc_send(
+                stack_ep, reply_ep, NET_IPC_TX_NOTIFY, request_id++, accept_id, 0, 0, 0) != 0) {
             break;
         }
         puts("[net-tcp-srv] echoed");

@@ -551,8 +551,8 @@ static inline void ui_draw_v_scrollbar(uint8_t* base, int32_t bw, int32_t bh, in
     const int32_t travel = h - thumb_h;
     const int32_t thumb_y = y + ((travel > 0) ? ((travel * scroll_y) / scroll_max) : 0);
     ui_fill_rect_clip(base, bw, bh, x + 1, thumb_y, w - 2, thumb_h, thumb_color, clip);
-    ui_stroke_rect_clip(base, bw, bh, (ui_rect_t){x + 1, thumb_y, w - 2, thumb_h}, 1,
-                        thumb_border_color, clip);
+    ui_stroke_rect_clip(
+        base, bw, bh, (ui_rect_t){x + 1, thumb_y, w - 2, thumb_h}, 1, thumb_border_color, clip);
 }
 
 /* Source-over blend of `src` onto `dst` at coverage `alpha` (0 = keep dst,
@@ -693,18 +693,24 @@ static inline int32_t ui_font_measure_text(ui_context_t* ctx, const char* text, 
             *out_adv = 0;
         return 0;
     }
-    if (ui_font_ensure_shmem_buffer(&ctx->font_text_shmem_id, &ctx->font_text_ptr,
-                                    &ctx->font_text_cap, text_len + 1) != 0)
+    if (ui_font_ensure_shmem_buffer(
+            &ctx->font_text_shmem_id, &ctx->font_text_ptr, &ctx->font_text_cap, text_len + 1) != 0)
         return -1;
     memcpy(ctx->font_text_ptr, text, (size_t)text_len);
     ctx->font_text_ptr[text_len] = '\0';
-    if (wasmos_shmem_flush(ctx->font_text_shmem_id, addr_cast(int32_t, ctx->font_text_ptr),
-                           text_len + 1) != 0)
+    if (wasmos_shmem_flush(
+            ctx->font_text_shmem_id, addr_cast(int32_t, ctx->font_text_ptr), text_len + 1) != 0)
         return -1;
 
     wasmos_ipc_message_t reply;
-    if (wasmos_ipc_call(ctx->font_endpoint, ctx->font_reply_endpoint, FONT_IPC_MEASURE_GLYPH_REQ,
-                        ctx->req_id++, ctx->font_handle, ctx->font_text_shmem_id, text_len, 0,
+    if (wasmos_ipc_call(ctx->font_endpoint,
+                        ctx->font_reply_endpoint,
+                        FONT_IPC_MEASURE_GLYPH_REQ,
+                        ctx->req_id++,
+                        ctx->font_handle,
+                        ctx->font_text_shmem_id,
+                        text_len,
+                        0,
                         &reply) != 0) {
         return -1;
     }
@@ -749,20 +755,26 @@ static inline int32_t ui_font_measure_and_raster_text(ui_context_t* ctx, const c
     const int32_t bytes = (*out_w) * (*out_h);
     if (bytes <= 0)
         return -1;
-    if (ui_font_ensure_shmem_buffer(&ctx->font_mask_shmem_id, &ctx->font_mask_ptr,
-                                    &ctx->font_mask_cap, bytes) != 0)
+    if (ui_font_ensure_shmem_buffer(
+            &ctx->font_mask_shmem_id, &ctx->font_mask_ptr, &ctx->font_mask_cap, bytes) != 0)
         return -1;
 
     wasmos_ipc_message_t reply;
-    if (wasmos_ipc_call(ctx->font_endpoint, ctx->font_reply_endpoint,
-                        FONT_IPC_RASTER_GLYPH_INTO_REQ, ctx->req_id++, ctx->font_handle,
-                        ctx->font_text_shmem_id, text_len, ctx->font_mask_shmem_id, &reply) != 0) {
+    if (wasmos_ipc_call(ctx->font_endpoint,
+                        ctx->font_reply_endpoint,
+                        FONT_IPC_RASTER_GLYPH_INTO_REQ,
+                        ctx->req_id++,
+                        ctx->font_handle,
+                        ctx->font_text_shmem_id,
+                        text_len,
+                        ctx->font_mask_shmem_id,
+                        &reply) != 0) {
         return -1;
     }
     if (reply.type != FONT_IPC_RESP || reply.arg0 != WASMOS_ERR_NONE)
         return -1;
-    if (wasmos_shmem_refresh(ctx->font_mask_shmem_id, addr_cast(int32_t, ctx->font_mask_ptr),
-                             bytes) != 0)
+    if (wasmos_shmem_refresh(
+            ctx->font_mask_shmem_id, addr_cast(int32_t, ctx->font_mask_ptr), bytes) != 0)
         return -1;
     return 0;
 }
@@ -1391,27 +1403,64 @@ static inline int32_t ui_realloc_buffer(ui_context_t* ctx, int32_t new_w, int32_
     const int32_t prev_ptr_x = ctx->pointer_x;
     const int32_t prev_ptr_y = ctx->pointer_y;
     const int32_t first_alloc = (ctx->mapped_base == NULL);
-    if (ui_send_gfx(ctx->gfx_endpoint, ctx->reply_endpoint, ctx->req_id++,
-                    GFX_IPC_ALLOC_SHARED_BUFFER, ctx->window_id, new_w, new_h, 0, &status,
-                    &new_buffer_id, &new_shmem_id, &new_stride) != 0 ||
+    if (ui_send_gfx(ctx->gfx_endpoint,
+                    ctx->reply_endpoint,
+                    ctx->req_id++,
+                    GFX_IPC_ALLOC_SHARED_BUFFER,
+                    ctx->window_id,
+                    new_w,
+                    new_h,
+                    0,
+                    &status,
+                    &new_buffer_id,
+                    &new_shmem_id,
+                    &new_stride) != 0 ||
         status != WASMOS_ERR_NONE) {
         return -1;
     }
     const int32_t bytes = (new_stride * new_h + (UI_PAGE_SIZE - 1)) & ~(UI_PAGE_SIZE - 1);
     const int32_t mapped_ptr = wasmos_shmem_map_auto(new_shmem_id, bytes);
     if (mapped_ptr < 0) {
-        (void)ui_send_gfx(ctx->gfx_endpoint, ctx->reply_endpoint, ctx->req_id++,
-                          GFX_IPC_RELEASE_SHARED_BUFFER, new_buffer_id, 0, 0, 0, &status, 0, 0, 0);
+        (void)ui_send_gfx(ctx->gfx_endpoint,
+                          ctx->reply_endpoint,
+                          ctx->req_id++,
+                          GFX_IPC_RELEASE_SHARED_BUFFER,
+                          new_buffer_id,
+                          0,
+                          0,
+                          0,
+                          &status,
+                          0,
+                          0,
+                          0);
         return -1;
     }
     if (ctx->shmem_id > 0)
         (void)wasmos_shmem_unmap(ctx->shmem_id);
     if (ctx->buffer_id > 0) {
-        (void)ui_send_gfx(ctx->gfx_endpoint, ctx->reply_endpoint, ctx->req_id++,
-                          GFX_IPC_RELEASE_SHARED_BUFFER, ctx->buffer_id, 0, 0, 0, &status, 0, 0, 0);
+        (void)ui_send_gfx(ctx->gfx_endpoint,
+                          ctx->reply_endpoint,
+                          ctx->req_id++,
+                          GFX_IPC_RELEASE_SHARED_BUFFER,
+                          ctx->buffer_id,
+                          0,
+                          0,
+                          0,
+                          &status,
+                          0,
+                          0,
+                          0);
     }
-    ui_apply_realloc_state(ctx, new_buffer_id, new_shmem_id, new_stride, new_w, new_h, mapped_ptr,
-                           first_alloc, prev_ptr_x, prev_ptr_y);
+    ui_apply_realloc_state(ctx,
+                           new_buffer_id,
+                           new_shmem_id,
+                           new_stride,
+                           new_w,
+                           new_h,
+                           mapped_ptr,
+                           first_alloc,
+                           prev_ptr_x,
+                           prev_ptr_y);
     return 0;
 }
 
@@ -1438,8 +1487,15 @@ static inline int32_t ui_init_font(ui_context_t* ctx) {
     }
     if (ctx->font_endpoint < 0)
         return -1;
-    if (wasmos_ipc_call(ctx->font_endpoint, ctx->font_reply_endpoint, FONT_IPC_OPEN_FONT_REQ,
-                        ctx->req_id++, FONT_ID_ROBOTO, ctx->font_px, 0, 0, &reply) != 0)
+    if (wasmos_ipc_call(ctx->font_endpoint,
+                        ctx->font_reply_endpoint,
+                        FONT_IPC_OPEN_FONT_REQ,
+                        ctx->req_id++,
+                        FONT_ID_ROBOTO,
+                        ctx->font_px,
+                        0,
+                        0,
+                        &reply) != 0)
         return -1;
     if (reply.type != FONT_IPC_RESP || reply.arg0 != WASMOS_ERR_NONE || reply.arg1 <= 0)
         return -1;
@@ -1492,10 +1548,18 @@ static inline int32_t ui_init(ui_context_t* ctx, int32_t proc_endpoint, int32_t 
     if (ui_init_font(ctx) != 0)
         goto fail;
 
-    if (ui_send_gfx(ctx->gfx_endpoint, ctx->event_endpoint, ctx->req_id++, GFX_IPC_CREATE_WINDOW,
-                    width, height, (int32_t)GFX_IPC_ABI_MAGIC,
+    if (ui_send_gfx(ctx->gfx_endpoint,
+                    ctx->event_endpoint,
+                    ctx->req_id++,
+                    GFX_IPC_CREATE_WINDOW,
+                    width,
+                    height,
+                    (int32_t)GFX_IPC_ABI_MAGIC,
                     (int32_t)gfx_ipc_header_pack(GFX_IPC_ABI_VERSION, GFX_IPC_CREATE_WINDOW),
-                    &status, &a1, &a2, &a3) != 0 ||
+                    &status,
+                    &a1,
+                    &a2,
+                    &a3) != 0 ||
         status != WASMOS_ERR_NONE) {
         goto fail;
     }
@@ -1551,8 +1615,18 @@ static inline int32_t ui_window_set_title(ui_context_t* ctx, const char* title) 
         return -1;
     }
     int32_t status = 0;
-    ui_send_gfx(ctx->gfx_endpoint, ctx->reply_endpoint, ctx->req_id++, GFX_IPC_SET_WINDOW_TITLE,
-                ctx->window_id, shmem_id, len, 0, &status, 0, 0, 0);
+    ui_send_gfx(ctx->gfx_endpoint,
+                ctx->reply_endpoint,
+                ctx->req_id++,
+                GFX_IPC_SET_WINDOW_TITLE,
+                ctx->window_id,
+                shmem_id,
+                len,
+                0,
+                &status,
+                0,
+                0,
+                0);
     (void)wasmos_shmem_unmap(shmem_id);
     return (status == WASMOS_ERR_NONE) ? 0 : -1;
 }
@@ -1593,32 +1667,68 @@ static inline int32_t ui_menu_bar_init(ui_context_t* ctx, int32_t proc_endpoint,
     if (ui_init_font(ctx) != 0)
         goto mb_fail;
 
-    if (ui_send_gfx(ctx->gfx_endpoint, reply_endpoint, ctx->req_id++, GFX_IPC_GET_DISPLAY_INFO, 0,
-                    0, 0, 0, &status, &a1, &a2, &a3) != 0 ||
+    if (ui_send_gfx(ctx->gfx_endpoint,
+                    reply_endpoint,
+                    ctx->req_id++,
+                    GFX_IPC_GET_DISPLAY_INFO,
+                    0,
+                    0,
+                    0,
+                    0,
+                    &status,
+                    &a1,
+                    &a2,
+                    &a3) != 0 ||
         status != WASMOS_ERR_NONE || a1 <= 0)
         goto mb_fail;
 
     const int32_t screen_w = a1;
     const int32_t bar_h = 28;
 
-    if (ui_send_gfx(ctx->gfx_endpoint, ctx->event_endpoint, ctx->req_id++, GFX_IPC_CREATE_WINDOW,
-                    screen_w, bar_h, (int32_t)GFX_IPC_ABI_MAGIC,
+    if (ui_send_gfx(ctx->gfx_endpoint,
+                    ctx->event_endpoint,
+                    ctx->req_id++,
+                    GFX_IPC_CREATE_WINDOW,
+                    screen_w,
+                    bar_h,
+                    (int32_t)GFX_IPC_ABI_MAGIC,
                     (int32_t)gfx_ipc_header_pack(GFX_IPC_ABI_VERSION, GFX_IPC_CREATE_WINDOW),
-                    &status, &a1, &a2, &a3) != 0 ||
+                    &status,
+                    &a1,
+                    &a2,
+                    &a3) != 0 ||
         status != WASMOS_ERR_NONE)
         goto mb_fail;
     ctx->window_id = a1;
 
-    if (ui_send_gfx(ctx->gfx_endpoint, reply_endpoint, ctx->req_id++, GFX_IPC_SET_WINDOW_FLAGS,
+    if (ui_send_gfx(ctx->gfx_endpoint,
+                    reply_endpoint,
+                    ctx->req_id++,
+                    GFX_IPC_SET_WINDOW_FLAGS,
                     ctx->window_id,
                     (int32_t)(GFX_WINDOW_FLAG_TOPMOST | GFX_WINDOW_FLAG_NO_CHROME |
                               GFX_WINDOW_FLAG_NO_TASK_LIST),
-                    0, 0, &status, 0, 0, 0) != 0 ||
+                    0,
+                    0,
+                    &status,
+                    0,
+                    0,
+                    0) != 0 ||
         status != WASMOS_ERR_NONE)
         goto mb_fail;
 
-    if (ui_send_gfx(ctx->gfx_endpoint, reply_endpoint, ctx->req_id++, GFX_IPC_MOVE_WINDOW,
-                    ctx->window_id, 0, 0, 0, &status, 0, 0, 0) != 0 ||
+    if (ui_send_gfx(ctx->gfx_endpoint,
+                    reply_endpoint,
+                    ctx->req_id++,
+                    GFX_IPC_MOVE_WINDOW,
+                    ctx->window_id,
+                    0,
+                    0,
+                    0,
+                    &status,
+                    0,
+                    0,
+                    0) != 0 ||
         status != WASMOS_ERR_NONE)
         goto mb_fail;
 
@@ -1661,12 +1771,32 @@ static inline void ui_destroy(ui_context_t* ctx) {
     if (!ctx)
         return;
     if (ctx->window_id > 0) {
-        (void)ui_send_gfx(ctx->gfx_endpoint, ctx->reply_endpoint, ctx->req_id++,
-                          GFX_IPC_DESTROY_WINDOW, ctx->window_id, 0, 0, 0, &status, 0, 0, 0);
+        (void)ui_send_gfx(ctx->gfx_endpoint,
+                          ctx->reply_endpoint,
+                          ctx->req_id++,
+                          GFX_IPC_DESTROY_WINDOW,
+                          ctx->window_id,
+                          0,
+                          0,
+                          0,
+                          &status,
+                          0,
+                          0,
+                          0);
     }
     if (ctx->buffer_id > 0) {
-        (void)ui_send_gfx(ctx->gfx_endpoint, ctx->reply_endpoint, ctx->req_id++,
-                          GFX_IPC_RELEASE_SHARED_BUFFER, ctx->buffer_id, 0, 0, 0, &status, 0, 0, 0);
+        (void)ui_send_gfx(ctx->gfx_endpoint,
+                          ctx->reply_endpoint,
+                          ctx->req_id++,
+                          GFX_IPC_RELEASE_SHARED_BUFFER,
+                          ctx->buffer_id,
+                          0,
+                          0,
+                          0,
+                          &status,
+                          0,
+                          0,
+                          0);
     }
     if (ctx->shmem_id > 0)
         (void)wasmos_shmem_unmap(ctx->shmem_id);
@@ -1841,8 +1971,15 @@ static inline void ui_render_component_clip(ui_context_t* ctx, int32_t id, ui_re
     const int32_t draw_y = c->bounds.y - offset_y;
     const ui_rect_t draw_bounds = {c->bounds.x, draw_y, c->bounds.w, c->bounds.h};
 
-    ui_fill_rect_clip(ctx->mapped_base, ctx->width, ctx->height, draw_bounds.x, draw_bounds.y,
-                      draw_bounds.w, draw_bounds.h, c->bg_color, clip);
+    ui_fill_rect_clip(ctx->mapped_base,
+                      ctx->width,
+                      ctx->height,
+                      draw_bounds.x,
+                      draw_bounds.y,
+                      draw_bounds.w,
+                      draw_bounds.h,
+                      c->bg_color,
+                      clip);
 
     const ui_component_ops_t* ops = &ui_component_ops[c->type];
     if (ops->render) {
@@ -1862,8 +1999,13 @@ static inline void ui_render_component_clip(ui_context_t* ctx, int32_t id, ui_re
         return;
     }
 
-    ui_stroke_rect_clip(ctx->mapped_base, ctx->width, ctx->height, draw_bounds, c->border_px,
-                        c->border_color, clip);
+    ui_stroke_rect_clip(ctx->mapped_base,
+                        ctx->width,
+                        ctx->height,
+                        draw_bounds,
+                        c->border_px,
+                        c->border_color,
+                        clip);
 
     int32_t child_id = c->first_child_id;
     while (child_id > 0) {
@@ -2352,13 +2494,24 @@ static inline int32_t ui_loop_drain(ui_context_t* ctx) {
     ui_layout_vertical(ctx, root->id);
     ui_render_component(ctx, root->id);
 
-    if (wasmos_shmem_flush(ctx->shmem_id, addr_cast(int32_t, ctx->mapped_base),
+    if (wasmos_shmem_flush(ctx->shmem_id,
+                           addr_cast(int32_t, ctx->mapped_base),
                            ctx->stride_bytes * ctx->height) != 0) {
         return -1;
     }
 
-    if (ui_send_gfx(ctx->gfx_endpoint, ctx->reply_endpoint, ctx->req_id++, GFX_IPC_PRESENT_WINDOW,
-                    ctx->window_id, ctx->buffer_id, 0, 0, &status, 0, 0, 0) != 0) {
+    if (ui_send_gfx(ctx->gfx_endpoint,
+                    ctx->reply_endpoint,
+                    ctx->req_id++,
+                    GFX_IPC_PRESENT_WINDOW,
+                    ctx->window_id,
+                    ctx->buffer_id,
+                    0,
+                    0,
+                    &status,
+                    0,
+                    0,
+                    0) != 0) {
         return -1;
     }
     if (status == WASMOS_ERR_GFX_INVALID || status == WASMOS_ERR_GFX_BUSY) {

@@ -64,8 +64,8 @@ int32_t tnet_join_begin(int32_t proc_ep, uint32_t addr_no, uint32_t port) {
     if (stack_ep < 0) {
         return stack_ep;
     }
-    return wasmos_net_tcp_connect_begin(&g_sock, stack_ep, g_reply_ep, addr_no, (uint16_t)port,
-                                        TNET_RING_CAP, 1, 0u, 0);
+    return wasmos_net_tcp_connect_begin(
+        &g_sock, stack_ep, g_reply_ep, addr_no, (uint16_t)port, TNET_RING_CAP, 1, 0u, 0);
 }
 
 /* Server role: arm a non-blocking listen/accept on `port`. Returns 0 armed, or a
@@ -75,8 +75,8 @@ int32_t tnet_host_begin(int32_t proc_ep, uint32_t port) {
     if (stack_ep < 0) {
         return stack_ep;
     }
-    return wasmos_net_tcp_listen_begin(&g_sock, stack_ep, g_reply_ep, (uint16_t)port, TNET_RING_CAP,
-                                       1);
+    return wasmos_net_tcp_listen_begin(
+        &g_sock, stack_ep, g_reply_ep, (uint16_t)port, TNET_RING_CAP, 1);
 }
 
 /* Doorbell handler for the armed handshake. Call from the game loop whenever the

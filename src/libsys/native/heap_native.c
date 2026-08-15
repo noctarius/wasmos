@@ -198,7 +198,22 @@ typedef struct SizeClass {
 } SizeClass;
 
 static const size_t heap_class_sizes[] = {
-    16, 32, 48, 64, 96, 128, 192, 256, 384, 512, 768, 1024, 1536, 2048, 3072, 4096,
+    16,
+    32,
+    48,
+    64,
+    96,
+    128,
+    192,
+    256,
+    384,
+    512,
+    768,
+    1024,
+    1536,
+    2048,
+    3072,
+    4096,
 };
 
 #define HEAP_SIZE_CLASS_COUNT (sizeof(heap_class_sizes) / sizeof(heap_class_sizes[0]))

@@ -465,8 +465,8 @@ static void continuation_cancel(wasmos_native_coroutine_runtime_t* runtime,
     if (future && future->state == WASMOS_FUTURE_PENDING) {
         continuation_list_remove(&future->continuations, NULL, continuation);
     } else if (runtime) {
-        continuation_list_remove(&runtime->continuation_head, &runtime->continuation_tail,
-                                 continuation);
+        continuation_list_remove(
+            &runtime->continuation_head, &runtime->continuation_tail, continuation);
     }
     continuation->next = NULL;
     continuation->future = NULL;
@@ -572,8 +572,12 @@ future_group_start(wasmos_native_coroutine_runtime_t* runtime, wasmos_future_gro
     for (size_t i = 0; i < count; ++i) {
         continuations[i].group = group;
         continuations[i].group_index = i;
-        if (!wasmos_future_then(runtime, inputs[i], &continuations[i], future_group_success,
-                                future_group_error, &continuations[i])) {
+        if (!wasmos_future_then(runtime,
+                                inputs[i],
+                                &continuations[i],
+                                future_group_success,
+                                future_group_error,
+                                &continuations[i])) {
             __builtin_trap();
         }
     }
@@ -583,16 +587,16 @@ future_group_start(wasmos_native_coroutine_runtime_t* runtime, wasmos_future_gro
 wasmos_future_t* wasmos_future_race(wasmos_native_coroutine_runtime_t* runtime,
                                     wasmos_future_group_t* group, wasmos_future_t* const* inputs,
                                     size_t count, wasmos_future_continuation_t* continuations) {
-    return future_group_start(runtime, group, inputs, count, NULL, continuations,
-                              WASMOS_FUTURE_GROUP_RACE);
+    return future_group_start(
+        runtime, group, inputs, count, NULL, continuations, WASMOS_FUTURE_GROUP_RACE);
 }
 
 wasmos_future_t* wasmos_future_all(wasmos_native_coroutine_runtime_t* runtime,
                                    wasmos_future_group_t* group, wasmos_future_t* const* inputs,
                                    size_t count, uintptr_t* values,
                                    wasmos_future_continuation_t* continuations) {
-    return future_group_start(runtime, group, inputs, count, values, continuations,
-                              WASMOS_FUTURE_GROUP_ALL);
+    return future_group_start(
+        runtime, group, inputs, count, values, continuations, WASMOS_FUTURE_GROUP_ALL);
 }
 
 int wasmos_native_coroutine_join(wasmos_native_coroutine_t* coroutine, int32_t* out_result) {

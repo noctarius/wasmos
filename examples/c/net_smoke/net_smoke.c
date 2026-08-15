@@ -121,7 +121,14 @@ int main(int argc, char** argv) {
         }
         (void)printf("[net-smoke] notify rx=%d ethertype=0x%04X "
                      "from=%02X:%02X:%02X:%02X:%02X:%02X\n",
-                     (int)len, et, frame[6], frame[7], frame[8], frame[9], frame[10], frame[11]);
+                     (int)len,
+                     et,
+                     frame[6],
+                     frame[7],
+                     frame[8],
+                     frame[9],
+                     frame[10],
+                     frame[11]);
         wasmos_net_tcp_close(&sock);
         return 0;
     }

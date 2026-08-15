@@ -395,8 +395,8 @@ static void native_random_reply(void* user, const nd_ipc_message_t* reply) {
         return;
     }
     if (reply->type == HRNG_IPC_ERROR) {
-        native_random_finish(request, (int32_t)reply->arg0 < 0 ? (int32_t)reply->arg0
-                                                               : WASMOS_ERR_HRNG_IO_ERROR);
+        native_random_finish(
+            request, (int32_t)reply->arg0 < 0 ? (int32_t)reply->arg0 : WASMOS_ERR_HRNG_IO_ERROR);
         return;
     }
     if (reply->type != HRNG_IPC_RESP) {
@@ -429,9 +429,17 @@ static int32_t native_random_issue(wasmos_sys_native_random_request_t* request) 
     if (chunk > request->chunk_max) {
         chunk = request->chunk_max;
     }
-    return wasmos_sys_native_intent_send(
-        request->loop, request->hrng_endpoint, request->loop->receiver_endpoint,
-        HRNG_IPC_GET_BYTES_REQ, request->buffer_id, chunk, 0u, 0u, native_random_reply, request, 0);
+    return wasmos_sys_native_intent_send(request->loop,
+                                         request->hrng_endpoint,
+                                         request->loop->receiver_endpoint,
+                                         HRNG_IPC_GET_BYTES_REQ,
+                                         request->buffer_id,
+                                         chunk,
+                                         0u,
+                                         0u,
+                                         native_random_reply,
+                                         request,
+                                         0);
 }
 
 int32_t wasmos_sys_native_random_bytes_async(wasmos_sys_native_event_loop_t* loop,
@@ -484,8 +492,12 @@ int32_t wasmos_sys_native_random_int_async(wasmos_sys_native_event_loop_t* loop,
         return WASMOS_ERR_HRNG_INVALID;
     }
     request->float_out = 0;
-    return wasmos_sys_native_random_bytes_async(loop, hrng_endpoint, (uint8_t*)out_value,
-                                                (uint32_t)sizeof(*out_value), request, on_complete,
+    return wasmos_sys_native_random_bytes_async(loop,
+                                                hrng_endpoint,
+                                                (uint8_t*)out_value,
+                                                (uint32_t)sizeof(*out_value),
+                                                request,
+                                                on_complete,
                                                 user);
 }
 
@@ -497,9 +509,13 @@ int32_t wasmos_sys_native_random_float_async(wasmos_sys_native_event_loop_t* loo
     if (!request || !out_value) {
         return WASMOS_ERR_HRNG_INVALID;
     }
-    int32_t status = wasmos_sys_native_random_bytes_async(
-        loop, hrng_endpoint, (uint8_t*)&request->float_word, (uint32_t)sizeof(request->float_word),
-        request, on_complete, user);
+    int32_t status = wasmos_sys_native_random_bytes_async(loop,
+                                                          hrng_endpoint,
+                                                          (uint8_t*)&request->float_word,
+                                                          (uint32_t)sizeof(request->float_word),
+                                                          request,
+                                                          on_complete,
+                                                          user);
     if (status != WASMOS_ERR_NONE) {
         return status;
     }
@@ -673,8 +689,15 @@ int32_t wasmos_sys_net_resolve_native(wasmos_driver_api_t* api, uint32_t source_
         (void)api->xfer_buffer_release(buffer_id);
         return -1;
     }
-    rc = wasmos_sys_ipc_call_native(api, source_endpoint, stack_endpoint, request_id,
-                                    NET_IPC_RESOLVE, buffer_id, (uint32_t)grant, hostname_len, 0u,
+    rc = wasmos_sys_ipc_call_native(api,
+                                    source_endpoint,
+                                    stack_endpoint,
+                                    request_id,
+                                    NET_IPC_RESOLVE,
+                                    buffer_id,
+                                    (uint32_t)grant,
+                                    hostname_len,
+                                    0u,
                                     &reply);
     (void)api->xfer_buffer_release(buffer_id);
     if (rc != 0 || reply.type != NET_IPC_RESP || (int32_t)reply.arg0 != WASMOS_ERR_NONE) {
@@ -757,8 +780,8 @@ int32_t wasmos_sys_svc_lookup_retry_native(wasmos_driver_api_t* api, uint32_t pr
         attempts = 1u;
     }
     for (i = 0; i < attempts; ++i) {
-        int32_t ep = wasmos_sys_svc_lookup_native(api, proc_endpoint, source_endpoint, name,
-                                                  name_len, request_id_base + i);
+        int32_t ep = wasmos_sys_svc_lookup_native(
+            api, proc_endpoint, source_endpoint, name, name_len, request_id_base + i);
         if (ep >= 0) {
             return ep;
         }
@@ -789,8 +812,8 @@ int32_t wasmos_sys_svc_register_class_native(wasmos_driver_api_t* api, uint32_t 
     if (!api || !api->xfer_buffer_acquire || !api->xfer_buffer_release) {
         return -1;
     }
-    desc = (svc_register_desc_t*)api->xfer_buffer_acquire(ND_BUFFER_KIND_XFER,
-                                                          (uint32_t)sizeof(*desc), &buffer_id);
+    desc = (svc_register_desc_t*)api->xfer_buffer_acquire(
+        ND_BUFFER_KIND_XFER, (uint32_t)sizeof(*desc), &buffer_id);
     if (!desc) {
         return -1;
     }
@@ -803,9 +826,16 @@ int32_t wasmos_sys_svc_register_class_native(wasmos_driver_api_t* api, uint32_t 
     (void)str_copy_bytes(desc->name, WASMOS_SVC_NAME_MAX, name, name_len);
     desc->instance = instance;
     (void)str_copy_bytes(desc->class_name, WASMOS_SVC_CLASS_MAX, class_name, class_len);
-    rc = wasmos_sys_ipc_call_native(api, source_endpoint, proc_endpoint, request_id,
-                                    SVC_IPC_REGISTER_DESC_REQ, 0u, (uint32_t)sizeof(*desc),
-                                    buffer_id, 0u, &resp);
+    rc = wasmos_sys_ipc_call_native(api,
+                                    source_endpoint,
+                                    proc_endpoint,
+                                    request_id,
+                                    SVC_IPC_REGISTER_DESC_REQ,
+                                    0u,
+                                    (uint32_t)sizeof(*desc),
+                                    buffer_id,
+                                    0u,
+                                    &resp);
     (void)api->xfer_buffer_release(buffer_id);
     if (rc != 0 || resp.type != SVC_IPC_REGISTER_RESP) {
         return -1;
@@ -840,8 +870,15 @@ int32_t wasmos_sys_svc_lookup_class_native(wasmos_driver_api_t* api, uint32_t pr
     if (str_copy_bytes((char*)buf, WASMOS_SVC_CLASS_MAX, class_name, class_len) != 0) {
         buf[0] = '\0';
     }
-    if (wasmos_sys_ipc_call_native(api, source_endpoint, proc_endpoint, request_id,
-                                   SVC_IPC_LOOKUP_CLASS_REQ, buffer_id, max_entries, 0u, 0u,
+    if (wasmos_sys_ipc_call_native(api,
+                                   source_endpoint,
+                                   proc_endpoint,
+                                   request_id,
+                                   SVC_IPC_LOOKUP_CLASS_REQ,
+                                   buffer_id,
+                                   max_entries,
+                                   0u,
+                                   0u,
                                    &resp) != 0 ||
         resp.type != SVC_IPC_LOOKUP_CLASS_RESP) {
         (void)api->xfer_buffer_release(buffer_id);
@@ -875,8 +912,15 @@ int32_t wasmos_sys_svc_subscribe_class_native(wasmos_driver_api_t* api, uint32_t
     if (str_copy_bytes((char*)buf, WASMOS_SVC_CLASS_MAX, class_name, class_len) != 0) {
         buf[0] = '\0';
     }
-    if (wasmos_sys_ipc_call_native(api, source_endpoint, proc_endpoint, request_id,
-                                   SVC_IPC_SUBSCRIBE_CLASS_REQ, notify_endpoint, buffer_id, 0u, 0u,
+    if (wasmos_sys_ipc_call_native(api,
+                                   source_endpoint,
+                                   proc_endpoint,
+                                   request_id,
+                                   SVC_IPC_SUBSCRIBE_CLASS_REQ,
+                                   notify_endpoint,
+                                   buffer_id,
+                                   0u,
+                                   0u,
                                    &resp) != 0 ||
         resp.type != SVC_IPC_SUBSCRIBE_CLASS_RESP) {
         (void)api->xfer_buffer_release(buffer_id);

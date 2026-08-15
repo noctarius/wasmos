@@ -224,8 +224,12 @@ static void cpu_sched_unlink_locked(cpu_sched_t* cs, thread_t* t) {
         if ((gn & (gn - 1u)) == 0u) {
             serial_printf_unlocked("[sched] ghost head tid=%u owner=%u state=%u prio=%u cs=%p "
                                    "count=%u (n=%u)\n",
-                                   (unsigned)t->tid, (unsigned)t->owner_pid, (unsigned)t->state,
-                                   (unsigned)prio, (void*)cs, (unsigned)cs->thread_count[prio],
+                                   (unsigned)t->tid,
+                                   (unsigned)t->owner_pid,
+                                   (unsigned)t->state,
+                                   (unsigned)prio,
+                                   (void*)cs,
+                                   (unsigned)cs->thread_count[prio],
                                    (unsigned)(gn + 1u));
         }
         /* Report only, deliberately: re-initialising the head here would drop
@@ -236,8 +240,8 @@ static void cpu_sched_unlink_locked(cpu_sched_t* cs, thread_t* t) {
         cs->thread_count[prio]--;
     }
     if (list_head_empty(&cs->ready_list[prio])) {
-        __atomic_store_n(&cs->ready_bitmap, (uint8_t)(cs->ready_bitmap & ~(1u << prio)),
-                         __ATOMIC_RELAXED);
+        __atomic_store_n(
+            &cs->ready_bitmap, (uint8_t)(cs->ready_bitmap & ~(1u << prio)), __ATOMIC_RELAXED);
     }
     /* Released atomically: cpu_sched_remove_thread follows t->rq WITHOUT holding
      * any queue lock (it cannot know which lock to take until it has read it),
@@ -271,7 +275,8 @@ void cpu_sched_enqueue(cpu_sched_t* cs, thread_t* t) {
             if ((n & (n - 1u)) == 0u) {
                 serial_printf_unlocked(
                     "[sched] enqueue idle tid=%u caller=%016llx (n=%u, skipped)\n",
-                    (unsigned)t->tid, (unsigned long long)(uintptr_t)__builtin_return_address(0),
+                    (unsigned)t->tid,
+                    (unsigned long long)(uintptr_t)__builtin_return_address(0),
                     (unsigned)(n + 1u));
             }
             return;
@@ -279,8 +284,11 @@ void cpu_sched_enqueue(cpu_sched_t* cs, thread_t* t) {
         if (g_cpus[i].current_thread == t) {
             serial_printf_unlocked(
                 "[sched] enqueue current tid=%u owner=%u caller_cpu=%u holder_cpu=%u state=%u\n",
-                (unsigned)t->tid, (unsigned)t->owner_pid, (unsigned)cpu_local()->cpu_id,
-                (unsigned)i, (unsigned)t->state);
+                (unsigned)t->tid,
+                (unsigned)t->owner_pid,
+                (unsigned)cpu_local()->cpu_id,
+                (unsigned)i,
+                (unsigned)t->state);
             /* Thread is still running on another CPU.  Mark it ready so the
              * owning CPU re-enqueues when its timeslice or blocking-yield
              * completes (see PROCESS_RUN_BLOCKED handler).  Never halt here
@@ -324,8 +332,10 @@ void cpu_sched_enqueue(cpu_sched_t* cs, thread_t* t) {
         if ((n & (n - 1u)) == 0u) {
             serial_printf_unlocked(
                 "[sched] enqueue bad prio tid=%u prio=%u caller=%016llx (n=%u, skipped)\n",
-                (unsigned)t->tid, (unsigned)t->sched_prio,
-                (unsigned long long)(uintptr_t)__builtin_return_address(0), (unsigned)(n + 1u));
+                (unsigned)t->tid,
+                (unsigned)t->sched_prio,
+                (unsigned long long)(uintptr_t)__builtin_return_address(0),
+                (unsigned)(n + 1u));
         }
         return;
     }
@@ -341,11 +351,14 @@ void cpu_sched_enqueue(cpu_sched_t* cs, thread_t* t) {
              * both race the writer and be able to print a value that never
              * failed the test above. */
             uint32_t reason = __atomic_load_n((uint32_t*)&t->block_reason, __ATOMIC_RELAXED);
-            serial_printf_unlocked(
-                "[sched] enqueue non-ready tid=%u owner=%u state=%u block=%u "
-                "caller=%016llx (n=%u, skipped)\n",
-                (unsigned)t->tid, (unsigned)t->owner_pid, (unsigned)state, (unsigned)reason,
-                (unsigned long long)(uintptr_t)__builtin_return_address(0), (unsigned)(n + 1u));
+            serial_printf_unlocked("[sched] enqueue non-ready tid=%u owner=%u state=%u block=%u "
+                                   "caller=%016llx (n=%u, skipped)\n",
+                                   (unsigned)t->tid,
+                                   (unsigned)t->owner_pid,
+                                   (unsigned)state,
+                                   (unsigned)reason,
+                                   (unsigned long long)(uintptr_t)__builtin_return_address(0),
+                                   (unsigned)(n + 1u));
         }
         return;
     }
@@ -395,8 +408,13 @@ void cpu_sched_enqueue(cpu_sched_t* cs, thread_t* t) {
             serial_printf_unlocked(
                 "[sched] claimed node still linked tid=%u owner=%u state=%u prio=%u rq=%p "
                 "cs=%p caller=%016llx (n=%u)\n",
-                (unsigned)t->tid, (unsigned)t->owner_pid, (unsigned)t->state, (unsigned)prio,
-                (void*)t->rq, (void*)cs, (unsigned long long)(uintptr_t)__builtin_return_address(0),
+                (unsigned)t->tid,
+                (unsigned)t->owner_pid,
+                (unsigned)t->state,
+                (unsigned)prio,
+                (void*)t->rq,
+                (void*)cs,
+                (unsigned long long)(uintptr_t)__builtin_return_address(0),
                 (unsigned)(dn + 1u));
         }
         /* Release the claim taken above before bailing.  Returning while still
@@ -410,8 +428,8 @@ void cpu_sched_enqueue(cpu_sched_t* cs, thread_t* t) {
     __atomic_store_n(&t->rq, cs, __ATOMIC_RELEASE); /* see cpu_sched_unlink_locked */
     list_head_add_tail(&cs->ready_list[prio], &t->sched_node);
     cs->thread_count[prio]++;
-    __atomic_store_n(&cs->ready_bitmap, (uint8_t)(cs->ready_bitmap | (1u << prio)),
-                     __ATOMIC_RELAXED);
+    __atomic_store_n(
+        &cs->ready_bitmap, (uint8_t)(cs->ready_bitmap | (1u << prio)), __ATOMIC_RELAXED);
     ksync_spinlock_unlock(&cs->lock);
 }
 
@@ -451,7 +469,8 @@ void cpu_sched_remove_thread(thread_t* t) {
     }
     (void)sched_debug_bump(SCHED_DEBUG_REMOVE_GAVE_UP);
     serial_printf_unlocked("[sched] remove_thread gave up tid=%u owner=%u state=%u\n",
-                           (unsigned)t->tid, (unsigned)t->owner_pid,
+                           (unsigned)t->tid,
+                           (unsigned)t->owner_pid,
                            (unsigned)__atomic_load_n((uint32_t*)&t->state, __ATOMIC_RELAXED));
 }
 
@@ -474,8 +493,11 @@ void sched_enqueue_thread_from(thread_t* t, uintptr_t caller) {
         if (g_cpus[i].current_thread == t) {
             serial_printf_unlocked("[sched] enqueue current tid=%u owner=%u caller_cpu=%u "
                                    "holder_cpu=%u state=%u caller=%016llx\n",
-                                   (unsigned)t->tid, (unsigned)t->owner_pid,
-                                   (unsigned)cpu_local()->cpu_id, (unsigned)i, (unsigned)t->state,
+                                   (unsigned)t->tid,
+                                   (unsigned)t->owner_pid,
+                                   (unsigned)cpu_local()->cpu_id,
+                                   (unsigned)i,
+                                   (unsigned)t->state,
                                    (unsigned long long)caller);
             if (sched_mark_ready_if_live(t)) {
                 __atomic_store_n((uint32_t*)&t->block_reason, THREAD_BLOCK_NONE, __ATOMIC_RELAXED);
@@ -493,8 +515,11 @@ void sched_enqueue_thread_from(thread_t* t, uintptr_t caller) {
         if ((n & (n - 1u)) == 0u) {
             serial_printf_unlocked("[sched] enqueue_from non-ready tid=%u owner=%u state=%u "
                                    "block=%u caller=%016llx (n=%u)\n",
-                                   (unsigned)t->tid, (unsigned)t->owner_pid, (unsigned)t->state,
-                                   (unsigned)t->block_reason, (unsigned long long)caller,
+                                   (unsigned)t->tid,
+                                   (unsigned)t->owner_pid,
+                                   (unsigned)t->state,
+                                   (unsigned)t->block_reason,
+                                   (unsigned long long)caller,
                                    (unsigned)(n + 1u));
         }
     }
@@ -668,10 +693,16 @@ void sched_thread_init(thread_t* t, sched_prio_t prio) {
             serial_printf_unlocked(
                 "[sched] init on queued tid=%u owner=%u state=%u on_rq=%u oldprio=%u newprio=%u "
                 "rq=%p linked=%u caller=%016llx (n=%u)\n",
-                (unsigned)t->tid, (unsigned)t->owner_pid, (unsigned)t->state, (unsigned)t->on_rq,
-                (unsigned)t->sched_prio, (unsigned)prio, (void*)t->rq,
+                (unsigned)t->tid,
+                (unsigned)t->owner_pid,
+                (unsigned)t->state,
+                (unsigned)t->on_rq,
+                (unsigned)t->sched_prio,
+                (unsigned)prio,
+                (void*)t->rq,
                 (unsigned)(!list_head_empty(&t->sched_node)),
-                (unsigned long long)(uintptr_t)__builtin_return_address(0), (unsigned)(in + 1u));
+                (unsigned long long)(uintptr_t)__builtin_return_address(0),
+                (unsigned)(in + 1u));
         }
         /* Unlink properly instead of orphaning the node under the queue. */
         cpu_sched_remove_thread(t);

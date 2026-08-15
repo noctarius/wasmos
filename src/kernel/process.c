@@ -273,7 +273,10 @@ static process_run_result_t process_run_worker_on_stack(process_t* proc, thread_
                      "call *%[entry]\n"
                      "mov %%r15, %%rsp\n"
                      : "=a"(rc)
-                     : [stack_top] "r"(stack_top), [entry] "r"(entry), "D"(proc), "S"(thread->tid),
+                     : [stack_top] "r"(stack_top),
+                       [entry] "r"(entry),
+                       "D"(proc),
+                       "S"(thread->tid),
                        "d"(thread->worker_arg)
                      : "r15", "rcx", "r8", "r9", "r10", "r11", "memory", "cc");
     return rc;
@@ -410,12 +413,15 @@ static void process_validate_thread_context(process_t* proc, thread_t* thread,
                     "[sched] name=%s\n"
                     "[sched] ctx canary pre=%016llx\n"
                     "[sched] ctx canary post=%016llx\n",
-                    (unsigned long long)proc->pid, (unsigned long long)thread->tid,
-                    proc->name ? proc->name : "(null)", (unsigned long long)thread->ctx_canary_pre,
+                    (unsigned long long)proc->pid,
+                    (unsigned long long)thread->tid,
+                    proc->name ? proc->name : "(null)",
+                    (unsigned long long)thread->ctx_canary_pre,
                     (unsigned long long)thread->ctx_canary_post);
         process_log_ctxsw_state();
         process_log_ctx_watch("canary");
-        kpanic("ctx_canary_tripped", (uintptr_t)thread->ctx_canary_pre,
+        kpanic("ctx_canary_tripped",
+               (uintptr_t)thread->ctx_canary_pre,
                (uintptr_t)thread->ctx_canary_post);
     }
     uint64_t rip = ctx->rip;
@@ -439,9 +445,12 @@ static void process_validate_thread_context(process_t* proc, thread_t* thread,
                             "[sched] name=%s\n"
                             "[sched] rip=%016llx\n"
                             "[sched] rsp=%016llx\n",
-                            where ? where : "?", (unsigned long long)proc->pid,
-                            (unsigned long long)thread->tid, proc->name ? proc->name : "(null)",
-                            (unsigned long long)rip, (unsigned long long)rsp);
+                            where ? where : "?",
+                            (unsigned long long)proc->pid,
+                            (unsigned long long)thread->tid,
+                            proc->name ? proc->name : "(null)",
+                            (unsigned long long)rip,
+                            (unsigned long long)rsp);
                 process_log_ctxsw_state();
                 process_log_ctx_watch("invalid-rsp");
                 kpanic("invalid_rsp", (uintptr_t)rip, (uintptr_t)rsp);
@@ -453,8 +462,11 @@ static void process_validate_thread_context(process_t* proc, thread_t* thread,
                 "[sched] name=%s\n"
                 "[sched] rip=%016llx\n"
                 "[sched] rsp=%016llx\n",
-                where ? where : "?", (unsigned long long)proc->pid, (unsigned long long)thread->tid,
-                proc->name ? proc->name : "(null)", (unsigned long long)rip,
+                where ? where : "?",
+                (unsigned long long)proc->pid,
+                (unsigned long long)thread->tid,
+                proc->name ? proc->name : "(null)",
+                (unsigned long long)rip,
                 (unsigned long long)ctx->rsp);
     process_log_ctxsw_state();
     process_log_ctx_watch("invalid-rip");
@@ -527,19 +539,22 @@ static void process_trampoline(void) {
             if (base && top && mid) {
                 const uint64_t canary = STACK_CANARY_VALUE;
                 if (*base != canary || *top != canary || *mid != canary) {
-                    serial_printf_unlocked(
-                        "[sched] stack canary tripped for %s\n"
-                        "[sched] base=%016llx\n"
-                        "[sched] mid=%016llx\n"
-                        "[sched] top=%016llx\n"
-                        "[sched] base val=%016llx\n"
-                        "[sched] mid val=%016llx\n"
-                        "[sched] top val=%016llx\n",
-                        cpu_local()->current_process->name ? cpu_local()->current_process->name
-                                                           : "(unknown)",
-                        addr_cast(unsigned long long, base), addr_cast(unsigned long long, mid),
-                        addr_cast(unsigned long long, top), (unsigned long long)*base,
-                        (unsigned long long)*mid, (unsigned long long)*top);
+                    serial_printf_unlocked("[sched] stack canary tripped for %s\n"
+                                           "[sched] base=%016llx\n"
+                                           "[sched] mid=%016llx\n"
+                                           "[sched] top=%016llx\n"
+                                           "[sched] base val=%016llx\n"
+                                           "[sched] mid val=%016llx\n"
+                                           "[sched] top val=%016llx\n",
+                                           cpu_local()->current_process->name
+                                               ? cpu_local()->current_process->name
+                                               : "(unknown)",
+                                           addr_cast(unsigned long long, base),
+                                           addr_cast(unsigned long long, mid),
+                                           addr_cast(unsigned long long, top),
+                                           (unsigned long long)*base,
+                                           (unsigned long long)*mid,
+                                           (unsigned long long)*top);
                     kpanic("stack_canary_tripped", (uintptr_t)base, (uintptr_t)top);
                 }
             }
@@ -647,8 +662,12 @@ static int process_transit(process_t* proc, process_state_t from, process_state_
         return 0;
     }
     uint32_t expected = (uint32_t)from;
-    return __atomic_compare_exchange_n((uint32_t*)&proc->state, &expected, (uint32_t)to, 0,
-                                       __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)
+    return __atomic_compare_exchange_n((uint32_t*)&proc->state,
+                                       &expected,
+                                       (uint32_t)to,
+                                       0,
+                                       __ATOMIC_ACQ_REL,
+                                       __ATOMIC_ACQUIRE)
                ? 1
                : 0;
 }
@@ -1003,8 +1022,8 @@ static void process_reap(process_t* proc) {
      * REAPING claim), so nothing else can have moved it.  A failure means the
      * slot would leak in REAPING forever — surface it. */
     if (!process_transit(proc, PROCESS_STATE_REAPING, PROCESS_STATE_DEAD)) {
-        process_sched_invariant_fail("reap publish REAPING->DEAD failed", proc->pid,
-                                     (uint64_t)proc->state);
+        process_sched_invariant_fail(
+            "reap publish REAPING->DEAD failed", proc->pid, (uint64_t)proc->state);
     }
 }
 
@@ -1174,8 +1193,9 @@ static int process_spawn_as_internal(uint32_t parent_pid, const char* name, proc
     if (process_copy_name(slot, name ? name : "") != 0) {
         return -1;
     }
-    if (thread_spawn_in_owner(pid, name ? name : "", initial_thread_state, initial_thread_reason,
-                              &slot->main_tid) != 0) {
+    if (thread_spawn_in_owner(
+            pid, name ? name : "", initial_thread_state, initial_thread_reason, &slot->main_tid) !=
+        0) {
         return -1;
     }
 
@@ -1258,16 +1278,16 @@ static int process_spawn_as_internal(uint32_t parent_pid, const char* name, proc
  * at startup.  Use the parked form for that. */
 int process_spawn_as(uint32_t parent_pid, const char* name, process_entry_t entry, void* arg,
                      uint32_t* out_pid) {
-    return process_spawn_as_internal(parent_pid, name, entry, arg, out_pid, THREAD_STATE_READY,
-                                     THREAD_BLOCK_NONE, 1);
+    return process_spawn_as_internal(
+        parent_pid, name, entry, arg, out_pid, THREAD_STATE_READY, THREAD_BLOCK_NONE, 1);
 }
 
 int process_spawn_as_parked(uint32_t parent_pid, const char* name, process_entry_t entry, void* arg,
                             uint32_t* out_pid) {
     /* Spawn with the main thread blocked from the start so no AP can dispatch
      * it before PM explicitly unparks the child. */
-    return process_spawn_as_internal(parent_pid, name, entry, arg, out_pid, THREAD_STATE_BLOCKED,
-                                     THREAD_BLOCK_NONE, 0);
+    return process_spawn_as_internal(
+        parent_pid, name, entry, arg, out_pid, THREAD_STATE_BLOCKED, THREAD_BLOCK_NONE, 0);
 }
 
 /* Releases a process spawned parked, making its main thread runnable on the
@@ -1358,8 +1378,8 @@ int process_spawn_idle(const char* name, process_entry_t entry, void* arg, uint3
     slot->exiting = 0;
     /* Idle is never reaped; publish LIVE now (NEW -> READY). Must succeed. */
     if (!process_transit(slot, PROCESS_STATE_NEW, PROCESS_STATE_READY)) {
-        process_sched_invariant_fail("idle spawn publish NEW->READY failed", pid,
-                                     (uint64_t)slot->state);
+        process_sched_invariant_fail(
+            "idle spawn publish NEW->READY failed", pid, (uint64_t)slot->state);
     }
     slot->block_reason = PROCESS_BLOCK_NONE;
     slot->wait_target_pid = 0;
@@ -1431,8 +1451,8 @@ int process_spawn_idle_ap(uint32_t cpu_id) {
         return -1;
     }
     uint32_t tid = 0;
-    if (thread_spawn_in_owner(g_idle_process->pid, "idle-ap", THREAD_STATE_READY, THREAD_BLOCK_NONE,
-                              &tid) != 0) {
+    if (thread_spawn_in_owner(
+            g_idle_process->pid, "idle-ap", THREAD_STATE_READY, THREAD_BLOCK_NONE, &tid) != 0) {
         return -1;
     }
     thread_t* thread = thread_get(tid);
@@ -1483,8 +1503,8 @@ int process_spawn_idle_ap(uint32_t cpu_id) {
  * Compatibility shim: preserve legacy signature but create a schedulable
  * worker thread that immediately exits when no explicit entry point exists. */
 int process_thread_spawn_internal(uint32_t owner_pid, const char* name, uint32_t* out_tid) {
-    return process_thread_spawn_worker_internal(owner_pid, name ? name : "thread-worker",
-                                                process_thread_spawn_default_worker, 0, out_tid);
+    return process_thread_spawn_worker_internal(
+        owner_pid, name ? name : "thread-worker", process_thread_spawn_default_worker, 0, out_tid);
 }
 
 /* Adds a ring-0 worker thread to a live process, running `entry(proc, tid, arg)`
@@ -1521,8 +1541,8 @@ int process_thread_spawn_worker_internal(uint32_t owner_pid, const char* name,
      * two owners, its ready bit can never clear, and the picker returns that one
      * node on every dispatch forever.  The user-thread path below already spawns
      * BLOCKED and promotes after init; this is the same contract. */
-    if (thread_spawn_in_owner(owner_pid, name ? name : "", THREAD_STATE_BLOCKED, THREAD_BLOCK_NONE,
-                              &tid) != 0) {
+    if (thread_spawn_in_owner(
+            owner_pid, name ? name : "", THREAD_STATE_BLOCKED, THREAD_BLOCK_NONE, &tid) != 0) {
         return -1;
     }
     thread = thread_get(tid);
@@ -1592,8 +1612,11 @@ int process_thread_spawn_user_internal(uint32_t owner_pid, const char* name, uin
     if ((user_stack_top & 0xFULL) != 0) {
         user_stack_top &= ~0xFULL;
     }
-    if (thread_spawn_in_owner(owner_pid, name ? name : "user-thread", THREAD_STATE_BLOCKED,
-                              THREAD_BLOCK_NONE, &tid) != 0) {
+    if (thread_spawn_in_owner(owner_pid,
+                              name ? name : "user-thread",
+                              THREAD_STATE_BLOCKED,
+                              THREAD_BLOCK_NONE,
+                              &tid) != 0) {
         return -1;
     }
     thread = thread_get(tid);
@@ -2118,8 +2141,11 @@ static int process_schedule_once_impl(void) {
         if ((n & (n - 1u)) == 0u) {
             serial_printf_unlocked(
                 "[sched] dequeued non-ready tid=%u pid=%u state=%u block=%u (n=%u)\n",
-                (unsigned)thread->tid, (unsigned)(proc ? proc->pid : 0u), (unsigned)thread->state,
-                (unsigned)thread->block_reason, (unsigned)(n + 1u));
+                (unsigned)thread->tid,
+                (unsigned)(proc ? proc->pid : 0u),
+                (unsigned)thread->state,
+                (unsigned)thread->block_reason,
+                (unsigned)(n + 1u));
         }
         return SCHED_R_NOTREADY;
     }
@@ -2183,8 +2209,10 @@ static int process_schedule_once_impl(void) {
     if (run_ctx->root_table >= 0x100000000ULL) {
         serial_printf_unlocked(
             "[sched] CORRUPT root_table pid=%u name=%s root=%016llx rip=%016llx\n",
-            (unsigned)proc->pid, proc->name ? proc->name : "?",
-            (unsigned long long)run_ctx->root_table, (unsigned long long)run_ctx->rip);
+            (unsigned)proc->pid,
+            proc->name ? proc->name : "?",
+            (unsigned long long)run_ctx->root_table,
+            (unsigned long long)run_ctx->rip);
         run_ctx->root_table = paging_get_root_table();
     }
     if (run_ctx->root_table == 0) {
@@ -2216,9 +2244,14 @@ static int process_schedule_once_impl(void) {
                          "mov %%rbp, %[rbp]\n"
                          "mov %%rbx, %[rbx]\n"
                          "pushfq; pop %[rf]"
-                         : [rsp] "=r"(_rsp), [r15] "=m"(_sctx->r15), [r14] "=m"(_sctx->r14),
-                           [r13] "=m"(_sctx->r13), [r12] "=m"(_sctx->r12), [rbp] "=m"(_sctx->rbp),
-                           [rbx] "=m"(_sctx->rbx), [rf] "=m"(_sctx->rflags)
+                         : [rsp] "=r"(_rsp),
+                           [r15] "=m"(_sctx->r15),
+                           [r14] "=m"(_sctx->r14),
+                           [r13] "=m"(_sctx->r13),
+                           [r12] "=m"(_sctx->r12),
+                           [rbp] "=m"(_sctx->rbp),
+                           [rbx] "=m"(_sctx->rbx),
+                           [rf] "=m"(_sctx->rflags)
                          :
                          : "memory");
         _sctx->rax = (uint64_t)PROCESS_RUN_BLOCKED;
@@ -2594,8 +2627,8 @@ int process_preempt_from_irq(irq_frame_t* frame) {
     ctx->rip = frame->rip;
     ctx->rflags = frame->rflags;
     ctx->root_table = paging_get_current_root_table();
-    process_validate_thread_context(cpu_local()->current_process, cpu_local()->current_thread, ctx,
-                                    "preempt");
+    process_validate_thread_context(
+        cpu_local()->current_process, cpu_local()->current_thread, ctx, "preempt");
     cpu_local()->current_process->ctx = *ctx;
     if (g_ctx_watch_ctx == addr_cast(uint64_t, ctx)) {
         g_ctx_watch_last_ctx = g_ctx_watch_ctx;
@@ -3006,7 +3039,10 @@ int process_set_main_prio(uint32_t pid, uint8_t prio) {
             serial_printf_unlocked(
                 "[sched] set_main_prio on a queued thread tid=%u pid=%u prio=%u->%u (n=%u,"
                 " refused)\n",
-                (unsigned)t->tid, (unsigned)pid, (unsigned)t->sched_prio, (unsigned)prio,
+                (unsigned)t->tid,
+                (unsigned)pid,
+                (unsigned)t->sched_prio,
+                (unsigned)prio,
                 (unsigned)(n + 1u));
         }
         return -1;
@@ -3027,8 +3063,8 @@ static void process_sched_invariant_fail(const char* msg, uint64_t a, uint64_t b
 static void process_set_blocked(process_t* proc, thread_t* thread, process_block_reason_t reason,
                                 thread_block_reason_t thread_reason) {
     if (!proc || !thread) {
-        process_sched_invariant_fail("set_blocked null", addr_cast(uint64_t, proc),
-                                     addr_cast(uint64_t, thread));
+        process_sched_invariant_fail(
+            "set_blocked null", addr_cast(uint64_t, proc), addr_cast(uint64_t, thread));
     }
     /* If the process raced to a terminal state, do not block its thread. */
     if (!process_force_transit(proc, PROCESS_STATE_BLOCKED)) {
@@ -3040,8 +3076,8 @@ static void process_set_blocked(process_t* proc, thread_t* thread, process_block
 
 static void process_set_ready(process_t* proc, thread_t* thread) {
     if (!proc || !thread) {
-        process_sched_invariant_fail("set_ready null", addr_cast(uint64_t, proc),
-                                     addr_cast(uint64_t, thread));
+        process_sched_invariant_fail(
+            "set_ready null", addr_cast(uint64_t, proc), addr_cast(uint64_t, thread));
     }
     if (proc->state == PROCESS_STATE_ZOMBIE || proc->exiting) {
         process_sched_invariant_fail("set_ready zombie", proc->pid, thread->tid);
@@ -3059,8 +3095,8 @@ static void process_set_ready(process_t* proc, thread_t* thread) {
  * NOT be dispatched. */
 static int process_set_running(process_t* proc, thread_t* thread) {
     if (!proc || !thread) {
-        process_sched_invariant_fail("set_running null", addr_cast(uint64_t, proc),
-                                     addr_cast(uint64_t, thread));
+        process_sched_invariant_fail(
+            "set_running null", addr_cast(uint64_t, proc), addr_cast(uint64_t, thread));
     }
     if (proc->state == PROCESS_STATE_ZOMBIE || proc->exiting) {
         process_sched_invariant_fail("set_running zombie", proc->pid, thread->tid);

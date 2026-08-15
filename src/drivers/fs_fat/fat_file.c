@@ -462,8 +462,8 @@ static int fat_read_direct_arm(fat_op_ctx_t* op, fat_block_t* blk) {
     if (op->zc_borrow < 0 || op->arg3 <= 0) {
         return 0; /* already tried and failed, or nothing to re-lend */
     }
-    borrow = wasmos_xfer_buffer_reborrow(fat_block_server_endpoint(blk), op->arg3,
-                                         WASMOS_BUFFER_GRANT_WRITE);
+    borrow = wasmos_xfer_buffer_reborrow(
+        fat_block_server_endpoint(blk), op->arg3, WASMOS_BUFFER_GRANT_WRITE);
     if (borrow <= 0) {
         op->zc_borrow = -1; /* remember, so every sector does not retry */
         return 0;
@@ -537,8 +537,13 @@ fat_r_t fat_op_read(fat_op_ctx_t* op, fat_block_t* blk, const fat_mount_t* mnt,
             if (op->io_run_sectors == 0u) {
                 op->io_run_sectors = 1u;
             }
-            FAT_CO_READ_DIRECT(op, blk, file->file_lba + file->current_sector, op->io_run_sectors,
-                               op->arg2, op->zc_borrow, op->done);
+            FAT_CO_READ_DIRECT(op,
+                               blk,
+                               file->file_lba + file->current_sector,
+                               op->io_run_sectors,
+                               op->arg2,
+                               op->zc_borrow,
+                               op->done);
             /* The server may have transferred fewer than asked; advance by what
              * it reported and let the loop issue the remainder. */
             op->io_run_sectors = fat_block_direct_sectors(blk);
@@ -549,8 +554,10 @@ fat_r_t fat_op_read(fat_op_ctx_t* op, fat_block_t* blk, const fat_mount_t* mnt,
         } else {
             FAT_CO_READ(op, blk, file->file_lba + file->current_sector);
             if (wasmos_xfer_buffer_write(
-                    op->arg2, addr_cast(int32_t, (fat_block_sector(blk) + op->io_sector_offset)),
-                    (int32_t)op->io_chunk, (int32_t)op->done) != 0) {
+                    op->arg2,
+                    addr_cast(int32_t, (fat_block_sector(blk) + op->io_sector_offset)),
+                    (int32_t)op->io_chunk,
+                    (int32_t)op->done) != 0) {
                 FAT_CO_FAIL(op, blk, WASMOS_ERR_FS_BUFFER);
             }
         }
@@ -653,8 +660,9 @@ fat_r_t fat_op_write(fat_op_ctx_t* op, fat_block_t* blk, const fat_mount_t* mnt,
         /* Stage the client chunk, then merge it into the sector buffer.  The
          * xfer read + copy happen within this step (no yield between), so the
          * stack buffer is safe. */
-        if (wasmos_xfer_buffer_read(op->arg2, addr_cast(int32_t, stage), (int32_t)op->io_chunk,
-                                    (int32_t)op->done) != 0) {
+        if (wasmos_xfer_buffer_read(
+                op->arg2, addr_cast(int32_t, stage), (int32_t)op->io_chunk, (int32_t)op->done) !=
+            0) {
             FAT_CO_FAIL(op, blk, WASMOS_ERR_FS_BUFFER);
         }
         for (i = 0; i < op->io_chunk; ++i) {

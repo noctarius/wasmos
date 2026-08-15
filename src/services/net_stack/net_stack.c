@@ -919,7 +919,12 @@ static void net_stack_finish_bind(net_interface_slot_t* interface, uint8_t link_
         /* Address is assigned later from /boot/system/net/interfaces (static)
          * or via DHCP; the netif is brought up unconfigured so DHCP has an
          * up, link-up interface to exchange DISCOVER/OFFER on. */
-        if (netif_add(&interface->netif, &zero, &zero, &zero, NULL, net_stack_netif_init,
+        if (netif_add(&interface->netif,
+                      &zero,
+                      &zero,
+                      &zero,
+                      NULL,
+                      net_stack_netif_init,
                       ethernet_input) == NULL) {
             return;
         }
@@ -1142,15 +1147,23 @@ static void net_stack_try_load_ifcfg(void) {
         const char* name = g_fs_lookup_stage == 0u ? "fs.vfs" : "fs";
         uint32_t name_len = g_fs_lookup_stage == 0u ? 6u : 2u;
         wasmos_sys_ipc_pack_name16_native((const uint8_t*)name, name_len, args);
-        if (wasmos_sys_native_intent_send(&g_control_loop, g_proc_endpoint, g_control_endpoint,
-                                          SVC_IPC_LOOKUP_REQ, args[0], args[1], args[2], args[3],
-                                          net_stack_fs_lookup_reply, NULL, NULL) == 0)
+        if (wasmos_sys_native_intent_send(&g_control_loop,
+                                          g_proc_endpoint,
+                                          g_control_endpoint,
+                                          SVC_IPC_LOOKUP_REQ,
+                                          args[0],
+                                          args[1],
+                                          args[2],
+                                          args[3],
+                                          net_stack_fs_lookup_reply,
+                                          NULL,
+                                          NULL) == 0)
             g_fs_lookup_pending = 1u;
         return;
     }
     /* fs endpoint known: owner-push read of the interfaces file. */
-    g_ifcfg_buffer = (uint8_t*)g_api->xfer_buffer_acquire(ND_BUFFER_KIND_XFER, NET_STACK_IFCFG_CAP,
-                                                          &g_ifcfg_buffer_id);
+    g_ifcfg_buffer = (uint8_t*)g_api->xfer_buffer_acquire(
+        ND_BUFFER_KIND_XFER, NET_STACK_IFCFG_CAP, &g_ifcfg_buffer_id);
     if (g_ifcfg_buffer == NULL) {
         g_ifcfg_next_tick = now + NET_STACK_IFCFG_RETRY_TICKS;
         return;
@@ -1159,12 +1172,19 @@ static void net_stack_try_load_ifcfg(void) {
     uint32_t path_len = (uint32_t)(sizeof(path) - 1u);
     int32_t borrow_id;
     __builtin_memcpy(g_ifcfg_buffer, path, path_len);
-    borrow_id = g_api->xfer_buffer_borrow((uint32_t)g_fs_endpoint, g_ifcfg_buffer_id,
-                                          ND_BUFFER_BORROW_READ | ND_BUFFER_BORROW_WRITE);
-    if (borrow_id < 0 || wasmos_sys_native_intent_send(
-                             &g_control_loop, (uint32_t)g_fs_endpoint, g_control_endpoint,
-                             FS_IPC_READ_PATH_REQ, path_len, NET_STACK_IFCFG_CAP, g_ifcfg_buffer_id,
-                             (uint32_t)borrow_id, net_stack_ifcfg_read_reply, NULL, NULL) != 0) {
+    borrow_id = g_api->xfer_buffer_borrow(
+        (uint32_t)g_fs_endpoint, g_ifcfg_buffer_id, ND_BUFFER_BORROW_READ | ND_BUFFER_BORROW_WRITE);
+    if (borrow_id < 0 || wasmos_sys_native_intent_send(&g_control_loop,
+                                                       (uint32_t)g_fs_endpoint,
+                                                       g_control_endpoint,
+                                                       FS_IPC_READ_PATH_REQ,
+                                                       path_len,
+                                                       NET_STACK_IFCFG_CAP,
+                                                       g_ifcfg_buffer_id,
+                                                       (uint32_t)borrow_id,
+                                                       net_stack_ifcfg_read_reply,
+                                                       NULL,
+                                                       NULL) != 0) {
         (void)g_api->xfer_buffer_release(g_ifcfg_buffer_id);
         g_ifcfg_buffer_id = 0u;
         g_ifcfg_buffer = NULL;
@@ -1230,8 +1250,8 @@ static void net_stack_try_load_ca(void) {
     if (g_api->sched_ticks != NULL && (int32_t)(now - g_ca_next_tick) < 0) {
         return;
     }
-    g_ca_buffer = (uint8_t*)g_api->xfer_buffer_acquire(ND_BUFFER_KIND_XFER, NET_STACK_CA_CAP,
-                                                       &g_ca_buffer_id);
+    g_ca_buffer = (uint8_t*)g_api->xfer_buffer_acquire(
+        ND_BUFFER_KIND_XFER, NET_STACK_CA_CAP, &g_ca_buffer_id);
     if (g_ca_buffer == NULL) {
         g_ca_next_tick = now + NET_STACK_CA_RETRY_TICKS;
         return;
@@ -1240,12 +1260,19 @@ static void net_stack_try_load_ca(void) {
     uint32_t path_len = (uint32_t)(sizeof(path) - 1u);
     int32_t borrow_id;
     __builtin_memcpy(g_ca_buffer, path, path_len);
-    borrow_id = g_api->xfer_buffer_borrow((uint32_t)g_fs_endpoint, g_ca_buffer_id,
-                                          ND_BUFFER_BORROW_READ | ND_BUFFER_BORROW_WRITE);
-    if (borrow_id < 0 || wasmos_sys_native_intent_send(
-                             &g_control_loop, (uint32_t)g_fs_endpoint, g_control_endpoint,
-                             FS_IPC_READ_PATH_REQ, path_len, NET_STACK_CA_CAP, g_ca_buffer_id,
-                             (uint32_t)borrow_id, net_stack_ca_read_reply, NULL, NULL) != 0) {
+    borrow_id = g_api->xfer_buffer_borrow(
+        (uint32_t)g_fs_endpoint, g_ca_buffer_id, ND_BUFFER_BORROW_READ | ND_BUFFER_BORROW_WRITE);
+    if (borrow_id < 0 || wasmos_sys_native_intent_send(&g_control_loop,
+                                                       (uint32_t)g_fs_endpoint,
+                                                       g_control_endpoint,
+                                                       FS_IPC_READ_PATH_REQ,
+                                                       path_len,
+                                                       NET_STACK_CA_CAP,
+                                                       g_ca_buffer_id,
+                                                       (uint32_t)borrow_id,
+                                                       net_stack_ca_read_reply,
+                                                       NULL,
+                                                       NULL) != 0) {
         (void)g_api->xfer_buffer_release(g_ca_buffer_id);
         g_ca_buffer_id = 0u;
         g_ca_buffer = NULL;
@@ -1308,15 +1335,25 @@ static void net_stack_start_lookup_coroutine(void) {
     }
     wasmos_sys_ipc_pack_name16_native((const uint8_t*)"virtio.net", 10u, args);
     wasmos_sys_native_ipc_future_init(&g_netdrv_lookup_future, net_stack_lookup_reply_status, NULL);
-    if (!wasmos_sys_native_ipc_future_send(&g_control_loop, &g_netdrv_lookup_future,
-                                           g_proc_endpoint, g_control_endpoint, SVC_IPC_LOOKUP_REQ,
-                                           args[0], args[1], args[2], args[3], NULL)) {
+    if (!wasmos_sys_native_ipc_future_send(&g_control_loop,
+                                           &g_netdrv_lookup_future,
+                                           g_proc_endpoint,
+                                           g_control_endpoint,
+                                           SVC_IPC_LOOKUP_REQ,
+                                           args[0],
+                                           args[1],
+                                           args[2],
+                                           args[3],
+                                           NULL)) {
         return;
     }
     g_netdrv_lookup_pending = 1u;
-    if (!g_control_runtime ||
-        !wasmos_async_start(g_control_runtime, &g_netdrv_lookup_coroutine, g_netdrv_lookup_stack,
-                            sizeof(g_netdrv_lookup_stack), net_stack_lookup_coroutine, NULL)) {
+    if (!g_control_runtime || !wasmos_async_start(g_control_runtime,
+                                                  &g_netdrv_lookup_coroutine,
+                                                  g_netdrv_lookup_stack,
+                                                  sizeof(g_netdrv_lookup_stack),
+                                                  net_stack_lookup_coroutine,
+                                                  NULL)) {
         wasmos_sys_native_ipc_future_cancel(&g_netdrv_lookup_future, -1);
         g_netdrv_lookup_pending = 0u;
     }
@@ -1362,10 +1399,17 @@ static void net_stack_try_discover_interfaces(void) {
             ND_BUFFER_KIND_XFER, WASMOS_SVC_CLASS_MAX, &g_netifc_subscribe_buffer_id);
         if (g_netifc_subscribe_buffer != NULL) {
             __builtin_memcpy(g_netifc_subscribe_buffer, "net.ifc", 8u);
-            if (wasmos_sys_native_intent_send(&g_control_loop, g_proc_endpoint, g_control_endpoint,
-                                              SVC_IPC_SUBSCRIBE_CLASS_REQ, g_endpoint,
-                                              g_netifc_subscribe_buffer_id, 0u, 0u,
-                                              net_stack_subscribe_reply, NULL, NULL) == 0)
+            if (wasmos_sys_native_intent_send(&g_control_loop,
+                                              g_proc_endpoint,
+                                              g_control_endpoint,
+                                              SVC_IPC_SUBSCRIBE_CLASS_REQ,
+                                              g_endpoint,
+                                              g_netifc_subscribe_buffer_id,
+                                              0u,
+                                              0u,
+                                              net_stack_subscribe_reply,
+                                              NULL,
+                                              NULL) == 0)
                 g_netifc_subscribe_pending = 1u;
         }
     }
@@ -1380,9 +1424,17 @@ static void net_stack_try_discover_interfaces(void) {
     if (g_netifc_lookup_buffer == NULL)
         return;
     __builtin_memcpy(g_netifc_lookup_buffer, "net.ifc", 8u);
-    if (wasmos_sys_native_intent_send(&g_control_loop, g_proc_endpoint, g_control_endpoint,
-                                      SVC_IPC_LOOKUP_CLASS_REQ, g_netifc_lookup_buffer_id, 1u, 0u,
-                                      0u, net_stack_class_lookup_reply, NULL, NULL) == 0) {
+    if (wasmos_sys_native_intent_send(&g_control_loop,
+                                      g_proc_endpoint,
+                                      g_control_endpoint,
+                                      SVC_IPC_LOOKUP_CLASS_REQ,
+                                      g_netifc_lookup_buffer_id,
+                                      1u,
+                                      0u,
+                                      0u,
+                                      net_stack_class_lookup_reply,
+                                      NULL,
+                                      NULL) == 0) {
         g_netifc_lookup_pending = 1u;
         g_netifc_lookup_kicked = 1u;
     }
@@ -1476,9 +1528,13 @@ static void net_stack_hrng_lookup_reply(void* user, const nd_ipc_message_t* repl
          * synchronous source. The pool is filled once at startup and never
          * refilled; mbedtls_hardware_poll() logs and degrades to a weak fallback
          * if it ever underflows. */
-        (void)wasmos_sys_native_random_bytes_async(&g_control_loop, entry.endpoint, g_entropy_pool,
-                                                   NET_STACK_ENTROPY_POOL_BYTES, &g_hrng_request,
-                                                   net_stack_hrng_seed_complete, NULL);
+        (void)wasmos_sys_native_random_bytes_async(&g_control_loop,
+                                                   entry.endpoint,
+                                                   g_entropy_pool,
+                                                   NET_STACK_ENTROPY_POOL_BYTES,
+                                                   &g_hrng_request,
+                                                   net_stack_hrng_seed_complete,
+                                                   NULL);
     }
 out:
     if (g_hrng_lookup_buffer_id != 0u) {
@@ -1534,9 +1590,17 @@ static void net_stack_try_seed_random(void) {
     g_hrng_lookup_buffer[2] = 'n';
     g_hrng_lookup_buffer[3] = 'g';
     g_hrng_lookup_buffer[4] = '\0';
-    if (wasmos_sys_native_intent_send(&g_control_loop, g_proc_endpoint, g_control_endpoint,
-                                      SVC_IPC_LOOKUP_CLASS_REQ, g_hrng_lookup_buffer_id, 1u, 0u, 0u,
-                                      net_stack_hrng_lookup_reply, NULL, NULL) != 0) {
+    if (wasmos_sys_native_intent_send(&g_control_loop,
+                                      g_proc_endpoint,
+                                      g_control_endpoint,
+                                      SVC_IPC_LOOKUP_CLASS_REQ,
+                                      g_hrng_lookup_buffer_id,
+                                      1u,
+                                      0u,
+                                      0u,
+                                      net_stack_hrng_lookup_reply,
+                                      NULL,
+                                      NULL) != 0) {
         (void)g_api->xfer_buffer_release(g_hrng_lookup_buffer_id);
         g_hrng_lookup_buffer_id = 0u;
         g_hrng_lookup_buffer = NULL;
@@ -1563,7 +1627,8 @@ static void net_stack_try_bind_interface(net_interface_slot_t* slot) {
         slot->rx_buffer = (uint8_t*)g_api->xfer_buffer_acquire(
             ND_BUFFER_KIND_XFER, NET_STACK_FRAME_BYTES, &slot->rx_buffer_id);
         if (slot->rx_buffer == NULL ||
-            g_api->xfer_buffer_borrow(slot->endpoint, slot->rx_buffer_id,
+            g_api->xfer_buffer_borrow(slot->endpoint,
+                                      slot->rx_buffer_id,
                                       ND_BUFFER_BORROW_READ | ND_BUFFER_BORROW_WRITE) < 0) {
             return;
         }
@@ -1571,25 +1636,36 @@ static void net_stack_try_bind_interface(net_interface_slot_t* slot) {
             slot->tx_slots[i].buffer = (uint8_t*)g_api->xfer_buffer_acquire(
                 ND_BUFFER_KIND_XFER, NET_STACK_FRAME_BYTES, &slot->tx_slots[i].buffer_id);
             if (slot->tx_slots[i].buffer == NULL ||
-                g_api->xfer_buffer_borrow(slot->endpoint, slot->tx_slots[i].buffer_id,
+                g_api->xfer_buffer_borrow(slot->endpoint,
+                                          slot->tx_slots[i].buffer_id,
                                           ND_BUFFER_BORROW_READ | ND_BUFFER_BORROW_WRITE) < 0) {
                 return;
             }
         }
         slot->state = NET_IFC_BUFFERS_GRANTED;
     }
-    wasmos_sys_native_ipc_future_init(&slot->link_get_future, net_stack_link_get_reply_status,
-                                      NULL);
-    if (!wasmos_sys_native_ipc_future_send(&g_netdrv_loop, &slot->link_get_future, slot->endpoint,
-                                           g_netdrv_reply_endpoint, NETDRV_IPC_LINK_GET,
-                                           slot->rx_buffer_id, 0u, 0u, 0u, NULL)) {
+    wasmos_sys_native_ipc_future_init(
+        &slot->link_get_future, net_stack_link_get_reply_status, NULL);
+    if (!wasmos_sys_native_ipc_future_send(&g_netdrv_loop,
+                                           &slot->link_get_future,
+                                           slot->endpoint,
+                                           g_netdrv_reply_endpoint,
+                                           NETDRV_IPC_LINK_GET,
+                                           slot->rx_buffer_id,
+                                           0u,
+                                           0u,
+                                           0u,
+                                           NULL)) {
         return;
     }
     slot->link_get_pending = 1u;
     slot->state = NET_IFC_LINK_QUERIED;
-    if (!g_control_runtime ||
-        !wasmos_async_start(g_control_runtime, &slot->link_get_coroutine, slot->link_get_stack,
-                            sizeof(slot->link_get_stack), net_stack_link_get_coroutine, slot)) {
+    if (!g_control_runtime || !wasmos_async_start(g_control_runtime,
+                                                  &slot->link_get_coroutine,
+                                                  slot->link_get_stack,
+                                                  sizeof(slot->link_get_stack),
+                                                  net_stack_link_get_coroutine,
+                                                  slot)) {
         wasmos_sys_native_ipc_future_cancel(&slot->link_get_future, -1);
         slot->link_get_pending = 0u;
     }
@@ -1986,10 +2062,10 @@ static void net_stack_handle_open(const nd_ipc_message_t* request) {
     /* Capture the socket-open flags (e.g. NET_SOCKET_OPEN_FLAG_TLS) before the
      * descriptor buffer is unmapped below; pcb creation consumes them. */
     open_flags = descriptor->flags;
-    tx_base = g_api->xfer_buffer_map_borrowed(ND_BUFFER_KIND_XFER, descriptor->tx_buffer_id,
-                                              descriptor->tx_borrow_id);
-    rx_base = g_api->xfer_buffer_map_borrowed(ND_BUFFER_KIND_XFER, descriptor->rx_buffer_id,
-                                              descriptor->rx_borrow_id);
+    tx_base = g_api->xfer_buffer_map_borrowed(
+        ND_BUFFER_KIND_XFER, descriptor->tx_buffer_id, descriptor->tx_borrow_id);
+    rx_base = g_api->xfer_buffer_map_borrowed(
+        ND_BUFFER_KIND_XFER, descriptor->rx_buffer_id, descriptor->rx_borrow_id);
     tx_borrow_id = descriptor->tx_borrow_id;
     rx_borrow_id = descriptor->rx_borrow_id;
     if (tx_base == NULL || rx_base == NULL) {
@@ -2066,10 +2142,10 @@ static void net_stack_handle_accept(const nd_ipc_message_t* request) {
         net_stack_reply_error(request, WASMOS_ERR_NET_INVALID);
         return;
     }
-    tx_base = g_api->xfer_buffer_map_borrowed(ND_BUFFER_KIND_XFER, descriptor->tx_buffer_id,
-                                              descriptor->tx_borrow_id);
-    rx_base = g_api->xfer_buffer_map_borrowed(ND_BUFFER_KIND_XFER, descriptor->rx_buffer_id,
-                                              descriptor->rx_borrow_id);
+    tx_base = g_api->xfer_buffer_map_borrowed(
+        ND_BUFFER_KIND_XFER, descriptor->tx_buffer_id, descriptor->tx_borrow_id);
+    rx_base = g_api->xfer_buffer_map_borrowed(
+        ND_BUFFER_KIND_XFER, descriptor->rx_buffer_id, descriptor->rx_borrow_id);
     tx_borrow_id = descriptor->tx_borrow_id;
     rx_borrow_id = descriptor->rx_borrow_id;
     if (tx_base == NULL || rx_base == NULL) {
@@ -2120,8 +2196,8 @@ static void net_stack_handle_ifaddr_add(const nd_ipc_message_t* request) {
         net_stack_reply_error(request, WASMOS_ERR_NET_INVALID);
         return;
     }
-    rec = (net_ifaddr_record_v1_t*)g_api->xfer_buffer_map_borrowed(ND_BUFFER_KIND_XFER,
-                                                                   request->arg0, request->arg1);
+    rec = (net_ifaddr_record_v1_t*)g_api->xfer_buffer_map_borrowed(
+        ND_BUFFER_KIND_XFER, request->arg0, request->arg1);
     if (rec == NULL) {
         net_stack_reply_error(request, WASMOS_ERR_NET_DENIED);
         return;
@@ -2230,7 +2306,10 @@ static void net_stack_handle_dns_set(const nd_ipc_message_t* request) {
         uint32_t word = (i == 0u) ? request->arg1 : request->arg2;
         ip_addr_t server;
         if (i < count) {
-            IP_ADDR4(&server, word & 0xFFu, (word >> 8) & 0xFFu, (word >> 16) & 0xFFu,
+            IP_ADDR4(&server,
+                     word & 0xFFu,
+                     (word >> 8) & 0xFFu,
+                     (word >> 16) & 0xFFu,
                      (word >> 24) & 0xFFu);
         } else {
             IP_ADDR4(&server, 0u, 0u, 0u, 0u); /* clear the slot */
@@ -2308,8 +2387,8 @@ static void net_stack_dns_found(const char* name, const ip_addr_t* ipaddr, void*
         return;
     }
     if (ipaddr != NULL) {
-        net_stack_dns_reply(slot, NET_IPC_RESP, WASMOS_ERR_NONE,
-                            ip4_addr_get_u32(ip_2_ip4(ipaddr)));
+        net_stack_dns_reply(
+            slot, NET_IPC_RESP, WASMOS_ERR_NONE, ip4_addr_get_u32(ip_2_ip4(ipaddr)));
     } else {
         net_stack_dns_reply(slot, NET_IPC_ERROR, WASMOS_ERR_NET_TIMEOUT, 0u);
     }
@@ -2353,8 +2432,8 @@ static void net_stack_handle_resolve(const nd_ipc_message_t* request) {
     err = dns_gethostbyname(hostname, &addr, net_stack_dns_found, slot);
     if (err == ERR_OK) {
         slot->in_use = 0u; /* cached: answer now */
-        net_stack_send_reply(request, NET_IPC_RESP, WASMOS_ERR_NONE,
-                             ip4_addr_get_u32(ip_2_ip4(&addr)), 0u, 0u);
+        net_stack_send_reply(
+            request, NET_IPC_RESP, WASMOS_ERR_NONE, ip4_addr_get_u32(ip_2_ip4(&addr)), 0u, 0u);
     } else if (err == ERR_INPROGRESS) {
         /* Deferred: net_stack_dns_found() answers when the query completes. */
     } else {
@@ -2381,8 +2460,8 @@ static void net_stack_handle_ifaddr_list(const nd_ipc_message_t* request) {
         net_stack_reply_error(request, WASMOS_ERR_NET_INVALID);
         return;
     }
-    out = (net_ifaddr_record_v1_t*)g_api->xfer_buffer_map_borrowed(ND_BUFFER_KIND_XFER,
-                                                                   request->arg0, request->arg1);
+    out = (net_ifaddr_record_v1_t*)g_api->xfer_buffer_map_borrowed(
+        ND_BUFFER_KIND_XFER, request->arg0, request->arg1);
     if (out == NULL) {
         net_stack_reply_error(request, WASMOS_ERR_NET_DENIED);
         return;
@@ -2506,11 +2585,14 @@ static void net_stack_dispatch(const nd_ipc_message_t* request) {
             net_stack_reply_error(request, WASMOS_ERR_NET_DENIED);
             break;
         }
-        status = net_stack_pcb_bind(&g_socket_pool.sockets[request->arg0], (uint16_t)request->arg1,
-                                    request->arg2);
+        status = net_stack_pcb_bind(
+            &g_socket_pool.sockets[request->arg0], (uint16_t)request->arg1, request->arg2);
         if (status == WASMOS_ERR_NONE) {
-            status = net_socket_bind(&g_socket_pool, request->source, request->arg0,
-                                     (uint16_t)request->arg1, request->arg2);
+            status = net_socket_bind(&g_socket_pool,
+                                     request->source,
+                                     request->arg0,
+                                     (uint16_t)request->arg1,
+                                     request->arg2);
         }
         if (status == WASMOS_ERR_NONE) {
             net_stack_send_reply(request, NET_IPC_RESP, status, 0u, 0u, 0u);
@@ -2528,8 +2610,8 @@ static void net_stack_dispatch(const nd_ipc_message_t* request) {
         socket = &g_socket_pool.sockets[request->arg0];
         /* Record the remote peer and advance the pool state (CONNECTING for a
          * stream socket, CONNECTED for a datagram socket). */
-        status = net_socket_connect(&g_socket_pool, request->source, request->arg0,
-                                    (uint16_t)request->arg1, request->arg2);
+        status = net_socket_connect(
+            &g_socket_pool, request->source, request->arg0, (uint16_t)request->arg1, request->arg2);
         if (status != WASMOS_ERR_NONE) {
             net_stack_reply_error(request, status);
             break;
@@ -2705,8 +2787,8 @@ static void net_stack_idle(void* user) {
     if (g_net_want_block && g_select_ready && g_api != NULL && g_api->ipc_select_wait != NULL) {
         uint32_t ready_ep = 0u;
         int rc;
-        rc = g_api->ipc_select_wait(g_select_id, g_api->sched_current_pid(), &ready_ep,
-                                    net_stack_idle_wait_ms());
+        rc = g_api->ipc_select_wait(
+            g_select_id, g_api->sched_current_pid(), &ready_ep, net_stack_idle_wait_ms());
         (void)rc;
     } else if (g_api != NULL && g_api->sched_yield != NULL) {
         g_api->sched_yield();
@@ -2769,14 +2851,16 @@ int32_t wasmos_async_main(wasmos_driver_api_t* driver_api,
     if (driver_api->proc_notify_ready != NULL) {
         driver_api->proc_notify_ready();
     }
-    wasmos_sys_native_event_loop_init(&g_control_loop, driver_api, g_control_endpoint,
-                                      NET_STACK_REGISTER_REQUEST_ID);
-    wasmos_sys_native_event_loop_init(&g_netdrv_loop, driver_api, g_netdrv_reply_endpoint,
+    wasmos_sys_native_event_loop_init(
+        &g_control_loop, driver_api, g_control_endpoint, NET_STACK_REGISTER_REQUEST_ID);
+    wasmos_sys_native_event_loop_init(&g_netdrv_loop,
+                                      driver_api,
+                                      g_netdrv_reply_endpoint,
                                       NET_STACK_TX_REQUEST_BASE + NET_STACK_TX_QUEUE_DEPTH);
-    if (wasmos_sys_native_event_register(&g_netdrv_loop, NETDRV_IPC_RX_FRAME_NOTIFY,
-                                         net_stack_netdrv_event, NULL) != 0 ||
-        wasmos_sys_native_event_register(&g_netdrv_loop, NETDRV_IPC_LINK_NOTIFY,
-                                         net_stack_netdrv_event, NULL) != 0 ||
+    if (wasmos_sys_native_event_register(
+            &g_netdrv_loop, NETDRV_IPC_RX_FRAME_NOTIFY, net_stack_netdrv_event, NULL) != 0 ||
+        wasmos_sys_native_event_register(
+            &g_netdrv_loop, NETDRV_IPC_LINK_NOTIFY, net_stack_netdrv_event, NULL) != 0 ||
         wasmos_sys_native_event_set_default(&g_netdrv_loop, net_stack_netdrv_event, NULL) != 0) {
         return -1;
     }
@@ -2787,8 +2871,8 @@ int32_t wasmos_async_main(wasmos_driver_api_t* driver_api,
      * loop falls back to cooperative yielding. */
     if (driver_api->ipc_select_listen != NULL) {
         const uint32_t endpoints[3] = {g_endpoint, g_control_endpoint, g_netdrv_reply_endpoint};
-        if (driver_api->ipc_select_listen(driver_api->sched_current_pid(), endpoints, 3u,
-                                          &g_select_id) == ND_IPC_OK) {
+        if (driver_api->ipc_select_listen(
+                driver_api->sched_current_pid(), endpoints, 3u, &g_select_id) == ND_IPC_OK) {
             g_select_ready = 1u;
         }
     }

@@ -91,16 +91,24 @@ static void log_desc(const wasmos_pci_device_desc_t* d) {
         return;
     }
     (void)printf("[pci-bus] %02X:%02X.%X class %02X:%02X:%02X %04X:%04X irq %02X pin %u%s%s\n",
-                 (unsigned)d->bus, (unsigned)d->device, (unsigned)d->function,
-                 (unsigned)d->class_code, (unsigned)d->subclass, (unsigned)d->prog_if,
-                 (unsigned)d->vendor_id, (unsigned)d->device_id, (unsigned)d->irq_line,
-                 (unsigned)d->irq_pin, d->msix_cap_offset ? " msix" : "",
+                 (unsigned)d->bus,
+                 (unsigned)d->device,
+                 (unsigned)d->function,
+                 (unsigned)d->class_code,
+                 (unsigned)d->subclass,
+                 (unsigned)d->prog_if,
+                 (unsigned)d->vendor_id,
+                 (unsigned)d->device_id,
+                 (unsigned)d->irq_line,
+                 (unsigned)d->irq_pin,
+                 d->msix_cap_offset ? " msix" : "",
                  (!d->msix_cap_offset && d->msi_cap_offset) ? " msi" : "");
     for (uint32_t i = 0; i < WASMOS_PCI_BAR_COUNT; ++i) {
         if (d->bars[i].kind == WASMOS_PCI_BAR_NONE) {
             continue;
         }
-        (void)printf("[pci-bus]   bar%u %s %08X size %u%s\n", (unsigned)i,
+        (void)printf("[pci-bus]   bar%u %s %08X size %u%s\n",
+                     (unsigned)i,
                      (d->bars[i].kind == WASMOS_PCI_BAR_IO)
                          ? "io "
                          : ((d->bars[i].kind == WASMOS_PCI_BAR_MEM64) ? "m64" : "m32"),
@@ -212,8 +220,8 @@ static uint64_t msix_entry_phys(uint16_t bdf, uint8_t cap, uint32_t entry) {
 }
 
 static int32_t mmio_write32(uint64_t phys, uint32_t value) {
-    return wasmos_mmio_write32((int32_t)(uint32_t)phys, (int32_t)(uint32_t)(phys >> 32),
-                               (int32_t)value);
+    return wasmos_mmio_write32(
+        (int32_t)(uint32_t)phys, (int32_t)(uint32_t)(phys >> 32), (int32_t)value);
 }
 
 /* ------------------------------------------------------------------ bindings */
@@ -333,8 +341,8 @@ static int32_t msi_bind(uint16_t bdf, uint32_t entry, uint32_t address_lo, uint3
         if (rc != 0) {
             return rc;
         }
-        uint8_t cap = pci_cap_find(bdf, (kind == WASMOS_PCI_MSI_KIND_MSIX) ? PCI_CAP_ID_MSIX
-                                                                           : PCI_CAP_ID_MSI);
+        uint8_t cap = pci_cap_find(
+            bdf, (kind == WASMOS_PCI_MSI_KIND_MSIX) ? PCI_CAP_ID_MSIX : PCI_CAP_ID_MSI);
         b = binding_claim(bdf, (uint8_t)kind, cap, requester);
         if (!b) {
             return WASMOS_ERR_MSI_NO_CAPABILITY;
@@ -534,13 +542,19 @@ static void pci_fill_desc(uint16_t bdf, wasmos_pci_device_desc_t* desc) {
 static void publish_desc(int32_t devmgr_endpoint, int32_t source_endpoint, int32_t buffer_id,
                          uint32_t slot, const wasmos_pci_device_desc_t* desc, int32_t request_id) {
     uint32_t offset = slot * (uint32_t)sizeof(*desc);
-    if (wasmos_xfer_buffer_write(buffer_id, addr_cast(int32_t, desc), (int32_t)sizeof(*desc),
-                                 (int32_t)offset) != 0) {
+    if (wasmos_xfer_buffer_write(
+            buffer_id, addr_cast(int32_t, desc), (int32_t)sizeof(*desc), (int32_t)offset) != 0) {
         (void)printf("[pci-bus] descriptor write failed slot=%u\n", (unsigned)slot);
         return;
     }
-    (void)wasmos_ipc_send(devmgr_endpoint, source_endpoint, DEVMGR_PUBLISH_DEVICE_DESC, request_id,
-                          buffer_id, (int32_t)offset, (int32_t)sizeof(*desc), 0);
+    (void)wasmos_ipc_send(devmgr_endpoint,
+                          source_endpoint,
+                          DEVMGR_PUBLISH_DEVICE_DESC,
+                          request_id,
+                          buffer_id,
+                          (int32_t)offset,
+                          (int32_t)sizeof(*desc),
+                          0);
 }
 
 /* Brute-force scan (buses 0-255, devices 0-31, functions 0-7), publishing each
@@ -578,8 +592,8 @@ static int32_t pci_scan_and_publish(int32_t devmgr_endpoint, int32_t source_endp
                                                WASMOS_IRQ_TRIGGER_LEVEL | WASMOS_IRQ_POLARITY_LOW);
                 }
                 log_desc(&desc);
-                publish_desc(devmgr_endpoint, source_endpoint, buffer_id, slot, &desc,
-                             request_id++);
+                publish_desc(
+                    devmgr_endpoint, source_endpoint, buffer_id, slot, &desc, request_id++);
                 slot++;
                 if (function == 0 && ((cfg_read(bdf, 0x0Cu) >> 16) & 0x80u) == 0u) {
                     break;
@@ -633,21 +647,27 @@ static void handle_request(int32_t service_endpoint, const wasmos_ipc_message_t*
             reply_error(reply_to, service_endpoint, msg->request_id, rc);
             return;
         }
-        (void)wasmos_ipc_send(reply_to, service_endpoint, PCI_IPC_RESP, msg->request_id,
-                              (int32_t)kind, (int32_t)vectors, 0, 0);
+        (void)wasmos_ipc_send(reply_to,
+                              service_endpoint,
+                              PCI_IPC_RESP,
+                              msg->request_id,
+                              (int32_t)kind,
+                              (int32_t)vectors,
+                              0,
+                              0);
         return;
     }
     case PCI_IPC_MSI_BIND: {
         uint16_t bdf = (uint16_t)((arg0 >> 8) & 0xFFFFu);
         uint32_t entry = arg0 & 0xFFu;
-        int32_t rc = msi_bind(bdf, entry, (uint32_t)msg->arg1, (uint32_t)msg->arg2,
-                              (uint32_t)msg->arg3, reply_to);
+        int32_t rc = msi_bind(
+            bdf, entry, (uint32_t)msg->arg1, (uint32_t)msg->arg2, (uint32_t)msg->arg3, reply_to);
         if (rc != 0) {
             reply_error(reply_to, service_endpoint, msg->request_id, rc);
             return;
         }
-        (void)wasmos_ipc_send(reply_to, service_endpoint, PCI_IPC_RESP, msg->request_id,
-                              (int32_t)entry, 0, 0, 0);
+        (void)wasmos_ipc_send(
+            reply_to, service_endpoint, PCI_IPC_RESP, msg->request_id, (int32_t)entry, 0, 0, 0);
         return;
     }
     case PCI_IPC_MSI_UNBIND: {
@@ -658,8 +678,8 @@ static void handle_request(int32_t service_endpoint, const wasmos_ipc_message_t*
             reply_error(reply_to, service_endpoint, msg->request_id, rc);
             return;
         }
-        (void)wasmos_ipc_send(reply_to, service_endpoint, PCI_IPC_RESP, msg->request_id,
-                              (int32_t)entry, 0, 0, 0);
+        (void)wasmos_ipc_send(
+            reply_to, service_endpoint, PCI_IPC_RESP, msg->request_id, (int32_t)entry, 0, 0, 0);
         return;
     }
     default:
@@ -715,8 +735,8 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
 
     pci_load_console_framebuffer();
     int32_t request_id = pci_scan_and_publish(devmgr_endpoint, source_endpoint, desc_bid, 1);
-    (void)wasmos_ipc_send(devmgr_endpoint, source_endpoint, DEVMGR_PCI_SCAN_DONE, request_id, 0, 0,
-                          0, 0);
+    (void)wasmos_ipc_send(
+        devmgr_endpoint, source_endpoint, DEVMGR_PCI_SCAN_DONE, request_id, 0, 0, 0, 0);
     wasmos_sys_notify_ready(proc_endpoint, source_endpoint);
 
     for (;;) {

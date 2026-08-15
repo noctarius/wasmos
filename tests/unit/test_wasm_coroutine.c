@@ -663,8 +663,8 @@ typedef struct {
 static int32_t reentrant_callback(void* user, uintptr_t value, uintptr_t* out_value) {
     reentrant_state_t* state = user;
     state->reentrant_run_result = wasmos_wasm_coroutine_run(state->runtime);
-    state->nested_child = wasmos_future_then(state->runtime, state->settled, &state->nested,
-                                             increment, NULL, &state->nested_state);
+    state->nested_child = wasmos_future_then(
+        state->runtime, state->settled, &state->nested, increment, NULL, &state->nested_state);
     *out_value = value;
     return state->nested_child ? 0 : -1;
 }

@@ -69,7 +69,8 @@ static int paging_verify_user_root_impl(uint64_t root_table, int log_failures) {
         }
         if (root[i] & PT_FLAG_PRESENT) {
             if (log_failures) {
-                klog_printf("[paging] verify fail: unexpected pml4[%u]=%016llx\n", (unsigned int)i,
+                klog_printf("[paging] verify fail: unexpected pml4[%u]=%016llx\n",
+                            (unsigned int)i,
                             (unsigned long long)root[i]);
             }
             return -1;
@@ -96,7 +97,8 @@ static int paging_verify_user_root_impl(uint64_t root_table, int log_failures) {
         if (present != allowed) {
             if (log_failures) {
                 klog_printf("[paging] verify fail: pdpt_high[%u]=%016llx allowed=%u\n",
-                            (unsigned int)i, (unsigned long long)pdpt_high[i],
+                            (unsigned int)i,
+                            (unsigned long long)pdpt_high[i],
                             (unsigned int)allowed);
             }
             return -1;
@@ -112,7 +114,9 @@ static int paging_verify_user_root_impl(uint64_t root_table, int log_failures) {
             if (pde_present != pde_allowed) {
                 if (log_failures) {
                     klog_printf("[paging] verify fail: pd_high[%u][%u]=%016llx allowed=%u\n",
-                                (unsigned int)i, (unsigned int)pde, (unsigned long long)pd[pde],
+                                (unsigned int)i,
+                                (unsigned int)pde,
+                                (unsigned long long)pd[pde],
                                 (unsigned int)pde_allowed);
                 }
                 return -1;
@@ -129,7 +133,8 @@ static int paging_verify_user_root_impl(uint64_t root_table, int log_failures) {
             if (present != allowed) {
                 if (log_failures) {
                     klog_printf("[paging] verify fail: pdpt_low[%u]=%016llx allowed=%u\n",
-                                (unsigned int)i, (unsigned long long)pdpt_low[i],
+                                (unsigned int)i,
+                                (unsigned long long)pdpt_low[i],
                                 (unsigned int)allowed);
                 }
                 return -1;
@@ -375,7 +380,8 @@ paging_init_after_bootstrap:
     }
 
     klog_printf("[paging] cr3=%016llx\n[paging] higher-half=%016llx\n",
-                (unsigned long long)g_pml4_phys, (unsigned long long)KERNEL_HIGHER_HALF_BASE);
+                (unsigned long long)g_pml4_phys,
+                (unsigned long long)KERNEL_HIGHER_HALF_BASE);
     return 0;
 }
 
@@ -890,8 +896,10 @@ void paging_dump_user_root_kernel_mappings(uint64_t root_table) {
     }
     volatile uint64_t* root = table_ptr(root_table);
     klog_printf("[paging] dump root=%016llx pml4[0]=%016llx pml4[1]=%016llx pml4[511]=%016llx\n",
-                (unsigned long long)root_table, (unsigned long long)root[0],
-                (unsigned long long)root[1], (unsigned long long)root[511]);
+                (unsigned long long)root_table,
+                (unsigned long long)root[0],
+                (unsigned long long)root[1],
+                (unsigned long long)root[511]);
     if (!(root[511] & PT_FLAG_PRESENT)) {
         klog_write("[paging] dump: pml4[511] not present\n");
         return;
@@ -901,7 +909,8 @@ void paging_dump_user_root_kernel_mappings(uint64_t root_table) {
         if (!(pdpt_high[i] & PT_FLAG_PRESENT)) {
             continue;
         }
-        klog_printf("[paging] dump: pdpt_high[%u]=%016llx\n", (unsigned int)i,
+        klog_printf("[paging] dump: pdpt_high[%u]=%016llx\n",
+                    (unsigned int)i,
                     (unsigned long long)pdpt_high[i]);
     }
 }

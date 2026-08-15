@@ -105,17 +105,23 @@ void ipc_init(void) {
      * docs/architecture/35-kernel-object-tables.md. The table lock stays here,
      * because the ordering below it -- table lock, then ep->lock -- is this
      * file's to decide. */
-    if (idtable_init(&g_endpoint_table, (uint32_t)sizeof(ipc_endpoint_t), IPC_ENDPOINT_TABLE_CHUNK,
+    if (idtable_init(&g_endpoint_table,
+                     (uint32_t)sizeof(ipc_endpoint_t),
+                     IPC_ENDPOINT_TABLE_CHUNK,
                      IPC_ENDPOINT_PER_CONTEXT_MAX) != WASMOS_OK) {
-        kpanic("ipc: endpoint table init failed", (uint64_t)sizeof(ipc_endpoint_t),
+        kpanic("ipc: endpoint table init failed",
+               (uint64_t)sizeof(ipc_endpoint_t),
                IPC_ENDPOINT_TABLE_CHUNK);
     }
     ksync_spinlock_init(&g_select_table_lock);
     /* Grows on demand, so the number of parked services is bounded by memory and
      * the per-context quota rather than by a fixed table size. */
-    if (idtable_init(&g_select_table, (uint32_t)sizeof(ipc_select_t), IPC_SELECT_TABLE_CHUNK,
+    if (idtable_init(&g_select_table,
+                     (uint32_t)sizeof(ipc_select_t),
+                     IPC_SELECT_TABLE_CHUNK,
                      IPC_SELECT_PER_CONTEXT_MAX) != WASMOS_OK) {
-        kpanic("ipc: select table init failed", (uint64_t)sizeof(ipc_select_t),
+        kpanic("ipc: select table init failed",
+               (uint64_t)sizeof(ipc_select_t),
                IPC_SELECT_TABLE_CHUNK);
     }
 }
@@ -198,8 +204,8 @@ int ipc_endpoint_create(uint32_t owner_context_id, uint32_t* out_endpoint) {
 }
 
 int ipc_notification_create(uint32_t owner_context_id, uint32_t* out_endpoint) {
-    return ipc_endpoint_create_typed(owner_context_id, IPC_ENDPOINT_TYPE_NOTIFICATION,
-                                     out_endpoint);
+    return ipc_endpoint_create_typed(
+        owner_context_id, IPC_ENDPOINT_TYPE_NOTIFICATION, out_endpoint);
 }
 
 /* Reports who owns `endpoint`.  IPC_OK with *out_owner_context_id set,
@@ -395,8 +401,8 @@ int ipc_notify_from(uint32_t sender_context_id, uint32_t endpoint) {
     int rc = IPC_OK;
     /* Only the owner (or the kernel) may raise a notification -- unlike a
      * message send, which any context may perform against any endpoint. */
-    ipc_endpoint_t* ep = ipc_endpoint_acquire_owned(endpoint, IPC_ENDPOINT_TYPE_NOTIFICATION,
-                                                    sender_context_id, &rc);
+    ipc_endpoint_t* ep = ipc_endpoint_acquire_owned(
+        endpoint, IPC_ENDPOINT_TYPE_NOTIFICATION, sender_context_id, &rc);
     if (!ep) {
         return rc;
     }
@@ -426,8 +432,8 @@ int ipc_notify_from(uint32_t sender_context_id, uint32_t endpoint) {
 
 int ipc_wait_for(uint32_t receiver_context_id, uint32_t endpoint) {
     int rc = IPC_OK;
-    ipc_endpoint_t* ep = ipc_endpoint_acquire_owned(endpoint, IPC_ENDPOINT_TYPE_NOTIFICATION,
-                                                    receiver_context_id, &rc);
+    ipc_endpoint_t* ep = ipc_endpoint_acquire_owned(
+        endpoint, IPC_ENDPOINT_TYPE_NOTIFICATION, receiver_context_id, &rc);
     if (!ep) {
         return rc;
     }

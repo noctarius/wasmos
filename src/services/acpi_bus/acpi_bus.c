@@ -300,8 +300,12 @@ static void scan_isa_devices(const uint8_t* aml, uint32_t aml_len, int32_t devmg
             seen[n_seen++] = dedup_key;
         }
 
-        (void)printf("[acpi-bus] PNP%02X%02X io=0x%04X irq=%u class=0x%02X\n", (unsigned)b2,
-                     (unsigned)b3, (unsigned)io_base, (unsigned)irq, (unsigned)entry->class_code);
+        (void)printf("[acpi-bus] PNP%02X%02X io=0x%04X irq=%u class=0x%02X\n",
+                     (unsigned)b2,
+                     (unsigned)b3,
+                     (unsigned)io_base,
+                     (unsigned)irq,
+                     (unsigned)entry->class_code);
 
         /* vendor_id/device_id have no meaning for a PNP device, so arg1's low
          * half stays 0 and arg2 reuses the device_id field for the I/O base. */
@@ -309,8 +313,14 @@ static void scan_isa_devices(const uint8_t* aml, uint32_t aml_len, int32_t devmg
         uint32_t a1 = ((uint32_t)entry->subclass << 24) | ((uint32_t)entry->prog_if << 16);
         uint32_t a2 = (uint32_t)io_base;
         uint32_t a3 = (irq < 16u) ? ((uint32_t)irq << 8) : 0u;
-        (void)wasmos_ipc_send(devmgr_ep, src_ep, DEVMGR_PUBLISH_DEVICE, (*req_id)++, (int32_t)a0,
-                              (int32_t)a1, (int32_t)a2, (int32_t)a3);
+        (void)wasmos_ipc_send(devmgr_ep,
+                              src_ep,
+                              DEVMGR_PUBLISH_DEVICE,
+                              (*req_id)++,
+                              (int32_t)a0,
+                              (int32_t)a1,
+                              (int32_t)a2,
+                              (int32_t)a3);
     }
 }
 
@@ -343,8 +353,8 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
     /* --- Step 1: get RSDP ------------------------------------------------- */
     acpi_rsdp_t rsdp;
     uint32_t rsdp_len = 0;
-    if (wasmos_acpi_rsdp_info(addr_cast(int32_t, &rsdp), addr_cast(int32_t, &rsdp_len),
-                              (int32_t)sizeof(rsdp)) != 0) {
+    if (wasmos_acpi_rsdp_info(
+            addr_cast(int32_t, &rsdp), addr_cast(int32_t, &rsdp_len), (int32_t)sizeof(rsdp)) != 0) {
         (void)printf("[acpi-bus] RSDP not found\n");
         goto done;
     }

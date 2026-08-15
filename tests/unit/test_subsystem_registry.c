@@ -41,8 +41,8 @@ static int register_test_brokers(void) {
         0) {
         return __LINE__;
     }
-    if (wasmos_subsystem_registry_register_broker("SCRIPT", "NATIVE", "SCRIPT", 103u, 0u, 0u, 0u,
-                                                  1u) != 0) {
+    if (wasmos_subsystem_registry_register_broker(
+            "SCRIPT", "NATIVE", "SCRIPT", 103u, 0u, 0u, 0u, 1u) != 0) {
         return __LINE__;
     }
     return 0;
@@ -119,8 +119,8 @@ static int test_broker_registration_lookup(void) {
     const wasmos_subsystem_registry_entry_t* entry = 0;
 
     wasmos_subsystem_registry_reset();
-    if (wasmos_subsystem_registry_register_broker(tag, runtime_tag, broker_name, endpoint, 0u, 0u,
-                                                  0u, 1u) != 0) {
+    if (wasmos_subsystem_registry_register_broker(
+            tag, runtime_tag, broker_name, endpoint, 0u, 0u, 0u, 1u) != 0) {
         return __LINE__;
     }
 
@@ -145,8 +145,8 @@ static int test_broker_registration_lookup(void) {
         return __LINE__;
     if (entry->ops != 0)
         return __LINE__;
-    if (wasmos_subsystem_registry_register_broker(tag, runtime_tag, broker_name, endpoint, 0u, 0u,
-                                                  0u, 1u) == 0) {
+    if (wasmos_subsystem_registry_register_broker(
+            tag, runtime_tag, broker_name, endpoint, 0u, 0u, 0u, 1u) == 0) {
         return __LINE__;
     }
 
@@ -198,12 +198,12 @@ static int test_exec_handler_registration_lookup(void) {
     wasmos_subsystem_registry_reset();
     if (register_test_brokers() != 0)
         return __LINE__;
-    if (wasmos_subsystem_registry_register_exec_handler("lua-file", "LUA", 0u, 40u, 2u, lua_nodes,
-                                                        3u, 0u) != 0) {
+    if (wasmos_subsystem_registry_register_exec_handler(
+            "lua-file", "LUA", 0u, 40u, 2u, lua_nodes, 3u, 0u) != 0) {
         return __LINE__;
     }
-    if (wasmos_subsystem_registry_register_exec_handler("jar-file", "JAVA", 0u, 50u, 4u, java_nodes,
-                                                        3u, 0u) != 0) {
+    if (wasmos_subsystem_registry_register_exec_handler(
+            "jar-file", "JAVA", 0u, 50u, 4u, java_nodes, 3u, 0u) != 0) {
         return __LINE__;
     }
     if (wasmos_subsystem_registry_exec_max_probe_bytes() != 4u)
@@ -255,8 +255,8 @@ static int test_exec_handler_registration_lookup(void) {
     if (handler)
         return __LINE__;
 
-    if (wasmos_subsystem_registry_register_exec_handler("lua-file", "LUA", 0u, 40u, 2u, lua_nodes,
-                                                        3u, 0u) == 0) {
+    if (wasmos_subsystem_registry_register_exec_handler(
+            "lua-file", "LUA", 0u, 40u, 2u, lua_nodes, 3u, 0u) == 0) {
         return __LINE__;
     }
 
@@ -306,12 +306,12 @@ static int test_exec_handler_not_and_priority(void) {
     wasmos_subsystem_registry_reset();
     if (register_test_brokers() != 0)
         return __LINE__;
-    if (wasmos_subsystem_registry_register_exec_handler("generic-script", "SCRIPT", 0u, 10u, 2u,
-                                                        generic_script_nodes, 4u, 0u) != 0) {
+    if (wasmos_subsystem_registry_register_exec_handler(
+            "generic-script", "SCRIPT", 0u, 10u, 2u, generic_script_nodes, 4u, 0u) != 0) {
         return __LINE__;
     }
-    if (wasmos_subsystem_registry_register_exec_handler("aaa-script", "SCRIPT", 0u, 10u, 0u,
-                                                        exact_script_nodes, 1u, 0u) != 0) {
+    if (wasmos_subsystem_registry_register_exec_handler(
+            "aaa-script", "SCRIPT", 0u, 10u, 0u, exact_script_nodes, 1u, 0u) != 0) {
         return __LINE__;
     }
 
@@ -375,20 +375,20 @@ static int test_exec_handler_validation(void) {
     wasmos_subsystem_registry_reset();
     if (register_test_brokers() != 0)
         return __LINE__;
-    if (wasmos_subsystem_registry_register_exec_handler("missing-owner", "WARP", 0u, 1u, 4u,
-                                                        bad_probe_nodes, 1u, 0u) == 0) {
+    if (wasmos_subsystem_registry_register_exec_handler(
+            "missing-owner", "WARP", 0u, 1u, 4u, bad_probe_nodes, 1u, 0u) == 0) {
         return __LINE__;
     }
-    if (wasmos_subsystem_registry_register_exec_handler("short-probe", "LUA", 0u, 1u, 2u,
-                                                        bad_probe_nodes, 1u, 0u) == 0) {
+    if (wasmos_subsystem_registry_register_exec_handler(
+            "short-probe", "LUA", 0u, 1u, 2u, bad_probe_nodes, 1u, 0u) == 0) {
         return __LINE__;
     }
-    if (wasmos_subsystem_registry_register_exec_handler("cycle", "LUA", 0u, 1u, 0u, cycle_nodes, 1u,
-                                                        0u) == 0) {
+    if (wasmos_subsystem_registry_register_exec_handler(
+            "cycle", "LUA", 0u, 1u, 0u, cycle_nodes, 1u, 0u) == 0) {
         return __LINE__;
     }
-    if (wasmos_subsystem_registry_register_exec_handler("bad-ext", "LUA", 0u, 1u, 0u, bad_ext_nodes,
-                                                        1u, 0u) == 0) {
+    if (wasmos_subsystem_registry_register_exec_handler(
+            "bad-ext", "LUA", 0u, 1u, 0u, bad_ext_nodes, 1u, 0u) == 0) {
         return __LINE__;
     }
 
@@ -418,16 +418,16 @@ static int test_owner_drop(void) {
     wasmos_subsystem_registry_reset();
     /* Owner 500 registers a broker subsystem + a handler; owner 501 registers a
      * second broker, which must survive the drop of owner 500. */
-    if (wasmos_subsystem_registry_register_broker("SCRIPT", "NATIVE", "SCRIPT", 200u, owner, 0u, 0u,
-                                                  1u) != 0) {
+    if (wasmos_subsystem_registry_register_broker(
+            "SCRIPT", "NATIVE", "SCRIPT", 200u, owner, 0u, 0u, 1u) != 0) {
         return __LINE__;
     }
-    if (wasmos_subsystem_registry_register_broker("LUA", "NATIVE", "LUA", 201u, other_owner, 0u, 0u,
-                                                  1u) != 0) {
+    if (wasmos_subsystem_registry_register_broker(
+            "LUA", "NATIVE", "LUA", 201u, other_owner, 0u, 0u, 1u) != 0) {
         return __LINE__;
     }
-    if (wasmos_subsystem_registry_register_exec_handler("rc-file", "SCRIPT", owner, 10u, 4u,
-                                                        ext_nodes, 1u, 0u) != 0) {
+    if (wasmos_subsystem_registry_register_exec_handler(
+            "rc-file", "SCRIPT", owner, 10u, 4u, ext_nodes, 1u, 0u) != 0) {
         return __LINE__;
     }
     if (wasmos_subsystem_registry_find("SCRIPT", &probe_entry) != 0)
@@ -452,8 +452,8 @@ static int test_owner_drop(void) {
         return __LINE__;
 
     /* After the drop, the freed tag can be registered again. */
-    if (wasmos_subsystem_registry_register_broker("SCRIPT", "NATIVE", "SCRIPT", 202u, owner, 0u, 0u,
-                                                  1u) != 0) {
+    if (wasmos_subsystem_registry_register_broker(
+            "SCRIPT", "NATIVE", "SCRIPT", 202u, owner, 0u, 0u, 1u) != 0) {
         return __LINE__;
     }
 
@@ -480,27 +480,27 @@ static int test_per_owner_caps(void) {
     wasmos_subsystem_registry_reset();
     for (i = 0; i < WASMOS_SUBSYSTEM_MAX_BROKERS_PER_OWNER; ++i) {
         snprintf(tag, sizeof(tag), "BRK%u", i);
-        if (wasmos_subsystem_registry_register_broker(tag, "NATIVE", "BRK", 700u + i, owner, 0u, 0u,
-                                                      1u) != 0) {
+        if (wasmos_subsystem_registry_register_broker(
+                tag, "NATIVE", "BRK", 700u + i, owner, 0u, 0u, 1u) != 0) {
             return __LINE__;
         }
     }
     /* The next broker for the same owner is rejected by the per-owner cap. */
-    if (wasmos_subsystem_registry_register_broker("BRKX", "NATIVE", "BRK", 799u, owner, 0u, 0u,
-                                                  1u) == 0) {
+    if (wasmos_subsystem_registry_register_broker(
+            "BRKX", "NATIVE", "BRK", 799u, owner, 0u, 0u, 1u) == 0) {
         return __LINE__;
     }
 
     /* Fill the per-owner handler cap against the owner's first broker tag. */
     for (i = 0; i < WASMOS_EXEC_HANDLER_MAX_PER_OWNER; ++i) {
         snprintf(name, sizeof(name), "h%u", i);
-        if (wasmos_subsystem_registry_register_exec_handler(name, "BRK0", owner, 10u, 4u, ext_nodes,
-                                                            1u, 0u) != 0) {
+        if (wasmos_subsystem_registry_register_exec_handler(
+                name, "BRK0", owner, 10u, 4u, ext_nodes, 1u, 0u) != 0) {
             return __LINE__;
         }
     }
-    if (wasmos_subsystem_registry_register_exec_handler("hX", "BRK0", owner, 10u, 4u, ext_nodes, 1u,
-                                                        0u) == 0) {
+    if (wasmos_subsystem_registry_register_exec_handler(
+            "hX", "BRK0", owner, 10u, 4u, ext_nodes, 1u, 0u) == 0) {
         return __LINE__;
     }
 

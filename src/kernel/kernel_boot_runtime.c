@@ -86,8 +86,8 @@ int kernel_boot_build_bootinfo_shadow(const boot_info_t* src, boot_info_t* dst) 
     if (boot_shadow_copy_blob(&dst->rsdp, src->rsdp, (uint64_t)src->rsdp_length) != 0) {
         return -1;
     }
-    if (boot_shadow_copy_blob(&dst->boot_config, src->boot_config,
-                              (uint64_t)src->boot_config_size) != 0) {
+    if (boot_shadow_copy_blob(
+            &dst->boot_config, src->boot_config, (uint64_t)src->boot_config_size) != 0) {
         return -1;
     }
     /* Remap initfs to its higher-half virtual alias.  UEFI allocates the initfs
@@ -173,13 +173,19 @@ void kernel_boot_run_low_slot_sweep_diagnostic(void) {
         }
         if (paging_strip_low_slot_in_root(root) != 0) {
             klog_printf("[diag] low-slot sweep fail: strip pid=%u name=%s ctx=%u root=%016llx\n",
-                        pid, name ? name : "(null)", proc->context_id, (unsigned long long)root);
+                        pid,
+                        name ? name : "(null)",
+                        proc->context_id,
+                        (unsigned long long)root);
             failed = 1;
             break;
         }
         if (paging_verify_user_root_no_low_slot(root, 1) != 0) {
             klog_printf("[diag] low-slot sweep fail: verify pid=%u name=%s ctx=%u root=%016llx\n",
-                        pid, name ? name : "(null)", proc->context_id, (unsigned long long)root);
+                        pid,
+                        name ? name : "(null)",
+                        proc->context_id,
+                        (unsigned long long)root);
             failed = 1;
             break;
         }

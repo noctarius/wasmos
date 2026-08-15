@@ -165,7 +165,8 @@ static int warp_map_page_alias(uint64_t phys, uint64_t pages) {
     for (uint64_t i = 0; i < pages; ++i) {
         uint64_t page_phys = phys + (i * kPageSize);
         uint64_t page_virt = page_phys + kHalfBase;
-        if (paging_map_4k(page_virt, page_phys,
+        if (paging_map_4k(page_virt,
+                          page_phys,
                           MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE | MEM_REGION_FLAG_EXEC) !=
             0) {
             return -1;
@@ -251,7 +252,8 @@ static void* warp_kmalloc(size_t const size) {
         void* raw = warp_small_alloc();
         if (!raw) {
             klog_printf("[warp-mem] small pool alloc failed size=%llu total=%llu\n",
-                        (unsigned long long)size, (unsigned long long)total);
+                        (unsigned long long)size,
+                        (unsigned long long)total);
             return nullptr;
         }
         auto* hdr = static_cast<AllocHeader*>(raw);
@@ -337,13 +339,15 @@ static void* warp_krealloc(void* const ptr, size_t const size) {
     uint32_t bound_pid = cpu_local()->wasm3_heap_bound_pid;
     uint32_t claim = bound_pid;
     if (old_hdr->is_pages == 1 && g_linmem_reserve_bytes && bound_pid != 0 &&
-        __atomic_compare_exchange_n(&g_linmem_reserve_pid, &claim, 0u, false, __ATOMIC_ACQ_REL,
-                                    __ATOMIC_ACQUIRE)) {
+        __atomic_compare_exchange_n(
+            &g_linmem_reserve_pid, &claim, 0u, false, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
         uint32_t pid = bound_pid;
 #if WASMOS_TRACE
         klog_printf("[trace-linmem] hint claim pid=%u size=%llx reserve=%llx oldpages=%llx\n",
-                    (unsigned)pid, (unsigned long long)size,
-                    (unsigned long long)g_linmem_reserve_bytes, (unsigned long long)old_hdr->pages);
+                    (unsigned)pid,
+                    (unsigned long long)size,
+                    (unsigned long long)g_linmem_reserve_bytes,
+                    (unsigned long long)old_hdr->pages);
 #endif
         g_linmem_reserve_bytes = 0;
         void* moved = warp_linmem_move(pid, ptr, old_bytes, size);
@@ -529,7 +533,9 @@ static void* warp_linmem_move(uint32_t pid, void* old_ptr, size_t old_bytes, siz
     cfg->linmem_reserved = cfg->heap_size;
 #if WASMOS_TRACE
     klog_printf("[trace-linmem] move pid=%u va=%llx committed_pages=%llx reserved=%llx\n",
-                (unsigned)pid, (unsigned long long)va_base, (unsigned long long)need_pages,
+                (unsigned)pid,
+                (unsigned long long)va_base,
+                (unsigned long long)need_pages,
                 (unsigned long long)cfg->heap_size);
 #endif
 

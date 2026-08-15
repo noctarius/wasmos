@@ -549,8 +549,8 @@ uint64_t x86_syscall_handler(syscall_frame_t* frame) {
             g_ring3_thread_create_logged = 1;
             klog_write("[test] ring3 thread create syscall ok\n");
         }
-        if (process_thread_spawn_user_internal(proc->pid, "user-thread", entry_rip, user_stack_top,
-                                               &tid) != 0) {
+        if (process_thread_spawn_user_internal(
+                proc->pid, "user-thread", entry_rip, user_stack_top, &tid) != 0) {
             return (uint64_t)-1;
         }
         return tid;
@@ -648,16 +648,16 @@ uint64_t x86_syscall_handler(syscall_frame_t* frame) {
         if (!proc) {
             return (uint64_t)-1;
         }
-        return (uint64_t)(int64_t)user_mutex_user_try_lock(proc->context_id, frame->rdi,
-                                                           thread_current_tid(), 0);
+        return (uint64_t)(int64_t)user_mutex_user_try_lock(
+            proc->context_id, frame->rdi, thread_current_tid(), 0);
     }
     case WASMOS_SYSCALL_MUTEX_UNLOCK: {
         process_t* proc = process_get(process_current_pid());
         if (!proc) {
             return (uint64_t)-1;
         }
-        return (uint64_t)(int64_t)user_mutex_user_unlock(proc->context_id, frame->rdi,
-                                                         thread_current_tid(), 0);
+        return (uint64_t)(int64_t)user_mutex_user_unlock(
+            proc->context_id, frame->rdi, thread_current_tid(), 0);
     }
     case WASMOS_SYSCALL_WAIT: {
         process_t* proc = process_get(process_current_pid());
@@ -902,8 +902,8 @@ uint64_t x86_syscall_handler(syscall_frame_t* frame) {
             }
         }
         while (syscall_ipc_pending_take_request(slot, request_id, &resp) == 0) {
-            if (!syscall_ipc_reply_authentic(&resp, expected_reply_source,
-                                             expected_reply_owner_context)) {
+            if (!syscall_ipc_reply_authentic(
+                    &resp, expected_reply_source, expected_reply_owner_context)) {
                 dropped_inauth_replies++;
                 continue;
             }
@@ -930,8 +930,8 @@ uint64_t x86_syscall_handler(syscall_frame_t* frame) {
                 if (!g_ring3_ipc_call_out_of_order_retain_logged &&
                     injected_out_of_order_request_id != 0) {
                     ipc_message_t retained;
-                    if (syscall_ipc_pending_take_request(slot, injected_out_of_order_request_id,
-                                                         &retained) == 0) {
+                    if (syscall_ipc_pending_take_request(
+                            slot, injected_out_of_order_request_id, &retained) == 0) {
                         g_ring3_ipc_call_out_of_order_retain_logged = 1;
                         klog_write("[test] ring3 ipc call out-of-order retain ok\n");
                     }
@@ -952,8 +952,8 @@ uint64_t x86_syscall_handler(syscall_frame_t* frame) {
                 (void)syscall_ipc_pending_enqueue(slot, &resp);
                 continue;
             }
-            if (!syscall_ipc_reply_authentic(&resp, expected_reply_source,
-                                             expected_reply_owner_context)) {
+            if (!syscall_ipc_reply_authentic(
+                    &resp, expected_reply_source, expected_reply_owner_context)) {
                 dropped_inauth_replies++;
                 continue;
             }

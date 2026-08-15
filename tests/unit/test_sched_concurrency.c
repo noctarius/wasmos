@@ -112,8 +112,8 @@ int thread_transit(thread_t* t, thread_state_t from, thread_state_t to) {
     if (!t) {
         return 0;
     }
-    return __atomic_compare_exchange_n((uint32_t*)&t->state, &expected, (uint32_t)to, 0,
-                                       __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE);
+    return __atomic_compare_exchange_n(
+        (uint32_t*)&t->state, &expected, (uint32_t)to, 0, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE);
 }
 /* Mirrors thread.c: tid 0 is refused, the transition is BLOCKED-only, block_reason is
  * cleared, and the result is 1 when this call performed the transition and 0 otherwise
@@ -236,8 +236,12 @@ static void check_invariants(const char* where) {
             }
             if (cs->thread_count[p] != walked) {
                 __atomic_fetch_add(&g_failures, 1, __ATOMIC_RELAXED);
-                printf("  [FAIL] %s: cpu%d band%d count=%u walked=%u\n", where, c, p,
-                       cs->thread_count[p], walked);
+                printf("  [FAIL] %s: cpu%d band%d count=%u walked=%u\n",
+                       where,
+                       c,
+                       p,
+                       cs->thread_count[p],
+                       walked);
             }
         }
     }

@@ -246,8 +246,8 @@ m3ApiRawFunction(wasmos_sys_select_wait_timeout) {
         m3ApiReturn(IPC_ERR_NOENT);
     }
     uint32_t ready_ep = IPC_ENDPOINT_NONE;
-    int rc = ipc_select_wait((uint32_t)select_id, context_id, &ready_ep,
-                             (uint32_t)(timeout_ms < 0 ? 0 : timeout_ms));
+    int rc = ipc_select_wait(
+        (uint32_t)select_id, context_id, &ready_ep, (uint32_t)(timeout_ms < 0 ? 0 : timeout_ms));
     if (rc == IPC_OK) {
         m3ApiReturn((int32_t)ready_ep);
     }

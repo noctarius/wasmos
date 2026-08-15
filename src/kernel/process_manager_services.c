@@ -238,8 +238,12 @@ int pm_handle_service_register(uint32_t pm_context_id, const ipc_message_t* msg)
     uint32_t endpoint_owner = 0;
     int track_fs = 0;
     ipc_message_t resp;
-    pm_unpack_name_args((uint32_t)msg->arg0, (uint32_t)msg->arg1, (uint32_t)msg->arg2,
-                        (uint32_t)msg->arg3, name, sizeof(name));
+    pm_unpack_name_args((uint32_t)msg->arg0,
+                        (uint32_t)msg->arg1,
+                        (uint32_t)msg->arg2,
+                        (uint32_t)msg->arg3,
+                        name,
+                        sizeof(name));
     if (name[0] == '\0') {
         return -1;
     }
@@ -340,8 +344,8 @@ int pm_handle_service_register_desc(uint32_t pm_context_id, const ipc_message_t*
         pm_service_class_ensure(pm_context_id);
         provider = process_find_by_context(reply_owner);
         provider_pid = provider ? provider->pid : 0;
-        if (service_class_registry_add(class_name, desc->instance, service_ep, reply_owner,
-                                       provider_pid) != 0) {
+        if (service_class_registry_add(
+                class_name, desc->instance, service_ep, reply_owner, provider_pid) != 0) {
             return -1;
         }
     }
@@ -368,8 +372,12 @@ int pm_handle_service_lookup(uint32_t pm_context_id, const ipc_message_t* msg) {
     char name[17];
     ipc_message_t resp;
     uint32_t endpoint = IPC_ENDPOINT_NONE;
-    pm_unpack_name_args((uint32_t)msg->arg0, (uint32_t)msg->arg1, (uint32_t)msg->arg2,
-                        (uint32_t)msg->arg3, name, sizeof(name));
+    pm_unpack_name_args((uint32_t)msg->arg0,
+                        (uint32_t)msg->arg1,
+                        (uint32_t)msg->arg2,
+                        (uint32_t)msg->arg3,
+                        name,
+                        sizeof(name));
     if (name[0] == '\0') {
         return -1;
     }
@@ -489,8 +497,8 @@ int pm_handle_subsystem_register_broker(uint32_t pm_context_id, const ipc_messag
     if (len != sizeof(*desc) || len > xfer_buffer_size(BUFFER_KIND_TRANSFER)) {
         return WASMOS_ERR_PROC_PM_BAD_BROKER;
     }
-    desc = (const wasmos_subsystem_broker_register_desc_t*)pm_foreign_xfer_ptr((uint32_t)msg->arg2,
-                                                                               owner_context, 0);
+    desc = (const wasmos_subsystem_broker_register_desc_t*)pm_foreign_xfer_ptr(
+        (uint32_t)msg->arg2, owner_context, 0);
     if (!desc || desc->version != WASMOS_SUBSYSTEM_REGISTER_BROKER_DESC_VERSION ||
         desc->broker_endpoint == IPC_ENDPOINT_NONE) {
         return WASMOS_ERR_PROC_PM_BAD_BROKER;
@@ -499,10 +507,14 @@ int pm_handle_subsystem_register_broker(uint32_t pm_context_id, const ipc_messag
         endpoint_owner != owner_context) {
         return WASMOS_ERR_PROC_PM_BAD_BROKER;
     }
-    if (wasmos_subsystem_registry_register_broker(
-            desc->request_tag, desc->runtime_tag, desc->broker_name, desc->broker_endpoint,
-            owner_context, desc->uses_wasm_payload, desc->needs_runtime_lock,
-            desc->gates_ready_for_services) != 0) {
+    if (wasmos_subsystem_registry_register_broker(desc->request_tag,
+                                                  desc->runtime_tag,
+                                                  desc->broker_name,
+                                                  desc->broker_endpoint,
+                                                  owner_context,
+                                                  desc->uses_wasm_payload,
+                                                  desc->needs_runtime_lock,
+                                                  desc->gates_ready_for_services) != 0) {
         return WASMOS_ERR_PROC_PM_SUBSYSTEM_REG;
     }
     resp.type = PROC_IPC_RESP;
@@ -549,8 +561,8 @@ int pm_handle_exec_handler_register(uint32_t pm_context_id, const ipc_message_t*
     if (len < sizeof(*desc) || len > xfer_buffer_size(BUFFER_KIND_TRANSFER)) {
         return WASMOS_ERR_PROC_PM_BAD_HANDLER;
     }
-    desc = (const wasmos_exec_handler_register_desc_t*)pm_foreign_xfer_ptr((uint32_t)msg->arg2,
-                                                                           owner_context, 0);
+    desc = (const wasmos_exec_handler_register_desc_t*)pm_foreign_xfer_ptr(
+        (uint32_t)msg->arg2, owner_context, 0);
     if (!desc || desc->version != WASMOS_EXEC_HANDLER_REGISTER_DESC_VERSION ||
         desc->node_count == 0u || desc->node_count > WASMOS_EXEC_MATCH_MAX_NODES) {
         return WASMOS_ERR_PROC_PM_BAD_HANDLER;
@@ -568,9 +580,14 @@ int pm_handle_exec_handler_register(uint32_t pm_context_id, const ipc_message_t*
         return WASMOS_ERR_PROC_PM_BAD_HANDLER;
     }
     nodes = (const wasmos_exec_match_node_t*)((const uint8_t*)desc + sizeof(*desc));
-    if (wasmos_subsystem_registry_register_exec_handler(
-            desc->handler_name, desc->request_tag, owner_context, desc->priority,
-            desc->max_probe_bytes, nodes, desc->node_count, desc->root_index) != 0) {
+    if (wasmos_subsystem_registry_register_exec_handler(desc->handler_name,
+                                                        desc->request_tag,
+                                                        owner_context,
+                                                        desc->priority,
+                                                        desc->max_probe_bytes,
+                                                        nodes,
+                                                        desc->node_count,
+                                                        desc->root_index) != 0) {
         return WASMOS_ERR_PROC_PM_HANDLER_REG;
     }
     resp.type = PROC_IPC_RESP;

@@ -158,8 +158,8 @@ int wasm_driver_start(wasm_driver_t* driver, const wasm_driver_manifest_t* manif
     ksync_mutex_init(&driver->lock);
     process_t* owner = process_find_by_context(owner_context_id);
     driver->owner_pid = owner ? owner->pid : process_current_pid();
-    wasm3_heap_configure(driver->owner_pid, driver->manifest.heap_size,
-                         2ULL * 1024ULL * 1024ULL * 1024ULL);
+    wasm3_heap_configure(
+        driver->owner_pid, driver->manifest.heap_size, 2ULL * 1024ULL * 1024ULL * 1024ULL);
 
     uint32_t previous_pid = wasm_driver_enter_runtime(driver);
 
@@ -180,8 +180,8 @@ int wasm_driver_start(wasm_driver_t* driver, const wasm_driver_manifest_t* manif
         return -1;
     }
 
-    M3Result res = m3_ParseModule(driver->env, &driver->module, driver->manifest.module_bytes,
-                                  driver->manifest.module_size);
+    M3Result res = m3_ParseModule(
+        driver->env, &driver->module, driver->manifest.module_bytes, driver->manifest.module_size);
     if (res) {
         log_wasm3_error("[wasm-driver] parse failed: ", res, driver->runtime);
         m3_FreeRuntime(driver->runtime);

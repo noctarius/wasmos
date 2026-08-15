@@ -41,8 +41,8 @@ wasmos_future_t* wasmos_go_future_then(wasmos_wasm_runtime_t* runtime, wasmos_fu
                                        uint32_t callback_id) {
     if (!callback_id)
         return 0;
-    return wasmos_future_then(runtime, future, continuation, go_success, go_error,
-                              (void*)(uintptr_t)callback_id);
+    return wasmos_future_then(
+        runtime, future, continuation, go_success, go_error, (void*)(uintptr_t)callback_id);
 }
 
 static int32_t go_chain(void* user, uintptr_t value, uintptr_t* out_value) {
@@ -64,6 +64,6 @@ wasmos_future_t* wasmos_go_future_then_flat(wasmos_wasm_runtime_t* runtime, wasm
                                             uint32_t callback_id) {
     if (!callback_id)
         return 0;
-    return wasmos_future_then_flat(runtime, future, continuation, adopt, go_chain, go_error,
-                                   (void*)(uintptr_t)callback_id);
+    return wasmos_future_then_flat(
+        runtime, future, continuation, adopt, go_chain, go_error, (void*)(uintptr_t)callback_id);
 }

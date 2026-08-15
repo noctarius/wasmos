@@ -77,7 +77,8 @@ static int remap_direct_alias_pages(uint8_t* ptr, uint64_t pages) {
     for (uint64_t i = 0; i < pages; ++i) {
         uint64_t page_virt = virt + (i * kPageSize);
         uint64_t page_phys = page_virt - kHalfBase;
-        if (paging_map_4k(page_virt, page_phys,
+        if (paging_map_4k(page_virt,
+                          page_phys,
                           MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE | MEM_REGION_FLAG_EXEC) !=
             0) {
             return -1;
@@ -218,8 +219,8 @@ extern "C" uint64_t warp_mem_linmem_basedata_length(uint8_t const* linmem_kernel
         uint64_t slot_va_base = 0;
         uint64_t basedata_length = 0;
         uint64_t committed_pages = 0;
-        if (warp_linmem_kernel_window_query(linmem_kernel_ptr, &slot_va_base, &basedata_length,
-                                            &committed_pages) != 0) {
+        if (warp_linmem_kernel_window_query(
+                linmem_kernel_ptr, &slot_va_base, &basedata_length, &committed_pages) != 0) {
             return 0;
         }
         return basedata_length;
@@ -274,8 +275,8 @@ extern "C" int warp_mem_ring3_map_jit(uint64_t user_root, uint8_t const* jit_ker
     uint64_t pages = (static_cast<uint64_t>(jit_size) + kPageSize - 1) / kPageSize;
     uint64_t flags = MEM_REGION_FLAG_READ | MEM_REGION_FLAG_EXEC | MEM_REGION_FLAG_USER;
     for (uint64_t i = 0; i < pages; ++i) {
-        if (paging_map_4k_in_root(user_root, WARP_R3_JIT_BASE + i * kPageSize, phys + i * kPageSize,
-                                  flags) != 0) {
+        if (paging_map_4k_in_root(
+                user_root, WARP_R3_JIT_BASE + i * kPageSize, phys + i * kPageSize, flags) != 0) {
             return -1;
         }
     }
@@ -307,8 +308,8 @@ extern "C" int warp_mem_ring3_map_linmem(uint64_t user_root, uint8_t const* linm
 
     if (is_ring3_linmem_kernel_window(linmem_virt)) {
         uint64_t slot_va_base = 0;
-        if (warp_linmem_kernel_window_query(linmem_kernel_ptr, &slot_va_base, &basedataLength,
-                                            &total_pages) != 0) {
+        if (warp_linmem_kernel_window_query(
+                linmem_kernel_ptr, &slot_va_base, &basedataLength, &total_pages) != 0) {
             return -1;
         }
         data_offset = linmem_virt - basedataLength - slot_va_base;

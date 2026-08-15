@@ -188,8 +188,10 @@ int main(void) {
     /* Randomized order: a case that leaks state must not be able to make its
      * neighbour pass. Replay a failure with WASMOS_TEST_SEED. */
     static const wasmos_test_case_t cases[] = {
-        WASMOS_TEST_CASE(test_init_validation),   WASMOS_TEST_CASE(test_put_get_remove),
-        WASMOS_TEST_CASE(test_growth_and_lookup), WASMOS_TEST_CASE(test_pointer_stability),
+        WASMOS_TEST_CASE(test_init_validation),
+        WASMOS_TEST_CASE(test_put_get_remove),
+        WASMOS_TEST_CASE(test_growth_and_lookup),
+        WASMOS_TEST_CASE(test_pointer_stability),
         WASMOS_TEST_CASE(test_iteration),
     };
     if (wasmos_test_run_all(cases, (int)(sizeof(cases) / sizeof(cases[0]))) != 0) {

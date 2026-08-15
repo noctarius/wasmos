@@ -113,7 +113,11 @@ static void fake_log_throttle(uint32_t line) {
 }
 
 static const irq_sharing_ops_t OPS = {
-    fake_mask, fake_unmask, fake_deliver, fake_now, fake_log_throttle,
+    fake_mask,
+    fake_unmask,
+    fake_deliver,
+    fake_now,
+    fake_log_throttle,
 };
 
 static irq_line_t g_lines[TEST_LINES];

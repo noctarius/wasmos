@@ -232,21 +232,36 @@ static int vformat(stdio_emit_fn emit, void* ctx, const char* format, va_list ar
             } else if (long_flag) {
                 format_unsigned(emit, ctx, va_arg(ap, unsigned long), 10u, 0, width, pad_char);
             } else {
-                format_unsigned(emit, ctx, (unsigned long long)va_arg(ap, unsigned int), 10u, 0,
-                                width, pad_char);
+                format_unsigned(emit,
+                                ctx,
+                                (unsigned long long)va_arg(ap, unsigned int),
+                                10u,
+                                0,
+                                width,
+                                pad_char);
             }
             break;
         case 'x':
         case 'X':
             if (long_flag == 2) {
-                format_unsigned(emit, ctx, va_arg(ap, unsigned long long), 16u, *format == 'X',
-                                width, pad_char);
-            } else if (long_flag) {
-                format_unsigned(emit, ctx, va_arg(ap, unsigned long), 16u, *format == 'X', width,
+                format_unsigned(emit,
+                                ctx,
+                                va_arg(ap, unsigned long long),
+                                16u,
+                                *format == 'X',
+                                width,
                                 pad_char);
+            } else if (long_flag) {
+                format_unsigned(
+                    emit, ctx, va_arg(ap, unsigned long), 16u, *format == 'X', width, pad_char);
             } else {
-                format_unsigned(emit, ctx, (unsigned long long)va_arg(ap, unsigned int), 16u,
-                                *format == 'X', width, pad_char);
+                format_unsigned(emit,
+                                ctx,
+                                (unsigned long long)va_arg(ap, unsigned int),
+                                16u,
+                                *format == 'X',
+                                width,
+                                pad_char);
             }
             break;
         case 'p': {

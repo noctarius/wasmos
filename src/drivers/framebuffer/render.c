@@ -171,7 +171,8 @@ void fbtext_scroll_up(fbtext_state_t* s, uint16_t n) {
         return;
     }
     /* Shift cell buffer up. */
-    nd_memmove(&s->cells[0], &s->cells[(int)n * s->cols],
+    nd_memmove(&s->cells[0],
+               &s->cells[(int)n * s->cols],
                sizeof(fbtext_cell_t) * (unsigned long)(s->rows - n) * s->cols);
     /* Clear the vacated bottom rows in the cell buffer. */
     for (int i = (s->rows - n) * s->cols; i < s->rows * s->cols; i++) {
@@ -183,7 +184,8 @@ void fbtext_scroll_up(fbtext_state_t* s, uint16_t n) {
     /* Pixel-level: shift framebuffer rows up by n*CELL_H scan lines. */
     unsigned long move_lines = (unsigned long)(s->rows - n) * CELL_H;
     unsigned long clear_lines = (unsigned long)n * CELL_H;
-    nd_memcpy(s->fb, s->fb + (unsigned long)n * CELL_H * s->fb_stride,
+    nd_memcpy(s->fb,
+              s->fb + (unsigned long)n * CELL_H * s->fb_stride,
               move_lines * s->fb_stride * sizeof(uint32_t));
     /* Re-render only the vacated bottom n rows. */
     for (uint16_t r = (uint16_t)(s->rows - n); r < s->rows; r++) {

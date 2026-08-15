@@ -130,7 +130,8 @@ static uint32_t smp_stress_count_orphans(void) {
         if (!current_somewhere) {
             orphans++;
             serial_printf("[test] sched smp stress ORPHAN tid=%u iters=%u last_cpu=%u\n",
-                          (unsigned)g_sw[i].tid, (unsigned)g_sw[i].iters_done,
+                          (unsigned)g_sw[i].tid,
+                          (unsigned)g_sw[i].iters_done,
                           (unsigned)t->last_cpu);
         }
     }
@@ -150,11 +151,14 @@ static void smp_stress_report(uint8_t passed) {
                   passed ? "summary" : "DIAG",
                   (unsigned)__atomic_load_n(&g_smp_stress_hops, __ATOMIC_RELAXED),
                   (unsigned)__atomic_load_n(&g_smp_stress_done, __ATOMIC_RELAXED),
-                  (unsigned)SMP_STRESS_WORKERS, (unsigned)smp_stress_popcount(cpus_used),
-                  (unsigned)cpus_used, (unsigned)g_cpu_count);
+                  (unsigned)SMP_STRESS_WORKERS,
+                  (unsigned)smp_stress_popcount(cpus_used),
+                  (unsigned)cpus_used,
+                  (unsigned)g_cpu_count);
     if (!passed) {
         for (uint32_t i = 0; i < SMP_STRESS_WORKERS; ++i) {
-            serial_printf("[test] sched smp stress worker %u iters=%u cpus=%u\n", (unsigned)i,
+            serial_printf("[test] sched smp stress worker %u iters=%u cpus=%u\n",
+                          (unsigned)i,
                           (unsigned)g_sw[i].iters_done,
                           (unsigned)smp_stress_popcount(g_sw[i].cpu_mask));
         }
@@ -186,9 +190,9 @@ static process_run_result_t smp_stress_coordinator_entry(process_t* process, voi
             g_sw[i].context_id = process->context_id;
             g_sw[i].iters_done = 0;
             g_sw[i].cpu_mask = 0;
-            if (process_thread_spawn_worker_internal(process->pid, "smp-stress",
-                                                     smp_stress_worker_entry, &g_sw[i],
-                                                     &g_sw[i].tid) != 0) {
+            if (process_thread_spawn_worker_internal(
+                    process->pid, "smp-stress", smp_stress_worker_entry, &g_sw[i], &g_sw[i].tid) !=
+                0) {
                 klog_write("[test] sched smp stress worker spawn failed\n");
                 process_set_exit_status(process, -1);
                 return PROCESS_RUN_EXITED;
@@ -209,7 +213,8 @@ static process_run_result_t smp_stress_coordinator_entry(process_t* process, voi
             }
         }
         klog_printf("[test] sched smp stress start workers=%u tokens=%u iters=%u\n",
-                    (unsigned)SMP_STRESS_WORKERS, (unsigned)SMP_STRESS_TOKENS,
+                    (unsigned)SMP_STRESS_WORKERS,
+                    (unsigned)SMP_STRESS_TOKENS,
                     (unsigned)SMP_STRESS_ITERS);
         st->spawned = 1;
         st->last_hops = 0;

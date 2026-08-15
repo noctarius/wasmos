@@ -10,6 +10,11 @@ AllowShortCaseLabelsOnASingleLine: false
 AllowShortFunctionsOnASingleLine: Empty
 AllowShortIfStatementsOnASingleLine: Never
 AllowShortLoopsOnASingleLine: false
+# One item per line once a call or braced list has to wrap, instead of filling
+# each line. Without this, clang-format arranges a short braced list into a
+# column grid, so a table's layout depends on how long its identifiers are and
+# renaming one entry reflows all of them.
+BinPackArguments: false
 BreakBeforeBraces: Attach
 IndentCaseLabels: false
 SortIncludes: false

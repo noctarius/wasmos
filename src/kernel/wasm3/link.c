@@ -867,12 +867,13 @@ m3ApiRawFunction(wasmos_dma_map_borrow) {
     if (max_bytes == 0 || (uint32_t)length > max_bytes) {
         m3ApiReturn(WASMOS_ERR_DMA_RANGE);
     }
-    if (xfer_buffer_dma_map_borrow(&borrow, (uint32_t)offset, (uint32_t)length,
-                                   (uint32_t)direction_flags, &mapping) != WASMOS_ERR_NONE) {
+    if (xfer_buffer_dma_map_borrow(
+            &borrow, (uint32_t)offset, (uint32_t)length, (uint32_t)direction_flags, &mapping) !=
+        WASMOS_ERR_NONE) {
         m3ApiReturn(WASMOS_ERR_DMA_DENY);
     }
-    if (!capability_dma_range_allowed(context_id, mapping.device_addr,
-                                      (uint64_t)(uint32_t)length)) {
+    if (!capability_dma_range_allowed(
+            context_id, mapping.device_addr, (uint64_t)(uint32_t)length)) {
         (void)xfer_buffer_dma_unmap(&mapping);
         m3ApiReturn(WASMOS_ERR_DMA_RANGE);
     }
@@ -1013,7 +1014,8 @@ static wasmos_error_code_t wasm_block_buffer_validate_args(int32_t phys, int32_t
     }
     /* The guest's int32 arguments are zero-extended, so a negative length
      * arrives as a large positive one and the range test refuses it. */
-    return block_buffer_check_range((uint64_t)(uint32_t)offset, (uint64_t)(uint32_t)len,
+    return block_buffer_check_range((uint64_t)(uint32_t)offset,
+                                    (uint64_t)(uint32_t)len,
                                     (uint64_t)WASM_BLOCK_BUFFER_SIZE_BYTES);
 }
 
@@ -1073,11 +1075,14 @@ m3ApiRawFunction(wasmos_block_buffer_copy) {
         m3ApiReturn(WASMOS_ERR_KERNEL_NO_CALLER);
     }
     uint64_t ptr_user = 0;
-    if (wasm_user_va_from_host_ptr(proc->context_id, (const uint8_t*)_mem,
-                                   (uint64_t)m3_GetMemorySize(runtime), ptr, (uint32_t)len,
+    if (wasm_user_va_from_host_ptr(proc->context_id,
+                                   (const uint8_t*)_mem,
+                                   (uint64_t)m3_GetMemorySize(runtime),
+                                   ptr,
+                                   (uint32_t)len,
                                    &ptr_user) != 0 ||
-        mm_user_range_permitted(proc->context_id, ptr_user, (uint64_t)(uint32_t)len,
-                                MEM_REGION_FLAG_WRITE) != 0) {
+        mm_user_range_permitted(
+            proc->context_id, ptr_user, (uint64_t)(uint32_t)len, MEM_REGION_FLAG_WRITE) != 0) {
         m3ApiReturn(WASMOS_ERR_KERNEL_BAD_POINTER);
     }
 
@@ -1109,11 +1114,14 @@ m3ApiRawFunction(wasmos_block_buffer_write) {
         m3ApiReturn(WASMOS_ERR_KERNEL_NO_CALLER);
     }
     uint64_t ptr_user = 0;
-    if (wasm_user_va_from_host_ptr(proc->context_id, (const uint8_t*)_mem,
-                                   (uint64_t)m3_GetMemorySize(runtime), ptr, (uint32_t)len,
+    if (wasm_user_va_from_host_ptr(proc->context_id,
+                                   (const uint8_t*)_mem,
+                                   (uint64_t)m3_GetMemorySize(runtime),
+                                   ptr,
+                                   (uint32_t)len,
                                    &ptr_user) != 0 ||
-        mm_user_range_permitted(proc->context_id, ptr_user, (uint64_t)(uint32_t)len,
-                                MEM_REGION_FLAG_READ) != 0) {
+        mm_user_range_permitted(
+            proc->context_id, ptr_user, (uint64_t)(uint32_t)len, MEM_REGION_FLAG_READ) != 0) {
         m3ApiReturn(WASMOS_ERR_KERNEL_BAD_POINTER);
     }
 
@@ -1125,8 +1133,8 @@ m3ApiRawFunction(wasmos_block_buffer_write) {
         if (chunk > (uint32_t)sizeof(bounce)) {
             chunk = (uint32_t)sizeof(bounce);
         }
-        if (wasm_copy_from_user_bytes(proc->context_id, ptr_user + (uint64_t)copied, bounce,
-                                      chunk) != 0) {
+        if (wasm_copy_from_user_bytes(
+                proc->context_id, ptr_user + (uint64_t)copied, bounce, chunk) != 0) {
             m3ApiReturn(WASMOS_ERR_KERNEL_COPY_FAILED);
         }
         for (uint32_t i = 0; i < chunk; ++i) {
@@ -1186,8 +1194,8 @@ static wasmos_error_code_t wasm_linmem_place_overlay(IM3Runtime runtime, process
             continue;
         }
         uint64_t probe_virt = 0;
-        if (wasm_user_va_from_offset(proc->context_id, (uint32_t)candidate, (uint32_t)region_bytes,
-                                     &probe_virt) != 0) {
+        if (wasm_user_va_from_offset(
+                proc->context_id, (uint32_t)candidate, (uint32_t)region_bytes, &probe_virt) != 0) {
             continue;
         }
         /* Retry on the next page: paging remaps whole pages, so an unaligned
@@ -1195,8 +1203,8 @@ static wasmos_error_code_t wasm_linmem_place_overlay(IM3Runtime runtime, process
         if ((probe_virt & 0xFFFULL) != 0) {
             continue;
         }
-        if (mm_user_range_permitted(proc->context_id, probe_virt, region_bytes,
-                                    MEM_REGION_FLAG_WRITE) != 0) {
+        if (mm_user_range_permitted(
+                proc->context_id, probe_virt, region_bytes, MEM_REGION_FLAG_WRITE) != 0) {
             continue;
         }
         *out_off = (uint32_t)candidate;
@@ -1264,7 +1272,10 @@ m3ApiRawFunction(wasmos_block_buffer_map) {
         (virt & 0xFFFULL) != 0) {
         m3ApiReturn(WASMOS_ERR_KERNEL_NO_WINDOW);
     }
-    if (mm_context_map_physical(proc->context_id, virt, slot->buffer_phys, region_bytes,
+    if (mm_context_map_physical(proc->context_id,
+                                virt,
+                                slot->buffer_phys,
+                                region_bytes,
                                 MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE |
                                     MEM_REGION_FLAG_USER) != 0) {
         m3ApiReturn(WASMOS_ERR_KERNEL_MAP_FAILED);
@@ -1334,7 +1345,10 @@ m3ApiRawFunction(wasmos_xfer_buffer_map) {
         (virt & 0xFFFULL) != 0) {
         m3ApiReturn(WASMOS_ERR_XFER_BUFFER_INTERNAL);
     }
-    if (mm_context_map_physical(proc->context_id, virt, phys, region_bytes,
+    if (mm_context_map_physical(proc->context_id,
+                                virt,
+                                phys,
+                                region_bytes,
                                 MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE |
                                     MEM_REGION_FLAG_USER) != 0) {
         m3ApiReturn(WASMOS_ERR_XFER_BUFFER_INTERNAL);
@@ -1422,11 +1436,14 @@ m3ApiRawFunction(wasmos_xfer_buffer_read) {
     }
     m3ApiCheckMem(ptr, (uint32_t)len);
     uint64_t ptr_user = 0;
-    if (wasm_user_va_from_host_ptr(context_id, (const uint8_t*)_mem,
-                                   (uint64_t)m3_GetMemorySize(runtime), ptr, (uint32_t)len,
+    if (wasm_user_va_from_host_ptr(context_id,
+                                   (const uint8_t*)_mem,
+                                   (uint64_t)m3_GetMemorySize(runtime),
+                                   ptr,
+                                   (uint32_t)len,
                                    &ptr_user) != 0 ||
-        mm_user_range_permitted(context_id, ptr_user, (uint64_t)(uint32_t)len,
-                                MEM_REGION_FLAG_WRITE) != 0) {
+        mm_user_range_permitted(
+            context_id, ptr_user, (uint64_t)(uint32_t)len, MEM_REGION_FLAG_WRITE) != 0) {
         m3ApiReturn(WASMOS_ERR_XFER_BUFFER_RANGE);
     }
 
@@ -1486,11 +1503,14 @@ m3ApiRawFunction(wasmos_xfer_buffer_write) {
     }
     m3ApiCheckMem(ptr, (uint32_t)len);
     uint64_t ptr_user = 0;
-    if (wasm_user_va_from_host_ptr(context_id, (const uint8_t*)_mem,
-                                   (uint64_t)m3_GetMemorySize(runtime), ptr, (uint32_t)len,
+    if (wasm_user_va_from_host_ptr(context_id,
+                                   (const uint8_t*)_mem,
+                                   (uint64_t)m3_GetMemorySize(runtime),
+                                   ptr,
+                                   (uint32_t)len,
                                    &ptr_user) != 0 ||
-        mm_user_range_permitted(context_id, ptr_user, (uint64_t)(uint32_t)len,
-                                MEM_REGION_FLAG_READ) != 0) {
+        mm_user_range_permitted(
+            context_id, ptr_user, (uint64_t)(uint32_t)len, MEM_REGION_FLAG_READ) != 0) {
         m3ApiReturn(WASMOS_ERR_XFER_BUFFER_RANGE);
     }
 
@@ -1510,8 +1530,8 @@ m3ApiRawFunction(wasmos_xfer_buffer_write) {
         if (chunk > (uint32_t)sizeof(bounce)) {
             chunk = (uint32_t)sizeof(bounce);
         }
-        if (wasm_copy_from_user_bytes(proc->context_id, ptr_user + (uint64_t)copied, bounce,
-                                      chunk) != 0) {
+        if (wasm_copy_from_user_bytes(
+                proc->context_id, ptr_user + (uint64_t)copied, bounce, chunk) != 0) {
             m3ApiReturn(WASMOS_ERR_XFER_BUFFER_RANGE);
         }
         for (uint32_t i = 0; i < chunk; ++i) {
@@ -1555,8 +1575,11 @@ m3ApiRawFunction(wasmos_early_log_copy) {
         m3ApiReturn(WASMOS_ERR_KERNEL_NO_CALLER);
     }
     uint64_t ptr_user = 0;
-    if (wasm_user_va_from_host_ptr(proc->context_id, (const uint8_t*)_mem,
-                                   (uint64_t)m3_GetMemorySize(runtime), ptr, count,
+    if (wasm_user_va_from_host_ptr(proc->context_id,
+                                   (const uint8_t*)_mem,
+                                   (uint64_t)m3_GetMemorySize(runtime),
+                                   ptr,
+                                   count,
                                    &ptr_user) != 0 ||
         mm_user_range_permitted(proc->context_id, ptr_user, count, MEM_REGION_FLAG_WRITE) != 0) {
         m3ApiReturn(WASMOS_ERR_KERNEL_BAD_POINTER);
@@ -1569,8 +1592,8 @@ m3ApiRawFunction(wasmos_early_log_copy) {
             chunk = (uint32_t)sizeof(bounce);
         }
         serial_early_log_copy(bounce, start + copied, chunk);
-        if (mm_copy_to_user(proc->context_id, ptr_user + (uint64_t)copied, bounce,
-                            (uint64_t)chunk) != 0) {
+        if (mm_copy_to_user(
+                proc->context_id, ptr_user + (uint64_t)copied, bounce, (uint64_t)chunk) != 0) {
             m3ApiReturn(WASMOS_ERR_KERNEL_COPY_FAILED);
         }
         copied += chunk;
@@ -1622,8 +1645,11 @@ m3ApiRawFunction(wasmos_boot_config_copy) {
         m3ApiReturn(WASMOS_ERR_KERNEL_NO_CALLER);
     }
     uint64_t ptr_user = 0;
-    if (wasm_user_va_from_host_ptr(proc->context_id, (const uint8_t*)_mem,
-                                   (uint64_t)m3_GetMemorySize(runtime), ptr, count,
+    if (wasm_user_va_from_host_ptr(proc->context_id,
+                                   (const uint8_t*)_mem,
+                                   (uint64_t)m3_GetMemorySize(runtime),
+                                   ptr,
+                                   count,
                                    &ptr_user) != 0 ||
         mm_user_range_permitted(proc->context_id, ptr_user, count, MEM_REGION_FLAG_WRITE) != 0) {
         m3ApiReturn(WASMOS_ERR_KERNEL_BAD_POINTER);
@@ -1660,16 +1686,22 @@ m3ApiRawFunction(wasmos_env_get) {
     }
     uint64_t name_user = 0;
     uint64_t buf_user = 0;
-    if (wasm_user_va_from_host_ptr(proc->context_id, (const uint8_t*)_mem,
-                                   (uint64_t)m3_GetMemorySize(runtime), name_ptr,
-                                   (uint32_t)name_len, &name_user) != 0 ||
-        mm_user_range_permitted(proc->context_id, name_user, (uint64_t)(uint32_t)name_len,
-                                MEM_REGION_FLAG_READ) != 0 ||
-        wasm_user_va_from_host_ptr(proc->context_id, (const uint8_t*)_mem,
-                                   (uint64_t)m3_GetMemorySize(runtime), buf_ptr, (uint32_t)buf_len,
+    if (wasm_user_va_from_host_ptr(proc->context_id,
+                                   (const uint8_t*)_mem,
+                                   (uint64_t)m3_GetMemorySize(runtime),
+                                   name_ptr,
+                                   (uint32_t)name_len,
+                                   &name_user) != 0 ||
+        mm_user_range_permitted(
+            proc->context_id, name_user, (uint64_t)(uint32_t)name_len, MEM_REGION_FLAG_READ) != 0 ||
+        wasm_user_va_from_host_ptr(proc->context_id,
+                                   (const uint8_t*)_mem,
+                                   (uint64_t)m3_GetMemorySize(runtime),
+                                   buf_ptr,
+                                   (uint32_t)buf_len,
                                    &buf_user) != 0 ||
-        mm_user_range_permitted(proc->context_id, buf_user, (uint64_t)(uint32_t)buf_len,
-                                MEM_REGION_FLAG_WRITE) != 0) {
+        mm_user_range_permitted(
+            proc->context_id, buf_user, (uint64_t)(uint32_t)buf_len, MEM_REGION_FLAG_WRITE) != 0) {
         m3ApiReturn(WASMOS_ERR_KERNEL_BAD_POINTER);
     }
     /* Refused rather than truncated: see kenv_get. */
@@ -1725,11 +1757,14 @@ m3ApiRawFunction(wasmos_env_set) {
         m3ApiReturn(WASMOS_ERR_KERNEL_NO_CALLER);
     }
     uint64_t name_user = 0;
-    if (wasm_user_va_from_host_ptr(proc->context_id, (const uint8_t*)_mem,
-                                   (uint64_t)m3_GetMemorySize(runtime), name_ptr,
-                                   (uint32_t)name_len, &name_user) != 0 ||
-        mm_user_range_permitted(proc->context_id, name_user, (uint64_t)(uint32_t)name_len,
-                                MEM_REGION_FLAG_READ) != 0) {
+    if (wasm_user_va_from_host_ptr(proc->context_id,
+                                   (const uint8_t*)_mem,
+                                   (uint64_t)m3_GetMemorySize(runtime),
+                                   name_ptr,
+                                   (uint32_t)name_len,
+                                   &name_user) != 0 ||
+        mm_user_range_permitted(
+            proc->context_id, name_user, (uint64_t)(uint32_t)name_len, MEM_REGION_FLAG_READ) != 0) {
         m3ApiReturn(WASMOS_ERR_KERNEL_BAD_POINTER);
     }
     char local_name[KENV_KEY_MAX];
@@ -1742,11 +1777,15 @@ m3ApiRawFunction(wasmos_env_set) {
     local_val[0] = '\0';
     if (val_len > 0) {
         uint64_t val_user = 0;
-        if (wasm_user_va_from_host_ptr(proc->context_id, (const uint8_t*)_mem,
-                                       (uint64_t)m3_GetMemorySize(runtime), val_ptr,
-                                       (uint32_t)val_len, &val_user) != 0 ||
-            mm_user_range_permitted(proc->context_id, val_user, (uint64_t)(uint32_t)val_len,
-                                    MEM_REGION_FLAG_READ) != 0) {
+        if (wasm_user_va_from_host_ptr(proc->context_id,
+                                       (const uint8_t*)_mem,
+                                       (uint64_t)m3_GetMemorySize(runtime),
+                                       val_ptr,
+                                       (uint32_t)val_len,
+                                       &val_user) != 0 ||
+            mm_user_range_permitted(
+                proc->context_id, val_user, (uint64_t)(uint32_t)val_len, MEM_REGION_FLAG_READ) !=
+                0) {
             m3ApiReturn(WASMOS_ERR_KERNEL_BAD_POINTER);
         }
         if (mm_copy_from_user(proc->context_id, local_val, val_user, (uint64_t)(uint32_t)val_len) !=
@@ -1775,11 +1814,14 @@ m3ApiRawFunction(wasmos_env_unset) {
         m3ApiReturn(0);
     }
     uint64_t name_user = 0;
-    if (wasm_user_va_from_host_ptr(proc->context_id, (const uint8_t*)_mem,
-                                   (uint64_t)m3_GetMemorySize(runtime), name_ptr,
-                                   (uint32_t)name_len, &name_user) != 0 ||
-        mm_user_range_permitted(proc->context_id, name_user, (uint64_t)(uint32_t)name_len,
-                                MEM_REGION_FLAG_READ) != 0) {
+    if (wasm_user_va_from_host_ptr(proc->context_id,
+                                   (const uint8_t*)_mem,
+                                   (uint64_t)m3_GetMemorySize(runtime),
+                                   name_ptr,
+                                   (uint32_t)name_len,
+                                   &name_user) != 0 ||
+        mm_user_range_permitted(
+            proc->context_id, name_user, (uint64_t)(uint32_t)name_len, MEM_REGION_FLAG_READ) != 0) {
         m3ApiReturn(0);
     }
     char local_name[KENV_KEY_MAX];
@@ -2027,11 +2069,14 @@ m3ApiRawFunction(wasmos_framebuffer_info) {
         m3ApiReturn(WASMOS_ERR_KERNEL_NO_CALLER);
     }
     uint64_t out_user = 0;
-    if (wasm_user_va_from_host_ptr(proc->context_id, (const uint8_t*)_mem,
-                                   (uint64_t)m3_GetMemorySize(runtime), out_ptr, (uint32_t)len,
+    if (wasm_user_va_from_host_ptr(proc->context_id,
+                                   (const uint8_t*)_mem,
+                                   (uint64_t)m3_GetMemorySize(runtime),
+                                   out_ptr,
+                                   (uint32_t)len,
                                    &out_user) != 0 ||
-        mm_user_range_permitted(proc->context_id, out_user, (uint64_t)(uint32_t)len,
-                                MEM_REGION_FLAG_WRITE) != 0) {
+        mm_user_range_permitted(
+            proc->context_id, out_user, (uint64_t)(uint32_t)len, MEM_REGION_FLAG_WRITE) != 0) {
         m3ApiReturn(WASMOS_ERR_KERNEL_BAD_POINTER);
     }
     if (mm_copy_to_user(proc->context_id, out_user, &info, sizeof(info)) != 0) {
@@ -2095,8 +2140,8 @@ m3ApiRawFunction(wasmos_framebuffer_map) {
     int va_rc = wasm_user_va_from_offset(proc->context_id, off32, map_size32, &virt);
     int perm_rc = 0;
     if (va_rc == 0) {
-        perm_rc = mm_user_range_permitted(proc->context_id, virt, (uint64_t)map_size32,
-                                          MEM_REGION_FLAG_WRITE);
+        perm_rc = mm_user_range_permitted(
+            proc->context_id, virt, (uint64_t)map_size32, MEM_REGION_FLAG_WRITE);
     }
     if (va_rc != 0 || perm_rc != 0) {
         m3ApiReturn(WASMOS_ERR_KERNEL_BAD_POINTER);
@@ -2114,7 +2159,9 @@ m3ApiRawFunction(wasmos_framebuffer_map) {
     uint64_t cur_phys = info.framebuffer_base;
     for (uint64_t i = 0; i < pages; ++i) {
         (void)paging_unmap_4k_in_root(ctx->root_table, cur_virt);
-        if (paging_map_4k_in_root(ctx->root_table, cur_virt, cur_phys,
+        if (paging_map_4k_in_root(ctx->root_table,
+                                  cur_virt,
+                                  cur_phys,
                                   MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE |
                                       MEM_REGION_FLAG_USER) < 0) {
             m3ApiReturn(WASMOS_ERR_KERNEL_MAP_FAILED);
@@ -2205,7 +2252,10 @@ m3ApiRawFunction(wasmos_region_alloc) {
         pfa_free_pages(phys_base, (uint64_t)(uint32_t)pages);
         m3ApiReturn(WASMOS_ERR_DMA_INVALID);
     }
-    if (mm_context_map_physical(proc->context_id, virt, phys_base, region_bytes,
+    if (mm_context_map_physical(proc->context_id,
+                                virt,
+                                phys_base,
+                                region_bytes,
                                 MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE |
                                     MEM_REGION_FLAG_USER) != 0) {
         pfa_free_pages(phys_base, (uint64_t)(uint32_t)pages);
@@ -2374,15 +2424,18 @@ m3ApiRawFunction(wasmos_shmem_map) {
     }
     uint64_t virt = 0;
     if (wasm_user_va_from_offset(proc->context_id, off32, map_size32, &virt) != 0 ||
-        mm_user_range_permitted(proc->context_id, virt, (uint64_t)map_size32,
-                                MEM_REGION_FLAG_WRITE) != 0) {
+        mm_user_range_permitted(
+            proc->context_id, virt, (uint64_t)map_size32, MEM_REGION_FLAG_WRITE) != 0) {
         m3ApiReturn(WASMOS_ERR_SHMEM_NO_WINDOW);
     }
     if ((virt & 0xFFFULL) != 0) {
         m3ApiReturn(WASMOS_ERR_SHMEM_UNALIGNED);
     }
 
-    if (mm_context_map_physical(proc->context_id, virt, phys_base, needed_size,
+    if (mm_context_map_physical(proc->context_id,
+                                virt,
+                                phys_base,
+                                needed_size,
                                 MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE |
                                     MEM_REGION_FLAG_USER) != 0) {
         m3ApiReturn(WASMOS_ERR_SHMEM_BAD_SIZE);
@@ -2440,15 +2493,18 @@ m3ApiRawFunction(wasmos_shmem_map_auto) {
     uint32_t map_size32 = (uint32_t)map_size;
     uint64_t virt = 0;
     if (wasm_user_va_from_offset(proc->context_id, off32, map_size32, &virt) != 0 ||
-        mm_user_range_permitted(proc->context_id, virt, (uint64_t)map_size32,
-                                MEM_REGION_FLAG_WRITE) != 0) {
+        mm_user_range_permitted(
+            proc->context_id, virt, (uint64_t)map_size32, MEM_REGION_FLAG_WRITE) != 0) {
         m3ApiReturn(WASMOS_ERR_SHMEM_MAP);
     }
     if ((virt & 0xFFFULL) != 0) {
         m3ApiReturn(WASMOS_ERR_SHMEM_UNALIGNED);
     }
 
-    if (mm_context_map_physical(proc->context_id, virt, phys_base, needed_size,
+    if (mm_context_map_physical(proc->context_id,
+                                virt,
+                                phys_base,
+                                needed_size,
                                 MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE |
                                     MEM_REGION_FLAG_USER) != 0) {
         m3ApiReturn(WASMOS_ERR_SHMEM_MAP);
@@ -2720,8 +2776,12 @@ m3ApiRawFunction(wasmos_msi_alloc) {
         require_irq_route_capability(context_id) != 0) {
         m3ApiReturn(WASMOS_ERR_MSI_NOT_AUTHORIZED);
     }
-    m3ApiReturn(msi_alloc(context_id, (uint32_t)endpoint, &out->address_lo, &out->address_hi,
-                          &out->data, &out->vector));
+    m3ApiReturn(msi_alloc(context_id,
+                          (uint32_t)endpoint,
+                          &out->address_lo,
+                          &out->address_hi,
+                          &out->data,
+                          &out->vector));
 }
 
 /* Release MSI vector `vector`, which must have been allocated by the caller, returning it to
@@ -2820,15 +2880,21 @@ m3ApiRawFunction(wasmos_acpi_rsdp_info) {
     }
     uint64_t out_user = 0;
     uint64_t out_len_user = 0;
-    if (wasm_user_va_from_host_ptr(proc->context_id, (const uint8_t*)_mem,
-                                   (uint64_t)m3_GetMemorySize(runtime), out_ptr, len,
+    if (wasm_user_va_from_host_ptr(proc->context_id,
+                                   (const uint8_t*)_mem,
+                                   (uint64_t)m3_GetMemorySize(runtime),
+                                   out_ptr,
+                                   len,
                                    &out_user) != 0 ||
         mm_user_range_permitted(proc->context_id, out_user, len, MEM_REGION_FLAG_WRITE) != 0 ||
-        wasm_user_va_from_host_ptr(proc->context_id, (const uint8_t*)_mem,
-                                   (uint64_t)m3_GetMemorySize(runtime), out_len_ptr,
-                                   sizeof(uint32_t), &out_len_user) != 0 ||
-        mm_user_range_permitted(proc->context_id, out_len_user, sizeof(uint32_t),
-                                MEM_REGION_FLAG_WRITE) != 0) {
+        wasm_user_va_from_host_ptr(proc->context_id,
+                                   (const uint8_t*)_mem,
+                                   (uint64_t)m3_GetMemorySize(runtime),
+                                   out_len_ptr,
+                                   sizeof(uint32_t),
+                                   &out_len_user) != 0 ||
+        mm_user_range_permitted(
+            proc->context_id, out_len_user, sizeof(uint32_t), MEM_REGION_FLAG_WRITE) != 0) {
         m3ApiReturn(WASMOS_ERR_KERNEL_BAD_POINTER);
     }
 
@@ -2865,11 +2931,14 @@ m3ApiRawFunction(wasmos_boot_module_name) {
         m3ApiReturn(WASMOS_ERR_KERNEL_NO_CALLER);
     }
     uint64_t out_user = 0;
-    if (wasm_user_va_from_host_ptr(proc->context_id, (const uint8_t*)_mem,
-                                   (uint64_t)m3_GetMemorySize(runtime), out_ptr, (uint32_t)out_len,
+    if (wasm_user_va_from_host_ptr(proc->context_id,
+                                   (const uint8_t*)_mem,
+                                   (uint64_t)m3_GetMemorySize(runtime),
+                                   out_ptr,
+                                   (uint32_t)out_len,
                                    &out_user) != 0 ||
-        mm_user_range_permitted(proc->context_id, out_user, (uint64_t)(uint32_t)out_len,
-                                MEM_REGION_FLAG_WRITE) != 0) {
+        mm_user_range_permitted(
+            proc->context_id, out_user, (uint64_t)(uint32_t)out_len, MEM_REGION_FLAG_WRITE) != 0) {
         m3ApiReturn(WASMOS_ERR_KERNEL_BAD_POINTER);
     }
 
@@ -2930,11 +2999,14 @@ m3ApiRawFunction(wasmos_initfs_entry_name) {
         m3ApiReturn(WASMOS_ERR_KERNEL_NO_CALLER);
     }
     uint64_t out_user = 0;
-    if (wasm_user_va_from_host_ptr(proc->context_id, (const uint8_t*)_mem,
-                                   (uint64_t)m3_GetMemorySize(runtime), out_ptr, (uint32_t)out_len,
+    if (wasm_user_va_from_host_ptr(proc->context_id,
+                                   (const uint8_t*)_mem,
+                                   (uint64_t)m3_GetMemorySize(runtime),
+                                   out_ptr,
+                                   (uint32_t)out_len,
                                    &out_user) != 0 ||
-        mm_user_range_permitted(proc->context_id, out_user, (uint64_t)(uint32_t)out_len,
-                                MEM_REGION_FLAG_WRITE) != 0) {
+        mm_user_range_permitted(
+            proc->context_id, out_user, (uint64_t)(uint32_t)out_len, MEM_REGION_FLAG_WRITE) != 0) {
         m3ApiReturn(WASMOS_ERR_KERNEL_BAD_POINTER);
     }
 
@@ -2944,8 +3016,8 @@ m3ApiRawFunction(wasmos_initfs_entry_name) {
     }
     uint32_t name_len = 0;
     uint32_t copy_len = 0;
-    wasmos_error_code_t clamp_rc = hostcall_name_clamp(entry.path, (uint32_t)sizeof(entry.path),
-                                                       (uint32_t)out_len, &name_len, &copy_len);
+    wasmos_error_code_t clamp_rc = hostcall_name_clamp(
+        entry.path, (uint32_t)sizeof(entry.path), (uint32_t)out_len, &name_len, &copy_len);
     if (clamp_rc != WASMOS_OK) {
         m3ApiReturn(clamp_rc);
     }
@@ -2998,11 +3070,14 @@ m3ApiRawFunction(wasmos_initfs_entry_copy) {
         m3ApiReturn(WASMOS_ERR_KERNEL_NO_CALLER);
     }
     uint64_t out_user = 0;
-    if (wasm_user_va_from_host_ptr(proc->context_id, (const uint8_t*)_mem,
-                                   (uint64_t)m3_GetMemorySize(runtime), out_ptr, (uint32_t)len,
+    if (wasm_user_va_from_host_ptr(proc->context_id,
+                                   (const uint8_t*)_mem,
+                                   (uint64_t)m3_GetMemorySize(runtime),
+                                   out_ptr,
+                                   (uint32_t)len,
                                    &out_user) != 0 ||
-        mm_user_range_permitted(proc->context_id, out_user, (uint64_t)(uint32_t)len,
-                                MEM_REGION_FLAG_WRITE) != 0) {
+        mm_user_range_permitted(
+            proc->context_id, out_user, (uint64_t)(uint32_t)len, MEM_REGION_FLAG_WRITE) != 0) {
         m3ApiReturn(WASMOS_ERR_KERNEL_BAD_POINTER);
     }
 
@@ -3049,11 +3124,14 @@ m3ApiRawFunction(wasmos_initfs_find_path) {
         m3ApiReturn(WASMOS_ERR_KERNEL_NO_CALLER);
     }
     uint64_t path_user = 0;
-    if (wasm_user_va_from_host_ptr(proc->context_id, (const uint8_t*)_mem,
-                                   (uint64_t)m3_GetMemorySize(runtime), path_ptr,
-                                   (uint32_t)path_len, &path_user) != 0 ||
-        mm_user_range_permitted(proc->context_id, path_user, (uint64_t)(uint32_t)path_len,
-                                MEM_REGION_FLAG_READ) != 0) {
+    if (wasm_user_va_from_host_ptr(proc->context_id,
+                                   (const uint8_t*)_mem,
+                                   (uint64_t)m3_GetMemorySize(runtime),
+                                   path_ptr,
+                                   (uint32_t)path_len,
+                                   &path_user) != 0 ||
+        mm_user_range_permitted(
+            proc->context_id, path_user, (uint64_t)(uint32_t)path_len, MEM_REGION_FLAG_READ) != 0) {
         m3ApiReturn(WASMOS_ERR_KERNEL_BAD_POINTER);
     }
 
@@ -3246,8 +3324,12 @@ m3ApiRawFunction(wasmos_console_read) {
         m3ApiReturn(WASMOS_ERR_KERNEL_NO_CALLER);
     }
     uint64_t ptr_user = 0;
-    if (wasm_user_va_from_host_ptr(proc->context_id, (const uint8_t*)_mem,
-                                   (uint64_t)m3_GetMemorySize(runtime), ptr, 1, &ptr_user) != 0 ||
+    if (wasm_user_va_from_host_ptr(proc->context_id,
+                                   (const uint8_t*)_mem,
+                                   (uint64_t)m3_GetMemorySize(runtime),
+                                   ptr,
+                                   1,
+                                   &ptr_user) != 0 ||
         mm_user_range_permitted(proc->context_id, ptr_user, 1, MEM_REGION_FLAG_WRITE) != 0) {
         m3ApiReturn(WASMOS_ERR_KERNEL_BAD_POINTER);
     }
@@ -3284,11 +3366,14 @@ m3ApiRawFunction(wasmos_sync_user_read) {
         m3ApiReturn(WASMOS_ERR_KERNEL_NO_CALLER);
     }
     uint64_t ptr_user = 0;
-    if (wasm_user_va_from_host_ptr(proc->context_id, (const uint8_t*)_mem,
-                                   (uint64_t)m3_GetMemorySize(runtime), ptr, (uint32_t)len,
+    if (wasm_user_va_from_host_ptr(proc->context_id,
+                                   (const uint8_t*)_mem,
+                                   (uint64_t)m3_GetMemorySize(runtime),
+                                   ptr,
+                                   (uint32_t)len,
                                    &ptr_user) != 0 ||
-        mm_user_range_permitted(proc->context_id, ptr_user, (uint64_t)(uint32_t)len,
-                                MEM_REGION_FLAG_READ) != 0) {
+        mm_user_range_permitted(
+            proc->context_id, ptr_user, (uint64_t)(uint32_t)len, MEM_REGION_FLAG_READ) != 0) {
         m3ApiReturn(WASMOS_ERR_KERNEL_BAD_POINTER);
     }
     if (mm_copy_from_user(proc->context_id, ptr, ptr_user, (uint64_t)(uint32_t)len) != 0) {
@@ -3472,11 +3557,14 @@ m3ApiRawFunction(wasmos_proc_info) {
         m3ApiReturn(WASMOS_ERR_KERNEL_NO_CALLER);
     }
     uint64_t buf_user = 0;
-    if (wasm_user_va_from_host_ptr(proc->context_id, (const uint8_t*)_mem,
-                                   (uint64_t)m3_GetMemorySize(runtime), buf, (uint32_t)buf_len,
+    if (wasm_user_va_from_host_ptr(proc->context_id,
+                                   (const uint8_t*)_mem,
+                                   (uint64_t)m3_GetMemorySize(runtime),
+                                   buf,
+                                   (uint32_t)buf_len,
                                    &buf_user) != 0 ||
-        mm_user_range_permitted(proc->context_id, buf_user, (uint64_t)(uint32_t)buf_len,
-                                MEM_REGION_FLAG_WRITE) != 0) {
+        mm_user_range_permitted(
+            proc->context_id, buf_user, (uint64_t)(uint32_t)buf_len, MEM_REGION_FLAG_WRITE) != 0) {
         m3ApiReturn(WASMOS_ERR_KERNEL_BAD_POINTER);
     }
 
@@ -3498,7 +3586,9 @@ m3ApiRawFunction(wasmos_proc_info) {
         bounce[i % sizeof(bounce)] = name[i];
         if ((i % sizeof(bounce)) == (sizeof(bounce) - 1U)) {
             uint32_t chunk_base = i + 1U - (uint32_t)sizeof(bounce);
-            if (mm_copy_to_user(proc->context_id, buf_user + (uint64_t)chunk_base, bounce,
+            if (mm_copy_to_user(proc->context_id,
+                                buf_user + (uint64_t)chunk_base,
+                                bounce,
                                 (uint64_t)sizeof(bounce)) != 0) {
                 m3ApiReturn(WASMOS_ERR_KERNEL_COPY_FAILED);
             }
@@ -3506,8 +3596,9 @@ m3ApiRawFunction(wasmos_proc_info) {
     }
     uint32_t tail = copied % (uint32_t)sizeof(bounce);
     if (tail > 0) {
-        if (mm_copy_to_user(proc->context_id, buf_user + (uint64_t)(copied - tail), bounce,
-                            (uint64_t)tail) != 0) {
+        if (mm_copy_to_user(
+                proc->context_id, buf_user + (uint64_t)(copied - tail), bounce, (uint64_t)tail) !=
+            0) {
             m3ApiReturn(WASMOS_ERR_KERNEL_COPY_FAILED);
         }
     }
@@ -3536,16 +3627,22 @@ m3ApiRawFunction(wasmos_proc_info_ex) {
     }
     uint64_t buf_user = 0;
     uint64_t parent_user = 0;
-    if (wasm_user_va_from_host_ptr(proc->context_id, (const uint8_t*)_mem,
-                                   (uint64_t)m3_GetMemorySize(runtime), buf, (uint32_t)buf_len,
+    if (wasm_user_va_from_host_ptr(proc->context_id,
+                                   (const uint8_t*)_mem,
+                                   (uint64_t)m3_GetMemorySize(runtime),
+                                   buf,
+                                   (uint32_t)buf_len,
                                    &buf_user) != 0 ||
-        mm_user_range_permitted(proc->context_id, buf_user, (uint64_t)(uint32_t)buf_len,
-                                MEM_REGION_FLAG_WRITE) != 0 ||
-        wasm_user_va_from_host_ptr(proc->context_id, (const uint8_t*)_mem,
-                                   (uint64_t)m3_GetMemorySize(runtime), parent_ptr,
-                                   sizeof(uint32_t), &parent_user) != 0 ||
-        mm_user_range_permitted(proc->context_id, parent_user, sizeof(uint32_t),
-                                MEM_REGION_FLAG_WRITE) != 0) {
+        mm_user_range_permitted(
+            proc->context_id, buf_user, (uint64_t)(uint32_t)buf_len, MEM_REGION_FLAG_WRITE) != 0 ||
+        wasm_user_va_from_host_ptr(proc->context_id,
+                                   (const uint8_t*)_mem,
+                                   (uint64_t)m3_GetMemorySize(runtime),
+                                   parent_ptr,
+                                   sizeof(uint32_t),
+                                   &parent_user) != 0 ||
+        mm_user_range_permitted(
+            proc->context_id, parent_user, sizeof(uint32_t), MEM_REGION_FLAG_WRITE) != 0) {
         m3ApiReturn(WASMOS_ERR_KERNEL_BAD_POINTER);
     }
 
@@ -3572,7 +3669,9 @@ m3ApiRawFunction(wasmos_proc_info_ex) {
         bounce[i % sizeof(bounce)] = name[i];
         if ((i % sizeof(bounce)) == (sizeof(bounce) - 1U)) {
             uint32_t chunk_base = i + 1U - (uint32_t)sizeof(bounce);
-            if (mm_copy_to_user(proc->context_id, buf_user + (uint64_t)chunk_base, bounce,
+            if (mm_copy_to_user(proc->context_id,
+                                buf_user + (uint64_t)chunk_base,
+                                bounce,
                                 (uint64_t)sizeof(bounce)) != 0) {
                 m3ApiReturn(WASMOS_ERR_KERNEL_COPY_FAILED);
             }
@@ -3580,8 +3679,9 @@ m3ApiRawFunction(wasmos_proc_info_ex) {
     }
     uint32_t tail = copied % (uint32_t)sizeof(bounce);
     if (tail > 0) {
-        if (mm_copy_to_user(proc->context_id, buf_user + (uint64_t)(copied - tail), bounce,
-                            (uint64_t)tail) != 0) {
+        if (mm_copy_to_user(
+                proc->context_id, buf_user + (uint64_t)(copied - tail), bounce, (uint64_t)tail) !=
+            0) {
             m3ApiReturn(WASMOS_ERR_KERNEL_COPY_FAILED);
         }
     }
@@ -3630,21 +3730,30 @@ m3ApiRawFunction(wasmos_proc_info_stats) {
     uint64_t buf_user = 0;
     uint64_t parent_user = 0;
     uint64_t stats_user = 0;
-    if (wasm_user_va_from_host_ptr(proc->context_id, (const uint8_t*)_mem,
-                                   (uint64_t)m3_GetMemorySize(runtime), buf, (uint32_t)buf_len,
+    if (wasm_user_va_from_host_ptr(proc->context_id,
+                                   (const uint8_t*)_mem,
+                                   (uint64_t)m3_GetMemorySize(runtime),
+                                   buf,
+                                   (uint32_t)buf_len,
                                    &buf_user) != 0 ||
-        mm_user_range_permitted(proc->context_id, buf_user, (uint64_t)(uint32_t)buf_len,
-                                MEM_REGION_FLAG_WRITE) != 0 ||
-        wasm_user_va_from_host_ptr(proc->context_id, (const uint8_t*)_mem,
-                                   (uint64_t)m3_GetMemorySize(runtime), parent_ptr,
-                                   sizeof(uint32_t), &parent_user) != 0 ||
-        mm_user_range_permitted(proc->context_id, parent_user, sizeof(uint32_t),
-                                MEM_REGION_FLAG_WRITE) != 0 ||
-        wasm_user_va_from_host_ptr(proc->context_id, (const uint8_t*)_mem,
-                                   (uint64_t)m3_GetMemorySize(runtime), stats_ptr,
-                                   sizeof(wasm_proc_stats_t), &stats_user) != 0 ||
-        mm_user_range_permitted(proc->context_id, stats_user, sizeof(wasm_proc_stats_t),
-                                MEM_REGION_FLAG_WRITE) != 0) {
+        mm_user_range_permitted(
+            proc->context_id, buf_user, (uint64_t)(uint32_t)buf_len, MEM_REGION_FLAG_WRITE) != 0 ||
+        wasm_user_va_from_host_ptr(proc->context_id,
+                                   (const uint8_t*)_mem,
+                                   (uint64_t)m3_GetMemorySize(runtime),
+                                   parent_ptr,
+                                   sizeof(uint32_t),
+                                   &parent_user) != 0 ||
+        mm_user_range_permitted(
+            proc->context_id, parent_user, sizeof(uint32_t), MEM_REGION_FLAG_WRITE) != 0 ||
+        wasm_user_va_from_host_ptr(proc->context_id,
+                                   (const uint8_t*)_mem,
+                                   (uint64_t)m3_GetMemorySize(runtime),
+                                   stats_ptr,
+                                   sizeof(wasm_proc_stats_t),
+                                   &stats_user) != 0 ||
+        mm_user_range_permitted(
+            proc->context_id, stats_user, sizeof(wasm_proc_stats_t), MEM_REGION_FLAG_WRITE) != 0) {
         m3ApiReturn(WASMOS_ERR_KERNEL_BAD_POINTER);
     }
 
@@ -3688,7 +3797,9 @@ m3ApiRawFunction(wasmos_proc_info_stats) {
         bounce[i % sizeof(bounce)] = name[i];
         if ((i % sizeof(bounce)) == (sizeof(bounce) - 1U)) {
             uint32_t chunk_base = i + 1U - (uint32_t)sizeof(bounce);
-            if (mm_copy_to_user(proc->context_id, buf_user + (uint64_t)chunk_base, bounce,
+            if (mm_copy_to_user(proc->context_id,
+                                buf_user + (uint64_t)chunk_base,
+                                bounce,
                                 (uint64_t)sizeof(bounce)) != 0) {
                 m3ApiReturn(WASMOS_ERR_KERNEL_COPY_FAILED);
             }
@@ -3696,8 +3807,9 @@ m3ApiRawFunction(wasmos_proc_info_stats) {
     }
     uint32_t tail = copied % (uint32_t)sizeof(bounce);
     if (tail > 0) {
-        if (mm_copy_to_user(proc->context_id, buf_user + (uint64_t)(copied - tail), bounce,
-                            (uint64_t)tail) != 0) {
+        if (mm_copy_to_user(
+                proc->context_id, buf_user + (uint64_t)(copied - tail), bounce, (uint64_t)tail) !=
+            0) {
             m3ApiReturn(WASMOS_ERR_KERNEL_COPY_FAILED);
         }
     }
@@ -3721,8 +3833,12 @@ m3ApiRawFunction(wasmos_strlen) {
         m3ApiReturn(0);
     }
     uint64_t ptr_user = 0;
-    if (wasm_user_va_from_host_ptr(proc->context_id, (const uint8_t*)_mem,
-                                   (uint64_t)m3_GetMemorySize(runtime), ptr, 1, &ptr_user) != 0 ||
+    if (wasm_user_va_from_host_ptr(proc->context_id,
+                                   (const uint8_t*)_mem,
+                                   (uint64_t)m3_GetMemorySize(runtime),
+                                   ptr,
+                                   1,
+                                   &ptr_user) != 0 ||
         mm_user_range_permitted(proc->context_id, ptr_user, 1, MEM_REGION_FLAG_READ) != 0) {
         m3ApiReturn(0);
     }

@@ -340,8 +340,8 @@ static int32_t wp_endpoint_owner(int32_t ep) {
     return (int32_t)warp_ipc_endpoint_owner((uint32_t)ep, nullptr);
 }
 static int32_t wp_send(int32_t d, int32_t s, int32_t t, int32_t r, int32_t a0) {
-    return (int32_t)warp_ipc_send((uint32_t)d, (uint32_t)s, (uint32_t)t, (uint32_t)r, (uint32_t)a0,
-                                  0, 0, 0, nullptr);
+    return (int32_t)warp_ipc_send(
+        (uint32_t)d, (uint32_t)s, (uint32_t)t, (uint32_t)r, (uint32_t)a0, 0, 0, 0, nullptr);
 }
 static int32_t wp_drain(int32_t ep) {
     return (int32_t)warp_ipc_drain((uint32_t)ep, nullptr);
@@ -365,14 +365,28 @@ static int32_t wp_select_destroy(int32_t sel) {
     return (int32_t)warp_ipc_select_destroy((uint32_t)sel, nullptr);
 }
 
-static const Shims k_wasm3 = {
-    "wasm3",          w3_create_endpoint, w3_endpoint_owner, w3_send,       w3_drain,
-    w3_notify,        w3_last_field,      w3_select_create,  w3_select_add, w3_select_wait_timeout,
-    w3_select_destroy};
-static const Shims k_warp = {
-    "WARP",           wp_create_endpoint, wp_endpoint_owner, wp_send,       wp_drain,
-    wp_notify,        wp_last_field,      wp_select_create,  wp_select_add, wp_select_wait_timeout,
-    wp_select_destroy};
+static const Shims k_wasm3 = {"wasm3",
+                              w3_create_endpoint,
+                              w3_endpoint_owner,
+                              w3_send,
+                              w3_drain,
+                              w3_notify,
+                              w3_last_field,
+                              w3_select_create,
+                              w3_select_add,
+                              w3_select_wait_timeout,
+                              w3_select_destroy};
+static const Shims k_warp = {"WARP",
+                             wp_create_endpoint,
+                             wp_endpoint_owner,
+                             wp_send,
+                             wp_drain,
+                             wp_notify,
+                             wp_last_field,
+                             wp_select_create,
+                             wp_select_add,
+                             wp_select_wait_timeout,
+                             wp_select_destroy};
 
 /* ------------------------------------------------------- scenario table */
 
@@ -535,17 +549,33 @@ static const Scenario k_scenarios[] = {
     {"endpoint_owner(unknown)", -4, -4, false, s_owner_unknown, nullptr},
 
     {"send(valid)", 0, 0, false, s_send_ok, nullptr},
-    {"send(negative destination)", -1, -1, false, s_send_negative_dst,
+    {"send(negative destination)",
+     -1,
+     -1,
+     false,
+     s_send_negative_dst,
      "a malformed handle is INVALID in both. WARP used to cast it to "
      "IPC_ENDPOINT_NONE first and report whatever the transport then said"},
-    {"send(negative source)", -1, -1, false, s_send_negative_src,
+    {"send(negative source)",
+     -1,
+     -1,
+     false,
+     s_send_negative_src,
      "same cause: WARP's cast turns the guest's -1 into a source it does not own, "
      "so the answer is DENIED rather than a rejected argument"},
-    {"send(unknown destination)", -4, -4, false, s_send_unknown_dst,
+    {"send(unknown destination)",
+     -4,
+     -4,
+     false,
+     s_send_unknown_dst,
      "the transport code reaches the guest: NOENT is distinguishable from a "
      "malformed argument"},
     {"send(source owned by another context)", -2, -2, false, s_send_foreign_src, nullptr},
-    {"send(destination is a notification endpoint)", -7, -7, false, s_send_to_notification,
+    {"send(destination is a notification endpoint)",
+     -7,
+     -7,
+     false,
+     s_send_to_notification,
      nullptr},
 
     {"drain(empty) is 0, not an error", 0, 0, false, s_drain_empty, nullptr},
@@ -559,33 +589,65 @@ static const Scenario k_scenarios[] = {
     {"last_field(out of range)", -1, -1, false, s_last_field_out_of_range, nullptr},
 
     {"notify(valid)", 0, 0, false, s_notify_ok, nullptr},
-    {"notify(negative handle)", -1, -1, false, s_notify_negative,
+    {"notify(negative handle)",
+     -1,
+     -1,
+     false,
+     s_notify_negative,
      "a malformed handle, not a transport failure"},
-    {"notify(message endpoint)", -7, -7, false, s_notify_message_ep,
+    {"notify(message endpoint)",
+     -7,
+     -7,
+     false,
+     s_notify_message_ep,
      "UNSUPPORTED: both runtimes now say WHY, so a guest can tell a type mismatch "
      "from a bad handle"},
-    {"notify(another context's endpoint)", -2, -2, false, s_notify_foreign,
+    {"notify(another context's endpoint)",
+     -2,
+     -2,
+     false,
+     s_notify_foreign,
      "DENIED, distinct from both of the above"},
 
     {"select_create(valid) returns a handle", 1, 1, false, s_select_create_ok, nullptr},
     {"select_add(valid)", 0, 0, false, s_select_add_ok, nullptr},
     {"select_add(unknown set)", -4, -4, false, s_select_add_bad_set, nullptr},
     {"select_add(negative set)", -1, -1, false, s_select_add_negative_set, nullptr},
-    {"select_add(negative endpoint)", -1, -1, false, s_select_add_negative_ep,
+    {"select_add(negative endpoint)",
+     -1,
+     -1,
+     false,
+     s_select_add_negative_ep,
      "was the one divergence that was a bug rather than a reporting difference: "
      "WARP's cast made it IPC_ENDPOINT_NONE and ipc_select_add recorded it without "
      "resolving, so the set silently never signalled on that slot while the guest "
      "was told it was watched. ipc_select_add now refuses an endpoint it cannot "
      "resolve, which converges both runtimes on a rejection"},
 
-    {"select_wait_timeout(expires)", -5, -5, false, s_select_wait_timeout_expires,
+    {"select_wait_timeout(expires)",
+     -5,
+     -5,
+     false,
+     s_select_wait_timeout_expires,
      "WASMOS_TIMEOUT from the generated axis, not a private -1: a guest can now tell "
      "'the window elapsed' from 'you passed a bad argument'"},
-    {"select_wait_timeout(ready) names the endpoint", 1, 1, false, s_select_wait_timeout_ready,
+    {"select_wait_timeout(ready) names the endpoint",
+     1,
+     1,
+     false,
+     s_select_wait_timeout_ready,
      nullptr},
-    {"select_wait_timeout(unknown set)", -4, -4, false, s_select_wait_timeout_bad_set,
+    {"select_wait_timeout(unknown set)",
+     -4,
+     -4,
+     false,
+     s_select_wait_timeout_bad_set,
      "the transport code, like every other call -- this was a private -2"},
-    {"select_destroy(unknown set)", 0, 0, false, s_select_destroy_bad_set,
+    {"select_destroy(unknown set)",
+     0,
+     0,
+     false,
+     s_select_destroy_bad_set,
      "destroy returns void from the transport, so nothing can be reported"},
 };
 
@@ -631,15 +693,16 @@ int main(void) {
                this row to be reclassified. */
             if (w3 == wp) {
                 g_failures++;
-                printf("  [FAIL] %s no longer diverges (both %d) -- update the table\n", sc.what,
-                       w3);
+                printf(
+                    "  [FAIL] %s no longer diverges (both %d) -- update the table\n", sc.what, w3);
             }
         } else if (w3 != wp) {
             g_failures++;
             printf("  [FAIL] parity %s: wasm3=%d WARP=%d\n", sc.what, w3, wp);
         }
     }
-    printf("  ... %d of %zu scenarios differ between the runtimes\n", divergences,
+    printf("  ... %d of %zu scenarios differ between the runtimes\n",
+           divergences,
            sizeof(k_scenarios) / sizeof(k_scenarios[0]));
 
     printf("test_hostcall_ipc: %d checks, %d failures\n", g_checks, g_failures);

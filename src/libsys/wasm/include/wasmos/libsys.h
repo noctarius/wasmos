@@ -298,8 +298,14 @@ wasmos_sys_intent_send(wasmos_sys_event_loop_t* loop, int32_t destination_endpoi
             loop->intents[i].request_id = request_id;
             loop->intents[i].on_resolve = on_resolve;
             loop->intents[i].user = user;
-            if (wasmos_ipc_send(destination_endpoint, source_endpoint, type, request_id, arg0, arg1,
-                                arg2, arg3) != 0) {
+            if (wasmos_ipc_send(destination_endpoint,
+                                source_endpoint,
+                                type,
+                                request_id,
+                                arg0,
+                                arg1,
+                                arg2,
+                                arg3) != 0) {
                 loop->intents[i].in_use = 0;
                 loop->intents[i].request_id = 0;
                 loop->intents[i].on_resolve = 0;
@@ -339,8 +345,14 @@ static inline int32_t wasmos_sys_intent_send_with_request_id(
             loop->intents[i].request_id = request_id;
             loop->intents[i].on_resolve = on_resolve;
             loop->intents[i].user = user;
-            if (wasmos_ipc_send(destination_endpoint, source_endpoint, type, request_id, arg0, arg1,
-                                arg2, arg3) != 0) {
+            if (wasmos_ipc_send(destination_endpoint,
+                                source_endpoint,
+                                type,
+                                request_id,
+                                arg0,
+                                arg1,
+                                arg2,
+                                arg3) != 0) {
                 loop->intents[i].in_use = 0;
                 loop->intents[i].request_id = 0;
                 loop->intents[i].on_resolve = 0;
@@ -608,8 +620,8 @@ static inline void wasmos_sys_notify_ready(int32_t proc_endpoint, int32_t source
     if (s_ready_reply_ep < 0) {
         return;
     }
-    (void)wasmos_ipc_call(proc_endpoint, s_ready_reply_ep, PROC_IPC_NOTIFY_READY, 0, 0, 0, 0, 0,
-                          &reply);
+    (void)wasmos_ipc_call(
+        proc_endpoint, s_ready_reply_ep, PROC_IPC_NOTIFY_READY, 0, 0, 0, 0, 0, &reply);
 }
 
 /* Spawn a module by index and block until the child signals ready or until
@@ -621,8 +633,15 @@ static inline int32_t wasmos_sys_spawn_sync(int32_t proc_endpoint, int32_t reply
                                             int32_t module_index, int32_t timeout_ms,
                                             int32_t request_id) {
     wasmos_ipc_message_t reply;
-    if (wasmos_ipc_call(proc_endpoint, reply_endpoint, PROC_IPC_SPAWN_SYNC, request_id,
-                        module_index, timeout_ms, 0, 0, &reply) != 0) {
+    if (wasmos_ipc_call(proc_endpoint,
+                        reply_endpoint,
+                        PROC_IPC_SPAWN_SYNC,
+                        request_id,
+                        module_index,
+                        timeout_ms,
+                        0,
+                        0,
+                        &reply) != 0) {
         return -1;
     }
     return reply.type == PROC_IPC_RESP ? (int32_t)reply.arg0 : -1;
@@ -636,8 +655,15 @@ static inline int32_t wasmos_sys_spawn_path_sync(int32_t proc_endpoint, int32_t 
                                                  int32_t path_len, int32_t timeout_ms,
                                                  int32_t request_id) {
     wasmos_ipc_message_t reply;
-    if (wasmos_ipc_call(proc_endpoint, reply_endpoint, PROC_IPC_SPAWN_PATH_SYNC, request_id, 0,
-                        path_len, 0, timeout_ms, &reply) != 0) {
+    if (wasmos_ipc_call(proc_endpoint,
+                        reply_endpoint,
+                        PROC_IPC_SPAWN_PATH_SYNC,
+                        request_id,
+                        0,
+                        path_len,
+                        0,
+                        timeout_ms,
+                        &reply) != 0) {
         return -1;
     }
     return reply.type == PROC_IPC_RESP ? (int32_t)reply.arg0 : -1;
@@ -683,8 +709,8 @@ static inline int32_t wasmos_sys_ipc_send_retry(int32_t destination_endpoint,
         retries = 1;
     }
     for (;;) {
-        int32_t rc = wasmos_ipc_send(destination_endpoint, source_endpoint, type, request_id, arg0,
-                                     arg1, arg2, arg3);
+        int32_t rc = wasmos_ipc_send(
+            destination_endpoint, source_endpoint, type, request_id, arg0, arg1, arg2, arg3);
         if (rc == 0 || rc != ipc_err_full) {
             return rc;
         }
@@ -766,8 +792,8 @@ static inline void wasmos_sys_random_reply(void* user, const wasmos_ipc_message_
     }
     wrote = reply->arg0;
     if (wrote <= 0 || wrote > request->chunk_max || wrote > request->len - request->done ||
-        wasmos_xfer_buffer_read(request->buffer_id,
-                                addr_cast(int32_t, request->out + request->done), wrote, 0) != 0) {
+        wasmos_xfer_buffer_read(
+            request->buffer_id, addr_cast(int32_t, request->out + request->done), wrote, 0) != 0) {
         wasmos_sys_random_finish(request, WASMOS_ERR_HRNG_IO_ERROR);
         return;
     }
@@ -794,9 +820,16 @@ static inline int32_t wasmos_sys_random_issue(wasmos_sys_random_request_t* reque
     if (chunk > request->chunk_max) {
         chunk = request->chunk_max;
     }
-    return wasmos_sys_intent_send(request->loop, request->hrng_endpoint,
-                                  request->loop->receiver_endpoint, HRNG_IPC_GET_BYTES_REQ,
-                                  request->buffer_id, chunk, 0, 0, wasmos_sys_random_reply, request,
+    return wasmos_sys_intent_send(request->loop,
+                                  request->hrng_endpoint,
+                                  request->loop->receiver_endpoint,
+                                  HRNG_IPC_GET_BYTES_REQ,
+                                  request->buffer_id,
+                                  chunk,
+                                  0,
+                                  0,
+                                  wasmos_sys_random_reply,
+                                  request,
                                   0);
 }
 
@@ -835,8 +868,9 @@ wasmos_sys_random_bytes_async(wasmos_sys_event_loop_t* loop, int32_t hrng_endpoi
         return WASMOS_ERR_HRNG_NOT_READY;
     }
     request->buffer_id = wasmos_xfer_buffer_acquire(request->chunk_max);
-    if (request->buffer_id < 0 || wasmos_xfer_buffer_borrow(hrng_endpoint, request->buffer_id,
-                                                            WASMOS_BUFFER_GRANT_WRITE) < 0) {
+    if (request->buffer_id < 0 ||
+        wasmos_xfer_buffer_borrow(hrng_endpoint, request->buffer_id, WASMOS_BUFFER_GRANT_WRITE) <
+            0) {
         if (request->buffer_id >= 0) {
             (void)wasmos_xfer_buffer_release(request->buffer_id);
             request->buffer_id = -1;
@@ -863,8 +897,13 @@ static inline int32_t wasmos_sys_random_int_async(wasmos_sys_event_loop_t* loop,
         return WASMOS_ERR_HRNG_INVALID;
     }
     request->float_out = 0;
-    return wasmos_sys_random_bytes_async(loop, hrng_endpoint, (uint8_t*)out_value,
-                                         (int32_t)sizeof(*out_value), request, on_complete, user);
+    return wasmos_sys_random_bytes_async(loop,
+                                         hrng_endpoint,
+                                         (uint8_t*)out_value,
+                                         (int32_t)sizeof(*out_value),
+                                         request,
+                                         on_complete,
+                                         user);
 }
 
 /* random_bytes_async() for a float uniformly distributed in [0, 1): the drawn
@@ -880,9 +919,13 @@ static inline int32_t wasmos_sys_random_float_async(wasmos_sys_event_loop_t* loo
     if (!request || !out_value) {
         return WASMOS_ERR_HRNG_INVALID;
     }
-    status = wasmos_sys_random_bytes_async(loop, hrng_endpoint, (uint8_t*)&request->float_word,
-                                           (int32_t)sizeof(request->float_word), request,
-                                           on_complete, user);
+    status = wasmos_sys_random_bytes_async(loop,
+                                           hrng_endpoint,
+                                           (uint8_t*)&request->float_word,
+                                           (int32_t)sizeof(request->float_word),
+                                           request,
+                                           on_complete,
+                                           user);
     if (status != WASMOS_ERR_NONE) {
         return status;
     }
@@ -932,14 +975,20 @@ static inline int32_t wasmos_sys_fs_read_path(int32_t fs_endpoint, int32_t reply
         (void)wasmos_xfer_buffer_release(bid);
         return -1;
     }
-    b1 = wasmos_xfer_buffer_borrow(fs_endpoint, bid,
-                                   WASMOS_BUFFER_GRANT_READ | WASMOS_BUFFER_GRANT_WRITE);
+    b1 = wasmos_xfer_buffer_borrow(
+        fs_endpoint, bid, WASMOS_BUFFER_GRANT_READ | WASMOS_BUFFER_GRANT_WRITE);
     if (b1 < 0) {
         (void)wasmos_xfer_buffer_release(bid);
         return -1;
     }
-    if (wasmos_ipc_send(fs_endpoint, reply_endpoint, FS_IPC_READ_PATH_REQ, request_id, path_len,
-                        buf_size, bid, b1) != 0) {
+    if (wasmos_ipc_send(fs_endpoint,
+                        reply_endpoint,
+                        FS_IPC_READ_PATH_REQ,
+                        request_id,
+                        path_len,
+                        buf_size,
+                        bid,
+                        b1) != 0) {
         (void)wasmos_xfer_buffer_release(bid);
         return -1;
     }

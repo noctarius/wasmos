@@ -62,8 +62,16 @@ int main(int argc, char** argv) {
         (void)putsn(fail, sizeof(fail) - 1);
         printf("[native-call-smoke] ep=%d rc=%d type=%d req=%d a0=%d a1=%d src=%d dst=%d a2=%d "
                "a3=%d\n",
-               endpoint, call_rc, reply.type, reply.request_id, reply.arg0, reply.arg1,
-               reply.source, reply.destination, reply.arg2, reply.arg3);
+               endpoint,
+               call_rc,
+               reply.type,
+               reply.request_id,
+               reply.arg0,
+               reply.arg1,
+               reply.source,
+               reply.destination,
+               reply.arg2,
+               reply.arg3);
         return -1;
     }
     static const char ok[] = "native-call-smoke: ipc-call ok\n";

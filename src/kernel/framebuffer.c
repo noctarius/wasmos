@@ -143,7 +143,8 @@ int framebuffer_map_high(void) {
     }
     *fb_hi_base_slot() = KERNEL_MMIO_FB_VA + (fb->framebuffer_base & 0xFFFULL);
     klog_printf("[framebuffer] hi base=0x%016llx pages=%llu\n",
-                (unsigned long long)*fb_hi_base_slot(), (unsigned long long)num_pages);
+                (unsigned long long)*fb_hi_base_slot(),
+                (unsigned long long)num_pages);
     return 0;
 }
 

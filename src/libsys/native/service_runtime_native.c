@@ -33,8 +33,12 @@ int32_t wasmos_sys_native_service_run(wasmos_sys_native_service_t* service,
     service->api = api;
     service->main = main;
     service->user = user;
-    if (!wasmos_async_start(&service->runtime, &service->root, service->root_stack,
-                            service->root_stack_size, service_root, service)) {
+    if (!wasmos_async_start(&service->runtime,
+                            &service->root,
+                            service->root_stack,
+                            service->root_stack_size,
+                            service_root,
+                            service)) {
         return -1;
     }
     while (service->root.state != WASMOS_NATIVE_COROUTINE_DEAD) {

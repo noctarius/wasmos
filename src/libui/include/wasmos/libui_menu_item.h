@@ -68,14 +68,22 @@ static inline void ui_render_menu_item(ui_context_t* ctx, const ui_component_t* 
     (void)offset_y;
     ui_menu_item_data_t* d = (ui_menu_item_data_t*)c->component_data;
     if (d && (d->dropdown_open || c->pressed)) {
-        ui_fill_rect_clip(ctx->mapped_base, ctx->width, ctx->height, draw_bounds.x + 1,
-                          draw_bounds.y + 1, draw_bounds.w - 2, draw_bounds.h - 2, 0xFF2A4060u,
+        ui_fill_rect_clip(ctx->mapped_base,
+                          ctx->width,
+                          ctx->height,
+                          draw_bounds.x + 1,
+                          draw_bounds.y + 1,
+                          draw_bounds.w - 2,
+                          draw_bounds.h - 2,
+                          0xFF2A4060u,
                           clip);
     }
-    ui_draw_text_clip(ctx, draw_bounds.x + (c->padding_px > 0 ? c->padding_px : 8),
+    ui_draw_text_clip(ctx,
+                      draw_bounds.x + (c->padding_px > 0 ? c->padding_px : 8),
                       draw_bounds.y + (draw_bounds.h - ctx->font_px) / 2,
                       (d && d->text.text) ? d->text.text : "",
-                      c->fg_color ? c->fg_color : 0xFFDDE8F0u, clip);
+                      c->fg_color ? c->fg_color : 0xFFDDE8F0u,
+                      clip);
     /* Only the bar/row label is drawn here; the popup has its own window. */
 }
 
@@ -186,7 +194,13 @@ static inline void ui_menu_item_popup_render(ui_context_t* ctx, ui_component_t* 
         child->bounds.h = item_h;
 
         if (row == hovered_row) {
-            ui_fill_rect(d->popup_base, d->popup_w, d->popup_h, 1, row_y, d->popup_w - 2, item_h,
+            ui_fill_rect(d->popup_base,
+                         d->popup_w,
+                         d->popup_h,
+                         1,
+                         row_y,
+                         d->popup_w - 2,
+                         item_h,
                          0xFF2F5C88u);
         }
 
@@ -195,8 +209,8 @@ static inline void ui_menu_item_popup_render(ui_context_t* ctx, ui_component_t* 
         ui_draw_text_clip(ctx, 8, row_y + (item_h - ctx->font_px) / 2, label, 0xFFFFFFFFu, full);
 
         if (child->first_child_id > 0) {
-            ui_draw_text_clip(ctx, d->popup_w - 14, row_y + (item_h - ctx->font_px) / 2, ">",
-                              0xFFAABBCCu, full);
+            ui_draw_text_clip(
+                ctx, d->popup_w - 14, row_y + (item_h - ctx->font_px) / 2, ">", 0xFFAABBCCu, full);
         }
 
         ++row;
@@ -216,10 +230,20 @@ static inline void ui_menu_item_popup_present(ui_context_t* ctx, ui_menu_item_da
     if (!d || !d->popup_base || d->popup_win_id == 0 || d->popup_buf_id == 0)
         return;
     int32_t status = 0;
-    wasmos_shmem_flush(d->popup_shmem_id, addr_cast(int32_t, d->popup_base),
-                       d->popup_w * d->popup_h * 4);
-    ui_send_gfx(ctx->gfx_endpoint, ctx->reply_endpoint, ctx->req_id++, GFX_IPC_PRESENT_WINDOW,
-                d->popup_win_id, d->popup_buf_id, 0, 0, &status, 0, 0, 0);
+    wasmos_shmem_flush(
+        d->popup_shmem_id, addr_cast(int32_t, d->popup_base), d->popup_w * d->popup_h * 4);
+    ui_send_gfx(ctx->gfx_endpoint,
+                ctx->reply_endpoint,
+                ctx->req_id++,
+                GFX_IPC_PRESENT_WINDOW,
+                d->popup_win_id,
+                d->popup_buf_id,
+                0,
+                0,
+                &status,
+                0,
+                0,
+                0);
 }
 
 /* Tear down mi's popup window: release the shared buffer, unmap the shmem,
@@ -237,16 +261,36 @@ static inline void ui_menu_item_popup_close(ui_context_t* ctx, ui_component_t* m
         return;
     int32_t status = 0;
     if (d->popup_buf_id > 0) {
-        ui_send_gfx(ctx->gfx_endpoint, ctx->reply_endpoint, ctx->req_id++,
-                    GFX_IPC_RELEASE_SHARED_BUFFER, d->popup_buf_id, 0, 0, 0, &status, 0, 0, 0);
+        ui_send_gfx(ctx->gfx_endpoint,
+                    ctx->reply_endpoint,
+                    ctx->req_id++,
+                    GFX_IPC_RELEASE_SHARED_BUFFER,
+                    d->popup_buf_id,
+                    0,
+                    0,
+                    0,
+                    &status,
+                    0,
+                    0,
+                    0);
         d->popup_buf_id = 0;
     }
     if (d->popup_shmem_id > 0) {
         wasmos_shmem_unmap(d->popup_shmem_id);
         d->popup_shmem_id = 0;
     }
-    ui_send_gfx(ctx->gfx_endpoint, ctx->reply_endpoint, ctx->req_id++, GFX_IPC_DESTROY_WINDOW,
-                d->popup_win_id, 0, 0, 0, &status, 0, 0, 0);
+    ui_send_gfx(ctx->gfx_endpoint,
+                ctx->reply_endpoint,
+                ctx->req_id++,
+                GFX_IPC_DESTROY_WINDOW,
+                d->popup_win_id,
+                0,
+                0,
+                0,
+                &status,
+                0,
+                0,
+                0);
     d->popup_win_id = 0;
     d->popup_base = NULL;
     d->popup_w = 0;
@@ -305,40 +349,85 @@ static inline void ui_menu_item_popup_open(ui_context_t* ctx, ui_component_t* mi
      * same endpoint the loop drains. (Sourcing from reply_endpoint would send
      * them to the request/reply channel, where the sync-call loop discards
      * them — breaking popup hover and focus-lost.) */
-    if (ui_send_gfx(ctx->gfx_endpoint, ctx->event_endpoint, ctx->req_id++, GFX_IPC_CREATE_WINDOW,
-                    popup_w, popup_h, (int32_t)GFX_IPC_ABI_MAGIC,
+    if (ui_send_gfx(ctx->gfx_endpoint,
+                    ctx->event_endpoint,
+                    ctx->req_id++,
+                    GFX_IPC_CREATE_WINDOW,
+                    popup_w,
+                    popup_h,
+                    (int32_t)GFX_IPC_ABI_MAGIC,
                     (int32_t)gfx_ipc_header_pack(GFX_IPC_ABI_VERSION, GFX_IPC_CREATE_WINDOW),
-                    &status, &a1, &a2, &a3) != 0 ||
+                    &status,
+                    &a1,
+                    &a2,
+                    &a3) != 0 ||
         status != WASMOS_ERR_NONE)
         return;
     const int32_t win_id = a1;
 
     /* INVISIBLE during setup prevents the placeholder flash before the first present. */
-    if (ui_send_gfx(ctx->gfx_endpoint, ctx->reply_endpoint, ctx->req_id++, GFX_IPC_SET_WINDOW_FLAGS,
+    if (ui_send_gfx(ctx->gfx_endpoint,
+                    ctx->reply_endpoint,
+                    ctx->req_id++,
+                    GFX_IPC_SET_WINDOW_FLAGS,
                     win_id,
                     (int32_t)(GFX_WINDOW_FLAG_TOPMOST | GFX_WINDOW_FLAG_NO_CHROME |
                               GFX_WINDOW_FLAG_NO_TASK_LIST | GFX_WINDOW_FLAG_INVISIBLE),
-                    0, 0, &status, 0, 0, 0) != 0 ||
+                    0,
+                    0,
+                    &status,
+                    0,
+                    0,
+                    0) != 0 ||
         status != WASMOS_ERR_NONE)
         goto fail;
 
-    if (ui_send_gfx(ctx->gfx_endpoint, ctx->reply_endpoint, ctx->req_id++, GFX_IPC_MOVE_WINDOW,
-                    win_id, popup_x, popup_y, 0, &status, 0, 0, 0) != 0 ||
+    if (ui_send_gfx(ctx->gfx_endpoint,
+                    ctx->reply_endpoint,
+                    ctx->req_id++,
+                    GFX_IPC_MOVE_WINDOW,
+                    win_id,
+                    popup_x,
+                    popup_y,
+                    0,
+                    &status,
+                    0,
+                    0,
+                    0) != 0 ||
         status != WASMOS_ERR_NONE)
         goto fail;
 
     int32_t buf_id = 0, shmem_id = 0, stride = 0;
-    if (ui_send_gfx(ctx->gfx_endpoint, ctx->reply_endpoint, ctx->req_id++,
-                    GFX_IPC_ALLOC_SHARED_BUFFER, win_id, popup_w, popup_h, 0, &status, &buf_id,
-                    &shmem_id, &stride) != 0 ||
+    if (ui_send_gfx(ctx->gfx_endpoint,
+                    ctx->reply_endpoint,
+                    ctx->req_id++,
+                    GFX_IPC_ALLOC_SHARED_BUFFER,
+                    win_id,
+                    popup_w,
+                    popup_h,
+                    0,
+                    &status,
+                    &buf_id,
+                    &shmem_id,
+                    &stride) != 0 ||
         status != WASMOS_ERR_NONE)
         goto fail;
 
     const int32_t bytes = (popup_w * popup_h * 4 + (UI_PAGE_SIZE - 1)) & ~(UI_PAGE_SIZE - 1);
     const int32_t mapped = wasmos_shmem_map_auto(shmem_id, bytes);
     if (mapped < 0) {
-        ui_send_gfx(ctx->gfx_endpoint, ctx->reply_endpoint, ctx->req_id++,
-                    GFX_IPC_RELEASE_SHARED_BUFFER, buf_id, 0, 0, 0, &status, 0, 0, 0);
+        ui_send_gfx(ctx->gfx_endpoint,
+                    ctx->reply_endpoint,
+                    ctx->req_id++,
+                    GFX_IPC_RELEASE_SHARED_BUFFER,
+                    buf_id,
+                    0,
+                    0,
+                    0,
+                    &status,
+                    0,
+                    0,
+                    0);
         goto fail;
     }
 
@@ -356,23 +445,51 @@ static inline void ui_menu_item_popup_open(ui_context_t* ctx, ui_component_t* mi
     ui_menu_item_popup_render(ctx, mi, -1);
     ui_menu_item_popup_present(ctx, d);
     /* Reveal: clear INVISIBLE now that the buffer has content. */
-    ui_send_gfx(ctx->gfx_endpoint, ctx->reply_endpoint, ctx->req_id++, GFX_IPC_SET_WINDOW_FLAGS,
+    ui_send_gfx(ctx->gfx_endpoint,
+                ctx->reply_endpoint,
+                ctx->req_id++,
+                GFX_IPC_SET_WINDOW_FLAGS,
                 win_id,
                 (int32_t)(GFX_WINDOW_FLAG_TOPMOST | GFX_WINDOW_FLAG_NO_CHROME |
                           GFX_WINDOW_FLAG_NO_TASK_LIST),
-                0, 0, &status, 0, 0, 0);
+                0,
+                0,
+                &status,
+                0,
+                0,
+                0);
     /* Top-level bar popups need focus so they receive pointer events.
      * Hover-opened child submenus must stay preview-only until clicked;
      * otherwise they trap pointer focus and the parent popup stops updating
      * hover state for sibling rows. */
     if (take_focus) {
-        ui_send_gfx(ctx->gfx_endpoint, ctx->reply_endpoint, ctx->req_id++, GFX_IPC_FOCUS_WINDOW,
-                    win_id, 0, 0, 0, &status, 0, 0, 0);
+        ui_send_gfx(ctx->gfx_endpoint,
+                    ctx->reply_endpoint,
+                    ctx->req_id++,
+                    GFX_IPC_FOCUS_WINDOW,
+                    win_id,
+                    0,
+                    0,
+                    0,
+                    &status,
+                    0,
+                    0,
+                    0);
     }
     return;
 fail:
-    ui_send_gfx(ctx->gfx_endpoint, ctx->reply_endpoint, ctx->req_id++, GFX_IPC_DESTROY_WINDOW,
-                win_id, 0, 0, 0, &status, 0, 0, 0);
+    ui_send_gfx(ctx->gfx_endpoint,
+                ctx->reply_endpoint,
+                ctx->req_id++,
+                GFX_IPC_DESTROY_WINDOW,
+                win_id,
+                0,
+                0,
+                0,
+                &status,
+                0,
+                0,
+                0);
 }
 
 /* Flag-only open/close for a bar item. ui_loop_drain -> ui_menu_item_sync_popup
@@ -529,9 +646,18 @@ static inline void ui_menu_item_handle_popup_event(ui_context_t* ctx, ui_compone
                         }
                         if (cd->popup_win_id > 0) {
                             int32_t status = 0;
-                            ui_send_gfx(ctx->gfx_endpoint, ctx->reply_endpoint, ctx->req_id++,
-                                        GFX_IPC_FOCUS_WINDOW, cd->popup_win_id, 0, 0, 0, &status, 0,
-                                        0, 0);
+                            ui_send_gfx(ctx->gfx_endpoint,
+                                        ctx->reply_endpoint,
+                                        ctx->req_id++,
+                                        GFX_IPC_FOCUS_WINDOW,
+                                        cd->popup_win_id,
+                                        0,
+                                        0,
+                                        0,
+                                        &status,
+                                        0,
+                                        0,
+                                        0);
                         }
                     }
                 }

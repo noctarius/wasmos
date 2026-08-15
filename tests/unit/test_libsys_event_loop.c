@@ -307,8 +307,8 @@ static void test_an_intent_wins_over_a_type_handler(void) {
     wasmos_sys_event_set_default(&loop, on_default, (void*)"default");
 
     int32_t rid = 0;
-    CHECK(wasmos_sys_intent_send(&loop, 9, 1, 0x4242, 1, 2, 3, 4, on_intent, (void*)"intent",
-                                 &rid) == 0,
+    CHECK(wasmos_sys_intent_send(
+              &loop, 9, 1, 0x4242, 1, 2, 3, 4, on_intent, (void*)"intent", &rid) == 0,
           "the intent is sent");
     CHECK(rid == 500, "and takes the seeded request id");
     CHECK(g_sent_count == 1 && g_sent[0].request_id == 500 && g_sent[0].destination == 9,
@@ -496,11 +496,11 @@ static void test_a_caller_supplied_request_id_must_be_unique(void) {
     wasmos_sys_event_loop_t loop;
     wasmos_sys_event_loop_init(&loop, 1, 1);
 
-    CHECK(wasmos_sys_intent_send_with_request_id(&loop, 9, 1, 77, 0x50, 0, 0, 0, 0, on_intent,
-                                                 (void*)"first") == 0,
+    CHECK(wasmos_sys_intent_send_with_request_id(
+              &loop, 9, 1, 77, 0x50, 0, 0, 0, 0, on_intent, (void*)"first") == 0,
           "a caller-supplied id is accepted");
-    CHECK(wasmos_sys_intent_send_with_request_id(&loop, 9, 1, 77, 0x50, 0, 0, 0, 0, on_intent,
-                                                 (void*)"second") == -1,
+    CHECK(wasmos_sys_intent_send_with_request_id(
+              &loop, 9, 1, 77, 0x50, 0, 0, 0, 0, on_intent, (void*)"second") == -1,
           "a second intent on the same id is refused");
     CHECK(g_sent_count == 1, "and the duplicate never reaches the wire");
 

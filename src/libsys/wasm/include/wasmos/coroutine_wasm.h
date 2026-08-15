@@ -251,13 +251,18 @@ wasmos_future_t* wasmos_future_all(wasmos_wasm_runtime_t* runtime, wasmos_future
  * arguments and `count` is derived from them, so `continuations` (and `values`)
  * must have at least that many elements. */
 #define WASMOS_FUTURE_RACE(runtime, group, continuations, ...)                                     \
-    wasmos_future_race((runtime), (group), (wasmos_future_t*[]){__VA_ARGS__},                      \
+    wasmos_future_race((runtime),                                                                  \
+                       (group),                                                                    \
+                       (wasmos_future_t*[]){__VA_ARGS__},                                          \
                        sizeof((wasmos_future_t*[]){__VA_ARGS__}) / sizeof(wasmos_future_t*),       \
                        (continuations))
 #define WASMOS_FUTURE_ALL(runtime, group, values, continuations, ...)                              \
-    wasmos_future_all((runtime), (group), (wasmos_future_t*[]){__VA_ARGS__},                       \
+    wasmos_future_all((runtime),                                                                   \
+                      (group),                                                                     \
+                      (wasmos_future_t*[]){__VA_ARGS__},                                           \
                       sizeof((wasmos_future_t*[]){__VA_ARGS__}) / sizeof(wasmos_future_t*),        \
-                      (values), (continuations))
+                      (values),                                                                    \
+                      (continuations))
 
 #ifdef __cplusplus
 }

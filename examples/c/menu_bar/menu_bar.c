@@ -80,15 +80,27 @@ static void update_clock(void) {
     if (g_rtc_endpoint < 0)
         return;
     wasmos_ipc_message_t reply;
-    if (wasmos_ipc_call(g_rtc_endpoint, g_ctx.reply_endpoint, RTC_IPC_READ_REQ, g_ctx.req_id++, 0,
-                        0, 0, 0, &reply) != 0)
+    if (wasmos_ipc_call(g_rtc_endpoint,
+                        g_ctx.reply_endpoint,
+                        RTC_IPC_READ_REQ,
+                        g_ctx.req_id++,
+                        0,
+                        0,
+                        0,
+                        0,
+                        &reply) != 0)
         return;
     if (reply.type != RTC_IPC_READ_RESP)
         return;
     const int32_t a0 = reply.arg0, a1 = reply.arg1;
     char buf[24];
-    format_clock((a1 >> 8) & 0xFFFF, a1 & 0xFF, (a0 >> 24) & 0xFF, (a0 >> 16) & 0xFF,
-                 (a0 >> 8) & 0xFF, a0 & 0xFF, buf);
+    format_clock((a1 >> 8) & 0xFFFF,
+                 a1 & 0xFF,
+                 (a0 >> 24) & 0xFF,
+                 (a0 >> 16) & 0xFF,
+                 (a0 >> 8) & 0xFF,
+                 a0 & 0xFF,
+                 buf);
     ui_menu_bar_set_clock(&g_ctx, g_ctx.root_id, buf);
 }
 
@@ -121,8 +133,18 @@ static void on_window_focus(ui_context_t* ctx, int32_t id, void* user) {
     (void)id;
     int32_t wid = (int32_t)(intptr_t)user;
     int32_t status = 0;
-    ui_send_gfx(ctx->gfx_endpoint, ctx->reply_endpoint, ctx->req_id++, GFX_IPC_FOCUS_WINDOW, wid, 0,
-                0, 0, &status, 0, 0, 0);
+    ui_send_gfx(ctx->gfx_endpoint,
+                ctx->reply_endpoint,
+                ctx->req_id++,
+                GFX_IPC_FOCUS_WINDOW,
+                wid,
+                0,
+                0,
+                0,
+                &status,
+                0,
+                0,
+                0);
 }
 
 /* ---- helpers ---- */
@@ -151,8 +173,18 @@ static int32_t fetch_title(int32_t window_id, char* out, int32_t cap) {
     if (!g_title_ptr || g_title_shmem_id <= 0)
         return 0;
     int32_t status = 0, tlen = 0;
-    ui_send_gfx(g_ctx.gfx_endpoint, g_ctx.reply_endpoint, g_ctx.req_id++, GFX_IPC_GET_WINDOW_TITLE,
-                window_id, g_title_shmem_id, cap - 1, 0, &status, &tlen, 0, 0);
+    ui_send_gfx(g_ctx.gfx_endpoint,
+                g_ctx.reply_endpoint,
+                g_ctx.req_id++,
+                GFX_IPC_GET_WINDOW_TITLE,
+                window_id,
+                g_title_shmem_id,
+                cap - 1,
+                0,
+                &status,
+                &tlen,
+                0,
+                0);
     if (status != WASMOS_ERR_NONE || tlen <= 0)
         return 0;
     wasmos_shmem_refresh(g_title_shmem_id, addr_cast(int32_t, g_title_ptr), tlen + 1);
@@ -172,9 +204,11 @@ static int32_t context_to_name(int32_t context_id, char* out, int32_t cap) {
         uint32_t parent_pid = 0;
         wasmos_proc_stats_t stats;
         memset(&stats, 0, sizeof(stats));
-        const int32_t rc =
-            wasmos_proc_info_stats(i, addr_cast(int32_t, namebuf), (int32_t)sizeof(namebuf),
-                                   addr_cast(int32_t, &parent_pid), addr_cast(int32_t, &stats));
+        const int32_t rc = wasmos_proc_info_stats(i,
+                                                  addr_cast(int32_t, namebuf),
+                                                  (int32_t)sizeof(namebuf),
+                                                  addr_cast(int32_t, &parent_pid),
+                                                  addr_cast(int32_t, &stats));
         if (rc < 0)
             continue;
         /* Kernel writes into WASM linear memory via mm_copy_to_user; sync
@@ -270,8 +304,18 @@ static void refresh_app_list(void) {
 
     for (int32_t idx = 0; idx < 32; ++idx) {
         int32_t status = 0, wid = 0, owner_ep = 0;
-        if (ui_send_gfx(g_ctx.gfx_endpoint, g_ctx.reply_endpoint, g_ctx.req_id++,
-                        GFX_IPC_LIST_WINDOWS, idx, 0, 0, 0, &status, &wid, &owner_ep, 0) != 0)
+        if (ui_send_gfx(g_ctx.gfx_endpoint,
+                        g_ctx.reply_endpoint,
+                        g_ctx.req_id++,
+                        GFX_IPC_LIST_WINDOWS,
+                        idx,
+                        0,
+                        0,
+                        0,
+                        &status,
+                        &wid,
+                        &owner_ep,
+                        0) != 0)
             break;
         if (status != WASMOS_ERR_NONE || wid == 0)
             break;

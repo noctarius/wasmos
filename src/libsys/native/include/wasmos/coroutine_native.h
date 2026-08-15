@@ -271,14 +271,19 @@ wasmos_future_t* wasmos_future_all(wasmos_native_coroutine_runtime_t* runtime,
  * arguments and `count` is derived from them, so `continuations` (and `values`)
  * must have at least that many elements. */
 #define WASMOS_FUTURE_RACE(runtime, group, continuations, ...)                                     \
-    wasmos_future_race((runtime), (group), (wasmos_future_t*[]){__VA_ARGS__},                      \
+    wasmos_future_race((runtime),                                                                  \
+                       (group),                                                                    \
+                       (wasmos_future_t*[]){__VA_ARGS__},                                          \
                        sizeof((wasmos_future_t*[]){__VA_ARGS__}) / sizeof(wasmos_future_t*),       \
                        (continuations))
 
 #define WASMOS_FUTURE_ALL(runtime, group, values, continuations, ...)                              \
-    wasmos_future_all((runtime), (group), (wasmos_future_t*[]){__VA_ARGS__},                       \
+    wasmos_future_all((runtime),                                                                   \
+                      (group),                                                                     \
+                      (wasmos_future_t*[]){__VA_ARGS__},                                           \
                       sizeof((wasmos_future_t*[]){__VA_ARGS__}) / sizeof(wasmos_future_t*),        \
-                      (values), (continuations))
+                      (values),                                                                    \
+                      (continuations))
 
 /* Settle the promise's future READY with `value`, waking its suspended waiters
  * and queueing its continuations on the runtime (callbacks run later, from

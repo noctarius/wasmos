@@ -298,8 +298,9 @@ static int setup_queue(void) {
         return -1;
     }
     uint8_t* ring = ptr_cast(uint8_t, (uint32_t)off);
-    if (vring_layout(&g_rq, ring, ring_phys, (uint64_t)pages * 0x1000u, qsize,
-                     VIRTIO_PCI_VRING_ALIGN) != 0) {
+    if (vring_layout(
+            &g_rq, ring, ring_phys, (uint64_t)pages * 0x1000u, qsize, VIRTIO_PCI_VRING_ALIGN) !=
+        0) {
         return -1;
     }
     vring_set_notify(&g_rq, virtio_rng_notify, 0);
@@ -333,8 +334,8 @@ static int rng_setup_msix(void) {
         ((uint32_t)g_dev.bus << 8) | ((uint32_t)g_dev.slot << 3) | (uint32_t)g_dev.function;
     wasmos_ipc_message_t reply;
 
-    if (wasmos_ipc_call(g_pci_endpoint, g_endpoint, PCI_IPC_MSI_QUERY, 1, (int32_t)bdf, 0, 0, 0,
-                        &reply) != 0 ||
+    if (wasmos_ipc_call(
+            g_pci_endpoint, g_endpoint, PCI_IPC_MSI_QUERY, 1, (int32_t)bdf, 0, 0, 0, &reply) != 0 ||
         reply.type != PCI_IPC_RESP || reply.arg0 != WASMOS_PCI_MSI_KIND_MSIX || reply.arg1 < 1) {
         return -1;
     }
@@ -344,8 +345,14 @@ static int rng_setup_msix(void) {
         return -1;
     }
     int32_t arg0 = (int32_t)((bdf << 8) | VIRTIO_RNG_MSIX_ENTRY_QUEUE);
-    if (wasmos_ipc_call(g_pci_endpoint, g_endpoint, PCI_IPC_MSI_BIND, 2, arg0,
-                        (int32_t)desc.address_lo, (int32_t)desc.address_hi, (int32_t)desc.data,
+    if (wasmos_ipc_call(g_pci_endpoint,
+                        g_endpoint,
+                        PCI_IPC_MSI_BIND,
+                        2,
+                        arg0,
+                        (int32_t)desc.address_lo,
+                        (int32_t)desc.address_hi,
+                        (int32_t)desc.data,
                         &reply) != 0 ||
         reply.type != PCI_IPC_RESP) {
         (void)wasmos_msi_free((int32_t)desc.vector);
@@ -403,8 +410,10 @@ static int initialize_device(void) {
     status |= VIRTIO_STATUS_DRIVER_OK;
     io_write8(g_dev.io_base + VIRTIO_PCI_DEVICE_STATUS, status);
     g_dev.ready = 1u;
-    (void)printf("[virtio-rng] vq ready qsize=%d ring_phys=0x%08X pool_phys=0x%08X\n", qsize,
-                 (unsigned)(g_rq.region_phys & 0xFFFFFFFFu), (unsigned)(g_pool_phys & 0xFFFFFFFFu));
+    (void)printf("[virtio-rng] vq ready qsize=%d ring_phys=0x%08X pool_phys=0x%08X\n",
+                 qsize,
+                 (unsigned)(g_rq.region_phys & 0xFFFFFFFFu),
+                 (unsigned)(g_pool_phys & 0xFFFFFFFFu));
     return 0;
 }
 
@@ -565,11 +574,14 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
     g_dev.ready = 0u;
     if (probe_virtio_rng_from_startup_args() == 0 || probe_virtio_rng() == 0) {
         if (initialize_device() != 0) {
-            (void)printf("[virtio-rng] init failed io=0x%04X dev=0x%04X\n", (unsigned)g_dev.io_base,
+            (void)printf("[virtio-rng] init failed io=0x%04X dev=0x%04X\n",
+                         (unsigned)g_dev.io_base,
                          (unsigned)g_dev.device_id);
         } else {
             (void)printf("[virtio-rng] probe ok bus=%u slot=%u dev=0x%04X io=0x%04X\n",
-                         (unsigned)g_dev.bus, (unsigned)g_dev.slot, (unsigned)g_dev.device_id,
+                         (unsigned)g_dev.bus,
+                         (unsigned)g_dev.slot,
+                         (unsigned)g_dev.device_id,
                          (unsigned)g_dev.io_base);
         }
     } else {

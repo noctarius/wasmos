@@ -67,14 +67,21 @@ static int32_t connect_resume(void* user, uintptr_t* out_value) {
             return connect_fail(c, out_value);
         }
         wasmos_net__fill_desc(&desc, s->tx_bid, s->tx_grant, s->rx_bid, s->rx_grant, region, 0u, 0);
-        if (wasmos_xfer_buffer_write(c->desc_bid, addr_cast(int32_t, &desc), (int32_t)sizeof(desc),
-                                     0) != 0) {
+        if (wasmos_xfer_buffer_write(
+                c->desc_bid, addr_cast(int32_t, &desc), (int32_t)sizeof(desc), 0) != 0) {
             return connect_fail(c, out_value);
         }
         wasmos_sys_wasm_ipc_future_init(&c->op, NULL, NULL);
-        c->future = wasmos_sys_wasm_ipc_future_send(c->loop, &c->op, c->stack_ep, c->reply_ep,
-                                                    NET_IPC_SOCKET_OPEN, c->desc_bid, c->desc_grant,
-                                                    (int32_t)sizeof(desc), 0, NULL);
+        c->future = wasmos_sys_wasm_ipc_future_send(c->loop,
+                                                    &c->op,
+                                                    c->stack_ep,
+                                                    c->reply_ep,
+                                                    NET_IPC_SOCKET_OPEN,
+                                                    c->desc_bid,
+                                                    c->desc_grant,
+                                                    (int32_t)sizeof(desc),
+                                                    0,
+                                                    NULL);
         if (c->future == 0) {
             return connect_fail(c, out_value);
         }
@@ -93,9 +100,16 @@ static int32_t connect_resume(void* user, uintptr_t* out_value) {
         (void)wasmos_xfer_buffer_release(c->desc_bid);
         c->desc_bid = -1;
         wasmos_sys_wasm_ipc_future_init(&c->op, NULL, NULL);
-        c->future = wasmos_sys_wasm_ipc_future_send(c->loop, &c->op, c->stack_ep, c->reply_ep,
-                                                    NET_IPC_CONNECT, (uint32_t)s->socket_id,
-                                                    (int32_t)c->port, (int32_t)c->addr, 0, NULL);
+        c->future = wasmos_sys_wasm_ipc_future_send(c->loop,
+                                                    &c->op,
+                                                    c->stack_ep,
+                                                    c->reply_ep,
+                                                    NET_IPC_CONNECT,
+                                                    (uint32_t)s->socket_id,
+                                                    (int32_t)c->port,
+                                                    (int32_t)c->addr,
+                                                    0,
+                                                    NULL);
         if (c->future == 0) {
             return connect_fail(c, out_value);
         }

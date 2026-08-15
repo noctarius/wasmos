@@ -15,13 +15,26 @@
 static inline void ui_render_scroll_view(ui_context_t* ctx, const ui_component_t* c,
                                          ui_rect_t draw_bounds, ui_rect_t clip, int32_t offset_y) {
     ui_scroll_view_data_t* d = (ui_scroll_view_data_t*)c->component_data;
-    const ui_rect_t inner = {draw_bounds.x + c->padding_px, draw_bounds.y + c->padding_px,
+    const ui_rect_t inner = {draw_bounds.x + c->padding_px,
+                             draw_bounds.y + c->padding_px,
                              draw_bounds.w - (c->padding_px * 2),
                              draw_bounds.h - (c->padding_px * 2)};
-    ui_fill_rect_clip(ctx->mapped_base, ctx->width, ctx->height, inner.x, inner.y, inner.w, inner.h,
-                      0xFF1B2535u, clip);
-    ui_stroke_rect_clip(ctx->mapped_base, ctx->width, ctx->height, draw_bounds, c->border_px,
-                        c->border_color, clip);
+    ui_fill_rect_clip(ctx->mapped_base,
+                      ctx->width,
+                      ctx->height,
+                      inner.x,
+                      inner.y,
+                      inner.w,
+                      inner.h,
+                      0xFF1B2535u,
+                      clip);
+    ui_stroke_rect_clip(ctx->mapped_base,
+                        ctx->width,
+                        ctx->height,
+                        draw_bounds,
+                        c->border_px,
+                        c->border_color,
+                        clip);
     const ui_rect_t child_clip = ui_rect_intersect(clip, inner);
     int32_t child_id = c->first_child_id;
     int32_t off = d ? d->scroll_y : 0;
@@ -35,11 +48,28 @@ static inline void ui_render_scroll_view(ui_context_t* ctx, const ui_component_t
     if (d && d->scroll_max > 0 && inner.h > 8) {
         const int32_t scrollbar_w = 10;
         const int32_t track_x = inner.x + inner.w - scrollbar_w;
-        ui_fill_rect_clip(ctx->mapped_base, ctx->width, ctx->height, track_x - 1, inner.y, 1,
-                          inner.h, 0xFF31475Fu, clip);
-        ui_draw_v_scrollbar(ctx->mapped_base, ctx->width, ctx->height, track_x, inner.y,
-                            scrollbar_w, inner.h, d->scroll_y, d->scroll_max, 0xFF0E1622u,
-                            0xFF8CB6D8u, 0xFFD7ECFFu, clip);
+        ui_fill_rect_clip(ctx->mapped_base,
+                          ctx->width,
+                          ctx->height,
+                          track_x - 1,
+                          inner.y,
+                          1,
+                          inner.h,
+                          0xFF31475Fu,
+                          clip);
+        ui_draw_v_scrollbar(ctx->mapped_base,
+                            ctx->width,
+                            ctx->height,
+                            track_x,
+                            inner.y,
+                            scrollbar_w,
+                            inner.h,
+                            d->scroll_y,
+                            d->scroll_max,
+                            0xFF0E1622u,
+                            0xFF8CB6D8u,
+                            0xFFD7ECFFu,
+                            clip);
     }
 }
 

@@ -1171,7 +1171,7 @@ int main(void) {
     if (wasmos_test_run_all(cases, groups) != 0) {
         return 1;
     }
-    printf("test_ringbuf: %d groups, %ld size cases, %ld checks passed\n", groups, g_cases,
-           g_checks);
+    printf(
+        "test_ringbuf: %d groups, %ld size cases, %ld checks passed\n", groups, g_cases, g_checks);
     return 0;
 }

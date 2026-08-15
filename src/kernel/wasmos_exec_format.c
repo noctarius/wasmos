@@ -167,16 +167,16 @@ int wasmos_exec_broker_plan_validate(const uint8_t* plan_bytes, uint32_t plan_si
         strcmp(plan->runtime_tag, handler->runtime_tag) != 0) {
         return -1;
     }
-    if (exec_plan_string_region(plan_bytes, plan_size, plan->host_path_offset, plan->host_path_len,
-                                &host_path) != 0 ||
+    if (exec_plan_string_region(
+            plan_bytes, plan_size, plan->host_path_offset, plan->host_path_len, &host_path) != 0 ||
         !host_path) {
         return -1;
     }
     if (plan->host_path_len < 4u || memcmp(host_path + plan->host_path_len - 4u, ".wap", 4u) != 0) {
         return -1;
     }
-    if (exec_plan_string_region(plan_bytes, plan_size, plan->host_args_offset, plan->host_args_len,
-                                &host_args) != 0) {
+    if (exec_plan_string_region(
+            plan_bytes, plan_size, plan->host_args_offset, plan->host_args_len, &host_args) != 0) {
         return -1;
     }
     out_plan->host_path = host_path;

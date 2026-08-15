@@ -641,8 +641,8 @@ fat_r_t fat_create_path_entry(fat_create_ctx_t* c, fat_block_t* blk, const fat_m
     if (!c->exact_short) {
         c->checksum = fat_short_name_checksum(c->short_name);
         for (c->i = 0; c->i < c->lfn_count; ++c->i) {
-            fat_fill_lfn_entry(c->entry, c->name, c->name_len, c->lfn_count - c->i, c->lfn_count,
-                               c->checksum);
+            fat_fill_lfn_entry(
+                c->entry, c->name, c->name_len, c->lfn_count - c->i, c->lfn_count, c->checksum);
             c->wr.cont = 0;
             c->wr.dir_lba = c->dir_lba;
             c->wr.entry_index = c->slot_entry + c->i;
@@ -988,8 +988,8 @@ static void fat_readdir_stream(const fat_op_ctx_t* op, int32_t fs_endpoint, cons
         }
         tries = 0;
         for (;;) {
-            int32_t rc = wasmos_ipc_send(op->source, fs_endpoint, FS_IPC_STREAM, op->request_id, a0,
-                                         a1, a2, a3);
+            int32_t rc = wasmos_ipc_send(
+                op->source, fs_endpoint, FS_IPC_STREAM, op->request_id, a0, a1, a2, a3);
             if (rc == 0) {
                 break;
             }

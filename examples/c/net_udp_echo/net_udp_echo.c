@@ -140,8 +140,14 @@ int main(int argc, char** argv) {
     put_u32(descriptor, 40u, RING_HEADER_BYTES + RING_BYTES);
     if (wasmos_xfer_buffer_write(desc_bid, addr_cast(int32_t, descriptor), sizeof(descriptor), 0) !=
             0 ||
-        wasmos_ipc_send(stack_ep, reply_ep, NET_IPC_SOCKET_OPEN, request_id, desc_bid, desc_grant,
-                        sizeof(descriptor), 0) != 0 ||
+        wasmos_ipc_send(stack_ep,
+                        reply_ep,
+                        NET_IPC_SOCKET_OPEN,
+                        request_id,
+                        desc_bid,
+                        desc_grant,
+                        sizeof(descriptor),
+                        0) != 0 ||
         recv_reply(reply_ep, request_id++, &message) != 0 || message.type != NET_IPC_RESP ||
         (int32_t)message.arg0 < 0) {
         puts("[net-udp-echo] open failed");
@@ -171,8 +177,8 @@ int main(int argc, char** argv) {
         record[16u + i] = payload[i];
     }
     uint32_t write = sizeof(record);
-    if (wasmos_xfer_buffer_write(tx_bid, addr_cast(int32_t, record), sizeof(record),
-                                 RING_HEADER_BYTES) != 0 ||
+    if (wasmos_xfer_buffer_write(
+            tx_bid, addr_cast(int32_t, record), sizeof(record), RING_HEADER_BYTES) != 0 ||
         wasmos_xfer_buffer_write(tx_bid, addr_cast(int32_t, &write), sizeof(write), 16) != 0 ||
         wasmos_ipc_send(stack_ep, reply_ep, NET_IPC_TX_NOTIFY, request_id++, socket_id, 0, 0, 0) !=
             0) {
@@ -188,11 +194,15 @@ int main(int argc, char** argv) {
         }
         uint8_t response[sizeof(payload) - 1];
         uint8_t length_bytes[4];
-        if (wasmos_xfer_buffer_read(rx_bid, addr_cast(int32_t, length_bytes), sizeof(length_bytes),
+        if (wasmos_xfer_buffer_read(rx_bid,
+                                    addr_cast(int32_t, length_bytes),
+                                    sizeof(length_bytes),
                                     RING_HEADER_BYTES) != 0 ||
             length_bytes[0] != len + sizeof(net_udp_datagram_record_v1_t) || length_bytes[1] != 0 ||
             length_bytes[2] != 0 || length_bytes[3] != 0 ||
-            wasmos_xfer_buffer_read(rx_bid, addr_cast(int32_t, response), len,
+            wasmos_xfer_buffer_read(rx_bid,
+                                    addr_cast(int32_t, response),
+                                    len,
                                     RING_HEADER_BYTES + 4u +
                                         sizeof(net_udp_datagram_record_v1_t)) != 0) {
             break;

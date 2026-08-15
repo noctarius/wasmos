@@ -142,7 +142,9 @@ int kernel_ring3_spawn_suite(uint32_t init_pid, uint8_t ring3_thread_lifecycle_s
                                                 .fault_nm_pid = ring3_fault_nm_pid,
                                                 .fault_ss_pid = ring3_fault_ss_pid,
                                                 .fault_ac_pid = ring3_fault_ac_pid};
-    if (kernel_ring3_fault_policy_spawn(init_pid, &fault_probes, ring3_fault_churn_rounds,
+    if (kernel_ring3_fault_policy_spawn(init_pid,
+                                        &fault_probes,
+                                        ring3_fault_churn_rounds,
                                         spawn_ring3_fault_churn_probe_process) != 0) {
         return -1;
     }

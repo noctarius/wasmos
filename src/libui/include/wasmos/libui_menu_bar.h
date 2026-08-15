@@ -10,8 +10,15 @@
  * and child pass. */
 static inline void ui_render_menu_bar(ui_context_t* ctx, const ui_component_t* c,
                                       ui_rect_t draw_bounds, ui_rect_t clip, int32_t offset_y) {
-    ui_fill_rect_clip(ctx->mapped_base, ctx->width, ctx->height, draw_bounds.x,
-                      draw_bounds.y + draw_bounds.h - 1, draw_bounds.w, 1, 0xFF304050u, clip);
+    ui_fill_rect_clip(ctx->mapped_base,
+                      ctx->width,
+                      ctx->height,
+                      draw_bounds.x,
+                      draw_bounds.y + draw_bounds.h - 1,
+                      draw_bounds.w,
+                      1,
+                      0xFF304050u,
+                      clip);
     int32_t mi_child_id = c->first_child_id;
     while (mi_child_id > 0) {
         ui_render_component_clip(ctx, mi_child_id, clip, offset_y);

@@ -19,6 +19,7 @@ env:
   # `lint`/`fmt-check` enforce. Bump deliberately alongside any ruff.toml change.
   BLACK_VERSION: "26.5.1"
   RUFF_VERSION: "0.16.1"
+  PYYAML_VERSION: "6.0.2"
 
 jobs:
   format-and-lint:
@@ -76,8 +77,13 @@ jobs:
             | tar -xJ
           echo "$PWD/zig-x86_64-linux-${ZIG_VERSION}" >> "$GITHUB_PATH"
 
+      # PyYAML is what makes the ABI drift gate real: without it every
+      # gen_abi_*.py --check/--verify-source SKIPS instead of comparing, so a
+      # generated file could disagree with its IDL and Quality would still pass.
       - name: Install Python format/lint tools
-        run: pip install "black==${BLACK_VERSION}" "ruff==${RUFF_VERSION}"
+        run: |
+          pip install "black==${BLACK_VERSION}" "ruff==${RUFF_VERSION}" \
+            "PyYAML==${PYYAML_VERSION}"
 
       # asc is needed both at configure time and by the AssemblyScript linter.
       - name: Install AssemblyScript compiler

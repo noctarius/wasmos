@@ -111,6 +111,15 @@ find_tool() {
     local candidates=()
     local override="${!env_name:-}"
     if [[ -n "$override" ]]; then
+        # An explicit override that does not resolve is an error, not a hint.
+        # Falling through to the search list means the caller asked for a
+        # specific tool and silently got a different one -- which is how CI ran
+        # the LLVM toolchain's clang-format while believing it had the pinned
+        # version, and reported the mismatch as if the pin itself were wrong.
+        if [[ ! -x "$override" ]] && ! command -v "$override" >/dev/null 2>&1; then
+            echo "error: ${env_name}='${override}' is not an executable." >&2
+            exit 1
+        fi
         candidates+=("$override")
     fi
     candidates+=("$@")

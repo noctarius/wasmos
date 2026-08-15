@@ -81,26 +81,33 @@ jobs:
       # gen_abi_*.py --check/--verify-source SKIPS instead of comparing, so a
       # generated file could disagree with its IDL and Quality would still pass.
       #
-      # clang-format is pinned SEPARATELY from LLVM_VERSION and installed from
-      # pip. Formatting is not stable across clang-format majors -- 20 bin-packs
-      # a short braced initialiser list where 22 keeps one element per line -- so
-      # tying it to whatever major the compiler happens to need makes the gate
-      # unreproducible for anyone whose local LLVM differs. The pin lives in
-      # .clang-format-version, which scripts/quality.sh also reads and enforces.
       - name: Install Python format/lint tools
         run: |
           pip install "black==${BLACK_VERSION}" "ruff==${RUFF_VERSION}" \
-            "PyYAML==${PYYAML_VERSION}" \
+            "PyYAML==${PYYAML_VERSION}"
+
+      # clang-format is pinned SEPARATELY from LLVM_VERSION, because formatting
+      # is not stable across clang-format majors -- 20 arranges a short braced
+      # list into a column grid where 22 does not -- so tying it to whatever
+      # major the compiler needs makes the gate unreproducible for anyone whose
+      # local LLVM differs. The pin lives in .clang-format-version, which
+      # scripts/quality.sh also reads and enforces.
+      #
+      # Installed into its OWN venv, which is the point of this step. This
+      # runner image already ships a pip clang-format in the tool cache, so a
+      # plain `pip install` writes one version while `import clang_format`
+      # resolves another, and CLANG_FORMAT ends up naming a 20.1.8 package after
+      # 22.1.0 was installed successfully. A venv contains exactly one
+      # clang_format, so resolving through its interpreter cannot pick the wrong
+      # one. The path is the binary the wheel bundles, not a scripts directory
+      # that merely ought to contain it -- and not `command -v`, which finds the
+      # LLVM toolchain copy because its bin is earlier on PATH.
+      - name: Install pinned clang-format
+        run: |
+          python -m venv /tmp/clang-format-venv
+          /tmp/clang-format-venv/bin/pip install --quiet \
             "clang-format==$(tr -d '[:space:]' < .clang-format-version)"
-          # Resolved to the binary the wheel bundles, not to a directory that
-          # merely ought to contain it. `command -v` finds the LLVM toolchain's
-          # copy, because the step above puts /usr/lib/llvm-N/bin first on PATH;
-          # sysconfig's scripts dir is wrong too, because pip may install to the
-          # user site (~/.local/bin) while sysconfig names the system dir -- on
-          # this runner that dir already held an older clang-format, so the pin
-          # silently resolved to 20.1.8 with 22.1.0 installed elsewhere. The
-          # package's own data/bin path is true wherever pip put it.
-          echo "CLANG_FORMAT=$(python -c 'import clang_format, os; print(os.path.join(os.path.dirname(clang_format.__file__), "data", "bin", "clang-format"))')" >> "$GITHUB_ENV"
+          echo "CLANG_FORMAT=$(/tmp/clang-format-venv/bin/python -c 'import clang_format, os; print(os.path.join(os.path.dirname(clang_format.__file__), "data", "bin", "clang-format"))')" >> "$GITHUB_ENV"
 
       # asc is needed both at configure time and by the AssemblyScript linter.
       - name: Install AssemblyScript compiler

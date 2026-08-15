@@ -986,23 +986,6 @@ returns; `FS_ERR_*`/`PROC_*` ride IPC opcodes), so the migration depends on them
   present/absent flag per field would remove the collision; the same convention
   makes a real class or vendor of 0xFF/0xFFFF inexpressible.
 
-- [ ] [FEATURE][P2] Generate the socket value constants instead of hand-writing
-  them in a C-only header. `abi/` has IDLs for opcodes, errors and hostcalls, and
-  emits all three into five languages; there is no IDL for plain value constants,
-  so `NET_SOCKET_AF_INET` / `_AF_PACKET` / `_STREAM` / `_DGRAM` / `_RAW`, the
-  `NET_SOCKET_OPEN_FLAG_*` bits and `NET_PACKET_FRAME_MAX` live as a hand-written
-  enum in `src/drivers/include/wasmos_driver_abi.h`.
-
-  Only C can include that header. A Rust, Go, Zig or AssemblyScript app has to
-  hard-code `2` and `1` to open a socket -- exactly the ambiguity the packed error
-  codes and the opcode table were generated to remove. The opcode side of the same
-  API is already generated, so an app can name `NET_IPC_SOCKET_OPEN` but not the
-  family it must pass to it.
-
-  Work: an `abi/constants.yaml` (or a `constants:` section in `opcodes.yaml`,
-  which already has the per-language emitters) covering at least the socket
-  family/type/flag values and the frame ceiling, then delete the hand-written
-  enum. Verify by opening a socket from a non-C example.
 ## Filesystems and Storage
 - [ ] [BUG][P0] Fix `test_exec_fs_write_smoke`, the last failing test in the QEMU
   integration suite (run 31081191205, job 92550164406 — everything else in that

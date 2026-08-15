@@ -1,0 +1,108 @@
+# Value constants of the WASMOS ABI.
+#
+# This IDL owns the plain VALUES a peer must pass or interpret: socket families
+# and types, flag bits, structure versions, size ceilings. It is the third axis
+# of the ABI alongside abi/opcodes.yaml (the positive `type` field of a message)
+# and abi/errors.yaml (the negative packed status codes).
+#
+# It exists because those two were generated for every language while the values
+# they are used with were not. An app could name NET_IPC_SOCKET_OPEN in Rust, Go,
+# Zig or AssemblyScript, but had to hard-code the `2` and `1` it passes in the
+# open descriptor, because the family and type were a C enum in
+# src/drivers/include/wasmos_driver_abi.h that only C can include.
+#
+# A group becomes one commented block per language. `bits: true` marks a group
+# whose members are OR-able flags rather than alternatives, which is documented
+# rather than enforced. Values are decimal or 0x-hex; the generator emits them in
+# the form given here so a bit constant stays readable as a bit.
+#
+# See docs/architecture/34-abi-idl-and-error-model.md.
+abi_version: 1
+
+groups:
+  - name: net_socket_family
+    doc: |
+      Address family of a socket: which layer it addresses and therefore what an
+      address means. Independent of the socket type below, as in BSD sockets.
+
+      AF_PACKET is the link layer and its payload is a complete ethernet frame,
+      destination MAC first. It is the only family that can carry a protocol
+      below IP -- ARP being the reason it exists -- and it pairs only with RAW.
+      The value matches Linux's AF_PACKET so the number is not a fresh invention
+      a reader has to look up.
+    constants:
+      - { symbol: NET_SOCKET_AF_INET, value: 2, doc: IPv4. }
+      - { symbol: NET_SOCKET_AF_INET6, value: 10, doc: IPv6. }
+      - symbol: NET_SOCKET_AF_PACKET
+        value: 17
+        doc: Link layer; payload is a whole ethernet frame. RAW only.
+
+  - name: net_socket_type
+    doc: |
+      Delivery discipline of a socket. STREAM and DGRAM run over a protocol above
+      IP, so they require an AF_INET/AF_INET6 socket; RAW carries frames the
+      caller frames itself and requires AF_PACKET. net-stack refuses any other
+      pairing of the two axes.
+    constants:
+      - { symbol: NET_SOCKET_STREAM, value: 1, doc: Reliable byte stream (TCP). }
+      - { symbol: NET_SOCKET_DGRAM, value: 2, doc: Datagrams (UDP). }
+      - symbol: NET_SOCKET_RAW
+        value: 3
+        doc: Whole ethernet frames, header included. AF_PACKET only.
+
+  - name: net_socket_open_flags
+    bits: true
+    doc: |
+      net_socket_open_descriptor_v1_t.flags bits.
+    constants:
+      - symbol: NET_SOCKET_OPEN_FLAG_TLS
+        value: 0x1
+        doc: Stream socket is wrapped in TLS (altcp_tls).
+
+  - name: net_socket_limits
+    doc: |
+      Sizes and versions both sides of a socket must agree on. They are ABI, not
+      private choices: a client that sizes a buffer from a different number
+      silently loses data the peer thinks it delivered.
+    constants:
+      - symbol: NET_SOCKET_OPEN_DESCRIPTOR_VERSION
+        value: 1
+        doc: Version of net_socket_open_descriptor_v1_t.
+      - symbol: NET_SOCKET_SNI_MAX
+        value: 256
+        doc: |
+          Capacity of the SNI / certificate-verification hostname in the open
+          descriptor. A DNS name is at most 253 bytes; the extra room leaves
+          space for the NUL mbedtls_ssl_set_hostname needs.
+      - symbol: NET_PACKET_FRAME_MAX
+        value: 2048
+        doc: |
+          Largest ethernet frame carried over a packet socket, in bytes.
+          net-stack refuses a longer frame in either direction, and a client
+          reading into anything smaller sees frames skipped. Generous next to
+          the 1514-byte classic MTU so a jumbo-ish frame is not truncated.
+
+  - name: net_udp_datagram
+    doc: |
+      Framing of one datagram record inside a UDP socket ring: this header,
+      immediately followed by payload_bytes of payload.
+    constants:
+      - { symbol: NET_UDP_DATAGRAM_RECORD_VERSION, value: 1, doc: Record version. }
+      - symbol: NET_UDP_DATAGRAM_FLAG_DESTINATION
+        value: 0x1
+        doc: Record carries explicit destination fields (an unconnected sendto).
+
+  - name: net_ifaddr
+    doc: |
+      Interface address records, as reported by NET_IPC_IFADDR_LIST.
+    constants:
+      - { symbol: NET_IFADDR_RECORD_VERSION, value: 1, doc: Record version. }
+      - symbol: NET_IFADDR_FLAG_LINK_UP
+        value: 0x1
+        doc: The link itself is up (carrier present).
+      - symbol: NET_IFADDR_FLAG_ADMIN_UP
+        value: 0x2
+        doc: The interface is administratively enabled.
+      - symbol: NET_IFADDR_FLAG_DHCP
+        value: 0x4
+        doc: Address is (or is being) assigned by DHCP.

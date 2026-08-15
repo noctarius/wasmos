@@ -17,7 +17,8 @@
 
 #include <stdint.h>
 #include "../../../abi/generated/c/wasmos_opcodes.h" /* generated opcode enums (abi/opcodes.yaml) */
-#include "../../../abi/generated/c/wasmos_status.h"  /* packed error codes (abi/errors.yaml) */
+#include "../../../abi/generated/c/wasmos_constants.h" /* generated value constants (abi/constants.yaml) */
+#include "../../../abi/generated/c/wasmos_status.h" /* packed error codes (abi/errors.yaml) */
 
 /* Kernel console text ring, mapped by whoever asks the native API for
  * console_ring_id(). Sized so the header plus data is exactly one 4 KiB page:
@@ -366,48 +367,11 @@ enum {
  * arg2=descriptor bytes, arg3=0. The descriptor transfers persistent grants
  * for the client-owned TX/RX SPSC rings, while TX/RX_NOTIFY are
  * empty-to-non-empty doorbells. */
-/* Address family and socket type are independent axes, as in BSD sockets.
- *
- * AF_PACKET is the link layer: its payload is a complete ethernet frame,
- * destination MAC first, and it is the only family that can carry a protocol
- * living below IP -- ARP being the reason it exists here. It pairs only with
- * NET_SOCKET_RAW; AF_INET with RAW would be raw IP, which cannot express an
- * ethernet header. The value matches Linux's AF_PACKET so the number is not a
- * fresh invention a reader has to look up. */
-enum {
-    NET_SOCKET_AF_INET = 2,
-    NET_SOCKET_AF_INET6 = 10,
-    NET_SOCKET_AF_PACKET = 17,
-    NET_SOCKET_STREAM = 1,
-    NET_SOCKET_DGRAM = 2,
-    NET_SOCKET_RAW = 3
-};
-
-/* Largest ethernet frame carried over a packet socket, in bytes. Both sides of
- * the socket size their staging buffers from this, so it is part of the ABI
- * rather than a private choice: net-stack refuses a longer frame in either
- * direction, and a client reading into anything smaller would see frames
- * skipped. Generous next to the 1514-byte classic MTU so a jumbo-ish frame is
- * not silently truncated. */
-#define NET_PACKET_FRAME_MAX 2048u
-
-#define NET_SOCKET_OPEN_DESCRIPTOR_VERSION 1u
-
-/* net_socket_open_descriptor_v1_t.flags bits. */
-#define NET_SOCKET_OPEN_FLAG_TLS 1u /* stream socket is wrapped in TLS (altcp_tls) */
-
-/* Maximum SNI / certificate-verification hostname carried in the open descriptor
- * (a DNS name is at most 253 bytes; the extra room leaves space for the NUL that
- * mbedtls_ssl_set_hostname needs). Milestone C: for a TLS socket this is the name
- * checked against the server certificate CN/SAN and sent in the SNI extension. */
-#define NET_SOCKET_SNI_MAX 256u
-
 /* Datagram ring records carry endpoint metadata as well as payload. A client
  * writes destination fields for an unconnected sendto; RX records contain the
  * source fields supplied by lwIP. Connected sockets may leave destination at
- * zero and use their connected peer. */
-#define NET_UDP_DATAGRAM_RECORD_VERSION 1u
-#define NET_UDP_DATAGRAM_FLAG_DESTINATION 1u
+ * zero and use their connected peer.  The record version and flag bits are
+ * generated; see abi/constants.yaml. */
 
 /* Header of one datagram record inside a UDP socket ring, immediately followed
  * by payload_bytes of payload. The ring's own 4-byte length prefix (see
@@ -461,8 +425,8 @@ typedef struct __attribute__((packed)) {
 /* Interface-address record for NET_IPC_IFADDR_ADD/DEL/LIST. ADD carries one
  * record in a borrowed xfer buffer (arg0=buffer_id, arg1=borrow_id,
  * arg2=bytes); LIST fills an array of these into a client buffer and returns
- * the count in the reply arg0. All IPv4 words are network byte order. */
-#define NET_IFADDR_RECORD_VERSION 1u
+ * the count in the reply arg0. All IPv4 words are network byte order.  The
+ * record version is generated; see abi/constants.yaml. */
 
 typedef struct __attribute__((packed)) {
     uint32_t version;
@@ -473,12 +437,10 @@ typedef struct __attribute__((packed)) {
     uint32_t flags; /* bit0: link up, bit1: administratively up */
 } net_ifaddr_record_v1_t;
 
-/* net_ifaddr_record_v1_t.flags. LINK_UP is the carrier the driver observes;
- * ADMIN_UP is the configured intent. They are independent, so an interface can
- * be administratively up with no cable, and traffic requires both. */
-#define NET_IFADDR_FLAG_LINK_UP 1u
-#define NET_IFADDR_FLAG_ADMIN_UP 2u
-#define NET_IFADDR_FLAG_DHCP 4u /* address is (or is being) assigned by DHCP */
+/* net_ifaddr_record_v1_t.flags are generated (see abi/constants.yaml). LINK_UP
+ * is the carrier the driver observes; ADMIN_UP is the configured intent. They
+ * are independent, so an interface can be administratively up with no cable,
+ * and traffic requires both. */
 
 /* Free-running per-interface counters a network driver reports. All wrap at
  * 2^32 and are never reset, so a consumer takes differences between two reads

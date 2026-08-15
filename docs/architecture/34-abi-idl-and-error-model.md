@@ -129,6 +129,27 @@ reference tables (`abi/generated/docs/opcodes.md`). Every consumer — the core
 guarded symbol/value parity against the hand-written header before the swap and
 self-skips now.
 
+### `abi/constants.yaml`
+
+Declares the plain VALUES a peer passes or interprets — socket families and
+types, flag bits, structure versions, size ceilings — grouped, each group with an
+optional `bits: true` marking OR-able flags and a `doc:`.
+`scripts/gen_abi_constants.py` generates one C enum per group
+(`abi/generated/c/wasmos_constants.h`), the per-language constants
+(`abi/generated/{rust,go,zig,assemblyscript}/wasmos_constants.*`), and the
+reference tables (`abi/generated/docs/constants.md`).
+
+This is the third axis, and it exists because the other two were generated for
+every language while the values used WITH them were not: an app could name
+`NET_IPC_SOCKET_OPEN` in Rust, Go, Zig or AssemblyScript but had to hard-code the
+`2` and `1` it puts in the open descriptor, because the family and type were a C
+enum only C could include. A value that crosses a language boundary belongs here;
+a descriptor struct still stays hand-written in the per-service header, since
+layout is not what this IDL expresses.
+
+`--verify-source` guarded symbol/value parity against the hand-written constants
+before the swap and self-skips now, exactly as the opcode generator does.
+
 Opcodes are **endpoint-scoped**, not a global namespace: distinct services reuse
 the same value ranges on their own endpoints (`gfx` and `proc_manager` both at
 `0x200`; `font` and `netdrv` both at `0xA00`; `0x223` is both a proc-broker and a

@@ -628,8 +628,9 @@ run_error_code_lint() {
     printf '    %s\n' "${hits[@]}"
 }
 
-# Verify the generated ABI header matches abi/errors.yaml. Skips (does not fail)
-# when PyYAML is unavailable, since the checked-in header drives normal builds.
+# Verify every generated ABI artefact matches its IDL (errors, host calls,
+# opcodes, value constants). Skips (does not fail) when PyYAML is unavailable,
+# since the checked-in generated files drive normal builds.
 run_abi_gen_check() {
     local py="${PYTHON:-python3}"
     command -v "$py" >/dev/null 2>&1 || { echo "abi gen check: no python3, skipping"; return 0; }
@@ -643,6 +644,10 @@ run_abi_gen_check() {
     "$py" "$repo_root/scripts/gen_abi_opcodes.py" --check
     step "Verifying opcodes match wasmos_driver_abi.h..."
     "$py" "$repo_root/scripts/gen_abi_opcodes.py" --verify-source
+    step "Checking generated constant ABI is in sync with abi/constants.yaml..."
+    "$py" "$repo_root/scripts/gen_abi_constants.py" --check
+    step "Verifying constants match wasmos_driver_abi.h..."
+    "$py" "$repo_root/scripts/gen_abi_constants.py" --verify-source
 }
 
 case "$mode" in

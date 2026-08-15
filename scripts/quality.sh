@@ -72,6 +72,39 @@ step() {
     printf '==> %s\n' "$*"
 }
 
+# Refuse a clang-format whose major version is not the pinned one.
+#
+# clang-format is not stable across major versions, and the disagreements are
+# silent: 20 bin-packs a short braced initialiser list where 22 keeps one
+# element per line. A developer formatting with a different major than CI
+# therefore produces a tree that passes locally and fails the Quality gate with
+# a diff nobody can reproduce -- which is exactly how it happened. The pin lives
+# in .clang-format-version so this script and the workflow read one value.
+require_clang_format_version() {
+    local tool="$1"
+    local pinned_file="${repo_root}/.clang-format-version"
+    local pinned actual
+
+    if [[ ! -f "$pinned_file" ]]; then
+        return 0
+    fi
+    pinned="$(tr -d '[:space:]' <"$pinned_file")"
+    actual="$("$tool" --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
+    if [[ -z "$actual" ]]; then
+        echo "error: could not read a version from '$tool'." >&2
+        exit 1
+    fi
+    if [[ "${actual%%.*}" != "${pinned%%.*}" ]]; then
+        echo "error: clang-format ${actual} does not match the pinned major from" >&2
+        echo "       .clang-format-version (${pinned}). Formatting differs between" >&2
+        echo "       majors, so this would disagree with CI." >&2
+        echo "       Install it and point CLANG_FORMAT at it, e.g.:" >&2
+        echo "         pip install 'clang-format==${pinned}'" >&2
+        echo "         CLANG_FORMAT=\"\$(command -v clang-format)\" scripts/quality.sh format" >&2
+        exit 1
+    fi
+}
+
 find_tool() {
     local env_name="$1"
     shift
@@ -174,7 +207,16 @@ collect_files() {
                 esac
                 ;;
         esac
-    done < <(git ls-files -z)
+    # Tracked files AND untracked-but-not-ignored ones. The second list is not
+    # optional: a file that has never been committed is invisible to
+    # `git ls-files`, so the very commit that introduces a source file could not
+    # have that file checked locally -- the gate passed, `git add` then made it
+    # tracked, and CI (which checks out a tree where it IS tracked) formatted it
+    # and failed. The two lists are disjoint by construction, so no dedup.
+    done < <(
+        git ls-files -z
+        git ls-files -z --others --exclude-standard
+    )
 }
 
 collect_files
@@ -188,6 +230,7 @@ run_clang_format() {
     clang_format="$(require_tool CLANG_FORMAT \
         "clang-format is required. Set CLANG_FORMAT or install LLVM clang-format." \
         clang-format /opt/homebrew/opt/llvm/bin/clang-format /usr/local/opt/llvm/bin/clang-format)"
+    require_clang_format_version "$clang_format"
 
     if [[ "$check_mode" -eq 1 ]]; then
         step "Checking C/C++ formatting (clang-format)..."

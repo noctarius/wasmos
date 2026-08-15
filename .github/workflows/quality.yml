@@ -80,10 +80,23 @@ jobs:
       # PyYAML is what makes the ABI drift gate real: without it every
       # gen_abi_*.py --check/--verify-source SKIPS instead of comparing, so a
       # generated file could disagree with its IDL and Quality would still pass.
+      #
+      # clang-format is pinned SEPARATELY from LLVM_VERSION and installed from
+      # pip. Formatting is not stable across clang-format majors -- 20 bin-packs
+      # a short braced initialiser list where 22 keeps one element per line -- so
+      # tying it to whatever major the compiler happens to need makes the gate
+      # unreproducible for anyone whose local LLVM differs. The pin lives in
+      # .clang-format-version, which scripts/quality.sh also reads and enforces.
       - name: Install Python format/lint tools
         run: |
           pip install "black==${BLACK_VERSION}" "ruff==${RUFF_VERSION}" \
-            "PyYAML==${PYYAML_VERSION}"
+            "PyYAML==${PYYAML_VERSION}" \
+            "clang-format==$(tr -d '[:space:]' < .clang-format-version)"
+          # Resolved through sysconfig rather than `command -v`: the LLVM step
+          # above puts /usr/lib/llvm-N/bin on PATH ahead of the pip scripts dir,
+          # so a PATH lookup would find the toolchain's clang-format instead of
+          # the pinned one.
+          echo "CLANG_FORMAT=$(python -c 'import os, sysconfig; print(os.path.join(sysconfig.get_path("scripts"), "clang-format"))')" >> "$GITHUB_ENV"
 
       # asc is needed both at configure time and by the AssemblyScript linter.
       - name: Install AssemblyScript compiler
@@ -93,7 +106,7 @@ jobs:
 
       - name: Tool versions
         run: |
-          clang-format --version; clang-tidy --version | head -1
+          "${CLANG_FORMAT}" --version; clang-tidy --version | head -1
           zig version; go version; rustc --version; node --version
           black --version; ruff --version; asc --version || true
 

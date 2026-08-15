@@ -1423,16 +1423,28 @@ Source: `architecture/25-diagnostics-status.md`,
   deadline. `timer_ticks()` is frozen and nothing calls `sched_timeout_check`,
   so `WASMOS_TIMEOUT` arrives via the spurious-wake path instead.
 
-- [ ] [TEST][P2] Require cross-CPU hops in `run-qemu-sched-stress-test`, or state
-  that it does not. The gate exists to exercise cross-CPU work stealing, but its
-  pass condition is only "every worker finished with no orphans": the summary
-  line reports `cpus=` (the popcount of the union of the workers' `cpu_mask`,
-  `smp_stress_report`) and nothing checks it. A `wasm3_smp` run passes with
-  `cpus=1` -- all 2048 hops on one CPU, so that run exercised no cross-CPU path
-  at all -- while `warp_smp` reports `cpus=3`. Asserting `cpus > 1` is the
-  obvious fix and is deliberately not done blind: thread placement is scheduler-
-  and timing-dependent, so measure across configs and repeated boots before
-  turning a green gate red (`src/kernel/kernel_sched_smp_stress_runtime.c:138`).
+- [ ] [TEST][P2] Make `run-qemu-sched-stress-test` actually spread across CPUs, or
+  stop claiming it does. Its pass condition is only "every worker finished with
+  no orphans"; the summary line reports `cpus=`/`mask=` and nothing checks them.
+  Observed over three runs with `online=4` every time: `cpus=3`, then `cpus=2
+  mask=0x9` (CPUs 0 and 3) under `warp_smp`, and `cpus=1` under `wasm3_smp` --
+  that last run forwarded all 2048 tokens on a single CPU and exercised no
+  cross-CPU path at all.
+
+  The cause is structural, not luck. The ring is a strict hand-off: each
+  `ipc_send_from` wakes the next worker, and `sched_wake_thread` enqueues a woken
+  thread on the **waking** CPU's queue (`src/kernel/sched_thread.c:634`), with
+  `WASMOS_SCHED_CALLER_CPU_BIAS` (ON by default, `CMakeLists.txt:848`) also
+  rewriting `last_cpu` to the waker's CPU. A token therefore follows whichever
+  CPU currently holds it, and only work stealing moves it. With
+  `SMP_STRESS_TOKENS` (4) at most equal to the core count, the ring can sit
+  entirely on one CPU while satisfying every assertion.
+
+  So the fix is not just asserting `cpus > 1` -- that would make a green gate red
+  without making it test more. Raising the token count above the core count, or
+  giving workers disjoint affinity, is what would force the migration path;
+  measure across configs and repeated boots first
+  (`src/kernel/kernel_sched_smp_stress_runtime.c:140`).
 
 - [ ] [BUG][P1] `test_virtio_net_notify_e2e` (the `notify rx=` / RX-frame-notify
   case) fails intermittently, roughly 1 run in 5: the guest stays alive and

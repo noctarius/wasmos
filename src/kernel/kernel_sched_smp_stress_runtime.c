@@ -142,11 +142,16 @@ static void smp_stress_report(uint8_t passed) {
     for (uint32_t i = 0; i < SMP_STRESS_WORKERS; ++i) {
         cpus_used |= g_sw[i].cpu_mask;
     }
-    serial_printf("[test] sched smp stress %s hops=%u done=%u/%u cpus=%u\n",
+    /* cpu_mask is set per successful receive, so cpus_used names the CPUs the
+     * ring actually woke on -- the popcount alone cannot distinguish "the BSP
+     * never took a worker" from "one AP never came up", which is why the raw
+     * mask is reported next to it. */
+    serial_printf("[test] sched smp stress %s hops=%u done=%u/%u cpus=%u mask=0x%x online=%u\n",
                   passed ? "summary" : "DIAG",
                   (unsigned)__atomic_load_n(&g_smp_stress_hops, __ATOMIC_RELAXED),
                   (unsigned)__atomic_load_n(&g_smp_stress_done, __ATOMIC_RELAXED),
-                  (unsigned)SMP_STRESS_WORKERS, (unsigned)smp_stress_popcount(cpus_used));
+                  (unsigned)SMP_STRESS_WORKERS, (unsigned)smp_stress_popcount(cpus_used),
+                  (unsigned)cpus_used, (unsigned)g_cpu_count);
     if (!passed) {
         for (uint32_t i = 0; i < SMP_STRESS_WORKERS; ++i) {
             serial_printf("[test] sched smp stress worker %u iters=%u cpus=%u\n", (unsigned)i,

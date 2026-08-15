@@ -1465,18 +1465,19 @@ Source: `architecture/25-diagnostics-status.md`,
 - [ ] [BUG][P1] Chase the intermittent whole-session hang: roughly 2 sessions per
   full CI suite run go silent and never resume. The stall point differs every run
   (`fat` backend registered, `native-call-smoke` start, `using AOT binary`,
-  `[calculator] ready`, and in run 31889615410 the prompt after an `ls` in
-  `/boot`), which points at a timing race rather than a deterministic bug.
+  `[calculator] ready`), which points at a timing race rather than a
+  deterministic bug.
 
   Two parts of the old description were the harness, not the guest, and are gone:
   "killed by the harness" and "the next log line a fresh UEFI boot" were
   `expect_from` calling `force_stop` on a per-command timeout, which killed a VM
   shared by a whole test class; and the "100-120 s" was that timeout
   (`20 s x WASMOS_TEST_TIMEOUT_SCALE=3`, once or twice per command), not a
-  property of the stall. `expect_from` no longer stops the VM, so an occurrence
-  now costs one failed test and the session stays up -- which also means the
-  remaining tests act as a free probe of whether the guest recovers. Read the
-  next run's log with that in mind: the old signature will not reappear.
+  property of the stall. `expect_from` no longer stops the VM, and the first run
+  after that change settled the question the kill used to hide: **the guest does
+  not recover**. The session stayed up for 13 more minutes and answered nothing,
+  so the remaining tests still fail -- 13 of them. The fix makes the signal
+  honest, not the battery green.
 
   Rate was unchanged across a large ABI change (2 stalls / 36 boots before, 2 / 36
   after), and it has only ever been seen in CI -- the full suite is green locally
@@ -1488,14 +1489,37 @@ Source: `architecture/25-diagnostics-status.md`,
   alive and one expected message is missing (an assertion FAIL); here everything
   stops. Both merely present as "timed out waiting for something".
 
-  The best-documented instance is CI run 31889615410, job 95023862160. The console
-  shows `cd /`, `cd boot`, then `ls` printing its full eight-entry listing down to
-  `system/` -- and then no prompt, ever. So the CLI serviced the command and
-  produced all of its output; what is missing is only the prompt that follows.
-  That is a narrower symptom than "the session went silent" and worth checking
-  first: whatever the CLI does between finishing a command's output and writing
-  the next prompt.
+  **Start from `ls` in `/boot`.** Two consecutive CI runs wedged on exactly that
+  command, which is far too specific to keep calling the stall point random:
 
+  - Run 31889615410 (job 95023862160): `cd /`, `cd boot`, `ls` -> the full
+    eight-entry listing down to `system/`, then no prompt.
+  - Run 31891304942 (job 95027874431): the same `ls` in `/boot` **succeeded**
+    (prompt returned, `test_cd_and_ls_apps` passed), and the very next one, from
+    `test_cd_dot_and_dotdot`, wedged identically. So it is not the first
+    traversal, a cold cache, or a mount race.
+
+  In both, the listing is complete before anything goes wrong, and what stops is
+  not just the CLI: the gfx-smoke and calculator chatter that had been
+  interleaving stops in the same instant and never resumes. That makes it a
+  system-wide wedge triggered by a `/boot` directory listing, not a CLI bug --
+  so suspect the path the listing runs through under `fs-manager` -> `fs-fat` ->
+  block/ata, and what it leaves outstanding on the way back.
+
+  Not yet known, and worth establishing before theorising: whether a `/init`
+  listing (initfs, not the FAT ESP) can trigger it too. The class's `/init` tests
+  sort after the two that wedged, so in both runs they only ever ran against an
+  already-dead guest and have never been observed on a live one.
+
+- [ ] [BUG][P1] `test_shmem_grant_revoke_pair` fails intermittently in the
+  `scheduler-and-ipc` battery: `[test] shmem e2e forged id denied` never arrives,
+  and the tail at that point is still early boot (font loading), so the guest had
+  not reached the probe rather than answering it wrongly. Seen on CI runs
+  31882420302 and 31891304942, passing in between, so it is a flake and not a
+  broken assertion. The early-boot tail makes it a likely instance of the
+  whole-session wedge above rather than a shmem defect -- check that first, and do
+  not start by reading `shmem_grant`/`shmem_revoke`
+  (`tests/test_shmem_grant_revoke_e2e.py`).
 - [ ] [BUG][P2] Make `run-qemu-ring3-threading-test` assert the probe it names.
   The ring-3 thread lifecycle probe never issues a join syscall: instrumenting
   every join for the `ring3-threading` process name gave zero hits, so all three

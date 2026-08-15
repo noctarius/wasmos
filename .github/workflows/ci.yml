@@ -178,15 +178,18 @@ jobs:
         battery: ${{ fromJSON(needs.batteries.outputs.host) }}
     steps:
       - uses: actions/checkout@v4
-      - name: Install host toolchain
+      # Built with cc directly rather than through CMake. A full configure
+      # validates the CROSS toolchain -- it fails on llvm-objcopy before it ever
+      # reaches this tool -- and installing LLVM to compile one self-contained
+      # host program would cost more than the battery saves.
+      #
+      # This holds only because scripts/make_wasmos_app.c includes nothing but
+      # libc. If it ever gains a project header, build it through CMake here and
+      # install the toolchain to match.
+      - name: Build the packer
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends cmake ninja-build python3-pip
-          python3 -m pip install --user kconfiglib
-      - name: Configure
-        run: cmake -S . -B build
-      - name: Build host tools
-        run: cmake --build build --target make_wasmos_app
+          mkdir -p build
+          cc -O2 -o build/make_wasmos_app scripts/make_wasmos_app.c
       - name: Run battery (${{ matrix.battery }})
         run: python3 scripts/run_unittest_suite.py --battery "${{ matrix.battery }}"
 

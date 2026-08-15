@@ -115,7 +115,12 @@ keeping the list sorted. If it fits no battery, add one — `name`, `description
 `needs_qemu`, `files` — and CI picks it up automatically.
 
 Set `needs_qemu: false` only if the test boots nothing. Those run on a fast job
-with no emulation toolchain instead of queueing behind QEMU.
+that installs nothing — no emulation toolchain, and no CMake configure either,
+since a full configure validates the cross toolchain and fails on `llvm-objcopy`
+long before it reaches a host tool. The `host-tools` job compiles what it needs
+with `cc` directly, which works only because `scripts/make_wasmos_app.c` includes
+nothing but libc. A host test whose tool needs the real build does not belong in
+that battery.
 
 Then verify, before running anything expensive:
 

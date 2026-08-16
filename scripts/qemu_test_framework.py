@@ -965,6 +965,25 @@ class QemuSession:
                 motion = f"  (moved to {moved:016x} {describe(moved)})"
             lines.append(f"--- CPU {cpu_id}")
             lines.append(f"[stall-dump] rip={rip:016x} {describe(rip)}{motion}")
+        # Ask the guest itself which threads are blocked and on what. The RIP
+        # sample says whether anything is running; only the thread table says
+        # why not. An NMI is the one request a wedged kernel still answers: it
+        # is deliverable however the guest is stuck, and the handler writes
+        # through the unlocked serial path.
+        try:
+            self.monitor.hmp("nmi")
+            deadline = time.time() + 3.0
+            mark = len(self.buf)
+            while time.time() < deadline:
+                self._pump(0.2)
+                if b"[diag] live=" in self.buf[mark:]:
+                    break
+            guest = self.buf[mark:].decode("utf-8", "replace")
+            for line in guest.splitlines():
+                if "[diag]" in line or "[nmi]" in line:
+                    lines.append(f"[stall-dump] {line.strip()}")
+        except Exception as exc:
+            lines.append(f"[stall-dump] guest thread dump unavailable: {exc}")
         lines.append("=== [stall-dump] end ===")
         text = "\n".join(lines)
         print(text, flush=True)

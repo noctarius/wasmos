@@ -1294,12 +1294,22 @@ Source: `architecture/25-diagnostics-status.md`,
   other's IPC — the nested synchronous `DEVMGR_QUERY_MOUNT_REQ` round-trip in
   `fs_manager.c:608` is a filed instance of exactly that shape.
 
-  Distinguishing those two needs in-guest state: which threads are BLOCKED and
-  on what. The kernel already has an NMI handler that logs and resumes outside a
-  panic (`x86_nmi_handler`, `kpanic.c:116`), and NMI is deliverable from the
-  monitor, so the next step is a lock-free thread-table dump on that path
-  (state, block reason, wait event, per-CPU current thread) plus an `nmi` from
-  the framework right after the RIP dump.
+  **The guest is now asked directly, too.** The stall dump follows the RIP
+  sample with an `nmi` over the monitor, and the kernel's NMI path answers with
+  `diag_dump_threads` (`kpanic.c`): one line per live thread with state, block
+  reason, run-queue membership, the wake-handshake flags, and the saved
+  instruction pointer plus four frames of backtrace. Taking no locks is what
+  makes it answerable at all on a wedged machine. Read it like this:
+
+  - `[diag]!` marks a scheduler anomaly -- a READY thread on no run queue, or a
+    BLOCKED thread with `wake=1` (a waker deferred an enqueue that never ran).
+    Either one is a lost wake.
+  - No `!` anywhere, nothing runnable, and every thread blocked in
+    `ipc_recv_blocking_for` / `ipc_select_wait` is a deadlock between processes;
+    the backtraces then name who is waiting inside which request.
+
+  A healthy guest reports live=32 ready=2 blocked=26 with no anomalies (the two
+  READY threads are the per-CPU idle threads, which are never queued by design).
 
   Not yet known, and worth establishing before theorising: whether a `/init`
   listing (initfs, not the FAT ESP) can trigger it too. The class's `/init` tests

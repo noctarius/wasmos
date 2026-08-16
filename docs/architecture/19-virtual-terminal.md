@@ -41,6 +41,16 @@ and the serial console binding.
 | `vt-1`   | System console. Default *visible* and default *serial-bound* slot.     |
 | `vt-2..N`| Additional text consoles, each owning its own CLI (spawned lazily).    |
 
+A slot's shell is what reads its input queue, so a slot without one answers
+nothing. The vt creates that shell on demand — the first time a slot is made
+visible (`VT_IPC_SWITCH_TTY`) or bound to the serial console
+(`VT_IPC_BIND_SERIAL_REQ`) — and pins it to that slot through
+`PROC_SPAWN_PATH_TTY`, since process-manager's round-robin tty would put the
+shell on a different slot's queue. A slot that already has a registered writer
+keeps it; the vt never spawns a second shell for one slot. The **console slot's**
+shell is the exception: `sysinit.rc` starts it, last, so the first prompt still
+means the system is up rather than appearing mid-boot.
+
 `VT_MAX_TTYS` is 4 today (vt-0..vt-3).
 
 **vt-1 is a mirror of the system log, not an ordinary text slot.** Everything it
@@ -698,7 +708,7 @@ without buffering or editing. Echo still applies if `input_echo = 1`.
 | 5a    | tty-switch grid-blit (`FBTEXT_IPC_BLIT_ATTACH`/`GRID`) + VT-driven framebuffer ownership (`VT_IPC_VIS_NOTIFY`) — the `vt_switch_tty` overlay-wedge fix | Shipped  |
 | 5b    | Default visible vt-1; framebuffer console-ring drain retired (both drivers); klog doorbell | Shipped  |
 | 5c    | Serial-bound selector (`VT_IPC_BIND_SERIAL_REQ`, `tty -s N`) | Shipped  |
-| 5d    | Lazy per-slot CLI spawn | Proposed |
+| 5d    | Lazy per-slot CLI spawn, pinned to its slot (console slot still from `sysinit.rc`) | Shipped  |
 
 Keymap layouts are data files under `system/keymaps/` (`us-qwerty.kmap`,
 `de-nodeadkeys.kmap`), loaded by the VT at init (built-in US fallback).  The VT

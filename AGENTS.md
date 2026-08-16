@@ -68,6 +68,14 @@ This repository uses Codex CLI to assist with development. Follow these conventi
   the constant directly (`return WASMOS_ERR_FS_NOT_FOUND;`) — never re-sign it.
   Bare `-1` stays acceptable only for internal helper returns that never cross a
   boundary; `scripts/quality.sh lint` reports those advisorily.
+- Fix the bare `-1`s you walk past. Whenever you work in a service, driver, app,
+  or the kernel, convert every boundary-crossing bare `-1` you see in the files
+  you touch to a packed code from `abi/errors.yaml`, in the same change — not as
+  a follow-up task. The backlog only shrinks if each visit leaves its files
+  cleaner, and a `-1` left in place is one a later reader will copy. If a
+  conversion needs a new domain or code, add it (`skills/wasmos-add-error`); if
+  it would balloon the change beyond what one review can carry, say so in the
+  commit message and leave a `TODO` naming the exact sites.
 
 ## Code Style
 - Keep C/ASM code minimal and explicit.

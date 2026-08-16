@@ -1690,6 +1690,88 @@ static void vt_blit_init(void) {
     g_blit_ready = 1;
 }
 
+/* Path of the shell the vt spawns for a slot.  One CLI per slot, created the
+ * first time that slot is put to use: a slot with no shell has nothing that
+ * reads its input queue.
+ *
+ * The console slot's shell is NOT spawned here — sysinit starts it, last, after
+ * the rest of the system is up.  The first prompt is what the test framework and
+ * a human both read as "the machine is ready", and spawning it from the vt (which
+ * comes up early) would put that prompt in the middle of boot and invite every
+ * caller to start driving a half-started system. */
+#define VT_CLI_PATH "/boot/system/services/cli.wap"
+
+static int32_t g_proc_ep = -1;
+static uint8_t g_tty_cli_spawned[VT_MAX_TTYS] = {0};
+/* Transfer buffer holding the path of an in-flight spawn request.  PM reads the
+ * path out of it while handling the request, so it is released only once the
+ * reply lands.  One spawn at a time: they are triggered by user-visible events
+ * (a switch, a serial rebind) and never arrive in bursts. */
+static int32_t g_spawn_path_bid = -1;
+/* Request id of that spawn, so the reply that frees the buffer is matched rather
+ * than assumed: any PROC_IPC_RESP would otherwise release a buffer PM may still
+ * be reading. */
+static int32_t g_spawn_req_id = 0;
+#define VT_SPAWN_REQ_BASE 0x5100
+
+/* Ask process-manager for a CLI pinned to `slot`.  Fire-and-forget with DETACH:
+ * the vt must keep serving IPC while the child comes up, and a ready-gated spawn
+ * would park the vt inside the request the new CLI needs answered.  The tty is
+ * pinned rather than left to PM's round-robin, which would put the shell on some
+ * other slot's queue where nothing reads it.  Best-effort: on any failure the
+ * slot simply stays without a shell, and the next switch to it tries again. */
+static void vt_spawn_cli_for_slot(uint32_t slot) {
+    if (slot == 0u || slot >= VT_MAX_TTYS || g_tty_cli_spawned[slot] || g_proc_ep < 0) {
+        return;
+    }
+    if (g_tty_writer_ep[slot] >= 0) {
+        return; /* a shell already owns this slot (sysinit's, or an earlier spawn) */
+    }
+    if (g_spawn_path_bid >= 0) {
+        return; /* one in flight; the next switch to this slot retries */
+    }
+    static const char path[] = VT_CLI_PATH;
+    uint32_t path_len = (uint32_t)sizeof(path) - 1u;
+    int32_t bid = wasmos_xfer_buffer_acquire((int32_t)path_len + 1);
+    if (bid <= 0) {
+        return;
+    }
+    if (wasmos_xfer_buffer_write(bid, addr_cast(int32_t, path), (int32_t)path_len, 0) != 0) {
+        (void)wasmos_xfer_buffer_release(bid);
+        return;
+    }
+    /* Mark before sending: a failed send leaves the slot marked only until the
+     * release below clears it, and a double spawn would give one slot two shells
+     * competing for its input. */
+    g_tty_cli_spawned[slot] = 1;
+    int32_t req_id = VT_SPAWN_REQ_BASE + (int32_t)slot;
+    int32_t rc = wasmos_ipc_send(g_proc_ep,
+                                 g_vt_ep,
+                                 PROC_IPC_SPAWN_PATH,
+                                 req_id,
+                                 (int32_t)(PROC_SPAWN_PATH_FLAG_DETACH | PROC_SPAWN_PATH_TTY(slot)),
+                                 (int32_t)(((uint32_t)bid << 12) | (path_len & 0xFFFu)),
+                                 0,
+                                 0);
+    if (rc != 0) {
+        g_tty_cli_spawned[slot] = 0;
+        (void)wasmos_xfer_buffer_release(bid);
+        return;
+    }
+    g_spawn_path_bid = bid;
+    g_spawn_req_id = req_id;
+}
+
+/* Release the path buffer once PM answers the request that named it. */
+static void vt_spawn_reply_done(int32_t request_id) {
+    if (g_spawn_path_bid < 0 || request_id != g_spawn_req_id) {
+        return;
+    }
+    (void)wasmos_xfer_buffer_release(g_spawn_path_bid);
+    g_spawn_path_bid = -1;
+    g_spawn_req_id = 0;
+}
+
 /* Service entry point.  Registers "vt", looks up "fb"/"kbd"/"fs.vfs", allocates
  * the per-slot cell grids (falling back to the default geometry if the queried
  * one does not fit), loads the keymap, subscribes to keyboard and serial input,
@@ -1766,6 +1848,10 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
     vt_klog_ring_init();
 
     wasmos_sys_notify_ready(proc_endpoint, g_vt_ep);
+
+    /* Kept for the lazy per-slot shells below; the console slot's shell comes
+     * from sysinit. */
+    g_proc_ep = proc_endpoint;
 
     for (;;) {
         int32_t rc = wasmos_ipc_select_one(g_vt_ep);
@@ -1883,6 +1969,11 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
                 g_tty_reader_ep[0] = msg.source;
             }
             int32_t sw = vt_switch_tty((uint32_t)msg.arg0);
+            if (sw == 0 && msg.arg0 > 0) {
+                /* A text slot the user just made visible needs a shell to type
+                 * into; the first switch to it is what creates one. */
+                vt_spawn_cli_for_slot((uint32_t)msg.arg0);
+            }
             if (msg.source >= 0 && msg.request_id != 0) {
                 (void)vt_ipc_reply_retry(msg.source,
                                          (sw == 0) ? VT_IPC_RESP : VT_IPC_ERROR,
@@ -1906,6 +1997,9 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
                 rc = WASMOS_ERR_VT_SERIAL_SLOT_GUI;
             } else {
                 g_serial_tty = (uint32_t)tty_id;
+                /* Same reason as a switch: a serial line bound to a slot with no
+                 * shell has nothing to answer it. */
+                vt_spawn_cli_for_slot(g_serial_tty);
             }
             if (msg.source >= 0 && msg.request_id != 0) {
                 (void)vt_ipc_reply_retry(msg.source,
@@ -1997,6 +2091,16 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
                 msg.source, VT_IPC_RESP, msg.request_id, (int32_t)mode, tty_index);
             break;
         }
+
+        case PROC_IPC_RESP:
+            /* Reply to the vt's own spawn request. */
+            vt_spawn_reply_done(msg.request_id);
+            break;
+
+        case PROC_IPC_ERROR:
+            vt_spawn_reply_done(msg.request_id);
+            printf("[vt] cli spawn failed: %d\n", (int)msg.arg1);
+            break;
 
         case VT_IPC_KLOG_NOTIFY:
             /* The kernel's klog doorbell.  Waking the select above is its entire

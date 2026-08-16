@@ -996,8 +996,13 @@ VT I/O-multiplexer phase 5 (remaining; phases 0–4 shipped):
   `serial_console_ring_id`, `serial_console_ring_ptr`), the native driver API's
   `console_ring_id` (an ABI version bump), and the type itself in
   `src/drivers/include/wasmos_driver_abi.h`. The klog ring replaced it.
-- [ ] [FEATURE][P2] Lazy per-slot CLI spawn: have the VT spawn `cli.wap` pinned to a slot on
-  first switch and drop `start cli.wap` from `sysinit.rc`.
+- [ ] [ENHANCEMENT][P3] Move the console slot's shell out of `sysinit.rc` too, so the vt owns
+  every shell. The vt already spawns one per slot on first use; the console
+  slot's is still started by `sysinit.rc`, last, because the first prompt is what
+  the test framework reads as "the system is up". Spawning it from the vt (which
+  comes up early) put that prompt in the middle of boot and made tests drive a
+  half-started system — `test_shmem_grant_revoke_pair` failed that way. Needs the
+  readiness contract to stop keying off the first prompt first.
 
 Other graphics/VT/UI:
 

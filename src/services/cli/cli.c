@@ -2115,12 +2115,13 @@ static void cli_phase_init_step(int32_t proc_endpoint, int32_t home_tty_arg) {
      * visibility (vt-0), and the CLI reads/writes its own slot (vt-1) regardless
      * of which slot is on screen.  Forcing a switch here fights the compositor
      * and can wedge the VT's switch path while the gfx overlay is locked. */
-    if (g_home_tty == 1) {
-        console_write("WAMOS CLI\ncommands: help, kmaps [all], ls, cd <path>, mount, script "
-                      "<file>, source <file>, spawn <cmd>, export VAR=<value>, set VAR=<value>, "
-                      "echo [-n] [-e|-E] [--] [text|${VAR}...], tty <0-3>, tty -s <1-3>, halt, "
-                      "reboot\n");
-    }
+    /* Every shell announces itself, whichever slot it was spawned for: a shell
+     * created for a slot the user just switched or bound to is otherwise
+     * invisible until it happens to be asked something. */
+    console_write("WAMOS CLI\ncommands: help, kmaps [all], ls, cd <path>, mount, script "
+                  "<file>, source <file>, spawn <cmd>, export VAR=<value>, set VAR=<value>, "
+                  "echo [-n] [-e|-E] [--] [text|${VAR}...], tty <0-3>, tty -s <1-3>, halt, "
+                  "reboot\n");
     wasmos_sys_notify_ready(g_proc_endpoint, g_reply_endpoint);
     g_phase = CLI_PHASE_PROMPT;
 }

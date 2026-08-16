@@ -20,10 +20,10 @@ class VtSerialBindTests(unittest.TestCase):
     (VT_IPC_BIND_SERIAL_REQ). Slot 0 belongs to the compositor and cannot be
     reached over a serial line, so binding to it is refused.
 
-    Both assertions are made in one test, in order, because a successful bind is
-    terminal for this session: serial input goes to a slot with no CLI on it, so
-    nothing typed afterwards can be answered. That is the behaviour under test,
-    not a limitation of the harness.
+    Binding to a slot that has no shell is not a dead end: the vt spawns a CLI
+    pinned to that slot on the bind, so the serial line gets a prompt from the
+    new shell. The assertions run in one test, in order, because each one moves
+    the session's state.
     """
 
     @classmethod
@@ -76,18 +76,23 @@ class VtSerialBindTests(unittest.TestCase):
                 f"--- tail ---\n{self.session.tail()}\n"
             )
 
-        # Serial input now lands in vt-2, which has no reader, so this command is
-        # never seen: no echo, no output. A short window is enough — the CLI
-        # answers in well under a second when the input reaches it.
-        mark = self.session.mark()
-        self.session.send("echo unreachable_after_bind")
-        self.assertFalse(
-            self.session.expect_from(mark, b"unreachable_after_bind", timeout_s=8),
-            msg=(
-                "serial input still reached the old slot after rebinding.\n"
+        # vt-2 had no shell, so the bind creates one pinned to it. Its banner is
+        # how a spawn on this path is observable at all.
+        if not self.session.expect_from(mark, b"WAMOS CLI", timeout_s=30):
+            self.fail(
+                "no CLI was spawned for the newly bound slot.\n"
                 f"--- tail ---\n{self.session.tail()}\n"
-            ),
-        )
+            )
+
+        # Serial input now reaches vt-2, and the shell answering it is the new
+        # one: the session stays usable across a rebind.
+        mark = self.session.mark()
+        self.session.send("echo bound_slot_alive")
+        if not self.session.expect_from(mark, b"bound_slot_alive", timeout_s=20):
+            self.fail(
+                "the newly bound slot's CLI did not answer.\n"
+                f"--- tail ---\n{self.session.tail()}\n"
+            )
 
 
 if __name__ == "__main__":

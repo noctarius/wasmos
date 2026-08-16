@@ -1,5 +1,5 @@
 #include "idtable.h"
-#include "serial.h" /* serial_printf_unlocked, for ipc_diag_dump_trace */
+#include "serial.h" /* serial_printf_unlocked, for the diagnostics below */
 #include "ipc.h"
 #include "list.h"
 #include "process.h"
@@ -29,6 +29,14 @@ typedef struct {
     uint32_t tail;
     uint32_t count;
     uint32_t notify_count;
+    /* Sends this endpoint refused because its queue was full, and the last one.
+     * Written under this endpoint's own lock by the refusing send, read by the
+     * diagnostics.  Kept here rather than in a global ring so a busy endpoint
+     * cannot evict a quiet one's record -- and so the write needs no atomics. */
+    uint32_t refused_count;
+    uint32_t last_refused_type;
+    uint32_t last_refused_request_id;
+    uint32_t last_refused_source;
     sched_event_t event;        /* supports N waiters */
     poll_struct_t* poll_struct; /* lazily allocated; notified on send */
 } ipc_endpoint_t;
@@ -336,138 +344,51 @@ int ipc_endpoint_count(uint32_t endpoint, uint32_t* out_count) {
  * validates.  Any context may send to any message endpoint — send is the one
  * operation without an ownership requirement on the destination — so the
  * spoofing defence is entirely on the source side. */
-/* Last-N IPC events, for reading the moments before a wedge.
+/* The messages this endpoint most recently DELIVERED, newest first.
  *
- * The thread dump says who is waiting; it cannot say what they were waiting FOR
- * or whether the message they expect was ever sent. The remaining
- * whole-session stall has every service parked on an empty endpoint, which is
- * consistent both with a request that was never sent and with one that was sent
- * and lost -- and those have nothing in common as bugs. This ring separates
- * them: it records who sent what to whom, and with what result.
+ * No ring is needed for these: ipc_recv_for advances head without clearing the
+ * slot, so queue[] already holds the last IPC_QUEUE_DEPTH messages that passed
+ * through -- per endpoint, which a global trace cannot match. On a machine that
+ * exchanges thousands of messages a second, a shared ring holds only whichever
+ * endpoint is chattiest; here a quiet endpoint keeps its own last words however
+ * long the rest of the system talks over it, which is exactly the situation a
+ * stalled request leaves behind.
  *
- * Bounded and lock-free: a relaxed increment claims a slot, so a concurrent
- * writer can interleave but not corrupt, and a torn entry costs one confusing
- * line in a diagnostic. IPC_TRACE_DEPTH entries is a few hundred bytes and
- * covers the last moments, which is all that is ever wanted -- an unbounded log
- * would change the timing of the thing being traced. */
-#define IPC_TRACE_DEPTH 48
-
-typedef struct {
-    uint32_t seq; /* 0 = never written */
-    uint32_t src_ctx;
-    uint32_t src_ep;
-    uint32_t dst_ep;
-    uint32_t type;
-    uint32_t request_id;
-    int32_t result;
-    uint8_t kind; /* IPC_TRACE_SEND / _RECV */
-} ipc_trace_entry_t;
-
-enum { IPC_TRACE_SEND = 1, IPC_TRACE_RECV = 2 };
-
-static ipc_trace_entry_t g_ipc_trace[IPC_TRACE_DEPTH];
-static uint32_t g_ipc_trace_seq;
-
-/* Failed sends, kept in their own ring.
- *
- * The ring above is evicted in milliseconds -- an idle machine still exchanges
- * thousands of messages a second -- so by the time a stalled test times out and
- * asks, it holds only the chatter that continued after the stall. A send that
- * FAILED cannot be evicted by that chatter here, which matters because a
- * request dropped on a full queue is the leading explanation for a requester
- * waiting forever on an empty endpoint: the sender either did not check, or
- * gave up and left the peer expecting a reply that will never be produced.
- * Sixteen is generous for something that should never happen at all. */
-#define IPC_FAIL_TRACE_DEPTH 16
-static ipc_trace_entry_t g_ipc_fail_trace[IPC_FAIL_TRACE_DEPTH];
-static uint32_t g_ipc_fail_seq;
-
-static void ipc_trace_write(ipc_trace_entry_t* e, uint32_t seq, uint8_t kind, uint32_t src_ctx,
-                            uint32_t src_ep, uint32_t dst_ep, uint32_t type, uint32_t request_id,
-                            int32_t result) {
-    e->src_ctx = src_ctx;
-    e->src_ep = src_ep;
-    e->dst_ep = dst_ep;
-    e->type = type;
-    e->request_id = request_id;
-    e->result = result;
-    e->kind = kind;
-    /* seq last: a reader that sees it knows the rest of the entry is written. */
-    __atomic_store_n(&e->seq, seq, __ATOMIC_RELEASE);
-}
-
-static void ipc_trace_record(uint8_t kind, uint32_t src_ctx, uint32_t src_ep, uint32_t dst_ep,
-                             uint32_t type, uint32_t request_id, int32_t result) {
-    if (result != IPC_OK) {
-        uint32_t fseq = __atomic_add_fetch(&g_ipc_fail_seq, 1u, __ATOMIC_RELAXED);
-        ipc_trace_write(&g_ipc_fail_trace[fseq % IPC_FAIL_TRACE_DEPTH],
-                        fseq,
-                        kind,
-                        src_ctx,
-                        src_ep,
-                        dst_ep,
-                        type,
-                        request_id,
-                        result);
+ * Entries behind the live queue are consumed and may be arbitrarily old; a slot
+ * never written reads as type 0 and is skipped. Takes no lock (NMI path) and
+ * tolerates a torn read. */
+void ipc_diag_dump_endpoint_history(uint32_t endpoint, uint32_t want) {
+    const ipc_endpoint_t* ep = (const ipc_endpoint_t*)idtable_get(&g_endpoint_table, endpoint);
+    if (!ep) {
+        return;
     }
-    uint32_t seq = __atomic_add_fetch(&g_ipc_trace_seq, 1u, __ATOMIC_RELAXED);
-    ipc_trace_write(&g_ipc_trace[seq % IPC_TRACE_DEPTH],
-                    seq,
-                    kind,
-                    src_ctx,
-                    src_ep,
-                    dst_ep,
-                    type,
-                    request_id,
-                    result);
-}
-
-/* Print the ring oldest-first.  Called from the NMI diagnostic path, so it takes
- * no locks and tolerates a torn entry. */
-void ipc_diag_dump_trace(void) {
-    uint32_t failures = __atomic_load_n(&g_ipc_fail_seq, __ATOMIC_ACQUIRE);
-    serial_printf_unlocked("[diag] ipc failed sends: %u\n", (unsigned)failures);
-    for (uint32_t back = IPC_FAIL_TRACE_DEPTH; back >= 1u; --back) {
-        if (back > failures) {
-            continue;
-        }
-        const ipc_trace_entry_t* e =
-            &g_ipc_fail_trace[(failures - back + 1u) % IPC_FAIL_TRACE_DEPTH];
-        if (__atomic_load_n(&e->seq, __ATOMIC_ACQUIRE) == 0u) {
-            continue;
-        }
+    uint32_t refused = __atomic_load_n(&ep->refused_count, __ATOMIC_RELAXED);
+    if (refused != 0u) {
+        /* Marked, because unlike the history below its presence is the finding:
+         * a send this endpoint turned away is a message its sender may have
+         * assumed delivered. */
         serial_printf_unlocked(
-            "[diag]!  FAILED send ctx=%u src_ep=%u dst_ep=%u type=0x%x req=%u rc=%d\n",
-            (unsigned)e->src_ctx,
-            (unsigned)e->src_ep,
-            (unsigned)e->dst_ep,
-            (unsigned)e->type,
-            (unsigned)e->request_id,
-            (int)e->result);
+            "[diag]!    refused %u send(s); last type=0x%x req=%u from ep=%u\n",
+            (unsigned)refused,
+            (unsigned)__atomic_load_n(&ep->last_refused_type, __ATOMIC_RELAXED),
+            (unsigned)__atomic_load_n(&ep->last_refused_request_id, __ATOMIC_RELAXED),
+            (unsigned)__atomic_load_n(&ep->last_refused_source, __ATOMIC_RELAXED));
     }
-    uint32_t newest = __atomic_load_n(&g_ipc_trace_seq, __ATOMIC_ACQUIRE);
-    serial_printf_unlocked("[diag] ipc trace (last %u of %u events)\n",
-                           (unsigned)(newest < IPC_TRACE_DEPTH ? newest : IPC_TRACE_DEPTH),
-                           (unsigned)newest);
-    for (uint32_t back = IPC_TRACE_DEPTH; back >= 1u; --back) {
-        if (back > newest) {
+    uint32_t head = __atomic_load_n(&ep->head, __ATOMIC_RELAXED);
+    for (uint32_t back = 1u; back <= want && back <= IPC_QUEUE_DEPTH; ++back) {
+        const ipc_message_t* m = &ep->queue[(head + IPC_QUEUE_DEPTH - back) % IPC_QUEUE_DEPTH];
+        /* Read atomically: a sender may be writing this slot right now, and a
+         * plain load beside it is a data race regardless of how tolerable the
+         * value would be. */
+        uint32_t type = __atomic_load_n(&m->type, __ATOMIC_RELAXED);
+        if (type == 0u) {
             continue;
         }
-        const ipc_trace_entry_t* e = &g_ipc_trace[(newest - back + 1u) % IPC_TRACE_DEPTH];
-        uint32_t seq = __atomic_load_n(&e->seq, __ATOMIC_ACQUIRE);
-        if (seq == 0u) {
-            continue;
-        }
-        serial_printf_unlocked(
-            "[diag]   #%u %s ctx=%u src_ep=%u dst_ep=%u type=0x%x req=%u rc=%d\n",
-            (unsigned)seq,
-            e->kind == IPC_TRACE_SEND ? "send" : "recv",
-            (unsigned)e->src_ctx,
-            (unsigned)e->src_ep,
-            (unsigned)e->dst_ep,
-            (unsigned)e->type,
-            (unsigned)e->request_id,
-            (int)e->result);
+        serial_printf_unlocked("[diag]     last[-%u] type=0x%x req=%u src_ep=%u\n",
+                               (unsigned)back,
+                               (unsigned)type,
+                               (unsigned)__atomic_load_n(&m->request_id, __ATOMIC_RELAXED),
+                               (unsigned)__atomic_load_n(&m->source, __ATOMIC_RELAXED));
     }
 }
 
@@ -498,16 +419,17 @@ int ipc_send_from(uint32_t sender_context_id, uint32_t endpoint, const ipc_messa
     }
 
     if (ep->count >= IPC_QUEUE_DEPTH) {
+        /* Remember the refusal on the endpoint that refused it, under the lock
+         * already held -- no ring, no atomics, nothing a reader can tear.  A
+         * refused send lands in no queue, so unlike a delivered message it
+         * leaves no other trace, and it is the leading explanation for a
+         * requester waiting forever on an endpoint that is empty by the time
+         * anyone looks. */
+        ep->refused_count++;
+        ep->last_refused_type = message->type;
+        ep->last_refused_request_id = message->request_id;
+        ep->last_refused_source = message->source;
         ksync_spinlock_unlock(&ep->lock);
-        /* A full queue is the failure most likely to strand a requester: the
-         * caller may or may not retry, and the trace is what says which. */
-        ipc_trace_record(IPC_TRACE_SEND,
-                         sender_context_id,
-                         message->source,
-                         endpoint,
-                         message->type,
-                         message->request_id,
-                         IPC_ERR_FULL);
         return IPC_ERR_FULL;
     }
 
@@ -556,13 +478,6 @@ int ipc_recv_for(uint32_t receiver_context_id, uint32_t endpoint, ipc_message_t*
     ep->head = (ep->head + 1u) % IPC_QUEUE_DEPTH;
     ep->count--;
     ksync_spinlock_unlock(&ep->lock);
-    ipc_trace_record(IPC_TRACE_RECV,
-                     receiver_context_id,
-                     out_message->source,
-                     endpoint,
-                     out_message->type,
-                     out_message->request_id,
-                     IPC_OK);
     return IPC_OK;
 }
 

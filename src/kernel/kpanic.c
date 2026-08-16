@@ -341,10 +341,15 @@ void diag_dump_threads(const char* reason) {
                         " ep:%u(q=%u)", (unsigned)watch_ids[w], (unsigned)watch_counts[w]);
                 }
                 serial_printf_unlocked("\n");
+                /* What each watched endpoint last saw: for a service waiting on
+                 * a select set, that is the last traffic it handled before
+                 * everything went quiet. */
+                for (uint32_t w = 0; w < watched; ++w) {
+                    ipc_diag_dump_endpoint_history(watch_ids[w], 2u);
+                }
             }
         }
     }
-    ipc_diag_dump_trace();
     /* A line marked `[diag]!` is a scheduler anomaly one snapshot can establish:
      * a READY thread on no run queue, or a BLOCKED one with an unconsumed wake.
      * `running-unclaimed` is NOT one of those -- it needs a second snapshot to

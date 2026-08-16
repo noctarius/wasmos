@@ -7,6 +7,7 @@
 #include "paging.h"
 #include "ipc.h"
 #include "process.h"
+#include "process_manager_internal.h"
 #include "thread.h"
 #include "arch/x86_64/smp.h"
 #include "arch/x86_64/lapic.h"
@@ -321,8 +322,14 @@ void diag_dump_threads(const char* reason) {
                                           watch_counts,
                                           &watched);
             if (kind == IPC_DIAG_WAIT_ENDPOINT) {
-                serial_printf_unlocked("[diag]   wait=endpoint:%u queued=%u owner_ctx=%u\n",
+                /* Named endpoint = the service's published one, so it is idle
+                 * waiting for work. Unnamed = private (a reply endpoint), so it
+                 * is mid-request waiting for an answer -- which is the half of
+                 * the chain that has actually stalled. */
+                const char* svc = pm_service_name_for_endpoint(wait_id);
+                serial_printf_unlocked("[diag]   wait=endpoint:%u (%s) queued=%u owner_ctx=%u\n",
                                        (unsigned)wait_id,
+                                       svc ? svc : "private",
                                        (unsigned)wait_count,
                                        (unsigned)wait_owner);
             } else if (kind == IPC_DIAG_WAIT_SELECT) {

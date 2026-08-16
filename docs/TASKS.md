@@ -1361,12 +1361,32 @@ Source: `architecture/25-diagnostics-status.md`,
   script-broker, Calculator -- 0 dispatches in a second.
 
   That is a straight chain (cli -> fs-manager -> fs-fat -> ata), not a cycle,
-  and a chain stalls when one link never answers. So the question is now narrow:
-  is a message sitting in a queue whose owner is blocked (a lost wake), or did
-  nobody send (a genuine deadlock)? The dump answers it directly -- each blocked
-  thread now prints `wait=endpoint:N queued=M owner_ctx=C`, or for a select set
-  the watched endpoints and their queue depths. A non-zero `queued` under a
-  blocked owner names both the bug and the endpoint.
+  and a chain stalls when one link never answers.
+
+  **Fourth capture (CI run 31949875433) answers the next question: every queue
+  is empty.** The cli sits in `warp_ipc_select_one` on `endpoint:113 queued=0`,
+  its own; fs-manager on one of its own with nothing queued; fs-fat on a select
+  set whose watched endpoints are all `q=0`. So no message is sitting anywhere
+  waiting to be noticed -- this is not a lost wake at the IPC layer. Something
+  was never sent, or was sent and never delivered.
+
+  The remaining ambiguity is which half of the chain stalled, and it turns on
+  which endpoint a service is parked on: its published one means idle and
+  waiting for work, a private one means mid-request and waiting for a reply.
+  Those looked identical in the dump, so it now names them --
+  `wait=endpoint:19 (fs.vfs) queued=0` versus `wait=endpoint:120 (private)`.
+  Note the two captures so far disagree on which endpoint fs-manager waited on
+  (19 in one, 18 in the other), which is exactly the distinction that matters.
+
+  Where to look once a capture shows fs-manager on a PRIVATE endpoint:
+  `forward_request` (`fs_manager.c:463`) sends to the backend with a bare
+  `wasmos_ipc_send` and then waits in a nested `select_one` on its own reply
+  endpoint. Two hazards live there, and the function's own comments describe the
+  consequences of the second: the send does not retry on a transiently full
+  backend queue (the STREAM relay below it does, and says why), and a reply
+  whose request id does not match is CONSUMED AND DISCARDED -- the same
+  drain-and-discard pattern that cost typed characters in the CLI before it was
+  replaced with a pump.
 
   Still missing after that: who waits for whom. Every backtrace ends at the
   host-call wrapper, and the guest's own stack is not walkable from the kernel,

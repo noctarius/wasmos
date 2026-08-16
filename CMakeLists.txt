@@ -1313,6 +1313,26 @@ function(wasmos_maybe_aot_pack MANIFEST WASM APP)
 endfunction()
 
 set(WASMOS_APP_PACKER $<TARGET_FILE:make_wasmos_app>)
+
+# The initfs payloads are whatever `scripts/initfs.toml` lists, so derive the
+# rule's dependencies from that manifest instead of restating them here.  A
+# hand-written list silently goes stale: framebuffer_pci.wap was embedded in
+# initfs but missing from the list, so editing the framebuffer driver rebuilt the
+# .wap and left the booted image untouched -- a change that appears to do nothing
+# and a test that measures the previous build.  make_initfs.py resolves every
+# `source` against the build dir; the devmgr rules file is produced by this rule's
+# own copy step, so it is excluded here and tracked through its source-tree path.
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${INITFS_TOML})
+file(STRINGS ${INITFS_TOML} _initfs_source_lines REGEX "^[ \t]*source[ \t]*=")
+set(WASMOS_INITFS_PAYLOADS "")
+foreach(_line IN LISTS _initfs_source_lines)
+  string(REGEX REPLACE "^[ \t]*source[ \t]*=[ \t]*\"([^\"]+)\".*$" "\\1" _payload "${_line}")
+  if (NOT _payload STREQUAL "devmgr_rules_init_default.rules")
+    list(APPEND WASMOS_INITFS_PAYLOADS ${BUILD_DIR}/${_payload})
+  endif()
+endforeach()
+list(REMOVE_DUPLICATES WASMOS_INITFS_PAYLOADS)
+
 add_custom_command(
   OUTPUT ${INITFS_IMG} ${INITFS_CONFIG_BIN}
   COMMAND ${CMAKE_COMMAND} -E copy
@@ -1326,27 +1346,7 @@ add_custom_command(
   DEPENDS ${CMAKE_SOURCE_DIR}/scripts/make_initfs.py
           ${INITFS_TOML}
           ${CMAKE_SOURCE_DIR}/scripts/initfs/devmgr/rules/default.rules
-          ${WASM_CHARDEV_CLIENT_APP}
-          ${WASM_INIT_SMOKE_APP}
-          ${WASM_NATIVE_CALL_MIN_APP}
-          ${WASM_NATIVE_CALL_SMOKE_APP}
-          ${WASM_WAMOS_SCRIPT_APP}
-          ${WASM_WAMOS_SCRIPT_BROKER_APP}
-          ${WASM_SHMEM_OWNER_APP}
-          ${WASM_SHMEM_TARGET_APP}
-          ${WASM_NET_SMOKE_APP}
-          ${WASM_NET_UDP_ECHO_APP}
-          ${WASM_NET_TCP_ECHO_APP}
-          ${WASM_NET_TCP_SERVER_APP}
-          ${WASM_ATA_APP}
-          ${WASM_CHARDEV_SERVER_APP}
-          ${WASM_FAT_APP}
-          ${WASM_FS_INIT_APP}
-          ${WASM_FS_MANAGER_APP}
-          ${WASM_DEVICE_MANAGER_APP}
-          ${WASM_NET_STACK_APP}
-          ${WASM_PCI_BUS_APP}
-          ${WASM_ACPI_BUS_APP}
+          ${WASMOS_INITFS_PAYLOADS}
           make_wasmos_app
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
   COMMENT "Building initfs image"

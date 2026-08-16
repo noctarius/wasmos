@@ -36,9 +36,7 @@ jobs:
 
       - name: Install LLVM ${{ env.LLVM_VERSION }}
         run: |
-          curl -fsSL https://apt.llvm.org/llvm.sh -o /tmp/llvm.sh
-          chmod +x /tmp/llvm.sh
-          sudo /tmp/llvm.sh "${LLVM_VERSION}" all
+          .github/scripts/install-llvm.sh "${LLVM_VERSION}"
           echo "/usr/lib/llvm-${LLVM_VERSION}/bin" >> "$GITHUB_PATH"
 
       - name: Fetch clang-tidy plugin headers

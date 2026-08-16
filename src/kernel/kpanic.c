@@ -344,6 +344,7 @@ void diag_dump_threads(const char* reason) {
             }
         }
     }
+    ipc_diag_dump_trace();
     /* A line marked `[diag]!` is a scheduler anomaly one snapshot can establish:
      * a READY thread on no run queue, or a BLOCKED one with an unconsumed wake.
      * `running-unclaimed` is NOT one of those -- it needs a second snapshot to

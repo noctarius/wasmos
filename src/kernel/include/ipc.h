@@ -135,6 +135,13 @@ int ipc_notification_create(uint32_t owner_context_id, uint32_t* out_endpoint);
  * pointer. The workhorse of PM-side authorisation: "who owns the endpoint this
  * request claims as its source?". */
 int ipc_endpoint_owner(uint32_t endpoint, uint32_t* out_owner_context_id);
+/* Print the last IPC events -- who sent what to whom, and the result -- oldest
+ * first.  For the NMI diagnostic path: takes no locks, and a torn entry costs a
+ * confusing line rather than a fault.  It is what distinguishes a request that
+ * was never sent from one that was sent and lost, which the thread dump alone
+ * cannot. */
+void ipc_diag_dump_trace(void);
+
 /* ipc_diag_wait_info's return values: which kind of object a blocked thread's
  * event belongs to. */
 #define IPC_DIAG_WAIT_ENDPOINT 0

@@ -2272,6 +2272,10 @@ static int process_schedule_once_impl(void) {
     }
     g_sched_switch_count++;
     cpu_local()->dispatch_count++;
+    /* Per-thread counterpart of the CPU's counter: it is what a diagnostic can
+     * compare across two snapshots to tell a thread that is executing from one
+     * left RUNNING that no longer runs (diag_dump_threads). */
+    thread->dispatch_count++;
     if (!g_sched_progress_logged && g_sched_switch_count >= SCHED_PROGRESS_MARKER_SWITCHES) {
         g_sched_progress_logged = 1;
         klog_write("[test] sched progress ok\n");
@@ -2284,6 +2288,15 @@ static int process_schedule_once_impl(void) {
     cpu_local()->current_thread = 0;
     thread_set_current(0);
     critical_section_leave();
+
+    /* This CPU has stopped naming the thread, so an enqueue that cpu_sched_enqueue
+     * refused while it was running here can now be performed.  Settling it here
+     * rather than in the result handling below covers every way a dispatch can
+     * end -- a thread that blocked again or exited owes nothing and is skipped
+     * inside.  Before this existed the refusal left only a READY mark, which a
+     * holder past its own check never acted on, and the thread stayed runnable
+     * on no run queue for the rest of the boot. */
+    sched_settle_deferred_enqueue(thread);
 
     if (proc->state == PROCESS_STATE_ZOMBIE || proc->exiting) {
         /* A concurrent kill/exit can mark the owner zombie while this thread

@@ -5,6 +5,10 @@
 #include "kallsyms.h"
 #include "serial.h"
 #include "paging.h"
+#include "ipc.h"
+#include "process.h"
+#include "process_manager_internal.h"
+#include "thread.h"
 #include "arch/x86_64/smp.h"
 #include "arch/x86_64/lapic.h"
 
@@ -31,7 +35,15 @@ typedef struct {
 static panic_cpu_ctx_t g_panic_ctx[WASMOS_MAX_CPUS];
 static volatile uint32_t g_panicking; /* 0 until the first CPU wins the panic  */
 
+/* Names an address, or says why it has no name.  Only kernel-range addresses are
+ * looked up: kallsyms answers with the nearest preceding symbol whatever it is
+ * handed, so a guest RIP would come back wearing the name of whichever kernel
+ * symbol sorts below it -- a wrong answer that reads exactly like a right one. */
 static void panic_print_symbol(uint64_t addr) {
+    if (addr < paging_get_higher_half_base()) {
+        serial_printf_unlocked(" (user/guest)");
+        return;
+    }
     const char* name = 0;
     uint64_t sym_addr = 0;
     if (kpanic_symbolize(addr, &name, &sym_addr) != 0 && name && *name) {
@@ -100,6 +112,259 @@ void kpanic_capture_origin(uint64_t rip, uint64_t rsp, uint64_t rbp, uint64_t rf
     __atomic_store_n(&c->captured, 1u, __ATOMIC_RELEASE);
 }
 
+static const char* diag_thread_state_name(thread_state_t state) {
+    switch (state) {
+    case THREAD_STATE_UNUSED:
+        return "unused";
+    case THREAD_STATE_READY:
+        return "ready";
+    case THREAD_STATE_RUNNING:
+        return "running";
+    case THREAD_STATE_BLOCKED:
+        return "blocked";
+    case THREAD_STATE_ZOMBIE:
+        return "zombie";
+    case THREAD_STATE_NEW:
+        return "new";
+    default:
+        return "?";
+    }
+}
+
+static const char* diag_block_reason_name(thread_block_reason_t reason) {
+    switch (reason) {
+    case THREAD_BLOCK_NONE:
+        return "-";
+    case THREAD_BLOCK_IPC:
+        return "ipc";
+    case THREAD_BLOCK_WAIT_PROCESS:
+        return "wait-proc";
+    case THREAD_BLOCK_WAIT_THREAD:
+        return "join";
+    case THREAD_BLOCK_EVENT:
+        return "event";
+    default:
+        return "?";
+    }
+}
+
+/* Up to `frames` return addresses from a saved frame pointer, on one line.
+ * Shares panic_ptr_ok's conservative screen: a wedged machine is exactly where a
+ * bad frame pointer would turn a diagnostic into a second fault. */
+static void diag_print_backtrace(uint64_t rbp, int frames) {
+    for (int i = 0; i < frames; ++i) {
+        if (!panic_ptr_ok(rbp)) {
+            return;
+        }
+        const uint64_t* frame = ptr_cast(uint64_t, rbp);
+        uint64_t next = frame[0];
+        uint64_t ret = frame[1];
+        serial_printf_unlocked(" [%d] %016llx", i, (unsigned long long)ret);
+        panic_print_symbol(ret);
+        if (next <= rbp) {
+            return;
+        }
+        rbp = next;
+    }
+}
+
+/* One line per live thread: what it is, what state it is in, and the three
+ * facts that separate the ways a system can stop making progress.
+ *
+ *   rq=0 on a READY thread   -- runnable but on no run queue: a wake that
+ *                               promoted the thread and never enqueued it, and
+ *                               nothing will ever pick it up.
+ *   wake=1 on a BLOCKED one  -- a waker deferred the enqueue to the blocking
+ *                               thread's own completion path, which then did
+ *                               not run it.
+ *   blocked with a reason    -- ordinary waiting; a whole system of these and
+ *                               no runnable thread is a deadlock between
+ *                               processes, not a scheduler defect.
+ *
+ * Takes NO locks and loads nothing atomically, deliberately: it runs from the
+ * NMI path on a machine that may be wedged holding any lock, where blocking to
+ * read consistent state would mean printing nothing at all. A torn field is an
+ * acceptable price for a snapshot that always arrives; treat a single
+ * implausible line as a race rather than evidence.
+ *
+ * Everything goes through the UNLOCKED serial writer, for the same reason. */
+void diag_dump_threads(const char* reason) {
+    serial_printf_unlocked("[diag] thread table (%s)\n", reason ? reason : "-");
+    /* Which thread each CPU believes it is running, so a thread that says
+     * RUNNING can be checked against the CPUs rather than believed.  A thread
+     * left RUNNING that no CPU executes is orphaned -- it is on no run queue
+     * either, since an enqueue requires READY, so nothing dispatches it again;
+     * that is the condition process.c's PROCESS_RUN_BLOCKED handler exists to
+     * prevent for legacy blockers, and a boot hang under SMP the last time it
+     * occurred.  Note this field is the last thread the CPU DISPATCHED, which
+     * stays set while the CPU idles, so it narrows the question rather than
+     * answering it. */
+    uint32_t current_tids[WASMOS_MAX_CPUS];
+    uint32_t cpu_count = g_cpu_count > WASMOS_MAX_CPUS ? WASMOS_MAX_CPUS : g_cpu_count;
+    for (uint32_t c = 0; c < cpu_count; ++c) {
+        cpu_local_t* cpu = &g_cpus[c];
+        thread_t* cur = cpu->current_thread;
+        thread_t* idle = cpu->idle_thread;
+        current_tids[c] = cur ? cur->tid : 0u;
+        serial_printf_unlocked(
+            "[diag] cpu=%u cur_tid=%u cur_pid=%u idle_tid=%u in_sched=%u in_ctxsw=%u "
+            "irq_depth=%u preempt=%u dispatches=%u\n",
+            (unsigned)c,
+            (unsigned)current_tids[c],
+            (unsigned)(cpu->current_process ? cpu->current_process->pid : 0u),
+            (unsigned)(idle ? idle->tid : 0u),
+            (unsigned)cpu->in_scheduler,
+            (unsigned)cpu->in_context_switch,
+            (unsigned)cpu->irq_disable_depth,
+            (unsigned)cpu->preempt_disable_count,
+            (unsigned)cpu->dispatch_count);
+    }
+    uint32_t live = 0;
+    uint32_t ready = 0;
+    uint32_t blocked = 0;
+    uint32_t stranded = 0;
+    uint32_t unclaimed = 0;
+    for (uint32_t i = 0; i < THREAD_MAX_COUNT; ++i) {
+        thread_t* t = thread_table_at(i);
+        if (!t || t->tid == 0 || t->state == THREAD_STATE_UNUSED) {
+            continue;
+        }
+        live++;
+        process_t* proc = process_get(t->owner_pid);
+        /* An idle thread is READY and never queued by design: it lives in the
+         * per-CPU fallback path, so counting it as stranded would report the
+         * anomaly on every healthy dump. */
+        uint8_t is_idle = (proc && proc->is_idle) ? 1u : 0u;
+        uint8_t anomaly = 0;
+        if (t->state == THREAD_STATE_READY) {
+            ready++;
+            if (!t->on_rq && !is_idle) {
+                stranded++;
+                anomaly = 1;
+            }
+        } else if (t->state == THREAD_STATE_RUNNING) {
+            uint8_t current_somewhere = 0;
+            for (uint32_t c = 0; c < cpu_count; ++c) {
+                if (current_tids[c] == t->tid) {
+                    current_somewhere = 1;
+                    break;
+                }
+            }
+            if (!current_somewhere) {
+                /* Counted, NOT flagged. A CPU's current_thread is the last one
+                 * it dispatched and the table is read while other CPUs run, so
+                 * a thread genuinely executing elsewhere can appear unclaimed
+                 * for the length of one snapshot -- measured on a healthy guest.
+                 * Whether it is really stuck is a question about two snapshots:
+                 * a thread that is RUNNING in both with its tick count
+                 * unchanged is not executing anywhere. The caller compares. */
+                unclaimed++;
+            }
+        } else if (t->state == THREAD_STATE_BLOCKED) {
+            blocked++;
+            if (t->wake_pending) {
+                anomaly = 1; /* a wake was deferred to a completion path that never ran */
+            }
+        }
+        serial_printf_unlocked(
+            "[diag]%s tid=%u pid=%u %s st=%s rsn=%s rq=%u wake=%u btrans=%u ev=%u cpu=%u "
+            "ticks=%llu disp=%llu\n",
+            anomaly ? "!" : "",
+            (unsigned)t->tid,
+            (unsigned)t->owner_pid,
+            (proc && proc->name) ? proc->name : "?",
+            diag_thread_state_name(t->state),
+            diag_block_reason_name(t->block_reason),
+            (unsigned)t->on_rq,
+            (unsigned)t->wake_pending,
+            (unsigned)t->blocking_transition,
+            (unsigned)(t->wait_event ? 1u : 0u),
+            (unsigned)t->last_cpu,
+            (unsigned long long)t->ticks_total,
+            (unsigned long long)t->dispatch_count);
+        /* Where the thread stopped. ctx is the context the scheduler saved when
+         * it last switched away, so for a BLOCKED thread this is the blocking
+         * call site and the frames above it -- the difference between "26
+         * threads are waiting" and "fs-manager is waiting inside a query it
+         * made to device-manager". It is stale for a RUNNING thread, which is
+         * executing past it on some CPU; the state field says which. */
+        serial_printf_unlocked("[diag]   rip=%016llx", (unsigned long long)t->ctx.rip);
+        panic_print_symbol(t->ctx.rip);
+        if (t->state == THREAD_STATE_BLOCKED) {
+            /* Deep enough to reach the caller, not just the mechanism. Four
+             * frames stop at the host-call wrapper, which is the same
+             * `warp_ipc_select_one` for every waiting guest and says nothing
+             * about which request is outstanding. For a native service the
+             * chain continues into the service's own code, since that runs in
+             * the kernel address space -- which is exactly where the useful
+             * name is. A WASM guest's walk ends on its own when the frame
+             * pointer leaves the higher half. */
+            diag_print_backtrace(t->ctx.rbp, 10);
+        }
+        serial_printf_unlocked("\n");
+        /* What the thread is waiting ON, and whether anything is already there
+         * for it.  A blocked owner whose endpoint holds a queued message is a
+         * lost wake: the send happened and the receiver was never made
+         * runnable. Empty queues everywhere means nobody sent -- a deadlock. */
+        if (t->state == THREAD_STATE_BLOCKED && t->wait_event) {
+            uint32_t wait_id = 0;
+            uint32_t wait_count = 0;
+            uint32_t wait_owner = 0;
+            uint32_t watch_ids[4] = {0};
+            uint32_t watch_counts[4] = {0};
+            uint32_t watched = 0;
+            int kind = ipc_diag_wait_info(t->wait_event,
+                                          &wait_id,
+                                          &wait_count,
+                                          &wait_owner,
+                                          4u,
+                                          watch_ids,
+                                          watch_counts,
+                                          &watched);
+            if (kind == IPC_DIAG_WAIT_ENDPOINT) {
+                /* Named endpoint = the service's published one, so it is idle
+                 * waiting for work. Unnamed = private (a reply endpoint), so it
+                 * is mid-request waiting for an answer -- which is the half of
+                 * the chain that has actually stalled. */
+                const char* svc = pm_service_name_for_endpoint(wait_id);
+                serial_printf_unlocked("[diag]   wait=endpoint:%u (%s) queued=%u owner_ctx=%u\n",
+                                       (unsigned)wait_id,
+                                       svc ? svc : "private",
+                                       (unsigned)wait_count,
+                                       (unsigned)wait_owner);
+            } else if (kind == IPC_DIAG_WAIT_SELECT) {
+                serial_printf_unlocked("[diag]   wait=select:%u owner_ctx=%u watching",
+                                       (unsigned)wait_id,
+                                       (unsigned)wait_owner);
+                for (uint32_t w = 0; w < watched; ++w) {
+                    serial_printf_unlocked(
+                        " ep:%u(q=%u)", (unsigned)watch_ids[w], (unsigned)watch_counts[w]);
+                }
+                serial_printf_unlocked("\n");
+                /* What each watched endpoint last saw: for a service waiting on
+                 * a select set, that is the last traffic it handled before
+                 * everything went quiet. */
+                for (uint32_t w = 0; w < watched; ++w) {
+                    ipc_diag_dump_endpoint_history(watch_ids[w], 2u);
+                }
+            }
+        }
+    }
+    /* A line marked `[diag]!` is a scheduler anomaly one snapshot can establish:
+     * a READY thread on no run queue, or a BLOCKED one with an unconsumed wake.
+     * `running-unclaimed` is NOT one of those -- it needs a second snapshot to
+     * mean anything, which the caller takes. A dump with no `!`, nothing
+     * runnable and every thread in an IPC wait is a deadlock between processes
+     * rather than a lost wake. */
+    serial_printf_unlocked(
+        "[diag] live=%u ready=%u blocked=%u stranded(ready,no-rq)=%u running-unclaimed=%u\n",
+        (unsigned)live,
+        (unsigned)ready,
+        (unsigned)blocked,
+        (unsigned)stranded,
+        (unsigned)unclaimed);
+}
+
 /* NMI vector, with two entirely different behaviours depending on whether a
  * panic is in progress.
  *
@@ -115,10 +380,22 @@ void kpanic_capture_origin(uint64_t rip, uint64_t rsp, uint64_t rbp, uint64_t rf
  * NMI_REG_* constants, and is borrowed for the call. */
 void x86_nmi_handler(uint64_t* regs) {
     if (!__atomic_load_n(&g_panicking, __ATOMIC_ACQUIRE)) {
-        /* Not a panic stop — an NMI the kernel did not initiate. Log and resume. */
+        /* Not a panic stop — an NMI the kernel did not initiate, which is how a
+         * diagnosis is requested from outside: the test framework injects one
+         * over the QEMU monitor when a command stalls. The thread table is what
+         * that asks for, since the wedge it chases leaves every CPU idle and the
+         * question is which threads are waiting and on what.
+         *
+         * Only the first CPU to arrive dumps. QEMU delivers the NMI to every
+         * vCPU, and four interleaved copies of one table are worse than one. */
         serial_printf_unlocked("[nmi] unexpected NMI cpu=%u rip=%016llx\n",
                                (unsigned)cpu_local()->cpu_id,
                                (unsigned long long)regs[NMI_REG_RIP]);
+        static volatile uint32_t nmi_diag_busy;
+        if (__atomic_exchange_n(&nmi_diag_busy, 1u, __ATOMIC_ACQ_REL) == 0u) {
+            diag_dump_threads("unexpected NMI");
+            __atomic_store_n(&nmi_diag_busy, 0u, __ATOMIC_RELEASE);
+        }
         return;
     }
 

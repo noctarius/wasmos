@@ -229,6 +229,9 @@ int pm_service_set(const char* name, uint32_t endpoint, uint32_t owner_context_i
 /* Endpoint bound to `name`, or IPC_ENDPOINT_NONE if the name is unknown. Note
  * the sentinel: 0 is a possible endpoint id, so a zero return is not "absent". */
 uint32_t pm_service_lookup(const char* name);
+/* The registered service name an endpoint serves, or NULL when it is private.
+ * Lock-free for the NMI diagnostic path; see the definition. */
+const char* pm_service_name_for_endpoint(uint32_t endpoint);
 /* Mirror a registration into the g_pm fast-path endpoint fields for the handful
  * of names the PM itself needs ("fs.vfs", "fs", "block", "vt", "fb"). A plain
  * "fs" registration does NOT displace an already-known fs.vfs endpoint, so

@@ -6,6 +6,7 @@
  * buffer without touching the cache. */
 #include "fat_block.h"
 #include "wasmos/api.h"
+#include "wasmos/libsys.h" /* wasmos_sys_ipc_report_discard */
 #include "wasmos_driver_abi.h"
 
 void fat_block_configure(fat_block_t* blk, int32_t block_endpoint, int32_t reply_endpoint) {
@@ -198,6 +199,13 @@ fat_op_ctx_t* fat_block_complete(fat_block_t* blk, int* out_ok) {
     rstatus = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG0);
 
     if (blk->cur_req_id == 0 || rreq != blk->cur_req_id) {
+        /* Consumed and dropped.  On this path that is a block reply nobody will
+         * ever see again, and the operation waiting for it stalls the whole FS
+         * chain behind it -- so it is reported rather than silently returned. */
+        wasmos_ipc_message_t dropped;
+        wasmos_ipc_message_read_last(&dropped);
+        wasmos_sys_ipc_report_discard(
+            "fs-fat/block", blk->reply_endpoint, blk->cur_req_id, &dropped);
         return 0; /* stale/unmatched reply */
     }
     blk->cur_req_id = 0;

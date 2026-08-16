@@ -121,6 +121,22 @@ void sched_set_need_resched(void);
  * so that path has something to enqueue. Never blocks. */
 void sched_wake_thread(struct thread* t);
 
+/* Perform an enqueue that cpu_sched_enqueue deferred while this thread was some
+ * CPU's current_thread.  Called by the dispatcher once it stops naming the
+ * thread, on the CPU that was holding it.  Does nothing when no enqueue is owed,
+ * when another CPU already claimed the debt, or when the thread is no longer
+ * runnable -- so it is safe to call after every dispatch and safe to call twice.
+ *
+ * Pair with cpu_sched_enqueue: exactly one of the two sides links the thread. */
+void sched_settle_deferred_enqueue(struct thread* t);
+
+/* Enqueue anything left owed, called by a CPU that has found nothing to run.
+ * Covers the one ordering settle cannot: a claim published just after the
+ * holding CPU looked for one.  Costs a single load when nothing is owed, which
+ * is every dispatch but a handful.  With it, the machine cannot go idle while a
+ * runnable thread sits on no run queue. */
+void sched_sweep_owed_enqueues(void);
+
 /* Scheduler tripwires, as counters rather than only log lines.  Each tripwire
  * rate-limits its own logging to powers of two, so past the first few hits the
  * log cannot distinguish "fired" from "fired but suppressed"; the counters
@@ -136,6 +152,10 @@ typedef enum {
     SCHED_DEBUG_INIT_ON_QUEUED,
     SCHED_DEBUG_REMOVE_GAVE_UP,
     SCHED_DEBUG_SET_PRIO_QUEUED,
+    /* Enqueues refused because the thread was executing on some CPU.  A normal
+     * outcome, not a defect, so its report is rate-limited and this counter is
+     * the honest total. */
+    SCHED_DEBUG_ENQUEUE_CURRENT,
     SCHED_DEBUG_EVENT_COUNT
 } sched_debug_event_t;
 

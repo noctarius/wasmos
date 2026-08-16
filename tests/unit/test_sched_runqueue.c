@@ -119,6 +119,17 @@ int thread_wake_if_blocked(uint32_t tid) {
     return 0;
 }
 
+/* The scheduler's deferred-enqueue sweep walks the thread table, which this
+ * harness owns rather than links: g_pool IS the table here.  Mirrors the real
+ * contract -- an in-range slot is returned whatever its state, out of range is
+ * NULL -- so the sweep sees exactly the slots a case built. */
+thread_t* thread_table_at(uint32_t index) {
+    if (index >= POOL_MAX) {
+        return 0;
+    }
+    return &g_pool[index];
+}
+
 /* Run every subsequent call as `cpu`. The choice is sticky until the next act_as() or
  * harness_reset() (which returns to CPU 0), which matters because several helpers here
  * -- pick_on in particular -- leave it changed. `cpu` is not bounds-checked and must be
@@ -882,6 +893,141 @@ static void test_enqueue_running_elsewhere_already_ready(void) {
     CHECK(t->state == THREAD_STATE_READY, "stays READY");
     CHECK(t->block_reason == THREAD_BLOCK_NONE, "block reason still cleared");
     CHECK(list_head_empty(&t->sched_node), "not linked");
+}
+
+/* The deferral above is only half a hand-off, and the missing half wedged a
+ * machine.  Marking the thread READY tells the holding CPU nothing it can act
+ * on: by the time the mark lands, that CPU may already have run the check it
+ * would have acted on, and then nobody enqueues the thread at all.  Observed in
+ * CI and reproduced locally -- the ata driver left READY with on_rq 0, every FS
+ * request queued behind it, and the machine idle with runnable work outstanding
+ * (docs/TASKS.md, the whole-session wedge).
+ *
+ * So a refused enqueue leaves a CLAIM, exactly as a wake does: whoever exchanges
+ * it to zero owns the enqueue.  Both orders must produce exactly one enqueue --
+ * the holder releasing after the refusal, and the holder releasing first with
+ * the refusal landing behind it. */
+
+static void test_refused_enqueue_leaves_a_claim(void) {
+    harness_reset();
+    thread_t* t = mk_thread(0, SCHED_PRIO_WASM, THREAD_STATE_RUNNING);
+    g_cpus[2].current_thread = t;
+    act_as(0);
+    cpu_sched_enqueue(&g_cpus[0].sched, t);
+
+    CHECK(list_head_empty(&t->sched_node), "not linked while it runs elsewhere");
+    CHECK(t->enqueue_owed != 0, "an enqueue is recorded as owed");
+    check_invariants("refusal leaves a claim");
+}
+
+/* The holder finishes with the thread and settles the debt: the thread must end
+ * up queued exactly once, and the claim must be consumed so a later settle does
+ * not link it twice. */
+static void test_holder_settles_the_deferred_enqueue(void) {
+    harness_reset();
+    thread_t* t = mk_thread(0, SCHED_PRIO_WASM, THREAD_STATE_RUNNING);
+    g_cpus[2].current_thread = t;
+    act_as(0);
+    cpu_sched_enqueue(&g_cpus[0].sched, t);
+
+    /* What the holder does when its dispatch returns: stop naming the thread,
+     * then settle. Order matters and is the kernel's (process.c clears
+     * current_thread before it handles the run result). */
+    act_as(2);
+    g_cpus[2].current_thread = NULL;
+    sched_settle_deferred_enqueue(t);
+
+    CHECK(t->state == THREAD_STATE_READY, "runnable");
+    CHECK(t->on_rq == 1, "and queued");
+    CHECK(t->enqueue_owed == 0, "the claim is consumed");
+    check_invariants("holder settled");
+
+    /* A second settle must not link it again. */
+    log_reset();
+    sched_settle_deferred_enqueue(t);
+    CHECK(t->on_rq == 1, "still queued exactly once");
+    check_invariants("second settle is a no-op");
+}
+
+/* The ordering the holder's settle cannot cover: the claim is published just
+ * after that holder looked for one, so nobody is left to act on it. A CPU that
+ * finds nothing to run sweeps the debt instead -- which is what makes "the
+ * machine never idles with a runnable thread off every queue" true rather than
+ * merely usual.
+ *
+ * The enqueuing side must NOT link the thread itself in this window: the holder
+ * may still be deciding the thread's final state, and a thread dispatched out of
+ * a queue mid-decision resumes a context nobody finished writing. Written that
+ * way first, it panicked with rip inside g_threads. */
+static void test_sweep_settles_a_claim_nobody_took(void) {
+    harness_reset();
+    thread_t* t = mk_thread(0, SCHED_PRIO_WASM, THREAD_STATE_RUNNING);
+    g_cpus[2].current_thread = t;
+    act_as(0);
+    cpu_sched_enqueue(&g_cpus[0].sched, t);
+    CHECK(t->on_rq == 0, "not linked from the enqueuing CPU");
+    CHECK(t->enqueue_owed != 0, "left owed");
+
+    /* Holder releases without settling -- the interleaving in question. */
+    g_cpus[2].current_thread = NULL;
+
+    act_as(1);
+    sched_sweep_owed_enqueues();
+    CHECK(t->on_rq == 1, "the sweep queued it");
+    CHECK(t->enqueue_owed == 0, "and consumed the claim");
+    check_invariants("swept");
+}
+
+/* The sweep must leave a thread that is executing exactly where it is: the
+ * enqueue it performs goes through the same guard, which re-owes it. */
+static void test_sweep_does_not_link_a_running_thread(void) {
+    harness_reset();
+    thread_t* t = mk_thread(0, SCHED_PRIO_WASM, THREAD_STATE_RUNNING);
+    g_cpus[2].current_thread = t;
+    act_as(0);
+    cpu_sched_enqueue(&g_cpus[0].sched, t);
+
+    act_as(1);
+    log_reset();
+    sched_sweep_owed_enqueues(); /* holder still names it */
+    sched_sweep_owed_enqueues(); /* and again, as the scheduler loop would */
+    CHECK(t->on_rq == 0, "still not linked while it executes");
+    CHECK(t->enqueue_owed != 0, "and the debt is carried forward");
+    /* The sweep must not hand a running thread to cpu_sched_enqueue at all.
+     * Doing so is refused and re-owed, which the sweep then retries on the next
+     * scheduler pass -- a loop that produced 43 copies of the guard's report in
+     * one CI window, from a thread that merely had a long timeslice. */
+    CHECK(!saw("enqueue current"), "and the sweep does not churn against the guard");
+    check_invariants("sweep respects the holder");
+}
+
+/* A claim for a thread that blocked again is consumed and dropped: the wake it
+ * stood for was answered by whatever moved it out of READY. */
+static void test_sweep_drops_a_claim_for_a_blocked_thread(void) {
+    harness_reset();
+    thread_t* t = mk_thread(0, SCHED_PRIO_WASM, THREAD_STATE_RUNNING);
+    g_cpus[2].current_thread = t;
+    act_as(0);
+    cpu_sched_enqueue(&g_cpus[0].sched, t);
+    g_cpus[2].current_thread = NULL;
+    t->state = THREAD_STATE_BLOCKED;
+
+    act_as(1);
+    sched_sweep_owed_enqueues();
+    CHECK(t->on_rq == 0, "a blocked thread is not queued");
+    CHECK(t->enqueue_owed == 0, "and its claim is consumed, not carried");
+    check_invariants("blocked claim dropped");
+}
+
+/* An ordinary enqueue must leave no claim behind, or the holder's next settle
+ * would link an already-queued thread. */
+static void test_ordinary_enqueue_owes_nothing(void) {
+    harness_reset();
+    thread_t* t = mk_thread(0, SCHED_PRIO_WASM, THREAD_STATE_READY);
+    cpu_sched_enqueue(&g_cpus[0].sched, t);
+    CHECK(t->on_rq == 1, "queued");
+    CHECK(t->enqueue_owed == 0, "owes nothing");
+    check_invariants("ordinary enqueue");
 }
 
 /* The reap gate: sched_mark_ready_if_live must never resurrect a dead or
@@ -2424,6 +2570,12 @@ int main(void) {
         {"P5 cs->idle vs cpu_local idle", test_cs_idle_and_cpu_local_idle_must_agree},
         {"P6 remote queue returns local idle", test_pick_on_a_remote_queue_returns_local_idle},
         {"P7 all bands stale converges", test_all_bands_stale_converges_to_idle},
+        {"D1 refused enqueue leaves a claim", test_refused_enqueue_leaves_a_claim},
+        {"D2 holder settles the deferred enqueue", test_holder_settles_the_deferred_enqueue},
+        {"D3 sweep settles an untaken claim", test_sweep_settles_a_claim_nobody_took},
+        {"D5 sweep never links a running thread", test_sweep_does_not_link_a_running_thread},
+        {"D6 sweep drops a blocked thread's claim", test_sweep_drops_a_claim_for_a_blocked_thread},
+        {"D4 ordinary enqueue owes nothing", test_ordinary_enqueue_owes_nothing},
         {"W1 ordinary wake", test_wake_ordinary},
         {"W2 wake during blocking transition",
          test_wake_during_blocking_transition_defers_with_token},

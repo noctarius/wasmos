@@ -206,6 +206,32 @@ int pm_service_set(const char* name, uint32_t endpoint, uint32_t owner_context_i
  * matches.  A hit only means the binding exists, not that the provider is still
  * running: entries are never removed, so a stale endpoint is possible and the
  * caller learns of it from the first send failing IPC_ERR_NOENT. */
+/* Reverse of pm_service_lookup: the registered name an endpoint serves, or NULL
+ * for a private one (a reply endpoint, a select-set's members, anything never
+ * published).  Walks the table WITHOUT a lock because its caller is the NMI
+ * diagnostic path, which must not block on a machine that may be wedged holding
+ * one; the entries are stable once registered, and a torn read costs a wrong
+ * name in a diagnostic rather than anything else.
+ *
+ * The distinction it exists to make: a service blocked on its own published
+ * endpoint is idle and waiting for work, while one blocked on a private
+ * endpoint is mid-request, waiting for a reply that has not come. Those look
+ * identical without the name. */
+const char* pm_service_name_for_endpoint(uint32_t endpoint) {
+    list_iter_t it;
+    if (endpoint == IPC_ENDPOINT_NONE) {
+        return 0;
+    }
+    pm_service_entry_t* entry = (pm_service_entry_t*)list_first(&g_pm.services, &it);
+    while (entry) {
+        if (entry->in_use && entry->endpoint == endpoint) {
+            return entry->name;
+        }
+        entry = (pm_service_entry_t*)list_next(&it);
+    }
+    return 0;
+}
+
 uint32_t pm_service_lookup(const char* name) {
     list_iter_t it;
     pm_service_entry_t* entry = (pm_service_entry_t*)list_first(&g_pm.services, &it);

@@ -1,4 +1,5 @@
 #include "idtable.h"
+#include "serial.h" /* serial_printf_unlocked, for the diagnostics below */
 #include "ipc.h"
 #include "list.h"
 #include "process.h"
@@ -28,6 +29,14 @@ typedef struct {
     uint32_t tail;
     uint32_t count;
     uint32_t notify_count;
+    /* Sends this endpoint refused because its queue was full, and the last one.
+     * Written under this endpoint's own lock by the refusing send, read by the
+     * diagnostics.  Kept here rather than in a global ring so a busy endpoint
+     * cannot evict a quiet one's record -- and so the write needs no atomics. */
+    uint32_t refused_count;
+    uint32_t last_refused_type;
+    uint32_t last_refused_request_id;
+    uint32_t last_refused_source;
     sched_event_t event;        /* supports N waiters */
     poll_struct_t* poll_struct; /* lazily allocated; notified on send */
 } ipc_endpoint_t;
@@ -54,6 +63,83 @@ static ksync_spinlock_t g_select_table_lock;
 
 static idtable_t g_endpoint_table;
 static ksync_spinlock_t g_endpoint_table_lock;
+
+/* Describe the wait a blocked thread is sitting in, from its event alone.
+ *
+ * A thread's wait_event points INTO the object that owns it -- an endpoint's or
+ * a select-set's embedded sched_event_t -- and sched_event_t::type says which,
+ * so the owner is recoverable without walking the id table.  That matters
+ * because the caller is the NMI diagnostic path, which must take no locks.
+ *
+ * Fills out_id with the endpoint or select id and out_count with the endpoint's
+ * queued-message count (0 for a select).  For a select set, up to `watch_max`
+ * watched endpoint ids and their queue counts are written to out_watch_ids /
+ * out_watch_counts and the number written is returned through out_watched.
+ *
+ * Returns IPC_DIAG_WAIT_ENDPOINT, IPC_DIAG_WAIT_SELECT, or -1 when the event is
+ * neither (a join, futex, mutex or timer wait).
+ *
+ * The point of the queue count: a blocked owner whose endpoint holds a message
+ * is a lost wake -- the send happened and the receiver was never made runnable.
+ * An empty queue everywhere means nobody sent, which is a deadlock instead. */
+int ipc_diag_wait_info(const void* event, uint32_t* out_id, uint32_t* out_count,
+                       uint32_t* out_owner, uint32_t watch_max, uint32_t* out_watch_ids,
+                       uint32_t* out_watch_counts, uint32_t* out_watched) {
+    const sched_event_t* ev = (const sched_event_t*)event;
+    if (out_watched) {
+        *out_watched = 0;
+    }
+    if (!ev) {
+        return -1;
+    }
+    if (ev->type == SCHED_EVENT_TYPE_IPC) {
+        const ipc_endpoint_t* ep =
+            (const ipc_endpoint_t*)(const void*)((const char*)ev - offsetof(ipc_endpoint_t, event));
+        if (out_id) {
+            *out_id = ep->header.id;
+        }
+        if (out_count) {
+            *out_count = ep->count;
+        }
+        if (out_owner) {
+            *out_owner = ep->header.owner_context_id;
+        }
+        return IPC_DIAG_WAIT_ENDPOINT;
+    }
+    if (ev->type == SCHED_EVENT_TYPE_SELECT) {
+        const ipc_select_t* sel =
+            (const ipc_select_t*)(const void*)((const char*)ev - offsetof(ipc_select_t, event));
+        if (out_id) {
+            *out_id = sel->header.id;
+        }
+        if (out_count) {
+            *out_count = 0;
+        }
+        if (out_owner) {
+            *out_owner = sel->header.owner_context_id;
+        }
+        uint32_t written = 0;
+        for (uint32_t i = 0; i < sel->ep_count && written < watch_max; ++i) {
+            uint32_t id = sel->ep_ids[i];
+            if (id == IPC_ENDPOINT_NONE) {
+                continue;
+            }
+            const ipc_endpoint_t* ep = (const ipc_endpoint_t*)idtable_get(&g_endpoint_table, id);
+            if (out_watch_ids) {
+                out_watch_ids[written] = id;
+            }
+            if (out_watch_counts) {
+                out_watch_counts[written] = ep ? ep->count : 0u;
+            }
+            written++;
+        }
+        if (out_watched) {
+            *out_watched = written;
+        }
+        return IPC_DIAG_WAIT_SELECT;
+    }
+    return -1;
+}
 
 /*
  * Returns the endpoint with ep->lock held.  The caller must call
@@ -258,6 +344,54 @@ int ipc_endpoint_count(uint32_t endpoint, uint32_t* out_count) {
  * validates.  Any context may send to any message endpoint — send is the one
  * operation without an ownership requirement on the destination — so the
  * spoofing defence is entirely on the source side. */
+/* The messages this endpoint most recently DELIVERED, newest first.
+ *
+ * No ring is needed for these: ipc_recv_for advances head without clearing the
+ * slot, so queue[] already holds the last IPC_QUEUE_DEPTH messages that passed
+ * through -- per endpoint, which a global trace cannot match. On a machine that
+ * exchanges thousands of messages a second, a shared ring holds only whichever
+ * endpoint is chattiest; here a quiet endpoint keeps its own last words however
+ * long the rest of the system talks over it, which is exactly the situation a
+ * stalled request leaves behind.
+ *
+ * Entries behind the live queue are consumed and may be arbitrarily old; a slot
+ * never written reads as type 0 and is skipped. Takes no lock (NMI path) and
+ * tolerates a torn read. */
+void ipc_diag_dump_endpoint_history(uint32_t endpoint, uint32_t want) {
+    const ipc_endpoint_t* ep = (const ipc_endpoint_t*)idtable_get(&g_endpoint_table, endpoint);
+    if (!ep) {
+        return;
+    }
+    uint32_t refused = __atomic_load_n(&ep->refused_count, __ATOMIC_RELAXED);
+    if (refused != 0u) {
+        /* Marked, because unlike the history below its presence is the finding:
+         * a send this endpoint turned away is a message its sender may have
+         * assumed delivered. */
+        serial_printf_unlocked(
+            "[diag]!    refused %u send(s); last type=0x%x req=%u from ep=%u\n",
+            (unsigned)refused,
+            (unsigned)__atomic_load_n(&ep->last_refused_type, __ATOMIC_RELAXED),
+            (unsigned)__atomic_load_n(&ep->last_refused_request_id, __ATOMIC_RELAXED),
+            (unsigned)__atomic_load_n(&ep->last_refused_source, __ATOMIC_RELAXED));
+    }
+    uint32_t head = __atomic_load_n(&ep->head, __ATOMIC_RELAXED);
+    for (uint32_t back = 1u; back <= want && back <= IPC_QUEUE_DEPTH; ++back) {
+        const ipc_message_t* m = &ep->queue[(head + IPC_QUEUE_DEPTH - back) % IPC_QUEUE_DEPTH];
+        /* Read atomically: a sender may be writing this slot right now, and a
+         * plain load beside it is a data race regardless of how tolerable the
+         * value would be. */
+        uint32_t type = __atomic_load_n(&m->type, __ATOMIC_RELAXED);
+        if (type == 0u) {
+            continue;
+        }
+        serial_printf_unlocked("[diag]     last[-%u] type=0x%x req=%u src_ep=%u\n",
+                               (unsigned)back,
+                               (unsigned)type,
+                               (unsigned)__atomic_load_n(&m->request_id, __ATOMIC_RELAXED),
+                               (unsigned)__atomic_load_n(&m->source, __ATOMIC_RELAXED));
+    }
+}
+
 int ipc_send_from(uint32_t sender_context_id, uint32_t endpoint, const ipc_message_t* message) {
     if (!message) {
         return IPC_ERR_INVALID;
@@ -285,6 +419,16 @@ int ipc_send_from(uint32_t sender_context_id, uint32_t endpoint, const ipc_messa
     }
 
     if (ep->count >= IPC_QUEUE_DEPTH) {
+        /* Remember the refusal on the endpoint that refused it, under the lock
+         * already held -- no ring, no atomics, nothing a reader can tear.  A
+         * refused send lands in no queue, so unlike a delivered message it
+         * leaves no other trace, and it is the leading explanation for a
+         * requester waiting forever on an endpoint that is empty by the time
+         * anyone looks. */
+        ep->refused_count++;
+        ep->last_refused_type = message->type;
+        ep->last_refused_request_id = message->request_id;
+        ep->last_refused_source = message->source;
         ksync_spinlock_unlock(&ep->lock);
         return IPC_ERR_FULL;
     }

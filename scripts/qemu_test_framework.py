@@ -3,6 +3,7 @@ import argparse
 import atexit
 import json
 import os
+import re
 import selectors
 import socket
 import struct
@@ -81,11 +82,99 @@ def default_kernel_path(build_dir: str = "build") -> str:
 
 CLI_PROMPT = b"wamos> "
 
+# Guest-state capture on a stalled command. A wedged guest answers nothing, and
+# the serial log then ends mid-sentence with no indication of what stopped --
+# which is the whole difficulty of the intermittent whole-session hang (see
+# docs/TASKS.md). QEMU knows what every vCPU is doing even when the guest does
+# not, so on a timeout the session asks it and symbolises the result against the
+# kernel image. Disabled by setting WASMOS_QEMU_STALL_DUMP=0.
+_STALL_DUMP_ENABLED = os.environ.get("WASMOS_QEMU_STALL_DUMP", "1") != "0"
+# Per session. One dump answers "what is each CPU doing"; repeating it for every
+# later command of a dead session just buries the first one.
+_STALL_DUMP_MAX = int(os.environ.get("WASMOS_QEMU_STALL_DUMP_MAX", "2") or "2")
+
 # Multiplies every expect()/settle() deadline. A CI runner is far slower than a
 # developer's machine -- boots that take 12s locally have taken over 120s there
 # -- and raising each test's literal timeout would slow local runs for a problem
 # they do not have. WASMOS_TEST_TIMEOUT_SCALE lets CI buy patience in one place.
 _TIMEOUT_SCALE = float(os.environ.get("WASMOS_TEST_TIMEOUT_SCALE", "1") or "1")
+
+
+def _split_guest_samples(lines):
+    """The [diag] lines of each guest sample, in order."""
+    blocks = []
+    current = None
+    for line in lines:
+        if "--- guest sample" in line:
+            current = []
+            blocks.append(current)
+        elif current is not None:
+            current.append(line)
+    return blocks
+
+
+def _parse_diag_threads(block):
+    """{tid: {name, state, disp}} from one guest sample's [diag] thread lines."""
+    out = {}
+    for line in block:
+        m = re.search(r"tid=(\d+) pid=\d+ (\S+) st=(\S+).*disp=(\d+)", line)
+        if m:
+            out[m.group(1)] = {
+                "name": m.group(2),
+                "state": m.group(3),
+                "disp": m.group(4),
+            }
+    return out
+
+
+def _parse_rips(regs_text):
+    """{cpu_id: rip} from `info registers -a`."""
+    out = {}
+    cpu_id = None
+    for line in regs_text.splitlines():
+        stripped = line.strip()
+        m = re.match(r"CPU#(\d+)", stripped)
+        if m:
+            cpu_id = m.group(1)
+            continue
+        m = re.match(r"RIP=([0-9a-fA-F]+)", stripped)
+        if m and cpu_id is not None:
+            out[cpu_id] = int(m.group(1), 16)
+    return out
+
+
+# Everything the kernel executes lives in the higher half; anything below it is
+# guest or firmware code, which the kernel image cannot name.
+_KERNEL_VA_BASE = 0xFFFFFFFF80000000
+
+
+def _resolve_kernel_addrs(kernel, addrs):
+    """addr -> "func at file:line", via scripts/decode_kernel_panic.py.
+
+    That module is the project's address resolver: it uses addr2line rather than
+    a symbol table, so it answers with a source location instead of
+    `symbol+offset`, and it already knows how to find llvm-addr2line from the
+    build's own toolchain. Resolving addresses a second way here would be one
+    more copy of a rule to drift.
+
+    Best-effort: anything missing (the module, the tool, the image) yields an
+    empty map and the caller prints raw addresses.
+    """
+    if not addrs or not kernel or not os.path.exists(kernel):
+        return {}
+    try:
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        import decode_kernel_panic as panic
+    except Exception:
+        return {}
+    try:
+        tool = panic.discover_addr2line(os.environ.get("LLVM_ADDR2LINE", ""), kernel)
+        if not tool:
+            return {}
+        hexed = [f"{a:016x}" for a in sorted(set(addrs))]
+        return panic.resolve_addresses(tool, kernel, hexed)
+    except Exception:
+        return {}
 
 
 def default_build_dir(build_dir: str = "build") -> str:
@@ -119,7 +208,9 @@ def default_config(build_dir: str = "build") -> QemuConfig:
     userfs_default = os.path.join(source_dir, "userfs")
     userfs_dir = os.environ.get("WASMOS_USERFS", userfs_default)
     isolate_esp = os.environ.get("WASMOS_QEMU_ISOLATE_ESP", "0") == "1"
-    enable_monitor = os.environ.get("WASMOS_QEMU_MONITOR", "0") == "1"
+    # On by default: the monitor is what makes dump_stall_state possible, and a
+    # stall that produces no diagnosis is the failure mode this is here to end.
+    enable_monitor = os.environ.get("WASMOS_QEMU_MONITOR", "1") != "0"
     monitor_socket = os.environ.get("WASMOS_QEMU_MONITOR_SOCK", "")
     smp_count = int(os.environ.get("WASMOS_QEMU_SMP_COUNT", "1"))
     nic_model = os.environ.get(
@@ -636,6 +727,7 @@ class QemuSession:
         self.echo = echo
         self.force_stop_on_timeout = force_stop_on_timeout
         self.proc: Optional[subprocess.Popen] = None
+        self._stall_dumps = 0
         self.selector: Optional[selectors.BaseSelector] = None
         self.buf = b""
         self._esp_runtime_dir: Optional[str] = None
@@ -831,6 +923,141 @@ class QemuSession:
                     sys.stdout.buffer.flush()
                 self.buf += chunk
 
+    def dump_stall_state(self, reason: str) -> str:
+        """Report what every vCPU is executing, symbolised against the kernel.
+
+        Called when a command times out. A wedged guest produces no further
+        output, so the serial log alone cannot say whether the machine is
+        spinning on a lock, parked in hlt with nobody to wake it, or looping in
+        one driver -- and those have different fixes. QEMU can answer that from
+        outside regardless of the guest's state.
+
+        Best-effort by construction: a missing monitor, addr2line or kernel image
+        each degrade the dump rather than failing the test that asked for it.
+        Rate-limited per session, because every later command of a dead session
+        would otherwise repeat it.
+
+        Addresses are printed in the same shape as a kernel panic dump
+        (`--- CPU n` / `rip=<16 hex>`), so a saved CI log can be piped through
+        `scripts/decode_kernel_panic.py` unchanged.
+        """
+        if not _STALL_DUMP_ENABLED or self.monitor is None:
+            return ""
+        if self._stall_dumps >= _STALL_DUMP_MAX:
+            return ""
+        self._stall_dumps += 1
+        try:
+            cpus = self.monitor.hmp("info cpus")
+            # Two samples: a CPU spinning on a lock moves within one function,
+            # a parked one does not. Telling those apart is most of the answer,
+            # and the second sample costs half a second.
+            regs = self.monitor.hmp("info registers -a")
+            time.sleep(0.5)
+            regs2 = self.monitor.hmp("info registers -a")
+        except Exception as exc:  # a closed monitor must not mask the real failure
+            text = f"[stall-dump] monitor unavailable: {exc}"
+            print(text, flush=True)
+            return text
+
+        kernel = os.environ.get("WASMOS_KERNEL", "") or default_kernel_path()
+        first = _parse_rips(regs)
+        second = _parse_rips(regs2)
+        kernel_addrs = [
+            rip
+            for rips in (first, second)
+            for rip in rips.values()
+            if rip >= _KERNEL_VA_BASE
+        ]
+        resolved = _resolve_kernel_addrs(kernel, kernel_addrs)
+
+        def describe(rip):
+            if rip < _KERNEL_VA_BASE:
+                return "user/guest"
+            return resolved.get(f"{rip:016x}", "kernel (unresolved)")
+
+        lines = [
+            f"=== [stall-dump] {reason} ===",
+            f"[stall-dump] kernel={kernel}",
+        ]
+        for line in cpus.splitlines():
+            if line.strip():
+                lines.append(f"[stall-dump] {line.strip()}")
+        for cpu_id, rip in first.items():
+            moved = second.get(cpu_id)
+            if moved is None:
+                motion = ""
+            elif moved == rip:
+                motion = "  (unchanged)"
+            else:
+                motion = f"  (moved to {moved:016x} {describe(moved)})"
+            lines.append(f"--- CPU {cpu_id}")
+            lines.append(f"[stall-dump] rip={rip:016x} {describe(rip)}{motion}")
+        # Ask the guest itself which threads are blocked and on what. The RIP
+        # sample says whether anything is running; only the thread table says
+        # why not. An NMI is the one request a wedged kernel still answers: it
+        # is deliverable however the guest is stuck, and the handler writes
+        # through the unlocked serial path.
+        # Twice, a second apart, for the same reason the RIP sample is taken
+        # twice: one snapshot cannot separate a thread that is RUNNING because a
+        # CPU is executing it from one left RUNNING that no longer runs. Across
+        # two samples the first advances its tick count and the second does not.
+        # The per-CPU `cur_tid` cannot answer this on its own -- it is the last
+        # thread that CPU dispatched, which stays set while the CPU idles.
+        for attempt in (1, 2):
+            try:
+                self.monitor.hmp("nmi")
+                deadline = time.time() + 3.0
+                mark = len(self.buf)
+                while time.time() < deadline:
+                    self._pump(0.2)
+                    if b"[diag] live=" in self.buf[mark:]:
+                        break
+                guest = self.buf[mark:].decode("utf-8", "replace")
+                lines.append(f"[stall-dump] --- guest sample {attempt} ---")
+                for line in guest.splitlines():
+                    if "[diag]" in line or "[nmi]" in line:
+                        lines.append(f"[stall-dump] {line.strip()}")
+            except Exception as exc:
+                lines.append(
+                    f"[stall-dump] guest thread dump {attempt} unavailable: {exc}"
+                )
+            if attempt == 1:
+                time.sleep(1.0)
+
+        # Verdict, from the two samples. A thread that is RUNNING in both and
+        # was not dispatched in between is executing nowhere -- it is on no run
+        # queue either, since an enqueue requires READY, so nothing will ever
+        # pick it up. The per-thread dispatch counter is what makes this sound:
+        # ticks_total only advances when a timer interrupt lands on the thread,
+        # so an event-driven service sits at 0 for its whole life and any
+        # verdict built on it fires on a healthy guest.
+        samples = [_parse_diag_threads(b) for b in _split_guest_samples(lines)]
+        if len(samples) == 2 and samples[0] and samples[1]:
+            stuck = [
+                f"tid={tid} {samples[0][tid]['name']} disp={samples[0][tid]['disp']}"
+                for tid in samples[0]
+                if tid in samples[1]
+                and samples[0][tid]["state"] == "running"
+                and samples[1][tid]["state"] == "running"
+                and samples[0][tid]["disp"] == samples[1][tid]["disp"]
+                and samples[0][tid]["name"] != "idle"
+            ]
+            if stuck:
+                lines.append(
+                    "[stall-dump] VERDICT: RUNNING across both samples and never "
+                    f"dispatched between them -- not executing: {', '.join(stuck)}"
+                )
+            else:
+                lines.append(
+                    "[stall-dump] VERDICT: every RUNNING thread was dispatched "
+                    "between the samples; if nothing is runnable the wait is "
+                    "between processes, not a lost thread"
+                )
+        lines.append("=== [stall-dump] end ===")
+        text = "\n".join(lines)
+        print(text, flush=True)
+        return text
+
     def expect(
         self, needle: Union[bytes, str, Pattern[bytes]], timeout_s: Optional[int] = None
     ) -> bool:
@@ -854,6 +1081,7 @@ class QemuSession:
                 if needle_b in self.buf:
                     return self._cli_ready(needle_b)
             self._pump(0.2)
+        self.dump_stall_state(f"expect({needle_b[:40]!r}) timed out")
         if self.force_stop_on_timeout:
             self.force_stop()
         return False
@@ -924,6 +1152,7 @@ class QemuSession:
                 if needle_b in view:
                     return True
             self._pump(0.2)
+        self.dump_stall_state(f"expect_from({needle_b[:40]!r}) timed out")
         return False
 
     def settle(self, probe_s: int = 3, timeout_s: int = 30) -> bool:

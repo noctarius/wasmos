@@ -1279,6 +1279,157 @@ Source: `architecture/25-diagnostics-status.md`,
   so suspect the path the listing runs through under `fs-manager` -> `fs-fat` ->
   block/ata, and what it leaves outstanding on the way back.
 
+  **What the first captured dump says (CI run 31939479042, boot-and-init).** A
+  command timeout now dumps every vCPU's RIP from the QEMU monitor, resolved to
+  `file:line` by `scripts/decode_kernel_panic.py`, sampled twice so a spinning
+  CPU is distinguishable from a parked one (`QemuSession.dump_stall_state`; grep
+  a CI log for `[stall-dump]`). It caught a wedge on its first run, after an `ls`
+  in `/boot/system/drivers`, and every CPU was in `idle_entry` — **unchanged**
+  across both samples.
+
+  That rules out a whole family of theories: nothing is spinning on a lock, and
+  no driver is looping on a device. The machine is asleep with work outstanding,
+  which is either a lost wakeup (a thread left READY on no run queue, or a wake
+  dropped against a thread mid-block) or a cycle of processes blocked on each
+  other's IPC — the nested synchronous `DEVMGR_QUERY_MOUNT_REQ` round-trip in
+  `fs_manager.c:608` is a filed instance of exactly that shape.
+
+  **The guest is now asked directly, too.** The stall dump follows the RIP
+  sample with an `nmi` over the monitor, and the kernel's NMI path answers with
+  `diag_dump_threads` (`kpanic.c`): one line per live thread with state, block
+  reason, run-queue membership, the wake-handshake flags, and the saved
+  instruction pointer plus four frames of backtrace. Taking no locks is what
+  makes it answerable at all on a wedged machine. Read it like this:
+
+  - `[diag]!` marks a scheduler anomaly -- a READY thread on no run queue, or a
+    BLOCKED thread with `wake=1` (a waker deferred an enqueue that never ran).
+    Either one is a lost wake.
+  - No `!` anywhere, nothing runnable, and every thread blocked in
+    `ipc_recv_blocking_for` / `ipc_select_wait` is a deadlock between processes;
+    the backtraces then name who is waiting inside which request.
+
+  A healthy guest reports live=32 ready=2 blocked=26 with no anomalies (the two
+  READY threads are the per-CPU idle threads, which are never queued by design).
+
+  **Second captured wedge, this time with the thread table (CI run 31942996423,
+  filesystem battery, again after an `ls`).** `live=32 ready=1 blocked=27
+  stranded(ready,no-rq)=0`, no `[diag]!` line anywhere, and cli, fs-manager,
+  both fs-fat instances, ata and device-manager all parked in
+  `ipc_recv_blocking_for` / `ipc_select_wait`. By the reading above that is a
+  **deadlock between processes, not a lost wake**: no thread was left runnable
+  off a queue and no wake token went unconsumed, so the scheduler handshake is
+  not implicated in this instance.
+
+  One thread in those dumps is never blocked: `vt` reports `st=running` with
+  `rq=0`. A thread left RUNNING that no CPU executes would be orphaned -- on no
+  run queue, since an enqueue requires READY -- and `process.c`'s
+  PROCESS_RUN_BLOCKED handler carries a branch specifically to stop legacy
+  blockers from leaving a thread that way, added after it hung an SMP boot. So
+  it looks like the answer, and it is not established: **a healthy guest reports
+  the same thing.** RUNNING is also what a thread a CPU is currently executing
+  looks like, and neither of the two things that seemed to separate them does:
+
+  - Per-CPU `current_thread` is the last thread that CPU DISPATCHED and stays
+    set while the CPU idles, so "no CPU claims it" is racy across a live table
+    -- measured firing on a healthy guest. The dump counts it
+    (`running-unclaimed`) but does not flag it.
+  - `ticks_total` only advances when a timer interrupt lands on the thread, so
+    an event-driven service that runs briefly and often sits at 0 for its whole
+    life. "Unchanged across two samples" therefore does not mean "not running",
+    and a verdict built on it fired on a healthy guest too.
+
+  So `thread_t` now carries `dispatch_count`, incremented once per dispatch
+  beside the CPU's own counter, and the stall dump takes two guest samples and
+  prints a verdict from them: a thread RUNNING in both that was never dispatched
+  between them is executing nowhere, and with `rq=0` nothing will ever pick it
+  up. On a healthy guest the verdict reads "every RUNNING thread was dispatched
+  between the samples", which is the answer that sends the next reader at the
+  IPC waits instead of the scheduler.
+
+  (That measurement showed something else in passing: on an idle guest the vt
+  and the cli are each dispatched ~2900 times a second, waking on a short
+  select timeout, checking, and re-blocking. It is the idle-burn pattern the
+  no-busy-spin rule exists for, and it is not the wedge.)
+
+  **Third captured wedge (CI run 31945544735), and the verdict: not a lost
+  thread.** Every RUNNING thread was dispatched between the two samples, so the
+  scheduler still owns everything it should. The dispatch deltas then show the
+  machine is not globally stopped either -- net-stack (+206), virtio-net (+97),
+  process-manager (+46), the compositor, menu-bar and gfx-smoke all keep
+  running. What is frozen is a connected subset: cli, vt, fs-manager, both
+  fs-fat instances, ata, fs-init, device-manager, serial, keyboard, mouse,
+  script-broker, Calculator -- 0 dispatches in a second.
+
+  That is a straight chain (cli -> fs-manager -> fs-fat -> ata), not a cycle,
+  and a chain stalls when one link never answers.
+
+  **Fourth capture (CI run 31949875433) answers the next question: every queue
+  is empty.** The cli sits in `warp_ipc_select_one` on `endpoint:113 queued=0`,
+  its own; fs-manager on one of its own with nothing queued; fs-fat on a select
+  set whose watched endpoints are all `q=0`. So no message is sitting anywhere
+  waiting to be noticed -- this is not a lost wake at the IPC layer. Something
+  was never sent, or was sent and never delivered.
+
+  The remaining ambiguity is which half of the chain stalled, and it turns on
+  which endpoint a service is parked on: its published one means idle and
+  waiting for work, a private one means mid-request and waiting for a reply.
+  Those looked identical in the dump, so it now names them --
+  `wait=endpoint:19 (fs.vfs) queued=0` versus `wait=endpoint:120 (private)`.
+  Note the two captures so far disagree on which endpoint fs-manager waited on
+  (19 in one, 18 in the other), which is exactly the distinction that matters.
+
+  **One of the two bugs behind this is FIXED** (see the deferred-enqueue claim in
+  `sched_thread.c`); what remains is the "wait is between processes" case, which
+  now reproduces locally too -- roughly 1 run in 8 of the filesystem battery,
+  `Prompt not found after 'ls'`, 32 live threads, `stranded=0`, and the verdict
+  naming the IPC waits rather than the scheduler. That is the repro to work
+  from; it never existed before this instrumentation.
+
+  The fixed half, kept here because the evidence chain is the useful part:
+
+  **Reproduced locally, with the anomaly flagged (1 run in 4 of the
+  filesystem battery).** The boot never reached a prompt, and the dump reported
+  `stranded(ready,no-rq)=1` rising to 2 across the two samples:
+
+      [diag]! tid=31 pid=22 ata st=ready rq=0 wake=0 btrans=0 disp=175
+      [diag]! tid=7 pid=7 broker-spawn-test st=ready rq=0 disp=771327
+
+  The ata driver is READY and on no run queue, so nothing will dispatch it
+  again and every FS operation queues up behind it. The same run logged exactly
+  one scheduler event, naming that thread:
+
+      [sched] enqueue current tid=31 owner=22 caller_cpu=1 holder_cpu=0 state=2
+
+  which is `cpu_sched_enqueue` refusing to link a thread another CPU still names
+  as current -- correct, it is executing -- and marking it READY on the
+  assumption that the holder re-enqueues when its dispatch ends. A mark is not a
+  message: a holder already past its own check never acted on it. Fixed by
+  making the refusal leave a consumable CLAIM, settled by the holder when it
+  stops naming the thread, with a sweep from the scheduler loop covering the one
+  ordering the holder cannot (a claim published just after it looked).
+
+  Note this is a different moment from the CI captures (22 live threads, mid
+  boot, versus 32 at a prompt) but the same shape, and the discard
+  instrumentation reported nothing on the same run -- so no message was eaten.
+
+  Where to look once a capture shows fs-manager on a PRIVATE endpoint:
+  `forward_request` (`fs_manager.c:463`) sends to the backend with a bare
+  `wasmos_ipc_send` and then waits in a nested `select_one` on its own reply
+  endpoint. Two hazards live there, and the function's own comments describe the
+  consequences of the second: the send does not retry on a transiently full
+  backend queue (the STREAM relay below it does, and says why), and a reply
+  whose request id does not match is CONSUMED AND DISCARDED -- the same
+  drain-and-discard pattern that cost typed characters in the CLI before it was
+  replaced with a pump.
+
+  Still missing after that: who waits for whom. Every backtrace ends at the
+  host-call wrapper, and the guest's own stack is not walkable from the kernel,
+  so the identity has to come from the wait -- the endpoint a blocked thread is
+  parked on, and the depth of each endpoint's queue. A message sitting in a
+  queue whose owner is blocked elsewhere is a lost delivery; a cycle of services
+  waiting on each other's replies is the nested synchronous round-trip this file
+  already tracks (`fs_manager.c:608`).
+
   Not yet known, and worth establishing before theorising: whether a `/init`
   listing (initfs, not the FAT ESP) can trigger it too. The class's `/init` tests
   sort after the two that wedged, so in both runs they only ever ran against an

@@ -222,6 +222,13 @@ void kernel_boot_run_scheduler_loop(void) {
         if (process_should_resched())
             process_clear_resched();
         timer_poll();
+        /* Enqueue anything a wake could not link because the thread was still
+         * executing.  Here rather than in the picker, which runs under the
+         * queue lock this would take, and here rather than only at dispatch,
+         * because the ordering it exists to cover is a claim published just
+         * after the dispatching CPU looked for one.  One load when nothing is
+         * owed. */
+        sched_sweep_owed_enqueues();
         /* Deferred klog doorbell: the logging path only raises a flag, because it
          * can run under the serial lock, in interrupt context and during a panic.
          * This is the first point after a dispatch where sending IPC is safe. */

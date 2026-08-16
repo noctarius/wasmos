@@ -7,6 +7,7 @@
  * non-zero exit and the message is already printed.
  */
 
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -29,6 +30,21 @@ __attribute__((noreturn)) void kpanic(const char* reason, uint64_t a, uint64_t b
            (unsigned long long)b);
     fflush(0);
     abort();
+}
+
+/* The unlocked serial writer the kernel's diagnostics use.  ipc.c's IPC trace
+ * dump reaches it, so a test that links ipc.c needs it defined; a test that
+ * never triggers a diagnostic never sees the output.  Printed rather than
+ * discarded, because when one does fire during a test its content is the point.
+ *
+ * WEAK so a harness with its own capturing definition -- test_sched_runqueue
+ * asserts on what the scheduler reported -- wins the link instead of colliding
+ * with this one. */
+__attribute__((weak, format(printf, 1, 2))) void serial_printf_unlocked(const char* fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    vprintf(fmt, ap);
+    va_end(ap);
 }
 
 /* Discards the interrupted CPU context a caller would record before panicking.

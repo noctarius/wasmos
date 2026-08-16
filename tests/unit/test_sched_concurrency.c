@@ -123,6 +123,15 @@ int thread_transit(thread_t* t, thread_state_t from, thread_state_t to) {
  * such lock, so the state change is a CAS (losing it means another CPU woke the thread
  * first) and block_reason is stored atomically. Only pool slots are searched, so a tid
  * outside 1..POOL_MAX -- an idle thread's, for instance -- never matches. */
+/* The deferred-enqueue sweep walks the thread table; g_pool is that table here.
+ * Same contract as the kernel's: any in-range slot, whatever its state. */
+thread_t* thread_table_at(uint32_t index) {
+    if (index >= POOL_MAX) {
+        return 0;
+    }
+    return &g_pool[index];
+}
+
 int thread_wake_if_blocked(uint32_t tid) {
     if (tid == 0) {
         return 0;

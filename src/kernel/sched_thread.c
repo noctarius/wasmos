@@ -254,6 +254,8 @@ static void cpu_sched_unlink_locked(cpu_sched_t* cs, thread_t* t) {
     __atomic_store_n(&t->on_rq, 0, __ATOMIC_RELEASE);
 }
 
+static void sched_owe_enqueue(thread_t* t);
+
 void cpu_sched_enqueue(cpu_sched_t* cs, thread_t* t) {
     /* A NULL thread must not reach the current_thread scan below: a CPU that
      * has not dispatched yet holds current_thread == NULL, so NULL == NULL
@@ -282,6 +284,19 @@ void cpu_sched_enqueue(cpu_sched_t* cs, thread_t* t) {
             return;
         }
         if (g_cpus[i].current_thread == t) {
+            /* Rate-limited like the idle-enqueue report above: this is a
+             * legitimate outcome, not a defect, and a thread with a long
+             * timeslice can produce it on every wake it receives.  Reporting
+             * each one turned into a log storm on a slow serial line. */
+            uint32_t n = sched_debug_bump(SCHED_DEBUG_ENQUEUE_CURRENT);
+            if ((n & (n - 1u)) != 0u) {
+                sched_owe_enqueue(t);
+                if (sched_mark_ready_if_live(t)) {
+                    __atomic_store_n(
+                        (uint32_t*)&t->block_reason, THREAD_BLOCK_NONE, __ATOMIC_RELAXED);
+                }
+                return;
+            }
             serial_printf_unlocked(
                 "[sched] enqueue current tid=%u owner=%u caller_cpu=%u holder_cpu=%u state=%u\n",
                 (unsigned)t->tid,
@@ -289,13 +304,24 @@ void cpu_sched_enqueue(cpu_sched_t* cs, thread_t* t) {
                 (unsigned)cpu_local()->cpu_id,
                 (unsigned)i,
                 (unsigned)t->state);
-            /* Thread is still running on another CPU.  Mark it ready so the
-             * owning CPU re-enqueues when its timeslice or blocking-yield
-             * completes (see PROCESS_RUN_BLOCKED handler).  Never halt here
-             * under production SMP IPC load. */
+            /* Thread is still running on another CPU: promote it, but do not
+             * link it -- a linked thread can be dispatched, and it is already
+             * executing.  The holding CPU performs the enqueue when it stops
+             * naming the thread.
+             *
+             * Record that as a CLAIM rather than relying on the READY mark.  The
+             * mark alone loses the hand-off whenever the holder has already run
+             * its check: nothing then links the thread and it stays runnable on
+             * no run queue forever, which is the whole-session wedge.  Publish
+             * the claim, then RE-READ the holder: if it has since released the
+             * thread its settle may have already looked and found nothing, so
+             * this side takes the claim back and enqueues.  Seq-cst on both
+             * sides makes "holder sees the claim" and "we see the release"
+             * mutually exclusive, so the enqueue happens exactly once. */
             if (sched_mark_ready_if_live(t)) {
                 __atomic_store_n((uint32_t*)&t->block_reason, THREAD_BLOCK_NONE, __ATOMIC_RELAXED);
             }
+            sched_owe_enqueue(t);
             return;
         }
     }
@@ -623,6 +649,105 @@ void sched_set_need_resched(void) {
     /* Delegate to the existing process.c resched flag. */
     extern void process_set_need_resched(void);
     process_set_need_resched();
+}
+
+/* Whether any CPU has this thread dispatched right now. */
+static int sched_thread_is_current_somewhere(const thread_t* t) {
+    for (uint32_t i = 0; i < WASMOS_MAX_CPUS; ++i) {
+        if (__atomic_load_n(&g_cpus[i].current_thread, __ATOMIC_ACQUIRE) == t) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* Outstanding deferred enqueues, so the idle path can tell in one load whether a
+ * sweep is worth doing.  Claims are rare; the counter keeps the common case (no
+ * debt) free. */
+static uint32_t g_enqueue_owed_count;
+
+/* Record that `t` is owed an enqueue.  Only the guard in cpu_sched_enqueue sets
+ * this, and only for a thread some CPU is still executing.
+ *
+ * The setter deliberately does NOT then link the thread itself, however the
+ * holder's state may look a moment later: linking from a CPU that is not the
+ * holder can put the thread in a ready queue while the holder is still deciding
+ * what its state should be, and a thread dispatched out of a queue in that
+ * window resumes a context nobody has finished writing.  That produced a jump
+ * into the middle of the thread table -- a kernel panic with rip inside
+ * g_threads -- when this fix was first written that way. */
+static void sched_owe_enqueue(thread_t* t) {
+    if (!__atomic_exchange_n(&t->enqueue_owed, 1u, __ATOMIC_SEQ_CST)) {
+        __atomic_add_fetch(&g_enqueue_owed_count, 1u, __ATOMIC_SEQ_CST);
+    }
+}
+
+/* Consume the claim, returning 1 to the single caller that owns the enqueue. */
+static int sched_take_owed_enqueue(thread_t* t) {
+    if (!__atomic_exchange_n(&t->enqueue_owed, 0u, __ATOMIC_SEQ_CST)) {
+        return 0;
+    }
+    __atomic_sub_fetch(&g_enqueue_owed_count, 1u, __ATOMIC_SEQ_CST);
+    return 1;
+}
+
+/* Safety net for the one ordering the holder's settle cannot cover: a claim
+ * published just after that holder looked.  A CPU with nothing to run checks
+ * whether any enqueue is outstanding and, if so, walks the thread table for
+ * runnable-but-unqueued threads and enqueues them.  Linking here is safe
+ * precisely because it goes through cpu_sched_enqueue, which refuses (and
+ * re-owes) anything still executing.
+ *
+ * The counter keeps this off the hot path: no debt, one relaxed load, no walk.
+ * A machine can therefore not go idle while a runnable thread sits on no queue,
+ * which is the invariant the wedge violated. */
+void sched_sweep_owed_enqueues(void) {
+    if (__atomic_load_n(&g_enqueue_owed_count, __ATOMIC_ACQUIRE) == 0u) {
+        return;
+    }
+    for (uint32_t i = 0; i < THREAD_MAX_COUNT; ++i) {
+        thread_t* t = thread_table_at(i);
+        if (!t || t->tid == 0u || !__atomic_load_n(&t->enqueue_owed, __ATOMIC_ACQUIRE)) {
+            continue;
+        }
+        /* Leave a thread that is still executing alone, WITHOUT consuming its
+         * claim: its holder will settle it.  Handing it to cpu_sched_enqueue
+         * instead would be refused and re-owed, and since the sweep runs once
+         * per scheduler pass that becomes a loop -- one refusal, one log line,
+         * every pass, for as long as the thread runs.  Measured in CI: 43
+         * repetitions of the same guard line in one window, from a thread that
+         * simply had a long timeslice. */
+        if (sched_thread_is_current_somewhere(t)) {
+            continue;
+        }
+        if (!sched_take_owed_enqueue(t)) {
+            continue;
+        }
+        if (__atomic_load_n((uint32_t*)&t->state, __ATOMIC_ACQUIRE) == THREAD_STATE_READY &&
+            !__atomic_load_n(&t->on_rq, __ATOMIC_ACQUIRE)) {
+            cpu_sched_enqueue(cpu_sched(), t);
+        }
+    }
+}
+
+/* Holder side of the deferred-enqueue claim.  See sched.h.
+ *
+ * Runs after the dispatcher has cleared current_thread, so the enqueue below
+ * cannot be refused again by the same guard.  A thread that is no longer
+ * runnable (it blocked again, or exited) has nothing owed to it: the claim is
+ * consumed either way, because the wake it represented was already answered by
+ * whatever moved it out of READY. */
+void sched_settle_deferred_enqueue(thread_t* t) {
+    if (!t) {
+        return;
+    }
+    if (!sched_take_owed_enqueue(t)) {
+        return;
+    }
+    if (__atomic_load_n((uint32_t*)&t->state, __ATOMIC_ACQUIRE) != THREAD_STATE_READY) {
+        return;
+    }
+    cpu_sched_enqueue(cpu_sched(), t);
 }
 
 void sched_wake_thread(thread_t* t) {

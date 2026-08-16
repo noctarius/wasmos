@@ -39,6 +39,14 @@ void kpanic_capture_origin(uint64_t rip, uint64_t rsp, uint64_t rbp, uint64_t rf
  * order followed by the CPU-pushed iret frame). */
 void x86_nmi_handler(uint64_t* regs);
 
+/* One line per live thread -- state, block reason, run-queue membership and the
+ * wake handshake flags -- written with the UNLOCKED serial writer and taking no
+ * locks, so it also works on a machine that is wedged holding them.  `reason` is
+ * printed verbatim as the dump's tag.  Diagnostic only: fields are read racily
+ * and a single implausible line is a torn read, not evidence.  Reached from the
+ * NMI path, which is how a wedged guest is asked what its threads are doing. */
+void diag_dump_threads(const char* reason);
+
 #ifdef __cplusplus
 }
 #endif

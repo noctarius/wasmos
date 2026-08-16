@@ -404,9 +404,9 @@ linked feature documents for rationale and rollout plans.
   20/20 passes after. The CLI's PM/FS paths still use blocking
   `ipc_select_one`, so it stays blind to input while a command runs.
 - The ABI is single-sourced in four IDL files under `abi/` — `errors.yaml`,
-  `hostcalls.yaml` (117 host calls), `opcodes.yaml` (193 opcodes / 21
-  subsystems) and `constants.yaml` — and every consumer of them is generated,
-  not hand-written: the `HC_*` id enum, the WARP `WASMOS_SYMBOLS` link table,
+  `hostcalls.yaml`, `opcodes.yaml` and `constants.yaml` — and every consumer of
+  them is generated, not hand-written: the `HC_*` id enum, the WARP
+  `WASMOS_SYMBOLS` link table,
   the wasm3 link table, the WARP AOT symbol table, the ring-3 dispatch table,
   the per-subsystem opcode enums, and guest import bindings for all five
   languages. Each is compiled into the live kernel, both runtimes and the AOT

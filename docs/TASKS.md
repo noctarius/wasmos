@@ -991,6 +991,41 @@ Source: `architecture/19-virtual-terminal.md`,
 
 VT I/O-multiplexer phase 5 (remaining; phases 0–4 shipped):
 
+- [ ] [FEATURE][P2] Route an app's output to its controlling tty instead of straight to
+  serial. Only three writers should reach the UART directly: the vt (mirroring
+  the serial-bound slot), early boot (before the vt exists), and the panic/fault
+  path. Everything else writes to a slot and lets the vt fan out.
+
+  Today every other component writes to the kernel log instead. libc's
+  `printf`/`puts`/`putsn` and `write(1|2, …)` call `wasmos_console_write`
+  (`src/libc/src/stdio.c:294`, `unistd.c:308`), native services call
+  `api->console_write`, and both land in `klog_write` -> `serial_write`, which
+  fans out to COM1 and the vt's klog ring. The consequence is that an app's
+  output is *system log*: it appears on the console slot no matter which slot the
+  app belongs to, and on serial no matter where serial is bound. An app on vt-2
+  prints onto vt-1's screen. The CLI is the only component in the tree that
+  writes to a slot (`VT_IPC_WRITE_REQ`, `cli.c:637`), and it writes to serial as
+  well — that duplication is exactly why vt-1 currently has to drop writer writes
+  and suppress echo (doc 19, the log-mirror rules).
+
+  Do it in libc, not in the ~53 files that print: a process already knows its
+  controlling tty (`wasmos_startup_tty()`, from spawn info), so `putsn` can send
+  `VT_IPC_WRITE_REQ` to that slot and fall back to `console_write` only when
+  there is no tty (drivers, early services, anything spawned without one). Native
+  services need the same treatment behind `api->console_write`. Then apps need no
+  changes at all, and `console_write` becomes what its name says: a kernel-log
+  call, not the way user code prints.
+
+  Blocked on one missing primitive: the vt cannot mirror a slot to serial while
+  `console_write` feeds the klog ring, because the mirrored bytes come straight
+  back into the slot it just wrote (klog -> vt-1 -> console_write -> klog). A
+  serial write that bypasses the klog ring — a host call, or a flag on the
+  existing one — has to land first.
+
+  Done when: an app spawned on vt-2 prints on vt-2 and nowhere else; the
+  serial-bound slot's output reaches serial through the vt; vt-1 no longer needs
+  its log-mirror special cases; and `wasmos_console_write` has no callers outside
+  libc's fallback path, the kernel, and the panic path.
 - [ ] [CLEANUP][P3] Delete `console_ring_t` and the plumbing that fills it now that nothing
   drains it: the kernel producer (`src/kernel/serial.c` `serial_ring_write`,
   `serial_console_ring_id`, `serial_console_ring_ptr`), the native driver API's

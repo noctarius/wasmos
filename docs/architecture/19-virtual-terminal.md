@@ -77,6 +77,12 @@ session — every headless test, among others — can change what is on screen.
 `tty -s 0` is refused (`vt.SERIAL_SLOT_GUI`): vt-0 is the compositor's and cannot
 be rendered down a serial line.
 
+Note what a slot does *not* yet capture: an app's own output. `printf` in a guest
+reaches `wasmos_console_write`, i.e. the kernel log, so it shows on the console
+slot whichever slot the app belongs to. Routing a process's output to its
+controlling tty is filed in `TASKS.md` and is what would retire vt-1's
+log-mirror rules below.
+
 The compositor requests the visible slot switch to `vt-0` **once**, when the
 first UI app appears (`try_switch_to_gfx_tty` → `VT_IPC_SWITCH_TTY 0`), and then
 never auto-switches again: switching is user-driven from there (`Ctrl+Shift+Fn`

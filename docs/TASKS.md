@@ -1279,6 +1279,14 @@ Source: `architecture/25-diagnostics-status.md`,
   so suspect the path the listing runs through under `fs-manager` -> `fs-fat` ->
   block/ata, and what it leaves outstanding on the way back.
 
+  **The next occurrence reports itself.** A command timeout now dumps every
+  vCPU's RIP from the QEMU monitor, symbolised against the kernel image, and
+  samples twice so a CPU spinning inside a function is distinguishable from one
+  parked (`QemuSession.dump_stall_state`, grep the CI log for `[stall-dump]`).
+  That is the discriminator the serial log cannot give: all CPUs unchanged in
+  `idle_entry` is a lost wakeup, one moving inside `spinlock_lock` is a lock
+  cycle, one in a driver is a device wait. Read that before theorising further.
+
   Not yet known, and worth establishing before theorising: whether a `/init`
   listing (initfs, not the FAT ESP) can trigger it too. The class's `/init` tests
   sort after the two that wedged, so in both runs they only ever ran against an

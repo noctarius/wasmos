@@ -3,6 +3,7 @@ import argparse
 import atexit
 import json
 import os
+import re
 import selectors
 import socket
 import struct
@@ -81,6 +82,108 @@ def default_kernel_path(build_dir: str = "build") -> str:
 
 CLI_PROMPT = b"wamos> "
 
+# Guest-state capture on a stalled command. A wedged guest answers nothing, and
+# the serial log then ends mid-sentence with no indication of what stopped --
+# which is the whole difficulty of the intermittent whole-session hang (see
+# docs/TASKS.md). QEMU knows what every vCPU is doing even when the guest does
+# not, so on a timeout the session asks it and symbolises the result against the
+# kernel image. Disabled by setting WASMOS_QEMU_STALL_DUMP=0.
+_STALL_DUMP_ENABLED = os.environ.get("WASMOS_QEMU_STALL_DUMP", "1") != "0"
+# Per session. One dump answers "what is each CPU doing"; repeating it for every
+# later command of a dead session just buries the first one.
+_STALL_DUMP_MAX = int(os.environ.get("WASMOS_QEMU_STALL_DUMP_MAX", "2") or "2")
+
+
+def _parse_rips(regs_text):
+    """{cpu_id: rip} from `info registers -a`."""
+    out = {}
+    cpu_id = None
+    for line in regs_text.splitlines():
+        stripped = line.strip()
+        m = re.match(r"CPU#(\d+)", stripped)
+        if m:
+            cpu_id = m.group(1)
+            continue
+        m = re.match(r"RIP=([0-9a-fA-F]+)", stripped)
+        if m and cpu_id is not None:
+            out[cpu_id] = int(m.group(1), 16)
+    return out
+
+
+# Everything the kernel executes lives in the higher half; anything below it is
+# guest or firmware code, which the kernel image cannot name.
+_KERNEL_VA_BASE = 0xFFFFFFFF80000000
+
+
+def _describe_rip(rip, syms):
+    if rip >= _KERNEL_VA_BASE:
+        return syms.resolve(rip) or "kernel (no symbol)"
+    return "user/guest"
+
+
+class _KernelSymbols:
+    """RIP -> `symbol+0x…`, read from the kernel ELF with nm.
+
+    Loaded lazily and at most once per path: a stall dump is rare, and a test run
+    that never stalls should not pay for it. A missing nm or unreadable image
+    degrades to raw addresses rather than failing the dump.
+    """
+
+    _cache = {}
+
+    def __init__(self, path):
+        self.syms = []
+        if not path or not os.path.exists(path):
+            return
+        nm = shutil.which("nm") or shutil.which("llvm-nm")
+        if not nm:
+            return
+        try:
+            out = subprocess.run(
+                [nm, "-n", "--defined-only", path],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            ).stdout
+        except Exception:
+            return
+        for line in out.splitlines():
+            parts = line.split()
+            if len(parts) < 3 or parts[1].upper() not in ("T", "W"):
+                continue
+            try:
+                self.syms.append((int(parts[0], 16), parts[2]))
+            except ValueError:
+                continue
+        self.syms.sort()
+
+    @classmethod
+    def get(cls, path):
+        if path not in cls._cache:
+            cls._cache[path] = cls(path)
+        return cls._cache[path]
+
+    def resolve(self, addr):
+        if not self.syms or addr < self.syms[0][0]:
+            return ""
+        lo, hi = 0, len(self.syms) - 1
+        best = None
+        while lo <= hi:
+            mid = (lo + hi) // 2
+            if self.syms[mid][0] <= addr:
+                best = self.syms[mid]
+                lo = mid + 1
+            else:
+                hi = mid - 1
+        if best is None:
+            return ""
+        delta = addr - best[0]
+        # A huge offset means the address is past the last symbol, not inside it.
+        if delta > 0x10000:
+            return ""
+        return f"{best[1]}+0x{delta:x}"
+
+
 # Multiplies every expect()/settle() deadline. A CI runner is far slower than a
 # developer's machine -- boots that take 12s locally have taken over 120s there
 # -- and raising each test's literal timeout would slow local runs for a problem
@@ -119,7 +222,9 @@ def default_config(build_dir: str = "build") -> QemuConfig:
     userfs_default = os.path.join(source_dir, "userfs")
     userfs_dir = os.environ.get("WASMOS_USERFS", userfs_default)
     isolate_esp = os.environ.get("WASMOS_QEMU_ISOLATE_ESP", "0") == "1"
-    enable_monitor = os.environ.get("WASMOS_QEMU_MONITOR", "0") == "1"
+    # On by default: the monitor is what makes dump_stall_state possible, and a
+    # stall that produces no diagnosis is the failure mode this is here to end.
+    enable_monitor = os.environ.get("WASMOS_QEMU_MONITOR", "1") != "0"
     monitor_socket = os.environ.get("WASMOS_QEMU_MONITOR_SOCK", "")
     smp_count = int(os.environ.get("WASMOS_QEMU_SMP_COUNT", "1"))
     nic_model = os.environ.get(
@@ -636,6 +741,7 @@ class QemuSession:
         self.echo = echo
         self.force_stop_on_timeout = force_stop_on_timeout
         self.proc: Optional[subprocess.Popen] = None
+        self._stall_dumps = 0
         self.selector: Optional[selectors.BaseSelector] = None
         self.buf = b""
         self._esp_runtime_dir: Optional[str] = None
@@ -831,6 +937,64 @@ class QemuSession:
                     sys.stdout.buffer.flush()
                 self.buf += chunk
 
+    def dump_stall_state(self, reason: str) -> str:
+        """Report what every vCPU is executing, symbolised against the kernel.
+
+        Called when a command times out. A wedged guest produces no further
+        output, so the serial log alone cannot say whether the machine is
+        spinning on a lock, parked in hlt with nobody to wake it, or looping in
+        one driver -- and those have different fixes. QEMU can answer that from
+        outside regardless of the guest's state.
+
+        Best-effort by construction: no monitor, no nm, or an unreadable image
+        each degrade the dump rather than failing the test that asked for it.
+        Rate-limited per session, because every later command of a dead session
+        would otherwise repeat it.
+        """
+        if not _STALL_DUMP_ENABLED or self.monitor is None:
+            return ""
+        if self._stall_dumps >= _STALL_DUMP_MAX:
+            return ""
+        self._stall_dumps += 1
+        try:
+            cpus = self.monitor.hmp("info cpus")
+            # Two samples: a CPU spinning on a lock moves within one function,
+            # a parked one does not. Telling those apart is most of the answer,
+            # and the second sample costs half a second.
+            regs = self.monitor.hmp("info registers -a")
+            time.sleep(0.5)
+            regs2 = self.monitor.hmp("info registers -a")
+        except Exception as exc:  # a closed monitor must not mask the real failure
+            text = f"[stall-dump] monitor unavailable: {exc}"
+            print(text, flush=True)
+            return text
+
+        kernel = os.environ.get("WASMOS_KERNEL", "") or default_kernel_path()
+        syms = _KernelSymbols.get(kernel)
+        lines = [
+            f"=== [stall-dump] {reason} ===",
+            f"[stall-dump] kernel={kernel} symbols={len(syms.syms)}",
+        ]
+        for line in cpus.splitlines():
+            if line.strip():
+                lines.append(f"[stall-dump] {line.strip()}")
+        first = _parse_rips(regs)
+        second = _parse_rips(regs2)
+        for cpu_id, rip in first.items():
+            where = _describe_rip(rip, syms)
+            moved = second.get(cpu_id)
+            if moved is None:
+                motion = ""
+            elif moved == rip:
+                motion = " (unchanged)"
+            else:
+                motion = f" (moved to 0x{moved:016x} {_describe_rip(moved, syms)})"
+            lines.append(f"[stall-dump] cpu{cpu_id} rip=0x{rip:016x} {where}{motion}")
+        lines.append("=== [stall-dump] end ===")
+        text = "\n".join(lines)
+        print(text, flush=True)
+        return text
+
     def expect(
         self, needle: Union[bytes, str, Pattern[bytes]], timeout_s: Optional[int] = None
     ) -> bool:
@@ -854,6 +1018,7 @@ class QemuSession:
                 if needle_b in self.buf:
                     return self._cli_ready(needle_b)
             self._pump(0.2)
+        self.dump_stall_state(f"expect({needle_b[:40]!r}) timed out")
         if self.force_stop_on_timeout:
             self.force_stop()
         return False
@@ -924,6 +1089,7 @@ class QemuSession:
                 if needle_b in view:
                     return True
             self._pump(0.2)
+        self.dump_stall_state(f"expect_from({needle_b[:40]!r}) timed out")
         return False
 
     def settle(self, probe_s: int = 3, timeout_s: int = 30) -> bool:

@@ -263,6 +263,12 @@ static int sysinit_on_exec(void* user, const char* path, const char* args, int32
     }
     int32_t resp_req = wasmos_ipc_last_field(WASMOS_IPC_FIELD_REQUEST_ID);
     if (resp_req != g_state.spawn_request_id) {
+        /* Consumed and abandoned: report it, because a reply eaten here is one
+         * its owner is still waiting for. */
+        wasmos_ipc_message_t dropped;
+        wasmos_ipc_message_read_last(&dropped);
+        wasmos_sys_ipc_report_discard(
+            "sysinit/spawn", g_state.reply_endpoint, g_state.spawn_request_id, &dropped);
         return -1;
     }
     if (wasmos_ipc_last_field(WASMOS_IPC_FIELD_TYPE) != PROC_IPC_RESP) {

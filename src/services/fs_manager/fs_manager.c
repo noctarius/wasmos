@@ -471,18 +471,21 @@ static int forward_request(int32_t backend_endpoint, int32_t type, int32_t req_i
         return -1;
     }
     for (;;) {
-        if (wasmos_ipc_select_one(g_reply_endpoint) < 0) {
+        wasmos_ipc_message_t reply;
+        /* Anything arriving here that is not this reply is consumed, so it must
+         * be reported: if it was a reply someone else awaits, that side blocks
+         * forever and the loss is otherwise invisible.  fs-manager is a relay
+         * with one request in flight, so a non-matching id means a stale reply
+         * to a request already abandoned -- worth seeing, never expected. */
+        if (wasmos_sys_ipc_await_reply(
+                g_reply_endpoint, req_id, &reply, 0, 0, "fs-manager/forward", 0) != 0) {
             return -1;
         }
-        int32_t resp_type = wasmos_ipc_last_field(WASMOS_IPC_FIELD_TYPE);
-        int32_t resp_req = wasmos_ipc_last_field(WASMOS_IPC_FIELD_REQUEST_ID);
-        int32_t rr0 = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG0);
-        int32_t rr1 = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG1);
-        int32_t rr2 = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG2);
-        int32_t rr3 = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG3);
-        if (resp_req != req_id) {
-            continue;
-        }
+        int32_t resp_type = (int32_t)reply.type;
+        int32_t rr0 = reply.arg0;
+        int32_t rr1 = reply.arg1;
+        int32_t rr2 = reply.arg2;
+        int32_t rr3 = reply.arg3;
         if (resp_type == FS_IPC_STREAM) {
             /* Retry with yield: the client may be in a slow output loop (e.g.
              * VT-write retries) and temporarily unable to drain its endpoint.

@@ -890,6 +890,12 @@ static int cli_register_vt_writer(void) {
         int32_t resp_type = wasmos_ipc_last_field(WASMOS_IPC_FIELD_TYPE);
         int32_t resp_req = wasmos_ipc_last_field(WASMOS_IPC_FIELD_REQUEST_ID);
         if (resp_req != req_id) {
+            /* Consumed, so report it: this is an init-time poll that predates
+             * the CLI's pump, and a reply eaten here is a reply its owner waits
+             * for forever. */
+            wasmos_ipc_message_t dropped;
+            wasmos_ipc_message_read_last(&dropped);
+            wasmos_sys_ipc_report_discard("cli/vt-init", g_vt_client_endpoint, req_id, &dropped);
             continue;
         }
         if (resp_type != VT_IPC_RESP) {
@@ -932,6 +938,12 @@ static int cli_set_vt_mode(uint32_t mode) {
         int32_t resp_type = wasmos_ipc_last_field(WASMOS_IPC_FIELD_TYPE);
         int32_t resp_req = wasmos_ipc_last_field(WASMOS_IPC_FIELD_REQUEST_ID);
         if (resp_req != req_id) {
+            /* Consumed, so report it: this is an init-time poll that predates
+             * the CLI's pump, and a reply eaten here is a reply its owner waits
+             * for forever. */
+            wasmos_ipc_message_t dropped;
+            wasmos_ipc_message_read_last(&dropped);
+            wasmos_sys_ipc_report_discard("cli/vt-init", g_vt_client_endpoint, req_id, &dropped);
             continue;
         }
         return (resp_type == VT_IPC_RESP) ? 0 : -1;

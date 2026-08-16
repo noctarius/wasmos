@@ -1378,6 +1378,27 @@ Source: `architecture/25-diagnostics-status.md`,
   Note the two captures so far disagree on which endpoint fs-manager waited on
   (19 in one, 18 in the other), which is exactly the distinction that matters.
 
+  **Reproduced locally at last, with the anomaly flagged (1 run in 4 of the
+  filesystem battery).** The boot never reached a prompt, and the dump reported
+  `stranded(ready,no-rq)=1` rising to 2 across the two samples:
+
+      [diag]! tid=31 pid=22 ata st=ready rq=0 wake=0 btrans=0 disp=175
+      [diag]! tid=7 pid=7 broker-spawn-test st=ready rq=0 disp=771327
+
+  The ata driver is READY and on no run queue, so nothing will dispatch it
+  again and every FS operation queues up behind it. That is the lost wake
+  `thread.h` warns about in as many words, and the Dekker flags are clear
+  (`wake=0 btrans=0`), which points at `sched_wake_thread`: it claims the
+  enqueue, then calls `thread_wake_if_blocked`, and RETURNS WITHOUT ENQUEUEING
+  when that reports the thread was not BLOCKED -- which is what happens if
+  another waker has already promoted it to READY via `sched_mark_ready_if_live`
+  while the completion path had already consumed its token. State READY,
+  `on_rq` 0, no token pending: exactly the dump.
+
+  Note this is a different moment from the CI captures (22 live threads, mid
+  boot, versus 32 at a prompt) but the same shape, and the discard
+  instrumentation reported nothing on the same run -- so no message was eaten.
+
   Where to look once a capture shows fs-manager on a PRIVATE endpoint:
   `forward_request` (`fs_manager.c:463`) sends to the backend with a bare
   `wasmos_ipc_send` and then waits in a nested `select_one` on its own reply

@@ -2,6 +2,12 @@
 #define WASMOS_LIBSYS_H
 
 #include <stdint.h>
+/* printf is DECLARED here rather than pulled in from "stdio.h": the host unit
+ * tests compile this header with the platform SDK on the include path, where
+ * that name resolves to the system stdio and collides with the project's own
+ * FILE (clang-diagnostic-error, caught by the lint gate). The signature matches
+ * both declarations, so the wasm build still binds to libc's. */
+int printf(const char* format, ...);
 
 #include "string.h"
 #include "wasmos/api.h"
@@ -718,6 +724,88 @@ static inline int32_t wasmos_sys_ipc_send_retry(int32_t destination_endpoint,
             return ipc_err_full;
         }
         (void)wasmos_sched_yield();
+    }
+}
+
+/* Callback for a message that arrived while awaiting a reply but is not it.
+ * Return non-zero if the message was handled (the wait continues silently),
+ * zero to have it reported as a discard. `user` is passed through untouched. */
+typedef int32_t (*wasmos_sys_ipc_other_fn)(const wasmos_ipc_message_t* message, void* user);
+
+/* Blocking wait for the reply carrying `request_id` on `endpoint`.
+ *
+ * This exists to make one thing visible. The hand-written form of this loop --
+ * receive, compare the request id, `continue` on a mismatch -- CONSUMES the
+ * message it rejects. When that message was a reply somebody else was waiting
+ * for, the loss is silent and the other side blocks forever; that is how typed
+ * characters went missing in the CLI before its VT path became a pump, and it
+ * is a live suspect in the intermittent whole-session wedge (docs/TASKS.md).
+ * Every discard is therefore reported, with enough identity to say whose reply
+ * it was: the endpoint, the id awaited, and the type/id/source of what arrived.
+ *
+ * Reporting is bounded rather than unconditional: the first
+ * WASMOS_IPC_DISCARD_REPORT_MAX discards per process print in full and later
+ * ones only every 64th, because the console is a slow serial line and a storm
+ * of reports would itself change the timing of the bug being chased.
+ *
+ * `on_other` gets first refusal on every non-matching message, so a caller that
+ * legitimately handles other traffic (a relay forwarding stream chunks, say)
+ * stays correct and silent; pass NULL when any other message really is a
+ * discard. `who` is the caller's name, printed in the report.
+ *
+ * Returns 0 with `out` filled, or -1 when the endpoint fails or `retries` empty
+ * receives pass without the reply (values <= 0 wait forever). It does not
+ * validate the reply's type -- callers check that themselves, since the type
+ * that is legal varies per request. */
+#ifndef WASMOS_IPC_DISCARD_REPORT_MAX
+#define WASMOS_IPC_DISCARD_REPORT_MAX 8
+#endif
+
+/* Report one consumed-but-unwanted message.  Split out of the await loop below
+ * so a caller that polls with wasmos_ipc_drain instead of blocking -- several do,
+ * deliberately, at init before their event pump exists -- can report the same
+ * loss without changing its wait into a blocking one. */
+static inline void wasmos_sys_ipc_report_discard(const char* who, int32_t endpoint,
+                                                 int32_t awaiting,
+                                                 const wasmos_ipc_message_t* got) {
+    static int32_t discarded_total;
+    discarded_total++;
+    if (discarded_total <= WASMOS_IPC_DISCARD_REPORT_MAX || (discarded_total % 64) == 0) {
+        printf("[ipc-discard] %s ep=%d awaiting=%d dropped type=0x%x req=%d src=%d (total %d)\n",
+               who ? who : "?",
+               (int)endpoint,
+               (int)awaiting,
+               (unsigned)(got ? got->type : 0u),
+               (int)(got ? got->request_id : 0),
+               (int)(got ? got->source : 0),
+               (int)discarded_total);
+    }
+}
+
+static inline int32_t wasmos_sys_ipc_await_reply(int32_t endpoint, int32_t request_id,
+                                                 wasmos_ipc_message_t* out,
+                                                 wasmos_sys_ipc_other_fn on_other, void* user,
+                                                 const char* who, int32_t retries) {
+    int32_t empty_polls = 0;
+    if (endpoint < 0 || !out) {
+        return -1;
+    }
+    for (;;) {
+        int32_t rc = wasmos_ipc_select_one(endpoint);
+        if (rc < 0) {
+            return -1;
+        }
+        wasmos_ipc_message_read_last(out);
+        if (out->request_id == request_id) {
+            return 0;
+        }
+        if (on_other && on_other(out, user)) {
+            continue;
+        }
+        wasmos_sys_ipc_report_discard(who, endpoint, request_id, out);
+        if (retries > 0 && ++empty_polls >= retries) {
+            return -1;
+        }
     }
 }
 

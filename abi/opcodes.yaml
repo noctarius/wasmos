@@ -277,7 +277,10 @@ subsystems:
         value: 0x604
         kind: req
         doc: |
-          arg0: 0=ring off, 1=ring on
+          Retired.  The framebuffer drivers no longer drain the kernel console
+          ring -- they are pure blit surfaces and the vt paints the log from its
+          own klog ring -- so there is no console mode to toggle and nothing
+          sends this.  The value stays reserved rather than being reused.
       - symbol: FBTEXT_IPC_GEOMETRY_REQ
         value: 0x605
         kind: req
@@ -342,6 +345,15 @@ subsystems:
         doc: |
           serial driver -> vt: RX bytes for the serial-bound slot, packed like
           VT_IPC_WRITE_REQ (arg0[27:24]=byte_count, arg0[7:0]..arg3[7:0]=bytes).
+      - symbol: VT_IPC_BIND_SERIAL_REQ
+        value: 0x708
+        kind: req
+        doc: |
+          Bind the serial console to a slot: arg0=slot.  Serial RX is injected
+          into that slot's line discipline from then on, whichever slot is
+          visible, and it is independent of VT_IPC_SWITCH_TTY.  Slot 0 is the GUI
+          slot and is refused (WASMOS_ERR_VT_SERIAL_SLOT_GUI); an out-of-range
+          slot answers WASMOS_ERR_VT_BAD_TTY_ID.  RESP arg0=the bound slot.
       - { symbol: VT_IPC_RESP, value: 0x780, kind: resp }
       - symbol: VT_IPC_INPUT_NOTIFY
         value: 0x781
@@ -364,6 +376,16 @@ subsystems:
           compositor owns the framebuffer only while vt-0 is visible; on this notify
           it resumes/relinquishes drawing.  Fire-and-forget.  arg0=1 if vt-0 is now
           the visible slot, 0 otherwise.
+      - symbol: VT_IPC_KLOG_NOTIFY
+        value: 0x784
+        kind: notify
+        doc: |
+          kernel -> vt: klog bytes are pending in the ring registered through
+          wasmos_klog_register_ring.  Fire-and-forget, carries no payload: the vt
+          drains the ring on every wake, so receiving it is the whole point and the
+          message itself needs no handling beyond not being treated as an error.
+          Without this doorbell an idle vt drains only on the next unrelated
+          message, which strands klog on screen while the system is quiet.
       - { symbol: VT_IPC_ERROR, value: 0x7ff, kind: error }
 
   - name: serial

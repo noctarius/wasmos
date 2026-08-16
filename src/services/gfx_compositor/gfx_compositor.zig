@@ -118,8 +118,6 @@ const GFX_MAX_TITLE_LABEL: usize = 24;
 // housekeeping counter clears FONT_INIT_RETRY_MASK, i.e. one attempt per 64 idle
 // passes, and only while at least one window exists.  Retrying stops on the
 // first success or on a hard failure, which leaves windows with untitled chrome.
-// FONT_INIT_MAX_ATTEMPTS is not referenced by any code path.
-const FONT_INIT_MAX_ATTEMPTS: u32 = 64;
 const FONT_INIT_RETRY_MASK: u32 = 0x3F;
 const TITLE_GLYPHS: []const u8 = "win 0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ -_.";
 const GFX_TITLE_TEXT_ENABLED: bool = true;
@@ -178,35 +176,16 @@ const CHROME_BTN_GAP: i32 = 4;
 const CHROME_MAX_HIT_W: i32 = 30;
 const CHROME_RESIZE_HANDLE_SZ: i32 = 12;
 const CHROME_TITLE_FONT_PX: u32 = 14;
-// Scancodes 0..57 of the set-1 make-code range, which is what the built-in
-// keymap tables below cover; anything at or above this decodes to 0.
-const SCANCODE_MAP_LEN: usize = 58;
-
-// Built-in keymaps.  The vt is the system's keymap decoder and the compositor
-// receives already-decoded characters, so scancode_to_ascii and these tables are
-// not reached by any live path; g_key_layout selects between them if they are.
-const key_layout_t = enum(u8) {
-    us_qwerty = 0,
-    de_nodeadkeys = 1,
-};
-
-const keymap_t = struct {
-    plain: [SCANCODE_MAP_LEN]u8,
-    shift: [SCANCODE_MAP_LEN]u8,
-    altgr: [SCANCODE_MAP_LEN]u8,
-};
 
 var g_api: ?*c.wasmos_driver_api_t = null;
 var g_proc_endpoint: u32 = IPC_ENDPOINT_NONE;
 var g_gfx_endpoint: u32 = IPC_ENDPOINT_NONE;
 var g_fb_endpoint: u32 = IPC_ENDPOINT_NONE;
 var g_vt_endpoint: u32 = IPC_ENDPOINT_NONE;
-var g_kbd_endpoint: u32 = IPC_ENDPOINT_NONE;
 var g_mouse_endpoint: u32 = IPC_ENDPOINT_NONE;
 var g_font_endpoint: u32 = IPC_ENDPOINT_NONE;
 var g_font_title_handle: u32 = 0;
 var g_font_init_failed: bool = false;
-var g_font_init_attempts: u32 = 0;
 var g_font_prime_index: usize = 0;
 // True while vt-0 (the compositor) is the visible slot and thus owns the
 // framebuffer.  Set at startup and thereafter driven by the vt's
@@ -229,14 +208,10 @@ var g_rng_state: u32 = 0xA5A5_5A5A;
 var g_damage_marker_logged: bool = false;
 var g_window_owner_deny_logged: bool = false;
 var g_buffer_owner_deny_logged: bool = false;
-var g_kbd_subscribed: bool = false;
 var g_mouse_subscribed: bool = false;
-var g_shift_down: bool = false;
-var g_altgr_down: bool = false;
 var g_idle_housekeeping_counter: u32 = 0;
 var g_total_handled_counter: u32 = 0;
 var g_runtime_lookup_req_id: u32 = GFX_REQUEST_BASE + 0x4000;
-var g_key_layout: key_layout_t = .de_nodeadkeys;
 var g_title_dbg_open_fail_logged: bool = false;
 var g_title_dbg_prime_fail_logged: bool = false;
 var g_dirty_pending: bool = false;
@@ -494,11 +469,6 @@ fn lookup_vt_endpoint() i32 {
     return 0;
 }
 
-fn lookup_kbd_endpoint() i32 {
-    g_kbd_endpoint = sys.svcLookupEndpointRetry(api(), g_proc_endpoint, g_gfx_endpoint, "kbd", GFX_REQUEST_BASE + 0x180, GFX_FB_LOOKUP_RETRIES) orelse return -1;
-    return 0;
-}
-
 fn lookup_mouse_endpoint() i32 {
     g_mouse_endpoint = sys.svcLookupEndpointRetry(api(), g_proc_endpoint, g_gfx_endpoint, "mouse", GFX_REQUEST_BASE + 0x1C0, GFX_FB_LOOKUP_RETRIES) orelse return -1;
     return 0;
@@ -544,20 +514,6 @@ fn ensure_font_title_ready_lazy() void {
     request_repaint_full();
 }
 
-fn subscribe_keyboard() i32 {
-    if (g_kbd_endpoint == IPC_ENDPOINT_NONE) return -1;
-    var reply: c.nd_ipc_message_t = undefined;
-    const req_id: u32 = GFX_REQUEST_BASE + GFX_FB_LOOKUP_RETRIES + 3;
-    if (ipc_call(g_kbd_endpoint, req_id, c.KBD_IPC_SUBSCRIBE_REQ, 0, 0, 0, 0, &reply) != 0) {
-        return -1;
-    }
-    if (reply.type != c.KBD_IPC_SUBSCRIBE_RESP or @as(i32, @bitCast(reply.arg0)) != 0) {
-        return -1;
-    }
-    g_kbd_subscribed = true;
-    return 0;
-}
-
 fn subscribe_mouse() i32 {
     if (g_mouse_endpoint == IPC_ENDPOINT_NONE) return -1;
     var reply: c.nd_ipc_message_t = undefined;
@@ -577,67 +533,6 @@ fn endpoint_alive(endpoint: u32) bool {
     if (api().ipc_endpoint_owner == null) return true;
     var owner_context_id: u32 = 0;
     return api().ipc_endpoint_owner.?(endpoint, &owner_context_id) == 0;
-}
-
-const KEYMAP_US = keymap_t{
-    .plain = [_]u8{
-        0,    0x1B, '1', '2',  '3',  '4',  '5', '6', '7',  '8',
-        '9',  '0',  '-', '=',  0x08, 0x09, 'q', 'w', 'e',  'r',
-        't',  'y',  'u', 'i',  'o',  'p',  '[', ']', 0x0A, 0,
-        'a',  's',  'd', 'f',  'g',  'h',  'j', 'k', 'l',  ';',
-        '\'', '`',  0,   '\\', 'z',  'x',  'c', 'v', 'b',  'n',
-        'm',  ',',  '.', '/',  0,    '*',  0,   ' ',
-    },
-    .shift = [_]u8{
-        0,   0x1B, '!', '@', '#',  '$',  '%', '^', '&',  '*',
-        '(', ')',  '_', '+', 0x08, 0x09, 'Q', 'W', 'E',  'R',
-        'T', 'Y',  'U', 'I', 'O',  'P',  '{', '}', 0x0A, 0,
-        'A', 'S',  'D', 'F', 'G',  'H',  'J', 'K', 'L',  ':',
-        '"', '~',  0,   '|', 'Z',  'X',  'C', 'V', 'B',  'N',
-        'M', '<',  '>', '?', 0,    '*',  0,   ' ',
-    },
-    .altgr = [_]u8{0} ** SCANCODE_MAP_LEN,
-};
-
-const KEYMAP_DE_NODEADKEYS = keymap_t{
-    .plain = [_]u8{
-        0,    0x1B, '1',  '2',  '3',  '4',  '5',  '6', '7',  '8',
-        '9',  '0',  0xDF, 0xB4, 0x08, 0x09, 'q',  'w', 'e',  'r',
-        't',  'z',  'u',  'i',  'o',  'p',  0xFC, '+', 0x0A, 0,
-        'a',  's',  'd',  'f',  'g',  'h',  'j',  'k', 'l',  0xF6,
-        0xE4, '#',  0,    '<',  'y',  'x',  'c',  'v', 'b',  'n',
-        'm',  ',',  '.',  '-',  0,    '*',  0,    ' ',
-    },
-    .shift = [_]u8{
-        0,    0x1B, '!', '"', '#',  '$',  '%',  '&', '/',  '(',
-        ')',  '=',  '?', '`', 0x08, 0x09, 'Q',  'W', 'E',  'R',
-        'T',  'Z',  'U', 'I', 'O',  'P',  0xDC, '*', 0x0A, 0,
-        'A',  'S',  'D', 'F', 'G',  'H',  'J',  'K', 'L',  0xD6,
-        0xC4, '\'', 0,   '>', 'Y',  'X',  'C',  'V', 'B',  'N',
-        'M',  ';',  ':', '_', 0,    '*',  0,    ' ',
-    },
-    .altgr = [_]u8{
-        0,   0,    0,    0,   0, 0,    0,   '{', '[', ']',
-        '}', 0,    '\\', 0,   0, 0,    '@', 0,   0,   0,
-        0,   0xFC, 0,    0,   0, 0xF6, '~', 0,   0,   0,
-        0,   0xDF, 0,    0,   0, 0,    0,   0,   0,   0,
-        0,   0,    0,    '|', 0, 0,    0,   0,   0,   0,
-        0,   0,    0,    0,   0, 0,    0,   0,
-    },
-};
-
-fn active_keymap() *const keymap_t {
-    return switch (g_key_layout) {
-        .us_qwerty => &KEYMAP_US,
-        .de_nodeadkeys => &KEYMAP_DE_NODEADKEYS,
-    };
-}
-
-fn scancode_to_ascii(scancode: u8, shifted: bool, altgr: bool) u8 {
-    const km = active_keymap();
-    if (scancode >= SCANCODE_MAP_LEN) return 0;
-    if (altgr and km.altgr[scancode] != 0) return km.altgr[scancode];
-    return if (shifted) km.shift[scancode] else km.plain[scancode];
 }
 
 fn prune_events_for_dead_endpoints() void {
@@ -689,10 +584,6 @@ fn cleanup_orphaned_state() void {
 }
 
 fn refresh_input_subscriptions_runtime() void {
-    if (g_kbd_subscribed and !endpoint_alive(g_kbd_endpoint)) {
-        g_kbd_subscribed = false;
-        g_kbd_endpoint = IPC_ENDPOINT_NONE;
-    }
     if (g_mouse_subscribed and !endpoint_alive(g_mouse_endpoint)) {
         g_mouse_subscribed = false;
         g_mouse_endpoint = IPC_ENDPOINT_NONE;

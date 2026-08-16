@@ -776,9 +776,13 @@ extern int32_t wasmos_xfer_buffer_unmap(int32_t buffer_id) WASMOS_WASM_IMPORT("w
 /* klog ring (VT I/O multiplexer): register a BUFFER_KIND_TRANSFER
  * xfer-buffer the caller acquired + mapped + wasmos_ringbuf_init'd as the kernel
  * klog ring, so serial_write publishes klog text into it for the VT to drain
- * into vt-1.  Returns 0 on success, -1 on a bad/foreign buffer id.
+ * into vt-1.  notify_endpoint is the caller's own endpoint and receives a
+ * fire-and-forget VT_IPC_KLOG_NOTIFY doorbell once bytes are pending, so a
+ * consumer parked on it drains without polling; pass 0 for no doorbell.
+ * Returns 0 on success, -1 on a bad/foreign buffer id or a notify_endpoint the
+ * caller does not own.
  */
-extern int32_t wasmos_klog_register_ring(int32_t id) WASMOS_WASM_IMPORT("wasmos", "klog_register_ring");
+extern int32_t wasmos_klog_register_ring(int32_t id, int32_t notify_endpoint) WASMOS_WASM_IMPORT("wasmos", "klog_register_ring");
 /* Allocate one message-signalled interrupt vector and bind it to `endpoint`,
  * which must be owned by the caller. Fills the wasmos_msi_desc_t at `out` with
  * the interrupt-controller address/data pair that makes a device raise that

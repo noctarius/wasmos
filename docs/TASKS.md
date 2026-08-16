@@ -352,35 +352,6 @@ and `architecture/33-completion-ports.md`.
   and make the user mutex consume it.
 - [ ] [ENHANCEMENT][P2] Promote libsys event-loop intents into the shared future/promise contract
   with one receive pump per endpoint and request-id/generation cancellation.
-- [ ] [CLEANUP][P3] Remove synchronous request/reply IPC from libc, libsys, native wrappers,
-  and remaining service call sites (nested `ipc_select_one` reply-waits). The
-  future/promise bridge has landed and net-stack uses it, but the
-  fs-manager↔device-manager sync-round-trip deadlock hazard remains
-  (`architecture/09` synchronous-IPC section; `src/services/fs_manager/fs_manager.c:608`).
-  - [x] CLI VT path: the three post-init VT round-trips (`GET_ACTIVE_TTY`,
-    `SWITCH_TTY`, `READ_REQ`) now go through one owned `wasmos_sys_event_loop`
-    pump as IPC futures. This fixed a real character-loss bug — see below.
-  - [ ] CLI, rest of the way to a coroutine app. Remaining synchronous receives:
-    `cli_register_vt_writer` / `cli_set_vt_mode` still drain the VT endpoint
-    directly (init-only, before the pump is in use), and the PM/FS/spawn paths
-    still block on `wasmos_ipc_select_one(g_reply_endpoint)`
-    (`cli.c` ~1111, ~1381, ~1404, ~2076), which is why the CLI is structurally
-    blind to input while a command waits (Ctrl+C during a long command cannot
-    work). Converting those is the prerequisite for collapsing the CLI's two
-    endpoints onto one, and then for replacing the `g_phase`
-    (`INIT/PROMPT/READ/WAIT_IPC/FAILED`) machine with a coroutine per command.
-    Do not collapse the endpoints first: sharing one endpoint while those
-    blocking receives remain just moves the input loss into them.
-  - [ ] AssemblyScript surface, which the UI apps sit on:
-    `src/libui/assemblyscript/libui.ts` (8 `ipc.call` sites),
-    `src/utils/date/date.ts` (3), and `examples/assemblyscript/minesweeper`.
-    libui.ts is the one that matters -- every AS UI app inherits its blocking
-    behaviour, so a UI cannot service input while it waits on the compositor.
-  - [ ] `examples/c/menu_bar/menu_bar.c` (C, not AssemblyScript): one blocking
-    `wasmos_ipc_call` at line 50, plus a `sched_yield` spin waiting for the rtc
-    service to appear. The spin is the more objectionable of the two under the
-    project's no-busy-spin rule; the service-discovery wait belongs on a class
-    subscription or a bounded park.
 - [ ] [CLEANUP][P3] Remove the legacy `process_block_on_ipc` shim once all callers move to the
   select/idle-wait path (`src/kernel/process.h:225`, `src/kernel/process.c:1588`).
 - [ ] [DOCS][P2] Reconcile `architecture/30-ipc-direct-switch.md` (fully unimplemented; its
@@ -475,33 +446,46 @@ and `architecture/33-completion-ports.md`.
   endpoint" and "owned by the kernel" stop sharing a value.
 
 - [ ] [CLEANUP][P1] Retire blocking IPC from app and service CALL SITES, then delete
-  the blocking primitives that only those call sites use. Sequenced, because the
-  order is forced by what gates what:
+  the blocking primitives that only those call sites use. Nothing gates the start:
+  the four AS drivers (keyboard, mouse, serial, rtc) are already `@coroutine` entry
+  points driven by libc's pump, and the future/promise bridge is live in net-stack
+  and on the CLI's VT path. Sequenced, because the order is forced by what gates
+  what:
 
-  1. **AssemblyScript coroutines: DONE.** All four AS drivers (keyboard, mouse,
-     serial, rtc) are `@coroutine` entry points with `@suspend` waits driven by
-     libc's pump; their only remaining mention of `ipc_recv` is a comment saying
-     registration deliberately does not use it. `src/libc/assemblyscript/` carries
-     coroutine.ts / eventloop.ts / runtime.ts and `tools/as_coroutine_transform.mjs`
-     lowers the entry point. This did NOT need the generated coroutine host-call
-     family that was once proposed as the prerequisite -- AS got its own
-     implementation instead, so nothing here gates the rest.
-  2. **AssemblyScript surface that is still blocking**: five `ipc_recv(...)` sites
+  1. **AssemblyScript surface that is still blocking**: five `ipc_recv(...)` sites
      in `src/libc/assemblyscript/wasmos.ts`, eight `ipc.call` sites in
      `src/libui/assemblyscript/libui.ts`, three in `src/utils/date/date.ts`, and
      `examples/assemblyscript/minesweeper`. libui.ts is the one that matters: every
      AS UI app inherits its blocking behaviour, so a UI cannot service input while
      it waits on the compositor.
-  3. **C**, ~36 files and not uniform. cli, fs_manager, virtio_net, pci_bus and the
+  2. **C**, ~36 files and not uniform. cli, fs_manager, virtio_net, pci_bus and the
      net_tcp_* examples already touch futures, so they are partial conversions; the
      utils and examples are shallow. fs_manager (6 sites), cli (5) and fs_fat (5)
-     are the bulk.
-  4. **Zig / Rust / Go**, small: font_service (a hand-rolled 50 ms x 200 poll, the
+     are the bulk, and three sites carry a named hazard:
+     - fs_manager's nested synchronous `DEVMGR_QUERY_MOUNT_REQ` round-trip can
+       deadlock (`src/services/fs_manager/fs_manager.c:608`; `architecture/09`
+       synchronous-IPC section).
+     - the CLI's PM/FS/spawn paths still block on
+       `wasmos_ipc_select_one(g_reply_endpoint)` (`cli.c` ~1111, ~1381, ~1404,
+       ~2076), and `cli_register_vt_writer` / `cli_set_vt_mode` drain the VT
+       endpoint directly at init, which is why the CLI is structurally blind to
+       input while a command waits (Ctrl+C during a long command cannot work).
+       Converting these is the prerequisite for collapsing the CLI's two endpoints
+       onto one, and then for replacing the `g_phase`
+       (`INIT/PROMPT/READ/WAIT_IPC/FAILED`) machine with a coroutine per command.
+       Do not collapse the endpoints first: sharing one endpoint while those
+       blocking receives remain just moves the input loss into them.
+     - `examples/c/menu_bar/menu_bar.c` has one blocking `wasmos_ipc_call` at line
+       50 plus a `sched_yield` spin waiting for the rtc service to appear. The spin
+       is the more objectionable of the two under the project's no-busy-spin rule;
+       the service-discovery wait belongs on a class subscription or a bounded park.
+  3. **Zig / Rust / Go**, small: font_service (a hand-rolled 50 ms x 200 poll, the
      one with a symptom to point at), gfx_compositor, `libc/rust/wasmos.rs`,
      tetris, `libc/go/wasmos.go`.
-  5. **Delete the primitives** -- `ipc_select_one`/`ipc_recv` host calls,
-     `wasmos_ipc_call*`, `wasmos_sys_ipc_call_native`. Only meaningful after 2-4;
-     doing it earlier is a flag day.
+  4. **Delete the primitives** -- `ipc_select_one`/`ipc_recv` host calls,
+     `wasmos_ipc_call*`, `wasmos_sys_ipc_call_native`, and the synchronous
+     request/reply wrappers in libc, libsys and the native shims. Only meaningful
+     after 1-3; doing it earlier is a flag day.
 
   **Syscall 6 (`WASMOS_SYSCALL_IPC_CALL`) is independent and can go now.** Its
   libc wrapper `wasmos_sys_ipc_call` has zero callers, and the kernel handler at
@@ -593,234 +577,43 @@ Source: `architecture/13-runtime-and-packaging.md`,
   `block_buffer_phys` (512 MiB under WARP vs 2 GiB under wasm3); an
   out-of-linear-memory guest pointer traps the module under wasm3 but returns
   `BAD_POINTER` under WARP; `sched_ready_count` returns 0 under WARP rather than
-  the live count; `wasi.random_get` fills zeros; `console_write` is mirrored to
-  the VT only under wasm3; `env.strlen` is wasm3-only; `wasm3_runtime_enter`
-  disables preemption for the whole call while `warp_runtime_enter` does not.
+  the live count; `wasi.random_get` fills zeros; `env.strlen` is wasm3-only;
+  `wasm3_runtime_enter` disables preemption for the whole call while
+  `warp_runtime_enter` does not.
 
 ## ABI, Code Generation, and Error Handling
 
 Source: `architecture/34-abi-idl-and-error-model.md`.
 
-Phase order: 1 (error foundation, done) → 2 (host calls) → 3 (opcodes) → 4
-(migrate call sites onto the generated surfaces). The error call-site migration
-is deliberately last: it rewrites service/driver code that Phases 2/3 also
-rewrite, so doing it after the generated host-call/opcode surfaces exist touches
-each site once. Error domains ride those surfaces (`SHMEM_ERR_*` are host-call
-returns; `FS_ERR_*`/`PROC_*` ride IPC opcodes), so the migration depends on them.
+The IDL surfaces (`abi/errors.yaml`, `abi/hostcalls.yaml`, `abi/opcodes.yaml`,
+`abi/constants.yaml`) and their generators are in place, swapped into the kernel,
+both runtimes, the AOT tool and all five guest languages, and guarded by the
+`quality` re-gen check; `STATUS.md` records that baseline. What remains is the
+tail.
 
-- [x] Phase 1 (error foundation) — COMPLETE: `abi/errors.yaml` IDL +
-  `scripts/gen_abi_errors.py` generator + the per-language value ABI under
-  `abi/generated/<lang>/wasmos_status.{h,rs,go,zig,ts}` — transport
-  `wasmos_status_t`, generated domain registry (stable ids), packed
-  `(domain, code)` constants seeded from the legacy taxonomy, decode lookups
-  (`wasmos_strerror`), the fixed 8-byte frame / 40-byte error object, and the
-  chain helpers (`wrap`/`unwrap`/`root`/`is`/`as`), each verified to compile
-  (Rust/Go/C also run-tested) with its native toolchain. Generated files sit
-  outside the `src/` format/lint scope. `quality` gained a `--check` re-gen
-  guard and an advisory bare-`return -1;` inventory (services/drivers, ~24
-  sites). Not yet wired into the OS — wiring is Phase 4.
-- [x] Phase 2a: `abi/hostcalls.yaml` (all 117 host calls + the id-less wasm3-only
-  `env.strlen`) + `scripts/gen_abi_hostcalls.py` generating the `HC_*` id enum,
-  with Model validation (ids unique, dense `0..N-1`, ordered; `reserved` slots for
-  retirements) and `--verify-source` proving the IDL's `(symbol, id)` set matches
-  the live `src/kernel/include/warp_ring3.h` exactly. Wired into `quality`
-  (`--check` + `--verify-source`). Param **kinds** captured but not yet emitted.
-- [x] Phase 2b: generate the WARP `WASMOS_SYMBOLS(LINK)` table
-  (`abi/generated/c/wasmos_symbols_warp.inc`) and the wasm3 link table
-  (`wasmos_link_wasm3.inc`, m3 sig strings derived from param kinds + the
-  `wasm3: i32` overrides for the 10 pointers wasm3 passes as a raw offset). Both
-  `--verify-source`-proven to reproduce the live `link.cpp`/`link.c` exactly
-  (117 host calls; ids, names, wrapper fn names, and sigs all match), wired into
-  `quality`. `warp_fn`/`wasm3_fn` are derived (only the 5 `ipc_select_*` family
-  fns need an explicit `wasm3_fn` override). Still parallel artifacts — not wired.
-- [x] Phase 2c (AOT): generate the WARP AOT symbol table
-  (`wasmos_symbols_aot.inc`, `WASMOS_AOT_SYMBOLS(LINK)`) — each entry a
-  `stub_i<arity>`; validated against `warp_aot.cpp`. The AOT table is
-  name-resolved (not position-coupled — only ring-3 dispatch is), so the
-  generator emits the full host-call set and `--verify-source` asserts the live
-  table is a subset (it currently omits `env.abort`/`wasi.proc_exit`; the
-  generated set completes it, a safe additive change to validate at swap time).
-- [x] Phase 2c (ring-3 dispatch): generate `warp_ring3_dispatch_table()`
-  (`wasmos_ring3_dispatch.inc`) — a self-contained inline function
-  (frame-decode stays hand-written, dispatch is generated). ctx is the computed
-  `a<arity>`, which fixes the `proc_info_stats` bug. Compile-checked clean under
-  `clang++ -Wall -Wextra -Werror` against arity-derived wrapper decls (proves
-  every case's arg count matches its wrapper); `--verify-source` also confirms
-  the per-id wrapper fn matches the live switch.
-- [x] First swap (proves the loop): `wasm3_link_wasmos` (`src/kernel/wasm3/link.c`)
-  now `#include`s the generated `wasmos_link_wasm3.inc` and expands
-  `WASMOS_WASM3_LINKS(X)` instead of the hand-written `rc |= wasm3_link_raw(...)`
-  cascade (129 lines retired). `abi/generated/c` added to `CFLAGS_KERNEL`. Live in
-  the default wasm3 build: `run-qemu-test` boots through to CLI + calculator +
-  halt, and `run-kernel-unit-tests` pass.
-- [x] WARP kernel surfaces swapped in: the HC enum (`warp_ring3.h`),
-  `WASMOS_SYMBOLS` (`link.cpp`), and the ring-3 dispatch
-  (`warp_ring3_dispatch` now decodes the frame and calls the generated
-  `warp_ring3_dispatch_table`). Validated by a WARP `run-qemu-test` (boots to
-  CLI + calculator + halt) and the default wasm3 `run-qemu-test` (the enum header
-  is shared). The `proc_info_stats` ctx fix is now live in the WARP kernel.
-- [x] AOT tool table swapped in: `src/tools/warp_aot/warp_aot.cpp` now
-  `#include`s the generated `wasmos_symbols_aot.inc` and expands
-  `WASMOS_AOT_SYMBOLS(DYNAMIC_LINK)` (return-matched `stub_i<N>`/`stub_v<N>`).
-  All kernel-side + AOT host-call tables are now generated from the IDL. WARP
-  `run-qemu-test` boots with "using AOT binary" (payloads rebind against the
-  generated table).
-- [x] Phase 2c (client stubs): generate the guest import bindings for **all five**
-  languages from the IDL — `abi/generated/{c/wasmos_imports.h,rust,go,zig,
-  assemblyscript}/wasmos_imports.*` — every `wasmos`-module host call (incl.
-  aliases) with its signature, idioms matched to the in-tree examples (C
-  `extern … WASMOS_WASM_IMPORT`, Rust `#[link(wasm_import_module)]`, Go
-  `//go:wasmimport`, Zig `pub extern "wasmos" … callconv(.c)`, AS `@external`).
-  Each compile-verified with its real toolchain (`zig ast-check`, `rustc --target
-  wasm32 -Dwarnings`, `go vet GOOS=wasip1`, `asc`, and a wasm32 `clang` compile of
-  `api.h`), all wired into the `quality` `--check` guard.
-  - C keeps its **ergonomic typed signatures** (`const char*`, `uint64_t*`,
-    struct pointers) via a per-param `c_type:` override in the IDL (default
-    `int32_t`, a wasm32 pointer being an i32 offset). `src/libc/include/wasmos/api.h`
-    is now just its struct typedefs + `#define`s + the two native-only `mutex_*`
-    decls + a relative `#include` of the generated header (relative-path include
-    avoids threading `-Iabi/generated/c` through every app/driver/service/test
-    compile that pulls in libc). The `mutex_try_lock`/`mutex_unlock` pair stays
-    hand-written because it is a driver_api vtable entry (native), not a WASM
-    host call — pending the futex migration.
-  - **Docs are single-sourced.** Each host call carries a `doc:` field in the IDL,
-    emitted as a comment into all five client stubs. Migrated the 17 legacy
-    `api.h` comments and authored the remaining ~80 from the wrapper bodies so
-    every call is documented in one place.
-  - `--verify-source` is repurposed as the permanent hand-written-C-surface guard
-    (not retired): every residual `WASMOS_WASM_IMPORT("wasmos", …)` decl in
-    `src/libc`/`src/libsys` must name a real IDL host call with a matching arity
-    (only the allow-listed `mutex_*` pair remains). The swapped kernel tables
-    self-skip; `--check` guards every generated file.
-  - (`dma_map_borrow` is a wrapper-body divergence, tracked separately under
-    Kernel — not a table swap. A client-side ABI-version `static_assert` was
-    dropped as meaningless: the guest has no second source of truth to assert
-    the count/version against.)
-- [x] Phase 3a (opcodes, ABI-header core): `abi/opcodes.yaml` (164 opcodes /
-  19 subsystems, extracted faithfully from the header) + `scripts/gen_abi_opcodes.py`
-  generating per-subsystem C enums (`abi/generated/c/wasmos_opcodes.h`), a
-  best-effort `wasmos_opcode_name()` diagnostic lookup, and a doc reference table
-  (`abi/generated/docs/opcodes.md`). Per-opcode doc comments migrated into the IDL
-  (39 documented). `wasmos_driver_abi.h` now `#include`s the generated enums (the
-  19 opcode enum blocks retired; error enums/flags/descriptors stay hand-written);
-  `--verify-source` proved symbol/value parity before the swap and now self-skips,
-  with `--check` + `--verify-source` wired into `quality`. Opcodes are
-  endpoint-scoped, so value collisions across subsystems are expected (0x223,
-  0x2A3 documented in the name table).
-- [x] Phase 3b (opcodes, consolidation): the scattered opcode definitions are
-  folded into `abi/opcodes.yaml` (now 193 opcodes / 21 subsystems) and the drift
-  retired — `rtc_ipc.h` (was triplicated across kernel/libc/libsys),
-  `font_ipc.h`, `gfx_ipc.h` (was duplicated kernel/libc), and the `serial.c`
-  0x500 driver opcodes now all `#include` the generated `wasmos_opcodes.h`
-  instead of hand-defining enums; their `*_STATUS_*`/structs stay hand-written.
-  Per-language opcode constants generated (`abi/generated/{rust,go,zig,
-  assemblyscript}/wasmos_opcodes.*`). `font`/`gfx` are modeled as their own
-  subsystems (distinct services/endpoints), so their range reuse (`gfx`+`pm` at
-  0x200, `font`+`netdrv` at 0xA00) is faithful endpoint-scoping; the diagnostic
-  lookup is therefore **subsystem-scoped** — `wasmos_opcode_name(subsystem_id,
-  type)`. NOTE: the earlier "font 0xA00 vs 0xA000" bug was a misread —
-  `font_service.zig` `REQ_BASE 0xA000` is the request-id counter seed, not an
-  opcode base; font clients and server agree on 0xA00. Not force-migrated: the
-  pre-existing hand-rolled per-language subsets (libc Go/Zig/AS/Rust FS
-  constants, the `.ts` driver literals) — they can adopt the generated files
-  incrementally. Deferred: `gfx_ipc.h`'s struct layouts still differ kernel-vs-libc
-  (96 lines) — a separate (non-opcode) consolidation.
-- [~] Phase 3c (optional, PoC landed): typed request/reply client stubs. An
-  optional `rpc:` block on a request opcode in `abi/opcodes.yaml` (`reply`/`error`
-  opcodes + `request`/`reply_args` arg-word names) drives generation of a typed
-  reply struct + reply-status decoder + a stub. Proven on the `rtc` read/set
-  family in two shapes: a C **future**-returning stub over the libsys ipc-future
-  bridge (`abi/generated/c/wasmos_rpc_wasm.h`, `wasmos_rpc_<op>()` returns a
-  `wasmos_future_t*`) and an AS **synchronous** stub over `ipc.call`
-  (`abi/generated/assemblyscript/wasmos_rpc.ts`, mirroring the idiom `date.ts`
-  uses). Both compile-verified against the real runtime APIs; wired into `--check`.
-  Remaining if pursued: model bit-packed args (RTC packs time into arg words —
-  the stub currently exposes raw arg words, packing stays hand-written), the
+- [ ] [ENHANCEMENT][P3] Extend the typed request/reply stub generator (an optional `rpc:`
+  block on a request opcode in `abi/opcodes.yaml`) beyond the `rtc` proof of
+  concept, which generates a C future-returning stub (`wasmos_rpc_wasm.h`) and an
+  AS synchronous one (`wasmos_rpc.ts`). Needed before it can carry more opcode
+  families: model bit-packed args (`rtc` packs a time into arg words, so the stub
+  exposes raw arg words and the packing stays hand-written), define the
   transfer-buffer borrow/release ownership contract for payload-carrying opcodes,
-  a native (`wasmos_sys_native_*`) flavor, and adoption (e.g. migrate `date.ts`
-  onto `rtcIpcRead`). Roll out to more opcode families only if the ergonomics pay
-  off — it is the optional tail of the ABI effort.
-- [~] Phase 4 (after 2 and 3): migrate the tree onto the packed error model, one
-  subsystem at a time. **Real scope (measured 2026-08-03, larger than the earlier
-  "~24" estimate):** ~413 legacy refs (`PROC_PM_ERR_` 188, `FS_ERR_` 111,
-  `PROC_SPAWN_ERR_` 89, `SHMEM_ERR_` 25) + **438 bare `return -1;`** in
-  services/drivers. Transport convention established (doc 34, Result
-  representation): a value-or-error host call returns the datum (`>= 0`) or a
-  packed code, which is **negative** (`WASMOS_ERR_MAKE(domain, code)`); IPC replies carry
-  the `{flags, chain}` block. Provenance wraps only at deliberate abstraction
-  seams.
-  - [x] Subsystem 1 — **SHMEM** (host calls): `SHMEM_ERR_*` (-30 range) →
-    packed `WASMOS_ERR_SHMEM_*` in both `link.c`/`link.cpp` wrappers;
-    legacy defs removed; no consumer decoded the specific reason so the wire
-    change is safe. Booted both runtimes.
-  - [x] Subsystem 2 — **FS**: `FS_ERR_*` deleted; all 91 FAT-backend/relay sites
-    now use packed `WASMOS_ERR_FS_*` directly (no compat/alias layer — we
-    own every caller). `driver_abi.h` includes `wasmos_status.h`; wire =
-    the packed code in `FS_IPC_ERROR`/`RESP` arg0, transparent to fs-manager/libc
-    (they only test `< 0`). Booted both runtimes.
-  - [x] Subsystem 3 — **PROC**: both `PROC_SPAWN_ERR_*` (domain 1) and
-    `PROC_PM_ERR_*` (domain 2) enums deleted; all 239 sites across the kernel
-    (process_manager_spawn/services, selftest) + services (cli, init, broker) now
-    use packed `WASMOS_ERR_PROC_{SPAWN,PM}_*` directly (returned as the
-    negative rc in `PROC_IPC_ERROR.arg1`). Booted both runtimes.
-  - [x] Subsystem 4 — **scoped boundary pass**: every bare `-1` that leaves a
-    service in an IPC reply code arg now carries a specific packed code. This
-    covers *bare* `-1`s only — the named negative-int taxonomies are subsystem 5
-    below, so the edges are not yet uniformly on the packed model. Scope was
-    "boundary-crossing returns only", not the full 438-site sweep;
-    internal-helper `-1`s stay and the `-1` lint stays advisory. New vocabulary:
-    8 specific `fs` codes (`NOT_AUTHORIZED`, `NO_CLIENT_SLOT`, `NOT_ABSOLUTE`,
-    `NO_BACKEND`, `REBORROW`, `BACKEND_IPC`, `BAD_FD`, `REPLY_SEND`), the `gfx`
-    domain populated, and new `vt` (8) / `chardev` (9) / `devmgr` (10) domains.
-    No **generic** fs code was added — an unspecific packed code is `-1` with
-    extra steps, so each site names its actual failure instead. Three structural
-    findings drove the shape:
-    - Six `-1`s covered ORed conditions with unrelated causes and had to be split
-      before they could be named (e.g. `handle_read_path_req`'s
-      `backend < 0 || open_path_len <= 0 || xfer_buffer_write() != 0`).
-    - `handle_read_path_req` was **discarding** the backend's own reason: it
-      replaced a specific `WASMOS_ERR_FS_*` from the OPEN/READ leg with `-1`. It
-      now relays that code and only mints `BACKEND_IPC` when `forward_request`
-      itself failed at the transport level. The main dispatch loop already
-      relayed backend replies verbatim, so its error path is transport-only.
-    - The `open0`/`read0`/`close0`/`r0` reply defaults no longer reach a client:
-      every path now selects a specific code, so those `-1`s are purely internal
-      "unset" markers.
-    Also migrated: `fs_init` (client-slot exhaustion), `device_manager` (the
-    unsupported-query path was leaking the request `type` as its code arg; now
-    `DEVMGR_UNSUPPORTED_QUERY` with `type` echoed in arg1), and both framebuffer
-    drivers (where the ad-hoc `-3` meant *two different things* across the two
-    drivers — `NO_RUNTIME_MODES` vs `MODE_TOO_LARGE`). `net`, `font`, `block`,
-    `virtio_serial` and `hrng` needed no domains: their `-1`s are all internal
-    helper returns. Booted both runtimes.
-  - [x] Subsystem 5 — the **named** negative-int status vocabularies. All seven
-    migrated onto packed domains: `XFER_BUFFER_ERR_*` (254 refs, host-call edge)
-    -> `xfer_buffer` (11); `NET_STATUS_*` (117) -> `net` (5, was reserved);
-    `GFX_STATUS_*` (112) -> appended to `gfx` (6); `FONT_STATUS_*` (61) ->
-    `font` (12); `RTC_STATUS_*` (27) -> `rtc` (13); `HRNG_STATUS_*` (17) ->
-    `hrng` (14); `VT_SWITCH_ERR_*` (10) -> appended to `vt` (8), reusing
-    `BAD_TTY_ID` for its `INVALID_TTY` rather than duplicating it. Each legacy
-    `*_OK` became `WASMOS_ERR_NONE` (both 0, so comparisons held). Notes worth
-    keeping: `HRNG_STATUS_*`'s value gaps were an alignment to `NET_STATUS_*`'s
-    numbering, which namespaced domains make unnecessary; `abi/hostcalls.yaml`
-    and `abi/opcodes.yaml` documented the old names in prose and were updated so
-    all three re-gen guards stay clean.
+  add a native (`wasmos_sys_native_*`) flavour, and adopt it at a real call site
+  (`src/utils/date/date.ts` onto `rtcIpcRead`). Roll out only if the ergonomics
+  pay off — this is the optional tail of the ABI effort.
 - [ ] [CLEANUP][P3] Unify the transport axis: `IPC_ERR_INVALID/PERM/FULL` in
   `src/kernel/include/ipc.h` duplicates `wasmos_status_t`'s `INVAL`/`DENIED`/
   `FULL` at the same values, and the same three names are redeclared in
   `fs_fat/fat_types.h` and `services/vt/vt_types.h`. Replace them with the
-  generated transport constants. Out of the subsystem-5 scope (that pass covered
-  the domain axis), but it is the last duplicated status vocabulary.
-  Deliberately left alone: `PM_SPAWN_INTERNAL_ERR_*` (internal by name) and
-  `WAMOS_SCRIPT_ERR_*` / `SCRIPT_BROKER_ERR_*`, which are service startup/exit
-  statuses returned from `initialize()`, not IPC reply codes.
-- [ ] [ENHANCEMENT][P2] Extend the `quality` re-gen guard to the host-call and opcode generators
-  as they land (the errors guard already exists), so generated output can never
-  silently drift from the IDL.
-- [ ] [ENHANCEMENT][P2] Widen the advisory `-1` lint: it greps for a literal `return -1;`, which is
-  why both the `fs_init` reply-code default and every named `*_STATUS_-1` above
-  escaped subsystem 4. It should also flag a reply code arg that is a variable
-  reaching `-1`, and any negative-int status enum defined outside
+  generated transport constants. The packed migration covered the domain axis;
+  this is the last duplicated status vocabulary. Deliberately left alone:
+  `PM_SPAWN_INTERNAL_ERR_*` (internal by name) and `WAMOS_SCRIPT_ERR_*` /
+  `SCRIPT_BROKER_ERR_*`, which are service startup/exit statuses returned from
+  `initialize()`, not IPC reply codes.
+- [ ] [ENHANCEMENT][P2] Widen the advisory `-1` lint: it greps for a literal `return -1;`,
+  which is why the `fs_init` reply-code default and the named `*_STATUS_` `-1`
+  values were invisible to it. It should also flag a reply code arg that is a
+  variable reaching `-1`, and any negative-int status enum defined outside
   `abi/errors.yaml`.
 
 
@@ -1031,37 +824,6 @@ returns; `FS_ERR_*`/`PROC_*` ride IPC opcodes), so the migration depends on them
   cannot currently name.
 
 ## Filesystems and Storage
-- [ ] [BUG][P0] Fix `test_exec_fs_write_smoke`, the last failing test in the QEMU
-  integration suite (run 31081191205, job 92550164406 — everything else in that
-  suite is green, as are all four boot configs and the kernel unit tests). The app
-  never prints `fs-write-smoke: ok`; the session tail shows a kernel fault:
-
-      =000000000000000d          vector 0x0d = #GP
-      [cpu] err=0000000000000000
-      [cpu] rip=ff1a2233ff1a2233
-      [cpu] cs=0000000000000008   kernel CS
-
-  The faulting address identifies the corruption source. `0xff1a2233ff1a2233` is
-  **non-canonical** (bits 63:48 = 0xff1a, neither all-zero nor all-one), which is
-  exactly why the CPU raised #GP with `err=0`: a control transfer to a corrupted
-  64-bit address. The value is the 32-bit pattern `0xFF1A2233` duplicated — and
-  that is the **menu-bar background colour** (`src/libui/include/wasmos/libui.h:1276`
-  `mbroot->bg_color`, also `examples/c/menu_bar/menu_bar.c:359,387`). A 32-bit ARGB
-  fill writing consecutive words produces precisely this doubled pattern.
-
-  So this is not a filesystem bug: a menu-bar background fill is writing over kernel
-  memory that holds a code pointer or return address, and control later transfers to
-  it. `fs_write_smoke` is the victim, not the cause. It is not a stack canary
-  (those are 0xC0DEC0DEF00DFACE / 0xCAFEBABEDEADC0DE / 0xC0FFEE0DD15EA5E).
-
-  Reproduces only in CI. The suite builds `warp_smp_defconfig` under TCG, which is
-  MTTCG (one host thread per vCPU) on the Linux runner, whereas an x86_64 guest on
-  an Apple Silicon host forces `thread=single` and serialises vCPUs — the same
-  asymmetry that hid the wake/block race fixed in c5dcab1eb3. Passes 2/2 locally on
-  the identical config. Prime suspect is therefore a concurrency window in the
-  gfx/window buffer mapping under WARP, which runs guests in ring 0 and so has no
-  hardware backstop against a guest write landing in kernel memory (see
-  `architecture/11` ring-3 work, and the shmem/linmem aliasing bug class).
 
 - [ ] [FEATURE][P2] Implement FAT32 cluster read/write in the FAT-table layer: FAT32 is
   detected at mount (`fat_geom.c:92`) but `fat_fatent_read`/`fat_fatent_write`
@@ -1176,13 +938,6 @@ Remaining:
   on a full RX ring (app-side flow control).
 - [ ] [FEATURE][P2] Enable guest-to-guest loopback (`LWIP_NETIF_LOOPBACK` + net-stack loopback
   polling) so an in-guest server is reachable.
-- [x] Migrate virtio-net to per-vq MSI-X so RX interrupts re-deliver per
-  notification and the timed-poll workaround drops to a plain blocking wait.
-  Done with the whole MSI platform: vectors 48–63 + ISR stubs, arch-neutral
-  allocator (`msi_vectors.c`, host unit test), `msi_alloc`/`msi_free` host calls,
-  the `msi` error domain, a resident pci-bus owning the capability walk and
-  device programming (`PCI_IPC_MSI_*`), and `mmio_write32` for the MSI-X table
-  BAR. virtio-net takes RX/TX/config vectors; virtio-rng takes one.
 - [ ] [FEATURE][P2] Give `ata` real device DMA. There is no bus-master IDE (BMIDE/PRD)
   programming today, so every transfer is PIO regardless of the `dma_*`
   scaffolding. On QEMU's PIIX this means bus-master IDE; an AHCI controller
@@ -1236,14 +991,53 @@ Source: `architecture/19-virtual-terminal.md`,
 
 VT I/O-multiplexer phase 5 (remaining; phases 0–4 shipped):
 
-- [ ] [ENHANCEMENT][P2] Make vt-1 default-visible at boot (`src/services/vt/vt_main.c:21`,
-  `g_active_tty = 0`).
-- [ ] [CLEANUP][P3] Retire the framebuffer-PCI console-ring drain so the framebuffer is a pure
-  blit surface (`src/drivers/framebuffer_pci/framebuffer_pci_native.c:41,233,336`).
-- [ ] [FEATURE][P2] Add the serial-bound-slot selector (`VT_IPC_BIND_SERIAL_REQ`, undefined;
-  `g_serial_tty` is fixed at 1 — `vt_main.c:24`).
-- [ ] [FEATURE][P2] Lazy per-slot CLI spawn: have the VT spawn `cli.wap` pinned to a slot on
-  first switch and drop `start cli.wap` from `sysinit.rc`.
+- [ ] [FEATURE][P2] Route an app's output to its controlling tty instead of straight to
+  serial. Only three writers should reach the UART directly: the vt (mirroring
+  the serial-bound slot), early boot (before the vt exists), and the panic/fault
+  path. Everything else writes to a slot and lets the vt fan out.
+
+  Today every other component writes to the kernel log instead. libc's
+  `printf`/`puts`/`putsn` and `write(1|2, …)` call `wasmos_console_write`
+  (`src/libc/src/stdio.c:294`, `unistd.c:308`), native services call
+  `api->console_write`, and both land in `klog_write` -> `serial_write`, which
+  fans out to COM1 and the vt's klog ring. The consequence is that an app's
+  output is *system log*: it appears on the console slot no matter which slot the
+  app belongs to, and on serial no matter where serial is bound. An app on vt-2
+  prints onto vt-1's screen. The CLI is the only component in the tree that
+  writes to a slot (`VT_IPC_WRITE_REQ`, `cli.c:637`), and it writes to serial as
+  well — that duplication is exactly why vt-1 currently has to drop writer writes
+  and suppress echo (doc 19, the log-mirror rules).
+
+  Do it in libc, not in the ~53 files that print: a process already knows its
+  controlling tty (`wasmos_startup_tty()`, from spawn info), so `putsn` can send
+  `VT_IPC_WRITE_REQ` to that slot and fall back to `console_write` only when
+  there is no tty (drivers, early services, anything spawned without one). Native
+  services need the same treatment behind `api->console_write`. Then apps need no
+  changes at all, and `console_write` becomes what its name says: a kernel-log
+  call, not the way user code prints.
+
+  Blocked on one missing primitive: the vt cannot mirror a slot to serial while
+  `console_write` feeds the klog ring, because the mirrored bytes come straight
+  back into the slot it just wrote (klog -> vt-1 -> console_write -> klog). A
+  serial write that bypasses the klog ring — a host call, or a flag on the
+  existing one — has to land first.
+
+  Done when: an app spawned on vt-2 prints on vt-2 and nowhere else; the
+  serial-bound slot's output reaches serial through the vt; vt-1 no longer needs
+  its log-mirror special cases; and `wasmos_console_write` has no callers outside
+  libc's fallback path, the kernel, and the panic path.
+- [ ] [CLEANUP][P3] Delete `console_ring_t` and the plumbing that fills it now that nothing
+  drains it: the kernel producer (`src/kernel/serial.c` `serial_ring_write`,
+  `serial_console_ring_id`, `serial_console_ring_ptr`), the native driver API's
+  `console_ring_id` (an ABI version bump), and the type itself in
+  `src/drivers/include/wasmos_driver_abi.h`. The klog ring replaced it.
+- [ ] [ENHANCEMENT][P3] Move the console slot's shell out of `sysinit.rc` too, so the vt owns
+  every shell. The vt already spawns one per slot on first use; the console
+  slot's is still started by `sysinit.rc`, last, because the first prompt is what
+  the test framework reads as "the system is up". Spawning it from the vt (which
+  comes up early) put that prompt in the middle of boot and made tests drive a
+  half-started system — `test_shmem_grant_revoke_pair` failed that way. Needs the
+  readiness contract to stop keying off the first prompt first.
 
 Other graphics/VT/UI:
 
@@ -1312,13 +1106,6 @@ Other graphics/VT/UI:
   index for LIST_VIEW/TREE_VIEW/DROPDOWN but a component id for MENU_ITEM, two
   incompatible non-negative domains a caller cannot tell apart
   (`src/libui/include/wasmos/libui.h`).
-- [ ] [CLEANUP][P3] Delete the compositor's dead keymap path -- `SCANCODE_MAP_LEN`,
-  `keymap_t`, `KEYMAP_US`, `KEYMAP_DE_NODEADKEYS`, `active_keymap`,
-  `scancode_to_ascii`, `g_key_layout`. Nothing calls the decoder, and its
-  presence contradicts the "vt is the single keymap decoder" invariant. The
-  dead `FONT_INIT_MAX_ATTEMPTS`/`g_font_init_attempts` pair and
-  `cli_types.h`'s unreferenced `CLI_MAX_PROCS` go with it
-  (`src/services/gfx_compositor/gfx_compositor.zig`).
 
 ## Validation and Documentation
 

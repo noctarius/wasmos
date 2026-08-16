@@ -166,10 +166,11 @@ and **domains** (namespaced operation errors: the negative of `(domain << 16) | 
 | `WASMOS_ERR_VT_NO_TTY_FOR_SOURCE` | -0x00080002 | no tty is associated with the requesting endpoint |
 | `WASMOS_ERR_VT_READER_BUSY` | -0x00080003 | another endpoint is already the reader for this tty |
 | `WASMOS_ERR_VT_UNSUPPORTED_REQUEST` | -0x00080004 | unknown or unsupported request type |
-| `WASMOS_ERR_VT_SWITCH_MODE_OFF` | -0x00080005 | tty switch could not disable framebuffer rendering |
+| `WASMOS_ERR_VT_SWITCH_MODE_OFF` | -0x00080005 | deprecated: the framebuffer no longer has a console mode to disable |
 | `WASMOS_ERR_VT_SWITCH_CLEAR` | -0x00080006 | tty switch could not clear the screen |
 | `WASMOS_ERR_VT_SWITCH_REPLAY` | -0x00080007 | tty switch could not replay the cell buffer |
-| `WASMOS_ERR_VT_SWITCH_MODE_ON` | -0x00080008 | tty switch could not re-enable framebuffer rendering |
+| `WASMOS_ERR_VT_SWITCH_MODE_ON` | -0x00080008 | deprecated: the framebuffer no longer has a console mode to re-enable |
+| `WASMOS_ERR_VT_SERIAL_SLOT_GUI` | -0x00080009 | slot 0 is the GUI slot and cannot be bound to the serial console |
 
 ### `chardev` (domain 9) — character-device sample driver failures
 

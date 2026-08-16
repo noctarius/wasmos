@@ -78,6 +78,8 @@
         "test_irq_route_capability.py",
         "test_libui_click.py",
         "test_vt_cli_lockup.py",
+        "test_vt_framebuffer_ownership.py",
+        "test_vt_serial_bind.py",
         "test_vt_tty_switch.py"
       ]
     },

@@ -403,6 +403,18 @@ linked feature documents for rationale and rollout plans.
   1-in-5 halt-test failures before (identical at the pre-change baseline),
   20/20 passes after. The CLI's PM/FS paths still use blocking
   `ipc_select_one`, so it stays blind to input while a command runs.
+- The ABI is single-sourced in four IDL files under `abi/` — `errors.yaml`,
+  `hostcalls.yaml`, `opcodes.yaml` and `constants.yaml` — and every consumer of
+  them is generated, not hand-written: the `HC_*` id enum, the WARP
+  `WASMOS_SYMBOLS` link table,
+  the wasm3 link table, the WARP AOT symbol table, the ring-3 dispatch table,
+  the per-subsystem opcode enums, and guest import bindings for all five
+  languages. Each is compiled into the live kernel, both runtimes and the AOT
+  tool rather than kept as a parallel artifact. `quality` runs every generator
+  with `--check` (output matches the IDL) and `--verify-source` (the IDL matches
+  what the tree declares), so neither side can drift. Opcodes are
+  endpoint-scoped, so values repeat across subsystems by design and the
+  diagnostic lookup takes a subsystem id.
 - Error and status codes are single-sourced in `abi/errors.yaml` and generated for
   C, Rust, Go, Zig and AssemblyScript; `gen_abi_errors.py --check` guards the
   checked-in output against IDL drift. Both axes are negative on error: the

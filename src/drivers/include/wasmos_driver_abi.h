@@ -51,6 +51,17 @@ enum { PROC_MODULE_SOURCE_INITFS = 0, PROC_MODULE_SOURCE_FS = 1 };
  * children that nobody PROC_IPC_WAITs on (bus enumerators, boot self-tests, …).
  * Must NOT be set when the spawner will PROC_IPC_WAIT for the exit status. */
 #define PROC_SPAWN_PATH_FLAG_AUTOREAP (1u << 1)
+/* Controlling tty for a child whose manifest sets wants_tty, encoded as
+ * (tty + 1) so that 0 keeps the previous behaviour: process-manager hands out
+ * the next tty itself, round-robin.  Pinning matters when the spawner is the vt
+ * creating a shell for one specific slot -- a round-robin number would put that
+ * shell on some other slot's queue, where nothing reads it. */
+#define PROC_SPAWN_PATH_TTY_SHIFT 2u
+#define PROC_SPAWN_PATH_TTY_MASK 0xFu
+#define PROC_SPAWN_PATH_TTY(tty)                                                                   \
+    ((((uint32_t)(tty) + 1u) & PROC_SPAWN_PATH_TTY_MASK) << PROC_SPAWN_PATH_TTY_SHIFT)
+#define PROC_SPAWN_PATH_TTY_OF(flags)                                                              \
+    ((((uint32_t)(flags) >> PROC_SPAWN_PATH_TTY_SHIFT) & PROC_SPAWN_PATH_TTY_MASK))
 
 /* Process-manager failure reasons: spawn paths use WASMOS_ERR_PROC_SPAWN_*
  * (domain 1), non-path PM IPC uses WASMOS_ERR_PROC_PM_* (domain 2), carried in

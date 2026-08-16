@@ -84,9 +84,18 @@ void* serial_console_ring_ptr(void);
  * serial_write then additionally publishes klog text into the ring for the VT
  * to drain into vt-1.  This is additive to the legacy console_ring (the
  * framebuffer driver still drains console_ring for early-boot on-screen klog).
- * owner_context_id must own the buffer.  Returns 0 on success, -1 on a
- * bad/foreign id or a region that is not an initialized ring. */
-int klog_register_ring(uint32_t owner_context_id, uint32_t id);
+ * owner_context_id must own the buffer and, when non-zero, notify_endpoint.
+ * notify_endpoint receives the VT_IPC_KLOG_NOTIFY doorbell; 0 registers the ring
+ * without one, leaving the consumer to drain on its own schedule.  Returns 0 on
+ * success, -1 on a bad/foreign id, a foreign notify endpoint, or a region that is
+ * not an initialized ring. */
+int klog_register_ring(uint32_t owner_context_id, uint32_t id, uint32_t notify_endpoint);
+
+/* Deliver a pending klog doorbell, if any.  Runs from the scheduler loop, not
+ * from the logging path: serial_write can run under a lock, in interrupt context
+ * and during a panic, so it may not send IPC.  A no-op when no ring, no doorbell
+ * endpoint, or nothing pending. */
+void klog_poll(void);
 /* Keyboard input ring, filled by the VT and drained by the wasmos_input_read host call.
  * It is independent of serial_read_char: a reader sees only pushed keystrokes and never
  * falls back to COM1.  Push appends to a 64-entry ring and drops the byte silently when

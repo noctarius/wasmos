@@ -146,10 +146,6 @@ void pm_update_well_known_service_endpoint(const char* name, uint32_t endpoint) 
         pm_atomic_store_u32(&g_pm.block_endpoint, endpoint);
         return;
     }
-    if (strcmp(name, "vt") == 0) {
-        pm_atomic_store_u32(&g_pm.vt_endpoint, endpoint);
-        return;
-    }
     if (strcmp(name, "fb") == 0) {
         pm_atomic_store_u32(&g_pm.fb_endpoint, endpoint);
         return;

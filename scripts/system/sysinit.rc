@@ -26,4 +26,8 @@ if -f /boot/apps/calculator.wap then
     spawn /boot/apps/calculator.wap
 endif
 
+# The console slot's shell, started last so the first prompt still means the
+# system is up.  Shells for the other slots are not started here: the vt creates
+# one on demand when a slot is first switched to or bound to serial, pinned to
+# that slot.
 start /boot/system/services/cli.wap

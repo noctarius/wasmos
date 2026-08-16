@@ -161,6 +161,7 @@ static void pm_slot_reset(pm_app_state_t* slot) {
     slot->entry_arg1 = 0;
     slot->entry_arg2 = 0;
     slot->entry_arg3 = 0;
+    slot->requested_tty = 0;
     slot->spawn_cli_args_len = 0;
     memset(slot->spawn_cli_args, 0, sizeof(slot->spawn_cli_args));
     memset(slot->name, 0, sizeof(slot->name));
@@ -353,7 +354,13 @@ static process_run_result_t pm_app_entry(process_t* process, void* arg) {
         si->version = WASMOS_SPAWN_INFO_VERSION;
         si->header_size = (uint32_t)sizeof(wasmos_spawn_info_t);
         si->proc_endpoint = g_pm.proc_endpoint;
-        si->tty = (desc.flags & WASMOS_APP_FLAG_WANTS_TTY) ? pm_alloc_cli_tty() : 0u;
+        if ((desc.flags & WASMOS_APP_FLAG_WANTS_TTY) == 0u) {
+            si->tty = 0u;
+        } else if (state->requested_tty != 0u) {
+            si->tty = state->requested_tty - 1u;
+        } else {
+            si->tty = pm_alloc_cli_tty();
+        }
         si->module_count = g_pm.module_count;
         si->module_index = g_pm.init_module_index;
         si->args_off = (uint32_t)sizeof(wasmos_spawn_info_t);
@@ -525,9 +532,11 @@ static int pm_apply_spawn_caps(uint32_t pid, const pm_spawn_caps_t* caps) {
     return 0;
 }
 
+/* requested_tty is the PROC_SPAWN_PATH_TTY encoding: 0 leaves the controlling tty
+ * to pm_alloc_cli_tty's round-robin, non-zero pins it to (requested_tty - 1). */
 static int pm_spawn_from_buffer(uint32_t parent_pid, const uint8_t* blob, uint32_t blob_size,
                                 const char* spawn_cli_args, uint32_t spawn_cli_args_len,
-                                uint32_t* out_pid) {
+                                uint32_t requested_tty, uint32_t* out_pid) {
     if (!blob || blob_size == 0 || !out_pid) {
         return PM_SPAWN_INTERNAL_ERR_BAD_ARGS;
     }
@@ -566,6 +575,7 @@ static int pm_spawn_from_buffer(uint32_t parent_pid, const uint8_t* blob, uint32
 
     slot->started = 0;
     slot->in_use = 1;
+    slot->requested_tty = requested_tty;
     slot->spawn_cli_args_len = 0;
     if (spawn_cli_args && spawn_cli_args_len > 0u) {
         if (spawn_cli_args_len >= sizeof(slot->spawn_cli_args)) {
@@ -1234,6 +1244,7 @@ int pm_handle_spawn_path_sync(uint32_t pm_context_id, const ipc_message_t* msg) 
                              resolved.blob_size,
                              resolved.args_len > 0u ? resolved.args : 0,
                              resolved.args_len,
+                             PROC_SPAWN_PATH_TTY_OF(spawn_req_flags),
                              &child_pid) != 0) {
         pm_xfer_release(&pmbuf);
         return WASMOS_ERR_PROC_PM_SPAWN_FAILED;
@@ -1366,6 +1377,7 @@ int pm_handle_spawn_path_caps_sync(uint32_t pm_context_id, const ipc_message_t* 
                              resolved.blob_size,
                              resolved.args_len > 0u ? resolved.args : 0,
                              resolved.args_len,
+                             0u, /* caps variants spend arg0 on capability flags: no tty pin */
                              &child_pid) != 0) {
         pm_xfer_release(&pmbuf);
         return WASMOS_ERR_PROC_PM_SPAWN_FAILED;
@@ -1981,6 +1993,7 @@ int pm_handle_spawn_path(uint32_t pm_context_id, const ipc_message_t* msg) {
                              resolved.blob_size,
                              resolved.args_len > 0u ? resolved.args : 0,
                              resolved.args_len,
+                             PROC_SPAWN_PATH_TTY_OF(spawn_req_flags),
                              &pid) != 0) {
         pm_xfer_release(&pmbuf);
         return WASMOS_ERR_PROC_SPAWN_SPAWN_FAILED;
@@ -2127,6 +2140,7 @@ int pm_handle_spawn_path_caps(uint32_t pm_context_id, const ipc_message_t* msg) 
                              resolved.blob_size,
                              resolved.args_len > 0u ? resolved.args : 0,
                              resolved.args_len,
+                             0u, /* caps variants spend arg0 on capability flags: no tty pin */
                              &pid) != 0) {
         pm_xfer_release(&pmbuf);
         return WASMOS_ERR_PROC_PM_SPAWN_FAILED;

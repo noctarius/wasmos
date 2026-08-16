@@ -196,7 +196,10 @@ const FBTEXT_IPC_CELL_WRITE_REQ int32 = 0x600
 const FBTEXT_IPC_CURSOR_SET_REQ int32 = 0x601
 const FBTEXT_IPC_SCROLL_REQ int32 = 0x602
 const FBTEXT_IPC_CLEAR_REQ int32 = 0x603
-// arg0: 0=ring off, 1=ring on
+// Retired.  The framebuffer drivers no longer drain the kernel console
+// ring -- they are pure blit surfaces and the vt paints the log from its
+// own klog ring -- so there is no console mode to toggle and nothing
+// sends this.  The value stays reserved rather than being reused.
 const FBTEXT_IPC_CONSOLE_MODE_REQ int32 = 0x604
 // resp: arg0=cols arg1=rows
 const FBTEXT_IPC_GEOMETRY_REQ int32 = 0x605
@@ -232,6 +235,12 @@ const VT_IPC_SET_MODE_REQ int32 = 0x706
 // serial driver -> vt: RX bytes for the serial-bound slot, packed like
 // VT_IPC_WRITE_REQ (arg0[27:24]=byte_count, arg0[7:0]..arg3[7:0]=bytes).
 const VT_IPC_SERIAL_INPUT_REQ int32 = 0x707
+// Bind the serial console to a slot: arg0=slot.  Serial RX is injected
+// into that slot's line discipline from then on, whichever slot is
+// visible, and it is independent of VT_IPC_SWITCH_TTY.  Slot 0 is the GUI
+// slot and is refused (WASMOS_ERR_VT_SERIAL_SLOT_GUI); an out-of-range
+// slot answers WASMOS_ERR_VT_BAD_TTY_ID.  RESP arg0=the bound slot.
+const VT_IPC_BIND_SERIAL_REQ int32 = 0x708
 const VT_IPC_RESP int32 = 0x780
 // vt -> a slot's registered reader: input is available on your slot; drain
 // it with VT_IPC_READ_REQ.  Fire-and-forget (request_id 0), arg0=slot.
@@ -245,6 +254,13 @@ const VT_IPC_KEY_FORWARD int32 = 0x782
 // it resumes/relinquishes drawing.  Fire-and-forget.  arg0=1 if vt-0 is now
 // the visible slot, 0 otherwise.
 const VT_IPC_VIS_NOTIFY int32 = 0x783
+// kernel -> vt: klog bytes are pending in the ring registered through
+// wasmos_klog_register_ring.  Fire-and-forget, carries no payload: the vt
+// drains the ring on every wake, so receiving it is the whole point and the
+// message itself needs no handling beyond not being treated as an error.
+// Without this doorbell an idle vt drains only on the next unrelated
+// message, which strands klog on screen while the system is quiet.
+const VT_IPC_KLOG_NOTIFY int32 = 0x784
 const VT_IPC_ERROR int32 = 0x7FF
 
 // serial (0x500..0x5FF)

@@ -155,10 +155,11 @@ const (
 	WASMOS_ERR_VT_NO_TTY_FOR_SOURCE int32 = -0x00080002 // no tty is associated with the requesting endpoint
 	WASMOS_ERR_VT_READER_BUSY int32 = -0x00080003 // another endpoint is already the reader for this tty
 	WASMOS_ERR_VT_UNSUPPORTED_REQUEST int32 = -0x00080004 // unknown or unsupported request type
-	WASMOS_ERR_VT_SWITCH_MODE_OFF int32 = -0x00080005 // tty switch could not disable framebuffer rendering
+	WASMOS_ERR_VT_SWITCH_MODE_OFF int32 = -0x00080005 // deprecated: the framebuffer no longer has a console mode to disable
 	WASMOS_ERR_VT_SWITCH_CLEAR int32 = -0x00080006 // tty switch could not clear the screen
 	WASMOS_ERR_VT_SWITCH_REPLAY int32 = -0x00080007 // tty switch could not replay the cell buffer
-	WASMOS_ERR_VT_SWITCH_MODE_ON int32 = -0x00080008 // tty switch could not re-enable framebuffer rendering
+	WASMOS_ERR_VT_SWITCH_MODE_ON int32 = -0x00080008 // deprecated: the framebuffer no longer has a console mode to re-enable
+	WASMOS_ERR_VT_SERIAL_SLOT_GUI int32 = -0x00080009 // slot 0 is the GUI slot and cannot be bound to the serial console
 	WASMOS_ERR_CHARDEV_NO_DATA int32 = -0x00090001 // no byte is buffered yet (retryable)
 	WASMOS_ERR_CHARDEV_UNSUPPORTED_REQUEST int32 = -0x00090002 // unknown or unsupported request type
 	WASMOS_ERR_HRNG_INVALID int32 = -0x000E0001 // invalid request arguments (byte count or buffer)
@@ -555,13 +556,15 @@ func WasmosStrerror(c int32) string {
 	case WASMOS_ERR_VT_UNSUPPORTED_REQUEST:
 		return "unknown or unsupported request type"
 	case WASMOS_ERR_VT_SWITCH_MODE_OFF:
-		return "tty switch could not disable framebuffer rendering"
+		return "deprecated: the framebuffer no longer has a console mode to disable"
 	case WASMOS_ERR_VT_SWITCH_CLEAR:
 		return "tty switch could not clear the screen"
 	case WASMOS_ERR_VT_SWITCH_REPLAY:
 		return "tty switch could not replay the cell buffer"
 	case WASMOS_ERR_VT_SWITCH_MODE_ON:
-		return "tty switch could not re-enable framebuffer rendering"
+		return "deprecated: the framebuffer no longer has a console mode to re-enable"
+	case WASMOS_ERR_VT_SERIAL_SLOT_GUI:
+		return "slot 0 is the GUI slot and cannot be bound to the serial console"
 	case WASMOS_ERR_CHARDEV_NO_DATA:
 		return "no byte is buffered yet (retryable)"
 	case WASMOS_ERR_CHARDEV_UNSUPPORTED_REQUEST:

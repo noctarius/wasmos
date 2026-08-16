@@ -233,7 +233,11 @@ enum {
     FBTEXT_IPC_CURSOR_SET_REQ = 0x601,
     FBTEXT_IPC_SCROLL_REQ = 0x602,
     FBTEXT_IPC_CLEAR_REQ = 0x603,
-    /* arg0: 0=ring off, 1=ring on */
+    /* Retired.  The framebuffer drivers no longer drain the kernel console
+     * ring -- they are pure blit surfaces and the vt paints the log from its
+     * own klog ring -- so there is no console mode to toggle and nothing
+     * sends this.  The value stays reserved rather than being reused.
+     */
     FBTEXT_IPC_CONSOLE_MODE_REQ = 0x604,
     /* resp: arg0=cols arg1=rows */
     FBTEXT_IPC_GEOMETRY_REQ = 0x605,
@@ -273,6 +277,13 @@ enum {
      * VT_IPC_WRITE_REQ (arg0[27:24]=byte_count, arg0[7:0]..arg3[7:0]=bytes).
      */
     VT_IPC_SERIAL_INPUT_REQ = 0x707,
+    /* Bind the serial console to a slot: arg0=slot.  Serial RX is injected
+     * into that slot's line discipline from then on, whichever slot is
+     * visible, and it is independent of VT_IPC_SWITCH_TTY.  Slot 0 is the GUI
+     * slot and is refused (WASMOS_ERR_VT_SERIAL_SLOT_GUI); an out-of-range
+     * slot answers WASMOS_ERR_VT_BAD_TTY_ID.  RESP arg0=the bound slot.
+     */
+    VT_IPC_BIND_SERIAL_REQ = 0x708,
     VT_IPC_RESP = 0x780,
     /* vt -> a slot's registered reader: input is available on your slot; drain
      * it with VT_IPC_READ_REQ.  Fire-and-forget (request_id 0), arg0=slot.
@@ -289,6 +300,14 @@ enum {
      * the visible slot, 0 otherwise.
      */
     VT_IPC_VIS_NOTIFY = 0x783,
+    /* kernel -> vt: klog bytes are pending in the ring registered through
+     * wasmos_klog_register_ring.  Fire-and-forget, carries no payload: the vt
+     * drains the ring on every wake, so receiving it is the whole point and the
+     * message itself needs no handling beyond not being treated as an error.
+     * Without this doorbell an idle vt drains only on the next unrelated
+     * message, which strands klog on screen while the system is quiet.
+     */
+    VT_IPC_KLOG_NOTIFY = 0x784,
     VT_IPC_ERROR = 0x7FF,
 };
 
@@ -681,10 +700,12 @@ static inline const char* wasmos_opcode_name(uint32_t subsystem_id, uint32_t typ
         case 0x705: return "VT_IPC_REGISTER_WRITER";
         case 0x706: return "VT_IPC_SET_MODE_REQ";
         case 0x707: return "VT_IPC_SERIAL_INPUT_REQ";
+        case 0x708: return "VT_IPC_BIND_SERIAL_REQ";
         case 0x780: return "VT_IPC_RESP";
         case 0x781: return "VT_IPC_INPUT_NOTIFY";
         case 0x782: return "VT_IPC_KEY_FORWARD";
         case 0x783: return "VT_IPC_VIS_NOTIFY";
+        case 0x784: return "VT_IPC_KLOG_NOTIFY";
         case 0x7FF: return "VT_IPC_ERROR";
         default: return "UNKNOWN";
         }

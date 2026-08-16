@@ -33,6 +33,9 @@
  *   VT_IPC_REGISTER_WRITER arg0=slot.  RESP arg0=switch generation, arg1=slot.
  *   VT_IPC_SET_MODE_REQ    arg0=VT_INPUT_MODE_* bits (other bits are masked
  *                          off).  RESP arg0=the mode applied, arg1=the slot.
+ *   VT_IPC_BIND_SERIAL_REQ arg0=slot (>= 1).  Moves the serial console to that
+ *                          slot, independently of the visible one.  RESP
+ *                          arg0=the bound slot.
  *
  * Every failure answers VT_IPC_ERROR with arg0 set to a packed vt-domain code
  * from abi/errors.yaml, including an unrecognised opcode
@@ -57,16 +60,26 @@ static int32_t g_vt_ep = -1;
 static int32_t g_kbd_ep = -1;
 static int32_t g_fb_ep = -1;
 static vt_tty_t g_ttys[VT_MAX_TTYS];
-static uint32_t g_active_tty = 0;
+/* The system console slot: kernel klog drains here and it is the default visible
+ * and serial-bound slot.  vt-0 is the GUI slot (the compositor), never a text
+ * console, which is why the console cannot be slot 0
+ * (docs/architecture/19-virtual-terminal.md, slot model). */
+#define VT_KLOG_TTY 1u
+static uint32_t g_active_tty = VT_KLOG_TTY;
 /* Slot bound to the serial console: RX from the serial driver is injected here,
- * regardless of which slot is visible.  Default vt-1 (the system console). */
-static uint32_t g_serial_tty = 1;
+ * regardless of which slot is visible.  Defaults to the system console and moves
+ * only on VT_IPC_BIND_SERIAL_REQ, never on a visible-slot switch. */
+static uint32_t g_serial_tty = VT_KLOG_TTY;
 static int32_t g_serial_in_ep = -1;
 static int32_t g_fs_ep = -1;
 static int32_t g_tty_reader_ep[VT_MAX_TTYS] = {-1, -1, -1, -1};
 static int32_t g_tty_writer_ep[VT_MAX_TTYS] = {-1, -1, -1, -1};
 static uint32_t g_switch_generation = 1;
 static uint8_t g_switch_barrier = 0;
+/* Suppresses per-cell rendering while a batch of bytes is written to a slot.  The
+ * caller repaints the whole grid with one blit afterwards, which is what keeps a
+ * klog burst from becoming one IPC per character. */
+static uint8_t g_render_defer = 0;
 static uint8_t g_ctrl_down = 0;
 static uint8_t g_shift_down = 0;
 static uint8_t g_altgr_down = 0;
@@ -78,11 +91,9 @@ static int32_t g_alloc_failure = 0;
 
 /* klog ring: the VT owns an SPSC byte ring overlaid on an xfer buffer; the
  * kernel publishes klog text into it (serial_write) and the VT drains it into
- * vt-1 (the system console).  The ring carries no IPC wake, so the main loop
- * drains it after each blocking wasmos_ipc_select_one: an idle VT does not
- * drain until the next message arrives.  That latency is tolerable because
- * vt-1 is off-screen by default and COM1 TX always carries the full log. */
-#define VT_KLOG_TTY 1u
+ * VT_KLOG_TTY.  The main loop drains after each blocking wasmos_ipc_select_one,
+ * and the kernel's VT_IPC_KLOG_NOTIFY doorbell is one such wake, so pending klog
+ * is drained even when nothing else is happening. */
 #define VT_KLOG_RING_CAPACITY 4096u /* SPSC data capacity (power of two) */
 static wasmos_ringbuf_t g_klog_ring;
 static int32_t g_klog_ring_ready = 0;
@@ -198,6 +209,13 @@ static int vt_alloc_tty_cells(void) {
 
 static void vt_render_cell(const vt_tty_t* tty, uint16_t row, uint16_t col);
 static void vt_draw_tty0_hint(void);
+
+/* Whether a write to `tty_index` should paint the framebuffer as it goes: only
+ * the visible slot renders, never during a switch (the replay repaints it), and
+ * never while a batch is deferring to a closing blit. */
+static uint8_t vt_render_live(uint32_t tty_index) {
+    return (uint8_t)((tty_index == g_active_tty) && !g_switch_barrier && !g_render_defer);
+}
 
 static int vt_bytes_equal(const uint8_t* a, const uint8_t* b, uint16_t len) {
     if (!a || !b) {
@@ -378,10 +396,6 @@ static void vt_fb_set_cursor(const vt_tty_t* tty) {
         FBTEXT_IPC_CURSOR_SET_REQ, (int32_t)tty->cursor_col, (int32_t)tty->cursor_row, 0, 0);
 }
 
-static void vt_fb_console_mode(uint8_t enabled) {
-    (void)vt_fb_send(FBTEXT_IPC_CONSOLE_MODE_REQ, enabled ? 1 : 0, 0, 0, 0);
-}
-
 static void vt_store_cell(vt_tty_t* tty, uint16_t row, uint16_t col, uint32_t ch) {
     if (!tty || !tty->cells || row >= g_vt_rows || col >= g_vt_cols) {
         return;
@@ -519,8 +533,7 @@ static void vt_apply_private_csi(uint32_t tty_index, vt_tty_t* tty, uint8_t fina
     }
 
     tty->cursor_visible = (final == 'h') ? 1u : 0u;
-    if ((tty_index != 0u) && (tty_index == g_active_tty) && !g_switch_barrier &&
-        tty->cursor_visible) {
+    if ((tty_index != 0u) && vt_render_live(tty_index) && tty->cursor_visible) {
         vt_fb_set_cursor(tty);
     }
 }
@@ -529,7 +542,7 @@ static void vt_apply_csi(uint32_t tty_index, vt_tty_t* tty, uint8_t final) {
     if (!tty) {
         return;
     }
-    uint8_t render_now = (tty_index != 0) && (tty_index == g_active_tty) && !g_switch_barrier;
+    uint8_t render_now = (tty_index != 0) && vt_render_live(tty_index);
     switch (final) {
     case 'A': {
         uint16_t n = vt_csi_param(tty, 0, 1);
@@ -718,7 +731,7 @@ static void vt_put_char_virtual(vt_tty_t* tty, uint32_t tty_index, uint8_t ch) {
     if (!tty) {
         return;
     }
-    uint8_t render_now = (tty_index == g_active_tty) && !g_switch_barrier;
+    uint8_t render_now = vt_render_live(tty_index);
 
     if (ch == '\r') {
         tty->cursor_col = 0;
@@ -960,7 +973,7 @@ static void vt_init_ttys(void) {
             cells[j].fg = 15;
         }
     }
-    g_active_tty = 0;
+    g_active_tty = VT_KLOG_TTY;
     g_switch_generation = 1;
     g_switch_barrier = 0;
 }
@@ -984,8 +997,6 @@ static int32_t vt_switch_tty(uint32_t tty_index) {
     }
 
     uint32_t prev_active = g_active_tty;
-    uint8_t prev_console_mode = (prev_active == 0) ? 1u : 0u;
-    uint8_t next_console_mode = (tty_index == 0) ? 1u : 0u;
     g_switch_barrier = 1;
 
     /* Allow logical tty switching even when framebuffer control is unavailable
@@ -1014,39 +1025,13 @@ static int32_t vt_switch_tty(uint32_t tty_index) {
         (void)vt_fb_send_switch(FBTEXT_IPC_GFX_OVERLAY_REQ, 0, 0, 0, 0);
     }
 
-    if (prev_console_mode != 0u) {
-        if (vt_fb_send_switch(FBTEXT_IPC_CONSOLE_MODE_REQ, 0, 0, 0, 0) != 0) {
-            g_switch_barrier = 0;
-            return WASMOS_ERR_VT_SWITCH_MODE_OFF;
-        }
-    }
     if (vt_fb_send_switch(FBTEXT_IPC_CLEAR_REQ, 0, 0, 0, 0) != 0) {
-        if (prev_console_mode != 0u) {
-            (void)vt_fb_send_switch(FBTEXT_IPC_CONSOLE_MODE_REQ, 1, 0, 0, 0);
-        } else {
-            (void)vt_fb_send_switch(FBTEXT_IPC_CONSOLE_MODE_REQ, 0, 0, 0, 0);
-        }
         g_switch_barrier = 0;
         return WASMOS_ERR_VT_SWITCH_CLEAR;
     }
     if (vt_replay_tty(tty_index, 1) != 0) {
-        if (prev_console_mode != 0u) {
-            (void)vt_fb_send_switch(FBTEXT_IPC_CONSOLE_MODE_REQ, 1, 0, 0, 0);
-        } else {
-            (void)vt_fb_send_switch(FBTEXT_IPC_CONSOLE_MODE_REQ, 0, 0, 0, 0);
-        }
         g_switch_barrier = 0;
         return WASMOS_ERR_VT_SWITCH_REPLAY;
-    }
-    if (next_console_mode != 0u &&
-        vt_fb_send_switch(FBTEXT_IPC_CONSOLE_MODE_REQ, 1, 0, 0, 0) != 0) {
-        if (prev_console_mode != 0u) {
-            (void)vt_fb_send_switch(FBTEXT_IPC_CONSOLE_MODE_REQ, 1, 0, 0, 0);
-        } else {
-            (void)vt_fb_send_switch(FBTEXT_IPC_CONSOLE_MODE_REQ, 0, 0, 0, 0);
-        }
-        g_switch_barrier = 0;
-        return WASMOS_ERR_VT_SWITCH_MODE_ON;
     }
     g_switch_generation++;
     g_active_tty = tty_index;
@@ -1256,6 +1241,12 @@ static void vt_load_keymap(const char* path) {
 
 static void vt_input_echo_char(uint32_t tty_index, uint8_t ch) {
     if (tty_index >= VT_MAX_TTYS || tty_index != g_active_tty) {
+        return;
+    }
+    if (tty_index == VT_KLOG_TTY) {
+        /* The system-console slot shows the serial stream: its reader echoes to
+         * serial and the kernel klog ring brings that echo back here, so echoing
+         * locally as well would double every typed character. */
         return;
     }
     vt_tty_t* tty = &g_ttys[tty_index];
@@ -1626,30 +1617,45 @@ static void vt_klog_ring_init(void) {
     if (wasmos_ringbuf_init(&g_klog_ring, base, region, VT_KLOG_RING_CAPACITY) != 0) {
         return;
     }
-    if (wasmos_klog_register_ring(bid) != 0) {
+    /* Register g_vt_ep as the doorbell: the kernel pushes VT_IPC_KLOG_NOTIFY when
+     * it has published bytes, which wakes the select below so an idle VT drains
+     * klog instead of sitting on it until unrelated traffic arrives. */
+    if (wasmos_klog_register_ring(bid, g_vt_ep) != 0) {
         return;
     }
     g_klog_ring_ready = 1;
 }
 
-/* Drain any pending klog bytes into vt-1 through the normal per-slot byte path
- * (cell buffer updated; rendered only if vt-1 is the visible slot).  Never
- * targets vt-0 (tty0's byte path calls wasmos_console_write, which would loop
- * back into klog). */
+/* Drain any pending klog bytes into VT_KLOG_TTY through the normal per-slot byte
+ * path.  Never targets vt-0 (tty0's byte path calls wasmos_console_write, which
+ * would loop back into klog).
+ *
+ * Rendering is deferred for the whole drain and closed with one full-grid blit.
+ * Per-cell rendering would issue one framebuffer IPC per character, and klog
+ * arrives in bursts of whole lines — thousands of cells during boot — which is
+ * the same queue-flooding shape that wedged tty switches before the blit path
+ * existed.  The grid is authoritative, so a batch repaint loses nothing. */
 static void vt_drain_klog_ring(void) {
     if (!g_klog_ring_ready) {
         return;
     }
     vt_tty_t* tty = &g_ttys[VT_KLOG_TTY];
     uint8_t buf[128];
+    uint32_t drained = 0;
+    g_render_defer = 1;
     for (;;) {
         uint32_t n = wasmos_ringbuf_read(&g_klog_ring, buf, (uint32_t)sizeof(buf));
         if (n == 0) {
             break;
         }
+        drained += n;
         for (uint32_t i = 0; i < n; ++i) {
             vt_process_byte(VT_KLOG_TTY, tty, buf[i]);
         }
+    }
+    g_render_defer = 0;
+    if (drained != 0 && VT_KLOG_TTY == g_active_tty && !g_switch_barrier) {
+        (void)vt_replay_tty(VT_KLOG_TTY, 0);
     }
 }
 
@@ -1682,6 +1688,88 @@ static void vt_blit_init(void) {
     }
     g_blit_grid = ptr_cast(fbtext_blit_cell_t, (uint32_t)off);
     g_blit_ready = 1;
+}
+
+/* Path of the shell the vt spawns for a slot.  One CLI per slot, created the
+ * first time that slot is put to use: a slot with no shell has nothing that
+ * reads its input queue.
+ *
+ * The console slot's shell is NOT spawned here — sysinit starts it, last, after
+ * the rest of the system is up.  The first prompt is what the test framework and
+ * a human both read as "the machine is ready", and spawning it from the vt (which
+ * comes up early) would put that prompt in the middle of boot and invite every
+ * caller to start driving a half-started system. */
+#define VT_CLI_PATH "/boot/system/services/cli.wap"
+
+static int32_t g_proc_ep = -1;
+static uint8_t g_tty_cli_spawned[VT_MAX_TTYS] = {0};
+/* Transfer buffer holding the path of an in-flight spawn request.  PM reads the
+ * path out of it while handling the request, so it is released only once the
+ * reply lands.  One spawn at a time: they are triggered by user-visible events
+ * (a switch, a serial rebind) and never arrive in bursts. */
+static int32_t g_spawn_path_bid = -1;
+/* Request id of that spawn, so the reply that frees the buffer is matched rather
+ * than assumed: any PROC_IPC_RESP would otherwise release a buffer PM may still
+ * be reading. */
+static int32_t g_spawn_req_id = 0;
+#define VT_SPAWN_REQ_BASE 0x5100
+
+/* Ask process-manager for a CLI pinned to `slot`.  Fire-and-forget with DETACH:
+ * the vt must keep serving IPC while the child comes up, and a ready-gated spawn
+ * would park the vt inside the request the new CLI needs answered.  The tty is
+ * pinned rather than left to PM's round-robin, which would put the shell on some
+ * other slot's queue where nothing reads it.  Best-effort: on any failure the
+ * slot simply stays without a shell, and the next switch to it tries again. */
+static void vt_spawn_cli_for_slot(uint32_t slot) {
+    if (slot == 0u || slot >= VT_MAX_TTYS || g_tty_cli_spawned[slot] || g_proc_ep < 0) {
+        return;
+    }
+    if (g_tty_writer_ep[slot] >= 0) {
+        return; /* a shell already owns this slot (sysinit's, or an earlier spawn) */
+    }
+    if (g_spawn_path_bid >= 0) {
+        return; /* one in flight; the next switch to this slot retries */
+    }
+    static const char path[] = VT_CLI_PATH;
+    uint32_t path_len = (uint32_t)sizeof(path) - 1u;
+    int32_t bid = wasmos_xfer_buffer_acquire((int32_t)path_len + 1);
+    if (bid <= 0) {
+        return;
+    }
+    if (wasmos_xfer_buffer_write(bid, addr_cast(int32_t, path), (int32_t)path_len, 0) != 0) {
+        (void)wasmos_xfer_buffer_release(bid);
+        return;
+    }
+    /* Mark before sending: a failed send leaves the slot marked only until the
+     * release below clears it, and a double spawn would give one slot two shells
+     * competing for its input. */
+    g_tty_cli_spawned[slot] = 1;
+    int32_t req_id = VT_SPAWN_REQ_BASE + (int32_t)slot;
+    int32_t rc = wasmos_ipc_send(g_proc_ep,
+                                 g_vt_ep,
+                                 PROC_IPC_SPAWN_PATH,
+                                 req_id,
+                                 (int32_t)(PROC_SPAWN_PATH_FLAG_DETACH | PROC_SPAWN_PATH_TTY(slot)),
+                                 (int32_t)(((uint32_t)bid << 12) | (path_len & 0xFFFu)),
+                                 0,
+                                 0);
+    if (rc != 0) {
+        g_tty_cli_spawned[slot] = 0;
+        (void)wasmos_xfer_buffer_release(bid);
+        return;
+    }
+    g_spawn_path_bid = bid;
+    g_spawn_req_id = req_id;
+}
+
+/* Release the path buffer once PM answers the request that named it. */
+static void vt_spawn_reply_done(int32_t request_id) {
+    if (g_spawn_path_bid < 0 || request_id != g_spawn_req_id) {
+        return;
+    }
+    (void)wasmos_xfer_buffer_release(g_spawn_path_bid);
+    g_spawn_path_bid = -1;
+    g_spawn_req_id = 0;
 }
 
 /* Service entry point.  Registers "vt", looks up "fb"/"kbd"/"fs.vfs", allocates
@@ -1747,7 +1835,6 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
     }
 
     if (g_fb_ep != -1) {
-        vt_fb_console_mode(1);
         /* Share the cell-grid blit buffer with the framebuffer driver so tty
          * switches repaint in one IPC instead of a per-cell storm. */
         vt_blit_init();
@@ -1756,12 +1843,15 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
     /* Bring up the VT-owned klog ring (small, cheap overlay — see
      * vt_klog_ring_init).  The VT drains it into vt-1 on every wake below: it
      * blocks on g_vt_ep with wasmos_ipc_select_one (a timed select set strands
-     * serial input under WARP), so klog reaches vt-1 whenever any IPC arrives.
-     * An idle VT does not drain until the next event, which is fine: vt-1 is not
-     * the visible slot, and COM1 TX always carries the full log. */
+     * serial input under WARP), and the kernel's VT_IPC_KLOG_NOTIFY doorbell is
+     * itself such a wake, so pending klog reaches vt-1 without polling. */
     vt_klog_ring_init();
 
     wasmos_sys_notify_ready(proc_endpoint, g_vt_ep);
+
+    /* Kept for the lazy per-slot shells below; the console slot's shell comes
+     * from sysinit. */
+    g_proc_ep = proc_endpoint;
 
     for (;;) {
         int32_t rc = wasmos_ipc_select_one(g_vt_ep);
@@ -1778,12 +1868,18 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
         case VT_IPC_WRITE_REQ: {
             int32_t tty_index = -1;
             if (msg.source < 0) {
-                /* Kernel-originated mirrored console writes target whichever TTY
-                 * is active. They are advisory and intentionally bypass writer
-                 * ownership plus generation checks. */
+                /* Kernel-originated writes target whichever TTY is active. They
+                 * are advisory and intentionally bypass writer ownership plus
+                 * generation checks. */
                 tty_index = (int32_t)g_active_tty;
             } else {
                 tty_index = vt_tty_index_for_source(msg.source);
+            }
+            if (tty_index == (int32_t)VT_KLOG_TTY) {
+                /* The system-console slot is painted from the kernel klog ring,
+                 * which already carries everything its writers put on serial.
+                 * Rendering their VT writes too would print every line twice. */
+                break;
             }
             if (tty_index < 0 || tty_index >= (int32_t)VT_MAX_TTYS) {
                 vt_trace_mark(
@@ -1873,12 +1969,44 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
                 g_tty_reader_ep[0] = msg.source;
             }
             int32_t sw = vt_switch_tty((uint32_t)msg.arg0);
+            if (sw == 0 && msg.arg0 > 0) {
+                /* A text slot the user just made visible needs a shell to type
+                 * into; the first switch to it is what creates one. */
+                vt_spawn_cli_for_slot((uint32_t)msg.arg0);
+            }
             if (msg.source >= 0 && msg.request_id != 0) {
                 (void)vt_ipc_reply_retry(msg.source,
                                          (sw == 0) ? VT_IPC_RESP : VT_IPC_ERROR,
                                          msg.request_id,
                                          (sw == 0) ? (int32_t)g_switch_generation : sw,
                                          (int32_t)g_active_tty);
+            }
+            break;
+        }
+
+        case VT_IPC_BIND_SERIAL_REQ: {
+            /* The serial-bound slot is independent of the visible one: serial RX
+             * reaches this slot no matter what is on screen (see doc 19, "two
+             * independent selectors"). */
+            int32_t tty_id = msg.arg0;
+            int32_t rc = 0;
+            if (tty_id < 0 || tty_id >= (int32_t)VT_MAX_TTYS) {
+                rc = WASMOS_ERR_VT_BAD_TTY_ID;
+            } else if (tty_id == 0) {
+                /* vt-0 is the compositor's; a serial line cannot render it. */
+                rc = WASMOS_ERR_VT_SERIAL_SLOT_GUI;
+            } else {
+                g_serial_tty = (uint32_t)tty_id;
+                /* Same reason as a switch: a serial line bound to a slot with no
+                 * shell has nothing to answer it. */
+                vt_spawn_cli_for_slot(g_serial_tty);
+            }
+            if (msg.source >= 0 && msg.request_id != 0) {
+                (void)vt_ipc_reply_retry(msg.source,
+                                         (rc == 0) ? VT_IPC_RESP : VT_IPC_ERROR,
+                                         msg.request_id,
+                                         (rc == 0) ? (int32_t)g_serial_tty : rc,
+                                         0);
             }
             break;
         }
@@ -1963,6 +2091,22 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
                 msg.source, VT_IPC_RESP, msg.request_id, (int32_t)mode, tty_index);
             break;
         }
+
+        case PROC_IPC_RESP:
+            /* Reply to the vt's own spawn request. */
+            vt_spawn_reply_done(msg.request_id);
+            break;
+
+        case PROC_IPC_ERROR:
+            vt_spawn_reply_done(msg.request_id);
+            printf("[vt] cli spawn failed: %d\n", (int)msg.arg1);
+            break;
+
+        case VT_IPC_KLOG_NOTIFY:
+            /* The kernel's klog doorbell.  Waking the select above is its entire
+             * purpose — vt_drain_klog_ring already ran for this wake — so there is
+             * nothing to do here and nothing to reply to. */
+            break;
 
         case KBD_IPC_KEY_NOTIFY:
             vt_handle_key_notify(msg.arg0, msg.arg1, msg.arg2);

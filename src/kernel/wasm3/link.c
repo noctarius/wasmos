@@ -565,61 +565,6 @@ static int require_system_control_capability(uint32_t context_id) {
     return policy_require(context_id, POLICY_ACTION_SYSTEM_CONTROL, 0);
 }
 
-static int wasm_console_should_mirror_to_vt(void) {
-    process_t* proc = process_get(process_current_pid());
-    if (!proc) {
-        return 0;
-    }
-
-    if (proc->name && memcmp(proc->name, "hello-", 6) == 0 && (proc->name[6] != '\0')) {
-        return 1;
-    }
-
-    if (proc->parent_pid == 0) {
-        return 0;
-    }
-
-    process_t* parent = process_get(proc->parent_pid);
-    if (!parent || !parent->name) {
-        return 0;
-    }
-
-    /* Mirrored VT output is restricted to shell-launched app workloads.
-     * FIXME: Replace this parent-name heuristic with explicit per-process
-     * console routing policy once PM exposes tty ownership metadata. */
-    return strcmp(parent->name, "cli") == 0;
-}
-
-static void wasm_console_write_vt_mirror(const char* ptr, int32_t len) {
-    uint32_t vt_endpoint = process_manager_vt_endpoint();
-    if (vt_endpoint == IPC_ENDPOINT_NONE || !ptr || len <= 0 ||
-        !wasm_console_should_mirror_to_vt()) {
-        return;
-    }
-
-    for (int32_t offset = 0; offset < len;) {
-        ipc_message_t msg;
-        int32_t chunk[4] = {0, 0, 0, 0};
-
-        for (int i = 0; i < 4 && offset < len; ++i, ++offset) {
-            chunk[i] = (int32_t)(uint8_t)ptr[offset];
-        }
-
-        msg.type = VT_IPC_WRITE_REQ;
-        msg.source = IPC_ENDPOINT_NONE;
-        msg.destination = vt_endpoint;
-        msg.request_id = 0;
-        msg.arg0 = (uint32_t)chunk[0];
-        msg.arg1 = (uint32_t)chunk[1];
-        msg.arg2 = (uint32_t)chunk[2];
-        msg.arg3 = (uint32_t)chunk[3];
-
-        if (ipc_send_from(IPC_CONTEXT_KERNEL, vt_endpoint, &msg) != IPC_OK) {
-            break;
-        }
-    }
-}
-
 wasm_fs_peer_slot_t* wasm_fs_peer_slot_for_pid(uint32_t pid) {
     wasm_fs_peer_slot_t* empty = 0;
     wasm_fs_peer_slot_t* slot = 0;
@@ -2365,11 +2310,14 @@ m3ApiRawFunction(wasmos_shmem_create) {
  * no retain and reaches the pages through the higher-half alias, so the caller must hold the
  * buffer for as long as the kernel logs into it.  Ownership is enforced by
  * xfer_buffer_describe inside klog_register_ring, which resolves the id against the caller's
- * context, so no extra capability gate is needed here.  Returns 0, WASMOS_INVAL for a
- * non-positive id, WASMOS_ERR_KERNEL_NO_CALLER, or klog_register_ring's -1 when the id is
- * foreign or does not hold an initialised ring. */
+ * context, so no extra capability gate is needed here.  notify_endpoint receives the
+ * VT_IPC_KLOG_NOTIFY doorbell and must be owned by the caller (checked in
+ * klog_register_ring); a negative value registers the ring without a doorbell.  Returns 0,
+ * WASMOS_INVAL for a non-positive id, WASMOS_ERR_KERNEL_NO_CALLER, or klog_register_ring's
+ * -1 when the id or the notify endpoint is foreign, or the region does not hold an
+ * initialised ring. */
 m3ApiRawFunction(wasmos_klog_register_ring) {
-    m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, id)
+    m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, id) m3ApiGetArg(int32_t, notify_endpoint)
 
         process_t* proc = process_get(process_current_pid());
     if (!proc || proc->context_id == 0) {
@@ -2378,7 +2326,8 @@ m3ApiRawFunction(wasmos_klog_register_ring) {
     if (id <= 0) {
         m3ApiReturn(WASMOS_INVAL);
     }
-    m3ApiReturn(klog_register_ring(proc->context_id, (uint32_t)id));
+    uint32_t notify = (notify_endpoint > 0) ? (uint32_t)notify_endpoint : 0u;
+    m3ApiReturn(klog_register_ring(proc->context_id, (uint32_t)id, notify));
 }
 
 /* Map shared-memory region `id` over the caller-chosen wasm32 linear-memory offset `ptr`,
@@ -3185,9 +3134,8 @@ m3ApiRawFunction(wasmos_initfs_find_path) {
  * disabled across the whole relay so a multi-chunk write is not interleaved with another
  * process's output.  A zero `len` is a no-op success; a negative one is WASMOS_INVAL.  `ptr`
  * is a wasm32 linear-memory range and one outside linear memory TRAPS the module via
- * m3ApiCheckMem.  wasm3-only behaviour: the same bytes are additionally mirrored to the VT
- * service for shell-launched app workloads (wasm_console_should_mirror_to_vt); WARP writes
- * only to the kernel log.  Returns 0. */
+ * m3ApiCheckMem.  The kernel log reaches the screen through the vt's klog ring, so this
+ * writes only to the log — both runtimes.  Returns 0. */
 m3ApiRawFunction(wasmos_console_write) {
     m3ApiReturnType(int32_t) m3ApiGetArgMem(const char*, ptr) m3ApiGetArg(int32_t, len)
 
@@ -3214,7 +3162,6 @@ m3ApiRawFunction(wasmos_console_write) {
         __builtin_memcpy(buf, ptr + copied, chunk);
         buf[chunk] = '\0';
         klog_write(buf);
-        wasm_console_write_vt_mirror(buf, (int32_t)chunk);
         copied += chunk;
     }
     preempt_enable();

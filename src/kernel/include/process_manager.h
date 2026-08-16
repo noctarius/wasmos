@@ -32,7 +32,6 @@ uint32_t process_manager_endpoint(void);
  * Safe to call from any CPU: the fields are read with acquire semantics. */
 uint32_t process_manager_fs_endpoint(void);
 uint32_t process_manager_block_endpoint(void);
-uint32_t process_manager_vt_endpoint(void);
 uint32_t process_manager_framebuffer_endpoint(void);
 /* Publish a framebuffer endpoint and register it under the service name "fb" as
  * kernel-owned. Used by in-kernel framebuffer providers, which have no context

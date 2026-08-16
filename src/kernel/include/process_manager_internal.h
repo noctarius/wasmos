@@ -73,6 +73,10 @@ typedef struct {
      * is the caller's problem: the request path bounds the length to this
      * array before it is stored. */
     uint32_t spawn_cli_args_len;
+    /* PROC_SPAWN_PATH_TTY encoding: 0 = let pm_alloc_cli_tty pick, otherwise the
+     * controlling tty is (requested_tty - 1).  Only meaningful for a child whose
+     * manifest sets wants_tty. */
+    uint32_t requested_tty;
     char spawn_cli_args[256];
     wasmos_app_instance_t app; /* runtime instance; torn down by wasmos_app_stop */
     char name[64];
@@ -158,7 +162,6 @@ typedef struct {
     uint32_t fs_endpoint;   /* the fs.vfs service, once registered */
     uint32_t block_endpoint;
     uint32_t fb_endpoint;
-    uint32_t vt_endpoint;
     uint32_t fs_reply_endpoint;     /* replies to the PM's own FS requests */
     uint32_t fs_ctrl_endpoint;      /* drained and discarded each iteration */
     uint32_t broker_reply_endpoint; /* drained synchronously inside the broker

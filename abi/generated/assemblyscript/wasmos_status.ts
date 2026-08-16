@@ -147,10 +147,11 @@ export const WASMOS_ERR_VT_BAD_TTY_ID: i32 = -0x00080001; // requested tty id is
 export const WASMOS_ERR_VT_NO_TTY_FOR_SOURCE: i32 = -0x00080002; // no tty is associated with the requesting endpoint
 export const WASMOS_ERR_VT_READER_BUSY: i32 = -0x00080003; // another endpoint is already the reader for this tty
 export const WASMOS_ERR_VT_UNSUPPORTED_REQUEST: i32 = -0x00080004; // unknown or unsupported request type
-export const WASMOS_ERR_VT_SWITCH_MODE_OFF: i32 = -0x00080005; // tty switch could not disable framebuffer rendering
+export const WASMOS_ERR_VT_SWITCH_MODE_OFF: i32 = -0x00080005; // deprecated: the framebuffer no longer has a console mode to disable
 export const WASMOS_ERR_VT_SWITCH_CLEAR: i32 = -0x00080006; // tty switch could not clear the screen
 export const WASMOS_ERR_VT_SWITCH_REPLAY: i32 = -0x00080007; // tty switch could not replay the cell buffer
-export const WASMOS_ERR_VT_SWITCH_MODE_ON: i32 = -0x00080008; // tty switch could not re-enable framebuffer rendering
+export const WASMOS_ERR_VT_SWITCH_MODE_ON: i32 = -0x00080008; // deprecated: the framebuffer no longer has a console mode to re-enable
+export const WASMOS_ERR_VT_SERIAL_SLOT_GUI: i32 = -0x00080009; // slot 0 is the GUI slot and cannot be bound to the serial console
 export const WASMOS_ERR_CHARDEV_NO_DATA: i32 = -0x00090001; // no byte is buffered yet (retryable)
 export const WASMOS_ERR_CHARDEV_UNSUPPORTED_REQUEST: i32 = -0x00090002; // unknown or unsupported request type
 export const WASMOS_ERR_HRNG_INVALID: i32 = -0x000E0001; // invalid request arguments (byte count or buffer)
@@ -399,10 +400,11 @@ export function strerror(c: i32): string {
     case WASMOS_ERR_VT_NO_TTY_FOR_SOURCE: return "no tty is associated with the requesting endpoint";
     case WASMOS_ERR_VT_READER_BUSY: return "another endpoint is already the reader for this tty";
     case WASMOS_ERR_VT_UNSUPPORTED_REQUEST: return "unknown or unsupported request type";
-    case WASMOS_ERR_VT_SWITCH_MODE_OFF: return "tty switch could not disable framebuffer rendering";
+    case WASMOS_ERR_VT_SWITCH_MODE_OFF: return "deprecated: the framebuffer no longer has a console mode to disable";
     case WASMOS_ERR_VT_SWITCH_CLEAR: return "tty switch could not clear the screen";
     case WASMOS_ERR_VT_SWITCH_REPLAY: return "tty switch could not replay the cell buffer";
-    case WASMOS_ERR_VT_SWITCH_MODE_ON: return "tty switch could not re-enable framebuffer rendering";
+    case WASMOS_ERR_VT_SWITCH_MODE_ON: return "deprecated: the framebuffer no longer has a console mode to re-enable";
+    case WASMOS_ERR_VT_SERIAL_SLOT_GUI: return "slot 0 is the GUI slot and cannot be bound to the serial console";
     case WASMOS_ERR_CHARDEV_NO_DATA: return "no byte is buffered yet (retryable)";
     case WASMOS_ERR_CHARDEV_UNSUPPORTED_REQUEST: return "unknown or unsupported request type";
     case WASMOS_ERR_HRNG_INVALID: return "invalid request arguments (byte count or buffer)";

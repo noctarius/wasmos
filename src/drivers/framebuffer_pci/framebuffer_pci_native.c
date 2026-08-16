@@ -45,7 +45,6 @@
 
 static fbtext_state_t g_state;
 static uint8_t g_early_log_buf[EARLY_LOG_BUF];
-static uint8_t g_console_ring_enabled = 1;
 static uint8_t g_text_plane_enabled = 1;
 static uint8_t g_gfx_overlay_lock = 0;
 static uint32_t g_fb_bytes_limit = 0;
@@ -55,13 +54,9 @@ static uint32_t g_fb_bytes_limit = 0;
  * per-cell CELL_WRITE alternative is an IPC storm that wedges tty switches. */
 static const fbtext_blit_cell_t* g_blit_grid = 0;
 
-/* Idle-block bounds so the main loop reaches idle/hlt instead of yield-spinning.
- * Control IPC (tty switch, overlay lock/unlock) wakes the endpoint immediately;
- * these only cap how long the loop sleeps with nothing to do.  The console ring
- * is fed over shared memory with no IPC doorbell, so while the text plane is
- * active it is re-polled at FB_CONSOLE_POLL_MS; when the gfx overlay owns the
- * framebuffer there is nothing to drain, so the block is longer. */
-#define FB_CONSOLE_POLL_MS 15u
+/* Idle-block bound so the main loop reaches idle/hlt instead of yield-spinning.
+ * Every screen change arrives as IPC, which wakes the endpoint immediately, so
+ * this only caps how long the loop sleeps with nothing to do. */
 #define FB_IDLE_WAIT_MS 200u
 
 typedef struct {
@@ -244,29 +239,6 @@ static void replay_early_log(wasmos_driver_api_t* api) {
     }
 }
 
-/* FIXME: a producer that laps the consumer is not detected here, so the read
- * position keeps naming bytes that have already been overwritten and the console
- * shows stale text until it catches up. The plain framebuffer driver snaps
- * read_pos to write_pos - capacity in that case; this one needs the same. */
-static int drain_console_ring(console_ring_t* ring, uint32_t budget) {
-    if (!ring || ring->capacity == 0) {
-        return 0;
-    }
-    uint32_t cap = ring->capacity;
-    uint32_t rp = ring->read_pos;
-    uint32_t wp = ring->write_pos;
-    int drained = 0;
-    uint32_t n = 0;
-    while (rp != wp && n < budget) {
-        fbtext_put_char(&g_state, ring->data[rp % cap]);
-        rp++;
-        n++;
-        drained = 1;
-    }
-    ring->read_pos = rp;
-    return drained;
-}
-
 /* Native driver entry point (see native_driver_entry_fn_t in
  * wasmos_native_driver.h). `api` is kernel-owned and borrowed for the whole
  * call; it takes no other arguments (native ABI 14).
@@ -348,37 +320,18 @@ int initialize(wasmos_driver_api_t* api) {
         return -1;
     }
 
-    console_ring_t* ring = (console_ring_t*)api->shmem_map(api->console_ring_id());
-    if (!ring) {
-        write_str(api, "[framebuffer] console ring map failed\n");
-        return -1;
-    }
-
     api->proc_notify_ready();
 
-    /* Main loop: prioritize control IPC so tty switch clear/replay requests
-     * are applied promptly even if console ring backlog is large. */
+    /* Main loop.  The driver is a pure blit surface: everything it paints arrives
+     * as IPC from the vt (cells, blits, scroll, clear) or is the early-log replay
+     * above, so there is nothing to poll for and the idle path just blocks. */
     nd_ipc_message_t msg;
     for (;;) {
         int rc = api->ipc_recv(ctx, ep, &msg);
         if (rc == ND_IPC_EMPTY) {
-            if (g_console_ring_enabled && !g_gfx_overlay_lock) {
-                /* Text plane active: flush backlog in bounded chunks.  If a chunk
-                 * was drained more may be pending, so loop immediately; only once
-                 * the ring is empty does the loop block (bounded) to re-poll it
-                 * for new text, since ring writes carry no IPC wake. */
-                if (drain_console_ring(ring, 256u)) {
-                    continue;
-                }
-                if (api->ipc_wait) {
-                    api->ipc_wait(ctx, ep, FB_CONSOLE_POLL_MS);
-                } else {
-                    api->sched_yield();
-                }
-            } else if (api->ipc_wait) {
-                /* GFX overlay owns the framebuffer (or console disabled): nothing
-                 * to drain and only control IPC matters, which wakes ep — block so
-                 * the CPU can reach idle/hlt instead of yield-spinning. */
+            if (api->ipc_wait) {
+                /* Only IPC can change the screen, and it wakes ep — block so the
+                 * CPU can reach idle/hlt instead of yield-spinning. */
                 api->ipc_wait(ctx, ep, FB_IDLE_WAIT_MS);
             } else {
                 api->sched_yield();
@@ -440,19 +393,6 @@ int initialize(wasmos_driver_api_t* api) {
                 break;
             }
             fbtext_clear(&g_state);
-            break;
-        case FBTEXT_IPC_CONSOLE_MODE_REQ:
-            if (msg.arg0 != 0) {
-                if (!g_console_ring_enabled) {
-                    /* Re-enable in "live tail" mode: drop stale backlog so
-                     * returning to tty0 does not replay minutes of old logs
-                     * and starve subsequent tty control traffic. */
-                    ring->read_pos = ring->write_pos;
-                }
-                g_console_ring_enabled = 1u;
-            } else {
-                g_console_ring_enabled = 0u;
-            }
             break;
         case FBTEXT_IPC_GEOMETRY_REQ:
             resp.arg0 = g_state.cols;

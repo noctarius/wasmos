@@ -48,20 +48,40 @@ static thread_t g_pool[POOL_MAX];
 static int g_failures;
 static int g_checks;
 
-/* Captured tripwire output.  The scheduler reports invariant violations through
- * serial_printf_unlocked rather than halting, so tests assert on what it said. */
+/* Captured tripwire output.  The scheduler reports invariant violations rather
+ * than halting, so tests assert on what it said.
+ *
+ * Both writers are captured, and WHICH one a report arrived through is itself
+ * asserted (case D7).  serial_printf takes the serial spinlock; the _unlocked
+ * form does not, so a concurrent writer on another CPU interleaves mid-string
+ * and corrupts both lines -- which on a real boot has cost a test marker that
+ * the harness matches byte for byte.  A tripwire fires on a live system, not
+ * from a fault handler, so it must use the locking writer. */
 #define LOG_MAX 64
 #define LOG_LINE 256
 static char g_log[LOG_MAX][LOG_LINE];
 static int g_log_count;
+static int g_log_unlocked_count;
 
-void serial_printf_unlocked(const char* fmt, ...) {
-    va_list ap;
-    va_start(ap, fmt);
+static void log_capture(const char* fmt, va_list ap) {
     if (g_log_count < LOG_MAX) {
         vsnprintf(g_log[g_log_count], LOG_LINE, fmt, ap);
         g_log_count++;
     }
+}
+
+void serial_printf(const char* fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    log_capture(fmt, ap);
+    va_end(ap);
+}
+
+void serial_printf_unlocked(const char* fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    g_log_unlocked_count++;
+    log_capture(fmt, ap);
     va_end(ap);
 }
 
@@ -1017,6 +1037,29 @@ static void test_sweep_drops_a_claim_for_a_blocked_thread(void) {
     CHECK(t->on_rq == 0, "a blocked thread is not queued");
     CHECK(t->enqueue_owed == 0, "and its claim is consumed, not carried");
     check_invariants("blocked claim dropped");
+}
+
+/* Every scheduler tripwire must report through the LOCKING writer.
+ *
+ * The unlocked writers exist for fault handlers, where the lock may be held by
+ * the CPU they interrupted.  A tripwire is not that: it fires on a live system,
+ * concurrently with whatever other CPUs are printing, and without the lock its
+ * line interleaves mid-string with theirs -- corrupting both.  On a real boot
+ * that split `[test] preempt ok` into `[test] preempt [scheok` and failed a
+ * battery on a machine that was working correctly.
+ *
+ * Asserted by capturing both writers separately and requiring the unlocked one
+ * to stay untouched while a tripwire fires. */
+static void test_tripwires_use_the_locking_writer(void) {
+    harness_reset();
+    g_log_unlocked_count = 0;
+
+    /* Any tripwire will do; this one needs no cross-CPU setup. */
+    thread_t* t = mk_thread(0, SCHED_PRIO_WASM, THREAD_STATE_BLOCKED);
+    cpu_sched_enqueue(&g_cpus[0].sched, t);
+
+    CHECK(saw("enqueue non-ready"), "the tripwire reported");
+    CHECK(g_log_unlocked_count == 0, "and not through the unlocked writer");
 }
 
 /* An ordinary enqueue must leave no claim behind, or the holder's next settle
@@ -2576,6 +2619,7 @@ int main(void) {
         {"D5 sweep never links a running thread", test_sweep_does_not_link_a_running_thread},
         {"D6 sweep drops a blocked thread's claim", test_sweep_drops_a_claim_for_a_blocked_thread},
         {"D4 ordinary enqueue owes nothing", test_ordinary_enqueue_owes_nothing},
+        {"D7 tripwires use the locking writer", test_tripwires_use_the_locking_writer},
         {"W1 ordinary wake", test_wake_ordinary},
         {"W2 wake during blocking transition",
          test_wake_during_blocking_transition_defers_with_token},

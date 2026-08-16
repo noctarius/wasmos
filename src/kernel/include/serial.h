@@ -41,9 +41,18 @@ void serial_write(const char* s);
 void serial_write_hex64(uint64_t value);
 void serial_printf(const char* fmt, ...) __attribute__((format(printf, 1, 2)));
 
-/* Unlocked variants — use only in ISR / NMI / very early boot.  Same behaviour without
- * the spinlock, so concurrent writers interleave; preemption is still disabled around
- * the character loop. */
+/* Unlocked variants — for NMI, exception and panic handlers, and for very early boot
+ * before the lock is meaningful.  Same behaviour without the spinlock, so a concurrent
+ * writer interleaves MID-STRING and both lines come out corrupted; preemption is still
+ * disabled around the character loop.
+ *
+ * A diagnostic that fires on a running system is not one of those contexts, however
+ * deep in the kernel it sits: an interleaved line is indistinguishable from a garbled
+ * one, and it corrupts whatever the other CPU was writing, up to and including a test
+ * marker the harness matches byte for byte.  g_serial_lock is a leaf lock and the
+ * IRQ/preempt depths spinlock_lock touches are per-CPU counters, so the locked writers
+ * are safe to nest inside a cli window or a held scheduler lock; use them anywhere a
+ * fault handler is not what is running. */
 void serial_write_unlocked(const char* s);
 void serial_write_hex64_unlocked(uint64_t value);
 void serial_printf_unlocked(const char* fmt, ...) __attribute__((format(printf, 1, 2)));

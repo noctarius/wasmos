@@ -222,15 +222,15 @@ static void cpu_sched_unlink_locked(cpu_sched_t* cs, thread_t* t) {
     if (cs->ready_list[prio].next == &t->sched_node) {
         uint32_t gn = sched_debug_bump(SCHED_DEBUG_GHOST_HEAD);
         if ((gn & (gn - 1u)) == 0u) {
-            serial_printf_unlocked("[sched] ghost head tid=%u owner=%u state=%u prio=%u cs=%p "
-                                   "count=%u (n=%u)\n",
-                                   (unsigned)t->tid,
-                                   (unsigned)t->owner_pid,
-                                   (unsigned)t->state,
-                                   (unsigned)prio,
-                                   (void*)cs,
-                                   (unsigned)cs->thread_count[prio],
-                                   (unsigned)(gn + 1u));
+            serial_printf("[sched] ghost head tid=%u owner=%u state=%u prio=%u cs=%p "
+                          "count=%u (n=%u)\n",
+                          (unsigned)t->tid,
+                          (unsigned)t->owner_pid,
+                          (unsigned)t->state,
+                          (unsigned)prio,
+                          (void*)cs,
+                          (unsigned)cs->thread_count[prio],
+                          (unsigned)(gn + 1u));
         }
         /* Report only, deliberately: re-initialising the head here would drop
          * every other thread in the band on the floor and fault in
@@ -275,11 +275,10 @@ void cpu_sched_enqueue(cpu_sched_t* cs, thread_t* t) {
         if (g_cpus[i].idle_thread == t) {
             uint32_t n = sched_debug_bump(SCHED_DEBUG_ENQUEUE_IDLE);
             if ((n & (n - 1u)) == 0u) {
-                serial_printf_unlocked(
-                    "[sched] enqueue idle tid=%u caller=%016llx (n=%u, skipped)\n",
-                    (unsigned)t->tid,
-                    (unsigned long long)(uintptr_t)__builtin_return_address(0),
-                    (unsigned)(n + 1u));
+                serial_printf("[sched] enqueue idle tid=%u caller=%016llx (n=%u, skipped)\n",
+                              (unsigned)t->tid,
+                              (unsigned long long)(uintptr_t)__builtin_return_address(0),
+                              (unsigned)(n + 1u));
             }
             return;
         }
@@ -297,7 +296,7 @@ void cpu_sched_enqueue(cpu_sched_t* cs, thread_t* t) {
                 }
                 return;
             }
-            serial_printf_unlocked(
+            serial_printf(
                 "[sched] enqueue current tid=%u owner=%u caller_cpu=%u holder_cpu=%u state=%u\n",
                 (unsigned)t->tid,
                 (unsigned)t->owner_pid,
@@ -356,7 +355,7 @@ void cpu_sched_enqueue(cpu_sched_t* cs, thread_t* t) {
     if (t->sched_prio >= SCHED_PRIO_MAX) {
         uint32_t n = sched_debug_bump(SCHED_DEBUG_BAD_PRIO);
         if ((n & (n - 1u)) == 0u) {
-            serial_printf_unlocked(
+            serial_printf(
                 "[sched] enqueue bad prio tid=%u prio=%u caller=%016llx (n=%u, skipped)\n",
                 (unsigned)t->tid,
                 (unsigned)t->sched_prio,
@@ -377,14 +376,14 @@ void cpu_sched_enqueue(cpu_sched_t* cs, thread_t* t) {
              * both race the writer and be able to print a value that never
              * failed the test above. */
             uint32_t reason = __atomic_load_n((uint32_t*)&t->block_reason, __ATOMIC_RELAXED);
-            serial_printf_unlocked("[sched] enqueue non-ready tid=%u owner=%u state=%u block=%u "
-                                   "caller=%016llx (n=%u, skipped)\n",
-                                   (unsigned)t->tid,
-                                   (unsigned)t->owner_pid,
-                                   (unsigned)state,
-                                   (unsigned)reason,
-                                   (unsigned long long)(uintptr_t)__builtin_return_address(0),
-                                   (unsigned)(n + 1u));
+            serial_printf("[sched] enqueue non-ready tid=%u owner=%u state=%u block=%u "
+                          "caller=%016llx (n=%u, skipped)\n",
+                          (unsigned)t->tid,
+                          (unsigned)t->owner_pid,
+                          (unsigned)state,
+                          (unsigned)reason,
+                          (unsigned long long)(uintptr_t)__builtin_return_address(0),
+                          (unsigned)(n + 1u));
         }
         return;
     }
@@ -431,7 +430,7 @@ void cpu_sched_enqueue(cpu_sched_t* cs, thread_t* t) {
     if (!list_head_empty(&t->sched_node)) {
         uint32_t dn = sched_debug_bump(SCHED_DEBUG_DOUBLE_LINK);
         if ((dn & (dn - 1u)) == 0u) {
-            serial_printf_unlocked(
+            serial_printf(
                 "[sched] claimed node still linked tid=%u owner=%u state=%u prio=%u rq=%p "
                 "cs=%p caller=%016llx (n=%u)\n",
                 (unsigned)t->tid,
@@ -494,10 +493,10 @@ void cpu_sched_remove_thread(thread_t* t) {
         ksync_spinlock_unlock(&cs->lock);
     }
     (void)sched_debug_bump(SCHED_DEBUG_REMOVE_GAVE_UP);
-    serial_printf_unlocked("[sched] remove_thread gave up tid=%u owner=%u state=%u\n",
-                           (unsigned)t->tid,
-                           (unsigned)t->owner_pid,
-                           (unsigned)__atomic_load_n((uint32_t*)&t->state, __ATOMIC_RELAXED));
+    serial_printf("[sched] remove_thread gave up tid=%u owner=%u state=%u\n",
+                  (unsigned)t->tid,
+                  (unsigned)t->owner_pid,
+                  (unsigned)__atomic_load_n((uint32_t*)&t->state, __ATOMIC_RELAXED));
 }
 
 /* cpu_sched_enqueue onto the CALLING CPU's queue, with `caller` carried through
@@ -517,14 +516,14 @@ void sched_enqueue_thread_from(thread_t* t, uintptr_t caller) {
     }
     for (uint32_t i = 0; i < WASMOS_MAX_CPUS; ++i) {
         if (g_cpus[i].current_thread == t) {
-            serial_printf_unlocked("[sched] enqueue current tid=%u owner=%u caller_cpu=%u "
-                                   "holder_cpu=%u state=%u caller=%016llx\n",
-                                   (unsigned)t->tid,
-                                   (unsigned)t->owner_pid,
-                                   (unsigned)cpu_local()->cpu_id,
-                                   (unsigned)i,
-                                   (unsigned)t->state,
-                                   (unsigned long long)caller);
+            serial_printf("[sched] enqueue current tid=%u owner=%u caller_cpu=%u "
+                          "holder_cpu=%u state=%u caller=%016llx\n",
+                          (unsigned)t->tid,
+                          (unsigned)t->owner_pid,
+                          (unsigned)cpu_local()->cpu_id,
+                          (unsigned)i,
+                          (unsigned)t->state,
+                          (unsigned long long)caller);
             if (sched_mark_ready_if_live(t)) {
                 __atomic_store_n((uint32_t*)&t->block_reason, THREAD_BLOCK_NONE, __ATOMIC_RELAXED);
             }
@@ -539,14 +538,14 @@ void sched_enqueue_thread_from(thread_t* t, uintptr_t caller) {
     if (t->state != THREAD_STATE_READY) {
         uint32_t n = sched_debug_bump(SCHED_DEBUG_ENQUEUE_FROM_NON_READY);
         if ((n & (n - 1u)) == 0u) {
-            serial_printf_unlocked("[sched] enqueue_from non-ready tid=%u owner=%u state=%u "
-                                   "block=%u caller=%016llx (n=%u)\n",
-                                   (unsigned)t->tid,
-                                   (unsigned)t->owner_pid,
-                                   (unsigned)t->state,
-                                   (unsigned)t->block_reason,
-                                   (unsigned long long)caller,
-                                   (unsigned)(n + 1u));
+            serial_printf("[sched] enqueue_from non-ready tid=%u owner=%u state=%u "
+                          "block=%u caller=%016llx (n=%u)\n",
+                          (unsigned)t->tid,
+                          (unsigned)t->owner_pid,
+                          (unsigned)t->state,
+                          (unsigned)t->block_reason,
+                          (unsigned long long)caller,
+                          (unsigned)(n + 1u));
         }
     }
     cpu_sched_enqueue(cpu_sched(), t);
@@ -815,7 +814,7 @@ void sched_thread_init(thread_t* t, sched_prio_t prio) {
     if (!list_head_empty(&t->sched_node) || __atomic_load_n(&t->on_rq, __ATOMIC_ACQUIRE)) {
         uint32_t in = sched_debug_bump(SCHED_DEBUG_INIT_ON_QUEUED);
         if ((in & (in - 1u)) == 0u) {
-            serial_printf_unlocked(
+            serial_printf(
                 "[sched] init on queued tid=%u owner=%u state=%u on_rq=%u oldprio=%u newprio=%u "
                 "rq=%p linked=%u caller=%016llx (n=%u)\n",
                 (unsigned)t->tid,

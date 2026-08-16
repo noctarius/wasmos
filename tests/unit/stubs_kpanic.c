@@ -47,6 +47,21 @@ __attribute__((weak, format(printf, 1, 2))) void serial_printf_unlocked(const ch
     va_end(ap);
 }
 
+/* The locking console writer, which the scheduler's tripwires use -- an
+ * interleaved diagnostic corrupts whatever another CPU is printing, so only
+ * fault handlers take the unlocked form. There is no lock to take on the host;
+ * a test linking sched_thread.c needs the symbol, and a tripwire that fires
+ * during a test is worth seeing.
+ *
+ * WEAK for the same reason as above: test_sched_runqueue captures both writers
+ * to assert which one a report came through. */
+__attribute__((weak, format(printf, 1, 2))) void serial_printf(const char* fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    vprintf(fmt, ap);
+    va_end(ap);
+}
+
 /* Discards the interrupted CPU context a caller would record before panicking.
  * There is no per-CPU panic slot to fill on the host and nothing reads one back,
  * so the register values a target dump would show are unavailable to a test. */

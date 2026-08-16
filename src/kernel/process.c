@@ -2132,20 +2132,25 @@ static int process_schedule_once_impl(void) {
          * output (concurrent unlocked writes interleave mid-line) and slows the
          * loop enough to perturb the race that put it there. Powers of two keep
          * the first report, which is the one that names the original thread,
-         * and the running count shows the magnitude. Deliberately still the
-         * UNLOCKED writer: serial_write takes a spinlock that does
-         * spinlock_irq_save + preempt_disable, and this runs inside the
-         * scheduler's own cli window with a dispatch decision in progress. */
+         * and the running count shows the magnitude.
+         *
+         * The LOCKED writer, despite running inside the scheduler's own cli
+         * window: g_serial_lock is a leaf (nothing reachable from serial_write
+         * takes a scheduler lock), spinlock_lock's IRQ-disable and preempt
+         * depths are per-CPU counters so nesting it inside that window leaves
+         * both unchanged, and preempt_enable only decrements -- it cannot
+         * re-enter the scheduler. Writing unlocked here buys nothing (the UART
+         * spin is the same either way) and costs coherence: another CPU's line
+         * interleaves mid-string, corrupting both. */
         static uint32_t notready_seen;
         uint32_t n = __atomic_fetch_add(&notready_seen, 1u, __ATOMIC_RELAXED);
         if ((n & (n - 1u)) == 0u) {
-            serial_printf_unlocked(
-                "[sched] dequeued non-ready tid=%u pid=%u state=%u block=%u (n=%u)\n",
-                (unsigned)thread->tid,
-                (unsigned)(proc ? proc->pid : 0u),
-                (unsigned)thread->state,
-                (unsigned)thread->block_reason,
-                (unsigned)(n + 1u));
+            serial_printf("[sched] dequeued non-ready tid=%u pid=%u state=%u block=%u (n=%u)\n",
+                          (unsigned)thread->tid,
+                          (unsigned)(proc ? proc->pid : 0u),
+                          (unsigned)thread->state,
+                          (unsigned)thread->block_reason,
+                          (unsigned)(n + 1u));
         }
         return SCHED_R_NOTREADY;
     }

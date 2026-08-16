@@ -10,6 +10,56 @@ shift || true
 check_mode=0
 build_dir="${QUALITY_BUILD_DIR:-build}"
 
+# Adopt the toolchain CMake already resolved, when the caller did not supply one.
+#
+# The fmt/lint targets pass every tool path and the clang-tidy plugin through the
+# environment, so running this script through them and running it directly used
+# to be two different gates: a bare run fell back to PATH and, worse, loaded no
+# plugin -- which silently drops every wasmos-* check and reports success for a
+# weaker lint than CI runs. Reading the same values out of the build directory's
+# CMakeCache makes the two equivalent, whichever way the script is invoked.
+# An explicit environment override still wins; this only fills in blanks.
+cache_value() {
+    local name="$1"
+    local cache="${build_dir}/CMakeCache.txt"
+    [[ -f "$cache" ]] || return 1
+    local line
+    line="$(grep -m1 "^${name}:" "$cache" 2>/dev/null)" || return 1
+    printf '%s\n' "${line#*=}"
+}
+
+adopt_cached_tool() {
+    local env_name="$1"
+    local cache_name="$2"
+    [[ -z "${!env_name:-}" ]] || return 0
+    local value
+    value="$(cache_value "$cache_name")" || return 0
+    [[ -n "$value" && "$value" != *"-NOTFOUND" ]] || return 0
+    export "${env_name}=${value}"
+}
+
+adopt_cached_tool CLANG_FORMAT QUALITY_CLANG_FORMAT
+adopt_cached_tool CLANG_TIDY QUALITY_CLANG_TIDY
+adopt_cached_tool ZIG QUALITY_ZIG
+adopt_cached_tool GOFMT QUALITY_GOFMT
+adopt_cached_tool GO QUALITY_GO
+adopt_cached_tool RUSTFMT QUALITY_RUSTFMT
+adopt_cached_tool RUSTC QUALITY_RUSTC
+adopt_cached_tool ASC QUALITY_ASC
+adopt_cached_tool BLACK QUALITY_BLACK
+adopt_cached_tool RUFF QUALITY_RUFF
+
+# The plugin is a build artifact rather than a cache entry, so find it by name.
+if [[ -z "${QUALITY_TIDY_PLUGIN:-}" ]]; then
+    for _candidate in "${build_dir}/wasmos_tidy_plugin.dylib" \
+                      "${build_dir}/wasmos_tidy_plugin.so"; do
+        if [[ -f "$_candidate" ]]; then
+            export QUALITY_TIDY_PLUGIN="$_candidate"
+            break
+        fi
+    done
+fi
+
 # Allowlist of top-level directories that hold first-party source. Only files
 # under these roots are formatted/linted; everything else is excluded by
 # omission: vendored subtrees (libs/), others/, dot folders (.claude/, .github
@@ -23,8 +73,16 @@ Usage:
   ./scripts/quality.sh format [--check]
   ./scripts/quality.sh lint
 
+Tool paths and the clang-tidy plugin are taken from QUALITY_BUILD_DIR's
+CMakeCache when not set explicitly, so a direct run matches the `fmt-check` /
+`lint` / `quality` CMake targets AS LONG AS that directory is configured and its
+plugin built. Where the plugin is missing this warns and lints without the
+wasmos-* checks; the targets build it first, which is why they are the safer
+way in.
+
 Environment overrides:
-  QUALITY_BUILD_DIR   Build directory used for clang-tidy (default: build)
+  QUALITY_BUILD_DIR   Build directory used for clang-tidy and for tool
+                      discovery (default: build)
   CLANG_FORMAT        Path to clang-format
   CLANG_TIDY          Path to clang-tidy
   GO                  Path to go
@@ -363,7 +421,8 @@ run_clang_tidy() {
         clang-tidy /opt/homebrew/opt/llvm/bin/clang-tidy /usr/local/opt/llvm/bin/clang-tidy)"
 
     if [[ ! -f "$build_dir/compile_commands.json" ]]; then
-        echo "error: $build_dir/compile_commands.json is missing. Re-run cmake -S . -B $build_dir before lint." >&2
+        printf 'error: %q/compile_commands.json is missing. Re-run: cmake -S . -B %q\n' \
+            "$build_dir" "$build_dir" >&2
         exit 1
     fi
 
@@ -505,11 +564,17 @@ PY
         return 0
     fi
 
-    # Load the wasmos clang-tidy plugin (built by CMake) so the wasmos-* checks
-    # run; without it clang-tidy just skips those checks.
+    # Load the wasmos clang-tidy plugin so the wasmos-* checks run. Its absence
+    # is reported rather than passed over: clang-tidy would simply not run those
+    # checks and the gate would report success for a lint CI does not consider
+    # sufficient. `cmake --build <dir> --target lint` builds it as a dependency.
     local -a load_args=()
     if [[ -n "${QUALITY_TIDY_PLUGIN:-}" && -f "$QUALITY_TIDY_PLUGIN" ]]; then
         load_args+=(--load "$QUALITY_TIDY_PLUGIN")
+    else
+        echo "warning: wasmos clang-tidy plugin not found under '${build_dir}';" >&2
+        echo "         the wasmos-* checks are NOT running. Build it with:" >&2
+        printf '           cmake --build %q --target wasmos_tidy_plugin\n' "$build_dir" >&2
     fi
 
     "$clang_tidy" "${load_args[@]}" -p "$tidy_db" --quiet "${tidy[@]}"

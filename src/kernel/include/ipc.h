@@ -143,6 +143,27 @@ int ipc_endpoint_owner(uint32_t endpoint, uint32_t* out_owner_context_id);
  * For the NMI diagnostic path: takes no locks and tolerates a torn read. */
 void ipc_diag_dump_endpoint_history(uint32_t endpoint, uint32_t want);
 
+/* Resolves an endpoint id to a service name, or NULL for a private endpoint.
+ * Passed in rather than called directly so this layer keeps no dependency on the
+ * process manager. */
+typedef const char* (*ipc_diag_name_fn)(uint32_t endpoint);
+
+/* Print, for every endpoint that has one in its history, the newest message sent
+ * FROM `source_endpoint` -- naming each peer that received a request from it and
+ * how far back.
+ *
+ * This is the answer to "who owes this thread a reply". A thread blocked on its
+ * own private endpoint has an EMPTY history by definition: nothing ever arrived,
+ * which is the complaint, not the evidence. What it sent is recorded only in the
+ * receiver's queue, and nothing indexes messages by sender -- so the sender's
+ * side is recovered by scanning the receivers.
+ *
+ * Cost is paid entirely by the reader: a scan of every endpoint's 32-slot ring,
+ * run once on a machine that has already stopped, so the send path keeps no
+ * bookkeeping for it. For the NMI diagnostic path: takes no locks and tolerates
+ * a torn read. */
+void ipc_diag_dump_requests_from(uint32_t source_endpoint, ipc_diag_name_fn name_of);
+
 /* ipc_diag_wait_info's return values: which kind of object a blocked thread's
  * event belongs to. */
 #define IPC_DIAG_WAIT_ENDPOINT 0

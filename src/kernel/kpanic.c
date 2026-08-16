@@ -332,6 +332,15 @@ void diag_dump_threads(const char* reason) {
                                        svc ? svc : "private",
                                        (unsigned)wait_count,
                                        (unsigned)wait_owner);
+                ipc_diag_dump_endpoint_history(wait_id, 2u);
+                /* A private endpoint is a reply address, so an empty history
+                 * there says only that the answer never came. Who owes it is on
+                 * the other side: the peers that received this endpoint's last
+                 * requests. A service endpoint needs no such search -- it is
+                 * idle waiting for work, not waiting on anyone. */
+                if (!svc) {
+                    ipc_diag_dump_requests_from(wait_id, pm_service_name_for_endpoint);
+                }
             } else if (kind == IPC_DIAG_WAIT_SELECT) {
                 serial_printf_unlocked("[diag]   wait=select:%u owner_ctx=%u watching",
                                        (unsigned)wait_id,

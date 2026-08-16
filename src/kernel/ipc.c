@@ -392,6 +392,42 @@ void ipc_diag_dump_endpoint_history(uint32_t endpoint, uint32_t want) {
     }
 }
 
+/* Endpoint ids to probe in the reverse scan below.  Endpoint ids are dense and
+ * small (a full desktop boot reaches ~130), and the scan runs once on a machine
+ * that has already stopped, so a fixed ceiling costs nothing and needs no
+ * iteration API on the id table. */
+#define IPC_DIAG_SCAN_MAX_ENDPOINT 512u
+
+void ipc_diag_dump_requests_from(uint32_t source_endpoint, ipc_diag_name_fn name_of) {
+    if (source_endpoint == IPC_ENDPOINT_NONE) {
+        return;
+    }
+    for (uint32_t id = 1u; id <= IPC_DIAG_SCAN_MAX_ENDPOINT; ++id) {
+        const ipc_endpoint_t* ep = (const ipc_endpoint_t*)idtable_get(&g_endpoint_table, id);
+        if (!ep || id == source_endpoint) {
+            continue;
+        }
+        uint32_t head = __atomic_load_n(&ep->head, __ATOMIC_RELAXED);
+        for (uint32_t back = 1u; back <= IPC_QUEUE_DEPTH; ++back) {
+            const ipc_message_t* m = &ep->queue[(head + IPC_QUEUE_DEPTH - back) % IPC_QUEUE_DEPTH];
+            if (__atomic_load_n(&m->type, __ATOMIC_RELAXED) == 0u) {
+                continue;
+            }
+            if (__atomic_load_n(&m->source, __ATOMIC_RELAXED) != source_endpoint) {
+                continue;
+            }
+            const char* svc = name_of ? name_of(id) : 0;
+            serial_printf_unlocked("[diag]     sent -> ep:%u (%s) type=0x%x req=%u (age %u)\n",
+                                   (unsigned)id,
+                                   svc ? svc : "private",
+                                   (unsigned)__atomic_load_n(&m->type, __ATOMIC_RELAXED),
+                                   (unsigned)__atomic_load_n(&m->request_id, __ATOMIC_RELAXED),
+                                   (unsigned)back);
+            break; /* newest per endpoint is enough to name the peer */
+        }
+    }
+}
+
 int ipc_send_from(uint32_t sender_context_id, uint32_t endpoint, const ipc_message_t* message) {
     if (!message) {
         return IPC_ERR_INVALID;

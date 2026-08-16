@@ -127,6 +127,14 @@ Do not:
 - Build app packer: `cmake --build build --target make_wasmos_app`
 - Run QEMU: `cmake --build build --target run-qemu`
 - Run QEMU halt test: `cmake --build build --target run-qemu-test` (default compile+boot+halt check after changes)
+- Quality gates: `cmake --build build --target fmt-check` and
+  `cmake --build build --target lint` (or `quality` for both). Run them through
+  the targets: the targets resolve the toolchain, and they build the wasmos
+  clang-tidy plugin that the `wasmos-*` checks live in. `scripts/quality.sh`
+  invoked directly now reads the same paths out of the build directory's
+  CMakeCache, so it is equivalent when that directory is configured and built —
+  but it warns and runs a weaker lint when the plugin is missing, and a warning
+  is easy to miss. Prefer the targets.
 
 ## QEMU + GDB Debugging
 - Use this default flow for non-ring3/kernel bring-up debugging.

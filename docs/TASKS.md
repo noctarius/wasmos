@@ -1351,6 +1351,23 @@ Source: `architecture/25-diagnostics-status.md`,
   select timeout, checking, and re-blocking. It is the idle-burn pattern the
   no-busy-spin rule exists for, and it is not the wedge.)
 
+  **Third captured wedge (CI run 31945544735), and the verdict: not a lost
+  thread.** Every RUNNING thread was dispatched between the two samples, so the
+  scheduler still owns everything it should. The dispatch deltas then show the
+  machine is not globally stopped either -- net-stack (+206), virtio-net (+97),
+  process-manager (+46), the compositor, menu-bar and gfx-smoke all keep
+  running. What is frozen is a connected subset: cli, vt, fs-manager, both
+  fs-fat instances, ata, fs-init, device-manager, serial, keyboard, mouse,
+  script-broker, Calculator -- 0 dispatches in a second.
+
+  That is a straight chain (cli -> fs-manager -> fs-fat -> ata), not a cycle,
+  and a chain stalls when one link never answers. So the question is now narrow:
+  is a message sitting in a queue whose owner is blocked (a lost wake), or did
+  nobody send (a genuine deadlock)? The dump answers it directly -- each blocked
+  thread now prints `wait=endpoint:N queued=M owner_ctx=C`, or for a select set
+  the watched endpoints and their queue depths. A non-zero `queued` under a
+  blocked owner names both the bug and the endpoint.
+
   Still missing after that: who waits for whom. Every backtrace ends at the
   host-call wrapper, and the guest's own stack is not walkable from the kernel,
   so the identity has to come from the wait -- the endpoint a blocked thread is

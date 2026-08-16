@@ -55,6 +55,83 @@ static ksync_spinlock_t g_select_table_lock;
 static idtable_t g_endpoint_table;
 static ksync_spinlock_t g_endpoint_table_lock;
 
+/* Describe the wait a blocked thread is sitting in, from its event alone.
+ *
+ * A thread's wait_event points INTO the object that owns it -- an endpoint's or
+ * a select-set's embedded sched_event_t -- and sched_event_t::type says which,
+ * so the owner is recoverable without walking the id table.  That matters
+ * because the caller is the NMI diagnostic path, which must take no locks.
+ *
+ * Fills out_id with the endpoint or select id and out_count with the endpoint's
+ * queued-message count (0 for a select).  For a select set, up to `watch_max`
+ * watched endpoint ids and their queue counts are written to out_watch_ids /
+ * out_watch_counts and the number written is returned through out_watched.
+ *
+ * Returns IPC_DIAG_WAIT_ENDPOINT, IPC_DIAG_WAIT_SELECT, or -1 when the event is
+ * neither (a join, futex, mutex or timer wait).
+ *
+ * The point of the queue count: a blocked owner whose endpoint holds a message
+ * is a lost wake -- the send happened and the receiver was never made runnable.
+ * An empty queue everywhere means nobody sent, which is a deadlock instead. */
+int ipc_diag_wait_info(const void* event, uint32_t* out_id, uint32_t* out_count,
+                       uint32_t* out_owner, uint32_t watch_max, uint32_t* out_watch_ids,
+                       uint32_t* out_watch_counts, uint32_t* out_watched) {
+    const sched_event_t* ev = (const sched_event_t*)event;
+    if (out_watched) {
+        *out_watched = 0;
+    }
+    if (!ev) {
+        return -1;
+    }
+    if (ev->type == SCHED_EVENT_TYPE_IPC) {
+        const ipc_endpoint_t* ep =
+            (const ipc_endpoint_t*)(const void*)((const char*)ev - offsetof(ipc_endpoint_t, event));
+        if (out_id) {
+            *out_id = ep->header.id;
+        }
+        if (out_count) {
+            *out_count = ep->count;
+        }
+        if (out_owner) {
+            *out_owner = ep->header.owner_context_id;
+        }
+        return IPC_DIAG_WAIT_ENDPOINT;
+    }
+    if (ev->type == SCHED_EVENT_TYPE_SELECT) {
+        const ipc_select_t* sel =
+            (const ipc_select_t*)(const void*)((const char*)ev - offsetof(ipc_select_t, event));
+        if (out_id) {
+            *out_id = sel->header.id;
+        }
+        if (out_count) {
+            *out_count = 0;
+        }
+        if (out_owner) {
+            *out_owner = sel->header.owner_context_id;
+        }
+        uint32_t written = 0;
+        for (uint32_t i = 0; i < sel->ep_count && written < watch_max; ++i) {
+            uint32_t id = sel->ep_ids[i];
+            if (id == IPC_ENDPOINT_NONE) {
+                continue;
+            }
+            const ipc_endpoint_t* ep = (const ipc_endpoint_t*)idtable_get(&g_endpoint_table, id);
+            if (out_watch_ids) {
+                out_watch_ids[written] = id;
+            }
+            if (out_watch_counts) {
+                out_watch_counts[written] = ep ? ep->count : 0u;
+            }
+            written++;
+        }
+        if (out_watched) {
+            *out_watched = written;
+        }
+        return IPC_DIAG_WAIT_SELECT;
+    }
+    return -1;
+}
+
 /*
  * Returns the endpoint with ep->lock held.  The caller must call
  * ksync_spinlock_unlock(&ep->lock) when done.  Lock order: g_endpoint_table_lock ->

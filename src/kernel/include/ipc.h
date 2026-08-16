@@ -135,6 +135,20 @@ int ipc_notification_create(uint32_t owner_context_id, uint32_t* out_endpoint);
  * pointer. The workhorse of PM-side authorisation: "who owns the endpoint this
  * request claims as its source?". */
 int ipc_endpoint_owner(uint32_t endpoint, uint32_t* out_owner_context_id);
+/* ipc_diag_wait_info's return values: which kind of object a blocked thread's
+ * event belongs to. */
+#define IPC_DIAG_WAIT_ENDPOINT 0
+#define IPC_DIAG_WAIT_SELECT 1
+
+/* Describe the wait a blocked thread is in, from its sched_event_t alone and
+ * WITHOUT taking any lock -- it is called from the NMI diagnostic path, where a
+ * lock may be held by a CPU that will never release it.  See the definition in
+ * ipc.c for the fields; returns IPC_DIAG_WAIT_ENDPOINT, IPC_DIAG_WAIT_SELECT,
+ * or -1 for any other kind of wait.  Values are read racily by design. */
+int ipc_diag_wait_info(const void* event, uint32_t* out_id, uint32_t* out_count,
+                       uint32_t* out_owner, uint32_t watch_max, uint32_t* out_watch_ids,
+                       uint32_t* out_watch_counts, uint32_t* out_watched);
+
 /* Queued message count. A snapshot taken under the endpoint lock and stale as
  * soon as it is returned. Returns IPC_OK / IPC_ERR_NOENT / IPC_ERR_INVALID. */
 int ipc_endpoint_count(uint32_t endpoint, uint32_t* out_count);

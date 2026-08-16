@@ -5,6 +5,7 @@
 #include "kallsyms.h"
 #include "serial.h"
 #include "paging.h"
+#include "ipc.h"
 #include "process.h"
 #include "thread.h"
 #include "arch/x86_64/smp.h"
@@ -289,9 +290,52 @@ void diag_dump_threads(const char* reason) {
         serial_printf_unlocked("[diag]   rip=%016llx", (unsigned long long)t->ctx.rip);
         panic_print_symbol(t->ctx.rip);
         if (t->state == THREAD_STATE_BLOCKED) {
-            diag_print_backtrace(t->ctx.rbp, 4);
+            /* Deep enough to reach the caller, not just the mechanism. Four
+             * frames stop at the host-call wrapper, which is the same
+             * `warp_ipc_select_one` for every waiting guest and says nothing
+             * about which request is outstanding. For a native service the
+             * chain continues into the service's own code, since that runs in
+             * the kernel address space -- which is exactly where the useful
+             * name is. A WASM guest's walk ends on its own when the frame
+             * pointer leaves the higher half. */
+            diag_print_backtrace(t->ctx.rbp, 10);
         }
         serial_printf_unlocked("\n");
+        /* What the thread is waiting ON, and whether anything is already there
+         * for it.  A blocked owner whose endpoint holds a queued message is a
+         * lost wake: the send happened and the receiver was never made
+         * runnable. Empty queues everywhere means nobody sent -- a deadlock. */
+        if (t->state == THREAD_STATE_BLOCKED && t->wait_event) {
+            uint32_t wait_id = 0;
+            uint32_t wait_count = 0;
+            uint32_t wait_owner = 0;
+            uint32_t watch_ids[4] = {0};
+            uint32_t watch_counts[4] = {0};
+            uint32_t watched = 0;
+            int kind = ipc_diag_wait_info(t->wait_event,
+                                          &wait_id,
+                                          &wait_count,
+                                          &wait_owner,
+                                          4u,
+                                          watch_ids,
+                                          watch_counts,
+                                          &watched);
+            if (kind == IPC_DIAG_WAIT_ENDPOINT) {
+                serial_printf_unlocked("[diag]   wait=endpoint:%u queued=%u owner_ctx=%u\n",
+                                       (unsigned)wait_id,
+                                       (unsigned)wait_count,
+                                       (unsigned)wait_owner);
+            } else if (kind == IPC_DIAG_WAIT_SELECT) {
+                serial_printf_unlocked("[diag]   wait=select:%u owner_ctx=%u watching",
+                                       (unsigned)wait_id,
+                                       (unsigned)wait_owner);
+                for (uint32_t w = 0; w < watched; ++w) {
+                    serial_printf_unlocked(
+                        " ep:%u(q=%u)", (unsigned)watch_ids[w], (unsigned)watch_counts[w]);
+                }
+                serial_printf_unlocked("\n");
+            }
+        }
     }
     /* A line marked `[diag]!` is a scheduler anomaly one snapshot can establish:
      * a READY thread on no run queue, or a BLOCKED one with an unconsumed wake.

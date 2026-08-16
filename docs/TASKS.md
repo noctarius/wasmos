@@ -1311,6 +1311,23 @@ Source: `architecture/25-diagnostics-status.md`,
   A healthy guest reports live=32 ready=2 blocked=26 with no anomalies (the two
   READY threads are the per-CPU idle threads, which are never queued by design).
 
+  **Second captured wedge, this time with the thread table (CI run 31942996423,
+  filesystem battery, again after an `ls`).** `live=32 ready=1 blocked=27
+  stranded(ready,no-rq)=0`, no `[diag]!` line anywhere, and cli, fs-manager,
+  both fs-fat instances, ata and device-manager all parked in
+  `ipc_recv_blocking_for` / `ipc_select_wait`. By the reading above that is a
+  **deadlock between processes, not a lost wake**: no thread was left runnable
+  off a queue and no wake token went unconsumed, so the scheduler handshake is
+  not implicated in this instance.
+
+  What the dump still cannot say is who waits for whom -- every backtrace ends
+  at the host-call wrapper, and the guest's own stack is not walkable from the
+  kernel. The next refinement is therefore per-thread wait identity: the
+  endpoint a blocked thread is waiting on, and the depth of each endpoint's
+  queue. A message sitting in a queue whose owner is blocked elsewhere is a lost
+  delivery; a cycle of services each waiting on the other's reply is the nested
+  synchronous round-trip this file already tracks (`fs_manager.c:608`).
+
   Not yet known, and worth establishing before theorising: whether a `/init`
   listing (initfs, not the FAT ESP) can trigger it too. The class's `/init` tests
   sort after the two that wedged, so in both runs they only ever ran against an

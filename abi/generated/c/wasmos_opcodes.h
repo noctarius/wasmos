@@ -289,6 +289,14 @@ enum {
      * the visible slot, 0 otherwise.
      */
     VT_IPC_VIS_NOTIFY = 0x783,
+    /* kernel -> vt: klog bytes are pending in the ring registered through
+     * wasmos_klog_register_ring.  Fire-and-forget, carries no payload: the vt
+     * drains the ring on every wake, so receiving it is the whole point and the
+     * message itself needs no handling beyond not being treated as an error.
+     * Without this doorbell an idle vt drains only on the next unrelated
+     * message, which strands klog on screen while the system is quiet.
+     */
+    VT_IPC_KLOG_NOTIFY = 0x784,
     VT_IPC_ERROR = 0x7FF,
 };
 
@@ -685,6 +693,7 @@ static inline const char* wasmos_opcode_name(uint32_t subsystem_id, uint32_t typ
         case 0x781: return "VT_IPC_INPUT_NOTIFY";
         case 0x782: return "VT_IPC_KEY_FORWARD";
         case 0x783: return "VT_IPC_VIS_NOTIFY";
+        case 0x784: return "VT_IPC_KLOG_NOTIFY";
         case 0x7FF: return "VT_IPC_ERROR";
         default: return "UNKNOWN";
         }

@@ -1911,18 +1911,21 @@ static uint32_t warp_shmem_create(uint32_t pages, uint32_t flags, void* ctx_) {
  * `id` is a BUFFER_KIND_TRANSFER buffer_id, not a shared-memory id; ownership, physical
  * backing, page alignment and ringbuf validity are all checked inside
  * klog_register_ring, which takes no retain — the caller must keep the buffer alive for
- * as long as the kernel logs into it.  Returns klog_register_ring's result (0, or a
- * bare -1 on any of those checks), or WASMOS_INVAL / WASMOS_ERR_KERNEL_NO_CALLER. */
-static uint32_t warp_klog_register_ring(uint32_t id, void* ctx_) {
+ * as long as the kernel logs into it.  `notify_endpoint` receives the VT_IPC_KLOG_NOTIFY
+ * doorbell and must belong to the caller; a non-positive value registers the ring without
+ * one.  Returns klog_register_ring's result (0, or a bare -1 on any of those checks), or
+ * WASMOS_INVAL / WASMOS_ERR_KERNEL_NO_CALLER. */
+static uint32_t warp_klog_register_ring(uint32_t id, uint32_t notify_endpoint, void* ctx_) {
     (void)ctx_;
     if ((int32_t)id <= 0)
         return (uint32_t)WASMOS_INVAL;
     uint32_t context_id = 0;
     if (warp_current_context_id(&context_id) != 0)
         return (uint32_t)WASMOS_ERR_KERNEL_NO_CALLER;
-    /* Ownership of the transfer buffer is enforced inside klog_register_ring
-     * (xfer_buffer_describe against this context), matching the wasm3 path. */
-    return (uint32_t)klog_register_ring(context_id, id);
+    /* Ownership of the transfer buffer and of the doorbell endpoint is enforced
+     * inside klog_register_ring, matching the wasm3 path. */
+    uint32_t notify = ((int32_t)notify_endpoint > 0) ? notify_endpoint : 0u;
+    return (uint32_t)klog_register_ring(context_id, id, notify);
 }
 
 /* hostcalls.yaml `shmem_grant` / `shmem_revoke`: give the process `target_pid` access

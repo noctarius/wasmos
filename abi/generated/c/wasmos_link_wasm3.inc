@@ -117,7 +117,7 @@
     X("wasmos", "block_buffer_map", "i()", wasmos_block_buffer_map) \
     X("wasmos", "xfer_buffer_map", "i(i)", wasmos_xfer_buffer_map) \
     X("wasmos", "xfer_buffer_unmap", "i(i)", wasmos_xfer_buffer_unmap) \
-    X("wasmos", "klog_register_ring", "i(i)", wasmos_klog_register_ring) \
+    X("wasmos", "klog_register_ring", "i(ii)", wasmos_klog_register_ring) \
     X("wasmos", "msi_alloc", "i(i*)", wasmos_msi_alloc) \
     X("wasmos", "msi_free", "i(i)", wasmos_msi_free) \
     X("wasmos", "mmio_write32", "i(iii)", wasmos_mmio_write32) \

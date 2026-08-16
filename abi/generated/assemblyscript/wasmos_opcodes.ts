@@ -244,6 +244,13 @@ export const VT_IPC_KEY_FORWARD: i32 = 0x782;
 // it resumes/relinquishes drawing.  Fire-and-forget.  arg0=1 if vt-0 is now
 // the visible slot, 0 otherwise.
 export const VT_IPC_VIS_NOTIFY: i32 = 0x783;
+// kernel -> vt: klog bytes are pending in the ring registered through
+// wasmos_klog_register_ring.  Fire-and-forget, carries no payload: the vt
+// drains the ring on every wake, so receiving it is the whole point and the
+// message itself needs no handling beyond not being treated as an error.
+// Without this doorbell an idle vt drains only on the next unrelated
+// message, which strands klog on screen while the system is quiet.
+export const VT_IPC_KLOG_NOTIFY: i32 = 0x784;
 export const VT_IPC_ERROR: i32 = 0x7FF;
 
 // serial (0x500..0x5FF)

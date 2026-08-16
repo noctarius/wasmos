@@ -1626,7 +1626,10 @@ static void vt_klog_ring_init(void) {
     if (wasmos_ringbuf_init(&g_klog_ring, base, region, VT_KLOG_RING_CAPACITY) != 0) {
         return;
     }
-    if (wasmos_klog_register_ring(bid) != 0) {
+    /* Register g_vt_ep as the doorbell: the kernel pushes VT_IPC_KLOG_NOTIFY when
+     * it has published bytes, which wakes the select below so an idle VT drains
+     * klog instead of sitting on it until unrelated traffic arrives. */
+    if (wasmos_klog_register_ring(bid, g_vt_ep) != 0) {
         return;
     }
     g_klog_ring_ready = 1;
@@ -1756,9 +1759,8 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
     /* Bring up the VT-owned klog ring (small, cheap overlay — see
      * vt_klog_ring_init).  The VT drains it into vt-1 on every wake below: it
      * blocks on g_vt_ep with wasmos_ipc_select_one (a timed select set strands
-     * serial input under WARP), so klog reaches vt-1 whenever any IPC arrives.
-     * An idle VT does not drain until the next event, which is fine: vt-1 is not
-     * the visible slot, and COM1 TX always carries the full log. */
+     * serial input under WARP), and the kernel's VT_IPC_KLOG_NOTIFY doorbell is
+     * itself such a wake, so pending klog reaches vt-1 without polling. */
     vt_klog_ring_init();
 
     wasmos_sys_notify_ready(proc_endpoint, g_vt_ep);
@@ -1963,6 +1965,12 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
                 msg.source, VT_IPC_RESP, msg.request_id, (int32_t)mode, tty_index);
             break;
         }
+
+        case VT_IPC_KLOG_NOTIFY:
+            /* The kernel's klog doorbell.  Waking the select above is its entire
+             * purpose — vt_drain_klog_ring already ran for this wake — so there is
+             * nothing to do here and nothing to reply to. */
+            break;
 
         case KBD_IPC_KEY_NOTIFY:
             vt_handle_key_notify(msg.arg0, msg.arg1, msg.arg2);

@@ -2365,11 +2365,14 @@ m3ApiRawFunction(wasmos_shmem_create) {
  * no retain and reaches the pages through the higher-half alias, so the caller must hold the
  * buffer for as long as the kernel logs into it.  Ownership is enforced by
  * xfer_buffer_describe inside klog_register_ring, which resolves the id against the caller's
- * context, so no extra capability gate is needed here.  Returns 0, WASMOS_INVAL for a
- * non-positive id, WASMOS_ERR_KERNEL_NO_CALLER, or klog_register_ring's -1 when the id is
- * foreign or does not hold an initialised ring. */
+ * context, so no extra capability gate is needed here.  notify_endpoint receives the
+ * VT_IPC_KLOG_NOTIFY doorbell and must be owned by the caller (checked in
+ * klog_register_ring); a negative value registers the ring without a doorbell.  Returns 0,
+ * WASMOS_INVAL for a non-positive id, WASMOS_ERR_KERNEL_NO_CALLER, or klog_register_ring's
+ * -1 when the id or the notify endpoint is foreign, or the region does not hold an
+ * initialised ring. */
 m3ApiRawFunction(wasmos_klog_register_ring) {
-    m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, id)
+    m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, id) m3ApiGetArg(int32_t, notify_endpoint)
 
         process_t* proc = process_get(process_current_pid());
     if (!proc || proc->context_id == 0) {
@@ -2378,7 +2381,8 @@ m3ApiRawFunction(wasmos_klog_register_ring) {
     if (id <= 0) {
         m3ApiReturn(WASMOS_INVAL);
     }
-    m3ApiReturn(klog_register_ring(proc->context_id, (uint32_t)id));
+    uint32_t notify = (notify_endpoint > 0) ? (uint32_t)notify_endpoint : 0u;
+    m3ApiReturn(klog_register_ring(proc->context_id, (uint32_t)id, notify));
 }
 
 /* Map shared-memory region `id` over the caller-chosen wasm32 linear-memory offset `ptr`,

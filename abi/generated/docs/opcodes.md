@@ -144,6 +144,7 @@ endpoint-scoped and may repeat across subsystems.
 | `VT_IPC_INPUT_NOTIFY` | 0x781 | notify | vt -> a slot's registered reader: input is available on your slot; drain it with VT_IPC_READ_REQ.  Fire-and-forget (request_id 0), arg0=slot.  |
 | `VT_IPC_KEY_FORWARD` | 0x782 | notify | vt -> compositor (the vt-0 key sink): a decoded key event for the focused window.  Fire-and-forget.  arg0=ascii/keysym (0 if none), arg1=scancode, arg2=flags (bit0=down, bit1=extended, bit2=shift, bit3=ctrl, bit4=altgr).  |
 | `VT_IPC_VIS_NOTIFY` | 0x783 | notify | vt -> compositor (the vt-0 key sink): the visible slot changed.  The compositor owns the framebuffer only while vt-0 is visible; on this notify it resumes/relinquishes drawing.  Fire-and-forget.  arg0=1 if vt-0 is now the visible slot, 0 otherwise.  |
+| `VT_IPC_KLOG_NOTIFY` | 0x784 | notify | kernel -> vt: klog bytes are pending in the ring registered through wasmos_klog_register_ring.  Fire-and-forget, carries no payload: the vt drains the ring on every wake, so receiving it is the whole point and the message itself needs no handling beyond not being treated as an error. Without this doorbell an idle vt drains only on the next unrelated message, which strands klog on screen while the system is quiet.  |
 | `VT_IPC_ERROR` | 0x7FF | error |  |
 
 ## serial (0x500–0x5FF)

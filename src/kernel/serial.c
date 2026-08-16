@@ -75,6 +75,13 @@ static console_ring_t* g_console_ring = 0;
  * and early boot keeps flowing only to console_ring + COM1 TX. */
 static uint64_t g_klog_ring_phys = 0;
 static uint32_t g_klog_ring_bytes = 0;
+/* Doorbell for the ring's consumer.  klog_ring_write runs under g_serial_lock and
+ * from interrupt and panic context, so it may not send IPC itself; it only raises
+ * g_klog_doorbell_pending, and klog_poll() delivers the notify from the scheduler
+ * loop, where no serial lock is held.  Endpoint 0 means no consumer registered a
+ * doorbell, which keeps the whole path inert. */
+static uint32_t g_klog_notify_endpoint = 0;
+static volatile uint8_t g_klog_doorbell_pending = 0;
 
 static inline ksync_spinlock_t* serial_lock_ptr(void) {
     uintptr_t addr = (uintptr_t)&g_serial_lock;
@@ -130,6 +137,22 @@ static inline uint32_t* serial_klog_ring_bytes_slot(void) {
         addr = (uintptr_t)((uint64_t)addr + KERNEL_HIGHER_HALF_BASE);
     }
     return (uint32_t*)(void*)addr;
+}
+
+static inline uint32_t* serial_klog_notify_endpoint_slot(void) {
+    uintptr_t addr = (uintptr_t)&g_klog_notify_endpoint;
+    if (g_serial_high_alias_enabled && (uint64_t)addr < KERNEL_HIGHER_HALF_BASE) {
+        addr = (uintptr_t)((uint64_t)addr + KERNEL_HIGHER_HALF_BASE);
+    }
+    return (uint32_t*)(void*)addr;
+}
+
+static inline volatile uint8_t* serial_klog_doorbell_slot(void) {
+    uintptr_t addr = (uintptr_t)&g_klog_doorbell_pending;
+    if (g_serial_high_alias_enabled && (uint64_t)addr < KERNEL_HIGHER_HALF_BASE) {
+        addr = (uintptr_t)((uint64_t)addr + KERNEL_HIGHER_HALF_BASE);
+    }
+    return (volatile uint8_t*)(void*)addr;
 }
 
 static inline uint8_t* serial_early_log_buf(void) {
@@ -486,9 +509,44 @@ static void klog_ring_write(const char* s) {
     while (s[len]) {
         len++;
     }
-    if (len) {
-        (void)wasmos_ringbuf_write(&rb, s, len);
+    if (len == 0) {
+        return;
     }
+    if (wasmos_ringbuf_write(&rb, s, len) > 0) {
+        /* Raise the doorbell only; klog_poll() sends it.  See the declaration. */
+        *serial_klog_doorbell_slot() = 1;
+    }
+}
+
+/* Deliver a pending klog doorbell to the registered consumer.  Called from the
+ * scheduler loop (kernel_boot_run_scheduler_loop), which is the nearest point to
+ * the logging path that holds no serial lock and is not interrupt context.
+ *
+ * The flag is cleared before the send, so a klog write racing the send re-arms
+ * the doorbell rather than being swallowed.  A failed send is dropped silently:
+ * the consumer's queue being full means it has messages to process and will
+ * drain the ring on that wake anyway, and logging the failure here would write
+ * klog from inside the klog doorbell path. */
+void klog_poll(void) {
+    if (!*serial_klog_doorbell_slot()) {
+        return;
+    }
+    uint32_t endpoint = *serial_klog_notify_endpoint_slot();
+    if (endpoint == 0) {
+        *serial_klog_doorbell_slot() = 0;
+        return;
+    }
+    *serial_klog_doorbell_slot() = 0;
+    ipc_message_t msg;
+    msg.type = (uint32_t)VT_IPC_KLOG_NOTIFY;
+    msg.request_id = 0;
+    msg.source = IPC_ENDPOINT_NONE;
+    msg.destination = endpoint;
+    msg.arg0 = 0;
+    msg.arg1 = 0;
+    msg.arg2 = 0;
+    msg.arg3 = 0;
+    (void)ipc_send_from(IPC_CONTEXT_KERNEL, endpoint, &msg);
 }
 
 /* Adopts an already-initialised ringbuf, owned by owner_context_id as
@@ -501,9 +559,18 @@ static void klog_ring_write(const char* s) {
  * page-aligned, a zero size, or a region that does not carry a valid ringbuf
  * header.  The rejection matters: an accepted bad region would corrupt memory on
  * every subsequent klog write. */
-int klog_register_ring(uint32_t owner_context_id, uint32_t id) {
+int klog_register_ring(uint32_t owner_context_id, uint32_t id, uint32_t notify_endpoint) {
     if (id == 0) {
         return -1;
+    }
+    /* The doorbell may only name an endpoint the registering context owns, so a
+     * caller cannot point kernel notifies at a third party's endpoint. */
+    if (notify_endpoint != 0) {
+        uint32_t notify_owner = 0;
+        if (ipc_endpoint_owner(notify_endpoint, &notify_owner) != IPC_OK ||
+            notify_owner != owner_context_id) {
+            return -1;
+        }
     }
     /* The VT owns the ring as a BUFFER_KIND_TRANSFER xfer-buffer (the same
      * zero-copy transport the socket rings use); resolve it by (id, owner) and
@@ -529,8 +596,9 @@ int klog_register_ring(uint32_t owner_context_id, uint32_t id) {
         return -1;
     }
     *serial_klog_ring_bytes_slot() = region_bytes;
+    *serial_klog_notify_endpoint_slot() = notify_endpoint;
     /* Publish phys last: klog_ring_write reads phys first, so a non-zero phys
-     * always implies a valid bytes value is already visible. */
+     * always implies a valid bytes value and doorbell endpoint are visible. */
     *serial_klog_ring_phys_slot() = base;
     return 0;
 }

@@ -261,6 +261,7 @@ the compositor or the VT owns the framebuffer.
 | `VT_IPC_INPUT_NOTIFY`     | 0x781  | *(phase 2)* vt → reader: input available on your slot  |
 | `VT_IPC_KEY_FORWARD`      | 0x782  | *(phase 3)* vt → compositor: key event for vt-0        |
 | `VT_IPC_VIS_NOTIFY`       | 0x783  | *(phase 5)* vt → compositor: arg0=1 if vt-0 is now visible, else 0 |
+| `VT_IPC_KLOG_NOTIFY`      | 0x784  | *(phase 5)* kernel → vt: klog bytes pending in the registered ring |
 | `VT_IPC_ERROR`            | 0x7FF  | Error response                                          |
 
 #### VT_IPC_WRITE_REQ
@@ -362,7 +363,18 @@ the IRQ→VT path and make the CLI event-driven.
   rings use. The VT acquires + maps the buffer, `wasmos_ringbuf_init`s it, and
   registers its id with the kernel (`klog_register_ring`); `serial_write` then
   publishes klog into that ring in addition to COM1 TX, and the VT drains it into
-  vt-1 on each wake of its main loop. This is **additive**: the kernel still
+  vt-1 on each wake of its main loop.
+
+  The VT registers its own endpoint as the ring's **doorbell** in the same call.
+  The kernel raises a flag on the logging path and delivers `VT_IPC_KLOG_NOTIFY`
+  from the scheduler loop (`klog_poll`), never from `serial_write` itself, which
+  runs under the serial lock, in interrupt context and during a panic. The notify
+  carries no payload: waking the VT's `wasmos_ipc_select_one` is its whole
+  purpose, since the VT drains the ring on every wake. Without it an idle VT holds
+  pending klog until unrelated traffic arrives — invisible while vt-1 was hidden,
+  a stalled console once it is the visible slot.
+
+  This is **additive**: the kernel still
   writes the legacy `console_ring` and the framebuffer driver still drains it for
   early-boot on-screen klog. Retiring that console-ring drain (making the
   framebuffer a pure blit surface) moves to phase 5, alongside the default-visible

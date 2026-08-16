@@ -284,6 +284,19 @@ void cpu_sched_enqueue(cpu_sched_t* cs, thread_t* t) {
             return;
         }
         if (g_cpus[i].current_thread == t) {
+            /* Rate-limited like the idle-enqueue report above: this is a
+             * legitimate outcome, not a defect, and a thread with a long
+             * timeslice can produce it on every wake it receives.  Reporting
+             * each one turned into a log storm on a slow serial line. */
+            uint32_t n = sched_debug_bump(SCHED_DEBUG_ENQUEUE_CURRENT);
+            if ((n & (n - 1u)) != 0u) {
+                sched_owe_enqueue(t);
+                if (sched_mark_ready_if_live(t)) {
+                    __atomic_store_n(
+                        (uint32_t*)&t->block_reason, THREAD_BLOCK_NONE, __ATOMIC_RELAXED);
+                }
+                return;
+            }
             serial_printf_unlocked(
                 "[sched] enqueue current tid=%u owner=%u caller_cpu=%u holder_cpu=%u state=%u\n",
                 (unsigned)t->tid,
@@ -638,6 +651,16 @@ void sched_set_need_resched(void) {
     process_set_need_resched();
 }
 
+/* Whether any CPU has this thread dispatched right now. */
+static int sched_thread_is_current_somewhere(const thread_t* t) {
+    for (uint32_t i = 0; i < WASMOS_MAX_CPUS; ++i) {
+        if (__atomic_load_n(&g_cpus[i].current_thread, __ATOMIC_ACQUIRE) == t) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 /* Outstanding deferred enqueues, so the idle path can tell in one load whether a
  * sweep is worth doing.  Claims are rare; the counter keeps the common case (no
  * debt) free. */
@@ -685,6 +708,16 @@ void sched_sweep_owed_enqueues(void) {
     for (uint32_t i = 0; i < THREAD_MAX_COUNT; ++i) {
         thread_t* t = thread_table_at(i);
         if (!t || t->tid == 0u || !__atomic_load_n(&t->enqueue_owed, __ATOMIC_ACQUIRE)) {
+            continue;
+        }
+        /* Leave a thread that is still executing alone, WITHOUT consuming its
+         * claim: its holder will settle it.  Handing it to cpu_sched_enqueue
+         * instead would be refused and re-owed, and since the sweep runs once
+         * per scheduler pass that becomes a loop -- one refusal, one log line,
+         * every pass, for as long as the thread runs.  Measured in CI: 43
+         * repetitions of the same guard line in one window, from a thread that
+         * simply had a long timeslice. */
+        if (sched_thread_is_current_somewhere(t)) {
             continue;
         }
         if (!sched_take_owed_enqueue(t)) {

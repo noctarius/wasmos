@@ -988,9 +988,16 @@ static void test_sweep_does_not_link_a_running_thread(void) {
     cpu_sched_enqueue(&g_cpus[0].sched, t);
 
     act_as(1);
+    log_reset();
     sched_sweep_owed_enqueues(); /* holder still names it */
+    sched_sweep_owed_enqueues(); /* and again, as the scheduler loop would */
     CHECK(t->on_rq == 0, "still not linked while it executes");
     CHECK(t->enqueue_owed != 0, "and the debt is carried forward");
+    /* The sweep must not hand a running thread to cpu_sched_enqueue at all.
+     * Doing so is refused and re-owed, which the sweep then retries on the next
+     * scheduler pass -- a loop that produced 43 copies of the guard's report in
+     * one CI window, from a thread that merely had a long timeslice. */
+    CHECK(!saw("enqueue current"), "and the sweep does not churn against the guard");
     check_invariants("sweep respects the holder");
 }
 

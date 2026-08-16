@@ -152,6 +152,10 @@ typedef enum {
     SCHED_DEBUG_INIT_ON_QUEUED,
     SCHED_DEBUG_REMOVE_GAVE_UP,
     SCHED_DEBUG_SET_PRIO_QUEUED,
+    /* Enqueues refused because the thread was executing on some CPU.  A normal
+     * outcome, not a defect, so its report is rate-limited and this counter is
+     * the honest total. */
+    SCHED_DEBUG_ENQUEUE_CURRENT,
     SCHED_DEBUG_EVENT_COUNT
 } sched_debug_event_t;
 

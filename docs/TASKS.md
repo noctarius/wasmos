@@ -1067,13 +1067,6 @@ Other graphics/VT/UI:
   index for LIST_VIEW/TREE_VIEW/DROPDOWN but a component id for MENU_ITEM, two
   incompatible non-negative domains a caller cannot tell apart
   (`src/libui/include/wasmos/libui.h`).
-- [ ] [CLEANUP][P3] Delete the compositor's dead keymap path -- `SCANCODE_MAP_LEN`,
-  `keymap_t`, `KEYMAP_US`, `KEYMAP_DE_NODEADKEYS`, `active_keymap`,
-  `scancode_to_ascii`, `g_key_layout`. Nothing calls the decoder, and its
-  presence contradicts the "vt is the single keymap decoder" invariant. The
-  dead `FONT_INIT_MAX_ATTEMPTS`/`g_font_init_attempts` pair and
-  `cli_types.h`'s unreferenced `CLI_MAX_PROCS` go with it
-  (`src/services/gfx_compositor/gfx_compositor.zig`).
 
 ## Validation and Documentation
 

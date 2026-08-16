@@ -13,8 +13,6 @@ typedef enum {
     CLI_PHASE_FAILED
 } cli_phase_t;
 
-/* CLI_MAX_PROCS is not referenced by any translation unit. */
-#define CLI_MAX_PROCS 48
 /* Command-history ring depth: the number of past lines Up/Down can reach.  Each
  * slot is a full copy of the 128-byte input line, so this is a static cost. */
 #define CLI_HISTORY_MAX 8

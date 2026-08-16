@@ -680,6 +680,7 @@ without buffering or editing. Echo still applies if `input_echo = 1`.
 | 5b    | Default visible vt-1 (retires the fbpci console-ring drain); serial-bound selector; lazy CLI spawn | Proposed |
 
 Keymap layouts are data files under `system/keymaps/` (`us-qwerty.kmap`,
-`de-nodeadkeys.kmap`), loaded by the VT at init (built-in US fallback).  Runtime
-layout switching and extracting a dedicated `keymapd` service remain future work;
-the compositor's now-unused legacy keymap awaits a cleanup pass.
+`de-nodeadkeys.kmap`), loaded by the VT at init (built-in US fallback).  The VT
+holds the only scancode decoder in the system; no other component carries a
+keymap.  Runtime layout switching and extracting a dedicated `keymapd` service
+remain future work.

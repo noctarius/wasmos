@@ -82,6 +82,10 @@ static int g_checks;
  * and slow the interleaving down. Counted instead, so a report remains
  * observable without printing anything. */
 static int g_reports;
+void serial_printf(const char* fmt, ...) {
+    (void)fmt;
+    __atomic_fetch_add(&g_reports, 1, __ATOMIC_RELAXED);
+}
 void serial_printf_unlocked(const char* fmt, ...) {
     (void)fmt;
     __atomic_fetch_add(&g_reports, 1, __ATOMIC_RELAXED);

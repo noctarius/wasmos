@@ -82,6 +82,36 @@ static int32_t fat_parse_requested_unit(void) {
     return (int32_t)value;
 }
 
+/* Send a reply, treating a full receiver queue as backpressure rather than
+ * failure: retry up to FAT_STREAM_SEND_RETRIES times, yielding between tries.
+ *
+ * A dropped reply is unrecoverable for the peer. It is waiting on exactly this
+ * message and has no timeout, so IPC_ERR_FULL discarded here strands the
+ * requester, and behind it every client of that requester -- which is how a
+ * single refused FS_IPC_RESP wedges a whole session.
+ *
+ * READDIR makes that the common case, not a rare one: fat_readdir_stream fills
+ * the relay's queue with FS_IPC_STREAM frames (retrying, so they get through)
+ * and the terminating response follows immediately, at the moment the queue is
+ * at its fullest. Whether it lands depends on how much the relay happened to
+ * drain in between, which is why the resulting wedge was intermittent and
+ * SMP-timing dependent.
+ *
+ * Returns the final send result; a caller with nowhere to report it may ignore
+ * it, but exhausting the retries means the peer is stranded. */
+static int32_t fat_send_reply(int32_t dest, int32_t type, uint32_t request_id, int32_t a0,
+                              int32_t a1, int32_t a2, int32_t a3) {
+    return wasmos_sys_ipc_send_retry(dest,
+                                     g_fs_endpoint,
+                                     type,
+                                     (int32_t)request_id,
+                                     a0,
+                                     a1,
+                                     a2,
+                                     a3,
+                                     (int32_t)FAT_STREAM_SEND_RETRIES);
+}
+
 /* Answer an fs-manager FSMGR_IPC_BACKEND_INFO_REQ pull. */
 static void fat_report_backend_info(int32_t dst, int32_t request_id) {
     int32_t mount_arg = 0;
@@ -89,14 +119,13 @@ static void fat_report_backend_info(int32_t dst, int32_t request_id) {
         wasmos_xfer_buffer_borrow(dst, g_mount_bid, WASMOS_BUFFER_GRANT_READ) >= 0) {
         mount_arg = (int32_t)(((uint32_t)g_mount_bid << 12) | ((uint32_t)g_mount_len & 0xFFFu));
     }
-    (void)wasmos_ipc_send(dst,
-                          g_fs_endpoint,
-                          FSMGR_IPC_BACKEND_INFO_RESP,
-                          request_id,
-                          FSMGR_BACKEND_BOOT,
-                          0,
-                          mount_arg,
-                          (int32_t)g_mount_unit);
+    (void)fat_send_reply(dst,
+                         FSMGR_IPC_BACKEND_INFO_RESP,
+                         (uint32_t)request_id,
+                         FSMGR_BACKEND_BOOT,
+                         0,
+                         mount_arg,
+                         (int32_t)g_mount_unit);
 }
 
 /* Resolve the mount alias + unit via BLOCK_IPC_IDENTIFY + devmgr query. */
@@ -257,15 +286,13 @@ static void fat_send_response(fat_op_ctx_t* op, fat_r_t r) {
     if (r == FAT_R_DONE) {
         int32_t a0 = op->resp_override ? op->resp_arg0 : 0;
         int32_t a1 = op->resp_override ? op->resp_arg1 : 0;
-        (void)wasmos_ipc_send(op->source, g_fs_endpoint, FS_IPC_RESP, op->request_id, a0, a1, 0, 0);
+        (void)fat_send_reply(op->source, FS_IPC_RESP, op->request_id, a0, a1, 0, 0);
     } else {
-        /* FIXME: a step that returns FAT_R_ERR without recording a code (the
-         * fat_block_read_direct submit paths) reports a bare -1, which no peer
-         * can decode; every failure leaving this backend owes a packed
-         * WASMOS_ERR_FS_* from abi/errors.yaml. */
-        int32_t err = op->err ? op->err : -1;
-        (void)wasmos_ipc_send(
-            op->source, g_fs_endpoint, FS_IPC_ERROR, op->request_id, err, 0, 0, 0);
+        /* A step that returns FAT_R_ERR without recording a code -- the
+         * fat_block_read_direct submit paths -- failed talking to the block
+         * device, which is what IO names. */
+        int32_t err = op->err ? op->err : WASMOS_ERR_FS_IO;
+        (void)fat_send_reply(op->source, FS_IPC_ERROR, op->request_id, err, 0, 0, 0);
     }
 }
 
@@ -484,26 +511,24 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
                 continue;
             }
             if (type == FS_IPC_READY_REQ) {
-                (void)wasmos_ipc_send(wasmos_ipc_last_field(WASMOS_IPC_FIELD_SOURCE),
-                                      g_fs_endpoint,
-                                      FS_IPC_RESP,
-                                      wasmos_ipc_last_field(WASMOS_IPC_FIELD_REQUEST_ID),
-                                      0,
-                                      0,
-                                      0,
-                                      0);
+                (void)fat_send_reply(wasmos_ipc_last_field(WASMOS_IPC_FIELD_SOURCE),
+                                     FS_IPC_RESP,
+                                     (uint32_t)wasmos_ipc_last_field(WASMOS_IPC_FIELD_REQUEST_ID),
+                                     0,
+                                     0,
+                                     0,
+                                     0);
                 continue;
             }
             op = fat_op_alloc();
             if (!op) {
-                (void)wasmos_ipc_send(wasmos_ipc_last_field(WASMOS_IPC_FIELD_SOURCE),
-                                      g_fs_endpoint,
-                                      FS_IPC_ERROR,
-                                      wasmos_ipc_last_field(WASMOS_IPC_FIELD_REQUEST_ID),
-                                      WASMOS_ERR_FS_BUSY,
-                                      0,
-                                      0,
-                                      0);
+                (void)fat_send_reply(wasmos_ipc_last_field(WASMOS_IPC_FIELD_SOURCE),
+                                     FS_IPC_ERROR,
+                                     (uint32_t)wasmos_ipc_last_field(WASMOS_IPC_FIELD_REQUEST_ID),
+                                     WASMOS_ERR_FS_BUSY,
+                                     0,
+                                     0,
+                                     0);
                 continue;
             }
             op->type = type;

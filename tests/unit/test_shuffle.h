@@ -56,7 +56,7 @@
 
 /* Some of these suites compile with src/libc/include on the include path, where
  * wasmos's own freestanding headers shadow the host's and declare far less.
- * They still LINK against the host libc, so the three functions used here are
+ * They still LINK against the host libc, so the four functions used here are
  * declared directly, with signatures identical to both the host's and wasmos's.
  * Declaring them unconditionally rather than behind a shadow-detecting guard is
  * deliberate: a guard would depend on whether this header is included before or
@@ -69,6 +69,7 @@ extern "C" {
 extern char* getenv(const char* name);
 extern unsigned long long strtoull(const char* text, char** end, int base);
 extern long write(int fd, const void* buf, unsigned long count);
+extern void _exit(int status) __attribute__((noreturn));
 #ifdef __cplusplus
 }
 #endif
@@ -77,7 +78,7 @@ extern long write(int fd, const void* buf, unsigned long count);
  * two runners put on the stack. A larger count is rejected rather than
  * truncated, so a suite that outgrows this fails loudly. Raising it costs
  * 4 bytes of stack per case. */
-#define WASMOS_TEST_MAX_CASES 128
+#define WASMOS_TEST_MAX_CASES 256
 
 /* A case returns 0 to pass. Any non-zero value is a failure marker naming the
  * assertion that failed -- by convention __LINE__, which the runner prints. */
@@ -165,8 +166,14 @@ static inline uint64_t wasmos_test_seed(void) {
  * `order` must have room for `count` ints; the caller owns it and it is written
  * in full. A NULL `order` or a non-positive `count` leaves it untouched and
  * returns the seed without printing it -- the seed line marks a shuffle that
- * actually happened. `count` is not checked against WASMOS_TEST_MAX_CASES here;
- * the two runners do that before calling.
+ * actually happened.
+ *
+ * A `count` past WASMOS_TEST_MAX_CASES aborts the process. Direct callers size
+ * `order` with that macro (the third pattern above), so writing past it is a
+ * stack overflow whose symptom is a segfault in an unrelated later case; and
+ * declining to fill `order` instead would leave that caller iterating
+ * uninitialised indices, which is worse. Growing a suite past the cap is a
+ * one-line change to the macro -- but it has to be noticed first.
  */
 static inline uint64_t wasmos_test_shuffle(int* order, int count) {
     uint64_t seed = wasmos_test_seed();
@@ -174,6 +181,15 @@ static inline uint64_t wasmos_test_shuffle(int* order, int count) {
 
     if (!order || count <= 0) {
         return seed;
+    }
+    if (count > WASMOS_TEST_MAX_CASES) {
+        /* Raw write and _exit for the same reason wasmos_test_write_seed uses
+         * them: suites compiling against wasmos's own headers have neither the
+         * host's stdout nor its exit. */
+        wasmos_test_write_seed(
+            "test_shuffle: case count exceeds WASMOS_TEST_MAX_CASES; raise it: 0x",
+            (uint64_t)count);
+        _exit(1);
     }
     for (int i = 0; i < count; ++i) {
         order[i] = i;

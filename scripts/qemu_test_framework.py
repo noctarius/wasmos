@@ -93,6 +93,12 @@ _STALL_DUMP_ENABLED = os.environ.get("WASMOS_QEMU_STALL_DUMP", "1") != "0"
 # later command of a dead session just buries the first one.
 _STALL_DUMP_MAX = int(os.environ.get("WASMOS_QEMU_STALL_DUMP_MAX", "2") or "2")
 
+# Multiplies every expect()/settle() deadline. A CI runner is far slower than a
+# developer's machine -- boots that take 12s locally have taken over 120s there
+# -- and raising each test's literal timeout would slow local runs for a problem
+# they do not have. WASMOS_TEST_TIMEOUT_SCALE lets CI buy patience in one place.
+_TIMEOUT_SCALE = float(os.environ.get("WASMOS_TEST_TIMEOUT_SCALE", "1") or "1")
+
 
 def _parse_rips(regs_text):
     """{cpu_id: rip} from `info registers -a`."""
@@ -115,80 +121,33 @@ def _parse_rips(regs_text):
 _KERNEL_VA_BASE = 0xFFFFFFFF80000000
 
 
-def _describe_rip(rip, syms):
-    if rip >= _KERNEL_VA_BASE:
-        return syms.resolve(rip) or "kernel (no symbol)"
-    return "user/guest"
+def _resolve_kernel_addrs(kernel, addrs):
+    """addr -> "func at file:line", via scripts/decode_kernel_panic.py.
 
+    That module is the project's address resolver: it uses addr2line rather than
+    a symbol table, so it answers with a source location instead of
+    `symbol+offset`, and it already knows how to find llvm-addr2line from the
+    build's own toolchain. Resolving addresses a second way here would be one
+    more copy of a rule to drift.
 
-class _KernelSymbols:
-    """RIP -> `symbol+0x…`, read from the kernel ELF with nm.
-
-    Loaded lazily and at most once per path: a stall dump is rare, and a test run
-    that never stalls should not pay for it. A missing nm or unreadable image
-    degrades to raw addresses rather than failing the dump.
+    Best-effort: anything missing (the module, the tool, the image) yields an
+    empty map and the caller prints raw addresses.
     """
-
-    _cache = {}
-
-    def __init__(self, path):
-        self.syms = []
-        if not path or not os.path.exists(path):
-            return
-        nm = shutil.which("nm") or shutil.which("llvm-nm")
-        if not nm:
-            return
-        try:
-            out = subprocess.run(
-                [nm, "-n", "--defined-only", path],
-                capture_output=True,
-                text=True,
-                timeout=30,
-            ).stdout
-        except Exception:
-            return
-        for line in out.splitlines():
-            parts = line.split()
-            if len(parts) < 3 or parts[1].upper() not in ("T", "W"):
-                continue
-            try:
-                self.syms.append((int(parts[0], 16), parts[2]))
-            except ValueError:
-                continue
-        self.syms.sort()
-
-    @classmethod
-    def get(cls, path):
-        if path not in cls._cache:
-            cls._cache[path] = cls(path)
-        return cls._cache[path]
-
-    def resolve(self, addr):
-        if not self.syms or addr < self.syms[0][0]:
-            return ""
-        lo, hi = 0, len(self.syms) - 1
-        best = None
-        while lo <= hi:
-            mid = (lo + hi) // 2
-            if self.syms[mid][0] <= addr:
-                best = self.syms[mid]
-                lo = mid + 1
-            else:
-                hi = mid - 1
-        if best is None:
-            return ""
-        delta = addr - best[0]
-        # A huge offset means the address is past the last symbol, not inside it.
-        if delta > 0x10000:
-            return ""
-        return f"{best[1]}+0x{delta:x}"
-
-
-# Multiplies every expect()/settle() deadline. A CI runner is far slower than a
-# developer's machine -- boots that take 12s locally have taken over 120s there
-# -- and raising each test's literal timeout would slow local runs for a problem
-# they do not have. WASMOS_TEST_TIMEOUT_SCALE lets CI buy patience in one place.
-_TIMEOUT_SCALE = float(os.environ.get("WASMOS_TEST_TIMEOUT_SCALE", "1") or "1")
+    if not addrs or not kernel or not os.path.exists(kernel):
+        return {}
+    try:
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        import decode_kernel_panic as panic
+    except Exception:
+        return {}
+    try:
+        tool = panic.discover_addr2line(os.environ.get("LLVM_ADDR2LINE", ""), kernel)
+        if not tool:
+            return {}
+        hexed = [f"{a:016x}" for a in sorted(set(addrs))]
+        return panic.resolve_addresses(tool, kernel, hexed)
+    except Exception:
+        return {}
 
 
 def default_build_dir(build_dir: str = "build") -> str:
@@ -946,10 +905,14 @@ class QemuSession:
         one driver -- and those have different fixes. QEMU can answer that from
         outside regardless of the guest's state.
 
-        Best-effort by construction: no monitor, no nm, or an unreadable image
+        Best-effort by construction: a missing monitor, addr2line or kernel image
         each degrade the dump rather than failing the test that asked for it.
         Rate-limited per session, because every later command of a dead session
         would otherwise repeat it.
+
+        Addresses are printed in the same shape as a kernel panic dump
+        (`--- CPU n` / `rip=<16 hex>`), so a saved CI log can be piped through
+        `scripts/decode_kernel_panic.py` unchanged.
         """
         if not _STALL_DUMP_ENABLED or self.monitor is None:
             return ""
@@ -970,26 +933,38 @@ class QemuSession:
             return text
 
         kernel = os.environ.get("WASMOS_KERNEL", "") or default_kernel_path()
-        syms = _KernelSymbols.get(kernel)
+        first = _parse_rips(regs)
+        second = _parse_rips(regs2)
+        kernel_addrs = [
+            rip
+            for rips in (first, second)
+            for rip in rips.values()
+            if rip >= _KERNEL_VA_BASE
+        ]
+        resolved = _resolve_kernel_addrs(kernel, kernel_addrs)
+
+        def describe(rip):
+            if rip < _KERNEL_VA_BASE:
+                return "user/guest"
+            return resolved.get(f"{rip:016x}", "kernel (unresolved)")
+
         lines = [
             f"=== [stall-dump] {reason} ===",
-            f"[stall-dump] kernel={kernel} symbols={len(syms.syms)}",
+            f"[stall-dump] kernel={kernel}",
         ]
         for line in cpus.splitlines():
             if line.strip():
                 lines.append(f"[stall-dump] {line.strip()}")
-        first = _parse_rips(regs)
-        second = _parse_rips(regs2)
         for cpu_id, rip in first.items():
-            where = _describe_rip(rip, syms)
             moved = second.get(cpu_id)
             if moved is None:
                 motion = ""
             elif moved == rip:
-                motion = " (unchanged)"
+                motion = "  (unchanged)"
             else:
-                motion = f" (moved to 0x{moved:016x} {_describe_rip(moved, syms)})"
-            lines.append(f"[stall-dump] cpu{cpu_id} rip=0x{rip:016x} {where}{motion}")
+                motion = f"  (moved to {moved:016x} {describe(moved)})"
+            lines.append(f"--- CPU {cpu_id}")
+            lines.append(f"[stall-dump] rip={rip:016x} {describe(rip)}{motion}")
         lines.append("=== [stall-dump] end ===")
         text = "\n".join(lines)
         print(text, flush=True)

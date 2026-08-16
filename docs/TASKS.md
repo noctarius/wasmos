@@ -1279,13 +1279,27 @@ Source: `architecture/25-diagnostics-status.md`,
   so suspect the path the listing runs through under `fs-manager` -> `fs-fat` ->
   block/ata, and what it leaves outstanding on the way back.
 
-  **The next occurrence reports itself.** A command timeout now dumps every
-  vCPU's RIP from the QEMU monitor, symbolised against the kernel image, and
-  samples twice so a CPU spinning inside a function is distinguishable from one
-  parked (`QemuSession.dump_stall_state`, grep the CI log for `[stall-dump]`).
-  That is the discriminator the serial log cannot give: all CPUs unchanged in
-  `idle_entry` is a lost wakeup, one moving inside `spinlock_lock` is a lock
-  cycle, one in a driver is a device wait. Read that before theorising further.
+  **What the first captured dump says (CI run 31939479042, boot-and-init).** A
+  command timeout now dumps every vCPU's RIP from the QEMU monitor, resolved to
+  `file:line` by `scripts/decode_kernel_panic.py`, sampled twice so a spinning
+  CPU is distinguishable from a parked one (`QemuSession.dump_stall_state`; grep
+  a CI log for `[stall-dump]`). It caught a wedge on its first run, after an `ls`
+  in `/boot/system/drivers`, and every CPU was in `idle_entry` — **unchanged**
+  across both samples.
+
+  That rules out a whole family of theories: nothing is spinning on a lock, and
+  no driver is looping on a device. The machine is asleep with work outstanding,
+  which is either a lost wakeup (a thread left READY on no run queue, or a wake
+  dropped against a thread mid-block) or a cycle of processes blocked on each
+  other's IPC — the nested synchronous `DEVMGR_QUERY_MOUNT_REQ` round-trip in
+  `fs_manager.c:608` is a filed instance of exactly that shape.
+
+  Distinguishing those two needs in-guest state: which threads are BLOCKED and
+  on what. The kernel already has an NMI handler that logs and resumes outside a
+  panic (`x86_nmi_handler`, `kpanic.c:116`), and NMI is deliverable from the
+  monitor, so the next step is a lock-free thread-table dump on that path
+  (state, block reason, wait event, per-CPU current thread) plus an `nmi` from
+  the framework right after the RIP dump.
 
   Not yet known, and worth establishing before theorising: whether a `/init`
   listing (initfs, not the FAT ESP) can trigger it too. The class's `/init` tests

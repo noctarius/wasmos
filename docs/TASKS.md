@@ -1378,12 +1378,19 @@ Source: `architecture/25-diagnostics-status.md`,
   Note the two captures so far disagree on which endpoint fs-manager waited on
   (19 in one, 18 in the other), which is exactly the distinction that matters.
 
-  **One of the two bugs behind this is FIXED** (see the deferred-enqueue claim in
-  `sched_thread.c`); what remains is the "wait is between processes" case, which
-  now reproduces locally too -- roughly 1 run in 8 of the filesystem battery,
-  `Prompt not found after 'ls'`, 32 live threads, `stranded=0`, and the verdict
-  naming the IPC waits rather than the scheduler. That is the repro to work
-  from; it never existed before this instrumentation.
+  **One of the two bugs behind this is FIXED** and merged (`8c063c62f3`; the
+  deferred-enqueue claim in `sched_thread.c`). What remains is the "wait is
+  between processes" case: `Prompt not found after 'ls'`, 32 live threads,
+  `stranded=0`, and the verdict naming the IPC waits rather than the scheduler.
+  It was seen once locally while the scheduler bug was still present and has not
+  recurred in ~40 filesystem-battery runs since, so treat the local rate as
+  unmeasured rather than 1-in-8.
+
+  The next capture answers more than that one did. A blocked thread's dump now
+  names the endpoint it waits on, that endpoint's queue depth, the last messages
+  the endpoint DELIVERED (its queue retains 32 behind `head`), and whether it
+  ever REFUSED a send for a full queue. A refusal on the endpoint a requester
+  waits on is the finding: the sender may have assumed delivery.
 
   The fixed half, kept here because the evidence chain is the useful part:
 
@@ -1425,10 +1432,10 @@ Source: `architecture/25-diagnostics-status.md`,
   Still missing after that: who waits for whom. Every backtrace ends at the
   host-call wrapper, and the guest's own stack is not walkable from the kernel,
   so the identity has to come from the wait -- the endpoint a blocked thread is
-  parked on, and the depth of each endpoint's queue. A message sitting in a
-  queue whose owner is blocked elsewhere is a lost delivery; a cycle of services
-  waiting on each other's replies is the nested synchronous round-trip this file
-  already tracks (`fs_manager.c:608`).
+  parked on, its queue depth and its history, all of which the dump now prints.
+  A message sitting in a queue whose owner is blocked elsewhere is a lost
+  delivery; a cycle of services waiting on each other's replies is the nested
+  synchronous round-trip this file already tracks (`fs_manager.c:608`).
 
   Not yet known, and worth establishing before theorising: whether a `/init`
   listing (initfs, not the FAT ESP) can trigger it too. The class's `/init` tests

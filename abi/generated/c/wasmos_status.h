@@ -172,6 +172,7 @@ enum {
     WASMOS_ERR_VT_SWITCH_CLEAR = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_VT, 6), /* tty switch could not clear the screen */
     WASMOS_ERR_VT_SWITCH_REPLAY = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_VT, 7), /* tty switch could not replay the cell buffer */
     WASMOS_ERR_VT_SWITCH_MODE_ON = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_VT, 8), /* deprecated: the framebuffer no longer has a console mode to re-enable */
+    WASMOS_ERR_VT_SERIAL_SLOT_GUI = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_VT, 9), /* slot 0 is the GUI slot and cannot be bound to the serial console */
     WASMOS_ERR_CHARDEV_NO_DATA = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_CHARDEV, 1), /* no byte is buffered yet (retryable) */
     WASMOS_ERR_CHARDEV_UNSUPPORTED_REQUEST = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_CHARDEV, 2), /* unknown or unsupported request type */
     WASMOS_ERR_HRNG_INVALID = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_HRNG, 1), /* invalid request arguments (byte count or buffer) */
@@ -440,6 +441,7 @@ static inline const char *wasmos_error_code_name(wasmos_error_code_t c) {
     case WASMOS_ERR_VT_SWITCH_CLEAR: return "vt.SWITCH_CLEAR";
     case WASMOS_ERR_VT_SWITCH_REPLAY: return "vt.SWITCH_REPLAY";
     case WASMOS_ERR_VT_SWITCH_MODE_ON: return "vt.SWITCH_MODE_ON";
+    case WASMOS_ERR_VT_SERIAL_SLOT_GUI: return "vt.SERIAL_SLOT_GUI";
     case WASMOS_ERR_CHARDEV_NO_DATA: return "chardev.NO_DATA";
     case WASMOS_ERR_CHARDEV_UNSUPPORTED_REQUEST: return "chardev.UNSUPPORTED_REQUEST";
     case WASMOS_ERR_HRNG_INVALID: return "hrng.INVALID";
@@ -644,6 +646,7 @@ static inline const char *wasmos_strerror(wasmos_error_code_t c) {
     case WASMOS_ERR_VT_SWITCH_CLEAR: return "tty switch could not clear the screen";
     case WASMOS_ERR_VT_SWITCH_REPLAY: return "tty switch could not replay the cell buffer";
     case WASMOS_ERR_VT_SWITCH_MODE_ON: return "deprecated: the framebuffer no longer has a console mode to re-enable";
+    case WASMOS_ERR_VT_SERIAL_SLOT_GUI: return "slot 0 is the GUI slot and cannot be bound to the serial console";
     case WASMOS_ERR_CHARDEV_NO_DATA: return "no byte is buffered yet (retryable)";
     case WASMOS_ERR_CHARDEV_UNSUPPORTED_REQUEST: return "unknown or unsupported request type";
     case WASMOS_ERR_HRNG_INVALID: return "invalid request arguments (byte count or buffer)";

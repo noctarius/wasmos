@@ -53,20 +53,27 @@ from the writer and once from the log. `vt-2`/`vt-3` are ordinary slots with the
 full writer and echo path. Folding vt-1 into that same model needs a way to
 write serial without feeding the klog ring, which does not exist yet.
 
-#### Two independent selectors (Proposed — phase 5)
+#### Two independent selectors (Shipped — phase 5)
 
 | Selector           | Default | Set by                                            |
 |--------------------|---------|---------------------------------------------------|
-| *visible* slot     | `vt-1`  | keyboard hotkeys / `tty N` issued on the keyboard  |
-| *serial-bound* slot| `vt-1`  | `VT_IPC_BIND_SERIAL_REQ` / `tty N` issued on serial |
+| *visible* slot     | `vt-1`  | `Ctrl+Shift+Fn` / `VT_IPC_SWITCH_TTY` (`tty N`)   |
+| *serial-bound* slot| `vt-1`  | `VT_IPC_BIND_SERIAL_REQ` (`tty -s N`)             |
+
+The two are named by separate commands rather than inferred from which channel a
+command arrived on. Inferring it would make `tty N` mean different things
+depending on where it was typed, and would take away the only way a serial-only
+session — every headless test, among others — can change what is on screen.
+`tty -s 0` is refused (`vt.SERIAL_SLOT_GUI`): vt-0 is the compositor's and cannot
+be rendered down a serial line.
 
 The compositor requests the visible slot switch to `vt-0` **once**, when the
 first UI app appears (`try_switch_to_gfx_tty` → `VT_IPC_SWITCH_TTY 0`), and then
 never auto-switches again: switching is user-driven from there (`Ctrl+Shift+Fn`
-or `tty N`). `tty N` retargets whichever channel issued it: issued on the
-keyboard it changes the visible slot; issued on serial it rebinds the
-serial-bound slot. `tty 0` on serial is rejected (the GUI cannot render over a
-serial line). vt-1 mirrors to serial even while vt-0 is visible.
+or `tty N`). Binding the serial console elsewhere leaves the screen alone, and
+vice versa. Note that binding serial to a slot with no reader on it — no CLI has
+been spawned there — leaves that serial line with nothing to answer it until one
+is; lazy per-slot CLI spawn is what makes the selector useful in practice.
 
 **Framebuffer ownership (phase 5, Shipped).** The compositor owns the framebuffer
 only while `vt-0` is the visible slot: it draws to it exclusively when visible
@@ -186,7 +193,7 @@ typedef struct {
 | `g_fb_ep`             | -1   | Framebuffer driver endpoint                       |
 | `g_kbd_ep`            | -1   | Keyboard driver endpoint                          |
 | `g_active_tty`        | 1    | Visible slot index (`VT_KLOG_TTY`, the system console) |
-| `g_serial_tty`        | 1    | Serial-bound slot index (proposed, phase 5)       |
+| `g_serial_tty`        | 1    | Serial-bound slot index (`VT_IPC_BIND_SERIAL_REQ`) |
 | `g_tty_writer_ep[4]`  | -1   | Registered writer endpoint per slot               |
 | `g_tty_reader_ep[4]`  | -1   | Registered reader endpoint per slot (push target) |
 | `g_switch_generation` | 1    | Monotonic counter, incremented on each switch     |
@@ -256,7 +263,7 @@ gates whether the compositor or the VT owns the framebuffer.
 | `VT_IPC_REGISTER_WRITER`  | 0x705  | Register caller as writer; arg0=slot index             |
 | `VT_IPC_SET_MODE_REQ`     | 0x706  | Set input mode bits; arg0=mode flags                   |
 | `VT_IPC_SERIAL_INPUT_REQ` | 0x707  | *(phase 1)* serial driver → vt: RX bytes for bound slot |
-| `VT_IPC_BIND_SERIAL_REQ`  | 0x708  | *(phase 5)* bind serial to slot; arg0=slot (≥1)        |
+| `VT_IPC_BIND_SERIAL_REQ`  | 0x708  | Bind serial to slot; arg0=slot (≥1). RESP arg0=bound slot |
 | `VT_IPC_RESP`             | 0x780  | Success response                                       |
 | `VT_IPC_INPUT_NOTIFY`     | 0x781  | *(phase 2)* vt → reader: input available on your slot  |
 | `VT_IPC_KEY_FORWARD`      | 0x782  | *(phase 3)* vt → compositor: key event for vt-0        |
@@ -690,7 +697,8 @@ without buffering or editing. Echo still applies if `input_echo = 1`.
 | 4     | klog into vt-1 via VT-owned xfer-buffer SPSC ring (additive; drained on each VT wake). FB→blit-surface retirement deferred to phase 5 | Shipped  |
 | 5a    | tty-switch grid-blit (`FBTEXT_IPC_BLIT_ATTACH`/`GRID`) + VT-driven framebuffer ownership (`VT_IPC_VIS_NOTIFY`) — the `vt_switch_tty` overlay-wedge fix | Shipped  |
 | 5b    | Default visible vt-1; framebuffer console-ring drain retired (both drivers); klog doorbell | Shipped  |
-| 5c    | Serial-bound selector; lazy CLI spawn | Proposed |
+| 5c    | Serial-bound selector (`VT_IPC_BIND_SERIAL_REQ`, `tty -s N`) | Shipped  |
+| 5d    | Lazy per-slot CLI spawn | Proposed |
 
 Keymap layouts are data files under `system/keymaps/` (`us-qwerty.kmap`,
 `de-nodeadkeys.kmap`), loaded by the VT at init (built-in US fallback).  The VT

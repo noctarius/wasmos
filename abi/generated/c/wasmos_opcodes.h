@@ -277,6 +277,13 @@ enum {
      * VT_IPC_WRITE_REQ (arg0[27:24]=byte_count, arg0[7:0]..arg3[7:0]=bytes).
      */
     VT_IPC_SERIAL_INPUT_REQ = 0x707,
+    /* Bind the serial console to a slot: arg0=slot.  Serial RX is injected
+     * into that slot's line discipline from then on, whichever slot is
+     * visible, and it is independent of VT_IPC_SWITCH_TTY.  Slot 0 is the GUI
+     * slot and is refused (WASMOS_ERR_VT_SERIAL_SLOT_GUI); an out-of-range
+     * slot answers WASMOS_ERR_VT_BAD_TTY_ID.  RESP arg0=the bound slot.
+     */
+    VT_IPC_BIND_SERIAL_REQ = 0x708,
     VT_IPC_RESP = 0x780,
     /* vt -> a slot's registered reader: input is available on your slot; drain
      * it with VT_IPC_READ_REQ.  Fire-and-forget (request_id 0), arg0=slot.
@@ -693,6 +700,7 @@ static inline const char* wasmos_opcode_name(uint32_t subsystem_id, uint32_t typ
         case 0x705: return "VT_IPC_REGISTER_WRITER";
         case 0x706: return "VT_IPC_SET_MODE_REQ";
         case 0x707: return "VT_IPC_SERIAL_INPUT_REQ";
+        case 0x708: return "VT_IPC_BIND_SERIAL_REQ";
         case 0x780: return "VT_IPC_RESP";
         case 0x781: return "VT_IPC_INPUT_NOTIFY";
         case 0x782: return "VT_IPC_KEY_FORWARD";

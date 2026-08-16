@@ -33,6 +33,9 @@
  *   VT_IPC_REGISTER_WRITER arg0=slot.  RESP arg0=switch generation, arg1=slot.
  *   VT_IPC_SET_MODE_REQ    arg0=VT_INPUT_MODE_* bits (other bits are masked
  *                          off).  RESP arg0=the mode applied, arg1=the slot.
+ *   VT_IPC_BIND_SERIAL_REQ arg0=slot (>= 1).  Moves the serial console to that
+ *                          slot, independently of the visible one.  RESP
+ *                          arg0=the bound slot.
  *
  * Every failure answers VT_IPC_ERROR with arg0 set to a packed vt-domain code
  * from abi/errors.yaml, including an unrecognised opcode
@@ -64,8 +67,9 @@ static vt_tty_t g_ttys[VT_MAX_TTYS];
 #define VT_KLOG_TTY 1u
 static uint32_t g_active_tty = VT_KLOG_TTY;
 /* Slot bound to the serial console: RX from the serial driver is injected here,
- * regardless of which slot is visible.  Default vt-1 (the system console). */
-static uint32_t g_serial_tty = 1;
+ * regardless of which slot is visible.  Defaults to the system console and moves
+ * only on VT_IPC_BIND_SERIAL_REQ, never on a visible-slot switch. */
+static uint32_t g_serial_tty = VT_KLOG_TTY;
 static int32_t g_serial_in_ep = -1;
 static int32_t g_fs_ep = -1;
 static int32_t g_tty_reader_ep[VT_MAX_TTYS] = {-1, -1, -1, -1};
@@ -1885,6 +1889,30 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
                                          msg.request_id,
                                          (sw == 0) ? (int32_t)g_switch_generation : sw,
                                          (int32_t)g_active_tty);
+            }
+            break;
+        }
+
+        case VT_IPC_BIND_SERIAL_REQ: {
+            /* The serial-bound slot is independent of the visible one: serial RX
+             * reaches this slot no matter what is on screen (see doc 19, "two
+             * independent selectors"). */
+            int32_t tty_id = msg.arg0;
+            int32_t rc = 0;
+            if (tty_id < 0 || tty_id >= (int32_t)VT_MAX_TTYS) {
+                rc = WASMOS_ERR_VT_BAD_TTY_ID;
+            } else if (tty_id == 0) {
+                /* vt-0 is the compositor's; a serial line cannot render it. */
+                rc = WASMOS_ERR_VT_SERIAL_SLOT_GUI;
+            } else {
+                g_serial_tty = (uint32_t)tty_id;
+            }
+            if (msg.source >= 0 && msg.request_id != 0) {
+                (void)vt_ipc_reply_retry(msg.source,
+                                         (rc == 0) ? VT_IPC_RESP : VT_IPC_ERROR,
+                                         msg.request_id,
+                                         (rc == 0) ? (int32_t)g_serial_tty : rc,
+                                         0);
             }
             break;
         }

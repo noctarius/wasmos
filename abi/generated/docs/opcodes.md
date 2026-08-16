@@ -140,6 +140,7 @@ endpoint-scoped and may repeat across subsystems.
 | `VT_IPC_REGISTER_WRITER` | 0x705 | req |  |
 | `VT_IPC_SET_MODE_REQ` | 0x706 | req |  |
 | `VT_IPC_SERIAL_INPUT_REQ` | 0x707 | req | serial driver -> vt: RX bytes for the serial-bound slot, packed like VT_IPC_WRITE_REQ (arg0[27:24]=byte_count, arg0[7:0]..arg3[7:0]=bytes).  |
+| `VT_IPC_BIND_SERIAL_REQ` | 0x708 | req | Bind the serial console to a slot: arg0=slot.  Serial RX is injected into that slot's line discipline from then on, whichever slot is visible, and it is independent of VT_IPC_SWITCH_TTY.  Slot 0 is the GUI slot and is refused (WASMOS_ERR_VT_SERIAL_SLOT_GUI); an out-of-range slot answers WASMOS_ERR_VT_BAD_TTY_ID.  RESP arg0=the bound slot.  |
 | `VT_IPC_RESP` | 0x780 | resp |  |
 | `VT_IPC_INPUT_NOTIFY` | 0x781 | notify | vt -> a slot's registered reader: input is available on your slot; drain it with VT_IPC_READ_REQ.  Fire-and-forget (request_id 0), arg0=slot.  |
 | `VT_IPC_KEY_FORWARD` | 0x782 | notify | vt -> compositor (the vt-0 key sink): a decoded key event for the focused window.  Fire-and-forget.  arg0=ascii/keysym (0 if none), arg1=scancode, arg2=flags (bit0=down, bit1=extended, bit2=shift, bit3=ctrl, bit4=altgr).  |

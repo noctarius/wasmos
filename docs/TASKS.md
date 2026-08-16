@@ -996,8 +996,6 @@ VT I/O-multiplexer phase 5 (remaining; phases 0–4 shipped):
   `serial_console_ring_id`, `serial_console_ring_ptr`), the native driver API's
   `console_ring_id` (an ABI version bump), and the type itself in
   `src/drivers/include/wasmos_driver_abi.h`. The klog ring replaced it.
-- [ ] [FEATURE][P2] Add the serial-bound-slot selector (`VT_IPC_BIND_SERIAL_REQ`, undefined;
-  `g_serial_tty` is fixed at 1 — `vt_main.c:24`).
 - [ ] [FEATURE][P2] Lazy per-slot CLI spawn: have the VT spawn `cli.wap` pinned to a slot on
   first switch and drop `start cli.wap` from `sysinit.rc`.
 

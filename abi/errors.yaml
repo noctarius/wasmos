@@ -187,6 +187,7 @@ domains:
       - { name: SWITCH_CLEAR,        description: "tty switch could not clear the screen" }
       - { name: SWITCH_REPLAY,       description: "tty switch could not replay the cell buffer" }
       - { name: SWITCH_MODE_ON,      description: "deprecated: the framebuffer no longer has a console mode to re-enable" }
+      - { name: SERIAL_SLOT_GUI,     description: "slot 0 is the GUI slot and cannot be bound to the serial console" }
 
   chardev:
     id: 9

@@ -32,6 +32,8 @@
  *   mount                   list mount points
  *   kmaps [all]             dump kernel page mappings
  *   tty <0-3>               make that vt slot visible; exactly one digit
+ *   tty -s <1-3>            bind the serial console to that slot; the visible
+ *                           slot is unaffected (slot 0 is the GUI slot)
  *   script <file>           run a .rc script in a child interpreter
  *   source <file> | . <file>  run a .rc script in THIS shell, so its variable
  *                           and directory changes persist
@@ -748,6 +750,36 @@ static int32_t cli_query_active_tty(uint32_t* out_generation) {
         }
     }
     return reply.arg1;
+}
+
+/* Move the serial console to `tty`.  The serial-bound slot and the visible slot
+ * are separate selectors: this changes which slot receives COM1 input and mirrors
+ * to it, and changes nothing on screen.  Returns 0, or -1 with *out_error set to
+ * the vt's packed code when it has one. */
+static int cli_bind_serial_tty(int32_t tty, int32_t* out_error) {
+    if (out_error) {
+        *out_error = 0;
+    }
+    if (g_vt_endpoint < 0 || g_vt_client_endpoint < 0) {
+        if (out_error) {
+            *out_error = -1;
+        }
+        return -1;
+    }
+    wasmos_ipc_message_t reply;
+    if (cli_vt_call(VT_IPC_BIND_SERIAL_REQ, tty, 0, 0, 0, &reply, CLI_VT_RESP_RETRIES) != 0) {
+        if (out_error) {
+            *out_error = -2;
+        }
+        return -1;
+    }
+    if (reply.type == VT_IPC_RESP) {
+        return 0;
+    }
+    if (out_error) {
+        *out_error = reply.arg0;
+    }
+    return -1;
 }
 
 static int cli_switch_tty(int32_t tty, int wait_resp, int32_t* out_error) {
@@ -1673,7 +1705,7 @@ static int cli_handle_line(void) {
     if (line_eq_ci("help")) {
         console_write("commands: help, kmaps [all], ls, cd <path>, mount, script <file>, source "
                       "<file>, spawn <cmd>, export VAR=<value>, set VAR=<value>, echo [-n] [-e|-E] "
-                      "[--] [text|${VAR}...], tty <0-3>, halt, reboot\n");
+                      "[--] [text|${VAR}...], tty <0-3>, tty -s <1-3>, halt, reboot\n");
         return 0;
     }
     if (line_eq_ci("mount")) {
@@ -1696,6 +1728,29 @@ static int cli_handle_line(void) {
         } else {
             console_write("kmaps all: failed\n");
         }
+        return 0;
+    }
+    if (g_line_len > 7 && line_starts_with_ci("tty -s ")) {
+        /* Retarget the serial console, not the screen. */
+        if (g_line[7] < '0' || g_line[7] > '3' || g_line[8] != '\0') {
+            console_write("tty usage: tty -s <1-3>\n");
+            return 0;
+        }
+        int32_t tty = (int32_t)(g_line[7] - '0');
+        if (g_vt_endpoint < 0 || g_reply_endpoint < 0) {
+            console_write("tty bind unavailable\n");
+            return 0;
+        }
+        int32_t bind_err = 0;
+        if (cli_bind_serial_tty(tty, &bind_err) != 0) {
+            if (bind_err != 0) {
+                console_write_num("tty serial bind failed: ", bind_err);
+            } else {
+                console_write("tty serial bind failed\n");
+            }
+            return 0;
+        }
+        console_write_num("serial console bound to tty", tty);
         return 0;
     }
     if (g_line_len > 4 && line_starts_with_ci("tty ")) {
@@ -2063,7 +2118,8 @@ static void cli_phase_init_step(int32_t proc_endpoint, int32_t home_tty_arg) {
     if (g_home_tty == 1) {
         console_write("WAMOS CLI\ncommands: help, kmaps [all], ls, cd <path>, mount, script "
                       "<file>, source <file>, spawn <cmd>, export VAR=<value>, set VAR=<value>, "
-                      "echo [-n] [-e|-E] [--] [text|${VAR}...], tty <0-3>, halt, reboot\n");
+                      "echo [-n] [-e|-E] [--] [text|${VAR}...], tty <0-3>, tty -s <1-3>, halt, "
+                      "reboot\n");
     }
     wasmos_sys_notify_ready(g_proc_endpoint, g_reply_endpoint);
     g_phase = CLI_PHASE_PROMPT;

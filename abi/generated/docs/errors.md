@@ -170,6 +170,7 @@ and **domains** (namespaced operation errors: the negative of `(domain << 16) | 
 | `WASMOS_ERR_VT_SWITCH_CLEAR` | -0x00080006 | tty switch could not clear the screen |
 | `WASMOS_ERR_VT_SWITCH_REPLAY` | -0x00080007 | tty switch could not replay the cell buffer |
 | `WASMOS_ERR_VT_SWITCH_MODE_ON` | -0x00080008 | deprecated: the framebuffer no longer has a console mode to re-enable |
+| `WASMOS_ERR_VT_SERIAL_SLOT_GUI` | -0x00080009 | slot 0 is the GUI slot and cannot be bound to the serial console |
 
 ### `chardev` (domain 9) — character-device sample driver failures
 

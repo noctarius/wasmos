@@ -151,6 +151,7 @@ pub const WASMOS_ERR_VT_SWITCH_MODE_OFF: i32 = -0x00080005; // deprecated: the f
 pub const WASMOS_ERR_VT_SWITCH_CLEAR: i32 = -0x00080006; // tty switch could not clear the screen
 pub const WASMOS_ERR_VT_SWITCH_REPLAY: i32 = -0x00080007; // tty switch could not replay the cell buffer
 pub const WASMOS_ERR_VT_SWITCH_MODE_ON: i32 = -0x00080008; // deprecated: the framebuffer no longer has a console mode to re-enable
+pub const WASMOS_ERR_VT_SERIAL_SLOT_GUI: i32 = -0x00080009; // slot 0 is the GUI slot and cannot be bound to the serial console
 pub const WASMOS_ERR_CHARDEV_NO_DATA: i32 = -0x00090001; // no byte is buffered yet (retryable)
 pub const WASMOS_ERR_CHARDEV_UNSUPPORTED_REQUEST: i32 = -0x00090002; // unknown or unsupported request type
 pub const WASMOS_ERR_HRNG_INVALID: i32 = -0x000E0001; // invalid request arguments (byte count or buffer)
@@ -407,6 +408,7 @@ pub fn strerror(c: i32) []const u8 {
         WASMOS_ERR_VT_SWITCH_CLEAR => "tty switch could not clear the screen",
         WASMOS_ERR_VT_SWITCH_REPLAY => "tty switch could not replay the cell buffer",
         WASMOS_ERR_VT_SWITCH_MODE_ON => "deprecated: the framebuffer no longer has a console mode to re-enable",
+        WASMOS_ERR_VT_SERIAL_SLOT_GUI => "slot 0 is the GUI slot and cannot be bound to the serial console",
         WASMOS_ERR_CHARDEV_NO_DATA => "no byte is buffered yet (retryable)",
         WASMOS_ERR_CHARDEV_UNSUPPORTED_REQUEST => "unknown or unsupported request type",
         WASMOS_ERR_HRNG_INVALID => "invalid request arguments (byte count or buffer)",

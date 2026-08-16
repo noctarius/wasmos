@@ -159,6 +159,7 @@ const (
 	WASMOS_ERR_VT_SWITCH_CLEAR int32 = -0x00080006 // tty switch could not clear the screen
 	WASMOS_ERR_VT_SWITCH_REPLAY int32 = -0x00080007 // tty switch could not replay the cell buffer
 	WASMOS_ERR_VT_SWITCH_MODE_ON int32 = -0x00080008 // deprecated: the framebuffer no longer has a console mode to re-enable
+	WASMOS_ERR_VT_SERIAL_SLOT_GUI int32 = -0x00080009 // slot 0 is the GUI slot and cannot be bound to the serial console
 	WASMOS_ERR_CHARDEV_NO_DATA int32 = -0x00090001 // no byte is buffered yet (retryable)
 	WASMOS_ERR_CHARDEV_UNSUPPORTED_REQUEST int32 = -0x00090002 // unknown or unsupported request type
 	WASMOS_ERR_HRNG_INVALID int32 = -0x000E0001 // invalid request arguments (byte count or buffer)
@@ -562,6 +563,8 @@ func WasmosStrerror(c int32) string {
 		return "tty switch could not replay the cell buffer"
 	case WASMOS_ERR_VT_SWITCH_MODE_ON:
 		return "deprecated: the framebuffer no longer has a console mode to re-enable"
+	case WASMOS_ERR_VT_SERIAL_SLOT_GUI:
+		return "slot 0 is the GUI slot and cannot be bound to the serial console"
 	case WASMOS_ERR_CHARDEV_NO_DATA:
 		return "no byte is buffered yet (retryable)"
 	case WASMOS_ERR_CHARDEV_UNSUPPORTED_REQUEST:

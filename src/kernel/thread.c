@@ -84,6 +84,7 @@ static void thread_reset_slot(thread_t* thread) {
     thread->time_slice_ticks = 0;
     thread->ticks_remaining = 0;
     thread->ticks_total = 0;
+    thread->dispatch_count = 0;
     thread_clear_ctx(&thread->ctx);
     thread->wait_target_pid = 0;
     thread->join_waiter_tid = 0;

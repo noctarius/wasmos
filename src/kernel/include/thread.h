@@ -80,6 +80,13 @@ typedef struct thread {
     uint32_t time_slice_ticks;
     uint32_t ticks_remaining;
     uint64_t ticks_total;
+    /* Dispatches of THIS thread, one per context_switch into it.  ticks_total
+     * cannot serve as a progress signal in its place: it only advances when a
+     * timer interrupt lands on the thread, so an event-driven service that runs
+     * briefly and often stays at 0 for its whole life.  This moves every time
+     * the thread runs, which is what makes "did it run between two snapshots?"
+     * answerable -- the question a wedged machine turns on. */
+    uint64_t dispatch_count;
     /* The context the scheduler actually saves and restores for this thread.
      * ctx.cs decides ring-0 (ret) versus ring-3 (iretq) resume. */
     process_context_t ctx;

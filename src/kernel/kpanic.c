@@ -189,11 +189,14 @@ static void diag_print_backtrace(uint64_t rbp, int frames) {
 void diag_dump_threads(const char* reason) {
     serial_printf_unlocked("[diag] thread table (%s)\n", reason ? reason : "-");
     /* Which thread each CPU believes it is running, so a thread that says
-     * RUNNING can be checked against the CPUs rather than believed.  A thread in
-     * that state which no CPU is executing is orphaned: it is on no run queue
-     * either (enqueue requires READY), so nothing will ever dispatch it again --
-     * the condition process.c's PROCESS_RUN_BLOCKED handler exists to prevent
-     * for legacy blockers, and a boot hang under SMP the last time it occurred. */
+     * RUNNING can be checked against the CPUs rather than believed.  A thread
+     * left RUNNING that no CPU executes is orphaned -- it is on no run queue
+     * either, since an enqueue requires READY, so nothing dispatches it again;
+     * that is the condition process.c's PROCESS_RUN_BLOCKED handler exists to
+     * prevent for legacy blockers, and a boot hang under SMP the last time it
+     * occurred.  Note this field is the last thread the CPU DISPATCHED, which
+     * stays set while the CPU idles, so it narrows the question rather than
+     * answering it. */
     uint32_t current_tids[WASMOS_MAX_CPUS];
     uint32_t cpu_count = g_cpu_count > WASMOS_MAX_CPUS ? WASMOS_MAX_CPUS : g_cpu_count;
     for (uint32_t c = 0; c < cpu_count; ++c) {
@@ -218,7 +221,7 @@ void diag_dump_threads(const char* reason) {
     uint32_t ready = 0;
     uint32_t blocked = 0;
     uint32_t stranded = 0;
-    uint32_t orphaned = 0;
+    uint32_t unclaimed = 0;
     for (uint32_t i = 0; i < THREAD_MAX_COUNT; ++i) {
         thread_t* t = thread_table_at(i);
         if (!t || t->tid == 0 || t->state == THREAD_STATE_UNUSED) {
@@ -246,8 +249,14 @@ void diag_dump_threads(const char* reason) {
                 }
             }
             if (!current_somewhere) {
-                orphaned++;
-                anomaly = 1;
+                /* Counted, NOT flagged. A CPU's current_thread is the last one
+                 * it dispatched and the table is read while other CPUs run, so
+                 * a thread genuinely executing elsewhere can appear unclaimed
+                 * for the length of one snapshot -- measured on a healthy guest.
+                 * Whether it is really stuck is a question about two snapshots:
+                 * a thread that is RUNNING in both with its tick count
+                 * unchanged is not executing anywhere. The caller compares. */
+                unclaimed++;
             }
         } else if (t->state == THREAD_STATE_BLOCKED) {
             blocked++;
@@ -257,7 +266,7 @@ void diag_dump_threads(const char* reason) {
         }
         serial_printf_unlocked(
             "[diag]%s tid=%u pid=%u %s st=%s rsn=%s rq=%u wake=%u btrans=%u ev=%u cpu=%u "
-            "ticks=%llu\n",
+            "ticks=%llu disp=%llu\n",
             anomaly ? "!" : "",
             (unsigned)t->tid,
             (unsigned)t->owner_pid,
@@ -269,7 +278,8 @@ void diag_dump_threads(const char* reason) {
             (unsigned)t->blocking_transition,
             (unsigned)(t->wait_event ? 1u : 0u),
             (unsigned)t->last_cpu,
-            (unsigned long long)t->ticks_total);
+            (unsigned long long)t->ticks_total,
+            (unsigned long long)t->dispatch_count);
         /* Where the thread stopped. ctx is the context the scheduler saved when
          * it last switched away, so for a BLOCKED thread this is the blocking
          * call site and the frames above it -- the difference between "26
@@ -283,16 +293,19 @@ void diag_dump_threads(const char* reason) {
         }
         serial_printf_unlocked("\n");
     }
-    /* A line marked `[diag]!` is one of the two scheduler anomalies above; a
-     * dump with none of them and no runnable thread is a deadlock between
-     * processes rather than a lost wake. */
+    /* A line marked `[diag]!` is a scheduler anomaly one snapshot can establish:
+     * a READY thread on no run queue, or a BLOCKED one with an unconsumed wake.
+     * `running-unclaimed` is NOT one of those -- it needs a second snapshot to
+     * mean anything, which the caller takes. A dump with no `!`, nothing
+     * runnable and every thread in an IPC wait is a deadlock between processes
+     * rather than a lost wake. */
     serial_printf_unlocked(
-        "[diag] live=%u ready=%u blocked=%u stranded(ready,no-rq)=%u orphaned(running,no-cpu)=%u\n",
+        "[diag] live=%u ready=%u blocked=%u stranded(ready,no-rq)=%u running-unclaimed=%u\n",
         (unsigned)live,
         (unsigned)ready,
         (unsigned)blocked,
         (unsigned)stranded,
-        (unsigned)orphaned);
+        (unsigned)unclaimed);
 }
 
 /* NMI vector, with two entirely different behaviours depending on whether a

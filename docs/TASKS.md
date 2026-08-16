@@ -1320,21 +1320,36 @@ Source: `architecture/25-diagnostics-status.md`,
   off a queue and no wake token went unconsumed, so the scheduler handshake is
   not implicated in this instance.
 
-  One thread in that dump was NOT blocked: `vt` reported `st=running` while all
-  four CPUs sat in `idle_entry`. A RUNNING thread that no CPU is executing is
-  orphaned -- it is on no run queue either, because an enqueue requires READY --
-  and nothing will ever dispatch it again. That is a known failure shape here:
-  `process.c`'s PROCESS_RUN_BLOCKED handler carries a branch specifically to
-  stop legacy blockers from leaving a thread in it, added after it hung an SMP
-  boot. Whether it is the cause or a consequence is not yet established --
-  RUNNING is also the normal state of a thread a CPU is currently executing, and
-  that dump could not tell the two apart.
+  One thread in those dumps is never blocked: `vt` reports `st=running` with
+  `rq=0`. A thread left RUNNING that no CPU executes would be orphaned -- on no
+  run queue, since an enqueue requires READY -- and `process.c`'s
+  PROCESS_RUN_BLOCKED handler carries a branch specifically to stop legacy
+  blockers from leaving a thread that way, added after it hung an SMP boot. So
+  it looks like the answer, and it is not established: **a healthy guest reports
+  the same thing.** RUNNING is also what a thread a CPU is currently executing
+  looks like, and neither of the two things that seemed to separate them does:
 
-  So the dump now prints, per CPU, the thread that CPU believes it is running
-  (plus its idle thread, scheduler/context-switch flags and dispatch count), and
-  flags `orphaned(running,no-cpu)` for any RUNNING thread no CPU claims. A
-  healthy guest reports 0. If the next capture reports `vt` orphaned, that is
-  the wedge.
+  - Per-CPU `current_thread` is the last thread that CPU DISPATCHED and stays
+    set while the CPU idles, so "no CPU claims it" is racy across a live table
+    -- measured firing on a healthy guest. The dump counts it
+    (`running-unclaimed`) but does not flag it.
+  - `ticks_total` only advances when a timer interrupt lands on the thread, so
+    an event-driven service that runs briefly and often sits at 0 for its whole
+    life. "Unchanged across two samples" therefore does not mean "not running",
+    and a verdict built on it fired on a healthy guest too.
+
+  So `thread_t` now carries `dispatch_count`, incremented once per dispatch
+  beside the CPU's own counter, and the stall dump takes two guest samples and
+  prints a verdict from them: a thread RUNNING in both that was never dispatched
+  between them is executing nowhere, and with `rq=0` nothing will ever pick it
+  up. On a healthy guest the verdict reads "every RUNNING thread was dispatched
+  between the samples", which is the answer that sends the next reader at the
+  IPC waits instead of the scheduler.
+
+  (That measurement showed something else in passing: on an idle guest the vt
+  and the cli are each dispatched ~2900 times a second, waking on a short
+  select timeout, checking, and re-blocking. It is the idle-burn pattern the
+  no-busy-spin rule exists for, and it is not the wedge.)
 
   Still missing after that: who waits for whom. Every backtrace ends at the
   host-call wrapper, and the guest's own stack is not walkable from the kernel,

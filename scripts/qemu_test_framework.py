@@ -100,6 +100,33 @@ _STALL_DUMP_MAX = int(os.environ.get("WASMOS_QEMU_STALL_DUMP_MAX", "2") or "2")
 _TIMEOUT_SCALE = float(os.environ.get("WASMOS_TEST_TIMEOUT_SCALE", "1") or "1")
 
 
+def _split_guest_samples(lines):
+    """The [diag] lines of each guest sample, in order."""
+    blocks = []
+    current = None
+    for line in lines:
+        if "--- guest sample" in line:
+            current = []
+            blocks.append(current)
+        elif current is not None:
+            current.append(line)
+    return blocks
+
+
+def _parse_diag_threads(block):
+    """{tid: {name, state, disp}} from one guest sample's [diag] thread lines."""
+    out = {}
+    for line in block:
+        m = re.search(r"tid=(\d+) pid=\d+ (\S+) st=(\S+).*disp=(\d+)", line)
+        if m:
+            out[m.group(1)] = {
+                "name": m.group(2),
+                "state": m.group(3),
+                "disp": m.group(4),
+            }
+    return out
+
+
 def _parse_rips(regs_text):
     """{cpu_id: rip} from `info registers -a`."""
     out = {}
@@ -970,20 +997,62 @@ class QemuSession:
         # why not. An NMI is the one request a wedged kernel still answers: it
         # is deliverable however the guest is stuck, and the handler writes
         # through the unlocked serial path.
-        try:
-            self.monitor.hmp("nmi")
-            deadline = time.time() + 3.0
-            mark = len(self.buf)
-            while time.time() < deadline:
-                self._pump(0.2)
-                if b"[diag] live=" in self.buf[mark:]:
-                    break
-            guest = self.buf[mark:].decode("utf-8", "replace")
-            for line in guest.splitlines():
-                if "[diag]" in line or "[nmi]" in line:
-                    lines.append(f"[stall-dump] {line.strip()}")
-        except Exception as exc:
-            lines.append(f"[stall-dump] guest thread dump unavailable: {exc}")
+        # Twice, a second apart, for the same reason the RIP sample is taken
+        # twice: one snapshot cannot separate a thread that is RUNNING because a
+        # CPU is executing it from one left RUNNING that no longer runs. Across
+        # two samples the first advances its tick count and the second does not.
+        # The per-CPU `cur_tid` cannot answer this on its own -- it is the last
+        # thread that CPU dispatched, which stays set while the CPU idles.
+        for attempt in (1, 2):
+            try:
+                self.monitor.hmp("nmi")
+                deadline = time.time() + 3.0
+                mark = len(self.buf)
+                while time.time() < deadline:
+                    self._pump(0.2)
+                    if b"[diag] live=" in self.buf[mark:]:
+                        break
+                guest = self.buf[mark:].decode("utf-8", "replace")
+                lines.append(f"[stall-dump] --- guest sample {attempt} ---")
+                for line in guest.splitlines():
+                    if "[diag]" in line or "[nmi]" in line:
+                        lines.append(f"[stall-dump] {line.strip()}")
+            except Exception as exc:
+                lines.append(
+                    f"[stall-dump] guest thread dump {attempt} unavailable: {exc}"
+                )
+            if attempt == 1:
+                time.sleep(1.0)
+
+        # Verdict, from the two samples. A thread that is RUNNING in both and
+        # was not dispatched in between is executing nowhere -- it is on no run
+        # queue either, since an enqueue requires READY, so nothing will ever
+        # pick it up. The per-thread dispatch counter is what makes this sound:
+        # ticks_total only advances when a timer interrupt lands on the thread,
+        # so an event-driven service sits at 0 for its whole life and any
+        # verdict built on it fires on a healthy guest.
+        samples = [_parse_diag_threads(b) for b in _split_guest_samples(lines)]
+        if len(samples) == 2 and samples[0] and samples[1]:
+            stuck = [
+                f"tid={tid} {samples[0][tid]['name']} disp={samples[0][tid]['disp']}"
+                for tid in samples[0]
+                if tid in samples[1]
+                and samples[0][tid]["state"] == "running"
+                and samples[1][tid]["state"] == "running"
+                and samples[0][tid]["disp"] == samples[1][tid]["disp"]
+                and samples[0][tid]["name"] != "idle"
+            ]
+            if stuck:
+                lines.append(
+                    "[stall-dump] VERDICT: RUNNING across both samples and never "
+                    f"dispatched between them -- not executing: {', '.join(stuck)}"
+                )
+            else:
+                lines.append(
+                    "[stall-dump] VERDICT: every RUNNING thread was dispatched "
+                    "between the samples; if nothing is runnable the wait is "
+                    "between processes, not a lost thread"
+                )
         lines.append("=== [stall-dump] end ===")
         text = "\n".join(lines)
         print(text, flush=True)

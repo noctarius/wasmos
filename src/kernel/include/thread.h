@@ -133,6 +133,16 @@ typedef struct thread {
      * rq names the owning queue so the reap path can unlink without knowing
      * which CPU last enqueued the thread.  Valid only while on_rq is 1. */
     uint8_t on_rq;
+    /* An enqueue this thread is OWED.  cpu_sched_enqueue refuses to link a
+     * thread that some CPU still names as current -- it is executing, and
+     * linking it would let a second CPU dispatch it -- so it records the debt
+     * here instead.  A claim, not a flag: whoever exchanges it to zero performs
+     * the enqueue, exactly like wake_pending, so the enqueuing CPU and the
+     * holding CPU cannot both do it and cannot both skip it.  Marking the thread
+     * READY was the whole hand-off before, and a mark is not a message: a holder
+     * that had already run its check never saw it, and the thread stayed
+     * runnable on no run queue forever. */
+    uint8_t enqueue_owed;
     struct cpu_sched_s* rq;
     /* The band this thread was actually LINKED into, recorded at enqueue under
      * the queue lock.  Unlink accounting must use this rather than sched_prio:

@@ -1378,7 +1378,16 @@ Source: `architecture/25-diagnostics-status.md`,
   Note the two captures so far disagree on which endpoint fs-manager waited on
   (19 in one, 18 in the other), which is exactly the distinction that matters.
 
-  **Reproduced locally at last, with the anomaly flagged (1 run in 4 of the
+  **One of the two bugs behind this is FIXED** (see the deferred-enqueue claim in
+  `sched_thread.c`); what remains is the "wait is between processes" case, which
+  now reproduces locally too -- roughly 1 run in 8 of the filesystem battery,
+  `Prompt not found after 'ls'`, 32 live threads, `stranded=0`, and the verdict
+  naming the IPC waits rather than the scheduler. That is the repro to work
+  from; it never existed before this instrumentation.
+
+  The fixed half, kept here because the evidence chain is the useful part:
+
+  **Reproduced locally, with the anomaly flagged (1 run in 4 of the
   filesystem battery).** The boot never reached a prompt, and the dump reported
   `stranded(ready,no-rq)=1` rising to 2 across the two samples:
 
@@ -1386,14 +1395,18 @@ Source: `architecture/25-diagnostics-status.md`,
       [diag]! tid=7 pid=7 broker-spawn-test st=ready rq=0 disp=771327
 
   The ata driver is READY and on no run queue, so nothing will dispatch it
-  again and every FS operation queues up behind it. That is the lost wake
-  `thread.h` warns about in as many words, and the Dekker flags are clear
-  (`wake=0 btrans=0`), which points at `sched_wake_thread`: it claims the
-  enqueue, then calls `thread_wake_if_blocked`, and RETURNS WITHOUT ENQUEUEING
-  when that reports the thread was not BLOCKED -- which is what happens if
-  another waker has already promoted it to READY via `sched_mark_ready_if_live`
-  while the completion path had already consumed its token. State READY,
-  `on_rq` 0, no token pending: exactly the dump.
+  again and every FS operation queues up behind it. The same run logged exactly
+  one scheduler event, naming that thread:
+
+      [sched] enqueue current tid=31 owner=22 caller_cpu=1 holder_cpu=0 state=2
+
+  which is `cpu_sched_enqueue` refusing to link a thread another CPU still names
+  as current -- correct, it is executing -- and marking it READY on the
+  assumption that the holder re-enqueues when its dispatch ends. A mark is not a
+  message: a holder already past its own check never acted on it. Fixed by
+  making the refusal leave a consumable CLAIM, settled by the holder when it
+  stops naming the thread, with a sweep from the scheduler loop covering the one
+  ordering the holder cannot (a claim published just after it looked).
 
   Note this is a different moment from the CI captures (22 live threads, mid
   boot, versus 32 at a prompt) but the same shape, and the discard

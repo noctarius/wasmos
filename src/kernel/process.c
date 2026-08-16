@@ -2289,6 +2289,15 @@ static int process_schedule_once_impl(void) {
     thread_set_current(0);
     critical_section_leave();
 
+    /* This CPU has stopped naming the thread, so an enqueue that cpu_sched_enqueue
+     * refused while it was running here can now be performed.  Settling it here
+     * rather than in the result handling below covers every way a dispatch can
+     * end -- a thread that blocked again or exited owes nothing and is skipped
+     * inside.  Before this existed the refusal left only a READY mark, which a
+     * holder past its own check never acted on, and the thread stayed runnable
+     * on no run queue for the rest of the boot. */
+    sched_settle_deferred_enqueue(thread);
+
     if (proc->state == PROCESS_STATE_ZOMBIE || proc->exiting) {
         /* A concurrent kill/exit can mark the owner zombie while this thread
          * is still returning from its timeslice. Never requeue it afterwards. */

@@ -183,10 +183,10 @@ domains:
       - { name: READER_BUSY,         description: "another endpoint is already the reader for this tty" }
       - { name: UNSUPPORTED_REQUEST, description: "unknown or unsupported request type" }
       # VT_IPC_SWITCH_TTY step failures (was VT_SWITCH_ERR_*).
-      - { name: SWITCH_MODE_OFF,     description: "tty switch could not disable framebuffer rendering" }
+      - { name: SWITCH_MODE_OFF,     description: "deprecated: the framebuffer no longer has a console mode to disable" }
       - { name: SWITCH_CLEAR,        description: "tty switch could not clear the screen" }
       - { name: SWITCH_REPLAY,       description: "tty switch could not replay the cell buffer" }
-      - { name: SWITCH_MODE_ON,      description: "tty switch could not re-enable framebuffer rendering" }
+      - { name: SWITCH_MODE_ON,      description: "deprecated: the framebuffer no longer has a console mode to re-enable" }
 
   chardev:
     id: 9

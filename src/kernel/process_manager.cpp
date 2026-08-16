@@ -126,7 +126,6 @@ class ProcessManager {
         pm_atomic_store_u32(&g_pm.fs_endpoint, IPC_ENDPOINT_NONE);
         pm_atomic_store_u32(&g_pm.block_endpoint, IPC_ENDPOINT_NONE);
         pm_atomic_store_u32(&g_pm.fb_endpoint, IPC_ENDPOINT_NONE);
-        pm_atomic_store_u32(&g_pm.vt_endpoint, IPC_ENDPOINT_NONE);
         pm_atomic_store_u32(&g_pm.fs_reply_endpoint, IPC_ENDPOINT_NONE);
         pm_atomic_store_u32(&g_pm.fs_ctrl_endpoint, IPC_ENDPOINT_NONE);
         g_pm.fs_request_id = 1;
@@ -576,9 +575,6 @@ uint32_t process_manager_fs_endpoint(void) {
 }
 uint32_t process_manager_block_endpoint(void) {
     return pm_atomic_load_u32(&g_pm.block_endpoint);
-}
-uint32_t process_manager_vt_endpoint(void) {
-    return pm_atomic_load_u32(&g_pm.vt_endpoint);
 }
 uint32_t process_manager_framebuffer_endpoint(void) {
     return pm_atomic_load_u32(&g_pm.fb_endpoint);

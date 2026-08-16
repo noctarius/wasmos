@@ -158,7 +158,6 @@ typedef struct {
     uint32_t fs_endpoint;   /* the fs.vfs service, once registered */
     uint32_t block_endpoint;
     uint32_t fb_endpoint;
-    uint32_t vt_endpoint;
     uint32_t fs_reply_endpoint;     /* replies to the PM's own FS requests */
     uint32_t fs_ctrl_endpoint;      /* drained and discarded each iteration */
     uint32_t broker_reply_endpoint; /* drained synchronously inside the broker

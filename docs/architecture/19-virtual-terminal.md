@@ -33,7 +33,7 @@ flow into the VT, which routes them to the active slot's reader. This makes the
 VT the single point that owns keymap/modifier state, framebuffer arbitration,
 and the serial console binding.
 
-#### Slot model (Proposed — phase 5)
+#### Slot model (Shipped — phase 5)
 
 | Slot     | Role                                                                   |
 |----------|------------------------------------------------------------------------|
@@ -43,12 +43,15 @@ and the serial console binding.
 
 `VT_MAX_TTYS` is 4 today (vt-0..vt-3).
 
-**Shipped model (being superseded):** today `tty0` is the serial-mirrored,
-read-only system console (`vt_put_char_tty0` → `wasmos_console_write`) which the
-compositor overlays via the framebuffer overlay lock; `tty1..tty3` are text VTs.
-Phase 5 moves the serial-mirrored console to **vt-1** and makes **vt-0** a pure
-GUI slot, so the framebuffer is exclusively either the compositor (vt-0) or the
-VT's text render of one vt-x.
+**vt-1 is a mirror of the system log, not an ordinary text slot.** Everything it
+shows comes from the kernel klog ring, which already carries every byte its
+writers put on serial (a service's `console_write` reaches the kernel log, and so
+does the CLI's). The vt therefore takes two rules for that slot alone: a
+registered writer's `VT_IPC_WRITE_REQ` is dropped, and input is not echoed
+locally. Without them each line and each typed character renders twice — once
+from the writer and once from the log. `vt-2`/`vt-3` are ordinary slots with the
+full writer and echo path. Folding vt-1 into that same model needs a way to
+write serial without feeding the klog ring, which does not exist yet.
 
 #### Two independent selectors (Proposed — phase 5)
 
@@ -182,7 +185,7 @@ typedef struct {
 | `g_vt_ep`             | -1   | VT's own IPC endpoint                             |
 | `g_fb_ep`             | -1   | Framebuffer driver endpoint                       |
 | `g_kbd_ep`            | -1   | Keyboard driver endpoint                          |
-| `g_active_tty`        | 0→1  | Visible slot index (default becomes 1 in phase 5) |
+| `g_active_tty`        | 1    | Visible slot index (`VT_KLOG_TTY`, the system console) |
 | `g_serial_tty`        | 1    | Serial-bound slot index (proposed, phase 5)       |
 | `g_tty_writer_ep[4]`  | -1   | Registered writer endpoint per slot               |
 | `g_tty_reader_ep[4]`  | -1   | Registered reader endpoint per slot (push target) |
@@ -198,11 +201,11 @@ typedef struct {
 
 ### Framebuffer Driver IPC Interface
 
-`vt` is the only caller of the framebuffer driver's text-cell endpoint. Under
-the redesign the framebuffer driver becomes a pure blit surface: it renders the
-cells `vt` sends and, in phase 5, will no longer drain the kernel console ring
-itself. Phase 4 routes klog into vt-1 through a separate VT-owned ring
-(additively); the framebuffer's console-ring drain is retired in phase 5.
+`vt` is the only caller of the framebuffer driver's text-cell endpoint. The
+framebuffer driver is a **pure blit surface**: it renders the cells `vt` sends and
+nothing else. Both drivers (GOP and PCI) once drained the kernel console ring
+themselves; that drain is retired, so the only text they paint on their own is the
+early-log replay at startup, before `vt` exists.
 
 | Opcode                          | Value | Arguments                                            |
 |---------------------------------|-------|------------------------------------------------------|
@@ -234,13 +237,10 @@ cell path is kept as a fallback when the blit buffer cannot be allocated.
 
 Cell color packing: `arg3 = (fg & 0x0F) << 8 | (bg & 0x0F)`.
 
-`FBTEXT_IPC_CONSOLE_MODE_REQ` toggles whether the framebuffer driver drains the
-kernel console ring. **Shipped:** the framebuffer driver owns the console-ring
-drain and `vt` toggles it around switches; **phase 4** adds a *separate*
-VT-owned klog ring drained into vt-1 without disturbing this. **Proposed
-(phase 5):** the framebuffer driver stops draining the console ring entirely,
-becoming a blit surface only; `FBTEXT_IPC_GFX_OVERLAY_REQ` still gates whether
-the compositor or the VT owns the framebuffer.
+`FBTEXT_IPC_CONSOLE_MODE_REQ` is **retired**: with no ring drain there is no
+console mode to toggle, and `vt` no longer sends it around switches. The opcode
+value stays reserved in `abi/opcodes.yaml`. `FBTEXT_IPC_GFX_OVERLAY_REQ` still
+gates whether the compositor or the VT owns the framebuffer.
 
 ---
 
@@ -689,7 +689,8 @@ without buffering or editing. Echo still applies if `input_echo = 1`.
 | 3     | Single keyboard decoder in VT (loadable `.kmap` layouts); compositor consumes `VT_IPC_KEY_FORWARD`; enriched `GFX_EVENT_KEY` (scancode) | Shipped  |
 | 4     | klog into vt-1 via VT-owned xfer-buffer SPSC ring (additive; drained on each VT wake). FB→blit-surface retirement deferred to phase 5 | Shipped  |
 | 5a    | tty-switch grid-blit (`FBTEXT_IPC_BLIT_ATTACH`/`GRID`) + VT-driven framebuffer ownership (`VT_IPC_VIS_NOTIFY`) — the `vt_switch_tty` overlay-wedge fix | Shipped  |
-| 5b    | Default visible vt-1 (retires the fbpci console-ring drain); serial-bound selector; lazy CLI spawn | Proposed |
+| 5b    | Default visible vt-1; framebuffer console-ring drain retired (both drivers); klog doorbell | Shipped  |
+| 5c    | Serial-bound selector; lazy CLI spawn | Proposed |
 
 Keymap layouts are data files under `system/keymaps/` (`us-qwerty.kmap`,
 `de-nodeadkeys.kmap`), loaded by the VT at init (built-in US fallback).  The VT

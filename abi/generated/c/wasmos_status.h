@@ -168,10 +168,10 @@ enum {
     WASMOS_ERR_VT_NO_TTY_FOR_SOURCE = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_VT, 2), /* no tty is associated with the requesting endpoint */
     WASMOS_ERR_VT_READER_BUSY = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_VT, 3), /* another endpoint is already the reader for this tty */
     WASMOS_ERR_VT_UNSUPPORTED_REQUEST = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_VT, 4), /* unknown or unsupported request type */
-    WASMOS_ERR_VT_SWITCH_MODE_OFF = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_VT, 5), /* tty switch could not disable framebuffer rendering */
+    WASMOS_ERR_VT_SWITCH_MODE_OFF = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_VT, 5), /* deprecated: the framebuffer no longer has a console mode to disable */
     WASMOS_ERR_VT_SWITCH_CLEAR = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_VT, 6), /* tty switch could not clear the screen */
     WASMOS_ERR_VT_SWITCH_REPLAY = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_VT, 7), /* tty switch could not replay the cell buffer */
-    WASMOS_ERR_VT_SWITCH_MODE_ON = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_VT, 8), /* tty switch could not re-enable framebuffer rendering */
+    WASMOS_ERR_VT_SWITCH_MODE_ON = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_VT, 8), /* deprecated: the framebuffer no longer has a console mode to re-enable */
     WASMOS_ERR_CHARDEV_NO_DATA = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_CHARDEV, 1), /* no byte is buffered yet (retryable) */
     WASMOS_ERR_CHARDEV_UNSUPPORTED_REQUEST = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_CHARDEV, 2), /* unknown or unsupported request type */
     WASMOS_ERR_HRNG_INVALID = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_HRNG, 1), /* invalid request arguments (byte count or buffer) */
@@ -640,10 +640,10 @@ static inline const char *wasmos_strerror(wasmos_error_code_t c) {
     case WASMOS_ERR_VT_NO_TTY_FOR_SOURCE: return "no tty is associated with the requesting endpoint";
     case WASMOS_ERR_VT_READER_BUSY: return "another endpoint is already the reader for this tty";
     case WASMOS_ERR_VT_UNSUPPORTED_REQUEST: return "unknown or unsupported request type";
-    case WASMOS_ERR_VT_SWITCH_MODE_OFF: return "tty switch could not disable framebuffer rendering";
+    case WASMOS_ERR_VT_SWITCH_MODE_OFF: return "deprecated: the framebuffer no longer has a console mode to disable";
     case WASMOS_ERR_VT_SWITCH_CLEAR: return "tty switch could not clear the screen";
     case WASMOS_ERR_VT_SWITCH_REPLAY: return "tty switch could not replay the cell buffer";
-    case WASMOS_ERR_VT_SWITCH_MODE_ON: return "tty switch could not re-enable framebuffer rendering";
+    case WASMOS_ERR_VT_SWITCH_MODE_ON: return "deprecated: the framebuffer no longer has a console mode to re-enable";
     case WASMOS_ERR_CHARDEV_NO_DATA: return "no byte is buffered yet (retryable)";
     case WASMOS_ERR_CHARDEV_UNSUPPORTED_REQUEST: return "unknown or unsupported request type";
     case WASMOS_ERR_HRNG_INVALID: return "invalid request arguments (byte count or buffer)";

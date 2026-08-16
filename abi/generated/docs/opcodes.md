@@ -117,7 +117,7 @@ endpoint-scoped and may repeat across subsystems.
 | `FBTEXT_IPC_CURSOR_SET_REQ` | 0x601 | req |  |
 | `FBTEXT_IPC_SCROLL_REQ` | 0x602 | req |  |
 | `FBTEXT_IPC_CLEAR_REQ` | 0x603 | req |  |
-| `FBTEXT_IPC_CONSOLE_MODE_REQ` | 0x604 | req | arg0: 0=ring off, 1=ring on  |
+| `FBTEXT_IPC_CONSOLE_MODE_REQ` | 0x604 | req | Retired.  The framebuffer drivers no longer drain the kernel console ring -- they are pure blit surfaces and the vt paints the log from its own klog ring -- so there is no console mode to toggle and nothing sends this.  The value stays reserved rather than being reused.  |
 | `FBTEXT_IPC_GEOMETRY_REQ` | 0x605 | req | resp: arg0=cols arg1=rows  |
 | `FBTEXT_IPC_GFX_OVERLAY_REQ` | 0x606 | req | arg0: 0=unlock, 1=lock  |
 | `FBTEXT_IPC_QUERY_CAPS_REQ` | 0x607 | req | resp: arg0=FBTEXT_CAP_* bitmask  |

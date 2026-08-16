@@ -577,9 +577,9 @@ Source: `architecture/13-runtime-and-packaging.md`,
   `block_buffer_phys` (512 MiB under WARP vs 2 GiB under wasm3); an
   out-of-linear-memory guest pointer traps the module under wasm3 but returns
   `BAD_POINTER` under WARP; `sched_ready_count` returns 0 under WARP rather than
-  the live count; `wasi.random_get` fills zeros; `console_write` is mirrored to
-  the VT only under wasm3; `env.strlen` is wasm3-only; `wasm3_runtime_enter`
-  disables preemption for the whole call while `warp_runtime_enter` does not.
+  the live count; `wasi.random_get` fills zeros; `env.strlen` is wasm3-only;
+  `wasm3_runtime_enter` disables preemption for the whole call while
+  `warp_runtime_enter` does not.
 
 ## ABI, Code Generation, and Error Handling
 
@@ -991,10 +991,11 @@ Source: `architecture/19-virtual-terminal.md`,
 
 VT I/O-multiplexer phase 5 (remaining; phases 0–4 shipped):
 
-- [ ] [ENHANCEMENT][P2] Make vt-1 default-visible at boot (`src/services/vt/vt_main.c:21`,
-  `g_active_tty = 0`).
-- [ ] [CLEANUP][P3] Retire the framebuffer-PCI console-ring drain so the framebuffer is a pure
-  blit surface (`src/drivers/framebuffer_pci/framebuffer_pci_native.c:41,233,336`).
+- [ ] [CLEANUP][P3] Delete `console_ring_t` and the plumbing that fills it now that nothing
+  drains it: the kernel producer (`src/kernel/serial.c` `serial_ring_write`,
+  `serial_console_ring_id`, `serial_console_ring_ptr`), the native driver API's
+  `console_ring_id` (an ABI version bump), and the type itself in
+  `src/drivers/include/wasmos_driver_abi.h`. The klog ring replaced it.
 - [ ] [FEATURE][P2] Add the serial-bound-slot selector (`VT_IPC_BIND_SERIAL_REQ`, undefined;
   `g_serial_tty` is fixed at 1 — `vt_main.c:24`).
 - [ ] [FEATURE][P2] Lazy per-slot CLI spawn: have the VT spawn `cli.wap` pinned to a slot on

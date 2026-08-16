@@ -233,7 +233,11 @@ enum {
     FBTEXT_IPC_CURSOR_SET_REQ = 0x601,
     FBTEXT_IPC_SCROLL_REQ = 0x602,
     FBTEXT_IPC_CLEAR_REQ = 0x603,
-    /* arg0: 0=ring off, 1=ring on */
+    /* Retired.  The framebuffer drivers no longer drain the kernel console
+     * ring -- they are pure blit surfaces and the vt paints the log from its
+     * own klog ring -- so there is no console mode to toggle and nothing
+     * sends this.  The value stays reserved rather than being reused.
+     */
     FBTEXT_IPC_CONSOLE_MODE_REQ = 0x604,
     /* resp: arg0=cols arg1=rows */
     FBTEXT_IPC_GEOMETRY_REQ = 0x605,

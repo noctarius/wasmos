@@ -195,7 +195,10 @@ pub const FBTEXT_IPC_CELL_WRITE_REQ: i32 = 0x600;
 pub const FBTEXT_IPC_CURSOR_SET_REQ: i32 = 0x601;
 pub const FBTEXT_IPC_SCROLL_REQ: i32 = 0x602;
 pub const FBTEXT_IPC_CLEAR_REQ: i32 = 0x603;
-/// arg0: 0=ring off, 1=ring on
+/// Retired.  The framebuffer drivers no longer drain the kernel console
+/// ring -- they are pure blit surfaces and the vt paints the log from its
+/// own klog ring -- so there is no console mode to toggle and nothing
+/// sends this.  The value stays reserved rather than being reused.
 pub const FBTEXT_IPC_CONSOLE_MODE_REQ: i32 = 0x604;
 /// resp: arg0=cols arg1=rows
 pub const FBTEXT_IPC_GEOMETRY_REQ: i32 = 0x605;

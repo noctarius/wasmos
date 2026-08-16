@@ -74,8 +74,11 @@ Usage:
   ./scripts/quality.sh lint
 
 Tool paths and the clang-tidy plugin are taken from QUALITY_BUILD_DIR's
-CMakeCache when not set explicitly, so a direct run matches what the `fmt-check`
-/ `lint` / `quality` CMake targets run.
+CMakeCache when not set explicitly, so a direct run matches the `fmt-check` /
+`lint` / `quality` CMake targets AS LONG AS that directory is configured and its
+plugin built. Where the plugin is missing this warns and lints without the
+wasmos-* checks; the targets build it first, which is why they are the safer
+way in.
 
 Environment overrides:
   QUALITY_BUILD_DIR   Build directory used for clang-tidy and for tool
@@ -418,7 +421,8 @@ run_clang_tidy() {
         clang-tidy /opt/homebrew/opt/llvm/bin/clang-tidy /usr/local/opt/llvm/bin/clang-tidy)"
 
     if [[ ! -f "$build_dir/compile_commands.json" ]]; then
-        echo "error: $build_dir/compile_commands.json is missing. Re-run cmake -S . -B $build_dir before lint." >&2
+        printf 'error: %q/compile_commands.json is missing. Re-run: cmake -S . -B %q\n' \
+            "$build_dir" "$build_dir" >&2
         exit 1
     fi
 
@@ -570,7 +574,7 @@ PY
     else
         echo "warning: wasmos clang-tidy plugin not found under '${build_dir}';" >&2
         echo "         the wasmos-* checks are NOT running. Build it with:" >&2
-        echo "           cmake --build ${build_dir} --target wasmos_tidy_plugin" >&2
+        printf '           cmake --build %q --target wasmos_tidy_plugin\n' "$build_dir" >&2
     fi
 
     "$clang_tidy" "${load_args[@]}" -p "$tidy_db" --quiet "${tidy[@]}"

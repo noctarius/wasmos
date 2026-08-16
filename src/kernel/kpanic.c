@@ -188,10 +188,37 @@ static void diag_print_backtrace(uint64_t rbp, int frames) {
  * Everything goes through the UNLOCKED serial writer, for the same reason. */
 void diag_dump_threads(const char* reason) {
     serial_printf_unlocked("[diag] thread table (%s)\n", reason ? reason : "-");
+    /* Which thread each CPU believes it is running, so a thread that says
+     * RUNNING can be checked against the CPUs rather than believed.  A thread in
+     * that state which no CPU is executing is orphaned: it is on no run queue
+     * either (enqueue requires READY), so nothing will ever dispatch it again --
+     * the condition process.c's PROCESS_RUN_BLOCKED handler exists to prevent
+     * for legacy blockers, and a boot hang under SMP the last time it occurred. */
+    uint32_t current_tids[WASMOS_MAX_CPUS];
+    uint32_t cpu_count = g_cpu_count > WASMOS_MAX_CPUS ? WASMOS_MAX_CPUS : g_cpu_count;
+    for (uint32_t c = 0; c < cpu_count; ++c) {
+        cpu_local_t* cpu = &g_cpus[c];
+        thread_t* cur = cpu->current_thread;
+        thread_t* idle = cpu->idle_thread;
+        current_tids[c] = cur ? cur->tid : 0u;
+        serial_printf_unlocked(
+            "[diag] cpu=%u cur_tid=%u cur_pid=%u idle_tid=%u in_sched=%u in_ctxsw=%u "
+            "irq_depth=%u preempt=%u dispatches=%u\n",
+            (unsigned)c,
+            (unsigned)current_tids[c],
+            (unsigned)(cpu->current_process ? cpu->current_process->pid : 0u),
+            (unsigned)(idle ? idle->tid : 0u),
+            (unsigned)cpu->in_scheduler,
+            (unsigned)cpu->in_context_switch,
+            (unsigned)cpu->irq_disable_depth,
+            (unsigned)cpu->preempt_disable_count,
+            (unsigned)cpu->dispatch_count);
+    }
     uint32_t live = 0;
     uint32_t ready = 0;
     uint32_t blocked = 0;
     uint32_t stranded = 0;
+    uint32_t orphaned = 0;
     for (uint32_t i = 0; i < THREAD_MAX_COUNT; ++i) {
         thread_t* t = thread_table_at(i);
         if (!t || t->tid == 0 || t->state == THREAD_STATE_UNUSED) {
@@ -208,6 +235,18 @@ void diag_dump_threads(const char* reason) {
             ready++;
             if (!t->on_rq && !is_idle) {
                 stranded++;
+                anomaly = 1;
+            }
+        } else if (t->state == THREAD_STATE_RUNNING) {
+            uint8_t current_somewhere = 0;
+            for (uint32_t c = 0; c < cpu_count; ++c) {
+                if (current_tids[c] == t->tid) {
+                    current_somewhere = 1;
+                    break;
+                }
+            }
+            if (!current_somewhere) {
+                orphaned++;
                 anomaly = 1;
             }
         } else if (t->state == THREAD_STATE_BLOCKED) {
@@ -247,11 +286,13 @@ void diag_dump_threads(const char* reason) {
     /* A line marked `[diag]!` is one of the two scheduler anomalies above; a
      * dump with none of them and no runnable thread is a deadlock between
      * processes rather than a lost wake. */
-    serial_printf_unlocked("[diag] live=%u ready=%u blocked=%u stranded(ready,no-rq)=%u\n",
-                           (unsigned)live,
-                           (unsigned)ready,
-                           (unsigned)blocked,
-                           (unsigned)stranded);
+    serial_printf_unlocked(
+        "[diag] live=%u ready=%u blocked=%u stranded(ready,no-rq)=%u orphaned(running,no-cpu)=%u\n",
+        (unsigned)live,
+        (unsigned)ready,
+        (unsigned)blocked,
+        (unsigned)stranded,
+        (unsigned)orphaned);
 }
 
 /* NMI vector, with two entirely different behaviours depending on whether a

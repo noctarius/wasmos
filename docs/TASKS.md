@@ -1320,13 +1320,29 @@ Source: `architecture/25-diagnostics-status.md`,
   off a queue and no wake token went unconsumed, so the scheduler handshake is
   not implicated in this instance.
 
-  What the dump still cannot say is who waits for whom -- every backtrace ends
-  at the host-call wrapper, and the guest's own stack is not walkable from the
-  kernel. The next refinement is therefore per-thread wait identity: the
-  endpoint a blocked thread is waiting on, and the depth of each endpoint's
-  queue. A message sitting in a queue whose owner is blocked elsewhere is a lost
-  delivery; a cycle of services each waiting on the other's reply is the nested
-  synchronous round-trip this file already tracks (`fs_manager.c:608`).
+  One thread in that dump was NOT blocked: `vt` reported `st=running` while all
+  four CPUs sat in `idle_entry`. A RUNNING thread that no CPU is executing is
+  orphaned -- it is on no run queue either, because an enqueue requires READY --
+  and nothing will ever dispatch it again. That is a known failure shape here:
+  `process.c`'s PROCESS_RUN_BLOCKED handler carries a branch specifically to
+  stop legacy blockers from leaving a thread in it, added after it hung an SMP
+  boot. Whether it is the cause or a consequence is not yet established --
+  RUNNING is also the normal state of a thread a CPU is currently executing, and
+  that dump could not tell the two apart.
+
+  So the dump now prints, per CPU, the thread that CPU believes it is running
+  (plus its idle thread, scheduler/context-switch flags and dispatch count), and
+  flags `orphaned(running,no-cpu)` for any RUNNING thread no CPU claims. A
+  healthy guest reports 0. If the next capture reports `vt` orphaned, that is
+  the wedge.
+
+  Still missing after that: who waits for whom. Every backtrace ends at the
+  host-call wrapper, and the guest's own stack is not walkable from the kernel,
+  so the identity has to come from the wait -- the endpoint a blocked thread is
+  parked on, and the depth of each endpoint's queue. A message sitting in a
+  queue whose owner is blocked elsewhere is a lost delivery; a cycle of services
+  waiting on each other's replies is the nested synchronous round-trip this file
+  already tracks (`fs_manager.c:608`).
 
   Not yet known, and worth establishing before theorising: whether a `/init`
   listing (initfs, not the FAT ESP) can trigger it too. The class's `/init` tests

@@ -14,6 +14,12 @@
 #include "fs_manager_types.h"
 #include "fs_manager_path.h"
 
+/* Retries a reply gets before this service gives up on a client whose endpoint
+ * stays full. Generous on purpose: the failure it guards against is permanent
+ * (a stranded client hangs forever) while the condition it waits out is
+ * transient (a client mid-output-loop drains within a few scheduling rounds). */
+#define FSMGR_REPLY_SEND_RETRIES 8192
+
 #define FSMGR_PATH_SCRATCH_SIZE 256
 
 static int32_t g_proc_endpoint = -1;
@@ -355,6 +361,26 @@ static void backend_refresh_boot_meta(fs_backend_t* slot, int32_t req_seed) {
     slot->device_id = (uint16_t)(a3 & 0xFFFFu);
 }
 
+/* Reply to a client, treating a full client queue as backpressure rather than
+ * failure: retry with a yield between tries.
+ *
+ * Every reply this service sends is one a client is blocked waiting for, with no
+ * timeout behind it. Dropping one because the client's 32-slot endpoint is
+ * momentarily full -- which a READDIR makes likely, since the stream frames just
+ * filled it and the terminating reply follows immediately -- hangs that client
+ * forever, and behind it everything waiting on that client. The STREAM relay in
+ * forward_request has retried for exactly this reason; the terminators it hands
+ * back had not.
+ *
+ * Returns 0 on success, or the send's status (IPC_ERR_FULL once the retries are
+ * spent, which means the client is stranded and there is nothing further this
+ * service can do about it). */
+static int32_t reply_to_client(int32_t source, int32_t type, int32_t request_id, int32_t a0,
+                               int32_t a1, int32_t a2, int32_t a3) {
+    return wasmos_sys_ipc_send_retry(
+        source, g_fs_endpoint, type, request_id, a0, a1, a2, a3, FSMGR_REPLY_SEND_RETRIES);
+}
+
 static int send_virtual_root_listing(int32_t source, int32_t req_id) {
     char root_listing[256] = {0};
     uint32_t pos = 0;
@@ -384,11 +410,11 @@ static int send_virtual_root_listing(int32_t source, int32_t req_id) {
             a2 = (int32_t)(uint8_t)root_listing[pos++];
         if (pos < len)
             a3 = (int32_t)(uint8_t)root_listing[pos++];
-        if (wasmos_ipc_send(source, g_fs_endpoint, FS_IPC_STREAM, req_id, a0, a1, a2, a3) != 0) {
+        if (reply_to_client(source, FS_IPC_STREAM, req_id, a0, a1, a2, a3) != 0) {
             return -1;
         }
     }
-    return wasmos_ipc_send(source, g_fs_endpoint, FS_IPC_RESP, req_id, 0, 0, 0, 0);
+    return reply_to_client(source, FS_IPC_RESP, req_id, 0, 0, 0, 0);
 }
 
 /* Returns WASMOS_ERR_NONE, or the packed reason the listing could not be sent. */
@@ -449,9 +475,7 @@ static wasmos_error_code_t fsmgr_emit_mounts(int32_t source, int32_t req_id, int
     if (wasmos_sys_buffer_write(buffer_id, mounts, (int32_t)pos, 0) != 0) {
         return WASMOS_ERR_FS_BUFFER;
     }
-    if (wasmos_ipc_send(
-            source, g_fs_endpoint, FSMGR_IPC_QUERY_MOUNTS_RESP, req_id, (int32_t)pos, 0, 0, 0) !=
-        0) {
+    if (reply_to_client(source, FSMGR_IPC_QUERY_MOUNTS_RESP, req_id, (int32_t)pos, 0, 0, 0) != 0) {
         return WASMOS_ERR_FS_REPLY_SEND;
     }
     return WASMOS_ERR_NONE;
@@ -492,8 +516,15 @@ static int forward_request(int32_t backend_endpoint, int32_t type, int32_t req_i
              * A bare non-retrying send would fill the 32-slot queue, abort the
              * relay, drop the error notification (send_fs_error also fails on a
              * full queue), and leave the client blocked in select_one forever. */
-            if (wasmos_sys_ipc_send_retry(
-                    source, g_fs_endpoint, resp_type, req_id, rr0, rr1, rr2, rr3, 8192) != 0) {
+            if (wasmos_sys_ipc_send_retry(source,
+                                          g_fs_endpoint,
+                                          resp_type,
+                                          req_id,
+                                          rr0,
+                                          rr1,
+                                          rr2,
+                                          rr3,
+                                          FSMGR_REPLY_SEND_RETRIES) != 0) {
                 return -1;
             }
             continue;
@@ -514,7 +545,7 @@ static void send_fs_error(int32_t source, int32_t request_id, wasmos_error_code_
      * dropping the error notification because the client's endpoint is
      * transiently full hangs that client forever in select_one. */
     (void)wasmos_sys_ipc_send_retry(
-        source, g_fs_endpoint, FS_IPC_ERROR, request_id, reason, 0, 0, 0, 4096);
+        source, g_fs_endpoint, FS_IPC_ERROR, request_id, reason, 0, 0, 0, FSMGR_REPLY_SEND_RETRIES);
 }
 
 static int32_t resolve_backend_for_state(const fs_client_state_t* state) {
@@ -728,7 +759,7 @@ static int handle_clone_cwd_req(int32_t source, int32_t source_owner, int32_t re
     dst_state->mount = src_state->mount;
     dst_state->backend_endpoint = src_state->backend_endpoint;
     dst_state->mount_depth = src_state->mount_depth;
-    (void)wasmos_ipc_send(source, g_fs_endpoint, FSMGR_IPC_CLONE_CWD_RESP, request_id, 0, 0, 0, 0);
+    (void)reply_to_client(source, FSMGR_IPC_CLONE_CWD_RESP, request_id, 0, 0, 0, 0);
     return 1;
 }
 
@@ -889,7 +920,7 @@ static int handle_read_path_req(fs_client_state_t* state, int32_t source, int32_
     /* Drop fs-manager's reborrow (cascade-safe) before replying; the client's
      * grant b1 stays until the client releases the buffer. */
     (void)wasmos_xfer_buffer_unborrow(backend_borrow);
-    (void)wasmos_ipc_send(source, g_fs_endpoint, FS_IPC_RESP, request_id, read0, 0, 0, 0);
+    (void)reply_to_client(source, FS_IPC_RESP, request_id, read0, 0, 0, 0);
     return 1;
 }
 
@@ -903,17 +934,17 @@ static int handle_chdir_mount(fs_client_state_t* state, int32_t source, int32_t 
         state->mount = FS_MOUNT_ROOT;
         state->backend_endpoint = -1;
         state->mount_depth = 0;
-        (void)wasmos_ipc_send(source, g_fs_endpoint, FS_IPC_RESP, request_id, 0, 0, 0, 0);
+        (void)reply_to_client(source, FS_IPC_RESP, request_id, 0, 0, 0, 0);
         return 1;
     }
     if (strcasecmp(path, "..") == 0 && state->mount == FS_MOUNT_ROOT) {
-        (void)wasmos_ipc_send(source, g_fs_endpoint, FS_IPC_RESP, request_id, 0, 0, 0, 0);
+        (void)reply_to_client(source, FS_IPC_RESP, request_id, 0, 0, 0, 0);
         return 1;
     }
     if (strcasecmp(path, "..") == 0 && state->mount != FS_MOUNT_ROOT && state->mount_depth == 0) {
         state->mount = FS_MOUNT_ROOT;
         state->backend_endpoint = -1;
-        (void)wasmos_ipc_send(source, g_fs_endpoint, FS_IPC_RESP, request_id, 0, 0, 0, 0);
+        (void)reply_to_client(source, FS_IPC_RESP, request_id, 0, 0, 0, 0);
         return 1;
     }
 
@@ -954,7 +985,7 @@ static int handle_chdir_mount(fs_client_state_t* state, int32_t source, int32_t 
             send_fs_error(source, request_id, WASMOS_ERR_FS_BACKEND_IPC);
             return 1;
         }
-        (void)wasmos_ipc_send(source, g_fs_endpoint, rr_t, request_id, rr0, rr1, rr2, rr3);
+        (void)reply_to_client(source, rr_t, request_id, rr0, rr1, rr2, rr3);
         return 1;
     }
 
@@ -1142,8 +1173,7 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
                 if (strcasecmp(path, "..") == 0) {
                     state->mount = FS_MOUNT_ROOT;
                     state->backend_endpoint = -1;
-                    (void)wasmos_ipc_send(
-                        source, g_fs_endpoint, FS_IPC_RESP, request_id, 0, 0, 0, 0);
+                    (void)reply_to_client(source, FS_IPC_RESP, request_id, 0, 0, 0, 0);
                     continue;
                 }
             }
@@ -1193,7 +1223,7 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
                 state->mount = FS_MOUNT_ROOT;
                 state->backend_endpoint = -1;
                 state->mount_depth = 0;
-                (void)wasmos_ipc_send(source, g_fs_endpoint, FS_IPC_RESP, request_id, 0, 0, 0, 0);
+                (void)reply_to_client(source, FS_IPC_RESP, request_id, 0, 0, 0, 0);
                 continue;
             }
         }
@@ -1217,6 +1247,6 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
                 }
             }
         }
-        (void)wasmos_ipc_send(source, g_fs_endpoint, resp_type, request_id, r0, r1, r2, r3);
+        (void)reply_to_client(source, resp_type, request_id, r0, r1, r2, r3);
     }
 }

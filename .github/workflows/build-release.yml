@@ -1,0 +1,35 @@
+name: Release workflow
+
+on: workflow_dispatch
+
+jobs:
+  build:
+
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v6
+
+    - name: Install packages
+      run: |
+        sudo apt-get update
+        sudo apt-get install libltdl-dev libx11-dev libgtk-3-dev libreadline-dev libsdl2-dev libasound-dev libvncserver-dev openjade docbook docbook-dsssl
+
+    - name: create sources tarball
+      run: tar czvf bochs.tar.gz --exclude=.git bochs
+
+    - name: build linux binaries
+      run: cd bochs && ./build/redhat/make-rpm | tee ../build.log
+
+    - name: Upload release sources tarball
+      uses: actions/upload-artifact@v6
+      with:
+        name: bochs.tar.gz
+        path: bochs.tar.gz
+
+    - name: Upload release linux RPM package
+      uses: actions/upload-artifact@v6
+      with:
+        name: bochs linux RPM
+        path: bochs/bochs-*.rpm

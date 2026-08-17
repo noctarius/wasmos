@@ -514,20 +514,31 @@ void sched_enqueue_thread_from(thread_t* t, uintptr_t caller) {
     if (!t) {
         return;
     }
+    /* Report the running-elsewhere case HERE, where the original call site is
+     * known, and then fall through: the deferral itself belongs to
+     * cpu_sched_enqueue, which owns the claim protocol.
+     *
+     * Reporting and returning is what this path used to do, and it stranded
+     * threads. A mark without a claim leaves nobody owing the enqueue -- the
+     * holder has no debt to settle and the sweep has nothing to find -- so a
+     * thread refused here was never linked by anyone.  Duplicating the guard is
+     * what let that behaviour survive cpu_sched_enqueue being fixed; the
+     * duplicate is now diagnostics only. */
     for (uint32_t i = 0; i < WASMOS_MAX_CPUS; ++i) {
         if (g_cpus[i].current_thread == t) {
-            serial_printf("[sched] enqueue current tid=%u owner=%u caller_cpu=%u "
-                          "holder_cpu=%u state=%u caller=%016llx\n",
-                          (unsigned)t->tid,
-                          (unsigned)t->owner_pid,
-                          (unsigned)cpu_local()->cpu_id,
-                          (unsigned)i,
-                          (unsigned)t->state,
-                          (unsigned long long)caller);
-            if (sched_mark_ready_if_live(t)) {
-                __atomic_store_n((uint32_t*)&t->block_reason, THREAD_BLOCK_NONE, __ATOMIC_RELAXED);
+            uint32_t n = sched_debug_note(SCHED_DEBUG_ENQUEUE_CURRENT);
+            if ((n & (n - 1u)) == 0u) {
+                serial_printf("[sched] enqueue current tid=%u owner=%u caller_cpu=%u "
+                              "holder_cpu=%u state=%u caller=%016llx (n=%u)\n",
+                              (unsigned)t->tid,
+                              (unsigned)t->owner_pid,
+                              (unsigned)cpu_local()->cpu_id,
+                              (unsigned)i,
+                              (unsigned)t->state,
+                              (unsigned long long)caller,
+                              (unsigned)(n + 1u));
             }
-            return;
+            break;
         }
     }
     /* DIAGNOSTIC: same check as cpu_sched_enqueue, done here because this path

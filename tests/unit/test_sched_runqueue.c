@@ -1252,6 +1252,40 @@ static void test_enqueue_from_null_is_silent(void) {
     check_invariants("enqueue_from NULL");
 }
 
+/* Regression: 2026-08-17-enqueue-from-leaves-no-claim.
+ *
+ * sched_enqueue_thread_from carried its OWN copy of the running-elsewhere
+ * guard, which marked the thread READY and returned without leaving a claim --
+ * the pre-claim behaviour, surviving on a second entry point after
+ * cpu_sched_enqueue was fixed. A thread refused there was enqueued by nobody:
+ * the holder had no debt to settle and the sweep had nothing to find.
+ *
+ * CI run 32002259179 wedged exactly that way. fs-manager sat READY with
+ * on_rq 0 across every sample, the boot never reached a CLI prompt, and the
+ * tripwire named this call site (its line is the one carrying `caller=`).
+ *
+ * The case below covers the whole hand-off, because asserting only that a claim
+ * exists would pass against a claim nobody can consume. */
+static void test_enqueue_from_running_elsewhere_leaves_a_claim(void) {
+    harness_reset();
+    thread_t* t = mk_thread(0, SCHED_PRIO_WASM, THREAD_STATE_RUNNING);
+    g_cpus[3].current_thread = t;
+    act_as(0);
+    sched_enqueue_thread_from(t, FROM_CALLER);
+
+    CHECK(t->enqueue_owed != 0, "a claim is left for the holder");
+    CHECK(list_head_empty(&t->sched_node), "and it is not linked while it runs elsewhere");
+
+    /* The holder stops naming it and settles: queued exactly once, claim spent. */
+    g_cpus[3].current_thread = NULL;
+    act_as(3);
+    sched_settle_deferred_enqueue(t);
+
+    CHECK(t->on_rq == 1, "the holder's settle links it");
+    CHECK(t->enqueue_owed == 0, "and consumes the claim");
+    check_invariants("enqueue_from leaves a settleable claim");
+}
+
 static void test_enqueue_from_running_elsewhere(void) {
     harness_reset();
     thread_t* t = mk_thread(0, SCHED_PRIO_WASM, THREAD_STATE_RUNNING);
@@ -2623,6 +2657,8 @@ int main(void) {
         {"D6 sweep drops a blocked thread's claim", test_sweep_drops_a_claim_for_a_blocked_thread},
         {"D4 ordinary enqueue owes nothing", test_ordinary_enqueue_owes_nothing},
         {"D7 tripwires use the locking writer", test_tripwires_use_the_locking_writer},
+        {"D8 enqueue_from leaves a settleable claim",
+         test_enqueue_from_running_elsewhere_leaves_a_claim},
         {"W1 ordinary wake", test_wake_ordinary},
         {"W2 wake during blocking transition",
          test_wake_during_blocking_transition_defers_with_token},

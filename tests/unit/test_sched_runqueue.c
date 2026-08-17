@@ -915,13 +915,14 @@ static void test_enqueue_running_elsewhere_already_ready(void) {
     CHECK(list_head_empty(&t->sched_node), "not linked");
 }
 
-/* The deferral above is only half a hand-off, and the missing half wedged a
+/* Regression: 2026-08-16-deferred-enqueue-claim (fixed 8c063c62f3).
+ *
+ * The deferral above is only half a hand-off, and the missing half wedged a
  * machine.  Marking the thread READY tells the holding CPU nothing it can act
  * on: by the time the mark lands, that CPU may already have run the check it
  * would have acted on, and then nobody enqueues the thread at all.  Observed in
  * CI and reproduced locally -- the ata driver left READY with on_rq 0, every FS
- * request queued behind it, and the machine idle with runnable work outstanding
- * (docs/TASKS.md, the whole-session wedge).
+ * request queued behind it, and the machine idle with runnable work outstanding.
  *
  * So a refused enqueue leaves a CLAIM, exactly as a wake does: whoever exchanges
  * it to zero owns the enqueue.  Both orders must produce exactly one enqueue --
@@ -1039,7 +1040,9 @@ static void test_sweep_drops_a_claim_for_a_blocked_thread(void) {
     check_invariants("blocked claim dropped");
 }
 
-/* Every scheduler tripwire must report through the LOCKING writer.
+/* Regression: 2026-08-16-tripwire-unlocked-writer (fixed 46bd8b5d26).
+ *
+ * Every scheduler tripwire must report through the LOCKING writer.
  *
  * The unlocked writers exist for fault handlers, where the lock may be held by
  * the CPU they interrupted.  A tripwire is not that: it fires on a live system,

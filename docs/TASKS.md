@@ -825,14 +825,35 @@ tail.
 
 ## Filesystems and Storage
 
-- [ ] [FEATURE][P2] Round-trip a file on FAT32, not just read one. The read side is
-  done: 28-bit FAT entries, the split start-cluster field, the chained root and
-  the 32-bit cluster type throughout (`tests/unit/test_fat_dir.c`). What has NOT
-  been exercised is mutation on a FAT32 volume -- create, write-through-grow,
-  unlink and mkdir all run through `fat_find_free_dir_slots`, which is still
-  single-cluster (see the entry below), and through `fat_fatent_write`'s FAT32
-  branch, which no test drives because the suite's block layer refuses writes.
-  Done when a FAT32 volume mounts and round-trips a file end to end.
+- [ ] [TEST][P2] Mount a FAT32 image produced by a real formatter. Every FAT32
+  test in the tree builds its volume from a BPB this repository hand-writes
+  (`tests/unit/test_fat_dir.c`), so the suite confirms the driver agrees with
+  our own reading of the specification -- it cannot catch a place where that
+  reading is wrong, because the same assumption wrote the image. The two
+  emulated paths do not close this either: QEMU synthesizes its FAT (vvfat), and
+  `scripts/run_bochs.sh` formats with `mkfs.vfat`/`newfs_msdos` but only as
+  FAT16. No `mkfs.vfat -F 32` image has ever been mounted by this driver.
+
+  The '..'-is-zero convention is the evidence that this matters: the code
+  derived `..` from the parent's real cluster, which is self-consistent and
+  readable by us, and wrong to every other implementation. It was found by
+  reading the specification, not by a test. Untested areas of the same kind:
+  FSInfo (never read or maintained), `BPB_ExtFlags` active-FAT/mirroring (the
+  write path fans out to all copies unconditionally), and a `bytes_per_sector`
+  other than 512.
+
+  Cheapest route: teach `scripts/run_bochs.sh` a FAT32 mode (it already formats
+  and populates a real image), or add a host fixture built by `mkfs.vfat -F 32`
+  at test time and skipped when the tool is absent.
+
+- [ ] [FEATURE][P2] Round-trip a file's DATA on FAT32. The metadata mutation paths
+  are covered (`tests/unit/test_fat_dir.c`: create, mkdir with its dot entries,
+  rmdir freeing the chain, `fat_append_cluster_to_file` linking a chain, and
+  `fat_fatent_write` preserving the reserved high nibble). What no host test
+  reaches is `fat_op_read`/`fat_op_write`, because both go through the client
+  transfer-buffer path the harness stubs out with aborts. Done when a FAT32
+  volume round-trips file contents end to end -- most naturally as an
+  integration test, since the transfer-buffer path is what needs a live system.
 - [ ] [ENHANCEMENT][P2] Apply the non-blocking reactor model to `fs-init` (currently a blocking
   dispatcher with no SEEK/STAT — `src/drivers/fs_init/fs_init.c:498-569`) and
   preserve the transfer-buffer ownership contract through all VFS relay paths.

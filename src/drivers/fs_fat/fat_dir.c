@@ -822,6 +822,14 @@ fat_r_t fat_create_directory(fat_mkdir_ctx_t* m, fat_block_t* blk, const fat_mou
          * need explicit parent-cluster tracking. */
         FAT_CO_FAIL(m, blk, WASMOS_ERR_FS_CORRUPT);
     }
+    /* The specification requires '..' to hold 0 when the parent IS the root
+     * directory.  On FAT32 the root is an ordinary cluster, so the derivation
+     * above yields its real number and it has to be mapped back to 0 -- other
+     * implementations reading this volume test '..' against 0, not against
+     * BPB_RootClus. */
+    if (mnt->fat_type == FAT_TYPE_32 && m->parent_cluster == mnt->root_cluster) {
+        m->parent_cluster = 0;
+    }
 
     /* Allocate a cluster + mark it end-of-chain. */
     m->findfree.cont = 0;

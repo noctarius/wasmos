@@ -27,6 +27,7 @@
 #include "fat_alloc.h"
 #include "fat_block.h"
 #include "fat_dir.h"
+#include "fat_file.h"
 #include "fat_geom.h"
 #include "fat_types.h"
 
@@ -97,14 +98,67 @@ void fat_block_set_err(fat_block_t* blk, int32_t err) {
     g_last_err = err;
 }
 
-/* Unreached by the read-only cases here; defined because fat_dir.c and
- * fat_alloc.c reference them, and a stub that silently succeeded would let a
- * mutation path appear to work. */
+/* Writes land in the image, so a mutation case can read back what the driver
+ * actually stored rather than trusting its return code.  Synchronous for the
+ * same reason fat_need_sector is: the coroutine completes in one call. */
 fat_r_t fat_block_write(fat_block_t* blk, uint32_t lba) {
+    if (lba >= g_image_sectors) {
+        return FAT_R_ERR;
+    }
+    memcpy(image_sector(lba), blk->sector, T_SECTOR);
+    blk->loaded_lba = lba;
+    return FAT_R_DONE;
+}
+
+void fat_block_invalidate(fat_block_t* blk) {
+    blk->loaded_lba = FAT_BLOCK_NO_LBA;
+}
+
+/* The client data path: reached only by fat_op_read/fat_op_write, which need
+ * the transfer-buffer plumbing this harness does not model.  They abort rather
+ * than return a plausible value, so a case that strayed onto the data path
+ * fails loudly instead of asserting against a fiction. */
+uint32_t fat_block_direct_sectors(const fat_block_t* blk) {
     (void)blk;
-    (void)lba;
-    assert(0 && "fat_block_write: no case here writes");
-    return FAT_R_ERR;
+    assert(0 && "fat_block_direct_sectors: no case here reads file data");
+    return 0;
+}
+
+int32_t fat_block_server_endpoint(const fat_block_t* blk) {
+    (void)blk;
+    assert(0 && "fat_block_server_endpoint: no case here reads file data");
+    return -1;
+}
+
+int32_t wasmos_xfer_buffer_read(int32_t buffer_id, int32_t dst, int32_t len, int32_t offset) {
+    (void)buffer_id;
+    (void)dst;
+    (void)len;
+    (void)offset;
+    assert(0 && "wasmos_xfer_buffer_read: no case here touches a client buffer");
+    return -1;
+}
+
+int32_t wasmos_xfer_buffer_reborrow(int32_t grantee, int32_t borrow_id, int32_t flags) {
+    (void)grantee;
+    (void)borrow_id;
+    (void)flags;
+    assert(0 && "wasmos_xfer_buffer_reborrow: no case here touches a client buffer");
+    return -1;
+}
+
+int32_t wasmos_xfer_buffer_write(int32_t buffer_id, int32_t src, int32_t len, int32_t offset) {
+    (void)buffer_id;
+    (void)src;
+    (void)len;
+    (void)offset;
+    assert(0 && "wasmos_xfer_buffer_write: no case here touches a client buffer");
+    return -1;
+}
+
+int32_t wasmos_xfer_buffer_size(void) {
+    assert(0 && "wasmos_xfer_buffer_size: no case here touches a client buffer");
+    return -1;
 }
 
 fat_r_t fat_block_read_direct(fat_block_t* blk, uint32_t lba, uint32_t count, int32_t buffer_id,
@@ -808,6 +862,278 @@ static void test_fat32_readdir_lists_the_root_chain(void) {
     free_volume();
 }
 
+/* --- FAT32 mutation ------------------------------------------------------
+ *
+ * These drive the WRITE paths, which the block layer above now lands in the
+ * image, so each case reads back what the driver actually stored rather than
+ * trusting a return code. Everything here stays inside the root's first
+ * cluster: fat_find_free_dir_slots is still single-cluster (see TASKS.md), and
+ * a case that needed a second cluster would be testing that gap, not FAT32. */
+
+/* Read a raw FAT32 table entry straight out of the image, reserved nibble and
+ * all -- deliberately not through fat_fatent_read, which masks it off. */
+static uint32_t fat32_get_raw(uint32_t cluster) {
+    uint32_t offset = cluster * 4u;
+    const uint8_t* p = image_sector(T32_FAT_LBA + (offset / T32_SECTOR)) + (offset % T32_SECTOR);
+
+    return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
+}
+
+/* The top four bits of a FAT32 entry belong to the volume, not to the cluster
+ * number being stored. Clearing them on write is a silent corruption of state
+ * the driver does not own, which no read-side case can detect. */
+static void test_fat32_fatent_write_preserves_reserved_bits(void) {
+    fat_mount_t mnt;
+    fat_block_t blk;
+    fat_fatent_ctx_t e;
+    fat_r_t r;
+
+    build_volume32();
+    /* Reserved nibble set, value irrelevant. */
+    fat32_set(T32_DIR_SECOND_CLUSTER, 0xA0000000u | 0x00000005u);
+    mount_volume32(&mnt, &blk);
+
+    memset(&e, 0, sizeof(e));
+    e.cluster = T32_DIR_SECOND_CLUSTER;
+    e.write_value = 0x0FFFFFFFu; /* end-of-chain */
+    r = fat_fatent_write(&e, &blk, &mnt);
+
+    CHECK(r == FAT_R_DONE, "FAT entry written");
+    CHECK((fat32_get_raw(T32_DIR_SECOND_CLUSTER) & 0x0FFFFFFFu) == 0x0FFFFFFFu,
+          "the 28-bit value is stored");
+    CHECK((fat32_get_raw(T32_DIR_SECOND_CLUSTER) & 0xF0000000u) == 0xA0000000u,
+          "the reserved high nibble survives the write");
+
+    free_volume();
+}
+
+/* A file created in the FAT32 root must be findable afterwards: the create path
+ * writes a dirent whose start-cluster field is split, into a root that is a
+ * cluster chain rather than a fixed region. */
+static void test_fat32_create_file_is_resolvable(void) {
+    fat_mount_t mnt;
+    fat_block_t blk;
+    fat_create_ctx_t c;
+    fat_resolve_ctx_t r;
+    fat_r_t rc;
+
+    build_volume32();
+    mount_volume32(&mnt, &blk);
+
+    memset(&c, 0, sizeof(c));
+    c.path = "/NEW.TXT";
+    c.source = -1;
+    rc = fat_create_empty_file(&c, &blk, &mnt);
+    CHECK(rc == FAT_R_DONE, "create completed");
+
+    memset(&r, 0, sizeof(r));
+    r.path = "/NEW.TXT";
+    r.source = -1;
+    rc = fat_resolve_path(&r, &blk, &mnt);
+
+    CHECK(rc == FAT_R_DONE, "resolve completed");
+    CHECK(r.found.valid == 1, "the created file resolves on a FAT32 volume");
+    CHECK(r.found.size == 0, "a new file is empty");
+
+    free_volume();
+}
+
+/* A start cluster above 0xFFFF must survive being WRITTEN, not just read: the
+ * high half goes to dirent bytes 20..21 and a store that dropped it would round
+ * the file's data to a different cluster. */
+static void test_fat32_create_stores_a_cluster_above_16_bits(void) {
+    fat_mount_t mnt;
+    fat_block_t blk;
+    fat_create_ctx_t c;
+    fat_resolve_ctx_t r;
+    fat_r_t rc;
+
+    build_volume32();
+    mount_volume32(&mnt, &blk);
+
+    memset(&c, 0, sizeof(c));
+    c.path = "/BIG.BIN";
+    c.source = -1;
+    c.attr = 0x20;
+    c.cluster = T32_TARGET_CLUSTER; /* 0x12345 */
+    c.size = 4096;
+    c.fail_if_exists = 1;
+    rc = fat_create_path_entry(&c, &blk, &mnt);
+    CHECK(rc == FAT_R_DONE, "create completed");
+
+    memset(&r, 0, sizeof(r));
+    r.path = "/BIG.BIN";
+    r.source = -1;
+    rc = fat_resolve_path(&r, &blk, &mnt);
+
+    CHECK(rc == FAT_R_DONE, "resolve completed");
+    CHECK(r.found.valid == 1, "the created entry resolves");
+    CHECK(r.found.cluster == T32_TARGET_CLUSTER, "a start cluster above 0xFFFF is stored intact");
+    CHECK(r.found.size == 4096u, "size is stored");
+
+    free_volume();
+}
+
+/* mkdir allocates a cluster, marks it end-of-chain and lays down '.' and '..'.
+ * On FAT32 the end-of-chain marker is 28-bit and the dot entries carry split
+ * cluster numbers, so this exercises three FAT32 paths at once. */
+static void test_fat32_mkdir_initialises_the_new_cluster(void) {
+    fat_mount_t mnt;
+    fat_block_t blk;
+    fat_mkdir_ctx_t m;
+    fat_resolve_ctx_t r;
+    fat_r_t rc;
+    const uint8_t* dir;
+
+    build_volume32();
+    mount_volume32(&mnt, &blk);
+
+    memset(&m, 0, sizeof(m));
+    m.path = "/NEWDIR";
+    m.source = -1;
+    rc = fat_create_directory(&m, &blk, &mnt);
+    CHECK(rc == FAT_R_DONE, "mkdir completed");
+
+    memset(&r, 0, sizeof(r));
+    r.path = "/NEWDIR";
+    r.source = -1;
+    rc = fat_resolve_path(&r, &blk, &mnt);
+    CHECK(rc == FAT_R_DONE, "resolve completed");
+    CHECK(r.found.valid == 1, "the new directory resolves");
+    CHECK((r.found.attr & 0x10) != 0, "it is marked a directory");
+    CHECK(r.found.cluster >= 2u, "it owns a real cluster");
+
+    if (r.found.valid && r.found.cluster >= 2u) {
+        CHECK((fat32_get_raw(r.found.cluster) & 0x0FFFFFFFu) == 0x0FFFFFFFu,
+              "its cluster is marked end-of-chain with the 28-bit FAT32 marker");
+        dir = cluster32_sector(r.found.cluster);
+        CHECK(dir[0] == '.' && dir[1] == ' ', "'.' is the first entry");
+        CHECK(dir[32] == '.' && dir[33] == '.', "'..' is the second entry");
+        CHECK(fat_dirent_cluster(dir) == r.found.cluster, "'.' points at the directory itself");
+        /* The specification requires 0 here when the parent is the root, even on
+         * FAT32 where the root has a real cluster number. Other implementations
+         * test '..' against 0, so writing BPB_RootClus would be readable by us
+         * and wrong to everyone else. */
+        CHECK(fat_dirent_cluster(dir + 32) == 0u, "'..' is 0 because the parent is the root");
+    }
+
+    free_volume();
+}
+
+/* rmdir must see the new directory as empty and then free its cluster: the
+ * emptiness walk, the entry tombstone and fat_free_cluster_chain all run
+ * against FAT32 here. */
+static void test_fat32_rmdir_frees_the_cluster(void) {
+    fat_mount_t mnt;
+    fat_block_t blk;
+    fat_mkdir_ctx_t m;
+    fat_remove_ctx_t rm;
+    fat_resolve_ctx_t r;
+    fat_r_t rc;
+    uint32_t dir_cluster;
+
+    build_volume32();
+    mount_volume32(&mnt, &blk);
+
+    memset(&m, 0, sizeof(m));
+    m.path = "/GONE";
+    m.source = -1;
+    rc = fat_create_directory(&m, &blk, &mnt);
+    CHECK(rc == FAT_R_DONE, "mkdir completed");
+    dir_cluster = m.cluster;
+
+    memset(&rm, 0, sizeof(rm));
+    rm.path = "/GONE";
+    rm.source = -1;
+    rm.is_rmdir = 1;
+    rc = fat_remove_path(&rm, &blk, &mnt, NULL, 0);
+    CHECK(rc == FAT_R_DONE, "rmdir completed");
+
+    memset(&r, 0, sizeof(r));
+    r.path = "/GONE";
+    r.source = -1;
+    rc = fat_resolve_path(&r, &blk, &mnt);
+    CHECK(rc == FAT_R_DONE, "resolve completed");
+    CHECK(r.found.valid == 0, "the removed directory no longer resolves");
+    if (dir_cluster >= 2u) {
+        CHECK((fat32_get_raw(dir_cluster) & 0x0FFFFFFFu) == 0u,
+              "its cluster is back on the free list");
+    }
+
+    free_volume();
+}
+
+/* Growing a file links its chain through fat_fatent_write twice: the new
+ * cluster gets the 28-bit end-of-chain marker, and the previous last cluster is
+ * repointed at it. On FAT32 both writes go through the 4-byte path, and the
+ * first-cluster write-back for a file that had none goes through the split
+ * dirent field. This is the chain half of a file round-trip; the data half
+ * needs the client transfer-buffer path, which this harness does not model. */
+static void test_fat32_append_cluster_links_the_chain(void) {
+    fat_mount_t mnt;
+    fat_block_t blk;
+    fat_create_ctx_t c;
+    fat_resolve_ctx_t r;
+    fat_open_file_t file;
+    fat_append_ctx_t ap;
+    fat_r_t rc;
+    uint32_t first;
+    uint32_t second;
+
+    build_volume32();
+    mount_volume32(&mnt, &blk);
+
+    memset(&c, 0, sizeof(c));
+    c.path = "/GROW.BIN";
+    c.source = -1;
+    rc = fat_create_empty_file(&c, &blk, &mnt);
+    CHECK(rc == FAT_R_DONE, "create completed");
+
+    memset(&r, 0, sizeof(r));
+    r.path = "/GROW.BIN";
+    r.source = -1;
+    rc = fat_resolve_path(&r, &blk, &mnt);
+    CHECK(rc == FAT_R_DONE && r.found.valid, "the new file resolves");
+
+    memset(&file, 0, sizeof(file));
+    file.in_use = 1;
+    file.owner = -1;
+    file.first_cluster = 0; /* empty: the first append must write the dirent back */
+    file.dir_lba = r.found.dir_lba;
+    file.dir_sector = r.found.dir_sector;
+    file.dir_index = r.found.dir_index;
+
+    memset(&ap, 0, sizeof(ap));
+    ap.file = &file;
+    rc = fat_append_cluster_to_file(&ap, &blk, &mnt);
+    CHECK(rc == FAT_R_DONE, "first append completed");
+    first = ap.new_cluster;
+    CHECK(first >= 2u, "a real cluster was allocated");
+    CHECK((fat32_get_raw(first) & 0x0FFFFFFFu) == 0x0FFFFFFFu, "the new cluster is end-of-chain");
+
+    /* The append must have written the start cluster back into the dirent, or
+     * the file's data would be unreachable after a reopen. */
+    memset(&r, 0, sizeof(r));
+    r.path = "/GROW.BIN";
+    r.source = -1;
+    rc = fat_resolve_path(&r, &blk, &mnt);
+    CHECK(rc == FAT_R_DONE && r.found.valid, "the file still resolves");
+    CHECK(r.found.cluster == first, "the first cluster is recorded in the directory entry");
+
+    /* A second append links the previous last cluster to the new one. */
+    file.first_cluster = first;
+    memset(&ap, 0, sizeof(ap));
+    ap.file = &file;
+    rc = fat_append_cluster_to_file(&ap, &blk, &mnt);
+    CHECK(rc == FAT_R_DONE, "second append completed");
+    second = ap.new_cluster;
+    CHECK(second >= 2u && second != first, "a distinct cluster was allocated");
+    CHECK((fat32_get_raw(first) & 0x0FFFFFFFu) == second, "the chain is linked first -> second");
+    CHECK((fat32_get_raw(second) & 0x0FFFFFFFu) == 0x0FFFFFFFu, "the tail is end-of-chain");
+
+    free_volume();
+}
+
 static const wasmos_test_void_case_t k_cases[] = {
     WASMOS_TEST_CASE(test_finds_entry_in_second_cluster),
     WASMOS_TEST_CASE(test_still_finds_entry_in_first_cluster),
@@ -823,6 +1149,12 @@ static const wasmos_test_void_case_t k_cases[] = {
     WASMOS_TEST_CASE(test_fat32_lookup_in_the_root_chain),
     WASMOS_TEST_CASE(test_fat32_start_cluster_above_16_bits_round_trips),
     WASMOS_TEST_CASE(test_fat32_readdir_lists_the_root_chain),
+    WASMOS_TEST_CASE(test_fat32_fatent_write_preserves_reserved_bits),
+    WASMOS_TEST_CASE(test_fat32_create_file_is_resolvable),
+    WASMOS_TEST_CASE(test_fat32_create_stores_a_cluster_above_16_bits),
+    WASMOS_TEST_CASE(test_fat32_mkdir_initialises_the_new_cluster),
+    WASMOS_TEST_CASE(test_fat32_rmdir_frees_the_cluster),
+    WASMOS_TEST_CASE(test_fat32_append_cluster_links_the_chain),
 };
 
 int main(void) {

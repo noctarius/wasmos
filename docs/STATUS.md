@@ -541,8 +541,14 @@ linked feature documents for rationale and rollout plans.
   region. `fat_root_origin` is the single place that knows which of those two a
   volume has, so resolve, readdir and chdir no longer open-code it. Cluster
   numbers are `uint32_t` throughout; a 16-bit field would have silently
-  addressed the wrong sector rather than erroring. Mutation on FAT32 is
-  untested — see `TASKS.md`.
+  addressed the wrong sector rather than erroring. Directory-level mutation is
+  covered too (create, mkdir, rmdir, chain append); file DATA read/write on
+  FAT32 is not, because it runs through the client transfer-buffer path.
+- Every FAT test builds its volume from a BPB this repository hand-writes, so
+  the suite proves the driver agrees with our reading of the specification, not
+  with a real formatter. QEMU synthesizes its FAT; `scripts/run_bochs.sh` uses a
+  genuine `mkfs.vfat` image but only FAT16. Treat FAT32 interop as unverified
+  until an `mkfs.vfat -F 32` image is mounted — see `TASKS.md`.
 - The WRITE side is still single-cluster: `fat_find_free_dir_slots` returns a
   flat entry index that the writer resolves against `dir_lba`, which is valid
   only within one contiguous run. A create into a directory whose first cluster

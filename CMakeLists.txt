@@ -2203,6 +2203,7 @@ add_custom_target(run-kernel-unit-tests
           ${DRIVER_WASM_DIR}/fs_fat/fat_geom.c
           ${DRIVER_WASM_DIR}/fs_fat/fat_alloc.c
           ${DRIVER_WASM_DIR}/fs_fat/fat_name.c
+          ${DRIVER_WASM_DIR}/fs_fat/fat_file.c
           ${DRIVER_WASM_DIR}/fs_fat/fat_util.c
           ${LIBC_DIR}/src/string.c
           -o ${BUILD_DIR}/test_fat_dir

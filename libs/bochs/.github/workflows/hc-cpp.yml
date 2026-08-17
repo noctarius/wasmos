@@ -1,0 +1,40 @@
+name: C/C++ CI
+
+on:
+  push:
+    branches: [ "*" ]
+  pull_request:
+    branches: [ "master" ]
+
+jobs:
+  build:
+
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v6
+
+    - name: Install packages
+      run: |
+        sudo apt-get update
+        sudo apt-get install libltdl-dev libx11-dev libgtk-3-dev libreadline-dev
+
+    - name: configure for release
+      run: cd bochs && ./.conf.gh-build-test release && make
+    - name: cleanup
+      run: make -C bochs all-clean
+
+    - name: configure i686 configuration
+      run: cd bochs && ./.conf.gh-build-test i686 && make
+    - name: cleanup
+      run: make -C bochs all-clean
+
+    - name: configure minimalistic configuration
+      run: cd bochs && ./.conf.gh-build-test nothing && make
+    - name: cleanup
+      run: make -C bochs all-clean
+
+    - name: configure maximum possible configuration
+      run: cd bochs && ./.conf.gh-build-test everything && make
+    - name: cleanup
+      run: make -C bochs all-clean

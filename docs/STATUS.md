@@ -527,14 +527,22 @@ linked feature documents for rationale and rollout plans.
   optional `/user`.
 - `fs-fat` is a single-threaded, non-blocking reactor: queued operation
   contexts are resumable stackless coroutines, while one active operation uses
-  the shared 8 KiB block/DMA buffer. It supports FAT12/16 and LFN, reports
-  `FS_ERR_*`, and binds to its requested block-device unit. FAT32 is detected at
-  mount but its cluster read/write is unimplemented.
+  the shared 8 KiB block/DMA buffer. It supports FAT12/16/32 and LFN, reports
+  `FS_ERR_*`, and binds to its requested block-device unit.
 - Every READ-side directory scan walks the whole cluster chain: lookup,
   short-name collision, the emptiness check `rmdir` depends on, and the readdir
   stream. Each is bounded by the volume's cluster count, so a corrupt cyclic
   chain fails `WASMOS_ERR_FS_CORRUPT` rather than hanging the reactor — an entry
   budget is deliberately not what terminates the walk.
+- FAT32 is served on the read path, not merely detected: 28-bit FAT entries
+  (the reserved top nibble is preserved on write, never treated as part of a
+  cluster number), the start cluster split across dirent bytes 26..27 and
+  20..21, and a ROOT that is an ordinary cluster chain rather than a fixed
+  region. `fat_root_origin` is the single place that knows which of those two a
+  volume has, so resolve, readdir and chdir no longer open-code it. Cluster
+  numbers are `uint32_t` throughout; a 16-bit field would have silently
+  addressed the wrong sector rather than erroring. Mutation on FAT32 is
+  untested — see `TASKS.md`.
 - The WRITE side is still single-cluster: `fat_find_free_dir_slots` returns a
   flat entry index that the writer resolves against `dir_lba`, which is valid
   only within one contiguous run. A create into a directory whose first cluster

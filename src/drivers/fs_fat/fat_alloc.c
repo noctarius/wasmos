@@ -6,12 +6,15 @@
 #include "fat_co.h"
 #include "wasmos_driver_abi.h"
 
-uint16_t fat_end_of_chain_marker(const fat_mount_t* mnt) {
+uint32_t fat_end_of_chain_marker(const fat_mount_t* mnt) {
     if (mnt->fat_type == FAT_TYPE_12) {
         return 0x0FFFu;
     }
     if (mnt->fat_type == FAT_TYPE_16) {
         return 0xFFFFu;
+    }
+    if (mnt->fat_type == FAT_TYPE_32) {
+        return 0x0FFFFFFFu; /* 28 significant bits; the top nibble is reserved */
     }
     return 0;
 }
@@ -30,7 +33,7 @@ uint32_t fat_total_clusters(const fat_mount_t* mnt) {
 
 fat_r_t fat_fatent_read(fat_fatent_ctx_t* e, fat_block_t* blk, const fat_mount_t* mnt) {
     uint32_t fat_offset;
-    uint16_t v;
+    uint32_t v;
 
     FAT_CO_BEGIN(e);
     if (e->cluster < 2) {
@@ -39,7 +42,9 @@ fat_r_t fat_fatent_read(fat_fatent_ctx_t* e, fat_block_t* blk, const fat_mount_t
     if (mnt->fat_type == FAT_TYPE_12) {
         fat_offset = e->cluster + (e->cluster / 2u);
     } else if (mnt->fat_type == FAT_TYPE_16) {
-        fat_offset = (uint32_t)e->cluster * 2u;
+        fat_offset = e->cluster * 2u;
+    } else if (mnt->fat_type == FAT_TYPE_32) {
+        fat_offset = e->cluster * 4u;
     } else {
         FAT_CO_FAIL(e, blk, WASMOS_ERR_FS_CORRUPT);
     }
@@ -55,7 +60,18 @@ fat_r_t fat_fatent_read(fat_fatent_ctx_t* e, fat_block_t* blk, const fat_mount_t
         e->hi = fat_block_sector(blk)[0];
     }
 
-    v = (uint16_t)e->lo | ((uint16_t)e->hi << 8);
+    /* A FAT32 entry is 4 bytes and, because bytes_per_sector is a multiple of 4,
+     * never straddles a sector edge -- unlike the FAT12 case handled above. */
+    if (mnt->fat_type == FAT_TYPE_32) {
+        e->b2 = fat_block_sector(blk)[e->sector_offset + 2u];
+        e->b3 = fat_block_sector(blk)[e->sector_offset + 3u];
+        v = (uint32_t)e->lo | ((uint32_t)e->hi << 8) | ((uint32_t)e->b2 << 16) |
+            ((uint32_t)e->b3 << 24);
+        e->value = v & 0x0FFFFFFFu; /* the top nibble is reserved, not part of the value */
+        FAT_CO_DONE(e);
+    }
+
+    v = (uint32_t)e->lo | ((uint32_t)e->hi << 8);
     if (mnt->fat_type == FAT_TYPE_12) {
         if (e->cluster & 1u) {
             v >>= 4;
@@ -79,7 +95,9 @@ fat_r_t fat_fatent_write(fat_fatent_ctx_t* e, fat_block_t* blk, const fat_mount_
     if (mnt->fat_type == FAT_TYPE_12) {
         e->fat_offset = e->cluster + (e->cluster / 2u);
     } else if (mnt->fat_type == FAT_TYPE_16) {
-        e->fat_offset = (uint32_t)e->cluster * 2u;
+        e->fat_offset = e->cluster * 2u;
+    } else if (mnt->fat_type == FAT_TYPE_32) {
+        e->fat_offset = e->cluster * 4u;
     } else {
         FAT_CO_FAIL(e, blk, WASMOS_ERR_FS_CORRUPT);
     }
@@ -109,6 +127,8 @@ fat_r_t fat_fatent_write(fat_fatent_ctx_t* e, fat_block_t* blk, const fat_mount_
     } else {
         e->lo = (uint8_t)(e->write_value & 0xFFu);
         e->hi = (uint8_t)((e->write_value >> 8) & 0xFFu);
+        e->b2 = (uint8_t)((e->write_value >> 16) & 0xFFu);
+        e->b3 = (uint8_t)((e->write_value >> 24) & 0x0Fu);
     }
 
     /* Store lo/hi at fat_offset in every FAT copy (read-modify-write). */
@@ -118,6 +138,18 @@ fat_r_t fat_fatent_write(fat_fatent_ctx_t* e, fat_block_t* blk, const fat_mount_
         e->sector_offset = e->fat_offset % mnt->bytes_per_sector;
 
         FAT_CO_READ(e, blk, e->fat_lba);
+        if (mnt->fat_type == FAT_TYPE_32) {
+            /* Four bytes, never straddling a sector edge. The top nibble of the
+             * on-disk entry is reserved and belongs to the volume, not to the
+             * value being stored, so it is carried over rather than cleared. */
+            fat_block_sector(blk)[e->sector_offset] = e->lo;
+            fat_block_sector(blk)[e->sector_offset + 1u] = e->hi;
+            fat_block_sector(blk)[e->sector_offset + 2u] = e->b2;
+            fat_block_sector(blk)[e->sector_offset + 3u] =
+                (uint8_t)((fat_block_sector(blk)[e->sector_offset + 3u] & 0xF0u) | e->b3);
+            FAT_CO_WRITE(e, blk, e->fat_lba);
+            continue;
+        }
         fat_block_sector(blk)[e->sector_offset] = e->lo;
         if (e->sector_offset + 1u < mnt->bytes_per_sector) {
             fat_block_sector(blk)[e->sector_offset + 1u] = e->hi;
@@ -134,7 +166,7 @@ fat_r_t fat_fatent_write(fat_fatent_ctx_t* e, fat_block_t* blk, const fat_mount_
 }
 
 fat_r_t fat_chain_next(fat_chain_ctx_t* c, fat_block_t* blk, const fat_mount_t* mnt) {
-    uint16_t v;
+    uint32_t v;
 
     FAT_CO_BEGIN(c);
     if (c->cluster < 2) {
@@ -147,7 +179,8 @@ fat_r_t fat_chain_next(fat_chain_ctx_t* c, fat_block_t* blk, const fat_mount_t* 
 
     v = c->ent.value;
     if ((mnt->fat_type == FAT_TYPE_12 && v >= 0x0FF8u) ||
-        (mnt->fat_type == FAT_TYPE_16 && v >= 0xFFF8u) || v < 2u) {
+        (mnt->fat_type == FAT_TYPE_16 && v >= 0xFFF8u) ||
+        (mnt->fat_type == FAT_TYPE_32 && v >= 0x0FFFFFF8u) || v < 2u) {
         c->next = 0; /* end-of-chain (not an error) */
     } else {
         c->next = v;

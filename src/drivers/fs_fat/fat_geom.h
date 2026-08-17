@@ -20,12 +20,13 @@ typedef struct {
     uint32_t fat_size; /* sectors per FAT */
     uint32_t total_sectors;
     fat_type_t fat_type;
-    uint32_t root_dir_lba;
-    uint32_t root_dir_sectors;
+    uint32_t root_dir_lba;     /* FAT12/16 fixed root region; 0 on FAT32 */
+    uint32_t root_dir_sectors; /* FAT12/16 fixed root region; 0 on FAT32 */
+    uint32_t root_cluster;     /* FAT32 root chain start (BPB_RootClus); 0 otherwise */
 
     /* Single current-working-directory navigation state (set by CHDIR). */
     int32_t cwd_source; /* endpoint that owns the cwd, or -1 */
-    uint16_t cwd_cluster;
+    uint32_t cwd_cluster;
     uint8_t cwd_root;
     vfs_mount_t cwd_mount;
     uint32_t dir_lba;     /* current dir first LBA (when not root) */
@@ -51,8 +52,17 @@ int fat_mount_ready(const fat_mount_t* mnt);
 fat_r_t fat_geom_mount_step(fat_mount_t* mnt, fat_block_t* blk);
 
 uint32_t fat_first_data_lba(const fat_mount_t* mnt);
-uint32_t fat_lba_for_cluster(const fat_mount_t* mnt, uint16_t cluster);
+uint32_t fat_lba_for_cluster(const fat_mount_t* mnt, uint32_t cluster);
 uint32_t fat_dir_entry_limit(const fat_mount_t* mnt, uint8_t root, uint32_t dir_sectors);
+
+/* Describe the root directory as a scan origin, the one place that knows how a
+ * volume addresses its root.  FAT12/16 have a fixed contiguous region
+ * (*out_root = 1, *out_cluster = 0); on FAT32 the root is an ordinary cluster
+ * chain starting at root_cluster, so *out_root = 0 and it scans through the
+ * same path as any subdirectory.  Returns 0, or -1 when the mount describes no
+ * usable root -- which callers report as "not found" rather than proceeding. */
+int fat_root_origin(const fat_mount_t* mnt, uint8_t* out_root, uint32_t* out_cluster,
+                    uint32_t* out_lba, uint32_t* out_sectors);
 
 /* First LBA of the FAT table region and the byte offset math base, for fat_alloc
  * (FAT-entry addressing): sector = fat_table_lba(mnt) + fat_offset/bytes_per_sec,

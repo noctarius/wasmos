@@ -641,6 +641,13 @@ thread_t* cpu_sched_pick_next(cpu_sched_t* cs) {
     return cpu_local()->idle_thread;
 }
 
+int cpu_sched_claim_for_dispatch(thread_t* t) {
+    if (!t) {
+        return 0;
+    }
+    return thread_transit(t, THREAD_STATE_READY, THREAD_STATE_RUNNING);
+}
+
 /* Requests a reschedule on the CALLING CPU only — the flag lives in cpu_local().
  * Marking another CPU's need_resched is not expressible here; that CPU notices
  * new work through its own tick or by stealing. */

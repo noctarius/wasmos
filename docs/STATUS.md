@@ -244,7 +244,10 @@ linked feature documents for rationale and rollout plans.
 - Scheduling is thread-centric. Ring-3 thread creation/join/detach/yield/exit
   and cooperative user-space reentrant mutexes are implemented. SMP has AP
   bring-up, per-CPU state, per-CPU ready queues with work-stealing, and
-  hardening for cross-CPU wake/reap/context races.
+  hardening for cross-CPU wake/reap/context races. Dispatch takes an exclusive
+  READY->RUNNING claim on the thread it is about to resume
+  (`cpu_sched_claim_for_dispatch`), which is what keeps two CPUs off one
+  `process_context_t` in the window between the pick and `current_thread`.
 - Process-manager state and core MM registries use dynamic/list-backed storage
   rather than small fixed process/context/region tables.
 

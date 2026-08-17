@@ -315,6 +315,30 @@ Runs `scripts/qemu_ring3_fault_storm_test.py` with up to 3 retry attempts.
 Asserts scheduler liveness under sustained concurrent fault load and checks
 that no forbidden error markers appear.
 
+#### Bochs Portability Check (manual, not a gate)
+
+```
+scripts/run_bochs.sh [--smp N] [--timeout SECONDS] [--quiet]
+```
+
+Boots the existing `build/esp` tree under the vendored Bochs (`libs/bochs`)
+instead of QEMU, exiting 0 once `WAMOS CLI` appears on the serial console.
+Bochs builds from a copy of the subtree, because SMP is a compile-time option
+there and a cached binary is only valid for the CPU count it was configured
+with.
+
+It is a second x86 implementation, not a faster or more deterministic one:
+every CPU is interpreted round-robin on a single host thread, so more CPUs
+divide one interpreter's throughput. One CPU reaches the prompt in roughly
+130 s and four in roughly 300 s. Run it to find assumptions that hold only on
+QEMU; do not run it in a loop.
+
+Unlike QEMU's synthesized FAT, the ESP here is a real FAT16 image, which is
+what makes on-disk filesystem geometry observable — `WASMOS_BOCHS_IMG_MB` and
+`WASMOS_BOCHS_CLUSTER_SECTORS` vary it deliberately. FAT16 is required because
+`fs_fat` detects FAT32 but serves no FAT-table access on it
+(`fat_geom.c`).
+
 ---
 
 ### Validation Constraints

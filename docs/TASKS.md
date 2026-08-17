@@ -1219,6 +1219,32 @@ Source: `architecture/25-diagnostics-status.md`,
   measure across configs and repeated boots first
   (`src/kernel/kernel_sched_smp_stress_runtime.c:140`).
 
+- [ ] [BUG][P1] The SMP scheduler stress gate panics intermittently: `FAIL: SMP
+  scheduler stress test did not pass (stalled ring)` preceded by a
+  `reason : cpu_exception` kernel panic. Two captures, both on the SMP defconfig
+  jobs, which are the only ones that run `run-qemu-sched-stress-test`:
+
+  - Run 31949875433, `wasm3_smp`, `a=0x0e` (page fault).
+  - Run 31970194315, `warp_smp`, `a=0x06` (invalid opcode) at
+    `rip=ffffffff803a2860`, where the bytes ARE `60 28 3A 80 FF FF FF FF` -- the
+    little-endian encoding of that same address. A CPU dispatched into a context
+    structure and executed a pointer as code, so this is a corrupted context
+    switch, not a bad jump target. CPU 1 was inside the WARP compiler
+    (`vb::Frontend::startCompilation`) at the time.
+
+  Not the whole-session wedge and not the diagnostics work: the first capture
+  predates both. Rate is roughly 2 of the last dozen CI runs' SMP jobs.
+
+  Reproducing needs a Linux x86 runner. Six consecutive local runs of the exact
+  CI configuration were clean:
+
+      cmake -S . -B build-warp_smp -DWASMOS_DOTCONFIG=configs/warp_smp_defconfig \
+            -DWASMOS_SCHED_SMP_STRESS=ON
+      cmake --build build-warp_smp --target run-qemu-sched-stress-test
+
+  which says nothing either way -- MTTCG on Apple Silicon masks memory-ordering
+  races, and this has the shape of one.
+
 - [ ] [BUG][P1] `test_virtio_net_notify_e2e` (the `notify rx=` / RX-frame-notify
   case) fails intermittently, roughly 1 run in 5: the guest stays alive and
   reaches `arp sent`, then no `notify rx=` arrives, so it fails as an assertion

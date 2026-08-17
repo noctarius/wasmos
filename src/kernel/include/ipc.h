@@ -244,6 +244,10 @@ void ipc_endpoints_release_owner(uint32_t owner_context_id);
  * ipc_select_wait blocks until any of them has a message or notification
  * ready, then returns the ready endpoint ID.  The caller then calls
  * ipc_recv_for / ipc_wait_for to consume the payload.
+ *
+ * Readiness is level-triggered: it is a property of the watched queues, which
+ * ipc_select_wait scans, not of the wake signal a send raises.  The signal only
+ * decides WHEN a parked waiter runs.
  */
 /* Select sets per kmem chunk. The select table, like the endpoint table, grows
  * on demand out of kmem, so this is a growth granularity and not a ceiling: the
@@ -279,11 +283,21 @@ int ipc_select_add(uint32_t select_id, uint32_t endpoint_id, uint32_t owner_cont
 /* Block until a watched endpoint is ready, or timeout_ms elapses (0 = forever).
  * On timeout returns IPC_EMPTY.
  *
- * Readiness is a single-slot LATCH, not a queue: two endpoints becoming ready
- * before the waiter runs report only the later one, so the caller must treat
- * the returned endpoint as a hint and be willing to poll the others. IPC_EMPTY
- * also covers a spurious wake and a set destroyed underneath the waiter -- all
- * three mean "loop". Owner-only (IPC_ERR_PERM); IPC_ERR_NOENT for an unknown
+ * Readiness is LEVEL-triggered: the wait reports an endpoint that holds a
+ * message or an unconsumed notification, whatever made it ready and whenever
+ * that happened. A send that lands before the endpoint joins the set, and two
+ * signals that collapse into one, are both still reported -- so a reactor that
+ * does nothing but wait, consume the endpoint it is handed, and wait again is
+ * correct, and does not have to re-poll its endpoints by hand.
+ *
+ * One endpoint is reported per wait, rotating, so a permanently readable
+ * endpoint cannot starve the rest of the set. Readiness that a caller does not
+ * consume is reported again rather than lost.
+ *
+ * IPC_EMPTY covers a timeout, a spurious wake and a set destroyed underneath
+ * the waiter -- all three mean "loop". A returned endpoint whose message a
+ * racing waiter took first reads back IPC_EMPTY, so the payload receive must
+ * tolerate that too. Owner-only (IPC_ERR_PERM); IPC_ERR_NOENT for an unknown
  * set, IPC_ERR_INVALID for a NULL out pointer. */
 int ipc_select_wait(uint32_t select_id, uint32_t owner_context_id, uint32_t* out_ready_ep,
                     uint32_t timeout_ms);

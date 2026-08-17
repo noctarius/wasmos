@@ -1264,8 +1264,8 @@ Source: `architecture/25-diagnostics-status.md`,
   stash`.** A previous attempt was unsound because a stash silently did not
   take, so both arms ran identical code and the result meant nothing.
 
-- [ ] [BUG][P2] Confirm the whole-session wedge stays fixed. It had TWO causes,
-  both fixed, and finding the second only because the first was gone is the
+- [ ] [BUG][P2] Confirm the whole-session wedge stays fixed. It had THREE causes,
+  all fixed, and finding each only because the previous one was gone is the
   reason this item stays open rather than closed on one green run.
 
   1. `46bd8b5d26` -- a READDIR's terminating `FS_IPC_RESP` was refused for a full
@@ -1278,11 +1278,22 @@ Source: `architecture/25-diagnostics-status.md`,
      `8c063c62f3`, on the second entry point. Its signature is
      `stranded(ready,no-rq)>0` plus a `[sched] enqueue current` line carrying
      `caller=`, which is the field that distinguishes the two copies.
+  3. Select-set readiness was edge-triggered: `ipc_select_wait` consulted only
+     the single-slot `ready_ep` latch, so a send that landed before
+     `ipc_select_add` registered the watcher raised no signal at all, and two
+     signals before a wait collapsed into one. Either way the message stayed
+     queued on an endpoint nobody was told about and its owner parked until an
+     unrelated later send re-armed the set. The wait now scans the watched
+     queues first, which makes the queues the authority. Its signature is a
+     blocked thread whose `wait=select:` line shows a watched endpoint with
+     `q>0` (CI run 32009665809: fs-fat parked on `ep:54(q=1)` holding
+     fs-manager's `type=0x420`, wedging the boot before the CLI).
 
   What would settle this: several consecutive green full-suite runs with no
-  `[diag]!    refused` line, and no `stranded(ready,no-rq)` that PERSISTS across
-  the dump's samples. Each marker names one of the two causes, so a recurrence
-  says immediately which mechanism came back.
+  `[diag]!    refused` line, no `stranded(ready,no-rq)` that PERSISTS across the
+  dump's samples, and no parked select waiter watching a `q>0` endpoint. Each
+  marker names one of the three causes, so a recurrence says immediately which
+  mechanism came back.
 
   Persistence is the whole test for the second marker, not a refinement of it. A
   single sample reporting `stranded=1` is normal: an enqueue claim published but

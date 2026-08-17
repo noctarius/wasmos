@@ -56,6 +56,10 @@ typedef struct ipc_select {
     uint32_t ready_ep; /* endpoint that triggered the wake */
     uint32_t ep_ids[IPC_SELECT_EPS_MAX];
     uint32_t ep_count;
+    /* Where the next readiness scan starts, so a permanently readable endpoint
+     * cannot monopolise every report and starve the rest of the set.  Protected
+     * by g_select_table_lock, the lock the scan itself runs under. */
+    uint32_t scan_cursor;
 } ipc_select_t;
 
 static idtable_t g_select_table;
@@ -729,6 +733,7 @@ int ipc_select_create(uint32_t owner_context_id, uint32_t* out_select_id) {
     }
     sel->ready_ep = IPC_ENDPOINT_NONE;
     sel->ep_count = 0;
+    sel->scan_cursor = 0;
     sched_event_init(&sel->event, SCHED_EVENT_TYPE_SELECT);
     *out_select_id = sel->header.id;
     ksync_spinlock_unlock(&g_select_table_lock);
@@ -750,8 +755,8 @@ int ipc_select_add(uint32_t select_id, uint32_t endpoint_id, uint32_t owner_cont
      * are the same -- so refusing would fail them at startup for a harmless
      * call.  Registering twice is worse than refusing: it burns one of only
      * IPC_SELECT_EPS_MAX watch slots and leaves two poll watchers, so a single
-     * send runs ipc_select_signal twice (invisibly, since ready_ep is a latch
-     * that swallows the second signal).
+     * send runs ipc_select_signal twice (invisibly, since the second signal
+     * only rewrites the latch, and readiness comes from the queue anyway).
      *
      * Checked before the capacity test on purpose: re-adding an endpoint to a
      * full set is still correct, because it is already being watched.
@@ -798,6 +803,72 @@ int ipc_select_add(uint32_t select_id, uint32_t endpoint_id, uint32_t owner_cont
     return IPC_OK;
 }
 
+/* Is this endpoint readable right now?  A message endpoint with a queued
+ * message and a notification endpoint with an unconsumed count are the two
+ * forms readiness takes, and ipc_select_add accepts both kinds. */
+static int ipc_endpoint_is_ready(uint32_t endpoint_id) {
+    ipc_endpoint_t* ep = ipc_endpoint_get(endpoint_id);
+    if (!ep) {
+        return 0;
+    }
+    int ready =
+        (ep->type == IPC_ENDPOINT_TYPE_NOTIFICATION) ? (ep->notify_count != 0) : (ep->count != 0);
+    ksync_spinlock_unlock(&ep->lock);
+    return ready;
+}
+
+/* Report the first watched endpoint that holds something, starting from
+ * sel->scan_cursor and advancing it past whatever is found.
+ *
+ * This is what makes a select set level-triggered.  ready_ep alone is an edge:
+ * a single latch, written by every signal, so readiness that is not consumed
+ * one-for-one is lost -- a send that lands before ipc_select_add registers the
+ * watcher raises no signal at all, and two signals before a wait collapse into
+ * one.  Either way the message stays queued on an endpoint nobody is told
+ * about, and the set's owner parks until some unrelated later send happens to
+ * re-arm it.  Scanning the queues makes the queues themselves the authority,
+ * so no reactor has to re-poll its endpoints by hand to be correct.
+ *
+ * Caller holds g_select_table_lock; this takes ep->lock per endpoint, which is
+ * the file-wide order (g_select_table_lock -> g_endpoint_table_lock ->
+ * ep->lock).  It must therefore run BEFORE sel->event.lock is taken, since an
+ * event lock is last in that order. */
+static int ipc_select_scan_ready(ipc_select_t* sel, uint32_t* out_ready_ep) {
+    if (sel->ep_count == 0) {
+        return 0;
+    }
+    if (sel->scan_cursor >= sel->ep_count) {
+        sel->scan_cursor = 0;
+    }
+    for (uint32_t n = 0; n < sel->ep_count; ++n) {
+        uint32_t i = (sel->scan_cursor + n) % sel->ep_count;
+        if (ipc_endpoint_is_ready(sel->ep_ids[i])) {
+            sel->scan_cursor = (i + 1u) % sel->ep_count;
+            *out_ready_ep = sel->ep_ids[i];
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* Drop the wake hint after a scan has answered the wait.
+ *
+ * Safe only on the path that returns to the caller, never on the path that goes
+ * on to block: the latch is the sole record of a signal that lands after the
+ * scan, so clearing it before parking would lose that wake.  On the returning
+ * path it carries nothing the queues do not -- whatever it names is either
+ * still queued, and so found by the next scan, or already drained.  Clearing it
+ * is what keeps a drained set from reporting one stale endpoint per idle
+ * transition.
+ *
+ * Caller holds g_select_table_lock and no endpoint lock, so taking event.lock
+ * here follows the file-wide order. */
+static void ipc_select_clear_latch(ipc_select_t* sel) {
+    ksync_spinlock_lock(&sel->event.lock);
+    sel->ready_ep = IPC_ENDPOINT_NONE;
+    ksync_spinlock_unlock(&sel->event.lock);
+}
+
 /* Consume the readiness latch.  Caller holds sel->event.lock, which the struct
  * comment names as the single authority for ready_ep.  Returns 1 if an
  * endpoint was taken. */
@@ -822,6 +893,19 @@ int ipc_select_wait(uint32_t select_id, uint32_t owner_context_id, uint32_t* out
     if (!sel) {
         ksync_spinlock_unlock(&g_select_table_lock);
         return find_rc;
+    }
+
+    /* Readiness is a property of the watched queues, so ask them first.  The
+     * latch below is only a wake hint; it can be stale, collapsed, or never
+     * have been written (see ipc_select_scan_ready).  Running the scan here,
+     * under the table lock and before any event lock, keeps the file-wide lock
+     * order and opens no lost-wakeup window: a signal that lands between this
+     * scan and the event.lock acquisition below writes ready_ep under that
+     * lock, so the take-and-clear still sees it. */
+    if (ipc_select_scan_ready(sel, out_ready_ep)) {
+        ipc_select_clear_latch(sel);
+        ksync_spinlock_unlock(&g_select_table_lock);
+        return IPC_OK;
     }
 
     /* Acquire event.lock BEFORE releasing g_select_table_lock.  It does two
@@ -864,6 +948,11 @@ int ipc_select_wait(uint32_t select_id, uint32_t owner_context_id, uint32_t* out
     if (!sel) {
         ksync_spinlock_unlock(&g_select_table_lock);
         return IPC_EMPTY;
+    }
+    if (ipc_select_scan_ready(sel, out_ready_ep)) {
+        ipc_select_clear_latch(sel);
+        ksync_spinlock_unlock(&g_select_table_lock);
+        return IPC_OK;
     }
     ksync_spinlock_lock(&sel->event.lock);
     ksync_spinlock_unlock(&g_select_table_lock);

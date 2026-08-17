@@ -251,11 +251,14 @@ typedef struct {
     uint32_t entry_limit;
     uint16_t cur_cluster;
     uint8_t cur_root;
-    /* Scan cursors. */
+    /* Scan cursors.  `entry_limit` budgets ONE cluster run and `entries_left` is
+     * refilled from it at each hop, so `hops` -- not the entry budget -- is what
+     * bounds the walk. */
     uint32_t entries_left;
     uint32_t cur_sector;
     uint32_t scan_index;
     uint32_t entries_total;
+    uint32_t hops; /* clusters visited, against a cyclic chain */
     fat_lfn_t lfn;
     fat_dir_entry_info_t found;
     fat_chain_ctx_t chain;

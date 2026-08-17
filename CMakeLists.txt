@@ -2182,6 +2182,31 @@ add_custom_target(run-kernel-unit-tests
           ${SERVICES_DIR}/fs_manager/fs_manager_path.c
           -o ${BUILD_DIR}/test_fs_manager_path
   COMMAND ${BUILD_DIR}/test_fs_manager_path
+  # FAT directory scanning over a cluster chain. The test supplies its own block
+  # layer (a RAM image served synchronously), so fat_block.c is deliberately NOT
+  # linked; fat_util.c is, because fat_geom.c logs through it.
+  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
+          -I${CMAKE_SOURCE_DIR}/tests/unit/include
+          -I${DRIVER_WASM_DIR}/fs_fat
+          -I${DRIVER_WASM_DIR}/include
+          -I${CMAKE_SOURCE_DIR}/abi/generated/c
+          -I${LIBSYS_WASM_DIR}/include
+          # Same reason as the device_manager suite above: route quote-includes
+          # to our libc headers (strcasecmp), leaving <angle> includes alone.
+          -iquote ${LIBC_DIR}/include
+          # fat_dir.c uses addr_cast without including the header that defines
+          # it, matching every other build of this tree (CFLAGS_KERNEL/EFI and
+          # the IDE targets all force-include it).
+          -include ${LIBC_DIR}/include/wasmos_cast.h
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_fat_dir.c
+          ${DRIVER_WASM_DIR}/fs_fat/fat_dir.c
+          ${DRIVER_WASM_DIR}/fs_fat/fat_geom.c
+          ${DRIVER_WASM_DIR}/fs_fat/fat_alloc.c
+          ${DRIVER_WASM_DIR}/fs_fat/fat_name.c
+          ${DRIVER_WASM_DIR}/fs_fat/fat_util.c
+          ${LIBC_DIR}/src/string.c
+          -o ${BUILD_DIR}/test_fat_dir
+  COMMAND ${BUILD_DIR}/test_fat_dir
   # Per-line IRQ sharer bookkeeping: pure logic, no arch dependency, so it runs on
   # the host (the x86 IRQ backend itself cannot — it carries inline asm).
   COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
@@ -3301,6 +3326,7 @@ wasmos_ide_index(wasmos_ide_unit
          ${CMAKE_SOURCE_DIR}/abi/generated/c
          ${SERVICES_DIR}/fs_manager ${SERVICES_DIR}/device_manager
          ${SERVICES_DIR}/net_stack
+         ${DRIVER_WASM_DIR}/fs_fat
          ${WASM3_DIR} ${WASM3_DIR}/source)
 
 wasmos_ide_index(wasmos_ide_tools

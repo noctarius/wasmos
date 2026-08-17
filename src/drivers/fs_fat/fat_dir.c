@@ -82,6 +82,7 @@ fat_r_t fat_find_in_dir(fat_dir_scan_ctx_t* s, fat_block_t* blk, const fat_mount
     }
 
     s->entries_left = s->entry_limit;
+    s->hops = 0;
     fat_lfn_reset(&s->lfn);
 
     /* Outer loop advances the directory: over the sectors of the current run,
@@ -137,16 +138,18 @@ fat_r_t fat_find_in_dir(fat_dir_scan_ctx_t* s, fat_block_t* blk, const fat_mount
         }
 
         /* Root region is a single contiguous run: no chain to follow. */
-        /* FIXME(fat-dir-multicluster): `entry_limit` is one cluster's worth of
-         * entries for a non-root directory (fat_dir_entry_limit), so
-         * `entries_left` reaches 0 at the end of the first cluster and this
-         * break fires before the chain hop below. Entries in a directory's
-         * second and later clusters are therefore never found; the budget must
-         * cover the whole chain, not one cluster. */
-        if (s->cur_root || s->entries_left == 0) {
+        if (s->cur_root) {
             break;
         }
-        /* Non-root: follow the cluster chain to the next cluster and rescan. */
+        /* Non-root: follow the cluster chain to the next cluster and rescan.
+         * `entry_limit` budgets one cluster run, so it is refilled per cluster
+         * below rather than spent across the chain; `hops` is what terminates
+         * the walk, because a corrupt volume can present a cyclic chain and no
+         * honest chain exceeds the volume's cluster count. */
+        if (s->hops >= fat_total_clusters(mnt)) {
+            FAT_CO_FAIL(s, blk, WASMOS_ERR_FS_CORRUPT);
+        }
+        s->hops++;
         s->chain.cont = 0;
         s->chain.cluster = s->cur_cluster;
         FAT_CO_AWAIT(s, fat_chain_next(&s->chain, blk, mnt));
@@ -159,6 +162,7 @@ fat_r_t fat_find_in_dir(fat_dir_scan_ctx_t* s, fat_block_t* blk, const fat_mount
         if (s->dir_lba == 0 || s->dir_sectors == 0) {
             break;
         }
+        s->entries_left = s->entry_limit;
     }
 
     fat_lfn_reset(&s->lfn);

@@ -1280,9 +1280,16 @@ Source: `architecture/25-diagnostics-status.md`,
      `caller=`, which is the field that distinguishes the two copies.
 
   What would settle this: several consecutive green full-suite runs with no
-  `[diag]!    refused` line and no `stranded(ready,no-rq)` above zero in any
-  stall dump. Both markers are cheap to grep for and each names one of the two
-  causes, so a recurrence says immediately which mechanism came back.
+  `[diag]!    refused` line, and no `stranded(ready,no-rq)` that PERSISTS across
+  the dump's samples. Each marker names one of the two causes, so a recurrence
+  says immediately which mechanism came back.
+
+  Persistence is the whole test for the second marker, not a refinement of it. A
+  single sample reporting `stranded=1` is normal: an enqueue claim published but
+  not yet settled looks identical to a stranded thread, and the dump takes its
+  samples ~1 s apart. Run 32009665809 shows exactly that -- `stranded=1` then
+  `stranded=0` on a healthy guest. The real one held across all three samples
+  while the thread's `disp` never moved.
 
 - [ ] [BUG][P1] `test_shmem_grant_revoke_pair` fails intermittently in the
   `scheduler-and-ipc` battery: `[test] shmem e2e forged id denied` never arrives,

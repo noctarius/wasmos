@@ -37,6 +37,12 @@ int fat_path_has_more(const char* path, uint32_t pos);
 
 /* --- Directory scan + path resolution (coroutines; contexts in fat_types.h). --- */
 
+/* Read/write a directory entry's first-cluster number, which FAT splits across
+ * bytes 26..27 (low half) and 20..21 (high half).  The high half is a reserved
+ * zero field on FAT12/16, so both are correct on every volume type. */
+uint32_t fat_dirent_cluster(const uint8_t* ent);
+void fat_dirent_set_cluster(uint8_t* ent, uint32_t cluster);
+
 /* Scan the directory described by s's inputs for s->target.  FAT_R_DONE (check
  * s->found.valid), FAT_R_WAIT, or FAT_R_ERR on I/O fault. */
 fat_r_t fat_find_in_dir(fat_dir_scan_ctx_t* s, fat_block_t* blk, const fat_mount_t* mnt);

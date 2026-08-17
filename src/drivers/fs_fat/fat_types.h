@@ -154,8 +154,8 @@ typedef struct {
     uint8_t in_use;
     int32_t owner;
     int32_t flags;
-    uint16_t first_cluster;
-    uint16_t current_cluster;
+    uint32_t first_cluster;
+    uint32_t current_cluster;
     uint32_t current_sector;
     uint32_t file_lba;
     uint32_t size;
@@ -178,7 +178,7 @@ typedef struct {
 typedef struct {
     uint8_t valid;
     uint8_t attr;
-    uint16_t cluster;
+    uint32_t cluster;
     uint32_t size;
     uint32_t dir_lba;
     uint32_t dir_sector;
@@ -201,10 +201,11 @@ typedef struct {
  * the rare 2-sector boundary; writes fan out across all FAT copies). */
 typedef struct {
     int cont;
-    uint16_t cluster;     /* entry index */
-    uint16_t value;       /* read result */
-    uint16_t write_value; /* value to store (write) */
-    uint8_t lo, hi;       /* the entry's two bytes */
+    uint32_t cluster;     /* entry index */
+    uint32_t value;       /* read result (28-bit on FAT32) */
+    uint32_t write_value; /* value to store (write) */
+    uint8_t lo, hi;       /* the entry's two bytes (FAT12/16) */
+    uint8_t b2, b3;       /* the upper two bytes (FAT32) */
     uint32_t copy_idx;    /* FAT copy being written */
     uint32_t fat_offset;  /* byte offset of the entry within a FAT copy */
     uint32_t fat_lba;     /* base lba of the entry's first byte (this copy) */
@@ -214,16 +215,16 @@ typedef struct {
 /* Resolve one cluster's successor.  next == 0 means end-of-chain. */
 typedef struct {
     int cont;
-    uint16_t cluster;
-    uint16_t next;
+    uint32_t cluster;
+    uint32_t next;
     fat_fatent_ctx_t ent;
 } fat_chain_ctx_t;
 
 /* Walk a cluster chain to its end (used for capacity and last-cluster). */
 typedef struct {
     int cont;
-    uint16_t cluster; /* cursor */
-    uint16_t last;    /* last cluster reached */
+    uint32_t cluster; /* cursor */
+    uint32_t last;    /* last cluster reached */
     uint32_t hops;    /* clusters visited */
     fat_chain_ctx_t step;
 } fat_chainwalk_ctx_t;
@@ -233,7 +234,7 @@ typedef struct {
     int cont;
     uint32_t cursor; /* current cluster index */
     uint32_t total;  /* total data clusters */
-    uint16_t result; /* found free cluster */
+    uint32_t result; /* found free cluster */
     fat_fatent_ctx_t ent;
 } fat_findfree_ctx_t;
 
@@ -249,7 +250,7 @@ typedef struct {
     uint32_t dir_lba;
     uint32_t dir_sectors;
     uint32_t entry_limit;
-    uint16_t cur_cluster;
+    uint32_t cur_cluster;
     uint8_t cur_root;
     /* Scan cursors.  `entry_limit` budgets ONE cluster run and `entries_left` is
      * refilled from it at each hop, so `hops` -- not the entry budget -- is what
@@ -271,7 +272,7 @@ typedef struct {
     int32_t source;
     uint32_t pos;
     uint8_t cur_root;
-    uint16_t cur_cluster;
+    uint32_t cur_cluster;
     uint32_t cur_lba;
     uint32_t cur_sectors;
     int comp_rc;
@@ -291,7 +292,7 @@ typedef struct {
     int32_t source;
     uint32_t pos;
     uint8_t cur_root;
-    uint16_t cur_cluster;
+    uint32_t cur_cluster;
     uint32_t cur_lba;
     uint32_t cur_sectors;
     int comp_rc;
@@ -309,8 +310,8 @@ typedef struct {
  * the rest of the chain. */
 typedef struct {
     int cont;
-    uint16_t cluster;      /* current cluster being freed */
-    uint16_t next;         /* resolved successor (before clearing) */
+    uint32_t cluster;      /* current cluster being freed */
+    uint32_t next;         /* resolved successor (before clearing) */
     uint8_t has_next;      /* 1 if `next` was resolved as an in-chain successor */
     fat_chain_ctx_t chain; /* successor lookup */
     fat_fatent_ctx_t ent;  /* clear-entry write */
@@ -324,7 +325,7 @@ typedef struct {
     uint32_t dir_sectors;
     uint32_t entry_limit;
     uint8_t short_name[11];
-    uint16_t cur_cluster; /* chain cursor; ignored when cur_root */
+    uint32_t cur_cluster; /* chain cursor; ignored when cur_root */
     uint8_t cur_root;
     uint32_t entries_left;
     uint32_t cur_sector;
@@ -380,7 +381,7 @@ typedef struct {
     int cont;
     uint32_t dir_lba;
     uint32_t dir_sectors;
-    uint16_t cur_cluster; /* chain cursor: the directory's first cluster on entry */
+    uint32_t cur_cluster; /* chain cursor: the directory's first cluster on entry */
     uint32_t entries_left;
     uint32_t cur_sector;
     uint32_t entries_total;
@@ -400,7 +401,7 @@ typedef struct {
     const char* path;
     int32_t source;
     uint8_t attr;
-    uint16_t cluster;
+    uint32_t cluster;
     uint32_t size;
     uint8_t fail_if_exists;
     /* Resolved-parent geometry. */
@@ -439,8 +440,8 @@ typedef struct {
     uint32_t dir_sectors;
     uint8_t root;
     char name[FAT_MAX_PATH];
-    uint16_t cluster;
-    uint16_t parent_cluster;
+    uint32_t cluster;
+    uint32_t parent_cluster;
     uint32_t cluster_lba;
     uint32_t sector; /* zero-fill cursor */
     uint8_t entry[32];
@@ -479,7 +480,7 @@ typedef struct {
     uint32_t dir_sectors;   /* span in sectors */
     uint32_t entries_left;  /* entries still to inspect in the current run */
     uint32_t entry_budget;  /* entries per run, refilled at each cluster hop */
-    uint16_t cur_cluster;   /* chain cursor; ignored when cur_root */
+    uint32_t cur_cluster;   /* chain cursor; ignored when cur_root */
     uint32_t cur_sector;    /* sector cursor within the run */
     uint32_t entries_total; /* entries in the sector currently staged */
     uint32_t scan_index;    /* entry cursor within the sector */
@@ -494,11 +495,15 @@ typedef struct {
  * yields; the per-directory scan cursors track the current sector being read. */
 typedef struct {
     int cont;
-    char path[32];          /* working copy of the target (from dir_name) */
-    uint32_t pos;           /* cursor into path[] */
-    char name[16];          /* current component being resolved */
-    uint8_t root;           /* running target: is-root flag */
-    uint16_t cluster;       /* running target: directory cluster */
+    char path[32];      /* working copy of the target (from dir_name) */
+    uint32_t pos;       /* cursor into path[] */
+    char name[16];      /* current component being resolved */
+    uint8_t root;       /* running target: is-root flag */
+    uint32_t cluster;   /* running target: directory cluster */
+    uint8_t root_probe; /* fat_root_origin output, latched at entry */
+    uint32_t root_cluster_probe;
+    uint32_t root_lba_probe;
+    uint32_t root_sectors_probe;
     uint32_t dir_lba;       /* first LBA of the directory being scanned */
     uint32_t dir_sectors;   /* span in sectors */
     uint32_t entries_left;  /* entries still to inspect in this directory */
@@ -519,12 +524,13 @@ typedef struct {
     uint32_t size;
 } fat_storesize_ctx_t;
 
-/* Read-modify-write the 2-byte first-cluster field (bytes 26..27) of a file's
- * directory entry.  Inputs: file + cluster latched by the caller. */
+/* Read-modify-write the first-cluster field of a file's directory entry: the
+ * low half at bytes 26..27 and, on FAT32, the high half at bytes 20..21.
+ * Inputs: file + cluster latched by the caller. */
 typedef struct {
     int cont;
     fat_open_file_t* file;
-    uint16_t cluster;
+    uint32_t cluster;
 } fat_storecluster_ctx_t;
 
 /* Reposition an open file to an absolute offset (walks the cluster chain when
@@ -543,9 +549,9 @@ typedef struct {
 typedef struct {
     int cont;
     fat_open_file_t* file;
-    uint16_t new_cluster;
-    uint16_t last_cluster;
-    uint16_t end_marker;
+    uint32_t new_cluster;
+    uint32_t last_cluster;
+    uint32_t end_marker;
     fat_findfree_ctx_t findfree;  /* free-cluster search */
     fat_fatent_ctx_t fatent;      /* EOC / link writes */
     fat_storecluster_ctx_t store; /* first-cluster patch */
@@ -669,7 +675,7 @@ typedef struct fat_op_ctx {
     char chdir_path[32];
     uint32_t chdir_pos;
     char chdir_name[16];
-    uint16_t chdir_cluster;
+    uint32_t chdir_cluster;
     uint8_t chdir_root;
     uint32_t chdir_dir_lba;
     uint32_t chdir_dir_sectors;

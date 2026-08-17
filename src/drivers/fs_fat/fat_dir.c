@@ -67,6 +67,27 @@ int fat_path_has_more(const char* path, uint32_t pos) {
     return path[pos] != '\0';
 }
 
+/* --- On-disk start-cluster field. ---
+ *
+ * A directory entry splits its first-cluster number: the low half at bytes
+ * 26..27 and the high half at bytes 20..21.  The high half is zero on FAT12/16
+ * (where it is a reserved field), so reading both is correct on every volume
+ * type and writing both keeps a FAT12/16 entry byte-identical to what the older
+ * two-byte store produced. */
+uint32_t fat_dirent_cluster(const uint8_t* ent) {
+    uint32_t lo = (uint32_t)ent[26] | ((uint32_t)ent[27] << 8);
+    uint32_t hi = (uint32_t)ent[20] | ((uint32_t)ent[21] << 8);
+
+    return (hi << 16) | lo;
+}
+
+void fat_dirent_set_cluster(uint8_t* ent, uint32_t cluster) {
+    ent[26] = (uint8_t)(cluster & 0xFFu);
+    ent[27] = (uint8_t)((cluster >> 8) & 0xFFu);
+    ent[20] = (uint8_t)((cluster >> 16) & 0xFFu);
+    ent[21] = (uint8_t)((cluster >> 24) & 0xFFu);
+}
+
 /* --- Directory scan. --- */
 
 fat_r_t fat_find_in_dir(fat_dir_scan_ctx_t* s, fat_block_t* blk, const fat_mount_t* mnt) {
@@ -124,7 +145,7 @@ fat_r_t fat_find_in_dir(fat_dir_scan_ctx_t* s, fat_block_t* blk, const fat_mount
 
                 s->found.valid = 1;
                 s->found.attr = ent[11];
-                s->found.cluster = (uint16_t)ent[26] | ((uint16_t)ent[27] << 8);
+                s->found.cluster = fat_dirent_cluster(ent);
                 s->found.size = (uint32_t)ent[28] | ((uint32_t)ent[29] << 8) |
                                 ((uint32_t)ent[30] << 16) | ((uint32_t)ent[31] << 24);
                 s->found.dir_lba = s->dir_lba;
@@ -175,14 +196,10 @@ fat_r_t fat_resolve_path(fat_resolve_ctx_t* r, fat_block_t* blk, const fat_mount
     FAT_CO_BEGIN(r);
 
     r->found.valid = 0;
-    if (!r->path || mnt->root_entry_count == 0 || mnt->root_dir_sectors == 0) {
+    if (!r->path ||
+        fat_root_origin(mnt, &r->cur_root, &r->cur_cluster, &r->cur_lba, &r->cur_sectors) != 0) {
         FAT_CO_DONE(r);
     }
-
-    r->cur_root = 1;
-    r->cur_cluster = 0;
-    r->cur_lba = mnt->root_dir_lba;
-    r->cur_sectors = mnt->root_dir_sectors;
     r->pos = 0;
 
     /* Relative path from the owning endpoint's cwd (when cwd is a subdir). */
@@ -209,10 +226,10 @@ fat_r_t fat_resolve_path(fat_resolve_ctx_t* r, fat_block_t* blk, const fat_mount
             /* TODO: '..' jumps to the root region instead of the true parent —
              * the on-disk '..' entry is never consulted, so "a/b/../c" resolves
              * against the root rather than against "a". */
-            r->cur_root = 1;
-            r->cur_cluster = 0;
-            r->cur_lba = mnt->root_dir_lba;
-            r->cur_sectors = mnt->root_dir_sectors;
+            if (fat_root_origin(mnt, &r->cur_root, &r->cur_cluster, &r->cur_lba, &r->cur_sectors) !=
+                0) {
+                FAT_CO_DONE(r);
+            }
             if (!fat_path_has_more(r->path, r->pos)) {
                 FAT_CO_DONE(r);
             }
@@ -257,14 +274,10 @@ fat_r_t fat_resolve_parent_dir(fat_resolve_parent_ctx_t* p, fat_block_t* blk,
     FAT_CO_BEGIN(p);
 
     p->found.valid = 0;
-    if (!p->path || mnt->root_entry_count == 0 || mnt->root_dir_sectors == 0) {
+    if (!p->path ||
+        fat_root_origin(mnt, &p->cur_root, &p->cur_cluster, &p->cur_lba, &p->cur_sectors) != 0) {
         FAT_CO_DONE(p);
     }
-
-    p->cur_root = 1;
-    p->cur_cluster = 0;
-    p->cur_lba = mnt->root_dir_lba;
-    p->cur_sectors = mnt->root_dir_sectors;
     p->pos = 0;
 
     if (p->path[0] != '\0' && p->path[0] != '/' && p->source == mnt->cwd_source && !mnt->cwd_root &&
@@ -287,10 +300,10 @@ fat_r_t fat_resolve_parent_dir(fat_resolve_parent_ctx_t* p, fat_block_t* blk,
             continue;
         }
         if (p->component[0] == '.' && p->component[1] == '.' && p->component[2] == '\0') {
-            p->cur_root = 1;
-            p->cur_cluster = 0;
-            p->cur_lba = mnt->root_dir_lba;
-            p->cur_sectors = mnt->root_dir_sectors;
+            if (fat_root_origin(mnt, &p->cur_root, &p->cur_cluster, &p->cur_lba, &p->cur_sectors) !=
+                0) {
+                FAT_CO_DONE(p);
+            }
             if (!fat_path_has_more(p->path, p->pos)) {
                 FAT_CO_DONE(p);
             }
@@ -702,8 +715,7 @@ fat_r_t fat_create_path_entry(fat_create_ctx_t* c, fat_block_t* blk, const fat_m
         c->entry[i] = c->short_name[i];
     }
     c->entry[11] = c->attr;
-    c->entry[26] = (uint8_t)(c->cluster & 0xFFu);
-    c->entry[27] = (uint8_t)((c->cluster >> 8) & 0xFFu);
+    fat_dirent_set_cluster(c->entry, c->cluster);
     c->entry[28] = (uint8_t)(c->size & 0xFFu);
     c->entry[29] = (uint8_t)((c->size >> 8) & 0xFFu);
     c->entry[30] = (uint8_t)((c->size >> 16) & 0xFFu);
@@ -745,7 +757,7 @@ fat_r_t fat_create_empty_file(fat_create_ctx_t* c, fat_block_t* blk, const fat_m
 }
 
 /* Derive a directory's starting cluster from its first LBA; pure geometry. */
-static int fat_dir_cluster_from_lba(const fat_mount_t* mnt, uint32_t dir_lba, uint16_t* out) {
+static int fat_dir_cluster_from_lba(const fat_mount_t* mnt, uint32_t dir_lba, uint32_t* out) {
     uint32_t first_data = fat_first_data_lba(mnt);
     uint32_t rel;
 
@@ -764,7 +776,7 @@ static int fat_dir_cluster_from_lba(const fat_mount_t* mnt, uint32_t dir_lba, ui
     return 0;
 }
 
-static void fat_fill_dot_dir_entry(uint8_t entry[32], uint8_t dots, uint16_t cluster) {
+static void fat_fill_dot_dir_entry(uint8_t entry[32], uint8_t dots, uint32_t cluster) {
     uint32_t i;
 
     for (i = 0; i < 32u; ++i) {
@@ -776,8 +788,7 @@ static void fat_fill_dot_dir_entry(uint8_t entry[32], uint8_t dots, uint16_t clu
         entry[i] = ' ';
     }
     entry[11] = 0x10;
-    entry[26] = (uint8_t)(cluster & 0xFFu);
-    entry[27] = (uint8_t)((cluster >> 8) & 0xFFu);
+    fat_dirent_set_cluster(entry, cluster);
 }
 
 fat_r_t fat_create_directory(fat_mkdir_ctx_t* m, fat_block_t* blk, const fat_mount_t* mnt) {
@@ -1075,25 +1086,23 @@ fat_r_t fat_op_readdir(fat_op_ctx_t* op, fat_block_t* blk, const fat_mount_t* mn
 
     FAT_CO_BEGIN(s);
 
-    /* Root region must exist; a non-root cwd must be valid. */
-    if (mnt->root_entry_count == 0 || mnt->root_dir_sectors == 0) {
-        fat_log("root listing unsupported\n");
-        FAT_CO_FAIL(s, blk, WASMOS_ERR_FS_NOT_FOUND);
-    }
-    if (!mnt->cwd_root && mnt->dir_lba == 0) {
-        fat_log("cwd invalid\n");
-        FAT_CO_FAIL(s, blk, WASMOS_ERR_FS_NOT_FOUND);
-    }
-
     /* Latch the region being listed: the scan reads these, not mnt, so a CHDIR
-     * that lands between this op and the next cannot shift the listing. */
-    s->cur_root = mnt->cwd_root ? 1u : 0u;
-    if (s->cur_root) {
-        s->base_lba = mnt->root_dir_lba;
-        s->dir_sectors = mnt->root_dir_sectors;
-        s->entry_budget = mnt->root_entry_count;
-        s->cur_cluster = 0;
+     * that lands between this op and the next cannot shift the listing.  A cwd
+     * of "root" resolves through fat_root_origin, which on FAT32 yields an
+     * ordinary cluster chain rather than a fixed region. */
+    if (mnt->cwd_root) {
+        if (fat_root_origin(mnt, &s->cur_root, &s->cur_cluster, &s->base_lba, &s->dir_sectors) !=
+            0) {
+            fat_log("root listing unsupported\n");
+            FAT_CO_FAIL(s, blk, WASMOS_ERR_FS_NOT_FOUND);
+        }
+        s->entry_budget = fat_dir_entry_limit(mnt, s->cur_root, s->dir_sectors);
     } else {
+        if (mnt->dir_lba == 0) {
+            fat_log("cwd invalid\n");
+            FAT_CO_FAIL(s, blk, WASMOS_ERR_FS_NOT_FOUND);
+        }
+        s->cur_root = 0;
         s->base_lba = mnt->dir_lba;
         s->dir_sectors = mnt->dir_sectors;
         s->entry_budget = (mnt->dir_sectors * mnt->bytes_per_sector) / 32u;
@@ -1259,8 +1268,10 @@ static int fat_chdir_next_component(fat_chdir_ctx_t* c) {
  * and read the first sector.  Returns 0, or -1 if the cluster maps to no LBA.
  * Pure setup: the read itself is issued by the caller via FAT_CO_READ. */
 static int fat_chdir_begin_dir(fat_chdir_ctx_t* c, const fat_mount_t* mnt, uint8_t root,
-                               uint16_t cluster) {
+                               uint32_t cluster) {
     if (root) {
+        /* Reachable only on FAT12/16: fat_root_origin reports FAT32's root as a
+         * non-root cluster, so this branch never sees one. */
         c->dir_lba = mnt->root_dir_lba;
         c->dir_sectors = mnt->root_dir_sectors;
         c->cur_sector = 0;
@@ -1297,7 +1308,11 @@ fat_r_t fat_op_chdir(fat_op_ctx_t* op, fat_block_t* blk, fat_mount_t* mnt) {
         FAT_CO_DONE(c);
     }
 
-    if (mnt->root_entry_count == 0 || mnt->root_dir_sectors == 0) {
+    if (fat_root_origin(mnt,
+                        &c->root_probe,
+                        &c->root_cluster_probe,
+                        &c->root_lba_probe,
+                        &c->root_sectors_probe) != 0) {
         FAT_CO_FAIL(c, blk, WASMOS_ERR_FS_NOT_FOUND);
     }
 
@@ -1309,8 +1324,8 @@ fat_r_t fat_op_chdir(fat_op_ctx_t* op, fat_block_t* blk, fat_mount_t* mnt) {
     c->path[j] = '\0';
     c->pos = 0;
     if (c->path[0] == '/') {
-        c->root = 1;
-        c->cluster = 0;
+        c->root = c->root_probe;
+        c->cluster = c->root_cluster_probe;
         c->pos = 1;
     } else {
         c->root = mnt->cwd_root;
@@ -1367,7 +1382,7 @@ fat_r_t fat_op_chdir(fat_op_ctx_t* op, fat_block_t* blk, fat_mount_t* mnt) {
                 }
                 const char* entry_name = 0;
                 char entry[13];
-                uint16_t cluster;
+                uint32_t cluster;
                 if (c->lfn.valid && c->lfn.seen == c->lfn.total && c->lfn.buf[0]) {
                     fat_lfn_finalize(&c->lfn);
                     entry_name = c->lfn.buf;
@@ -1390,7 +1405,7 @@ fat_r_t fat_op_chdir(fat_op_ctx_t* op, fat_block_t* blk, fat_mount_t* mnt) {
                     fat_lfn_reset(&c->lfn);
                     continue;
                 }
-                cluster = (uint16_t)ent[26] | ((uint16_t)ent[27] << 8);
+                cluster = fat_dirent_cluster(ent);
                 if (cluster < 2) {
                     fat_lfn_reset(&c->lfn);
                     FAT_CO_FAIL(c, blk, WASMOS_ERR_FS_NOT_DIR);

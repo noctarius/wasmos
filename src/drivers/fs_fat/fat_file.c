@@ -165,8 +165,7 @@ fat_r_t fat_store_open_file_cluster(fat_storecluster_ctx_t* c, fat_block_t* blk,
     }
     FAT_CO_READ(c, blk, c->file->dir_lba + c->file->dir_sector);
     ent = fat_block_sector(blk) + c->file->dir_index * 32u;
-    ent[26] = (uint8_t)(c->cluster & 0xFFu);
-    ent[27] = (uint8_t)((c->cluster >> 8) & 0xFFu);
+    fat_dirent_set_cluster(ent, c->cluster);
     FAT_CO_WRITE(c, blk, c->file->dir_lba + c->file->dir_sector);
     c->file->first_cluster = c->cluster;
     FAT_CO_END(c);

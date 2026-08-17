@@ -825,11 +825,14 @@ tail.
 
 ## Filesystems and Storage
 
-- [ ] [FEATURE][P2] Implement FAT32 cluster read/write in the FAT-table layer: FAT32 is
-  detected at mount (`fat_geom.c:92`) but `fat_fatent_read`/`fat_fatent_write`
-  return `FS_ERR_CORRUPT` and `fat_chain_next` decodes only FAT12/16 and stores
-  clusters as `uint16_t` (truncation) (`src/drivers/fs_fat/fat_alloc.c:43-44,83-84,148-154`).
-  Done when a FAT32 `/user` volume mounts and round-trips a file.
+- [ ] [FEATURE][P2] Round-trip a file on FAT32, not just read one. The read side is
+  done: 28-bit FAT entries, the split start-cluster field, the chained root and
+  the 32-bit cluster type throughout (`tests/unit/test_fat_dir.c`). What has NOT
+  been exercised is mutation on a FAT32 volume -- create, write-through-grow,
+  unlink and mkdir all run through `fat_find_free_dir_slots`, which is still
+  single-cluster (see the entry below), and through `fat_fatent_write`'s FAT32
+  branch, which no test drives because the suite's block layer refuses writes.
+  Done when a FAT32 volume mounts and round-trips a file end to end.
 - [ ] [ENHANCEMENT][P2] Apply the non-blocking reactor model to `fs-init` (currently a blocking
   dispatcher with no SEEK/STAT — `src/drivers/fs_init/fs_init.c:498-569`) and
   preserve the transfer-buffer ownership contract through all VFS relay paths.
@@ -858,14 +861,21 @@ tail.
   existing VFS/backends have clear mount, ownership, and recovery semantics.
 
 
-- [ ] [BUG][P1] Serve FAT32 or refuse the mount. `fat_parse_boot` detects it, then every
-  `fat_fatent_read/write` fails `WASMOS_ERR_FS_CORRUPT` and
-  `fat_end_of_chain_marker` returns 0, so the volume mounts unusable
-  (`src/drivers/fs_fat/fat_geom.c:94` `TODO`).
 - [ ] [BUG][P1] Honour `mnt->bytes_per_sector` in `fat_block_start`. The transfer is fixed
   at `FAT_SECTOR_SIZE` (512) while `fat_parse_boot` accepts 1024/2048/4096 and
   the FAT/dir code then parses `bytes_per_sector` bytes out of the staged
   sector, silently truncating (`src/drivers/fs_fat/fat_block.c:58` `TODO`).
+- [ ] [BUG][P1] Walk the cluster chain in CHDIR's own directory scan. `fat_op_chdir`
+  does not use `fat_find_in_dir`; it carries a hand-written scan with a `goto
+  rescan` that stops when the current cluster's sectors are exhausted
+  (`fat_dir.c`, `WASMOS_ERR_FS_NOT_FOUND` after "Exhausted the directory's
+  sectors"). Now that every other read-side scan walks the chain, this is an
+  inconsistency a user can observe: `ls /a/b` finds an entry that `cd /a/b`
+  reports as missing, when the entry lives past its parent's first cluster.
+  It has its own loop shape rather than the shared one, which is why it was not
+  converted with the others; the cleanest fix is to make it call
+  `fat_find_in_dir` instead of duplicating a scan.
+
 - [ ] [BUG][P1] Address directory slots by (cluster, index) rather than by a flat
   offset from `dir_lba`, so a directory can be written past its first cluster --
   and then grow. The four READ-side scans now walk the chain

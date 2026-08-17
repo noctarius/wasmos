@@ -10,7 +10,7 @@ uint32_t fat_first_data_lba(const fat_mount_t* mnt) {
     return mnt->root_dir_lba + mnt->root_dir_sectors;
 }
 
-uint32_t fat_lba_for_cluster(const fat_mount_t* mnt, uint16_t cluster) {
+uint32_t fat_lba_for_cluster(const fat_mount_t* mnt, uint32_t cluster) {
     if (cluster < 2) {
         return 0;
     }
@@ -22,6 +22,34 @@ uint32_t fat_dir_entry_limit(const fat_mount_t* mnt, uint8_t root, uint32_t dir_
         return mnt->root_entry_count;
     }
     return (dir_sectors * mnt->bytes_per_sector) / 32u;
+}
+
+int fat_root_origin(const fat_mount_t* mnt, uint8_t* out_root, uint32_t* out_cluster,
+                    uint32_t* out_lba, uint32_t* out_sectors) {
+    if (!mnt || !out_root || !out_cluster || !out_lba || !out_sectors) {
+        return -1;
+    }
+    if (mnt->fat_type == FAT_TYPE_32) {
+        /* The root is an ordinary directory that happens to start at
+         * root_cluster, so it scans through the same chain-walking path as any
+         * subdirectory and `root` is 0. */
+        if (mnt->root_cluster < 2 || mnt->sectors_per_cluster == 0) {
+            return -1;
+        }
+        *out_root = 0;
+        *out_cluster = mnt->root_cluster;
+        *out_lba = fat_lba_for_cluster(mnt, mnt->root_cluster);
+        *out_sectors = mnt->sectors_per_cluster;
+        return *out_lba == 0 ? -1 : 0;
+    }
+    if (mnt->root_entry_count == 0 || mnt->root_dir_sectors == 0) {
+        return -1;
+    }
+    *out_root = 1;
+    *out_cluster = 0;
+    *out_lba = mnt->root_dir_lba;
+    *out_sectors = mnt->root_dir_sectors;
+    return 0;
 }
 
 uint32_t fat_table_lba(const fat_mount_t* mnt) {
@@ -87,13 +115,14 @@ static int fat_parse_boot(fat_mount_t* mnt, const uint8_t* sector) {
     mnt->total_sectors = total_sectors;
     mnt->root_dir_sectors = root_dir_sectors;
     mnt->root_dir_lba = mnt->boot_lba + bpb->reserved_sectors + (bpb->fat_count * fat_size);
+    /* BPB_RootClus, at offset 44 of the boot sector = ext[8..11]. Meaningful only
+     * on FAT32, where the root directory is an ordinary cluster chain and the
+     * fixed root region above is empty. */
+    mnt->root_cluster = ((const uint32_t*)bpb->ext)[2];
 
     /* Cluster-count thresholds per the FAT specification: < 4085 is FAT12,
      * < 65525 is FAT16, everything else FAT32 (which also has no fixed-size root
-     * directory, hence root_entry_count == 0).
-     * TODO: FAT32 is only detected, never served — the mount succeeds but every
-     * FAT-table access then fails with WASMOS_ERR_FS_CORRUPT (fat_alloc.c),
-     * because 32-bit entries and a cluster-chained root are unimplemented. */
+     * directory, hence root_entry_count == 0). */
     if (bpb->root_entry_count == 0) {
         mnt->fat_type = FAT_TYPE_32;
         fat_log("FAT32 detected\n");
@@ -106,6 +135,10 @@ static int fat_parse_boot(fat_mount_t* mnt, const uint8_t* sector) {
     } else {
         mnt->fat_type = FAT_TYPE_32;
         fat_log("FAT32 detected\n");
+    }
+    if (mnt->fat_type == FAT_TYPE_32 && mnt->root_cluster < 2) {
+        fat_log("FAT32 root cluster invalid\n");
+        return -1;
     }
     return 0;
 }

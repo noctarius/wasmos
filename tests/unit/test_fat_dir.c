@@ -69,10 +69,11 @@ typedef struct wasmos_msi_desc wasmos_msi_desc_t;
 /* --- Fake block layer (replaces fat_block.c). --- */
 
 static uint8_t* g_image;
+static uint32_t g_image_sectors; /* size of the volume currently built */
 static int32_t g_last_err;
 
 static uint8_t* image_sector(uint32_t lba) {
-    assert(lba < T_TOTAL_SECTORS);
+    assert(lba < g_image_sectors);
     return g_image + ((size_t)lba * T_SECTOR);
 }
 
@@ -83,7 +84,7 @@ uint8_t* fat_block_sector(fat_block_t* blk) {
 /* Synchronous by construction: the sector is already in memory, so this never
  * reports FAT_R_WAIT and no caller here ever has to be resumed. */
 fat_r_t fat_need_sector(fat_block_t* blk, uint32_t lba) {
-    if (lba >= T_TOTAL_SECTORS) {
+    if (lba >= g_image_sectors) {
         return FAT_R_ERR;
     }
     memcpy(blk->sector, image_sector(lba), T_SECTOR);
@@ -225,6 +226,7 @@ static void build_volume(int filler_deleted) {
 
     g_image = calloc(T_TOTAL_SECTORS, T_SECTOR);
     assert(g_image != NULL);
+    g_image_sectors = T_TOTAL_SECTORS;
 
     boot = image_sector(0);
     boot[0] = 0xEB; /* jump */
@@ -276,6 +278,7 @@ static void build_volume(int filler_deleted) {
 static void free_volume(void) {
     free(g_image);
     g_image = NULL;
+    g_image_sectors = 0;
 }
 
 /* Mount the image through the real geometry parser rather than hand-filling
@@ -559,6 +562,252 @@ static void test_readdir_lists_entries_in_second_cluster(void) {
     free_volume();
 }
 
+/* --- FAT32 ---------------------------------------------------------------
+ *
+ * A second volume, because FAT32 differs from FAT16 in three ways that the
+ * cases below separate deliberately: 32-bit FAT entries (28 significant bits),
+ * a start cluster whose high half lives at dirent offset 20-21, and a ROOT
+ * directory that is an ordinary cluster chain rather than a fixed region.
+ *
+ * The geometry is spec-legal rather than merely accepted: fat_parse_boot keys
+ * FAT32 off root_entry_count == 0 and would take a tiny volume, but a cluster
+ * count below 65525 is a FAT16 volume by the specification and a test that
+ * relied on the shortcut would not be testing FAT32. Hence ~69k clusters and a
+ * 35 MB image -- calloc leaves it lazily mapped, and the cases touch a handful
+ * of sectors. */
+
+#define T32_SECTOR 512u
+#define T32_SECTORS_PER_CLUSTER 1u
+#define T32_RESERVED 32u
+#define T32_FAT_COUNT 1u
+#define T32_FAT_SECTORS 550u
+#define T32_TOTAL_SECTORS 70000u
+
+#define T32_FAT_LBA T32_RESERVED
+#define T32_FIRST_DATA_LBA (T32_RESERVED + (T32_FAT_COUNT * T32_FAT_SECTORS))
+#define T32_ENTRIES_PER_CLUSTER ((T32_SECTOR * T32_SECTORS_PER_CLUSTER) / 32u)
+
+#define T32_ROOT_CLUSTER 2u
+#define T32_DIR_FIRST_CLUSTER 3u
+#define T32_DIR_SECOND_CLUSTER 4u
+
+/* Deliberately above 0xFFFF: a start cluster that a 16-bit field truncates,
+ * which is what makes the width of the cluster type observable. */
+#define T32_TARGET_CLUSTER 0x12345u
+
+static uint8_t* cluster32_sector(uint32_t cluster) {
+    return image_sector(T32_FIRST_DATA_LBA + (cluster - 2u));
+}
+
+/* Store a FAT32 chain entry. Only the low 28 bits are the cluster number; the
+ * top 4 are reserved and must survive a write, which test_fat32_fatent_write_
+ * preserves_reserved_bits checks. */
+static void fat32_set(uint32_t cluster, uint32_t value) {
+    uint32_t offset = cluster * 4u;
+    uint8_t* p = image_sector(T32_FAT_LBA + (offset / T32_SECTOR)) + (offset % T32_SECTOR);
+    put32(p, value);
+}
+
+/* FAT32 splits a start cluster across two dirent fields: low half at 26-27 (as
+ * on FAT16) and high half at 20-21. */
+static void put_dirent32(uint8_t* base, uint32_t index, const char* name, uint8_t attr,
+                         uint32_t cluster, uint32_t size) {
+    uint8_t* slot = dirent_slot(base, index);
+
+    memset(slot, 0, 32);
+    memcpy(slot, name, 11);
+    slot[11] = attr;
+    put16(slot + 20, (uint16_t)((cluster >> 16) & 0xFFFFu));
+    put16(slot + 26, (uint16_t)(cluster & 0xFFFFu));
+    put32(slot + 28, size);
+}
+
+static void build_volume32(void) {
+    uint8_t* boot;
+    uint8_t* root;
+    uint8_t* cluster1;
+    uint8_t* cluster2;
+    char filler[12];
+    uint32_t i;
+
+    g_image = calloc(T32_TOTAL_SECTORS, T32_SECTOR);
+    assert(g_image != NULL);
+    g_image_sectors = T32_TOTAL_SECTORS;
+
+    boot = image_sector(0);
+    boot[0] = 0xEB;
+    boot[1] = 0x58;
+    boot[2] = 0x90;
+    memcpy(boot + 3, "WASMOS32", 8);
+    put16(boot + 11, (uint16_t)T32_SECTOR);
+    boot[13] = (uint8_t)T32_SECTORS_PER_CLUSTER;
+    put16(boot + 14, (uint16_t)T32_RESERVED);
+    boot[16] = (uint8_t)T32_FAT_COUNT;
+    put16(boot + 17, 0);                 /* root_entry_count: 0 marks FAT32 */
+    put16(boot + 19, 0);                 /* total_sectors_16: 0, the 32-bit field is used */
+    boot[21] = 0xF8;                     /* media */
+    put16(boot + 22, 0);                 /* fat_size_16: 0, FATSz32 below is used */
+    put32(boot + 32, T32_TOTAL_SECTORS); /* total_sectors_32 */
+    put32(boot + 36, T32_FAT_SECTORS);   /* FATSz32  (bpb->ext[0..3]) */
+    put32(boot + 44, T32_ROOT_CLUSTER);  /* BPB_RootClus (bpb->ext[8..11]) */
+    put16(boot + 510, 0xAA55);
+
+    fat32_set(0, 0x0FFFFFF8u);
+    fat32_set(1, 0x0FFFFFFFu);
+    /* The root is a single-cluster chain; the subdirectory spans two. */
+    fat32_set(T32_ROOT_CLUSTER, 0x0FFFFFFFu);
+    fat32_set(T32_DIR_FIRST_CLUSTER, T32_DIR_SECOND_CLUSTER);
+    fat32_set(T32_DIR_SECOND_CLUSTER, 0x0FFFFFFFu);
+
+    root = cluster32_sector(T32_ROOT_CLUSTER);
+    put_dirent32(root, 0, "SUB        ", 0x10, T32_DIR_FIRST_CLUSTER, 0);
+    put_dirent32(root, 1, "INROOT  TXT", 0x20, 0x0099u, 7u);
+
+    cluster1 = cluster32_sector(T32_DIR_FIRST_CLUSTER);
+    put_dirent32(cluster1, 0, ".          ", 0x10, T32_DIR_FIRST_CLUSTER, 0);
+    put_dirent32(cluster1, 1, "..         ", 0x10, 0, 0);
+    for (i = 2; i < T32_ENTRIES_PER_CLUSTER; ++i) {
+        memcpy(filler, "FILLER00   ", 12);
+        filler[6] = (char)('0' + (char)((i - 2u) / 10u));
+        filler[7] = (char)('0' + (char)((i - 2u) % 10u));
+        put_dirent32(cluster1, i, filler, 0x20, 0x100u + i, 16u);
+    }
+
+    cluster2 = cluster32_sector(T32_DIR_SECOND_CLUSTER);
+    put_dirent32(cluster2, 0, "TARGET  TXT", 0x20, T32_TARGET_CLUSTER, T_TARGET_SIZE);
+}
+
+static void mount_volume32(fat_mount_t* mnt, fat_block_t* blk) {
+    fat_r_t r;
+
+    memset(blk, 0, sizeof(*blk));
+    blk->loaded_lba = FAT_BLOCK_NO_LBA;
+    fat_mount_init(mnt);
+
+    r = fat_geom_mount_step(mnt, blk);
+    assert(r == FAT_R_DONE && "FAT32 mount failed: the case cannot say anything about scanning");
+    assert(fat_mount_ready(mnt));
+    assert(mnt->fat_type == FAT_TYPE_32);
+    assert(fat_first_data_lba(mnt) == T32_FIRST_DATA_LBA);
+}
+
+/* The mount must describe a FAT32 volume rather than merely accept it: the root
+ * is a cluster, not a fixed region, and everything else keys off that. */
+static void test_fat32_mount_reports_a_chained_root(void) {
+    fat_mount_t mnt;
+    fat_block_t blk;
+
+    build_volume32();
+    mount_volume32(&mnt, &blk);
+
+    CHECK(mnt.fat_type == FAT_TYPE_32, "volume is detected as FAT32");
+    CHECK(mnt.root_cluster == T32_ROOT_CLUSTER, "root cluster comes from BPB_RootClus");
+    CHECK(mnt.root_entry_count == 0, "FAT32 has no fixed root entry count");
+    CHECK(mnt.fat_size == T32_FAT_SECTORS, "FAT size comes from FATSz32");
+    CHECK(fat_total_clusters(&mnt) >= 65525u, "cluster count is in the FAT32 range");
+
+    free_volume();
+}
+
+/* A FAT32 FAT entry is 32 bits with only the low 28 significant, so a chain hop
+ * must mask rather than truncate. */
+static void test_fat32_chain_next_reads_a_28_bit_entry(void) {
+    fat_mount_t mnt;
+    fat_block_t blk;
+    fat_chain_ctx_t c;
+    fat_r_t r;
+
+    build_volume32();
+    /* Top nibble set: reserved bits that must be ignored, not read as part of
+     * the cluster number. */
+    fat32_set(T32_DIR_FIRST_CLUSTER, 0xF0000000u | T32_DIR_SECOND_CLUSTER);
+    mount_volume32(&mnt, &blk);
+
+    memset(&c, 0, sizeof(c));
+    c.cluster = T32_DIR_FIRST_CLUSTER;
+    r = fat_chain_next(&c, &blk, &mnt);
+
+    CHECK(r == FAT_R_DONE, "chain hop completed");
+    CHECK(c.next == T32_DIR_SECOND_CLUSTER, "successor ignores the reserved high nibble");
+
+    free_volume();
+}
+
+/* The FAT32 root directory is an ordinary chain, so a lookup in it must work
+ * without the fixed-region machinery FAT12/16 uses. */
+static void test_fat32_lookup_in_the_root_chain(void) {
+    fat_mount_t mnt;
+    fat_block_t blk;
+    fat_resolve_ctx_t r;
+    fat_r_t rc;
+
+    build_volume32();
+    mount_volume32(&mnt, &blk);
+
+    memset(&r, 0, sizeof(r));
+    r.path = "/INROOT.TXT";
+    r.source = -1;
+    rc = fat_resolve_path(&r, &blk, &mnt);
+
+    CHECK(rc == FAT_R_DONE, "resolve completed");
+    CHECK(r.found.valid == 1, "a name in the FAT32 root chain resolves");
+    CHECK(r.found.cluster == 0x0099u, "resolved entry carries its start cluster");
+
+    free_volume();
+}
+
+/* A start cluster above 0xFFFF must survive the dirent's split representation
+ * (high half at offset 20-21) and every cluster field it passes through. A
+ * 16-bit cluster type truncates this to 0x2345 and silently addresses the
+ * wrong data. */
+static void test_fat32_start_cluster_above_16_bits_round_trips(void) {
+    fat_mount_t mnt;
+    fat_block_t blk;
+    fat_resolve_ctx_t r;
+    fat_r_t rc;
+
+    build_volume32();
+    mount_volume32(&mnt, &blk);
+
+    memset(&r, 0, sizeof(r));
+    r.path = "/SUB/TARGET.TXT";
+    r.source = -1;
+    rc = fat_resolve_path(&r, &blk, &mnt);
+
+    CHECK(rc == FAT_R_DONE, "resolve completed");
+    CHECK(r.found.valid == 1, "entry in the subdirectory's second cluster resolves");
+    CHECK(r.found.cluster == T32_TARGET_CLUSTER, "a start cluster above 0xFFFF is not truncated");
+    CHECK(r.found.size == T_TARGET_SIZE, "resolved entry carries its size");
+
+    free_volume();
+}
+
+/* Listing the FAT32 root exercises the chained-root path in READDIR, which on
+ * FAT12/16 is the fixed-region branch. */
+static void test_fat32_readdir_lists_the_root_chain(void) {
+    fat_mount_t mnt;
+    fat_block_t blk;
+    fat_op_ctx_t op;
+    fat_r_t r;
+
+    build_volume32();
+    mount_volume32(&mnt, &blk);
+
+    memset(&op, 0, sizeof(op));
+    op.source = 7;
+    op.request_id = 1;
+    g_stream_len = 0;
+    g_stream[0] = '\0';
+
+    r = fat_op_readdir(&op, &blk, &mnt, 9);
+
+    CHECK(r == FAT_R_DONE, "readdir completed");
+    CHECK(strstr(g_stream, "INROOT.TXT") != NULL, "FAT32 root listing includes its entries");
+    CHECK(strstr(g_stream, "SUB") != NULL, "FAT32 root listing includes its subdirectory");
+
+    free_volume();
+}
+
 static const wasmos_test_void_case_t k_cases[] = {
     WASMOS_TEST_CASE(test_finds_entry_in_second_cluster),
     WASMOS_TEST_CASE(test_still_finds_entry_in_first_cluster),
@@ -569,6 +818,11 @@ static const wasmos_test_void_case_t k_cases[] = {
     WASMOS_TEST_CASE(test_child_in_second_cluster_makes_directory_not_empty),
     WASMOS_TEST_CASE(test_directory_with_no_children_is_still_empty),
     WASMOS_TEST_CASE(test_readdir_lists_entries_in_second_cluster),
+    WASMOS_TEST_CASE(test_fat32_mount_reports_a_chained_root),
+    WASMOS_TEST_CASE(test_fat32_chain_next_reads_a_28_bit_entry),
+    WASMOS_TEST_CASE(test_fat32_lookup_in_the_root_chain),
+    WASMOS_TEST_CASE(test_fat32_start_cluster_above_16_bits_round_trips),
+    WASMOS_TEST_CASE(test_fat32_readdir_lists_the_root_chain),
 };
 
 int main(void) {

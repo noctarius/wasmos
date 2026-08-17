@@ -699,11 +699,11 @@ static void test_teardown_racing_senders_is_memory_safe(void) {
 
 /* ------------------------------------------------- select under contention */
 
-/* The service-side receive loop, written the way the contract requires: the
- * readiness latch is a single slot, so concurrent signals collapse and a
- * consumer that trusted select_recv alone would strand messages. On EMPTY it
- * re-polls every watched endpoint — which is also what makes the completion
- * condition here reachable rather than a hang. */
+/* The service-side receive loop. select_recv alone is enough -- readiness is
+ * level-triggered, so a message stays reported until it is taken -- but the
+ * loop still drains every watched endpoint on EMPTY, which is what a real
+ * reactor sharing its endpoints with other consumers has to do to be sure it
+ * lost a race rather than been starved. */
 static void* select_waiter_thread(void* p) {
     worker_arg_t* a = (worker_arg_t*)p;
     uint32_t sel = (uint32_t)(uintptr_t)a->aux;

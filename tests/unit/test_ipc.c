@@ -1104,10 +1104,16 @@ static void test_select_is_signalled_by_a_send_to_a_watched_endpoint(void) {
     CHECK(ready == b, "and names the right endpoint");
     CHECK(g_yield_calls == 0, "a pre-signalled set does not block");
 
-    /* The readiness latch is consumed: the next wait must not re-report it. */
-    CHECK(ipc_select_wait(sel, ctx, &ready, 0) == IPC_EMPTY,
-          "the readiness latch is cleared by the wait that reported it");
-    CHECK(g_yield_calls == 1, "so the second wait actually blocks");
+    /* Readiness is the queue, so it persists until the message is taken: a
+     * caller that ignores the report is told again rather than losing it. */
+    CHECK(ipc_select_wait(sel, ctx, &ready, 0) == IPC_OK && ready == b,
+          "an unconsumed message is still ready on the next wait");
+    CHECK(g_yield_calls == 0, "and still does not block");
+
+    ipc_message_t got;
+    CHECK(ipc_recv_for(ctx, b, &got) == IPC_OK, "once the caller drains it");
+    CHECK(ipc_select_wait(sel, ctx, &ready, 0) == IPC_EMPTY, "the set reports nothing ready");
+    CHECK(g_yield_calls == 1, "so that wait actually blocks");
 
     ipc_select_destroy(sel, ctx);
     ipc_endpoints_release_owner(ctx);
@@ -1722,20 +1728,19 @@ static void test_adding_the_same_endpoint_twice_is_a_no_op(void) {
      * set is full -- there is nothing to allocate. */
     CHECK(ipc_select_add(sel, ep, ctx) == IPC_OK, "a duplicate is still accepted on a full set");
 
-    /* And the endpoint is watched exactly once, so one message yields one
-     * readiness report. A second watcher would fire ipc_select_signal twice;
-     * that is masked today by ready_ep being a latch, so the slot accounting
-     * above is what actually proves the dedupe -- this pins the behaviour the
-     * caller sees. */
+    /* And the endpoint is watched exactly once, so one message is one message:
+     * a second registration would leave the set ready again after the single
+     * message is drained. The slot accounting above proves the dedupe on the
+     * inside; this pins the behaviour the caller sees. */
     CHECK(ksend(ep, 1u) == IPC_OK, "one message arrives on the endpoint");
     uint32_t ready = 0;
     CHECK(ipc_select_wait(sel, ctx, &ready, 0) == IPC_OK && ready == ep,
           "the set reports it ready");
-    CHECK(ipc_select_wait(sel, ctx, &ready, 0) == IPC_EMPTY,
-          "and reports it exactly once, not once per registration");
     CHECK(count_of(ep) == 1, "with a single message actually queued");
     ipc_message_t got;
     CHECK(ipc_recv_for(ctx, ep, &got) == IPC_OK && got.arg0 == 1u, "which the caller drains");
+    CHECK(ipc_select_recv(sel, ctx, &ready, &got, 0) == IPC_EMPTY,
+          "after which nothing is ready, not one report per registration");
 
     /* Destroy must clear BOTH entries. A surviving one would point at a table
      * slot the next service gets handed. */
@@ -1782,8 +1787,11 @@ static void test_listen_tolerates_a_repeated_endpoint(void) {
 
     CHECK(ksend(a, 5u) == IPC_OK, "a message arrives on the repeated endpoint");
     uint32_t ready = 0;
-    CHECK(ipc_select_wait(sel, ctx, &ready, 0) == IPC_OK && ready == a, "the set reports it ready");
-    CHECK(ipc_select_wait(sel, ctx, &ready, 0) == IPC_EMPTY, "exactly once");
+    ipc_message_t got;
+    CHECK(ipc_select_recv(sel, ctx, &ready, &got, 0) == IPC_OK && ready == a,
+          "the set reports it ready");
+    CHECK(ipc_select_recv(sel, ctx, &ready, &got, 0) == IPC_EMPTY,
+          "and the one message is one message, not one per registration");
 
     /* The endpoint that was NOT repeated still works — the duplicate did not
      * displace it. */
@@ -1877,10 +1885,16 @@ static void test_a_full_set_reports_each_of_its_endpoints(void) {
     ipc_endpoints_release_owner(ctx);
 }
 
-/* ready_ep is a single latch, not a queue. Two sends before a wait collapse to
- * one report — which is why the documented contract is "re-poll every watched
- * endpoint", not "handle the one you were told about". */
-static void test_the_readiness_latch_is_last_writer_wins(void) {
+/* ready_ep is a single latch, so two sends before a wait collapse to one
+ * signal. Readiness is a property of the queues, not of that latch: a wait
+ * reports every endpoint that still holds a message, one wait at a time, so the
+ * collapsed signal costs a report but strands nothing.
+ *
+ * Regression: 2026-08-17-select-edge-triggered-wedge — the latch used to be the
+ * only readiness source, so the collapsed send was invisible until an unrelated
+ * later send re-armed the set. Boot wedged with fs-fat parked on a select whose
+ * fs endpoint held fs-manager's queued request (CI run 32009665809). */
+static void test_a_collapsed_latch_still_reports_every_ready_endpoint(void) {
     uint32_t ctx = fresh_ctx();
     uint32_t a = 0, b = 0, sel = 0;
     (void)ipc_endpoint_create(ctx, &a);
@@ -1890,12 +1904,121 @@ static void test_the_readiness_latch_is_last_writer_wins(void) {
 
     CHECK(ksend(a, 1u) == IPC_OK, "the first endpoint gets a message");
     CHECK(ksend(b, 2u) == IPC_OK, "then the second");
-    uint32_t ready = 0;
-    CHECK(ipc_select_wait(sel, ctx, &ready, 0) == IPC_OK, "the set reports ready");
-    CHECK(ready == b, "naming the most recent signal");
+
+    /* Drain the way a reactor does: wait, receive the endpoint named, repeat.
+     * Both messages must come out without the loop ever re-polling by hand. */
+    uint32_t seen_a = 0, seen_b = 0;
+    for (int i = 0; i < 2; ++i) {
+        uint32_t ready = IPC_ENDPOINT_NONE;
+        ipc_message_t got;
+        if (ipc_select_recv(sel, ctx, &ready, &got, 0) != IPC_OK) {
+            break;
+        }
+        if (ready == a && got.arg0 == 1u) {
+            seen_a++;
+        }
+        if (ready == b && got.arg0 == 2u) {
+            seen_b++;
+        }
+    }
+    CHECK(seen_a == 1, "the collapsed signal's message is still delivered");
+    CHECK(seen_b == 1, "as is the one that overwrote the latch");
+
+    /* A drained set can still hand back the stale latch once -- the "message
+     * already taken by a racing waiter" case the contract names -- and the
+     * receive behind it answers IPC_EMPTY rather than looping. */
+    uint32_t ready = IPC_ENDPOINT_NONE;
+    ipc_message_t none;
+    CHECK(ipc_select_recv(sel, ctx, &ready, &none, 0) == IPC_EMPTY,
+          "and a drained set yields nothing");
+
+    ipc_select_destroy(sel, ctx);
+    ipc_endpoints_release_owner(ctx);
+}
+
+/* A send that lands before ipc_select_add registers the watcher raises no
+ * signal for the set, because the set does not exist as far as that endpoint is
+ * concerned yet. The window is wide and routinely open: a service publishes its
+ * endpoint, announces itself ready, and only then builds its reactor's set, so
+ * a peer's first request can arrive in between.
+ *
+ * Regression: 2026-08-17-select-edge-triggered-wedge — such a message was
+ * unreachable for the life of the set, which is how a boot wedged with a
+ * message queued on a watched endpoint and its owner parked. */
+static void test_select_reports_a_message_queued_before_the_watch(void) {
+    uint32_t ctx = fresh_ctx();
+    uint32_t ep = 0, sel = 0;
+    CHECK(ipc_endpoint_create(ctx, &ep) == IPC_OK, "an endpoint is created");
+    CHECK(ksend(ep, 42u) == IPC_OK, "a peer sends to it before anyone watches it");
+    reset_threads();
+
+    CHECK(ipc_select_create(ctx, &sel) == IPC_OK, "the owner then builds its set");
+    CHECK(ipc_select_add(sel, ep, ctx) == IPC_OK, "and adds the endpoint");
+
+    uint32_t ready = IPC_ENDPOINT_NONE;
+    ipc_message_t got;
+    CHECK(ipc_select_recv(sel, ctx, &ready, &got, 0) == IPC_OK,
+          "the already-queued message is reachable, not stranded");
+    CHECK(ready == ep, "and is reported against the endpoint holding it");
+    CHECK(got.arg0 == 42u, "with its payload intact");
+
+    ipc_select_destroy(sel, ctx);
+    ipc_endpoints_release_owner(ctx);
+}
+
+/* A notification raised before the watch is registered is readiness too: the
+ * counter is the endpoint's queue equivalent, and a set that ignored it would
+ * park with notifications pending exactly as it would with messages. */
+static void test_select_reports_a_notification_raised_before_the_watch(void) {
+    uint32_t ctx = fresh_ctx();
+    uint32_t note = 0, sel = 0;
+    CHECK(ipc_notification_create(ctx, &note) == IPC_OK, "a notification endpoint is created");
+    CHECK(ipc_notify_from(ctx, note) == IPC_OK, "and raised before anyone watches it");
+    reset_threads();
+
+    CHECK(ipc_select_listen(ctx, &note, 1, &sel) == IPC_OK, "the owner then watches it");
+    uint32_t ready = IPC_ENDPOINT_NONE;
+    CHECK(ipc_select_wait(sel, ctx, &ready, 0) == IPC_OK, "the pending notification is reported");
+    CHECK(ready == note, "naming the endpoint it is pending on");
+    CHECK(ipc_wait_for(ctx, note) == IPC_OK, "and the notification is still there to consume");
     CHECK(ipc_select_wait(sel, ctx, &ready, 0) == IPC_EMPTY,
-          "the earlier signal was collapsed, not queued");
-    CHECK(count_of(a) == 1, "but its message is still queued for a re-poll");
+          "once consumed the set reports nothing ready");
+
+    ipc_select_destroy(sel, ctx);
+    ipc_endpoints_release_owner(ctx);
+}
+
+/* Readiness rotates: an endpoint that stays readable must not monopolise every
+ * report and starve the set's other endpoints. A reactor consuming one message
+ * per wait would otherwise never reach its second endpoint while the first is
+ * busy. */
+static void test_select_rotates_between_ready_endpoints(void) {
+    uint32_t ctx = fresh_ctx();
+    uint32_t a = 0, b = 0, sel = 0;
+    (void)ipc_endpoint_create(ctx, &a);
+    (void)ipc_endpoint_create(ctx, &b);
+    (void)ipc_select_listen(ctx, (uint32_t[]){a, b}, 2, &sel);
+    reset_threads();
+
+    /* `a` is kept permanently readable and is the last writer of the latch, so
+     * only rotation can ever surface `b`. */
+    CHECK(ksend(b, 2u) == IPC_OK, "the quiet endpoint has one message");
+    CHECK(ksend(a, 1u) == IPC_OK, "the busy endpoint has a message");
+    CHECK(ksend(a, 1u) == IPC_OK, "and another behind it");
+
+    int saw_b = 0;
+    for (int i = 0; i < 3; ++i) {
+        uint32_t ready = IPC_ENDPOINT_NONE;
+        ipc_message_t got;
+        if (ipc_select_recv(sel, ctx, &ready, &got, 0) != IPC_OK) {
+            break;
+        }
+        if (ready == b) {
+            saw_b = 1;
+        }
+        (void)ksend(a, 1u); /* keep `a` readable throughout */
+    }
+    CHECK(saw_b, "the quiet endpoint is reported even while the busy one stays readable");
 
     ipc_select_destroy(sel, ctx);
     ipc_endpoints_release_owner(ctx);
@@ -2758,8 +2881,13 @@ int main(void) {
         {"S16 two sets on one endpoint both signal",
          test_two_sets_watching_one_endpoint_are_both_signalled},
         {"S17 a full set reports each endpoint", test_a_full_set_reports_each_of_its_endpoints},
-        {"S18 the readiness latch is last-writer-wins",
-         test_the_readiness_latch_is_last_writer_wins},
+        {"S18 a collapsed latch still reports every ready endpoint",
+         test_a_collapsed_latch_still_reports_every_ready_endpoint},
+        {"S25 select reports a message queued before the watch",
+         test_select_reports_a_message_queued_before_the_watch},
+        {"S26 select reports a notification raised before the watch",
+         test_select_reports_a_notification_raised_before_the_watch},
+        {"S27 select rotates between ready endpoints", test_select_rotates_between_ready_endpoints},
         {"S19 a kernel-owned set may drain a foreign endpoint",
          test_a_kernel_owned_set_may_drain_another_contexts_endpoint},
         {"S20 a set survives losing every endpoint",

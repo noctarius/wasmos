@@ -392,6 +392,17 @@ linked feature documents for rationale and rollout plans.
   co-sharer too. `build-wasm3-single` went from ~2/5 failures to 8/8 with the
   throttle no longer firing at all — the storm is gone at the source rather than
   contained.
+- Select-set readiness is level-triggered. `ipc_select_wait` scans the watched
+  endpoints' queues and notification counters before consulting the `ready_ep`
+  latch, so the latch is only a wake hint and the queues are the authority. Two
+  cases that previously stranded a message and parked its owner for good are now
+  reported: a send that lands before `ipc_select_add` registers the watcher (the
+  window a service opens between announcing itself ready and building its
+  reactor's set), and two signals collapsing into the single latch slot. One
+  endpoint is reported per wait, rotating from a per-set cursor, so a
+  permanently readable endpoint cannot starve the rest of the set. A reactor
+  that waits, consumes the endpoint it is handed, and waits again is therefore
+  correct without re-polling its endpoints by hand.
 - IRQ routing errors are packed `WASMOS_ERR_IRQ_*` codes (`BAD_LINE`,
   `NOT_AUTHORIZED`, `BAD_ENDPOINT`, `LINE_FULL`, `NOT_A_SHARER`), so a driver can
   tell a capability denial from a full line.

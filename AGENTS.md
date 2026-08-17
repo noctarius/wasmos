@@ -25,6 +25,9 @@ This repository uses Codex CLI to assist with development. Follow these conventi
   - `skills/wasmos-system-util` — create a one-shot CLI utility under `src/utils/`.
   - `skills/wasmos-ide-targets` — keep CLion/clangd IDE coverage in sync (audit +
     fix "not in a project target").
+  - `skills/wasmos-regression-test` — write and run the regression test for a
+    bug (red before the fix, the `Regression:` marker, running/registering the
+    host unit suites). Read it BEFORE writing any bug fix.
   - `skills/wasmos-integration-test` — add or change a QEMU integration test
     under `tests/` and assign it to a battery (`tests/batteries.json` is the
     single source for both the runner and the CI matrix; every test file must
@@ -257,6 +260,23 @@ Do not:
   `skills/wasmos-integration-test`.
 
 ## Testing Policy
+- Every bug fix owes a regression test, and the test comes FIRST. The order is
+  binding, not stylistic: a test written after the fix never demonstrated that it
+  can fail, so it may assert nothing. See `skills/wasmos-regression-test`.
+  1. Reproduce the bug and understand its mechanism.
+  2. Write the failing test, carrying a `Regression:` marker in its comment — a
+     GitHub issue number (`Regression: #142`) or, when there is none, a
+     date-based identifier (`Regression: 2026-08-17-readdir-terminator`). State
+     the failure and what it cost, not the fix.
+  3. Run it against the UNFIXED tree and confirm it is red for the reason the bug
+     describes. A test that fails to compile, or fails on a missing stub, has
+     demonstrated nothing.
+  4. Only then write the fix, and only a fix that turns those tests green.
+- When a bug genuinely cannot be reproduced on the host — real SMP ordering, a
+  context switch, hardware timing — test the nearest observable contract instead.
+  If even that is impossible, say so plainly in the commit message and
+  `docs/TASKS.md` along with what you verified instead (boot counts, sweep
+  sizes). Never fake a test, and never weaken a real one until it passes.
 - Valid unit tests MUST verify runtime behavior, outputs, state transitions, or API contracts.
 - Unit tests MUST NOT use source-text presence assertions (for example regex/string matching
   against repository files to check whether specific words, sentences, or lines still exist).

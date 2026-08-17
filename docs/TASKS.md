@@ -866,14 +866,31 @@ tail.
   at `FAT_SECTOR_SIZE` (512) while `fat_parse_boot` accepts 1024/2048/4096 and
   the FAT/dir code then parses `bytes_per_sector` bytes out of the staged
   sector, silently truncating (`src/drivers/fs_fat/fat_block.c:58` `TODO`).
-- [ ] [BUG][P1] Scan a directory's whole cluster chain, not just its first cluster.
-  `fat_dir_entry_limit` returns one cluster's worth of entries for a non-root
-  directory (`fat_geom.c:24`), so `entries_left` reaches 0 at the end of the
-  first cluster and the `s->entries_left == 0` break fires before the chain hop
-  that follows it -- making the chain-following block unreachable for every
-  non-root scan (`fat_dir.c:140`, `FIXME(fat-dir-multicluster)`). Entries in a
-  directory's second and later clusters are invisible: lookup misses them, and
-  the same `entry_limit` is passed to the create/free-slot scans.
+- [ ] [BUG][P1] Follow the cluster chain in the FOUR directory scans that still do
+  not. `fat_find_in_dir` was fixed (`test_fat_dir.c`,
+  `Regression: 2026-08-17-fat-dir-multicluster`) -- it alone carried chain-hop
+  code, which a one-cluster entry budget had made unreachable. The other four
+  scans in `fat_dir.c` have no chain-hop code at all, so each still treats a
+  directory as its first cluster:
+
+  - `fat_dir_is_empty_step` (`:842`) reports a directory EMPTY when its only
+    children live past the first cluster, so `rmdir` deletes a non-empty
+    directory and `fat_free_cluster_chain` then frees the children's clusters.
+    This is the dangerous one: it is data loss, not a failed lookup.
+  - `fat_find_free_dir_slots` (`:447`) refuses with `WASMOS_ERR_FS_NO_SPACE`
+    once the first cluster is full, so a directory can never grow past one
+    cluster -- which is also why the loss above is not currently reachable
+    through this driver's own `mkdir`/`create`.
+  - `fat_short_name_exists_in_dir` (`:401`) misses a colliding short name in a
+    later cluster, so `fat_build_short_alias` can mint a DUPLICATE 8.3 alias.
+  - The readdir streaming scan (`:1040`) sizes `entries_left` from
+    `mnt->dir_sectors` and truncates the listing at one cluster.
+
+  Fix them together with the create path, since a growable directory is what
+  makes the others reachable. Each owes its own case in `tests/unit/test_fat_dir.c`,
+  whose RAM-image harness already builds a two-cluster directory. Reuse the
+  `hops`-bounded walk `fat_find_in_dir` now uses -- an entry budget must not be
+  what terminates a cyclic chain.
 
   Invisible under QEMU, which synthesizes the FAT and keeps the boot tree's
   directories single-cluster. Reproduced on a real FAT16 image via

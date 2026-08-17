@@ -530,14 +530,18 @@ linked feature documents for rationale and rollout plans.
   the shared 8 KiB block/DMA buffer. It supports FAT12/16 and LFN, reports
   `FS_ERR_*`, and binds to its requested block-device unit. FAT32 is detected at
   mount but its cluster read/write is unimplemented.
-- Directory LOOKUP walks the whole cluster chain, bounded by the volume's
-  cluster count so a cyclic chain fails rather than hangs (`fat_find_in_dir`).
-  The other four directory scans do not yet: emptiness, free-slot search,
-  short-name collision and readdir each still see only a directory's first
-  cluster. On this tree that is latent rather than live, because the free-slot
-  search is itself what stops a directory growing past one cluster — QEMU's
-  synthesized FAT never produces one either. `scripts/run_bochs.sh` boots a real
-  FAT16 image and does; see `TASKS.md`.
+- Every READ-side directory scan walks the whole cluster chain: lookup,
+  short-name collision, the emptiness check `rmdir` depends on, and the readdir
+  stream. Each is bounded by the volume's cluster count, so a corrupt cyclic
+  chain fails `WASMOS_ERR_FS_CORRUPT` rather than hanging the reactor — an entry
+  budget is deliberately not what terminates the walk.
+- The WRITE side is still single-cluster: `fat_find_free_dir_slots` returns a
+  flat entry index that the writer resolves against `dir_lba`, which is valid
+  only within one contiguous run. A create into a directory whose first cluster
+  is full therefore fails `WASMOS_ERR_FS_NO_SPACE` instead of using free slots
+  further along, and directories cannot grow. It fails rather than corrupts.
+  See `TASKS.md`; QEMU's synthesized FAT never produces a multi-cluster
+  directory, `scripts/run_bochs.sh` does.
 - `block_buffer_map` overlays a caller block buffer into linear memory so FAT
   I/O normally avoids staging copies. Bounds checks limit legacy copy/write
   calls to the live block slot.

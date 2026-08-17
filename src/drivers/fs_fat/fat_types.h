@@ -324,10 +324,14 @@ typedef struct {
     uint32_t dir_sectors;
     uint32_t entry_limit;
     uint8_t short_name[11];
+    uint16_t cur_cluster; /* chain cursor; ignored when cur_root */
+    uint8_t cur_root;
     uint32_t entries_left;
     uint32_t cur_sector;
     uint32_t entries_total;
     uint32_t scan_index;
+    uint32_t hops; /* clusters visited, against a cyclic chain */
+    fat_chain_ctx_t chain;
     int result; /* 1 present, 0 absent */
 } fat_shortscan_ctx_t;
 
@@ -376,10 +380,13 @@ typedef struct {
     int cont;
     uint32_t dir_lba;
     uint32_t dir_sectors;
+    uint16_t cur_cluster; /* chain cursor: the directory's first cluster on entry */
     uint32_t entries_left;
     uint32_t cur_sector;
     uint32_t entries_total;
     uint32_t scan_index;
+    uint32_t hops; /* clusters visited, against a cyclic chain */
+    fat_chain_ctx_t chain;
     int result; /* 1 empty, 0 non-empty */
     fat_lfn_t lfn;
 } fat_dirempty_ctx_t;
@@ -470,11 +477,15 @@ typedef struct {
     uint8_t cur_root;       /* 1 = scanning the root region */
     uint32_t base_lba;      /* first LBA of the directory being listed */
     uint32_t dir_sectors;   /* span in sectors */
-    uint32_t entries_left;  /* entries still to inspect */
+    uint32_t entries_left;  /* entries still to inspect in the current run */
+    uint32_t entry_budget;  /* entries per run, refilled at each cluster hop */
+    uint16_t cur_cluster;   /* chain cursor; ignored when cur_root */
     uint32_t cur_sector;    /* sector cursor within the run */
     uint32_t entries_total; /* entries in the sector currently staged */
     uint32_t scan_index;    /* entry cursor within the sector */
-    fat_lfn_t lfn;          /* LFN accumulation across entries */
+    uint32_t hops;          /* clusters visited, against a cyclic chain */
+    fat_chain_ctx_t chain;
+    fat_lfn_t lfn; /* LFN accumulation across entries */
 } fat_readdir_ctx_t;
 
 /* CHDIR: navigate op->dir_name (relative to the cwd unless it starts with '/')

@@ -866,6 +866,22 @@ tail.
   at `FAT_SECTOR_SIZE` (512) while `fat_parse_boot` accepts 1024/2048/4096 and
   the FAT/dir code then parses `bytes_per_sector` bytes out of the staged
   sector, silently truncating (`src/drivers/fs_fat/fat_block.c:58` `TODO`).
+- [ ] [BUG][P1] Scan a directory's whole cluster chain, not just its first cluster.
+  `fat_dir_entry_limit` returns one cluster's worth of entries for a non-root
+  directory (`fat_geom.c:24`), so `entries_left` reaches 0 at the end of the
+  first cluster and the `s->entries_left == 0` break fires before the chain hop
+  that follows it -- making the chain-following block unreachable for every
+  non-root scan (`fat_dir.c:140`, `FIXME(fat-dir-multicluster)`). Entries in a
+  directory's second and later clusters are invisible: lookup misses them, and
+  the same `entry_limit` is passed to the create/free-slot scans.
+
+  Invisible under QEMU, which synthesizes the FAT and keeps the boot tree's
+  directories single-cluster. Reproduced on a real FAT16 image via
+  `scripts/run_bochs.sh`: `WASMOS_BOCHS_IMG_MB=64
+  WASMOS_BOCHS_CLUSTER_SECTORS=4` puts `/boot/apps` across three clusters, and
+  `chardevc.wap` -- which lands in the second -- fails to spawn. The 16 KiB
+  default cluster size exists to keep every directory inside one cluster and so
+  to avoid this.
 - [ ] [BUG][P1] Resolve `..` against the on-disk parent. `fat_resolve_path`,
   `fat_resolve_parent_dir` and `fat_chdir_next_component` all reset to the root
   region, so `a/b/../c` resolves against the root

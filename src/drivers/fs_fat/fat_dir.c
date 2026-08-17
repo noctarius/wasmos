@@ -137,6 +137,12 @@ fat_r_t fat_find_in_dir(fat_dir_scan_ctx_t* s, fat_block_t* blk, const fat_mount
         }
 
         /* Root region is a single contiguous run: no chain to follow. */
+        /* FIXME(fat-dir-multicluster): `entry_limit` is one cluster's worth of
+         * entries for a non-root directory (fat_dir_entry_limit), so
+         * `entries_left` reaches 0 at the end of the first cluster and this
+         * break fires before the chain hop below. Entries in a directory's
+         * second and later clusters are therefore never found; the budget must
+         * cover the whole chain, not one cluster. */
         if (s->cur_root || s->entries_left == 0) {
             break;
         }

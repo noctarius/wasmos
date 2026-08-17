@@ -30,6 +30,17 @@
 #include "fat_geom.h"
 #include "fat_types.h"
 
+/* The generated import declarations, so the stubs below are checked rather than
+ * merely name-matched at link. WASMOS_WASM_IMPORT is a no-op off wasm32, and
+ * the two struct types the declarations reference are needed only as incomplete
+ * pointees here -- pulling in wasmos/api.h's full prerequisite chain would drag
+ * the guest headers into a host compile for no gain. */
+#define WASMOS_WASM_IMPORT(module, name)
+typedef struct wasmos_physmem_stats wasmos_physmem_stats_t;
+typedef struct wasmos_framebuffer_info wasmos_framebuffer_info_t;
+typedef struct wasmos_msi_desc wasmos_msi_desc_t;
+#include "wasmos_imports.h"
+
 /* --- Volume geometry (see the header comment for why these values). --- */
 
 #define T_SECTOR 512u
@@ -107,8 +118,14 @@ fat_r_t fat_block_read_direct(fat_block_t* blk, uint32_t lba, uint32_t count, in
     return FAT_R_ERR;
 }
 
-/* --- Guest API stubs (the three calls fat_dir.c makes, all on the readdir
- * streaming path, which no case here drives). --- */
+/* --- Guest API stubs: the three calls fat_dir.c makes, all on the readdir
+ * streaming path.
+ *
+ * wasmos_imports.h is included so the compiler checks these against the real
+ * declarations. It is worth the include: an earlier revision of this file gave
+ * wasmos_ipc_send seven parameters against the real eight, which compiled
+ * because nothing here pulled the declaration in and linked because C matches
+ * by name alone. --- */
 
 int32_t wasmos_console_write(int32_t ptr, int32_t len) {
     (void)ptr;
@@ -116,15 +133,29 @@ int32_t wasmos_console_write(int32_t ptr, int32_t len) {
     return 0;
 }
 
-int32_t wasmos_ipc_send(int32_t endpoint, int32_t type, int32_t request_id, int32_t arg0,
+/* READDIR streams a listing one byte per argument word. The bytes are collected
+ * here so a case can assert on the listing the client would have received. */
+#define T_STREAM_CAP 1024u
+static char g_stream[T_STREAM_CAP];
+static uint32_t g_stream_len;
+
+static void stream_put(int32_t byte) {
+    if (byte != 0 && g_stream_len + 1u < T_STREAM_CAP) {
+        g_stream[g_stream_len++] = (char)byte;
+        g_stream[g_stream_len] = '\0';
+    }
+}
+
+int32_t wasmos_ipc_send(int32_t dest, int32_t src, int32_t type, int32_t request_id, int32_t arg0,
                         int32_t arg1, int32_t arg2, int32_t arg3) {
-    (void)endpoint;
+    (void)dest;
+    (void)src;
     (void)type;
     (void)request_id;
-    (void)arg0;
-    (void)arg1;
-    (void)arg2;
-    (void)arg3;
+    stream_put(arg0);
+    stream_put(arg1);
+    stream_put(arg2);
+    stream_put(arg3);
     return 0;
 }
 
@@ -178,8 +209,13 @@ static void put_dirent(uint8_t* base, uint32_t index, const char* name, uint8_t 
  * The first cluster is filled to its LAST entry on purpose. A scan stops at the
  * first 0x00 (end-of-directory), so leaving even one free slot there would end
  * the scan legitimately and the case could not distinguish a budget defect from
- * a correct stop. */
-static void build_volume(void) {
+ * a correct stop.
+ *
+ * `filler_deleted` chooses what fills it. Real entries (0) suit the lookup and
+ * listing cases. Tombstones (1) are what the emptiness case needs: a scan
+ * ignores 0xE5, so the first cluster is full yet contains no child, and the
+ * directory's only real child is the one in the second cluster. */
+static void build_volume(int filler_deleted) {
     uint8_t* boot;
     uint8_t* cluster1;
     uint8_t* cluster2;
@@ -227,6 +263,9 @@ static void build_volume(void) {
         filler[6] = (char)('0' + (char)((i - 2u) / 10u));
         filler[7] = (char)('0' + (char)((i - 2u) % 10u));
         put_dirent(cluster1, i, filler, 0x20, (uint16_t)(0x100u + i), 16u);
+        if (filler_deleted) {
+            dirent_slot(cluster1, i)[0] = 0xE5; /* deleted: occupies a slot, is not a child */
+        }
     }
 
     /* Second cluster: the target, then end-of-directory. */
@@ -293,7 +332,7 @@ static void test_finds_entry_in_second_cluster(void) {
     fat_dir_scan_ctx_t s;
     fat_r_t r;
 
-    build_volume();
+    build_volume(0);
     mount_volume(&mnt, &blk);
 
     r = scan_subdir(&s, &blk, &mnt, "TARGET.TXT");
@@ -314,7 +353,7 @@ static void test_still_finds_entry_in_first_cluster(void) {
     fat_dir_scan_ctx_t s;
     fat_r_t r;
 
-    build_volume();
+    build_volume(0);
     mount_volume(&mnt, &blk);
 
     r = scan_subdir(&s, &blk, &mnt, "FILLER00");
@@ -337,7 +376,7 @@ static void test_absent_name_terminates_with_a_miss(void) {
     fat_dir_scan_ctx_t s;
     fat_r_t r;
 
-    build_volume();
+    build_volume(0);
     mount_volume(&mnt, &blk);
 
     r = scan_subdir(&s, &blk, &mnt, "NOSUCH.TXT");
@@ -357,7 +396,7 @@ static void test_cyclic_chain_terminates(void) {
     fat_dir_scan_ctx_t s;
     fat_r_t r;
 
-    build_volume();
+    build_volume(0);
     /* Point the second cluster back at the first: 2 -> 3 -> 2 -> ... */
     fat_set((uint16_t)T_DIR_SECOND_CLUSTER, (uint16_t)T_DIR_FIRST_CLUSTER);
     mount_volume(&mnt, &blk);
@@ -378,7 +417,7 @@ static void test_root_scan_is_unchanged(void) {
     fat_dir_scan_ctx_t s;
     fat_r_t r;
 
-    build_volume();
+    build_volume(0);
     mount_volume(&mnt, &blk);
 
     memset(&s, 0, sizeof(s));
@@ -397,12 +436,139 @@ static void test_root_scan_is_unchanged(void) {
     free_volume();
 }
 
+/* Regression: 2026-08-17-fat-dir-multicluster -- fat_short_name_exists_in_dir
+ * has no chain-hop code, so a colliding 8.3 short name living past the first
+ * cluster reported ABSENT and fat_build_short_alias would mint a duplicate
+ * alias for a name already on the volume. */
+static void test_short_name_collision_seen_in_second_cluster(void) {
+    fat_mount_t mnt;
+    fat_block_t blk;
+    fat_shortscan_ctx_t s;
+    fat_r_t r;
+    uint32_t i;
+    static const char k_target[11] = {'T', 'A', 'R', 'G', 'E', 'T', ' ', ' ', 'T', 'X', 'T'};
+
+    build_volume(0);
+    mount_volume(&mnt, &blk);
+
+    memset(&s, 0, sizeof(s));
+    s.dir_lba = fat_lba_for_cluster(&mnt, (uint16_t)T_DIR_FIRST_CLUSTER);
+    s.dir_sectors = mnt.sectors_per_cluster;
+    s.entry_limit = fat_dir_entry_limit(&mnt, 0, s.dir_sectors);
+    s.cur_cluster = (uint16_t)T_DIR_FIRST_CLUSTER;
+    s.cur_root = 0;
+    for (i = 0; i < 11u; ++i) {
+        s.short_name[i] = (uint8_t)k_target[i];
+    }
+    r = fat_short_name_exists_in_dir(&s, &blk, &mnt);
+
+    CHECK(r == FAT_R_DONE, "short-name scan completed");
+    CHECK(s.result == 1, "a short name in the SECOND cluster is reported present");
+
+    free_volume();
+}
+
+/* Regression: 2026-08-17-fat-dir-multicluster -- fat_dir_is_empty_step has no
+ * chain-hop code, so a directory whose only children live past the first
+ * cluster reported EMPTY. rmdir believes that answer: it deletes the entry and
+ * then fat_free_cluster_chain frees the clusters those children occupy. This
+ * is the data-loss member of the family, which is why the case builds the
+ * first cluster full of TOMBSTONES -- full, yet genuinely childless. */
+static void test_child_in_second_cluster_makes_directory_not_empty(void) {
+    fat_mount_t mnt;
+    fat_block_t blk;
+    fat_dirempty_ctx_t e;
+    fat_r_t r;
+
+    build_volume(1);
+    mount_volume(&mnt, &blk);
+
+    memset(&e, 0, sizeof(e));
+    e.dir_lba = fat_lba_for_cluster(&mnt, (uint16_t)T_DIR_FIRST_CLUSTER);
+    e.dir_sectors = mnt.sectors_per_cluster;
+    e.cur_cluster = (uint16_t)T_DIR_FIRST_CLUSTER;
+    r = fat_dir_is_empty_step(&e, &blk, &mnt);
+
+    CHECK(r == FAT_R_DONE, "emptiness check completed");
+    CHECK(e.result == 0, "a child in the SECOND cluster makes the directory non-empty");
+
+    free_volume();
+}
+
+/* A directory that really is empty must still report empty once the walk covers
+ * the whole chain -- otherwise the fix above would simply make rmdir refuse
+ * everything, which the case above alone could not detect. */
+static void test_directory_with_no_children_is_still_empty(void) {
+    fat_mount_t mnt;
+    fat_block_t blk;
+    fat_dirempty_ctx_t e;
+    fat_r_t r;
+    uint8_t* cluster2;
+
+    build_volume(1);
+    /* Drop the second cluster's only real child, leaving the whole chain
+     * childless. */
+    cluster2 = image_sector(T_FIRST_DATA_LBA + (T_DIR_SECOND_CLUSTER - 2u));
+    memset(cluster2, 0, T_SECTOR);
+    mount_volume(&mnt, &blk);
+
+    memset(&e, 0, sizeof(e));
+    e.dir_lba = fat_lba_for_cluster(&mnt, (uint16_t)T_DIR_FIRST_CLUSTER);
+    e.dir_sectors = mnt.sectors_per_cluster;
+    e.cur_cluster = (uint16_t)T_DIR_FIRST_CLUSTER;
+    r = fat_dir_is_empty_step(&e, &blk, &mnt);
+
+    CHECK(r == FAT_R_DONE, "emptiness check completed");
+    CHECK(e.result == 1, "a directory with no children anywhere in its chain is empty");
+
+    free_volume();
+}
+
+/* Regression: 2026-08-17-fat-dir-multicluster -- the READDIR scan sizes its
+ * budget from mnt->dir_sectors (one cluster) and never hops, so a listing was
+ * truncated at the first cluster and entries beyond it never reached the
+ * client. */
+static void test_readdir_lists_entries_in_second_cluster(void) {
+    fat_mount_t mnt;
+    fat_block_t blk;
+    fat_op_ctx_t op;
+    fat_r_t r;
+
+    build_volume(0);
+    mount_volume(&mnt, &blk);
+
+    /* Make the two-cluster subdirectory the cwd, which is what READDIR lists. */
+    mnt.cwd_root = 0;
+    mnt.cwd_source = 7;
+    mnt.cwd_cluster = (uint16_t)T_DIR_FIRST_CLUSTER;
+    mnt.dir_lba = fat_lba_for_cluster(&mnt, (uint16_t)T_DIR_FIRST_CLUSTER);
+    mnt.dir_sectors = mnt.sectors_per_cluster;
+
+    memset(&op, 0, sizeof(op));
+    op.source = 7;
+    op.request_id = 1;
+    g_stream_len = 0;
+    g_stream[0] = '\0';
+
+    r = fat_op_readdir(&op, &blk, &mnt, 9);
+
+    CHECK(r == FAT_R_DONE, "readdir completed");
+    CHECK(strstr(g_stream, "FILLER00") != NULL, "listing includes a first-cluster entry");
+    CHECK(strstr(g_stream, "TARGET.TXT") != NULL, "listing includes the SECOND cluster's entry");
+
+    free_volume();
+}
+
 static const wasmos_test_void_case_t k_cases[] = {
     WASMOS_TEST_CASE(test_finds_entry_in_second_cluster),
     WASMOS_TEST_CASE(test_still_finds_entry_in_first_cluster),
     WASMOS_TEST_CASE(test_absent_name_terminates_with_a_miss),
     WASMOS_TEST_CASE(test_cyclic_chain_terminates),
     WASMOS_TEST_CASE(test_root_scan_is_unchanged),
+    WASMOS_TEST_CASE(test_short_name_collision_seen_in_second_cluster),
+    WASMOS_TEST_CASE(test_child_in_second_cluster_makes_directory_not_empty),
+    WASMOS_TEST_CASE(test_directory_with_no_children_is_still_empty),
+    WASMOS_TEST_CASE(test_readdir_lists_entries_in_second_cluster),
 };
 
 int main(void) {

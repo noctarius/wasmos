@@ -866,37 +866,37 @@ tail.
   at `FAT_SECTOR_SIZE` (512) while `fat_parse_boot` accepts 1024/2048/4096 and
   the FAT/dir code then parses `bytes_per_sector` bytes out of the staged
   sector, silently truncating (`src/drivers/fs_fat/fat_block.c:58` `TODO`).
-- [ ] [BUG][P1] Follow the cluster chain in the FOUR directory scans that still do
-  not. `fat_find_in_dir` was fixed (`test_fat_dir.c`,
-  `Regression: 2026-08-17-fat-dir-multicluster`) -- it alone carried chain-hop
-  code, which a one-cluster entry budget had made unreachable. The other four
-  scans in `fat_dir.c` have no chain-hop code at all, so each still treats a
-  directory as its first cluster:
+- [ ] [BUG][P1] Address directory slots by (cluster, index) rather than by a flat
+  offset from `dir_lba`, so a directory can be written past its first cluster --
+  and then grow. The four READ-side scans now walk the chain
+  (`fat_find_in_dir`, `fat_short_name_exists_in_dir`, `fat_dir_is_empty_step`
+  and the readdir stream, all pinned in `tests/unit/test_fat_dir.c`,
+  `Regression: 2026-08-17-fat-dir-multicluster`). `fat_find_free_dir_slots`
+  (`fat_dir.c:447`) is the one left, and it is not a missing `for(;;)` like the
+  others were:
 
-  - `fat_dir_is_empty_step` (`:842`) reports a directory EMPTY when its only
-    children live past the first cluster, so `rmdir` deletes a non-empty
-    directory and `fat_free_cluster_chain` then frees the children's clusters.
-    This is the dangerous one: it is data loss, not a failed lookup.
-  - `fat_find_free_dir_slots` (`:447`) refuses with `WASMOS_ERR_FS_NO_SPACE`
-    once the first cluster is full, so a directory can never grow past one
-    cluster -- which is also why the loss above is not currently reachable
-    through this driver's own `mkdir`/`create`.
-  - `fat_short_name_exists_in_dir` (`:401`) misses a colliding short name in a
-    later cluster, so `fat_build_short_alias` can mint a DUPLICATE 8.3 alias.
-  - The readdir streaming scan (`:1040`) sizes `entries_left` from
-    `mnt->dir_sectors` and truncates the listing at one cluster.
+  - Its `out_entry` is a flat entry index that `fat_write_dir_entry` and
+    `fat_delete_dir_entry_chain` resolve as `dir_lba + index/entries_per_sector`.
+    That arithmetic is only valid within ONE contiguous run, because the next
+    cluster of a chain is not the next LBA. Making the search chain-aware
+    therefore means changing what a slot address IS, across the search, the
+    writer, the LFN-chain deleter and `fat_remove_path`'s
+    `dir_sector * eps + dir_index` reconstruction.
+  - Consequence today: a create into a directory whose first cluster is full
+    fails `WASMOS_ERR_FS_NO_SPACE`, even when later clusters have free slots.
+    Wrong, but it FAILS rather than corrupting -- the writer is never handed an
+    index it would resolve against the wrong cluster.
 
-  Fix them together with the create path, since a growable directory is what
-  makes the others reachable. Each owes its own case in `tests/unit/test_fat_dir.c`,
-  whose RAM-image harness already builds a two-cluster directory. Reuse the
-  `hops`-bounded walk `fat_find_in_dir` now uses -- an entry budget must not be
-  what terminates a cyclic chain.
+  Directory GROWTH (allocating a cluster and linking it when the whole chain is
+  full) is the natural follow-on and wants the same addressing, so do them
+  together. `mkdir` already has the pieces: `fat_find_free_cluster` +
+  `fat_fatent_write` + `fat_end_of_chain_marker`.
 
   Invisible under QEMU, which synthesizes the FAT and keeps the boot tree's
   directories single-cluster. Reproduced on a real FAT16 image via
   `scripts/run_bochs.sh`: `WASMOS_BOCHS_IMG_MB=64
   WASMOS_BOCHS_CLUSTER_SECTORS=4` puts `/boot/apps` across three clusters, and
-  `chardevc.wap` -- which lands in the second -- fails to spawn. The 16 KiB
+  `chardevc.wap` -- which lands in the second -- failed to spawn. The 16 KiB
   default cluster size exists to keep every directory inside one cluster and so
   to avoid this.
 - [ ] [BUG][P1] Resolve `..` against the on-disk parent. `fat_resolve_path`,

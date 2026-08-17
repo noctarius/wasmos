@@ -62,9 +62,16 @@ int fat_entry_is_open(const fat_dir_entry_info_t* entry, const fat_open_file_t* 
 fat_r_t fat_free_cluster_chain(fat_freechain_ctx_t* f, fat_block_t* blk, const fat_mount_t* mnt);
 
 /* Scan a directory's raw 8.3 entries for s->short_name; s->result = 1 present,
- * 0 absent.  Inputs: dir_lba, dir_sectors, entry_limit, short_name[11]. */
+ * 0 absent.  Follows the cluster chain when cur_root is 0.  Inputs: dir_lba,
+ * dir_sectors, entry_limit, short_name[11], cur_cluster, cur_root. */
 fat_r_t fat_short_name_exists_in_dir(fat_shortscan_ctx_t* s, fat_block_t* blk,
                                      const fat_mount_t* mnt);
+
+/* Report whether the directory at e->dir_lba holds any child beyond '.'/'..';
+ * e->result = 1 empty, 0 non-empty.  Follows the cluster chain, so a child in
+ * any cluster counts -- rmdir's precondition depends on that.  Inputs: dir_lba,
+ * dir_sectors, cur_cluster (the directory's first cluster). */
+fat_r_t fat_dir_is_empty_step(fat_dirempty_ctx_t* e, fat_block_t* blk, const fat_mount_t* mnt);
 
 /* Find f->needed consecutive free directory slots; f->out_entry = first slot's
  * flat index, f->result = 0 found / -1 none.  Inputs: dir_lba, dir_sectors,

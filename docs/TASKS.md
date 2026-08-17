@@ -1264,16 +1264,25 @@ Source: `architecture/25-diagnostics-status.md`,
   stash`.** A previous attempt was unsound because a stash silently did not
   take, so both arms ran identical code and the result meant nothing.
 
-- [ ] [BUG][P2] Confirm the whole-session wedge stays fixed. Its cause is known
-  and fixed (`46bd8b5d26`): a READDIR's terminating `FS_IPC_RESP` was refused for
-  a full relay queue and dropped, stranding fs-manager and, behind it, the client
-  and every later test in that session. Replies on both sides of the FS chain now
-  retry rather than drop.
+- [ ] [BUG][P2] Confirm the whole-session wedge stays fixed. It had TWO causes,
+  both fixed, and finding the second only because the first was gone is the
+  reason this item stays open rather than closed on one green run.
 
-  One green full CI run is not proof for a fault that appeared roughly twice per
-  36 boots. What would settle it: several consecutive green full-suite runs, and
-  no `[diag]!    refused` line in any stall dump -- that marker is what named the
-  bug, and its absence is the property to watch. Close this once that holds.
+  1. `46bd8b5d26` -- a READDIR's terminating `FS_IPC_RESP` was refused for a full
+     relay queue and dropped, stranding fs-manager and, behind it, the client and
+     every later test in that session. Replies on both sides of the FS chain now
+     retry rather than drop. Its signature is a `[diag]!    refused` line.
+  2. The running-elsewhere guard duplicated in `sched_enqueue_thread_from`, which
+     marked a thread READY and returned without leaving a claim, so nobody owed
+     the enqueue. Same stranding as the `cpu_sched_enqueue` half fixed in
+     `8c063c62f3`, on the second entry point. Its signature is
+     `stranded(ready,no-rq)>0` plus a `[sched] enqueue current` line carrying
+     `caller=`, which is the field that distinguishes the two copies.
+
+  What would settle this: several consecutive green full-suite runs with no
+  `[diag]!    refused` line and no `stranded(ready,no-rq)` above zero in any
+  stall dump. Both markers are cheap to grep for and each names one of the two
+  causes, so a recurrence says immediately which mechanism came back.
 
 - [ ] [BUG][P1] `test_shmem_grant_revoke_pair` fails intermittently in the
   `scheduler-and-ipc` battery: `[test] shmem e2e forged id denied` never arrives,

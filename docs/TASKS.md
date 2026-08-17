@@ -1219,31 +1219,34 @@ Source: `architecture/25-diagnostics-status.md`,
   measure across configs and repeated boots first
   (`src/kernel/kernel_sched_smp_stress_runtime.c:140`).
 
-- [ ] [BUG][P1] The SMP scheduler stress gate panics intermittently: `FAIL: SMP
-  scheduler stress test did not pass (stalled ring)` preceded by a
-  `reason : cpu_exception` kernel panic. Two captures, both on the SMP defconfig
-  jobs, which are the only ones that run `run-qemu-sched-stress-test`:
+- [ ] [BUG][P1] Confirm the SMP scheduler stress panic stays fixed. One cause is
+  found and fixed: dispatch took no exclusive claim on the thread it was about
+  to run, so two CPUs could resume one `process_context_t` on one kernel stack
+  and the thread resumed a torn rip (`cpu_sched_claim_for_dispatch`, pinned by
+  `X7 one dispatch per thread` in `tests/unit/test_sched_concurrency.c`).
 
-  - Run 31949875433, `wasm3_smp`, `a=0x0e` (page fault).
-  - Run 31970194315, `warp_smp`, `a=0x06` (invalid opcode) at
-    `rip=ffffffff803a2860`, where the bytes ARE `60 28 3A 80 FF FF FF FF` -- the
-    little-endian encoding of that same address. A CPU dispatched into a context
-    structure and executed a pointer as code, so this is a corrupted context
-    switch, not a bad jump target. CPU 1 was inside the WARP compiler
-    (`vb::Frontend::startCompilation`) at the time.
+  Reopen — do not re-diagnose from scratch — if `FAIL: SMP scheduler stress test
+  did not pass (stalled ring)` recurs with a `reason : cpu_exception` panic. The
+  two original captures, both on the SMP defconfig jobs (the only ones that run
+  `run-qemu-sched-stress-test`), were run 31949875433 (`wasm3_smp`, `a=0x0e`) and
+  run 31970194315 (`warp_smp`, `a=0x06` at `rip=ffffffff803a2860`). Both resumed
+  a rip inside `g_cpus`; `cpu_local_t.self` is its own address, which is why the
+  bytes at that rip read as a pointer to themselves.
 
-  Not the whole-session wedge and not the diagnostics work: the first capture
-  predates both. Rate is roughly 2 of the last dozen CI runs' SMP jobs.
+  What the fix is NOT verified against: whether it was the only cause. The
+  panic's natural rate is roughly 1 boot in 40, so the 85 clean stress boots it
+  has since survived (40 `warp_smp`, 25 instrumented `warp_smp`, 20 `wasm3_smp`,
+  all Linux/MTTCG) do not resolve a second mechanism if one exists. The unit
+  test is what pins this one.
 
-  Reproducing needs a Linux x86 runner. Six consecutive local runs of the exact
-  CI configuration were clean:
+  Reproducing needs a Linux x86 runner; MTTCG on Apple Silicon masks it. Force
+  TCG (`WASMOS_QEMU_ACCEL=tcg`) and reset the OVMF vars file between boots:
 
       cmake -S . -B build-warp_smp -DWASMOS_DOTCONFIG=configs/warp_smp_defconfig \
             -DWASMOS_SCHED_SMP_STRESS=ON
       cmake --build build-warp_smp --target run-qemu-sched-stress-test
 
-  which says nothing either way -- MTTCG on Apple Silicon masks memory-ordering
-  races, and this has the shape of one.
+  A `[sched] claim lost` line means the race fired and the claim resolved it.
 
 - [ ] [BUG][P1] `test_virtio_net_notify_e2e` (the `notify rx=` / RX-frame-notify
   case) fails intermittently, roughly 1 run in 5: the guest stays alive and

@@ -2154,10 +2154,28 @@ static int process_schedule_once_impl(void) {
         }
         return SCHED_R_NOTREADY;
     }
+    /* The READY test above is the cheap reject; this claim is what makes the
+     * dispatch exclusive (see cpu_sched_claim_for_dispatch).  The loser drops the
+     * thread -- the winner owns it and re-enqueues it when its dispatch ends. */
+    if (!cpu_sched_claim_for_dispatch(thread)) {
+        static uint32_t claim_lost_seen;
+        uint32_t cn = __atomic_fetch_add(&claim_lost_seen, 1u, __ATOMIC_RELAXED);
+        if ((cn & (cn - 1u)) == 0u) {
+            serial_printf("[sched] claim lost tid=%u pid=%u cpu=%u state=%u (n=%u)\n",
+                          (unsigned)thread->tid,
+                          (unsigned)proc->pid,
+                          (unsigned)cpu_local()->cpu_id,
+                          (unsigned)__atomic_load_n((uint32_t*)&thread->state, __ATOMIC_ACQUIRE),
+                          (unsigned)(cn + 1u));
+        }
+        return SCHED_R_CLAIMED;
+    }
 
     if (!process_set_running(proc, thread)) {
         /* Process raced to a terminal state between the READY check and now;
-         * do not dispatch it.  Its thread will be reaped via the zombie path. */
+         * do not dispatch it.  Its thread will be reaped via the zombie path.
+         * Release the claim so the state matches the pre-claim disposition. */
+        (void)thread_transit(thread, THREAD_STATE_RUNNING, THREAD_STATE_READY);
         return SCHED_R_ZOMBIE;
     }
     if (thread->ticks_remaining == 0) {

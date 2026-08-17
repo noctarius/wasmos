@@ -15,6 +15,7 @@ enum {
     SCHED_R_ZOMBIE = 6,   /* owning process is zombie/exiting                */
     SCHED_R_RANDONE = 7,  /* dispatched; thread BLOCKED/EXITED (normal loop) */
     SCHED_R_STALE = 8,    /* non-idle thread reaped mid-flight (normal race)  */
+    SCHED_R_CLAIMED = 9,  /* another CPU won the READY->RUNNING claim (race)  */
 };
 
 #include <stdint.h>
@@ -108,6 +109,21 @@ void cpu_sched_remove_thread(struct thread* t);
  * it and must either dispatch it or re-enqueue it -- the anti-starvation
  * bookkeeping above is also advanced by this call. */
 struct thread* cpu_sched_pick_next(cpu_sched_t* cs);
+
+/* Take exclusive ownership of `t` for a dispatch on the calling CPU, as the
+ * atomic READY -> RUNNING edge.  Returns 1 to the single CPU that may proceed to
+ * context_switch into t->ctx and 0 to every other caller.
+ *
+ * cpu_sched_pick_next unlinks under cs->lock and releases on_rq, but the
+ * dispatcher does not name the thread in current_thread until later, so between
+ * those two points the thread is READY, on no queue and claimed by no CPU:
+ * cpu_sched_enqueue accepts it, a second CPU picks it, and both reach dispatch.
+ * This edge is the exclusion.  Two CPUs resuming one process_context_t run on
+ * one kernel stack and resume a torn rip.
+ *
+ * The loser must NOT re-queue the thread: the winner owns it and re-enqueues or
+ * parks it when its dispatch ends. */
+int cpu_sched_claim_for_dispatch(struct thread* t);
 
 /* Mark the current CPU as needing a reschedule. */
 void sched_set_need_resched(void);

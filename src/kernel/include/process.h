@@ -472,7 +472,7 @@ int process_wake_thread(uint32_t tid);
  * sched.h -- SCHED_OK only for a voluntary yield, SCHED_R_RANDONE for the
  * ordinary blocked/exited outcome, and the rest for conditions the boot loop
  * classifies. Only SCHED_R_PICK / _CTX / _ROOT / _MAXCOUNT are bugs; _NOTREADY,
- * _ZOMBIE and _STALE are races that the caller simply retries.
+ * _ZOMBIE, _STALE and _CLAIMED are races that the caller simply retries.
  * Must be called with no run-queue lock held; it takes them itself.
  */
 int process_schedule_once(void);

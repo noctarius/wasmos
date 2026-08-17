@@ -610,6 +610,113 @@ static void test_dekker_under_real_threads(void) {
 
 /* -------------------------------------------------------------------- main */
 
+/* --------------------------------------------- X7 one dispatch per thread */
+
+#if NCPU >= 2
+
+/* Regression: 2026-08-17-smp-double-dispatch -- two CPUs dispatched one thread
+ * and resumed the same process_context_t on the same kernel stack, so one CPU's
+ * register save raced the other's restore and the thread resumed a torn rip.
+ * Seen as a #UD/#PF kernel panic with rip inside g_cpus, killing the boot; the
+ * SMP defconfig CI jobs hit it about twice per dozen runs.
+ *
+ * cpu_sched_pick_next hands a thread to a CPU that has not yet named it in
+ * current_thread. Until it does the thread is READY, on no queue and claimed by
+ * nobody, so cpu_sched_enqueue accepts it on a second CPU and that CPU picks it
+ * too: both hold the same thread_t and are one step from resuming one
+ * process_context_t on two kernel stacks. cpu_sched_claim_for_dispatch is what
+ * decides between them.
+ *
+ * Both halves of the interleaving are forced rather than raced for -- the CPUs
+ * rendezvous once holding the thread and again inside the claim -- so the case
+ * is deterministic rather than probabilistic.
+ *
+ * WASMOS_TEST_BASELINE_DISPATCH substitutes the dispatch sequence that preceded
+ * the claim: the plain READY test of process_schedule_once_impl followed by the
+ * unconditional RUNNING store of process_set_running. Because that sequence is
+ * a test and a separate commit, the rendezvous splits it -- which is the whole
+ * defect: two CPUs can both pass the test before either commits. That arm is
+ * expected to FAIL, and is what shows this case detects what it claims to. */
+
+static test_barrier_t g_picked;
+static test_barrier_t g_in_claim;
+static thread_t* g_victim;
+static int g_dispatch_claims;
+static int g_reached_dispatch;
+
+#ifdef WASMOS_TEST_BASELINE_DISPATCH
+static int baseline_observe_ready(const thread_t* t) {
+    return __atomic_load_n((uint32_t*)&t->state, __ATOMIC_ACQUIRE) == THREAD_STATE_READY;
+}
+static int baseline_commit_running(thread_t* t) {
+    __atomic_store_n((uint32_t*)&t->state, (uint32_t)THREAD_STATE_RUNNING, __ATOMIC_RELEASE);
+    return 1;
+}
+#endif
+
+static void* dispatch_worker(void* arg) {
+    uint32_t id = (uint32_t)(uintptr_t)arg;
+    be_cpu(id);
+    thread_t* t;
+    if (id == 0u) {
+        ksync_spinlock_lock(&g_cpus[0].sched.lock);
+        t = cpu_sched_pick_next(&g_cpus[0].sched);
+        ksync_spinlock_unlock(&g_cpus[0].sched.lock);
+        barrier_wait(&g_picked);
+    } else {
+        /* Runs only once CPU 0 holds the thread off-queue and unnamed. */
+        barrier_wait(&g_picked);
+        cpu_sched_enqueue(&g_cpus[1].sched, g_victim);
+        ksync_spinlock_lock(&g_cpus[1].sched.lock);
+        t = cpu_sched_pick_next(&g_cpus[1].sched);
+        ksync_spinlock_unlock(&g_cpus[1].sched.lock);
+    }
+    int holds = (t == g_victim);
+    if (holds) {
+        __atomic_fetch_add(&g_reached_dispatch, 1, __ATOMIC_RELAXED);
+    }
+    /* A worker that did not get the thread still arrives, so a harness that
+     * stops reproducing the window reports it instead of hanging. */
+#ifdef WASMOS_TEST_BASELINE_DISPATCH
+    int ready = holds && baseline_observe_ready(t);
+    barrier_wait(&g_in_claim);
+    int won = ready && baseline_commit_running(t);
+#else
+    barrier_wait(&g_in_claim);
+    int won = holds && cpu_sched_claim_for_dispatch(t);
+#endif
+    if (won) {
+        __atomic_fetch_add(&g_dispatch_claims, 1, __ATOMIC_RELAXED);
+        __atomic_store_n(&cpu_local()->current_thread, t, __ATOMIC_RELEASE);
+    }
+    return NULL;
+}
+
+static void test_one_dispatch_per_thread(void) {
+    harness_init();
+    g_victim = &g_pool[0];
+    g_dispatch_claims = 0;
+    g_reached_dispatch = 0;
+    cpu_sched_enqueue(&g_cpus[0].sched, g_victim);
+
+    pthread_t a, b;
+    barrier_init(&g_picked, 2);
+    barrier_init(&g_in_claim, 2);
+    pthread_create(&a, NULL, dispatch_worker, (void*)(uintptr_t)0);
+    pthread_create(&b, NULL, dispatch_worker, (void*)(uintptr_t)1);
+    pthread_join(a, NULL);
+    pthread_join(b, NULL);
+    be_cpu(0);
+
+    /* Vacuity guard: if cpu_sched_enqueue ever starts refusing a picked-but-
+     * unnamed thread, the claim below stops being exercised and this case would
+     * pass without testing anything. */
+    CHECK(g_reached_dispatch == 2, "both CPUs reach dispatch holding the same thread");
+    CHECK(g_dispatch_claims == 1, "exactly one CPU claims a thread for dispatch");
+}
+
+#endif /* NCPU >= 2 */
+
 int main(void) {
     struct {
         const char* name;
@@ -626,6 +733,7 @@ int main(void) {
         {"X4 two stealers, one thread", test_two_stealers_one_thread},
         {"X5 steal versus reap", test_steal_versus_reap},
         {"X6 wake/block Dekker under threads", test_dekker_under_real_threads},
+        {"X7 one dispatch per thread", test_one_dispatch_per_thread},
 #endif
         {"X1 soak", test_soak},
     };

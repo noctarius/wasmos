@@ -150,6 +150,7 @@ static void fat_lfn_store_char(fat_lfn_t* lfn, uint32_t pos, uint16_t ch) {
 void fat_lfn_finalize(fat_lfn_t* lfn) {
     uint32_t out = 0;
     uint32_t i = 0;
+    uint16_t low;
 
     if (!lfn->valid || lfn->total == 0) {
         return;
@@ -167,15 +168,13 @@ void fat_lfn_finalize(fat_lfn_t* lfn) {
                 lfn->valid = 0; /* unpaired high surrogate */
                 return;
             }
-            {
-                uint16_t low = lfn->units[i + 1u];
-                if (low < 0xDC00u || low > 0xDFFFu) {
-                    lfn->valid = 0;
-                    return;
-                }
-                cp = 0x10000u + (((uint32_t)(unit - 0xD800u) << 10) | (uint32_t)(low - 0xDC00u));
-                i++;
+            low = lfn->units[i + 1u];
+            if (low < 0xDC00u || low > 0xDFFFu) {
+                lfn->valid = 0; /* high surrogate not followed by a low one */
+                return;
             }
+            cp = 0x10000u + (((uint32_t)(unit - 0xD800u) << 10) | (uint32_t)(low - 0xDC00u));
+            i++;
         } else if (unit >= 0xDC00u && unit <= 0xDFFFu) {
             lfn->valid = 0; /* unpaired low surrogate */
             return;

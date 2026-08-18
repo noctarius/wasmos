@@ -96,6 +96,7 @@ static int fat_parse_boot(fat_mount_t* mnt, const uint8_t* sector) {
     uint16_t sig = (uint16_t)sector[510] | ((uint16_t)sector[511] << 8);
     uint32_t bytes_per_sector = bpb->bytes_per_sector;
     uint32_t total_sectors, fat_size, root_dir_sectors, data_sectors, cluster_count;
+    uint16_t fsinfo_sector;
 
     if (sig != 0xAA55 || (bytes_per_sector != 512 && bytes_per_sector != 1024 &&
                           bytes_per_sector != 2048 && bytes_per_sector != 4096)) {
@@ -126,13 +127,12 @@ static int fat_parse_boot(fat_mount_t* mnt, const uint8_t* sector) {
      * on FAT32, where the root directory is an ordinary cluster chain and the
      * fixed root region above is empty. */
     mnt->root_cluster = ((const uint32_t*)bpb->ext)[2];
-    /* BPB_FSInfo, at offset 48 = ext[12..13]. Meaningful only on FAT32. */
+    /* BPB_FSInfo, at offset 48 = ext[12..13]. Meaningful only on FAT32; 0 and
+     * 0xFFFF both mean "no FSInfo block". */
+    fsinfo_sector = (uint16_t)((uint16_t)bpb->ext[12] | ((uint16_t)bpb->ext[13] << 8));
     mnt->fsinfo_lba = 0;
-    {
-        uint16_t fsinfo_sector = (uint16_t)((uint16_t)bpb->ext[12] | ((uint16_t)bpb->ext[13] << 8));
-        if (fsinfo_sector != 0 && fsinfo_sector != 0xFFFFu) {
-            mnt->fsinfo_lba = mnt->boot_lba + fsinfo_sector;
-        }
+    if (fsinfo_sector != 0 && fsinfo_sector != 0xFFFFu) {
+        mnt->fsinfo_lba = mnt->boot_lba + fsinfo_sector;
     }
 
     /* Cluster-count thresholds per the FAT specification: < 4085 is FAT12,

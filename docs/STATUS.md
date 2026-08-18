@@ -586,8 +586,14 @@ linked feature documents for rationale and rollout plans.
 
   Rename is exercised too — a rename within a directory and a move into another
   — with the host confirming the content arrives under the new name and the old
-  path is gone. Still not covered, in `TASKS.md`: `fat_op_read` goes through the
-  zero-copy borrow passthrough the harness does not model.
+  path is gone.
+
+  Reads go through `fat_op_read` itself, including its zero-copy whole-sector
+  passthrough and the bounce-through-the-staging-sector path a partial sector
+  takes: the harness models the borrow passthrough by treating the image as the
+  block server and its transfer buffer as the client's, which is the same shape
+  from the driver's side. File data therefore round-trips on FAT32 as well as
+  FAT16.
 - The write side addresses directory slots CHAIN-RELATIVELY. An entry index
   counts across the whole directory and is resolved to a physical sector by
   `fat_dir_entry_locate`, which walks the chain; `dir_lba + index /

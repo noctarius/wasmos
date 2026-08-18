@@ -242,6 +242,7 @@ subsystems:
       - { symbol: FS_IPC_CHDIR_REQ, value: 0x412, kind: req }
       - { symbol: FS_IPC_READ_APP_REQ, value: 0x413, kind: req }
       - { symbol: FS_IPC_READ_PATH_REQ, value: 0x414, kind: req }
+      - { symbol: FS_IPC_RENAME_REQ, value: 0x415, kind: req }
       - { symbol: FS_IPC_RESP, value: 0x480, kind: resp }
       - { symbol: FS_IPC_STREAM, value: 0x481, kind: resp }
       - { symbol: FS_IPC_ERROR, value: 0x4ff, kind: error }

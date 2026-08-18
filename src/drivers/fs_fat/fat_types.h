@@ -79,7 +79,8 @@ typedef enum {
     FAT_OP_MKDIR,
     FAT_OP_RMDIR,
     FAT_OP_READDIR, /* directory enumeration (fat_dir.c) */
-    FAT_OP_CHDIR    /* change directory      (fat_dir.c) */
+    FAT_OP_CHDIR,   /* change directory      (fat_dir.c) */
+    FAT_OP_RENAME   /* rename/move an entry  (fat_dir.c) */
 } fat_op_t;
 
 /* Result of advancing an op's state machine one step. */
@@ -465,6 +466,31 @@ typedef struct {
     fat_delchain_ctx_t delchain;
 } fat_remove_ctx_t;
 
+/* Rename/move an entry: re-point a name at an existing cluster chain without
+ * touching the data.  The new entry is written BEFORE the old one is removed,
+ * so an interruption leaves the chain reachable under two names rather than
+ * under none -- recoverable, where the other order loses the file.
+ *
+ * `entry` is the source's resolved directory entry, captured before anything is
+ * written because the create step restages the block buffer. */
+typedef struct {
+    int cont;
+    const char* old_path;
+    const char* new_path;
+    int32_t source;
+    fat_dir_entry_info_t entry; /* the source entry, latched */
+    uint32_t entry_index;       /* its flat index within its directory run */
+    uint32_t dotdot_cluster;    /* what '..' must hold after a directory moves */
+    uint8_t is_dir;
+    uint8_t entry_buf[32];
+    fat_resolve_ctx_t resolve;
+    fat_resolve_ctx_t dest_probe;
+    fat_resolve_parent_ctx_t old_parent;
+    fat_create_ctx_t create;
+    fat_delchain_ctx_t delchain;
+    fat_writeent_ctx_t wr;
+} fat_rename_ctx_t;
+
 /* --- Coroutine sub-machine contexts (fat_dir.c, navigation side). --- */
 
 /* READDIR: stream the entries of the CURRENT directory (root region when
@@ -605,6 +631,11 @@ typedef struct fat_op_ctx {
      * TODO: component[] and name[] have no reader; they only cost op-ctx bytes. */
     char path[FAT_MAX_PATH];     /* raw client path */
     char fat_path[FAT_MAX_PATH]; /* vfs-translated path */
+    /* RENAME's destination.  A second pair rather than a reuse of the above,
+     * because fat_rename_path holds pointers to BOTH for the length of the
+     * operation. */
+    char rename_path[FAT_MAX_PATH];
+    char fat_rename_path[FAT_MAX_PATH];
     char component[FAT_MAX_PATH];
     char name[FAT_MAX_PATH];
 
@@ -620,6 +651,7 @@ typedef struct fat_op_ctx {
     fat_create_ctx_t create; /* create file/dir entry (MKDIR reuses via mkdir) */
     fat_mkdir_ctx_t mkdir;   /* MKDIR */
     fat_remove_ctx_t remove; /* UNLINK / RMDIR */
+    fat_rename_ctx_t rename; /* RENAME */
 
     /* Cluster-chain / allocation sub-machines (fat_alloc.c).  Only `chain` is
      * driven from the op level (the read/write loop's chain follow).

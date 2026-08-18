@@ -90,6 +90,11 @@ fat_r_t fat_op_stat(fat_op_ctx_t* op, fat_block_t* blk, const fat_mount_t* mnt,
                     fat_open_pool_t* pool);
 fat_r_t fat_op_unlink(fat_op_ctx_t* op, fat_block_t* blk, const fat_mount_t* mnt,
                       fat_open_pool_t* pool);
+/* RENAME: both paths arrive in one client buffer -- source at offset 0, dest at
+ * offset arg0+1 -- with arg0/arg1 their lengths and arg2 the buffer id. */
+fat_r_t fat_op_rename(fat_op_ctx_t* op, fat_block_t* blk, const fat_mount_t* mnt,
+                      fat_open_pool_t* pool);
+
 fat_r_t fat_op_mkdir(fat_op_ctx_t* op, fat_block_t* blk, const fat_mount_t* mnt,
                      fat_open_pool_t* pool);
 fat_r_t fat_op_rmdir(fat_op_ctx_t* op, fat_block_t* blk, const fat_mount_t* mnt,

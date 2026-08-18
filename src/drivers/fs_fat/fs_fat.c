@@ -238,6 +238,8 @@ static fat_op_t fat_op_for_type(int32_t type) {
         return FAT_OP_CLOSE;
     case FS_IPC_UNLINK_REQ:
         return FAT_OP_UNLINK;
+    case FS_IPC_RENAME_REQ:
+        return FAT_OP_RENAME;
     case FS_IPC_MKDIR_REQ:
         return FAT_OP_MKDIR;
     case FS_IPC_RMDIR_REQ:
@@ -268,6 +270,8 @@ static fat_r_t fat_op_dispatch(fat_op_ctx_t* op) {
         return fat_op_close(op, &g_blk, &g_mnt, &g_pool);
     case FAT_OP_UNLINK:
         return fat_op_unlink(op, &g_blk, &g_mnt, &g_pool);
+    case FAT_OP_RENAME:
+        return fat_op_rename(op, &g_blk, &g_mnt, &g_pool);
     case FAT_OP_MKDIR:
         return fat_op_mkdir(op, &g_blk, &g_mnt, &g_pool);
     case FAT_OP_RMDIR:

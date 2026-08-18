@@ -90,7 +90,7 @@ static fs_client_chunk_t* client_chunk_alloc(void) {
 static int type_uses_client_buffer(int32_t type) {
     return type == FS_IPC_OPEN_REQ || type == FS_IPC_STAT_REQ || type == FS_IPC_UNLINK_REQ ||
            type == FS_IPC_MKDIR_REQ || type == FS_IPC_RMDIR_REQ || type == FS_IPC_READ_REQ ||
-           type == FS_IPC_WRITE_REQ || type == FS_IPC_READ_APP_REQ;
+           type == FS_IPC_WRITE_REQ || type == FS_IPC_READ_APP_REQ || type == FS_IPC_RENAME_REQ;
 }
 
 static void log_msg(const char* s) {
@@ -643,6 +643,66 @@ static int route_root_path_request(fs_client_state_t* state, int32_t buffer_id, 
     return 1;
 }
 
+/* RENAME carries two paths in one buffer (source at 0, destination at
+ * arg0 + 1), so it needs its own routing: each has its mount prefix stripped,
+ * and stripping the FIRST moves the second, which is why the buffer is rewritten
+ * as a pair rather than in place one at a time.
+ *
+ * Both paths must resolve to the SAME backend. A cross-mount rename would mean
+ * copying the data between filesystems, which no backend can express and this
+ * layer will not fake; it is refused so a caller sees a failure rather than a
+ * half-move. Returns 1 when routed, 0 when not applicable, -1 on refusal.  */
+static int route_rename_request(fs_client_state_t* state, int32_t buffer_id, int32_t* inout_arg0,
+                                int32_t* inout_arg1, int32_t* out_backend) {
+    uint8_t old_buf[256];
+    uint8_t new_buf[256];
+    int32_t old_len = inout_arg0 ? *inout_arg0 : 0;
+    int32_t new_len = inout_arg1 ? *inout_arg1 : 0;
+    int32_t fs_buf_size = wasmos_xfer_buffer_size();
+    int32_t old_backend = out_backend ? *out_backend : -1;
+    int32_t new_backend = old_backend;
+    int32_t out_old = old_len;
+    int32_t out_new = new_len;
+
+    if (!state || !inout_arg0 || !inout_arg1 || !out_backend || buffer_id <= 0) {
+        return 0;
+    }
+    if (old_len <= 0 || new_len <= 0 || old_len >= (int32_t)sizeof(old_buf) - 1 ||
+        new_len >= (int32_t)sizeof(new_buf) - 1 || old_len + new_len + 2 > fs_buf_size) {
+        return -1;
+    }
+    if (wasmos_xfer_buffer_read(buffer_id, old_buf, old_len, 0) != 0 ||
+        wasmos_xfer_buffer_read(buffer_id, new_buf, new_len, old_len + 1) != 0) {
+        return -1;
+    }
+    old_buf[old_len] = '\0';
+    new_buf[new_len] = '\0';
+
+    if (old_buf[0] == '/' && old_buf[1] != '\0') {
+        (void)route_path_to_backend(
+            old_buf, old_len, 0, (char*)old_buf, (int32_t)sizeof(old_buf), &out_old, &old_backend);
+    }
+    if (new_buf[0] == '/' && new_buf[1] != '\0') {
+        (void)route_path_to_backend(
+            new_buf, new_len, 0, (char*)new_buf, (int32_t)sizeof(new_buf), &out_new, &new_backend);
+    }
+    if (out_old <= 0 || out_new <= 0) {
+        return -1;
+    }
+    if (old_backend != new_backend) {
+        return -1; /* cross-mount: refused, see above */
+    }
+    /* Rewrite the pair so the destination follows the STRIPPED source. */
+    if (wasmos_xfer_buffer_write(buffer_id, old_buf, out_old + 1, 0) != 0 ||
+        wasmos_xfer_buffer_write(buffer_id, new_buf, out_new + 1, out_old + 1) != 0) {
+        return -1;
+    }
+    *inout_arg0 = out_old;
+    *inout_arg1 = out_new;
+    *out_backend = old_backend;
+    return 1;
+}
+
 /* Apply a backend's pulled info: register it at its endpoint, set unit, and
  * read its mount name (arg2 packs (buffer_id<<12)|len; the backend borrowed the
  * buffer READ to fs-manager). Shared by the initial class enumeration and ADD
@@ -1121,6 +1181,12 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
         int32_t fwd_arg3 = arg3f;
         if (is_path_op_type(type)) {
             if (route_root_path_request(state, arg2f, type, &req_arg0, &backend) < 0) {
+                send_fs_error(source, request_id, WASMOS_ERR_FS_TRANSLATE);
+                continue;
+            }
+        }
+        if (type == FS_IPC_RENAME_REQ) {
+            if (route_rename_request(state, arg2f, &req_arg0, &arg1f, &backend) < 0) {
                 send_fs_error(source, request_id, WASMOS_ERR_FS_TRANSLATE);
                 continue;
             }

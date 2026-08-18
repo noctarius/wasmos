@@ -582,9 +582,10 @@ linked feature documents for rationale and rollout plans.
   front of 45 stale ones. Note `O_TRUNC` resets the size without freeing the
   cluster chain, so a truncated file keeps its capacity; `fsck` accepts that.
 
-  Still not covered, in `TASKS.md`: there is no rename operation in the stack to
-  exercise, and `fat_op_read` goes through the zero-copy borrow passthrough the
-  harness does not model.
+  Rename is exercised too — a rename within a directory and a move into another
+  — with the host confirming the content arrives under the new name and the old
+  path is gone. Still not covered, in `TASKS.md`: `fat_op_read` goes through the
+  zero-copy borrow passthrough the harness does not model.
 - The WRITE side is still single-cluster: `fat_find_free_dir_slots` returns a
   flat entry index that the writer resolves against `dir_lba`, which is valid
   only within one contiguous run. A create into a directory whose first cluster
@@ -592,6 +593,19 @@ linked feature documents for rationale and rollout plans.
   further along, and directories cannot grow. It fails rather than corrupts.
   See `TASKS.md`; QEMU's synthesized FAT never produces a multi-cluster
   directory, `scripts/run_bochs.sh` does.
+- Rename/move exists end to end: libc `rename()` -> `FS_IPC_RENAME_REQ` (both
+  paths in one transfer buffer, source at offset 0 and destination after its
+  NUL) -> fs-manager routing -> `fat_rename_path`. Only the directory entry
+  moves; the cluster chain is never read or copied, so a rename costs the same
+  regardless of file size. The new entry is written BEFORE the old is
+  tombstoned, so an interruption leaves the chain reachable under two names
+  rather than none. A directory that changes parents has its `..` rewritten
+  under the same 0-when-parent-is-root rule `mkdir` uses.
+
+  It deliberately differs from POSIX in two ways, both in `TASKS.md`: an
+  existing destination is refused rather than replaced, and an open source is
+  refused (`WASMOS_ERR_FS_BUSY`) because a descriptor records where its
+  directory entry lives. Cross-mount renames are refused by fs-manager.
 - `block_buffer_map` overlays a caller block buffer into linear memory so FAT
   I/O normally avoids staging copies. Bounds checks limit legacy copy/write
   calls to the live block slot.

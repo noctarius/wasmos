@@ -24,6 +24,8 @@
 
 #include "test_shuffle.h"
 
+#include "wasmos_driver_abi.h"
+
 #include "fat_alloc.h"
 #include "fat_block.h"
 #include "fat_dir.h"
@@ -1134,6 +1136,198 @@ static void test_fat32_append_cluster_links_the_chain(void) {
     free_volume();
 }
 
+/* --- rename ------------------------------------------------------------- */
+
+/* A rename re-points a NAME at an existing chain: the start cluster and size
+ * must come through untouched, or the data has been silently relocated.
+ *
+ * The root is used because the new name needs a free directory slot, and this
+ * fixture fills /SUB's first cluster to its last entry on purpose. Renaming
+ * INTO a directory whose first cluster is full fails WASMOS_ERR_FS_NO_SPACE --
+ * inherited from fat_find_free_dir_slots, which create has too (docs/TASKS.md),
+ * not something rename introduces. */
+static void test_rename_within_a_directory_preserves_the_chain(void) {
+    fat_mount_t mnt;
+    fat_block_t blk;
+    fat_rename_ctx_t r;
+    fat_dir_entry_info_t before;
+    fat_resolve_ctx_t res;
+    fat_r_t rc;
+
+    build_volume(0);
+    mount_volume(&mnt, &blk);
+
+    memset(&res, 0, sizeof(res));
+    res.path = "/INROOT.TXT";
+    res.source = -1;
+    rc = fat_resolve_path(&res, &blk, &mnt);
+    CHECK(rc == FAT_R_DONE && res.found.valid, "the source resolves before the rename");
+    before = res.found;
+
+    memset(&r, 0, sizeof(r));
+    r.old_path = "/INROOT.TXT";
+    r.new_path = "/RENAMED.TXT";
+    r.source = -1;
+    rc = fat_rename_path(&r, &blk, &mnt, NULL, 0);
+    CHECK(rc == FAT_R_DONE, "the rename completes");
+
+    memset(&res, 0, sizeof(res));
+    res.path = "/RENAMED.TXT";
+    res.source = -1;
+    rc = fat_resolve_path(&res, &blk, &mnt);
+    CHECK(rc == FAT_R_DONE && res.found.valid, "the new name resolves");
+    CHECK(res.found.cluster == before.cluster, "the start cluster is unchanged");
+    CHECK(res.found.size == before.size, "the size is unchanged");
+
+    memset(&res, 0, sizeof(res));
+    res.path = "/INROOT.TXT";
+    res.source = -1;
+    rc = fat_resolve_path(&res, &blk, &mnt);
+    CHECK(rc == FAT_R_DONE, "the old-name lookup completes");
+    CHECK(res.found.valid == 0, "the old name is gone");
+
+    free_volume();
+}
+
+/* Moving between directories is the same operation with a different parent. */
+static void test_rename_moves_between_directories(void) {
+    fat_mount_t mnt;
+    fat_block_t blk;
+    fat_rename_ctx_t r;
+    fat_resolve_ctx_t res;
+    fat_r_t rc;
+    uint32_t cluster_before;
+
+    build_volume(0);
+    mount_volume(&mnt, &blk);
+
+    memset(&res, 0, sizeof(res));
+    res.path = "/SUB/TARGET.TXT";
+    res.source = -1;
+    (void)fat_resolve_path(&res, &blk, &mnt);
+    cluster_before = res.found.cluster;
+
+    memset(&r, 0, sizeof(r));
+    r.old_path = "/SUB/TARGET.TXT";
+    r.new_path = "/MOVED.TXT"; /* into the root */
+    r.source = -1;
+    rc = fat_rename_path(&r, &blk, &mnt, NULL, 0);
+    CHECK(rc == FAT_R_DONE, "the move completes");
+
+    memset(&res, 0, sizeof(res));
+    res.path = "/MOVED.TXT";
+    res.source = -1;
+    rc = fat_resolve_path(&res, &blk, &mnt);
+    CHECK(rc == FAT_R_DONE && res.found.valid, "the entry resolves under the new parent");
+    CHECK(res.found.cluster == cluster_before, "moving does not relocate the data");
+
+    memset(&res, 0, sizeof(res));
+    res.path = "/SUB/TARGET.TXT";
+    res.source = -1;
+    (void)fat_resolve_path(&res, &blk, &mnt);
+    CHECK(res.found.valid == 0, "the entry is gone from the old parent");
+
+    free_volume();
+}
+
+/* Refusing an existing destination is the documented contract, and the source
+ * has to survive the refusal -- a half-done rename would lose the file. */
+static void test_rename_refuses_an_existing_destination(void) {
+    fat_mount_t mnt;
+    fat_block_t blk;
+    fat_rename_ctx_t r;
+    fat_resolve_ctx_t res;
+    fat_r_t rc;
+
+    build_volume(0);
+    mount_volume(&mnt, &blk);
+
+    memset(&r, 0, sizeof(r));
+    r.old_path = "/SUB/TARGET.TXT";
+    r.new_path = "/INROOT.TXT"; /* already exists */
+    r.source = -1;
+    rc = fat_rename_path(&r, &blk, &mnt, NULL, 0);
+    CHECK(rc == FAT_R_ERR, "the rename is refused");
+    CHECK(g_last_err == WASMOS_ERR_FS_EXISTS, "it reports EXISTS");
+
+    memset(&res, 0, sizeof(res));
+    res.path = "/SUB/TARGET.TXT";
+    res.source = -1;
+    (void)fat_resolve_path(&res, &blk, &mnt);
+    CHECK(res.found.valid == 1, "the source survives a refused rename");
+
+    memset(&res, 0, sizeof(res));
+    res.path = "/INROOT.TXT";
+    res.source = -1;
+    (void)fat_resolve_path(&res, &blk, &mnt);
+    CHECK(res.found.valid == 1, "and so does the destination");
+
+    free_volume();
+}
+
+/* A missing source is a miss, not a crash. */
+static void test_rename_refuses_a_missing_source(void) {
+    fat_mount_t mnt;
+    fat_block_t blk;
+    fat_rename_ctx_t r;
+    fat_r_t rc;
+
+    build_volume(0);
+    mount_volume(&mnt, &blk);
+
+    memset(&r, 0, sizeof(r));
+    r.old_path = "/SUB/NOSUCH.TXT";
+    r.new_path = "/SUB/WHATEVER.TXT";
+    r.source = -1;
+    rc = fat_rename_path(&r, &blk, &mnt, NULL, 0);
+    CHECK(rc == FAT_R_ERR, "the rename is refused");
+    CHECK(g_last_err == WASMOS_ERR_FS_NOT_FOUND, "it reports NOT_FOUND");
+
+    free_volume();
+}
+
+/* An open file's descriptor records where its directory entry lives, so moving
+ * the entry would leave that slot pointing at a tombstone. */
+static void test_rename_refuses_an_open_source(void) {
+    fat_mount_t mnt;
+    fat_block_t blk;
+    fat_rename_ctx_t r;
+    fat_resolve_ctx_t res;
+    fat_open_file_t open_files[1];
+    fat_r_t rc;
+
+    build_volume(0);
+    mount_volume(&mnt, &blk);
+
+    memset(&res, 0, sizeof(res));
+    res.path = "/SUB/TARGET.TXT";
+    res.source = -1;
+    (void)fat_resolve_path(&res, &blk, &mnt);
+
+    memset(open_files, 0, sizeof(open_files));
+    open_files[0].in_use = 1;
+    open_files[0].owner = 5;
+    open_files[0].dir_lba = res.found.dir_lba;
+    open_files[0].dir_sector = res.found.dir_sector;
+    open_files[0].dir_index = res.found.dir_index;
+
+    memset(&r, 0, sizeof(r));
+    r.old_path = "/SUB/TARGET.TXT";
+    r.new_path = "/SUB/RENAMED.TXT";
+    r.source = -1;
+    rc = fat_rename_path(&r, &blk, &mnt, open_files, 1u);
+    CHECK(rc == FAT_R_ERR, "the rename is refused while the source is open");
+    CHECK(g_last_err == WASMOS_ERR_FS_BUSY, "it reports BUSY");
+
+    memset(&res, 0, sizeof(res));
+    res.path = "/SUB/TARGET.TXT";
+    res.source = -1;
+    (void)fat_resolve_path(&res, &blk, &mnt);
+    CHECK(res.found.valid == 1, "the source is untouched");
+
+    free_volume();
+}
+
 static const wasmos_test_void_case_t k_cases[] = {
     WASMOS_TEST_CASE(test_finds_entry_in_second_cluster),
     WASMOS_TEST_CASE(test_still_finds_entry_in_first_cluster),
@@ -1155,6 +1349,11 @@ static const wasmos_test_void_case_t k_cases[] = {
     WASMOS_TEST_CASE(test_fat32_mkdir_initialises_the_new_cluster),
     WASMOS_TEST_CASE(test_fat32_rmdir_frees_the_cluster),
     WASMOS_TEST_CASE(test_fat32_append_cluster_links_the_chain),
+    WASMOS_TEST_CASE(test_rename_within_a_directory_preserves_the_chain),
+    WASMOS_TEST_CASE(test_rename_moves_between_directories),
+    WASMOS_TEST_CASE(test_rename_refuses_an_existing_destination),
+    WASMOS_TEST_CASE(test_rename_refuses_a_missing_source),
+    WASMOS_TEST_CASE(test_rename_refuses_an_open_source),
 };
 
 int main(void) {

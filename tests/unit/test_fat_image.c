@@ -456,6 +456,9 @@ int main(int argc, char** argv) {
     fat_create_ctx_t create;
     fat_mkdir_ctx_t mkdir_ctx;
     fat_remove_ctx_t remove_ctx;
+    fat_rename_ctx_t rename_ctx;
+    uint32_t rename_cluster;
+    uint32_t rename_size;
     fat_op_ctx_t op;
     fat_open_pool_t pool;
     int32_t trunc_fd;
@@ -664,6 +667,32 @@ int main(int argc, char** argv) {
     CHECK(resolve_ok(&blk, &mnt, "/MADEDIR/INNER.TXT", &info), "the nested file resolves back");
     CHECK(info.size == (uint32_t)strlen(INNER_TEXT), "the nested file has its content size");
 
+    /* (e2) RENAME a file the formatter wrote, and MOVE another into a
+     *      directory. The chain is never copied, so the host must see the same
+     *      bytes under the new name -- that is the whole contract. */
+    CHECK(resolve_ok(&blk, &mnt, "/SUBDIR/CHILD.TXT", &info), "the rename source exists");
+    rename_cluster = info.cluster;
+    rename_size = info.size;
+    memset(&rename_ctx, 0, sizeof(rename_ctx));
+    rename_ctx.old_path = "/SUBDIR/CHILD.TXT";
+    rename_ctx.new_path = "/SUBDIR/RENAMED.TXT";
+    rename_ctx.source = -1;
+    rc = fat_rename_path(&rename_ctx, &blk, &mnt, NULL, 0);
+    CHECK(rc == FAT_R_DONE, "renaming within a directory succeeds");
+    CHECK(resolve_ok(&blk, &mnt, "/SUBDIR/RENAMED.TXT", &info), "the new name resolves");
+    CHECK(info.cluster == rename_cluster, "the rename did not relocate the data");
+    CHECK(info.size == rename_size, "the size came through unchanged");
+    CHECK(!resolve_ok(&blk, &mnt, "/SUBDIR/CHILD.TXT", &info), "the old name is gone");
+
+    memset(&rename_ctx, 0, sizeof(rename_ctx));
+    rename_ctx.old_path = "/HELLO.TXT";
+    rename_ctx.new_path = "/MADEDIR/MOVED.TXT";
+    rename_ctx.source = -1;
+    rc = fat_rename_path(&rename_ctx, &blk, &mnt, NULL, 0);
+    CHECK(rc == FAT_R_DONE, "moving into another directory succeeds");
+    CHECK(resolve_ok(&blk, &mnt, "/MADEDIR/MOVED.TXT", &info), "it resolves under the new parent");
+    CHECK(!resolve_ok(&blk, &mnt, "/HELLO.TXT", &info), "and is gone from the old one");
+
     /* (f) DELETE one of the formatter's files. */
     memset(&remove_ctx, 0, sizeof(remove_ctx));
     remove_ctx.path = "/SIZED.BIN";
@@ -672,7 +701,7 @@ int main(int argc, char** argv) {
     rc = fat_remove_path(&remove_ctx, &blk, &mnt, NULL, 0);
     CHECK(rc == FAT_R_DONE, "unlinking one of the formatter's files succeeds");
     CHECK(!resolve_ok(&blk, &mnt, "/SIZED.BIN", &info), "the unlinked file no longer resolves");
-    CHECK(resolve_ok(&blk, &mnt, "/SUBDIR/CHILD.TXT", &info), "an unrelated file survives it");
+    CHECK(resolve_ok(&blk, &mnt, "/SUBDIR/RENAMED.TXT", &info), "an unrelated file survives it");
 
     if (store_image(g_image_path) != 0) {
         return 1;

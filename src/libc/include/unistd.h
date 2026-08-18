@@ -58,6 +58,13 @@ off_t lseek(int fd, off_t offset, int whence);
 int stat(const char* path, struct stat* st);
 /* Remove a file. Returns 0 on success, -1 on failure. */
 int unlink(const char* path);
+
+/* Rename or move `old_path` to `new_path` within one mount.  0 on success, -1
+ * otherwise.  Unlike POSIX rename(), an EXISTING destination is refused rather
+ * than replaced, and an open source is refused (WASMOS_ERR_FS_BUSY): the
+ * backend's descriptors record where a file's directory entry lives.  The
+ * file's data is never copied -- only the directory entry moves. */
+int rename(const char* old_path, const char* new_path);
 /* Remove a directory. Returns 0 on success, -1 on failure. */
 int rmdir(const char* path);
 /* List the FS manager's current directory into `buf`: one newline-terminated

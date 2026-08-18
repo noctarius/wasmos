@@ -1031,6 +1031,108 @@ fat_r_t fat_remove_path(fat_remove_ctx_t* r, fat_block_t* blk, const fat_mount_t
     FAT_CO_END(r);
 }
 
+fat_r_t fat_rename_path(fat_rename_ctx_t* r, fat_block_t* blk, const fat_mount_t* mnt,
+                        const fat_open_file_t* files, uint32_t file_count) {
+    uint32_t i;
+
+    FAT_CO_BEGIN(r);
+
+    if (!r->old_path || !r->new_path) {
+        FAT_CO_FAIL(r, blk, WASMOS_ERR_FS_BAD_ARGS);
+    }
+
+    /* Resolve the source and LATCH its entry: everything below restages the
+     * block buffer, so the entry cannot be re-read later. */
+    r->resolve.cont = 0;
+    r->resolve.path = r->old_path;
+    r->resolve.source = r->source;
+    FAT_CO_AWAIT(r, fat_resolve_path(&r->resolve, blk, mnt));
+    if (!r->resolve.found.valid) {
+        FAT_CO_FAIL(r, blk, WASMOS_ERR_FS_NOT_FOUND);
+    }
+    r->entry = r->resolve.found;
+    r->is_dir = (uint8_t)((r->entry.attr & 0x10) != 0 ? 1u : 0u);
+
+    /* An open file's descriptor records where its directory entry lives, so
+     * moving the entry out from under it would leave that slot pointing at a
+     * tombstone. */
+    if (fat_entry_is_open(&r->entry, files, file_count)) {
+        FAT_CO_FAIL(r, blk, WASMOS_ERR_FS_BUSY);
+    }
+
+    /* The destination must not exist.  Replacing it would mean freeing its
+     * cluster chain here, which is a second failure mode inside an operation
+     * that already has no way to roll back; POSIX rename() overwrites, this
+     * does not (see docs/TASKS.md). */
+    r->dest_probe.cont = 0;
+    r->dest_probe.path = r->new_path;
+    r->dest_probe.source = r->source;
+    FAT_CO_AWAIT(r, fat_resolve_path(&r->dest_probe, blk, mnt));
+    if (r->dest_probe.found.valid) {
+        FAT_CO_FAIL(r, blk, WASMOS_ERR_FS_EXISTS);
+    }
+
+    /* The source's parent, needed only to decide whether a directory's '..'
+     * has to change. */
+    r->old_parent.cont = 0;
+    r->old_parent.path = r->old_path;
+    r->old_parent.source = r->source;
+    FAT_CO_AWAIT(r, fat_resolve_parent_dir(&r->old_parent, blk, mnt));
+    if (!r->old_parent.found.valid) {
+        FAT_CO_FAIL(r, blk, WASMOS_ERR_FS_NOT_FOUND);
+    }
+
+    /* Write the new name first, carrying the SAME start cluster and size: the
+     * file's data is never touched by a rename. */
+    r->create.cont = 0;
+    r->create.path = r->new_path;
+    r->create.source = r->source;
+    r->create.attr = r->entry.attr;
+    r->create.cluster = r->entry.cluster;
+    r->create.size = r->entry.size;
+    r->create.fail_if_exists = 1;
+    FAT_CO_AWAIT(r, fat_create_path_entry(&r->create, blk, mnt));
+
+    /* Now drop the old name.  Only the directory entry goes; the cluster chain
+     * stays, which is the whole point. */
+    r->entry_index = r->entry.dir_sector * (mnt->bytes_per_sector / 32u) + r->entry.dir_index;
+    r->delchain.cont = 0;
+    r->delchain.dir_lba = r->entry.dir_lba;
+    r->delchain.entry_index = r->entry_index;
+    FAT_CO_AWAIT(r, fat_delete_dir_entry_chain(&r->delchain, blk, mnt));
+
+    /* A directory that changed parents carries a stale '..'.  The convention is
+     * the one fat_create_directory applies: 0 when the parent is the root, on
+     * every FAT width. */
+    if (!r->is_dir || r->entry.cluster < 2) {
+        FAT_CO_DONE(r);
+    }
+    r->dotdot_cluster = r->create.parent.found.cluster;
+    if ((r->create.parent.found.attr & 1u) != 0 ||
+        (mnt->fat_type == FAT_TYPE_32 && r->dotdot_cluster == mnt->root_cluster)) {
+        r->dotdot_cluster = 0;
+    }
+    if (r->dotdot_cluster == r->old_parent.found.cluster &&
+        (r->create.parent.found.attr & 1u) == (r->old_parent.found.attr & 1u)) {
+        FAT_CO_DONE(r); /* same parent: '..' already correct */
+    }
+
+    FAT_CO_READ(r, blk, fat_lba_for_cluster(mnt, r->entry.cluster));
+    for (i = 0; i < 32u; ++i) {
+        r->entry_buf[i] = fat_block_sector(blk)[32u + i];
+    }
+    if (r->entry_buf[0] != '.' || r->entry_buf[1] != '.') {
+        FAT_CO_FAIL(r, blk, WASMOS_ERR_FS_CORRUPT); /* second slot is not '..' */
+    }
+    fat_dirent_set_cluster(r->entry_buf, r->dotdot_cluster);
+    for (i = 0; i < 32u; ++i) {
+        fat_block_sector(blk)[32u + i] = r->entry_buf[i];
+    }
+    FAT_CO_WRITE(r, blk, fat_lba_for_cluster(mnt, r->entry.cluster));
+
+    FAT_CO_END(r);
+}
+
 /* --- Directory navigation (READDIR / CHDIR). --- */
 
 /* Stream a NUL-terminated string to the READDIR client, byte-packed 4 per

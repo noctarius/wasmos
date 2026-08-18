@@ -174,6 +174,7 @@ pub const FS_IPC_READDIR_REQ: i32 = 0x410;
 pub const FS_IPC_CHDIR_REQ: i32 = 0x412;
 pub const FS_IPC_READ_APP_REQ: i32 = 0x413;
 pub const FS_IPC_READ_PATH_REQ: i32 = 0x414;
+pub const FS_IPC_RENAME_REQ: i32 = 0x415;
 pub const FS_IPC_RESP: i32 = 0x480;
 pub const FS_IPC_STREAM: i32 = 0x481;
 pub const FS_IPC_ERROR: i32 = 0x4FF;

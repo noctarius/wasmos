@@ -145,8 +145,7 @@ verify_host_readable() {
     else
         fail "$name: WROTE.TXT not visible to the host"; ok=0
     fi
-    # (b) new file with content
-    expect_content "$dir/HELLO.TXT" "$HELLO_TEXT" "HELLO.TXT" "$name" || ok=0
+    # (b) the new file with content is checked at its POST-RENAME path below
     # (c) multi-cluster file, byte for byte
     if [ -f "$dir/BIG.BIN" ]; then
         expected_big > "$WORK/big.expected"
@@ -189,10 +188,17 @@ verify_host_readable() {
     # (e) directory + nested file with content
     [ -d "$dir/MADEDIR" ] || { fail "$name: MADEDIR not visible to the host"; ok=0; }
     expect_content "$dir/MADEDIR/INNER.TXT" "$INNER_TEXT" "MADEDIR/INNER.TXT" "$name" || ok=0
-    # (f) the deleted file is gone, and an untouched one still reads correctly
+    # (e2) the RENAMED file keeps its content under the new name, and the moved
+    #      one carries HELLO.TXT's bytes into its new directory. Comparing
+    #      content is what distinguishes a rename from a create-plus-lose.
+    expect_content "$dir/SUBDIR/RENAMED.TXT" "short name in a subdir" \
+                   "SUBDIR/RENAMED.TXT (renamed)" "$name" || ok=0
+    [ ! -e "$dir/SUBDIR/CHILD.TXT" ] || { fail "$name: the old name survived the rename"; ok=0; }
+    expect_content "$dir/MADEDIR/MOVED.TXT" "$HELLO_TEXT" "MADEDIR/MOVED.TXT (moved)" "$name" || ok=0
+    [ ! -e "$dir/HELLO.TXT" ] || { fail "$name: the moved file is still at its old path"; ok=0; }
+
+    # (f) the deleted file is gone
     [ ! -e "$dir/SIZED.BIN" ] || { fail "$name: the unlinked SIZED.BIN is still present"; ok=0; }
-    expect_content "$dir/SUBDIR/CHILD.TXT" "short name in a subdir" \
-                   "SUBDIR/CHILD.TXT (untouched)" "$name" || ok=0
 
     if [ -n "$cleanup" ]; then
         hdiutil detach "$cleanup" -quiet || true

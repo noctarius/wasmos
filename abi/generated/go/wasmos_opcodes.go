@@ -174,6 +174,7 @@ const FS_IPC_READDIR_REQ int32 = 0x410
 const FS_IPC_CHDIR_REQ int32 = 0x412
 const FS_IPC_READ_APP_REQ int32 = 0x413
 const FS_IPC_READ_PATH_REQ int32 = 0x414
+const FS_IPC_RENAME_REQ int32 = 0x415
 const FS_IPC_RESP int32 = 0x480
 const FS_IPC_STREAM int32 = 0x481
 const FS_IPC_ERROR int32 = 0x4FF

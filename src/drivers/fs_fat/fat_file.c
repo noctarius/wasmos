@@ -740,6 +740,57 @@ fat_r_t fat_op_unlink(fat_op_ctx_t* op, fat_block_t* blk, const fat_mount_t* mnt
     FAT_CO_END(op);
 }
 
+/* RENAME carries BOTH paths in one client buffer: the source at offset 0 and
+ * the destination immediately after its NUL, with arg0/arg1 their lengths.
+ * One buffer keeps the request a single message; the destination's offset is
+ * derived rather than sent, so the two cannot disagree. */
+fat_r_t fat_op_rename(fat_op_ctx_t* op, fat_block_t* blk, const fat_mount_t* mnt,
+                      fat_open_pool_t* pool) {
+    uint32_t old_len;
+    uint32_t new_len;
+    uint8_t path_is_init;
+
+    FAT_CO_BEGIN(op);
+    old_len = (uint32_t)op->arg0;
+    new_len = (uint32_t)op->arg1;
+    path_is_init = 0;
+
+    if (old_len == 0 || new_len == 0 || old_len >= sizeof(op->path) ||
+        new_len >= sizeof(op->rename_path)) {
+        FAT_CO_FAIL(op, blk, WASMOS_ERR_FS_BAD_ARGS);
+    }
+    if (old_len + new_len + 2u > (uint32_t)wasmos_xfer_buffer_size()) {
+        FAT_CO_FAIL(op, blk, WASMOS_ERR_FS_PATH_TOO_LONG);
+    }
+    if (wasmos_sys_buffer_read(op->arg2, op->path, (int32_t)old_len, 0) != 0 ||
+        wasmos_sys_buffer_read(
+            op->arg2, op->rename_path, (int32_t)new_len, (int32_t)(old_len + 1u)) != 0) {
+        FAT_CO_FAIL(op, blk, WASMOS_ERR_FS_BUFFER);
+    }
+    op->path[old_len] = '\0';
+    op->rename_path[new_len] = '\0';
+
+    if (vfs_translate_path(op->path, op->fat_path, sizeof(op->fat_path), &path_is_init) != 0 ||
+        path_is_init) {
+        FAT_CO_FAIL(op, blk, WASMOS_ERR_FS_TRANSLATE);
+    }
+    if (vfs_translate_path(
+            op->rename_path, op->fat_rename_path, sizeof(op->fat_rename_path), &path_is_init) !=
+            0 ||
+        path_is_init) {
+        FAT_CO_FAIL(op, blk, WASMOS_ERR_FS_TRANSLATE);
+    }
+
+    op->rename.cont = 0;
+    op->rename.old_path = op->fat_path;
+    op->rename.new_path = op->fat_rename_path;
+    op->rename.source = op->source;
+    FAT_CO_AWAIT(op, fat_rename_path(&op->rename, blk, mnt, pool->files, FAT_MAX_OPEN_FILES));
+    op->resp_override = 1;
+    op->resp_arg0 = 0;
+    FAT_CO_END(op);
+}
+
 fat_r_t fat_op_mkdir(fat_op_ctx_t* op, fat_block_t* blk, const fat_mount_t* mnt,
                      fat_open_pool_t* pool) {
     uint8_t path_is_init;

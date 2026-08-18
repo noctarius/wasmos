@@ -839,26 +839,6 @@ tail.
 
 ## Filesystems and Storage
 
-- [ ] [TEST][P2] Drive `fat_op_read` as well as `fat_op_write`.
-  `tests/unit/test_fat_image.c` now drives `fat_op_write` end to end (request
-  parsing, the buffer-size clamp, capacity growth, the partial-sector merge and
-  the size write-back), which became possible once `dst`/`src` gained a
-  `c_type` of `void*`. `fat_op_read` still is not driven: it goes through
-  `fat_block_read_direct`, the zero-copy borrow passthrough, which the harness
-  does not model because the block server writes the client buffer itself. The
-  suite reads content back through the chain instead. Modelling a direct read
-  means giving the fake block layer a notion of the client buffer as a
-  destination, which is a small amount of work and worth doing next time
-  something in that path changes.
-
-- [ ] [FEATURE][P2] Round-trip a file's DATA on FAT32. The metadata mutation paths
-  are covered (`tests/unit/test_fat_dir.c`: create, mkdir with its dot entries,
-  rmdir freeing the chain, `fat_append_cluster_to_file` linking a chain, and
-  `fat_fatent_write` preserving the reserved high nibble). What no host test
-  reaches is `fat_op_read`/`fat_op_write`, because both go through the client
-  transfer-buffer path the harness stubs out with aborts. Done when a FAT32
-  volume round-trips file contents end to end -- most naturally as an
-  integration test, since the transfer-buffer path is what needs a live system.
 - [ ] [ENHANCEMENT][P2] Apply the non-blocking reactor model to `fs-init` (currently a blocking
   dispatcher with no SEEK/STAT — `src/drivers/fs_init/fs_init.c:498-569`) and
   preserve the transfer-buffer ownership contract through all VFS relay paths.

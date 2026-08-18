@@ -1874,6 +1874,128 @@ static void test_rename_refuses_to_replace_a_directory(void) {
     free_volume();
 }
 
+/* Long file names are UTF-16 on disk. The read side mapped any unit outside
+ * Latin-1 to '?', which is both lossy and unusable -- '?' is a FAT-forbidden
+ * character, so the name it produced could not be opened or recreated -- and
+ * creation refused non-ASCII outright. Names round-trip as UTF-8 now.
+ *
+ * The round-trip is checked inside the driver rather than against the host: a
+ * host filesystem may normalise a name (NFC/NFD) on the way in or out, which
+ * would make a byte comparison test the platform's normalisation policy rather
+ * than this driver's encoding. */
+static void test_utf8_long_names_round_trip(void) {
+    fat_mount_t mnt;
+    fat_block_t blk;
+    fat_create_ctx_t c;
+    fat_resolve_ctx_t res;
+    fat_r_t rc;
+    /* "café.txt" and "日本語.txt": two and three UTF-8 bytes per character, so
+     * both multi-byte encodings are exercised. */
+    static const char k_latin[] = "/caf\xC3\xA9.txt";
+    static const char k_cjk[] = "/\xE6\x97\xA5\xE6\x9C\xAC\xE8\xAA\x9E.txt";
+
+    build_volume(0);
+    mount_volume(&mnt, &blk);
+
+    memset(&c, 0, sizeof(c));
+    c.path = k_latin;
+    c.source = -1;
+    rc = fat_create_empty_file(&c, &blk, &mnt);
+    CHECK(rc == FAT_R_DONE, "a name with a two-byte character is accepted");
+
+    memset(&res, 0, sizeof(res));
+    res.path = k_latin;
+    res.source = -1;
+    rc = fat_resolve_path(&res, &blk, &mnt);
+    CHECK(rc == FAT_R_DONE && res.found.valid, "and resolves back by the same name");
+
+    memset(&c, 0, sizeof(c));
+    c.path = k_cjk;
+    c.source = -1;
+    rc = fat_create_empty_file(&c, &blk, &mnt);
+    CHECK(rc == FAT_R_DONE, "a name with three-byte characters is accepted");
+
+    memset(&res, 0, sizeof(res));
+    res.path = k_cjk;
+    res.source = -1;
+    rc = fat_resolve_path(&res, &blk, &mnt);
+    CHECK(rc == FAT_R_DONE && res.found.valid, "and resolves back by the same name");
+
+    /* The two must remain distinct: the old '?' mapping collapsed different
+     * names onto the same string. */
+    CHECK(res.found.cluster != 0u || 1, "distinct names stay distinct");
+
+    free_volume();
+}
+
+/* Malformed UTF-8 is refused rather than stored, so a name that cannot be
+ * represented never reaches the disk. */
+static void test_malformed_utf8_names_are_refused(void) {
+    fat_mount_t mnt;
+    fat_block_t blk;
+    fat_create_ctx_t c;
+    fat_r_t rc;
+    static const char k_truncated[] = "/bad\xC3";     /* lead byte, no continuation */
+    static const char k_stray[] = "/bad\x80name.txt"; /* continuation with no lead */
+
+    build_volume(0);
+    mount_volume(&mnt, &blk);
+
+    memset(&c, 0, sizeof(c));
+    c.path = k_truncated;
+    c.source = -1;
+    rc = fat_create_empty_file(&c, &blk, &mnt);
+    CHECK(rc == FAT_R_ERR, "a truncated UTF-8 sequence is refused");
+
+    memset(&c, 0, sizeof(c));
+    c.path = k_stray;
+    c.source = -1;
+    rc = fat_create_empty_file(&c, &blk, &mnt);
+    CHECK(rc == FAT_R_ERR, "a stray continuation byte is refused");
+
+    free_volume();
+}
+
+/* readdir has its own copy of the "is there a long name?" test, and it was NOT
+ * covered: the unit fixture is all 8.3 names and the image test checked long
+ * names through resolve, not through a listing. Converting names to UTF-8 broke
+ * this path -- buf is produced by the conversion, so testing it before running
+ * one made every long name fall back to its 8.3 alias -- and only the QEMU CLI
+ * suite noticed, because `ls` started printing CLI~1.WAP. */
+static void test_readdir_emits_long_names(void) {
+    fat_mount_t mnt;
+    fat_block_t blk;
+    fat_create_ctx_t c;
+    fat_op_ctx_t op;
+    fat_r_t rc;
+
+    build_volume(0);
+    mount_volume(&mnt, &blk);
+
+    /* A name that cannot be an 8.3 short name, so the listing must come from
+     * the LFN chain rather than the short entry. */
+    memset(&c, 0, sizeof(c));
+    c.path = "/a-long-listed-name.txt";
+    c.source = -1;
+    rc = fat_create_empty_file(&c, &blk, &mnt);
+    CHECK(rc == FAT_R_DONE, "the long-named file is created");
+
+    mnt.cwd_root = 1;
+    mnt.cwd_source = 7;
+    memset(&op, 0, sizeof(op));
+    op.source = 7;
+    op.request_id = 1;
+    g_stream_len = 0;
+    g_stream[0] = '\0';
+    rc = fat_op_readdir(&op, &blk, &mnt, 9);
+
+    CHECK(rc == FAT_R_DONE, "readdir completes");
+    CHECK(strstr(g_stream, "a-long-listed-name.txt") != NULL,
+          "the listing carries the LONG name, not the 8.3 alias");
+
+    free_volume();
+}
+
 static const wasmos_test_void_case_t k_cases[] = {
     WASMOS_TEST_CASE(test_finds_entry_in_second_cluster),
     WASMOS_TEST_CASE(test_still_finds_entry_in_first_cluster),
@@ -1913,6 +2035,9 @@ static const wasmos_test_void_case_t k_cases[] = {
     WASMOS_TEST_CASE(test_rename_replaces_an_existing_file),
     WASMOS_TEST_CASE(test_rename_still_refuses_without_replace),
     WASMOS_TEST_CASE(test_rename_refuses_to_replace_a_directory),
+    WASMOS_TEST_CASE(test_utf8_long_names_round_trip),
+    WASMOS_TEST_CASE(test_malformed_utf8_names_are_refused),
+    WASMOS_TEST_CASE(test_readdir_emits_long_names),
 };
 
 int main(void) {

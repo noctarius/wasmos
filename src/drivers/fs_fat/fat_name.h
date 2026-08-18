@@ -30,6 +30,12 @@ int fat_entry_name_from_dirent(fat_lfn_t* lfn, const uint8_t* ent, char* out, ui
 
 /* Validate a candidate long file name (ASCII, no reserved chars, <= FAT_LFN_MAX)
  * and report its length; returns 0 on success. */
+/* Convert a UTF-8 name to UTF-16 code units, refusing malformed input and the
+ * characters FAT forbids.  Pass out=NULL to validate and count only.  Returns 0,
+ * or -1; *out_len is the number of UTF-16 units, which is what sizes the LFN
+ * chain (13 units per entry). */
+int fat_utf8_to_utf16(const char* name, uint16_t* out, uint32_t out_cap, uint32_t* out_len);
+
 int fat_validate_lfn_name(const char* name, uint32_t* out_len);
 
 /* Encode `name` as a strict 8.3 short name into out[11]; returns 0 only when the
@@ -45,7 +51,7 @@ uint8_t fat_short_name_checksum(const uint8_t short_name[11]);
 int fat_build_short_alias(const char* name, uint32_t ordinal, uint8_t out[11]);
 
 /* Construct one 32-byte FAT Long File Name directory entry for writing. */
-void fat_fill_lfn_entry(uint8_t* entry, const char* name, uint32_t name_len, uint32_t ordinal,
+void fat_fill_lfn_entry(uint8_t* entry, const uint16_t* units, uint32_t name_len, uint32_t ordinal,
                         uint32_t total, uint8_t checksum);
 
 #endif /* FS_FAT_FAT_NAME_H */

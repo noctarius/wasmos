@@ -848,9 +848,6 @@ tail.
   IPC and map via `dma_map_borrow`, then drive the PRDT/descriptor path.
 - [ ] [FEATURE][P2] Complete initfs zero-copy mapping with an explicit entry-offset ABI and
   correct revoke/lifetime behavior (still copy-based today).
-- [ ] [ENHANCEMENT][P2] Extend LFN creation beyond ASCII: new-file LFN entries currently store
-  `?`-mapped ASCII, not UTF-16 (`src/drivers/fs_fat/fat_name.c:175`; read-side
-  LFN already works).
 - [ ] [ENHANCEMENT][P2] Refetch fs-manager boot metadata out-of-band (push/idle-step) to remove
   the nested synchronous `DEVMGR_QUERY_MOUNT_REQ` deadlock hazard during
   class discovery (`src/services/fs_manager/fs_manager.c:608`).

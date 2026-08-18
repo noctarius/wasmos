@@ -841,7 +841,9 @@ fat_r_t fat_create_path_entry(fat_create_ctx_t* c, fat_block_t* blk, const fat_m
     c->name[i < sizeof(c->name) ? i : sizeof(c->name) - 1u] = '\0';
     c->entry_limit = fat_dir_entry_limit(mnt, c->root, c->dir_sectors);
 
-    if (fat_validate_lfn_name(c->name, &c->name_len) != 0) {
+    /* Decode once: the LFN entries are written from the UTF-16 form, and its
+     * unit count -- not the UTF-8 byte count -- is what sizes the chain. */
+    if (fat_utf8_to_utf16(c->name, c->name_units, FAT_LFN_MAX, &c->name_len) != 0) {
         FAT_CO_FAIL(c, blk, WASMOS_ERR_FS_NAME);
     }
 
@@ -911,8 +913,12 @@ fat_r_t fat_create_path_entry(fat_create_ctx_t* c, fat_block_t* blk, const fat_m
     if (!c->exact_short) {
         c->checksum = fat_short_name_checksum(c->short_name);
         for (c->i = 0; c->i < c->lfn_count; ++c->i) {
-            fat_fill_lfn_entry(
-                c->entry, c->name, c->name_len, c->lfn_count - c->i, c->lfn_count, c->checksum);
+            fat_fill_lfn_entry(c->entry,
+                               c->name_units,
+                               c->name_len,
+                               c->lfn_count - c->i,
+                               c->lfn_count,
+                               c->checksum);
             c->wr.cont = 0;
             c->wr.dir_lba = c->dir_lba;
             c->wr.first_cluster = c->parent.found.cluster;
@@ -1536,9 +1542,15 @@ fat_r_t fat_op_readdir(fat_op_ctx_t* op, fat_block_t* blk, const fat_mount_t* mn
                 }
                 const char* entry_name = 0;
                 const int is_dir = (ent[11] & 0x10) != 0;
-                if (s->lfn.valid && s->lfn.seen == s->lfn.total && s->lfn.buf[0]) {
+                /* Finalize BEFORE testing buf: it is produced by the
+                 * conversion, so testing it first would always fall back to the
+                 * 8.3 name -- and validity is re-tested after, because a name
+                 * that does not fit invalidates there. */
+                if (s->lfn.valid && s->lfn.seen == s->lfn.total && s->lfn.unit_count > 0) {
                     fat_lfn_finalize(&s->lfn);
-                    entry_name = s->lfn.buf;
+                    if (s->lfn.valid && s->lfn.buf[0]) {
+                        entry_name = s->lfn.buf;
+                    }
                 }
                 if (ent[11] & 0x08) {
                     fat_lfn_reset(&s->lfn);

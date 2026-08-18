@@ -529,6 +529,14 @@ linked feature documents for rationale and rollout plans.
   contexts are resumable stackless coroutines, while one active operation uses
   the shared 8 KiB block/DMA buffer. It supports FAT12/16/32 and LFN, reports
   `FS_ERR_*`, and binds to its requested block-device unit.
+- Long file names are UTF-8 at the API and UTF-16 on disk, in both directions.
+  Reading gathers UTF-16 units positionally (LFN entries arrive highest-ordinal
+  first, each carrying a fixed slice, which variable-length UTF-8 cannot do) and
+  converts once at the end; creating decodes the name to UTF-16 and sizes the
+  entry chain by UNIT count, not byte count. Malformed UTF-8, overlong
+  encodings and unpaired surrogates are refused rather than stored. A name whose
+  UTF-8 form exceeds the accumulator falls back to the entry's 8.3 short name —
+  a name that can be opened — rather than being truncated.
 - Every READ-side directory scan walks the whole cluster chain: lookup,
   short-name collision, the emptiness check `rmdir` depends on, the readdir
   stream, and `chdir` — which reached that by delegating to `fat_find_in_dir`

@@ -98,28 +98,43 @@ void fat_block_set_err(fat_block_t* blk, int32_t err) {
 /* The client data path, which this harness does not model.  Aborting rather
  * than returning a plausible value keeps a stray case from asserting against a
  * fiction. */
+#define XFER_CAP 4096u
+static uint8_t g_xfer[XFER_CAP];
+
+/* The zero-copy read passthrough, modelled so fat_op_read can be driven.  The
+ * real block server writes the client's buffer itself; here the image is the
+ * source and g_xfer is that buffer, which is the same shape from the driver's
+ * point of view: nothing lands in the staging sector, and the caller advances
+ * by the sector count the server reports rather than the one it asked for. */
+static uint32_t g_direct_sectors;
+
 uint32_t fat_block_direct_sectors(const fat_block_t* blk) {
     (void)blk;
-    assert(0 && "fat_block_direct_sectors: not driven here");
-    return 0;
+    return g_direct_sectors;
 }
 
 int32_t fat_block_server_endpoint(const fat_block_t* blk) {
     (void)blk;
-    assert(0 && "fat_block_server_endpoint: not driven here");
-    return -1;
+    return 42; /* any valid endpoint: the harness reborrows to nothing */
 }
 
 fat_r_t fat_block_read_direct(fat_block_t* blk, uint32_t lba, uint32_t count, int32_t buffer_id,
                               int32_t borrow_id, uint32_t dst_offset) {
+    uint32_t bytes;
+
     (void)blk;
-    (void)lba;
-    (void)count;
     (void)buffer_id;
     (void)borrow_id;
-    (void)dst_offset;
-    assert(0 && "fat_block_read_direct: not driven here");
-    return FAT_R_ERR;
+    if (count == 0u || lba + count > g_image_sectors) {
+        return FAT_R_ERR;
+    }
+    bytes = count * g_sector_bytes;
+    if (dst_offset + bytes > XFER_CAP) {
+        return FAT_R_ERR;
+    }
+    memcpy(g_xfer + dst_offset, image_sector(lba), bytes);
+    g_direct_sectors = count;
+    return FAT_R_DONE;
 }
 
 /* The client transfer buffer, modelled for real.
@@ -129,8 +144,6 @@ fat_r_t fat_block_read_direct(fat_block_t* blk, uint32_t lba, uint32_t count, in
  * the wasm import signature is unchanged, still an i32) and 64-bit here. While
  * it was declared int32_t a host pointer did not survive the call, which is why
  * fat_op_read/fat_op_write used to be stubbed out with aborts. */
-#define XFER_CAP 4096u
-static uint8_t g_xfer[XFER_CAP];
 
 int32_t wasmos_xfer_buffer_size(void) {
     return (int32_t)XFER_CAP;
@@ -428,6 +441,51 @@ static int write_file_content(fat_block_t* blk, const fat_mount_t* mnt, fat_open
     return op.resp_arg0 == (int32_t)len ? 0 : -1;
 }
 
+/* Read `len` bytes from offset 0 of `path` by driving fat_op_read -- the real
+ * entry point, including its zero-copy whole-sector passthrough and the
+ * bounce-through-the-staging-sector path for partial sectors. */
+static int read_via_op(fat_block_t* blk, const fat_mount_t* mnt, fat_open_pool_t* pool,
+                       const char* path, uint8_t* out, uint32_t len) {
+    fat_dir_entry_info_t info;
+    fat_open_file_t* file;
+    fat_op_ctx_t op;
+    int32_t fd = -1;
+
+    if (len > XFER_CAP) {
+        return -1;
+    }
+    if (!resolve_ok(blk, mnt, path, &info)) {
+        return -1;
+    }
+    if (fat_open_file_alloc(pool, -1, &fd) != 0) {
+        return -1;
+    }
+    file = fat_open_file_for_fd(pool, -1, fd);
+    if (!file || open_resolved(blk, mnt, &info, file) != 0) {
+        return -1;
+    }
+    file->owner = -1;
+    file->flags = 0; /* read access */
+
+    memset(g_xfer, 0, XFER_CAP);
+    memset(&op, 0, sizeof(op));
+    op.source = -1;
+    op.request_id = 1;
+    op.arg0 = fd;
+    op.arg1 = (int32_t)len;
+    op.arg2 = 1;
+    if (fat_op_read(&op, blk, mnt, pool) != FAT_R_DONE) {
+        file->in_use = 0;
+        return -1;
+    }
+    file->in_use = 0;
+    if (op.resp_arg0 != (int32_t)len) {
+        return -1;
+    }
+    memcpy(out, g_xfer, len);
+    return 0;
+}
+
 /* Read `len` bytes from offset 0 of `path` back through the chain, so the
  * driver's own view is checked before the external tools see the image. */
 static int read_file_content(fat_block_t* blk, const fat_mount_t* mnt, const char* path,
@@ -604,6 +662,20 @@ int main(int argc, char** argv) {
     CHECK(read_file_content(&blk, &mnt, "/BIG.BIN", bigback, BIG_LEN) == 0,
           "reading the multi-cluster file back succeeds");
     CHECK(memcmp(bigback, big, BIG_LEN) == 0, "every byte survives the chain walk");
+
+    /* And through fat_op_read itself, which is the path a client actually uses:
+     * whole sectors go straight to the client buffer, partial ones bounce
+     * through the staging sector. BIG_LEN is deliberately not a sector multiple
+     * so both halves run. */
+    memset(bigback, 0, sizeof(bigback));
+    CHECK(read_via_op(&blk, &mnt, &pool, "/BIG.BIN", bigback, BIG_LEN) == 0,
+          "reading it back through fat_op_read succeeds");
+    CHECK(memcmp(bigback, big, BIG_LEN) == 0, "fat_op_read returns every byte intact");
+    memset(readback, 0, sizeof(readback));
+    CHECK(read_via_op(&blk, &mnt, &pool, "/HELLO.TXT", readback, (uint32_t)strlen(HELLO_TEXT)) == 0,
+          "a sub-sector read through fat_op_read succeeds");
+    CHECK(memcmp(readback, HELLO_TEXT, strlen(HELLO_TEXT)) == 0,
+          "and returns exactly the written content");
 
     /* (d) OVERWRITE an existing file the formatter wrote.
      *

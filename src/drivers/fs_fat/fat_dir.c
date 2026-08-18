@@ -1291,16 +1291,71 @@ fat_r_t fat_rename_path(fat_rename_ctx_t* r, fat_block_t* blk, const fat_mount_t
         FAT_CO_FAIL(r, blk, WASMOS_ERR_FS_BUSY);
     }
 
-    /* The destination must not exist.  Replacing it would mean freeing its
-     * cluster chain here, which is a second failure mode inside an operation
-     * that already has no way to roll back; POSIX rename() overwrites, this
-     * does not (see docs/TASKS.md). */
+    /* An existing destination is replaced only when the caller asks for it.
+     * POSIX rename() overwrites; doing so silently by default would let a
+     * mistyped path destroy data, so `replace` is opt-in. */
     r->dest_probe.cont = 0;
     r->dest_probe.path = r->new_path;
     r->dest_probe.source = r->source;
     FAT_CO_AWAIT(r, fat_resolve_path(&r->dest_probe, blk, mnt));
     if (r->dest_probe.found.valid) {
-        FAT_CO_FAIL(r, blk, WASMOS_ERR_FS_EXISTS);
+        if (!r->replace) {
+            FAT_CO_FAIL(r, blk, WASMOS_ERR_FS_EXISTS);
+        }
+        /* Replacing a DIRECTORY would mean freeing whatever it contains -- a
+         * recursive delete wearing a rename's clothes.  Refused; remove it
+         * first if that is really the intent. */
+        if ((r->dest_probe.found.attr & 0x10) != 0 || r->is_dir) {
+            FAT_CO_FAIL(r, blk, WASMOS_ERR_FS_NOT_DIR);
+        }
+        if (fat_entry_is_open(&r->dest_probe.found, files, file_count)) {
+            FAT_CO_FAIL(r, blk, WASMOS_ERR_FS_BUSY);
+        }
+
+        /* Point the DESTINATION's existing entry at the source's data, then drop
+         * the source name, then release what the destination used to own.  The
+         * destination keeps its own name and LFN chain, so no new entry is
+         * needed.  In this order an interruption leaves the data reachable and
+         * at worst an orphaned chain, never a lost file. */
+        r->victim = r->dest_probe.found.cluster;
+        for (i = 0; i < 32u; ++i) {
+            r->entry_patch[i] = 0;
+        }
+        FAT_CO_READ(r, blk, r->dest_probe.found.dir_lba + r->dest_probe.found.dir_sector);
+        for (i = 0; i < 32u; ++i) {
+            r->entry_patch[i] = fat_block_sector(blk)[r->dest_probe.found.dir_index * 32u + i];
+        }
+        r->entry_patch[11] = r->entry.attr;
+        fat_dirent_set_cluster(r->entry_patch, r->entry.cluster);
+        r->entry_patch[28] = (uint8_t)(r->entry.size & 0xFFu);
+        r->entry_patch[29] = (uint8_t)((r->entry.size >> 8) & 0xFFu);
+        r->entry_patch[30] = (uint8_t)((r->entry.size >> 16) & 0xFFu);
+        r->entry_patch[31] = (uint8_t)((r->entry.size >> 24) & 0xFFu);
+
+        r->wr.cont = 0;
+        r->wr.dir_lba = r->dest_probe.found.dir_lba;
+        r->wr.first_cluster = r->dest_probe.found.dir_first_cluster;
+        r->wr.root = r->dest_probe.found.dir_root;
+        r->wr.entry_index = r->dest_probe.found.dir_entry_index;
+        for (i = 0; i < 32u; ++i) {
+            r->wr.entry[i] = r->entry_patch[i];
+        }
+        FAT_CO_AWAIT(r, fat_write_dir_entry(&r->wr, blk, mnt));
+
+        r->entry_index = r->entry.dir_entry_index;
+        r->delchain.cont = 0;
+        r->delchain.dir_lba = r->entry.dir_lba;
+        r->delchain.first_cluster = r->entry.dir_first_cluster;
+        r->delchain.root = r->entry.dir_root;
+        r->delchain.entry_index = r->entry_index;
+        FAT_CO_AWAIT(r, fat_delete_dir_entry_chain(&r->delchain, blk, mnt));
+
+        if (r->victim >= 2) {
+            r->freechain.cont = 0;
+            r->freechain.cluster = r->victim;
+            FAT_CO_AWAIT(r, fat_free_cluster_chain(&r->freechain, blk, mnt));
+        }
+        FAT_CO_DONE(r);
     }
 
     /* The source's parent, needed only to decide whether a directory's '..'

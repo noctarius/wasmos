@@ -120,10 +120,13 @@ fat_r_t fat_remove_path(fat_remove_ctx_t* r, fat_block_t* blk, const fat_mount_t
  * cluster and size -- the file's data is never read or rewritten.  Inputs on
  * `r`: old_path, new_path, source.
  *
- * Refuses WASMOS_ERR_FS_NOT_FOUND (no source), WASMOS_ERR_FS_BUSY (the source
- * is open, whose descriptor records the entry's location), and
- * WASMOS_ERR_FS_EXISTS (the destination exists -- this does NOT overwrite, see
- * docs/TASKS.md).  A directory that changes parents has its '..' rewritten.
+ * Refuses WASMOS_ERR_FS_NOT_FOUND (no source) and WASMOS_ERR_FS_BUSY (the
+ * source or destination is open, whose descriptor records the entry's
+ * location).  An existing destination is refused with WASMOS_ERR_FS_EXISTS
+ * unless `replace` is set, in which case a destination FILE is overwritten in
+ * place and its old cluster chain released; a destination DIRECTORY is refused
+ * either way (WASMOS_ERR_FS_NOT_DIR), since freeing its contents would be a
+ * recursive delete.  A directory that changes parents has its '..' rewritten.
  *
  * The new entry is written before the old one is tombstoned, so an interruption
  * leaves the chain reachable under two names rather than under none. */

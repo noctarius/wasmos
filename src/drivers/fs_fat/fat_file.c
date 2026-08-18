@@ -799,6 +799,10 @@ fat_r_t fat_op_rename(fat_op_ctx_t* op, fat_block_t* blk, const fat_mount_t* mnt
     op->rename.old_path = op->fat_path;
     op->rename.new_path = op->fat_rename_path;
     op->rename.source = op->source;
+    /* POSIX rename() replaces an existing destination, and this is the boundary
+     * callers reach through libc.  The driver-level entry point defaults to
+     * refusing, so an internal caller that wants the strict behaviour keeps it. */
+    op->rename.replace = 1;
     FAT_CO_AWAIT(op, fat_rename_path(&op->rename, blk, mnt, pool->files, FAT_MAX_OPEN_FILES));
     op->resp_override = 1;
     op->resp_arg0 = 0;

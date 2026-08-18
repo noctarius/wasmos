@@ -839,20 +839,6 @@ tail.
 
 ## Filesystems and Storage
 
-- [ ] [ENHANCEMENT][P2] Decide whether rename should REPLACE an existing destination.
-  `fat_rename_path` refuses `WASMOS_ERR_FS_EXISTS` today, where POSIX
-  `rename()` overwrites. Replacing means freeing the destination's cluster
-  chain inside an operation that already has no rollback, so it was left out of
-  the first cut rather than half-done. If it is added, the order matters: the
-  new entry must be written before anything of the old one is released, as the
-  current implementation does, so an interruption leaves the chain reachable
-  under two names rather than none.
-
-  Also unresolved by that first cut: a cross-mount rename is refused by
-  `route_rename_request` in fs-manager, because moving between filesystems
-  means copying data and no backend can express it. A `mv` that spans mounts
-  needs copy-then-unlink in the caller, which nothing implements yet.
-
 - [ ] [TEST][P2] Drive `fat_op_read` as well as `fat_op_write`.
   `tests/unit/test_fat_image.c` now drives `fat_op_write` end to end (request
   parsing, the buffer-size clamp, capacity growth, the partial-sector merge and
@@ -885,9 +871,6 @@ tail.
 - [ ] [ENHANCEMENT][P2] Extend LFN creation beyond ASCII: new-file LFN entries currently store
   `?`-mapped ASCII, not UTF-16 (`src/drivers/fs_fat/fat_name.c:175`; read-side
   LFN already works).
-- [ ] [ENHANCEMENT][P2] Port the reactor open-file table into `fat_file` so `fat_dir` reads it
-  there rather than the stubbed path (`src/drivers/fs_fat/fat_dir.c:339`,
-  `fat_dir.h:54`).
 - [ ] [ENHANCEMENT][P2] Refetch fs-manager boot metadata out-of-band (push/idle-step) to remove
   the nested synchronous `DEVMGR_QUERY_MOUNT_REQ` deadlock hazard during
   class discovery (`src/services/fs_manager/fs_manager.c:608`).

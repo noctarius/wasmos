@@ -15,21 +15,17 @@ extern int32_t wasmos_ipc_create_endpoint(void) WASMOS_WASM_IMPORT("wasmos", "ip
 /* Return the context ID that owns `endpoint`; returns the owner context ID, or
  * -1 if the endpoint is invalid or has no owner.
  */
-extern int32_t wasmos_ipc_endpoint_owner(int32_t endpoint)
-    WASMOS_WASM_IMPORT("wasmos", "ipc_endpoint_owner");
+extern int32_t wasmos_ipc_endpoint_owner(int32_t endpoint) WASMOS_WASM_IMPORT("wasmos", "ipc_endpoint_owner");
 /* Send an IPC message to endpoint `dest` carrying `type`, `req_id`, declared
  * sender `src`, and payload words `a0..a3`; returns 0 (IPC_OK) on success,
  * negative on failure.
  */
-extern int32_t wasmos_ipc_send(int32_t dest, int32_t src, int32_t type, int32_t request_id,
-                               int32_t arg0, int32_t arg1, int32_t arg2, int32_t arg3)
-    WASMOS_WASM_IMPORT("wasmos", "ipc_send");
+extern int32_t wasmos_ipc_send(int32_t dest, int32_t src, int32_t type, int32_t request_id, int32_t arg0, int32_t arg1, int32_t arg2, int32_t arg3) WASMOS_WASM_IMPORT("wasmos", "ipc_send");
 /* Block until a message arrives on `endpoint`, recording it as the caller's
  * last-received message (yielding on spurious wake); returns 1 on success, -1 on
  * invalid endpoint or receive error.
  */
-extern int32_t wasmos_ipc_select_one(int32_t endpoint)
-    WASMOS_WASM_IMPORT("wasmos", "ipc_select_one");
+extern int32_t wasmos_ipc_select_one(int32_t endpoint) WASMOS_WASM_IMPORT("wasmos", "ipc_select_one");
 /* Alias of ipc_select_one (identical ABI): block until a message arrives on
  * `endpoint` and record it as the last-received message; returns 1 on success,
  * -1 on error.
@@ -68,16 +64,14 @@ extern int32_t wasmos_ipc_last_field(int32_t field) WASMOS_WASM_IMPORT("wasmos",
  * Under wasm3, WASMOS_ERR_KERNEL_NO_CALLER and WASMOS_ERR_KERNEL_COPY_FAILED
  * are also possible; see the note at the top of this file.
  */
-extern int32_t wasmos_console_read(int32_t buf, int32_t len)
-    WASMOS_WASM_IMPORT("wasmos", "console_read");
+extern int32_t wasmos_console_read(int32_t buf, int32_t len) WASMOS_WASM_IMPORT("wasmos", "console_read");
 /* Write len bytes from guest memory at buf_offset to the kernel log, emitted in
  * NUL-terminated 127-byte chunks. Returns 0 on success -- including for len==0,
  * which is a no-op rather than a failure -- WASMOS_INVAL if `len` is negative,
  * or WASMOS_ERR_KERNEL_BAD_POINTER if [buf_offset, buf_offset+len) is not a
  * readable range of the caller's linear memory.
  */
-extern int32_t wasmos_console_write(int32_t buf, int32_t len)
-    WASMOS_WASM_IMPORT("wasmos", "console_write");
+extern int32_t wasmos_console_write(int32_t buf, int32_t len) WASMOS_WASM_IMPORT("wasmos", "console_write");
 /* Terminate the calling process with exit code `code`; records the exit status
  * and yields as EXITED so the process is reaped. Does not return to the caller.
  */
@@ -100,28 +94,24 @@ extern int32_t wasmos_thread_gettid(void) WASMOS_WASM_IMPORT("wasmos", "thread_g
  * timeout or invalid offset, and negative IPC_ERR_FULL when the futex table is
  * exhausted.
  */
-extern int32_t wasmos_futex_wait(int32_t addr, int32_t val, int32_t timeout_ms)
-    WASMOS_WASM_IMPORT("wasmos", "futex_wait");
+extern int32_t wasmos_futex_wait(int32_t addr, int32_t val, int32_t timeout_ms) WASMOS_WASM_IMPORT("wasmos", "futex_wait");
 /* Wake up to `count` contexts waiting on the WASM linear-memory word at offset
  * `addr_off`; returns the number of contexts actually woken (0 if none were
  * waiting or the offset is invalid).
  */
-extern int32_t wasmos_futex_wake(int32_t addr, int32_t count)
-    WASMOS_WASM_IMPORT("wasmos", "futex_wake");
+extern int32_t wasmos_futex_wake(int32_t addr, int32_t count) WASMOS_WASM_IMPORT("wasmos", "futex_wake");
 /* Select sets: block until any one of N endpoints is ready. */
 extern int32_t wasmos_ipc_select_create(void) WASMOS_WASM_IMPORT("wasmos", "ipc_select_create");
 /* Add endpoint `ep_id` to select set `sel_id` for the calling context; returns 0
  * on success, -1 on failure.
  */
-extern int32_t wasmos_ipc_select_add(int32_t sel, int32_t endpoint)
-    WASMOS_WASM_IMPORT("wasmos", "ipc_select_add");
+extern int32_t wasmos_ipc_select_add(int32_t sel, int32_t endpoint) WASMOS_WASM_IMPORT("wasmos", "ipc_select_add");
 /* Block until any watched endpoint is ready; returns the ready endpoint ID. */
 extern int32_t wasmos_ipc_select_wait(int32_t sel) WASMOS_WASM_IMPORT("wasmos", "ipc_select_wait");
 /* Destroy the select set `sel_id` owned by the calling context; always returns 0
  * (returns -1 only if the caller's context cannot be resolved).
  */
-extern int32_t wasmos_ipc_select_destroy(int32_t sel)
-    WASMOS_WASM_IMPORT("wasmos", "ipc_select_destroy");
+extern int32_t wasmos_ipc_select_destroy(int32_t sel) WASMOS_WASM_IMPORT("wasmos", "ipc_select_destroy");
 /* Create a new IPC select set for the calling context and return its select-set
  * ID, or -1 on failure. Alias of ipc_select_create (identical ABI).
  */
@@ -129,8 +119,7 @@ extern int32_t wasmos_sys_select_create(void) WASMOS_WASM_IMPORT("wasmos", "sys_
 /* Add endpoint `ep_id` to select set `sel_id` for the calling context; returns 0
  * on success, -1 on failure. Alias of ipc_select_add (identical ABI).
  */
-extern int32_t wasmos_sys_select_add(int32_t sel, int32_t endpoint)
-    WASMOS_WASM_IMPORT("wasmos", "sys_select_add");
+extern int32_t wasmos_sys_select_add(int32_t sel, int32_t endpoint) WASMOS_WASM_IMPORT("wasmos", "sys_select_add");
 /* Block until any endpoint in select set `sel_id` becomes ready and return that
  * endpoint ID, retrying internally on spurious wake; returns -1 on error. Alias
  * of ipc_select_wait (identical ABI).
@@ -140,8 +129,7 @@ extern int32_t wasmos_sys_select_wait(int32_t sel) WASMOS_WASM_IMPORT("wasmos", 
  * if the caller's context cannot be resolved). Alias of ipc_select_destroy
  * (identical ABI).
  */
-extern int32_t wasmos_sys_select_destroy(int32_t sel)
-    WASMOS_WASM_IMPORT("wasmos", "sys_select_destroy");
+extern int32_t wasmos_sys_select_destroy(int32_t sel) WASMOS_WASM_IMPORT("wasmos", "sys_select_destroy");
 /* Returns the fixed capacity in bytes of the transfer-buffer kind
  * (BUFFER_KIND_TRANSFER); the maximum extent addressable by
  * xfer_buffer_read/write and the size backing an acquired transfer buffer.
@@ -158,32 +146,27 @@ extern int32_t wasmos_fs_endpoint(void) WASMOS_WASM_IMPORT("wasmos", "fs_endpoin
  * a zero `len`, otherwise a negative WASMOS_ERR_XFER_BUFFER_* code (NOT_FOUND,
  * INVALID_CONTEXT, NO_ACCESS, RANGE).
  */
-extern int32_t wasmos_xfer_buffer_read(int32_t buffer_id, void* dst, int32_t len, int32_t offset)
-    WASMOS_WASM_IMPORT("wasmos", "xfer_buffer_read");
+extern int32_t wasmos_xfer_buffer_read(int32_t buffer_id, void* dst, int32_t len, int32_t offset) WASMOS_WASM_IMPORT("wasmos", "xfer_buffer_read");
 /* Copies `len` bytes from the caller's WASM linear memory at `ptr_off` into
  * transfer buffer `buffer_id` starting at `offset`; requires the caller (owner
  * or borrower) to hold the WRITE right. Returns WASMOS_ERR_NONE (0) on success, 0
  * for a zero `len`, otherwise a negative WASMOS_ERR_XFER_BUFFER_* code (NOT_FOUND,
  * INVALID_CONTEXT, NO_ACCESS, RANGE).
  */
-extern int32_t wasmos_xfer_buffer_write(int32_t buffer_id, const void* src, int32_t len,
-                                        int32_t offset)
-    WASMOS_WASM_IMPORT("wasmos", "xfer_buffer_write");
+extern int32_t wasmos_xfer_buffer_write(int32_t buffer_id, const void* src, int32_t len, int32_t offset) WASMOS_WASM_IMPORT("wasmos", "xfer_buffer_write");
 /* OWNER assigns `flags` rights (bitmask of BUFFER_BORROW_READ/WRITE, must be
  * non-zero and within 0x3) over buffer `buffer_id` of `kind` to the context that
  * owns `grantee_ep`; returns the grantee's borrow_id. On failure returns a
  * negative WASMOS_ERR_XFER_BUFFER_* code (INVALID_KIND, NOT_FOUND, INVALID_FLAGS,
  * INVALID_CONTEXT, NO_ACCESS).
  */
-extern int32_t wasmos_buffer_borrow(int32_t kind, int32_t grantee, int32_t buffer_id, int32_t flags)
-    WASMOS_WASM_IMPORT("wasmos", "buffer_borrow");
+extern int32_t wasmos_buffer_borrow(int32_t kind, int32_t grantee, int32_t buffer_id, int32_t flags) WASMOS_WASM_IMPORT("wasmos", "buffer_borrow");
 /* OWNER releases buffer `buffer_id` of `kind` (only BUFFER_KIND_TRANSFER
  * supported), dropping its acquisition and backing; caller must be the owning
  * context. Returns WASMOS_ERR_NONE (0) on success, otherwise a negative
  * WASMOS_ERR_XFER_BUFFER_* code (INVALID_KIND, NOT_FOUND, INVALID_CONTEXT, NO_ACCESS).
  */
-extern int32_t wasmos_buffer_release(int32_t kind, int32_t buffer_id)
-    WASMOS_WASM_IMPORT("wasmos", "buffer_release");
+extern int32_t wasmos_buffer_release(int32_t kind, int32_t buffer_id) WASMOS_WASM_IMPORT("wasmos", "buffer_release");
 /* Returns the physical address of the calling process's per-process 8 KiB
  * (2-page) block buffer, allocating it below 512 MiB on first use (kernel
  * higher-half identity window and 32-bit ATA DMA range). Returns the u32
@@ -213,8 +196,7 @@ extern int32_t wasmos_block_buffer_phys(void) WASMOS_WASM_IMPORT("wasmos", "bloc
  * context cannot be resolved, and WASMOS_ERR_KERNEL_COPY_FAILED when the copy
  * into user memory fails after the range was accepted.
  */
-extern int32_t wasmos_block_buffer_copy(int32_t phys, int32_t dst, int32_t len, int32_t offset)
-    WASMOS_WASM_IMPORT("wasmos", "block_buffer_copy");
+extern int32_t wasmos_block_buffer_copy(int32_t phys, int32_t dst, int32_t len, int32_t offset) WASMOS_WASM_IMPORT("wasmos", "block_buffer_copy");
 /* Copies `len` bytes from the caller's WASM linear memory at `ptr_off` into the
  * block buffer identified by physical address `phys` starting at `offset`.
  * Returns 0 on success, WASMOS_ERR_BLOCK_NO_SLOT if `phys` names no live block
@@ -231,8 +213,7 @@ extern int32_t wasmos_block_buffer_copy(int32_t phys, int32_t dst, int32_t len, 
  * context cannot be resolved, and WASMOS_ERR_KERNEL_COPY_FAILED when the copy
  * out of user memory fails after the range was accepted.
  */
-extern int32_t wasmos_block_buffer_write(int32_t phys, int32_t src, int32_t len, int32_t offset)
-    WASMOS_WASM_IMPORT("wasmos", "block_buffer_write");
+extern int32_t wasmos_block_buffer_write(int32_t phys, int32_t src, int32_t len, int32_t offset) WASMOS_WASM_IMPORT("wasmos", "block_buffer_write");
 /* Read a byte from x86 I/O port `port` (0..0xFFFF) and store it at `out`.
  *
  * The value comes back through `out` for the same reason io_in32's does. A
@@ -310,8 +291,7 @@ extern int32_t wasmos_io_wait(void) WASMOS_WASM_IMPORT("wasmos", "io_wait");
  * context cannot be resolved, and WASMOS_ERR_KERNEL_COPY_FAILED when a copy
  * into user memory fails after the range was accepted.
  */
-extern int32_t wasmos_acpi_rsdp_info(int32_t out, int32_t out_len, int32_t max_len)
-    WASMOS_WASM_IMPORT("wasmos", "acpi_rsdp_info");
+extern int32_t wasmos_acpi_rsdp_info(int32_t out, int32_t out_len, int32_t max_len) WASMOS_WASM_IMPORT("wasmos", "acpi_rsdp_info");
 /* Copy the NUL-terminated name of boot module `index` into guest memory at
  * out_off, truncated to out_len-1 bytes. Returns the module's TRUE name length
  * -- not the truncated one, so a caller can tell that its buffer was too small
@@ -325,14 +305,12 @@ extern int32_t wasmos_acpi_rsdp_info(int32_t out, int32_t out_len, int32_t max_l
  * context cannot be resolved, and WASMOS_ERR_KERNEL_COPY_FAILED when a copy
  * into user memory fails after the range was accepted.
  */
-extern int32_t wasmos_boot_module_name(int32_t index, int32_t out, int32_t out_len)
-    WASMOS_WASM_IMPORT("wasmos", "boot_module_name");
+extern int32_t wasmos_boot_module_name(int32_t index, int32_t out, int32_t out_len) WASMOS_WASM_IMPORT("wasmos", "boot_module_name");
 /* Touch `len` bytes of guest linear memory starting at `ptr_off` with volatile
  * reads to fault them in / synchronize the mapping. Returns 0 (0 immediately if
  * `len` is 0), or -1 if the offset/length is out of bounds.
  */
-extern int32_t wasmos_sync_user_read(int32_t ptr, int32_t len)
-    WASMOS_WASM_IMPORT("wasmos", "sync_user_read");
+extern int32_t wasmos_sync_user_read(int32_t ptr, int32_t len) WASMOS_WASM_IMPORT("wasmos", "sync_user_read");
 /* Power off the machine. Requires the caller to hold the system-control
  * capability; returns -1 if the capability check fails, otherwise does not
  * return.
@@ -358,8 +336,7 @@ extern int32_t wasmos_sched_cpu_count(void) WASMOS_WASM_IMPORT("wasmos", "sched_
  * (total and free bytes as seen by the kernel page-frame allocator). Returns 0
  * on success, -1 if the buffer offset is invalid.
  */
-extern int32_t wasmos_physmem_stats(wasmos_physmem_stats_t* out)
-    WASMOS_WASM_IMPORT("wasmos", "physmem_stats");
+extern int32_t wasmos_physmem_stats(wasmos_physmem_stats_t* out) WASMOS_WASM_IMPORT("wasmos", "physmem_stats");
 /* Returns 0=wasm3, 1=WARP. Compile-time constant baked into the kernel. */
 extern int32_t wasmos_kernel_runtime(void) WASMOS_WASM_IMPORT("wasmos", "kernel_runtime");
 /* Emit a debug marker (tag value `tag` plus the current PID) to the kernel trace
@@ -395,15 +372,13 @@ extern int32_t wasmos_initfs_entry_count(void) WASMOS_WASM_IMPORT("wasmos", "ini
  * Under wasm3, WASMOS_ERR_KERNEL_NO_CALLER and WASMOS_ERR_KERNEL_COPY_FAILED
  * are also possible; see the note at the top of this file.
  */
-extern int32_t wasmos_initfs_entry_name(int32_t index, int32_t out, int32_t out_len)
-    WASMOS_WASM_IMPORT("wasmos", "initfs_entry_name");
+extern int32_t wasmos_initfs_entry_name(int32_t index, int32_t out, int32_t out_len) WASMOS_WASM_IMPORT("wasmos", "initfs_entry_name");
 /* Return the byte size of initfs entry `index`. Returns the size,
  * WASMOS_ERR_FS_NOT_FOUND if `index` is negative or names no entry, or
  * WASMOS_ERR_KERNEL_TOO_LARGE if the size cannot be expressed on the signed i32
  * the value shares with the error codes.
  */
-extern int32_t wasmos_initfs_entry_size(int32_t index)
-    WASMOS_WASM_IMPORT("wasmos", "initfs_entry_size");
+extern int32_t wasmos_initfs_entry_size(int32_t index) WASMOS_WASM_IMPORT("wasmos", "initfs_entry_size");
 /* Copy up to len bytes of initfs entry `index` starting at byte `offset` into
  * guest memory at out_off, clamping a trailing chunk to the remaining bytes.
  * Returns the number of bytes copied (0 when offset is at or past end),
@@ -418,8 +393,7 @@ extern int32_t wasmos_initfs_entry_size(int32_t index)
  * Under wasm3, WASMOS_ERR_KERNEL_NO_CALLER and WASMOS_ERR_KERNEL_COPY_FAILED
  * are also possible; see the note at the top of this file.
  */
-extern int32_t wasmos_initfs_entry_copy(int32_t index, int32_t out, int32_t len, int32_t offset)
-    WASMOS_WASM_IMPORT("wasmos", "initfs_entry_copy");
+extern int32_t wasmos_initfs_entry_copy(int32_t index, int32_t out, int32_t len, int32_t offset) WASMOS_WASM_IMPORT("wasmos", "initfs_entry_copy");
 /* Maps a `length`-byte, `offset`-based range of the caller's borrowed buffer
  * `borrow_id` for device DMA in direction `flags` (which must be non-zero and a
  * subset of the borrow's rights); returns the device DMA address
@@ -427,43 +401,37 @@ extern int32_t wasmos_initfs_entry_copy(int32_t index, int32_t out, int32_t len,
  * (INVALID for bad args, DENY for context/borrow/mapping denial, UNAVAILABLE
  * when the address exceeds the signed-32-bit device window).
  */
-extern int32_t wasmos_dma_map_borrow(int32_t borrow_id, int32_t offset, int32_t length,
-                                     int32_t flags) WASMOS_WASM_IMPORT("wasmos", "dma_map_borrow");
+extern int32_t wasmos_dma_map_borrow(int32_t borrow_id, int32_t offset, int32_t length, int32_t flags) WASMOS_WASM_IMPORT("wasmos", "dma_map_borrow");
 /* Synchronizes the DMA mapping of borrowed buffer `borrow_id` over the
  * `offset`/`length` range (cache coherency for the transfer; `op` direction is
  * accepted but not distinguished). Returns WASMOS_DMA_STATUS_OK (0) on success,
  * otherwise a negative WASMOS_DMA_STATUS_* code (INVALID for a bad borrow_id,
  * DENY when the borrow/mapping cannot be resolved or the sync fails).
  */
-extern int32_t wasmos_dma_sync_borrow(int32_t borrow_id, int32_t offset, int32_t length, int32_t op)
-    WASMOS_WASM_IMPORT("wasmos", "dma_sync_borrow");
+extern int32_t wasmos_dma_sync_borrow(int32_t borrow_id, int32_t offset, int32_t length, int32_t op) WASMOS_WASM_IMPORT("wasmos", "dma_sync_borrow");
 /* Unmaps the DMA mapping of borrowed buffer `borrow_id`, tearing down the device
  * mapping established by dma_map_borrow. Returns WASMOS_DMA_STATUS_OK (0) on
  * success, otherwise a negative WASMOS_DMA_STATUS_* code (INVALID for a bad
  * borrow_id, DENY when the borrow/mapping cannot be resolved or the unmap
  * fails).
  */
-extern int32_t wasmos_dma_unmap_borrow(int32_t borrow_id)
-    WASMOS_WASM_IMPORT("wasmos", "dma_unmap_borrow");
+extern int32_t wasmos_dma_unmap_borrow(int32_t borrow_id) WASMOS_WASM_IMPORT("wasmos", "dma_unmap_borrow");
 /* Map a physical address range into WASM linear memory at wasm_offset.
  * phys_lo/phys_hi form a 64-bit physical address; size and wasm_offset must
  * be page-aligned (multiples of 4096). Requires the mmio.map capability.
  */
-extern int32_t wasmos_phys_map(int32_t phys_lo, int32_t phys_hi, int32_t size, int32_t wasm_offset)
-    WASMOS_WASM_IMPORT("wasmos", "phys_map");
+extern int32_t wasmos_phys_map(int32_t phys_lo, int32_t phys_hi, int32_t size, int32_t wasm_offset) WASMOS_WASM_IMPORT("wasmos", "phys_map");
 /* Look up the process at enumeration `index`; write its NUL-terminated name into
  * the guest buffer at `buf_off` (capacity `buf_len`, truncated to fit). Returns
  * the process PID, or -1 if `index` is out of range or the buffer is invalid.
  */
-extern int32_t wasmos_proc_info(int32_t index, int32_t buf, int32_t buf_len)
-    WASMOS_WASM_IMPORT("wasmos", "proc_info");
+extern int32_t wasmos_proc_info(int32_t index, int32_t buf, int32_t buf_len) WASMOS_WASM_IMPORT("wasmos", "proc_info");
 /* Like proc_info but also writes the parent PID as a u32 into `parent_off`.
  * Writes the process name into `buf_off`/`buf_len` (truncated to fit) and
  * returns the process PID; returns -1 if `index` is out of range or either
  * buffer is invalid.
  */
-extern int32_t wasmos_proc_info_ex(int32_t index, int32_t buf, int32_t buf_len, int32_t parent)
-    WASMOS_WASM_IMPORT("wasmos", "proc_info_ex");
+extern int32_t wasmos_proc_info_ex(int32_t index, int32_t buf, int32_t buf_len, int32_t parent) WASMOS_WASM_IMPORT("wasmos", "proc_info_ex");
 /* Extended process enumeration for entry `index`: writes the name into
  * `buf_off`/`buf_len` (truncated), the parent PID (u32) into `parent_off`, and a
  * full stats record into `stats_off` (state, block_reason, runtime_tag[8],
@@ -472,27 +440,22 @@ extern int32_t wasmos_proc_info_ex(int32_t index, int32_t buf, int32_t buf_len, 
  * rss_est_bytes, last_cpu). Returns the process PID, or -1 if `index` is out of
  * range or any buffer is invalid.
  */
-extern int32_t wasmos_proc_info_stats(int32_t index, int32_t buf, int32_t buf_len, int32_t parent,
-                                      int32_t stats)
-    WASMOS_WASM_IMPORT("wasmos", "proc_info_stats");
+extern int32_t wasmos_proc_info_stats(int32_t index, int32_t buf, int32_t buf_len, int32_t parent, int32_t stats) WASMOS_WASM_IMPORT("wasmos", "proc_info_stats");
 /* OWNER assigns `flags` rights over `buffer_id` to the context that owns
  * `grantee_endpoint`; returns the grantee's borrow_id.
  */
-extern int32_t wasmos_xfer_buffer_borrow(int32_t grantee, int32_t buffer_id, int32_t flags)
-    WASMOS_WASM_IMPORT("wasmos", "xfer_buffer_borrow");
+extern int32_t wasmos_xfer_buffer_borrow(int32_t grantee, int32_t buffer_id, int32_t flags) WASMOS_WASM_IMPORT("wasmos", "xfer_buffer_borrow");
 /* Owner-only release of transfer buffer `buffer_id`, dropping the owner's
  * acquisition and its backing. Returns WASMOS_ERR_NONE (0) on success, otherwise
  * a negative WASMOS_ERR_XFER_BUFFER_* code.
  */
-extern int32_t wasmos_xfer_buffer_release(int32_t buffer_id)
-    WASMOS_WASM_IMPORT("wasmos", "xfer_buffer_release");
+extern int32_t wasmos_xfer_buffer_release(int32_t buffer_id) WASMOS_WASM_IMPORT("wasmos", "xfer_buffer_release");
 /* Fill the caller's buffer at `out_off` with a per-CPU stats record for CPU
  * `cpu_id` (ready_count, running_pid, steal_count, dispatch_count, last_pid).
  * Returns 0 on success, or -1 if `cpu_id` is out of range or the buffer offset
  * is invalid.
  */
-extern int32_t wasmos_sched_cpu_stats(int32_t cpu_id, int32_t out)
-    WASMOS_WASM_IMPORT("wasmos", "sched_cpu_stats");
+extern int32_t wasmos_sched_cpu_stats(int32_t cpu_id, int32_t out) WASMOS_WASM_IMPORT("wasmos", "sched_cpu_stats");
 /* Yield the calling thread's CPU (YIELDED state) to the scheduler. Returns 0. */
 extern int32_t wasmos_thread_yield(void) WASMOS_WASM_IMPORT("wasmos", "thread_yield");
 /* Shared memory API: shmem_create allocates pages of shared memory and
@@ -500,31 +463,27 @@ extern int32_t wasmos_thread_yield(void) WASMOS_WASM_IMPORT("wasmos", "thread_yi
  * shmem_map/map_auto map the region into WASM linear memory;
  * flush/refresh synchronise dirty regions between processes.
  */
-extern int32_t wasmos_shmem_create(int32_t pages, int32_t flags)
-    WASMOS_WASM_IMPORT("wasmos", "shmem_create");
+extern int32_t wasmos_shmem_create(int32_t pages, int32_t flags) WASMOS_WASM_IMPORT("wasmos", "shmem_create");
 /* Grants the caller's shared-memory region `id` to the process `target_pid`
  * (resolved to its context); gated by the caller's DMA capability. Returns the
  * mm_shared_grant result (0 on success), WASMOS_ERR_SHMEM_BAD_ID if `id` or
  * `target_pid` is not positive, or WASMOS_ERR_SHMEM_NO_CAP if the caller has no
  * context, lacks the DMA capability, or `target_pid` names no live process.
  */
-extern int32_t wasmos_shmem_grant(int32_t id, int32_t target_pid)
-    WASMOS_WASM_IMPORT("wasmos", "shmem_grant");
+extern int32_t wasmos_shmem_grant(int32_t id, int32_t target_pid) WASMOS_WASM_IMPORT("wasmos", "shmem_grant");
 /* Revokes a prior grant of the caller's shared-memory region `id` from process
  * `target_pid`; gated by the caller's DMA capability. Returns the
  * mm_shared_revoke result (0 on success), WASMOS_ERR_SHMEM_BAD_ID if `id` or
  * `target_pid` is not positive, or WASMOS_ERR_SHMEM_NO_CAP if the caller has no
  * context, lacks the DMA capability, or `target_pid` names no live process.
  */
-extern int32_t wasmos_shmem_revoke(int32_t id, int32_t target_pid)
-    WASMOS_WASM_IMPORT("wasmos", "shmem_revoke");
+extern int32_t wasmos_shmem_revoke(int32_t id, int32_t target_pid) WASMOS_WASM_IMPORT("wasmos", "shmem_revoke");
 /* On success wasmos_shmem_map/_auto return the mapped guest offset (>= 0).  On
  * failure they return a negative SHMEM_ERR_* reason code (see
  * drivers/include/wasmos_driver_abi.h) rather than a blanket -1, so callers can
  * report why a map failed.
  */
-extern int32_t wasmos_shmem_map(int32_t id, int32_t wasm_off, int32_t size)
-    WASMOS_WASM_IMPORT("wasmos", "shmem_map");
+extern int32_t wasmos_shmem_map(int32_t id, int32_t wasm_off, int32_t size) WASMOS_WASM_IMPORT("wasmos", "shmem_map");
 /* Overlays shared-memory region `id` into the caller's WASM linear memory at an
  * automatically chosen page-aligned window of `size` bytes (must be non-zero,
  * page-aligned, and at least the region's size); gated by the caller's DMA
@@ -532,8 +491,7 @@ extern int32_t wasmos_shmem_map(int32_t id, int32_t wasm_off, int32_t size)
  * negative SHMEM_ERR_* reason code (BAD_ARGS, NO_CAP, BAD_ID, BAD_SIZE,
  * NO_WINDOW, MAP).
  */
-extern int32_t wasmos_shmem_map_auto(int32_t id, int32_t size)
-    WASMOS_WASM_IMPORT("wasmos", "shmem_map_auto");
+extern int32_t wasmos_shmem_map_auto(int32_t id, int32_t size) WASMOS_WASM_IMPORT("wasmos", "shmem_map_auto");
 /* Pushes `size` bytes from the caller's WASM linear memory at `wasm_off` into
  * the backing physical pages of shared-memory region `id` (local-to-shared
  * copy); gated by the caller's DMA capability and bounded by the region size.
@@ -545,8 +503,7 @@ extern int32_t wasmos_shmem_map_auto(int32_t id, int32_t size)
  * WASMOS_ERR_SHMEM_NO_WINDOW if [`wasm_off`, `wasm_off`+`size`) does not lie
  * inside the caller's linear memory.
  */
-extern int32_t wasmos_shmem_flush(int32_t id, int32_t wasm_off, int32_t size)
-    WASMOS_WASM_IMPORT("wasmos", "shmem_flush");
+extern int32_t wasmos_shmem_flush(int32_t id, int32_t wasm_off, int32_t size) WASMOS_WASM_IMPORT("wasmos", "shmem_flush");
 /* Pulls `size` bytes from the backing physical pages of shared-memory region
  * `id` into the caller's WASM linear memory at `wasm_off` (shared-to-local copy
  * into an already-mapped window); gated by the caller's DMA capability and
@@ -558,8 +515,7 @@ extern int32_t wasmos_shmem_flush(int32_t id, int32_t wasm_off, int32_t size)
  * exceeds the region, or WASMOS_ERR_SHMEM_NO_WINDOW if [`wasm_off`,
  * `wasm_off`+`size`) does not lie inside the caller's linear memory.
  */
-extern int32_t wasmos_shmem_refresh(int32_t id, int32_t wasm_off, int32_t size)
-    WASMOS_WASM_IMPORT("wasmos", "shmem_refresh");
+extern int32_t wasmos_shmem_refresh(int32_t id, int32_t wasm_off, int32_t size) WASMOS_WASM_IMPORT("wasmos", "shmem_refresh");
 /* Removes the caller's overlay of shared-memory region `id` from linear memory,
  * restoring the original linear window, untracking the mapping, and releasing
  * the caller's retain on the region. Returns the mm_shared_release result (0 on
@@ -580,8 +536,7 @@ extern int32_t wasmos_shmem_unmap(int32_t id) WASMOS_WASM_IMPORT("wasmos", "shme
  * WASMOS_ERR_IRQ_NOT_AUTHORIZED if the caller has no context or lacks the
  * irq.route capability.
  */
-extern int32_t wasmos_irq_route_ipc(int32_t irq_line, int32_t endpoint)
-    WASMOS_WASM_IMPORT("wasmos", "irq_route_ipc");
+extern int32_t wasmos_irq_route_ipc(int32_t irq_line, int32_t endpoint) WASMOS_WASM_IMPORT("wasmos", "irq_route_ipc");
 /* Acknowledge/re-arm IRQ line `irq_line` for the calling context after handling
  * a delivered interrupt. Returns the ack result, WASMOS_ERR_IRQ_BAD_LINE if
  * `irq_line` is negative, or WASMOS_ERR_IRQ_NOT_AUTHORIZED if the caller has no
@@ -599,8 +554,7 @@ extern int32_t wasmos_irq_unroute(int32_t irq_line) WASMOS_WASM_IMPORT("wasmos",
  * (resetting remote serial state); returns 0 on success, -1 if `endpoint` is
  * IPC_ENDPOINT_NONE, unowned, or kernel-owned.
  */
-extern int32_t wasmos_serial_register(int32_t endpoint)
-    WASMOS_WASM_IMPORT("wasmos", "serial_register");
+extern int32_t wasmos_serial_register(int32_t endpoint) WASMOS_WASM_IMPORT("wasmos", "serial_register");
 /* vt keyboard input integration */
 extern int32_t wasmos_input_push(int32_t ch) WASMOS_WASM_IMPORT("wasmos", "input_push");
 /* Read one byte from the serial input ring (input pushed by the keyboard/serial
@@ -620,8 +574,7 @@ extern int32_t wasmos_input_read(void) WASMOS_WASM_IMPORT("wasmos", "input_read"
  * Under wasm3, WASMOS_ERR_KERNEL_NO_CALLER and WASMOS_ERR_KERNEL_COPY_FAILED
  * are also possible; see the note at the top of this file.
  */
-extern int32_t wasmos_framebuffer_info(wasmos_framebuffer_info_t* out, int32_t len)
-    WASMOS_WASM_IMPORT("wasmos", "framebuffer_info");
+extern int32_t wasmos_framebuffer_info(wasmos_framebuffer_info_t* out, int32_t len) WASMOS_WASM_IMPORT("wasmos", "framebuffer_info");
 /* Map the GOP framebuffer's physical pages into guest linear memory at wasm_off;
  * size must be page-aligned, non-zero, and at least the framebuffer size, and
  * both wasm_off and the resolved host address must be page-aligned. Returns 0
@@ -639,8 +592,7 @@ extern int32_t wasmos_framebuffer_info(wasmos_framebuffer_info_t* out, int32_t l
  * not a permission decision, and folding them was the same conflation the io
  * family carried.
  */
-extern int32_t wasmos_framebuffer_map(int32_t wasm_off, int32_t size)
-    WASMOS_WASM_IMPORT("wasmos", "framebuffer_map");
+extern int32_t wasmos_framebuffer_map(int32_t wasm_off, int32_t size) WASMOS_WASM_IMPORT("wasmos", "framebuffer_map");
 /* Write 32-bit `color` to the framebuffer pixel at (x, y). Returns 0 on
  * success, WASMOS_ERR_FRAMEBUFFER_NOT_PRESENT if no framebuffer was handed over
  * at boot (or it has no stride), or WASMOS_INVAL if (x, y) falls outside it.
@@ -649,8 +601,7 @@ extern int32_t wasmos_framebuffer_map(int32_t wasm_off, int32_t size)
  * mistake and it can correct them, which is not the same fact as there being
  * no framebuffer at all.
  */
-extern int32_t wasmos_framebuffer_pixel(int32_t x, int32_t y, int32_t color)
-    WASMOS_WASM_IMPORT("wasmos", "framebuffer_pixel");
+extern int32_t wasmos_framebuffer_pixel(int32_t x, int32_t y, int32_t color) WASMOS_WASM_IMPORT("wasmos", "framebuffer_pixel");
 /* Return the byte size of the kernel boot-config blob. Returns the size, or
  * WASMOS_NOENT if no boot config is present or it is empty.
  */
@@ -670,8 +621,7 @@ extern int32_t wasmos_boot_config_size(void) WASMOS_WASM_IMPORT("wasmos", "boot_
  * context cannot be resolved, and WASMOS_ERR_KERNEL_COPY_FAILED when the copy
  * into user memory fails after the range was accepted.
  */
-extern int32_t wasmos_boot_config_copy(int32_t buf, int32_t len, int32_t offset)
-    WASMOS_WASM_IMPORT("wasmos", "boot_config_copy");
+extern int32_t wasmos_boot_config_copy(int32_t buf, int32_t len, int32_t offset) WASMOS_WASM_IMPORT("wasmos", "boot_config_copy");
 /* Look up an initfs entry by path at path_off (path_len bytes, < 112), stripping
  * leading '/' and an optional 'init/' prefix and matching either the full stored
  * path or its basename case-insensitively. Returns the entry index,
@@ -685,8 +635,7 @@ extern int32_t wasmos_boot_config_copy(int32_t buf, int32_t len, int32_t offset)
  * Under wasm3, WASMOS_ERR_KERNEL_NO_CALLER and WASMOS_ERR_KERNEL_COPY_FAILED
  * are also possible; see the note at the top of this file.
  */
-extern int32_t wasmos_initfs_find_path(int32_t path, int32_t path_len)
-    WASMOS_WASM_IMPORT("wasmos", "initfs_find_path");
+extern int32_t wasmos_initfs_find_path(int32_t path, int32_t path_len) WASMOS_WASM_IMPORT("wasmos", "initfs_find_path");
 /* Return the number of bytes currently held in the kernel early-log buffer. */
 extern int32_t wasmos_early_log_size(void) WASMOS_WASM_IMPORT("wasmos", "early_log_size");
 /* Copy len bytes of the early-log buffer starting at byte `offset` into guest
@@ -701,8 +650,7 @@ extern int32_t wasmos_early_log_size(void) WASMOS_WASM_IMPORT("wasmos", "early_l
  * Under wasm3, WASMOS_ERR_KERNEL_NO_CALLER and WASMOS_ERR_KERNEL_COPY_FAILED
  * are also possible; see the note at the top of this file.
  */
-extern int32_t wasmos_early_log_copy(int32_t buf, int32_t len, int32_t offset)
-    WASMOS_WASM_IMPORT("wasmos", "early_log_copy");
+extern int32_t wasmos_early_log_copy(int32_t buf, int32_t len, int32_t offset) WASMOS_WASM_IMPORT("wasmos", "early_log_copy");
 /* Look up the process-environment variable named by name_off/name_len (name_len
  * < key max) and copy its value into guest memory at buf_off, truncated to
  * buf_len-1 bytes and NUL-terminated. Returns the written value length,
@@ -719,8 +667,7 @@ extern int32_t wasmos_early_log_copy(int32_t buf, int32_t len, int32_t offset)
  * Under wasm3, WASMOS_ERR_KERNEL_NO_CALLER and WASMOS_ERR_KERNEL_COPY_FAILED
  * are also possible; see the note at the top of this file.
  */
-extern int32_t wasmos_env_get(const char* name, int32_t name_len, char* buf, int32_t buf_len)
-    WASMOS_WASM_IMPORT("wasmos", "env_get");
+extern int32_t wasmos_env_get(const char* name, int32_t name_len, char* buf, int32_t buf_len) WASMOS_WASM_IMPORT("wasmos", "env_get");
 /* Set the process-environment variable named by name_off/name_len to the value
  * at val_off/val_len (val_len may be 0), creating a new slot or overwriting an
  * existing one. Returns 0 on success, WASMOS_INVAL if `name_len` is not
@@ -732,14 +679,12 @@ extern int32_t wasmos_env_get(const char* name, int32_t name_len, char* buf, int
  * Under wasm3, WASMOS_ERR_KERNEL_NO_CALLER and WASMOS_ERR_KERNEL_COPY_FAILED
  * are also possible; see the note at the top of this file.
  */
-extern int32_t wasmos_env_set(const char* name, int32_t name_len, const char* val, int32_t val_len)
-    WASMOS_WASM_IMPORT("wasmos", "env_set");
+extern int32_t wasmos_env_set(const char* name, int32_t name_len, const char* val, int32_t val_len) WASMOS_WASM_IMPORT("wasmos", "env_set");
 /* Remove the process-environment variable named by name_off/name_len, freeing
  * its slot if present. Always returns 0, including for invalid names or a
  * variable that does not exist.
  */
-extern int32_t wasmos_env_unset(const char* name, int32_t name_len)
-    WASMOS_WASM_IMPORT("wasmos", "env_unset");
+extern int32_t wasmos_env_unset(const char* name, int32_t name_len) WASMOS_WASM_IMPORT("wasmos", "env_unset");
 /* Allocate a driver-owned, pinned, contiguous DMA region below 2 GiB and map it
  * into the caller's WASM linear memory (a real page remap, so writes reach the
  * exact physical pages the device DMAs).  cache_policy is WASMOS_REGION_CACHE_*.
@@ -748,21 +693,18 @@ extern int32_t wasmos_env_unset(const char* name, int32_t name_len)
  * Requires CAP_DMA_BUFFER and an approved DMA window covering the allocation.
  * out_phys must point into the caller's linear memory.
  */
-extern int32_t wasmos_region_alloc(int32_t pages, int32_t cache_policy, uint64_t* out_phys)
-    WASMOS_WASM_IMPORT("wasmos", "region_alloc");
+extern int32_t wasmos_region_alloc(int32_t pages, int32_t cache_policy, uint64_t* out_phys) WASMOS_WASM_IMPORT("wasmos", "region_alloc");
 /* Configure an IRQ line's trigger/polarity (flags: WASMOS_IRQ_TRIGGER_LEVEL /
  * WASMOS_IRQ_POLARITY_LOW). Used by pci-bus to mark PCI INTx lines level/low.
  * Requires the IRQ capability.
  */
-extern int32_t wasmos_irq_configure(int32_t irq_line, int32_t flags)
-    WASMOS_WASM_IMPORT("wasmos", "irq_configure");
+extern int32_t wasmos_irq_configure(int32_t irq_line, int32_t flags) WASMOS_WASM_IMPORT("wasmos", "irq_configure");
 /* Like ipc_select_wait but bounded by timeout_ms (0 = wait forever). Returns the
  * ready endpoint ID (>= 0), WASMOS_TIMEOUT (-5) when the window elapsed without
  * anything becoming ready (poll and retry), or the transport status on error.
  * Lets a driver poll (e.g. RX rings) on a timer without busy-yielding.
  */
-extern int32_t wasmos_ipc_select_wait_timeout(int32_t sel, int32_t timeout_ms)
-    WASMOS_WASM_IMPORT("wasmos", "ipc_select_wait_timeout");
+extern int32_t wasmos_ipc_select_wait_timeout(int32_t sel, int32_t timeout_ms) WASMOS_WASM_IMPORT("wasmos", "ipc_select_wait_timeout");
 /* Object/owner/borrow xfer-buffer ABI (stateless, id-based, capability-style).
  *
  * The OWNER acquires a buffer (buffer_id, held like an fd) and drives all
@@ -777,43 +719,36 @@ extern int32_t wasmos_ipc_select_wait_timeout(int32_t sel, int32_t timeout_ms)
  * All return >= 0 on success (buffer_id / borrow_id / device address / 0) and a
  * negative xfer_buffer_status_t code on failure.
  */
-extern int32_t wasmos_xfer_buffer_acquire(int32_t minimum_size)
-    WASMOS_WASM_IMPORT("wasmos", "xfer_buffer_acquire");
+extern int32_t wasmos_xfer_buffer_acquire(int32_t minimum_size) WASMOS_WASM_IMPORT("wasmos", "xfer_buffer_acquire");
 /* Grantor-side drop of a transfer-buffer (re)borrow named by `borrow_id`; the
  * lender revokes a grant it previously extended (resolved via the lent set, not
  * the borrowed set). Returns WASMOS_ERR_NONE (0) on success, otherwise a negative
  * WASMOS_ERR_XFER_BUFFER_* code (INACTIVE_BORROW, INVALID_CONTEXT).
  */
-extern int32_t wasmos_xfer_buffer_unborrow(int32_t borrow_id)
-    WASMOS_WASM_IMPORT("wasmos", "xfer_buffer_unborrow");
+extern int32_t wasmos_xfer_buffer_unborrow(int32_t borrow_id) WASMOS_WASM_IMPORT("wasmos", "xfer_buffer_unborrow");
 /* OWNER acquires a new buffer of `kind` (only BUFFER_KIND_TRANSFER is supported)
  * sized at least `minimum_size` bytes. Returns the positive `buffer_id` on
  * success, otherwise a negative WASMOS_ERR_XFER_BUFFER_* code (INVALID_KIND,
  * INVALID_SIZE, INVALID_CONTEXT, NO_ACCESS).
  */
-extern int32_t wasmos_buffer_acquire(int32_t kind, int32_t minimum_size)
-    WASMOS_WASM_IMPORT("wasmos", "buffer_acquire");
+extern int32_t wasmos_buffer_acquire(int32_t kind, int32_t minimum_size) WASMOS_WASM_IMPORT("wasmos", "buffer_acquire");
 /* Grantor-side drop of a (re)borrow named by `borrow_id`: the lender revokes a
  * grant it previously extended (resolved via the lent set). Returns
  * WASMOS_ERR_NONE (0) on success, otherwise a negative WASMOS_ERR_XFER_BUFFER_* code
  * (INACTIVE_BORROW, INVALID_CONTEXT).
  */
-extern int32_t wasmos_buffer_unborrow(int32_t borrow_id)
-    WASMOS_WASM_IMPORT("wasmos", "buffer_unborrow");
+extern int32_t wasmos_buffer_unborrow(int32_t borrow_id) WASMOS_WASM_IMPORT("wasmos", "buffer_unborrow");
 /* A grantee sub-grants its own `borrow_id` (rights ⊆ its own) to the context
  * that owns `grantee_endpoint`; returns the downstream borrow_id.
  */
-extern int32_t wasmos_xfer_buffer_reborrow(int32_t grantee, int32_t borrow_id, int32_t flags)
-    WASMOS_WASM_IMPORT("wasmos", "xfer_buffer_reborrow");
+extern int32_t wasmos_xfer_buffer_reborrow(int32_t grantee, int32_t borrow_id, int32_t flags) WASMOS_WASM_IMPORT("wasmos", "xfer_buffer_reborrow");
 /* A current BORROWER sub-grants its own borrow `borrow_id` of `kind` to the
  * context that owns `grantee_ep`, narrowing rights to `flags` (non-zero, within
  * 0x3); returns the new grantee's borrow_id. On failure returns a negative
  * WASMOS_ERR_XFER_BUFFER_* code (INVALID_KIND, INACTIVE_BORROW, INVALID_FLAGS,
  * INVALID_CONTEXT).
  */
-extern int32_t wasmos_buffer_reborrow(int32_t kind, int32_t grantee, int32_t borrow_id,
-                                      int32_t flags)
-    WASMOS_WASM_IMPORT("wasmos", "buffer_reborrow");
+extern int32_t wasmos_buffer_reborrow(int32_t kind, int32_t grantee, int32_t borrow_id, int32_t flags) WASMOS_WASM_IMPORT("wasmos", "buffer_reborrow");
 /* Returns this process's spawn-info buffer_id (holding its wasmos_spawn_info_t
  * header + args blob), or 0 if none. The buffer is owned by this process.
  */
@@ -831,15 +766,13 @@ extern int32_t wasmos_block_buffer_map(void) WASMOS_WASM_IMPORT("wasmos", "block
  * buffer_id. unmap tears the window down; always unmap before releasing the
  * buffer so the linmem window never outlives its backing. Negative on failure.
  */
-extern int32_t wasmos_xfer_buffer_map(int32_t buffer_id)
-    WASMOS_WASM_IMPORT("wasmos", "xfer_buffer_map");
+extern int32_t wasmos_xfer_buffer_map(int32_t buffer_id) WASMOS_WASM_IMPORT("wasmos", "xfer_buffer_map");
 /* Tears down the owner's zero-copy overlay of transfer buffer `buffer_id` from
  * linear memory: clears the overlay PTEs and releases the phys refcount taken at
  * map time. Returns 0 (also 0 when nothing was mapped); returns -1 on an invalid
  * buffer_id or context.
  */
-extern int32_t wasmos_xfer_buffer_unmap(int32_t buffer_id)
-    WASMOS_WASM_IMPORT("wasmos", "xfer_buffer_unmap");
+extern int32_t wasmos_xfer_buffer_unmap(int32_t buffer_id) WASMOS_WASM_IMPORT("wasmos", "xfer_buffer_unmap");
 /* klog ring (VT I/O multiplexer): register a BUFFER_KIND_TRANSFER
  * xfer-buffer the caller acquired + mapped + wasmos_ringbuf_init'd as the kernel
  * klog ring, so serial_write publishes klog text into it for the VT to drain
@@ -849,8 +782,7 @@ extern int32_t wasmos_xfer_buffer_unmap(int32_t buffer_id)
  * Returns 0 on success, -1 on a bad/foreign buffer id or a notify_endpoint the
  * caller does not own.
  */
-extern int32_t wasmos_klog_register_ring(int32_t id, int32_t notify_endpoint)
-    WASMOS_WASM_IMPORT("wasmos", "klog_register_ring");
+extern int32_t wasmos_klog_register_ring(int32_t id, int32_t notify_endpoint) WASMOS_WASM_IMPORT("wasmos", "klog_register_ring");
 /* Allocate one message-signalled interrupt vector and bind it to `endpoint`,
  * which must be owned by the caller. Fills the wasmos_msi_desc_t at `out` with
  * the interrupt-controller address/data pair that makes a device raise that
@@ -861,8 +793,7 @@ extern int32_t wasmos_klog_register_ring(int32_t id, int32_t notify_endpoint)
  * irq_ack and the vector is never masked. Delivered as IPC_MSI_EVENT_TYPE.
  * Returns 0, or a negative WASMOS_ERR_MSI_* code. Requires irq.route.
  */
-extern int32_t wasmos_msi_alloc(int32_t endpoint, wasmos_msi_desc_t* out)
-    WASMOS_WASM_IMPORT("wasmos", "msi_alloc");
+extern int32_t wasmos_msi_alloc(int32_t endpoint, wasmos_msi_desc_t* out) WASMOS_WASM_IMPORT("wasmos", "msi_alloc");
 /* Release MSI vector `vector`, which must have been allocated by the caller.
  * The vector stops being delivered and returns to the free pool. Mask the
  * device's table entry (PCI_IPC_MSI_UNBIND) before calling this, or the device
@@ -877,8 +808,7 @@ extern int32_t wasmos_msi_free(int32_t vector) WASMOS_WASM_IMPORT("wasmos", "msi
  * driver has to place MSI-X table entries. Returns 0, or a negative
  * WASMOS_ERR_MSI_* code. Requires the mmio.map capability.
  */
-extern int32_t wasmos_mmio_write32(int32_t phys_lo, int32_t phys_hi, int32_t value)
-    WASMOS_WASM_IMPORT("wasmos", "mmio_write32");
+extern int32_t wasmos_mmio_write32(int32_t phys_lo, int32_t phys_hi, int32_t value) WASMOS_WASM_IMPORT("wasmos", "mmio_write32");
 /* Read a byte at `offset` within the caller's granted I/O region `region` -- an
  * index into the windows its spawn profile granted, in the order they were
  * declared -- and store it at `out`. The kernel adds the base and
@@ -891,8 +821,7 @@ extern int32_t wasmos_mmio_write32(int32_t phys_lo, int32_t phys_hi, int32_t val
  * on success, otherwise a negative WASMOS_ERR_IO_* code naming which check
  * refused it. Requires the io.port capability.
  */
-extern int32_t wasmos_io_region_in8(int32_t region, int32_t offset, uint32_t* out)
-    WASMOS_WASM_IMPORT("wasmos", "io_region_in8");
+extern int32_t wasmos_io_region_in8(int32_t region, int32_t offset, uint32_t* out) WASMOS_WASM_IMPORT("wasmos", "io_region_in8");
 /* Read a 16-bit word at `offset` within the caller's granted I/O region `region` -- an
  * index into the windows its spawn profile granted, in the order they were
  * declared -- and store it at `out`. The kernel adds the base and
@@ -905,8 +834,7 @@ extern int32_t wasmos_io_region_in8(int32_t region, int32_t offset, uint32_t* ou
  * on success, otherwise a negative WASMOS_ERR_IO_* code naming which check
  * refused it. Requires the io.port capability.
  */
-extern int32_t wasmos_io_region_in16(int32_t region, int32_t offset, uint32_t* out)
-    WASMOS_WASM_IMPORT("wasmos", "io_region_in16");
+extern int32_t wasmos_io_region_in16(int32_t region, int32_t offset, uint32_t* out) WASMOS_WASM_IMPORT("wasmos", "io_region_in16");
 /* Read a 32-bit word at `offset` within the caller's granted I/O region `region` -- an
  * index into the windows its spawn profile granted, in the order they were
  * declared -- and store it at `out`. The kernel adds the base and
@@ -919,28 +847,24 @@ extern int32_t wasmos_io_region_in16(int32_t region, int32_t offset, uint32_t* o
  * on success, otherwise a negative WASMOS_ERR_IO_* code naming which check
  * refused it. Requires the io.port capability.
  */
-extern int32_t wasmos_io_region_in32(int32_t region, int32_t offset, uint32_t* out)
-    WASMOS_WASM_IMPORT("wasmos", "io_region_in32");
+extern int32_t wasmos_io_region_in32(int32_t region, int32_t offset, uint32_t* out) WASMOS_WASM_IMPORT("wasmos", "io_region_in32");
 /* Write a byte to `offset` within the caller's granted I/O region
  * `region` (see io_region_in8 for how a region is named). Returns 0, or a
  * negative WASMOS_ERR_IO_* code naming which check refused it. Requires the
  * io.port capability.
  */
-extern int32_t wasmos_io_region_out8(int32_t region, int32_t offset, int32_t value)
-    WASMOS_WASM_IMPORT("wasmos", "io_region_out8");
+extern int32_t wasmos_io_region_out8(int32_t region, int32_t offset, int32_t value) WASMOS_WASM_IMPORT("wasmos", "io_region_out8");
 /* Write a 16-bit word to `offset` within the caller's granted I/O region
  * `region` (see io_region_in8 for how a region is named). Returns 0, or a
  * negative WASMOS_ERR_IO_* code naming which check refused it. Requires the
  * io.port capability.
  */
-extern int32_t wasmos_io_region_out16(int32_t region, int32_t offset, int32_t value)
-    WASMOS_WASM_IMPORT("wasmos", "io_region_out16");
+extern int32_t wasmos_io_region_out16(int32_t region, int32_t offset, int32_t value) WASMOS_WASM_IMPORT("wasmos", "io_region_out16");
 /* Write a 32-bit word to `offset` within the caller's granted I/O region
  * `region` (see io_region_in8 for how a region is named). Returns 0, or a
  * negative WASMOS_ERR_IO_* code naming which check refused it. Requires the
  * io.port capability.
  */
-extern int32_t wasmos_io_region_out32(int32_t region, int32_t offset, int32_t value)
-    WASMOS_WASM_IMPORT("wasmos", "io_region_out32");
+extern int32_t wasmos_io_region_out32(int32_t region, int32_t offset, int32_t value) WASMOS_WASM_IMPORT("wasmos", "io_region_out32");
 
 #endif /* WASMOS_GENERATED_CLIENT_IMPORTS_H */

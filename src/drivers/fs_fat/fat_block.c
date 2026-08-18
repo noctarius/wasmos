@@ -10,6 +10,7 @@
 #include "wasmos_driver_abi.h"
 
 void fat_block_configure(fat_block_t* blk, int32_t block_endpoint, int32_t reply_endpoint) {
+    blk->sector_bytes = FAT_SECTOR_SIZE;
     blk->block_endpoint = block_endpoint;
     blk->reply_endpoint = reply_endpoint;
     blk->buf_phys = -1;
@@ -53,12 +54,18 @@ void fat_block_invalidate(fat_block_t* blk) {
     blk->loaded_lba = FAT_BLOCK_NO_LBA;
 }
 
-/* Submit one 512-byte block transfer (count = 1).  Returns 0, or -1 when the
- * layer is unconfigured, when staging the write into the block buffer failed, or
- * when the request could not be sent.
- * TODO: the transfer size is fixed at FAT_SECTOR_SIZE while fat_geom accepts a
- * BPB of 1024/2048/4096 bytes per sector, so such a volume would stage only the
- * first 512 bytes of every sector the FAT/directory code then parses in full. */
+int fat_block_set_sector_bytes(fat_block_t* blk, uint32_t bytes) {
+    if (!blk || bytes < FAT_SECTOR_SIZE || bytes > FAT_MAX_SECTOR_BYTES ||
+        (bytes % FAT_SECTOR_SIZE) != 0) {
+        return -1;
+    }
+    blk->sector_bytes = bytes;
+    return 0;
+}
+
+/* Submit one block transfer of blk->sector_bytes (count = 1).  Returns 0, or -1
+ * when the layer is unconfigured, when staging the write into the block buffer
+ * failed, or when the request could not be sent. */
 static int fat_block_start(fat_block_t* blk, uint32_t lba, int rw) {
     int32_t req_type;
 
@@ -67,7 +74,7 @@ static int fat_block_start(fat_block_t* blk, uint32_t lba, int rw) {
     }
     if (rw == 1 /* write */ &&
         wasmos_block_buffer_write(
-            blk->buf_phys, addr_cast(int32_t, blk->sector), (int32_t)FAT_SECTOR_SIZE, 0) != 0) {
+            blk->buf_phys, addr_cast(int32_t, blk->sector), (int32_t)blk->sector_bytes, 0) != 0) {
         return -1;
     }
 
@@ -229,7 +236,7 @@ fat_op_ctx_t* fat_block_complete(fat_block_t* blk, int* out_ok) {
     }
     if (blk->copy_into_sector &&
         wasmos_block_buffer_copy(
-            blk->buf_phys, addr_cast(int32_t, blk->sector), (int32_t)FAT_SECTOR_SIZE, 0) != 0) {
+            blk->buf_phys, addr_cast(int32_t, blk->sector), (int32_t)blk->sector_bytes, 0) != 0) {
         blk->loaded_lba = FAT_BLOCK_NO_LBA;
         return owner;
     }

@@ -279,6 +279,14 @@ typedef struct {
     fat_chain_ctx_t chain;
 } fat_dir_scan_ctx_t;
 
+/* Read a directory's parent from its on-disk '..' entry.  `out_parent` is 0 when
+ * the parent IS the root, which is what the specification stores there. */
+typedef struct {
+    int cont;
+    uint32_t cluster; /* the directory whose parent is wanted */
+    uint32_t out_parent;
+} fat_dotdot_ctx_t;
+
 /* Resolve a path to its directory entry (walks components, descends subdirs). */
 typedef struct {
     int cont;
@@ -294,6 +302,7 @@ typedef struct {
     char component[FAT_MAX_PATH];
     fat_dir_entry_info_t found;
     fat_dir_scan_ctx_t scan;
+    fat_dotdot_ctx_t dotdot; /* '..' resolved through the on-disk entry */
 } fat_resolve_ctx_t;
 
 /* Resolve a path to its PARENT directory + leaf name (for create/delete).  The
@@ -315,6 +324,7 @@ typedef struct {
     char name[FAT_MAX_PATH];
     fat_dir_entry_info_t found;
     fat_dir_scan_ctx_t scan;
+    fat_dotdot_ctx_t dotdot; /* '..' resolved through the on-disk entry */
 } fat_resolve_parent_ctx_t;
 
 /* --- Coroutine sub-machine contexts (fat_dir.c, mutation side). --- */
@@ -585,6 +595,7 @@ typedef struct {
     uint32_t root_sectors_probe;
     int next;                /* fat_chdir_next_component result carried out */
     fat_dir_scan_ctx_t scan; /* the shared directory scan, one level at a time */
+    fat_dotdot_ctx_t dotdot; /* '..' resolved through the on-disk entry */
 } fat_chdir_ctx_t;
 
 /* --- Coroutine sub-machine contexts (fat_file.c, open-file I/O side). --- */
@@ -638,6 +649,7 @@ typedef struct {
     fat_open_file_t* file;
     uint32_t min_size;
     uint32_t saved_offset;
+    uint32_t prev_capacity; /* progress check: an append must raise capacity */
     fat_append_ctx_t append;
     fat_reposition_ctx_t repos;
 } fat_ensurecap_ctx_t;

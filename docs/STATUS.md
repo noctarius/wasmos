@@ -544,11 +544,19 @@ linked feature documents for rationale and rollout plans.
   addressed the wrong sector rather than erroring. Directory-level mutation is
   covered too (create, mkdir, rmdir, chain append); file DATA read/write on
   FAT32 is not, because it runs through the client transfer-buffer path.
-- Every FAT test builds its volume from a BPB this repository hand-writes, so
-  the suite proves the driver agrees with our reading of the specification, not
-  with a real formatter. QEMU synthesizes its FAT; `scripts/run_bochs.sh` uses a
-  genuine `mkfs.vfat` image but only FAT16. Treat FAT32 interop as unverified
-  until an `mkfs.vfat -F 32` image is mounted — see `TASKS.md`.
+- FAT interop is checked against real tools, not only against this repository's
+  own reading of the format. `cmake --build build --target run-fat-image-tests`
+  formats FAT16, FAT16+LFN and FAT32 volumes with the platform's own
+  `mkfs.vfat`/`newfs_msdos`, has the driver mount, read and MODIFY each, then
+  runs `fsck.vfat`/`fsck_msdos` over the result and mounts it on the host to
+  confirm the entries the driver created are visible to the operating system.
+  It skips when no formatter is installed, so it is a separate target rather
+  than part of `run-kernel-unit-tests`.
+
+  Judge that target by its output, not its exit status: `fsck -n` reports a
+  fault and still exits 0, so the script greps the report. Two real defects came
+  out of its first run — a `..` entry written with a non-zero start cluster
+  under a FAT12/16 root, and FSInfo free-space drift (still open, `TASKS.md`).
 - The WRITE side is still single-cluster: `fat_find_free_dir_slots` returns a
   flat entry index that the writer resolves against `dir_lba`, which is valid
   only within one contiguous run. A create into a directory whose first cluster

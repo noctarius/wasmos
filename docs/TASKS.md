@@ -825,26 +825,20 @@ tail.
 
 ## Filesystems and Storage
 
-- [ ] [TEST][P2] Mount a FAT32 image produced by a real formatter. Every FAT32
-  test in the tree builds its volume from a BPB this repository hand-writes
-  (`tests/unit/test_fat_dir.c`), so the suite confirms the driver agrees with
-  our own reading of the specification -- it cannot catch a place where that
-  reading is wrong, because the same assumption wrote the image. The two
-  emulated paths do not close this either: QEMU synthesizes its FAT (vvfat), and
-  `scripts/run_bochs.sh` formats with `mkfs.vfat`/`newfs_msdos` but only as
-  FAT16. No `mkfs.vfat -F 32` image has ever been mounted by this driver.
+- [ ] [BUG][P2] Maintain or invalidate the FAT32 FSInfo free-cluster count.
+  `fsck_msdos` reports `Free space in FSInfo block (128937) not correct
+  (128936)` after the driver allocates a cluster: FSI_Free_Count is never
+  updated, so the hint drifts by exactly the number of clusters allocated. The
+  volume stays structurally sound -- FSInfo is advisory and the specification
+  defines 0xFFFFFFFF as "unknown" -- which is why
+  `scripts/run_fat_image_test.sh` allows this one warning through by name
+  rather than failing on it.
 
-  The '..'-is-zero convention is the evidence that this matters: the code
-  derived `..` from the parent's real cluster, which is self-consistent and
-  readable by us, and wrong to every other implementation. It was found by
-  reading the specification, not by a test. Untested areas of the same kind:
-  FSInfo (never read or maintained), `BPB_ExtFlags` active-FAT/mirroring (the
-  write path fans out to all copies unconditionally), and a `bytes_per_sector`
-  other than 512.
-
-  Cheapest route: teach `scripts/run_bochs.sh` a FAT32 mode (it already formats
-  and populates a real image), or add a host fixture built by `mkfs.vfat -F 32`
-  at test time and skipped when the tool is absent.
+  Writing 0xFFFFFFFF once per session on the first allocation is the cheap
+  correct fix and is what the "unknown" encoding exists for; maintaining a
+  running count is more work and more ways to be wrong. Either needs a mutable
+  mount, since `fat_fatent_write` takes `const fat_mount_t*` -- which is the
+  actual reason this is filed rather than fixed inline.
 
 - [ ] [FEATURE][P2] Round-trip a file's DATA on FAT32. The metadata mutation paths
   are covered (`tests/unit/test_fat_dir.c`: create, mkdir with its dot entries,

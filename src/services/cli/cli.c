@@ -2,6 +2,7 @@
  * and routes console output to the VT service or serial depending on TTY focus */
 #include <stdint.h>
 #include "ctype.h"
+#include "cli_ls_order.h"
 #include "stdlib.h"
 #include "stdio.h"
 #include "string.h"
@@ -1708,6 +1709,114 @@ static int cli_run_script(const char* script_path, int source_mode) {
     return 0;
 }
 
+/* --- `ls` ordering. ---
+ *
+ * The filesystem streams directory entries in on-disk slot order, which is not
+ * even insertion order: a freed slot is reused, so a file created after a
+ * deletion appears in the hole. FAT specifies no ordering and POSIX readdir()
+ * guarantees none, so ordering is the consumer's job -- and it has to be, since
+ * sorting in the driver would mean buffering a whole directory before emitting
+ * the first byte, in a component with one 8 KiB staging buffer.
+ *
+ * So `ls` collects the stream and sorts it. The buffer is bounded, and the
+ * policy when a directory outgrows it is to print EVERYTHING unsorted with a
+ * note rather than to drop entries or to emit a half-sorted list: a listing
+ * that silently omits a file is worse than one in an awkward order. */
+#define CLI_LS_POOL_BYTES 4096u
+#define CLI_LS_MAX_ENTRIES 192u
+
+static char g_ls_pool[CLI_LS_POOL_BYTES];
+static uint32_t g_ls_pool_used; /* bytes of completed entries */
+static uint32_t g_ls_line_len;  /* bytes of the entry being accumulated */
+static uint16_t g_ls_off[CLI_LS_MAX_ENTRIES];
+static uint32_t g_ls_count;
+static uint8_t g_ls_passthrough; /* capacity exceeded: stream straight out */
+
+static void cli_ls_reset(void) {
+    g_ls_pool_used = 0;
+    g_ls_line_len = 0;
+    g_ls_count = 0;
+    g_ls_passthrough = 0;
+}
+
+/* Print every collected entry in arrival order and switch to streaming. Used
+ * when the directory outgrows the buffer: nothing is dropped, the order is just
+ * the filesystem's. */
+static void cli_ls_overflow(void) {
+    uint32_t i;
+
+    console_write("[ls] directory too large to sort; listing in on-disk order\n");
+    for (i = 0; i < g_ls_count; ++i) {
+        console_write(&g_ls_pool[g_ls_off[i]]);
+        console_write("\n");
+    }
+    /* The partially accumulated entry has not been terminated yet; emit what
+     * arrived so far so no bytes are lost. */
+    if (g_ls_line_len > 0) {
+        g_ls_pool[g_ls_pool_used + g_ls_line_len] = '\0';
+        console_write(&g_ls_pool[g_ls_pool_used]);
+    }
+    g_ls_count = 0;
+    g_ls_line_len = 0;
+    g_ls_pool_used = 0;
+    g_ls_passthrough = 1;
+}
+
+/* Accumulate one streamed byte of a listing. */
+static void cli_ls_put(char c) {
+    if (g_ls_passthrough) {
+        char one[2];
+        one[0] = c;
+        one[1] = '\0';
+        console_write(one);
+        return;
+    }
+    if (c == '\n') {
+        if (g_ls_count >= CLI_LS_MAX_ENTRIES) {
+            cli_ls_overflow();
+            console_write("\n");
+            return;
+        }
+        g_ls_pool[g_ls_pool_used + g_ls_line_len] = '\0';
+        g_ls_off[g_ls_count++] = (uint16_t)g_ls_pool_used;
+        g_ls_pool_used += g_ls_line_len + 1u;
+        g_ls_line_len = 0;
+        return;
+    }
+    /* +1 for this byte, +1 for its NUL. */
+    if (g_ls_pool_used + g_ls_line_len + 2u > CLI_LS_POOL_BYTES) {
+        cli_ls_overflow();
+        cli_ls_put(c);
+        return;
+    }
+    g_ls_pool[g_ls_pool_used + g_ls_line_len] = c;
+    g_ls_line_len++;
+}
+
+/* Sort what was collected and print it (ordering lives in cli_ls_order.c). */
+static void cli_ls_flush(void) {
+    uint32_t i;
+
+    if (g_ls_passthrough) {
+        cli_ls_reset();
+        return;
+    }
+    if (g_ls_line_len > 0) {
+        /* A final entry with no trailing newline. */
+        if (g_ls_count < CLI_LS_MAX_ENTRIES) {
+            g_ls_pool[g_ls_pool_used + g_ls_line_len] = '\0';
+            g_ls_off[g_ls_count++] = (uint16_t)g_ls_pool_used;
+        }
+        g_ls_line_len = 0;
+    }
+    cli_ls_sort(g_ls_pool, g_ls_off, g_ls_count);
+    for (i = 0; i < g_ls_count; ++i) {
+        console_write(&g_ls_pool[g_ls_off[i]]);
+        console_write("\n");
+    }
+    cli_ls_reset();
+}
+
 static int cli_handle_line(void) {
     g_line[g_line_len] = '\0';
     if (g_line_len == 0) {
@@ -1888,6 +1997,7 @@ static int cli_handle_line(void) {
             console_write("ls failed\n");
             return 0;
         }
+        cli_ls_reset();
         g_pending_kind = PENDING_LIST;
         return 1;
     }
@@ -2267,7 +2377,15 @@ static void cli_phase_wait_ipc_step(void) {
         }
         out[out_len] = '\0';
         if (out_len > 0) {
-            console_write(out);
+            if (g_pending_kind == PENDING_LIST) {
+                /* Collected and sorted at completion; `cat` keeps streaming,
+                 * because a file's bytes must not be reordered or buffered. */
+                for (int i = 0; i < out_len; ++i) {
+                    cli_ls_put(out[i]);
+                }
+            } else {
+                console_write(out);
+            }
         }
         return;
     }
@@ -2388,6 +2506,9 @@ static void cli_phase_wait_ipc_step(void) {
         } else {
             set_cwd_root();
         }
+    }
+    if (g_pending_kind == PENDING_LIST) {
+        cli_ls_flush();
     }
     cli_release_pending_spawn_bid();
     g_pending_req = -1;

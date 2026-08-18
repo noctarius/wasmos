@@ -593,6 +593,22 @@ linked feature documents for rationale and rollout plans.
   further along, and directories cannot grow. It fails rather than corrupts.
   See `TASKS.md`; QEMU's synthesized FAT never produces a multi-cluster
   directory, `scripts/run_bochs.sh` does.
+- `ls` orders its listing; the filesystem does not. The backend streams entries
+  in on-disk slot order, which is not even insertion order — a freed slot is
+  reused, so a file created after a deletion appears in the hole. FAT specifies
+  no ordering and POSIX `readdir()` guarantees none, and the backend emits
+  entries as it walks the cluster chain, so sorting there would mean buffering a
+  whole directory before the first byte. The CLI collects and sorts instead
+  (`src/services/cli/cli_ls_order.c`, split out for unit testing like
+  `fs_manager_path.c`): case-insensitive, with digit runs compared by value so
+  `f9` precedes `f10`, and a trailing `/` treated as the directory marker rather
+  than part of the name.
+
+  The collector is bounded (192 entries / 4 KiB of names). A directory past that
+  is printed IN FULL in on-disk order with a visible note, never truncated and
+  never half-sorted — an omitted file is worse than an awkward order. `cat`
+  still streams straight through; a file's bytes are never buffered or
+  reordered.
 - Rename/move exists end to end: libc `rename()` -> `FS_IPC_RENAME_REQ` (both
   paths in one transfer buffer, source at offset 0 and destination after its
   NUL) -> fs-manager routing -> `fat_rename_path`. Only the directory entry

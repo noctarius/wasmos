@@ -156,7 +156,7 @@ set(WASM_INIT_APP_SRC ${SERVICES_DIR}/sysinit/init.c)
 set(WASMOS_SCRIPT_ENGINE_SRC ${LIBC_DIR}/src/script.c)
 set(WASM_INIT_APP_WASM ${BUILD_DIR}/init.wasm)
 set(WASM_INIT_APP ${BUILD_DIR}/sysinit.wap)
-set(WASM_CLI_APP_SRC ${SERVICES_DIR}/cli/cli.c)
+set(WASM_CLI_APP_SRC ${SERVICES_DIR}/cli/cli.c ${SERVICES_DIR}/cli/cli_ls_order.c)
 set(WASM_CLI_APP_WASM ${BUILD_DIR}/cli.wasm)
 set(WASM_CLI_APP ${BUILD_DIR}/cli.wap)
 set(WASM_DEVICE_MANAGER_SOURCES
@@ -2196,6 +2196,15 @@ add_custom_target(run-kernel-unit-tests
           ${SERVICES_DIR}/fs_manager/fs_manager_path.c
           -o ${BUILD_DIR}/test_fs_manager_path
   COMMAND ${BUILD_DIR}/test_fs_manager_path
+  # Listing order for `ls`. Split out of cli.c for the same reason
+  # fs_manager_path.c is: no IPC, no console, no globals.
+  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
+          -I${CMAKE_SOURCE_DIR}/tests/unit/include
+          -I${SERVICES_DIR}/cli
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_cli_ls_order.c
+          ${SERVICES_DIR}/cli/cli_ls_order.c
+          -o ${BUILD_DIR}/test_cli_ls_order
+  COMMAND ${BUILD_DIR}/test_cli_ls_order
   # FAT directory scanning over a cluster chain. The test supplies its own block
   # layer (a RAM image served synchronously), so fat_block.c is deliberately NOT
   # linked; fat_util.c is, because fat_geom.c logs through it.
@@ -3360,7 +3369,7 @@ wasmos_ide_index(wasmos_ide_unit
          ${LIBSYS_WASM_DIR}/include ${LIBSYS_NATIVE_DIR}/include
          ${CMAKE_SOURCE_DIR}/abi/generated/c
          ${SERVICES_DIR}/fs_manager ${SERVICES_DIR}/device_manager
-         ${SERVICES_DIR}/net_stack
+         ${SERVICES_DIR}/net_stack ${SERVICES_DIR}/cli
          ${DRIVER_WASM_DIR}/fs_fat
          ${WASM3_DIR} ${WASM3_DIR}/source)
 

@@ -820,7 +820,7 @@ static inline int32_t wasmos_sys_buffer_read(int32_t buffer_id, void* dst, int32
     if (!dst || buffer_id <= 0 || len < 0 || offset < 0) {
         return -1;
     }
-    return wasmos_xfer_buffer_read(buffer_id, addr_cast(int32_t, dst), len, offset) == 0 ? 0 : -1;
+    return wasmos_xfer_buffer_read(buffer_id, dst, len, offset) == 0 ? 0 : -1;
 }
 
 /* Grantee-side write of a transfer buffer object named by `buffer_id`. The owner
@@ -833,7 +833,7 @@ static inline int32_t wasmos_sys_buffer_write(int32_t buffer_id, const void* src
     if (!src || buffer_id <= 0 || len < 0 || offset < 0) {
         return -1;
     }
-    return wasmos_xfer_buffer_write(buffer_id, addr_cast(int32_t, src), len, offset) == 0 ? 0 : -1;
+    return wasmos_xfer_buffer_write(buffer_id, src, len, offset) == 0 ? 0 : -1;
 }
 
 /* Terminate an entropy request with `status`: release the transfer buffer,
@@ -880,8 +880,7 @@ static inline void wasmos_sys_random_reply(void* user, const wasmos_ipc_message_
     }
     wrote = reply->arg0;
     if (wrote <= 0 || wrote > request->chunk_max || wrote > request->len - request->done ||
-        wasmos_xfer_buffer_read(
-            request->buffer_id, addr_cast(int32_t, request->out + request->done), wrote, 0) != 0) {
+        wasmos_xfer_buffer_read(request->buffer_id, request->out + request->done, wrote, 0) != 0) {
         wasmos_sys_random_finish(request, WASMOS_ERR_HRNG_IO_ERROR);
         return;
     }
@@ -1059,7 +1058,7 @@ static inline int32_t wasmos_sys_fs_read_path(int32_t fs_endpoint, int32_t reply
     if (bid < 0) {
         return -1;
     }
-    if (wasmos_xfer_buffer_write(bid, addr_cast(int32_t, path), path_len, 0) != 0) {
+    if (wasmos_xfer_buffer_write(bid, path, path_len, 0) != 0) {
         (void)wasmos_xfer_buffer_release(bid);
         return -1;
     }
@@ -1093,8 +1092,7 @@ static inline int32_t wasmos_sys_fs_read_path(int32_t fs_endpoint, int32_t reply
     if (read_len >= out_text_len) {
         read_len = out_text_len - 1;
     }
-    if (read_len > 0 &&
-        wasmos_xfer_buffer_read(bid, addr_cast(int32_t, out_text), read_len, 0) != 0) {
+    if (read_len > 0 && wasmos_xfer_buffer_read(bid, out_text, read_len, 0) != 0) {
         (void)wasmos_xfer_buffer_release(bid);
         return -1;
     }

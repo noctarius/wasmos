@@ -566,12 +566,18 @@ linked feature documents for rationale and rollout plans.
   out of its first run — a `..` entry written with a non-zero start cluster
   under a FAT12/16 root, and FSInfo free-space drift (still open, `TASKS.md`).
 
-  Two gaps it does NOT cover, both in `TASKS.md`: there is no rename operation
-  in the stack to exercise, and `fat_op_write`/`fat_op_read` are driven one
-  layer down (chain growth, repositioning and the size write-back are the
-  driver's; the byte copy is the harness's) because those entry points pass the
-  client buffer through a 32-bit pointer truncation a 64-bit host cannot
-  satisfy.
+  Writes go through `fat_op_write` itself. That entry point used to be
+  unreachable from a 64-bit host because it passes the client buffer's address
+  to `wasmos_xfer_buffer_read`, and while that parameter was declared `int32_t`
+  a host pointer did not survive it. The `dst`/`src` params now carry a
+  `c_type` of `void*`/`const void*` in `abi/hostcalls.yaml`, which changes no
+  wire format — a pointer is 32 bits on wasm32, so the import is still an i32 —
+  and makes the same code host-drivable. Prefer that over `addr_cast(int32_t,
+  …)` for any new buffer-address parameter.
+
+  Still not covered, in `TASKS.md`: there is no rename operation in the stack to
+  exercise, and `fat_op_read` goes through the zero-copy borrow passthrough the
+  harness does not model.
 - The WRITE side is still single-cluster: `fat_find_free_dir_slots` returns a
   flat entry index that the writer resolves against `dir_lba`, which is valid
   only within one contiguous run. A create into a directory whose first cluster

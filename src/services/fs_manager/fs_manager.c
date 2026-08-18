@@ -622,7 +622,7 @@ static int route_root_path_request(fs_client_state_t* state, int32_t buffer_id, 
     /* fs-manager was granted R|W over the client object (client borrow -> arg3);
      * read the path and write the mount-stripped tail back in place for the
      * backend to re-read. No borrow is taken here. */
-    if (wasmos_xfer_buffer_read(buffer_id, addr_cast(int32_t, scratch), path_len, 0) != 0) {
+    if (wasmos_xfer_buffer_read(buffer_id, scratch, path_len, 0) != 0) {
         return -1;
     }
     scratch[path_len] = '\0';
@@ -635,8 +635,7 @@ static int route_root_path_request(fs_client_state_t* state, int32_t buffer_id, 
                                     &open_path_len,
                                     &routed_backend);
     }
-    if (open_path_len <= 0 ||
-        wasmos_xfer_buffer_write(buffer_id, addr_cast(int32_t, scratch), open_path_len, 0) != 0) {
+    if (open_path_len <= 0 || wasmos_xfer_buffer_write(buffer_id, scratch, open_path_len, 0) != 0) {
         return -1;
     }
     *inout_arg0 = open_path_len;
@@ -798,7 +797,7 @@ static int handle_read_path_req(fs_client_state_t* state, int32_t source, int32_
      * BORROWER and never unborrows it (the client releases it). fs-manager reads
      * the path via its grant, reborrows to the backend (b2, which fs-manager
      * lends and therefore unborrows), and unborrows b2 before replying. */
-    if (wasmos_xfer_buffer_read(buffer_id, addr_cast(int32_t, path_scratch), path_len, 0) != 0) {
+    if (wasmos_xfer_buffer_read(buffer_id, path_scratch, path_len, 0) != 0) {
         send_fs_error(source, request_id, WASMOS_ERR_FS_BUFFER);
         return 1;
     }
@@ -827,8 +826,7 @@ static int handle_read_path_req(fs_client_state_t* state, int32_t source, int32_
         send_fs_error(source, request_id, WASMOS_ERR_FS_TRANSLATE);
         return 1;
     }
-    if (wasmos_xfer_buffer_write(buffer_id, addr_cast(int32_t, path_scratch), open_path_len, 0) !=
-        0) {
+    if (wasmos_xfer_buffer_write(buffer_id, path_scratch, open_path_len, 0) != 0) {
         send_fs_error(source, request_id, WASMOS_ERR_FS_BUFFER);
         return 1;
     }

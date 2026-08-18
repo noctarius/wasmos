@@ -359,7 +359,7 @@ static int cmd_show(int32_t stack_ep, int32_t reply_ep, int32_t* rid) {
     count = message.arg0;
     if (count > IP_MAX_IFACES)
         count = IP_MAX_IFACES;
-    if (wasmos_xfer_buffer_read(bid, addr_cast(int32_t, records), (int32_t)(count * 24u), 0) != 0) {
+    if (wasmos_xfer_buffer_read(bid, records, (int32_t)(count * 24u), 0) != 0) {
         (void)wasmos_xfer_buffer_release(bid);
         return 1;
     }
@@ -431,8 +431,7 @@ static int cmd_add(int32_t stack_ep, int32_t reply_ep, int32_t* rid, const char*
     bid = wasmos_xfer_buffer_acquire((int32_t)sizeof(record));
     if (bid < 0)
         return 1;
-    if (wasmos_xfer_buffer_write(bid, addr_cast(int32_t, record), (int32_t)sizeof(record), 0) !=
-        0) {
+    if (wasmos_xfer_buffer_write(bid, record, (int32_t)sizeof(record), 0) != 0) {
         (void)wasmos_xfer_buffer_release(bid);
         return 1;
     }

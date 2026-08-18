@@ -43,7 +43,7 @@ static inline int32_t wasmos_net_resolve(int32_t stack_ep, int32_t reply_ep, con
     if (bid < 0) {
         return -1;
     }
-    if (wasmos_xfer_buffer_write(bid, addr_cast(int32_t, hostname), len, 0) != 0) {
+    if (wasmos_xfer_buffer_write(bid, hostname, len, 0) != 0) {
         (void)wasmos_xfer_buffer_release(bid);
         return -1;
     }
@@ -248,7 +248,7 @@ static inline int32_t wasmos_net__write_ring_header(int32_t bid, uint32_t capaci
     hdr[9] = (uint8_t)((capacity >> 8) & 0xFFu);
     hdr[10] = (uint8_t)((capacity >> 16) & 0xFFu);
     hdr[11] = (uint8_t)((capacity >> 24) & 0xFFu);
-    return wasmos_xfer_buffer_write(bid, addr_cast(int32_t, hdr), (int32_t)sizeof(hdr), 0);
+    return wasmos_xfer_buffer_write(bid, hdr, (int32_t)sizeof(hdr), 0);
 }
 
 /* Reset a socket to the "nothing acquired" baseline: every buffer id / grant /
@@ -353,8 +353,7 @@ static inline int32_t wasmos_net__connect_flags(wasmos_net_tcp_t* s, int32_t sta
     wasmos_net__fill_desc(
         &desc, s->tx_bid, s->tx_grant, s->rx_bid, s->rx_grant, region, open_flags, sni);
     rid = s->request_id++;
-    if (wasmos_xfer_buffer_write(
-            s->desc_bid, addr_cast(int32_t, &desc), (int32_t)sizeof(desc), 0) != 0 ||
+    if (wasmos_xfer_buffer_write(s->desc_bid, &desc, (int32_t)sizeof(desc), 0) != 0 ||
         wasmos_ipc_send(stack_ep,
                         reply_ep,
                         NET_IPC_SOCKET_OPEN,
@@ -455,8 +454,7 @@ static inline int32_t wasmos_net_packet_open(wasmos_net_tcp_t* s, int32_t stack_
     desc.family = NET_SOCKET_AF_PACKET;
     desc.type = NET_SOCKET_RAW;
     rid = s->request_id++;
-    if (wasmos_xfer_buffer_write(
-            s->desc_bid, addr_cast(int32_t, &desc), (int32_t)sizeof(desc), 0) != 0 ||
+    if (wasmos_xfer_buffer_write(s->desc_bid, &desc, (int32_t)sizeof(desc), 0) != 0 ||
         wasmos_ipc_send(stack_ep,
                         reply_ep,
                         NET_IPC_SOCKET_OPEN,
@@ -629,8 +627,7 @@ static inline int32_t wasmos_net_tcp_connect_begin(wasmos_net_tcp_t* s, int32_t 
     wasmos_net__fill_desc(
         &desc, s->tx_bid, s->tx_grant, s->rx_bid, s->rx_grant, region, flags, sni);
     s->hs_pending_rid = s->request_id++;
-    if (wasmos_xfer_buffer_write(
-            s->desc_bid, addr_cast(int32_t, &desc), (int32_t)sizeof(desc), 0) != 0 ||
+    if (wasmos_xfer_buffer_write(s->desc_bid, &desc, (int32_t)sizeof(desc), 0) != 0 ||
         wasmos_ipc_send(stack_ep,
                         reply_ep,
                         NET_IPC_SOCKET_OPEN,
@@ -681,8 +678,7 @@ static inline int32_t wasmos_net_tcp_listen_begin(wasmos_net_tcp_t* s, int32_t s
     }
     wasmos_net__fill_desc(&desc, s->hs_l_tx_bid, l_txg, s->hs_l_rx_bid, l_rxg, l_region, 0u, 0);
     s->hs_pending_rid = s->request_id++;
-    if (wasmos_xfer_buffer_write(
-            s->desc_bid, addr_cast(int32_t, &desc), (int32_t)sizeof(desc), 0) != 0 ||
+    if (wasmos_xfer_buffer_write(s->desc_bid, &desc, (int32_t)sizeof(desc), 0) != 0 ||
         wasmos_ipc_send(stack_ep,
                         reply_ep,
                         NET_IPC_SOCKET_OPEN,
@@ -819,8 +815,7 @@ static inline int32_t wasmos_net_tcp_advance(wasmos_net_tcp_t* s) {
                                   0u,
                                   0);
             s->hs_pending_rid = s->request_id++;
-            if (wasmos_xfer_buffer_write(
-                    s->desc_bid, addr_cast(int32_t, &desc), (int32_t)sizeof(desc), 0) != 0 ||
+            if (wasmos_xfer_buffer_write(s->desc_bid, &desc, (int32_t)sizeof(desc), 0) != 0 ||
                 wasmos_ipc_send(s->stack_ep,
                                 s->reply_ep,
                                 NET_IPC_ACCEPT,

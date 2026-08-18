@@ -436,8 +436,7 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
     }
     g_mount_bid = wasmos_xfer_buffer_acquire(mount_alias_len);
     if (g_mount_bid < 0 ||
-        wasmos_xfer_buffer_write(
-            g_mount_bid, addr_cast(int32_t, mount_alias), mount_alias_len, 0) != 0) {
+        wasmos_xfer_buffer_write(g_mount_bid, mount_alias, mount_alias_len, 0) != 0) {
         fat_log("mount alias buffer write failed\n");
         fat_stall();
     }

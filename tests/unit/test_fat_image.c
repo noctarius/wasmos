@@ -103,35 +103,43 @@ fat_r_t fat_block_read_direct(fat_block_t* blk, uint32_t lba, uint32_t count, in
     return FAT_R_ERR;
 }
 
-int32_t wasmos_xfer_buffer_read(int32_t buffer_id, int32_t dst, int32_t len, int32_t offset) {
-    (void)buffer_id;
-    (void)dst;
-    (void)len;
-    (void)offset;
-    assert(0 && "wasmos_xfer_buffer_read: not driven here");
-    return -1;
+/* The client transfer buffer, modelled for real.
+ *
+ * This became possible when abi/hostcalls.yaml gave `dst`/`src` a `c_type` of
+ * void*: the address now crosses as a POINTER, which is 32-bit on wasm32 (so
+ * the wasm import signature is unchanged, still an i32) and 64-bit here. While
+ * it was declared int32_t a host pointer did not survive the call, which is why
+ * fat_op_read/fat_op_write used to be stubbed out with aborts. */
+#define XFER_CAP 4096u
+static uint8_t g_xfer[XFER_CAP];
+
+int32_t wasmos_xfer_buffer_size(void) {
+    return (int32_t)XFER_CAP;
 }
 
-int32_t wasmos_xfer_buffer_write(int32_t buffer_id, int32_t src, int32_t len, int32_t offset) {
+int32_t wasmos_xfer_buffer_read(int32_t buffer_id, void* dst, int32_t len, int32_t offset) {
     (void)buffer_id;
-    (void)src;
-    (void)len;
-    (void)offset;
-    assert(0 && "wasmos_xfer_buffer_write: not driven here");
-    return -1;
+    if (len < 0 || offset < 0 || (uint32_t)offset + (uint32_t)len > XFER_CAP) {
+        return -1;
+    }
+    memcpy(dst, g_xfer + offset, (size_t)len);
+    return 0;
+}
+
+int32_t wasmos_xfer_buffer_write(int32_t buffer_id, const void* src, int32_t len, int32_t offset) {
+    (void)buffer_id;
+    if (len < 0 || offset < 0 || (uint32_t)offset + (uint32_t)len > XFER_CAP) {
+        return -1;
+    }
+    memcpy(g_xfer + offset, src, (size_t)len);
+    return 0;
 }
 
 int32_t wasmos_xfer_buffer_reborrow(int32_t grantee, int32_t borrow_id, int32_t flags) {
     (void)grantee;
     (void)borrow_id;
     (void)flags;
-    assert(0 && "wasmos_xfer_buffer_reborrow: not driven here");
-    return -1;
-}
-
-int32_t wasmos_xfer_buffer_size(void) {
-    assert(0 && "wasmos_xfer_buffer_size: not driven here");
-    return -1;
+    return 0;
 }
 
 int32_t wasmos_console_write(int32_t ptr, int32_t len) {
@@ -177,7 +185,7 @@ int32_t wasmos_sched_yield(void) {
 #define INNER_TEXT "nested content\n"
 /* Larger than one cluster at the fixture's one-sector clusters, so writing and
  * reading it both walk the chain. */
-#define BIG_LEN 1500u
+#define BIG_LEN 1500u /* < XFER_CAP: fat_op_write clamps to the client buffer */
 
 /* --- Harness. --- */
 
@@ -256,26 +264,23 @@ static int resolve_ok(fat_block_t* blk, const fat_mount_t* mnt, const char* path
     return 1;
 }
 
-/* --- File contents. ---
+/* --- File contents, through the driver's own op entry point. ---
  *
- * fat_op_write cannot be driven from a 64-bit host: it hands the client buffer
- * to wasmos_xfer_buffer_read as `addr_cast(int32_t, stage)`, and a host stack
- * pointer does not survive truncation to 32 bits (on wasm32, where the driver
- * actually runs, a pointer IS 32 bits). So the bytes are placed here instead --
- * but everything around them is the driver's own machinery:
- * fat_ensure_open_file_capacity allocates and links the clusters,
- * fat_reposition_open_file walks the chain to each offset, and
- * fat_store_open_file_size writes the length back into the directory entry.
- * Only the memcpy into the staged sector is the harness's, which is precisely
- * the part fat_op_write does through the truncated pointer.
+ * fat_op_write is driven directly now. It used to be unreachable from a 64-bit
+ * host because it hands the client buffer to wasmos_xfer_buffer_read as an
+ * address, and while that parameter was declared int32_t a host pointer did not
+ * survive it. Giving the parameter a `c_type` of void* in abi/hostcalls.yaml
+ * fixed that without touching the wire format: a pointer is 32 bits on wasm32,
+ * so the import is still an i32 there.
  *
- * The point of the exercise is downstream anyway: the image is handed to fsck
- * and to the host, which compare the CONTENT byte for byte. */
+ * So the whole path runs here: request parsing, the buffer-size clamp, capacity
+ * growth, the partial-sector merge, the chain walk and the size write-back. */
 
 /* Populate `file` from a resolved entry, deriving capacity from the chain. */
 static int open_resolved(fat_block_t* blk, const fat_mount_t* mnt, const fat_dir_entry_info_t* info,
                          fat_open_file_t* file) {
     fat_chainwalk_ctx_t walk;
+    fat_reposition_ctx_t repos;
     uint32_t cluster_bytes = (uint32_t)mnt->sectors_per_cluster * mnt->bytes_per_sector;
 
     memset(file, 0, sizeof(*file));
@@ -297,69 +302,65 @@ static int open_resolved(fat_block_t* blk, const fat_mount_t* mnt, const fat_dir
         return -1;
     }
     file->capacity = walk.hops * cluster_bytes;
+
+    /* Seat the cursor at offset 0. fat_op_write refuses a slot whose
+     * current_cluster/file_lba are unset (it reports WASMOS_ERR_FS_CORRUPT), and
+     * the reactor's own fat_op_open establishes them the same way -- a file that
+     * already has enough capacity never reaches fat_ensure_open_file_capacity's
+     * repositioning path, so populating the slot is not enough on its own. */
+    memset(&repos, 0, sizeof(repos));
+    repos.file = file;
+    repos.offset = 0;
+    repos.limit = file->capacity;
+    if (fat_reposition_open_file(&repos, blk, mnt) != FAT_R_DONE) {
+        return -1;
+    }
     return 0;
 }
 
-/* Write `len` bytes of `data` at offset 0 of `path`, growing the file through
- * the driver's own allocation path and recording the new size. */
-static int write_file_content(fat_block_t* blk, const fat_mount_t* mnt, const char* path,
-                              const uint8_t* data, uint32_t len) {
+/* Write `len` bytes of `data` at offset 0 of `path` by driving fat_op_write,
+ * exactly as the reactor does: stage the bytes in the client buffer, point an
+ * open-file slot at the resolved entry, and issue the op. */
+static int write_file_content(fat_block_t* blk, const fat_mount_t* mnt, fat_open_pool_t* pool,
+                              const char* path, const uint8_t* data, uint32_t len) {
     fat_dir_entry_info_t info;
-    fat_open_file_t file;
-    fat_ensurecap_ctx_t cap;
-    fat_reposition_ctx_t repos;
-    fat_storesize_ctx_t ss;
-    uint32_t done = 0;
+    fat_open_file_t* file;
+    fat_op_ctx_t op;
+    int32_t fd = -1;
 
+    if (len > XFER_CAP) {
+        return -1;
+    }
     if (!resolve_ok(blk, mnt, path, &info)) {
         return -1;
     }
-    if (open_resolved(blk, mnt, &info, &file) != 0) {
+    if (fat_open_file_alloc(pool, -1, &fd) != 0) {
         return -1;
     }
-
-    memset(&cap, 0, sizeof(cap));
-    cap.file = &file;
-    cap.min_size = len;
-    if (fat_ensure_open_file_capacity(&cap, blk, mnt) != FAT_R_DONE) {
+    file = fat_open_file_for_fd(pool, -1, fd);
+    if (!file) {
         return -1;
     }
-
-    while (done < len) {
-        uint32_t sector_offset;
-        uint32_t chunk;
-
-        memset(&repos, 0, sizeof(repos));
-        repos.file = &file;
-        repos.offset = done;
-        repos.limit = file.capacity;
-        if (fat_reposition_open_file(&repos, blk, mnt) != FAT_R_DONE) {
-            return -1;
-        }
-        sector_offset = done % mnt->bytes_per_sector;
-        chunk = mnt->bytes_per_sector - sector_offset;
-        if (chunk > len - done) {
-            chunk = len - done;
-        }
-        if (fat_need_sector(blk, file.file_lba + file.current_sector) != FAT_R_DONE) {
-            return -1;
-        }
-        memcpy(fat_block_sector(blk) + sector_offset, data + done, chunk);
-        if (fat_block_write(blk, file.file_lba + file.current_sector) != FAT_R_DONE) {
-            return -1;
-        }
-        done += chunk;
-    }
-
-    memset(&ss, 0, sizeof(ss));
-    ss.file = &file;
-    ss.size = len;
-    if (fat_store_open_file_size(&ss, blk, mnt) != FAT_R_DONE) {
+    if (open_resolved(blk, mnt, &info, file) != 0) {
         return -1;
     }
-    /* The first cluster is written back by fat_append_cluster_to_file; re-resolve
-     * so a caller checking the entry sees the committed state. */
-    return 0;
+    file->owner = -1;
+    file->flags = 1; /* write access; fat_op_write refuses anything else */
+
+    memcpy(g_xfer, data, len);
+
+    memset(&op, 0, sizeof(op));
+    op.source = -1;
+    op.request_id = 1;
+    op.arg0 = fd;           /* the open file */
+    op.arg1 = (int32_t)len; /* byte count */
+    op.arg2 = 1;            /* client buffer id */
+    if (fat_op_write(&op, blk, mnt, pool) != FAT_R_DONE) {
+        file->in_use = 0;
+        return -1;
+    }
+    file->in_use = 0;
+    return op.resp_arg0 == (int32_t)len ? 0 : -1;
 }
 
 /* Read `len` bytes from offset 0 of `path` back through the chain, so the
@@ -410,6 +411,7 @@ int main(int argc, char** argv) {
     fat_mkdir_ctx_t mkdir_ctx;
     fat_remove_ctx_t remove_ctx;
     fat_op_ctx_t op;
+    fat_open_pool_t pool;
     uint8_t readback[256];
     static uint8_t big[BIG_LEN];
     static uint8_t bigback[BIG_LEN];
@@ -432,6 +434,7 @@ int main(int argc, char** argv) {
 
     memset(&blk, 0, sizeof(blk));
     blk.loaded_lba = FAT_BLOCK_NO_LBA;
+    fat_open_pool_init(&pool);
     fat_mount_init(&mnt);
     rc = fat_geom_mount_step(&mnt, &blk);
     CHECK(rc == FAT_R_DONE, "the formatter's volume mounts");
@@ -498,9 +501,12 @@ int main(int argc, char** argv) {
     create.source = -1;
     rc = fat_create_empty_file(&create, &blk, &mnt);
     CHECK(rc == FAT_R_DONE, "creating the content file succeeds");
-    CHECK(write_file_content(
-              &blk, &mnt, "/HELLO.TXT", (const uint8_t*)HELLO_TEXT, (uint32_t)strlen(HELLO_TEXT)) ==
-              0,
+    CHECK(write_file_content(&blk,
+                             &mnt,
+                             &pool,
+                             "/HELLO.TXT",
+                             (const uint8_t*)HELLO_TEXT,
+                             (uint32_t)strlen(HELLO_TEXT)) == 0,
           "writing content succeeds");
     CHECK(resolve_ok(&blk, &mnt, "/HELLO.TXT", &info), "the content file resolves back");
     CHECK(info.size == (uint32_t)strlen(HELLO_TEXT), "its recorded size is the byte count");
@@ -521,7 +527,7 @@ int main(int argc, char** argv) {
     for (i = 0; i < BIG_LEN; ++i) {
         big[i] = (uint8_t)(i * 7u + 3u); /* position-dependent: a shifted copy fails */
     }
-    CHECK(write_file_content(&blk, &mnt, "/BIG.BIN", big, BIG_LEN) == 0,
+    CHECK(write_file_content(&blk, &mnt, &pool, "/BIG.BIN", big, BIG_LEN) == 0,
           "writing a multi-cluster file succeeds");
     CHECK(resolve_ok(&blk, &mnt, "/BIG.BIN", &info), "the multi-cluster file resolves back");
     CHECK(info.size == BIG_LEN, "its size spans more than one cluster");
@@ -530,22 +536,31 @@ int main(int argc, char** argv) {
           "reading the multi-cluster file back succeeds");
     CHECK(memcmp(bigback, big, BIG_LEN) == 0, "every byte survives the chain walk");
 
-    /* (d) OVERWRITE an existing file the formatter wrote, shrinking it. */
+    /* (d) OVERWRITE an existing file the formatter wrote.
+     *
+     * A write is not a truncate: fat_op_write only ever GROWS the recorded
+     * size, so writing 19 bytes over this 20-byte file replaces the first 19
+     * and leaves the 20th in place. Shrinking is what O_TRUNC does at open
+     * time. The external check compares all 20 bytes, retained tail included,
+     * which is the only way to tell a correct partial overwrite from a
+     * truncation that silently lost a byte. */
     CHECK(resolve_ok(&blk, &mnt, "/README.TXT", &info), "the formatter's file is there to modify");
+    CHECK(info.size == 20u, "it starts at the size the formatter wrote");
     CHECK(write_file_content(&blk,
                              &mnt,
+                             &pool,
                              "/README.TXT",
                              (const uint8_t*)MODIFIED_TEXT,
                              (uint32_t)strlen(MODIFIED_TEXT)) == 0,
           "overwriting an existing file succeeds");
     CHECK(resolve_ok(&blk, &mnt, "/README.TXT", &info), "it still resolves after modification");
-    CHECK(info.size == (uint32_t)strlen(MODIFIED_TEXT), "its size is updated to the new content");
+    CHECK(info.size == 20u, "a shorter write does not shrink the file");
     memset(readback, 0, sizeof(readback));
-    CHECK(read_file_content(&blk, &mnt, "/README.TXT", readback, (uint32_t)strlen(MODIFIED_TEXT)) ==
-              0,
+    CHECK(read_file_content(&blk, &mnt, "/README.TXT", readback, 20u) == 0,
           "reading the modified file back succeeds");
     CHECK(memcmp(readback, MODIFIED_TEXT, strlen(MODIFIED_TEXT)) == 0,
-          "the modified content is what was written");
+          "the overwritten prefix is what was written");
+    CHECK(readback[19] == '\n', "the byte past the write is the formatter's, retained");
 
     /* (e) A directory, and a file inside it. */
     memset(&mkdir_ctx, 0, sizeof(mkdir_ctx));
@@ -563,6 +578,7 @@ int main(int argc, char** argv) {
     CHECK(rc == FAT_R_DONE, "creating a file inside it succeeds");
     CHECK(write_file_content(&blk,
                              &mnt,
+                             &pool,
                              "/MADEDIR/INNER.TXT",
                              (const uint8_t*)INNER_TEXT,
                              (uint32_t)strlen(INNER_TEXT)) == 0,

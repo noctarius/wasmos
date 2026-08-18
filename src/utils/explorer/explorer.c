@@ -599,8 +599,7 @@ static void explorer_open_selected(ui_context_t* ctx, int32_t id, void* user) {
         if (path_len > 0 && path_len <= 0xFFFu) {
             int32_t bid = wasmos_xfer_buffer_acquire((int32_t)path_len);
             if (bid >= 0) {
-                if (wasmos_xfer_buffer_write(
-                        bid, addr_cast(int32_t, full_path), (int32_t)path_len, 0) == 0) {
+                if (wasmos_xfer_buffer_write(bid, full_path, (int32_t)path_len, 0) == 0) {
                     pid = wasmos_sys_spawn_path_sync(
                         g_proc_endpoint,
                         g_proc_reply_endpoint,

@@ -317,7 +317,7 @@ hostcalls:
       INVALID_CONTEXT, NO_ACCESS, RANGE).
     params:
       - { name: buffer_id, kind: handle }
-      - { name: dst, kind: out, len: len }
+      - { name: dst, kind: out, len: len, c_type: "void*" }
       - { name: len, kind: scalar }
       - { name: offset, kind: scalar }
   - name: xfer_buffer_write
@@ -331,7 +331,7 @@ hostcalls:
       INVALID_CONTEXT, NO_ACCESS, RANGE).
     params:
       - { name: buffer_id, kind: handle }
-      - { name: src, kind: buf, len: len }
+      - { name: src, kind: buf, len: len, c_type: "const void*" }
       - { name: len, kind: scalar }
       - { name: offset, kind: scalar }
   - name: buffer_borrow

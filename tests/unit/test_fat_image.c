@@ -170,6 +170,15 @@ int32_t wasmos_sched_yield(void) {
     return 0;
 }
 
+/* Content the external checker compares against byte for byte; keep these in
+ * step with scripts/run_fat_image_test.sh, which greps for the same strings. */
+#define HELLO_TEXT "written by the wasmos fs_fat driver\n"
+#define MODIFIED_TEXT "MODIFIED by fs_fat\n"
+#define INNER_TEXT "nested content\n"
+/* Larger than one cluster at the fixture's one-sector clusters, so writing and
+ * reading it both walk the chain. */
+#define BIG_LEN 1500u
+
 /* --- Harness. --- */
 
 static int g_failures;
@@ -247,13 +256,164 @@ static int resolve_ok(fat_block_t* blk, const fat_mount_t* mnt, const char* path
     return 1;
 }
 
+/* --- File contents. ---
+ *
+ * fat_op_write cannot be driven from a 64-bit host: it hands the client buffer
+ * to wasmos_xfer_buffer_read as `addr_cast(int32_t, stage)`, and a host stack
+ * pointer does not survive truncation to 32 bits (on wasm32, where the driver
+ * actually runs, a pointer IS 32 bits). So the bytes are placed here instead --
+ * but everything around them is the driver's own machinery:
+ * fat_ensure_open_file_capacity allocates and links the clusters,
+ * fat_reposition_open_file walks the chain to each offset, and
+ * fat_store_open_file_size writes the length back into the directory entry.
+ * Only the memcpy into the staged sector is the harness's, which is precisely
+ * the part fat_op_write does through the truncated pointer.
+ *
+ * The point of the exercise is downstream anyway: the image is handed to fsck
+ * and to the host, which compare the CONTENT byte for byte. */
+
+/* Populate `file` from a resolved entry, deriving capacity from the chain. */
+static int open_resolved(fat_block_t* blk, const fat_mount_t* mnt, const fat_dir_entry_info_t* info,
+                         fat_open_file_t* file) {
+    fat_chainwalk_ctx_t walk;
+    uint32_t cluster_bytes = (uint32_t)mnt->sectors_per_cluster * mnt->bytes_per_sector;
+
+    memset(file, 0, sizeof(*file));
+    file->in_use = 1;
+    file->owner = -1;
+    file->first_cluster = info->cluster;
+    file->size = info->size;
+    file->dir_lba = info->dir_lba;
+    file->dir_sector = info->dir_sector;
+    file->dir_index = info->dir_index;
+
+    if (info->cluster < 2) {
+        file->capacity = 0;
+        return 0;
+    }
+    memset(&walk, 0, sizeof(walk));
+    walk.cluster = info->cluster;
+    if (fat_chain_walk(&walk, blk, mnt) != FAT_R_DONE) {
+        return -1;
+    }
+    file->capacity = walk.hops * cluster_bytes;
+    return 0;
+}
+
+/* Write `len` bytes of `data` at offset 0 of `path`, growing the file through
+ * the driver's own allocation path and recording the new size. */
+static int write_file_content(fat_block_t* blk, const fat_mount_t* mnt, const char* path,
+                              const uint8_t* data, uint32_t len) {
+    fat_dir_entry_info_t info;
+    fat_open_file_t file;
+    fat_ensurecap_ctx_t cap;
+    fat_reposition_ctx_t repos;
+    fat_storesize_ctx_t ss;
+    uint32_t done = 0;
+
+    if (!resolve_ok(blk, mnt, path, &info)) {
+        return -1;
+    }
+    if (open_resolved(blk, mnt, &info, &file) != 0) {
+        return -1;
+    }
+
+    memset(&cap, 0, sizeof(cap));
+    cap.file = &file;
+    cap.min_size = len;
+    if (fat_ensure_open_file_capacity(&cap, blk, mnt) != FAT_R_DONE) {
+        return -1;
+    }
+
+    while (done < len) {
+        uint32_t sector_offset;
+        uint32_t chunk;
+
+        memset(&repos, 0, sizeof(repos));
+        repos.file = &file;
+        repos.offset = done;
+        repos.limit = file.capacity;
+        if (fat_reposition_open_file(&repos, blk, mnt) != FAT_R_DONE) {
+            return -1;
+        }
+        sector_offset = done % mnt->bytes_per_sector;
+        chunk = mnt->bytes_per_sector - sector_offset;
+        if (chunk > len - done) {
+            chunk = len - done;
+        }
+        if (fat_need_sector(blk, file.file_lba + file.current_sector) != FAT_R_DONE) {
+            return -1;
+        }
+        memcpy(fat_block_sector(blk) + sector_offset, data + done, chunk);
+        if (fat_block_write(blk, file.file_lba + file.current_sector) != FAT_R_DONE) {
+            return -1;
+        }
+        done += chunk;
+    }
+
+    memset(&ss, 0, sizeof(ss));
+    ss.file = &file;
+    ss.size = len;
+    if (fat_store_open_file_size(&ss, blk, mnt) != FAT_R_DONE) {
+        return -1;
+    }
+    /* The first cluster is written back by fat_append_cluster_to_file; re-resolve
+     * so a caller checking the entry sees the committed state. */
+    return 0;
+}
+
+/* Read `len` bytes from offset 0 of `path` back through the chain, so the
+ * driver's own view is checked before the external tools see the image. */
+static int read_file_content(fat_block_t* blk, const fat_mount_t* mnt, const char* path,
+                             uint8_t* out, uint32_t len) {
+    fat_dir_entry_info_t info;
+    fat_open_file_t file;
+    fat_reposition_ctx_t repos;
+    uint32_t done = 0;
+
+    if (!resolve_ok(blk, mnt, path, &info)) {
+        return -1;
+    }
+    if (open_resolved(blk, mnt, &info, &file) != 0) {
+        return -1;
+    }
+    while (done < len) {
+        uint32_t sector_offset;
+        uint32_t chunk;
+
+        memset(&repos, 0, sizeof(repos));
+        repos.file = &file;
+        repos.offset = done;
+        repos.limit = file.capacity;
+        if (fat_reposition_open_file(&repos, blk, mnt) != FAT_R_DONE) {
+            return -1;
+        }
+        sector_offset = done % mnt->bytes_per_sector;
+        chunk = mnt->bytes_per_sector - sector_offset;
+        if (chunk > len - done) {
+            chunk = len - done;
+        }
+        if (fat_need_sector(blk, file.file_lba + file.current_sector) != FAT_R_DONE) {
+            return -1;
+        }
+        memcpy(out + done, fat_block_sector(blk) + sector_offset, chunk);
+        done += chunk;
+    }
+    return 0;
+}
+
 int main(int argc, char** argv) {
     fat_mount_t mnt;
     fat_block_t blk;
     fat_dir_entry_info_t info;
     fat_create_ctx_t create;
     fat_mkdir_ctx_t mkdir_ctx;
+    fat_remove_ctx_t remove_ctx;
     fat_op_ctx_t op;
+    uint8_t readback[256];
+    static uint8_t big[BIG_LEN];
+    static uint8_t bigback[BIG_LEN];
+    uint32_t i;
     fat_r_t rc;
     const char* want_type;
     int want_lfn;
@@ -322,13 +482,72 @@ int main(int argc, char** argv) {
     CHECK(strstr(g_stream, "SUBDIR") != NULL, "listing includes SUBDIR");
 
     /* --- MODIFY, for the external tools to judge. --- */
+
+    /* (a) A new, empty file. */
     memset(&create, 0, sizeof(create));
     create.path = "/WROTE.TXT";
     create.source = -1;
     rc = fat_create_empty_file(&create, &blk, &mnt);
     CHECK(rc == FAT_R_DONE, "creating a file succeeds");
     CHECK(resolve_ok(&blk, &mnt, "/WROTE.TXT", &info), "the created file resolves back");
+    CHECK(info.size == 0u, "a new file starts empty");
 
+    /* (b) A new file WITH CONTENT, small enough to stay inside one sector. */
+    memset(&create, 0, sizeof(create));
+    create.path = "/HELLO.TXT";
+    create.source = -1;
+    rc = fat_create_empty_file(&create, &blk, &mnt);
+    CHECK(rc == FAT_R_DONE, "creating the content file succeeds");
+    CHECK(write_file_content(
+              &blk, &mnt, "/HELLO.TXT", (const uint8_t*)HELLO_TEXT, (uint32_t)strlen(HELLO_TEXT)) ==
+              0,
+          "writing content succeeds");
+    CHECK(resolve_ok(&blk, &mnt, "/HELLO.TXT", &info), "the content file resolves back");
+    CHECK(info.size == (uint32_t)strlen(HELLO_TEXT), "its recorded size is the byte count");
+    CHECK(info.cluster >= 2u, "it owns a real first cluster");
+    memset(readback, 0, sizeof(readback));
+    CHECK(read_file_content(&blk, &mnt, "/HELLO.TXT", readback, (uint32_t)strlen(HELLO_TEXT)) == 0,
+          "reading the content back succeeds");
+    CHECK(memcmp(readback, HELLO_TEXT, strlen(HELLO_TEXT)) == 0,
+          "the driver reads back exactly what it wrote");
+
+    /* (c) A file spanning several clusters, so the chain is walked on write and
+     *     on read rather than everything landing in one. */
+    memset(&create, 0, sizeof(create));
+    create.path = "/BIG.BIN";
+    create.source = -1;
+    rc = fat_create_empty_file(&create, &blk, &mnt);
+    CHECK(rc == FAT_R_DONE, "creating the multi-cluster file succeeds");
+    for (i = 0; i < BIG_LEN; ++i) {
+        big[i] = (uint8_t)(i * 7u + 3u); /* position-dependent: a shifted copy fails */
+    }
+    CHECK(write_file_content(&blk, &mnt, "/BIG.BIN", big, BIG_LEN) == 0,
+          "writing a multi-cluster file succeeds");
+    CHECK(resolve_ok(&blk, &mnt, "/BIG.BIN", &info), "the multi-cluster file resolves back");
+    CHECK(info.size == BIG_LEN, "its size spans more than one cluster");
+    memset(bigback, 0, sizeof(bigback));
+    CHECK(read_file_content(&blk, &mnt, "/BIG.BIN", bigback, BIG_LEN) == 0,
+          "reading the multi-cluster file back succeeds");
+    CHECK(memcmp(bigback, big, BIG_LEN) == 0, "every byte survives the chain walk");
+
+    /* (d) OVERWRITE an existing file the formatter wrote, shrinking it. */
+    CHECK(resolve_ok(&blk, &mnt, "/README.TXT", &info), "the formatter's file is there to modify");
+    CHECK(write_file_content(&blk,
+                             &mnt,
+                             "/README.TXT",
+                             (const uint8_t*)MODIFIED_TEXT,
+                             (uint32_t)strlen(MODIFIED_TEXT)) == 0,
+          "overwriting an existing file succeeds");
+    CHECK(resolve_ok(&blk, &mnt, "/README.TXT", &info), "it still resolves after modification");
+    CHECK(info.size == (uint32_t)strlen(MODIFIED_TEXT), "its size is updated to the new content");
+    memset(readback, 0, sizeof(readback));
+    CHECK(read_file_content(&blk, &mnt, "/README.TXT", readback, (uint32_t)strlen(MODIFIED_TEXT)) ==
+              0,
+          "reading the modified file back succeeds");
+    CHECK(memcmp(readback, MODIFIED_TEXT, strlen(MODIFIED_TEXT)) == 0,
+          "the modified content is what was written");
+
+    /* (e) A directory, and a file inside it. */
     memset(&mkdir_ctx, 0, sizeof(mkdir_ctx));
     mkdir_ctx.path = "/MADEDIR";
     mkdir_ctx.source = -1;
@@ -337,14 +556,29 @@ int main(int argc, char** argv) {
     CHECK(resolve_ok(&blk, &mnt, "/MADEDIR", &info), "the created directory resolves back");
     CHECK((info.attr & 0x10) != 0, "it is marked a directory");
 
-    /* Create inside the directory we just made, so the external check sees a
-     * populated subdirectory rather than an empty one. */
     memset(&create, 0, sizeof(create));
     create.path = "/MADEDIR/INNER.TXT";
     create.source = -1;
     rc = fat_create_empty_file(&create, &blk, &mnt);
     CHECK(rc == FAT_R_DONE, "creating a file inside it succeeds");
+    CHECK(write_file_content(&blk,
+                             &mnt,
+                             "/MADEDIR/INNER.TXT",
+                             (const uint8_t*)INNER_TEXT,
+                             (uint32_t)strlen(INNER_TEXT)) == 0,
+          "writing content inside the new directory succeeds");
     CHECK(resolve_ok(&blk, &mnt, "/MADEDIR/INNER.TXT", &info), "the nested file resolves back");
+    CHECK(info.size == (uint32_t)strlen(INNER_TEXT), "the nested file has its content size");
+
+    /* (f) DELETE one of the formatter's files. */
+    memset(&remove_ctx, 0, sizeof(remove_ctx));
+    remove_ctx.path = "/SIZED.BIN";
+    remove_ctx.source = -1;
+    remove_ctx.is_rmdir = 0;
+    rc = fat_remove_path(&remove_ctx, &blk, &mnt, NULL, 0);
+    CHECK(rc == FAT_R_DONE, "unlinking one of the formatter's files succeeds");
+    CHECK(!resolve_ok(&blk, &mnt, "/SIZED.BIN", &info), "the unlinked file no longer resolves");
+    CHECK(resolve_ok(&blk, &mnt, "/SUBDIR/CHILD.TXT", &info), "an unrelated file survives it");
 
     if (store_image(g_image_path) != 0) {
         return 1;

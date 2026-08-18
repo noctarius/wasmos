@@ -825,6 +825,35 @@ tail.
 
 ## Filesystems and Storage
 
+- [ ] [FEATURE][P2] Implement rename/move. There is no rename operation anywhere in
+  the stack: `fat_op_t` has no `FAT_OP_RENAME`, `abi/opcodes.yaml` has no
+  `FS_IPC_RENAME_*`, and there is no libc entry point, so a rename today means
+  copy-then-unlink in the caller. The FAT pieces already exist -- an in-place
+  rename within one directory is a short-name/LFN rewrite over
+  `fat_find_free_dir_slots` + `fat_write_dir_entry` +
+  `fat_delete_dir_entry_chain`, and a move between directories is the same
+  entry written elsewhere with the start cluster preserved. Two constraints
+  make it more than a rewrite: the LFN chain length changes with the new name,
+  so the slot search has to run again and can fail with the directory full; and
+  a moved DIRECTORY needs its `..` updated, including the 0-when-parent-is-root
+  rule that `fat_create_directory` now applies.
+
+- [ ] [TEST][P2] Drive `fat_op_write`/`fat_op_read` themselves, rather than the
+  layers under them. `tests/unit/test_fat_image.c` writes real file content --
+  it grows the chain with `fat_ensure_open_file_capacity`, walks it with
+  `fat_reposition_open_file` and records the length with
+  `fat_store_open_file_size` -- but the byte copy into the staged sector is the
+  harness's, because `fat_op_write` passes the client buffer as
+  `addr_cast(int32_t, stage)` and a 64-bit host stack pointer does not survive
+  truncation to 32 bits. On wasm32, where the driver runs, a pointer IS 32 bits,
+  so this is a host-harness limit and not a driver defect.
+
+  The consequence is narrow but real: the request parsing, the buffer-size
+  clamp, the append-mode reposition and the partial-sector merge inside
+  `fat_op_write` have no coverage. Closing it needs either a wasm32 execution
+  harness (the same gap as the `%lld` item under Validation) or an integration
+  test that drives writes through the live FS IPC path.
+
 - [ ] [BUG][P2] Maintain or invalidate the FAT32 FSInfo free-cluster count.
   `fsck_msdos` reports `Free space in FSInfo block (128937) not correct
   (128936)` after the driver allocates a cluster: FSI_Free_Count is never

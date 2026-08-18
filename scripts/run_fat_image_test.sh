@@ -74,45 +74,106 @@ check_image() {
 
 # --- 4. can the host itself read what the driver wrote? ---------------------
 # The strongest check available: not "a checker found no fault" but "the
-# operating system mounts it and sees the entries".
+# operating system mounts it and the CONTENT is what we wrote". Existence alone
+# would pass on a file whose bytes never reached the disk, or whose size field
+# says 0 -- so every one of these compares content, and the ones the driver
+# modified are compared against the new content, not merely against "changed".
+#
+# Keep these strings in step with tests/unit/test_fat_image.c.
+HELLO_TEXT='written by the wasmos fs_fat driver'
+MODIFIED_TEXT='MODIFIED by fs_fat'
+INNER_TEXT='nested content'
+BIG_LEN=1500
+
+# The same position-dependent pattern test_fat_image.c writes: byte i is
+# (i * 7 + 3) mod 256. A shifted or truncated copy fails this, which a
+# constant fill would not.
+expected_big() {
+    python3 -c "import sys; sys.stdout.buffer.write(bytes(((i*7+3)&0xFF) for i in range($BIG_LEN)))"
+}
+
+# Compare a file's whole content against a string (exact, including the newline
+# the driver wrote).
+expect_content() {
+    local path="$1" want="$2" label="$3" name="$4"
+    if [ ! -f "$path" ]; then
+        fail "$name: $label is not visible to the host at all"
+        return 1
+    fi
+    local got
+    got="$(cat "$path")"
+    if [ "$got" != "$want" ]; then
+        fail "$name: $label content mismatch"
+        printf '         want: %s\n' "$want" >&2
+        printf '         got : %s\n' "$got" >&2
+        return 1
+    fi
+    return 0
+}
+
 verify_host_readable() {
     local img="$1" name
     name="$(basename "$img")"
 
-    if command -v mdir >/dev/null 2>&1; then
-        local listing
-        listing="$(mdir -i "$img" ::/ 2>&1 || true)"
-        printf '%s' "$listing" | grep -q 'WROTE' \
-            || { fail "$name: mtools does not see the created file"; return 1; }
-        printf '%s' "$listing" | grep -q 'MADEDIR' \
-            || { fail "$name: mtools does not see the created directory"; return 1; }
-        listing="$(mdir -i "$img" ::/MADEDIR 2>&1 || true)"
-        printf '%s' "$listing" | grep -q 'INNER' \
-            || { fail "$name: mtools does not see the nested file"; return 1; }
-        say "mtools reads $name"
+    if [ "$(uname -s)" != "Darwin" ] && ! command -v mcopy >/dev/null 2>&1; then
+        say "no host reader available for $name"
         return 0
     fi
 
-    if [ "$(uname -s)" = "Darwin" ]; then
-        local mnt
-        mnt="$(hdiutil attach -nobrowse -imagekey diskimage-class=CRawDiskImage "$img" \
+    # Both platforms end up comparing files in a directory: macOS mounts the
+    # image, Linux copies the tree out with mtools.
+    local dir cleanup=""
+    if command -v mcopy >/dev/null 2>&1; then
+        dir="$WORK/extract-$name"
+        rm -rf "$dir"; mkdir -p "$dir"
+        mcopy -s -n -i "$img" ::/ "$dir/" >/dev/null 2>&1 \
+            || { fail "$name: mtools could not read the modified image"; return 1; }
+    else
+        dir="$(hdiutil attach -nobrowse -imagekey diskimage-class=CRawDiskImage "$img" \
                2>/dev/null | grep -o '/Volumes/.*' | head -1)"
-        if [ -z "$mnt" ] || [ ! -d "$mnt" ]; then
+        if [ -z "$dir" ] || [ ! -d "$dir" ]; then
             fail "$name: the host refused to mount the modified image"
             return 1
         fi
-        local ok=1
-        [ -f "$mnt/WROTE.TXT" ]        || { fail "$name: WROTE.TXT not visible to the host"; ok=0; }
-        [ -d "$mnt/MADEDIR" ]          || { fail "$name: MADEDIR not visible to the host"; ok=0; }
-        [ -f "$mnt/MADEDIR/INNER.TXT" ] || { fail "$name: MADEDIR/INNER.TXT not visible"; ok=0; }
-        # The formatter's own content must survive our writes.
-        [ -f "$mnt/README.TXT" ]       || { fail "$name: the formatter's README.TXT was lost"; ok=0; }
-        hdiutil detach "$mnt" -quiet || true
-        [ "$ok" = "1" ] && say "the host mounts and reads $name"
-        return 0
+        cleanup="$dir"
     fi
 
-    say "no host reader available for $name"
+    local ok=1
+    # (a) the empty file exists and IS empty
+    if [ -f "$dir/WROTE.TXT" ]; then
+        [ ! -s "$dir/WROTE.TXT" ] || { fail "$name: WROTE.TXT should be empty"; ok=0; }
+    else
+        fail "$name: WROTE.TXT not visible to the host"; ok=0
+    fi
+    # (b) new file with content
+    expect_content "$dir/HELLO.TXT" "$HELLO_TEXT" "HELLO.TXT" "$name" || ok=0
+    # (c) multi-cluster file, byte for byte
+    if [ -f "$dir/BIG.BIN" ]; then
+        expected_big > "$WORK/big.expected"
+        if ! cmp -s "$dir/BIG.BIN" "$WORK/big.expected"; then
+            fail "$name: BIG.BIN differs from what the driver wrote"
+            ok=0
+        fi
+        rm -f "$WORK/big.expected"
+    else
+        fail "$name: BIG.BIN not visible to the host"; ok=0
+    fi
+    # (d) the MODIFIED file carries the new content, not the formatter's
+    expect_content "$dir/README.TXT" "$MODIFIED_TEXT" "README.TXT (modified)" "$name" || ok=0
+    # (e) directory + nested file with content
+    [ -d "$dir/MADEDIR" ] || { fail "$name: MADEDIR not visible to the host"; ok=0; }
+    expect_content "$dir/MADEDIR/INNER.TXT" "$INNER_TEXT" "MADEDIR/INNER.TXT" "$name" || ok=0
+    # (f) the deleted file is gone, and an untouched one still reads correctly
+    [ ! -e "$dir/SIZED.BIN" ] || { fail "$name: the unlinked SIZED.BIN is still present"; ok=0; }
+    expect_content "$dir/SUBDIR/CHILD.TXT" "short name in a subdir" \
+                   "SUBDIR/CHILD.TXT (untouched)" "$name" || ok=0
+
+    if [ -n "$cleanup" ]; then
+        hdiutil detach "$cleanup" -quiet || true
+    else
+        rm -rf "$dir"
+    fi
+    [ "$ok" = "1" ] && say "the host reads $name and every byte matches"
     return 0
 }
 

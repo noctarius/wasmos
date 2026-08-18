@@ -569,8 +569,9 @@ typedef struct {
 
 /* CHDIR: navigate op->dir_name (relative to the cwd unless it starts with '/')
  * one component at a time, descending into each matched subdirectory.  The
- * path/name buffers and the running (root,cluster) target survive the per-sector
- * yields; the per-directory scan cursors track the current sector being read. */
+ * path/name buffers and the running (root,cluster) target survive the yields;
+ * the per-level lookup is delegated to fat_find_in_dir, so this carries no scan
+ * cursors of its own. */
 typedef struct {
     int cont;
     char path[32];      /* working copy of the target (from dir_name) */
@@ -582,14 +583,8 @@ typedef struct {
     uint32_t root_cluster_probe;
     uint32_t root_lba_probe;
     uint32_t root_sectors_probe;
-    uint32_t dir_lba;       /* first LBA of the directory being scanned */
-    uint32_t dir_sectors;   /* span in sectors */
-    uint32_t entries_left;  /* entries still to inspect in this directory */
-    uint32_t cur_sector;    /* sector cursor within the run */
-    uint32_t entries_total; /* entries in the sector currently staged */
-    uint32_t scan_index;    /* entry cursor within the sector */
-    int next;               /* fat_chdir_next_component result carried out */
-    fat_lfn_t lfn;          /* LFN accumulation across entries */
+    int next;                /* fat_chdir_next_component result carried out */
+    fat_dir_scan_ctx_t scan; /* the shared directory scan, one level at a time */
 } fat_chdir_ctx_t;
 
 /* --- Coroutine sub-machine contexts (fat_file.c, open-file I/O side). --- */

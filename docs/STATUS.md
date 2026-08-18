@@ -530,8 +530,10 @@ linked feature documents for rationale and rollout plans.
   the shared 8 KiB block/DMA buffer. It supports FAT12/16/32 and LFN, reports
   `FS_ERR_*`, and binds to its requested block-device unit.
 - Every READ-side directory scan walks the whole cluster chain: lookup,
-  short-name collision, the emptiness check `rmdir` depends on, and the readdir
-  stream. Each is bounded by the volume's cluster count, so a corrupt cyclic
+  short-name collision, the emptiness check `rmdir` depends on, the readdir
+  stream, and `chdir` — which reached that by delegating to `fat_find_in_dir`
+  instead of carrying a second scan of its own, deleting more code than it
+  added. Each is bounded by the volume's cluster count, so a corrupt cyclic
   chain fails `WASMOS_ERR_FS_CORRUPT` rather than hanging the reactor — an entry
   budget is deliberately not what terminates the walk.
 - FAT32 is served on the read path, not merely detected: 28-bit FAT entries

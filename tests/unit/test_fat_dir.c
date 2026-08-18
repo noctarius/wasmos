@@ -65,6 +65,8 @@ typedef struct wasmos_msi_desc wasmos_msi_desc_t;
  * the SECOND cluster, which is the whole point. */
 #define T_DIR_FIRST_CLUSTER 2u
 #define T_DIR_SECOND_CLUSTER 3u
+/* A subdirectory whose ENTRY lives in the second cluster above. */
+#define T_DEEP_CLUSTER 4u
 
 #define T_TARGET_CLUSTER 0x0042u
 #define T_TARGET_SIZE 1234u
@@ -276,6 +278,7 @@ static void build_volume(int filler_deleted) {
     uint8_t* boot;
     uint8_t* cluster1;
     uint8_t* cluster2;
+    uint8_t* deep;
     uint8_t* root;
     char filler[12];
     uint32_t i;
@@ -326,9 +329,19 @@ static void build_volume(int filler_deleted) {
         }
     }
 
-    /* Second cluster: the target, then end-of-directory. */
+    /* Second cluster: the target, a SUBDIRECTORY (so a scan that stops at the
+     * first cluster cannot descend into it), then end-of-directory. */
     cluster2 = image_sector(T_FIRST_DATA_LBA + (T_DIR_SECOND_CLUSTER - 2u));
     put_dirent(cluster2, 0, "TARGET  TXT", 0x20, (uint16_t)T_TARGET_CLUSTER, T_TARGET_SIZE);
+    put_dirent(cluster2, 1, "DEEP       ", 0x10, (uint16_t)T_DEEP_CLUSTER, 0);
+
+    /* That subdirectory's own cluster: '.' and '..' plus one file, so a chdir
+     * into it can be checked by resolving something inside. */
+    deep = image_sector(T_FIRST_DATA_LBA + (T_DEEP_CLUSTER - 2u));
+    put_dirent(deep, 0, ".          ", 0x10, (uint16_t)T_DEEP_CLUSTER, 0);
+    put_dirent(deep, 1, "..         ", 0x10, (uint16_t)T_DIR_FIRST_CLUSTER, 0);
+    put_dirent(deep, 2, "INDEEP  TXT", 0x20, 0x00A1u, 11u);
+    fat_set(T_DEEP_CLUSTER, 0xFFFFu);
 }
 
 static void free_volume(void) {
@@ -1515,6 +1528,81 @@ static void test_unlink_an_entry_in_a_later_cluster(void) {
     free_volume();
 }
 
+/* Regression: 2026-08-18-fat-chdir-multicluster -- fat_op_chdir carried its own
+ * hand-written scan that stopped at a directory's first cluster, while every
+ * other read-side scan walked the chain. The result was an inconsistency a user
+ * could see directly: `ls /a/b` listed an entry that `cd /a/b` reported as
+ * missing. Now that directories can grow past one cluster, it is easy to reach. */
+static void test_chdir_into_a_directory_listed_in_a_later_cluster(void) {
+    fat_mount_t mnt;
+    fat_block_t blk;
+    fat_op_ctx_t op;
+    fat_resolve_ctx_t res;
+    fat_r_t rc;
+
+    build_volume(0);
+    mount_volume(&mnt, &blk);
+
+    /* The entry is findable by the ordinary scan, which is what makes the old
+     * chdir behaviour an inconsistency rather than a missing file. */
+    memset(&res, 0, sizeof(res));
+    res.path = "/SUB/DEEP";
+    res.source = -1;
+    rc = fat_resolve_path(&res, &blk, &mnt);
+    CHECK(rc == FAT_R_DONE && res.found.valid, "the subdirectory resolves by path");
+
+    memset(&op, 0, sizeof(op));
+    op.source = 5;
+    memcpy(op.dir_name, "/SUB/DEEP", sizeof("/SUB/DEEP"));
+    rc = fat_op_chdir(&op, &blk, &mnt);
+
+    CHECK(rc == FAT_R_DONE, "chdir into it succeeds");
+    CHECK(mnt.cwd_root == 0, "the cwd is no longer the root");
+    CHECK(mnt.cwd_cluster == T_DEEP_CLUSTER, "the cwd is the subdirectory's cluster");
+
+    /* Resolving a relative name proves the cwd is usable, not merely recorded. */
+    memset(&res, 0, sizeof(res));
+    res.path = "INDEEP.TXT";
+    res.source = 5;
+    rc = fat_resolve_path(&res, &blk, &mnt);
+    CHECK(rc == FAT_R_DONE && res.found.valid, "a relative lookup works from the new cwd");
+
+    free_volume();
+}
+
+/* chdir must still refuse a name that is a FILE, and still find directories in
+ * the first cluster -- the ordinary cases the rewrite could regress. */
+static void test_chdir_ordinary_cases_still_hold(void) {
+    fat_mount_t mnt;
+    fat_block_t blk;
+    fat_op_ctx_t op;
+    fat_r_t rc;
+
+    build_volume(0);
+    mount_volume(&mnt, &blk);
+
+    memset(&op, 0, sizeof(op));
+    op.source = 5;
+    memcpy(op.dir_name, "/SUB", sizeof("/SUB"));
+    rc = fat_op_chdir(&op, &blk, &mnt);
+    CHECK(rc == FAT_R_DONE, "chdir into a first-cluster directory still works");
+    CHECK(mnt.cwd_cluster == T_DIR_FIRST_CLUSTER, "the cwd is that directory");
+
+    memset(&op, 0, sizeof(op));
+    op.source = 5;
+    memcpy(op.dir_name, "/INROOT.TXT", sizeof("/INROOT.TXT"));
+    rc = fat_op_chdir(&op, &blk, &mnt);
+    CHECK(rc == FAT_R_ERR, "chdir into a FILE is refused");
+
+    memset(&op, 0, sizeof(op));
+    op.source = 5;
+    memcpy(op.dir_name, "/NOSUCHDIR", sizeof("/NOSUCHDIR"));
+    rc = fat_op_chdir(&op, &blk, &mnt);
+    CHECK(rc == FAT_R_ERR, "chdir into a missing name is refused");
+
+    free_volume();
+}
+
 static const wasmos_test_void_case_t k_cases[] = {
     WASMOS_TEST_CASE(test_finds_entry_in_second_cluster),
     WASMOS_TEST_CASE(test_still_finds_entry_in_first_cluster),
@@ -1545,6 +1633,8 @@ static const wasmos_test_void_case_t k_cases[] = {
     WASMOS_TEST_CASE(test_rename_into_a_directory_past_its_first_cluster),
     WASMOS_TEST_CASE(test_directory_grows_when_every_cluster_is_full),
     WASMOS_TEST_CASE(test_unlink_an_entry_in_a_later_cluster),
+    WASMOS_TEST_CASE(test_chdir_into_a_directory_listed_in_a_later_cluster),
+    WASMOS_TEST_CASE(test_chdir_ordinary_cases_still_hold),
 };
 
 int main(void) {

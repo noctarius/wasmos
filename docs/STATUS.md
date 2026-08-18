@@ -627,10 +627,16 @@ linked feature documents for rationale and rollout plans.
   rather than none. A directory that changes parents has its `..` rewritten
   under the same 0-when-parent-is-root rule `mkdir` uses.
 
-  It deliberately differs from POSIX in two ways, both in `TASKS.md`: an
-  existing destination is refused rather than replaced, and an open source is
-  refused (`WASMOS_ERR_FS_BUSY`) because a descriptor records where its
-  directory entry lives. Cross-mount renames are refused by fs-manager.
+  An existing destination FILE is replaced, as POSIX requires: the destination's
+  entry is pointed at the source's data, the source name is dropped, and only
+  then is the replaced chain released — so an interruption leaves an orphaned
+  chain rather than a lost file. Replacing a DIRECTORY is refused, because
+  freeing its contents would be a recursive delete wearing a rename's clothes.
+  The driver-level entry point still defaults to refusing; `replace` is opt-in
+  there and set by the IPC path, so a mistyped internal call cannot destroy
+  data. An open source or destination is refused (`WASMOS_ERR_FS_BUSY`) because
+  a descriptor records where its directory entry lives, and cross-mount renames
+  are refused by fs-manager.
 - `block_buffer_map` overlays a caller block buffer into linear memory so FAT
   I/O normally avoids staging copies. Bounds checks limit legacy copy/write
   calls to the live block slot.

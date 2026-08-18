@@ -60,10 +60,12 @@ int stat(const char* path, struct stat* st);
 int unlink(const char* path);
 
 /* Rename or move `old_path` to `new_path` within one mount.  0 on success, -1
- * otherwise.  Unlike POSIX rename(), an EXISTING destination is refused rather
- * than replaced, and an open source is refused (WASMOS_ERR_FS_BUSY): the
- * backend's descriptors record where a file's directory entry lives.  The
- * file's data is never copied -- only the directory entry moves. */
+ * otherwise.  An existing destination FILE is replaced, as POSIX requires, and
+ * its data is released; an existing destination DIRECTORY is refused, because
+ * freeing what it contains would be a recursive delete rather than a rename.
+ * An open source or destination is refused (WASMOS_ERR_FS_BUSY): the backend's
+ * descriptors record where a file's directory entry lives.  The file's data is
+ * never copied -- only the directory entry changes. */
 int rename(const char* old_path, const char* new_path);
 /* Remove a directory. Returns 0 on success, -1 on failure. */
 int rmdir(const char* path);

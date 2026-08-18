@@ -1362,6 +1362,19 @@ static void test_rename_refuses_an_open_source(void) {
 
 /* --- directory slots past the first cluster ----------------------------- */
 
+/* 1 when `cluster`'s FAT entry reads free, 0 otherwise. Distinguishes a
+ * replaced file's chain being RELEASED from merely being unreferenced. */
+static int fat_test_cluster_is_free(fat_block_t* blk, const fat_mount_t* mnt, uint32_t cluster) {
+    fat_fatent_ctx_t e;
+
+    memset(&e, 0, sizeof(e));
+    e.cluster = cluster;
+    if (fat_fatent_read(&e, blk, mnt) != FAT_R_DONE) {
+        return -1;
+    }
+    return e.value == 0 ? 1 : 0;
+}
+
 /* Clusters in `first`'s chain. Distinguishes "reused a free slot" from "grew
  * the directory", which resolve identically from a caller's point of view. */
 static uint32_t chain_length(fat_block_t* blk, const fat_mount_t* mnt, uint32_t first) {
@@ -1752,6 +1765,115 @@ static void test_capacity_growth_refuses_to_wrap(void) {
     free_volume();
 }
 
+/* POSIX rename() replaces an existing destination. Doing so means the
+ * destination's data is released, so it is worth pinning exactly what survives:
+ * the destination NAME, pointing at the SOURCE's data, with the old data freed
+ * and the source name gone. */
+static void test_rename_replaces_an_existing_file(void) {
+    fat_mount_t mnt;
+    fat_block_t blk;
+    fat_rename_ctx_t r;
+    fat_resolve_ctx_t res;
+    fat_dir_entry_info_t src;
+    fat_r_t rc;
+    uint32_t victim_cluster;
+
+    build_volume(0);
+    mount_volume(&mnt, &blk);
+
+    memset(&res, 0, sizeof(res));
+    res.path = "/SUB/TARGET.TXT";
+    res.source = -1;
+    (void)fat_resolve_path(&res, &blk, &mnt);
+    src = res.found;
+
+    memset(&res, 0, sizeof(res));
+    res.path = "/INROOT.TXT";
+    res.source = -1;
+    (void)fat_resolve_path(&res, &blk, &mnt);
+    victim_cluster = res.found.cluster;
+
+    memset(&r, 0, sizeof(r));
+    r.old_path = "/SUB/TARGET.TXT";
+    r.new_path = "/INROOT.TXT"; /* exists */
+    r.source = -1;
+    r.replace = 1;
+    rc = fat_rename_path(&r, &blk, &mnt, NULL, 0);
+    CHECK(rc == FAT_R_DONE, "renaming over an existing file succeeds when asked");
+
+    memset(&res, 0, sizeof(res));
+    res.path = "/INROOT.TXT";
+    res.source = -1;
+    rc = fat_resolve_path(&res, &blk, &mnt);
+    CHECK(rc == FAT_R_DONE && res.found.valid, "the destination name still resolves");
+    CHECK(res.found.cluster == src.cluster, "and now points at the SOURCE's data");
+    CHECK(res.found.size == src.size, "with the source's size");
+
+    memset(&res, 0, sizeof(res));
+    res.path = "/SUB/TARGET.TXT";
+    res.source = -1;
+    (void)fat_resolve_path(&res, &blk, &mnt);
+    CHECK(res.found.valid == 0, "the source name is gone");
+
+    /* The replaced file's chain must be released, or every overwrite leaks. */
+    CHECK(fat_test_cluster_is_free(&blk, &mnt, victim_cluster) == 1,
+          "the replaced file's clusters are back on the free list");
+
+    free_volume();
+}
+
+/* Without the flag the old refusal stands, so a caller that has not opted in
+ * cannot destroy data by accident. */
+static void test_rename_still_refuses_without_replace(void) {
+    fat_mount_t mnt;
+    fat_block_t blk;
+    fat_rename_ctx_t r;
+    fat_r_t rc;
+
+    build_volume(0);
+    mount_volume(&mnt, &blk);
+
+    memset(&r, 0, sizeof(r));
+    r.old_path = "/SUB/TARGET.TXT";
+    r.new_path = "/INROOT.TXT";
+    r.source = -1;
+    r.replace = 0;
+    rc = fat_rename_path(&r, &blk, &mnt, NULL, 0);
+    CHECK(rc == FAT_R_ERR, "a rename that would clobber is refused by default");
+    CHECK(g_last_err == WASMOS_ERR_FS_EXISTS, "it reports EXISTS");
+
+    free_volume();
+}
+
+/* Replacing a DIRECTORY is refused: freeing its tree is a recursive delete
+ * wearing a rename's clothes. */
+static void test_rename_refuses_to_replace_a_directory(void) {
+    fat_mount_t mnt;
+    fat_block_t blk;
+    fat_rename_ctx_t r;
+    fat_resolve_ctx_t res;
+    fat_r_t rc;
+
+    build_volume(0);
+    mount_volume(&mnt, &blk);
+
+    memset(&r, 0, sizeof(r));
+    r.old_path = "/INROOT.TXT";
+    r.new_path = "/SUB"; /* a directory */
+    r.source = -1;
+    r.replace = 1;
+    rc = fat_rename_path(&r, &blk, &mnt, NULL, 0);
+    CHECK(rc == FAT_R_ERR, "replacing a directory is refused even with replace set");
+
+    memset(&res, 0, sizeof(res));
+    res.path = "/SUB/TARGET.TXT";
+    res.source = -1;
+    (void)fat_resolve_path(&res, &blk, &mnt);
+    CHECK(res.found.valid == 1, "the directory and its contents survive");
+
+    free_volume();
+}
+
 static const wasmos_test_void_case_t k_cases[] = {
     WASMOS_TEST_CASE(test_finds_entry_in_second_cluster),
     WASMOS_TEST_CASE(test_still_finds_entry_in_first_cluster),
@@ -1788,6 +1910,9 @@ static const wasmos_test_void_case_t k_cases[] = {
     WASMOS_TEST_CASE(test_dotdot_from_a_top_level_directory_reaches_the_root),
     WASMOS_TEST_CASE(test_chdir_dotdot_returns_to_the_real_parent),
     WASMOS_TEST_CASE(test_capacity_growth_refuses_to_wrap),
+    WASMOS_TEST_CASE(test_rename_replaces_an_existing_file),
+    WASMOS_TEST_CASE(test_rename_still_refuses_without_replace),
+    WASMOS_TEST_CASE(test_rename_refuses_to_replace_a_directory),
 };
 
 int main(void) {

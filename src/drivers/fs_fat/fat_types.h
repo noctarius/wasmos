@@ -542,6 +542,8 @@ typedef struct {
     const char* old_path;
     const char* new_path;
     int32_t source;
+    uint8_t replace;            /* 1: overwrite an existing FILE destination, POSIX-style */
+    uint32_t victim;            /* the replaced entry's first cluster, freed after the swap */
     fat_dir_entry_info_t entry; /* the source entry, latched */
     uint32_t entry_index;       /* its flat index within its directory run */
     uint32_t dotdot_cluster;    /* what '..' must hold after a directory moves */
@@ -553,6 +555,8 @@ typedef struct {
     fat_create_ctx_t create;
     fat_delchain_ctx_t delchain;
     fat_writeent_ctx_t wr;
+    fat_freechain_ctx_t freechain; /* releases the replaced entry's chain */
+    uint8_t entry_patch[32];
 } fat_rename_ctx_t;
 
 /* --- Coroutine sub-machine contexts (fat_dir.c, navigation side). --- */

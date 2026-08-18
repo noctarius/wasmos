@@ -173,6 +173,19 @@ verify_host_readable() {
     else
         fail "$name: README.TXT not visible to the host"; ok=0
     fi
+    # (d2) the TRUNCATED file is exactly the new payload -- 19 bytes, not 19 new
+    #      bytes in front of the formatter's remaining 45.
+    if [ -f "$dir/TRUNCME.TXT" ]; then
+        printf '%s\n' "$MODIFIED_TEXT" > "$WORK/trunc.expected"
+        if ! cmp -s "$dir/TRUNCME.TXT" "$WORK/trunc.expected"; then
+            fail "$name: TRUNCME.TXT is not exactly the truncated payload"
+            printf '         size: %s bytes\n' "$(wc -c < "$dir/TRUNCME.TXT" | tr -d ' ')" >&2
+            ok=0
+        fi
+        rm -f "$WORK/trunc.expected"
+    else
+        fail "$name: TRUNCME.TXT not visible to the host"; ok=0
+    fi
     # (e) directory + nested file with content
     [ -d "$dir/MADEDIR" ] || { fail "$name: MADEDIR not visible to the host"; ok=0; }
     expect_content "$dir/MADEDIR/INNER.TXT" "$INNER_TEXT" "MADEDIR/INNER.TXT" "$name" || ok=0

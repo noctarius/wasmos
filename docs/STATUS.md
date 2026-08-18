@@ -575,6 +575,13 @@ linked feature documents for rationale and rollout plans.
   and makes the same code host-drivable. Prefer that over `addr_cast(int32_t,
   …)` for any new buffer-address parameter.
 
+  Opens go through `fat_op_open`, so the `O_CREAT`/`O_TRUNC`/`O_APPEND`
+  handling runs — a slot built by hand skips it entirely. The truncating case
+  is checked as a real shrink: a 64-byte file reopened with `O_TRUNC` and
+  rewritten with 19 bytes must be 19 bytes on the host, not 19 new bytes in
+  front of 45 stale ones. Note `O_TRUNC` resets the size without freeing the
+  cluster chain, so a truncated file keeps its capacity; `fsck` accepts that.
+
   Still not covered, in `TASKS.md`: there is no rename operation in the stack to
   exercise, and `fat_op_read` goes through the zero-copy borrow passthrough the
   harness does not model.

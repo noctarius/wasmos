@@ -318,6 +318,52 @@ static int open_resolved(fat_block_t* blk, const fat_mount_t* mnt, const fat_dir
     return 0;
 }
 
+/* Open `path` through fat_op_open, which is the only way the O_CREAT / O_TRUNC
+ * / O_APPEND handling runs at all -- constructing an open-file slot by hand
+ * skips it. Returns the fd, or -1. */
+static int32_t open_via_op(fat_block_t* blk, const fat_mount_t* mnt, fat_open_pool_t* pool,
+                           const char* path, int32_t flags) {
+    fat_op_ctx_t op;
+    uint32_t path_len = (uint32_t)strlen(path);
+
+    if (path_len + 1u > XFER_CAP) {
+        return -1;
+    }
+    memcpy(g_xfer, path, path_len + 1u);
+
+    memset(&op, 0, sizeof(op));
+    op.source = -1;
+    op.request_id = 1;
+    op.arg0 = (int32_t)path_len; /* path length */
+    op.arg1 = flags;             /* access mode + O_CREAT/O_TRUNC/O_APPEND */
+    op.arg2 = 1;                 /* client buffer holding the path */
+    if (fat_op_open(&op, blk, mnt, pool) != FAT_R_DONE) {
+        return -1;
+    }
+    return op.fd;
+}
+
+/* Write `len` bytes of `data` at offset 0 of an ALREADY-OPEN fd. */
+static int write_fd_content(fat_block_t* blk, const fat_mount_t* mnt, fat_open_pool_t* pool,
+                            int32_t fd, const uint8_t* data, uint32_t len) {
+    fat_op_ctx_t op;
+
+    if (len > XFER_CAP) {
+        return -1;
+    }
+    memcpy(g_xfer, data, len);
+    memset(&op, 0, sizeof(op));
+    op.source = -1;
+    op.request_id = 1;
+    op.arg0 = fd;
+    op.arg1 = (int32_t)len;
+    op.arg2 = 1;
+    if (fat_op_write(&op, blk, mnt, pool) != FAT_R_DONE) {
+        return -1;
+    }
+    return op.resp_arg0 == (int32_t)len ? 0 : -1;
+}
+
 /* Write `len` bytes of `data` at offset 0 of `path` by driving fat_op_write,
  * exactly as the reactor does: stage the bytes in the client buffer, point an
  * open-file slot at the resolved entry, and issue the op. */
@@ -412,6 +458,7 @@ int main(int argc, char** argv) {
     fat_remove_ctx_t remove_ctx;
     fat_op_ctx_t op;
     fat_open_pool_t pool;
+    int32_t trunc_fd;
     uint8_t readback[256];
     static uint8_t big[BIG_LEN];
     static uint8_t bigback[BIG_LEN];
@@ -561,6 +608,37 @@ int main(int argc, char** argv) {
     CHECK(memcmp(readback, MODIFIED_TEXT, strlen(MODIFIED_TEXT)) == 0,
           "the overwritten prefix is what was written");
     CHECK(readback[19] == '\n', "the byte past the write is the formatter's, retained");
+
+    /* (d2) A TRUNCATING overwrite, through the real open path.
+     *
+     * This is the case fat_op_write alone cannot express: O_TRUNC is handled by
+     * fat_op_open, so a slot built by hand never reaches it. The formatter left
+     * 64 bytes here; opening with O_TRUNC must reset the size to 0 before the
+     * 19-byte write, leaving a 19-byte file rather than 19 new bytes in front of
+     * 45 stale ones. The external check compares the whole file, which is what
+     * distinguishes those two outcomes. */
+    trunc_fd = open_via_op(&blk, &mnt, &pool, "/TRUNCME.TXT", 1 /* write */ | FAT_OPEN_TRUNC);
+    CHECK(trunc_fd >= 0, "opening with O_TRUNC succeeds");
+    if (trunc_fd >= 0) {
+        CHECK(resolve_ok(&blk, &mnt, "/TRUNCME.TXT", &info), "the truncated file still resolves");
+        CHECK(info.size == 0u, "O_TRUNC resets the recorded size at open time");
+        CHECK(write_fd_content(&blk,
+                               &mnt,
+                               &pool,
+                               trunc_fd,
+                               (const uint8_t*)MODIFIED_TEXT,
+                               (uint32_t)strlen(MODIFIED_TEXT)) == 0,
+              "writing the shorter payload succeeds");
+        CHECK(resolve_ok(&blk, &mnt, "/TRUNCME.TXT", &info), "it resolves after the write");
+        CHECK(info.size == (uint32_t)strlen(MODIFIED_TEXT),
+              "the file is now exactly the new content's length");
+        memset(readback, 0, sizeof(readback));
+        CHECK(read_file_content(
+                  &blk, &mnt, "/TRUNCME.TXT", readback, (uint32_t)strlen(MODIFIED_TEXT)) == 0,
+              "reading the truncated file back succeeds");
+        CHECK(memcmp(readback, MODIFIED_TEXT, strlen(MODIFIED_TEXT)) == 0,
+              "and its content is the new payload");
+    }
 
     /* (e) A directory, and a file inside it. */
     memset(&mkdir_ctx, 0, sizeof(mkdir_ctx));

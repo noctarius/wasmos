@@ -46,6 +46,9 @@ build_stage() {
     printf 'short name in a subdir\n'    > "$STAGE/SUBDIR/CHILD.TXT"
     # 64 bytes exactly, so a size assertion is unambiguous.
     printf '%064d' 0                     > "$STAGE/SIZED.BIN"
+    # Overwritten with a SHORTER payload through O_TRUNC, so the external check
+    # can tell a real shrink from a partial overwrite that left a tail behind.
+    printf '%064d' 7                     > "$STAGE/TRUNCME.TXT"
 
     if [ "$want_lfn" = "1" ]; then
         printf 'a long file name\n' > "$STAGE/a-long-file-name.txt"

@@ -553,10 +553,25 @@ linked feature documents for rationale and rollout plans.
   It skips when no formatter is installed, so it is a separate target rather
   than part of `run-kernel-unit-tests`.
 
+  The mutations are: a new empty file; a new file with content; a file spanning
+  several clusters; an OVERWRITE of a file the formatter wrote, shrinking it; a
+  new directory with a file inside it; and an unlink of one of the formatter's
+  files. The host then compares CONTENT byte for byte — including the
+  multi-cluster file against a position-dependent pattern, so a shifted or
+  truncated copy fails — and confirms the unlinked file is gone while untouched
+  files still read correctly.
+
   Judge that target by its output, not its exit status: `fsck -n` reports a
   fault and still exits 0, so the script greps the report. Two real defects came
   out of its first run — a `..` entry written with a non-zero start cluster
   under a FAT12/16 root, and FSInfo free-space drift (still open, `TASKS.md`).
+
+  Two gaps it does NOT cover, both in `TASKS.md`: there is no rename operation
+  in the stack to exercise, and `fat_op_write`/`fat_op_read` are driven one
+  layer down (chain growth, repositioning and the size write-back are the
+  driver's; the byte copy is the harness's) because those entry points pass the
+  client buffer through a 32-bit pointer truncation a 64-bit host cannot
+  satisfy.
 - The WRITE side is still single-cluster: `fat_find_free_dir_slots` returns a
   flat entry index that the writer resolves against `dir_lba`, which is valid
   only within one contiguous run. A create into a directory whose first cluster

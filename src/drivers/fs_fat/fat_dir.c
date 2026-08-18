@@ -1539,45 +1539,18 @@ static int fat_chdir_next_component(fat_chdir_ctx_t* c) {
             continue;
         }
         if (c->name[0] == '.' && c->name[1] == '.' && c->name[2] == '\0') {
+            /* TODO: '..' resets to the root region rather than consulting the
+             * on-disk '..' entry, matching fat_resolve_path; see docs/TASKS.md. */
             c->root = 1;
             c->cluster = 0;
-            c->dir_lba = 0;
-            c->dir_sectors = 0;
             continue;
         }
         return 1;
     }
 }
 
-/* Begin scanning the directory selected by (root, cluster): set the scan cursors
- * and read the first sector.  Returns 0, or -1 if the cluster maps to no LBA.
- * Pure setup: the read itself is issued by the caller via FAT_CO_READ. */
-static int fat_chdir_begin_dir(fat_chdir_ctx_t* c, const fat_mount_t* mnt, uint8_t root,
-                               uint32_t cluster) {
-    if (root) {
-        /* Reachable only on FAT12/16: fat_root_origin reports FAT32's root as a
-         * non-root cluster, so this branch never sees one. */
-        c->dir_lba = mnt->root_dir_lba;
-        c->dir_sectors = mnt->root_dir_sectors;
-        c->cur_sector = 0;
-        c->entries_left = mnt->root_entry_count;
-    } else {
-        c->dir_lba = fat_lba_for_cluster(mnt, cluster);
-        if (c->dir_lba == 0) {
-            return -1;
-        }
-        c->dir_sectors = mnt->sectors_per_cluster;
-        c->cur_sector = 0;
-        c->entries_left = (c->dir_sectors * mnt->bytes_per_sector) / 32u;
-    }
-    fat_lfn_reset(&c->lfn);
-    return 0;
-}
-
 fat_r_t fat_op_chdir(fat_op_ctx_t* op, fat_block_t* blk, fat_mount_t* mnt) {
     fat_chdir_ctx_t* c = &op->chdir;
-    uint8_t* ent;
-    uint32_t entries_per_sector;
     uint32_t j;
 
     FAT_CO_BEGIN(c);
@@ -1637,97 +1610,57 @@ fat_r_t fat_op_chdir(fat_op_ctx_t* op, fat_block_t* blk, fat_mount_t* mnt) {
         FAT_CO_DONE(c);
     }
 
-    if (fat_chdir_begin_dir(c, mnt, c->root, c->cluster) != 0) {
-        FAT_CO_FAIL(c, blk, WASMOS_ERR_FS_NOT_FOUND);
-    }
-
-    /* Walk directories: each level scans its sectors looking for c->name; a match
-     * that is a directory advances to the next component (or finishes). */
+    /* Walk the components. Each level goes through fat_find_in_dir -- the same
+     * scan every other lookup uses -- rather than a second implementation of
+     * one. That is what makes chdir follow a directory's cluster chain: this
+     * function used to carry its own scan that stopped at the first cluster, so
+     * `ls /a/b` listed entries `cd /a/b` reported as missing.
+     *
+     * One deliberate difference from the old scan: it skipped a name match that
+     * was not a directory and kept looking, whereas this reports NOT_DIR. Two
+     * entries sharing a name is a corrupt directory, and naming the reason
+     * beats reporting the file as absent. */
     for (;;) {
-        for (; c->cur_sector < c->dir_sectors && c->entries_left > 0; ++c->cur_sector) {
-            entries_per_sector = mnt->bytes_per_sector / 32u;
-            c->entries_total =
-                c->entries_left < entries_per_sector ? c->entries_left : entries_per_sector;
-
-            FAT_CO_READ(c, blk, c->dir_lba + c->cur_sector);
-
-            for (c->scan_index = 0; c->scan_index < c->entries_total; ++c->scan_index) {
-                ent = fat_block_sector(blk) + c->scan_index * 32u;
-                if (ent[0] == 0x00) {
-                    fat_lfn_reset(&c->lfn);
-                    FAT_CO_FAIL(c, blk, WASMOS_ERR_FS_NOT_FOUND); /* end-of-dir: miss */
-                }
-                if (ent[0] == 0xE5) {
-                    fat_lfn_reset(&c->lfn);
-                    continue;
-                }
-                if ((ent[11] & 0x0F) == 0x0F) {
-                    fat_lfn_collect(&c->lfn, ent);
-                    continue;
-                }
-                const char* entry_name = 0;
-                char entry[13];
-                uint32_t cluster;
-                if (c->lfn.valid && c->lfn.seen == c->lfn.total && c->lfn.buf[0]) {
-                    fat_lfn_finalize(&c->lfn);
-                    entry_name = c->lfn.buf;
-                }
-                if (!(ent[11] & 0x10)) {
-                    fat_lfn_reset(&c->lfn);
-                    continue; /* not a directory */
-                }
-                if (!entry_name) {
-                    uint32_t p = 0;
-                    for (j = 0; j < 8; ++j) {
-                        if (ent[j] != ' ') {
-                            entry[p++] = (char)ent[j];
-                        }
-                    }
-                    entry[p] = '\0';
-                    entry_name = entry;
-                }
-                if (!fat_name_eq(entry_name, c->name)) {
-                    fat_lfn_reset(&c->lfn);
-                    continue;
-                }
-                cluster = fat_dirent_cluster(ent);
-                if (cluster < 2) {
-                    fat_lfn_reset(&c->lfn);
-                    FAT_CO_FAIL(c, blk, WASMOS_ERR_FS_NOT_DIR);
-                }
-                c->root = 0;
-                c->cluster = cluster;
-                c->next = fat_chdir_next_component(c);
-                if (c->next < 0) {
-                    fat_lfn_reset(&c->lfn);
-                    FAT_CO_FAIL(c, blk, WASMOS_ERR_FS_NOT_FOUND);
-                }
-                if (c->next == 0) {
-                    mnt->cwd_mount = VFS_MOUNT_BOOT;
-                    mnt->cwd_cluster = c->cluster;
-                    mnt->dir_lba = fat_lba_for_cluster(mnt, cluster);
-                    mnt->dir_sectors = mnt->sectors_per_cluster;
-                    mnt->cwd_root = 0;
-                    mnt->cwd_source = op->source;
-                    fat_lfn_reset(&c->lfn);
-                    FAT_CO_DONE(c);
-                }
-                /* Descend into the matched subdirectory and restart the scan. */
-                if (fat_chdir_begin_dir(c, mnt, 0, cluster) != 0) {
-                    fat_lfn_reset(&c->lfn);
-                    FAT_CO_FAIL(c, blk, WASMOS_ERR_FS_NOT_FOUND);
-                }
-                goto rescan;
-            }
-
-            if (c->entries_left <= c->entries_total) {
+        c->scan.cont = 0;
+        c->scan.target = c->name;
+        c->scan.cur_root = c->root;
+        if (c->root) {
+            c->scan.dir_lba = mnt->root_dir_lba;
+            c->scan.dir_sectors = mnt->root_dir_sectors;
+            c->scan.cur_cluster = 0;
+        } else {
+            c->scan.dir_lba = fat_lba_for_cluster(mnt, c->cluster);
+            c->scan.dir_sectors = mnt->sectors_per_cluster;
+            c->scan.cur_cluster = c->cluster;
+            if (c->scan.dir_lba == 0) {
                 FAT_CO_FAIL(c, blk, WASMOS_ERR_FS_NOT_FOUND);
             }
-            c->entries_left -= c->entries_total;
         }
-        /* Exhausted the directory's sectors without a match. */
-        FAT_CO_FAIL(c, blk, WASMOS_ERR_FS_NOT_FOUND);
-    rescan:;
+        c->scan.entry_limit = fat_dir_entry_limit(mnt, c->root, c->scan.dir_sectors);
+        FAT_CO_AWAIT(c, fat_find_in_dir(&c->scan, blk, mnt));
+
+        if (!c->scan.found.valid) {
+            FAT_CO_FAIL(c, blk, WASMOS_ERR_FS_NOT_FOUND);
+        }
+        if (!(c->scan.found.attr & 0x10) || c->scan.found.cluster < 2) {
+            FAT_CO_FAIL(c, blk, WASMOS_ERR_FS_NOT_DIR);
+        }
+
+        c->root = 0;
+        c->cluster = c->scan.found.cluster;
+        c->next = fat_chdir_next_component(c);
+        if (c->next < 0) {
+            FAT_CO_FAIL(c, blk, WASMOS_ERR_FS_NOT_FOUND);
+        }
+        if (c->next == 0) {
+            mnt->cwd_mount = VFS_MOUNT_BOOT;
+            mnt->cwd_cluster = c->cluster;
+            mnt->dir_lba = fat_lba_for_cluster(mnt, c->cluster);
+            mnt->dir_sectors = mnt->sectors_per_cluster;
+            mnt->cwd_root = 0;
+            mnt->cwd_source = op->source;
+            FAT_CO_DONE(c);
+        }
     }
 
     FAT_CO_END(c);

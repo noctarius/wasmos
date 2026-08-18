@@ -920,17 +920,6 @@ tail.
   at `FAT_SECTOR_SIZE` (512) while `fat_parse_boot` accepts 1024/2048/4096 and
   the FAT/dir code then parses `bytes_per_sector` bytes out of the staged
   sector, silently truncating (`src/drivers/fs_fat/fat_block.c:58` `TODO`).
-- [ ] [BUG][P1] Walk the cluster chain in CHDIR's own directory scan. `fat_op_chdir`
-  does not use `fat_find_in_dir`; it carries a hand-written scan with a `goto
-  rescan` that stops when the current cluster's sectors are exhausted
-  (`fat_dir.c`, `WASMOS_ERR_FS_NOT_FOUND` after "Exhausted the directory's
-  sectors"). Now that every other read-side scan walks the chain, this is an
-  inconsistency a user can observe: `ls /a/b` finds an entry that `cd /a/b`
-  reports as missing, when the entry lives past its parent's first cluster.
-  It has its own loop shape rather than the shared one, which is why it was not
-  converted with the others; the cleanest fix is to make it call
-  `fat_find_in_dir` instead of duplicating a scan.
-
 - [ ] [ENHANCEMENT][P3] Let a slot run longer than one cluster span a GROWN
   directory. `fat_find_free_dir_slots` refuses `WASMOS_ERR_FS_NO_SPACE` when
   `needed` exceeds one cluster's entries and the directory had to grow, rather

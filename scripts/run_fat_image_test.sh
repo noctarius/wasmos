@@ -158,8 +158,21 @@ verify_host_readable() {
     else
         fail "$name: BIG.BIN not visible to the host"; ok=0
     fi
-    # (d) the MODIFIED file carries the new content, not the formatter's
-    expect_content "$dir/README.TXT" "$MODIFIED_TEXT" "README.TXT (modified)" "$name" || ok=0
+    # (d) the MODIFIED file: a write is not a truncate, so this is the 19 new
+    #     bytes plus the formatter's 20th byte, compared exactly. `cat` in a
+    #     command substitution would strip the trailing newlines and hide the
+    #     difference, so this compares the bytes.
+    if [ -f "$dir/README.TXT" ]; then
+        printf '%s\n\n' "$MODIFIED_TEXT" > "$WORK/readme.expected"
+        if ! cmp -s "$dir/README.TXT" "$WORK/readme.expected"; then
+            fail "$name: README.TXT is not the overwritten content plus the retained byte"
+            od -c "$dir/README.TXT" | head -3 >&2
+            ok=0
+        fi
+        rm -f "$WORK/readme.expected"
+    else
+        fail "$name: README.TXT not visible to the host"; ok=0
+    fi
     # (e) directory + nested file with content
     [ -d "$dir/MADEDIR" ] || { fail "$name: MADEDIR not visible to the host"; ok=0; }
     expect_content "$dir/MADEDIR/INNER.TXT" "$INNER_TEXT" "MADEDIR/INNER.TXT" "$name" || ok=0

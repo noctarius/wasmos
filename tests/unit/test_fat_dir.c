@@ -130,7 +130,7 @@ int32_t fat_block_server_endpoint(const fat_block_t* blk) {
     return -1;
 }
 
-int32_t wasmos_xfer_buffer_read(int32_t buffer_id, int32_t dst, int32_t len, int32_t offset) {
+int32_t wasmos_xfer_buffer_read(int32_t buffer_id, void* dst, int32_t len, int32_t offset) {
     (void)buffer_id;
     (void)dst;
     (void)len;
@@ -147,7 +147,7 @@ int32_t wasmos_xfer_buffer_reborrow(int32_t grantee, int32_t borrow_id, int32_t 
     return -1;
 }
 
-int32_t wasmos_xfer_buffer_write(int32_t buffer_id, int32_t src, int32_t len, int32_t offset) {
+int32_t wasmos_xfer_buffer_write(int32_t buffer_id, const void* src, int32_t len, int32_t offset) {
     (void)buffer_id;
     (void)src;
     (void)len;

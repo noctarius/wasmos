@@ -542,8 +542,7 @@ static void pci_fill_desc(uint16_t bdf, wasmos_pci_device_desc_t* desc) {
 static void publish_desc(int32_t devmgr_endpoint, int32_t source_endpoint, int32_t buffer_id,
                          uint32_t slot, const wasmos_pci_device_desc_t* desc, int32_t request_id) {
     uint32_t offset = slot * (uint32_t)sizeof(*desc);
-    if (wasmos_xfer_buffer_write(
-            buffer_id, addr_cast(int32_t, desc), (int32_t)sizeof(*desc), (int32_t)offset) != 0) {
+    if (wasmos_xfer_buffer_write(buffer_id, desc, (int32_t)sizeof(*desc), (int32_t)offset) != 0) {
         (void)printf("[pci-bus] descriptor write failed slot=%u\n", (unsigned)slot);
         return;
     }

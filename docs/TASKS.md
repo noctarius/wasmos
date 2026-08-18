@@ -838,21 +838,17 @@ tail.
   a moved DIRECTORY needs its `..` updated, including the 0-when-parent-is-root
   rule that `fat_create_directory` now applies.
 
-- [ ] [TEST][P2] Drive `fat_op_write`/`fat_op_read` themselves, rather than the
-  layers under them. `tests/unit/test_fat_image.c` writes real file content --
-  it grows the chain with `fat_ensure_open_file_capacity`, walks it with
-  `fat_reposition_open_file` and records the length with
-  `fat_store_open_file_size` -- but the byte copy into the staged sector is the
-  harness's, because `fat_op_write` passes the client buffer as
-  `addr_cast(int32_t, stage)` and a 64-bit host stack pointer does not survive
-  truncation to 32 bits. On wasm32, where the driver runs, a pointer IS 32 bits,
-  so this is a host-harness limit and not a driver defect.
-
-  The consequence is narrow but real: the request parsing, the buffer-size
-  clamp, the append-mode reposition and the partial-sector merge inside
-  `fat_op_write` have no coverage. Closing it needs either a wasm32 execution
-  harness (the same gap as the `%lld` item under Validation) or an integration
-  test that drives writes through the live FS IPC path.
+- [ ] [TEST][P2] Drive `fat_op_read` as well as `fat_op_write`.
+  `tests/unit/test_fat_image.c` now drives `fat_op_write` end to end (request
+  parsing, the buffer-size clamp, capacity growth, the partial-sector merge and
+  the size write-back), which became possible once `dst`/`src` gained a
+  `c_type` of `void*`. `fat_op_read` still is not driven: it goes through
+  `fat_block_read_direct`, the zero-copy borrow passthrough, which the harness
+  does not model because the block server writes the client buffer itself. The
+  suite reads content back through the chain instead. Modelling a direct read
+  means giving the fake block layer a notion of the client buffer as a
+  destination, which is a small amount of work and worth doing next time
+  something in that path changes.
 
 - [ ] [BUG][P2] Maintain or invalidate the FAT32 FSInfo free-cluster count.
   `fsck_msdos` reports `Free space in FSInfo block (128937) not correct

@@ -344,8 +344,7 @@ static int ata_sink_write(const ata_sink_t* sink, const uint8_t* src, uint32_t l
                           uint32_t sector_offset) {
     uint32_t offset = sink->dst_offset + sector_offset;
     if (sink->to_xfer) {
-        return wasmos_xfer_buffer_write(
-            sink->id, addr_cast(int32_t, src), (int32_t)len, (int32_t)offset);
+        return wasmos_xfer_buffer_write(sink->id, src, (int32_t)len, (int32_t)offset);
     }
     return wasmos_block_buffer_write(
         sink->id, addr_cast(int32_t, src), (int32_t)len, (int32_t)offset);

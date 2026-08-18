@@ -296,7 +296,7 @@ static int is_mount_already_active(const char* mount) {
         (void)wasmos_xfer_buffer_release(bid);
         return 0;
     }
-    if (wasmos_xfer_buffer_read(bid, addr_cast(int32_t, buf), n, 0) != 0) {
+    if (wasmos_xfer_buffer_read(bid, buf, n, 0) != 0) {
         (void)wasmos_xfer_buffer_release(bid);
         return 0;
     }
@@ -430,7 +430,7 @@ static void kick_boot_rules_read_async(void) {
         console_write("[device-manager] boot rules buffer acquire failed; skipping\n");
         return;
     }
-    if (wasmos_xfer_buffer_write(bid, addr_cast(int32_t, path), path_len, 0) != 0) {
+    if (wasmos_xfer_buffer_write(bid, path, path_len, 0) != 0) {
         (void)wasmos_xfer_buffer_release(bid);
         g_dm.rules_boot_loaded = 1;
         g_dm.rules_boot_active = 0;
@@ -522,7 +522,7 @@ static void poll_boot_rules_async(void) {
     if (read_len >= (int32_t)sizeof(text)) {
         read_len = (int32_t)sizeof(text) - 1;
     }
-    if (read_len > 0 && wasmos_xfer_buffer_read(bid, addr_cast(int32_t, text), read_len, 0) != 0) {
+    if (read_len > 0 && wasmos_xfer_buffer_read(bid, text, read_len, 0) != 0) {
         if (bid >= 0) {
             (void)wasmos_xfer_buffer_release(bid);
         }
@@ -831,8 +831,7 @@ static int hw_spawn_driver_index_caps_v2(int32_t index, const spawn_caps_t* caps
         memcpy(g_dm_caps_payload + offset, &window, sizeof(window));
     }
     if (dm_pm_buffer() < 0 ||
-        wasmos_xfer_buffer_write(
-            g_dm_meta_bid, addr_cast(int32_t, g_dm_caps_payload), (int32_t)payload_size, 0) != 0) {
+        wasmos_xfer_buffer_write(g_dm_meta_bid, g_dm_caps_payload, (int32_t)payload_size, 0) != 0) {
         return -1;
     }
     return dm_spawn_sync_call(PROC_IPC_SPAWN_CAPS_V2,
@@ -880,7 +879,7 @@ static int hw_spawn_driver_path(const char* path) {
     if (bid < 0) {
         return -1;
     }
-    if (wasmos_xfer_buffer_write(bid, addr_cast(int32_t, path), (int32_t)path_len, 0) != 0) {
+    if (wasmos_xfer_buffer_write(bid, path, (int32_t)path_len, 0) != 0) {
         (void)wasmos_xfer_buffer_release(bid);
         return -1;
     }
@@ -922,18 +921,16 @@ static int hw_spawn_driver_path_caps_args(const char* path, const spawn_caps_t* 
     if (bid < 0) {
         return -1;
     }
-    if (wasmos_xfer_buffer_write(bid, addr_cast(int32_t, path), (int32_t)path_len, 0) != 0) {
+    if (wasmos_xfer_buffer_write(bid, path, (int32_t)path_len, 0) != 0) {
         (void)wasmos_xfer_buffer_release(bid);
         return -1;
     }
     if (args_len > 0u &&
-        wasmos_xfer_buffer_write(
-            bid, addr_cast(int32_t, args), (int32_t)(args_len + 1u), (int32_t)path_len) != 0) {
+        wasmos_xfer_buffer_write(bid, args, (int32_t)(args_len + 1u), (int32_t)path_len) != 0) {
         (void)wasmos_xfer_buffer_release(bid);
         return -1;
     }
-    if (args_len == 0u &&
-        wasmos_xfer_buffer_write(bid, addr_cast(int32_t, ""), 1, (int32_t)path_len) != 0) {
+    if (args_len == 0u && wasmos_xfer_buffer_write(bid, "", 1, (int32_t)path_len) != 0) {
         (void)wasmos_xfer_buffer_release(bid);
         return -1;
     }
@@ -1065,7 +1062,7 @@ static int query_module_meta_by_path(const char* path, uint32_t source, int32_t*
     if (bid < 0) {
         return -1;
     }
-    if (wasmos_xfer_buffer_write(bid, addr_cast(int32_t, path), (int32_t)path_len, 0) != 0) {
+    if (wasmos_xfer_buffer_write(bid, path, (int32_t)path_len, 0) != 0) {
         (void)wasmos_xfer_buffer_release(bid);
         return -1;
     }
@@ -1101,8 +1098,7 @@ static void registry_add_from_desc(int32_t buffer_id, int32_t offset, int32_t si
         return;
     }
     if (size < (int32_t)sizeof(desc) ||
-        wasmos_xfer_buffer_read(
-            buffer_id, addr_cast(int32_t, &desc), (int32_t)sizeof(desc), offset) != 0) {
+        wasmos_xfer_buffer_read(buffer_id, &desc, (int32_t)sizeof(desc), offset) != 0) {
         console_write("[device-manager] device descriptor read failed\n");
         return;
     }
@@ -1536,8 +1532,7 @@ static int query_driver_module_meta(int32_t module_index, uint8_t* out_storage_b
                     &resp,
                     128) == 0 &&
         resp.type == PROC_IPC_RESP && resp.arg0 >= (int32_t)sizeof(desc) &&
-        wasmos_xfer_buffer_read(
-            g_dm_meta_bid, addr_cast(int32_t, &desc), (int32_t)sizeof(desc), 0) == 0 &&
+        wasmos_xfer_buffer_read(g_dm_meta_bid, &desc, (int32_t)sizeof(desc), 0) == 0 &&
         desc.version == WASMOS_MODULE_META_DESC_VERSION) {
         *out_storage_bootstrap = desc.storage_bootstrap;
         out_caps->cap_flags = desc.cap_flags & 0xFFFFu;

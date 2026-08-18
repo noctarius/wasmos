@@ -179,8 +179,7 @@ static wasmos_future_t* fs_operation_buffer_send(wasmos_sys_event_loop_t* loop,
     if (!operation || length <= 0)
         return NULL;
     bid = wasmos_xfer_buffer_acquire(length);
-    if (bid < 0 ||
-        (data && wasmos_xfer_buffer_write(bid, addr_cast(int32_t, data), length, 0) != 0)) {
+    if (bid < 0 || (data && wasmos_xfer_buffer_write(bid, data, length, 0) != 0)) {
         if (bid >= 0)
             (void)wasmos_xfer_buffer_release(bid);
         return NULL;
@@ -327,8 +326,7 @@ int32_t wasmos_sys_wasm_fs_operation_finish(wasmos_sys_wasm_fs_operation_t* oper
         result = reply->arg0;
         if (read_dst && result >= 0 && result <= read_capacity && result <= operation->length &&
             operation->has_buffer &&
-            wasmos_xfer_buffer_read(
-                operation->buffer_id, addr_cast(int32_t, read_dst), result, 0) != 0)
+            wasmos_xfer_buffer_read(operation->buffer_id, read_dst, result, 0) != 0)
             result = -1;
     }
     fs_operation_release(operation);

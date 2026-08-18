@@ -49,14 +49,14 @@ int32_t wasmos_xfer_buffer_release(int32_t buffer) {
     (void)buffer;
     return 0;
 }
-int32_t wasmos_xfer_buffer_write(int32_t buffer, int32_t ptr, int32_t len, int32_t offset) {
+int32_t wasmos_xfer_buffer_write(int32_t buffer, const void* ptr, int32_t len, int32_t offset) {
     (void)buffer;
     (void)ptr;
     (void)len;
     (void)offset;
     return 0;
 }
-int32_t wasmos_xfer_buffer_read(int32_t buffer, int32_t ptr, int32_t len, int32_t offset) {
+int32_t wasmos_xfer_buffer_read(int32_t buffer, void* ptr, int32_t len, int32_t offset) {
     (void)buffer;
     (void)ptr;
     (void)len;

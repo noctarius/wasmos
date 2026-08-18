@@ -223,7 +223,7 @@ static inline int32_t wasmos_xfer_stage(const void* src, int32_t len) {
     if (bid < 0) {
         return -1;
     }
-    if (wasmos_xfer_buffer_write(bid, addr_cast(int32_t, src), len, 0) != 0) {
+    if (wasmos_xfer_buffer_write(bid, src, len, 0) != 0) {
         (void)wasmos_xfer_buffer_release(bid);
         return -1;
     }
@@ -356,7 +356,7 @@ static inline int32_t wasmos_svc_lookup_class(int32_t proc_endpoint, int32_t rep
     if (bid < 0) {
         return -1;
     }
-    if (wasmos_xfer_buffer_write(bid, addr_cast(int32_t, cn), (int32_t)i + 1, 0) != 0) {
+    if (wasmos_xfer_buffer_write(bid, cn, (int32_t)i + 1, 0) != 0) {
         (void)wasmos_xfer_buffer_release(bid);
         return -1;
     }
@@ -376,8 +376,7 @@ static inline int32_t wasmos_svc_lookup_class(int32_t proc_endpoint, int32_t rep
     count = (int32_t)resp.arg0;
     got = (count < max_entries) ? count : max_entries;
     if (out != 0 && got > 0) {
-        (void)wasmos_xfer_buffer_read(
-            bid, addr_cast(int32_t, out), got * (int32_t)sizeof(svc_class_entry_t), 0);
+        (void)wasmos_xfer_buffer_read(bid, out, got * (int32_t)sizeof(svc_class_entry_t), 0);
     }
     (void)wasmos_xfer_buffer_release(bid);
     return count;
@@ -516,9 +515,9 @@ static inline int32_t wasmos_exec_handler_register(int32_t proc_endpoint, const 
     if (bid < 0) {
         return -1;
     }
-    if (wasmos_xfer_buffer_write(bid, addr_cast(int32_t, &desc), (int32_t)sizeof(desc), 0) != 0 ||
+    if (wasmos_xfer_buffer_write(bid, &desc, (int32_t)sizeof(desc), 0) != 0 ||
         wasmos_xfer_buffer_write(bid,
-                                 addr_cast(int32_t, nodes),
+                                 nodes,
                                  (int32_t)(sizeof(wasmos_exec_match_node_t) * (uint32_t)node_count),
                                  (int32_t)sizeof(desc)) != 0) {
         (void)wasmos_xfer_buffer_release(bid);

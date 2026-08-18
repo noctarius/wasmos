@@ -68,7 +68,7 @@ static int32_t libc_fs_stage_path(const char* path, size_t* out_len) {
     if (bid < 0) {
         return -1;
     }
-    if (wasmos_xfer_buffer_write(bid, addr_cast(int32_t, path), (int32_t)(path_len + 1u), 0) != 0) {
+    if (wasmos_xfer_buffer_write(bid, path, (int32_t)(path_len + 1u), 0) != 0) {
         (void)wasmos_xfer_buffer_release(bid);
         return -1;
     }
@@ -272,7 +272,7 @@ ssize_t read(int fd, void* buf, size_t count) {
         if (got == 0) {
             break;
         }
-        if (wasmos_xfer_buffer_read(bid, addr_cast(int32_t, (dst + done)), got, 0) != 0) {
+        if (wasmos_xfer_buffer_read(bid, dst + done, got, 0) != 0) {
             failed = 1;
             break;
         }
@@ -338,8 +338,7 @@ ssize_t write(int fd, const void* buf, size_t count) {
         if (chunk > chunk_max) {
             chunk = chunk_max;
         }
-        if (wasmos_xfer_buffer_write(bid, addr_cast(int32_t, (src + done)), (int32_t)chunk, 0) !=
-            0) {
+        if (wasmos_xfer_buffer_write(bid, src + done, (int32_t)chunk, 0) != 0) {
             failed = 1;
             break;
         }

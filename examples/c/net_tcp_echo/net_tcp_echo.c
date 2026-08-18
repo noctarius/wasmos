@@ -67,8 +67,7 @@ static int32_t connect_resume(void* user, uintptr_t* out_value) {
             return connect_fail(c, out_value);
         }
         wasmos_net__fill_desc(&desc, s->tx_bid, s->tx_grant, s->rx_bid, s->rx_grant, region, 0u, 0);
-        if (wasmos_xfer_buffer_write(
-                c->desc_bid, addr_cast(int32_t, &desc), (int32_t)sizeof(desc), 0) != 0) {
+        if (wasmos_xfer_buffer_write(c->desc_bid, &desc, (int32_t)sizeof(desc), 0) != 0) {
             return connect_fail(c, out_value);
         }
         wasmos_sys_wasm_ipc_future_init(&c->op, NULL, NULL);

@@ -70,7 +70,7 @@ static inline int32_t wasmos_proc_module_meta_path(int32_t proc_endpoint, int32_
     if (bid < 0) {
         return -1;
     }
-    if (wasmos_xfer_buffer_write(bid, addr_cast(int32_t, path), (int32_t)path_len, 0) != 0) {
+    if (wasmos_xfer_buffer_write(bid, path, (int32_t)path_len, 0) != 0) {
         (void)wasmos_xfer_buffer_release(bid);
         return -1;
     }

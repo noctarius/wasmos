@@ -81,10 +81,8 @@ static int prepare_bufs(int32_t stack_ep, sock_bufs_t* b) {
     put_u16(ring_header, 4u, 1u);
     put_u16(ring_header, 6u, RING_HEADER_BYTES);
     put_u32(ring_header, 8u, RING_BYTES);
-    if (wasmos_xfer_buffer_write(
-            b->tx_bid, addr_cast(int32_t, ring_header), sizeof(ring_header), 0) != 0 ||
-        wasmos_xfer_buffer_write(
-            b->rx_bid, addr_cast(int32_t, ring_header), sizeof(ring_header), 0) != 0) {
+    if (wasmos_xfer_buffer_write(b->tx_bid, ring_header, sizeof(ring_header), 0) != 0 ||
+        wasmos_xfer_buffer_write(b->rx_bid, ring_header, sizeof(ring_header), 0) != 0) {
         return -1;
     }
     b->tx_grant = wasmos_xfer_buffer_borrow(
@@ -105,7 +103,7 @@ static int prepare_bufs(int32_t stack_ep, sock_bufs_t* b) {
     put_u32(desc, 32u, (uint32_t)b->rx_bid);
     put_u32(desc, 36u, (uint32_t)b->rx_grant);
     put_u32(desc, 40u, RING_HEADER_BYTES + RING_BYTES);
-    if (wasmos_xfer_buffer_write(b->desc_bid, addr_cast(int32_t, desc), sizeof(desc), 0) != 0) {
+    if (wasmos_xfer_buffer_write(b->desc_bid, desc, sizeof(desc), 0) != 0) {
         return -1;
     }
     return 0;
@@ -205,10 +203,8 @@ int main(int argc, char** argv) {
             continue;
         }
         uint32_t rx_write = 0u;
-        if (wasmos_xfer_buffer_read(accept_bufs.rx_bid,
-                                    addr_cast(int32_t, &rx_write),
-                                    sizeof(rx_write),
-                                    RING_OFF_WRITE) != 0) {
+        if (wasmos_xfer_buffer_read(
+                accept_bufs.rx_bid, &rx_write, sizeof(rx_write), RING_OFF_WRITE) != 0) {
             break;
         }
         if (rx_write == 0u) {
@@ -218,14 +214,10 @@ int main(int argc, char** argv) {
             rx_write = RING_BYTES;
         }
         uint8_t buf[RING_BYTES];
-        if (wasmos_xfer_buffer_read(
-                accept_bufs.rx_bid, addr_cast(int32_t, buf), rx_write, RING_HEADER_BYTES) != 0 ||
+        if (wasmos_xfer_buffer_read(accept_bufs.rx_bid, buf, rx_write, RING_HEADER_BYTES) != 0 ||
+            wasmos_xfer_buffer_write(accept_bufs.tx_bid, buf, rx_write, RING_HEADER_BYTES) != 0 ||
             wasmos_xfer_buffer_write(
-                accept_bufs.tx_bid, addr_cast(int32_t, buf), rx_write, RING_HEADER_BYTES) != 0 ||
-            wasmos_xfer_buffer_write(accept_bufs.tx_bid,
-                                     addr_cast(int32_t, &rx_write),
-                                     sizeof(rx_write),
-                                     RING_OFF_WRITE) != 0 ||
+                accept_bufs.tx_bid, &rx_write, sizeof(rx_write), RING_OFF_WRITE) != 0 ||
             wasmos_ipc_send(
                 stack_ep, reply_ep, NET_IPC_TX_NOTIFY, request_id++, accept_id, 0, 0, 0) != 0) {
             break;

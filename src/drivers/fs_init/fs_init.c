@@ -94,7 +94,7 @@ static wasmos_error_code_t copy_path_from_xfer_buffer(int32_t buffer_id, int32_t
     }
     /* Owner-push: the client owns buffer_id and granted this backend READ (via
      * fs-manager's reborrow); read the path directly by buffer_id. */
-    if (wasmos_xfer_buffer_read(buffer_id, addr_cast(int32_t, out), path_len, 0) != 0) {
+    if (wasmos_xfer_buffer_read(buffer_id, out, path_len, 0) != 0) {
         return WASMOS_ERR_FS_BUFFER;
     }
     if (wasmos_sync_user_read(addr_cast(int32_t, out), path_len) != 0) {
@@ -585,8 +585,7 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
                         if (copied == 0) {
                             break;
                         }
-                        if (wasmos_xfer_buffer_write(
-                                arg2, addr_cast(int32_t, tmp), copied, total) != 0) {
+                        if (wasmos_xfer_buffer_write(arg2, tmp, copied, total) != 0) {
                             copy_err = WASMOS_ERR_FS_BUFFER;
                             break;
                         }

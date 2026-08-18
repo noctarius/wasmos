@@ -552,11 +552,10 @@ fat_r_t fat_op_read(fat_op_ctx_t* op, fat_block_t* blk, const fat_mount_t* mnt,
             op->io_chunk = op->io_run_sectors * mnt->bytes_per_sector;
         } else {
             FAT_CO_READ(op, blk, file->file_lba + file->current_sector);
-            if (wasmos_xfer_buffer_write(
-                    op->arg2,
-                    addr_cast(int32_t, (fat_block_sector(blk) + op->io_sector_offset)),
-                    (int32_t)op->io_chunk,
-                    (int32_t)op->done) != 0) {
+            if (wasmos_xfer_buffer_write(op->arg2,
+                                         fat_block_sector(blk) + op->io_sector_offset,
+                                         (int32_t)op->io_chunk,
+                                         (int32_t)op->done) != 0) {
                 FAT_CO_FAIL(op, blk, WASMOS_ERR_FS_BUFFER);
             }
         }
@@ -659,8 +658,7 @@ fat_r_t fat_op_write(fat_op_ctx_t* op, fat_block_t* blk, const fat_mount_t* mnt,
         /* Stage the client chunk, then merge it into the sector buffer.  The
          * xfer read + copy happen within this step (no yield between), so the
          * stack buffer is safe. */
-        if (wasmos_xfer_buffer_read(
-                op->arg2, addr_cast(int32_t, stage), (int32_t)op->io_chunk, (int32_t)op->done) !=
+        if (wasmos_xfer_buffer_read(op->arg2, stage, (int32_t)op->io_chunk, (int32_t)op->done) !=
             0) {
             FAT_CO_FAIL(op, blk, WASMOS_ERR_FS_BUFFER);
         }

@@ -49,8 +49,7 @@ static void wasmos_startup_load(void) {
     if (bid <= 0) {
         return;
     }
-    if (wasmos_xfer_buffer_read(
-            bid, addr_cast(int32_t, &g_spawn_info), (int32_t)sizeof(g_spawn_info), 0) != 0 ||
+    if (wasmos_xfer_buffer_read(bid, &g_spawn_info, (int32_t)sizeof(g_spawn_info), 0) != 0 ||
         g_spawn_info.magic != WASMOS_SPAWN_INFO_MAGIC) {
         wasmos_spawn_info_clear();
         return;
@@ -59,10 +58,8 @@ static void wasmos_startup_load(void) {
     if (n > WASMOS_STARTUP_ARGS_MAX - 1u) {
         n = WASMOS_STARTUP_ARGS_MAX - 1u;
     }
-    if (n > 0u && wasmos_xfer_buffer_read(bid,
-                                          addr_cast(int32_t, g_spawn_args),
-                                          (int32_t)n,
-                                          (int32_t)g_spawn_info.args_off) != 0) {
+    if (n > 0u && wasmos_xfer_buffer_read(
+                      bid, g_spawn_args, (int32_t)n, (int32_t)g_spawn_info.args_off) != 0) {
         n = 0u;
     }
     g_spawn_args[n] = '\0';

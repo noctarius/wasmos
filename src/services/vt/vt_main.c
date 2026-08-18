@@ -1184,7 +1184,7 @@ static int vt_read_keymap_file(const char* path, char* out, uint32_t out_cap, ui
     if (bid < 0) {
         return -1;
     }
-    if (wasmos_xfer_buffer_write(bid, addr_cast(int32_t, path), (int32_t)plen, 0) != 0) {
+    if (wasmos_xfer_buffer_write(bid, path, (int32_t)plen, 0) != 0) {
         (void)wasmos_xfer_buffer_release(bid);
         return -1;
     }
@@ -1217,7 +1217,7 @@ static int vt_read_keymap_file(const char* path, char* out, uint32_t out_cap, ui
         (void)wasmos_xfer_buffer_release(bid);
         return -1;
     }
-    if (wasmos_xfer_buffer_read(bid, addr_cast(int32_t, out), total, 0) != 0) {
+    if (wasmos_xfer_buffer_read(bid, out, total, 0) != 0) {
         (void)wasmos_xfer_buffer_release(bid);
         return -1;
     }
@@ -1736,7 +1736,7 @@ static void vt_spawn_cli_for_slot(uint32_t slot) {
     if (bid <= 0) {
         return;
     }
-    if (wasmos_xfer_buffer_write(bid, addr_cast(int32_t, path), (int32_t)path_len, 0) != 0) {
+    if (wasmos_xfer_buffer_write(bid, path, (int32_t)path_len, 0) != 0) {
         (void)wasmos_xfer_buffer_release(bid);
         return;
     }

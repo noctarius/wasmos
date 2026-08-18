@@ -173,9 +173,18 @@ typedef struct {
  * leaves it 0 and still reports success, so callers must test it rather than
  * treating FAT_R_DONE as a match. `attr` is the raw FAT attribute byte (0x10 =
  * directory). `cluster` is the entry's first cluster, 0 for an empty file. The
- * dir_* triple locates the 32-byte entry itself -- first LBA of the directory,
- * sector within it, and entry index -- which is what lets a later write patch
- * the entry in place. */
+ * dir_* triple locates the 32-byte entry PHYSICALLY -- LBA of the run it was
+ * found in, sector within that run, and entry index within the sector -- which
+ * is what lets a later write patch the entry in place, and what the open-file
+ * table records.
+ *
+ * `dir_entry_index` locates it LOGICALLY instead: the entry's index counted
+ * across the directory's whole cluster chain, which is the form
+ * fat_write_dir_entry and fat_delete_dir_entry_chain address. The two are the
+ * same number only in a single-cluster directory, which is why reconstructing
+ * one from the other (`dir_sector * eps + dir_index`) was wrong as soon as
+ * directories spanned clusters. `dir_first_cluster`/`dir_root` say which chain
+ * that index belongs to. */
 typedef struct {
     uint8_t valid;
     uint8_t attr;
@@ -184,6 +193,9 @@ typedef struct {
     uint32_t dir_lba;
     uint32_t dir_sector;
     uint32_t dir_index;
+    uint32_t dir_entry_index;   /* chain-relative */
+    uint32_t dir_first_cluster; /* the directory's first cluster */
+    uint8_t dir_root;           /* the entry lives in the fixed root region */
 } fat_dir_entry_info_t;
 
 /* Long-file-name accumulation state, gathered across the LFN entries that
@@ -251,7 +263,8 @@ typedef struct {
     uint32_t dir_lba;
     uint32_t dir_sectors;
     uint32_t entry_limit;
-    uint32_t cur_cluster;
+    uint32_t cur_cluster;   /* chain cursor: moves as the scan hops */
+    uint32_t first_cluster; /* latched at entry; what a hit reports */
     uint8_t cur_root;
     /* Scan cursors.  `entry_limit` budgets ONE cluster run and `entries_left` is
      * refilled from it at each hop, so `hops` -- not the entry budget -- is what
@@ -343,36 +356,75 @@ typedef struct {
     int cont;
     uint32_t dir_lba;
     uint32_t dir_sectors;
-    uint32_t entry_limit;
+    uint32_t entry_limit; /* entries per cluster run (per the root region when root) */
+    uint32_t first_cluster;
+    uint8_t root;
     uint32_t needed;
     uint32_t run;
     uint32_t run_start;
-    uint32_t entry;  /* flat entry cursor */
+    uint32_t entry;  /* chain-relative entry cursor */
     uint32_t sector; /* derived (crosses the per-sector yield) */
+    uint32_t base;   /* chain-relative index of the current cluster's first entry */
+    uint32_t cur_cluster;
+    uint32_t cur_lba;
+    uint32_t hops; /* clusters visited, against a cyclic chain */
+    uint32_t grow_cluster;
+    uint32_t zero_sector;
+    uint8_t grew; /* a cluster was appended to satisfy the request */
     uint32_t out_entry;
     int result; /* 0 found, -1 none */
+    fat_chain_ctx_t chain;
+    fat_findfree_ctx_t findfree;
+    fat_fatent_ctx_t fatent;
 } fat_findslots_ctx_t;
 
-/* Read-modify-write one 32-byte directory entry into its sector. */
+/* Resolve a directory's CHAIN-RELATIVE entry index to a physical location.
+ *
+ * An entry index counts across the whole directory, not within one cluster, so
+ * resolving it means walking the chain -- `dir_lba + index / entries_per_sector`
+ * is only valid inside one contiguous run, and the next cluster of a chain is
+ * not the next LBA.  The fixed FAT12/16 root IS such a run, which is why `root`
+ * short-circuits the walk. */
 typedef struct {
     int cont;
-    uint32_t dir_lba;
+    uint32_t first_cluster; /* directory's first cluster; ignored when root */
+    uint8_t root;
+    uint32_t entry_index; /* input: chain-relative */
+    uint32_t out_lba;     /* output: the sector holding it */
+    uint32_t out_index;   /* output: entry index within that sector */
+    uint32_t cluster_skip;
+    uint32_t cur_cluster;
+    fat_chain_ctx_t chain;
+} fat_dirloc_ctx_t;
+
+/* Read-modify-write one 32-byte directory entry into its sector.  `entry_index`
+ * is chain-relative and resolved through fat_dirloc_ctx_t, so the caller must
+ * also supply the directory's first cluster (or set root). */
+typedef struct {
+    int cont;
+    uint32_t dir_lba; /* the fixed root region's first LBA when root */
+    uint32_t first_cluster;
+    uint8_t root;
     uint32_t entry_index;
     uint32_t sector; /* derived; crosses the read->write yield */
     uint32_t index;  /* derived; crosses the read->write yield */
     uint8_t entry[32];
+    fat_dirloc_ctx_t loc;
 } fat_writeent_ctx_t;
 
 /* Mark a short entry + its preceding LFN entries as deleted (0xE5). */
 typedef struct {
     int cont;
     uint32_t dir_lba;
+    uint32_t first_cluster; /* the directory's first cluster; ignored when root */
+    uint8_t root;
     uint32_t entry_index; /* cursor: the short entry, then walks back over LFNs */
     uint32_t prev_index;
     uint32_t sector; /* derived; crosses the read yield */
     uint32_t index;  /* derived; crosses the read yield */
     uint8_t tombstone[32];
     fat_writeent_ctx_t wr;
+    fat_dirloc_ctx_t loc;
 } fat_delchain_ctx_t;
 
 /* Check whether a directory (given by its first LBA + span) contains any real

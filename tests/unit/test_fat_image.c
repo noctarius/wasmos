@@ -693,6 +693,29 @@ int main(int argc, char** argv) {
     CHECK(resolve_ok(&blk, &mnt, "/MADEDIR/MOVED.TXT", &info), "it resolves under the new parent");
     CHECK(!resolve_ok(&blk, &mnt, "/HELLO.TXT", &info), "and is gone from the old one");
 
+    /* (e3) Create inside a directory the FORMATTER made multi-cluster.
+     *      MANYFILES/ holds 64 entries at one sector per cluster, so its first
+     *      cluster is long full -- this is the case that failed NO_SPACE until
+     *      directory slots were addressed across the chain. fsck then judges
+     *      whether the slot (or the appended cluster) is structurally sound. */
+    memset(&create, 0, sizeof(create));
+    create.path = "/MANYFILES/ADDED.TXT";
+    create.source = -1;
+    rc = fat_create_empty_file(&create, &blk, &mnt);
+    CHECK(rc == FAT_R_DONE, "creating in a multi-cluster directory succeeds");
+    CHECK(write_file_content(&blk,
+                             &mnt,
+                             &pool,
+                             "/MANYFILES/ADDED.TXT",
+                             (const uint8_t*)INNER_TEXT,
+                             (uint32_t)strlen(INNER_TEXT)) == 0,
+          "writing its content succeeds");
+    CHECK(resolve_ok(&blk, &mnt, "/MANYFILES/ADDED.TXT", &info), "the new entry resolves");
+    /* The formatter's own entries in that directory must be untouched -- a slot
+     * search that mis-resolved an index would overwrite one of them. */
+    CHECK(resolve_ok(&blk, &mnt, "/MANYFILES/F00.TXT", &info), "its first entry survives");
+    CHECK(resolve_ok(&blk, &mnt, "/MANYFILES/F63.TXT", &info), "its last entry survives");
+
     /* (f) DELETE one of the formatter's files. */
     memset(&remove_ctx, 0, sizeof(remove_ctx));
     remove_ctx.path = "/SIZED.BIN";

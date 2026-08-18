@@ -47,6 +47,11 @@ void fat_dirent_set_cluster(uint8_t* ent, uint32_t cluster);
  * s->found.valid), FAT_R_WAIT, or FAT_R_ERR on I/O fault. */
 fat_r_t fat_find_in_dir(fat_dir_scan_ctx_t* s, fat_block_t* blk, const fat_mount_t* mnt);
 
+/* Read a directory's parent from its on-disk '..' entry; p->out_parent is 0 when
+ * the parent IS the root (what the specification stores there).  FAT_R_ERR with
+ * WASMOS_ERR_FS_CORRUPT when the second slot is not '..'. */
+fat_r_t fat_dir_parent_cluster(fat_dotdot_ctx_t* p, fat_block_t* blk, const fat_mount_t* mnt);
+
 /* Resolve r->path to a directory entry in r->found (found.valid tells hit/miss). */
 fat_r_t fat_resolve_path(fat_resolve_ctx_t* r, fat_block_t* blk, const fat_mount_t* mnt);
 

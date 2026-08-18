@@ -197,6 +197,12 @@ fat_r_t fat_geom_mount_step(fat_mount_t* mnt, fat_block_t* blk) {
         fat_log("boot parse failed\n");
         FAT_CO_FAIL(mnt, blk, WASMOS_ERR_FS_CORRUPT);
     }
+    /* The block layer transfers whole sectors, and the FAT/directory code parses
+     * bytes_per_sector out of each one, so the two must agree from here on. */
+    if (fat_block_set_sector_bytes(blk, mnt->bytes_per_sector) != 0) {
+        fat_log("unsupported bytes_per_sector\n");
+        FAT_CO_FAIL(mnt, blk, WASMOS_ERR_FS_CORRUPT);
+    }
     mnt->mounted = 1;
     FAT_CO_END(mnt);
 }

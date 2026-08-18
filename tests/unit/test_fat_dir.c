@@ -114,6 +114,18 @@ fat_r_t fat_block_write(fat_block_t* blk, uint32_t lba) {
     return FAT_R_DONE;
 }
 
+/* The harness serves whole sectors from RAM, so the transfer size the driver
+ * asks for is recorded rather than acted on -- but it is validated the same way,
+ * so a mount that set a size the real layer would refuse fails here too. */
+int fat_block_set_sector_bytes(fat_block_t* blk, uint32_t bytes) {
+    if (!blk || bytes < FAT_SECTOR_SIZE || bytes > FAT_MAX_SECTOR_BYTES ||
+        (bytes % FAT_SECTOR_SIZE) != 0) {
+        return -1;
+    }
+    blk->sector_bytes = bytes;
+    return 0;
+}
+
 void fat_block_invalidate(fat_block_t* blk) {
     blk->loaded_lba = FAT_BLOCK_NO_LBA;
 }
@@ -1603,6 +1615,136 @@ static void test_chdir_ordinary_cases_still_hold(void) {
     free_volume();
 }
 
+/* Regression: 2026-08-18-fat-dotdot-parent -- '..' reset the running target to
+ * the ROOT region instead of consulting the directory's on-disk '..' entry, so
+ * "a/b/../c" resolved against the root rather than against "a". With a
+ * single-level tree that is often accidentally the same answer; one level
+ * deeper it is simply wrong. */
+static void test_dotdot_resolves_against_the_real_parent(void) {
+    fat_mount_t mnt;
+    fat_block_t blk;
+    fat_resolve_ctx_t res;
+    fat_r_t rc;
+
+    build_volume(0);
+    mount_volume(&mnt, &blk);
+
+    /* /SUB/DEEP/.. is /SUB, so TARGET.TXT (which lives in /SUB) must resolve. */
+    memset(&res, 0, sizeof(res));
+    res.path = "/SUB/DEEP/../TARGET.TXT";
+    res.source = -1;
+    rc = fat_resolve_path(&res, &blk, &mnt);
+    CHECK(rc == FAT_R_DONE, "resolve completed");
+    CHECK(res.found.valid == 1, "'..' lands in the real parent, not the root");
+    CHECK(res.found.cluster == T_TARGET_CLUSTER, "and it is the right entry");
+
+    /* The same path must NOT resolve to a root entry: if '..' still reset to the
+     * root, "/SUB/DEEP/../INROOT.TXT" would wrongly succeed. */
+    memset(&res, 0, sizeof(res));
+    res.path = "/SUB/DEEP/../INROOT.TXT";
+    res.source = -1;
+    rc = fat_resolve_path(&res, &blk, &mnt);
+    CHECK(rc == FAT_R_DONE, "resolve completed");
+    CHECK(res.found.valid == 0, "a root entry is NOT reachable through the parent");
+
+    free_volume();
+}
+
+/* '..' from a directory whose parent IS the root must reach the root, which is
+ * what the on-disk convention of storing 0 there encodes. */
+static void test_dotdot_from_a_top_level_directory_reaches_the_root(void) {
+    fat_mount_t mnt;
+    fat_block_t blk;
+    fat_resolve_ctx_t res;
+    fat_r_t rc;
+
+    build_volume(0);
+    mount_volume(&mnt, &blk);
+
+    memset(&res, 0, sizeof(res));
+    res.path = "/SUB/../INROOT.TXT";
+    res.source = -1;
+    rc = fat_resolve_path(&res, &blk, &mnt);
+    CHECK(rc == FAT_R_DONE, "resolve completed");
+    CHECK(res.found.valid == 1, "'..' from a top-level directory reaches the root");
+
+    free_volume();
+}
+
+/* chdir shares the rule, so it has to share the behaviour. */
+static void test_chdir_dotdot_returns_to_the_real_parent(void) {
+    fat_mount_t mnt;
+    fat_block_t blk;
+    fat_op_ctx_t op;
+    fat_r_t rc;
+
+    build_volume(0);
+    mount_volume(&mnt, &blk);
+
+    memset(&op, 0, sizeof(op));
+    op.source = 5;
+    memcpy(op.dir_name, "/SUB/DEEP", sizeof("/SUB/DEEP"));
+    rc = fat_op_chdir(&op, &blk, &mnt);
+    CHECK(rc == FAT_R_DONE, "chdir into the nested directory succeeds");
+
+    memset(&op, 0, sizeof(op));
+    op.source = 5;
+    memcpy(op.dir_name, "..", sizeof(".."));
+    rc = fat_op_chdir(&op, &blk, &mnt);
+    CHECK(rc == FAT_R_DONE, "chdir .. succeeds");
+    CHECK(mnt.cwd_root == 0, "'..' from a nested directory is not the root");
+    CHECK(mnt.cwd_cluster == T_DIR_FIRST_CLUSTER, "it is the real parent");
+
+    free_volume();
+}
+
+/* A capacity that wraps reads as "smaller than the offset", which sends
+ * fat_ensure_open_file_capacity round to append again -- an allocation loop that
+ * eats the volume. The append refuses instead. */
+static void test_capacity_growth_refuses_to_wrap(void) {
+    fat_mount_t mnt;
+    fat_block_t blk;
+    fat_open_file_t file;
+    fat_append_ctx_t ap;
+    fat_create_ctx_t c;
+    fat_resolve_ctx_t res;
+    fat_r_t rc;
+
+    build_volume(0);
+    mount_volume(&mnt, &blk);
+
+    /* A real entry, so the append gets past its first-cluster write-back and
+     * actually reaches the capacity arithmetic. */
+    memset(&c, 0, sizeof(c));
+    c.path = "/CAPTEST.TXT";
+    c.source = -1;
+    CHECK(fat_create_empty_file(&c, &blk, &mnt) == FAT_R_DONE, "the test file is created");
+    memset(&res, 0, sizeof(res));
+    res.path = "/CAPTEST.TXT";
+    res.source = -1;
+    CHECK(fat_resolve_path(&res, &blk, &mnt) == FAT_R_DONE && res.found.valid, "and resolves");
+
+    memset(&file, 0, sizeof(file));
+    file.in_use = 1;
+    file.owner = -1;
+    file.first_cluster = 0;
+    file.dir_lba = res.found.dir_lba;
+    file.dir_sector = res.found.dir_sector;
+    file.dir_index = res.found.dir_index;
+    /* One cluster short of wrapping. */
+    file.capacity = 0xFFFFFFFFu - 8u;
+
+    memset(&ap, 0, sizeof(ap));
+    ap.file = &file;
+    rc = fat_append_cluster_to_file(&ap, &blk, &mnt);
+
+    CHECK(rc == FAT_R_ERR, "an append that would wrap the capacity is refused");
+    CHECK(g_last_err == WASMOS_ERR_FS_RANGE, "it reports RANGE");
+    CHECK(file.capacity == 0xFFFFFFFFu - 8u, "and the capacity is left alone");
+
+    free_volume();
+}
+
 static const wasmos_test_void_case_t k_cases[] = {
     WASMOS_TEST_CASE(test_finds_entry_in_second_cluster),
     WASMOS_TEST_CASE(test_still_finds_entry_in_first_cluster),
@@ -1635,6 +1777,10 @@ static const wasmos_test_void_case_t k_cases[] = {
     WASMOS_TEST_CASE(test_unlink_an_entry_in_a_later_cluster),
     WASMOS_TEST_CASE(test_chdir_into_a_directory_listed_in_a_later_cluster),
     WASMOS_TEST_CASE(test_chdir_ordinary_cases_still_hold),
+    WASMOS_TEST_CASE(test_dotdot_resolves_against_the_real_parent),
+    WASMOS_TEST_CASE(test_dotdot_from_a_top_level_directory_reaches_the_root),
+    WASMOS_TEST_CASE(test_chdir_dotdot_returns_to_the_real_parent),
+    WASMOS_TEST_CASE(test_capacity_growth_refuses_to_wrap),
 };
 
 int main(void) {

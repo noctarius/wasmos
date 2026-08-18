@@ -225,6 +225,8 @@ fat_r_t fat_reposition_open_file(fat_reposition_ctx_t* c, fat_block_t* blk,
 }
 
 fat_r_t fat_append_cluster_to_file(fat_append_ctx_t* c, fat_block_t* blk, const fat_mount_t* mnt) {
+    uint32_t cluster_bytes = (uint32_t)mnt->sectors_per_cluster * mnt->bytes_per_sector;
+
     FAT_CO_BEGIN(c);
     if (!c->file) {
         FAT_CO_FAIL(c, blk, WASMOS_ERR_FS_BAD_ARGS);
@@ -259,7 +261,13 @@ fat_r_t fat_append_cluster_to_file(fat_append_ctx_t* c, fat_block_t* blk, const 
         FAT_CO_AWAIT(c, fat_fatent_write(&c->fatent, blk, mnt));
     }
 
-    c->file->capacity += (uint32_t)mnt->sectors_per_cluster * mnt->bytes_per_sector;
+    /* Refuse rather than wrap: a wrapped capacity reads as "smaller than the
+     * offset", which sends fat_ensure_open_file_capacity back round to append
+     * again -- an allocation loop that consumes the volume. */
+    if (c->file->capacity > 0xFFFFFFFFu - cluster_bytes) {
+        FAT_CO_FAIL(c, blk, WASMOS_ERR_FS_RANGE);
+    }
+    c->file->capacity += cluster_bytes;
     FAT_CO_END(c);
 }
 
@@ -274,9 +282,15 @@ fat_r_t fat_ensure_open_file_capacity(fat_ensurecap_ctx_t* c, fat_block_t* blk,
     }
     c->saved_offset = c->file->offset;
     while (c->file->capacity < c->min_size) {
+        c->prev_capacity = c->file->capacity;
         c->append.cont = 0;
         c->append.file = c->file;
         FAT_CO_AWAIT(c, fat_append_cluster_to_file(&c->append, blk, mnt));
+        /* Every append must advance the capacity. If one does not, looping
+         * would allocate clusters forever without ever satisfying min_size. */
+        if (c->file->capacity <= c->prev_capacity) {
+            FAT_CO_FAIL(c, blk, WASMOS_ERR_FS_RANGE);
+        }
     }
     c->repos.cont = 0;
     c->repos.file = c->file;

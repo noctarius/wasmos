@@ -67,6 +67,18 @@ fat_r_t fat_block_write(fat_block_t* blk, uint32_t lba) {
     return FAT_R_DONE;
 }
 
+/* The harness serves whole sectors from RAM, so the transfer size the driver
+ * asks for is recorded rather than acted on -- but it is validated the same way,
+ * so a mount that set a size the real layer would refuse fails here too. */
+int fat_block_set_sector_bytes(fat_block_t* blk, uint32_t bytes) {
+    if (!blk || bytes < FAT_SECTOR_SIZE || bytes > FAT_MAX_SECTOR_BYTES ||
+        (bytes % FAT_SECTOR_SIZE) != 0) {
+        return -1;
+    }
+    blk->sector_bytes = bytes;
+    return 0;
+}
+
 void fat_block_invalidate(fat_block_t* blk) {
     blk->loaded_lba = FAT_BLOCK_NO_LBA;
 }

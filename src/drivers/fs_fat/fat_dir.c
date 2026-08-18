@@ -200,6 +200,32 @@ fat_r_t fat_find_in_dir(fat_dir_scan_ctx_t* s, fat_block_t* blk, const fat_mount
     FAT_CO_END(s); /* miss (found.valid == 0) */
 }
 
+/* Read a directory's parent from its on-disk '..' entry, which is the second
+ * slot of its first cluster.  Returns 0 in `out_parent` when the parent is the
+ * root -- the specification stores 0 there rather than the root's cluster, and
+ * fat_create_directory writes it that way on every FAT width.
+ *
+ * A directory whose second slot is not '..' is corrupt; that is reported rather
+ * than guessed at, because guessing would silently resolve a path into the
+ * wrong directory. */
+fat_r_t fat_dir_parent_cluster(fat_dotdot_ctx_t* p, fat_block_t* blk, const fat_mount_t* mnt) {
+    const uint8_t* ent;
+
+    FAT_CO_BEGIN(p);
+
+    p->out_parent = 0;
+    if (p->cluster < 2) {
+        FAT_CO_DONE(p); /* already the root */
+    }
+    FAT_CO_READ(p, blk, fat_lba_for_cluster(mnt, p->cluster));
+    ent = fat_block_sector(blk) + 32u;
+    if (ent[0] != '.' || ent[1] != '.') {
+        FAT_CO_FAIL(p, blk, WASMOS_ERR_FS_CORRUPT);
+    }
+    p->out_parent = fat_dirent_cluster(ent);
+    FAT_CO_END(p);
+}
+
 /* --- Path resolution. --- */
 
 fat_r_t fat_resolve_path(fat_resolve_ctx_t* r, fat_block_t* blk, const fat_mount_t* mnt) {
@@ -233,12 +259,27 @@ fat_r_t fat_resolve_path(fat_resolve_ctx_t* r, fat_block_t* blk, const fat_mount
             continue;
         }
         if (r->component[0] == '.' && r->component[1] == '.' && r->component[2] == '\0') {
-            /* TODO: '..' jumps to the root region instead of the true parent —
-             * the on-disk '..' entry is never consulted, so "a/b/../c" resolves
-             * against the root rather than against "a". */
-            if (fat_root_origin(mnt, &r->cur_root, &r->cur_cluster, &r->cur_lba, &r->cur_sectors) !=
-                0) {
-                FAT_CO_DONE(r);
+            /* Consult the directory's own '..' entry, so "a/b/../c" resolves
+             * against "a".  From the root, '..' is the root. */
+            if (!r->cur_root) {
+                r->dotdot.cont = 0;
+                r->dotdot.cluster = r->cur_cluster;
+                FAT_CO_AWAIT(r, fat_dir_parent_cluster(&r->dotdot, blk, mnt));
+                if (r->dotdot.out_parent < 2) {
+                    if (fat_root_origin(
+                            mnt, &r->cur_root, &r->cur_cluster, &r->cur_lba, &r->cur_sectors) !=
+                        0) {
+                        FAT_CO_DONE(r);
+                    }
+                } else {
+                    r->cur_root = 0;
+                    r->cur_cluster = r->dotdot.out_parent;
+                    r->cur_lba = fat_lba_for_cluster(mnt, r->cur_cluster);
+                    r->cur_sectors = mnt->sectors_per_cluster;
+                    if (r->cur_lba == 0) {
+                        FAT_CO_DONE(r);
+                    }
+                }
             }
             if (!fat_path_has_more(r->path, r->pos)) {
                 FAT_CO_DONE(r);
@@ -310,9 +351,25 @@ fat_r_t fat_resolve_parent_dir(fat_resolve_parent_ctx_t* p, fat_block_t* blk,
             continue;
         }
         if (p->component[0] == '.' && p->component[1] == '.' && p->component[2] == '\0') {
-            if (fat_root_origin(mnt, &p->cur_root, &p->cur_cluster, &p->cur_lba, &p->cur_sectors) !=
-                0) {
-                FAT_CO_DONE(p);
+            if (!p->cur_root) {
+                p->dotdot.cont = 0;
+                p->dotdot.cluster = p->cur_cluster;
+                FAT_CO_AWAIT(p, fat_dir_parent_cluster(&p->dotdot, blk, mnt));
+                if (p->dotdot.out_parent < 2) {
+                    if (fat_root_origin(
+                            mnt, &p->cur_root, &p->cur_cluster, &p->cur_lba, &p->cur_sectors) !=
+                        0) {
+                        FAT_CO_DONE(p);
+                    }
+                } else {
+                    p->cur_root = 0;
+                    p->cur_cluster = p->dotdot.out_parent;
+                    p->cur_lba = fat_lba_for_cluster(mnt, p->cur_cluster);
+                    p->cur_sectors = mnt->sectors_per_cluster;
+                    if (p->cur_lba == 0) {
+                        FAT_CO_DONE(p);
+                    }
+                }
             }
             if (!fat_path_has_more(p->path, p->pos)) {
                 FAT_CO_DONE(p);
@@ -1513,10 +1570,10 @@ fat_r_t fat_op_readdir(fat_op_ctx_t* op, fat_block_t* blk, const fat_mount_t* mn
 }
 
 /* Advance the CHDIR walk to the next real component in c->path (skipping '/'
- * runs and '.'; '..' resets the running target to the root region rather than
- * hopping to the true parent, matching fat_resolve_path).  Returns 1 with
- * c->name set, 0 at end of path, -1 on a too-long component.  Pure string work,
- * iterative so it needs no recursion / stack. */
+ * runs and '.').  Returns 1 with
+ * c->name set, 2 for a '..' the caller must resolve through the on-disk entry
+ * (reading it is I/O, and this is a pure helper), 0 at end of path, -1 on a
+ * too-long component.  Iterative so it needs no recursion / stack. */
 static int fat_chdir_next_component(fat_chdir_ctx_t* c) {
     for (;;) {
         uint32_t len;
@@ -1539,11 +1596,9 @@ static int fat_chdir_next_component(fat_chdir_ctx_t* c) {
             continue;
         }
         if (c->name[0] == '.' && c->name[1] == '.' && c->name[2] == '\0') {
-            /* TODO: '..' resets to the root region rather than consulting the
-             * on-disk '..' entry, matching fat_resolve_path; see docs/TASKS.md. */
-            c->root = 1;
-            c->cluster = 0;
-            continue;
+            /* Reported to the caller rather than resolved here: reading the
+             * on-disk '..' entry is I/O, and this is a pure helper. */
+            return 2;
         }
         return 1;
     }
@@ -1610,6 +1665,8 @@ fat_r_t fat_op_chdir(fat_op_ctx_t* op, fat_block_t* blk, fat_mount_t* mnt) {
         FAT_CO_DONE(c);
     }
 
+    /* Resolving one component may report '..', which has to be applied before
+     * the next lookup; the loop below re-enters here after each application. */
     /* Walk the components. Each level goes through fat_find_in_dir -- the same
      * scan every other lookup uses -- rather than a second implementation of
      * one. That is what makes chdir follow a directory's cluster chain: this
@@ -1621,6 +1678,41 @@ fat_r_t fat_op_chdir(fat_op_ctx_t* op, fat_block_t* blk, fat_mount_t* mnt) {
      * entries sharing a name is a corrupt directory, and naming the reason
      * beats reporting the file as absent. */
     for (;;) {
+        while (c->next == 2) {
+            /* '..': consult the directory's own entry rather than resetting to
+             * the root, so `cd ..` from a nested directory lands in its real
+             * parent. From the root, '..' is the root. */
+            if (!c->root) {
+                c->dotdot.cont = 0;
+                c->dotdot.cluster = c->cluster;
+                FAT_CO_AWAIT(c, fat_dir_parent_cluster(&c->dotdot, blk, mnt));
+                if (c->dotdot.out_parent < 2) {
+                    c->root = c->root_probe;
+                    c->cluster = c->root_cluster_probe;
+                } else {
+                    c->root = 0;
+                    c->cluster = c->dotdot.out_parent;
+                }
+            }
+            c->next = fat_chdir_next_component(c);
+            if (c->next < 0) {
+                FAT_CO_FAIL(c, blk, WASMOS_ERR_FS_NOT_FOUND);
+            }
+            if (c->next == 0) {
+                mnt->cwd_mount = VFS_MOUNT_BOOT;
+                mnt->cwd_root = c->root;
+                mnt->cwd_cluster = c->cluster;
+                if (c->root) {
+                    mnt->dir_lba = 0;
+                    mnt->dir_sectors = 0;
+                } else {
+                    mnt->dir_lba = fat_lba_for_cluster(mnt, c->cluster);
+                    mnt->dir_sectors = mnt->sectors_per_cluster;
+                }
+                mnt->cwd_source = op->source;
+                FAT_CO_DONE(c);
+            }
+        }
         c->scan.cont = 0;
         c->scan.target = c->name;
         c->scan.cur_root = c->root;

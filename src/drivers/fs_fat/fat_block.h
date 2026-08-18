@@ -41,12 +41,25 @@ typedef struct {
     uint8_t write_pending;    /* a FAT_CO_WRITE is mid-flight (yield-once flag) */
     uint32_t loaded_lba;      /* lba currently staged, or FAT_BLOCK_NO_LBA */
 
+    /* Bytes transferred per request.  Defaults to FAT_SECTOR_SIZE and is raised
+     * to the volume's own bytes_per_sector once the BPB is parsed: the FAT and
+     * directory code parses `bytes_per_sector` bytes out of every staged
+     * sector, so transferring only 512 of a 1024/2048/4096-byte sector would
+     * feed it stale bytes.  Bounded by FAT_MAX_SECTOR_BYTES, which is what
+     * `sector` below is sized for. */
+    uint32_t sector_bytes;
+
     uint8_t sector[FAT_MAX_SECTOR_BYTES];
 
     fat_op_ctx_t* owner; /* active op to resume on completion */
 } fat_block_t;
 
 void fat_block_configure(fat_block_t* blk, int32_t block_endpoint, int32_t reply_endpoint);
+
+/* Set the per-request transfer size from the mounted volume's bytes_per_sector.
+ * Refuses anything above FAT_MAX_SECTOR_BYTES or not a multiple of 512, leaving
+ * the previous value; returns 0 on success, -1 otherwise. */
+int fat_block_set_sector_bytes(fat_block_t* blk, uint32_t bytes);
 
 /* Acquire the dedicated block-buffer physical handle.  Returns 0, or -1. */
 int fat_block_setup(fat_block_t* blk);

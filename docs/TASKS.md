@@ -900,26 +900,26 @@ tail.
 - [ ] [ENHANCEMENT][P2] Extend LFN creation beyond ASCII: new-file LFN entries currently store
   `?`-mapped ASCII, not UTF-16 (`src/drivers/fs_fat/fat_name.c:175`; read-side
   LFN already works).
-- [ ] [BUG][P1] Fix FAT12/16 `..` self-reference and cross-cluster-boundary parent
-  assumptions (`src/drivers/fs_fat/fat_dir.c:771,775`).
 - [ ] [ENHANCEMENT][P2] Port the reactor open-file table into `fat_file` so `fat_dir` reads it
   there rather than the stubbed path (`src/drivers/fs_fat/fat_dir.c:339`,
   `fat_dir.h:54`).
 - [ ] [ENHANCEMENT][P2] Refetch fs-manager boot metadata out-of-band (push/idle-step) to remove
   the nested synchronous `DEVMGR_QUERY_MOUNT_REQ` deadlock hazard during
   class discovery (`src/services/fs_manager/fs_manager.c:608`).
-- [ ] [BUG][P1] Guard FAT file-capacity growth against `uint32_t` overflow and reject
-  writes not representable by the on-disk/open-file size fields.
 - [ ] [TEST][P2] Expand FAT coverage deliberately: FAT32 update modes and behavioral tests
   for each added contract.
 - [ ] [FEATURE][P2] Evaluate additional filesystems and dynamic mount lifecycle only after the
   existing VFS/backends have clear mount, ownership, and recovery semantics.
 
 
-- [ ] [BUG][P1] Honour `mnt->bytes_per_sector` in `fat_block_start`. The transfer is fixed
-  at `FAT_SECTOR_SIZE` (512) while `fat_parse_boot` accepts 1024/2048/4096 and
-  the FAT/dir code then parses `bytes_per_sector` bytes out of the staged
-  sector, silently truncating (`src/drivers/fs_fat/fat_block.c:58` `TODO`).
+- [ ] [TEST][P2] Mount a volume whose `bytes_per_sector` is not 512. The block
+  layer now transfers `blk->sector_bytes`, set from the BPB at mount and refused
+  unless it is a 512-multiple within `FAT_MAX_SECTOR_BYTES`, so the FAT and
+  directory code no longer parses past what was staged. No fixture exercises it:
+  both `newfs_msdos` and `mkfs.vfat` default to 512, and the host harnesses
+  address their RAM images in 512-byte units. Needs a formatter invocation with
+  an explicit sector size plus a harness that reads its own geometry.
+
 - [ ] [ENHANCEMENT][P3] Let a slot run longer than one cluster span a GROWN
   directory. `fat_find_free_dir_slots` refuses `WASMOS_ERR_FS_NO_SPACE` when
   `needed` exceeds one cluster's entries and the directory had to grow, rather
@@ -929,11 +929,6 @@ tail.
   one sector per cluster could hit it, and then only with a name over ~200
   characters. A free run that spans clusters is already handled when the
   clusters exist; this is only the freshly-appended case.
-
-- [ ] [BUG][P1] Resolve `..` against the on-disk parent. `fat_resolve_path`,
-  `fat_resolve_parent_dir` and `fat_chdir_next_component` all reset to the root
-  region, so `a/b/../c` resolves against the root
-  (`src/drivers/fs_fat/fat_dir.c`).
 
 
 

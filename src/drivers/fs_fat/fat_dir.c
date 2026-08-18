@@ -814,9 +814,11 @@ fat_r_t fat_create_directory(fat_mkdir_ctx_t* m, fat_block_t* blk, const fat_mou
 
     m->cluster = 0;
     if (m->root) {
-        /* TODO: FAT12/16 root has no real cluster number; self-reference in '..'
-         * (vvfat-compatible) until explicit root-parent handling lands. */
-        m->parent_cluster = m->cluster;
+        /* The FAT12/16 root has no cluster number, and the specification's rule
+         * for that case is the same one FAT32 needs below: '..' holds 0 when the
+         * parent IS the root.  fsck_msdos reports a non-zero value here as
+         * "`..' entry in <dir> has non-zero start cluster". */
+        m->parent_cluster = 0;
     } else if (fat_dir_cluster_from_lba(mnt, m->dir_lba, &m->parent_cluster) != 0) {
         /* TODO: assumes the parent starts on a cluster boundary; wider chains
          * need explicit parent-cluster tracking. */
@@ -835,9 +837,6 @@ fat_r_t fat_create_directory(fat_mkdir_ctx_t* m, fat_block_t* blk, const fat_mou
     m->findfree.cont = 0;
     FAT_CO_AWAIT(m, fat_find_free_cluster(&m->findfree, blk, mnt));
     m->cluster = m->findfree.result;
-    if (m->root) {
-        m->parent_cluster = m->cluster; /* root '..' self-reference, per above */
-    }
 
     m->fatent.cont = 0;
     m->fatent.cluster = m->cluster;

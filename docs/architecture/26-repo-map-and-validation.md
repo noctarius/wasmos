@@ -315,6 +315,24 @@ Runs `scripts/qemu_ring3_fault_storm_test.py` with up to 3 retry attempts.
 Asserts scheduler liveness under sustained concurrent fault load and checks
 that no forbidden error markers appear.
 
+#### FAT Image Interop (skips without a formatter)
+
+```
+cmake --build build --target run-fat-image-tests
+```
+
+Builds FAT16, FAT16+LFN and FAT32 volumes with the platform's own formatter
+(`mkfs.vfat` on Linux, `newfs_msdos` on macOS), drives `fs_fat` over each to
+mount, read and modify it, then checks the result two ways: `fsck.vfat` /
+`fsck_msdos`, and mounting the modified image on the host to confirm the
+entries the driver created are visible to the operating system.
+
+This exists because every other FAT test writes its own BPB and can therefore
+only confirm the driver agrees with this repository's reading of the
+specification. Exit status is not the signal — `fsck -n` reports a fault and
+still exits 0 — so `scripts/run_fat_image_test.sh` judges the report text.
+Exits 77 and is treated as a pass when no formatter is installed.
+
 #### Bochs Portability Check (manual, not a gate)
 
 ```

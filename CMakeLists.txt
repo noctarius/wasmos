@@ -2108,6 +2108,20 @@ find_program(WASMOS_UNIT_ASC asc HINTS ${CMAKE_SOURCE_DIR}/node_modules/.bin ${C
 find_program(WASMOS_UNIT_NODE node)
 find_program(WASMOS_UNIT_TINYGO tinygo)
 
+# FAT images from the platform's own formatter (mkfs.vfat / newfs_msdos),
+# driven read+write and then checked by fsck.vfat / fsck_msdos and by mounting
+# the result on the host. Separate from run-kernel-unit-tests because it needs
+# tools that are not everywhere; it exits 77 (skip) when they are absent, which
+# this target reports as success.
+add_custom_target(run-fat-image-tests
+  COMMAND ${CMAKE_COMMAND} -E env
+          WASMOS_FAT_IMAGE_TEST_BIN=${BUILD_DIR}/test_fat_image
+          WASMOS_FAT_IMAGE_WORK=${BUILD_DIR}/fat-images
+          bash -c "bash '${CMAKE_SOURCE_DIR}/scripts/run_fat_image_test.sh'; rc=$?; [ \"$rc\" -eq 77 ] && exit 0; exit \"$rc\"" 
+  DEPENDS run-kernel-unit-tests
+  COMMENT "Driving fs_fat against real formatter-built FAT images"
+  VERBATIM)
+
 add_custom_target(run-kernel-unit-tests
   COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
           -I${KERNEL_DIR}/include
@@ -2208,6 +2222,26 @@ add_custom_target(run-kernel-unit-tests
           ${LIBC_DIR}/src/string.c
           -o ${BUILD_DIR}/test_fat_dir
   COMMAND ${BUILD_DIR}/test_fat_dir
+  # Same sources, but driven against images built by the PLATFORM's formatter
+  # and checked afterwards by its fsck. Built here; run by the separate
+  # run-fat-image-tests target, which skips when no formatter is installed.
+  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
+          -I${CMAKE_SOURCE_DIR}/tests/unit/include
+          -I${DRIVER_WASM_DIR}/fs_fat
+          -I${DRIVER_WASM_DIR}/include
+          -I${CMAKE_SOURCE_DIR}/abi/generated/c
+          -I${LIBSYS_WASM_DIR}/include
+          -iquote ${LIBC_DIR}/include
+          -include ${LIBC_DIR}/include/wasmos_cast.h
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_fat_image.c
+          ${DRIVER_WASM_DIR}/fs_fat/fat_dir.c
+          ${DRIVER_WASM_DIR}/fs_fat/fat_geom.c
+          ${DRIVER_WASM_DIR}/fs_fat/fat_alloc.c
+          ${DRIVER_WASM_DIR}/fs_fat/fat_name.c
+          ${DRIVER_WASM_DIR}/fs_fat/fat_file.c
+          ${DRIVER_WASM_DIR}/fs_fat/fat_util.c
+          ${LIBC_DIR}/src/string.c
+          -o ${BUILD_DIR}/test_fat_image
   # Per-line IRQ sharer bookkeeping: pure logic, no arch dependency, so it runs on
   # the host (the x86 IRQ backend itself cannot — it carries inline asm).
   COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions

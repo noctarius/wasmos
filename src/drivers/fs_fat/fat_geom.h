@@ -23,6 +23,7 @@ typedef struct {
     uint32_t root_dir_lba;     /* FAT12/16 fixed root region; 0 on FAT32 */
     uint32_t root_dir_sectors; /* FAT12/16 fixed root region; 0 on FAT32 */
     uint32_t root_cluster;     /* FAT32 root chain start (BPB_RootClus); 0 otherwise */
+    uint32_t fsinfo_lba;       /* FAT32 FSInfo sector; 0 when absent or not FAT32 */
 
     /* Single current-working-directory navigation state (set by CHDIR). */
     int32_t cwd_source; /* endpoint that owns the cwd, or -1 */

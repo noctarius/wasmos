@@ -54,6 +54,14 @@ void fat_block_invalidate(fat_block_t* blk) {
     blk->loaded_lba = FAT_BLOCK_NO_LBA;
 }
 
+void fat_block_set_free_count(fat_block_t* blk, uint32_t count) {
+    if (!blk) {
+        return;
+    }
+    blk->free_count = count;
+    blk->free_count_valid = 1;
+}
+
 int fat_block_set_sector_bytes(fat_block_t* blk, uint32_t bytes) {
     if (!blk || bytes < FAT_SECTOR_SIZE || bytes > FAT_MAX_SECTOR_BYTES ||
         (bytes % FAT_SECTOR_SIZE) != 0) {

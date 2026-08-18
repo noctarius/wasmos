@@ -221,6 +221,8 @@ typedef struct {
     uint8_t b2, b3;       /* the upper two bytes (FAT32) */
     uint32_t copy_idx;    /* FAT copy being written */
     uint32_t fat_offset;  /* byte offset of the entry within a FAT copy */
+    uint32_t fsinfo_lba;  /* carried across the FSInfo read->write yield */
+    uint32_t old_value;   /* what the entry held, for FSInfo free accounting */
     uint32_t fat_lba;     /* base lba of the entry's first byte (this copy) */
     uint32_t sector_offset;
 } fat_fatent_ctx_t;

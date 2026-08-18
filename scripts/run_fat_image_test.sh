@@ -43,10 +43,9 @@ fi
 
 # --- 3. the platform's checker ---------------------------------------------
 # Anything fsck calls a Warning or an Error is a failure here, because both
-# tools report and then exit 0 under -n.  FSInfo free-space drift is allowed
-# through by name: FSI_Free_Count is a hint the specification lets a driver
-# leave stale, and treating it as a failure would flag a volume that is
-# structurally sound (tracked in docs/TASKS.md).
+# tools report and then exit 0 under -n.  Nothing is excused by name: the FAT32
+# FSInfo drift that used to be filtered out here is fixed, so a recurrence
+# should fail rather than be waved through.
 check_image() {
     local img="$1" out
     if command -v fsck.vfat >/dev/null 2>&1; then
@@ -61,7 +60,6 @@ check_image() {
     local bad
     bad="$(printf '%s\n' "$out" \
            | grep -E '^(Warning|Error)' \
-           | grep -v 'Free space in FSInfo block' \
            | grep -vE '^Warning: [0-9]+ files,' || true)"
     if [ -n "$bad" ]; then
         fail "fsck rejected $(basename "$img"):"

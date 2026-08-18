@@ -6,6 +6,20 @@
 #include "fat_co.h"
 #include "wasmos_driver_abi.h"
 
+/* Little-endian 32-bit accessors for the FSInfo block, whose fields the
+ * specification defines at fixed byte offsets. */
+static uint32_t fat_read_u32(const uint8_t* p, uint32_t off) {
+    return (uint32_t)p[off] | ((uint32_t)p[off + 1u] << 8) | ((uint32_t)p[off + 2u] << 16) |
+           ((uint32_t)p[off + 3u] << 24);
+}
+
+static void fat_write_u32(uint8_t* p, uint32_t off, uint32_t v) {
+    p[off] = (uint8_t)(v & 0xFFu);
+    p[off + 1u] = (uint8_t)((v >> 8) & 0xFFu);
+    p[off + 2u] = (uint8_t)((v >> 16) & 0xFFu);
+    p[off + 3u] = (uint8_t)((v >> 24) & 0xFFu);
+}
+
 uint32_t fat_end_of_chain_marker(const fat_mount_t* mnt) {
     if (mnt->fat_type == FAT_TYPE_12) {
         return 0x0FFFu;
@@ -138,6 +152,19 @@ fat_r_t fat_fatent_write(fat_fatent_ctx_t* e, fat_block_t* blk, const fat_mount_
         e->sector_offset = e->fat_offset % mnt->bytes_per_sector;
 
         FAT_CO_READ(e, blk, e->fat_lba);
+        if (e->copy_idx == 0) {
+            /* What the entry held, for the FSInfo accounting below.  Read from
+             * the first copy only: the copies are kept identical. */
+            if (mnt->fat_type == FAT_TYPE_32) {
+                e->old_value =
+                    (fat_read_u32(fat_block_sector(blk), e->sector_offset) & 0x0FFFFFFFu);
+            } else {
+                e->old_value = (uint32_t)fat_block_sector(blk)[e->sector_offset];
+                if (e->sector_offset + 1u < mnt->bytes_per_sector) {
+                    e->old_value |= (uint32_t)fat_block_sector(blk)[e->sector_offset + 1u] << 8;
+                }
+            }
+        }
         if (mnt->fat_type == FAT_TYPE_32) {
             /* Four bytes, never straddling a sector edge. The top nibble of the
              * on-disk entry is reserved and belongs to the volume, not to the
@@ -160,6 +187,35 @@ fat_r_t fat_fatent_write(fat_fatent_ctx_t* e, fat_block_t* blk, const fat_mount_
             FAT_CO_READ(e, blk, e->fat_lba + 1u);
             fat_block_sector(blk)[0] = e->hi;
             FAT_CO_WRITE(e, blk, e->fat_lba + 1u);
+        }
+    }
+
+    /* Keep FAT32's FSInfo free-cluster count in step.  This function is the one
+     * place every allocation and free passes through, so the count is adjusted
+     * from what the entry HELD versus what it now holds: 0 means free.
+     *
+     * The specification also allows 0xFFFFFFFF ("unknown"), but fsck_msdos
+     * reports that as "Free space in FSInfo block is unset", so an accurate
+     * count is what actually keeps a volume clean.  When the volume arrived
+     * already unset the count is left alone -- recomputing means a full FAT
+     * scan, which is not worth doing on a metadata write.
+     *
+     * TODO: one FSInfo sector write per allocation change. Batching it behind a
+     * dirty flag needs a flush point the reactor does not have today. */
+    if (mnt->fat_type == FAT_TYPE_32 && mnt->fsinfo_lba != 0 && blk->free_count_valid &&
+        (e->old_value == 0) != (e->write_value == 0)) {
+        if (e->write_value == 0) {
+            blk->free_count++;
+        } else if (blk->free_count > 0) {
+            blk->free_count--;
+        }
+        e->fsinfo_lba = mnt->fsinfo_lba;
+        FAT_CO_READ(e, blk, e->fsinfo_lba);
+        /* Only touch a sector that really is an FSInfo block. */
+        if (fat_read_u32(fat_block_sector(blk), 0) == 0x41615252u &&
+            fat_read_u32(fat_block_sector(blk), 484) == 0x61417272u) {
+            fat_write_u32(fat_block_sector(blk), 488, blk->free_count); /* FSI_Free_Count */
+            FAT_CO_WRITE(e, blk, e->fsinfo_lba);
         }
     }
     FAT_CO_END(e);

@@ -49,6 +49,18 @@ typedef struct {
      * `sector` below is sized for. */
     uint32_t sector_bytes;
 
+    /* FAT32 FSInfo free-cluster accounting.  Seeded from the volume at mount and
+     * adjusted by fat_fatent_write, which is the single point every allocation
+     * and free passes through.  It lives here rather than in fat_mount_t
+     * because the allocation paths take the mount by const pointer, and because
+     * this is per-run state rather than volume geometry.
+     *
+     * `valid` is 0 when the volume arrived with the count already unset
+     * (0xFFFFFFFF): the specification permits that and recomputing it means a
+     * full FAT scan, so the count is then left alone rather than guessed. */
+    uint32_t free_count;
+    uint8_t free_count_valid;
+
     uint8_t sector[FAT_MAX_SECTOR_BYTES];
 
     fat_op_ctx_t* owner; /* active op to resume on completion */
@@ -60,6 +72,10 @@ void fat_block_configure(fat_block_t* blk, int32_t block_endpoint, int32_t reply
  * Refuses anything above FAT_MAX_SECTOR_BYTES or not a multiple of 512, leaving
  * the previous value; returns 0 on success, -1 otherwise. */
 int fat_block_set_sector_bytes(fat_block_t* blk, uint32_t bytes);
+
+/* Seed the FAT32 free-cluster count from the volume's FSInfo block and mark it
+ * maintainable.  Not called for a volume whose count arrived unset. */
+void fat_block_set_free_count(fat_block_t* blk, uint32_t count);
 
 /* Acquire the dedicated block-buffer physical handle.  Returns 0, or -1. */
 int fat_block_setup(fat_block_t* blk);

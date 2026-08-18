@@ -865,21 +865,6 @@ tail.
   destination, which is a small amount of work and worth doing next time
   something in that path changes.
 
-- [ ] [BUG][P2] Maintain or invalidate the FAT32 FSInfo free-cluster count.
-  `fsck_msdos` reports `Free space in FSInfo block (128937) not correct
-  (128936)` after the driver allocates a cluster: FSI_Free_Count is never
-  updated, so the hint drifts by exactly the number of clusters allocated. The
-  volume stays structurally sound -- FSInfo is advisory and the specification
-  defines 0xFFFFFFFF as "unknown" -- which is why
-  `scripts/run_fat_image_test.sh` allows this one warning through by name
-  rather than failing on it.
-
-  Writing 0xFFFFFFFF once per session on the first allocation is the cheap
-  correct fix and is what the "unknown" encoding exists for; maintaining a
-  running count is more work and more ways to be wrong. Either needs a mutable
-  mount, since `fat_fatent_write` takes `const fat_mount_t*` -- which is the
-  actual reason this is filed rather than fixed inline.
-
 - [ ] [FEATURE][P2] Round-trip a file's DATA on FAT32. The metadata mutation paths
   are covered (`tests/unit/test_fat_dir.c`: create, mkdir with its dot entries,
   rmdir freeing the chain, `fat_append_cluster_to_file` linking a chain, and
@@ -923,12 +908,16 @@ tail.
 - [ ] [ENHANCEMENT][P3] Let a slot run longer than one cluster span a GROWN
   directory. `fat_find_free_dir_slots` refuses `WASMOS_ERR_FS_NO_SPACE` when
   `needed` exceeds one cluster's entries and the directory had to grow, rather
-  than appending two clusters and running the LFN chain across them. Unreachable
-  today: `FAT_LFN_MAX` (255 characters) needs at most 21 entries, and the
-  smallest cluster this driver mounts holds 16 -- so only a 512-byte sector with
-  one sector per cluster could hit it, and then only with a name over ~200
-  characters. A free run that spans clusters is already handled when the
-  clusters exist; this is only the freshly-appended case.
+  than appending a second cluster and running the LFN chain across both.
+
+  Deliberately not fixed. It is unreachable -- `FAT_LFN_MAX` (255 characters)
+  needs at most 21 entries and the smallest cluster this driver mounts holds 16,
+  so it takes a name over ~200 characters on a 512-byte single-sector cluster --
+  and an attempt at it added a second growth pass reachable by a `goto` INTO a
+  switch-based coroutine body, jumping across resume points. That is more risk
+  to a working allocation path than the case is worth. A free run that spans
+  clusters is already handled when the clusters exist; only the
+  append-two-at-once case is missing.
 
 
 

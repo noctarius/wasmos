@@ -52,6 +52,13 @@ int fat_root_origin(const fat_mount_t* mnt, uint8_t* out_root, uint32_t* out_clu
     return 0;
 }
 
+/* Little-endian 32-bit read, for the FSInfo fields the specification places at
+ * fixed byte offsets. */
+static uint32_t fat_read_u32_at(const uint8_t* p, uint32_t off) {
+    return (uint32_t)p[off] | ((uint32_t)p[off + 1u] << 8) | ((uint32_t)p[off + 2u] << 16) |
+           ((uint32_t)p[off + 3u] << 24);
+}
+
 uint32_t fat_table_lba(const fat_mount_t* mnt) {
     return mnt->boot_lba + mnt->reserved_sectors;
 }
@@ -119,6 +126,14 @@ static int fat_parse_boot(fat_mount_t* mnt, const uint8_t* sector) {
      * on FAT32, where the root directory is an ordinary cluster chain and the
      * fixed root region above is empty. */
     mnt->root_cluster = ((const uint32_t*)bpb->ext)[2];
+    /* BPB_FSInfo, at offset 48 = ext[12..13]. Meaningful only on FAT32. */
+    mnt->fsinfo_lba = 0;
+    {
+        uint16_t fsinfo_sector = (uint16_t)((uint16_t)bpb->ext[12] | ((uint16_t)bpb->ext[13] << 8));
+        if (fsinfo_sector != 0 && fsinfo_sector != 0xFFFFu) {
+            mnt->fsinfo_lba = mnt->boot_lba + fsinfo_sector;
+        }
+    }
 
     /* Cluster-count thresholds per the FAT specification: < 4085 is FAT12,
      * < 65525 is FAT16, everything else FAT32 (which also has no fixed-size root
@@ -202,6 +217,20 @@ fat_r_t fat_geom_mount_step(fat_mount_t* mnt, fat_block_t* blk) {
     if (fat_block_set_sector_bytes(blk, mnt->bytes_per_sector) != 0) {
         fat_log("unsupported bytes_per_sector\n");
         FAT_CO_FAIL(mnt, blk, WASMOS_ERR_FS_CORRUPT);
+    }
+
+    /* Seed the FAT32 free-cluster count from the volume so allocation can keep
+     * it in step.  A volume that arrived with it unset stays unset: recomputing
+     * would mean scanning the whole FAT at mount. */
+    if (mnt->fat_type == FAT_TYPE_32 && mnt->fsinfo_lba != 0) {
+        FAT_CO_READ(mnt, blk, mnt->fsinfo_lba);
+        if (fat_read_u32_at(fat_block_sector(blk), 0) == 0x41615252u &&
+            fat_read_u32_at(fat_block_sector(blk), 484) == 0x61417272u) {
+            uint32_t seeded = fat_read_u32_at(fat_block_sector(blk), 488);
+            if (seeded != 0xFFFFFFFFu) {
+                fat_block_set_free_count(blk, seeded);
+            }
+        }
     }
     mnt->mounted = 1;
     FAT_CO_END(mnt);

@@ -18,6 +18,7 @@ int fat_name_eq(const char* a, const char* b) {
 }
 
 void fat_lfn_reset(fat_lfn_t* lfn) {
+    lfn->unit_count = 0;
     lfn->total = 0;
     lfn->seen = 0;
     lfn->valid = 0;
@@ -30,22 +31,116 @@ void fat_lfn_reset(fat_lfn_t* lfn) {
  * 0x0000 = end-of-name sentinel; 0xFFFF = unused padding slot.  A character with
  * a non-zero high byte is outside ASCII and becomes '?': name handling here is
  * ASCII-only, and fat_validate_lfn_name refuses to create such names. */
+/* Encode one code point as UTF-8.  Returns the byte count, or 0 when it does
+ * not fit in `cap`. */
+static uint32_t fat_utf8_encode(uint32_t cp, char* out, uint32_t cap) {
+    if (cp < 0x80u) {
+        if (cap < 1u) {
+            return 0;
+        }
+        out[0] = (char)cp;
+        return 1;
+    }
+    if (cp < 0x800u) {
+        if (cap < 2u) {
+            return 0;
+        }
+        out[0] = (char)(0xC0u | (cp >> 6));
+        out[1] = (char)(0x80u | (cp & 0x3Fu));
+        return 2;
+    }
+    if (cp < 0x10000u) {
+        if (cap < 3u) {
+            return 0;
+        }
+        out[0] = (char)(0xE0u | (cp >> 12));
+        out[1] = (char)(0x80u | ((cp >> 6) & 0x3Fu));
+        out[2] = (char)(0x80u | (cp & 0x3Fu));
+        return 3;
+    }
+    if (cap < 4u) {
+        return 0;
+    }
+    out[0] = (char)(0xF0u | (cp >> 18));
+    out[1] = (char)(0x80u | ((cp >> 12) & 0x3Fu));
+    out[2] = (char)(0x80u | ((cp >> 6) & 0x3Fu));
+    out[3] = (char)(0x80u | (cp & 0x3Fu));
+    return 4;
+}
+
+/* Decode one UTF-8 sequence.  Returns the bytes consumed and writes the code
+ * point, or 0 for a malformed sequence -- including an overlong encoding or a
+ * surrogate, both of which must be refused rather than re-encoded. */
+static uint32_t fat_utf8_decode(const char* s, uint32_t* out_cp) {
+    unsigned char c0 = (unsigned char)s[0];
+    unsigned char c1;
+    unsigned char c2;
+    unsigned char c3;
+    uint32_t cp;
+
+    if (c0 < 0x80u) {
+        *out_cp = c0;
+        return 1;
+    }
+    if ((c0 & 0xE0u) == 0xC0u) {
+        c1 = (unsigned char)s[1];
+        if ((c1 & 0xC0u) != 0x80u) {
+            return 0;
+        }
+        cp = ((uint32_t)(c0 & 0x1Fu) << 6) | (uint32_t)(c1 & 0x3Fu);
+        return cp < 0x80u ? 0u : (*out_cp = cp, 2u);
+    }
+    if ((c0 & 0xF0u) == 0xE0u) {
+        c1 = (unsigned char)s[1];
+        if ((c1 & 0xC0u) != 0x80u) {
+            return 0;
+        }
+        c2 = (unsigned char)s[2];
+        if ((c2 & 0xC0u) != 0x80u) {
+            return 0;
+        }
+        cp =
+            ((uint32_t)(c0 & 0x0Fu) << 12) | ((uint32_t)(c1 & 0x3Fu) << 6) | (uint32_t)(c2 & 0x3Fu);
+        if (cp < 0x800u || (cp >= 0xD800u && cp <= 0xDFFFu)) {
+            return 0;
+        }
+        *out_cp = cp;
+        return 3;
+    }
+    if ((c0 & 0xF8u) == 0xF0u) {
+        c1 = (unsigned char)s[1];
+        c2 = (unsigned char)s[2];
+        c3 = (unsigned char)s[3];
+        if ((c1 & 0xC0u) != 0x80u || (c2 & 0xC0u) != 0x80u || (c3 & 0xC0u) != 0x80u) {
+            return 0;
+        }
+        cp = ((uint32_t)(c0 & 0x07u) << 18) | ((uint32_t)(c1 & 0x3Fu) << 12) |
+             ((uint32_t)(c2 & 0x3Fu) << 6) | (uint32_t)(c3 & 0x3Fu);
+        if (cp < 0x10000u || cp > 0x10FFFFu) {
+            return 0;
+        }
+        *out_cp = cp;
+        return 4;
+    }
+    return 0; /* a continuation byte or an invalid lead */
+}
+
 static void fat_lfn_store_char(fat_lfn_t* lfn, uint32_t pos, uint16_t ch) {
     if (pos >= FAT_LFN_MAX) {
         return;
     }
     if (ch == 0x0000 || ch == 0xFFFF) {
-        if (lfn->buf[pos] == '\0') {
-            return;
+        /* End-of-name sentinel and padding: everything from here is absent. */
+        if (pos < lfn->unit_count) {
+            lfn->unit_count = pos;
         }
-        lfn->buf[pos] = '\0';
+        lfn->units[pos] = 0;
         return;
     }
-    if ((ch & 0xFF00u) != 0) {
-        lfn->buf[pos] = '?';
-        return;
+    lfn->units[pos] = ch;
+    if (pos + 1u > lfn->unit_count) {
+        lfn->unit_count = pos + 1u;
     }
-    lfn->buf[pos] = (char)(ch & 0xFFu);
 }
 
 /* NUL-terminate the reassembled LFN name after all ordinal entries have been
@@ -53,23 +148,47 @@ static void fat_lfn_store_char(fat_lfn_t* lfn, uint32_t pos, uint16_t ch) {
  * the number of entries present.  If fat_lfn_store_char already wrote a NUL
  * (end-of-name sentinel), the loop exits early. */
 void fat_lfn_finalize(fat_lfn_t* lfn) {
+    uint32_t out = 0;
+    uint32_t i = 0;
+
     if (!lfn->valid || lfn->total == 0) {
         return;
     }
-    uint32_t max_len = (uint32_t)lfn->total * 13u;
-    if (max_len > FAT_LFN_MAX) {
-        max_len = FAT_LFN_MAX;
-    }
-    for (uint32_t i = 0; i < max_len; ++i) {
-        if (lfn->buf[i] == '\0') {
+    /* UTF-16 to UTF-8, pairing surrogates.  A name that does not fit the output
+     * buffer invalidates the accumulator rather than truncating: the caller then
+     * uses the 8.3 short name, which is a name that can actually be opened. */
+    while (i < lfn->unit_count) {
+        uint16_t unit = lfn->units[i];
+        uint32_t cp = unit;
+        uint32_t n;
+
+        if (unit >= 0xD800u && unit <= 0xDBFFu) {
+            if (i + 1u >= lfn->unit_count) {
+                lfn->valid = 0; /* unpaired high surrogate */
+                return;
+            }
+            {
+                uint16_t low = lfn->units[i + 1u];
+                if (low < 0xDC00u || low > 0xDFFFu) {
+                    lfn->valid = 0;
+                    return;
+                }
+                cp = 0x10000u + (((uint32_t)(unit - 0xD800u) << 10) | (uint32_t)(low - 0xDC00u));
+                i++;
+            }
+        } else if (unit >= 0xDC00u && unit <= 0xDFFFu) {
+            lfn->valid = 0; /* unpaired low surrogate */
             return;
         }
+        n = fat_utf8_encode(cp, &lfn->buf[out], (uint32_t)sizeof(lfn->buf) - 1u - out);
+        if (n == 0) {
+            lfn->valid = 0; /* does not fit; fall back to the short name */
+            return;
+        }
+        out += n;
+        i++;
     }
-    if (max_len < sizeof(lfn->buf)) {
-        lfn->buf[max_len] = '\0';
-    } else {
-        lfn->buf[sizeof(lfn->buf) - 1] = '\0';
-    }
+    lfn->buf[out] = '\0';
 }
 
 /* Accumulate one 32-byte FAT Long File Name directory entry into lfn->buf.
@@ -138,8 +257,14 @@ int fat_entry_name_from_dirent(fat_lfn_t* lfn, const uint8_t* ent, char* out, ui
         return -1;
     }
 
-    if (lfn->valid && lfn->seen == lfn->total && lfn->buf[0]) {
+    /* `unit_count` is the accumulated-name test now: buf is produced BY
+     * fat_lfn_finalize, so testing buf[0] first would always fail.  Validity is
+     * re-tested after it, because a name that does not fit invalidates there and
+     * the entry falls back to its 8.3 short name. */
+    if (lfn->valid && lfn->seen == lfn->total && lfn->unit_count > 0) {
         fat_lfn_finalize(lfn);
+    }
+    if (lfn->valid && lfn->seen == lfn->total && lfn->unit_count > 0 && lfn->buf[0]) {
         while (lfn->buf[pos] && pos + 1 < out_len) {
             out[pos] = lfn->buf[pos];
             pos++;
@@ -165,29 +290,55 @@ int fat_entry_name_from_dirent(fat_lfn_t* lfn, const uint8_t* ent, char* out, ui
     return 0;
 }
 
-int fat_validate_lfn_name(const char* name, uint32_t* out_len) {
-    uint32_t len = 0;
+int fat_utf8_to_utf16(const char* name, uint16_t* out, uint32_t out_cap, uint32_t* out_len) {
+    uint32_t pos = 0;
+    uint32_t units = 0;
 
     if (!name || name[0] == '\0') {
         return -1;
     }
-    while (name[len]) {
-        unsigned char c = (unsigned char)name[len];
-        /* TODO: Extend new-file LFN creation beyond ASCII once the service
-         * grows a real UTF-16 normalization and alias policy. */
-        if (c < 0x20 || c > 0x7Eu || c == '"' || c == '*' || c == '/' || c == ':' || c == '<' ||
-            c == '>' || c == '?' || c == '\\' || c == '|') {
+    while (name[pos]) {
+        uint32_t cp = 0;
+        uint32_t n = fat_utf8_decode(&name[pos], &cp);
+
+        if (n == 0) {
+            return -1; /* malformed UTF-8 */
+        }
+        /* The characters FAT forbids, plus the control range.  Everything above
+         * ASCII is now allowed: it is a name, not a command. */
+        if (cp < 0x20u || cp == '"' || cp == '*' || cp == '/' || cp == ':' || cp == '<' ||
+            cp == '>' || cp == '?' || cp == '\\' || cp == '|') {
             return -1;
         }
-        len++;
-        if (len > FAT_LFN_MAX) {
-            return -1;
+        if (cp < 0x10000u) {
+            if (units + 1u > out_cap) {
+                return -1;
+            }
+            if (out) {
+                out[units] = (uint16_t)cp;
+            }
+            units += 1u;
+        } else {
+            if (units + 2u > out_cap) {
+                return -1;
+            }
+            if (out) {
+                cp -= 0x10000u;
+                out[units] = (uint16_t)(0xD800u + (cp >> 10));
+                out[units + 1u] = (uint16_t)(0xDC00u + (cp & 0x3FFu));
+            }
+            units += 2u;
         }
+        pos += n;
     }
     if (out_len) {
-        *out_len = len;
+        *out_len = units;
     }
     return 0;
+}
+
+int fat_validate_lfn_name(const char* name, uint32_t* out_len) {
+    return fat_utf8_to_utf16(name, NULL, FAT_LFN_MAX, out_len);
 }
 
 int fat_encode_short_name(const char* name, uint8_t out[11]) {
@@ -328,7 +479,7 @@ int fat_build_short_alias(const char* name, uint32_t ordinal, uint8_t out[11]) {
  *
  * Characters after the name end are filled with 0x0000 (first unused slot)
  * and 0xFFFF (all remaining padding slots). */
-void fat_fill_lfn_entry(uint8_t* entry, const char* name, uint32_t name_len, uint32_t ordinal,
+void fat_fill_lfn_entry(uint8_t* entry, const uint16_t* units, uint32_t name_len, uint32_t ordinal,
                         uint32_t total, uint8_t checksum) {
     /* byte offsets of the low byte of each UTF-16LE character in the entry */
     static const uint8_t positions[13] = {1, 3, 5, 7, 9, 14, 16, 18, 20, 22, 24, 28, 30};
@@ -354,7 +505,7 @@ void fat_fill_lfn_entry(uint8_t* entry, const char* name, uint32_t name_len, uin
 
         if (!ended) {
             if (pos < name_len) {
-                ch = (uint8_t)name[pos]; /* ASCII→UTF-16LE: high byte is 0 */
+                ch = units[pos];
             } else {
                 ch = 0x0000u; /* end-of-name sentinel */
                 ended = 1;

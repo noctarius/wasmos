@@ -200,8 +200,22 @@ typedef struct {
 
 /* Long-file-name accumulation state, gathered across the LFN entries that
  * precede a short entry during a directory scan.  One per scan context, so
- * scans cannot corrupt each other's names. */
+ * scans cannot corrupt each other's names.
+ *
+ * A name is UTF-16 on disk, so it is gathered into `units` -- LFN entries arrive
+ * highest-ordinal first and each carries a fixed slice, so accumulation has to
+ * be positional, which variable-length UTF-8 cannot be.  fat_lfn_finalize then
+ * converts the whole thing into `buf` as UTF-8.
+ *
+ * `buf` is deliberately not sized for the worst case: 255 UTF-16 units can need
+ * 765 UTF-8 bytes, and carrying that per scan context (three per in-flight
+ * operation, eight operations) is not worth it for names that do not occur. A
+ * name whose UTF-8 form does not fit marks the accumulator invalid, and the
+ * caller falls back to the entry's 8.3 short name -- a real name that can be
+ * opened, rather than a truncated one that cannot. */
 typedef struct {
+    uint16_t units[FAT_LFN_MAX];
+    uint32_t unit_count;
     char buf[FAT_LFN_MAX + 1u];
     uint8_t total;
     uint8_t seen;
@@ -476,7 +490,8 @@ typedef struct {
     uint8_t root;
     /* Name handling. */
     char name[FAT_MAX_PATH];
-    uint32_t name_len;
+    uint32_t name_len;                /* in UTF-16 units: what sizes the LFN chain */
+    uint16_t name_units[FAT_LFN_MAX]; /* the name as it goes on disk */
     uint8_t short_name[11];
     uint8_t exact_short;
     uint32_t ordinal; /* alias-search cursor */

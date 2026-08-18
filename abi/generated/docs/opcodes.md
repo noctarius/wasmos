@@ -94,6 +94,7 @@ endpoint-scoped and may repeat across subsystems.
 | `FS_IPC_CHDIR_REQ` | 0x412 | req |  |
 | `FS_IPC_READ_APP_REQ` | 0x413 | req |  |
 | `FS_IPC_READ_PATH_REQ` | 0x414 | req |  |
+| `FS_IPC_RENAME_REQ` | 0x415 | req |  |
 | `FS_IPC_RESP` | 0x480 | resp |  |
 | `FS_IPC_STREAM` | 0x481 | resp |  |
 | `FS_IPC_ERROR` | 0x4FF | error |  |

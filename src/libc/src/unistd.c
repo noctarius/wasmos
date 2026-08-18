@@ -437,6 +437,48 @@ int unlink(const char* path) {
     return libc_fs_path_op(FS_IPC_UNLINK_REQ, path);
 }
 
+int rename(const char* old_path, const char* new_path) {
+    size_t old_len;
+    size_t new_len;
+    int32_t bid;
+    int32_t b1;
+    int rc;
+
+    if (!old_path || !new_path) {
+        return -1;
+    }
+    old_len = strlen(old_path);
+    new_len = strlen(new_path);
+    if (old_len == 0 || new_len == 0) {
+        return -1;
+    }
+    /* Both paths travel in one buffer, each NUL-terminated: source at 0,
+     * destination at old_len + 1.  fat_op_rename derives the second offset
+     * rather than being told it, so the two cannot disagree. */
+    if (old_len + new_len + 2u > (size_t)wasmos_xfer_buffer_size()) {
+        return -1;
+    }
+    bid = wasmos_xfer_buffer_acquire((int32_t)(old_len + new_len + 2u));
+    if (bid < 0) {
+        return -1;
+    }
+    if (wasmos_xfer_buffer_write(bid, old_path, (int32_t)(old_len + 1u), 0) != 0 ||
+        wasmos_xfer_buffer_write(bid, new_path, (int32_t)(new_len + 1u), (int32_t)(old_len + 1u)) !=
+            0) {
+        (void)wasmos_xfer_buffer_release(bid);
+        return -1;
+    }
+    b1 = libc_fs_grant(bid);
+    if (b1 < 0) {
+        (void)wasmos_xfer_buffer_release(bid);
+        return -1;
+    }
+    rc =
+        libc_fs_request(FS_IPC_RENAME_REQ, (int32_t)old_len, (int32_t)new_len, bid, b1, NULL, NULL);
+    (void)wasmos_xfer_buffer_release(bid);
+    return rc;
+}
+
 int mkdir(const char* path, mode_t mode) {
     /* TODO: Honor mode bits if WASMOS grows real permission semantics. */
     (void)mode;

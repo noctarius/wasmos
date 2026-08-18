@@ -173,6 +173,7 @@ export const FS_IPC_READDIR_REQ: i32 = 0x410;
 export const FS_IPC_CHDIR_REQ: i32 = 0x412;
 export const FS_IPC_READ_APP_REQ: i32 = 0x413;
 export const FS_IPC_READ_PATH_REQ: i32 = 0x414;
+export const FS_IPC_RENAME_REQ: i32 = 0x415;
 export const FS_IPC_RESP: i32 = 0x480;
 export const FS_IPC_STREAM: i32 = 0x481;
 export const FS_IPC_ERROR: i32 = 0x4FF;

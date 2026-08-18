@@ -825,18 +825,28 @@ tail.
 
 ## Filesystems and Storage
 
-- [ ] [FEATURE][P2] Implement rename/move. There is no rename operation anywhere in
-  the stack: `fat_op_t` has no `FAT_OP_RENAME`, `abi/opcodes.yaml` has no
-  `FS_IPC_RENAME_*`, and there is no libc entry point, so a rename today means
-  copy-then-unlink in the caller. The FAT pieces already exist -- an in-place
-  rename within one directory is a short-name/LFN rewrite over
-  `fat_find_free_dir_slots` + `fat_write_dir_entry` +
-  `fat_delete_dir_entry_chain`, and a move between directories is the same
-  entry written elsewhere with the start cluster preserved. Two constraints
-  make it more than a rewrite: the LFN chain length changes with the new name,
-  so the slot search has to run again and can fail with the directory full; and
-  a moved DIRECTORY needs its `..` updated, including the 0-when-parent-is-root
-  rule that `fat_create_directory` now applies.
+- [ ] [ENHANCEMENT][P2] Decide whether rename should REPLACE an existing destination.
+  `fat_rename_path` refuses `WASMOS_ERR_FS_EXISTS` today, where POSIX
+  `rename()` overwrites. Replacing means freeing the destination's cluster
+  chain inside an operation that already has no rollback, so it was left out of
+  the first cut rather than half-done. If it is added, the order matters: the
+  new entry must be written before anything of the old one is released, as the
+  current implementation does, so an interruption leaves the chain reachable
+  under two names rather than none.
+
+  Also unresolved by that first cut: a cross-mount rename is refused by
+  `route_rename_request` in fs-manager, because moving between filesystems
+  means copying data and no backend can express it. A `mv` that spans mounts
+  needs copy-then-unlink in the caller, which nothing implements yet.
+
+- [ ] [ENHANCEMENT][P3] Let rename target a directory whose first cluster is full.
+  It inherits the `fat_find_free_dir_slots` limitation directly above: writing
+  the new name needs a free slot, so renaming INTO a directory whose first
+  cluster is full fails `WASMOS_ERR_FS_NO_SPACE` even when the volume is nearly
+  empty. `create` has the same limit, so rename is no worse -- it just makes the
+  gap easier to hit, because renaming a file inside a full directory is an
+  ordinary thing to do. Fixed by the slot-addressing item above; no separate
+  work.
 
 - [ ] [TEST][P2] Drive `fat_op_read` as well as `fat_op_write`.
   `tests/unit/test_fat_image.c` now drives `fat_op_write` end to end (request

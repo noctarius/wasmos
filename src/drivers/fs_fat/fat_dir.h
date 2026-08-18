@@ -111,6 +111,20 @@ fat_r_t fat_create_directory(fat_mkdir_ctx_t* m, fat_block_t* blk, const fat_mou
 fat_r_t fat_remove_path(fat_remove_ctx_t* r, fat_block_t* blk, const fat_mount_t* mnt,
                         const fat_open_file_t* files, uint32_t file_count);
 
+/* Rename or move r->old_path to r->new_path, preserving the entry's start
+ * cluster and size -- the file's data is never read or rewritten.  Inputs on
+ * `r`: old_path, new_path, source.
+ *
+ * Refuses WASMOS_ERR_FS_NOT_FOUND (no source), WASMOS_ERR_FS_BUSY (the source
+ * is open, whose descriptor records the entry's location), and
+ * WASMOS_ERR_FS_EXISTS (the destination exists -- this does NOT overwrite, see
+ * docs/TASKS.md).  A directory that changes parents has its '..' rewritten.
+ *
+ * The new entry is written before the old one is tombstoned, so an interruption
+ * leaves the chain reachable under two names rather than under none. */
+fat_r_t fat_rename_path(fat_rename_ctx_t* r, fat_block_t* blk, const fat_mount_t* mnt,
+                        const fat_open_file_t* files, uint32_t file_count);
+
 /* --- Directory navigation (READDIR / CHDIR).  Contexts in fat_types.h. --- */
 
 /* Stream the entries of the CURRENT directory (root region when mnt->cwd_root,

@@ -610,6 +610,20 @@ tail.
   `PM_SPAWN_INTERNAL_ERR_*` (internal by name) and `WAMOS_SCRIPT_ERR_*` /
   `SCRIPT_BROKER_ERR_*`, which are service startup/exit statuses returned from
   `initialize()`, not IPC reply codes.
+- [ ] [BUG][P2] Make the ABI re-gen check fail loudly when PyYAML is missing rather
+  than skipping. `scripts/gen_abi_*.py --check` prints
+  `skipping (PyYAML is required ...)` and exits 0, so on a machine without
+  PyYAML `cmake --build build --target lint` reports success while verifying
+  none of the generated ABI. That is not hypothetical: a `clang-format -i` sweep
+  re-wrapped `abi/generated/c/wasmos_imports.h` and `wasmos_opcodes.h`, the
+  local gate passed, and CI caught it only because its runners have PyYAML.
+
+  A skipped check should be visible in the gate's exit status, or the gate
+  should refuse to run without the dependency. Related: generated files are
+  reformattable at all, so a formatter sweep can silently desynchronise them
+  from their generator -- excluding `abi/generated/` from the format pass would
+  remove the hazard at its source.
+
 - [ ] [ENHANCEMENT][P2] Widen the advisory `-1` lint: it greps for a literal `return -1;`,
   which is why the `fs_init` reply-code default and the named `*_STATUS_` `-1`
   values were invisible to it. It should also flag a reply code arg that is a

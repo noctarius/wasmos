@@ -104,6 +104,7 @@ fat_r_t fat_find_in_dir(fat_dir_scan_ctx_t* s, fat_block_t* blk, const fat_mount
 
     s->entries_left = s->entry_limit;
     s->hops = 0;
+    s->first_cluster = s->cur_cluster;
     fat_lfn_reset(&s->lfn);
 
     /* Outer loop advances the directory: over the sectors of the current run,
@@ -151,6 +152,15 @@ fat_r_t fat_find_in_dir(fat_dir_scan_ctx_t* s, fat_block_t* blk, const fat_mount
                 s->found.dir_lba = s->dir_lba;
                 s->found.dir_sector = s->cur_sector;
                 s->found.dir_index = s->scan_index;
+                /* `hops` is the number of clusters advanced so far, so it IS
+                 * the current cluster's ordinal within the chain. */
+                s->found.dir_entry_index =
+                    s->hops * (s->cur_root
+                                   ? 0u
+                                   : mnt->sectors_per_cluster * (mnt->bytes_per_sector / 32u)) +
+                    s->cur_sector * (mnt->bytes_per_sector / 32u) + s->scan_index;
+                s->found.dir_first_cluster = s->cur_root ? 0u : s->first_cluster;
+                s->found.dir_root = s->cur_root;
                 fat_lfn_reset(&s->lfn);
                 FAT_CO_DONE(s);
             }
@@ -492,67 +502,207 @@ fat_r_t fat_find_free_dir_slots(fat_findslots_ctx_t* f, fat_block_t* blk, const 
     if (f->needed == 0) {
         FAT_CO_FAIL(f, blk, WASMOS_ERR_FS_NO_SPACE);
     }
+    entries_per_sector = mnt->bytes_per_sector / 32u;
+    if (entries_per_sector == 0 || f->entry_limit == 0) {
+        FAT_CO_FAIL(f, blk, WASMOS_ERR_FS_NO_SPACE);
+    }
     f->run = 0;
     f->run_start = 0;
+    f->base = 0;
+    f->hops = 0;
+    f->grew = 0;
+    f->cur_cluster = f->first_cluster;
+    f->cur_lba = f->dir_lba;
 
-    for (f->entry = 0; f->entry < f->entry_limit; ++f->entry) {
-        entries_per_sector = mnt->bytes_per_sector / 32u;
-        f->sector = f->entry / entries_per_sector;
-        index = f->entry % entries_per_sector;
+    /* Outer loop advances a cluster at a time.  `entry` is CHAIN-RELATIVE --
+     * the index the caller gets back and hands to fat_write_dir_entry, which
+     * resolves it through fat_dir_entry_locate.  A run of free slots may
+     * therefore straddle a cluster boundary, which is exactly what the old
+     * flat-offset addressing could not express. */
+    for (;;) {
+        for (f->entry = f->base; f->entry < f->base + f->entry_limit; ++f->entry) {
+            entries_per_sector = mnt->bytes_per_sector / 32u;
+            f->sector = (f->entry - f->base) / entries_per_sector;
+            index = (f->entry - f->base) % entries_per_sector;
 
-        if (f->sector >= f->dir_sectors) {
-            FAT_CO_FAIL(f, blk, WASMOS_ERR_FS_NO_SPACE);
-        }
-        /* Load the sector once at its first entry (index 0). */
-        if (index == 0) {
-            FAT_CO_READ(f, blk, f->dir_lba + f->sector);
-        }
-        /* Recompute the in-sector index from ctx: `index` is a C local and the
-         * resume switch jumps past its initializer after the FAT_CO_READ. */
-        ent = fat_block_sector(blk) + (f->entry % (mnt->bytes_per_sector / 32u)) * 32u;
-        if (ent[0] == 0x00 || ent[0] == 0xE5) {
-            if (f->run == 0) {
-                f->run_start = f->entry;
+            if (f->sector >= f->dir_sectors) {
+                break;
             }
-            f->run++;
-            if (f->run >= f->needed) {
-                f->out_entry = f->run_start;
-                f->result = 0;
-                FAT_CO_DONE(f);
+            /* Load the sector once, at its first entry. */
+            if (index == 0) {
+                FAT_CO_READ(f, blk, f->cur_lba + f->sector);
             }
-            continue;
+            /* Recompute from ctx: `index` is a C local and the resume switch
+             * jumps past its initializer after the FAT_CO_READ. */
+            ent = fat_block_sector(blk) +
+                  ((f->entry - f->base) % (mnt->bytes_per_sector / 32u)) * 32u;
+            if (ent[0] == 0x00 || ent[0] == 0xE5) {
+                if (f->run == 0) {
+                    f->run_start = f->entry;
+                }
+                f->run++;
+                if (f->run >= f->needed) {
+                    f->out_entry = f->run_start;
+                    f->result = 0;
+                    FAT_CO_DONE(f);
+                }
+                continue;
+            }
+            f->run = 0;
         }
-        f->run = 0;
+
+        if (f->root) {
+            break; /* the fixed root region cannot grow */
+        }
+        /* Hop to the next cluster.  A run in progress is NOT reset: consecutive
+         * free slots continue across the boundary. */
+        if (f->hops >= fat_total_clusters(mnt)) {
+            FAT_CO_FAIL(f, blk, WASMOS_ERR_FS_CORRUPT);
+        }
+        f->hops++;
+        f->chain.cont = 0;
+        f->chain.cluster = f->cur_cluster;
+        FAT_CO_AWAIT(f, fat_chain_next(&f->chain, blk, mnt));
+        if (f->chain.next == 0) {
+            break; /* end of chain: the directory is full */
+        }
+        f->cur_cluster = f->chain.next;
+        f->cur_lba = fat_lba_for_cluster(mnt, f->cur_cluster);
+        f->dir_sectors = mnt->sectors_per_cluster;
+        if (f->cur_lba == 0) {
+            FAT_CO_FAIL(f, blk, WASMOS_ERR_FS_CORRUPT);
+        }
+        f->base += f->entry_limit;
     }
 
-    FAT_CO_FAIL(f, blk, WASMOS_ERR_FS_NO_SPACE);
+    /* Every cluster is full.  GROW the directory: allocate a cluster, mark it
+     * end-of-chain, zero it so every slot reads free, then link it on.  The new
+     * cluster is written and terminated BEFORE the link, so an interruption
+     * leaves an allocated-but-unreferenced cluster rather than a directory whose
+     * last cluster contains garbage. */
+    if (f->root || f->grew) {
+        FAT_CO_FAIL(f, blk, WASMOS_ERR_FS_NO_SPACE);
+    }
+    f->findfree.cont = 0;
+    FAT_CO_AWAIT(f, fat_find_free_cluster(&f->findfree, blk, mnt));
+    f->grow_cluster = f->findfree.result;
+
+    f->fatent.cont = 0;
+    f->fatent.cluster = f->grow_cluster;
+    f->fatent.write_value = fat_end_of_chain_marker(mnt);
+    FAT_CO_AWAIT(f, fat_fatent_write(&f->fatent, blk, mnt));
+
+    f->cur_lba = fat_lba_for_cluster(mnt, f->grow_cluster);
+    if (f->cur_lba == 0) {
+        FAT_CO_FAIL(f, blk, WASMOS_ERR_FS_CORRUPT);
+    }
+    for (f->zero_sector = 0; f->zero_sector < mnt->sectors_per_cluster; ++f->zero_sector) {
+        for (index = 0; index < mnt->bytes_per_sector; ++index) {
+            fat_block_sector(blk)[index] = 0;
+        }
+        FAT_CO_WRITE(f, blk, f->cur_lba + f->zero_sector);
+    }
+
+    f->fatent.cont = 0;
+    f->fatent.cluster = f->cur_cluster; /* the old last cluster */
+    f->fatent.write_value = f->grow_cluster;
+    FAT_CO_AWAIT(f, fat_fatent_write(&f->fatent, blk, mnt));
+
+    /* The whole new cluster is free, so the run the caller needs starts at its
+     * first entry.  A `needed` larger than one cluster is refused rather than
+     * chained across two fresh clusters: no name in this driver needs it
+     * (FAT_LFN_MAX yields at most 21 entries). */
+    f->base += f->entry_limit;
+    if (f->needed > f->entry_limit) {
+        FAT_CO_FAIL(f, blk, WASMOS_ERR_FS_NO_SPACE);
+    }
+    f->cur_cluster = f->grow_cluster;
+    f->dir_sectors = mnt->sectors_per_cluster;
+    f->grew = 1;
+    f->out_entry = f->base;
+    f->result = 0;
+    FAT_CO_DONE(f);
+
     FAT_CO_END(f);
 }
 
-fat_r_t fat_write_dir_entry(fat_writeent_ctx_t* w, fat_block_t* blk, const fat_mount_t* mnt) {
+fat_r_t fat_dir_entry_locate(fat_dirloc_ctx_t* l, fat_block_t* blk, const fat_mount_t* mnt) {
     uint32_t entries_per_sector;
+    uint32_t entries_per_cluster;
+    uint32_t within;
+
+    FAT_CO_BEGIN(l);
+
+    entries_per_sector = mnt->bytes_per_sector / 32u;
+    if (entries_per_sector == 0 || mnt->sectors_per_cluster == 0) {
+        FAT_CO_FAIL(l, blk, WASMOS_ERR_FS_CORRUPT);
+    }
+
+    if (l->root) {
+        /* The fixed root region is one contiguous run, so the index addresses
+         * it directly. */
+        if (l->entry_index >= mnt->root_entry_count) {
+            FAT_CO_FAIL(l, blk, WASMOS_ERR_FS_NO_SPACE);
+        }
+        l->out_lba = mnt->root_dir_lba + (l->entry_index / entries_per_sector);
+        l->out_index = l->entry_index % entries_per_sector;
+        FAT_CO_DONE(l);
+    }
+
+    if (l->first_cluster < 2) {
+        FAT_CO_FAIL(l, blk, WASMOS_ERR_FS_CORRUPT);
+    }
+    entries_per_cluster = mnt->sectors_per_cluster * entries_per_sector;
+    l->cluster_skip = l->entry_index / entries_per_cluster;
+    within = l->entry_index % entries_per_cluster;
+    l->cur_cluster = l->first_cluster;
+
+    while (l->cluster_skip > 0) {
+        l->chain.cont = 0;
+        l->chain.cluster = l->cur_cluster;
+        FAT_CO_AWAIT(l, fat_chain_next(&l->chain, blk, mnt));
+        if (l->chain.next == 0) {
+            /* The index names an entry past the end of the chain. */
+            FAT_CO_FAIL(l, blk, WASMOS_ERR_FS_NO_SPACE);
+        }
+        l->cur_cluster = l->chain.next;
+        l->cluster_skip--;
+    }
+
+    l->out_lba = fat_lba_for_cluster(mnt, l->cur_cluster) + (within / entries_per_sector);
+    l->out_index = within % entries_per_sector;
+    if (l->out_lba == 0) {
+        FAT_CO_FAIL(l, blk, WASMOS_ERR_FS_CORRUPT);
+    }
+    FAT_CO_END(l);
+}
+
+fat_r_t fat_write_dir_entry(fat_writeent_ctx_t* w, fat_block_t* blk, const fat_mount_t* mnt) {
     uint8_t* ent;
     uint32_t i;
 
     FAT_CO_BEGIN(w);
 
-    entries_per_sector = mnt->bytes_per_sector / 32u;
-    w->sector = w->entry_index / entries_per_sector;
-    w->index = w->entry_index % entries_per_sector;
+    w->loc.cont = 0;
+    w->loc.root = w->root;
+    w->loc.first_cluster = w->first_cluster;
+    w->loc.entry_index = w->entry_index;
+    FAT_CO_AWAIT(w, fat_dir_entry_locate(&w->loc, blk, mnt));
+    w->sector = w->loc.out_lba;
+    w->index = w->loc.out_index;
 
-    FAT_CO_READ(w, blk, w->dir_lba + w->sector);
+    FAT_CO_READ(w, blk, w->sector);
     ent = fat_block_sector(blk) + w->index * 32u;
     for (i = 0; i < 32u; ++i) {
         ent[i] = w->entry[i];
     }
-    FAT_CO_WRITE(w, blk, w->dir_lba + w->sector);
+    FAT_CO_WRITE(w, blk, w->sector);
 
     FAT_CO_END(w);
 }
 
 fat_r_t fat_delete_dir_entry_chain(fat_delchain_ctx_t* d, fat_block_t* blk,
                                    const fat_mount_t* mnt) {
-    uint32_t entries_per_sector;
     uint8_t* ent;
     uint32_t i;
 
@@ -566,6 +716,8 @@ fat_r_t fat_delete_dir_entry_chain(fat_delchain_ctx_t* d, fat_block_t* blk,
     /* Tombstone the short entry itself. */
     d->wr.cont = 0;
     d->wr.dir_lba = d->dir_lba;
+    d->wr.first_cluster = d->first_cluster;
+    d->wr.root = d->root;
     d->wr.entry_index = d->entry_index;
     for (i = 0; i < 32u; ++i) {
         d->wr.entry[i] = d->tombstone[i];
@@ -576,18 +728,24 @@ fat_r_t fat_delete_dir_entry_chain(fat_delchain_ctx_t* d, fat_block_t* blk,
      * entries_per_sector is recomputed each iteration: the resume switch jumps
      * past a pre-loop initializer, so a cross-yield C local would be garbage. */
     while (d->entry_index > 0) {
-        entries_per_sector = mnt->bytes_per_sector / 32u;
         d->prev_index = d->entry_index - 1u;
-        d->sector = d->prev_index / entries_per_sector;
-        d->index = d->prev_index % entries_per_sector;
+        d->loc.cont = 0;
+        d->loc.root = d->root;
+        d->loc.first_cluster = d->first_cluster;
+        d->loc.entry_index = d->prev_index;
+        FAT_CO_AWAIT(d, fat_dir_entry_locate(&d->loc, blk, mnt));
+        d->sector = d->loc.out_lba;
+        d->index = d->loc.out_index;
 
-        FAT_CO_READ(d, blk, d->dir_lba + d->sector);
+        FAT_CO_READ(d, blk, d->sector);
         ent = fat_block_sector(blk) + d->index * 32u;
         if ((ent[11] & 0x0Fu) != 0x0Fu) {
             break; /* not an LFN entry: chain ends here */
         }
         d->wr.cont = 0;
         d->wr.dir_lba = d->dir_lba;
+        d->wr.first_cluster = d->first_cluster;
+        d->wr.root = d->root;
         d->wr.entry_index = d->prev_index;
         for (i = 0; i < 32u; ++i) {
             d->wr.entry[i] = d->tombstone[i];
@@ -686,6 +844,8 @@ fat_r_t fat_create_path_entry(fat_create_ctx_t* c, fat_block_t* blk, const fat_m
     c->findslots.dir_lba = c->dir_lba;
     c->findslots.dir_sectors = c->dir_sectors;
     c->findslots.entry_limit = c->entry_limit;
+    c->findslots.first_cluster = c->parent.found.cluster;
+    c->findslots.root = c->root;
     c->findslots.needed = c->needed_entries;
     FAT_CO_AWAIT(c, fat_find_free_dir_slots(&c->findslots, blk, mnt));
     c->slot_entry = c->findslots.out_entry;
@@ -698,6 +858,8 @@ fat_r_t fat_create_path_entry(fat_create_ctx_t* c, fat_block_t* blk, const fat_m
                 c->entry, c->name, c->name_len, c->lfn_count - c->i, c->lfn_count, c->checksum);
             c->wr.cont = 0;
             c->wr.dir_lba = c->dir_lba;
+            c->wr.first_cluster = c->parent.found.cluster;
+            c->wr.root = c->root;
             c->wr.entry_index = c->slot_entry + c->i;
             for (i = 0; i < 32u; ++i) {
                 c->wr.entry[i] = c->entry[i];
@@ -722,6 +884,8 @@ fat_r_t fat_create_path_entry(fat_create_ctx_t* c, fat_block_t* blk, const fat_m
     c->entry[31] = (uint8_t)((c->size >> 24) & 0xFFu);
     c->wr.cont = 0;
     c->wr.dir_lba = c->dir_lba;
+    c->wr.first_cluster = c->parent.found.cluster;
+    c->wr.root = c->root;
     c->wr.entry_index = c->slot_entry;
     for (i = 0; i < 32u; ++i) {
         c->wr.entry[i] = c->entry[i];
@@ -733,8 +897,14 @@ fat_r_t fat_create_path_entry(fat_create_ctx_t* c, fat_block_t* blk, const fat_m
     c->found.cluster = c->cluster;
     c->found.size = c->size;
     c->found.dir_lba = c->dir_lba;
-    c->found.dir_sector = c->slot_entry / (mnt->bytes_per_sector / 32u);
-    c->found.dir_index = c->slot_entry % (mnt->bytes_per_sector / 32u);
+    /* The physical slot comes from the locator the short-entry write just
+     * resolved; deriving it from slot_entry would assume one cluster again. */
+    c->found.dir_lba = c->wr.loc.out_lba;
+    c->found.dir_sector = 0;
+    c->found.dir_index = c->wr.loc.out_index;
+    c->found.dir_entry_index = c->slot_entry;
+    c->found.dir_first_cluster = c->root ? 0u : c->parent.found.cluster;
+    c->found.dir_root = c->root;
     FAT_CO_END(c);
 }
 
@@ -997,9 +1167,11 @@ fat_r_t fat_remove_path(fat_remove_ctx_t* r, fat_block_t* blk, const fat_mount_t
             FAT_CO_FAIL(r, blk, WASMOS_ERR_FS_NOT_EMPTY);
         }
         /* rmdir order: delete the entry chain, THEN free the clusters. */
-        r->entry_index = r->entry.dir_sector * (mnt->bytes_per_sector / 32u) + r->entry.dir_index;
+        r->entry_index = r->entry.dir_entry_index;
         r->delchain.cont = 0;
         r->delchain.dir_lba = r->entry.dir_lba;
+        r->delchain.first_cluster = r->entry.dir_first_cluster;
+        r->delchain.root = r->entry.dir_root;
         r->delchain.entry_index = r->entry_index;
         FAT_CO_AWAIT(r, fat_delete_dir_entry_chain(&r->delchain, blk, mnt));
         r->freechain.cont = 0;
@@ -1022,9 +1194,11 @@ fat_r_t fat_remove_path(fat_remove_ctx_t* r, fat_block_t* blk, const fat_mount_t
         r->freechain.cluster = r->entry.cluster;
         FAT_CO_AWAIT(r, fat_free_cluster_chain(&r->freechain, blk, mnt));
     }
-    r->entry_index = r->entry.dir_sector * (mnt->bytes_per_sector / 32u) + r->entry.dir_index;
+    r->entry_index = r->entry.dir_entry_index;
     r->delchain.cont = 0;
     r->delchain.dir_lba = r->entry.dir_lba;
+    r->delchain.first_cluster = r->entry.dir_first_cluster;
+    r->delchain.root = r->entry.dir_root;
     r->delchain.entry_index = r->entry_index;
     FAT_CO_AWAIT(r, fat_delete_dir_entry_chain(&r->delchain, blk, mnt));
 
@@ -1095,9 +1269,11 @@ fat_r_t fat_rename_path(fat_rename_ctx_t* r, fat_block_t* blk, const fat_mount_t
 
     /* Now drop the old name.  Only the directory entry goes; the cluster chain
      * stays, which is the whole point. */
-    r->entry_index = r->entry.dir_sector * (mnt->bytes_per_sector / 32u) + r->entry.dir_index;
+    r->entry_index = r->entry.dir_entry_index;
     r->delchain.cont = 0;
     r->delchain.dir_lba = r->entry.dir_lba;
+    r->delchain.first_cluster = r->entry.dir_first_cluster;
+    r->delchain.root = r->entry.dir_root;
     r->delchain.entry_index = r->entry_index;
     FAT_CO_AWAIT(r, fat_delete_dir_entry_chain(&r->delchain, blk, mnt));
 

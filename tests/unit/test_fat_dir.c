@@ -1328,6 +1328,193 @@ static void test_rename_refuses_an_open_source(void) {
     free_volume();
 }
 
+/* --- directory slots past the first cluster ----------------------------- */
+
+/* Clusters in `first`'s chain. Distinguishes "reused a free slot" from "grew
+ * the directory", which resolve identically from a caller's point of view. */
+static uint32_t chain_length(fat_block_t* blk, const fat_mount_t* mnt, uint32_t first) {
+    fat_chainwalk_ctx_t walk;
+
+    memset(&walk, 0, sizeof(walk));
+    walk.cluster = first;
+    if (fat_chain_walk(&walk, blk, mnt) != FAT_R_DONE) {
+        return 0;
+    }
+    return walk.hops;
+}
+
+/* Regression: 2026-08-18-fat-dir-slot-addressing -- fat_find_free_dir_slots
+ * searched only a directory's first cluster, so a create into a directory whose
+ * first cluster is full failed WASMOS_ERR_FS_NO_SPACE even with free slots
+ * waiting in the next cluster. The fixture's /SUB is exactly that shape: its
+ * first cluster is filled to the last entry, its second holds one entry and
+ * then free space. */
+static void test_create_uses_a_free_slot_in_a_later_cluster(void) {
+    fat_mount_t mnt;
+    fat_block_t blk;
+    fat_create_ctx_t c;
+    fat_resolve_ctx_t res;
+    fat_r_t rc;
+
+    build_volume(0);
+    mount_volume(&mnt, &blk);
+
+    memset(&c, 0, sizeof(c));
+    c.path = "/SUB/LATER.TXT";
+    c.source = -1;
+    rc = fat_create_empty_file(&c, &blk, &mnt);
+    CHECK(rc == FAT_R_DONE, "creating into a full first cluster succeeds");
+
+    memset(&res, 0, sizeof(res));
+    res.path = "/SUB/LATER.TXT";
+    res.source = -1;
+    rc = fat_resolve_path(&res, &blk, &mnt);
+    CHECK(rc == FAT_R_DONE && res.found.valid, "the created entry resolves");
+
+    /* Crucially: the existing free slot must be REUSED, not grown past. A
+     * search that never hopped would fall through to directory growth, the
+     * entry would still resolve, and every other assertion here would pass --
+     * so the chain length is what distinguishes the two. */
+    CHECK(chain_length(&blk, &mnt, T_DIR_FIRST_CLUSTER) == 2u,
+          "the directory did not grow: the free slot in cluster 2 was used");
+
+    /* The directory's existing entries must survive: a slot search that walked
+     * off the end could otherwise overwrite one. */
+    memset(&res, 0, sizeof(res));
+    res.path = "/SUB/TARGET.TXT";
+    res.source = -1;
+    (void)fat_resolve_path(&res, &blk, &mnt);
+    CHECK(res.found.valid == 1, "the second cluster's existing entry survives");
+    memset(&res, 0, sizeof(res));
+    res.path = "/SUB/FILLER00";
+    res.source = -1;
+    (void)fat_resolve_path(&res, &blk, &mnt);
+    CHECK(res.found.valid == 1, "the first cluster's entries survive");
+
+    free_volume();
+}
+
+/* Renaming needs a free slot for the new name, so it inherited the same limit. */
+static void test_rename_into_a_directory_past_its_first_cluster(void) {
+    fat_mount_t mnt;
+    fat_block_t blk;
+    fat_rename_ctx_t r;
+    fat_resolve_ctx_t res;
+    fat_r_t rc;
+
+    build_volume(0);
+    mount_volume(&mnt, &blk);
+
+    memset(&r, 0, sizeof(r));
+    r.old_path = "/INROOT.TXT";
+    r.new_path = "/SUB/MOVEDIN.TXT";
+    r.source = -1;
+    rc = fat_rename_path(&r, &blk, &mnt, NULL, 0);
+    CHECK(rc == FAT_R_DONE, "moving into a directory with a full first cluster succeeds");
+
+    memset(&res, 0, sizeof(res));
+    res.path = "/SUB/MOVEDIN.TXT";
+    res.source = -1;
+    rc = fat_resolve_path(&res, &blk, &mnt);
+    CHECK(rc == FAT_R_DONE && res.found.valid, "the moved entry resolves under its new parent");
+
+    free_volume();
+}
+
+/* When the WHOLE chain is full the directory has to grow: allocate a cluster,
+ * link it, and use a slot in it. Before this, a full chain was simply the end
+ * of the directory's capacity. */
+static void test_directory_grows_when_every_cluster_is_full(void) {
+    fat_mount_t mnt;
+    fat_block_t blk;
+    fat_create_ctx_t c;
+    fat_resolve_ctx_t res;
+    fat_r_t rc;
+    uint8_t* cluster2;
+    uint32_t i;
+    char filler[12];
+
+    build_volume(0);
+    /* Fill the second cluster too, so the chain has no free slot anywhere. */
+    cluster2 = image_sector(T_FIRST_DATA_LBA + (T_DIR_SECOND_CLUSTER - 2u));
+    for (i = 1; i < T_ENTRIES_PER_CLUSTER; ++i) {
+        memcpy(filler, "SECOND00   ", 12);
+        filler[6] = (char)('0' + (char)((i - 1u) / 10u));
+        filler[7] = (char)('0' + (char)((i - 1u) % 10u));
+        put_dirent(cluster2, i, filler, 0x20, (uint16_t)(0x200u + i), 16u);
+    }
+    mount_volume(&mnt, &blk);
+
+    memset(&c, 0, sizeof(c));
+    c.path = "/SUB/GROWN.TXT";
+    c.source = -1;
+    rc = fat_create_empty_file(&c, &blk, &mnt);
+    CHECK(rc == FAT_R_DONE, "the directory grows to take a new entry");
+
+    memset(&res, 0, sizeof(res));
+    res.path = "/SUB/GROWN.TXT";
+    res.source = -1;
+    rc = fat_resolve_path(&res, &blk, &mnt);
+    CHECK(rc == FAT_R_DONE && res.found.valid, "the entry in the grown cluster resolves");
+    CHECK(chain_length(&blk, &mnt, T_DIR_FIRST_CLUSTER) == 3u,
+          "the chain gained exactly one cluster");
+
+    /* Entries in both original clusters must still be reachable, which means the
+     * new cluster was LINKED rather than replacing the chain. */
+    memset(&res, 0, sizeof(res));
+    res.path = "/SUB/FILLER00";
+    res.source = -1;
+    (void)fat_resolve_path(&res, &blk, &mnt);
+    CHECK(res.found.valid == 1, "the first cluster is still in the chain");
+    memset(&res, 0, sizeof(res));
+    res.path = "/SUB/SECOND00";
+    res.source = -1;
+    (void)fat_resolve_path(&res, &blk, &mnt);
+    CHECK(res.found.valid == 1, "the second cluster is still in the chain");
+
+    free_volume();
+}
+
+/* An entry written into a later cluster must be deletable, which exercises the
+ * other half of the addressing: the LFN back-walk resolving across clusters. */
+static void test_unlink_an_entry_in_a_later_cluster(void) {
+    fat_mount_t mnt;
+    fat_block_t blk;
+    fat_create_ctx_t c;
+    fat_remove_ctx_t rm;
+    fat_resolve_ctx_t res;
+    fat_r_t rc;
+
+    build_volume(0);
+    mount_volume(&mnt, &blk);
+
+    memset(&c, 0, sizeof(c));
+    c.path = "/SUB/LATER.TXT";
+    c.source = -1;
+    rc = fat_create_empty_file(&c, &blk, &mnt);
+    CHECK(rc == FAT_R_DONE, "create succeeds");
+
+    memset(&rm, 0, sizeof(rm));
+    rm.path = "/SUB/LATER.TXT";
+    rm.source = -1;
+    rm.is_rmdir = 0;
+    rc = fat_remove_path(&rm, &blk, &mnt, NULL, 0);
+    CHECK(rc == FAT_R_DONE, "unlinking it succeeds");
+
+    memset(&res, 0, sizeof(res));
+    res.path = "/SUB/LATER.TXT";
+    res.source = -1;
+    (void)fat_resolve_path(&res, &blk, &mnt);
+    CHECK(res.found.valid == 0, "it is gone");
+    memset(&res, 0, sizeof(res));
+    res.path = "/SUB/TARGET.TXT";
+    res.source = -1;
+    (void)fat_resolve_path(&res, &blk, &mnt);
+    CHECK(res.found.valid == 1, "its neighbour in the same cluster survives");
+
+    free_volume();
+}
+
 static const wasmos_test_void_case_t k_cases[] = {
     WASMOS_TEST_CASE(test_finds_entry_in_second_cluster),
     WASMOS_TEST_CASE(test_still_finds_entry_in_first_cluster),
@@ -1354,6 +1541,10 @@ static const wasmos_test_void_case_t k_cases[] = {
     WASMOS_TEST_CASE(test_rename_refuses_an_existing_destination),
     WASMOS_TEST_CASE(test_rename_refuses_a_missing_source),
     WASMOS_TEST_CASE(test_rename_refuses_an_open_source),
+    WASMOS_TEST_CASE(test_create_uses_a_free_slot_in_a_later_cluster),
+    WASMOS_TEST_CASE(test_rename_into_a_directory_past_its_first_cluster),
+    WASMOS_TEST_CASE(test_directory_grows_when_every_cluster_is_full),
+    WASMOS_TEST_CASE(test_unlink_an_entry_in_a_later_cluster),
 };
 
 int main(void) {

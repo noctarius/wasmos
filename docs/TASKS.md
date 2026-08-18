@@ -853,15 +853,6 @@ tail.
   means copying data and no backend can express it. A `mv` that spans mounts
   needs copy-then-unlink in the caller, which nothing implements yet.
 
-- [ ] [ENHANCEMENT][P3] Let rename target a directory whose first cluster is full.
-  It inherits the `fat_find_free_dir_slots` limitation directly above: writing
-  the new name needs a free slot, so renaming INTO a directory whose first
-  cluster is full fails `WASMOS_ERR_FS_NO_SPACE` even when the volume is nearly
-  empty. `create` has the same limit, so rename is no worse -- it just makes the
-  gap easier to hit, because renaming a file inside a full directory is an
-  ordinary thing to do. Fixed by the slot-addressing item above; no separate
-  work.
-
 - [ ] [TEST][P2] Drive `fat_op_read` as well as `fat_op_write`.
   `tests/unit/test_fat_image.c` now drives `fat_op_write` end to end (request
   parsing, the buffer-size clamp, capacity growth, the partial-sector merge and
@@ -940,39 +931,16 @@ tail.
   converted with the others; the cleanest fix is to make it call
   `fat_find_in_dir` instead of duplicating a scan.
 
-- [ ] [BUG][P1] Address directory slots by (cluster, index) rather than by a flat
-  offset from `dir_lba`, so a directory can be written past its first cluster --
-  and then grow. The four READ-side scans now walk the chain
-  (`fat_find_in_dir`, `fat_short_name_exists_in_dir`, `fat_dir_is_empty_step`
-  and the readdir stream, all pinned in `tests/unit/test_fat_dir.c`,
-  `Regression: 2026-08-17-fat-dir-multicluster`). `fat_find_free_dir_slots`
-  (`fat_dir.c:447`) is the one left, and it is not a missing `for(;;)` like the
-  others were:
+- [ ] [ENHANCEMENT][P3] Let a slot run longer than one cluster span a GROWN
+  directory. `fat_find_free_dir_slots` refuses `WASMOS_ERR_FS_NO_SPACE` when
+  `needed` exceeds one cluster's entries and the directory had to grow, rather
+  than appending two clusters and running the LFN chain across them. Unreachable
+  today: `FAT_LFN_MAX` (255 characters) needs at most 21 entries, and the
+  smallest cluster this driver mounts holds 16 -- so only a 512-byte sector with
+  one sector per cluster could hit it, and then only with a name over ~200
+  characters. A free run that spans clusters is already handled when the
+  clusters exist; this is only the freshly-appended case.
 
-  - Its `out_entry` is a flat entry index that `fat_write_dir_entry` and
-    `fat_delete_dir_entry_chain` resolve as `dir_lba + index/entries_per_sector`.
-    That arithmetic is only valid within ONE contiguous run, because the next
-    cluster of a chain is not the next LBA. Making the search chain-aware
-    therefore means changing what a slot address IS, across the search, the
-    writer, the LFN-chain deleter and `fat_remove_path`'s
-    `dir_sector * eps + dir_index` reconstruction.
-  - Consequence today: a create into a directory whose first cluster is full
-    fails `WASMOS_ERR_FS_NO_SPACE`, even when later clusters have free slots.
-    Wrong, but it FAILS rather than corrupting -- the writer is never handed an
-    index it would resolve against the wrong cluster.
-
-  Directory GROWTH (allocating a cluster and linking it when the whole chain is
-  full) is the natural follow-on and wants the same addressing, so do them
-  together. `mkdir` already has the pieces: `fat_find_free_cluster` +
-  `fat_fatent_write` + `fat_end_of_chain_marker`.
-
-  Invisible under QEMU, which synthesizes the FAT and keeps the boot tree's
-  directories single-cluster. Reproduced on a real FAT16 image via
-  `scripts/run_bochs.sh`: `WASMOS_BOCHS_IMG_MB=64
-  WASMOS_BOCHS_CLUSTER_SECTORS=4` puts `/boot/apps` across three clusters, and
-  `chardevc.wap` -- which lands in the second -- failed to spawn. The 16 KiB
-  default cluster size exists to keep every directory inside one cluster and so
-  to avoid this.
 - [ ] [BUG][P1] Resolve `..` against the on-disk parent. `fat_resolve_path`,
   `fat_resolve_parent_dir` and `fat_chdir_next_component` all reset to the root
   region, so `a/b/../c` resolves against the root

@@ -197,6 +197,12 @@ verify_host_readable() {
     expect_content "$dir/MADEDIR/MOVED.TXT" "$HELLO_TEXT" "MADEDIR/MOVED.TXT (moved)" "$name" || ok=0
     [ ! -e "$dir/HELLO.TXT" ] || { fail "$name: the moved file is still at its old path"; ok=0; }
 
+    # (e3) the entry created in a multi-cluster directory is readable by the
+    #      host with its content, and that directory's own files are intact.
+    expect_content "$dir/MANYFILES/ADDED.TXT" "$INNER_TEXT" "MANYFILES/ADDED.TXT" "$name" || ok=0
+    [ -f "$dir/MANYFILES/F00.TXT" ] || { fail "$name: MANYFILES/F00.TXT was lost"; ok=0; }
+    [ -f "$dir/MANYFILES/F63.TXT" ] || { fail "$name: MANYFILES/F63.TXT was lost"; ok=0; }
+
     # (f) the deleted file is gone
     [ ! -e "$dir/SIZED.BIN" ] || { fail "$name: the unlinked SIZED.BIN is still present"; ok=0; }
 

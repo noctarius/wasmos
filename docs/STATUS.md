@@ -586,13 +586,20 @@ linked feature documents for rationale and rollout plans.
   — with the host confirming the content arrives under the new name and the old
   path is gone. Still not covered, in `TASKS.md`: `fat_op_read` goes through the
   zero-copy borrow passthrough the harness does not model.
-- The WRITE side is still single-cluster: `fat_find_free_dir_slots` returns a
-  flat entry index that the writer resolves against `dir_lba`, which is valid
-  only within one contiguous run. A create into a directory whose first cluster
-  is full therefore fails `WASMOS_ERR_FS_NO_SPACE` instead of using free slots
-  further along, and directories cannot grow. It fails rather than corrupts.
-  See `TASKS.md`; QEMU's synthesized FAT never produces a multi-cluster
-  directory, `scripts/run_bochs.sh` does.
+- The write side addresses directory slots CHAIN-RELATIVELY. An entry index
+  counts across the whole directory and is resolved to a physical sector by
+  `fat_dir_entry_locate`, which walks the chain; `dir_lba + index /
+  entries_per_sector` was valid only inside one contiguous run. That is what
+  lets a create or rename use a free slot in any cluster, lets a run of free
+  slots straddle a cluster boundary, and lets the LFN back-walk in
+  `fat_delete_dir_entry_chain` cross back into the previous cluster.
+  `fat_dir_entry_info_t` therefore carries both forms: the physical triple the
+  open-file table records, and the chain-relative index the writer and deleter
+  address.
+- Directories GROW. When every cluster is full, `fat_find_free_dir_slots`
+  allocates a cluster, marks it end-of-chain, zeroes it and only then links it
+  on — so an interruption leaves an unreferenced cluster rather than a directory
+  whose last cluster holds garbage.
 - `ls` orders its listing; the filesystem does not. The backend streams entries
   in on-disk slot order, which is not even insertion order — a freed slot is
   reused, so a file created after a deletion appears in the hole. FAT specifies

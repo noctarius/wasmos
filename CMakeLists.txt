@@ -573,7 +573,7 @@ function(wasmos_add_wasm_c_app_target target_name)
   add_custom_command(
     OUTPUT ${WASMOS_APP_OUTPUT_WASM}
     COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}
-    COMMAND ${_wasmos_compiler} --target=wasm32 -mno-bulk-memory -Oz -nostdlib -ffreestanding
+    COMMAND ${_wasmos_compiler} --target=wasm32 -Oz -nostdlib -ffreestanding
             -include ${LIBC_DIR}/include/wasmos_cast.h
             ${_wasmos_extra_flags}
             ${WASMOS_TRACE_DEFINE}
@@ -1183,8 +1183,7 @@ if (WASMOS_WASM_RUNTIME_WARP)
       # one linked nothing, and only ever built on an x86_64 host with WARP
       # enabled -- a combination that did not occur until WARP became the default
       # runtime. Link the real libc string/ctype implementations rather than
-      # hand-rolling a memset, and pass -mno-bulk-memory to match the app builds.
-      COMMAND ${CLANG} --target=wasm32 -mno-bulk-memory -Oz -nostdlib -ffreestanding
+      COMMAND ${CLANG} --target=wasm32 -Oz -nostdlib -ffreestanding
               -Wl,--no-entry -Wl,--strip-all -Wl,--export=wasmos_coroutine_wasm_test
               -I${LIBSYS_WASM_DIR}/include
               -I${LIBC_DIR}/include

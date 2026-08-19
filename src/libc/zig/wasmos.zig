@@ -442,9 +442,10 @@ pub const stdlib = struct {
 
     /// Formats into a 256-byte stack buffer and writes the result. A line that
     /// does not fit is refused with Error.BufferTooSmall rather than truncated.
-    /// `fmt` is a comptime std.fmt format string, so this pulls in std.fmt --
-    /// which emits bulk-memory opcodes WARP's JIT rejects; a WARP guest formats
-    /// through `strconv` instead.
+    /// `fmt` is a comptime std.fmt format string, so this pulls in std.fmt,
+    /// which emits bulk-memory opcodes. Both runtimes execute those, so this is
+    /// usable; `strconv` remains for callers that want formatting without
+    /// pulling std.fmt's code size into the module.
     pub fn print(comptime fmt: []const u8, args: anytype) Error!void {
         var buffer: [256]u8 = undefined;
         const line = std.fmt.bufPrint(&buffer, fmt, args) catch return Error.BufferTooSmall;
@@ -873,14 +874,14 @@ pub const fs = struct {
 // ---------------------------------------------------------------------------
 // fmt — numeric formatting helpers that avoid std.fmt.
 //
-// std.fmt.bufPrint internally uses memory.fill / memory.copy (WASM bulk-memory
-// extension) even when -mcpu=generic-bulk_memory is passed, because the Zig
-// standard library does not honour that flag for its own internals.  WARP's
-// single-pass JIT only supports WASM MVP and rejects those opcodes.
+// std.fmt.bufPrint emits memory.fill / memory.copy (the WASM bulk-memory
+// extension). Both wasm3 and WARP execute those, so std.fmt is usable -- these
+// helpers are kept because they cost far less code size, not because std.fmt is
+// unavailable.
 //
-// These helpers produce the same output for the values a typical WASMOS app
-// would display (integers, finite floats, error sentinel) using only basic
-// arithmetic — no WASM extensions, no allocator.
+// They produce the same output for the values a typical WASMOS app would
+// display (integers, finite floats, error sentinel) using only basic
+// arithmetic — no allocator.
 // ---------------------------------------------------------------------------
 pub const strconv = struct {
     /// Convert a f64 value in [0.0, 9.0] to a u8 digit using only f64

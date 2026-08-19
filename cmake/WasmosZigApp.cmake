@@ -98,10 +98,6 @@ function(wasmos_add_zig_wasm_app)
     endif()
   endforeach()
 
-  # When C sources are present, pass -mno-bulk-memory via -cflags ... -- so
-  # Zig's embedded Clang disables bulk-memory for those translation units.
-  # -mcpu=generic-bulk_memory covers the Zig frontend; for C, the explicit
-  # flag is required, otherwise memcpy/memset loops become memory.copy/fill.
   # Optional -Xlinker --initial-memory=N: sets the WASM binary's declared
   # initial memory pages.  WARP's ActiveMemoryManager uses this to set
   # allowedLinMemPages_; without it, Zig freestanding binaries declare only
@@ -113,7 +109,7 @@ function(wasmos_add_zig_wasm_app)
 
   set(_c_compile_flags "")
   if (_extra_c)
-    set(_c_compile_flags -cflags -mno-bulk-memory)
+    set(_c_compile_flags -cflags)
     foreach(_dir ${ARG_INCLUDE_DIRS})
       list(APPEND _c_compile_flags "-I${_dir}")
     endforeach()
@@ -133,11 +129,6 @@ function(wasmos_add_zig_wasm_app)
     COMMAND ${ZIG_EXECUTABLE}
             build-exe
             -target wasm32-freestanding
-            # Disable WASM bulk-memory extension (memory.fill / memory.copy).
-            # WARP's single-pass JIT only targets WASM MVP and rejects these
-            # opcodes with "module compilation failed".  The Zig default enables
-            # bulk-memory so we must opt out explicitly for all WASMOS Zig apps.
-            -mcpu=generic-bulk_memory
             -O ReleaseSmall
             -fno-entry
             -fstrip

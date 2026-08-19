@@ -11,6 +11,11 @@
 
 void fat_block_configure(fat_block_t* blk, int32_t block_endpoint, int32_t reply_endpoint) {
     blk->sector_bytes = FAT_SECTOR_SIZE;
+    /* The FSInfo accounting starts unknown: a caller that did not zero the
+     * struct would otherwise present a garbage free count as valid and write it
+     * back to the volume on the first allocation. */
+    blk->free_count = 0;
+    blk->free_count_valid = 0;
     blk->block_endpoint = block_endpoint;
     blk->reply_endpoint = reply_endpoint;
     blk->buf_phys = -1;

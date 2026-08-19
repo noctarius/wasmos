@@ -1888,6 +1888,7 @@ static void test_utf8_long_names_round_trip(void) {
     fat_block_t blk;
     fat_create_ctx_t c;
     fat_resolve_ctx_t res;
+    fat_resolve_ctx_t other;
     fat_r_t rc;
     /* "café.txt" and "日本語.txt": two and three UTF-8 bytes per character, so
      * both multi-byte encodings are exercised. */
@@ -1921,9 +1922,17 @@ static void test_utf8_long_names_round_trip(void) {
     rc = fat_resolve_path(&res, &blk, &mnt);
     CHECK(rc == FAT_R_DONE && res.found.valid, "and resolves back by the same name");
 
-    /* The two must remain distinct: the old '?' mapping collapsed different
-     * names onto the same string. */
-    CHECK(res.found.cluster != 0u || 1, "distinct names stay distinct");
+    /* The two must remain DISTINCT. The old '?' mapping collapsed different
+     * non-ASCII names onto the same string, so each would have resolved to
+     * whichever entry was found first; comparing the resolved entries is what
+     * catches that. */
+    memset(&other, 0, sizeof(other));
+    other.path = k_latin;
+    other.source = -1;
+    (void)fat_resolve_path(&other, &blk, &mnt);
+    CHECK(other.found.valid == 1, "both names still resolve");
+    CHECK(other.found.dir_entry_index != res.found.dir_entry_index,
+          "they resolve to DIFFERENT directory entries, not one collapsed name");
 
     free_volume();
 }
@@ -1996,6 +2005,90 @@ static void test_readdir_emits_long_names(void) {
     free_volume();
 }
 
+/* fat_entry_is_open decides whether rename and unlink may touch an entry, and
+ * dir_lba/dir_sector are only meaningful as a SUM: a scan reports (run's first
+ * LBA, sector within the run) while a create reports (resolved sector, 0). The
+ * two encodings denote the same slot, so the check must treat them as equal --
+ * comparing the halves separately let a created-and-still-open file be renamed
+ * or unlinked out from under its descriptor.
+ *
+ * Asserted directly rather than through a fixture: at one sector per cluster
+ * both encodings coincide, so no volume this suite builds can distinguish
+ * them. */
+static void test_open_check_matches_across_slot_encodings(void) {
+    fat_dir_entry_info_t scan_form;
+    fat_open_file_t files[1];
+
+    /* The same physical slot, split the two ways. */
+    memset(&scan_form, 0, sizeof(scan_form));
+    scan_form.dir_lba = 100u;  /* run's first LBA   */
+    scan_form.dir_sector = 3u; /* sector within it  */
+    scan_form.dir_index = 5u;
+
+    memset(files, 0, sizeof(files));
+    files[0].in_use = 1;
+    files[0].owner = -1;
+    files[0].dir_lba = 103u; /* resolved sector   */
+    files[0].dir_sector = 0u;
+    files[0].dir_index = 5u;
+
+    CHECK(fat_entry_is_open(&scan_form, files, 1u) == 1,
+          "the same slot matches however the two producers split it");
+
+    /* A genuinely different slot must still not match. */
+    files[0].dir_index = 6u;
+    CHECK(fat_entry_is_open(&scan_form, files, 1u) == 0, "a different slot does not match");
+    files[0].dir_index = 5u;
+    files[0].dir_lba = 104u;
+    CHECK(fat_entry_is_open(&scan_form, files, 1u) == 0, "a different sector does not match");
+}
+
+/* '..' is ".." padded to eleven bytes with the directory attribute set. A
+ * corrupt entry that merely starts with two dots must not be believed: it would
+ * resolve a path into whatever cluster that entry happens to name. */
+static void test_dotdot_validation_rejects_a_corrupt_entry(void) {
+    fat_mount_t mnt;
+    fat_block_t blk;
+    fat_dotdot_ctx_t d;
+    uint8_t* deep;
+    fat_r_t rc;
+
+    build_volume(0);
+    /* Turn the subdirectory's '..' into "..A" -- two dots, then not padding. */
+    deep = image_sector(T_FIRST_DATA_LBA + (T_DEEP_CLUSTER - 2u));
+    dirent_slot(deep, 1)[2] = 'A';
+    mount_volume(&mnt, &blk);
+
+    memset(&d, 0, sizeof(d));
+    d.cluster = T_DEEP_CLUSTER;
+    rc = fat_dir_parent_cluster(&d, &blk, &mnt);
+    CHECK(rc == FAT_R_ERR, "a malformed '..' is refused");
+    CHECK(g_last_err == WASMOS_ERR_FS_CORRUPT, "it reports CORRUPT");
+
+    free_volume();
+}
+
+/* A '..' that is not marked a directory is equally untrustworthy. */
+static void test_dotdot_validation_requires_the_directory_attribute(void) {
+    fat_mount_t mnt;
+    fat_block_t blk;
+    fat_dotdot_ctx_t d;
+    uint8_t* deep;
+    fat_r_t rc;
+
+    build_volume(0);
+    deep = image_sector(T_FIRST_DATA_LBA + (T_DEEP_CLUSTER - 2u));
+    dirent_slot(deep, 1)[11] = 0x20; /* archive, not directory */
+    mount_volume(&mnt, &blk);
+
+    memset(&d, 0, sizeof(d));
+    d.cluster = T_DEEP_CLUSTER;
+    rc = fat_dir_parent_cluster(&d, &blk, &mnt);
+    CHECK(rc == FAT_R_ERR, "a '..' that is not a directory is refused");
+
+    free_volume();
+}
+
 static const wasmos_test_void_case_t k_cases[] = {
     WASMOS_TEST_CASE(test_finds_entry_in_second_cluster),
     WASMOS_TEST_CASE(test_still_finds_entry_in_first_cluster),
@@ -2038,6 +2131,9 @@ static const wasmos_test_void_case_t k_cases[] = {
     WASMOS_TEST_CASE(test_utf8_long_names_round_trip),
     WASMOS_TEST_CASE(test_malformed_utf8_names_are_refused),
     WASMOS_TEST_CASE(test_readdir_emits_long_names),
+    WASMOS_TEST_CASE(test_open_check_matches_across_slot_encodings),
+    WASMOS_TEST_CASE(test_dotdot_validation_rejects_a_corrupt_entry),
+    WASMOS_TEST_CASE(test_dotdot_validation_requires_the_directory_attribute),
 };
 
 int main(void) {

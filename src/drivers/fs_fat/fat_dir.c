@@ -210,6 +210,7 @@ fat_r_t fat_find_in_dir(fat_dir_scan_ctx_t* s, fat_block_t* blk, const fat_mount
  * wrong directory. */
 fat_r_t fat_dir_parent_cluster(fat_dotdot_ctx_t* p, fat_block_t* blk, const fat_mount_t* mnt) {
     const uint8_t* ent;
+    uint32_t i;
 
     FAT_CO_BEGIN(p);
 
@@ -219,8 +220,16 @@ fat_r_t fat_dir_parent_cluster(fat_dotdot_ctx_t* p, fat_block_t* blk, const fat_
     }
     FAT_CO_READ(p, blk, fat_lba_for_cluster(mnt, p->cluster));
     ent = fat_block_sector(blk) + 32u;
-    if (ent[0] != '.' || ent[1] != '.') {
+    /* The whole 11-byte short name must be ".." padded with spaces, and the
+     * entry must be a directory. Testing only the first two bytes would accept
+     * a corrupt "..A" and resolve the path into the wrong directory. */
+    if (ent[0] != '.' || ent[1] != '.' || (ent[11] & 0x10u) == 0u) {
         FAT_CO_FAIL(p, blk, WASMOS_ERR_FS_CORRUPT);
+    }
+    for (i = 2u; i < 11u; ++i) {
+        if (ent[i] != ' ') {
+            FAT_CO_FAIL(p, blk, WASMOS_ERR_FS_CORRUPT);
+        }
     }
     p->out_parent = fat_dirent_cluster(ent);
     FAT_CO_END(p);
@@ -438,7 +447,13 @@ int fat_entry_is_open(const fat_dir_entry_info_t* entry, const fat_open_file_t* 
         if (!files[i].in_use) {
             continue;
         }
-        if (files[i].dir_lba == entry->dir_lba && files[i].dir_sector == entry->dir_sector &&
+        /* dir_lba and dir_sector are only meaningful as a SUM -- that is how
+         * fat_store_open_file_size addresses the slot -- and the two producers
+         * split it differently: a scan reports (run's first LBA, sector within
+         * the run) while a create reports (the resolved sector, 0). Comparing
+         * the halves separately therefore missed a file that was created and
+         * left open, letting rename and unlink proceed on it. */
+        if (files[i].dir_lba + files[i].dir_sector == entry->dir_lba + entry->dir_sector &&
             files[i].dir_index == entry->dir_index) {
             return 1;
         }
@@ -959,7 +974,6 @@ fat_r_t fat_create_path_entry(fat_create_ctx_t* c, fat_block_t* blk, const fat_m
     c->found.attr = c->attr;
     c->found.cluster = c->cluster;
     c->found.size = c->size;
-    c->found.dir_lba = c->dir_lba;
     /* The physical slot comes from the locator the short-entry write just
      * resolved; deriving it from slot_entry would assume one cluster again. */
     c->found.dir_lba = c->wr.loc.out_lba;

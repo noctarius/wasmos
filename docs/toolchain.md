@@ -55,12 +55,36 @@ The signature is `(i32, i32, i32, i32) -> i32` and all four arguments are always
 zero. `crt1.o` calls `main()` and then `wasmos_proc_exit()` with its return value,
 so an application never writes either.
 
-**Startup values** are not in registers or in `argv`. They live in a spawn-info
-transfer buffer: `wasmos_spawn_info_buffer()` returns a `buffer_id` whose contents
-are read with `xfer_buffer_read`. Use the accessors in `wasmos/startup.h`
+**Startup values** are not in registers. They live in a spawn-info transfer
+buffer: `wasmos_spawn_info_buffer()` returns a `buffer_id` whose contents are read
+with `xfer_buffer_read`. Use the accessors in `wasmos/startup.h`
 (`wasmos_startup_args`, `_proc_endpoint`, `_tty`, `_module_count`,
-`_module_index`). Arguments arrive as **one NUL-terminated string**, so a program
-that wants tokens tokenizes them itself; `crt1.o` currently passes `argc = 0`.
+`_module_index`).
+
+**Arguments** arrive as **one NUL-terminated string**, not an argv array.
+`wasmos_startup_argv()` tokenizes it and `crt1.o` calls `main(argc, argv)` with the
+result, so plain C works:
+
+```c
+int main(int argc, char **argv) {           /* argv[1] is the first argument */
+    const char *path = argc > 1 ? argv[1] : "/boot/default";
+```
+
+Two properties of that argv are worth knowing:
+
+- **`argv[0]` is an empty string, not the program name.** The contract carries only
+  what followed the command name, and `wasmos_spawn_info_t` has no name field. The
+  slot exists anyway so `argv[1]` is the first argument as the language says;
+  filling it means appending a name to the spawn-info header, which is a `TODO` at
+  the accessor.
+- **An argument the buffer cannot hold whole is dropped, not truncated.** A
+  silently shortened path or number is a failure nothing downstream can detect,
+  while one fewer argument is visible in `argc`.
+
+This is currently the **C path only**. The Rust, Go, Zig and AssemblyScript entry
+shims still call their `main` with an empty argument list, so a guest in those
+languages reads `wasmos_startup_args` and tokenizes it itself. Closing that is
+tracked in `docs/TASKS.md`.
 
 **Imports** are declared, never inferred. Every host call is an import of module
 `wasmos` declared through `WASMOS_WASM_IMPORT` in `wasmos/api.h`, generated from

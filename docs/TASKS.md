@@ -508,6 +508,26 @@ Source: `architecture/13-runtime-and-packaging.md`,
 `architecture/14-libsys-and-service-runtime.md`, and
 `architecture/15-drivers-and-services.md`.
 
+- [ ] [FEATURE][P2] Give the non-C entry shims a real `argv`. The C `crt1`
+  (`src/libc/src/startup.c`) now calls `main(argc, argv)` from
+  `wasmos_startup_argv()`, but the Rust, Go, Zig and AssemblyScript shims
+  (`src/libc/{rust,go,zig,assemblyscript}`) still call their `main` with an empty
+  argument list, so a guest in those languages must read `wasmos_startup_args`
+  and tokenize it. Port the same split per language, with a guest test per
+  language that passes an argument and asserts it lands at index 1.
+- [ ] [FEATURE][P3] Carry the program name in the startup contract so `argv[0]` can
+  be one. `wasmos_spawn_info_t` (`src/drivers/include/wasmos_spawn_info.h`) has no
+  name field, so `wasmos_startup_argv` fills `argv[0]` with an empty string
+  (`TODO` at `src/libc/src/spawn_info.c`). The header is versioned and
+  append-only, and PM already parses the `.wap` package name; adding it means the
+  header field, a `version` bump, the native `api->spawn_info` path, and the
+  accessor in every language.
+- [ ] [CLEANUP][P3] Retire the hand-rolled argument tokenizers now that
+  `wasmos_startup_argv` exists: `src/utils/host/host.c:48` (`first_token`),
+  `src/utils/curl/curl.c`, `src/utils/ip/ip.c`, and
+  `src/services/wasmos_script/wamos_script.c` each split the argument string
+  themselves. Each conversion is a behaviour-preserving switch to `main(argc,
+  argv)` and needs its own guest check.
 - [ ] [ENHANCEMENT][P2] Close the remaining WARP refinement TODOs (host-call coverage itself is
   broad): synchronise symbol lookups/alloc under SMP (`src/kernel/warp/link.cpp:90`
   `TODO(smp-warp)`, `src/kernel/warp/shim.cpp:579` `FIXME(smp-warp)`); reserve
@@ -1123,6 +1143,19 @@ Source: `architecture/25-diagnostics-status.md`,
 
 - [ ] [TEST][P2] Add behavioral regression coverage with every new subsystem contract;
   reject source-text assertions.
+- [ ] [FEATURE][P2] Finish the toolchain SDK's remaining Stage 1 milestones
+  (`docs/toolchain.md`): build `compiler-rt` builtins for wasm32 (absent from the
+  host toolchain, so guest 64-bit or 128-bit arithmetic helpers will not link);
+  switch `wasmos_add_wasm_c_app_target` onto the sysroot archives instead of
+  recompiling libc into each of the ~58 modules; move the per-target
+  `STACK_SIZE`/`INITIAL_MEMORY`/`MAX_MEMORY` CMake arguments into each
+  `linker.metadata`'s `[link]` section so one file describes an app; and ship a
+  standalone SDK build that does not borrow the host LLVM. Stage 2 (a native
+  `wasm32-unknown-wasmos` LLVM triple) follows those.
+- [ ] [TEST][P2] Run the SDK on Linux. The driver wrappers (`scripts/sdk/*`) are
+  POSIX `sh` and parse under `dash`, but have only been executed on macOS, and
+  `sdk_hello_app` is a dependency of the default build — so a portability defect
+  in the wrappers fails the build rather than one test.
 - [ ] [TEST][P2] Give the host suite a way to test wasm32-only libc behaviour.
   Some defects are invisible on the host by construction: `%lld`/`%llx` truncated
   to 32 bits because `vsnprintf` cast `long long` through `long`, which is 64-bit

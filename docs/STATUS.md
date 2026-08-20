@@ -775,7 +775,8 @@ linked feature documents for rationale and rollout plans.
   sysroot, wasm linker defaults and the `.wap` packaging step, so
   `wasmos-clang hello.c -o hello` produces a runnable package with no other flags.
   `examples/c/sdk_hello` is built that way by every build and run in the guest by
-  `tests/test_sdk_hello.py`; `tests/test_sdk_abi.py` asserts the module's import
+  `tests/test_sdk_hello.py`, which checks console output, a real `argv[1]`, and an
+  `open`/`read` that reaches the filesystem service over IPC; `tests/test_sdk_abi.py` asserts the module's import
   and export shape without booting. Stage 1 keeps LLVM's own
   `wasm32-unknown-unknown` target and puts the WASMOS knowledge in the driver,
   which reports `wasm32-unknown-wasmos`. The CMake integration
@@ -784,6 +785,13 @@ linked feature documents for rationale and rollout plans.
   freestanding C++ (verified in the guest by hand, not yet in a battery). Not yet
   present: compiler-rt builtins for wasm32, a wasm32 `libc++` (so no `<vector>`),
   and a native `wasm32-unknown-wasmos` LLVM triple. See `docs/toolchain.md`.
+- `crt1` builds a real `argc`/`argv` for `wasmos_main` apps:
+  `wasmos_startup_argv()` (`src/libc/src/spawn_info.c`) tokenizes the spawn-info
+  argument string, `argv[0]` is an empty program-name slot so `argv[1]` is the
+  first argument, and an argument that does not fit the buffer whole is dropped
+  rather than truncated (`tests/unit/test_libc_startup_argv.c`). C only so far —
+  the Rust, Go, Zig and AssemblyScript entry shims still pass an empty argument
+  list.
 - The C wasm link no longer passes `--allow-undefined`. It was never needed — no
   module in the tree carries an undeclared import — and it turned a missing source
   file into a module that loads and traps at the call site instead of a link

@@ -2863,6 +2863,19 @@ add_custom_command(TARGET run-kernel-unit-tests POST_BUILD
           ${LIBC_DIR}/src/string.c
           -o ${BUILD_DIR}/test_libc_string
   COMMAND ${BUILD_DIR}/test_libc_string
+  # argv construction from the spawn-info argument string. spawn_info.c reaches
+  # the contract through two hostcalls, which the suite defines itself, so it
+  # links against the real accessors with a synthetic spawn-info blob behind them.
+  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
+          -I${LIBC_DIR}/include
+          -I${LIBC_DIR}/src
+          -I${DRIVER_WASM_DIR}/include
+          -I${CMAKE_SOURCE_DIR}/tests/unit
+          -include ${LIBC_DIR}/include/wasmos_cast.h
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_libc_startup_argv.c
+          ${LIBC_DIR}/src/spawn_info.c
+          -o ${BUILD_DIR}/test_libc_startup_argv
+  COMMAND ${BUILD_DIR}/test_libc_startup_argv
   COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
           -Wno-error=implicit-function-declaration -Wno-sign-compare
           "-D__builtin_wasm_memory_size(x)=((int)(0))"
@@ -3276,6 +3289,7 @@ set(WASMOS_UNIT_LIBC_TESTS
     ${CMAKE_SOURCE_DIR}/tests/unit/stubs_wasm_stdlib.c
     ${CMAKE_SOURCE_DIR}/tests/unit/test_libc_math.c
     ${CMAKE_SOURCE_DIR}/tests/unit/test_libc_stdio.c
+    ${CMAKE_SOURCE_DIR}/tests/unit/test_libc_startup_argv.c
     ${CMAKE_SOURCE_DIR}/tests/unit/test_libc_stdlib.c
     ${CMAKE_SOURCE_DIR}/tests/unit/test_libc_string.c
     ${CMAKE_SOURCE_DIR}/tests/unit/test_libui_key_decode.c

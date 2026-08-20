@@ -53,6 +53,12 @@ if (NOT ZIG_EXECUTABLE OR ZIG_EXECUTABLE MATCHES "NOTFOUND")
   find_program(ZIG_EXECUTABLE zig HINTS ${CLANG_BIN_DIR} $ENV{HOME}/bin $ENV{HOME}/.local/bin)
 endif ()
 
+# Same for the AssemblyScript driver: WASMOS_AS_LIBC_SOURCES is the list the
+# in-tree build stages into every AS module, and the SDK stages the same one so a
+# module built out of tree sees the same runtime.
+include(${CMAKE_SOURCE_DIR}/cmake/WasmosAssemblyScript.cmake)
+find_program(ASC_EXECUTABLE asc HINTS ${CLANG_BIN_DIR})
+
 # Compile flags every sysroot object is built with. They must match what
 # wasmos-clang passes for application sources, or an archive object and its
 # caller would disagree about, for example, WASMOS_TRACE.
@@ -175,6 +181,8 @@ add_custom_command(
           -DSDK_ZIG=${ZIG_EXECUTABLE}
           -DSDK_ZIG_STACK_SIZE=${WASMOS_ZIG_STACK_SIZE}
           -DSDK_ZIG_VA_LIMIT=${WASMOS_ZIG_USER_VA_LIMIT}
+          -DSDK_ASC=${ASC_EXECUTABLE}
+          "-DAS_SOURCES=${WASMOS_AS_LIBC_SOURCES}"
           -DSDK_AR=${WASMOS_SDK_AR}
           -DSDK_NM=${WASMOS_SDK_nm}
           -DSDK_RANLIB=${WASMOS_SDK_ranlib}
@@ -191,6 +199,10 @@ add_custom_command(
           ${LIBC_DIR}/zig/wasmos.zig
           ${LIBC_DIR}/zig/coroutine.zig
           ${CMAKE_SOURCE_DIR}/scripts/wasm_stack_check.py
+          ${CMAKE_SOURCE_DIR}/scripts/sdk/wasmos-asc
+          ${LIBC_DIR}/assemblyscript/runtime.ts
+          ${WASMOS_AS_LIBC_SOURCES}
+          ${CMAKE_SOURCE_DIR}/tools/as_coroutine_transform.mjs
           ${CMAKE_SOURCE_DIR}/scripts/sdk/wasmos-pack
           ${CMAKE_SOURCE_DIR}/scripts/sdk/wasmos-inspect
           ${CMAKE_SOURCE_DIR}/scripts/sdk/default-manifest.toml
@@ -266,5 +278,31 @@ if (ZIG_EXECUTABLE AND NOT ZIG_EXECUTABLE MATCHES "NOTFOUND")
   set(SDK_ZIG_HELLO_COPY_CMD
     COMMAND ${CMAKE_COMMAND} -E copy ${WASMOS_SDK_ZIG_HELLO_APP}
             ${BUILD_DIR}/esp/apps/sdkzig.wap
+  )
+endif ()
+
+# --- the AssemblyScript driver's smoke app --------------------------------
+# As above, for wasmos-asc, and skipped the same way when asc is absent. Staged as
+# sdkas.wap (FAT 8.3).
+if (ASC_EXECUTABLE AND NOT ASC_EXECUTABLE MATCHES "NOTFOUND")
+  set(WASMOS_SDK_AS_HELLO_SRC
+      ${CMAKE_SOURCE_DIR}/examples/assemblyscript/sdk_hello/hello.ts)
+  set(WASMOS_SDK_AS_HELLO_APP ${BUILD_DIR}/sdkas.wap)
+  add_custom_command(
+    OUTPUT ${WASMOS_SDK_AS_HELLO_APP}
+    COMMAND ${WASMOS_SDK_DIR}/bin/wasmos-asc ${WASMOS_SDK_AS_HELLO_SRC}
+            -o ${WASMOS_SDK_AS_HELLO_APP}
+    DEPENDS ${WASMOS_SDK_AS_HELLO_SRC} ${WASMOS_SDK_STAMP}
+    WORKING_DIRECTORY ${BUILD_DIR}
+    COMMENT "sdk: building sdk_hello (AssemblyScript) with wasmos-asc"
+    VERBATIM
+  )
+  add_custom_target(sdk_as_hello_app DEPENDS ${WASMOS_SDK_AS_HELLO_APP})
+  add_dependencies(sdk_as_hello_app wasmos-sdk)
+  set_property(GLOBAL APPEND PROPERTY WASMOS_WASM_APP_TARGETS sdk_as_hello_app)
+
+  set(SDK_AS_HELLO_COPY_CMD
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASMOS_SDK_AS_HELLO_APP}
+            ${BUILD_DIR}/esp/apps/sdkas.wap
   )
 endif ()

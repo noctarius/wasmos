@@ -37,6 +37,7 @@ from qemu_test_framework import QemuSession, default_config
 BUILD_DIR = os.environ.get("WASMOS_BUILD_DIR", os.path.join(ROOT, "build"))
 SDK_HELLO_WAP = os.path.join(BUILD_DIR, "esp", "apps", "sdkhello.wap")
 SDK_ZIG_WAP = os.path.join(BUILD_DIR, "esp", "apps", "sdkzig.wap")
+SDK_AS_WAP = os.path.join(BUILD_DIR, "esp", "apps", "sdkas.wap")
 
 
 @unittest.skipUnless(
@@ -44,9 +45,9 @@ SDK_ZIG_WAP = os.path.join(BUILD_DIR, "esp", "apps", "sdkzig.wap")
     "SDK smoke app not staged on the ESP (needs llvm-ar and the wasmos-sdk target)",
 )
 class SdkHelloTest(unittest.TestCase):
-    """One boot, one case per driver. The Zig case skips on its own when zig is
-    absent, rather than living in a subclass that would boot the guest a second
-    time to run one test."""
+    """One boot, one case per driver. The non-C cases skip on their own when their
+    compiler is absent, rather than living in subclasses that would boot the guest
+    again to run a single case each."""
 
     @classmethod
     def setUpClass(cls):
@@ -118,6 +119,21 @@ class SdkHelloTest(unittest.TestCase):
         module is the only way to know the driver got both right."""
         self._cmd_expect("cd apps", [b"/apps wamos>"])
         self._cmd_expect("sdkzig", [b"Hello WASMOS from Zig via the SDK!"])
+
+    @unittest.skipUnless(
+        os.path.isfile(SDK_AS_WAP),
+        "SDK AssemblyScript smoke app not staged (needs asc and the wasmos-sdk target)",
+    )
+    def test_exec_sdk_assemblyscript_hello(self):
+        """asc has no include path and resolves imports relative to the entry, so
+        wasmos-asc stages the whole AS runtime flat beside a copy of the app --
+        under the name runtime.ts imports, not the developer's filename. Whether
+        that staging produced a module the runtime can instantiate is only
+        answerable by running it."""
+        self._cmd_expect("cd apps", [b"/apps wamos>"])
+        self._cmd_expect(
+            "sdkas", [b"Hello WASMOS from AssemblyScript via the SDK!"]
+        )
 
 
 if __name__ == "__main__":

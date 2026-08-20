@@ -69,7 +69,7 @@ file(COPY ${SRC_DIR}/scripts/wasm_stack_check.py DESTINATION ${SDK_DIR}/libexec/
 
 # --- driver + tool wrappers ------------------------------------------------
 set(_perm FILE_PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE GROUP_READ GROUP_EXECUTE)
-foreach (_w IN ITEMS wasmos-clang wasmos-clang++ wasmos-zig wasmos-pack wasmos-inspect)
+foreach (_w IN ITEMS wasmos-clang wasmos-clang++ wasmos-zig wasmos-asc wasmos-pack wasmos-inspect)
   file(COPY ${SRC_DIR}/scripts/sdk/${_w} DESTINATION ${SDK_DIR}/bin ${_perm})
 endforeach ()
 
@@ -106,6 +106,22 @@ foreach (_zig IN ITEMS wasmos.zig coroutine.zig)
   file(COPY ${LIBC_DIR}/zig/${_zig} DESTINATION ${SDK_DIR}/share/wasmos/zig)
 endforeach ()
 
+# AssemblyScript is staged the same way and for a sharper reason: asc has no
+# include path and resolves every import relative to the entry file, so the
+# runtime has to sit flat beside the app. The entry is runtime.ts, which imports
+# "./app"; the driver stages the developer's file under that name. AS_SOURCES is
+# the same list the in-tree build stages, passed in so the two cannot diverge.
+file(MAKE_DIRECTORY ${SDK_DIR}/share/wasmos/assemblyscript)
+file(COPY ${LIBC_DIR}/assemblyscript/runtime.ts
+     DESTINATION ${SDK_DIR}/share/wasmos/assemblyscript)
+foreach (_as IN LISTS AS_SOURCES)
+  file(COPY ${_as} DESTINATION ${SDK_DIR}/share/wasmos/assemblyscript)
+endforeach ()
+if (EXISTS ${SRC_DIR}/tools/as_coroutine_transform.mjs)
+  file(COPY ${SRC_DIR}/tools/as_coroutine_transform.mjs
+       DESTINATION ${SDK_DIR}/libexec/wasmos)
+endif ()
+
 file(COPY ${SRC_DIR}/scripts/sdk/default-manifest.toml DESTINATION ${SDK_DIR}/share/wasmos)
 file(COPY ${SRC_DIR}/scripts/sdk/WASMOSToolchain.cmake DESTINATION ${SDK_DIR}/share/cmake/WASMOS)
 file(COPY ${SRC_DIR}/scripts/sdk/Platform/WASMOS.cmake
@@ -125,6 +141,7 @@ WASMOS_SDK_CLANGXX=${SDK_CLANGXX}
 WASMOS_SDK_ZIG=${SDK_ZIG}
 WASMOS_SDK_ZIG_STACK_SIZE=${SDK_ZIG_STACK_SIZE}
 WASMOS_SDK_ZIG_VA_LIMIT=${SDK_ZIG_VA_LIMIT}
+WASMOS_SDK_ASC=${SDK_ASC}
 ")
 
 file(WRITE ${STAMP} "staged\n")

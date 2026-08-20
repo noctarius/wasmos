@@ -104,17 +104,18 @@ POSIX feature macros are not: WASMOS satisfies none of those contracts.
 
 ```text
 build/wasmos-sdk/
-├── bin/            wasmos-clang, wasmos-clang++, wasmos-zig, wasmos-ld,
-│                   wasmos-ar, wasmos-nm, wasmos-ranlib, wasmos-strip,
-│                   wasmos-objdump, wasmos-pack, wasmos-inspect
-├── libexec/wasmos/ make_wasmos_app, wasm_inspect.py, wasm_stack_check.py
+├── bin/            wasmos-clang, wasmos-clang++, wasmos-zig, wasmos-asc,
+│                   wasmos-ld, wasmos-ar, wasmos-nm, wasmos-ranlib,
+│                   wasmos-strip, wasmos-objdump, wasmos-pack, wasmos-inspect
+├── libexec/wasmos/ make_wasmos_app, wasm_inspect.py, wasm_stack_check.py,
+│                   as_coroutine_transform.mjs
 ├── sysroot/
 │   ├── include/    libc headers, sys/, and wasmos/ (libc + libsys + libui),
 │   │               with the generated ABI headers under wasmos/abi/
 │   └── lib/wasm32-unknown-wasmos/  crt1.o, libc.a, libsys.a
 ├── share/
 │   ├── cmake/WASMOS/  WASMOSToolchain.cmake, Platform/WASMOS.cmake
-│   └── wasmos/        default-manifest.toml, zig/{wasmos,coroutine}.zig
+│   └── wasmos/        default-manifest.toml, zig/*.zig, assemblyscript/*.ts
 └── wasmos-sdk.conf  resolved tool paths and version, sourced by the wrappers
 ```
 
@@ -193,6 +194,32 @@ casts it to the process exit status.
 Additional `.zig` files passed on the command line are staged alongside. Extra C
 objects (the coroutine and libui shims that `examples/zig/calculator` links) are
 not wired into the driver yet; that app is still built by the in-tree helper.
+
+## AssemblyScript
+
+```bash
+wasmos-asc app.ts -o app             # -> app.wap
+wasmos-asc --emit-wasm app.ts -o app.wasm
+```
+
+What this driver hides follows from how `asc` resolves imports: it has no include
+path and resolves every import relative to the entry file. So the whole AS runtime
+is staged **flat** beside a copy of the app, and the entry is the runtime's own
+`runtime.ts`, which imports `"./app"` — the developer's file is staged under that
+name whatever it is called. The flat `"./name"` import convention across the AS
+sources is a consequence of this, not a style choice.
+
+Two fixed choices come with it. `--transform as_coroutine_transform.mjs` lowers
+`@coroutine` functions into their state machines and is inert for a module that
+uses none, so it applies unconditionally rather than being an opt-in to remember.
+`--runtime stub` is the WASMOS choice: AS's incremental GC is not usable here.
+
+An AS guest's `main` takes the args array — `export function main(args:
+Array<string>): i32` — and omitting the parameter does not compile.
+
+`[link] initial_memory` is in bytes like every other language; `asc` takes pages,
+and a value that is not a whole number of 64 KiB pages is refused rather than
+rounded.
 
 ## Linker behavior
 

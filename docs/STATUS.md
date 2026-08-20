@@ -796,11 +796,14 @@ linked feature documents for rationale and rollout plans.
   `libc.a` and `libsys.a`, and a `wasmos-clang` driver that supplies the triple,
   sysroot, wasm linker defaults and the `.wap` packaging step, so
   `wasmos-clang hello.c -o hello` produces a runnable package with no other flags.
-  `wasmos-zig` does the same for Zig, staging the runtime shims flat so
+  `wasmos-zig` does the same for Zig — staging the runtime shims flat so
   `@import("wasmos.zig")` resolves, always passing the mandatory 8 KiB shadow
-  stack, and refusing to emit a module that fails the user-VA layout check.
-  `examples/{c,zig}/sdk_hello` are built that way by every build and run in the
-  guest by `tests/test_sdk_hello.py`, which checks console output, a real `argv[1]`, and an
+  stack, and refusing to emit a module that fails the user-VA layout check — and
+  `wasmos-asc` for AssemblyScript, staging the whole AS runtime flat beside the app
+  because `asc` has no include path, with the coroutine transform and
+  `--runtime stub` applied unconditionally. `examples/{c,zig,assemblyscript}/sdk_hello`
+  are built that way by every build and run in the guest by
+  `tests/test_sdk_hello.py`, which checks console output, a real `argv[1]`, and an
   `open`/`read` that reaches the filesystem service over IPC; `tests/test_sdk_abi.py` asserts the module's import
   and export shape without booting. Stage 1 keeps LLVM's own
   `wasm32-unknown-unknown` target and puts the WASMOS knowledge in the driver,

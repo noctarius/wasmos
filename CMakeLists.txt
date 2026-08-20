@@ -503,6 +503,43 @@ set(WASMOS_LIBC_INCLUDE_DEPS
   ${CMAKE_SOURCE_DIR}/src/libui/include/wasmos/libui_menu_item.h
 )
 
+# wasmos_manifest_link_value(<out_var> <manifest> <key> <default>)
+#
+# Reads one key from a manifest's [link] section -- the link-time memory sizes,
+# in bytes -- and falls back to <default> when the section or the key is absent.
+#
+# Section-aware rather than a bare regex over the file: [resources] holds
+# stack_pages next to [link]'s stack_size, and a manifest is the one place a
+# reader looks to learn how an app is sized, so a key silently read from the wrong
+# section would be worse than no key at all. The grammar is the subset
+# scripts/make_wasmos_app.c accepts (see parse_linker_manifest); [link] is the one
+# section the packer ignores, because these values reach the linker, not the
+# container.
+function(wasmos_manifest_link_value out_var manifest key default)
+  set(_result ${default})
+  if (EXISTS "${manifest}")
+    file(STRINGS "${manifest}" _lines)
+    set(_section "")
+    foreach (_line IN LISTS _lines)
+      string(REGEX REPLACE "#.*$" "" _line "${_line}")
+      string(STRIP "${_line}" _line)
+      if (_line STREQUAL "")
+        continue()
+      endif ()
+      if (_line MATCHES "^\\[")
+        set(_section "${_line}")
+        continue()
+      endif ()
+      if (_section STREQUAL "[link]" AND _line MATCHES "^${key}[ \t]*=[ \t]*(.+)$")
+        string(STRIP "${CMAKE_MATCH_1}" _value)
+        string(REGEX REPLACE "^\"(.*)\"$" "\\1" _value "${_value}")
+        set(_result "${_value}")
+      endif ()
+    endforeach ()
+  endif ()
+  set(${out_var} ${_result} PARENT_SCOPE)
+endfunction()
+
 function(wasmos_add_wasm_c_app_target target_name)
   set(options NO_BUILTIN STARTUP_SHIM CXX ASYNC_SERVICE ASYNC_APP)
   set(oneValueArgs SOURCE OUTPUT_WASM OUTPUT_APP MANIFEST EXPORT STACK_SIZE INITIAL_MEMORY MAX_MEMORY BUILD_COMMENT PACK_COMMENT)
@@ -552,18 +589,26 @@ function(wasmos_add_wasm_c_app_target target_name)
     list(APPEND _wasmos_runtime_deps ${_wasmos_crt})
   endif ()
 
-  set(_stack_size 4096)
-  if (WASMOS_APP_STACK_SIZE)
-    set(_stack_size ${WASMOS_APP_STACK_SIZE})
+  # Link-time memory sizes come from the manifest's [link] section, so one file
+  # describes an app: what it needs from the kernel ([resources]) and how its own
+  # linear memory is laid out ([link]). These values are load-bearing rather than
+  # stylistic -- an app that maps shared memory, a framebuffer or socket rings has
+  # to reserve linear memory up front, because those windows are placed above a
+  # 2 MiB floor and above live data -- so they belong with the app, not in the
+  # build file that happens to compile it.
+  if (WASMOS_APP_STACK_SIZE OR WASMOS_APP_INITIAL_MEMORY OR WASMOS_APP_MAX_MEMORY)
+    message(FATAL_ERROR
+      "${target_name}: STACK_SIZE/INITIAL_MEMORY/MAX_MEMORY are read from the "
+      "manifest's [link] section now. Move them to "
+      "${WASMOS_APP_MANIFEST} as stack_size/initial_memory/max_memory.")
   endif ()
-  set(_initial_memory 65536)
-  if (WASMOS_APP_INITIAL_MEMORY)
-    set(_initial_memory ${WASMOS_APP_INITIAL_MEMORY})
-  endif ()
-  set(_max_memory 65536)
-  if (WASMOS_APP_MAX_MEMORY)
-    set(_max_memory ${WASMOS_APP_MAX_MEMORY})
-  endif ()
+  # Re-configure when a manifest changes: these values are read at configure time,
+  # so an edit that is not noticed here silently builds with the old sizes.
+  set_property(DIRECTORY ${CMAKE_SOURCE_DIR} APPEND
+               PROPERTY CMAKE_CONFIGURE_DEPENDS ${WASMOS_APP_MANIFEST})
+  wasmos_manifest_link_value(_stack_size "${WASMOS_APP_MANIFEST}" stack_size 4096)
+  wasmos_manifest_link_value(_initial_memory "${WASMOS_APP_MANIFEST}" initial_memory 65536)
+  wasmos_manifest_link_value(_max_memory "${WASMOS_APP_MANIFEST}" max_memory 65536)
 
   set(_build_comment "Building wasm module")
   if (WASMOS_APP_BUILD_COMMENT)

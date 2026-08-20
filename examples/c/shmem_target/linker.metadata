@@ -12,6 +12,13 @@ stack_pages = 16
 # (heap_pages * 4 KiB) must clear it. 512 pages = 2 MiB.
 heap_pages = 512
 
+# Link-time memory in bytes (docs/toolchain.md); omitted keys take the defaults.
+# See shmem_owner: the full 4 MiB is live from the start so the map_auto
+# window lands inside already-live logical memory.
+[link]
+initial_memory = 4194304
+max_memory = 4194304
+
 [ipc]
 required_endpoint_name = "-"
 required_endpoint_rights = 0

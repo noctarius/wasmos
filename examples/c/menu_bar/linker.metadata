@@ -10,6 +10,12 @@ native = false
 stack_pages = 16
 heap_pages = 512
 
+# Link-time memory in bytes (docs/toolchain.md); omitted keys take the defaults.
+# A libui menu tree and its shared framebuffer window.
+[link]
+initial_memory = 4194304
+max_memory = 4194304
+
 [ipc]
 required_endpoint_name = "proc"
 required_endpoint_rights = 0

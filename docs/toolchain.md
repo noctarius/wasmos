@@ -215,10 +215,22 @@ the packed `(domain, code)` values single-sourced in `abi/errors.yaml` (see
 exactly the ambiguity that model removes. `wasmos/abi/wasmos_status.h` is the
 header that answers "what went wrong".
 
-There is also no `libclang_rt.builtins-wasm32.a` yet. Nothing in tree needs it —
-`-fno-builtin` is passed and libc supplies the `mem*` family — but guest code that
-needs 64-bit or 128-bit arithmetic helpers will fail to link until it is built
-from LLVM source.
+There is also no `libclang_rt.builtins-wasm32.a`, and the gap is narrower than a
+freestanding target usually implies. WebAssembly has native i64 divide, remainder
+and multiply and native float conversions, so **64-bit C arithmetic needs no
+compiler-rt at all**. The only shape that does is `__int128`, which reaches exactly
+eight symbols:
+
+```
+__multi3  __udivti3  __divti3  __umodti3  __modti3     (integer)
+__fixdfti  __fixunsdfti  __floatuntidf                 (double <-> i128)
+```
+
+Nothing in the tree uses `__int128`, and because the C link does not pass
+`--allow-undefined`, a guest that reaches one gets a link error naming the symbol
+rather than a module that loads and traps. `tests/test_sdk_arithmetic.py` pins both
+halves of that boundary — 64-bit code links, `__int128` fails by name — so building
+compiler-rt later is a change that test will notice.
 
 ---
 
@@ -257,6 +269,21 @@ flags = 0
 `[resources]` and `[link]` are different things with confusingly similar names:
 `[resources]` sizes the *kernel's* runtime allocations for the process, `[link]`
 sizes the *module's* own linear memory and shadow stack.
+
+`[link]` is where an app's memory lives for the in-tree build too, not only for the
+SDK: `wasmos_add_wasm_c_app_target` reads it at configure time and passing
+`STACK_SIZE`/`INITIAL_MEMORY`/`MAX_MEMORY` to the helper is now a configure error
+naming the manifest to move them to. Omit a key to take the default; writing a
+default out explicitly is noise a test rejects, so a value present in a manifest is
+one somebody chose. `tests/test_link_memory_manifest.py` checks that what a
+manifest asks for is what the module declares — the failure it exists for is a
+module that links fine and is sized wrong, which does not surface at the link step
+but later, inside a host call whose window did not fit.
+
+The C and Zig helpers read `[link]`; the AssemblyScript and Rust helpers still size
+their modules through their own flags, which `docs/TASKS.md` tracks. Each helper
+keeps its own defaults for keys a manifest omits — the C one pins a maximum, the Zig
+one leaves the module without any — so only declared keys are checked.
 
 With no `--wasmos-manifest=`, the driver falls back to
 `share/wasmos/default-manifest.toml` and substitutes the output basename for the

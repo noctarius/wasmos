@@ -103,13 +103,27 @@ function(wasmos_add_zig_wasm_app)
     endif()
   endforeach()
 
-  # Optional -Xlinker --initial-memory=N: sets the WASM binary's declared
-  # initial memory pages.  WARP's ActiveMemoryManager uses this to set
-  # allowedLinMemPages_; without it, Zig freestanding binaries declare only
-  # 1 page (64 KB) and shmem probes beyond that throw OutOfBounds at runtime.
-  set(_initial_mem_flags "")
+  # -Xlinker --initial-memory=N sets the WASM binary's declared initial memory
+  # pages.  WARP's ActiveMemoryManager derives allowedLinMemPages_ from it;
+  # without it a Zig freestanding binary declares one page (64 KiB) and a shmem
+  # probe beyond that throws OutOfBounds at runtime -- which reaches C++ code with
+  # no handler and panics the kernel, so this is not a tuning knob.
+  #
+  # The value comes from the manifest's [link] section, the same place the C helper
+  # reads it, so an app is sized in one file whatever language it is written in.
+  # ARG_INITIAL_MEMORY is rejected rather than honoured: two sources for one number
+  # is how it goes stale.
   if (ARG_INITIAL_MEMORY)
-    set(_initial_mem_flags --initial-memory=${ARG_INITIAL_MEMORY})
+    message(FATAL_ERROR
+      "${ARG_NAME}: INITIAL_MEMORY is read from the manifest's [link] section now. "
+      "Move it to ${ARG_MANIFEST} as initial_memory.")
+  endif ()
+  set_property(DIRECTORY ${CMAKE_SOURCE_DIR} APPEND
+               PROPERTY CMAKE_CONFIGURE_DEPENDS ${ARG_MANIFEST})
+  wasmos_manifest_link_value(_zig_initial_memory "${ARG_MANIFEST}" initial_memory 0)
+  set(_initial_mem_flags "")
+  if (_zig_initial_memory GREATER 0)
+    set(_initial_mem_flags --initial-memory=${_zig_initial_memory})
   endif ()
 
   set(_c_compile_flags "")

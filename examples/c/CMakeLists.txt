@@ -78,8 +78,6 @@ wasmos_add_wasm_c_app_target(gfx_smoke
   EXPORT         wasmos_main
   NO_BUILTIN
   STARTUP_SHIM
-  INITIAL_MEMORY 8388608
-  MAX_MEMORY     8388608
   BUILD_COMMENT  "Building wasm gfx smoke module"
   PACK_COMMENT   "Packing wasm gfx smoke as WASMOS-APP"
 )
@@ -152,12 +150,6 @@ wasmos_add_wasm_c_app_target(shmem_owner
   EXPORT      wasmos_main
   NO_BUILTIN
   STARTUP_SHIM
-  # shmem_map_auto places its window above the app's live data. Start with the
-  # full 4 MiB of linear memory (like menu_bar) so the window lands inside
-  # already-live logical memory rather than requiring a grow-on-access, which
-  # a shmem window at ~2 MiB in a 1-page module would trap on.
-  INITIAL_MEMORY 4194304
-  MAX_MEMORY     4194304
   BUILD_COMMENT "Building wasm shmem-owner module"
   PACK_COMMENT  "Packing wasm shmownr as WASMOS-APP"
 )
@@ -170,10 +162,6 @@ wasmos_add_wasm_c_app_target(shmem_target
   EXPORT      wasmos_main
   NO_BUILTIN
   STARTUP_SHIM
-  # See shmem_owner: full 4 MiB initial memory so the map_auto window lands in
-  # already-live logical memory (no grow-on-access trap).
-  INITIAL_MEMORY 4194304
-  MAX_MEMORY     4194304
   BUILD_COMMENT "Building wasm shmem-target module"
   PACK_COMMENT  "Packing wasm shmtgt as WASMOS-APP"
 )
@@ -186,10 +174,6 @@ wasmos_add_wasm_c_app_target(net_smoke
   EXPORT      wasmos_main
   NO_BUILTIN
   STARTUP_SHIM
-  # Room for the packet socket's rings overlaid into linear memory (scanned in
-  # above the 2 MiB floor, clear of the heap) via wasmos_xfer_buffer_map.
-  INITIAL_MEMORY 4194304
-  MAX_MEMORY     4194304
   BUILD_COMMENT "Building wasm net-smoke module"
   PACK_COMMENT  "Packing wasm net-smoke as WASMOS-APP"
 )
@@ -215,10 +199,6 @@ wasmos_add_wasm_c_app_target(net_tcp_echo
   EXPORT      wasmos_main
   NO_BUILTIN
   STARTUP_SHIM
-  # Room for the socket rings overlaid into linear memory (scanned in above the
-  # 2 MiB floor, clear of the heap) via wasmos_xfer_buffer_map.
-  INITIAL_MEMORY 4194304
-  MAX_MEMORY     4194304
   BUILD_COMMENT "Building wasm TCP echo client"
   PACK_COMMENT  "Packing wasm TCP echo client as WASMOS-APP"
 )
@@ -243,8 +223,6 @@ wasmos_add_wasm_c_app_target(menu_bar
   EXPORT         wasmos_main
   NO_BUILTIN
   STARTUP_SHIM
-  INITIAL_MEMORY 4194304
-  MAX_MEMORY     4194304
   BUILD_COMMENT  "Building wasm menu-bar module"
   PACK_COMMENT   "Packing wasm menu-bar as WASMOS-APP"
 )

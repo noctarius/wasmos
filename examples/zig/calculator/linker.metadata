@@ -10,6 +10,14 @@ native = false
 stack_pages = 4
 heap_pages = 512
 
+# Link-time memory in bytes (docs/toolchain.md); omitted keys take the defaults.
+# Zig declares its own initial memory from the binary's live data, and
+# shmem_map_auto scans for its window ABOVE that, so the declared minimum has to
+# leave room for the framebuffer mapping: 2 MiB. Without it the window lands
+# outside linear memory and WARP throws OutOfBounds, which panics the kernel.
+[link]
+initial_memory = 2097152
+
 [ipc]
 required_endpoint_name = "proc"
 required_endpoint_rights = 0

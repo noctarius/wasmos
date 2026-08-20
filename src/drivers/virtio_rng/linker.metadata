@@ -15,6 +15,12 @@ stack_pages = 16
 # 4 MiB in CMakeLists.
 heap_pages = 512
 
+# Link-time memory in bytes (docs/toolchain.md); omitted keys take the defaults.
+# Virtqueue ring, mapped above the 2 MiB floor.
+[link]
+initial_memory = 4194304
+max_memory = 4194304
+
 [ipc]
 required_endpoint_name = "-"
 required_endpoint_rights = 0

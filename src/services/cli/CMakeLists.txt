@@ -9,9 +9,6 @@ wasmos_add_wasm_c_app_target(cli_app
   OUTPUT_APP ${WASM_CLI_APP}
   MANIFEST ${CMAKE_CURRENT_SOURCE_DIR}/linker.metadata
   EXPORT initialize
-  STACK_SIZE 8192
-  INITIAL_MEMORY 131072
-  MAX_MEMORY 131072
   BUILD_COMMENT "Building wasm CLI module"
   PACK_COMMENT "Packing wasm CLI as WASMOS-APP"
 )

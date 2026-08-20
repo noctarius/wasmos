@@ -769,6 +769,17 @@ linked feature documents for rationale and rollout plans.
 - `.wap` packages cover WASM and native apps, services, and drivers. C, C++,
   Zig, Go, Rust, and AssemblyScript examples are supported through shared libc
   and runtime-specific libsys wrappers.
+- An app's link-time memory lives in its manifest's `[link]` section
+  (`stack_size`/`initial_memory`/`max_memory`, bytes), read at configure time by
+  `wasmos_add_wasm_c_app_target`; passing the old
+  `STACK_SIZE`/`INITIAL_MEMORY`/`MAX_MEMORY` arguments is a configure error naming
+  the manifest. So one file describes an app: what it needs from the kernel
+  (`[resources]`) and how its own linear memory is laid out (`[link]`), each number
+  next to the reason for it. All 59 modules were byte-identical in size across the
+  migration, and `tests/test_link_memory_manifest.py` checks every manifest that
+  declares `[link]` against what its module actually declares. The Zig helper reads
+  the section too; the AssemblyScript and Rust helpers still size modules through
+  their own flags.
 - The in-tree build and the SDK are one toolchain: `wasmos_add_wasm_c_app_target`
   links `crt1.o`, `libc.a` and `libsys.a` from the staged sysroot instead of
   recompiling libc into each of the ~59 modules, so there is one libc build and
@@ -792,8 +803,11 @@ linked feature documents for rationale and rollout plans.
   (`share/cmake/WASMOS/WASMOSToolchain.cmake` plus a `Platform/WASMOS.cmake`)
   builds an out-of-tree project to a running `.wap`, and `wasmos-clang++` builds
   freestanding C++ (verified in the guest by hand, not yet in a battery). Not yet
-  present: compiler-rt builtins for wasm32, a wasm32 `libc++` (so no `<vector>`),
-  and a native `wasm32-unknown-wasmos` LLVM triple. See `docs/toolchain.md`.
+  present: a wasm32 `libc++` (so no `<vector>`) and a native
+  `wasm32-unknown-wasmos` LLVM triple. compiler-rt builtins are absent but measured
+  to be needed only for `__int128` (eight symbols) — 64-bit arithmetic and float
+  conversions are native wasm instructions — and `tests/test_sdk_arithmetic.py`
+  pins that boundary in both directions. See `docs/toolchain.md`.
 - `crt1` builds a real `argc`/`argv` for `wasmos_main` apps:
   `wasmos_startup_argv()` (`src/libc/src/spawn_info.c`) tokenizes the spawn-info
   argument string, `argv[0]` is an empty program-name slot so `argv[1]` is the

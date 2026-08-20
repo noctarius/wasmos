@@ -106,7 +106,12 @@
       "name": "host-tools",
       "description": "Host tools, exercised directly. Boots nothing and needs no emulation.",
       "needs_qemu": false,
-      "files": ["test_make_wasmos_app_capabilities.py", "test_sdk_abi.py"]
+      "files": [
+        "test_link_memory_manifest.py",
+        "test_make_wasmos_app_capabilities.py",
+        "test_sdk_abi.py",
+        "test_sdk_arithmetic.py"
+      ]
     }
   ]
 }

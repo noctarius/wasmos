@@ -11,6 +11,12 @@ native = false
 stack_pages = 64
 heap_pages = 64
 
+# Link-time memory in bytes (docs/toolchain.md); omitted keys take the defaults.
+# The startup script recurses through .rc includes; the deeper stack is for
+# that, not for data.
+[link]
+stack_size = 16384
+
 [ipc]
 required_endpoint_name = "proc"
 required_endpoint_rights = 1

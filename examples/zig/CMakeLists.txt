@@ -44,11 +44,6 @@ wasmos_add_zig_wasm_app(
   OUTPUT_WASM    ${WASM_CALCULATOR_WASM}
   OUTPUT_APP     ${WASM_CALCULATOR_APP}
   MANIFEST       ${CMAKE_CURRENT_SOURCE_DIR}/calculator/linker.metadata
-  # WARP's ActiveMemoryManager caps linear memory at allowedLinMemPages_, taken
-  # from the WASM binary's declared minimum. shmem_map_auto scans for its window
-  # above that live data, so the declared minimum has to leave room for the
-  # framebuffer mapping: 2 MiB (32 WASM pages).
-  INITIAL_MEMORY 2097152
   EXTRA_SRCS
     ${LIBC_DIR}/zig/coroutine.zig
     ${LIBSYS_WASM_DIR}/coroutine_wasm.c

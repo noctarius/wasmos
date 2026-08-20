@@ -1144,11 +1144,18 @@ Source: `architecture/25-diagnostics-status.md`,
 - [ ] [TEST][P2] Add behavioral regression coverage with every new subsystem contract;
   reject source-text assertions.
 - [ ] [FEATURE][P2] Finish the toolchain SDK's remaining Stage 1 milestones
-  (`docs/toolchain.md`): build `compiler-rt` builtins for wasm32 (absent from the
-  host toolchain, so guest 64-bit or 128-bit arithmetic helpers will not link);
-  move the per-target
-  `STACK_SIZE`/`INITIAL_MEMORY`/`MAX_MEMORY` CMake arguments into each
-  `linker.metadata`'s `[link]` section so one file describes an app; and ship a
+  (`docs/toolchain.md`): build `compiler-rt` builtins for wasm32 if a guest ever
+  needs `__int128` — measured to be the ONLY shape that needs them, reaching eight
+  symbols (`__multi3`, `__udivti3`, `__divti3`, `__umodti3`, `__modti3`,
+  `__fixdfti`, `__fixunsdfti`, `__floatuntidf`); 64-bit arithmetic and float
+  conversions are native wasm instructions and need nothing, nothing in tree uses
+  `__int128`, and `tests/test_sdk_arithmetic.py` pins that boundary, so this is a
+  gap to close on demand rather than a missing piece;
+  teach the AssemblyScript and Rust app
+  helpers to read the manifest's `[link]` section, as the C and Zig helpers do, so
+  every language sizes its modules from one place
+  (`cmake/WasmosAssemblyScript.cmake`, `examples/rust/CMakeLists.txt`; their modules
+  are visibly skipped by `tests/test_link_memory_manifest.py` today); and ship a
   standalone SDK build that does not borrow the host LLVM. Stage 2 (a native
   `wasm32-unknown-wasmos` LLVM triple) follows those.
 - [ ] [TEST][P2] Run the SDK on Linux. The driver wrappers (`scripts/sdk/*`) are

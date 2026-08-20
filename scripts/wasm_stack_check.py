@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
 """Validate that a Zig WASM utility's stack pointer and data segments fit
-within the kernel's user-VA region limit.
+within the layout budget the kernel's user-VA mirror region allows.
 
-Background: the kernel allocates 8 physical pages (32 KB) for the
-MEM_REGION_WASM_LINEAR user-VA region of each process context.  The
+Background: each process context gets a MEM_REGION_WASM_LINEAR user-VA
+mirror region of 16 pages (64 KiB) (src/kernel/memory.c).  The
 proc_info_stats and fs_buffer_write hostcalls call mm_user_range_permitted
-on every pointer they receive, which walks that 32 KB region.  If a Zig
+on every pointer they receive, which walks only that region.  If a Zig
 utility is built with the default 1 MB shadow stack, its globals land at
-~1 MB — far outside this window — and every hostcall fails silently.
+~1 MB — far outside the region — and every such hostcall fails silently.
 Building with --stack 8192 places globals starting at 0x2000, identical to
-the layout of C WASM modules."""
+the layout of C WASM modules.  The budget passed in --max-addr is set by
+cmake/WasmosZigApp.cmake and is stricter than the kernel window."""
 
 import argparse
 import sys

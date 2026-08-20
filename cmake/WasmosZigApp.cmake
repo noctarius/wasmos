@@ -3,23 +3,28 @@
 #
 # Why --stack 8192 is mandatory
 # ==============================
-# The kernel's mm_context_alloc_region allocates 8 × 4 KB pages (32 KB) for
-# MEM_REGION_WASM_LINEAR per process context.  Every hostcall that writes to
-# WASM memory — proc_info_stats, fs_buffer_write, fs_buffer_copy, etc. —
-# calls mm_user_range_permitted, which walks only that 32 KB window.
-# Zig's default shadow stack is 1 MB, which places globals at ~1 MB: every
-# such hostcall rejects the pointer and fails silently.  Building with
-# --stack 8192 mirrors the layout of C WASM modules (stack_ptr = 0x2000) and
-# keeps all globals well within 32 KB.
+# Each process context gets one MEM_REGION_WASM_LINEAR user-VA mirror region of
+# 16 × 4 KiB pages (64 KiB), matching a module's one-page initial linear memory
+# (src/kernel/memory.c, mm_context_alloc_region(ctx, 16, ...)).  Every hostcall
+# that writes to WASM memory — proc_info_stats, fs_buffer_write, fs_buffer_copy,
+# etc. — calls mm_user_range_permitted, which walks only that region: a pointer
+# whose offset lands above it is rejected and the call fails silently.
+# Zig's default shadow stack is 1 MB, which places globals at ~1 MB, past the
+# region entirely.  --stack 8192 mirrors the layout of C WASM modules
+# (stack_ptr = 0x2000) and keeps globals in the region's first pages.
 #
 # The wasm_stack_check.py script verifies this after every compilation and
 # fails the build immediately if the constraint is violated.
 
-# Kernel user-VA region limit: 8 pages × 4 KB.  Must stay in sync with
-# mm_context_alloc_region(ctx, 8, ..., MEM_REGION_WASM_LINEAR) in
-# src/kernel/memory.c.
+# Budget wasm_stack_check.py enforces on stack pointer + data end.  32 KiB is
+# half the kernel's 64 KiB MEM_REGION_WASM_LINEAR window, so a passing module is
+# inside it with room to spare.
+# TODO: no Zig app has needed more than 32 KiB of data, so nobody has decided
+# whether this should track the kernel window (65536) instead; a Zig app that
+# outgrows the budget will fail the check while the kernel would still accept
+# it, and the number must be re-derived then rather than nudged.
 set(WASMOS_ZIG_USER_VA_LIMIT 32768 CACHE INTERNAL
-    "Kernel user-VA region size (bytes) validated by wasm_stack_check.py")
+    "Layout budget (bytes) validated by wasm_stack_check.py; see note above")
 
 # Shadow-stack size passed to zig build-exe for every Zig WASM app.
 set(WASMOS_ZIG_STACK_SIZE 8192 CACHE INTERNAL

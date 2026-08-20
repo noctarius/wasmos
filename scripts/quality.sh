@@ -250,6 +250,16 @@ collect_files() {
             *.rs)
                 rust_format_files+=("$file")
                 case "$file" in
+                    # sdk_hello declares the binding as a plain sibling module
+                    # (`mod wasmos;`) because that is what an out-of-tree app can
+                    # write, and wasmos-rustc stages wasmos.rs beside a copy of it
+                    # to make that resolve. So the file does not compile where it
+                    # sits -- only in the layout its driver builds -- and linting
+                    # it in place would fail on a missing module every time. It is
+                    # still format-checked, and it is COMPILED by the build, by
+                    # the driver, and RUN in the guest by tests/test_sdk_hello.py,
+                    # which is stronger coverage than this stage gives.
+                    examples/rust/sdk_hello/*) ;;
                     examples/rust/*)
                         rust_lint_files+=("$file")
                         ;;
@@ -626,8 +636,17 @@ run_rust_lint() {
     step "Linting Rust sources (rustc -Dwarnings)..."
     local file
     for file in "${rust_lint_files[@]}"; do
-        local out_file
-        out_file="$(mktemp "${TMPDIR:-/tmp}/wasmos-rust-lint.XXXXXX.rmeta")"
+        local out_file rc
+        # The Xs must be the LAST characters of the template: BSD/macOS mktemp
+        # substitutes only a trailing run of them, so a template ending in an
+        # extension is taken literally and every run gets the SAME path. Combined
+        # with `set -e` skipping a cleanup line after a failing rustc, that turned
+        # one legitimate lint failure into a gate that stayed red on every later
+        # run with "mkstemp failed: File exists" -- a message about nothing in the
+        # code. The file is removed whether rustc succeeds or not, and rustc does
+        # not care that the name has no .rmeta suffix.
+        out_file="$(mktemp "${TMPDIR:-/tmp}/wasmos-rust-lint.XXXXXX")"
+        rc=0
         "$rustc" \
             --edition=2021 \
             --emit metadata \
@@ -635,8 +654,11 @@ run_rust_lint() {
             --target wasm32-unknown-unknown \
             -Dwarnings \
             "$file" \
-            -o "$out_file"
+            -o "$out_file" || rc=$?
         rm -f "$out_file"
+        if [[ $rc -ne 0 ]]; then
+            return "$rc"
+        fi
     done
 }
 

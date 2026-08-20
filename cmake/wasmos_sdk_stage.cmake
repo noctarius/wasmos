@@ -69,7 +69,8 @@ file(COPY ${SRC_DIR}/scripts/wasm_stack_check.py DESTINATION ${SDK_DIR}/libexec/
 
 # --- driver + tool wrappers ------------------------------------------------
 set(_perm FILE_PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE GROUP_READ GROUP_EXECUTE)
-foreach (_w IN ITEMS wasmos-clang wasmos-clang++ wasmos-zig wasmos-asc wasmos-pack wasmos-inspect)
+foreach (_w IN ITEMS wasmos-clang wasmos-clang++ wasmos-zig wasmos-asc wasmos-rustc
+                     wasmos-pack wasmos-inspect)
   file(COPY ${SRC_DIR}/scripts/sdk/${_w} DESTINATION ${SDK_DIR}/bin ${_perm})
 endforeach ()
 
@@ -122,6 +123,15 @@ if (EXISTS ${SRC_DIR}/tools/as_coroutine_transform.mjs)
        DESTINATION ${SDK_DIR}/libexec/wasmos)
 endif ()
 
+# Rust reaches its binding as a sibling module (`mod wasmos;`), so the two .rs
+# files are staged beside a copy of the app the same way. Unlike Zig and
+# AssemblyScript, the C entry points the Rust binding declares as extern "C" come
+# from libsys.a in the sysroot, which rustc links through -C link-arg.
+file(MAKE_DIRECTORY ${SDK_DIR}/share/wasmos/rust)
+foreach (_rs IN ITEMS wasmos.rs coroutine.rs)
+  file(COPY ${LIBC_DIR}/rust/${_rs} DESTINATION ${SDK_DIR}/share/wasmos/rust)
+endforeach ()
+
 file(COPY ${SRC_DIR}/scripts/sdk/default-manifest.toml DESTINATION ${SDK_DIR}/share/wasmos)
 file(COPY ${SRC_DIR}/scripts/sdk/WASMOSToolchain.cmake DESTINATION ${SDK_DIR}/share/cmake/WASMOS)
 file(COPY ${SRC_DIR}/scripts/sdk/Platform/WASMOS.cmake
@@ -142,6 +152,7 @@ WASMOS_SDK_ZIG=${SDK_ZIG}
 WASMOS_SDK_ZIG_STACK_SIZE=${SDK_ZIG_STACK_SIZE}
 WASMOS_SDK_ZIG_VA_LIMIT=${SDK_ZIG_VA_LIMIT}
 WASMOS_SDK_ASC=${SDK_ASC}
+WASMOS_SDK_RUSTC=${SDK_RUSTC}
 ")
 
 file(WRITE ${STAMP} "staged\n")

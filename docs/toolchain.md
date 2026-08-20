@@ -105,8 +105,9 @@ POSIX feature macros are not: WASMOS satisfies none of those contracts.
 ```text
 build/wasmos-sdk/
 ├── bin/            wasmos-clang, wasmos-clang++, wasmos-zig, wasmos-asc,
-│                   wasmos-ld, wasmos-ar, wasmos-nm, wasmos-ranlib,
-│                   wasmos-strip, wasmos-objdump, wasmos-pack, wasmos-inspect
+│                   wasmos-rustc, wasmos-ld, wasmos-ar, wasmos-nm,
+│                   wasmos-ranlib, wasmos-strip, wasmos-objdump, wasmos-pack,
+│                   wasmos-inspect
 ├── libexec/wasmos/ make_wasmos_app, wasm_inspect.py, wasm_stack_check.py,
 │                   as_coroutine_transform.mjs
 ├── sysroot/
@@ -115,7 +116,8 @@ build/wasmos-sdk/
 │   └── lib/wasm32-unknown-wasmos/  crt1.o, libc.a, libsys.a
 ├── share/
 │   ├── cmake/WASMOS/  WASMOSToolchain.cmake, Platform/WASMOS.cmake
-│   └── wasmos/        default-manifest.toml, zig/*.zig, assemblyscript/*.ts
+│   └── wasmos/        default-manifest.toml, zig/*.zig, assemblyscript/*.ts,
+│                       rust/*.rs
 └── wasmos-sdk.conf  resolved tool paths and version, sourced by the wrappers
 ```
 
@@ -220,6 +222,42 @@ Array<string>): i32` — and omitting the parameter does not compile.
 `[link] initial_memory` is in bytes like every other language; `asc` takes pages,
 and a value that is not a whole number of 64 KiB pages is refused rather than
 rounded.
+
+## Rust
+
+```bash
+wasmos-rustc app.rs -o app           # -> app.wap
+```
+
+An app declares the binding as a sibling module:
+
+```rust
+#![no_std]
+#![no_main]
+mod wasmos;
+```
+
+and the driver stages it so that resolves — `wasmos.rs` beside a copy of the app,
+and its own `pub mod coroutine;` child under `wasmos/`, because a plain `mod`
+declaration nests where an `#[path]` escape does not. (In tree an app reaches the
+binding with `#[path = "../../../src/libc/rust/wasmos.rs"]`, which an out-of-tree
+app cannot write.)
+
+**The shadow stack is overridden**, for the same reason as Zig: rustc defaults to
+1 MB with `--stack-first`, which places the app's data above 1 MB — past the 64 KiB
+user-VA mirror region that host calls writing into WASM memory validate against.
+The driver passes the same small stack the Zig driver uses and then runs
+`wasm_stack_check`, so an SDK-built Rust module has the same low layout as a C one
+and fits the default one-page manifest.
+
+The C entry points the binding declares as `extern "C"` (coroutines, the event
+loop, async filesystem) come from `libsys.a` in the sysroot, linked through
+`-C link-arg=-L… -C link-arg=-lsys`; archive semantics pull in only what the app
+references.
+
+A Rust module exports more than a C one — `__heap_base`, `__data_end` and the
+app's own `main` alongside `wasmos_main` — because rustc adds those to the link
+line. They are inert: the kernel resolves the entry by name.
 
 ## Linker behavior
 

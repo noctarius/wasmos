@@ -1153,6 +1153,17 @@ Source: `architecture/25-diagnostics-status.md`,
   gap to close on demand rather than a missing piece; and ship a standalone SDK
   build that does not borrow the host LLVM. Stage 2 (a native
   `wasm32-unknown-wasmos` LLVM triple) follows those.
+- [ ] [BUG][P2] Resolve a layout contradiction between the in-tree Rust build and
+  the check every Zig module must pass. `build/hello_rust.wasm` places its data
+  segments at `0x100000` and **fails** `scripts/wasm_stack_check.py --max-addr
+  32768` outright — rustc defaults to a 1 MB shadow stack with `--stack-first` —
+  yet `tests/test_hello_rust.py` passes, including its filesystem chain. Either
+  the mirror-region constraint the check enforces is narrower than
+  `cmake/WasmosZigApp.cmake` describes, or that guest is one unexercised host call
+  away from a silent failure. Determine which before copying either premise:
+  `wasmos-rustc` already overrides the stack to the small size and passes the
+  check, so an SDK-built Rust module and the in-tree one now have *different*
+  layouts, which is its own reason to settle this.
 - [ ] [TEST][P2] Run the SDK on Linux. The driver wrappers (`scripts/sdk/*`) are
   POSIX `sh` and parse under `dash`, but have only been executed on macOS, and
   `sdk_hello_app` is a dependency of the default build — so a portability defect

@@ -38,6 +38,7 @@ BUILD_DIR = os.environ.get("WASMOS_BUILD_DIR", os.path.join(ROOT, "build"))
 SDK_HELLO_WAP = os.path.join(BUILD_DIR, "esp", "apps", "sdkhello.wap")
 SDK_ZIG_WAP = os.path.join(BUILD_DIR, "esp", "apps", "sdkzig.wap")
 SDK_AS_WAP = os.path.join(BUILD_DIR, "esp", "apps", "sdkas.wap")
+SDK_RUST_WAP = os.path.join(BUILD_DIR, "esp", "apps", "sdkrust.wap")
 
 
 @unittest.skipUnless(
@@ -134,6 +135,20 @@ class SdkHelloTest(unittest.TestCase):
         self._cmd_expect(
             "sdkas", [b"Hello WASMOS from AssemblyScript via the SDK!"]
         )
+
+    @unittest.skipUnless(
+        os.path.isfile(SDK_RUST_WAP),
+        "SDK Rust smoke app not staged (needs rustc and the wasmos-sdk target)",
+    )
+    def test_exec_sdk_rust_hello(self):
+        """rustc defaults to a 1 MB shadow stack with --stack-first, which puts the
+        app's data above 1 MB -- past the user-VA mirror region host calls
+        validate against. wasmos-rustc overrides it to the same small size the Zig
+        driver uses and checks the resulting layout, and the binding is staged as a
+        sibling module so a plain `mod wasmos;` resolves. Running the module is what
+        says both worked."""
+        self._cmd_expect("cd apps", [b"/apps wamos>"])
+        self._cmd_expect("sdkrust", [b"Hello WASMOS from Rust via the SDK!"])
 
 
 if __name__ == "__main__":

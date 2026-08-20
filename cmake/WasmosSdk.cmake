@@ -58,6 +58,7 @@ endif ()
 # module built out of tree sees the same runtime.
 include(${CMAKE_SOURCE_DIR}/cmake/WasmosAssemblyScript.cmake)
 find_program(ASC_EXECUTABLE asc HINTS ${CLANG_BIN_DIR})
+find_program(RUSTC_EXECUTABLE rustc HINTS $ENV{HOME}/.cargo/bin)
 
 # Compile flags every sysroot object is built with. They must match what
 # wasmos-clang passes for application sources, or an archive object and its
@@ -183,6 +184,7 @@ add_custom_command(
           -DSDK_ZIG_VA_LIMIT=${WASMOS_ZIG_USER_VA_LIMIT}
           -DSDK_ASC=${ASC_EXECUTABLE}
           "-DAS_SOURCES=${WASMOS_AS_LIBC_SOURCES}"
+          -DSDK_RUSTC=${RUSTC_EXECUTABLE}
           -DSDK_AR=${WASMOS_SDK_AR}
           -DSDK_NM=${WASMOS_SDK_nm}
           -DSDK_RANLIB=${WASMOS_SDK_ranlib}
@@ -203,6 +205,9 @@ add_custom_command(
           ${LIBC_DIR}/assemblyscript/runtime.ts
           ${WASMOS_AS_LIBC_SOURCES}
           ${CMAKE_SOURCE_DIR}/tools/as_coroutine_transform.mjs
+          ${CMAKE_SOURCE_DIR}/scripts/sdk/wasmos-rustc
+          ${LIBC_DIR}/rust/wasmos.rs
+          ${LIBC_DIR}/rust/coroutine.rs
           ${CMAKE_SOURCE_DIR}/scripts/sdk/wasmos-pack
           ${CMAKE_SOURCE_DIR}/scripts/sdk/wasmos-inspect
           ${CMAKE_SOURCE_DIR}/scripts/sdk/default-manifest.toml
@@ -304,5 +309,29 @@ if (ASC_EXECUTABLE AND NOT ASC_EXECUTABLE MATCHES "NOTFOUND")
   set(SDK_AS_HELLO_COPY_CMD
     COMMAND ${CMAKE_COMMAND} -E copy ${WASMOS_SDK_AS_HELLO_APP}
             ${BUILD_DIR}/esp/apps/sdkas.wap
+  )
+endif ()
+
+# --- the Rust driver's smoke app ------------------------------------------
+# As above, for wasmos-rustc, skipped when rustc is absent. Staged as sdkrust.wap.
+if (RUSTC_EXECUTABLE AND NOT RUSTC_EXECUTABLE MATCHES "NOTFOUND")
+  set(WASMOS_SDK_RUST_HELLO_SRC ${CMAKE_SOURCE_DIR}/examples/rust/sdk_hello/hello.rs)
+  set(WASMOS_SDK_RUST_HELLO_APP ${BUILD_DIR}/sdkrust.wap)
+  add_custom_command(
+    OUTPUT ${WASMOS_SDK_RUST_HELLO_APP}
+    COMMAND ${WASMOS_SDK_DIR}/bin/wasmos-rustc ${WASMOS_SDK_RUST_HELLO_SRC}
+            -o ${WASMOS_SDK_RUST_HELLO_APP}
+    DEPENDS ${WASMOS_SDK_RUST_HELLO_SRC} ${WASMOS_SDK_STAMP}
+    WORKING_DIRECTORY ${BUILD_DIR}
+    COMMENT "sdk: building sdk_hello (Rust) with wasmos-rustc"
+    VERBATIM
+  )
+  add_custom_target(sdk_rust_hello_app DEPENDS ${WASMOS_SDK_RUST_HELLO_APP})
+  add_dependencies(sdk_rust_hello_app wasmos-sdk)
+  set_property(GLOBAL APPEND PROPERTY WASMOS_WASM_APP_TARGETS sdk_rust_hello_app)
+
+  set(SDK_RUST_HELLO_COPY_CMD
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASMOS_SDK_RUST_HELLO_APP}
+            ${BUILD_DIR}/esp/apps/sdkrust.wap
   )
 endif ()

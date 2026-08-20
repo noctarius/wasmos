@@ -801,7 +801,9 @@ linked feature documents for rationale and rollout plans.
   stack, and refusing to emit a module that fails the user-VA layout check — and
   `wasmos-asc` for AssemblyScript, staging the whole AS runtime flat beside the app
   because `asc` has no include path, with the coroutine transform and
-  `--runtime stub` applied unconditionally. `examples/{c,zig,assemblyscript}/sdk_hello`
+  `--runtime stub` applied unconditionally; and `wasmos-rustc` for Rust, staging
+  the binding as a sibling module and overriding rustc's 1 MB default shadow stack
+  for the same layout reason as Zig. `examples/{c,zig,assemblyscript,rust}/sdk_hello`
   are built that way by every build and run in the guest by
   `tests/test_sdk_hello.py`, which checks console output, a real `argv[1]`, and an
   `open`/`read` that reaches the filesystem service over IPC; `tests/test_sdk_abi.py` asserts the module's import

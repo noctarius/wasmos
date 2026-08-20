@@ -1,4 +1,4 @@
-"""The staged SDK's zero-configuration path, end to end in the guest.
+"""The staged SDK's zero-configuration path, end to end in the guest, per driver.
 
 examples/c/sdk_hello/hello.c is plain C with no linker.metadata, built by
 cmake/WasmosSdk.cmake with the staged driver and no flags but -o. That link line
@@ -34,12 +34,9 @@ from qemu_test_framework import QemuSession, default_config
 # The SDK target is skipped when llvm-ar is absent (cmake/WasmosSdk.cmake returns
 # early), and then the app never reaches the ESP. Skip rather than fail: the
 # absence is a toolchain gap on the host, not a regression in the guest.
-SDK_HELLO_WAP = os.path.join(
-    os.environ.get("WASMOS_BUILD_DIR", os.path.join(ROOT, "build")),
-    "esp",
-    "apps",
-    "sdkhello.wap",
-)
+BUILD_DIR = os.environ.get("WASMOS_BUILD_DIR", os.path.join(ROOT, "build"))
+SDK_HELLO_WAP = os.path.join(BUILD_DIR, "esp", "apps", "sdkhello.wap")
+SDK_ZIG_WAP = os.path.join(BUILD_DIR, "esp", "apps", "sdkzig.wap")
 
 
 @unittest.skipUnless(
@@ -47,6 +44,10 @@ SDK_HELLO_WAP = os.path.join(
     "SDK smoke app not staged on the ESP (needs llvm-ar and the wasmos-sdk target)",
 )
 class SdkHelloTest(unittest.TestCase):
+    """One boot, one case per driver. The Zig case skips on its own when zig is
+    absent, rather than living in a subclass that would boot the guest a second
+    time to run one test."""
+
     @classmethod
     def setUpClass(cls):
         cfg = default_config()
@@ -103,6 +104,20 @@ class SdkHelloTest(unittest.TestCase):
                 b"fs: read ",
             ],
         )
+
+    @unittest.skipUnless(
+        os.path.isfile(SDK_ZIG_WAP),
+        "SDK Zig smoke app not staged (needs zig and the wasmos-sdk target)",
+    )
+    def test_exec_sdk_zig_hello(self):
+        """wasmos-zig hides more than the C driver, and none of it is visible in
+        the source: the runtime shims are staged flat so @import("wasmos.zig")
+        resolves, and the 8 KiB shadow stack is mandatory because Zig's 1 MB
+        default puts the app's globals past the kernel's user-VA mirror region,
+        where host calls that write to WASM memory fail SILENTLY. Running the
+        module is the only way to know the driver got both right."""
+        self._cmd_expect("cd apps", [b"/apps wamos>"])
+        self._cmd_expect("sdkzig", [b"Hello WASMOS from Zig via the SDK!"])
 
 
 if __name__ == "__main__":

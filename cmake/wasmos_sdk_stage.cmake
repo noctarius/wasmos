@@ -62,10 +62,14 @@ if (DEFINED PACKER AND EXISTS ${PACKER})
        FILE_PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE GROUP_READ GROUP_EXECUTE)
 endif ()
 file(COPY ${SRC_DIR}/scripts/wasm_inspect.py DESTINATION ${SDK_DIR}/libexec/wasmos)
+# The layout check wasmos-zig runs after every Zig build: a module whose globals
+# sit above the user-VA mirror region fails host calls silently, so the driver
+# refuses to emit one rather than leaving it to be discovered at runtime.
+file(COPY ${SRC_DIR}/scripts/wasm_stack_check.py DESTINATION ${SDK_DIR}/libexec/wasmos)
 
 # --- driver + tool wrappers ------------------------------------------------
 set(_perm FILE_PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE GROUP_READ GROUP_EXECUTE)
-foreach (_w IN ITEMS wasmos-clang wasmos-clang++ wasmos-pack wasmos-inspect)
+foreach (_w IN ITEMS wasmos-clang wasmos-clang++ wasmos-zig wasmos-pack wasmos-inspect)
   file(COPY ${SRC_DIR}/scripts/sdk/${_w} DESTINATION ${SDK_DIR}/bin ${_perm})
 endforeach ()
 
@@ -92,6 +96,16 @@ wasmos_sdk_tool(wasmos-objdump "${SDK_OBJDUMP}")
 wasmos_sdk_tool(wasmos-ld "${SDK_WASMLD}")
 
 # --- share/ ----------------------------------------------------------------
+# Per-language runtime shims are SOURCE, not headers or archives: Zig and
+# AssemblyScript compile theirs together with the app, and Zig resolves
+# @import("wasmos.zig") beside the importing file. They live under share/ because
+# a sysroot's include/ and lib/ are what a C compiler searches, and these are
+# neither.
+file(MAKE_DIRECTORY ${SDK_DIR}/share/wasmos/zig)
+foreach (_zig IN ITEMS wasmos.zig coroutine.zig)
+  file(COPY ${LIBC_DIR}/zig/${_zig} DESTINATION ${SDK_DIR}/share/wasmos/zig)
+endforeach ()
+
 file(COPY ${SRC_DIR}/scripts/sdk/default-manifest.toml DESTINATION ${SDK_DIR}/share/wasmos)
 file(COPY ${SRC_DIR}/scripts/sdk/WASMOSToolchain.cmake DESTINATION ${SDK_DIR}/share/cmake/WASMOS)
 file(COPY ${SRC_DIR}/scripts/sdk/Platform/WASMOS.cmake
@@ -108,6 +122,9 @@ WASMOS_SDK_TARGET=${SDK_TARGET}
 WASMOS_SDK_TARGET_LLVM=${SDK_TARGET_LLVM}
 WASMOS_SDK_CLANG=${SDK_CLANG}
 WASMOS_SDK_CLANGXX=${SDK_CLANGXX}
+WASMOS_SDK_ZIG=${SDK_ZIG}
+WASMOS_SDK_ZIG_STACK_SIZE=${SDK_ZIG_STACK_SIZE}
+WASMOS_SDK_ZIG_VA_LIMIT=${SDK_ZIG_VA_LIMIT}
 ")
 
 file(WRITE ${STAMP} "staged\n")

@@ -42,6 +42,17 @@ foreach (_tool IN ITEMS nm ranlib strip objdump)
 endforeach ()
 find_program(WASMOS_SDK_WASMLD wasm-ld HINTS ${CLANG_BIN_DIR} ${LLVM_HINTS})
 
+# The Zig driver needs zig itself and the two layout constants the Zig app helper
+# owns (the mandatory shadow-stack size and the budget the layout check enforces).
+# That helper is normally included from the subdirectory that builds a Zig app,
+# which happens after this file; including it here makes the constants available
+# now and is idempotent -- it defines a function and two cache entries.
+include(${CMAKE_SOURCE_DIR}/cmake/WasmosZigApp.cmake)
+if (NOT ZIG_EXECUTABLE OR ZIG_EXECUTABLE MATCHES "NOTFOUND")
+  unset(ZIG_EXECUTABLE CACHE)
+  find_program(ZIG_EXECUTABLE zig HINTS ${CLANG_BIN_DIR} $ENV{HOME}/bin $ENV{HOME}/.local/bin)
+endif ()
+
 # Compile flags every sysroot object is built with. They must match what
 # wasmos-clang passes for application sources, or an archive object and its
 # caller would disagree about, for example, WASMOS_TRACE.
@@ -161,6 +172,9 @@ add_custom_command(
           -DSDK_VERSION=${WASMOS_SDK_VERSION}
           -DSDK_CLANG=${CLANG}
           -DSDK_CLANGXX=${CMAKE_CXX_COMPILER}
+          -DSDK_ZIG=${ZIG_EXECUTABLE}
+          -DSDK_ZIG_STACK_SIZE=${WASMOS_ZIG_STACK_SIZE}
+          -DSDK_ZIG_VA_LIMIT=${WASMOS_ZIG_USER_VA_LIMIT}
           -DSDK_AR=${WASMOS_SDK_AR}
           -DSDK_NM=${WASMOS_SDK_nm}
           -DSDK_RANLIB=${WASMOS_SDK_ranlib}
@@ -173,6 +187,10 @@ add_custom_command(
   DEPENDS ${WASMOS_SDK_STAGE_SCRIPT} ${WASMOS_APP_PACKER} make_wasmos_app
           ${CMAKE_SOURCE_DIR}/scripts/sdk/wasmos-clang
           ${CMAKE_SOURCE_DIR}/scripts/sdk/wasmos-clang++
+          ${CMAKE_SOURCE_DIR}/scripts/sdk/wasmos-zig
+          ${LIBC_DIR}/zig/wasmos.zig
+          ${LIBC_DIR}/zig/coroutine.zig
+          ${CMAKE_SOURCE_DIR}/scripts/wasm_stack_check.py
           ${CMAKE_SOURCE_DIR}/scripts/sdk/wasmos-pack
           ${CMAKE_SOURCE_DIR}/scripts/sdk/wasmos-inspect
           ${CMAKE_SOURCE_DIR}/scripts/sdk/default-manifest.toml
@@ -224,3 +242,29 @@ set_property(GLOBAL APPEND PROPERTY WASMOS_WASM_APP_TARGETS sdk_hello_app)
 set(SDK_HELLO_COPY_CMD
   COMMAND ${CMAKE_COMMAND} -E copy ${WASMOS_SDK_HELLO_APP} ${BUILD_DIR}/esp/apps/sdkhello.wap
 )
+
+# --- the Zig driver's smoke app -------------------------------------------
+# Same contract as sdk_hello above, for wasmos-zig. Skipped when zig is absent:
+# the Zig toolchain is optional here, and the rest of the SDK does not depend on
+# it. Staged as sdkzig.wap (FAT 8.3).
+if (ZIG_EXECUTABLE AND NOT ZIG_EXECUTABLE MATCHES "NOTFOUND")
+  set(WASMOS_SDK_ZIG_HELLO_SRC ${CMAKE_SOURCE_DIR}/examples/zig/sdk_hello/hello.zig)
+  set(WASMOS_SDK_ZIG_HELLO_APP ${BUILD_DIR}/sdkzig.wap)
+  add_custom_command(
+    OUTPUT ${WASMOS_SDK_ZIG_HELLO_APP}
+    COMMAND ${WASMOS_SDK_DIR}/bin/wasmos-zig ${WASMOS_SDK_ZIG_HELLO_SRC}
+            -o ${WASMOS_SDK_ZIG_HELLO_APP}
+    DEPENDS ${WASMOS_SDK_ZIG_HELLO_SRC} ${WASMOS_SDK_STAMP}
+    WORKING_DIRECTORY ${BUILD_DIR}
+    COMMENT "sdk: building sdk_hello (Zig) with wasmos-zig"
+    VERBATIM
+  )
+  add_custom_target(sdk_zig_hello_app DEPENDS ${WASMOS_SDK_ZIG_HELLO_APP})
+  add_dependencies(sdk_zig_hello_app wasmos-sdk)
+  set_property(GLOBAL APPEND PROPERTY WASMOS_WASM_APP_TARGETS sdk_zig_hello_app)
+
+  set(SDK_ZIG_HELLO_COPY_CMD
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASMOS_SDK_ZIG_HELLO_APP}
+            ${BUILD_DIR}/esp/apps/sdkzig.wap
+  )
+endif ()

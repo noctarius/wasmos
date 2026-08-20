@@ -1,0 +1,159 @@
+#!/bin/sh
+# wasmos-zig - the WASMOS Zig compiler driver.
+#
+# Builds a WASMOS application from Zig and packs it into the .wap container the
+# kernel loads, hiding what a developer would otherwise have to know:
+#
+#   wasmos-zig app.zig -o app            # -> app.wap
+#   wasmos-zig --emit-wasm app.zig -o app.wasm
+#
+# Two of the hidden parts are not conveniences. The shadow stack MUST be 8192:
+# each process gets a 16-page (64 KiB) user-VA mirror region, and host calls that
+# write into WASM memory validate pointers against it, so Zig's 1 MB default
+# stack puts the app's globals past the region and every such call fails
+# SILENTLY. This driver always passes --stack, then runs the layout check and
+# refuses to emit a module that violates it. And Zig resolves @import("wasmos.zig")
+# beside the importing file, so the runtime shims are staged flat next to a copy
+# of the app rather than passed by path.
+#
+# Link-time memory comes from the manifest's [link] section, as in every other
+# WASMOS language.
+set -e
+
+self=$0
+while [ -L "$self" ]; do
+    link=$(readlink "$self")
+    case $link in
+    /*) self=$link ;;
+    *) self=$(dirname "$self")/$link ;;
+    esac
+done
+bindir=$(cd "$(dirname "$self")" && pwd)
+sdkroot=$(cd "$bindir/.." && pwd)
+
+. "$sdkroot/wasmos-sdk.conf"
+
+zigdir=$sdkroot/share/wasmos/zig
+manifest=$sdkroot/share/wasmos/default-manifest.toml
+
+manifest_get() {
+    awk -v want_sec="[$1]" -v want_key="$2" '
+        { sub(/#.*/, ""); gsub(/^[ \t]+|[ \t]+$/, "") }
+        /^\[/ { sec = $0; next }
+        sec == want_sec {
+            eq = index($0, "=")
+            if (eq == 0) next
+            key = substr($0, 1, eq - 1); val = substr($0, eq + 1)
+            gsub(/^[ \t]+|[ \t]+$/, "", key); gsub(/^[ \t]+|[ \t]+$/, "", val)
+            gsub(/^"|"$/, "", val)
+            if (key == want_key) { print val; exit }
+        }
+    ' "$3"
+}
+
+emit_wasm=0
+output=
+source=
+extra=
+
+for arg in "$@"; do
+    case $arg in
+    --emit-wasm) emit_wasm=1 ;;
+    --wasmos-manifest=*) manifest=${arg#--wasmos-manifest=} ;;
+    --print-sysroot) echo "$sdkroot/sysroot"; exit 0 ;;
+    --print-target-triple) echo "$WASMOS_SDK_TARGET"; exit 0 ;;
+    --print-manifest) echo "$manifest"; exit 0 ;;
+    --version)
+        echo "WASMOS SDK $WASMOS_SDK_VERSION (target $WASMOS_SDK_TARGET)"
+        exec "$WASMOS_SDK_ZIG" version
+        ;;
+    -o) output=PENDING ;;
+    *.zig)
+        if [ "$output" = PENDING ]; then
+            output=$arg
+        elif [ -z "$source" ]; then
+            source=$arg
+        else
+            extra="$extra $arg"
+        fi
+        ;;
+    *)
+        if [ "$output" = PENDING ]; then
+            output=$arg
+        else
+            extra="$extra $arg"
+        fi
+        ;;
+    esac
+done
+
+if [ -z "$source" ]; then
+    echo "wasmos-zig: no .zig input file" >&2
+    exit 1
+fi
+if [ -z "$WASMOS_SDK_ZIG" ] || ! command -v "$WASMOS_SDK_ZIG" >/dev/null 2>&1; then
+    echo "wasmos-zig: zig not found (WASMOS_SDK_ZIG=$WASMOS_SDK_ZIG)" >&2
+    exit 1
+fi
+if [ ! -f "$manifest" ]; then
+    echo "wasmos-zig: manifest not found: $manifest" >&2
+    exit 1
+fi
+
+entry=$(manifest_get package entry "$manifest")
+[ -n "$entry" ] || entry=wasmos_main
+initmem=$(manifest_get link initial_memory "$manifest")
+
+if [ -z "$output" ] || [ "$output" = PENDING ]; then
+    output=a.out
+fi
+case $output in
+*.wasm) emit_wasm=1; wasm=$output ;;
+*.wap) wasm=${output%.wap}.wasm ;;
+*)
+    wasm=$output.wasm
+    [ "$emit_wasm" = 1 ] || output=$output.wap
+    ;;
+esac
+
+name=$(basename "$source" .zig)
+stage=${wasm%.wasm}.zigstage
+rm -rf "$stage"
+mkdir -p "$stage"
+cp "$source" "$stage/$name.zig"
+cp "$zigdir/wasmos.zig" "$zigdir/coroutine.zig" "$stage/"
+for f in $extra; do
+    case $f in
+    *.zig) cp "$f" "$stage/" ;;
+    esac
+done
+
+initmem_flag=
+[ -n "$initmem" ] && initmem_flag="--initial-memory=$initmem"
+
+# shellcheck disable=SC2086
+"$WASMOS_SDK_ZIG" build-exe \
+    -target wasm32-freestanding \
+    -O ReleaseSmall \
+    -fno-entry \
+    -fstrip \
+    --export="$entry" \
+    --stack "$WASMOS_SDK_ZIG_STACK_SIZE" \
+    -femit-bin="$wasm" \
+    $initmem_flag \
+    "$stage/$name.zig"
+
+python3 "$sdkroot/libexec/wasmos/wasm_stack_check.py" "$wasm" \
+    --stack-size "$WASMOS_SDK_ZIG_STACK_SIZE" \
+    --max-addr "$WASMOS_SDK_ZIG_VA_LIMIT"
+
+[ "$emit_wasm" = 1 ] && exit 0
+
+if grep -q '@NAME@' "$manifest" 2>/dev/null; then
+    packname=$(basename "$output" .wap)
+    packed_manifest=${wasm%.wasm}.manifest.toml
+    sed "s/@NAME@/$packname/" "$manifest" > "$packed_manifest"
+    manifest=$packed_manifest
+fi
+
+exec "$bindir/wasmos-pack" --manifest "$manifest" --in "$wasm" --out "$output"

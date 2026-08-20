@@ -104,17 +104,17 @@ POSIX feature macros are not: WASMOS satisfies none of those contracts.
 
 ```text
 build/wasmos-sdk/
-├── bin/            wasmos-clang, wasmos-clang++, wasmos-ld, wasmos-ar,
-│                   wasmos-nm, wasmos-ranlib, wasmos-strip, wasmos-objdump,
-│                   wasmos-pack, wasmos-inspect
-├── libexec/wasmos/ make_wasmos_app, wasm_inspect.py
+├── bin/            wasmos-clang, wasmos-clang++, wasmos-zig, wasmos-ld,
+│                   wasmos-ar, wasmos-nm, wasmos-ranlib, wasmos-strip,
+│                   wasmos-objdump, wasmos-pack, wasmos-inspect
+├── libexec/wasmos/ make_wasmos_app, wasm_inspect.py, wasm_stack_check.py
 ├── sysroot/
 │   ├── include/    libc headers, sys/, and wasmos/ (libc + libsys + libui),
 │   │               with the generated ABI headers under wasmos/abi/
 │   └── lib/wasm32-unknown-wasmos/  crt1.o, libc.a, libsys.a
 ├── share/
 │   ├── cmake/WASMOS/  WASMOSToolchain.cmake, Platform/WASMOS.cmake
-│   └── wasmos/        default-manifest.toml
+│   └── wasmos/        default-manifest.toml, zig/{wasmos,coroutine}.zig
 └── wasmos-sdk.conf  resolved tool paths and version, sourced by the wrappers
 ```
 
@@ -163,6 +163,36 @@ wasmos-clang --print-manifest       # the manifest this invocation would use
 An output name without `.wasm` produces a `.wap`; `--emit-wasm` or an explicit
 `.wasm` output stops at the module. The `.wasm` is never hidden — the WebAssembly
 pipeline stays independently testable.
+
+## Zig
+
+```bash
+wasmos-zig app.zig -o app            # -> app.wap
+wasmos-zig --emit-wasm app.zig -o app.wasm
+```
+
+The Zig driver hides more than the C one, and two of the things it hides are not
+conveniences:
+
+- **The 8 KiB shadow stack is mandatory.** Zig's default is 1 MB, which places the
+  app's globals at ~1 MB — past the 64 KiB user-VA mirror region each process gets
+  — and every host call that writes into WASM memory then rejects the pointer
+  *silently*. The driver always passes `--stack`, and afterwards runs
+  `wasm_stack_check` and **refuses to emit a module that violates the layout**,
+  rather than leaving it to be discovered as a service that mysteriously fails to
+  register.
+- **The runtime shims are staged, not passed.** Zig resolves
+  `@import("wasmos.zig")` beside the importing file, so the driver copies the app
+  and `share/wasmos/zig/{wasmos,coroutine}.zig` into one directory and compiles
+  there. That is why the shims live under `share/` rather than in the sysroot:
+  they are source compiled with the app, not headers or archives.
+
+A Zig guest's `main` returns `u8`, not `void` — the shim's `wasmos_main` export
+casts it to the process exit status.
+
+Additional `.zig` files passed on the command line are staged alongside. Extra C
+objects (the coroutine and libui shims that `examples/zig/calculator` links) are
+not wired into the driver yet; that app is still built by the in-tree helper.
 
 ## Linker behavior
 

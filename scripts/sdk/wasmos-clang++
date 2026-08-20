@@ -1,0 +1,13 @@
+#!/bin/sh
+# wasmos-clang++ - the C++ face of wasmos-clang. See that script for the contract.
+set -e
+self=$0
+while [ -L "$self" ]; do
+    link=$(readlink "$self")
+    case $link in
+    /*) self=$link ;;
+    *) self=$(dirname "$self")/$link ;;
+    esac
+done
+bindir=$(cd "$(dirname "$self")" && pwd)
+exec "$bindir/wasmos-clang" --wasmos-cxx "$@"

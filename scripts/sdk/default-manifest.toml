@@ -1,0 +1,33 @@
+# Default WASMOS application manifest, used by wasmos-clang when the developer
+# passes no --wasmos-manifest=. @NAME@ is substituted with the output basename.
+#
+# These values describe a minimal one-page application: console output, IPC as a
+# client, no hardware. Anything larger needs its own manifest -- in particular the
+# [link] memory values, which are load-bearing rather than stylistic (a module
+# that maps shared memory or socket rings must reserve linear memory up front).
+version = 1
+
+[package]
+name = "@NAME@"
+entry = "wasmos_main"
+kind = "app"
+native = false
+
+[resources]
+stack_pages = 16
+heap_pages = 16
+
+# Link-time memory configuration, consumed by wasmos-clang and ignored by the
+# packer. Sizes are bytes.
+[link]
+stack_size = 4096
+initial_memory = 65536
+max_memory = 65536
+
+[ipc]
+required_endpoint_name = "-"
+required_endpoint_rights = 0
+
+[[capabilities]]
+name = "ipc.basic"
+flags = 0

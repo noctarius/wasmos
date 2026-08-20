@@ -1,0 +1,187 @@
+#!/bin/sh
+# wasmos-clang - the WASMOS C/C++ compiler driver.
+#
+# Compiles and links a WASMOS WebAssembly application, and by default packs the
+# result into the .wap container the kernel loads. Everything the developer would
+# otherwise have to pass -- target triple, sysroot, freestanding/nostdlib flags,
+# the wasm linker flags, crt1, libc, libsys -- is supplied here.
+#
+# The SDK is relocatable: the sysroot and the tool paths are resolved from this
+# script's own location, never from a compiled-in prefix.
+#
+#   wasmos-clang hello.c -o hello           # -> hello.wap (packed, runnable)
+#   wasmos-clang --emit-wasm hello.c -o h.wasm
+#   wasmos-clang --wasmos-manifest=m.toml app.c -o app
+#
+# Link-time memory configuration comes from the manifest's [link] section, so one
+# file describes the application (see share/wasmos/default-manifest.toml). The
+# defaults match a one-page module and are only right for trivial programs.
+set -e
+
+# Resolve this script's directory through symlinks without requiring GNU readlink.
+self=$0
+while [ -L "$self" ]; do
+    link=$(readlink "$self")
+    case $link in
+    /*) self=$link ;;
+    *) self=$(dirname "$self")/$link ;;
+    esac
+done
+bindir=$(cd "$(dirname "$self")" && pwd)
+sdkroot=$(cd "$bindir/.." && pwd)
+
+. "$sdkroot/wasmos-sdk.conf"
+
+sysroot=$sdkroot/sysroot
+libdir=$sysroot/lib/$WASMOS_SDK_TARGET
+manifest=$sdkroot/share/wasmos/default-manifest.toml
+
+# --- manifest reader -------------------------------------------------------
+# Reads one key from one section of the TOML-ish manifest grammar that
+# make_wasmos_app accepts. Prints nothing when the key is absent.
+manifest_get() {
+    awk -v want_sec="[$1]" -v want_key="$2" '
+        { sub(/#.*/, ""); gsub(/^[ \t]+|[ \t]+$/, "") }
+        /^\[/ { sec = $0; next }
+        sec == want_sec {
+            eq = index($0, "=")
+            if (eq == 0) next
+            key = substr($0, 1, eq - 1); val = substr($0, eq + 1)
+            gsub(/^[ \t]+|[ \t]+$/, "", key); gsub(/^[ \t]+|[ \t]+$/, "", val)
+            gsub(/^"|"$/, "", val)
+            if (key == want_key) { print val; exit }
+        }
+    ' "$3"
+}
+
+emit_wasm=0
+lang_cxx=0
+compile_only=0
+output=
+# Pass-through arguments, accumulated as one word-split string. A path containing
+# a space therefore does not survive; the in-tree build has none and neither does
+# any layout the SDK targets. Passing them through faithfully needs the driver
+# rewritten in a language with real argument vectors, which is the right move once
+# it does more than assemble a command line.
+args=
+
+for arg in "$@"; do
+    case $arg in
+    -c) compile_only=1; args="$args -c" ;;
+    --emit-wasm) emit_wasm=1 ;;
+    --wasmos-manifest=*) manifest=${arg#--wasmos-manifest=} ;;
+    --wasmos-cxx) lang_cxx=1 ;;
+    --print-sysroot) echo "$sysroot"; exit 0 ;;
+    --print-target-triple) echo "$WASMOS_SDK_TARGET"; exit 0 ;;
+    --print-manifest) echo "$manifest"; exit 0 ;;
+    --version)
+        echo "WASMOS SDK $WASMOS_SDK_VERSION (target $WASMOS_SDK_TARGET)"
+        exec "$WASMOS_SDK_CLANG" --version
+        ;;
+    -o) output=PENDING ;;
+    *)
+        if [ "$output" = PENDING ]; then
+            output=$arg
+        else
+            args="$args $arg"
+        fi
+        ;;
+    esac
+done
+
+if [ -z "$args" ]; then
+    echo "wasmos-clang: no input files" >&2
+    exit 1
+fi
+
+cc=$WASMOS_SDK_CLANG
+# C is compiled freestanding, matching the in-tree build.
+#
+# C++ is not, and the difference is load-bearing rather than cosmetic: under
+# -ffreestanding the standard gives `main` no special status, so clang mangles it
+# (_Z4mainv) and crt1.o's `extern int main(int, char **)` goes unresolved. Dropping
+# the flag restores `main` as the program entry. It costs nothing else here --
+# -nostdlib still links no host library, our own headers still satisfy every
+# include, -fno-builtin still blocks libc-shaped lowering, and the __main_void /
+# __original_main shims clang then emits are unreferenced and collected by the
+# linker. A native wasm32-unknown-wasmos target would state the entry contract
+# directly and make this unnecessary; see docs/toolchain.md.
+langflags="-ffreestanding"
+if [ "$lang_cxx" = 1 ]; then
+    cc=$WASMOS_SDK_CLANGXX
+    langflags="-fno-exceptions -fno-rtti -fno-threadsafe-statics -fno-use-cxa-atexit"
+fi
+
+# Flags that apply whether or not this invocation links.
+common="--target=$WASMOS_SDK_TARGET_LLVM --sysroot=$sysroot -D__wasmos__=1
+    -Oz -nostdlib -fno-builtin -include $sysroot/include/wasmos_cast.h $langflags"
+
+# Compile-only: no crt, no libraries, no packaging. This is the shape a build
+# system drives, compiling each source before linking the objects.
+if [ "$compile_only" = 1 ]; then
+    set_output=
+    if [ -n "$output" ] && [ "$output" != PENDING ]; then
+        set_output="-o $output"
+    fi
+    # shellcheck disable=SC2086
+    exec "$cc" $common $set_output $args
+fi
+
+if [ ! -f "$manifest" ]; then
+    echo "wasmos-clang: manifest not found: $manifest" >&2
+    exit 1
+fi
+
+entry=$(manifest_get package entry "$manifest")
+[ -n "$entry" ] || entry=wasmos_main
+stack=$(manifest_get link stack_size "$manifest")
+[ -n "$stack" ] || stack=4096
+initmem=$(manifest_get link initial_memory "$manifest")
+[ -n "$initmem" ] || initmem=65536
+maxmem=$(manifest_get link max_memory "$manifest")
+[ -n "$maxmem" ] || maxmem=65536
+
+if [ -z "$output" ] || [ "$output" = PENDING ]; then
+    output=a.out
+fi
+case $output in
+*.wasm)
+    # An explicit .wasm output means the developer wants the module itself.
+    emit_wasm=1
+    wasm=$output
+    ;;
+*.wap)
+    wasm=${output%.wap}.wasm
+    ;;
+*)
+    wasm=$output.wasm
+    [ "$emit_wasm" = 1 ] || output=$output.wap
+    ;;
+esac
+
+# shellcheck disable=SC2086
+"$cc" $common \
+    -fuse-ld=lld \
+    -Wl,--no-entry -Wl,--strip-all \
+    -Wl,-z,stack-size="$stack" \
+    -Wl,--initial-memory="$initmem" \
+    -Wl,--max-memory="$maxmem" \
+    -Wl,--export="$entry" \
+    "$libdir/crt1.o" \
+    $args \
+    -L"$libdir" -lc -lsys \
+    -o "$wasm"
+
+[ "$emit_wasm" = 1 ] && exit 0
+
+# The container needs a package name and the default manifest cannot know it, so
+# @NAME@ is substituted with the output basename. A developer-supplied manifest is
+# used verbatim.
+if grep -q '@NAME@' "$manifest" 2>/dev/null; then
+    name=$(basename "$output" .wap)
+    packed_manifest=${wasm%.wasm}.manifest.toml
+    sed "s/@NAME@/$name/" "$manifest" > "$packed_manifest"
+    manifest=$packed_manifest
+fi
+
+exec "$bindir/wasmos-pack" --manifest "$manifest" --in "$wasm" --out "$output"

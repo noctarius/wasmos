@@ -68,6 +68,7 @@ in-kernel scheduler rather than an optional mode.
 ### WASM Runtime
 - [Runtime and Packaging](architecture/13-runtime-and-packaging.md) (wasm3 + WARP JIT)
 - [libsys and IPC Service Runtime](architecture/14-libsys-and-service-runtime.md)
+- [Toolchain and SDK](toolchain.md) - the staged `wasmos-clang` SDK: sysroot, crt1/libc/libsys archives, the linker and packaging defaults an application never has to state, and the ABI a compiled module must satisfy
 
 ### Drivers and Services
 - [Drivers and Services](architecture/15-drivers-and-services.md)

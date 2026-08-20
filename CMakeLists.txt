@@ -577,11 +577,15 @@ function(wasmos_add_wasm_c_app_target target_name)
             -include ${LIBC_DIR}/include/wasmos_cast.h
             ${_wasmos_extra_flags}
             ${WASMOS_TRACE_DEFINE}
+            # No --allow-undefined: every host call is a declared import
+            # (WASMOS_WASM_IMPORT in wasmos/api.h, generated from
+            # abi/hostcalls.yaml), so an unresolved symbol is a missing source
+            # file rather than an import, and belongs at the link step instead of
+            # as a trap at the call site.
             -Wl,--no-entry -Wl,--strip-all
             -Wl,-z,stack-size=${_stack_size}
             -Wl,--initial-memory=${_initial_memory}
             -Wl,--max-memory=${_max_memory}
-            -Wl,--allow-undefined
             -Wl,--export=${WASMOS_APP_EXPORT}
             -I${CMAKE_SOURCE_DIR}/src/libui/include
             -I${LIBC_DIR}/include
@@ -1313,6 +1317,10 @@ endfunction()
 
 set(WASMOS_APP_PACKER $<TARGET_FILE:make_wasmos_app>)
 
+# The staged SDK (target `wasmos-sdk`) repackages this toolchain for use outside
+# the repository.  Included here because it needs WASMOS_APP_PACKER.
+include(${CMAKE_SOURCE_DIR}/cmake/WasmosSdk.cmake)
+
 # The initfs payloads are whatever `scripts/initfs.toml` lists, so derive the
 # rule's dependencies from that manifest instead of restating them here.  A
 # hand-written list silently goes stale: framebuffer_pci.wap was embedded in
@@ -1700,6 +1708,7 @@ set(WASMOS_ESP_POPULATE_CMDS
   ${AS_HELLO_COPY_CMD}
   ${AS_MINESWEEPER_COPY_CMD}
   ${HELLO_C_COPY_CMD}
+  ${SDK_HELLO_COPY_CMD}
   ${CHARDEV_PREEMPT_COPY_CMD}
   ${INIT_SMOKE_COPY_CMD}
   ${FS_OPEN_SMOKE_COPY_CMD}

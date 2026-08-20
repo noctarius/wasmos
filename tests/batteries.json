@@ -91,21 +91,22 @@
     },
     {
       "name": "language-runtimes",
-      "description": "One guest per supported source language boots and runs.",
+      "description": "One guest per supported source language boots and runs, plus the guest the staged SDK builds from plain C.",
       "needs_qemu": true,
       "files": [
         "test_hello_as.py",
         "test_hello_c.py",
         "test_hello_go.py",
         "test_hello_rust.py",
-        "test_hello_zig.py"
+        "test_hello_zig.py",
+        "test_sdk_hello.py"
       ]
     },
     {
       "name": "host-tools",
       "description": "Host tools, exercised directly. Boots nothing and needs no emulation.",
       "needs_qemu": false,
-      "files": ["test_make_wasmos_app_capabilities.py"]
+      "files": ["test_make_wasmos_app_capabilities.py", "test_sdk_abi.py"]
     }
   ]
 }

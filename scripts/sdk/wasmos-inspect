@@ -1,0 +1,15 @@
+#!/bin/sh
+# wasmos-inspect - print the imports, exports and section shape of a .wasm or .wap.
+# A thin front for scripts/wasm_inspect.py, which stays the single implementation.
+set -e
+self=$0
+while [ -L "$self" ]; do
+    link=$(readlink "$self")
+    case $link in
+    /*) self=$link ;;
+    *) self=$(dirname "$self")/$link ;;
+    esac
+done
+bindir=$(cd "$(dirname "$self")" && pwd)
+sdkroot=$(cd "$bindir/.." && pwd)
+exec python3 "$sdkroot/libexec/wasmos/wasm_inspect.py" "$@"

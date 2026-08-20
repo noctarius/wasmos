@@ -769,6 +769,25 @@ linked feature documents for rationale and rollout plans.
 - `.wap` packages cover WASM and native apps, services, and drivers. C, C++,
   Zig, Go, Rust, and AssemblyScript examples are supported through shared libc
   and runtime-specific libsys wrappers.
+- A staged SDK (`cmake --build build --target wasmos-sdk`) repackages the C
+  toolchain for use outside the repository: a relocatable sysroot with `crt1.o`,
+  `libc.a` and `libsys.a`, and a `wasmos-clang` driver that supplies the triple,
+  sysroot, wasm linker defaults and the `.wap` packaging step, so
+  `wasmos-clang hello.c -o hello` produces a runnable package with no other flags.
+  `examples/c/sdk_hello` is built that way by every build and run in the guest by
+  `tests/test_sdk_hello.py`; `tests/test_sdk_abi.py` asserts the module's import
+  and export shape without booting. Stage 1 keeps LLVM's own
+  `wasm32-unknown-unknown` target and puts the WASMOS knowledge in the driver,
+  which reports `wasm32-unknown-wasmos`. The CMake integration
+  (`share/cmake/WASMOS/WASMOSToolchain.cmake` plus a `Platform/WASMOS.cmake`)
+  builds an out-of-tree project to a running `.wap`, and `wasmos-clang++` builds
+  freestanding C++ (verified in the guest by hand, not yet in a battery). Not yet
+  present: compiler-rt builtins for wasm32, a wasm32 `libc++` (so no `<vector>`),
+  and a native `wasm32-unknown-wasmos` LLVM triple. See `docs/toolchain.md`.
+- The C wasm link no longer passes `--allow-undefined`. It was never needed — no
+  module in the tree carries an undeclared import — and it turned a missing source
+  file into a module that loads and traps at the call site instead of a link
+  error.
 - CLI path spawns retain transfer buffers until the matching PM response;
   foreground/background launches and broker handoff use the same ownership
   contract.

@@ -5,6 +5,7 @@ if (AS_ENABLE)
     NAME serial
     ENTRY ${WASM_SERIAL_DRIVER_SRC}
     OUTPUT_WASM ${WASM_SERIAL_DRIVER_WASM}
+    MANIFEST ${DRIVER_WASM_DIR}/serial/linker.metadata
   )
 
   wasmos_maybe_aot_pack(

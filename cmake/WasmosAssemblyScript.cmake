@@ -35,14 +35,14 @@ set(WASMOS_AS_LIBC_SOURCES
 #   ENTRY                 <path>   # entry .ts; staged under ENTRY_NAME
 #   OUTPUT_WASM           <path>   # output .wasm
 #   [ENTRY_NAME           <file>]  # staged entry filename (default: ENTRY's name)
-#   [INITIAL_MEMORY_PAGES <n>]     # --initialMemory
+#   [MANIFEST             <path>]  # source of --initialMemory, via [link]
 #   [EXTRA_SOURCES        <...>]   # further .ts staged flat beside the entry
 # )
 #
 # Declares the custom command producing OUTPUT_WASM. Packing the result into a
 # .wap is the caller's business, since drivers and apps pack differently.
 function(wasmos_assemblyscript_compile)
-  cmake_parse_arguments(ARG "" "NAME;ENTRY;OUTPUT_WASM;ENTRY_NAME;INITIAL_MEMORY_PAGES"
+  cmake_parse_arguments(ARG "" "NAME;ENTRY;OUTPUT_WASM;ENTRY_NAME;MANIFEST;INITIAL_MEMORY_PAGES"
                         "EXTRA_SOURCES" ${ARGN})
 
   foreach (_required NAME ENTRY OUTPUT_WASM)
@@ -68,9 +68,23 @@ function(wasmos_assemblyscript_compile)
          COMMAND ${CMAKE_COMMAND} -E copy_if_different "${_src}" "${_stage_dir}/${_bname}")
   endforeach ()
 
-  set(_initial_memory_args "")
+  # --initialMemory is asc's declared initial memory in WASM pages. It comes from
+  # the manifest's [link] initial_memory (in bytes, like every other language), so
+  # an app is sized in one file whatever it is written in. INITIAL_MEMORY_PAGES is
+  # rejected rather than honoured: two sources for one number is how it goes stale.
   if (ARG_INITIAL_MEMORY_PAGES)
-    set(_initial_memory_args --initialMemory ${ARG_INITIAL_MEMORY_PAGES})
+    message(FATAL_ERROR
+      "${ARG_NAME}: INITIAL_MEMORY_PAGES is read from the manifest's [link] section "
+      "now, as initial_memory in BYTES. Move it there.")
+  endif ()
+  set(_initial_memory_args "")
+  if (ARG_MANIFEST)
+    set_property(DIRECTORY ${CMAKE_SOURCE_DIR} APPEND
+                 PROPERTY CMAKE_CONFIGURE_DEPENDS ${ARG_MANIFEST})
+    wasmos_manifest_link_pages(_as_initial_pages "${ARG_MANIFEST}" initial_memory 0)
+    if (_as_initial_pages GREATER 0)
+      set(_initial_memory_args --initialMemory ${_as_initial_pages})
+    endif ()
   endif ()
 
   add_custom_command(

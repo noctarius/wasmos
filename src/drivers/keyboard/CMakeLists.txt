@@ -5,6 +5,7 @@ if (AS_ENABLE)
     NAME keyboard
     ENTRY ${WASM_KEYBOARD_DRIVER_SRC}
     OUTPUT_WASM ${WASM_KEYBOARD_DRIVER_WASM}
+    MANIFEST ${DRIVER_WASM_DIR}/keyboard/linker.metadata
   )
 
   wasmos_maybe_aot_pack(

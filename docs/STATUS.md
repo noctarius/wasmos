@@ -777,9 +777,11 @@ linked feature documents for rationale and rollout plans.
   (`[resources]`) and how its own linear memory is laid out (`[link]`), each number
   next to the reason for it. All 59 modules were byte-identical in size across the
   migration, and `tests/test_link_memory_manifest.py` checks every manifest that
-  declares `[link]` against what its module actually declares. The Zig helper reads
-  the section too; the AssemblyScript and Rust helpers still size modules through
-  their own flags.
+  declares `[link]` against what its module actually declares — 21 modules across
+  C, Zig, AssemblyScript and Rust, all four of which read the section, so it is the
+  single check that the four toolchains agree about what a manifest means. The
+  section is in bytes in every language; `asc` takes pages, and the conversion is in
+  one place where a non-page-multiple is an error rather than a silent round.
 - The in-tree build and the SDK are one toolchain: `wasmos_add_wasm_c_app_target`
   links `crt1.o`, `libc.a` and `libsys.a` from the staged sysroot instead of
   recompiling libc into each of the ~59 modules, so there is one libc build and

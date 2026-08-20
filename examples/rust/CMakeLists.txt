@@ -42,6 +42,17 @@ if (RUST_ENABLE)
     COMMENT "Building WASM service runtime wrapper for Rust"
     VERBATIM
   )
+  # Link-time memory comes from the manifest's [link] section, the same place the
+  # C, Zig and AssemblyScript helpers read it, so an app is sized in one file
+  # whatever language it is written in.
+  set_property(DIRECTORY ${CMAKE_SOURCE_DIR} APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+               ${CMAKE_CURRENT_SOURCE_DIR}/linker.metadata)
+  wasmos_manifest_link_value(_hello_rust_initial_memory
+                             "${CMAKE_CURRENT_SOURCE_DIR}/linker.metadata"
+                             initial_memory 65536)
+  wasmos_manifest_link_value(_hello_rust_max_memory
+                             "${CMAKE_CURRENT_SOURCE_DIR}/linker.metadata"
+                             max_memory 65536)
   add_custom_command(
     OUTPUT ${WASM_HELLO_RUST_WASM}
     COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}
@@ -54,8 +65,8 @@ if (RUST_ENABLE)
             -C link-arg=--no-entry
             -C link-arg=--export=wasmos_main
             -C link-arg=--strip-all
-            -C link-arg=--initial-memory=2097152
-            -C link-arg=--max-memory=2097152
+            -C link-arg=--initial-memory=${_hello_rust_initial_memory}
+            -C link-arg=--max-memory=${_hello_rust_max_memory}
             -C link-arg=${WASM_HELLO_RUST_COROUTINE_OBJ}
             -C link-arg=${WASM_HELLO_RUST_IPC_FUTURE_OBJ}
             -C link-arg=${WASM_HELLO_RUST_SERVICE_RUNTIME_OBJ}
@@ -96,6 +107,14 @@ if (RUST_ENABLE)
     COMMENT "Building WASM net transport shim for Rust tetris"
     VERBATIM
   )
+  set_property(DIRECTORY ${CMAKE_SOURCE_DIR} APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+               ${CMAKE_CURRENT_SOURCE_DIR}/tetris/linker.metadata)
+  wasmos_manifest_link_value(_tetris_initial_memory
+                             "${CMAKE_CURRENT_SOURCE_DIR}/tetris/linker.metadata"
+                             initial_memory 65536)
+  wasmos_manifest_link_value(_tetris_max_memory
+                             "${CMAKE_CURRENT_SOURCE_DIR}/tetris/linker.metadata"
+                             max_memory 65536)
   add_custom_command(
     OUTPUT ${WASM_TETRIS_RUST_WASM}
     COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}
@@ -108,8 +127,8 @@ if (RUST_ENABLE)
             -C link-arg=--no-entry
             -C link-arg=--export=wasmos_main
             -C link-arg=--strip-all
-            -C link-arg=--initial-memory=16777216
-            -C link-arg=--max-memory=16777216
+            -C link-arg=--initial-memory=${_tetris_initial_memory}
+            -C link-arg=--max-memory=${_tetris_max_memory}
             -C link-arg=${WASM_TETRIS_SHIM_OBJ}
             --crate-type=cdylib
             ${WASM_TETRIS_RUST_SRC}

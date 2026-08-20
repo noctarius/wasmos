@@ -10,6 +10,12 @@ native = false
 stack_pages = 16
 heap_pages = 16
 
+# Link-time memory in bytes (docs/toolchain.md); omitted keys take the defaults.
+# Rust's core formatting machinery and the coroutine runtime's task storage.
+[link]
+initial_memory = 2097152
+max_memory = 2097152
+
 [ipc]
 required_endpoint_name = "-"
 required_endpoint_rights = 0

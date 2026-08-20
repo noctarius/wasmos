@@ -1,11 +1,12 @@
 """Every built module's memory limits match its manifest's [link] section.
 
-The linker's memory configuration used to live in CMake arguments while the
-kernel's resource hints lived in the manifest -- two places, neither next to the
-other, for values that are load-bearing rather than stylistic: an app that maps
-shared memory, a framebuffer or socket rings has to reserve linear memory up
-front, because those windows are placed above a 2 MiB floor and above live data.
-`[link]` moved them into the manifest, and the CMake helper reads them at
+The linker's memory configuration used to live in CMake arguments -- four
+different spellings across four language helpers -- while the kernel's resource
+hints lived in the manifest. Two places, neither next to the other, for values that
+are load-bearing rather than stylistic: an app that maps shared memory, a
+framebuffer or socket rings has to reserve linear memory up front, because those
+windows are placed above a 2 MiB floor and above live data. `[link]` moved them into
+the manifest, in bytes whatever the language, and every helper reads them at
 configure time.
 
 Reading them at configure time is exactly what makes this test worth having. A
@@ -114,17 +115,18 @@ def find_manifests() -> dict[str, str]:
 
 
 class LinkMemoryManifestTest(unittest.TestCase):
-    """Scope: the keys a manifest actually declares.
+    """Scope: the keys a manifest actually declares, in every language.
 
     Only declared keys are asserted, never a default. Each helper applies its own
-    defaults -- the C helper pins a maximum, the Zig one leaves the module without
-    any -- so a test that assumed one helper's defaults would be asserting the wrong
-    contract for the other. What a manifest declares is a value somebody chose, and
-    that is exactly what has to reach the module.
+    defaults -- the C helper pins a maximum, the Zig and AssemblyScript ones leave
+    the module without any -- so a test that assumed one helper's defaults would be
+    asserting the wrong contract for the others. What a manifest declares is a value
+    somebody chose, and that is exactly what has to reach the module.
 
-    The AssemblyScript and Rust helpers do not read [link] yet, so their modules
-    declare none and are skipped -- visibly, not silently. Teaching them the section
-    is tracked in docs/TASKS.md.
+    All four toolchains read [link] (C, Zig, AssemblyScript, Rust), which is what
+    makes this test worth running over the whole build tree rather than one
+    language: it is the single check that the four paths agree about what a manifest
+    means.
     """
 
     @classmethod

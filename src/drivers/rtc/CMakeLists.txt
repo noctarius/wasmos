@@ -5,6 +5,7 @@ if (AS_ENABLE)
     NAME rtc
     ENTRY ${WASM_RTC_DRIVER_SRC}
     OUTPUT_WASM ${WASM_RTC_DRIVER_WASM}
+    MANIFEST ${DRIVER_WASM_DIR}/rtc/linker.metadata
   )
 
   wasmos_maybe_aot_pack(

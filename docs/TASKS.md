@@ -1150,13 +1150,8 @@ Source: `architecture/25-diagnostics-status.md`,
   `__fixdfti`, `__fixunsdfti`, `__floatuntidf`); 64-bit arithmetic and float
   conversions are native wasm instructions and need nothing, nothing in tree uses
   `__int128`, and `tests/test_sdk_arithmetic.py` pins that boundary, so this is a
-  gap to close on demand rather than a missing piece;
-  teach the AssemblyScript and Rust app
-  helpers to read the manifest's `[link]` section, as the C and Zig helpers do, so
-  every language sizes its modules from one place
-  (`cmake/WasmosAssemblyScript.cmake`, `examples/rust/CMakeLists.txt`; their modules
-  are visibly skipped by `tests/test_link_memory_manifest.py` today); and ship a
-  standalone SDK build that does not borrow the host LLVM. Stage 2 (a native
+  gap to close on demand rather than a missing piece; and ship a standalone SDK
+  build that does not borrow the host LLVM. Stage 2 (a native
   `wasm32-unknown-wasmos` LLVM triple) follows those.
 - [ ] [TEST][P2] Run the SDK on Linux. The driver wrappers (`scripts/sdk/*`) are
   POSIX `sh` and parse under `dash`, but have only been executed on macOS, and

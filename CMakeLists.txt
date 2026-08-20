@@ -540,6 +540,30 @@ function(wasmos_manifest_link_value out_var manifest key default)
   set(${out_var} ${_result} PARENT_SCOPE)
 endfunction()
 
+# wasmos_manifest_link_pages(<out_var> <manifest> <key> <default_pages>)
+#
+# The same [link] value as wasmos_manifest_link_value, converted to WASM pages for
+# the toolchains that take a page count (asc's --initialMemory). The manifest is in
+# bytes whatever the language, so an app reads the same way in every one of them;
+# a value that is not a whole number of 64 KiB pages is an error rather than a
+# silent round, because rounding down would hand the app less memory than it asked
+# for and rounding up would hide a typo.
+function(wasmos_manifest_link_pages out_var manifest key default_pages)
+  wasmos_manifest_link_value(_bytes "${manifest}" ${key} 0)
+  if (_bytes EQUAL 0)
+    set(${out_var} ${default_pages} PARENT_SCOPE)
+    return()
+  endif ()
+  math(EXPR _pages "${_bytes} / 65536")
+  math(EXPR _remainder "${_bytes} % 65536")
+  if (NOT _remainder EQUAL 0)
+    message(FATAL_ERROR
+      "${manifest}: [link] ${key} = ${_bytes} is not a whole number of 64 KiB WASM "
+      "pages. Round it to a multiple of 65536.")
+  endif ()
+  set(${out_var} ${_pages} PARENT_SCOPE)
+endfunction()
+
 function(wasmos_add_wasm_c_app_target target_name)
   set(options NO_BUILTIN STARTUP_SHIM CXX ASYNC_SERVICE ASYNC_APP)
   set(oneValueArgs SOURCE OUTPUT_WASM OUTPUT_APP MANIFEST EXPORT STACK_SIZE INITIAL_MEMORY MAX_MEMORY BUILD_COMMENT PACK_COMMENT)

@@ -280,10 +280,13 @@ manifest asks for is what the module declares — the failure it exists for is a
 module that links fine and is sized wrong, which does not surface at the link step
 but later, inside a host call whose window did not fit.
 
-The C and Zig helpers read `[link]`; the AssemblyScript and Rust helpers still size
-their modules through their own flags, which `docs/TASKS.md` tracks. Each helper
-keeps its own defaults for keys a manifest omits — the C one pins a maximum, the Zig
-one leaves the module without any — so only declared keys are checked.
+All four toolchains read `[link]` — C, Zig, AssemblyScript and Rust — so an app is
+sized in one file whatever it is written in. The section is in **bytes** in every
+language; `asc` wants pages, and the conversion happens in one place
+(`wasmos_manifest_link_pages`), where a value that is not a whole number of 64 KiB
+pages is an error rather than a silent round. Each helper keeps its own defaults for
+keys a manifest omits — the C one pins a maximum, the Zig and AssemblyScript ones
+leave the module without any — so only declared keys are checked.
 
 With no `--wasmos-manifest=`, the driver falls back to
 `share/wasmos/default-manifest.toml` and substitutes the output basename for the

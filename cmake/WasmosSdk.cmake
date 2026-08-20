@@ -26,10 +26,15 @@ set(WASMOS_SDK_TARGET_LLVM wasm32-unknown-unknown)
 set(WASMOS_SDK_LIBDIR ${WASMOS_SDK_SYSROOT}/lib/${WASMOS_SDK_TARGET})
 set(WASMOS_SDK_VERSION 0.1.0-spike)
 
+# llvm-ar is required, not optional: the sysroot archives it builds are what every
+# WASM C target links against, so a tree without it cannot build a module at all.
+# It ships with the same LLVM install that provides the clang, lld and
+# llvm-objcopy this build already requires.
 find_program(WASMOS_SDK_AR llvm-ar HINTS ${CLANG_BIN_DIR} ${LLVM_HINTS})
 if (NOT WASMOS_SDK_AR)
-  message(STATUS "wasmos-sdk: llvm-ar not found; the wasmos-sdk target is unavailable")
-  return()
+  message(FATAL_ERROR
+    "llvm-ar not found. It builds the sysroot archives every WASM target links "
+    "against; install LLVM's binutils or set -DWASMOS_SDK_AR=/path/to/llvm-ar.")
 endif ()
 
 foreach (_tool IN ITEMS nm ranlib strip objdump)
@@ -207,8 +212,8 @@ add_custom_command(
 add_custom_target(sdk_hello_app DEPENDS ${WASMOS_SDK_HELLO_APP})
 # The app is built by the SDK driver rather than a wasmos_add_wasm_* helper, so it
 # gets no compile_commands.json entry and would be invisible to clangd and the
-# lint gate. Index it against the in-tree headers -- the same files the sysroot is
-# populated from, and present whether or not the SDK has been staged.
+# lint gate. Index it against the in-tree headers, which are the files the sysroot
+# copies are made from, so the index does not depend on staging order.
 wasmos_add_ide_c_target(sdk_hello_ide
   SOURCES ${WASMOS_SDK_HELLO_SRC}
   INCLUDES ${LIBC_DIR}/include ${LIBSYS_WASM_DIR}/include

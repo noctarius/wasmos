@@ -1146,8 +1146,7 @@ Source: `architecture/25-diagnostics-status.md`,
 - [ ] [FEATURE][P2] Finish the toolchain SDK's remaining Stage 1 milestones
   (`docs/toolchain.md`): build `compiler-rt` builtins for wasm32 (absent from the
   host toolchain, so guest 64-bit or 128-bit arithmetic helpers will not link);
-  switch `wasmos_add_wasm_c_app_target` onto the sysroot archives instead of
-  recompiling libc into each of the ~58 modules; move the per-target
+  move the per-target
   `STACK_SIZE`/`INITIAL_MEMORY`/`MAX_MEMORY` CMake arguments into each
   `linker.metadata`'s `[link]` section so one file describes an app; and ship a
   standalone SDK build that does not borrow the host LLVM. Stage 2 (a native

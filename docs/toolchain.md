@@ -272,12 +272,37 @@ app is staged as `sdkhello.wap`.
 
 ---
 
+## One toolchain, not two
+
+The in-tree build and the SDK are the same toolchain: `wasmos_add_wasm_c_app_target`
+links `crt1.o`, `libc.a` and `libsys.a` out of the staged sysroot rather than
+recompiling libc into each module. So there is one libc build instead of one per
+module, and one link line to keep correct instead of two that can drift — a change
+to a libc source or a linker default reaches every guest and the SDK at once.
+
+Two consequences worth knowing:
+
+- **`llvm-ar` is required to build anything.** It builds the archives every WASM
+  target links against. It ships with the same LLVM install that provides the
+  clang, lld and `llvm-objcopy` this build already needs.
+- **A symbol defined by both an application and libc is no longer a duplicate
+  symbol error.** Archive members are pulled only to resolve something undefined,
+  so the application's definition silently wins. That was a link failure when libc
+  was compiled into every module.
+
+Only *entry* shims are still compiled per target: an entry symbol has to be
+present whether or not anything references it, which is exactly what an archive
+will not guarantee. `crt1.o` is named on the link line for the same reason.
+
 ## Building the SDK
 
 ```bash
 cmake -S . -B build
 cmake --build build --target wasmos-sdk
 ```
+
+The `wasmos-sdk` target stages the SDK tree; the archives and `crt1.o` inside it
+are built by the ordinary build, because every WASM target already depends on them.
 
 `cmake/WasmosSdk.cmake` compiles the sysroot objects with the same flags
 `wasmos-clang` passes for application sources — they must match, or an archive
@@ -304,13 +329,12 @@ try to run what it builds.
 
 1. Declare it in the appropriate `src/libc/include` header and implement it in the
    matching `src/libc/src/*.c`. Do not add a POSIX surface WASMOS cannot honour.
-2. If the file is new, add it to `WASMOS_LIBC_C_SOURCES` (the in-tree build) *and*
-   `WASMOS_SDK_LIBC_SOURCES` (the archive) in the root `CMakeLists.txt` and
-   `cmake/WasmosSdk.cmake`. The two lists are separate on purpose — `startup.c`
-   belongs only to the crt, and the in-tree list carries `coroutine_wasm.c` from
-   libsys where the archive keeps it in `libsys.a` — so a new file that belongs in
-   both must be added to both. Archive membership costs nothing at link time: an
-   object no module references is not pulled in.
+2. If the file is new, add it to `WASMOS_SDK_LIBC_SOURCES` in
+   `cmake/WasmosSdk.cmake` — the archive is now the only place libc is built, so
+   that is the only list. Archive membership costs nothing at link time: an object
+   no module references is not pulled in. `WASMOS_LIBC_C_SOURCES` in the root
+   `CMakeLists.txt` is for entry shims only, and a libc source added there would be
+   compiled into every module again.
 3. Cover it with a host unit test under `tests/unit/` (`test_libc_*.c` are the
    precedents) and keep the other language bindings in sync where the API is shared
    (repo rule: libc and its wrappers change together).

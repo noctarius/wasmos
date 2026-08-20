@@ -769,6 +769,15 @@ linked feature documents for rationale and rollout plans.
 - `.wap` packages cover WASM and native apps, services, and drivers. C, C++,
   Zig, Go, Rust, and AssemblyScript examples are supported through shared libc
   and runtime-specific libsys wrappers.
+- The in-tree build and the SDK are one toolchain: `wasmos_add_wasm_c_app_target`
+  links `crt1.o`, `libc.a` and `libsys.a` from the staged sysroot instead of
+  recompiling libc into each of the ~59 modules, so there is one libc build and
+  one link line rather than two that can drift. `llvm-ar` is therefore required to
+  build anything. Only entry shims are still compiled per target (an entry symbol
+  must be present whether or not anything references it, which an archive will not
+  guarantee). One behavioural consequence: a symbol defined by both an application
+  and libc is no longer a duplicate-symbol error — the application's definition
+  silently wins.
 - A staged SDK (`cmake --build build --target wasmos-sdk`) repackages the C
   toolchain for use outside the repository: a relocatable sysroot with `crt1.o`,
   `libc.a` and `libsys.a`, and a `wasmos-clang` driver that supplies the triple,

@@ -153,7 +153,6 @@ set(WASM_FRAMEBUFFER_PCI_APP ${BUILD_DIR}/framebuffer_pci.wap)
 set(NATIVE_FRAMEBUFFER_PCI_DRIVER_SRC ${DRIVER_WASM_DIR}/framebuffer_pci/framebuffer_pci_native.c)
 set(NATIVE_FRAMEBUFFER_PCI_DRIVER_ELF ${BUILD_DIR}/framebuffer_pci_native.elf)
 set(WASM_INIT_APP_SRC ${SERVICES_DIR}/sysinit/init.c)
-set(WASMOS_SCRIPT_ENGINE_SRC ${LIBC_DIR}/src/script.c)
 set(WASM_INIT_APP_WASM ${BUILD_DIR}/init.wasm)
 set(WASM_INIT_APP ${BUILD_DIR}/sysinit.wap)
 set(WASM_CLI_APP_SRC ${SERVICES_DIR}/cli/cli.c ${SERVICES_DIR}/cli/cli_ls_order.c)
@@ -463,17 +462,14 @@ project(wasmos C CXX ASM)
 find_package(Python3 COMPONENTS Interpreter REQUIRED)
 include(CMakeParseArguments)
 
-set(WASMOS_LIBC_C_SOURCES
-  ${LIBC_DIR}/src/ctype.c
-  ${LIBC_DIR}/src/ipc_managed.c
-  ${LIBC_DIR}/src/math.c
-  ${LIBC_DIR}/src/stdlib.c
-  ${LIBC_DIR}/src/string.c
-  ${LIBC_DIR}/src/stdio.c
-  ${LIBC_DIR}/src/unistd.c
-  ${LIBC_DIR}/src/spawn_info.c
-  ${LIBSYS_WASM_DIR}/coroutine_wasm.c
-)
+# Sources every WASM C target compiles for itself, on top of the sysroot
+# archives. Only ENTRY shims belong here: an entry symbol must be present
+# unconditionally, and an archive member is pulled only when something already
+# references it. Everything else -- libc and libsys -- comes from
+# ${WASMOS_SDK_LIBDIR}/lib{c,sys}.a, built once by cmake/WasmosSdk.cmake with the
+# same flags this helper passes, so there is one libc build rather than one per
+# module and one link line rather than two to keep in step.
+set(WASMOS_LIBC_C_SOURCES)
 
 set(WASMOS_LIBC_INCLUDE_DEPS
   ${LIBC_DIR}/include/ctype.h
@@ -538,14 +534,22 @@ function(wasmos_add_wasm_c_app_target target_name)
     message(FATAL_ERROR "async WASM target may be a service/driver or an app, not both")
   endif ()
   if (WASMOS_APP_ASYNC_SERVICE)
-    list(APPEND _wasmos_libc_sources ${LIBSYS_WASM_DIR}/service_runtime_wasm.c
-         ${LIBSYS_WASM_DIR}/service_async_entry_wasm.c)
+    list(APPEND _wasmos_libc_sources ${LIBSYS_WASM_DIR}/service_async_entry_wasm.c)
   elseif (WASMOS_APP_ASYNC_APP)
-    list(APPEND _wasmos_libc_sources ${LIBSYS_WASM_DIR}/service_runtime_wasm.c
-         ${LIBSYS_WASM_DIR}/app_async_entry_wasm.c)
+    list(APPEND _wasmos_libc_sources ${LIBSYS_WASM_DIR}/app_async_entry_wasm.c)
   endif ()
+
+  # crt1.o supplies the wasmos_main export and the bridge to main(); it is named
+  # on the link line rather than pulled from an archive because nothing in the
+  # application references it -- the kernel calls it by name.
+  set(_wasmos_crt)
   if (WASMOS_APP_STARTUP_SHIM)
-    list(APPEND _wasmos_libc_sources ${LIBC_DIR}/src/startup.c)
+    set(_wasmos_crt ${WASMOS_SDK_LIBDIR}/crt1.o)
+  endif ()
+  set(_wasmos_runtime_libs -L${WASMOS_SDK_LIBDIR} -lc -lsys)
+  set(_wasmos_runtime_deps ${WASMOS_SDK_LIBDIR}/libc.a ${WASMOS_SDK_LIBDIR}/libsys.a)
+  if (_wasmos_crt)
+    list(APPEND _wasmos_runtime_deps ${_wasmos_crt})
   endif ()
 
   set(_stack_size 4096)
@@ -591,10 +595,13 @@ function(wasmos_add_wasm_c_app_target target_name)
             -I${LIBC_DIR}/include
             -I${LIBSYS_WASM_DIR}/include
             -I${DRIVER_WASM_DIR}/include
+            ${_wasmos_crt}
             ${_wasmos_libc_sources}
             ${_wasmos_sources}
+            ${_wasmos_runtime_libs}
             -o ${WASMOS_APP_OUTPUT_WASM}
     DEPENDS ${_wasmos_sources} ${_wasmos_libc_sources} ${WASMOS_LIBC_INCLUDE_DEPS}
+            ${_wasmos_runtime_deps}
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     COMMENT ${_build_comment}
     VERBATIM
@@ -1183,10 +1190,10 @@ if (WASMOS_WASM_RUNTIME_WARP)
       # -nostdlib is not a promise that the compiler emits no libc calls: it may
       # still lower an aggregate initialiser to memset (clang 18 does for this
       # fixture's `= {0}` structs, clang 20+ inlines it). Every other wasm target
-      # here links ${WASMOS_LIBC_C_SOURCES} and so already satisfies that; this
-      # one linked nothing, and only ever built on an x86_64 host with WARP
-      # enabled -- a combination that did not occur until WARP became the default
-      # runtime. Link the real libc string/ctype implementations rather than
+      # here links the sysroot's libc.a and so already satisfies that; this one
+      # linked nothing, and only ever built on an x86_64 host with WARP enabled --
+      # a combination that did not occur until WARP became the default runtime.
+      # Link the real libc string/ctype implementations rather than
       COMMAND ${CLANG} --target=wasm32 -Oz -nostdlib -ffreestanding
               -Wl,--no-entry -Wl,--strip-all -Wl,--export=wasmos_coroutine_wasm_test
               -I${LIBSYS_WASM_DIR}/include

@@ -109,6 +109,7 @@
       "files": [
         "test_link_memory_manifest.py",
         "test_make_wasmos_app_capabilities.py",
+        "test_sdk_headers.py",
         "test_sdk_abi.py",
         "test_sdk_arithmetic.py"
       ]

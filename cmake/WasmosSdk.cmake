@@ -59,6 +59,10 @@ endif ()
 include(${CMAKE_SOURCE_DIR}/cmake/WasmosAssemblyScript.cmake)
 find_program(ASC_EXECUTABLE asc HINTS ${CLANG_BIN_DIR})
 find_program(RUSTC_EXECUTABLE rustc HINTS $ENV{HOME}/.cargo/bin)
+find_program(SDK_TINYGO_EXECUTABLE tinygo)
+# TinyGo drives Binaryen itself; resolve wasm-opt here rather than relying on the
+# driver's PATH, exactly as examples/go/CMakeLists.txt does for the in-tree build.
+find_program(SDK_WASMOPT_EXECUTABLE wasm-opt HINTS ${CMAKE_SOURCE_DIR}/node_modules/.bin)
 
 # Compile flags every sysroot object is built with. They must match what
 # wasmos-clang passes for application sources, or an archive object and its
@@ -174,6 +178,7 @@ add_custom_command(
           -DSYSROOT=${WASMOS_SDK_SYSROOT}
           -DLIBC_DIR=${LIBC_DIR}
           -DLIBSYS_WASM_DIR=${LIBSYS_WASM_DIR}
+          -DDRIVER_INCLUDE_DIR=${DRIVER_WASM_DIR}/include
           -DSDK_TARGET=${WASMOS_SDK_TARGET}
           -DSDK_TARGET_LLVM=${WASMOS_SDK_TARGET_LLVM}
           -DSDK_VERSION=${WASMOS_SDK_VERSION}
@@ -185,6 +190,8 @@ add_custom_command(
           -DSDK_ASC=${ASC_EXECUTABLE}
           "-DAS_SOURCES=${WASMOS_AS_LIBC_SOURCES}"
           -DSDK_RUSTC=${RUSTC_EXECUTABLE}
+          -DSDK_TINYGO=${SDK_TINYGO_EXECUTABLE}
+          -DSDK_WASMOPT=${SDK_WASMOPT_EXECUTABLE}
           -DSDK_AR=${WASMOS_SDK_AR}
           -DSDK_NM=${WASMOS_SDK_nm}
           -DSDK_RANLIB=${WASMOS_SDK_ranlib}
@@ -208,6 +215,9 @@ add_custom_command(
           ${CMAKE_SOURCE_DIR}/scripts/sdk/wasmos-rustc
           ${LIBC_DIR}/rust/wasmos.rs
           ${LIBC_DIR}/rust/coroutine.rs
+          ${CMAKE_SOURCE_DIR}/scripts/sdk/wasmos-tinygo
+          ${LIBC_DIR}/go/wasmos.go
+          ${LIBC_DIR}/go/coroutine.go
           ${CMAKE_SOURCE_DIR}/scripts/sdk/wasmos-pack
           ${CMAKE_SOURCE_DIR}/scripts/sdk/wasmos-inspect
           ${CMAKE_SOURCE_DIR}/scripts/sdk/default-manifest.toml
@@ -333,5 +343,31 @@ if (RUSTC_EXECUTABLE AND NOT RUSTC_EXECUTABLE MATCHES "NOTFOUND")
   set(SDK_RUST_HELLO_COPY_CMD
     COMMAND ${CMAKE_COMMAND} -E copy ${WASMOS_SDK_RUST_HELLO_APP}
             ${BUILD_DIR}/esp/apps/sdkrust.wap
+  )
+endif ()
+
+# --- the Go driver's smoke app --------------------------------------------
+# As above, for wasmos-tinygo. Needs both tinygo and wasm-opt (TinyGo drives
+# Binaryen itself), and skips when either is missing. Staged as sdkgo.wap.
+if (SDK_TINYGO_EXECUTABLE AND NOT SDK_TINYGO_EXECUTABLE MATCHES "NOTFOUND"
+    AND SDK_WASMOPT_EXECUTABLE AND NOT SDK_WASMOPT_EXECUTABLE MATCHES "NOTFOUND")
+  set(WASMOS_SDK_GO_HELLO_SRC ${CMAKE_SOURCE_DIR}/examples/go/sdk_hello/hello.go)
+  set(WASMOS_SDK_GO_HELLO_APP ${BUILD_DIR}/sdkgo.wap)
+  add_custom_command(
+    OUTPUT ${WASMOS_SDK_GO_HELLO_APP}
+    COMMAND ${WASMOS_SDK_DIR}/bin/wasmos-tinygo ${WASMOS_SDK_GO_HELLO_SRC}
+            -o ${WASMOS_SDK_GO_HELLO_APP}
+    DEPENDS ${WASMOS_SDK_GO_HELLO_SRC} ${WASMOS_SDK_STAMP}
+    WORKING_DIRECTORY ${BUILD_DIR}
+    COMMENT "sdk: building sdk_hello (Go) with wasmos-tinygo"
+    VERBATIM
+  )
+  add_custom_target(sdk_go_hello_app DEPENDS ${WASMOS_SDK_GO_HELLO_APP})
+  add_dependencies(sdk_go_hello_app wasmos-sdk)
+  set_property(GLOBAL APPEND PROPERTY WASMOS_WASM_APP_TARGETS sdk_go_hello_app)
+
+  set(SDK_GO_HELLO_COPY_CMD
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASMOS_SDK_GO_HELLO_APP}
+            ${BUILD_DIR}/esp/apps/sdkgo.wap
   )
 endif ()

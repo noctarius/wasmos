@@ -105,9 +105,9 @@ POSIX feature macros are not: WASMOS satisfies none of those contracts.
 ```text
 build/wasmos-sdk/
 ├── bin/            wasmos-clang, wasmos-clang++, wasmos-zig, wasmos-asc,
-│                   wasmos-rustc, wasmos-ld, wasmos-ar, wasmos-nm,
-│                   wasmos-ranlib, wasmos-strip, wasmos-objdump, wasmos-pack,
-│                   wasmos-inspect
+│                   wasmos-rustc, wasmos-tinygo, wasmos-ld, wasmos-ar,
+│                   wasmos-nm, wasmos-ranlib, wasmos-strip, wasmos-objdump,
+│                   wasmos-pack, wasmos-inspect
 ├── libexec/wasmos/ make_wasmos_app, wasm_inspect.py, wasm_stack_check.py,
 │                   as_coroutine_transform.mjs
 ├── sysroot/
@@ -117,26 +117,45 @@ build/wasmos-sdk/
 ├── share/
 │   ├── cmake/WASMOS/  WASMOSToolchain.cmake, Platform/WASMOS.cmake
 │   └── wasmos/        default-manifest.toml, zig/*.zig, assemblyscript/*.ts,
-│                       rust/*.rs
+│                       rust/*.rs, go/*.go + go/c/*.c
 └── wasmos-sdk.conf  resolved tool paths and version, sourced by the wrappers
 ```
 
 The sysroot is relocatable: each wrapper resolves `bin/../sysroot` from its own
-real path, so the SDK can be moved or extracted anywhere. Stage 1 borrows the host
-LLVM rather than shipping one, so `wasmos-sdk.conf` records absolute clang paths;
-that file is the only thing tying a staged SDK to the machine that built it.
+real path, so the SDK can be moved or extracted anywhere — verified on Linux by
+moving a staged tree and by invoking a driver through a symlink on `PATH`, which is
+where a `readlink -f` would have been a macOS-only assumption.
 
-### Why the sysroot rewrites one header
+Stage 1 borrows the host LLVM rather than shipping one, so `wasmos-sdk.conf` records
+absolute tool paths. A staged SDK therefore relocates freely **on the machine that
+staged it** and not to another machine; each driver checks its compiler up front and
+says so, naming that file, rather than dying on a raw "not found".
 
-`src/libc/include/wasmos/api.h` includes the generated ABI headers by a
-repo-relative path (`../../../../abi/generated/c/…`). That is deliberate in-tree:
-the generated files live outside `src/` to stay out of format and lint scope, so
-no `-Iabi/generated/c` has to be threaded through every compile that pulls in
-libc. No sysroot can reproduce that depth, so `cmake/wasmos_sdk_stage.cmake`
-installs the generated headers under `sysroot/include/wasmos/abi/` and rewrites
-those two includes. The rewrite is asserted, not assumed — a silent miss would
-produce a sysroot that cannot compile anything — and
-`tests/test_sdk_abi.py` checks the installed result.
+Portability of the drivers themselves is checked where it is harshest: all eight
+parse and run their argument handling, manifest reading and path resolution under
+**busybox `ash` and busybox `awk`** on Linux, which is a stricter environment than
+either macOS `sh` or CI's Ubuntu `dash`. What that does *not* cover is the
+compilers: a full Linux build of the five languages happens in CI's `defconfig`
+job, which installs zig, the Rust wasm target, TinyGo and AssemblyScript and builds
+`run-qemu-test` — and every SDK smoke app is a dependency of the kernel target, so a
+driver that breaks on Linux fails that job rather than going unnoticed.
+
+### Why the sysroot rewrites headers on install
+
+Six public headers include the generated ABI headers by a repo-relative path
+(`../../../../abi/generated/c/…`), at three different depths. That is deliberate
+in-tree: the generated files live outside `src/` to stay out of format and lint
+scope, so no `-Iabi/generated/c` has to be threaded through every compile that
+pulls in libc. No sysroot can reproduce those depths, so
+`cmake/wasmos_sdk_stage.cmake` installs the generated headers under
+`sysroot/include/wasmos/abi/` and rewrites **every** staged header, then asserts
+that none still carries one.
+
+Rewriting only `api.h` — which is what this did first — left `wasmos_driver_abi.h`
+broken, and with it `wasmos/{ipc,proc,net}.h` and `wasmos/libsys.h`: every header an
+app doing IPC needs. The SDK could build hello-world and could not build anything
+that talks to a service. `tests/test_sdk_headers.py` compiles every public header on
+its own so that class of hole is caught by a test rather than by a developer.
 
 ---
 
@@ -177,13 +196,12 @@ wasmos-zig --emit-wasm app.zig -o app.wasm
 The Zig driver hides more than the C one, and two of the things it hides are not
 conveniences:
 
-- **The 8 KiB shadow stack is mandatory.** Zig's default is 1 MB, which places the
-  app's globals at ~1 MB — past the 64 KiB user-VA mirror region each process gets
-  — and every host call that writes into WASM memory then rejects the pointer
-  *silently*. The driver always passes `--stack`, and afterwards runs
-  `wasm_stack_check` and **refuses to emit a module that violates the layout**,
-  rather than leaving it to be discovered as a service that mysteriously fails to
-  register.
+- **The 8 KiB shadow stack is forced.** Zig's default is 1 MB, placed first, so a
+  module's globals land above 1 MB and it must declare at least 2 MiB of linear
+  memory; with a small stack the same module fits a single 64 KiB page like a C
+  one. The driver always passes `--stack` and then runs `wasm_stack_check`, which
+  is how a stack that failed to take effect gets caught — see *The layout check is
+  a size guard* below for what that check does and does not mean.
 - **The runtime shims are staged, not passed.** Zig resolves
   `@import("wasmos.zig")` beside the importing file, so the driver copies the app
   and `share/wasmos/zig/{wasmos,coroutine}.zig` into one directory and compiles
@@ -244,11 +262,10 @@ binding with `#[path = "../../../src/libc/rust/wasmos.rs"]`, which an out-of-tre
 app cannot write.)
 
 **The shadow stack is overridden**, for the same reason as Zig: rustc defaults to
-1 MB with `--stack-first`, which places the app's data above 1 MB — past the 64 KiB
-user-VA mirror region that host calls writing into WASM memory validate against.
-The driver passes the same small stack the Zig driver uses and then runs
-`wasm_stack_check`, so an SDK-built Rust module has the same low layout as a C one
-and fits the default one-page manifest.
+1 MB with `--stack-first`, so the app's data lands above 1 MB and the module must
+declare at least 2 MiB. Without the override a one-page manifest cannot link at all
+— 1 MB of stack does not fit in 64 KiB of declared memory. With it, an SDK-built
+Rust module has the same low layout as a C one and fits the default manifest.
 
 The C entry points the binding declares as `extern "C"` (coroutines, the event
 loop, async filesystem) come from `libsys.a` in the sysroot, linked through
@@ -258,6 +275,61 @@ references.
 A Rust module exports more than a C one — `__heap_base`, `__data_end` and the
 app's own `main` alongside `wasmos_main` — because rustc adds those to the link
 line. They are inert: the kernel resolves the entry by name.
+
+## Go (TinyGo)
+
+```bash
+wasmos-tinygo app.go -o app          # -> app.wap
+```
+
+The entry is `func Main(args []string) int32` in `package main` — capital M.
+
+This is the most involved driver, because TinyGo is configured by a **target file**
+rather than by flags, and that file cannot be shipped ready-made:
+
+- Its `extra-files` — the C shims a Go guest links (coroutine runtime, IPC-future
+  bridge, Go coroutine trampoline, service runtime, async app entry) — are resolved
+  **relative to `TINYGOROOT`**, i.e. wherever TinyGo is installed on this machine.
+  So the driver generates the target per invocation, after asking
+  `tinygo env TINYGOROOT`, with those paths computed against it. The shims are
+  copies inside the SDK (`share/wasmos/go/c/`) rather than references into a source
+  tree, because the SDK is what moves with the developer.
+- Its `cflags` carry the include paths those C files need, which point at the
+  sysroot.
+
+TinyGo also builds a **package**, not a file, and in GOPATH mode a bare directory
+name is read as an import path — so the app and the two Go runtime files are staged
+into one directory and built as `./dir` from its parent.
+
+`wasm-opt` must be resolvable: TinyGo drives Binaryen itself. The driver passes it
+explicitly rather than relying on the child process's `PATH`.
+
+A Go module exports more than a C one (`fminimum`, `fmaximumf`, …, from TinyGo's
+math runtime). They are inert.
+
+## The layout check is a size guard, not a safety property
+
+`scripts/wasm_stack_check.py` runs after every Zig and Rust build and fails on a
+module whose stack pointer or data end exceeds a 32 KiB budget. What it actually
+verifies is that the small shadow stack took effect: a module that reverted to its
+toolchain's 1 MB default trips it, and such a module must declare 2 MiB of linear
+memory instead of one page.
+
+It was documented for a long time as something stronger — that a fixed 16-page
+(64 KiB) `MEM_REGION_WASM_LINEAR` mirror bounds every pointer a host call receives,
+so globals above it fail *silently*. That is no longer true, and the correction
+matters because it is the kind of claim that gets built on: reserved-VA linmem
+made `mm_context_rebind_wasm_linear` and `mm_context_bind_wasm_linear_scattered`
+(`src/kernel/memory.c`) **repoint and resize** that region to the guest's real
+linear memory, so the pages allocated at context creation are a bootstrap default
+rather than the bound a running guest is checked against.
+
+Measured on 2026-08-21 rather than argued: a Zig module built with
+`--stack 1048576` — data at `0x100000`, failing the check outright — executed
+`console_write` *and* read its spawn-info buffer through `xfer_buffer_read`, with
+pointers above 1 MB, under **both** runtimes. `examples/rust/hello` has had data at
+`0x100000` all along and passes its guest test on both. `docs/TASKS.md` carries the
+open question of whether the budget should be relaxed.
 
 ## Linker behavior
 

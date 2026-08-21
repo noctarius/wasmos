@@ -21,11 +21,11 @@
 # objects an app actually references.
 #
 # The shadow stack is overridden to the same small size the Zig driver uses, and
-# for the same reason. rustc defaults to 1 MB with --stack-first, which puts the
-# app's data above 1 MB -- far past the 64 KiB user-VA mirror region a process
-# gets, which is where host calls that write into WASM memory validate the
-# pointers they are given. A small stack puts data at the same low offsets a C
-# module uses, and the layout check afterwards says so rather than assuming it.
+# for the same reason: rustc defaults to 1 MB with --stack-first, so the app's data
+# lands above 1 MB and the module must declare at least 2 MiB of linear memory.
+# Without the override a one-page manifest cannot link at all -- 1 MB of stack does
+# not fit in 64 KiB. With it, a Rust module has the same low layout as a C one and
+# fits the default manifest.
 #
 # Link-time memory comes from the manifest's [link] section, as in every other
 # WASMOS language.

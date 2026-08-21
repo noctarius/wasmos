@@ -1153,21 +1153,29 @@ Source: `architecture/25-diagnostics-status.md`,
   gap to close on demand rather than a missing piece; and ship a standalone SDK
   build that does not borrow the host LLVM. Stage 2 (a native
   `wasm32-unknown-wasmos` LLVM triple) follows those.
-- [ ] [BUG][P2] Resolve a layout contradiction between the in-tree Rust build and
-  the check every Zig module must pass. `build/hello_rust.wasm` places its data
-  segments at `0x100000` and **fails** `scripts/wasm_stack_check.py --max-addr
-  32768` outright — rustc defaults to a 1 MB shadow stack with `--stack-first` —
-  yet `tests/test_hello_rust.py` passes, including its filesystem chain. Either
-  the mirror-region constraint the check enforces is narrower than
-  `cmake/WasmosZigApp.cmake` describes, or that guest is one unexercised host call
-  away from a silent failure. Determine which before copying either premise:
-  `wasmos-rustc` already overrides the stack to the small size and passes the
-  check, so an SDK-built Rust module and the in-tree one now have *different*
-  layouts, which is its own reason to settle this.
-- [ ] [TEST][P2] Run the SDK on Linux. The driver wrappers (`scripts/sdk/*`) are
-  POSIX `sh` and parse under `dash`, but have only been executed on macOS, and
-  `sdk_hello_app` is a dependency of the default build — so a portability defect
-  in the wrappers fails the build rather than one test.
+- [ ] [ENHANCEMENT][P3] Decide whether the 32 KiB layout budget
+  (`WASMOS_ZIG_USER_VA_LIMIT`, enforced by `scripts/wasm_stack_check.py`) should be
+  relaxed or dropped. The reason it existed is gone: it was documented as a
+  pointer-validity rule — a fixed 16-page `MEM_REGION_WASM_LINEAR` mirror bounding
+  every host-call pointer, so globals above it fail silently — and reserved-VA
+  linmem made that false, because `mm_context_rebind_wasm_linear` and
+  `mm_context_bind_wasm_linear_scattered` resize that region to the guest's real
+  linear memory. Measured 2026-08-21: a Zig module built `--stack 1048576` (data at
+  `0x100000`, failing the check) ran `console_write` and `xfer_buffer_read` with
+  pointers above 1 MB under **both** WARP and wasm3, and `examples/rust/hello` has
+  had data at `0x100000` all along. The check is kept as a *size* guard — it
+  catches a module that reverted to its toolchain's 1 MB default and so needs 2 MiB
+  of declared memory instead of one page — and the comments now say so. What is
+  left is a judgement call: keep it as a size guard, raise the number, or drop it
+  and let each app declare the memory it wants.
+- [ ] [TEST][P3] Run the SDK's *compilers* on Linux. The wrappers themselves are
+  covered: all eight parse and run their argument handling, manifest reading and
+  path resolution under busybox `ash`/`awk` on Linux (harsher than CI's `dash`),
+  relocation and symlinked invocation included. What has only ever run on macOS is
+  the compilation itself. CI's `defconfig` job installs every language toolchain and
+  builds `run-qemu-test`, and each SDK smoke app is a dependency of the kernel
+  target, so the first CI run of this branch is that check — it just has not run
+  yet.
 - [ ] [TEST][P2] Give the host suite a way to test wasm32-only libc behaviour.
   Some defects are invisible on the host by construction: `%lld`/`%llx` truncated
   to 32 bits because `vsnprintf` cast `long long` through `long`, which is 64-bit

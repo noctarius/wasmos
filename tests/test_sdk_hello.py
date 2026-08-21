@@ -39,6 +39,7 @@ SDK_HELLO_WAP = os.path.join(BUILD_DIR, "esp", "apps", "sdkhello.wap")
 SDK_ZIG_WAP = os.path.join(BUILD_DIR, "esp", "apps", "sdkzig.wap")
 SDK_AS_WAP = os.path.join(BUILD_DIR, "esp", "apps", "sdkas.wap")
 SDK_RUST_WAP = os.path.join(BUILD_DIR, "esp", "apps", "sdkrust.wap")
+SDK_GO_WAP = os.path.join(BUILD_DIR, "esp", "apps", "sdkgo.wap")
 
 
 @unittest.skipUnless(
@@ -149,6 +150,18 @@ class SdkHelloTest(unittest.TestCase):
         says both worked."""
         self._cmd_expect("cd apps", [b"/apps wamos>"])
         self._cmd_expect("sdkrust", [b"Hello WASMOS from Rust via the SDK!"])
+
+    @unittest.skipUnless(
+        os.path.isfile(SDK_GO_WAP),
+        "SDK Go smoke app not staged (needs tinygo, wasm-opt and the wasmos-sdk target)",
+    )
+    def test_exec_sdk_go_hello(self):
+        """TinyGo is configured by a target FILE whose extra-files are resolved
+        relative to TINYGOROOT, so wasmos-tinygo generates that file per invocation
+        after asking tinygo where its root is, with the C shims' paths computed
+        against it. Nothing about that is checkable short of running the module."""
+        self._cmd_expect("cd apps", [b"/apps wamos>"])
+        self._cmd_expect("sdkgo", [b"Hello WASMOS from Go via the SDK!"])
 
 
 if __name__ == "__main__":

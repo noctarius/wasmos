@@ -94,6 +94,20 @@ if [ -z "$args" ]; then
     exit 1
 fi
 
+# wasmos-sdk.conf records absolute paths to the host toolchain, because Stage 1
+# borrows it rather than shipping one. So a staged SDK relocates freely on the
+# machine that built it and NOT to another machine, and this is the failure that
+# says so -- without it the driver dies with a raw "not found" naming a line
+# number, which reads like a broken script rather than a missing prerequisite.
+for _tool in "$WASMOS_SDK_CLANG" "$WASMOS_SDK_CLANGXX"; do
+    if [ -z "$_tool" ] || ! command -v "$_tool" >/dev/null 2>&1; then
+        echo "wasmos-clang: compiler not found: ${_tool:-<unset>}" >&2
+        echo "  recorded in $sdkroot/wasmos-sdk.conf when the SDK was staged;" >&2
+        echo "  re-stage the SDK on this machine, or edit that file." >&2
+        exit 1
+    fi
+done
+
 cc=$WASMOS_SDK_CLANG
 # C is compiled freestanding, matching the in-tree build.
 #

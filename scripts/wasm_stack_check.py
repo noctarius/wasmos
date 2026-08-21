@@ -1,16 +1,20 @@
 #!/usr/bin/env python3
-"""Validate that a Zig WASM utility's stack pointer and data segments fit
-within the layout budget the kernel's user-VA mirror region allows.
+"""Validate that a WASM module's stack pointer and data segments stay inside a
+layout budget.
 
-Background: each process context gets a MEM_REGION_WASM_LINEAR user-VA
-mirror region of 16 pages (64 KiB) (src/kernel/memory.c).  The
-proc_info_stats and fs_buffer_write hostcalls call mm_user_range_permitted
-on every pointer they receive, which walks only that region.  If a Zig
-utility is built with the default 1 MB shadow stack, its globals land at
-~1 MB — far outside the region — and every such hostcall fails silently.
-Building with --stack 8192 places globals starting at 0x2000, identical to
-the layout of C WASM modules.  The budget passed in --max-addr is set by
-cmake/WasmosZigApp.cmake and is stricter than the kernel window."""
+What this checks is that a small shadow stack was actually applied. A module
+built with a toolchain's default -- 1 MB for both Zig and rustc, placed first --
+puts its globals above 1 MB and must declare at least 2 MiB of linear memory,
+where the same module with an 8 KiB stack fits a single 64 KiB page like a C one.
+Tripping this check means the small stack did not take effect.
+
+It is NOT a pointer-validity check, though it was documented as one for a long
+time. The claim was that a fixed 16-page MEM_REGION_WASM_LINEAR mirror bounds
+every pointer a host call receives; reserved-VA linmem made that false, because
+mm_context_rebind_wasm_linear and mm_context_bind_wasm_linear_scattered resize
+that region to the guest's real linear memory. Measured on 2026-08-21: a Zig
+module with data at 0x100000 -- which fails this check -- runs console_write and
+xfer_buffer_read successfully under both WARP and wasm3. See docs/TASKS.md."""
 
 import argparse
 import sys

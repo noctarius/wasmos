@@ -38,20 +38,55 @@ file(GLOB _wasmos_hdrs
 foreach (_h IN LISTS _wasmos_hdrs)
   file(COPY ${_h} DESTINATION ${_inc}/wasmos)
 endforeach ()
+# src/drivers/include holds the headers wasmos/{ipc,proc,net}.h and libsys.h
+# include by bare name -- wasmos_driver_abi.h above all, which every IPC-using app
+# reaches transitively. They are part of the public surface, not a driver-only
+# detail, and a sysroot without them compiles hello-world and nothing that talks
+# to a service. tests/test_sdk_headers.py compiles the whole set to keep it that
+# way.
+file(GLOB _driver_hdrs ${DRIVER_INCLUDE_DIR}/*.h)
+foreach (_h IN LISTS _driver_hdrs)
+  file(COPY ${_h} DESTINATION ${_inc})
+endforeach ()
+file(GLOB _driver_wasmos_hdrs ${DRIVER_INCLUDE_DIR}/wasmos/*.h)
+foreach (_h IN LISTS _driver_wasmos_hdrs)
+  file(COPY ${_h} DESTINATION ${_inc}/wasmos)
+endforeach ()
+
 file(GLOB _abi_hdrs ${SRC_DIR}/abi/generated/c/*.h)
 foreach (_h IN LISTS _abi_hdrs)
   file(COPY ${_h} DESTINATION ${_inc}/wasmos/abi)
 endforeach ()
 
-# Rewrite the two repo-relative generated-ABI includes to the sysroot layout.
-set(_api ${_inc}/wasmos/api.h)
-file(READ ${_api} _api_text)
-string(REPLACE "../../../../abi/generated/c/" "wasmos/abi/" _api_text "${_api_text}")
-file(WRITE ${_api} "${_api_text}")
-string(FIND "${_api_text}" "../../../../abi/generated" _leftover)
-if (NOT _leftover EQUAL -1)
-  message(FATAL_ERROR "wasmos_sdk_stage: api.h still carries a repo-relative ABI include")
-endif ()
+# Rewrite every repo-relative generated-ABI include to the sysroot layout.
+#
+# Six public headers reach abi/generated/c by relative path, at THREE different
+# depths (wasmos/api.h and the *_ipc.h headers from libc, one deeper from libsys,
+# one shallower from src/drivers/include). Rewriting api.h alone -- which is what
+# this did first -- left wasmos_driver_abi.h broken, and with it every header that
+# includes it: wasmos/{ipc,proc,net}.h and libsys.h, which is to say everything an
+# app doing IPC needs. So the substitution is a regex over any depth, applied to
+# every staged header, and then asserted: no staged header may still carry one.
+file(GLOB_RECURSE _staged_hdrs ${_inc}/*.h)
+foreach (_h IN LISTS _staged_hdrs)
+  file(READ ${_h} _text)
+  string(REGEX REPLACE "(\\.\\./)+abi/generated/c/" "wasmos/abi/" _rewritten "${_text}")
+  if (NOT _rewritten STREQUAL _text)
+    file(WRITE ${_h} "${_rewritten}")
+  endif ()
+endforeach ()
+
+file(GLOB_RECURSE _staged_hdrs ${_inc}/*.h)
+foreach (_h IN LISTS _staged_hdrs)
+  file(READ ${_h} _text)
+  # Match the relative INCLUDE, not the string: several of these headers mention
+  # abi/generated/c in prose when citing where a generated header comes from, and
+  # a bare substring check fails on the documentation.
+  if (_text MATCHES "(\\.\\./)+abi/generated/c/")
+    message(FATAL_ERROR
+      "wasmos_sdk_stage: ${_h} still carries a repo-relative ABI include")
+  endif ()
+endforeach ()
 if (NOT EXISTS ${_inc}/wasmos/abi/wasmos_imports.h)
   message(FATAL_ERROR "wasmos_sdk_stage: generated ABI headers missing from the sysroot")
 endif ()
@@ -70,7 +105,7 @@ file(COPY ${SRC_DIR}/scripts/wasm_stack_check.py DESTINATION ${SDK_DIR}/libexec/
 # --- driver + tool wrappers ------------------------------------------------
 set(_perm FILE_PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE GROUP_READ GROUP_EXECUTE)
 foreach (_w IN ITEMS wasmos-clang wasmos-clang++ wasmos-zig wasmos-asc wasmos-rustc
-                     wasmos-pack wasmos-inspect)
+                     wasmos-tinygo wasmos-pack wasmos-inspect)
   file(COPY ${SRC_DIR}/scripts/sdk/${_w} DESTINATION ${SDK_DIR}/bin ${_perm})
 endforeach ()
 
@@ -132,6 +167,20 @@ foreach (_rs IN ITEMS wasmos.rs coroutine.rs)
   file(COPY ${LIBC_DIR}/rust/${_rs} DESTINATION ${SDK_DIR}/share/wasmos/rust)
 endforeach ()
 
+# Go needs both halves staged: the Go binding, and the C shims a Go guest links.
+# The C files are copies rather than references into src/ because TinyGo resolves
+# a target's extra-files relative to TINYGOROOT, and the driver computes those
+# relative paths from wherever these end up -- so they have to live inside the
+# SDK, which is the tree that moves with the developer.
+file(MAKE_DIRECTORY ${SDK_DIR}/share/wasmos/go/c)
+foreach (_go IN ITEMS wasmos.go coroutine.go)
+  file(COPY ${LIBC_DIR}/go/${_go} DESTINATION ${SDK_DIR}/share/wasmos/go)
+endforeach ()
+foreach (_c IN ITEMS coroutine_wasm.c ipc_future_wasm.c go_coroutine_trampoline.c
+                     service_runtime_wasm.c go_async_app_wasm.c)
+  file(COPY ${LIBSYS_WASM_DIR}/${_c} DESTINATION ${SDK_DIR}/share/wasmos/go/c)
+endforeach ()
+
 file(COPY ${SRC_DIR}/scripts/sdk/default-manifest.toml DESTINATION ${SDK_DIR}/share/wasmos)
 file(COPY ${SRC_DIR}/scripts/sdk/WASMOSToolchain.cmake DESTINATION ${SDK_DIR}/share/cmake/WASMOS)
 file(COPY ${SRC_DIR}/scripts/sdk/Platform/WASMOS.cmake
@@ -153,6 +202,8 @@ WASMOS_SDK_ZIG_STACK_SIZE=${SDK_ZIG_STACK_SIZE}
 WASMOS_SDK_ZIG_VA_LIMIT=${SDK_ZIG_VA_LIMIT}
 WASMOS_SDK_ASC=${SDK_ASC}
 WASMOS_SDK_RUSTC=${SDK_RUSTC}
+WASMOS_SDK_TINYGO=${SDK_TINYGO}
+WASMOS_SDK_WASMOPT=${SDK_WASMOPT}
 ")
 
 file(WRITE ${STAMP} "staged\n")

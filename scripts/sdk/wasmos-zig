@@ -7,14 +7,16 @@
 #   wasmos-zig app.zig -o app            # -> app.wap
 #   wasmos-zig --emit-wasm app.zig -o app.wasm
 #
-# Two of the hidden parts are not conveniences. The shadow stack MUST be 8192:
-# each process gets a 16-page (64 KiB) user-VA mirror region, and host calls that
-# write into WASM memory validate pointers against it, so Zig's 1 MB default
-# stack puts the app's globals past the region and every such call fails
-# SILENTLY. This driver always passes --stack, then runs the layout check and
-# refuses to emit a module that violates it. And Zig resolves @import("wasmos.zig")
-# beside the importing file, so the runtime shims are staged flat next to a copy
-# of the app rather than passed by path.
+# Two of the hidden parts are load-bearing. The shadow stack is forced to 8192:
+# Zig's default is 1 MB and is placed first, so a module's globals land above 1 MB
+# and it must declare at least 2 MiB of linear memory, where the same module with a
+# small stack fits a single 64 KiB page like a C one. The driver always passes
+# --stack and then runs the layout check, which is how a stack that failed to take
+# effect is caught. (That check was long documented as a pointer-validity rule --
+# a fixed 64 KiB user-VA mirror region bounding every host-call pointer. It is not:
+# see cmake/WasmosZigApp.cmake for the measurement.) And Zig resolves
+# @import("wasmos.zig") beside the importing file, so the runtime shims are staged
+# flat next to a copy of the app rather than passed by path.
 #
 # Link-time memory comes from the manifest's [link] section, as in every other
 # WASMOS language.

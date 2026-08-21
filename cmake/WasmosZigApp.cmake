@@ -1,28 +1,36 @@
 # WasmosZigApp.cmake
 # Shared helper for building any Zig WASM app (utilities, examples, services).
 #
-# Why --stack 8192 is mandatory
-# ==============================
-# Each process context gets one MEM_REGION_WASM_LINEAR user-VA mirror region of
-# 16 × 4 KiB pages (64 KiB), matching a module's one-page initial linear memory
-# (src/kernel/memory.c, mm_context_alloc_region(ctx, 16, ...)).  Every hostcall
-# that writes to WASM memory — proc_info_stats, fs_buffer_write, fs_buffer_copy,
-# etc. — calls mm_user_range_permitted, which walks only that region: a pointer
-# whose offset lands above it is rejected and the call fails silently.
-# Zig's default shadow stack is 1 MB, which places globals at ~1 MB, past the
-# region entirely.  --stack 8192 mirrors the layout of C WASM modules
-# (stack_ptr = 0x2000) and keeps globals in the region's first pages.
+# Why --stack 8192
+# ================
+# Zig's default shadow stack is 1 MB and is placed FIRST, so a module's globals
+# land above 1 MB and its declared linear memory must be at least 2 MiB.  8192
+# gives the layout a C module has (stack_ptr = 0x2000, globals just above it),
+# which is what lets a Zig app declare a single 64 KiB page like every C app.
+# That is the reason the flag is passed: module size, not correctness.
 #
-# The wasm_stack_check.py script verifies this after every compilation and
-# fails the build immediately if the constraint is violated.
+# It is NOT a pointer-validity constraint, though it was documented as one here
+# for a long time.  The claim was that MEM_REGION_WASM_LINEAR is a fixed 16-page
+# (64 KiB) user-VA mirror, so a host call handed a pointer above it fails
+# silently.  That stopped being true when reserved-VA linmem landed:
+# mm_context_rebind_wasm_linear and mm_context_bind_wasm_linear_scattered
+# (src/kernel/memory.c) REPOINT AND RESIZE that region to the guest's actual
+# linear memory, so the 16 pages allocated at context creation are a bootstrap
+# default, not the bound a running guest is checked against.
+#
+# Measured rather than reasoned, on 2026-08-21: a Zig module built with
+# --stack 1048576 (data at 0x100000, failing the check below outright) executes
+# console_write AND reads its spawn-info buffer through xfer_buffer_read, with
+# pointers above 1 MB, under BOTH runtimes -- WARP and wasm3.  In tree,
+# examples/rust/hello has had data at 0x100000 all along for the same reason and
+# passes its guest test.  See docs/TASKS.md before treating the budget below as a
+# safety property.
 
-# Budget wasm_stack_check.py enforces on stack pointer + data end.  32 KiB is
-# half the kernel's 64 KiB MEM_REGION_WASM_LINEAR window, so a passing module is
-# inside it with room to spare.
-# TODO: no Zig app has needed more than 32 KiB of data, so nobody has decided
-# whether this should track the kernel window (65536) instead; a Zig app that
-# outgrows the budget will fail the check while the kernel would still accept
-# it, and the number must be re-derived then rather than nudged.
+# Budget wasm_stack_check.py enforces on stack pointer + data end.  With the
+# constraint above corrected, this is a check that the small stack was actually
+# applied -- a module that quietly reverted to Zig's 1 MB default trips it -- not
+# a bound the kernel imposes.  Kept because a module accidentally declaring 2 MiB
+# of linear memory is worth catching at build time.
 set(WASMOS_ZIG_USER_VA_LIMIT 32768 CACHE INTERNAL
     "Layout budget (bytes) validated by wasm_stack_check.py; see note above")
 
